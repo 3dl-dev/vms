@@ -72,6 +72,38 @@ import sys
 
 DEFAULT_CAPDIR = "/data/training/vax/cluster/captures"
 
+# ---------------------------------------------------------------------------
+# THE LAB FENCE (vms-096)
+# ---------------------------------------------------------------------------
+# DEFAULT_CAPDIR is the LAB-1 GROUNDING LIBRARY: the hand-run SIMH VAX cluster
+# at /data/training/vax/cluster. Every figure in EXPECTED is a lab-1
+# measurement, and tests/lab/README.md keeps lab-2 (the k3s pods) separate for
+# a concrete reason -- each lab-2 replica deliberately REUSES lab-1's
+# SCSSYSTEMIDs and node MACs, so a lab-2 capture dropped in here contributes
+# frames that look like lab-1's nodes and silently moves every census.
+#
+# That is not hypothetical: six 2026-08-05 vaxlab-4 captures were deposited
+# into this directory and 23 of this script's 34 checks went red. The fix is
+# NOT to raise EXPECTED to the mixed count -- that bakes the mixing in. They
+# now live in /data/training/vax/cluster/captures-lab2, a SIBLING rather than
+# a subdirectory because scs_connect_data_measure.py globs `**/*.pcap`
+# recursively and a subdirectory would not fence it out.
+#
+# This guard makes a repeat LOUD instead of silent.
+LAB2_MARKER = "-lab2-"
+
+
+def lab1_only(paths):
+    """Return `paths` unchanged, or die naming every lab-2 capture in them."""
+    foreign = sorted(os.path.basename(p) for p in paths
+                     if LAB2_MARKER in os.path.basename(p))
+    if foreign:
+        raise SystemExit(
+            "lab fence: %d lab-2 capture(s) in the lab-1 grounding library. "
+            "Move them to a <capdir>-lab2 sibling and re-run; do NOT raise "
+            "EXPECTED to absorb them.\n  %s" % (len(foreign), "\n  ".join(foreign)))
+    return paths
+
 
 def _read_pcap():
     """The pcap reader, imported LAZILY.
@@ -195,7 +227,7 @@ def load_connctl(path, read_pcap=None):
 
 def measure(capdir):
     read_pcap = _read_pcap()
-    files = sorted(glob.glob(os.path.join(capdir, "*.pcap")))
+    files = lab1_only(sorted(glob.glob(os.path.join(capdir, "*.pcap"))))
     skipped = []
 
     pairs = collections.Counter()

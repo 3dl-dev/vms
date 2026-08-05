@@ -24,12 +24,21 @@
  * beyond "every VMS frame we hold reads zero there", which is exactly what
  * assertion (1) says and no more.
  *
- * DOES NOT ASSERT: that OVMX transmits a reason code. It does not -- OVMX
- * builds neither REJECT_REQ nor DISCONNECT_REQ (scs_svc.h). scs_reason_put()
- * has no production caller and this file is its only caller.
+ * SCOPE, CORRECTED (vms-096). This block used to say "DOES NOT ASSERT: that
+ * OVMX transmits a reason code. It does not -- OVMX builds neither REJECT_REQ
+ * nor DISCONNECT_REQ. scs_reason_put() has no production caller and this file
+ * is its only caller." All three clauses were false: vms-591 added
+ * scs_disc_build_request(), which calls scs_reason_put() at scs_disc.c:138, and
+ * scsd.c drives it with SCS_REASON_SYSAP_SHUTDOWN and SCS_REASON_PEER_DISCONNECT
+ * -- 6 frames carrying reason 5 and 4 carrying reason 7 over the lab-2 vaxlab-4
+ * captures, against reason 0 in every VMS-origin frame we hold.
  *
- * The RECEIVE half, which IS live in the daemon, is covered where it lives:
- * tests/vmsscs/test_scsd_wire.c, the four test_reason_* cases.
+ * What this file covers is the CODEC in isolation. The two halves that ARE live
+ * in the daemon are covered where they live:
+ *   - the SEND half:    tests/vmsscs/test_scs_disc.c (the builder stamps it) and
+ *                       test_scsd_wire.c's disconnect cases (the daemon asks
+ *                       for the value and it reaches the frame);
+ *   - the RECEIVE half: test_scsd_wire.c, the four test_reason_* cases.
  */
 #include "scs_reason.h"
 

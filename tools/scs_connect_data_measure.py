@@ -178,6 +178,29 @@ import struct
 import sys
 
 DEFAULT_CAPDIR = "/data/training/vax/cluster/captures"
+
+# THE LAB FENCE (vms-096). DEFAULT_CAPDIR is the LAB-1 grounding library and
+# every figure in EXPECTED is a lab-1 measurement. lab-2 replicas reuse lab-1's
+# SCSSYSTEMIDs and node MACs by design (tests/lab/README.md), so a lab-2
+# capture deposited here silently moves every census -- six 2026-08-05
+# vaxlab-4 captures did exactly that and put 18 of this script's 67 checks red,
+# including inventing a fifth "VAX" hardware source MAC. They now live in the
+# /data/training/vax/cluster/captures-lab2 SIBLING; a sibling and not a
+# subdirectory precisely because the sweep below globs `**/*.pcap` RECURSIVELY.
+# Full rationale in tools/cluster/scs_disc_measure.py.
+LAB2_MARKER = "-lab2-"
+
+
+def lab1_only(paths):
+    """Return `paths` unchanged, or die naming every lab-2 capture in them."""
+    foreign = sorted(os.path.basename(p) for p in paths
+                     if LAB2_MARKER in os.path.basename(p))
+    if foreign:
+        raise SystemExit(
+            "lab fence: %d lab-2 capture(s) in the lab-1 grounding library. "
+            "Move them to a <capdir>-lab2 sibling and re-run; do NOT raise "
+            "EXPECTED to absorb them.\n  %s" % (len(foreign), "\n  ".join(foreign)))
+    return paths
 DEFAULT_LOGDIR = "/data/training/vax/cluster/work"
 
 # The SCA payload-relative span of the connect-data field, and the two 16-byte
@@ -495,7 +518,8 @@ def measure(capdir):
         "vax_start_hardware": collections.Counter(),
     }
     adopted = bytes.fromhex(EXPECTED["ovmx_value"].replace(" ", ""))
-    for path in sorted(glob.glob(os.path.join(capdir, "**", "*.pcap"), recursive=True)):
+    for path in lab1_only(sorted(glob.glob(os.path.join(capdir, "**", "*.pcap"),
+                                           recursive=True))):
         m["pcaps_scanned"] += 1
         base = os.path.basename(path)
         for pkt in pcap_frames(path):

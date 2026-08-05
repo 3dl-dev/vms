@@ -5,6 +5,10 @@
  */
 #include "scs_poll.h"
 
+/* vms-096: scs_poll_pb_departing() mirrors scs_pb_depart()'s kill switch, so
+ * this file needs scs_depart_enabled(). It links no other symbol from there. */
+#include "scs_depart.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -342,6 +346,33 @@ static void poll_release_cdt(struct scs_poller *p)
     if (p->cdt == NULL) {
         return;
     }
+    /* vms-096, DEFENCE IN DEPTH against a RECYCLED-SLOT RELEASE. A CDT this
+     * poller no longer owns must never be released here.
+     *
+     * scs_cdl_release() memsets the descriptor, so a released-and-not-yet-reused
+     * slot reads in_use == 0. A slot released and then handed to a DIFFERENT
+     * connection reads a different SYSAP pair: the poller's connection is always
+     * SCS$DIR_LOOKUP -> SCS$DIRECTORY (see poll_args()), and p. 2-50's "only one
+     * node will be polled at a time" means there is never a second one.
+     *
+     * NOT local_conid: that is derived from the CDL SLOT INDEX
+     * (SCS_CDT_MAKE_CONID in scs_cdt.c), so EVERY connection that lands in the
+     * recycled slot carries the same value and the check would pass for all of
+     * them. Measured -- the first version of this guard used local_conid and the
+     * recycled-slot arm of test_peer_departure_under_a_live_poll_cycle() still
+     * released the victim.
+     *
+     * HONEST RESIDUAL: a slot reused by ANOTHER SCS$DIR_LOOKUP -> SCS$DIRECTORY
+     * connection would still pass. The primary fix -- scs_poll_pb_departing(),
+     * which stops the poller pointing at a released descriptor at all -- is what
+     * closes that; this check is what makes a MISSED notification harmless
+     * against every other connection rather than destructive. */
+    if (!p->cdt->in_use ||
+        !name_eq(p->cdt->local_sysap, SCS_DIR_SYSAP_POLLER) ||
+        !name_eq(p->cdt->remote_sysap, SCS_DIR_SYSAP_DIRECTORY)) {
+        p->cdt = NULL;
+        return;
+    }
     if (!scs_svc_close_if_closed(p->port, p->cdt)) {
         (void)scs_credit_wait_flush(p->cdt); /* p. 2-45, same order as scs_svc.c */
         if (p->port->cdl != NULL) {
@@ -385,6 +416,42 @@ int scs_poll_cdt_released(struct scs_poller *p, const struct scs_cdt *cdt)
     if (p->state == SCS_POLL_DISCONNECTING) {
         p->disconnects_closed++;
     } else if (p->state != SCS_POLL_IDLE) {
+        p->cycles_abandoned++;
+    }
+    p->cdt = NULL;
+    p->state = SCS_POLL_IDLE;
+    p->pending_count = 0;
+    memset(p->cur_node, 0, 6);
+    return 1;
+}
+
+/*
+ * vms-096: the departure sweep is about to release every CDT on `pb`, and one
+ * of them may be this poller's in-flight cycle. See scs_poll.h for the
+ * recycled-slot release this prevents.
+ *
+ * Deliberately does NOT release anything: scs_pb_depart() is the releaser, and
+ * a second scs_cdl_release() on the same descriptor is the other half of the
+ * same bug. It only forgets the descriptor and ends the cycle, which is exactly
+ * what scs_poll_cdt_released() does once the release has happened.
+ */
+int scs_poll_pb_departing(struct scs_poller *p, const struct scs_pb *pb)
+{
+    if (p == NULL || pb == NULL || p->cdt == NULL || p->cdt->pb != pb) {
+        return 0;
+    }
+    /* Mirror scs_pb_depart()'s own preconditions exactly: if it is going to
+     * decline (kill switch set, or the Path Block is not in use) it releases
+     * NOTHING, and ending a live cycle on a teardown that did not happen would
+     * be a second, opposite defect. */
+    if (!pb->in_use || !scs_depart_enabled()) {
+        return 0;
+    }
+    /* A cycle taken down by a node dropping out is ABANDONED however far it had
+     * got -- even in DISCONNECTING, where the peer's answer is now never coming.
+     * That is the difference from scs_poll_cdt_released(), which counts a
+     * DISCONNECTING release as the p. 2-26 close it really is. */
+    if (p->state != SCS_POLL_IDLE) {
         p->cycles_abandoned++;
     }
     p->cdt = NULL;

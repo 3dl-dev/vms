@@ -776,9 +776,13 @@ struct peer_state {
      * a VMS$VAXcluster VC. All sends ride the shared per-channel ps->vc.seq;
      * connect/lookup seqs are allocate-once/retransmit-reuse (the 760mscp hole). */
     int      psc_step;             /* enum ps_client_step; current stop-and-wait state */
-    int      psc_credit_done;      /* VAX1's op6/op8 credit handshake on OUR server dir
-                                    * connection is complete -> safe to open our client
-                                    * connect (af2: joiner opens its dir AFTER this) */
+    /* psc_credit_done STOOD HERE AND IS DELETED (vms-096). Its ONE writer was
+     * the `cm_op == 6` block nested inside `cm_op == 8`, which is unreachable,
+     * so the flag was 0 for the whole life of every process. Its two readers
+     * are gone with it: the immediate disk-discovery trigger it gated (dead by
+     * the same argument) and a `psc_credit_done ||` term in main()'s ungate
+     * that could never be true. Keeping a field that is structurally always 0
+     * is how a condition reads as "sometimes" in a diff. */
     /* vms-2f3 sec 4M.20: allocate-once/retransmit-reuse for the op6/op8
      * credit-handshake REPLY, the same rule the struct header states for
      * connect/lookup seqs and that psc_dir_req_seq already implements.
@@ -2147,12 +2151,13 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                           it is listed separately, like scsd_send_sdir_refusal
  *                           above and for the same kind of reason.
  *
- *   CHOKED, and new in vms-578: THE SEVENTEEN worktree-760 SENDERS. These are
+ *   CHOKED, and new in vms-578: THE SIXTEEN worktree-760 SENDERS (seventeen
+ *   when merged; scs_send_disconnect() was deleted by vms-096, see below). These are
  *   the connection-manager / join-sequencer / pure-server-disk-client half of
  *   the daemon, merged in from worktree-760-active-directory. On that branch
  *   every one of them called send_frame_to() -- a SECOND raw sendto() wrapper,
  *   invisible to a name-keyed census and the exact hole the primitive check was
- *   added to close. send_frame_to is DELETED and all seventeen are CHOKED. None
+ *   added to close. send_frame_to is DELETED and all sixteen are CHOKED. None
  *   takes an exemption, and the argument is one argument for all of them: each
  *   is a SEQUENCED SCS MESSAGE addressed to a Path Block's remote port address
  *   and carrying a Con.ID pair, i.e. precisely the traffic p. 2-31 says a
@@ -2179,10 +2184,16 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *     cm_send_ack()           the cat-0x04 ack that names the watermark
  *     cm_send_barrier_step()  the sec 4(p) barrier step request
  *     scs_reflect_credit()    the op8->op9 / op6->op7 credit handshake reply
- *     scs_send_disconnect()      peer-directed teardown, hand-built frame
  *     scs_send_disconnect_self() self-directed teardown, hand-built frame
  *
- *   NOT CLAIMED: that all seventeen have been exercised on a wire since the
+ *   SIXTEEN, NOT SEVENTEEN (vms-096). scs_send_disconnect() was listed here and
+ *   is DELETED: its only call site was a `cm_op == 6` block nested inside
+ *   `cm_op == 8`, so it was unreachable and no build of this branch ever emitted
+ *   its frame. Answering an op 6 -- the DISCONNECT_REQUEST of spec sec 4(h)(1a)
+ *   -- is scs_disc_build_response()'s job, driven off the CDT by the vms-dd5
+ *   classifier, and that path IS live and tested.
+ *
+ *   NOT CLAIMED: that all sixteen have been exercised on a wire since the
  *   move. What IS true and mechanically checked is that none of them can reach
  *   the socket except through send_frame_vc(), because scsd.c contains exactly
  *   one transmit primitive and this census counts it.
@@ -2424,6 +2435,67 @@ struct scsd_vc_ctx {
 };
 
 /*
+ * scsd_vc_params - fill in the 0x41 formation body for this peer.
+ *
+ * SPLIT OUT OF scsd_vc_emit() (vms-096) and it TRANSMITS NOTHING -- deliberately
+ * so. scsd_vc_emit() is one of the two functions EXEMPT from the send_frame_vc()
+ * choke point (see the SEND SITE TABLE), and tests/vmsscs/test_scsd_send_sites.py
+ * caps an exempt function at 60 lines precisely so that an exemption granted for
+ * three formation sends cannot creep into covering a page of unrelated logic.
+ * Restoring the two vms-2f3 time quadwords pushed it to 63. The right answer is
+ * the one that gate's failure message names: hoist, do not widen the exemption.
+ */
+static void scsd_vc_params(const struct scsd_vc_ctx *ctx, struct peer_state *ps,
+                           struct scs_start_params *sp)
+{
+    memset(sp, 0, sizeof(*sp));
+    memcpy(sp->dst_mac, ps_port_addr(ps), 6);
+    memcpy(sp->src_mac, ctx->hw_mac, 6);
+    memcpy(sp->src_logical, ctx->src_logical, 6);
+    memcpy(sp->peer_logical, ps_sys_addr(ps), 6);
+    sp->scssystemid = ctx->scssystemid;
+    strncpy(sp->node_name, ctx->node_name, SCS_START_NODENAME_LEN);
+    sp->node_name[SCS_START_NODENAME_LEN] = '\0';
+    /* GROUNDED joiner values, unchanged from vms-21e: every joiner 0x41 frame
+     * carries send_seq=1 / recv_ack=0 (spec sec 4i.A) and echoes the member's
+     * advertised node-incarnation at [22:24] (spec sec 4i.B). */
+    sp->send_seq = ps->vc.seq.send_seq;
+    sp->recv_ack = 0;
+    sp->incarnation = ps->incarnation ? ps->incarnation : 1;
+    /* [66:74] OUR OWN incarnation -- a live per-boot VMS timestamp, and a
+     * DIFFERENT field from the [22:24] counter above. See
+     * ovmx_incarnation_time(): a frozen value here made every peer reuse the
+     * System Block from our previous incarnation (vms-2f3, c302b7d).
+     *
+     * THIS IS THE ONLY PRODUCTION CALLER OF ovmx_incarnation_time(), and it
+     * hangs off scsd_vc_emit() rather than the old main() site because the
+     * vms-4071 VC-FSM refactor moved every 0x41 emission behind that function.
+     * It was LOST in that move -- for a while OVMX shipped the REPLAYED
+     * TEMPLATE quadword that scs_start.h calls the control arm, on every
+     * START/STACK, with the suite green: test_scs_start.c covered
+     * scs_start_build() only, never the daemon.
+     * tests/vmsscs/test_scsd_wire.c's
+     * test_vc_start_carries_a_live_per_boot_incarnation() now asserts the
+     * DAEMON stamps it, so a second such move cannot be silent.
+     *
+     * AND IT IS PROVEN ON THE WIRE, not only in the suite: lab-2 vaxlab-4 run
+     * V96 (2026-08-05) put 0x00bc087816c76364 -- 5-AUG-2026 15:32:29, the second
+     * the daemon started -- in all four of its 0x41 frames and JOINED
+     * (CLUSTER_NODES=3, XITDONE=1), where run B2 of the vms-578 acceptance
+     * bracket, same pod, pre-fix binary, put the captured template's
+     * 0x00bc00947a678ebb. See the matched pair in scs_start.h. */
+    sp->incarnation_time = ovmx_incarnation_time();
+    /* [98:106] when THIS frame was composed -- live per frame, not per boot.
+     * Same env kill-switch shape as the incarnation so the two can be bisected
+     * independently. */
+    {
+        const char *mt_frozen = getenv("OVMX_MSGTIME_FROZEN");
+        sp->message_time = (mt_frozen != NULL && mt_frozen[0] == '1')
+                           ? 0u : scs_member_vms_time_now();
+    }
+}
+
+/*
  * scsd_vc_emit - transmit the formation packet the state machine asked for.
  * Returns 1 if a frame went out, 0 otherwise. `act` must be one of the three
  * SEND_* actions; anything else is a no-op.
@@ -2435,20 +2507,7 @@ static int scsd_vc_emit(const struct scsd_vc_ctx *ctx, struct peer_state *ps,
         return 0;
     }
     struct scs_start_params sp;
-    memset(&sp, 0, sizeof(sp));
-    memcpy(sp.dst_mac, ps_port_addr(ps), 6);
-    memcpy(sp.src_mac, ctx->hw_mac, 6);
-    memcpy(sp.src_logical, ctx->src_logical, 6);
-    memcpy(sp.peer_logical, ps_sys_addr(ps), 6);
-    sp.scssystemid = ctx->scssystemid;
-    strncpy(sp.node_name, ctx->node_name, SCS_START_NODENAME_LEN);
-    sp.node_name[SCS_START_NODENAME_LEN] = '\0';
-    /* GROUNDED joiner values, unchanged from vms-21e: every joiner 0x41 frame
-     * carries send_seq=1 / recv_ack=0 (spec sec 4i.A) and echoes the member's
-     * advertised node-incarnation at [22:24] (spec sec 4i.B). */
-    sp.send_seq = ps->vc.seq.send_seq;
-    sp.recv_ack = 0;
-    sp.incarnation = ps->incarnation ? ps->incarnation : 1;
+    scsd_vc_params(ctx, ps, &sp);
 
     if (act == SCS_VC_ACT_SEND_ACK) {
         uint8_t aframe[SCS_START_ACK_FRAME_LEN];
@@ -4833,10 +4892,17 @@ static const uint8_t scs_dir_disc_tmpl[76] = {
  * the SYSAP in the other node, WHICH MUST THEN PERFORM ITS OWN DISCONNECT CALL
  * to synchronize the dismantling of the connection." The teardown is SYMMETRIC.
  *
- * OVMX only ever emitted op6 in REPLY to the peer's (scs_send_disconnect, from
- * the cm_op==6 branch). On a rejoin the peer's op6 never arrives -- its CDT sits
- * in disc_sent/disc_pend (sec 4M.18) -- so OVMX never performs its own
- * disconnect call and by the documented protocol the teardown cannot complete.
+ * On a rejoin the peer's op6 never arrives -- its CDT sits in
+ * disc_sent/disc_pend (sec 4M.18) -- so OVMX never performs its own disconnect
+ * call and by the documented protocol the teardown cannot complete.
+ *
+ * CORRECTED (vms-096): this comment used to say "OVMX only ever emitted op6 in
+ * REPLY to the peer's (scs_send_disconnect, from the cm_op==6 branch)". That
+ * branch was nested inside `cm_op == 8` and was unreachable, so on THIS branch
+ * OVMX never emitted that reply at all; scs_send_disconnect() is deleted. The
+ * architected reply to an op 6 is scs_disc_build_response(), driven by the
+ * vms-591/vms-dd5 path -- which does not change the sentence below, because the
+ * peer's op 6 is what never arrives.
  * This performs it on the same 2000 ms timeout that already fires PSCUNGATE. */
 static int scs_send_disconnect_self(int sock, int ifindex, struct peer_state *ps,
                                     const uint8_t our_hw_mac[6],
@@ -4858,7 +4924,7 @@ static int scs_send_disconnect_self(int sock, int ifindex, struct peer_state *ps
     d[44] = (uint8_t)sseq; d[45] = (uint8_t)(sseq >> 8);
 
     /* Con.ID pair: remote = the peer's handle on OUR server dir connection,
-     * local = ours. Same convention as scs_send_disconnect. */
+     * local = ours. */
     uint32_t rc = ps->dir_remote_conid;
     uint32_t lc = (uint32_t)SCS_DIR_OVMX_CONID;
     d[64] = (uint8_t)rc;  d[65] = (uint8_t)(rc >> 8);
@@ -4876,38 +4942,29 @@ static int scs_send_disconnect_self(int sock, int ifindex, struct peer_state *ps
     return send_frame_vc(sock, ifindex, ps, ps->pb, "CM self-disconnect (hand-built)", d, sizeof(d)) > 0;
 }
 
-static int scs_send_disconnect(int sock, int ifindex, struct peer_state *ps,
-                               const uint8_t our_hw_mac[6],
-                               const uint8_t our_src_logical[6], const uint8_t *buf)
-{
-    uint8_t d[76];
-    memcpy(d, buf, 76);
-    memcpy(d + 0, ps_port_addr(ps), 6);
-    memcpy(d + 6, our_hw_mac, 6);
-    memcpy(d + 14 + 2, ps_sys_addr(ps), 6);
-    memcpy(d + 14 + 10, our_src_logical, 6);
-    uint16_t rseq = (uint16_t)buf[34] | ((uint16_t)buf[35] << 8);
-    uint16_t sseq = scs_seq_advance(&ps->vc.seq);
-    d[32] = (uint8_t)rseq; d[33] = (uint8_t)(rseq >> 8);
-    d[40] = (uint8_t)rseq; d[41] = (uint8_t)(rseq >> 8);
-    d[48] = (uint8_t)rseq; d[49] = (uint8_t)(rseq >> 8);
-    d[34] = (uint8_t)sseq; d[35] = (uint8_t)(sseq >> 8);
-    d[44] = (uint8_t)sseq; d[45] = (uint8_t)(sseq >> 8);
-    d[60] = 6; d[61] = 0;                       /* op stays 6 (disconnect-REQUEST) */
-    memcpy(d + 64, buf + 68, 4);                /* rc = VAX1 (address the peer) */
-    memcpy(d + 68, buf + 64, 4);                /* lc = OUR conid */
-    d[72] = 0x00; d[73] = 0x00; d[74] = 0x01; d[75] = 0x00; /* GROUNDED joiner op6 tail */
-    /* vms-760: DERIVE the length words from what we emit, never inherit them.
-     * Here in/out are both 62-byte SCA so the inherited values happened to be
-     * right, but inheriting is the bug class that broke op7 in
-     * scs_reflect_credit() -- close it everywhere. Invariant (13556/13556 ref
-     * frames): declared == payload-2, inner == payload-44. */
-    uint16_t d_sca = (uint16_t)(sizeof(d) - 14 - 2);  /* 60 */
-    uint16_t d_inner = (uint16_t)(sizeof(d) - 58);    /* 18 */
-    d[14] = (uint8_t)d_sca;   d[15] = (uint8_t)(d_sca >> 8);
-    d[56] = (uint8_t)d_inner; d[57] = (uint8_t)(d_inner >> 8);
-    return send_frame_vc(sock, ifindex, ps, ps->pb, "CM self-disconnect (hand-built)", d, sizeof(d)) > 0;
-}
+/* scs_send_disconnect() STOOD HERE AND IS DELETED (vms-096).
+ *
+ * It echoed the peer's op-6 frame back with the Con.ID pair swapped, and its
+ * ONE call site was the `cm_op == 6` block nested inside `cm_op == 8` -- i.e.
+ * unreachable, so no OVMX build since the vms-578 integration has ever emitted
+ * this frame. PROOF, not assertion:
+ *   - static: cm_op is a single local `uint16_t`, assigned once from
+ *     buf[60..61] and never written again in the enclosing block, so
+ *     `cm_op == 6` inside `if (cm_op == 8 && ...)` is a contradiction;
+ *   - census: over the six vaxlab-4 captures produced by this branch, OVMX
+ *     emits msgtype-6 frames only from scs_disc_build_request() (the vms-591
+ *     architected builder) -- their 62-byte DISCONNECT_REQ class, never this
+ *     function's 76-byte hand-built one.
+ * tests/vmsscs/test_scsd_send_sites.py now refuses a `cm_op == 6` comparison
+ * anywhere in scsd.c, which is the negative control that reds if the block is
+ * re-added.
+ *
+ * Nothing is lost architecturally: op 6 IS the DISCONNECT_REQUEST of spec sec
+ * 4(h)(1a), and answering it is scs_disc_build_response()'s job, driven off the
+ * CDT by the vms-dd5 classifier. scs_send_disconnect_self() above is a
+ * different thing and is KEPT -- it performs OVMX's OWN disconnect call on the
+ * op-8 stall signal, opt-in behind OVMX_DIR_SELF_DISCONNECT.
+ */
 
 /* Fill the shared MSCP command envelope (identity + Con.ID pair + live counters
  * + correlation token) for a PS disk-client command. */
@@ -5184,33 +5241,15 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                         fflush(stdout);
                     }
                 }
-                /* vms-760: op6 on OUR server dir connection (SCS_DIR_OVMX_CONID)
-                 * is the LAST credit frame -- af2's joiner opens its own client
-                 * dir connect only AFTER this settles. Mark it done and kick off
-                 * the disk-discovery machine (once config has been exchanged). */
-                if (cm_op == 6 && cm_rc == SCS_DIR_OVMX_CONID) {
-                    /* complete the bidirectional teardown: send OUR op6 too,
-                     * fully closing the server dir connection before we open
-                     * our own client dir connect (af2 143.76011). */
-                    if (n >= 76) {
-                        scs_send_disconnect(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac,
-                                            rx->our_src_logical, buf);
-                    }
-                    ps->psc_credit_done = 1;
-                    if (getenv("OVMX_PURE_SERVER") != NULL && ps->cm_config_sent && ps->psc_step == PSC_IDLE &&
-                        !ps->psc_dir_sent &&
-                        ps_send_dir_connect(rx->sock, (int)rx->ifindex, ps,
-                                            rx->our_hw_mac, rx->our_src_logical)) {
-                        ps->psc_step = PSC_DIR_CONNECT;
-                        ps->psc_retx = 0;
-                        log_ts(stdout);
-                        printf(" SCSD-I-PSCLIENT, opened OUR SCS$DIRECTORY client"
-                               " connect local=0x%08X seq=%u (disk-discovery step 1,"
-                               " post-credit)\n",
-                               (unsigned)OVMX_PS_DIR_CONID, ps->psc_dir_req_seq);
-                        fflush(stdout);
-                    }
-                }
+                /* DELETED (vms-096): a `if (cm_op == 6 && cm_rc ==
+                 * SCS_DIR_OVMX_CONID)` block used to sit HERE -- INSIDE the
+                 * `cm_op == 8` branch, where cm_op is 8 by construction. It was
+                 * unreachable, and it carried real behaviour with it: the only
+                 * call of scs_send_disconnect(), the only write to
+                 * ps->psc_credit_done, and one of the two disk-discovery
+                 * triggers. See the DISK DISCOVERY note above
+                 * scsd_peer_departure_sweep()'s ungate block in main() for what
+                 * remains and what was ruled. */
             }
             return;
         }
@@ -5384,26 +5423,19 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                            c, (unsigned)OVMX_LOCAL_CONID, ps->remote_conid);
                     fflush(stdout);
 
-                    /* vms-760: OVMX has now reached NEW (answered VAX1's
-                     * config). A real joiner is ALSO a disk CLIENT -- KICK OFF
-                     * the pure-server disk-discovery machine: open OUR OWN
-                     * SCS$DIRECTORY connection back to VAX1 (step 1). VAX1 will
-                     * not COMMIT us to MEMBER until we complete MSCP disk
-                     * discovery on the connection-set this opens. This is
-                     * ADDITIVE to the server-side NEW path; it never opens a
-                     * VMS$VAXcluster VC (which would short-circuit admission). */
-                    if (ps->psc_credit_done && ps->psc_step == PSC_IDLE &&
-                        !ps->psc_dir_sent &&
-                        ps_send_dir_connect(rx->sock, (int)rx->ifindex, ps,
-                                            rx->our_hw_mac, rx->our_src_logical)) {
-                        ps->psc_step = PSC_DIR_CONNECT;
-                        ps->psc_retx = 0;
-                        log_ts(stdout);
-                        printf(" SCSD-I-PSCLIENT, opened OUR SCS$DIRECTORY client"
-                               " connect local=0x%08X seq=%u (disk-discovery step 1)\n",
-                               (unsigned)OVMX_PS_DIR_CONID, ps->psc_dir_req_seq);
-                        fflush(stdout);
-                    }
+                    /* THE IMMEDIATE DISK-DISCOVERY TRIGGER STOOD HERE AND IS
+                     * DELETED (vms-096). vms-760's intent -- OVMX has answered
+                     * VAX1's config, so open OUR OWN SCS$DIRECTORY connection
+                     * and run MSCP disk discovery -- is unchanged and still
+                     * happens; only this entry point is gone.
+                     *
+                     * IT WAS DEAD, and the argument is one line long: its guard
+                     * opened with `ps->psc_credit_done &&`, and the flag's only
+                     * writer was the unreachable `cm_op == 6` block above, so
+                     * the guard was false for the entire life of every process
+                     * this branch has ever run. Deleting the writer without
+                     * deleting this would leave a trigger that reads as live
+                     * and is not. */
                 }
 
                 /* vms-760: ACKNOWLEDGE the coordinator's category-0x01
@@ -6701,10 +6733,17 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         /* ---- PHASE 2: LOG. Nothing below touches the wire. ---- */
         if (sent_start) {
             log_ts(stdout);
+            /* sys_incarnation is the [66:74] quadword scsd_vc_emit() just
+             * stamped (the accessor caches, so this is the same value that
+             * went out). 0 means OVMX_INCARNATION_FROZEN=1 -- the control arm,
+             * shipping the replayed template bytes. Logged so a lab run can be
+             * checked without a capture. */
             printf(" SCSD-I-STARTTX, sent round-0 START (VC %s)"
-                   " (sysid=%u node='%s' send_seq=%u recv_ack=0 incarnation=%u)\n",
+                   " (sysid=%u node='%s' send_seq=%u recv_ack=0 incarnation=%u"
+                   " sys_incarnation=0x%016llx)\n",
                    scs_vc_state_name(state_after_start), rx->vc_ctx->scssystemid, rx->vc_ctx->node_name,
-                   ps->vc.seq.send_seq, ps->incarnation ? ps->incarnation : 1);
+                   ps->vc.seq.send_seq, ps->incarnation ? ps->incarnation : 1,
+                   (unsigned long long)ovmx_incarnation_time());
             fflush(stdout);
         }
         log_ts(stdout);
@@ -8437,6 +8476,26 @@ static unsigned scsd_peer_departure_sweep(struct scsd_rx *rx, uint64_t now_ms)
         memcpy(gone_mac, ps_port_addr(ps), 6);
         uint64_t silent_ms = now_ms - ps->last_rx_ms;
 
+        /* vms-096: TELL THE POLLER BEFORE THE SWEEP RELEASES ITS DESCRIPTOR.
+         * scs_pb_depart() releases every CDT queued to this Path Block, and
+         * the poller's in-flight cycle connection is an ordinary CDT on it.
+         * scs_depart.c sits UNDER scs_poll.c in the library graph and cannot
+         * make this call itself. Without it the poller keeps a pointer to a
+         * released slot in a non-IDLE state, and the next scs_poll_abandon()
+         * releases whatever has since been allocated into that CDL slot. Must
+         * precede the sweep: afterwards the CDT is memset and its `pb` link --
+         * the only way to recognise it as being on this circuit -- is gone.
+         *
+         * `scsd_poller_ready ? &scsd_poller : NULL` and NOT scsd_poll(rx):
+         * scsd_poll() BINDS the poller on first use, registering its SYSAP name
+         * with the port. A departure sweep must not bring a poller into
+         * existence that the daemon never asked for -- measured, doing so left
+         * a descriptor in the CDL and reddened
+         * test_rejoin_reaches_the_p221_refresh's "no connection survived the
+         * departure" assertion. If no poller was ever bound it has no cycle to
+         * lose, so NULL is exactly right. */
+        (void)scs_poll_pb_departing(scsd_poller_ready ? &scsd_poller : NULL, ps->pb);
+
         struct scs_depart_stats st;
         enum scs_pb_close_result res =
             scs_pb_depart(scsd_cdl_ready ? &scsd_cdl : NULL, rx->cfg, ps->pb, &st);
@@ -9454,26 +9513,42 @@ int main(int argc, char **argv)
          * reach it, and made retransmit exhaustion break the circuit. */
         scsd_retransmit_tick(&rx, monotonic_ms());
 
-        /* --- vms-2f3 step 4: UNGATE the disk-discovery run from the member's op 6.
+        /* --- DISK DISCOVERY HAS EXACTLY ONE TRIGGER, AND THIS IS IT.
          *
-         * The pure-server disk-CLIENT machine (OUR SCS$DIRECTORY connect ->
-         * MSCP$DISK lookup -> SCC/GUS walk) is started in exactly two places and
-         * BOTH require ps->psc_credit_done, which is set ONLY by an inbound op 6
-         * addressed to SCS_DIR_OVMX_CONID. On a REJOIN that op 6 never arrives --
-         * 0 of 3 peers send it (spec/handoff sec 4d.5) -- so a returning identity
-         * never performs the disk discovery that sec 4c.8 shows every real joiner
-         * runs in the 1.4-4.4 s between its op 0x01 and its op 0x02. Measured on
-         * this lab: PSCLIENT fires 33 times on a join and 0 times on a rejoin.
+         * ORIGINALLY (vms-2f3 step 4) this was the SECOND of two entry points
+         * into the pure-server disk-CLIENT machine (OUR SCS$DIRECTORY connect ->
+         * MSCP$DISK lookup -> SCC/GUS walk). The first fired immediately off an
+         * inbound op 6 on SCS_DIR_OVMX_CONID; this one existed because on a
+         * REJOIN that op 6 never arrives -- 0 of 3 peers send it (spec/handoff
+         * sec 4d.5) -- so a returning identity never ran the discovery that
+         * sec 4c.8 shows every real joiner performs in the 1.4-4.4 s between its
+         * op 0x01 and its op 0x02.
          *
-         * Sec 4e.3 added peer-side evidence that this window matters: during a
-         * refused rejoin the peer holds VMS$DISK_CL_DRVR in `con_sent` with a
-         * zero Remote Con. ID -- a connect request to us we never answered --
-         * where a successful join leaves MSCP$DISK `open`.
+         * CORRECTED (vms-096). The first trigger is GONE, and the paragraph that
+         * used to stand here was doubly stale:
+         *   - "started in exactly two places" -- there is ONE. The op-6 handler
+         *     that set psc_credit_done sat INSIDE an `if (cm_op == 8)` branch and
+         *     was unreachable, so the flag was permanently 0 and the immediate
+         *     trigger it gated could never fire. Both are deleted.
+         *   - "PSCLIENT fires 33 times on a join and 0 times on a rejoin" was
+         *     MEASURED ON worktree-760-active-directory, where the op-6 handler
+         *     really was reachable. It does not describe this branch and is not
+         *     restated as if it did.
          *
-         * So if the config exchange has completed and the op 6 has still not
-         * arrived after OVMX_DISKRUN_GATE_MS, start the run anyway. ADDITIVE:
-         * on every path where the op 6 does arrive (all fresh joins) the original
-         * trigger fires first and this block never runs.
+         * SO THE `psc_credit_done ||` TERM IS GONE FROM THE GUARD BELOW TOO, and
+         * this block is now unconditional once the gate expires rather than
+         * "additive" to a trigger that fires first. The three vms-578 acceptance
+         * runs (spec sec 4(O.1), B1/B3/B2) all JOINED with exactly this
+         * behaviour, so re-attaching an immediate trigger to the ARCHITECTED
+         * DISCONNECT path (scs_disc_*, the vms-591 classifier, which is where an
+         * op 6 is now handled) would change a wire path the only passing
+         * acceptance bracket did not exercise. RULED: not re-attached here;
+         * raised as follow-up work instead.
+         *
+         * Sec 4e.3's peer-side evidence that this window matters is unchanged:
+         * during a refused rejoin the peer holds VMS$DISK_CL_DRVR in `con_sent`
+         * with a zero Remote Con. ID -- a connect request to us we never answered
+         * -- where a successful join leaves MSCP$DISK `open`.
          *
          * Kill-switch OVMX_NO_DISKRUN_UNGATE=1 restores the gated behaviour so
          * this can be refuted by a matched control in the same session
@@ -9486,8 +9561,8 @@ int main(int argc, char **argv)
                 if (!(ps->pb != NULL) || !ps->cm_config_sent || ps->psc_gate_ms == 0) {
                     continue;
                 }
-                if (ps->psc_credit_done || ps->psc_step != PSC_IDLE || ps->psc_dir_sent) {
-                    continue; /* the op 6 came, or the run is already going */
+                if (ps->psc_step != PSC_IDLE || ps->psc_dir_sent) {
+                    continue; /* the run is already going */
                 }
                 if (now_ms - ps->psc_gate_ms < (uint64_t)diskrun_gate_ms) {
                     continue;

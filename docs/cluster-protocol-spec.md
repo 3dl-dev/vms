@@ -2921,8 +2921,8 @@ would be the correlation §3 of the `vms-2f3` handoff exists to prevent.
 `vms-578` merged `work/vms-187-closure` (the SCA architecture) with
 `worktree-760-active-directory` (the layer that joins). This is the acceptance
 measurement, taken the same way as the bracket above, on the **same pod**
-(`vaxlab-4`, lab-2), minutes apart, with the control **between** the two runs of
-the binary under test rather than after them.
+(`vaxlab-4`, lab-2) on **2026-08-05**, minutes apart, with the control
+**between** the two runs of the binary under test rather than after them.
 
 Identity is proven ON THE WIRE
 (`strings -a <pcap> | grep -oE 'OVMX[A-Z0-9]{2}'`), not from a log. All three
@@ -3152,6 +3152,48 @@ For visibility, every field NOT marked GROUNDED above:
   *transmits*, if anything, on declaring a peer gone — OVMX transmits nothing at
   that moment, which is an absence of evidence, not evidence of absence.
 
+- **THE BLOCK DATA TRANSFER SERVICE — DELIBERATELY UNIMPLEMENTED, and this is
+  its only durable record** (`vms-941`, closed as RECORDED; written down here by
+  `vms-096` after an audit found the deferral existed nowhere in the tree).
+
+  SCA offers SYSAPs three services. OVMX implements the datagram and message
+  services (§4(h), `scs_dgram.c`, `scs_credit.c`). It implements **none** of the
+  third, and the omission is a decision rather than an oversight. What is being
+  deferred, from *VAXcluster Principles* ch. 2 sec 2.7 (pp. 2-32..2-41) and
+  sec 2.9 (pp. 2-45..2-46):
+
+  | mechanism | pages | what it is |
+  |---|---|---|
+  | **Named buffers** | 2-32..2-34 | a SYSAP declares a region of its own memory to SCS and receives an opaque *buffer name*, which it may then hand to the remote SYSAP; the name, not the address, is what the far end quotes |
+  | **Buffer mapping** | 2-34..2-36 | the port maps a named buffer for direct port-to-port access, so the transfer never passes through the SYSAP's own copy loop |
+  | **`SNDDAT` / `REQDAT`** | 2-36..2-38 | the two directions of the transfer: SEND DATA pushes into a remote named buffer, REQUEST DATA pulls from one. These are port *commands*, not connection-control message types, and neither appears in the `[46:48]` namespace §4(h)(1a) grounds |
+  | **Buffer Descriptor Table (BDT)** | 2-34..2-36 | the per-port table the buffer names index into |
+  | **Class Driver Request Packets (CDRPs)** | 2-38..2-40 | the request context a class driver queues to the port for the duration of a transfer |
+  | **RSPID / Request Descriptor Table (RDT)** | 2-40..2-41 | the response identifier a request carries so its (possibly much later, possibly out-of-order) completion can be matched back to its CDRP |
+  | **Pool / BDT / RDT SCS Waits** | 2-45..2-46 | the three additional wait states a SYSAP can be suspended in when the resource it needs — non-paged pool, a BDT entry, an RDT entry — is exhausted. Siblings of the Credit Wait `scs_credit.c` does implement |
+
+  **WHY IT IS DEFERRED:** every one of these exists to move bulk data between a
+  disk class driver and a disk *server*, and **OVMX serves no real storage to a
+  cluster peer.** OVMX's MSCP work (`vms-760`, `scs_mscp.c`) is the disk
+  **client** side, and its purpose is admission: a joiner that never presents a
+  disk-client connection is not promoted to MEMBER. A client that reads nothing
+  issues no `REQDAT` and is asked for no `SNDDAT`. Implementing the service now
+  would be a large, entirely untestable surface — there is no traffic on our lab
+  wire to ground it against, because nothing in our lab asks OVMX for data.
+
+  **THE UN-DEFER TRIGGER, so this is a decision with an expiry and not a
+  permanent silence.** Revisit the moment EITHER holds:
+  1. OVMX serves real storage to a cluster peer (an OVMX MSCP **server**, not
+     client), or
+  2. a peer issues a `SNDDAT`/`REQDAT` — or any port command naming a buffer —
+     that OVMX must answer. Today that cannot arise, because OVMX declares no
+     named buffers and a peer can only address one it has been given.
+
+  **NOT CLAIMED:** that the seven mechanisms above are decoded. They are *named*
+  from the public book, at page granularity, so a future implementer knows what
+  the gap contains. No byte layout for any of them appears anywhere in OVMX, and
+  none has been observed on our wire.
+
 - HELLO/SOLICIT: the offset-30 "per-frame word" is **now GROUNDED for the
   directed values (b2/b3/b4) in §4(a).1** (`vms-d94`, the NISCA channel-verify
   request/response counter); only the multicast `a0` / SOLICIT `b6` values of
@@ -3241,21 +3283,47 @@ For visibility, every field NOT marked GROUNDED above:
   upper bound. It justifies `scsd.c`'s 500 ms bounded shutdown wait by margin —
   and exceeding the bound costs only a log line, because the daemon exits anyway
   rather than blocking on a peer.
-- **A VAX DID NOT ANSWER *OVMX's* DISCONNECT_REQ ON THE `vaxlab-4` RUNS — OPEN,
-  and narrower than first written** (`vms-591`, lab-2 `vaxlab-4`, four runs on
-  four fresh identities): the two figures above are about **VAX→VAX** traffic.
-  Between VAXes the request is answered 220/220 within 7 ms. When **OVMX** sends
-  the same frame — byte-diffed against a real VAX DISCONNECT_REQ with **zero**
-  differences outside the per-run/substituted fields — no `DISCONNECT_RSP`
-  arrived on any of these four runs, over 20 s of
-  capture past the request. VAX1's console instead logs, exactly once per
+- **~~A VAX DID NOT ANSWER *OVMX's* DISCONNECT_REQ ON THE `vaxlab-4` RUNS~~ —
+  REFUTED, 10 answers out of 10 answerable requests** (`vms-abd`, refuted by
+  `vms-096` against this branch's own `vaxlab-4` captures).
+
+  <!-- REFUTED-QUOTE-BEGIN -->
+  > REFUTED — the entry here used to read: *"When OVMX sends the same frame … no
+  > `DISCONNECT_RSP` arrived on any of these four runs, over 20 s of capture past
+  > the request."* That claim is false; the measurement below kills it.
+  <!-- REFUTED-QUOTE-END -->
+
+  **THE MEASUREMENT THAT KILLS IT.** Over the six `vaxlab-4` captures this branch
+  produced (`vms578-{B1,B2,B3}` + `vms70e2-{A0,A1,A3}`, 2026-08-05, now held in
+  `/data/training/vax/cluster/captures-lab2/`), pairing every OVMX-sourced
+  msgtype-`6` with the first later VMS-origin frame carrying the same Con.ID pair
+  with the two handles swapped — the pairing rule `scs_disc_measure.py` uses:
+
+  | | |
+  |---|---|
+  | OVMX `DISCONNECT_REQ` (msgtype `6`) emitted | **14** |
+  | answered by a VMS-origin frame | **10** — msgtype `7`, 58-byte class, 10/10 |
+  | request→response latency | 0.073 – 0.807 ms |
+  | unanswered *inside the capture window* | 4 — all at daemon shutdown, at the tail of their capture |
+
+  So a real VAX **does** answer OVMX's `DISCONNECT_REQ`, on this very pod, in
+  under a millisecond, and the 58-byte `7` class is exactly the response class
+  §4(h)(1a) grounds. The four unanswered ones are an artefact of where the
+  capture stops, not a refusal.
+
+  **WHAT SURVIVES AND IS STILL OPEN.** VAX1's console logs, exactly once per
   disconnect-sending run and never for the control run that sent none:
 
   > `%PEA0, Inappropriate SCA Control Message - FLAGS/OPC/STATUS/PORT 00/22/00/DD`
 
-  So the peer **receives and refuses** it. **`OPC/22` is NOT decoded** — it is a
-  port-level opcode, not the [46:48] connection-control message type, and
-  nothing we hold identifies it. Do not guess at it and do not build on it.
+  **`OPC/22` is NOT decoded** — it is a port-level opcode, not the [46:48]
+  connection-control message type, and nothing we hold identifies it. Do not
+  guess at it and do not build on it. **What this console line means is now
+  ITSELF the open question**, and it is a smaller one than before: the entry used
+  to read it as "so the peer receives and **refuses** it", which was the only
+  available reading while the response was believed absent. It is not available
+  any more — the SCA layer answers 10/10 in under a millisecond, so whatever the
+  port layer is complaining about, it is not a refusal of the disconnect.
   **One hypothesis is already dead, with a matched control:** the LABELED OVMX
   reason-code placement at [58:60] is not the cause — a run with
   `OVMX_NO_REASON_CODE=1`, verified on the wire to carry `0x0000` there against
@@ -3541,17 +3609,49 @@ For visibility, every field NOT marked GROUNDED above:
   decodes the field out of every REJECT_REQ/DISCONNECT_REQ addressed to one of
   OVMX's own Con.IDs, logs `SCSD-I-CONNREASON` naming the frame, the code and its
   name, and reports the totals in the exit summary — so the peer's SDA
-  `Rej/Disconn Reason` finally has a counterpart on our side. The SEND half is a
-  tested codec with **no production caller**: OVMX builds neither REJECT_REQ nor
-  DISCONNECT_REQ at all (the `SCSD-W-CONNNOACT` bullet above), so nothing here
-  claims OVMX transmits a reason code. `struct scs_svc_args.reason` already
-  carries a SYSAP's value into the emit callback, so a future builder need only
-  call `scs_reason_put()`. Kill switch `OVMX_NO_REASON_CODE=1` suppresses both
-  halves and says so in the exit summary. Tests: `tests/vmsscs/test_scs_reason.c`
-  (codec, plus two real captured frames asserted to read zero at the slot) and
-  the four `test_reason_*` cases in `tests/vmsscs/test_scsd_wire.c` (the daemon's
-  receive path, driven by an unedited real SCS$DIRECTORY dialogue ending in a
-  real DISCONNECT_REQ). **And the figures above are pinned to the measurement by
+  `Rej/Disconn Reason` finally has a counterpart on our side.
+
+  **THE SEND HALF IS LIVE TOO, AND OVMX PUTS UNGROUNDED VALUES ON A REAL VAX'S
+  WIRE. STATED HERE BECAUSE IT MUST NOT BE SILENT** (`vms-096`; this paragraph
+  used to say the send half was "a tested codec with **no production caller**",
+  which stopped being true at `vms-591`). `scs_disc_build_request()` calls
+  `scs_reason_put()` (`src/vmsscs/scs_disc.c:138`), and `scsd.c` drives it with
+  `SCS_REASON_SYSAP_SHUTDOWN` (5) on clean shutdown and
+  `SCS_REASON_PEER_DISCONNECT` (7) on the symmetric answer to a peer's
+  disconnect. Census over the six lab-2 `vaxlab-4` captures (2026-08-05), 62-byte
+  connection-control class:
+
+  | source | msgtype `6` reason values |
+  |---|---|
+  | **OVMX** | `0` ×4, **`5` ×6**, **`7` ×4** |
+  | VMS-origin, same captures | `0` ×10 |
+  | VMS-origin, lab-1 library (47 pcaps) | `0` ×220 (msgtype `6`), `0` ×453 (msgtype `4`) |
+
+  **RULED (`vms-096`): the values are an OVMX DESIGN CHOICE and are KEPT, with
+  the refusal recorded.** Across 683 frames every VMS-origin reason field reads
+  0, so reason `5` and reason `7` are OVMX's own vocabulary in OVMX's own labeled
+  slot — not decoded VMS values, and this section is where that is written down.
+  (These are REASON CODES in the `[58:60]` slot; they are unrelated to
+  connection-control *message types* `5`/`7`, which §4(h)(1a) grounds and which
+  are on our wire.) They are kept rather than zeroed because zeroing was MEASURED not
+  to help: a matched control run with `OVMX_NO_REASON_CODE=1`, verified on the
+  wire to carry `0x0000` where its bracketing run carried `0x0005`, drew VAX1's
+  `Inappropriate SCA Control Message` console line identically (see the
+  DISCONNECT_RSP entry above, where that console line is the surviving open
+  question). Zeroing therefore costs OVMX its own diagnostics and buys nothing.
+  **If a real node is ever observed setting a nonzero code, that observation
+  overrides both the placement and the namespace.**
+
+  `struct scs_svc_args.reason` is what carries a SYSAP's value into the emit
+  callback; `scs_svc.c` itself stamps nothing. Kill switch
+  `OVMX_NO_REASON_CODE=1` suppresses both halves and says so in the exit summary.
+  Tests: `tests/vmsscs/test_scs_reason.c` (the codec, plus two real captured
+  frames asserted to read zero at the slot), `tests/vmsscs/test_scs_disc.c` (the
+  builder stamps what it is given), and in `tests/vmsscs/test_scsd_wire.c` both
+  the four `test_reason_*` cases (the daemon's receive path, driven by an
+  unedited real SCS$DIRECTORY dialogue ending in a real DISCONNECT_REQ) and
+  `test_peer_disconnect_req_is_answered_and_matched()`, which asserts the
+  daemon's own DISCONNECT_REQ carries `SCS_REASON_PEER_DISCONNECT`. **And the figures above are pinned to the measurement by
   construction:** `tools/cluster/scs_reason_measure.py` carries a checked-in
   `EXPECTED` table and re-derives it from the captures on a lab host, while the
   ctest gate `scs_reason_figures` (`tests/vmsscs/test_scs_reason_figures.py`,

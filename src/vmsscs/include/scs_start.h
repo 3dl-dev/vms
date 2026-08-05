@@ -147,6 +147,30 @@ struct scs_start_params {
                                  gate (spec sec 4i.B). READ from the wire, never hard-coded.
                                  1 for a fresh/first contact. NOT the same field as
                                  incarnation_time below -- see that comment. */
+    /* ------------------------------------------------------------------
+     * PROVEN ON A REAL VAX'S WIRE (vms-096, lab-2 pod vaxlab-4, 2026-08-05),
+     * after the vms-4071 VC-FSM refactor silently stopped supplying these two
+     * fields and OVMX went back to shipping the replayed template on every
+     * START. A matched pair on the SAME pod, read straight out of the captures:
+     *
+     *   run  binary                    [66:74]              [98:106]
+     *   B2   pre-fix (spec sec 4(O.1)) 0x00bc00947a678ebb   0x00bc009655d32a40
+     *                                  26-JUL-2026 14:35:33  26-JUL-2026 14:48:50
+     *                                  == THE CAPTURED TEMPLATE, both fields
+     *   V96  fixed                     0x00bc087816c76364   0x00bc0878169ba480
+     *                                   5-AUG-2026 15:32:29   5-AUG-2026 15:32:29
+     *                                  == the second the daemon started
+     *
+     * V96 carried ONE incarnation across all 4 of its 106-byte 0x41 frames (one
+     * run is one incarnation) and JOINED -- CLUSTER_NODES=3 at t+13 s, XITDONE=1
+     * -- so the live value costs nothing on the working path. Captures:
+     * /data/training/vax/cluster/captures-lab2/vms096-V96-*.
+     *
+     * The DAEMON side is gated by
+     * test_vc_start_carries_a_live_per_boot_incarnation() in
+     * tests/vmsscs/test_scsd_wire.c; the assertions below cover the BUILDER, and
+     * covering only the builder is exactly how the regression stayed invisible.
+     * ------------------------------------------------------------------ */
     uint64_t incarnation_time; /* [66:74] THIS SYSTEM'S INCARNATION, a VMS 64-bit absolute
                                  time (100 ns since 17-NOV-1858). It is what a peer stores
                                  as the "Incarnation" of our CSB/SB and what tells it we

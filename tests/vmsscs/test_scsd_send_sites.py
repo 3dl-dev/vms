@@ -454,6 +454,46 @@ for svc in ("scs_connect", "scs_accept"):
     check(n > 0, f"nothing in scsd.c calls {svc}() -- connection formation is "
                  f"no longer going through the SCS services")
 
+# ---------------------------------------------------------------------------
+# 8. (vms-096) THE DEAD op6 BLOCK STAYS DEAD -- the negative control for a
+#    deletion.
+#
+# A `if (cm_op == 6 && cm_rc == SCS_DIR_OVMX_CONID)` block sat INSIDE
+# `if (cm_op == 8 && ...)`, where cm_op is 8 by construction. It was
+# unreachable, and it carried the only call of scs_send_disconnect(), the only
+# write to ps->psc_credit_done and one of the two disk-discovery triggers -- all
+# of which therefore read as live code in every review and were not.
+#
+# Message type 6 IS the DISCONNECT_REQUEST of spec sec 4(h)(1a). Since vms-591
+# it is answered by scs_disc_build_response(), driven off the CDT by the vms-dd5
+# classifier -- which is why the credit-handshake region has no business
+# comparing cm_op against 6 at all. Any reappearance of that comparison is this
+# defect coming back, whether nested or not, so the check is on the comparison
+# and not on the nesting.
+dead_op6 = [i + 1 for i, line in enumerate(code_lines)
+            if re.search(r"\bcm_op\s*==\s*6\b", line)]
+check(not dead_op6,
+      f"scsd.c compares cm_op against 6 at line(s) {dead_op6}. vms-096 deleted "
+      f"exactly such a block: it was nested inside `if (cm_op == 8)` and could "
+      f"never be true, and it was the only caller of scs_send_disconnect() and "
+      f"the only writer of psc_credit_done. Message type 6 is DISCONNECT_REQ and "
+      f"belongs to the vms-591 builders via the vms-dd5 classifier, not to the "
+      f"credit-handshake branch.")
+
+# And the symbols it kept alive must be gone, not merely uncalled -- an
+# uncalled static function is what made the block look load-bearing.
+for gone, why in (
+        ("scs_send_disconnect", "the hand-built peer-directed op-6 teardown; "
+                                "scs_disc_build_response() is the architected reply"),
+        ("psc_credit_done", "a flag whose only writer was the unreachable block, "
+                            "so it was structurally always 0")):
+    hits = [i + 1 for i, line in enumerate(code_lines)
+            if re.search(r"\b" + gone + r"\b", line)]
+    check(not hits,
+          f"scsd.c still uses `{gone}` at line(s) {hits} -- {why}. It was deleted "
+          f"by vms-096 as proven-dead; re-adding it needs a live call path and a "
+          f"test, not a re-declaration.")
+
 for f in failures:
     print("FAIL " + f, file=sys.stderr)
 print(f"test_scsd_send_sites: {checks} checks, {len(failures)} failures")

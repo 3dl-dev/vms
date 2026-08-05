@@ -360,10 +360,17 @@ struct scs_svc_args {
     /* p. 2-26: "it contains an optional disconnect reason code if one is
      * specified by the SYSAP", and the same for REJECT (p. 2-24). CARRIED, NEVER
      * INTERPRETED HERE -- vms-6b3 defines the value in scs_reason.h
-     * (enum scs_reason_code) and the two bytes it occupies. This field is
-     * already handed to args->emit, so the REJECT_REQ / DISCONNECT_REQ builder
-     * OVMX still does not have needs only to call scs_reason_put() on the frame
-     * it assembles; nothing in this file puts a reason code on any wire. */
+     * (enum scs_reason_code) and the two bytes it occupies. Nothing in THIS file
+     * puts a reason code on any wire; it is handed to args->emit and the emitter
+     * stamps it.
+     *
+     * CORRECTED (vms-096): this used to add "the REJECT_REQ / DISCONNECT_REQ
+     * builder OVMX still does not have needs only to call scs_reason_put()".
+     * OVMX HAS that builder -- scs_disc_build_request() since vms-591 -- and it
+     * DOES call scs_reason_put(). scsd.c drives it with SCS_REASON_SYSAP_SHUTDOWN
+     * on clean shutdown and SCS_REASON_PEER_DISCONNECT on the symmetric answer,
+     * so nonzero reason codes are on a real VAX's wire. See the SEND SIDE block
+     * in scs_reason.h for the census and the design-choice ruling. */
     uint16_t reason;
 
     /*

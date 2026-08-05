@@ -177,6 +177,11 @@
  *       shows), and it is the DEFAULT: OVMX puts a nonzero code on the wire
  *       only when a caller explicitly asks for one.
  *
+ *       AND OVMX'S OWN CALLERS DO ASK (vms-096). scsd.c requests 5 and 7 on the
+ *       DISCONNECT_REQ, so nonzero values ARE on a real VAX's wire -- see the
+ *       SEND SIDE block below for the census and the ruling. The sentence above
+ *       describes the DEFAULT, not what the shipped daemon does.
+ *
  * ---------------------------------------------------------------------------
  * WHAT IS LIVE AND WHAT IS NOT (read before believing anything else)
  * ---------------------------------------------------------------------------
@@ -189,14 +194,48 @@
  * an UNEDITED real SCS$DIRECTORY dialogue from ovmx-760-MEMBER-achieved ending
  * in a real DISCONNECT_REQ addressed to OVMX's own Con.ID.
  *
- * SEND SIDE -- NO PRODUCTION CALLER. scs_reason_put() is a tested codec with
- * no caller in the shipped daemon, because OVMX has no REJECT_REQ or
- * DISCONNECT_REQ builder at all (see scs_svc.h: both services report their
- * frame unemitted). `struct scs_svc_args.reason` already carries the SYSAP's
- * value into the emit callback, so whoever adds that builder need only call
- * scs_reason_put() on the frame it assembles. Nothing here claims OVMX
- * currently transmits a reason code, because it currently transmits neither
- * frame. Its only caller today is tests/vmsscs/test_scs_reason.c.
+ * SEND SIDE -- LIVE SINCE vms-591, AND ON A REAL VAX'S WIRE.
+ *
+ * CORRECTED (vms-096). This block used to read "NO PRODUCTION CALLER ... OVMX
+ * has no REJECT_REQ or DISCONNECT_REQ builder at all ... Its only caller today
+ * is tests/vmsscs/test_scs_reason.c." Every clause of that was false by the time
+ * it was read:
+ *
+ *   THE CALL GRAPH. src/vmsscs/scs_disc.c:138 calls scs_reason_put() inside
+ *   scs_disc_build_request() -- the vms-591 62-byte DISCONNECT_REQ builder. It
+ *   is driven from src/vmsscs/scsd.c with a NONZERO value at two sites:
+ *   SCS_REASON_PEER_DISCONNECT (7) on the symmetric answer to a peer's
+ *   disconnect, and SCS_REASON_SYSAP_SHUTDOWN (5) on clean shutdown.
+ *   `nm build/bin/SCSD.EXE` lists scs_reason_put among 5 scs_reason symbols in
+ *   the shipped daemon.
+ *
+ *   THE WIRE. Census over the six lab-2 vaxlab-4 captures this branch produced
+ *   (2026-08-05, /data/training/vax/cluster/captures-lab2/), 62-byte
+ *   connection-control class:
+ *
+ *       OVMX-sourced msgtype 6:  reason 0 x4,  reason 5 x6,  reason 7 x4
+ *       VMS-origin  msgtype 6:   reason 0 x10           (lab-1: 0 x220, 0 x453
+ *                                                        on msgtype 4)
+ *
+ *   So OVMX transmits a reason code, and it transmits values no VAX has ever
+ *   been observed setting.
+ *
+ * ==> THE RULING ON THOSE VALUES (vms-096), and it is a LABEL, not a retreat.
+ *     A real VAX sets this field to 0 in 100% of the 683 frames we hold. OVMX
+ *     setting 5 or 7 there is therefore an OVMX DESIGN CHOICE IN THE VALUE as
+ *     well as in the placement, and sec 5 of docs/cluster-protocol-spec.md now
+ *     says so explicitly, together with the observed consequence: VAX1's port
+ *     layer logs "Inappropriate SCA Control Message" once per
+ *     disconnect-sending run. The values are KEPT rather than zeroed, for one
+ *     reason that is measured and not aesthetic -- a matched control with
+ *     OVMX_NO_REASON_CODE=1, verified on the wire to carry 0x0000 where its
+ *     bracketing run carried 0x0005, drew the SAME console line, so zeroing the
+ *     field does not buy the peer's approval and would only cost OVMX its own
+ *     diagnostics. What is NOT acceptable is asserting an ungrounded value
+ *     silently, and that is what this correction ends.
+ *
+ * `struct scs_svc_args.reason` is what carries the SYSAP's value into the emit
+ * callback; scs_svc.c itself still stamps nothing.
  *
  * KILL SWITCH: OVMX_NO_REASON_CODE=1 suppresses BOTH halves -- put() writes no
  * byte and get() reports suppressed (so scsd.c logs nothing). Re-read from the

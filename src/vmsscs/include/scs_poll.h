@@ -315,6 +315,33 @@ void scs_poll_abandon(struct scs_poller *p);
  */
 int scs_poll_cdt_released(struct scs_poller *p, const struct scs_cdt *cdt);
 
+/*
+ * THE PEER IS DEPARTING AND ITS PATH BLOCK IS ABOUT TO BE SWEPT (vms-096).
+ *
+ * THE BUG THIS CLOSES, WHICH WAS REAL. scs_pb_depart() releases EVERY CDT
+ * queued to a departing peer's Path Block -- including the poller's in-flight
+ * cycle descriptor, because the poller's connection is an ordinary CDT on that
+ * circuit. It does not, and cannot, know the poller exists: src/vmsscs
+ * layering puts scs_depart.c under scs_poll.c, not over it. So the poller kept
+ * `p->cdt` pointing at a released slot and stayed in CONNECTING / INQUIRING /
+ * DISCONNECTING. The next scs_poll_abandon() -- a timeout, or the next tick's
+ * cycle change -- then called scs_cdl_release() on WHATEVER now occupied that
+ * CDL slot. If another connection had been allocated into it in the meantime,
+ * that connection was torn down under its owner and its MFREEQ/DFREEQ deposit
+ * was subtracted from the port: a recycled-slot release.
+ *
+ * WHY A SEPARATE ENTRY POINT rather than reusing scs_poll_cdt_released(): the
+ * sweep must be told BEFORE the release, while the CDT is still queued to the
+ * Path Block and can still be recognised as being on it. Afterwards
+ * scs_cdl_release() has memset the descriptor and the `pb` link is gone.
+ *
+ * Call it immediately before scs_pb_depart() on the same Path Block.
+ *
+ * Returns 1 if the poller's cycle was on `pb` (the cycle is ended and counted
+ * as abandoned, and NOTHING is released here -- the sweep does that), else 0.
+ */
+int scs_poll_pb_departing(struct scs_poller *p, const struct scs_pb *pb);
+
 enum scs_poll_state scs_poll_state_of(const struct scs_poller *p);
 unsigned scs_poll_pending(const struct scs_poller *p);
 const uint8_t *scs_poll_current_node(const struct scs_poller *p);

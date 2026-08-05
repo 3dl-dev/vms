@@ -197,12 +197,32 @@ void scs_cdl_release(struct scs_cdl *cdl, struct scs_cdt *cdt)
      * else about the credit account (see the field comments in scs_cdt.h and the
      * teardown note in scs_credit.h): draining the CDT's Credit Wait queue needs
      * struct scs_credit_waiter, which is opaque in this translation unit, so it
-     * is the caller's job and scs_depart.c is the caller that does it. */
-    if (cdt->pb != NULL && cdt->pb->pdt != NULL && cdt->extended_credits > 0) {
-        struct scs_pdt *pdt = cdt->pb->pdt;
-        pdt->mfreeq_count = (pdt->mfreeq_count > cdt->extended_credits)
-                                ? pdt->mfreeq_count - cdt->extended_credits
-                                : 0;
+     * is the caller's job and scs_depart.c is the caller that does it.
+     *
+     * CORRECTED (vms-096): the figure is `receive_credit + pending_receive_credit`,
+     * NOT `extended_credits`. extended_credits is the WHOLE deposit made at
+     * formation and never changes again; the share STILL SITTING IN the MFREEQ
+     * is smaller whenever a received message is in the SYSAP's hands. Trace it:
+     * scs_credit_extend(n) does mfreeq += n, receive_credit = n; delivering a
+     * message does mfreeq_take() + receive_credit--; releasing the buffer does
+     * mfreeq_return() + pending_receive_credit++ (and take_pending_receive_credit
+     * later folds pending back into receive_credit). So at every instant this
+     * connection's contribution to the port depth is exactly
+     * receive_credit + pending_receive_credit = n - taken + returned.
+     * Subtracting `extended_credits` charges the port a second time for buffers
+     * mfreeq_take() had already removed, and drives mfreeq_count to its
+     * saturating floor of 0 -- i.e. the port forgets buffers belonging to OTHER
+     * connections. This is the identical argument vms-b1d already applied to the
+     * DFREEQ below (`dgram_buffers`, not `dgram_extended`); the MFREEQ half was
+     * simply never brought into line. */
+    {
+        unsigned mfreeq_share = cdt->receive_credit + cdt->pending_receive_credit;
+        if (cdt->pb != NULL && cdt->pb->pdt != NULL && mfreeq_share > 0) {
+            struct scs_pdt *pdt = cdt->pb->pdt;
+            pdt->mfreeq_count = (pdt->mfreeq_count > mfreeq_share)
+                                    ? pdt->mfreeq_count - mfreeq_share
+                                    : 0;
+        }
     }
     /* vms-b1d: THE DFREEQ MUST BE GIVEN BACK TOO, for exactly the same reason
      * and by exactly the same argument. p. 2-42/2-43: the datagram buffers a

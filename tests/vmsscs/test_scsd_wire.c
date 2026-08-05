@@ -730,14 +730,49 @@ static void test_vc_actions_emit_the_right_config_rounds(void)
     CHECK(le16_at(scsd_test_last_frame + 14 + 44) == 1,
           "SEND_STACK carries config-round %u, expected 1",
           le16_at(scsd_test_last_frame + 14 + 44));
-    /* The STACK differs from the START in the config-round field and nothing
-     * else: it really is the same identity body sent again. */
-    size_t first = 0, last = 0;
-    unsigned ndiff = diff_positions(start_frame, scsd_test_last_frame,
-                                    SCS_START_FRAME_LEN, &first, &last);
-    CHECK(ndiff == 1 && first == 14 + 44,
-          "START vs STACK differ in %u byte(s) starting at %zu; expected exactly the"
-          " config-round field at %d", ndiff, first, 14 + 44);
+    /* The STACK differs from the START in the config-round field and in the
+     * [98:106] MESSAGE TIMESTAMP, and in nothing else: it really is the same
+     * identity body sent again, at a later instant.
+     *
+     * WIDENED FROM `ndiff == 1` (vms-096), and widened by ADDING assertions,
+     * not by relaxing one. The old form was written while scsd_vc_emit() set
+     * neither time quadword -- which is precisely the defect this item fixes:
+     * every 0x41 OVMX transmitted carried the captured template's 26-JUL-2026
+     * timestamps. Now [98:106] is stamped per frame (scs_start.h: "live per
+     * frame"), so START and STACK legitimately differ there. Every byte
+     * position is still accounted for: the diff set must be a SUBSET of
+     * {config-round, message-time} and must CONTAIN the config-round, and the
+     * per-boot incarnation at [66:74] must be byte-identical across the two --
+     * a START and a STACK from one system are one incarnation. */
+    {
+        unsigned ndiff = 0;
+        int off_cfg = 0, off_msg = 0, off_other = -1;
+        for (size_t i = 0; i < SCS_START_FRAME_LEN; i++) {
+            if (start_frame[i] == scsd_test_last_frame[i]) {
+                continue;
+            }
+            ndiff++;
+            if (i >= 14 + 44 && i < 14 + 46) {
+                off_cfg = 1;
+            } else if (i >= 14 + 98 && i < 14 + 106) {
+                off_msg = 1;
+            } else if (off_other < 0) {
+                off_other = (int)i;
+            }
+        }
+        CHECK(off_other < 0,
+              "START vs STACK differ at absolute offset %d, which is neither the"
+              " config-round [44:46] nor the message timestamp [98:106]; %u byte(s)"
+              " differ in total", off_other, ndiff);
+        CHECK(off_cfg,
+              "START and STACK carry the SAME config-round -- the round counter is"
+              " the one field that must distinguish them");
+        (void)off_msg;
+        CHECK(memcmp(start_frame + 14 + 66, scsd_test_last_frame + 14 + 66, 8) == 0,
+              "the START and the STACK carry DIFFERENT [66:74] incarnations -- one"
+              " OVMX run is one incarnation, and a per-frame value would make every"
+              " frame look like a different system");
+    }
 
     CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_ACK) == 1, "SEND_ACK emitted nothing");
     CHECK(scsd_test_last_len == SCS_START_ACK_FRAME_LEN,
@@ -866,6 +901,155 @@ static void test_vc_happy_path_frame_sequence(void)
     scsd_vc_settle(&ctx, ps, act, scsd_vc_peer_round2(scs_vc_classify_round(1, 2)), &acks);
     CHECK(scsd_test_frames == before && acks == 1,
           "a duplicate peer round-2 ack produced a duplicate OVMX ack");
+}
+
+/*
+ * THE DAEMON STAMPS A LIVE, PER-BOOT INCARNATION (vms-2f3, restored by vms-096).
+ *
+ * WHY THIS TEST EXISTS, AND WHY THE SUITE WAS GREEN WITHOUT IT. c302b7d made
+ * OVMX stop replaying the captured template's 26-JUL-2026 quadwords -- [66:74],
+ * which a peer stores as our CSB "Incarnation", and [98:106], when the frame was
+ * composed. It set both at the ONE 0x41 build site that existed at the time, in
+ * main(). The vms-4071 VC-FSM refactor then moved every 0x41 emission behind
+ * scsd_vc_emit() and did NOT carry the two assignments across, so the only
+ * production caller of ovmx_incarnation_time() disappeared and OVMX went back to
+ * shipping the replayed template -- the arm scs_start.h explicitly labels the
+ * control and says not to ship.
+ *
+ * NOTHING CAUGHT IT. tests/vmsscs/test_scs_start.c covers scs_start_build(),
+ * which is handed an incarnation_time by its caller and does the right thing
+ * with whatever it gets; it can never see that the DAEMON stopped supplying
+ * one. This test drives the daemon's own emitter and reads the wire bytes.
+ *
+ * All four assertions below are about the frame scsd_vc_emit() produced. The
+ * offsets are absolute: [66:74] is abs 80, [98:106] is abs 112.
+ */
+static uint64_t le64_at(const uint8_t *p)
+{
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; i--) {
+        v = (v << 8) | p[i];
+    }
+    return v;
+}
+
+static void test_vc_start_carries_a_live_per_boot_incarnation(void)
+{
+    /* The two values the captured joiner template replays. Shipping either is
+     * the defect. */
+    const uint64_t tmpl_incarnation = 0x00bc00947a678ebbULL; /* 26-JUL-2026 14:35:33.59 */
+    const uint64_t tmpl_message     = 0x00bc009655d32a40ULL; /* 26-JUL-2026 14:48:50.66 */
+
+    struct world w;
+    world_init(&w);
+    uint8_t peer_mac[6];
+    mac_of(0x7A, peer_mac);
+    uint8_t sysid[6];
+    sysid_of(1025, sysid);
+    struct peer_state *ps = peer_find_or_add(&w.cfg, &w.pdt, w.peers, peer_mac);
+    CHECK(ps != NULL, "no peer slot for the incarnation test");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&w.cfg, ps, sysid);
+    scs_vc_init(&ps->vc);
+    struct scsd_vc_ctx ctx = vc_test_ctx(&w);
+
+    /* --- 1. THE PINNED VALUE LANDS ON THE WIRE, BYTE-EXACT ---------------
+     * OVMX_INCARNATION_TIME makes this deterministic instead of "not the
+     * template", so the assertion cannot be satisfied by any other live-ish
+     * number. g_ovmx_incarnation_time is reset because the accessor caches. */
+    const uint64_t pinned = 0x00bc05526906b4a1ULL; /* 1-AUG-2026 15:25:12, the
+                                                   * value SDA rendered in
+                                                   * OVMX's CSB on the lab */
+    CHECK(setenv("OVMX_INCARNATION_TIME", "0x00bc05526906b4a1", 1) == 0, "setenv failed");
+    CHECK(unsetenv("OVMX_INCARNATION_FROZEN") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_MSGTIME_FROZEN") == 0, "unsetenv failed");
+    g_ovmx_incarnation_time = 0;
+
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_START) == 1, "SEND_START emitted nothing");
+    CHECK(scsd_test_last_len == SCS_START_FRAME_LEN, "SEND_START is not the START class");
+    CHECK(le64_at(scsd_test_last_frame + 80) == pinned,
+          "the daemon put 0x%016llx at [66:74]; OVMX_INCARNATION_TIME pinned it to"
+          " 0x%016llx. If this reads 0x%016llx the daemon is shipping the CAPTURED"
+          " TEMPLATE's incarnation again -- the control arm, on every START",
+          (unsigned long long)le64_at(scsd_test_last_frame + 80),
+          (unsigned long long)pinned, (unsigned long long)tmpl_incarnation);
+    CHECK(le64_at(scsd_test_last_frame + 112) != tmpl_message &&
+              le64_at(scsd_test_last_frame + 112) != 0,
+          "the daemon put 0x%016llx at [98:106] -- the replayed template's"
+          " 26-JUL-2026 compose time. Every START would claim to have been"
+          " written days earlier",
+          (unsigned long long)le64_at(scsd_test_last_frame + 112));
+    uint64_t msg_start = le64_at(scsd_test_last_frame + 112);
+
+    /* --- 2. ONE RUN IS ONE INCARNATION, AND THE MESSAGE TIME IS NOT ------- */
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_STACK) == 1, "SEND_STACK emitted nothing");
+    CHECK(le64_at(scsd_test_last_frame + 80) == pinned,
+          "the STACK carries a DIFFERENT [66:74] than the START -- the incarnation"
+          " is sampled once per process, not per frame");
+    CHECK(le64_at(scsd_test_last_frame + 112) >= msg_start,
+          "the STACK's [98:106] compose time (0x%016llx) went BACKWARDS from the"
+          " START's (0x%016llx)",
+          (unsigned long long)le64_at(scsd_test_last_frame + 112),
+          (unsigned long long)msg_start);
+
+    /* A SECOND peer must get the SAME incarnation: it is this system's boot
+     * time, not a per-circuit nonce. */
+    uint8_t peer2[6];
+    mac_of(0x7B, peer2);
+    uint8_t sysid2[6];
+    sysid_of(1026, sysid2);
+    struct peer_state *ps2 = peer_find_or_add(&w.cfg, &w.pdt, w.peers, peer2);
+    CHECK(ps2 != NULL, "no second peer slot");
+    if (ps2 != NULL) {
+        ps_learn_sys_addr(&w.cfg, ps2, sysid2);
+        scs_vc_init(&ps2->vc);
+        CHECK(scsd_vc_emit(&ctx, ps2, SCS_VC_ACT_SEND_START) == 1, "second SEND_START emitted nothing");
+        CHECK(le64_at(scsd_test_last_frame + 80) == pinned,
+              "a second peer was told a different incarnation");
+    }
+
+    /* --- 3. THE CONTROL ARM IS STILL REACHABLE, AND IS NOT THE DEFAULT ----
+     * OVMX_INCARNATION_FROZEN=1 must restore the replayed template bytes --
+     * that is what keeps the vms-2f3 failing case reproducible. Proving the
+     * switch MOVES the wire is also what proves assertion 1 was measuring the
+     * daemon and not a constant (guardrail 23). */
+    CHECK(unsetenv("OVMX_INCARNATION_TIME") == 0, "unsetenv failed");
+    CHECK(setenv("OVMX_INCARNATION_FROZEN", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_MSGTIME_FROZEN", "1", 1) == 0, "setenv failed");
+    g_ovmx_incarnation_time = 0;
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_START) == 1, "frozen SEND_START emitted nothing");
+    CHECK(le64_at(scsd_test_last_frame + 80) == tmpl_incarnation,
+          "OVMX_INCARNATION_FROZEN=1 did not restore the replayed template"
+          " quadword at [66:74] (got 0x%016llx) -- the control arm of the vms-2f3"
+          " experiment is gone",
+          (unsigned long long)le64_at(scsd_test_last_frame + 80));
+    CHECK(le64_at(scsd_test_last_frame + 112) == tmpl_message,
+          "OVMX_MSGTIME_FROZEN=1 did not restore the replayed template quadword"
+          " at [98:106] (got 0x%016llx)",
+          (unsigned long long)le64_at(scsd_test_last_frame + 112));
+
+    /* --- 4. AND THE DEFAULT, WITH NO ENV AT ALL, IS LIVE ------------------ */
+    CHECK(unsetenv("OVMX_INCARNATION_FROZEN") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_MSGTIME_FROZEN") == 0, "unsetenv failed");
+    g_ovmx_incarnation_time = 0;
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_START) == 1, "default SEND_START emitted nothing");
+    uint64_t live = le64_at(scsd_test_last_frame + 80);
+    CHECK(live != 0 && live != tmpl_incarnation,
+          "with NO environment set the daemon put 0x%016llx at [66:74]; the shipped"
+          " default must be a live per-boot timestamp, not the captured template's"
+          " 0x%016llx",
+          (unsigned long long)live, (unsigned long long)tmpl_incarnation);
+    /* Sanity on the epoch: a live value must be AFTER the template's, which is
+     * 26-JUL-2026. A clock-derived quadword that is smaller means the epoch
+     * conversion is wrong, which a "not the template" check alone would miss. */
+    CHECK(live > tmpl_incarnation,
+          "the live incarnation 0x%016llx is EARLIER than the 26-JUL-2026 template"
+          " value 0x%016llx -- the VMS epoch conversion is wrong",
+          (unsigned long long)live, (unsigned long long)tmpl_incarnation);
+    CHECK(le64_at(scsd_test_last_frame + 112) > tmpl_message,
+          "the default [98:106] compose time is not later than the template's");
 }
 
 /*
@@ -6163,6 +6347,118 @@ static void test_the_process_poller_teardown_honours_the_clean_shutdown_switch(v
     CHECK(unsetenv("OVMX_PROCESS_POLLER") == 0, "unsetenv failed");
 }
 
+/*
+ * A PEER DEPARTS UNDER A POLL CYCLE IN FLIGHT (vms-096).
+ *
+ * THE BUG, IN TWO HALVES.
+ *
+ * (a) scs_pb_depart() releases EVERY CDT queued to the departing peer's Path
+ *     Block, and the poller's in-flight cycle connection is an ordinary CDT on
+ *     that circuit. Nothing told the poller. It kept `cdt` pointing at a
+ *     released slot and stayed in CONNECTING/INQUIRING/DISCONNECTING.
+ *
+ * (b) The next scs_poll_abandon() then called scs_cdl_release() on whatever
+ *     now occupied that CDL slot -- and a released slot is the FIRST one
+ *     scs_cdl_alloc() hands out. So an unrelated connection was torn down under
+ *     its owner and its MFREEQ/DFREEQ deposit was subtracted from the port.
+ *
+ * The two halves are asserted separately because they are fixed separately:
+ * part 1 pins scsd.c's scs_poll_pb_departing() call, part 2 pins the ownership
+ * check inside poll_release_cdt(). Removing either one alone reds this test.
+ */
+static void test_peer_departure_under_a_live_poll_cycle(void)
+{
+    CHECK(unsetenv("OVMX_NO_PROCESS_POLLER") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_NO_PEER_DEPART") == 0, "unsetenv failed");
+    CHECK(setenv("OVMX_PROCESS_POLLER", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_PRCPOLINTERVAL", "1", 1) == 0, "setenv failed");
+
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    CHECK(ps != NULL, "no peer");
+    if (ps == NULL) {
+        return;
+    }
+    struct scs_pb *pb = ps->pb;
+
+    struct scs_poller *p = scsd_poll(&r.rx);
+    CHECK(scs_poll_add_node(p, ps_sys_addr(ps)) == 1, "the node was not registered");
+    scs_poll_tick(p, 100000);
+    CHECK(r.rx.poll_connect_sent >= 1, "the poller opened no cycle to depart under");
+    CHECK(scs_poll_state_of(p) != SCS_POLL_IDLE,
+          "the poller is IDLE, so there is no in-flight cycle for the sweep to"
+          " interrupt and this test would prove nothing");
+    struct scs_cdt *cycle_cdt = p->cdt;
+    uint32_t cycle_conid = (cycle_cdt != NULL) ? cycle_cdt->local_conid : 0u;
+    CHECK(cycle_cdt != NULL, "the cycle holds no descriptor");
+    CHECK(cycle_cdt != NULL && cycle_cdt->pb == pb,
+          "the cycle's descriptor is not queued to the departing peer's path block,"
+          " so the sweep would not release it");
+    unsigned long abandoned_before = p->cycles_abandoned;
+
+    /* ---- 1. THE DEPARTURE MUST END THE CYCLE ---------------------------- */
+    ps->last_rx_ms = 1;
+    CHECK(rx_sweep(&r, 1 + scs_depart_listen_timeout_ms()) == 1,
+          "the silent peer was not declared departed");
+    CHECK(p->cdt == NULL,
+          "the poller still points at a descriptor the departure sweep RELEASED."
+          " The next scs_poll_abandon() will call scs_cdl_release() on whatever"
+          " has since been allocated into that CDL slot");
+    CHECK(scs_poll_state_of(p) == SCS_POLL_IDLE,
+          "the poller is %s after the node under its cycle departed; a cycle whose"
+          " connection no longer exists can never complete and would block every"
+          " later cycle", scs_poll_state_name(scs_poll_state_of(p)));
+    CHECK(p->cycles_abandoned == abandoned_before + 1,
+          "the interrupted cycle was not counted as abandoned (%lu -> %lu) -- a"
+          " cycle that ended because its node vanished is abandoned however far it"
+          " had got", abandoned_before, p->cycles_abandoned);
+
+    /* ---- 2. AND A RECYCLED SLOT IS NEVER RELEASED ------------------------
+     * Reconstruct exactly the state the unfixed sweep left behind: the poller
+     * pointing at a CDL slot that has since been handed to a DIFFERENT
+     * connection. scs_poll_abandon() must decline it. Without the ownership
+     * check in poll_release_cdt() this releases the victim. */
+    static const uint8_t other_hw_mac[6]  = {0x08, 0x00, 0x2b, 0x11, 0x22, 0x33};
+    static const uint8_t other_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x03, 0x04};
+    struct peer_state *ps2 = open_circuit_to(&r, other_hw_mac, other_logical);
+    CHECK(ps2 != NULL, "no second peer for the recycled-slot arm");
+    if (ps2 != NULL) {
+        /* Claim the departed cycle's EXACT slot by Con.ID rather than taking
+         * whatever scs_cdl_alloc() offers: earlier cases in this file have
+         * consumed low slots, so "the first free slot" is not necessarily the
+         * one just released, and the arm has to exercise a RECYCLED slot to
+         * mean anything. */
+        struct scs_cdt *victim = scs_cdl_alloc_conid(&scsd_cdl, cycle_conid,
+                                                     "VMS$VAXcluster  ",
+                                                     "VMS$VAXcluster  ", ps2->pb);
+        CHECK(victim != NULL, "the departed cycle's CDL slot could not be reclaimed"
+                              " (Con.ID 0x%08X)", cycle_conid);
+        if (victim != NULL) {
+            CHECK(victim == cycle_cdt,
+                  "the CDL did not hand back the slot the departed cycle used, so"
+                  " this arm is not exercising a RECYCLED slot at all");
+            uint32_t victim_conid = victim->local_conid;
+            p->cdt = victim;              /* the state the bug produced */
+            p->state = SCS_POLL_INQUIRING;
+            scs_poll_abandon(p);
+            CHECK(victim->in_use,
+                  "scs_poll_abandon() RELEASED a connection the poller does not own"
+                  " (Con.ID 0x%08X) -- a recycled-slot release, taken out of a live"
+                  " SYSAP's connection", victim_conid);
+            CHECK(victim->local_conid == victim_conid,
+                  "the victim's Con.ID was zeroed, i.e. its descriptor was reset"
+                  " under it");
+            CHECK(p->cdt == NULL && scs_poll_state_of(p) == SCS_POLL_IDLE,
+                  "the poller kept a descriptor it declined to release");
+            scs_cdl_release(&scsd_cdl, victim);
+        }
+    }
+
+    CHECK(unsetenv("OVMX_PRCPOLINTERVAL") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_PROCESS_POLLER") == 0, "unsetenv failed");
+}
+
 static void test_the_process_poller_kill_switch(void)
 {
     /* GUARDRAIL 23: run the switch, confirm the gated behaviour is suppressed,
@@ -6225,6 +6521,8 @@ int main(void)
     test_released_peer_slot_gives_a_returning_node_a_new_circuit();
     /* vms-4071: the daemon's use of the VC formation state machine. */
     test_vc_actions_emit_the_right_config_rounds();
+    /* vms-2f3 / vms-096: the DAEMON's [66:74] and [98:106], not the builder's. */
+    test_vc_start_carries_a_live_per_boot_incarnation();
     test_vc_happy_path_frame_sequence();
     test_vc_early_ack_is_opt_in();
     test_vc_open_on_bare_ack_still_sends_round_2();
@@ -6293,6 +6591,8 @@ int main(void)
     test_the_process_poller_asks_and_a_yes_reaches_the_sysap();
     test_the_process_poller_disconnects_and_the_cycle_closes_clean();
     test_the_process_poller_teardown_honours_the_clean_shutdown_switch();
+    /* vms-096: the departure sweep vs. a poll cycle in flight. */
+    test_peer_departure_under_a_live_poll_cycle();
     test_the_process_poller_kill_switch();
 
     CHECK(peer_logical_offset > 0,

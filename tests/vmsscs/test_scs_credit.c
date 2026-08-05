@@ -1549,9 +1549,105 @@ static void test_kill_switch(void)
     CHECK(b2.pdt_l.mfreeq_count == 10, "control: MFREEQ %u, want 10", b2.pdt_l.mfreeq_count);
 }
 
+/*
+ * RELEASING A CONNECTION RETURNS ITS SHARE OF THE MFREEQ -- ITS SHARE, AND NOT
+ * ITS WHOLE FORMATION DEPOSIT (vms-096).
+ *
+ * THE BUG. scs_cdl_release() subtracted `extended_credits` from the port's
+ * mfreeq_count. extended_credits is the deposit made at formation and NEVER
+ * changes; the connection's contribution to the queue DEPTH shrinks every time
+ * a received message is dequeued into the SYSAP's hands (mfreeq_take()) and
+ * grows back when the SYSAP releases the buffer (mfreeq_return()). So a
+ * connection released while any of its buffers were still held charged the port
+ * for those buffers a SECOND time -- and because the subtraction saturates at
+ * 0, the overdraft was silently taken out of OTHER connections' deposits.
+ *
+ * This is the identical error vms-b1d had already found and fixed on the DFREEQ
+ * side (`dgram_buffers`, not `dgram_extended`); the MFREEQ half was never
+ * brought into line.
+ *
+ * THE SHAPE OF THE TEST. TWO connections on ONE port, so the damage is
+ * observable rather than hidden by the saturation. A and B each deposit 10, so
+ * the port holds 20. Three messages are delivered on A and NOT released, so
+ * mfreeq_take() has already taken the depth to 17 (A's remaining share 7 plus
+ * B's untouched 10). Then A is released:
+ *   correct : 17 - (receive_credit 7 + pending 0) = 10 -- exactly B's deposit
+ *   the bug : 17 - extended_credits 10            =  7 -- B has been robbed of
+ *             the 3 buffers it still owns, and the port will under-report free
+ *             buffers for the rest of its life.
+ * Releasing B then takes a correct port to 0 and a buggy one to 0 as well (it
+ * saturates), which is why the FIRST number is the discriminator and the second
+ * is the conservation check.
+ */
+static void test_release_returns_the_share_still_in_the_mfreeq(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt;
+    struct scs_cdl cdl;
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt, SCS_PORT_TYPE_ETHERNET, 4096);
+    scs_cdl_init(&cdl);
+
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt, mac_r, SCS_PORT_TYPE_ETHERNET);
+    CHECK(pb != NULL, "no path block");
+    CHECK(pb != NULL && scs_pb_learn_system_addr(&cfg, pb, sysid_r) != NULL,
+          "no system block");
+    CHECK(pb != NULL && scs_pb_open(&cfg, pb) != SCS_OPEN_ERROR, "the circuit did not open");
+    struct scs_cdt *a = scs_cdl_alloc(&cdl, "VMS$VAXcluster  ", "VMS$VAXcluster  ", pb);
+    struct scs_cdt *b = scs_cdl_alloc(&cdl, "SCS$DIRECTORY   ", "SCS$DIRECTORY   ", pb);
+    CHECK(a != NULL && b != NULL, "two CDTs could not be allocated on one port");
+    if (a == NULL || b == NULL) {
+        return;
+    }
+
+    scs_credit_extend(a, 10, 1);
+    scs_credit_extend(b, 10, 1);
+    CHECK(pdt.mfreeq_count == 20, "two 10-buffer deposits give MFREEQ %u, want 20",
+          pdt.mfreeq_count);
+
+    /* Three messages arrive on connection A and the SYSAP is still holding
+     * their buffers -- exactly the state a peer departure interrupts. */
+    for (int i = 0; i < 3; i++) {
+        CHECK(scs_credit_on_recv(a, 0) == 0, "recv %d on A failed", i);
+    }
+    CHECK(pdt.mfreeq_count == 17,
+          "MFREEQ %u with 3 of A's buffers in the SYSAP's hands, want 17",
+          pdt.mfreeq_count);
+    CHECK(a->receive_credit == 7 && a->pending_receive_credit == 0,
+          "A's account reads receive=%u pending=%u, want 7/0",
+          a->receive_credit, a->pending_receive_credit);
+    CHECK(a->extended_credits == 10,
+          "A's formation deposit changed to %u -- it must not; that is the whole"
+          " point of the distinction", a->extended_credits);
+
+    /* THE RELEASE. */
+    scs_cdl_release(&cdl, a);
+
+    CHECK(pdt.mfreeq_count == 10,
+          "MFREEQ is %u after releasing a connection whose remaining share of the"
+          " queue was 7; want 10, which is exactly the OTHER connection's untouched"
+          " deposit. 7 means scs_cdl_release() subtracted the whole"
+          " `extended_credits` deposit of 10 and charged the port a second time for"
+          " the 3 buffers mfreeq_take() had already removed -- and the overdraft came"
+          " straight out of the surviving connection's 10", pdt.mfreeq_count);
+    CHECK(b->extended_credits == 10 && b->receive_credit == 10,
+          "the surviving connection's own account was disturbed by its neighbour's"
+          " release: extended=%u receive=%u", b->extended_credits, b->receive_credit);
+
+    /* And releasing the survivor takes the port to exactly 0: its whole deposit
+     * was still in the queue, and the 3 buffers the departed SYSAP was holding
+     * are gone with it and are deliberately NOT returned (the same rule vms-b1d
+     * states for the DFREEQ). */
+    scs_cdl_release(&cdl, b);
+    CHECK(pdt.mfreeq_count == 0,
+          "MFREEQ is %u after both connections were released; want 0",
+          pdt.mfreeq_count);
+}
+
 int main(void)
 {
     test_formation_extends_credits();
+    test_release_returns_the_share_still_in_the_mfreeq();
     test_worked_example_p2_43();
     test_worked_example_variation_p2_44();
     test_credit_wait_p2_45();

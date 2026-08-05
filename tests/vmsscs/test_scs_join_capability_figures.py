@@ -65,9 +65,21 @@ def check(cond, msg):
 
 
 def load(path, name):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    """Execute the measure script FROM SOURCE, never from cached bytecode.
+
+    importlib's source-file loader validates its cached .pyc on
+    (mtime-in-SECONDS, size), so an edit that keeps the file the same length
+    and lands in the same second as a previous run silently reuses the OLD
+    bytecode -- i.e. the OLD EXPECTED / EXPECTED_578 -- and this gate reads
+    both out of that module, so such a mutation would survive. The mutation
+    battery for test_scs_reason_figures.py had exactly one survivor for this
+    reason; this is the compile()+exec() form that fixed it.
+    """
+    src = open(path, encoding="utf-8").read()
+    mod = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(name, loader=None))
+    mod.__file__ = path
+    exec(compile(src, path, "exec"), mod.__dict__)
     return mod
 
 
@@ -220,6 +232,150 @@ check("actions-required-but-not-emitted=1" in sec,
 check("does **not** establish" in sec,
       "spec sec 4(O) lost its explicit non-claim -- the section must keep saying "
       "that the missing ACCEPT_RSP is NOT established as the cause")
+
+# ===========================================================================
+# 2b. THE vms-578 ACCEPTANCE BRACKET -- EXPECTED_578 vs spec sec 4(O.1)
+# ===========================================================================
+# WHY THIS EXISTS (vms-096). EXPECTED_578 is the bracket in which the
+# integrated tree JOINS -- the evidence the whole SCA-closure epic rests on --
+# and until now NO ctest gate pinned it to the prose. Every figure in sec
+# 4(O.1) could drift, or be edited to say the opposite, with the suite green.
+# The bracket above (EXPECTED) has been gated since vms-70e2; this is the same
+# discipline applied to the run that matters more.
+check(hasattr(M, "EXPECTED_578"),
+      "the measurement no longer defines EXPECTED_578 -- the vms-578 "
+      "acceptance bracket has lost its recorded figures")
+EXPECTED_578 = getattr(M, "EXPECTED_578", None)
+CAPTURES_578 = getattr(M, "CAPTURES_578", {})
+
+if EXPECTED_578:
+    check("#### 4(O.1)" in spec, "spec section 4(O.1) is missing")
+    sec1 = spec.split("#### 4(O.1)", 1)[1].split("\n## 5.", 1)[0] if "#### 4(O.1)" in spec else ""
+    # The prose writes branches inside backticks; compare against a copy with
+    # the markup removed rather than teaching EXPECTED_578 to carry markup.
+    sec1_plain = sec1.replace("`", "")
+
+    check(EXPECTED_578["pod"] in sec1, "the pod is not named in spec sec 4(O.1)")
+    check(EXPECTED_578["date"] in sec1, "the run date is not in spec sec 4(O.1)")
+    check(EXPECTED_578["lab"].replace("-", "-") in sec1,
+          "spec sec 4(O.1) does not say which LAB the runs were taken on -- "
+          "the lab-1/lab-2 distinction is what vms-096 fenced")
+
+    # THE FIGURES ARE READ OUT OF THE TABLE ROW, NOT SEARCHED FOR AS LOOSE
+    # DIGITS. Measured: with a bare `\b%d\b` search over the section, mutating
+    # B1's cm_190_tx from 509 to 508 SURVIVED -- 508 is B2's value and appears
+    # one row down. A figures gate that cannot tell two rows apart is not
+    # pinning anything.
+    def table_rows(text):
+        """Parse the sec 4(O.1) markdown table into {run tag: [cells]}."""
+        rows = {}
+        for line in text.splitlines():
+            line = line.strip()
+            if not (line.startswith("|") and line.endswith("|")):
+                continue
+            cells = [c.strip().strip("`").replace("**", "").strip()
+                     for c in line[1:-1].split("|")]
+            if len(cells) < 6 or not re.fullmatch(r"B\d", cells[0]):
+                continue
+            rows[cells[0]] = cells
+        return rows
+
+    rows578 = table_rows(sec1)
+    check(set(rows578) == set(EXPECTED_578["runs"]),
+          f"spec sec 4(O.1)'s table lists runs {sorted(rows578)}, EXPECTED_578 "
+          f"has {sorted(EXPECTED_578['runs'])}")
+
+    for tag, e in EXPECTED_578["runs"].items():
+        check(tag in sec1, f"run tag {tag} is not named in spec sec 4(O.1)")
+        for ident in e["identity"]:
+            check(ident in sec1, f"identity {ident} is not in spec sec 4(O.1)")
+        check(e["branch"] in sec1_plain,
+              f"branch {e['branch']} is not named in spec sec 4(O.1)")
+        row = rows578.get(tag)
+        if not row:
+            check(False, f"{tag} has no row in the spec sec 4(O.1) table")
+            continue
+        # | run | binary | identity | CM 190 tx | CM 190 rx | ACCEPT_RSP | verdict |
+        check(row[1].replace("`", "") in e["branch"] or e["branch"].startswith(row[1]),
+              f"{tag}: the table names binary {row[1]!r}, EXPECTED_578 says "
+              f"{e['branch']!r}")
+        check(row[2] in e["identity"],
+              f"{tag}: the table's identity {row[2]!r} is not among the "
+              f"identities measured on the wire {e['identity']!r}")
+        for col, field in ((3, "cm_190_tx"), (4, "cm_190_rx"), (5, "accept_rsp_tx")):
+            check(row[col].isdigit() and int(row[col]) == e[field],
+                  f"{tag} {field}: the spec sec 4(O.1) table row says {row[col]!r}, "
+                  f"the measurement says {e[field]}")
+        check(("JOINED" in row[6]) is bool(e["joined"]),
+              f"{tag}: the table verdict {row[6]!r} contradicts joined={e['joined']}")
+        # internal consistency: a run cannot claim N ACCEPT_RSPs and a
+        # different count of message type 3.
+        check(e["ctl_tx"].get(3) == e["accept_rsp_tx"],
+              f"{tag}: ctl_tx type-3 count {e['ctl_tx'].get(3)} disagrees with "
+              f"accept_rsp_tx {e['accept_rsp_tx']}")
+
+    # --- THE SHAPE OF THE BRACKET, not just the per-run digits -------------
+    # Two runs of the INTEGRATED tree with the control BETWEEN them, and all
+    # three joining. Without this, EXPECTED_578 could be rewritten into a shape
+    # that says the merge failed while every individual number still "appears
+    # in the spec".
+    integrated = [t for t, e in EXPECTED_578["runs"].items() if "vms-578" in e["branch"]]
+    control = [t for t, e in EXPECTED_578["runs"].items() if "vms-578" not in e["branch"]]
+    check(len(integrated) == 2 and len(control) == 1,
+          f"the acceptance bracket must be two runs of the integrated tree "
+          f"around one control; EXPECTED_578 has {len(integrated)} and {len(control)}")
+    check(control and EXPECTED_578["runs"][control[0]]["branch"]
+          == "worktree-760-active-directory",
+          "the control arm is not the worktree-760-active-directory binary")
+    for tag, e in EXPECTED_578["runs"].items():
+        check(e["joined"] is True,
+              f"{tag} is recorded as NOT JOINED -- sec 4(O.1) is the bracket in "
+              f"which every arm joins; a false arm here would invert the finding")
+        check(e["accept_rsp_tx"] > 0,
+              f"{tag} joined while sending no ACCEPT_RSP, which contradicts the "
+              f"4(O) bracket's own discriminator")
+        check(e["cm_190_rx"] > 0, f"{tag} joined while receiving no CM frames")
+
+    # --- the claims the section must keep making ---------------------------
+    check("residue" in sec1,
+          "spec sec 4(O.1) drops the OVMXA0 residue note -- the B1 capture "
+          "carries two identities and that is recorded, not filtered")
+    check("NOT CLAIMED" in sec1 or "not claimed" in sec1,
+          "spec sec 4(O.1) lost its non-claim about the CONNECT_RSP/REJECT_REQ "
+          "reduction being an improvement")
+    check("FIRST join" in sec1,
+          "spec sec 4(O.1) must keep saying these are FIRST joins -- the "
+          "rejoin (vms-2f3) is explicitly out of scope and a stale incarnation "
+          "cannot affect a first join")
+    check(set(CAPTURES_578) == set(EXPECTED_578["runs"]),
+          f"CAPTURES_578 {sorted(CAPTURES_578)} does not cover exactly the runs "
+          f"in EXPECTED_578 {sorted(EXPECTED_578['runs'])}")
+    for fn in CAPTURES_578.values():
+        check(fn.rsplit("-", 1)[0] in spec or fn in spec
+              or "vms578-{B1,B3,B2}-lab2-vaxlab4-20260805.pcap" in spec,
+              f"spec sec 4(O.1) does not name the capture {fn}")
+
+    # --- and re-derive it when the lab-2 captures are here ------------------
+    # OVMX_LAB_CAPTURES is honoured as the fallback because
+    # test_scs_join_capability_mutants.py points it at a nonexistent directory to
+    # score only the host-independent checks; a re-derivation that ignored it
+    # would try to import the dissector into the mutants' scratch tree.
+    cap578 = os.environ.get("OVMX_LAB2_CAPTURES",
+                            os.environ.get("OVMX_LAB_CAPTURES", M.DEFAULT_CAPTURE_DIR))
+    have578 = all(os.path.exists(os.path.join(cap578, fn))
+                  for fn in CAPTURES_578.values())
+    if have578:
+        for tag, fn in CAPTURES_578.items():
+            g = M.measure_capture(os.path.join(cap578, fn), EXPECTED_578.get(
+                "ovmx_mac", EXPECTED["ovmx_mac"]))
+            e = EXPECTED_578["runs"][tag]
+            for field in ("cm_190_tx", "cm_190_rx", "ctl_tx", "accept_rsp_tx", "identity"):
+                check(g[field] == e[field],
+                      f"[captures-578] {tag} {field} {g[field]!r} != {e[field]!r}")
+        print("[the lab-2 captures are present -- EXPECTED_578 was re-derived from them]")
+    else:
+        print(f"[no lab-2 captures under {cap578} -- EXPECTED_578 was pinned to "
+              f"the prose; the re-derivation was not run]")
 
 # ===========================================================================
 # 3. THE QUARANTINE

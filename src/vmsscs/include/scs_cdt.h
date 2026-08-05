@@ -466,8 +466,13 @@ struct scs_cdt *scs_cdl_alloc_conid(struct scs_cdl *cdl, uint32_t conid,
  * "released (but not deallocated)"). No-op on NULL or an already-free CDT.
  *
  * vms-61b: also RETURNS this connection's share of the port MFREEQ -- the
- * `extended_credits` buffers p. 2-43 contributed at connection formation are
- * subtracted from cdt->pb->pdt->mfreeq_count (saturating at 0). Nothing else
+ * buffers p. 2-43 contributed at connection formation that are STILL SITTING IN
+ * the queue, i.e. `receive_credit + pending_receive_credit`, are subtracted from
+ * cdt->pb->pdt->mfreeq_count (saturating at 0). CORRECTED vms-096: this used to
+ * subtract `extended_credits`, the whole formation deposit, which charges the
+ * port a second time for every buffer already dequeued into the SYSAP's hands
+ * by mfreeq_take() -- the exact error vms-b1d had already fixed on the DFREEQ
+ * side below. Nothing else
  * about the credit account is touched; in particular the CDT's Credit Wait
  * queue is NOT drained here, because struct scs_credit_waiter is opaque to
  * scs_cdt.c. A caller tearing a connection down must call

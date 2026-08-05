@@ -45,6 +45,7 @@ WHAT THIS TEST DOES NOT DO: it does not read a pcap and it cannot tell you the
 measurement is right. It tells you the documents still say what the measurement
 said. `tools/cluster/scs_disc_measure.py` is the only thing that re-derives it.
 """
+import importlib.util
 import os
 import re
 import sys
@@ -79,9 +80,34 @@ def read(path):
 
 
 # --- EXPECTED, imported from the measure script ----------------------------
-sys.path.insert(0, os.path.dirname(MEASURE))
-_mod = os.path.splitext(os.path.basename(MEASURE))[0]
-EXPECTED = __import__(_mod).EXPECTED
+def load_measure():
+    """Execute the measure script FROM SOURCE, never from cached bytecode.
+
+    `__import__` (and importlib's source-file loader generally) validates its
+    cached .pyc on (mtime-in-SECONDS, size). An edit that keeps the file the
+    same length and lands in the same second as a previous run therefore
+    silently reuses the OLD bytecode -- i.e. the OLD EXPECTED -- and this gate
+    reads EXPECTED out of that module, so the mutation would survive.
+    test_scs_reason_figures.py hit exactly that (one surviving mutant,
+    `EXPECTED pcaps 25 -> 26`) and switched to compile()+exec(); this gate had
+    not. Reading the source text every time removes the cache from the path.
+    """
+    src = open(MEASURE, encoding="utf-8").read()
+    mod = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader("scs_disc_measure", loader=None))
+    mod.__file__ = MEASURE
+    # scs_disc_measure.py imports dissect_sca LAZILY, so nothing here needs
+    # the dissector or a capture -- but keep its directory on sys.path so a
+    # future eager import does not turn this gate red for the wrong reason.
+    d = os.path.dirname(MEASURE)
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    exec(compile(src, MEASURE, "exec"), mod.__dict__)
+    return mod
+
+
+MEASURE_MOD = load_measure()
+EXPECTED = MEASURE_MOD.EXPECTED
 
 header = read(HEADER)
 daemon = read(DAEMON)
@@ -413,6 +439,61 @@ for phrase, why in (
           f"down, not dropped.")
 check(re.search(r"\b8\b.{0,80}\b9\b", spec, re.S) is not None,
       "the spec no longer names message types 8 and 9 together")
+
+# ===========================================================================
+# THE LAB FENCE (vms-096)
+# ===========================================================================
+# Six 2026-08-05 lab-2 vaxlab-4 captures were deposited into the LAB-1
+# grounding library and silently mixed two labs -- lab-2 replicas reuse lab-1's
+# SCSSYSTEMIDs and node MACs by design (tests/lab/README.md), so the frames look
+# like lab-1's nodes. Measured at the time: 23 of scs_disc_measure's 34 checks
+# red, 13 of 27 in scs_reason_measure, 18 of 67 in scs_connect_data_measure, 11
+# of 30 in scs_credit_measure. The captures now live in a
+# /data/training/vax/cluster/captures-lab2 SIBLING and each globbing tool
+# carries a `lab1_only()` guard. This gate keeps the guard alive: it is the
+# executable half of the fence, since the guard itself only fires on a host
+# that has the captures.
+check(hasattr(MEASURE_MOD, "lab1_only"),
+      "scs_disc_measure.py has lost its lab1_only() fence -- a lab-2 capture "
+      "dropped into the lab-1 library would silently move every census again")
+if hasattr(MEASURE_MOD, "lab1_only"):
+    clean = ["/x/cd0-baseline-current-20260728.pcap", "/x/formation-01.pcap"]
+    check(MEASURE_MOD.lab1_only(list(clean)) == clean,
+          "lab1_only() rejected a clean lab-1 capture list")
+    try:
+        MEASURE_MOD.lab1_only(clean + ["/x/vms578-B1-lab2-vaxlab4-20260805.pcap"])
+        check(False, "lab1_only() accepted a lab-2 capture in the lab-1 library")
+    except SystemExit as exc:
+        check("vms578-B1-lab2-vaxlab4-20260805.pcap" in str(exc),
+              "lab1_only() refused the mixed list without naming the offender")
+
+# Every lab-1-grounded tool that GLOBS the library must carry the same fence,
+# and the fence must be wired into the glob -- a defined-but-uncalled guard is
+# the same defect in a different place.
+FENCED = {
+    "tools/cluster/scs_disc_measure.py": "lab1_only(sorted(glob.glob(",
+    "tools/cluster/scs_reason_measure.py": "lab1_only(sorted(glob.glob(",
+    "tools/scs_credit_measure.py": "lab1_only(sorted(glob.glob(",
+    "tools/scs_connect_data_measure.py": "lab1_only(sorted(glob.glob(",
+}
+for rel, wiring in FENCED.items():
+    path = os.path.join(ROOT, rel)
+    if not os.path.exists(path):
+        check(False, f"{rel} is missing")
+        continue
+    src = read(path)
+    check("def lab1_only(" in src, f"{rel} has no lab1_only() fence")
+    check(wiring in src,
+          f"{rel} defines lab1_only() but does not wrap its glob with it")
+
+# The one tool that legitimately reads lab-2 must point AWAY from the lab-1
+# library, or the separation is only a comment.
+JC = os.path.join(ROOT, "tools/cluster/scs_join_capability_measure.py")
+if os.path.exists(JC):
+    jc = read(JC)
+    check(re.search(r'DEFAULT_CAPTURE_DIR\s*=\s*"[^"]*captures-lab2"', jc),
+          "scs_join_capability_measure.py still defaults to the lab-1 capture "
+          "directory; its six lab-2 captures belong in the -lab2 sibling")
 
 print(f"{'FAIL' if failures else 'PASS'}: {checks} checks, {failures} failure(s)")
 sys.exit(1 if failures else 0)

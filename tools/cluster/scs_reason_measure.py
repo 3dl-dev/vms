@@ -62,6 +62,27 @@ from dissect_sca import read_pcap  # noqa: E402
 
 DEFAULT_CAPDIR = "/data/training/vax/cluster/captures"
 
+# THE LAB FENCE (vms-096). DEFAULT_CAPDIR is the LAB-1 grounding library and
+# every figure in EXPECTED is a lab-1 measurement. lab-2 replicas reuse lab-1's
+# SCSSYSTEMIDs and node MACs by design (tests/lab/README.md), so a lab-2
+# capture deposited here silently moves every census -- six 2026-08-05
+# vaxlab-4 captures did exactly that and put 13 of this script's 27 checks red.
+# They now live in the /data/training/vax/cluster/captures-lab2 SIBLING. Full
+# rationale in tools/cluster/scs_disc_measure.py.
+LAB2_MARKER = "-lab2-"
+
+
+def lab1_only(paths):
+    """Return `paths` unchanged, or die naming every lab-2 capture in them."""
+    foreign = sorted(os.path.basename(p) for p in paths
+                     if LAB2_MARKER in os.path.basename(p))
+    if foreign:
+        raise SystemExit(
+            "lab fence: %d lab-2 capture(s) in the lab-1 grounding library. "
+            "Move them to a <capdir>-lab2 sibling and re-run; do NOT raise "
+            "EXPECTED to absorb them.\n  %s" % (len(foreign), "\n  ".join(foreign)))
+    return paths
+
 SCA_ETHERTYPE = b"\x60\x07"
 CONNCTL_SCA_LEN = 62
 CONNCTL_CLASSES = (62, 66, 110)   # spec sec 4(h)(1a) connection-control lengths
@@ -142,7 +163,7 @@ def hist(counter):
 
 
 def measure(capdir):
-    files = sorted(glob.glob(os.path.join(capdir, "*.pcap")))
+    files = lab1_only(sorted(glob.glob(os.path.join(capdir, "*.pcap"))))
     rows = collections.defaultdict(list)          # (scalen, msgtype) -> frames
     skipped = []
     for path in files:

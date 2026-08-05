@@ -46,7 +46,19 @@ THE RESULT, IN ONE LINE: the joining binary transmits 514 CM frames and receives
     tools/cluster/scs_join_capability_measure.py --print    # just print
 
 Requires the lab captures, host-only and NOT in git (CLAUDE.md rule 8):
-/data/training/vax/cluster/captures/vms70e2-*.pcap. Override with --captures.
+/data/training/vax/cluster/captures-lab2/vms{70e2,578}-*.pcap. Override with
+--captures.
+
+THIS IS THE ONE MEASUREMENT TOOL THAT READS LAB-2, and the reason the captures
+it reads live in a SEPARATE directory (vms-096). Every other measurement tool
+here is grounded in LAB-1 -- the hand-run SIMH cluster under
+/data/training/vax/cluster/captures -- and globs that directory. lab-2 replicas
+reuse lab-1's SCSSYSTEMIDs and node MACs by design (tests/lab/README.md), so
+while these six captures sat in the lab-1 library they silently moved every
+lab-1 census: scs_disc_measure (23/34 checks red), scs_reason_measure (13/27),
+scs_connect_data_measure (18/67) and scs_credit_measure (11/30). Those four now
+carry a `lab1_only()` fence that dies loudly if a `-lab2-` capture reappears
+there. Do not move these files back.
 
 `ctest -R scs_join_capability_figures` does NOT need them: it exercises this
 file's decoder against synthesized frames and asserts every figure in EXPECTED
@@ -137,7 +149,11 @@ CAPTURES = {
     "A3": "vms70e2-A3-lab2-vaxlab4-20260805.pcap",
 }
 
-DEFAULT_CAPTURE_DIR = "/data/training/vax/cluster/captures"
+# The LAB-2 capture library -- a SIBLING of the lab-1 grounding library, not a
+# subdirectory of it (scs_connect_data_measure.py globs `**/*.pcap`
+# recursively, so a subdirectory would not fence it out). See the module
+# docstring.
+DEFAULT_CAPTURE_DIR = "/data/training/vax/cluster/captures-lab2"
 
 ETHERTYPE_SCA = b"\x60\x07"
 

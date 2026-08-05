@@ -108,12 +108,20 @@ target_link_libraries(vmsscs_cdt PUBLIC vmsscs_config)
 # sender is suspended and resumed FIFO when credit arrives, pp. 2-45..2-46) and
 # the p. 2-44 special credit message trigger.
 #
-# LINKED INTO scsd_exe SINCE vms-17f, but only barely: the daemon's ONE call
-# into this library is scs_credit_wait_flush() on connection teardown (via
-# vmsscs_depart). OVMX still emits no live credit, enters no Credit Wait and
-# sends no special credit message, so that flush always drops zero waiters
-# today. See the reachability notes in scs_credit.h -- do not read a green test
-# run as "OVMX does flow control".
+# LINKED INTO scsd_exe SINCE vms-17f, and reached only on the TEARDOWN side.
+# `nm build/bin/SCSD.EXE | grep -c ' T scs_credit'` = 22. It arrives three ways,
+# all transitive -- vmsscs_depart, vmsscs_svc, and (vms-096) vmsscs_poll -- and
+# the production call sites are scs_depart.c:88, scs_svc.c:269 and
+# scs_poll.c:377, all scs_credit_wait_flush(), plus scs_credit_extend() at
+# scs_svc.c:250 which scsd.c only ever reaches with 0. OVMX still emits no live
+# credit, enters no Credit Wait and sends no special credit message, so every
+# flush drops zero waiters today.
+#
+# NOTE (vms-096) the comment on vmsscs_reason below said the reason codec had no
+# production caller, by the same "OVMX builds no DISCONNECT_REQ" argument that
+# vms-591 falsified; both entries are corrected together so the two cannot drift
+# apart again. See the reachability notes in scs_credit.h -- do not read a green
+# test run as "OVMX does flow control".
 add_library(vmsscs_credit STATIC scs_credit.c)
 target_include_directories(vmsscs_credit PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -147,10 +155,20 @@ target_link_libraries(vmsscs_conn PUBLIC vmsscs_cdt)
 
 # vms-6b3 - THE 16-BIT REJECT/DISCONNECT REASON CODE (VAXcluster Principles
 # p. 2-26). Two bytes and their kill switch: no allocation, no dependency on any
-# other vmsscs library. The RECEIVE half is live in scsd.c; the send half is a
-# tested codec with no production caller because OVMX builds neither REJECT_REQ
-# nor DISCONNECT_REQ (scs_svc.h). The byte OFFSET is a LABELED OVMX design
-# choice -- see scs_reason.h and docs/cluster-protocol-spec.md sec 5.
+# other vmsscs library.
+#
+# BOTH HALVES ARE LIVE (corrected vms-096; this said "the send half is a tested
+# codec with no production caller because OVMX builds neither REJECT_REQ nor
+# DISCONNECT_REQ", which stopped being true at vms-591). RECEIVE: scsd.c decodes
+# and logs the field. SEND: scs_disc.c:138 calls scs_reason_put() inside
+# scs_disc_build_request(), driven from scsd.c with SCS_REASON_SYSAP_SHUTDOWN
+# and SCS_REASON_PEER_DISCONNECT -- and those values are on a real VAX's wire
+# (6x reason 5, 4x reason 7 over the lab-2 vaxlab-4 captures, against 0 in every
+# VMS-origin frame we hold).
+#
+# vmsscs_disc therefore links vmsscs_reason, which is why THIS entry must stay
+# above it. Both the byte OFFSET and the code VALUES are LABELED OVMX design
+# choices -- see scs_reason.h and docs/cluster-protocol-spec.md sec 5.
 add_library(vmsscs_reason STATIC scs_reason.c)
 target_include_directories(vmsscs_reason PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -236,11 +254,17 @@ target_link_libraries(vmsscs_svc PUBLIC vmsscs_conn vmsscs_credit vmsscs_dgram v
 # named SYSAPs are listening, notifies on a Yes only, and DISCONNECTs. Links
 # vmsscs_svc for the five services it drives and vmsscs_dir for the request
 # frame shapes and the answer classification.
+#
+# vms-096 adds vmsscs_depart, for scs_depart_enabled() ALONE:
+# scs_poll_pb_departing() must decline exactly when scs_pb_depart() would
+# decline, and respelling that kill switch here is how the two would drift. The
+# poller sits ABOVE the departure teardown in this graph -- which is why
+# scs_depart.c cannot make the call itself and scsd.c makes it instead.
 add_library(vmsscs_poll STATIC scs_poll.c)
 target_include_directories(vmsscs_poll PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(vmsscs_poll PUBLIC vmsscs_svc vmsscs_dir)
+target_link_libraries(vmsscs_poll PUBLIC vmsscs_svc vmsscs_dir vmsscs_depart)
 
 # vms-760 - MSCP-over-SCS disk-client command builders (SET CONTROLLER
 # CHARACTERISTICS 0x04 + GET UNIT STATUS 0x03, byte-exact vs the golden af2

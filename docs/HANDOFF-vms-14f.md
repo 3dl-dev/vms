@@ -1,11 +1,81 @@
 # HANDOFF — vms-14f, the executive-residency dispatch
 
-**Revised 2026-08-04 (round 9), after the round that spent itself on the real VMS defects instead of
-the machinery.** Read §1 first. Everything else is reference §1 sends you to.
+**Revised 2026-08-05 (round 10), after the round that finished the last wrong-answer defect and
+found the data file underneath it was an invention.** Read §0-R10 first, then §1.
 
-Every number below was re-derived on 2026-08-04. **Re-derive them again** — main moved three times
-during the last round while CI was running, and two of this document's numbers were stale within
-the hour.
+Every number below was re-derived on 2026-08-05. **Re-derive them again.**
+
+---
+
+## 0-R10. What changed in round 10
+
+Round 10 worked exactly one item, `vms-2f8`, because it turned out to be two.
+
+| The 2026-08-04/round-9 revision said | Actually |
+|---|---|
+| closure = **30 open** | **28 open.** `vms-2f8` closed; `vms-e60`/`vms-82a` had already closed. |
+| `vms-2f8` is "F$IDENTIFIER's data source … not a wrong-answer defect" | **Half right, and the wrong half was the dangerous one.** The SOURCE question was real and is now answered. But the file it was going to be pointed at — the shipped `RIGHTSLIST.DAT` — **was an invention**, and wiring the reader to it unchanged would have shipped six wrong answers *while looking like it had started reading a real facility*. |
+| local ctest **64 tests**, 1 expected failure | **66 tests, 2 failures.** `test_libvms_protection` (`vms-2a1`, the documented apparmor one) and **`rd_citations_fresh`, which is RED ON MAIN and was before this round** — filed as `vms-344`, left exactly as found. |
+| disk **2.7 GB free, 99%** | **4.5 GB free, 98%.** Slightly better. Still do not prune `vat-env-*`. |
+| no PR open | **PR #79 merged**, `e68fc4d`, 35/35 CI green by SHA `4fe0deb`. |
+
+### What `vms-2f8` actually was
+
+`F$IDENTIFIER` now READS the rights database (`src/libvms/rtl/rightslist.c`): general identifiers
+from `SYS$SYSTEM:RIGHTSLIST.DAT`, UIC identifiers **derived** from SYSUAF rather than duplicated,
+because two files free to disagree about one account's UIC is the defect `vms-e60` closed.
+
+**The shipped file carried `INTERACTIVE:1 BATCH:2 NETWORK:3 LOCAL:4 REMOTE:5`, all attributed
+`RESOURCE`. Asked of the oracle: none of 1–5 is an identifier on real VMS — every one answers the
+null string.** The real environmental identifiers are `%X80000001`–`%X80000006` assigned
+*alphabetically*; `DIALUP` was missing entirely; the Attributes column is empty. Corrected in the
+same commit that made anything read it. Transcript: `docs/oracle/vax73-rights-database.md` (new).
+
+The `8388736 -> "DEFAULT"` reverse mapping round 9 deliberately declined to add on the strength of
+symmetry has now been **asked** and answers `DEFAULT`. Not inferred — read out of the database.
+
+### The three things round 10 found that outlive it
+
+1. **`vms-79f` — the VMS-native shareable recipes keep a hand-maintained TU list parallel to
+   `CMakeLists.txt`, and nothing checks they agree.** Adding `rtl/rightslist.c` to CMake and not to
+   `src/vmslink/mk_libvms_shr.sh` left **every local signal green** — clean build, 64/66 ctest,
+   every host test of the new code passing — and failed only in CI's arm64 VMS-native DCL link job,
+   5m19s in, on an undefined symbol. `mk_vmsrms_shr.sh` has the same shape. The comment claiming
+   the lists were equal was itself the thing that was wrong.
+2. **`vms-c71` — `SHOW SYMBOL` renders integers as 64-bit**: negatives sign-extend in Hex/Octal, and
+   the Octal field is 12 digits where VMS prints 11 (wrong for *positive* values too, today). The
+   six general identifiers are the first negative values `F$IDENTIFIER` can return, which is why
+   this surfaced now.
+3. **`vms-344` — `rd_citations_fresh` is red on `main`.** `sys_lock.c`'s three `OVMX-EXECUTIVE`
+   declarations cite `vms-82a`, which round 9 closed. **Regenerating the ledger does NOT fix it** —
+   that fixes only the freshness half; the tree-wide rescan fails independently. And the underlying
+   tension is general: an `OVMX-EXECUTIVE` declaration is a claim a facility IS executive-resident,
+   yet the gate requires it to cite an item, and every item eventually closes. **Every successful
+   executive-residency fix arms this same red the moment its item closes.** `vms-82a` is the first
+   to fire, not the last.
+
+### Method, round 10
+
+**THE MEASUREMENT THAT LOOKED LIKE A FINDING, THREE TIMES.** Establishing whether new assertions
+would enlarge a control's red set meant applying each `dcl-fident-*` mutation and probing. The first
+three attempts all reported "no effect" — a clean, believable result. All three were **void**: first
+the subcommand was wrong (`inject`, not `apply`), then the src-root was wrong (`.`, not `src`, since
+`targets` is a path relative to it). The landed-check that should have caught it diffed against git
+`HEAD`, which was already dirty with the round's own edits, so it reported "landed" every time.
+*Prove which binary ran — the md5 of the artifact, not the exit status of the tool.*
+
+**A FIRST GUESS AT WHICH ASSERTION CATCHES WHICH MUTATION WAS WRONG, IN THE COMFORTING DIRECTION.**
+The new test's header claimed the `1..5` miss checks would catch a reader wired to the uncorrected
+file. Measured: they do not — the old file's bare-decimal values do not parse at all, so the
+*positive* checks fail instead. A second mutation (old numbering in the new notation) is what the
+misses actually catch. Both populations are in the test because neither mutation is caught by both.
+
+**AN ASSERTION YOU CANNOT MEASURE WHERE IT RUNS DOES NOT GO THERE.** The discriminating `4 -> ""`
+check would have enlarged two declared red sets, and its behaviour under one control is
+host-sensitive (`getpwuid(4)` is `SYNC` on this host; the guest stages a different passwd). It was
+kept out of the QEMU suite and lives in the host test where its negative control is real and
+complete. Declaring a red-set entry measurable only on the host, for a gate that runs in QEMU, is
+the reasoning the manifest's own rulings forbid.
 
 ---
 
@@ -36,8 +106,15 @@ the hour.
 The objective is **`vms-14f`**: *OVMX runs unmodified VMS software: executive-resident system
 facilities, no facades.*
 
-**State (re-derived 2026-08-04, end of round 9):** closure = **30 open** by DAG walk from
-`vms-14f`. Main is at **`9b72ba4`**. No PR is open.
+**State (re-derived 2026-08-05, end of round 10):** closure = **28 open** by DAG walk from
+`vms-14f`; **16 of them unblocked**. Main is at **`e68fc4d`**. No PR is open.
+
+> **Round 10 note on §1's "go here next" list below: both of its entries are DONE.** `vms-e60` and
+> `vms-82a` closed in round 9; `vms-2f8` closed in round 10. **There is no wrong-answer VMS defect
+> left unblocked in this closure.** What remains unblocked is `vms-4c2` (AUTHORIZE's positive
+> control — needs a human first, §6) and fifteen machinery items. The ratio the last two revisions
+> kept flagging is now the whole picture, and §6's "whether to keep paying for the machinery" is
+> the live question rather than a background one.
 
 **`vms-b33` is still blocked by exactly one item: `vms-d894`**, and `vms-d894` is now sitting on a
 human as an `rd` **scope gate**, not on you. Do not close it by asserting its criterion is met — it

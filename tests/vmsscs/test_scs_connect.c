@@ -327,7 +327,8 @@ static void test_connect_data_decode_real_frames(void)
     check_bytes(v.connect_data, member_cd, SCS_CONNECT_DATA_LEN, "view carries the member value");
 
     /* The two invariant spans, read off the captured frames rather than off
-     * our own builder (203/203 across the library). */
+     * our own builder (148/148 VAX-sourced frames across the library; OVMX's
+     * own 55 are excluded from the census -- see the guard in scs_connect.h). */
     check(memcmp(vax3_joiner_connect_req + SCS_CONNECT_DATA_ABS_OFF,
                  vax1_member_accept_req + SCS_CONNECT_DATA_ABS_OFF, 4) == 0,
           "the [94:98] version quad is the same in both captured frames");

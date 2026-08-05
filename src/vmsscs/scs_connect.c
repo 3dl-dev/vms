@@ -22,11 +22,12 @@
  *
  * NOT invented, NOT an OVMX design choice: every byte below was observed. */
 const uint8_t scs_connect_data_vaxcluster[SCS_CONNECT_DATA_LEN] = {
-    /* [0:4]  version quad, 203/203 VMS$VAXcluster connect frames */
+    /* [0:4]  version quad, 148/148 VAX-sourced VMS$VAXcluster connect
+     * frames (OVMX's own 55 excluded -- see the guard in scs_connect.h) */
     0x01, 0x1b, 0x01, 0x03,
     /* [4:11] the joiner form (all-zero); what it encodes is an RE gap */
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    /* [11:16] tail, 203/203 */
+    /* [11:16] tail, 148/148 VAX-sourced */
     0x08, 0x00, 0x00, 0x06, 0x00
 };
 

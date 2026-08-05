@@ -1661,7 +1661,8 @@ static int scsd_log_peer_connect_data(const uint8_t *buf, size_t n)
      * one of these two, and the frame to be long enough to hold it. */
     uint16_t cmsg = (uint16_t)(buf[60] | ((uint16_t)buf[61] << 8));
     /* [62:78] = abs 76:92, the sender's local SYSAP name (spec sec 4h(2)).
-     * Measured ASCII in 1891/1891 connect frames, but this is peer-supplied
+     * Measured ASCII in 1425/1425 VAX-sourced connect frames (and in all 466
+     * OVMX-sourced ones), but this is peer-supplied
      * and goes straight into a log line, so sanitize rather than trust it. */
     char sysap[17];
     for (int i = 0; i < 16; i++) {

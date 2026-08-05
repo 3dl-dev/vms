@@ -1665,10 +1665,35 @@ the target, it explicitly breaks the connection that the target accepted."
 p. 2-28 puts the field in the CDT. This section locates it on our wire.
 
 **Re-derive everything below:** `tools/scs_connect_data_measure.py` (lab host;
-the captures are host-only and not in git). Last full run **2026-08-04: 25
+the captures are host-only and not in git). Last full run **2026-08-05: 42
 checks, 0 failures.** `ctest -R scs_connect_data_figures` needs no captures — it
 asserts these figures still appear verbatim here and in
 `src/vmsscs/include/scs_connect.h`.
+
+**THE POPULATION IS VAX-ONLY — OVMX's own frames are not evidence about VMS.**
+The lab captures are recorded on a LAN where OVMX itself is a talker, so a
+quarter of the library's connect frames were **transmitted by OVMX** and are
+**excluded here: 466 of 1891, of which 55 are `VMS$VAXcluster`**.
+Counting those toward "what a
+real VAX puts in this field" is circular grounding: the census could not then
+distinguish *"every VMS node does this"* from *"we do this, and so do the VAXes
+we recorded alongside us"*. **Every GROUNDED figure in this section is therefore
+measured over VAX-sourced frames only.** The split is on the Ethernet source MAC
+and is a first-class filter in the tool, which reports both populations and the
+counts it dropped.
+
+Identification is sound: OVMX never spoofs its Ethernet source — `scsd` takes
+`our_hw_mac` from `SIOCGIFHWADDR` and every builder copies it into abs `[6:12]`
+— and its MACs are the `hwmac=` values `scsd` itself logged in the lab work
+directory. That blocklist is backed by a **structural rule**: a real lab VAX
+sources from `08:00:2b` (DEC NIC OUI) or `aa:00:04` (DECnet logical address);
+anything else, in particular a locally-administered Linux tap MAC, is not a VAX.
+The tool **fails** on any source it cannot place, so a future OVMX run on a new
+MAC reds the measurement rather than silently rejoining the sample.
+
+OVMX-sourced frames remain legitimate evidence about exactly one thing — **what
+OVMX's own encoder emits** — and the tool reports that population separately.
+They are never evidence about a real VAX.
 
 **WHERE IT IS — GROUNDED.** The connect data is the **last 16 payload bytes of
 the 110-byte connect class, `[94:110]`** (absolute frame `[108:124]`), directly
@@ -1678,44 +1703,58 @@ an unexplained replay.
 
 **Population, and why it is exactly this one.** Take `sca = frame[14:]`; keep
 `len(sca) == 110`, format byte `sca[17] == 0x13`, opcode `sca[16]` in
-`{0x4b, 0x5b, 0x7b}`; then split on the SCA connection-control message type at
-`[46:48]` (§4(h)(1a)). Over every `.pcap` in the lab capture directory (**48
-files**) that class carries message types **`{0: 1497, 2: 394, 10: 2889}`**.
-The 1497 + 394 = **1891** type-0/type-2 frames all carry an ASCII SYSAP name at
+`{0x4b, 0x5b, 0x7b}`; drop OVMX-sourced frames per the guard above; then split
+on the SCA connection-control message type at `[46:48]` (§4(h)(1a)). Over every
+`.pcap` in the lab capture directory (**48 files**) the VAX-sourced part of that
+class carries message types **`{0: 1101, 2: 324, 10: 2889}`**. The
+1101 + 324 = **1425** type-0/type-2 frames all carry an ASCII SYSAP name at
 `[62:78]` — **0 non-ASCII residuals** — while the type-10 frames carry binary
 there and are not connect frames. So the field is claimed for `CONNECT_REQ` and
 `ACCEPT_REQ` **only**; a length test alone would over-claim by 2 889 frames.
+(OVMX's own 466 connect frames are `{0: 396, 2: 70}` — it emits **no** type-10
+frame at all. The two populations are not scaled copies of one another, which is
+why the exclusion has to be applied before the split rather than to the totals.)
 
 **WHAT IS IN IT — GROUNDED, and it is per-SYSAP, not per-node.** Census of
-`[94:110]` over those 1 891 frames, keyed on the local SYSAP name `[62:78]`:
+`[94:110]` over those 1 425 VAX-sourced frames, keyed on the local SYSAP name
+`[62:78]`. The last column records what OVMX contributed and the guard removed:
 
-| local SYSAP | frames | distinct values | value(s) |
-|---|---|---|---|
-| `MSCP$DISK` | 1052 | 1 | ASCII **`"V5.0          + "`** |
-| `SCS$DIRECTORY` | 314 | 1 | 16 ASCII spaces |
-| `SCS$DIR_LOOKUP` | 189 | 1 | 16 ASCII spaces |
-| `SCA$TRANSPORT` | 32 | 2 | `02 02 01 03 …` |
-| `VMS$DISK_CL_DRVR` | 101 | 5 | `00 00 04 a0 00 00 00 00 NN 04 00 00 00 00 04 01` |
-| `VMS$VAXcluster` | 203 | 5 | `01 1b 01 03 …` |
+| local SYSAP | VAX frames | distinct values | value(s) | OVMX frames excluded |
+|---|---|---|---|---|
+| `MSCP$DISK` | 809 | 1 | ASCII **`"V5.0          + "`** | 243 |
+| `SCS$DIRECTORY` | 201 | 1 | 16 ASCII spaces | 113 |
+| `SCS$DIR_LOOKUP` | 134 | 1 | 16 ASCII spaces | 55 |
+| `SCA$TRANSPORT` | 32 | 2 | `02 02 01 03 …` | 0 |
+| `VMS$DISK_CL_DRVR` | 101 | 5 | `00 00 04 a0 00 00 00 00 NN 04 00 00 00 00 04 01` | 0 |
+| `VMS$VAXcluster` | 148 | 5 | `01 1b 01 03 …` | 55 |
 
 **`MSCP$DISK` is the decisive row**: a printable ASCII **version string** in the
 connect data of the disk-server SYSAP — p. 2-25's "which version" read straight
-off the wire, at these offsets, with 1 052 frames and one distinct value. The
-`VMS$DISK_CL_DRVR` row is the corroborating one: its byte `NN` takes
+off the wire, at these offsets, with **809** VAX-sourced frames from four
+distinct VAX nodes and one distinct value. The `VMS$DISK_CL_DRVR` row is the
+corroborating one, and it is **untouched by the guard** — OVMX runs no such
+SYSAP, so all 101 frames are VAX-sourced: its byte `NN` takes
 `{01, 02, 03, 1a, 4b}` = `{1, 2, 3, 26, 75}`, exactly the LAVC node numbers of
 VAX1/VAX2/VAX3/VX3-1050/ZK-1099 (`SCSSYSTEMID & 1023`, §4(g)) — a per-node datum
 landing inside the 16-byte window, which is a second, independent check that the
 window's boundaries are right.
 
-**The `VMS$VAXcluster` value — what is invariant.** Across **all 203**
-`VMS$VAXcluster` connect frames, from every node, every boot and every capture we
-hold (all VAX/VMS V7.3):
+**The `VMS$VAXcluster` value — what is invariant.** Across **all 148**
+VAX-sourced `VMS$VAXcluster` connect frames, from **4 distinct VAX nodes**, every
+boot and every capture we hold (all VAX/VMS V7.3):
 
 | span | value | grounding |
 |---|---|---|
-| `[94:98]` | `01 1b 01 03` | **GROUNDED 203/203, 0 residuals** — the version quad |
+| `[94:98]` | `01 1b 01 03` | **GROUNDED 148/148, 0 residuals** — the version quad |
 | `[98:105]` | 5 distinct | **NOT GROUNDED** — see the gap below |
-| `[105:110]` | `08 00 00 06 00` | **GROUNDED 203/203, 0 residuals** |
+| `[105:110]` | `08 00 00 06 00` | **GROUNDED 148/148, 0 residuals** |
+
+Excluding OVMX moved these counts from `203/203` to `148/148`; it did **not**
+weaken either claim below what we would accept from a stranger's capture — the
+two spans still hold with zero residuals over four independent real VAX nodes,
+many boots and 48 captures, and the distinct-value count for `[98:105]` is
+unchanged at 5 (OVMX's 55 frames carried only values the VAXes already emit).
+No claim in this section had to be downgraded to a §5 gap as a result.
 
 **What OVMX sends, and why that value.** OVMX joins an existing cluster.
 `vax3-2to3-established-join-20260730.pcap` is the library's only capture of a
@@ -1733,28 +1772,54 @@ byte, stamped by **both** OVMX builders — because OVMX occupies exactly VAX3's
 role in exactly that exchange. The established **members** in the same capture
 emit a different value (VAX1 raw 136, VAX2 raw 208, both
 `01 1b 01 03 01 00 01 00 02 00 01 08 00 00 06 00`), and that contrast is what
-the decode test in `tests/vmsscs/test_scs_connect.c` asserts.
+the decode test in `tests/vmsscs/test_scs_connect.c` asserts. **Both ends of
+that contrast are real VAXes.** OVMX is present in the specimen as a bystander
+(209 SCA frames) but sources no `VMS$VAXcluster` connect frame in it, and the
+tool asserts that — the joiner/member contrast is VAX-to-VAX throughout.
+
+**Not just the specimen.** Two frames would be thin evidence for a value a peer
+is documented to *reject* on, so the adopted value is attested independently:
+**40 VAX-sourced `VMS$VAXcluster` connect frames carry it, 38 of them outside
+the specimen, from 3 distinct VAX nodes across 18 captures.** All three counts
+are pinned by the tool. (OVMX's own excluded frames also carry it 54 times —
+that is evidence about an OVMX build, deliberately not counted here.)
 
 **What changed on OVMX's wire.** Before `vms-fdd` the region was a labelled
 replay of whichever golden frame the template came from. The `CONNECT-REQUEST`
 template is VAX1's — an established **member's** frame — so OVMX, a joiner, was
-presenting a member's connect data (`[98:105]` = `01 00 01 00 01 00 01`). The
-`CONNECT-RESPONSE` template is VAX2's joiner frame and already carried the
-stamped bytes, so that direction is byte-unchanged. Kill switch
+presenting a member's connect data (`[98:105]` = `01 00 01 00 01 00 01`). This
+is a claim about the code as it stood immediately before `vms-fdd`, measured by
+`scsd_wire_diff.sh`, **not** a claim about OVMX's whole recorded history: the
+OVMX frames in the capture library predate the `vms-561` refactor that routed
+the joiner request through this template, and 54 of their 55 already carried the
+joiner value. The `CONNECT-RESPONSE` template is VAX2's joiner frame and already
+carried the stamped bytes, so that direction is byte-unchanged. Kill switch
 `OVMX_NO_CONNECT_DATA=1` suppresses the stamp and restores the template bytes
 exactly; both directions are asserted in the unit test.
 
-**RE gap left in §4(N) (honest).** What `[98:105]` **encodes is unknown.** Two
-families appear — all-zero, and `01 00 01 00 NN 00 01` with `NN ∈ {1,2,3}` — and
-the nodes emitting the all-zero form are the ones joining. "`NN` = the count of
-cluster members the sender currently sees" fits every capture and is the best
-reading, but it is **INFERRED**, and nothing OVMX does depends on it: OVMX copies
-a real joiner's observed bytes rather than computing them. Two candidate readings
-are **REFUTED**: it is not the member-state sequence (`af2-established-rejoin`
-runs Member State Seq 2→3→4 while VAX1 sends `NN=1` throughout) and not the node
-number (VAX1, node 1, sends `NN=2` in the 2-member specimen). **Consequence, and
-it is a real limit:** OVMX cannot yet *generate* connect data for a role it has
-not observed, and it must not claim to.
+**RE gap left in §4(N) (honest).** What `[98:105]` **encodes is unknown.** All
+five values it takes over the 148 VAX-sourced frames, exhaustively:
+
+| `[98:105]` | VAX frames | note |
+|---|---|---|
+| `00 00 00 00 00 00 00` | 40 | the joining form — the value OVMX adopts |
+| `01 00 01 00 02 00 01` | 59 | |
+| `01 00 01 00 03 00 01` | 37 | |
+| `01 00 01 00 01 00 01` | 11 | |
+| `01 00 00 00 02 00 01` | 1 | **does not fit the shape below** |
+
+The nodes emitting the all-zero form are the ones joining. Four of the five fit
+`01 00 01 00 NN 00 01` with `NN ∈ {1,2,3}`, and "`NN` = the count of cluster
+members the sender currently sees" fits every capture and is the best reading —
+but it is **INFERRED**, the fifth value does not even fit the shape, and one
+frame is too few to say whether that is a sixth state or a transient. Nothing
+OVMX does depends on any of it: OVMX copies a real joiner's observed bytes
+rather than computing them. Two candidate readings are **REFUTED**: it is not
+the member-state sequence (`af2-established-rejoin` runs Member State Seq 2→3→4
+while VAX1 sends `NN=1` throughout) and not the node number (VAX1, node 1, sends
+`NN=2` in the 2-member specimen). **Consequence, and it is a real limit:** OVMX
+cannot yet *generate* connect data for a role it has not observed, and it must
+not claim to.
 
 **OVMX does NOT act on the peer's value.** It decodes and logs it
 (`SCSD-I-CONNDATA`) and nothing more. p. 2-25's rejection behaviour is real, but
@@ -1824,17 +1889,28 @@ For visibility, every field NOT marked GROUNDED above:
 
 - **SCA connect data `[98:105]` (`vms-fdd`, §4(N)).** The 16-byte field's
   *location*, its *width*, its *per-SYSAP* character and the two spans `[94:98]`
-  = `01 1b 01 03` and `[105:110]` = `08 00 00 06 00` are GROUNDED (203/203
-  `VMS$VAXcluster` connect frames, 0 residuals). The **seven bytes between them
-  are not**: 5 distinct values, two families (`00…00`, and
-  `01 00 01 00 NN 00 01` with `NN ∈ {1,2,3}`), correlated with whether the sender
-  is joining. "`NN` = current member count" is the best reading and is
-  **INFERRED**; member-state-sequence and node-number are both REFUTED (§4(N)).
-  OVMX copies a real joiner's observed bytes and therefore **cannot generate**
-  connect data for a role it has not captured. Also not grounded: what a real
-  node's *rejection* on connect data looks like — only one VMS version (V7.3) has
-  ever been on our wire, so no refusal has ever been observed, and OVMX
-  correspondingly implements no version policy.
+  = `01 1b 01 03` and `[105:110]` = `08 00 00 06 00` are GROUNDED (148/148
+  **VAX-sourced** `VMS$VAXcluster` connect frames from 4 nodes, 0 residuals;
+  OVMX's own 55 frames are excluded — see the circular-grounding guard in
+  §4(N)). The **seven bytes between them are not**: 5 distinct values, four of
+  which fit `01 00 01 00 NN 00 01` with `NN ∈ {1,2,3}` and one of which
+  (`01 00 00 00 02 00 01`, 1 frame) does not, plus the all-zero form,
+  correlated with whether the sender is joining. "`NN` = current member count"
+  is the best reading and is **INFERRED**; member-state-sequence and
+  node-number are both REFUTED (§4(N)). OVMX copies a real joiner's observed
+  bytes and therefore **cannot generate** connect data for a role it has not
+  captured. Also not grounded: what a real node's *rejection* on connect data
+  looks like — only one VMS version (V7.3) has ever been on our wire, so no
+  refusal has ever been observed, and OVMX correspondingly implements no
+  version policy.
+
+- **What a non-VAX peer puts in the field (`vms-fdd`, §4(N)).** Nothing in the
+  census is evidence about implementations other than VAX/VMS V7.3, and — since
+  the guard now excludes them — nothing in it is evidence drawn from OVMX's own
+  transmissions either. The library holds 466 OVMX-sourced connect frames; they
+  ground OVMX's *encoder*, and nothing about VMS. A second real VMS
+  implementation on the wire is what would raise the confidence here, and we do
+  not have one.
 
 - **Peer-liveness detection (`vms-17f`, §4M).** The two silence *populations* are
   GROUNDED (measured, re-derivable). What is **NOT** grounded is the timer a real

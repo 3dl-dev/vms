@@ -52,35 +52,52 @@
  * with. If the target does not approve of the source Connection Manager VMS
  * version, it rejects the request." p. 2-28 puts the field in the CDT.
  *
+ * THE POPULATION IS VAX-ONLY -- OVMX'S OWN FRAMES ARE NOT EVIDENCE ABOUT VMS.
+ * The lab captures are taken on a LAN where OVMX itself is a talker, and a
+ * quarter of the library's connect frames were TRANSMITTED BY OVMX: 466 of
+ * 1891 excluded, 55 of them VMS$VAXcluster. Counting those would be circular: the
+ * census could not then tell "every VMS node does this" from "we do this, and
+ * so do the VAXes we recorded alongside us". Every figure below is therefore
+ * measured over VAX-SOURCED FRAMES ONLY, split on the Ethernet source MAC.
+ * OVMX is identified by the hwmac scsd itself logs (it never spoofs its
+ * source: scsd.c takes it from SIOCGIFHWADDR), and that blocklist is backed by
+ * a structural rule -- a real lab VAX sources from 08:00:2b (DEC OUI) or
+ * aa:00:04 (DECnet logical), so any other source, e.g. a locally-administered
+ * Linux tap MAC, is not a VAX. The measure script FAILS on any source it
+ * cannot place, so a future OVMX MAC reds it rather than rejoining the sample.
+ * OVMX-sourced frames remain valid evidence about ONE thing -- what OVMX's own
+ * encoder emits -- and the script reports that population separately.
+ *
  * WHERE IT IS -- GROUNDED. The field is the LAST 16 payload bytes of the
  * 110-byte connect class, [94:110] payload-relative (abs 108-123), directly
  * after the two 16-byte ASCII SYSAP name fields [62:78] and [78:94] that spec
  * sec 4h(2) already grounds. The 110-byte class is exactly the two connect
  * messages: over every lab capture its connection-control message type
- * ([46:48], spec sec 4h(1a)) reads {0: 1497, 2: 394, 10: 2889}, and all 1891
- * type-0/type-2 frames carry an ASCII SYSAP name at [62:78] with 0 residuals
- * while the type-10 frames carry binary there. So the field is claimed for
- * CONNECT_REQ and ACCEPT_REQ only.
+ * ([46:48], spec sec 4h(1a)) reads {0: 1101, 2: 324, 10: 2889} VAX-sourced,
+ * and all 1425 VAX type-0/type-2 frames carry an ASCII SYSAP name at [62:78]
+ * with 0 residuals while the type-10 frames carry binary there. So the field
+ * is claimed for CONNECT_REQ and ACCEPT_REQ only.
  *
  * WHAT IS IN IT -- GROUNDED, and it is per-SYSAP, not per-node. Census of
- * [94:110] over 48 pcaps, 1891 connect frames, keyed on the local SYSAP name:
+ * [94:110] over 48 pcaps, 1425 VAX-sourced connect frames, keyed on the local
+ * SYSAP name:
  *
- *     MSCP$DISK          1052 frames, 1 distinct  ASCII "V5.0          + "
- *     SCS$DIRECTORY       314 frames, 1 distinct  16 ASCII spaces
- *     SCS$DIR_LOOKUP      189 frames, 1 distinct  16 ASCII spaces
+ *     MSCP$DISK           809 frames, 1 distinct  ASCII "V5.0          + "
+ *     SCS$DIRECTORY       201 frames, 1 distinct  16 ASCII spaces
+ *     SCS$DIR_LOOKUP      134 frames, 1 distinct  16 ASCII spaces
  *     SCA$TRANSPORT        32 frames, 2 distinct  02 02 01 03 ...
  *     VMS$DISK_CL_DRVR    101 frames, 5 distinct  00 00 04 a0 ...
- *     VMS$VAXcluster      203 frames, 5 distinct  01 1b 01 03 ...
+ *     VMS$VAXcluster      148 frames, 5 distinct  01 1b 01 03 ...
  *
  * MSCP$DISK is the decisive one: a printable ASCII version string, "V5.0", in
  * the connect data of the disk-server SYSAP -- p. 2-25's "which version" read
  * straight off the wire, in the field this module now names.
  *
- * THE VMS$VAXcluster VALUE -- what is invariant. Across ALL 203 VMS$VAXcluster
- * connect frames, from every node, every boot and every capture we hold (all
- * VAX/VMS V7.3):
- *     [94:98]   == 01 1b 01 03        203/203, 0 residuals
- *     [105:110] == 08 00 00 06 00     203/203, 0 residuals
+ * THE VMS$VAXcluster VALUE -- what is invariant. Across ALL 148 VAX-sourced
+ * VMS$VAXcluster connect frames, from 4 distinct nodes, every boot and every
+ * capture we hold (all VAX/VMS V7.3):
+ *     [94:98]   == 01 1b 01 03        148/148, 0 residuals
+ *     [105:110] == 08 00 00 06 00     148/148, 0 residuals
  * The seven bytes in between, [98:105], take 5 values and are NOT grounded --
  * see the RE gap below and spec sec 5.
  *
@@ -98,21 +115,39 @@
  * exactly that exchange. The established MEMBERS in the same capture emit a
  * DIFFERENT value (VAX1 raw frame 136, VAX2 raw frame 208, both
  * 01 1b 01 03 01 00 01 00 02 00 01 08 00 00 06 00), which is the contrast the
- * decode test asserts.
+ * decode test asserts. Both ends of that contrast are real VAXes; OVMX is
+ * present in the specimen as a bystander (209 SCA frames) but sources no
+ * VMS$VAXcluster connect frame in it, and the measure script asserts that.
  *
- * RE GAP, STATED (spec sec 5): what [98:105] ENCODES is unknown. Two families
- * appear -- all-zero, and 01 00 01 00 NN 00 01 with NN in {1,2,3} -- and the
- * nodes that emit the all-zero form are the ones joining. "NN = the count of
- * cluster members the sender currently sees" fits every capture and is the best
- * reading, but it is INFERRED, not grounded, and nothing here depends on it:
- * OVMX copies a real joiner's bytes rather than computing them. It is NOT the
- * member-state sequence (af2-established-rejoin runs Member State Seq 2->3->4
- * while VAX1 sends NN=1 throughout) and NOT the node number (VAX1, node 1,
- * sends NN=2 in the 2-member specimen). OVMX therefore cannot yet generate a
- * connect data for a role it has not observed.
+ * NOT JUST THE SPECIMEN. Two frames would be thin evidence for a value a peer
+ * is documented to reject on, so the adopted value is separately attested:
+ * 40 VAX-sourced VMS$VAXcluster connect frames carry it, 38 of them OUTSIDE
+ * the specimen, from 3 distinct VAX nodes across 18 captures. The measure
+ * script pins all three counts.
+ *
+ * RE GAP, STATED (spec sec 5): what [98:105] ENCODES is unknown. All 5 values
+ * it takes over the 148 VAX-sourced frames, exhaustively:
+ *
+ *     00 00 00 00 00 00 00   40 frames   the joining form
+ *     01 00 01 00 02 00 01   59 frames
+ *     01 00 01 00 03 00 01   37 frames
+ *     01 00 01 00 01 00 01   11 frames
+ *     01 00 00 00 02 00 01    1 frame    does NOT fit the shape below
+ *
+ * The nodes that emit the all-zero form are the ones joining. Four of the five
+ * fit 01 00 01 00 NN 00 01 with NN in {1,2,3}, and "NN = the count of cluster
+ * members the sender currently sees" fits every capture and is the best
+ * reading -- but it is INFERRED, not grounded; the fifth value does not even
+ * fit the shape, and one frame is too few to say whether it is a sixth state
+ * or a transient. Nothing here depends on any of it: OVMX copies a real
+ * joiner's bytes rather than computing them. It is NOT the member-state
+ * sequence (af2-established-rejoin runs Member State Seq 2->3->4 while VAX1
+ * sends NN=1 throughout) and NOT the node number (VAX1, node 1, sends NN=2 in
+ * the 2-member specimen). OVMX therefore cannot yet generate a connect data
+ * for a role it has not observed.
  *
  * RE-DERIVE ALL OF THE ABOVE: tools/scs_connect_data_measure.py (lab host; the
- * captures are host-only and not in git). Last run 2026-08-04: 25 checks, 0
+ * captures are host-only and not in git). Last run 2026-08-05: 42 checks, 0
  * failures. `ctest -R scs_connect_data_figures` needs no captures -- it asserts
  * these figures still appear verbatim here and in the spec.
  *

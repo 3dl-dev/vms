@@ -14,9 +14,11 @@ compliant. (b) Our own lab captures under `/data/training/vax/cluster/`
 The DEC-Confidential bitsavers *VAXcluster Disk I/O Internals Manual* was **not**
 consulted (excluded under Rule 8).
 
-**Corpus gaps** (missing from the supplied screenshots, not transcription
-misses): pp. 4-22–4-35 (highest value — likely deeper MSCP command/end-message
-detail), 4-39, 4-103, 5-58–5-69. If a re-shoot is possible, 4-22–4-35 first.
+**Corpus gaps.** pp. 4-22–4-35 and 4-39 were re-shot and transcribed same day
+(`ch4-5-part11.md`): HSC hardware internals only — no MSCP wire-format tables.
+This settles that **chapter 4 contains no numeric opcode/status enumeration
+anywhere**; MSCP numeric values remain capture-grounded only (§2). Still
+missing: p. 4-103, Figures 4-29/4-30, pp. 5-58–5-69.
 
 ---
 

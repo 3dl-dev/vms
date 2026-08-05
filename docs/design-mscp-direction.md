@@ -110,8 +110,20 @@ OUI-rule census tool):
 - The only value-bearing field present is the credit field [48:50] = 1 in
   every exemplar inspected.
 
-**Candidate identification (NOT grounded — do not write into the spec as a
-name):** the SCA credit-flow control pair. Ch.2 p. 2-44 defines the "special
+**MEASURED 2026-08-05 — the credit candidate is WEAKENED.** Over 855 real-VAX
+type-8/9 frames the credit field `[48:50]` is a **constant 1**, identical to
+ordinary application messages (type 10). p. 2-44 requires a special credit
+message to carry the *Pending Receive Credit count*, which varies with buffers
+released; a constant cannot be one. Meanwhile types 5 and 7 carry credit 0 in
+100% of 5,257 frames — the structural signature p. 4-68 predicts for a class
+that does not extend credit. So the "8/9 are the credit pair" reading now has
+evidence *against* it, and the response-half reading of 5/7 has evidence *for*
+it. Full table in spec §4(h)(1c). The §1.3 experiment below stands, with an
+added discriminator: a genuine special credit message must show a **varying**
+credit value.
+
+**Candidate identification (NOT grounded, and now weakened — do not write into
+the spec as a name):** the SCA credit-flow control pair. Ch.2 p. 2-44 defines the "special
 credit message" — sent when the local Receive Credit count is dangerously low
 and Pending Receive Credit > 0, carrying the pending count (vms-1d2, currently
 UNGROUNDED with no candidate wire class). An envelope-only control message
@@ -212,6 +224,91 @@ registration) stays deferred until OVMX has a disk to serve and a reason to.
 Alternatives teed up in the gate: (a) permanent "serves no disk" with the
 connect *refused* instead of accepted; (b) full server build now. Absent an
 answer, work proceeds on Phases A–C only, which no option forecloses.
+
+---
+
+## 4. Ground-source answers to standing questions (2026-08-05)
+
+Chapters 2, 4, 7 and 8 of the transcript were queried against the open rd
+questions. Answers below are book-grounded with page cites; measurements are
+from the corpus. Items are *informed*, not closed, unless stated.
+
+**vms-c35 — RESOLVED.** p. 2-12 names the round-1 106-byte frame a **STACK**
+("a STACK acknowledges receipt of the START… each node uses the STACK to again
+supply the other node with a description of itself"), which is why it re-carries
+the config body; the 46-byte round-2 frame is the **ACK**, "simply discard[ed]"
+on receipt. Spec §4(g) now uses START/STACK/ACK, agreeing with `scs_vc.c`.
+Caveat preserved: p. 2-14 shows a real retransmitted START exists in the
+asymmetric-timing case — it just is not our round-1 frame.
+
+**vms-abd — CONFOUND CLEARED (the missing-precondition theory is dead).** ch.2
+documents **no** precondition on sending DISCONNECT_REQ: "SCA permits either
+SYSAP to unilaterally request that the connection be broken by invoking the
+DISCONNECT service" (p. 2-26), and no draining, credit-return or quiescing rule
+appears anywhere in the chapter (nor is a CDT drain-before-free ordering stated
+at p. 2-28 — only that CDTs are queued to the Path Block). So "Inappropriate SCA
+Control Message" is **not** explained by an undocumented precondition OVMX
+skipped. What ch.2 *does* give is the state ladder the peer runs
+(OPEN→DISC SENT / DISC RECEIVED→DISC MATCH→CLOSED, pp. 2-26/2-27), and ch.7
+gives the CSB's own 10 connectivity states. **Reframed hypothesis for the
+re-run:** the refusal is a *state* mismatch — the peer's CSB was not in a state
+where a disconnect is legal — not a missing message. Also actionable: type 7
+(DISCONNECT_RSP) **exists** in our corpus and carries credit 0, so OVMX should
+expect and accept one rather than treating its absence as normal.
+
+**vms-7e7 — a fourth candidate rule REFUTED.** `0x4b13` vs `0x5b13` is not the
+message-vs-datagram distinction: p. 4-68 requires datagrams to carry credit 0,
+and both words carry mostly-nonzero credit (24.2% vs 29.9% zero over 930k
+real-VAX frames). The msgtype-selection rule remains unknown; the corpus-limit
+note on the item (need a capture with a served tape or a fourth SYSAP name)
+still stands as the cheapest way forward.
+
+**vms-da1 — REFRAMED, and the reframing is the answer to look for.** The four
+SDA CSB fields (Next seq. number / Last seq num rcvd / Last ack. seq num /
+Unacked messages) appear **nowhere** in ch.2, ch.7 or ch.8. ch.2 defines only
+the three credit counters (Send / Receive / Pending Receive, p. 2-45), and
+ch.8's SHOW CLUSTER **CREDITS** class maps 1:1 onto exactly those four credit
+quantities (p. 8-33) — not onto sequence numbers. Critically, ch.2 p. 2-55
+assigns "the protocol necessary to ensure the guarantees associated with the
+message… service" to the **PPD layer**, not SCS. **Therefore the CSB sequence
+counters are almost certainly PPD/NISCA (PEDRIVER virtual-circuit) state, not
+SCS connection state** — which is why no SCS-level wire field matched them, and
+why the magnitude-match inference failed. Re-run the correlation against
+VC-level counters, not SCS message counters.
+
+**vms-1d2 — the special credit message is a distinct MTYPE, and that is new.**
+p. 4-68 enumerates four SCS message types for SSP ports: "datagrams, regular
+messages, **special credit messages**, and node name packets." So a special
+credit message is its own message-type value, not a flavour of ordinary
+message — meaning it should be findable as a distinct `[46:48]` value. Our
+observed value set is 0–10; if the special credit message is on our wire it is
+one of these, and 8/9 are now the *weakened* candidates (constant credit, §1.3).
+ch.2 names no acknowledgment or response to it (p. 2-44), which argues against a
+*paired* reading like 8/9.
+
+**Type 5/7 corroboration.** Beyond the count-pairing in §1.4, 5 and 7 partition
+perfectly from every other type on credit==0 (5,257/5,257) — the structural
+signature p. 4-68 predicts for a class that does not extend send credits, and
+what one expects of response halves.
+
+**Method confound found and fixed (self-caught).** An earlier scratch census in
+this session read `[46:48]` in the 70-content class and printed "types 1..22".
+That class does **not** share the envelope (`[42:44]` is not an inner length,
+`[44:46]` is not `0x0004`), so those were a misread field. Corrected in spec
+§4(h)(1d); the envelope claim is scoped to the 58/62/66/110/94/190-content
+classes only. This is the vms-c11 failure mode in the opposite direction —
+over-generalising a field across classes rather than under-sampling them.
+
+**Reference now available for vms-187.** ch.7 supplies what the epic said was
+missing: the CSB 10-state connectivity machine (pp. 7-23/7-24), CSID structure
+and reuse (16-bit CSV index + 16-bit sequence, new CSID on every rejoin,
+p. 7-25), the JOIN CLUSTER Phase 1 field list and Phase 2 commit tasks
+(pp. 7-40..7-42), and RECNXINTERVAL timeout formulas (p. 7-30). Note two
+explicit **NOT IN BOOK** answers that stop further searching: there is no
+cluster-wide generation/configuration sequence counter (only timestamps and the
+per-node CSID sequence), and ch.7 says nothing about the cluster group
+number/password or CLUSTER_AUTHORIZE.DAT — so the join-nonce derivation gap in
+§5 cannot be closed from this book.
 
 **Consequences for open items.**
 - vms-ecff: identified (§1.2); close after the spec records it (done in this

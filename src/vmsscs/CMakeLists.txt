@@ -277,6 +277,19 @@ target_include_directories(vmsscs_mscp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# vms-7c0 - THE RECEIVE-SIDE SCS HEADER. One pure function: decode the sec
+# 4(h)(1b) envelope, classify the p. 4-13 MTYPE, hand out the destination and
+# source Con.IDs so scsd.c can do the p. 2-29 CDL lookup instead of comparing a
+# Con.ID against a compile-time macro. Builds no frame, opens no socket,
+# allocates nothing, and deliberately indexes NO table -- the CDL bound check
+# and slot-ownership check stay in scs_cdl_lookup(), which is the only place
+# allowed to turn a peer-supplied Con.ID into a pointer. No dependency on any
+# other vmsscs library (plain stdint).
+add_library(vmsscs_rx STATIC scs_rx.c)
+target_include_directories(vmsscs_rx PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -286,7 +299,7 @@ target_include_directories(scsd_exe PRIVATE
 # item was built but NOT linked into the daemon, exactly as scs_cdt.h said).
 # vms-578 adds vmsscs_mscp back: the worktree-760 CM layer merged into scsd.c
 # drives the MSCP$DISK client command builders after NEW.
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_mscp vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_mscp vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

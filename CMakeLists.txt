@@ -179,6 +179,26 @@ if(BUILD_TESTS)
     # when it is not (see tests/qemu/CMakeLists.txt).
     add_subdirectory(tests/qemu)
 
+    # A full local `ctest` run is dominated by three of the negctl gates
+    # below (each carries a `slow` label to say so) and can take tens of
+    # minutes on this host (vms-819d). Run `ctest -LE slow` for a fast loop.
+    #
+    # `ctest --timeout N` on the command line CANNOT be used to bound them:
+    # it is documented as a DEFAULT, used only for tests that carry no
+    # explicit CMake TIMEOUT property. Every gate below sets its own TIMEOUT,
+    # so it always wins over the CLI flag regardless of N — this was
+    # MEASURED directly (a two-test throwaway CMake project, one test with a
+    # TIMEOUT property and one without, both running `sleep 30`: `ctest
+    # --timeout 3` killed the one without the property at 3.01s and let the
+    # one with TIMEOUT 1800 run to completion at 30.00s) and independently
+    # corroborated in docs/HANDOFF-vms-14f.md's vms-008 note ("`ctest
+    # --timeout 120` does **not** override a per-test `TIMEOUT` property").
+    # This is CMake/CTest's documented precedence, not a signal that fails to
+    # reach a process group, and not a defect in any script here — do not
+    # go looking for one. A genuine external ceiling on a full run needs
+    # `ctest -LE slow` (scope out what's slow) or wrapping the whole `ctest`
+    # invocation in `timeout(1)`/`--stop-time`, not `--timeout`.
+
     # INV-1 standing gate (vms-e652): system identity has ONE owner, and the
     # login banner stays driven by SYS$WELCOME rather than a compiled-in
     # printf. Source scan — no build artifacts needed.
@@ -234,8 +254,15 @@ if(BUILD_TESTS)
     # configures cmake and preprocesses every product translation unit.
     # MEASURED 3m29s on workshop at 29 controls; 37 after vms-8cc added the
     # citation controls, 43 after vms-c13 added the reachability ones.
+    #
+    # `slow` label added (vms-819d): this is one of the two negctl gates that
+    # measured 5+ minutes on workshop (341s at the control count above), the
+    # dominant cost in a full local `ctest` run. `ctest -LE slow` gives a fast
+    # local loop without weakening what this gate asserts or touching its
+    # TIMEOUT. See the top-of-file note on why `ctest --timeout` cannot be
+    # used for this instead.
     set_tests_properties(kif_caller_census_negctl PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 1800)
+        LABELS "integration;authenticity;slow" TIMEOUT 1800)
 
     # The citation ledger is fresh (vms-8cc). tracking/rd-citations.tsv is what
     # lets the vms_kif caller census above check that an exemption's cited rd
@@ -346,8 +373,11 @@ if(BUILD_TESTS)
     add_test(NAME userspace_service_register_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_userspace_service_register_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
+    # `slow` label added (vms-819d): the other of the two negctl gates that
+    # measured 5+ minutes on workshop (390-514s at the control counts noted
+    # above). See kif_caller_census_negctl above for what the label is for.
     set_tests_properties(userspace_service_register_negctl PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 1500)
+        LABELS "integration;authenticity;slow" TIMEOUT 1500)
 
     # Rule 10/11 standing gate (vms-fb9): a process does not name its own
     # terminal, and SHOW DEVICE does not invent device rows. Keeps the
@@ -376,8 +406,13 @@ if(BUILD_TESTS)
     # spent this budget. 600 is 4x the measured time, matching the headroom
     # kif_caller_census carries for slower CI runners. If this is approached
     # again, measure and say so here rather than doubling it blind.
+    # `slow` label added (vms-819d): MEASURED 147s at 16 controls above --
+    # under the 5-minute mark alone, but it is one of the four gates that
+    # together make a full local `ctest` run take tens of minutes and get
+    # misread as a hang. `ctest -LE slow` excludes it along with the other
+    # two heavy negctl gates.
     set_tests_properties(terminal_identity_negctl PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 600)
+        LABELS "integration;authenticity;slow" TIMEOUT 600)
 
     # Rule 10/11 standing gate (vms-cb5): the DERIVED census of every writer
     # and reader of the identity environment variables, across src/ AND
@@ -422,6 +457,46 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(show_device_rows_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 300)
+
+    # SHOW SYMBOL renders an integer's Hex and Octal columns as a LONGWORD
+    # (rd vms-c71), pinned to a side-by-side measurement against OpenVMS VAX
+    # V7.3. Two defects lived on one line: a negative sign-extended to 16 hex
+    # digits where VMS prints 8, and the octal field was padded to 12 digits
+    # where a longword is 11 -- the latter wrong for EVERY integer symbol,
+    # including positive ones, which is why it survived (the hex column looks
+    # correct for positives).
+    add_test(NAME show_symbol_longword_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_symbol_longword.sh
+                $<TARGET_FILE:vmsdcl>)
+    set_tests_properties(show_symbol_longword_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
+    # ...and the proof that each of its four assertions carries a defect. Three
+    # mutants are built and RUN, and each declares the COMPLETE set of gate
+    # checks it expects to redden, compared for EQUALITY -- an unlisted red
+    # fails the control just as a listed green does. Case C (octal fixed, sign
+    # extension left) is the one that keeps this gate from silently becoming
+    # positive-only, which is the state the tree was in before a negative value
+    # was reachable through F$IDENTIFIER at all.
+    #
+    # TIMEOUT derived, not guessed, and the measurement says under WHAT LOAD --
+    # which is the half that is usually missing. MEASURED on workshop
+    # 2026-08-05: 7-8s wall-clock serialized (invoked directly, and under ctest
+    # with nothing else running), 14s with a second full ctest running
+    # concurrently. One sandbox configure plus four builds of the vmsdcl target.
+    # 120 is ~8.5x the loaded figure. A bare "8s" would have been true and
+    # would have overstated the margin by 2x, because this suite's cost is
+    # dominated by compiler contention rather than by its own work -- the same
+    # effect that took the per-facility negctl job from 27m to >60m and killed
+    # it (rd vms-86a). If this is ever approached, measure and record it here
+    # rather than doubling it blind (the lesson rd vms-008 charged to
+    # terminal_identity_negctl, where a never-derived 120 was killing a
+    # PASSING test).
+    add_test(NAME show_symbol_longword_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_symbol_longword_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(show_symbol_longword_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 120)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

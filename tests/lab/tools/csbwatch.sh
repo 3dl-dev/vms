@@ -25,7 +25,11 @@ NS=ovmx-lab
 L=/lab/k8s-labs/$POD/logs
 HOSTL=/data/training/vax/k8s-labs/$POD/logs
 W=/data/training/vax/cluster/work
-REPO=/home/baron/projects/vms
+REPO=${REPO:-/home/baron/projects/vms}
+# vms-449: same override lab2run.sh grew in vms-578 -- a worktree runs its OWN
+# build instead of the shared build-d94 artifact another agent may be mid-run
+# with. Default unchanged.
+SCSD_BIN=${SCSD_BIN:-$REPO/build-d94/bin/SCSD.EXE}
 CAD=${CAD:-5}
 MAXEMPTY=${MAXEMPTY:-6}
 
@@ -58,9 +62,10 @@ shot(){
 bash /data/training/vax/cluster/tools/lab2login.sh "$POD" 1 | grep -q LOGGED-IN \
   || { echo "csbwatch: FATAL -- $POD vax1 not at DCL" >&2; exit 2; }
 
-log "RUN $TAG pod=$POD ident=$IDENT store=$STORE dur=$DUR cad=${CAD}s env='$*'"
+log "RUN $TAG pod=$POD ident=$IDENT store=$STORE dur=$DUR cad=${CAD}s daemon=$SCSD_BIN env='$*'"
 
-kubectl -n $NS cp "$REPO/build-d94/bin/SCSD.EXE" "$POD:/lab/SCSD.EXE" >/dev/null 2>&1
+[ -x "$SCSD_BIN" ] || { echo "csbwatch: FATAL -- no daemon at $SCSD_BIN" >&2; exit 2; }
+kubectl -n $NS cp "$SCSD_BIN" "$POD:/lab/SCSD.EXE" >/dev/null 2>&1
 kubectl -n $NS cp "$STORE" "$POD:/lab/$TAG.sysgen" >/dev/null 2>&1
 if [ -r "$STORE.cluster" ]; then
   kubectl -n $NS cp "$STORE.cluster" "$POD:/lab/$TAG.sysgen.cluster" >/dev/null 2>&1

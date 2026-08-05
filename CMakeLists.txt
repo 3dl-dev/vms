@@ -422,6 +422,46 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(show_device_rows_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 300)
+
+    # SHOW SYMBOL renders an integer's Hex and Octal columns as a LONGWORD
+    # (rd vms-c71), pinned to a side-by-side measurement against OpenVMS VAX
+    # V7.3. Two defects lived on one line: a negative sign-extended to 16 hex
+    # digits where VMS prints 8, and the octal field was padded to 12 digits
+    # where a longword is 11 -- the latter wrong for EVERY integer symbol,
+    # including positive ones, which is why it survived (the hex column looks
+    # correct for positives).
+    add_test(NAME show_symbol_longword_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_symbol_longword.sh
+                $<TARGET_FILE:vmsdcl>)
+    set_tests_properties(show_symbol_longword_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
+    # ...and the proof that each of its four assertions carries a defect. Three
+    # mutants are built and RUN, and each declares the COMPLETE set of gate
+    # checks it expects to redden, compared for EQUALITY -- an unlisted red
+    # fails the control just as a listed green does. Case C (octal fixed, sign
+    # extension left) is the one that keeps this gate from silently becoming
+    # positive-only, which is the state the tree was in before a negative value
+    # was reachable through F$IDENTIFIER at all.
+    #
+    # TIMEOUT derived, not guessed, and the measurement says under WHAT LOAD --
+    # which is the half that is usually missing. MEASURED on workshop
+    # 2026-08-05: 7-8s wall-clock serialized (invoked directly, and under ctest
+    # with nothing else running), 14s with a second full ctest running
+    # concurrently. One sandbox configure plus four builds of the vmsdcl target.
+    # 120 is ~8.5x the loaded figure. A bare "8s" would have been true and
+    # would have overstated the margin by 2x, because this suite's cost is
+    # dominated by compiler contention rather than by its own work -- the same
+    # effect that took the per-facility negctl job from 27m to >60m and killed
+    # it (rd vms-86a). If this is ever approached, measure and record it here
+    # rather than doubling it blind (the lesson rd vms-008 charged to
+    # terminal_identity_negctl, where a never-derived 120 was killing a
+    # PASSING test).
+    add_test(NAME show_symbol_longword_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_symbol_longword_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(show_symbol_longword_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 120)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

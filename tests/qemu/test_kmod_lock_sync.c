@@ -78,7 +78,9 @@
 #include "vms_kif.h"
 
 #define SS_NORMAL       1
-#define SS_DEADLOCK     100
+/* ssdef.h SS$_DEADLOCK -- the lock manager yields the VMS condition value
+ * itself now, not the private 100 (vms-82a). */
+#define SS_DEADLOCK     3594
 
 #define AST_ASTADR      0xCAFEF00DULL
 #define AST_ASTPRM      0x12345678ULL

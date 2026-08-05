@@ -89,8 +89,41 @@ int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
             strncpy(rec->username, fields[0], sizeof(rec->username) - 1);
             str_upcase(rec->username);
             strncpy(rec->password_hash, fields[1], sizeof(rec->password_hash) - 1);
-            rec->uic_group  = (uint32_t)strtoul(fields[2], NULL, 10);
-            rec->uic_member = (uint32_t)strtoul(fields[3], NULL, 10);
+            /*
+             * ============================================================
+             * SYSUAF.DAT's UIC FIELDS ARE OCTAL (vms-e60)
+             * ============================================================
+             * These were strtoul(..., 10). That is the bug, and which base
+             * is right was DERIVED from the oracle rather than picked:
+             *
+             *   ORACLE (measured twice on lab nodes vax3/vax2, and asserted
+             *   in-tree at tests/qemu/test_syssvc_ident.c):
+             *       F$IDENTIFIER("DEFAULT","NAME_TO_NUMBER") -> 8388736
+             *       = %X00800080 -> group 0x80 = 128, member 0x80 = 128,
+             *       which is UIC [200,200] written the way VMS writes UICs.
+             *
+             *   SYSUAF.DAT ships 'DEFAULT||200|200|...'. Read as OCTAL that
+             *   is 128/128 and reproduces the oracle exactly. Read as
+             *   DECIMAL it is 200/200 -> 13107400, which matches nothing.
+             *
+             * SYSTEM's 1|4 reads identically in both bases -- that is the
+             * coincidence that hid this for as long as SYSTEM was the only
+             * account anyone logged in as. Any account whose UIC digits
+             * differ between bases showed two different UICs for one
+             * account: LOGINOUT stamped one value into the executive while
+             * F$IDENTIFIER answered another.
+             *
+             * VMS's own convention is quoted in this tree at
+             * src/libvms/include/ovmx_secparam.h and docs/oracle/
+             * vax73-privileges.md: "bear in mind that numbers in a UIC are
+             * octal". So the display, the write path and the /UIC=[g,m]
+             * command parse in tools/vms_authorize.c are octal too; all
+             * nine sites move together, because a partial change just
+             * relocates the disagreement (Rule 10 -- one answer, pinned).
+             * ============================================================
+             */
+            rec->uic_group  = (uint32_t)strtoul(fields[2], NULL, 8);
+            rec->uic_member = (uint32_t)strtoul(fields[3], NULL, 8);
             strncpy(rec->default_dir, fields[4], sizeof(rec->default_dir) - 1);
             if (nf > 5)
                 strncpy(rec->flags, fields[5], sizeof(rec->flags) - 1);

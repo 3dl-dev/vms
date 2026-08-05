@@ -41,8 +41,11 @@
 /* AUTHORIZE reports the OVMX product version from the SSOT (INV-1). */
 #define UAF_VERSION   OVMX_PRODUCT_VERSION
 
-/* Default values for new users */
-#define DEFAULT_UIC_GROUP    200
+/* Default values for new users.
+ * UIC numbers are OCTAL (vms-e60), so this literal is written 0200 -- it is
+ * the group [200,...] a VMS administrator reads, not decimal 200, which
+ * would display as [310,...]. */
+#define DEFAULT_UIC_GROUP    0200
 #define DEFAULT_PRIVS        "TMPMBX,NETMBX"
 
 /* In-memory database */
@@ -152,8 +155,12 @@ static int load_sysuaf(void)
         str_upcase(r->username);
 
         strncpy(r->password_hash, fields[1], sizeof(r->password_hash) - 1);
-        r->uic_group  = (uint32_t)strtoul(fields[2], NULL, 10);
-        r->uic_member = (uint32_t)strtoul(fields[3], NULL, 10);
+        /* OCTAL: SYSUAF.DAT UIC fields (vms-e60; derivation in
+         * src/libvms/rtl/sysuaf.c). Read, write, display and the
+         * /UIC=[g,m] parse below all move together or AUTHORIZE
+         * disagrees with the file it just wrote. */
+        r->uic_group  = (uint32_t)strtoul(fields[2], NULL, 8);
+        r->uic_member = (uint32_t)strtoul(fields[3], NULL, 8);
         strncpy(r->default_dir, fields[4], sizeof(r->default_dir) - 1);
 
         if (nf > 5 && fields[5])
@@ -200,7 +207,9 @@ static int save_sysuaf(void)
 
     for (int i = 0; i < g_nusers; i++) {
         const sysuaf_record_t *r = &g_users[i];
-        fprintf(fp, "%s|%s|%u|%u|%s|%s|%s\n",
+        /* %o: the UIC fields are octal (vms-e60) -- writing them decimal
+         * would make AUTHORIZE unable to read back what it just saved. */
+        fprintf(fp, "%s|%s|%o|%o|%s|%s|%s\n",
                 r->username,
                 r->password_hash,
                 r->uic_group,
@@ -248,7 +257,11 @@ static int find_user(const char *username)
 /* Find highest UIC member number for a given group */
 static uint32_t next_uic_member(uint32_t group)
 {
-    uint32_t max_member = 200;
+    /* 0200 OCTAL (vms-e60): the floor must be in the same base as the member
+     * numbers it is compared against, or it sorts above every real account.
+     * With the shipped SYSUAF (members 201/202/203 octal = 129/130/131) a
+     * decimal 200 floor would beat all of them and hand out 0311. */
+    uint32_t max_member = 0200;
     for (int i = 0; i < g_nusers; i++) {
         if (g_users[i].uic_group == group &&
             g_users[i].uic_member > max_member)
@@ -385,7 +398,8 @@ static void cmd_add(const char *args)
         const char *v = val;
         if (*v == '[') v++;
         unsigned g = 0, m = 0;
-        if (sscanf(v, "%u,%u", &g, &m) == 2) {
+        /* /UIC=[g,m] is typed in octal (vms-e60) */
+        if (sscanf(v, "%o,%o", &g, &m) == 2) {
             rec.uic_group  = g;
             rec.uic_member = m;
         }
@@ -496,7 +510,8 @@ static void cmd_modify(const char *args)
         const char *v = val;
         if (*v == '[') v++;
         unsigned g = 0, m = 0;
-        if (sscanf(v, "%u,%u", &g, &m) == 2) {
+        /* /UIC=[g,m] is typed in octal (vms-e60) */
+        if (sscanf(v, "%o,%o", &g, &m) == 2) {
             r->uic_group  = (uint32_t)g;
             r->uic_member = (uint32_t)m;
         }
@@ -567,7 +582,8 @@ static void cmd_list(const char *args)
     for (int i = 0; i < g_nusers; i++) {
         const sysuaf_record_t *r = &g_users[i];
         char uic_str[16];
-        snprintf(uic_str, sizeof(uic_str), "[%03u,%03u]",
+        /* octal, as VMS writes UICs (vms-e60) */
+        snprintf(uic_str, sizeof(uic_str), "[%03o,%03o]",
                  r->uic_group, r->uic_member);
         printf("%-18s %-12s %-22s %-10s %s\n",
                r->username,
@@ -604,7 +620,8 @@ static void cmd_show(const char *args)
 
     const sysuaf_record_t *r = &g_users[idx];
     char uic_str[16];
-    snprintf(uic_str, sizeof(uic_str), "[%03u,%03u]",
+    /* octal, as VMS writes UICs (vms-e60) */
+    snprintf(uic_str, sizeof(uic_str), "[%03o,%03o]",
              r->uic_group, r->uic_member);
 
     printf("\n");

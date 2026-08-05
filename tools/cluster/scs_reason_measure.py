@@ -72,19 +72,24 @@ DEFAULT_CAPDIR = "/data/training/vax/cluster/captures"
 # vaxlab-4 captures did exactly that and put 13 of this script's 27 checks red.
 # They now live in the /data/training/vax/cluster/captures-lab2 SIBLING. Full
 # rationale in tools/cluster/scs_disc_measure.py.
-LAB2_MARKER = "-lab2-"
+#
+# vms-beb: checked against the declared manifest in
+# tools/cluster/capture_manifest.py now, not this filename marker -- an
+# unknown or mislabeled capture reds too, not just one carrying "-lab2-".
+LAB2_MARKER = "-lab2-"   # kept for readers who still grep for it; unused below
 
 
 def lab1_only(paths):
-    """Return `paths` unchanged, or die naming every lab-2 capture in them."""
-    foreign = sorted(os.path.basename(p) for p in paths
-                     if LAB2_MARKER in os.path.basename(p))
-    if foreign:
-        raise SystemExit(
-            "lab fence: %d lab-2 capture(s) in the lab-1 grounding library. "
-            "Move them to a <capdir>-lab2 sibling and re-run; do NOT raise "
-            "EXPECTED to absorb them.\n  %s" % (len(foreign), "\n  ".join(foreign)))
-    return paths
+    """Return `paths` unchanged, or die naming every non-lab-1 capture in
+    them -- checked against tools/cluster/capture_manifest.py's declared
+    manifest. Imports it LAZILY from this file's own directory (same
+    reasoning as the `dissect_sca` import just above).
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import capture_manifest
+    return capture_manifest.check_paths(paths, capture_manifest.LAB1)
 
 SCA_ETHERTYPE = b"\x60\x07"
 CONNCTL_SCA_LEN = 62

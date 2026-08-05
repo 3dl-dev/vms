@@ -168,8 +168,10 @@ DEFAULT_CAPTURE_DIR = "/data/training/vax/cluster/captures-lab2"
 ETHERTYPE_SCA = b"\x60\x07"
 
 
-# ====================================================================# vms-578: THE SECOND BRACKET -- does the INTEGRATED tree join?
-# ====================================================================# vms-70e2's bracket above measured that work/vms-187-closure CANNOT complete a
+# ===========================================================================
+# vms-578: THE SECOND BRACKET -- does the INTEGRATED tree join?
+# ===========================================================================
+# vms-70e2's bracket above measured that work/vms-187-closure CANNOT complete a
 # first join and worktree-760-active-directory can. vms-578 merged the two and
 # this is the acceptance measurement for that merge, taken the same way on the
 # SAME pod (vaxlab-4) minutes apart, with the control BETWEEN the two runs of
@@ -235,8 +237,25 @@ CAPTURES_578 = {
 }
 
 
-# ====================================================================# vms-449: THE THIRD BRACKET -- THE REJOIN QUESTION, ASKED AND ANSWERED
-# ====================================================================# vms-2f3's question -- can a returning OVMX identity rejoin a cluster it was
+def _lab2_named(capdir, names):
+    """Verify `names` (a fixed, named capture list -- this script does not
+    glob) are declared lab-2 in tools/cluster/capture_manifest.py, and audit
+    `capdir` for any OTHER capture that disagrees with the manifest (vms-beb).
+    This is the one tool that legitimately reads lab-2; the check still
+    matters here because it catches a lab-1 file wandering INTO
+    captures-lab2, or a capture this script names that the manifest has never
+    heard of. Imports the manifest LAZILY, from this file's own directory.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import capture_manifest
+    return capture_manifest.check_named(capdir, names, capture_manifest.LAB2)
+
+# ===========================================================================
+# vms-449: THE THIRD BRACKET -- THE REJOIN QUESTION, ASKED AND ANSWERED
+# ===========================================================================
+# vms-2f3's question -- can a returning OVMX identity rejoin a cluster it was
 # removed from? -- had never actually been ASKED on a tree that can complete a
 # FIRST join. vms-70e2's positive control failed (EXPECTED above); vms-578 fixed
 # that (EXPECTED_578) and nobody re-ran the triple. This is the triple.
@@ -336,8 +355,10 @@ CAPTURES_449 = {
 }
 
 
-# ====================================================================# vms-449R: THE REPLICATION -- IS THE REFUSAL A PROPERTY OF OVMX, OR OF A POD?
-# ====================================================================# EXPECTED_449 answered the rejoin question on ONE pod. A single pod cannot
+# ===========================================================================
+# vms-449R: THE REPLICATION -- IS THE REFUSAL A PROPERTY OF OVMX, OR OF A POD?
+# ===========================================================================
+# EXPECTED_449 answered the rejoin question on ONE pod. A single pod cannot
 # distinguish "OVMX identities are refused readmission" from "vaxlab-6 was
 # sick". This is the same experiment on `vaxlab-7`, scaled up fresh, verified
 # CLUSTER_NODES=2 before the first run, with the SAME binary (build-449,
@@ -704,6 +725,11 @@ def main():
     ap.add_argument("--captures", default=DEFAULT_CAPTURE_DIR)
     ap.add_argument("--print", dest="just_print", action="store_true")
     args = ap.parse_args()
+
+    # vms-beb: refuse rather than silently read if any named capture is
+    # unknown to the manifest, mislabeled, or if args.captures holds a
+    # capture the manifest declares for a different lab.
+    _lab2_named(args.captures, list(CAPTURES.values()) + list(CAPTURES_578.values()))
 
     got = {}
     for tag, fn in CAPTURES.items():

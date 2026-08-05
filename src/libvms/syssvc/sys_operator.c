@@ -16,7 +16,7 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-PARTIAL: sys$sndopr (vms-2d37) -- exec: the user name in the OPCOM
+ * OVMX-PARTIAL: sys$sndopr (vms-042) -- exec: the user name in the OPCOM
  *     header is the one the EXECUTIVE holds for the caller, read back through
  *     vms_kif_getjpi_self(). It used to come from the caller's own PCB and
  *     then from the host passwd database, which is why this line is an upgrade
@@ -34,10 +34,29 @@
  *
  * THE TWO SERVICES CITE DIFFERENT ITEMS ON PURPOSE (vms-fab). They shared vms-5b4,
  * which is the closed item that BUILT this register and owned neither of them.
- * $SNDOPR's remainder is the OPCOM record itself -- vms-2d37 measured that the
- * message body never reaches OPERATOR.LOG, because the callers point the
- * descriptor at an OPC message block and this file copies it as a C string.
  * $BRKTHRU's remainder is broadcast delivery, which is vms-905.
+ *
+ * $SNDOPR'S CITATION MOVED FROM vms-2d37 TO vms-042 WHEN vms-2d37 WAS FIXED
+ * AND CLOSED, and the move is the point rather than the bookkeeping. vms-2d37
+ * was the defect "the message body never reaches OPERATOR.LOG, because the
+ * callers point the descriptor at an OPC message block and this file copies it
+ * as a C string". That is now fixed -- the reader takes the text at
+ * OPC$K_MS_HDRLEN and the record carries the message -- so the item closed, and
+ * a closed id tracks nothing and cannot be what a live declaration is declared
+ * against (rd_cite_check treats it as red by design).
+ *
+ * What REMAINS partial is what this line has always claimed: the user name is
+ * the executive's, and nothing else about the record is. vms-042 -- Phase 3,
+ * the real VMS system facilities -- is where a genuine OPCOM process lives, so
+ * it is the owner of the remainder now that the body defect is gone. This is
+ * the same disposition, for the same reason, that sys_lock.c took when vms-82a
+ * closed under it (rd vms-344).
+ *
+ * THAT THIS KEEPS HAPPENING IS ITSELF TRACKED. An OVMX-PARTIAL/-EXECUTIVE line
+ * asserts a state and must cite an item, yet every item eventually closes, so
+ * every successful fix arms this same red. The structural question is rd
+ * vms-344 and the CI-visibility half is rd vms-72d; neither is answered by
+ * repointing, which is only the honest local move.
  */
 
 #include <stdint.h>
@@ -189,9 +208,45 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
     if (!msgbuf || !msgbuf->dsc$a_pointer)
         return SS$_BADPARAM;
 
-    /* Extract message text */
+    /*
+     * THE DESCRIPTOR POINTS AT AN OPC MESSAGE BLOCK, NOT AT A STRING
+     * (rd vms-2d37). This is what $SNDOPR takes on VMS, and it is what every
+     * caller in this tree builds: an opcdef header followed by the text.
+     *
+     * WHAT WAS WRONG, and it emptied the audit trail rather than corrupting a
+     * corner of it. This function used to do dsc$strncpy() straight onto the
+     * descriptor -- treating the first byte of the BLOCK as the first byte of a
+     * C string. So it copied opc$b_ms_type and opc$b_ms_target and then stopped
+     * at the first NUL inside opc$w_ms_rqstlen, and every OPCOM record OVMX
+     * wrote had a body of two control bytes:
+     *
+     *     %%OPCOM, 02-AUG-2026 00:13:58.89, request 1 from user  on node OVMX
+     *     ^A^A
+     *
+     * The record said that a request happened, by whom and when, and never what
+     * it was.
+     *
+     * THE TEXT IS TAKEN BY LENGTH, NOT BY NUL. The block carries its extent in
+     * the descriptor, and nothing guarantees a terminator inside it -- reading
+     * to a NUL would be the same category of mistake as the one being fixed.
+     *
+     * OPC$K_MS_HDRLEN rather than 8: the offset is derived from the shared
+     * declaration, so the reader here and the callers that size the block
+     * cannot drift apart. Skipping a hardcoded 8 would have made this line
+     * print correctly while leaving the two halves free to disagree again,
+     * which is why rd vms-2d37 rules it out explicitly.
+     */
+    if (msgbuf->dsc$w_length < OPC$K_MS_HDRLEN)
+        return SS$_BADPARAM;
+
+    const char *blk = (const char *)msgbuf->dsc$a_pointer;
+    size_t textlen = (size_t)msgbuf->dsc$w_length - OPC$K_MS_HDRLEN;
+
     char msgtext[512];
-    dsc$strncpy(msgtext, msgbuf, sizeof(msgtext));
+    if (textlen > sizeof(msgtext) - 1)
+        textlen = sizeof(msgtext) - 1;
+    memcpy(msgtext, blk + OPC$K_MS_HDRLEN, textlen);
+    msgtext[textlen] = '\0';
 
     /* Format timestamp */
     char timestamp[32];

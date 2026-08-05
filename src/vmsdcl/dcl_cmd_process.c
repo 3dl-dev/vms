@@ -1540,7 +1540,7 @@ int cmd_logout(struct dcl_command *cmd)
                          tm.tm_hour, tm.tm_min, tm.tm_sec);
         struct dsc$descriptor_s desc;
         desc.dsc$a_pointer = (char *)&msgbuf.hdr;
-        desc.dsc$w_length  = (uint16_t)(8 + n);
+        desc.dsc$w_length  = (uint16_t)(OPC$K_MS_HDRLEN + n);
         sys$sndopr(&desc, 0);
     }
 

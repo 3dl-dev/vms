@@ -1,0 +1,100 @@
+# One StatefulSet replica == one AlphaServer ES40 (rd vms-e2c).
+#
+# Reuses lab-2's namespace (ovmx-lab) and its PVC (vax-lab-pvc -> the tank
+# tank/vax volume at /data/training/vax). Nothing new to provision: the Alpha
+# assets already live under /data/training/vax/alpha, which is inside that same
+# volume, so they arrive in the pod at /lab/alpha. Apply tests/lab/k8s/ first if
+# the namespace and PVC do not exist yet.
+#
+# WHY THIS EXISTS INSTEAD OF RUNNING ON WORKSHOP: AXPbox has no idle detection
+# -- unlike SIMH's `set idle=vms`, an idle emulated Alpha still spins a host
+# core flat out. Run on the dev seat it drove load average past 20 and
+# destabilised the box. Here the CPU limit below is a hard ceiling, and the blast
+# radius of a runaway emulator is one pod on k3s-worker.
+apiVersion: v1
+kind: Service
+metadata:
+  name: alphalab
+  namespace: ovmx-lab
+spec:
+  clusterIP: None          # headless: alphalab-0.alphalab.ovmx-lab.svc.cluster.local
+  selector:
+    app: alphalab
+  ports:
+    - { name: console-alpha1, port: 21264, targetPort: 21264 }
+    - { name: console-alpha2, port: 21265, targetPort: 21265 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: alphalab
+  namespace: ovmx-lab
+  labels:
+    ovmx.io/item: vms-e2c
+spec:
+  serviceName: alphalab
+  replicas: 1
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: alphalab
+  template:
+    metadata:
+      labels:
+        app: alphalab
+    spec:
+      # The PV's nodeAffinity already forces this; stated so a scheduling
+      # failure reads as "wrong node" rather than "volume node conflict".
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: alphalab
+          image: 192.168.2.43:30500/ovmx-alphalab:6
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: LAB_ROOT
+              value: /lab
+            # 1.2.0 or 1.1.2 -- both are in the image, so switching is a
+            # redeploy, not a rebuild. See the Dockerfile for why.
+            - name: AXPBOX_VERSION
+              value: "1.2.0"
+            # Clone the installed system instead of installing per replica.
+            # Unset GOLDEN (and set MEDIA) to build a new one from the CD.
+            # One pod = one whole Alpha cluster. Each node gets its own disk
+            # cloned from the golden image, its own tap on the pod-local br0,
+            # and its own console port (21264 + index).
+            - name: NODES
+              value: "alpha1 alpha2"
+            - name: GOLDEN
+              value: "alpha1-sys.golden.img"
+            - name: MEDIA
+              value: ""
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]        # bridge + tap creation in the pod netns
+            privileged: false
+          resources:
+            # AXPbox pins a core whether or not the guest is doing anything, so
+            # the limit is the real control here, not the request. One core is
+            # enough for an 800 MHz EV68 and keeps a runaway pod from taking the
+            # node down the way it took workshop down.
+            # One core PER EMULATED NODE: AXPbox pins a core whether or not the
+            # guest is doing anything, so the limit is the real control here.
+            requests: { cpu: "400m",  memory: "768Mi" }
+            limits:   { cpu: "2200m", memory: "2Gi" }
+          volumeMounts:
+            - { name: vax-lab, mountPath: /lab }
+            - { name: tun,     mountPath: /dev/net/tun }
+      volumes:
+        - name: vax-lab
+          persistentVolumeClaim:
+            claimName: vax-lab-pvc
+        - name: tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice

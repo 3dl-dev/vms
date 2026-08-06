@@ -335,6 +335,7 @@ int main(int argc, char **argv)
     CHECK(strcmp(execed.terminal, CONSOLE_DEVNAM) == 0,
           "the freshly activated image still finds its terminal -- nothing "
           "was carried across execve() in userspace");
+    /* negctl: register-adopt-pid-not-reported */
     CHECK(execed.vms_pid == pre.vms_pid,
           "and it is the same VMS process, so the binding was not re-made");
 

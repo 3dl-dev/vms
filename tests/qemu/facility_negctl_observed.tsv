@@ -23,10 +23,10 @@
 #   RUN <defect> <suites that went red, space-joined, or "-"> <pass|fail>
 #   RED <defect> <suite or (harness)> <assertion text observed FAILing>
 #
-# generated-at: 2026-08-05T00:31:23Z
-# tree-commit: 66d590067dbd53daa3eb1eca75f9d563baf4f8f6
+# generated-at: 2026-08-06T12:53:07Z
+# tree-commit: 350c6e71d415ec24c200a30a6868011750a2beeb
 # positive-control: pass
-# defects-in-manifest: 42
+# defects-in-manifest: 43
 # suites-derived: 27
 RUN	access-mode-escalation	test_kmod_access	pass
 RED	access-mode-escalation	test_kmod_access	... and still does not hold CMKRNL afterwards
@@ -344,3 +344,5 @@ RED	dcl-fident-name2num-host-passwd	test_syssvc_ident	G/F$IDENTIFIER: NAME_TO_NU
 RUN	opcom-header-host-login-name	test_syssvc_ident	pass
 RED	opcom-header-host-login-name	test_syssvc_ident	G/OPCOM: EVERY header's user field is empty for a process the executive has not named -- sys$sndopr reads the executive's row, not the caller's PCB and not the passwd database (goes RED, not vacuous, when vms-afd propagates identity to SPAWN)
 RED	opcom-header-host-login-name	test_syssvc_ident	G/OPCOM: the operator record does NOT name the HOST Linux account -- the vms-f39 leak that survived in sys_operator.c
+RUN	register-adopt-pid-not-reported	test_kmod_setterm	pass
+RED	register-adopt-pid-not-reported	test_kmod_setterm	and it is the same VMS process, so the binding was not re-made

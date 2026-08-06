@@ -230,6 +230,35 @@ MUTANTS = [
      "srv.c",
      "    h.bytes_remaining = s->bytes_total - s->bytes_sent;",
      "    h.bytes_remaining = s->bytes_total;"),
+
+    # ---- vms-7b0: the header-OFFSET gap the post-merge audit demonstrated --
+    # Every mutant above this point changes what a field MEANS or DOES; none
+    # of them moves WHERE a field lives in the 28-byte header. That gap is
+    # exactly what let a SRC_NAME/DST_NAME offset swap ship invisibly: every
+    # test in test_scs_mscp_srv.c built a frame with scs_mscp_srv_blk_build_hdr
+    # and parsed it back with scs_mscp_srv_blk_parse_hdr, both reading the
+    # SAME macro, so a swap changed nothing about whether they agreed with
+    # each other. test_blk_hdr_byte_exact_against_capture() /
+    # test_blk_frame_byte_exact_against_capture() (vms-7b0) check the built
+    # bytes against vms291-mount-A.pcap's real, independently-offset wire
+    # capture instead, so a moved field now produces bytes that don't match
+    # the wire -- these two mutants are the audit's own method, replayed.
+    ("BLKHDR-SRC-DST-NAME-offsets-swapped", "srv.h",
+     "#define SCS_MSCP_BLK_SRC_NAME 12 /* +12 4  source buffer name */\n"
+     "#define SCS_MSCP_BLK_DST_OFF  16 /* +16 4  destination offset */\n"
+     "#define SCS_MSCP_BLK_DST_NAME 20 /* +20 4  destination buffer name */",
+     "#define SCS_MSCP_BLK_SRC_NAME 20 /* +12 4  source buffer name */\n"
+     "#define SCS_MSCP_BLK_DST_OFF  16 /* +16 4  destination offset */\n"
+     "#define SCS_MSCP_BLK_DST_NAME 12 /* +20 4  destination buffer name */"),
+    # bytes_remaining is the one candidate for a shift mutant whose GOLDEN
+    # value is non-zero (512) at every byte a 1-byte shift could land on --
+    # shifting SRC_OFF or DST_OFF instead would move a captured value of
+    # ZERO into an already-zero neighboring byte and produce no visible
+    # difference, which is a property of THIS capture's data, not of the
+    # offset being right.
+    ("BLKHDR-REMAIN-offset-shifted-by-one-byte", "srv.h",
+     "#define SCS_MSCP_BLK_REMAIN   8  /* +8  4  bytes remaining, counts down */",
+     "#define SCS_MSCP_BLK_REMAIN   9  /* +8  4  bytes remaining, counts down */"),
 ]
 
 

@@ -104,6 +104,27 @@ extended one field further.
 
 ### 1.3 Types 8/9 — paired control exchange; identification still open, candidates narrowed
 
+> **SUPERSEDED IN PART BY `vms-a58` (2026-08-06) — read
+> `docs/cluster-protocol-spec.md` §4(h)(1f) and its §5 register entry first.**
+> The OUI-rule census this section says is "still owed" now exists
+> (`tools/cluster/scs_t89_measure.py`, gated by `ctest -R scs_t89_figures`).
+> Three things below are settled and one is overturned:
+> - The constant `1` is a **count of one**, not a version or a flag. The
+>   p. 2-43 credit ledger predicts `[48:50]` on 938 of 938 frames with zero
+>   residuals; the value is `1` because the `SCS$DIRECTORY` dialogue never
+>   leaves two buffers outstanding, and the same field reads `0` on the first
+>   application message of all 131 dialogues.
+> - **Types 8 and 9 are NOT connection-control messages** — they are inside the
+>   credit account that types `0`–`7` sit outside. The "control-message
+>   codepoints beyond the drawn eight" reading below is **overturned**.
+> - The special-credit-message candidate is still **not** restored, but for two
+>   NEW reasons that do not depend on the constant: the exchange is
+>   unconditional and it is answered.
+> - Emission ruling (spec §5): OVMX must keep answering a received `8` with a
+>   `9`, and **must emit an `8` before any `DISCONNECT_REQ` it initiates** —
+>   a 131-of-131 invariant it does not yet honour, and a first-class candidate
+>   for the `vms-abd` refusal.
+
 Observed (mixed-source corpus; formal per-population split still owed to the
 OUI-rule census tool):
 

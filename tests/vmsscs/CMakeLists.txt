@@ -693,6 +693,60 @@ set_tests_properties(scs_disc_figures PROPERTIES
     TIMEOUT 60
 )
 
+# vms-a58 - THE TYPES-8/9 GATE. Message types 8 and 9 had been read three
+# different ways in this repo's own documents ("a ninth and tenth
+# connection-control message", "the SCA credit-flow control pair", "constant
+# credit, so not a credit message") and no gate read a census of them at all,
+# so nothing could tell the readings apart.
+#
+# vms-a58 measured the length-unrestricted, OUI-split census and, decisively,
+# replayed the p. 2-43 credit LEDGER frame by frame: it predicts [48:50] on 938
+# of 938 frames with zero residuals, which makes the constant 1 a COUNT (not a
+# version, not a flag) and puts types 8 and 9 INSIDE the credit account that
+# every connection-control type sits outside. The names remain unknown and the
+# gate keeps them unnamed.
+#
+# It pins the four spec tables and scsd.c's T89-CENSUS-INV ruling lines to
+# tools/cluster/scs_t89_measure.py's EXPECTED, reds if any of the four
+# eliminated readings is written back down as an identification, and reds if
+# the honest limit (the owning-SYSAP census CANNOT discriminate, because the
+# entire teardown population is one SYSAP) is deleted. On a lab host it also
+# re-derives every figure from the packets via scs_wire.gate().
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_t89_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_t89_figures.py)
+else()
+    add_test(NAME scs_t89_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_t89_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_t89_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 120
+)
+
+# vms-a58 - THE MUTATION BATTERY for scs_t89_figures. Nine mutants against
+# COPIES of the two documents that gate reads; it must red for every one. It
+# has already found a real defect in the gate -- a sentence splitter that cut
+# "p. 2-44" in half, so no claim stated with a page cite could be seen, and the
+# "types 8 and 9 ARE the special credit message" mutant walked through it.
+# The mutant and kill counts are PRINTED by the test and deliberately not
+# restated here: a second copy of a figure is how a drift in one copy hides.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_t89_mutants
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_t89_mutants.py)
+else()
+    add_test(NAME scs_t89_mutants
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_t89_mutants_no_python3.cmake)
+endif()
+set_tests_properties(scs_t89_mutants PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 900
+)
+
 # vms-66f, review round 2 - THE SCS$DIRECTORY ROLE / LOOKUP-CREDIT GATE.
 #
 # WHY IT EXISTS: two claims shipped in round 1 that the capture they cited

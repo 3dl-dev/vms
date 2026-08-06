@@ -127,6 +127,13 @@ GATES = [
          caps=LAB1, caps_env="OVMX_LAB_CAPTURES",
          truncate="formation-ci1.pcap",
          edit=('"gus_end_matched": 2889,', '"gus_end_matched": 2989,')),
+    dict(name="scs_t89_figures",
+         gate="test_scs_t89_figures.py",
+         measure="tools/cluster/scs_t89_measure.py",
+         measure_env="OVMX_SCS_T89_MEASURE",
+         caps=LAB1, caps_env="OVMX_LAB_CAPTURES",
+         truncate="formation-ci1.pcap",
+         edit=('"n_captures": 47,', '"n_captures": 41,')),
     # The vms-578 ACCEPTANCE bracket -- the three runs that JOIN, the evidence
     # the whole SCA layer rests on. Until vms-371 no gate pinned it at all, so
     # its mutants deliberately target EXPECTED_578 and the B1 capture.

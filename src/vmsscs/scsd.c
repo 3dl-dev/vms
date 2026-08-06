@@ -2475,9 +2475,18 @@ static const uint8_t *scsd_credit_stamp_outbound(const uint8_t *frame, size_t le
     if (h.kind != SCS_RX_APP_MESSAGE) {
         return frame; /* MTYPE != 10 -- the credit field is not a piggyback */
     }
-    if (scs_credit_header_offset(h.total_sca_len) < 0 || len > SCSD_CREDIT_MAX_FRAME) {
-        return frame; /* ungrounded length class, or longer than the scratch */
+    if (len > SCSD_CREDIT_MAX_FRAME) {
+        return frame; /* longer than the scratch */
     }
+    /* vms-a61: NO scs_credit_header_offset() PRE-GATE HERE ANY MORE. `h`
+     * already proves envelope conformance, which is what fixes the credit
+     * field at content[48:50] regardless of length (scs_env.h) -- the length
+     * allowlist that function re-derives is a redundant, narrower re-check of
+     * a fact this frame already established. scs_credit_stamp_header() below
+     * still does its own internal length lookup (it is a general primitive,
+     * used elsewhere without a pre-proven envelope) and its failure is still
+     * handled -- so removing the redundant pre-check here does not weaken
+     * anything, it just stops re-deriving what `h` already proved. */
     struct scs_cdt *cdt = scs_cdl_lookup(&scsd_cdl, h.src_conid);
     if (cdt == NULL) {
         credit_send_no_cdt++;
@@ -6446,8 +6455,20 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
              * delivery path then refuses. */
             struct scs_cdt *rcdt = NULL;   /* resolved connection, or NULL */
             struct scs_cdt *ccdt = NULL;   /* the one owing a p. 2-43 buffer release */
+            /* vms-a61: NO scs_credit_header_offset() GATE HERE ANY MORE. `h`
+             * already proves this frame envelope-conformant (scs_rx_parse
+             * succeeded to produce it), and the credit field sits at the
+             * SAME fixed content[48:50] on every conformant frame regardless
+             * of length (scs_env.h) -- h.credit above is already that field,
+             * read by the shared parse, not re-derived here. The length
+             * allowlist scs_credit_header_offset() re-checks is therefore
+             * redundant at this call site: it can only ever agree with the
+             * envelope test on today's corpus (measured, zero missing
+             * classes -- tools/cluster/scs_env_measure.py part G) and would
+             * only ever DISAGREE by refusing a conformant length outside the
+             * seven it lists, which is exactly the case this migration
+             * removes the redundant refusal for. */
             if (scs_credit_enabled() &&
-                scs_credit_header_offset(h.total_sca_len) >= 0 &&
                 scs_cdl_resolve(&scsd_cdl, h.dest_conid, h.src_conid, &rcdt) == SCS_DELIVER_OK) {
                 if (h.kind == SCS_RX_APP_MESSAGE) {
                     /* p. 2-44: "remote SCS adds the contents of the credit
@@ -6529,32 +6550,137 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                     break;
                 }
             } else if (h.kind == SCS_RX_CONTROL) {
-                /* vms-ec7: THE CONTROL HALF OF THE p. 4-15 DISPATCH, counted at
-                 * the one place every frame is classified. p. 4-15 routes on
-                 * MTYPE: a message goes to the CDT's message input routine
-                 * (the arm above), and a control message goes to the connection
-                 * state machine instead. OVMX has run that state machine since
-                 * vms-dd5, but it ran it from a DIFFERENT place -- the (b1)
-                 * classifier further down this function, behind its own
-                 * per-class guard -- so this, the one place that knows the
-                 * MTYPE of every received frame, could not say how many control
-                 * messages had arrived or of which kinds.
+                /* vms-ec7/vms-a61: THE CONTROL HALF OF THE p. 4-15 DISPATCH,
+                 * decoded AND STEPPED at the one place every frame is
+                 * classified. p. 4-15 routes on MTYPE: a message goes to the
+                 * CDT's message input routine (the arm above), and a control
+                 * message goes to the connection state machine instead.
                  *
-                 * IT DOES NOT STEP THE MACHINE HERE, AND THAT IS DELIBERATE.
-                 * The transitions stay at their existing call sites for two
-                 * reasons, both about not changing behaviour in a refactor:
-                 * MTYPEs 0 and 2 are already fed by the branches that ANSWER
-                 * them and feeding them twice would double-step the machine
-                 * (see the (b1) note), and this block runs BEFORE those
-                 * branches, so stepping here would reorder the handlers on a
-                 * live wire. What moved is the DECODE -- the classifier below
-                 * now takes its message type from this same shared envelope
-                 * rather than from open-coded offsets on an untested frame.
-                 * Relocating the transitions themselves is the follow-up, and
-                 * it needs a bracketed lab run, not a code review. */
+                 * THIS USED TO RUN FROM A DIFFERENT PLACE. Through vms-a61,
+                 * the actual conn_step() call sat at the (b1) classifier much
+                 * further down this function, re-parsing the SAME frame with
+                 * its own scs_env_parse_frame() call, behind its own
+                 * `n>=72 && buf[30] in {0x4b,0x5b,0x7b}` marker gate -- so
+                 * this, the one place that already holds the parsed envelope,
+                 * could only count. vms-a61 moves the step itself here, onto
+                 * `h`, and deletes the (b1) reparse.
+                 *
+                 * WHY THIS IS SAFE TO MOVE (not merely convenient), checked
+                 * against every branch that runs between here and the old
+                 * (b1) site before making the move:
+                 *   - MTYPE 0 (CONNECT_REQ) and 2 (ACCEPT_REQ) are excluded
+                 *     from stepping HERE exactly as they were at (b1) --
+                 *     they are answered by the explicit CONNECT/ACCEPT
+                 *     branches, which are untouched and still run at their
+                 *     existing call sites (some of which are AFTER this
+                 *     block; that is fine, since 0/2 are never stepped from
+                 *     either location).
+                 *   - No branch between here and the old (b1) site returns
+                 *     for a frame carrying a conformant MTYPE in {1,3,4,5,6,
+                 *     7}: the op6/op8 credit/ready block above only acts on
+                 *     MTYPE 8 (an unnamed type, vms-f03, never stepped by
+                 *     this machine either way); the VC-engine credit-ack
+                 *     block's only `return` is on a sequence GAP, which is a
+                 *     circuit break that would have stopped the frame from
+                 *     ever reaching the old (b1) site too; the padded-HELLO,
+                 *     directed-HELLO and START blocks below all gate on a
+                 *     DIFFERENT wire marker (HELLO length / 0x41 opcode) that
+                 *     an envelope-conformant control frame never carries, so
+                 *     they never consume one of these frames either.
+                 *   - When scsd_cdl_ready is 0 (OVMX_NO_CONN_FSM), this whole
+                 *     block -- like the old (b1) lookup against an
+                 *     uninitialized, zeroed scsd_cdl -- is a no-op either way.
+                 *
+                 * WHAT DOES CHANGE, NAMED RATHER THAN HIDDEN: the (b1) site's
+                 * OWN extra gate (`n>=72 && buf[30] in {0x4b,0x5b,0x7b}`) is
+                 * gone. Every conformant control frame in the corpus this
+                 * item can measure against carries one of those three markers
+                 * (docs/design-mscp-direction.md / scs_credit.h's "0x?B13
+                 * family" note), so this is not observed to change anything
+                 * TODAY -- but a hypothetical conformant control frame under
+                 * a fourth, unobserved marker would now reach the state
+                 * machine where it previously would not have. That is the
+                 * same class of "wire-visible if it ever changes" the sibling
+                 * changes in this item (scs_connect_parse's has_conid,
+                 * scs_credit_header_offset) already accept, and it is why
+                 * this item's own text calls for a lab-2 bracket: NOT run
+                 * this turn (see the item's own note on that), so treat this
+                 * paragraph as a recorded risk, not a closed one. */
                 rx_control_messages++;
                 if (h.mtype <= SCS_ENV_MTYPE_CONTROL_MAX) {
                     rx_control_by_mtype[h.mtype]++;
+                }
+                enum scs_conn_event cev;
+                if (h.mtype != SCS_ENV_MTYPE_CONNECT_REQ &&
+                    h.mtype != SCS_ENV_MTYPE_ACCEPT_REQ &&
+                    scs_conn_event_for_msgtype(h.mtype, &cev)) {
+                    struct scs_cdt *tgt = scs_cdl_lookup(&scsd_cdl, h.dest_conid);
+                    if (tgt != NULL) {
+                        /* vms-6b3: THE REASON CODE, decoded before the
+                         * transition so the log reads in wire order -- see
+                         * the grounding at scs_reason.h. Gated on the same
+                         * Con.ID ownership test as the transition. */
+                        if (scs_reason_carried_by(h.mtype)) {
+                            uint16_t reason = 0;
+                            if (scs_reason_get(buf, (size_t)n, h.mtype, &reason) == 1) {
+                                conn_reason_seen++;
+                                if (reason != 0) {
+                                    conn_reason_nonzero++;
+                                }
+                                log_ts(stdout);
+                                printf(" SCSD-I-CONNREASON, conid=0x%08X: %s"
+                                       " carries reason code %u (%s)%s\n",
+                                       (unsigned)h.dest_conid,
+                                       h.mtype == SCS_REASON_MSGTYPE_REJECT_REQ
+                                           ? "REJECT_REQ" : "DISCONNECT_REQ",
+                                       (unsigned)reason, scs_reason_name(reason),
+                                       reason == 0 ? " -- no reason supplied,"
+                                                     " which is what every VMS"
+                                                     " frame we have observed"
+                                                     " carries" : "");
+                                fflush(stdout);
+                            }
+                        }
+                        /* vms-591: THE DISCONNECT MESSAGES ARE ANSWERED, NOT
+                         * MERELY RECORDED -- see scsd_disconnect_dialogue().
+                         * lconid (abs 68, the peer's own handle) is recorded
+                         * before the dialogue runs: OVMX must address its
+                         * DISCONNECT_RSP and its own DISCONNECT_REQ to the
+                         * peer's Con.ID, and on a connection OVMX did not open
+                         * the CDT may not have it yet. A frame carrying
+                         * remote Con.ID 0 names no connection at the peer. */
+                        if (cev == SCS_CONN_EV_RCV_DISCONNECT_REQ ||
+                            cev == SCS_CONN_EV_RCV_DISCONNECT_RSP) {
+                            struct peer_state *dps =
+                                peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
+                            if (dps != NULL) {
+                                uint32_t lconid = h.src_conid;
+                                if (lconid != 0) {
+                                    scs_cdt_set_remote_conid(tgt, lconid);
+                                }
+                                int rel = scsd_disconnect_dialogue(rx->sock, rx->ifindex,
+                                                                   dps, tgt, cev,
+                                                                   rx->our_hw_mac,
+                                                                   rx->our_src_logical);
+                                /* vms-66f r4: TELL THE OWNING SYSAP -- see the
+                                 * grounding at the (former) (b1) site. */
+                                if (rel && scsd_poller_ready &&
+                                    scs_poll_cdt_released(&scsd_poller, tgt)) {
+                                    log_ts(stdout);
+                                    printf(" SCSD-I-POLLCLOSED, the Process"
+                                           " Poller's SCS$DIRECTORY connection"
+                                           " reached CLOSED (p. 2-26) -- the"
+                                           " p. 2-50 cycle ended clean,"
+                                           " descriptor returned\n");
+                                    fflush(stdout);
+                                }
+                            } else {
+                                conn_step(tgt, cev, NULL);
+                            }
+                        } else {
+                            conn_step(tgt, cev, NULL);
+                        }
+                    }
                 }
             } else if (h.kind == SCS_RX_UNKNOWN_MTYPE) {
                 /* Never observed in 981,367 envelope-conformant frames across
@@ -7570,163 +7696,32 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
 
         /* vms-578 INTEGRATION: BOTH sides added distinct handling to (b1) and
          * both are kept, closure first. They key on DIFFERENT Con.IDs and
-         * cannot both claim a frame: the vms-dd5 classifier below steps a CDT
-         * found in the CDL by rconid, the worktree-760 blocks after it are
-         * gated on rconid == OVMX_MSCP_CONID, which is a handle the CDL does
+         * cannot both claim a frame: the worktree-760 blocks below are gated
+         * on rconid == OVMX_MSCP_CONID, which is a handle the CDL does
          * not hold. The final JOINER_CONID bind takes worktree-760's op
          * discriminator (dop == SCS_DIR_OP_RESPONSE), because the member's
          * lookup-RESPONSE echoes the same rconid and would otherwise be
          * mis-read as a connect-RESPONSE. */
 
-        /* vms-dd5: THE CONNECTION-CONTROL CLASSIFIER. The destination Con.ID
-         * of a connection-control frame names one of OUR CDTs (p. 2-29: the
-         * low 16 bits index the CDL), and [46:48] names which SCA message it
-         * is (spec sec 4(h)(1a)). Together those are enough to drive the
-         * documented state machine off real frames instead of off inferred
-         * side effects. RECEIVE-SIDE ONLY -- it emits nothing and changes no
-         * byte; where the machine says a frame is owed, conn_step logs
-         * SCSD-W-CONNNOACT.
+        /* vms-dd5/vms-a61: THE CONNECTION-CONTROL CLASSIFIER USED TO LIVE
+         * HERE and no longer does -- it moved to the shared envelope receive
+         * block above (scsd_handle_frame's `h.kind == SCS_RX_CONTROL` arm),
+         * which already holds this exact frame's parsed envelope and no
+         * longer needs a second, independent scs_env_parse_frame() call to
+         * get it. See that arm for the full grounding, the reordering-safety
+         * argument and the one behaviour delta it names.
          *
-         * DELIBERATELY NOT HANDLED HERE: message types 0 (CONNECT_REQ) and
-         * 2 (ACCEPT_REQ). Those are already fed by the explicit branches
-         * that ANSWER them -- the SCS$DIRECTORY connect branch and the two
-         * VMS$VAXcluster accept branches -- and feeding them twice would
-         * double-step the machine. Everything else (1, 3, 4, 5, 6, 7) has no
-         * other call site: before this item OVMX did not react to any of
-         * them at all, which is exactly why a peer parking a connection was
-         * invisible. */
-        /* vms-ec7: THE MESSAGE TYPE COMES FROM THE SHARED ENVELOPE, and the
-         * envelope test is now a PRECONDITION of the dispatch.
-         *
-         * This line used to read `buf[60] | buf[61] << 8` directly, guarded
-         * only by the enclosing (wire length >= 72 AND content[16] is a
-         * 0x4b/0x5b/0x7b PPD marker). That guard cannot tell an SCS message
-         * from anything else of the same shape, and MEASURED over the lab-1
-         * corpus (48 pcaps, tools/cluster/scs_env_measure.py part (F)) it
-         * admitted 1,972 frames that are NOT envelope-conformant -- of which
-         * 1,092 carried a 0..7 value at [46:48] that this classifier would have
-         * handed to scs_conn_event_for_msgtype() as a connection-control
-         * message. The values it read there ranged over 1..19, which is the
-         * SAME misread docs/design-mscp-direction.md sec 4 records as a
-         * self-caught method confound ("an earlier scratch census read [46:48]
-         * in the 70-content class and printed types 1..22"). That class does
-         * not have this field.
-         *
-         * WHAT THIS DOES AND DOES NOT CHANGE. It changes which frames REACH the
-         * state machine: a frame that fails the sec 4(h)(1b) envelope test is
-         * no longer read for a message type. It emits nothing, changes no
-         * transmitted byte, and does not move the classifier -- the deliberate
-         * exclusions below and the handler ORDER in this function are untouched,
-         * because reordering handlers is a wire-behaviour change and this is a
-         * refactor. Those 1,092 frames additionally had to survive the
-         * scs_cdl_lookup() below to step anything, so this is a narrowing of an
-         * unsound read rather than a bug fix with a known victim; the unsound
-         * read is the part that is gone.
-         *
-         * SCOPE: only the CLASSIFIER is narrowed. A non-conformant frame simply
-         * carries no message type, so `cmsg` is left at a value no MTYPE can
-         * take and the branch below declines; every other branch in this block,
-         * including the worktree-760 ones keyed on OVMX_MSCP_CONID, sees
-         * exactly what it saw before. */
-        struct scs_env cenv;
-        uint16_t cmsg = 0xFFFFu; /* not an MTYPE: {0..10} is the whole space */
-        uint32_t cdest = rconid;
-        if (scs_env_parse_frame(buf, (size_t)n, &cenv) == 0) {
-            cmsg = cenv.mtype;
-            cdest = cenv.dest_conid; /* == buf[64:68]; taken from the envelope */
-        } else {
-            rx_control_nonconformant++;
-        }
-        enum scs_conn_event cev;
-        if (cmsg != 0 && cmsg != 2 && scs_conn_event_for_msgtype(cmsg, &cev)) {
-            struct scs_cdt *tgt = scs_cdl_lookup(&scsd_cdl, cdest);
-            if (tgt != NULL) {
-                /* vms-6b3: THE REASON CODE, decoded before the transition so
-                 * the log reads in wire order. p. 2-26: REJECT_REQ and
-                 * DISCONNECT_REQ each carry an optional 16-bit reason code.
-                 * This is the counterpart of the peer's SDA "Rej/Disconn
-                 * Reason" field: without it, a peer that told us WHY it refused
-                 * us said it into a void. Gated on the same Con.ID ownership
-                 * test as the transition -- another node's connection-control
-                 * traffic on the shared LAN is not ours to report.
-                 *
-                 * THE OFFSET IS AN OVMX DESIGN CHOICE, NOT A DECODED VMS FIELD
-                 * (scs_reason.h; docs/cluster-protocol-spec.md sec 5). Every
-                 * one of the 673 VMS-origin REJECT/DISCONNECT frames we hold
-                 * reads 0 there, so on real VMS traffic this line reports NONE
-                 * -- which is exactly what SDA reports -- and it would only
-                 * ever differ against a peer using the same placement. */
-                if (scs_reason_carried_by(cmsg)) {
-                    uint16_t reason = 0;
-                    if (scs_reason_get(buf, (size_t)n, cmsg, &reason) == 1) {
-                        conn_reason_seen++;
-                        if (reason != 0) {
-                            conn_reason_nonzero++;
-                        }
-                        log_ts(stdout);
-                        printf(" SCSD-I-CONNREASON, conid=0x%08X: %s carries"
-                               " reason code %u (%s)%s\n",
-                               (unsigned)rconid,
-                               cmsg == SCS_REASON_MSGTYPE_REJECT_REQ
-                                   ? "REJECT_REQ" : "DISCONNECT_REQ",
-                               (unsigned)reason, scs_reason_name(reason),
-                               reason == 0 ? " -- no reason supplied, which is"
-                                             " what every VMS frame we have"
-                                             " observed carries" : "");
-                        fflush(stdout);
-                    }
-                }
-                /* vms-591: THE DISCONNECT MESSAGES ARE ANSWERED, NOT MERELY
-                 * RECORDED. conn_step() drives the machine and emits nothing,
-                 * which for the eight formation/rejection messages is correct
-                 * (their answers are emitted by the branches that own them).
-                 * For the two teardown messages it was NOT: a peer
-                 * DISCONNECT_REQ moved the CDT to DISC RECEIVED and the
-                 * DISCONNECT_RSP that Figure 2-16 draws on the SAME arrow was
-                 * never sent, and the symmetric own-disconnect p. 2-26
-                 * requires was never invoked. That is what this branch fixes;
-                 * see scsd_disconnect_dialogue().
-                 *
-                 * lconid IS THE PEER'S HANDLE and it is recorded before the
-                 * dialogue runs: OVMX must address its DISCONNECT_RSP and its
-                 * own DISCONNECT_REQ to the peer's Con.ID, and on a connection
-                 * OVMX did not open (the member-opened VMS$VAXcluster one) the
-                 * CDT may not have it yet. A frame carrying remote Con.ID 0
-                 * names no connection at the peer. */
-                if (cev == SCS_CONN_EV_RCV_DISCONNECT_REQ ||
-                    cev == SCS_CONN_EV_RCV_DISCONNECT_RSP) {
-                    struct peer_state *dps =
-                        peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
-                    if (dps != NULL) {
-                        if (lconid != 0) {
-                            scs_cdt_set_remote_conid(tgt, lconid);
-                        }
-                        int rel = scsd_disconnect_dialogue(rx->sock, rx->ifindex,
-                                                           dps, tgt, cev,
-                                                           rx->our_hw_mac,
-                                                           rx->our_src_logical);
-                        /* vms-66f r4: TELL THE OWNING SYSAP. The dialogue above
-                         * released the CDT, and the Process Poller may be the
-                         * SYSAP holding it -- p. 2-50's cycle ends on exactly
-                         * this event. Pushed at the moment of release, before
-                         * the CDL can recycle the slot (scs_poll.h). The call
-                         * answers 0 for every connection that is not the
-                         * poller's, so no other owner is disturbed. */
-                        if (rel && scsd_poller_ready &&
-                            scs_poll_cdt_released(&scsd_poller, tgt)) {
-                            log_ts(stdout);
-                            printf(" SCSD-I-POLLCLOSED, the Process Poller's"
-                                   " SCS$DIRECTORY connection reached CLOSED"
-                                   " (p. 2-26) -- the p. 2-50 cycle ended"
-                                   " clean, descriptor returned\n");
-                            fflush(stdout);
-                        }
-                    } else {
-                        conn_step(tgt, cev, NULL);
-                    }
-                } else {
-                    conn_step(tgt, cev, NULL);
-                }
+         * rx_control_nonconformant keeps its ORIGINAL meaning here rather
+         * than moving with the rest: it measures how often this (b1) marker
+         * gate (`n>=72 && buf[30] in {0x4b,0x5b,0x7b}`) admits a frame the
+         * envelope test refuses (tools/cluster/scs_env_measure.py part (F)),
+         * which is a property of THIS gate, not of the now-relocated
+         * dispatch -- so it is measured with its own cheap parse rather than
+         * inferred from whether the shared block happened to step anything. */
+        {
+            struct scs_env cenv_diag;
+            if (scs_env_parse_frame(buf, (size_t)n, &cenv_diag) != 0) {
+                rx_control_nonconformant++;
             }
         }
 

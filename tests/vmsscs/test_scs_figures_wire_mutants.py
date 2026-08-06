@@ -116,6 +116,17 @@ GATES = [
          truncate="formation-ci1-joinwindow.pcap",
          edit=('"request_credit_hist": {0: 2, 1: 4},',
                '"request_credit_hist": {0: 2, 1: 7},')),
+    # vms-4eb: the 110-content type-10 decode. Its mutant targets the pairing
+    # count, which is the figure the whole IDENTIFICATION rests on -- 2889 of
+    # 2889 frames matched to an MSCP command by command-reference number. If
+    # that number can drift unnoticed, "decoded" is back to being an adjective.
+    dict(name="scs_type10_figures",
+         gate="test_scs_type10_figures.py",
+         measure="tools/cluster/scs_type10_measure.py",
+         measure_env="OVMX_SCS_TYPE10_MEASURE",
+         caps=LAB1, caps_env="OVMX_LAB_CAPTURES",
+         truncate="formation-ci1.pcap",
+         edit=('"gus_end_matched": 2889,', '"gus_end_matched": 2989,')),
     # The vms-578 ACCEPTANCE bracket -- the three runs that JOIN, the evidence
     # the whole SCA layer rests on. Until vms-371 no gate pinned it at all, so
     # its mutants deliberately target EXPECTED_578 and the B1 capture.

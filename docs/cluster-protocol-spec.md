@@ -1110,6 +1110,169 @@ classes, the 94-content MSCP class and the 190-content class **only**. The
 70-content class is a different shape and remains undecoded. Do not extend the
 (1b) offsets to it.
 
+**(1e) THE 110-CONTENT TYPE-10 CLASS IS THE MSCP `GET UNIT STATUS` END MESSAGE
+— DECODED (`vms-4eb`, 2026-08-06).** Re-derive every figure below with
+`tools/cluster/scs_type10_measure.py`; `ctest -R scs_type10_figures` pins this
+prose to it and, on a host with the captures, pins it to the packets.
+
+*Sources.* Our own 48 lab-1 captures, plus **AA-L619A-TK** *MSCP Basic Disk
+Functions Manual* v1.2 (Apr 1982) — the customer-orderable UDA50 Programmer's
+Doc Kit manual, plain copyright page, no distribution restriction, therefore
+admissible public documentation under CLAUDE.md rule 8. ⛔ The bitsavers
+`dec/dsa/mscp` v2.4.0 files ("DEC CONFIDENTIAL AND PROPRIETARY / RESTRICTED
+DISTRIBUTION") and the bitsavers *VAXcluster Disk I/O Internals Manual* are
+EXCLUDED and were not read.
+
+**THE CENSUS, AND IT IS NOT LENGTH-RESTRICTED.** Every envelope-conformant SCA
+frame in all 48 captures, keyed (content length, message type), real-VAX
+sources only (`08:00:2b` / `aa:00:04`; `unclassified_sources` = **0**, and an
+unplaceable source REDS the tool rather than joining a population):
+
+| len | mt | VAX | | len | mt | VAX | | len | mt | VAX |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 58 | 5 | 697 | | 62 | 4 | 453 | | 94 | 10 | 3 621 |
+| 58 | 7 | 223 | | 62 | 6 | 220 | | 110 | 0 | 1 101 |
+| 58 | 8 | 131 | | 66 | 1 | 778 | | 110 | 2 | 324 |
+| 58 | 9 | 89 | | 86 | 10 | 202 | | **110** | **10** | **2 889** |
+| 62 | 3 | 258 | | | | | | 190 | 10 | 299 224 |
+
+Type 10 is not a class, it is a **carrier**, and it occupies four length
+classes: VAX `{86: 202, 94: 3 621, 110: 2 889, 190: 299 224}` against OVMX
+`{94: 585, 190: 7 446}` — OVMX emits type 10 in two of them (its replayed MSCP
+command and add-member templates) and has **never** emitted a 110-content one.
+
+**WHAT IDENTIFIES IT — the command/end pairing, 2 889 of 2 889.** For every one
+of the 2 889 frames there is an earlier 94-content type-10 frame in the same
+capture, on the **mirrored Con.ID pair**, carrying the **same 32-bit value at
+body offset 0**. That is MSCP's own correlation rule: AA-L619A-TK §5.1 defines
+the command reference number as "a 32-bit, unique, non-zero number identifying
+a host command… copied to the end message". **Unmatched: 0.** The opcode
+relation across every pair is `0x03 → 0x83`, i.e. exactly Table A-1's
+`endcode = command | OP.END` with `OP.GUS = 0x03` and `OP.END = 0x80`. Sources:
+`08:00:2b:78:56:b9` 1 126, `aa:00:04:00:01:04` 1 194, `08:00:2b:11:22:33` 569
+— the last is vax3's SIMH adapter (`vax3/local.ini`, `set xq
+mac=08-00-2b-11-22-33`), so the OUI verdict is cross-checked against the lab's
+own configuration and not merely assumed from the prefix.
+
+**THE SYSAP FILTER, because `body[8]` is an opcode only on an MSCP
+connection.** Binding Con.IDs to SYSAP names through the connect frames in the
+same capture: 1 723 of the 2 889 have both ends bound and **every one** binds
+to the `VMS$DISK_CL_DRVR ↔ MSCP$DISK` pair — no other pair, zero residuals; the
+remaining 1 166 have no connect frame in-capture (the connection predates it).
+The category error, measured on the 94-content class: on that MSCP connection
+`body[8]` is `{0x03: 1 715, 0x04: 202}`, **every value a Table A-1 opcode**; on
+the `SCS$DIRECTORY ↔ SCS$DIR_LOOKUP` connections the same offset is
+`{0x24: 942, 0x56: 178}`, **not one of which is a Table A-1 opcode**. An
+unfiltered `body[8]` census over the 94-content class is therefore a category
+error, and this is the number that says so.
+
+The bind depends on which 16-byte name field is the sender's, so that is
+re-derived here over the whole corpus rather than assumed: on CONNECT_REQ the
+pair `([62:78], [78:94])` is (`MSCP$DISK`, `VMS$DISK_CL_DRVR`) 809× and
+(`SCS$DIRECTORY`, `SCS$DIR_LOOKUP`) 201×, and on the ACCEPT_REQ answering those
+same connections it is those strings **swapped** (101× and 134×). The listeners
+are `MSCP$DISK` and `SCS$DIRECTORY` (SDA `SHOW CONNECTIONS`, §3), so `[62:78]`
+on a CONNECT_REQ is the **destination** — which is what §4(h)(2) already
+grounds by the swap test on one dialogue, now re-derived across all of them.
+MSCP confirms it independently: bound the other way, all 2 889 END messages
+would be travelling client→controller, and an endcode is by definition what a
+controller sends.
+
+**THE FIELDS, against Table A-7 (GET UNIT STATUS end message) and §6.12.**
+Body offsets are content-relative to `[58]`; absolute frame offset is body + 72.
+
+| body | field (Table A-7 symbol) | measured over 2 889 VAX frames |
+|---|---|---|
+| `[0:4]` | `P.CRF` command reference number | pairs 2 889/2 889 to its command |
+| `[4:6]` | `P.UNIT` unit number | `0x0000` ×2 485, `0x4000…0x4003` ×101 each |
+| `[6:8]` | reserved | zero on every valid-unit frame |
+| `[8]` | `P.OPCD` endcode | `0x83` — **2 889/2 889** |
+| `[9]` | `P.FLGS` end flags (Table A-3) | `0x00` — 2 889/2 889, no bad block, no error log |
+| `[10:12]` | `P.STS` status | `0x03` ×2 485, `0x04` ×402, `0x23` ×2 |
+| `[12:14]` | `P.MLUN` multi-unit code | `0x0000/0x0100/0x0200/0x0300` (§6.12: high byte = spindle id) |
+| `[14:16]` | `P.UNFL` unit flags | `0x8000` on all 404 valid-unit frames — **see the gap below** |
+| `[16:20]` | reserved | zero on every valid-unit frame |
+| `[20:28]` | `P.UNTI` unit identifier | `02 00 00 00 NN 00 a1 12`, `NN` = the unit index |
+| `[28:32]` | `P.MEDI` media type identifier | `0x2564105c` ×202, `0x25652228` ×202 |
+| `[32:34]` | `P.SHUN` shadow unit | `0x0000` — 2 889/2 889 (nothing shadowed) |
+| `[36:48]` | track/group/cylinder/RCT geometry | see below |
+
+Every status value is a documented Table B-1/B-2 code: `0x03` = Unit-Offline
+sub-code 0 ("unit unknown or online to another controller"), `0x04` =
+Unit-Available, `0x23` = Unit-Offline **sub-code 1** ("no volume mounted or
+drive disabled"). And §6.12's validity rule holds as an exact **partition with
+zero residuals**: the unit identifier is zero on all 2 485 plain Unit-Offline
+frames and non-zero on all 404 others — "if unit identifier = 0, virtually no
+characteristics are valid", read off the wire rather than quoted at it.
+
+**THE UNITS ARE THE LAB'S OWN DISKS, and that is the independent check.** The
+media type identifier decodes by AA-L619A-TK §4.17 + Appendix C (D0/D1 = the
+two device-type characters, A0–A2 = one to three media characters, N = two
+decimal digits, "A" = 1), calibrated on Appendix C Table C-3's published worked
+value **RA80 = `0x25641050`**:
+
+| unit | unit identifier | media id | decodes to | multi-unit | frames |
+|---|---|---|---|---|---|
+| `0x4000` | `02 00 00 00 00 00 a1 12` | `0x2564105c` | **DU RA92** | `0x0000` | 101 |
+| `0x4001` | `02 00 00 00 01 00 a1 12` | `0x2564105c` | **DU RA92** | `0x0100` | 101 |
+| `0x4002` | `02 00 00 00 02 00 a1 12` | `0x25652228` | **DU RRD40** | `0x0200` | 101 |
+| `0x4003` | `02 00 00 00 03 00 a1 12` | `0x25652228` | **DU RRD40** | `0x0300` | 101 |
+
+The lab's own SIMH configuration, written years before this decode and never
+consulted while making it, is `set rq0 ra92 / set rq1 ra92 / set rq2 cdrom /
+set rq3 cdrom` (`/data/training/vax/cluster/vax.ini`). Four units, two RA92s
+then two CD-ROMs, in that order. The wire and the hardware config agree without
+a free parameter.
+
+Geometry follows the media, as §6.12 says it must ("track size … 0 if
+inapplicable"): the RA92 rows carry `track 73 / group 13 / cylinder 1 / RCT
+size 949 / RBNs 1 / copies 1` (188 frames; 73 × 13 = 949, the RCT being one
+cylinder) and all-zero on 14; every RRD40 row is all-zero, 202/202 — a CD-ROM
+has no replacement table.
+
+**THE ENUMERATION IS §6.12's `Next Unit` MODIFIER, read off the answered
+commands.** Command modifier word `[10:12]` against the unit the end message
+returned: modifier `0x0000` → unit `0x0000` ×2 384 (a plain controller-level
+probe), and modifier `0x0001` — Table A-2 `MD.NXU`, "returns the next known
+unit ≥ the specified unit number, in ascending order" — walking
+`0x4000 → 0x4001 → 0x4002 → 0x4003` at 101 frames each and then `0x0000` ×101,
+the walk running off the end. The class driver enumerating the served units is
+the *behaviour* this class carries, not just the *format*.
+
+**WHAT IS NOT DECODED, and it is exactly four bytes.** Table A-7's last GET
+UNIT STATUS field ends at body `[48]`; the SCS payload of this class is 52
+bytes. `body[48:50]` is a **constant `0x006e`** across all 2 889 frames.
+`0x6e` is 110, this class's own SCA content length, so a length echo and a
+plain constant are **indistinguishable on a single-length population** — that
+is the honest state of it, not a preference between the two readings.
+`body[50:52]` takes 32 distinct values (`0000` ×792, `3142` ×585, `2b20` ×519,
+`4924` ×419, …), several of them printable ASCII fragments. **Nothing here
+identifies either field. Do not name them and do not emit a guess in them.**
+Also undecoded: the unit-flags word reads `0x8000` on all 404 valid-unit
+frames, and **Table A-5 defines no bit 15** — it is constant across both media
+types, so it is not the removable-media flag either.
+
+**RULING — must OVMX ever EMIT a 110-content type-10 frame? Not until it
+serves a disk; and it must PARSE one today.** The frame is an MSCP end message,
+and an end message is by definition what a *controller* sends. OVMX is the
+client on this connection: it already emits the 94-content `GET UNIT STATUS`
+command (195 of the 2 889 VAX end messages in this corpus are answers to an
+OVMX-sourced command) and it already parses the reply (`scs_mscp_parse()`,
+`tests/vmsscs/test_scs_mscp.c`). So:
+
+- **Emitting one is gated behind, and only behind, `docs/design-mscp-direction.md`
+  Phase D** — the disk-server posture question already raised as a gate on
+  `vms-54f`. Even the minimal "serves no disk" responder option in that gate
+  requires this frame, because *answering* `GET UNIT STATUS` **is** this frame.
+  Until Phase D is ruled, OVMX must not emit it: a node that emits an end
+  message reporting units it does not serve is the dishonest-success shape
+  INV-6 exists to kill.
+- **Parsing it is not optional and is not deferred.** It is the answer to a
+  command OVMX already sends; dropping it silently would leave OVMX unable to
+  tell "no units" from "no answer". The fields above are what a parser is
+  entitled to read — and only those; `body[48:52]` must be ignored, not
+  replayed with intent.
+
 **(2) SCS$DIR_LOOKUP body — name resolution with a grounded negative marker.**
 Past the handle pair the body carries fixed-position, blank-padded ASCII SYSAP
 name fields beginning at [62]. Two observed shapes, selected by the field at
@@ -3357,6 +3520,51 @@ run a lab-2 bracket through `lab2run.sh` while another session is live.
 
 For visibility, every field NOT marked GROUNDED above:
 
+- **THE 110-CONTENT TYPE-10 RESIDUE — `body[48:52]`, four bytes past the end of
+  the documented message (`vms-4eb`).** §4(h)(1e) decodes that class as the MSCP
+  `GET UNIT STATUS` end message and every field AA-L619A-TK Table A-7 defines
+  re-derives from the wire. Table A-7's last field ends at body `[48]`; the SCS
+  payload is 52 bytes. `body[48:50]` is a constant `0x006e` on 2 889/2 889
+  frames — and because `0x6e` is 110, which is this class's own SCA content
+  length, and because **every** frame of the class is that length, a
+  length-echo reading and a plain-constant reading are
+  **INDISTINGUISHABLE ON THIS POPULATION**. Neither is asserted.
+  `body[50:52]` takes 32 distinct values, some
+  of them printable ASCII fragments; nothing we hold identifies it. **Do not
+  name either field, and do not put a meaningful value in them** — OVMX has no
+  occasion to build this frame at all (see the ruling in §4(h)(1e)), and if
+  Phase D ever gives it one, these four bytes are the part that must be copied
+  from an observation rather than composed. Closing this needs a capture of a
+  `GET UNIT STATUS` end message at some OTHER content length, which the lab
+  cannot produce on demand: the length is fixed by the message, not by the
+  configuration.
+
+- **THE UNIT-FLAGS BIT 15 (`vms-4eb`).** `body[14:16]` (Table A-7 `P.UNFL`)
+  reads `0x8000` on all 404 valid-unit frames. **Table A-5 defines no bit 15**,
+  and the bit is set identically for the two RA92 fixed disks and the two RRD40
+  CD-ROMs, so it is not the `UF.RMV` removable-media flag under a different
+  numbering either. Recorded as a live field with an undecoded meaning. It is
+  not evidence of anything and must not be cited as one.
+
+- **§4(N) KEYS ITS CENSUS ON THE *DESTINATION* SYSAP, WHICH ITS PROSE CALLS
+  "local" (found by `vms-4eb`, filed as `vms-5da`; NOT fixed here).** §4(h)(2)
+  grounds `[62:78]`/`[78:94]` as (destination, source) by the request/response
+  swap; `tools/cluster/scs_type10_measure.py` re-derives that over all 48
+  captures (CONNECT_REQ (`MSCP$DISK`, `VMS$DISK_CL_DRVR`) 809× and
+  (`SCS$DIRECTORY`, `SCS$DIR_LOOKUP`) 201×, swapped on the answering
+  ACCEPT_REQ), and MSCP confirms it independently — bound the other way, all
+  2 889 END messages would run client→controller, which an endcode cannot.
+  §4(N) nevertheless calls `[62:78]` "the local SYSAP name" while keying its
+  connect-data table on it. **No count moves** — `scs_type10_measure.py`
+  re-derives 1 101/324/2 889 and the 809 identically to
+  `scs_connect_data_measure.py` — and the table stays per-SYSAP either way. What
+  moves is *whose claim it is*: the `MSCP$DISK` row's `"V5.0          + "` sits
+  in frames addressed **to** the disk server, so it is the disk CLASS DRIVER's
+  version claim, not the server's. §4(N), `tools/scs_connect_data_measure.py`
+  and `src/vmsscs/include/scs_connect.h` are left untouched by `vms-4eb`
+  deliberately: they carry their own gated EXPECTED table, and a label fix that
+  drags a figures gate with it belongs to the item that owns them.
+
 - **`PRCPOLINTERVAL` — GROUNDED, and recorded here because a default that
   matters is worth pinning to its oracle (`vms-66f`).** The SCS process polling
   interval of *VAXcluster Principles* p. 2-50 is a real SYSGEN parameter, and it
@@ -3627,6 +3835,13 @@ For visibility, every field NOT marked GROUNDED above:
   Principles* pp. 4-13..4-15) carrying all SYSAP payloads — which explains its
   2 889-frame majority of the 110-byte class and the fact that OVMX, which
   routes no SYSAP payload, has never emitted one.
+  **And in the 110-content class it is now DECODED, not merely classified —
+  §4(h)(1e) (`vms-4eb`): the MSCP `GET UNIT STATUS` end message**, every field
+  named against AA-L619A-TK Table A-7, paired 2 889/2 889 to its `0x03` command
+  by MSCP's own command-reference rule, on the `VMS$DISK_CL_DRVR ↔ MSCP$DISK`
+  connection and no other. A taxon is not a decode, and the gap between the two
+  was the largest unknown on our wire until that section. What is left of it is
+  four bytes and one flag bit, both registered above.
   `8`/`9` are a paired, envelope-only control exchange on established
   connections — that is a CHARACTERISATION, not an identification:
   **nothing we hold identifies them**, and they are not

@@ -39,6 +39,33 @@ $! check was silent -- see the NOTE ON SERVICES in src/ovmx_init/ovmx_init.c.
 $!
 $ SET NOON
 $!
+$! REGISTER THE SHAREABLE IMAGES every dynamically-activated OVMX binary
+$! depends on with INSTALL (bead vms-913.7, docs/design-image-activation.md
+$! section 6). This is Priority 1 of IMGACT.EXE's SONAME search order
+$! (src/imgact/imgact.c load_needed()): a hit here is an O(1) mmap'd hash
+$! lookup with no filesystem search at all; a system that never runs this
+$! still boots, because Priority 2 (the hardcoded SYS$SHARE fallback) always
+$! finds the same files by scanning the directory instead. INSTALL ADD is
+$! idempotent (re-adding an installed image updates its entry in place), so
+$! running this on every boot -- not just the first -- is the VMS way and
+$! matches the real SYSTARTUP_VMS.COM's own STARTUP.COM pattern.
+$!
+$! This list is exactly the shareable set the fat initramfs actually ships
+$! in SYS$SHARE (distro/Dockerfile.bootable's "9 VMS-native LINK.EXE
+$! artifacts" gate: these 7 shareables + DCL.EXE + LOGINOUT.EXE in SYSEXE).
+$! LIBVMSQUEUE$SHR.EXE (src/vmsqueue) is deliberately NOT here: it is built
+$! by the ordinary CMake add_library() graph, not the VMS-native LINK.EXE
+$! graph, and is not copied into the fat initramfs -- an INSTALL ADD for it
+$! would fail with %INSTALL-E-FILNOTFND on every boot.
+$!
+$ INSTALL ADD SYS$SHARE:DECC$SHR.EXE          /OPEN /SHARED /HEADER_RESIDENT
+$ INSTALL ADD SYS$SHARE:LIBVMSSYS$SHR.EXE     /OPEN /SHARED /HEADER_RESIDENT
+$ INSTALL ADD SYS$SHARE:LIBVMS$SHR.EXE        /OPEN /SHARED /HEADER_RESIDENT
+$ INSTALL ADD SYS$SHARE:LIBVMSPROCESS$SHR.EXE /OPEN /SHARED /HEADER_RESIDENT
+$ INSTALL ADD SYS$SHARE:LIBVMSLNM$SHR.EXE     /OPEN /SHARED /HEADER_RESIDENT
+$ INSTALL ADD SYS$SHARE:LIBVMSFS$SHR.EXE      /OPEN /SHARED /HEADER_RESIDENT
+$ INSTALL ADD SYS$SHARE:LIBVMSRMS$SHR.EXE     /OPEN /SHARED /HEADER_RESIDENT
+$!
 $! ANNOUNCE THAT THIS PROCEDURE RAN, so that "the boot reached site
 $! startup" is an ASSERTION and not an inference from the absence of an
 $! error. tests/qemu/test_persistent_boot.sh greps the boot console for

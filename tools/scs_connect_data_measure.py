@@ -216,6 +216,25 @@ DEFAULT_LOGDIR = "/data/training/vax/cluster/work"
 CD_OFF, CD_END = 94, 110
 LOCAL_NAME, REMOTE_NAME = (62, 78), (78, 94)
 
+# vms-69c: this census is deliberately restricted to ONE SCA length class,
+# 110 -- narrower than either of the other two measure scripts' restrictions
+# -- and that restriction is structural, not an oversight: CD_OFF:CD_END
+# ([94:110]) is the last 16 bytes of the 110-byte CONNECT_REQ/ACCEPT_REQ
+# formation frame and simply does not exist as an offset in any shorter SCA
+# class, and no LONGER connection-control class carries it either (spec sec
+# 4(h)(1a) names 110 as the largest of the four formation lengths). See
+# CONNECT_DATA_RESTRICT_REASON below and the census_guard.check_census() call
+# in measure().
+CONNECT_DATA_RESTRICT_REASON = (
+    "the connect-data field [94:110] is the trailing 16 bytes of the "
+    "110-byte CONNECT_REQ/ACCEPT_REQ formation frame. It is not addressable "
+    "at all in the shorter envelope-conformant classes (58/62/66-byte "
+    "connection-control, 86/94-byte MSCP). The one LONGER class, 190 bytes, "
+    "has the byte range but not the field: scs_rx.h (vms-7c0, unrestricted "
+    "by length) measured the 190-byte class as uniformly MTYPE 10 "
+    "(APPLICATION) -- never 0 (CONNECT_REQ) or 2 (ACCEPT_REQ) -- so [94:110] "
+    "there is SYSAP application payload, not connect data")
+
 # The authoritative established-join specimen (spec sec 1: the ONLY capture of a
 # real node being admitted to an already-running cluster, which is the operation
 # OVMX performs).
@@ -505,6 +524,24 @@ def _new_pop():
     }
 
 
+def _census_guard():
+    """Lazily imported, same reasoning as the lab-fence imports above: keep
+    the module importable with no dependency until a scan actually runs."""
+    cluster_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cluster")
+    if cluster_dir not in sys.path:
+        sys.path.insert(0, cluster_dir)
+    import census_guard
+    return census_guard
+
+
+def _read_pcap_adapter(path):
+    """census_guard.population() expects dissect_sca.read_pcap()'s
+    (ts, tu, orig_len, frame) tuple shape; pcap_frames() above yields bare
+    frame bytes. Adapt rather than duplicate the pcap parser."""
+    for frame in pcap_frames(path):
+        yield (0, 0, len(frame), frame)
+
+
 def measure(capdir):
     m = {
         "pcaps_scanned": 0,
@@ -525,9 +562,18 @@ def measure(capdir):
         "vax_start_versions": collections.Counter(),
         "vax_start_hardware": collections.Counter(),
     }
+    files = lab1_only(sorted(glob.glob(os.path.join(capdir, "**", "*.pcap"),
+                                       recursive=True)))
+
+    # vms-69c: the guard, see CONNECT_DATA_RESTRICT_REASON above.
+    cg = _census_guard()
+    conformant, raw = cg.population(files, _read_pcap_adapter)
+    m["census_guard"] = cg.check_census(
+        (110,), conformant, raw, restrict_reason=CONNECT_DATA_RESTRICT_REASON,
+        label="scs_connect_data_measure.py: ")
+
     adopted = bytes.fromhex(EXPECTED["ovmx_value"].replace(" ", ""))
-    for path in lab1_only(sorted(glob.glob(os.path.join(capdir, "**", "*.pcap"),
-                                           recursive=True))):
+    for path in files:
         m["pcaps_scanned"] += 1
         base = os.path.basename(path)
         for pkt in pcap_frames(path):
@@ -662,6 +708,10 @@ def _report_pop(m, which, label, out):
 def report(m, out=sys.stdout):
     print("pcaps scanned                       : %d" % m["pcaps_scanned"], file=out)
     print(file=out)
+    if "census_guard" in m:
+        print("--- CENSUS GUARD (vms-69c) ---", file=out)
+        print(_census_guard().format_report(m["census_guard"]), file=out)
+        print(file=out)
     print("--- CIRCULAR-GROUNDING GUARD (see the module docstring) ---", file=out)
     print("Every GROUNDED figure below the VAX heading is derived from the VAX", file=out)
     print("population ONLY. The OVMX population is OVMX's own transmissions: it", file=out)

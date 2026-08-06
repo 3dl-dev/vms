@@ -397,11 +397,21 @@ def main():
                     env=env, capture_output=True, text=True)
                 out = r.stdout + r.stderr
                 ran = "re-derived from the packets" in out
-                note(r.returncode == 0 and ran,
+                # vms-14f3: the 70e2/578 wire arm running is not enough -- the
+                # vms-449 rejoin bracket and its vms-449R replication had the
+                # IDENTICAL lab-1-shadows-lab-2 precedence bug, resolving their
+                # own OVMX_LAB2_CAPTURES/OVMX_LAB_CAPTURES pair independently
+                # of the fix below and skipping silently (72 checks, rc=0, no
+                # banner). Require their re-derivation lines too, or this arm
+                # would keep reporting ran=True while 449/449R sat off.
+                ran449 = "EXPECTED_449 was re-derived from the packets" in out
+                ran449r = "EXPECTED_449R was re-derived from the packets" in out
+                note(r.returncode == 0 and ran and ran449 and ran449r,
                      "LAB1_SHADOW: OVMX_LAB_CAPTURES=%s (a lab-1 library) with "
                      "OVMX_LAB2_CAPTURES unset must NOT push this lab-2 gate "
-                     "onto its no-captures arm -- rc=%d, wire arm ran=%s"
-                     % (LAB1, r.returncode, ran))
+                     "onto its no-captures arm -- rc=%d, wire arm ran=%s, "
+                     "449 ran=%s, 449R ran=%s"
+                     % (LAB1, r.returncode, ran, ran449, ran449r))
             elif spec.get("lab2"):
                 skipped.append("%s LAB1_SHADOW (no captures under %s)"
                                % (spec["name"], spec["caps"]))

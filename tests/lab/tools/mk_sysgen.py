@@ -178,7 +178,10 @@ def alloc(prefix, dirname):
         die("every %s? SCSNODE is taken in %s -- pick another prefix"
             % (prefix.upper(), dirname))
     sysid = max(ids) + 1 if ids else 1024
-    while sysid in ids or sysid >= 65536:
+    # Bound the scan: `or sysid >= 65536` here would never terminate, because
+    # incrementing past the bound keeps the condition true forever and the die()
+    # below becomes unreachable (caught by execution -- a real hang).
+    while sysid < 65536 and sysid in ids:
         sysid += 1
     if sysid >= 65536:
         die("no free SCSSYSTEMID below 65536 in %s" % dirname)

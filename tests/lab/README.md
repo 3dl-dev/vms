@@ -129,9 +129,15 @@ the join is refused outright:
 The VC opens, the peer's connect never comes, `CLUSTER_NODES` never moves —
 i.e. it looks **exactly** like the `vms-2f3` stall, and every run under a
 collided identity is a null result filed against the wrong cause. Bracketed
-live over 13 arms on three pods; the rule, the aging behaviour, and the fact
-that an *exact* rejoin does **not** trip it are in
-`docs/cluster-protocol-spec.md` §4(w).
+live over 13 arms on three pods; the rule is in `docs/cluster-protocol-spec.md`
+§4(w).
+
+Read §4(w) for what it does **not** yet establish, too. Whether the poller's
+record **ages out** is an *open hypothesis there, not a measured behaviour* —
+two timepoints, one confounded pod, the interval never measured. And the arm
+showing that an *exact* rejoin draws no conflict lines (`1aeG`) is n=1 and was
+**not cleanly bracketed**: the pod had stopped admitting fresh identities
+before it ran. Neither is safe to design against.
 
 This has already bitten: parallel agents minted `OVMXY1` and `OVMXP1` both on
 `SCSSYSTEMID` 1601, and `OVMXP2`/`OVMXY2` both on 1602. `mk_sysgen.py` now

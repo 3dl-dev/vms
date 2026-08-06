@@ -154,6 +154,30 @@ else
     || no "refused for the wrong reason: $(cat "$T/err")"
 fi
 
+echo "== 12. --alloc TERMINATES when the SCSSYSTEMID space is exhausted =="
+# Regression, audit of vms-1ae. The scan was
+#     while sysid in ids or sysid >= 65536: sysid += 1
+# which never exits once sysid passes the bound -- it just keeps incrementing,
+# and the die() below it is unreachable. --alloc hung (exit 124) instead of
+# reporting exhaustion. A registry whose highest SCSSYSTEMID is the last legal
+# one (65535) puts the scan's first candidate straight over the bound, which is
+# exactly the case that used to spin. The timeout is the assertion.
+mkdir -p "$T/exhaust"; cp "$TMPL" "$T/exhaust/tmpl.dat"
+python3 "$MK" "$T/exhaust/sysgen-max.dat" OVMXQX 65535 "$T/exhaust/tmpl.dat" \
+  >"$T/out" 2>"$T/err" \
+  || no "fixture: could not mint the SCSSYSTEMID-65535 store: $(cat "$T/err")"
+timeout 10 python3 "$MK" --alloc OVMXW "$T/exhaust" >"$T/out" 2>"$T/err"
+rc=$?
+if [ $rc -eq 124 ]; then
+  no "--alloc HUNG on an exhausted SCSSYSTEMID space (the unbounded scan is back)"
+elif [ $rc -eq 0 ]; then
+  no "--alloc handed out $(cat "$T/out") with no SCSSYSTEMID free below 65536"
+else
+  grep -q "no free SCSSYSTEMID" "$T/err" \
+    && ok "--alloc terminated and reported exhaustion (rc=$rc)" \
+    || no "--alloc failed (rc=$rc) but not with the exhaustion message: $(cat "$T/err")"
+fi
+
 echo
 if [ $fails -eq 0 ]; then echo "PASS: lab identity uniqueness guard"; exit 0; fi
 echo "FAIL: $fails check(s) failed"; exit 1

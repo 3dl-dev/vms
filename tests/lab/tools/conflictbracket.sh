@@ -68,17 +68,24 @@ log "known systems BEFORE: $PRECLUSTER"
 # so check our SCSNODE against it before burning two minutes on a run that is
 # pre-refused and reads as a stall.
 #
-# It OVER-APPROXIMATES, deliberately. sec 4(w) arm 1aeR: a SHOW CLUSTER entry
-# survives as BRK_NEW long after the poller's own record has aged out, so a
-# name listed here does not guarantee a conflict -- but a name NOT listed is
-# the cheap common case, and a false abort costs nothing but a re-mint. It also
-# under-covers the other half: SHOW CLUSTER prints node names, never
-# SCSSYSTEMIDs, so the SCSSYSTEMID collision (arms 1aeC/1aeT2/1aeU2) is
+# It OVER-APPROXIMATES, deliberately, and this check does NOT depend on knowing
+# why. Measured fact (sec 4(w), arm 1aeR): a name can still be listed by SHOW
+# CLUSTER as BRK_NEW while that same collision draws no conflict at all -- so a
+# name listed here does not GUARANTEE a conflict. Whether the poller's record
+# ages out is one HYPOTHESIS for that gap and is explicitly UNPROVEN in 4(w)
+# (two timepoints, one confounded pod, interval never measured); do not repeat
+# it as a behaviour. The preflight only needs the observed direction -- SHOW
+# CLUSTER's set is a superset of the poller's -- so it may abort a run that
+# would in fact have been admitted, and that false abort costs nothing but a
+# re-mint. It also under-covers the other half: SHOW CLUSTER prints node names,
+# never SCSSYSTEMIDs, so the SCSSYSTEMID collision (arms 1aeC/1aeT2/1aeU2) is
 # invisible here and is mk_sysgen's registry to catch.
 if [ "${ALLOW_COLLISION:-0}" != "1" ] && echo " $PRECLUSTER" | grep -q " ${NODE:0:6} "; then
   log "ABORT -- SCSNODE ${NODE:0:6} is ALREADY a system this peer knows."
-  log "  The poller will answer with '%PEA0, Remote System Conflicts with Known"
-  log "  System' and the join can never complete. Mint a free identity:"
+  log "  This peer MAY answer with '%PEA0, Remote System Conflicts with Known"
+  log "  System', in which case the join can never complete and the run reads"
+  log "  as a stall. The check over-approximates (see above) -- re-minting is"
+  log "  cheaper than finding out. Mint a free identity:"
   log "  python3 $TOOLS/mk_sysgen.py --alloc <prefix> $W"
   exit 3
 fi

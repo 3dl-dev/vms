@@ -50,6 +50,18 @@ static uint32_t u32(const uint8_t *b, size_t o)
     return (uint32_t)u16(b, o) | ((uint32_t)u16(b, o + 2) << 16);
 }
 
+static void wle16(uint8_t *b, size_t o, uint16_t v)
+{
+    b[o] = (uint8_t)(v & 0xffu);
+    b[o + 1] = (uint8_t)((v >> 8) & 0xffu);
+}
+
+static void wle32(uint8_t *b, size_t o, uint32_t v)
+{
+    wle16(b, o, (uint16_t)(v & 0xffffu));
+    wle16(b, o + 2, (uint16_t)((v >> 16) & 0xffffu));
+}
+
 /* ===================== THE GOLDEN SCC END MESSAGE ========================= */
 
 /*
@@ -766,6 +778,428 @@ static void test_end_frame(void)
     }
 }
 
+/* ===================== SCA block data transfer (vms-4e31) ================= */
+/*
+ * vms-941 un-deferred. Grounding: docs/design-mscp-direction.md, "Phase D
+ * part 1's lab capture" -- a real VAX serving a disk to a real VAX, captured
+ * on lab-2 (vaxlab-9, 2026-08-06). These tests build synthetic frames from
+ * that documented shape; none of them needs lab access.
+ */
+
+/* The 28-byte header, field by field, including the two UNGROUNDED ones,
+ * which must round-trip UNCHANGED -- carrying a value through is not the same
+ * claim as decoding it. */
+static void test_blk_hdr_round_trip(void)
+{
+    struct scs_mscp_blk_hdr h, out;
+    uint8_t raw[SCS_MSCP_BLK_HDR_LEN];
+
+    memset(&h, 0, sizeof(h));
+    h.dest_conid = 0x01020304u;
+    h.f4 = 0xbeefu; /* UNGROUNDED bit pattern -- no meaning asserted */
+    h.f6 = 0xcafeu;
+    h.bytes_remaining = 0x11223344u;
+    h.src_buf_name = 0x55667788u;
+    h.dest_offset = 0x99aabbccu;
+    h.dest_buf_name = 0xddeeff00u;
+    h.src_offset = 0x13579bdfu;
+
+    scs_mscp_srv_blk_build_hdr(raw, &h);
+    check(scs_mscp_srv_blk_parse_hdr(raw, &out) == 0, "the header parses");
+    check(out.dest_conid == h.dest_conid && out.f4 == h.f4 && out.f6 == h.f6
+              && out.bytes_remaining == h.bytes_remaining
+              && out.src_buf_name == h.src_buf_name
+              && out.dest_offset == h.dest_offset
+              && out.dest_buf_name == h.dest_buf_name
+              && out.src_offset == h.src_offset,
+          "every field round-trips exactly, including the two UNGROUNDED "
+          "ones -- carried through, never reinterpreted");
+
+    scs_mscp_srv_blk_build_hdr(raw, NULL);
+    {
+        int allzero = 1;
+        size_t i;
+        for (i = 0; i < sizeof(raw); i++) {
+            if (raw[i] != 0) {
+                allzero = 0;
+            }
+        }
+        check(allzero, "a NULL header builds all-zero bytes, not a crash");
+    }
+    check(scs_mscp_srv_blk_parse_hdr(NULL, &out) == -1
+              && scs_mscp_srv_blk_parse_hdr(raw, NULL) == -1,
+          "NULL arguments are refused");
+}
+
+/*
+ * TRAP 2: WRITE's two-frame request/response has BYTE-IDENTICAL 28-byte
+ * headers -- only data presence tells them apart. Proves both halves of that
+ * claim: the headers really are identical, and the parser really does
+ * distinguish them anyway.
+ */
+static void test_trap2_write_request_vs_response(void)
+{
+    struct scs_mscp_params p;
+    struct scs_mscp_blk_hdr h;
+    uint8_t req_frame[256], resp_frame[256];
+    uint8_t payload[64];
+    long req_n, resp_n;
+    struct scs_mscp_srv_blk_view req_v, resp_v;
+    size_t i;
+
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, "\x01\x02\x03\x04\x05\x06", 6);
+    memcpy(p.src_mac, "\x07\x08\x09\x0a\x0b\x0c", 6);
+    memcpy(p.src_logical, "\xaa\x00\x04\x00\x01\x04", 6);
+    memcpy(p.peer_logical, "\xaa\x00\x04\x00\x1a\x04", 6);
+    p.remote_conid = 0x99998888u;
+    p.local_conid = 0x77776666u;
+    p.recv_ack = 5;
+    p.send_seq = 5;
+
+    memset(&h, 0, sizeof(h));
+    /* Upper 16 bits (content[44:46]) is 0x8765 -- nowhere near the envelope
+     * format word 0x0004, so the conformance-fail claim below is real, not
+     * coincidental. */
+    h.dest_conid = 0x87654321u;
+    h.f4 = 13; /* UNGROUNDED, observed shape -- see the header comment */
+    h.f6 = 2;
+    h.bytes_remaining = sizeof(payload);
+    h.src_buf_name = 0x5555u;
+    h.dest_offset = 0;
+    h.dest_buf_name = 0x6666u;
+    h.src_offset = 0;
+    for (i = 0; i < sizeof(payload); i++) {
+        payload[i] = (uint8_t)(i * 3 + 1);
+    }
+
+    req_n = scs_mscp_srv_build_block_frame(&p, &h, payload, sizeof(payload),
+                                           req_frame, sizeof(req_frame));
+    resp_n = scs_mscp_srv_build_block_frame(&p, &h, NULL, 0, resp_frame,
+                                            sizeof(resp_frame));
+    check(req_n > 0 && resp_n > 0, "both frames build");
+    check(req_n == resp_n + (long)sizeof(payload),
+          "the request frame is exactly the response frame plus the payload");
+
+    check(memcmp(req_frame + 14 + SCS_MSCP_BLK_HDR_OFF,
+                 resp_frame + 14 + SCS_MSCP_BLK_HDR_OFF,
+                 SCS_MSCP_BLK_HDR_LEN) == 0,
+          "THE TRAP, made concrete: WRITE's request and response headers are "
+          "byte-identical -- nothing in the header distinguishes them");
+
+    check(scs_mscp_srv_blk_parse_frame(req_frame, (size_t)req_n, &req_v) == 0
+              && req_v.data_len == sizeof(payload) && req_v.data != NULL
+              && memcmp(req_v.data, payload, sizeof(payload)) == 0,
+          "THE FIX: the data-bearing frame parses as carrying its payload");
+    check(scs_mscp_srv_blk_parse_frame(resp_frame, (size_t)resp_n, &resp_v)
+                  == 0
+              && resp_v.data_len == 0 && resp_v.data == NULL,
+          "...and the header-only frame parses as carrying NONE -- correctly "
+          "told apart from the request despite the identical header. A "
+          "parser keyed on the header (e.g. comparing hdr fields) would see "
+          "these as the SAME message, which is exactly the bug this data-len "
+          "discriminator exists to avoid");
+
+    check(u16(req_frame, 14 + 44) != 0x0004u,
+          "content[44:46] is NOT the SCS envelope format word 0x0004 -- a "
+          "block-transfer frame deliberately fails that conformance test");
+}
+
+/*
+ * TRAP 1: READ's final partial chunk piggybacks into the SAME Ethernet frame
+ * as the MSCP end message, past what the SCS envelope's declared inner
+ * length covers. Builds the combined shape, then proves the receive-side fix
+ * (bound by the frame's REAL length) against the receive-side bug (bound by
+ * the declared end-message length) side by side.
+ */
+static void test_trap1_read_end_piggyback(void)
+{
+    struct scs_mscp_params p;
+    uint8_t end_body[SCS_MSCP_READ_END_LEN];
+    uint8_t out[512];
+    struct scs_mscp_blk_hdr tail_hdr;
+    uint8_t tail_data[200];
+    long end_only_n, combined_n;
+    struct scs_mscp_srv_blk_view v, v_naive;
+    size_t i;
+    int rc, rc_naive;
+
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, "\xaa\xbb\xcc\xdd\xee\xff", 6);
+    memcpy(p.src_mac, "\x11\x22\x33\x44\x55\x66", 6);
+    memcpy(p.src_logical, "\xaa\x00\x04\x00\x01\x04", 6);
+    memcpy(p.peer_logical, "\xaa\x00\x04\x00\x1a\x04", 6);
+    p.remote_conid = 0x11112222u;
+    p.local_conid = 0x33334444u;
+    p.recv_ack = 0x0019;
+    p.send_seq = 0x0019;
+
+    memset(end_body, 0, sizeof(end_body));
+    end_body[SCS_MSCP_P_OPCD] = SCS_MSCP_OP_READ | SCS_MSCP_END_BIT;
+    wle16(end_body, SCS_MSCP_P_STS,
+         SCS_MSCP_STATUS(SCS_MSCP_ST_SUCCESS, SCS_MSCP_SUB_NORMAL));
+    wle32(end_body, SCS_MSCP_E_BCNT, 712u);
+
+    memset(&tail_hdr, 0, sizeof(tail_hdr));
+    tail_hdr.dest_conid = p.local_conid;
+    tail_hdr.f4 = 9;
+    tail_hdr.f6 = 3;
+    tail_hdr.bytes_remaining = (uint32_t)sizeof(tail_data);
+    tail_hdr.src_buf_name = 0xaaaau;
+    tail_hdr.dest_offset = 512;
+    tail_hdr.dest_buf_name = 0x2222u;
+    tail_hdr.src_offset = 0;
+    for (i = 0; i < sizeof(tail_data); i++) {
+        tail_data[i] = (uint8_t)(i * 7 + 3);
+    }
+
+    /* The plain end frame -- what a naive caller mistakes for the whole
+     * frame. */
+    end_only_n = scs_mscp_srv_build_end_frame(&p, end_body, sizeof(end_body),
+                                              out, sizeof(out));
+    check(end_only_n > 0, "the plain READ end frame builds");
+
+    /* THE COMBINED FRAME -- what a real server actually sends. */
+    combined_n = scs_mscp_srv_build_read_end_with_piggyback(
+        &p, end_body, sizeof(end_body), &tail_hdr, tail_data,
+        sizeof(tail_data), out, sizeof(out));
+    check(combined_n == end_only_n + (long)SCS_MSCP_BLK_HDR_LEN
+                             + (long)sizeof(tail_data),
+          "the piggybacked frame is the end message PLUS the 28-byte block "
+          "header PLUS the tail data -- one Ethernet frame, two messages");
+    check(end_only_n < combined_n,
+          "the declared end-message length UNDER-COUNTS the real frame -- "
+          "TRAP 1, made observable");
+
+    /* THE FIX: pass the frame's REAL length. */
+    rc = scs_mscp_srv_parse_read_end_trailer(out, (size_t)combined_n,
+                                             (size_t)end_only_n, &v);
+    check(rc == 0, "the trailer parses");
+    check(v.data_len == sizeof(tail_data) && v.data != NULL,
+          "...and recovers every byte of the piggybacked chunk");
+    check(rc == 0 && v.data != NULL
+              && memcmp(v.data, tail_data, sizeof(tail_data)) == 0,
+          "...byte for byte");
+    check(v.hdr.dest_conid == tail_hdr.dest_conid
+              && v.hdr.dest_offset == tail_hdr.dest_offset
+              && v.hdr.bytes_remaining == tail_hdr.bytes_remaining,
+          "...and the block header's fields round-trip");
+
+    /* THE BUG, reproduced: a receive path that (mis)used the declared
+     * end-message length as the frame's real size sees no trailer at all --
+     * this IS that path, modelled by passing end_only_n as frame_len. A
+     * regression that goes back to trusting a declared length rather than
+     * the frame's real size makes this assertion fail. */
+    rc_naive = scs_mscp_srv_parse_read_end_trailer(
+        out, (size_t)end_only_n, (size_t)end_only_n, &v_naive);
+    check(rc_naive == 0 && v_naive.data_len == 0,
+          "...and TRUSTING the declared length as the frame's real size "
+          "finds ZERO trailer bytes -- the exact silent data loss TRAP 1 "
+          "warns about");
+}
+
+/*
+ * struct scs_mscp_srv_blk_sink installed as the transfer hook: a READ
+ * through scs_mscp_srv_handle() really moves real backing-store bytes
+ * through real SCA block-transfer frames, end to end -- this is what "wire
+ * the real path in behind the kill switch" means.
+ */
+static void test_blk_sink_read_end_to_end(void)
+{
+    struct scs_mscp_srv srv;
+    uint8_t body[SCS_MSCP_BODY_LEN];
+    uint8_t end[SCS_MSCP_SRV_END_MAX];
+    struct scs_mscp_view v;
+    struct scs_mscp_params p;
+    struct scs_mscp_srv_blk_sink sink;
+    uint8_t sink_out[4096];
+    char path[128];
+    const unsigned NBLK = 16;
+    const size_t FRAME_LEN = 14u + SCS_MSCP_BLK_HDR_OFF + SCS_MSCP_BLK_HDR_LEN
+                             + SCS_MSCP_BLOCK_SIZE;
+    struct scs_mscp_srv_unit *u;
+    struct scs_mscp_srv_blk_view v0, v1;
+    uint8_t expect0[SCS_MSCP_BLOCK_SIZE], expect1[SCS_MSCP_BLOCK_SIZE];
+    long n;
+    int fd = make_image(NBLK, path, sizeof(path));
+
+    check(fd >= 0, "test fixture: the raw block image is created");
+    if (fd < 0) {
+        return;
+    }
+
+    scs_mscp_srv_init(&srv, GOLDEN_CTLR_ID, GOLDEN_CTLR_TIMEOUT);
+    bring_controller_online(&srv, 11u);
+    scs_mscp_srv_attach_fd(&srv, 0, fd, NBLK, 0x8888ULL, 0x2452, 0x1);
+    {
+        struct scs_mscp_view ov;
+        uint8_t ob[SCS_MSCP_BODY_LEN], oe[SCS_MSCP_SRV_END_MAX];
+        make_command(ob, sizeof(ob), &ov, 0x9f0u, 0, SCS_MSCP_OP_ONLINE, 0);
+        scs_mscp_srv_handle(&srv, 11u, &ov, ob, sizeof(ob), oe, sizeof(oe));
+    }
+
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, "\xaa\xbb\xcc\xdd\xee\xff", 6);
+    memcpy(p.src_mac, "\x11\x22\x33\x44\x55\x66", 6);
+    memcpy(p.src_logical, "\xaa\x00\x04\x00\x01\x04", 6);
+    memcpy(p.peer_logical, "\xaa\x00\x04\x00\x1a\x04", 6);
+    p.remote_conid = 0x11112222u;
+    p.local_conid = 0x33334444u;
+    p.recv_ack = 1;
+    p.send_seq = 1;
+
+    scs_mscp_srv_blk_sink_init(&sink, &p, 1024u, sink_out, sizeof(sink_out));
+    sink.conn_const = 9;
+    sink.xfer_const = 4;
+    sink.src_buf_name = 0xabcdu;
+    scs_mscp_srv_set_xfer(&srv, scs_mscp_srv_blk_sink_xfer, &sink);
+
+    make_command(body, sizeof(body), &v, 0x9f1u, 0, SCS_MSCP_OP_READ, 0);
+    wle32(body, SCS_MSCP_P_BCNT, 1024u);
+    wle32(body, SCS_MSCP_P_LBN, 2u);
+    /* the host buffer descriptor: {offset, SCS buffer NAME, SCS connection ID} */
+    wle32(body, SCS_MSCP_P_BUFF + 0, 0x1000u);
+    wle32(body, SCS_MSCP_P_BUFF + 4, 0x2222u);
+    wle32(body, SCS_MSCP_P_BUFF + 8, 0x87653333u);
+
+    n = scs_mscp_srv_handle(&srv, 11u, &v, body, sizeof(body), end,
+                            sizeof(end));
+    check(n > 0, "a READ with the sink installed answers");
+    check(scs_mscp_status_major(u16(end, SCS_MSCP_P_STS)) == SCS_MSCP_ST_SUCCESS,
+          "...and SUCCEEDS -- the always-refuse kill switch, given something "
+          "real to gate, now answers a real mount's READ");
+    check(u32(end, SCS_MSCP_E_BCNT) == 1024u, "...and reports all 1024 bytes");
+    check(sink.frames_built == 2, "two 512-byte block-transfer frames were built");
+    check(sink.used == FRAME_LEN * 2,
+          "...and the sink buffer holds exactly two frames, nothing more");
+
+    memset(&v0, 0, sizeof(v0));
+    memset(&v1, 0, sizeof(v1));
+    check(scs_mscp_srv_blk_parse_frame(sink_out, FRAME_LEN, &v0) == 0,
+          "the first frame parses");
+    check(scs_mscp_srv_blk_parse_frame(sink_out + FRAME_LEN, FRAME_LEN, &v1)
+              == 0,
+          "the second frame parses");
+
+    u = scs_mscp_srv_find_unit(&srv, 0);
+    scs_mscp_srv_read_blocks(u, 2, 1, expect0, sizeof(expect0));
+    scs_mscp_srv_read_blocks(u, 3, 1, expect1, sizeof(expect1));
+    check(v0.data_len == SCS_MSCP_BLOCK_SIZE && v0.data != NULL
+              && memcmp(v0.data, expect0, SCS_MSCP_BLOCK_SIZE) == 0,
+          "the first frame carries block 2's REAL content from the backing "
+          "store -- not a fake success");
+    check(v1.data_len == SCS_MSCP_BLOCK_SIZE && v1.data != NULL
+              && memcmp(v1.data, expect1, SCS_MSCP_BLOCK_SIZE) == 0,
+          "...and the second frame carries block 3's");
+
+    check(v0.hdr.dest_conid == 0x87653333u && v1.hdr.dest_conid == 0x87653333u,
+          "every frame addresses the connection ID from the host's buffer "
+          "descriptor");
+    check(v0.hdr.dest_buf_name == 0x2222u && v1.hdr.dest_buf_name == 0x2222u,
+          "...and the destination buffer NAME -- the correlation key");
+    check(v0.hdr.dest_offset == 0x1000u,
+          "the first frame's destination offset is the buffer descriptor's "
+          "base offset");
+    check(v1.hdr.dest_offset == 0x1000u + SCS_MSCP_BLOCK_SIZE,
+          "...and the second frame's offset advances by exactly one block");
+    check(v0.hdr.bytes_remaining == 1024u,
+          "the first frame's down-counting field includes ITS OWN data -- "
+          "1024 remaining before either frame's bytes have crossed");
+    check(v1.hdr.bytes_remaining == SCS_MSCP_BLOCK_SIZE,
+          "the LAST frame's bytes-remaining equals exactly its own data "
+          "length -- the down-count landing on zero at transfer's end");
+    check(v0.hdr.f4 == 9 && v0.hdr.f6 == 4 && v1.hdr.f4 == 9 && v1.hdr.f6 == 4,
+          "the two UNGROUNDED fields are carried through unchanged on every "
+          "frame, never reinterpreted");
+    check(u16(sink_out, 14 + 44) != 0x0004u,
+          "and the frame fails SCS envelope conformance, as designed");
+
+    close(fd);
+    unlink(path);
+}
+
+/*
+ * ONE WRITE, END TO END: the receiving half of block data transfer (what a
+ * real WRITE's REQDAT pull would need) really moves bytes into the backing
+ * store. This does NOT change scs_mscp_srv_handle()'s WRITE opcode policy --
+ * v1 stays Write Protected (design decision (2), test_write_is_refused_honestly
+ * above) -- it proves the transfer primitive a read-write v2 would build on.
+ */
+static void test_write_block_transfer_end_to_end(void)
+{
+    struct scs_mscp_params p;
+    struct scs_mscp_blk_hdr h;
+    uint8_t req_frame[700], resp_frame[700];
+    uint8_t payload[SCS_MSCP_BLOCK_SIZE];
+    uint8_t readback[SCS_MSCP_BLOCK_SIZE];
+    long req_n, resp_n;
+    struct scs_mscp_srv_blk_view req_v;
+    struct scs_mscp_srv srv;
+    struct scs_mscp_srv_unit *u;
+    char path[128];
+    const unsigned NBLK = 8;
+    size_t i;
+    int fd = make_image(NBLK, path, sizeof(path));
+
+    check(fd >= 0, "test fixture: the raw block image is created");
+    if (fd < 0) {
+        return;
+    }
+
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, "\x01\x02\x03\x04\x05\x06", 6);
+    memcpy(p.src_mac, "\x07\x08\x09\x0a\x0b\x0c", 6);
+    memcpy(p.src_logical, "\xaa\x00\x04\x00\x01\x04", 6);
+    memcpy(p.peer_logical, "\xaa\x00\x04\x00\x1a\x04", 6);
+    p.remote_conid = 0x44445555u;
+    p.local_conid = 0x66667777u;
+    p.recv_ack = 2;
+    p.send_seq = 2;
+
+    memset(&h, 0, sizeof(h));
+    h.dest_conid = 0xabcdef01u;
+    h.f4 = 13; /* UNGROUNDED, observed shape -- see the header comment */
+    h.f6 = 1;
+    h.bytes_remaining = (uint32_t)sizeof(payload);
+    h.src_buf_name = 0x9999u;
+    h.dest_offset = 0;
+    h.dest_buf_name = 0x8888u;
+    h.src_offset = 0;
+    for (i = 0; i < sizeof(payload); i++) {
+        payload[i] = (uint8_t)('W' + (i % 7));
+    }
+
+    /* TRAP 2 shape again: request carries the data, response is header-only. */
+    req_n = scs_mscp_srv_build_block_frame(&p, &h, payload, sizeof(payload),
+                                           req_frame, sizeof(req_frame));
+    resp_n = scs_mscp_srv_build_block_frame(&p, &h, NULL, 0, resp_frame,
+                                            sizeof(resp_frame));
+    check(req_n > 0 && resp_n > 0, "both frames of the WRITE exchange build");
+    check(scs_mscp_srv_blk_parse_frame(req_frame, (size_t)req_n, &req_v) == 0
+              && req_v.data_len == sizeof(payload),
+          "the request half is recovered with its full payload");
+
+    scs_mscp_srv_init(&srv, GOLDEN_CTLR_ID, GOLDEN_CTLR_TIMEOUT);
+    check(scs_mscp_srv_attach_fd(&srv, 0, fd, NBLK, 0x7777ULL, 0x2452, 0x1)
+              == 0,
+          "the unit attaches");
+    u = scs_mscp_srv_find_unit(&srv, 0);
+    check(scs_mscp_srv_write_blocks(u, 4, req_v.data, 1)
+              == (long)SCS_MSCP_BLOCK_SIZE,
+          "the block-transfer request's data writes to the backing store");
+    check(scs_mscp_srv_read_blocks(u, 4, 1, readback, sizeof(readback))
+              == (long)SCS_MSCP_BLOCK_SIZE
+              && memcmp(readback, payload, sizeof(payload)) == 0,
+          "...and reading it back gets exactly what the request carried, "
+          "byte for byte");
+    check(scs_mscp_srv_write_blocks(u, NBLK - 1, req_v.data, 2) == -1,
+          "a write running past the end of the volume is refused (sec 5.3), "
+          "same bound as a read");
+
+    close(fd);
+    unlink(path);
+}
+
 int main(void)
 {
     test_scc_end_byte_exact();
@@ -778,6 +1212,11 @@ int main(void)
     test_hard_refusals();
     test_attach_refusals();
     test_end_frame();
+    test_blk_hdr_round_trip();
+    test_trap2_write_request_vs_response();
+    test_trap1_read_end_piggyback();
+    test_blk_sink_read_end_to_end();
+    test_write_block_transfer_end_to_end();
 
     printf("test_scs_mscp_srv: %d checks, %d failure(s)\n", checks, failures);
     return failures ? 1 : 0;

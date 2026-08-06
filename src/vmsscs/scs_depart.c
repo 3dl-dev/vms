@@ -59,8 +59,11 @@ enum scs_pb_close_result scs_pb_depart(struct scs_cdl *cdl, struct scs_config *c
         return SCS_PB_CLOSE_NOTHING;
     }
 
-    /* --- 1. p. 2-28: notify every interested SYSAP FIRST, while the CDTs and
-     * the Path Block they point at are all still intact. */
+    /* --- 1. Notify every interested SYSAP FIRST, while the CDTs and the Path
+     * Block they point at are all still intact. p. 2-28 explains why CDTs are
+     * queued to the Path Block (so a lost connection is easy to find after a
+     * broken circuit); doing the notification before teardown is an OVMX
+     * design choice (vms-228), not a sequencing rule the book states. */
     if (stats != NULL) {
         for (const struct scs_cdt *c = scs_pb_first_cdt(pb); c != NULL;
              c = scs_cdt_next_on_pb(c)) {

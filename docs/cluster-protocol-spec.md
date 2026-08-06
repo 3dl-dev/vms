@@ -3342,7 +3342,7 @@ simply does not gate on it — but "the run must happen inside the 1.4–4.4 s
 window or the join suffers" is not a claim this lab supports. Filed as `vms-5c7e`, not fixed.
 
 **A HARNESS DEFECT FOUND WHILE RUNNING THIS, AND EVERY FIGURE ABOVE DEPENDS ON
-THE FIX.** `tools/lab2run.sh` stages the daemon to `/lab/SCSD.EXE`, and `/lab`
+THE FIX.** `tests/lab/tools/lab2run.sh` stages the daemon to `/lab/SCSD.EXE`, and `/lab`
 **is the shared tank volume** — the same file for every pod and for lab-1. Two
 sessions bracketing at once overwrite each other's binary between the copy and
 the exec, silently, because the copy's errors are discarded. Two vms-ebb arms
@@ -3351,7 +3351,7 @@ the exec, silently, because the copy's errors are discarded. Two vms-ebb arms
 `disk-discovery step 1, post-credit` — **a log line that exists nowhere in this
 tree**. Both were discarded. The arms above ran from a per-run
 `/lab/ebb-<TAG>/` directory with the md5 checked in-pod before and after. Do not
-run a lab-2 bracket through `lab2run.sh` while another session is live.
+run a lab-2 bracket through `tests/lab/tools/lab2run.sh` while another session is live.
 
 ## 5. Summary of unknown/inferred fields (RE gaps)
 

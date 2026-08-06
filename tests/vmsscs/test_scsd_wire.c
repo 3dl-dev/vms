@@ -4227,6 +4227,92 @@ static void test_multicast_beacon_keeps_a_peer_alive(void)
 }
 
 /*
+ * vms-030: peer_touch()'s per-slot MAC match, driven with TWO peers so that a
+ * mutation touching the wrong slot (or every slot) is visible. Every other
+ * liveness test in this file has exactly one peer, so a `tbl[0]` hardcode or a
+ * loop that stamps every slot instead of the matching one would still pass
+ * them all. Here neither peer's expected timestamp is read out of the field a
+ * mutation would corrupt (CLAUDE.md/OS rule: "the tests read the deadline OUT
+ * OF the field under test" is exactly the gap this closes) -- both are set to
+ * a known baseline by the test itself before peer_touch() runs.
+ */
+static void test_peer_touch_updates_only_the_matching_slot(void)
+{
+    struct rxworld r;
+    unsetenv("OVMX_NO_PEER_DEPART");
+    unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+
+    struct peer_state *p1 = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    struct peer_state *p2 = open_circuit_to(&r, ovmx760_hw_mac, ovmx760_logical);
+    CHECK(p1 != NULL && p2 != NULL && p1 != p2, "could not build two distinct peer slots");
+    if (p1 == NULL || p2 == NULL || p1 == p2) {
+        return;
+    }
+
+    /* A known baseline, set by the test -- not by anything under test. */
+    p1->last_rx_ms = 1000;
+    p2->last_rx_ms = 1000;
+
+    peer_touch(r.w.peers, vax1_hw_mac, 9000);
+
+    CHECK(p1->last_rx_ms == 9000,
+          "peer_touch() did not stamp the slot whose MAC matched: got %lu, want 9000",
+          (unsigned long)p1->last_rx_ms);
+    CHECK(p2->last_rx_ms == 1000,
+          "peer_touch() stamped a slot whose MAC did NOT match: got %lu, want 1000"
+          " unchanged -- this is the cross-contamination a wrong loop index or a"
+          " missing mac_eq() check would produce",
+          (unsigned long)p2->last_rx_ms);
+
+    /* Drive it through the departure sweep too: the untouched peer's own
+     * baseline is old enough to depart, the touched one's is not. If the sweep
+     * cannot tell them apart, this reds regardless of what the two fields
+     * above say. */
+    uint64_t timeout = scs_depart_listen_timeout_ms();
+    unsigned departed = rx_sweep(&r, 1000 + timeout);
+    CHECK(departed == 1, "the sweep departed %u peers, want exactly the silent one", departed);
+    CHECK(rx_peer_of(&r, vax1_hw_mac) != NULL,
+          "the peer that was touched (heard from) was wrongly departed");
+    CHECK(rx_peer_of(&r, ovmx760_hw_mac) == NULL,
+          "the peer that was never touched (silent) was NOT departed");
+}
+
+/*
+ * vms-030: the never-heard bootstrap stamp, pinned against a clock the test
+ * reads INDEPENDENTLY of the field under test. peer_find_or_add()'s "first
+ * contact IS contact" stamp (scsd.c) writes ps->last_rx_ms = monotonic_ms() at
+ * allocation time; every existing liveness test reads its expected deadline
+ * back out of that same field, so a bootstrap bug that wrote 0, a stale
+ * constant, or the wrong clock entirely would still self-consistently pass
+ * them. This brackets the real value against monotonic_ms() calls the test
+ * makes itself, immediately before and after the allocating frame is fed.
+ */
+static void test_peer_touch_bootstrap_uses_the_natural_clock(void)
+{
+    struct rxworld r;
+    unsetenv("OVMX_NO_PEER_DEPART");
+    unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+
+    uint64_t before = monotonic_ms();
+    rx_feed_formation(&r); /* first contact: allocates the slot and bootstraps last_rx_ms */
+    uint64_t after = monotonic_ms();
+
+    struct peer_state *ps = rx_peer_of(&r, vax1_hw_mac);
+    CHECK(ps != NULL, "no peer slot was built for the captured formation");
+    if (ps == NULL) {
+        return;
+    }
+    CHECK(ps->last_rx_ms != 0,
+          "the bootstrap left last_rx_ms at its never-heard sentinel 0 after first contact");
+    CHECK(ps->last_rx_ms >= before && ps->last_rx_ms <= after,
+          "last_rx_ms=%lu falls outside [%lu, %lu] -- the bootstrap stamp did not"
+          " come from monotonic_ms() taken at allocation time",
+          (unsigned long)ps->last_rx_ms, (unsigned long)before, (unsigned long)after);
+}
+
+/*
  * vms-abc: THE HELLO BEACON IS A SEND SITE, AND IT IS NOW ONE A TEST CAN SEE.
  *
  * This send used to be six lines inside main()'s timer loop -- the one function
@@ -4279,6 +4365,79 @@ static void test_multicast_beacon_keeps_a_peer_alive(void)
  * without being enumerated -- is tests/vmsscs/test_scsd_send_sites.py, which
  * carries its own seven-mutant record.
  */
+
+/*
+ * vms-45b: OVMX's SOURCE LOGICAL ADDRESS (the value main() computes once via
+ * ovmx_cluster_logical() and stamps at SCA abs-24 of every frame OVMX
+ * transmits) had no test pinning it AT ALL -- every test in this file that
+ * cares about src-logical placement supplies its own `our_logical`/hp.src_logical
+ * value and compares emitted bytes back against that SAME test-supplied value
+ * (e.g. test_the_hello_beacon_transmits_through_the_channel_exemption's (d)
+ * above). That proves the STAMPER puts whatever it is handed at the right
+ * offset; it proves nothing about whether the value main() computes and hands
+ * it is actually OVMX's cluster-logical address rather than, say, its raw HW
+ * MAC -- which is precisely the historical bug the comment on
+ * ovmx_cluster_logical() names ("OVMX's raw HW MAC there was why VAX1's
+ * PEDRIVER never verified the channel"). Two constants (a peer's captured
+ * address and OVMX's own) were swapped in this very file for the life of a
+ * commit and nothing here went red, because nothing compared either value to
+ * anything outside itself.
+ *
+ * This drives the real function with several SCSSYSTEMIDs and checks its
+ * output against bytes computed BY HAND from the documented convention (spec
+ * sec 3 decoder ring: aa:00:04:00:<LE16(sysid)>) -- not by calling
+ * ovmx_cluster_logical() a second time, which would let a wrong formula agree
+ * with itself. It also checks the output is never the all-zero sentinel and,
+ * for the one SCSSYSTEMID that collides with a real captured HW MAC used
+ * elsewhere in this file, that the two are NOT byte-equal -- pinning the
+ * specific "raw MAC where the cluster-logical address belongs" shape of the
+ * historical bug.
+ */
+static void test_ovmx_cluster_logical_matches_the_convention(void)
+{
+    struct {
+        uint16_t sysid;
+        uint8_t  want[6];
+    } cases[] = {
+        /* 1329 = 0x0531, LE16 -> 31 05. This is r.vc_ctx.scssystemid in every
+         * rxworld fixture in this file (rxworld_init). */
+        {1329, {0xaa, 0x00, 0x04, 0x00, 0x31, 0x05}},
+        /* 1025 = 0x0401, LE16 -> 01 04 -- VAX1's lab SCSSYSTEMID. */
+        {1025, {0xaa, 0x00, 0x04, 0x00, 0x01, 0x04}},
+        /* 1026 = 0x0402, LE16 -> 02 04 -- VAX2's lab SCSSYSTEMID (spec sec 4g). */
+        {1026, {0xaa, 0x00, 0x04, 0x00, 0x02, 0x04}},
+        /* A boundary case: the high byte is nonzero, so a swap of the two
+         * LE16 halves is visible rather than accidentally symmetric. */
+        {0x1234, {0xaa, 0x00, 0x04, 0x00, 0x34, 0x12}},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        uint8_t got[6];
+        memset(got, 0xFF, sizeof(got)); /* poison: the function must write all 6 */
+        ovmx_cluster_logical(cases[i].sysid, got);
+        CHECK(memcmp(got, cases[i].want, 6) == 0,
+              "ovmx_cluster_logical(%u) = %02x:%02x:%02x:%02x:%02x:%02x, want"
+              " %02x:%02x:%02x:%02x:%02x:%02x",
+              cases[i].sysid, got[0], got[1], got[2], got[3], got[4], got[5],
+              cases[i].want[0], cases[i].want[1], cases[i].want[2], cases[i].want[3],
+              cases[i].want[4], cases[i].want[5]);
+    }
+
+    /* The specific historical shape: for VAX2's SCSSYSTEMID, the cluster-logical
+     * address must not equal vax2_hw_mac (a real captured HW MAC used elsewhere
+     * in this file) -- that equality is exactly what "the raw HW MAC was there
+     * instead" would look like. */
+    uint8_t vax2_logical[6];
+    ovmx_cluster_logical(1026, vax2_logical);
+    CHECK(memcmp(vax2_logical, vax2_hw_mac, 6) != 0,
+          "the cluster-logical address computed for sysid 1026 equals VAX2's raw"
+          " HW MAC -- this is the exact historical bug (the raw MAC where the SCA"
+          " src-logical field belongs)");
+
+    static const uint8_t zero6[6] = {0, 0, 0, 0, 0, 0};
+    CHECK(memcmp(vax2_logical, zero6, 6) != 0,
+          "ovmx_cluster_logical() produced the all-zero sentinel for a nonzero"
+          " SCSSYSTEMID");
+}
 static void test_the_hello_beacon_transmits_through_the_channel_exemption(void)
 {
     struct world w;
@@ -7207,6 +7366,7 @@ int main(void)
     test_seq_gap_breaks_the_vc_and_notifies_both_sysaps();
     test_seq_gap_kill_switch_through_the_daemon();
     test_a_broken_circuit_carries_no_traffic();
+    test_ovmx_cluster_logical_matches_the_convention(); /* vms-45b */
     test_the_hello_beacon_transmits_through_the_channel_exemption();
     test_retransmit_does_not_break_the_vc();
     test_delivery_failure_breaks_the_vc_through_the_daemon();
@@ -7220,6 +7380,8 @@ int main(void)
     test_departure_kill_switch_restores_the_pinned_slot();
     test_listen_timeout_override_moves_the_departure();
     test_multicast_beacon_keeps_a_peer_alive();
+    test_peer_touch_updates_only_the_matching_slot(); /* vms-030 */
+    test_peer_touch_bootstrap_uses_the_natural_clock(); /* vms-030 */
     /* vms-22e: the daemon's half of the p. 2-21 footnote rule -- the log line
      * that names the failing test, and the VCOPEN it must NOT print. */
     test_masquerade_open_is_logged_and_suppresses_vcopen();

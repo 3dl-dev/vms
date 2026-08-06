@@ -255,9 +255,14 @@ struct scs_pb {
      * into or removes from this queue and never dereferences a CDT. It does
      * READ the head pointer for exactly one purpose (vms-17f/vms-228):
      * scs_pb_close() REFUSES to close a Path Block whose connection queue is not
-     * empty, returning SCS_PB_CLOSE_CONNECTIONS_QUEUED. The p. 2-28 VC-loss scan
-     * (scs_cdl_vc_loss) must run first, or the CDTs are left holding a dangling
-     * pb pointer. That used to be a comment; a comment is not enforcement, so it
+     * empty, returning SCS_PB_CLOSE_CONNECTIONS_QUEUED.
+     *
+     * vms-228: p. 2-28 gives the RATIONALE for queueing CDTs to the Path Block
+     * (so a broken circuit's lost connections are easy to find), not an
+     * ordering MANDATE. The refusal-to-close is an OVMX design choice: without
+     * it, the p. 2-28 VC-loss scan (scs_cdl_vc_loss) could run AFTER the
+     * circuit structure was gone, leaving the CDTs holding a dangling pb
+     * pointer. That used to be a comment; a comment is not enforcement, so it
      * is now a refusal the caller cannot ignore. src/vmsscs/scs_depart.c is the
      * one function that performs the whole sequence in the documented order.
      */
@@ -284,9 +289,15 @@ struct scs_pb {
 struct scs_pdt {
     enum scs_port_type port_type;    /* p. 2-21 "Type of port" */
     uint32_t max_xfer_bytes;         /* p. 2-21 max bytes per single operation */
-    unsigned long frames_sent;       /* p. 2-21 "counters of various port activities" */
-    unsigned long frames_received;
-    unsigned long errors;
+    /* vms-631: p. 2-21 "counters of various port activities" names the CATEGORY
+     * this module reserves space for -- these three fields are that reservation,
+     * not an implementation of it. Nothing in src/vmsscs writes or reads any of
+     * the three (grep confirms); they carry no test. Declared here rather than
+     * omitted so a caller that DOES wire up counting has somewhere documented to
+     * put it, but until that happens a green test run proves nothing about them. */
+    unsigned long frames_sent;       /* UNPOPULATED -- see note above */
+    unsigned long frames_received;   /* UNPOPULATED -- see note above */
+    unsigned long errors;            /* UNPOPULATED -- see note above */
     struct scs_pb *formative_head;   /* p. 2-21 head of the formative-PB queue */
 
     /*
@@ -343,9 +354,15 @@ struct scs_config {
  * ===== REACHABILITY IN SCSD TODAY -- DO NOT READ A GREEN TEST RUN AS "OVMX
  * IMPLEMENTS THIS" =====
  *
- * This module implements the full p. 2-20..2-21 rule set and tests/vmsscs/
- * test_scs_config.c exercises all of it. The DAEMON (src/vmsscs/scsd.c) reaches
- * only part of it:
+ * This module implements the p. 2-20..2-21 STATE-TRANSITION rule set (the SB/PB
+ * open/refresh/masquerade rules) and tests/vmsscs/test_scs_config.c exercises
+ * all of it. vms-631: it does NOT implement the p. 2-21 "counters of various
+ * port activities" -- struct scs_pdt's frames_sent/frames_received/errors
+ * fields are declared but unpopulated (see the note at their declaration) --
+ * so "implements the full p. 2-20..2-21 rule set" was an overclaim that
+ * folded a reserved-but-unwired field group into the same sentence as the
+ * transition rules, which really are fully covered. The DAEMON
+ * (src/vmsscs/scsd.c) reaches only part of the transition rules:
  *
  *   scs_pb_create / scs_pb_learn_system_addr / scs_pb_open -> SCS_OPEN_NEW_SB
  *       LIVE. Every peer SCSD discovers takes exactly this path.
@@ -584,11 +601,13 @@ enum scs_open_result scs_pb_open(struct scs_config *cfg, struct scs_pb *pb);
 enum scs_pb_close_result {
     SCS_PB_CLOSE_OK = 0,      /* the PB was dequeued and returned to the pool */
     SCS_PB_CLOSE_NOTHING = 1, /* NULL argument, or a PB that was not in use */
-    /* REFUSED: connections are still queued to this circuit. p. 2-28 requires
-     * the VC-loss scan to notify their SYSAPs BEFORE the circuit structure goes
-     * away, and zeroing the PB here would leave every one of those CDTs holding
-     * a dangling pb pointer. Run scs_cdl_vc_loss() + release the CDTs first --
-     * or just call scs_pb_depart() (scs_depart.h), which does it in order. */
+    /* REFUSED: connections are still queued to this circuit. p. 2-28 explains
+     * WHY the VC-loss scan needs to notify their SYSAPs before the circuit
+     * structure goes away; refusing the close until that happens is an OVMX
+     * design choice (vms-228), not a mandate the book states. Zeroing the PB
+     * here would leave every one of those CDTs holding a dangling pb pointer.
+     * Run scs_cdl_vc_loss() + release the CDTs first -- or just call
+     * scs_pb_depart() (scs_depart.h), which does it in order. */
     SCS_PB_CLOSE_CONNECTIONS_QUEUED = 2
 };
 

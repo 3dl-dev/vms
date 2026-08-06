@@ -1473,6 +1473,45 @@ jobs:
             '
 
   # -----------------------------------------------------------------------
+  # LOGINOUT-native (vms-c39, pillar vms-ade, sibling of dcl-native above).
+  # tools/vms_login.c links as a VMS-native ET_DYN executable via LINK.EXE
+  # --executable --use {DECC$SHR + the six OVMX shareables} (mk_loginout.sh) --
+  # the OTHER real EXECUTABLE consumer of the graph, closing the gap Baron's
+  # 2026-08-06 ruling found: the 0.1 dynamic-linking proof covered DCL.EXE only,
+  # not the full login chain. IMGACT.EXE activates LOGINOUT.EXE and it
+  # authenticates SYSTEM against the REAL shipped SYSUAF.DAT, entirely inside
+  # the VMS-native image, with NO ld / NO ld.so. With no /dev/vms in this
+  # container it correctly refuses the session (%OVMX-F-NOIDENT) rather than
+  # faking success into DCL.EXE -- CLAUDE.md Rule 9's "fail honestly", not a
+  # test limitation. See run_login_native.sh's header for the full proof shape
+  # and what is left for a QEMU harness to extend.
+  # -----------------------------------------------------------------------
+  login-native:
+    name: LOGINOUT.EXE VMS-native Link + Activate (login chain)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link LOGINOUT.EXE VMS-native + activate through IMGACT.EXE, authenticate against real SYSUAF (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/login-native LOGIN_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_login_native.sh
+            '
+
+  # -----------------------------------------------------------------------
   # tcc-object-native — S2 CRUX proof (bead vms-4ba.3, epic vms-4ba "self-host
   # S2: a C compiler as an OVMX image"). Builds stock, UNMODIFIED tinycc
   # (third-party/tcc), compiles hello.c with DEFAULT flags (no -gstabs, no

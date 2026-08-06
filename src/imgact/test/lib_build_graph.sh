@@ -48,21 +48,20 @@ build_producer_graph() {
     readelf -SW "$SYSLIB/DECC\$SHR.EXE" | grep -q '\.vms\$sv' || { echo "FAIL: DECC\$SHR no symbol vector"; exit 1; }
 
     echo "== LIBVMSSYS\$SHR.EXE =="
-    SYSCFLAGS="$LIBCFLAGS -I$LIBVMSSYS_DIR"
-    SYSOBJS=""
-    for c in vms_string vms_snprintf vms_futex vms_stdio vms_math vms_runtime_init vms_kif; do
-        $CC $SYSCFLAGS -c -o "$WORK/sys_$c.o" "$LIBVMSSYS_DIR/$c.c"
-        SYSOBJS="$SYSOBJS $WORK/sys_$c.o"
-    done
-    $CC -fPIC -c -o "$WORK/sys_syscall.o" "$LIBVMSSYS_DIR/arch/$ARCH/syscall.S"
-    SYSOBJS="$SYSOBJS $WORK/sys_syscall.o"
-    SYS_VEC="vms_strlen=PROCEDURE,vms_kif_open=PROCEDURE,vms_kif_enq=PROCEDURE,vms_kif_deq=PROCEDURE,vms_kif_convert=PROCEDURE,vms_kif_assign=PROCEDURE,vms_kif_dassgn=PROCEDURE,vms_kif_getdvi_chan=PROCEDURE,vms_kif_setprn=PROCEDURE,vms_kif_getjpi_self=PROCEDURE,vms_kif_getjpi_pid=PROCEDURE,vms_kif_getjpi_prcnam=PROCEDURE,vms_kif_procscan=PROCEDURE,vms_kif_setef=PROCEDURE,vms_kif_clref=PROCEDURE,vms_kif_readef=PROCEDURE,vms_kif_waitfr=PROCEDURE,vms_kif_wflor=PROCEDURE,vms_kif_wfland=PROCEDURE,vms_kif_ascefc=PROCEDURE,vms_kif_dacefc=PROCEDURE,vms_kif_dlcefc=PROCEDURE,vms_kif_devscan=PROCEDURE,vms_kif_getdvi_devnam=PROCEDURE"
-    if [ -n "${SYS_VEC_EXTRA:-}" ]; then
-        SYS_VEC="$SYS_VEC,$SYS_VEC_EXTRA"
-    fi
-    "$WORK/LINK.EXE" --shareable \
-        --symbol-vector "$SYS_VEC" \
-        --gsmatch LEQUAL,1,0 -o "$SYSLIB/LIBVMSSYS\$SHR.EXE" $SYSOBJS
+    # vms-b6a: the recipe itself now lives once, in mk_vmssys_shr.sh (CMake's
+    # link-native graph uses the same script) — this used to be a second,
+    # independently-drifting copy of the LIST/vector that mk_libvms_shr.sh's
+    # header comment warns is otherwise unenforced and silent. mk_vmssys_shr.sh
+    # always exports vms_kif_setident (append-only vector; LOGINOUT needs it,
+    # DCL simply never calls it), so SYS_VEC_EXTRA is now informational only —
+    # callers may still pass additional universals beyond that baseline.
+    # vms-6da: mk_vmssys_shr.sh now reads ARCH (arch/$ARCH/syscall.S) and
+    # CFLAGS (env-overridable, same convention as every other mk_*_shr.sh
+    # since vms-cb5f) instead of hardcoding aarch64.
+    CC="$CC" ARCH="$ARCH" CFLAGS="$LIBCFLAGS" WORK="$WORK/vmssys" \
+        sh "$LINK_DIR/mk_vmssys_shr.sh" \
+        "$WORK/LINK.EXE" "$SYSLIB/LIBVMSSYS\$SHR.EXE" \
+        "$LIBVMSSYS_DIR" "${SYS_VEC_EXTRA:-}"
 
     echo "== LIBVMSPROCESS\$SHR.EXE =="
     CC="$CC" CFLAGS="$LIBCFLAGS" sh "$LINK_DIR/mk_vmsprocess_shr.sh" \

@@ -174,6 +174,8 @@ deliberately; do not assume this copy is current.
 | `mk_sysgen.py` | Mint a SYSGEN store for a new `SCSNODE`/`SCSSYSTEMID`. Patches a known-good template rather than regenerating, so every other field matches a store proven to join. Rejects names >6 chars (VMS truncates) and deletes any stale `.cluster` sidecar. |
 | `seqchk.py` | Capture-integrity check: sequence gaps and truncated frames. |
 | `probe.sh` | Drive any VAX console and capture between markers. |
+| `portwatch.sh` | `csbwatch.sh` with SDA `SHOW CONNECTIONS/NODE=` — the peer's CDT table and its `Rej/Disconn Reason`. |
+| `portrun.sh` | `lab2run.sh` with **both** VAX consoles bracketed by byte offset. Use it whenever the claim is "the peer said X": the console logs are append-only and shared with every earlier run on that pod, so a bare `grep` finds somebody else's scrollback and reads as a reproduction (`vms-0fe`). |
 
 ## Harness lessons baked into these scripts
 

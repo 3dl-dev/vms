@@ -254,18 +254,40 @@
  *   >>> SCSD-W-DISCPEND, 2 connection(s) still open, which is the honest
  *   >>> outcome and is why the wait is bounded.
  *
- * AND THE PEER SAYS WHY, IN ITS OWN WORDS. VAX1's console logs
+ * THE CONSOLE LINE THIS SECTION USED TO READ AS A REFUSAL. VAX1's console logs
  *
  *     %PEA0, Inappropriate SCA Control Message - FLAGS/OPC/STATUS/PORT 00/22/00/DD
  *
- * EXACTLY ONCE PER DISCONNECT-SENDING RUN -- 3 messages across A1, A2 and C1,
- * and NONE for B1, which instead produced the plain "%PEA0, Port has Closed
- * Virtual Circuit - REMOTE NODE OVMX" of a node that simply vanished. The VAX
- * is not ignoring OVMX's DISCONNECT_REQ; it is RECEIVING it and REFUSING it.
- * That is a better diagnostic than silence and it is the lead this item hands
- * on. What `OPC/22` denotes is NOT known -- it is a port-level opcode, not the
- * connection-control message type at [46:48], and nothing we hold decodes it.
- * Do not guess at it.
+ * on the disconnect-sending runs above and not on B1. THIS SECTION USED TO READ
+ * IT AS A REFUSAL:
+ *
+ * PPD-REFUTED-BEGIN
+ *     "The VAX is not ignoring OVMX's DISCONNECT_REQ; it is RECEIVING it and
+ *      REFUSING it."
+ * PPD-REFUTED-END
+ *
+ * THAT READING IS DEAD -- twice over, and it must not come back:
+ *
+ *   - vms-096 re-measured these captures: 10 of 10 answerable OVMX
+ *     DISCONNECT_REQs ARE answered, by a VMS-origin msgtype 7, in under a
+ *     millisecond. The "peer never answers" statement above is scoped to the
+ *     591-{A1,A2,C1} captures and is not a fact about VMS or about OVMX.
+ *   - vms-0fe decoded the line off VMS's own shipped tables. HELP/MESSAGE puts
+ *     it in the "Cluster Port Driver" facility and documents its effect as
+ *     "the port driver closes the port-to-port virtual circuit to the remote
+ *     port" -- a PORT-layer VC close, not an SCA-layer refusal of anything.
+ *     ANALYZE/ERROR_LOG decodes the quadruple as PPD$B_FLAGS / PPD$B_OPC /
+ *     PPD$B_STATUS / PPD$B_PORT, and $SCSDEF (LIB.MLB) gives SCS$S_PPD = 16:
+ *     the PPD header is a SEPARATE 16-byte port header in front of the SCS
+ *     header, so OPC/22 cannot be an SCS message type at all (that enum stops
+ *     at SCS$C_APPL_DG = 11). PPD$B_PORT is the peer's own remote-node number
+ *     for us, allocated descending from 0xDE -- 0xDD is simply "the first OVMX
+ *     node this VAX1 boot learned".
+ *
+ * OPC/22 itself is STILL undecoded -- do not guess at it. The decode procedure
+ * is known though: reproduce the line, then read the symbolic name
+ * ANALYZE/ERROR_LOG/INCLUDE=PEA0 prints under PPD$B_OPC 22. And vms-0fe could
+ * not reproduce it in four fresh lab-2 runs. spec sec 5 carries all of this.
  *
  * ONE HYPOTHESIS KILLED, with a matched control. The obvious suspect was the
  * reason code: [58:60] is a LABELED OVMX placement, and OVMX was the only node

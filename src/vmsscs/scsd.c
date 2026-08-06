@@ -9454,15 +9454,30 @@ static unsigned scsd_diskrun_ungate_tick(struct scsd_rx *rx, uint64_t now_ms)
  * (SCSD-W-DISCPEND, counted in disc_shutdown_pending and printed in the exit
  * summary) and the daemon exits anyway. It never blocks on a peer.
  *
- * AND ON THE LAB IT ALWAYS DOES EXPIRE. Those latency figures are VAX-to-VAX.
- * Measured over four lab-2 runs (scs_disc.h, THE LAB VERDICT), a real VAX
- * ANSWERS NO DISCONNECT_REQ OVMX SENDS -- not in 500 ms, and not in the 20 s a
- * capture ran past one. It logs "%PEA0, Inappropriate SCA Control Message"
- * instead. So on today's wire this wait ALWAYS runs to its deadline and always
- * reports SCSD-W-DISCPEND, and raising it would only make shutdown slower. It
- * is kept, and kept short, because the bound is what stops a peer that answers
- * SOMETIMES from turning into a hang -- and because when the refusal is
- * understood, the wait is what will let the dialogue finish.
+ * AND ON THE LAB IT SOMETIMES EXPIRES, WHICH IS WHY IT IS BOUNDED. Those
+ * latency figures are VAX-to-VAX. This paragraph used to assert:
+ *
+ * PPD-REFUTED-BEGIN
+ *     "A real VAX ANSWERS NO DISCONNECT_REQ OVMX SENDS -- not in 500 ms, and
+ *      not in the 20 s a capture ran past one. It logs %PEA0, Inappropriate SCA
+ *      Control Message instead."
+ * PPD-REFUTED-END
+ *
+ * BOTH HALVES ARE REFUTED and must not be written back:
+ *
+ *   - vms-096 re-measured the same vaxlab-4 captures and found 10 of 10
+ *     answerable OVMX DISCONNECT_REQs answered by a VMS-origin msgtype 7, in
+ *     0.073-0.807 ms. spec sec 5 carries the census.
+ *   - vms-0fe re-ran the experiment on lab-2 (runs 0feA1/0feB1/0feA2, main
+ *     daemon, fresh identities): 0feA1 sent 3 DISCONNECT_REQ and got 2
+ *     DISCONNECT_RSP back, and the "Inappropriate SCA Control Message" line did
+ *     not appear on ANY of the four runs. What appears is the ordinary
+ *     "Port has Closed Virtual Circuit" -- and the matched control 0feB1 drew
+ *     that line while sending ZERO disconnect frames, so it is not ours at all.
+ *
+ * So the wait CAN complete, and does. It is kept, and kept short, because it
+ * still expires whenever a connection's peer has already torn the VC down (the
+ * SCSD-W-DISCPEND path below) and the daemon must not block on a peer.
  *
  * OVMX_SHUTDOWN_WAIT_MS overrides the value; 0 disables the wait entirely (send
  * and go). OVMX_NO_CLEAN_SHUTDOWN=1 skips the whole function -- and, because

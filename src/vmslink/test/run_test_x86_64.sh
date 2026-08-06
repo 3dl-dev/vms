@@ -1,14 +1,22 @@
 #!/bin/sh
-# run_test_x86_64.sh — LINK.EXE x86_64 "simple" reloc proof harness (vms-8f5).
+# run_test_x86_64.sh — LINK.EXE x86_64 reloc proof harness (vms-8f5, vms-cd1).
 #
 # Ground-source done condition: hand-built x86_64 .o's carrying one of each of
-# the three "simple" static relocs the survey (docs/design-link-x86_64-relocs.md)
+# the "simple" static relocs the survey (docs/design-link-x86_64-relocs.md)
 # confirmed are present in the real x86_64 object set — R_X86_64_64 (absolute
 # data pointer), R_X86_64_PC32/PLT32 (same-image and cross-object function
 # call) — link via LINK.EXE to a real ET_DYN x86_64 ELF (readelf -h shows
 # EM_X86_64) and the produced image RUNS: CALLSLOT mmaps it and calls into it
 # natively (this harness runs on an x86_64 host, so no emulation is needed for
 # the execution half — only the byte-level relocation math is under test).
+#
+# vms-cd1 adds the GOT-relative pair R_X86_64_GOTPCREL / R_X86_64_REX_GOTPCRELX
+# — a cross-image DATA import (mirrors DCL's real vms_months/vms_device_table
+# imports from LIBVMS$SHR) proved via ACTIVATE (ovmx_activate.c), the same
+# reference hosted-C SYS$IMGACT activation run_test.sh already uses for the
+# aarch64 ADR_GOT_PAGE/LD64_GOT_LO12_NC cross-image DATA import: a REAL load
+# (mmap, symbol-vector resolution, GOT-cell patch, control transfer), not just
+# a readelf/byte check.
 #
 # Also proves the gate is ADDITIVE, not a replacement: a matching aarch64
 # object built in the same run still yields EM_AARCH64 (regression check).
@@ -24,10 +32,18 @@ SRC=$(cd "$HERE/.." && pwd)             # src/vmslink
 WORK=${WORK:-/tmp/vmslink-test-x86_64}
 rm -rf "$WORK"; mkdir -p "$WORK"
 
-echo "== build LINK.EXE + CALLSLOT + ABSCHECK (host tools) =="
+echo "== build LINK.EXE + CALLSLOT + ABSCHECK + ACTIVATE (host tools) =="
 $CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/LINK.EXE"    "$SRC/link.c"
 $CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/CALLSLOT"    "$SRC/test/call_slot.c"
 $CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/ABSCHECK"    "$SRC/test/abs_check.c"
+# ACTIVATE (ovmx_activate.c, vms-142) is the reference hosted-C SYS$IMGACT
+# activation the aarch64 harness (run_test.sh) already uses to prove cross-image
+# DATA imports round-trip through a real load (mmap the images, resolve
+# .vms$imp via the producer's symbol vector, patch the consumer's GOT cell,
+# transfer control) -- it is architecture-generic (pure ELF/mmap/syscall-ABI
+# code, no AARCH64-specific instruction encoding), so the SAME binary proves
+# the x86_64 GOTPCREL path below with no emulation needed on this native host.
+$CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/ACTIVATE"    "$SRC/test/ovmx_activate.c"
 
 echo
 echo "== same-image function call: R_X86_64_PC32/PLT32 to a local function =="
@@ -104,6 +120,76 @@ readelf -rW "$WORK/ptr.o" | grep -qE "R_X86_64_64 " || { echo "FAIL: expected R_
 # in run_test.sh does for R_AARCH64_ABS64.)
 "$WORK/ABSCHECK" "$WORK/LIBPTR\$SHR.EXE" tbl 0 f || { echo "FAIL: tbl[0] != &f"; exit 1; }
 "$WORK/ABSCHECK" "$WORK/LIBPTR\$SHR.EXE" tbl 8 g || { echo "FAIL: tbl[1] != &g"; exit 1; }
+
+echo
+echo "== cross-image DATA import: R_X86_64_GOTPCREL / R_X86_64_REX_GOTPCRELX (vms-cd1) =="
+# Mirrors DCL's real cross-image DATA imports (vms_months/vms_device_table from
+# LIBVMS\$SHR): a producer shareable exports a DATA universal; the consumer
+# executable reads it through 'mov sym@GOTPCREL(%rip), reg' -- a SINGLE
+# relocation computed as GOT_entry_addr+A-P, unlike aarch64's ADR_GOT_PAGE/
+# LD64_GOT_LO12_NC PAIR. LINK's --executable path turns the GOT reference into
+# a .vms\$imp DATA binding + import-GOT cell, same machinery as the aarch64
+# cross-image DATA import test in run_test.sh (vms-20b) -- reused here, not
+# reimplemented, confirming the GOT-synthesis machinery link.c already had was
+# already architecture-generic and needed no format change, only the new
+# is_got_reloc()/patch_got() cases below.
+#
+# Ground-source proof: ACTIVATE performs a REAL load (mmap both images,
+# resolve the import through the producer's actual symbol vector, patch the
+# GOT cell, transfer control into real machine code) and the consumer exits
+# with shared_counter+9 -- not a readelf-only check of the written bytes.
+cat > "$WORK/datalib.c" <<'EOF'
+int shared_counter = 90;                  /* exported DATA universal (.data) */
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/datalib.o" "$WORK/datalib.c"
+"$WORK/LINK.EXE" --shareable --symbol-vector "shared_counter=DATA" \
+    --gsmatch EQUAL,1,0 -o "$WORK/LIBDATA\$SHR.EXE" "$WORK/datalib.o"
+
+cat > "$WORK/datacons.c" <<'EOF'
+extern int shared_counter;                /* imported via GOTPCREL(%rip) */
+void _start(void) {
+    int r = shared_counter + 9;           /* == 99, data resolved across images */
+    __asm__ volatile("mov %0, %%edi\n\t"
+                      "mov $60, %%eax\n\t" /* exit_group */
+                      "syscall"
+                      :: "r"(r) : "rdi", "rax", "memory");
+    __builtin_unreachable();
+}
+EOF
+# Default (REX_GOTPCRELX): -fPIC without hidden visibility can't prove
+# shared_counter binds locally, so gcc/gas route the read through GOTPCREL --
+# gas's default emits the REX-tagged relaxable variant.
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/datacons.o" "$WORK/datacons.c"
+echo "-- consumer .text relocations (expect GOTPCREL/REX_GOTPCRELX to shared_counter) --"
+readelf -rW "$WORK/datacons.o" | awk '/R_X86_64/{print $3}' | sort | uniq -c
+readelf -rW "$WORK/datacons.o" | grep -qE "R_X86_64_(GOTPCREL|REX_GOTPCRELX)" \
+    || { echo "FAIL: expected a GOTPCREL/REX_GOTPCRELX cross-image DATA reference"; exit 1; }
+"$WORK/LINK.EXE" --executable --use "$WORK/LIBDATA\$SHR.EXE" \
+    -o "$WORK/DATAPROG.EXE" "$WORK/datacons.o"
+readelf -SW "$WORK/DATAPROG.EXE" | grep -E '\.got|\.vms\$imp' || true
+set +e
+"$WORK/ACTIVATE" "$WORK/DATAPROG.EXE" "$WORK/LIBDATA\$SHR.EXE"; RC=$?
+set -e
+echo "consumer exit code = $RC (expect 99 = shared_counter(90)+9 read across images)"
+[ "$RC" -eq 99 ] || { echo "FAIL: R_X86_64_REX_GOTPCRELX cross-image DATA import did not yield 99 (got $RC)"; exit 1; }
+
+# Also prove the plain (non-relaxable) R_X86_64_GOTPCREL form -- gas emits it
+# with relaxation hints suppressed (-mrelax-relocations=no). Same is_got_reloc/
+# patch_got code path in link.c handles both; this proves it against the OTHER
+# survey-listed type, not just the one gcc happens to emit by default.
+$CC -Wa,-mrelax-relocations=no -fPIC -O2 -ffreestanding -fno-stack-protector \
+    -c -o "$WORK/datacons_norelax.o" "$WORK/datacons.c"
+echo "-- norelax consumer .text relocations (expect plain GOTPCREL) --"
+readelf -rW "$WORK/datacons_norelax.o" | awk '/R_X86_64/{print $3}' | sort | uniq -c
+readelf -rW "$WORK/datacons_norelax.o" | grep -q "R_X86_64_GOTPCREL " \
+    || { echo "FAIL: expected plain R_X86_64_GOTPCREL with relaxation suppressed"; exit 1; }
+"$WORK/LINK.EXE" --executable --use "$WORK/LIBDATA\$SHR.EXE" \
+    -o "$WORK/DATAPROG_NORELAX.EXE" "$WORK/datacons_norelax.o"
+set +e
+"$WORK/ACTIVATE" "$WORK/DATAPROG_NORELAX.EXE" "$WORK/LIBDATA\$SHR.EXE"; RC=$?
+set -e
+echo "norelax consumer exit code = $RC (expect 99)"
+[ "$RC" -eq 99 ] || { echo "FAIL: R_X86_64_GOTPCREL cross-image DATA import did not yield 99 (got $RC)"; exit 1; }
 
 echo
 echo "== output header: e_machine must be EM_X86_64 =="

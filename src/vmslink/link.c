@@ -105,6 +105,23 @@
                              * stub needed for an intra-link reference) */
 #endif
 
+/* x86_64 GOT-relative relocations (vms-cd1, grounded by
+ * docs/design-link-x86_64-relocs.md): `mov sym@GOTPCREL(%rip), reg` computes
+ * the GOT cell's address in ONE relocation — GOT_entry_addr+A-P written as a
+ * flat 32-bit disp32, unlike aarch64's ADR_GOT_PAGE/LD64_GOT_LO12_NC PAIR
+ * (page-hi21 + lo12 split across two instructions). REX_GOTPCRELX is GNU as's
+ * "relaxable" GOTPCREL variant (mov->lea when the linker can prove the GOT
+ * slot is unneeded) — LINK.EXE does not perform that relaxation (out of
+ * scope: correctness over the optimization), so it is handled identically to
+ * plain GOTPCREL: always synthesize the GOT slot and patch the load. Guarded:
+ * older <elf.h> may lack them. */
+#ifndef R_X86_64_GOTPCREL
+#define R_X86_64_GOTPCREL      9   /* mov sym@GOTPCREL(%rip), reg : S(got)+A-P */
+#endif
+#ifndef R_X86_64_REX_GOTPCRELX
+#define R_X86_64_REX_GOTPCRELX 42  /* REX-prefixed relaxable GOTPCREL variant */
+#endif
+
 #define IMGACT_INTERP "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"
 
 /* --------------------------------------------------------------------------
@@ -577,9 +594,13 @@ struct import {
     int      is_data;      /* 1 = DATA import (GOT-read), 0 = call import (PLT) */
 };
 
-/* Patch an ADR_GOT_PAGE / LD64_GOT_LO12_NC pair to reach `slot` PC-relatively
- * (defined below; forward-declared for the executable data-import path). */
-static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slot);
+/* Patch a GOT-relative reference to reach `slot` PC-relatively: the aarch64
+ * ADR_GOT_PAGE/LD64_GOT_LO12_NC PAIR, or x86_64's single GOTPCREL/
+ * REX_GOTPCRELX flat disp32 (which carries a real addend, usually -4 — see
+ * the definition below) (defined below; forward-declared for the executable
+ * data-import path). */
+static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slot,
+                      int64_t add);
 
 /* Find an interned import by name -> index, or -1. */
 static int import_find(struct import *imp, int nimp, const char *nm)
@@ -969,22 +990,39 @@ static int find_got_local(struct gotslot *g, int ng, int oi, int sym)
 
 /* Patch an ADR_GOT_PAGE / LD64_GOT_LO12_NC pair to reach `slot` PC-relatively.
  * Identical bit-layout to ADR_PREL_PG_HI21 / LDST64_ABS_LO12_NC, but the target
- * is the GOT cell rather than the symbol. */
-static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slot)
+ * is the GOT cell rather than the symbol.
+ *
+ * x86_64 GOTPCREL/REX_GOTPCRELX (vms-cd1): a SINGLE relocation, not a pair —
+ * `mov sym@GOTPCREL(%rip), reg` disassembles to a disp32 whose value is
+ * GOT_entry_addr+A-P, written as a flat 32-bit word exactly like PC32/PLT32 in
+ * patch_pcrel() (not bitfield-packed into the instruction). Unlike the aarch64
+ * pair (addend always 0 in practice — the page/lo12 split carries no separate
+ * addend slot LINK.EXE models), the x86_64 form's `add` is real: gcc/gas emit
+ * addend -4 for GOTPCREL (site is the start of the 4-byte disp32 field, 4
+ * bytes before the next instruction, so A=-4 makes S+A-P land on the GOT cell
+ * relative to the instruction's end, matching how the CPU computes %rip at
+ * execution time) — so `add` must be threaded through here and included in
+ * the write, unlike the two aarch64 branches which don't take one. */
+static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slot,
+                      int64_t add)
 {
     if (type == R_AARCH64_ADR_GOT_PAGE) {
         int64_t d = (int64_t)(slot >> 12) - (int64_t)(site >> 12);
         uint32_t immlo = (uint32_t)(d & 3), immhi = (uint32_t)((d >> 2) & 0x7FFFF);
         *insn = (*insn & ~((3u << 29) | (0x7FFFFu << 5))) | (immlo << 29) | (immhi << 5);
-    } else { /* R_AARCH64_LD64_GOT_LO12_NC: 8-byte load, scale 3 */
+    } else if (type == R_AARCH64_LD64_GOT_LO12_NC) { /* 8-byte load, scale 3 */
         uint32_t imm = (uint32_t)((slot & 0xFFF) >> 3);
         *insn = (*insn & ~(0xFFFu << 10)) | (imm << 10);
+    } else { /* R_X86_64_GOTPCREL / R_X86_64_REX_GOTPCRELX */
+        int64_t d = (int64_t)slot + add - (int64_t)site;
+        *insn = (uint32_t)(uint64_t)d;
     }
 }
 
 static int is_got_reloc(uint32_t type)
 {
-    return type == R_AARCH64_ADR_GOT_PAGE || type == R_AARCH64_LD64_GOT_LO12_NC;
+    return type == R_AARCH64_ADR_GOT_PAGE || type == R_AARCH64_LD64_GOT_LO12_NC ||
+           type == R_X86_64_GOTPCREL || type == R_X86_64_REX_GOTPCRELX;
 }
 
 /* A synthesized TLSDESC entry (two quadwords): [0]=resolver (IMGACT fills with
@@ -1590,16 +1628,16 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                     /* LOCAL GOT reference -> its per-object (oi, sym) slot. */
                     int gi = find_got_local(got, ngot, i, (int)si);
                     if (gi < 0) die("internal: local GOT slot missing for symbol");
-                    patch_got(type, insn, site, got[gi].va);
+                    patch_got(type, insn, site, got[gi].va, rl->add);
                 } else {
                     int ii = import_find(imp, nimp, nm);
                     if (ii >= 0) {
                         /* Cross-image DATA import: read its import-GOT cell. */
-                        patch_got(type, insn, site, imp[ii].got_va);
+                        patch_got(type, insn, site, imp[ii].got_va, rl->add);
                     } else {
                         int gi = find_got(got, ngot, nm);
                         if (gi < 0) die("internal: GOT slot missing for symbol");
-                        patch_got(type, insn, site, got[gi].va);
+                        patch_got(type, insn, site, got[gi].va, rl->add);
                     }
                 }
             } else if (is_tlsdesc_reloc(type)) {

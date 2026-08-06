@@ -443,16 +443,17 @@ static long handle_read(struct scs_mscp_srv *srv,
                         const struct scs_mscp_view *cmd, const uint8_t *body,
                         size_t body_len, uint8_t *end, size_t end_len)
 {
-    /* The sec 5.3 transfer command layout: byte count at P.BCNT (12), the
-     * 12-byte host buffer descriptor at P.BUFF (16), the LBN at P.LBN (28). */
-    const size_t P_BCNT = 12, P_BUFF = 16, P_LBN = 28;
-    if (body_len < P_LBN + 4) {
+    /* The sec 5.3 transfer command layout: byte count at P.BCNT, the 12-byte
+     * host buffer descriptor at P.BUFF, the LBN at P.LBN -- all named in
+     * scs_mscp.h, which is the one place in the tree these offsets are
+     * written. */
+    if (body_len < SCS_MSCP_P_LBN + 4) {
         return build_invalid_command(
             end, end_len, cmd->cmd_ref, cmd->unit,
             SCS_MSCP_STATUS(SCS_MSCP_ST_INVALID_CMD, 0u));
     }
-    uint32_t byte_count = get_le32(body + P_BCNT);
-    uint32_t lbn = get_le32(body + P_LBN);
+    uint32_t byte_count = get_le32(body + SCS_MSCP_P_BCNT);
+    uint32_t lbn = get_le32(body + SCS_MSCP_P_LBN);
 
     struct scs_mscp_srv_unit *u = scs_mscp_srv_find_unit(srv, cmd->unit);
     if (u == NULL) {
@@ -476,13 +477,13 @@ static long handle_read(struct scs_mscp_srv *srv,
     if (byte_count == 0 || (byte_count % SCS_MSCP_BLOCK_SIZE) != 0) {
         return build_transfer_end(
             end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_READ,
-            SCS_MSCP_STATUS(SCS_MSCP_ST_INVALID_CMD, P_BCNT * 256u), 0u);
+            SCS_MSCP_STATUS(SCS_MSCP_ST_INVALID_CMD, SCS_MSCP_P_BCNT * 256u), 0u);
     }
     uint32_t nblocks = byte_count / SCS_MSCP_BLOCK_SIZE;
     if ((uint64_t)lbn + (uint64_t)nblocks > (uint64_t)u->unit_size) {
         return build_transfer_end(
             end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_READ,
-            SCS_MSCP_STATUS(SCS_MSCP_ST_INVALID_CMD, P_LBN * 256u), 0u);
+            SCS_MSCP_STATUS(SCS_MSCP_ST_INVALID_CMD, SCS_MSCP_P_LBN * 256u), 0u);
     }
 
     /* DESIGN DECISION (4). The blocks are read for real -- and then they have
@@ -512,7 +513,7 @@ static long handle_read(struct scs_mscp_srv *srv,
                 SCS_MSCP_STATUS(SCS_MSCP_ST_DRIVE_ERR, 0u), moved);
         }
         srv->blocks_read++;
-        long n = srv->xfer(srv->xfer_ctx, body + P_BUFF, lbn + i, block,
+        long n = srv->xfer(srv->xfer_ctx, body + SCS_MSCP_P_BUFF, lbn + i, block,
                            sizeof(block));
         if (n < 0 || (size_t)n != sizeof(block)) {
             /* The transfer service failed. sec 6.14 gives Host Buffer Access

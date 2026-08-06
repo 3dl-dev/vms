@@ -466,9 +466,9 @@ static void test_backing_store_and_read(void)
     /* --- READ WITH NO TRANSFER HOOK: design decision (4). This is the INV-6
      * boundary and the single most important assertion in this file. --- */
     make_command(body, sizeof(body), &v, 0x200u, 0, SCS_MSCP_OP_READ, 0);
-    body[12] = (uint8_t)(SCS_MSCP_BLOCK_SIZE & 0xff); /* P.BCNT = 512 */
-    body[13] = (uint8_t)(SCS_MSCP_BLOCK_SIZE >> 8);
-    body[28] = 3; /* P.LBN = 3 */
+    body[SCS_MSCP_P_BCNT] = (uint8_t)(SCS_MSCP_BLOCK_SIZE & 0xff);
+    body[SCS_MSCP_P_BCNT + 1] = (uint8_t)(SCS_MSCP_BLOCK_SIZE >> 8);
+    body[SCS_MSCP_P_LBN] = 3;
     /* The unit must be ONLINE before a transfer is legal. */
     {
         struct scs_mscp_view ov;
@@ -498,9 +498,9 @@ static void test_backing_store_and_read(void)
     memset(&rec, 0, sizeof(rec));
     scs_mscp_srv_set_xfer(&srv, recording_xfer, &rec);
     make_command(body, sizeof(body), &v, 0x201u, 0, SCS_MSCP_OP_READ, 0);
-    body[12] = 0x00;
-    body[13] = 0x04; /* P.BCNT = 1024 == two blocks */
-    body[28] = 7;    /* P.LBN = 7 */
+    body[SCS_MSCP_P_BCNT] = 0x00;
+    body[SCS_MSCP_P_BCNT + 1] = 0x04; /* 1024 == two blocks */
+    body[SCS_MSCP_P_LBN] = 7;
     n = scs_mscp_srv_handle(&srv, 2u, &v, body, sizeof(body), end, sizeof(end));
     check(scs_mscp_status_major(u16(end, SCS_MSCP_P_STS))
               == SCS_MSCP_ST_SUCCESS,
@@ -517,8 +517,8 @@ static void test_backing_store_and_read(void)
      * not swallowed. */
     rec.fail = 1;
     make_command(body, sizeof(body), &v, 0x202u, 0, SCS_MSCP_OP_READ, 0);
-    body[12] = 0x00;
-    body[13] = 0x02; /* 512 */
+    body[SCS_MSCP_P_BCNT] = 0x00;
+    body[SCS_MSCP_P_BCNT + 1] = 0x02; /* 512 */
     n = scs_mscp_srv_handle(&srv, 2u, &v, body, sizeof(body), end, sizeof(end));
     check(scs_mscp_status_major(u16(end, SCS_MSCP_P_STS))
               == SCS_MSCP_ST_HOST_BUF_ERR,
@@ -528,8 +528,8 @@ static void test_backing_store_and_read(void)
      * scheme of Table B-2, not serviced. */
     rec.fail = 0;
     make_command(body, sizeof(body), &v, 0x203u, 0, SCS_MSCP_OP_READ, 0);
-    body[12] = 0x01; /* 513 -- not a whole number of blocks */
-    body[13] = 0x02;
+    body[SCS_MSCP_P_BCNT] = 0x01; /* 513 -- not a whole number of blocks */
+    body[SCS_MSCP_P_BCNT + 1] = 0x02;
     n = scs_mscp_srv_handle(&srv, 2u, &v, body, sizeof(body), end, sizeof(end));
     check(scs_mscp_status_major(u16(end, SCS_MSCP_P_STS))
               == SCS_MSCP_ST_INVALID_CMD,
@@ -537,9 +537,9 @@ static void test_backing_store_and_read(void)
           "Command (sec 5.3)");
 
     make_command(body, sizeof(body), &v, 0x204u, 0, SCS_MSCP_OP_READ, 0);
-    body[12] = 0x00;
-    body[13] = 0x02;
-    body[28] = (uint8_t)(NBLK + 10); /* past the end */
+    body[SCS_MSCP_P_BCNT] = 0x00;
+    body[SCS_MSCP_P_BCNT + 1] = 0x02;
+    body[SCS_MSCP_P_LBN] = (uint8_t)(NBLK + 10); /* past the end */
     n = scs_mscp_srv_handle(&srv, 2u, &v, body, sizeof(body), end, sizeof(end));
     check(scs_mscp_status_major(u16(end, SCS_MSCP_P_STS))
               == SCS_MSCP_ST_INVALID_CMD,

@@ -38,4 +38,9 @@
 # proctab-procscan-nonexpr-status-wrong (the first mutations anchored
 # inside vms_ioctl_getjpi/procscan's own bodies -- see those entries in
 # facility_defects.sh for what each covers and why).
-48
+# Raised to 51 by vms-2e7's devtab-dassgn-status-wrong,
+# devtab-getdvi-devnam-status-wrong and devtab-devscan-found-status-wrong
+# (the first mutations anchored inside vms_ioctl_dassgn/getdvi/devscan's
+# own bodies -- see those entries in facility_defects.sh for what each
+# covers and why).
+51

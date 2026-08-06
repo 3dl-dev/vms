@@ -425,6 +425,9 @@ lock-deq-status-wrong
 lock-convert-mode-not-updated
 devtab-owner-not-recorded
 devtab-alloc-not-recorded
+devtab-dassgn-status-wrong
+devtab-getdvi-devnam-status-wrong
+devtab-devscan-found-status-wrong
 setterm-binding-not-recorded
 showterm-width-page-fabricated
 showterm-width-page-oracle-shaped
@@ -1154,6 +1157,128 @@ EOF
                       ;;
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
+        esac;;
+
+    devtab-dassgn-status-wrong)
+        case "$_f" in
+        facility)     echo "device table -- \$DASSGN's own success status (VMS_IOCTL_DASSGN)";;
+        targets)      echo "kernel/vms_devtab.c";;
+        # vms-2e7 (vms-2b2 follow-up). MEASURED at the 9-of-33 audit: no
+        # existing mutation hunk sits inside vms_ioctl_dassgn's own body --
+        # devtab-owner-not-recorded and devtab-alloc-not-recorded both
+        # mutate devinfo_fill()/the \$ASSIGN owner write, neither of which
+        # is inside \$DASSGN. RANGE-ANCHORED to vms_ioctl_dassgn's own body:
+        # this exact 8-space "args.status = SS_NORMAL;" also appears in
+        # \$ALLOC (twice) and \$DALLOC, all defined nearby in the same file.
+        # MEASURED (not the entry's first guess): dassgn is called as
+        # cleanup by suites outside test_kmod_devtab too. Real
+        # run_facility_negctl.sh output, not a static guess, is what fixed
+        # this suites_red/require_fail/knock_on_fail set.
+        suites_red)   echo "test_kmod_devtab test_kmod_setterm test_syssvc_qio_terminal";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$DASSGN reports SS\$_IVCHAN -- \"no such channel\" -- for a channel it actually found and released (removed from the process's channel list, device_release_channel() run, the entry freed). The deassignment happens; only the caller-visible confirmation of it does not.";;
+        require_fail) cat <<'EOF'
+channel deassigned
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+last channel deassigned
+B returns its channel
+parent: sys$dassgn("TT:" channel) succeeded (public API)
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME defect, observed a second and third time: every one of these assertions depends on \$DASSGN succeeding as its own cleanup/release step, and this mutation is the ONLY thing that changed -- nothing about the channel table's real bookkeeping was touched.";;
+        esac;;
+
+    devtab-getdvi-devnam-status-wrong)
+        case "$_f" in
+        facility)     echo "device table -- \$GETDVI's own success status on the by-NAME lookup path (VMS_IOCTL_GETDVI)";;
+        targets)      echo "kernel/vms_devtab.c";;
+        # vms-2e7. MEASURED, same audit: no existing mutation hunk sits
+        # inside vms_ioctl_getdvi's own body. Two "args.status =
+        # SS_NORMAL;" sites exist in this function -- the by-CHANNEL path
+        # and the by-NAME path -- so this is RANGE-ANCHORED to the unique
+        # "if (args.select != VMS_DVI_SEL_DEVNAM) {" line (which opens the
+        # by-name branch) through the function's own closing brace,
+        # excluding the by-channel path entirely.
+        # MEASURED (not the entry's first guess): GETDVI-by-name is the
+        # standard cross-process read-back verification every device test
+        # in the tree uses, so a wrong status on it cascades widely. Real
+        # run_facility_negctl.sh output, not a static guess, is what fixed
+        # this suites_red/require_fail/knock_on_fail set.
+        suites_red)   echo "test_kmod_devtab test_syssvc_qio_terminal test_syssvc_showdev test_syssvc_showterm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$GETDVI by device name reports SS\$_NOSUCHDEV for a device it actually found and filled in (devinfo_fill() still runs, args.info is still the real row) -- the lookup succeeds; only the caller-visible confirmation of it does not. Nearly every device test in the tree uses a by-name GETDVI as its read-back verification step, so this one status word gates a wide surface.";;
+        require_fail) cat <<'EOF'
+device still exists after its owner dies
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+console OPA0: exists without any process creating it
+B sees the ownership A took with a channel alone (A writes, B reads)
+this process can still read the device
+reference count returns to zero
+parent: baseline read of the executive's OPA0: row succeeded
+parent: a fresh child process could read the executive's OPA0: row
+A-WRITES/B-READS: a fresh child sees the reference sys$assign("TT:") added to OPA0: in the executive (public API, cross-process)
+parent: a second fresh child process could read the executive's OPA0: row
+A-WRITES/B-READS: a second fresh child sees OPA0:'s reference count back at baseline after sys$dassgn (the release reached the executive, not just local bookkeeping)
+SHOW DEVICE OPA0: resolves the name through the executive and prints its row
+A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
+the console is still listed once the other process is gone
+SHOW TERMINAL names _OPA0: once the executive holds the binding -- the SAME BINARY that named nothing a moment ago
+the characteristics heading is printed (oracle section 2)
+grid row 1 is byte-for-byte the V7.3 capture
+grid row 2 is byte-for-byte the V7.3 capture
+grid row 4 is byte-for-byte the V7.3 capture
+grid row 10 is byte-for-byte the V7.3 capture
+the last row carries the single remaining characteristic, unpadded
+...and the cleared Echo bit, in the grid cell the oracle prints it in
+...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
+...and grid row 1 is the oracle's bytes again, so neither is the grid
+EOF
+                      ;;
+        knock_on_why)
+            _n_suites=$(defect_field devtab-getdvi-devnam-status-wrong suites_red | wc -w)
+            _n_assert=$(( $(defect_field devtab-getdvi-devnam-status-wrong require_fail | wc -l) + $(defect_field devtab-getdvi-devnam-status-wrong knock_on_fail | wc -l) ))
+            echo "the SAME defect, observed a second (through twenty-second) time: every one of these ${_n_assert} assertions across ${_n_suites} suites depends on a by-name \$GETDVI succeeding as its own read-back verification step, and this mutation is the ONLY thing that changed -- nothing about ownership, allocation or channels was touched. A wrong SS\$_NORMAL->SS\$_NOSUCHDEV substitution on the one line every one of these calls passes through explains all of them at once; no other hypothesis does."
+            ;;
+        esac;;
+
+    devtab-devscan-found-status-wrong)
+        case "$_f" in
+        facility)     echo "device table -- \$DEVICE_SCAN's own success status when a row IS found (VMS_IOCTL_DEVSCAN)";;
+        targets)      echo "kernel/vms_devtab.c";;
+        # vms-2e7. MEASURED, same audit: no existing mutation hunk sits
+        # inside vms_ioctl_devscan's own body. The only
+        # "args.status = SS_NORMAL;" in this function, so a plain
+        # range-anchor to vms_ioctl_devscan's own body (for consistency
+        # with its siblings, though a bare text anchor would also be
+        # unambiguous here) is enough.
+        # MEASURED (not the entry's first guess): SHOW DEVICE with no
+        # argument drives DEVSCAN too (the "bare listing"), so this
+        # reaches test_syssvc_showdev as well as test_kmod_devtab.
+        suites_red)   echo "test_kmod_devtab test_syssvc_showdev";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$DEVICE_SCAN reports SS\$_NOSUCHDEV -- a real but wrong refusal -- for the FIRST row it finds, even though it filled in a real device's info first. Every caller here loops \"while status == SS\$_NORMAL\", so a wrong status on the very first hit ends the scan immediately: it never sees a second device and never reaches the real SS\$_NOMOREDEV terminator either.";;
+        require_fail) cat <<'EOF'
+device scan terminates with SS$_NOMOREDEV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+device scan lists the console terminal
+bare SHOW DEVICE lists OPA0: -- a device DCL has no other way to know about, read from the executive's table
+the listing carries the oracle's column header (section 4)
+the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME defect, observed a second through fifth time: every one of these assertions depends on \$DEVICE_SCAN succeeding on its first row, and this mutation is the ONLY thing that changed.";;
         esac;;
 
     setterm-binding-not-recorded)
@@ -3204,6 +3329,25 @@ apply_edit() {
         # assignment in the file, so a second apply finds no match and is the
         # no-op the selftest requires.
         sed -i 's|    info->allocated = dev->allocated;|    info->allocated = 0; /* NEGCTL devtab-alloc-not-recorded */|' "$_file";;
+    devtab-dassgn-status-wrong)
+        # RANGE-ANCHORED to vms_ioctl_dassgn's own body. This exact 8-space
+        # "args.status = SS_NORMAL;" also appears in $ALLOC (twice) and
+        # $DALLOC, all defined nearby in the same file; vms_ioctl_dassgn is
+        # the first of them, so the range closes at its own `}`.
+        sed -i '/^long vms_ioctl_dassgn/,/^}$/ s|^        args\.status = SS__NORMAL;$|        args.status = SS__IVCHAN; /* NEGCTL devtab-dassgn-status-wrong */|' "$_file";;
+    devtab-getdvi-devnam-status-wrong)
+        # RANGE-ANCHORED to the by-NAME branch only, not the whole
+        # function: "if (args.select != VMS_DVI_SEL_DEVNAM) {" is the
+        # unique line that opens it, and the range runs to
+        # vms_ioctl_getdvi's own closing brace, excluding the by-CHANNEL
+        # branch's own "args.status = SS_NORMAL;" earlier in the function.
+        sed -i '/if (args\.select != VMS_DVI_SEL_DEVNAM) {/,/^}$/ s|^        args\.status = SS__NORMAL;$|        args.status = SS__NOSUCHDEV; /* NEGCTL devtab-getdvi-devnam-status-wrong */|' "$_file";;
+    devtab-devscan-found-status-wrong)
+        # RANGE-ANCHORED to vms_ioctl_devscan's own body for consistency
+        # with its siblings above -- the only "args.status = SS_NORMAL;" in
+        # this function, so the range is not load-bearing for uniqueness,
+        # only for the naming convention this file's devtab-* entries share.
+        sed -i '/^long vms_ioctl_devscan/,/^}$/ s|^        args\.status = SS__NORMAL;$|        args.status = SS__NOSUCHDEV; /* NEGCTL devtab-devscan-found-status-wrong */|' "$_file";;
     setterm-binding-not-recorded)
         # vms_ioctl_setterm() has exactly one write to proc->terminal, and it
         # is the only strscpy in the file whose destination is a proc field --

@@ -288,9 +288,11 @@ int main(void)
     }
     show_capture("SHOW DEVICE (before)", out);
     /* negctl-knockon: bind-client-no-register */
+    /* negctl-knockon: devtab-devscan-found-status-wrong */
     CHECK(console_row(out) != NULL,
           "bare SHOW DEVICE lists OPA0: -- a device DCL has no other way to know about, read from the executive's table");
     /* negctl-knockon: bind-client-no-register */
+    /* negctl-knockon: devtab-devscan-found-status-wrong */
     CHECK(strstr(out, "Device                  Device           Error") != NULL,
           "the listing carries the oracle's column header (section 4)");
     CHECK(!row_says_alloc(out),
@@ -377,6 +379,7 @@ int main(void)
 
     /* negctl: devtab-alloc-not-recorded */
     /* negctl-knockon: bind-client-no-register */
+    /* negctl-knockon: devtab-devscan-found-status-wrong */
     if (run_dcl("SHOW DEVICE", out, sizeof(out)) == 0)
         CHECK(row_says_alloc(out),
               "the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table");

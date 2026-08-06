@@ -155,6 +155,45 @@ identity is an argument, the console is windowed to the run (vax1.log is
 append-only for the life of the pod, so a bare grep finds someone else's
 message from hours ago), and both consoles are read.
 
+## Optional variant: making the disk config asymmetric for MSCP serving (`vms-291`/`vms-3d3`)
+
+**The stock 2-node config above cannot exercise MSCP serving traffic.** In the
+golden image both vax1 and vax2 attach their own copies of the same disk
+images (`d0.dsk` shared deliberately as the dual-ported system root, but each
+node's `rq2`/`rq3` units point at disks it owns outright) — so neither node
+ever needs to route a READ/WRITE through the other's MSCP server, and the SCA
+block-transfer path (§ "Phase D part 1's lab capture" in
+`docs/design-mscp-direction.md`) never fires. This is a variant on top of the
+stock config, not a replacement for it — most lab sessions want the stock
+symmetric setup.
+
+**Recipe** (source: `docs/design-mscp-direction.md`, "Phase D part 1's lab
+capture", grounded against `vms-291`'s `vaxlab-9` capture, 2026-08-06):
+
+1. In the target pod's SIMH config for **vax1**, add a new RA81 unit `rq2`
+   backed by a **new** disk image (e.g. `d2.dsk`) that vax1 alone owns —
+   this is the unit vax1 will serve over MSCP.
+2. In the same pod's config for **vax2**, **disable** `rq2` and `rq3` (detach
+   or comment out those unit lines) so vax2 has no local disk at those unit
+   numbers and must reach them, if at all, through vax1's MSCP server.
+3. Leave `MSCP_LOAD=1` and `MSCP_SERVE_ALL=1` as-is — the golden image
+   already sets both, so no SYSGEN change is needed to make vax1 serve.
+4. Boot the pod, then from vax2 `MOUNT` the unit vax1 is now serving and
+   read/write through it (e.g. drop a marker file and read it back) to
+   produce real MSCP command + SCA block-transfer traffic between the two
+   nodes.
+
+**Do not hand-modify a running pod for this** unless the pod is disposable —
+`vms-76eb` tracks restoring/destroying the specific pod (`vaxlab-9`) that was
+hand-modified to produce the capture cited above. Prefer editing a fresh
+replica's config before first boot, or scaling up a new replica
+(`kubectl -n ovmx-lab scale sts/vaxlab --replicas=N`) to modify.
+
+A negative control (MOUNT aimed at a nonexistent unit, expected to show zero
+READ/WRITE/block-transfer frames) is worth capturing alongside the positive
+run — it is what makes the mount capture attributable to the asymmetric
+config rather than to something else on the wire.
+
 ## Things that will bite you
 
 - **`dep bdr 0` stays commented on every node.** Depositing 0 into the KA655

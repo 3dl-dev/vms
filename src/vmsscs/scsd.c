@@ -8779,6 +8779,108 @@ static unsigned scsd_peer_departure_sweep(struct scsd_rx *rx, uint64_t now_ms)
 }
 
 /*
+ * scsd_vc_reissue_tick - vms-4071's p. 2-14 formation reissue timer. "whenever
+ * a port driver sends a START or a STACK ... it starts a timer and expects a
+ * response. If the timer expires before any response is received ... SCA
+ * requires the port driver to reissue the START or STACK (whichever it last
+ * sent)", bounded by an "operating system dependent retry limit" after which
+ * "formation of the virtual circuit is to be abandoned". Returns the number of
+ * reissues (SEND_START/SEND_STACK actions taken) on this tick.
+ *
+ * WHY IT IS A FUNCTION (vms-fb1). This was an inline block in main()'s loop,
+ * and SCSD_UNIT_TEST renames main() away, so it was compiled but reachable
+ * from no test -- the same measured gap vms-abc closed for the retransmit tick
+ * and vms-ebb closed for the disk-discovery ungate. The body is that block,
+ * moved verbatim: `vc_ctx` becomes `rx->vc_ctx` (main() already points it at
+ * the same struct via `rx.vc_ctx = &vc_ctx`), `peers` becomes `rx->peers`, and
+ * the loop-local `rx.start_sent`/`rx.start_ack_sent` become `rx->`. No guard,
+ * no order and no log line changed.
+ *
+ * OVMX_VC_NO_RETRY_LIMIT=1 (read inside scs_vc_retry_limit()) restores
+ * unbounded retry with no abandon; unchanged by this move.
+ */
+static unsigned scsd_vc_reissue_tick(struct scsd_rx *rx, uint64_t now_ms)
+{
+    if (rx == NULL || !rx->do_connect) {
+        return 0;
+    }
+    unsigned reissued = 0;
+    unsigned retry_limit = scs_vc_retry_limit();
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &rx->peers[i];
+        if (ps->pb == NULL) {
+            continue;
+        }
+        if (!scs_vc_fsm_timer_expired(ps->pb, now_ms, SCS_VC_FORMATION_TIMEOUT_MS)) {
+            continue;
+        }
+        enum scs_vc_action act = scs_vc_fsm_timeout(ps->pb, now_ms, retry_limit);
+        if (act == SCS_VC_ACT_SEND_START || act == SCS_VC_ACT_SEND_STACK) {
+            if (scsd_vc_emit(rx->vc_ctx, ps, act)) {
+                rx->start_sent++;
+                ps->start_replies++;
+                reissued++;
+                log_ts(stdout);
+                printf(" SCSD-I-VCREISSUE, formation timer expired -- %s to peer"
+                       " %02x:%02x:%02x:%02x:%02x:%02x (attempt %u, VC %s)\n",
+                       scs_vc_action_name(act),
+                       ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                       ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+                       ps->pb->fsm.retries, scs_vc_state_name(ps->pb->vc_state));
+                fflush(stdout);
+            }
+        }
+        /* peer_round2_seen=0: a timer expiry is not a peer frame. */
+        scsd_vc_settle(rx->vc_ctx, ps, act, 0, &rx->start_ack_sent);
+    }
+    return reissued;
+}
+
+/*
+ * scsd_poll_refresh_tick - vms-66f's p. 2-50 SCS process poll. "A VMS system
+ * will poll each other node that it can see approximately once, but not more
+ * than once, during each such interval" -- so the set of nodes it can see is
+ * refreshed here, from the ONE authority on whether a circuit is open
+ * (CONFIG_PATH, p. 2-47), and scs_poll_tick() decides whether anything
+ * happens.
+ *
+ * WHY IT IS A FUNCTION (vms-fb1). This was an inline block in main()'s loop,
+ * and SCSD_UNIT_TEST renames main() away, so it was compiled but reachable
+ * from no test -- the same measured gap vms-abc closed for the retransmit tick
+ * and vms-ebb closed for the disk-discovery ungate. The body is that block,
+ * moved verbatim: `peers` becomes `rx->peers`, `rx.cfg` becomes `rx->cfg`.
+ *
+ * ASK THE QUESTION CONNECT WILL ASK, not a similar one -- see the comment on
+ * scs_config_select_vc() below, unchanged from the inline block: the first
+ * revision tested the Path Block's own vc_state and MEASURED WRONG on the lab
+ * wire (the VC formation machine reaches OPEN one received frame BEFORE
+ * scs_pb_open() moves the Path Block off the PDT formative queue).
+ *
+ * OVMX_NO_PROCESS_POLLER=1 (read inside scs_poll_tick()) forces it to a no-op
+ * from any state; unchanged by this move.
+ */
+static void scsd_poll_refresh_tick(struct scsd_rx *rx, uint64_t now_ms)
+{
+    if (rx == NULL || !rx->do_connect) {
+        return;
+    }
+    struct scs_poller *poller = scsd_poll(rx);
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &rx->peers[i];
+        if (ps->pb == NULL) {
+            continue;
+        }
+        const uint8_t *sys = ps_sys_addr(ps);
+        if (scs_config_select_vc(rx->cfg, sys) != NULL) {
+            (void)scs_poll_add_node(poller, sys);
+        } else {
+            scs_poll_drop_node(poller, sys);
+        }
+    }
+    scs_poll_tick(poller, now_ms);
+}
+
+/*
  * scsd_retransmit_tick - vms-691's retransmit of OVMX's own unacked sequenced
  * message (the CONNECT-REQUEST), plus vms-abc's p. 2-31 DELIVERY guarantee.
  *
@@ -9794,82 +9896,19 @@ int main(int argc, char **argv)
          * disables it entirely. See the block above scsd_peer_departure_sweep. */
         (void)scsd_peer_departure_sweep(&rx, monotonic_ms());
 
-        /* --- vms-4071: the p. 2-14 formation reissue timer. "whenever a port
-         * driver sends a START or a STACK ... it starts a timer and expects a
-         * response. If the timer expires before any response is received ...
-         * SCA requires the port driver to reissue the START or STACK (whichever
-         * it last sent)", bounded by an "operating system dependent retry
-         * limit" after which "formation of the virtual circuit is to be
-         * abandoned". THIS IS NEW ON THE WIRE and fires only under loss; the
-         * OVMX_VC_NO_RETRY_LIMIT=1 kill-switch restores unbounded retry. */
-        if (do_connect) {
-            uint64_t now_ms = monotonic_ms();
-            unsigned retry_limit = scs_vc_retry_limit();
-            for (int i = 0; i < OVMX_MAX_PEERS; i++) {
-                struct peer_state *ps = &peers[i];
-                if (ps->pb == NULL) {
-                    continue;
-                }
-                if (!scs_vc_fsm_timer_expired(ps->pb, now_ms, SCS_VC_FORMATION_TIMEOUT_MS)) {
-                    continue;
-                }
-                enum scs_vc_action act = scs_vc_fsm_timeout(ps->pb, now_ms, retry_limit);
-                if (act == SCS_VC_ACT_SEND_START || act == SCS_VC_ACT_SEND_STACK) {
-                    if (scsd_vc_emit(&vc_ctx, ps, act)) {
-                        rx.start_sent++;
-                        ps->start_replies++;
-                        log_ts(stdout);
-                        printf(" SCSD-I-VCREISSUE, formation timer expired -- %s to peer"
-                               " %02x:%02x:%02x:%02x:%02x:%02x (attempt %u, VC %s)\n",
-                               scs_vc_action_name(act),
-                               ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
-                               ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
-                               ps->pb->fsm.retries, scs_vc_state_name(ps->pb->vc_state));
-                        fflush(stdout);
-                    }
-                }
-                /* peer_round2_seen=0: a timer expiry is not a peer frame. */
-                scsd_vc_settle(&vc_ctx, ps, act, 0, &rx.start_ack_sent);
-            }
-        }
+        /* --- vms-4071: the p. 2-14 formation reissue timer, moved to a
+         * function (vms-fb1) so the SCSD_UNIT_TEST seam can reach it -- see
+         * scsd_vc_reissue_tick() above. THIS IS NEW ON THE WIRE and fires only
+         * under loss; the OVMX_VC_NO_RETRY_LIMIT=1 kill-switch restores
+         * unbounded retry. */
+        (void)scsd_vc_reissue_tick(&rx, monotonic_ms());
 
-        /* --- vms-66f: the p. 2-50 SCS process poll. "A VMS system will poll
-         * each other node that it can see approximately once, but not more than
-         * once, during each such interval" -- so the set of nodes it can see is
-         * refreshed here, from the ONE authority on whether a circuit is open
-         * (CONFIG_PATH, p. 2-47), and scs_poll_tick() decides whether anything
-         * happens. WIRE-VISIBLE and NEW: this is the first outbound
-         * SCS$DIRECTORY traffic OVMX has ever emitted. OVMX_NO_PROCESS_POLLER=1
-         * suppresses it entirely. */
-        if (do_connect) {
-            struct scs_poller *poller = scsd_poll(&rx);
-            for (int i = 0; i < OVMX_MAX_PEERS; i++) {
-                struct peer_state *ps = &peers[i];
-                if (ps->pb == NULL) {
-                    continue;
-                }
-                const uint8_t *sys = ps_sys_addr(ps);
-                /*
-                 * ASK THE QUESTION CONNECT WILL ASK, not a similar one.
-                 * The first revision of this loop tested the Path Block's own
-                 * vc_state and MEASURED WRONG on the lab wire: the VC formation
-                 * machine reaches OPEN one received frame BEFORE scs_pb_open()
-                 * moves the Path Block off the PDT formative queue, so for that
-                 * window the circuit is "open" and CONFIG_SYS cannot reach it.
-                 * The poller duly registered the node, CONNECT ran the p. 2-47
-                 * selection, and the run ended with connect-refused=1
-                 * last-connect-status=NOVC and not one frame sent. Using
-                 * scs_config_select_vc() -- the selection itself -- closes the
-                 * gap by construction: if it answers, CONNECT will too.
-                 */
-                if (scs_config_select_vc(rx.cfg, sys) != NULL) {
-                    (void)scs_poll_add_node(poller, sys);
-                } else {
-                    scs_poll_drop_node(poller, sys);
-                }
-            }
-            scs_poll_tick(poller, monotonic_ms());
-        }
+        /* --- vms-66f: the p. 2-50 SCS process poll, moved to a function
+         * (vms-fb1) so the SCSD_UNIT_TEST seam can reach it -- see
+         * scsd_poll_refresh_tick() above. WIRE-VISIBLE and NEW: this is the
+         * first outbound SCS$DIRECTORY traffic OVMX has ever emitted.
+         * OVMX_NO_PROCESS_POLLER=1 suppresses it entirely. */
+        scsd_poll_refresh_tick(&rx, monotonic_ms());
 
         /* --- vms-691: retransmit OVMX's own unacked sequenced message (the
          * connect-request) on timeout, so a dropped CONNECT-REQUEST does not

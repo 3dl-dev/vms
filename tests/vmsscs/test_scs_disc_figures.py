@@ -478,6 +478,7 @@ if hasattr(MEASURE_MOD, "lab1_only"):
 FENCED = {
     "tools/cluster/scs_disc_measure.py": "lab1_only(sorted(glob.glob(",
     "tools/cluster/scs_reason_measure.py": "lab1_only(sorted(glob.glob(",
+    "tools/cluster/scs_t89_measure.py": "lab1_only(sorted(glob.glob(",
     "tools/scs_credit_measure.py": "lab1_only(sorted(glob.glob(",
     "tools/scs_connect_data_measure.py": "lab1_only(sorted(glob.glob(",
 }

@@ -86,6 +86,25 @@
 #define R_AARCH64_TLSDESC_CALL       569
 #endif
 
+/* x86_64 "simple" static relocations (vms-8f5, grounded by
+ * docs/design-link-x86_64-relocs.md): straight little-endian word/dword
+ * writes at the relocation offset — NOT bitfield-packed into an instruction
+ * encoding like the AARCH64 cases above. GOT/TLSDESC-class x86_64 types
+ * (GOTPCREL, REX_GOTPCRELX, GOTPC32_TLSDESC, TLSDESC_CALL, DTPOFF32) are a
+ * later bead (vms-cd1/vms-2e4) — out of scope here. Guarded: older <elf.h>
+ * may lack them. */
+#ifndef R_X86_64_64
+#define R_X86_64_64    1   /* direct 64-bit: S+A, absolute pointer initializer */
+#endif
+#ifndef R_X86_64_PC32
+#define R_X86_64_PC32  2   /* 32-bit PC-relative: S+A-P */
+#endif
+#ifndef R_X86_64_PLT32
+#define R_X86_64_PLT32 4   /* 32-bit PC-relative via PLT: S+A-P (same value when
+                             * the callee is defined in this link — no real PLT
+                             * stub needed for an intra-link reference) */
+#endif
+
 #define IMGACT_INTERP "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"
 
 /* --------------------------------------------------------------------------
@@ -162,6 +181,11 @@ static void *xat(struct obj *o, uint64_t off, uint64_t sz, const char *what)
 /* Parse an ELF relocatable object already resident in memory. `buf` must remain
  * live for the whole run (o->buf points into it) — the caller owns/keeps it.
  * `name` is a diagnostic label (file path or "archive.a(member.o)"). (vms-004) */
+/* Target machine for the emitted image, derived from the input object set (not
+ * hardcoded) — set by the first object parsed, checked against every object
+ * after it. 0 == not yet seen. (vms-8f5) */
+static uint16_t g_out_machine;
+
 static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name)
 {
     memset(o, 0, sizeof *o);
@@ -177,8 +201,13 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
         die("input is not ELF64");
     if (o->eh->e_type != ET_REL)
         die("input is not a relocatable object (.o)");
-    if (o->eh->e_machine != EM_AARCH64)
-        die("MVP supports aarch64 objects only (x86_64 is a later bead)");
+    if (o->eh->e_machine != EM_AARCH64 && o->eh->e_machine != EM_X86_64)
+        die("MVP supports aarch64 and x86_64 objects only");
+    if (g_out_machine == 0)
+        g_out_machine = o->eh->e_machine;
+    else if (g_out_machine != o->eh->e_machine)
+        die("mixed-architecture link: all input objects must share one e_machine "
+            "(aarch64 and x86_64 objects cannot be linked into the same image)");
 
     o->sh = (Elf64_Shdr *)xat(o, o->eh->e_shoff,
                               (uint64_t)o->eh->e_shnum * sizeof(Elf64_Shdr),
@@ -657,11 +686,17 @@ static void patch_pcrel(uint32_t type, uint32_t *insn, uint64_t site, uint64_t t
         *insn = (*insn & ~(0xFFFu << 10)) | (imm << 10);
         break;
     }
-    case R_AARCH64_PREL32: {
+    case R_AARCH64_PREL32:
+    case R_X86_64_PC32:
+    case R_X86_64_PLT32: {
         /* 32-bit PC-relative data word: S + A - P. `target` already carries the
          * addend (caller adds rl->add before calling); write S+A-P at the site.
          * Not an instruction field — a full 32-bit relative datum (switch/
-         * relative tables). Fixes a latent emit_shareable gap too. (vms-ba1) */
+         * relative tables for AARCH64_PREL32; x86_64's workhorse call/jmp/
+         * lea-rip disp32 for PC32/PLT32 — vms-8f5, docs/design-link-x86_64-
+         * relocs.md). PLT32 is written identically to PC32 here: an intra-link
+         * callee needs no PLT stub, only a cross-image import would (out of
+         * scope). Fixes a latent emit_shareable gap too. (vms-ba1) */
         int64_t d = (int64_t)target - (int64_t)site;
         *insn = (uint32_t)(uint64_t)d;
         break;
@@ -963,6 +998,14 @@ static int find_tls(struct tlsslot *t, int nt, const char *name)
     return -1;
 }
 
+/* Absolute 64-bit pointer-initializer relocation, either architecture: written
+ * as a flat 8-byte S+A and recorded in .vms$rel for load-bias. (vms-8f5 adds
+ * R_X86_64_64 alongside the existing R_AARCH64_ABS64.) */
+static int is_abs64_reloc(uint32_t type)
+{
+    return type == R_AARCH64_ABS64 || type == R_X86_64_64;
+}
+
 static int is_tlsdesc_reloc(uint32_t type)
 {
     return type == R_AARCH64_TLSDESC_ADR_PAGE21 ||
@@ -1222,7 +1265,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     int nabs = 0;
     for (int i = 0; i < nobj; i++)
         for (int r = 0; r < objs[i].nreloc; r++)
-            if (ELF64_R_TYPE(objs[i].relocs[r].info) == R_AARCH64_ABS64)
+            if (is_abs64_reloc(ELF64_R_TYPE(objs[i].relocs[r].info)))
                 nabs++;
 
     /* ---- Layout: [ehdr][phdr] text|rodata|got|tlsdesc|data|tdata|sv|rel|tls|bss --- */
@@ -1420,7 +1463,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     memcpy(eh->e_ident, ELFMAG, SELFMAG);
     eh->e_ident[EI_CLASS] = ELFCLASS64; eh->e_ident[EI_DATA] = ELFDATA2LSB;
     eh->e_ident[EI_VERSION] = EV_CURRENT;
-    eh->e_type = ET_DYN; eh->e_machine = EM_AARCH64; eh->e_version = EV_CURRENT;
+    /* e_machine follows the input object set (vms-8f5) — g_out_machine is set
+     * in parse_obj and validated there to be uniform across every input .o. */
+    if (g_out_machine != EM_AARCH64 && g_out_machine != EM_X86_64)
+        die("internal: no input machine recorded");
+    eh->e_type = ET_DYN; eh->e_machine = g_out_machine; eh->e_version = EV_CURRENT;
     eh->e_phoff = off_ph; eh->e_shoff = off_shdr;
     eh->e_ehsize = sizeof *eh; eh->e_phentsize = sizeof(Elf64_Phdr); eh->e_phnum = nph;
     eh->e_shentsize = sizeof(Elf64_Shdr); eh->e_shnum = nsec; eh->e_shstrndx = ix_str;
@@ -1559,7 +1606,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 int ti = find_tls(tls, ntls, nm);
                 if (ti < 0) die("internal: TLSDESC slot missing for symbol");
                 patch_tlsdesc(type, insn, site, tls[ti].va);
-            } else if (type == R_AARCH64_ABS64) {
+            } else if (is_abs64_reloc(type)) {
                 /* Pointer initializer (.rela.data): write S+A as a 64-bit
                  * image-relative address and record the slot in .vms$rel so
                  * the activator adds the load bias. A deferred external leaves

@@ -1457,6 +1457,32 @@ jobs:
               sh /src/src/imgact/test/run_multiobj_exec.sh
             '
 
+  # -----------------------------------------------------------------------
+  # Job: Multi-Object main() Executable Link + Activate — x86_64 (vms-206)
+  #
+  # x86_64 counterpart of multiobj-exec. Proves LINK.EXE's emit_shareable()
+  # synthesizes REAL x86_64 machine code, not the aarch64 words it silently
+  # reused before vms-206, for (1) the crt0 entry stub of a main()-based
+  # --executable and (2) the PLT stub + import-CALL routing for a cross-image
+  # R_X86_64_PLT32 call to a --use producer's universal. Runs natively (both
+  # the runner and the project's dev host are x86_64) — no docker, no QEMU,
+  # no emulation in the path under test: the real kernel ELF loader invokes
+  # IMGACT.EXE via PT_INTERP exactly as it would for any process.
+  # -----------------------------------------------------------------------
+  multiobj-exec-x86_64:
+    name: Multi-Object main() Executable Link + Activate — x86_64 (vms-206)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Link + activate a multi-object main() program through IMGACT.EXE (native x86_64)
+        run: |
+          export CC=gcc WORK=/tmp/multiobj-exec-x86_64
+          sh src/imgact/test/run_multiobj_exec_x86_64.sh
+
   exec-tls:
     name: Executable-Own TLS Link + Activate
     runs-on: ubuntu-latest

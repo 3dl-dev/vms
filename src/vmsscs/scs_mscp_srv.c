@@ -50,6 +50,11 @@ static uint32_t get_le32(const uint8_t *s)
            | ((uint32_t)s[3] << 24);
 }
 
+static uint16_t get_le16(const uint8_t *s)
+{
+    return (uint16_t)((uint16_t)s[0] | ((uint16_t)s[1] << 8));
+}
+
 /* ========================= server / unit lifecycle ======================== */
 
 int scs_mscp_srv_init(struct scs_mscp_srv *srv, uint64_t ctlr_id,
@@ -213,6 +218,33 @@ long scs_mscp_srv_read_blocks(struct scs_mscp_srv_unit *u, uint32_t lbn,
         if (n <= 0) {
             /* A short read is a real failure, not a partial success: the class
              * driver asked for whole blocks. */
+            return -1;
+        }
+        done += (size_t)n;
+    }
+    return (long)done;
+}
+
+/*
+ * scs_mscp_srv_write_blocks - the write-side mirror of read above. Added for
+ * vms-4e31 to prove the block-transfer WRITE path against a real backing
+ * store; does NOT change v1's WRITE policy -- see the header comment.
+ */
+long scs_mscp_srv_write_blocks(struct scs_mscp_srv_unit *u, uint32_t lbn,
+                               const uint8_t *data, uint32_t nblocks)
+{
+    if (u == NULL || data == NULL || !u->in_use || u->fd < 0 || nblocks == 0) {
+        return -1;
+    }
+    if ((uint64_t)lbn + (uint64_t)nblocks > (uint64_t)u->unit_size) {
+        return -1;
+    }
+    size_t want = (size_t)nblocks * (size_t)SCS_MSCP_BLOCK_SIZE;
+    off_t off = (off_t)lbn * (off_t)SCS_MSCP_BLOCK_SIZE;
+    size_t done = 0;
+    while (done < want) {
+        ssize_t n = pwrite(u->fd, data + done, want - done, off + (off_t)done);
+        if (n <= 0) {
             return -1;
         }
         done += (size_t)n;
@@ -763,4 +795,269 @@ long scs_mscp_srv_build_end_frame(const struct scs_mscp_params *p,
 
     memcpy(out + SCS_ENV_ETH_HDR_LEN + SCS_MSCP_BODY_OFF, body, body_len);
     return (long)frame_len;
+}
+
+/* ===================== SCA block data transfer (vms-4e31) ================= */
+/* See the "SCA BLOCK DATA TRANSFER" section of scs_mscp_srv.h for the full
+ * grounding, the field table and the two framing traps. Nothing here
+ * interprets the two UNGROUNDED header fields (+4/+6); every one of them is a
+ * caller-supplied value carried through unchanged. */
+
+void scs_mscp_srv_blk_build_hdr(uint8_t out[SCS_MSCP_BLK_HDR_LEN],
+                                const struct scs_mscp_blk_hdr *h)
+{
+    if (out == NULL) {
+        return;
+    }
+    memset(out, 0, SCS_MSCP_BLK_HDR_LEN);
+    if (h == NULL) {
+        return;
+    }
+    put_le32(out + SCS_MSCP_BLK_CONID, h->dest_conid);
+    put_le16(out + SCS_MSCP_BLK_F4, h->f4);
+    put_le16(out + SCS_MSCP_BLK_F6, h->f6);
+    put_le32(out + SCS_MSCP_BLK_REMAIN, h->bytes_remaining);
+    put_le32(out + SCS_MSCP_BLK_SRC_NAME, h->src_buf_name);
+    put_le32(out + SCS_MSCP_BLK_DST_OFF, h->dest_offset);
+    put_le32(out + SCS_MSCP_BLK_DST_NAME, h->dest_buf_name);
+    put_le32(out + SCS_MSCP_BLK_SRC_OFF, h->src_offset);
+}
+
+int scs_mscp_srv_blk_parse_hdr(const uint8_t hdr[SCS_MSCP_BLK_HDR_LEN],
+                               struct scs_mscp_blk_hdr *out)
+{
+    if (hdr == NULL || out == NULL) {
+        return -1;
+    }
+    out->dest_conid      = get_le32(hdr + SCS_MSCP_BLK_CONID);
+    out->f4              = get_le16(hdr + SCS_MSCP_BLK_F4);
+    out->f6              = get_le16(hdr + SCS_MSCP_BLK_F6);
+    out->bytes_remaining = get_le32(hdr + SCS_MSCP_BLK_REMAIN);
+    out->src_buf_name    = get_le32(hdr + SCS_MSCP_BLK_SRC_NAME);
+    out->dest_offset     = get_le32(hdr + SCS_MSCP_BLK_DST_OFF);
+    out->dest_buf_name   = get_le32(hdr + SCS_MSCP_BLK_DST_NAME);
+    out->src_offset      = get_le32(hdr + SCS_MSCP_BLK_SRC_OFF);
+    return 0;
+}
+
+int scs_mscp_srv_blk_parse_frame(const uint8_t *frame, size_t frame_len,
+                                 struct scs_mscp_srv_blk_view *out)
+{
+    size_t hdr_off;
+    size_t data_off;
+
+    if (frame == NULL || out == NULL) {
+        return -1;
+    }
+    hdr_off = (size_t)SCS_ENV_ETH_HDR_LEN + (size_t)SCS_MSCP_BLK_HDR_OFF;
+    if (frame_len < hdr_off + (size_t)SCS_MSCP_BLK_HDR_LEN) {
+        return -1;
+    }
+    if (scs_mscp_srv_blk_parse_hdr(frame + hdr_off, &out->hdr) != 0) {
+        return -1;
+    }
+    /* TRAP 2: request vs response is decided by DATA PRESENCE, not by
+     * anything in the (byte-identical) header. */
+    data_off = hdr_off + (size_t)SCS_MSCP_BLK_HDR_LEN;
+    if (frame_len > data_off) {
+        out->data = frame + data_off;
+        out->data_len = frame_len - data_off;
+    } else {
+        out->data = NULL;
+        out->data_len = 0;
+    }
+    return 0;
+}
+
+long scs_mscp_srv_build_block_frame(const struct scs_mscp_params *p,
+                                    const struct scs_mscp_blk_hdr *h,
+                                    const uint8_t *data, size_t data_len,
+                                    uint8_t *out, size_t out_len)
+{
+    size_t sca_len;
+    size_t frame_len;
+
+    if (p == NULL || h == NULL || out == NULL) {
+        return -1;
+    }
+    if (data_len > 0 && data == NULL) {
+        return -1;
+    }
+    sca_len = (size_t)SCS_MSCP_BLK_HDR_OFF + (size_t)SCS_MSCP_BLK_HDR_LEN
+              + data_len;
+    frame_len = (size_t)SCS_ENV_ETH_HDR_LEN + sca_len;
+    if (out_len < frame_len) {
+        return -1;
+    }
+
+    memset(out, 0, frame_len);
+
+    /* Ethernet header -- identical shape to scs_mscp_srv_build_end_frame(). */
+    memcpy(out + 0, p->dst_mac, 6);
+    memcpy(out + 6, p->src_mac, 6);
+    out[12] = 0x60;
+    out[13] = 0x07;
+
+    /* The SAME 42-byte PPD prefix every server emission in this file uses.
+     * A block-transfer message has NO SCS envelope past it -- the 28-byte
+     * block header written below occupies that slot instead (see the "SCA
+     * BLOCK DATA TRANSFER" comment in scs_mscp_srv.h for why that is exactly
+     * what makes it fail envelope conformance). */
+    memcpy(out + SCS_ENV_ETH_HDR_LEN, srv_sca_hdr, SCS_MSCP_BLK_HDR_OFF);
+
+    /* [0:2] DERIVED, never inherited -- same convention as the end frame. */
+    put_le16(out + SCS_ENV_ETH_HDR_LEN + 0, (uint16_t)(sca_len - 2));
+
+    /* Identity substitutions (SCA-content offsets + 14). */
+    memcpy(out + SCS_ENV_ETH_HDR_LEN + 2, p->peer_logical, 6);
+    memcpy(out + SCS_ENV_ETH_HDR_LEN + 10, p->src_logical, 6);
+
+    /* SCS sequenced-message counters, same layout as the end frame. */
+    put_le16(out + SCS_ENV_ETH_HDR_LEN + 18, p->recv_ack);
+    put_le16(out + SCS_ENV_ETH_HDR_LEN + 20, p->send_seq);
+    if (p->incarnation != 0) {
+        put_le16(out + SCS_ENV_ETH_HDR_LEN + 22, p->incarnation);
+    }
+    put_le16(out + SCS_ENV_ETH_HDR_LEN + 26, p->recv_ack);
+    put_le16(out + SCS_ENV_ETH_HDR_LEN + 30, p->send_seq);
+    put_le16(out + SCS_ENV_ETH_HDR_LEN + 34, p->recv_ack);
+
+    /* The 28-byte block-transfer header, deliberately NOT an SCS envelope. */
+    scs_mscp_srv_blk_build_hdr(out + SCS_ENV_ETH_HDR_LEN + SCS_MSCP_BLK_HDR_OFF,
+                               h);
+
+    if (data_len > 0) {
+        memcpy(out + SCS_ENV_ETH_HDR_LEN + SCS_MSCP_BLK_HDR_OFF
+                   + SCS_MSCP_BLK_HDR_LEN,
+               data, data_len);
+    }
+    return (long)frame_len;
+}
+
+long scs_mscp_srv_build_read_end_with_piggyback(
+    const struct scs_mscp_params *p, const uint8_t *end_body,
+    size_t end_body_len, const struct scs_mscp_blk_hdr *tail_hdr,
+    const uint8_t *tail_data, size_t tail_data_len, uint8_t *out,
+    size_t out_len)
+{
+    long n;
+    size_t tail_len;
+
+    n = scs_mscp_srv_build_end_frame(p, end_body, end_body_len, out, out_len);
+    if (n < 0) {
+        return -1;
+    }
+    if (tail_hdr == NULL) {
+        return n;
+    }
+    if (tail_data_len > 0 && tail_data == NULL) {
+        return -1;
+    }
+    tail_len = (size_t)SCS_MSCP_BLK_HDR_LEN + tail_data_len;
+    if ((size_t)n + tail_len > out_len) {
+        return -1;
+    }
+    /* TRAP 1: appended PAST what scs_mscp_srv_build_end_frame() already wrote
+     * as the SCS envelope's declared inner length -- deliberately NOT
+     * reflected in that length word. A real server's READ does exactly this
+     * with the final partial chunk. */
+    scs_mscp_srv_blk_build_hdr(out + n, tail_hdr);
+    if (tail_data_len > 0) {
+        memcpy(out + n + SCS_MSCP_BLK_HDR_LEN, tail_data, tail_data_len);
+    }
+    return n + (long)tail_len;
+}
+
+int scs_mscp_srv_parse_read_end_trailer(const uint8_t *frame, size_t frame_len,
+                                        size_t end_frame_len,
+                                        struct scs_mscp_srv_blk_view *out)
+{
+    size_t data_off;
+
+    if (frame == NULL || out == NULL) {
+        return -1;
+    }
+    /* TRAP 1's receive-side fix: bound by frame_len, the frame's REAL size --
+     * never by a value derived from the SCS envelope's declared inner length.
+     * See the caller-facing warning on this function in scs_mscp_srv.h. */
+    if (frame_len <= end_frame_len) {
+        memset(&out->hdr, 0, sizeof(out->hdr));
+        out->data = NULL;
+        out->data_len = 0;
+        return 0;
+    }
+    if (frame_len < end_frame_len + (size_t)SCS_MSCP_BLK_HDR_LEN) {
+        return -1;
+    }
+    if (scs_mscp_srv_blk_parse_hdr(frame + end_frame_len, &out->hdr) != 0) {
+        return -1;
+    }
+    data_off = end_frame_len + (size_t)SCS_MSCP_BLK_HDR_LEN;
+    if (frame_len > data_off) {
+        out->data = frame + data_off;
+        out->data_len = frame_len - data_off;
+    } else {
+        out->data = NULL;
+        out->data_len = 0;
+    }
+    return 0;
+}
+
+/* ------------- the reference transfer hook (design decision (4)) --------- */
+
+void scs_mscp_srv_blk_sink_init(struct scs_mscp_srv_blk_sink *sink,
+                                const struct scs_mscp_params *params,
+                                uint32_t bytes_total, uint8_t *out,
+                                size_t out_len)
+{
+    if (sink == NULL) {
+        return;
+    }
+    memset(sink, 0, sizeof(*sink));
+    if (params != NULL) {
+        sink->params = *params;
+    }
+    sink->bytes_total = bytes_total;
+    sink->out = out;
+    sink->out_len = out_len;
+}
+
+long scs_mscp_srv_blk_sink_xfer(void *ctx, const uint8_t buffer_desc[12],
+                                uint32_t lbn, const uint8_t *data, size_t len)
+{
+    struct scs_mscp_srv_blk_sink *s = (struct scs_mscp_srv_blk_sink *)ctx;
+    struct scs_mscp_blk_hdr h;
+    long n;
+
+    (void)lbn;
+    if (s == NULL || buffer_desc == NULL || data == NULL) {
+        return -1;
+    }
+    if (s->used > s->out_len) {
+        return -1;
+    }
+
+    /* Appendix D / docs/design-mscp-direction.md: the host buffer descriptor
+     * carried in the READ/WRITE command (SCS_MSCP_P_BUFF) is
+     * { u32 offset, u32 SCS buffer NAME, u32 SCS connection ID }. */
+    memset(&h, 0, sizeof(h));
+    h.dest_conid    = get_le32(buffer_desc + 8);
+    h.f4            = s->conn_const;               /* UNGROUNDED, passed through */
+    h.f6            = s->xfer_const;                /* UNGROUNDED, passed through */
+    /* Down-counting, INCLUDING this frame's own data -- see the field table. */
+    h.bytes_remaining = s->bytes_total - s->bytes_sent;
+    h.src_buf_name  = s->src_buf_name;
+    h.dest_offset   = get_le32(buffer_desc + 0) + s->bytes_sent;
+    h.dest_buf_name = get_le32(buffer_desc + 4);
+    h.src_offset    = s->bytes_sent;
+
+    n = scs_mscp_srv_build_block_frame(&s->params, &h, data, len,
+                                       s->out + s->used, s->out_len - s->used);
+    if (n < 0) {
+        return -1;
+    }
+    s->used += (size_t)n;
+    s->bytes_sent += (uint32_t)len;
+    s->frames_built++;
+    return (long)len;
 }

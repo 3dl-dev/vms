@@ -184,6 +184,52 @@ MUTANTS = [
      "    end_header(end, SCS_MSCP_HDR_LEN, cmd_ref, unit, 0u, 0u, status);",
      "    end_header(end, SCS_MSCP_HDR_LEN, cmd_ref, unit,\n"
      "               SCS_MSCP_OP_SET_CTLR_CHAR, 0u, status);"),
+
+    # ---- vms-4e31: SCA block data transfer, un-deferring vms-941 -----------
+    # TRAP 2 (WRITE's byte-identical request/response headers): the
+    # discriminator MUST be data presence, not the header.
+    ("TRAP2-block-frame-parse-ignores-data-presence-always-reports-none",
+     "srv.c",
+     "    data_off = hdr_off + (size_t)SCS_MSCP_BLK_HDR_LEN;\n"
+     "    if (frame_len > data_off) {\n"
+     "        out->data = frame + data_off;\n"
+     "        out->data_len = frame_len - data_off;\n"
+     "    } else {\n"
+     "        out->data = NULL;\n"
+     "        out->data_len = 0;\n"
+     "    }\n"
+     "    return 0;\n"
+     "}",
+     "    data_off = hdr_off + (size_t)SCS_MSCP_BLK_HDR_LEN;\n"
+     "    (void)data_off;\n"
+     "    out->data = NULL;\n"
+     "    out->data_len = 0;\n"
+     "    return 0;\n"
+     "}"),
+    # TRAP 1 (READ's piggybacked final chunk): the receive side must bound
+    # itself by the frame's REAL length, never the declared end-message
+    # length -- this mutant IS that bug, reintroduced.
+    ("TRAP1-end-trailer-parse-trusts-the-declared-length-not-the-real-one",
+     "srv.c",
+     "    if (frame_len <= end_frame_len) {",
+     "    if (end_frame_len <= end_frame_len) {"),
+    # The build side of TRAP 1: the piggyback header must carry the REAL
+    # tail_hdr fields (dest_conid, dest_offset, bytes_remaining, ...), not a
+    # zeroed placeholder -- a receiver correlating by buffer NAME would not
+    # know which buffer the trailing chunk belongs to.
+    ("TRAP1-piggyback-header-is-zeroed-instead-of-the-real-tail-header",
+     "srv.c",
+     "    scs_mscp_srv_blk_build_hdr(out + n, tail_hdr);",
+     "    scs_mscp_srv_blk_build_hdr(out + n, NULL);"),
+    # The kill switch: installing scs_mscp_srv_blk_sink_xfer must make a READ
+    # actually succeed -- if the down-counting field is wrong the sink itself
+    # still "succeeds" by this module's own status test, but the wire shape
+    # a real class driver depends on (last frame's remaining == its own
+    # length) breaks silently.
+    ("BLKSINK-bytes-remaining-does-not-count-down",
+     "srv.c",
+     "    h.bytes_remaining = s->bytes_total - s->bytes_sent;",
+     "    h.bytes_remaining = s->bytes_total;"),
 ]
 
 

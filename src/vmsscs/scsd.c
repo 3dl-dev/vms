@@ -7789,7 +7789,21 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
          * with an op-3 would be inventing a pairing the reference never
          * emits -- across 336 op-5 frames the reply to an op-4 is an op-5,
          * every time. Nothing follows it: the Con.ID pair never appears again
-         * (334 silent, 2 retransmits), so we owe the peer nothing more. */
+         * (334 silent, 2 retransmits), so we owe the peer nothing more.
+         *
+         * vms-754 (2026-08-06), NOT FIXED HERE -- flagged as a follow-up, out
+         * of scope for that item: "nothing follows it" is precisely the
+         * terminal-dialogue signature tools/cluster/scs_t45_measure.py found
+         * on EVERY MTYPE-4/5 exchange in the 47-capture lab-1 library (733/733
+         * terminal, 0 ever followed by application traffic), which is the
+         * REJECT_REQ/REJECT_RSP signature, not a bound connection that simply
+         * needs no more traffic -- see scs_dir.h's SCS_DIR_OP_ACCEPT entry.
+         * That means the branch below, when it fires against a REAL peer,
+         * marks ps->mscp_connected = 1 on a connection the peer actually
+         * REJECTED. Whether that is part of the vms-abd refusal is an open,
+         * separate question -- this is a wire-behaviour change to the
+         * server-first MSCP accept path and needs its own item, not a decode
+         * fix. */
         if (rconid == OVMX_MSCP_CONID && lconid != 0 &&
             dop == SCS_DIR_OP_ACCEPT) {
             struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);

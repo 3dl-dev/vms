@@ -1070,6 +1070,58 @@ below content-relative per the §0 erratum):
   (vms-1d2). Decisive experiment and full observations:
   `docs/design-mscp-direction.md` §1.3.
 
+**(1h) `4`/`5` COLLIDED WITH `src/vmsscs/scs_dir.c`'S OWN NAMESPACE — RESOLVED
+IN FAVOUR OF THIS SECTION (`vms-754`, 2026-08-06).** REFUTED, `vms-754`:
+`src/vmsscs/scs_dir.c` had read `[46:48]`==4/5 as an MSCP connect-ACCEPT/
+CONFIRM pair (`SCS_DIR_OP_ACCEPT`/`SCS_DIR_OP_MSCP_CONFIRM`, `vms-760`). Both
+readings shared one namespace and could not both be right.
+
+`tools/cluster/scs_t45_measure.py` (`ctest -R scs_t45_figures`) is the
+decisive test: an ACCEPT that binds a working connection must be followed, on
+that SAME Con.ID pair, by application traffic (`MTYPE` `10`); a REJECT cannot
+be, because no connection is left to carry any. Over the 47-capture lab-1
+library:
+
+| MTYPE | frames | followed by MTYPE 10 | terminal |
+|---|---|---|---|
+| `2` ACCEPT_REQ (positive control, undisputed) | 394 | 388 | 6 |
+| `4` (disputed) | 733 | 0 | 733 |
+
+Zero of 733 `4` dialogues are EVER followed by application traffic, against
+388 of 394 for the message nobody disputes is a real accept. (Of the 733, 453
+are VMS-origin — the same figure `scs_reason_measure.py`'s independent
+REJECT_REQ census reports over the identical 47-pcap library restricted to
+VMS sources — and 280 are OVMX-sourced.)
+
+The exact frame `scs_dir.c` cited as its own grounding
+(`af2-firsttimer-established-20260728.pcap`, frame 2584, rel~143.758) makes
+the case on its own: read back with no filtering, it is VAX2 (real HW MAC
+`08:00:2b:78:56:b9`) sending to VAX1 (logical LAVC `aa:00:04:00:01:04`) — a
+REAL VAX addressing ANOTHER REAL VAX, and every source MAC in that entire
+capture is one of those two, so there is no OVMX participant in it at all.
+"Server-first, OVMX accepts a member's MSCP connect" cannot be what a
+two-real-VAX capture shows.
+
+The SAME capture also contains a separate, more legible exhibit: a different
+Con.ID family runs NINE consecutive `4`/`5` exchanges between the same two
+nodes at ~10 s intervals with a STRICTLY INCREASING Con.ID (one carries an
+explicit `0x7b` retransmit marker), and a TENTH attempt switches message type
+entirely — to `2`/`3` — and succeeds, its Con.ID pair going on to carry the
+94-content MSCP command class. That is retry-until-accepted with the connect
+REFUSED nine times running, not nine acceptances of the same connection
+followed by a tenth, differently-typed acceptance.
+
+**Conclusion: this section's reading stands. `4` = REJECT_REQ, `5` =
+REJECT_RSP.** `src/vmsscs/scs_dir.c`'s `SCS_DIR_OP_ACCEPT`/
+`SCS_DIR_OP_MSCP_CONFIRM` naming was a misattribution, corrected there and in
+`src/vmsscs/include/scs_env.h` and `src/vmsscs/include/scs_dir.h`. **NOT
+settled by this decode:** `src/vmsscs/scsd.c`'s server-first MSCP accept path
+still builds and consumes these bytes believing they mean ACCEPT/CONFIRM —
+i.e. when a real peer answers OVMX's MSCP$DISK connect with what is actually a
+REJECT_REQ, `scsd.c` currently marks the connection bound anyway. Whether that
+bears on `vms-abd`'s refusal is an open question; fixing the wire behaviour is
+a separate item, out of scope here.
+
 **(1c) CREDIT-FIELD MEASUREMENT — one candidate confirmed structurally, one
 WEAKENED, one REFUTED (`vms-54f`, 2026-08-05).** *VAXcluster Principles*
 p. 4-68 (the SSP section) enumerates **four** SCS message types — "datagrams,

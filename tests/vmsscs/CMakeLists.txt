@@ -1175,3 +1175,24 @@ set_tests_properties(scs_flowcush_figures PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 120
 )
+
+# vms-291 (MSCP epic Phase D) - THE MSCP DISK SERVER RESPONDER.
+# The byte-exact half of this test is the point: real captured VAX MSCP *server*
+# end messages exist in our corpus (86-content 0x84 SCC END, 954 frames, pairing
+# exactly with 954 SCC commands; 110-content 0x83 GUS END, 18855 frames), and
+# the builder is required to reproduce one byte for byte -- the same standard
+# Phase B held its command builders to. The rest covers the state machine
+# (Controller-Online gating, the MD.NXU walk and its Unit-Offline terminator,
+# ONLINE/Already-Online), the real backing store, and the refusals -- above all
+# that a READ which cannot move its data reports Controller Error rather than a
+# Success it cannot back up (INV-6).
+add_executable(test_scs_mscp_srv test_scs_mscp_srv.c)
+target_include_directories(test_scs_mscp_srv PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+target_link_libraries(test_scs_mscp_srv PRIVATE vmsscs_mscp_srv vmsscs_mscp)
+add_test(NAME vmsscs_mscp_srv_unit COMMAND test_scs_mscp_srv)
+set_tests_properties(vmsscs_mscp_srv_unit PROPERTIES
+    LABELS "unit;scs;cluster;mscp"
+    TIMEOUT 30
+)

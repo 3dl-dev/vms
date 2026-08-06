@@ -322,6 +322,19 @@ target_include_directories(vmsscs_mscp PUBLIC
 # the inner length / format word / MTYPE / credit / Con.ID-pair stores.
 target_link_libraries(vmsscs_mscp PUBLIC vmsscs_env)
 
+# vms-291 (MSCP epic Phase D) - THE OTHER HALF: the MSCP disk SERVER responder.
+# vmsscs_mscp builds the commands OVMX sends as a disk client; this answers the
+# commands a real VAX's disk class driver sends to OVMX, so a real VAX can MOUNT
+# a disk OVMX serves. End-message layouts are AA-L619A-TK Table A-7 (public doc,
+# Rule 8) and the SCC/GUS builders are proven byte-exact against real captured
+# VAX server end messages (86-content 0x84 and 110-content 0x83 classes). Plain
+# POSIX + stdint; pread() on a raw block image is the whole backing store.
+add_library(vmsscs_mscp_srv STATIC scs_mscp_srv.c)
+target_include_directories(vmsscs_mscp_srv PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(vmsscs_mscp_srv PUBLIC vmsscs_mscp vmsscs_env)
+
 # vms-7c0 - THE RECEIVE-SIDE SCS HEADER. One pure function: decode the sec
 # 4(h)(1b) envelope, classify the p. 4-13 MTYPE, hand out the destination and
 # source Con.IDs so scsd.c can do the p. 2-29 CDL lookup instead of comparing a

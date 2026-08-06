@@ -122,7 +122,19 @@ int scs_mscp_build_body(const struct scs_mscp_cmd *c, uint8_t *body,
     /* sec 5.1 / Table A-1: OP.END makes a message an END MESSAGE. This module
      * is the disk CLIENT -- it sends commands. Answering commands is Phase D
      * (vms-291) and refusing here is what keeps that boundary honest rather
-     * than letting a caller emit a malformed half-response. */
+     * than letting a caller emit a malformed half-response.
+     *
+     * PHASE D LANDED AND THIS REFUSAL DELIBERATELY STAYS. vms-291 builds end
+     * messages in scs_mscp_srv.c with its own builder rather than opening this
+     * seam, because a command and an end message DO NOT SHARE A LAYOUT beyond
+     * the 12-byte header: the parameter areas come from two different tables
+     * (A-6 for commands, A-7 for end messages) and disagree field by field --
+     * P.MOD vs P.STS at body[10], P.HTMO at 16 in an SCC command against
+     * P.CTMO at 16 in its end message, and the whole GET UNIT STATUS
+     * characteristics block that has no command-side counterpart at all. One
+     * builder switching on OP.END would have to carry both tables and would
+     * make the client able to emit a response by accident. Two builders, one
+     * table each. */
     if ((c->opcode & SCS_MSCP_END_BIT) != 0) {
         return -1;
     }

@@ -328,9 +328,140 @@ mounts a served disk.
 keeps the worktree-760 empirical behavior (answer the op8 handshake, expect no
 ack for op9) and does not name the messages in the spec.
 
-**Phase D — MSCP disk-server posture (GATED, Baron's call — rd gate raised on
-vms-54f).** Recommendation: **minimal honest responder, flag stays OFF by
-default.** OVMX currently accepts the member-opened MSCP$DISK connect and then
+**Phase D — MSCP disk server. RULED 2026-08-06 (vms-34b): BUILD THE FULL
+SERVER, superseding this section's own recommendation below.** The operator
+overrode the "minimal honest responder" recommendation; the done condition is a
+real VAX running MOUNT against an OVMX-served unit and reading files on it.
+
+*PART 1 LANDED as `vms-291`* — `src/vmsscs/scs_mscp_srv.{h,c}`, the responder:
+SET CONTROLLER CHARACTERISTICS, GET UNIT STATUS (with the MD.NXU walk and its
+Unit-Offline terminator), ONLINE, READ and WRITE handling; a raw block image as
+the backing store; the sec 3.4 Controller-Online gate; UQB/HQB analogues only
+(no HULB — nothing to load-balance against). The SCC end message is built from
+fields and reproduces a **real captured VAX server answer byte for byte**,
+which is possible because the 86-content MTYPE-10 class turns out to be the SCC
+END and its 954 frames pair exactly with 954 SCC commands in the same corpus.
+Its parameter area is constant over all 954: `P.CNTF` `0xa004`, `P.CTMO` `20`,
+and `0x0547` in the word Table A-7 calls reserved — none of the three explained
+by AA-L619A-TK, all three recorded as observations rather than named, and
+`P.CNTF` notably **not** an echo of what the class driver requested.
+
+Two design decisions worth carrying forward. **The backing store is a raw block
+image and OVMX's `vmsfs` is deliberately not used**: MSCP is a block protocol
+and `vmsfs_ondisk.h` states it is not byte-compatible with real ODS-2, so a
+served volume's *content* must be a genuine VMS-made ODS-2 volume while OVMX
+serves its blocks verbatim — which keeps Phase D on the protocol and leaves the
+on-disk format story untouched. **v1 is read-only and says so on the wire**
+(`UF.WPS` advertised; WRITE answered Write Protected `0x1006`).
+
+**WHAT PART 1 DOES NOT DO.** Block data transfer is still unimplemented, so a
+READ with no transfer hook returns Controller Error and a zero byte count
+rather than a Success it cannot back up. `vms-941` (block data transfer) and
+`vms-61b2` (LISTEN registration) both stay open behind that — registering
+`MSCP$DISK` before the responder can honour a mount is the exact facade
+`vms-61b2` refused to build.
+
+**THE TWO WIRE-FIDELITY GAPS ARE CLOSED — BY MEASUREMENT, NOT BY THE BOOK.**
+Part 1's first draft carried two gaps that blocked a real MOUNT and that
+**neither the documentation nor the joiner-side corpus could close**: (a) the
+GUS end message the builder emitted was 106-content where every real VAX emits
+110, and the four undecoded bytes past Table A-7 had to, per §5's standing
+instruction, be *copied from an observation rather than composed*; (b) `P.UNFL`
+bit 15 is set on all 404 valid-unit frames and Table A-5 defines no bit 15.
+Both needed **a lab capture of a real VAX serving a disk to another VAX**,
+which the stock lab-2 configuration cannot produce — both nodes attach the same
+disk images and therefore never generate MSCP serving traffic between
+themselves. **That capture was taken inside part 1** (next section), and it
+settled both: the GUS end message is **110-content, 52 bytes**, with
+`body[48:50]` carrying the observed `0x006e` (copied, not composed) and
+`body[50:52]` left zero because a real server demonstrably leaves it as stale
+garbage; and `P.UNFL` bit 15 is **host-originated** — the class driver's ONLINE
+*command* carries `0x8000` and the server echoes it, which settles it as a
+design question without decoding its meaning. The same capture caught a third
+length the book had also not given away: **WRITE end messages are 36 bytes, not
+READ's 32**, which part 1 had assumed equal. All of these corrections are in
+`scs_mscp_srv.c`, are asserted by `test_scs_mscp_srv.c`, and are held there by
+the `scs_mscp_srv_mutants` battery.
+
+### Phase D part 1's lab capture — SCA block data transfer, DECODED
+
+**A real VAX serving a disk to another real VAX was captured for the first
+time** (lab-2 `vaxlab-9`, 2026-08-06). VAX2 ran `MOUNT` against a unit VAX1
+served and read a marker file back. Host-only artifacts, never in git:
+
+| path under `/data/training/vax/k8s-labs/vaxlab-9/logs/` | what |
+|---|---|
+| `vms291-mount-A.pcap` | the MOUNT, TYPE of the marker file, DIRECTORY, DUMP |
+| `vms291-control-B.pcap` | **negative control** — MOUNT of a nonexistent unit |
+| `vms291-boot-C.pcap` | cold vax2 boot → rejoin → SCC → enumeration → MOUNT |
+
+The control is what makes the mount capture attributable: with the volume
+dismounted and `MOUNT` aimed at a nonexistent unit it carries **zero** READ,
+**zero** WRITE, **zero** block-transfer frames and zero marker bytes.
+
+**The stock lab-2 config cannot produce this** — both nodes attach the same
+disk images, so they never serve to each other. The asymmetry was made by
+giving vax1 an `rq2` RA81 on a new `d2.dsk` and disabling `rq2`/`rq3` on vax2.
+`MSCP_LOAD=1` and `MSCP_SERVE_ALL=1` were already set in the golden image.
+
+**A block-transfer message is a 28-byte header followed by N data bytes**, and
+it deliberately FAILS the SCS envelope conformance test (`content[44:46] ==
+0x0004`) that the command/end class passes:
+
+| offset | size | field |
+|---|---|---|
+| +0 | 4 | destination connection ID (same value the MSCP envelope carries) |
+| +4 | 2 | constant per connection (9 on one, 13 on another). **NOT a message type** |
+| +6 | 2 | constant across all frames of one transfer; increments between transfers |
+| +8 | 4 | **bytes remaining in this transfer**, including this frame's data (counts *down*) |
+| +12 | 4 | source buffer name |
+| +16 | 4 | destination offset within the destination buffer |
+| +20 | 4 | destination buffer name |
+| +24 | 4 | source offset |
+| +28 | N | the data |
+
+**The MSCP buffer descriptor** (Table A-6 offset 16, 12 bytes) is
+`{ u32 offset, u32 SCS buffer NAME, u32 SCS connection ID }`. The name in the
+READ/WRITE command is exactly the name that appears in the block-transfer
+frames — that is the correlation, and it is the named-buffer mechanism
+*VAXcluster Principles* pp. 2-32..2-41 describes without giving bytes.
+
+**READ** streams standalone block frames server→client and **piggybacks the
+final partial chunk into the same Ethernet frame as the MSCP end message**; the
+SCS inner length declares only the 32-byte end message and everything past it
+is a second message. Observed READ-END SCA contents 118/194/448/630/1142 all
+declare MSCP length 32. **WRITE** is a two-frame request/response whose two
+28-byte headers are *byte-identical* — only the presence of data distinguishes
+them.
+
+**Mount-verify ordering, confirmed from a cold node:** `SCC → SCC-END` ×2 at
+connection setup → `GUS` walk with MD.NXU terminated by status `0x0003` → ~20 s
+periodic `GUS` polls → at MOUNT: `ONLINE → ONLINE-END → GUS → GUS-END → READ
+LBN 1 (home block) → READ LBN 0x40a → READ/WRITE of the INDEXF/BITMAP extent`.
+
+**End-message lengths measured:** SCC 28, ONLINE 44, READ 32, WRITE 36, GUS 52.
+Phase D part 1 had three right from Table A-7 alone and **two wrong** — GUS
+(48) and WRITE (assumed equal to READ) — both corrected.
+
+**Two decode targets did NOT close.** `GUS body[48:50]` is `0x006e` even on an
+RA81 with different geometry, so length-echo vs plain-constant remains
+undecidable; what the capture *did* show is that the field is written
+deliberately (invalid-unit replies carry visible stale garbage in the
+surrounding tail while `[48:50]` still reads `0x006e`), which kills the
+"all padding" reading. And `P.UNFL` bit 15 turns out to be **host-originated** —
+the class driver's ONLINE *command* carries `0x8000` and the server echoes it —
+which settles it as a design question without decoding its meaning.
+
+**Still ungrounded, do not build on:** the block header's `+4` and `+6` fields;
+the SCC controller-flags bits 15/13/11/2; whether credit/flow control interacts
+with block transfers. Also: the connection carrying 190-content frames matched
+MSCP opcodes **by byte collision only** and is NOT MSCP — do not feed it to an
+MSCP parser.
+
+*The superseded recommendation is preserved below for the record.*
+
+~~Recommendation: **minimal honest responder, flag stays OFF by
+default.**~~ OVMX currently accepts the member-opened MSCP$DISK connect and then
 cannot serve a single command on it — an accepted connection that black-holes
 commands is exactly the dishonest-success shape INV-6 exists to kill, one
 layer up. The minimal responder answers SCC with a well-formed end message and

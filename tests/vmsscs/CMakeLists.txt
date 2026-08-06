@@ -1175,3 +1175,68 @@ set_tests_properties(scs_flowcush_figures PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 120
 )
+
+# vms-291 (MSCP epic Phase D) - THE MSCP DISK SERVER RESPONDER.
+# The byte-exact half of this test is the point: real captured VAX MSCP *server*
+# end messages exist in our corpus (86-content 0x84 SCC END, 954 frames, pairing
+# exactly with 954 SCC commands; 110-content 0x83 GUS END, 18855 frames), and
+# the builder is required to reproduce one byte for byte -- the same standard
+# Phase B held its command builders to. The rest covers the state machine
+# (Controller-Online gating, the MD.NXU walk and its Unit-Offline terminator,
+# ONLINE/Already-Online), the real backing store, and the refusals -- above all
+# that a READ which cannot move its data reports Controller Error rather than a
+# Success it cannot back up (INV-6).
+add_executable(test_scs_mscp_srv test_scs_mscp_srv.c)
+target_include_directories(test_scs_mscp_srv PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+target_link_libraries(test_scs_mscp_srv PRIVATE vmsscs_mscp_srv vmsscs_mscp)
+add_test(NAME vmsscs_mscp_srv_unit COMMAND test_scs_mscp_srv)
+set_tests_properties(vmsscs_mscp_srv_unit PROPERTIES
+    LABELS "unit;scs;cluster;mscp"
+    TIMEOUT 30
+)
+
+# vms-291 - THE MUTATION BATTERY FOR THE MSCP DISK SERVER RESPONDER.
+#
+# WHY IT EXISTS, in one fact: the three end-message LENGTHS this module gets
+# right today were WRONG AND GREEN before the vms-291 serving capture. GUS was
+# built at Table A-7's 48 where every real VAX emits 52, and WRITE was assumed
+# equal to READ's 32 where a real server declares 36 -- and vmsscs_mscp_srv_unit
+# passed at both values, because a test that only checks a builder against the
+# constant that built it is self-consistent at any constant. This battery is
+# what turns those assertions into measurements: it puts each length BACK to its
+# pre-capture value, rebuilds, and requires the C test to go NON-ZERO.
+#
+# The two arms that matter most are the two the module would be dangerous
+# without. (a) THE INV-6 BOUNDARY: block data transfer is unimplemented
+# (rd vms-941), so a READ with no transfer hook must answer Controller Error
+# with a zero byte count -- a silent fake success there is the exact bug class
+# CLAUDE.md Rule 9 forbids, and it is one that looks like a green build.
+# (b) THE sec 3.4 CONTROLLER-ONLINE GATE, without which a stray frame on a
+# half-open connection can mount a volume.
+#
+# It found a real survivor on first run: the `!u->online` guard on READ could be
+# DELETED OUTRIGHT with every other assertion in test_scs_mscp_srv.c still
+# green. That guard is now covered by an arm of its own (the READ-BEFORE-ONLINE
+# block), which is the fix -- the mutant was not dropped.
+#
+# The mutant count and the kill count are PRINTED by the script and deliberately
+# not restated here (the vms-6b3 precedent: a second copy of a figure is how a
+# coverage claim drifts). It needs a C compiler, which is why CMAKE_C_COMPILER
+# is passed through: the gate must run under whatever toolchain configured the
+# tree, musl-gcc included. Registered unconditionally.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_mscp_srv_mutants
+             COMMAND ${CMAKE_COMMAND} -E env OVMX_CC=${CMAKE_C_COMPILER}
+                     ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_mscp_srv_mutants.py)
+else()
+    add_test(NAME scs_mscp_srv_mutants
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_mscp_srv_mutants_no_python3.cmake)
+endif()
+set_tests_properties(scs_mscp_srv_mutants PROPERTIES
+    LABELS "unit;scs;cluster;mscp"
+    TIMEOUT 600
+)

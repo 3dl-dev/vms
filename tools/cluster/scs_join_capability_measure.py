@@ -817,6 +817,16 @@ def main():
     results, _covered = rederive(args.captures)
     fails = [label for ok, label in results if not ok]
 
+    # vms-992: `ck` below is main()'s OWN failure recorder, appending
+    # straight to `fails` -- it is NOT rederive()'s `ck` closure (that one
+    # is scoped inside rederive() and appends to its own local `results`,
+    # and goes out of scope the moment rederive() returns). Before this fix
+    # every `ck(...)` call past this point raised NameError -- main() had
+    # never actually run to completion on either side of vms-beb's merge.
+    def ck(cond, msg):
+        if not cond:
+            fails.append(msg)
+
     # --- vms-449: THE REJOIN BRACKET, checked figure by figure ---
     # The shape check runs on EVERY host; only the figure re-derivation needs
     # the captures.

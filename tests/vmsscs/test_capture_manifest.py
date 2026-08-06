@@ -34,12 +34,21 @@ with the right name is exactly as good a test subject as the real pcap.
         half (a foreign file sitting next to correctly-named ones must still
         red).
     (5) WIRING: every one of the five tools vms-beb names actually imports
-        and calls into capture_manifest -- a manifest nobody reads is not a
-        fence, it is a doc comment (the same defect class the vms-6b3 gate
-        was rejected for: a check that cannot fail).
+        AND EXECUTES capture_manifest's gate as its real entry point, not
+        merely a source-substring the tool happens to contain. Each tool is
+        run as a subprocess: once against a fixture directory holding no
+        capture at all (must NOT trip the gate) and once against a fixture
+        holding one capture the manifest has never heard of (MUST trip the
+        gate, by name). A grep for `capture_manifest.check_named(` cannot
+        fail the way vms-992 failed -- MANIFEST silently missing 15 real
+        lab-2 captures left every one of these tools' actual runs refusing,
+        while the grep (and the two tests that entered via rederive()
+        instead of main()) stayed green throughout. This subprocess pair
+        is the check that CAN fail that way.
 """
 import glob
 import os
+import subprocess
 import sys
 import tempfile
 
@@ -203,9 +212,14 @@ with tempfile.TemporaryDirectory(prefix="capture_manifest_named.") as tmp:
               "check_named()'s directory audit did not name the foreign file")
 
 # ===========================================================================
-# 5. WIRING -- the five tools vms-beb names must actually call into this
-#    module, not merely have it exist unused beside them.
+# 5. WIRING -- the five tools vms-beb names must actually EXECUTE the
+#    manifest gate as part of their real entry point (main(), via
+#    subprocess), not merely import capture_manifest and never reach the
+#    call. A source-substring grep is satisfied by dead code; this is not.
 # ===========================================================================
+# rel path -> the call site's own source-substring, kept as a cheap first
+# assertion (a missing import/call is a clearer failure than a subprocess
+# traceback), PLUS now actually run below.
 WIRED = {
     "tools/scs_connect_data_measure.py": "capture_manifest.check_paths(",
     "tools/cluster/scs_disc_measure.py": "capture_manifest.check_paths(",
@@ -224,6 +238,45 @@ for rel, wiring in WIRED.items():
     check(wiring in src,
           "%s imports capture_manifest but never calls %s -- a manifest "
           "nobody calls is not a fence" % (rel, wiring))
+
+UNKNOWN_NAME = "unknown-capture-not-in-manifest.pcap"
+
+for rel in WIRED:
+    path = os.path.join(ROOT, rel)
+    if not os.path.exists(path):
+        continue
+
+    # (a) POSITIVE CONTROL: an empty --captures directory must run past the
+    # gate untouched. If this trips, the gate (or the tool's own argument
+    # handling around it) is broken independent of any manifest content.
+    with tempfile.TemporaryDirectory(prefix="wiring_clean.") as tmp:
+        proc = subprocess.run(
+            [sys.executable, path, "--captures", tmp, "--print"],
+            capture_output=True, text=True, timeout=60)
+        out = proc.stdout + proc.stderr
+        check("capture manifest disagreement" not in out,
+              "%s refused a --captures directory holding no capture at "
+              "all -- output:\n%s" % (rel, out))
+
+    # (b) THE vms-992 REPRODUCTION: a capture physically present in
+    # --captures that the checked-in MANIFEST has never heard of MUST make
+    # the tool's actual run refuse, by name. This is the one grep could
+    # never fail: vms-992's MANIFEST omitted 15 real lab-2 captures and
+    # every one of these five tools' real runs was already refusing before
+    # this test could have caught it -- the grep, and the two callers that
+    # enter via rederive() rather than main(), all stayed green.
+    with tempfile.TemporaryDirectory(prefix="wiring_dirty.") as tmp:
+        touch(os.path.join(tmp, UNKNOWN_NAME))
+        proc = subprocess.run(
+            [sys.executable, path, "--captures", tmp, "--print"],
+            capture_output=True, text=True, timeout=60)
+        out = proc.stdout + proc.stderr
+        check(proc.returncode != 0,
+              "%s exited 0 with an unmanifested capture sitting in "
+              "--captures -- the manifest gate did not actually run" % rel)
+        check("capture manifest disagreement" in out and UNKNOWN_NAME in out,
+              "%s did not name the unmanifested capture when it refused -- "
+              "output:\n%s" % (rel, out))
 
 print("%s: %d checks, %d failure(s)" % ("FAIL" if failures else "PASS",
                                         checks, len(failures)))

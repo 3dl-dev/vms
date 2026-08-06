@@ -905,9 +905,12 @@ jobs:
   # success path (activated program prints PASS, exits 0) and the failure
   # path (missing shareable image -> %IMGACT-F-IMGNOTFND, nonzero exit).
   #
-  # IMGACT.EXE is aarch64-only until bead vms-913.11 (x86_64). GitHub runners
-  # are x86_64, so the harness runs under arm64 emulation via binfmt/QEMU.
-  # This is a hard gate (rule 10): a broken activator fails the build.
+  # This job covers the aarch64 backend specifically (the x86_64 backend,
+  # bead vms-913.11, has its own native-runner counterpart: Job 9b
+  # imgact-x86_64 below, plus the full boot-to-login proof in uat-session).
+  # GitHub runners are x86_64, so this aarch64 harness runs under arm64
+  # emulation via binfmt/QEMU. This is a hard gate (rule 10): a broken
+  # activator fails the build.
   # -----------------------------------------------------------------------
   imgact-proof:
     name: IMGACT.EXE Activation Proof (musl)
@@ -941,8 +944,10 @@ jobs:
   # build the whole tree with -DOVMX_IMGACT=ON and assert (via readelf) that
   # shareable images carry VMS SONAMEs + DT_HASH, executables carry
   # PT_INTERP=IMGACT.EXE + DT_HASH, STARTUP.EXE/IMGACT.EXE stay static, and
-  # nothing uses GNU_HASH. aarch64-only until bead vms-913.11; runs under
-  # arm64 emulation on the x86_64 runner.
+  # nothing uses GNU_HASH. This job covers the aarch64 backend; the x86_64
+  # counterpart (bead vms-913.11) is Job 9b (imgact-x86_64) below, which
+  # runs natively with no emulation. This job runs under arm64 emulation
+  # on the x86_64 runner.
   # -----------------------------------------------------------------------
   imgact-build-mode:
     name: OVMX_IMGACT Build Mode (musl)

@@ -144,6 +144,31 @@ def scan_citations(root):
     return cites
 
 
+# rd's own board is nostr-backed and, per CLAUDE.md, is written to concurrently
+# by sibling swarm sessions while this script runs. MEASURED (vms-ce0, from
+# vms-371's run on 2026-08-05): the first ctest invocation of
+# rd_citations_fresh failed with an `rd list --json` / `rd show --json` call
+# reporting a transient failure, and an immediate re-run on the SAME tree,
+# with no changes, passed. That is the signature of a race against a
+# concurrent write, not a real defect in the tree being checked -- and Rule 8
+# forbids papering over it by retry-wrapping the ctest invocation itself. The
+# retry belongs HERE, at the data-fetch layer, where it can be scoped to
+# genuinely transient failures and logged, so a PERMANENT failure (rd absent,
+# a real parse error, a genuinely-nonexistent id) still fails loud on the
+# first attempt path that matters.
+RD_RETRY_ATTEMPTS = 4
+RD_RETRY_BASE_DELAY = 0.5
+
+# The one rd error shape that is a DEFINITIVE, non-transient answer rather
+# than a possible race: rd itself says the id does not exist in its
+# projection. MEASURED: `rd show <bogus-id> --json` returns rc=1 with this
+# exact stderr text. Retrying that would not fix anything -- there is no
+# write in flight that will ever make a nonexistent id start existing -- so
+# this one shape short-circuits the retry loop instead of burning 4 attempts
+# and ~4s to reconfirm the same permanent answer.
+RD_NOT_FOUND_MARKER = "not found in nostr projection"
+
+
 def rd_json(args, cwd):
     """Run `rd <args> --json` WITH cwd INSIDE THE TREE. Returns (rc, parsed).
 
@@ -157,19 +182,51 @@ def rd_json(args, cwd):
     had nothing to do with the ledger. A wrong answer with rc=0 is the worst
     shape available, so every rd call here is pinned to the tree being scanned,
     and main() additionally refuses an empty open set.
+
+    RETRY (vms-ce0). A non-zero rc that is NOT the definitive "not found"
+    shape above is treated as a possibly-transient glitch -- a relay hiccup,
+    a projection lag under a concurrent write from a sibling session -- and
+    retried up to RD_RETRY_ATTEMPTS times with exponential backoff, logging
+    every attempt (including the exact stderr) on this script's own stderr so
+    the freshness test's captured gen.err carries the evidence rather than
+    hiding it. Only after every attempt is exhausted does this function give
+    up and return the last failure to the caller.
     """
-    try:
-        p = subprocess.run(["rd"] + args + ["--json"],
-                           capture_output=True, text=True, cwd=cwd)
-    except FileNotFoundError:
-        die("rd is not on PATH. This script must run on a host that has rd; "
-            "that is the whole reason its output is committed.")
-    if p.returncode != 0:
-        return p.returncode, None
-    try:
-        return 0, json.loads(p.stdout)
-    except ValueError as e:
-        die("rd %s --json did not return JSON: %s" % (" ".join(args), e))
+    last_rc, last_stderr = None, ""
+    for attempt in range(1, RD_RETRY_ATTEMPTS + 1):
+        try:
+            p = subprocess.run(["rd"] + args + ["--json"],
+                               capture_output=True, text=True, cwd=cwd)
+        except FileNotFoundError:
+            die("rd is not on PATH. This script must run on a host that has rd; "
+                "that is the whole reason its output is committed.")
+        if p.returncode == 0:
+            try:
+                return 0, json.loads(p.stdout)
+            except ValueError as e:
+                die("rd %s --json did not return JSON: %s" % (" ".join(args), e))
+        last_rc = p.returncode
+        last_stderr = (p.stderr or "").strip()
+        if RD_NOT_FOUND_MARKER in last_stderr:
+            # Definitive, not transient: no amount of retrying makes an id
+            # that rd says does not exist start existing.
+            return p.returncode, None
+        if attempt < RD_RETRY_ATTEMPTS:
+            delay = RD_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            sys.stderr.write(
+                "gen_rd_citations: rd %s --json failed (rc=%d) on attempt "
+                "%d/%d: %s -- retrying in %.1fs (treating as a possible "
+                "transient race against a concurrent rd write, per Rule 8: "
+                "retried at the data layer, not by re-running this script)\n"
+                % (" ".join(args), p.returncode, attempt, RD_RETRY_ATTEMPTS,
+                   last_stderr or "(no stderr)", delay))
+            time.sleep(delay)
+    sys.stderr.write(
+        "gen_rd_citations: rd %s --json failed on all %d attempt(s), last "
+        "rc=%d: %s\n"
+        % (" ".join(args), RD_RETRY_ATTEMPTS, last_rc,
+           last_stderr or "(no stderr)"))
+    return last_rc, None
 
 
 def clean_title(t):
@@ -213,22 +270,27 @@ def check_self_consistent(rows, closed, absent):
                 "does not appear there is invisible to it." % cid)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--root", default=None)
-    ap.add_argument("--out", default=None,
-                    help="output path, or - for stdout")
-    args = ap.parse_args()
+# How many times to re-fetch `rd list` when a single read looks like the
+# vms-10c shape (id absent from `rd list`, but `rd show` says it is alive)
+# before concluding that is really what it is rather than a projection race
+# against a concurrent write finishing between the two calls (vms-ce0).
+RD_LIST_RECHECK_ATTEMPTS = 3
+RD_LIST_RECHECK_DELAY = 1.0
 
-    root = args.root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    root = os.path.abspath(root)
 
-    cites = scan_citations(root)
+def fetch_open_status(root):
+    """`rd list --json`, resolved to {id: (status, title)}. Dies on a bad read.
 
+    Pulled out of main() so the vms-10c cross-check (vms-ce0) can call this a
+    second and third time -- a fresh `rd list` read, not a cached one -- when
+    a single read looks contradictory, instead of trusting the one read that
+    produced the contradiction.
+    """
     rc, open_items = rd_json(["list"], root)
     if rc != 0 or not isinstance(open_items, list):
-        die("`rd list --json` failed (rc=%d). Refusing to write a ledger that "
-            "would record every citation as unresolvable." % rc)
+        die("`rd list --json` failed (rc=%d) even after retries at the "
+            "data-fetch layer. Refusing to write a ledger that would record "
+            "every citation as unresolvable." % rc)
     if not open_items:
         die("`rd list --json` returned NO open items at all, run from %s.\n"
             "That is not a board with nothing on it; it is overwhelmingly "
@@ -242,6 +304,22 @@ def main():
     for it in open_items:
         if isinstance(it, dict) and it.get("id"):
             open_status[it["id"]] = (it.get("status") or "?", it.get("title") or "")
+    return open_status
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", default=None)
+    ap.add_argument("--out", default=None,
+                    help="output path, or - for stdout")
+    args = ap.parse_args()
+
+    root = args.root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root = os.path.abspath(root)
+
+    cites = scan_citations(root)
+
+    open_status = fetch_open_status(root)
 
     rows = []
     absent = []
@@ -282,10 +360,54 @@ def main():
             # refusal path too, because the safe direction for "this script has
             # never seen this state" is to stop, not to guess `closed`.
             if st not in CLOSING_STATUSES:
+                # CROSS-CHECK BEFORE REFUSING (vms-ce0). This exact shape --
+                # absent from the `rd list` snapshot taken once at the top of
+                # main(), alive per a fresh `rd show` -- is also what a
+                # concurrent write from a sibling swarm session finishing
+                # BETWEEN those two calls looks like: the write lands, `rd
+                # show` (queried after) sees it, the `rd list` snapshot
+                # (queried before) does not yet. MEASURED (vms-371,
+                # 2026-08-05): the first ctest invocation of
+                # rd_citations_fresh failed here, and an immediate re-run on
+                # the identical tree passed -- the signature of a race, not a
+                # standing vms-10c partial-board condition. So: re-query `rd
+                # list` fresh (not the cached snapshot) with backoff, and only
+                # if the id still never shows up after every attempt is this
+                # treated as the genuine vms-10c contradiction and refused.
+                recovered = False
+                for recheck in range(1, RD_LIST_RECHECK_ATTEMPTS + 1):
+                    delay = RD_LIST_RECHECK_DELAY * recheck
+                    sys.stderr.write(
+                        "gen_rd_citations: %s missing from the `rd list` "
+                        "snapshot but `rd show %s` reports a live, "
+                        "non-closing status %r -- re-querying `rd list` "
+                        "fresh (cross-check %d/%d, waiting %.1fs) before "
+                        "concluding this is vms-10c rather than a race "
+                        "against a concurrent rd write\n"
+                        % (cid, cid, st, recheck, RD_LIST_RECHECK_ATTEMPTS,
+                           delay))
+                    time.sleep(delay)
+                    open_status.update(fetch_open_status(root))
+                    if cid in open_status:
+                        recovered = True
+                        rst, rtitle = open_status[cid]
+                        sys.stderr.write(
+                            "gen_rd_citations: %s appeared in a re-fetched "
+                            "`rd list` on cross-check %d/%d -- resolving as "
+                            "open (transient projection race, not vms-10c)\n"
+                            % (cid, recheck, RD_LIST_RECHECK_ATTEMPTS))
+                        break
+                if recovered:
+                    rst, rtitle = open_status[cid]
+                    rows.append((cid, "open", rst, clean_title(rtitle)))
+                    continue
                 die("`rd list` does not carry %s, but `rd show %s` reports its "
                     "status as %r -- which is not a closing status (%s).\n"
                     "Writing this row would record a live item as `closed`, and "
                     "every gate that reads the ledger trusts that column.\n"
+                    "This held across %d fresh re-queries of `rd list` (not "
+                    "just the original snapshot), so it is not the transient "
+                    "projection race this script now cross-checks for.\n"
                     "The overwhelmingly likely cause is a PARTIAL `rd list`: rd "
                     "resolves its board from the working directory, and this run "
                     "used %s. That is rd vms-10c, and the row it produces "
@@ -295,7 +417,7 @@ def main():
                     "genuinely a closing status this script does not know, add "
                     "it to CLOSING_STATUSES -- deliberately, not to clear a red."
                     % (cid, cid, st, "|".join(sorted(CLOSING_STATUSES)),
-                       root, st, st))
+                       RD_LIST_RECHECK_ATTEMPTS, root, st, st))
             rows.append((cid, "closed", st, clean_title(item.get("title"))))
             closed.append((cid, st))
         else:

@@ -982,3 +982,34 @@ set_tests_properties(scs_diskrun_mutants PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 300
 )
+
+# vms-4eb - THE 110-CONTENT TYPE-10 DECODE.
+#
+# Type 10 was the MAJORITY of what real VAXes put on the 110-byte 0x?B13 class
+# (2 889 of 4 314 frames) and the spec carried it as a TAXON -- "the SCS
+# application-message MTYPE" -- which says nothing about what the message
+# contains. spec sec 4(h)(1e) now decodes it as the MSCP GET UNIT STATUS end
+# message against the PUBLIC AA-L619A-TK manual, and this gate holds the
+# document to tools/cluster/scs_type10_measure.py's EXPECTED table. On a host
+# with the (host-only, CLAUDE.md rule 8) lab captures it also re-derives
+# EXPECTED from the packets via scs_wire.gate().
+#
+# The two things it exists above all to stop: (1) the decode's admitted gaps --
+# body[48:52] and the unit-flags bit Table A-5 does not define -- being quietly
+# NAMED, which is the exact failure this epic already shipped once ("grounded"
+# with zero observations, and wrong); (2) OVMX emitting a 110-content type-10
+# frame, which is an MSCP END message and is gated behind
+# docs/design-mscp-direction.md Phase D.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_type10_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_type10_figures.py)
+else()
+    add_test(NAME scs_type10_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_type10_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_type10_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 120
+)

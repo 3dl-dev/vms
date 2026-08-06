@@ -294,6 +294,9 @@ WIRED = {
     "tools/cluster/scs_reason_measure.py": "check_census(",
     "tools/cluster/scs_disc_measure.py": "check_census(",
     "tools/scs_connect_data_measure.py": "check_census(",
+    # vms-4eb: the type-10 decode focuses on ONE length class and so is exactly
+    # the shape vms-c11 warns about; it must justify that focus like the rest.
+    "tools/cluster/scs_type10_measure.py": "check_census(",
 }
 for rel, wiring in WIRED.items():
     path = os.path.join(ROOT, rel)

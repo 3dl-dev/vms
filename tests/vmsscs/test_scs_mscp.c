@@ -208,6 +208,130 @@ static void test_parse_gus_end(void)
     CHECK(v.msg_id == SCS_MSCP_GUS_MSGID0, "GUS-END echoes the GUS message-id");
 }
 
+/*
+ * vms-4eb -- the 110-byte GUS-END class decoded field by field.
+ *
+ * ORACLE, both halves. The bytes are golden_gus_end[] above: the byte-exact SCA
+ * content of a real VAX1 frame from af2-firsttimer-established-20260728.pcap.
+ * The FIELD MAP is *MSCP Basic Disk Functions Manual* AA-L619A-TK v1.2 (public,
+ * CLAUDE.md rule 8 -- the UDA50 doc kit manual, no distribution restriction;
+ * the DEC-Confidential bitsavers MSCP 2.4.0 files are EXCLUDED and were not
+ * read): Table A-7 "GET UNIT STATUS end message offsets", sec 6.12, Table A-3
+ * (end flags), Table B-1/B-2 (status), sec 4.17 + Appendix C (media type id).
+ *
+ * WHY THIS IS HERE AND NOT ONLY IN THE PYTHON FIGURES GATE. The census in
+ * tools/cluster/scs_type10_measure.py runs only where the host-only lab
+ * captures are; this runs everywhere ctest does, on bytes that are IN GIT. It
+ * is what stops the decode in spec sec 4(h)(1e) from being a claim nobody can
+ * re-check on a machine without the capture library.
+ *
+ * All offsets are MSCP-body-relative, i.e. from SCA content[58].
+ */
+#define GUS_BODY (golden_gus_end + SCS_MSCP_BODY_OFF)
+
+static uint16_t bu16(const uint8_t *b, int off)
+{
+    return (uint16_t)(b[off] | (b[off + 1] << 8));
+}
+
+static uint32_t bu32(const uint8_t *b, int off)
+{
+    return (uint32_t)b[off] | ((uint32_t)b[off + 1] << 8)
+         | ((uint32_t)b[off + 2] << 16) | ((uint32_t)b[off + 3] << 24);
+}
+
+/* AA-L619A-TK sec 4.17: D0 (bits 31-27) and D1 (26-22) are the device-type
+ * name, A0..A2 (21-17, 16-12, 11-7) are one to three media-name characters
+ * ("A" == 1, 0 == absent), N (bits 6-0) holds the two decimal digits. */
+static void media_name(uint32_t v, char out[8])
+{
+    static const int shift[5] = {27, 22, 17, 12, 7};
+    int i, n = 0;
+    for (i = 0; i < 5; i++) {
+        unsigned c = (v >> shift[i]) & 0x1Fu;
+        if (c)
+            out[n++] = (char)('A' + c - 1);
+    }
+    out[n++] = (char)('0' + (v & 0x7Fu) / 10);
+    out[n++] = (char)('0' + (v & 0x7Fu) % 10);
+    out[n] = '\0';
+}
+
+static void test_gus_end_field_map(void)
+{
+    const uint8_t *b = GUS_BODY;
+    char name[8];
+
+    /* Appendix C Table C-3 publishes ONE worked media-type value: RA80 =
+     * hex 2564,1050. The decoder must reproduce it, or reading the captured
+     * value with it proves nothing. This is the calibration, not a decoration. */
+    media_name(0x25641050u, name);
+    CHECK(strcmp(name, "DURA80") == 0,
+          "media_name() reproduces Appendix C Table C-3's published RA80 value");
+
+    /* --- generic end-message header, Table A-7 ------------------------- */
+    CHECK(bu32(b, 0) == (((uint32_t)SCS_MSCP_GUS_MSGID0 << 16) | SCS_MSCP_GUS_CLASS),
+          "P.CRF command reference number is the token echoed from the command");
+    CHECK(bu16(b, 4) == 0x4000, "P.UNIT unit number 0x4000");
+    CHECK(bu16(b, 6) == 0, "generic reserved [6:8] is zero (AA-L619A-TK sec 5.2)");
+    CHECK(b[8] == (SCS_MSCP_OP_GET_UNIT_STATUS | SCS_MSCP_END_BIT),
+          "P.OPCD endcode 0x83 == OP.GUS | OP.END (Table A-1)");
+    CHECK(b[9] == 0x00,
+          "P.FLGS end flags clear: no Bad Block Reported / Unreported / Error "
+          "Log Generated (Table A-3)");
+    CHECK(bu16(b, 10) == SCS_MSCP_ST_AVAILABLE,
+          "P.STS status 0x0004 = Unit-Available, sub-code 0 (Table B-1/B-2)");
+
+    /* --- GET UNIT STATUS specifics, Table A-7 + sec 6.12 --------------- */
+    CHECK(bu16(b, 12) == 0x0000,
+          "P.MLUN multi-unit code 0 (sec 6.12: low byte access path, high byte "
+          "spindle id) -- unit 0x4000 is spindle 0");
+    CHECK(bu16(b, 16) == 0 && bu16(b, 18) == 0,
+          "GUS reserved [16:20] is zero");
+    /* sec 6.12: a non-zero unit identifier is what makes the characteristics
+     * valid. This frame reports a unit, so it must be non-zero. */
+    CHECK(bu32(b, 20) != 0 || bu32(b, 24) != 0,
+          "P.UNTI unit identifier non-zero, so sec 6.12 says the "
+          "characteristics below are valid");
+    CHECK(bu32(b, 20) == 0x00000002u && bu32(b, 24) == 0x12a10000u,
+          "P.UNTI unit identifier 02 00 00 00 | 00 00 a1 12");
+    media_name(bu32(b, 28), name);
+    CHECK(strcmp(name, "DURA92") == 0,
+          "P.MEDI media type identifier decodes to the RA92 the lab's own "
+          "vax.ini attaches (set rq0 ra92)");
+    CHECK(bu16(b, 32) == 0, "P.SHUN shadow unit 0 -- nothing shadowed");
+    CHECK(bu16(b, 42) == 0, "GUS reserved [42:44] is zero");
+
+    /* Geometry, sec 6.12: blocks/track, tracks/group, groups/cylinder, and the
+     * RCT that spans one cylinder (73 * 13 == 949). */
+    CHECK(bu16(b, 36) == 73, "P.TRCK track size 73 blocks/track");
+    CHECK(bu16(b, 38) == 13, "P.GRP group size 13 tracks/group");
+    CHECK(bu16(b, 40) == 1, "P.CYL cylinder size 1 group/cylinder");
+    CHECK(bu16(b, 44) == 949 && 73 * 13 == 949,
+          "P.RCTS RCT size 949 == track size * group size");
+    CHECK(b[46] == 1, "P.RBNS 1 replacement block per track");
+    CHECK(b[47] == 1, "P.RCTC 1 RCT copy");
+
+    /* --- THE UNDECODED RESIDUE. Table A-7's last field ends at body[48];
+     * this class carries 52 body bytes. Asserted as *present and unexplained*
+     * so that a future change which starts MEANING something here has to come
+     * back and edit this test -- see spec sec 5. */
+    CHECK(bu16(b, 48) == 0x006e,
+          "body[48:50] is the constant 0x006e -- NOT DECODED (0x6e == 110 is "
+          "this class's own SCA content length, and every frame of the class "
+          "has that length, so a length echo and a constant are "
+          "indistinguishable here)");
+    CHECK(bu16(b, 50) == 0x4231,
+          "body[50:52] carries one of the 32 observed values -- NOT DECODED, "
+          "and no meaning may be read into it");
+    /* The unit-flags word is a documented FIELD with an undocumented VALUE:
+     * Table A-5 defines no bit 15. Pinned so the gap cannot be quietly filled. */
+    CHECK(bu16(b, 14) == 0x8000,
+          "P.UNFL unit flags 0x8000 -- bit 15 is NOT in Table A-5 and is NOT "
+          "decoded; it is set identically on the RA92s and the RRD40s, so it "
+          "is not a removable-media flag either");
+}
+
 static void test_null_guards(void)
 {
     uint8_t out[SCS_MSCP_FRAME_LEN];
@@ -229,6 +353,7 @@ int main(void)
     test_gus_unit_substitution();
     test_parse_scc_end();
     test_parse_gus_end();
+    test_gus_end_field_map();
     test_null_guards();
 
     if (failures == 0) {

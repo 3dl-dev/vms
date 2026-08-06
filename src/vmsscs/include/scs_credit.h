@@ -705,6 +705,24 @@ int scs_credit_can_send(const struct scs_cdt *cdt);
  */
 int scs_credit_on_send(struct scs_cdt *cdt);
 
+/*
+ * scs_credit_peek_pending - read the local Pending Receive Credit count
+ * WITHOUT taking it: unlike scs_credit_on_send() (which debits a Send Credit
+ * and consumes the Pending Receive Credit via the internal, static
+ * take_pending_receive_credit()), this modifies nothing. It exists for a
+ * frame BUILDER that needs to know what the next piggyback value will be
+ * before the transmit choke point (scsd_credit_stamp_outbound(),
+ * scsd.c:2465, vms-aa1) actually sends the frame and performs the real debit
+ * and reset (vms-d76: an earlier build site read cdt->send_credit here, the
+ * wrong account -- see scs_cdt.h's split between Send Credit and Pending
+ * Receive Credit).
+ *
+ * Returns the current Pending Receive Credit count, or 0 if cdt is NULL.
+ * Independent of the kill switch: peeking is never wrong, same as
+ * scs_credit_read_header().
+ */
+unsigned scs_credit_peek_pending(const struct scs_cdt *cdt);
+
 /* --- receive path (pp. 2-43..2-44) ---------------------------------------- */
 
 /*

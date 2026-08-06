@@ -157,25 +157,32 @@ message from hours ago), and both consoles are read.
 
 ## Optional variant: making the disk config asymmetric for MSCP serving (`vms-291`/`vms-3d3`)
 
-**The stock 2-node config above cannot exercise MSCP serving traffic.** In the
-golden image both vax1 and vax2 attach their own copies of the same disk
-images (`d0.dsk` shared deliberately as the dual-ported system root, but each
-node's `rq2`/`rq3` units point at disks it owns outright) — so neither node
-ever needs to route a READ/WRITE through the other's MSCP server, and the SCA
-block-transfer path (§ "Phase D part 1's lab capture" in
+**The stock 2-node config above cannot exercise MSCP serving traffic.** Per
+`tests/lab/entrypoint.sh`, every node's `vax.ini` attaches `rq0`/`rq1` as
+`ra92` to the **same** `${LAB_DIR}/data/d0.dsk`/`d1.dsk` files (`LAB_DIR` is
+per-pod, not per-node, so vax1 and vax2 share these paths outright), and
+`rq2`/`rq3` are `cdrom` units attached **read-only** (`attach -r`) to shared
+install ISOs on the tank volume — not disks either node owns. Neither pair
+ever needs a READ/WRITE routed through the other node's MSCP server, so the
+SCA block-transfer path (§ "Phase D part 1's lab capture" in
 `docs/design-mscp-direction.md`) never fires. This is a variant on top of the
 stock config, not a replacement for it — most lab sessions want the stock
 symmetric setup.
 
-**Recipe** (source: `docs/design-mscp-direction.md`, "Phase D part 1's lab
-capture", grounded against `vms-291`'s `vaxlab-9` capture, 2026-08-06):
+**Recipe** (source: `vms-291`'s `vaxlab-9` capture via `vms-76eb`'s closing
+context, grounded against `tests/lab/entrypoint.sh`, 2026-08-06):
 
-1. In the target pod's SIMH config for **vax1**, add a new RA81 unit `rq2`
-   backed by a **new** disk image (e.g. `d2.dsk`) that vax1 alone owns —
-   this is the unit vax1 will serve over MSCP.
-2. In the same pod's config for **vax2**, **disable** `rq2` and `rq3` (detach
-   or comment out those unit lines) so vax2 has no local disk at those unit
-   numbers and must reach them, if at all, through vax1's MSCP server.
+1. In the target pod's `vax.ini` for **vax1**, repoint the existing `rq2`
+   unit from `cdrom` to `ra81`, backed by a **new** disk image (e.g.
+   `d2.dsk`) that vax1 alone owns. `rq2` already exists as a cdrom unit —
+   this replaces both its `set rq2 cdrom` line and its
+   `attach -r rq2 <iso>` line with `set rq2 ra81` and
+   `attach rq2 ${LAB_DIR}/data/d2.dsk` (or equivalent); it does not add a
+   new unit.
+2. In the same pod's `vax.ini` for **vax2**, disable `rq2` and `rq3` (detach
+   or comment out those unit lines) to free those unit numbers — vax2's
+   `rq2`/`rq3` are CD-ROM drives (`DUA2`/`DUA3`), not local disks, so this
+   frees the numbers rather than replacing anything vax2 owned outright.
 3. Leave `MSCP_LOAD=1` and `MSCP_SERVE_ALL=1` as-is — the golden image
    already sets both, so no SYSGEN change is needed to make vax1 serve.
 4. Boot the pod, then from vax2 `MOUNT` the unit vax1 is now serving and
@@ -183,11 +190,20 @@ capture", grounded against `vms-291`'s `vaxlab-9` capture, 2026-08-06):
    produce real MSCP command + SCA block-transfer traffic between the two
    nodes.
 
-**Do not hand-modify a running pod for this** unless the pod is disposable —
-`vms-76eb` tracks restoring/destroying the specific pod (`vaxlab-9`) that was
-hand-modified to produce the capture cited above. Prefer editing a fresh
-replica's config before first boot, or scaling up a new replica
-(`kubectl -n ovmx-lab scale sts/vaxlab --replicas=N`) to modify.
+**There is no way to hand-edit a pod's config before first boot** —
+`entrypoint.sh` regenerates `vax.ini`/`local.ini` unconditionally on every
+boot (unlike the disk-clone step above it in the same script, which is
+guarded by `[ ! -f ]`), so any hand edit to a running pod's config is
+overwritten on the next restart. `vms-76eb` hit exactly this and restored
+`vaxlab-9` by destroy-and-recreate rather than by hand-editing. The two
+approaches that actually work:
+
+- Edit the `rq2`/`rq3` block in `tests/lab/entrypoint.sh` itself, rebuild
+  and repush the `ovmx-vaxlab` image, and deploy from that image — this
+  makes the asymmetric config the one every replica boots with.
+- Or hand-modify a running pod's config and treat that pod as disposable:
+  it produces one capture and does not survive a restart. Do not rely on
+  a hand-modified pod for anything beyond that single session.
 
 A negative control (MOUNT aimed at a nonexistent unit, expected to show zero
 READ/WRITE/block-transfer frames) is worth capturing alongside the positive

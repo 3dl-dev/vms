@@ -24,8 +24,8 @@ GREEN before the capture, because a test that only checks self-consistency
 against the constant it is testing passes at any value. The header mutants below
 are what makes those assertions pin a MEASUREMENT rather than a definition.
 
-HOW IT WORKS. Copies src/vmsscs/{scs_mscp_srv,scs_mscp,scs_env,scs_member}.c, the include
-directory and tests/vmsscs/test_scs_mscp_srv.c into a scratch tree, compiles and
+HOW IT WORKS. Copies src/vmsscs/{scs_mscp_srv,scs_mscp,scs_env,scs_member,scs_credit}.c,
+the include directory and tests/vmsscs/test_scs_mscp_srv.c into a scratch tree, compiles and
 runs the UNMUTATED copy first (the control -- a battery whose control is already
 red scores meaningless kills), then applies each mutant on its own to the scratch
 copy of the named file, recompiles, and requires a non-zero exit. The file is
@@ -279,6 +279,7 @@ def build_and_run(scratch, tag):
         os.path.join(src, "scs_mscp.c"),
         os.path.join(src, "scs_env.c"),
         os.path.join(src, "scs_member.c"),  # vms-020: scs_member_vms_time_now()
+        os.path.join(src, "scs_credit.c"),  # vms-d76: scs_credit_peek_pending()
     ]
     cmd = [CC, "-std=gnu11", "-O0",
            "-I", os.path.join(src, "include"),

@@ -67,7 +67,8 @@
 #include <stdint.h>
 
 /* Forward declaration only -- struct scs_mscp_params carries an OPTIONAL
- * pointer (see its `cdt` field) so build sites can read live Send Credit
+ * pointer (see its `cdt` field) so build sites can read the live Pending
+ * Receive Credit (the piggyback account, via scs_credit_peek_pending())
  * without this header taking on the full CDT definition. */
 struct scs_cdt;
 
@@ -279,14 +280,21 @@ struct scs_mscp_params {
     uint16_t incarnation;     /* envelope [22:24]; 0 => the fresh-contact value 1 */
     uint32_t cmd_ref;         /* P.CRF -- see SCS_MSCP_CMD_REF() */
     uint16_t unit;            /* P.UNIT (GUS enumeration unit; 0 for SCC) */
-    /* vms-8de: OPTIONAL live-credit source. When the caller has a CDT for this
-     * connection (the normal case in scsd.c, looked up by local_conid), pass it
-     * here and the envelope's credit field ([48:50]) is read straight from
-     * cdt->send_credit -- the same accounting scsd_credit_stamp_outbound()
-     * (vms-aa1) already owns. This is a non-mutating READ, not a debit; the
-     * debit still happens once, at the vms-aa1 transmit choke point. NULL (the
-     * default; callers with no CDT, e.g. unit tests) falls back to the labeled
-     * replay SCS_MSCP_ENV_CREDIT, unchanged from before this item. */
+    /* vms-8de, corrected by vms-d76: OPTIONAL live-credit source. When the
+     * caller has a CDT for this connection (the normal case in scsd.c, looked
+     * up by local_conid), pass it here and the envelope's credit field
+     * ([48:50]) is read via scs_credit_peek_pending(cdt) -- the connection's
+     * Pending Receive Credit, the piggyback account, NOT cdt->send_credit
+     * (a receive-side accounting value that never rides the wire; see
+     * scs_cdt.h's split and scs_credit.c's scs_credit_on_send(), which
+     * scsd_credit_stamp_outbound() (vms-aa1) actually calls). This is a
+     * non-mutating READ, not a debit; the debit and reset still happen once,
+     * at the vms-aa1 transmit choke point -- except on the five paths
+     * scsd_credit_stamp_outbound() leaves the frame unstamped, where this
+     * builder's bytes are what actually reaches the wire (see the build-site
+     * note in scs_mscp.c). NULL (the default; callers with no CDT, e.g. unit
+     * tests) falls back to the labeled replay SCS_MSCP_ENV_CREDIT, unchanged
+     * from before vms-8de. */
     const struct scs_cdt *cdt;
 };
 

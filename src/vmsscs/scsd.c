@@ -44,6 +44,7 @@
 #include "scs_classify.h"
 #include "scs_config.h"
 #include "scs_conn.h"
+#include "scs_credit.h"
 #include "scs_dgram.h"
 #include "scs_connect.h"
 #include "scs_depart.h"
@@ -1713,6 +1714,66 @@ static unsigned long sysap_vc_loss_notifications = 0; /* SYSAP handlers actually
 static unsigned long vc_sends_refused = 0; /* frames send_frame_vc() would not transmit */
 
 /*
+ * ===== vms-aa1: THE FLOW-CONTROL ACCOUNT, DRIVEN BY TRAFFIC THAT REALLY FLOWS
+ *
+ * vms-76e built the pp. 2-43..2-45 debit/credit account in the CDT and vms-1d2
+ * the Credit Wait, both unit tested, and the vms-096 ledger then measured the
+ * thing that made them decorative: NO PRODUCTION CALLER. Nothing debited a Send
+ * Credit on a real send, nothing piggybacked a Pending Receive Credit onto a
+ * real outbound frame, nothing added an inbound credit field to any account.
+ * The counters below are what makes the difference measurable rather than
+ * asserted -- they are printed unconditionally in the exit summary, so a run
+ * whose account never moves says so in its own log (INV-6).
+ *
+ * WHERE THE TWO HALVES ARE. The send half is scsd_credit_stamp_outbound(),
+ * called from send_frame_vc() -- the p. 2-31 choke point every connection-
+ * oriented sender already goes through, so a sender added tomorrow is accounted
+ * by construction. The receive half is scsd_credit_bank_inbound(), called from
+ * scsd_handle_frame() at the point scs_rx_parse() has decoded the envelope.
+ *
+ * WHICH FRAMES, AND WHY NOT ALL OF THEM. The credit field is grounded at SCA
+ * [48:50] (scs_credit.h WIRE VERDICT / tools/scs_credit_measure.py -- NOT
+ * re-derived here), but it does not carry the same QUANTITY on every message
+ * type, and spec sec 4(h)(1c) measures the difference over real-VAX frames:
+ *
+ *   MTYPE 10 (p. 4-13 APPLICATION MESSAGE) -- the SYSAP data class, and the
+ *     only class the p. 2-44 piggyback is about. This is the class OVMX both
+ *     sends (the 190-byte CM frames, scs_member.c) and receives. STAMPED on
+ *     send, BANKED on receive.
+ *   MTYPE 2 (ACCEPT_REQ) -- the credit field is the number of Send Credits
+ *     being EXTENDED at connection formation (p. 2-43; spec sec 4(g)'s tunable
+ *     match, 10 = CLUSTER_CREDITS, 8 = MSCP_CREDITS). A different quantity.
+ *     BANKED on receive through scs_credit_grant_from_peer(); NEVER stamped,
+ *     because overwriting an extension with a pending count would emit a lie.
+ *   MTYPE 0 (CONNECT_REQ) -- same quantity as 2, but its DESTINATION Con.ID is
+ *     0 by construction (the target CDT does not exist yet), so it resolves to
+ *     no CDT and is banked nowhere. Stated so the absence is not read as an
+ *     oversight.
+ *   MTYPE 5 and 7 -- credit == 0 in 4523/4523 and 734/734 real-VAX frames
+ *     (sec 4(h)(1c)). Stamping a live count there would put a shape on the wire
+ *     that has never been observed. LEFT ALONE.
+ *   MTYPE 1,3,4,6,8,9 -- 8/9 carry a constant 1 whose meaning is UNNAMED (the
+ *     "special credit message" candidate is WEAKENED, not confirmed -- sec
+ *     4(h)(1c)); the rest carry 0. Reading an unnamed constant as a credit
+ *     grant would be a wire claim with no observation behind it. LEFT ALONE.
+ *
+ * KILL SWITCH: OVMX_NO_CREDIT_ACCOUNTING=1 (scs_credit.h). Both halves return
+ * before touching anything, so the daemon looks up no CDT, debits nothing,
+ * stamps nothing, and every counter below stays 0 -- the bytes OVMX transmits
+ * are then EXACTLY the bytes its builders produced, which is what makes the
+ * switch a usable matched control on the lab (guardrail 23).
+ */
+static unsigned long credit_send_stamped = 0;   /* outbound MTYPE-10 frames that carried a live piggyback */
+static unsigned long credit_send_units = 0;     /* total Pending Receive Credits piggybacked */
+static unsigned long credit_send_starved = 0;   /* outbound MTYPE-10 frames with no Send Credit (p. 2-45) */
+static unsigned long credit_send_no_cdt = 0;    /* outbound MTYPE-10 frames whose SOURCE Con.ID resolved to no CDT */
+static unsigned long credit_recv_banked = 0;    /* inbound MTYPE-10 frames whose credit field was banked */
+static unsigned long credit_recv_units = 0;     /* total Send Credits banked from those fields */
+static unsigned long credit_grants_recv = 0;    /* inbound ACCEPT_REQs that extended Send Credits */
+static unsigned long credit_grant_units = 0;    /* total Send Credits those extensions carried */
+static unsigned long credit_buffers_released = 0; /* p. 2-43 SYSAP buffer releases */
+
+/*
  * vms-abc: THE SYSAP's VC-LOSS ERROR HANDLER, and the first one OVMX has ever
  * installed.
  *
@@ -2010,6 +2071,18 @@ uint8_t  scsd_test_last_frame[SCA_FRAME_MAX];
 uint8_t  scsd_test_last_dst[6];
 size_t   scsd_test_last_len;
 unsigned scsd_test_frames;
+/*
+ * vms-aa1: THE LAST FEW FRAMES, not just the last one. One production call can
+ * emit several frames (cm_send_config_burst emits three), and a per-frame wire
+ * field -- the p. 2-44 credit piggyback is the first one OVMX has -- differs
+ * BETWEEN them by design. A single-frame capture can only show the last value,
+ * so a test asserting that the field VARIES across a burst would have to
+ * re-derive the other frames instead of reading them. This is the same seam,
+ * widened; it exists only in the SCSD_UNIT_TEST translation unit.
+ */
+#define SCSD_TEST_RING 8
+uint8_t  scsd_test_ring[SCSD_TEST_RING][SCA_FRAME_MAX];
+size_t   scsd_test_ring_len[SCSD_TEST_RING];
 #endif
 
 /*
@@ -2045,6 +2118,8 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
     memcpy(scsd_test_last_dst, mac, 6);
     memcpy(scsd_test_last_frame, frame, len);
     scsd_test_last_len = len;
+    memcpy(scsd_test_ring[scsd_test_frames % SCSD_TEST_RING], frame, len);
+    scsd_test_ring_len[scsd_test_frames % SCSD_TEST_RING] = len;
     scsd_test_frames++;
     return (ssize_t)len;
 #else
@@ -2346,11 +2421,79 @@ static int scsd_refuse_without_open_vc(struct peer_state *ps, const struct scs_p
 }
 
 /*
+ * SCSD_CREDIT_MAX_FRAME - the stamping scratch buffer. The largest frame any
+ * scsd sender hands to send_frame_vc() is the 1500-byte padded probe; a frame
+ * longer than this is transmitted UNSTAMPED rather than truncated, and the
+ * refusal is counted, never silent.
+ */
+#define SCSD_CREDIT_MAX_FRAME 1518
+
+/*
+ * scsd_credit_stamp_outbound - the p. 2-43/2-44 SEND half (vms-aa1). See the
+ * flow-control block above for which message types are eligible and why.
+ *
+ * Returns the frame to transmit: `scratch` (a stamped COPY) when this frame is
+ * an eligible SYSAP message on a live connection with Send Credit, otherwise
+ * `frame` itself, byte for byte. It NEVER refuses a send. p. 2-45's answer to
+ * starvation is a Credit Wait, and there is no CDRP to queue here -- the frame
+ * is already built and its sequence number already consumed -- so the honest
+ * behaviour is to transmit the builder's bytes and COUNT the starvation
+ * (credit_send_starved) rather than either drop a real frame or pretend a
+ * credit existed. That counter is the p. 2-45 backlog this daemon cannot yet
+ * express, printed in the exit summary so it is a measurement and not a gap.
+ *
+ * WHICH CONNECTION A FRAME BELONGS TO comes out of the frame itself: p. 2-35
+ * makes SCA [54:58] the SENDER's own local Con.ID, which is exactly the CDL
+ * index (p. 2-29). No caller passes a CDT and none needs to.
+ */
+static const uint8_t *scsd_credit_stamp_outbound(const uint8_t *frame, size_t len,
+                                                 uint8_t *scratch)
+{
+    if (!scs_credit_enabled() || !scsd_cdl_ready || len <= 14) {
+        return frame;
+    }
+    struct scs_rx_hdr h;
+    if (scs_rx_parse(frame + 14, len - 14, &h) != 0) {
+        return frame; /* not an envelope-conformant SCS message */
+    }
+    if (h.kind != SCS_RX_APP_MESSAGE) {
+        return frame; /* MTYPE != 10 -- the credit field is not a piggyback */
+    }
+    if (scs_credit_header_offset(h.total_sca_len) < 0 || len > SCSD_CREDIT_MAX_FRAME) {
+        return frame; /* ungrounded length class, or longer than the scratch */
+    }
+    struct scs_cdt *cdt = scs_cdl_lookup(&scsd_cdl, h.src_conid);
+    if (cdt == NULL) {
+        credit_send_no_cdt++;
+        return frame;
+    }
+    int credit = scs_credit_on_send(cdt);
+    if (credit < 0) {
+        credit_send_starved++;
+        return frame;
+    }
+    memcpy(scratch, frame, len);
+    if (scs_credit_stamp_header(scratch + 14, h.total_sca_len, (unsigned)credit) != 0) {
+        return frame;
+    }
+    credit_send_stamped++;
+    credit_send_units += (unsigned long)credit;
+    return scratch;
+}
+
+/*
  * send_frame_vc - THE CHOKE POINT. Transmit `frame` on circuit `vc`, or refuse.
  * Returns the byte count send_frame_raw() returned, or -1 if the circuit
  * refused it -- so every existing `... > 0` call-site idiom keeps working
  * unchanged and a refused send takes the same "nothing was sent" branch a
  * builder failure would.
+ *
+ * IT IS ALSO WHERE FLOW CONTROL IS DEBITED (vms-aa1). p. 2-43 debits a Send
+ * Credit when the message is SENT, so the debit belongs at the transmit choke
+ * point and not in any builder -- a frame that the circuit refuses must not
+ * cost a credit, and a sender added later must be accounted without being
+ * edited. The stamping is a pure function of the frame's own bytes; see
+ * scsd_credit_stamp_outbound() above.
  *
  * THE DESTINATION COMES FROM THE CIRCUIT, not from the caller. p. 2-47: the
  * remote port address a frame is addressed to is a property of the Path Block
@@ -2368,7 +2511,9 @@ static ssize_t send_frame_vc(int sock, int ifindex, struct peer_state *ps,
     if (scsd_refuse_without_open_vc(ps, vc, what, &path)) {
         return -1;
     }
-    return send_frame_raw(sock, ifindex, path.remote_port_addr, frame, len);
+    uint8_t scratch[SCSD_CREDIT_MAX_FRAME];
+    const uint8_t *out = scsd_credit_stamp_outbound(frame, len, scratch);
+    return send_frame_raw(sock, ifindex, path.remote_port_addr, out, len);
 }
 
 /*
@@ -6241,6 +6386,43 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
     if (rx->do_connect && scsd_cdl_ready) {
         struct scs_rx_hdr h;
         if (scs_rx_parse(sca_payload, payload_len, &h) == 0) {
+            /* vms-aa1: THE RECEIVE HALF OF THE FLOW-CONTROL ACCOUNT, p. 2-43/
+             * 2-44. Done BEFORE delivery, deliberately: OVMX's SYSAP input
+             * routines answer SYNCHRONOUSLY (scsd_sysap_msg_input() emits the
+             * 0x81 CM response inside the delivery call), so a credit banked
+             * after delivery would arrive one frame too late to pay for the
+             * very reply the message provoked -- and the p. 2-43 order is
+             * "adds the contents of the credit field to its Send Credit count"
+             * on receipt, ahead of any send. Resolution is scs_cdl_resolve(),
+             * the SAME p. 2-29/2-35 function scs_cdl_deliver_message() uses
+             * below, so the account can never be credited for a frame the
+             * delivery path then refuses. */
+            struct scs_cdt *rcdt = NULL;   /* resolved connection, or NULL */
+            struct scs_cdt *ccdt = NULL;   /* the one owing a p. 2-43 buffer release */
+            if (scs_credit_enabled() &&
+                scs_credit_header_offset(h.total_sca_len) >= 0 &&
+                scs_cdl_resolve(&scsd_cdl, h.dest_conid, h.src_conid, &rcdt) == SCS_DELIVER_OK) {
+                if (h.kind == SCS_RX_APP_MESSAGE) {
+                    /* p. 2-44: "remote SCS adds the contents of the credit
+                     * field to its Send Credit count." The message also
+                     * consumed one of this node's receive buffers, which is
+                     * what scs_credit_on_recv() debits. */
+                    (void)scs_credit_on_recv(rcdt, h.credit);
+                    credit_recv_banked++;
+                    credit_recv_units += h.credit;
+                    ccdt = rcdt;
+                } else if (h.mtype == SCS_CONN_MSGTYPE_ACCEPT_REQ && h.credit > 0) {
+                    /* p. 2-43: the credit field of an ACCEPT_REQ is the number
+                     * of Send Credits the remote SYSAP is EXTENDING at
+                     * connection formation -- spec sec 4(g)'s tunable match,
+                     * not a piggyback. This is where a connection's Send Credit
+                     * comes from in the first place. No buffer was consumed:
+                     * a connection-control message is not a SYSAP message. */
+                    (void)scs_credit_grant_from_peer(rcdt, h.credit);
+                    credit_grants_recv++;
+                    credit_grant_units += h.credit;
+                }
+            }
             if (h.kind == SCS_RX_APP_MESSAGE) {
                 rx_app_messages++;
                 /* The daemon's receive context, for the duration of ONE
@@ -6263,6 +6445,17 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 switch (dres) {
                 case SCS_DELIVER_OK:
                     rx_delivered_message++;
+                    /* p. 2-43: the SYSAP "has processed the contents of ...
+                     * those buffers and released them back to local SCS". OVMX
+                     * delivery is synchronous, so the routine returning IS the
+                     * release, and the freed buffer becomes one Pending Receive
+                     * Credit -- the quantity the NEXT outbound message on this
+                     * connection piggybacks (p. 2-44). This is the only thing
+                     * that ever makes a stamped credit non-zero. */
+                    if (ccdt != NULL) {
+                        (void)scs_credit_release_buffer(ccdt);
+                        credit_buffers_released++;
+                    }
                     break;
                 case SCS_DELIVER_NO_CDT:
                     rx_deliver_no_cdt++;
@@ -9321,6 +9514,23 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                 rx_app_messages, rx_delivered_message, rx_deliver_no_cdt,
                 rx_deliver_src_mismatch, rx_deliver_no_routine, rx_unknown_mtype,
                 sysap_msg_input_calls, sysap_cm_messages);
+        /* vms-aa1: the pp. 2-43..2-45 account, as this run actually moved it.
+         * Printed unconditionally and next to RX-CDL for the same reason that
+         * line is: a run with app-messages in the thousands and stamped=0 has
+         * flow control that is decorative, and that has to be readable in the
+         * log rather than inferred. starved is the p. 2-45 Credit Wait backlog
+         * this daemon cannot yet express (see scsd_credit_stamp_outbound) --
+         * it is a REAL number, not a placeholder, and a large one is a defect
+         * report. */
+        fprintf(out, "  CREDIT: stamped=%lu units-sent=%lu starved=%lu no-cdt=%lu"
+                " banked=%lu units-recv=%lu grants=%lu grant-units=%lu"
+                " buffers-released=%lu%s\n",
+                credit_send_stamped, credit_send_units, credit_send_starved,
+                credit_send_no_cdt, credit_recv_banked, credit_recv_units,
+                credit_grants_recv, credit_grant_units, credit_buffers_released,
+                scs_credit_enabled() ? ""
+                                     : "  [OVMX_NO_CREDIT_ACCOUNTING SET --"
+                                       " nothing was debited, stamped or banked]");
         (void)scs_conn_report_stuck(&scsd_cdl, out);
         /* vms-17f: the p. 2-20/2-21 open transitions this run took, and the
          * departure sweep's work. PB-OPEN-REFRESHED is the p. 2-21 Note firing

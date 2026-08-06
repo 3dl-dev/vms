@@ -1873,6 +1873,16 @@ static void rxworld_init(struct rxworld *r, const uint8_t hw_mac[6],
     rx_unknown_mtype = 0;
     sysap_msg_input_calls = 0;
     sysap_cm_messages = 0;
+    /* vms-aa1: the flow-control ledger is file-static in scsd.c too. */
+    credit_send_stamped = 0;
+    credit_send_units = 0;
+    credit_send_starved = 0;
+    credit_send_no_cdt = 0;
+    credit_recv_banked = 0;
+    credit_recv_units = 0;
+    credit_grants_recv = 0;
+    credit_grant_units = 0;
+    credit_buffers_released = 0;
     /* vms-7fe: the SDIR outcome counters are file-static in scsd.c too. */
     sdir_connect_scans = 0;
     sdir_no_such_sysap = 0;
@@ -2693,6 +2703,563 @@ static void test_captured_app_message_reaches_the_sysap_through_the_cdl(void)
     CHECK(ps->cm_last_recv_cat == 0x01 && ps->cm_last_recv_op == 0x14,
           "the dialogue recorded category 0x%02x opcode 0x%02x, expected the"
           " captured 0x01/0x14", ps->cm_last_recv_cat, ps->cm_last_recv_op);
+}
+
+/* ==========================================================================
+ * vms-aa1 -- FLOW CONTROL ACCOUNTS FOR TRAFFIC THAT ACTUALLY FLOWS.
+ *
+ * vms-76e/vms-1d2 built the pp. 2-43..2-45 account and vms-b1d the DFREEQ, all
+ * unit tested against the book's worked example. The vms-096 ledger then found
+ * the thing those tests could not see: NO PRODUCTION CALLER. Nothing debited a
+ * Send Credit on a real send, nothing piggybacked a Pending Receive Credit onto
+ * a real outbound frame, nothing banked an inbound credit field. The account
+ * was arithmetic about a wire it never touched.
+ *
+ * WHAT IS DRIVEN HERE, AND BY WHOM. Every transition below is performed by
+ * src/vmsscs/scsd.c: the join dialogue by scsd_handle_frame() over frames
+ * transcribed byte-exact from ovmx-760-MEMBER-achieved-20260730.pcap, the
+ * outbound frames by cm_send_config_burst() -- a production sender with three
+ * production call sites -- through send_frame_vc(), the p. 2-31 choke point.
+ * NOTHING in this case calls scs_credit_on_send(), scs_credit_on_recv(),
+ * scs_credit_grant_from_peer() or scs_credit_release_buffer() on its own
+ * behalf; if the daemon stops calling them, every assertion here goes red.
+ *
+ * EVERY EXPECTED CREDIT VALUE IS READ OFF THE CAPTURE BYTES at the GROUNDED
+ * offset SCS_CREDIT_FIELD_SCA_OFFSET (SCA [48:50], scs_credit.h WIRE VERDICT /
+ * tools/scs_credit_measure.py -- cited, NOT re-derived here). None is typed in
+ * as a literal, so a capture that carried different credits would move the
+ * expectations with it rather than red spuriously.
+ * ========================================================================== */
+
+/*
+ * pcap frames #77 and #369 of the SAME capture, transcribed byte-exact with the
+ * same reader, ZERO bytes edited. They exist because the credit field of #76 is
+ * 0, and an assertion that a banked 0 equals a wire 0 cannot tell a live bank
+ * from a hard-coded one -- the vms-aa1 mutation battery measured exactly that
+ * survivor and this is the fix.
+ *
+ *   #77:  MTYPE 10, send_seq 15 (the frame that follows #76 with no gap),
+ *         credit 0, dest 0x4F580002 = OVMX_JOINER_CONID, src 0x63020011.
+ *   #369: MTYPE 10, send_seq 29, credit 3, same Con.ID pair. This is a REAL
+ *         non-zero piggyback from the member on OVMX's own connection, and it
+ *         is what makes "the daemon adds the WIRE's value" a discrimination.
+ *
+ * The send_seq jump 15 -> 29 is real (the member sent 13 frames on OTHER
+ * connections in between; this capture's stream on THIS connection is
+ * 12,14,15,29,...). The daemon's p. 2-31 gap detector sees it -- what that
+ * costs, and that credit is banked before it, is asserted where they are fed.
+ */
+static const uint8_t cap_ovmx_cm_app_message2[204] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0xbc, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x0f, 0x00, 0x0f, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00,
+    0x0f, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x92, 0x00, 0x04, 0x00,
+    0x0a, 0x00, 0x00, 0x00, 0x02, 0x00, 0x58, 0x4f, 0x11, 0x00, 0x02, 0x63,
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00,
+    0x21, 0x50, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x01, 0x00, 0xe0, 0x5e, 0xa9, 0x57, 0xcd, 0x03, 0xbc, 0x00,
+    0x20, 0x02, 0x71, 0xc5, 0xcd, 0x03, 0xbc, 0x00, 0x04, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x24, 0x61, 0x53, 0x59, 0x53, 0x44, 0x53, 0x4b,
+    0x31, 0x20, 0x20, 0x20, 0x60, 0x8a, 0x9b, 0x87, 0xcd, 0x03, 0xbc, 0x00,
+    0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2b, 0x00,
+    0x18, 0x01, 0x00, 0x00, 0x56, 0x37, 0x2e, 0x33, 0x20, 0x20, 0x20, 0x20,
+    0x00, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+    0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x6d, 0x1b, 0x50, 0x48
+};
+
+static const uint8_t cap_ovmx_cm_app_message_credit3[204] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0xbc, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x1d, 0x00, 0x1d, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x1d, 0x00, 0x00, 0x00, 0x1d, 0x00, 0x00, 0x00,
+    0x1d, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x92, 0x00, 0x04, 0x00,
+    0x0a, 0x00, 0x03, 0x00, 0x02, 0x00, 0x58, 0x4f, 0x11, 0x00, 0x02, 0x63,
+    0x03, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x43, 0x4f, 0x4d, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+/* The credit field of a frame, read as raw little-endian bytes at the grounded
+ * SCA offset. Deliberately NOT via scs_rx_parse(): this is the same read the
+ * lab pcap check performs, and it must not be able to agree with the stamper by
+ * sharing a decoder. Returns -1 if the frame is too short to hold the field. */
+static int frame_credit_field(const uint8_t *frame, size_t len)
+{
+    size_t off = 14u + (size_t)SCS_CREDIT_FIELD_SCA_OFFSET;
+    if (frame == NULL || len < off + 2u) {
+        return -1;
+    }
+    return (int)((unsigned)frame[off] | ((unsigned)frame[off + 1] << 8));
+}
+
+/* The credit field of the n'th frame this daemon transmitted, out of the
+ * SCSD_UNIT_TEST ring. -1 if that frame is no longer in the ring. */
+static int emitted_credit_field(unsigned nth)
+{
+    if (scsd_test_frames - nth > SCSD_TEST_RING) {
+        return -1;
+    }
+    unsigned slot = nth % SCSD_TEST_RING;
+    return frame_credit_field(scsd_test_ring[slot], scsd_test_ring_len[slot]);
+}
+
+/*
+ * Drive the production join dialogue to a bound VMS$VAXcluster joiner
+ * connection, exactly as test_captured_app_message_reaches_the_sysap_through_
+ * the_cdl() does. Returns the peer, or NULL if the fixture itself failed.
+ *
+ * WHAT THIS ALREADY PUTS ON THE WIRE, and it is not incidental: binding the
+ * connection makes scsd_handle_frame() run cm_send_config_burst() ITSELF (the
+ * call site at the ACCEPT_REQ handler), so THREE MTYPE-10 frames leave the
+ * daemon before any test code asks for one. They are the first frames OVMX
+ * ever stamped, they carry credit 0 because nothing has been received or
+ * released yet, and every send-side assertion below is anchored on the counts
+ * they leave behind rather than on a world where nothing has been sent.
+ *
+ * pcap#73 is fed for the reason the CDL case feeds it: it is the frame the
+ * member really sent between the ACCEPT_REQ and pcap#76, and without it the VC
+ * sequence jumps 12 -> 14, which the p. 2-31 guarantee breaks the circuit over
+ * -- the application message would then never be delivered at all.
+ */
+static struct peer_state *credit_world_join(struct rxworld *r)
+{
+    struct peer_state *ps =
+        peer_find_or_add(&r->w.cfg, &r->w.pdt, r->w.peers, ovmx760_member_mac);
+    if (ps == NULL) {
+        CHECK(0, "peer slot");
+        return NULL;
+    }
+    ps_learn_sys_addr(&r->w.cfg, ps, ovmx760_member_sysid);
+    (void)scs_pb_open(&r->w.cfg, ps->pb);
+    CHECK(send_joiner_connect_request(7, 1, &r->w.cfg, ps, NULL, r->hw_mac, r->logical) == 1,
+          "the joiner CONNECT-REQUEST was not sent");
+    rx_feed(r, cap_ovmx_joiner_connect_rsp, sizeof(cap_ovmx_joiner_connect_rsp));
+    rx_feed(r, cap_ovmx_joiner_accept_req, sizeof(cap_ovmx_joiner_accept_req));
+    CHECK(ps->cdt_joiner != NULL && scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_OPEN,
+          "the joiner connection did not reach OPEN off the captured dialogue");
+    rx_feed(r, cap_ovmx_app_message_other_conid,
+            sizeof(cap_ovmx_app_message_other_conid));
+    return ps;
+}
+
+/* The number of MTYPE-10 frames the join dialogue itself emits (the production
+ * add-member burst the ACCEPT_REQ handler fires). Asserted, never assumed: if
+ * the daemon's burst size changes this reds here rather than skewing every
+ * arithmetic assertion below into a wrong-but-green state. */
+#define CREDIT_JOIN_BURST 3
+
+/* (1) THE RECEIVE HALF: an ACCEPT_REQ extends Send Credits and an application
+ * message's credit field is banked, both off real captured frames, both through
+ * scsd_handle_frame(). */
+static void test_credit_receive_path_banks_the_wire_field(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
+
+    const int accept_credit =
+        frame_credit_field(cap_ovmx_joiner_accept_req, sizeof(cap_ovmx_joiner_accept_req));
+    const int appmsg_credit =
+        frame_credit_field(cap_ovmx_cm_app_message, sizeof(cap_ovmx_cm_app_message));
+    /* THE PREMISE, asserted rather than assumed: pcap#67 must really extend a
+     * non-zero number of Send Credits, or the rest of this case would be
+     * measuring nothing. p. 2-43 / spec sec 4(g): the ACCEPT_REQ credit field
+     * is the extension, and the tunable match makes 10 = CLUSTER_CREDITS. */
+    CHECK(accept_credit > 0,
+          "the captured ACCEPT_REQ carries credit %d -- this fixture cannot"
+          " demonstrate a grant off a frame that extends none", accept_credit);
+
+    struct peer_state *ps = credit_world_join(&r);
+    if (ps == NULL || ps->cdt_joiner == NULL) {
+        return;
+    }
+
+    CHECK(credit_grants_recv == 1 && credit_grant_units == (unsigned long)accept_credit,
+          "the captured ACCEPT_REQ produced grants=%lu units=%lu, expected 1"
+          " and %d -- the daemon is not banking the p. 2-43 extension",
+          credit_grants_recv, credit_grant_units, accept_credit);
+    /* p. 2-43: the extension, minus one debit per message the join dialogue's
+     * own add-member burst then sent. */
+    CHECK(credit_send_stamped == CREDIT_JOIN_BURST,
+          "the join dialogue emitted %lu accounted message(s), expected the"
+          " %d-frame add-member burst -- the arithmetic below depends on it",
+          credit_send_stamped, CREDIT_JOIN_BURST);
+    CHECK(credit_send_units == 0,
+          "the join burst piggybacked %lu credit(s); nothing had been received"
+          " or released yet, so it must carry 0", credit_send_units);
+    CHECK(ps->cdt_joiner->send_credit ==
+              (unsigned)(accept_credit - CREDIT_JOIN_BURST),
+          "Send Credit is %u after a %d-credit ACCEPT_REQ and %d sends,"
+          " expected %d", ps->cdt_joiner->send_credit, accept_credit,
+          CREDIT_JOIN_BURST, accept_credit - CREDIT_JOIN_BURST);
+    /* pcap#73 is a real MTYPE-10 frame for a Con.ID this world never opened.
+     * It must be banked NOWHERE: the p. 2-29/2-35 resolution refuses it, and a
+     * credit banked against some other connection would be an account crediting
+     * itself from a stranger's frame. */
+    CHECK(credit_recv_banked == 0,
+          "%lu frame(s) were banked before any deliverable application message"
+          " arrived -- pcap#73 addresses a connection this node never opened",
+          credit_recv_banked);
+    CHECK(ps->cdt_joiner->pending_receive_credit == 0,
+          "Pending Receive Credit is %u before any message was received",
+          ps->cdt_joiner->pending_receive_credit);
+
+    /* THE APPLICATION MESSAGE. */
+    rx_feed(&r, cap_ovmx_cm_app_message, sizeof(cap_ovmx_cm_app_message));
+    CHECK(rx_delivered_message == 1,
+          "the captured application message was not delivered (%lu) -- the"
+          " credit assertions below would be about a frame that never arrived",
+          rx_delivered_message);
+    CHECK(credit_recv_banked == 1 && credit_recv_units == (unsigned long)appmsg_credit,
+          "the application message produced banked=%lu units=%lu, expected 1"
+          " and %d (its own credit field)",
+          credit_recv_banked, credit_recv_units, appmsg_credit);
+    /* p. 2-43: the buffer the message consumed is released when the SYSAP
+     * returns, and that release IS the Pending Receive Credit the next outbound
+     * message will piggyback (p. 2-44). */
+    CHECK(credit_buffers_released == 1,
+          "the delivered message released %lu buffer(s), expected 1",
+          credit_buffers_released);
+    CHECK(ps->cdt_joiner->pending_receive_credit == 1,
+          "Pending Receive Credit is %u after one delivered message, expected 1",
+          ps->cdt_joiner->pending_receive_credit);
+
+    /* THE DISCRIMINATION, and the reason two more frames were transcribed for
+     * this case. #76's credit field is 0, so everything above is equally true
+     * of a daemon that banks a hard-coded 0 -- the vms-aa1 mutation battery
+     * proved that by replacing h.credit with 0 and surviving. pcap#369 carries
+     * a REAL non-zero piggyback (3) from the member on this same connection.
+     * The daemon must add THAT number, off the wire. */
+    const int credit3 = frame_credit_field(cap_ovmx_cm_app_message_credit3,
+                                           sizeof(cap_ovmx_cm_app_message_credit3));
+    CHECK(credit3 > 0,
+          "pcap#369 carries credit %d; a zero here makes this whole check"
+          " vacuous again", credit3);
+    const unsigned send_before = ps->cdt_joiner->send_credit;
+    rx_feed(&r, cap_ovmx_cm_app_message2, sizeof(cap_ovmx_cm_app_message2));
+    /* ONE FIELD OF pcap#369 IS EDITED, AND IT IS NOT THE ONE UNDER TEST: the
+     * NISCA send_seq at content [20:22] and its grounded [30:32] mirror are
+     * moved from the captured 29 to 16, so the frame follows #77's 15 with no
+     * gap. The member really did send 13 frames on OTHER connections in
+     * between; replaying only this connection's stream reproduces the gap, and
+     * the p. 2-31 guarantee then refuses the frame before its credit field is
+     * ever read -- which is what the first run of this case measured. The
+     * credit field, the Con.ID pair and every other byte are the capture's. */
+    uint8_t seqfix[sizeof(cap_ovmx_cm_app_message_credit3)];
+    memcpy(seqfix, cap_ovmx_cm_app_message_credit3, sizeof(seqfix));
+    seqfix[14 + 20] = 16; seqfix[14 + 21] = 0;
+    seqfix[14 + 30] = 16; seqfix[14 + 31] = 0;
+    CHECK(frame_credit_field(seqfix, sizeof(seqfix)) == credit3,
+          "the send_seq edit moved the credit field too (%d != %d)",
+          frame_credit_field(seqfix, sizeof(seqfix)), credit3);
+    rx_feed(&r, seqfix, sizeof(seqfix));
+    CHECK(credit_recv_banked == 3,
+          "%lu application message(s) were banked, expected 3", credit_recv_banked);
+    CHECK(credit_recv_units == (unsigned long)(appmsg_credit * 2 + credit3),
+          "the three application messages banked %lu credit(s) in total,"
+          " expected %d -- the daemon is not reading the field off the wire",
+          credit_recv_units, appmsg_credit * 2 + credit3);
+    CHECK(ps->cdt_joiner->send_credit == send_before + (unsigned)credit3,
+          "Send Credit went %u -> %u across two more messages carrying %d and"
+          " %d; p. 2-44 requires the credit field to be ADDED",
+          send_before, ps->cdt_joiner->send_credit, appmsg_credit, credit3);
+
+    /* THE NEGATIVE CONTROL: the p. 2-35 source check. pcap#369 with ONE field
+     * changed -- its source Con.ID -- is a frame addressed to this connection
+     * by something that is not its peer. Its credit must be banked NOWHERE.
+     * (The edit is deliberate and is the only edit: everything else, including
+     * the credit field being asserted about, is the captured bytes.) */
+    const unsigned long banked_before = credit_recv_banked;
+    const unsigned long units_before = credit_recv_units;
+    const unsigned send_before2 = ps->cdt_joiner->send_credit;
+    uint8_t forged[sizeof(seqfix)];
+    memcpy(forged, seqfix, sizeof(forged));
+    forged[14 + 20] = 17; forged[14 + 30] = 17; /* keep the sequence contiguous */
+    forged[14 + 54] = 0x99; /* source Con.ID low byte -- not the peer's handle */
+    rx_feed(&r, forged, sizeof(forged));
+    CHECK(rx_deliver_src_mismatch >= 1,
+          "the forged source Con.ID was not refused by the p. 2-35 check"
+          " (%lu mismatch(es)) -- the control below proves nothing",
+          rx_deliver_src_mismatch);
+    CHECK(credit_recv_banked == banked_before &&
+              credit_recv_units == units_before &&
+              ps->cdt_joiner->send_credit == send_before2,
+          "a frame the p. 2-35 source check REFUSED still moved the account:"
+          " banked %lu->%lu units %lu->%lu send-credit %u->%u",
+          banked_before, credit_recv_banked, units_before, credit_recv_units,
+          send_before2, ps->cdt_joiner->send_credit);
+}
+
+/* (2) THE SEND HALF: the production sender debits a Send Credit per message and
+ * stamps the Pending Receive Credit into the grounded field -- and the field
+ * VARIES across the frames of one burst, because the p. 2-44 reset means only
+ * the first frame after a release can carry it. */
+static void test_credit_send_path_stamps_the_grounded_field(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
+
+    const int accept_credit =
+        frame_credit_field(cap_ovmx_joiner_accept_req, sizeof(cap_ovmx_joiner_accept_req));
+    const int appmsg_credit =
+        frame_credit_field(cap_ovmx_cm_app_message, sizeof(cap_ovmx_cm_app_message));
+    struct peer_state *ps = credit_world_join(&r);
+    if (ps == NULL || ps->cdt_joiner == NULL) {
+        return;
+    }
+    rx_feed(&r, cap_ovmx_cm_app_message, sizeof(cap_ovmx_cm_app_message));
+    CHECK(ps->cdt_joiner->pending_receive_credit == 1,
+          "the fixture did not leave one Pending Receive Credit to piggyback");
+
+    const unsigned base = scsd_test_frames;
+    const unsigned long stamped_before = credit_send_stamped;
+    log_capture_begin();
+    int sent = cm_send_config_burst(r.rx.sock, r.rx.ifindex, ps, r.rx.our_hw_mac,
+                                    r.rx.our_src_logical, OVMX_JOINER_CONID,
+                                    ps->joiner_remote_conid);
+    log_capture_end();
+    CHECK(sent == 3, "the production add-member burst emitted %d frame(s),"
+                     " expected 3", sent);
+    CHECK(scsd_test_frames == base + 3,
+          "%u frame(s) reached the transport, expected 3",
+          scsd_test_frames - base);
+    if (scsd_test_frames != base + 3) {
+        return;
+    }
+
+    const int c0 = emitted_credit_field(base);
+    const int c1 = emitted_credit_field(base + 1);
+    const int c2 = emitted_credit_field(base + 2);
+
+    /* p. 2-44: "local SCS copies the local Pending Receive Credit count into
+     * the credit field of the message header ... also resets to 0 the local
+     * Pending Receive Credit." */
+    CHECK(c0 == 1,
+          "the FIRST outbound message carries credit %d at SCA [48:50],"
+          " expected the 1 Pending Receive Credit the delivered message"
+          " released -- the send path is not piggybacking", c0);
+    CHECK(c1 == 0 && c2 == 0,
+          "the second and third outbound messages carry credit %d/%d, expected"
+          " 0/0 -- p. 2-44 resets the count when it is piggybacked, so only the"
+          " first frame after a release may carry it", c1, c2);
+    /* THE FIELD IS NOT A CONSTANT. This is the assertion a template can't pass:
+     * before this item every OVMX 190-byte frame carried the template's fixed
+     * 0 there, and a stamper that wrote one fixed value would still. */
+    CHECK(c0 != c1,
+          "the credit field is CONSTANT (%d) across the three frames of one"
+          " burst -- nothing live is being stamped", c0);
+
+    CHECK(credit_send_stamped == stamped_before + 3,
+          "the three outbound messages stamped %lu account(s), expected 3",
+          credit_send_stamped - stamped_before);
+    CHECK(credit_send_units == 1,
+          "the burst piggybacked %lu credit(s) in total, expected the 1 that"
+          " was released", credit_send_units);
+    CHECK(credit_send_starved == 0,
+          "%lu send(s) found no Send Credit, on a connection the ACCEPT_REQ"
+          " extended %d to", credit_send_starved, accept_credit);
+    /* p. 2-43: "remote SCS decrements its Send Credit count and sends the
+     * message" -- one debit per message, against the extension the ACCEPT_REQ
+     * granted plus whatever the delivered application message added. */
+    const int expect_send_credit =
+        accept_credit + appmsg_credit - (CREDIT_JOIN_BURST + 3);
+    CHECK(ps->cdt_joiner->send_credit == (unsigned)expect_send_credit,
+          "Send Credit is %u after %d sends on a connection granted %d + %d,"
+          " expected %d", ps->cdt_joiner->send_credit, CREDIT_JOIN_BURST + 3,
+          accept_credit, appmsg_credit, expect_send_credit);
+    CHECK(ps->cdt_joiner->pending_receive_credit == 0,
+          "Pending Receive Credit is %u after it was piggybacked, expected the"
+          " p. 2-44 reset to 0", ps->cdt_joiner->pending_receive_credit);
+}
+
+/* (3) THE EXIT SUMMARY carries the account, so a run whose flow control never
+ * moved says so in its own log rather than leaving it to be inferred (INV-6). */
+static void test_exit_summary_reports_the_credit_account(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
+    struct peer_state *ps = credit_world_join(&r);
+    if (ps == NULL || ps->cdt_joiner == NULL) {
+        return;
+    }
+    rx_feed(&r, cap_ovmx_cm_app_message, sizeof(cap_ovmx_cm_app_message));
+    log_capture_begin();
+    (void)cm_send_config_burst(r.rx.sock, r.rx.ifindex, ps, r.rx.our_hw_mac,
+                               r.rx.our_src_logical, OVMX_JOINER_CONID,
+                               ps->joiner_remote_conid);
+    log_capture_end();
+
+    char  buf[16384];
+    FILE *cap = tmpfile();
+    CHECK(cap != NULL, "tmpfile");
+    if (cap == NULL) {
+        return;
+    }
+    scsd_exit_summary(&r.rx, cap);
+    fflush(cap);
+    rewind(cap);
+    size_t got = fread(buf, 1, sizeof(buf) - 1, cap);
+    buf[got] = '\0';
+    fclose(cap);
+
+    /* The NUMBERS, not just the label -- a line of zeros next to a run that
+     * moved the account is the failure this case exists to catch. */
+    char want[128];
+    snprintf(want, sizeof(want), "CREDIT: stamped=%d units-sent=1 starved=0",
+             CREDIT_JOIN_BURST + 3);
+    CHECK(strstr(buf, want) != NULL,
+          "the exit summary does not carry the send half of the account this"
+          " run performed ('%s')", want);
+    CHECK(strstr(buf, "banked=1") != NULL && strstr(buf, "grants=1") != NULL,
+          "the exit summary does not carry the receive half (banked=1 grants=1)");
+    CHECK(strstr(buf, "buffers-released=1") != NULL,
+          "the exit summary does not report the p. 2-43 buffer release");
+}
+
+/*
+ * (4) THE KILL SWITCH, RUN AS A MATCHED CONTROL (guardrail 23). This is
+ * wire-visible: OVMX_NO_CREDIT_ACCOUNTING=1 must suppress the change and
+ * NOTHING ELSE. The same fixture is driven twice and the emitted frames are
+ * compared BYTE FOR BYTE -- the switched run must differ from the accounted run
+ * at exactly the two bytes of the credit field on exactly the frames that were
+ * stamped, and be identical everywhere else. A switch that gates more than its
+ * change is as useless as one that gates less.
+ */
+static void test_credit_kill_switch_is_a_matched_control(void)
+{
+    uint8_t on_frames[3][SCA_FRAME_MAX];
+    size_t  on_len[3] = {0, 0, 0};
+    uint8_t off_frames[3][SCA_FRAME_MAX];
+    size_t  off_len[3] = {0, 0, 0};
+    unsigned long on_stamped = 0;
+
+    for (int pass = 0; pass < 2; pass++) {
+        if (pass == 0) {
+            unsetenv("OVMX_NO_CREDIT_ACCOUNTING");
+        } else {
+            setenv("OVMX_NO_CREDIT_ACCOUNTING", "1", 1);
+        }
+        scs_credit_reset_switch_cache();
+        CHECK(scs_credit_enabled() == (pass == 0),
+              "the switch cache did not follow the environment on pass %d", pass);
+
+        struct rxworld r;
+        rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
+        struct peer_state *ps = credit_world_join(&r);
+        if (ps == NULL || ps->cdt_joiner == NULL) {
+            break;
+        }
+        rx_feed(&r, cap_ovmx_cm_app_message, sizeof(cap_ovmx_cm_app_message));
+        unsigned base = scsd_test_frames;
+        log_capture_begin();
+        (void)cm_send_config_burst(r.rx.sock, r.rx.ifindex, ps, r.rx.our_hw_mac,
+                                   r.rx.our_src_logical, OVMX_JOINER_CONID,
+                                   ps->joiner_remote_conid);
+        log_capture_end();
+        CHECK(scsd_test_frames == base + 3, "pass %d emitted %u frames, expected 3",
+              pass, scsd_test_frames - base);
+        if (scsd_test_frames != base + 3) {
+            break;
+        }
+        for (unsigned i = 0; i < 3; i++) {
+            unsigned slot = (base + i) % SCSD_TEST_RING;
+            if (pass == 0) {
+                on_len[i] = scsd_test_ring_len[slot];
+                memcpy(on_frames[i], scsd_test_ring[slot], on_len[i]);
+            } else {
+                off_len[i] = scsd_test_ring_len[slot];
+                memcpy(off_frames[i], scsd_test_ring[slot], off_len[i]);
+            }
+        }
+        if (pass == 0) {
+            on_stamped = credit_send_stamped;
+            CHECK(on_stamped == CREDIT_JOIN_BURST + 3,
+                  "the accounted pass stamped %lu, expected %d", on_stamped,
+                  CREDIT_JOIN_BURST + 3);
+        } else {
+            /* THE SWITCH ACTUALLY GATED IT: not one counter moved. */
+            CHECK(credit_send_stamped == 0 && credit_send_units == 0 &&
+                      credit_recv_banked == 0 && credit_grants_recv == 0 &&
+                      credit_buffers_released == 0 && credit_send_starved == 0,
+                  "OVMX_NO_CREDIT_ACCOUNTING=1 still moved the account:"
+                  " stamped=%lu units=%lu banked=%lu grants=%lu released=%lu"
+                  " starved=%lu",
+                  credit_send_stamped, credit_send_units, credit_recv_banked,
+                  credit_grants_recv, credit_buffers_released,
+                  credit_send_starved);
+            CHECK(ps->cdt_joiner->send_credit == 0 &&
+                      ps->cdt_joiner->pending_receive_credit == 0,
+                  "the switched-off run still carries an account:"
+                  " send=%u pending=%u", ps->cdt_joiner->send_credit,
+                  ps->cdt_joiner->pending_receive_credit);
+        }
+    }
+    unsetenv("OVMX_NO_CREDIT_ACCOUNTING");
+    scs_credit_reset_switch_cache();
+
+    /* THE BYTE COMPARISON. */
+    unsigned frames_that_differ = 0;
+    for (unsigned i = 0; i < 3; i++) {
+        CHECK(on_len[i] == off_len[i] && on_len[i] > 0,
+              "frame %u differs in LENGTH between the two passes (%zu vs %zu)",
+              i, on_len[i], off_len[i]);
+        if (on_len[i] != off_len[i] || on_len[i] == 0) {
+            continue;
+        }
+        size_t credit_off = 14u + (size_t)SCS_CREDIT_FIELD_SCA_OFFSET;
+        size_t differing = 0;
+        size_t first_diff = 0;
+        for (size_t b = 0; b < on_len[i]; b++) {
+            if (on_frames[i][b] != off_frames[i][b]) {
+                if (differing == 0) {
+                    first_diff = b;
+                }
+                differing++;
+                CHECK(b == credit_off || b == credit_off + 1,
+                      "frame %u differs at absolute offset %zu, which is NOT the"
+                      " credit field at %zu -- OVMX_NO_CREDIT_ACCOUNTING is"
+                      " gating something other than its own change",
+                      i, b, credit_off);
+            }
+        }
+        if (differing > 0) {
+            frames_that_differ++;
+        }
+        (void)first_diff;
+    }
+    /* THE SWITCH GATES SOMETHING OBSERVABLE ON THE WIRE. Without this the whole
+     * control is decorative: a switch whose two arms emit identical bytes
+     * proves nothing about what the change did (guardrail 23). */
+    CHECK(frames_that_differ > 0,
+          "all three frames are BYTE-IDENTICAL with OVMX_NO_CREDIT_ACCOUNTING"
+          " set and unset -- the switch gates nothing on the wire");
+    /* AND THE FIRST FRAME IS ONE OF THEM, for a reason stated rather than
+     * assumed: it is the one carrying the live Pending Receive Credit, so if it
+     * matched the control the piggyback would not be reaching the wire. */
+    CHECK(frame_credit_field(on_frames[0], on_len[0]) == 1 &&
+              frame_credit_field(off_frames[0], off_len[0]) != 1,
+          "the first burst frame carries credit %d accounted and %d switched"
+          " off; the accounted value must be the 1 Pending Receive Credit and"
+          " the control must NOT reproduce it",
+          frame_credit_field(on_frames[0], on_len[0]),
+          frame_credit_field(off_frames[0], off_len[0]));
+    /* The remaining frames are NOT required to be identical, and this is a
+     * MEASUREMENT rather than a concession: scs_member.c's op-0x02 config
+     * template replays a captured credit of 2 at [48:50], so stamping the live
+     * count (0, already piggybacked by the first frame) legitimately changes
+     * that byte too. Every difference is still inside the credit field -- the
+     * per-byte CHECK above is what enforces that -- which is the actual claim.
+     * What must NOT happen is a difference outside it. */
+    CHECK(on_stamped == CREDIT_JOIN_BURST + 3, "the accounted pass did not run");
 }
 
 /*
@@ -7198,6 +7765,11 @@ int main(void)
      * that make the lookup a gate rather than a formality. */
     test_rx_classifier_over_captured_frames();
     test_captured_app_message_reaches_the_sysap_through_the_cdl();
+    /* vms-aa1 */
+    test_credit_receive_path_banks_the_wire_field();
+    test_credit_send_path_stamps_the_grounded_field();
+    test_exit_summary_reports_the_credit_account();
+    test_credit_kill_switch_is_a_matched_control();
     test_peer_supplied_conid_cannot_index_past_the_cdl();
     test_source_conid_from_another_incarnation_is_refused();
     /* vms-fdd: the SCA connect data, through CONNECT, ACCEPT and the receive

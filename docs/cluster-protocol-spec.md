@@ -3522,6 +3522,53 @@ tree**. Both were discarded. The arms above ran from a per-run
 `/lab/ebb-<TAG>/` directory with the md5 checked in-pod before and after. Do not
 run a lab-2 bracket through `tests/lab/tools/lab2run.sh` while another session is live.
 
+#### 4(O.5) `vms-7c0`'s stricter CDL receive path does not regress the `vms-449` rejoin (GROUNDED live, `vms-8e4`)
+
+`vms-449` (§4(O.2)) and `vms-7c0` (routing received application messages through
+the CDL, p. 2-29) merged to main independently and had never been exercised
+together. `vms-7c0` flagged three of its own tightened behaviors as an
+unmeasured risk against the rejoin finding: a 190-content frame to a Con.ID
+with no live CDT is now dropped-and-counted (`rx_deliver_no_cdt`) rather than
+processed; a frame whose source Con.ID mismatches the bound peer handle is now
+refused (`rx_deliver_src_mismatch`); and a previously-accepted defensive-OR
+shape is now unreachable. This re-runs the question on current `main`
+(`3809b14`, both `vms-449` and `vms-7c0` ancestors).
+
+**Method.** A first-join + rejoin pair on lab-2 `vaxlab-6` — the same pod
+`vms-449`'s own bracket used — binary built from this tree, identity `OVMXW1` /
+`SCSSYSTEMID` 1610, default environment.
+
+| run | role | verdict | RX-CDL: no-cdt | RX-CDL: src-mismatch | CM 190-class messages |
+|---|---|---|---|---|---|
+| `A2` | first join | **JOINED, t+26s** | 0 | 0 | 342 (cm-messages) |
+| `B1` | rejoin, same identity | **REFUSED** (`CLUSTER_NODES` never advanced) | 0 | 0 | 596 (cm-messages, peer-driven — see caveat) |
+
+**The rejoin-refused finding still holds** on current main, and **neither of
+`vms-7c0`'s two countable tightened paths fired on either run** — `no-cdt` and
+`src-mismatch` both read 0 in the exit summary for the join and for the
+rejoin, so the stricter receive path is not what is refusing the rejoin.
+
+**Caveat, recorded rather than smoothed over.** `vaxlab-6` had already carried
+`vms-449`'s own 9-run bracket plus other sessions' traffic earlier the same
+day; mid-bracket here, `VAX2` showed `SHOW CLUSTER` status `BRK_NON` (broken,
+non-member) rather than the clean 2-node baseline, and `OVMXW1` sat at `NEW`
+rather than being refused outright the way `vms-449`'s bracket recorded it.
+This is pod wear, not a code path: a companion first-join run on a virgin pod
+(`vaxlab-8`, scaled up fresh for this check) never joined at all across two
+identities in 156s each — a pod-level SIMH/br0 problem on that specific
+replica, distinct from both the `vms-449` and this bracket's `vaxlab-6`
+results, and not chased further here (out of this item's scope; a fresh
+lab-2 replica should not need to be treated as suspect after one bad boot,
+but this one was). Neither confound changes the two RX-CDL counters, which
+are read directly off the exit summary and are unaffected by `VAX2`'s state.
+
+**Not claimed:** a byte-clean replication of `vms-449`'s exact bracket shape
+(guardrail 20's control-between-runs discipline) — the degraded `VAX2` breaks
+that. What is grounded is the counter reading, which is what this item asked
+for. Re-derive: `docs/HANDOFF-vms-2f3.md` §4(O.2) for the original bracket;
+this section's numbers come from `tests/lab/tools/lab2run.sh` runs
+`8e4A2`/`8e4B1` on `vaxlab-6`, 2026-08-06.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

@@ -1044,6 +1044,37 @@ jobs:
             '
 
   # -----------------------------------------------------------------------
+  # Job 10a: LINK.EXE — x86_64 "simple" static relocations (vms-8f5)
+  #
+  # x86_64 counterpart of Job 10, gating the additive machine-type gate: the
+  # runner IS x86_64, so LINK.EXE + the hand-built .o test objects are built
+  # and RUN natively with NO emulation (contrast Job 10, which needs arm64
+  # QEMU for the whole harness). Proves R_X86_64_64 (absolute data pointer),
+  # R_X86_64_PC32 (same-image call), and R_X86_64_PLT32 (cross-object call)
+  # link + execute for real, that the emitted ET_DYN carries EM_X86_64, and —
+  # via one arm64-emulated cross-compile of a companion aarch64 object fed to
+  # the SAME native LINK.EXE binary — that the gate stays additive (aarch64
+  # still emits EM_AARCH64, mixed-architecture input is rejected).
+  # -----------------------------------------------------------------------
+  vmslink-x86_64:
+    name: LINK.EXE VMS-native Linker — x86_64 simple relocs (vms-8f5)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64, for the aarch64 regression cross-compile only)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build LINK.EXE (native x86_64) + prove the simple x86_64 relocs + additive-gate regression
+        run: |
+          sh src/vmslink/test/run_test_x86_64.sh
+
+  # -----------------------------------------------------------------------
   # Job 10b: DECC$SHR.EXE — the OVMX C run-time library shareable (aarch64)
   #
   # Gate on the C-RTL shareable (bead vms-61f.1, pillar vms-ade): LINK.EXE links

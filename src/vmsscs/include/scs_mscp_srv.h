@@ -173,14 +173,27 @@
  *  - The SCC controller-flags bits 15/13/11/2 and P.UNFL bit 15's meaning.
  *  - Whether MSCP credit/flow control interacts with block transfers.
  *
- * AND THE BIG ONE: BLOCK DATA TRANSFER IS DECODED BUT NOT IMPLEMENTED HERE.
- * The capture grounds the wire format (see docs/design-mscp-direction.md for
- * the field table), so vms-941 is now buildable -- but this module still ships
- * with no transfer hook, and a READ therefore still answers Controller Error
- * rather than a Success it cannot back up. Implementing it is part 2.
- * MSCP$DISK is still NOT registered via LISTEN (vms-61b2) for the same reason:
- * OVMX cannot yet honour a mount, so advertising that it can would be the
- * facade vms-61b2 refused to build.
+ * BLOCK DATA TRANSFER (vms-941 UN-DEFERRED by vms-4e31). The capture grounds
+ * the wire format above, and this module now BUILDS AND PARSES it -- see the
+ * "SCA BLOCK DATA TRANSFER" section below for the 28-byte header, the two
+ * framing traps a real lab capture found (READ's end-message piggyback, and
+ * WRITE's byte-identical request/response headers), and
+ * struct scs_mscp_srv_blk_sink, a reference scs_mscp_srv_xfer_fn implementation
+ * that actually moves bytes through it. Installing it is what turns srv->xfer's
+ * absence -- the deliberate refusal design decision (4) established -- into
+ * real serving; leaving it uninstalled still refuses, honestly, exactly as
+ * before -- the kill switch is not removed, only given something real to gate.
+ * MSCP$DISK is still NOT registered via LISTEN (vms-61b2) for a different
+ * reason: that is about advertising the service on the wire, not about
+ * whether this module can serve one.
+ *
+ * v1's WRITE REFUSAL (design decision (2)) IS UNCHANGED BY THIS ITEM. This
+ * item grounds and implements the block-transfer WIRE MECHANISM for both
+ * directions (a real WRITE needs the REQDAT half just as much as READ needs
+ * SNDDAT), and tests it end-to-end against the backing store with
+ * scs_mscp_srv_write_blocks() -- but scs_mscp_srv_handle()'s WRITE opcode
+ * dispatch still answers Write Protected. Flipping v1 read-only to read-write
+ * is a policy decision this item does not make.
  */
 #ifndef SCS_MSCP_SRV_H
 #define SCS_MSCP_SRV_H
@@ -509,6 +522,25 @@ long scs_mscp_srv_read_blocks(struct scs_mscp_srv_unit *u, uint32_t lbn,
                               uint32_t nblocks, uint8_t *out, size_t out_len);
 
 /*
+ * scs_mscp_srv_write_blocks - the write-side mirror of scs_mscp_srv_read_blocks,
+ * added for vms-4e31 to test the block-transfer WRITE path against a real
+ * backing store. Writes `nblocks` 512-byte blocks starting at `lbn` from `data`.
+ * Returns the number of BYTES written, or -1 on a short write, an out-of-range
+ * LBN, or an unattached unit.
+ *
+ * THIS DOES NOT CHANGE v1's WRITE POLICY. scs_mscp_srv_handle()'s WRITE opcode
+ * dispatch still answers Write Protected unconditionally (design decision (2))
+ * -- this function exists so the block-transfer machinery's receiving half can
+ * be proven against a real file, independent of whether any current MSCP
+ * command path calls it. A unit attached read-only via scs_mscp_srv_attach_fd()
+ * still requires an fd the CALLER opened read-write for this to succeed; the
+ * function itself does not check u->read_only, because it is not the write
+ * POLICY -- scs_mscp_srv_handle() is.
+ */
+long scs_mscp_srv_write_blocks(struct scs_mscp_srv_unit *u, uint32_t lbn,
+                               const uint8_t *data, uint32_t nblocks);
+
+/*
  * scs_mscp_srv_handle - THE RESPONDER. Decode one received MSCP command
  * (`cmd`, already parsed by scs_mscp_parse(), with `body` pointing at its
  * 12-byte-header MSCP message and `body_len` its length) and lay the end
@@ -549,6 +581,225 @@ long scs_mscp_srv_handle(struct scs_mscp_srv *srv, uint32_t conid,
 long scs_mscp_srv_build_end_frame(const struct scs_mscp_params *p,
                                   const uint8_t *body, size_t body_len,
                                   uint8_t *out, size_t out_len);
+
+/* ==================================================================
+ * SCA BLOCK DATA TRANSFER (vms-941 un-deferred, vms-4e31).
+ *
+ * GROUNDING: a real VAX serving a disk to a real VAX, captured for the first
+ * time on lab-2 (vaxlab-9, 2026-08-06) -- see
+ * docs/design-mscp-direction.md, "Phase D part 1's lab capture" section, and
+ * the WIRE FIDELITY commentary above. A block-transfer message is a 28-byte
+ * header followed by N data bytes, and it sits at SCA content offset 42 -- the
+ * SAME SLOT a normal message's 16-byte SCS envelope occupies -- which is why
+ * it deliberately FAILS the SCS envelope conformance test
+ * (content[44:46] == 0x0004, the envelope's format word): offset 44 here is
+ * the UPPER HALF of the block header's 32-bit destination connection ID, a
+ * value that essentially never happens to equal 0x0004. Do not route a
+ * block-transfer frame through envelope-conformance code; it is not one.
+ *
+ *   header offset | size | field
+ *   --------------|------|------------------------------------------------
+ *   +0            | 4    | destination connection ID (same value the MSCP
+ *                 |      | envelope for this connection carries)
+ *   +4            | 2    | UNGROUNDED. Constant per connection (9 on one
+ *                 |      | connection, 13 on another, in the capture).
+ *                 |      | NOT a message type despite resembling one.
+ *   +6            | 2    | UNGROUNDED. Constant across all frames of one
+ *                 |      | transfer; increments between transfers.
+ *   +8            | 4    | bytes remaining in THIS transfer, INCLUDING this
+ *                 |      | frame's own data (counts DOWN)
+ *   +12           | 4    | source buffer name
+ *   +16           | 4    | destination offset within the destination buffer
+ *   +20           | 4    | destination buffer name
+ *   +24           | 4    | source offset
+ *   +28           | N    | the data
+ *
+ * The two UNGROUNDED fields (+4, +6) are never interpreted anywhere in this
+ * module -- every builder takes them as caller-supplied opaque values and
+ * every parser exposes them as opaque values. Carrying a value through
+ * unchanged is not the same claim as decoding it.
+ *
+ * THE MSCP BUFFER DESCRIPTOR (Table A-6 offset 16 in a READ/WRITE command,
+ * SCS_MSCP_P_BUFF, 12 bytes) is { u32 offset, u32 SCS buffer NAME,
+ * u32 SCS connection ID }; the NAME is the correlation key a real
+ * implementation would use to match block frames to the command that asked
+ * for them.
+ *
+ * TWO FRAMING TRAPS, found by the lab-2 capture and not derivable from the
+ * manual alone:
+ *
+ *  TRAP 1 (READ): the FINAL, possibly-partial chunk of a READ's data
+ *  piggybacks into the SAME Ethernet frame as the MSCP end message. The SCS
+ *  envelope's inner length (content[42:44]) declares only the end message's
+ *  own bytes; everything past it is a second, unheralded message. A receive
+ *  path that trusts the declared inner length to bound the frame silently
+ *  drops that data. See scs_mscp_srv_build_read_end_with_piggyback() /
+ *  scs_mscp_srv_parse_read_end_trailer(), which build and receive exactly
+ *  this shape using the frame's REAL length, never a declared one.
+ *
+ *  TRAP 2 (WRITE): WRITE's two-frame request/response has BYTE-IDENTICAL
+ *  28-byte headers in both directions -- only the PRESENCE OF DATA
+ *  distinguishes request (header + data) from response (header only). A
+ *  parser keying on the header alone cannot tell them apart, and
+ *  scs_mscp_srv_blk_parse_frame() does not try to; see its data_len.
+ * ================================================================== */
+
+#define SCS_MSCP_BLK_HDR_OFF 42 /* SCA content offset -- same slot a normal
+                                 * message's SCS envelope would occupy */
+#define SCS_MSCP_BLK_HDR_LEN 28
+
+/* Block-transfer header field offsets, relative to SCS_MSCP_BLK_HDR_OFF. */
+#define SCS_MSCP_BLK_CONID    0  /* +0  4  destination connection ID */
+#define SCS_MSCP_BLK_F4       4  /* +4  2  UNGROUNDED, see above */
+#define SCS_MSCP_BLK_F6       6  /* +6  2  UNGROUNDED, see above */
+#define SCS_MSCP_BLK_REMAIN   8  /* +8  4  bytes remaining, counts down */
+#define SCS_MSCP_BLK_SRC_NAME 12 /* +12 4  source buffer name */
+#define SCS_MSCP_BLK_DST_OFF  16 /* +16 4  destination offset */
+#define SCS_MSCP_BLK_DST_NAME 20 /* +20 4  destination buffer name */
+#define SCS_MSCP_BLK_SRC_OFF  24 /* +24 4  source offset */
+
+/*
+ * scs_mscp_blk_hdr - the 28-byte block-transfer header, field by field.
+ */
+struct scs_mscp_blk_hdr {
+    uint32_t dest_conid;
+    uint16_t f4;             /* UNGROUNDED, see SCS_MSCP_BLK_F4 above */
+    uint16_t f6;             /* UNGROUNDED, see SCS_MSCP_BLK_F6 above */
+    uint32_t bytes_remaining;
+    uint32_t src_buf_name;
+    uint32_t dest_offset;
+    uint32_t dest_buf_name;
+    uint32_t src_offset;
+};
+
+/*
+ * scs_mscp_srv_blk_build_hdr / scs_mscp_srv_blk_parse_hdr - lay out / decode
+ * just the 28-byte header at its field offsets. build zero-fills first and
+ * tolerates h == NULL (an all-zero header). parse returns 0, or -1 if either
+ * pointer is NULL.
+ */
+void scs_mscp_srv_blk_build_hdr(uint8_t out[SCS_MSCP_BLK_HDR_LEN],
+                                const struct scs_mscp_blk_hdr *h);
+int scs_mscp_srv_blk_parse_hdr(const uint8_t hdr[SCS_MSCP_BLK_HDR_LEN],
+                               struct scs_mscp_blk_hdr *out);
+
+/*
+ * scs_mscp_srv_blk_view - a parsed block-transfer frame: the header, plus
+ * whatever trailing data was actually PRESENT in the bytes handed in (never a
+ * declared length). data_len == 0 with data == NULL is a real, valid state --
+ * TRAP 2's response half is header-only by design, not a parse failure.
+ */
+struct scs_mscp_srv_blk_view {
+    struct scs_mscp_blk_hdr hdr;
+    const uint8_t *data;
+    size_t data_len;
+};
+
+/*
+ * scs_mscp_srv_blk_parse_frame - parse a standalone block-transfer Ethernet
+ * frame (14-byte Ethernet header + 42-byte PPD prefix + 28-byte block header
+ * + N data bytes, N possibly 0). `frame_len` MUST be the frame's real,
+ * received length -- a block-transfer message carries no length field of its
+ * own to bound it with (TRAP 1's lesson generalised). Returns 0, or -1 if
+ * frame_len is too short for even the header or a pointer is NULL.
+ */
+int scs_mscp_srv_blk_parse_frame(const uint8_t *frame, size_t frame_len,
+                                 struct scs_mscp_srv_blk_view *out);
+
+/*
+ * scs_mscp_srv_build_block_frame - build one standalone block-transfer frame
+ * on the connection described by `p`. `data_len` may be 0 (TRAP 2: a
+ * header-only frame, e.g. a WRITE response/ack). Returns the frame length, or
+ * -1 on a NULL pointer or a short `out`.
+ */
+long scs_mscp_srv_build_block_frame(const struct scs_mscp_params *p,
+                                    const struct scs_mscp_blk_hdr *h,
+                                    const uint8_t *data, size_t data_len,
+                                    uint8_t *out, size_t out_len);
+
+/*
+ * scs_mscp_srv_build_read_end_with_piggyback - TRAP 1's send side. Builds an
+ * ordinary end frame (scs_mscp_srv_build_end_frame(), whose SCS envelope inner
+ * length covers only `end_body`) and then, if `tail_hdr` is non-NULL, appends
+ * a block-transfer header + `tail_data` RAW past what that inner length
+ * declares -- reproducing the real server's piggyback of READ's final partial
+ * chunk into the same Ethernet frame as the end message. `tail_hdr == NULL`
+ * builds a plain end frame with no piggyback. Returns the TOTAL frame length
+ * (end message + piggyback, if any), or -1.
+ */
+long scs_mscp_srv_build_read_end_with_piggyback(
+    const struct scs_mscp_params *p, const uint8_t *end_body,
+    size_t end_body_len, const struct scs_mscp_blk_hdr *tail_hdr,
+    const uint8_t *tail_data, size_t tail_data_len, uint8_t *out,
+    size_t out_len);
+
+/*
+ * scs_mscp_srv_parse_read_end_trailer - TRAP 1's receive side. Given a
+ * frame's REAL received length (`frame_len`) and the length of just its end
+ * message (`end_frame_len` -- e.g. scs_mscp_srv_build_end_frame()'s own return
+ * value, or the SCS envelope's declared inner length plus the 14+58-byte
+ * prefix), recovers a trailing piggybacked block segment if one is present.
+ * *out has data_len == 0 (not an error) when frame_len <= end_frame_len, i.e.
+ * no piggyback. Returns 0, or -1 if a trailer is present but too short for
+ * even its header.
+ *
+ * THE POINT OF THIS FUNCTION IS ITS SECOND ARGUMENT: a caller that instead
+ * derived a bound from the SCS envelope's declared inner length and used THAT
+ * as frame_len would silently see no trailer, ever -- which is TRAP 1 exactly
+ * as a real receive path hits it. Always pass the frame's actual size.
+ */
+int scs_mscp_srv_parse_read_end_trailer(const uint8_t *frame, size_t frame_len,
+                                        size_t end_frame_len,
+                                        struct scs_mscp_srv_blk_view *out);
+
+/*
+ * scs_mscp_srv_blk_sink - a REFERENCE scs_mscp_srv_xfer_fn implementation that
+ * actually builds SCA block-transfer frames (design decision (4) / vms-941),
+ * appending them into a caller-owned buffer rather than a live connection --
+ * this module has no network layer of its own (scsd.c does; wiring the sink
+ * to a real socket is future work outside this module's scope). Install with
+ * scs_mscp_srv_set_xfer(srv, scs_mscp_srv_blk_sink_xfer, sink).
+ */
+struct scs_mscp_srv_blk_sink {
+    struct scs_mscp_params params;
+    uint16_t conn_const;   /* UNGROUNDED +4 value this sink will carry through
+                            * unchanged; caller sets it, this code never
+                            * interprets it */
+    uint16_t xfer_const;   /* UNGROUNDED +6 value, likewise carried through */
+    uint32_t bytes_total;  /* caller sets before the transfer starts; feeds
+                            * the down-counting +8 field */
+    uint32_t bytes_sent;   /* running total; updated by
+                            * scs_mscp_srv_blk_sink_xfer as frames are built */
+    uint32_t src_buf_name; /* OVMX's own local source-buffer token -- our
+                            * side's naming choice, not wire-grounded (the spec
+                            * names the field but not what a server puts in
+                            * it) */
+    uint8_t *out;
+    size_t   out_len;
+    size_t   used;
+    unsigned frames_built;
+};
+
+/*
+ * scs_mscp_srv_blk_sink_init - zero *sink and load the connection identity
+ * (`params`), the transfer's total byte count and the output buffer it will
+ * build frames into.
+ */
+void scs_mscp_srv_blk_sink_init(struct scs_mscp_srv_blk_sink *sink,
+                                const struct scs_mscp_params *params,
+                                uint32_t bytes_total, uint8_t *out,
+                                size_t out_len);
+
+/*
+ * scs_mscp_srv_blk_sink_xfer - the scs_mscp_srv_xfer_fn itself. Decodes the
+ * host buffer descriptor (offset, SCS buffer NAME, SCS connection ID -- see
+ * the module comment above), builds one block-transfer frame carrying `data`
+ * via scs_mscp_srv_build_block_frame(), and appends it to sink->out. Returns
+ * `len` on success (matching scs_mscp_srv_xfer_fn's contract), or -1 if the
+ * output buffer is exhausted or an argument is NULL.
+ */
+long scs_mscp_srv_blk_sink_xfer(void *ctx, const uint8_t buffer_desc[12],
+                                uint32_t lbn, const uint8_t *data, size_t len);
 
 #ifdef __cplusplus
 }

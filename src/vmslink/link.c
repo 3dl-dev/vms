@@ -122,6 +122,50 @@
 #define R_X86_64_REX_GOTPCRELX 42  /* REX-prefixed relaxable GOTPCREL variant */
 #endif
 
+/* x86_64 TLSDESC ("gnu2" TLS dialect) relocations (vms-2e4). The type set is
+ * grounded by docs/design-link-x86_64-relocs.md; the CODEGEN below was
+ * re-derived from real `gcc -fPIC -O2 -mtls-dialect=gnu2` objects rather than
+ * assumed from the aarch64 shape, because the two are NOT the same mechanism:
+ *
+ *   aarch64 (4 relocs, bit-patched into an ADRP+LDR+ADD+BLR quartet):
+ *       TLSDESC_ADR_PAGE21 / TLSDESC_LD64_LO12 / TLSDESC_ADD_LO12 / TLSDESC_CALL
+ *
+ *   x86_64 (2 relocs, a flat disp32 + a pure marker) — observed byte-exactly:
+ *       48 8d 05 <disp32>   lea  sym@TLSDESC(%rip), %rax
+ *                              -> R_X86_64_GOTPC32_TLSDESC, addend -4
+ *       ff 10               call *(%rax)
+ *                              -> R_X86_64_TLSDESC_CALL, addend 0
+ *       64 03 38            add  %fs:(%rax), %edi      (TP + returned offset)
+ *
+ * So GOTPC32_TLSDESC is written EXACTLY like GOTPCREL — descriptor_addr+A-P as
+ * a flat little-endian 32-bit word, with the -4 being a FIELD addend (the site
+ * is the 4-byte disp32 field, 4 bytes before the instruction end the CPU uses
+ * as %rip) and NOT a symbol offset. TLSDESC_CALL is a marker on the 2-byte
+ * `call *(%rax)`: it must be left ALONE (its site is only two bytes wide — a
+ * 32-bit write there would corrupt the following instruction).
+ *
+ * R_X86_64_DTPOFF32 is the local-dynamic half. For `static _Thread_local`
+ * variables (exactly what src/libvms/rtl/lib_signal.c has, and why the survey
+ * tallies 8 of them) gcc emits ONE TLSDESC pair against the synthetic UND
+ * symbol `_TLS_MODULE_BASE_` — "give me this module's TLS block base" — and
+ * then addresses each variable as %fs:DTPOFF32(%rax), where the DTPOFF32 field
+ * holds the variable's MODULE-RELATIVE offset as a plain absolute 32-bit
+ * constant. That value is fixed at link time and is NOT load-biased, so it is
+ * deliberately not recorded in .vms$rel. */
+#ifndef R_X86_64_DTPOFF32
+#define R_X86_64_DTPOFF32        21
+#endif
+#ifndef R_X86_64_GOTPC32_TLSDESC
+#define R_X86_64_GOTPC32_TLSDESC 34
+#endif
+#ifndef R_X86_64_TLSDESC_CALL
+#define R_X86_64_TLSDESC_CALL    35
+#endif
+
+/* The synthetic UND TLS symbol gcc names in an x86_64 local-dynamic TLSDESC
+ * pair. It is not a variable: its "module offset" is 0 by definition. */
+#define TLS_MODULE_BASE_SYM "_TLS_MODULE_BASE_"
+
 #define IMGACT_INTERP "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"
 
 /* --------------------------------------------------------------------------
@@ -1049,13 +1093,39 @@ static int is_tlsdesc_reloc(uint32_t type)
     return type == R_AARCH64_TLSDESC_ADR_PAGE21 ||
            type == R_AARCH64_TLSDESC_LD64_LO12 ||
            type == R_AARCH64_TLSDESC_ADD_LO12 ||
-           type == R_AARCH64_TLSDESC_CALL;
+           type == R_AARCH64_TLSDESC_CALL ||
+           type == R_X86_64_GOTPC32_TLSDESC ||
+           type == R_X86_64_TLSDESC_CALL;
+}
+
+/* x86_64 TLSDESC relocations carry a FIELD addend (-4 on GOTPC32_TLSDESC, for
+ * the disp32-field-vs-instruction-end delta), never a symbol offset — so the
+ * addend must be excluded from the descriptor's module-offset computation,
+ * unlike the aarch64 TLSDESC relocs whose addend IS a symbol offset. */
+static int is_x86_tlsdesc_reloc(uint32_t type)
+{
+    return type == R_X86_64_GOTPC32_TLSDESC || type == R_X86_64_TLSDESC_CALL;
+}
+
+/* R_X86_64_DTPOFF32: the local-dynamic operand half — a plain absolute 32-bit
+ * module-relative TLS offset written at the site, added at run time to the
+ * module base the TLSDESC pair resolved. No image bias, no .vms$rel slot. */
+static int is_dtpoff_reloc(uint32_t type)
+{
+    return type == R_X86_64_DTPOFF32;
 }
 
 /* Patch a TLSDESC ADR_PAGE21 / LD64_LO12 / ADD_LO12 to reach the 2-word TLSDESC
  * entry PC-relatively (same encodings as ADRP / LDR64 / ADD-imm12). TLSDESC_CALL
- * is a marker at the blr and needs no patch. */
-static void patch_tlsdesc(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slot)
+ * is a marker at the blr and needs no patch.
+ *
+ * x86_64 (vms-2e4): GOTPC32_TLSDESC is a SINGLE flat disp32 —
+ * descriptor_addr + A - P, the same write patch_got() does for GOTPCREL, so
+ * `add` must be threaded through (A is -4 here). R_X86_64_TLSDESC_CALL, like
+ * its aarch64 namesake, is a pure marker: writing anything at its 2-byte site
+ * would clobber the next instruction. */
+static void patch_tlsdesc(uint32_t type, uint32_t *insn, uint64_t site,
+                          uint64_t slot, int64_t add)
 {
     if (type == R_AARCH64_TLSDESC_ADR_PAGE21) {
         int64_t d = (int64_t)(slot >> 12) - (int64_t)(site >> 12);
@@ -1066,8 +1136,11 @@ static void patch_tlsdesc(uint32_t type, uint32_t *insn, uint64_t site, uint64_t
         *insn = (*insn & ~(0xFFFu << 10)) | (imm << 10);
     } else if (type == R_AARCH64_TLSDESC_ADD_LO12) {
         *insn = (*insn & ~(0xFFFu << 10)) | (((uint32_t)slot & 0xFFF) << 10);
+    } else if (type == R_X86_64_GOTPC32_TLSDESC) {
+        int64_t d = (int64_t)slot + add - (int64_t)site;
+        *insn = (uint32_t)(uint64_t)d;
     }
-    /* R_AARCH64_TLSDESC_CALL: no-op. */
+    /* R_AARCH64_TLSDESC_CALL / R_X86_64_TLSDESC_CALL: no-op markers. */
 }
 
 /* Module-relative TLS offset of a TLS symbol: 0-based within the module's
@@ -1075,6 +1148,12 @@ static void patch_tlsdesc(uint32_t type, uint32_t *insn, uint64_t site, uint64_t
 static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base,
                                   const char *name, int64_t addend)
 {
+    /* x86_64 local-dynamic (vms-2e4): `_TLS_MODULE_BASE_` is a synthetic UND
+     * symbol naming the module's TLS block base, defined by no object — its
+     * module offset is 0 by definition. Each `static _Thread_local` access then
+     * adds its own R_X86_64_DTPOFF32 operand offset on top. */
+    if (strcmp(name, TLS_MODULE_BASE_SYM) == 0)
+        return (uint64_t)addend;
     for (int j = 0; j < nobj; j++) {
         struct obj *d = &objs[j];
         for (int k = 0; k < d->nsym; k++) {
@@ -1088,6 +1167,27 @@ static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base
     }
     die("TLS symbol not defined in any input .tdata/.tbss");
     return 0;
+}
+
+/* Module-relative TLS offset of the symbol a specific relocation names, resolved
+ * in the REFERENCING object first (vms-2e4). R_X86_64_DTPOFF32 references are
+ * normally STB_LOCAL — `static _Thread_local` variables — whose names are not
+ * unique across translation units, so a name-keyed lookup is the wrong tool:
+ * resolve directly through (object, symbol index) when the symbol is defined in
+ * its own object, and fall back to the cross-object name lookup only for a
+ * genuinely undefined (external / _TLS_MODULE_BASE_) reference. */
+static uint64_t tls_ref_offset(struct obj *objs, int nobj, int oi, uint32_t si,
+                               uint64_t tbss_base, int64_t addend)
+{
+    struct obj *o = &objs[oi];
+    Elf64_Sym  *s = &o->sym[si];
+    if (s->st_shndx != SHN_UNDEF && s->st_shndx < (Elf64_Section)o->nsh) {
+        if (o->tdata && s->st_shndx == (Elf64_Section)o->tdata_ndx)
+            return s->st_value + (uint64_t)addend;
+        if (o->tbss && s->st_shndx == (Elf64_Section)o->tbss_ndx)
+            return tbss_base + s->st_value + (uint64_t)addend;
+    }
+    return tls_module_offset(objs, nobj, tbss_base, o->str + s->st_name, addend);
 }
 
 /* True if `name` is defined by some input object in a section this linker places
@@ -1292,7 +1392,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                     if (!tls) die("oom growing TLSDESC table");
                 }
                 snprintf(tls[ntls].name, sizeof tls[ntls].name, "%s", nm);
-                tls[ntls].addend = objs[i].relocs[r].add;
+                /* aarch64's TLSDESC addend is a symbol offset and belongs in the
+                 * descriptor's module offset; x86_64's is a disp32 FIELD addend
+                 * (-4) that belongs only in the PC-relative write. (vms-2e4) */
+                tls[ntls].addend = is_x86_tlsdesc_reloc(type)
+                                   ? 0 : objs[i].relocs[r].add;
                 ntls++;
             }
         }
@@ -1643,7 +1747,16 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             } else if (is_tlsdesc_reloc(type)) {
                 int ti = find_tls(tls, ntls, nm);
                 if (ti < 0) die("internal: TLSDESC slot missing for symbol");
-                patch_tlsdesc(type, insn, site, tls[ti].va);
+                patch_tlsdesc(type, insn, site, tls[ti].va, rl->add);
+            } else if (is_dtpoff_reloc(type)) {
+                /* x86_64 local-dynamic operand: the variable's module-relative
+                 * TLS offset, written as a flat absolute 32-bit constant. Added
+                 * at run time to the module base the TLSDESC pair returned, so
+                 * it is link-time-final — NOT load-biased, NOT in .vms$rel. */
+                uint64_t moff = tls_ref_offset(objs, nobj, i,
+                                               ELF64_R_SYM(rl->info),
+                                               tbss_base, rl->add);
+                *insn = (uint32_t)moff;
             } else if (is_abs64_reloc(type)) {
                 /* Pointer initializer (.rela.data): write S+A as a 64-bit
                  * image-relative address and record the slot in .vms$rel so

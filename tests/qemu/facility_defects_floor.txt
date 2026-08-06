@@ -30,4 +30,8 @@
 # Value as of the commit that added this file (vms-d894): 42 entries.
 # Raised to 43 by vms-2b2's register-adopt-pid-not-reported (see its own
 # entry in facility_defects.sh for what it covers and why).
-43
+# Raised to 46 by vms-053's lock-enq-immediate-grant-status-wrong,
+# lock-deq-status-wrong and lock-convert-mode-not-updated (the
+# first mutations anchored inside vms_ioctl_enq/deq/convert's own bodies --
+# see those entries in facility_defects.sh for what each covers and why).
+46

@@ -23,10 +23,10 @@
 #   RUN <defect> <suites that went red, space-joined, or "-"> <pass|fail>
 #   RED <defect> <suite or (harness)> <assertion text observed FAILing>
 #
-# generated-at: 2026-08-06T15:54:46Z
-# tree-commit: 5613a1648f17a3cc5f8021a7a4f6c97ebcd7ed73
+# generated-at: 2026-08-06T18:27:04Z
+# tree-commit: 0960429ec77d8b492fbbc5214cc1ae59e7f779cf
 # positive-control: pass
-# defects-in-manifest: 43
+# defects-in-manifest: 46
 # suites-derived: 28
 RUN	access-mode-escalation	test_kmod_access	pass
 RED	access-mode-escalation	test_kmod_access	... and still does not hold CMKRNL afterwards
@@ -70,6 +70,51 @@ RED	lock-compat-cr-ex	test_syssvc_lock_status	sys$enq(LCK$M_CONVERT) on a lock s
 RUN	lock-valblk-grant-not-delivered	test_kmod_lock_sync	pass
 RED	lock-valblk-grant-not-delivered	test_kmod_lock_sync	child: GETLKI value block equals the PARENT's, not this lock's own pre-grant value (blocked-then-granted valblk delivery)
 RED	lock-valblk-grant-not-delivered	test_kmod_lock_sync	parent: child (valblk grant) exited clean
+RUN	lock-enq-immediate-grant-status-wrong	test_kmod_bind test_kmod_lock test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status	pass
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_bind	$ENQ EX granted through /dev/vms
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_bind	main thread takes a lock
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ CR on TESTRES2
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ EX with value block
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ NL on TESTRES1
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ second CR on TESTRES2 (compatible)
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_mproc	child: CR granted on MPROCLOCK2 (own request)
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_mproc	parent: CR granted on MPROCLOCK2 concurrently with child's CR (CR+CR compatible)
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_mproc	parent: EX granted on MPROCLOCK1 with blkastadr set
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	child: EX granted on DLRES_Y
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX granted on ASTRES
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX granted on DLRES_X
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX granted on SYNCRES1
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX+VALBLK granted immediately on fresh VALBLKRES (publishes VALBLK_SEED)
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: child (completion AST) exited clean
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: child (deadlock) exited clean
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: child (sync block) exited clean
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	child: sys$enqw EX granted after parent's sys$deq (cross-process release, public API)
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	parent: child's NOQUEUE-denial checks reported via public API
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	parent: child's post-release retry succeeded via public API
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	parent: sys$enqw EX granted, real lock ID returned (public API)
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock_status	parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock_status	parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
+RUN	lock-deq-status-wrong	test_kmod_bind test_kmod_lock test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status	pass
+RED	lock-deq-status-wrong	test_kmod_bind	$DEQ released the lock
+RED	lock-deq-status-wrong	test_kmod_bind	sibling thread can $DEQ the lock the main thread took
+RED	lock-deq-status-wrong	test_kmod_lock	DEQ lock
+RED	lock-deq-status-wrong	test_kmod_lock_mproc	child: DEQ queued CR request
+RED	lock-deq-status-wrong	test_kmod_lock_mproc	parent: DEQ own EX lock
+RED	lock-deq-status-wrong	test_kmod_lock_sync	child: released its own granted EX on VALBLKRES
+RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: child (completion AST) exited clean
+RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: child (deadlock) exited clean
+RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: child (valblk grant) exited clean
+RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: released EX (should grant child)
+RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: released EX on ASTRES (grants child + queues AST)
+RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: released EX on VALBLKRES (grants child's queued request)
+RED	lock-deq-status-wrong	test_syssvc_lock	child: sys$deq released its own EX lock
+RED	lock-deq-status-wrong	test_syssvc_lock	parent: child's post-release retry succeeded via public API
+RED	lock-deq-status-wrong	test_syssvc_lock	parent: sys$deq released EX lock (public API)
+RED	lock-deq-status-wrong	test_syssvc_lock_status	parent: child (CVTUNGRANT holder) exited clean
+RED	lock-deq-status-wrong	test_syssvc_lock_status	parent: dequeued its still-queued CR lock
+RED	lock-deq-status-wrong	test_syssvc_lock_status	parent: released X (should unblock the child)
+RUN	lock-convert-mode-not-updated	test_kmod_lock	pass
+RED	lock-convert-mode-not-updated	test_kmod_lock	granted mode is CR
 RUN	devtab-owner-not-recorded	test_kmod_devtab	pass
 RED	devtab-owner-not-recorded	test_kmod_devtab	B sees the ownership A took with a channel alone (A writes, B reads)
 RED	devtab-owner-not-recorded	test_kmod_devtab	oracle: $ASSIGN to a non-shareable device nobody owns makes the caller its owner

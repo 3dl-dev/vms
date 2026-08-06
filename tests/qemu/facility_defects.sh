@@ -420,6 +420,9 @@ eflag-waitfr-eintr-normal
 lock-compat-ex-cr
 lock-compat-cr-ex
 lock-valblk-grant-not-delivered
+lock-enq-immediate-grant-status-wrong
+lock-deq-status-wrong
+lock-convert-mode-not-updated
 devtab-owner-not-recorded
 devtab-alloc-not-recorded
 setterm-binding-not-recorded
@@ -923,6 +926,164 @@ knock-on above already establishes the pattern for a sibling scenario in this
 same file.
 EOF
                       ;;
+        esac;;
+
+    lock-enq-immediate-grant-status-wrong)
+        case "$_f" in
+        facility)     echo "distributed lock manager -- \$ENQ's own success status, immediate-grant path (VMS_IOCTL_ENQ)";;
+        targets)      echo "kernel/vms_lock.c";;
+        # vms-053 (vms-2b2 follow-up). MEASURED at the 9-of-33 audit: no
+        # existing mutation hunk sits inside vms_ioctl_enq's own body -- the
+        # three lock-* entries above all edit code OUTSIDE it (the
+        # lock_compatible() matrix, try_grant_waiters()). This is the first
+        # defect anchored inside the handler every lock test calls first.
+        #
+        # ROUND 1 of this defect corrupted the immediate-grant branch's
+        # RETURNED LOCK ID instead (args.lkid forced to 0). A REAL
+        # run_facility_negctl.sh run caught, live, why that is unsafe rather
+        # than merely wide: every later caller in the SAME boot that reuses
+        # a genuine internal lock ID also has it echoed back as 0 to
+        # userspace, and something downstream keys blocking-AST completion
+        # delivery to the userspace-visible id -- test_kmod_lock_mproc's
+        # cross-process AST wait never got its completion, and thirteen
+        # suites after it in run order never printed a verdict line at all
+        # ('NEVER RAN', harness never reached FINAL RESULTS). A defect that
+        # can hang the guest is worse than one that reddens the wrong
+        # suite; it burns the whole job's timeout and proves nothing. This
+        # replacement corrupts only the STATUS word on the same branch --
+        # copy_to_user relays it to userspace and nothing in the kernel
+        # branches on it, so it cannot feed back into a later ioctl the way
+        # a wrong lock ID does.
+        # MEASURED (not the entry's first guess): the immediate-grant path is
+        # the SETUP step of nearly every lock test in the tree -- kernel and
+        # public-API alike -- so a wrong status on it cascades widely. Real
+        # run_facility_negctl.sh output, not a static guess, is what fixed
+        # this suites_red/require_fail/knock_on_fail set.
+        suites_red)   echo "test_kmod_lock test_kmod_bind test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "the immediate-grant branch of \$ENQ reports SS\$_NOTQUEUED instead of SS\$_NORMAL for a lock that WAS granted with no contention -- the request succeeded and the caller is told it was refused. Unlike the lock ID, the status word feeds nothing downstream in the kernel (copy_to_user relays it and returns), so the defect cannot propagate past the assertions that read it -- but nearly every lock test's FIRST step is an uncontended \$ENQ used as setup, so this one status word gates a wide surface.";;
+        require_fail) cat <<'EOF'
+ENQ NL on TESTRES1
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+ENQ CR on TESTRES2
+ENQ second CR on TESTRES2 (compatible)
+ENQ EX with value block
+$ENQ EX granted through /dev/vms
+main thread takes a lock
+parent: EX granted on MPROCLOCK1 with blkastadr set
+child: CR granted on MPROCLOCK2 (own request)
+parent: CR granted on MPROCLOCK2 concurrently with child's CR (CR+CR compatible)
+parent: EX granted on SYNCRES1
+parent: child (sync block) exited clean
+parent: EX granted on DLRES_X
+child: EX granted on DLRES_Y
+parent: child (deadlock) exited clean
+parent: EX granted on ASTRES
+parent: child (completion AST) exited clean
+parent: EX+VALBLK granted immediately on fresh VALBLKRES (publishes VALBLK_SEED)
+parent: sys$enqw EX granted, real lock ID returned (public API)
+parent: child's NOQUEUE-denial checks reported via public API
+child: sys$enqw EX granted after parent's sys$deq (cross-process release, public API)
+parent: child's post-release retry succeeded via public API
+parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
+parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
+EOF
+                      ;;
+        knock_on_why)
+            _n_suites=$(defect_field lock-enq-immediate-grant-status-wrong suites_red | wc -w)
+            _n_assert=$(( $(defect_field lock-enq-immediate-grant-status-wrong require_fail | wc -l) + $(defect_field lock-enq-immediate-grant-status-wrong knock_on_fail | wc -l) ))
+            echo "the SAME defect, observed a second (through twenty-second) time: every one of these ${_n_assert} assertions across ${_n_suites} suites first depends on an uncontended \$ENQ succeeding as its own setup step, and this mutation is the ONLY thing that changed -- nothing about compatibility, lock IDs, value blocks or AST delivery was touched. A wrong SS\$_NORMAL->SS\$_NOTQUEUED substitution on the one line every one of these calls passes through explains all of them at once; no other hypothesis does.";;
+        esac;;
+
+    lock-deq-status-wrong)
+        case "$_f" in
+        facility)     echo "distributed lock manager -- \$DEQ's own success status (VMS_IOCTL_DEQ)";;
+        targets)      echo "kernel/vms_lock.c";;
+        # vms-053 (vms-2b2 follow-up). MEASURED at the 9-of-33 audit: no
+        # existing mutation hunk sits inside vms_ioctl_deq's own body.
+        #
+        # ROUND 1 of this defect blanked the value-block write-back to the
+        # resource (the memcpy guarded by "LCK_M_VALBLK set and not a
+        # queued waiter") instead. A REAL run_facility_negctl.sh run showed
+        # it INERT -- harness exits 0, nothing reddens. Read the resource
+        # lifecycle before trusting a similar target again: DEQ's write-back
+        # only matters if a lock's OWN valblk snapshot ever diverges from
+        # the resource's before release, and no existing test does that --
+        # the one round-trip test_kmod_lock.c has re-acquires the SAME
+        # resource with the SAME value it already held, so skipping the
+        # write-back changes nothing observable. That is a real gap in
+        # existing coverage, not a defect a mutation can expose; it would
+        # need new test coverage first (the vms-2ed shape), which is out of
+        # scope here. RANGE-ANCHORED to vms_ioctl_deq's own body for the
+        # same reason lock-convert-mode-not-updated is: this exact status
+        # assignment text also appears in vms_ioctl_convert's own
+        # fallthrough path, at the same indentation.
+        # MEASURED (not the entry's first guess), same shape as
+        # lock-enq-immediate-grant-status-wrong: DEQ is the universal
+        # cleanup step, so a wrong status on it cascades to every suite
+        # that ever releases a lock. Real run_facility_negctl.sh output,
+        # not a static guess, is what fixed this suites_red/require_fail/
+        # knock_on_fail set.
+        suites_red)   echo "test_kmod_lock test_kmod_bind test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$DEQ reports SS\$_IVLOCKID instead of SS\$_NORMAL for a lock it actually released -- the release happens (removed from the resource's list, waiters get their chance, the lock entry is freed), only the status word lies about it -- but nearly every lock test's LAST step is releasing what it acquired, so this one status word gates a wide surface, symmetric with \$ENQ's.";;
+        require_fail) cat <<'EOF'
+DEQ lock
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+$DEQ released the lock
+sibling thread can $DEQ the lock the main thread took
+child: DEQ queued CR request
+parent: DEQ own EX lock
+parent: released EX (should grant child)
+parent: child (deadlock) exited clean
+parent: released EX on ASTRES (grants child + queues AST)
+parent: child (completion AST) exited clean
+parent: released EX on VALBLKRES (grants child's queued request)
+child: released its own granted EX on VALBLKRES
+parent: child (valblk grant) exited clean
+parent: sys$deq released EX lock (public API)
+child: sys$deq released its own EX lock
+parent: child's post-release retry succeeded via public API
+parent: dequeued its still-queued CR lock
+parent: child (CVTUNGRANT holder) exited clean
+parent: released X (should unblock the child)
+EOF
+                      ;;
+        knock_on_why)
+            _n_suites=$(defect_field lock-deq-status-wrong suites_red | wc -w)
+            _n_assert=$(( $(defect_field lock-deq-status-wrong require_fail | wc -l) + $(defect_field lock-deq-status-wrong knock_on_fail | wc -l) ))
+            echo "the SAME defect, observed a second (through seventeenth) time: every one of these ${_n_assert} assertions across ${_n_suites} suites depends on an uncontended \$DEQ succeeding as its own cleanup step, and this mutation is the ONLY thing that changed -- nothing about compatibility, granted mode, or value blocks was touched. A wrong SS\$_NORMAL->SS\$_IVLOCKID substitution on the one line every one of these calls passes through explains all of them at once; no other hypothesis does."
+            ;;
+        esac;;
+
+    lock-convert-mode-not-updated)
+        case "$_f" in
+        facility)     echo "distributed lock manager -- \$ENQ/CONVERT's own granted-mode update, immediate-conversion path (VMS_IOCTL_CONVERT)";;
+        targets)      echo "kernel/vms_lock.c";;
+        # MEASURED, same audit. lock->granted_mode = args.lkmode also appears
+        # in vms_ioctl_enq's immediate-grant branch (line 666) -- the SAME
+        # text -- so this mutation is RANGE-ANCHORED to vms_ioctl_convert's
+        # own function body in apply_edit() below, not text-anchored, or it
+        # would silently also mutate ENQ's grant path on every apply.
+        suites_red)   echo "test_kmod_lock";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$ENQ/CONVERT's immediate-conversion branch stops updating lock->granted_mode to the newly-requested mode (the assignment deleted). The call still reports SS\$_NORMAL -- conversion \"succeeded\" -- but GETLKI on the same lock afterward reads back the OLD granted mode, not the one just requested.";;
+        require_fail) cat <<'EOF'
+granted mode is CR
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     devtab-owner-not-recorded)
@@ -2895,6 +3056,34 @@ apply_edit() {
         # this exact `if` in the file, so a second apply finds no match --
         # the no-op the selftest requires.
         sed -i 's|            if (waiter->flags & LCK_M_VALBLK)|            if (0 \&\& (waiter->flags \& LCK_M_VALBLK)) /* NEGCTL lock-valblk-grant-not-delivered: no delivery */|' "$_file";;
+    lock-enq-immediate-grant-status-wrong)
+        # RANGE-ANCHORED to vms_ioctl_enq's own body. `args.status =
+        # SS__NORMAL;` at this exact 8-space indentation also appears in
+        # vms_ioctl_convert's immediate-conversion branch (same text, same
+        # indentation -- indentation alone does not disambiguate this pair).
+        # vms_ioctl_enq is defined BEFORE vms_ioctl_convert in this file, so
+        # the range closes at enq's own `}` and excludes convert's copy.
+        sed -i '/^long vms_ioctl_enq/,/^}$/ s|^        args\.status = SS__NORMAL;$|        args.status = SS__NOTQUEUED; /* NEGCTL lock-enq-immediate-grant-status-wrong */|' "$_file";;
+    lock-deq-status-wrong)
+        # RANGE-ANCHORED to vms_ioctl_deq's own body. `args.status =
+        # SS__NORMAL;` at this exact 4-space indentation also appears in
+        # vms_ioctl_convert's own fallthrough path (same text, same
+        # indentation). vms_ioctl_deq is defined BEFORE vms_ioctl_convert in
+        # this file, so the range closes at deq's own `}` and excludes
+        # convert's copy.
+        sed -i '/^long vms_ioctl_deq/,/^}$/ s|^    args\.status = SS__NORMAL;$|    args.status = SS__IVLOCKID; /* NEGCTL lock-deq-status-wrong */|' "$_file";;
+    lock-convert-mode-not-updated)
+        # RANGE-ANCHORED to vms_ioctl_convert's own body. `lock->granted_mode
+        # = args.lkmode;` at 8-space indent also appears in $ENQ's
+        # immediate-grant branch (line ~666, same indentation -- indentation
+        # alone does not disambiguate this pair, unlike the enq/deq defects
+        # above). vms_ioctl_convert is defined AFTER vms_ioctl_enq in this
+        # file, so the range excludes ENQ's copy entirely; only CONVERT's
+        # remains inside it. Commented out rather than blanked to a `;`: this
+        # assignment sits inside a braced `{ }` block (the immediate-
+        # conversion branch), not an unbraced single-statement `if`, so there
+        # is no dangling-body hazard here.
+        sed -i '/^long vms_ioctl_convert/,/^}$/ s|^        lock->granted_mode = args\.lkmode;$|        /* NEGCTL lock-convert-mode-not-updated: granted_mode left unchanged */|' "$_file";;
     devtab-owner-not-recorded)
         # Range-anchored, NOT `0,/re/` (first-match). There are two
         # `dev->owner_pid =` writes -- $ASSIGN's implicit ownership and

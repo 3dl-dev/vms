@@ -56,6 +56,15 @@ extern "C" {
 
 /* The add-member dialogue rides the 190-byte VMS$VAXcluster VC class (spec
  * sec 4d / Table 2): 190 SCA-content bytes + 14-byte Ethernet header. */
+/* vms-ec7: the credit field ([48:50]) each captured 190-content template
+ * carries. LABELED REPLAYS of the golden joiner frames, not computed
+ * extensions. This class is MTYPE 10, so scsd_credit_stamp_outbound() (vms-aa1)
+ * overwrites the field with the connection's live Pending Receive Credit on the
+ * transmit path unless OVMX_NO_CREDIT_ACCOUNTING is set. */
+#define SCS_MEMBER_ENV_CREDIT_MODEL  0u
+#define SCS_MEMBER_ENV_CREDIT_PARAMS 0u
+#define SCS_MEMBER_ENV_CREDIT_CONFIG 2u
+
 #define SCS_MEMBER_SCA_LEN    190
 #define SCS_MEMBER_FRAME_LEN  204
 

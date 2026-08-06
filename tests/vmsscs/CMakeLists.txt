@@ -657,6 +657,52 @@ set_tests_properties(scs_reason_mutants PROPERTIES
 # It does appear; every census had been restricted to SCA length classes
 # {62, 66, 110} and the response class is 58. The test carries that correction
 # as an assertion over the captured bytes, not as a sentence.
+# vms-ec7 (MSCP epic Phase A) - THE SCS MESSAGE ENVELOPE unit test.
+#
+# scs_env.c is the single build/parse path for the envelope every SCS message
+# shares, so a one-byte defect in it is a one-byte defect on every frame OVMX
+# transmits. The per-class byte-exact tests already cover the happy path --
+# MEASURED: a +1 mutation of the MTYPE store reds seven test binaries. This
+# binary covers what they cannot reach: the REFUSALS (the 106-content START, the
+# 120-content HELLO and the undecoded 70-content class must all fail the
+# conformance test), the boundaries (the 58-content class is envelope and
+# nothing else, so its payload must be NULL rather than a pointer past the
+# frame), the frame-vs-content addressing, and the p. 4-15 dispatch decision
+# over the WHOLE u16 MTYPE space.
+add_executable(test_scs_env test_scs_env.c)
+target_include_directories(test_scs_env PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+target_link_libraries(test_scs_env PRIVATE vmsscs_env)
+add_test(NAME vmsscs_env_unit COMMAND test_scs_env)
+set_tests_properties(vmsscs_env_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
+# vms-ec7 - THE FIGURES GATE for the envelope. Pins src/vmsscs/include/scs_env.h
+# to tools/cluster/scs_env_measure.py's EXPECTED table, and (vms-371, on a host
+# with the lab captures) pins EXPECTED to the packets -- including the BUILD
+# ROUND TRIP, which rebuilds content[42:58] for every envelope-conformant frame
+# in the corpus with scs_env_build()'s own rule and requires byte-identity.
+# It also enforces the structural half of the item: scs_rx.h must ALIAS the
+# offsets rather than restate them, no builder may write an envelope field by
+# open-coded offset any more, and scs_start.c / scs_hello.c must NOT route their
+# non-envelope classes through the shared builder.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_env_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_env_figures.py)
+else()
+    add_test(NAME scs_env_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_env_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_env_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 300
+)
+
 add_executable(test_scs_disc test_scs_disc.c)
 target_include_directories(test_scs_disc PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsscs/include

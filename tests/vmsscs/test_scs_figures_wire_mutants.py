@@ -127,6 +127,18 @@ GATES = [
          caps=LAB1, caps_env="OVMX_LAB_CAPTURES",
          truncate="formation-ci1.pcap",
          edit=('"gus_end_matched": 2889,', '"gus_end_matched": 2989,')),
+    # vms-ec7: the SCS ENVELOPE gate. Its mutant targets THE BUILD ROUND TRIP --
+    # the figure that says scs_env_build() reproduces content[42:58] on every
+    # envelope-conformant frame in the corpus. That is the single claim every
+    # builder in src/vmsscs/ now depends on, so if it can drift unnoticed then
+    # "one shared build path" is an assertion rather than a measurement.
+    dict(name="scs_env_figures",
+         gate="test_scs_env_figures.py",
+         measure="tools/cluster/scs_env_measure.py",
+         measure_env="OVMX_SCS_ENV_MEASURE",
+         caps=LAB1, caps_env="OVMX_LAB_CAPTURES",
+         truncate="formation-ci1.pcap",
+         edit=('"build_mismatches": 0,', '"build_mismatches": 3,')),
     dict(name="scs_t89_figures",
          gate="test_scs_t89_figures.py",
          measure="tools/cluster/scs_t89_measure.py",

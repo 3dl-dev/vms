@@ -1,19 +1,16 @@
 /*
  * scs_rx.c - the receive-side SCS header decoder. See scs_rx.h for the source
  * cites, the measured MTYPE census and the honest statement about datagrams.
+ *
+ * vms-ec7: the decode itself now lives in scs_env.c, which the SEND side shares.
+ * What remains here is the receive-side VIEW of it -- struct scs_rx_hdr and the
+ * enum scs_rx_kind names its callers use. The mapping below is written out
+ * value by value rather than cast, so that a future change to either enum is a
+ * compile-time decision instead of a silent renumbering.
  */
 #include "scs_rx.h"
 
-static uint16_t get_le16(const uint8_t *p)
-{
-    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
-}
-
-static uint32_t get_le32(const uint8_t *p)
-{
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
+#include "scs_env.h"
 
 const char *scs_rx_kind_name(int kind)
 {
@@ -25,48 +22,35 @@ const char *scs_rx_kind_name(int kind)
     }
 }
 
+static int kind_for_route(int route)
+{
+    switch (route) {
+    case SCS_ENV_ROUTE_CONTROL: return SCS_RX_CONTROL;
+    case SCS_ENV_ROUTE_MESSAGE: return SCS_RX_APP_MESSAGE;
+    case SCS_ENV_ROUTE_UNKNOWN:
+    default:                    return SCS_RX_UNKNOWN_MTYPE;
+    }
+}
+
 int scs_rx_parse(const uint8_t *content, size_t len, struct scs_rx_hdr *out)
 {
-    if (content == NULL || out == NULL) {
+    struct scs_env e;
+
+    if (out == NULL) {
         return -1;
     }
-    if (len < SCS_RX_HDR_END) {
+    if (scs_env_parse(content, len, &e) != 0) {
         return -1;
     }
 
-    uint16_t total = (uint16_t)(get_le16(content) + 2u);
-    if ((size_t)total > len || total < SCS_RX_HDR_END) {
-        return -1;
-    }
-
-    /* The sec 4(h)(1b) envelope test. Both halves are load-bearing: the
-     * 70-content class satisfies neither (its [42:44] is 9..13, never
-     * total-44, and its [44:46] is 0x522f / 0x532f / 0x2abe / ...), which is
-     * exactly what sec 4(h)(1d) requires this parser to reject. */
-    if (get_le16(content + SCS_RX_OFF_FORMAT) != SCS_RX_FORMAT_WORD) {
-        return -1;
-    }
-    uint16_t inner = get_le16(content + SCS_RX_OFF_INNER_LEN);
-    if (inner != (uint16_t)(total - 44u)) {
-        return -1;
-    }
-
-    out->total_sca_len = total;
-    out->inner_len = inner;
-    out->mtype = get_le16(content + SCS_RX_OFF_MTYPE);
-    out->credit = get_le16(content + SCS_RX_OFF_CREDIT);
-    out->dest_conid = get_le32(content + SCS_RX_OFF_DEST_CONID);
-    out->src_conid = get_le32(content + SCS_RX_OFF_SRC_CONID);
-    out->payload_len = (size_t)total - SCS_RX_HDR_END;
-    out->payload = (out->payload_len > 0) ? (content + SCS_RX_HDR_END) : NULL;
-
-    if (out->mtype == SCS_RX_MTYPE_APP_MESSAGE) {
-        out->kind = SCS_RX_APP_MESSAGE;
-    } else if (out->mtype <= SCS_RX_MTYPE_CONTROL_MAX) {
-        out->kind = SCS_RX_CONTROL;
-    } else {
-        /* Never observed. NOT a datagram -- see scs_rx.h. */
-        out->kind = SCS_RX_UNKNOWN_MTYPE;
-    }
+    out->total_sca_len = e.total_sca_len;
+    out->inner_len = e.inner_len;
+    out->mtype = e.mtype;
+    out->credit = e.credit;
+    out->dest_conid = e.dest_conid;
+    out->src_conid = e.src_conid;
+    out->payload = e.payload;
+    out->payload_len = e.payload_len;
+    out->kind = kind_for_route(e.route);
     return 0;
 }

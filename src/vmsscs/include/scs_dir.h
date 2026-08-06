@@ -127,6 +127,23 @@ extern "C" {
  * classes reuse the response classes' lengths: a CONNECT_REQ is the same
  * 110-byte class as the ACCEPT_REQ (spec sec 4h(1a)), and a lookup REQUEST the
  * same 94-byte class as a lookup RESPONSE. */
+/* vms-ec7: the credit field ([48:50]) each captured directory template carries.
+ * LABELED REPLAYS of the captured bytes, one per class, so that the value on the
+ * wire is a named constant instead of "whatever byte the template had".
+ *
+ * They are not uniform and that is a real observation, not noise: the
+ * connect-REQUEST extends 3 credits, the ACCEPT_REQ extends 1, the lookup
+ * RESPONSE carries 1 while the lookup REQUEST carries 0, and the echo/confirm
+ * shorts carry 0 -- the p. 4-68 signature of a class that extends no credit.
+ * Deriving these from a live CDT account instead of replaying them is a
+ * wire-visible change and is NOT part of this refactor. */
+#define SCS_DIR_ENV_CREDIT_ECHO       0u  /* 66-content CONNECT_RSP / echo */
+#define SCS_DIR_ENV_CREDIT_RESP       1u  /* 110-content ACCEPT_REQ */
+#define SCS_DIR_ENV_CREDIT_CONNREQ    3u  /* 110-content CONNECT_REQ */
+#define SCS_DIR_ENV_CREDIT_LOOKUP_RSP 1u  /* 94-content lookup RESPONSE */
+#define SCS_DIR_ENV_CREDIT_LOOKUP_REQ 0u  /* 94-content lookup REQUEST */
+#define SCS_DIR_ENV_CREDIT_CONFIRM    0u  /* 62/58-content confirm / accept4 / confirm5 */
+
 #define SCS_DIR_ECHO_SCA_LEN     66
 #define SCS_DIR_ECHO_FRAME_LEN   80  /* 14 Eth hdr + 66 */
 #define SCS_DIR_RESP_SCA_LEN     110

@@ -195,7 +195,24 @@ static int run_child(int c2p_write, int p2c_read)
     CHECK((st_local & 1) && !(st & 1),
           "child: setef on an UNASSOCIATED common flag is refused WHILE a local flag succeeds (not merely 'every call fails')");
 
+    /*
+     * Wait for A to have created the cluster first. Without this, A and B's
+     * own ascefc calls below race to be the FIRST caller (which CREATES the
+     * cluster, vms_ioctl_ascefc's "Create new cluster" branch) versus the
+     * SECOND (which FINDS it and re-associates, the "Found it -- associate"
+     * branch) -- unordered, so which process lands on which branch is
+     * scheduler-dependent. That made eflag-ascefc-reassoc-status-wrong
+     * genuinely nondeterministic (vms-2b2/vms-400): the assertion that goes
+     * red depends on who wins the race, not on the defect. This handshake
+     * decides the winner: A always creates, B always re-associates.
+     */
+    if (read_bounded(p2c_read, &tok, 1, PEER_TIMEOUT_MS) != 1 || tok != 'P') {
+        printf("  FAIL: child: never saw the parent's cluster-created token\n");
+        fail++;
+    }
+
     st = do_ascefc(fd, COMMON_BASE, "OVMX$F1F_EFC");
+    /* negctl: eflag-ascefc-reassoc-status-wrong */
     CHECK(st & 1, "child: ascefc joined the named common cluster");
 
     /* Tell A we are associated. */
@@ -322,6 +339,12 @@ int main(void)
 
     st = do_ascefc(fd, COMMON_BASE, "OVMX$F1F_EFC");
     CHECK(st & 1, "parent: ascefc created/joined the named common cluster");
+
+    /* Tell B the cluster now exists, so B's own ascefc (below, via the
+     * matching wait on its side) deterministically re-associates rather
+     * than racing A to create it -- see B's matching comment. */
+    if (send_token(p2c[1], 'P') < 0)
+        fail++;
 
     /* Wait for B to have associated, so the write below cannot be observed
      * by accident through some pre-association path. */

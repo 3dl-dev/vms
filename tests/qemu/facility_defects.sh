@@ -419,6 +419,7 @@ eflag-clref-noop
 eflag-waitfr-eintr-normal
 eflag-setef-status-inverted
 eflag-readef-status-inverted
+eflag-ascefc-reassoc-status-wrong
 eflag-dacefc-status-wrong
 eflag-dlcefc-status-wrong
 eflag-wflor-status-wrong
@@ -862,6 +863,93 @@ sys$waitfr(1) left the flag SET -- it is not a counting semaphore
 EOF
                       ;;
         knock_on_why)  echo "the SAME defect, observed a second through ninth time: every one of these assertions reads a flag's state back through READEF's own WASSET/WASCLR discrimination, and this mutation is the ONLY thing that changed.";;
+        esac;;
+
+    eflag-ascefc-reassoc-status-wrong)
+        case "$_f" in
+        facility)     echo "event flags -- \$ASCEFC's own success status, the found-and-reassociate path (VMS_IOCTL_ASCEFC)";;
+        targets)      echo "kernel/vms_eflag.c";;
+        # vms-400 (vms-2b2 follow-up). A SECOND attempt at this handler:
+        # eflag-ascefc-reassoc-status-wrong was written once already, this
+        # session, against test_kmod_eflag_mproc.c AS IT THEN STOOD -- and
+        # dropped, not merged, because that file raced its own two
+        # processes' first-ever $ASCEFC calls with no ordering between them.
+        # vms_ioctl_ascefc has TWO "args.status = SS_NORMAL;" writes: the
+        # 4-space one at function scope (the "Create new cluster" branch,
+        # shared text with vms_ioctl_waitfr/wflor/wfland/dacefc, all already
+        # anchored elsewhere) and a SECOND, uniquely-indented 12-space one
+        # inside the "Found it -- associate" branch (list_for_each_entry's
+        # if-block) -- the reassociation path this entry targets. Which of
+        # the two processes' racing calls landed on which branch was
+        # scheduler-dependent, so which of the two "ascefc joined/created"
+        # assertions went red was genuinely nondeterministic -- not fixable
+        # by choosing a different target line, because the race was in the
+        # TEST's own lack of synchronization, not in the mutation.
+        # FIXED THIS ROUND: test_kmod_eflag_mproc.c's parent now signals
+        # child (token 'P', over the p2c pipe already in the file) only
+        # after its OWN $ASCEFC returns, and child now waits for that token
+        # before calling its own $ASCEFC -- pipes only, no sleeps, the same
+        # synchronisation discipline the file's own header mandates. Parent
+        # therefore ALWAYS creates the cluster (4-space branch, already
+        # covered); child ALWAYS finds it and re-associates (12-space
+        # branch, this entry). UNIQUE TEXT, no range anchor needed:
+        # `grep -rn` across src/kernel/*.c finds the 12-space
+        # "args.status = SS_NORMAL;" in exactly this one place.
+        #
+        # test_syssvc_ef_mproc.c JOINS suites_red, MEASURED not predicted:
+        # it has the IDENTICAL race (its parent and forked child both call
+        # sys$ascefc on "OVMX$F1F_SVC" with no ordering), so it was fixed
+        # the same way (a matching 'P' token handshake). Once de-raced, a
+        # real run still named 4 MORE assertions here, all genuine and
+        # deterministic -- see knock_on_why, not test flakiness (checked by
+        # re-running twice; identical both times).
+        suites_red)   echo "test_kmod_eflag_mproc test_syssvc_ef_mproc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$ASCEFC reports SS\$_UNASEFC -- \"you were never associated with this cluster\" -- for a re-association that actually happened (the cluster's refcount incremented, proc->ef.common[idx] updated to point at it, any prior association released). The caller is told its own real (re)association never took place, the same facade shape as \$DACEFC's and \$DLCEFC's own status-word defects.";;
+        require_fail) cat <<'EOF'
+child: ascefc joined the named common cluster
+child: sys$ascefc joined the named common cluster
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+parent: sys$ascefc re-joined the permanent cluster by name
+parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
+parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
+parent: wfland child never reported it was ready to block
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+"parent: sys$ascefc re-joined the permanent cluster by name" is the SAME
+defect observed a second time, no forking involved: sys$dacefc releases the
+permanent cluster's last association (it survives, being permanent), and
+the very next call, sys$ascefc on that same name, is a genuine
+re-association -- the reassociate branch, deterministically, every run.
+
+The other three are ONE STEP REMOVED, through two of this suite's own
+forked-child helpers, run_wait_child() and run_wfland_child() -- each
+begins with its own sys$ascefc on a cluster its PARENT already created
+moments earlier, before the fork. That is ALSO a genuine, deterministic
+reassociation (not a race: the parent's own create happens synchronously,
+before the fork, so the cluster always exists by the time the child runs).
+Both helpers check that call's status and bail out immediately if it is not
+success:
+    st = sys$ascefc(...);
+    if (!(st & 1)) { send_token(c2p_write, 'E'); return 1; }
+Under this defect that status lies, so both children take the early-exit
+branch WITHOUT EVER REACHING their real test logic -- run_wait_child()
+never calls sys$waitfr() at all, so the parent's alarm count stays at 0
+("the waiter was interrupted..." fails) and its verdict is 'E' rather than
+'S' ("sys$waitfr did NOT return..." fails); run_wfland_child() never sends
+the 'R' ready-to-block token, so the parent's read_bounded for it times out
+("wfland child never reported..." fails). Confirmed by reading both
+helpers, not inferred from the FAIL list alone -- and confirmed
+deterministic by re-running this defect twice, identical result both
+times, which is what tells this apart from the resource-contention
+flakiness this session hit elsewhere on this shared host.
+EOF
+                      ;;
         esac;;
 
     eflag-dacefc-status-wrong)
@@ -3495,6 +3583,14 @@ apply_edit() {
         # Unique text in the file -- readef's own state/bit comparison,
         # shared with no other handler.
         sed -i 's|^    args\.status = (args\.state \& (1U << bit)) ? SS__WASSET : SS__WASCLR;$|    args.status = (args.state \& (1U << bit)) ? SS__WASCLR : SS__WASSET; /* NEGCTL eflag-readef-status-inverted */|' "$_file";;
+    eflag-ascefc-reassoc-status-wrong)
+        # UNIQUE TEXT, no range anchor needed: the 12-space indentation only
+        # occurs inside vms_ioctl_ascefc's own "Found it -- associate"
+        # branch (list_for_each_entry's if-block) -- the sibling 4-space
+        # "args.status = SS_NORMAL;" at this handler's own Create-new-
+        # cluster branch, and every other handler's copy of that same
+        # 4-space text, are both a different indentation and untouched.
+        sed -i 's|^            args\.status = SS__NORMAL;$|            args.status = SS__UNASEFC; /* NEGCTL eflag-ascefc-reassoc-status-wrong */|' "$_file";;
     eflag-dacefc-status-wrong)
         # RANGE-ANCHORED to vms_ioctl_dacefc's own body. This exact 4-space
         # "args.status = SS_NORMAL;" also appears in vms_ioctl_waitfr,

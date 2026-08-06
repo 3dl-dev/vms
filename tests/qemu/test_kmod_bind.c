@@ -472,6 +472,7 @@ int main(int argc, char **argv)
     state = 0;
     status = vms_kif_readef(BIND_EFN, &state);
     /* negctl-knockon: bind-client-no-register */
+    /* negctl-knockon: eflag-readef-status-inverted */
     CHECK(status == SS_WASSET, "$READEF sees the flag this process just set");
     /* negctl-knockon: bind-client-no-register */
     CHECK((state & (1u << (BIND_EFN % 32))) != 0,
@@ -796,6 +797,7 @@ int main(int argc, char **argv)
             CHECK(strcmp(trep.prcnam, THREAD_NAME) == 0,
                   "sibling thread sees the process name the main thread set");
             /* negctl: pcb-per-thread */
+            /* negctl-knockon: eflag-readef-status-inverted */
             CHECK(trep.readef_status == SS_WASSET,
                   "sibling thread sees the event flag the main thread set");
             /* negctl-knockon: bind-client-no-register */

@@ -23,10 +23,10 @@
 #   RUN <defect> <suites that went red, space-joined, or "-"> <pass|fail>
 #   RED <defect> <suite or (harness)> <assertion text observed FAILing>
 #
-# generated-at: 2026-08-06T20:18:07Z
-# tree-commit: 79b570094058e2d5df626d5acad5dc082ff66b9f
+# generated-at: 2026-08-06T21:02:56Z
+# tree-commit: 72b232921b5da26996613932509f15b82ab17a16
 # positive-control: pass
-# defects-in-manifest: 51
+# defects-in-manifest: 55
 # suites-derived: 28
 RUN	access-mode-escalation	test_kmod_access	pass
 RED	access-mode-escalation	test_kmod_access	... and still does not hold CMKRNL afterwards
@@ -53,6 +53,27 @@ RED	eflag-clref-noop	test_syssvc_ef_mproc	child: a common flag CLEARED BY THE PA
 RUN	eflag-waitfr-eintr-normal	test_syssvc_ef_mproc	pass
 RED	eflag-waitfr-eintr-normal	test_syssvc_ef_mproc	parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
 RED	eflag-waitfr-eintr-normal	test_syssvc_ef_mproc	parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
+RUN	eflag-setef-status-inverted	test_kmod_eflag test_syssvc_ef_local	pass
+RED	eflag-setef-status-inverted	test_kmod_eflag	setef(40) in cluster 1 returns WASCLR
+RED	eflag-setef-status-inverted	test_kmod_eflag	setef(5) again returns WASSET
+RED	eflag-setef-status-inverted	test_kmod_eflag	setef(5) returns WASCLR
+RED	eflag-setef-status-inverted	test_syssvc_ef_local	sys$setef(1) on an already-set flag reported WASSET
+RUN	eflag-readef-status-inverted	test_kmod_bind test_kmod_eflag test_syssvc_ef_local	pass
+RED	eflag-readef-status-inverted	test_kmod_bind	$READEF sees the flag this process just set
+RED	eflag-readef-status-inverted	test_kmod_bind	sibling thread sees the event flag the main thread set
+RED	eflag-readef-status-inverted	test_kmod_eflag	readef(5) after clear returns WASCLR
+RED	eflag-readef-status-inverted	test_kmod_eflag	readef(5) returns WASSET
+RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$readef(1) reported WASCLR after the clear
+RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$readef(1) reported WASCLR for the cleared flag
+RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$readef(1) reported WASSET after the flag was set
+RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$waitfr(1) left the flag SET -- it is not a counting semaphore
+RED	eflag-readef-status-inverted	test_syssvc_ef_local	the cluster state word agrees with the status: flag 1's bit is CLEAR
+RUN	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	pass
+RED	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dacefc identifies the cluster from ANY flag number in it, not only the base
+RED	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dacefc released the last association to the permanent cluster
+RED	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dacefc released the marked cluster
+RUN	eflag-dlcefc-status-wrong	test_syssvc_ef_mproc	pass
+RED	eflag-dlcefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dlcefc accepted the permanent cluster by name
 RUN	lock-compat-ex-cr	test_kmod_lock	pass
 RED	lock-compat-ex-cr	test_kmod_lock	ENQ EX+NOQUEUE denied (CR held)
 RUN	lock-compat-cr-ex	test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status	pass

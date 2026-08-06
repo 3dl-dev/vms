@@ -577,6 +577,7 @@ int main(void)
     printf("  INFO: sys$dacefc(%d) [non-base flag number] returned status %u\n",
            CLUSTER_EFN_A, st);
     /* negctl-knockon: bind-client-no-register */
+    /* negctl: eflag-dacefc-status-wrong */
     CHECK(st & 1,
           "parent: sys$dacefc identifies the cluster from ANY flag number in it, not only the base");
 
@@ -618,6 +619,7 @@ int main(void)
 
         st = sys$dacefc(PERM_EFN);
         /* negctl-knockon: bind-client-no-register */
+        /* negctl-knockon: eflag-dacefc-status-wrong */
         CHECK(st & 1, "parent: sys$dacefc released the last association to the permanent cluster");
 
         st = sys$ascefc(PERM_EFN, &permnam, 0, 0);
@@ -634,10 +636,12 @@ int main(void)
         st = sys$dlcefc(&permnam);
         printf("  INFO: sys$dlcefc(\"OVMX$2A8_PERM\") returned status %u\n", st);
         /* negctl-knockon: bind-client-no-register */
+        /* negctl: eflag-dlcefc-status-wrong */
         CHECK(st & 1, "parent: sys$dlcefc accepted the permanent cluster by name");
 
         st = sys$dacefc(PERM_EFN);
         /* negctl-knockon: bind-client-no-register */
+        /* negctl-knockon: eflag-dacefc-status-wrong */
         CHECK(st & 1, "parent: sys$dacefc released the marked cluster");
 
         st = sys$ascefc(PERM_EFN, &permnam, 0, 0);

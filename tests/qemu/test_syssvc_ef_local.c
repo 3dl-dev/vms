@@ -146,9 +146,11 @@ int main(void)
     /* negctl-knockon: bind-client-no-register */
     CHECK($VMS_STATUS_SUCCESS(status), "sys$readef(1) succeeded on the cleared flag");
     /* negctl-knockon: bind-client-no-register */
+    /* negctl: eflag-readef-status-inverted */
     CHECK(status == SS$_WASCLR, "sys$readef(1) reported WASCLR for the cleared flag");
     /* ADDED (vms-2a8): the old program read ef_state and never checked it. */
     /* negctl-knockon: bind-client-no-register */
+    /* negctl-knockon: eflag-readef-status-inverted */
     CHECK((status == SS$_WASCLR) && !(ef_state & (1u << TEST_EFN)),
           "the cluster state word agrees with the status: flag 1's bit is CLEAR");
 
@@ -171,6 +173,7 @@ int main(void)
     /* negctl-knockon: bind-client-no-register */
     CHECK($VMS_STATUS_SUCCESS(status), "sys$readef(1) succeeded after the flag was set");
     /* negctl-knockon: bind-client-no-register */
+    /* negctl-knockon: eflag-readef-status-inverted */
     CHECK(status == SS$_WASSET, "sys$readef(1) reported WASSET after the flag was set");
     /* ADDED (vms-2a8): the state word must move with the flag. */
     /* negctl-knockon: bind-client-no-register */
@@ -182,6 +185,7 @@ int main(void)
     /* negctl-knockon: bind-client-no-register */
     CHECK($VMS_STATUS_SUCCESS(status), "sys$setef(1) succeeded on the already-set flag");
     /* negctl-knockon: bind-client-no-register */
+    /* negctl: eflag-setef-status-inverted */
     CHECK(status == SS$_WASSET, "sys$setef(1) on an already-set flag reported WASSET");
 
     /* C6: sys$waitfr on a set flag returns immediately. */
@@ -196,6 +200,7 @@ int main(void)
      */
     status = sys$readef(TEST_EFN, &ef_state);
     /* negctl-knockon: bind-client-no-register */
+    /* negctl-knockon: eflag-readef-status-inverted */
     CHECK(status == SS$_WASSET, "sys$waitfr(1) left the flag SET -- it is not a counting semaphore");
 
     /* C7: sys$clref on the set flag reports WASSET. */
@@ -209,6 +214,7 @@ int main(void)
     status = sys$readef(TEST_EFN, &ef_state);
     /* negctl: eflag-clref-noop */
     /* negctl-knockon: bind-client-no-register */
+    /* negctl-knockon: eflag-readef-status-inverted */
     CHECK(status == SS$_WASCLR, "sys$readef(1) reported WASCLR after the clear");
 
     printf("=== test_syssvc_ef_local: %d passed, %d failed ===\n", pass, fail);

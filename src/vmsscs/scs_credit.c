@@ -214,6 +214,14 @@ int scs_credit_on_send(struct scs_cdt *cdt)
     return (int)take_pending_receive_credit(cdt);
 }
 
+unsigned scs_credit_peek_pending(const struct scs_cdt *cdt)
+{
+    if (cdt == NULL) {
+        return 0;
+    }
+    return cdt->pending_receive_credit;
+}
+
 /* --- Credit Wait: the queue on the CDT (pp. 2-45..2-46, vms-1d2) ---------- */
 
 /* FIFO append (p. 2-46: "The longer a CDRP has been in the queue, the closer it

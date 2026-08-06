@@ -25,7 +25,10 @@
 #include <string.h>
 #include <time.h>
 
-#include "scs_cdt.h" /* vms-8de: struct scs_cdt::send_credit, the live-read oracle */
+#include "scs_cdt.h" /* struct scs_cdt */
+#include "scs_credit.h" /* vms-d76: scs_credit_release_buffer()/scs_credit_peek_pending(),
+                          * the real accounting path that is the independent oracle for
+                          * what the build site's live credit read must equal */
 
 static int failures = 0;
 
@@ -701,13 +704,26 @@ static void test_null_guards(void)
 }
 
 /*
- * vms-8de: the build site itself, not just the wire, must stop replaying the
- * constant 1. With p->cdt pointing at a live CDT, the SCS envelope's credit
- * field ([48:50], abs frame offset 62) must be READ from cdt->send_credit --
- * not from SCS_MSCP_ENV_CREDIT -- and it must track a change to that field.
- * This is the build-site case; the existing byte-exact tests above (p.cdt ==
- * NULL via fill_params' memset) already cover the no-CDT / downstream-
- * overwrite case, which is unchanged by this item.
+ * vms-8de / corrected by vms-d76: the build site itself, not just the wire,
+ * must stop replaying the constant 1. With p->cdt pointing at a live CDT, the
+ * SCS envelope's credit field ([48:50], abs frame offset 62) must be READ
+ * from the connection's Pending Receive Credit (the piggyback account) --
+ * NOT from Send Credit and NOT from SCS_MSCP_ENV_CREDIT -- and it must track
+ * a change to that account.
+ *
+ * ORACLE, INDEPENDENT OF THE BUILD SITE UNDER TEST: the CDT is put into each
+ * state through the REAL accounting entry points -- scs_credit_release_buffer()
+ * (the only production path that ever raises Pending Receive Credit, p. 2-43)
+ * and scs_credit_grant_from_peer()/scs_credit_on_send() to establish a
+ * DIFFERENT Send Credit value on the SAME cdt -- rather than by hand-setting
+ * cdt.pending_receive_credit or cdt.send_credit directly. This is what makes
+ * the assertions catch "wrong field chosen": send_credit and
+ * pending_receive_credit are driven to DIFFERENT, independently-known values,
+ * so a build site reading the wrong one produces a value this test does not
+ * expect, instead of one that merely echoes whatever was poked into a single
+ * shared field. This is the build-site case; the existing byte-exact tests
+ * above (p.cdt == NULL via fill_params' memset) already cover the no-CDT /
+ * downstream-overwrite case, which is unchanged by this item.
  */
 static void test_credit_reads_live_cdt(void)
 {
@@ -717,22 +733,50 @@ static void test_credit_reads_live_cdt(void)
 
     struct scs_cdt cdt;
     memset(&cdt, 0, sizeof(cdt));
-    cdt.send_credit = 7; /* deliberately NOT the replayed constant (1) */
     p.cdt = &cdt;
+
+    /* Drive Send Credit and Pending Receive Credit to DIFFERENT values via
+     * the real accounting API, not by poking the struct fields:
+     *   - scs_credit_grant_from_peer(&cdt, 7) is the p. 2-43 "peer extended us
+     *     7 Send Credits" edge -- sets send_credit = 7, pending_receive_credit
+     *     untouched (still 0).
+     *   - scs_credit_release_buffer() called 3 times is the p. 2-43 "the
+     *     SYSAP released 3 buffers" edge -- raises pending_receive_credit by
+     *     1 each call, to 3, leaving send_credit at 7. */
+    CHECK(scs_credit_grant_from_peer(&cdt, 7) == 0, "grant_from_peer sets send_credit");
+    CHECK(cdt.send_credit == 7 && cdt.pending_receive_credit == 0,
+          "precondition: send_credit and pending_receive_credit now DIFFER (7 vs 0)");
+    CHECK(scs_credit_release_buffer(&cdt) == 0 &&
+          scs_credit_release_buffer(&cdt) == 0 &&
+          scs_credit_release_buffer(&cdt) == 0,
+          "release_buffer x3 raises pending_receive_credit via the real accounting path");
+    CHECK(cdt.pending_receive_credit == 3 && cdt.send_credit == 7,
+          "precondition: pending_receive_credit=3, send_credit=7 -- reading the wrong "
+          "field would emit 7, not 3");
 
     uint8_t out[SCS_MSCP_FRAME_LEN];
     CHECK(scs_mscp_build_scc(&p, out) == 0, "build_scc with live cdt ok");
     uint16_t credit = (uint16_t)(out[62] | (out[63] << 8));
-    CHECK(credit == 7,
-          "build site reads credit from cdt->send_credit, not SCS_MSCP_ENV_CREDIT");
+    CHECK(credit == cdt.pending_receive_credit,
+          "build site's emitted credit equals pending_receive_credit, the piggyback account");
+    CHECK(credit == scs_credit_peek_pending(&cdt),
+          "build site's emitted credit equals scs_credit_peek_pending(), the non-mutating oracle");
+    CHECK(credit != cdt.send_credit,
+          "build site's emitted credit does NOT equal send_credit -- proves the wrong-field "
+          "bug (reading cdt->send_credit) is caught, not just re-encoded");
     CHECK(credit != SCS_MSCP_ENV_CREDIT,
-          "live credit differs from the replayed constant this test chose 7 to prove");
+          "live credit differs from the replayed constant this test's setup avoided");
+    CHECK(cdt.pending_receive_credit == 3,
+          "scs_credit_peek_pending() must NOT mutate the CDT -- it is a peek, not a take");
 
-    /* Live tracking: change the account, rebuild, the build site follows it. */
-    cdt.send_credit = 3;
+    /* Live tracking: raise the piggyback account further via the real path,
+     * rebuild, the build site follows it. */
+    CHECK(scs_credit_release_buffer(&cdt) == 0, "release_buffer again");
+    CHECK(cdt.pending_receive_credit == 4, "pending_receive_credit is now 4");
     CHECK(scs_mscp_build_gus(&p, out) == 0, "build_gus with live cdt ok");
     credit = (uint16_t)(out[62] | (out[63] << 8));
-    CHECK(credit == 3, "build site re-reads cdt->send_credit on each build, not cached");
+    CHECK(credit == 4, "build site re-reads pending_receive_credit on each build, not cached");
+    CHECK(cdt.send_credit == 7, "send_credit is untouched throughout -- it is the wrong account");
 
     /* No CDT (the pre-vms-8de shape) still falls back to the labeled replay. */
     p.cdt = NULL;

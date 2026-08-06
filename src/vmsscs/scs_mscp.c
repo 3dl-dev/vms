@@ -33,7 +33,8 @@
 #include <string.h>
 
 #include "scs_env.h" /* vms-ec7: THE shared SCS message envelope */
-#include "scs_cdt.h" /* vms-8de: struct scs_cdt::send_credit, the live credit read */
+#include "scs_cdt.h" /* struct scs_cdt, forward-declared in scs_mscp.h */
+#include "scs_credit.h" /* vms-d76: scs_credit_peek_pending(), the correct live credit read */
 #include "scs_member.h" /* vms-020: scs_member_vms_time_now() for P.TIME */
 
 /*
@@ -241,21 +242,35 @@ int scs_mscp_build_command(const struct scs_mscp_params *p,
      * Con.ID pair. This is the frame class docs/design-mscp-direction.md sec 1.2
      * identifies: an MSCP command nested under an SCS header, Figure 4-5.
      *
-     * CREDIT (vms-8de): a live READ of p->cdt->send_credit when the caller
-     * passed a CDT for this connection (the normal scsd.c case, looked up by
-     * local_conid) -- the same accounting scsd_credit_stamp_outbound()
-     * (vms-aa1) owns; this builder invents no second source of truth. It is
-     * still overwritten (via the same read, one debit later) further down the
-     * transmit path by scsd_credit_stamp_outbound() on every outbound MTYPE-10
-     * frame, so the field written here never reaches the wire as-is -- naming
-     * it live here is what makes that overwrite legible instead of invisible.
+     * CREDIT (vms-8de, corrected by vms-d76): a live READ of the connection's
+     * Pending Receive Credit -- via scs_credit_peek_pending(), a non-mutating
+     * peek -- when the caller passed a CDT for this connection (the normal
+     * scsd.c case, looked up by local_conid). Pending Receive Credit, not
+     * Send Credit, is the piggyback account: scs_cdt.h documents the split
+     * (Send Credit = buffers THIS node believes exist on the REMOTE, a
+     * receive-side accounting value; Pending Receive Credit = buffers freed
+     * LOCALLY, piggybacked into the credit field of the next outbound
+     * message), and scsd_credit_stamp_outbound() (scsd.c, vms-aa1) -- the
+     * function this builder's live read is meant to track -- returns
+     * scs_credit_on_send(cdt), which takes cdt->pending_receive_credit, never
+     * cdt->send_credit. This builder invents no second source of truth.
+     *
+     * NOT ALWAYS OVERWRITTEN: scsd_credit_stamp_outbound() only re-stamps the
+     * field on the credit-enabled, CDL-hit, in-length, non-starved path.
+     * Five paths return the frame UNSTAMPED -- !scs_credit_enabled(),
+     * !scsd_cdl_ready, len > SCSD_CREDIT_MAX_FRAME, a CDL lookup miss, and
+     * credit starvation -- and on every one of those the builder's bytes go
+     * out on the wire exactly as written here. Naming the live read here is
+     * what makes both the overwrite AND the five unstamped exceptions
+     * legible, not what makes them irrelevant.
+     *
      * With no CDT (p->cdt == NULL, e.g. a unit test with no CDL), this falls
      * back to SCS_MSCP_ENV_CREDIT, the golden af2 joiner command's [48:50]
-     * LABELED REPLAY this field used unconditionally before this item. */
+     * LABELED REPLAY this field used unconditionally before vms-8de. */
     {
         struct scs_env_fields env;
         env.mtype = SCS_ENV_MTYPE_APP_MESSAGE;
-        env.credit = (p->cdt != NULL) ? (uint16_t)p->cdt->send_credit
+        env.credit = (p->cdt != NULL) ? (uint16_t)scs_credit_peek_pending(p->cdt)
                                        : SCS_MSCP_ENV_CREDIT;
         env.dest_conid = p->remote_conid;
         env.src_conid = p->local_conid;

@@ -322,7 +322,11 @@ target_include_directories(vmsscs_mscp PUBLIC
 # the inner length / format word / MTYPE / credit / Con.ID-pair stores.
 # vms-020: also links vmsscs_member for scs_member_vms_time_now() -- P.TIME
 # (sec 6.16) is live host time, not a frozen capture replay.
-target_link_libraries(vmsscs_mscp PUBLIC vmsscs_env vmsscs_member)
+# vms-d76: also links vmsscs_credit for scs_credit_peek_pending() -- the
+# non-mutating read of the connection's Pending Receive Credit (the piggyback
+# account) that the CREDIT build site uses, correcting vms-8de's read of the
+# wrong CDT field (send_credit).
+target_link_libraries(vmsscs_mscp PUBLIC vmsscs_env vmsscs_member vmsscs_credit)
 
 # vms-291 (MSCP epic Phase D) - THE OTHER HALF: the MSCP disk SERVER responder.
 # vmsscs_mscp builds the commands OVMX sends as a disk client; this answers the

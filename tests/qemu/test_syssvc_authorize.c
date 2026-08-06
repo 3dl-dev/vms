@@ -206,21 +206,26 @@ int main(void)
         CHECK(0, "A: could not run the SYSPRV-holder subprocess");
     } else {
         dump("A: SYSPRV holder", outA);
+        /* negctl-knockon: bind-client-no-register */
         CHECK(strstr(outA, "SETIDENT_STATUS=1\n") != NULL,
               "A: the executive accepted the SYSPRV identity");
         {
             char want[64];
             snprintf(want, sizeof(want), "SELF_PRIVS=%016llx\n",
                      (unsigned long long)(uint64_t)A_PRIVS);
+            /* negctl-knockon: bind-client-no-register */
             CHECK(strstr(outA, want) != NULL,
                   "A: the executive's own row holds exactly the SYSPRV mask "
                   "this run stamped -- not a claim, a readback");
         }
+        /* negctl-knockon: bind-client-no-register */
         CHECK(strstr(outA, "%UAF-I-AUTHVERSION") != NULL,
               "A: AUTHORIZE printed its version banner -- the SYSPRV holder "
               "was ADMITTED");
+        /* negctl-knockon: bind-client-no-register */
         CHECK(strstr(outA, "%UAF-F-NOAUTH") == NULL,
               "A: the SYSPRV holder was never refused");
+        /* negctl-knockon: bind-client-no-register */
         CHECK(rcA == 0,
               "A: AUTHORIZE exited 0 for the admitted session");
     }
@@ -231,12 +236,14 @@ int main(void)
         CHECK(0, "B: could not run the non-SYSPRV subprocess");
     } else {
         dump("B: non-SYSPRV (OPER|WORLD, no SYSPRV)", outB);
+        /* negctl-knockon: bind-client-no-register */
         CHECK(strstr(outB, "SETIDENT_STATUS=1\n") != NULL,
               "B: the executive accepted the non-SYSPRV identity");
         {
             char want[64];
             snprintf(want, sizeof(want), "SELF_PRIVS=%016llx\n",
                      (unsigned long long)(uint64_t)B_PRIVS);
+            /* negctl-knockon: bind-client-no-register */
             CHECK(strstr(outB, want) != NULL,
                   "B: the executive's own row holds exactly the OPER|WORLD "
                   "mask this run stamped, with SYSPRV genuinely absent");

@@ -1591,7 +1591,18 @@ EOF
         # /dev/vms only to decide skip-vs-run, then drives the real DCL.EXE),
         # so it is a genuine detector of the same missing bind, not a widening
         # of blind_suites.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status test_syssvc_setname";;
+        # test_syssvc_authorize is the TENTH, added by vms-4c2, and it arrived
+        # the way every one above it did -- NOT PREDICTED, READ OFF A RUN. It
+        # was written to prove AUTHORIZE's SYSPRV check has a positive
+        # control (a real /dev/vms, not the dev-host-only refusal PR #76
+        # left unproven), and its helper stamps an identity with a BARE
+        # vms_kif_setident() -- no vms_kif_register() first, the exact
+        # counter-example shape test_syssvc_procnam/showdev/showproc/
+        # lock_status establish -- so it was never a blind_suites candidate.
+        # The first per-facility CI run after it merged reddened it here:
+        # one suite outside the declared set and seven assertions outside
+        # the named set.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status test_syssvc_setname test_syssvc_authorize";;
         # test_kmod_setterm (vms-d0b) joins the blind set, MEASURED in the
         # same run: it stayed rc=0 with the defect injected, because
         # open_and_register() hand-registers exactly like test_kmod_devtab
@@ -1778,6 +1789,13 @@ the executive's process table row for the second holder became named
 the 15-char boundary-legal name (VMS_PRCNAM_SIZE-1) was accepted
 the 16-char oversized name is refused with the oracle's two-line %SET-E-NOTSET / -SYSTEM-F-IVLOGNAM shape, now that upname is sized VMS_PRCNAM_XFER and reaches the executive intact
 after the refused rename, SHOW SYSTEM still names this process with its PRE-EXISTING boundary name -- left UNCHANGED by the refusal, exactly as the oracle transcript shows
+A: the executive accepted the SYSPRV identity
+A: the executive's own row holds exactly the SYSPRV mask this run stamped -- not a claim, a readback
+A: AUTHORIZE printed its version banner -- the SYSPRV holder was ADMITTED
+A: the SYSPRV holder was never refused
+A: AUTHORIZE exited 0 for the admitted session
+B: the executive accepted the non-SYSPRV identity
+B: the executive's own row holds exactly the OPER|WORLD mask this run stamped, with SYSPRV genuinely absent
 EOF
                       ;;
         knock_on_why) cat <<'EOF'

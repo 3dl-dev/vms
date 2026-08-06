@@ -41,7 +41,9 @@
 # Env:    CC (default gcc), GSMATCH (default LEQUAL,1,0)
 #
 # Must run in the arm64 musl container where DECC$SHR.EXE and LIBVMSLNM$SHR.EXE
-# already exist (see CLAUDE.md test loop). aarch64-only for now.
+# already exist (see CLAUDE.md test loop). CC/CFLAGS are env-overridable
+# (default aarch64 musl flags); the x86_64 caller (vms-cb5f) sets CC + CFLAGS
+# (with -mtls-dialect=gnu2, no -mno-outline-atomics) before invoking this script.
 set -e
 
 LINK_EXE=${1:?usage: mk_vmsfs_shr.sh <LINK.EXE> <out> <DECC$SHR.EXE> <LIBVMSLNM$SHR.EXE> [src] [libvms-inc] [vmslnm-inc]}
@@ -62,7 +64,7 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 WORK=${WORK:-/tmp/mk-vmsfs-shr}
 mkdir -p "$WORK"
 
-CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics"
+CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics}"
 INCS="-I$SRC/include -I$LIBVMS_INC -I$LNM_INC"
 
 echo "mk_vmsfs_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH"

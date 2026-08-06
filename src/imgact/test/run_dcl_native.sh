@@ -12,8 +12,9 @@
 #      universals appended to DECC$SHR for DCL (access..utimes) — the graph builds
 #      STRICT-clean.
 #   2. The real src/vmsdcl shell (21 TUs) + src/vmsqueue compile cleanly with the
-#      proven musl VMS-native flags (-fPIC -ffreestanding -fno-builtin
-#      -mno-outline-atomics + the DCL POSIX feature macros).
+#      proven musl VMS-native flags (-fPIC -ffreestanding -fno-builtin +
+#      the one target-specific codegen flag -mno-outline-atomics on aarch64
+#      / -mtls-dialect=gnu2 on x86_64 (vms-cb5f) + the DCL POSIX feature macros).
 #   3. DCL.EXE links as a VMS-native ET_DYN executable via
 #      `LINK.EXE --executable --use {DECC$SHR + the five OVMX shareables}` — a
 #      22-object, main()-entered program with a full intra-image reloc set
@@ -28,9 +29,21 @@
 # real regression = hard FAIL). link.c and imgact.c are the complete toolchain and
 # are OUT of the Systems-Engineer file-domain — do NOT edit them here.
 #
-# arm64 musl container only (CLAUDE.md test loop). Needs root to create /vms.
+# ARCH selects the target (default aarch64; also x86_64, vms-cb5f — reproduces
+# this same proof through the x86_64 LINK.EXE/IMGACT.EXE path merged by
+# vms-8f5/vms-cd1/vms-2e4/vms-206). Run in a MATCHING musl container (arm64 or
+# amd64 -- CLAUDE.md test loop): the container's native $CC drives both the
+# object compiles and (per lib_build_graph.sh) IMGACT.EXE's own Makefile ARCH
+# selection, and DCL.EXE activates directly (no qemu-user — the container IS
+# the target arch). Needs root to create /vms.
 set -e
+ARCH=${ARCH:-aarch64}
 CC=${CC:-gcc}
+case "$ARCH" in
+    aarch64) DCL_ARCHFLAG="-mno-outline-atomics" ;;
+    x86_64)  DCL_ARCHFLAG="-mtls-dialect=gnu2" ;;
+    *) echo "run_dcl_native: unsupported ARCH=$ARCH (expected aarch64 or x86_64)"; exit 1 ;;
+esac
 HERE=$(cd "$(dirname "$0")" && pwd)          # src/imgact/test
 IMGACT_DIR=$(cd "$HERE/.." && pwd)           # src/imgact
 LINK_DIR=$(cd "$IMGACT_DIR/../vmslink" && pwd)
@@ -55,7 +68,7 @@ mkdir -p "$SYSEXE" "$SYSLIB"
 
 LIBC=${LIBC:-/usr/lib/libc.a}
 LIBGCC=${LIBGCC:-$($CC -print-libgcc-file-name)}
-[ -f "$LIBC" ]   || { echo "SKIP-FAIL: no musl libc.a at $LIBC (need arm64 musl container)"; exit 1; }
+[ -f "$LIBC" ]   || { echo "SKIP-FAIL: no musl libc.a at $LIBC (need a $ARCH musl container)"; exit 1; }
 [ -f "$LIBGCC" ] || { echo "FAIL: no libgcc.a at $LIBGCC"; exit 1; }
 
 # Shared producer-graph build steps (vms-c39: factored out so LOGINOUT's
@@ -67,8 +80,8 @@ build_producer_graph
 echo "-- (DCL's own +32 DECC\$SHR universals were part of that graph build) --"
 
 echo
-echo "== compile the real src/vmsdcl (21 TUs) + src/vmsqueue VMS-native =="
-CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics"
+echo "== compile the real src/vmsdcl (21 TUs) + src/vmsqueue VMS-native ($ARCH) =="
+CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector $DCL_ARCHFLAG"
 DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
 # -I$LIBVMSSYS_DIR (vms-8019): dcl_cmd_show.c includes "vms_kif.h" — SHOW SYSTEM
 # reads the executive's process table through vms_kif_procscan().
@@ -92,16 +105,17 @@ echo
 echo "== DCL.EXE reloc/TLS profile (informative) =="
 echo "-- entry symbol (crt0 synthesizes _start -> main): --"
 nm $DCLOBJS 2>/dev/null | awk '$2=="T" && ($3=="main"||$3=="_start"){print "   "$3}'
-echo "-- reloc histogram (intra-image ADRP/ADD/ABS64/PREL32 + GOT + TLSDESC): --"
+echo "-- reloc histogram (intra-image + GOT + TLSDESC, per docs/design-link-x86_64-relocs.md on x86_64): --"
+RELOC_PREFIX="R_AARCH64"; [ "$ARCH" = "x86_64" ] && RELOC_PREFIX="R_X86_64"
 for o in $DCLOBJS; do readelf -rW "$o" 2>/dev/null; done \
-  | awk '/R_AARCH64/{print $3}' | sort | uniq -c | sort -rn | sed 's/^/   /'
+  | awk -v p="$RELOC_PREFIX" '$0 ~ p{print $3}' | sort | uniq -c | sort -rn | sed 's/^/   /'
 echo "-- TLS-defining objects (single-object TLS, within the per-image limit): --"
 for o in $DCLOBJS; do readelf -SW "$o" 2>/dev/null | grep -qE '\.tdata|\.tbss' && echo "   TLS: $(basename $o)"; done
 
 echo
 echo "== link DCL.EXE VMS-native (LINK.EXE --executable --use the seven shareables) =="
 set +e
-sh "$LINK_DIR/mk_dcl.sh" "$WORK/LINK.EXE" "$SYSEXE/DCL.EXE" \
+CFLAGS="$CFLAGS" sh "$LINK_DIR/mk_dcl.sh" "$WORK/LINK.EXE" "$SYSEXE/DCL.EXE" \
     "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" \
     "$SYSLIB/LIBVMSFS\$SHR.EXE" "$SYSLIB/LIBVMSLNM\$SHR.EXE" "$SYSLIB/LIBVMSRMS\$SHR.EXE" \
     "$SYSLIB/LIBVMSSYS\$SHR.EXE" \

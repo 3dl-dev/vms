@@ -1483,6 +1483,45 @@ jobs:
           export CC=gcc WORK=/tmp/multiobj-exec-x86_64
           sh src/imgact/test/run_multiobj_exec_x86_64.sh
 
+  # -----------------------------------------------------------------------
+  # Job: Read-only-section relocations — x86_64 (vms-a66)
+  #
+  # LINK.EXE used to collect relocations ONLY against sections it bucketed
+  # B_TEXT or B_DATA, silently discarding every relocation whose target was a
+  # read-only allocatable section. gcc emits each switch jump table into
+  # `.rodata` as `.long arm - table_base` (one R_X86_64_PC32 per arm, because
+  # the arms are in .text and the table is not), so those tables came out ALL
+  # ZERO and the dispatch `jmp *rdx` executed the table's own bytes. That is
+  # what made DCL.EXE segfault on x86_64: musl's pop_arg jumped into the
+  # "(null)" string in DECC$SHR's .rodata on the first %-conversion.
+  #
+  # The three jobs that "covered" this path before (multiobj-exec-x86_64,
+  # vmslink-x86_64, exec-tls) all passed through the bug because their
+  # specimens contained no switch big enough for a jump table and never
+  # executed one. This job reproduces the SHAPE directly — it is not a
+  # scale/import-count gate — and diffs the activated image's output against
+  # the same source built by the system toolchain.
+  # -----------------------------------------------------------------------
+  rodata-reloc-x86_64:
+    name: Read-only-section relocations (switch jump tables) — x86_64 (vms-a66)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Link + activate a jump-table-bearing image against real musl DECC$SHR (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/rodata-reloc-x86_64
+              sh /src/src/vmslink/test/run_rodata_reloc_x86_64.sh
+            '
+
   exec-tls:
     name: Executable-Own TLS Link + Activate
     runs-on: ubuntu-latest
@@ -1540,6 +1579,40 @@ jobs:
               set -e
               apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
               export CC=gcc WORK=/tmp/dcl-native DCL_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_dcl_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # dcl-native-x86_64 — the x86_64 analog of dcl-native above (bead vms-cb5f,
+  # vms-bdf's own done-condition, epic vms-b93 "0.1 pre-release"). Reproduces
+  # the SAME proof (real DCL.EXE, the full six-library producer graph, IMGACT
+  # activation, the SHOW TIME / A=2+3 SHOW SYMBOL scripted session, zero
+  # ld/ld.so) through the x86_64 LINK.EXE path merged by vms-8f5 (simple
+  # relocs) + vms-cd1 (GOT-relative DATA imports) + vms-2e4 (gnu2 TLSDESC) +
+  # vms-206 (crt0 + cross-image CALL PLT stubs). Shares run_dcl_native.sh
+  # (and lib_build_graph.sh) verbatim with the arm64 job above -- ARCH=x86_64
+  # is a parameter of the SAME script, not a forked copy (vms-cb5f). Unlike
+  # the arm64 job, GitHub's runner IS x86_64, so this needs no QEMU binfmt
+  # registration -- the alpine:3.20/amd64 container runs natively and DCL.EXE
+  # activates directly, no qemu-user in the loop.
+  # -----------------------------------------------------------------------
+  dcl-native-x86_64:
+    name: DCL.EXE VMS-native Link + Activate, x86_64 (vms-bdf done-condition)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Link the real src/vmsdcl into DCL.EXE VMS-native + activate a scripted session through IMGACT.EXE (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/dcl-native-x86_64 DCL_EXPECT_LINK=1
               sh /src/src/imgact/test/run_dcl_native.sh
             '
 

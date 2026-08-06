@@ -30,7 +30,10 @@
 # Env:    GSMATCH (default LEQUAL,1,0)
 #
 # Must run where an aarch64 musl `libc.a` + `libgcc.a` exist (the arm64 musl
-# container — see CLAUDE.md test loop). aarch64-only for now.
+# container — see CLAUDE.md test loop). Otherwise arch-neutral: LINK.EXE
+# derives e_machine from the input libc.a/libgcc.a members, so pointing $2/$3
+# at an x86_64 musl libc.a + libgcc.a (vms-cb5f) produces an x86_64 DECC$SHR --
+# MODULO the TLS filter below, which the x86_64 build actually needs.
 set -e
 
 LINK_EXE=${1:?usage: mk_decc_shr.sh <LINK.EXE> <out> [libc.a] [libgcc.a]}
@@ -41,6 +44,114 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 
 [ -f "$LIBC" ]   || { echo "mk_decc_shr: libc.a not found: $LIBC (need the arm64 musl container)"; exit 1; }
 [ -f "$LIBGCC" ] || { echo "mk_decc_shr: libgcc.a not found: $LIBGCC"; exit 1; }
+
+# DECC$SHR must stay a NON-TLS-producer: it whole-archives libc.a/libgcc.a for
+# C-runtime support routines only and carries no __thread state of its own.
+# LINK.EXE enforces "one TLS object per image" (general multi-module TLS is
+# vms-212, not yet built) -- fine on aarch64, whose libgcc.a empirically
+# carries ZERO TLS-defining members (366 members / 0 TLS, checked directly
+# with readelf), but x86_64's libgcc.a whole-archives an entire dead-for-OVMX
+# subsystem built around __thread state: GCC's bundled IEEE 754-2008 decimal
+# floating-point library (bid_decimal_globals.o DEFINES two __thread globals,
+# __bid_IDEC_glbflags/glbround; ~20 bid128_*/bid32_*/bid64_* arithmetic
+# objects REFERENCE them via R_X86_64_TLSGD, the general-dynamic TLS model --
+# OVMX/musl never uses GCC's _Decimal32/64/128 types, so none of this is ever
+# called) plus gcc -fsplit-stack support (generic-morestack.o DEFINES a
+# __thread stack-guard var; generic-morestack-thread.o REFERENCES it, also
+# via TLSGD -- OVMX never builds with -fsplit-stack). Without this filter,
+# mk_decc_shr's x86_64 build hits "%LINK-F-ERROR, multi-module TLS not
+# supported yet" from the TLS-defining half, or "%LINK-F-ERROR, unsupported
+# .text relocation" (TLSGD is not a reloc type LINK.EXE's x86_64 path
+# resolves -- OVMX standardizes on the gnu2/TLSDESC model throughout, per
+# docs/design-link-x86_64-relocs.md) from the referencing half, if only the
+# definers are dropped and the referencing members are left dangling
+# (discovered building this bead's DCL.EXE proof, vms-cb5f). Filtered
+# architecture-generically -- any member DEFINING TLS storage (.tdata/.tbss)
+# or REFERENCING it via the GD model (TLSGD) is dropped as one unit, not by
+# hardcoding the four x86_64 object names -- so it is a no-op on an archive
+# with neither, like aarch64's, and covers a future libgcc revision (or a
+# different musl/libgcc build carrying the same dead subsystems) on either
+# architecture without edits here.
+#
+# The direct TLS-tainted set is not the whole dead subsystem, though: gcc's
+# decimal-float library has non-TLS "glue" objects that call INTO it without
+# touching TLS themselves -- e.g. libgcc's _addsub_dd.o/_addsub_sd.o (the
+# __bid_adddd3/__bid_subdd3/__bid_addsd3/__bid_subsd3 entry points) reference
+# __bid64_add via a plain GOT call, and __bid64_add is defined ONLY by
+# bid64_add.o -- which IS TLS-tainted (it references the rounding-mode
+# globals via TLSGD) and gets dropped above. Left in the archive, _addsub_*.o
+# would whole-archive into DECC$SHR with a GOT cell that resolve_named()
+# cannot satisfy -- die()'s "GOT symbol undefined" is CORRECT (there really
+# is no definition left), not a link.c gap; the gap is that the filter above
+# only removes the directly-tainted half of a connected dead-code component
+# (found completing vms-cb5f's x86_64 DCL.EXE proof, once vms-e5d unblocked
+# the GOTPCRELX reloc that had masked this further in). Fixed by a
+# reference-graph fixed-point closure below: after the direct TLS-tainted
+# set is seeded, repeatedly pull in any SURVIVING member whose undefined
+# reference is satisfied ONLY by an already-removed member (i.e. the symbol
+# has no definition left among survivors) -- not by name, by the actual
+# def/ref graph nm reports, so it generalizes to any future libgcc/musl
+# revision with the same shape on either architecture, and is a no-op archive
+# whose direct-tainted set is empty (aarch64's, and libc.a on both).
+filter_tls_members() {
+    src=$1
+    dir=$(mktemp -d)
+    ( cd "$dir" && ar x "$src" )
+
+    # One nm pass over the whole archive -> "<member> <symbol>" for defined
+    # (non-U) and undefined (U) symbols, split into two lookup files. Doing
+    # this once up front (instead of re-invoking nm per member per iteration)
+    # is what keeps the fixed-point loop below cheap on a 1345-member archive.
+    defs="$dir/.defs"; refs="$dir/.refs"
+    : > "$defs"; : > "$refs"
+    ( cd "$dir" && nm -A ./*.o 2>/dev/null ) | awk -v defs="$defs" -v refs="$refs" '
+        {
+            c = index($0, ":"); if (!c) next;
+            file = substr($0, 1, c-1); sub(/^\.\//, "", file);
+            n = split(substr($0, c+1), a, " "); if (n < 2) next;
+            type = a[n-1]; sym = a[n];
+            if (type == "U") print file, sym >> refs; else print file, sym >> defs;
+        }'
+
+    removed="$dir/.removed"
+    : > "$removed"
+    for o in "$dir"/*.o; do
+        [ -f "$o" ] || continue
+        if readelf -SW "$o" 2>/dev/null | grep -qE '\.tdata|\.tbss' || \
+           readelf -rW "$o" 2>/dev/null | grep -q 'TLSGD'; then
+            basename "$o" >> "$removed"
+        fi
+    done
+
+    # Fixed-point: keep pulling in surviving members that reference a symbol
+    # only a removed member defines, until nothing new is added.
+    while :; do
+        new="$dir/.new_removed"
+        awk '
+            NR==FNR { removed[$1]=1; next }
+            FILENAME==defs { if ($1 in removed) rdef[$2]=1; else sdef[$2]=1; next }
+            { if (!($1 in removed) && ($2 in rdef) && !($2 in sdef) && !($1 in seen)) { print $1; seen[$1]=1 } }
+        ' defs="$defs" "$removed" "$defs" "$refs" > "$new"
+        [ -s "$new" ] || { rm -f "$new"; break; }
+        cat "$new" >> "$removed"
+        sort -u "$removed" -o "$removed"
+        rm -f "$new"
+    done
+
+    if [ -s "$removed" ]; then
+        echo "mk_decc_shr: filtered TLS-tainted member(s) [direct + dead-code callers pulled in by the reference-graph closure] out of $(basename "$src") (DECC\$SHR stays a non-TLS producer, vms-212): $(tr '\n' ' ' < "$removed")" >&2
+        while read -r b; do rm -f "$dir/$b"; done < "$removed"
+        out="$dir/filtered.a"
+        ( cd "$dir" && ar rcs "$out" ./*.o )
+        echo "$out"
+    else
+        rm -rf "$dir"
+        echo "$src"
+    fi
+}
+
+LIBC=$(filter_tls_members "$LIBC")
+LIBGCC=$(filter_tls_members "$LIBGCC")
 
 # The C run-time universals DECC$SHR exports. Every name is defined by musl's
 # libc.a; each becomes a PROCEDURE universal in .vms$sv. (The stdin/stdout/stderr

@@ -747,6 +747,38 @@ set_tests_properties(scs_t89_mutants PROPERTIES
     TIMEOUT 900
 )
 
+# vms-0fe - THE PORT-LAYER (PPD) FIGURES GATE.
+#
+# WHY IT EXISTS: the "%PEA0, Inappropriate SCA Control Message -
+# FLAGS/OPC/STATUS/PORT 00/22/00/DD" console line was carried through two items
+# as evidence that a real VAX RECEIVES and REFUSES OVMX's DISCONNECT_REQ. It
+# never meant that -- vms-096 measured the SCA answer (10/10, sub-millisecond)
+# and vms-0fe read the line off VMS's own shipped decode tables (HELP/MESSAGE,
+# ANALYZE/ERROR_LOG, $SCSDEF in LIB.MLB): it is a PORT-layer message whose
+# documented effect is a port-to-port VC close, and its four fields are the PPD
+# header, not the SCA connection-control message type.
+#
+# The gate pins those figures ONE COPY EACH in docs/cluster-protocol-spec.md,
+# pins the NEGATIVE reproduction result (four fresh lab-2 runs including a
+# matched OVMX_NO_CLEAN_SHUTDOWN=1 control that put zero disconnect frames on
+# the wire -- the line appeared in none of them), and quarantines both dead
+# readings so they cannot be re-asserted in the spec, in scs_disc.h or in
+# scsd.c. Needs no captures and no lab. Registered unconditionally: a missing
+# interpreter must make the gate RED, never make it vanish.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_ppd_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_ppd_figures.py)
+else()
+    add_test(NAME scs_ppd_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_ppd_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_ppd_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 60
+)
+
 # vms-66f, review round 2 - THE SCS$DIRECTORY ROLE / LOOKUP-CREDIT GATE.
 #
 # WHY IT EXISTS: two claims shipped in round 1 that the capture they cited

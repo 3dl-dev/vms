@@ -4196,10 +4196,15 @@ For visibility, every field NOT marked GROUNDED above:
   connection-control message type, and nothing we hold identifies it. Do not
   guess at it and do not build on it. **What this console line means is now
   ITSELF the open question**, and it is a smaller one than before: the entry used
-  to read it as "so the peer receives and **refuses** it", which was the only
+  to read it as
+  <!-- PPD-REFUTED-BEGIN --> "so the peer receives and **refuses** it"
+  <!-- PPD-REFUTED-END -->, which was the only
   available reading while the response was believed absent. It is not available
   any more — the SCA layer answers 10/10 in under a millisecond, so whatever the
   port layer is complaining about, it is not a refusal of the disconnect.
+  **Three of the four printed fields, the message's own meaning and its effect
+  are GROUNDED as of `vms-0fe` — see the dedicated entry below. `OPC` itself is
+  still undecoded, and `vms-0fe` could not reproduce the line at all.**
   **One hypothesis is already dead, with a matched control:** the LABELED OVMX
   reason-code placement at [58:60] is not the cause — a run with
   `OVMX_NO_REASON_CODE=1`, verified on the wire to carry `0x0000` there against
@@ -4224,6 +4229,112 @@ For visibility, every field NOT marked GROUNDED above:
   is **why these four `vaxlab-4` runs differ**, not whether a VAX will answer
   OVMX at all. `tests/vmsscs/test_scsd_wire.c` drives OVMX's receive side with
   SCA 184 unedited.
+<!-- PPD-FIGURES-BEGIN -->
+- **The `%PEA0, Inappropriate SCA Control Message` console line** (`vms-0fe`):
+  **PARTLY DECODED, AND NOT REPRODUCIBLE ON A CURRENT LAB-2 RUN.** Two separate
+  results; keep them separate.
+
+  **(1) WHAT THE LINE IS — decoded, from VMS's own shipped decode tables.**
+  Nothing here is a guess and nothing here came from a VSI binary: every figure
+  below is output of a *documented* VMS utility run on a lab-2 VAX, or a
+  published `$xxxDEF` definition macro of the kind CLAUDE.md rule 8 already
+  names as a permitted source. Transcripts are host-only in
+  `/data/training/vax/cluster/captures-lab2/vms0fe-vaxlab-3-oracles-20260806.txt`
+  and `vms0fe-vaxlab3-analyze-errorlog-pea0-20260806.txt`.
+
+  | figure | value | oracle |
+  |---|---|---|
+  | facility | `Cluster Port Driver` | `HELP/MESSAGE "Inappropriate SCA Control"` |
+  | documented effect | *"The port driver closes the port-to-port virtual circuit to the remote port."* | same |
+  | field names | `PPD$B_FLAGS` / `PPD$B_OPC` / `PPD$B_STATUS` / `PPD$B_PORT` | `ANALYZE/ERROR_LOG/INCLUDE=PEA0` decodes an `NI-SCS SUB-SYSTEM, _VAX1$PEA0:` entry into exactly these four symbols |
+  | `PPD$B_PORT` renders as | `REMOTE NODE # n.` | same report |
+  | `PPD$B_OPC` renders as | a symbolic opcode name (`UNKNOWN OPCODE` for `00`) | same report |
+  | PPD header size | `SCS$S_PPD` = **16** bytes, at `SCS$B_PPD` = `-32` — i.e. a 16-byte port header *in front of* the SCS header (`SCS$W_LENGTH` −16, `SCS$W_MTYPE` −12, `SCS$W_CREDIT` −10, `SCS$L_DST_CONID` −8, `SCS$L_SRC_CONID` −4) | `LIBRARY/MACRO/EXTRACT=$SCSDEF SYS$LIBRARY:LIB.MLB` |
+  | SCS message-type enum | `CON_REQ 0 · CON_RSP 1 · ACCP_REQ 2 · ACCP_RSP 3 · REJ_REQ 4 · REJ_RSP 5 · DISC_REQ 6 · DISC_RSP 7 · CR_REQ 8 · CR_RSP 9 · APPL_MSG 10 · APPL_DG 11` | same macro — an **independent confirmation** of §4(h)(1a)'s 0–7, which until now rested only on our own captures, and it extends the enum past 7 |
+
+  So the quadruple is the **PPD (port-to-port driver) header**, a *different*
+  16-byte header from the SCS header whose `[46:48]` message type §4(h)(1a)
+  grounds. `OPC/22` is a `PPD$B_OPC`, and it can never be an SCS message type —
+  the SCS enum stops at 11. **The reading "the peer refuses OVMX's
+  DISCONNECT_REQ" is now dead twice over**: `vms-096` measured the SCA answer
+  10/10, and the message's own documented meaning is a *port*-layer VC close,
+  not an SCA-layer refusal.
+
+  **`PPD$B_PORT` = the sender's PEDRIVER remote-node number, allocated
+  descending from `0xDE`** (GROUNDED). `ANALYZE/ERROR_LOG` on `vaxlab-3`'s own
+  `ERRLOG.SYS` pairs every `REMOTE STATION ADDRESS` with a `REMOTE SYSTEM ID`:
+
+  | station | remote SCSSYSTEMID(s) seen | who |
+  |---|---|---|
+  | `0xDE` (222) | `0x402` = 1026 | VAX2 — always the first remote node |
+  | `0xDD` (221) | `0x456`=1110, `0x52B`=1323, `0x642`=**1602 = OVMXP2** | first OVMX joiner of that VAX1 boot |
+  | `0xDC` (220) | `0x406`=1030, `0x52C`=1324, `0x643`=**1603 = OVMXP3** | second |
+  | `0xDB` … `0xCF` | `0x460`, `0x461`, … `0x477` | later ones, one step down each |
+
+  The run that produced `PORT/DD` was a 2-node lab-2 pod, so `0xDD` **is OVMX** —
+  the line is about a frame received *from us*. `PORT/DB` on the lab-1
+  `coord5` run (`work/coord5.status`, `OVMXC5`/1174) is the same field on a
+  3-VAX lab. **It is a per-boot discovery ordinal, not derived from any
+  identity** — the same `0xDD` covers three different SCSSYSTEMIDs above — so do
+  not try to read a node identity out of it, and do not treat `DD` vs `DB` as a
+  difference between the two runs.
+
+  **(2) REPRODUCTION — IT DID NOT REPRODUCE.** Four fresh lab-2 runs,
+  `main`-built daemon `md5 ce1e0e484f7247d2234e2413dafff47a`, identities minted
+  clear of every id in use (`OVMXP1`/1601 … `OVMXP3`/1603), captures and both
+  consoles archived as `vms0fe-*` beside the epic's other lab-2 evidence:
+
+  | run | pod | pod state | clean shutdown | joined | port-driver line on VAX1 |
+  |---|---|---|---|---|---|
+  | `0feA`  | `vaxlab-7` | 3 prior OVMX ids | n/a (no connection) | **no** | `Remote System Conflicts with Known System - REMOTE NODE OVMXP1` |
+  | `0feA1` | `vaxlab-0` | virgin | yes — 3 `DISCONNECT_REQ` sent, 2 answered | **yes** (CN_3) | `Port has Closed Virtual Circuit - REMOTE NODE OVMXP1` |
+  | `0feB1` | `vaxlab-3` | virgin | **no — `OVMX_NO_CLEAN_SHUTDOWN=1`, `req-sent=0`** | no | `Port has Closed Virtual Circuit - REMOTE NODE OVMXP2` |
+  | `0feA2` | `vaxlab-3` | holds `OVMXP2` | yes | **yes** (CN_3) | `Port has Closed Virtual Circuit - REMOTE NODE OVMXP3` |
+
+  **`Inappropriate SCA Control Message` appeared in none of the four.** What a
+  disconnect-sending run draws today is the ordinary
+  `Port has Closed Virtual Circuit` — and the **matched control `0feB1` draws
+  that same line while putting ZERO `DISCONNECT_REQ` frames on the wire**
+  (`SCSD-I-NOCLEANSHUT` logged, `DISCONNECT: req-sent=0`), so that message is
+  the ordinary teardown of a node that went away and is **not** caused by
+  OVMX's disconnect at all. `0feA2` also kills "the pod has to be virgin": a
+  second OVMX identity joined a pod that already held one.
+
+  **NAMED STATE DIFFERENCES A FUTURE SESSION CAN TEST**, in the order they are
+  worth trying — the `vaxlab-4`/`coord5` runs differ from these four by:
+  (a) **daemon build** — those ran the `vms-578`/`vms-70e2`/`vms-591` branch
+  daemons, these ran `main` after `vms-096`/`vms-755`; (b) **which connection
+  was still open at exit** — in the `vaxlab-4` runs the surviving
+  `DISCONNECT_REQ` went to **VAX1** (`aa:00:04:00:01:04`), in `0feA1` VAX1's
+  SCS$DIRECTORY connection had already reached CLOSED during the run and the
+  only one left went to **VAX2**; (c) **`0feA`'s own failure mode**, below.
+  Hypothesis (b) is the one the message text itself points at — an SCA control
+  message is "inappropriate" for the *state*, and the sibling message
+  `Received Connect Without Path-Block` shows this facility's other complaint of
+  the same shape is precisely "control message arrived with no path block".
+
+  **AND THE DECODE PROCEDURE IS NOW FULLY SPECIFIED.** Whoever reproduces it
+  next does not have to guess at `OPC/22`: run
+  `ANALYZE/ERROR_LOG/INCLUDE=PEA0 SYS$ERRORLOG:ERRLOG.SYS` on the complaining
+  VAX afterwards and **read the symbolic name the report prints under
+  `PPD$B_OPC 22`**. The formatter has the table; our labs have simply never
+  logged a nonzero `PPD$B_OPC` (all entries in `vaxlab-3`'s log read
+  `00 / UNKNOWN OPCODE`). No `$PPDDEF` exists in `LIB.MLB` or `STARLET.MLB` on
+  V7.3, so the error-log report is the only decode oracle we have.
+
+  **AND A SECOND, PREVIOUSLY UNRECORDED PORT-DRIVER REFUSAL WAS FOUND** (`0feA`,
+  `vaxlab-7`): `%PEA0, Remote System Conflicts with Known System - REMOTE NODE
+  OVMXP1`, documented as *"the configuration poller discovered a remote system
+  with SCSSYSTEMID or SCSNODE equal to that of another system to which a virtual
+  circuit is already open"*, whose documented user action warns of **CLUEXIT
+  bugchecks elsewhere in the cluster**. OVMX then reached VC OPEN and never
+  received the `0x4b` connect — the exact `vms-2f3` stall signature — while
+  `0feA1`/`0feA2` on other pods joined normally. **This is NOT a claim about the
+  `vms-2f3` cause** (`0feA2` joined a non-virgin pod, so "residue blocks the
+  join" is already falsified as a general rule); it is a named, observed
+  port-layer refusal that had never been written down, and it deserves its own
+  item.
+<!-- PPD-FIGURES-END -->
 - **Joining an ESTABLISHED cluster** (§4i, `vms-af2`): **RESOLVED — two distinct
   differences.** (A) The established member's round-0 `0x41` START
   `send_seq[20:22]` = `prior_VC_send_seq+1` (residual VC continuation, e.g.

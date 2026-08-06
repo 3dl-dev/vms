@@ -310,8 +310,10 @@ int scs_conn_table_row(unsigned i, enum scs_conn_event *ev_out,
 
 int scs_conn_event_for_msgtype(unsigned msgtype, enum scs_conn_event *ev)
 {
-    /* See scs_conn.h for the grounding of each value and for which of them have
-     * never been seen on a wire. */
+    /* See scs_conn.h for the grounding of each value, and (vms-c11) for why
+     * "never seen on a wire" was a sampling error for 5 and 7, not a fact --
+     * 7 (DISCONNECT_RSP) is now real-frame tested at this call site
+     * (tests/vmsscs/test_scsd_wire.c case (2)); 5 (REJECT_RSP) is not yet. */
     if (ev == NULL) {
         return 0;
     }
@@ -321,9 +323,9 @@ int scs_conn_event_for_msgtype(unsigned msgtype, enum scs_conn_event *ev)
     case 2: *ev = SCS_CONN_EV_RCV_ACCEPT_REQ; return 1;
     case 3: *ev = SCS_CONN_EV_RCV_ACCEPT_RSP; return 1;
     case 4: *ev = SCS_CONN_EV_RCV_REJECT_REQ; return 1;
-    case 5: *ev = SCS_CONN_EV_RCV_REJECT_RSP; return 1;     /* never observed */
+    case 5: *ev = SCS_CONN_EV_RCV_REJECT_RSP; return 1;     /* not yet real-frame tested */
     case 6: *ev = SCS_CONN_EV_RCV_DISCONNECT_REQ; return 1;
-    case 7: *ev = SCS_CONN_EV_RCV_DISCONNECT_RSP; return 1; /* never observed */
+    case 7: *ev = SCS_CONN_EV_RCV_DISCONNECT_RSP; return 1; /* real-frame tested, test_scsd_wire.c case (2) */
     default: return 0;
     }
 }

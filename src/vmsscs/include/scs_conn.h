@@ -109,11 +109,17 @@
  *
  * 16 complete dialogues, 16 CONNECT_REQ / 16 CONNECT_RSP, each terminated by
  * exactly one of 6 ACCEPT_REQ or 10 value-`4` frames with zero overlap. The
- * derivation, the counts, the caveats on `4` (REJECT_REQ) and `6` (DISCONNECT),
- * and the fact that `5` and `7` appear on NO capture we hold, are all in
- * docs/cluster-protocol-spec.md sec 4(h)(1a) -- which vms-dd5 also had to
- * CORRECT, since the counter reading is refuted. Read that section before
- * changing any mapping here.
+ * derivation, the counts and the caveats on `4` (REJECT_REQ) and `6`
+ * (DISCONNECT) are all in docs/cluster-protocol-spec.md sec 4(h)(1a) -- which
+ * vms-dd5 also had to CORRECT, since the counter reading is refuted. Read
+ * that section before changing any mapping here.
+ *
+ * `5` and `7` appearing on NO capture this project held was itself a vms-c11
+ * SAMPLING ERROR (every census behind that claim was restricted to SCA
+ * length classes {62, 66, 110}; both RESPONSE messages are 58 bytes) --
+ * CORRECTED BY vms-591: 696 REJECT_RSP and 262 DISCONNECT_RSP frames are on
+ * the wire, spec sec 4(h)(1b). See the WEAKEST paragraph below for what is
+ * and is not tested against a real frame at this module's own call site.
  *
  * OVMX does not yet build a REJECT_REQ, a DISCONNECT_REQ, an ACCEPT_RSP or a
  * CONNECT_RSP of its own; where the machine says to send one, scsd.c logs
@@ -293,9 +299,23 @@ int scs_conn_table_row(unsigned i, enum scs_conn_event *ev_out,
  *
  * WEAKER, and labeled as such in the spec: 4 = REJECT_REQ rests on a decisive
  * behavioural partition rather than a decoded field; 6 = DISCONNECT_REQ rests
- * on shape alone. WEAKEST: 5 (REJECT_RSP) and 7 (DISCONNECT_RSP) are mapped BY
- * POSITION ONLY -- neither value occurs on any capture this project holds, so
- * OVMX has never seen one and this mapping is untested against a real frame.
+ * on shape alone. 5 (REJECT_RSP) and 7 (DISCONNECT_RSP) are mapped BY POSITION
+ * ONLY (figure order, sec 4(h)(1b)) -- that part has not changed.
+ *
+ * WHAT HAS CHANGED (vms-c11): "neither value occurs on any capture this
+ * project holds" was a vms-c11 SAMPLING ERROR, not a fact -- every census
+ * behind it was restricted to SCA length classes {62, 66, 110}, and both
+ * RESPONSE messages are 58 bytes. Re-measured with no length restriction
+ * (vms-591): 696 REJECT_RSP and 262 DISCONNECT_RSP frames are on the wire.
+ * DISCONNECT_RSP (7) is now tested against a real captured frame at this
+ * exact call site: tests/vmsscs/test_scsd_wire.c case (2) ("THE PEER'S OWN
+ * DISCONNECT_RSP, ADDRESSED TO OVMX, UNEDITED", vms-591 rd 2) feeds SCA frame
+ * 184 of ovmx-760-MEMBER-achieved-20260730.pcap through this exact daemon
+ * path unedited, and its N4 mutation (changing the captured [46:48] from 7 to
+ * 6) reds the case -- proof the mapping is exercised by a real frame, not
+ * merely reachable. REJECT_RSP (5) has NO equivalent real-frame case yet: it
+ * is still mapped by position only and untested against a real frame at this
+ * call site.
  *
  * Returns 1 and fills *ev for 0..7; returns 0 and leaves *ev alone for anything
  * else, notably 10 (the application/SYSAP class carrying every steady-state

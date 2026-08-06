@@ -98,6 +98,22 @@ import sys
 # running the measurement rather than by reasoning about it.
 CTL_CLASSES = (58, 62, 66, 110)
 
+# vms-c11: the prose above is DELIBERATE, same as scs_reason_measure.py's
+# RESTRICT_REASON -- but it must be CHECKED, not merely asserted in a comment,
+# or the next edit that narrows CTL_CLASSES again reproduces the vms-c11
+# mistake silently. See _census_guard() / rederive() below.
+RESTRICT_REASON = (
+    "the 94-byte class has a live [46:48] but is not connection-control (it is "
+    "SCS$DIRECTORY lookup traffic, spec sec 4(h)(2a)); the 106-byte class's "
+    "[46:48] is the sender's SCSSYSTEMID (the START frame), not a message "
+    "type -- reading either as a connection-control msgtype produced "
+    "plausible, meaningless figures (vms-591). The 190-byte class is the "
+    "fixed SCS class the CM membership dialogue rides (spec sec 4(d)) and is "
+    "measured separately by this same script as CM_CLASS/cm_190_tx/cm_190_rx "
+    "-- it is a different message family, not connection-control. All three "
+    "are excluded on that documented behavioural basis, not by silent "
+    "narrowing.")
+
 # The fixed SCS message class the CM membership dialogue rides (spec sec 4(d)).
 CM_CLASS = 190
 
@@ -432,6 +448,20 @@ def _read_pcap(path):
     return read_pcap(path)
 
 
+def _census_guard():
+    """Lazily imported, same reasoning as `_read_pcap`'s lazy dissect_sca
+    import: keeps this module importable with no extra sibling dependency
+    until a scan with real captures actually runs -- which is what lets
+    test_scs_join_capability_mutants.py's scratch copy (measure+spec+header
+    only, no captures ever supplied) stay green with no census_guard.py
+    beside it at all."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import census_guard
+    return census_guard
+
+
 def mac_str(b):
     return ":".join("%02x" % c for c in b)
 
@@ -520,6 +550,29 @@ def rederive(capdir, **_kw):
 
     def ck(cond, msg):
         results.append((bool(cond), msg))
+
+    # vms-c11: the guard. CTL_CLASSES is one module-global constant used by
+    # every bracket this file measures (70e2, 578, 449, 449R), so checking it
+    # ONCE against a real, representative population -- the same files this
+    # function reads, restricted to frames touching vaxlab-4's OVMX tap, the
+    # same origin rule measure_frames() itself applies -- catches a future
+    # edit that narrows or widens CTL_CLASSES for all of them, not just this
+    # bracket. Runs only here (real captures required), same as
+    # scs_reason_measure.py / scs_disc_measure.py.
+    guard_files = [os.path.join(capdir, fn) for fn in BRACKET_CAPTURES
+                   if os.path.exists(os.path.join(capdir, fn))]
+    if guard_files:
+        ovmx_mac_bytes = bytes(int(x, 16) for x in EXPECTED["ovmx_mac"].split(":"))
+
+        def _touches_ovmx(frame, _mac=ovmx_mac_bytes):
+            return frame[6:12] == _mac or frame[0:6] == _mac
+
+        cg = _census_guard()
+        conformant, raw = cg.population(guard_files, _read_pcap,
+                                         origin_filter=_touches_ovmx)
+        cg.check_census(
+            CTL_CLASSES, conformant, raw, restrict_reason=RESTRICT_REASON,
+            label="scs_join_capability_measure.py: ")
 
     got = {}
     for bracket, caps, exp in (("70e2", CAPTURES, EXPECTED),

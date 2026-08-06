@@ -53,8 +53,11 @@ const char *scs_env_mtype_name(unsigned mtype)
     case SCS_ENV_MTYPE_REJECT_RSP:     return "REJECT_RSP";
     case SCS_ENV_MTYPE_DISCONNECT_REQ: return "DISCONNECT_REQ";
     case SCS_ENV_MTYPE_DISCONNECT_RSP: return "DISCONNECT_RSP";
-    /* 8 and 9 are observed and UNIDENTIFIED (vms-f03). Deliberately not named:
-     * a log line reading "SPECIAL_CREDIT" would put a guess in the record. */
+    /* 8 is the special credit message (vms-f03/#128: content[48:50] is the
+     * Pending Receive Credit count). 9 is its paired response, DELIBERATELY
+     * left unnamed: no public doc names a response to the special credit
+     * message, so a log line guessing one would repeat the vms-c11
+     * guessed-name pattern -- render both as bare type numbers instead. */
     case SCS_ENV_MTYPE_T8:             return "type 8";
     case SCS_ENV_MTYPE_T9:             return "type 9";
     case SCS_ENV_MTYPE_APP_MESSAGE:    return "APP_MESSAGE";

@@ -63,18 +63,21 @@ int main(void) {
     struct vms_ef_args ef = {0};
     ef.efn = 5;
     ioctl(fd, VMS_IOCTL_SETEF, &ef);
+    /* negctl-knockon: eflag-setef-status-inverted */
     CHECK(ef.status == SS_WASCLR, "setef(5) returns WASCLR");
 
     /* 2. Set flag 5 again (should return WASSET) */
     memset(&ef, 0, sizeof(ef));
     ef.efn = 5;
     ioctl(fd, VMS_IOCTL_SETEF, &ef);
+    /* negctl-knockon: eflag-setef-status-inverted */
     CHECK(ef.status == SS_WASSET, "setef(5) again returns WASSET");
 
     /* 3. Read event flag 5 */
     struct vms_ef_read_args rd = {0};
     rd.efn = 5;
     ioctl(fd, VMS_IOCTL_READEF, &rd);
+    /* negctl-knockon: eflag-readef-status-inverted */
     CHECK(rd.status == SS_WASSET, "readef(5) returns WASSET");
     CHECK((rd.state & (1 << 5)) != 0, "cluster state has bit 5 set");
 
@@ -89,6 +92,7 @@ int main(void) {
     rd.efn = 5;
     ioctl(fd, VMS_IOCTL_READEF, &rd);
     /* negctl: eflag-clref-noop */
+    /* negctl-knockon: eflag-readef-status-inverted */
     CHECK(rd.status == SS_WASCLR, "readef(5) after clear returns WASCLR");
 
     /* 6. Set multiple flags and verify cluster */
@@ -114,6 +118,7 @@ int main(void) {
     memset(&ef, 0, sizeof(ef));
     ef.efn = 40;
     ioctl(fd, VMS_IOCTL_SETEF, &ef);
+    /* negctl-knockon: eflag-setef-status-inverted */
     CHECK(ef.status == SS_WASCLR, "setef(40) in cluster 1 returns WASCLR");
 
     memset(&rd, 0, sizeof(rd));

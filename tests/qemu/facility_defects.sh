@@ -417,6 +417,10 @@ getmode-buffer-not-written
 ast-setast-disable
 eflag-clref-noop
 eflag-waitfr-eintr-normal
+eflag-setef-status-inverted
+eflag-readef-status-inverted
+eflag-dacefc-status-wrong
+eflag-dlcefc-status-wrong
 lock-compat-ex-cr
 lock-compat-cr-ex
 lock-valblk-grant-not-delivered
@@ -777,6 +781,135 @@ collapses to one and this assertion goes red as a direct consequence of the
 same return -- it is the cause, and the require_fail line is the effect.
 EOF
                       ;;
+        esac;;
+
+    eflag-setef-status-inverted)
+        case "$_f" in
+        facility)     echo "event flags -- \$SETEF's own WASSET/WASCLR discrimination (VMS_IOCTL_SETEF)";;
+        targets)      echo "kernel/vms_eflag.c";;
+        # vms-177 (vms-2b2 follow-up). MEASURED at the 9-of-33 audit: no
+        # existing mutation hunk sits inside vms_ioctl_setef's own body --
+        # eflag-clref-noop mutates \$CLREF, a different handler in the same
+        # file. RANGE-ANCHORED to vms_ioctl_setef's own body: the target
+        # text "args.status = prev ? SS\$_WASSET : SS\$_WASCLR;" is
+        # DUPLICATED verbatim in vms_ioctl_clref, immediately below it in
+        # the file.
+        #
+        # THE REAL BIT-SET IS LEFT UNTOUCHED ON PURPOSE. *flags |= (1U <<
+        # bit) still runs and still wakes waiters -- only the discriminating
+        # STATUS WORD is inverted. Corrupting the bit-set itself was tried
+        # and rejected for the sibling lock-enq defect this session: it can
+        # HANG the guest, because blocked WAITFR/WFLOR/WFLAND callers rely
+        # on the bit actually flipping, not on what SETEF reports about it.
+        # MEASURED (not the entry's first guess): the ORIGINAL require_fail
+        # below, "sys$setef(1) set the flag", checks $VMS_STATUS_SUCCESS(),
+        # which is true for BOTH WASSET and WASCLR (both are success
+        # codes) -- so an inverted discrimination cannot make that specific
+        # assertion fail, and a real run confirmed it stayed green. The
+        # discriminating assertions are the ones that compare against a
+        # SPECIFIC one of the two values, in this suite and in
+        # test_kmod_eflag.
+        suites_red)   echo "test_syssvc_ef_local test_kmod_eflag";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$SETEF reports the OPPOSITE of the flag's real previous state -- WASCLR when it was set, WASSET when it was clear. The flag itself is still set correctly (wake_up_interruptible still fires on the real bit), so this is purely a caller-visible lie about history, not a functional break -- but only assertions that check the SPECIFIC previous-state value can see it; \$VMS_STATUS_SUCCESS() alone cannot, since both values are success codes.";;
+        require_fail) cat <<'EOF'
+sys$setef(1) on an already-set flag reported WASSET
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+setef(5) returns WASCLR
+setef(5) again returns WASSET
+setef(40) in cluster 1 returns WASCLR
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME defect, observed a second through fourth time: every one of these assertions checks SETEF's returned previous-state value against a specific WASSET/WASCLR expectation, and this mutation is the ONLY thing that changed.";;
+        esac;;
+
+    eflag-readef-status-inverted)
+        case "$_f" in
+        facility)     echo "event flags -- \$READEF's own WASSET/WASCLR discrimination (VMS_IOCTL_READEF)";;
+        targets)      echo "kernel/vms_eflag.c";;
+        # vms-177. MEASURED, same audit: no existing mutation hunk sits
+        # inside vms_ioctl_readef's own body. The target text is unique in
+        # the file (readef's cluster-state-word comparison, not shared with
+        # any other handler), so this is a plain text anchor, no range
+        # needed.
+        # MEASURED (not the entry's first guess): READEF is the standard
+        # way every eflag test reads back a flag's state, so a wrong
+        # discrimination reaches beyond test_syssvc_ef_local.
+        suites_red)   echo "test_syssvc_ef_local test_kmod_bind test_kmod_eflag";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$READEF reports the OPPOSITE of the flag's real current state in args.state's own bit -- WASCLR when the cluster word says set, WASSET when it says clear. args.state itself (the full cluster word) is untouched, so a check that compares the discriminating status against the state word directly catches the lie -- but READEF is the standard way every eflag test reads a flag's state back, so this one status word gates a wide surface.";;
+        require_fail) cat <<'EOF'
+sys$readef(1) reported WASCLR for the cleared flag
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+$READEF sees the flag this process just set
+sibling thread sees the event flag the main thread set
+readef(5) returns WASSET
+readef(5) after clear returns WASCLR
+sys$readef(1) reported WASCLR after the clear
+the cluster state word agrees with the status: flag 1's bit is CLEAR
+sys$readef(1) reported WASSET after the flag was set
+sys$waitfr(1) left the flag SET -- it is not a counting semaphore
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME defect, observed a second through ninth time: every one of these assertions reads a flag's state back through READEF's own WASSET/WASCLR discrimination, and this mutation is the ONLY thing that changed.";;
+        esac;;
+
+    eflag-dacefc-status-wrong)
+        case "$_f" in
+        facility)     echo "event flags -- \$DACEFC's own success status (VMS_IOCTL_DACEFC)";;
+        targets)      echo "kernel/vms_eflag.c";;
+        # vms-177. MEASURED, same audit: no existing mutation hunk sits
+        # inside vms_ioctl_dacefc's own body. RANGE-ANCHORED to
+        # vms_ioctl_dacefc's own body: "args.status = SS_NORMAL;" at this
+        # exact 4-space indentation also appears in vms_ioctl_waitfr,
+        # vms_ioctl_wflor, vms_ioctl_wfland (already covered by
+        # eflag-waitfr-eintr-normal's sibling scope) and vms_ioctl_ascefc's
+        # create path -- vms_ioctl_dacefc is defined between ascefc and
+        # dlcefc, so the range excludes all of them.
+        suites_red)   echo "test_syssvc_ef_mproc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$DACEFC reports SS\$_UNASEFC -- \"you were never associated with this cluster\" -- for a disassociation that actually happened (proc->ef.common[idx] cleared, the cluster's refcount dropped and freed if it hit zero and was not permanent). The caller is told its own real disassociation never took place.";;
+        require_fail) cat <<'EOF'
+parent: sys$dacefc identifies the cluster from ANY flag number in it, not only the base
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+parent: sys$dacefc released the last association to the permanent cluster
+parent: sys$dacefc released the marked cluster
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME defect, observed a second and third time: both released-cluster assertions depend on \$DACEFC succeeding on this same call, and this mutation is the ONLY thing that changed.";;
+        esac;;
+
+    eflag-dlcefc-status-wrong)
+        case "$_f" in
+        facility)     echo "event flags -- \$DLCEFC's own success status (VMS_IOCTL_DLCEFC)";;
+        targets)      echo "kernel/vms_eflag.c";;
+        # vms-177. MEASURED, same audit: no existing mutation hunk sits
+        # inside vms_ioctl_dlcefc's own body. The target text's 8-space
+        # indentation is the only occurrence at that depth in the file, so
+        # this is a plain ^-anchored text match, no range needed.
+        suites_red)   echo "test_syssvc_ef_mproc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$DLCEFC reports SS\$_UNASEFC -- the pre-set default it never overwrites -- for a permanent cluster it actually found and marked for deletion (perm cleared, freed immediately if nothing else is associated). The deletion happens; only the caller-visible confirmation of it does not.";;
+        require_fail) cat <<'EOF'
+parent: sys$dlcefc accepted the permanent cluster by name
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     lock-compat-ex-cr)
@@ -3258,6 +3391,28 @@ apply_edit() {
         # requires, instead of walking on to WFLOR's like a first-match
         # address would.
         sed -i '/wait_event_interruptible(\*waitq, (READ_ONCE(\*flags) \& (1U << bit)))/,/^out:$/ s|^        return ret;$|        { args.status = SS__NORMAL; goto out; } /* NEGCTL eflag-waitfr-eintr-normal */|' "$_file";;
+    eflag-setef-status-inverted)
+        # `args.status = prev ? SS_WASSET : SS_WASCLR;` is duplicated
+        # verbatim in vms_ioctl_clref immediately below. RANGE-ANCHORED to
+        # vms_ioctl_setef's own body so the range closes before clref's
+        # copy is reached.
+        sed -i '/^long vms_ioctl_setef/,/^}$/ s|^    args\.status = prev ? SS__WASSET : SS__WASCLR;$|    args.status = prev ? SS__WASCLR : SS__WASSET; /* NEGCTL eflag-setef-status-inverted */|' "$_file";;
+    eflag-readef-status-inverted)
+        # Unique text in the file -- readef's own state/bit comparison,
+        # shared with no other handler.
+        sed -i 's|^    args\.status = (args\.state \& (1U << bit)) ? SS__WASSET : SS__WASCLR;$|    args.status = (args.state \& (1U << bit)) ? SS__WASCLR : SS__WASSET; /* NEGCTL eflag-readef-status-inverted */|' "$_file";;
+    eflag-dacefc-status-wrong)
+        # RANGE-ANCHORED to vms_ioctl_dacefc's own body. This exact 4-space
+        # "args.status = SS_NORMAL;" also appears in vms_ioctl_waitfr,
+        # vms_ioctl_wflor, vms_ioctl_wfland and vms_ioctl_ascefc's create
+        # path; vms_ioctl_dacefc is defined between ascefc and dlcefc, so
+        # the range excludes all of them.
+        sed -i '/^long vms_ioctl_dacefc/,/^}$/ s|^    args\.status = SS__NORMAL;$|    args.status = SS__UNASEFC; /* NEGCTL eflag-dacefc-status-wrong */|' "$_file";;
+    eflag-dlcefc-status-wrong)
+        # 8-space indentation is the only occurrence at that depth in the
+        # file -- dlcefc's own found-and-marked success, inside its
+        # list_for_each_entry_safe loop.
+        sed -i 's|^        args\.status = SS__NORMAL;$|        args.status = SS__UNASEFC; /* NEGCTL eflag-dlcefc-status-wrong */|' "$_file";;
     lock-compat-ex-cr)
         sed -i 's|/\* EX \*/ {  1,  0,  0,  0,  0,  0 },|/* EX */ {  1,  1,  0,  0,  0,  0 }, /* NEGCTL lock-compat-ex-cr */|' "$_file";;
     lock-compat-cr-ex)

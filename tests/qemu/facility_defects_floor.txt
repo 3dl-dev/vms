@@ -43,4 +43,18 @@
 # (the first mutations anchored inside vms_ioctl_dassgn/getdvi/devscan's
 # own bodies -- see those entries in facility_defects.sh for what each
 # covers and why).
-51
+# Raised to 55 by vms-177's eflag-setef-status-inverted,
+# eflag-readef-status-inverted, eflag-dacefc-status-wrong and
+# eflag-dlcefc-status-wrong (the first mutations anchored inside
+# vms_ioctl_setef/readef/dacefc/dlcefc's own bodies -- see those entries in
+# facility_defects.sh for what each covers and why). A fifth,
+# eflag-ascefc-reassoc-status-wrong, was written and then DROPPED: real
+# execution showed vms_ioctl_ascefc's own re-association status is only
+# reachable in this tree through an unsynchronized race between two
+# processes in test_kmod_eflag_mproc.c (parent and child both call
+# sys$ascefc on the same cluster name immediately after fork(), no
+# ordering between them), so which of two possible assertions goes red is
+# genuinely nondeterministic -- structurally incompatible with this
+# manifest's exact-match model. Left for a future item that either adds
+# synchronization to that test or finds a differently-scoped target.
+55

@@ -25,6 +25,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "scs_cdt.h" /* vms-8de: struct scs_cdt::send_credit, the live-read oracle */
+
 static int failures = 0;
 
 #define CHECK(cond, msg)                                                      \
@@ -698,6 +700,48 @@ static void test_null_guards(void)
     CHECK(scs_mscp_parse(shortf, sizeof(shortf), &v) == -1, "parse short frame");
 }
 
+/*
+ * vms-8de: the build site itself, not just the wire, must stop replaying the
+ * constant 1. With p->cdt pointing at a live CDT, the SCS envelope's credit
+ * field ([48:50], abs frame offset 62) must be READ from cdt->send_credit --
+ * not from SCS_MSCP_ENV_CREDIT -- and it must track a change to that field.
+ * This is the build-site case; the existing byte-exact tests above (p.cdt ==
+ * NULL via fill_params' memset) already cover the no-CDT / downstream-
+ * overwrite case, which is unchanged by this item.
+ */
+static void test_credit_reads_live_cdt(void)
+{
+    struct scs_mscp_params p;
+    fill_params(&p, 24, 25,
+                SCS_MSCP_CMD_REF(SCS_MSCP_SCC_CLASS, SCS_MSCP_SCC_MSGID0), 0);
+
+    struct scs_cdt cdt;
+    memset(&cdt, 0, sizeof(cdt));
+    cdt.send_credit = 7; /* deliberately NOT the replayed constant (1) */
+    p.cdt = &cdt;
+
+    uint8_t out[SCS_MSCP_FRAME_LEN];
+    CHECK(scs_mscp_build_scc(&p, out) == 0, "build_scc with live cdt ok");
+    uint16_t credit = (uint16_t)(out[62] | (out[63] << 8));
+    CHECK(credit == 7,
+          "build site reads credit from cdt->send_credit, not SCS_MSCP_ENV_CREDIT");
+    CHECK(credit != SCS_MSCP_ENV_CREDIT,
+          "live credit differs from the replayed constant this test chose 7 to prove");
+
+    /* Live tracking: change the account, rebuild, the build site follows it. */
+    cdt.send_credit = 3;
+    CHECK(scs_mscp_build_gus(&p, out) == 0, "build_gus with live cdt ok");
+    credit = (uint16_t)(out[62] | (out[63] << 8));
+    CHECK(credit == 3, "build site re-reads cdt->send_credit on each build, not cached");
+
+    /* No CDT (the pre-vms-8de shape) still falls back to the labeled replay. */
+    p.cdt = NULL;
+    CHECK(scs_mscp_build_scc(&p, out) == 0, "build_scc with no cdt ok");
+    credit = (uint16_t)(out[62] | (out[63] << 8));
+    CHECK(credit == SCS_MSCP_ENV_CREDIT,
+          "no cdt -> unchanged fallback to SCS_MSCP_ENV_CREDIT");
+}
+
 int main(void)
 {
     test_scc_byte_exact();
@@ -715,6 +759,7 @@ int main(void)
     test_gus_end_offline_subcode();
     test_parse_command_is_not_an_end_message();
     test_null_guards();
+    test_credit_reads_live_cdt();
 
     if (failures == 0) {
         printf("test_scs_mscp: ALL PASSED\n");

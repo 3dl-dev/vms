@@ -110,6 +110,12 @@
 #define COMMON_BASE_3   96
 #define PERM_EFN        100
 
+/* Common cluster 3, a SECOND pair of flags distinct from PERM_EFN (vms-2ed).
+ * Bit positions within the cluster word are WFLAND_EFN_A - COMMON_BASE_3 = 9
+ * and WFLAND_EFN_B - COMMON_BASE_3 = 10. */
+#define WFLAND_EFN_A    105
+#define WFLAND_EFN_B    106
+
 static int pass = 0, fail = 0;
 
 #define CHECK(cond, msg) do { \
@@ -359,6 +365,61 @@ static int run_wait_child(int c2p_write, const struct dsc$descriptor_s *nam)
            (state & (1u << (WAIT_EFN - COMMON_BASE))) ? "SET" : "STILL CLEAR");
 
     verdict = ((st & 1) && (state & (1u << (WAIT_EFN - COMMON_BASE)))) ? 'S' : 'X';
+    (void)send_token(c2p_write, verdict);
+    return verdict == 'S' ? 0 : 1;
+}
+
+/* ========================================================================
+ * $WFLAND -- waits for ALL of a mask, not any one of it (vms-2ed).
+ *
+ * ORACLE (docs/oracle/vax73-event-flags.md section 4.4, OpenVMS System
+ * Services Reference Manual): "$WFLAND ... The process is put in a wait
+ * state until all specified event flags are set." Condition values are the
+ * same three ($SS_NORMAL/$SS_ILLEFC/$SS_UNASEFC) $WAITFR already carries, so
+ * this scenario -- like the interrupted-wait one above -- asserts the
+ * behaviour, not an invented status.
+ *
+ * THE CHILD blocks in $WFLAND on a TWO-flag mask (WFLAND_EFN_A |
+ * WFLAND_EFN_B) and reports 'R' the instant before the blocking call, so the
+ * parent knows the call has actually been made.
+ *
+ * THE PARENT sets ONLY WFLAND_EFN_A, then does a SHORT bounded read
+ * expecting SILENCE: if $WFLAND were actually implemented as $WFLOR (any
+ * ONE flag suffices, the exact defect class this scenario exists to catch),
+ * the child would return and write its verdict almost immediately. A short
+ * bound is enough to catch "returned essentially at once" without being a
+ * tight race -- this is not testing timing, it is testing which of two
+ * categorically different code paths ran. Only after that silence is
+ * confirmed does the parent set WFLAND_EFN_B, and the child is expected to
+ * unblock and report success within the ordinary PEER_TIMEOUT_MS.
+ * ======================================================================== */
+
+#define WFLAND_SILENCE_MS   500
+
+static int run_wfland_child(int c2p_write, const struct dsc$descriptor_s *nam)
+{
+    uint32_t st, state = 0;
+    uint32_t mask = (1u << (WFLAND_EFN_A - COMMON_BASE_3)) |
+                    (1u << (WFLAND_EFN_B - COMMON_BASE_3));
+    char verdict;
+
+    st = sys$ascefc(COMMON_BASE_3, nam, 0, 0);
+    if (!(st & 1)) {
+        printf("  INFO: wfland-child: sys$ascefc failed, status %u\n", st);
+        (void)send_token(c2p_write, 'E');
+        return 1;
+    }
+
+    if (send_token(c2p_write, 'R') < 0)
+        return 1;
+
+    st = sys$wfland(WFLAND_EFN_A, mask);
+
+    (void)sys$readef(WFLAND_EFN_A, &state);
+    printf("  INFO: wfland-child: sys$wfland(%d, 0x%x) returned status %u; "
+           "state=0x%08x\n", WFLAND_EFN_A, mask, st, state);
+
+    verdict = ((st & 1) && ((state & mask) == mask)) ? 'S' : 'X';
     (void)send_token(c2p_write, verdict);
     return verdict == 'S' ? 0 : 1;
 }
@@ -696,6 +757,111 @@ int main(void)
 
         (void)sys$clref(WAIT_EFN);
         (void)sys$dacefc(WAIT_EFN);
+    }
+
+    /* =====================================================================
+     * $WFLOR / $WFLAND -- OR vs. AND (vms-2ed). See docs/oracle/
+     * vax73-event-flags.md section 4.4 for the pin and run_wfland_child()
+     * above for the design.
+     * ===================================================================== */
+    {
+        $DESCRIPTOR(wfnam, "OVMX$2ED_WF");
+        uint32_t mask = (1u << (WFLAND_EFN_A - COMMON_BASE_3)) |
+                        (1u << (WFLAND_EFN_B - COMMON_BASE_3));
+        uint32_t state = 0;
+        int c2p2[2];
+        pid_t cpid;
+
+        /* --- $WFLOR: ANY one flag in the mask suffices --------------------
+         * Done in THIS process, not forked: with WFLAND_EFN_A already set,
+         * the predicate is true at call time, so $WFLOR cannot genuinely
+         * block here -- there is nothing to wait FOR. That is the point:
+         * an implementation that (wrongly) required ALL flags, like
+         * $WFLAND, would block forever on this exact call. */
+        st = sys$ascefc(COMMON_BASE_3, &wfnam, 0, 0);
+        printf("  INFO: parent: sys$ascefc(%d, \"OVMX$2ED_WF\") returned status %u\n",
+               COMMON_BASE_3, st);
+        CHECK(st & 1, "parent: sys$ascefc joined the cluster the WFLOR/WFLAND measurement uses");
+
+        (void)sys$clref(WFLAND_EFN_A);
+        (void)sys$clref(WFLAND_EFN_B);
+
+        st = sys$setef(WFLAND_EFN_A);
+        printf("  INFO: parent: sys$setef(%d) [WFLOR setup] returned status %u\n",
+               WFLAND_EFN_A, st);
+        CHECK(st & 1, "parent: sys$setef sets the flag $WFLOR will find already satisfied");
+
+        state = 0;
+        st = sys$wflor(WFLAND_EFN_A, mask);
+        (void)sys$readef(WFLAND_EFN_A, &state);
+        printf("  INFO: parent: sys$wflor(%d, 0x%x) returned status %u; state=0x%08x "
+               "(only bit %d of the mask is set)\n",
+               WFLAND_EFN_A, mask, st, state, WFLAND_EFN_A - COMMON_BASE_3);
+        CHECK((st & 1) && (state & (1u << (WFLAND_EFN_A - COMMON_BASE_3))),
+              "parent: sys$wflor returned with only ONE of the two mask flags set -- OR, not AND");
+
+        (void)sys$clref(WFLAND_EFN_A);
+
+        /* --- $WFLAND: ALL flags in the mask are required ------------------ */
+        if (pipe(c2p2) < 0) {
+            printf("  FAIL: parent: pipe() for the wfland child failed\n");
+            fail++;
+        } else if ((cpid = fork()) < 0) {
+            printf("  FAIL: parent: fork() for the wfland child failed\n");
+            fail++;
+            close(c2p2[0]);
+            close(c2p2[1]);
+        } else if (cpid == 0) {
+            close(c2p2[0]);
+            _exit(run_wfland_child(c2p2[1], &wfnam));
+        } else {
+            char tok = 0;
+            char verdict = 0;
+            int wst = 0;
+
+            close(c2p2[1]);
+
+            if (read_bounded(c2p2[0], &tok, 1, PEER_TIMEOUT_MS) != 1 || tok != 'R') {
+                printf("  FAIL: parent: wfland child never reported it was ready to block\n");
+                fail++;
+            } else {
+                st = sys$setef(WFLAND_EFN_A);
+                printf("  INFO: parent: sys$setef(%d) [only ONE of the WFLAND mask] returned status %u\n",
+                       WFLAND_EFN_A, st);
+                CHECK(st & 1, "parent: sys$setef sets one of the two flags $WFLAND is waiting on");
+
+                /* Expect SILENCE: the child must still be blocked, because
+                 * only one of the two required flags is set. */
+                if (read_bounded(c2p2[0], &verdict, 1, WFLAND_SILENCE_MS) == 1) {
+                    printf("  FAIL: parent: wfland child returned '%c' with only ONE flag set -- it did not wait for ALL of them\n",
+                           verdict);
+                    fail++;
+                } else {
+                    printf("  PASS: parent: wfland child stayed blocked with only one of two required flags set\n");
+                    pass++;
+
+                    st = sys$setef(WFLAND_EFN_B);
+                    printf("  INFO: parent: sys$setef(%d) [the second WFLAND mask flag] returned status %u\n",
+                           WFLAND_EFN_B, st);
+                    CHECK(st & 1, "parent: sys$setef sets the second, completing flag");
+
+                    if (read_bounded(c2p2[0], &verdict, 1, PEER_TIMEOUT_MS) != 1) {
+                        printf("  FAIL: parent: wfland child never reported a verdict after both flags were set\n");
+                        fail++;
+                    } else {
+                        CHECK(verdict == 'S',
+                              "parent: sys$wfland unblocked only once BOTH mask flags were set (AND, not OR)");
+                    }
+                }
+            }
+
+            waitpid(cpid, &wst, 0);
+            close(c2p2[0]);
+        }
+
+        (void)sys$clref(WFLAND_EFN_A);
+        (void)sys$clref(WFLAND_EFN_B);
+        (void)sys$dacefc(WFLAND_EFN_A);
     }
 
     printf("=== test_syssvc_ef_mproc: %d passed, %d failed ===\n", pass, fail);

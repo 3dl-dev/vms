@@ -232,6 +232,38 @@ so `$WAITFR`/`$WFLOR`/`$WFLAND` cannot return while their predicate is false —
 exactly §4.1's "the process is placed in a wait state until the event flag is set", with
 §4.2's interruption running in between and leaving no trace in the caller's status.
 
+### 4.4 `$WFLOR`/`$WFLAND` — OR vs. AND, and their own condition values (vms-2ed)
+
+The lab session above (§4.1-4.3) only ran `HELP` on `$WAITFR`; it did not query `$WFLOR` or
+`$WFLAND` directly, and the `~/vax/cluster` SIMH node was not reachable from this session to
+re-run it (`127.0.0.1:2001` refused the connection). PUBLIC DOCUMENTATION substitutes here,
+per the operator's standing rule that either source is a legal oracle (CLAUDE.md Rule 10):
+the OpenVMS System Services Reference Manual, V7.1 edition (contemporaneous with this lab's
+V7.3, and this entry has not changed across VMS versions):
+<https://www0.mi.infn.it/~calcolo/OpenVMS/ssb71/4527/4527p082.htm>, mirrored at
+<https://docs.vmssoftware.com/vsi-openvms-system-services-reference-manual-getutc-z/>.
+
+> **$WFLAND** (Wait for Logical AND of Event Flags) — "The process is put in a wait state
+> until all specified event flags are set, at which time $WFLAND returns to the caller and
+> execution resumes."
+>
+> **$WFLOR** (Wait for Logical OR of Event Flags) — "The process is put in a wait state
+> until any one of the specified event flags is set, at which time $WFLOR returns to the
+> caller and execution resumes."
+>
+> Condition Values Returned, IDENTICAL for both services: `SS$_NORMAL`, `SS$_ILLEFC`,
+> `SS$_UNASEFC` — the SAME three-value set §1 above already pinned by the lab for
+> `$WAITFR`/`$SETEF`/`$CLREF`/`$READEF`. No fourth value, no OR-specific or AND-specific
+> status either service returns.
+
+**What this decides.** `src/kernel/vms_eflag.c`'s `vms_ioctl_wflor`/`vms_ioctl_wfland` already
+implement exactly this: `wait_event_interruptible()` on `(*flags & mask)` for WFLOR (any bit)
+and on `((*flags & mask) == mask)` for WFLAND (every bit), `SS__ILLEFC`/`SS__UNASEFC` from the
+shared `efn_resolve()` failure path, `SS__NORMAL` on success, and no fourth status anywhere.
+The implementation was already correct; §4.4 exists so `tests/qemu/test_syssvc_ef_mproc.c`'s
+new WFLOR/WFLAND scenarios (vms-2ed) can cite chapter and verse instead of asserting values
+nobody pinned.
+
 ---
 
 ## Reproducing

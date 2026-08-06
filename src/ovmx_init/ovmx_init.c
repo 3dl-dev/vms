@@ -1,10 +1,10 @@
 /*
  * ovmx_init.c - OVMX Boot Orchestrator (STARTUP.EXE)
  *
- * Unified PID 1 / ENTRYPOINT for OVMX on both Docker and bare-metal (QEMU).
- * Handles the entire boot sequence: filesystem setup, kernel module loading,
- * VMS directory provisioning, SYSUAF user provisioning, daemon startup,
- * boot banner, and console login loop.
+ * PID 1 / ENTRYPOINT for OVMX on its one runtime target: the real-kernel /
+ * QEMU path (CLAUDE.md Rule 9). Handles the entire boot sequence: filesystem
+ * setup, kernel module loading, VMS directory provisioning, SYSUAF user
+ * provisioning, daemon startup, boot banner, and console login loop.
  *
  * No shell scripts, no busybox, no /etc/passwd — SYSUAF is the user database.
  */
@@ -42,14 +42,11 @@
 #define INITRAMFS_BACKUP "/tmp/initramfs_vms"
 
 /*
- * Binary/library search paths — initialized at runtime after device
- * table is populated so VMS specs can be translated to Linux paths.
- * Docker puts binaries in standard paths, QEMU in SYS$SYSTEM.
+ * SYS$SYSTEM / SYS$LIBRARY as Linux paths — initialized at runtime after
+ * the device table is populated so VMS specs can be translated.
  */
 static char sysexe_linux[512];
 static char syslib_linux[512];
-static const char *bin_search_dirs[5];
-static const char *lib_search_dirs[4];
 
 static const char *vms_months[] = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -57,7 +54,6 @@ static const char *vms_months[] = {
 };
 
 static volatile sig_atomic_t shutdown_requested = 0;
-static int blkdev_mode = 0;
 
 /*
  * Translate a VMS filespec to a Linux path.
@@ -80,17 +76,6 @@ static void init_search_paths(void)
 {
     vms_to_linux(VMS_SYSEXE, sysexe_linux, sizeof(sysexe_linux));
     vms_to_linux(VMS_SYSLIB, syslib_linux, sizeof(syslib_linux));
-
-    bin_search_dirs[0] = sysexe_linux;
-    bin_search_dirs[1] = VMS_SYSTEM_DIR;
-    bin_search_dirs[2] = "/bin";
-    bin_search_dirs[3] = "/sbin";
-    bin_search_dirs[4] = NULL;
-
-    lib_search_dirs[0] = syslib_linux;
-    lib_search_dirs[1] = VMS_LIBRARY_DIR;
-    lib_search_dirs[2] = "/lib";
-    lib_search_dirs[3] = NULL;
 }
 
 static void sigterm_handler(int sig)
@@ -453,7 +438,6 @@ static void bare_metal_init(void)
 
         if (rc == 0) {
             printf("%%STARTUP-I-MOUNTED, system disk DKA0: mounted\n");
-            blkdev_mode = 1;
             return;
         }
 
@@ -552,15 +536,16 @@ static void provision_seed_files(void)
 
 /*
  * Check if the system is already installed on the system disk.
- * DCL.EXE in SYSEXE is the marker — if it exists (file or symlink),
- * a prior install populated the tree and we can skip straight to boot.
+ * DCL.EXE in SYSEXE is the marker — if the file exists, a prior install
+ * (or the initramfs backing itself, in overlay mode) populated the tree
+ * and we can skip straight to boot.
  */
 static int is_system_installed(void)
 {
     char path[512];
     snprintf(path, sizeof(path), "%s/DCL.EXE", sysexe_linux);
     struct stat st;
-    return (lstat(path, &st) == 0);
+    return (stat(path, &st) == 0);
 }
 
 /*
@@ -613,75 +598,6 @@ static void provision_dirs(void)
 
     mkdir("/tmp/ovmx", 0755);
     mkdir("/tmp/ovmx/locks", 0755);
-}
-
-/*
- * Create a symlink at vms_path → discovered binary location.
- * Searches bin_search_dirs for the named file. Skips if vms_path
- * already exists (binary placed directly in SYS$SYSTEM by initramfs).
- */
-static void ensure_vms_binary(const char *vms_path, const char *name)
-{
-    struct stat st;
-
-    for (int i = 0; bin_search_dirs[i]; i++) {
-        char path[256];
-        snprintf(path, sizeof(path), "%s/%s", bin_search_dirs[i], name);
-        if (stat(path, &st) == 0) {
-            /* Atomic: just try symlink(), handle EEXIST */
-            if (symlink(path, vms_path) == 0 || errno == EEXIST)
-                return;
-        }
-    }
-}
-
-/*
- * Create a symlink at vms_path → discovered library location.
- */
-static void ensure_vms_library(const char *vms_path, const char *name)
-{
-    struct stat st;
-
-    for (int i = 0; lib_search_dirs[i]; i++) {
-        char path[256];
-        snprintf(path, sizeof(path), "%s/%s", lib_search_dirs[i], name);
-        if (stat(path, &st) == 0) {
-            /* Atomic: just try symlink(), handle EEXIST */
-            if (symlink(path, vms_path) == 0 || errno == EEXIST)
-                return;
-        }
-    }
-}
-
-/*
- * Populate SYS$SYSTEM and SYS$LIBRARY with VMS-named binaries/images.
- * On QEMU, files are already at VMS paths (initramfs). On Docker,
- * creates symlinks from SYSEXE/SYSLIB to /usr/local/{bin,lib}/.
- */
-static void provision_symlinks(void)
-{
-    char exe_path[512], lib_path[512];
-
-    /* [SYS0.SYSCOMMON.SYSEXE] executables */
-    const char *exes[] = {
-        "LOGINOUT.EXE", "DCL.EXE", "HELP.EXE", "AUTHORIZE.EXE",
-        "MAIL.EXE", "MONITOR.EXE", "VMSSSHD.EXE",
-        "STARTUP.EXE", NULL
-    };
-    for (int i = 0; exes[i]; i++) {
-        snprintf(exe_path, sizeof(exe_path), "%s/%s", sysexe_linux, exes[i]);
-        ensure_vms_binary(exe_path, exes[i]);
-    }
-
-    /* [SYS0.SYSCOMMON.SYSLIB] shareable images */
-    const char *libs[] = {
-        "LIBVMS$SHR.EXE", "LIBVMSPROCESS$SHR.EXE", "LIBVMSLNM$SHR.EXE",
-        "LIBVMSFS$SHR.EXE", "LIBVMSRMS$SHR.EXE", NULL
-    };
-    for (int i = 0; libs[i]; i++) {
-        snprintf(lib_path, sizeof(lib_path), "%s/%s", syslib_linux, libs[i]);
-        ensure_vms_library(lib_path, libs[i]);
-    }
 }
 
 /*
@@ -740,9 +656,9 @@ static int sysuaf_split(char *line, char **user, uint32_t *grp, uint32_t *mem,
 /*
  * Give one filesystem object to a UIC, without following symlinks.
  *
- * lchown() and not chown(): in overlay mode SYS$SYSTEM holds symlinks to
- * /usr/local/bin, and re-owning a symlink must not re-own the Linux
- * binary it points at.
+ * lchown() and not chown(): copy_recursive() preserves symlinks (VMS
+ * concealed-device and relative-path links can appear in the tree it
+ * copies), and re-owning a symlink must not re-own whatever it points at.
  */
 static void own_object(const char *path, uint32_t uic_group, uint32_t uic_member)
 {
@@ -923,26 +839,22 @@ static void provision_ownership(void)
 }
 
 /*
- * Install the OVMX system onto the system disk (overlay mode).
- * Creates ODS-2 directory tree, populates [SYS0.SYSCOMMON.SYSEXE]
- * and [SYS0.SYSCOMMON.SYSLIB] with symlinks to discovered binaries,
+ * Install the OVMX system onto the system disk.
+ *
+ * Creates the ODS-2 directory tree, then copies the real files from the
+ * initramfs backup (INITRAMFS_BACKUP, populated by bare_metal_init before
+ * the system disk was mounted over it) onto the now-mounted system disk,
  * and provisions SYSUAF user home directories.
+ *
+ * Only reached when is_system_installed() found no DCL.EXE on the mounted
+ * disk — i.e. a blank block-device disk just initialized by INITIALIZE.EXE.
+ * In overlay mode the backing store is the initramfs copy itself, so
+ * DCL.EXE is already there and this function is never called.
+ *
+ * No symlinks: this is a real copy onto real vmsfs storage, so binaries
+ * and libraries land at their VMS paths as real files, not indirection.
  */
 static void install_system(void)
-{
-    printf("%%STARTUP-I-INSTALL, installing OVMX system\n");
-    provision_dirs();
-    provision_symlinks();
-    provision_sysuaf_users();
-    printf("%%STARTUP-I-INSTALLED, system installation complete\n");
-}
-
-/*
- * Install the OVMX system onto a block-device system disk.
- * Copies real binaries from the initramfs backup to the mounted
- * block device. No symlinks — vmsfs block-device mode stores real files.
- */
-static void install_system_blkdev(void)
 {
     printf("%%STARTUP-I-INSTALL, installing OVMX system to DKA0:\n");
     provision_dirs();
@@ -1254,10 +1166,7 @@ int main(void)
     if (is_system_installed()) {
         printf("%%STARTUP-I-SYSBOOT, system disk detected, skipping install\n");
     } else {
-        if (blkdev_mode)
-            install_system_blkdev();
-        else
-            install_system();
+        install_system();
     }
 
     /* Step 2b: Ensure seed data files exist on system disk.
@@ -1404,7 +1313,7 @@ int main(void)
              *
              * MADE UNREACHABLE, NOT HANDLED, per Rule 10's other answer:
              * LOGINOUT.EXE is a required system file, provisioned onto
-             * every system disk by provision_symlinks() (this file,
+             * every system disk by install_system() (this file,
              * "install once, boot forever" -- see is_system_installed())
              * before the login loop below can ever run, so failing to
              * exec it here is the same class of condition as vms.ko or

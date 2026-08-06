@@ -142,3 +142,43 @@ add_test(
             ${CMAKE_SOURCE_DIR}
 )
 set_tests_properties(facility_negctl_record PROPERTIES LABELS "harness")
+
+# ---------------------------------------------------------------------------
+# PER-ASSERTION RUNTIME ATTRIBUTION, and its own negative controls
+# (rd vms-38c, rd vms-d33, rd vms-2b2).
+#
+# tests/qemu/facility_attribution.sh joins WHAT EACH INJECTION REALLY MUTATES
+# (re-derived here, by running the real `facility_defects.sh apply` against a
+# throwaway tree and reading the enclosing function of every line the sed
+# actually changed) with WHAT REALLY WENT RED (the committed execution record).
+# The result is the one statement no static reader in this tree can make:
+#
+#     mutating <function> was OBSERVED to change the verdict of <assertion>.
+#
+# BOTH tests below run WITHOUT docker, QEMU or /dev/vms, in seconds, in the
+# ordinary Build & Test job -- deliberately. The instrument's whole value is
+# that it survives the buys that beat the static gates, and a control that only
+# runs in the twenty-minute QEMU job is a control nobody sees fail.
+#
+# facility_attribution_negctl.sh CONSTRUCTS THE 2-EDIT BUY rd vms-38c recorded
+# (flip sys$wflor's OVMX-PARTIAL+OVMX-LOCAL block to OVMX-EXECUTIVE, plus one
+# ignored call placed AFTER `return`), runs the OLD register against it -- which
+# must still exit 0, or the control is stale -- and then runs the measured check,
+# which must refuse it. It also diffs the attribution rows before and after the
+# ignored call to show it bought nothing. It invokes the register, so it is the
+# slower of the two; still no container.
+add_test(
+    NAME facility_attribution_selftest
+    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_attribution.sh selftest
+)
+set_tests_properties(facility_attribution_selftest PROPERTIES
+    LABELS "harness"
+    ENVIRONMENT "FA_REPO_ROOT=${CMAKE_SOURCE_DIR}")
+
+add_test(
+    NAME facility_attribution_negctl
+    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_attribution_negctl.sh
+)
+set_tests_properties(facility_attribution_negctl PROPERTIES
+    LABELS "harness"
+    TIMEOUT 2400)

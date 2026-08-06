@@ -1012,6 +1012,7 @@ fi
 
 # ---------------------------------------------------------------- analysis --
 : > "$WORK/answerpath"
+: > "$WORK/answerfn"
 : > "$WORK/usremainder"
 awk -F'\t' \
     -v declf="$WORK/decl_ok" \
@@ -1022,6 +1023,7 @@ awk -F'\t' \
     -v out_symonly="$WORK/symonly" \
     -v ioctlf="$WORK/ioctlmap" \
     -v out_apath="$WORK/answerpath" \
+    -v out_afn="$WORK/answerfn" \
     -v out_upath="$WORK/usremainder" \
     -v out_table="$WORK/table" '
 $1 == "D" {
@@ -1209,11 +1211,29 @@ END {
                 if (ir[j] == "") continue
                 m = split(hnd[ir[j]], hs, " ")
                 for (hi = 1; hi <= m; hi++)
-                    if (hs[hi] != "" && (hs[hi] in deffile)) apf[deffile[hs[hi]]] = 1
+                    if (hs[hi] != "" && (hs[hi] in deffile)) {
+                        apf[deffile[hs[hi]]] = 1
+                        # THE HANDLER NAME, KEPT (rd vms-38c). Every hop of the
+                        # derivation above already knows WHICH FUNCTION answers
+                        # the ioctl -- it is right here in hs[hi] -- and the
+                        # next line used to throw it away and keep only the
+                        # file. That collapse is exactly why one mutation of
+                        # the event-flag file pays for all seven event-flag
+                        # services at once. Kept at function granularity, the
+                        # per-assertion runtime attribution in
+                        # tests/qemu/facility_attribution.sh can ask the finer
+                        # question: did an assertion in the cited proof change
+                        # verdict when THIS SERVICE OWN handler was mutated.
+                        # (No apostrophe above on purpose: this awk program is
+                        # single-quoted in the enclosing shell.)
+                        apn[hs[hi]] = 1
+                    }
             }
         }
         upf[deffile[nm]] = 1
         for (f in apf) printf "%s %s\n", nm, f > out_apath
+        for (h in apn) printf "%s %s\n", nm, h > out_afn
+        delete apn
         for (f in upf) printf "%s %s\n", nm, f > out_upath
     }
 
@@ -1698,6 +1718,69 @@ if [ -s "$WORK/backed" ]; then
             printf '          paid by %-34s (edits %s)\n' "$_b" \
                 "$(sh "$FDMANIFEST" field "$_b" targets 2>/dev/null | tr '\n' ' ')"
         done
+        # ------------------------------------------------------------------
+        # AND WHETHER EXECUTION AGREES (rd vms-38c). REPORTED, NOT ENFORCED --
+        # and the difference is deliberate, not timidity.
+        #
+        # What is printed above is a STATIC join: the defect edits a FILE in
+        # the answer path, and one of its declared assertion texts appears in
+        # the proof. Both halves are file-granular and both are readable off
+        # the tree, which is why check 4 next door is buyable by an ignored
+        # call placed after `return` (measured, rd vms-38c run-6).
+        #
+        # What is printed below is the join done at RUNTIME and at FUNCTION
+        # granularity: was any assertion in the cited proof OBSERVED, in QEMU
+        # against a real /dev/vms, to change its verdict when THIS SERVICE'S
+        # OWN ioctl handler was mutated. An ignored call cannot produce that
+        # row, and neither can dead code, a comment, a re-worded assertion or
+        # a manifest edit.
+        #
+        # IT IS NOT A GATE YET, AND THE REASON IS A NUMBER RATHER THAN AN
+        # OPINION: on this tree the measured check pays 2 of the 10 standing
+        # OVMX-EXECUTIVE claims (sys$clref, sys$waitfr) and leaves 8
+        # UNMEASURED -- because only 9 of the 33 vms_ioctl_* handlers have any
+        # defect landing in them at all (rd vms-2b2). Enforcing it today would
+        # red a pristine tree for handlers nobody has written a probe for,
+        # which is a coverage gap being reported as a lie. UNMEASURED here
+        # means NOTHING PROBED IT, never "the claim is false" -- the same
+        # asymmetry check 6 carries, and it must not be collapsed by a reader.
+        #
+        # THE PATH TO ENFORCEMENT is therefore not "turn this on": it is to
+        # write a defect for each unprobed handler (rd vms-2b2), watch this
+        # column fill in, and flip it when it reaches the standing claims.
+        # ------------------------------------------------------------------
+        _fa="$SRC_ROOT/tests/qemu/facility_attribution.sh"
+        if [ -f "$_fa" ] && [ -f "$SRC_ROOT/tests/qemu/facility_negctl_observed.tsv" ]; then
+            # The handler set comes from $WORK/answerfn -- THE REGISTER'S OWN
+            # four-hop derivation, kept at function granularity above. An
+            # earlier draft of this block guessed the handler from the service
+            # name (sys$foo -> VMS_IOCTL_FOO -> vms_ioctl_foo) and printed
+            # "no VMS_IOCTL_ENQW dispatch arm" for sys$enqw, which issues
+            # VMS_IOCTL_ENQ with a wait flag. A name guess is not a derivation;
+            # it was wrong on the first service that did not follow the pattern.
+            _hdls=$(awk -v n="$bn" '$1 == n { print $2 }' "$WORK/answerfn" 2>/dev/null | sort -u)
+            if [ -z "$_hdls" ]; then
+                printf '          UNRESOLVED: the derivation found no executive handler for this service,\n'
+                printf '                      so there is nothing to attribute to. Neither paid nor refuted.\n'
+            else
+                _hit=""
+                for _h in $_hdls; do
+                    if FA_REPO_ROOT="$SRC_ROOT" FA_ATTR_CACHE="$WORK/attrcache" \
+                            sh "$_fa" depends "$bp" "$_h" >/dev/null 2>&1; then
+                        _hit="$_hit $_h"
+                    fi
+                done
+                if [ -n "$_hit" ]; then
+                    printf '          MEASURED: assertion(s) in %s were observed to change verdict when\n' "$(basename "$bp")"
+                    printf '                    %s was mutated -- this claim is paid by EXECUTION\n' "$(printf '%s' "$_hit" | sed 's/^ //;s/$/()/')"
+                else
+                    printf '          UNMEASURED: no observed red is attributed to any of [%s].\n' "$(printf '%s' "$_hdls" | tr '\n' ' ' | sed 's/ $//')"
+                    printf '                      NOT a refutation -- no defect probes those handlers\n'
+                    printf '                      (rd vms-2b2). The static join above is the only thing\n'
+                    printf '                      paying this claim.\n'
+                fi
+            fi
+        fi
     done
 fi
 

@@ -4516,8 +4516,8 @@ static int ps_mscp_disc(int sock, int ifindex, struct peer_state *ps,
     uint8_t f[SCS_MSCP_FRAME_LEN];
     int ok;
     if (ps->mscp_scc_sent < 2) {
-        mp.class_token = SCS_MSCP_SCC_CLASS;
-        mp.msg_id = (uint16_t)(SCS_MSCP_SCC_MSGID0 + ps->mscp_scc_sent);
+        mp.cmd_ref = SCS_MSCP_CMD_REF(
+            SCS_MSCP_SCC_CLASS, (uint16_t)(SCS_MSCP_SCC_MSGID0 + ps->mscp_scc_sent));
         mp.unit = 0;
         ok = (scs_mscp_build_scc(&mp, f) == 0);
         if (ok && send_frame_vc(sock, ifindex, ps, ps->pb, "sequenced SCS message", f, sizeof(f)) > 0) {
@@ -4527,8 +4527,8 @@ static int ps_mscp_disc(int sock, int ifindex, struct peer_state *ps,
         }
         return 0;
     }
-    mp.class_token = SCS_MSCP_GUS_CLASS;
-    mp.msg_id = (uint16_t)(SCS_MSCP_GUS_MSGID0 + ps->mscp_msg_id);
+    mp.cmd_ref = SCS_MSCP_CMD_REF(
+        SCS_MSCP_GUS_CLASS, (uint16_t)(SCS_MSCP_GUS_MSGID0 + ps->mscp_msg_id));
     /* GROUNDED (vax3-2to3): the FIRST GUS seeds unit-word 0x0001; each subsequent
      * command uses the previous END's returned unit-word + 1. Seeding 0 makes VAX1
      * answer OFFLINE immediately and the walk ends after one exchange. */
@@ -5218,7 +5218,7 @@ static int scs_send_disconnect_self(int sock, int ifindex, struct peer_state *ps
  * + correlation token) for a PS disk-client command. */
 static void ps_fill_mscp(const struct peer_state *ps, const uint8_t our_hw_mac[6],
                          const uint8_t our_src_logical[6],
-                         uint16_t class_token, uint16_t msg_id, uint16_t unit,
+                         uint32_t cmd_ref, uint16_t unit,
                          uint16_t send_seq, struct scs_mscp_params *mp)
 {
     memset(mp, 0, sizeof(*mp));
@@ -5231,8 +5231,7 @@ static void ps_fill_mscp(const struct peer_state *ps, const uint8_t our_hw_mac[6
     mp->recv_ack = ps->vc.seq.recv_seq;
     mp->send_seq = send_seq;
     mp->incarnation = ps->incarnation;
-    mp->class_token = class_token;
-    mp->msg_id = msg_id;
+    mp->cmd_ref = cmd_ref;
     mp->unit = unit;
 }
 
@@ -5247,8 +5246,9 @@ static int ps_send_scc(int sock, int ifindex, struct peer_state *ps,
     }
     struct scs_mscp_params mp;
     uint16_t seq = scs_seq_advance(&ps->vc.seq);
-    ps_fill_mscp(ps, our_hw_mac, our_src_logical, SCS_MSCP_SCC_CLASS,
-                 ps->psc_mscp_msgid, 0, seq, &mp);
+    ps_fill_mscp(ps, our_hw_mac, our_src_logical,
+                 SCS_MSCP_CMD_REF(SCS_MSCP_SCC_CLASS, ps->psc_mscp_msgid),
+                 0, seq, &mp);
     uint8_t f[SCS_MSCP_FRAME_LEN];
     if (scs_mscp_build_scc(&mp, f) == 0 &&
         send_frame_vc(sock, ifindex, ps, ps->pb, "sequenced SCS message", f, sizeof(f)) > 0) {
@@ -5274,8 +5274,9 @@ static int ps_send_gus(int sock, int ifindex, struct peer_state *ps,
     }
     struct scs_mscp_params mp;
     uint16_t seq = scs_seq_advance(&ps->vc.seq);
-    ps_fill_mscp(ps, our_hw_mac, our_src_logical, SCS_MSCP_GUS_CLASS,
-                 ps->psc_mscp_msgid, unit, seq, &mp);
+    ps_fill_mscp(ps, our_hw_mac, our_src_logical,
+                 SCS_MSCP_CMD_REF(SCS_MSCP_GUS_CLASS, ps->psc_mscp_msgid),
+                 unit, seq, &mp);
     uint8_t f[SCS_MSCP_FRAME_LEN];
     if (scs_mscp_build_gus(&mp, f) == 0 &&
         send_frame_vc(sock, ifindex, ps, ps->pb, "sequenced SCS message", f, sizeof(f)) > 0) {
@@ -7512,7 +7513,11 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 } else if (mvv.opcode ==
                                (SCS_MSCP_OP_GET_UNIT_STATUS | SCS_MSCP_END_BIT) &&
                            ps->psc_step == PSC_GUS) {
-                    if (mvv.status == SCS_MSCP_ST_OFFLINE) {
+                    /* vms-533: compare the AA-L619A-TK sec 5.6 MAJOR code, not
+                     * the whole status word. Table B-2 publishes Unit-Offline
+                     * sub-codes 1/2/4/8 (0x23, 0x43, 0x83, 0x103) -- a
+                     * `status == 3` test terminates the walk on none of them. */
+                    if (mvv.status_major == SCS_MSCP_ST_OFFLINE) {
                         /* end-of-list terminator: disk discovery COMPLETE. VAX1
                          * self-triggers reconfiguration -> op0x03 COMMIT ->
                          * MEMBER on its next poll (~1.7s); no further client
@@ -7525,7 +7530,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                                ps->psc_gus_avail);
                         fflush(stdout);
                     } else {
-                        if (mvv.status == SCS_MSCP_ST_AVAILABLE) {
+                        if (mvv.status_major == SCS_MSCP_ST_AVAILABLE) {
                             ps->psc_gus_avail++;
                         }
                         /* NEXT-UNIT: next unit = returned unit-word + 1. */
@@ -7745,8 +7750,12 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
                 if (ps != NULL && ps->mscp_connected && !ps->mscp_disc_done) {
                     scs_vc_note_recv(&ps->vc, mv2.send_seq);
-                    if ((mv2.opcode & 0x7f) == SCS_MSCP_OP_GET_UNIT_STATUS) {
-                        if ((mv2.status & 0xff) == SCS_MSCP_ST_OFFLINE) {
+                    if (mv2.base_opcode == SCS_MSCP_OP_GET_UNIT_STATUS) {
+                        /* vms-533: the sec 5.6 MAJOR code. `status & 0xff` was
+                         * wrong twice over -- the major code is 5 bits, so any
+                         * Table B-2 sub-code (Unit-Offline 1/2/4/8 = 0x23/0x43/
+                         * 0x83/0x103) escaped the terminator test. */
+                        if (mv2.status_major == SCS_MSCP_ST_OFFLINE) {
                             ps->mscp_disc_done = 1;
                             log_ts(stdout);
                             printf(" SCSD-I-MSCPDISC, disk discovery COMPLETE"

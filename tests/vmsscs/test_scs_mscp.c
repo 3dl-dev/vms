@@ -1,6 +1,6 @@
 /*
  * test_scs_mscp.c - targeted unit tests for the MSCP-over-SCS disk-client
- * command builders/parser (vms-760).
+ * command builder/parser (vms-760; field-based since vms-533, Phase B).
  *
  * ORACLE. Every expected byte array below is the byte-exact SCA content of a
  * real frame from af2-firsttimer-established-20260728.pcap (the clean-room
@@ -9,6 +9,14 @@
  * captured joiner MSCP commands byte-for-byte; the parser is validated against
  * the captured VAX1 END responses (SCC-END 0x84 / GUS-END 0x83), proving OVMX
  * reads the echoed correlation token + returned unit/status rather than guessing.
+ *
+ * WHAT THE BYTE-EXACT TESTS PROVE AFTER vms-533. They used to prove that a
+ * captured template plus four substitutions equals the capture -- close to a
+ * tautology. The MSCP body is now BUILT from struct scs_mscp_cmd at
+ * AA-L619A-TK Table A-6 offsets and not one byte of it is copied from a
+ * capture, so the same assertions now prove something real: that the field map
+ * transcribed from the public spec reconstructs a real VMS disk class driver's
+ * command EXACTLY, and that Phase B changed no transmitted byte.
  */
 #include "scs_mscp.h"
 
@@ -85,8 +93,7 @@ static const uint8_t joiner_logical[6] = {0xaa,0x00,0x04,0x00,0x1a,0x04};
 #define JOINER_MSCP_CONID 0x8fd20008u /* joiner's MSCP$DISK client handle (abs68) */
 
 static void fill_params(struct scs_mscp_params *p, uint16_t recv_ack,
-                        uint16_t send_seq, uint16_t class_token,
-                        uint16_t msg_id, uint16_t unit)
+                        uint16_t send_seq, uint32_t cmd_ref, uint16_t unit)
 {
     memset(p, 0, sizeof(*p));
     memcpy(p->dst_mac, vax1_logical, 6);   /* Ethernet header unused by SCA compare */
@@ -97,16 +104,16 @@ static void fill_params(struct scs_mscp_params *p, uint16_t recv_ack,
     p->local_conid = JOINER_MSCP_CONID;
     p->recv_ack = recv_ack;
     p->send_seq = send_seq;
-    p->incarnation = 1; /* fresh first-timer join -- matches the golden template */
-    p->class_token = class_token;
-    p->msg_id = msg_id;
+    p->incarnation = 1; /* fresh first-timer join -- matches the golden capture */
+    p->cmd_ref = cmd_ref;
     p->unit = unit;
 }
 
 static void test_scc_byte_exact(void)
 {
     struct scs_mscp_params p;
-    fill_params(&p, 24, 25, SCS_MSCP_SCC_CLASS, SCS_MSCP_SCC_MSGID0, 0);
+    fill_params(&p, 24, 25,
+                SCS_MSCP_CMD_REF(SCS_MSCP_SCC_CLASS, SCS_MSCP_SCC_MSGID0), 0);
     uint8_t out[SCS_MSCP_FRAME_LEN];
     CHECK(scs_mscp_build_scc(&p, out) == 0, "build_scc ok");
     CHECK(memcmp(out + 14, golden_scc, 94) == 0,
@@ -115,7 +122,7 @@ static void test_scc_byte_exact(void)
     const uint8_t *body = out + 72;
     CHECK(out[30] == SCS_MSCP_MSGTYPE && out[31] == SCS_MSCP_FORMAT,
           "SCC keeps SCS envelope 0x4b/0x13");
-    CHECK(body[8] == SCS_MSCP_OP_SET_CTLR_CHAR, "SCC opcode 0x04");
+    CHECK(body[SCS_MSCP_P_OPCD] == SCS_MSCP_OP_SET_CTLR_CHAR, "SCC opcode 0x04");
     CHECK((uint16_t)(body[0] | (body[1] << 8)) == SCS_MSCP_SCC_CLASS,
           "SCC class token 0x0002");
     CHECK((uint16_t)(body[2] | (body[3] << 8)) == SCS_MSCP_SCC_MSGID0,
@@ -127,29 +134,32 @@ static void test_scc_byte_exact(void)
 static void test_gus_byte_exact(void)
 {
     struct scs_mscp_params p;
-    fill_params(&p, 26, 27, SCS_MSCP_GUS_CLASS, SCS_MSCP_GUS_MSGID0, 0x0001);
+    fill_params(&p, 26, 27,
+                SCS_MSCP_CMD_REF(SCS_MSCP_GUS_CLASS, SCS_MSCP_GUS_MSGID0), 0x0001);
     uint8_t out[SCS_MSCP_FRAME_LEN];
     CHECK(scs_mscp_build_gus(&p, out) == 0, "build_gus ok");
     CHECK(memcmp(out + 14, golden_gus, 94) == 0,
           "GUS reproduces golden af2 GUS command byte-exact");
     const uint8_t *body = out + 72;
-    CHECK(body[8] == SCS_MSCP_OP_GET_UNIT_STATUS, "GUS opcode 0x03");
+    CHECK(body[SCS_MSCP_P_OPCD] == SCS_MSCP_OP_GET_UNIT_STATUS, "GUS opcode 0x03");
     CHECK((uint16_t)(body[10] | (body[11] << 8)) == SCS_MSCP_MOD_NEXT_UNIT,
           "GUS carries NEXT-UNIT modifier 0x0001");
     CHECK((uint16_t)(body[4] | (body[5] << 8)) == 0x0001, "GUS unit word 0x0001");
 }
 
-/* The unit/msg-id substitution must change ONLY the intended body bytes. */
+/* The unit/cmd-ref substitution must change ONLY the intended body bytes. */
 static void test_gus_unit_substitution(void)
 {
     struct scs_mscp_params p;
     uint8_t base[SCS_MSCP_FRAME_LEN], out[SCS_MSCP_FRAME_LEN];
-    fill_params(&p, 26, 27, SCS_MSCP_GUS_CLASS, SCS_MSCP_GUS_MSGID0, 0x0001);
+    fill_params(&p, 26, 27,
+                SCS_MSCP_CMD_REF(SCS_MSCP_GUS_CLASS, SCS_MSCP_GUS_MSGID0), 0x0001);
     CHECK(scs_mscp_build_gus(&p, base) == 0, "build_gus base ok");
 
     /* cmd#2 of the enumeration: unit 0x4001, message-id incremented (echoed). */
     p.unit = 0x4001;
-    p.msg_id = (uint16_t)(SCS_MSCP_GUS_MSGID0 + 1);
+    p.cmd_ref = SCS_MSCP_CMD_REF(SCS_MSCP_GUS_CLASS,
+                                 (uint16_t)(SCS_MSCP_GUS_MSGID0 + 1));
     CHECK(scs_mscp_build_gus(&p, out) == 0, "build_gus unit=0x4001 ok");
     const uint8_t *b = out + 72;
     CHECK((uint16_t)(b[4] | (b[5] << 8)) == 0x4001, "unit word advanced to 0x4001");
@@ -186,10 +196,18 @@ static void test_parse_scc_end(void)
           "SCC-END SCS envelope");
     CHECK(v.opcode == (SCS_MSCP_OP_SET_CTLR_CHAR | SCS_MSCP_END_BIT) && v.is_end,
           "SCC-END opcode 0x84 (END bit set)");
-    CHECK(v.status == SCS_MSCP_ST_SUCCESS, "SCC-END status SUCCESS (0)");
+    CHECK(v.status_major == SCS_MSCP_ST_SUCCESS && v.status_subcode == 0,
+          "SCC-END status Success, sub-code Normal (sec 6.16: the only status "
+          "SET CONTROLLER CHARACTERISTICS ever returns)");
+    CHECK(v.end_flags == 0, "SCC-END carries no Table A-3 end flags");
+    CHECK(v.modifiers == 0,
+          "an END message leaves .modifiers zero -- body[10:12] is P.STS there, "
+          "not P.MOD");
+    CHECK(v.base_opcode == SCS_MSCP_OP_SET_CTLR_CHAR,
+          "SCC-END base opcode strips OP.END back to 0x04");
     /* Correlation token echoed from the joiner's SCC command. */
-    CHECK(v.class_token == SCS_MSCP_SCC_CLASS && v.msg_id == SCS_MSCP_SCC_MSGID0,
-          "SCC-END echoes the joiner's command-reference token");
+    CHECK(v.cmd_ref == SCS_MSCP_CMD_REF(SCS_MSCP_SCC_CLASS, SCS_MSCP_SCC_MSGID0),
+          "SCC-END echoes the joiner's P.CRF command reference number verbatim");
     CHECK(v.remote_conid == JOINER_MSCP_CONID && v.local_conid == VAX1_MSCP_CONID,
           "SCC-END Con.ID pair (remote=joiner client, local=VAX1 server)");
 }
@@ -202,10 +220,13 @@ static void test_parse_gus_end(void)
     CHECK(scs_mscp_parse(frame, sizeof(frame), &v) == 0, "parse GUS-END ok");
     CHECK(v.opcode == (SCS_MSCP_OP_GET_UNIT_STATUS | SCS_MSCP_END_BIT) && v.is_end,
           "GUS-END opcode 0x83 (END bit set)");
-    CHECK(v.status == SCS_MSCP_ST_AVAILABLE, "GUS-END status UNIT AVAILABLE (4)");
+    CHECK(v.status_major == SCS_MSCP_ST_AVAILABLE && v.status_subcode == 0,
+          "GUS-END status Unit-Available (4), sub-code 0 -- Table B-2 says "
+          "Unit-Available uses no sub-codes");
     /* The returned unit-word drives the NEXT-UNIT enumeration (next = +1). */
     CHECK(v.unit == 0x4000, "GUS-END returns unit-word 0x4000");
-    CHECK(v.msg_id == SCS_MSCP_GUS_MSGID0, "GUS-END echoes the GUS message-id");
+    CHECK(v.cmd_ref == SCS_MSCP_CMD_REF(SCS_MSCP_GUS_CLASS, SCS_MSCP_GUS_MSGID0),
+          "GUS-END echoes the GUS command reference number");
 }
 
 /*
@@ -332,6 +353,301 @@ static void test_gus_end_field_map(void)
           "is not a removable-media flag either");
 }
 
+/* ===================== vms-533 -- the FIELD-BASED client =================== */
+
+/*
+ * Each MSCP header field lands at its own AA-L619A-TK Table A-6 offset and
+ * nowhere else. Built one field at a time off a common base, so a builder that
+ * wrote the opcode into body[9], or the modifiers into the status word, or that
+ * quietly kept a template byte, cannot pass. This is the test that makes the
+ * word "field" mean something -- the byte-exact tests above would still pass
+ * against a pure template.
+ */
+static void test_body_field_positions(void)
+{
+    struct scs_mscp_cmd c;
+    uint8_t base[SCS_MSCP_BODY_LEN], out[SCS_MSCP_BODY_LEN];
+
+    memset(&c, 0, sizeof(c));
+    c.cmd_ref = 0x11223344u;
+    c.unit = 0x5566;
+    c.opcode = SCS_MSCP_OP_GET_UNIT_STATUS;
+    c.modifiers = 0x0000;
+    CHECK(scs_mscp_build_body(&c, base, sizeof(base)) == 0, "build_body base ok");
+
+    /* P.CRF is a 32-bit little-endian field at body[0:4], not two words the
+     * builder happens to write next to each other. */
+    CHECK(base[0] == 0x44 && base[1] == 0x33 && base[2] == 0x22 && base[3] == 0x11,
+          "P.CRF at body[0:4], little-endian (sec 5.1)");
+    CHECK(base[SCS_MSCP_P_UNIT] == 0x66 && base[SCS_MSCP_P_UNIT + 1] == 0x55,
+          "P.UNIT at body[4:6]");
+    CHECK(base[SCS_MSCP_P_RSVD6] == 0 && base[SCS_MSCP_P_RSVD6 + 1] == 0,
+          "the body[6:8] reserved word is zero -- sec 5.2 requires it of a "
+          "class driver");
+    CHECK(base[SCS_MSCP_P_OPCD] == SCS_MSCP_OP_GET_UNIT_STATUS,
+          "P.OPCD at body[8]");
+    CHECK(base[SCS_MSCP_P_FLGS] == 0,
+          "body[9] is reserved in a COMMAND (P.FLGS is an end-message field)");
+
+    /* --- one field at a time --- */
+    c.cmd_ref = 0x11223345u;
+    CHECK(scs_mscp_build_body(&c, out, sizeof(out)) == 0, "cmd_ref variant ok");
+    CHECK(out[0] == 0x45 && memcmp(out + 4, base + 4, SCS_MSCP_BODY_LEN - 4) == 0,
+          "changing cmd_ref moves ONLY body[0:4]");
+    c.cmd_ref = 0x11223344u;
+
+    c.unit = 0x5567;
+    CHECK(scs_mscp_build_body(&c, out, sizeof(out)) == 0, "unit variant ok");
+    CHECK(out[SCS_MSCP_P_UNIT] == 0x67 && memcmp(out, base, SCS_MSCP_P_UNIT) == 0
+              && memcmp(out + 6, base + 6, SCS_MSCP_BODY_LEN - 6) == 0,
+          "changing unit moves ONLY body[4:6]");
+    c.unit = 0x5566;
+
+    c.opcode = SCS_MSCP_OP_ONLINE; /* 0x09, Table A-1, capture-confirmed */
+    CHECK(scs_mscp_build_body(&c, out, sizeof(out)) == 0, "opcode variant ok");
+    CHECK(out[SCS_MSCP_P_OPCD] == SCS_MSCP_OP_ONLINE
+              && memcmp(out, base, SCS_MSCP_P_OPCD) == 0
+              && memcmp(out + 9, base + 9, SCS_MSCP_BODY_LEN - 9) == 0,
+          "changing opcode moves ONLY body[8] -- not body[9], not the "
+          "modifiers word");
+    c.opcode = SCS_MSCP_OP_GET_UNIT_STATUS;
+
+    c.modifiers = SCS_MSCP_MOD_NEXT_UNIT;
+    CHECK(scs_mscp_build_body(&c, out, sizeof(out)) == 0, "modifiers variant ok");
+    CHECK(out[SCS_MSCP_P_MOD] == 0x01 && out[SCS_MSCP_P_MOD + 1] == 0x00
+              && memcmp(out, base, SCS_MSCP_P_MOD) == 0
+              && memcmp(out + 12, base + 12, SCS_MSCP_BODY_LEN - 12) == 0,
+          "changing modifiers moves ONLY body[10:12]");
+}
+
+/*
+ * The SET CONTROLLER CHARACTERISTICS parameter area, decoded against Table A-6
+ * and sec 6.16 -- the region that used to be an opaque "REPLAYED template".
+ * These assertions are what let the header claim the values are named rather
+ * than copied.
+ */
+static void test_scc_parameter_area(void)
+{
+    struct scs_mscp_cmd c;
+    uint8_t body[SCS_MSCP_BODY_LEN];
+    CHECK(scs_mscp_scc_defaults(&c, SCS_MSCP_CMD_REF(SCS_MSCP_SCC_CLASS,
+                                                     SCS_MSCP_SCC_MSGID0)) == 0,
+          "scc_defaults ok");
+    CHECK(scs_mscp_build_body(&c, body, sizeof(body)) == 0, "scc body ok");
+
+    /* The golden af2 SCC command's parameter area, byte for byte -- the proof
+     * that the transcribed field map and the captured bytes are the same thing. */
+    CHECK(memcmp(body, golden_scc + SCS_MSCP_BODY_OFF, SCS_MSCP_BODY_LEN) == 0,
+          "the field-built SCC body equals the golden af2 SCC body byte for byte");
+
+    CHECK(bu16(body, SCS_MSCP_P_VRSN) == 0,
+          "P.VRSN MSCP version 0 -- sec 6.16: the host MUST supply 0 or be "
+          "answered Invalid Command");
+    CHECK(bu16(body, SCS_MSCP_P_CNTF) == 0x00d0
+              && bu16(body, SCS_MSCP_P_CNTF)
+                     == (SCS_MSCP_CF_ATTN_MSGS | SCS_MSCP_CF_MISC_ERRLOG
+                         | SCS_MSCP_CF_THIS_HOST),
+          "P.CNTF 0x00d0 decodes EXACTLY to Table A-4's CF.ATN|CF.MSC|CF.THS -- "
+          "the captured byte is a named set of controller flags, not a magic "
+          "number");
+    CHECK((bu16(body, SCS_MSCP_P_CNTF) & SCS_MSCP_CF_OTHER_HOSTS) == 0,
+          "CF.OTH clear: the joiner does not ask for OTHER hosts' error logs");
+    CHECK(bu16(body, SCS_MSCP_P_HTMO) == 0,
+          "P.HTMO 0 = host-access timeout disabled (sec 6.16)");
+    CHECK(bu16(body, 18) == 0, "the Table A-6 reserved word at body[18:20] is 0");
+    CHECK(bu32(body, SCS_MSCP_P_TIME) == 0x75280bc0u
+              && bu32(body, SCS_MSCP_P_TIME + 4) == 0x00bc0219u,
+          "P.TIME is the VMS quadword time of sec 6.16");
+    /* AA-L619A-TK sec 6.16: clunks (100 ns) since 00:00 17-Nov-1858. Decoding
+     * the captured quadword yields 2026-07-28 12:59:58 UTC -- the wall clock of
+     * the af2 capture itself. That is the CALIBRATION of the field (it proves
+     * the offset and the epoch), and simultaneously the reason emitting the
+     * constant is a labeled replay: a live client sends the CURRENT time. */
+    {
+        const uint64_t clunks = ((uint64_t)bu32(body, SCS_MSCP_P_TIME + 4) << 32)
+                              | bu32(body, SCS_MSCP_P_TIME);
+        const uint64_t secs = clunks / 10000000ULL;
+        /* days since 17-Nov-1858 to 28-Jul-2026 == 61249; +46798 s == 12:59:58 */
+        CHECK(secs / 86400ULL == 61249ULL && secs % 86400ULL == 46798ULL,
+              "P.TIME decodes to 1858-11-17 + 61249 days + 12:59:58 == "
+              "2026-07-28 12:59:58 UTC, the af2 capture's own wall clock");
+    }
+    /* sec 5.1 caps the parameter area at 36 bytes; SCC's documented fields end
+     * at body[28] and the tail must be zero, not template residue. */
+    CHECK(bu32(body, 28) == 0 && bu32(body, 32) == 0,
+          "the SCC parameter tail body[28:36] is zero-filled (sec 5.2)");
+}
+
+/* GET UNIT STATUS is "standard header only" (sec 6.12): a 24-byte zero tail. */
+static void test_gus_parameter_area_is_empty(void)
+{
+    struct scs_mscp_cmd c;
+    uint8_t body[SCS_MSCP_BODY_LEN];
+    int i, nonzero = 0;
+    CHECK(scs_mscp_gus_defaults(&c, SCS_MSCP_CMD_REF(SCS_MSCP_GUS_CLASS,
+                                                     SCS_MSCP_GUS_MSGID0),
+                                0x0001) == 0, "gus_defaults ok");
+    CHECK(scs_mscp_build_body(&c, body, sizeof(body)) == 0, "gus body ok");
+    CHECK(memcmp(body, golden_gus + SCS_MSCP_BODY_OFF, SCS_MSCP_BODY_LEN) == 0,
+          "the field-built GUS body equals the golden af2 GUS body byte for byte");
+    for (i = SCS_MSCP_HDR_LEN; i < SCS_MSCP_BODY_LEN; i++) {
+        if (body[i] != 0) {
+            nonzero++;
+        }
+    }
+    CHECK(nonzero == 0,
+          "GET UNIT STATUS carries a standard header and nothing else "
+          "(sec 6.12) -- body[12:36] is entirely zero");
+    CHECK(c.modifiers == SCS_MSCP_MOD_NEXT_UNIT,
+          "gus_defaults sets MD.NXU (Table A-2), which is what makes the walk "
+          "a walk");
+}
+
+/*
+ * sec 5.1 makes P.CRF non-zero and OP.END the end-message marker. Both are
+ * refused rather than emitted malformed: this client sends COMMANDS, and
+ * answering them is Phase D (vms-291), deliberately not here.
+ */
+static void test_build_body_refusals(void)
+{
+    struct scs_mscp_cmd c;
+    uint8_t body[SCS_MSCP_BODY_LEN];
+    CHECK(scs_mscp_gus_defaults(&c, 0x00010001u, 1) == 0, "defaults ok");
+
+    c.cmd_ref = 0;
+    CHECK(scs_mscp_build_body(&c, body, sizeof(body)) == -1,
+          "a zero command reference number is refused (sec 5.1: unique, "
+          "NON-ZERO)");
+    c.cmd_ref = 0x00010001u;
+
+    c.opcode = (uint8_t)(SCS_MSCP_OP_GET_UNIT_STATUS | SCS_MSCP_END_BIT);
+    CHECK(scs_mscp_build_body(&c, body, sizeof(body)) == -1,
+          "an opcode with OP.END set is refused -- that is an END message, and "
+          "this module is the disk CLIENT (serving is Phase D / vms-291)");
+    c.opcode = SCS_MSCP_OP_GET_UNIT_STATUS;
+
+    CHECK(scs_mscp_build_body(&c, body, SCS_MSCP_BODY_LEN - 1) == -1,
+          "a short body buffer is refused");
+    CHECK(scs_mscp_build_body(&c, body, sizeof(body)) == 0,
+          "and the same command builds once the refusals are removed");
+}
+
+/*
+ * THE STATUS WORD IS NOT A FLAT CODE (sec 5.6): 5-bit major + 11-bit sub-code.
+ *
+ * CALIBRATION, not decoration: Table B-2 publishes worked combined values, and
+ * the decoder must reproduce them or reading a captured status with it proves
+ * nothing. The whole-word comparison this replaces (`status == 3`) is wrong on
+ * every one of the Unit-Offline rows below -- which is the live consequence,
+ * because Unit-Offline is the GET UNIT STATUS walk's end-of-list terminator.
+ */
+static void test_status_code_split(void)
+{
+    /* Table B-2, "Unit-Offline" sub-codes, with the manual's own hex column. */
+    CHECK(scs_mscp_status_major(0x0003) == SCS_MSCP_ST_OFFLINE
+              && scs_mscp_status_subcode(0x0003) == 0,
+          "0x03 = Unit-Offline, sub-code 0 (unit unknown or online elsewhere)");
+    CHECK(scs_mscp_status_major(0x0023) == SCS_MSCP_ST_OFFLINE
+              && scs_mscp_status_subcode(0x0023) == 1,
+          "0x23 = Unit-Offline, sub-code 1 (no volume mounted / RUN-STOP) -- "
+          "and 0x23 != 3, which is exactly why the whole word must not be "
+          "compared");
+    CHECK(scs_mscp_status_major(0x0043) == SCS_MSCP_ST_OFFLINE
+              && scs_mscp_status_subcode(0x0043) == 2,
+          "0x43 = Unit-Offline, sub-code 2 (unit is inoperative)");
+    CHECK(scs_mscp_status_major(0x0083) == SCS_MSCP_ST_OFFLINE
+              && scs_mscp_status_subcode(0x0083) == 4,
+          "0x83 = Unit-Offline, sub-code 4 (duplicate unit number)");
+    CHECK(scs_mscp_status_major(0x0103) == SCS_MSCP_ST_OFFLINE
+              && scs_mscp_status_subcode(0x0103) == 8,
+          "0x103 = Unit-Offline, sub-code 8 (disabled by field service)");
+
+    /* Table B-2, "Success" sub-codes -- the same arithmetic on a second row. */
+    CHECK(scs_mscp_status_major(0x0080) == SCS_MSCP_ST_SUCCESS
+              && scs_mscp_status_subcode(0x0080) == 4,
+          "0x80 = Success, sub-code 4 (Duplicate Unit Number)");
+    CHECK(scs_mscp_status_major(0x0100) == SCS_MSCP_ST_SUCCESS
+              && scs_mscp_status_subcode(0x0100) == 8,
+          "0x100 = Success, sub-code 8 (Already Online)");
+    /* Table B-2, "Write Protected": the two published sub-codes. */
+    CHECK(scs_mscp_status_major(0x2006) == SCS_MSCP_ST_WRITE_PROT
+              && scs_mscp_status_subcode(0x2006) == 256,
+          "0x2006 = Write Protected, sub-code 256 (hardware write protected)");
+    CHECK(scs_mscp_status_major(0x1006) == SCS_MSCP_ST_WRITE_PROT
+              && scs_mscp_status_subcode(0x1006) == 128,
+          "0x1006 = Write Protected, sub-code 128 (software write protected)");
+
+    /* Table B-1 names, and the honest answer for the codes it leaves undefined. */
+    CHECK(strcmp(scs_mscp_status_name(SCS_MSCP_ST_SUCCESS), "Success") == 0
+              && strcmp(scs_mscp_status_name(SCS_MSCP_ST_OFFLINE),
+                        "Unit-Offline") == 0
+              && strcmp(scs_mscp_status_name(SCS_MSCP_ST_DRIVE_ERR),
+                        "Drive Error") == 0,
+          "Table B-1 major-code names");
+    CHECK(strcmp(scs_mscp_status_name(12), "undefined status code") == 0,
+          "Table B-1 defines nothing at 12 and the decoder does not invent one");
+    CHECK(strcmp(scs_mscp_opcode_name(0x83), "GET UNIT STATUS") == 0,
+          "an endcode names the command it answers");
+    CHECK(strcmp(scs_mscp_opcode_name(0x14),
+                 "opcode not confirmed on our wire") == 0,
+          "REPLACE (0x14) is in Table A-1 but not on our wire, and is NOT "
+          "silently named");
+}
+
+/*
+ * The live consequence, on a real captured frame: take the golden GUS-END and
+ * move its status to a published Unit-Offline sub-code. The walk's terminator
+ * test must still fire. Under the old whole-word comparison it did not, and the
+ * enumeration would have run past the end of the unit list.
+ */
+static void test_gus_end_offline_subcode(void)
+{
+    uint8_t frame[14 + 110];
+    struct scs_mscp_view v;
+    make_frame(frame, sizeof(frame), golden_gus_end, 110);
+    /* body[10:12] = P.STS. 0x0023 = Unit-Offline, sub-code 1 (Table B-2). */
+    frame[14 + SCS_MSCP_BODY_OFF + SCS_MSCP_P_STS] = 0x23;
+    frame[14 + SCS_MSCP_BODY_OFF + SCS_MSCP_P_STS + 1] = 0x00;
+    CHECK(scs_mscp_parse(frame, sizeof(frame), &v) == 0, "parse offline GUS-END");
+    CHECK(v.status == 0x0023, "raw status preserved");
+    CHECK(v.status_major == SCS_MSCP_ST_OFFLINE,
+          "a GUS-END with Unit-Offline sub-code 1 IS the end-of-list "
+          "terminator -- v.status == SCS_MSCP_ST_OFFLINE would have missed it");
+    CHECK(v.status_subcode == 1, "and the sub-code survives for diagnostics");
+
+    /* Table A-3 end flags ride the same end message and are decoded now. */
+    frame[14 + SCS_MSCP_BODY_OFF + SCS_MSCP_P_FLGS] =
+        SCS_MSCP_EF_ERROR_LOG_GENERATED;
+    CHECK(scs_mscp_parse(frame, sizeof(frame), &v) == 0, "parse flagged GUS-END");
+    CHECK(v.end_flags == SCS_MSCP_EF_ERROR_LOG_GENERATED,
+          "P.FLGS EF.LOG (Error Log Generated) decoded from body[9]");
+}
+
+/* A COMMAND's body[10:12] is P.MOD, not P.STS. The parser must not report a
+ * status for one -- reading modifiers as a status is a category error. */
+static void test_parse_command_is_not_an_end_message(void)
+{
+    struct scs_mscp_params p;
+    struct scs_mscp_view v;
+    uint8_t out[SCS_MSCP_FRAME_LEN];
+    fill_params(&p, 26, 27,
+                SCS_MSCP_CMD_REF(SCS_MSCP_GUS_CLASS, SCS_MSCP_GUS_MSGID0), 0x0001);
+    CHECK(scs_mscp_build_gus(&p, out) == 0, "build_gus ok");
+    CHECK(scs_mscp_parse(out, sizeof(out), &v) == 0, "parse our own GUS command");
+    CHECK(!v.is_end, "a command is not an end message");
+    CHECK(v.opcode == SCS_MSCP_OP_GET_UNIT_STATUS
+              && v.base_opcode == SCS_MSCP_OP_GET_UNIT_STATUS,
+          "GUS command opcode");
+    CHECK(v.modifiers == SCS_MSCP_MOD_NEXT_UNIT,
+          "body[10:12] decodes as P.MOD on a command");
+    CHECK(v.status == 0 && v.status_major == 0 && v.status_subcode == 0
+              && v.end_flags == 0,
+          "and NO status is reported for a command -- P.STS does not exist "
+          "there (sec 5.1)");
+    CHECK(v.cmd_ref == SCS_MSCP_CMD_REF(SCS_MSCP_GUS_CLASS, SCS_MSCP_GUS_MSGID0),
+          "P.CRF round-trips build -> parse");
+}
+
 static void test_null_guards(void)
 {
     uint8_t out[SCS_MSCP_FRAME_LEN];
@@ -340,6 +656,18 @@ static void test_null_guards(void)
     CHECK(scs_mscp_build_scc(NULL, out) == -1, "build_scc NULL p");
     CHECK(scs_mscp_build_scc(&p, NULL) == -1, "build_scc NULL out");
     CHECK(scs_mscp_build_gus(NULL, out) == -1, "build_gus NULL p");
+    /* A zeroed params has cmd_ref 0, which sec 5.1 forbids -- the refusal
+     * propagates all the way out of the frame builder. */
+    CHECK(scs_mscp_build_scc(&p, out) == -1,
+          "build_scc refuses a zero command reference number");
+    CHECK(scs_mscp_build_body(NULL, out, SCS_MSCP_BODY_LEN) == -1,
+          "build_body NULL cmd");
+    CHECK(scs_mscp_scc_defaults(NULL, 1) == -1, "scc_defaults NULL");
+    CHECK(scs_mscp_gus_defaults(NULL, 1, 0) == -1, "gus_defaults NULL");
+    struct scs_mscp_cmd c;
+    CHECK(scs_mscp_gus_defaults(&c, 1, 0) == 0 &&
+          scs_mscp_build_command(NULL, &c, out) == -1, "build_command NULL p");
+    CHECK(scs_mscp_build_command(&p, NULL, out) == -1, "build_command NULL cmd");
     struct scs_mscp_view v;
     CHECK(scs_mscp_parse(NULL, 108, &v) == -1, "parse NULL frame");
     uint8_t shortf[40] = {0};
@@ -354,6 +682,14 @@ int main(void)
     test_parse_scc_end();
     test_parse_gus_end();
     test_gus_end_field_map();
+    /* vms-533 -- Phase B, the field-based client. */
+    test_body_field_positions();
+    test_scc_parameter_area();
+    test_gus_parameter_area_is_empty();
+    test_build_body_refusals();
+    test_status_code_split();
+    test_gus_end_offline_subcode();
+    test_parse_command_is_not_an_end_message();
     test_null_guards();
 
     if (failures == 0) {

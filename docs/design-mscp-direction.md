@@ -303,6 +303,18 @@ hook `scs_credit.c` already anticipates). This dissolves the per-class
 template special-casing and is the precondition for everything below.
 
 **Phase B — MSCP client on DOCUMENTED fields (now cheaper than planned).**
+*LANDED as `vms-533`.* The 36-byte MSCP body is built from `struct scs_mscp_cmd`
+at Table A-6 offsets — cmd-ref, unit, opcode, modifiers and the sec 6.16 SCC
+parameter area are named fields, and no captured byte survives in `[58:94]`. The
+end-message parse splits the sec 5.6 status word into its 5-bit major code and
+11-bit sub-code, which fixed a live defect: the GET UNIT STATUS walk compared the
+whole word against `3`, so any Table B-2 Unit-Offline sub-code (`0x23`, `0x43`,
+`0x83`, `0x103`) failed to terminate the enumeration. Wire-neutral: the
+field-built frames reproduce the golden af2 commands byte for byte. What is
+still replayed is the 58-byte SCA/PPD header ahead of the body, and P.TIME (a
+frozen 2026-07-28 capture timestamp — replacing it with live host time is a wire
+change and is deliberately not in this refactor).
+
 AA-L619A-TK supplies the opcode, status/event and per-command formats, so this
 is no longer a decode exercise — it is transcription from a public spec, with
 the captures as the conformance check. Promote `scs_mscp.c` from byte-replay

@@ -613,7 +613,9 @@ jobs:
       # fails on ANY disagreement in either direction, so the committed record
       # cannot be fabricated upward and cannot go stale quietly. That check is
       # the half a deleter does not own; the committed file alone is a
-      # snapshot, exactly like tracking/rd-citations.tsv.
+      # snapshot, but unlike the citation ledger this replaced (rd vms-dc7),
+      # it is re-verified against a fresh QEMU run every time it matters, not
+      # just believed on its own say-so.
       #
       # FACILITY_NEGCTL_REQUIRE_RECORD: 1 makes a MISSING committed record red.
       # It was 0 only while the tree had none -- the first record can only be

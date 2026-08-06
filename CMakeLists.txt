@@ -264,55 +264,15 @@ if(BUILD_TESTS)
     set_tests_properties(kif_caller_census_negctl PROPERTIES
         LABELS "integration;authenticity;slow" TIMEOUT 1800)
 
-    # The citation ledger is fresh (vms-8cc). tracking/rd-citations.tsv is what
-    # lets the vms_kif caller census above check that an exemption's cited rd
-    # item EXISTS and is OPEN without reaching rd -- rd is nostr-backed and
-    # unavailable in CI, which is why that gate shape-checked the id and
-    # nothing more until now. (The userspace service register below does NOT
-    # read the ledger; wiring it is rd vms-fab. Do not read the census's
-    # coverage as the register's.)
-    #
-    # Committed derived state has one failure mode and it is the whole defect
-    # one level up: the ledger goes stale and the gate then certifies a closed
-    # item as open. Only this test can see that, and only where rd is
-    # reachable, so it EXITS 77 and ctest reports SKIPPED -- never PASSED -- on
-    # a host without rd.
-    #
-    # THE SKIP IS A STANDING RESIDUAL, not a clean result: under project rule 7
-    # a skipped test is a failing test, and this one skips on every CI run.
-    # What survives the skip is its self-controls and its ledger-FLOOR controls
-    # -- 16 of them, all rd-free -- so a skipped run still proves the
-    # comparator is not stuck at green and still proves the checker refuses an
-    # empty ledger. What does NOT survive is the part that needs rd: the live
-    # comparison and the independent read.
-    add_test(NAME rd_citations_fresh
-        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_rd_citations_fresh.sh
-                ${CMAKE_CURRENT_SOURCE_DIR})
-    set_tests_properties(rd_citations_fresh PROPERTIES
-        LABELS "integration;authenticity;needs-rd"
-        SKIP_RETURN_CODE 77 TIMEOUT 300)
-
-    # Absence from `rd list` must not mean CLOSED (rd vms-10c).
-    #
-    # gen_rd_citations recorded an id `open` iff it appeared in `rd list`, and
-    # wrote everything else it could still `rd show` as `closed`. `rd list` is
-    # cwd-dependent -- 289 items from the repo root, 159 from a clone of the
-    # same repo at another path, same machine, same second -- so run against a
-    # sandbox copy, LIVE items were written `closed`. The row it produced is
-    # self-contradictory (`closed active`) and that is the tell.
-    #
-    # THIS ONE DOES NOT NEED rd, AND THAT IS THE POINT. It stubs rd on PATH,
-    # so unlike rd_citations_fresh above -- which skips on every CI run, a
-    # standing residual under project rule 7 -- this executes everywhere. It
-    # covers one property that test cannot reach (a disagreement BETWEEN
-    # `rd list` and `rd show`, which against the real rd could only be staged
-    # by depending on the very cwd-dependence being fixed) on the hosts that
-    # test cannot run on. It does not replace it.
-    add_test(NAME rd_citations_partial_list
-        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_rd_citations_partial_list.sh
-                ${CMAKE_CURRENT_SOURCE_DIR})
-    set_tests_properties(rd_citations_partial_list PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 300)
+    # The citation-ledger apparatus that used to sit here (rd_citations_fresh,
+    # rd_citations_partial_list, tracking/rd-citations.tsv, tools/gen_rd_citations.py)
+    # is torn down (rd vms-dc7, operator ruling 2026-08-06): it verified that a
+    # source comment cited an rd item id that resolved open in a committed
+    # snapshot, never anything about whether the labeled claim was true, and it
+    # could not see the ledger go stale between regenerations -- exactly the
+    # failure mode that let sys_lock.c cite a closed item and still print PASS
+    # (vms-344). The real proof for wired facilities remains the QEMU
+    # negative-control harness below; nothing here replaces or weakens it.
 
     # The QEMU harness reaches the right verdict (vms-b1f). run_tests.sh used
     # to decide "did this run report zero failed suites?" with a pipeline under

@@ -265,67 +265,36 @@
 #     things that were fixed years ago. Note the remedy: rewritten, not
 #     deleted. "Delete it" was the old remedy and it was the buy-off.
 #
-# THE ITEM ID, AND WHAT IT IS WORTH -- WHICH IS NOW MORE THAN A SHAPE, AND
-# STILL NOT EVERYTHING (rd vms-32e).
+# THE ITEM ID: A LABEL, NOT A CHECK (rd vms-dc7, tearing down vms-32e/vms-8cc).
 #
-# The id is REQUIRED, because "answers from userspace" as free text with
-# nothing tracking it is how this state persisted through the whole vms-14f
-# dispatch. Until vms-32e it was SHAPE-checked here and nothing more, and the
-# paragraph that used to sit here said the mechanism for checking it "belongs
-# in one place that both gates consume, not reimplemented here" -- which was
-# true, and was read as though the wiring had happened. IT HAD NOT. The
-# mechanism (tests/integration/lib/rd_citations.sh, rd vms-8cc) shipped wired
-# to the kif caller census ONLY, and three files said otherwise. MEASURED on
-# c73726a, the last revision that shipped that way: `sed s/(vms-6aa)/(vms-q9z9)/`
-# on src/libvms/syssvc/sys_qio.c -- an id that has never existed, two
-# declaration sites -- left this gate rc=0, PASS, printing `vms-q9z9 x2` in the
-# table below as though it were an owner. Two well-formed tokens, no other
-# edit. (rd vms-32e records the same attack on a single site.)
+# This gate used to call a shared checker (tests/integration/lib/rd_citations.sh)
+# that verified a cited id resolved to a row in a committed ledger snapshot of
+# rd, and that the row said "open". That checker is gone (rd vms-dc7): it never
+# ran anything against a real executive, and the property it verified --
+# whether a comment's citation still points at a currently-open tracking ticket
+# -- has no bearing on whether the answer it labels is actually correct. It
+# also could not see rd going stale between snapshot regenerations, which is
+# exactly the failure mode that motivated tearing it out rather than patching
+# it again.
 #
-# This gate now calls that shared checker. What that buys and what it does not
-# is stated at equal length in the library's own header; the short form, for
-# the declarations THIS gate parses:
-#
-#   BUYS - a fabricated id is RED: it resolves to no row in
-#          tracking/rd-citations.tsv, and regenerating that ledger records the
-#          id `absent` rather than inventing a row for it.
-#        - a CLOSED id is RED. A closed item tracks nothing, so it cannot be
-#          what a live facade is declared against.
-#        - a ledger that is missing, malformed, unstamped, stamped with an
-#          instant that cannot exist, stamped in the future, stripped to its
-#          header or carrying two rows for one id is a REFUSAL, not a skip.
-#          Each of those seven is provoked by its own negative control next
-#          door, so "destroying the evidence is not cheaper than fixing the
-#          citation" is a run rather than a boast.
-#        - the checker RESCANS src/ and tools/ itself, so an id cited by a
-#          declaration THIS gate's parser does not accept is still resolved.
-#          The parser here is not the floor on what gets checked.
-#   DOES - claim the cited item is the RIGHT one, or that anyone is working it.
-#   NOT    An open item is an owner, not a schedule.
-#        - check what the row SAYS. It asks whether the cited id has a row and
-#          whether that row's verdict is open -- never whether the row is
-#          actually ABOUT this declaration. That gap is real and open, tracked
-#          as vms-004e; it is a gap in the ledger and the checker this gate
-#          calls, not one this file can close by itself.
-#        - reach rd. rd is nostr-backed and unreachable from CI, so the answer
-#          comes from a committed SNAPSHOT whose age this gate prints every
-#          run. An item closed in rd since that stamp still reads open here,
-#          and a ledger row written by hand reads exactly like a derived one.
-#          tests/integration/test_rd_citations_fresh.sh re-derives the ledger
-#          from live rd and reds on any disagreement -- it needs rd, so it
-#          SKIPS in CI. That residual is closed on a host with rd and nowhere
-#          else.
-#
-# What the id still records, and this is the part the check does not replace,
-# is WHERE THE DECISION IS WRITTEN DOWN. The run prints the distinct items
-# cited and how many declarations each carries, so the concentration is visible
-# every time without anyone maintaining a number -- a register whose
-# declarations nearly all cite one item is describing one past sweep.
+# The id is kept as a REQUIRED but UNVERIFIED label: "answers from userspace"
+# as free text with nothing pointing at where that decision was made is how
+# this state persisted through the whole vms-14f dispatch. The register still
+# parses it, still prints which distinct items are cited and how many
+# declarations each carries (so a register that nearly all cites one item is
+# still visibly describing one past sweep), but it no longer claims the cited
+# id exists, is open, or was ever tracking anything real. That was always a
+# claim about a citation's bookkeeping, never about the executive.
 #
 # The reason text is required too, and unlike the census this gate insists on
 # it: the reason IS the register's content. An id alone records that somebody
 # noticed; the reason records WHAT ANSWERS INSTEAD, which is the fact a reader
 # of $SETAST needs.
+#
+# WHAT ACTUALLY PROVES A SERVICE IS EXECUTIVE-RESIDENT, since this gate never
+# did: tests/qemu/facility_defects.sh + run_facility_negctl.sh, which inject
+# real defects and observe real execution against /dev/vms. Quote that, not
+# this file's declaration table.
 #
 # EVERY CARDINAL BELOW IS DERIVED AND PRINTED BY THIS SCRIPT. There is no count
 # recited in this comment for a human to keep in step with the tree -- read the
@@ -346,27 +315,6 @@ if [ ! -d "$SRC_ROOT/src" ]; then
     echo "  -> if the tree moved, move this gate with it; do not delete the register."
     exit 1
 fi
-
-# THE CITATION CHECKER (rd vms-8cc, wired here by rd vms-32e).
-# Resolved from THIS FILE's directory, not from SRC_ROOT: it is gate code, not
-# tree data. SRC_ROOT is the tree under measurement -- the negative controls
-# hand it a sandbox copy, and a gate that loaded its own checker out of the
-# thing it is measuring could be disarmed by editing that copy.
-#
-# This failure is a PREREQUISITE failure, the same class as "no compiler" and
-# "no cmake": it is provoked by the gate's own install being broken, never by a
-# mutation of the tree, so the negative controls next door do not provoke it
-# and do not pretend to.
-CITE_LIB="$(cd "$(dirname "$0")" && pwd)/lib/rd_citations.sh"
-if [ ! -f "$CITE_LIB" ]; then
-    echo "FAIL: cannot find the citation checker at $CITE_LIB"
-    echo "  -> without it the item ids in OVMX declarations would be shape-checked"
-    echo "     only, which is the vms-32e defect: on the revision that shipped that"
-    echo "     way, one declaration repointed at the never-existent vms-q9z9 left"
-    echo "     this gate rc=0 and PASS. Restore it; do not drop the check."
-    exit 1
-fi
-. "$CITE_LIB"
 
 # ---------------------------------------------------------------- strippers --
 # A mention in a comment is not a definition and not a call. The DECLARATIONS
@@ -999,31 +947,6 @@ while IFS= read -r rawline; do
     fi
     printf '%s\n' "$rawline" >> "$WORK/decl_bad"
 done < "$WORK/decl_raw"
-
-# ------------------------------------------------ the cited item must be real --
-# THE CITED ITEM MUST EXIST AND BE OPEN (rd vms-32e).
-#
-# Every accepted declaration except OVMX-LOCAL carries an id (LOCAL's id is on
-# the OVMX-PARTIAL half it belongs to, so it is written "-" above and skipped
-# here rather than being resolved twice). Those ids go to the shared checker.
-#
-# WHAT HAPPENS TO A LINE THIS PARSER REJECTS, since that is the obvious way to
-# hide a citation from a check driven by a parser. Two things, neither of them
-# this block's doing: the line lands in decl_bad and is a RED in its own right,
-# AND the checker rescans src/ and tools/ for OVMX-<TOKEN>: markers itself, so
-# an id in a marker this parser does not accept is still resolved. The second
-# is the load-bearing one and it has its own negative control, which fabricates
-# an id in an OVMX-UNWIRED line -- a marker this gate never parses at all.
-#
-# The return is folded into status rather than exiting: a citation red must not
-# suppress the per-service reds or THE FLOOR below, which are what the rest of
-# this gate is for.
-awk -F'\t' '$4 != "-" { print $4 }' "$WORK/decl_ok" | sort -u > "$WORK/cited_ids"
-n_cite_sites=$(awk -F'\t' '$4 != "-"' "$WORK/decl_ok" | grep -c . || true)
-if ! rd_cite_check "$SRC_ROOT" "$WORK/cited_ids" "$WORK" \
-                   "${n_cite_sites:-0}" "an OVMX service declaration"; then
-    status=1
-fi
 
 # -------------------------------------------------------- the ioctl bridge --
 # THE ONE HOP THE CALL GRAPH CANNOT WALK. A service's answer path runs

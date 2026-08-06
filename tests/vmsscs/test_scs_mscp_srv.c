@@ -493,6 +493,30 @@ static void test_backing_store_and_read(void)
     check(scs_mscp_srv_read_blocks(u, 0, 2, buf, SCS_MSCP_BLOCK_SIZE) == -1,
           "a read into a buffer too small for the blocks asked for is refused");
 
+    /* --- READ BEFORE ONLINE. sec 6.14 lists Unit-Available among READ's
+     * statuses: a unit we serve but which no ONLINE has claimed cannot
+     * transfer. This arm exists because test_scs_mscp_srv_mutants.py MEASURED
+     * that without it the `!u->online` guard can be deleted outright and every
+     * other assertion in this file stays green -- the guard was untested, and
+     * an untested guard is the one a refactor removes. --- */
+    {
+        struct scs_mscp_view av;
+        uint8_t ab[SCS_MSCP_BODY_LEN], ae[SCS_MSCP_SRV_END_MAX];
+        make_command(ab, sizeof(ab), &av, 0x1feu, 0, SCS_MSCP_OP_READ, 0);
+        ab[SCS_MSCP_P_BCNT] = (uint8_t)(SCS_MSCP_BLOCK_SIZE & 0xff);
+        ab[SCS_MSCP_P_BCNT + 1] = (uint8_t)(SCS_MSCP_BLOCK_SIZE >> 8);
+        long an = scs_mscp_srv_handle(&srv, 2u, &av, ab, sizeof(ab), ae,
+                                      sizeof(ae));
+        check(an > 0 && scs_mscp_status_major(u16(ae, SCS_MSCP_P_STS))
+                            == SCS_MSCP_ST_AVAILABLE,
+              "a READ on a served unit that no ONLINE has claimed is "
+              "Unit-Available, NOT a transfer (sec 6.14)");
+        check(an > 0 && u32(ae, SCS_MSCP_E_BCNT) == 0,
+              "...and reports zero bytes transferred");
+        check(srv.blocks_read == 0,
+              "...and never reached the backing store");
+    }
+
     /* --- READ WITH NO TRANSFER HOOK: design decision (4). This is the INV-6
      * boundary and the single most important assertion in this file. --- */
     make_command(body, sizeof(body), &v, 0x200u, 0, SCS_MSCP_OP_READ, 0);

@@ -354,22 +354,34 @@ serves its blocks verbatim — which keeps Phase D on the protocol and leaves th
 on-disk format story untouched. **v1 is read-only and says so on the wire**
 (`UF.WPS` advertised; WRITE answered Write Protected `0x1006`).
 
-**WHAT PART 1 DOES NOT DO, and what part 2 needs.** Block data transfer is
-still unimplemented, so a READ with no transfer hook returns Controller Error
-and a zero byte count rather than a Success it cannot back up. Two wire-fidelity
-gaps block a real MOUNT and **neither is closable from the documentation**:
-(a) the GUS end message the builder emits is 106-content where every real VAX
-emits 110, and the four undecoded bytes past Table A-7 must, per §5's standing
+**WHAT PART 1 DOES NOT DO.** Block data transfer is still unimplemented, so a
+READ with no transfer hook returns Controller Error and a zero byte count
+rather than a Success it cannot back up. `vms-941` (block data transfer) and
+`vms-61b2` (LISTEN registration) both stay open behind that — registering
+`MSCP$DISK` before the responder can honour a mount is the exact facade
+`vms-61b2` refused to build.
+
+**THE TWO WIRE-FIDELITY GAPS ARE CLOSED — BY MEASUREMENT, NOT BY THE BOOK.**
+Part 1's first draft carried two gaps that blocked a real MOUNT and that
+**neither the documentation nor the joiner-side corpus could close**: (a) the
+GUS end message the builder emitted was 106-content where every real VAX emits
+110, and the four undecoded bytes past Table A-7 had to, per §5's standing
 instruction, be *copied from an observation rather than composed*; (b) `P.UNFL`
 bit 15 is set on all 404 valid-unit frames and Table A-5 defines no bit 15.
-Both need **a lab capture of a real VAX serving a disk to another VAX**, which
-the stock lab-2 configuration cannot produce — both nodes attach the same disk
-images and therefore never generate MSCP serving traffic between themselves.
-Producing that capture (a disk visible to only one node, `MSCP_LOAD`/
-`MSCP_SERVE_ALL` on the server, MOUNT from the peer) is part 2's first task.
-`vms-941` (block data transfer) and `vms-61b2` (LISTEN registration) both stay
-open behind it — registering `MSCP$DISK` before the responder can honour a
-mount is the exact facade `vms-61b2` refused to build.
+Both needed **a lab capture of a real VAX serving a disk to another VAX**,
+which the stock lab-2 configuration cannot produce — both nodes attach the same
+disk images and therefore never generate MSCP serving traffic between
+themselves. **That capture was taken inside part 1** (next section), and it
+settled both: the GUS end message is **110-content, 52 bytes**, with
+`body[48:50]` carrying the observed `0x006e` (copied, not composed) and
+`body[50:52]` left zero because a real server demonstrably leaves it as stale
+garbage; and `P.UNFL` bit 15 is **host-originated** — the class driver's ONLINE
+*command* carries `0x8000` and the server echoes it, which settles it as a
+design question without decoding its meaning. The same capture caught a third
+length the book had also not given away: **WRITE end messages are 36 bytes, not
+READ's 32**, which part 1 had assumed equal. All of these corrections are in
+`scs_mscp_srv.c`, are asserted by `test_scs_mscp_srv.c`, and are held there by
+the `scs_mscp_srv_mutants` battery.
 
 ### Phase D part 1's lab capture — SCA block data transfer, DECODED
 

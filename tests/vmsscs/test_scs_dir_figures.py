@@ -243,13 +243,29 @@ for path in SCANNED:
                   f"{QUOTE_BEGIN}/{QUOTE_END} block")
 
 # The refutation must actually exist -- a gate that passes because someone
-# deleted the correction entirely is worthless. All three carriers must still
-# hold a quoted refutation AND cite the tool that re-derives it.
+# deleted the correction entirely is worthless. Each carrier must still hold
+# THIS ITEM's OWN quoted refutation, checked by the SPECIFIC phrase it is
+# responsible for -- NOT a bare "some REFUTED-QUOTE block or other exists in
+# this file" check. That generic form stopped meaning anything the moment a
+# LATER item put an unrelated quarantine block in one of these same files
+# (vms-754 added one to both scs_dir.c and the spec): this item's own block
+# could be deleted whole and the file would still show >= 1 span. Measured:
+# that is exactly what happened -- QUARANTINE-dirc-block-deleted started
+# surviving the day vms-754's blocks landed, until this check was narrowed to
+# the specific phrase each carrier is actually pinned to.
+CORRECTION_PHRASE = {
+    SPEC: "having polled anybody",
+    SCSD_C: "having polled anybody",
+    DIR_C: "a request; the response has 1",
+}
 for label, path, txt in (("the spec", SPEC, spec_txt),
                          ("scsd.c", SCSD_C, scsd_txt),
                          ("scs_dir.c", DIR_C, dir_txt)):
-    check(len(quote_spans(txt.splitlines())) >= 1,
-          f"{label} still carries a {QUOTE_BEGIN} block (the correction was not deleted)")
+    norm_txt, _owner_txt = normalize(txt.splitlines())
+    phrase = CORRECTION_PHRASE[path]
+    check(phrase in norm_txt,
+          f"{label} no longer carries the refuted phrase {phrase!r} anywhere "
+          f"-- the correction was deleted, not just unquarantined")
     check("scs_dir_role_measure.py" in txt,
           f"{label} cites the tool that re-derives the correction")
 check(os.path.exists(MEASURE), "the measuring tool is checked in")

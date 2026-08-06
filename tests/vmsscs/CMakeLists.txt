@@ -860,6 +860,30 @@ set_tests_properties(scs_dir_figures PROPERTIES
     TIMEOUT 60
 )
 
+# vms-754 - THE FIGURES GATE for the MTYPE 4/5 decode. scs_dir.c's
+# SCS_DIR_OP_ACCEPT/SCS_DIR_OP_MSCP_CONFIRM read [46:48]==4/5 as an MSCP
+# connect-ACCEPT/CONFIRM pair; docs/cluster-protocol-spec.md sec 4(h)(1a) reads
+# the SAME field as REJECT_REQ/REJECT_RSP. tools/cluster/scs_t45_measure.py is
+# the decisive test (does application traffic ever follow on the same Con.ID
+# pair?) and resolves it in favour of the spec -- see scs_env.h, scs_dir.h and
+# spec sec 4(h)(1h). This gate pins every figure to the prose and reds if the
+# refuted "MSCP connect-ACCEPT/CONFIRM" reading resurfaces outside a
+# REFUTED-QUOTE-BEGIN/END block. It needs no captures for the prose half; on a
+# host with the lab-1 library it also re-derives from the packets (vms-371).
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_t45_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_t45_figures.py)
+else()
+    add_test(NAME scs_t45_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_t45_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_t45_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 60
+)
+
 # vms-591 - THE MUTATION BATTERY for scs_disc_figures. See the file header: it
 # found two real defects in that gate (a quarantine parser that accepted nested
 # markers, and a claim matcher that missed "neither 5 nor 7"), which is the

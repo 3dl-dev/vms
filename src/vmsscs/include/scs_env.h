@@ -137,6 +137,26 @@ extern "C" {
  * Figures 2-14/2-15/2-16 (spec sec 4(h)(1a)); the mapping onto the connection
  * state machine's events lives in scs_conn_event_for_msgtype() and is NOT
  * duplicated here. 8 and 9 are observed, paired, and UNIDENTIFIED (vms-f03).
+ *
+ * 4 and 5 WERE DISPUTED (vms-754, RESOLVED 2026-08-06). scs_dir.c's
+ * SCS_DIR_OP_ACCEPT(4) / SCS_DIR_OP_MSCP_CONFIRM(5) read this SAME field as an
+ * MSCP connect-ACCEPT/CONFIRM pair (vms-760, a 336-frame op-5 census), which
+ * disagreed with REJECT_REQ/REJECT_RSP below. Decisive test, re-derivable with
+ * tools/cluster/scs_t45_measure.py (`ctest -R scs_t45_figures`): an ACCEPT
+ * that binds a working connection must be followed, on that SAME Con.ID pair,
+ * by application traffic (MTYPE 10); a REJECT cannot be, because no
+ * connection is left to carry any. Over the 47-capture lab-1 library, 733/733
+ * MTYPE-4 dialogues are terminal -- 0 are EVER followed by MTYPE 10 -- against
+ * 388/394 for the undisputed ACCEPT_REQ (MTYPE 2) positive control. The EXACT
+ * frame vms-760 cited as its own grounding
+ * (af2-firsttimer-established-20260728.pcap, frame 2584, rel~143.758) is a
+ * real-VAX-to-real-VAX exchange with NO OVMX participant in that capture at
+ * all, and is one of nine identical rejections of a retried connect (10s
+ * apart, strictly increasing Con.ID, one explicit retransmit) immediately
+ * followed by a tenth attempt that switches message type to ACCEPT_REQ/RSP
+ * and succeeds. REJECT_REQ/REJECT_RSP is correct; scs_dir.c's reading was a
+ * misattribution -- see scs_dir.h for the correction and the still-open wire-
+ * behaviour question it leaves (out of scope for vms-754).
  */
 #define SCS_ENV_MTYPE_CONNECT_REQ     0u
 #define SCS_ENV_MTYPE_CONNECT_RSP     1u

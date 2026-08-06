@@ -162,10 +162,12 @@ extern "C" {
 
 #define SCS_DIR_CONFIRM_SCA_LEN   62
 #define SCS_DIR_CONFIRM_FRAME_LEN 76  /* 14 + 62 */
-/* vms-e81: the op-5 CONFIRM5 is FOUR BYTES SHORTER than the op-3 confirm -- the
- * trailing marker word is absent and BOTH length words are re-derived. It is not
- * "the confirm with a different opcode"; building it that way emits 62 bytes
- * declaring 60. See dir_confirm5_tmpl in scs_dir.c. */
+/* vms-e81: the op-5 frame (named CONFIRM5 here for its byte shape, though
+ * vms-754 corrects what op 5 actually IS -- see SCS_DIR_OP_MSCP_CONFIRM
+ * below) is FOUR BYTES SHORTER than the op-3 confirm -- the trailing marker
+ * word is absent and BOTH length words are re-derived. It is not "the confirm
+ * with a different opcode"; building it that way emits 62 bytes declaring 60.
+ * See dir_confirm5_tmpl in scs_dir.c. */
 #define SCS_DIR_CONFIRM5_SCA_LEN   58
 #define SCS_DIR_CONFIRM5_FRAME_LEN 72 /* 14 + 58 */
 
@@ -174,8 +176,49 @@ extern "C" {
 #define SCS_DIR_OP_CONNECT  0 /* connect-request / echo carries op=0 / op=1 */
 #define SCS_DIR_OP_RESPONSE 2 /* member connect-response supplies its handle */
 #define SCS_DIR_OP_CONFIRM  3 /* joiner connect-confirm (62-byte, no names) */
-#define SCS_DIR_OP_ACCEPT   4 /* vms-760 server-first: MSCP connect-ACCEPT (62-byte, binds our server handle) */
-#define SCS_DIR_OP_MSCP_CONFIRM 5 /* vms-760 server-first: the MEMBER's op=5 confirm of our MSCP accept (M->J) */
+/*
+ * SCS_DIR_OP_ACCEPT / SCS_DIR_OP_MSCP_CONFIRM -- MISIDENTIFIED, CORRECTED
+ * vms-754 (2026-08-06). [46:48] is ONE field, scs_env.h's shared MTYPE
+ * namespace (spec sec 4(h)(1a)), and this pair of names read it as an MSCP
+ * connect-ACCEPT/CONFIRM handshake:
+ * REFUTED-QUOTE-BEGIN
+ *   vms-760 grounded op 4 as an MSCP connect-ACCEPT and op 5 as its CONFIRM
+ *   (336 op-5 frames, 4 sender nodes, 15 captures) -- the peer accepts OUR
+ *   MSCP$DISK connect with an op-4 ACCEPT4, answered with an op-5 CONFIRM5.
+ * REFUTED-QUOTE-END
+ * tools/cluster/scs_t45_measure.py (`ctest -R scs_t45_figures`) settles it:
+ * these values are the shared-namespace REJECT_REQ(4)/REJECT_RSP(5), not an
+ * accept/confirm. Over the 47-capture lab-1 library, 733/733 MTYPE-4
+ * dialogues are TERMINAL -- 0 are EVER followed by application traffic on the
+ * same Con.ID pair -- against 388/394 for the undisputed ACCEPT_REQ (MTYPE 2)
+ * positive control; a real accept/confirm handshake should look like the
+ * latter, not the former. And the exact frame vms-760 cited as its own
+ * grounding (af2-firsttimer-established-20260728.pcap, frame 2584,
+ * rel~143.758) is a real-VAX-to-real-VAX exchange -- checked: every source
+ * MAC in that capture is VAX1's or VAX2's, no OVMX participant at all -- and
+ * is one of nine identical rejections of a retried connect (10s apart,
+ * strictly increasing Con.ID, one explicit op-0x7b retransmit) immediately
+ * followed by a tenth attempt that switches message type to ACCEPT_REQ/RSP
+ * and succeeds (its Con.ID pair goes on to carry live MSCP command traffic,
+ * the exact thing the nine op-4/op-5 pairs never do). That is textbook
+ * retry-until-accepted with the connect refused nine times, not "OVMX accepts
+ * a member's MSCP connect nine times before a real VAX also somehow accepts
+ * one a tenth time with a completely different message type."
+ *
+ * NOT FIXED HERE, AND SAID OUT LOUD RATHER THAN LEFT SILENT: src/vmsscs/scsd.c
+ * still BUILDS and CONSUMES frames through these constants believing they
+ * mean ACCEPT/CONFIRM -- i.e. when a real peer answers OVMX's MSCP$DISK
+ * connect with what is actually a REJECT_REQ, scsd.c currently marks
+ * ps->mscp_connected = 1 and proceeds as though the connection succeeded.
+ * That is a genuine wire-behaviour question (does this explain part of
+ * vms-abd's refusal?) and fixing it is a design-affecting change to the
+ * server-first MSCP accept path, deliberately OUT OF SCOPE for vms-754 (which
+ * settled the decode and applied the interim documentation/log-naming safety
+ * fix only) -- flagged here as a follow-up rather than silently fixed or
+ * silently left unmentioned. See src/vmsscs/scsd.c's FORM B comment.
+ */
+#define SCS_DIR_OP_ACCEPT   4 /* vms-754: actually the shared-namespace REJECT_REQ; kept under this name only because scsd.c still builds/reads it as such -- see the block above */
+#define SCS_DIR_OP_MSCP_CONFIRM 5 /* vms-754: actually the shared-namespace REJECT_RSP; see above */
 
 /* Recognizable OVMX SCS$DIRECTORY Con.ID ("OX" base | 7). OVMX design choice,
  * opaque to the peer (see header note). Distinct from OVMX's VMS$VAXcluster
@@ -412,14 +455,27 @@ int scs_dir_build_vc_echo(const struct scs_dir_params *p,
                           uint8_t out[SCS_DIR_ECHO_FRAME_LEN]);
 
 /*
- * scs_dir_build_mscp_accept - vms-760 SERVER-FIRST established-join: build the
- * op=4 CONNECT-ACCEPT that BINDS OVMX's MSCP$DISK server connection. Structurally
- * IDENTICAL to the op=3 dir CONNECT-CONFIRM (62-byte SCA, opcode 0x5b, marker
- * 0x00010000, NO SYSAP names) with the SINGLE fixed-byte delta op [46:48]=4
- * (vs 3). GROUNDED byte-exact from af2-firsttimer-established.pcap (J->M op=4,
- * rel~143.758). remote Con.ID [50:54]=p->remote_conid (member's MSCP client
- * handle), local Con.ID [54:58]=p->local_conid (OVMX's FRESH MSCP server handle,
- * opaque to the peer -- OVMX design choice). Returns 0, or -1 if p/out is NULL.
+ * scs_dir_build_mscp_accept -- vms-754 CORRECTION (2026-08-06): the "op=4
+ * CONNECT-ACCEPT" name below is REFUTED. See SCS_DIR_OP_ACCEPT in this header
+ * for the full grounding: op [46:48]=4 is the shared-namespace REJECT_REQ
+ * (scs_env.h), and the exact frame this builder cites as its template turns
+ * out to be a real-VAX-to-real-VAX rejection with no OVMX participant in that
+ * capture at all. The byte layout claims below (62-byte SCA, opcode 0x5b,
+ * marker 0x00010000, the op[46:48]=4 vs 3 delta, the Con.ID placement) are
+ * still an accurate BYTE-EXACT replay -- only the name and the "BINDS a
+ * server connection" claim are wrong.
+ * REFUTED-QUOTE-BEGIN
+ *   vms-760 SERVER-FIRST established-join: build the op=4 CONNECT-ACCEPT that
+ *   BINDS OVMX's MSCP$DISK server connection.
+ * REFUTED-QUOTE-END
+ * Structurally IDENTICAL to the op=3 dir CONNECT-CONFIRM (62-byte SCA,
+ * opcode 0x5b, marker 0x00010000, NO SYSAP names) with the SINGLE fixed-byte
+ * delta op [46:48]=4 (vs 3). GROUNDED byte-exact from
+ * af2-firsttimer-established.pcap (frame 2584, rel~143.758). remote Con.ID
+ * [50:54]=p->remote_conid, local Con.ID [54:58]=p->local_conid. Returns 0, or
+ * -1 if p/out is NULL. NOT rewired to stop building this frame -- vms-754 is
+ * a decode, not a wire-behaviour fix; see scsd.c's FORM B comment for the
+ * open follow-up question this leaves.
  */
 int scs_dir_build_mscp_accept(const struct scs_dir_params *p,
                               uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN]);
@@ -466,10 +522,19 @@ int scs_dir_parse(const uint8_t *frame, size_t len, struct scs_dir_view *v);
 #endif
 
 /*
- * scs_dir_build_mscp_confirm5 - op-5 CONFIRM5 answering a peer's op-4 ACCEPT4 on
- * a connection OVMX opened (the "form B" accept). remote_conid = the peer's
- * handle from the op-4's [54:58]; local_conid = the handle OVMX sent in its
- * op-0. incarnation is OUR OWN value, never an echo of the op-4's.
+ * scs_dir_build_mscp_confirm5 -- vms-754 CORRECTION (2026-08-06): "op-4
+ * ACCEPT4" / "form B accept" below is REFUTED, same grounding as
+ * SCS_DIR_OP_MSCP_CONFIRM in this header -- op [46:48]=5 is the
+ * shared-namespace REJECT_RSP. The byte layout (58-byte SCA, the four deltas
+ * from the op=3 template, remote/local Con.ID placement) is still accurate.
+ * REFUTED-QUOTE-BEGIN
+ *   op-5 CONFIRM5 answering a peer's op-4 ACCEPT4 on a connection OVMX
+ *   opened (the "form B" accept).
+ * REFUTED-QUOTE-END
+ * remote_conid = the peer's handle from the answered frame's [54:58];
+ * local_conid = the handle OVMX sent in its own op-0. incarnation is OUR OWN
+ * value, never an echo. NOT rewired to stop building this frame -- see
+ * scsd.c's FORM B comment for the open wire-behaviour follow-up.
  */
 int scs_dir_build_mscp_confirm5(const struct scs_dir_params *p,
                                 uint8_t out[SCS_DIR_CONFIRM5_FRAME_LEN]);

@@ -308,6 +308,12 @@ static const uint8_t dir_confirm_tmpl[SCS_DIR_CONFIRM_SCA_LEN] = {
  * [16] is 0x4b (SEQAPP), NOT a mirror of the op-4 being answered: 86 of the
  * observed pairs answer a 0x5b op-4 with a 0x4b op-5, and all three op-5s a real
  * VAX has ever sent AT OVMX are 0x4b.
+ *
+ * The BYTE SHAPE above is unaffected by vms-754 (2026-08-06): every offset,
+ * length and constant this comment measured is still exactly what a real op-5
+ * frame carries. What vms-754 corrects is the NAME "CONFIRM5" -- op 4/5 are
+ * the shared-namespace REJECT_REQ/REJECT_RSP (scs_dir.h, scs_env.h), not an
+ * MSCP accept/confirm; see dir_build_common()'s collision comment above.
  */
 static const uint8_t dir_confirm5_tmpl[SCS_DIR_CONFIRM5_SCA_LEN] = {
     /* [0:2]   */ 0x38, 0x00,                               /* outer length = 56 (SCA 58) */
@@ -405,20 +411,34 @@ static void dir_build_common(const uint8_t *dst_mac, const uint8_t *src_mac,
      * the nine separate copies of `put_le32(out + 14 + 50/54, ...)` that used to
      * sit in the per-class builders below, and the two open-coded MTYPE stores.
      *
-     * ⚠ A COLLISION THIS UNIFICATION MADE VISIBLE, recorded rather than
-     * resolved. The field at [46:48] is ONE field, and this module has been
-     * calling its values "directory operations" (SCS_DIR_OP_*) while
-     * scs_conn.c / spec sec 4(h)(1a) call the same values connection-control
-     * MESSAGE TYPES. They agree on 0/1/2/3 (CONNECT_REQ / CONNECT_RSP /
-     * ACCEPT_REQ / ACCEPT_RSP) and they DISAGREE on 4 and 5: vms-760 grounded
-     * op 4 as an MSCP connect-ACCEPT and op 5 as its CONFIRM (336 op-5 frames,
-     * 4 senders, 15 captures), while sec 4(h)(1a) maps 4 to REJECT_REQ and 5 to
-     * REJECT_RSP -- the latter BY POSITION ONLY, on a value it says appears on
-     * no capture we hold, a claim docs/design-mscp-direction.md sec 1.4 has
-     * since overturned (type 5 appears 4,536 times). Both readings cannot be
-     * right. Nothing here picks one: the builders keep emitting exactly the
-     * bytes they emitted before, and the disagreement is now a visible property
-     * of a shared namespace instead of two vocabularies that never met. */
+     * A COLLISION THIS UNIFICATION MADE VISIBLE -- RESOLVED, vms-754
+     * (2026-08-06). The field at [46:48] is ONE field, and this module used to
+     * call its values "directory operations" (SCS_DIR_OP_*) while scs_conn.c /
+     * spec sec 4(h)(1a) call the same values connection-control MESSAGE TYPES.
+     * They agreed on 0/1/2/3 (CONNECT_REQ / CONNECT_RSP / ACCEPT_REQ /
+     * ACCEPT_RSP) and disagreed on 4 and 5:
+     * REFUTED-QUOTE-BEGIN
+     *   vms-760 grounded op 4 as an MSCP connect-ACCEPT and op 5 as its
+     *   CONFIRM (336 op-5 frames, 4 senders, 15 captures), while sec 4(h)(1a)
+     *   maps 4 to REJECT_REQ and 5 to REJECT_RSP -- the latter BY POSITION
+     *   ONLY. Both readings cannot be right. Nothing here picks one.
+     * REFUTED-QUOTE-END
+     * tools/cluster/scs_t45_measure.py (`ctest -R scs_t45_figures`) settles
+     * it: sec 4(h)(1a) is correct. Over the 47-capture lab-1 library, 733/733
+     * MTYPE-4 dialogues are TERMINAL -- 0 are ever followed by application
+     * traffic (MTYPE 10) on the same Con.ID pair -- against 388/394 for the
+     * undisputed ACCEPT_REQ positive control, and the exact frame vms-760
+     * cited as its own grounding (af2-firsttimer-established-20260728.pcap,
+     * frame 2584, rel~143.758) is a real-VAX-to-real-VAX exchange with no
+     * OVMX participant in that capture at all, one of nine identical
+     * rejections of a retried connect immediately followed by a tenth attempt
+     * that switches message type to ACCEPT_REQ/RSP and succeeds. See
+     * scs_dir.h's SCS_DIR_OP_ACCEPT / SCS_DIR_OP_MSCP_CONFIRM entries for the
+     * full grounding and the wire-behaviour follow-up this decode opens
+     * (NOT fixed here -- out of scope for vms-754): scsd.c's server-first
+     * MSCP accept path still builds and consumes these bytes believing they
+     * mean ACCEPT/CONFIRM. The builders below keep emitting exactly the bytes
+     * they emitted before -- vms-754 is a decode, not a wire change. */
     if (env != NULL) {
         (void)scs_env_build(out + 14, sca_len, env);
     }
@@ -715,10 +735,11 @@ int scs_dir_build_mscp_accept(const struct scs_dir_params *p,
     /* Structurally the op=3 dir CONNECT-CONFIRM (same 62-byte SCA, opcode 0x5b,
      * marker 0x00010000, no SYSAP names). */
     /* vms-760: the SINGLE fixed-byte delta vs the confirm IS the MTYPE, op 4 --
-     * see the collision note in dir_build_common, which this item records and
-     * does not resolve. Con.ID pair bound: remote = member's MSCP client handle,
-     * local = OVMX's fresh MSCP server handle (the admission act for OUR server
-     * connection). */
+     * see the collision note in dir_build_common, RESOLVED by vms-754: op 4 is
+     * the shared-namespace REJECT_REQ, not an accept (SCS_DIR_OP_ACCEPT in
+     * scs_dir.h carries the full grounding). Con.ID pair still bound the same
+     * way: remote = member's MSCP client handle, local = OVMX's fresh MSCP
+     * server handle -- the byte layout is unchanged, only the name was wrong. */
     struct scs_env_fields env = { SCS_DIR_OP_ACCEPT, SCS_DIR_ENV_CREDIT_CONFIRM,
                                   p->remote_conid, p->local_conid };
     dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
@@ -805,14 +826,26 @@ int scs_dir_parse(const uint8_t *frame, size_t len, struct scs_dir_view *v)
 }
 
 /*
- * scs_dir_build_mscp_confirm5 - answer a peer's op-4 ACCEPT4 with an op-5
- * CONFIRM5, completing the "form B" accept of a connection WE opened.
+ * scs_dir_build_mscp_confirm5 -- vms-754 CORRECTION (2026-08-06). This
+ * function's own name and the "form A/form B accept" model below are
+ * REFUTED: op 4/5 are the shared-namespace REJECT_REQ/REJECT_RSP (see
+ * SCS_DIR_OP_ACCEPT / SCS_DIR_OP_MSCP_CONFIRM in scs_dir.h for the full
+ * grounding), not a second accept form. What is NOT refuted is the byte
+ * layout and the wedge-avoidance fix -- OVMX must still answer an op-4 with
+ * an op-5 on the wire (whatever it actually means) or a real peer that sent
+ * one gets nothing back and the caller retransmits forever; that half of
+ * this function's job stands. NOT rewired here -- see scsd.c's FORM B
+ * comment for the open wire-behaviour follow-up (out of scope for vms-754).
+ * REFUTED-QUOTE-BEGIN
+ *   answer a peer's op-4 ACCEPT4 with an op-5 CONFIRM5, completing the
+ *   "form B" accept of a connection WE opened.
  *
- * There are two accept forms on an MSCP$DISK connection and OVMX only ever
- * implemented half of each:
- *   form A: op 0 -> op 1 -> op 2 RESPONSE -> op 3 CONFIRM      (we handle this)
- *   form B: op 0 -> op 1 -> op 4 ACCEPT4  -> op 5 CONFIRM5     (we EMIT op 4 as
- *           a server, but could not CONSUME one as a client)
+ *   There are two accept forms on an MSCP$DISK connection and OVMX only ever
+ *   implemented half of each:
+ *     form A: op 0 -> op 1 -> op 2 RESPONSE -> op 3 CONFIRM      (we handle this)
+ *     form B: op 0 -> op 1 -> op 4 ACCEPT4  -> op 5 CONFIRM5     (we EMIT op 4 as
+ *             a server, but could not CONSUME one as a client)
+ * REFUTED-QUOTE-END
  *
  * The consequence was not a missing feature, it was a wedged node: when VAX3
  * answered our connect with an op-4 we silently dropped it, then retransmitted
@@ -822,8 +855,10 @@ int scs_dir_parse(const uint8_t *frame, size_t len, struct scs_dir_view *v)
  * three a real VAX sent AT OVMX. Con.ID convention is identical to the op-3
  * confirm: [50] = the peer's handle, taken from the op-4's [54]; [54] = our own,
  * the handle we put in our op-0. Nothing follows an op-5 -- across all 336 the
- * Con.ID pair never appears again (334 silent, 2 retransmits), so OVMX owes the
- * peer nothing further on that connection.
+ * Con.ID pair never appears again (334 silent, 2 retransmits) -- which
+ * tools/cluster/scs_t45_measure.py's corpus-wide census (733/733 terminal,
+ * against 388/394 for the undisputed ACCEPT_REQ positive control) shows is the
+ * REJECT signature, not "a bound connection needs no more".
  */
 int scs_dir_build_mscp_confirm5(const struct scs_dir_params *p,
                                 uint8_t out[SCS_DIR_CONFIRM5_FRAME_LEN])
@@ -831,9 +866,11 @@ int scs_dir_build_mscp_confirm5(const struct scs_dir_params *p,
     if (p == NULL || out == NULL) {
         return -1;
     }
-    /* op 5 -- the other half of the 4/5 collision noted in dir_build_common.
-     * [50] = the peer's handle, taken from its op-4's [54]; [54] = our own, the
-     * handle we put in our op-0. */
+    /* op 5 -- the collision noted in dir_build_common, RESOLVED by vms-754:
+     * this is a REJECT_RSP, not an accept confirm (see SCS_DIR_OP_MSCP_CONFIRM
+     * in scs_dir.h). Con.ID placement unchanged: [50] = the peer's handle,
+     * taken from the answered frame's [54]; [54] = our own, the handle we put
+     * in our op-0. */
     struct scs_env_fields env = { SCS_DIR_OP_MSCP_CONFIRM,
                                   SCS_DIR_ENV_CREDIT_CONFIRM, p->remote_conid,
                                   p->local_conid };

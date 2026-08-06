@@ -23,11 +23,11 @@
 #   RUN <defect> <suites that went red, space-joined, or "-"> <pass|fail>
 #   RED <defect> <suite or (harness)> <assertion text observed FAILing>
 #
-# generated-at: 2026-08-06T17:10:27Z
-# tree-commit: 1d4dfd9d3eaef7870285c33a1c0781dbdf46eb19
+# generated-at: 2026-08-06T18:27:04Z
+# tree-commit: 0960429ec77d8b492fbbc5214cc1ae59e7f779cf
 # positive-control: pass
 # defects-in-manifest: 46
-# suites-derived: 27
+# suites-derived: 28
 RUN	access-mode-escalation	test_kmod_access	pass
 RED	access-mode-escalation	test_kmod_access	... and still does not hold CMKRNL afterwards
 RED	access-mode-escalation	test_kmod_access	... and the mode is still USER after the denied escalation
@@ -192,7 +192,7 @@ RED	pcb-per-thread	test_kmod_bind	sibling thread's cluster state carries the fla
 RED	pcb-per-thread	test_kmod_ident	... and sees the identity the other thread stamped
 RED	pcb-per-thread	test_kmod_ident	... as the SAME process, not a second one (one PCB per process)
 RED	pcb-per-thread	test_kmod_ident	a second thread of the process is known to the executive
-RUN	bind-client-no-register	test_kmod_bind test_syssvc_ef_local test_syssvc_ef_mproc test_syssvc_ident test_syssvc_lock_status test_syssvc_procnam test_syssvc_setname test_syssvc_showdev test_syssvc_showproc test_syssvc_showterm test_syssvc_startup_service	pass
+RUN	bind-client-no-register	test_kmod_bind test_syssvc_authorize test_syssvc_ef_local test_syssvc_ef_mproc test_syssvc_ident test_syssvc_lock_status test_syssvc_procnam test_syssvc_setname test_syssvc_showdev test_syssvc_showproc test_syssvc_showterm test_syssvc_startup_service	pass
 RED	bind-client-no-register	test_kmod_bind	$DEQ released the lock
 RED	bind-client-no-register	test_kmod_bind	$ENQ EX granted through /dev/vms
 RED	bind-client-no-register	test_kmod_bind	$ENQ returned a lock id
@@ -206,6 +206,13 @@ RED	bind-client-no-register	test_kmod_bind	forked child resolves itself in the p
 RED	bind-client-no-register	test_kmod_bind	forked child's $SETEF reaches the executive
 RED	bind-client-no-register	test_kmod_bind	the executive entry is this process's own
 RED	bind-client-no-register	test_kmod_bind	vms_kif_open() then a BARE vms_kif_setident() reaches the executive with no explicit register
+RED	bind-client-no-register	test_syssvc_authorize	A: AUTHORIZE exited 0 for the admitted session
+RED	bind-client-no-register	test_syssvc_authorize	A: AUTHORIZE printed its version banner -- the SYSPRV holder was ADMITTED
+RED	bind-client-no-register	test_syssvc_authorize	A: the SYSPRV holder was never refused
+RED	bind-client-no-register	test_syssvc_authorize	A: the executive accepted the SYSPRV identity
+RED	bind-client-no-register	test_syssvc_authorize	A: the executive's own row holds exactly the SYSPRV mask this run stamped -- not a claim, a readback
+RED	bind-client-no-register	test_syssvc_authorize	B: the executive accepted the non-SYSPRV identity
+RED	bind-client-no-register	test_syssvc_authorize	B: the executive's own row holds exactly the OPER|WORLD mask this run stamped, with SYSPRV genuinely absent
 RED	bind-client-no-register	test_syssvc_ef_local	sys$clref(1) cleared the flag
 RED	bind-client-no-register	test_syssvc_ef_local	sys$clref(1) reported WASSET for the previously-set flag
 RED	bind-client-no-register	test_syssvc_ef_local	sys$clref(1) succeeded on the set flag

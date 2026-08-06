@@ -228,6 +228,10 @@ target_link_libraries(test_scsd_wire PRIVATE
     vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn
     vmsscs_depart vmsscs_dgram vmsscs_svc vmsscs_reason vmsscs_disc
     vmsscs_poll vmsscs_rx
+    # vms-aa1: scsd.c now calls scs_credit_* directly on both the send and the
+    # receive path, so the credit account is a DIRECT dependency of this test,
+    # not one that happens to arrive through vmsscs_depart.
+    vmsscs_credit
     # vms-578: the merged scsd.c drives the MSCP$DISK client builders, so the
     # unit-test seam needs them too (it #includes scsd.c whole).
     vmsscs_mscp
@@ -298,6 +302,39 @@ endif()
 set_tests_properties(scs_credit_figures PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 60
+)
+
+# vms-aa1 - THE MUTATION BATTERY FOR THE LIVE FLOW-CONTROL ACCOUNT.
+#
+# WHY IT EXISTS, in one fact: vms-76e and vms-1d2 shipped a fully unit-tested
+# pp. 2-43..2-45 credit account that NOTHING CALLED, and every one of those
+# tests stayed green throughout -- because they called the account themselves.
+# vms-aa1 moved the assertions onto the production path (the four test_credit_*
+# cases in test_scsd_wire.c); this battery is what makes "those assertions would
+# notice" a measurement. It breaks one live behaviour in scsd.c at a time,
+# rebuilds, and requires the C test to go NON-ZERO. It found two of its own
+# survivors on first run (an assertion comparing a banked 0 against a wire 0,
+# and a p. 2-35 source check no fed frame violated) -- both are now covered by
+# captured frames rather than by argument.
+#
+# The mutant count and the kill count are PRINTED by the script and deliberately
+# not restated here (the vms-6b3 precedent: a second copy of a figure is how a
+# coverage claim drifts). It needs a C compiler, which is why CMAKE_C_COMPILER
+# is passed through: the gate must run under whatever toolchain configured the
+# tree, musl-gcc included. Registered unconditionally.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_credit_live_mutants
+             COMMAND ${CMAKE_COMMAND} -E env OVMX_CC=${CMAKE_C_COMPILER}
+                     ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_credit_live_mutants.py)
+else()
+    add_test(NAME scs_credit_live_mutants
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_credit_live_mutants_no_python3.cmake)
+endif()
+set_tests_properties(scs_credit_live_mutants PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 600
 )
 
 # vms-abc - THE SEND SITE CENSUS. test_scsd_send_sites.py reads src/vmsscs/scsd.c

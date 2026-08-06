@@ -742,8 +742,13 @@ not a grounded offset.
 > markers; only the `0x?B13` members are SCS messages.
 >
 > Field map, evidence and the reader/stamper:
-> `src/vmsscs/include/scs_credit.h`. **OVMX does not yet stamp a live credit on
-> the wire** — see that header's reachability note.
+> `src/vmsscs/include/scs_credit.h`. **OVMX stamps a live credit on the wire as
+> of `vms-aa1`**, on outbound MTYPE-10 (application message) frames only: the
+> connection's Pending Receive Credit, debited and reset per p. 2-44, written at
+> the choke point `send_frame_vc()`. Every other MTYPE is transmitted with the
+> builder's own bytes at `[48:50]`, because there the field is a different
+> quantity (extension count for 0/2; 0 for 5/7; an unnamed constant 1 for 8/9).
+> Kill switch `OVMX_NO_CREDIT_ACCOUNTING=1` restores the pre-`vms-aa1` bytes.
 
 **Vote / quorum — GROUNDED NEGATIVE RESULT** (the vote-varying capture
 recommended below was **done** for `vms-cd0`, subsuming `vms-41d`). The joiner
@@ -1188,10 +1193,10 @@ What *is* grounded is the negative: the "request/response flag" reading is dead.
 **Why OVMX pins 0 anyway, and what is NOT grounded.** `dir_lookupreq_tmpl` in
 `src/vmsscs/scs_dir.c` is a byte-exact replay of SCA 29 (raw 37), the first
 lookup on its connection, so its `[48:50]` is 0 for the same reason the wire's
-is. OVMX **does not stamp a live credit on any frame** — that is the standing
-reachability gap recorded in `src/vmsscs/include/scs_credit.h`, not something
-this template decides — so every inquiry OVMX sends carries 0 whether it is the
-first on the connection or the fourth. That is a KNOWN DEVIATION from the
+is. OVMX **does not stamp a live credit on a directory inquiry** — `vms-aa1` wired
+the p. 2-44 piggyback for MTYPE 10 (application messages) ONLY, and these
+inquiries are not that class — so every inquiry OVMX sends still carries 0
+whether it is the first on the connection or the fourth. That is a KNOWN DEVIATION from the
 reference wire, recorded as §4h gap (f), and it is one of the unseparated
 candidates for the unanswered-inquiry gap below.
 
@@ -1410,8 +1415,8 @@ is not decoded. The field is the §4(d) credit (the "flag" reading is refuted,
 are the first message on each of the two directory connections, which is a
 correlation over n=2, not a rule. Consequently — and this is the OVMX-side half
 of the same gap — **OVMX stamps a constant 0 there on every inquiry it sends**,
-because it stamps no live credit on any frame (`scs_credit.h` reachability
-note). A reference exchange longer than one inquiry would show a `1` OVMX never
+because `vms-aa1` wired the live piggyback for MTYPE-10 application messages
+only and a directory inquiry is not one (`scs_credit.h` reachability note). A reference exchange longer than one inquiry would show a `1` OVMX never
 sends. Listed as a KNOWN DEVIATION and as one of the unseparated candidates
 for (e).**
 
@@ -3779,8 +3784,9 @@ For visibility, every field NOT marked GROUNDED above:
   - Consequence for OVMX: `src/vmsscs/scs_credit.c` implements the p. 2-44
     **trigger** (when a special credit message is owed, and what count it
     carries) and hands it to a per-CDT hook. **It builds no frame and OVMX emits
-    no special credit message.** Nothing installs the hook, and `vmsscs_credit`
-    is still not linked into `SCSD.EXE`.
+    no special credit message.** Nothing installs the hook. (`vmsscs_credit` IS
+    linked into `SCSD.EXE` and, since `vms-aa1`, called directly by `scsd.c` on
+    both the send and the receive path — the unwired part is this hook alone.)
 - **DATAGRAM BUFFER COUNT (the DFREEQ deposit) — UNGROUNDED, and an OVMX
   CHOSEN VALUE** (`vms-b1d`). *VAXcluster Principles* p. 2-42 has a SYSAP
   optionally request a number of datagram buffers for a connection through "an

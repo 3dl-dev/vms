@@ -108,20 +108,41 @@ target_link_libraries(vmsscs_cdt PUBLIC vmsscs_config)
 # sender is suspended and resumed FIFO when credit arrives, pp. 2-45..2-46) and
 # the p. 2-44 special credit message trigger.
 #
-# LINKED INTO scsd_exe SINCE vms-17f, and reached only on the TEARDOWN side.
-# `nm build/bin/SCSD.EXE | grep -c ' T scs_credit'` = 22. It arrives three ways,
-# all transitive -- vmsscs_depart, vmsscs_svc, and (vms-096) vmsscs_poll -- and
-# the production call sites are scs_depart.c:88, scs_svc.c:269 and
-# scs_poll.c:377, all scs_credit_wait_flush(), plus scs_credit_extend() at
-# scs_svc.c:250 which scsd.c only ever reaches with 0. OVMX still emits no live
-# credit, enters no Credit Wait and sends no special credit message, so every
-# flush drops zero waiters today.
+# vms-aa1 GAVE IT A LIVE DATA-PATH ENTRY POINT, and this entry is rewritten
+# rather than appended to because the previous one -- "OVMX still emits no live
+# credit" -- is now FALSE, and a stale reachability claim in a build file is
+# exactly the class of comment this epic keeps rejecting.
 #
-# NOTE (vms-096) the comment on vmsscs_reason below said the reason codec had no
-# production caller, by the same "OVMX builds no DISCONNECT_REQ" argument that
-# vms-591 falsified; both entries are corrected together so the two cannot drift
-# apart again. See the reachability notes in scs_credit.h -- do not read a green
-# test run as "OVMX does flow control".
+# What is live now, in scsd.c and nowhere else:
+#   - scsd_credit_stamp_outbound(), called from send_frame_vc(): every outbound
+#     MTYPE-10 (p. 4-13 application message) frame debits a Send Credit and
+#     carries the connection's Pending Receive Credit in the GROUNDED credit
+#     field at SCA [48:50] (scs_credit.h WIRE VERDICT). OVMX DOES emit live
+#     credit on the wire as of this item; OVMX_NO_CREDIT_ACCOUNTING=1 restores
+#     the builders' bytes exactly.
+#   - scsd_handle_frame(): an inbound MTYPE-10 credit field is added to that
+#     connection's Send Credit (scs_credit_on_recv), an inbound ACCEPT_REQ's
+#     credit field is the p. 2-43 initial extension (scs_credit_grant_from_peer),
+#     and a delivered message's buffer is released (scs_credit_release_buffer),
+#     which is what makes the NEXT piggyback non-zero.
+#
+# STILL NOT LIVE, stated so the gap is not read as coverage: no send enters a
+# Credit Wait (a starved send is transmitted unstamped and COUNTED as
+# `starved=` in the exit summary, because the frame's sequence number is already
+# consumed by the time the choke point sees it), and OVMX sends no special
+# credit message -- nothing installs the p. 2-44 emitter hook. Every
+# scs_credit_wait_flush() on the teardown side therefore still drops zero
+# waiters. Do not read a green test run as "OVMX implements p. 2-45".
+#
+# It arrives in scsd_exe three transitive ways (vmsscs_depart, vmsscs_svc,
+# vmsscs_poll) and is now ALSO named directly on the link line, because scsd.c
+# calls it directly and a direct caller depending on a transitive edge is one
+# refactor away from a link error.
+#
+# THE PATTERN, KEPT FROM THE ENTRY THIS REPLACED (vms-096): the vmsscs_reason
+# note below made the same "no production caller" claim by the same argument,
+# and vms-591 falsified it. Two modules have now had that claim go stale in this
+# file. When a third does, correct this entry and that one together.
 add_library(vmsscs_credit STATIC scs_credit.c)
 target_include_directories(vmsscs_credit PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -299,7 +320,7 @@ target_include_directories(scsd_exe PRIVATE
 # item was built but NOT linked into the daemon, exactly as scs_cdt.h said).
 # vms-578 adds vmsscs_mscp back: the worktree-760 CM layer merged into scsd.c
 # drives the MSCP$DISK client command builders after NEW.
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_mscp vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_mscp vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

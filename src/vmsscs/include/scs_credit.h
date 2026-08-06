@@ -249,13 +249,78 @@
  *       scs_svc.c:250     scs_credit_extend(), but ONLY when a caller passes a
  *                         nonzero send_credits/min_send_credits -- and scsd.c
  *                         passes 0 on every production connection.
- *     So the reached surface is the TEARDOWN half. Every flush drops zero
- *     waiters today, because nothing ever enters a Credit Wait (below).
- *   - OVMX STILL PUTS NO LIVE CREDIT ON THE WIRE, and THAT part was and remains
- *     true. Every frame OVMX emits carries whatever value its captured template
- *     had at [48:50]; no path above changes a transmitted byte.
- *     scs_credit_stamp_header() and scs_credit_read_header() exist, are
- *     unit-tested against real captured frames, and have ZERO production callers.
+ *     So the reached surface WAS the TEARDOWN half, and vms-aa1 added the DATA
+ *     half below. Every flush still drops zero waiters, because nothing ever
+ *     enters a Credit Wait (below).
+ *   - OVMX PUTS LIVE CREDIT ON THE WIRE AS OF vms-aa1. This bullet used to read
+ *     "OVMX STILL PUTS NO LIVE CREDIT ON THE WIRE ... scs_credit_stamp_header()
+ *     and scs_credit_read_header() ... have ZERO production callers", and it is
+ *     rewritten rather than appended to, because a superseded reachability claim
+ *     left standing next to its correction is how this file grew the last one.
+ *
+ *     THE DATA-PATH MECHANISM, in src/vmsscs/scsd.c and nowhere else:
+ *       scsd_credit_stamp_outbound(), called from send_frame_vc() -- the p. 2-31
+ *                         transmit choke point. Every outbound MTYPE-10 (p. 4-13
+ *                         application message) frame on a resolvable connection
+ *                         debits one Send Credit (p. 2-43) and carries the
+ *                         connection's Pending Receive Credit at [48:50]
+ *                         (p. 2-44), which is then reset. Frames of every other
+ *                         MTYPE are transmitted byte-unchanged -- their credit
+ *                         field is a DIFFERENT quantity (see the send-side note
+ *                         in scsd.c for the per-MTYPE grounding).
+ *       scsd_handle_frame(), at the p. 2-29 receive path: an inbound MTYPE-10
+ *                         credit field is added to that connection's Send Credit
+ *                         (scs_credit_on_recv), an inbound ACCEPT_REQ's credit
+ *                         field is banked as the p. 2-43 initial extension
+ *                         (scs_credit_grant_from_peer), and the buffer a
+ *                         delivered message consumed is released when the SYSAP
+ *                         returns (scs_credit_release_buffer) -- which is the
+ *                         only thing that ever makes a piggyback non-zero.
+ *     The daemon prints the whole ledger as its exit summary's CREDIT: line, so
+ *     a run whose account never moved says so in its own log.
+ *
+ *     WHAT IS STILL NOT LIVE: a starved send does NOT enter a Credit Wait. The
+ *     frame reaching the choke point has already consumed its VC sequence
+ *     number, so it is transmitted UNSTAMPED and counted as `starved=` rather
+ *     than queued or dropped. scs_credit_send_or_wait() therefore still has no
+ *     production caller, and neither does the special-credit emitter hook.
+ *
+ *     MEASURED ON A REAL WIRE, WITH THE KILL SWITCH AS A MATCHED CONTROL
+ *     (guardrail 23; lab-2 pod vaxlab-7, 2026-08-06, same pod, same runner,
+ *     same daemon md5 91eb759db227356083fa33b10b2b2795, same
+ *     OVMX_PURE_SERVER=1, 60 s each). Identities read back OUT OF THE CAPTURES,
+ *     not out of SCSD's log: OVMXY1 (arm A) and OVMXY2 (arm B, the control).
+ *     Captures /data/training/vax/k8s-labs/vaxlab-7/logs/d94-AA1{A,B}.pcap;
+ *     re-read them with tools/cluster/scs_credit_wire_check.py, which byte-reads
+ *     [48:50] and splits OVMX from real-VAX by the scs_rx.h source-MAC rule.
+ *
+ *       arm A, accounting ON : OVMX-emitted MTYPE 10 n=28, FIVE distinct credit
+ *                              values {0:6 1:17 2:3 3:1 5:1}
+ *       arm B, OVMX_NO_CREDIT_ACCOUNTING=1
+ *                            : OVMX-emitted MTYPE 10 n=22, THREE distinct
+ *                              values {0:4 1:15 2:3}
+ *
+ *     THE SWITCH DEMONSTRABLY GATED IT before any of that was credited to the
+ *     change: arm B's own exit summary reads
+ *     `CREDIT: stamped=0 units-sent=0 starved=0 no-cdt=0 banked=0 units-recv=0
+ *     grants=0 grant-units=0 buffers-released=0  [OVMX_NO_CREDIT_ACCOUNTING SET
+ *     -- nothing was debited, stamped or banked]`, against arm A's
+ *     `stamped=12 units-sent=18 starved=7 no-cdt=9 banked=20 units-recv=14
+ *     grants=0 grant-units=0 buffers-released=20`.
+ *
+ *     READ THE CONTROL'S THREE VALUES HONESTLY: they are NOT evidence of a live
+ *     account. {0,2} are OVMX template constants (scs_member.c's op-0x14/0x01
+ *     templates carry 0, its op-0x02 config template replays a captured 2) and
+ *     1 is the value the 0x81 CM response INHERITS from the peer's own frame.
+ *     What arm A adds is a value the control never emits and the peer never
+ *     sent on either capture (5), plus the ledger above. Arm A's 28 = 12
+ *     stamped + 7 starved + 9 no-CDT, which is the arithmetic check that the
+ *     ledger describes the frames actually on that wire.
+ *
+ *     NEITHER ARM JOINED (both stayed at CLUSTER_NODES=2). That is UNCHANGED by
+ *     this item and is the point of running the control: the arm carrying the
+ *     pre-item bytes did not join either, so the stamping did not break a join
+ *     that was working. Making the join work is vms-449/vms-2f3, not this.
  *   - The 0x48 "credit-return" emitter in scs_vc.c is untouched and is NOT this
  *     mechanism. It is a 1-for-1 ACK; the 41-byte 0x48 class is too short to
  *     even contain SCA offset 48. Whether the 0x48 short is SCA's "special
@@ -263,9 +328,15 @@
  *     NAME COLLISION WARNING, still worth stating: `scs_credit_build` in that
  *     symbol count is scs_vc.c's 0x48 frame builder and predates this module
  *     (vms-691). It is 1 of the 22, not evidence about this header.
- *   - Wiring the SEND side to the daemon needs per-connection credit on the
- *     production connections -- i.e. scsd.c passing nonzero send_credits into
- *     scs_connect()/scs_accept() -- which this item is fenced out of.
+ *   - HOW A PRODUCTION CONNECTION GETS ANY SEND CREDIT AT ALL. This bullet used
+ *     to say the send side "needs ... scsd.c passing nonzero send_credits into
+ *     scs_connect()/scs_accept()". vms-aa1 found that is not where it comes
+ *     from: scs_credit_extend()'s argument is what THIS node extends to the
+ *     REMOTE (its own receive buffers). Send Credit is what the PEER extends,
+ *     and the peer states it on the wire -- the credit field of its ACCEPT_REQ
+ *     (p. 2-43; spec sec 4(g)'s tunable match, 10 = CLUSTER_CREDITS). So the
+ *     daemon banks it from the frame rather than from a local argument, and
+ *     scs_svc.c:250 passing 0 is orthogonal to whether the send side works.
  *
  * PER THE DISPATCH: this is implemented for CORRECTNESS. It is NOT a fix for
  * the vms-2f3 rejoin failure and is not offered as one -- HANDOFF sec 4M.22
@@ -774,8 +845,12 @@ int scs_credit_read_header(const uint8_t *sca, size_t sca_len, uint16_t *out);
  * whatever the caller had put there. That is the wire-visible half of
  * OVMX_NO_CREDIT_ACCOUNTING.
  *
- * HAS NO PRODUCTION CALLER TODAY. See the reachability note: no OVMX builder
- * stamps a live credit, so no byte OVMX transmits is changed by this item.
+ * ITS PRODUCTION CALLER IS scsd_credit_stamp_outbound() in src/vmsscs/scsd.c,
+ * on the send_frame_vc() transmit path (vms-aa1). Bytes OVMX transmits DO
+ * change: an outbound MTYPE-10 frame's [48:50] carries the live Pending Receive
+ * Credit instead of its captured template's replayed value. That is the whole
+ * wire-visible surface of this module, and OVMX_NO_CREDIT_ACCOUNTING=1 restores
+ * the builders' bytes exactly.
  */
 int scs_credit_stamp_header(uint8_t *sca, size_t sca_len, unsigned credit);
 

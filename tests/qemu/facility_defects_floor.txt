@@ -28,4 +28,6 @@
 #   awk '/^DEFECTS="/{f=1;next} f&&/^"/{exit} f' tests/qemu/facility_defects.sh | wc -l
 #
 # Value as of the commit that added this file (vms-d894): 42 entries.
-42
+# Raised to 43 by vms-2b2's register-adopt-pid-not-reported (see its own
+# entry in facility_defects.sh for what it covers and why).
+43

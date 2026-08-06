@@ -254,10 +254,35 @@
 #   * It does NOT floor the number 42 against a rewrite of the suites. Nothing
 #     outside this repository enumerates the properties, so no check here can.
 #   * It does NOT say the 42 defects cover the executive. MEASURED (vms-279):
-#     of the 33 `vms_ioctl_*` handlers defined in src/kernel/*.c, exactly 9 are
+#     of the 33 `vms_ioctl_*` handlers defined in src/kernel/*.c, exactly 9 were
 #     inside a hunk any of these mutations edits. The translation-unit check
-#     below is satisfied by 7 files; the executive's ioctl surface is nearly
+#     below is satisfied by 7 files; the executive's ioctl surface was nearly
 #     five times wider. That gap is a finding, not something this file hides.
+#
+#     vms-2b2 MEASURED THE GAP BY EXECUTION, not by re-reading the line count.
+#     tests/qemu/facility_attribution.sh handlers (vms-38c) joins the manifest
+#     against a committed execution record instead of source line overlap, so
+#     it answers "which wired handlers have NO mutation that changes what they
+#     return" rather than "which handlers no hunk's line range happens to
+#     touch". Run against this tree, all 24 handlers vms-279 counted as
+#     uncovered come back UNPROBED -- zero of them are covered in effect
+#     through a shared-code-path mutation on a sibling handler in the same
+#     file; the line-level gap and the behavioural gap are the same gap here.
+#     Of those 24, 8 (setprv, chkpriv, dclast, deliverast, getlki, alloc,
+#     dalloc, ttsetmode) are OVMX-UNWIRED declarations (src/libvmssys/
+#     vms_kif.h) with zero product-tree callers -- exempt under the vms-1e1
+#     ruling, not a gap this file can close without inventing a caller. The
+#     other 16 have a real product-side caller (a DCL command or a sys$
+#     wrapper) and are not exempt. Of those 16, an existing QEMU assertion
+#     already checks a real result/side-effect for 14 (ascefc, convert,
+#     dacefc, dassgn, deq, devscan, dlcefc, enq, getdvi, getjpi, procscan,
+#     readef, register, setef) -- a manifest entry for each is mechanical, no
+#     new test-writing required, and `register`'s was added this session as
+#     `register-adopt-pid-not-reported` (raising MEASURED from 9/33 to
+#     10/33). `wflor` and `wfland` have NO test coverage at all (zero
+#     references anywhere under tests/qemu) and need a new assertion written
+#     and oracle-pinned before either can get a control. See vms-2b2 for the
+#     full split and the follow-up items for the remaining 13.
 #   * The anchor placement check is DELIBERATELY LOOSE. It requires the text
 #     following an anchor, up to the first `;`, to contain one of that defect's
 #     named assertion texts. It exists to catch an anchor parked in a comment
@@ -427,7 +452,8 @@ dcl-fuser-host-login-name
 dcl-fident-num2name-host-passwd
 dcl-fident-num2name-bracketed-uic
 dcl-fident-name2num-host-passwd
-opcom-header-host-login-name"
+opcom-header-host-login-name
+register-adopt-pid-not-reported"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2776,6 +2802,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    register-adopt-pid-not-reported)
+        case "$_f" in
+        facility)     echo "process registration / adoption (VMS_IOCTL_REGISTER, src/kernel/vms_module.c vms_ioctl_register)";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_kmod_setterm";;
+        blind_suites) echo "test_kmod_bind";;
+        blind_why)    echo "test_kmod_bind.c's own re-exec/adoption scenario calls vms_kif_register(NULL) -- the output pointer is NULL, so the adopted vms_pid this defect stops writing is never read back through REGISTER at all. That scenario's own identity checks (status, getjpi, prcnam, privs, uic, username) all go through a SEPARATE later vms_kif_getjpi_self() call, which reads proc->vms_pid straight out of the table -- a field this defect never touches, only the register ioctl's own reply copy of it. MEASURED: a run of this defect named only test_kmod_bind's assertion in require_fail and it came back green while an unnamed suite (test_kmod_setterm) went red instead -- the ignored-call trap this file's own header warns about, caught by running it rather than by re-reading the call site.";;
+        isolation)    echo "isolated";;
+        why)          echo "REGISTER on a process that already has an executive entry (the post-execve() adopt path, vms-9fc) stops copying the adopted process's own vms_pid into the reply. Status is still reported SS\$_NORMAL and the process is still genuinely adopted (the hash-table entry is unchanged) -- only the ANSWER the caller is given about which VMS process ID it now has is missing, the same facade shape as setterm-binding-not-recorded and devtab-owner-not-recorded: the operation happens, only the record of it going back to the caller does not. test_kmod_setterm.c's own re-exec scenario passes a non-NULL output pointer to vms_kif_register() on both the pre-exec (fresh, line 438, untouched) and post-exec (adopt, line 412, mutated) calls, and compares the two -- the one place in the suite set that reads REGISTER's own reply rather than re-deriving the pid through GETJPI.";;
+        require_fail) cat <<'EOF'
+and it is the same VMS process, so the binding was not re-made
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -2999,6 +3042,20 @@ apply_edit() {
         sed -i '/^static int lex_identifier(/,/^}$/ s|^            snprintf(result, result_size, "0");$|            { struct passwd *pw_ = getpwnam(id_str); if (pw_) { snprintf(result, result_size, "%d", (int)((pw_->pw_gid << 16) \| (pw_->pw_uid \& 0xFFFF))); } else { snprintf(result, result_size, "0"); } } /* NEGCTL dcl-fident-name2num-host-passwd */|' "$_file";;
     opcom-header-host-login-name)
         sed -i '/^static void get_current_username(/,/^}$/ s|^    strncpy(buf, info.username, bufsz - 1);$|    if (!info.username[0]) { struct passwd *pw_ = getpwuid(getuid()); if (pw_) { strncpy(buf, pw_->pw_name, bufsz - 1); buf[bufsz - 1] = 0; return; } } strncpy(buf, info.username, bufsz - 1); /* NEGCTL opcom-header-host-login-name */|' "$_file";;
+    register-adopt-pid-not-reported)
+        # Range-anchored to the ADOPT branch only (`if (proc) { ... return 0; }`
+        # right after the first vms_proc_find_or_err() call). The FRESH
+        # registration path lower in the same function has its own, textually
+        # identical `args.vms_pid = proc->vms_pid;` write; a bare match (no
+        # range) would hit both and trip two properties (adoption AND fresh
+        # registration) at once. The range opens at the first
+        # `proc = vms_proc_find_or_err();` in the file and closes at the
+        # adopt branch's own `return 0;` -- the first such line after it --
+        # so it cannot reach the fresh-registration branch's write, which
+        # comes later in the function. The write disappears after one
+        # application (replaced by a comment), so a second apply finds no
+        # match inside the range and is the no-op selftest requires.
+        sed -i '/^    proc = vms_proc_find_or_err();$/,/^        return 0;$/ s|^        args.vms_pid = proc->vms_pid;$|        /* NEGCTL register-adopt-pid-not-reported: vms_pid not copied back on adopt */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

@@ -121,6 +121,16 @@
 #ifndef R_X86_64_REX_GOTPCRELX
 #define R_X86_64_REX_GOTPCRELX 42  /* REX-prefixed relaxable GOTPCREL variant */
 #endif
+#ifndef R_X86_64_GOTPCRELX
+#define R_X86_64_GOTPCRELX     41  /* non-REX relaxable GOTPCREL variant (vms-e5d,
+                                     * grounded by docs/design-link-x86_64-relocs.md
+                                     * and readelf -r on real musl .o files: e.g.
+                                     * `cmp sym@GOTPCREL(%rip), reg` / other non-REX
+                                     * encodings gas can relax). Same disp32-write
+                                     * codegen as GOTPCREL/REX_GOTPCRELX — LINK.EXE
+                                     * does not implement the relaxation either
+                                     * way, so all three are handled identically. */
+#endif
 
 /* x86_64 TLSDESC ("gnu2" TLS dialect) relocations (vms-2e4). The type set is
  * grounded by docs/design-link-x86_64-relocs.md; the CODEGEN below was
@@ -1061,7 +1071,7 @@ static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slo
     } else if (type == R_AARCH64_LD64_GOT_LO12_NC) { /* 8-byte load, scale 3 */
         uint32_t imm = (uint32_t)((slot & 0xFFF) >> 3);
         *insn = (*insn & ~(0xFFFu << 10)) | (imm << 10);
-    } else { /* R_X86_64_GOTPCREL / R_X86_64_REX_GOTPCRELX */
+    } else { /* R_X86_64_GOTPCREL / R_X86_64_GOTPCRELX / R_X86_64_REX_GOTPCRELX */
         int64_t d = (int64_t)slot + add - (int64_t)site;
         *insn = (uint32_t)(uint64_t)d;
     }
@@ -1070,7 +1080,8 @@ static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slo
 static int is_got_reloc(uint32_t type)
 {
     return type == R_AARCH64_ADR_GOT_PAGE || type == R_AARCH64_LD64_GOT_LO12_NC ||
-           type == R_X86_64_GOTPCREL || type == R_X86_64_REX_GOTPCRELX;
+           type == R_X86_64_GOTPCREL || type == R_X86_64_GOTPCRELX ||
+           type == R_X86_64_REX_GOTPCRELX;
 }
 
 /* A synthesized TLSDESC entry (two quadwords): [0]=resolver (IMGACT fills with

@@ -328,9 +328,53 @@ mounts a served disk.
 keeps the worktree-760 empirical behavior (answer the op8 handshake, expect no
 ack for op9) and does not name the messages in the spec.
 
-**Phase D — MSCP disk-server posture (GATED, Baron's call — rd gate raised on
-vms-54f).** Recommendation: **minimal honest responder, flag stays OFF by
-default.** OVMX currently accepts the member-opened MSCP$DISK connect and then
+**Phase D — MSCP disk server. RULED 2026-08-06 (vms-34b): BUILD THE FULL
+SERVER, superseding this section's own recommendation below.** The operator
+overrode the "minimal honest responder" recommendation; the done condition is a
+real VAX running MOUNT against an OVMX-served unit and reading files on it.
+
+*PART 1 LANDED as `vms-291`* — `src/vmsscs/scs_mscp_srv.{h,c}`, the responder:
+SET CONTROLLER CHARACTERISTICS, GET UNIT STATUS (with the MD.NXU walk and its
+Unit-Offline terminator), ONLINE, READ and WRITE handling; a raw block image as
+the backing store; the sec 3.4 Controller-Online gate; UQB/HQB analogues only
+(no HULB — nothing to load-balance against). The SCC end message is built from
+fields and reproduces a **real captured VAX server answer byte for byte**,
+which is possible because the 86-content MTYPE-10 class turns out to be the SCC
+END and its 954 frames pair exactly with 954 SCC commands in the same corpus.
+Its parameter area is constant over all 954: `P.CNTF` `0xa004`, `P.CTMO` `20`,
+and `0x0547` in the word Table A-7 calls reserved — none of the three explained
+by AA-L619A-TK, all three recorded as observations rather than named, and
+`P.CNTF` notably **not** an echo of what the class driver requested.
+
+Two design decisions worth carrying forward. **The backing store is a raw block
+image and OVMX's `vmsfs` is deliberately not used**: MSCP is a block protocol
+and `vmsfs_ondisk.h` states it is not byte-compatible with real ODS-2, so a
+served volume's *content* must be a genuine VMS-made ODS-2 volume while OVMX
+serves its blocks verbatim — which keeps Phase D on the protocol and leaves the
+on-disk format story untouched. **v1 is read-only and says so on the wire**
+(`UF.WPS` advertised; WRITE answered Write Protected `0x1006`).
+
+**WHAT PART 1 DOES NOT DO, and what part 2 needs.** Block data transfer is
+still unimplemented, so a READ with no transfer hook returns Controller Error
+and a zero byte count rather than a Success it cannot back up. Two wire-fidelity
+gaps block a real MOUNT and **neither is closable from the documentation**:
+(a) the GUS end message the builder emits is 106-content where every real VAX
+emits 110, and the four undecoded bytes past Table A-7 must, per §5's standing
+instruction, be *copied from an observation rather than composed*; (b) `P.UNFL`
+bit 15 is set on all 404 valid-unit frames and Table A-5 defines no bit 15.
+Both need **a lab capture of a real VAX serving a disk to another VAX**, which
+the stock lab-2 configuration cannot produce — both nodes attach the same disk
+images and therefore never generate MSCP serving traffic between themselves.
+Producing that capture (a disk visible to only one node, `MSCP_LOAD`/
+`MSCP_SERVE_ALL` on the server, MOUNT from the peer) is part 2's first task.
+`vms-941` (block data transfer) and `vms-61b2` (LISTEN registration) both stay
+open behind it — registering `MSCP$DISK` before the responder can honour a
+mount is the exact facade `vms-61b2` refused to build.
+
+*The superseded recommendation is preserved below for the record.*
+
+~~Recommendation: **minimal honest responder, flag stays OFF by
+default.**~~ OVMX currently accepts the member-opened MSCP$DISK connect and then
 cannot serve a single command on it — an accepted connection that black-holes
 commands is exactly the dishonest-success shape INV-6 exists to kill, one
 layer up. The minimal responder answers SCC with a well-formed end message and

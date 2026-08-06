@@ -4846,6 +4846,117 @@ reproduced byte-identically in `by10` — not the connect-back at all. The
 ~660 s numbers were capture *lengths*, not protocol intervals. **No code change;
 the rule OVMX already follows is the grounded one.**
 
+### 4(w) The configuration poller's identity-conflict refusal (GROUNDED live, `vms-1ae`)
+
+A refusal that is **not** the `vms-2f3` stall, but is indistinguishable from it
+at the console — which is why it went unrecorded for so long. The peer prints
+
+```
+%PEA0, Remote System Conflicts with Known System - REMOTE NODE <ours>
+```
+
+on **both** VAX consoles, the VC opens, the peer's connect never comes, and
+`CLUSTER_NODES` never moves. `HELP/MESSAGE` on the lab VAX gives VMS's own
+explanation: *"The port driver configuration poller discovered a remote system
+with SCSSYSTEMID or SCSNODE equal to that of another system to which a virtual
+circuit is already open."*
+
+**The rule, as measured (13 arms, 3 lab-2 pods, 2026-08-06).** The poller keeps
+a record of every system it has recently seen on the wire, keyed on the pair
+(`SCSNODE`, `SCSSYSTEMID`). A joiner is refused when it matches such a record
+on **exactly one** of the two fields:
+
+| our identity vs. a recently-seen system | conflict | arms |
+|---|---|---|
+| both fields differ (a genuinely new system) | **no** | `1aeB`, `1aeD`, `1aeU3` — all three also **joined** |
+| same `SCSSYSTEMID`, different `SCSNODE` | **yes** | `1aeC` (pod 8), `1aeT2` (pod 7), `1aeU2` (pod 1) |
+| same `SCSNODE`, different `SCSSYSTEMID` | **yes** | `1aeE` (pod 8) — **n=1, unreplicated** |
+| **both fields the same — an exact rejoin** | **no** | `1aeG` (refused, but silently: 0 conflict lines) — **n=1, unreplicated** |
+
+**Read the `arms` column before leaning on a row.** Only the `SCSSYSTEMID` row
+has its specific field replicated across pods (three arms, three pods). The
+`SCSNODE` row rests entirely on `1aeE` and the exact-rejoin row entirely on
+`1aeG` — one arm each, both on `vaxlab-8`, and both inside the window discussed
+in the caveat under point 4.
+
+Four things follow, and the fourth is the one that matters to `vms-2f3`:
+
+1. **Either field alone is sufficient.** The message names `SCSSYSTEMID or
+   SCSNODE` and both halves were exercised separately. The `SCSSYSTEMID` half
+   is the well-bracketed one: three arms on three pods, each against a matched
+   fresh-identity control on the same pod minutes before and after. The
+   `SCSNODE` half is `1aeE` alone, and its *trailing* control did not hold —
+   see point 4.
+2. **An open VC is *not* required, despite the wording.** In `1aeT2` the
+   colliding system (`OVMXT0`) had been on the wire two minutes earlier and had
+   **never been admitted** — it never reached `CLUSTER_NODES=3` and no VC to it
+   was ever opened. The conflict fired anyway. Being *seen* is enough.
+3. **`SHOW CLUSTER` is NOT the oracle for the conflicting set — GROUNDED.**
+   Arm `1aeR` replayed the original `vms-0fe` collision (`OVMXP1`/1601 against
+   `OVMXY1`/1601) on the same pod, `vaxlab-7`: **no conflict**, even though
+   `SHOW CLUSTER` *still listed* `OVMXY1` as `BRK_NEW` at that moment. So the
+   poller's set is strictly smaller than `SHOW CLUSTER`'s — the latter is a safe
+   pre-flight, not a precise one.
+
+   **Why `1aeR` drew nothing is NOT established — do not cite this as an aging
+   result.** The tempting reading is that the record ages out: the same
+   collision on the same pod fired at +49 min (the original `vms-0fe`
+   observation) and not at +3.5 h (`1aeR`). But that is two points at two times
+   with nothing held constant between them, no measurement of the interval, and
+   a live confound — `vaxlab-7` refused *every* identity this session including
+   the fresh `1aeT1`, so its peer state differs from the pods that produced the
+   positive arms in at least one other way. Aging is one hypothesis; a
+   fourteenth arm holding the pod and the collision fixed while varying only
+   the delay is what would settle it, and it was not run.
+4. **⭐ An exact rejoin does not draw this conflict.** Arm `1aeG` re-ran
+   `OVMXZ4`/1804 eight minutes after that identity had actually **joined** the
+   same pod, and was refused with **zero** conflict lines on either console. So
+   the conflict signature does not fire on an exact-identity return the way it
+   fires on a field collision: whatever refused `1aeG` is **not** the refusal
+   this section describes, and **this section does not explain the `vms-2f3`
+   stall.**
+
+   **⚠ `1aeG` is NOT a cleanly bracketed arm — do not read it as ruling
+   `vms-2f3` in or out.** The pod-8 sequence was `1aeD` joined at 04:43 →
+   `1aeE` (`SCSNODE` collision, conflict) → **`1aeF`, a FRESH identity, FAILED
+   to join at 04:49** → `1aeG` at 04:51. The trailing fresh-identity control
+   therefore *did not hold*: by the time `1aeG` ran, `vaxlab-8` was refusing
+   **everyone**, new identities included. `1aeG` drawing no conflict lines is
+   consistent with the exact-rejoin reading, but it is equally consistent with
+   a pod that had simply stopped admitting anything, and this arm cannot
+   separate the two. The same failed control sits on the trailing edge of
+   `1aeE`.
+
+   What survives is the **narrow** claim: an exact-identity rejoin does not
+   produce the *same* console signature as a field collision. What does **not**
+   survive is any claim that `1aeG` positively demonstrates VMS distinguishing
+   *the same system returning* from *a different system claiming a used key*,
+   or that it rules `vms-2f3` out.
+
+   Two further caveats. `1aeG` is **n=1**, and `conflictbracket.sh` deletes the
+   prior-admission sidecar (§4d.2) on every arm, so it is a rejoin by a
+   previously-admitted *identity* presenting as a first-timer, not the full
+   `vms-2f3` reproducer. §4f.2 already refuted the sidecar as causal for the
+   refusal. **Replicate `1aeG` on a virgin pod, with a trailing control that
+   actually joins, before anything is built on it.**
+
+**Reading it off a capture without a console.** The two refusals separate on the
+wire. In a conflict arm the peers never emit our node name at all and total
+0x6007 traffic collapses (577–693 frames over the same window against
+3195–3729 for an admitted run); in a non-conflict refusal (`1aeF`, `1aeG`) the
+peers *do* carry our name in their own frames (3–7 occurrences from the VAX
+source MACs). Census per arm with
+`strings -a <pcap> | grep -oE 'OVMX[A-Z0-9]{2}'` cross-tabulated by Ethernet
+source — guardrail 4.
+
+**Why this is a harness bug before it is a protocol bug.** `tests/lab/tools/mk_sysgen.py`
+would mint any identity asked of it, so parallel agents collided:
+`OVMXY1` and `OVMXP1` were both minted on `SCSSYSTEMID` 1601, and `OVMXP2`/`OVMXY2`
+both on 1602. Every experiment run under a collided identity produces a null
+result that reads as a `vms-2f3` stall. The uniqueness guard added in `vms-1ae`
+refuses the collision at mint time (and names the store it collides with);
+`tests/integration/test_lab_identity_unique.sh` is its gate.
+
 ## 6. Using the dissector
 
 ```

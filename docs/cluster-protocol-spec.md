@@ -1058,7 +1058,9 @@ below content-relative per the §0 erratum):
   class partitions exactly {0 CONNECT_REQ, 2 ACCEPT_REQ, 10 application
   message}. This closes the vms-ecff identification: type 10 is not a tenth
   connection-control message — it is the carrier of *all* SYSAP payloads.
-- **Types `8`/`9` — REGISTERED, still unnamed.** 58-content class, paired
+- **Types `8`/`9` — type 8 IDENTIFIED as the special credit message by the
+  controlled experiment in (1g); type 9 stays unnamed.** The observations below
+  are the pre-experiment record and are kept as written. 58-content class, paired
   request/response on established connections (8 from A handles (X,Y), 9 from
   B handles swapped), envelope-only, credit field = 1 in every inspected
   exemplar; observed immediately preceding teardown
@@ -1093,7 +1095,10 @@ field at content `[48:50]`:
   halves (a response acknowledges; it does not extend buffers). Recorded as an
   observation — the p. 4-68 rule is stated for SSP ports, and we do not assert
   it verbatim for the LAN/NISCA path.
-- **The 8/9 = "special credit message" candidate is WEAKENED, not confirmed.**
+- **The 8/9 = "special credit message" candidate was WEAKENED here and is now
+  CONFIRMED for type 8 by (1g) below — read the two together.** The weakening
+  argument stands as written and was answered by moving SCSFLOWCUSH, not by
+  explaining the constant away.
   p. 2-44 requires a special credit message to *carry the local Pending Receive
   Credit count* — a quantity that varies with how many buffers were released.
   Types 8 and 9 carry a **constant 1** across 855 real-VAX frames, identical to
@@ -1424,6 +1429,124 @@ times with the handle pair swapped, where p. 2-44 describes no reply at all.
 Either observation alone is a mismatch; both together are why this section still
 **does not name them**. See §5 for the register entry, the eliminated
 hypotheses, and the three experiments that would discriminate next.
+
+**(1g) TYPE 8 IS THE SCA SPECIAL CREDIT MESSAGE — GROUNDED BY A CONTROLLED
+EXPERIMENT (`vms-f03`, 2026-08-06).** (1c) left the credit reading *weakened*:
+types 8/9 carried a **constant 1**, and p. 2-44 requires a special credit
+message to carry the *Pending Receive Credit count*, which varies. That
+weakening is now explained and the reading is confirmed — by moving the trigger
+rather than by finding more frames.
+
+*The knob, and why it is a legitimate one.* p. 2-44 states the VMS trigger
+exactly: "The VMS implementation of SCS considers the local Receive Credit count
+to be dangerously low if it is less than the sum of the local SYSGEN parameter
+**SCSFLOWCUSH** and the remote value for Minimum Send Credits." SCSFLOWCUSH is
+a documented, **dynamic** parameter (VAX/VMS V7.3 SYSGEN reports default 1, min
+0, max 16, Dynamic=D), so the threshold can be raised on one node with
+`WRITE ACTIVE` and no reboot, under a load held otherwise constant. Nothing is
+disassembled and nothing is patched — this is observation of a documented
+control, Rule 8 clean.
+
+*Method.* One lab-2 replica (`vaxlab-5`, `CLUSTER_NODES`=2 verified on both
+nodes before the run). A shared-file lock-contention loop on both nodes held the
+SCS message rate at ≈3 500–3 700 messages/s throughout. SCSFLOWCUSH was varied
+on **VAX1 only**; VAX2 stayed at 1 for every run and is the matched same-wire
+control. Node identity was proven **on the node**: VAX1's own
+`NCP SHOW EXECUTOR STATUS` printed `Physical address = AA-00-04-00-01-04`, and
+VAX2 answered `%SYSTEM-W-NOSUCHDEV` (no DECnet) so it keeps its SIMH hardware
+MAC `08:00:2b:62:02:09`. Each run is a 120 s capture on the pod's `br0`; the
+cushion was read back from `SYSGEN SHOW SCSFLOWCUSH` before every capture.
+
+| SCSFLOWCUSH on VAX1 | type-8 frames from VAX1 | rate | type-10 msgs/s |
+|---|---|---|---|
+| 1 (pre-bracket) | 0 | — | 3 674.7 |
+| 0 | 0 | — | 3 639.7 |
+| 8 | 26 719 | 222.8/s | 3 556.1 |
+| 16 | 64 305 | 536.3/s | 3 229.7 |
+| 1 (post-bracket) | 0 | — | 3 570.4 |
+
+**Zero type-8 frames at the default cushion — in 440 367 and 427 958 envelope
+frames respectively, bracketing the condition on both sides** — then a count
+strictly monotonic in the cushion. The application-message rate barely moves
+across the sweep, so this is not a traffic-volume artifact. VAX2, cushion fixed
+at 1, emitted **no type 8 in any run**.
+
+*The decode of `[48:50]` — an accounting identity, not a correlation.* Credit
+returned by VAX1 rides on two carriers: the ordinary piggyback in the type-10
+credit field, and the type-8 message. Summed, they must equal the number of
+messages VAX1 received, because a credit is returned per released buffer. They
+do, in every run:
+
+| run | credit on type-10 | + credit on type-8 | == msgs VAX2→VAX1 | error |
+|---|---|---|---|---|
+| cushion 1 (pre) | 224 020 | 0 | 223 975 | 0.020% |
+| cushion 0 | 221 439 | 0 | 221 413 | 0.012% |
+| cushion 8 | 179 192 | 36 707 | 215 873 | 0.012% |
+| cushion 16 | 139 429 | 57 012 | 196 411 | 0.015% |
+| cushion 1 (post) | 217 849 | 0 | 217 799 | 0.023% |
+
+Raising the cushion moves credit *between the two carriers* — 100% piggybacked
+at the default, 29% carried by type 8 at cushion 16 — while the total stays an
+exact count of messages received. `[48:50]` on a type 8 is therefore denominated
+in the same units as the piggybacked credit field and is the **Pending Receive
+Credit count**, which is p. 2-44's definition of the special credit message.
+
+*A second, independent dose-response — on the value, not the rate.* A higher
+cushion fires the message sooner, so it carries a smaller accumulated pending
+count: mean credit per type-8 is **1.3738** at cushion 8 and **0.8866** at
+cushion 16. The (1c) "constant 1" is thus explained rather than contradicted:
+at the default cushion the message fires only at genuine near-exhaustion, where
+the pending count is essentially always 1.
+
+*What a type-8 costs, and what type 9 is.* Reverse accounting (VAX2's piggyback
+against VAX1's message count) closes on VAX1's **type-10 messages alone** in
+every run, cushion-8 and cushion-16 included, to within 25–33 units. Two
+consequences: a type-8 message **does not consume a send credit**, and the
+credit value on the type 9 **is not a credit return** — adding it overshoots by
+exactly its own total (36 707 and 57 012), which would inflate VAX1's send
+credit without bound. Type 9 is an echo: over 26 719 and 64 305 pairs, every
+type 8 was answered by exactly one type 9 (zero unmatched, zero unanswered,
+p50 latency 0.13 ms) carrying the **identical** credit value.
+
+> **Type 9 is deliberately NOT named here.** p. 2-44 describes the special
+> credit message and **names no acknowledgment or response to it**. The wire
+> shows a strict one-for-one response half that the book does not document, so
+> naming it would be exactly the vms-c11 pattern this spec has rejected before.
+> Recorded as: *the response half of the special-credit exchange; carries an
+> echo of the credited count; book-unnamed.* It is a real book-vs-wire
+> divergence and it stays labelled as one.
+
+*Limits of this result, stated plainly.*
+- **The handle-swap claim in (1b)/(1c) was NOT tested by this run.** On this lab
+  both handle fields carry the **identical** 4-byte value (`0800fd82`), so a
+  reversal is undetectable. The pairing proven here is by direction and by
+  time-adjacency, not by handle swap.
+- All five runs are a **single** lab-2 replica and a single SYSAP (the lock
+  traffic of one connection — 8/9 appeared on exactly one connection).
+- The result does **not contradict** any lab-1 measurement — it explains lab-1's
+  constant-1 population as the default-cushion regime — so `tests/lab/README.md`'s
+  reproduce-on-lab-1 rule is not triggered. A lab-1 confirmation would still
+  strengthen it.
+- SCSFLOWCUSH=0 produced zero type-8 frames, same as 1; the threshold at 0 is
+  never reached under this load. Minimum Send Credits stays UNGROUNDED
+  (`vms-1d2`) — this experiment moves the *other* term of the sum.
+- 7 388 of the cushion-16 type-8 frames carry credit **0**, which p. 2-44's
+  "and if the local Pending Receive Credit count is greater than 0" does not
+  predict. Recorded as an observed implementation divergence, not smoothed over.
+
+Re-derive: `tools/scs_flowcush_measure.py` (15 checks) against
+`/data/training/vax/cluster/captures-lab2/vms-f03/`; gate
+`tests/vmsscs/test_scs_flowcush_figures.py`.
+
+**Consequence for `vms-abd`.** §1.4 noted an 8/9 exchange immediately preceding
+an accepted DISCONNECT_REQ and asked whether OVMX must reproduce it. It must
+not be read as a teardown handshake: type 8 is credit flushing, emitted whenever
+receive credit is low, and at teardown a draining connection is exactly when
+that happens. There is no evidence of a disconnect **precondition** here, which
+**confirms** the reframed hypothesis of `docs/design-mscp-direction.md` §4 —
+"Inappropriate SCA Control Message" is a **CSB state mismatch, not a missing
+message**. The 8/9-present vs 8/9-absent teardown comparison is no longer the
+next move for vms-abd; the peer's CSB state is.
 
 **(2) SCS$DIR_LOOKUP body — name resolution with a grounded negative marker.**
 Past the handle pair the body carries fixed-position, blank-padded ASCII SYSAP

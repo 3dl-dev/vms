@@ -175,6 +175,56 @@ credit counter; then decode the [48:50] value against the engineered pending
 count. If 8/9 emission tracks credit state, both vms-07a and vms-1d2 close
 with one decode.
 
+**RAN 2026-08-06 (`vms-f03`) — TYPE 8 IS THE SPECIAL CREDIT MESSAGE. Full
+method, tables and limits: spec §4(h)(1g).** The experiment was run with one
+deliberate change of instrument, and the change is why it worked. Engineering a
+*one-way SYSAP flow* means driving Receive Credit down to a fixed threshold;
+but p. 2-44 states the threshold itself as `local SCSFLOWCUSH + remote Minimum
+Send Credits`, and **SCSFLOWCUSH is a documented dynamic SYSGEN parameter**
+(V7.3: default 1, min 0, max 16, Dynamic). Moving the threshold up to meet the
+credit is the same experiment with a knob that DCL can actually turn, needs no
+custom SYSAP, and is reversible inside one session. Load was held at ≈3 500
+messages/s by shared-file lock contention while the cushion was varied on VAX1
+alone; VAX2 stayed at the default and is the matched same-wire control.
+
+Result, type-8 frames emitted by VAX1 per 120 s run, bracketed on both sides —
+SCSFLOWCUSH **1 → 0 frames**, **0 → 0 frames**, **8 → 26 719**, **16 → 64 305**,
+back to **1 → 0 frames** — with the type-10 rate flat across the sweep. VAX2
+emitted zero type 8 throughout. The decode of `[48:50]`
+is an accounting identity rather than a correlation: credit on type-10 plus
+credit on type-8, from VAX1, equals the messages VAX1 received, in every run
+(139 429 + 57 012 == 196 411 at cushion 16; 179 192 + 36 707 == 215 873 at
+cushion 8; error ≤ 0.023%). Raising the cushion moves credit between the two
+carriers and changes nothing else, so the field is the **Pending Receive Credit
+count**. A second dose-response confirms it on the value rather than the rate —
+mean credit per type-8 is **1.3738** at cushion 8 and **0.8866** at cushion 16,
+because a higher cushion fires the message earlier, on less accumulated credit.
+
+This also explains the constant-1 measurement that weakened the candidate: at
+the default cushion the message only fires at genuine near-exhaustion, where the
+pending count is essentially always 1.
+
+**Type 9 is NOT named.** Every type 8 drew exactly one type 9 back (26 719 and
+64 305 pairs, zero unmatched, p50 0.13 ms) echoing the identical value — but
+reverse accounting shows that value is *not* a credit return, and ch.2 p. 2-44
+documents no response to a special credit message at all. Recorded as the
+book-unnamed response half; naming it would be the vms-c11 pattern. Two further
+honest limits: the (X,Y)/(Y,X) **handle swap could not be tested** — both handle
+fields carry the identical value on this lab — and 7 388 cushion-16 type-8
+frames carry credit 0, which p. 2-44's "Pending Receive Credit > 0" condition
+does not predict.
+
+Re-derive with `tools/scs_flowcush_measure.py`; gate
+`tests/vmsscs/test_scs_flowcush_figures.py`. Captures (lab-2, host-only):
+`/data/training/vax/cluster/captures-lab2/vms-f03/`.
+
+**Consequence for vms-abd — the reframed hypothesis is CONFIRMED, and §1.4's
+suggested next move is retired.** The 8/9 exchange seen immediately before an
+accepted DISCONNECT_REQ is credit flushing on a draining connection, not a
+teardown handshake, so it is not a disconnect precondition. Comparing teardowns
+with and without a preceding 8/9 exchange would measure nothing; §4's CSB state
+mismatch is the live hypothesis.
+
 ### 1.4 Bonus: types 5 and 7 exist in captures we hold
 
 The spec (§4(h)(1a) and sec 5) records the "total absence of 5 and 7"

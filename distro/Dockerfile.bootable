@@ -176,16 +176,29 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR/ && \
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
-    # Ground-source gate: the SHIPPED DCL.EXE (the file that actually goes
-    # into the initramfs, not a copy elsewhere) must be the VMS-native
-    # ET_DYN LINK.EXE output — no DT_NEEDED, no DT_HASH.
-    DCL=/initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
-    readelf -h "$DCL" | grep -q "Machine:.*X86-64" || { echo "FAIL: shipped DCL.EXE not EM_X86_64"; exit 1; } && \
-    N=$(readelf -d "$DCL" 2>/dev/null | grep -c NEEDED || true) && \
-    [ "$N" -eq 0 ] || { echo "FAIL: shipped DCL.EXE has $N DT_NEEDED entries"; exit 1; } && \
-    H=$(readelf -d "$DCL" 2>/dev/null | grep -c HASH || true) && \
-    [ "$H" -eq 0 ] || { echo "FAIL: shipped DCL.EXE has $H DT_HASH entries"; exit 1; } && \
-    echo "OK: shipped DCL.EXE is VMS-native (EM_X86_64, zero DT_NEEDED/DT_HASH)" && \
+    # Ground-source gate: the SHIPPED DCL.EXE AND LOGINOUT.EXE (the files
+    # that actually go into the initramfs STARTUP execs at boot, not a copy
+    # elsewhere) must both be the VMS-native ET_DYN LINK.EXE output — no
+    # DT_NEEDED, no DT_HASH. Both are gated, not just DCL.EXE: STARTUP execs
+    # LOGINOUT.EXE first (src/ovmx_init/ovmx_init.c), and LOGINOUT is what
+    # authenticates against SYSUAF and execs DCL.EXE next (tools/
+    # vms_login.c) — LOGINOUT is the FIRST VMS-native image in the login
+    # chain, and a DCL.EXE-only gate would not have caught a regression
+    # that reintroduced an ld/ld.so-linked LOGINOUT.EXE ahead of it (vms-fbc).
+    # This is a re-check of the ACTUAL SHIPPED bytes, deliberately redundant
+    # with the generic 9-artifact loop in the link-native stage above (which
+    # checks the build-output copies, not what cp placed in the initramfs):
+    # a gate that only proves properties of a source file two directories
+    # away from the one that boots is not proof of what boots.
+    for name in "DCL.EXE" "LOGINOUT.EXE"; do \
+        IMG="/initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/$name" && \
+        readelf -h "$IMG" | grep -q "Machine:.*X86-64" || { echo "FAIL: shipped $name not EM_X86_64"; exit 1; } && \
+        N=$(readelf -d "$IMG" 2>/dev/null | grep -c NEEDED || true) && \
+        [ "$N" -eq 0 ] || { echo "FAIL: shipped $name has $N DT_NEEDED entries"; exit 1; } && \
+        H=$(readelf -d "$IMG" 2>/dev/null | grep -c HASH || true) && \
+        [ "$H" -eq 0 ] || { echo "FAIL: shipped $name has $H DT_HASH entries"; exit 1; } && \
+        echo "OK: shipped $name is VMS-native (EM_X86_64, zero DT_NEEDED/DT_HASH)"; \
+    done && \
     # Pack the fat initramfs
     cd /initramfs-fat && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx.cpio.gz && \
     echo "FAT initramfs: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"

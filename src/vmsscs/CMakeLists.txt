@@ -320,7 +320,9 @@ target_include_directories(vmsscs_mscp PUBLIC
 )
 # vms-ec7: shares the SCS message envelope (scs_env.h) instead of hand-writing
 # the inner length / format word / MTYPE / credit / Con.ID-pair stores.
-target_link_libraries(vmsscs_mscp PUBLIC vmsscs_env)
+# vms-020: also links vmsscs_member for scs_member_vms_time_now() -- P.TIME
+# (sec 6.16) is live host time, not a frozen capture replay.
+target_link_libraries(vmsscs_mscp PUBLIC vmsscs_env vmsscs_member)
 
 # vms-291 (MSCP epic Phase D) - THE OTHER HALF: the MSCP disk SERVER responder.
 # vmsscs_mscp builds the commands OVMX sends as a disk client; this answers the

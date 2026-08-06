@@ -207,15 +207,17 @@ extern "C" {
 /* P.HTMO 0 == "host-access timeout disabled" (sec 6.16). The golden SCC's value. */
 #define SCS_MSCP_SCC_HOST_TIMEOUT 0x0000u
 
-/* ⚠ P.TIME: A FROZEN CAPTURE TIMESTAMP, and it is a labeled REPLAY, not a
- * design choice. sec 6.16 defines this quadword as VAX/VMS time -- 100 ns clunks
- * since 00:00 17-Nov-1858 -- "or 0 if unavailable". This constant decodes to
- * 2026-07-28 12:59:58.46 UTC, which is the wall-clock instant the golden af2
- * capture was taken; a live client sends the CURRENT time. Emitting it keeps
- * this Phase-B refactor wire-neutral, which is the whole point of the change;
- * replacing it with live host time is a WIRE change that wants a lab join to
- * confirm, and is filed as follow-up work, not smuggled in here. */
-#define SCS_MSCP_SCC_TIME_AF2 ((uint64_t)0x00bc021975280bc0ULL)
+/* P.TIME (vms-020): sec 6.16 defines this quadword as VAX/VMS absolute time --
+ * 100 ns clunks since 00:00 17-Nov-1858 -- "or 0 if unavailable". OVMX used to
+ * emit SCS_MSCP_SCC_TIME_AF2, a frozen replay of the af2 capture's own wall
+ * clock (2026-07-28 12:59:58 UTC), on every SCC regardless of when the join
+ * actually happened. scs_mscp_scc_defaults() now calls
+ * scs_member_vms_time_now() (scs_member.h) -- the same live-host-time helper
+ * scs_start.c and scs_member.c already use for their own quadword-time fields
+ * -- so P.TIME reflects the actual join instant. THIS CHANGES WIRE OUTPUT:
+ * every byte of P.TIME now varies run to run instead of matching the golden
+ * af2 capture; anyone running a rejoin experiment against that captured wire
+ * needs to know P.TIME is no longer byte-comparable to it. */
 
 /* GROUNDED seed tokens from af2-firsttimer-established.pcap. sec 5.1 makes the
  * whole 32-bit P.CRF opaque -- "unique, non-zero", echoed verbatim, unique only

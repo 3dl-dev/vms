@@ -421,6 +421,8 @@ eflag-setef-status-inverted
 eflag-readef-status-inverted
 eflag-dacefc-status-wrong
 eflag-dlcefc-status-wrong
+eflag-wflor-status-wrong
+eflag-wfland-status-wrong
 lock-compat-ex-cr
 lock-compat-cr-ex
 lock-valblk-grant-not-delivered
@@ -906,6 +908,71 @@ EOF
         why)          echo "\$DLCEFC reports SS\$_UNASEFC -- the pre-set default it never overwrites -- for a permanent cluster it actually found and marked for deletion (perm cleared, freed immediately if nothing else is associated). The deletion happens; only the caller-visible confirmation of it does not.";;
         require_fail) cat <<'EOF'
 parent: sys$dlcefc accepted the permanent cluster by name
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    eflag-wflor-status-wrong)
+        case "$_f" in
+        facility)     echo "event flags -- \$WFLOR's own success status (VMS_IOCTL_WFLOR)";;
+        targets)      echo "kernel/vms_eflag.c";;
+        # vms-2ed. MEASURED at the 9-of-33 audit: no existing mutation hunk
+        # sits inside vms_ioctl_wflor's own body -- eflag-waitfr-eintr-normal's
+        # own apply_edit comment explicitly notes its range-anchor excludes
+        # WFLOR's copy of the same "args.status = SS_NORMAL;" text. This is
+        # the first defect anchored inside \$WFLOR itself, made possible by
+        # vms-2ed's new test_syssvc_ef_mproc.c scenario -- before that, no
+        # suite in the tree called sys\$wflor at all.
+        #
+        # THE WAIT PREDICATE ITSELF IS LEFT UNTOUCHED ON PURPOSE.
+        # wait_event_interruptible()'s mask comparison still runs and still
+        # wakes correctly -- only the post-wait STATUS WORD is corrupted.
+        # Corrupting the underlying wait/bit state was tried and rejected
+        # for the sibling lock-enq defect this session: it can HANG the
+        # guest. RANGE-ANCHORED to vms_ioctl_wflor's own body: this exact
+        # "args.status = SS_NORMAL;" also appears in vms_ioctl_waitfr (4-space,
+        # earlier in the file) and vms_ioctl_wfland (4-space, later).
+        suites_red)   echo "test_syssvc_ef_mproc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$WFLOR reports SS\$_ILLEFC instead of SS\$_NORMAL after its wait predicate is genuinely satisfied (at least one mask flag set) -- the wait itself resolved correctly, only the caller-visible confirmation of it did not.";;
+        require_fail) cat <<'EOF'
+parent: sys$wflor returned with only ONE of the two mask flags set -- OR, not AND
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    eflag-wfland-status-wrong)
+        case "$_f" in
+        facility)     echo "event flags -- \$WFLAND's own success status (VMS_IOCTL_WFLAND)";;
+        targets)      echo "kernel/vms_eflag.c";;
+        # vms-2ed. MEASURED, same audit: no existing mutation hunk sits
+        # inside vms_ioctl_wfland's own body, for the same reason as
+        # eflag-wflor-status-wrong above. Made possible by the same new
+        # test_syssvc_ef_mproc.c scenario, which is the only place in the
+        # tree that genuinely BLOCKS a process in \$WFLAND (proven via a
+        # bounded-silence check with only one of two required flags set)
+        # before releasing the second flag and expecting it to unblock --
+        # so this is the one suite that can tell "wait resolved, status
+        # lied" apart from "wait never resolved at all".
+        #
+        # THE WAIT PREDICATE ITSELF IS LEFT UNTOUCHED, same reasoning as
+        # \$WFLOR's sibling entry. RANGE-ANCHORED to vms_ioctl_wfland's own
+        # body: this exact "args.status = SS_NORMAL;" also appears in
+        # vms_ioctl_waitfr and vms_ioctl_wflor (both 4-space, earlier in
+        # the file).
+        suites_red)   echo "test_syssvc_ef_mproc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$WFLAND reports SS\$_ILLEFC instead of SS\$_NORMAL after its wait predicate is genuinely satisfied (every mask flag set) -- the blocked process is really released by the second sys\$setef (the child's own read-back at that point still shows both bits set), only the caller-visible confirmation of success does not survive.";;
+        require_fail) cat <<'EOF'
+parent: sys$wfland unblocked only once BOTH mask flags were set (AND, not OR)
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -2228,6 +2295,7 @@ parent: a common flag SET BY THE CHILD via sys$setef is visible here (B writes, 
 parent: sys$ascefc after the deletion created a cluster of that name again
 parent: sys$ascefc created a PERMANENT common cluster
 parent: sys$ascefc created/joined the named common cluster
+parent: sys$ascefc joined the cluster the WFLOR/WFLAND measurement uses
 parent: sys$ascefc joined the cluster the interrupted-wait measurement uses
 parent: sys$ascefc re-joined the permanent cluster by name
 parent: sys$clref on the associated common cluster reported success
@@ -2240,8 +2308,11 @@ parent: sys$setef on an UNASSOCIATED common flag is refused WHILE a local flag s
 parent: sys$setef on the associated common cluster reported success
 parent: sys$setef on the permanent cluster reported success
 parent: sys$setef released the waiter's flag
+parent: sys$setef sets the flag $WFLOR will find already satisfied
 parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
+parent: sys$wflor returned with only ONE of the two mask flags set -- OR, not AND
 parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
+parent: wfland child never reported it was ready to block
 sys$clref(1) cleared the flag
 sys$clref(1) reported WASSET for the previously-set flag
 sys$clref(1) succeeded on the set flag
@@ -2430,6 +2501,29 @@ refuse to be satisfied by a facility that does nothing, and with the bind
 deleted the facility does nothing -- so it fails, exactly as designed. A
 manifest that named only the "succeeds" assertions and not this one would be
 describing a different, kinder defect.
+
+FOUR MORE IN test_syssvc_ef_mproc, ADDED vms-2ed -- SAME MISSING BIND, READ
+OFF A RUN OF THIS CONTROL AGAINST THE NEW $WFLOR/$WFLAND SCENARIO, NOT
+PREDICTED. That scenario is a THIRD process pair in the same suite (the
+first two are the interrupted-wait pair above and the plain shared-flag
+pair before it), so it needs its own $ASCEFC/$SETEF to stand the cluster up
+before $WFLOR/$WFLAND can be exercised at all -- an unbound parent fails
+that setup exactly as it fails the other two pairs' setup, and the two
+assertions that read the setup back ("parent: sys$ascefc joined the cluster
+the WFLOR/WFLAND measurement uses", "parent: sys$setef sets the flag
+$WFLOR will find already satisfied") go red for the same reason
+test_syssvc_ef_mproc's other require_fail/knock_on_fail entries do. The
+remaining two are the scenario's own two properties failing to be reached
+at all: "parent: sys$wflor returned with only ONE of the two mask flags
+set -- OR, not AND" never gets a real $WFLOR call to observe (the setup
+that would satisfy its predicate never ran), and "parent: wfland child
+never reported it was ready to block" is the forked WFLAND child never
+reaching its own readiness marker, one layer down, same shape as suite 3's
+forked child above. None of this is the eflag-wflor-status-wrong or
+eflag-wfland-status-wrong DEFECT itself -- those mutate vms_ioctl_wflor/
+wfland's own status word and are unreachable from an unbound process in
+the first place, which is exactly why bind-client-no-register's own red
+set is these four setup/reachability assertions and not those two.
 
 TEST_SYSSVC_SHOWDEV, THE SIXTH SUITE, ADDED vms-fb9 r6 -- READ OFF THE PROOF
 RE-RUN THIS ITEM WAS ASKED TO DO, NOT PREDICTED. test_syssvc_showdev.c
@@ -3413,6 +3507,18 @@ apply_edit() {
         # file -- dlcefc's own found-and-marked success, inside its
         # list_for_each_entry_safe loop.
         sed -i 's|^        args\.status = SS__NORMAL;$|        args.status = SS__UNASEFC; /* NEGCTL eflag-dlcefc-status-wrong */|' "$_file";;
+    eflag-wflor-status-wrong)
+        # RANGE-ANCHORED to vms_ioctl_wflor's own body. This exact 4-space
+        # "args.status = SS_NORMAL;" also appears in vms_ioctl_waitfr
+        # (earlier in the file) and vms_ioctl_wfland (later); vms_ioctl_wflor
+        # is defined between them, so the range excludes both.
+        sed -i '/^long vms_ioctl_wflor/,/^}$/ s|^    args\.status = SS__NORMAL;$|    args.status = SS__ILLEFC; /* NEGCTL eflag-wflor-status-wrong */|' "$_file";;
+    eflag-wfland-status-wrong)
+        # RANGE-ANCHORED to vms_ioctl_wfland's own body, same reasoning as
+        # its WFLOR sibling above -- this exact "args.status = SS_NORMAL;"
+        # also appears in vms_ioctl_waitfr and vms_ioctl_wflor, both earlier
+        # in the file.
+        sed -i '/^long vms_ioctl_wfland/,/^}$/ s|^    args\.status = SS__NORMAL;$|    args.status = SS__ILLEFC; /* NEGCTL eflag-wfland-status-wrong */|' "$_file";;
     lock-compat-ex-cr)
         sed -i 's|/\* EX \*/ {  1,  0,  0,  0,  0,  0 },|/* EX */ {  1,  1,  0,  0,  0,  0 }, /* NEGCTL lock-compat-ex-cr */|' "$_file";;
     lock-compat-cr-ex)

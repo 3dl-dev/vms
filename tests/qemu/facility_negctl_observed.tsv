@@ -23,10 +23,10 @@
 #   RUN <defect> <suites that went red, space-joined, or "-"> <pass|fail>
 #   RED <defect> <suite or (harness)> <assertion text observed FAILing>
 #
-# generated-at: 2026-08-06T21:02:56Z
-# tree-commit: 72b232921b5da26996613932509f15b82ab17a16
+# generated-at: 2026-08-06T22:30:33Z
+# tree-commit: 4b9a2c1bd7a0f40c760016f290b1d075732a6da9
 # positive-control: pass
-# defects-in-manifest: 55
+# defects-in-manifest: 57
 # suites-derived: 28
 RUN	access-mode-escalation	test_kmod_access	pass
 RED	access-mode-escalation	test_kmod_access	... and still does not hold CMKRNL afterwards
@@ -74,6 +74,10 @@ RED	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dacefc released t
 RED	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dacefc released the marked cluster
 RUN	eflag-dlcefc-status-wrong	test_syssvc_ef_mproc	pass
 RED	eflag-dlcefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dlcefc accepted the permanent cluster by name
+RUN	eflag-wflor-status-wrong	test_syssvc_ef_mproc	pass
+RED	eflag-wflor-status-wrong	test_syssvc_ef_mproc	parent: sys$wflor returned with only ONE of the two mask flags set -- OR, not AND
+RUN	eflag-wfland-status-wrong	test_syssvc_ef_mproc	pass
+RED	eflag-wfland-status-wrong	test_syssvc_ef_mproc	parent: sys$wfland unblocked only once BOTH mask flags were set (AND, not OR)
 RUN	lock-compat-ex-cr	test_kmod_lock	pass
 RED	lock-compat-ex-cr	test_kmod_lock	ENQ EX+NOQUEUE denied (CR held)
 RUN	lock-compat-cr-ex	test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status	pass
@@ -310,6 +314,7 @@ RED	bind-client-no-register	test_syssvc_ef_mproc	parent: a common flag SET BY TH
 RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$ascefc after the deletion created a cluster of that name again
 RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$ascefc created a PERMANENT common cluster
 RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$ascefc created/joined the named common cluster
+RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$ascefc joined the cluster the WFLOR/WFLAND measurement uses
 RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$ascefc joined the cluster the interrupted-wait measurement uses
 RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$ascefc re-joined the permanent cluster by name
 RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$clref on the associated common cluster reported success
@@ -323,8 +328,11 @@ RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$setef on an UNASSOC
 RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$setef on the associated common cluster reported success
 RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$setef on the permanent cluster reported success
 RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$setef released the waiter's flag
+RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$setef sets the flag $WFLOR will find already satisfied
 RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
+RED	bind-client-no-register	test_syssvc_ef_mproc	parent: sys$wflor returned with only ONE of the two mask flags set -- OR, not AND
 RED	bind-client-no-register	test_syssvc_ef_mproc	parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
+RED	bind-client-no-register	test_syssvc_ef_mproc	parent: wfland child never reported it was ready to block
 RED	bind-client-no-register	test_syssvc_ident	A: F$GETJPI("","USERNAME") returns the name the EXECUTIVE holds -- the programmatic path reads the same source the display does
 RED	bind-client-no-register	test_syssvc_ident	A: SHOW PROCESS does NOT report the user name planted in VMS_USERNAME
 RED	bind-client-no-register	test_syssvc_ident	A: SHOW PROCESS reports the UIC the EXECUTIVE holds

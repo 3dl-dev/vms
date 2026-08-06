@@ -33,6 +33,7 @@
 #include <string.h>
 
 #include "scs_env.h" /* vms-ec7: THE shared SCS message envelope */
+#include "scs_cdt.h" /* vms-8de: struct scs_cdt::send_credit, the live credit read */
 
 /*
  * THE SCA/PPD HEADER of the 94-content MSCP command class: SCA content [0:58],
@@ -239,16 +240,22 @@ int scs_mscp_build_command(const struct scs_mscp_params *p,
      * Con.ID pair. This is the frame class docs/design-mscp-direction.md sec 1.2
      * identifies: an MSCP command nested under an SCS header, Figure 4-5.
      *
-     * CREDIT 1 IS A LABELED REPLAY of the golden af2 joiner command's [48:50],
-     * not a computed extension: this builder has no CDT and therefore no Pending
-     * Receive Credit to piggyback. The live account is stamped further down the
-     * transmit path by scsd_credit_stamp_outbound() (vms-aa1), which overwrites
-     * this same field on every outbound MTYPE-10 frame. Naming it here is what
-     * makes that overwrite legible instead of invisible. */
+     * CREDIT (vms-8de): a live READ of p->cdt->send_credit when the caller
+     * passed a CDT for this connection (the normal scsd.c case, looked up by
+     * local_conid) -- the same accounting scsd_credit_stamp_outbound()
+     * (vms-aa1) owns; this builder invents no second source of truth. It is
+     * still overwritten (via the same read, one debit later) further down the
+     * transmit path by scsd_credit_stamp_outbound() on every outbound MTYPE-10
+     * frame, so the field written here never reaches the wire as-is -- naming
+     * it live here is what makes that overwrite legible instead of invisible.
+     * With no CDT (p->cdt == NULL, e.g. a unit test with no CDL), this falls
+     * back to SCS_MSCP_ENV_CREDIT, the golden af2 joiner command's [48:50]
+     * LABELED REPLAY this field used unconditionally before this item. */
     {
         struct scs_env_fields env;
         env.mtype = SCS_ENV_MTYPE_APP_MESSAGE;
-        env.credit = SCS_MSCP_ENV_CREDIT;
+        env.credit = (p->cdt != NULL) ? (uint16_t)p->cdt->send_credit
+                                       : SCS_MSCP_ENV_CREDIT;
         env.dest_conid = p->remote_conid;
         env.src_conid = p->local_conid;
         (void)scs_env_build_frame(out, SCS_MSCP_FRAME_LEN, &env);

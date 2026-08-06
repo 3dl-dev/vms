@@ -269,12 +269,25 @@ check(re.search(r"REJECT_REQ", dir_c) is not None,
 # ===========================================================================
 # 4. THE FOLLOW-UP BUG STAYS ON THE RECORD (not fixed here -- vms-754 scope)
 # ===========================================================================
-check(re.search(r"vms-abd|follow-?up|separate item|out of scope", dir_c, re.I)
-      is not None or re.search(r"vms-abd|follow-?up|separate item|out of scope",
-                                scsd_c, re.I) is not None,
-      "neither scs_dir.c nor scsd.c records that the server-first MSCP accept "
-      "path still emits/consumes these bytes as if they meant ACCEPT/CONFIRM "
-      "-- a genuine wire-behaviour question this item deliberately did not fix")
+# A generic "vms-abd|follow-?up|separate item|out of scope" OR-search is
+# vacuously satisfiable: scsd.c already carries THREE unrelated matches
+# (~line 547 "is a separate item", ~line 4992 "vms-abd", ~line 7803 "is an
+# open ... separate question") that have nothing to do with vms-754's own
+# follow-up disclosure. Pin to the SPECIFIC sentence each carrier actually
+# owns, and require BOTH -- scs_dir.c's op-4/op-5 builder comment and
+# scsd.c's FORM B accept-path comment are two independent places this fact
+# must survive, not interchangeable alternatives.
+FOLLOWUP_PHRASE = {
+    DIR_C: "scsd.c's server-first",
+    SCSD_C: "marks ps->mscp_connected = 1 on a connection the peer actually",
+}
+for label, path, txt in (("scs_dir.c", DIR_C, dir_c), ("scsd.c", SCSD_C, scsd_c)):
+    phrase = FOLLOWUP_PHRASE[path]
+    check(phrase in txt,
+          f"{label} no longer carries the specific follow-up-disclosure phrase "
+          f"{phrase!r} -- the disclosure that the server-first MSCP accept "
+          f"path still misreads a REJECT_REQ/REJECT_RSP as ACCEPT/CONFIRM "
+          f"(vms-257) was deleted, not just reworded")
 
 # ===========================================================================
 # 5. THE LAB FENCE (vms-096)

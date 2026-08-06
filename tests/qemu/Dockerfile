@@ -228,14 +228,22 @@ COPY . /src/repo/
 # correct and is NOT the "one binary by literal name" defect the comment
 # above warns about: that rule is about which TEST suites reach the image
 # (still a glob), not about which product image a suite needs.
+# BUILD_TOOLS=ON (vms-4c2): tools/CMakeLists.txt is only CONFIGURED here, not
+# fully built -- the --target list below still names exactly the binaries
+# this image needs, so flipping this on adds one requested target
+# (vms_authorize) without pulling vms_login/vms_mail/vms_monitor/etc. into
+# the build. OVMX_STATIC + BUILD_TOOLS=ON is not new ground: distro/
+# Dockerfile.bootable already builds the WHOLE tools/ tree this way for the
+# bootable distro image, so vms_authorize compiling static+musl here is
+# precedented, not a first attempt.
 RUN cd /src/repo && \
     cmake -B build-static \
         -DCMAKE_C_COMPILER=musl-gcc \
         -DCMAKE_BUILD_TYPE=Release \
         -DOVMX_STATIC=ON \
         -DBUILD_TESTS=ON \
-        -DBUILD_TOOLS=OFF \
-    && cmake --build build-static --target qemu_syssvc_tests vmsdcl --parallel $(nproc) 2>&1 && \
+        -DBUILD_TOOLS=ON \
+    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
     # DCL.EXE (already built above in the qemu_syssvc_tests/vmsdcl target
@@ -248,7 +256,15 @@ RUN cd /src/repo && \
     # asserting on the reader helper alone would leave dcl_cmd_show.c
     # ungated in the one environment where it can actually work.
     echo "--- DCL.EXE (the shipped image test_syssvc_showdev/procnam/showproc drive) ---" && \
-    ls -la build-static/bin/DCL.EXE
+    ls -la build-static/bin/DCL.EXE && \
+    # AUTHORIZE.EXE (vms-4c2): same reasoning as DCL.EXE above, for
+    # tests/qemu/test_syssvc_authorize.c. check_privilege() in
+    # tools/vms_authorize.c reads the executive's own privilege mask for
+    # THIS process -- proving it discriminates SYSPRV holders from
+    # everyone else needs the real binary run against a real /dev/vms,
+    # not a unit test of the read helper in isolation.
+    echo "--- AUTHORIZE.EXE (the shipped image test_syssvc_authorize drive) ---" && \
+    ls -la build-static/bin/AUTHORIZE.EXE
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
@@ -359,6 +375,14 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
       { echo "FATAL: DCL.EXE was not built into the static tree -- SHOW SYSTEM would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/bin/DCL.EXE && \
     cp /initramfs/bin/DCL.EXE /initramfs/tests/DCL.EXE && \
+    # AUTHORIZE.EXE (vms-4c2), staged at /bin/AUTHORIZE.EXE --
+    # tests/qemu/test_syssvc_authorize.c execs it by that path. Absence is
+    # FATAL, not skipped, for the same reason as DCL.EXE above: a missing
+    # subject would silently turn the SYSPRV admit/refuse assertions into
+    # no-ops with the job still green.
+    { cp /src/repo/build-static/bin/AUTHORIZE.EXE /initramfs/bin/AUTHORIZE.EXE || \
+      { echo "FATAL: AUTHORIZE.EXE was not built into the static tree -- the SYSPRV positive control would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x /initramfs/bin/AUTHORIZE.EXE && \
     # THE SYSTEM DATA FILES F$IDENTIFIER READS (vms-2f8).
     #
     # F$IDENTIFIER used to answer from a hardcoded pair of names inside

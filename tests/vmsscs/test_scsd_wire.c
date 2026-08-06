@@ -7877,6 +7877,223 @@ static void test_the_diskrun_gate_default_and_override(void)
     CHECK(unsetenv("OVMX_DISKRUN_GATE_MS") == 0, "unsetenv failed");
 }
 
+/*
+ * vms-fb1: THE LAST TWO PRE-RECV TIMER BLOCKS THAT WERE STILL INLINE IN
+ * main()'S LOOP, closing the gap this file's own header comment named --
+ * "the remaining pre-recv timer blocks in main()'s loop (the VC reissue timer
+ * is still reachable only from main())". The vms-4071 formation reissue timer
+ * and the vms-66f process-poll refresh were both inline blocks that iterated
+ * `peers[]` and decided, PER PEER, whether to act; SCSD_UNIT_TEST renames
+ * main() away, so that DECISION LOOP -- as opposed to the state-machine calls
+ * it makes -- was compiled but reachable from no test. They are now
+ * scsd_vc_reissue_tick() and scsd_poll_refresh_tick(); the two tests below
+ * drive THOSE functions, not the state machine or the poller module directly
+ * (test_vc_reissue_and_abandon_through_the_daemon() and
+ * test_the_process_poller_asks_and_a_yes_reaches_the_sysap() already cover
+ * those layers by hand-driving scs_vc_fsm_timeout()/scsd_vc_emit()/
+ * scsd_vc_settle() and scs_poll_add_node()/scs_poll_tick() respectively --
+ * that is the correct scope for THOSE tests, and doing it again here would be
+ * the by-hand-transition antipattern this epic has already rejected once).
+ * What was never exercised is the LOOP: which peers it picks, what it counts
+ * into `rx`, and what it does on the branch it does not take. A mutant
+ * deleting scsd_vc_emit(), scsd_vc_settle(), scs_poll_add_node(),
+ * scs_poll_drop_node() or scs_poll_tick() from inside either function reds
+ * one of these two cases.
+ */
+
+/* Run the production reissue tick with its logging captured, like rx_sweep does. */
+static unsigned rx_vc_reissue_tick(struct rxworld *r, uint64_t now_ms)
+{
+    log_capture_begin();
+    unsigned n = scsd_vc_reissue_tick(&r->rx, now_ms);
+    log_capture_end();
+    return n;
+}
+
+/* Run the production poll-refresh tick with its logging captured. */
+static void rx_poll_refresh_tick(struct rxworld *r, uint64_t now_ms)
+{
+    log_capture_begin();
+    scsd_poll_refresh_tick(&r->rx, now_ms);
+    log_capture_end();
+}
+
+static void test_vc_reissue_tick_drives_the_daemon_loop(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+
+    /* GUARD: do_connect == 0 must stop the loop cold, with no peer needed to
+     * prove it -- an empty peer table would make this trivially true even if
+     * the guard were deleted, so this has to run before any peer exists. */
+    r.rx.do_connect = 0;
+    CHECK(rx_vc_reissue_tick(&r, 999999999UL) == 0,
+          "the reissue tick ran with do_connect == 0");
+    r.rx.do_connect = 1;
+
+    uint8_t peer_mac[6];
+    mac_of(0x75, peer_mac);
+    uint8_t sysid[6];
+    sysid_of(1025, sysid);
+    struct peer_state *ps = peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, peer_mac);
+    CHECK(ps != NULL, "no peer slot for the reissue-tick test");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&r.w.cfg, ps, sysid);
+    scs_vc_init(&ps->vc);
+
+    /* Arm the dialogue the way the daemon's own joiner sender does: a real
+     * SEND_START through the FSM, so the loop under test has something with an
+     * armed, expirable timer to find. This setup step is NOT what is under
+     * test here -- test_vc_reissue_and_abandon_through_the_daemon() above
+     * already covers scs_vc_fsm_send_start()/scsd_vc_emit() directly. */
+    CHECK(scs_vc_fsm_send_start(ps->pb, 0) == SCS_VC_ACT_SEND_START,
+          "PRECONDITION: the initial SEND_START did not arm the timer");
+    log_capture_begin();
+    CHECK(scsd_vc_emit(r.rx.vc_ctx, ps, SCS_VC_ACT_SEND_START) == 1,
+          "PRECONDITION: the initial START did not send");
+    log_capture_end();
+
+    /* Nothing is due before the timeout: the loop must find no expired peer. */
+    scsd_test_frames = 0;
+    CHECK(rx_vc_reissue_tick(&r, SCS_VC_FORMATION_TIMEOUT_MS - 1) == 0,
+          "the loop reissued before the formation timer expired");
+    CHECK(scsd_test_frames == 0, "an early tick put a frame on the wire");
+    CHECK(r.rx.start_sent == 0, "an early tick counted a reissue");
+
+    uint8_t original[SCS_START_FRAME_LEN];
+    memcpy(original, scsd_test_last_frame, SCS_START_FRAME_LEN);
+
+    /* Drive SCS_VC_FORMATION_RETRY_LIMIT expirations through the LOOP ITSELF
+     * -- not scs_vc_fsm_timeout() called by hand -- each one a real reissue,
+     * byte-identical to the original START, counted into rx.start_sent. */
+    uint64_t t = SCS_VC_FORMATION_TIMEOUT_MS;
+    unsigned last_reissued = 0;
+    for (unsigned n = 0; n < SCS_VC_FORMATION_RETRY_LIMIT; n++) {
+        scsd_test_frames = 0;
+        last_reissued = rx_vc_reissue_tick(&r, t);
+        if (n + 1 < SCS_VC_FORMATION_RETRY_LIMIT) {
+            CHECK(last_reissued == 1,
+                  "expiry %u through the loop did not reissue (got %u)", n + 1,
+                  last_reissued);
+            CHECK(scsd_test_frames == 1,
+                  "expiry %u through the loop put %d frames on the wire, not 1",
+                  n + 1, scsd_test_frames);
+            CHECK(scsd_test_last_len == SCS_START_FRAME_LEN &&
+                      memcmp(scsd_test_last_frame, original, SCS_START_FRAME_LEN) == 0,
+                  "the loop's reissue %u is not byte-identical to the original START",
+                  n + 1);
+        }
+        t += SCS_VC_FORMATION_TIMEOUT_MS;
+    }
+    CHECK(r.rx.start_sent == SCS_VC_FORMATION_RETRY_LIMIT - 1,
+          "the loop counted %ld reissues into rx.start_sent, not the %u expected"
+          " before the retry limit abandons",
+          r.rx.start_sent, SCS_VC_FORMATION_RETRY_LIMIT - 1);
+
+    /* The retry-limit-th expiry abandons THROUGH THE LOOP: no frame, not
+     * counted as a reissue, and scsd_vc_settle()'s effects (Path Block CLOSED,
+     * the daemon's START-replied latch cleared) actually ran. */
+    CHECK(last_reissued == 0,
+          "the loop counted the retry-limit abandon as a reissue");
+    CHECK(scsd_test_frames == 0,
+          "the loop's abandon put a frame on the wire");
+    CHECK(ps->pb->vc_state == SCS_VC_CLOSED,
+          "the loop's abandon did not close the Path Block (state %s)",
+          scs_vc_state_name(ps->pb->vc_state));
+    CHECK(ps->pb->fsm.abandoned == 0,
+          "the loop's scsd_vc_settle() left the Path Block permanently abandoned");
+    CHECK(ps->start_replied == 0,
+          "the loop's scsd_vc_settle() did not clear the daemon's START-replied"
+          " latch on abandon");
+
+    /* And one more tick after the abandon must do nothing: the timer is
+     * disarmed, so the loop must not re-fire on a Path Block it just closed. */
+    scsd_test_frames = 0;
+    CHECK(rx_vc_reissue_tick(&r, t + SCS_VC_FORMATION_TIMEOUT_MS) == 0,
+          "the loop fired again on an already-abandoned Path Block");
+    CHECK(scsd_test_frames == 0,
+          "the loop sent a frame for an already-abandoned Path Block");
+}
+
+static void test_poll_refresh_tick_drives_the_daemon_loop(void)
+{
+    CHECK(unsetenv("OVMX_NO_PROCESS_POLLER") == 0, "unsetenv failed");
+    CHECK(setenv("OVMX_PROCESS_POLLER", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_PRCPOLINTERVAL", "1", 1) == 0, "setenv failed");
+
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+
+    /* GUARD: do_connect == 0 must stop the loop cold before any peer exists. */
+    r.rx.do_connect = 0;
+    scsd_test_frames = 0;
+    rx_poll_refresh_tick(&r, 100000);
+    CHECK(scsd_test_frames == 0, "the poll-refresh loop ran with do_connect == 0");
+    r.rx.do_connect = 1;
+
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    CHECK(ps != NULL, "no peer for the poll-refresh-tick test");
+    if (ps == NULL) {
+        (void)unsetenv("OVMX_PROCESS_POLLER");
+        return;
+    }
+
+    /* THE DAEMON'S OWN LOOP -- not a hand call to scs_poll_add_node() --
+     * must ask scs_config_select_vc() the same question CONNECT asks, find
+     * this peer's circuit OPEN, register it, and hand it to scs_poll_tick(),
+     * which puts the p. 2-50 SCS$DIRECTORY CONNECT-REQUEST on the wire. */
+    scsd_test_frames = 0;
+    rx_poll_refresh_tick(&r, 100000);
+    CHECK(r.rx.poll_connect_sent == 1,
+          "the daemon's poll-refresh loop did not register the peer and put a"
+          " CONNECT-REQUEST on the wire (%ld)", r.rx.poll_connect_sent);
+    CHECK(scsd_test_frames == 1, "the loop sent %d frames, not 1", scsd_test_frames);
+    CHECK(scsd_test_last_len == SCS_DIR_CONNREQ_FRAME_LEN,
+          "the loop's CONNECT-REQUEST is %zu bytes, not the 110-byte SCA class",
+          scsd_test_last_len);
+    uint8_t connreq[SCS_DIR_CONNREQ_FRAME_LEN];
+    memcpy(connreq, scsd_test_last_frame, scsd_test_last_len);
+    CHECK(connreq[30] == SCS_DIR_OPCODE, "the loop's frame is not opcode 0x5b");
+    struct scs_dir_view cv;
+    CHECK(scs_dir_parse(connreq, SCS_DIR_CONNREQ_FRAME_LEN, &cv) == 0,
+          "the loop's own CONNECT-REQUEST did not parse");
+    CHECK(cv.op == SCS_DIR_MSGTYPE_CONNECT_REQ,
+          "message type [46:48] is %u, not 0 == CONNECT_REQ", cv.op);
+    CHECK(scs_poll_polling(scsd_poll(&r.rx), "VMS$VAXcluster", ps_sys_addr(ps)) == 1,
+          "the loop did not register VMS$VAXcluster as a polled SYSAP (p. 2-50)");
+
+    /* THE OTHER BRANCH, SAME TICK FUNCTION, A SECOND PEER: a peer whose
+     * circuit is NOT open must take scs_config_select_vc()==NULL and be
+     * handed to scs_poll_drop_node() instead of scs_poll_add_node() --
+     * proven the same way the positive arm above is proven, by the WIRE
+     * EFFECT: no additional CONNECT-REQUEST for this tick. (scs_poll_polling()
+     * cannot distinguish this branch: VMS$VAXcluster registers all_nodes, so
+     * it answers 1 for any node once the SYSAP itself is known -- see
+     * name_scopes() in scs_poll.c -- regardless of scs_poll_add_node()'s
+     * per-node list, which this file has no read-only accessor for.) */
+    uint8_t closed_mac[6];
+    mac_of(0x99, closed_mac);
+    uint8_t closed_sysid[6];
+    sysid_of(1099, closed_sysid);
+    struct peer_state *closed_ps =
+        peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, closed_mac);
+    CHECK(closed_ps != NULL, "no second peer slot for the closed-circuit arm");
+    if (closed_ps != NULL) {
+        ps_learn_sys_addr(&r.w.cfg, closed_ps, closed_sysid);
+        CHECK(closed_ps->pb->vc_state != SCS_VC_OPEN,
+              "PRECONDITION: the second peer's circuit is already OPEN");
+        long before = r.rx.poll_connect_sent;
+        rx_poll_refresh_tick(&r, 200000);
+        CHECK(r.rx.poll_connect_sent == before,
+              "the loop polled a peer whose circuit is not OPEN (%ld -> %ld)",
+              before, r.rx.poll_connect_sent);
+    }
+
+    (void)unsetenv("OVMX_PROCESS_POLLER");
+}
+
 int main(void)
 {
     /* THE FAILURE STREAM, taken before anything can dup2() over fd 2. See
@@ -7995,6 +8212,10 @@ int main(void)
     test_the_diskrun_gate_default_and_override();
     test_the_peer_disconnect_req_starts_no_disk_discovery();
     test_the_diskrun_ungate_kill_switch();
+    /* vms-fb1: the two pre-recv timer blocks that were still inline in
+     * main()'s loop, driven through the loop functions themselves. */
+    test_vc_reissue_tick_drives_the_daemon_loop();
+    test_poll_refresh_tick_drives_the_daemon_loop();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"

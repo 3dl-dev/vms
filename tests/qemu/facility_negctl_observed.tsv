@@ -23,10 +23,10 @@
 #   RUN <defect> <suites that went red, space-joined, or "-"> <pass|fail>
 #   RED <defect> <suite or (harness)> <assertion text observed FAILing>
 #
-# generated-at: 2026-08-06T19:36:27Z
-# tree-commit: 79c0ae13d4aef6cb03176b41388dc1d329393dc4
+# generated-at: 2026-08-06T19:57:16Z
+# tree-commit: 0b68b4c2497cce9503414435624d05ed78f942f7
 # positive-control: pass
-# defects-in-manifest: 48
+# defects-in-manifest: 49
 # suites-derived: 28
 RUN	access-mode-escalation	test_kmod_access	pass
 RED	access-mode-escalation	test_kmod_access	... and still does not hold CMKRNL afterwards
@@ -126,6 +126,41 @@ RED	devtab-alloc-not-recorded	test_kmod_devtab	device reports itself allocated
 RED	devtab-alloc-not-recorded	test_kmod_devtab	oracle: allocating what we already own adds the allocation and one reference (OPA0: 2 -> 3, l.682)
 RED	devtab-alloc-not-recorded	test_syssvc_showdev	A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
 RED	devtab-alloc-not-recorded	test_syssvc_showdev	the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
+RUN	devtab-dassgn-status-wrong	test_kmod_devtab test_kmod_setterm test_syssvc_qio_terminal	pass
+RED	devtab-dassgn-status-wrong	test_kmod_devtab	channel deassigned
+RED	devtab-dassgn-status-wrong	test_kmod_devtab	last channel deassigned
+RED	devtab-dassgn-status-wrong	test_kmod_setterm	B returns its channel
+RED	devtab-dassgn-status-wrong	test_syssvc_qio_terminal	parent: sys$dassgn("TT:" channel) succeeded (public API)
+RUN	devtab-getdvi-devnam-status-wrong	test_kmod_devtab test_syssvc_qio_terminal test_syssvc_showdev test_syssvc_showterm	pass
+RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	B sees the ownership A took with a channel alone (A writes, B reads)
+RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	console OPA0: exists without any process creating it
+RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	device still exists after its owner dies
+RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	reference count returns to zero
+RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	this process can still read the device
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	A-WRITES/B-READS: a fresh child sees the reference sys$assign("TT:") added to OPA0: in the executive (public API, cross-process)
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	A-WRITES/B-READS: a second fresh child sees OPA0:'s reference count back at baseline after sys$dassgn (the release reached the executive, not just local bookkeeping)
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	parent: a fresh child process could read the executive's OPA0: row
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	parent: a second fresh child process could read the executive's OPA0: row
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	parent: baseline read of the executive's OPA0: row succeeded
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showdev	A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showdev	SHOW DEVICE OPA0: resolves the name through the executive and prints its row
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showdev	the console is still listed once the other process is gone
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	...and grid row 1 is the oracle's bytes again, so neither is the grid
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	...and the cleared Echo bit, in the grid cell the oracle prints it in
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	SHOW TERMINAL names _OPA0: once the executive holds the binding -- the SAME BINARY that named nothing a moment ago
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	grid row 1 is byte-for-byte the V7.3 capture
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	grid row 10 is byte-for-byte the V7.3 capture
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	grid row 2 is byte-for-byte the V7.3 capture
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	grid row 4 is byte-for-byte the V7.3 capture
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	the characteristics heading is printed (oracle section 2)
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	the last row carries the single remaining characteristic, unpadded
+RUN	devtab-devscan-found-status-wrong	test_kmod_devtab test_syssvc_showdev	pass
+RED	devtab-devscan-found-status-wrong	test_kmod_devtab	device scan lists the console terminal
+RED	devtab-devscan-found-status-wrong	test_kmod_devtab	device scan terminates with SS$_NOMOREDEV
+RED	devtab-devscan-found-status-wrong	test_syssvc_showdev	bare SHOW DEVICE lists OPA0: -- a device DCL has no other way to know about, read from the executive's table
+RED	devtab-devscan-found-status-wrong	test_syssvc_showdev	the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
+RED	devtab-devscan-found-status-wrong	test_syssvc_showdev	the listing carries the oracle's column header (section 4)
 RUN	setterm-binding-not-recorded	test_kmod_setterm test_syssvc_showterm	pass
 RED	setterm-binding-not-recorded	test_kmod_setterm	A's own row now names the console
 RED	setterm-binding-not-recorded	test_kmod_setterm	A-WRITES/B-READS: B reads OPA0: out of A's row -- a binding a different process made, which a per-process binding could not show
@@ -168,19 +203,6 @@ RED	proctab-crossgroup-identity	test_syssvc_showproc	SHOW PROCESS/ID on an out-o
 RED	proctab-crossgroup-identity	test_syssvc_showproc	the by-PID refusal printed no process header
 RUN	proctab-terminal-redaction-bypassed	test_kmod_ident	pass
 RED	proctab-terminal-redaction-bypassed	test_kmod_ident	TERMINAL REDACTION: the scan withholds D's terminal too, even though D genuinely bound one -- a caller that may not read D's identity may not read which terminal D is on either
-RUN	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam test_syssvc_procnam test_syssvc_showproc test_syssvc_startup_service	pass
-RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	a name held only in another UIC group does not resolve
-RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	name released when the process exits
-RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	unknown name does not resolve (SS$_NONEXPR)
-RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	unset name does not resolve (SS$_NONEXPR)
-RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_procnam	sys$getjpi by an unheld name returns SS$_NONEXPR
-RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_showproc	... and NOT %SYSTEM-F-NOPRIV: the group-scoped name search never reaches a process to be refused
-RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_showproc	SHOW PROCESS <name> on an out-of-group process reports %SYSTEM-W-NONEXPR -- the name search is group-scoped
-RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_showproc	an absent process name reports %SYSTEM-W-NONEXPR verbatim
-RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_startup_service	the service's name is released when the service dies
-RUN	proctab-procscan-nonexpr-status-wrong	test_kmod_ident test_kmod_procnam	pass
-RED	proctab-procscan-nonexpr-status-wrong	test_kmod_ident	the unprivileged scan terminates with SS$_NONEXPR
-RED	proctab-procscan-nonexpr-status-wrong	test_kmod_procnam	process scan terminates with SS$_NONEXPR
 RUN	ident-username-unguarded	test_kmod_ident	pass
 RED	ident-username-unguarded	test_kmod_ident	... and the executive still holds the name it authenticated
 RED	ident-username-unguarded	test_kmod_ident	... and the process is STILL UNNAMED (a process cannot name itself a user)

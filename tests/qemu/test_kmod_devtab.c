@@ -246,7 +246,9 @@ int main(int argc, char **argv)
         if (scanned > 64)
             break;
     }
+    /* negctl: devtab-devscan-found-status-wrong */
     CHECK(status == SS_NOMOREDEV, "device scan terminates with SS$_NOMOREDEV");
+    /* negctl-knockon: devtab-devscan-found-status-wrong */
     CHECK(saw_console, "device scan lists the console terminal");
 
     /* --------------------------------------------------------------
@@ -466,6 +468,7 @@ int main(int argc, char **argv)
      *    not assert an answer to it.
      * -------------------------------------------------------------- */
     status = vms_kif_dassgn(chan);
+    /* negctl: devtab-dassgn-status-wrong */
     CHECK(status == SS_NORMAL, "channel deassigned");
     memset(&info, 0, sizeof(info));
     (void)vms_kif_getdvi_devnam(CONSOLE, &info);
@@ -477,6 +480,7 @@ int main(int argc, char **argv)
 
     memset(&info, 0, sizeof(info));
     status = vms_kif_getdvi_devnam(CONSOLE, &info);
+    /* negctl: devtab-getdvi-devnam-status-wrong */
     CHECK(status == SS_NORMAL, "device still exists after its owner dies");
     CHECK(info.owner_pid == 0, "dead process no longer owns the device");
     CHECK(info.allocated == 0, "dead process's allocation was released");

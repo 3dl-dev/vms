@@ -11,12 +11,24 @@ CMakeFiles/
 cmake_install.cmake
 *.cmake
 # ...but *.cmake also swallows hand-written CMake scripts that live in the
-# SOURCE tree. Un-ignore those explicitly, one path at a time (vms-76e: this
-# one is the body of a ctest, so if it silently failed to get committed the
-# test would red in CI with "no such file" instead of its real diagnostic).
-!tests/vmsscs/scs_credit_figures_no_python3.cmake
-!tests/vmsscs/scs_connect_data_figures_no_python3.cmake
-!tests/vmsscs/scs_reason_figures_no_python3.cmake
+# SOURCE tree (vms-76e: this one is the body of a ctest, so if it silently
+# failed to get committed the test would red in CI with "no such file"
+# instead of its real diagnostic).
+#
+# vms-4847: the per-path allowlist above this comment (one `!` line added by
+# hand for each new shim) is exactly the failure mode it was meant to guard
+# against -- three of these _no_python3.cmake bodies (and counting) were
+# referenced by tests/vmsscs/CMakeLists.txt's else() branch for months and
+# never existed in git because nobody remembered to add their line here. One
+# of the three failed LOUD (a bare cmake -P "file does not exist" error); the
+# rest failed SILENT, indistinguishable from a green run with the gate simply
+# absent. Carve out the whole naming convention instead of one path at a
+# time, so a new shim needs no .gitignore edit to survive `git add`:
+!*_no_python3.cmake
+# tests/integration/test_cmake_shims_tracked.sh is the standing gate that
+# catches the case this carve-out cannot: a *_no_python3.cmake file that
+# exists on disk, is referenced by a CMakeLists.txt else() branch, but was
+# never `git add`-ed at all (as opposed to being re-ignored).
 !tests/vmsscs/capture_manifest_no_python3.cmake
 
 # Object files and libraries

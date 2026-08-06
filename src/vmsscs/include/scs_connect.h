@@ -132,8 +132,9 @@
  * is claimed for CONNECT_REQ and ACCEPT_REQ only.
  *
  * WHAT IS IN IT -- GROUNDED, and it is per-SYSAP, not per-node. Census of
- * [94:110] over 48 pcaps, 1425 VAX-sourced connect frames, keyed on the local
- * SYSAP name:
+ * [94:110] over 48 pcaps, 1425 VAX-sourced connect frames, keyed on the
+ * DESTINATION SYSAP name at [62:78] (spec sec 4h(2) already grounds [62:78]
+ * as the CONNECT_REQ's TARGET SYSAP, not the sender's own):
  *
  *     MSCP$DISK           809 frames, 1 distinct  ASCII "V5.0          + "
  *     SCS$DIRECTORY       201 frames, 1 distinct  16 ASCII spaces
@@ -142,9 +143,11 @@
  *     VMS$DISK_CL_DRVR    101 frames, 5 distinct  00 00 04 a0 ...
  *     VMS$VAXcluster      148 frames, 5 distinct  01 1b 01 03 ...
  *
- * MSCP$DISK is the decisive one: a printable ASCII version string, "V5.0", in
- * the connect data of the disk-server SYSAP -- p. 2-25's "which version" read
- * straight off the wire, in the field this module now names.
+ * MSCP$DISK is the decisive one: a printable ASCII version string, "V5.0",
+ * in the CONNECT_REQ connect data destined FOR the disk-server SYSAP -- i.e.
+ * it is the DISK CLASS DRIVER's version claim, carried TO MSCP$DISK, not
+ * MSCP$DISK's own version -- p. 2-25's "which version" read straight off the
+ * wire, in the field this module now names.
  *
  * THE VMS$VAXcluster VALUE -- what is invariant. Across ALL 148 VAX-sourced
  * VMS$VAXcluster connect frames, every boot and every capture we hold (all

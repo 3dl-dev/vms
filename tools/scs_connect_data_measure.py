@@ -213,8 +213,10 @@ DEFAULT_LOGDIR = "/data/training/vax/cluster/work"
 
 # The SCA payload-relative span of the connect-data field, and the two 16-byte
 # SYSAP name fields that precede it (spec sec 4h(2) grounds the names).
+# [62:78] is the DESTINATION (target) SYSAP name; [78:94] is the offered
+# LOCAL (sender's own) SYSAP name -- sec 4(h)(2) grounds this pairing.
 CD_OFF, CD_END = 94, 110
-LOCAL_NAME, REMOTE_NAME = (62, 78), (78, 94)
+DEST_NAME, LOCAL_NAME = (62, 78), (78, 94)
 
 # vms-69c: this census is deliberately restricted to ONE SCA length class,
 # 110 -- narrower than either of the other two measure scripts' restrictions
@@ -626,13 +628,14 @@ def measure(capdir):
                 if src.startswith("aa:00:04") and mac(
                         sca[SRC_LAVC[0]:SRC_LAVC[1]]) != src:
                     p["srclavc_mismatches"] += 1
-            local = sca[LOCAL_NAME[0]:LOCAL_NAME[1]]
+            dest = sca[DEST_NAME[0]:DEST_NAME[1]]
             # The population claim: a connect frame's [62:78] is an ASCII SYSAP
-            # name. Anything else means the split above is wrong.
-            if not all(32 <= c < 127 for c in local):
+            # name -- the DESTINATION SYSAP (sec 4(h)(2)), not the sender's own.
+            # Anything else means the split above is wrong.
+            if not all(32 <= c < 127 for c in dest):
                 p["name_field_ascii_violations"] += 1
                 continue
-            name = local.decode("ascii").rstrip()
+            name = dest.decode("ascii").rstrip()
             cd = bytes(sca[CD_OFF:CD_END])
             p["sysap_values"][name][cd] += 1
             if node is not None:
@@ -670,7 +673,7 @@ def _report_pop(m, which, label, out):
     print("  CONNECT_REQ/ACCEPT_REQ frames (0,2): %d" % p["connect_frames"], file=out)
     print("  SYSAP-name non-ASCII residuals    : %d" % p["name_field_ascii_violations"],
           file=out)
-    print("  per-local-SYSAP connect-data census (payload [94:110]):", file=out)
+    print("  per-destination-SYSAP connect-data census (payload [94:110]):", file=out)
     for name in sorted(p["sysap_values"]):
         vals = p["sysap_values"][name]
         print("    %-18s n=%-5d distinct=%d" % (name, sum(vals.values()), len(vals)),

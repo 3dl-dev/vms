@@ -2557,10 +2557,12 @@ frame at all. The two populations are not scaled copies of one another, which is
 why the exclusion has to be applied before the split rather than to the totals.)
 
 **WHAT IS IN IT — GROUNDED, and it is per-SYSAP, not per-node.** Census of
-`[94:110]` over those 1 425 VAX-sourced frames, keyed on the local SYSAP name
-`[62:78]`. The last column records what OVMX contributed and the guard removed:
+`[94:110]` over those 1 425 VAX-sourced frames, keyed on the destination SYSAP
+name `[62:78]` — §4(h)(2) already grounds `[62:78]` as the CONNECT_REQ's
+**TARGET** SYSAP name, not the sender's own. The last column records what
+OVMX contributed and the guard removed:
 
-| local SYSAP | VAX frames | distinct values | value(s) | OVMX frames excluded |
+| destination SYSAP | VAX frames | distinct values | value(s) | OVMX frames excluded |
 |---|---|---|---|---|
 | `MSCP$DISK` | 809 | 1 | ASCII **`"V5.0          + "`** | 243 |
 | `SCS$DIRECTORY` | 201 | 1 | 16 ASCII spaces | 113 |
@@ -2570,8 +2572,10 @@ why the exclusion has to be applied before the split rather than to the totals.)
 | `VMS$VAXcluster` | 148 | 5 | `01 1b 01 03 …` | 55 |
 
 **`MSCP$DISK` is the decisive row**: a printable ASCII **version string** in the
-connect data of the disk-server SYSAP — p. 2-25's "which version" read straight
-off the wire, at these offsets, with **809** VAX-sourced frames from **5 node
+`CONNECT_REQ` connect data **destined for** the disk-server SYSAP — i.e. it is
+the **disk class driver's** version claim, carried **to** `MSCP$DISK`, not
+`MSCP$DISK`'s own version — p. 2-25's "which version" read straight off the
+wire, at these offsets, with **809** VAX-sourced frames from **5 node
 identities on 3 emulator instances** — i.e. 1 VMS build, 3 system roots, 1 disk
 image — and one distinct value. (The
 earlier "four distinct VAX nodes" here was the source-MAC count.) Every SYSAP

@@ -201,6 +201,17 @@ static void die(const char *msg)
  * .rodata.cst8, .data.rel.ro, ...) all land in the right output region. (vms-fa1) */
 enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_BSS, B_TDATA, B_TBSS };
 
+/* The buckets LINK.EXE places FLAT (a real image vaddr per input section) and
+ * can therefore apply relocations into. B_BSS/B_TBSS are NOBITS (no bytes to
+ * patch); B_TDATA is reached through TLSDESC, not a flat address; B_NONE is an
+ * allocatable section type this linker does not place at all. Anything outside
+ * this set that still carries relocations is REPORTED, never dropped in
+ * silence. (vms-a66) */
+static int bucket_is_patchable(int b)
+{
+    return b == B_TEXT || b == B_RODATA || b == B_DATA;
+}
+
 /* One relocation, tagged with the section it patches (site = sec_va + off). */
 struct reloc { uint64_t off; uint64_t info; int64_t add; int sec; };
 
@@ -361,17 +372,37 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
          * a relocation into one dies loudly rather than silently misplacing. */
     }
 
-    /* Collect relocations against every code AND data section into one flat
-     * list, each tagged with the section it patches. Data-section relocations
-     * are .rela.data ABS64 pointer initializers (stdio FILE structs, locale
-     * ptables, *_lockptr sets, ...) — resolved + biased at emit time. (vms-004
-     * folds in vms-a17; formerly only B_TEXT was collected.) */
+    /* Collect relocations against every FLAT-PLACED allocatable section into one
+     * flat list, each tagged with the section it patches.
+     *
+     *   B_TEXT   — instruction patches (call/jmp, PC-rel, GOT, TLSDESC).
+     *   B_DATA   — .rela.data ABS64 pointer initializers (stdio FILE structs,
+     *              locale ptables, *_lockptr sets, ...) resolved + biased at
+     *              emit time (vms-004, folds in vms-a17).
+     *   B_RODATA — READ-ONLY relocated data. This is NOT decoration: gcc emits
+     *              every `switch` jump table into a per-function read-only
+     *              section (`.rodata.<fn>`) as `.long target - table_base`, and
+     *              because the targets live in .text and the table lives in
+     *              .rodata the assembler CANNOT fold the difference — it leaves
+     *              a real R_X86_64_PC32 per arm (and .eh_frame's CIE/FDE
+     *              pointers are the same shape). Dropping these left every such
+     *              table ALL ZERO, so the dispatch `jmp *rdx` computed
+     *              table_base + 0 and executed the table's own bytes: musl's
+     *              printf_core/pop_arg (i.e. any %-conversion) jumped into the
+     *              "(null)" string in DECC$SHR's .rodata. Empirically 902 such
+     *              relocations in musl's libc.a and 554 in DCL's own objects, so
+     *              the crash needs no unusual image size to appear — only a code
+     *              path that reaches a jump table. (vms-a66)
+     *
+     * A RELA section whose target is allocatable but NOT flat-placed cannot be
+     * patched (nothing assigns it an address). LINK.EXE reports that on
+     * SYS$ERROR rather than dropping it silently — a silent drop is exactly how
+     * the .rodata gap survived four proofs. (vms-a66) */
     int cap = 0;
     for (int i = 0; i < o->nsh; i++) {
         if (o->sh[i].sh_type != SHT_RELA) continue;
         int t = (int)o->sh[i].sh_info;
-        if (t >= 0 && t < o->nsh &&
-            (o->sec_bucket[t] == B_TEXT || o->sec_bucket[t] == B_DATA))
+        if (t >= 0 && t < o->nsh && bucket_is_patchable(o->sec_bucket[t]))
             cap += o->sh[i].sh_size / sizeof(Elf64_Rela);
     }
     o->relocs = cap ? malloc((size_t)cap * sizeof(struct reloc)) : NULL;
@@ -379,11 +410,22 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
     o->nreloc = 0;
     for (int i = 0; i < o->nsh; i++) {
         int t = (int)o->sh[i].sh_info;
-        if (t < 0 || t >= o->nsh ||
-            (o->sec_bucket[t] != B_TEXT && o->sec_bucket[t] != B_DATA)) continue;
-        if (o->sh[i].sh_type == SHT_REL)
+        if (t < 0 || t >= o->nsh) continue;
+        if (o->sh[i].sh_type == SHT_REL && bucket_is_patchable(o->sec_bucket[t]))
             die("REL relocations are unsupported (expected RELA)");
-        if (o->sh[i].sh_type != SHT_RELA) continue;
+        if (o->sh[i].sh_type != SHT_RELA || o->sh[i].sh_size == 0) continue;
+        if (!bucket_is_patchable(o->sec_bucket[t])) {
+            if (o->sh[t].sh_flags & SHF_ALLOC)
+                fprintf(stderr, "%%LINK-W-RELSKIP, %s(%s): %d relocation%s NOT "
+                        "applied — target section %s is allocatable but LINK.EXE "
+                        "does not place it flat\n",
+                        name,
+                        o->shstr + o->sh[i].sh_name,
+                        (int)(o->sh[i].sh_size / sizeof(Elf64_Rela)),
+                        o->sh[i].sh_size == sizeof(Elf64_Rela) ? "" : "s",
+                        o->shstr + o->sh[t].sh_name);
+            continue;
+        }
         Elf64_Rela *ra = (Elf64_Rela *)(o->buf + o->sh[i].sh_offset);
         int n = o->sh[i].sh_size / sizeof(Elf64_Rela);
         for (int j = 0; j < n; j++)

@@ -228,6 +228,28 @@ if(BUILD_TESTS)
     set_tests_properties(runtime_target_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
 
+    # vms-4847 standing gate: every *_no_python3.cmake path a CMakeLists.txt
+    # else() branch names must resolve to a file `git ls-files` actually
+    # tracks. The blanket `*.cmake` .gitignore rule swallowed three (later
+    # five) of these shims for months -- most silently, one loudly. The
+    # .gitignore carve-out (`!*_no_python3.cmake`) fixes the re-ignored case;
+    # this gate re-derives, on every run, that the fix held and that a shim
+    # was not simply never `git add`-ed in the first place.
+    add_test(NAME cmake_shims_tracked_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_cmake_shims_tracked.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(cmake_shims_tracked_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
+    # Negative controls for the above -- proves it reds for both ways a shim
+    # can go missing (untracked-on-disk, absent-on-disk) and stays green for
+    # the innocent case, in a disposable sandbox git repo.
+    add_test(NAME cmake_shims_tracked_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_cmake_shims_tracked_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(cmake_shims_tracked_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
     # vms_kif caller census (vms-7fb): every kernel-interface entry point is
     # either reached from the product or declared unwired against an item.
     # The Rule 9 gate is shaped to catch a FALLBACK; a facility implemented

@@ -228,6 +228,15 @@ struct inode *vmsfs_blkdev_iget(struct super_block *sb, uint32_t fid);
 /* Write inode metadata + retrieval pointers back to on-disk file header */
 int vmsfs_blkdev_flush_inode(struct super_block *sb, struct inode *inode);
 
+/*
+ * Resolve a (possibly versioned) name in @dir to a FID, exactly as
+ * ->lookup would. *fid_out is 0 when the name does not exist. Returns a
+ * negative errno only when @name is not a parseable VMS filename.
+ * Used by ->lookup and by ->d_revalidate (vmsfs_inode.c).
+ */
+int vmsfs_blkdev_resolve(struct inode *dir, const char *name,
+                         uint32_t *fid_out);
+
 /* Block-device directory inode operations */
 extern const struct inode_operations vmsfs_blkdev_dir_iops;
 

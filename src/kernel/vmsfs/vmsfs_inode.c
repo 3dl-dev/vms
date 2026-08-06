@@ -175,24 +175,137 @@ static int vmsfs_d_compare(const struct dentry *dentry, unsigned int len,
 }
 
 /*
- * vmsfs_d_revalidate - Force re-lookup for regular file dentries.
+ * vmsfs_d_revalidate - Does this cached dentry still name the file it points at?
  *
- * VMS versioning means a file's identity can change between accesses
- * (e.g., open("FOO.TXT") should find the highest version, which may
- * have changed).  Returning 0 for regular file dentries forces the
- * VFS to invalidate and re-lookup, which then triggers atomic_open
- * for O_CREAT operations.
+ * VMS versioning means an unversioned name is a MOVING TARGET:
+ * open("FOO.TXT") means "the highest version", and that can change under a
+ * cached dentry when a new version is created or the current one is deleted.
+ * So vmsfs cannot simply accept every cached dentry the way a Unix filesystem
+ * does -- it has to re-ask the version question.
+ *
+ * WHAT THIS MUST NOT DO, AND WHY (rd vms-00e).
+ *
+ * This used to answer "0" -- INVALID -- for EVERY positive regular-file
+ * dentry, unconditionally, so that every lookup fell through to a fresh
+ * ->lookup / ->atomic_open. That is not revalidation, it is permanent
+ * invalidation, and it corrupts something the VFS guarantees to userspace:
+ * a d_revalidate() of 0 makes the VFS call d_invalidate(), which UNHASHES
+ * the dentry (fs/namei.c, lookup_fast()/lookup_open()). An unhashed,
+ * non-root dentry satisfies d_unlinked(), and d_path() renders any
+ * d_unlinked() path with a " (deleted)" suffix (fs/d_path.c,
+ * path_with_deleted()). /proc/<pid>/exe and /proc/<pid>/fd/<n> are d_path()
+ * readers.
+ *
+ * So: the FIRST time anything walked the path of a running executable that
+ * lives on vmsfs, that program's own /proc/self/exe started reading
+ * ".../DCL.EXE (deleted)" -- while the file was present and unmodified.
+ * mm->exe_file pins the dentry, so it stayed unhashed for the life of the
+ * process. DCL's SPAWN re-execs itself via readlink("/proc/self/exe")
+ * (src/vmsdcl/dcl_cmd_process.c, cmd_spawn()), so SPAWN execl()'d a path
+ * with " (deleted)" glued on the end, got ENOENT, and answered
+ * %DCL-E-CREPRC. That is the whole bug, in both of its observed shapes:
+ *
+ *   - statically linked DCL.EXE: nothing re-walks DCL.EXE's path during
+ *     startup, so the exe dentry was still hashed at the first SPAWN. That
+ *     SPAWN's own execl() was the walk that unhashed it -- so spawn #1
+ *     worked and spawn #2 onwards failed. (The long-standing "SECOND SPAWN
+ *     in a session fails" defect recorded in tests/uat/vms_session_qemu.sh.)
+ *   - VMS-native, IMGACT-activated DCL.EXE: IMGACT.EXE re-opens the
+ *     executable by AT_EXECFN to read its .vms$sv/.vms$imp sections
+ *     (src/imgact/imgact.c, activate_symbol_vector()) BEFORE the image ever
+ *     runs. That second walk unhashed the dentry inside the exec itself, so
+ *     /proc/self/exe already said "(deleted)" at the first line of main()
+ *     and the FIRST SPAWN failed.
+ *
+ * Same kernel defect; IMGACT just reaches it one walk earlier.
+ *
+ * WHAT IT DOES INSTEAD: re-ask the resolver the question a fresh ->lookup
+ * would ask -- "what does this name resolve to right now?" -- and keep the
+ * dentry when the answer is unchanged. Correct for the version semantics
+ * (a new version, or a deletion, changes the answer and the dentry is
+ * dropped), and strictly cheaper than the old behaviour, which paid for the
+ * same resolution AND threw away the dentry and (in overlay mode) the inode
+ * every time.
  */
+static int vmsfs_scan_highest(struct vmsfs_sb_info *sbi, const char *base);
+
 static int vmsfs_d_revalidate(struct dentry *dentry, unsigned int flags)
 {
+    struct vmsfs_sb_info *sbi;
+    struct inode *inode;
+    struct dentry *parent;
+    char base[VMSFS_MAX_FILENAME + 1];
+    int req_version;
+    int valid = 1;
+
     /* Drop out of RCU walk - we can't do real revalidation in RCU mode */
     if (flags & LOOKUP_RCU)
         return -ECHILD;
 
-    /* Directories are stable - only invalidate regular file dentries */
-    if (d_is_positive(dentry) && d_is_reg(dentry))
+    inode = d_inode(dentry);
+
+    /*
+     * Negative dentries and directories are stable. (Directories carry no
+     * version, and a negative dentry is dropped by ->create/->mkdir when
+     * the name comes into existence.)
+     */
+    if (!inode || !S_ISREG(inode->i_mode))
+        return 1;
+
+    /*
+     * CREATE INTENT IS NEVER SATISFIED FROM THE CACHE. On VMS, creating
+     * "FOO.TXT" when FOO.TXT;1 exists produces FOO.TXT;2 -- it does not
+     * reopen ;1. If the VFS accepted the cached positive dentry here it
+     * would go straight to f_op->open on the existing version and never
+     * reach ->atomic_open / ->create, so no new version would be cut.
+     * Returning 0 for create-intent lookups is what keeps
+     * tests/qemu/test_kmod_vmsfs.c's "create TEST.TXT again (should become
+     * ;2)" true.
+     */
+    if (flags & (LOOKUP_CREATE | LOOKUP_RENAME_TARGET))
         return 0;
-    return 1;
+
+    if (vmsfs_parse_version(dentry->d_name.name, base, sizeof(base),
+                            &req_version) != 0)
+        return 0;   /* unparseable name: let the VFS re-look it up */
+
+    /*
+     * An explicitly versioned name ("FOO.TXT;3") names exactly one file and
+     * cannot drift. Deletion of that file goes through ->unlink, which
+     * d_drop()s this dentry itself.
+     */
+    if (req_version != 0)
+        return 1;
+
+    sbi = VMSFS_SB(dentry->d_sb);
+    parent = dget_parent(dentry);
+
+    if (sbi->mode == VMSFS_MODE_BLKDEV) {
+        /*
+         * Block-device mode: inodes are iget_locked(sb, fid), so i_ino IS
+         * the FID. Re-resolving the name and comparing FIDs is an exact
+         * identity check -- it catches both a newer version and a deletion.
+         */
+        uint32_t fid = 0;
+
+        if (vmsfs_blkdev_resolve(d_inode(parent), base, &fid) != 0 ||
+            fid == 0 || fid != (uint32_t)inode->i_ino)
+            valid = 0;
+    } else {
+        /*
+         * Overlay mode: each lookup mints a fresh inode, so there is no
+         * stable identity to compare. The version number is the identity:
+         * the dentry is still correct iff the highest version of this base
+         * name is the version this dentry was resolved to.
+         */
+        int highest = vmsfs_scan_highest(sbi, base);
+
+        if (highest == 0 || highest != VMSFS_I(inode)->version)
+            valid = 0;
+    }
+
+    dput(parent);
+    return valid;
 }
 
 const struct dentry_operations vmsfs_dops = {

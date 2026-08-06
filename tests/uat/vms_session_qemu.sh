@@ -105,6 +105,7 @@ SYSTEM_CMDS=(
     'IDENT_SETPRV = F$PRIVILEGE("SETPRV")'
     'SHOW SYMBOL IDENT_SETPRV'
     'SPAWN SHOW PROCESS'
+    'SPAWN SHOW TIME'
     'COPY LOGIN.COM UATWRITE.TXT'
     'TYPE UATWRITE.TXT'
     'COPY LOGIN.COM SYS$SYSTEM:UATSYS.TXT'
@@ -1081,6 +1082,24 @@ check_not_response 'SPAWN SHOW PROCESS' '\[000,000\]'
 # whoever lands it has to come and delete it.
 check_response 'SPAWN SHOW PROCESS' 'User: +Process ID:'
 
+# SPAWN WORKS MORE THAN ONCE PER SESSION (rd vms-00e).
+#
+# This is the SECOND SPAWN in this session. Before vms-00e it answered
+# '%DCL-E-CREPRC, cannot create subprocess' every time -- deterministically,
+# for any command, on both the static and the VMS-native DCL.EXE (the
+# VMS-native one failed on the FIRST spawn too). The cause was vmsfs.ko's
+# ->d_revalidate unhashing the running image's own dentry, which made
+# readlink("/proc/self/exe") -- how cmd_spawn() finds the image to re-exec --
+# return a path with " (deleted)" glued on. See the block above.
+#
+# TWO assertions, because either alone is weak: the negative one alone would
+# be satisfied by SPAWN printing nothing at all, and the positive one alone
+# would not distinguish "subprocess ran SHOW TIME" from "SPAWN failed and the
+# error text happened to match". Together they say the subprocess was created
+# AND it produced the VMS date/time SHOW TIME is supposed to produce.
+check_not_response 'SPAWN SHOW TIME' 'CREPRC'
+check_response 'SPAWN SHOW TIME' '[0-9]{1,2}-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-[0-9]{4}'
+
 # A-WRITES / B-READS FOR THE LOGIN SESSION'S PROCESS NAME -- WHERE THE
 # PROOF ACTUALLY LIVES, AND WHY NOT HERE (vms-72c).
 #
@@ -1104,6 +1123,18 @@ check_response 'SPAWN SHOW PROCESS' 'User: +Process ID:'
 # bug in an unrelated command would itself violate Method Requirement 3 (an
 # assertion whose failure is explained by something OTHER than the property
 # under test is vacuous either way it goes). Reported as a finding instead.
+#
+# THAT DEFECT IS FIXED (rd vms-00e) -- and it was never in DCL. It was
+# vmsfs.ko's ->d_revalidate answering "invalid" for every positive
+# regular-file dentry, which makes the VFS d_invalidate() (== UNHASH) the
+# dentry of the running DCL.EXE; d_path() renders an unhashed dentry with a
+# " (deleted)" suffix, so readlink("/proc/self/exe") handed cmd_spawn() a
+# path that could not be exec'd. The FIRST walk of DCL.EXE's path after exec
+# is what unhashed it -- which is why the static image survived one SPAWN
+# (its own execl() was that walk) and the VMS-native, IMGACT-activated image
+# survived none (IMGACT re-opens the image by AT_EXECFN during activation,
+# before main()). The 'SPAWN SHOW TIME' entry added to SYSTEM_CMDS above is
+# a SECOND spawn in the same session, and the two assertions below pin it.
 #
 # THE PROOF THIS ITEM RELIES ON INSTEAD:
 #   - cross-process $GETJPI-BY-NAME, generically, at the executive layer,

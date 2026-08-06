@@ -918,17 +918,25 @@ static uint16_t vmsfs_blkdev_highest_version(struct super_block *sb,
  * ================================================================ */
 
 /*
- * vmsfs_blkdev_lookup - Look up a file in a block-device directory.
+ * vmsfs_blkdev_resolve - Resolve a (possibly versioned) name to a FID.
  *
  * Scans the directory's data blocks (via retrieval pointers) for an
- * entry matching the requested name. Handles version resolution:
+ * entry matching @name. Handles version resolution:
  *   "FOO.TXT"    -> highest version
  *   "FOO.TXT;0"  -> highest version
  *   "FOO.TXT;3"  -> exact version 3
+ *
+ * Returns 0 on success and stores the FID in *fid_out; *fid_out is 0 when
+ * the directory holds no entry for @name. Returns a negative errno only when
+ * @name is not a parseable VMS filename.
+ *
+ * Factored out of vmsfs_blkdev_lookup() so that ->d_revalidate can ask the
+ * SAME question a lookup would ask ("what does this name resolve to right
+ * now?") without allocating a dentry -- see vmsfs_d_revalidate() in
+ * vmsfs_inode.c.
  */
-static struct dentry *vmsfs_blkdev_lookup(struct inode *dir,
-                                          struct dentry *dentry,
-                                          unsigned int flags)
+int vmsfs_blkdev_resolve(struct inode *dir, const char *name,
+                         uint32_t *fid_out)
 {
     struct super_block *sb = dir->i_sb;
     struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
@@ -936,16 +944,16 @@ static struct dentry *vmsfs_blkdev_lookup(struct inode *dir,
     char base[VMSFS_MAX_FILENAME + 1];
     int req_version;
     int ret;
-    struct inode *inode = NULL;
     uint32_t vbn;
     uint32_t best_fid = 0;
     uint16_t best_version = 0;
 
+    *fid_out = 0;
+
     /* Parse requested name for version */
-    ret = vmsfs_parse_version(dentry->d_name.name, base, sizeof(base),
-                              &req_version);
+    ret = vmsfs_parse_version(name, base, sizeof(base), &req_version);
     if (ret)
-        return ERR_PTR(ret);
+        return ret;
 
     /* Scan all data blocks of this directory */
     for (vbn = 1; ; vbn++) {
@@ -1033,12 +1041,37 @@ static struct dentry *vmsfs_blkdev_lookup(struct inode *dir,
     }
 
 found:
-    if (best_fid == 0) {
+    *fid_out = best_fid;
+    (void)best_version;
+    return 0;
+}
+
+/*
+ * vmsfs_blkdev_lookup - Look up a file in a block-device directory.
+ *
+ * Thin wrapper over vmsfs_blkdev_resolve(): name -> FID -> inode -> dentry.
+ */
+static struct dentry *vmsfs_blkdev_lookup(struct inode *dir,
+                                          struct dentry *dentry,
+                                          unsigned int flags)
+{
+    struct super_block *sb = dir->i_sb;
+    struct inode *inode;
+    uint32_t fid = 0;
+    int ret;
+
+    (void)flags;
+
+    ret = vmsfs_blkdev_resolve(dir, dentry->d_name.name, &fid);
+    if (ret)
+        return ERR_PTR(ret);
+
+    if (fid == 0) {
         /* Not found -- negative dentry */
         return d_splice_alias(NULL, dentry);
     }
 
-    inode = vmsfs_blkdev_iget(sb, best_fid);
+    inode = vmsfs_blkdev_iget(sb, fid);
     if (IS_ERR(inode))
         return ERR_CAST(inode);
 

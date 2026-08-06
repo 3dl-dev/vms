@@ -106,6 +106,15 @@ extern "C" {
 #define SCS_MSCP_P_STS   10 /* end-message status, 2 -- the SAME word as P.MOD */
 #define SCS_MSCP_HDR_LEN 12 /* sec 5.1: the generic header is 12 bytes */
 
+/* TRANSFER command parameter-area offsets (Table A-6, sec 5.3) -- the layout
+ * READ and WRITE share. Defined here rather than beside the server responder
+ * that reads them, because these are COMMAND offsets and the note above makes
+ * this header the one place in the tree they are written. */
+#define SCS_MSCP_P_BCNT 12 /* byte count, 4 -- must be a whole number of blocks */
+#define SCS_MSCP_P_BUFF 16 /* buffer descriptor, 12 -- names the HOST buffer the
+                            * data must cross into (Appendix D) */
+#define SCS_MSCP_P_LBN  28 /* logical block number, 4 */
+
 /* The MSCP body carried by this 94-content frame class: 12-byte header + a
  * 24-byte parameter area (sec 5.1 allows up to 36 bytes of parameters). */
 #define SCS_MSCP_BODY_LEN (SCS_MSCP_SCA_LEN - SCS_MSCP_BODY_OFF) /* 36 */

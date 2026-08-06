@@ -1937,11 +1937,25 @@ int cmd_convert(struct dcl_command *cmd)
  * INSTALL LIST [/FULL]
  * INSTALL REMOVE image
  *
- * Maintains list in SYS$MANAGER:INSTALL_LIST.DAT
+ * WRAPS SYS$SYSTEM:INSTALL.EXE (src/install/install.c, bead vms-913.5) --
+ * same pattern as cmd_analyze/cmd_mail/cmd_sysgen/cmd_sysman in this file:
+ * the builtin verb just parses DCL syntax and re-execs the real external
+ * utility via dcl_exec_utility(), it does not implement image-database
+ * semantics itself.
+ *
+ * THIS REPLACES an earlier version that maintained its own flat-text list
+ * at SYS$MANAGER:INSTALL_LIST.DAT (vms-913.7). That list was never read by
+ * anything: IMGACT.EXE's known-image search path (src/imgact/known_images.c)
+ * mmaps SYS$SYSTEM:VMS$KNOWN_IMAGES.DAT, the binary KFE database only
+ * SYS$SYSTEM:INSTALL.EXE writes. So SYSTARTUP_VMS.COM's `INSTALL ADD`
+ * commands were silently landing in a file nothing consulted, while image
+ * activation always fell through to the Priority 2 filesystem-search path
+ * (docs/design-image-activation.md section 4) -- functionally harmless
+ * (activation still worked) but the Known Image Database (Priority 1) was
+ * never actually populated, contradicting install.c's own header comment
+ * ("deliberately NOT wired as a DCL builtin verb"). Fixed by making the
+ * builtin do what that comment already assumed.
  */
-
-#define INSTALL_LIST_PATH VMS_MANAGER_DIR "/INSTALL_LIST.DAT"
-
 int cmd_install(struct dcl_command *cmd)
 {
     if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
@@ -1955,147 +1969,42 @@ int cmd_install(struct dcl_command *cmd)
     for (int i = 0; subcmd[i]; i++)
         subcmd[i] = (char)toupper((unsigned char)subcmd[i]);
 
-    if (strcmp(subcmd, "ADD") == 0) {
-        if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
-            dcl_error("INSTALL", 2, "NOIMAGE", "missing image name");
-            return SS$_BADPARAM;
-        }
-
-        /* Build flags string */
-        char flags[128] = {0};
-        if (dcl_has_qualifier(cmd, "OPEN"))
-            strncat(flags, " Open", sizeof(flags) - strlen(flags) - 1);
-        if (dcl_has_qualifier(cmd, "HEADER_RESIDENT"))
-            strncat(flags, " Hdr", sizeof(flags) - strlen(flags) - 1);
-        if (dcl_has_qualifier(cmd, "SHARED"))
-            strncat(flags, " Shared", sizeof(flags) - strlen(flags) - 1);
-
-        /* Ensure directory exists */
-        mkdir(VMS_MANAGER_DIR, 0755);
-
-        /* Append to install list */
-        FILE *fp = fopen(INSTALL_LIST_PATH, "a");
-        if (!fp) {
-            dcl_error("INSTALL", 2, "OPENERR", "cannot open install list");
-            return SS$_FILACCERR;
-        }
-
-        /* Convert image name to uppercase */
-        char image_upper[256];
-        strncpy(image_upper, cmd->params[1], sizeof(image_upper) - 1);
-        image_upper[sizeof(image_upper) - 1] = '\0';
-        for (int i = 0; image_upper[i]; i++)
-            image_upper[i] = (char)toupper((unsigned char)image_upper[i]);
-
-        fprintf(fp, "%s%s\n", image_upper, flags);
-        fclose(fp);
-
-        printf("%%INSTALL-I-ADDED, %s added to known image list\n", image_upper);
-        return SS$_NORMAL;
-
-    } else if (strcmp(subcmd, "LIST") == 0) {
-        FILE *fp = fopen(INSTALL_LIST_PATH, "r");
-        if (!fp) {
-            printf("%%INSTALL-I-NOIMAGES, no known images installed\n");
-            return SS$_NORMAL;
-        }
-
-        int full = dcl_has_qualifier(cmd, "FULL");
-        printf("\nINSTALL - Known Image List\n");
-        if (full) {
-            printf("%-50s %s\n", "Image Name", "Attributes");
-            printf("%-50s %s\n",
-                   "--------------------------------------------------",
-                   "----------");
-        }
-
-        char line[512];
-        int count = 0;
-        while (fgets(line, sizeof(line), fp)) {
-            /* Strip newline */
-            size_t len = strlen(line);
-            if (len > 0 && line[len - 1] == '\n')
-                line[--len] = '\0';
-            if (len == 0) continue;
-
-            /* Parse: "IMAGE FLAGS" */
-            char *space = strchr(line, ' ');
-            if (full && space) {
-                char image[256];
-                strncpy(image, line, (size_t)(space - line));
-                image[space - line] = '\0';
-                printf("DISK$SYSTEM:[SYSEXE]%s;1  %s\n", image, space + 1);
-            } else if (space) {
-                char image[256];
-                strncpy(image, line, (size_t)(space - line));
-                image[space - line] = '\0';
-                printf("DISK$SYSTEM:[SYSEXE]%s;1  %s\n", image, space + 1);
-            } else {
-                printf("DISK$SYSTEM:[SYSEXE]%s;1\n", line);
-            }
-            count++;
-        }
-        fclose(fp);
-
-        printf("\n%d known image%s\n", count, count != 1 ? "s" : "");
-        return SS$_NORMAL;
-
-    } else if (strcmp(subcmd, "REMOVE") == 0) {
-        if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
-            dcl_error("INSTALL", 2, "NOIMAGE", "missing image name");
-            return SS$_BADPARAM;
-        }
-
-        char target[256];
-        strncpy(target, cmd->params[1], sizeof(target) - 1);
-        target[sizeof(target) - 1] = '\0';
-        for (int i = 0; target[i]; i++)
-            target[i] = (char)toupper((unsigned char)target[i]);
-
-        FILE *fp = fopen(INSTALL_LIST_PATH, "r");
-        if (!fp) {
-            dcl_error("INSTALL", 2, "NOTKNOWN", "image %s is not a known image", target);
-            return SS$_NOSUCHFILE;
-        }
-
-        /* Read all lines, write back those that don't match */
-        char lines[256][512];
-        int count = 0;
-        int found = 0;
-        char line[512];
-        while (fgets(line, sizeof(line), fp) && count < 256) {
-            /* Check if this line starts with target */
-            size_t tlen = strlen(target);
-            if (strncasecmp(line, target, tlen) == 0 &&
-                (line[tlen] == ' ' || line[tlen] == '\n' || line[tlen] == '\0')) {
-                found = 1;
-                continue;
-            }
-            strncpy(lines[count], line, sizeof(lines[count]) - 1);
-            lines[count][sizeof(lines[count]) - 1] = '\0';
-            count++;
-        }
-        fclose(fp);
-
-        if (!found) {
-            dcl_error("INSTALL", 2, "NOTKNOWN", "image %s is not a known image", target);
-            return SS$_NOSUCHFILE;
-        }
-
-        fp = fopen(INSTALL_LIST_PATH, "w");
-        if (fp) {
-            for (int i = 0; i < count; i++)
-                fputs(lines[i], fp);
-            fclose(fp);
-        }
-
-        printf("%%INSTALL-I-REMOVED, %s removed from known image list\n", target);
-        return SS$_NORMAL;
-
-    } else {
+    if (strcmp(subcmd, "ADD") != 0 &&
+        strcmp(subcmd, "LIST") != 0 &&
+        strcmp(subcmd, "REMOVE") != 0) {
         dcl_error("INSTALL", 2, "INVCMD", "invalid subcommand - %s", subcmd);
         return SS$_BADPARAM;
     }
+
+    if ((strcmp(subcmd, "ADD") == 0 || strcmp(subcmd, "REMOVE") == 0) &&
+        (cmd->param_count < 2 || cmd->params[1][0] == '\0')) {
+        dcl_error("INSTALL", 2, "NOIMAGE", "missing image name");
+        return SS$_BADPARAM;
+    }
+
+    /* Build argv: [placeholder, SUBCMD, image-filespec?, /QUAL, /QUAL, ...]
+     * install.c's main() expects argv[1]=verb, argv[2..]=cmd_add/cmd_list/
+     * cmd_remove's own argv (filespec first for ADD/REMOVE, qualifiers with
+     * a leading '/' throughout -- the parser already strips the '/' into
+     * qualifiers[].name, so it is re-added here). */
+    char *argv[40] = {NULL};
+    int argc = 0;
+    argv[argc++] = NULL; /* placeholder for resolved binary path */
+    argv[argc++] = subcmd;
+    if (cmd->param_count >= 2 && cmd->params[1][0] != '\0')
+        argv[argc++] = cmd->params[1];
+
+    char qual_bufs[32][66];
+    int nquals = 0;
+    for (int i = 0; i < cmd->qualifier_count && nquals < 32 && argc < 39; i++) {
+        snprintf(qual_bufs[nquals], sizeof(qual_bufs[nquals]), "/%s",
+                 cmd->qualifiers[i].name);
+        argv[argc++] = qual_bufs[nquals];
+        nquals++;
+    }
+    argv[argc] = NULL;
+
+    return dcl_exec_utility("INSTALL.EXE", "INSTALL", argv, argc);
 }
 
 /* ================================================================== */

@@ -96,11 +96,10 @@ LIBGCC=${LIBGCC:-$($CC -print-libgcc-file-name)}
 [ -f "$LIBC" ]   || { echo "SKIP-FAIL: no musl libc.a at $LIBC (need arm64 musl container)"; exit 1; }
 [ -f "$LIBGCC" ] || { echo "FAIL: no libgcc.a at $LIBGCC"; exit 1; }
 
-# SYS_VEC_EXTRA: LOGINOUT needs vms_kif_setident (identity establishment),
-# which DCL never calls and run_dcl_native.sh's LIBVMSSYS$SHR vector
-# therefore never exported. Appended, not reordered -- the vector contract
-# (mk_vmsprocess_shr.sh's comment) is append-only.
-SYS_VEC_EXTRA="vms_kif_setident=PROCEDURE"
+# LOGINOUT needs vms_kif_setident (identity establishment). mk_vmssys_shr.sh
+# (vms-b6a) now exports it unconditionally from every LIBVMSSYS$SHR build --
+# SYS_VEC_EXTRA is for anything beyond that baseline, and this script needs
+# nothing more.
 . "$HERE/lib_build_graph.sh"
 build_producer_graph
 

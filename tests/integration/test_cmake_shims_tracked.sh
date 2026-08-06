@@ -42,7 +42,16 @@ checked=0
 # Every *_no_python3.cmake token referenced anywhere by any CMakeLists.txt in
 # the tree, paired with the CMakeLists.txt directory it was referenced from
 # (the shim lives alongside the CMakeLists.txt that names it, per convention).
-refs=$(grep -rhEo '[A-Za-z0-9_]+_no_python3\.cmake' --include=CMakeLists.txt . 2>/dev/null | sort -u)
+#
+# vms-4e31 dispatch (2026-08-06): exclude .claude/worktrees -- those are
+# SEPARATE git worktrees (their own branch, their own checkout), not part of
+# the current branch's tree. `git ls-files` below always answers against
+# THIS checkout's index, so any nested worktree path is unconditionally
+# "not tracked" here regardless of whether the shim is actually committed on
+# that worktree's own branch -- a guaranteed false positive, not a real gap.
+# Same exclusion convention as test_runtime_target.sh.
+refs=$(grep -rhEo '[A-Za-z0-9_]+_no_python3\.cmake' --include=CMakeLists.txt \
+    --exclude-dir=.claude . 2>/dev/null | sort -u)
 
 if [ -z "$refs" ]; then
     echo "OK: no *_no_python3.cmake references found in any CMakeLists.txt"
@@ -53,7 +62,7 @@ fi
 # it, so we can resolve it relative to that file's directory.
 for name in $refs; do
     found_any=0
-    for cml in $(grep -rlE "$name" --include=CMakeLists.txt . 2>/dev/null); do
+    for cml in $(grep -rlE "$name" --include=CMakeLists.txt --exclude-dir=.claude . 2>/dev/null); do
         dir=$(dirname "$cml")
         candidate="$dir/$name"
         checked=$((checked + 1))

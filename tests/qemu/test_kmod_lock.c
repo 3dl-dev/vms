@@ -58,6 +58,7 @@ int main(void) {
     enq.lkmode = LCK_K_NLMODE;
     strncpy(enq.resnam, "TESTRES1", sizeof(enq.resnam));
     ioctl(fd, VMS_IOCTL_ENQ, &enq);
+    /* negctl: lock-enq-immediate-grant-status-wrong */
     CHECK(enq.status == SS_NORMAL, "ENQ NL on TESTRES1");
     CHECK(enq.lkid != 0, "got non-zero lock ID");
 
@@ -83,6 +84,7 @@ int main(void) {
     uint32_t getlki_st = vms_kif_getlki(lkid1, &granted_mode, &requested_mode,
                                          resnam, NULL);
     CHECK(getlki_st == SS_NORMAL, "GETLKI succeeds");
+    /* negctl: lock-convert-mode-not-updated */
     CHECK(granted_mode == LCK_K_CRMODE, "granted mode is CR");
     CHECK(strncmp(resnam, "TESTRES1", 8) == 0, "resource name matches");
 
@@ -99,6 +101,7 @@ int main(void) {
     struct vms_deq_args deq = {0};
     deq.lkid = lkid1;
     ioctl(fd, VMS_IOCTL_DEQ, &deq);
+    /* negctl: lock-deq-status-wrong */
     CHECK(deq.status == SS_NORMAL, "DEQ lock");
 
     /* 6. ENQ two compatible locks on same resource */

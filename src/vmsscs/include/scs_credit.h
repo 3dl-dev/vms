@@ -824,6 +824,24 @@ int scs_credit_set_remote_min_send_credits(struct scs_cdt *cdt, unsigned n);
  * short to reach offset 48 at all; and the 106-byte class, which is the 0x4113
  * START/config frame and not an SCS message (see "WHY 106 IS NOT HERE") --
  * returns -1 rather than a guess.
+ *
+ * SCOPING NOTE (vms-a61). The seven-entry length allowlist here duplicates a
+ * fact the shared envelope test (scs_env_parse / scs_rx_parse, scs_env.h)
+ * already establishes for free: [48:50] is the credit field of ANY
+ * envelope-conformant frame, not just these seven measured lengths -- see
+ * tools/cluster/scs_env_measure.py part (G), which reports the delta and
+ * says outright that it is "recorded, NOT acted on: moving the credit module
+ * onto the envelope test changes which outbound frames get a live credit
+ * stamped, i.e. it changes bytes on the wire, and that needs a bracketed lab
+ * run rather than a refactor." vms-a61 took that instruction literally: it
+ * removed the REDUNDANT re-derivation of this same allowlist at scsd.c's two
+ * call sites (both of which already hold a proven-conformant `struct
+ * scs_rx_hdr`/`scs_env` before ever calling this function) but deliberately
+ * left THIS function, scs_credit_read_header() and scs_credit_stamp_header()
+ * -- the ones that decide the offset for a bare (buffer, length) pair with
+ * no proven-conformant envelope in hand, scs_credit_stamp_header() being the
+ * one that writes live bytes onto the wire -- on the length allowlist
+ * unchanged. Migrating THEM is the part that still needs the lab bracket.
  */
 int scs_credit_header_offset(uint16_t total_sca_len);
 

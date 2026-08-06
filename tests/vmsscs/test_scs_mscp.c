@@ -23,6 +23,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 static int failures = 0;
 
@@ -116,8 +117,19 @@ static void test_scc_byte_exact(void)
                 SCS_MSCP_CMD_REF(SCS_MSCP_SCC_CLASS, SCS_MSCP_SCC_MSGID0), 0);
     uint8_t out[SCS_MSCP_FRAME_LEN];
     CHECK(scs_mscp_build_scc(&p, out) == 0, "build_scc ok");
-    CHECK(memcmp(out + 14, golden_scc, 94) == 0,
-          "SCC reproduces golden af2 SCC command byte-exact");
+    /* vms-020: P.TIME (golden_scc[SCS_MSCP_BODY_OFF + SCS_MSCP_P_TIME : +8))
+     * is now live host time, not a replay of the af2 capture's wall clock, so
+     * it is excluded from this byte-exact compare and checked separately in
+     * test_scc_parameter_area(). THIS IS A WIRE-VISIBLE CHANGE (see
+     * scs_mscp.h). */
+    {
+        const size_t time_off = SCS_MSCP_BODY_OFF + SCS_MSCP_P_TIME;
+        CHECK(memcmp(out + 14, golden_scc, time_off) == 0
+                  && memcmp(out + 14 + time_off + 8, golden_scc + time_off + 8,
+                            94 - time_off - 8) == 0,
+              "SCC reproduces golden af2 SCC command byte-exact outside of "
+              "P.TIME");
+    }
     /* Spot-check the load-bearing MSCP fields. */
     const uint8_t *body = out + 72;
     CHECK(out[30] == SCS_MSCP_MSGTYPE && out[31] == SCS_MSCP_FORMAT,
@@ -435,10 +447,17 @@ static void test_scc_parameter_area(void)
           "scc_defaults ok");
     CHECK(scs_mscp_build_body(&c, body, sizeof(body)) == 0, "scc body ok");
 
-    /* The golden af2 SCC command's parameter area, byte for byte -- the proof
-     * that the transcribed field map and the captured bytes are the same thing. */
-    CHECK(memcmp(body, golden_scc + SCS_MSCP_BODY_OFF, SCS_MSCP_BODY_LEN) == 0,
-          "the field-built SCC body equals the golden af2 SCC body byte for byte");
+    /* The golden af2 SCC command's parameter area, byte for byte, EXCEPT
+     * P.TIME [SCS_MSCP_P_TIME : SCS_MSCP_P_TIME+8) -- vms-020 made that live
+     * host time instead of a replay of the af2 capture's own wall clock, so it
+     * is no longer byte-comparable to the golden capture and is checked
+     * separately below. */
+    CHECK(memcmp(body, golden_scc + SCS_MSCP_BODY_OFF, SCS_MSCP_P_TIME) == 0
+              && memcmp(body + SCS_MSCP_P_TIME + 8,
+                        golden_scc + SCS_MSCP_BODY_OFF + SCS_MSCP_P_TIME + 8,
+                        SCS_MSCP_BODY_LEN - SCS_MSCP_P_TIME - 8) == 0,
+          "the field-built SCC body equals the golden af2 SCC body byte for "
+          "byte outside of P.TIME");
 
     CHECK(bu16(body, SCS_MSCP_P_VRSN) == 0,
           "P.VRSN MSCP version 0 -- sec 6.16: the host MUST supply 0 or be "
@@ -455,22 +474,27 @@ static void test_scc_parameter_area(void)
     CHECK(bu16(body, SCS_MSCP_P_HTMO) == 0,
           "P.HTMO 0 = host-access timeout disabled (sec 6.16)");
     CHECK(bu16(body, 18) == 0, "the Table A-6 reserved word at body[18:20] is 0");
-    CHECK(bu32(body, SCS_MSCP_P_TIME) == 0x75280bc0u
-              && bu32(body, SCS_MSCP_P_TIME + 4) == 0x00bc0219u,
-          "P.TIME is the VMS quadword time of sec 6.16");
-    /* AA-L619A-TK sec 6.16: clunks (100 ns) since 00:00 17-Nov-1858. Decoding
-     * the captured quadword yields 2026-07-28 12:59:58 UTC -- the wall clock of
-     * the af2 capture itself. That is the CALIBRATION of the field (it proves
-     * the offset and the epoch), and simultaneously the reason emitting the
-     * constant is a labeled replay: a live client sends the CURRENT time. */
+    /* vms-020: P.TIME is now LIVE host time (scs_member_vms_time_now()), not a
+     * frozen replay of the af2 capture's own wall clock (2026-07-28
+     * 12:59:58 UTC, the old SCS_MSCP_SCC_TIME_AF2 constant). Assert it decodes
+     * to a well-formed VMS quadword close to "now", per sec 6.16, rather than
+     * pinning it to any specific instant. THIS IS A WIRE-VISIBLE CHANGE: a
+     * byte-exact comparison of P.TIME against the golden af2 capture (or
+     * against any earlier OVMX run) will now legitimately fail. */
     {
         const uint64_t clunks = ((uint64_t)bu32(body, SCS_MSCP_P_TIME + 4) << 32)
                               | bu32(body, SCS_MSCP_P_TIME);
-        const uint64_t secs = clunks / 10000000ULL;
-        /* days since 17-Nov-1858 to 28-Jul-2026 == 61249; +46798 s == 12:59:58 */
-        CHECK(secs / 86400ULL == 61249ULL && secs % 86400ULL == 46798ULL,
-              "P.TIME decodes to 1858-11-17 + 61249 days + 12:59:58 == "
-              "2026-07-28 12:59:58 UTC, the af2 capture's own wall clock");
+        const uint64_t secs_since_1858 = clunks / 10000000ULL;
+        /* 17-Nov-1858 00:00:00 -> 01-Jan-1970 00:00:00 is 3506716800 s. */
+        const int64_t unix_secs = (int64_t)secs_since_1858 - 3506716800LL;
+        const time_t now = time(NULL);
+        const int64_t delta = (int64_t)now - unix_secs;
+        CHECK(delta >= -60 && delta <= 60,
+              "P.TIME decodes to within 60s of live host time, not a frozen "
+              "capture replay");
+        CHECK(clunks != 0x00bc021975280bc0ULL,
+              "P.TIME is no longer the frozen af2 capture constant "
+              "(2026-07-28 12:59:58 UTC)");
     }
     /* sec 5.1 caps the parameter area at 36 bytes; SCC's documented fields end
      * at body[28] and the tail must be zero, not template residue. */

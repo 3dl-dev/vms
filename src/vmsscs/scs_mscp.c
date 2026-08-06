@@ -33,6 +33,7 @@
 #include <string.h>
 
 #include "scs_env.h" /* vms-ec7: THE shared SCS message envelope */
+#include "scs_member.h" /* vms-020: scs_member_vms_time_now() for P.TIME */
 
 /*
  * THE SCA/PPD HEADER of the 94-content MSCP command class: SCA content [0:58],
@@ -175,7 +176,7 @@ int scs_mscp_scc_defaults(struct scs_mscp_cmd *c, uint32_t cmd_ref)
     c->scc_version = SCS_MSCP_SCC_VERSION_HOST;
     c->scc_ctlr_flags = SCS_MSCP_SCC_CTLR_FLAGS;
     c->scc_host_timeout = SCS_MSCP_SCC_HOST_TIMEOUT;
-    c->scc_time = SCS_MSCP_SCC_TIME_AF2; /* see the warning in scs_mscp.h */
+    c->scc_time = scs_member_vms_time_now(); /* vms-020: live host time, see scs_mscp.h */
     return 0;
 }
 

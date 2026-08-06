@@ -16,6 +16,7 @@
 
 #include "scs_conn.h" /* vms-dd5: the connection state machine + wire->event map */
 #include "scs_connect.h"
+#include "scs_env.h" /* vms-a61: builds the envelope-conformant test fixture directly */
 #include "scs_hello.h"
 
 static int failures = 0;
@@ -401,6 +402,72 @@ static void test_parse_real_frames(void)
     check(scs_connect_parse(real_request, 20, &v) == -1, "too-short frame rejected");
 }
 
+/*
+ * vms-a61: has_conid used to be gated on `total_sca_len == 110 || 190` --
+ * two of the SEVEN envelope-conformant length classes (scs_env.h: 58, 62, 66,
+ * 86, 94, 110, 190) -- even though the Con.ID pair sits at the SAME fixed
+ * content[50:58] offset on every one of them. This proves the widened gate
+ * (scs_env_parse_frame's conformance test) admits the SHORTEST class, 58,
+ * which the old length pair refused outright.
+ *
+ * THE INPUT IS BUILT BY THE PRODUCTION ENVELOPE BUILDER, not hand-typed: a
+ * hand-typed "58-byte conformant frame" could easily fail the conformance
+ * test by accident (get the inner length or format word wrong) and this test
+ * would then be proving nothing. scs_env_build_frame() is scs_env.c's own
+ * builder -- the same one scs_env_measure.py part (D) proves byte-exact
+ * against 319,575+ real captured frames -- so a successful build is already
+ * proof the frame is conformant before scs_connect_parse ever sees it.
+ */
+static void test_has_conid_widens_past_the_old_110_190_special_case(void)
+{
+    printf("[has_conid: widened to every envelope-conformant class, not just 110/190]\n");
+
+    uint8_t frame[14 + SCS_ENV_HDR_END];
+    memset(frame, 0, sizeof(frame));
+    frame[12] = 0x60;
+    frame[13] = 0x07; /* SCA ethertype */
+    uint8_t *content = frame + 14;
+    /* scs_env_build() deliberately does NOT write the [0:2] SCA length word
+     * (scs_env.h: "it belongs to the frame class, not to the SCS envelope") --
+     * the caller must, exactly as every real builder in this tree does. */
+    uint16_t lenword = (uint16_t)(SCS_ENV_HDR_END - 2);
+    content[0] = (uint8_t)(lenword & 0xffu);
+    content[1] = (uint8_t)((lenword >> 8) & 0xffu);
+
+    struct scs_env_fields f;
+    f.mtype = SCS_ENV_MTYPE_DISCONNECT_REQ;
+    f.credit = 0;
+    f.dest_conid = 0xAABBCCDDu;
+    f.src_conid = 0x11223344u;
+    check(scs_env_build_frame(frame, sizeof(frame), &f) == 0,
+          "scs_env_build_frame built the 58-content envelope-only fixture");
+
+    struct scs_connect_view v;
+    check(scs_connect_parse(frame, sizeof(frame), &v) == 0, "parse the 58-content frame");
+    check(v.total_sca_len == 58, "the fixture really is the 58-content class");
+    check(v.has_conid == 1,
+          "58-content class now carries has_conid -- the OLD code set it ONLY"
+          " for total_sca_len == 110 or 190 and would have refused this exact"
+          " class outright");
+    check(v.remote_conid == 0xAABBCCDDu, "remote Con.ID reads back the built dest_conid");
+    check(v.local_conid == 0x11223344u, "local Con.ID reads back the built src_conid");
+    check(v.conn_msgtype == SCS_ENV_MTYPE_DISCONNECT_REQ,
+          "conn_msgtype reads back the built MTYPE off the parsed envelope,"
+          " not an unguarded raw offset read (vms-a61's scs_connect.c:304 fix)");
+
+    /* NEGATIVE CONTROL: a frame that fails the conformance test (bad format
+     * word) must still get has_conid == 0 -- the widening is to "every
+     * conformant class", not to "every frame this long". */
+    uint8_t bad[sizeof(frame)];
+    memcpy(bad, frame, sizeof(bad));
+    bad[14 + 44] ^= 0xFFu; /* corrupt the format word at content[44] */
+    struct scs_connect_view bv;
+    check(scs_connect_parse(bad, sizeof(bad), &bv) == 0, "parse still succeeds (refusal is in the flag, not the return)");
+    check(bv.has_conid == 0,
+          "a non-conformant frame of the SAME length must NOT get has_conid --"
+          " the gate is conformance, not length");
+}
+
 static void test_build_request(void)
 {
     printf("[build CONNECT-REQUEST]\n");
@@ -735,6 +802,7 @@ int main(void)
     printf("test_scs_connect: directed HELLO + SCS connect (vms-5fe/vms-c6d)\n");
     test_directed_hello();
     test_parse_real_frames();
+    test_has_conid_widens_past_the_old_110_190_special_case();
     test_build_request();
     test_build_response();
     test_response_live_counters();

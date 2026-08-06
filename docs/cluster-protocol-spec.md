@@ -4882,19 +4882,37 @@ Four things follow, and the fourth is the one that matters to `vms-2f3`:
    colliding system (`OVMXT0`) had been on the wire two minutes earlier and had
    **never been admitted** — it never reached `CLUSTER_NODES=3` and no VC to it
    was ever opened. The conflict fired anyway. Being *seen* is enough.
-3. **The record ages out, and `SHOW CLUSTER` is not the oracle for it.** Arm
-   `1aeR` replayed the original `vms-0fe` collision (`OVMXP1`/1601 against
-   `OVMXY1`/1601) on the same pod, `vaxlab-7`, ~3.5 h after `OVMXY1` was last on
-   the wire: **no conflict**, even though `SHOW CLUSTER` *still listed* `OVMXY1`
-   as `BRK_NEW`. The same collision on the same pod **did** fire at 49 minutes
-   (the original `vms-0fe` observation). So `SHOW CLUSTER` over-approximates the
-   conflicting set — it is a safe pre-flight, not a precise one.
-4. **⭐ An exact rejoin never trips this.** Arm `1aeG` re-ran `OVMXZ4`/1804 eight
-   minutes after that identity had actually **joined** the same pod — the
+3. **`SHOW CLUSTER` is NOT the oracle for the conflicting set — GROUNDED.**
+   Arm `1aeR` replayed the original `vms-0fe` collision (`OVMXP1`/1601 against
+   `OVMXY1`/1601) on the same pod, `vaxlab-7`: **no conflict**, even though
+   `SHOW CLUSTER` *still listed* `OVMXY1` as `BRK_NEW` at that moment. So the
+   poller's set is strictly smaller than `SHOW CLUSTER`'s — the latter is a safe
+   pre-flight, not a precise one.
+
+   **Why `1aeR` drew nothing is NOT established — do not cite this as an aging
+   result.** The tempting reading is that the record ages out: the same
+   collision on the same pod fired at +49 min (the original `vms-0fe`
+   observation) and not at +3.5 h (`1aeR`). But that is two points at two times
+   with nothing held constant between them, no measurement of the interval, and
+   a live confound — `vaxlab-7` refused *every* identity this session including
+   the fresh `1aeT1`, so its peer state differs from the pods that produced the
+   positive arms in at least one other way. Aging is one hypothesis; a
+   fourteenth arm holding the pod and the collision fixed while varying only
+   the delay is what would settle it, and it was not run.
+4. **⭐ An exact rejoin does not trip this.** Arm `1aeG` re-ran `OVMXZ4`/1804
+   eight minutes after that identity had actually **joined** the same pod — the
    textbook `vms-2f3` rejoin — and was refused with **zero** conflict lines on
    either console. VMS distinguishes *the same system returning* from *a
    different system claiming a used key*. **The `vms-2f3` refusal is therefore a
    different refusal, and this section does not explain it.**
+
+   Two caveats on this one arm, which is the only claim here without three-pod
+   replication. `1aeG` is **n=1**, and `conflictbracket.sh` deletes the
+   prior-admission sidecar (§4d.2) on every arm, so it is a rejoin by a
+   previously-admitted *identity* presenting as a first-timer, not the full
+   `vms-2f3` reproducer. §4f.2 already refuted the sidecar as causal for the
+   refusal, so the conclusion is very likely to hold — but if anything in this
+   section gets leaned on hard, replicate `1aeG` first.
 
 **Reading it off a capture without a console.** The two refusals separate on the
 wire. In a conflict arm the peers never emit our node name at all and total

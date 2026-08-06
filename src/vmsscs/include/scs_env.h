@@ -90,8 +90,14 @@
  *
  * Exactly {0..10} over ~1,000,000 envelope-conformant frames; 0..9 are the
  * connection-control messages spec sec 4(h)(1a) names and 10 is the p. 4-13
- * application message. 8 and 9 are OBSERVED and UNNAMED -- vms-f03 (Phase C)
- * owns their identification and this header does not guess at one. Anything
+ * application message. 8 is the p. 2-44 SPECIAL CREDIT MESSAGE, identified by
+ * vms-f03/#128: content[48:50] is the Pending Receive Credit count, and its
+ * rate rises monotonically with SYSGEN SCSFLOWCUSH while the type-10 piggyback
+ * rate falls, matching the credit-flush accounting identity p. 2-44 predicts.
+ * 9 is its paired response, one-per-8, but is DELIBERATELY left unnamed: no
+ * public doc names a response to the special credit message, and reverse
+ * accounting rules out a second credit return, so naming it would repeat the
+ * vms-c11 guessed-name pattern. Anything
  * outside {0..10} routes to SCS_ENV_ROUTE_UNKNOWN, is COUNTED, and is NEVER
  * assumed to be an application datagram: no application-datagram MTYPE has ever
  * been observed on this wire, and picking a value would be a guess presented as
@@ -136,7 +142,8 @@ extern "C" {
  * The MTYPE namespace, {0..10}. 0..7 are the connection-control messages of
  * Figures 2-14/2-15/2-16 (spec sec 4(h)(1a)); the mapping onto the connection
  * state machine's events lives in scs_conn_event_for_msgtype() and is NOT
- * duplicated here. 8 and 9 are observed, paired, and UNIDENTIFIED (vms-f03).
+ * duplicated here. 8 is the special credit message and 9 is its unnamed
+ * paired response (vms-f03/#128) -- see the MTYPE namespace comment above.
  *
  * 4 and 5 WERE DISPUTED (vms-754, RESOLVED 2026-08-06). scs_dir.c's
  * SCS_DIR_OP_ACCEPT(4) / SCS_DIR_OP_MSCP_CONFIRM(5) read this SAME field as an
@@ -166,8 +173,8 @@ extern "C" {
 #define SCS_ENV_MTYPE_REJECT_RSP      5u
 #define SCS_ENV_MTYPE_DISCONNECT_REQ  6u
 #define SCS_ENV_MTYPE_DISCONNECT_RSP  7u
-#define SCS_ENV_MTYPE_T8              8u  /* observed, UNNAMED -- vms-f03 */
-#define SCS_ENV_MTYPE_T9              9u  /* observed, UNNAMED -- vms-f03 */
+#define SCS_ENV_MTYPE_T8              8u  /* special credit message -- vms-f03/#128 */
+#define SCS_ENV_MTYPE_T9              9u  /* paired response, deliberately UNNAMED -- vms-f03/#128 */
 #define SCS_ENV_MTYPE_APP_MESSAGE    10u  /* p. 4-13 application message */
 
 /* The highest MTYPE that is a connection-control message, and the highest that

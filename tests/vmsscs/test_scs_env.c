@@ -350,8 +350,9 @@ static void test_names(void)
                  "APP_MESSAGE") == 0, "MTYPE 10 renders as APP_MESSAGE");
     check(strcmp(scs_env_mtype_name(SCS_ENV_MTYPE_T8), "type 8") == 0 &&
               strcmp(scs_env_mtype_name(SCS_ENV_MTYPE_T9), "type 9") == 0,
-          "MTYPEs 8 and 9 render as bare type numbers -- they are OBSERVED and "
-          "UNIDENTIFIED (vms-f03) and a name here would be a guess in the log");
+          "MTYPEs 8 and 9 render as bare type numbers -- 8 is the special "
+          "credit message and 9 is deliberately unnamed (vms-f03/#128), and a "
+          "guessed name here would put a guess in the log");
     check(scs_env_mtype_name(4242) != NULL && scs_env_route_name(99) != NULL,
           "the name helpers never return NULL");
 }

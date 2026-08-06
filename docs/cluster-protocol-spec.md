@@ -4846,6 +4846,73 @@ reproduced byte-identically in `by10` — not the connect-back at all. The
 ~660 s numbers were capture *lengths*, not protocol intervals. **No code change;
 the rule OVMX already follows is the grounded one.**
 
+### 4(w) The configuration poller's identity-conflict refusal (GROUNDED live, `vms-1ae`)
+
+A refusal that is **not** the `vms-2f3` stall, but is indistinguishable from it
+at the console — which is why it went unrecorded for so long. The peer prints
+
+```
+%PEA0, Remote System Conflicts with Known System - REMOTE NODE <ours>
+```
+
+on **both** VAX consoles, the VC opens, the peer's connect never comes, and
+`CLUSTER_NODES` never moves. `HELP/MESSAGE` on the lab VAX gives VMS's own
+explanation: *"The port driver configuration poller discovered a remote system
+with SCSSYSTEMID or SCSNODE equal to that of another system to which a virtual
+circuit is already open."*
+
+**The rule, as measured (13 arms, 3 lab-2 pods, 2026-08-06).** The poller keeps
+a record of every system it has recently seen on the wire, keyed on the pair
+(`SCSNODE`, `SCSSYSTEMID`). A joiner is refused when it matches such a record
+on **exactly one** of the two fields:
+
+| our identity vs. a recently-seen system | conflict | arms |
+|---|---|---|
+| both fields differ (a genuinely new system) | **no** | `1aeB`, `1aeD`, `1aeU3` — all three also **joined** |
+| same `SCSSYSTEMID`, different `SCSNODE` | **yes** | `1aeC` (pod 8), `1aeT2` (pod 7), `1aeU2` (pod 1) |
+| same `SCSNODE`, different `SCSSYSTEMID` | **yes** | `1aeE` (pod 8) |
+| **both fields the same — an exact rejoin** | **no** | `1aeG` (refused, but silently: 0 conflict lines) |
+
+Four things follow, and the fourth is the one that matters to `vms-2f3`:
+
+1. **Either field alone is sufficient.** The message names `SCSSYSTEMID or
+   SCSNODE` and both halves were exercised separately, each against a matched
+   control run on the same pod minutes before and after.
+2. **An open VC is *not* required, despite the wording.** In `1aeT2` the
+   colliding system (`OVMXT0`) had been on the wire two minutes earlier and had
+   **never been admitted** — it never reached `CLUSTER_NODES=3` and no VC to it
+   was ever opened. The conflict fired anyway. Being *seen* is enough.
+3. **The record ages out, and `SHOW CLUSTER` is not the oracle for it.** Arm
+   `1aeR` replayed the original `vms-0fe` collision (`OVMXP1`/1601 against
+   `OVMXY1`/1601) on the same pod, `vaxlab-7`, ~3.5 h after `OVMXY1` was last on
+   the wire: **no conflict**, even though `SHOW CLUSTER` *still listed* `OVMXY1`
+   as `BRK_NEW`. The same collision on the same pod **did** fire at 49 minutes
+   (the original `vms-0fe` observation). So `SHOW CLUSTER` over-approximates the
+   conflicting set — it is a safe pre-flight, not a precise one.
+4. **⭐ An exact rejoin never trips this.** Arm `1aeG` re-ran `OVMXZ4`/1804 eight
+   minutes after that identity had actually **joined** the same pod — the
+   textbook `vms-2f3` rejoin — and was refused with **zero** conflict lines on
+   either console. VMS distinguishes *the same system returning* from *a
+   different system claiming a used key*. **The `vms-2f3` refusal is therefore a
+   different refusal, and this section does not explain it.**
+
+**Reading it off a capture without a console.** The two refusals separate on the
+wire. In a conflict arm the peers never emit our node name at all and total
+0x6007 traffic collapses (577–693 frames over the same window against
+3195–3729 for an admitted run); in a non-conflict refusal (`1aeF`, `1aeG`) the
+peers *do* carry our name in their own frames (3–7 occurrences from the VAX
+source MACs). Census per arm with
+`strings -a <pcap> | grep -oE 'OVMX[A-Z0-9]{2}'` cross-tabulated by Ethernet
+source — guardrail 4.
+
+**Why this is a harness bug before it is a protocol bug.** `tests/lab/tools/mk_sysgen.py`
+would mint any identity asked of it, so parallel agents collided:
+`OVMXY1` and `OVMXP1` were both minted on `SCSSYSTEMID` 1601, and `OVMXP2`/`OVMXY2`
+both on 1602. Every experiment run under a collided identity produces a null
+result that reads as a `vms-2f3` stall. The uniqueness guard added in `vms-1ae`
+refuses the collision at mint time (and names the store it collides with);
+`tests/integration/test_lab_identity_unique.sh` is its gate.
+
 ## 6. Using the dissector
 
 ```

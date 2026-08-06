@@ -518,6 +518,20 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(divider_integrity_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
+
+    # Cluster-identity uniqueness (vms-1ae): SCSNODE/SCSSYSTEMID are
+    # cluster-wide unique keys, and a joiner reusing either one that the peer
+    # already knows is refused by the configuration poller ("%PEA0, Remote
+    # System Conflicts with Known System") in a way that looks exactly like the
+    # vms-2f3 stall. Two agents had already collided on SCSSYSTEMID 1601 and
+    # 1602. Hermetic -- builds its own SYSG v2 stores in a temp dir, needs no
+    # lab, no k3s and no VAX -- and carries both directions plus a control that
+    # the guard is reading the store registry rather than rejecting on sight.
+    add_test(NAME lab_identity_unique_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_lab_identity_unique.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(lab_identity_unique_gate PROPERTIES
+        LABELS "integration;cluster" TIMEOUT 60)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

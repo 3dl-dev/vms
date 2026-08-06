@@ -116,6 +116,39 @@ Scaling up is cheaper than repairing one: `kubectl -n ovmx-lab scale sts/vaxlab
 --replicas=N` gave a healthy virgin pod in ~2.5 minutes. The StatefulSet was left
 at **6 replicas**; `vaxlab-4` carries the `vms-70e2` bracket.
 
+## Mint every identity through `mk_sysgen.py` — never by hand (`vms-1ae`)
+
+`SCSNODE` and `SCSSYSTEMID` are cluster-wide unique keys. Present either one
+that the peer's configuration poller has *recently seen on another system* and
+the join is refused outright:
+
+```
+%PEA0, Remote System Conflicts with Known System - REMOTE NODE OVMXxx
+```
+
+The VC opens, the peer's connect never comes, `CLUSTER_NODES` never moves —
+i.e. it looks **exactly** like the `vms-2f3` stall, and every run under a
+collided identity is a null result filed against the wrong cause. Bracketed
+live over 13 arms on three pods; the rule, the aging behaviour, and the fact
+that an *exact* rejoin does **not** trip it are in
+`docs/cluster-protocol-spec.md` §4(w).
+
+This has already bitten: parallel agents minted `OVMXY1` and `OVMXP1` both on
+`SCSSYSTEMID` 1601, and `OVMXP2`/`OVMXY2` both on 1602. `mk_sysgen.py` now
+refuses a colliding mint and names the store it collides with; ask it for a
+free pair rather than guessing one:
+
+```bash
+python3 tests/lab/tools/mk_sysgen.py --alloc OVMXR /data/training/vax/cluster/work
+# -> OVMXR0 1812
+```
+
+`--force` overrides, loudly, for the arms where the collision *is* the
+experiment. `tests/lab/tools/conflictbracket.sh` is the runner those arms use:
+identity is an argument, the console is windowed to the run (vax1.log is
+append-only for the life of the pod, so a bare grep finds someone else's
+message from hours ago), and both consoles are read.
+
 ## Things that will bite you
 
 - **`dep bdr 0` stays commented on every node.** Depositing 0 into the KA655

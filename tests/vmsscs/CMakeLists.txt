@@ -1099,3 +1099,33 @@ set_tests_properties(scs_type10_figures PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 120
 )
+
+# ---------------------------------------------------------------------------
+# scs_flowcush_figures (vms-f03) -- SCA type 8 == the SCA special credit message.
+#
+# Holds docs/cluster-protocol-spec.md section 4(h)(1g) and
+# docs/design-mscp-direction.md section 1.3 to tools/scs_flowcush_measure.py's
+# EXPECTED table, and on a host that has the lab-2 captures re-derives all 15
+# figures from the packets (the vms-371 contract, via scs_wire.gate).
+#
+# Beyond the figures it pins the three claims that keep an IDENTIFICATION from
+# degenerating into a name guessed into the spec (the vms-c11 failure mode):
+# the zero-type-8-at-default-cushion negative control with the frame counts it
+# was measured over, the handle swap this lab could NOT test, and the explicit
+# refusal to name type 9 (ch.2 p. 2-44 documents no response to a special
+# credit message). Each was verified to RED under a targeted mutant.
+#
+# Registered unconditionally, exactly like scs_credit_figures above.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_flowcush_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_flowcush_figures.py)
+else()
+    add_test(NAME scs_flowcush_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_flowcush_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_flowcush_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 120
+)

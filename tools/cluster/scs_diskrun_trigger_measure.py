@@ -50,7 +50,7 @@ import os
 import struct
 import sys
 
-CAPTURE_DIR = "/data/training/vax/cluster/captures"
+CAPTURE_DIR = "/data/training/vax/cluster/captures-lab2"
 
 SLOT_DIR_SERVER = 0x0007   # SCS_DIR_OVMX_CONID
 SLOT_PS_DIR = 0x000C       # OVMX_PS_DIR_CONID

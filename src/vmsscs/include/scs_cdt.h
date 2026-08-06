@@ -138,7 +138,17 @@
  *     credit==0 rule is necessary rather than sufficient (24.1% of MTYPE-10
  *     frames carry credit 0). OVMX cannot recognise an inbound datagram from
  *     this wire and does not pretend to; see the census in scs_rx.h and the
- *     rx_unknown_mtype counter that will notice the first candidate.
+ *     rx_unknown_mtype counter that will notice the first candidate. THE COUNTS
+ *     ABOVE ARE A DATED SNAPSHOT, THE CONCLUSION IS NOT. The reference lab keeps
+ *     writing captures, so the corpus GROWS and a later re-derivation will not
+ *     reproduce these totals -- a re-run on 2026-08-05 read 154 pcaps /
+ *     1,002,247 envelope-conformant frames (942,251 real-VAX-source) and got
+ *     MTYPE 0..10 with MTYPE 10 at 923,678 / 23.9% credit-0. A DIFFERENT TOTAL
+ *     IS NOT A REGRESSION; a different SHAPE would be. What must still hold on
+ *     re-run, and what the code depends on, is: the MTYPE namespace is exactly
+ *     {0..10}, MTYPE 10 dominates, and no eleventh value appears. If an MTYPE
+ *     outside {0..10} ever shows up, scsd's rx_unknown_mtype counter moves and
+ *     the datagram question is finally answerable.
  *   - CONNECTION-CONTROL messages (types 0..9) are still NOT delivered through
  *     the CDL -- they drive the connection state machine, which is right:
  *     p. 2-29's delivery is to a SYSAP, and control messages are SCS's own.

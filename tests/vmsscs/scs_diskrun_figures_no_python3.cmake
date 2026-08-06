@@ -10,7 +10,7 @@ message(FATAL_ERROR
     "tests/vmsscs/test_scs_diskrun_figures.py with.\n"
     "This test is NOT optional and is deliberately RED rather than skipped. It "
     "is the only thing in ctest that pins the disk-discovery trigger ruling -- "
-    "spec sec 4(O.2), the lab-2 bracket that decided disk discovery keeps ONE "
+    "spec sec 4(O.4), the lab-2 bracket that decided disk discovery keeps ONE "
     "trigger -- to the checked-in EXPECTED table in "
     "tools/cluster/scs_diskrun_trigger_measure.py, and that keeps the REFUTED "
     "claim out: the peer DOES send the DISCONNECT_REQ an immediate trigger "

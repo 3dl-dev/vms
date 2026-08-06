@@ -61,4 +61,11 @@
 # eflag-wfland-status-wrong (the first mutations anchored inside
 # vms_ioctl_wflor/wfland's own bodies -- see those entries in
 # facility_defects.sh for what each covers and why).
-57
+# Raised to 58 by vms-400's eflag-ascefc-reassoc-status-wrong -- the fifth
+# attempt named above at line 51, this time landing: test_kmod_eflag_mproc.c
+# was fixed to de-race its parent/child $ASCEFC calls (a token handshake so
+# the parent always creates the cluster and the child always re-associates)
+# before this entry was written, so the assertion it names is no longer
+# scheduler-dependent. See its own entry in facility_defects.sh for the
+# full account.
+58

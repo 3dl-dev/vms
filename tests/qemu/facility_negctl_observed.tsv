@@ -23,10 +23,10 @@
 #   RUN <defect> <suites that went red, space-joined, or "-"> <pass|fail>
 #   RED <defect> <suite or (harness)> <assertion text observed FAILing>
 #
-# generated-at: 2026-08-06T22:30:33Z
-# tree-commit: 4b9a2c1bd7a0f40c760016f290b1d075732a6da9
+# generated-at: 2026-08-06T23:13:51Z
+# tree-commit: 8bac2e36c85424de0c63429a75811778224ea3cc
 # positive-control: pass
-# defects-in-manifest: 57
+# defects-in-manifest: 58
 # suites-derived: 28
 RUN	access-mode-escalation	test_kmod_access	pass
 RED	access-mode-escalation	test_kmod_access	... and still does not hold CMKRNL afterwards
@@ -68,6 +68,13 @@ RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$readef(1) reported WAS
 RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$readef(1) reported WASSET after the flag was set
 RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$waitfr(1) left the flag SET -- it is not a counting semaphore
 RED	eflag-readef-status-inverted	test_syssvc_ef_local	the cluster state word agrees with the status: flag 1's bit is CLEAR
+RUN	eflag-ascefc-reassoc-status-wrong	test_kmod_eflag_mproc test_syssvc_ef_mproc	pass
+RED	eflag-ascefc-reassoc-status-wrong	test_kmod_eflag_mproc	child: ascefc joined the named common cluster
+RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	child: sys$ascefc joined the named common cluster
+RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	parent: sys$ascefc re-joined the permanent cluster by name
+RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
+RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
+RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	parent: wfland child never reported it was ready to block
 RUN	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	pass
 RED	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dacefc identifies the cluster from ANY flag number in it, not only the base
 RED	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dacefc released the last association to the permanent cluster

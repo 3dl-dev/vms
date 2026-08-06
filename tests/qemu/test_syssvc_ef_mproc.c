@@ -195,9 +195,24 @@ static int run_child(int c2p_write, int p2c_read)
     CHECK((st_local & 1) && !(st & 1),
           "child: sys$setef on an UNASSOCIATED common flag is refused WHILE a local flag succeeds (not merely 'every call fails')");
 
+    /*
+     * Wait for A to have created the cluster first. Without this, A and B's
+     * own sys$ascefc calls below race to be the FIRST caller on this same
+     * cluster name (which CREATES it) versus the SECOND (which FINDS it and
+     * re-associates) -- unordered, so which process lands on which branch
+     * is scheduler-dependent. Same race, same fix, as test_kmod_eflag_mproc.c
+     * one layer down (vms-400): a token handshake decides the winner, A
+     * always creates, B always re-associates.
+     */
+    if (read_bounded(p2c_read, &tok, 1, PEER_TIMEOUT_MS) != 1 || tok != 'P') {
+        printf("  FAIL: child: never saw the parent's cluster-created token\n");
+        fail++;
+    }
+
     st = sys$ascefc(COMMON_BASE, &clusnam, 0, 0);
     printf("  INFO: child: sys$ascefc returned status %u\n", st);
     /* negctl-knockon: bind-client-no-register */
+    /* negctl: eflag-ascefc-reassoc-status-wrong */
     CHECK(st & 1, "child: sys$ascefc joined the named common cluster");
 
     if (send_token(c2p_write, 'A') < 0)
@@ -509,6 +524,12 @@ int main(void)
     /* negctl-knockon: bind-client-no-register */
     CHECK(st & 1, "parent: sys$ascefc created/joined the named common cluster");
 
+    /* Tell B the cluster now exists, so B's own sys$ascefc (below, via the
+     * matching wait on its side) deterministically re-associates rather
+     * than racing A to create it -- see B's matching comment. */
+    if (send_token(p2c[1], 'P') < 0)
+        fail++;
+
     if (read_bounded(c2p[0], &tok, 1, PEER_TIMEOUT_MS) != 1 || tok != 'A') {
         printf("  FAIL: parent: child never reported that it associated\n");
         fail++;
@@ -624,6 +645,7 @@ int main(void)
 
         st = sys$ascefc(PERM_EFN, &permnam, 0, 0);
         /* negctl-knockon: bind-client-no-register */
+        /* negctl-knockon: eflag-ascefc-reassoc-status-wrong */
         CHECK(st & 1, "parent: sys$ascefc re-joined the permanent cluster by name");
         state = 0;
         st = sys$readef(PERM_EFN, &state);
@@ -724,6 +746,7 @@ int main(void)
                    alarms);
             /* negctl-knockon: bind-client-no-register */
             /* negctl-knockon: eflag-waitfr-eintr-normal */
+            /* negctl-knockon: eflag-ascefc-reassoc-status-wrong */
             CHECK(alarms >= WAIT_SIGNAL_ROUNDS,
                   "parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)");
 
@@ -753,6 +776,7 @@ int main(void)
 
             /* negctl: eflag-waitfr-eintr-normal */
             /* negctl-knockon: bind-client-no-register */
+            /* negctl-knockon: eflag-ascefc-reassoc-status-wrong */
             CHECK(verdict == 'S',
                   "parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag");
 
@@ -831,6 +855,7 @@ int main(void)
 
             if (read_bounded(c2p2[0], &tok, 1, PEER_TIMEOUT_MS) != 1 || tok != 'R') {
                 /* negctl-knockon: bind-client-no-register */
+                /* negctl-knockon: eflag-ascefc-reassoc-status-wrong */
                 printf("  FAIL: parent: wfland child never reported it was ready to block\n");
                 fail++;
             } else {

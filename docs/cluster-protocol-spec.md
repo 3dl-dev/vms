@@ -1016,8 +1016,11 @@ paired the same way — 131 frames each, in 25 captures — and positioned insid
 the connection lifetime between the ACCEPT_RSP and the DISCONNECT_REQ (the
 observed order on a full connection is `0,1,2,3,…,8,9,6,7`). **They are not
 named here.** *VAXcluster Principles* ch. 2 draws eight connection-control
-messages and these are a ninth and tenth; nothing we hold says what they are.
-See §5.
+messages, and this paragraph originally read `8`/`9` as a ninth and tenth of the
+same kind. **That reading is superseded by (1f) (`vms-a58`): they are not
+connection-control messages at all** — they sit inside the p. 2-43 credit
+account, which every one of types `0`–`7` sits outside. Their names are still
+unknown. See (1f) and §5.
 
 **What OVMX now builds on this section:** `6` and `7`, from byte-exact captured
 templates, in `src/vmsscs/scs_disc.c` (`vms-591`). Not `5` — OVMX has no
@@ -1277,6 +1280,150 @@ OVMX-sourced command) and it already parses the reply (`scs_mscp_parse()`,
   tell "no units" from "no answer". The fields above are what a parser is
   entitled to read — and only those; `body[48:52]` must be ignored, not
   replayed with intent.
+
+**(1f) TYPES `8` AND `9`: THE CONSTANT-1 LEAD IS EXHAUSTED, AND THEY ARE NOT
+CONNECTION-CONTROL MESSAGES AT ALL (`vms-a58`, 2026-08-06).** Every figure in
+this subsection comes out of `tools/cluster/scs_t89_measure.py` over the
+47-capture lab-1 library, split by the OUI rule (real VAX = `08:00:2b` or
+`aa:00:04`; OVMX's tap MAC reported apart, never mixed in), with the length
+census unrestricted and `tools/cluster/census_guard.py` called on it so that a
+later edit which narrows the population reds instead of silently under-sampling.
+`ctest -R scs_t89_figures` re-derives all of it from the packets on a lab host.
+
+**The unrestricted census by length class.** No length filter — this is the
+whole envelope-conformant population, which is what (1b)/`vms-c11` demand and
+what no earlier census in this document printed in full:
+
+<!-- CENSUS-T89-A: parsed by tests/vmsscs/test_scs_t89_figures.py. Re-run
+     tools/cluster/scs_t89_measure.py; do not hand-edit. -->
+
+| SCA content | msgtype | VMS-origin | OVMX-origin |
+|---|---|---|---|
+| 58 | `5` | 697 | 1 |
+| 58 | `7` | 223 | 42 |
+| 58 | `8` | 131 | 0 |
+| 58 | `9` | 89 | 42 |
+| 62 | `3` | 258 | 123 |
+| 62 | `4` | 453 | 280 |
+| 62 | `6` | 220 | 42 |
+| 66 | `1` | 778 | 338 |
+| 86 | `10` | 202 | 0 |
+| 94 | `10` | 3621 | 585 |
+| 110 | `0` | 1101 | 396 |
+| 110 | `2` | 324 | 70 |
+| 110 | `10` | 2889 | 0 |
+| 190 | `10` | 299224 | 7446 |
+
+A further **93232** SCA-ethertype frames across **39** length classes fail the
+envelope-conformance test and are counted but never read at `[46:48]` — that is
+(1d)'s rule executed rather than remembered.
+
+**The census by owning SYSAP — and the negative it returns.** Each dialogue is
+keyed by its Con.ID handle pair and attributed to the SYSAP its `CONNECT_REQ`
+named at `[62:78]` (§4(h)(2)):
+
+<!-- CENSUS-T89-B: parsed by tests/vmsscs/test_scs_t89_figures.py. -->
+
+| SYSAP | dialogues | accepted | torn down | carrying a type `8` |
+|---|---|---|---|---|
+| `MSCP$DISK` | 1645 | 101 | 0 | 0 |
+| `SCA$TRANSPORT` | 32 | 16 | 0 | 0 |
+| `SCS$DIRECTORY` | 353 | 188 | 131 | 131 |
+| `VMS$VAXcluster` | 154 | 76 | 0 | 0 |
+| `?` | 150 | 0 | 0 | 0 |
+
+**Read the third and fourth columns together before drawing anything from this
+table.** All 131 type-`8` dialogues are `SCS$DIRECTORY` — and so is every
+dialogue in the library that is torn down at all. `MSCP$DISK`, `VMS$VAXcluster`
+and `SCA$TRANSPORT` open, accept and then simply outlive the capture. **So the
+SYSAP split cannot discriminate an SCA-level exchange from an
+`SCS$DIRECTORY`-level one**: the entire teardown population is one SYSAP, and a
+"131/131 SCS$DIRECTORY" result is what BOTH hypotheses predict. Recorded as a
+measured limit of the corpus, not as a finding.
+
+**The structural invariants, each N-of-N over the library:**
+
+<!-- CENSUS-T89-C: parsed by tests/vmsscs/test_scs_t89_figures.py. -->
+
+| invariant | count |
+|---|---|
+| type `8` frames / type `9` frames | 131 / 131 |
+| dialogues carrying a type `8` | 131 |
+| …of those, dialogues that also disconnect | 131 |
+| dialogues that disconnect WITHOUT a type `8` | 0 |
+| type `8` sender is the connection's opener | 131 |
+| type `8` sender is the first `DISCONNECT_REQ` sender | 131 |
+| type `9` answers it with the handle pair swapped | 131 |
+| frames between the `8` and the `DISCONNECT_REQ`: exactly the `9` | 131 |
+| type `8` emitted before the last application message | 0 |
+| type `8` frames sourced by OVMX | 0 |
+| OVMX-sourced `DISCONNECT_REQ` that INITIATED a teardown (rank 0) | 0 |
+| OVMX-sourced `DISCONNECT_REQ` that MATCHED one (rank 1) | 42 |
+
+So the `8`→`9` exchange is **biconditional with teardown** in both directions,
+happens **exactly once** per connection, is always opened by the end that opened
+the connection and will initiate the disconnect, and is always the last thing on
+the connection before `DISCONNECT_REQ`. It is machine-speed, not a timer: 131 of
+131 type `8` frames answered, worst case **0.003122 s**, and worst case
+**0.002112 s** from the `9` to the `DISCONNECT_REQ`.
+
+**THE CREDIT LEDGER — the measurement that answers the lead.** *VAXcluster
+Principles* pp. 2-43..2-44 states a falsifiable rule for the credit field
+(quoted with page cites in `src/vmsscs/include/scs_credit.h`): local SCS copies
+its Pending Receive Credit count into the field and resets that count to zero;
+the receiver adds it to its Send Credit count. That is a per-connection ledger,
+so it can be replayed frame by frame and predicted. Doing so over the 131
+dialogues, with message types `8`, `9` and `10` counted as consuming a receive
+buffer and every other type outside the account:
+
+<!-- CENSUS-T89-D: parsed by tests/vmsscs/test_scs_t89_figures.py. -->
+
+| frames whose `[48:50]` the ledger predicts | msgtype `8` | msgtype `9` | msgtype `10` |
+|---|---|---|---|
+| agreeing | 131 | 131 | 676 |
+| residual | 0 | 0 | 0 |
+
+938 of 938, zero residuals. Two consequences, and they are the deliverable of
+this item:
+
+1. **The constant `1` is a COUNT OF ONE, and the lead is exhausted.** It is not
+   a version and not a flag. The same field, at the same offset, in the same
+   131 dialogues, reads `0` on the first application message of every connection
+   (131 frames — nothing has been received yet) and `1` on all 545 later ones;
+   across the library it also reads `2`, `3` and `4` on type `10`, and `3`, `6`,
+   `8` and `10` on the `CONNECT_REQ`/`ACCEPT_REQ` initial grant. It is `1` on
+   types `8` and `9` because every dialogue here is the strictly alternating
+   `SCS$DIRECTORY` lookup, which never leaves more than one buffer outstanding
+   in either direction. **"Constant" was a property of the workload, not of the
+   field** — which is why a value histogram could not settle this and a ledger
+   could.
+2. **Types `8` and `9` are not connection-control messages.** Message types
+   `1`, `3`, `4`, `5`, `6` and `7` carry credit `0` in 100% of their frames in
+   this library: connection-control frames neither consume a receive buffer nor
+   return one. Types `8` and `9` sit *inside* the credit account and behave
+   exactly like the type-`10` application messages beside them. So (1b)'s
+   framing — "a ninth and tenth" where ch. 2 draws eight connection-control
+   messages — is **refuted by their own credit behaviour**. Whatever they are,
+   they are in the same taxon as sequenced messages, not in the taxon `0`–`7`
+   occupy.
+
+**One residual, kept because it is evidence.** The initiating `DISCONNECT_REQ`
+carries credit `0` while the ledger says `1` is owed, in **131 of 131**
+dialogues. That is not a model failure; it is the same rule seen from the other
+side — the last credit on a connection is never returned, because the connection
+is being destroyed.
+
+**WHAT IS STILL NOT KNOWN, stated as narrowly as the evidence allows.** The
+*names* of message types `8` and `9`, and what a SYSAP asks SCS to do that puts
+them on the wire. The p. 2-44 **special credit message** is **not** restored as
+the candidate, and the reason is no longer the constant: (i) that exchange is
+*unconditional* here — 131 of 131 teardowns, never once mid-dialogue on a
+low-credit trigger — where p. 2-44 describes a message sent only when the local
+Receive Credit count is dangerously low; and (ii) it is *answered* 131 of 131
+times with the handle pair swapped, where p. 2-44 describes no reply at all.
+Either observation alone is a mismatch; both together are why this section still
+**does not name them**. See §5 for the register entry, the eliminated
+hypotheses, and the three experiments that would discriminate next.
 
 **(2) SCS$DIR_LOOKUP body — name resolution with a grounded negative marker.**
 Past the handle pair the body carries fixed-position, blank-padded ASCII SYSAP
@@ -3899,7 +4046,76 @@ For visibility, every field NOT marked GROUNDED above:
   connections — that is a CHARACTERISATION, not an identification:
   **nothing we hold identifies them**, and they are not
   named here. The candidate and its decisive experiment are in
-  `docs/design-mscp-direction.md` §1.3. Do not name or emit them.
+  `docs/design-mscp-direction.md` §1.3. Do not name them. **The "do not emit
+  them" half of this line is SUPERSEDED by the `vms-a58` entry below** — see it
+  before writing an emitter, and see §4(h)(1f) before writing a name.
+- **Message types `8` and `9`: WHAT THEY ARE NOT, and the ruling on emitting
+  them** (§4(h)(1f), `vms-a58`, 2026-08-06). The measurement is
+  `tools/cluster/scs_t89_measure.py`; the gate is `ctest -R scs_t89_figures`.
+
+  **ELIMINATED, with what did it.**
+  1. *"The constant `1` is a version or a flag."* — **DEAD.** The p. 2-43
+     credit ledger predicts `[48:50]` on 938 of 938 frames with zero residuals,
+     so the field is a count; the same field reads `0`, `1`, `2`, `3`, `4` on
+     type `10` and `3`, `6`, `8`, `10` on the initial grant. `1` on types `8`
+     and `9` is a count-of-one produced by a strictly alternating workload that
+     never leaves two buffers outstanding.
+  2. *"They are the ninth and tenth connection-control messages."* — **DEAD.**
+     Types `1`, `3`, `4`, `5`, `6`, `7` carry credit `0` in 100% of frames;
+     `8` and `9` are inside the credit account. Different taxon.
+  3. *"The pairing may be incidental / the response optional."* — **DEAD.**
+     131 of 131 answered, handle pair swapped, worst case 3.1 ms.
+  4. *"They are the p. 2-44 special credit message."* — **NOT RESTORED**, and
+     no longer for the constant-`1` reason, which (1) dissolves. Two
+     independent mismatches now carry it: the exchange is unconditional
+     (131/131 teardowns, never mid-dialogue on a low-credit trigger) and it is
+     answered (p. 2-44 describes no reply). Do not re-propose it without
+     evidence that addresses BOTH.
+
+  **NOT ELIMINATED, and honestly it cannot be from this corpus.** Whether the
+  exchange is an SCA-level property of every connection or an `SCS$DIRECTORY`
+  protocol element: 131 of 131 type-`8` dialogues are `SCS$DIRECTORY`, but so
+  are 131 of 131 dialogues that tear down at all, so both hypotheses predict
+  the observation exactly (§4(h)(1f)).
+
+  **WHAT WOULD DISCRIMINATE NEXT, cheapest first.** (a) Capture a teardown on a
+  `MSCP$DISK` or `VMS$VAXcluster` connection — the §4(h)(1f) table shows both
+  are accepted in quantity and neither ever closes, so this needs a lab run that
+  dismounts a served disk or drops a member cleanly. If an `8`/`9` precedes it, the exchange is SCA-level;
+  if not, it is `SCS$DIRECTORY`'s. (b) Drive a dialogue that leaves more than
+  one message outstanding in a direction and read `[48:50]` on the resulting
+  `8`: a value other than `1` confirms the count reading against a second
+  workload; a stubborn `1` would falsify it. (c) The `docs/design-mscp-direction.md`
+  §1.3 engineered one-way-flow experiment, which is also `vms-1d2`'s missing
+  capture.
+
+  **RULING — must OVMX emit them? YES, but only on the half OVMX actually
+  performs, and NOT as a replayed template.**
+  - **Answering a received type `8` with a type `9`: KEEP.** OVMX already does
+    it (`scs_reflect_credit()` in `src/vmsscs/scsd.c`), and the library records
+    42 OVMX-sourced type-`9` frames against 0 OVMX-sourced type-`8`. Removing
+    it would break a 131-of-131 invariant on a peer that is waiting for it.
+  - **Emitting a type `8` before a `DISCONNECT_REQ` OVMX itself initiates:
+    REQUIRED, and currently ABSENT.** On the wire the type-`8` sender is the
+    disconnect initiator in 131 of 131 dialogues, and nothing else ever sits
+    between the `8` and the `DISCONNECT_REQ`. OVMX has initiated no teardown in
+    this library — every one of its `DISCONNECT_REQ` frames is the *matching*
+    half, rank 1 (§4(h)(1f) table) — so it has never yet violated the invariant — but `vms-591` added
+    `scs_disc_build_request()` and `vms-66f` wired the poller to send it, so the
+    first OVMX-initiated teardown will send a `DISCONNECT_REQ` that no `8`
+    preceded. **This is a first-class candidate for the `vms-abd` refusal**
+    (`%PEA0, Inappropriate SCA Control Message`) and the cheapest test of it is
+    a bracket with and without the `8`, which is what §1.4 of the design record
+    already asks for.
+  - **The credit value is DERIVED, never replayed.** `[48:50]` on the `8` and
+    the `9` must carry the sender's outstanding-credit count from OVMX's own
+    CDT (`src/vmsscs/scs_credit.c`), which happens to be `1` for the dialogues
+    OVMX runs. Hard-coding `1` from these captures would be replay of a
+    workload artifact, which is exactly what (1) above says the constant is.
+  - **Do not name them in an emitter.** A builder may be called
+    `scs_t8_build_request()` — an OVMX name for a wire codepoint — and must not
+    be called a credit message, a quiesce, or anything else this document has
+    not grounded.
   **The vocabulary gap is a COUNTED RUNTIME FIGURE, not only a note**
   (`vms-561`): the five SCS services (`src/vmsscs/scs_svc.c`) ask the port
   driver to emit the packet each transition names, and `scsd.c` answers

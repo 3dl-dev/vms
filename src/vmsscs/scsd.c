@@ -4952,7 +4952,37 @@ static int cm_send_ack(int sock, int ifindex, struct peer_state *ps,
     return 0;
 }
 
-/* vms-760: SCS connection-management credit/ready handshake. After a connection
+/* vms-a58 RULING -- WHAT THIS FUNCTION IS HALF OF, AND WHAT IS MISSING.
+ *
+ * The "op8" this answers is SCS message type 8 at SCA [46:48]. It is now
+ * measured rather than guessed (tools/cluster/scs_t89_measure.py, spec
+ * sec 4(h)(1f) + sec 5; `ctest -R scs_t89_figures` re-derives it):
+ *
+ *   T89-CENSUS-INV: t8_sender_is_disconnect_initiator=131
+ *   T89-CENSUS-INV: ovmx_disconnect_req_rank0=0
+ *
+ * The first says the node that sends the type 8 is the node that then sends the
+ * DISCONNECT_REQ, in every dialogue in the lab-1 library, with nothing but the
+ * type 9 in between -- the 8/9 exchange is biconditional with teardown and
+ * always opened by the disconnecting end. The second says OVMX has never
+ * INITIATED a teardown on any capture we hold; every DISCONNECT_REQ it has ever
+ * emitted is the matching half. THAT is the only reason answering (below) has
+ * been enough so far.
+ *
+ * SO: the moment OVMX initiates a teardown -- which vms-591's
+ * scs_disc_build_request() and vms-66f's poller wiring made possible -- it will
+ * send a DISCONNECT_REQ that no type 8 preceded, violating a 131-of-131 wire
+ * invariant. Emitting the type 8 first is REQUIRED, is NOT implemented here,
+ * and is a first-class candidate for the vms-abd "Inappropriate SCA Control
+ * Message" refusal. When it is built: derive [48:50] from this connection's own
+ * outstanding-credit count (scs_credit.c) -- do NOT hard-code the 1 the
+ * captures show, which is an artifact of the strictly alternating
+ * SCS$DIRECTORY workload and not a constant of the message. And do not NAME the
+ * message: types 8 and 9 are grounded in position, pairing and credit
+ * behaviour, and in nothing else (spec sec 5 lists the four eliminated
+ * readings, including the p. 2-44 special credit message).
+ *
+ * vms-760: SCS connection-management credit/ready handshake. After a connection
  * binds (op0/1/2/3), VAX1 runs op8->op9 and op6->op7 control exchanges on it, and
  * GATES further admission (incl. accepting the joiner's own client connects) on the
  * joiner answering them. GROUNDED af2 143.759 (member's dir conn) + 143.893 (joiner's):

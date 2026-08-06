@@ -761,6 +761,7 @@ int main(void)
              "SHOW PROCESS %s\nLOGOUT\n", ABSENT_NAME);
     CHECK(run_dcl(script, -1, NULL, out, sizeof(out)) == 0,
           "SHOW PROCESS <absent name> ran under the real DCL.EXE");
+    /* negctl-knockon: proctab-getjpi-nonexpr-status-wrong */
     CHECK(has_line(out, MSG_NONEXPR),
           "an absent process name reports %SYSTEM-W-NONEXPR verbatim");
     CHECK(line_containing(out, "Process ID:") == NULL,
@@ -844,9 +845,11 @@ int main(void)
                       "its own UIC group");
                 CHECK(strstr(out, SETUP_FAIL_MARK) == NULL,
                       "the unprivileged by-name caller was set up as intended");
+                /* negctl-knockon: proctab-getjpi-nonexpr-status-wrong */
                 CHECK(has_line(out, MSG_NONEXPR),
                       "SHOW PROCESS <name> on an out-of-group process reports "
                       "%SYSTEM-W-NONEXPR -- the name search is group-scoped");
+                /* negctl-knockon: proctab-getjpi-nonexpr-status-wrong */
                 CHECK(!has_line(out, MSG_NOPRIV),
                       "... and NOT %SYSTEM-F-NOPRIV: the group-scoped name "
                       "search never reaches a process to be refused");

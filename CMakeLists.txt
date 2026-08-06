@@ -513,6 +513,20 @@ if(BUILD_TESTS)
                 $<TARGET_FILE:vmsdcl>)
     set_tests_properties(opcom_record_body_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
+
+    # Divider integrity (vms-6d7): catch git's 3-way auto-merge silently
+    # truncating/fusing comment-divider blocks -- the vms-371 rebase
+    # incident (2e30da9 / 2dcd237), corrupted OUTSIDE the region git
+    # reported as needing manual resolution, invisible to py_compile
+    # (comments) and to the wire/data tests (they string-search a markdown
+    # spec, not comment formatting). Source scan over tracked .py/.c/.h;
+    # runs its own proof suite first (synthetic corrupted + clean fixtures)
+    # so the sweep is only trusted once the detector proves itself.
+    add_test(NAME divider_integrity_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_divider_integrity.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(divider_integrity_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 120)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

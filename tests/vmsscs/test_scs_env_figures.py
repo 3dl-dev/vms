@@ -121,12 +121,16 @@ m = re.search(r"#define\s+SCS_ENV_MTYPE_CONTROL_MAX\s+(\d+)", env_h)
 check(m is not None and int(m.group(1)) == 9,
       "scs_env.h defines SCS_ENV_MTYPE_CONTROL_MAX == 9")
 
-# 8 and 9 are observed and UNNAMED. A gate on this because naming them would be
-# the guess-presented-as-decode this epic keeps rejecting, and Phase C
-# (vms-f03) owns the identification.
-check("vms-f03" in env_h and "UNIDENTIFIED" in env_h.upper(),
-      "scs_env.h records that MTYPEs 8 and 9 are observed and UNIDENTIFIED, "
-      "and names the item that owns them")
+# 8 is identified (special credit message) and 9 is DELIBERATELY left
+# unnamed -- vms-f03/#128. Gate on the corrected text so this file cannot
+# drift back to the stale "UNIDENTIFIED" claim vms-182 fixed.
+check("vms-f03" in env_h and "special credit message" in env_h.lower(),
+      "scs_env.h records that MTYPE 8 is the special credit message, "
+      "citing the item that identified it")
+check("vms-f03" in env_h and "unnamed" in env_h.lower() and "9" in env_h,
+      "scs_env.h records that MTYPE 9 is deliberately left unnamed")
+check("UNIDENTIFIED" not in env_h.upper(),
+      "scs_env.h no longer claims MTYPE 8 is unidentified (stale post-vms-f03)")
 check('"type 8"' in env_c and '"type 9"' in env_c,
       "scs_env.c renders MTYPE 8/9 as bare type numbers, never as a guessed name")
 

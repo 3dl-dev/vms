@@ -57,4 +57,8 @@
 # genuinely nondeterministic -- structurally incompatible with this
 # manifest's exact-match model. Left for a future item that either adds
 # synchronization to that test or finds a differently-scoped target.
-55
+# Raised to 57 by vms-2ed's eflag-wflor-status-wrong and
+# eflag-wfland-status-wrong (the first mutations anchored inside
+# vms_ioctl_wflor/wfland's own bodies -- see those entries in
+# facility_defects.sh for what each covers and why).
+57

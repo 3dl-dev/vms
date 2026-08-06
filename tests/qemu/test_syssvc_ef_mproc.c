@@ -785,6 +785,7 @@ int main(void)
         st = sys$ascefc(COMMON_BASE_3, &wfnam, 0, 0);
         printf("  INFO: parent: sys$ascefc(%d, \"OVMX$2ED_WF\") returned status %u\n",
                COMMON_BASE_3, st);
+        /* negctl-knockon: bind-client-no-register */
         CHECK(st & 1, "parent: sys$ascefc joined the cluster the WFLOR/WFLAND measurement uses");
 
         (void)sys$clref(WFLAND_EFN_A);
@@ -793,6 +794,7 @@ int main(void)
         st = sys$setef(WFLAND_EFN_A);
         printf("  INFO: parent: sys$setef(%d) [WFLOR setup] returned status %u\n",
                WFLAND_EFN_A, st);
+        /* negctl-knockon: bind-client-no-register */
         CHECK(st & 1, "parent: sys$setef sets the flag $WFLOR will find already satisfied");
 
         state = 0;
@@ -801,6 +803,8 @@ int main(void)
         printf("  INFO: parent: sys$wflor(%d, 0x%x) returned status %u; state=0x%08x "
                "(only bit %d of the mask is set)\n",
                WFLAND_EFN_A, mask, st, state, WFLAND_EFN_A - COMMON_BASE_3);
+        /* negctl: eflag-wflor-status-wrong */
+        /* negctl-knockon: bind-client-no-register */
         CHECK((st & 1) && (state & (1u << (WFLAND_EFN_A - COMMON_BASE_3))),
               "parent: sys$wflor returned with only ONE of the two mask flags set -- OR, not AND");
 
@@ -826,6 +830,7 @@ int main(void)
             close(c2p2[1]);
 
             if (read_bounded(c2p2[0], &tok, 1, PEER_TIMEOUT_MS) != 1 || tok != 'R') {
+                /* negctl-knockon: bind-client-no-register */
                 printf("  FAIL: parent: wfland child never reported it was ready to block\n");
                 fail++;
             } else {
@@ -853,6 +858,7 @@ int main(void)
                         printf("  FAIL: parent: wfland child never reported a verdict after both flags were set\n");
                         fail++;
                     } else {
+                        /* negctl: eflag-wfland-status-wrong */
                         CHECK(verdict == 'S',
                               "parent: sys$wfland unblocked only once BOTH mask flags were set (AND, not OR)");
                     }

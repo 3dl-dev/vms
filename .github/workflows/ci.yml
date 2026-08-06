@@ -1057,7 +1057,7 @@ jobs:
   # still emits EM_AARCH64, mixed-architecture input is rejected).
   # -----------------------------------------------------------------------
   vmslink-x86_64:
-    name: LINK.EXE VMS-native Linker — x86_64 simple relocs (vms-8f5)
+    name: LINK.EXE VMS-native Linker — x86_64 relocs (vms-8f5/cd1/2e4)
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1073,6 +1073,20 @@ jobs:
       - name: Build LINK.EXE (native x86_64) + prove the simple x86_64 relocs + additive-gate regression
         run: |
           sh src/vmslink/test/run_test_x86_64.sh
+
+      # vms-2e4: the LAST x86_64 relocation class — gnu2-dialect TLSDESC
+      # (R_X86_64_GOTPC32_TLSDESC + R_X86_64_TLSDESC_CALL, plus the
+      # local-dynamic R_X86_64_DTPOFF32 / _TLS_MODULE_BASE_ half). Proof is
+      # end-to-end, not structural: the linked image is EXECUTED, its
+      # PT_INTERP runs the real x86_64 IMGACT.EXE, and a second real thread
+      # (clone + CLONE_SETTLS) shows every thread-local is TP-relative. The
+      # runner is x86_64, so this runs natively — but it needs
+      # /vms/SYS0/SYSCOMMON/{SYSEXE,SYSLIB} for the PT_INTERP path.
+      - name: Prove the x86_64 TLSDESC relocs link AND activate (vms-2e4)
+        run: |
+          sudo mkdir -p /vms/SYS0/SYSCOMMON/SYSEXE /vms/SYS0/SYSCOMMON/SYSLIB
+          sudo chown -R "$(id -u):$(id -g)" /vms
+          sh src/vmslink/test/run_test_x86_64_tls.sh
 
   # -----------------------------------------------------------------------
   # Job 10b: DECC$SHR.EXE — the OVMX C run-time library shareable (aarch64)

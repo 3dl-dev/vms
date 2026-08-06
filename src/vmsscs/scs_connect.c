@@ -139,12 +139,6 @@ static void put_le16(uint8_t *dst, uint16_t v)
     dst[1] = (uint8_t)((v >> 8) & 0xff);
 }
 
-static uint32_t get_le32(const uint8_t *src)
-{
-    return (uint32_t)src[0] | ((uint32_t)src[1] << 8) |
-           ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24);
-}
-
 /*
  * vms-578: `stamp_connect_data` -- WHOSE connect data goes at [94:110].
  *
@@ -290,18 +284,50 @@ int scs_connect_parse(const uint8_t *frame, size_t len, struct scs_connect_view 
     v->msgtype = frame[30];
     v->format = frame[31];
 
-    /* Con.ID pair (abs 64/68) is only grounded for the 110- and 190-byte
-     * classes (spec sec 4d/4g); require the frame actually holds those bytes. */
-    if ((v->total_sca_len == 110 || v->total_sca_len == 190) && len >= 72) {
+    /* vms-a61: Con.ID pair (abs 64/68 = content[50:58]) is grounded on the
+     * SHARED ENVELOPE for ANY envelope-conformant frame (scs_env.h: "[50:54]
+     * DESTINATION Con.ID / [54:58] SOURCE Con.ID", fixed offsets, no length
+     * dependence) -- NOT only for the 110- and 190-byte classes this used to
+     * special-case. That length pair was never the grounding; it was every
+     * class this parser's callers happened to be handed at the time it was
+     * written. scs_env_parse_frame() is the conformance test itself (inner
+     * length == total-44 AND format word == 0x0004), which is a STRICTER and
+     * more principled admission than the two-length allowlist it replaces:
+     * every frame the old test admitted is envelope-conformant (110/190 are
+     * two of the seven conformant classes), so nothing the old code accepted
+     * is now refused.
+     *
+     * WHAT THIS WIDENS: the 58/62/66/86/94-content classes, which the old
+     * length test excluded even though their Con.ID pair sits at the exact
+     * same fixed offset and is exactly as grounded. A caller in scsd.c that
+     * gates a CONNECT-RESPONSE emission on `has_conid` (branch (c)) will now
+     * see it set for those classes too where before it did not -- this is a
+     * behaviour change on frames scsd.c did not previously act on this way,
+     * not a decode change: the field itself is unchanged and unconditionally
+     * correct for every class in the conformant population. */
+    struct scs_env cev;
+    int conformant = (scs_env_parse_frame(frame, len, &cev) == 0);
+    if (conformant) {
         v->has_conid = 1;
-        v->remote_conid = get_le32(frame + 64);
-        v->local_conid = get_le32(frame + 68);
+        v->remote_conid = cev.dest_conid; /* content[50:54], == old abs-64 read */
+        v->local_conid = cev.src_conid;   /* content[54:58], == old abs-68 read */
     }
 
-    /* [46:48] = abs 60:62, the SCA connection-control message type (spec sec
-     * 4h(1a)). Filled whenever the frame is long enough to hold it. */
-    if (len >= 62) {
-        v->conn_msgtype = (uint16_t)(frame[60] | ((uint16_t)frame[61] << 8));
+    /* vms-a61: [46:48] = abs 60:62, the SCA connection-control message type
+     * (spec sec 4h(1a)) -- same field scs_env.h calls MTYPE. This used to be
+     * an open-coded `frame[60] | frame[61]<<8` behind only a bare `len>=62`
+     * check, the same unsound-read shape the has_conid widening above and
+     * scsd.c's vms-ec7/vms-a61 migrations removed elsewhere: `len>=62` proves
+     * the two bytes are READABLE, not that they are the MTYPE field of an
+     * actual SCS message -- a frame of some other class that happens to be
+     * >=62 bytes has two bytes there too, meaning something else. Read it
+     * from the SAME parsed envelope as the Con.ID pair above, and only when
+     * conformant. INERT today (conn_msgtype has no production consumer --
+     * only the two asserts in test_scs_connect.c), flagged in the vms-ec7
+     * post-merge audit and fixed here as the same bug class this item's
+     * other two bullets fix. */
+    if (conformant) {
+        v->conn_msgtype = cev.mtype; /* content[46:48], == old abs-60 read */
     }
 
     /* vms-fdd: the peer's connect data. Claimed ONLY for the population it is

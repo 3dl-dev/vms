@@ -6746,6 +6746,86 @@ static void test_peer_disconnect_req_is_answered_and_matched(void)
 }
 
 /*
+ * vms-a61 -- THE REORDERING RISK, AS A FALSIFIABLE TEST.
+ *
+ * vms-ec7 left the connection-control state-machine DECODE on the shared
+ * envelope (scs_rx_parse, in scsd_handle_frame's receive block) but the
+ * actual conn_step() DISPATCH at the old (b1) classifier, which additionally
+ * gated on a legacy marker test scsd_handle_frame no longer needs anywhere
+ * else: `n>=72 && content[16] in {0x4b,0x5b,0x7b}`. vms-a61 moves the
+ * dispatch itself onto the shared receive block, dropping that marker gate --
+ * the envelope conformance test (scs_rx_parse succeeding) is now the ONLY
+ * admission test, run at a point in scsd_handle_frame() strictly EARLIER
+ * than the old (b1) site.
+ *
+ * THIS IS THE ONE NAMED BEHAVIOUR DELTA (see the comment at the shared
+ * receive block's `h.kind == SCS_RX_CONTROL` arm): a frame that is
+ * envelope-conformant but does NOT carry one of the three legacy markers
+ * would previously never have reached the classifier at all -- REGARDLESS
+ * of dispatch order, because (b1)'s own outer `if` refused it before the
+ * classifier code ever ran. After vms-a61 such a frame IS dispatched.
+ *
+ * This test manufactures EXACTLY that frame -- a real captured DISCONNECT_REQ
+ * (cap_disconnect_req_to_ovmx) with its outer marker byte [16] (frame abs 30)
+ * changed from the captured 0x4b to 0x00, everything else byte-identical,
+ * including the envelope at [42:58] the dispatch actually reads -- and drives
+ * it through the REAL production entry point, scsd_handle_frame(), exactly
+ * as every other case in this file does. It is not a synthetic construction
+ * chosen to flatter the new code: it is the precise frame class the comment
+ * at the shared receive block names as the one admitted set this item
+ * widens, built by editing exactly the one byte that set does not depend on.
+ *
+ * OLD DISPATCH (behaviour this test would have caught): conn_step() never
+ * runs, no DISCONNECT_RSP is sent, no matching DISCONNECT_REQ is sent, and
+ * the connection stays wherever it was -- FAILING every CHECK below.
+ * NEW DISPATCH (what vms-a61 claims): the envelope test alone gates it, so
+ * the marker edit changes nothing observable and the outcome is byte-for-byte
+ * what test_peer_disconnect_req_is_answered_and_matched() gets from the
+ * UNEDITED marker. That equivalence -- "the marker byte no longer matters" --
+ * is the claim under test, so both are asserted.
+ */
+static void test_control_dispatch_survives_a_frame_the_legacy_marker_would_have_refused(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    enum scs_conn_state before = scs_conn_state_of(cdt);
+    CHECK(before == SCS_CONN_OPEN || before == SCS_CONN_ACCEPT_SENT,
+          "the fixture's SCS$DIRECTORY connection is %s -- Figure 2-16 starts "
+          "from a formed connection", scs_conn_state_name(before));
+
+    uint8_t frame[sizeof(cap_disconnect_req_to_ovmx)];
+    memcpy(frame, cap_disconnect_req_to_ovmx, sizeof(frame));
+    CHECK(frame[30] == SCS_MSGTYPE_SEQAPP,
+          "the fixture's own marker byte drifted -- this test needs to know"
+          " what it is changing FROM");
+    frame[30] = 0x00; /* NOT in the legacy {0x4b,0x5b,0x7b} admission set */
+
+    rx_feed(&r, frame, sizeof(frame));
+
+    CHECK(disc_req_recv == 1,
+          "with the legacy marker gone, the daemon delivered %lu DISCONNECT_REQ"
+          " to the reason-code accounting, expected 1 -- the envelope test alone"
+          " should have been sufficient", disc_req_recv);
+    CHECK(disc_rsp_sent == 1,
+          "with the legacy marker gone, the daemon sent %lu DISCONNECT_RSP,"
+          " expected 1: this is exactly the frame the OLD (b1) marker gate"
+          " would have silently dropped before the classifier ever ran",
+          disc_rsp_sent);
+    CHECK(disc_req_sent == 1,
+          "with the legacy marker gone, the daemon's own symmetric"
+          " DISCONNECT_REQ count is %lu, expected 1", disc_req_sent);
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_MATCH,
+          "with the legacy marker gone, the connection is %s, expected"
+          " DISC MATCH -- the state machine did not step",
+          scs_conn_state_name(scs_conn_state_of(cdt)));
+    CHECK(disc_simultaneous == 0,
+          "a peer-initiated teardown was scored as the p. 2-27 simultaneous case");
+}
+
+/*
  * (2) THE MATCHING DISCONNECT_RSP CLOSES IT, and the CDT is RELEASED.
  * Figure 2-16: DISC MATCH --RCV_DISCONNECT_RSP--> CLOSED.
  *
@@ -8194,6 +8274,10 @@ int main(void)
     test_reason_kill_switch_through_the_daemon();
     /* vms-591: the Figure 2-16 DISCONNECT dialogue and the clean shutdown. */
     test_peer_disconnect_req_is_answered_and_matched();
+    /* vms-a61: the state-machine dispatch point moved off the legacy marker
+     * gate onto the shared envelope test alone -- proved with a frame the
+     * OLD gate would have refused outright. */
+    test_control_dispatch_survives_a_frame_the_legacy_marker_would_have_refused();
     test_matching_disconnect_rsp_closes_the_connection();
     test_simultaneous_disconnect_sends_no_second_request();
     test_shutdown_disconnects_every_open_connection();

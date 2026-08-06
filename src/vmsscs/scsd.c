@@ -6288,7 +6288,18 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                  * counter is how "OVMX has never seen an SCS message type
                  * outside {0..10}" stays a MEASUREMENT instead of a memory, and
                  * it is the counter that would move the day an application
-                 * DATAGRAM class finally shows up. */
+                 * DATAGRAM class finally shows up. THE COUNTS ABOVE ARE A DATED
+                 * SNAPSHOT, THE CONCLUSION IS NOT. The reference lab keeps
+                 * writing captures, so the corpus GROWS and a later re-derivation
+                 * will not reproduce these totals -- a re-run on 2026-08-05 read
+                 * 154 pcaps / 1,002,247 envelope-conformant frames (942,251
+                 * real-VAX-source) and got MTYPE 0..10 with MTYPE 10 at 923,678 /
+                 * 23.9% credit-0. A DIFFERENT TOTAL IS NOT A REGRESSION; a
+                 * different SHAPE would be. What must still hold on re-run, and
+                 * what the code depends on, is: the MTYPE namespace is exactly
+                 * {0..10}, MTYPE 10 dominates, and no eleventh value appears. If
+                 * an MTYPE outside {0..10} ever shows up, scsd's rx_unknown_mtype
+                 * counter moves and the datagram question is finally answerable. */
                 rx_unknown_mtype++;
                 log_ts(stdout);
                 printf(" SCSD-W-RXMTYPE, SCS message type %u is outside the"

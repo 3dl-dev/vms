@@ -3107,8 +3107,9 @@ to a tree capable of completing a first join: `vms-70e2`'s positive control
 failed (§4(O)), `vms-578` fixed that (§4(O.1)), and nobody re-ran the triple.
 
 **Method.** Nine runs on ONE lab-2 pod, `vaxlab-6`, scaled up fresh for this
-bracket and verified `CLUSTER_NODES=2` before the first run, inside twenty-one
-minutes on 2026-08-05 — **one binary throughout** (a build of `main` at
+bracket and verified `CLUSTER_NODES=2` before the first run, over 27 minutes
+29 seconds on 2026-08-05 (A1 start to C4 end, with the last rejoin B4 at the
+21-minute mark) — **one binary throughout** (a build of `main` at
 `f874b04`), **default environment**, no switches. `SCSSYSTEMID`s 1500–1504.
 Identity is proven from the capture bytes on every run, never from SCSD's log
 (guardrail 18). A control sits **between** every pair of test runs, not merely

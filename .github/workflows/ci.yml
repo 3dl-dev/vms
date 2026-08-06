@@ -1132,8 +1132,11 @@ jobs:
   # shipped OVMX libraries can be the VMS-native LINK.EXE shareables instead
   # of ld-linked .so files. Asserts, via readelf, that all 9 artifacts (5
   # libs + DECC$SHR + DCL.EXE + LOGINOUT.EXE) are EM_AARCH64 with zero
-  # DT_NEEDED entries -- no ld/ld.so anywhere in the graph. aarch64-only (the
-  # x86_64 extension is vms-6da); runs under arm64 emulation.
+  # DT_NEEDED entries -- no ld/ld.so anywhere in the graph. Runs under arm64
+  # emulation. The x86_64 analog (link-native-cmake-x86_64, vms-6da) follows
+  # immediately below, sharing this SAME build_link_native.sh/CMakeLists.txt
+  # mechanism (ARCH auto-detected from the compiler triple) -- not a forked
+  # target or a second custom command.
   # -----------------------------------------------------------------------
   link-native-cmake:
     name: VMS-native LINK.EXE Graph via CMake (OVMX_LINK_NATIVE)
@@ -1164,12 +1167,56 @@ jobs:
               for f in "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE; do
                   echo "-- $f --"
                   readelf -h "$f" | grep -q "Machine:.*AArch64" || { echo "FAIL: $f not EM_AARCH64"; exit 1; }
-                  N=$(readelf -d "$f" 2>/dev/null | grep -c NEEDED)
+                  N=$(readelf -d "$f" 2>/dev/null | grep -c NEEDED || true)
                   [ "$N" -eq 0 ] || { echo "FAIL: $f has $N DT_NEEDED entries (ld-linked, not VMS-native)"; exit 1; }
               done
               COUNT=$(ls "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE | wc -l)
               [ "$COUNT" -eq 9 ] || { echo "FAIL: expected 9 artifacts (5 libs + DECC\$SHR + DCL.EXE + LOGINOUT.EXE), got $COUNT"; exit 1; }
               echo "OK: $COUNT VMS-native LINK.EXE artifacts, all EM_AARCH64, zero DT_NEEDED"
+            '
+
+  # -----------------------------------------------------------------------
+  # link-native-cmake-x86_64: the x86_64 analog of link-native-cmake above
+  # (bead vms-6da, epic vms-b93 "0.1 pre-release" -- the direct blocker of
+  # vms-d0f5e's fat initramfs). Same CMakeLists.txt/build_link_native.sh
+  # mechanism, ARCH auto-detected from the compiler triple (aarch64-musl vs
+  # x86_64-musl) -- NOT a duplicated custom target. x86_64 is the project's
+  # primary architecture (CLAUDE.md Rule 5) and this is what a shipped fat
+  # initramfs actually needs. Asserts, via readelf, that all 9 artifacts are
+  # EM_X86_64 with zero DT_NEEDED entries. Unlike the arm64 job, GitHub's
+  # runner IS x86_64 (see dcl-native-x86_64 above), so this needs no QEMU
+  # binfmt registration -- the alpine:3.20/amd64 container runs natively.
+  # -----------------------------------------------------------------------
+  link-native-cmake-x86_64:
+    name: VMS-native LINK.EXE Graph via CMake, x86_64 (OVMX_LINK_NATIVE)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: cmake -B build && cmake --build build (x86_64 musl) -- assert the shipped graph is LINK.EXE-native
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache cmake gcc g++ musl-dev binutils make linux-headers >/dev/null
+              cmake -B /tmp/build -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=Release
+              cmake --build /tmp/build --target link_native_graph -j"$(nproc)"
+              echo "== readelf: EM_X86_64, zero DT_NEEDED, across all 9 artifacts =="
+              SYSLIB=/tmp/build/link-native/SYSLIB
+              SYSEXE=/tmp/build/link-native/SYSEXE
+              for f in "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE; do
+                  echo "-- $f --"
+                  readelf -h "$f" | grep -q "Machine:.*X86-64" || { echo "FAIL: $f not EM_X86_64"; exit 1; }
+                  N=$(readelf -d "$f" 2>/dev/null | grep -c NEEDED || true)
+                  [ "$N" -eq 0 ] || { echo "FAIL: $f has $N DT_NEEDED entries (ld-linked, not VMS-native)"; exit 1; }
+              done
+              COUNT=$(ls "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE | wc -l)
+              [ "$COUNT" -eq 9 ] || { echo "FAIL: expected 9 artifacts (5 libs + DECC\$SHR + DCL.EXE + LOGINOUT.EXE), got $COUNT"; exit 1; }
+              echo "OK: $COUNT VMS-native LINK.EXE artifacts, all EM_X86_64, zero DT_NEEDED"
             '
 
   # -----------------------------------------------------------------------

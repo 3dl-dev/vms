@@ -32,11 +32,12 @@ install(TARGETS vmsdump RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 # LOGINOUT.EXE) that IMGACT.EXE actually activates: ET_DYN images carrying a
 # .vms$sv symbol vector and NO DT_NEEDED — never ld/ld.so.
 #
-# aarch64 musl only, detected from the compiler's target triple (the same
+# aarch64 OR x86_64 musl, detected from the compiler's target triple (the same
 # precondition `run_dcl_native.sh`/`run_login_native.sh` document as "must run
-# in the arm64 musl container"). The x86_64 extension is a separate item
-# (vms-6da) that extends this same target once LINK.EXE's x86_64 backend
-# (vms-bdf/vms-cb5f) is wired in.
+# in the arm64/amd64 musl container"). x86_64 detection added by vms-6da,
+# which extends this SAME target/detection mechanism (not a second custom
+# target) once LINK.EXE's x86_64 backend (vms-bdf/vms-cb5f/vms-a66) landed --
+# x86_64 is the project's primary arch (CLAUDE.md Rule 5).
 execute_process(
     COMMAND ${CMAKE_C_COMPILER} -dumpmachine
     OUTPUT_VARIABLE OVMX_CC_TARGET_TRIPLE
@@ -44,14 +45,21 @@ execute_process(
     ERROR_QUIET
     RESULT_VARIABLE OVMX_CC_DUMPMACHINE_RC
 )
-if(OVMX_CC_DUMPMACHINE_RC EQUAL 0 AND OVMX_CC_TARGET_TRIPLE MATCHES "aarch64" AND OVMX_CC_TARGET_TRIPLE MATCHES "musl")
+if(OVMX_CC_DUMPMACHINE_RC EQUAL 0 AND OVMX_CC_TARGET_TRIPLE MATCHES "musl" AND
+   (OVMX_CC_TARGET_TRIPLE MATCHES "aarch64" OR OVMX_CC_TARGET_TRIPLE MATCHES "x86_64"))
     set(OVMX_LINK_NATIVE_SUPPORTED ON)
+    if(OVMX_CC_TARGET_TRIPLE MATCHES "aarch64")
+        set(OVMX_LINK_NATIVE_ARCH aarch64)
+    else()
+        set(OVMX_LINK_NATIVE_ARCH x86_64)
+    endif()
 else()
     set(OVMX_LINK_NATIVE_SUPPORTED OFF)
+    set(OVMX_LINK_NATIVE_ARCH "")
 endif()
 
 option(OVMX_LINK_NATIVE
-    "Build the VMS-native LINK.EXE shareable-image graph (LIBVMS\$SHR.EXE et al, DCL.EXE, LOGINOUT.EXE) -- aarch64 musl only"
+    "Build the VMS-native LINK.EXE shareable-image graph (LIBVMS\$SHR.EXE et al, DCL.EXE, LOGINOUT.EXE) -- aarch64 or x86_64 musl only"
     ${OVMX_LINK_NATIVE_SUPPORTED})
 
 if(OVMX_LINK_NATIVE)
@@ -62,11 +70,11 @@ if(OVMX_LINK_NATIVE)
         # success without the artifacts.
         message(FATAL_ERROR
             "OVMX_LINK_NATIVE=ON but ${CMAKE_C_COMPILER} (-dumpmachine: "
-            "'${OVMX_CC_TARGET_TRIPLE}') is not an aarch64 musl compiler. This "
-            "graph is aarch64-musl-only (docs/design-link-native-toolchain.md; "
-            "x86_64 is vms-6da). Build inside an aarch64 musl toolchain (e.g. "
-            "`docker run --platform linux/arm64 alpine:3.20` with `apk add "
-            "cmake gcc musl-dev binutils linux-headers`) or unset OVMX_LINK_NATIVE.")
+            "'${OVMX_CC_TARGET_TRIPLE}') is not an aarch64 or x86_64 musl compiler. "
+            "This graph is musl-only (docs/design-link-native-toolchain.md). Build "
+            "inside an aarch64 or x86_64 musl toolchain (e.g. `docker run --platform "
+            "linux/arm64 alpine:3.20` or a native x86_64 `alpine:3.20`, with "
+            "`apk add cmake gcc musl-dev binutils linux-headers`) or unset OVMX_LINK_NATIVE.")
     endif()
     if(OVMX_STATIC)
         message(FATAL_ERROR "OVMX_LINK_NATIVE and OVMX_STATIC are mutually exclusive: "
@@ -85,7 +93,7 @@ if(OVMX_LINK_NATIVE)
     file(GLOB_RECURSE OVMX_NATIVE_GRAPH_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_SOURCE_DIR}/src/libvmssys/*.c
         ${CMAKE_SOURCE_DIR}/src/libvmssys/*.h
-        ${CMAKE_SOURCE_DIR}/src/libvmssys/arch/aarch64/*.S
+        ${CMAKE_SOURCE_DIR}/src/libvmssys/arch/${OVMX_LINK_NATIVE_ARCH}/*.S
         ${CMAKE_SOURCE_DIR}/src/vmsprocess/*.c
         ${CMAKE_SOURCE_DIR}/src/vmsprocess/include/*.h
         ${CMAKE_SOURCE_DIR}/src/vmslnm/*.c
@@ -107,6 +115,7 @@ if(OVMX_LINK_NATIVE)
         COMMAND ${CMAKE_COMMAND} -E make_directory ${OVMX_NATIVE_SYSLIB} ${OVMX_NATIVE_SYSEXE}
         COMMAND ${CMAKE_COMMAND} -E env
                 CC=${CMAKE_C_COMPILER}
+                ARCH=${OVMX_LINK_NATIVE_ARCH}
                 WORK=${OVMX_NATIVE_WORK}/work
                 sh ${CMAKE_CURRENT_SOURCE_DIR}/build_link_native.sh
                     $<TARGET_FILE:vmslink> ${OVMX_NATIVE_SYSLIB} ${OVMX_NATIVE_SYSEXE} ${CMAKE_SOURCE_DIR}
@@ -124,17 +133,17 @@ if(OVMX_LINK_NATIVE)
             ${CMAKE_CURRENT_SOURCE_DIR}/mk_dcl.sh
             ${CMAKE_CURRENT_SOURCE_DIR}/mk_loginout.sh
             ${OVMX_NATIVE_GRAPH_SOURCES}
-        COMMENT "LINK.EXE: building the VMS-native shareable graph (5 libs + DECC\$SHR + DCL.EXE + LOGINOUT.EXE, aarch64 musl, no ld/ld.so)"
+        COMMENT "LINK.EXE: building the VMS-native shareable graph (5 libs + DECC\$SHR + DCL.EXE + LOGINOUT.EXE, ${OVMX_LINK_NATIVE_ARCH} musl, no ld/ld.so)"
         VERBATIM
     )
     add_custom_target(link_native_graph ALL DEPENDS ${OVMX_NATIVE_STAMP})
-    message(STATUS "OVMX_LINK_NATIVE on (compiler target '${OVMX_CC_TARGET_TRIPLE}') -- "
+    message(STATUS "OVMX_LINK_NATIVE on (compiler target '${OVMX_CC_TARGET_TRIPLE}', ARCH=${OVMX_LINK_NATIVE_ARCH}) -- "
         "the VMS-native LINK.EXE shareable graph will be built into ${OVMX_NATIVE_WORK}")
 
     install(DIRECTORY ${OVMX_NATIVE_SYSLIB}/ DESTINATION ${VMS_SHARE_DIR})
     install(DIRECTORY ${OVMX_NATIVE_SYSEXE}/ DESTINATION ${VMS_SYSTEM_DIR})
 else()
     message(STATUS "OVMX_LINK_NATIVE off (compiler target '${OVMX_CC_TARGET_TRIPLE}' is not "
-        "aarch64-musl) -- the VMS-native LINK.EXE shareable graph is not built for this "
-        "configuration. Build inside an aarch64 musl toolchain to produce it (see above).")
+        "aarch64-musl or x86_64-musl) -- the VMS-native LINK.EXE shareable graph is not built "
+        "for this configuration. Build inside an aarch64 or x86_64 musl toolchain to produce it (see above).")
 endif()

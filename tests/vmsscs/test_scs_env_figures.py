@@ -122,13 +122,71 @@ check(m is not None and int(m.group(1)) == 9,
       "scs_env.h defines SCS_ENV_MTYPE_CONTROL_MAX == 9")
 
 # 8 is identified (special credit message) and 9 is DELIBERATELY left
-# unnamed -- vms-f03/#128. Gate on the corrected text so this file cannot
-# drift back to the stale "UNIDENTIFIED" claim vms-182 fixed.
-check("vms-f03" in env_h and "special credit message" in env_h.lower(),
-      "scs_env.h records that MTYPE 8 is the special credit message, "
-      "citing the item that identified it")
-check("vms-f03" in env_h and "unnamed" in env_h.lower() and "9" in env_h,
-      "scs_env.h records that MTYPE 9 is deliberately left unnamed")
+# unnamed -- vms-f03/#128. This must NOT be a whole-file substring search:
+# vms-ab3 (post-merge audit, 3rd occurrence of this failure class) found that
+# an unscoped check is satisfied by "special credit message" surviving in the
+# T9 sentence (it names what 9 responds to) even when the T8 identification
+# itself has been mangled, and separately never catches a guessed NAME
+# smuggled into the T9 #define's comment. Anchor to specific regions instead:
+# the MTYPE-namespace paragraph's T8/T9-specific sentences, and the T8/T9
+# #define lines themselves.
+
+_ns_m = re.search(r"THE MTYPE NAMESPACE =+\n(.*?)\n \*/", env_h, re.S)
+check(_ns_m is not None, "scs_env.h has lost the MTYPE NAMESPACE section")
+_ns_para = _ns_m.group(1) if _ns_m else ""
+# Strip the leading " * " block-comment prefix from every line so sentences
+# that wrap across lines read as continuous text.
+_ns = "\n".join(re.sub(r"^\s*\*\s?", "", line) for line in _ns_para.splitlines())
+
+_t8_sent_m = re.search(r"\b8 is the\b.*?(?=\n9 is\b)", _ns, re.S)
+check(_t8_sent_m is not None,
+      "scs_env.h's MTYPE-namespace paragraph has no T8-specific sentence "
+      "('8 is the ...' up to '9 is ...')")
+_t8_sent = _t8_sent_m.group(0) if _t8_sent_m else ""
+
+_t9_sent_m = re.search(r"\b9 is its paired response\b.*", _ns, re.S)
+check(_t9_sent_m is not None,
+      "scs_env.h's MTYPE-namespace paragraph has no T9-specific sentence "
+      "('9 is its paired response ...')")
+_t9_sent = _t9_sent_m.group(0) if _t9_sent_m else ""
+
+_t8_def_m = re.search(r"#define\s+SCS_ENV_MTYPE_T8\s+\S+.*", env_h)
+check(_t8_def_m is not None, "scs_env.h has no SCS_ENV_MTYPE_T8 #define")
+_t8_def = _t8_def_m.group(0) if _t8_def_m else ""
+
+_t9_def_m = re.search(r"#define\s+SCS_ENV_MTYPE_T9\s+\S+.*", env_h)
+check(_t9_def_m is not None, "scs_env.h has no SCS_ENV_MTYPE_T9 #define")
+_t9_def = _t9_def_m.group(0) if _t9_def_m else ""
+
+check("vms-f03" in env_h and
+      "special credit message" in (_t8_sent + " " + _t8_def).lower(),
+      "scs_env.h identifies MTYPE 8 as the special credit message WITHIN "
+      "the T8-specific sentence or the T8 #define's own comment -- not "
+      "satisfied by the phrase surviving elsewhere (e.g. the T9 sentence's "
+      "reference to what 9 responds to)")
+check("vms-f03" in env_h and "unnamed" in (_t9_sent + " " + _t9_def).lower(),
+      "scs_env.h states, WITHIN the T9-specific sentence or the T9 #define's "
+      "own comment, that MTYPE 9 is deliberately left unnamed")
+
+# A guessed name smuggled into the T9 #define's comment (vms-182's own
+# warning) would pass a bare 'unnamed' substring check -- a name-shaped
+# token (CamelCase or UPPER_SNAKE, more than one word/segment) anywhere in
+# that comment is exactly the pattern to catch, e.g. 'SPECIAL_CREDIT_RSP'.
+# Bare references like 'T9', '9', citation tokens ('vms-f03') and plain
+# all-caps single words ('UNNAMED', 'DELIBERATELY') must NOT trip this.
+_t9_comment_m = re.search(r"/\*(.*?)\*/", _t9_def)
+_t9_comment = _t9_comment_m.group(1) if _t9_comment_m else _t9_def
+_NAME_SHAPED = re.compile(
+    r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b"       # UPPER_SNAKE_CASE
+    r"|\b[A-Z][a-z]+(?:[A-Z][a-zA-Z0-9]*)+\b"  # PascalCase
+    r"|\b[a-z]+(?:[A-Z][a-zA-Z0-9]*)+\b"       # camelCase
+)
+_t9_name_hits = _NAME_SHAPED.findall(_t9_comment)
+check(not _t9_name_hits,
+      f"scs_env.h's T9 #define comment contains a name-shaped token "
+      f"{_t9_name_hits} -- MTYPE 9 must stay unnamed, not renamed to a "
+      f"guessed identifier")
+
 check("UNIDENTIFIED" not in env_h.upper(),
       "scs_env.h no longer claims MTYPE 8 is unidentified (stale post-vms-f03)")
 check('"type 8"' in env_c and '"type 9"' in env_c,

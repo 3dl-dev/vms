@@ -53,12 +53,14 @@
  * bodies from af2-firsttimer-established-20260728.pcap and requires this
  * module's builders to reproduce them.
  *
- * WHAT THE CORPUS DOES *NOT* CONTAIN, and therefore what this module does NOT
- * claim to have grounded: ONLINE (0x89) and READ (0xa1) end messages, and the
- * SCA block data transfer that actually moves disk blocks. The captured joiner
- * only ever performs SCC + GET UNIT STATUS discovery; it never mounts. Those
- * builders below are laid out from the AA-L619A-TK tables ALONE and are
- * labelled as such at each site. Do not describe them as wire-proven.
+ * WHAT THE *JOINER* CORPUS DOES NOT CONTAIN: ONLINE (0x89) and READ (0xa1) end
+ * messages, and the SCA block data transfer that moves disk blocks. The
+ * captured joiner only ever performs SCC + GET UNIT STATUS discovery; it never
+ * mounts. THIS ITEM WENT AND CAPTURED THEM -- a real VAX serving a disk to
+ * another real VAX on lab-2 -- and the result is in the WIRE FIDELITY section
+ * further down, which is the authority on what is now grounded and what is
+ * still book-only. Read that before trusting any statement here about ONLINE,
+ * READ or block transfer.
  *
  * ======================= DESIGN DECISIONS (vms-291) ========================
  *
@@ -130,45 +132,55 @@
  *     forbids, and the refusal is asserted by a unit test so it cannot regress
  *     into a fake success later.
  *
- * ================== KNOWN WIRE-FIDELITY GAPS (vms-291) ====================
+ * ============ WIRE FIDELITY AFTER THE vms-291 SERVING CAPTURE =============
  *
- * THE GUS END MESSAGE THIS MODULE BUILDS IS NOT THE LENGTH A REAL VAX EMITS,
- * and that is the first thing that would break a real MOUNT. Read this before
- * concluding the responder is wire-ready.
+ * A real VAX serving a disk to another real VAX was captured on lab-2
+ * (vaxlab-9) for this item -- the first such capture the project holds.
+ * VAX2 ran MOUNT against a unit VAX1 served and read a marker file back, and
+ * the whole dialogue is on the wire. Artifacts (host-only, NOT in git):
+ *   /data/training/vax/k8s-labs/vaxlab-9/logs/vms291-mount-A.pcap   (the mount)
+ *   /data/training/vax/k8s-labs/vaxlab-9/logs/vms291-control-B.pcap (the control)
+ *   /data/training/vax/k8s-labs/vaxlab-9/logs/vms291-boot-C.pcap    (cold join)
+ * The control is what makes the mount capture attributable: with the volume
+ * dismounted and MOUNT aimed at a nonexistent unit, it carries ZERO READ, ZERO
+ * WRITE, ZERO block-transfer frames and zero marker bytes.
  *
- * (a) LENGTH. docs/cluster-protocol-spec.md sec 4(h)(1e) (vms-4eb) already
- *     decoded the 110-content type-10 class as the GET UNIT STATUS end message
- *     and re-derived every field Table A-7 defines -- that identification is
- *     PRIOR WORK, not this item's. Table A-7's last field ends at body[48];
- *     the observed SCS payload is 52. So a real VAX's GUS end message carries
- *     FOUR BYTES the 1982 manual does not describe, and this module builds a
- *     48-byte body -- a 106-content frame, a length no VAX has been observed to
- *     emit for this message.
- *     body[48:50] is a constant 0x006e on 2889/2889 frames; because 0x6e is
- *     110, which is that class's own content length, a length-echo reading and
- *     a plain-constant reading are INDISTINGUISHABLE on a single-length
- *     population, and the spec asserts neither. body[50:52] takes 32 distinct
- *     values and nothing we hold identifies it.
- *     The spec's standing instruction for exactly this situation: if Phase D
- *     ever gives OVMX occasion to build the frame, "these four bytes are the
- *     part that must be COPIED FROM AN OBSERVATION rather than composed."
- *     Composing them is therefore not an option and inventing a value is
- *     specifically forbidden. Closing this needs a capture of a real MSCP
- *     serving session, which is the lab work this item did not complete.
+ * WHAT THAT SETTLED, and what this module now does because of it:
  *
- * (b) UNIT FLAGS BIT 15. P.UNFL reads 0x8000 on all 404 valid-unit frames in
- *     the corpus, and Table A-5 defines no bit 15. It is constant across both
- *     an RA92 fixed disk and an RRD40 CD-ROM, so it is not UF.RMV under a
- *     different numbering either. This module emits UF.WPS (0x1000) and does
- *     NOT set bit 15, because setting an undecoded bit so the frame "looks
- *     right" is the vms-c11 pattern. Whether a real class driver requires it is
- *     untested.
+ *  - END MESSAGE LENGTHS. Measured: SCC 28, ONLINE 44, READ 32, WRITE 36,
+ *    GUS 52. Three of those this module already had right from Table A-7 alone.
+ *    TWO IT HAD WRONG and both are fixed here: GUS was 48 (Table A-7's last
+ *    field) where every real GUS end is 52, and WRITE was assumed equal to
+ *    READ where a real server declares four bytes more. Mutation arms pin both.
+ *  - THE GUS TAIL. body[48:50] is 0x006e on every GUS end ever measured,
+ *    including an RA81 on a different controller -- so the capture did NOT
+ *    break the length-echo/plain-constant tie. It DID show the field is written
+ *    deliberately: in invalid-unit replies the surrounding tail carries visible
+ *    stale garbage while [48:50] still reads 0x006e. So OVMX copies [48:50] and
+ *    leaves [50:52] zero. See SCS_MSCP_E_GUS_TAIL_OBSERVED.
+ *  - P.UNFL BIT 15 IS HOST-ORIGINATED, which resolves it as a design question
+ *    without decoding it. The class driver's ONLINE COMMAND carries 0x8000 and
+ *    the server ECHOES it; the bit is not something a controller invents. This
+ *    module now echoes the host's unit-flags word (OR-ed with the unit's own
+ *    non-host-settable flags, so a host cannot clear write protection by
+ *    asking). Its MEANING is still undecoded and is still not named.
  *
- * NEITHER GAP IS SPECULATIVE and neither is closable from the documentation --
- * both need a lab capture of a real VAX serving a disk to another VAX. Until
- * that exists, this responder is corpus-proven for SET CONTROLLER
- * CHARACTERISTICS and UNPROVEN ON THE WIRE for everything a MOUNT needs.
- * That is why MSCP$DISK is still not registered via LISTEN (vms-61b2).
+ * WHAT REMAINS UNGROUNDED -- do not build on these:
+ *  - The block-transfer header's field at +4 (constant per connection, 9 on one
+ *    connection and 13 on another) and at +6 (constant per transfer). Neither
+ *    is decoded. In particular +4 is NOT a message type, despite looking like
+ *    one.
+ *  - The SCC controller-flags bits 15/13/11/2 and P.UNFL bit 15's meaning.
+ *  - Whether MSCP credit/flow control interacts with block transfers.
+ *
+ * AND THE BIG ONE: BLOCK DATA TRANSFER IS DECODED BUT NOT IMPLEMENTED HERE.
+ * The capture grounds the wire format (see docs/design-mscp-direction.md for
+ * the field table), so vms-941 is now buildable -- but this module still ships
+ * with no transfer hook, and a READ therefore still answers Controller Error
+ * rather than a Success it cannot back up. Implementing it is part 2.
+ * MSCP$DISK is still NOT registered via LISTEN (vms-61b2) for the same reason:
+ * OVMX cannot yet honour a mount, so advertising that it can would be the
+ * facade vms-61b2 refused to build.
  */
 #ifndef SCS_MSCP_SRV_H
 #define SCS_MSCP_SRV_H
@@ -213,13 +225,53 @@ extern "C" {
 #define SCS_MSCP_E_RCTS 44 /* RCT table size, 2 */
 #define SCS_MSCP_E_RBNS 46 /* RBNs per track, 1 */
 #define SCS_MSCP_E_RCTC 47 /* RCT copies, 1 */
-#define SCS_MSCP_GUS_END_LEN 48 /* Table A-7's last GUS field ends at 48 */
+/* Table A-7's last GUS field (P.RCTC) ends at 48, but a REAL VMS server emits
+ * 52 -- 110 SCA content, measured on every GUS end message in the corpus AND in
+ * the vms-291 serving capture, including for an RA81 whose geometry and media
+ * id differ from the RA92s. So 48 would be a length no VAX has ever emitted.
+ * See SCS_MSCP_E_GUS_TAIL below for what is in the extra four bytes. */
+#define SCS_MSCP_GUS_END_LEN 52
+#define SCS_MSCP_E_GUS_TAIL  48 /* the 4 bytes past Table A-7, [48:52] */
+
+/* body[48:50] == 0x006e on every GUS end message ever measured.
+ *
+ * WHY THIS IS COPIED AND NOT COMPOSED. 0x6e is 110, which is this class's own
+ * SCA content length, and every frame of the class is that length -- so a
+ * length-echo reading and a plain-constant reading are INDISTINGUISHABLE, and
+ * the spec (sec 5 register) forbids naming it or emitting a guess. The vms-291
+ * serving capture did NOT break the tie: an RA81 on a different controller
+ * still produced 110.
+ *
+ * What that capture DID establish is that the field is written DELIBERATELY.
+ * In invalid-unit replies (status 0x0003) the surrounding tail carries visible
+ * stale buffer garbage -- one reply's body[36:48] decodes as the ASCII "V5.0"
+ * fragment, and body[50:52] takes junk values like 0x4843 / 0x4231 -- while
+ * body[48:50] still reads 0x006e. That kills the "it is all uninitialised
+ * padding" reading, which is progress, and still cannot separate the other two.
+ *
+ * So OVMX emits the OBSERVED BYTES at [48:50] and ZERO at [50:52]: the one
+ * field a real server always writes is reproduced, and the one it demonstrably
+ * leaves as garbage is not filled with an invention. */
+#define SCS_MSCP_E_GUS_TAIL_OBSERVED 0x006eu
 
 /* ONLINE / SET UNIT CHARACTERISTICS end message (Table A-7). Shares P.MLUN,
  * P.UNFL, P.UNTI and P.MEDI with the GUS end message above, then diverges. */
 #define SCS_MSCP_E_UNSZ 36 /* unit size in logical blocks, 4 */
 #define SCS_MSCP_E_VSER 40 /* volume serial number, 4 */
-#define SCS_MSCP_ONLINE_END_LEN 44
+#define SCS_MSCP_ONLINE_END_LEN 44 /* == the captured 102-content class body */
+
+/* TRANSFER end messages. Table A-7's generic end message ends at 32 (P.FBBK,
+ * 28..32) and a real server's READ end declares exactly that -- but its WRITE
+ * end declares 36, on every one measured in the vms-291 serving capture. The
+ * extra four bytes are NOT explained by the manual and OVMX zero-fills them
+ * rather than inventing content; only the LENGTH is reproduced.
+ *
+ * (A READ end message's SCA content varies -- 118/194/448/630/1142 observed --
+ * because a real server PIGGYBACKS the transfer's trailing data into the same
+ * Ethernet frame, past the declared MSCP length. The MSCP message itself is 32
+ * in every case, and 32 is what this builder produces.) */
+#define SCS_MSCP_READ_END_LEN  32
+#define SCS_MSCP_WRITE_END_LEN 36
 
 /* The longest end message this module builds. */
 #define SCS_MSCP_SRV_END_MAX 52

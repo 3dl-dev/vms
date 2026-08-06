@@ -269,7 +269,16 @@ static void test_gus_walk_and_fields(void)
                  SCS_MSCP_MOD_NEXT_UNIT);
     long n = scs_mscp_srv_handle(&srv, 7u, &v, body, sizeof(body), end,
                                  sizeof(end));
-    check(n == SCS_MSCP_GUS_END_LEN, "a GUS end message is 48 bytes (Table A-7)");
+    check(n == SCS_MSCP_GUS_END_LEN && SCS_MSCP_GUS_END_LEN == 52,
+          "a GUS end message is 52 bytes -- what a REAL server emits (110 SCA "
+          "content), NOT Table A-7's 48, which is a length no VAX has emitted");
+    check(u16(end, SCS_MSCP_E_GUS_TAIL) == SCS_MSCP_E_GUS_TAIL_OBSERVED,
+          "body[48:50] carries the observed 0x006e -- COPIED, not composed: a "
+          "real server always writes it, and length-echo vs plain-constant is "
+          "still undecidable on a single-length population");
+    check(u16(end, SCS_MSCP_E_GUS_TAIL + 2) == 0,
+          "body[50:52] is left ZERO -- a real server leaves it as stale "
+          "garbage, so there is nothing to copy and we do not invent one");
     check(end[SCS_MSCP_P_OPCD] == (SCS_MSCP_OP_GET_UNIT_STATUS
                                    | SCS_MSCP_END_BIT),
           "the GUS endcode is 0x83");
@@ -341,6 +350,27 @@ static void test_online(void)
           "mounting VAX sizes the volume from (Table A-7 offset 36)");
     check(u32(end, SCS_MSCP_E_VSER) == 0xaabbccddu,
           "P.VSER (volume serial number) lands at Table A-7 offset 40");
+    check(n == SCS_MSCP_ONLINE_END_LEN && SCS_MSCP_ONLINE_END_LEN == 44,
+          "an ONLINE end message is 44 bytes -- confirmed against a REAL "
+          "server's 102-content ONLINE end in the vms-291 serving capture");
+
+    /* MEASURED: P.UNFL bit 15 is HOST-ORIGINATED -- the class driver's ONLINE
+     * COMMAND carries 0x8000 and the server echoes it. A server that ignored
+     * the host's word would answer with flags the host never asked for. */
+    {
+        struct scs_mscp_view hv;
+        uint8_t hb[SCS_MSCP_BODY_LEN], he[SCS_MSCP_SRV_END_MAX];
+        make_command(hb, sizeof(hb), &hv, 0x103u, 1, SCS_MSCP_OP_ONLINE, 0);
+        hb[SCS_MSCP_E_UNFL] = 0x00;
+        hb[SCS_MSCP_E_UNFL + 1] = 0x80; /* the host asks for bit 15 */
+        scs_mscp_srv_handle(&srv, 3u, &hv, hb, sizeof(hb), he, sizeof(he));
+        check((u16(he, SCS_MSCP_E_UNFL) & 0x8000u) != 0,
+              "the ONLINE end message ECHOES the host's requested unit flags "
+              "(bit 15 is host-originated, measured on the wire)");
+        check((u16(he, SCS_MSCP_E_UNFL) & SCS_MSCP_UF_WRITE_PROT_SW) != 0,
+              "...and the unit's OWN UF.WPS survives the echo -- a host must "
+              "not be able to clear the write protection by asking nicely");
+    }
 
     /* A second ONLINE is Success/Already Online, NOT an error -- getting this
      * wrong would make a re-MOUNT fail for no reason. */
@@ -566,7 +596,10 @@ static void test_write_is_refused_honestly(void)
     make_command(body, sizeof(body), &v, 0x300u, 0, SCS_MSCP_OP_WRITE, 0);
     long n = scs_mscp_srv_handle(&srv, 4u, &v, body, sizeof(body), end,
                                  sizeof(end));
-    check(n > 0, "a WRITE is answered, not dropped");
+    check(n == SCS_MSCP_WRITE_END_LEN && SCS_MSCP_WRITE_END_LEN == 36,
+          "a WRITE end message is 36 bytes -- MEASURED on a real server, which "
+          "declares 36 for WRITE and 32 for READ; Table A-7's generic end is "
+          "32, so the two are NOT the same length and assuming so is wrong");
     check(end[SCS_MSCP_P_OPCD] == (SCS_MSCP_OP_WRITE | SCS_MSCP_END_BIT),
           "the WRITE endcode is 0xa2");
     check(scs_mscp_status_major(u16(end, SCS_MSCP_P_STS))
@@ -702,10 +735,10 @@ static void test_end_frame(void)
         long gn = scs_mscp_srv_build_end_frame(&p, gus_body, sizeof(gus_body),
                                                out, sizeof(out));
         check(gn == 14 + 58 + SCS_MSCP_GUS_END_LEN,
-              "a GUS end frame is 14 + 58 + 48 == 120 bytes");
+              "a GUS end frame is 14 + 58 + 52 == 124 bytes");
         check(u16(out, 14 + 0) == (uint16_t)(58 + SCS_MSCP_GUS_END_LEN - 2),
-              "...and its SCA content length word is 104, NOT the template's "
-              "84 -- the word tracks the body, which is the whole claim");
+              "...and its SCA content length word tracks the body rather than "
+              "the template's 84, which is the whole claim");
     }
 }
 

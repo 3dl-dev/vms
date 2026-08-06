@@ -352,6 +352,7 @@ static long build_gus_end(struct scs_mscp_srv *srv,
                    SCS_MSCP_OP_GET_UNIT_STATUS, 0u,
                    SCS_MSCP_STATUS(SCS_MSCP_ST_OFFLINE,
                                    SCS_MSCP_SUB_OFL_UNKNOWN));
+        put_le16(end + SCS_MSCP_E_GUS_TAIL, SCS_MSCP_E_GUS_TAIL_OBSERVED);
         return (long)SCS_MSCP_GUS_END_LEN;
     }
 
@@ -376,13 +377,19 @@ static long build_gus_end(struct scs_mscp_srv *srv,
     put_le16(end + SCS_MSCP_E_RCTS, u->rct_size);
     end[SCS_MSCP_E_RBNS] = u->rbns;
     end[SCS_MSCP_E_RCTC] = u->rct_copies;
+    /* The four bytes past Table A-7. [48:50] is copied from the observation --
+     * a real server always writes it; [50:52] is left zero because a real
+     * server demonstrably leaves it as stale garbage. See the commentary on
+     * SCS_MSCP_E_GUS_TAIL_OBSERVED. */
+    put_le16(end + SCS_MSCP_E_GUS_TAIL, SCS_MSCP_E_GUS_TAIL_OBSERVED);
     return (long)SCS_MSCP_GUS_END_LEN;
 }
 
 /* ------------------- ONLINE end message (Table A-7, sec 6.13) ------------ */
 
 static long build_online_end(struct scs_mscp_srv *srv,
-                             const struct scs_mscp_view *cmd, uint8_t *end,
+                             const struct scs_mscp_view *cmd,
+                             const uint8_t *body, size_t body_len, uint8_t *end,
                              size_t end_len)
 {
     if (end_len < SCS_MSCP_ONLINE_END_LEN) {
@@ -412,6 +419,20 @@ static long build_online_end(struct scs_mscp_srv *srv,
     end_header(end, SCS_MSCP_ONLINE_END_LEN, cmd->cmd_ref, u->unit,
                SCS_MSCP_OP_ONLINE, 0u, status);
     fill_unit_characteristics(u, end);
+    /* MEASURED (vms-291 serving capture): P.UNFL bit 15 is HOST-ORIGINATED.
+     * The class driver's ONLINE COMMAND carries 0x8000 at Table A-6 offset 14
+     * and the server ECHOES it into the end message -- so the bit is not
+     * something a controller invents, and a server that ignored the host's
+     * word would answer with flags the host never asked for. sec 6.13 says as
+     * much in prose ("sets host-settable characteristics"); the capture is what
+     * makes it actionable. The unit's own non-host-settable flags (UF.WPS,
+     * from design decision (2)) are OR-ed in and cannot be cleared by a host. */
+    if (body != NULL && body_len >= SCS_MSCP_E_UNFL + 2) {
+        uint16_t host_flags =
+            (uint16_t)((uint16_t)body[SCS_MSCP_E_UNFL]
+                       | ((uint16_t)body[SCS_MSCP_E_UNFL + 1] << 8));
+        put_le16(end + SCS_MSCP_E_UNFL, (uint16_t)(host_flags | u->unit_flags));
+    }
     /* P.UNSZ and P.VSER are what distinguish the ONLINE end message from the
      * GET UNIT STATUS one -- and P.UNSZ is the field a mounting VAX uses to
      * size the volume. */
@@ -430,7 +451,11 @@ static long build_transfer_end(uint8_t *end, size_t end_len, uint32_t cmd_ref,
      * TRANSFERRED UP TO THE FIRST ERROR -- so a failure reports 0 here, and
      * reporting the requested count on a failure would be a lie the class
      * driver would believe. */
-    size_t need = SCS_MSCP_E_FBBK + 4;
+    /* READ and WRITE end messages are NOT the same length on a real server:
+     * READ declares 32 (Table A-7's generic end) and WRITE declares 36. The
+     * extra four bytes on WRITE are undecoded and stay zero. */
+    size_t need = (base_opcode == SCS_MSCP_OP_WRITE) ? SCS_MSCP_WRITE_END_LEN
+                                                     : SCS_MSCP_READ_END_LEN;
     if (end_len < need) {
         return -1;
     }
@@ -608,7 +633,7 @@ long scs_mscp_srv_handle(struct scs_mscp_srv *srv, uint32_t conid,
         if (cmd->base_opcode == SCS_MSCP_OP_GET_UNIT_STATUS) {
             n = build_gus_end(srv, cmd, end, end_len);
         } else if (cmd->base_opcode == SCS_MSCP_OP_ONLINE) {
-            n = build_online_end(srv, cmd, end, end_len);
+            n = build_online_end(srv, cmd, body, body_len, end, end_len);
         } else if (cmd->base_opcode == SCS_MSCP_OP_READ) {
             n = handle_read(srv, cmd, body, body_len, end, end_len);
         } else {

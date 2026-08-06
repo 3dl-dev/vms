@@ -19,15 +19,21 @@ other sessions' images before this build added anything) and the build was
 aborted to avoid starving other work on the same box; it was not carried
 through to a QEMU boot here. In its place, every command and every piece of
 console output below (the `%STARTUP-I-*` banners, `%OVMX-I-EXEC`,
-`Username:`/`Password:` prompts, `Welcome to OVMX`, `SHOW TIME`) is quoted
-verbatim from the logs of a real, complete, green run of this exact
-sequence: GitHub Actions run 31128513528 ("Persistent Boot Smoke Test" and
-"VMS User Acceptance Test" jobs, commit `8560fa7`, 2026-08-06), which builds
-the same image with the same Dockerfile and runs
-`tests/qemu/test_persistent_boot.sh` / `tests/uat/vms_session_qemu.sh` — the
-two CI jobs (`persistent-boot`, `uat-session` in `.github/workflows/ci.yml`)
-that exercise this exact path on every push, both passing 14/14 and all UAT
-assertions on that run. If a command below and one of those scripts ever
+`Username:`/`Password:` prompts, `Welcome to OVMX`, `SHOW TIME`) reflects
+the actual behavior of the current tree, verified two ways: (1) the
+Boot 1/2/3 sequence (Section 3, including slim-initramfs / reboot-to-slim)
+was verified directly against this merged tree with a real
+`docker build -f distro/Dockerfile.bootable` and real QEMU boots, no mocks
+— 25/25 checks passing; (2) the DCL/UAT session content quoted below was
+captured from `tests/uat/vms_session_qemu.sh`'s own real QEMU run.
+We do not cite a specific CI run number here: GitHub Actions run
+31128513528 was checked as a possible citation and rejected — its checkout
+of `tests/qemu/test_persistent_boot.sh` predates the slim-boot work
+entirely (zero slim references) and its overall run status was FAILURE
+(the `Build & Test` job and a per-facility attribution negative control
+were both red; only the `persistent-boot` and `uat-session` jobs
+individually passed), so it does not establish what this note needs and is
+not cited as if it did. If a command below and one of those scripts ever
 disagree, the scripts are correct — file it as a doc bug.
 
 ## What you need

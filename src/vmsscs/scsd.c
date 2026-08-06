@@ -9162,11 +9162,21 @@ static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
  * scsd_diskrun_gate_ms - how long the pure-server disk-discovery run waits
  * before it opens OUR SCS$DIRECTORY client connection anyway.
  *
- * Default 2000 ms sits inside the 1.4-4.4 s window a real joiner uses between
- * its op 0x01 and its op 0x02 (spec sec 4c.8). OVMX_DISKRUN_GATE_MS overrides
- * it; a value of 0 or an unparseable one leaves the default, which is why the
- * env read is a function rather than an inline strtoul -- vms-ebb's bracket has
- * to be able to state what the gate was without re-reading main().
+ * Default 2000 ms sits inside the 1.4-4.4 s gap a real joiner leaves between
+ * its op 0x01 and its op 0x02 while it runs its own disk-client discovery
+ * (spec sec 4c.8) -- that is an AUTHENTICITY placement, replaying where a real
+ * joiner's own run falls, not a join-success requirement. CORRECTED
+ * (vms-5c7e): "the run must happen inside that window or the join suffers"
+ * is NOT a claim this lab's evidence supports -- spec sec 4(O.4)'s `E8`
+ * control arm ran with the run suppressed entirely (OVMX_NO_DISKRUN_UNGATE=1,
+ * zero PS SCS$DIRECTORY CONNECT_REQ on the wire) and still reached
+ * CLUSTER_NODES=3 on the identical schedule as the arms that ran it. Do not
+ * reintroduce the timing-gates-admission claim; the authenticity rationale
+ * above is the only one this lab has grounded. OVMX_DISKRUN_GATE_MS
+ * overrides the default; a value of 0 or an unparseable one leaves the
+ * default, which is why the env read is a function rather than an inline
+ * strtoul -- vms-ebb's bracket has to be able to state what the gate was
+ * without re-reading main().
  */
 #define SCSD_DISKRUN_GATE_MS_DEFAULT 2000UL
 

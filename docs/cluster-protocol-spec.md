@@ -3655,7 +3655,17 @@ OWN MOTIVATION.** `E8` joined with disk discovery *entirely* suppressed, on the
 same schedule as the arms that ran it. Nothing here says the disk run is
 useless — §4c.8 shows a real joiner performing it, and this lab's admission
 simply does not gate on it — but "the run must happen inside the 1.4–4.4 s
-window or the join suffers" is not a claim this lab supports. Filed as `vms-5c7e`, not fixed.
+window or the join suffers" is not a claim this lab supports. **CORRECTED
+(`vms-5c7e`, fixed via the item of that number — the earlier "Filed, not
+fixed" note here was itself wrong: the `rd create` that was supposed to file
+it ran from a worktree and was ephemeral, so nothing was ever actually filed
+until the post-merge veracity audit caught it and vms-5c7e was created for
+real).** `OVMX_DISKRUN_GATE_MS`'s default (2000 ms, still inside the
+1.4–4.4 s gap) is kept for the reason that survives: it replays where a real
+joiner's own disk-client run falls, which is an authenticity match to §4c.8,
+not a join-success dependency. `src/vmsscs/scsd.c`'s `scsd_diskrun_gate_ms()`
+header and `tests/vmsscs/test_scsd_wire.c`'s
+`test_the_diskrun_gate_default_and_override()` carry the corrected framing.
 
 **A HARNESS DEFECT FOUND WHILE RUNNING THIS, AND EVERY FIGURE ABOVE DEPENDS ON
 THE FIX.** `tests/lab/tools/lab2run.sh` stages the daemon to `/lab/SCSD.EXE`, and `/lab`

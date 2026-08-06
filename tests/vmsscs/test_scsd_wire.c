@@ -7860,8 +7860,10 @@ static void test_the_diskrun_gate_default_and_override(void)
 {
     (void)unsetenv("OVMX_DISKRUN_GATE_MS");
     CHECK(scsd_diskrun_gate_ms() == 2000UL,
-          "the disk-run gate default is %lu ms; spec sec 4c.8 puts it inside the"
-          " 1.4-4.4 s window and sec 4(O.4) measured its arms at 2000",
+          "the disk-run gate default is %lu ms; spec sec 4c.8 places a real"
+          " joiner's own run inside the 1.4-4.4 s window (authenticity"
+          " placement, not a join-success requirement -- see vms-5c7e) and"
+          " sec 4(O.4) measured its arms at 2000",
           scsd_diskrun_gate_ms());
     CHECK(setenv("OVMX_DISKRUN_GATE_MS", "750", 1) == 0, "setenv failed");
     CHECK(scsd_diskrun_gate_ms() == 750UL, "the override did not take");

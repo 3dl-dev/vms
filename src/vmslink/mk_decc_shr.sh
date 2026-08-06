@@ -229,7 +229,10 @@ strpbrk=PROCEDURE,strtof=PROCEDURE,strtold=PROCEDURE,strtoull=PROCEDURE,\
 \
 fcntl=PROCEDURE,\
 \
-setsid=PROCEDURE"
+setsid=PROCEDURE,\
+\
+setvbuf=PROCEDURE,setgid=PROCEDURE,setuid=PROCEDURE,setgroups=PROCEDURE,\
+getegid=PROCEDURE"
 
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets
@@ -245,6 +248,28 @@ setsid=PROCEDURE"
 # creator's session and controlling terminal before the grandchild registers
 # as a detached process. setsid() is a plain C-RTL entry point musl's libc.a
 # defines, so DECC$SHR is the right producer.
+#
+# setvbuf/setgid/setuid/setgroups/getegid APPENDED for vms-c39 (append-only
+# -> prior consumers' vector indices unchanged, GSMATCH LEQUAL-compatible).
+# LOGINOUT.EXE (tools/vms_login.c, mk_loginout.sh) is the first VMS-native
+# EXECUTABLE consumer that needs them, found by the STRICT link actually
+# failing (link.c's unresolved-symbol diagnostic names the symbol one at a
+# time; `nm -u` of the compiled object against this vector gave the rest in
+# one pass rather than one link-fail-fix-relink cycle per name):
+#   - setvbuf: unbuffers stdin so credential input typed at Username:/
+#     Password: survives past LOGINOUT's own execl() into DCL.EXE (the
+#     unread SHOW-TIME/EXIT lines a scripted session pipes ahead of time
+#     stay in the kernel pipe buffer, not libc's).
+#   - setgid/setuid/setgroups: LOGINOUT drops Linux credentials from root to
+#     the authenticated SYSUAF UIC before exec'ing the user's session (the
+#     vms-2b8 round-6 fix cited at length in tools/vms_login.c) so a forked
+#     child cannot re-register with the executive and re-escalate.
+#   - getegid: part of the same block's post-drop verification
+#     (getuid/geteuid/getgid/getegid all compared against the target UIC);
+#     getuid/geteuid/getgid were already exported for earlier consumers,
+#     getegid was not. (strtok_r, also referenced by LOGINOUT via privs.h's
+#     parse_privilege_string(), was ALREADY exported -- appended earlier for
+#     a prior consumer -- so it is not part of this block.)
 #
 # THE GENERAL RULE, because this is the commonest way to break the VMS-native
 # toolchain jobs: EVERY libc call added to an OVMX library is a claim that

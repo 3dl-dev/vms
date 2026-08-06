@@ -886,6 +886,7 @@ int main(void)
             usleep(1000);
         }
         /* negctl-knockon: proctab-duplicate-name */
+        /* negctl-knockon: proctab-getjpi-nonexpr-status-wrong */
         CHECK(gone,
               "the service's name is released when the service dies");
     }

@@ -431,6 +431,8 @@ showterm-width-page-oracle-shaped
 proctab-duplicate-name
 proctab-crossgroup-identity
 proctab-terminal-redaction-bypassed
+proctab-getjpi-nonexpr-status-wrong
+proctab-procscan-nonexpr-status-wrong
 ident-username-unguarded
 executive-not-pinned
 pcb-per-thread
@@ -1486,6 +1488,107 @@ EOF
                       ;;
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
+        esac;;
+
+    proctab-getjpi-nonexpr-status-wrong)
+        case "$_f" in
+        facility)     echo "process table -- \$GETJPI's own refusal status when NO target is found (VMS_IOCTL_GETJPI)";;
+        targets)      echo "kernel/vms_proctab.c";;
+        # vms-68e (vms-2b2 follow-up). MEASURED at the 9-of-33 audit: no
+        # existing mutation hunk sits inside vms_ioctl_getjpi's own body --
+        # proctab-duplicate-name/crossgroup-identity/terminal-redaction-
+        # bypassed all mutate proc_fill_info() or the registration/naming
+        # path, none of which is GETJPI's own status write.
+        #
+        # ROUND 1 of this defect corrupted GETJPI's own SUCCESS path (the
+        # shared "args.status = SS_NORMAL;" every selector -- SELF, PID,
+        # PRCNAM -- converges on after proc_fill_info()) instead of this
+        # refusal path. LEARNED THIS SESSION (see vms-68e's own item
+        # notes: "a getjpi-adjacent assertion can read identity through
+        # vms_kif_getjpi_self() WITHOUT going through this handler's own
+        # status write at all" was the WARNING; a real run showed the
+        # inverse problem was worse): GETJPI's success path is the shared
+        # foundation nearly every identity-reading test in the tree calls
+        # through -- SHOW PROCESS, F\$GETJPI, every cross-process identity
+        # check -- so corrupting it reddened 9 suites and roughly 90
+        # assertions. That is not "the same defect observed widely", it is
+        # "the read side of process identity is gone", which stops being a
+        # useful discriminator of GETJPI specifically. This replacement
+        # targets the NARROWER refusal path instead: the "no such process"
+        # branch, reached only by a lookup that legitimately finds nothing.
+        # RANGE-ANCHORED to vms_ioctl_getjpi's own body: this exact
+        # "args.status = SS_NONEXPR;" also appears in vms_ioctl_procscan's
+        # own not-found path (a DIFFERENT defect's target, below).
+        # MEASURED (not the entry's first guess): every "name/process not
+        # found" check in the tree -- kernel and public-API alike -- routes
+        # through this same refusal line, so it reaches beyond
+        # test_kmod_procnam.
+        suites_red)   echo "test_kmod_procnam test_syssvc_procnam test_syssvc_showproc test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$GETJPI reports SS\$_NOPRIV instead of SS\$_NONEXPR when no target row exists at all -- a lookup that found nothing is told it was refused by privilege, not that there was nothing to refuse. args.info is still zeroed (the memset ahead of this line is untouched), so this is purely the wrong flavor of \"no\", not a fabricated \"yes\" -- but every not-found check in the tree depends on this exact status, so it gates a wide surface.";;
+        require_fail) cat <<'EOF'
+unset name does not resolve (SS$_NONEXPR)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+unknown name does not resolve (SS$_NONEXPR)
+name released when the process exits
+a name held only in another UIC group does not resolve
+sys$getjpi by an unheld name returns SS$_NONEXPR
+an absent process name reports %SYSTEM-W-NONEXPR verbatim
+SHOW PROCESS <name> on an out-of-group process reports %SYSTEM-W-NONEXPR -- the name search is group-scoped
+... and NOT %SYSTEM-F-NOPRIV: the group-scoped name search never reaches a process to be refused
+the service's name is released when the service dies
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME defect, observed a second through ninth time: every one of these assertions depends on a genuinely-absent name or process resolving through this identical refusal line, and this mutation is the ONLY thing that changed.";;
+        esac;;
+
+    proctab-procscan-nonexpr-status-wrong)
+        case "$_f" in
+        facility)     echo "process table -- \$PROCSCAN's own terminator status when the scan is exhausted (VMS_IOCTL_PROCSCAN)";;
+        targets)      echo "kernel/vms_proctab.c";;
+        # vms-68e. MEASURED, same audit: no existing mutation hunk sits
+        # inside vms_ioctl_procscan's own body.
+        #
+        # ROUND 1 of this defect corrupted PROCSCAN's own SUCCESS path (the
+        # one "args.status = SS_NORMAL;" every found row returns through)
+        # instead of this terminator path, mirroring the mistake ROUND 1 of
+        # proctab-getjpi made and for the identical reason: SHOW SYSTEM
+        # (every caller here loops "while status == SS_NORMAL") is as
+        # foundational to process-identity tests as \$GETJPI is, so
+        # corrupting the shared success status reddened 6 suites and ~21
+        # assertions -- not a scoped property of PROCSCAN, the whole
+        # enumeration primitive. WORSE: the chosen wrong value (SS_NONEXPR)
+        # happened to equal the CORRECT terminator value this same entry's
+        # own require_fail checks for, so that assertion passed by
+        # COINCIDENCE and never actually exercised the mutation at all --
+        # caught by the real run, not by re-reading the code. This
+        # replacement targets the NARROWER terminator path instead: the
+        # "table exhausted, no more rows" branch, reached only by a scan
+        # that runs to completion. RANGE-ANCHORED to vms_ioctl_procscan's
+        # own body: this exact "args.status = SS_NONEXPR;" also appears in
+        # vms_ioctl_getjpi's own not-found path (a DIFFERENT defect's
+        # target, above).
+        # MEASURED (not the entry's first guess): test_kmod_ident also runs
+        # a full-table scan to its terminator, independent of
+        # test_kmod_procnam's own.
+        suites_red)   echo "test_kmod_procnam test_kmod_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$PROCSCAN reports SS\$_NOPRIV instead of SS\$_NONEXPR when the table is genuinely exhausted -- a scan that ran off the end is told it was refused by privilege, not that there was nothing left to enumerate. args.info stays whatever the last found row left it (the memset ahead of this line, like GETJPI's, is untouched), so this is purely the wrong flavor of \"no more\", not a fabricated row.";;
+        require_fail) cat <<'EOF'
+process scan terminates with SS$_NONEXPR
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the unprivileged scan terminates with SS$_NONEXPR
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME defect, observed a second time: test_kmod_ident's own scan also depends on reaching this identical terminator line.";;
         esac;;
 
     ident-username-unguarded)
@@ -3152,6 +3255,18 @@ apply_edit() {
         # catch -- while leaving the return itself, the redacted flag's
         # value, and every other withheld field untouched.
         sed -i "s|        info->redacted = 1;|        info->redacted = 1U; memcpy(info->terminal, proc->terminal, VMS_DEVNAM_SIZE); info->terminal[VMS_DEVNAM_SIZE - 1] = '\\\\0'; /* NEGCTL proctab-terminal-redaction-bypassed */|" "$_file";;
+    proctab-getjpi-nonexpr-status-wrong)
+        # RANGE-ANCHORED to vms_ioctl_getjpi's own body. This exact
+        # "args.status = SS_NONEXPR;" also appears in vms_ioctl_procscan's
+        # own not-found path; vms_ioctl_getjpi is defined first in the
+        # file, so the range closes at its own `}` and excludes procscan's.
+        sed -i '/^long vms_ioctl_getjpi/,/^}$/ s|^        args\.status = SS__NONEXPR;$|        args.status = SS__NOPRIV; /* NEGCTL proctab-getjpi-nonexpr-status-wrong */|' "$_file";;
+    proctab-procscan-nonexpr-status-wrong)
+        # RANGE-ANCHORED to vms_ioctl_procscan's own body. This exact
+        # "args.status = SS_NONEXPR;" also appears in vms_ioctl_getjpi's
+        # own not-found path; vms_ioctl_procscan is defined after
+        # vms_ioctl_getjpi in this file, so the range excludes getjpi's.
+        sed -i '/^long vms_ioctl_procscan/,/^}$/ s|^        args\.status = SS__NONEXPR;$|        args.status = SS__NOPRIV; /* NEGCTL proctab-procscan-nonexpr-status-wrong */|' "$_file";;
     executive-not-pinned)
         sed -i 's|\.owner          = THIS_MODULE,|/* NEGCTL executive-not-pinned: no .owner, so nothing pins vms.ko */|' "$_file";;
     pcb-per-thread)

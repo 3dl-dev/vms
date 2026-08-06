@@ -1068,6 +1068,7 @@ int main(void)
          * genuinely holds "OUTSIDER" for it, as section 1d proved by
          * reading it with WORLD.
          * ------------------------------------------------------------ */
+        /* negctl-knockon: proctab-procscan-nonexpr-status-wrong */
         CHECK(r2.scan_terminator == SS_NONEXPR,
               "the unprivileged scan terminates with SS$_NONEXPR");
         /* negctl-knockon: ident-username-unguarded */

@@ -31,7 +31,11 @@
 # Raised to 43 by vms-2b2's register-adopt-pid-not-reported (see its own
 # entry in facility_defects.sh for what it covers and why).
 # Raised to 46 by vms-053's lock-enq-immediate-grant-status-wrong,
-# lock-deq-status-wrong and lock-convert-mode-not-updated (the
-# first mutations anchored inside vms_ioctl_enq/deq/convert's own bodies --
-# see those entries in facility_defects.sh for what each covers and why).
-46
+# lock-deq-status-wrong and lock-convert-mode-not-updated (the first
+# mutations anchored inside vms_ioctl_enq/deq/convert's own bodies -- see
+# those entries in facility_defects.sh for what each covers and why).
+# Raised to 48 by vms-68e's proctab-getjpi-nonexpr-status-wrong and
+# proctab-procscan-nonexpr-status-wrong (the first mutations anchored
+# inside vms_ioctl_getjpi/procscan's own bodies -- see those entries in
+# facility_defects.sh for what each covers and why).
+48

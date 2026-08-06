@@ -237,10 +237,12 @@ int main(int argc, char **argv)
      * -------------------------------------------------------------- */
     memset(&info, 0, sizeof(info));
     status = vms_kif_getjpi_prcnam(CHILD_NAME, &info);
+    /* negctl: proctab-getjpi-nonexpr-status-wrong */
     CHECK(status == SS_NONEXPR, "unset name does not resolve (SS$_NONEXPR)");
 
     memset(&info, 0, sizeof(info));
     status = vms_kif_getjpi_prcnam(ABSENT_NAME, &info);
+    /* negctl-knockon: proctab-getjpi-nonexpr-status-wrong */
     CHECK(status == SS_NONEXPR, "unknown name does not resolve (SS$_NONEXPR)");
 
     if (pipe(pipefd) < 0) {
@@ -345,6 +347,7 @@ int main(int argc, char **argv)
         if (scanned > 64)
             break;
     }
+    /* negctl: proctab-procscan-nonexpr-status-wrong */
     CHECK(status == SS_NONEXPR, "process scan terminates with SS$_NONEXPR");
     CHECK(scanned >= 2, "process scan enumerates more than the caller");
     CHECK(saw_child && saw_parent,
@@ -357,6 +360,7 @@ int main(int argc, char **argv)
 
     memset(&info, 0, sizeof(info));
     status = vms_kif_getjpi_prcnam(CHILD_NAME, &info);
+    /* negctl-knockon: proctab-getjpi-nonexpr-status-wrong */
     CHECK(status == SS_NONEXPR, "name released when the process exits");
 
     status = vms_kif_setprn(CHILD_NAME);
@@ -446,6 +450,7 @@ int main(int argc, char **argv)
          * returns SS$_NORMAL here. */
         memset(&info, 0, sizeof(info));
         status = vms_kif_getjpi_prcnam(G300_NAME, &info);
+        /* negctl-knockon: proctab-getjpi-nonexpr-status-wrong */
         CHECK(status == SS_NONEXPR,
               "a name held only in another UIC group does not resolve");
 

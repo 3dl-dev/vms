@@ -1429,6 +1429,7 @@ int main(void)
      * --------------------------------------------------------------- */
     uint32_t none = 0;
     st = getjpi_pid_of(ABSENT_NAME, &none);
+    /* negctl-knockon: proctab-getjpi-nonexpr-status-wrong */
     CHECK(st == SS$_NONEXPR,
           "sys$getjpi by an unheld name returns SS$_NONEXPR");
 

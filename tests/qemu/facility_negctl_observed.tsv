@@ -23,10 +23,10 @@
 #   RUN <defect> <suites that went red, space-joined, or "-"> <pass|fail>
 #   RED <defect> <suite or (harness)> <assertion text observed FAILing>
 #
-# generated-at: 2026-08-06T18:27:04Z
-# tree-commit: 0960429ec77d8b492fbbc5214cc1ae59e7f779cf
+# generated-at: 2026-08-06T19:16:30Z
+# tree-commit: b4b035fce934d6a69acd473710ef09541d0afe7a
 # positive-control: pass
-# defects-in-manifest: 46
+# defects-in-manifest: 45
 # suites-derived: 28
 RUN	access-mode-escalation	test_kmod_access	pass
 RED	access-mode-escalation	test_kmod_access	... and still does not hold CMKRNL afterwards
@@ -70,51 +70,6 @@ RED	lock-compat-cr-ex	test_syssvc_lock_status	sys$enq(LCK$M_CONVERT) on a lock s
 RUN	lock-valblk-grant-not-delivered	test_kmod_lock_sync	pass
 RED	lock-valblk-grant-not-delivered	test_kmod_lock_sync	child: GETLKI value block equals the PARENT's, not this lock's own pre-grant value (blocked-then-granted valblk delivery)
 RED	lock-valblk-grant-not-delivered	test_kmod_lock_sync	parent: child (valblk grant) exited clean
-RUN	lock-enq-immediate-grant-status-wrong	test_kmod_bind test_kmod_lock test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status	pass
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_bind	$ENQ EX granted through /dev/vms
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_bind	main thread takes a lock
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ CR on TESTRES2
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ EX with value block
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ NL on TESTRES1
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ second CR on TESTRES2 (compatible)
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_mproc	child: CR granted on MPROCLOCK2 (own request)
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_mproc	parent: CR granted on MPROCLOCK2 concurrently with child's CR (CR+CR compatible)
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_mproc	parent: EX granted on MPROCLOCK1 with blkastadr set
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	child: EX granted on DLRES_Y
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX granted on ASTRES
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX granted on DLRES_X
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX granted on SYNCRES1
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX+VALBLK granted immediately on fresh VALBLKRES (publishes VALBLK_SEED)
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: child (completion AST) exited clean
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: child (deadlock) exited clean
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: child (sync block) exited clean
-RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	child: sys$enqw EX granted after parent's sys$deq (cross-process release, public API)
-RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	parent: child's NOQUEUE-denial checks reported via public API
-RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	parent: child's post-release retry succeeded via public API
-RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	parent: sys$enqw EX granted, real lock ID returned (public API)
-RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock_status	parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
-RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock_status	parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
-RUN	lock-deq-status-wrong	test_kmod_bind test_kmod_lock test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status	pass
-RED	lock-deq-status-wrong	test_kmod_bind	$DEQ released the lock
-RED	lock-deq-status-wrong	test_kmod_bind	sibling thread can $DEQ the lock the main thread took
-RED	lock-deq-status-wrong	test_kmod_lock	DEQ lock
-RED	lock-deq-status-wrong	test_kmod_lock_mproc	child: DEQ queued CR request
-RED	lock-deq-status-wrong	test_kmod_lock_mproc	parent: DEQ own EX lock
-RED	lock-deq-status-wrong	test_kmod_lock_sync	child: released its own granted EX on VALBLKRES
-RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: child (completion AST) exited clean
-RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: child (deadlock) exited clean
-RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: child (valblk grant) exited clean
-RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: released EX (should grant child)
-RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: released EX on ASTRES (grants child + queues AST)
-RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: released EX on VALBLKRES (grants child's queued request)
-RED	lock-deq-status-wrong	test_syssvc_lock	child: sys$deq released its own EX lock
-RED	lock-deq-status-wrong	test_syssvc_lock	parent: child's post-release retry succeeded via public API
-RED	lock-deq-status-wrong	test_syssvc_lock	parent: sys$deq released EX lock (public API)
-RED	lock-deq-status-wrong	test_syssvc_lock_status	parent: child (CVTUNGRANT holder) exited clean
-RED	lock-deq-status-wrong	test_syssvc_lock_status	parent: dequeued its still-queued CR lock
-RED	lock-deq-status-wrong	test_syssvc_lock_status	parent: released X (should unblock the child)
-RUN	lock-convert-mode-not-updated	test_kmod_lock	pass
-RED	lock-convert-mode-not-updated	test_kmod_lock	granted mode is CR
 RUN	devtab-owner-not-recorded	test_kmod_devtab	pass
 RED	devtab-owner-not-recorded	test_kmod_devtab	B sees the ownership A took with a channel alone (A writes, B reads)
 RED	devtab-owner-not-recorded	test_kmod_devtab	oracle: $ASSIGN to a non-shareable device nobody owns makes the caller its owner
@@ -168,6 +123,19 @@ RED	proctab-crossgroup-identity	test_syssvc_showproc	SHOW PROCESS/ID on an out-o
 RED	proctab-crossgroup-identity	test_syssvc_showproc	the by-PID refusal printed no process header
 RUN	proctab-terminal-redaction-bypassed	test_kmod_ident	pass
 RED	proctab-terminal-redaction-bypassed	test_kmod_ident	TERMINAL REDACTION: the scan withholds D's terminal too, even though D genuinely bound one -- a caller that may not read D's identity may not read which terminal D is on either
+RUN	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam test_syssvc_procnam test_syssvc_showproc test_syssvc_startup_service	pass
+RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	a name held only in another UIC group does not resolve
+RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	name released when the process exits
+RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	unknown name does not resolve (SS$_NONEXPR)
+RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	unset name does not resolve (SS$_NONEXPR)
+RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_procnam	sys$getjpi by an unheld name returns SS$_NONEXPR
+RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_showproc	... and NOT %SYSTEM-F-NOPRIV: the group-scoped name search never reaches a process to be refused
+RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_showproc	SHOW PROCESS <name> on an out-of-group process reports %SYSTEM-W-NONEXPR -- the name search is group-scoped
+RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_showproc	an absent process name reports %SYSTEM-W-NONEXPR verbatim
+RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_startup_service	the service's name is released when the service dies
+RUN	proctab-procscan-nonexpr-status-wrong	test_kmod_ident test_kmod_procnam	pass
+RED	proctab-procscan-nonexpr-status-wrong	test_kmod_ident	the unprivileged scan terminates with SS$_NONEXPR
+RED	proctab-procscan-nonexpr-status-wrong	test_kmod_procnam	process scan terminates with SS$_NONEXPR
 RUN	ident-username-unguarded	test_kmod_ident	pass
 RED	ident-username-unguarded	test_kmod_ident	... and the executive still holds the name it authenticated
 RED	ident-username-unguarded	test_kmod_ident	... and the process is STILL UNNAMED (a process cannot name itself a user)

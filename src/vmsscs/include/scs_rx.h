@@ -111,35 +111,43 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "scs_env.h" /* THE envelope: offsets, constants, build+parse (vms-ec7) */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /*
- * Content-relative offsets of the sec 4(h)(1b) envelope. "Content" is the SCA
- * payload: absolute frame offset 14, immediately after the Ethernet header --
- * the same convention as scs_classify.h and dissect_sca.py.
+ * vms-ec7: THE OFFSETS AND CONSTANTS BELOW ARE ALIASES, NOT DEFINITIONS.
+ *
+ * This module was the tree's first envelope decoder and for a while it was the
+ * only place the layout existed in code. Phase A of the MSCP epic made the
+ * envelope a layer of its own (scs_env.h) because the SEND side needed the same
+ * six fields and had six hand-written copies of them instead. The numbers now
+ * live in exactly one place; these names remain so that every existing caller
+ * and test keeps compiling, and so that a reader who arrives here is told where
+ * the definition went rather than shown a second copy that can drift.
  */
-#define SCS_RX_OFF_INNER_LEN 42
-#define SCS_RX_OFF_FORMAT    44
-#define SCS_RX_OFF_MTYPE     46
-#define SCS_RX_OFF_CREDIT    48
-#define SCS_RX_OFF_DEST_CONID 50
-#define SCS_RX_OFF_SRC_CONID  54
+#define SCS_RX_OFF_INNER_LEN  SCS_ENV_OFF_INNER_LEN
+#define SCS_RX_OFF_FORMAT     SCS_ENV_OFF_FORMAT
+#define SCS_RX_OFF_MTYPE      SCS_ENV_OFF_MTYPE
+#define SCS_RX_OFF_CREDIT     SCS_ENV_OFF_CREDIT
+#define SCS_RX_OFF_DEST_CONID SCS_ENV_OFF_DEST_CONID
+#define SCS_RX_OFF_SRC_CONID  SCS_ENV_OFF_SRC_CONID
 
 /* The SYSAP payload begins here (content-relative): the envelope's last field
  * ends at 58, and the 58-content class -- envelope and nothing else -- has
  * inner length 14, which is exactly [44:58]. */
-#define SCS_RX_HDR_END 58
+#define SCS_RX_HDR_END SCS_ENV_HDR_END
 
 /* [44:46] on every envelope-conformant frame in the corpus. */
-#define SCS_RX_FORMAT_WORD 0x0004u
+#define SCS_RX_FORMAT_WORD SCS_ENV_FORMAT_WORD
 
 /* p. 4-13 / spec sec 4(h)(1b): the application-message MTYPE. */
-#define SCS_RX_MTYPE_APP_MESSAGE 10u
+#define SCS_RX_MTYPE_APP_MESSAGE SCS_ENV_MTYPE_APP_MESSAGE
 
 /* The highest connection-control MTYPE spec sec 4(h)(1a) names. */
-#define SCS_RX_MTYPE_CONTROL_MAX 9u
+#define SCS_RX_MTYPE_CONTROL_MAX SCS_ENV_MTYPE_CONTROL_MAX
 
 enum scs_rx_kind {
     /* MTYPE 0..9: an SCA connection-control message. NOT delivered to a SYSAP

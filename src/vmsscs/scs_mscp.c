@@ -16,6 +16,8 @@
 
 #include <string.h>
 
+#include "scs_env.h" /* vms-ec7: THE shared SCS message envelope */
+
 /* SET CONTROLLER CHARACTERISTICS (opcode 0x04) -- golden joiner SCC command
  * (af2 rel~143.89574). body param region [12:36] = MSCP-version/controller-flags
  * + the 8-byte host time/id quadword c00b28751902bc00 + zero pad (REPLAYED). */
@@ -49,23 +51,9 @@ static void put_le16(uint8_t *dst, uint16_t v)
     dst[1] = (uint8_t)((v >> 8) & 0xff);
 }
 
-static void put_le32(uint8_t *dst, uint32_t v)
-{
-    dst[0] = (uint8_t)(v & 0xff);
-    dst[1] = (uint8_t)((v >> 8) & 0xff);
-    dst[2] = (uint8_t)((v >> 16) & 0xff);
-    dst[3] = (uint8_t)((v >> 24) & 0xff);
-}
-
 static uint16_t get_le16(const uint8_t *src)
 {
     return (uint16_t)((uint16_t)src[0] | ((uint16_t)src[1] << 8));
-}
-
-static uint32_t get_le32(const uint8_t *src)
-{
-    return (uint32_t)src[0] | ((uint32_t)src[1] << 8) |
-           ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24);
 }
 
 /*
@@ -104,9 +92,26 @@ static void build_common(const struct scs_mscp_params *p, const uint8_t *tmpl,
     put_le16(out + 14 + 30, p->send_seq);
     put_le16(out + 14 + 34, p->recv_ack);
 
-    /* Con.ID pair: remote at [50:54] (abs 64), local at [54:58] (abs 68). */
-    put_le32(out + 14 + 50, p->remote_conid);
-    put_le32(out + 14 + 54, p->local_conid);
+    /* vms-ec7: THE SCS MESSAGE ENVELOPE, from the one build path -- the inner
+     * length (derived), the format word, the MTYPE, the credit field and the
+     * Con.ID pair. This is the frame class docs/design-mscp-direction.md sec 1.2
+     * identifies: an MSCP command nested under an SCS header, Figure 4-5. The
+     * MTYPE was already 0x0a in the golden template bytes and is now SAID.
+     *
+     * CREDIT 1 IS A LABELED REPLAY of the golden af2 joiner command's [48:50],
+     * not a computed extension: this builder has no CDT and therefore no Pending
+     * Receive Credit to piggyback. The live account is stamped further down the
+     * transmit path by scsd_credit_stamp_outbound() (vms-aa1), which overwrites
+     * this same field on every outbound MTYPE-10 frame. Naming it here is what
+     * makes that overwrite legible instead of invisible. */
+    {
+        struct scs_env_fields env;
+        env.mtype = SCS_ENV_MTYPE_APP_MESSAGE;
+        env.credit = SCS_MSCP_ENV_CREDIT;
+        env.dest_conid = p->remote_conid;
+        env.src_conid = p->local_conid;
+        (void)scs_env_build_frame(out, SCS_MSCP_FRAME_LEN, &env);
+    }
 
     /* MSCP command-reference-number: class token body[0:2] + message-id body[2:4]
      * (body[0] = SCA offset 58). VAX1 echoes both verbatim in its END. */
@@ -147,15 +152,27 @@ int scs_mscp_parse(const uint8_t *frame, size_t len, struct scs_mscp_view *v)
         return -1;
     }
 
+    /* vms-ec7: the SCS envelope half of this parse comes from the shared path,
+     * which also applies the sec 4(h)(1b) conformance test. A frame that is not
+     * envelope-conformant is not an MSCP-over-SCS message and is refused here
+     * rather than decoded with offsets that do not apply to it. */
+    struct scs_env env;
+    if (scs_env_parse_frame(frame, len, &env) != 0) {
+        return -1;
+    }
+
     memset(v, 0, sizeof(*v));
-    uint16_t lenword = get_le16(frame + 14);
-    v->total_sca_len = (uint16_t)(lenword + 2);
+    v->total_sca_len = env.total_sca_len;
+    v->scs_mtype = env.mtype;
+    v->credit = env.credit;
+    v->remote_conid = env.dest_conid;
+    v->local_conid = env.src_conid;
+    /* The PPD/NISCA marker + format bytes at content [16:18] -- NOT the SCS
+     * message type; see the naming trap in scs_mscp.h. */
     v->msgtype = frame[30];
     v->format = frame[31];
     v->recv_ack = get_le16(frame + 32);
     v->send_seq = get_le16(frame + 34);
-    v->remote_conid = get_le32(frame + 64);
-    v->local_conid = get_le32(frame + 68);
 
     const uint8_t *body = frame + 72; /* MSCP body[0] = abs 72 */
     v->class_token = get_le16(body + 0);

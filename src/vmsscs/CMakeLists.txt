@@ -11,6 +11,17 @@
 # header-only readers (sysgen_params.h, cluster_authorize.h) for node/group
 # identity -- no link dependency, they are static inline.
 
+# vms-ec7 (MSCP epic Phase A) - THE SCS MESSAGE ENVELOPE, as a layer. One build
+# path, one parse path, one set of offsets, one MTYPE namespace, shared by every
+# SCS message OVMX emits or receives. Pure: no socket, no allocation, no
+# environment, no logging, and no dependency on any other vmsscs library. Every
+# builder below links it, and scs_rx.c is now a receive-side view of it rather
+# than a second copy of the layout.
+add_library(vmsscs_env STATIC scs_env.c)
+target_include_directories(vmsscs_env PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 add_library(vmsscs_classify STATIC scs_classify.c)
 target_include_directories(vmsscs_classify PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -27,6 +38,9 @@ add_library(vmsscs_connect STATIC scs_connect.c)
 target_include_directories(vmsscs_connect PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+# vms-ec7: shares the SCS message envelope (scs_env.h) instead of hand-writing
+# the inner length / format word / MTYPE / credit / Con.ID-pair stores.
+target_link_libraries(vmsscs_connect PUBLIC vmsscs_env)
 
 # vms-21e - phase-2 START/config (0x41) builder + SCS seq/ack state machine
 # (the last step before the VAX binds the VMS$VAXcluster SCS connection).
@@ -65,7 +79,9 @@ add_library(vmsscs_dir STATIC scs_dir.c)
 target_include_directories(vmsscs_dir PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(vmsscs_dir PUBLIC vmsscs_connect)
+# vms-ec7: shares the SCS message envelope (scs_env.h) instead of hand-writing
+# the inner length / format word / MTYPE / credit / Con.ID-pair stores.
+target_link_libraries(vmsscs_dir PUBLIC vmsscs_connect vmsscs_env)
 
 # vms-224 - VMS$VAXcluster connection-manager add-member transaction on the
 # 190-byte VC (spec sec 4j): builds the op 0x14/0x01/0x02 config frames the
@@ -77,6 +93,9 @@ add_library(vmsscs_member STATIC scs_member.c)
 target_include_directories(vmsscs_member PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+# vms-ec7: shares the SCS message envelope (scs_env.h) instead of hand-writing
+# the inner length / format word / MTYPE / credit / Con.ID-pair stores.
+target_link_libraries(vmsscs_member PUBLIC vmsscs_env)
 
 # vms-7be - SCA System Blocks / Path Blocks / Port Descriptor Tables and the
 # VMS SCA Configuration Queue (VAXcluster Principles ch. 2, pp. 2-11..2-21).
@@ -210,7 +229,9 @@ add_library(vmsscs_disc STATIC scs_disc.c)
 target_include_directories(vmsscs_disc PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(vmsscs_disc PUBLIC vmsscs_reason)
+# vms-ec7: shares the SCS message envelope (scs_env.h) instead of hand-writing
+# the inner length / format word / MTYPE / credit / Con.ID-pair stores.
+target_link_libraries(vmsscs_disc PUBLIC vmsscs_reason vmsscs_env)
 
 # vms-b1d - SCA DATAGRAM BUFFER MANAGEMENT: the per-port Datagram Free Queue
 # (DFREEQ) and the per-connection datagram buffer count in the CDT (VAXcluster
@@ -292,11 +313,14 @@ target_link_libraries(vmsscs_poll PUBLIC vmsscs_svc vmsscs_dir vmsscs_depart)
 # joiner commands). What the joiner sends as a disk CLIENT after NEW, on its own
 # MSCP$DISK connection, so an established VAX1 promotes it to MEMBER. MSCP is a
 # publicly documented DEC protocol (Rule 8: public opcodes + lab-wire capture);
-# plain POSIX + stdint template builders, no other vmsscs dependency.
+# plain POSIX + stdint template builders.
 add_library(vmsscs_mscp STATIC scs_mscp.c)
 target_include_directories(vmsscs_mscp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+# vms-ec7: shares the SCS message envelope (scs_env.h) instead of hand-writing
+# the inner length / format word / MTYPE / credit / Con.ID-pair stores.
+target_link_libraries(vmsscs_mscp PUBLIC vmsscs_env)
 
 # vms-7c0 - THE RECEIVE-SIDE SCS HEADER. One pure function: decode the sec
 # 4(h)(1b) envelope, classify the p. 4-13 MTYPE, hand out the destination and
@@ -310,6 +334,7 @@ add_library(vmsscs_rx STATIC scs_rx.c)
 target_include_directories(vmsscs_rx PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+target_link_libraries(vmsscs_rx PUBLIC vmsscs_env)
 
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE

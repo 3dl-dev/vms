@@ -19,6 +19,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "scs_env.h" /* vms-ec7: THE shared SCS message envelope */
+
 /* op 0x14 model advertisement -- golden SCA#48 (VAX2->VAX1). */
 static const uint8_t member_model_tmpl[SCS_MEMBER_SCA_LEN] = {
     0xbc, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04, 0x01, 0x00, 0xaa, 0x00,
@@ -158,8 +160,10 @@ static uint32_t get_le32(const uint8_t *src)
  * op-specific body fields afterward. SCA-content offset == out+14+off.
  */
 static void build_common(const struct scs_member_params *p, const uint8_t *tmpl,
-                         uint8_t *out)
+                         uint16_t credit, uint8_t *out)
 {
+    struct scs_env_fields env;
+
     /* Ethernet header (abs 0-13). */
     memcpy(out + 0, p->dst_mac, 6);
     memcpy(out + 6, p->src_mac, 6);
@@ -188,10 +192,27 @@ static void build_common(const struct scs_member_params *p, const uint8_t *tmpl,
     put_le16(out + 14 + 30, p->send_seq);
     put_le16(out + 14 + 34, p->recv_ack);
 
-    /* Con.ID pair (spec sec 4d): remote at [50:54] (abs 64), local at [54:58]
-     * (abs 68). */
-    put_le32(out + 14 + 50, p->remote_conid);
-    put_le32(out + 14 + 54, p->local_conid);
+    /* vms-ec7: THE SCS MESSAGE ENVELOPE, from the one build path -- inner
+     * length (derived), format word, MTYPE, credit, Con.ID pair.
+     *
+     * MTYPE 10 is GROUNDED for this whole class and it is the finding that
+     * unified the envelope: docs/design-mscp-direction.md sec 1.1 measured
+     * 173,927 of 173,927 190-content add-member frames in the work/ corpus
+     * carrying MTYPE 10, inner length 146 -- the same p. 4-13 application
+     * message as the MSCP command frames, not a class of its own. The value was
+     * already in every template; the builder now says it.
+     *
+     * CREDIT is a labeled REPLAY of the per-template captured value (0 on the
+     * model/params classes, 2 on the config class). On this class it is also
+     * the field scsd_credit_stamp_outbound() (vms-aa1) overwrites with the
+     * connection's live Pending Receive Credit on the way out, so the value
+     * written here is what goes on the wire only when OVMX_NO_CREDIT_ACCOUNTING
+     * is set. Naming it is what makes that overwrite legible. */
+    env.mtype = SCS_ENV_MTYPE_APP_MESSAGE;
+    env.credit = credit;
+    env.dest_conid = p->remote_conid;
+    env.src_conid = p->local_conid;
+    (void)scs_env_build_frame(out, SCS_MEMBER_FRAME_LEN, &env);
 
     /* SYSAP transaction envelope send/ack-msg# (body[0:2]/[2:4]; body[0] =
      * SCA offset 58). */
@@ -215,7 +236,7 @@ int scs_member_build_model(const struct scs_member_params *p,
         return -1;
     }
 
-    build_common(p, member_model_tmpl, out);
+    build_common(p, member_model_tmpl, SCS_MEMBER_ENV_CREDIT_MODEL, out);
 
     /* Substitute OVMX's own model string: zero the old field, then write the
      * length prefix + ASCII (op 0x14, spec sec 4j). body[16] = SCA offset
@@ -237,7 +258,7 @@ int scs_member_build_params(const struct scs_member_params *p,
         return -1;
     }
 
-    build_common(p, member_params_tmpl, out);
+    build_common(p, member_params_tmpl, SCS_MEMBER_ENV_CREDIT_PARAMS, out);
 
     /* VOTES at body[22:24] (abs 94), LE u16 -- GROUNDED across four vote
      * configurations (spec sec 4j). OVMX joins non-voting => 0. */
@@ -318,7 +339,7 @@ int scs_member_build_config(const struct scs_member_params *p,
         return -1;
     }
 
-    build_common(p, member_config_tmpl, out);
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
 
     /* vms-760: body[10:12] and body[40:52] are left ZERO.
      * An earlier revision replayed 0x5041 and twelve 0x20 spaces here, copied
@@ -440,7 +461,7 @@ int scs_member_build_ack(const struct scs_member_params *p,
 
     /* Any 190-byte template supplies the correct constant envelope span;
      * build_common substitutes identity, Con.ID pair and live counters. */
-    build_common(p, member_config_tmpl, out);
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
 
     uint8_t *body = out + 72;
     /* A cat-0x04 ack is header-only: everything past the category/opcode is
@@ -460,7 +481,7 @@ int scs_member_build_barrier(const struct scs_member_params *p,
     if (p == NULL || out == NULL) {
         return -1;
     }
-    build_common(p, member_config_tmpl, out);
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
 
     uint8_t *body = out + 72;
     memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
@@ -508,7 +529,7 @@ int scs_member_build_token_response(const struct scs_member_params *p,
      * replayed constant ~26 years off.
      *
      * Everything not named below is ZERO. Do not reintroduce a template here. */
-    build_common(p, member_config_tmpl, out);
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
 
     uint8_t *body = out + 72;
     const uint8_t *rbody = req_frame + 72;
@@ -585,7 +606,7 @@ int scs_member_build_dlm_response(const struct scs_member_params *p,
         return -1;
     }
 
-    build_common(p, member_config_tmpl, out);
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
 
     uint8_t *obody = out + 72;
     const uint8_t *rbody = req_frame + 72;
@@ -625,7 +646,7 @@ int scs_member_build_response(const struct scs_member_params *p,
     /* Start from the member_config template (any 190-byte template gives the
      * correct constant envelope span [36:50]); build_common overwrites all the
      * substituted fields, and we then echo the member's SYSAP body. */
-    build_common(p, member_config_tmpl, out);
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
 
     /* Echo the member's entire SYSAP body (carries txn+checksum byte-for-byte,
      * spec sec 4j), then apply the response transform. body[0] = abs 72. */

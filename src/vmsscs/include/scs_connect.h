@@ -260,9 +260,17 @@ extern "C" {
 #define SCS_CONNECT_DATA_ABS_OFF (14 + SCS_CONNECT_DATA_OFF) /* abs 108 */
 
 /* SCA connection-control message types at payload [46:48] (spec sec 4h(1a)).
- * Only these two carry connect data. */
+ * Only these two carry connect data. The full namespace is in scs_env.h; these
+ * two names stay because the connect-data claim is scoped to exactly them. */
 #define SCS_CONN_MSGTYPE_CONNECT_REQ 0
 #define SCS_CONN_MSGTYPE_ACCEPT_REQ  2
+
+/* vms-ec7: the credit field ([48:50]) all three connect templates carry. A
+ * LABELED REPLAY of the captured value, and a real p. 2-43 extension rather
+ * than padding -- spec sec 4(g) matches the observed set {1,3,6,8,10} on this
+ * class to the SYSGEN send-credit tunables. It is not yet computed from the
+ * connection's own account; see the note at the build site. */
+#define SCS_CONNECT_ENV_CREDIT 10u
 
 /* The VMS$VAXcluster connect data OVMX presents in both CONNECT_REQ and
  * ACCEPT_REQ: byte-exact to the joiner's value in the established-join

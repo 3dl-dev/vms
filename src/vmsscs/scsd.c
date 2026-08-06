@@ -56,6 +56,7 @@
 #include "scs_mscp.h"
 #include "scs_poll.h"
 #include "scs_reason.h"
+#include "scs_env.h" /* vms-ec7: THE shared SCS message envelope (build + parse + dispatch) */
 #include "scs_rx.h"
 #include "scs_start.h"
 #include "scs_svc.h"
@@ -1545,6 +1546,21 @@ static unsigned long rx_deliver_no_cdt = 0;      /* dest Con.ID names no open co
 static unsigned long rx_deliver_src_mismatch = 0;/* p. 2-35 source refusal */
 static unsigned long rx_deliver_no_routine = 0;  /* CDT carries no input routine */
 static unsigned long rx_unknown_mtype = 0;       /* MTYPE outside the observed {0..10} */
+/* vms-ec7 (MSCP epic Phase A): the CONTROL half of the p. 4-15 dispatch, made
+ * countable at the one place every received frame is classified. MTYPE 10 has
+ * had rx_app_messages since vms-7c0; MTYPE 0..9 had nothing, so "which control
+ * messages arrive, and how many" was answerable only by reading the run log for
+ * the handful that happened to log. rx_control_by_mtype is indexed by MTYPE, so
+ * the exit summary prints the received half of the connection dialogue next to
+ * the transitions the state machine made on it. */
+static unsigned long rx_control_messages = 0;    /* MTYPE 0..9 frames seen */
+static unsigned long rx_control_by_mtype[SCS_ENV_MTYPE_CONTROL_MAX + 1] = { 0 };
+/* Frames the pre-vms-ec7 connection-control guard would have read a message
+ * type out of, and that carry no SCS envelope at all. See the long note at the
+ * classifier: this counter is how "the classifier no longer reads a field the
+ * frame does not have" stays a MEASUREMENT on this host instead of a claim
+ * about the capture corpus. */
+static unsigned long rx_control_nonconformant = 0;
 static unsigned long sysap_msg_input_calls = 0;  /* the input routine ran */
 static unsigned long sysap_cm_messages = 0;      /* ... and it was a CM dialogue frame */
 
@@ -6441,7 +6457,13 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                     credit_recv_banked++;
                     credit_recv_units += h.credit;
                     ccdt = rcdt;
-                } else if (h.mtype == SCS_CONN_MSGTYPE_ACCEPT_REQ && h.credit > 0) {
+                } else if (h.mtype == SCS_ENV_MTYPE_ACCEPT_REQ && h.credit > 0) {
+                    /* vms-ec7: spelled from the shared MTYPE namespace. Same
+                     * value as the SCS_CONN_MSGTYPE_ACCEPT_REQ this used to
+                     * read -- scs_connect.h's pair is scoped to the two classes
+                     * that carry connect data -- but this is a DISPATCH site,
+                     * and a dispatch site should name the namespace it is
+                     * dispatching on. */
                     /* p. 2-43: the credit field of an ACCEPT_REQ is the number
                      * of Send Credits the remote SYSAP is EXTENDING at
                      * connection formation -- spec sec 4(g)'s tunable match,
@@ -6504,6 +6526,34 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 default:
                     rx_deliver_no_routine++;
                     break;
+                }
+            } else if (h.kind == SCS_RX_CONTROL) {
+                /* vms-ec7: THE CONTROL HALF OF THE p. 4-15 DISPATCH, counted at
+                 * the one place every frame is classified. p. 4-15 routes on
+                 * MTYPE: a message goes to the CDT's message input routine
+                 * (the arm above), and a control message goes to the connection
+                 * state machine instead. OVMX has run that state machine since
+                 * vms-dd5, but it ran it from a DIFFERENT place -- the (b1)
+                 * classifier further down this function, behind its own
+                 * per-class guard -- so this, the one place that knows the
+                 * MTYPE of every received frame, could not say how many control
+                 * messages had arrived or of which kinds.
+                 *
+                 * IT DOES NOT STEP THE MACHINE HERE, AND THAT IS DELIBERATE.
+                 * The transitions stay at their existing call sites for two
+                 * reasons, both about not changing behaviour in a refactor:
+                 * MTYPEs 0 and 2 are already fed by the branches that ANSWER
+                 * them and feeding them twice would double-step the machine
+                 * (see the (b1) note), and this block runs BEFORE those
+                 * branches, so stepping here would reorder the handlers on a
+                 * live wire. What moved is the DECODE -- the classifier below
+                 * now takes its message type from this same shared envelope
+                 * rather than from open-coded offsets on an untested frame.
+                 * Relocating the transitions themselves is the follow-up, and
+                 * it needs a bracketed lab run, not a code review. */
+                rx_control_messages++;
+                if (h.mtype <= SCS_ENV_MTYPE_CONTROL_MAX) {
+                    rx_control_by_mtype[h.mtype]++;
                 }
             } else if (h.kind == SCS_RX_UNKNOWN_MTYPE) {
                 /* Never observed in 981,367 envelope-conformant frames across
@@ -7540,12 +7590,51 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
          * other call site: before this item OVMX did not react to any of
          * them at all, which is exactly why a peer parking a connection was
          * invisible. */
-        /* [46:48] is absolute 60:62; the enclosing guard already required
-         * n >= 72. */
-        uint16_t cmsg = (uint16_t)((uint32_t)buf[60] | ((uint32_t)buf[61] << 8));
+        /* vms-ec7: THE MESSAGE TYPE COMES FROM THE SHARED ENVELOPE, and the
+         * envelope test is now a PRECONDITION of the dispatch.
+         *
+         * This line used to read `buf[60] | buf[61] << 8` directly, guarded
+         * only by the enclosing (wire length >= 72 AND content[16] is a
+         * 0x4b/0x5b/0x7b PPD marker). That guard cannot tell an SCS message
+         * from anything else of the same shape, and MEASURED over the lab-1
+         * corpus (48 pcaps, tools/cluster/scs_env_measure.py part (F)) it
+         * admitted 1,972 frames that are NOT envelope-conformant -- of which
+         * 1,092 carried a 0..7 value at [46:48] that this classifier would have
+         * handed to scs_conn_event_for_msgtype() as a connection-control
+         * message. The values it read there ranged over 1..19, which is the
+         * SAME misread docs/design-mscp-direction.md sec 4 records as a
+         * self-caught method confound ("an earlier scratch census read [46:48]
+         * in the 70-content class and printed types 1..22"). That class does
+         * not have this field.
+         *
+         * WHAT THIS DOES AND DOES NOT CHANGE. It changes which frames REACH the
+         * state machine: a frame that fails the sec 4(h)(1b) envelope test is
+         * no longer read for a message type. It emits nothing, changes no
+         * transmitted byte, and does not move the classifier -- the deliberate
+         * exclusions below and the handler ORDER in this function are untouched,
+         * because reordering handlers is a wire-behaviour change and this is a
+         * refactor. Those 1,092 frames additionally had to survive the
+         * scs_cdl_lookup() below to step anything, so this is a narrowing of an
+         * unsound read rather than a bug fix with a known victim; the unsound
+         * read is the part that is gone.
+         *
+         * SCOPE: only the CLASSIFIER is narrowed. A non-conformant frame simply
+         * carries no message type, so `cmsg` is left at a value no MTYPE can
+         * take and the branch below declines; every other branch in this block,
+         * including the worktree-760 ones keyed on OVMX_MSCP_CONID, sees
+         * exactly what it saw before. */
+        struct scs_env cenv;
+        uint16_t cmsg = 0xFFFFu; /* not an MTYPE: {0..10} is the whole space */
+        uint32_t cdest = rconid;
+        if (scs_env_parse_frame(buf, (size_t)n, &cenv) == 0) {
+            cmsg = cenv.mtype;
+            cdest = cenv.dest_conid; /* == buf[64:68]; taken from the envelope */
+        } else {
+            rx_control_nonconformant++;
+        }
         enum scs_conn_event cev;
         if (cmsg != 0 && cmsg != 2 && scs_conn_event_for_msgtype(cmsg, &cev)) {
-            struct scs_cdt *tgt = scs_cdl_lookup(&scsd_cdl, rconid);
+            struct scs_cdt *tgt = scs_cdl_lookup(&scsd_cdl, cdest);
             if (tgt != NULL) {
                 /* vms-6b3: THE REASON CODE, decoded before the transition so
                  * the log reads in wire order. p. 2-26: REJECT_REQ and
@@ -9682,6 +9771,25 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                 rx_app_messages, rx_delivered_message, rx_deliver_no_cdt,
                 rx_deliver_src_mismatch, rx_deliver_no_routine, rx_unknown_mtype,
                 sysap_msg_input_calls, sysap_cm_messages);
+        /* vms-ec7: THE CONTROL HALF of the same dispatch. RX-CDL above counts
+         * only MTYPE 10; without this line a run log said how much SYSAP data
+         * arrived and nothing at all about the connection dialogue that carried
+         * it, so "the peer sent us four REJECT_REQs" was visible only if one of
+         * them happened to hit a logging branch. Per-MTYPE, because the
+         * INTERESTING number is which kind: a run with disconnect=2 and
+         * connect-rsp=0 is a different failure from the reverse.
+         * nonconformant is the honesty counter -- frames the pre-vms-ec7
+         * classifier would have read a message type out of and that carry no
+         * SCS envelope at all (see the note at that classifier). */
+        fprintf(out, "  RX-CONTROL: total=%lu", rx_control_messages);
+        for (unsigned _mt = 0; _mt <= SCS_ENV_MTYPE_CONTROL_MAX; _mt++) {
+            if (rx_control_by_mtype[_mt] != 0) {
+                fprintf(out, " %s=%lu", scs_env_mtype_name(_mt),
+                        rx_control_by_mtype[_mt]);
+            }
+        }
+        fprintf(out, " non-envelope-frames-declined=%lu\n",
+                rx_control_nonconformant);
         /* vms-aa1: the pp. 2-43..2-45 account, as this run actually moved it.
          * Printed unconditionally and next to RX-CDL for the same reason that
          * line is: a run with app-messages in the thousands and stamped=0 has

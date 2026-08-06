@@ -7,6 +7,8 @@
 
 #include <string.h>
 
+#include "scs_env.h" /* vms-ec7: THE shared SCS message envelope */
+
 /* --- byte-exact SCA-content templates (payload byte 0 = abs frame 14) --- */
 
 /*
@@ -340,14 +342,6 @@ static void put_le16(uint8_t *dst, uint16_t v)
     dst[1] = (uint8_t)((v >> 8) & 0xff);
 }
 
-static void put_le32(uint8_t *dst, uint32_t v)
-{
-    dst[0] = (uint8_t)(v & 0xff);
-    dst[1] = (uint8_t)((v >> 8) & 0xff);
-    dst[2] = (uint8_t)((v >> 16) & 0xff);
-    dst[3] = (uint8_t)((v >> 24) & 0xff);
-}
-
 static uint16_t get_le16(const uint8_t *src)
 {
     return (uint16_t)((uint16_t)src[0] | ((uint16_t)src[1] << 8));
@@ -366,7 +360,8 @@ static void dir_build_common(const uint8_t *dst_mac, const uint8_t *src_mac,
                              const uint8_t *src_logical,
                              const uint8_t *peer_logical, const uint8_t *tmpl,
                              size_t sca_len, uint16_t recv_ack, uint16_t send_seq,
-                             uint16_t incarnation, uint8_t *out)
+                             uint16_t incarnation,
+                             const struct scs_env_fields *env, uint8_t *out)
 {
     /* Ethernet header (abs 0-13). */
     memcpy(out + 0, dst_mac, 6);
@@ -404,6 +399,29 @@ static void dir_build_common(const uint8_t *dst_mac, const uint8_t *src_mac,
     if (incarnation != 0) {
         put_le16(out + 14 + 22, incarnation);
     }
+
+    /* vms-ec7: THE SCS MESSAGE ENVELOPE, from the one build path -- inner
+     * length (derived), format word, MTYPE, credit, Con.ID pair. This replaces
+     * the nine separate copies of `put_le32(out + 14 + 50/54, ...)` that used to
+     * sit in the per-class builders below, and the two open-coded MTYPE stores.
+     *
+     * ⚠ A COLLISION THIS UNIFICATION MADE VISIBLE, recorded rather than
+     * resolved. The field at [46:48] is ONE field, and this module has been
+     * calling its values "directory operations" (SCS_DIR_OP_*) while
+     * scs_conn.c / spec sec 4(h)(1a) call the same values connection-control
+     * MESSAGE TYPES. They agree on 0/1/2/3 (CONNECT_REQ / CONNECT_RSP /
+     * ACCEPT_REQ / ACCEPT_RSP) and they DISAGREE on 4 and 5: vms-760 grounded
+     * op 4 as an MSCP connect-ACCEPT and op 5 as its CONFIRM (336 op-5 frames,
+     * 4 senders, 15 captures), while sec 4(h)(1a) maps 4 to REJECT_REQ and 5 to
+     * REJECT_RSP -- the latter BY POSITION ONLY, on a value it says appears on
+     * no capture we hold, a claim docs/design-mscp-direction.md sec 1.4 has
+     * since overturned (type 5 appears 4,536 times). Both readings cannot be
+     * right. Nothing here picks one: the builders keep emitting exactly the
+     * bytes they emitted before, and the disagreement is now a visible property
+     * of a shared namespace instead of two vocabularies that never met. */
+    if (env != NULL) {
+        (void)scs_env_build(out + 14, sca_len, env);
+    }
 }
 
 int scs_dir_build_connect_echo(const struct scs_dir_params *p,
@@ -412,11 +430,13 @@ int scs_dir_build_connect_echo(const struct scs_dir_params *p,
     if (p == NULL || out == NULL) {
         return -1;
     }
+    /* MTYPE 1 = CONNECT_RSP (Fig 2-14's second arrow). Con.ID: remote = peer's
+     * handle (echoed), local still 0 -- a CONNECT_RSP has not yet bound one. */
+    struct scs_env_fields env = { SCS_DIR_MSGTYPE_CONNECT_RSP,
+                                  SCS_DIR_ENV_CREDIT_ECHO, p->remote_conid, 0 };
     dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
                      dir_echo_tmpl, SCS_DIR_ECHO_SCA_LEN, p->recv_ack, p->send_seq,
-                     p->incarnation, out);
-    /* Con.ID: remote = peer's handle (echoed), local stays 0 for the echo. */
-    put_le32(out + 14 + 50, p->remote_conid);
+                     p->incarnation, &env, out);
     return 0;
 }
 
@@ -468,12 +488,14 @@ int scs_dir_build_connect_response(const struct scs_dir_params *p,
     if (p == NULL || out == NULL) {
         return -1;
     }
+    /* MTYPE 2 = ACCEPT_REQ. Con.ID pair now bound: remote = peer's handle,
+     * local = OVMX's own. */
+    struct scs_env_fields env = { SCS_DIR_MSGTYPE_ACCEPT_REQ,
+                                  SCS_DIR_ENV_CREDIT_RESP, p->remote_conid,
+                                  p->local_conid };
     dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
                      dir_resp_tmpl, SCS_DIR_RESP_SCA_LEN, p->recv_ack, p->send_seq,
-                     p->incarnation, out);
-    /* Con.ID pair now bound: remote = peer's handle, local = OVMX's own. */
-    put_le32(out + 14 + 50, p->remote_conid);
-    put_le32(out + 14 + 54, p->local_conid);
+                     p->incarnation, &env, out);
     return 0;
 }
 
@@ -483,12 +505,15 @@ int scs_dir_build_connect_request(const struct scs_dir_params *p,
     if (p == NULL || out == NULL) {
         return -1;
     }
+    /* MTYPE 0 = CONNECT_REQ. The destination handle is 0 and is now WRITTEN as
+     * 0 rather than inherited from the template: a CONNECT_REQ cannot name a CDT
+     * that does not exist yet (sec 4h(1a)), and that is a property of the
+     * message type, not of whichever capture the template came from. */
+    struct scs_env_fields env = { SCS_DIR_MSGTYPE_CONNECT_REQ,
+                                  SCS_DIR_ENV_CREDIT_CONNREQ, 0, p->local_conid };
     dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
                      dir_connreq_tmpl, SCS_DIR_CONNREQ_SCA_LEN, p->recv_ack, p->send_seq,
-                     p->incarnation, out);
-    /* remote [50:54] stays the template's 0 -- a CONNECT_REQ cannot name a CDT
-     * that does not exist yet (sec 4h(1a)). Only the offered local handle moves. */
-    put_le32(out + 14 + 54, p->local_conid);
+                     p->incarnation, &env, out);
     return 0;
 }
 
@@ -496,20 +521,23 @@ int scs_dir_build_connect_request(const struct scs_dir_params *p,
  * every substitution below is identical, which is the point -- an inquiry and
  * its answer are the same frame shape (spec sec 4h(2)). */
 static int dir_build_lookup(const struct scs_dir_lookup_params *p,
-                            const uint8_t *tmpl, uint8_t *out)
+                            const uint8_t *tmpl, uint16_t credit, uint8_t *out)
 {
+    /* p->op IS the SCS MTYPE, and on this class it is 10 -- the p. 4-13
+     * APPLICATION MESSAGE (SCS_DIR_OP_LOOKUP == 0x0a == SCS_ENV_MTYPE_APP_MESSAGE).
+     * A name lookup is SYSAP-to-SYSAP traffic on an open SCS$DIRECTORY
+     * connection, which is exactly what that taxon means. It stays a parameter
+     * because the builder ECHOES the request's value rather than asserting one. */
+    struct scs_env_fields env = { p->op, credit, p->remote_conid,
+                                  p->local_conid };
     dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
                      tmpl, SCS_DIR_LOOKUP_SCA_LEN, p->recv_ack, p->send_seq,
-                     p->incarnation, out);
+                     p->incarnation, &env, out);
 
     /* Opcode echoes the request (0x5b before the SCS$DIRECTORY connection is up,
-     * 0x4b once it is -- see spec sec 4h / 4g phase-3). */
+     * 0x4b once it is -- see spec sec 4h / 4g phase-3). This is the PPD marker
+     * byte at content [16], NOT the SCS message type. */
     out[14 + 16] = p->opcode;
-    /* Directory-operation field echoes the request's [46:48] (inferred). */
-    put_le16(out + 14 + 46, p->op);
-    /* Con.ID pair (bound). */
-    put_le32(out + 14 + 50, p->remote_conid);
-    put_le32(out + 14 + 54, p->local_conid);
 
     /* Queried SYSAP name echoed into [62:78], 16-byte blank-padded. */
     {
@@ -568,7 +596,7 @@ int scs_dir_build_lookup_response(const struct scs_dir_lookup_params *p,
     if (p->request) {
         return -1;
     }
-    return dir_build_lookup(p, dir_lookup_tmpl, out);
+    return dir_build_lookup(p, dir_lookup_tmpl, SCS_DIR_ENV_CREDIT_LOOKUP_RSP, out);
 }
 
 /* vms-578 INTEGRATION: worktree-760 carried its own scs_dir_build_connect_request
@@ -585,12 +613,13 @@ int scs_dir_build_connect_confirm(const struct scs_dir_params *p,
     if (p == NULL || out == NULL) {
         return -1;
     }
+    /* op 3 = ACCEPT_RSP in the sec 4(h)(1a) reading. Con.ID pair now bound:
+     * remote = member's dir handle, local = OVMX's own. */
+    struct scs_env_fields env = { SCS_DIR_OP_CONFIRM, SCS_DIR_ENV_CREDIT_CONFIRM,
+                                  p->remote_conid, p->local_conid };
     dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
                      dir_confirm_tmpl, SCS_DIR_CONFIRM_SCA_LEN, p->recv_ack,
-                     p->send_seq, p->incarnation, out);
-    /* Con.ID pair now bound: remote = member's dir handle, local = OVMX's own. */
-    put_le32(out + 14 + 50, p->remote_conid);
-    put_le32(out + 14 + 54, p->local_conid);
+                     p->send_seq, p->incarnation, &env, out);
     return 0;
 }
 
@@ -616,7 +645,8 @@ int scs_dir_build_lookup_request(const struct scs_dir_lookup_params *p,
     if (q.op == 0) {
         q.op = SCS_DIR_OP_LOOKUP;
     }
-    return dir_build_lookup(&q, dir_lookupreq_tmpl, out);
+    return dir_build_lookup(&q, dir_lookupreq_tmpl,
+                            SCS_DIR_ENV_CREDIT_LOOKUP_REQ, out);
 }
 
 const char *scs_dir_answer_name(enum scs_dir_answer a)
@@ -635,12 +665,14 @@ int scs_dir_build_mscp_echo(const struct scs_dir_params *p,
     if (p == NULL || out == NULL) {
         return -1;
     }
-    /* Same 66-byte SCA class as the directory CONNECT-ECHO. */
+    /* Same 66-byte SCA class, same MTYPE 1 = CONNECT_RSP, as the directory
+     * CONNECT-ECHO. remote = member's MSCP client handle (echoed); local still
+     * 0, because a CONNECT_RSP has bound none. */
+    struct scs_env_fields env = { SCS_DIR_MSGTYPE_CONNECT_RSP,
+                                  SCS_DIR_ENV_CREDIT_ECHO, p->remote_conid, 0 };
     dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
                      dir_echo_tmpl, SCS_DIR_ECHO_SCA_LEN, p->recv_ack, p->send_seq,
-                     p->incarnation, out);
-    /* remote = member's MSCP client handle (echoed); local stays 0 for the echo. */
-    put_le32(out + 14 + 50, p->remote_conid);
+                     p->incarnation, &env, out);
     /* vms-760 delta (1): opcode [16] = 0x4b (data-phase; the VC to OVMX is up),
      * NOT the 0x5b the directory-echo template carries. GROUNDED from the pcap. */
     out[14 + 16] = SCS_MSGTYPE_SEQAPP;
@@ -662,10 +694,13 @@ int scs_dir_build_vc_echo(const struct scs_dir_params *p,
      * 66-byte SCA as the MSCP echo; the only delta is the truncated SYSAP-name
      * tail [62:66] = 'VMS$' ("VMS$VAXcluster" clipped to the 66-byte window).
      * Every accept in this protocol echoes op=1 before its op=2/op=4 response. */
+    struct scs_env_fields env = { SCS_DIR_MSGTYPE_CONNECT_RSP,
+                                  SCS_DIR_ENV_CREDIT_ECHO,
+                                  p->remote_conid, /* member's VC handle (echoed) */
+                                  0 };
     dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
                      dir_echo_tmpl, SCS_DIR_ECHO_SCA_LEN, p->recv_ack, p->send_seq,
-                     p->incarnation, out);
-    put_le32(out + 14 + 50, p->remote_conid); /* member's VC handle (echoed) */
+                     p->incarnation, &env, out);
     out[14 + 16] = SCS_MSGTYPE_SEQAPP;         /* opcode 0x4b (data-phase) */
     memcpy(out + 14 + 62, "VMS$", 4);          /* GROUNDED name tail */
     return 0;
@@ -679,15 +714,16 @@ int scs_dir_build_mscp_accept(const struct scs_dir_params *p,
     }
     /* Structurally the op=3 dir CONNECT-CONFIRM (same 62-byte SCA, opcode 0x5b,
      * marker 0x00010000, no SYSAP names). */
+    /* vms-760: the SINGLE fixed-byte delta vs the confirm IS the MTYPE, op 4 --
+     * see the collision note in dir_build_common, which this item records and
+     * does not resolve. Con.ID pair bound: remote = member's MSCP client handle,
+     * local = OVMX's fresh MSCP server handle (the admission act for OUR server
+     * connection). */
+    struct scs_env_fields env = { SCS_DIR_OP_ACCEPT, SCS_DIR_ENV_CREDIT_CONFIRM,
+                                  p->remote_conid, p->local_conid };
     dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
                      dir_confirm_tmpl, SCS_DIR_CONFIRM_SCA_LEN, p->recv_ack,
-                     p->send_seq, p->incarnation, out);
-    /* Con.ID pair bound: remote = member's MSCP client handle, local = OVMX's
-     * fresh MSCP server handle (the admission act for OUR server connection). */
-    put_le32(out + 14 + 50, p->remote_conid);
-    put_le32(out + 14 + 54, p->local_conid);
-    /* vms-760: the SINGLE fixed-byte delta vs the confirm -- op [46:48] = 4. */
-    put_le16(out + 14 + 46, SCS_DIR_OP_ACCEPT);
+                     p->send_seq, p->incarnation, &env, out);
     return 0;
 }
 
@@ -795,10 +831,14 @@ int scs_dir_build_mscp_confirm5(const struct scs_dir_params *p,
     if (p == NULL || out == NULL) {
         return -1;
     }
+    /* op 5 -- the other half of the 4/5 collision noted in dir_build_common.
+     * [50] = the peer's handle, taken from its op-4's [54]; [54] = our own, the
+     * handle we put in our op-0. */
+    struct scs_env_fields env = { SCS_DIR_OP_MSCP_CONFIRM,
+                                  SCS_DIR_ENV_CREDIT_CONFIRM, p->remote_conid,
+                                  p->local_conid };
     dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
                      dir_confirm5_tmpl, SCS_DIR_CONFIRM5_SCA_LEN, p->recv_ack,
-                     p->send_seq, p->incarnation, out);
-    put_le32(out + 14 + 50, p->remote_conid); /* peer's handle, from its op-4 [54] */
-    put_le32(out + 14 + 54, p->local_conid);  /* ours, the one we sent in our op-0 */
+                     p->send_seq, p->incarnation, &env, out);
     return 0;
 }

@@ -60,9 +60,21 @@ extern "C" {
 /* SCA-content offset of the MSCP body (body[0] = SCA offset 58 = abs 72). */
 #define SCS_MSCP_BODY_OFF   58
 
-/* SCS envelope constants (shared with the other 0x4b classes). */
+/* SCS envelope constants (shared with the other 0x4b classes).
+ *
+ * ⚠ NAMING TRAP, and it is the reason this comment exists: SCS_MSCP_MSGTYPE is
+ * the PPD/NISCA marker byte at content [16], NOT the SCS message type. The SCS
+ * MTYPE is the LE u16 at content [46:48] and it is 10 on this class -- the
+ * p. 4-13 APPLICATION MESSAGE (docs/design-mscp-direction.md sec 1.2, which
+ * identifies these very golden frames as MTYPE 10 with credit 1). Since vms-ec7
+ * the builder writes it through scs_env_build_frame() as
+ * SCS_ENV_MTYPE_APP_MESSAGE; do not add a second spelling of it here. */
 #define SCS_MSCP_MSGTYPE    0x4b
 #define SCS_MSCP_FORMAT     0x13
+
+/* The credit field ([48:50]) of the golden af2 joiner MSCP commands. A labeled
+ * REPLAY, not a computed extension -- see the note at the build site. */
+#define SCS_MSCP_ENV_CREDIT 1u
 
 /* MSCP opcodes (body[8]) and the END-response bit (public MSCP). */
 #define SCS_MSCP_OP_GET_UNIT_STATUS 0x03
@@ -123,7 +135,12 @@ int scs_mscp_build_gus(const struct scs_mscp_params *p,
  */
 struct scs_mscp_view {
     uint16_t total_sca_len;
-    uint8_t  msgtype;        /* [16] */
+    /* vms-ec7: the SCS envelope's own two value fields, decoded through the
+     * shared path. scs_mtype is the [46:48] SCS message type (10 = the p. 4-13
+     * application message on every MSCP frame we hold); credit is [48:50]. */
+    uint16_t scs_mtype;      /* [46:48] */
+    uint16_t credit;         /* [48:50] */
+    uint8_t  msgtype;        /* [16] -- the PPD marker byte, NOT the SCS MTYPE */
     uint8_t  format;         /* [17] */
     uint16_t recv_ack;       /* [18:20] */
     uint16_t send_seq;       /* [20:22] */

@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "scs_env.h" /* vms-ec7: THE shared SCS message envelope */
+
 /* --- vms-fdd: SCA connect data (p. 2-25 / p. 2-28) -----------------------
  *
  * Byte-exact to the joiner's VMS$VAXcluster connect data in
@@ -137,14 +139,6 @@ static void put_le16(uint8_t *dst, uint16_t v)
     dst[1] = (uint8_t)((v >> 8) & 0xff);
 }
 
-static void put_le32(uint8_t *dst, uint32_t v)
-{
-    dst[0] = (uint8_t)(v & 0xff);
-    dst[1] = (uint8_t)((v >> 8) & 0xff);
-    dst[2] = (uint8_t)((v >> 16) & 0xff);
-    dst[3] = (uint8_t)((v >> 24) & 0xff);
-}
-
 static uint32_t get_le32(const uint8_t *src)
 {
     return (uint32_t)src[0] | ((uint32_t)src[1] << 8) |
@@ -167,9 +161,12 @@ static uint32_t get_le32(const uint8_t *src)
 static int build_from_tmpl(const struct scs_connect_params *p,
                            const uint8_t tmpl[SCS_CONNECT_SCA_LEN],
                            uint32_t remote_conid,
+                           uint16_t mtype,
                            int stamp_connect_data,
                            uint8_t out[SCS_CONNECT_FRAME_LEN])
 {
+    struct scs_env_fields env;
+
     if (p == NULL || out == NULL) {
         return -1;
     }
@@ -187,8 +184,31 @@ static int build_from_tmpl(const struct scs_connect_params *p,
     memcpy(out + 14 + 2, p->peer_logical, 6);  /* dest logical (abs 16) */
     memcpy(out + 14 + 10, p->src_logical, 6);   /* src-logical (abs 24) = aa:00:04:00:<sysid>
                                                  * cluster-LOGICAL addr, NOT raw HW MAC (vms-9f3) */
-    put_le32(out + 14 + 50, remote_conid);      /* Remote Con.ID (abs 64) */
-    put_le32(out + 14 + 54, p->local_conid);    /* Local  Con.ID (abs 68) */
+    /* vms-ec7: THE SCS MESSAGE ENVELOPE, from the one build path -- inner
+     * length (derived), format word, MTYPE, credit, Con.ID pair.
+     *
+     * THE MTYPE IS THE POINT. These three templates are the CONNECT_REQ (0) and
+     * ACCEPT_REQ (2) of Figure 2-14, and until this item the builder never
+     * wrote the field that says so: the value came along inside whichever
+     * captured template the caller picked, so a builder could be handed the
+     * wrong template and emit a well-formed message of the wrong kind with
+     * nothing in the program able to notice. It is now an argument.
+     *
+     * CREDIT: a LABELED REPLAY of the templates' [48:50], which is 10 in all
+     * three. p. 2-43 makes this field the number of Send Credits the SYSAP is
+     * EXTENDING at connection formation, and spec sec 4(g) matches the observed
+     * values {1,3,6,8,10} to the SYSGEN tunables -- so 10 is a real extension
+     * OVMX makes, not padding. It is NOT yet computed from the CDT's account;
+     * scs_credit_extend() is where that would come from, and wiring it is a
+     * wire-visible change this refactor deliberately does not make.
+     */
+    env.mtype = mtype;
+    env.credit = SCS_CONNECT_ENV_CREDIT;
+    env.dest_conid = remote_conid;
+    env.src_conid = p->local_conid;
+    if (scs_env_build_frame(out, SCS_CONNECT_FRAME_LEN, &env) != 0) {
+        return -1;
+    }
 
     /* --- vms-c6d: thread the LIVE SCS VC counters (spec sec 4h(4)), replacing
      * the golden template's replayed 6/7 (request) / 7/8 (response). recv_ack at
@@ -228,7 +248,8 @@ int scs_connect_build_request(const struct scs_connect_params *p,
                               uint8_t out[SCS_CONNECT_FRAME_LEN])
 {
     /* CONNECT-REQUEST: remote Con.ID is always 0 (peer's not yet known). */
-    return build_from_tmpl(p, connect_request_tmpl, 0, 1, out);
+    return build_from_tmpl(p, connect_request_tmpl, 0,
+                           SCS_CONN_MSGTYPE_CONNECT_REQ, 1, out);
 }
 
 int scs_connect_build_response(const struct scs_connect_params *p,
@@ -238,7 +259,8 @@ int scs_connect_build_response(const struct scs_connect_params *p,
         return -1;
     }
     /* CONNECT-RESPONSE: echo the peer's Con.ID as remote. */
-    return build_from_tmpl(p, connect_response_tmpl, p->remote_conid, 1, out);
+    return build_from_tmpl(p, connect_response_tmpl, p->remote_conid,
+                           SCS_CONN_MSGTYPE_ACCEPT_REQ, 1, out);
 }
 
 int scs_connect_build_mscp_request(const struct scs_connect_params *p,
@@ -246,7 +268,8 @@ int scs_connect_build_mscp_request(const struct scs_connect_params *p,
 {
     /* MSCP$DISK CONNECT-REQUEST: remote Con.ID always 0 (peer's not yet known). */
     /* vms-578: MSCP$DISK carries its OWN [94:110]; do NOT stamp. */
-    return build_from_tmpl(p, mscp_connect_request_tmpl, 0, 0, out);
+    return build_from_tmpl(p, mscp_connect_request_tmpl, 0,
+                           SCS_CONN_MSGTYPE_CONNECT_REQ, 0, out);
 }
 
 int scs_connect_parse(const uint8_t *frame, size_t len, struct scs_connect_view *v)

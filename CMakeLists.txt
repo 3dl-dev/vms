@@ -532,6 +532,27 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(lab_identity_unique_gate PROPERTIES
         LABELS "integration;cluster" TIMEOUT 60)
+
+    # x86_64 relocation survey freshness (vms-680, under vms-bdf): the
+    # committed docs/design-link-x86_64-relocs.md is GENERATED, not hand-typed
+    # -- tools/survey_x86_64_relocs.sh cross-compiles the vms-b65.1-.6 object
+    # set to x86_64 .o files with musl-gcc -fPIC -mtls-dialect=gnu2 and tallies
+    # every observed ELF r_type by name and count. `--check` regenerates into a
+    # temp file and diffs against the committed doc; this is that check wired
+    # into ctest so the downstream x86_64 reloc-apply items (vms-8f5, vms-cd1,
+    # vms-2e4) can't drift from what the compiler actually emits. Skipped if
+    # musl-gcc isn't on the host -- same containerized-build-tooling posture as
+    # the rest of the x86_64 musl toolchain (CLAUDE.md Rule 9's "build tooling
+    # is fine" carve-out).
+    find_program(MUSL_GCC_FOR_RELOC_SURVEY musl-gcc)
+    if(MUSL_GCC_FOR_RELOC_SURVEY)
+        add_test(NAME x86_64_reloc_survey_fresh
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/survey_x86_64_relocs.sh --check)
+        set_tests_properties(x86_64_reloc_survey_fresh PROPERTIES
+            LABELS "integration;toolchain" TIMEOUT 300)
+    else()
+        message(STATUS "musl-gcc not found -- x86_64_reloc_survey_fresh test skipped")
+    endif()
 endif()
 
 # vmssshd requires libssh — skip if headers not available

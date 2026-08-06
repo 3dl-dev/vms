@@ -1544,6 +1544,40 @@ jobs:
             '
 
   # -----------------------------------------------------------------------
+  # dcl-native-x86_64 — the x86_64 analog of dcl-native above (bead vms-cb5f,
+  # vms-bdf's own done-condition, epic vms-b93 "0.1 pre-release"). Reproduces
+  # the SAME proof (real DCL.EXE, the full six-library producer graph, IMGACT
+  # activation, the SHOW TIME / A=2+3 SHOW SYMBOL scripted session, zero
+  # ld/ld.so) through the x86_64 LINK.EXE path merged by vms-8f5 (simple
+  # relocs) + vms-cd1 (GOT-relative DATA imports) + vms-2e4 (gnu2 TLSDESC) +
+  # vms-206 (crt0 + cross-image CALL PLT stubs). Shares run_dcl_native.sh
+  # (and lib_build_graph.sh) verbatim with the arm64 job above -- ARCH=x86_64
+  # is a parameter of the SAME script, not a forked copy (vms-cb5f). Unlike
+  # the arm64 job, GitHub's runner IS x86_64, so this needs no QEMU binfmt
+  # registration -- the alpine:3.20/amd64 container runs natively and DCL.EXE
+  # activates directly, no qemu-user in the loop.
+  # -----------------------------------------------------------------------
+  dcl-native-x86_64:
+    name: DCL.EXE VMS-native Link + Activate, x86_64 (vms-bdf done-condition)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Link the real src/vmsdcl into DCL.EXE VMS-native + activate a scripted session through IMGACT.EXE (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/dcl-native-x86_64 DCL_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_dcl_native.sh
+            '
+
+  # -----------------------------------------------------------------------
   # LOGINOUT-native (vms-c39, pillar vms-ade, sibling of dcl-native above).
   # tools/vms_login.c links as a VMS-native ET_DYN executable via LINK.EXE
   # --executable --use {DECC$SHR + the six OVMX shareables} (mk_loginout.sh) --

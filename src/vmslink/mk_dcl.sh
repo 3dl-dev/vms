@@ -70,6 +70,9 @@
 #             <LIBVMSSYS$SHR.EXE> [vmsdcl-src-dir] [repo-src-dir]
 # Env:    CC (default gcc)
 # Must run in the arm64 musl container where the producer .EXE already exist.
+# CC/CFLAGS are env-overridable (default aarch64 musl flags); the x86_64
+# caller (vms-cb5f) sets CC + CFLAGS (with -mtls-dialect=gnu2, no
+# -mno-outline-atomics) before invoking this script.
 set -e
 
 LINK_EXE=${1:?usage: mk_dcl.sh <LINK.EXE> <out> <DECC$SHR> <LIBVMS$SHR> <LIBVMSPROCESS$SHR> <LIBVMSFS$SHR> <LIBVMSLNM$SHR> <LIBVMSRMS$SHR> <LIBVMSSYS$SHR> [dcl-src] [repo-src]}
@@ -94,7 +97,7 @@ done
 WORK=${WORK:-/tmp/mk-dcl}
 mkdir -p "$WORK"
 
-CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics"
+CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics}"
 DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
 INCS="-I$DCL/include -I$REPO_SRC/libvms/include -I$REPO_SRC/vmsfs/include \
 -I$REPO_SRC/vmslnm/include -I$REPO_SRC/vmsrms/include \

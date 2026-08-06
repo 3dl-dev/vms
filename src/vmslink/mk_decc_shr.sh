@@ -30,7 +30,10 @@
 # Env:    GSMATCH (default LEQUAL,1,0)
 #
 # Must run where an aarch64 musl `libc.a` + `libgcc.a` exist (the arm64 musl
-# container — see CLAUDE.md test loop). aarch64-only for now.
+# container — see CLAUDE.md test loop). Otherwise arch-neutral: LINK.EXE
+# derives e_machine from the input libc.a/libgcc.a members, so pointing $2/$3
+# at an x86_64 musl libc.a + libgcc.a (vms-cb5f) produces an x86_64 DECC$SHR --
+# MODULO the TLS filter below, which the x86_64 build actually needs.
 set -e
 
 LINK_EXE=${1:?usage: mk_decc_shr.sh <LINK.EXE> <out> [libc.a] [libgcc.a]}
@@ -41,6 +44,60 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 
 [ -f "$LIBC" ]   || { echo "mk_decc_shr: libc.a not found: $LIBC (need the arm64 musl container)"; exit 1; }
 [ -f "$LIBGCC" ] || { echo "mk_decc_shr: libgcc.a not found: $LIBGCC"; exit 1; }
+
+# DECC$SHR must stay a NON-TLS-producer: it whole-archives libc.a/libgcc.a for
+# C-runtime support routines only and carries no __thread state of its own.
+# LINK.EXE enforces "one TLS object per image" (general multi-module TLS is
+# vms-212, not yet built) -- fine on aarch64, whose libgcc.a empirically
+# carries ZERO TLS-defining members (366 members / 0 TLS, checked directly
+# with readelf), but x86_64's libgcc.a whole-archives an entire dead-for-OVMX
+# subsystem built around __thread state: GCC's bundled IEEE 754-2008 decimal
+# floating-point library (bid_decimal_globals.o DEFINES two __thread globals,
+# __bid_IDEC_glbflags/glbround; ~20 bid128_*/bid32_*/bid64_* arithmetic
+# objects REFERENCE them via R_X86_64_TLSGD, the general-dynamic TLS model --
+# OVMX/musl never uses GCC's _Decimal32/64/128 types, so none of this is ever
+# called) plus gcc -fsplit-stack support (generic-morestack.o DEFINES a
+# __thread stack-guard var; generic-morestack-thread.o REFERENCES it, also
+# via TLSGD -- OVMX never builds with -fsplit-stack). Without this filter,
+# mk_decc_shr's x86_64 build hits "%LINK-F-ERROR, multi-module TLS not
+# supported yet" from the TLS-defining half, or "%LINK-F-ERROR, unsupported
+# .text relocation" (TLSGD is not a reloc type LINK.EXE's x86_64 path
+# resolves -- OVMX standardizes on the gnu2/TLSDESC model throughout, per
+# docs/design-link-x86_64-relocs.md) from the referencing half, if only the
+# definers are dropped and the referencing members are left dangling
+# (discovered building this bead's DCL.EXE proof, vms-cb5f). Filtered
+# architecture-generically -- any member DEFINING TLS storage (.tdata/.tbss)
+# or REFERENCING it via the GD model (TLSGD) is dropped as one unit, not by
+# hardcoding the four x86_64 object names -- so it is a no-op on an archive
+# with neither, like aarch64's, and covers a future libgcc revision (or a
+# different musl/libgcc build carrying the same dead subsystems) on either
+# architecture without edits here.
+filter_tls_members() {
+    src=$1
+    dir=$(mktemp -d)
+    ( cd "$dir" && ar x "$src" )
+    removed=""
+    for o in "$dir"/*.o; do
+        [ -f "$o" ] || continue
+        if readelf -SW "$o" 2>/dev/null | grep -qE '\.tdata|\.tbss' || \
+           readelf -rW "$o" 2>/dev/null | grep -q 'TLSGD'; then
+            removed="$removed $(basename "$o")"
+            rm -f "$o"
+        fi
+    done
+    if [ -n "$removed" ]; then
+        echo "mk_decc_shr: filtered TLS-defining member(s) out of $(basename "$src") (DECC\$SHR stays a non-TLS producer, vms-212):$removed" >&2
+        out="$dir/filtered.a"
+        ( cd "$dir" && ar rcs "$out" ./*.o )
+        echo "$out"
+    else
+        rm -rf "$dir"
+        echo "$src"
+    fi
+}
+
+LIBC=$(filter_tls_members "$LIBC")
+LIBGCC=$(filter_tls_members "$LIBGCC")
 
 # The C run-time universals DECC$SHR exports. Every name is defined by musl's
 # libc.a; each becomes a PROCEDURE universal in .vms$sv. (The stdin/stdout/stderr

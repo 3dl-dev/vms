@@ -72,21 +72,75 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 # with neither, like aarch64's, and covers a future libgcc revision (or a
 # different musl/libgcc build carrying the same dead subsystems) on either
 # architecture without edits here.
+#
+# The direct TLS-tainted set is not the whole dead subsystem, though: gcc's
+# decimal-float library has non-TLS "glue" objects that call INTO it without
+# touching TLS themselves -- e.g. libgcc's _addsub_dd.o/_addsub_sd.o (the
+# __bid_adddd3/__bid_subdd3/__bid_addsd3/__bid_subsd3 entry points) reference
+# __bid64_add via a plain GOT call, and __bid64_add is defined ONLY by
+# bid64_add.o -- which IS TLS-tainted (it references the rounding-mode
+# globals via TLSGD) and gets dropped above. Left in the archive, _addsub_*.o
+# would whole-archive into DECC$SHR with a GOT cell that resolve_named()
+# cannot satisfy -- die()'s "GOT symbol undefined" is CORRECT (there really
+# is no definition left), not a link.c gap; the gap is that the filter above
+# only removes the directly-tainted half of a connected dead-code component
+# (found completing vms-cb5f's x86_64 DCL.EXE proof, once vms-e5d unblocked
+# the GOTPCRELX reloc that had masked this further in). Fixed by a
+# reference-graph fixed-point closure below: after the direct TLS-tainted
+# set is seeded, repeatedly pull in any SURVIVING member whose undefined
+# reference is satisfied ONLY by an already-removed member (i.e. the symbol
+# has no definition left among survivors) -- not by name, by the actual
+# def/ref graph nm reports, so it generalizes to any future libgcc/musl
+# revision with the same shape on either architecture, and is a no-op archive
+# whose direct-tainted set is empty (aarch64's, and libc.a on both).
 filter_tls_members() {
     src=$1
     dir=$(mktemp -d)
     ( cd "$dir" && ar x "$src" )
-    removed=""
+
+    # One nm pass over the whole archive -> "<member> <symbol>" for defined
+    # (non-U) and undefined (U) symbols, split into two lookup files. Doing
+    # this once up front (instead of re-invoking nm per member per iteration)
+    # is what keeps the fixed-point loop below cheap on a 1345-member archive.
+    defs="$dir/.defs"; refs="$dir/.refs"
+    : > "$defs"; : > "$refs"
+    ( cd "$dir" && nm -A ./*.o 2>/dev/null ) | awk -v defs="$defs" -v refs="$refs" '
+        {
+            c = index($0, ":"); if (!c) next;
+            file = substr($0, 1, c-1); sub(/^\.\//, "", file);
+            n = split(substr($0, c+1), a, " "); if (n < 2) next;
+            type = a[n-1]; sym = a[n];
+            if (type == "U") print file, sym >> refs; else print file, sym >> defs;
+        }'
+
+    removed="$dir/.removed"
+    : > "$removed"
     for o in "$dir"/*.o; do
         [ -f "$o" ] || continue
         if readelf -SW "$o" 2>/dev/null | grep -qE '\.tdata|\.tbss' || \
            readelf -rW "$o" 2>/dev/null | grep -q 'TLSGD'; then
-            removed="$removed $(basename "$o")"
-            rm -f "$o"
+            basename "$o" >> "$removed"
         fi
     done
-    if [ -n "$removed" ]; then
-        echo "mk_decc_shr: filtered TLS-defining member(s) out of $(basename "$src") (DECC\$SHR stays a non-TLS producer, vms-212):$removed" >&2
+
+    # Fixed-point: keep pulling in surviving members that reference a symbol
+    # only a removed member defines, until nothing new is added.
+    while :; do
+        new="$dir/.new_removed"
+        awk '
+            NR==FNR { removed[$1]=1; next }
+            FILENAME==defs { if ($1 in removed) rdef[$2]=1; else sdef[$2]=1; next }
+            { if (!($1 in removed) && ($2 in rdef) && !($2 in sdef) && !($1 in seen)) { print $1; seen[$1]=1 } }
+        ' defs="$defs" "$removed" "$defs" "$refs" > "$new"
+        [ -s "$new" ] || { rm -f "$new"; break; }
+        cat "$new" >> "$removed"
+        sort -u "$removed" -o "$removed"
+        rm -f "$new"
+    done
+
+    if [ -s "$removed" ]; then
+        echo "mk_decc_shr: filtered TLS-tainted member(s) [direct + dead-code callers pulled in by the reference-graph closure] out of $(basename "$src") (DECC\$SHR stays a non-TLS producer, vms-212): $(tr '\n' ' ' < "$removed")" >&2
+        while read -r b; do rm -f "$dir/$b"; done < "$removed"
         out="$dir/filtered.a"
         ( cd "$dir" && ar rcs "$out" ./*.o )
         echo "$out"

@@ -169,45 +169,70 @@ SUITE_FAIL=0
 ASSERT_PASS=0
 ASSERT_FAIL=0
 SUITE_OUT=/tmp/suite_out.$$
-SUITE_RC=/tmp/suite_rc.$$
-# Bounds a real, measured hazard, not a flake (see the loop body below for
-# the mechanism). 20s is generous slack over any suite's legitimate runtime
-# and small next to run_tests.sh's outer 120s VM boot timeout.
+SUITE_FIFO=/tmp/suite_fifo.$$
+# Bounds a real, measured hazard -- see the loop body for the mechanism, and
+# for the FIRST version of this bound, which measured wrong and was replaced
+# (round 2 of round 2, found by this item's own FULL_RUN=1 proof: not
+# hypothetical, not theoretical, an actual regression caught before it
+# shipped). 20s is slack for an ORPHAN to be force-reaped, not for a suite to
+# finish; see below for why that distinction is the whole fix.
 SUITE_DRAIN_TIMEOUT=${SUITE_DRAIN_TIMEOUT:-20}
 for test in /tests/test_kmod_* /tests/test_syssvc_*; do
     [ -x "$test" ] || continue
     name=$(basename "$test")
     echo "" >&4
     echo "--- $name ---" >&4
-    # $SUITE_RC is REMOVED before each iteration, not just overwritten by
-    # the next one's `echo $? >"$SUITE_RC"`. A subshell that dies before
-    # that echo runs -- e.g. killed by the drain timeout below -- would
-    # otherwise leave the PREVIOUS suite's exit status on disk, and `[ -f
-    # "$SUITE_RC" ]` below would read it as if it were this suite's. Plain
-    # `rc=$?` could never make that mistake; reusing one path across N runs
-    # can.
-    rm -f "$SUITE_RC" "$SUITE_OUT"
-    # DRAIN TIMEOUT: a pipeline's reader (tee) does not see EOF until EVERY
-    # process holding the write end has closed it, including a suite's own
-    # ORPHANED grandchildren -- ones it forked but never wait()ed for. A
-    # single leaked child blocks not just this suite's line but the WHOLE
-    # loop after it, until run_tests.sh's outer QEMU timeout fires and every
-    # remaining suite is lost with it. Demonstrated under this exact
-    # pipeline shape: a 6-second sleeping orphan made it take 6.014s instead
-    # of returning immediately. Suites whose fork() count exceeds their
-    # wait() count are the exposure (test_kmod_bind 9/4, test_kmod_lock_sync
-    # 8/4, test_syssvc_ef_mproc 7/3). Killing `tee` after
-    # $SUITE_DRAIN_TIMEOUT bounds the damage to this one suite's slot --
-    # "$test" itself already exited before its pipe could be starved, so its
-    # own exit status is unaffected.
-    ( "$test" 2>&1; echo $? >"$SUITE_RC" ) \
-        | timeout -s KILL "$SUITE_DRAIN_TIMEOUT" tee "$SUITE_OUT" >&4
-    if [ -f "$SUITE_RC" ]; then
-        rc=$(cat "$SUITE_RC")
-    else
-        echo "  WARN: $name -- no exit-status record (drain timeout fired, or the wrapper died abnormally) -- treating as FAIL" >&4
-        rc=124
-    fi
+    rm -f "$SUITE_OUT" "$SUITE_FIFO"
+    mknod "$SUITE_FIFO" p
+    # REAL-TIME FORWARDER, via a FIFO instead of a shell pipe. "$test" writes
+    # into the fifo; `tee`, backgrounded, copies each chunk to $SUITE_OUT
+    # (this loop's own PASS/FAIL tally) AND fd 4 (the assertion channel) as
+    # it arrives -- not after "$test" returns. That immediacy is what makes
+    # a `fatal` isolation control (executive-not-pinned) survivable: bytes
+    # already reach fd 4 before a guest wedge can lose them.
+    tee "$SUITE_OUT" >&4 <"$SUITE_FIFO" &
+    TEE_PID=$!
+    "$test" >"$SUITE_FIFO" 2>&1
+    rc=$?
+    # DRAIN, bounded -- and bounded starting HERE, after "$test" has ALREADY
+    # exited and rc is already known, not from the top of the iteration.
+    # THIS ORDERING IS THE FIX. The first version of this bound wrapped
+    # `timeout -s KILL $SUITE_DRAIN_TIMEOUT tee ...` around the WHOLE
+    # pipeline, so its clock started when the SUITE started, not when it
+    # finished -- indistinguishable, to that timeout, from "this suite is
+    # simply slow". MEASURED: this item's own FULL_RUN=1 proof caught it
+    # rebounding off bind-client-no-register, whose mutation makes every
+    # subsequent syscall in several suites fail, which pushed
+    # test_syssvc_lock_status and test_syssvc_setname's own real runtimes
+    # past the 20s mark with NO orphan involved -- `tee` was SIGKILLed while
+    # those suites were still legitimately running, which SIGPIPE'd
+    # test_syssvc_lock_status (observed: rc=141) and silently dropped
+    # test_syssvc_setname's last 4 PASS/FAIL lines (observed: present on the
+    # unfixed ef9b99c baseline, absent here). Confirmed on the base tree:
+    # both suites print their full expected assertion sets when nothing
+    # times anything out. Waiting for "$test" to exit FIRST (the line above)
+    # and only THEN bounding the wait for tee removes the ambiguity: nothing
+    # still holding the fifo's write end open past this point can be "$test"
+    # itself (it has already exited) -- it can only be an orphaned
+    # grandchild ("$test" forked it and never wait()ed for it). Suites whose
+    # fork() count exceeds their wait() count are the exposure this control
+    # actually targets (test_kmod_bind 9/4, test_kmod_lock_sync 8/4,
+    # test_syssvc_ef_mproc 7/3); a 6-second sleeping orphan demonstrated
+    # under the original (pre-fifo) pipeline shape that this class is real,
+    # not hypothetical -- it made the pipeline take 6.014s instead of
+    # returning immediately.
+    _waited=0
+    while kill -0 "$TEE_PID" 2>/dev/null; do
+        if [ "$_waited" -ge "$SUITE_DRAIN_TIMEOUT" ]; then
+            echo "  WARN: $name -- an orphaned child is still holding the assertion fifo open ${SUITE_DRAIN_TIMEOUT}s after $name itself exited -- killing the forwarder so the run can continue" >&4
+            kill -KILL "$TEE_PID" 2>/dev/null
+            break
+        fi
+        sleep 1
+        _waited=$((_waited + 1))
+    done
+    wait "$TEE_PID" 2>/dev/null
+    rm -f "$SUITE_FIFO"
     spass=$(grep -c "^  PASS:" "$SUITE_OUT" 2>/dev/null); spass=${spass:-0}
     sfail=$(grep -c "^  FAIL:" "$SUITE_OUT" 2>/dev/null); sfail=${sfail:-0}
     ASSERT_PASS=$((ASSERT_PASS+spass))
@@ -226,7 +251,7 @@ for test in /tests/test_kmod_* /tests/test_syssvc_*; do
     fi
     echo "=== SUITE $name rc=$rc ===" >&4
 done
-rm -f "$SUITE_OUT" "$SUITE_RC"
+rm -f "$SUITE_OUT" "$SUITE_FIFO"
 exec 4>&-
 
 echo ""

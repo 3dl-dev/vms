@@ -295,8 +295,12 @@ int scs_env_route_for_mtype(unsigned mtype);
 
 /*
  * scs_env_mtype_name - a static, never-NULL name for logs. The names of 0..7
- * are spec sec 4(h)(1a)'s; 8 and 9 render as "type 8"/"type 9" because they are
- * NOT identified and naming them in a log would leak a guess into the record.
+ * are spec sec 4(h)(1a)'s; 8 is the special credit message, identified by
+ * vms-f03/#128, but still renders as "type 8" -- naming it while its paired
+ * response (9) stays a bare number would read as more confidence about 9
+ * than the record has. 9 renders as "type 9" because it is DELIBERATELY
+ * left unnamed: no public doc names a response to the special credit
+ * message, and guessing would repeat the vms-c11 guessed-name pattern.
  */
 const char *scs_env_mtype_name(unsigned mtype);
 

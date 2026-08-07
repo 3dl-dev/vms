@@ -364,6 +364,37 @@ set_tests_properties(scs_send_sites PROPERTIES
     TIMEOUT 60
 )
 
+# vms-73c - THE UNDISCLOSED DOUBLE-GRANT CENSUS. test_scs_mscp_cdt_hazard.py
+# reads src/vmsscs/scsd.c and src/vmsscs/scs_mscp_srv.c and asserts that no
+# `.cdt =` / `->cdt =` write lands on a struct scs_mscp_params instance without
+# an adjacent CREDIT-HAZARD-ACKNOWLEDGED comment.
+#
+# WHY A SOURCE GATE: scs_mscp.c's build-site comment discloses a LATENT
+# DOUBLE-GRANT HAZARD -- scs_credit_peek_pending() is a PEEK, not a reset, so a
+# live CDT wired into this struct would let scsd_credit_stamp_outbound()'s
+# still-real unstamped exits (F1 recount: !scs_credit_enabled(),
+# !scsd_cdl_ready, a CDL lookup miss, credit starvation) emit a pending credit
+# that a later successful stamp on the same CDT would grant a second time. No
+# production caller wires this today, which is exactly why nothing catches it
+# if that changes silently. This gate does not forbid wiring it -- it forbids
+# wiring it without the change disclosing the hazard.
+#
+# Registered unconditionally, exactly like scs_send_sites above: a missing
+# interpreter must make the gate RED, never make it vanish.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_mscp_cdt_hazard
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_mscp_cdt_hazard.py)
+else()
+    add_test(NAME scs_mscp_cdt_hazard
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_mscp_cdt_hazard_no_python3.cmake)
+endif()
+set_tests_properties(scs_mscp_cdt_hazard PROPERTIES
+    LABELS "unit;scs;cluster;mscp"
+    TIMEOUT 60
+)
+
 # vms-b1d - SCA datagram buffer management: the per-port DFREEQ and the
 # per-connection buffer count in the CDT (VAXcluster Principles pp. 2-42..2-43).
 # Covers both documented discard classes, the fact that a no-quota discard

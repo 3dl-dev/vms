@@ -300,15 +300,31 @@ struct scs_mscp_params {
      * memset(&mp, 0, sizeof(mp))) leave .cdt at its zeroed NULL and never set
      * it, and nothing in src/vmsscs/scs_mscp_srv.c constructs one either. The
      * ONLY non-NULL assignment anywhere in the tree is
-     * tests/vmsscs/test_scs_mscp.c, so on the real wire every OVMX MSCP
-     * command still carries the constant SCS_MSCP_ENV_CREDIT (1) below, and
-     * the live-credit branch above is exercised only by that test. Wiring a
-     * real caller -- e.g. having ps_mscp_disc()/ps_fill_mscp() look their CDT
-     * up via scs_cdl_lookup() the same way scsd_credit_stamp_outbound()
-     * already does at scsd.c:2490 -- is future work, not done by this
-     * struct's addition. NULL (the default; every current caller) falls back
-     * to the labeled replay SCS_MSCP_ENV_CREDIT, unchanged from before
-     * vms-8de. */
+     * tests/vmsscs/test_scs_mscp.c, and the live-credit branch above is
+     * exercised only by that test.
+     *
+     * THAT IS NOT WHY every OVMX MSCP command still carries the constant
+     * SCS_MSCP_ENV_CREDIT (1) below on the real wire (vms-73c: the prior
+     * wording asserted this unconditionally, as if it followed from no
+     * caller passing a CDT today -- it does not, since .cdt is exactly the
+     * kind of thing a future change wires up, and this struct's own live
+     * branch would then read live against a well-formed frame that is
+     * otherwise eligible for it). The wire claim holds for a DERIVED reason
+     * instead: scsd.c allocates a CDT ONLY at the three local Con.IDs
+     * OVMX_JOINER_CONID, SCS_DIR_OVMX_CONID and OVMX_LOCAL_CONID
+     * (scsd.c:3906/8496/8835/9354) -- never at either MSCP Con.ID
+     * (OVMX_MSCP_CONID, scsd.c:477; OVMX_PS_MSCP_CONID, scsd.c:496) -- so a
+     * production caller that looked its own CDT up by local_conid would
+     * always miss, and the constant is what reaches the wire. That is
+     * CONTINGENT on scsd.c's allocation pattern, not a guarantee this struct
+     * or the builder enforces: it changes the moment a future caller
+     * allocates a CDT at an MSCP Con.ID, independent of whether anyone also
+     * passes a CDT into .cdt here. Wiring a real caller -- e.g. having
+     * ps_mscp_disc()/ps_fill_mscp() look their CDT up via scs_cdl_lookup()
+     * the same way scsd_credit_stamp_outbound() already does at scsd.c:2490
+     * -- is future work, not done by this struct's addition. NULL (the
+     * default; every current caller) falls back to the labeled replay
+     * SCS_MSCP_ENV_CREDIT, unchanged from before vms-8de. */
     const struct scs_cdt *cdt;
 };
 

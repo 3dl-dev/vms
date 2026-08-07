@@ -243,16 +243,36 @@ int scs_mscp_build_command(const struct scs_mscp_params *p,
      * identifies: an MSCP command nested under an SCS header, Figure 4-5.
      *
      * CREDIT (vms-8de, corrected by vms-d76, documentation corrected again by
-     * vms-973): a live READ of the connection's Pending Receive Credit -- via
-     * scs_credit_peek_pending(), a non-mutating peek -- IF the caller passed
-     * a CDT for this connection. NO PRODUCTION CALLER DOES THIS TODAY: both
-     * scsd.c call sites (ps_mscp_disc(), ps_fill_mscp()) memset their
-     * scs_mscp_params and never set .cdt, and scs_mscp_srv.c constructs none
-     * either. The only place in the tree that passes a non-NULL cdt is
-     * tests/vmsscs/test_scs_mscp.c, so this branch is exercised by that test
-     * and by nothing else; on the real wire every OVMX MSCP command still
-     * carries the constant SCS_MSCP_ENV_CREDIT below. Wiring a real caller
-     * (e.g. ps_mscp_disc()/ps_fill_mscp() doing the same scs_cdl_lookup() by
+     * vms-973, recount corrected again by vms-73c): a live READ of the
+     * connection's Pending Receive Credit -- via scs_credit_peek_pending(), a
+     * non-mutating peek -- IF the caller passed a CDT for this connection.
+     * NO PRODUCTION CALLER DOES THIS TODAY: both scsd.c call sites
+     * (ps_mscp_disc(), ps_fill_mscp()) memset their scs_mscp_params and never
+     * set .cdt, and scs_mscp_srv.c constructs none either. The only place in
+     * the tree that passes a non-NULL cdt is tests/vmsscs/test_scs_mscp.c, so
+     * this branch is exercised by that test and by nothing else.
+     *
+     * THAT IS NOT WHY every OVMX MSCP command still carries the constant
+     * SCS_MSCP_ENV_CREDIT below on the real wire -- .cdt could be wired
+     * tomorrow (see the gate note under LATENT DOUBLE-GRANT HAZARD), and the
+     * credit-enabled/CDL-hit/non-starved path this builder's own well-formed
+     * 108-byte MTYPE-10 frame is otherwise eligible for (see NOT ALWAYS
+     * OVERWRITTEN below) would then read live. The wire claim holds for a
+     * SEPARATE, DERIVED reason: CDTs in this daemon are allocated ONLY at the
+     * three local Con.IDs OVMX_JOINER_CONID, SCS_DIR_OVMX_CONID and
+     * OVMX_LOCAL_CONID (scsd.c:3906/8496/8835/9354 -- the only four
+     * scs_connect()/scs_accept() call sites in the file), and NOTHING
+     * allocates a CDT at either MSCP Con.ID (OVMX_MSCP_CONID, scsd.c:477;
+     * OVMX_PS_MSCP_CONID, scsd.c:496). So a scs_cdl_lookup() on any MSCP
+     * frame's own local_conid ALWAYS misses today -- this is
+     * scsd_credit_stamp_outbound()'s own CDL-miss exit, one of the 4
+     * applicable failing conditions counted below -- and the constant below
+     * is what reaches the wire. That is CONTINGENT on this allocation
+     * pattern, not a structural guarantee this builder or
+     * scsd_credit_stamp_outbound() enforces: a future caller that allocates a
+     * CDT at an MSCP Con.ID would make the live-credit branch (and the hazard
+     * below) real without touching a line here. Wiring a real caller (e.g.
+     * ps_mscp_disc()/ps_fill_mscp() doing the same scs_cdl_lookup() by
      * local_conid that scsd_credit_stamp_outbound() already does at
      * scsd.c:2490) is future work, not done here -- see the hazard note below
      * before anyone does it.
@@ -269,16 +289,24 @@ int scs_mscp_build_command(const struct scs_mscp_params *p,
      *
      * NOT ALWAYS OVERWRITTEN: scsd_credit_stamp_outbound() only re-stamps the
      * field on the credit-enabled, CDL-hit, in-length, non-starved,
-     * successfully-restamped path; it has up to 9 "return frame unstamped"
-     * exits. 4 of those are structural checks (len <= 14, envelope parse
-     * failure, MTYPE != 10, len > SCSD_CREDIT_MAX_FRAME) that cannot trigger
-     * against this builder's own well-formed 108-byte MTYPE-10 output. The
-     * other 5 CAN: !scs_credit_enabled(), !scsd_cdl_ready, a CDL lookup miss
-     * on this frame's own local_conid, credit starvation, and a
-     * scs_credit_stamp_header() failure -- and on every one of those the
-     * builder's bytes go out on the wire exactly as written here. Naming the
-     * live read here is what makes both the overwrite AND the unstamped
-     * exceptions legible, not what makes them irrelevant.
+     * successfully-restamped path. Precisely (vms-73c recount -- MEASURED
+     * against scsd.c:2465-2506, not assumed): the function has 7 "return
+     * frame" (unstamped) sites, covering 9 failing CONDITIONS between them --
+     * the first site's one `if` combines three (!scs_credit_enabled(),
+     * !scsd_cdl_ready, len <= 14). Of those 9, 5 CANNOT trigger against this
+     * builder's own well-formed 108-byte MTYPE-10 output: the 4 structural
+     * checks (len <= 14, envelope parse failure, MTYPE != 10, len >
+     * SCSD_CREDIT_MAX_FRAME), plus a scs_credit_stamp_header() failure --
+     * this builder's frame carries total_sca_len=94, which IS in
+     * scs_credit_header_offset()'s allowlist {58,62,66,86,94,110,190}
+     * (scs_credit.c:483), so the offset lookup succeeds, and credit >
+     * 0xFFFF (stamp_header's only other failure mode) is unreachable given
+     * CLUSTER_CREDITS=10. The remaining 4 CAN trigger against this builder's
+     * own frame: !scs_credit_enabled(), !scsd_cdl_ready, a CDL lookup miss on
+     * this frame's own local_conid, and credit starvation -- and on every one
+     * of those the builder's bytes go out on the wire exactly as written
+     * here. Naming the live read here is what makes both the overwrite AND
+     * the unstamped exceptions legible, not what makes them irrelevant.
      *
      * LATENT DOUBLE-GRANT HAZARD if this branch is ever wired to a real
      * caller: scs_credit_peek_pending() is a PEEK -- it does not clear
@@ -292,6 +320,16 @@ int scs_mscp_build_command(const struct scs_mscp_params *p,
      * scs_credit_on_send()'s take_pending_receive_credit() (scs_credit.c).
      * Currently unreachable in production (this whole branch is dead code
      * there), but real the moment it is wired.
+     *
+     * ENFORCED, NOT JUST DISCLOSED (vms-73c):
+     * tests/vmsscs/test_scs_mscp_cdt_hazard.py (registered as ctest
+     * `scs_mscp_cdt_hazard`) scans src/vmsscs/scsd.c and
+     * src/vmsscs/scs_mscp_srv.c and reds on any new `.cdt =` / `->cdt =`
+     * assignment to a struct scs_mscp_params instance that does not carry a
+     * `CREDIT-HAZARD-ACKNOWLEDGED` comment on the same or an adjacent line.
+     * It does not forbid wiring a real caller -- it forbids doing so without
+     * writing down, next to the assignment, what resets pending_receive_credit
+     * on the unstamped path.
      *
      * With no CDT (p->cdt == NULL, every current caller), this falls back to
      * SCS_MSCP_ENV_CREDIT, the golden af2 joiner command's [48:50] LABELED

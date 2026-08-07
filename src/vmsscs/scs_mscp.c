@@ -242,31 +242,60 @@ int scs_mscp_build_command(const struct scs_mscp_params *p,
      * Con.ID pair. This is the frame class docs/design-mscp-direction.md sec 1.2
      * identifies: an MSCP command nested under an SCS header, Figure 4-5.
      *
-     * CREDIT (vms-8de, corrected by vms-d76): a live READ of the connection's
-     * Pending Receive Credit -- via scs_credit_peek_pending(), a non-mutating
-     * peek -- when the caller passed a CDT for this connection (the normal
-     * scsd.c case, looked up by local_conid). Pending Receive Credit, not
-     * Send Credit, is the piggyback account: scs_cdt.h documents the split
-     * (Send Credit = buffers THIS node believes exist on the REMOTE, a
-     * receive-side accounting value; Pending Receive Credit = buffers freed
-     * LOCALLY, piggybacked into the credit field of the next outbound
-     * message), and scsd_credit_stamp_outbound() (scsd.c, vms-aa1) -- the
-     * function this builder's live read is meant to track -- returns
-     * scs_credit_on_send(cdt), which takes cdt->pending_receive_credit, never
-     * cdt->send_credit. This builder invents no second source of truth.
+     * CREDIT (vms-8de, corrected by vms-d76, documentation corrected again by
+     * vms-973): a live READ of the connection's Pending Receive Credit -- via
+     * scs_credit_peek_pending(), a non-mutating peek -- IF the caller passed
+     * a CDT for this connection. NO PRODUCTION CALLER DOES THIS TODAY: both
+     * scsd.c call sites (ps_mscp_disc(), ps_fill_mscp()) memset their
+     * scs_mscp_params and never set .cdt, and scs_mscp_srv.c constructs none
+     * either. The only place in the tree that passes a non-NULL cdt is
+     * tests/vmsscs/test_scs_mscp.c, so this branch is exercised by that test
+     * and by nothing else; on the real wire every OVMX MSCP command still
+     * carries the constant SCS_MSCP_ENV_CREDIT below. Wiring a real caller
+     * (e.g. ps_mscp_disc()/ps_fill_mscp() doing the same scs_cdl_lookup() by
+     * local_conid that scsd_credit_stamp_outbound() already does at
+     * scsd.c:2490) is future work, not done here -- see the hazard note below
+     * before anyone does it.
+     *
+     * Pending Receive Credit, not Send Credit, is the piggyback account:
+     * scs_cdt.h documents the split (Send Credit = buffers THIS node
+     * believes exist on the REMOTE, a SEND-side gate value debited per
+     * message sent, that never itself rides the wire; Pending Receive
+     * Credit = buffers freed LOCALLY, piggybacked into the credit field of
+     * the next outbound message), and scsd_credit_stamp_outbound() (scsd.c,
+     * vms-aa1) -- the function this builder's live read is meant to track --
+     * returns scs_credit_on_send(cdt), which takes cdt->pending_receive_credit,
+     * never cdt->send_credit. This builder invents no second source of truth.
      *
      * NOT ALWAYS OVERWRITTEN: scsd_credit_stamp_outbound() only re-stamps the
-     * field on the credit-enabled, CDL-hit, in-length, non-starved path.
-     * Five paths return the frame UNSTAMPED -- !scs_credit_enabled(),
-     * !scsd_cdl_ready, len > SCSD_CREDIT_MAX_FRAME, a CDL lookup miss, and
-     * credit starvation -- and on every one of those the builder's bytes go
-     * out on the wire exactly as written here. Naming the live read here is
-     * what makes both the overwrite AND the five unstamped exceptions
-     * legible, not what makes them irrelevant.
+     * field on the credit-enabled, CDL-hit, in-length, non-starved,
+     * successfully-restamped path; it has up to 9 "return frame unstamped"
+     * exits. 4 of those are structural checks (len <= 14, envelope parse
+     * failure, MTYPE != 10, len > SCSD_CREDIT_MAX_FRAME) that cannot trigger
+     * against this builder's own well-formed 108-byte MTYPE-10 output. The
+     * other 5 CAN: !scs_credit_enabled(), !scsd_cdl_ready, a CDL lookup miss
+     * on this frame's own local_conid, credit starvation, and a
+     * scs_credit_stamp_header() failure -- and on every one of those the
+     * builder's bytes go out on the wire exactly as written here. Naming the
+     * live read here is what makes both the overwrite AND the unstamped
+     * exceptions legible, not what makes them irrelevant.
      *
-     * With no CDT (p->cdt == NULL, e.g. a unit test with no CDL), this falls
-     * back to SCS_MSCP_ENV_CREDIT, the golden af2 joiner command's [48:50]
-     * LABELED REPLAY this field used unconditionally before vms-8de. */
+     * LATENT DOUBLE-GRANT HAZARD if this branch is ever wired to a real
+     * caller: scs_credit_peek_pending() is a PEEK -- it does not clear
+     * cdt->pending_receive_credit the way scs_credit_on_send()'s
+     * take_pending_receive_credit() does. So on an unstamped path (above),
+     * this builder would emit a real pending_receive_credit value that stays
+     * un-reset; if scsd_credit_stamp_outbound() later succeeds on a
+     * subsequent send for the same CDT, scs_credit_on_send() would grant that
+     * same credit to the peer a SECOND time. Wiring a production caller must
+     * also give the unstamped path its own reset, modeled on
+     * scs_credit_on_send()'s take_pending_receive_credit() (scs_credit.c).
+     * Currently unreachable in production (this whole branch is dead code
+     * there), but real the moment it is wired.
+     *
+     * With no CDT (p->cdt == NULL, every current caller), this falls back to
+     * SCS_MSCP_ENV_CREDIT, the golden af2 joiner command's [48:50] LABELED
+     * REPLAY this field used unconditionally before vms-8de. */
     {
         struct scs_env_fields env;
         env.mtype = SCS_ENV_MTYPE_APP_MESSAGE;

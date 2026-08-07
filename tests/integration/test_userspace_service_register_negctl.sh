@@ -906,13 +906,19 @@ else
 CC_GOOD_EOF
     # Same fixture, missing ONE closing brace -- the entry's "file" field is
     # read but never reaches a matching "}", exactly as a shape drift in a
-    # future CMake would leave it.
-    sed '$d' "$WORK/cc_good.json" > "$WORK/cc_partial.json"
+    # future CMake would leave it. Deleting the LAST line of cc_good.json
+    # would strip the outer "]" and leave the object's own "}" intact (this
+    # control shipped that way once -- vms-0c3 rework -- and the "malformed"
+    # fixture parsed byte-identical to the good one, so the control could
+    # never fail). Deleting the "}" line specifically is what actually
+    # removes the object's close.
+    grep -v '^}$' "$WORK/cc_good.json" > "$WORK/cc_partial.json"
 
     out_good=$(awk -v ROOT="/root/" -v INSTF="" -f "$REGBUILDSET_AWK" "$WORK/cc_good.json")
     rc_good=$?
-    out_partial=$(awk -v ROOT="/root/" -v INSTF="" -f "$REGBUILDSET_AWK" "$WORK/cc_partial.json")
+    out_partial=$(awk -v ROOT="/root/" -v INSTF="" -f "$REGBUILDSET_AWK" "$WORK/cc_partial.json" 2>"$WORK/cc_partial.err")
     rc_partial=$?
+    err_partial=$(cat "$WORK/cc_partial.err")
 
     if [ "$rc_good" -ne 0 ] || [ "$out_good" != "src/a.c" ]; then
         echo "  FAIL: BROKEN FIXTURE: the well-formed compile_commands.json fixture did not"
@@ -924,10 +930,10 @@ CC_GOOD_EOF
         echo "        entry missing its closing brace was silently dropped instead of refusing"
         printf '%s\n' "$out_partial" | sed 's/^/          /'
         failed=$((failed + 1)); status=1
-    elif ! printf '%s\n' "$out_partial" | grep -qF "BROKEN BUILD-SET SCAN: compile_commands.json parse is PARTIAL"; then
+    elif ! printf '%s\n' "$err_partial" | grep -qF "BROKEN BUILD-SET SCAN: compile_commands.json parse is PARTIAL"; then
         echo "  FAIL: register_buildset.awk went non-zero on the malformed fixture but not"
-        echo "        for the named reason:"
-        printf '%s\n' "$out_partial" | sed 's/^/          /'
+        echo "        for the named reason (checked stderr, where the refusal is written):"
+        printf '%s\n' "$err_partial" | sed 's/^/          /'
         failed=$((failed + 1)); status=1
     else
         echo "  PASS: a compile_commands.json entry missing its closing brace is refused,"

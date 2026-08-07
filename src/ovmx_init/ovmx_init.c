@@ -3,10 +3,13 @@
  *
  * PID 1 / ENTRYPOINT for OVMX on its one runtime target: the real-kernel /
  * QEMU path (CLAUDE.md Rule 9). Handles the entire boot sequence: filesystem
- * setup, kernel module loading, VMS directory provisioning, SYSUAF user
- * provisioning, daemon startup, boot banner, and console login loop.
+ * setup, kernel module loading, VMS directory provisioning, boot banner,
+ * and console login loop.
  *
- * No shell scripts, no busybox, no /etc/passwd — SYSUAF is the user database.
+ * IT DOES NOT READ SYS$SYSTEM:SYSUAF.DAT (vms-9b7). Account provisioning,
+ * system-tree ownership and the SYSTEM identity are system management, and
+ * run from SYS$MANAGER:STARTUP.COM in PROVISION.EXE -- see the Step 1 note
+ * in main(). No shell scripts, no busybox, no /etc/passwd.
  */
 
 #include <stdio.h>
@@ -27,9 +30,10 @@
 #include <sys/reboot.h>
 #include <errno.h>
 
-#include "vms/pcb.h"
+/* vms/pcb.h and vms/privs.h are DELIBERATELY NOT INCLUDED (vms-9b7). PID 1
+ * no longer seeds a private PCB and no longer parses a privilege string --
+ * both were part of reading SYSUAF here, which it no longer does. */
 #include "vms/logical.h"
-#include "vms/privs.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 #include "ovmx_layout.h"
@@ -601,250 +605,20 @@ static void provision_dirs(void)
 }
 
 /*
- * Split one SYSUAF record into the fields this file cares about.
- *
- * SYSUAF format (pipe-delimited, 0-indexed):
- *   0 USERNAME | 1 HASH | 2 UIC_GROUP | 3 UIC_MEMBER
- *   4 DEFAULT_DIR | 5 FLAGS | 6 PRIVILEGES
- *
- * `line` is modified in place. Returns 0 if the record parsed, -1 if it
- * is a comment, blank, or malformed.
- */
-static int sysuaf_split(char *line, char **user, uint32_t *grp, uint32_t *mem,
-                        char **defdir)
-{
-    if (line[0] == '#' || line[0] == '\n' || line[0] == '\r' || line[0] == '\0')
-        return -1;
-
-    char *f[7];
-    int n = 0;
-    f[n++] = line;
-    for (char *p = line; *p && n < 7; p++) {
-        if (*p == '|') { *p = '\0'; f[n++] = p + 1; }
-    }
-    if (n < 5)
-        return -1;
-    for (char *p = f[n - 1]; *p; p++) {
-        if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
-    }
-
-    *user   = f[0];
-    /*
-     * OCTAL (vms-e60), and this site is the reason the item's own enumeration
-     * was not enough. SYSUAF.DAT's UIC fields are octal; derivation in
-     * src/libvms/rtl/sysuaf.c.
-     *
-     * MEASURED, by the UAT rather than by review: fixing the other ten sites
-     * and leaving this one decimal made every non-SYSTEM login unable to write
-     * its OWN login directory. This function feeds own_tree(), which chowns
-     * SYS$SYSDEVICE:[USERS.<name>] to the account's UIC, while LOGINOUT
-     * setuid()s to the UIC it reads through libvms. With the two on different
-     * bases GUEST's directory was owned by 201:200 and GUEST ran as 129:128,
-     * so `COPY SYS$MANAGER:LOGIN.COM UATUSER.TXT` returned %RMS-E-CRE.
-     *
-     * That is exactly the failure mode a partial base change produces: it does
-     * not restore the old behaviour, it relocates the disagreement to a new
-     * pair of subsystems. Any future change to this base must move all of the
-     * sites listed in sysuaf.c together.
-     */
-    *grp    = (uint32_t)strtoul(f[2], NULL, 8);
-    *mem    = (uint32_t)strtoul(f[3], NULL, 8);
-    *defdir = f[4];
-    return 0;
-}
-
-/*
- * Give one filesystem object to a UIC, without following symlinks.
- *
- * lchown() and not chown(): copy_recursive() preserves symlinks (VMS
- * concealed-device and relative-path links can appear in the tree it
- * copies), and re-owning a symlink must not re-own whatever it points at.
- */
-static void own_object(const char *path, uint32_t uic_group, uint32_t uic_member)
-{
-    if (lchown(path, (uid_t)uic_member, (gid_t)uic_group) != 0 &&
-        errno != ENOENT)
-        fprintf(stderr, "%%STARTUP-W-OWNER, cannot set owner of %s: %s\n",
-                path, strerror(errno));
-}
-
-/*
- * Give a directory and everything beneath it to a UIC.
- */
-static void own_tree(const char *path, uint32_t uic_group, uint32_t uic_member)
-{
-    own_object(path, uic_group, uic_member);
-
-    DIR *d = opendir(path);
-    if (!d)
-        return;
-
-    struct dirent *ent;
-    while ((ent = readdir(d)) != NULL) {
-        if (ent->d_name[0] == '.' &&
-            (ent->d_name[1] == '\0' ||
-             (ent->d_name[1] == '.' && ent->d_name[2] == '\0')))
-            continue;
-
-        char child[512];
-        int len = snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
-        if (len < 0 || len >= (int)sizeof(child))
-            continue;
-
-        struct stat es;
-        if (lstat(child, &es) != 0)
-            continue;
-
-        if (S_ISDIR(es.st_mode))
-            own_tree(child, uic_group, uic_member);
-        else
-            own_object(child, uic_group, uic_member);
-    }
-    closedir(d);
-}
-
-/*
- * Read SYSUAF and create home directories for each user, OWNED BY THAT
- * USER'S UIC.
- *
- * WHY THE OWNERSHIP IS PART OF PROVISIONING AND NOT PART OF LOGIN
- * (vms-2b8 round 7). Until LOGINOUT started dropping to the
- * authenticated user's credentials, every VMS session on OVMX ran as
- * Linux root, so it did not matter who owned anything: root passes
- * every DAC check. The moment a session really becomes UIC [1,4], a
- * tree installed as root:root is a tree that VMS's own SYSTEM account
- * cannot write -- and that is not a VMS state.
- *
- * On OpenVMS the account's directory is created BY THE ACCOUNT
- * PROVISIONING (the System Manager's Manual add-user procedure is
- * AUTHORIZE ADD followed by CREATE/DIRECTORY .../OWNER=[g,m]); LOGINOUT
- * does not create it and does not re-own it. OVMX does the same here,
- * in PID 1, before any other process exists.
- *
- * SYSUAF format: USERNAME|HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVS
- * No /etc/passwd — SYSUAF is the user database.
- */
-static void provision_sysuaf_users(void)
-{
-    char sysuaf_path[512];
-    vms_to_linux(VMS_SYSUAF_PATH, sysuaf_path, sizeof(sysuaf_path));
-    FILE *fp = fopen(sysuaf_path, "r");
-    if (!fp)
-        return;
-
-    char line[512];
-    while (fgets(line, sizeof(line), fp)) {
-        char *user, *defdir;
-        uint32_t grp, mem;
-        if (sysuaf_split(line, &user, &grp, &mem, &defdir) != 0)
-            continue;
-        if (defdir[0] == '\0')
-            continue;
-
-        /* default_dir may be a VMS spec (DKA0:[USERS.name]) — translate. */
-        char home_linux[512];
-        if (strchr(defdir, '[') || strchr(defdir, ':')) {
-            vms_to_linux(defdir, home_linux, sizeof(home_linux));
-        } else {
-            /* Legacy Linux path — use directly */
-            snprintf(home_linux, sizeof(home_linux), "%s", defdir);
-        }
-        mkdir(home_linux, 0755);
-        own_object(home_linux, grp, mem);
-    }
-    fclose(fp);
-}
-
-/*
- * Give the system root ([SYS0] and everything under it) to the UIC that
- * OWNS the OpenVMS system tree: the SYSTEM account's.
- *
- * PINNED TO THE ORACLE, not chosen (CLAUDE.md Rule 10). Measured on VAX2
- * of the ~/vax/cluster lab, OpenVMS VAX V7.3, 30-JUL-2026 -- verbatim
- * transcripts in docs/oracle/vax73-privileges.md S7:
- *
- *   $ DIRECTORY/OWNER/PROTECTION SYS$COMMON:[000000]SYSEXE.DIR,SYSLIB.DIR
- *   SYSEXE.DIR;1         [SYSTEM]                         (RWE,RWE,RE,RE)
- *   SYSLIB.DIR;1         [SYSTEM]                         (RWE,RWE,RE,RE)
- *   $ DIRECTORY/OWNER/PROTECTION SYS$SYSTEM:LOGINOUT.EXE,AUTHORIZE.EXE
- *   LOGINOUT.EXE;1       [SYSTEM]                         (RWED,RWED,RWED,RE)
- *   $ DIRECTORY/OWNER/PROTECTION SYS$SYSDEVICE:[000000]*.DIR
- *   SYS0.DIR;1           [SYSTEM]                         (RWE,RWE,RE,RE)
- *
- * So on VMS the system tree is owned by SYSTEM and world gets R+E and no
- * write -- which is exactly the pair of facts OVMX has to reproduce: the
- * SYSTEM account can create and delete in SYS$SYSTEM: and SYS$MANAGER:,
- * and an ordinary user cannot.
- *
- * WHICH UIC IS NOT HARDCODED HERE. It is read out of SYSUAF's SYSTEM
- * record, the same record LOGINOUT authenticates against and the same one
- * establish_system_identity() below hands to the executive. If those two
- * ever disagreed, the file protection would be enforced against a
- * different identity than the executive holds -- which is the defect this
- * whole item exists to delete.
- *
- * WHY IT RUNS ON EVERY BOOT, not just at install: provision_seed_files()
- * adds files to the tree after the install step is skipped, and a file
- * seeded by root that SYSTEM cannot write is the same regression in a
- * smaller box.
- *
- * DISCLOSED DIVERGENCE (not a handler, a substrate limit): VMS grants the
- * SYSTEM protection category to every UIC whose group is <= MAXSYSGROUP
- * (measured 8, see S7). A Linux inode carries exactly one owning group, so
- * OVMX can express "UIC group 1 is the owner's group" but not "UIC groups
- * 1 through 8 are all system". Accounts in groups 2..8 would therefore get
- * VMS's GROUP nibble where VMS gives them the SYSTEM one. OVMX's SYSUAF
- * ships no such account, and inventing a second enforcement layer to paper
- * over it would be worse than the gap (Rule 10).
- */
-static void provision_ownership(void)
-{
-    char sysuaf_path[512];
-    vms_to_linux(VMS_SYSUAF_PATH, sysuaf_path, sizeof(sysuaf_path));
-    FILE *fp = fopen(sysuaf_path, "r");
-    if (!fp)
-        return;
-
-    uint32_t sys_grp = 0, sys_mem = 0;
-    int found = 0;
-    char line[512];
-    while (fgets(line, sizeof(line), fp)) {
-        char *user, *defdir;
-        uint32_t grp, mem;
-        if (sysuaf_split(line, &user, &grp, &mem, &defdir) != 0)
-            continue;
-        if (strcmp(user, "SYSTEM") == 0) {
-            sys_grp = grp;
-            sys_mem = mem;
-            found = 1;
-            break;
-        }
-    }
-    fclose(fp);
-
-    /* No SYSTEM record means no authorized identity for the system
-     * process at all; establish_system_identity() halts the boot on the
-     * same condition a few steps later. Nothing to own here. */
-    if (!found)
-        return;
-
-    /* [SYS0] -- the parent of VMS_SYSROOT ([SYS0.SYSCOMMON]) -- and
-     * everything beneath it. */
-    char path[512];
-    vms_to_linux(VMS_SYSROOT, path, sizeof(path));
-    char *last_slash = strrchr(path, '/');
-    if (last_slash && last_slash != path)
-        *last_slash = '\0';
-    own_tree(path, sys_grp, sys_mem);
-}
-
-/*
  * Install the OVMX system onto the system disk.
  *
  * Creates the ODS-2 directory tree, then copies the real files from the
  * initramfs backup (INITRAMFS_BACKUP, populated by bare_metal_init before
- * the system disk was mounted over it) onto the now-mounted system disk,
- * and provisions SYSUAF user home directories.
+ * the system disk was mounted over it) onto the now-mounted system disk.
+ *
+ * IT DOES NOT PROVISION ACCOUNTS, AND MUST NOT (vms-9b7). This used to end
+ * with provision_sysuaf_users(), which read SYSUAF.DAT and created and
+ * chowned each account's home directory. Creating accounts' directories is
+ * ACCOUNT PROVISIONING -- on OpenVMS it is AUTHORIZE's job, driven from a
+ * DCL procedure -- and it is the same shape as the services this function's
+ * own NOTE below refuses to start here. It now runs from SYS$MANAGER:
+ * STARTUP.COM, in PROVISION.EXE, which is an ordinary image linking the
+ * ordinary libraries. This function copies files; that is all it does.
  *
  * Only reached when is_system_installed() found no DCL.EXE on the mounted
  * disk — i.e. a blank block-device disk just initialized by INITIALIZE.EXE.
@@ -859,15 +633,17 @@ static void install_system(void)
     printf("%%STARTUP-I-INSTALL, installing OVMX system to DKA0:\n");
     provision_dirs();
     copy_recursive(INITRAMFS_BACKUP, SYSDISK_MOUNT);
-    provision_sysuaf_users();
-
-    /* Every file just written -- SYSUAF.DAT above all -- sits dirty in
-     * the page cache until the kernel's own periodic writeback runs
-     * (default ~30s). A user who reaches the login prompt below and
-     * quits QEMU before that timer fires (the documented "log out or
-     * Ctrl-A X here" step) loses the install: the next boot reads a
-     * system disk that was never actually written. Force it out now,
-     * while install_system() still knows the write is what must survive. */
+    /* Every file just written sits dirty in the page cache until the
+     * kernel's own periodic writeback runs (default ~30s). A user who
+     * reaches the login prompt below and quits QEMU before that timer
+     * fires (the documented "log out or Ctrl-A X here" step) loses the
+     * install: the next boot reads a system disk that was never actually
+     * written. Force it out now, while install_system() still knows the
+     * write is what must survive.
+     *
+     * SYSUAF.DAT is among those files, and that is the ONLY relationship
+     * this sync() has to it now (vms-9b7): install_system() copies it and
+     * never reads it. Account provisioning moved to PROVISION.EXE. */
     sync();
 
     printf("%%STARTUP-I-INSTALLED, system installation complete\n");
@@ -900,184 +676,61 @@ static void install_system(void)
  */
 
 /*
- * Read one pipe-delimited field of a SYSUAF record by user name.
- * Returns 0 and fills out on success, -1 if there is no such user, no
- * such field, or SYSUAF.DAT cannot be read.
- */
-static int sysuaf_field(const char *username, int index,
-                        char *out, size_t outsz)
-{
-    char sysuaf_path[512];
-    vms_to_linux(VMS_SYSUAF_PATH, sysuaf_path, sizeof(sysuaf_path));
-    FILE *fp = fopen(sysuaf_path, "r");
-    if (!fp)
-        return -1;
-
-    size_t namelen = strlen(username);
-    char line[512];
-    int found = -1;
-
-    while (fgets(line, sizeof(line), fp)) {
-        if (line[0] == '#' || line[0] == '\n' || line[0] == '\0')
-            continue;
-        if (strncmp(line, username, namelen) != 0 || line[namelen] != '|')
-            continue;
-
-        char *field = line;
-        for (int i = 0; i < index; i++) {
-            field = strchr(field, '|');
-            if (!field) break;
-            field++;
-        }
-        if (!field)
-            break;
-
-        char *end = field;
-        while (*end && *end != '|' && *end != '\n' && *end != '\r')
-            end++;
-        *end = '\0';
-
-        snprintf(out, outsz, "%s", field);
-        found = 0;
-        break;
-    }
-
-    fclose(fp);
-    return found;
-}
-
-/*
- * Establish PID 1's identity through the executive (vms-2b8).
+ * Run the startup process.
  *
- * WHAT THIS REPLACES, so it is never put back: PID 1 used to call
- *     vms_pcb_init(0xFFFFFFFFFFFFFFFFULL);
- *     vms_pcb_set_identity(1, (1 << 16) | 4, "SYSTEM", "SYSTEM");
- * -- a process writing its own user name, its own UIC and every
- * privilege bit in existence into a structure it owns privately. The
- * answer it wrote was the right one; WHO DECIDED IT was the defect
- * (CLAUDE.md Rule 11). Nothing outside PID 1 could see that PCB, and
- * nothing could refuse it.
+ * PID 1 EXECS PROVISION.EXE, NOT DCL.EXE (vms-9b7). PROVISION.EXE establishes
+ * the SYSTEM identity from SYSUAF through the executive, provisions the system
+ * tree's ownership and the accounts' home directories, and then execs DCL.EXE
+ * on SYS$MANAGER:STARTUP.COM in the SAME process -- so the DCL that runs
+ * STARTUP.COM and SYSTARTUP_VMS.COM holds SYSTEM's identity, which is what
+ * OpenVMS does (STARTUP runs under username SYSTEM) and what this file used to
+ * approximate by stamping PID 1 instead.
  *
- * The identity now comes from the two places a VMS identity can come
- * from, and PID 1 supplies neither of them:
- *   - WHAT the identity is: SYSUAF's SYSTEM record -- the same user
- *     database LOGINOUT authenticates against, and the same one that
- *     already decides the UIC and privileges of every other session.
- *   - WHETHER PID 1 may establish it: the executive's own judgement.
- *     VMS_IOCTL_SETIDENT refuses any caller that does not hold SETPRV
- *     an identity that is not a weakening of its own, and SETPRV is
- *     derived in vms.ko from capable(CAP_SYS_ADMIN) at registration --
- *     a credential no process can grant itself.
+ * The three steps that used to run HERE, in PID 1, before this fork --
+ * provision_ownership(), establish_system_identity() and (from
+ * install_system()) provision_sysuaf_users() -- are the same three steps, in
+ * the same order, moved into that image. What is gone with them is PID 1's own
+ * pair of hand-rolled SYSUAF parsers.
  *
- * So this is LOGINOUT's shape, run for the system process: read the
- * authorized record, ask the executive to stamp it, and let the
- * executive say no. The row it writes is what every other process on
- * the node sees for PID 1, which is the whole point.
- *
- * FAILURE IS FATAL, and deliberately so. There is no VMS in which the
- * system process has no identity, so there is no VMS behaviour to
- * reproduce for that state and no plausible-looking default to pick
- * (Rule 10): the condition is made unreachable instead. The diagnostic
- * wears the OVMX facility, not a VMS one, because the event is OVMX's.
- */
-static void establish_system_identity(void)
-{
-    char uic_group[32] = "", uic_member[32] = "", priv_str[256] = "";
-
-    /* SYSUAF fields, 0-indexed and pipe-delimited, the same layout
-     * provision_sysuaf_users() above walks:
-     *   0 USERNAME | 1 HASH | 2 UIC_GROUP | 3 UIC_MEMBER
-     *   4 DEFAULT_DIR | 5 FLAGS | 6 PRIVILEGES
-     * Parsed here rather than through libvms's sysuaf_lookup() because
-     * PID 1 must stay statically linked against the minimal set of
-     * libraries (see the -static note at the bottom of this target's
-     * CMakeLists.txt); it does not link libvms. */
-    if (sysuaf_field("SYSTEM", 2, uic_group, sizeof(uic_group)) != 0 ||
-        sysuaf_field("SYSTEM", 3, uic_member, sizeof(uic_member)) != 0 ||
-        sysuaf_field("SYSTEM", 6, priv_str, sizeof(priv_str)) != 0)
-        ovmx_exec_halt("no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT",
-                       "the system process has no authorized identity");
-
-    /*
-     * OCTAL (vms-e60). SYSUAF.DAT's UIC fields are octal; derivation in
-     * src/libvms/rtl/sysuaf.c. This site is the one that mattered most and
-     * the item did not name it: PID 1 parses SYSTEM's UIC here and stamps
-     * it into the executive via vms_kif_setident(), so a base mismatch here
-     * gives the system process a different identity from the one every
-     * other reader of SYSUAF computes. It was correct only because SYSTEM
-     * is 1|4, which reads the same in both bases.
-     */
-    uint32_t uic = ((uint32_t)strtoul(uic_group, NULL, 8) << 16) |
-                    (uint32_t)strtoul(uic_member, NULL, 8);
-    uint64_t privs = parse_privilege_string(priv_str);
-
-    uint32_t st = vms_kif_setident("SYSTEM", uic, privs);
-    if (!(st & 1)) {
-        char detail[64];
-        snprintf(detail, sizeof(detail), "SS$ status %u", (unsigned)st);
-        ovmx_exec_halt("the executive refused the system process's identity",
-                       detail);
-    }
-
-    /*
-     * Seed the userspace PCB from the row the executive just wrote --
-     * a copy of the executive's verdict, never a declaration. (The PCB
-     * is per-process and therefore a facade for anything system-wide;
-     * removing it is vms-8019's, not this item's. What this item
-     * removes is PID 1 CHOOSING what goes in it.)
-     */
-    struct vms_procinfo info;
-    memset(&info, 0, sizeof(info));
-    st = vms_kif_getjpi_self(&info);
-    if (!(st & 1))
-        ovmx_exec_halt("the executive holds no row for the system process",
-                       "identity was stamped but cannot be read back");
-
-    struct vms_pcb *pcb = vms_pcb_init(info.cur_privs);
-    if (pcb) {
-        vms_pcb_set_identity(info.vms_pid, info.uic, info.username,
-                             info.prcnam);
-        vms_pcb_set_default_dir("SYS$SYSROOT:[SYSMGR]");
-    }
-
-    printf("%%OVMX-I-EXEC, system identity %s [%o,%o] established by the executive\n",
-           info.username, (unsigned)((info.uic >> 16) & 0xFFFFu),
-           (unsigned)(info.uic & 0xFFFFu));
-}
-
-/*
- * Run SYS$MANAGER:STARTUP.COM via DCL subprocess.
- * Waits for completion before returning.
+ * A MISSING OR FAILING STARTUP PROCESS IS FATAL, and it is checked here rather
+ * than skipped. The version of this function that only stat()ed STARTUP.COM
+ * and silently returned is the bug class named in the NOTE ON SERVICES above:
+ * a boot that quietly does not establish an identity, with a banner that says
+ * everything is fine.
  */
 static void run_startup(void)
 {
-    char startup_path[512], dcl_path[512];
-    vms_to_linux(VMS_STARTUP_PATH, startup_path, sizeof(startup_path));
-    vms_to_linux(VMS_DCL_PATH, dcl_path, sizeof(dcl_path));
+    char provision_path[512];
+    vms_to_linux(VMS_PROVISION_PATH, provision_path, sizeof(provision_path));
 
     struct stat st;
-    if (stat(startup_path, &st) != 0)
-        return;
+    if (stat(provision_path, &st) != 0)
+        ovmx_exec_halt("SYS$SYSTEM:PROVISION.EXE is missing",
+                       "the system process has no authorized identity");
 
     pid_t pid = fork();
     if (pid == 0) {
-        execl(dcl_path, "vmsdcl", startup_path, (char *)NULL);
+        execl(provision_path, "PROVISION", (char *)NULL);
+        fprintf(stderr, "%%OVMX-E-NOIMG, cannot activate %s: %s\n",
+                VMS_PROVISION_PATH, strerror(errno));
         _exit(1);
     }
     if (pid > 0) {
         int s;
         waitpid(pid, &s, 0);
+        /*
+         * PROVISION.EXE powers the machine off itself on the conditions that
+         * are fatal by design (no SYSTEM record, executive refusal), so
+         * reaching here with a nonzero status means it could not even do
+         * that -- e.g. the image would not activate. Halt rather than fall
+         * through to a login prompt on a system with no identity.
+         */
+        if (!WIFEXITED(s) || WEXITSTATUS(s) != 0)
+            ovmx_exec_halt("the startup process did not complete",
+                           "SYS$SYSTEM:PROVISION.EXE failed");
     }
 }
 
-/*
- * Display VMS-style boot banner.
- *
- * Announces only what STARTUP.EXE itself did. A service announces
- * itself from its own startup procedure, as VMS does -- this banner
- * must never claim a service is running, because STARTUP.EXE no longer
- * starts any and could not know.
- */
 static void display_boot_banner(void)
 {
     struct timespec ts;
@@ -1146,22 +799,50 @@ int main(void)
     signal(SIGHUP, SIG_IGN);
 
     /*
-     * Step 1: SYSTEM process identity.
+     * Step 1: PID 1 DOES NOT READ SYS$SYSTEM:SYSUAF.DAT. AT ALL.
      *
-     * WHAT USED TO STAND HERE (vms-2b8, closed this round): PID 1 called
-     *     vms_pcb_init(0xFFFFFFFFFFFFFFFFULL);
-     *     vms_pcb_set_identity(1, (1 << 16) | 4, "SYSTEM", "SYSTEM");
-     * -- a process writing its own user name, its own UIC and every
-     * privilege bit in existence into a structure it owns privately.
-     * Nothing outside PID 1 could see that PCB, and nothing could refuse
-     * it. The blocking precondition this stopgap was waiting on
-     * (vms_kif_setident() binding before its ioctl, vms-fb9 r6) has
-     * landed, so the real establishment now runs: see
-     * establish_system_identity() below, called from Step 2c after
-     * SYSUAF exists on the system disk. It reads PID 1's identity from
-     * SYSUAF's SYSTEM record and asks the executive to stamp it, and the
-     * executive can refuse -- exactly LOGINOUT's shape, run for the
-     * system process.
+     * WHAT USED TO STAND HERE, in two successive forms, so neither goes
+     * back:
+     *
+     *   (1) PID 1 declared its own identity --
+     *           vms_pcb_init(0xFFFFFFFFFFFFFFFFULL);
+     *           vms_pcb_set_identity(1, (1 << 16) | 4, "SYSTEM", "SYSTEM");
+     *       a process writing its own user name, its own UIC and every
+     *       privilege bit in existence into a structure it owns privately.
+     *       Nothing outside PID 1 could see that PCB and nothing could
+     *       refuse it (vms-2b8, Rule 11).
+     *
+     *   (2) PID 1 read SYSUAF's SYSTEM record itself and asked the executive
+     *       to stamp it (establish_system_identity(), Step 2c). That fixed
+     *       WHO DECIDES -- the executive can refuse -- but it left a
+     *       bootstrap process parsing an account database, through TWO
+     *       hand-rolled 512-byte parsers of its own (sysuaf_split() and
+     *       sysuaf_field()) because PID 1 is statically linked. Those were
+     *       two of FIVE independent parsers of one file format, with three
+     *       different line limits between them, and the disagreement was
+     *       fatal: MEASURED on a real QEMU boot (vms-9b7), a SYSTEM row whose
+     *       sixth field separator fell past byte 511 was read here as a
+     *       five-field record, and this file reported
+     *           %OVMX-F-EXECINIT, no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT
+     *       and powered the machine off -- while every 1024-byte reader in
+     *       the tree read the same row without complaint.
+     *
+     * THE ANSWER WAS NOT A BIGGER BUFFER OR A SHARED STATIC LIBRARY. It was
+     * that PID 1 NEEDS SYSUAF FOR NOTHING. Its three uses -- account home
+     * directories, system-tree ownership, and the system identity -- are all
+     * system management, not bootstrap, and they now run from
+     * SYS$MANAGER:STARTUP.COM in PROVISION.EXE, exactly where the NOTE ON
+     * SERVICES below already sends every other piece of VMS-domain work that
+     * accumulated in this file because this file was the only thing running.
+     *
+     * The minimum bootstrap to reach an activatable image is below, and none
+     * of it parses anything: mounts and the executive (bare_metal_init /
+     * executive_attach, above), the device table, the install-time FILE COPY,
+     * and the logical names that make SYS$SYSTEM: and SYS$SHARE: resolve.
+     *
+     * PID 1'S OWN IDENTITY is now whatever the executive derived for it from
+     * its real credentials at registration -- which is honest, and is the
+     * only thing PID 1 is entitled to say about itself. It declares nothing.
      */
 
     /* Step 1b: Bootstrap VMS namespace — device table + logical names.
@@ -1186,20 +867,11 @@ int main(void)
      * without overwriting existing files. */
     provision_seed_files();
 
-    /* Step 2b': Give the VMS tree the ownership VMS gives it, so that the
-     * identity the executive enforces and the identity the filesystem
-     * enforces are the same one (vms-2b8). Runs after the seed files
-     * exist and after any install, and is the LAST writer of ownership so
-     * that accounts sharing a directory (SYSUAF ships SYSTEM and OPERATOR
-     * both defaulted to [SYSMGR]) cannot leave the system tree owned by
-     * whichever record was read last. */
-    provision_ownership();
-
-    /* Step 2c: Establish PID 1's identity — from SYSUAF, through the
-     * executive. Must run after provision_seed_files(): SYSUAF.DAT is
-     * one of the files it seeds, so on a first boot there is no user
-     * database before this point. */
-    establish_system_identity();
+    /* Steps 2b' and 2c -- system-tree ownership and the SYSTEM identity --
+     * USED TO STAND HERE and have moved to SYS$MANAGER:STARTUP.COM
+     * (PROVISION.EXE). See the Step 1 note above. Nothing between
+     * provision_seed_files() and run_startup() reads SYSUAF any more, and
+     * nothing here may start doing so again. */
 
     /* Step 3: Run STARTUP.COM.
      * There is no logical name daemon to start first: on VMS the logical name

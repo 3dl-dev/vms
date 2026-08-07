@@ -92,8 +92,10 @@ uint32_t vms_kif_register(uint32_t *vms_pid);
  * it (an OVMX design choice -- see vms_ioctl.h).
  *
  * WIRED (vms-2b8): tools/vms_login.c (LOGINOUT) calls this after SYSUAF
- * authentication, and src/ovmx_init/ovmx_init.c's establish_system_identity()
- * calls it for PID 1's own SYSTEM identity. src/vmsdcl/dcl_main.c and
+ * authentication, and src/ovmx_provision/ovmx_provision.c (PROVISION.EXE --
+ * the startup process PID 1 execs, which then execs DCL.EXE on STARTUP.COM in
+ * the same process, vms-9b7) calls it for the SYSTEM identity that system
+ * startup runs under. src/vmsdcl/dcl_main.c and
  * dcl_cmd_show.c read the row back through vms_kif_getjpi_self() instead of
  * the environment. */
 uint32_t vms_kif_setident(const char *username, uint32_t uic,

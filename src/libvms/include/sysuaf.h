@@ -14,10 +14,75 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 #include "ovmx_layout.h"
 #include "rms/xab.h"
 
 #define SYSUAF_PATH VMS_SYSUAF_PATH
+
+/* =========================================================================
+ * THE SYSUAF.DAT TEXT FORMAT — ONE DEFINITION, ONE READER, ONE WRITER
+ * (vms-9b7)
+ *
+ * WHAT THIS REPLACES, so it is never put back: five independent hand-rolled
+ * parsers of one file format, with THREE different line-buffer sizes and TWO
+ * different writer format strings.
+ *
+ *   src/ovmx_init/ovmx_init.c  sysuaf_split()   char line[512]   DELETED
+ *   src/ovmx_init/ovmx_init.c  sysuaf_field()   char line[512]   DELETED
+ *   src/libvms/rtl/sysuaf.c    sysuaf_scan()    char line[1024]  -> this
+ *   src/libvms/syssvc/sys_uai.c parse_uaf_line  512              -> this
+ *   tools/vms_authorize.c      load_sysuaf()    1024             -> this
+ *
+ * MEASURED, on a real QEMU boot of the unfixed tree (three boots, each with
+ * a control): a SYSTEM row long enough that its SIXTH '|' falls past byte
+ * 511 is read by the 512-byte readers as a record with only five fields.
+ * PID 1's establish_system_identity() then reported
+ *
+ *     %OVMX-F-EXECINIT, no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT
+ *
+ * and powered the machine off, while the 1024-byte readers accepted the same
+ * row without complaint. That is a writer and a reader disagreeing about one
+ * file, and the disagreement is fatal by design (Rule 10) -- so the format
+ * gets exactly one definition and every accessor is derived from it.
+ *
+ * SYSUAF_LINE_MAX is the ONE limit. It bounds the writer (an over-length
+ * record is REFUSED, loudly, by sysuaf_format_record() -- never silently
+ * clipped) and it bounds the reader (an over-length line is REPORTED by
+ * sysuaf_read_line() -- never silently truncated into a short record).
+ * ========================================================================= */
+
+/* The record separator. Chosen over ':' because VMS device names contain
+   colons and DEFAULT_DIR is a filespec. */
+#define SYSUAF_SEP_CHAR      '|'
+#define SYSUAF_SEP_STR       "|"
+
+/* Field order and count. Rows carrying fewer than SYSUAF_MIN_FIELDS are
+   malformed; FLAGS and PRIVILEGES may be absent on a legacy row. */
+#define SYSUAF_FIELD_COUNT   7
+#define SYSUAF_MIN_FIELDS    5
+
+enum {
+    SYSUAF_F_USERNAME   = 0,
+    SYSUAF_F_PWHASH     = 1,
+    SYSUAF_F_UIC_GROUP  = 2,
+    SYSUAF_F_UIC_MEMBER = 3,
+    SYSUAF_F_DEFDIR     = 4,
+    SYSUAF_F_FLAGS      = 5,
+    SYSUAF_F_PRIVILEGES = 6
+};
+
+/*
+ * THE UIC FIELDS ARE OCTAL (vms-e60). Derivation -- from the oracle, not
+ * chosen -- is in the block comment on sysuaf_parse_line() in
+ * src/libvms/rtl/sysuaf.c. Every read, write, display and /UIC=[g,m] parse
+ * in the tree goes through this constant so they cannot drift apart again.
+ */
+#define SYSUAF_UIC_RADIX     8
+
+/* The one line limit, shared by the writer's refusal and the reader's
+   truncation report. Includes the terminating newline. */
+#define SYSUAF_LINE_MAX      1024
 
 /* -------------------------------------------------------------------------
  * In-memory (parsed) SYSUAF record.
@@ -35,6 +100,47 @@ typedef struct {
     char     flags[64];
     char     privileges[256];
 } sysuaf_record_t;
+
+/*
+ * Parse one SYSUAF line into a record. 'line' is MODIFIED IN PLACE.
+ * Returns  1 if a record was parsed,
+ *          0 if the line is a comment or blank (not an error),
+ *         -1 if the line is malformed (fewer than SYSUAF_MIN_FIELDS fields).
+ */
+int sysuaf_parse_line(char *line, sysuaf_record_t *rec);
+
+/*
+ * Render one record as the SYSUAF line that represents it, WITHOUT the
+ * trailing newline.
+ *
+ * Returns the length written on success, or -1 if the record does not fit in
+ * SYSUAF_LINE_MAX (counting the newline a writer will append). AN OVER-LENGTH
+ * RECORD IS REFUSED, NEVER CLIPPED: a reader that silently truncates is how
+ * the SYSTEM record went missing and the boot halted, and clipping here would
+ * simply move that same silent data loss one process earlier.
+ */
+int sysuaf_format_record(const sysuaf_record_t *rec, char *out, size_t outsz);
+
+/*
+ * Read one line, reporting truncation instead of hiding it.
+ *
+ * Returns 1 when a line was read, 0 at end of file. When the line did not fit
+ * in 'bufsz', *too_long is set to 1, the REST OF THE LINE IS CONSUMED (so the
+ * caller's next read starts at a real record boundary and never at a
+ * fragment), and the caller decides what to do -- which is never "carry on
+ * with the prefix".
+ */
+int sysuaf_read_line(FILE *fp, char *buf, size_t bufsz, int *too_long);
+
+/* FLAGS is stored in the file as a comma-separated list of UAI flag NAMES
+   (what a system manager types at AUTHORIZE's /FLAGS=), and exposed through
+   $GETUAI/$SETUAI as the UAI$M_* longword. These two functions are the only
+   conversion between the two, so the file format has one answer and the API
+   has one answer and neither invents the other's. An unrecognized name is
+   ignored; an empty string is mask 0 and round-trips back to empty. */
+uint32_t sysuaf_flags_to_mask(const char *flags);
+void     sysuaf_mask_to_flags(uint32_t mask, char *out, size_t outsz);
+
 
 /* =========================================================================
  * Binary on-disk SYSUAF record (RMS indexed file) — vms-846 / vms-846.1

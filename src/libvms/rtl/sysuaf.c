@@ -26,6 +26,269 @@
 
 /* str_upcase() and str_trim() replaced by str_str_upcase()/str_trim() from str_util.h */
 
+#include "uaidef.h"
+
+/* ------------------------------------------------------------------ */
+/* THE FORMAT: one reader, one writer (vms-9b7)                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Read one line, REPORTING truncation rather than hiding it.
+ *
+ * THIS IS THE FUNCTION THE BUG WAS THE ABSENCE OF. Every one of the five
+ * parsers this file replaces called fgets() straight into a fixed buffer and
+ * used whatever came back. fgets() on an over-length line returns a PREFIX
+ * that is indistinguishable from a complete short line -- so a 512-byte
+ * reader turned a valid seven-field SYSTEM row into a five-field one, the
+ * privileges field ceased to exist, and PID 1 halted the boot reporting that
+ * SYSUAF had no SYSTEM record at all. Nothing warned, at any of the five
+ * sites.
+ *
+ * The remainder of an over-length line is DRAINED here, so the caller's next
+ * read begins at a real record boundary. Leaving it in the stream is how the
+ * tail of one row gets presented to the caller as a row of its own.
+ */
+int sysuaf_read_line(FILE *fp, char *buf, size_t bufsz, int *too_long)
+{
+    if (too_long)
+        *too_long = 0;
+    if (!fp || !buf || bufsz < 2)
+        return 0;
+
+    if (!fgets(buf, (int)bufsz, fp))
+        return 0;
+
+    size_t len = strlen(buf);
+    if (len + 1 == bufsz && buf[len - 1] != '\n') {
+        /* The line did not fit. Drain it so the next read is a real record. */
+        int c;
+        while ((c = fgetc(fp)) != EOF && c != '\n')
+            ;
+        if (too_long)
+            *too_long = 1;
+    }
+    return 1;
+}
+
+/*
+ * Parse one SYSUAF line into a record. 'line' is modified in place.
+ *
+ * FIELDS ARE SPLIT ON EVERY SEPARATOR, INCLUDING CONSECUTIVE ONES. strtok()
+ * treats a run of delimiters as one, which silently DROPS every empty field
+ * and shifts every field after it one position early -- five of the six rows
+ * OVMX ships have an empty field, so a strtok split misparsed nearly the
+ * whole authorization database (vms-cb5 round 5, measured on the real runtime
+ * by tests/qemu/test_syssvc_setuai.c).
+ */
+int sysuaf_parse_line(char *line, sysuaf_record_t *rec)
+{
+    if (!line || !rec)
+        return -1;
+
+    /* Comments and blank lines are not records and are not errors. */
+    if (line[0] == '#' || line[0] == '\n' || line[0] == '\r' || line[0] == '\0')
+        return 0;
+
+    str_trim(line);
+    if (line[0] == '\0' || line[0] == '#')
+        return 0;
+
+    char *fields[SYSUAF_FIELD_COUNT];
+    int nf;
+    {
+        char *p = line;
+        for (nf = 0; nf < SYSUAF_FIELD_COUNT && p; nf++) {
+            fields[nf] = p;
+            char *sep = strchr(p, SYSUAF_SEP_CHAR);
+            if (sep) {
+                *sep = '\0';
+                p = sep + 1;
+            } else {
+                p = NULL;
+            }
+        }
+    }
+
+    if (nf < SYSUAF_MIN_FIELDS)
+        return -1;
+
+    memset(rec, 0, sizeof(*rec));
+    strncpy(rec->username, fields[SYSUAF_F_USERNAME], sizeof(rec->username) - 1);
+    str_upcase(rec->username);
+    strncpy(rec->password_hash, fields[SYSUAF_F_PWHASH],
+            sizeof(rec->password_hash) - 1);
+    /*
+     * ============================================================
+     * SYSUAF.DAT's UIC FIELDS ARE OCTAL (vms-e60)
+     * ============================================================
+     * These were strtoul(..., 10). That is the bug, and which base is right
+     * was DERIVED from the oracle rather than picked:
+     *
+     *   ORACLE (measured twice on lab nodes vax3/vax2, and asserted in-tree
+     *   at tests/qemu/test_syssvc_ident.c):
+     *       F$IDENTIFIER("DEFAULT","NAME_TO_NUMBER") -> 8388736
+     *       = %X00800080 -> group 0x80 = 128, member 0x80 = 128, which is
+     *       UIC [200,200] written the way VMS writes UICs.
+     *
+     *   SYSUAF.DAT ships 'DEFAULT||200|200|...'. Read as OCTAL that is
+     *   128/128 and reproduces the oracle exactly. Read as DECIMAL it is
+     *   200/200 -> 13107400, which matches nothing.
+     *
+     * SYSTEM's 1|4 reads identically in both bases -- that is the coincidence
+     * that hid this for as long as SYSTEM was the only account anyone logged
+     * in as.
+     *
+     * VMS's own convention is quoted in this tree at
+     * src/libvms/include/ovmx_secparam.h and docs/oracle/vax73-privileges.md:
+     * "bear in mind that numbers in a UIC are octal".
+     *
+     * THE BASE IS NOW A SHARED CONSTANT (SYSUAF_UIC_RADIX), and this is the
+     * only site that applies it to a file field. When there were five parsers
+     * a partial base change did not restore the old behaviour, it RELOCATED
+     * the disagreement to a new pair of subsystems -- measured by the UAT:
+     * fixing ten sites and leaving PID 1's decimal made every non-SYSTEM
+     * login unable to write its own login directory (GUEST's home owned by
+     * 201:200 while GUEST ran as 129:128, so COPY returned %RMS-E-CRE).
+     * ============================================================
+     */
+    rec->uic_group  = (uint32_t)strtoul(fields[SYSUAF_F_UIC_GROUP], NULL,
+                                        SYSUAF_UIC_RADIX);
+    rec->uic_member = (uint32_t)strtoul(fields[SYSUAF_F_UIC_MEMBER], NULL,
+                                        SYSUAF_UIC_RADIX);
+    strncpy(rec->default_dir, fields[SYSUAF_F_DEFDIR],
+            sizeof(rec->default_dir) - 1);
+    if (nf > SYSUAF_F_FLAGS)
+        strncpy(rec->flags, fields[SYSUAF_F_FLAGS], sizeof(rec->flags) - 1);
+    if (nf > SYSUAF_F_PRIVILEGES)
+        strncpy(rec->privileges, fields[SYSUAF_F_PRIVILEGES],
+                sizeof(rec->privileges) - 1);
+
+    return 1;
+}
+
+/*
+ * Render one record as the line that represents it (no trailing newline).
+ *
+ * ONE FORMAT STRING. There used to be two, and they disagreed on the FLAGS
+ * field: tools/vms_authorize.c wrote it "%s" and src/libvms/syssvc/sys_uai.c
+ * wrote it "%u", so AUTHORIZE round-tripped an empty FLAGS as empty while
+ * $SETUAI rewrote it as "0" -- the same field of the same file with two
+ * answers. FLAGS is a NAME LIST in the file (see sysuaf_flags_to_mask); the
+ * longword form belongs to the $GETUAI/$SETUAI item code, not to the file.
+ *
+ * %o on the two UIC fields, from the same SYSUAF_UIC_RADIX the parse uses --
+ * writing them decimal would make the writer unable to read back what it
+ * just saved.
+ *
+ * OVER-LENGTH IS REFUSED, NOT CLIPPED. Returns -1 and leaves 'out' untouched
+ * when the record does not fit within SYSUAF_LINE_MAX including the newline a
+ * caller will append. This is the loud writer-side failure the silent reader
+ * truncation made necessary: the caller must report it and must not write a
+ * record it cannot read back.
+ */
+int sysuaf_format_record(const sysuaf_record_t *rec, char *out, size_t outsz)
+{
+    if (!rec || !out || outsz == 0)
+        return -1;
+
+    char tmp[SYSUAF_LINE_MAX * 2];
+    int n = snprintf(tmp, sizeof(tmp), "%s|%s|%o|%o|%s|%s|%s",
+                     rec->username,
+                     rec->password_hash,
+                     (unsigned)rec->uic_group,
+                     (unsigned)rec->uic_member,
+                     rec->default_dir,
+                     rec->flags,
+                     rec->privileges);
+
+    /* n + 1 for the newline the caller appends; the line must fit in
+     * SYSUAF_LINE_MAX so that sysuaf_read_line() can read it back whole. */
+    if (n < 0 || (size_t)n + 1 >= SYSUAF_LINE_MAX)
+        return -1;
+    if ((size_t)n >= outsz)
+        return -1;
+
+    memcpy(out, tmp, (size_t)n + 1);
+    return n;
+}
+
+/* ------------------------------------------------------------------ */
+/* FLAGS: names in the file, a longword in the API                     */
+/* ------------------------------------------------------------------ */
+
+static const struct { const char *name; uint32_t bit; } sysuaf_flag_names[] = {
+    { "DISCTLY",      UAI$M_DISCTLY },
+    { "DEFCLI",       UAI$M_DEFCLI },
+    { "LOCKPWD",      UAI$M_LOCKPWD },
+    { "DISMAIL",      UAI$M_DISMAIL },
+    { "CAPTIVE",      UAI$M_CAPTIVE },
+    { "DISREPORT",    UAI$M_DISREPORT },
+    { "DISRECONNECT", UAI$M_DISRECONNECT },
+    { "AUTOLOGIN",    UAI$M_AUTOLOGIN },
+    { "DISLOCAL",     UAI$M_DISLOCAL },
+    { "DISDIALUP",    UAI$M_DISDIALUP },
+    { "DISNETWORK",   UAI$M_DISNETWORK },
+    { "DISACNT",      UAI$M_DISACNT },
+    { "DISBATCH",     UAI$M_DISBATCH },
+    { "DISUSER",      UAI$M_DISUSER },
+    { "DISWELCOME",   UAI$M_DISWELCOME },
+    { "EXTAUTH",      UAI$M_EXTAUTH },
+    { "PWDMIX",       UAI$M_PWDMIX },
+    { "GENERATE_PWD", UAI$M_GENERATE_PWD },
+};
+
+uint32_t sysuaf_flags_to_mask(const char *flags)
+{
+    if (!flags || flags[0] == '\0')
+        return 0;
+
+    char buf[64];
+    strncpy(buf, flags, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    uint32_t mask = 0;
+    char *saveptr = NULL;
+    for (char *tok = strtok_r(buf, ",", &saveptr); tok;
+         tok = strtok_r(NULL, ",", &saveptr)) {
+        while (*tok == ' ') tok++;
+        for (size_t i = 0; i < sizeof(sysuaf_flag_names) /
+                               sizeof(sysuaf_flag_names[0]); i++) {
+            if (strcasecmp(tok, sysuaf_flag_names[i].name) == 0) {
+                mask |= sysuaf_flag_names[i].bit;
+                break;
+            }
+        }
+    }
+    return mask;
+}
+
+void sysuaf_mask_to_flags(uint32_t mask, char *out, size_t outsz)
+{
+    if (!out || outsz == 0)
+        return;
+    out[0] = '\0';
+
+    /* Mask 0 renders as the EMPTY string, so that a row whose FLAGS field is
+     * empty round-trips through $GETUAI/$SETUAI back to empty. Rendering it
+     * as "0" is what the second writer did, and is why the same field of the
+     * same file had two representations. */
+    size_t used = 0;
+    for (size_t i = 0; i < sizeof(sysuaf_flag_names) /
+                           sizeof(sysuaf_flag_names[0]); i++) {
+        if (!(mask & sysuaf_flag_names[i].bit))
+            continue;
+        size_t nlen = strlen(sysuaf_flag_names[i].name);
+        size_t need = nlen + (used ? 1 : 0);
+        if (used + need + 1 > outsz)
+            break;
+        if (used)
+            out[used++] = ',';
+        memcpy(out + used, sysuaf_flag_names[i].name, nlen);
+        used += nlen;
+        out[used] = '\0';
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* sysuaf_lookup / sysuaf_lookup_by_uic                                */
 /* ------------------------------------------------------------------ */
@@ -48,7 +311,7 @@
 static int sysuaf_scan(const char *username, uint32_t want_uic,
                        sysuaf_record_t *out)
 {
-    char sysuaf_linux[1024];
+    char sysuaf_linux[SYSUAF_LINE_MAX];
     vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
     FILE *fp = fopen(sysuaf_linux, "r");
     if (!fp)
@@ -63,97 +326,35 @@ static int sysuaf_scan(const char *username, uint32_t want_uic,
         str_upcase(search_copy);
     }
 
-    char line[1024];
-    while (fgets(line, sizeof(line), fp)) {
-        /* Skip comments and blank lines */
-        if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
+    char line[SYSUAF_LINE_MAX];
+    int too_long = 0;
+    while (sysuaf_read_line(fp, line, sizeof(line), &too_long)) {
+        /*
+         * A LINE THAT DID NOT FIT IS NOT A RECORD. It is reported and
+         * skipped, never parsed as the short row its prefix resembles --
+         * that silent downgrade is what made SYSTEM's row look like it had
+         * no privileges field and halted the boot (vms-9b7).
+         */
+        if (too_long) {
+            fprintf(stderr, "%%SYSUAF-E-RECTOOLONG, record longer than %d "
+                            "bytes in %s -- ignored\n",
+                    SYSUAF_LINE_MAX - 1, SYSUAF_PATH);
             continue;
-
-        str_trim(line);
-
-        /* Parse: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
-         * Pipe delimiter avoids conflict with VMS device colons in DEFAULT_DIR. */
-        char *fields[7];
-        char *p = line;
-        int nf = 0;
-
-        for (nf = 0; nf < 7 && p; nf++) {
-            fields[nf] = p;
-            char *sep = strchr(p, '|');
-            if (sep) {
-                *sep = '\0';
-                p = sep + 1;
-            } else {
-                p = NULL;
-            }
         }
 
-        if (nf < 5)
-            continue;  /* malformed line */
+        /* Every row is parsed before either direction decides whether it
+         * matched, so the UIC direction reads the SAME parse the name
+         * direction does rather than a second copy of it. */
+        sysuaf_record_t row;
+        if (sysuaf_parse_line(line, &row) != 1)
+            continue;
 
-        /* Every row is parsed into 'row' before either direction decides
-         * whether it matched, so the UIC direction reads the SAME parse the
-         * name direction does rather than a second copy of it. */
-        {
-            sysuaf_record_t row;
-            memset(&row, 0, sizeof(row));
-            /* 'rec' is an alias for the row being parsed, kept so the field
-             * fill below -- including the vms-e60 octal block, which is the
-             * one thing in this file nobody should be re-typing -- stays
-             * byte-identical to what it was before this scan grew a second
-             * caller. The function's out-parameter is 'out'. */
-            sysuaf_record_t *rec = &row;
-            strncpy(rec->username, fields[0], sizeof(rec->username) - 1);
-            str_upcase(rec->username);
-            strncpy(rec->password_hash, fields[1], sizeof(rec->password_hash) - 1);
-            /*
-             * ============================================================
-             * SYSUAF.DAT's UIC FIELDS ARE OCTAL (vms-e60)
-             * ============================================================
-             * These were strtoul(..., 10). That is the bug, and which base
-             * is right was DERIVED from the oracle rather than picked:
-             *
-             *   ORACLE (measured twice on lab nodes vax3/vax2, and asserted
-             *   in-tree at tests/qemu/test_syssvc_ident.c):
-             *       F$IDENTIFIER("DEFAULT","NAME_TO_NUMBER") -> 8388736
-             *       = %X00800080 -> group 0x80 = 128, member 0x80 = 128,
-             *       which is UIC [200,200] written the way VMS writes UICs.
-             *
-             *   SYSUAF.DAT ships 'DEFAULT||200|200|...'. Read as OCTAL that
-             *   is 128/128 and reproduces the oracle exactly. Read as
-             *   DECIMAL it is 200/200 -> 13107400, which matches nothing.
-             *
-             * SYSTEM's 1|4 reads identically in both bases -- that is the
-             * coincidence that hid this for as long as SYSTEM was the only
-             * account anyone logged in as. Any account whose UIC digits
-             * differ between bases showed two different UICs for one
-             * account: LOGINOUT stamped one value into the executive while
-             * F$IDENTIFIER answered another.
-             *
-             * VMS's own convention is quoted in this tree at
-             * src/libvms/include/ovmx_secparam.h and docs/oracle/
-             * vax73-privileges.md: "bear in mind that numbers in a UIC are
-             * octal". So the display, the write path and the /UIC=[g,m]
-             * command parse in tools/vms_authorize.c are octal too; all
-             * nine sites move together, because a partial change just
-             * relocates the disagreement (Rule 10 -- one answer, pinned).
-             * ============================================================
-             */
-            rec->uic_group  = (uint32_t)strtoul(fields[2], NULL, 8);
-            rec->uic_member = (uint32_t)strtoul(fields[3], NULL, 8);
-            strncpy(rec->default_dir, fields[4], sizeof(rec->default_dir) - 1);
-            if (nf > 5)
-                strncpy(rec->flags, fields[5], sizeof(rec->flags) - 1);
-            if (nf > 6)
-                strncpy(rec->privileges, fields[6], sizeof(rec->privileges) - 1);
-
-            if (username
-                ? strcmp(row.username, search_copy) == 0
-                : ((row.uic_group << 16) | row.uic_member) == want_uic) {
-                *out = row;
-                fclose(fp);
-                return 0;
-            }
+        if (username
+            ? strcmp(row.username, search_copy) == 0
+            : ((row.uic_group << 16) | row.uic_member) == want_uic) {
+            *out = row;
+            fclose(fp);
+            return 0;
         }
     }
 

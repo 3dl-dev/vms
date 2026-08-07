@@ -129,6 +129,15 @@ directory structure, copying the shipped images into
 `SYS0.SYSCOMMON.[SYSEXE]` / `[SYSLIB]` / `[SYSMGR]` / `[SYSHLP]`, and
 generating `SYS$MANAGER:SYSTARTUP_VMS.COM` on the disk.
 
+`STARTUP.EXE` (PID 1) is a bootstrap only — it does **not** read SYSUAF and is
+**not** SYSTEM. Where it used to exec `DCL.EXE`, it now execs
+`SYS$SYSTEM:PROVISION.EXE`, the startup process: PROVISION reads SYSUAF's
+SYSTEM record, stamps SYSTEM's identity onto itself via the executive, provisions
+home directories and system-tree ownership, then execs `DCL.EXE` on
+`STARTUP.COM` **in the same process** — so `STARTUP.COM` and
+`SYSTARTUP_VMS.COM` run under SYSTEM, exactly as OpenVMS (vms-9b7). See
+`docs/architecture.md` → *Boot Sequence* for the full chain.
+
 You'll then land at a `Username:` prompt. **Log out or Ctrl-A X out of QEMU
 here** — the first boot's job is to install; the interesting proof-of-life
 boot is the slim one below. (You can log in now too, with the credentials
@@ -140,9 +149,9 @@ disk.)
 
 The installed disk under `dist/sysdisk.img` (or wherever `--disk` pointed)
 is now a real, populated ODS-2 system disk. Boot it again, this time with
-the **slim** initramfs, which ships none of `DCL.EXE`, `LOGINOUT.EXE`,
-`IMGACT.EXE`, or `SYSLIB` — everything past `STARTUP.EXE` itself has to
-come from the disk you just installed:
+the **slim** initramfs, which ships none of `PROVISION.EXE`, `DCL.EXE`,
+`LOGINOUT.EXE`, `IMGACT.EXE`, or `SYSLIB` — everything past `STARTUP.EXE`
+itself has to come from the disk you just installed:
 
 ```bash
 ./boot.sh --slim

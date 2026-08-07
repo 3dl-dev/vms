@@ -1159,7 +1159,7 @@ check_response 'SPAWN SHOW TIME' '[0-9]{1,2}-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SE
 # real bootable image. The cause was not the protection check: it was that
 # PID 1 installed the whole VMS tree as Linux root, so once a session
 # genuinely became UIC [1,4] there was nothing on the system that the SYSTEM
-# account owned. src/ovmx_init/ovmx_init.c provision_ownership() now gives
+# account owned. SYS$SYSTEM:PROVISION.EXE provision_ownership() now gives
 # the tree to SYSTEM, which is what the oracle says VMS does
 # (DIRECTORY/OWNER SYS$COMMON:[000000]SYSEXE.DIR -> [SYSTEM]).
 #
@@ -1295,14 +1295,28 @@ check_response 'SHOW DEVICE' '^OPA0: +Online'
 # anything real.
 check_response 'HELP SHOW' '(SHOW|Additional information)'
 
-# PID 1's identity is ESTABLISHED BY THE EXECUTIVE, not declared (vms-2b8).
+# THE SYSTEM IDENTITY IS ESTABLISHED BY THE EXECUTIVE, not declared
+# (vms-2b8; the process it is established ON changed in vms-9b7).
 #
 # PID 1 used to call vms_pcb_init(0xFFFFFFFFFFFFFFFF) followed by
 # vms_pcb_set_identity(1, [1,4], "SYSTEM", "SYSTEM") -- a process writing
 # its own user name, UIC and every privilege bit into a private structure.
-# It now reads the SYSTEM record from SYSUAF and asks the executive to
-# stamp it (VMS_IOCTL_SETIDENT, which refuses any caller without SETPRV),
-# then prints the row the executive holds back to it.
+# vms-2b8 replaced that with a real establishment: read the SYSTEM record
+# from SYSUAF, ask the executive to stamp it (VMS_IOCTL_SETIDENT, which
+# refuses any caller without SETPRV), then print the row the executive
+# holds back.
+#
+# WHAT vms-9b7 CHANGED, and what it did NOT. The read-and-stamp now happens
+# in SYS$SYSTEM:PROVISION.EXE -- the process PID 1 execs where it used to
+# exec DCL.EXE, and which execs DCL.EXE on STARTUP.COM afterwards, so the
+# identity carries into the DCL that runs system startup. That is what
+# OpenVMS does (STARTUP runs under username SYSTEM), and it is what let PID 1
+# stop parsing SYSUAF with two 512-byte parsers of its own -- the divergence
+# that could leave the system with no readable SYSTEM record and no boot.
+#
+# THE ASSERTION IS UNCHANGED AND IS NOT WEAKER: the same line, with the same
+# values, printed at boot time before the login prompt exists, from a row read
+# back out of the executive rather than from what the caller asked for.
 #
 # WHOLE-LOG grep, and safe as one: this is a BOOT-TIME diagnostic, printed
 # before the login prompt exists. The script cannot have typed it -- the
@@ -1314,7 +1328,7 @@ if echo "$OUTPUT" | grep -qF 'system identity SYSTEM [1,4] established by the ex
     PASS=$((PASS + 1))
 else
     FAIL=$((FAIL + 1))
-    ERRORS="${ERRORS}\n  FAIL: PID 1's identity was not established by the executive from SYSUAF"
+    ERRORS="${ERRORS}\n  FAIL: the system identity was not established by the executive from SYSUAF"
 fi
 
 # Unix leak checks -- scanned against the WHOLE log (including the boot log

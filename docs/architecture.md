@@ -94,11 +94,41 @@ docker build -f Dockerfile.bootable -o dist .
         ├── Mount: proc, sysfs, devtmpfs, devpts, tmpfs
         ├── Load: vms.ko, vmsfs.ko
         ├── Generate /etc/passwd, /etc/group from sysuaf.dat
-        └── exec /sbin/init (ovmx_init)
+        └── exec /sbin/init (ovmx_init) — PID 1, BOOTSTRAP ONLY (vms-9b7)
+              │  PID 1 does NOT read SYSUAF and is NOT SYSTEM. It holds only what
+              │  the executive derived from root's credentials at registration
+              │  (UIC [0,0], empty username). It reaches shared libraries and stops.
+              ├── executive_attach (/dev/vms) → vmsfs device table
+              ├── if no system disk: provision dirs + copy initramfs backup (a file copy)
+              ├── lnm_setup_defaults + init_search_paths (SYS$SYSTEM:, SYS$SHARE: resolve)
               ├── (no logical name daemon — deleted, vms-a4b; VMS has no such process)
-              ├── Execute STARTUP.COM
-              └── Launch login shell (vmsdcl)
+              └── exec SYS$SYSTEM:PROVISION.EXE — where PID 1 used to exec DCL.EXE
+                    │  The startup process. Links libvms; reads SYSUAF's SYSTEM
+                    │  record through the ONE reader (sysuaf_lookup). vms-9b7.
+                    ├── vms_kif_setident() on ITSELF → this process now holds SYSTEM [1,4]
+                    ├── provision home directories + system-tree ownership
+                    └── exec DCL.EXE on SYS$MANAGER:STARTUP.COM — SAME PROCESS.
+                          exec(2) preserves the executive's SYSTEM identity, so
+                          STARTUP.COM / SYSTARTUP_VMS.COM run under SYSTEM, exactly
+                          as OpenVMS (STARTUP runs as SYSTEM). Login shells (vmsdcl)
+                          launch afterward.
 ```
+
+### SYSUAF.DAT — one format, one reader, one writer (vms-9b7)
+
+`src/libvms/include/sysuaf.h` is the single definition of the SYSUAF text
+format: the `|` separator, field order/count, the octal UIC radix, and the one
+`SYSUAF_LINE_MAX`. Every accessor derives from it — `sysuaf_parse_line`,
+`sysuaf_format_record` (which **refuses** an over-length record rather than
+letting a reader silently truncate it), and `sysuaf_read_line` (which **reports**
+an over-length line). This replaced five independent hand-rolled parsers that
+carried three different line limits and two writer format strings; the
+disagreement between a 512-byte reader (PID 1) and a 1024-byte writer is what let
+a long SYSTEM row split across reads and halt the boot with
+`%OVMX-F-EXECINIT, no SYSTEM record`. The FLAGS field is a comma-separated list
+of UAI flag **names** in the file and the `UAI$M_*` longword through
+`$GETUAI`/`$SETUAI`; `sysuaf_flags_to_mask`/`sysuaf_mask_to_flags` are the only
+conversion, so the file has one answer and the API has one answer.
 
 ## Data Flow: User Command Execution
 

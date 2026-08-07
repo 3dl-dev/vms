@@ -4,8 +4,8 @@
  * Implements sys$getuai and sys$setuai for querying and updating
  * user account information from SYS$SYSTEM:SYSUAF.DAT.
  *
- * The format is PIPE-delimited text (the delimiter parse_uaf_line() below
- * splits on, and the one src/libvms/rtl/sysuaf.c writes):
+ * The format is PIPE-delimited text, defined once in src/libvms/include/
+ * sysuaf.h and parsed once in src/libvms/rtl/sysuaf.c:
  *   USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
  *
  * sys$getuai fills in requested UAI$_ items from the matching record.
@@ -39,6 +39,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <time.h>
+#include <unistd.h>
 #include "starlet.h"
 #include "uaidef.h"
 #include "prvdef.h"
@@ -47,155 +48,30 @@
 /* Path to the system authorization file */
 #include "ovmx_layout.h"
 #include "vmsfs/filespec.h"
-#define SYSUAF_PATH VMS_SYSUAF_PATH
-
-/* Maximum line length in sysuaf.dat */
-#define SYSUAF_LINE_MAX 512
-
 /*
- * Parsed UAF record — fields extracted from one sysuaf.dat line.
- */
-struct uaf_record {
-    char username[32];
-    char password_hash[128];
-    unsigned int uic_group;
-    unsigned int uic_member;
-    char default_dir[256];
-    uint32_t flags;
-    char privileges[256];   /* comma-separated privilege names */
-};
-
-/*
- * Parse privilege name list into a 64-bit mask.
+ * THE FORMAT, THE READER AND THE WRITER ALL COME FROM libvms (vms-9b7).
  *
- * Supported privilege names match the common VMS set:
- *   ALL, OPER, SYSPRV, TMPMBX, NETMBX, BYPASS, SYSLCK, SYSNAM, CMKRNL
+ * WHAT USED TO STAND HERE, so it is never put back:
+ *   - a private "#define SYSUAF_LINE_MAX 512", one of THREE different line
+ *     limits for one file format across five parsers (512 here and in PID 1,
+ *     1024 in rtl/sysuaf.c and in AUTHORIZE). A row between those sizes was
+ *     written happily by one and truncated silently by another;
+ *   - a private record struct whose FLAGS field was a longword while
+ *     every other reader of the same field held a string;
+ *   - a private parse_uaf_line() and a private parse_privileges();
+ *   - a second fprintf format string that wrote FLAGS "%u" where
+ *     tools/vms_authorize.c wrote it "%s" -- the same field of the same file
+ *     with two representations, so AUTHORIZE round-tripped an empty FLAGS as
+ *     empty and $SETUAI rewrote it as "0".
+ *
+ * ALSO DELETED, and named here so the claim is not quietly reintroduced: a
+ * comment asserting that PID 1 "must stay statically linked against the
+ * minimal set of libraries ... it does not link libvms", offered as the
+ * justification for duplicating this parser. PID 1 links FOUR libraries; the
+ * constraint on it is STATIC, not minimal. And as of vms-9b7 PID 1 does not
+ * read SYSUAF at all, so the justification has no subject left.
  */
-static uint64_t parse_privileges(const char *privstr)
-{
-    uint64_t mask = 0;
-
-    if (strcmp(privstr, "ALL") == 0) {
-        return ~(uint64_t)0;
-    }
-
-    /* Walk comma-separated tokens (thread-safe) */
-    char buf[256];
-    strncpy(buf, privstr, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-
-    char *saveptr = NULL;
-    char *tok = strtok_r(buf, ",", &saveptr);
-    while (tok) {
-        /* Trim leading whitespace */
-        while (*tok == ' ') tok++;
-
-        if      (strcmp(tok, "OPER")    == 0) mask |= PRV$M_OPER;
-        else if (strcmp(tok, "SYSPRV")  == 0) mask |= PRV$M_SYSPRV;
-        else if (strcmp(tok, "TMPMBX")  == 0) mask |= PRV$M_TMPMBX;
-        else if (strcmp(tok, "NETMBX")  == 0) mask |= PRV$M_NETMBX;
-        else if (strcmp(tok, "BYPASS")  == 0) mask |= PRV$M_BYPASS;
-        else if (strcmp(tok, "SYSLCK")  == 0) mask |= PRV$M_SYSLCK;
-        else if (strcmp(tok, "SYSNAM")  == 0) mask |= PRV$M_SYSNAM;
-        else if (strcmp(tok, "CMKRNL")  == 0) mask |= PRV$M_CMKRNL;
-        else if (strcmp(tok, "ALL")     == 0) mask  = ~(uint64_t)0;
-
-        tok = strtok_r(NULL, ",", &saveptr);
-    }
-    return mask;
-}
-
-/*
- * Parse a single sysuaf.dat line into a uaf_record.
- * Returns 1 on success, 0 if line is a comment or blank, -1 on parse error.
- */
-static int parse_uaf_line(const char *line, struct uaf_record *rec)
-{
-    /* Skip comments and blank lines */
-    if (!line || line[0] == '#' || line[0] == '\n' || line[0] == '\0')
-        return 0;
-
-    /* Copy line for strtok (it modifies in place) */
-    char buf[SYSUAF_LINE_MAX];
-    strncpy(buf, line, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-
-    /* Strip trailing newline */
-    size_t len = strlen(buf);
-    if (len > 0 && buf[len - 1] == '\n')
-        buf[len - 1] = '\0';
-
-    memset(rec, 0, sizeof(*rec));
-
-    /*
-     * FIELDS ARE SPLIT ON EVERY '|', INCLUDING CONSECUTIVE ONES (vms-cb5
-     * round 5).
-     *
-     * This used to be seven strtok_r(buf, "|") calls. strtok treats a RUN of
-     * delimiters as ONE, so every EMPTY field in a SYSUAF row was silently
-     * dropped and every field after it read one position early. Five of the
-     * six rows OVMX ships have an empty field, so this misparsed nearly the
-     * whole authorization database:
-     *
-     *     USER1||200|202|SYS$SYSDEVICE:[USERS.USER1]||TMPMBX,NETMBX
-     *
-     * parsed as password_hash="200", uic_group=202 (octal 130), uic_member=
-     * strtoul("SYS$SYSDEVICE:[USERS.USER1]", 8) = 0. MEASURED on the real
-     * runtime by tests/qemu/test_syssvc_setuai.c, which read the row back out
-     * of the file after a $SETUAI and found 202 and 0 where 200 and 202
-     * belong. $GETUAI answered from the same misparse, so it reported the
-     * wrong hash, the wrong UIC and the wrong privileges for those accounts;
-     * $SETUAI then wrote the misparse back, which is how a service that
-     * manages the authorization database silently rewrote an account's
-     * identity.
-     *
-     * UIC MEMBER 0 IS WHY THIS IS NOT MERELY A PARSING BUG. tools/vms_login.c
-     * does setuid(rec->uic_member) to drop the session's Linux credentials,
-     * and setuid(0) is not a drop -- such a session keeps CAP_SYS_ADMIN, and
-     * every process it creates registers with SETPRV. What stops that on the
-     * shipped SYSUAF is that all four accounts this misparse gives member 0
-     * carry no password hash and so cannot authenticate at all (vms-08f); it
-     * is not stopped by anything here.
-     *
-     * The split below is the one src/libvms/rtl/sysuaf.c's sysuaf_scan()
-     * already uses -- strchr for the next '|', NUL it, carry on -- so the two
-     * readers of this file agree by construction rather than by coincidence.
-     */
-    char *fields[7];
-    int nf;
-    {
-        char *p = buf;
-        for (nf = 0; nf < 7 && p; nf++) {
-            fields[nf] = p;
-            char *sep = strchr(p, '|');
-            if (sep) {
-                *sep = '\0';
-                p = sep + 1;
-            } else {
-                p = NULL;
-            }
-        }
-    }
-
-    /* USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
-     * -- the first five are required; a row with fewer is malformed. */
-    if (nf < 5)
-        return -1;
-
-    strncpy(rec->username, fields[0], sizeof(rec->username) - 1);
-    strncpy(rec->password_hash, fields[1], sizeof(rec->password_hash) - 1);
-    /* OCTAL: SYSUAF.DAT UIC fields (vms-e60; derivation in
-     * src/libvms/rtl/sysuaf.c). */
-    rec->uic_group  = (unsigned int)strtoul(fields[2], NULL, 8);
-    rec->uic_member = (unsigned int)strtoul(fields[3], NULL, 8);
-    strncpy(rec->default_dir, fields[4], sizeof(rec->default_dir) - 1);
-    if (nf > 5)
-        rec->flags = (uint32_t)strtoul(fields[5], NULL, 0);
-    if (nf > 6)
-        strncpy(rec->privileges, fields[6], sizeof(rec->privileges) - 1);
-
-    return 1;
-}
+#include "sysuaf.h"
 
 /*
  * Find a user record in sysuaf.dat by username.
@@ -203,7 +79,7 @@ static int parse_uaf_line(const char *line, struct uaf_record *rec)
  * Returns 1 if found, 0 if not found, -1 on I/O error.
  */
 static int find_uaf_record(const char *username_str,
-                            struct uaf_record *out_rec,
+                            sysuaf_record_t *out_rec,
                             long *out_offset)
 {
     char sysuaf_linux[1024];
@@ -215,10 +91,18 @@ static int find_uaf_record(const char *username_str,
     char line[SYSUAF_LINE_MAX];
     long offset = 0;
     int found = 0;
+    int too_long = 0;
 
-    while (fgets(line, sizeof(line), f)) {
-        struct uaf_record rec;
-        int rc = parse_uaf_line(line, &rec);
+    while (sysuaf_read_line(f, line, sizeof(line), &too_long)) {
+        sysuaf_record_t rec;
+        /* An over-length line is not a short record. Reporting and skipping
+         * it is the whole fix (vms-9b7): parsing its prefix is how a
+         * seven-field row became a five-field one. */
+        if (too_long) {
+            offset = ftell(f);
+            continue;
+        }
+        int rc = sysuaf_parse_line(line, &rec);
         if (rc == 1) {
             if (strcasecmp(rec.username, username_str) == 0) {
                 if (out_rec)    *out_rec    = rec;
@@ -239,7 +123,7 @@ static int find_uaf_record(const char *username_str,
  * Returns SS$_NORMAL or an error code.
  */
 static uint32_t fill_uai_item(const struct item_list_3 *item,
-                               const struct uaf_record *rec)
+                               const sysuaf_record_t *rec)
 {
     switch (item->item_code) {
 
@@ -279,7 +163,7 @@ static uint32_t fill_uai_item(const struct item_list_3 *item,
 
         case UAI$_PRIV: {
             if (item->bufaddr && item->buflen >= sizeof(uint64_t)) {
-                uint64_t mask = parse_privileges(rec->privileges);
+                uint64_t mask = sysuaf_parse_privileges(rec->privileges);
                 *(uint64_t *)item->bufaddr = mask;
             }
             if (item->retlen) *item->retlen = sizeof(uint64_t);
@@ -288,7 +172,7 @@ static uint32_t fill_uai_item(const struct item_list_3 *item,
 
         case UAI$_DEF_PRIV: {
             if (item->bufaddr && item->buflen >= sizeof(uint64_t)) {
-                uint64_t mask = parse_privileges(rec->privileges);
+                uint64_t mask = sysuaf_parse_privileges(rec->privileges);
                 *(uint64_t *)item->bufaddr = mask;
             }
             if (item->retlen) *item->retlen = sizeof(uint64_t);
@@ -297,7 +181,8 @@ static uint32_t fill_uai_item(const struct item_list_3 *item,
 
         case UAI$_FLAGS: {
             if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                *(uint32_t *)item->bufaddr = rec->flags;
+                *(uint32_t *)item->bufaddr =
+                    sysuaf_flags_to_mask(rec->flags);
             if (item->retlen) *item->retlen = sizeof(uint32_t);
             break;
         }
@@ -368,7 +253,7 @@ uint32_t sys$getuai(uint32_t efn, uint32_t *context,
     dsc$strncpy(username, usrnam, sizeof(username));
 
     /* Look up the user record */
-    struct uaf_record rec;
+    sysuaf_record_t rec;
     int found = find_uaf_record(username, &rec, NULL);
 
     uint32_t status;
@@ -465,7 +350,7 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
     dsc$strncpy(username, usrnam, sizeof(username));
 
     /* Read current record */
-    struct uaf_record rec;
+    sysuaf_record_t rec;
     int found = find_uaf_record(username, &rec, NULL);
     if (found <= 0) {
         return SS$_NOSUCHID;
@@ -478,7 +363,8 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
             switch (items->item_code) {
                 case UAI$_FLAGS:
                     if (items->bufaddr && items->buflen >= sizeof(uint32_t))
-                        rec.flags = *(uint32_t *)items->bufaddr;
+                        sysuaf_mask_to_flags(*(uint32_t *)items->bufaddr,
+                                             rec.flags, sizeof(rec.flags));
                     break;
                 case UAI$_DEFDIR:
                     if (items->bufaddr) {
@@ -518,39 +404,69 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
         return SS$_FILACCERR;
     }
 
+    /*
+     * REWRITE THROUGH THE ONE WRITER (vms-9b7).
+     *
+     * The line this loop used to emit came from a SECOND fprintf format
+     * string that disagreed with tools/vms_authorize.c's on the FLAGS field
+     * ("%u" here, "%s" there). It now calls sysuaf_format_record(), which is
+     * the only place in the tree that turns a record into a line -- and which
+     * REFUSES a record too long to be read back rather than writing one that
+     * a reader will silently truncate.
+     *
+     * Non-matching rows are still copied VERBATIM, including any that this
+     * process could not parse: $SETUAI is asked to change ONE account, and a
+     * row it does not understand is not its to rewrite or to drop.
+     */
     char line[SYSUAF_LINE_MAX];
-    while (fgets(line, sizeof(line), in)) {
-        struct uaf_record tmp;
-        int rc = parse_uaf_line(line, &tmp);
-        if (rc == 1 && strcasecmp(tmp.username, username) == 0) {
+    int too_long_w = 0;
+    while (sysuaf_read_line(in, line, sizeof(line), &too_long_w)) {
+        if (too_long_w) {
             /*
-             * %o, NOT %u, ON THE TWO UIC FIELDS (vms-e60, vms-cb5 round 5).
-             *
-             * parse_uaf_line() above reads them with strtoul(..., 8) -- the
-             * base vms-e60 derived from the oracle and moved every other
-             * SYSUAF reader and writer to. This fprintf was the site that
-             * did not move: it read octal and wrote decimal, so rewriting
-             * ANY record whose UIC digits differ between the two bases
-             * changed that account's UIC. DEFAULT ships 200|200, which this
-             * parsed as 128/128 and wrote back as "128|128", which the next
-             * read takes as octal 88/88 -- a different UIC, hence a
-             * different Linux uid/gid for the session LOGINOUT starts and a
-             * different owner for every protection decision taken against
-             * it. SYSTEM's 1|4 is the only shipped row that reads the same
-             * in both bases, which is what hid this.
-             *
-             * tools/vms_authorize.c's writer already uses %o; this is the
-             * same value written the same way, not a second answer.
+             * An over-length row cannot be copied verbatim (this process only
+             * ever saw its prefix) and cannot be parsed. Copying the prefix
+             * would DESTROY that account; dropping it would delete it. So the
+             * rewrite is abandoned and the original file is left untouched --
+             * the only answer that loses nothing.
              */
-            fprintf(out, "%s|%s|%o|%o|%s|%u|%s\n",
-                    rec.username, rec.password_hash,
-                    rec.uic_group, rec.uic_member,
-                    rec.default_dir, rec.flags, rec.privileges);
+            fclose(in);
+            fclose(out);
+            unlink(tmp_path);
+            if (iosb) {
+                iosb->iosb$w_status = (uint16_t)SS$_FILACCERR;
+                iosb->iosb$w_bcnt   = 0;
+            }
+            return SS$_FILACCERR;
+        }
+
+        /* sysuaf_parse_line() modifies its argument, so the verbatim copy
+         * has to be taken BEFORE the parse, not after it. */
+        char verbatim[SYSUAF_LINE_MAX];
+        strncpy(verbatim, line, sizeof(verbatim) - 1);
+        verbatim[sizeof(verbatim) - 1] = '\0';
+
+        sysuaf_record_t tmp;
+        int rc = sysuaf_parse_line(line, &tmp);
+        if (rc == 1 && strcasecmp(tmp.username, username) == 0) {
+            char row[SYSUAF_LINE_MAX];
+            if (sysuaf_format_record(&rec, row, sizeof(row)) < 0) {
+                /* Loud writer-side refusal. The update does not happen and
+                 * the caller is told, rather than a truncated identity being
+                 * committed to the authorization database. */
+                fclose(in);
+                fclose(out);
+                unlink(tmp_path);
+                if (iosb) {
+                    iosb->iosb$w_status = (uint16_t)SS$_BADPARAM;
+                    iosb->iosb$w_bcnt   = 0;
+                }
+                return SS$_BADPARAM;
+            }
+            fprintf(out, "%s\n", row);
         } else {
-            fputs(line, out);
+            fputs(verbatim, out);
         }
     }
-
     fclose(in);
     fclose(out);
     rename(tmp_path, sysuaf_linux2);

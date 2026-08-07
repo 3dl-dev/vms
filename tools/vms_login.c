@@ -262,9 +262,11 @@ static void start_session(const sysuaf_record_t *rec)
      *
      * So the condition is made UNREACHABLE rather than handled: the
      * directory is created and owned when the ACCOUNT is provisioned,
-     * by PID 1, before any other process exists
-     * (provision_sysuaf_users() and provision_ownership() in
-     * src/ovmx_init/ovmx_init.c). That is also what OpenVMS does -- the
+     * on the startup path, before any login can happen
+     * (provision_home_directories() and provision_ownership() in
+     * src/ovmx_provision/ovmx_provision.c -- PROVISION.EXE, which PID 1
+     * execs and which execs DCL.EXE on STARTUP.COM afterwards, vms-9b7).
+     * That is also what OpenVMS does -- the
      * System Manager's Manual add-user procedure is AUTHORIZE ADD
      * followed by CREATE/DIRECTORY .../OWNER=[g,m]; LOGINOUT is not in
      * that sequence and has no fixup step of its own.

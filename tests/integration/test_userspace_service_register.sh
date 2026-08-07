@@ -733,11 +733,15 @@ if [ -f "$SRC_ROOT/CMakeLists.txt" ]; then
     # nested if()) by an option() this configure left OFF, whose target
     # directory is not under src/ or tools/. It does NOT check add_executable/
     # add_library source arguments in place -- those live in the SAME
-    # CMakeLists.txt that declares them, which (for every option() in this
-    # tree today) is already under src/ or tools/, so add_subdirectory is the
-    # only vector that has ever moved a whole source tree out of scope here
-    # (OVMX_IMGACT / src/imgact is the existing, in-scope example of the
-    # pattern this looks for).
+    # CMakeLists.txt that declares them, and
+    # `grep -rn 'BUILD_FUSE\|OVMX_STATIC\|OVMX_IMGACT\|OVMX_LINK_NATIVE'
+    # --include=CMakeLists.txt` today shows every if() gated on one of this
+    # tree's OFF-by-default option() names sitting in a CMakeLists.txt already
+    # under src/ (OVMX_IMGACT / src/imgact is the existing, in-scope example
+    # of the pattern add_subdirectory-scanning looks for). A future
+    # option()-gated add_executable/add_library added outside src/ or tools/
+    # would not be caught by this check -- re-run that grep before trusting
+    # this comment.
     OPTGUARD_AWK="$(dirname "$0")/lib/register_optguard.awk"
     if [ ! -f "$OPTGUARD_AWK" ]; then
         echo "FAIL: BROKEN BUILD-SET SCAN: $OPTGUARD_AWK is missing -- the"

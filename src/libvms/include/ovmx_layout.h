@@ -92,6 +92,14 @@
 /* ------------------------------------------------------------------ */
 
 #define VMS_DCL_PATH         "SYS$SYSTEM:DCL.EXE"
+/* PROVISION.EXE -- the OVMX startup process (vms-9b7). PID 1 execs this
+ * where it used to exec DCL.EXE; it establishes the SYSTEM identity from
+ * SYSUAF through the executive, provisions ownership and account home
+ * directories, and then execs DCL.EXE on SYS$MANAGER:STARTUP.COM in the
+ * SAME process, so STARTUP.COM runs as SYSTEM. It exists so that PID 1 --
+ * which is statically linked and therefore grew two hand-rolled 512-byte
+ * SYSUAF parsers of its own -- does not read SYSUAF at all. */
+#define VMS_PROVISION_PATH   "SYS$SYSTEM:PROVISION.EXE"
 #define VMS_LOGINOUT_PATH    "SYS$SYSTEM:LOGINOUT.EXE"
 /* ZERO READERS as of vms-47b: its only reader was STARTUP.EXE's
  * start_sshd(), deleted with the rest of PID 1's service starting. SSH is

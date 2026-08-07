@@ -30,13 +30,13 @@ data either way.
 
 | r_type | count | distinct source objects | example source |
 |---|---|---|---|
-| R_X86_64_64 | 830 | 16 | src/libvms/rtl/lib_datetime.c |
+| R_X86_64_64 | 848 | 16 | src/libvms/rtl/lib_datetime.c |
 | R_X86_64_DTPOFF32 | 8 | 1 | src/libvms/rtl/lib_signal.c |
 | R_X86_64_GOTPC32_TLSDESC | 21 | 3 | src/libvms/rtl/lib_signal.c |
 | R_X86_64_GOTPCREL | 1 | 1 | src/vmsprocess/vms_pcb.c |
 | R_X86_64_PC32 | 2358 | 79 | src/libvms/descrip.c |
-| R_X86_64_PLT32 | 3019 | 76 | src/libvms/descrip.c |
-| R_X86_64_REX_GOTPCRELX | 45 | 12 | src/libvms/rtl/lib_misc.c |
+| R_X86_64_PLT32 | 3024 | 76 | src/libvms/descrip.c |
+| R_X86_64_REX_GOTPCRELX | 46 | 13 | src/libvms/rtl/lib_misc.c |
 | R_X86_64_TLSDESC_CALL | 22 | 3 | src/libvms/rtl/lib_signal.c |
 
 ## Cross-reference: LINK.EXE's existing R_AARCH64_* switch

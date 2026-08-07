@@ -192,3 +192,14 @@ add_test(NAME test_libvms_rightslist
          COMMAND test_libvms_rightslist
          "${CMAKE_SOURCE_DIR}/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT"
          "${CMAKE_SOURCE_DIR}/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT")
+
+# The SYSUAF record limit, at the boundary (vms-9b7).
+#
+# Guards the defect that let a boot halt with "%OVMX-F-EXECINIT, no SYSTEM
+# record in SYS$SYSTEM:SYSUAF.DAT": five parsers of one format with three
+# different line limits between them, so a row one wrote was a row another
+# silently truncated. Drives real files through the real writer and the real
+# reader at 511/512/513/1022/1023/1024/1025 bytes -- the sizes the deleted
+# implementations disagreed on.
+libvms_add_test(test_libvms_sysuaf_line_limit
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_line_limit.c)

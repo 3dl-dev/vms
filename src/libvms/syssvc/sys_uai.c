@@ -2,10 +2,11 @@
  * sys_uai.c - User Authorization File System Services
  *
  * Implements sys$getuai and sys$setuai for querying and updating
- * user account information from /etc/ovmx/sysuaf.dat.
+ * user account information from SYS$SYSTEM:SYSUAF.DAT.
  *
- * The sysuaf.dat format is colon-delimited text:
- *   USERNAME:PASSWORD_HASH:UIC_GROUP:UIC_MEMBER:DEFAULT_DIR:FLAGS:PRIVILEGES
+ * The format is PIPE-delimited text (the delimiter parse_uaf_line() below
+ * splits on, and the one src/libvms/rtl/sysuaf.c writes):
+ *   USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
  *
  * sys$getuai fills in requested UAI$_ items from the matching record.
  * sys$setuai updates the record in place (requires SYSPRV privilege).
@@ -126,41 +127,72 @@ static int parse_uaf_line(const char *line, struct uaf_record *rec)
 
     memset(rec, 0, sizeof(*rec));
 
-    char *f;
-    char *saveptr = NULL;
+    /*
+     * FIELDS ARE SPLIT ON EVERY '|', INCLUDING CONSECUTIVE ONES (vms-cb5
+     * round 5).
+     *
+     * This used to be seven strtok_r(buf, "|") calls. strtok treats a RUN of
+     * delimiters as ONE, so every EMPTY field in a SYSUAF row was silently
+     * dropped and every field after it read one position early. Five of the
+     * six rows OVMX ships have an empty field, so this misparsed nearly the
+     * whole authorization database:
+     *
+     *     USER1||200|202|SYS$SYSDEVICE:[USERS.USER1]||TMPMBX,NETMBX
+     *
+     * parsed as password_hash="200", uic_group=202 (octal 130), uic_member=
+     * strtoul("SYS$SYSDEVICE:[USERS.USER1]", 8) = 0. MEASURED on the real
+     * runtime by tests/qemu/test_syssvc_setuai.c, which read the row back out
+     * of the file after a $SETUAI and found 202 and 0 where 200 and 202
+     * belong. $GETUAI answered from the same misparse, so it reported the
+     * wrong hash, the wrong UIC and the wrong privileges for those accounts;
+     * $SETUAI then wrote the misparse back, which is how a service that
+     * manages the authorization database silently rewrote an account's
+     * identity.
+     *
+     * UIC MEMBER 0 IS WHY THIS IS NOT MERELY A PARSING BUG. tools/vms_login.c
+     * does setuid(rec->uic_member) to drop the session's Linux credentials,
+     * and setuid(0) is not a drop -- such a session keeps CAP_SYS_ADMIN, and
+     * every process it creates registers with SETPRV. What stops that on the
+     * shipped SYSUAF is that all four accounts this misparse gives member 0
+     * carry no password hash and so cannot authenticate at all (vms-08f); it
+     * is not stopped by anything here.
+     *
+     * The split below is the one src/libvms/rtl/sysuaf.c's sysuaf_scan()
+     * already uses -- strchr for the next '|', NUL it, carry on -- so the two
+     * readers of this file agree by construction rather than by coincidence.
+     */
+    char *fields[7];
+    int nf;
+    {
+        char *p = buf;
+        for (nf = 0; nf < 7 && p; nf++) {
+            fields[nf] = p;
+            char *sep = strchr(p, '|');
+            if (sep) {
+                *sep = '\0';
+                p = sep + 1;
+            } else {
+                p = NULL;
+            }
+        }
+    }
 
-    /* Fields separated by '|' (pipe) to avoid conflict with VMS device colons.
-     * Format: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES */
-    f = strtok_r(buf, "|", &saveptr);
-    if (!f) return -1;
-    strncpy(rec->username, f, sizeof(rec->username) - 1);
+    /* USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
+     * -- the first five are required; a row with fewer is malformed. */
+    if (nf < 5)
+        return -1;
 
-    f = strtok_r(NULL, "|", &saveptr);
-    if (!f) return -1;
-    strncpy(rec->password_hash, f, sizeof(rec->password_hash) - 1);
-
-    f = strtok_r(NULL, "|", &saveptr);
-    if (!f) return -1;
+    strncpy(rec->username, fields[0], sizeof(rec->username) - 1);
+    strncpy(rec->password_hash, fields[1], sizeof(rec->password_hash) - 1);
     /* OCTAL: SYSUAF.DAT UIC fields (vms-e60; derivation in
      * src/libvms/rtl/sysuaf.c). */
-    rec->uic_group = (unsigned int)strtoul(f, NULL, 8);
-
-    f = strtok_r(NULL, "|", &saveptr);
-    if (!f) return -1;
-    /* OCTAL: see above (vms-e60). */
-    rec->uic_member = (unsigned int)strtoul(f, NULL, 8);
-
-    f = strtok_r(NULL, "|", &saveptr);
-    if (!f) return -1;
-    strncpy(rec->default_dir, f, sizeof(rec->default_dir) - 1);
-
-    f = strtok_r(NULL, "|", &saveptr);
-    if (f)
-        rec->flags = (uint32_t)strtoul(f, NULL, 0);
-
-    f = strtok_r(NULL, "|\n", &saveptr);
-    if (f)
-        strncpy(rec->privileges, f, sizeof(rec->privileges) - 1);
+    rec->uic_group  = (unsigned int)strtoul(fields[2], NULL, 8);
+    rec->uic_member = (unsigned int)strtoul(fields[3], NULL, 8);
+    strncpy(rec->default_dir, fields[4], sizeof(rec->default_dir) - 1);
+    if (nf > 5)
+        rec->flags = (uint32_t)strtoul(fields[5], NULL, 0);
+    if (nf > 6)
+        strncpy(rec->privileges, fields[6], sizeof(rec->privileges) - 1);
 
     return 1;
 }

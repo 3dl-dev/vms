@@ -57,6 +57,22 @@
 #      NO assertion whose verdict was observed to change when a function in
 #      sys$wflor's own answer path was mutated.
 #
+#      UPDATE (rd vms-38c, re-measured after vms-2b2 closed): vms_ioctl_wflor
+#      is NOT a permanently safe target for this. vms-2b2's own follow-up work
+#      (vms-2ed) added a REAL, oracle-pinned defect (eflag-wflor-status-wrong)
+#      that genuinely mutates vms_ioctl_wflor and reddens an assertion in
+#      test_syssvc_ef_mproc -- so sys$wflor's handler now has HONEST measured
+#      dependence in exactly the suite this control cites, independent of any
+#      buy. That is a coverage GAIN, not a broken control, and treating it as
+#      a bare FAIL would be exactly the stale-anchor mistake this file exists
+#      to catch elsewhere (rd vms-38c's own selftest checks 3/5 hardcoded the
+#      same name and needed the identical fix). Control B therefore checks
+#      FIRST whether the target has organically graduated, and if so falls
+#      through to a still-live equivalent: sys$readef, which rd vms-38c's
+#      re-measurement (post vms-2b2) found is declared OVMX-EXECUTIVE with
+#      proof=test_syssvc_ef_mproc.c yet UNMEASURED in that exact suite -- a
+#      real, current gap, no declaration flip required to construct it.
+#
 #   C. THE NEW INSTRUMENT IS NOT VACUOUS. It must PAY the claims that are
 #      honestly measured. A check that refuses everything passes B trivially
 #      and gates nothing -- that is a blunderbuss, and this program has
@@ -186,6 +202,33 @@ edit2b_live_ignored_call() {
     rm -f "$_f.pristine"
 }
 
+# EDIT 3 -- the LIVE equivalent of EDIT 2, aimed at sys$readef instead of
+# sys$wflor. No declaration flip is needed: sys$readef is ALREADY declared
+# OVMX-EXECUTIVE proof=tests/qemu/test_syssvc_ef_mproc.c on an untouched tree,
+# and rd vms-38c's re-measurement (post vms-2b2) found it UNMEASURED there --
+# a real, standing gap, not a constructed one. This is the sharpest live
+# question left: can ONE MORE ignored call, in the exact suite already cited
+# as proof, flip that UNMEASURED to MEASURED.
+edit3_readef_dead_call() {
+    _t="$1"
+    _f="$_t/tests/qemu/test_syssvc_ef_mproc.c"
+    [ -f "$_f" ] || { echo "FATAL: $_f missing in the scratch tree"; exit 2; }
+    cp "$_f" "$_f.pristine"
+    awk '
+        /^    return fail > 0 \? 1 : 0;$/ && !done {
+            print
+            print "    { uint32_t _negctl_st; (void)sys$readef(0u, &_negctl_st); }   /* NEGCTL: dead code after return, targets sys$readef (vms-38c live gap) */"
+            done = 1
+            next
+        }
+        { print }' "$_f" > "$_f.new" && mv "$_f.new" "$_f"
+    if cmp -s "$_f" "$_f.pristine"; then
+        echo "FATAL: BROKEN CONTROL -- edit 3 did not land (the return statement moved)."
+        exit 2
+    fi
+    rm -f "$_f.pristine"
+}
+
 # The measured check, run against a tree: does ANY assertion in the cited proof
 # have an OBSERVED dependence on a function in the service's own answer path?
 #
@@ -257,11 +300,34 @@ echo ""
 echo "--- B. the MEASURED instrument refuses the same buy ---"
 echo "    question: was any assertion in tests/qemu/test_syssvc_ef_mproc.c OBSERVED"
 echo "              to change verdict when sys\$wflor's own handler was mutated?"
-if measured_dependence "$WORK/bought" 'sys$wflor' test_syssvc_ef_mproc; then
-    bad "the measured check PAYS the bought claim -- it is buyable by the same 2 edits"
+if measured_dependence "$WORK/pristine" 'sys$wflor' test_syssvc_ef_mproc; then
+    echo "  NOTE: vms_ioctl_wflor is measured-dependent in this suite on the PRISTINE"
+    echo "        tree already -- vms-2ed gave it real coverage since this control was"
+    echo "        written. It is no longer a valid UNPAID target; this is a coverage"
+    echo "        GAIN, not a defeat of the buy, so it is not scored bad() here."
+    echo "    falling through to the live equivalent: sys\$readef, no flip needed --"
+    echo "    question: does ONE MORE ignored call in the exact cited proof flip its"
+    echo "              standing UNMEASURED to MEASURED?"
+    mk_tree "$WORK/bought2"
+    edit3_readef_dead_call "$WORK/bought2"
+    if measured_dependence "$WORK/pristine" 'sys$readef' test_syssvc_ef_mproc; then
+        bad "BASELINE BROKEN: sys\$readef already shows measured dependence on the"
+        echo "        pristine tree -- rd vms-38c's recorded gap has closed by some OTHER"
+        echo "        change; re-derive this control's target rather than trust this note."
+    elif measured_dependence "$WORK/bought2" 'sys$readef' test_syssvc_ef_mproc; then
+        bad "the measured check PAYS sys\$readef after ONE ignored call -- buyable"
+    else
+        ok "NO measured dependence, before or after the ignored call. sys\$readef's"
+        echo "        standing UNMEASURED gap (rd vms-38c) is not moved by adding one more"
+        echo "        call to the exact suite already cited as its proof."
+    fi
 else
-    ok "NO measured dependence. The bought OVMX-EXECUTIVE claim is UNPAID by execution,"
-    echo "        where the register's check 4 accepted it from dead code."
+    if measured_dependence "$WORK/bought" 'sys$wflor' test_syssvc_ef_mproc; then
+        bad "the measured check PAYS the bought claim -- it is buyable by the same 2 edits"
+    else
+        ok "NO measured dependence. The bought OVMX-EXECUTIVE claim is UNPAID by execution,"
+        echo "        where the register's check 4 accepted it from dead code."
+    fi
 fi
 echo ""
 

@@ -1705,6 +1705,19 @@ if [ -s "$WORK/backed" ]; then
     echo "  path AND names an assertion that appears in the proof it points at. Read"
     echo "  a paid claim as 'no proven userspace remainder', not as 'proven to have"
     echo "  none': check 6 can refute a full exemption, never confirm one."
+    # Computed ONCE, outside the per-claim loop below: which handlers have ANY
+    # measured dependence, ANYWHERE (not just in the claim's own cited proof).
+    # This is what lets the UNMEASURED branch tell "nothing probes this
+    # handler at all" apart from "something probes it, just not in this
+    # suite" -- re-derived every run rather than hand-maintained, so it
+    # cannot go stale the way a recited count would (rd vms-38c: the prior
+    # version of this block hardcoded "9 of 33 handlers" and the fix here is
+    # the SAME mistake in miniature -- deleted, not re-worded).
+    _fa="$SRC_ROOT/tests/qemu/facility_attribution.sh"
+    if [ -f "$_fa" ] && [ -f "$SRC_ROOT/tests/qemu/facility_negctl_observed.tsv" ]; then
+        FA_REPO_ROOT="$SRC_ROOT" FA_ATTR_CACHE="$WORK/attrcache" \
+            sh "$_fa" handlers "$SRC_ROOT/src" > "$WORK/handlerstatus" 2>/dev/null || :
+    fi
     sort "$WORK/backed" | while IFS="$(printf '\t')" read -r bn bp bd; do
         printf '      %-22s %s\n' "$bn" "$bp"
         case "$bd" in
@@ -1735,21 +1748,28 @@ if [ -s "$WORK/backed" ]; then
         # row, and neither can dead code, a comment, a re-worded assertion or
         # a manifest edit.
         #
-        # IT IS NOT A GATE YET, AND THE REASON IS A NUMBER RATHER THAN AN
-        # OPINION: on this tree the measured check pays 2 of the 10 standing
-        # OVMX-EXECUTIVE claims (sys$clref, sys$waitfr) and leaves 8
-        # UNMEASURED -- because only 9 of the 33 vms_ioctl_* handlers have any
-        # defect landing in them at all (rd vms-2b2). Enforcing it today would
-        # red a pristine tree for handlers nobody has written a probe for,
-        # which is a coverage gap being reported as a lie. UNMEASURED here
-        # means NOTHING PROBED IT, never "the claim is false" -- the same
-        # asymmetry check 6 carries, and it must not be collapsed by a reader.
+        # IT IS NOT A GATE YET. NOT because of timidity, but because the exact
+        # counts drift as coverage work lands (vms-2b2 raised handler probe
+        # coverage from 9/33 to all 16 WIRED handlers MEASURED, 8 exempt
+        # OVMX-UNWIRED handlers UNPROBED by design -- re-check with
+        # `facility_attribution.sh handlers`, never recite a count here).
+        # Even with every wired handler probed, a claim can still print
+        # UNMEASURED for a narrower reason: the register requires the
+        # dependence be observed IN THE SERVICE'S OWN CITED PROOF, and a
+        # defect can probe a handler thoroughly in OTHER suites without ever
+        # reddening an assertion in that specific one (measured case:
+        # sys$readef/sys$setef's WASSET/WASCLR discrimination defects redden
+        # test_syssvc_ef_local/test_kmod_eflag/test_kmod_bind, never
+        # test_syssvc_ef_mproc -- the mproc suite's calls to those two
+        # services check cross-process VISIBILITY, not the discriminating
+        # status word, so a defect aimed only at that word cannot move it).
+        # The two failure modes are printed distinctly below and neither is
+        # "the claim is false" -- the same asymmetry check 6 carries.
         #
         # THE PATH TO ENFORCEMENT is therefore not "turn this on": it is to
-        # write a defect for each unprobed handler (rd vms-2b2), watch this
-        # column fill in, and flip it when it reaches the standing claims.
+        # get every claim's own handler MEASURED in ITS OWN cited proof, and
+        # flip this once a pristine tree stays green under enforcement.
         # ------------------------------------------------------------------
-        _fa="$SRC_ROOT/tests/qemu/facility_attribution.sh"
         if [ -f "$_fa" ] && [ -f "$SRC_ROOT/tests/qemu/facility_negctl_observed.tsv" ]; then
             # The handler set comes from $WORK/answerfn -- THE REGISTER'S OWN
             # four-hop derivation, kept at function granularity above. An
@@ -1774,10 +1794,36 @@ if [ -s "$WORK/backed" ]; then
                     printf '          MEASURED: assertion(s) in %s were observed to change verdict when\n' "$(basename "$bp")"
                     printf '                    %s was mutated -- this claim is paid by EXECUTION\n' "$(printf '%s' "$_hit" | sed 's/^ //;s/$/()/')"
                 else
-                    printf '          UNMEASURED: no observed red is attributed to any of [%s].\n' "$(printf '%s' "$_hdls" | tr '\n' ' ' | sed 's/ $//')"
-                    printf '                      NOT a refutation -- no defect probes those handlers\n'
-                    printf '                      (rd vms-2b2). The static join above is the only thing\n'
-                    printf '                      paying this claim.\n'
+                    # Two DIFFERENT reasons produce the same UNMEASURED verdict,
+                    # and a reader cannot tell them apart without this lookup
+                    # (rd vms-38c): a handler nobody has written ANY defect for
+                    # (vms-2b2's question) vs. a handler that IS measured
+                    # elsewhere, just not in THIS claim's own cited proof (a
+                    # suite-scope mismatch, not a coverage gap). Derived from
+                    # $WORK/handlerstatus computed once above, never recited.
+                    _elsewhere=""
+                    _nowhere=""
+                    for _h in $_hdls; do
+                        if grep -q "^MEASURED	$_h	" "$WORK/handlerstatus" 2>/dev/null; then
+                            _elsewhere="$_elsewhere $_h"
+                        else
+                            _nowhere="$_nowhere $_h"
+                        fi
+                    done
+                    if [ -n "$_elsewhere" ]; then
+                        printf '          UNMEASURED (in this proof): %s IS measured-dependent by\n' \
+                            "$(printf '%s' "$_elsewhere" | sed 's/^ //;s/$/()/')"
+                        printf '                      execution, but not inside %s -- the\n' "$(basename "$bp")"
+                        printf '                      defect(s) that probe it redden a DIFFERENT suite.\n'
+                        printf '                      NOT a coverage gap; a suite-scope mismatch between\n'
+                        printf '                      the declared proof and where the property is checked.\n'
+                    fi
+                    if [ -n "$_nowhere" ]; then
+                        printf '          UNMEASURED: no defect in the manifest mutates %s at all --\n' \
+                            "$(printf '%s' "$_nowhere" | sed 's/^ //;s/$/()/')"
+                        printf '                      NOT a refutation, nothing has probed it. The static\n'
+                        printf '                      join above is the only thing paying this claim.\n'
+                    fi
                 fi
             fi
         fi

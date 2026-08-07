@@ -137,14 +137,21 @@ _ns_para = _ns_m.group(1) if _ns_m else ""
 # Strip the leading " * " block-comment prefix from every line so sentences
 # that wrap across lines read as continuous text.
 _ns = "\n".join(re.sub(r"^\s*\*\s?", "", line) for line in _ns_para.splitlines())
+# vms-c84 (M9): a benign paragraph reflow can move a word boundary (e.g. "9
+# is") off a line start, or split a multi-word anchor phrase across a line
+# break, without changing the CONTENT at all. The span-extraction anchors
+# below must not depend on where lines happen to break, so run them against
+# a whitespace-normalized flattening of the paragraph instead of the raw
+# (newline-preserving) text.
+_ns_flat = re.sub(r"\s+", " ", _ns)
 
-_t8_sent_m = re.search(r"\b8 is the\b.*?(?=\n9 is\b)", _ns, re.S)
+_t8_sent_m = re.search(r"\b8 is the\b.*?(?=\s9 is\b)", _ns_flat, re.S)
 check(_t8_sent_m is not None,
       "scs_env.h's MTYPE-namespace paragraph has no T8-specific sentence "
       "('8 is the ...' up to '9 is ...')")
 _t8_sent = _t8_sent_m.group(0) if _t8_sent_m else ""
 
-_t9_sent_m = re.search(r"\b9 is its paired response\b.*", _ns, re.S)
+_t9_sent_m = re.search(r"\b9 is its paired response\b.*", _ns_flat, re.S)
 check(_t9_sent_m is not None,
       "scs_env.h's MTYPE-namespace paragraph has no T9-specific sentence "
       "('9 is its paired response ...')")
@@ -159,14 +166,17 @@ check(_t9_def_m is not None, "scs_env.h has no SCS_ENV_MTYPE_T9 #define")
 _t9_def = _t9_def_m.group(0) if _t9_def_m else ""
 
 check("vms-f03" in env_h and
-      "special credit message" in (_t8_sent + " " + _t8_def).lower(),
-      "scs_env.h identifies MTYPE 8 as the special credit message WITHIN "
-      "the T8-specific sentence or the T8 #define's own comment -- not "
-      "satisfied by the phrase surviving elsewhere (e.g. the T9 sentence's "
-      "reference to what 9 responds to)")
-check("vms-f03" in env_h and "unnamed" in (_t9_sent + " " + _t9_def).lower(),
-      "scs_env.h states, WITHIN the T9-specific sentence or the T9 #define's "
-      "own comment, that MTYPE 9 is deliberately left unnamed")
+      "special credit message" in _t8_sent.lower() and
+      "special credit message" in _t8_def.lower(),
+      "scs_env.h identifies MTYPE 8 as the special credit message in BOTH "
+      "the T8-specific sentence AND the T8 #define's own comment -- one "
+      "carrier alone is not enough (vms-c84: a disjunction here let the "
+      "file go internally contradictory, prose vs #define, without redding)")
+check("vms-f03" in env_h and
+      "unnamed" in _t9_sent.lower() and "unnamed" in _t9_def.lower(),
+      "scs_env.h states, in BOTH the T9-specific sentence AND the T9 "
+      "#define's own comment, that MTYPE 9 is deliberately left unnamed -- "
+      "one carrier alone is not enough (vms-c84)")
 
 # A guessed name smuggled into the T9 #define's comment (vms-182's own
 # warning) would pass a bare 'unnamed' substring check -- a name-shaped
@@ -186,6 +196,31 @@ check(not _t9_name_hits,
       f"scs_env.h's T9 #define comment contains a name-shaped token "
       f"{_t9_name_hits} -- MTYPE 9 must stay unnamed, not renamed to a "
       f"guessed identifier")
+
+# vms-c84 (post-vms-ab3 audit, 4th occurrence of this failure class): the
+# same guessed-name pattern can be smuggled into the T9 PROSE SENTENCE
+# instead of the #define comment -- e.g. "...and is the
+# SPECIAL_CREDIT_RESPONSE (SpecialCreditRsp), which returns the credit..."
+# -- and the check above never looked at the prose at all. Apply the same
+# name-shaped-token scan there. The sentence legitimately carries
+# cross-reference identifiers to other things already named in this file
+# (e.g. the SCS_ENV_ROUTE_UNKNOWN dispatch value the same paragraph cites);
+# those are exempted by an explicit allowlist of real, already-defined
+# tokens -- never by loosening the pattern -- so a genuinely new guessed
+# name still trips it.
+_T9_SENT_ALLOWED_TOKENS = {
+    "SCS_ENV_ROUTE_UNKNOWN", "SCS_ENV_ROUTE_CONTROL", "SCS_ENV_ROUTE_MESSAGE",
+    "SCS_ENV_MTYPE_T8", "SCS_ENV_MTYPE_T9",
+    "SCS_ENV_MTYPE_APP_MESSAGE", "SCS_ENV_MTYPE_CONTROL_MAX",
+    "SCS_ENV_MTYPE_MAX_OBSERVED",
+}
+_t9_sent_name_hits = [tok for tok in _NAME_SHAPED.findall(_t9_sent)
+                      if tok not in _T9_SENT_ALLOWED_TOKENS]
+check(not _t9_sent_name_hits,
+      f"scs_env.h's T9-specific PROSE SENTENCE contains a name-shaped token "
+      f"{_t9_sent_name_hits} -- MTYPE 9 must stay unnamed in the prose too, "
+      f"not renamed to a guessed identifier (vms-c84: the #define-comment-"
+      f"only scan missed exactly this carrier)")
 
 check("UNIDENTIFIED" not in env_h.upper(),
       "scs_env.h no longer claims MTYPE 8 is unidentified (stale post-vms-f03)")

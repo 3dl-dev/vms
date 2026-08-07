@@ -2286,7 +2286,20 @@ EOF
         # The first per-facility CI run after it merged reddened it here:
         # one suite outside the declared set and seven assertions outside
         # the named set.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status test_syssvc_setname test_syssvc_authorize";;
+        # test_syssvc_setuai is the ELEVENTH, added by vms-cb5, and it arrived
+        # the way every one above it did -- NOT PREDICTED, READ OFF A RUN --
+        # except that the run in question did not happen until rd vms-570
+        # (the aggregate-verification rework): vms-cb5 added the suite and
+        # this facility's committed execution record was never regenerated
+        # against it, so the gap sat undetected until the first REAL full
+        # driver run against the merged tree (2026-08-07) reddened it here --
+        # one suite outside the declared set and eight assertions outside the
+        # named set, all in test_syssvc_setuai. It does not hand-register (it
+        # opens /dev/vms only to decide skip-vs-run, then stamps identity
+        # through the public sys$ API, same counter-example shape as
+        # procnam/showdev/showproc/lock_status/authorize), so it is a genuine
+        # detector of the same missing bind, not a widening of blind_suites.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status test_syssvc_setname test_syssvc_authorize test_syssvc_setuai";;
         # test_kmod_setterm (vms-d0b) joins the blind set, MEASURED in the
         # same run: it stayed rc=0 with the defect injected, because
         # open_and_register() hand-registers exactly like test_kmod_devtab
@@ -2484,6 +2497,14 @@ A: the SYSPRV holder was never refused
 A: AUTHORIZE exited 0 for the admitted session
 B: the executive accepted the non-SYSPRV identity
 B: the executive's own row holds exactly the OPER|WORLD mask this run stamped, with SYSPRV genuinely absent
+1: the executive's row for it does not hold SYSPRV
+2: the executive accepted the non-SYSPRV identity
+2: the executive's row holds exactly the OPER|WORLD mask, no SYSPRV
+3: the executive's row for it still does not hold SYSPRV
+4: $SETUAI serves a SYSPRV identity -- the refusals are not blanket
+4: the executive accepted the SYSPRV identity
+4: the executive's row for it holds SYSPRV
+4: the parent process reads the new default directory in the file
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
@@ -2904,6 +2925,25 @@ Both halves were fixed rather than declared away, and the order matters:
      DECLARED, NOT NARROWED, for the reason the showproc paragraph gives: the
      whole value of this suite is that it drives the real DCL.EXE end to end,
      so it SHOULD be sensitive to the whole stack beneath the command.
+
+EIGHT MORE IN test_syssvc_setuai, THE ELEVENTH SUITE -- SAME MISSING BIND,
+READ OFF THE FIRST REAL FULL DRIVER RUN AGAINST THE MERGED TREE (rd vms-570,
+2026-08-07), NOT PREDICTED. test_syssvc_setuai.c exists to prove $SETUAI's
+SYSPRV test is the EXECUTIVE's, not the caller's own PCB mask (vms-cb5): its
+probe stamps an identity, calls $SETUAI, then reads the identity's row back
+through the SAME executive path every other suite here depends on. With the
+bind deleted the stamped identity never lands in a row the executive holds,
+so every "the executive's row for it ..." and "the executive accepted ..."
+readback in scenarios 1-4 observes an unbound caller instead of the identity
+the test just stamped -- the identical shape as authorize's "A:"/"B:" reds
+one suite up, on the same $SETUAI/$GETUAI row. "4: the parent process reads
+the new default directory in the file" is scenario 4's own downstream check
+(the SYSPRV-served write actually landed), one layer further from the same
+unbound row. Two of scenario 3's own assertions stay GREEN ("1: the probe
+genuinely had NO PCB" and "3: the probe's OWN PCB really does carry SYSPRV")
+because they read the PROBE's own memory, not the executive's row -- the
+same distinction that keeps this suite meaningful rather than a duplicate of
+the bind check itself.
 EOF
                       ;;
         esac;;

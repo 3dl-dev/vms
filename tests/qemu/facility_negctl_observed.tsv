@@ -23,11 +23,11 @@
 #   RUN <defect> <suites that went red, space-joined, or "-"> <pass|fail>
 #   RED <defect> <suite or (harness)> <assertion text observed FAILing>
 #
-# generated-at: 2026-08-06T23:13:51Z
-# tree-commit: 8bac2e36c85424de0c63429a75811778224ea3cc
+# generated-at: 2026-08-07T03:17:10Z
+# tree-commit: bd029e949679e4e740847cdc0fbdfcd9c0dd7722
 # positive-control: pass
-# defects-in-manifest: 58
-# suites-derived: 28
+# defects-in-manifest: 59
+# suites-derived: 30
 RUN	access-mode-escalation	test_kmod_access	pass
 RED	access-mode-escalation	test_kmod_access	... and still does not hold CMKRNL afterwards
 RED	access-mode-escalation	test_kmod_access	... and the mode is still USER after the denied escalation
@@ -272,7 +272,7 @@ RED	pcb-per-thread	test_kmod_bind	sibling thread's cluster state carries the fla
 RED	pcb-per-thread	test_kmod_ident	... and sees the identity the other thread stamped
 RED	pcb-per-thread	test_kmod_ident	... as the SAME process, not a second one (one PCB per process)
 RED	pcb-per-thread	test_kmod_ident	a second thread of the process is known to the executive
-RUN	bind-client-no-register	test_kmod_bind test_syssvc_authorize test_syssvc_ef_local test_syssvc_ef_mproc test_syssvc_ident test_syssvc_lock_status test_syssvc_procnam test_syssvc_setname test_syssvc_showdev test_syssvc_showproc test_syssvc_showterm test_syssvc_startup_service	pass
+RUN	bind-client-no-register	test_kmod_bind test_syssvc_authorize test_syssvc_ef_local test_syssvc_ef_mproc test_syssvc_ident test_syssvc_lock_status test_syssvc_procnam test_syssvc_setname test_syssvc_setuai test_syssvc_showdev test_syssvc_showproc test_syssvc_showterm test_syssvc_startup_service	pass
 RED	bind-client-no-register	test_kmod_bind	$DEQ released the lock
 RED	bind-client-no-register	test_kmod_bind	$ENQ EX granted through /dev/vms
 RED	bind-client-no-register	test_kmod_bind	$ENQ returned a lock id
@@ -376,6 +376,14 @@ RED	bind-client-no-register	test_syssvc_setname	the 15-char boundary-legal name 
 RED	bind-client-no-register	test_syssvc_setname	the 16-char oversized name is refused with the oracle's two-line %SET-E-NOTSET / -SYSTEM-F-IVLOGNAM shape, now that upname is sized VMS_PRCNAM_XFER and reaches the executive intact
 RED	bind-client-no-register	test_syssvc_setname	the executive's process table row for the holder became named
 RED	bind-client-no-register	test_syssvc_setname	the executive's process table row for the second holder became named
+RED	bind-client-no-register	test_syssvc_setuai	1: the executive's row for it does not hold SYSPRV
+RED	bind-client-no-register	test_syssvc_setuai	2: the executive accepted the non-SYSPRV identity
+RED	bind-client-no-register	test_syssvc_setuai	2: the executive's row holds exactly the OPER|WORLD mask, no SYSPRV
+RED	bind-client-no-register	test_syssvc_setuai	3: the executive's row for it still does not hold SYSPRV
+RED	bind-client-no-register	test_syssvc_setuai	4: $SETUAI serves a SYSPRV identity -- the refusals are not blanket
+RED	bind-client-no-register	test_syssvc_setuai	4: the executive accepted the SYSPRV identity
+RED	bind-client-no-register	test_syssvc_setuai	4: the executive's row for it holds SYSPRV
+RED	bind-client-no-register	test_syssvc_setuai	4: the parent process reads the new default directory in the file
 RED	bind-client-no-register	test_syssvc_showdev	...and refuses it with the oracle's own message (section 6)
 RED	bind-client-no-register	test_syssvc_showdev	A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
 RED	bind-client-no-register	test_syssvc_showdev	SHOW DEVICE OPA0: resolves the name through the executive and prints its row
@@ -480,5 +488,10 @@ RED	dcl-fident-name2num-host-passwd	test_syssvc_ident	G/F$IDENTIFIER: NAME_TO_NU
 RUN	opcom-header-host-login-name	test_syssvc_ident	pass
 RED	opcom-header-host-login-name	test_syssvc_ident	G/OPCOM: EVERY header's user field is empty for a process the executive has not named -- sys$sndopr reads the executive's row, not the caller's PCB and not the passwd database (goes RED, not vacuous, when vms-afd propagates identity to SPAWN)
 RED	opcom-header-host-login-name	test_syssvc_ident	G/OPCOM: the operator record does NOT name the HOST Linux account -- the vms-f39 leak that survived in sys_operator.c
+RUN	setuai-sysprv-caller-declared	test_syssvc_setuai	pass
+RED	setuai-sysprv-caller-declared	test_syssvc_setuai	1-3: SYSUAF.DAT is byte-identical after all three refusals
+RED	setuai-sysprv-caller-declared	test_syssvc_setuai	1: $SETUAI refuses a caller with no PCB (was: no test ran at all)
+RED	setuai-sysprv-caller-declared	test_syssvc_setuai	2: $SETUAI refuses an authenticated identity without SYSPRV
+RED	setuai-sysprv-caller-declared	test_syssvc_setuai	3: $SETUAI refuses it anyway -- the PCB mask does not decide
 RUN	register-adopt-pid-not-reported	test_kmod_setterm	pass
 RED	register-adopt-pid-not-reported	test_kmod_setterm	and it is the same VMS process, so the binding was not re-made

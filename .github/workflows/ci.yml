@@ -624,16 +624,34 @@ jobs:
   # mistaken for it. Hence the wider timeout-minutes than the other QEMU jobs.
   # -----------------------------------------------------------------------
   # SHARDED (vms-86a). MEASURED root cause: this job ran the full defect list
-  # (58 QEMU boots, one in-container rebuild each) SEQUENTIALLY in one job --
-  # 27m09s idle, 50m39s under moderate concurrent CI load, >60m and
-  # timeout-minutes-killed with three PRs in flight (rd vms-86a trail). Each
-  # instance is its own ubuntu-latest runner VM -- there is no host-level
-  # resource shared between two PRs' jobs -- so the slowdown under load is
-  # queueing/scheduling variance on GitHub's shared runner fleet, not
-  # contention this workflow can remove; the fix is to make ONE job's
-  # sequential work small enough that that variance still fits the timeout.
-  # Raising timeout-minutes was rejected: it hides the same margin problem
+  # sequentially -- one in-container rebuild plus one QEMU boot per defect --
+  # in a single job: 27m09s idle, 50m39s under moderate concurrent CI load,
+  # >60m and timeout-minutes-killed with three PRs in flight (rd vms-86a
+  # trail, measured 2026-08-04).
+  #
+  # WHY it slows down under load is NOT established, and a prior version of
+  # this comment asserted a cause ("no host-level resource shared between two
+  # PRs' jobs -- so the slowdown is queueing/scheduling variance, not
+  # contention this workflow can remove") with no command behind it (rd
+  # vms-570 audit). timeout-minutes counts execution time on an already-
+  # assigned runner, not queue wait, so a job the timeout kills at 60+ minutes
+  # spent that time RUNNING -- queueing before the runner was assigned cannot
+  # produce that, which contradicts the deleted claim rather than supporting
+  # it. GitHub does not expose runner host placement, so whether concurrent
+  # jobs share underlying physical-host resources is not verifiable from
+  # here either way. Deleted rather than reworded, per this program's own
+  # rule: a false emphatic gets removed, not restated more carefully.
+  #
+  # The fix below does not depend on knowing the mechanism: shrinking what
+  # ONE job must sequentially get through before its own timeout widens the
+  # margin against whatever the slowdown turns out to be. Raising
+  # timeout-minutes was rejected regardless: it hides the same margin problem
   # under a bigger number rather than fixing it (flaky-test rule, CLAUDE.md).
+  # A concurrency group serialising these jobs across PRs remains on the
+  # table if sharding's margin ever proves insufficient -- not applied here
+  # because sharding alone already multiplies the measured margin (see the
+  # per-shard budget comment below), and serialising would trade this job's
+  # timeout risk for queue-time risk on whichever PR runs second.
   #
   # So the per-facility loop is split into N independent shard jobs, each
   # running ~1/N of the manifest's defects (`facility_defects.sh list`, split
@@ -652,11 +670,15 @@ jobs:
   kernel-executive-facility-negative-controls-shard:
     name: Kernel Executive — Per-Facility Negative Controls (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
-    # Budget per shard: ~58/6 defects plus the fixed image-build + positive-
-    # control cost every shard pays independently. Measured solo full run was
-    # 27m for 58 defects; a ~10-defect shard's sequential work is a fraction of
-    # that, so 30m leaves headroom for the SAME per-shard variance the full job
-    # saw (50m/60m at moderate/heavy load) without resurrecting a 60m+ job.
+    # Budget per shard: roughly one Nth of the manifest's defects (the NR%n
+    # partition below) plus the fixed image-build + positive-control cost
+    # every shard pays independently. Not hand-recited here because it drifts
+    # as the manifest grows -- run `sh tests/qemu/facility_defects.sh list |
+    # wc -l` for today's count. The pre-sharding full run measured 27m09s
+    # idle / 50m39s moderate / >60m heavy-load (rd vms-86a trail,
+    # 2026-08-04); a shard's sequential work is a small fraction of that, so
+    # 30m leaves headroom against the SAME per-defect variance without
+    # resurrecting a 60m+ job.
     timeout-minutes: 30
     strategy:
       fail-fast: false

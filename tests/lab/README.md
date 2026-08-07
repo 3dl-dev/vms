@@ -10,6 +10,16 @@ Clean-room invariant (project Rule 8) is unchanged: these labs are *observation*
 oracles. Wire formats come from watching the wire and from public OpenVMS
 documentation. Never disassemble or decompile VSI/HPE material.
 
+> **These labs are VAX — 32-bit. They cannot answer a 64-bit question.**
+> For anything width-, quadword- or architecture-dependent, use **lab-Alpha**
+> (`tests/lab-alpha/`, `vms-e2c`): OpenVMS Alpha V8.4 on AXPbox, same k3s
+> namespace and volume, same one-pod-is-one-lab model, and it also forms a
+> 2-node **Alpha** VMScluster. Its operating protocol and its traps are
+> **different from lab-2's** — read `tests/lab-alpha/README.md`, do not
+> transfer habits from here. Most importantly: lab-2 nodes take a **tap** and
+> survive a console disconnect; Alpha nodes take a **veth** and are killed by
+> one.
+
 ## The design in one paragraph
 
 **One pod == one complete lab.** Each StatefulSet replica clones its own copies

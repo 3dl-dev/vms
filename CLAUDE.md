@@ -243,8 +243,21 @@ vms/
      replica — do not queue.** Read `tests/lab/README.md` before driving one; it carries the console
      protocol, the four traps, and the wire comparison against lab-1 *including what that comparison
      does not prove*.
+   - **Lab-Alpha, the 64-bit oracle: `tests/lab-alpha/`** (`vms-e2c`). **OpenVMS Alpha V8.4** on the
+     AXPbox AlphaServer ES40 emulator, same k3s namespace and volume as lab-2, same one-pod-is-one-lab
+     model. `NODES="alpha1 alpha2"` gives a whole 2-node **Alpha** VMScluster in one pod.
+     **Lab-1 and lab-2 are OpenVMS VAX V7.3 — 32-bit — so neither can answer a question about
+     64-bit behaviour.** Reach for lab-Alpha whenever a width, a quadword, or an
+     architecture-dependence is what is actually in question; asking a VAX and concluding "VMS does
+     X" reads an *architecture* limit as an *OS* rule. Read `tests/lab-alpha/README.md` before
+     driving one — it carries the agent protocol, the health check, and the traps, which are **not**
+     lab-2's traps (notably: AXPbox dies if a console client disconnects, and it cannot use a tap).
 
-   Both labs are observation oracles under this rule, and neither changes what it permits.
+   **Which lab to use.** VAX-era wire/cluster behaviour → lab-1, or lab-2 if lab-1 is busy. Anything
+   width- or architecture-dependent, or any question needing a second architecture to be answerable
+   at all → lab-Alpha. A divergence between architectures is a *result*, not a fault: record it.
+
+   All three labs are observation oracles under this rule, and none of them changes what it permits.
 
 9. **One runtime target: the kernel/QEMU path (HARD INVARIANT)**. Operator ruling 2026-07-28 — the
    Docker *runtime* layer is **dead**. OVMX has exactly **one** runtime: the real-kernel / QEMU path,

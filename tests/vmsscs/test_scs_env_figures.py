@@ -200,8 +200,8 @@ _t9_comment_m = re.search(r"/\*(.*?)\*/", _t9_def)
 _t9_comment = _t9_comment_m.group(1) if _t9_comment_m else _t9_def
 _NAME_SHAPED = re.compile(
     r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b"        # UPPER_SNAKE_CASE
-    r"|\b[A-Z][a-z]+(?:[A-Z][a-zA-Z0-9]*)+\b"   # PascalCase
-    r"|\b[a-z]+(?:[A-Z][a-zA-Z0-9]*)+\b"        # camelCase
+    r"|\b[A-Z][a-z]+(?:[A-Z][a-z0-9]*)+\b"      # PascalCase
+    r"|\b[a-z]+(?:[A-Z][a-z0-9]*)+\b"           # camelCase
     r"|\b[A-Za-z][A-Za-z0-9]*\$[A-Za-z0-9]+\b"  # VMS-style $-identifier
     r"|\b[A-Z]{5,}\b"                           # bare ALL-CAPS word, meaningful length
     r"|\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b"      # spaced Title Case phrase

@@ -73,6 +73,7 @@
 #include "ovmx_layout.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
+#include "vms/logical.h"
 
 #define EXIT_SKIP 77
 
@@ -328,12 +329,16 @@ int main(void)
      * Bootstrap the VMS namespace the same way every shipped image does
      * (tools/vms_login.c, tools/vms_authorize.c, DCL.EXE): SYSUAF_PATH is a
      * VMS filespec and vmsfs_to_linux_path() cannot resolve it until the
-     * system device is in this process's device table. $SETUAI resolves it
-     * the same way, so without this the service under test would fail on a
-     * missing file rather than on its privilege test, and every refusal
-     * below would be explained by the wrong thing.
+     * system device is in this process's device table AND SYS$SYSTEM is in its
+     * logical name table -- VMS_SYSUAF_PATH is "SYS$SYSTEM:SYSUAF.DAT", so
+     * both halves are needed. $SETUAI resolves it the same way, so without
+     * this the service under test would fail on a missing file rather than on
+     * its privilege test, and every refusal below would be explained by the
+     * wrong thing. MEASURED: with the device table alone the path resolved to
+     * /vms/sysuaf.dat, which does not exist.
      */
     vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
+    lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
     {
         char path[1024];
         resolve_sysuaf(path, sizeof(path));
@@ -368,6 +373,7 @@ int main(void)
         CHECK((r1.self_read & 1) &&
               !(r1.exec_privs & PRV$M_SYSPRV),
               "1: the executive's row for it does not hold SYSPRV");
+        /* negctl: setuai-sysprv-caller-declared */
         CHECK(r1.setuai_status == SS$_NOPRIV,
               "1: $SETUAI refuses a caller with no PCB (was: no test ran at all)");
     }
@@ -384,6 +390,7 @@ int main(void)
               "2: the executive accepted the non-SYSPRV identity");
         CHECK((r2.self_read & 1) && r2.exec_privs == NO_PRIVS,
               "2: the executive's row holds exactly the OPER|WORLD mask, no SYSPRV");
+        /* negctl: setuai-sysprv-caller-declared */
         CHECK(r2.setuai_status == SS$_NOPRIV,
               "2: $SETUAI refuses an authenticated identity without SYSPRV");
     }
@@ -402,12 +409,14 @@ int main(void)
               "3: the probe's OWN PCB really does carry SYSPRV");
         CHECK((r3.self_read & 1) && !(r3.exec_privs & PRV$M_SYSPRV),
               "3: the executive's row for it still does not hold SYSPRV");
+        /* negctl: setuai-sysprv-caller-declared */
         CHECK(r3.setuai_status == SS$_NOPRIV,
               "3: $SETUAI refuses it anyway -- the PCB mask does not decide");
     }
 
     /* Nothing above was authorized, so nothing above may have written. */
     nafter = slurp_sysuaf(after, sizeof(after));
+    /* negctl-knockon: setuai-sysprv-caller-declared */
     CHECK(nafter == nbefore && memcmp(before, after, (size_t)nbefore) == 0,
           "1-3: SYSUAF.DAT is byte-identical after all three refusals");
 

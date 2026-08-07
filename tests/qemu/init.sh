@@ -14,8 +14,15 @@ echo "=== OVMX Kernel Module Test Suite ==="
 echo "Kernel: $(uname -r) ($(uname -m))"
 echo ""
 
-TOTAL_PASS=0
-TOTAL_FAIL=0
+# MODULE_PASS/MODULE_FAIL count the two module-load checks below (vms.ko,
+# vmsfs.ko). SUITE_PASS/SUITE_FAIL (declared below the loop) count only
+# actual test-suite runs. Keeping them apart is the vms-95f fix: the old
+# single TOTAL_PASS/TOTAL_FAIL counter mixed the two, so the "FINAL RESULTS"
+# headline printed "28 suites passed" when only 26 suites ever ran -- the
+# other 2 were these module-load checks mislabeled as suites. See the
+# FINAL RESULTS derivation at the bottom of this file for the reconciliation.
+MODULE_PASS=0
+MODULE_FAIL=0
 
 # Set up loop device for block-device vmsfs test
 # loop may be built-in (CONFIG_BLK_DEV_LOOP=y) or a module
@@ -40,10 +47,10 @@ echo "--- Loading vms.ko ---"
 insmod /lib/modules/vms.ko
 if [ -c /dev/vms ]; then
     echo "  PASS: vms.ko loaded, /dev/vms present"
-    TOTAL_PASS=$((TOTAL_PASS+1))
+    MODULE_PASS=$((MODULE_PASS+1))
 else
     echo "  FAIL: vms.ko load or /dev/vms creation failed"
-    TOTAL_FAIL=$((TOTAL_FAIL+1))
+    MODULE_FAIL=$((MODULE_FAIL+1))
     # Show dmesg for diagnostics
     dmesg | tail -20
 fi
@@ -53,10 +60,10 @@ echo "--- Loading vmsfs.ko ---"
 insmod /lib/modules/vmsfs.ko
 if grep -q vmsfs /proc/filesystems; then
     echo "  PASS: vmsfs.ko loaded, filesystem registered"
-    TOTAL_PASS=$((TOTAL_PASS+1))
+    MODULE_PASS=$((MODULE_PASS+1))
 else
     echo "  FAIL: vmsfs.ko load or filesystem registration failed"
-    TOTAL_FAIL=$((TOTAL_FAIL+1))
+    MODULE_FAIL=$((MODULE_FAIL+1))
     dmesg | tail -20
 fi
 
@@ -79,7 +86,7 @@ mkdir -p /tmp/vmsfs_backing /mnt/vmsfs
 #
 #  1. The aggregate tally cannot distinguish an honest skip (rc 77) from a
 #     failed assertion (rc 1) -- the two branches below both increment
-#     TOTAL_FAIL. Injecting a FABRICATED SUCCESS into
+#     SUITE_FAIL. Injecting a FABRICATED SUCCESS into
 #     src/libvms/syssvc/sys_lock.c (do_enq and sys$deq returning SS$_NORMAL
 #     with an invented lock ID when the executive was never reached) makes
 #     every one of test_syssvc_lock's device-absent assertions FAIL and its
@@ -95,8 +102,23 @@ mkdir -p /tmp/vmsfs_backing /mnt/vmsfs
 #     the expected set from the checkout (`ls tests/qemu/test_*.c`), which is
 #     addition-tolerant AND drop-detecting with nothing maintained by hand.
 #
-# The TOTAL_PASS/TOTAL_FAIL tally is kept for human readers and for
+# The SUITE_PASS/SUITE_FAIL tally is kept for human readers and for
 # run_tests.sh's exit code; it is no longer the thing CI pins.
+#
+# WHY SUITE_PASS/SUITE_FAIL ARE SEPARATE FROM MODULE_PASS/MODULE_FAIL
+# (vms-95f). This loop is the ONLY place a "=== SUITE <name> rc= ==="
+# verdict line is printed, so SUITE_PASS+SUITE_FAIL, by construction, always
+# equals the number of those lines. Before this fix there was a single
+# TOTAL_PASS/TOTAL_FAIL shared with the two module-load checks above, so
+# the "FINAL RESULTS" headline below reported 28 ("suites passed") when
+# only 26 suite verdict lines were ever printed -- the other 2 were the
+# vms.ko/vmsfs.ko module-load checks, not suites. Derived twice
+# independently against a clean tree (see rd vms-215's notes). Keeping the
+# counters apart means the headline's suite count reconciles with the
+# "=== SUITE ... ===" lines by construction instead of by someone
+# remembering to subtract 2.
+SUITE_PASS=0
+SUITE_FAIL=0
 #
 # ASSERTION-LEVEL TALLY (vms-215). A per-suite "N passed, M failed" line is a
 # SELF-REPORT: a suite that forgets to print one (test_kmod_bind did, until
@@ -123,23 +145,33 @@ for test in /tests/test_kmod_* /tests/test_syssvc_*; do
     ASSERT_PASS=$((ASSERT_PASS+spass))
     ASSERT_FAIL=$((ASSERT_FAIL+sfail))
     if [ $rc -eq 0 ]; then
-        TOTAL_PASS=$((TOTAL_PASS+1))
+        SUITE_PASS=$((SUITE_PASS+1))
     elif [ $rc -eq 77 ]; then
         # Honest skip (e.g. /dev/vms absent) -- should never happen in this
         # job, since vms.ko was just insmod'd above. Count as a FAIL: if it
         # ever fires here, the executive is not actually present, which is
         # exactly what this job exists to catch.
         echo "  SKIP reported inside the kernel-executive job -- treating as FAIL"
-        TOTAL_FAIL=$((TOTAL_FAIL+1))
+        SUITE_FAIL=$((SUITE_FAIL+1))
     else
-        TOTAL_FAIL=$((TOTAL_FAIL+1))
+        SUITE_FAIL=$((SUITE_FAIL+1))
     fi
     echo "=== SUITE $name rc=$rc ==="
 done
 rm -f "$SUITE_OUT"
 
 echo ""
-echo "=== FINAL RESULTS: $TOTAL_PASS suites passed, $TOTAL_FAIL suites failed ==="
+# MODULE LOAD is reported separately from FINAL RESULTS (vms-95f) so that
+# "suites passed/failed" below counts only what the loop above actually ran
+# -- SUITE_PASS+SUITE_FAIL is exactly the number of "=== SUITE ... ===" lines
+# printed, no module-load check folded in under the same name. A module-load
+# failure is not silently lost by this split: /dev/vms absent or vmsfs
+# unregistered means every test_kmod_*/test_syssvc_* suite above fails or
+# honest-skips against a missing device, which SUITE_FAIL already reports,
+# and .github/workflows/ci.yml's kernel-executive job additionally asserts
+# on the two "PASS: vms.ko loaded" / "PASS: vmsfs.ko loaded" lines directly.
+echo "=== MODULE LOAD: $MODULE_PASS passed, $MODULE_FAIL failed ==="
+echo "=== FINAL RESULTS: $SUITE_PASS suites passed, $SUITE_FAIL suites failed ==="
 echo "=== ASSERTIONS: $ASSERT_PASS passed, $ASSERT_FAIL failed (derived from PASS/FAIL lines actually printed, not summed from suite self-reports) ==="
 echo ""
 

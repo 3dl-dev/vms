@@ -260,7 +260,7 @@ static int run_child(int c2p_write, int p2c_read)
  * ================================================================ */
 int main(void)
 {
-    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: keep stdout line-buffered even when init.sh redirects it to a file, so an unflushed fork() cannot splice output */
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
     printf("=== test_syssvc_lock (public sys$enq/sys$enqw/sys$deq API) ===\n");
 
     if (bootstrap("parent") < 0) {

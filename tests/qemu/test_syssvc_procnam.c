@@ -1333,7 +1333,7 @@ static int device_absent_checks(void)
 
 int main(void)
 {
-    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: keep stdout line-buffered even when init.sh redirects it to a file, so an unflushed fork() cannot splice output */
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
     printf("=== test_syssvc_procnam: executive process table via public sys$ API ===\n");
 
     int devfd = open("/dev/vms", O_RDWR);

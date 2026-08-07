@@ -441,7 +441,7 @@ static int run_wfland_child(int c2p_write, const struct dsc$descriptor_s *nam)
 
 int main(void)
 {
-    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: keep stdout line-buffered even when init.sh redirects it to a file, so an unflushed fork() cannot splice output */
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
     int p2c[2], c2p[2];
     char tok;
     uint32_t st;

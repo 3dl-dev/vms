@@ -70,6 +70,43 @@ fi
 # Create directories needed by vmsfs tests
 mkdir -p /tmp/vmsfs_backing /mnt/vmsfs
 
+# ASSERTION CHANNEL (vms-b5b round 2). Round 1 (ef9b99c) made suite text
+# stream to the console in real time via `tee`, which fixed "a wedge loses
+# everything" but opened a SECOND splice source: kernel printk lands on that
+# same console concurrently, so a printk can land INSIDE an assertion line
+# before its newline. MEASURED by the round-1 audit against a real /dev/vms
+# (executive-not-pinned, run 1 of 2 -- run 2, identical code, did not
+# reproduce it, which is why round 1's control was flaky, not fixed):
+#   '  FAIL: rmmod vms is REFUSED while a descriptor is open (executive pinned)[    5.922598] BUG: unable to handle page fault for address: ffffffffc03c50a8'
+# One line, wrong in both directions at once: the clean assertion text reads
+# "named but did NOT go red", and the spliced line reads "went red and the
+# manifest does NOT name it". setvbuf() cannot touch this -- the splice
+# source is the KERNEL's own printk, not userspace stdio buffering.
+#
+# The fix is a SEPARATE WIRE, not a smarter one. run_tests.sh gives this
+# guest a second serial port, ttyS1 (x86_64 only -- see run_tests.sh for the
+# aarch64 gap, tracked as rd vms-c83), that carries ONLY what this loop
+# writes to fd 4 below. Kernel printk stays on ttyS0 (console=ttyS0 on the
+# kernel command line) and never touches ttyS1, so the two cannot splice
+# into each other regardless of timing. QEMU's file-backed chardev transmits
+# each byte as the guest writes it, so the property round 1 was actually
+# chasing -- surviving a guest wedge -- comes along for free, the same way
+# it did for `tee` on the console.
+#
+# If ttyS1 is not present (e.g. a QEMU invocation that never added it), fd 4
+# falls back to fd 1 -- LOUDLY, not silently: that is exactly the
+# printk-splice exposure above, so the run says so on the console instead of
+# pretending the channel split happened.
+[ -c /dev/ttyS1 ] || mknod /dev/ttyS1 c 4 65 2>/dev/null
+if [ -c /dev/ttyS1 ] && exec 4>/dev/ttyS1; then
+    echo "--- assertion channel: /dev/ttyS1 (separate from console) ---"
+else
+    exec 4>&1
+    echo "WARN: /dev/ttyS1 unavailable -- assertion text is sharing the"
+    echo "      console with kernel printk. This reopens the vms-b5b splice"
+    echo "      class; it is disclosed here, not silently absorbed."
+fi
+
 # Run each test program. test_kmod_* drive /dev/vms with raw ioctls
 # (kernel lock manager, ASTs, event flags, access modes, vmsfs). test_syssvc_*
 # drive the same /dev/vms through the PUBLIC sys$ API in src/libvms instead
@@ -133,50 +170,64 @@ ASSERT_PASS=0
 ASSERT_FAIL=0
 SUITE_OUT=/tmp/suite_out.$$
 SUITE_RC=/tmp/suite_rc.$$
+# Bounds a real, measured hazard, not a flake (see the loop body below for
+# the mechanism). 20s is generous slack over any suite's legitimate runtime
+# and small next to run_tests.sh's outer 120s VM boot timeout.
+SUITE_DRAIN_TIMEOUT=${SUITE_DRAIN_TIMEOUT:-20}
 for test in /tests/test_kmod_* /tests/test_syssvc_*; do
     [ -x "$test" ] || continue
     name=$(basename "$test")
-    echo ""
-    echo "--- $name ---"
-    # vms-b5b: stream to console AND capture to file IN REAL TIME via tee,
-    # instead of "redirect to a file, then cat it after the process exits".
-    # The old form is fine for a suite that returns -- but a `fatal`
-    # negative control (facility_defects.sh isolation=fatal, e.g.
-    # executive-not-pinned) can wedge the WHOLE GUEST KERNEL after the
-    # suite has printed its assertions and before init.sh regains control.
-    # When that happens the shell's own `rc=$?; cat "$SUITE_OUT"` NEVER
-    # RUNS, and every byte the suite already wrote -- durable only inside
-    # the guest's own tmpfs -- is lost when the host's `timeout` kills
-    # QEMU, even though the write(2) calls themselves succeeded. MEASURED:
-    # with the plain redirect, executive-not-pinned's three named
-    # assertions (all printed BEFORE the fatal ioctl) never reached the
-    # captured serial transcript at all -- not a splice, an absence. tee
-    # puts each line on the console the instant the suite prints it, which
-    # survives a guest freeze one line later exactly the way direct-to-
-    # console output always did before vms-215 introduced the file
-    # redirect. The exit status can no longer come from `$?` (that would
-    # be tee's), so the subshell banks it to a second file.
-    ( "$test" 2>&1; echo $? >"$SUITE_RC" ) | tee "$SUITE_OUT"
-    rc=$(cat "$SUITE_RC")
-    spass=$(grep -c "^  PASS:" "$SUITE_OUT")
-    sfail=$(grep -c "^  FAIL:" "$SUITE_OUT")
+    echo "" >&4
+    echo "--- $name ---" >&4
+    # $SUITE_RC is REMOVED before each iteration, not just overwritten by
+    # the next one's `echo $? >"$SUITE_RC"`. A subshell that dies before
+    # that echo runs -- e.g. killed by the drain timeout below -- would
+    # otherwise leave the PREVIOUS suite's exit status on disk, and `[ -f
+    # "$SUITE_RC" ]` below would read it as if it were this suite's. Plain
+    # `rc=$?` could never make that mistake; reusing one path across N runs
+    # can.
+    rm -f "$SUITE_RC" "$SUITE_OUT"
+    # DRAIN TIMEOUT: a pipeline's reader (tee) does not see EOF until EVERY
+    # process holding the write end has closed it, including a suite's own
+    # ORPHANED grandchildren -- ones it forked but never wait()ed for. A
+    # single leaked child blocks not just this suite's line but the WHOLE
+    # loop after it, until run_tests.sh's outer QEMU timeout fires and every
+    # remaining suite is lost with it. Demonstrated under this exact
+    # pipeline shape: a 6-second sleeping orphan made it take 6.014s instead
+    # of returning immediately. Suites whose fork() count exceeds their
+    # wait() count are the exposure (test_kmod_bind 9/4, test_kmod_lock_sync
+    # 8/4, test_syssvc_ef_mproc 7/3). Killing `tee` after
+    # $SUITE_DRAIN_TIMEOUT bounds the damage to this one suite's slot --
+    # "$test" itself already exited before its pipe could be starved, so its
+    # own exit status is unaffected.
+    ( "$test" 2>&1; echo $? >"$SUITE_RC" ) \
+        | timeout -s KILL "$SUITE_DRAIN_TIMEOUT" tee "$SUITE_OUT" >&4
+    if [ -f "$SUITE_RC" ]; then
+        rc=$(cat "$SUITE_RC")
+    else
+        echo "  WARN: $name -- no exit-status record (drain timeout fired, or the wrapper died abnormally) -- treating as FAIL" >&4
+        rc=124
+    fi
+    spass=$(grep -c "^  PASS:" "$SUITE_OUT" 2>/dev/null); spass=${spass:-0}
+    sfail=$(grep -c "^  FAIL:" "$SUITE_OUT" 2>/dev/null); sfail=${sfail:-0}
     ASSERT_PASS=$((ASSERT_PASS+spass))
     ASSERT_FAIL=$((ASSERT_FAIL+sfail))
-    if [ $rc -eq 0 ]; then
+    if [ "$rc" -eq 0 ]; then
         SUITE_PASS=$((SUITE_PASS+1))
-    elif [ $rc -eq 77 ]; then
+    elif [ "$rc" -eq 77 ]; then
         # Honest skip (e.g. /dev/vms absent) -- should never happen in this
         # job, since vms.ko was just insmod'd above. Count as a FAIL: if it
         # ever fires here, the executive is not actually present, which is
         # exactly what this job exists to catch.
-        echo "  SKIP reported inside the kernel-executive job -- treating as FAIL"
+        echo "  SKIP reported inside the kernel-executive job -- treating as FAIL" >&4
         SUITE_FAIL=$((SUITE_FAIL+1))
     else
         SUITE_FAIL=$((SUITE_FAIL+1))
     fi
-    echo "=== SUITE $name rc=$rc ==="
+    echo "=== SUITE $name rc=$rc ===" >&4
 done
 rm -f "$SUITE_OUT" "$SUITE_RC"
+exec 4>&-
 
 echo ""
 # MODULE LOAD is reported separately from FINAL RESULTS (vms-95f) so that

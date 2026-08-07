@@ -260,28 +260,41 @@
 #     reader that guessed at runtime values would red on every defensive branch
 #     in the tree. Execution is what closes this, and execution is rd vms-d33's
 #     question, not a reader's.
-#   - THE ROOT RULE IS BOUGHT AT TWO EDITS, RE-MEASURED AGAINST THIS REVISION
-#     rather than restated from the last one. Give a dead function a
-#     DECLARATION in a header the build compiles and it becomes a root, because
-#     that is exactly what an exported library entry point looks like and this
-#     gate cannot tell the two apart without linking. The emitted-call rule
-#     does not touch it -- the call in the dead function's own body is real
-#     code and the compiler emits it. MEASURED on this tree: ONE insertion into
-#     src/vmsdcl/include/dcl/dcl_cmd.h,
-#         #include "vms_kif.h"
-#         static void ovmx_dead_helper(void);
-#         static void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }
-#     plus retiring vms_kif_chkpriv's OVMX-UNWIRED token, is rc=0 at 44 entry
-#     points / 32 reached / 12 unwired with all 127 product translation units
-#     compiling clean. TWO edits across TWO files, one of them a public header.
-#     The `static` is what makes it link: nine translation units include that
-#     header, and a non-static definition would be nine duplicate symbols.
-#     THE SAME SHAPE THROUGH vms_kif.h ITSELF DOES NOT WORK, which is worth
-#     knowing before anyone tries it as a shortcut: section 0' excludes $KIF_H
-#     from the product text, so a declaration written beside the retired token
-#     -- two edits in ONE file -- makes no root. MEASURED: rc=1, naming
-#     vms_kif_chkpriv.
-#     What would close this class is execution evidence. It is not a compile.
+#   - THE ROOT RULE'S HEADER-RESIDENCY FORM IS CLOSED (rd vms-d33); THE
+#     EXECUTION QUESTION IT SAT NEXT TO IS NOT, and the two must not be
+#     conflated. What used to be bought here at two edits: put a `static`
+#     function's DECLARATION AND BODY BOTH directly in a header the build
+#     compiles --
+#         src/vmsdcl/include/dcl/dcl_cmd.h:
+#             #include "vms_kif.h"
+#             static void ovmx_dead_helper(void);
+#             static void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }
+#         src/libvmssys/vms_kif.h: retire vms_kif_chkpriv's OVMX-UNWIRED token
+#     -- and it became a root, because the (origin file, name) tagging that
+#     tells a `.c` translation unit's private static from an exported
+#     definition only fires when the origin is itself one of the compiled
+#     TUs; a header never is, so the `static` fact was lost and the dead
+#     helper landed on the same bare-name node an actually-exported symbol
+#     gets. `static` means internal linkage NO MATTER WHICH FILE the
+#     declaration sits in, so this was never a real exported entry point --
+#     it is a linkage question, answerable statically, not an execution one.
+#     Header-resident `static` definitions are now tracked independent of the
+#     per-TU tagging and excluded from rule 2's grant. MEASURED: the identical
+#     two-edit recipe above is now rc=1, naming vms_kif_chkpriv, root count
+#     unchanged on a pristine tree (negative control 48,
+#     test_kif_caller_census_negctl.sh).
+#     THE SAME SHAPE THROUGH vms_kif.h ITSELF STILL DOES NOT WORK EITHER WAY:
+#     section 0' excludes $KIF_H from the product text, so a declaration
+#     written beside the retired token -- two edits in ONE file -- makes no
+#     root regardless of this fix. MEASURED: rc=1, naming vms_kif_chkpriv.
+#     WHAT THIS DOES NOT CLOSE, AND CANNOT (rd vms-d33's actual question): a
+#     genuinely EXTERN function, declared in a header and DEFINED in exactly
+#     one product .c file, is still a root whether or not anything in this
+#     tree ever calls it -- correctly, per rule 2's own justification, and
+#     also indistinguishable here from a real caller nobody exercises at
+#     runtime. That gap is EXECUTION, not linkage, and closing it needs the
+#     per-assertion runtime-attribution instrument's groundwork
+#     (docs/design-runtime-attribution.md, residual R7), not a sharper reader.
 #   - A FILE-SCOPE REFERENCE THIS READER CANNOT ATTRIBUTE CREDITS NOTHING. An
 #     address taken at file scope outside every brace, in a declarator shape
 #     neither $pendobj nor $pendarr names, belongs to no node and therefore
@@ -1836,6 +1849,20 @@ awk -F'\t' -v tuf="$WORK/tu_rel" -v seedf="$WORK/seedable" -v w="$WORK" \
     NR == FNR {
         if ($1 == "D" && $3 == "static" && ($2 in istu)) statfn[$2, $4] = 1
         if ($1 == "O" && $3 == "static" && ($2 in istu)) statobj[$2, $4] = 1
+        # A `static` DEFINITION whose origin is NOT one of the compiled TUs
+        # (i.e. it lives in a HEADER, since only a .c file is ever in istu)
+        # falls through the (file,name) tagging above: statfn[] is never set
+        # for it, so res() resolves it to the SAME bare-name node ("\tname")
+        # an extern definition would get. That untags exactly the case rule 2
+        # below exists to grant roots to legitimately -- an EXPORTED symbol --
+        # and hands the same root status to a function with INTERNAL linkage
+        # that merely happens to sit in a header (rd vms-d33: a `static`
+        # forward-declaration plus body in dcl_cmd.h, included by every
+        # dcl_cmd_*.c, makes a dead helper a root purely by residing in a
+        # compiled header -- MEASURED rc=0 before this line existed). Record
+        # the name here, independent of the tagging bug, so rule 2 can refuse
+        # it below.
+        if ($1 == "D" && $3 == "static" && !($2 in istu)) hstatfn[$4] = 1
         if ($1 == "D") isfn[$4] = 1
         if ($1 == "O") isobj[$4] = 1
         next
@@ -1876,7 +1903,12 @@ awk -F'\t' -v tuf="$WORK/tu_rel" -v seedf="$WORK/seedable" -v w="$WORK" \
     }
     END {
         if (("\tmain") in defn) root["\tmain"] = 1
-        for (n in prot) { k = "\t" n; if (k in defn) root[k] = 1 }
+        # RULE 2 GRANTS A ROOT TO AN EXPORTED SYMBOL, and a `static` definition
+        # is never exported -- it has no external linkage no matter which file
+        # its prototype-shaped forward declaration sits in. Excluding
+        # hstatfn[] here is what makes "prototyped in a header" require actual
+        # external linkage rather than mere header residency (rd vms-d33).
+        for (n in prot) { k = "\t" n; if (k in defn && !(n in hstatfn)) root[k] = 1 }
 
         nroot = 0
         for (k in root) {

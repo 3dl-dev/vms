@@ -143,6 +143,18 @@
 #   46 GREEN: a call under a RUNTIME-false condition is credited
 #   47 GREEN: a call through a helper the compiler INLINES      -> GREEN
 #
+# And control 48, which pins the OTHER half of rule 2 (36-41 pin the call-graph
+# propagation the rule feeds; this pins the rule's OWN grant), closed by rd
+# vms-d33 -- narrowing what counts as "the product emits a call" from "is
+# there a product path" one step further, toward "is the path one that could
+# actually be invoked from outside its own translation unit":
+#
+#   48 a `static` function's BODY, residing in a HEADER the build     -> RED
+#      compiles, is not a root merely by that residency
+#
+# Every one of 48 was a clean PASS on the revision before vms-d33's fix. See
+# its own definition below for the measured before/after.
+#
 # Usage: test_kif_caller_census_negctl.sh [SRC_ROOT]
 
 set -u
@@ -190,8 +202,9 @@ QTEST="$ROOT/tests/qemu/test_kmod_devtab.c"
 TOPCM="$ROOT/CMakeLists.txt"
 SYSCM="$ROOT/src/libvmssys/CMakeLists.txt"
 STRC="$ROOT/src/libvmssys/vms_string.c"
+DCLCMH="$ROOT/src/vmsdcl/include/dcl/dcl_cmd.h"
 
-MUTABLE="$H $C $SHOW $QTEST $TOPCM $SYSCM $STRC"
+MUTABLE="$H $C $SHOW $QTEST $TOPCM $SYSCM $STRC $DCLCMH"
 
 # THE ID EVERY FIXTURE DECLARATION CITES: a label only (rd vms-dc7), not
 # verified against anything. Kept as real, currently-open tree ids purely by
@@ -1382,6 +1395,48 @@ sed -i 's|^vms_size_t vms_strlen(const char \*s)$|#include "vms_kif.h"\nstatic u
 sed -i 's|^    while (\*p)$|    (void)ovmx_inlined_helper();\n&|' "$STRC"
 expect_green "$H $C $STRC" \
     "a call through a helper the compiler inlines is still credited"
+
+# ---------------------------------------------------------------------------
+# 48. THE ROOT RULE GRANTED BY HEADER RESIDENCY RATHER THAN LINKAGE
+#     (rd vms-d33).
+#
+# Rule 2 grants a root to "every product function PROTOTYPED IN A HEADER THE
+# BUILD COMPILES" -- ON PURPOSE, because an exported symbol is reachable by
+# anything that links the library whether or not anything IN THIS TREE calls
+# it. A `static` function is never exported, no matter which file its
+# forward declaration sits in -- but the reader's (origin file, name) tagging
+# that tells a `.c` TU's private static from an extern definition keyed
+# statfn[] only for origins that are themselves one of the compiled
+# TRANSLATION UNITS. A header is never itself a TU, so a `static` function
+# whose declaration AND body both live in one fell through untagged, landed
+# on the exact bare-name node an exported symbol gets, and rule 2 handed it a
+# root.
+#
+# MEASURED before the fix, TWO EDITS in two files the build already compiles
+# -- no new file, no CMakeLists change, no `#if 0`:
+#
+#     src/vmsdcl/include/dcl/dcl_cmd.h (included by every dcl_cmd_*.c):
+#         static void ovmx_dead_helper(void);
+#         static void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }
+#     src/libvmssys/vms_kif.h: retire vms_kif_chkpriv's OVMX-UNWIRED token
+#
+#   rc=0, "44 entry points -- 32 the product emits a call to, 12 with no
+#   product path", PASS, root count 731 -> 732 -- one more than main() and
+#   every genuinely exported header prototype in the tree.
+#
+# THE SUBJECT IS AGAIN vms_kif_chkpriv, for the same reason 36-41 use it: it
+# is genuinely unwired and declared, and its body issues VMS_IOCTL_CHKPRIV,
+# so nothing on the kernel side moves either.
+sed -i "$RETIRE_CHKPRIV" "$H"
+sed -i 's|^#include <stdint.h>$|#include <stdint.h>\n#include "vms_kif.h"\nstatic void ovmx_dead_helper(void);\nstatic void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }|' "$DCLCMH"
+expect_red "$H $DCLCMH" \
+    "a static function's body residing in a compiled HEADER is not a root by residency alone" \
+    "vms_kif_chkpriv
+$F_UNDECL
+credit NOTHING: ovmx_dead_helper" \
+    "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+    "$F_NO_BUILD" "$F_NO_IFACE"
 
 echo "  controls: $passed passed, $failed failed"
 if [ "$status" -eq 0 ]; then

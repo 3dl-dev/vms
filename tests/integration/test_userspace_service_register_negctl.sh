@@ -134,7 +134,17 @@ LIBVMSCM="$ROOT/src/libvms/CMakeLists.txt"
 # escape. It does not exist in the pristine tree, so restore() deletes it
 # rather than copying a saved original back.
 OUTSIDE="$ROOT/runtime/ovmx_time.c"
-MUTABLE="$AST $EVENT $TIME $QIO $STR $STARLET $PROOF $LOCKPROOF $FDMAN $DISPATCH $PROCESS $TOPCM $LIBVMSCM"
+# vms-ed8 residual #1: a target declared under tests/, holding its own sys$
+# definition, that is nevertheless installed. tests/vmsssh/CMakeLists.txt
+# already exists (edited in place); the fixture source it adds does not, so
+# restore() removes it like OUTSIDE.
+TESTSSHCM="$ROOT/tests/vmsssh/CMakeLists.txt"
+INSTFIX="$ROOT/tests/vmsssh/negctl_installed.c"
+# vms-ed8 residual #2: a source CMake compiles only under an option this
+# configure leaves OFF, living outside src/ and tools/. Neither the directory
+# it lives in nor the option gating it exists in the pristine tree.
+OPTGUARDDIR="$ROOT/addons/negctl_optguard"
+MUTABLE="$AST $EVENT $TIME $QIO $STR $STARLET $PROOF $LOCKPROOF $FDMAN $DISPATCH $PROCESS $TOPCM $LIBVMSCM $TESTSSHCM"
 
 key_of() { printf '%s' "${1#"$ROOT"/}" | tr '/.' '__'; }
 
@@ -205,6 +215,8 @@ restore() {
         cp "$WORK/orig/$(key_of "$_f")" "$_f"
     done
     rm -rf "$(dirname "$OUTSIDE")"
+    rm -f "$INSTFIX"
+    rm -rf "$OPTGUARDDIR"
 }
 
 injection_landed() {
@@ -798,6 +810,132 @@ expect_red "$DISPATCH" "the executive dispatch switch made unreadable, so no ans
 printf '\nthis_is_not_cmake_syntax(((\n' >> "$TOPCM"
 expect_red "$TOPCM" "the build description made unreadable, so what the product compiles is unknown" \
     "BROKEN BUILD-SET SCAN: "
+
+# ------------------------------------------------- vms-ed8 residuals (vms-c19) --
+#
+# Three gaps vms-c19 DISCLOSED rather than claimed closed. Each control below
+# was run against the PRE-FIX gate first (measured, not asserted): the
+# mutation landed, `sh $GATE` printed PASS, and the minted service never
+# appeared anywhere in its output. That measurement is not re-run here every
+# time -- it is what "residual" meant before this file had a control for it --
+# but it is why these are ordinary expect_red calls and not a new fixture
+# shape: the fix makes the SAME gate, on the SAME mutation, go red.
+
+# RESIDUAL #1: a target declared under tests/, holding its own sys$
+# definition in a source under tests/, that is nevertheless INSTALLED. The
+# tests/ exclusion only ever asked "is the compiling target declared outside
+# tests/ AND does it also compile a non-tests/ source" -- a target that fails
+# both halves but ships via install(TARGETS ...) was never asked about at
+# all.
+cat > "$INSTFIX" <<'INSTFIX_EOF'
+#include <stdint.h>
+
+static int ovmx_negctl_installed_state = 0;
+
+uint32_t sys$negctl_installed(uint32_t v) {
+    ovmx_negctl_installed_state += (int)v;
+    return (uint32_t)ovmx_negctl_installed_state;
+}
+
+int main(void) { return 0; }
+INSTFIX_EOF
+{
+    echo ''
+    echo 'add_executable(negctl_installed negctl_installed.c)'
+    echo 'install(TARGETS negctl_installed RUNTIME DESTINATION bin)'
+} >> "$TESTSSHCM"
+expect_red "$TESTSSHCM $INSTFIX" \
+    "a tests/-declared target with its own sys\$ definition, shipped by install(TARGETS ...)" \
+    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$negctl_installed"
+
+# RESIDUAL #2: a source CMake compiles only under an option this configure
+# leaves OFF, living OUTSIDE src/ and tools/. Inside those two directories the
+# glob still holds such a source (that is what catches src/imgact/, gated by
+# OVMX_IMGACT=OFF by default); outside them neither reading did.
+mkdir -p "$OPTGUARDDIR"
+cat > "$OPTGUARDDIR/negctl_optguard.c" <<'OPTGUARD_EOF'
+#include <stdint.h>
+
+static int ovmx_negctl_optguard_state = 0;
+
+uint32_t sys$negctl_optguard(uint32_t v) {
+    ovmx_negctl_optguard_state += (int)v;
+    return (uint32_t)ovmx_negctl_optguard_state;
+}
+OPTGUARD_EOF
+cat > "$OPTGUARDDIR/CMakeLists.txt" <<'OPTGUARD_CM_EOF'
+add_library(negctl_optguard STATIC negctl_optguard.c)
+OPTGUARD_CM_EOF
+{
+    echo ''
+    echo 'option(OVMX_NEGCTL_OPTGUARD "negctl fixture: vms-ed8 residual #2" OFF)'
+    echo 'if(OVMX_NEGCTL_OPTGUARD)'
+    echo '    add_subdirectory(addons/negctl_optguard)'
+    echo 'endif()'
+} >> "$TOPCM"
+expect_red "$TOPCM" \
+    "a source gated by an option this configure leaves OFF, living outside src/ and tools/" \
+    "an add_subdirectory() is gated by an option"
+
+# RESIDUAL #3: compile_commands.json is parsed BY LINE SHAPE (one JSON field
+# per line, as CMake writes it); the gate refused on an EMPTY parse but a
+# PARTIAL one -- some "file" field read but its object never reaching a
+# matching close -- would have silently DROPPED that entry from the compile
+# set instead of erroring. This cannot be provoked by mutating the PRODUCT
+# TREE (nothing a source-tree edit does changes the *shape* CMake writes its
+# own compile_commands.json in -- every mutation above that reaches this far
+# still produces a well-formed one), so this control runs the REAL parser
+# (tests/integration/lib/register_buildset.awk, the same file the gate
+# invokes) directly against a hand-built malformed fixture instead of through
+# $GATE. It is still the shipped code under test, not a reimplementation of
+# it.
+REGBUILDSET_AWK="$SRC_ROOT/tests/integration/lib/register_buildset.awk"
+if [ ! -f "$REGBUILDSET_AWK" ]; then
+    echo "  FAIL: BROKEN FIXTURE: $REGBUILDSET_AWK does not exist"
+    failed=$((failed + 1)); status=1
+else
+    cat > "$WORK/cc_good.json" <<'CC_GOOD_EOF'
+[
+{
+  "directory": "/root/build",
+  "command": "cc -c /root/src/a.c -o /root/build/CMakeFiles/vms.dir/a.c.o",
+  "file": "/root/src/a.c",
+  "output": "/root/build/CMakeFiles/vms.dir/a.c.o"
+}
+]
+CC_GOOD_EOF
+    # Same fixture, missing ONE closing brace -- the entry's "file" field is
+    # read but never reaches a matching "}", exactly as a shape drift in a
+    # future CMake would leave it.
+    sed '$d' "$WORK/cc_good.json" > "$WORK/cc_partial.json"
+
+    out_good=$(awk -v ROOT="/root/" -v INSTF="" -f "$REGBUILDSET_AWK" "$WORK/cc_good.json")
+    rc_good=$?
+    out_partial=$(awk -v ROOT="/root/" -v INSTF="" -f "$REGBUILDSET_AWK" "$WORK/cc_partial.json")
+    rc_partial=$?
+
+    if [ "$rc_good" -ne 0 ] || [ "$out_good" != "src/a.c" ]; then
+        echo "  FAIL: BROKEN FIXTURE: the well-formed compile_commands.json fixture did not"
+        echo "        parse to src/a.c -- this control's baseline is wrong, so its verdict"
+        echo "        on the malformed one below is unfounded."
+        failed=$((failed + 1)); status=1
+    elif [ "$rc_partial" -eq 0 ]; then
+        echo "  FAIL: register_buildset.awk certified a PARTIAL parse: a compile_commands.json"
+        echo "        entry missing its closing brace was silently dropped instead of refusing"
+        printf '%s\n' "$out_partial" | sed 's/^/          /'
+        failed=$((failed + 1)); status=1
+    elif ! printf '%s\n' "$out_partial" | grep -qF "BROKEN BUILD-SET SCAN: compile_commands.json parse is PARTIAL"; then
+        echo "  FAIL: register_buildset.awk went non-zero on the malformed fixture but not"
+        echo "        for the named reason:"
+        printf '%s\n' "$out_partial" | sed 's/^/          /'
+        failed=$((failed + 1)); status=1
+    else
+        echo "  PASS: a compile_commands.json entry missing its closing brace is refused,"
+        echo "        not silently dropped"
+        passed=$((passed + 1))
+        printf '%s\n' "BROKEN BUILD-SET SCAN: compile_commands.json parse is PARTIAL" >> "$WORK/needs"
+    fi
+fi
 
 # ----------------------------------------------------------- GREEN controls --
 

@@ -260,28 +260,64 @@
 #     reader that guessed at runtime values would red on every defensive branch
 #     in the tree. Execution is what closes this, and execution is rd vms-d33's
 #     question, not a reader's.
-#   - THE ROOT RULE IS BOUGHT AT TWO EDITS, RE-MEASURED AGAINST THIS REVISION
-#     rather than restated from the last one. Give a dead function a
-#     DECLARATION in a header the build compiles and it becomes a root, because
-#     that is exactly what an exported library entry point looks like and this
-#     gate cannot tell the two apart without linking. The emitted-call rule
-#     does not touch it -- the call in the dead function's own body is real
-#     code and the compiler emits it. MEASURED on this tree: ONE insertion into
+#   - THE ROOT RULE'S "prototyped in a header" CLAUSE IS SCOPED TO A NON-static
+#     DECLARATION (rd vms-41b). A declaration in a header the build compiles
+#     used to seed a root regardless of storage class, because that is exactly
+#     what an exported library entry point looks like and the P-record reading
+#     did not carry the static/extern qualifier at all. MEASURED, the recipe
+#     that bought it on this tree before the fix: ONE insertion into
 #     src/vmsdcl/include/dcl/dcl_cmd.h,
 #         #include "vms_kif.h"
 #         static void ovmx_dead_helper(void);
 #         static void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }
-#     plus retiring vms_kif_chkpriv's OVMX-UNWIRED token, is rc=0 at 44 entry
-#     points / 32 reached / 12 unwired with all 127 product translation units
-#     compiling clean. TWO edits across TWO files, one of them a public header.
-#     The `static` is what makes it link: nine translation units include that
-#     header, and a non-static definition would be nine duplicate symbols.
-#     THE SAME SHAPE THROUGH vms_kif.h ITSELF DOES NOT WORK, which is worth
-#     knowing before anyone tries it as a shortcut: section 0' excludes $KIF_H
-#     from the product text, so a declaration written beside the retired token
-#     -- two edits in ONE file -- makes no root. MEASURED: rc=1, naming
-#     vms_kif_chkpriv.
-#     What would close this class is execution evidence. It is not a compile.
+#     plus retiring vms_kif_chkpriv's OVMX-UNWIRED token -- TWO edits across TWO
+#     files, one of them a public header, `static` chosen so the multi-includer
+#     header would still link. A `static` declaration in a header can NEVER be
+#     the exported-API shape rule 2 exists for: each includer gets its own
+#     private symbol, not a shared entry point. RE-MEASURED against this
+#     revision: rc=1, naming vms_kif_chkpriv -- see negative control 49.
+#     THE SAME SHAPE THROUGH vms_kif.h ITSELF DOES NOT WORK EITHER, which is
+#     worth knowing before anyone tries it as a shortcut: section 0' excludes
+#     $KIF_H from the product text, so a declaration written beside the retired
+#     token -- two edits in ONE file -- makes no root regardless of storage
+#     class. MEASURED: rc=1, naming vms_kif_chkpriv.
+#     What would close the class of a genuinely NON-static header declaration
+#     with no in-tree caller is execution evidence. It is not a compile.
+#   - THE ROOT RULE'S HEADER-RESIDENCY FORM IS CLOSED (rd vms-d33); THE
+#     EXECUTION QUESTION IT SAT NEXT TO IS NOT, and the two must not be
+#     conflated. What used to be bought here at two edits: put a `static`
+#     function's DECLARATION AND BODY BOTH directly in a header the build
+#     compiles --
+#         src/vmsdcl/include/dcl/dcl_cmd.h:
+#             #include "vms_kif.h"
+#             static void ovmx_dead_helper(void);
+#             static void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }
+#         src/libvmssys/vms_kif.h: retire vms_kif_chkpriv's OVMX-UNWIRED token
+#     -- and it became a root, because the (origin file, name) tagging that
+#     tells a `.c` translation unit's private static from an exported
+#     definition only fires when the origin is itself one of the compiled
+#     TUs; a header never is, so the `static` fact was lost and the dead
+#     helper landed on the same bare-name node an actually-exported symbol
+#     gets. `static` means internal linkage NO MATTER WHICH FILE the
+#     declaration sits in, so this was never a real exported entry point --
+#     it is a linkage question, answerable statically, not an execution one.
+#     Header-resident `static` definitions are now tracked independent of the
+#     per-TU tagging and excluded from rule 2's grant. MEASURED: the identical
+#     two-edit recipe above is now rc=1, naming vms_kif_chkpriv, root count
+#     unchanged on a pristine tree (negative control 50,
+#     test_kif_caller_census_negctl.sh).
+#     THE SAME SHAPE THROUGH vms_kif.h ITSELF STILL DOES NOT WORK EITHER WAY:
+#     section 0' excludes $KIF_H from the product text, so a declaration
+#     written beside the retired token -- two edits in ONE file -- makes no
+#     root regardless of this fix. MEASURED: rc=1, naming vms_kif_chkpriv.
+#     WHAT THIS DOES NOT CLOSE, AND CANNOT (rd vms-d33's actual question): a
+#     genuinely EXTERN function, declared in a header and DEFINED in exactly
+#     one product .c file, is still a root whether or not anything in this
+#     tree ever calls it -- correctly, per rule 2's own justification, and
+#     also indistinguishable here from a real caller nobody exercises at
+#     runtime. That gap is EXECUTION, not linkage, and closing it needs the
+#     per-assertion runtime-attribution instrument's groundwork
+#     (docs/design-runtime-attribution.md, residual R7), not a sharper reader.
 #   - A FILE-SCOPE REFERENCE THIS READER CANNOT ATTRIBUTE CREDITS NOTHING. An
 #     address taken at file scope outside every brace, in a declarator shape
 #     neither $pendobj nor $pendarr names, belongs to no node and therefore
@@ -400,23 +436,29 @@
 #     sections at all is an explicit refusal), but the other two would degrade
 #     QUIETLY, in the under-firing direction. Re-measure them on any other
 #     compiler or target before trusting a green from one.
-#   - EXFILTRATION COMPOSED WITH A RENAME STILL LEAVES THE UNIVERSE, and the
-#     recipe is written down here because a residual nobody can reproduce is
-#     not a disclosure. Move a wrapper's body into a .inc; mark it `static`
-#     AND rename it out of the vms_kif_ namespace; #include that .inc from
-#     vms_kif.c AND from one other product file, so it is neither
-#     interface-private nor namespaced and every one of section 1's three
-#     definition readings drops it; delete the prototype; retire the
-#     declaration; add `enum { r = (int)VMS_IOCTL_TTSETMODE };` to vms_kif.c so
-#     the raw floor stays satisfied. Seven edits across three files, and the
-#     product still LINKS because the function is static in both units.
-#     MEASURED: 44 entry points -> 43, rc=0, PASS. Uncomposed -- keeping the
-#     name -- the same evasion is a RED at 44 entries; the name filter on the
-#     third reading is what makes the rename necessary. NOT CLOSED HERE. What
-#     would close it is reading the definition side of the universe from the
-#     interface TU with no name filter and no private-origin restriction, which
-#     needs a way to tell vms_syscall.h's 47 static inlines from an interface
-#     wrapper that this round did not find.
+#   - EXFILTRATION COMPOSED WITH A RENAME, CLOSED (vms-05e7). Move a wrapper's
+#     body into a .inc; mark it `static` AND rename it out of the vms_kif_
+#     namespace; #include that .inc from vms_kif.c AND from one other product
+#     file, so it is neither interface-private nor namespaced and each of
+#     section 1's first three definition readings drops it; delete the
+#     prototype; retire the declaration; add
+#     `enum { r = (int)VMS_IOCTL_TTSETMODE };` to vms_kif.c so the raw floor
+#     stays satisfied. Seven edits across three files, and the product still
+#     LINKS because the function is static in both units. MEASURED against the
+#     gate before the fourth definition reading existed: 44 entry points -> 43,
+#     rc=0, PASS. The fourth term closes it by dropping the name filter and
+#     reading the interface TU's full region unrestricted, which needed a way
+#     to tell vms_syscall.h's 47 `static inline` syscall stubs from an
+#     interface wrapper's exfiltrated body: MEASURED, every one of those 47
+#     (plus vms_errno.h's 2) carries `inline`, and every wrapper vms_kif.c
+#     defines directly does not, so `static-inline` is what the fourth term
+#     excludes and nothing else. RE-MEASURED with the fourth term in place:
+#     the same seven edits are now rc=1, naming the renamed entry point.
+#     Negative control 48 is this recipe. NOT CLOSED BY THIS: composing the
+#     same recipe with an eighth edit that also adds `inline` to the renamed,
+#     exfiltrated definition would look identical to a syscall stub to this
+#     term, and the boundary that separates them at that point is what the
+#     next residual would need to name.
 #
 # If you are here because this failed: do NOT add a declaration to make it pass
 # unless the entry point genuinely has no product path yet AND you have an item
@@ -483,12 +525,17 @@ strip_comments() {
 # call_edges [calls|defs|graph <rel>]: read comment-stripped C on stdin.
 #
 #   calls (default) - print "ENCLOSING<TAB>CALLEE" for every call expression.
-#   defs            - print "static|extern<TAB>NAME" for every function
-#                     DEFINITION at file scope. Definitions, not prototypes:
-#                     the same depth-0 rule that stops a prototype counting as
-#                     a call is what distinguishes them, so both readings of
-#                     the tree come from one reader and cannot disagree about
-#                     what a definition is.
+#   defs            - print "static|extern|static-inline<TAB>NAME" for every
+#                     function DEFINITION at file scope. Definitions, not
+#                     prototypes: the same depth-0 rule that stops a prototype
+#                     counting as a call is what distinguishes them, so both
+#                     readings of the tree come from one reader and cannot
+#                     disagree about what a definition is. "static-inline" is
+#                     a `static` definition that also saw the `inline` keyword
+#                     at file scope before its name -- see the vms-05e7 term
+#                     in section 1 for why that distinction exists: it is what
+#                     tells vms_syscall.h's generic syscall stubs apart from
+#                     an interface wrapper's body without a name filter.
 #   graph <rel>     - all five record kinds section 2 needs to build the
 #                     PRODUCT call graph, in ONE pass, each tagged and
 #                     attributed to the origin file <rel>:
@@ -498,7 +545,7 @@ strip_comments() {
 #                                                             OBJECT with a
 #                                                             braced initialiser
 #                       E<TAB>rel<TAB>ENCLOSING<TAB>CALLEE    a call edge
-#                       P<TAB>rel<TAB>NAME                    a file-scope
+#                       P<TAB>rel<TAB>static|extern<TAB>NAME  a file-scope
 #                                                             DECLARATION
 #                       R<TAB>rel<TAB>ENCLOSING<TAB>NAME  an identifier NOT
 #                                           followed by "(", i.e. a name USED
@@ -616,7 +663,7 @@ call_edges() {
                         } else if (pending != "") {
                             curfn = pending
                             if (want == "defs")
-                                print (sawstatic ? "static" : "extern") "\t" curfn
+                                print (sawstatic ? (sawinline ? "static-inline" : "static") : "extern") "\t" curfn
                             else if (want == "graph" && once("D" SUBSEP curfn))
                                 print "D\t" rel "\t" (sawstatic ? "static" : "extern") "\t" curfn
                         } else if (pendobj != "") {
@@ -626,14 +673,14 @@ call_edges() {
                         } else {
                             curfn = ""
                         }
-                        pending = ""; pdepth = 0; sawstatic = 0
+                        pending = ""; pdepth = 0; sawstatic = 0; sawinline = 0
                     }
                     depth++; i++; continue
                 }
                 if (!ismac && c == "}") {
                     depth--
                     if (depth <= 0) {
-                        depth = 0; curfn = ""; sawstatic = 0; pdepth = 0
+                        depth = 0; curfn = ""; sawstatic = 0; sawinline = 0; pdepth = 0
                         pendobj = ""; pendarr = ""; objfrozen = 0
                     }
                     i++; continue
@@ -642,8 +689,8 @@ call_edges() {
                     # A name followed by "(" at file scope whose statement ends
                     # in ";" is a DECLARATION -- a prototype.
                     if (pending != "" && want == "graph" && once("P" SUBSEP pending))
-                        print "P\t" rel "\t" pending
-                    pending = ""; sawstatic = 0; pendobj = ""; pendarr = ""; objfrozen = 0
+                        print "P\t" rel "\t" (sawstatic ? "static" : "extern") "\t" pending
+                    pending = ""; sawstatic = 0; sawinline = 0; pendobj = ""; pendarr = ""; objfrozen = 0
                     i++; continue
                 }
                 if (c ~ /[A-Za-z_$]/) {
@@ -658,6 +705,8 @@ call_edges() {
                         else if (pdepth == 0) pending = id
                     } else if (!ismac && depth == 0 && id == "static") {
                         sawstatic = 1
+                    } else if (!ismac && depth == 0 && id == "inline") {
+                        sawinline = 1
                     } else if (want == "graph" && !ismac) {
                         if (depth == 0 && !objfrozen) {
                             if (pdepth == 0) pendobj = id
@@ -671,7 +720,7 @@ call_edges() {
                 i++
             }
         }
-        BEGIN { depth = 0; pending = ""; curfn = ""; inmac = 0; macnode = ""; sawstatic = 0
+        BEGIN { depth = 0; pending = ""; curfn = ""; inmac = 0; macnode = ""; sawstatic = 0; sawinline = 0
                 pdepth = 0; pendobj = ""; pendarr = ""; objfrozen = 0 }
         {
             line = $0
@@ -1493,6 +1542,22 @@ fi
     # leaves open is that same evasion COMPOSED with a rename out of the
     # namespace, which is recorded under "WHAT THIS GATE DOES NOT SEE".
     call_edges defs < "$WORK/kif_pp_all" | grep -E '	vms_kif_' || true
+    # THE FOURTH TERM (vms-05e7), closing the residual the third term's own
+    # comment named: THAT SAME EVASION COMPOSED WITH A RENAME out of the
+    # vms_kif_ namespace. vms-e2b could not drop the name filter above without
+    # flooding on vms_syscall.h's 47 static inline syscall stubs, also visible
+    # in this unrestricted region once the private-origin rule is defeated.
+    # MEASURED on this tree: every one of those 47 (plus vms_errno.h's 2) is
+    # declared `static inline`; every wrapper vms_kif.c defines directly --
+    # kif_bind, kif_call, kif_wait_call, vms_kif_alloc_op, getjpi_common -- is
+    # plain `static`, with no `inline`. The vms-05e7 recipe does not add
+    # `inline` to the exfiltrated, renamed body either: it only needs `static`
+    # for the two TUs to each hold a private copy and still link, so it stays
+    # `static`, not `static-inline`. That is the tell this term reads: no name
+    # filter, but `static-inline` definitions are excluded as the generic
+    # syscall-stub shape, and everything else in the interface TU's full
+    # region -- namespaced or not -- is counted.
+    call_edges defs < "$WORK/kif_pp_all" | awk -F'\t' '$1 != "static-inline"'
 } | sort -u > "$WORK/defs_all"
 cut -f2 "$WORK/defs_all" | sort -u > "$WORK/defs"
 # A name is externally linked if EITHER reading saw it defined non-static.
@@ -1532,7 +1597,7 @@ sort -u "$WORK/protos" "$WORK/defs" > "$WORK/universe"
 # REACHED -- but only through the in-file reachability pass in step 3, which is
 # the only way a static can be reached in C. That is how kif_bind, kif_call and
 # getjpi_common pass today.
-awk -F'\t' '$1 == "static" { print $2 }' "$WORK/defs_all" | sort -u > "$WORK/statics"
+awk -F'\t' '$1 == "static" || $1 == "static-inline" { print $2 }' "$WORK/defs_all" | sort -u > "$WORK/statics"
 sort -u "$WORK/protos" "$WORK/defs_extern" > "$WORK/linkable"
 comm -23 "$WORK/statics" "$WORK/linkable" > "$WORK/static_only"
 comm -23 "$WORK/universe" "$WORK/static_only" > "$WORK/seedable"
@@ -1836,13 +1901,33 @@ awk -F'\t' -v tuf="$WORK/tu_rel" -v seedf="$WORK/seedable" -v w="$WORK" \
     NR == FNR {
         if ($1 == "D" && $3 == "static" && ($2 in istu)) statfn[$2, $4] = 1
         if ($1 == "O" && $3 == "static" && ($2 in istu)) statobj[$2, $4] = 1
+        # A `static` DEFINITION whose origin is NOT one of the compiled TUs
+        # (i.e. it lives in a HEADER, since only a .c file is ever in istu)
+        # falls through the (file,name) tagging above: statfn[] is never set
+        # for it, so res() resolves it to the SAME bare-name node ("\tname")
+        # an extern definition would get. That untags exactly the case rule 2
+        # below exists to grant roots to legitimately -- an EXPORTED symbol --
+        # and hands the same root status to a function with INTERNAL linkage
+        # that merely happens to sit in a header (rd vms-d33: a `static`
+        # forward-declaration plus body in dcl_cmd.h, included by every
+        # dcl_cmd_*.c, makes a dead helper a root purely by residing in a
+        # compiled header -- MEASURED rc=0 before this line existed). Record
+        # the name here, independent of the tagging bug, so rule 2 can refuse
+        # it below.
+        if ($1 == "D" && $3 == "static" && !($2 in istu)) hstatfn[$4] = 1
         if ($1 == "D") isfn[$4] = 1
         if ($1 == "O") isobj[$4] = 1
         next
     }
     $1 == "D" { defn[res($2, $4)] = 1; next }
     $1 == "O" { next }
-    $1 == "P" { if (!($2 in istu)) prot[$3] = 1; next }
+    # A "static" declaration in a header cannot be an exported entry point --
+    # each includer gets its own private symbol, which is exactly what a
+    # dead helper declared AND defined `static` inside a multi-includer
+    # header (e.g. dcl_cmd.h) looks like when it tries to buy a root off
+    # rule 2 (rd vms-41b). Only a NON-static declaration in a non-TU file
+    # is the exported-API-surface shape rule 2 exists for.
+    $1 == "P" { if (!($2 in istu) && $3 != "static") prot[$4] = 1; next }
     $1 == "E" {
         if (!emitted_ok($3, $4)) {
             nnoemit++
@@ -1876,7 +1961,12 @@ awk -F'\t' -v tuf="$WORK/tu_rel" -v seedf="$WORK/seedable" -v w="$WORK" \
     }
     END {
         if (("\tmain") in defn) root["\tmain"] = 1
-        for (n in prot) { k = "\t" n; if (k in defn) root[k] = 1 }
+        # RULE 2 GRANTS A ROOT TO AN EXPORTED SYMBOL, and a `static` definition
+        # is never exported -- it has no external linkage no matter which file
+        # its prototype-shaped forward declaration sits in. Excluding
+        # hstatfn[] here is what makes "prototyped in a header" require actual
+        # external linkage rather than mere header residency (rd vms-d33).
+        for (n in prot) { k = "\t" n; if (k in defn && !(n in hstatfn)) root[k] = 1 }
 
         nroot = 0
         for (k in root) {

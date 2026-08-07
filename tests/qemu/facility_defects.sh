@@ -468,6 +468,7 @@ dcl-fident-num2name-host-passwd
 dcl-fident-num2name-bracketed-uic
 dcl-fident-name2num-host-passwd
 opcom-header-host-login-name
+setuai-sysprv-caller-declared
 register-adopt-pid-not-reported"
 
 # ---------------------------------------------------------------------------
@@ -3530,6 +3531,28 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    setuai-sysprv-caller-declared)
+        case "$_f" in
+        facility)     echo "\$SETUAI's SYSPRV test -- the gate on the one service that rewrites SYSUAF.DAT (src/libvms/syssvc/sys_uai.c sys\$setuai)";;
+        targets)      echo "libvms/syssvc/sys_uai.c";;
+        suites_red)   echo "test_syssvc_setuai";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mask test goes away, which is the state \$SETUAI was in before vms-cb5 round 5 for every caller with no PCB: \`if (pcb && !(pcb->cur_privs & PRV\$M_SYSPRV))\` is false when vms_pcb_get() returns NULL, so the service rewrote SYSUAF.DAT -- UAI\$_PWD included -- with no privilege test having run. This control exists because the ONLY thing standing between an unauthorized caller and an account's password hash is that one comparison: delete it and the suite's three refusals become three grants, with the service still returning SS\$_NORMAL and still looking like an access control.";;
+        require_fail) cat <<'EOF'
+1: $SETUAI refuses a caller with no PCB (was: no test ran at all)
+2: $SETUAI refuses an authenticated identity without SYSPRV
+3: $SETUAI refuses it anyway -- the PCB mask does not decide
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+1-3: SYSUAF.DAT is byte-identical after all three refusals
+EOF
+                      ;;
+        knock_on_why)  echo "Each of the three calls the mutation turns from a refusal into a grant WRITES -- they all carry the same UAI\$_DEFDIR item -- so the file-unchanged check is the same single defect observed in the artifact instead of in the returned status. It is listed rather than dropped because it is the assertion that shows the refusals were refusals and not merely a status the service returned after doing the work anyway.";;
+        esac;;
+
     register-adopt-pid-not-reported)
         case "$_f" in
         facility)     echo "process registration / adoption (VMS_IOCTL_REGISTER, src/kernel/vms_module.c vms_ioctl_register)";;
@@ -3871,6 +3894,14 @@ apply_edit() {
         sed -i '/^static int lex_identifier(/,/^}$/ s|^            snprintf(result, result_size, "0");$|            { struct passwd *pw_ = getpwnam(id_str); if (pw_) { snprintf(result, result_size, "%d", (int)((pw_->pw_gid << 16) \| (pw_->pw_uid \& 0xFFFF))); } else { snprintf(result, result_size, "0"); } } /* NEGCTL dcl-fident-name2num-host-passwd */|' "$_file";;
     opcom-header-host-login-name)
         sed -i '/^static void get_current_username(/,/^}$/ s|^    strncpy(buf, info.username, bufsz - 1);$|    if (!info.username[0]) { struct passwd *pw_ = getpwuid(getuid()); if (pw_) { strncpy(buf, pw_->pw_name, bufsz - 1); buf[bufsz - 1] = 0; return; } } strncpy(buf, info.username, bufsz - 1); /* NEGCTL opcom-header-host-login-name */|' "$_file";;
+    # Deletes the mask test and NOTHING ELSE. The vms_kif_getjpi_self() read
+    # above it is left in place on purpose: with it removed as well, the
+    # mutation would also delete the Rule 9 refusal-on-failed-read, and the
+    # negative-control rig (no /dev/vms) would then differ from the product rig
+    # for two reasons instead of one. The replacement is `if (0)`, so a second
+    # apply finds no match and is the no-op selftest requires.
+    setuai-sysprv-caller-declared)
+        sed -i 's|^        if (!(self.cur_privs \& PRV\$M_SYSPRV))$|        if (0) /* NEGCTL setuai-sysprv-caller-declared */|' "$_file";;
     register-adopt-pid-not-reported)
         # Range-anchored to the ADOPT branch only (`if (proc) { ... return 0; }`
         # right after the first vms_proc_find_or_err() call). The FRESH

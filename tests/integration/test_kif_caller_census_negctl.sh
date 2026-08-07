@@ -142,6 +142,33 @@
 #   45 ... the same buy in a translation unit built -O2         -> RED
 #   46 GREEN: a call under a RUNTIME-false condition is credited
 #   47 GREEN: a call through a helper the compiler INLINES      -> GREEN
+#   48 27 COMPOSED WITH A RENAME out of the vms_kif_ namespace  -> RED
+#
+# And the control (49) that pins what root rule 2 -- "every product function
+# PROTOTYPED IN A HEADER THE BUILD COMPILES" -- takes for granted: that a
+# header declaration is the exported-API shape the rule exists for. It was
+# not: a `static` declaration AND definition, both written inside a header
+# the build compiles into MULTIPLE translation units, was credited exactly
+# like an extern one, because the declaration reading (a "P" record) never
+# carried the static/extern qualifier. See the gate's own root-rule bullet in
+# section 0 (WHAT THIS GATE DOES NOT PROVE) for the measured recipe and the
+# rd vms-41b fix. This was a clean PASS at rc=0 on every gate revision through
+# rd vms-c79.
+#
+#   49 a dead helper declared AND defined `static` in a
+#      multi-includer header does not buy a root                -> RED
+#
+# And control 50, which pins the OTHER half of rule 2 (36-41 pin the call-graph
+# propagation the rule feeds; this pins the rule's OWN grant), closed by rd
+# vms-d33 -- narrowing what counts as "the product emits a call" from "is
+# there a product path" one step further, toward "is the path one that could
+# actually be invoked from outside its own translation unit":
+#
+#   50 a `static` function's BODY, residing in a HEADER the build     -> RED
+#      compiles, is not a root merely by that residency
+#
+# Every one of 50 was a clean PASS on the revision before vms-d33's fix. See
+# its own definition below for the measured before/after.
 #
 # Usage: test_kif_caller_census_negctl.sh [SRC_ROOT]
 
@@ -190,8 +217,10 @@ QTEST="$ROOT/tests/qemu/test_kmod_devtab.c"
 TOPCM="$ROOT/CMakeLists.txt"
 SYSCM="$ROOT/src/libvmssys/CMakeLists.txt"
 STRC="$ROOT/src/libvmssys/vms_string.c"
+DCLCMDH="$ROOT/src/vmsdcl/include/dcl/dcl_cmd.h"
+DCLCMH="$DCLCMDH"
 
-MUTABLE="$H $C $SHOW $QTEST $TOPCM $SYSCM $STRC"
+MUTABLE="$H $C $SHOW $QTEST $TOPCM $SYSCM $STRC $DCLCMDH"
 
 # THE ID EVERY FIXTURE DECLARATION CITES: a label only (rd vms-dc7), not
 # verified against anything. Kept as real, currently-open tree ids purely by
@@ -202,7 +231,7 @@ FIX_ITEM2="vms-as1"
 
 # Files a control CREATES rather than edits. restore() removes them, because
 # a leftover fabricated caller would silently contaminate every later control.
-CREATED="$ROOT/src/libvmssys/kif_negctl_orphan.c $ROOT/src/libvmssys/vms_kif_close.inc $ROOT/src/libvmssys/vms_kif_close_proto.h $ROOT/src/libvmssys/vms_kif_ttsetmode.inc"
+CREATED="$ROOT/src/libvmssys/kif_negctl_orphan.c $ROOT/src/libvmssys/vms_kif_close.inc $ROOT/src/libvmssys/vms_kif_close_proto.h $ROOT/src/libvmssys/vms_kif_ttsetmode.inc $ROOT/src/libvmssys/vms_kif_ttsetmode_renamed.inc"
 
 key_of() { printf '%s' "${1#$ROOT/}" | tr '/.' '__'; }
 
@@ -1382,6 +1411,141 @@ sed -i 's|^vms_size_t vms_strlen(const char \*s)$|#include "vms_kif.h"\nstatic u
 sed -i 's|^    while (\*p)$|    (void)ovmx_inlined_helper();\n&|' "$STRC"
 expect_green "$H $C $STRC" \
     "a call through a helper the compiler inlines is still credited"
+
+# ---------------------------------------------------------------------------
+# 48. EXFILTRATION COMPOSED WITH A RENAME (vms-05e7), THE RECIPE 27's OWN
+#     COMMENT NAMED AS UNCLOSED. 27 shows the gate catches a body moved to a
+#     non-private .inc AS LONG AS THE NAME STAYS vms_kif_ttsetmode -- the
+#     third definition reading is namespaced. This composes that with a
+#     rename: mark the moved body `static`, rename it out of the vms_kif_
+#     namespace, #include it from vms_kif.c AND vms_string.c so it is neither
+#     interface-private nor namespaced, delete the prototype, retire the
+#     declaration, and add a floor-reference enum so the raw opcode floor
+#     stays satisfied. Same seven edits as the gate's own "WHAT THIS GATE DOES
+#     NOT SEE" writeup, reproduced here rather than merely cited.
+#
+#     THE .inc IS SYNTHESIZED, NOT EXTRACTED, for the same reason control 27's
+#     is: the real vms_kif_ttsetmode body uses vms_kif.c privates (struct
+#     vms_setmode_args, vms_memset, KIF_CALL) that vms_string.c does not have,
+#     so an extracted body would preprocess but not compile -- a broken
+#     fixture, not a working control. A self-contained stub with the same
+#     signature, renamed, exfiltrates the DEFINITION exactly as well while
+#     being a tree that actually builds.
+# ---------------------------------------------------------------------------
+TTINC48="$ROOT/src/libvmssys/vms_kif_ttsetmode_renamed.inc"
+cat > "$TTINC48" <<'EOF'
+#include "vms_kif.h"
+
+static uint32_t kif_ttsetmode_apply(uint32_t chan, uint32_t flags,
+                                     uint64_t setchar, uint64_t clrchar,
+                                     uint32_t width, uint32_t page)
+{
+    (void)chan; (void)flags; (void)setchar; (void)clrchar;
+    (void)width; (void)page;
+    return 0;
+}
+EOF
+sed -i '/^uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,$/,/^}$/c\
+#include "vms_kif_ttsetmode_renamed.inc"' "$C"
+printf '\n#include "vms_kif_ttsetmode_renamed.inc"\n' >> "$STRC"
+sed -i '/^uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,$/,/uint32_t width, uint32_t page);$/d' "$H"
+sed -i 's|OVMX-UNWIRED: vms_kif_ttsetmode (vms-a36)|(retired by negctl 48)|' "$H"
+printf '\nenum { kif_negctl_floor_ref48 = (int)VMS_IOCTL_TTSETMODE };\n' >> "$C"
+# THE FIXTURE CHECK THAT MATTERS IS THE REMOVAL, same rationale as control 27:
+# the real body -- identified by the KIF_CALL it issues -- must no longer be
+# in vms_kif.c, or this control ran against an unmutated tree.
+if ! created_landed "$TTINC48" || grep -q 'KIF_CALL(VMS_IOCTL_TTSETMODE' "$C"; then
+    echo "  FAIL: BROKEN FIXTURE (not a broken gate): control 48 did not move"
+    echo "        vms_kif_ttsetmode's body out of vms_kif.c -- its anchor no"
+    echo "        longer matches, so the tree it ran against was not the"
+    echo "        evasion. Re-anchor it."
+    record_verdict "the composed rename+shared-.inc exfiltration does not leave the census" 0
+    restore
+else
+    expect_red "$H $C $STRC" \
+        "the composed rename+shared-.inc exfiltration does not leave the census" \
+        "kif_ttsetmode_apply
+$F_UNDECL" \
+        "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+        "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+        "$F_NO_BUILD" "$F_NO_IFACE" "$F_NO_EVIDENCE"
+fi
+
+# ---------------------------------------------------------------------------
+# 49. THE ROOT-RULE'S HEADER CLAUSE, AND ITS PRICE BEFORE rd vms-41b. Root
+#     rule 2 credits "every product function prototyped in a header the build
+#     compiles" because that is what an exported library entry point looks
+#     like. A `static` declaration in a header is never that: each includer
+#     gets its OWN private symbol, not a shared entry point, and dcl_cmd.h is
+#     included by MULTIPLE translation units (checked below, not assumed) --
+#     so a non-static definition there would not even link.
+#
+# FIXTURE CONSTRAINT, CHECKED RATHER THAN ASSUMED: this control only proves
+# the point if dcl_cmd.h really is included by more than one product .c file.
+# If it is ever narrowed to a single includer, the recipe still goes red for
+# the ordinary reason (a static in a header included once is no different
+# from a static in the .c itself) and this control would silently stop
+# testing the header case while still reporting PASS.
+if [ "$(grep -rl '#include "dcl/dcl_cmd.h"' "$ROOT/src" --include='*.c' 2>/dev/null | wc -l)" -lt 2 ]; then
+    echo "  FAIL: BROKEN FIXTURE (not a broken gate): control 49 needs a header"
+    echo "        included by more than one product .c file to prove a static"
+    echo "        header declaration is not credited as exported. dcl_cmd.h no"
+    echo "        longer qualifies; pick another multi-includer header."
+    record_verdict "a static declaration AND definition in a multi-includer header does not buy a root" 0
+else
+    sed -i "$RETIRE_CHKPRIV" "$H"
+    sed -i 's|^#include <stdint.h>$|#include <stdint.h>\n#include "vms_kif.h"\nstatic void ovmx_dead_helper(void);\nstatic void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }|' "$DCLCMDH"
+    expect_red "$H $DCLCMDH" \
+        "a static declaration AND definition in a multi-includer header does not buy a root" \
+        "vms_kif_chkpriv
+$F_UNDECL
+credit NOTHING: ovmx_dead_helper" \
+        "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+        "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+        "$F_NO_BUILD" "$F_NO_IFACE" "$F_NO_EVIDENCE"
+fi
+
+# ---------------------------------------------------------------------------
+# 50. THE ROOT RULE GRANTED BY HEADER RESIDENCY RATHER THAN LINKAGE
+#     (rd vms-d33).
+#
+# Rule 2 grants a root to "every product function PROTOTYPED IN A HEADER THE
+# BUILD COMPILES" -- ON PURPOSE, because an exported symbol is reachable by
+# anything that links the library whether or not anything IN THIS TREE calls
+# it. A `static` function is never exported, no matter which file its
+# forward declaration sits in -- but the reader's (origin file, name) tagging
+# that tells a `.c` TU's private static from an extern definition keyed
+# statfn[] only for origins that are themselves one of the compiled
+# TRANSLATION UNITS. A header is never itself a TU, so a `static` function
+# whose declaration AND body both live in one fell through untagged, landed
+# on the exact bare-name node an exported symbol gets, and rule 2 handed it a
+# root.
+#
+# MEASURED before the fix, TWO EDITS in two files the build already compiles
+# -- no new file, no CMakeLists change, no `#if 0`:
+#
+#     src/vmsdcl/include/dcl/dcl_cmd.h (included by every dcl_cmd_*.c):
+#         static void ovmx_dead_helper(void);
+#         static void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }
+#     src/libvmssys/vms_kif.h: retire vms_kif_chkpriv's OVMX-UNWIRED token
+#
+#   rc=0, "44 entry points -- 32 the product emits a call to, 12 with no
+#   product path", PASS, root count 731 -> 732 -- one more than main() and
+#   every genuinely exported header prototype in the tree.
+#
+# THE SUBJECT IS AGAIN vms_kif_chkpriv, for the same reason 36-41 use it: it
+# is genuinely unwired and declared, and its body issues VMS_IOCTL_CHKPRIV,
+# so nothing on the kernel side moves either.
+sed -i "$RETIRE_CHKPRIV" "$H"
+sed -i 's|^#include <stdint.h>$|#include <stdint.h>\n#include "vms_kif.h"\nstatic void ovmx_dead_helper(void);\nstatic void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }|' "$DCLCMH"
+expect_red "$H $DCLCMH" \
+    "a static function's body residing in a compiled HEADER is not a root by residency alone" \
+    "vms_kif_chkpriv
+$F_UNDECL
+credit NOTHING: ovmx_dead_helper" \
+    "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+    "$F_NO_BUILD" "$F_NO_IFACE"
 
 echo "  controls: $passed passed, $failed failed"
 if [ "$status" -eq 0 ]; then

@@ -503,18 +503,27 @@ cmd_selftest() {
 
     echo "--- 3. an IGNORED CALL produces NO attribution (the recorded trap) ---"
     # THE CONTROL THIS FILE EXISTS FOR (vms-38c). The measured buy against the
-    # register was `(void)sys$wflor(0u, 0u);` after `return`. Here we assert the
-    # instrument's defining property directly: attribution is keyed on an
-    # OBSERVED CHANGE OF VERDICT, so no assertion can be attributed to a
-    # function that no defect mutates -- and adding a call to a proof cannot
-    # create a RED row, because RED rows come only from the QEMU driver.
-    if cmd_depends test_syssvc_ef_mproc vms_ioctl_wflor >/dev/null 2>&1; then
-        echo "  FAIL: something is attributed to vms_ioctl_wflor, which no defect mutates"
+    # register was originally `(void)sys$wflor(0u, 0u);` after `return` -- but
+    # vms_ioctl_wflor is NOT a safe anchor to hardcode: vms-2b2's follow-up
+    # work (vms-2ed) later added a REAL defect that genuinely mutates it and
+    # reddens test_syssvc_ef_mproc, which is exactly the kind of coverage gain
+    # this instrument is supposed to notice -- a check that still expected
+    # wflor to be unprobed would itself become the stale, hand-maintained fact
+    # this file argues against. So the anchor is DERIVED fresh every run: pick
+    # whatever `handlers` currently reports UNPROBED, and prove no assertion
+    # is attributed to it.
+    _st_unprobed=$(cmd_handlers 2>/dev/null | awk -F'\t' '$1=="UNPROBED"{print $2; exit}')
+    if [ -z "$_st_unprobed" ]; then
+        echo "  FAIL: no UNPROBED handler exists to anchor this check -- every vms_ioctl_*"
+        echo "        handler now has some measured dependence, so this control has nothing"
+        echo "        left to prove and must be re-targeted, not left green by accident"
+        _st_bad=1
+    elif cmd_attribute 2>/dev/null | awk -F'\t' -v h="$_st_unprobed" '$5==h{f=1} END{exit(f?0:1)}'; then
+        echo "  FAIL: something is attributed to $_st_unprobed, which no defect mutates"
         _st_bad=1
     else
-        echo "  ok: no assertion is attributed to vms_ioctl_wflor -- the handler behind the"
-        echo "      2-edit sys\$wflor buy recorded on vms-38c is UNMEASURED, and an ignored"
-        echo "      call in the proof cannot change that"
+        echo "  ok: no assertion is attributed to $_st_unprobed -- nothing in the manifest"
+        echo "      mutates it, so an ignored call anywhere cannot manufacture a dependency"
     fi
 
     echo "--- 4. the instrument is not vacuous: a real dependency IS attributed ---"
@@ -548,7 +557,7 @@ cmd_selftest() {
             echo "  FAIL: the fabricated row produced NO rows at all, so this check judged"
             echo "        nothing. It must attribute to eflag-clref-noop's real site."
             _st_bad=1
-        elif printf '%s' "$_st_f1" | grep -q 'vms_ioctl_wflor'; then
+        elif [ -n "$_st_unprobed" ] && printf '%s' "$_st_f1" | grep -qF "$_st_unprobed"; then
             echo "  FAIL: a hand-written record row reached an unprobed handler"; _st_bad=1
         else
             echo "  ok: it is confined to the function that defect's sed REALLY mutates --"

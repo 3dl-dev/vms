@@ -341,6 +341,28 @@ here is the one vms-d33 names, and `functions` already reports which
 wiring has the same "would red pristine" problem as the register, for the same
 reason, and needs the same vms-2b2 groundwork first.
 
+**2026-08-07 addendum, disclosed not claimed-closed:** the sentence above is
+still true of THIS instrument — the census does not consult
+`facility_attribution.sh` and the "reachable-but-never-executed" gap it names
+is unchanged, still gated on vms-2b2. Separately, vms-d33 closed one narrower,
+purely-static loophole in the census's OWN root rule: rule 2 (`test_kif_
+caller_census.sh` section 2') granted a root to "every product function
+prototyped in a header the build compiles" without checking that the
+definition actually carried external linkage, so a `static` function whose
+declaration AND body both lived in a compiled header (e.g.
+`src/vmsdcl/include/dcl/dcl_cmd.h`) fell through the reader's (origin-file,
+name) statics tagging — which only fires for an origin that is itself one of
+the compiled `.c` translation units — and landed on the same bare-name node an
+actually-exported symbol gets. That bought a root for two edits with rc=0 at
+44/32/12 (negative control 48 in `test_kif_caller_census_negctl.sh` pins it).
+Fixed by tracking header-resident `static` definitions independent of the
+existing per-TU tagging and excluding them from rule 2. This is a linkage
+question the census can answer statically; it is not, and does not claim to
+be, an answer to R7's actual question, which remains: EXECUTION is still the
+only way to tell a reachable-but-dead call from a live one, and that still
+needs the vms-2b2 probe set before this instrument's MEASURED column can be
+enforced anywhere, including here.
+
 **R9 — a multi-handler answer path is an OR, and that is proof-shoppable.**
 The measured check pays a claim when **any** handler in the derived answer path
 has a measured dependence in the cited proof. `sys$enq` and `sys$enqw` both

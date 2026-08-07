@@ -52,7 +52,10 @@
 # Env:    CC (default gcc), GSMATCH (default LEQUAL,1,0)
 #
 # Must run in the arm64 musl container where the four producer .EXE already exist
-# (see CLAUDE.md test loop). aarch64-only for now.
+# (see CLAUDE.md test loop). CC/CFLAGS are env-overridable (default aarch64
+# musl flags); the x86_64 caller (vms-cb5f) sets CC + CFLAGS (with
+# -mtls-dialect=gnu2, no -mno-outline-atomics) before invoking this script --
+# this library is a TLS producer (rtl/lib_signal.c __thread).
 set -e
 
 LINK_EXE=${1:?usage: mk_libvms_shr.sh <LINK.EXE> <out> <DECC$SHR> <LIBVMSPROCESS$SHR> <LIBVMSSYS$SHR> <LIBVMSFS$SHR> [src]}
@@ -74,7 +77,7 @@ done
 WORK=${WORK:-/tmp/mk-libvms-shr}
 mkdir -p "$WORK"
 
-CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics"
+CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics}"
 # Sibling include dirs: own headers + libvmssys (vms_kif.h) + vmsprocess/vmslnm/
 # vmsfs/vmsrms public headers (prototypes referenced across the RTL/syssvc).
 INCS="-I$SRC/include -I$HERE/../libvmssys \

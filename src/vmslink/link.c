@@ -121,6 +121,16 @@
 #ifndef R_X86_64_REX_GOTPCRELX
 #define R_X86_64_REX_GOTPCRELX 42  /* REX-prefixed relaxable GOTPCREL variant */
 #endif
+#ifndef R_X86_64_GOTPCRELX
+#define R_X86_64_GOTPCRELX     41  /* non-REX relaxable GOTPCREL variant (vms-e5d,
+                                     * grounded by docs/design-link-x86_64-relocs.md
+                                     * and readelf -r on real musl .o files: e.g.
+                                     * `cmp sym@GOTPCREL(%rip), reg` / other non-REX
+                                     * encodings gas can relax). Same disp32-write
+                                     * codegen as GOTPCREL/REX_GOTPCRELX — LINK.EXE
+                                     * does not implement the relaxation either
+                                     * way, so all three are handled identically. */
+#endif
 
 /* x86_64 TLSDESC ("gnu2" TLS dialect) relocations (vms-2e4). The type set is
  * grounded by docs/design-link-x86_64-relocs.md; the CODEGEN below was
@@ -190,6 +200,17 @@ static void die(const char *msg)
  * exact name, so gcc's split sections (.text.unlikely, .rodata.str1.8,
  * .rodata.cst8, .data.rel.ro, ...) all land in the right output region. (vms-fa1) */
 enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_BSS, B_TDATA, B_TBSS };
+
+/* The buckets LINK.EXE places FLAT (a real image vaddr per input section) and
+ * can therefore apply relocations into. B_BSS/B_TBSS are NOBITS (no bytes to
+ * patch); B_TDATA is reached through TLSDESC, not a flat address; B_NONE is an
+ * allocatable section type this linker does not place at all. Anything outside
+ * this set that still carries relocations is REPORTED, never dropped in
+ * silence. (vms-a66) */
+static int bucket_is_patchable(int b)
+{
+    return b == B_TEXT || b == B_RODATA || b == B_DATA;
+}
 
 /* One relocation, tagged with the section it patches (site = sec_va + off). */
 struct reloc { uint64_t off; uint64_t info; int64_t add; int sec; };
@@ -351,17 +372,37 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
          * a relocation into one dies loudly rather than silently misplacing. */
     }
 
-    /* Collect relocations against every code AND data section into one flat
-     * list, each tagged with the section it patches. Data-section relocations
-     * are .rela.data ABS64 pointer initializers (stdio FILE structs, locale
-     * ptables, *_lockptr sets, ...) — resolved + biased at emit time. (vms-004
-     * folds in vms-a17; formerly only B_TEXT was collected.) */
+    /* Collect relocations against every FLAT-PLACED allocatable section into one
+     * flat list, each tagged with the section it patches.
+     *
+     *   B_TEXT   — instruction patches (call/jmp, PC-rel, GOT, TLSDESC).
+     *   B_DATA   — .rela.data ABS64 pointer initializers (stdio FILE structs,
+     *              locale ptables, *_lockptr sets, ...) resolved + biased at
+     *              emit time (vms-004, folds in vms-a17).
+     *   B_RODATA — READ-ONLY relocated data. This is NOT decoration: gcc emits
+     *              every `switch` jump table into a per-function read-only
+     *              section (`.rodata.<fn>`) as `.long target - table_base`, and
+     *              because the targets live in .text and the table lives in
+     *              .rodata the assembler CANNOT fold the difference — it leaves
+     *              a real R_X86_64_PC32 per arm (and .eh_frame's CIE/FDE
+     *              pointers are the same shape). Dropping these left every such
+     *              table ALL ZERO, so the dispatch `jmp *rdx` computed
+     *              table_base + 0 and executed the table's own bytes: musl's
+     *              printf_core/pop_arg (i.e. any %-conversion) jumped into the
+     *              "(null)" string in DECC$SHR's .rodata. Empirically 902 such
+     *              relocations in musl's libc.a and 554 in DCL's own objects, so
+     *              the crash needs no unusual image size to appear — only a code
+     *              path that reaches a jump table. (vms-a66)
+     *
+     * A RELA section whose target is allocatable but NOT flat-placed cannot be
+     * patched (nothing assigns it an address). LINK.EXE reports that on
+     * SYS$ERROR rather than dropping it silently — a silent drop is exactly how
+     * the .rodata gap survived four proofs. (vms-a66) */
     int cap = 0;
     for (int i = 0; i < o->nsh; i++) {
         if (o->sh[i].sh_type != SHT_RELA) continue;
         int t = (int)o->sh[i].sh_info;
-        if (t >= 0 && t < o->nsh &&
-            (o->sec_bucket[t] == B_TEXT || o->sec_bucket[t] == B_DATA))
+        if (t >= 0 && t < o->nsh && bucket_is_patchable(o->sec_bucket[t]))
             cap += o->sh[i].sh_size / sizeof(Elf64_Rela);
     }
     o->relocs = cap ? malloc((size_t)cap * sizeof(struct reloc)) : NULL;
@@ -369,11 +410,22 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
     o->nreloc = 0;
     for (int i = 0; i < o->nsh; i++) {
         int t = (int)o->sh[i].sh_info;
-        if (t < 0 || t >= o->nsh ||
-            (o->sec_bucket[t] != B_TEXT && o->sec_bucket[t] != B_DATA)) continue;
-        if (o->sh[i].sh_type == SHT_REL)
+        if (t < 0 || t >= o->nsh) continue;
+        if (o->sh[i].sh_type == SHT_REL && bucket_is_patchable(o->sec_bucket[t]))
             die("REL relocations are unsupported (expected RELA)");
-        if (o->sh[i].sh_type != SHT_RELA) continue;
+        if (o->sh[i].sh_type != SHT_RELA || o->sh[i].sh_size == 0) continue;
+        if (!bucket_is_patchable(o->sec_bucket[t])) {
+            if (o->sh[t].sh_flags & SHF_ALLOC)
+                fprintf(stderr, "%%LINK-W-RELSKIP, %s(%s): %d relocation%s NOT "
+                        "applied — target section %s is allocatable but LINK.EXE "
+                        "does not place it flat\n",
+                        name,
+                        o->shstr + o->sh[i].sh_name,
+                        (int)(o->sh[i].sh_size / sizeof(Elf64_Rela)),
+                        o->sh[i].sh_size == sizeof(Elf64_Rela) ? "" : "s",
+                        o->shstr + o->sh[t].sh_name);
+            continue;
+        }
         Elf64_Rela *ra = (Elf64_Rela *)(o->buf + o->sh[i].sh_offset);
         int n = o->sh[i].sh_size / sizeof(Elf64_Rela);
         for (int j = 0; j < n; j++)
@@ -559,7 +611,11 @@ static void parse_gsmatch(char *spec, uint32_t *kind, uint32_t *maj, uint32_t *m
  * -------------------------------------------------------------------------- */
 #define ALIGN_UP(x, a) (((x) + ((a) - 1)) & ~((uint64_t)(a) - 1))
 #define PAGE 0x1000u
-#define CRT0_NINSN 7   /* instructions in the synthesized executable crt0 (vms-ba1) */
+#define CRT0_NINSN 7   /* aarch64 instruction count in the synthesized executable
+                        * crt0 (vms-ba1); *4 = 28 bytes reserved for the stub,
+                        * which the x86_64 crt0 stub (vms-206) also fits in
+                        * exactly (its 7 variable-length instructions total 28
+                        * bytes too) -- same reservation, both encodings. */
 
 /* --------------------------------------------------------------------------
  * Consumer/executable linking: bind imports to producer symbol vectors.
@@ -1057,7 +1113,7 @@ static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slo
     } else if (type == R_AARCH64_LD64_GOT_LO12_NC) { /* 8-byte load, scale 3 */
         uint32_t imm = (uint32_t)((slot & 0xFFF) >> 3);
         *insn = (*insn & ~(0xFFFu << 10)) | (imm << 10);
-    } else { /* R_X86_64_GOTPCREL / R_X86_64_REX_GOTPCRELX */
+    } else { /* R_X86_64_GOTPCREL / R_X86_64_GOTPCRELX / R_X86_64_REX_GOTPCRELX */
         int64_t d = (int64_t)slot + add - (int64_t)site;
         *insn = (uint32_t)(uint64_t)d;
     }
@@ -1066,7 +1122,8 @@ static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slo
 static int is_got_reloc(uint32_t type)
 {
     return type == R_AARCH64_ADR_GOT_PAGE || type == R_AARCH64_LD64_GOT_LO12_NC ||
-           type == R_X86_64_GOTPCREL || type == R_X86_64_REX_GOTPCRELX;
+           type == R_X86_64_GOTPCREL || type == R_X86_64_GOTPCRELX ||
+           type == R_X86_64_REX_GOTPCRELX;
 }
 
 /* A synthesized TLSDESC entry (two quadwords): [0]=resolver (IMGACT fills with
@@ -1258,7 +1315,16 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     for (int i = 0; i < nobj; i++)
         for (int r = 0; r < objs[i].nreloc; r++) {
             uint32_t type = ELF64_R_TYPE(objs[i].relocs[r].info);
-            int is_call = (type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26);
+            /* R_X86_64_PLT32 is x86_64's call/jmp relocation (vms-206): the
+             * SAME reloc type covers both an intra-image callee (patched as a
+             * plain PC32-style datum below, no stub) and a cross-image call
+             * to a --use producer's universal (routed here exactly like
+             * aarch64's CALL26/JUMP26, into a PLT stub). Which one applies is
+             * decided by defined_placed()/find_universal() below, same as the
+             * aarch64 path -- an intra-image PLT32 never reaches find_universal
+             * because defined_placed() is true and the loop `continue`s. */
+            int is_call = (type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26 ||
+                           type == R_X86_64_PLT32);
             int is_gotr = is_got_reloc(type);
             if (!is_call && !is_gotr) continue;
             uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
@@ -1777,6 +1843,15 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                     uint32_t op = (type == R_AARCH64_JUMP26) ? 0x14000000u
                                                              : 0x94000000u;
                     *insn = op | imm26;
+                } else if (ii >= 0 && type == R_X86_64_PLT32) {
+                    /* Cross-image CALL import (vms-206): a PC32-style call to
+                     * the PLT stub instead of the (nonexistent, in this
+                     * object set) callee -- same S+A-P shape the intra-image
+                     * PC32/PLT32 datum write below uses, just with S = the
+                     * stub's address. rl->add carries the real x86_64 addend
+                     * (typically -4, same as the GOTPCREL/PC32 cases above). */
+                    int64_t d = (int64_t)imp[ii].plt_va + rl->add - (int64_t)site;
+                    *insn = (uint32_t)(uint64_t)d;
                 } else {
                     uint64_t target =
                         resolve_ref(objs, nobj, i, ELF64_R_SYM(rl->info));
@@ -1788,16 +1863,30 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         }
     }
 
-    /* PLT stubs for call imports: adrp x16,cell ; ldr x16,[x16,#lo12] ; br x16.
-     * (Data-import slots stay unused — the site reads the import cell directly.)
-     * The import-GOT cells stay 0; IMGACT fills them from .vms$imp. (vms-e65) */
+    /* PLT stubs for call imports: aarch64 = adrp x16,cell ; ldr x16,[x16,#lo12] ;
+     * br x16 (page+lo12 split GOT load then indirect branch). x86_64 = a single
+     * `jmp *disp32(%rip)` (FF 25 imm32): RIP-relative addressing reaches the
+     * whole address space in one instruction, so no page/lo12 split is needed --
+     * the memory operand IS the import-GOT cell, read indirectly exactly like
+     * the aarch64 stub's ldr does. Both stubs jump through the SAME import-GOT
+     * cell (imp[i].got_va), left 0 here; IMGACT fills it with the producer's
+     * resolved address from .vms$imp at activation. (Data-import slots stay
+     * unused — the site reads the import cell directly.) (vms-e65, vms-206) */
     for (int i = 0; i < nimp; i++) {
         if (imp[i].is_data) continue;
-        uint32_t *stub = (uint32_t *)(img + imp[i].plt_va);
-        int64_t pd = (int64_t)(imp[i].got_va >> 12) - (int64_t)(imp[i].plt_va >> 12);
-        stub[0] = enc_adrp(16, pd);
-        stub[1] = enc_ldr_u64(16, 16, (uint32_t)(imp[i].got_va & 0xfff));
-        stub[2] = enc_br(16);
+        if (g_out_machine == EM_X86_64) {
+            uint8_t *stub = img + imp[i].plt_va;
+            stub[0] = 0xFFu; stub[1] = 0x25u;   /* jmp *disp32(%rip) */
+            int32_t d = (int32_t)((int64_t)imp[i].got_va -
+                                  (int64_t)(imp[i].plt_va + 6));
+            memcpy(stub + 2, &d, 4);
+        } else {
+            uint32_t *stub = (uint32_t *)(img + imp[i].plt_va);
+            int64_t pd = (int64_t)(imp[i].got_va >> 12) - (int64_t)(imp[i].plt_va >> 12);
+            stub[0] = enc_adrp(16, pd);
+            stub[1] = enc_ldr_u64(16, 16, (uint32_t)(imp[i].got_va & 0xfff));
+            stub[2] = enc_br(16);
+        }
     }
 
     /* Synthesized crt0 (executable entry). The initial process stack the kernel
@@ -1812,16 +1901,41 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         uint64_t main_va = resolve_named(objs, nobj, "main",
             "--executable object set defines no main()");
         if (exit_imp < 0) die("internal: exit import missing for crt0");
-        uint32_t *c = (uint32_t *)(img + crt0_va);
-        c[0] = 0xF94003E0u;   /* ldr  x0, [sp]              ; x0 = argc          */
-        c[1] = 0x910023E1u;   /* add  x1, sp, #8            ; x1 = argv          */
-        c[2] = 0x8B000C22u;   /* add  x2, x1, x0, lsl #3    ; &argv[argc] (=NULL) */
-        c[3] = 0x91002042u;   /* add  x2, x2, #8            ; x2 = envp          */
-        int64_t dmain = (int64_t)main_va - (int64_t)(crt0_va + 16);
-        c[4] = 0x94000000u | (uint32_t)((dmain >> 2) & 0x03FFFFFF);  /* bl main   */
-        int64_t dexit = (int64_t)imp[exit_imp].plt_va - (int64_t)(crt0_va + 20);
-        c[5] = 0x94000000u | (uint32_t)((dexit >> 2) & 0x03FFFFFF);  /* bl exit   */
-        c[6] = 0xD4200000u;   /* brk #0                     ; exit never returns */
+        if (g_out_machine == EM_X86_64) {
+            /* x86_64 crt0 (vms-206): same contract as the aarch64 stub below --
+             * recover argc/argv/envp off the initial process stack per the
+             * SysV entry layout ([rsp]=argc, rsp+8..=argv[], NULL, envp[],
+             * NULL, auxv) and call main(argc,argv,envp) in the SysV integer
+             * arg registers (rdi,rsi,rdx), then tail the return value (eax)
+             * into exit()'s argument (edi). No pushes happen before `call
+             * main`, so RSP stays exactly as the kernel/IMGACT left it --
+             * 16-byte aligned per the ABI's call-site rule, matching what a
+             * real _start entry requires. */
+            uint8_t *c = img + crt0_va;
+            memcpy(c +  0, "\x48\x8B\x3C\x24", 4);     /* mov rdi,[rsp]          ; argc */
+            memcpy(c +  4, "\x48\x8D\x74\x24\x08", 5); /* lea rsi,[rsp+8]        ; argv */
+            memcpy(c +  9, "\x48\x8D\x54\xFE\x08", 5); /* lea rdx,[rsi+rdi*8+8]  ; envp */
+            c[14] = 0xE8;                              /* call main (rel32)          */
+            int32_t dmain = (int32_t)((int64_t)main_va - (int64_t)(crt0_va + 19));
+            memcpy(c + 15, &dmain, 4);
+            memcpy(c + 19, "\x89\xC7", 2);              /* mov edi,eax  ; exit code   */
+            c[21] = 0xE8;                               /* call exit (rel32)          */
+            int32_t dexit = (int32_t)((int64_t)imp[exit_imp].plt_va -
+                                      (int64_t)(crt0_va + 26));
+            memcpy(c + 22, &dexit, 4);
+            memcpy(c + 26, "\x0F\x0B", 2);               /* ud2 ; exit never returns  */
+        } else {
+            uint32_t *c = (uint32_t *)(img + crt0_va);
+            c[0] = 0xF94003E0u;   /* ldr  x0, [sp]              ; x0 = argc          */
+            c[1] = 0x910023E1u;   /* add  x1, sp, #8            ; x1 = argv          */
+            c[2] = 0x8B000C22u;   /* add  x2, x1, x0, lsl #3    ; &argv[argc] (=NULL) */
+            c[3] = 0x91002042u;   /* add  x2, x2, #8            ; x2 = envp          */
+            int64_t dmain = (int64_t)main_va - (int64_t)(crt0_va + 16);
+            c[4] = 0x94000000u | (uint32_t)((dmain >> 2) & 0x03FFFFFF);  /* bl main   */
+            int64_t dexit = (int64_t)imp[exit_imp].plt_va - (int64_t)(crt0_va + 20);
+            c[5] = 0x94000000u | (uint32_t)((dexit >> 2) & 0x03FFFFFF);  /* bl exit   */
+            c[6] = 0xD4200000u;   /* brk #0                     ; exit never returns */
+        }
     }
 
     struct ovmx_sv_header *svh = (struct ovmx_sv_header *)(img + off_sv);

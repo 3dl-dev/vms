@@ -27,6 +27,60 @@
 #   docker run --rm -it ovmx-boot                           # fat initramfs
 #   docker run --rm -it -e INITRD=slim ovmx-boot            # slim initramfs
 
+# -- link-native stage -----------------------------------------------------
+# Builds the VMS-native LINK.EXE shareable-image graph (DECC$SHR.EXE,
+# LIBVMSSYS$SHR.EXE, LIBVMSPROCESS$SHR.EXE, LIBVMSLNM$SHR.EXE,
+# LIBVMSFS$SHR.EXE, LIBVMS$SHR.EXE, LIBVMSRMS$SHR.EXE, DCL.EXE, LOGINOUT.EXE)
+# via `cmake --build --target link_native_graph` (OVMX_LINK_NATIVE, beads
+# vms-b6a/vms-6da, docs/design-link-native-toolchain.md) plus IMGACT.EXE (the
+# freestanding image activator, built by its own standalone Makefile — bead
+# vms-913.11). Replaces vms-913.6 (cancelled: DT_HASH/ld-based dynamic ELF
+# was a proven dead end) — these images carry NO DT_NEEDED/DT_HASH; IMGACT.EXE
+# activates them by resolving each image's .vms$sv symbol vector instead.
+#
+# Real alpine:3.20 musl (not musl-tools on Ubuntu) — same container CI's
+# link-native-cmake-x86_64 job uses; OVMX_LINK_NATIVE auto-detects ON only
+# when `$CC -dumpmachine` reports an aarch64/x86_64 *-musl triple, which
+# Ubuntu's musl-gcc wrapper does not.
+FROM --platform=linux/amd64 alpine:3.20 AS link-native
+
+RUN apk add --no-cache cmake gcc g++ musl-dev binutils make linux-headers
+
+WORKDIR /src
+COPY . .
+
+RUN cmake -B /tmp/build -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build /tmp/build --target link_native_graph -j"$(nproc)"
+
+# IMGACT.EXE — not part of the CMake OVMX_LINK_NATIVE graph (it gates on the
+# separate OVMX_IMGACT option, which CMake keeps mutually exclusive with
+# OVMX_STATIC and this configure never sets); built directly via its own
+# Makefile, same musl container, same x86_64 target.
+RUN cd src/imgact && make CC=gcc ARCH=x86_64
+
+# Ground-source gate, baked into the build itself (not just asserted by a
+# separate CI job elsewhere): every artifact this stage ships must be a real
+# LINK.EXE-built x86_64 image with NO DT_NEEDED/DT_HASH (LINK.EXE emits no
+# .dynamic section at all — resolution is via .vms$sv, not ld.so) and
+# IMGACT.EXE must be the freestanding activator (no PT_INTERP of its own).
+RUN set -e; \
+    SYSLIB=/tmp/build/link-native/SYSLIB; SYSEXE=/tmp/build/link-native/SYSEXE; \
+    for f in "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE; do \
+        echo "-- $f --"; \
+        readelf -h "$f" | grep -q "Machine:.*X86-64" || { echo "FAIL: $f not EM_X86_64"; exit 1; }; \
+        N=$(readelf -d "$f" 2>/dev/null | grep -c NEEDED || true); \
+        [ "$N" -eq 0 ] || { echo "FAIL: $f has $N DT_NEEDED entries (ld-linked, not VMS-native)"; exit 1; }; \
+        H=$(readelf -d "$f" 2>/dev/null | grep -c HASH || true); \
+        [ "$H" -eq 0 ] || { echo "FAIL: $f has $H DT_HASH entries (ld-linked, not VMS-native)"; exit 1; }; \
+    done; \
+    COUNT=$(ls "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE | wc -l); \
+    [ "$COUNT" -eq 9 ] || { echo "FAIL: expected 9 VMS-native artifacts, got $COUNT"; exit 1; }; \
+    readelf -h src/imgact/IMGACT.EXE | grep -q "Machine:.*X86-64" || { echo "FAIL: IMGACT.EXE not EM_X86_64"; exit 1; }; \
+    if readelf -l src/imgact/IMGACT.EXE 2>/dev/null | grep -q INTERP; then \
+        echo "FAIL: IMGACT.EXE itself must have no PT_INTERP"; exit 1; \
+    fi; \
+    echo "OK: 9 VMS-native LINK.EXE artifacts (EM_X86_64, zero DT_NEEDED/DT_HASH) + IMGACT.EXE"
+
 FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -34,8 +88,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake gcc make musl-tools linux-libc-dev \
     linux-headers-generic linux-image-generic \
-    kmod cpio \
+    kmod cpio binutils \
     && rm -rf /var/lib/apt/lists/*
+
+# VMS-native LINK.EXE shareable graph (DCL.EXE, LOGINOUT.EXE, the 7
+# shareables) + IMGACT.EXE, built by the link-native stage above.
+COPY --from=link-native /tmp/build/link-native/SYSLIB /link-native/SYSLIB
+COPY --from=link-native /tmp/build/link-native/SYSEXE /link-native/SYSEXE
+COPY --from=link-native /src/src/imgact/IMGACT.EXE /link-native/IMGACT.EXE
 
 # Determine kernel version and ensure build symlink exists
 RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && echo "$KVER" > /tmp/kver && \
@@ -89,15 +149,27 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSHLP \
              /initramfs-fat/vms/USERS && \
-    # OVMX binaries → SYSEXE (STARTUP.EXE is also /init)
+    # OVMX binaries → SYSEXE (STARTUP.EXE is also /init).
+    # DCL.EXE + LOGINOUT.EXE + the 7 shareables are the VMS-native LINK.EXE
+    # graph (link-native stage above, beads vms-b6a/vms-6da/vms-d0f5e) — ET_DYN
+    # images with a .vms$sv symbol vector, NO DT_NEEDED/DT_HASH, activated by
+    # IMGACT.EXE via PT_INTERP (replaces vms-913.6's cancelled DT_HASH/ld
+    # approach). STARTUP.EXE and IMGACT.EXE stay static/freestanding — same
+    # architectural requirement as today. The remaining utilities (HELP,
+    # AUTHORIZE, MAIL, MONITOR, INITIALIZE) have no mk_*.sh VMS-native recipe
+    # yet, so they ship static for 0.1 (scope decision, vms-d0f5e) — mixed
+    # static+dynamic initramfs, DCL as the flagship dynamic proof.
     cp build-static/bin/STARTUP.EXE    /initramfs-fat/init && \
-    cp build-static/bin/DCL.EXE        /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-    cp build-static/bin/LOGINOUT.EXE   /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp /link-native/IMGACT.EXE         /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp "/link-native/SYSEXE/DCL.EXE"      /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp "/link-native/SYSEXE/LOGINOUT.EXE" /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp /link-native/SYSLIB/*.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSLIB/ && \
     cp build-static/bin/HELP.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/AUTHORIZE.EXE  /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/MAIL.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/MONITOR.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/INITIALIZE.EXE /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/INSTALL.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # Kernel modules
     cp src/kernel/vms.ko /initramfs-fat/lib/modules/ && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-fat/lib/modules/ && \
@@ -105,6 +177,29 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR/ && \
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # Ground-source gate: the SHIPPED DCL.EXE AND LOGINOUT.EXE (the files
+    # that actually go into the initramfs STARTUP execs at boot, not a copy
+    # elsewhere) must both be the VMS-native ET_DYN LINK.EXE output — no
+    # DT_NEEDED, no DT_HASH. Both are gated, not just DCL.EXE: STARTUP execs
+    # LOGINOUT.EXE first (src/ovmx_init/ovmx_init.c), and LOGINOUT is what
+    # authenticates against SYSUAF and execs DCL.EXE next (tools/
+    # vms_login.c) — LOGINOUT is the FIRST VMS-native image in the login
+    # chain, and a DCL.EXE-only gate would not have caught a regression
+    # that reintroduced an ld/ld.so-linked LOGINOUT.EXE ahead of it (vms-fbc).
+    # This is a re-check of the ACTUAL SHIPPED bytes, deliberately redundant
+    # with the generic 9-artifact loop in the link-native stage above (which
+    # checks the build-output copies, not what cp placed in the initramfs):
+    # a gate that only proves properties of a source file two directories
+    # away from the one that boots is not proof of what boots.
+    for name in "DCL.EXE" "LOGINOUT.EXE"; do \
+        IMG="/initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/$name" && \
+        readelf -h "$IMG" | grep -q "Machine:.*X86-64" || { echo "FAIL: shipped $name not EM_X86_64"; exit 1; } && \
+        N=$(readelf -d "$IMG" 2>/dev/null | grep -c NEEDED || true) && \
+        [ "$N" -eq 0 ] || { echo "FAIL: shipped $name has $N DT_NEEDED entries"; exit 1; } && \
+        H=$(readelf -d "$IMG" 2>/dev/null | grep -c HASH || true) && \
+        [ "$H" -eq 0 ] || { echo "FAIL: shipped $name has $H DT_HASH entries"; exit 1; } && \
+        echo "OK: shipped $name is VMS-native (EM_X86_64, zero DT_NEEDED/DT_HASH)"; \
+    done && \
     # Pack the fat initramfs
     cd /initramfs-fat && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx.cpio.gz && \
     echo "FAT initramfs: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"
@@ -175,7 +270,7 @@ FROM ubuntu:24.04 AS runner
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    qemu-system-x86 qemu-system-arm qemu-efi-aarch64 \
+    qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /boot/vmlinuz /boot/vmlinuz

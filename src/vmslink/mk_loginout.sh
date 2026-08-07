@@ -64,11 +64,13 @@
 #             <DECC$SHR.EXE> <LIBVMS$SHR.EXE> <LIBVMSPROCESS$SHR.EXE> \
 #             <LIBVMSFS$SHR.EXE> <LIBVMSLNM$SHR.EXE> <LIBVMSRMS$SHR.EXE> \
 #             <LIBVMSSYS$SHR.EXE> [vms-login-src-file] [repo-src-dir]
-# Env:    CC (default gcc)
-# Must run in the arm64 musl container where the producer .EXE already exist
-# (mirrors mk_dcl.sh's requirement -- aarch64-only, per vms-c39: x86_64 needs
-# vms-bdf's separate proof that LINK.EXE has an x86_64 backend at all; do not
-# wait on it).
+# Env:    CC (default gcc), CFLAGS (env-overridable, default aarch64 musl
+#         flags; the x86_64 caller sets CFLAGS with -mtls-dialect=gnu2 in
+#         place of -mno-outline-atomics -- same convention every other
+#         mk_*_shr.sh took on since vms-cb5f; this one hadn't yet, vms-6da)
+# Must run in the target-arch musl container where the producer .EXE already
+# exist (mirrors mk_dcl.sh's requirement). LINK.EXE's x86_64 backend landed
+# vms-bdf/vms-cb5f/vms-a66; x86_64 is wired the same way as aarch64 now.
 set -e
 
 LINK_EXE=${1:?usage: mk_loginout.sh <LINK.EXE> <out> <DECC\$SHR> <LIBVMS\$SHR> <LIBVMSPROCESS\$SHR> <LIBVMSFS\$SHR> <LIBVMSLNM\$SHR> <LIBVMSRMS\$SHR> <LIBVMSSYS\$SHR> [vms_login.c] [repo-src]}
@@ -93,7 +95,7 @@ done
 WORK=${WORK:-/tmp/mk-loginout}
 mkdir -p "$WORK"
 
-CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics"
+CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics}"
 DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
 INCS="-I$REPO_SRC/libvms/include -I$REPO_SRC/vmsfs/include \
 -I$REPO_SRC/vmslnm/include -I$REPO_SRC/vmsrms/include \

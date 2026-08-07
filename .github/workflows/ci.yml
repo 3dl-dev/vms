@@ -905,9 +905,12 @@ jobs:
   # success path (activated program prints PASS, exits 0) and the failure
   # path (missing shareable image -> %IMGACT-F-IMGNOTFND, nonzero exit).
   #
-  # IMGACT.EXE is aarch64-only until bead vms-913.11 (x86_64). GitHub runners
-  # are x86_64, so the harness runs under arm64 emulation via binfmt/QEMU.
-  # This is a hard gate (rule 10): a broken activator fails the build.
+  # This job covers the aarch64 backend specifically (the x86_64 backend,
+  # bead vms-913.11, has its own native-runner counterpart: Job 9b
+  # imgact-x86_64 below, plus the full boot-to-login proof in uat-session).
+  # GitHub runners are x86_64, so this aarch64 harness runs under arm64
+  # emulation via binfmt/QEMU. This is a hard gate (rule 10): a broken
+  # activator fails the build.
   # -----------------------------------------------------------------------
   imgact-proof:
     name: IMGACT.EXE Activation Proof (musl)
@@ -941,8 +944,10 @@ jobs:
   # build the whole tree with -DOVMX_IMGACT=ON and assert (via readelf) that
   # shareable images carry VMS SONAMEs + DT_HASH, executables carry
   # PT_INTERP=IMGACT.EXE + DT_HASH, STARTUP.EXE/IMGACT.EXE stay static, and
-  # nothing uses GNU_HASH. aarch64-only until bead vms-913.11; runs under
-  # arm64 emulation on the x86_64 runner.
+  # nothing uses GNU_HASH. This job covers the aarch64 backend; the x86_64
+  # counterpart (bead vms-913.11) is Job 9b (imgact-x86_64) below, which
+  # runs natively with no emulation. This job runs under arm64 emulation
+  # on the x86_64 runner.
   # -----------------------------------------------------------------------
   imgact-build-mode:
     name: OVMX_IMGACT Build Mode (musl)
@@ -1121,6 +1126,102 @@ jobs:
               apk add --no-cache gcc musl-dev binutils >/dev/null
               export CC=gcc WORK=/tmp/decc-shr-test
               sh /src/src/vmslink/test/run_decc_shr.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # link-native-cmake: the VMS-native LINK.EXE graph wired into CMake
+  # (bead vms-b6a, pillar vms-ade). Every job above this one drives the
+  # mk_*_shr.sh recipes by hand from a raw shell harness; this job proves the
+  # SAME recipes are reachable as ordinary `cmake --build` output when the
+  # compiler targets aarch64 musl (OVMX_LINK_NATIVE auto-detects ON), so the
+  # shipped OVMX libraries can be the VMS-native LINK.EXE shareables instead
+  # of ld-linked .so files. Asserts, via readelf, that all 9 artifacts (5
+  # libs + DECC$SHR + DCL.EXE + LOGINOUT.EXE) are EM_AARCH64 with zero
+  # DT_NEEDED entries -- no ld/ld.so anywhere in the graph. Runs under arm64
+  # emulation. The x86_64 analog (link-native-cmake-x86_64, vms-6da) follows
+  # immediately below, sharing this SAME build_link_native.sh/CMakeLists.txt
+  # mechanism (ARCH auto-detected from the compiler triple) -- not a forked
+  # target or a second custom command.
+  # -----------------------------------------------------------------------
+  link-native-cmake:
+    name: VMS-native LINK.EXE Graph via CMake (OVMX_LINK_NATIVE)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: cmake -B build && cmake --build build (arm64 musl) -- assert the shipped graph is LINK.EXE-native
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache cmake gcc g++ musl-dev binutils make linux-headers >/dev/null
+              cmake -B /tmp/build -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=Release
+              cmake --build /tmp/build --target link_native_graph -j"$(nproc)"
+              echo "== readelf: EM_AARCH64, zero DT_NEEDED, across all 9 artifacts =="
+              SYSLIB=/tmp/build/link-native/SYSLIB
+              SYSEXE=/tmp/build/link-native/SYSEXE
+              for f in "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE; do
+                  echo "-- $f --"
+                  readelf -h "$f" | grep -q "Machine:.*AArch64" || { echo "FAIL: $f not EM_AARCH64"; exit 1; }
+                  N=$(readelf -d "$f" 2>/dev/null | grep -c NEEDED || true)
+                  [ "$N" -eq 0 ] || { echo "FAIL: $f has $N DT_NEEDED entries (ld-linked, not VMS-native)"; exit 1; }
+              done
+              COUNT=$(ls "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE | wc -l)
+              [ "$COUNT" -eq 9 ] || { echo "FAIL: expected 9 artifacts (5 libs + DECC\$SHR + DCL.EXE + LOGINOUT.EXE), got $COUNT"; exit 1; }
+              echo "OK: $COUNT VMS-native LINK.EXE artifacts, all EM_AARCH64, zero DT_NEEDED"
+            '
+
+  # -----------------------------------------------------------------------
+  # link-native-cmake-x86_64: the x86_64 analog of link-native-cmake above
+  # (bead vms-6da, epic vms-b93 "0.1 pre-release" -- the direct blocker of
+  # vms-d0f5e's fat initramfs). Same CMakeLists.txt/build_link_native.sh
+  # mechanism, ARCH auto-detected from the compiler triple (aarch64-musl vs
+  # x86_64-musl) -- NOT a duplicated custom target. x86_64 is the project's
+  # primary architecture (CLAUDE.md Rule 5) and this is what a shipped fat
+  # initramfs actually needs. Asserts, via readelf, that all 9 artifacts are
+  # EM_X86_64 with zero DT_NEEDED entries. Unlike the arm64 job, GitHub's
+  # runner IS x86_64 (see dcl-native-x86_64 above), so this needs no QEMU
+  # binfmt registration -- the alpine:3.20/amd64 container runs natively.
+  # -----------------------------------------------------------------------
+  link-native-cmake-x86_64:
+    name: VMS-native LINK.EXE Graph via CMake, x86_64 (OVMX_LINK_NATIVE)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: cmake -B build && cmake --build build (x86_64 musl) -- assert the shipped graph is LINK.EXE-native
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache cmake gcc g++ musl-dev binutils make linux-headers >/dev/null
+              cmake -B /tmp/build -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=Release
+              cmake --build /tmp/build --target link_native_graph -j"$(nproc)"
+              echo "== readelf: EM_X86_64, zero DT_NEEDED, across all 9 artifacts =="
+              SYSLIB=/tmp/build/link-native/SYSLIB
+              SYSEXE=/tmp/build/link-native/SYSEXE
+              for f in "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE; do
+                  echo "-- $f --"
+                  readelf -h "$f" | grep -q "Machine:.*X86-64" || { echo "FAIL: $f not EM_X86_64"; exit 1; }
+                  N=$(readelf -d "$f" 2>/dev/null | grep -c NEEDED || true)
+                  [ "$N" -eq 0 ] || { echo "FAIL: $f has $N DT_NEEDED entries (ld-linked, not VMS-native)"; exit 1; }
+              done
+              COUNT=$(ls "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE | wc -l)
+              [ "$COUNT" -eq 9 ] || { echo "FAIL: expected 9 artifacts (5 libs + DECC\$SHR + DCL.EXE + LOGINOUT.EXE), got $COUNT"; exit 1; }
+              echo "OK: $COUNT VMS-native LINK.EXE artifacts, all EM_X86_64, zero DT_NEEDED"
             '
 
   # -----------------------------------------------------------------------
@@ -1457,6 +1558,71 @@ jobs:
               sh /src/src/imgact/test/run_multiobj_exec.sh
             '
 
+  # -----------------------------------------------------------------------
+  # Job: Multi-Object main() Executable Link + Activate — x86_64 (vms-206)
+  #
+  # x86_64 counterpart of multiobj-exec. Proves LINK.EXE's emit_shareable()
+  # synthesizes REAL x86_64 machine code, not the aarch64 words it silently
+  # reused before vms-206, for (1) the crt0 entry stub of a main()-based
+  # --executable and (2) the PLT stub + import-CALL routing for a cross-image
+  # R_X86_64_PLT32 call to a --use producer's universal. Runs natively (both
+  # the runner and the project's dev host are x86_64) — no docker, no QEMU,
+  # no emulation in the path under test: the real kernel ELF loader invokes
+  # IMGACT.EXE via PT_INTERP exactly as it would for any process.
+  # -----------------------------------------------------------------------
+  multiobj-exec-x86_64:
+    name: Multi-Object main() Executable Link + Activate — x86_64 (vms-206)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Link + activate a multi-object main() program through IMGACT.EXE (native x86_64)
+        run: |
+          export CC=gcc WORK=/tmp/multiobj-exec-x86_64
+          sh src/imgact/test/run_multiobj_exec_x86_64.sh
+
+  # -----------------------------------------------------------------------
+  # Job: Read-only-section relocations — x86_64 (vms-a66)
+  #
+  # LINK.EXE used to collect relocations ONLY against sections it bucketed
+  # B_TEXT or B_DATA, silently discarding every relocation whose target was a
+  # read-only allocatable section. gcc emits each switch jump table into
+  # `.rodata` as `.long arm - table_base` (one R_X86_64_PC32 per arm, because
+  # the arms are in .text and the table is not), so those tables came out ALL
+  # ZERO and the dispatch `jmp *rdx` executed the table's own bytes. That is
+  # what made DCL.EXE segfault on x86_64: musl's pop_arg jumped into the
+  # "(null)" string in DECC$SHR's .rodata on the first %-conversion.
+  #
+  # The three jobs that "covered" this path before (multiobj-exec-x86_64,
+  # vmslink-x86_64, exec-tls) all passed through the bug because their
+  # specimens contained no switch big enough for a jump table and never
+  # executed one. This job reproduces the SHAPE directly — it is not a
+  # scale/import-count gate — and diffs the activated image's output against
+  # the same source built by the system toolchain.
+  # -----------------------------------------------------------------------
+  rodata-reloc-x86_64:
+    name: Read-only-section relocations (switch jump tables) — x86_64 (vms-a66)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Link + activate a jump-table-bearing image against real musl DECC$SHR (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/rodata-reloc-x86_64
+              sh /src/src/vmslink/test/run_rodata_reloc_x86_64.sh
+            '
+
   exec-tls:
     name: Executable-Own TLS Link + Activate
     runs-on: ubuntu-latest
@@ -1514,6 +1680,40 @@ jobs:
               set -e
               apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
               export CC=gcc WORK=/tmp/dcl-native DCL_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_dcl_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # dcl-native-x86_64 — the x86_64 analog of dcl-native above (bead vms-cb5f,
+  # vms-bdf's own done-condition, epic vms-b93 "0.1 pre-release"). Reproduces
+  # the SAME proof (real DCL.EXE, the full six-library producer graph, IMGACT
+  # activation, the SHOW TIME / A=2+3 SHOW SYMBOL scripted session, zero
+  # ld/ld.so) through the x86_64 LINK.EXE path merged by vms-8f5 (simple
+  # relocs) + vms-cd1 (GOT-relative DATA imports) + vms-2e4 (gnu2 TLSDESC) +
+  # vms-206 (crt0 + cross-image CALL PLT stubs). Shares run_dcl_native.sh
+  # (and lib_build_graph.sh) verbatim with the arm64 job above -- ARCH=x86_64
+  # is a parameter of the SAME script, not a forked copy (vms-cb5f). Unlike
+  # the arm64 job, GitHub's runner IS x86_64, so this needs no QEMU binfmt
+  # registration -- the alpine:3.20/amd64 container runs natively and DCL.EXE
+  # activates directly, no qemu-user in the loop.
+  # -----------------------------------------------------------------------
+  dcl-native-x86_64:
+    name: DCL.EXE VMS-native Link + Activate, x86_64 (vms-bdf done-condition)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Link the real src/vmsdcl into DCL.EXE VMS-native + activate a scripted session through IMGACT.EXE (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/dcl-native-x86_64 DCL_EXPECT_LINK=1
               sh /src/src/imgact/test/run_dcl_native.sh
             '
 

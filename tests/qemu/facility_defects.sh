@@ -481,6 +481,12 @@ register-adopt-pid-not-reported"
 # never proven capable of going red, while printing a PASS a reader would
 # reasonably take as covering the whole harness.
 #
+# test_kmod_vmsfs_exepath (rd vms-00e) joins them for the same reason: it
+# mounts vmsfs and reads /proc/<pid>/exe and /proc/<pid>/fd/<n>, and never
+# opens /dev/vms. Its own red/green control is a vmsfs.ko mutation, not an
+# executive one -- it was measured failing 3 phases against the pre-fix
+# ->d_revalidate and passing 28/28 against the fixed one.
+#
 # SCOPE_OUT_UNIT_DIRS   directories under src/ whose .c files are NOT executive
 #                       translation units. Files there must NOT be named by any
 #                       defect (a control there would mean the scope statement
@@ -488,7 +494,7 @@ register-adopt-pid-not-reported"
 # SCOPE_OUT_SUITES      derived tests/qemu suites with no facility control.
 # ---------------------------------------------------------------------------
 SCOPE_OUT_UNIT_DIRS="kernel/vmsfs"
-SCOPE_OUT_SUITES="test_kmod_vmsfs test_kmod_vmsfs_blkdev"
+SCOPE_OUT_SUITES="test_kmod_vmsfs test_kmod_vmsfs_blkdev test_kmod_vmsfs_exepath"
 
 scope_out_why() {
     cat <<'EOF'

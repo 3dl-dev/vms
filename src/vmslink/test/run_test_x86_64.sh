@@ -192,6 +192,50 @@ echo "norelax consumer exit code = $RC (expect 99)"
 [ "$RC" -eq 99 ] || { echo "FAIL: R_X86_64_GOTPCREL cross-image DATA import did not yield 99 (got $RC)"; exit 1; }
 
 echo
+echo "== intra-image indirect call: R_X86_64_GOTPCRELX (type 41, vms-e5d) =="
+# Grounded against real musl/gcc-toolchain objects (docs/design-link-x86_64-
+# relocs.md's standing methodology + this bead's own survey): plain (non-REX)
+# GOTPCRELX is what gas emits for a non-REX-prefixed GOT-indirect instruction
+# -- observed byte-exactly as `call *sym@GOTPCREL(%rip)` / `jmp *sym@GOTPCREL
+# (%rip)` (opcode ff /2 or ff /4, no REX prefix: near call/jmp defaults to a
+# 64-bit operand without REX.W), which musl-gcc emits with -fno-plt (used
+# empirically: 1521 real occurrences in Alpine x86_64 libgcc.a alone --
+# GCC's runtime calling abort()/memcpy()/etc. through the GOT instead of a
+# lazy PLT stub -- the actual gap vms-cb5f's whole-archive DECC$SHR build hit,
+# not libc.a itself). Same flat-disp32-write shape as GOTPCREL/REX_GOTPCRELX
+# (addend -4), confirmed via objdump -dr before this fix landed.
+#
+# UNLIKE the cross-image DATA import above, this is an INTRA-image reference:
+# both caller and callee are defined in the SAME shareable, so the GOT cell is
+# filled by LINK.EXE itself (not IMGACT's .vms$imp) and recorded in .vms$rel
+# for load-bias. gotpcrelx_activate.c performs that bias step for real (mmaps
+# the image at a genuine, non-zero, ASLR'd base and adds it to every .vms$rel
+# slot) before calling in -- proving the GOT cell resolves to the correct
+# address under a real load, not just a readelf/byte check.
+$CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/GOTPCRELX_ACTIVATE" "$SRC/test/gotpcrelx_activate.c"
+cat > "$WORK/gpx_callee.c" <<'EOF'
+int gpx_callee(int x) { return x * 7; }
+EOF
+cat > "$WORK/gpx_caller.c" <<'EOF'
+extern int gpx_callee(int);
+int gpx_caller(int x, int unused) { (void)unused; return gpx_callee(x) + 1; }
+EOF
+$CC -fPIC -fno-plt -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/gpx_callee.o" "$WORK/gpx_callee.c"
+$CC -fPIC -fno-plt -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/gpx_caller.o" "$WORK/gpx_caller.c"
+echo "-- gpx_caller.o .text relocations (expect a plain GOTPCRELX to gpx_callee) --"
+readelf -rW "$WORK/gpx_caller.o" | awk '/R_X86_64/{print $3}' | sort | uniq -c
+readelf -rW "$WORK/gpx_caller.o" | grep -qE "R_X86_64_GOTPCRELX " \
+    || { echo "FAIL: expected a plain R_X86_64_GOTPCRELX (type 41) call reloc"; exit 1; }
+"$WORK/LINK.EXE" --shareable --symbol-vector "gpx_caller=PROCEDURE,gpx_callee=PROCEDURE" \
+    --gsmatch EQUAL,1,0 -o "$WORK/LIBGPX\$SHR.EXE" "$WORK/gpx_caller.o" "$WORK/gpx_callee.o"
+readelf -SW "$WORK/LIBGPX\$SHR.EXE" | grep -E '\.got|\.vms\$rel' || true
+set +e
+"$WORK/GOTPCRELX_ACTIVATE" "$WORK/LIBGPX\$SHR.EXE" gpx_caller 5 0; RC=$?
+set -e
+echo "gpx_caller(5) exit = $RC (expect 36 = gpx_callee(5)*7+1)"
+[ "$RC" -eq 36 ] || { echo "FAIL: intra-image R_X86_64_GOTPCRELX indirect call did not yield 36 (got $RC)"; exit 1; }
+
+echo
 echo "== output header: e_machine must be EM_X86_64 =="
 readelf -h "$WORK/LIBPTR\$SHR.EXE" | grep -E "Machine:" || true
 readelf -h "$WORK/LIBPTR\$SHR.EXE" | grep -q "X86-64" \

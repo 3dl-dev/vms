@@ -18,10 +18,28 @@
 #   CC, WORK, IMGACT_DIR, LINK_DIR, LIBVMSSYS_DIR, VMSPROC_DIR, VMSLNM_DIR,
 #   VMSFS_DIR, LIBVMS_DIR, VMSRMS_DIR, LIBVMS_INC, LNM_INC, VMSFS_INC,
 #   RMS_INC, SYSEXE, SYSLIB, LIBC, LIBGCC
+# Optional: ARCH (default aarch64; also supports x86_64, vms-cb5f — the
+#   x86_64 analog of this proof reuses this same graph builder, it is NOT a
+#   forked copy). ARCH selects the libvmssys arch/<ARCH>/syscall.S and the
+#   one target-specific codegen flag each producer's CFLAGS needs:
+#   -mno-outline-atomics on aarch64 (no __aarch64_* outline-atomic helper
+#   calls DECC$SHR lacks) vs -mtls-dialect=gnu2 on x86_64 (TLSDESC codegen,
+#   the standing precedent from docs/design-link-x86_64-relocs.md /
+#   run_test_x86_64.sh -- x86_64's default TLS dialect is the GD model, not
+#   TLSDESC). The mk_*_shr.sh recipes read this through CFLAGS (env-
+#   overridable, vms-cb5f); IMGACT.EXE's own Makefile reads ARCH directly.
 
 build_producer_graph() {
-    echo "== build IMGACT.EXE + LINK.EXE =="
-    ( cd "$IMGACT_DIR" && make CC="$CC" clean >/dev/null 2>&1 || true; make CC="$CC" ) >/dev/null 2>&1
+    ARCH=${ARCH:-aarch64}
+    case "$ARCH" in
+        aarch64) ARCHFLAG="-mno-outline-atomics" ;;
+        x86_64)  ARCHFLAG="-mtls-dialect=gnu2" ;;
+        *) echo "build_producer_graph: unsupported ARCH=$ARCH (expected aarch64 or x86_64)"; exit 1 ;;
+    esac
+    LIBCFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector $ARCHFLAG"
+
+    echo "== build IMGACT.EXE + LINK.EXE ($ARCH) =="
+    ( cd "$IMGACT_DIR" && make CC="$CC" ARCH="$ARCH" clean >/dev/null 2>&1 || true; make CC="$CC" ARCH="$ARCH" ) >/dev/null 2>&1
     cp "$IMGACT_DIR/IMGACT.EXE" "$SYSEXE/IMGACT.EXE"
     $CC -std=gnu11 -O2 -Wall -Wextra -I"$LINK_DIR/include" -o "$WORK/LINK.EXE" "$LINK_DIR/link.c"
 
@@ -30,49 +48,48 @@ build_producer_graph() {
     readelf -SW "$SYSLIB/DECC\$SHR.EXE" | grep -q '\.vms\$sv' || { echo "FAIL: DECC\$SHR no symbol vector"; exit 1; }
 
     echo "== LIBVMSSYS\$SHR.EXE =="
-    SYSCFLAGS="-fPIC -O2 -ffreestanding -fno-stack-protector -fno-builtin -mno-outline-atomics -I$LIBVMSSYS_DIR"
-    SYSOBJS=""
-    for c in vms_string vms_snprintf vms_futex vms_stdio vms_math vms_runtime_init vms_kif; do
-        $CC $SYSCFLAGS -c -o "$WORK/sys_$c.o" "$LIBVMSSYS_DIR/$c.c"
-        SYSOBJS="$SYSOBJS $WORK/sys_$c.o"
-    done
-    $CC -fPIC -mno-outline-atomics -c -o "$WORK/sys_syscall.o" "$LIBVMSSYS_DIR/arch/aarch64/syscall.S"
-    SYSOBJS="$SYSOBJS $WORK/sys_syscall.o"
-    SYS_VEC="vms_strlen=PROCEDURE,vms_kif_open=PROCEDURE,vms_kif_enq=PROCEDURE,vms_kif_deq=PROCEDURE,vms_kif_convert=PROCEDURE,vms_kif_assign=PROCEDURE,vms_kif_dassgn=PROCEDURE,vms_kif_getdvi_chan=PROCEDURE,vms_kif_setprn=PROCEDURE,vms_kif_getjpi_self=PROCEDURE,vms_kif_getjpi_pid=PROCEDURE,vms_kif_getjpi_prcnam=PROCEDURE,vms_kif_procscan=PROCEDURE,vms_kif_setef=PROCEDURE,vms_kif_clref=PROCEDURE,vms_kif_readef=PROCEDURE,vms_kif_waitfr=PROCEDURE,vms_kif_wflor=PROCEDURE,vms_kif_wfland=PROCEDURE,vms_kif_ascefc=PROCEDURE,vms_kif_dacefc=PROCEDURE,vms_kif_dlcefc=PROCEDURE,vms_kif_devscan=PROCEDURE,vms_kif_getdvi_devnam=PROCEDURE"
-    if [ -n "${SYS_VEC_EXTRA:-}" ]; then
-        SYS_VEC="$SYS_VEC,$SYS_VEC_EXTRA"
-    fi
-    "$WORK/LINK.EXE" --shareable \
-        --symbol-vector "$SYS_VEC" \
-        --gsmatch LEQUAL,1,0 -o "$SYSLIB/LIBVMSSYS\$SHR.EXE" $SYSOBJS
+    # vms-b6a: the recipe itself now lives once, in mk_vmssys_shr.sh (CMake's
+    # link-native graph uses the same script) — this used to be a second,
+    # independently-drifting copy of the LIST/vector that mk_libvms_shr.sh's
+    # header comment warns is otherwise unenforced and silent. mk_vmssys_shr.sh
+    # always exports vms_kif_setident (append-only vector; LOGINOUT needs it,
+    # DCL simply never calls it), so SYS_VEC_EXTRA is now informational only —
+    # callers may still pass additional universals beyond that baseline.
+    # vms-6da: mk_vmssys_shr.sh now reads ARCH (arch/$ARCH/syscall.S) and
+    # CFLAGS (env-overridable, same convention as every other mk_*_shr.sh
+    # since vms-cb5f) instead of hardcoding aarch64.
+    CC="$CC" ARCH="$ARCH" CFLAGS="$LIBCFLAGS" WORK="$WORK/vmssys" \
+        sh "$LINK_DIR/mk_vmssys_shr.sh" \
+        "$WORK/LINK.EXE" "$SYSLIB/LIBVMSSYS\$SHR.EXE" \
+        "$LIBVMSSYS_DIR" "${SYS_VEC_EXTRA:-}"
 
     echo "== LIBVMSPROCESS\$SHR.EXE =="
-    CC="$CC" sh "$LINK_DIR/mk_vmsprocess_shr.sh" \
+    CC="$CC" CFLAGS="$LIBCFLAGS" sh "$LINK_DIR/mk_vmsprocess_shr.sh" \
         "$WORK/LINK.EXE" "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" \
         "$SYSLIB/DECC\$SHR.EXE" "" "$VMSPROC_DIR" "$LIBVMS_INC"
 
     echo "== LIBVMSLNM\$SHR.EXE =="
-    CC="$CC" sh "$LINK_DIR/mk_vmslnm_shr.sh" \
+    CC="$CC" CFLAGS="$LIBCFLAGS" sh "$LINK_DIR/mk_vmslnm_shr.sh" \
         "$WORK/LINK.EXE" "$SYSLIB/LIBVMSLNM\$SHR.EXE" \
         "$SYSLIB/DECC\$SHR.EXE" "$VMSLNM_DIR" "$LIBVMS_INC"
 
     echo "== LIBVMSFS\$SHR.EXE =="
-    CC="$CC" sh "$LINK_DIR/mk_vmsfs_shr.sh" \
+    CC="$CC" CFLAGS="$LIBCFLAGS" sh "$LINK_DIR/mk_vmsfs_shr.sh" \
         "$WORK/LINK.EXE" "$SYSLIB/LIBVMSFS\$SHR.EXE" \
         "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMSLNM\$SHR.EXE" \
         "$VMSFS_DIR" "$LIBVMS_INC" "$LNM_INC"
 
     echo "== LIBVMS\$SHR.EXE =="
-    CC="$CC" sh "$LINK_DIR/mk_libvms_shr.sh" \
+    CC="$CC" CFLAGS="$LIBCFLAGS" sh "$LINK_DIR/mk_libvms_shr.sh" \
         "$WORK/LINK.EXE" "$SYSLIB/LIBVMS\$SHR.EXE" \
         "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" \
         "$SYSLIB/LIBVMSSYS\$SHR.EXE" "$SYSLIB/LIBVMSFS\$SHR.EXE" \
         "$LIBVMS_DIR"
 
     echo "== LIBVMSRMS\$SHR.EXE =="
-    CC="$CC" sh "$LINK_DIR/mk_vmsrms_shr.sh" \
+    CC="$CC" CFLAGS="$LIBCFLAGS" sh "$LINK_DIR/mk_vmsrms_shr.sh" \
         "$WORK/LINK.EXE" "$SYSLIB/LIBVMSRMS\$SHR.EXE" \
         "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSFS\$SHR.EXE" \
         "$VMSRMS_DIR" "$LIBVMS_INC" "$VMSFS_INC"
-    echo "-- full six-library producer graph linked VMS-native --"
+    echo "-- full six-library producer graph linked VMS-native ($ARCH) --"
 }

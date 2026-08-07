@@ -317,6 +317,132 @@ run_case() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# NEGATIVE CONTROL 2: the startup process itself goes missing (vms-56c).
+#
+# PROVISION.EXE is now boot-critical -- PID 1 execs it where it used to exec
+# DCL.EXE, and it is what acquires SYSTEM's identity. If the image is absent the
+# system has no way to acquire an identity, so PID 1 must FAIL-STOP, exactly as
+# it does for a missing SYSTEM record -- never fall through to a login prompt on
+# a system with no identity. ovmx_init.c run_startup() stat()s the image and
+# calls ovmx_exec_halt() with a DIFFERENT message than the no-SYSTEM-record
+# halt; asserting that specific message proves this specific guard fires and is
+# not the SYSUAF halt in disguise.
+#
+# Injected THROUGH THE FILE, like every other case: a real SYSTEM session
+# deletes the real image off the installed disk with DCL DELETE. No source is
+# edited. If the delete did not land, boot 2 comes up and the halt assertion
+# below fails -- so this case cannot false-pass.
+#
+# (The other fatal run_startup() path -- PROVISION.EXE activates but the
+# executive REFUSES setident -- is caught by the same function at its waitpid
+# nonzero-status branch, but is not injectable through the file from a session;
+# it is left to inspection here rather than claimed as covered.)
+# ---------------------------------------------------------------------------
+run_provision_missing_case() {
+    local tag="noprovision"
+    local disk="/tmp/e2e-$tag.img"
+    local log1="/tmp/e2e-$tag-boot1.log"
+    local log2="/tmp/e2e-$tag-boot2.log"
+    local fifo="/tmp/e2e-$tag.in"
+    local qp=""
+
+    echo ""
+    echo "=========================================================="
+    echo "CASE $tag: SYSTEM deletes SYS\$SYSTEM:PROVISION.EXE, expect=halt"
+    echo "=========================================================="
+
+    rm -f "$disk" "$log1" "$log2" "$fifo"
+    truncate -s 64M "$disk"
+    mkfifo "$fifo"
+
+    # shellcheck disable=SC2086
+    timeout "$BOOT_TIMEOUT" $QEMU $MACHINE \
+        -kernel "$KERNEL" -initrd "$INITRD" \
+        -nographic -append "$CONSOLE loglevel=3 quiet" \
+        -m 512M -smp 1 -nic none -nodefaults -serial stdio \
+        -drive file="$disk",format=raw,if=virtio,cache=writethrough \
+        -no-reboot <"$fifo" >"$log1" 2>&1 &
+    qp=$!
+    exec 4>"$fifo"
+
+    send() { printf '%s\r' "$1" >&4; }
+    waitfor() {
+        local pat="$1" lim="${2:-60}" log="$3" w=0
+        while [ $w -lt $((lim * 4)) ]; do
+            grep -qF "$pat" "$log" 2>/dev/null && return 0
+            kill -0 "$qp" 2>/dev/null || return 1
+            sleep 0.25; w=$((w + 1))
+        done
+        return 1
+    }
+
+    # --- Boot 1: install, then delete the startup image off the disk ---
+    if waitfor 'Username:' 120 "$log1"; then rc=0; else rc=1; fi
+    record "$tag boot 1: install completes and reaches the login prompt" "$rc"
+    if [ "$rc" -ne 0 ]; then
+        kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&-
+        echo "--- boot 1 log ---"; cat "$log1"
+        return
+    fi
+
+    send 'SYSTEM'; sleep 1
+    send 'MANAGER'; sleep 3
+    if waitfor 'Welcome to OVMX' 60 "$log1"; then rc=0; else rc=1; fi
+    record "$tag boot 1: SYSTEM logs in" "$rc"
+
+    send 'DELETE/LOG SYS$SYSTEM:PROVISION.EXE'; sleep 2
+    send 'DIRECTORY SYS$SYSTEM:PROVISION.EXE'; sleep 3
+
+    # The delete must actually have landed, or boot 2 measures nothing. DELETE
+    # /LOG prints '%DELETE-S-DELETED, <spec> deleted' on success (dcl_error
+    # severity 1 -> 'S'); a delete that found no file prints '%RMS-E-FNF'
+    # instead and this check goes red rather than silently measuring an intact
+    # disk.
+    if grep -qiE '%DELETE-S-DELETED|PROVISION\.EXE deleted' "$log1"; then rc=0; else rc=1; fi
+    record "$tag boot 1: PROVISION.EXE deleted off the disk" "$rc"
+
+    # See THE WRITEBACK TRAP at the top of this file.
+    echo "  (settling ${SETTLE_SECS}s for guest writeback)"
+    sleep "$SETTLE_SECS"
+    kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
+
+    # --- Boot 2: no startup image on disk -> PID 1 must fail-stop ---
+    rm -f "$fifo"; mkfifo "$fifo"
+    # shellcheck disable=SC2086
+    timeout "$BOOT_TIMEOUT" $QEMU $MACHINE \
+        -kernel "$KERNEL" -initrd "$INITRD" \
+        -nographic -append "$CONSOLE loglevel=3 quiet" \
+        -m 512M -smp 1 -nic none -nodefaults -serial stdio \
+        -drive file="$disk",format=raw,if=virtio,cache=writethrough \
+        -no-reboot <"$fifo" >"$log2" 2>&1 &
+    qp=$!
+    exec 4>"$fifo"
+
+    # Whole-log grep is safe: a boot-time diagnostic printed before any prompt
+    # exists, so nothing this script typed can have produced it.
+    if waitfor '%OVMX-F-EXECINIT, SYS$SYSTEM:PROVISION.EXE is missing' 120 "$log2"; then
+        rc=0
+    else
+        rc=1
+    fi
+    kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
+    record "$tag boot 2: HALTS with 'PROVISION.EXE is missing'" "$rc"
+
+    if grep -qF '%OVMX-I-EXECINIT, the system process has no authorized identity' "$log2"; then
+        rc=0
+    else
+        rc=1
+    fi
+    record "$tag boot 2: the detail line names the missing identity" "$rc"
+
+    # ...and it must NOT reach a login prompt.
+    if grep -qF 'Username:' "$log2"; then rc=1; else rc=0; fi
+    record "$tag boot 2: no login prompt on a system with no startup image" "$rc"
+
+    if [ "$FAIL" -ne 0 ]; then echo "--- $tag boot 2 log ---"; cat "$log2"; fi
+}
+
 echo "=== OVMX release e2e: boot -> provision -> boot (vms-9b7) ==="
 echo "Architecture: $ARCH   QEMU: $QEMU"
 
@@ -339,6 +465,12 @@ run_case longrow "$(make_system_row 420 63)" up
 # case the three above are all "did not halt" assertions with nothing showing
 # they could ever have halted.
 run_case norecord "" halt
+
+# NEGATIVE CONTROL 2 (vms-56c). The startup process image itself is deleted off
+# the disk from a SYSTEM session. PID 1 must fail-stop with the PROVISION-missing
+# halt, proving run_startup()'s stat() guard fires and that the new boot-critical
+# image is not a silently-skippable step.
+run_provision_missing_case
 
 echo ""
 echo "=========================================="

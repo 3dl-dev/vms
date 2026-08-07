@@ -2,10 +2,11 @@
  * sys_uai.c - User Authorization File System Services
  *
  * Implements sys$getuai and sys$setuai for querying and updating
- * user account information from /etc/ovmx/sysuaf.dat.
+ * user account information from SYS$SYSTEM:SYSUAF.DAT.
  *
- * The sysuaf.dat format is colon-delimited text:
- *   USERNAME:PASSWORD_HASH:UIC_GROUP:UIC_MEMBER:DEFAULT_DIR:FLAGS:PRIVILEGES
+ * The format is PIPE-delimited text (the delimiter parse_uaf_line() below
+ * splits on, and the one src/libvms/rtl/sysuaf.c writes):
+ *   USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
  *
  * sys$getuai fills in requested UAI$_ items from the matching record.
  * sys$setuai updates the record in place (requires SYSPRV privilege).
@@ -19,10 +20,17 @@
  *     itself through vmsfs path translation, in the calling process, with no
  *     executive-mediated access and no interlock against a concurrent
  *     sys$setuai in another process.
- * OVMX-USERSPACE: sys$setuai (vms-846.3) -- rewrites that same file directly.
- *     Its SYSPRV check reads pcb->cur_privs, the per-process word any process
- *     can set for itself through sys$setprv (see src/libvms/syssvc/sys_misc.c),
- *     so the authorization it enforces is the caller's own claim.
+ * OVMX-PARTIAL: sys$setuai (vms-846.3) -- exec: the SYSPRV test reads the
+ *     privilege mask the EXECUTIVE holds for the caller, through
+ *     vms_kif_getjpi_self(). That mask arrives only through
+ *     VMS_IOCTL_SETIDENT, which refuses any caller without SETPRV an identity
+ *     that is not a weakening of its own (src/kernel/vms_proctab.c). This line
+ *     is an upgrade rather than a correction -- see the disposition on
+ *     sys$setuai below (vms-cb5).
+ * OVMX-LOCAL: sys$setuai -- everything else. Once the test passes, this
+ *     process rewrites SYSUAF.DAT itself through vmsfs path translation, with
+ *     no executive mediation of the file and no interlock against a concurrent
+ *     sys$getuai in another process.
  */
 
 #include <stdint.h>
@@ -34,7 +42,7 @@
 #include "starlet.h"
 #include "uaidef.h"
 #include "prvdef.h"
-#include "vms/pcb.h"
+#include "vms_kif.h"
 
 /* Path to the system authorization file */
 #include "ovmx_layout.h"
@@ -119,41 +127,72 @@ static int parse_uaf_line(const char *line, struct uaf_record *rec)
 
     memset(rec, 0, sizeof(*rec));
 
-    char *f;
-    char *saveptr = NULL;
+    /*
+     * FIELDS ARE SPLIT ON EVERY '|', INCLUDING CONSECUTIVE ONES (vms-cb5
+     * round 5).
+     *
+     * This used to be seven strtok_r(buf, "|") calls. strtok treats a RUN of
+     * delimiters as ONE, so every EMPTY field in a SYSUAF row was silently
+     * dropped and every field after it read one position early. Five of the
+     * six rows OVMX ships have an empty field, so this misparsed nearly the
+     * whole authorization database:
+     *
+     *     USER1||200|202|SYS$SYSDEVICE:[USERS.USER1]||TMPMBX,NETMBX
+     *
+     * parsed as password_hash="200", uic_group=202 (octal 130), uic_member=
+     * strtoul("SYS$SYSDEVICE:[USERS.USER1]", 8) = 0. MEASURED on the real
+     * runtime by tests/qemu/test_syssvc_setuai.c, which read the row back out
+     * of the file after a $SETUAI and found 202 and 0 where 200 and 202
+     * belong. $GETUAI answered from the same misparse, so it reported the
+     * wrong hash, the wrong UIC and the wrong privileges for those accounts;
+     * $SETUAI then wrote the misparse back, which is how a service that
+     * manages the authorization database silently rewrote an account's
+     * identity.
+     *
+     * UIC MEMBER 0 IS WHY THIS IS NOT MERELY A PARSING BUG. tools/vms_login.c
+     * does setuid(rec->uic_member) to drop the session's Linux credentials,
+     * and setuid(0) is not a drop -- such a session keeps CAP_SYS_ADMIN, and
+     * every process it creates registers with SETPRV. What stops that on the
+     * shipped SYSUAF is that all four accounts this misparse gives member 0
+     * carry no password hash and so cannot authenticate at all (vms-08f); it
+     * is not stopped by anything here.
+     *
+     * The split below is the one src/libvms/rtl/sysuaf.c's sysuaf_scan()
+     * already uses -- strchr for the next '|', NUL it, carry on -- so the two
+     * readers of this file agree by construction rather than by coincidence.
+     */
+    char *fields[7];
+    int nf;
+    {
+        char *p = buf;
+        for (nf = 0; nf < 7 && p; nf++) {
+            fields[nf] = p;
+            char *sep = strchr(p, '|');
+            if (sep) {
+                *sep = '\0';
+                p = sep + 1;
+            } else {
+                p = NULL;
+            }
+        }
+    }
 
-    /* Fields separated by '|' (pipe) to avoid conflict with VMS device colons.
-     * Format: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES */
-    f = strtok_r(buf, "|", &saveptr);
-    if (!f) return -1;
-    strncpy(rec->username, f, sizeof(rec->username) - 1);
+    /* USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
+     * -- the first five are required; a row with fewer is malformed. */
+    if (nf < 5)
+        return -1;
 
-    f = strtok_r(NULL, "|", &saveptr);
-    if (!f) return -1;
-    strncpy(rec->password_hash, f, sizeof(rec->password_hash) - 1);
-
-    f = strtok_r(NULL, "|", &saveptr);
-    if (!f) return -1;
+    strncpy(rec->username, fields[0], sizeof(rec->username) - 1);
+    strncpy(rec->password_hash, fields[1], sizeof(rec->password_hash) - 1);
     /* OCTAL: SYSUAF.DAT UIC fields (vms-e60; derivation in
      * src/libvms/rtl/sysuaf.c). */
-    rec->uic_group = (unsigned int)strtoul(f, NULL, 8);
-
-    f = strtok_r(NULL, "|", &saveptr);
-    if (!f) return -1;
-    /* OCTAL: see above (vms-e60). */
-    rec->uic_member = (unsigned int)strtoul(f, NULL, 8);
-
-    f = strtok_r(NULL, "|", &saveptr);
-    if (!f) return -1;
-    strncpy(rec->default_dir, f, sizeof(rec->default_dir) - 1);
-
-    f = strtok_r(NULL, "|", &saveptr);
-    if (f)
-        rec->flags = (uint32_t)strtoul(f, NULL, 0);
-
-    f = strtok_r(NULL, "|\n", &saveptr);
-    if (f)
-        strncpy(rec->privileges, f, sizeof(rec->privileges) - 1);
+    rec->uic_group  = (unsigned int)strtoul(fields[2], NULL, 8);
+    rec->uic_member = (unsigned int)strtoul(fields[3], NULL, 8);
+    strncpy(rec->default_dir, fields[4], sizeof(rec->default_dir) - 1);
+    if (nf > 5)
+        rec->flags = (uint32_t)strtoul(fields[5], NULL, 0);
+    if (nf > 6)
+        strncpy(rec->privileges, fields[6], sizeof(rec->privileges) - 1);
 
     return 1;
 }
@@ -375,10 +414,51 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
     if (!usrnam || !usrnam->dsc$a_pointer)
         return SS$_BADPARAM;
 
-    /* Check for SYSPRV privilege */
-    struct vms_pcb *pcb = vms_pcb_get();
-    if (pcb && !(pcb->cur_privs & PRV$M_SYSPRV)) {
-        return SS$_NOPRIV;
+    /*
+     * THE SYSPRV TEST READS THE EXECUTIVE (vms-cb5 round 5).
+     *
+     * WHAT STOOD HERE:
+     *
+     *     struct vms_pcb *pcb = vms_pcb_get();
+     *     if (pcb && !(pcb->cur_privs & PRV$M_SYSPRV))
+     *         return SS$_NOPRIV;
+     *
+     * Two defects, and the second is the one that decides. The mask came
+     * from the caller's own PCB, a per-process word sys$setprv
+     * (src/libvms/syssvc/sys_misc.c) lets any process write for itself --
+     * so the authorization was the caller's own claim. AND the guard read
+     * `pcb &&`: vms_pcb_get() returns NULL for a process that never called
+     * vms_pcb_init() (src/vmsprocess/vms_pcb.c), so for such a caller the
+     * condition was false and the test was SKIPPED. Not a test the caller
+     * controls -- no test. What is behind it is the UAI$_PWD case below,
+     * which writes an account's password hash into SYSUAF.DAT.
+     *
+     * The mask now comes from the row the EXECUTIVE holds for this process,
+     * the same source tools/vms_authorize.c's check_privilege() reads
+     * (vms-b2e). A process cannot widen that row for itself: the authorized
+     * mask is derived at registration from capable(CAP_SYS_ADMIN), and the
+     * only way to change it is VMS_IOCTL_SETIDENT, which without SETPRV
+     * accepts nothing but a weakening (src/kernel/vms_proctab.c).
+     *
+     * THERE IS NO ABSENT-EXECUTIVE BRANCH AND MUST NOT BE ONE (CLAUDE.md
+     * Rule 9). PID 1 refuses to bring OVMX up without /dev/vms, so on the
+     * one OVMX runtime this read cannot fail. If it fails anyway, this
+     * service refuses: a process whose privileges nothing can vouch for
+     * holds none. Substituting a process-local guess for a failed executive
+     * read is the defect above wearing a different name.
+     *
+     * PRV$M_SYSPRV is held equal to the executive's own VMS_PRV_M_SYSPRV by
+     * _Static_assert in src/libvms/prv_agreement.c, so the bit is pinned and
+     * not self-certified (CLAUDE.md Rule 8).
+     */
+    {
+        struct vms_procinfo self;
+
+        memset(&self, 0, sizeof(self));
+        if (!(vms_kif_getjpi_self(&self) & 1))
+            return SS$_NOPRIV;
+        if (!(self.cur_privs & PRV$M_SYSPRV))
+            return SS$_NOPRIV;
     }
 
     char username[32];
@@ -443,8 +523,26 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
         struct uaf_record tmp;
         int rc = parse_uaf_line(line, &tmp);
         if (rc == 1 && strcasecmp(tmp.username, username) == 0) {
-            /* Write the updated record */
-            fprintf(out, "%s|%s|%u|%u|%s|%u|%s\n",
+            /*
+             * %o, NOT %u, ON THE TWO UIC FIELDS (vms-e60, vms-cb5 round 5).
+             *
+             * parse_uaf_line() above reads them with strtoul(..., 8) -- the
+             * base vms-e60 derived from the oracle and moved every other
+             * SYSUAF reader and writer to. This fprintf was the site that
+             * did not move: it read octal and wrote decimal, so rewriting
+             * ANY record whose UIC digits differ between the two bases
+             * changed that account's UIC. DEFAULT ships 200|200, which this
+             * parsed as 128/128 and wrote back as "128|128", which the next
+             * read takes as octal 88/88 -- a different UIC, hence a
+             * different Linux uid/gid for the session LOGINOUT starts and a
+             * different owner for every protection decision taken against
+             * it. SYSTEM's 1|4 is the only shipped row that reads the same
+             * in both bases, which is what hid this.
+             *
+             * tools/vms_authorize.c's writer already uses %o; this is the
+             * same value written the same way, not a second answer.
+             */
+            fprintf(out, "%s|%s|%o|%o|%s|%u|%s\n",
                     rec.username, rec.password_hash,
                     rec.uic_group, rec.uic_member,
                     rec.default_dir, rec.flags, rec.privileges);

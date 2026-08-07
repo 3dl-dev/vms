@@ -327,6 +327,18 @@ static int run_dcl(const char *script, int uic_group, const char *prcnam,
     if (pipe(in_pipe) < 0) return -1;
     if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
 
+    /*
+     * Flush every stdio buffer -- including this process's own (parent)
+     * stdout -- before forking. Without this, the child inherits a copy
+     * of the PARENT's unflushed stdout buffer; the child's own
+     * fflush(stdout) after dup2'ing the capture pipe then writes that
+     * inherited parent data into the child's pipe, splicing a prior
+     * run_dcl() call's transcript into this call's capture. Latent when
+     * stdout is line-buffered (console); live the moment stdout is fully
+     * buffered (redirected to a file) -- see vms-cdb.
+     */
+    fflush(NULL);
+
     pid_t pid = fork();
     if (pid < 0) return -1;
 

@@ -71,6 +71,7 @@
 #include "vms/pcb.h"
 #include "vms_kif.h"
 #include "ovmx_layout.h"
+#include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 
 #define EXIT_SKIP 77
@@ -322,6 +323,22 @@ int main(void)
     long nbefore, nafter;
 
     printf("=== test_syssvc_setuai ($SETUAI's SYSPRV test is the executive's, vms-cb5) ===\n");
+
+    /*
+     * Bootstrap the VMS namespace the same way every shipped image does
+     * (tools/vms_login.c, tools/vms_authorize.c, DCL.EXE): SYSUAF_PATH is a
+     * VMS filespec and vmsfs_to_linux_path() cannot resolve it until the
+     * system device is in this process's device table. $SETUAI resolves it
+     * the same way, so without this the service under test would fail on a
+     * missing file rather than on its privilege test, and every refusal
+     * below would be explained by the wrong thing.
+     */
+    vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
+    {
+        char path[1024];
+        resolve_sysuaf(path, sizeof(path));
+        printf("  SYSUAF.DAT resolves to: %s\n", path);
+    }
 
     if (!executive_present()) {
         printf("  INFO: cannot open /dev/vms -- CI negative-control rig, not the product\n");

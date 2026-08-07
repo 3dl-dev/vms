@@ -608,15 +608,20 @@ PROTO_EOF
 # test source came into the scan with it. It contributed no service, but a
 # scan that reaches into test programs is not the scope this gate states.
 # WHAT REMAINS OPEN, said here rather than discovered later:
-#   - a target declared under tests/, holding a sys$ definition in a source
-#     under tests/, that is nevertheless installed;
-#   - a source CMake compiles only under an option this configure leaves OFF
-#     AND that lives outside src/ and tools/. Inside those two directories the
-#     glob still holds it (that is what caught src/imgact/ here); outside them
-#     neither reading does. A configure is only as wide as its options.
 #   - what the compile set decides is WHICH FILES ARE READ. It says nothing
 #     about whether a service's declaration is true; that is the per-family
 #     Rule 10 decision, pinned to the oracle in the item the declaration names.
+#
+# TWO ESCAPES THIS USED TO LEAVE OPEN, CLOSED BY vms-ed8:
+#   - a target declared under tests/, holding a sys$ definition in a source
+#     under tests/, that is nevertheless installed, now counts as a product
+#     target regardless of which directory declared it (see the
+#     install(TARGETS ...) scan feeding register_buildset.awk's INSTF list).
+#   - a source CMake compiles only under an option this configure leaves OFF
+#     AND that lives outside src/ and tools/ now makes this gate REFUSE
+#     (register_optguard.awk), naming the option and the path, instead of
+#     silently certifying a universe with a hole in it. Inside src/+tools/ the
+#     glob still holds such a source (that is what catches src/imgact/ today).
 #
 # IF THE BUILD DESCRIPTION CANNOT BE READ, THIS REFUSES. A tree with a
 # CMakeLists.txt and no way to read what it compiles is a tree this gate cannot
@@ -647,38 +652,46 @@ if [ -f "$SRC_ROOT/CMakeLists.txt" ]; then
         echo "     does not look. Fix the build description; do not add a skip."
         exit 1
     fi
+    # THE INSTALLED-TESTS ESCAPE (vms-ed8 residual #1). tests/ is out of scope
+    # unless the target compiling it is a PRODUCT target -- declared outside
+    # tests/ and also compiling a non-tests/ source. That left one door open:
+    # a target declared UNDER tests/, compiling only tests/ sources, that is
+    # nevertheless shipped by an install(TARGETS ...) rule. install() is read
+    # here as a plain grep over every CMakeLists.txt in the tree -- the same
+    # line-shape reading this gate already does for everything else -- so a
+    # target name it names is a product target regardless of which directory
+    # declared it. See register_buildset.awk for where this list is consumed.
+    INSTALLED_TARGETS="$WORK/installed_targets"
+    find "$SRC_ROOT" -name CMakeLists.txt -print0 2>/dev/null \
+        | xargs -0 grep -hoE 'install\([[:space:]]*TARGETS[[:space:]]+[^)]*\)' 2>/dev/null \
+        | sed -E 's/^install\([[:space:]]*TARGETS[[:space:]]*//' \
+        | sed -E 's/[[:space:]]+(RUNTIME|LIBRARY|ARCHIVE|OBJECTS|FRAMEWORK|BUNDLE|PUBLIC_HEADER|PRIVATE_HEADER|RESOURCE|FILE_SET|EXPORT).*$//' \
+        | sed -E 's/\)[[:space:]]*$//' \
+        | tr -s '[:space:]' '\n' \
+        | sed '/^$/d' \
+        | sort -u > "$INSTALLED_TARGETS"
+
     # compile_commands.json, one field per line as CMake writes it. Each entry
     # gives the source file and the object it produces; the object path names
     # the TARGET (the component before ".dir/"), which is how a test-only
-    # target is told from a product one.
-    awk -v ROOT="$SRC_ROOT/" '
-        /^[ \t]*"file"[ \t]*:/ {
-            f = $0; sub(/^[^:]*:[ \t]*"/, "", f); sub(/",?[ \t]*$/, "", f)
-            curf = f; curt = ""; next
-        }
-        /^[ \t]*"output"[ \t]*:/ {
-            o = $0; sub(/^[^:]*:[ \t]*"/, "", o); sub(/",?[ \t]*$/, "", o)
-            curt = o; next
-        }
-        /^[ \t]*\}/ {
-            if (curf != "" && index(curf, ROOT) == 1) {
-                rel = substr(curf, length(ROOT) + 1)
-                p = index(curt, ".dir/")
-                tgt = (p > 0) ? substr(curt, 1, p + 3) : "?"
-                q = index(curt, "/CMakeFiles/")
-                tdir = (q > 0) ? substr(curt, 1, q - 1) : ""
-                n++; src[n] = rel; tg[n] = tgt
-                if (rel !~ /^tests\// && tdir !~ /^tests\//) prodtgt[tgt] = 1
-            }
-            curf = ""; curt = ""; next
-        }
-        END {
-            for (i = 1; i <= n; i++) {
-                if (src[i] ~ /^tests\// && !(tg[i] in prodtgt)) continue
-                if (src[i] in seen) continue
-                seen[src[i]] = 1; print src[i]
-            }
-        }' "$WORK/cmk/compile_commands.json" | sort > "$WORK/buildset"
+    # target is told from a product one. The parse itself lives in
+    # register_buildset.awk (vms-ed8) -- pulled out of this file so the
+    # negative control for "a PARTIAL parse would silently shorten the set"
+    # (residual #3) can run this exact code against a hand-built malformed
+    # fixture; a real cmake has never been measured to emit one.
+    REGBUILDSET_AWK="$(dirname "$0")/lib/register_buildset.awk"
+    if [ ! -f "$REGBUILDSET_AWK" ]; then
+        echo "FAIL: BROKEN BUILD-SET SCAN: $REGBUILDSET_AWK is missing -- the"
+        echo "      compile_commands.json parser this gate depends on is not there."
+        exit 1
+    fi
+    if ! awk -v ROOT="$SRC_ROOT/" -v INSTF="$INSTALLED_TARGETS" \
+            -f "$REGBUILDSET_AWK" "$WORK/cmk/compile_commands.json" \
+            > "$WORK/buildset.raw" 2>"$WORK/buildset.err"; then
+        cat "$WORK/buildset.err" >&2
+        exit 1
+    fi
+    sort -u "$WORK/buildset.raw" > "$WORK/buildset"
     if [ ! -s "$WORK/buildset" ]; then
         echo "FAIL: BROKEN BUILD-SET SCAN: cmake configured $SRC_ROOT but no translation"
         echo "      unit could be read out of its compile_commands.json."
@@ -686,6 +699,59 @@ if [ -f "$SRC_ROOT/CMakeLists.txt" ]; then
         echo "     what CMake writes. Both make the build half of the universe empty,"
         echo "     which would silently reduce it to the directory glob it exists to"
         echo "     back up. Fix the parse; do not let it fall back."
+        exit 1
+    fi
+
+    # THE OPTION-GATED ESCAPE (vms-ed8 residual #2). A source compiled only
+    # under an option THIS configure leaves OFF, and living OUTSIDE src/ and
+    # tools/, is invisible to both readings: the glob doesn't walk there and
+    # the build didn't compile it. Inside src/+tools/ the glob still catches
+    # it (this is how src/imgact/, gated by OVMX_IMGACT=OFF by default, stays
+    # in the universe). This is a static, mechanical check for the shape that
+    # would escape: an add_subdirectory() call, gated (possibly through a
+    # nested if()) by an option() this configure left OFF, whose target
+    # directory is not under src/ or tools/. It does NOT check add_executable/
+    # add_library source arguments in place -- those live in the SAME
+    # CMakeLists.txt that declares them, which (for every option() in this
+    # tree today) is already under src/ or tools/, so add_subdirectory is the
+    # only vector that has ever moved a whole source tree out of scope here
+    # (OVMX_IMGACT / src/imgact is the existing, in-scope example of the
+    # pattern this looks for).
+    OPTGUARD_AWK="$(dirname "$0")/lib/register_optguard.awk"
+    if [ ! -f "$OPTGUARD_AWK" ]; then
+        echo "FAIL: BROKEN BUILD-SET SCAN: $OPTGUARD_AWK is missing -- the"
+        echo "      option-gate scan this gate depends on is not there."
+        exit 1
+    fi
+    OFF_OPTS="$WORK/off_options"
+    : > "$OFF_OPTS"
+    if [ -f "$WORK/cmk/CMakeCache.txt" ]; then
+        DECLARED_OPTS=$(find "$SRC_ROOT" -name CMakeLists.txt -print0 2>/dev/null \
+            | xargs -0 grep -hoE '^[[:space:]]*option\([[:space:]]*[A-Za-z0-9_]+' 2>/dev/null \
+            | sed -E 's/^[[:space:]]*option\([[:space:]]*//' | sort -u)
+        for _opt in $DECLARED_OPTS; do
+            grep -qE "^${_opt}:BOOL=OFF\$" "$WORK/cmk/CMakeCache.txt" && printf '%s\n' "$_opt" >> "$OFF_OPTS"
+        done
+    fi
+    OPTGUARD_OUT="$WORK/optguard.out"
+    : > "$OPTGUARD_OUT"
+    while IFS= read -r cmf; do
+        [ -n "$cmf" ] || continue
+        rel_dir=$(dirname "${cmf#"$SRC_ROOT"/}")
+        awk -v OFFLIST="$(tr '\n' ' ' < "$OFF_OPTS")" -v RELDIR="$rel_dir" \
+            -f "$OPTGUARD_AWK" "$cmf" >> "$OPTGUARD_OUT"
+    done <<EOF
+$(find "$SRC_ROOT" -name CMakeLists.txt 2>/dev/null)
+EOF
+    if [ -s "$OPTGUARD_OUT" ]; then
+        echo "FAIL: BROKEN BUILD-SET SCAN: an add_subdirectory() is gated by an option"
+        echo "      this configure leaves OFF and points outside src/ and tools/, so"
+        echo "      neither the glob nor the build's answer can see what it compiles:"
+        sed 's/^/    /' "$OPTGUARD_OUT"
+        echo "  -> turn the option ON for this scan, move the subdirectory under src/ or"
+        echo "     tools/, or accept the exclusion visibly (as OVMX_IMGACT/src/imgact"
+        echo "     does today, where the directory glob still holds it). Do not add a"
+        echo "     silent skip."
         exit 1
     fi
 fi

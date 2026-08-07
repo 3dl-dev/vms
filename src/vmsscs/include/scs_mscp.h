@@ -280,21 +280,35 @@ struct scs_mscp_params {
     uint16_t incarnation;     /* envelope [22:24]; 0 => the fresh-contact value 1 */
     uint32_t cmd_ref;         /* P.CRF -- see SCS_MSCP_CMD_REF() */
     uint16_t unit;            /* P.UNIT (GUS enumeration unit; 0 for SCC) */
-    /* vms-8de, corrected by vms-d76: OPTIONAL live-credit source. When the
-     * caller has a CDT for this connection (the normal case in scsd.c, looked
-     * up by local_conid), pass it here and the envelope's credit field
-     * ([48:50]) is read via scs_credit_peek_pending(cdt) -- the connection's
-     * Pending Receive Credit, the piggyback account, NOT cdt->send_credit
-     * (a receive-side accounting value that never rides the wire; see
-     * scs_cdt.h's split and scs_credit.c's scs_credit_on_send(), which
-     * scsd_credit_stamp_outbound() (vms-aa1) actually calls). This is a
-     * non-mutating READ, not a debit; the debit and reset still happen once,
-     * at the vms-aa1 transmit choke point -- except on the five paths
-     * scsd_credit_stamp_outbound() leaves the frame unstamped, where this
-     * builder's bytes are what actually reaches the wire (see the build-site
-     * note in scs_mscp.c). NULL (the default; callers with no CDT, e.g. unit
-     * tests) falls back to the labeled replay SCS_MSCP_ENV_CREDIT, unchanged
-     * from before vms-8de. */
+    /* vms-8de, corrected by vms-d76, documentation corrected again by
+     * vms-973: OPTIONAL live-credit source, and currently DEAD IN PRODUCTION.
+     * Pass a CDT here and the envelope's credit field ([48:50]) is read via
+     * scs_credit_peek_pending(cdt) -- the connection's Pending Receive
+     * Credit, the piggyback account, NOT cdt->send_credit (a SEND-side gate
+     * value -- buffers this node believes exist on the REMOTE, debited per
+     * message sent -- that never rides the wire; see scs_cdt.h's split and
+     * scs_credit.c's scs_credit_on_send(), which scsd_credit_stamp_outbound()
+     * (vms-aa1) actually calls). This is a non-mutating READ, not a debit;
+     * the debit and reset are meant to happen once, at the vms-aa1 transmit
+     * choke point -- except on the paths scsd_credit_stamp_outbound() leaves
+     * the frame unstamped, where this builder's bytes are what actually
+     * reaches the wire (see the build-site note in scs_mscp.c, and its
+     * warning about a double-grant hazard on that path).
+     *
+     * NO PRODUCTION CALLER PASSES A CDT TODAY. Both scsd.c call sites
+     * (ps_mscp_disc() and ps_fill_mscp(), via struct scs_mscp_params mp;
+     * memset(&mp, 0, sizeof(mp))) leave .cdt at its zeroed NULL and never set
+     * it, and nothing in src/vmsscs/scs_mscp_srv.c constructs one either. The
+     * ONLY non-NULL assignment anywhere in the tree is
+     * tests/vmsscs/test_scs_mscp.c, so on the real wire every OVMX MSCP
+     * command still carries the constant SCS_MSCP_ENV_CREDIT (1) below, and
+     * the live-credit branch above is exercised only by that test. Wiring a
+     * real caller -- e.g. having ps_mscp_disc()/ps_fill_mscp() look their CDT
+     * up via scs_cdl_lookup() the same way scsd_credit_stamp_outbound()
+     * already does at scsd.c:2490 -- is future work, not done by this
+     * struct's addition. NULL (the default; every current caller) falls back
+     * to the labeled replay SCS_MSCP_ENV_CREDIT, unchanged from before
+     * vms-8de. */
     const struct scs_cdt *cdt;
 };
 

@@ -1051,6 +1051,16 @@ static int run_show_system(char *out, size_t outsz)
     if (pipe(in_pipe) < 0) return -1;
     if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
 
+    /*
+     * Flush every stdio buffer -- including this process's own (parent)
+     * stdout -- before forking. Without this, the child inherits a copy
+     * of the PARENT's unflushed stdout buffer, which a later fflush(stdout)
+     * in this or a sibling helper could push into the wrong capture pipe.
+     * Latent when stdout is line-buffered (console); live the moment
+     * stdout is fully buffered (redirected to a file) -- see vms-cdb.
+     */
+    fflush(NULL);
+
     pid_t pid = fork();
     if (pid < 0) return -1;
 
@@ -1121,6 +1131,17 @@ static int run_show_system_unpriv(char *out, size_t outsz)
     out[0] = '\0';
     if (pipe(in_pipe) < 0) return -1;
     if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+
+    /*
+     * Flush every stdio buffer -- including this process's own (parent)
+     * stdout -- before forking. Without this, the child inherits a copy
+     * of the PARENT's unflushed stdout buffer; on any setup failure below
+     * the child's fflush(stdout) after dup2'ing the capture pipe would
+     * write that inherited parent data into the child's pipe. Latent
+     * when stdout is line-buffered (console); live the moment stdout is
+     * fully buffered (redirected to a file) -- see vms-cdb.
+     */
+    fflush(NULL);
 
     pid_t pid = fork();
     if (pid < 0) return -1;

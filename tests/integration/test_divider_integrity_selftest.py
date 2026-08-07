@@ -106,6 +106,30 @@ class FusionDetection(unittest.TestCase):
         )
         self.assertEqual(C.check_text("cpp.cc", text), [])
 
+    def test_does_not_flag_markdown_table_separator_row(self):
+        # vms-e90: a comment-embedded markdown table's separator row
+        # ("|------|------|...") is a legitimate divider shape, not a fused
+        # divider run followed by prose -- every character after the run is
+        # '|' or a divider char, never letters/words from a following line.
+        text = (
+            " *   header offset | size | field\n"
+            " *   --------------|------|------------------------------------------------\n"
+            " *   +0            | 4    | destination connection ID\n"
+        )
+        findings = C.check_text("table.h", text)
+        self.assertEqual(findings, [], "false positive on table row: %r" % findings)
+
+    def test_still_flags_fusion_immediately_after_a_table_style_run(self):
+        # A table-separator-shaped run that is IMMEDIATELY followed by real
+        # prose (not just '|' and divider chars) must still be caught --
+        # the table-row exemption must not swallow genuine fusion.
+        text = (
+            " *   --------------|------| this text should not be here\n"
+        )
+        findings = C.check_text("fused_table.h", text)
+        kinds = {f.kind for f in findings}
+        self.assertIn("fused-divider", kinds, findings)
+
 
 class TruncationDetection(unittest.TestCase):
     """Pass 2: a shorter divider on its OWN line, sharing a file with

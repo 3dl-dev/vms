@@ -184,6 +184,7 @@ static int process_a(int wfd, int rfd)
 
 int main(int argc, char **argv)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: keep stdout line-buffered even when init.sh redirects it to a file, so an unflushed fork() cannot splice output */
     int pipefd[2], gofd[2];
     pid_t child;
     struct owner_report rep;

@@ -132,14 +132,32 @@ SUITE_FAIL=0
 ASSERT_PASS=0
 ASSERT_FAIL=0
 SUITE_OUT=/tmp/suite_out.$$
+SUITE_RC=/tmp/suite_rc.$$
 for test in /tests/test_kmod_* /tests/test_syssvc_*; do
     [ -x "$test" ] || continue
     name=$(basename "$test")
     echo ""
     echo "--- $name ---"
-    "$test" >"$SUITE_OUT" 2>&1
-    rc=$?
-    cat "$SUITE_OUT"
+    # vms-b5b: stream to console AND capture to file IN REAL TIME via tee,
+    # instead of "redirect to a file, then cat it after the process exits".
+    # The old form is fine for a suite that returns -- but a `fatal`
+    # negative control (facility_defects.sh isolation=fatal, e.g.
+    # executive-not-pinned) can wedge the WHOLE GUEST KERNEL after the
+    # suite has printed its assertions and before init.sh regains control.
+    # When that happens the shell's own `rc=$?; cat "$SUITE_OUT"` NEVER
+    # RUNS, and every byte the suite already wrote -- durable only inside
+    # the guest's own tmpfs -- is lost when the host's `timeout` kills
+    # QEMU, even though the write(2) calls themselves succeeded. MEASURED:
+    # with the plain redirect, executive-not-pinned's three named
+    # assertions (all printed BEFORE the fatal ioctl) never reached the
+    # captured serial transcript at all -- not a splice, an absence. tee
+    # puts each line on the console the instant the suite prints it, which
+    # survives a guest freeze one line later exactly the way direct-to-
+    # console output always did before vms-215 introduced the file
+    # redirect. The exit status can no longer come from `$?` (that would
+    # be tee's), so the subshell banks it to a second file.
+    ( "$test" 2>&1; echo $? >"$SUITE_RC" ) | tee "$SUITE_OUT"
+    rc=$(cat "$SUITE_RC")
     spass=$(grep -c "^  PASS:" "$SUITE_OUT")
     sfail=$(grep -c "^  FAIL:" "$SUITE_OUT")
     ASSERT_PASS=$((ASSERT_PASS+spass))
@@ -158,7 +176,7 @@ for test in /tests/test_kmod_* /tests/test_syssvc_*; do
     fi
     echo "=== SUITE $name rc=$rc ==="
 done
-rm -f "$SUITE_OUT"
+rm -f "$SUITE_OUT" "$SUITE_RC"
 
 echo ""
 # MODULE LOAD is reported separately from FINAL RESULTS (vms-95f) so that

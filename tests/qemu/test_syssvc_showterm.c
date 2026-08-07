@@ -384,6 +384,7 @@ static const char *const HEADER_PREFIX =
 
 int main(void)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: keep stdout line-buffered even when init.sh redirects it to a file, so an unflushed fork() cannot splice output */
     char out[16384];
     int pipefd[2], stopfd[2];
     pid_t child;

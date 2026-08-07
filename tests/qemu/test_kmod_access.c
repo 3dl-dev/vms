@@ -135,6 +135,7 @@ static int child_main(int wfd)
 
 int main(void)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: keep stdout line-buffered even when init.sh redirects it to a file, so an unflushed fork() cannot splice output */
     struct vms_register_args reg;
     struct vms_getmode_args gm;
     struct vms_priv_args pv;

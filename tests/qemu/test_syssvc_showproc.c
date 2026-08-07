@@ -558,6 +558,7 @@ static int device_absent_checks(void)
 
 int main(void)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: keep stdout line-buffered even when init.sh redirects it to a file, so an unflushed fork() cannot splice output */
     static char out[65536];
     static char script[512];
     char msg[256];

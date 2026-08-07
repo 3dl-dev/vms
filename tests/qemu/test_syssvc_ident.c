@@ -1381,6 +1381,7 @@ static void scenario_g_unnamed_row_reports_nothing(void)
 
 int main(void)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: keep stdout line-buffered even when init.sh redirects it to a file, so an unflushed fork() cannot splice output */
     static char outa[65536], outb[65536], outc[65536];
     uint32_t selfpid = 0;
 

@@ -6,6 +6,16 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege GITHUB_TOKEN for every job in this workflow (jobs may narrow
+# further, none may widen without saying so here). Nothing in this file needs
+# write scope: no step uses `secrets.`, `gh`, or `git push`; the only actions
+# are checkout/cache (read), upload-artifact (Actions runtime token, not
+# GITHUB_TOKEN), and docker build-push-action with `push: false`. If a job ever
+# needs to write (comment on a PR, push a tag, upload SARIF), grant that scope
+# on THAT job rather than widening this block.
+permissions:
+  contents: read
+
 jobs:
   # -----------------------------------------------------------------------
   # Job 1: Build and unit test (host, shared libs, readline)

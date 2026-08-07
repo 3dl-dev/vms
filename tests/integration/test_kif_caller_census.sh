@@ -400,23 +400,29 @@
 #     sections at all is an explicit refusal), but the other two would degrade
 #     QUIETLY, in the under-firing direction. Re-measure them on any other
 #     compiler or target before trusting a green from one.
-#   - EXFILTRATION COMPOSED WITH A RENAME STILL LEAVES THE UNIVERSE, and the
-#     recipe is written down here because a residual nobody can reproduce is
-#     not a disclosure. Move a wrapper's body into a .inc; mark it `static`
-#     AND rename it out of the vms_kif_ namespace; #include that .inc from
-#     vms_kif.c AND from one other product file, so it is neither
-#     interface-private nor namespaced and every one of section 1's three
-#     definition readings drops it; delete the prototype; retire the
-#     declaration; add `enum { r = (int)VMS_IOCTL_TTSETMODE };` to vms_kif.c so
-#     the raw floor stays satisfied. Seven edits across three files, and the
-#     product still LINKS because the function is static in both units.
-#     MEASURED: 44 entry points -> 43, rc=0, PASS. Uncomposed -- keeping the
-#     name -- the same evasion is a RED at 44 entries; the name filter on the
-#     third reading is what makes the rename necessary. NOT CLOSED HERE. What
-#     would close it is reading the definition side of the universe from the
-#     interface TU with no name filter and no private-origin restriction, which
-#     needs a way to tell vms_syscall.h's 47 static inlines from an interface
-#     wrapper that this round did not find.
+#   - EXFILTRATION COMPOSED WITH A RENAME, CLOSED (vms-05e7). Move a wrapper's
+#     body into a .inc; mark it `static` AND rename it out of the vms_kif_
+#     namespace; #include that .inc from vms_kif.c AND from one other product
+#     file, so it is neither interface-private nor namespaced and each of
+#     section 1's first three definition readings drops it; delete the
+#     prototype; retire the declaration; add
+#     `enum { r = (int)VMS_IOCTL_TTSETMODE };` to vms_kif.c so the raw floor
+#     stays satisfied. Seven edits across three files, and the product still
+#     LINKS because the function is static in both units. MEASURED against the
+#     gate before the fourth definition reading existed: 44 entry points -> 43,
+#     rc=0, PASS. The fourth term closes it by dropping the name filter and
+#     reading the interface TU's full region unrestricted, which needed a way
+#     to tell vms_syscall.h's 47 `static inline` syscall stubs from an
+#     interface wrapper's exfiltrated body: MEASURED, every one of those 47
+#     (plus vms_errno.h's 2) carries `inline`, and every wrapper vms_kif.c
+#     defines directly does not, so `static-inline` is what the fourth term
+#     excludes and nothing else. RE-MEASURED with the fourth term in place:
+#     the same seven edits are now rc=1, naming the renamed entry point.
+#     Negative control 48 is this recipe. NOT CLOSED BY THIS: composing the
+#     same recipe with an eighth edit that also adds `inline` to the renamed,
+#     exfiltrated definition would look identical to a syscall stub to this
+#     term, and the boundary that separates them at that point is what the
+#     next residual would need to name.
 #
 # If you are here because this failed: do NOT add a declaration to make it pass
 # unless the entry point genuinely has no product path yet AND you have an item
@@ -483,12 +489,17 @@ strip_comments() {
 # call_edges [calls|defs|graph <rel>]: read comment-stripped C on stdin.
 #
 #   calls (default) - print "ENCLOSING<TAB>CALLEE" for every call expression.
-#   defs            - print "static|extern<TAB>NAME" for every function
-#                     DEFINITION at file scope. Definitions, not prototypes:
-#                     the same depth-0 rule that stops a prototype counting as
-#                     a call is what distinguishes them, so both readings of
-#                     the tree come from one reader and cannot disagree about
-#                     what a definition is.
+#   defs            - print "static|extern|static-inline<TAB>NAME" for every
+#                     function DEFINITION at file scope. Definitions, not
+#                     prototypes: the same depth-0 rule that stops a prototype
+#                     counting as a call is what distinguishes them, so both
+#                     readings of the tree come from one reader and cannot
+#                     disagree about what a definition is. "static-inline" is
+#                     a `static` definition that also saw the `inline` keyword
+#                     at file scope before its name -- see the vms-05e7 term
+#                     in section 1 for why that distinction exists: it is what
+#                     tells vms_syscall.h's generic syscall stubs apart from
+#                     an interface wrapper's body without a name filter.
 #   graph <rel>     - all five record kinds section 2 needs to build the
 #                     PRODUCT call graph, in ONE pass, each tagged and
 #                     attributed to the origin file <rel>:
@@ -616,7 +627,7 @@ call_edges() {
                         } else if (pending != "") {
                             curfn = pending
                             if (want == "defs")
-                                print (sawstatic ? "static" : "extern") "\t" curfn
+                                print (sawstatic ? (sawinline ? "static-inline" : "static") : "extern") "\t" curfn
                             else if (want == "graph" && once("D" SUBSEP curfn))
                                 print "D\t" rel "\t" (sawstatic ? "static" : "extern") "\t" curfn
                         } else if (pendobj != "") {
@@ -626,14 +637,14 @@ call_edges() {
                         } else {
                             curfn = ""
                         }
-                        pending = ""; pdepth = 0; sawstatic = 0
+                        pending = ""; pdepth = 0; sawstatic = 0; sawinline = 0
                     }
                     depth++; i++; continue
                 }
                 if (!ismac && c == "}") {
                     depth--
                     if (depth <= 0) {
-                        depth = 0; curfn = ""; sawstatic = 0; pdepth = 0
+                        depth = 0; curfn = ""; sawstatic = 0; sawinline = 0; pdepth = 0
                         pendobj = ""; pendarr = ""; objfrozen = 0
                     }
                     i++; continue
@@ -643,7 +654,7 @@ call_edges() {
                     # in ";" is a DECLARATION -- a prototype.
                     if (pending != "" && want == "graph" && once("P" SUBSEP pending))
                         print "P\t" rel "\t" pending
-                    pending = ""; sawstatic = 0; pendobj = ""; pendarr = ""; objfrozen = 0
+                    pending = ""; sawstatic = 0; sawinline = 0; pendobj = ""; pendarr = ""; objfrozen = 0
                     i++; continue
                 }
                 if (c ~ /[A-Za-z_$]/) {
@@ -658,6 +669,8 @@ call_edges() {
                         else if (pdepth == 0) pending = id
                     } else if (!ismac && depth == 0 && id == "static") {
                         sawstatic = 1
+                    } else if (!ismac && depth == 0 && id == "inline") {
+                        sawinline = 1
                     } else if (want == "graph" && !ismac) {
                         if (depth == 0 && !objfrozen) {
                             if (pdepth == 0) pendobj = id
@@ -671,7 +684,7 @@ call_edges() {
                 i++
             }
         }
-        BEGIN { depth = 0; pending = ""; curfn = ""; inmac = 0; macnode = ""; sawstatic = 0
+        BEGIN { depth = 0; pending = ""; curfn = ""; inmac = 0; macnode = ""; sawstatic = 0; sawinline = 0
                 pdepth = 0; pendobj = ""; pendarr = ""; objfrozen = 0 }
         {
             line = $0
@@ -1493,6 +1506,22 @@ fi
     # leaves open is that same evasion COMPOSED with a rename out of the
     # namespace, which is recorded under "WHAT THIS GATE DOES NOT SEE".
     call_edges defs < "$WORK/kif_pp_all" | grep -E '	vms_kif_' || true
+    # THE FOURTH TERM (vms-05e7), closing the residual the third term's own
+    # comment named: THAT SAME EVASION COMPOSED WITH A RENAME out of the
+    # vms_kif_ namespace. vms-e2b could not drop the name filter above without
+    # flooding on vms_syscall.h's 47 static inline syscall stubs, also visible
+    # in this unrestricted region once the private-origin rule is defeated.
+    # MEASURED on this tree: every one of those 47 (plus vms_errno.h's 2) is
+    # declared `static inline`; every wrapper vms_kif.c defines directly --
+    # kif_bind, kif_call, kif_wait_call, vms_kif_alloc_op, getjpi_common -- is
+    # plain `static`, with no `inline`. The vms-05e7 recipe does not add
+    # `inline` to the exfiltrated, renamed body either: it only needs `static`
+    # for the two TUs to each hold a private copy and still link, so it stays
+    # `static`, not `static-inline`. That is the tell this term reads: no name
+    # filter, but `static-inline` definitions are excluded as the generic
+    # syscall-stub shape, and everything else in the interface TU's full
+    # region -- namespaced or not -- is counted.
+    call_edges defs < "$WORK/kif_pp_all" | awk -F'\t' '$1 != "static-inline"'
 } | sort -u > "$WORK/defs_all"
 cut -f2 "$WORK/defs_all" | sort -u > "$WORK/defs"
 # A name is externally linked if EITHER reading saw it defined non-static.
@@ -1532,7 +1561,7 @@ sort -u "$WORK/protos" "$WORK/defs" > "$WORK/universe"
 # REACHED -- but only through the in-file reachability pass in step 3, which is
 # the only way a static can be reached in C. That is how kif_bind, kif_call and
 # getjpi_common pass today.
-awk -F'\t' '$1 == "static" { print $2 }' "$WORK/defs_all" | sort -u > "$WORK/statics"
+awk -F'\t' '$1 == "static" || $1 == "static-inline" { print $2 }' "$WORK/defs_all" | sort -u > "$WORK/statics"
 sort -u "$WORK/protos" "$WORK/defs_extern" > "$WORK/linkable"
 comm -23 "$WORK/statics" "$WORK/linkable" > "$WORK/static_only"
 comm -23 "$WORK/universe" "$WORK/static_only" > "$WORK/seedable"

@@ -905,13 +905,23 @@ else
 ]
 CC_GOOD_EOF
     # Same fixture, missing ONE closing brace -- the entry's "file" field is
-    # read but never reaches a matching "}", exactly as a shape drift in a
-    # future CMake would leave it.
-    sed '$d' "$WORK/cc_good.json" > "$WORK/cc_partial.json"
+    # read but its object never reaches a matching "}", exactly as a shape
+    # drift in a future CMake would leave it. Delete the ENTRY's brace (the
+    # lone "}" line), NOT the trailing array "]": the array bracket is the
+    # actual last line, and dropping it leaves every entry's "}" intact, so
+    # the parser's "file"-vs-"}" balance stays even and the PARTIAL is never
+    # provoked (that off-by-one is exactly what this control regressed on).
+    sed '/^}[[:space:]]*$/d' "$WORK/cc_good.json" > "$WORK/cc_partial.json"
 
     out_good=$(awk -v ROOT="/root/" -v INSTF="" -f "$REGBUILDSET_AWK" "$WORK/cc_good.json")
     rc_good=$?
-    out_partial=$(awk -v ROOT="/root/" -v INSTF="" -f "$REGBUILDSET_AWK" "$WORK/cc_partial.json")
+    # register_buildset.awk emits its clean set on stdout and its refusal
+    # diagnostic ("... parse is PARTIAL ...") on STDERR (see its header, and the
+    # real gate at test_userspace_service_register.sh which captures stdout and
+    # stderr into separate files). Fold stderr in so the message check below can
+    # actually see it -- capturing stdout alone left out_partial empty on a
+    # correct refusal, so the "named reason" branch could never be satisfied.
+    out_partial=$(awk -v ROOT="/root/" -v INSTF="" -f "$REGBUILDSET_AWK" "$WORK/cc_partial.json" 2>&1)
     rc_partial=$?
 
     if [ "$rc_good" -ne 0 ] || [ "$out_good" != "src/a.c" ]; then

@@ -95,10 +95,14 @@
 set -u
 
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-# The instrument, read from THIS checkout. The register, by contrast, is always
-# invoked from the SANDBOX copy under test -- a control that ran the pristine
-# register against a bought tree would be measuring the wrong pair.
-ATTR="$REPO_ROOT/tests/qemu/facility_attribution.sh"
+# The instrument is always invoked from a FROZEN SANDBOX copy under test, never
+# from the live $REPO_ROOT -- checks A-F run it against $WORK/pristine (and the
+# bought trees), and section G runs the snapshot's own copy against the snapshot
+# too. A control that read the live shared checkout while another session wrote
+# to it would be measuring a moving target (rd vms-a0f, vms-2d4). The register,
+# likewise, is only ever invoked from the SANDBOX copy under test -- a control
+# that ran the pristine register against a bought tree would measure the wrong
+# pair.
 
 pass_n=0; fail_n=0
 ok()  { echo "  ok: $*"; pass_n=$((pass_n + 1)); }
@@ -453,7 +457,22 @@ ICSEOF
     if "$_engine" run --rm -v "$WORK/ics.sh:/tmp/ics.sh:ro" "$_image" sh /tmp/ics.sh \
             > "$WORK/csites.raw" 2>"$WORK/csites.err"; then
         cut -f2,3,4 "$WORK/csites.raw" | sort > "$WORK/csites"
-        sh "$ATTR" sites | cut -f2,3,4 | sort > "$WORK/hsites"
+        # HERMETIC SNAPSHOT, not the live checkout (rd vms-a0f, vms-2d4). The
+        # host site derivation must run against the SAME frozen tree the rest of
+        # this program froze once at run start ($WORK/pristine, a `git archive
+        # HEAD` + WIP-patch taken at line ~257) -- never against $REPO_ROOT
+        # live. Reading the live shared working directory here made the check
+        # race any concurrent session's writes to this checkout: the container
+        # side is a snapshot baked into the image (COPY . in tests/qemu/Docker-
+        # file), so comparing it against a tree still being edited produced a
+        # DIFFERENT spurious mismatch on every run (shifted line numbers, a
+        # defect appearing/vanishing) -- the classic flaky signature. Both
+        # sides are now immutable snapshots, so a real image/tree divergence
+        # still reds, but a mid-run edit cannot. Run the snapshot's OWN copy of
+        # the script against its OWN tree so the manifest is snapshotted too.
+        FA_REPO_ROOT="$WORK/pristine" \
+            sh "$WORK/pristine/tests/qemu/facility_attribution.sh" sites \
+            | cut -f2,3,4 | sort > "$WORK/hsites"
         _cn=$(wc -l < "$WORK/csites"); _hn=$(wc -l < "$WORK/hsites")
         echo "      host: $_hn site row(s)   container: $_cn site row(s)"
         if [ "$_cn" -eq 0 ]; then

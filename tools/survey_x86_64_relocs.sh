@@ -44,6 +44,10 @@ INCS=""
 for c in $COMPONENTS vmslink; do
     [ -d "$REPO/src/$c/include" ] && INCS="$INCS -I$REPO/src/$c/include"
 done
+# src/libvmssys has no include/ subdir (headers live at its top level), so the
+# loop above never picks it up. sys_uai.c (src/libvms/syssvc/sys_uai.c)
+# #includes vms_kif.h from there — add it explicitly (vms-354, option b).
+INCS="$INCS -I$REPO/src/libvmssys"
 
 TALLY="$WORK/tally.txt"
 : > "$TALLY"

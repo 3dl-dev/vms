@@ -528,9 +528,24 @@ jobs:
                       next
                     }
                     { buf = buf $0 "\n" }
-                  ' | grep -F "FAIL:")
+                  ' | grep -F "FAIL:" || true)
+                  # `|| true`: grep -F exits 1 when this suite printed NO
+                  # FAIL: line at all -- the crash/segfault/killed-by-signal
+                  # shape (rc=139, rc=141/SIGPIPE, etc: real data per
+                  # CLAUDE.md Rule 9, not noise), where the process died
+                  # before reaching an assertion. This whole step runs under
+                  # bash -e (set at the top of this step), so an unguarded
+                  # grep here previously aborted the ENTIRE step with ZERO
+                  # diagnostic the instant a test_syssvc_* suite crashed
+                  # instead of failing an assertion -- reproduced with
+                  # tools/replay_ci_kernel_executive.py against a synthetic
+                  # rc=139/no-FAIL-line capture (vms-a3c). Same idiom, same
+                  # reason, as the N_EXPECTED `grep -c . || true` above.
+                  if [ -z "$suite_fails" ]; then
+                    suite_fails="(no FAIL: line was printed for this suite -- consistent with a crash, a killed process, or an exit before any assertion ran; NOT consistent with a specific assertion having been identified)"
+                  fi
                   BAD="$BAD
-            $suite: rc=$rc -- expected the honest-skip code 77. Not reaching 77 means EITHER a device-absent assertion inside the suite failed (a fabricated success, vms-6b8's signature defect) OR some other assertion failed for an unrelated reason -- the suite's own FAIL line(s) below say which:
+            $suite: rc=$rc -- expected the honest-skip code 77. Not reaching 77 has AT LEAST two known causes: a device-absent assertion inside the suite failing (a fabricated success, vms-6b8's signature defect), or another assertion failing for an unrelated reason -- both print the suite's own FAIL line(s), pasted below when present. This condition is not proven exhaustive; a suite that crashes before printing anything (see below) is a THIRD observed shape that produces neither:
             $suite_fails"
                 fi
                 ;;

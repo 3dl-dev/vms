@@ -206,3 +206,24 @@ add_test(
             ${CMAKE_SOURCE_DIR}
 )
 set_tests_properties(facility_negctl_equality PROPERTIES LABELS "harness")
+
+# ---------------------------------------------------------------------------
+# THE kernel-executive-negative-control STEP MUST SURVIVE A CRASHING SUITE
+# (rd vms-a3c, rework of vms-c9c / commit 74e3200).
+#
+# vms-c9c's `suite_fails=$(... | grep -F "FAIL:")` in ci.yml only exercises
+# the branch where the target suite printed a FAIL: line. A test_syssvc_*
+# suite that crashes (segfault, killed by a signal, any exit with NO FAIL:
+# line) makes grep exit 1, and because this whole step runs under `bash -e`,
+# an unguarded `var=$(cmd)` assignment that fails aborts the step -- with
+# ZERO diagnostic, before the per-suite verdicts or the vms.ko/vmsfs.ko
+# checks are ever reached. tools/replay_ci_kernel_executive.py extracts that
+# step's `run:` block VERBATIM out of ci.yml and executes it against a
+# synthetic capture, so this control is exercised against the SAME TEXT CI
+# runs -- no QEMU, no container, no /dev/vms needed.
+add_test(
+    NAME kernel_executive_negctl_crash
+    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/kernel_executive_negctl_crash.sh
+            ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(kernel_executive_negctl_crash PROPERTIES LABELS "harness")

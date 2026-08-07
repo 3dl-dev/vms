@@ -592,55 +592,137 @@ jobs:
   # the checkout, never written down), so a genuine boot failure cannot be
   # mistaken for it. Hence the wider timeout-minutes than the other QEMU jobs.
   # -----------------------------------------------------------------------
-  kernel-executive-facility-negative-controls:
-    name: Kernel Executive — Per-Facility Negative Controls (attribution)
+  # SHARDED (vms-86a). MEASURED root cause: this job ran the full defect list
+  # (58 QEMU boots, one in-container rebuild each) SEQUENTIALLY in one job --
+  # 27m09s idle, 50m39s under moderate concurrent CI load, >60m and
+  # timeout-minutes-killed with three PRs in flight (rd vms-86a trail). Each
+  # instance is its own ubuntu-latest runner VM -- there is no host-level
+  # resource shared between two PRs' jobs -- so the slowdown under load is
+  # queueing/scheduling variance on GitHub's shared runner fleet, not
+  # contention this workflow can remove; the fix is to make ONE job's
+  # sequential work small enough that that variance still fits the timeout.
+  # Raising timeout-minutes was rejected: it hides the same margin problem
+  # under a bigger number rather than fixing it (flaky-test rule, CLAUDE.md).
+  #
+  # So the per-facility loop is split into N independent shard jobs, each
+  # running ~1/N of the manifest's defects (`facility_defects.sh list`, split
+  # by `NR % N`, so the split tracks the manifest as it grows or shrinks --
+  # never a hand-maintained defect list that goes stale). Splitting shrinks
+  # the SEQUENTIAL run inside any one job, which is what the timeout budgets
+  # against; it does not remove or narrow any check -- every shard still runs
+  # the same positive control, the same per-defect equality check (red set
+  # EXACTLY require_fail + knock_on_fail, attribution, blind-suite gaps) as
+  # the single job did, just over a subset of defects. The full-manifest
+  # comparison against the committed execution record (the check a deleter
+  # does not own) still runs, in the aggregate job below, over the UNION of
+  # every shard's observations -- so it is exactly as strict as before: a
+  # defect a shard dropped is a defect missing from that union, and the
+  # committed-record comparison catches it same as it always did.
+  kernel-executive-facility-negative-controls-shard:
+    name: Kernel Executive — Per-Facility Negative Controls (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Budget per shard: ~58/6 defects plus the fixed image-build + positive-
+    # control cost every shard pays independently. Measured solo full run was
+    # 27m for 58 defects; a ~10-defect shard's sequential work is a fraction of
+    # that, so 30m leaves headroom for the SAME per-shard variance the full job
+    # saw (50m/60m at moderate/heavy load) without resurrecting a 60m+ job.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # This job is the ONLY place the executive is actually exercised, and
-      # rd vms-b1f means it does not run on a dev host at all. It therefore
-      # also EMITS the execution-sourced attribution record (rd vms-d894,
-      # rd vms-659) that tests/qemu/facility_defects.sh's static `coverage`
-      # reads for its observed count floor and its PROVEN-able-to-go-red suite
-      # population.
-      #
-      # THE COMPARISON IS THE POINT. The driver compares what it just observed
-      # with tests/qemu/facility_negctl_observed.tsv committed in the tree and
-      # fails on ANY disagreement in either direction, so the committed record
-      # cannot be fabricated upward and cannot go stale quietly. That check is
-      # the half a deleter does not own; the committed file alone is a
-      # snapshot, but unlike the citation ledger this replaced (rd vms-dc7),
-      # it is re-verified against a fresh QEMU run every time it matters, not
-      # just believed on its own say-so.
-      #
-      # FACILITY_NEGCTL_REQUIRE_RECORD: 1 makes a MISSING committed record red.
-      # It was 0 only while the tree had none -- the first record can only be
-      # produced here. That record is now committed
-      # (tests/qemu/facility_negctl_observed.tsv, emitted by run
-      # 30940272725 at tree-commit 6ffde90, positive-control pass, 42 RUN rows
-      # and 272 observed failing assertions), so this is 1 and deleting the
-      # record is red rather than a loud NOT MEASURED.
-      - name: Every executive facility has a control that turns CI red and NAMES it
+      # This job (across its shards) is the ONLY place the executive is
+      # actually exercised, and rd vms-b1f means it does not run on a dev host
+      # at all. Each shard EMITS its slice of the execution-sourced
+      # attribution record (rd vms-d894, rd vms-659); the aggregate job below
+      # unions the slices and is where the full-manifest comparison against
+      # the committed record happens (FACILITY_NEGCTL_REQUIRE_RECORD is a
+      # FULL_RUN-only check in the driver, so it is not meaningful per-shard --
+      # see run_facility_negctl.sh's own "ONLY ON A FULL RUN" note).
+      - name: Every executive facility has a control that turns CI red and NAMES it (this shard's slice)
         env:
           CONTAINER_ENGINE: docker
           FACILITY_NEGCTL_RECORD_OUT: ${{ runner.temp }}/facility_negctl_observed.tsv
-          FACILITY_NEGCTL_REQUIRE_RECORD: 1
-        run: tests/qemu/run_facility_negctl.sh
+        run: |
+          set -eu
+          DEFECTS=$(sh tests/qemu/facility_defects.sh list \
+            | awk -v n="${{ strategy.job-total }}" -v i="${{ matrix.shard }}" 'NR % n == i')
+          echo "This shard (${{ matrix.shard }}/${{ strategy.job-total }}) runs:"
+          echo "$DEFECTS" | sed 's/^/  /'
+          # shellcheck disable=SC2086
+          tests/qemu/run_facility_negctl.sh $DEFECTS
 
       # Uploaded even on failure: a run that went red is exactly when someone
-      # needs to see what it observed, and reading 42 defects' worth of rows
-      # out of a job log is how a record gets transcribed wrong.
-      - name: Upload the execution record this run observed
+      # needs to see what it observed, and reading a shard's rows out of a job
+      # log is how a record gets transcribed wrong.
+      - name: Upload this shard's observed record slice
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: facility-negctl-observed-record
+          name: facility-negctl-observed-record-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/facility_negctl_observed.tsv
           if-no-files-found: warn
+
+  # Aggregate job: keeps the ORIGINAL job name (branch protection / docs may
+  # cite it, e.g. docs/VERDICT-vms-b33-phase2-*.md) and does the ONE check that
+  # is only meaningful over the FULL manifest -- comparing the union of every
+  # shard's observations against the committed
+  # tests/qemu/facility_negctl_observed.tsv, in both directions, exactly as
+  # the single-job driver did on a full run.
+  kernel-executive-facility-negative-controls:
+    name: Kernel Executive — Per-Facility Negative Controls (attribution)
+    needs: kernel-executive-facility-negative-controls-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download every shard's observed record slice
+        uses: actions/download-artifact@v4
+        with:
+          pattern: facility-negctl-observed-record-shard-*
+          path: ${{ runner.temp }}/shards
+
+      # The union of every shard's rows, deduplicated. Shards partition the
+      # manifest by defect name, so no RUN row should collide across shards;
+      # `sort -u` is a safety net, not load-bearing on that partition.
+      - name: Union the shard records and compare against the committed record
+        env:
+          FACILITY_NEGCTL_REQUIRE_RECORD: 1
+        run: |
+          set -eu
+          UNION="${{ runner.temp }}/facility_negctl_observed.union.tsv"
+          find "${{ runner.temp }}/shards" -name '*.tsv' -print0 \
+            | xargs -0 cat 2>/dev/null | grep -v '^#' | grep -v '^[[:space:]]*$' \
+            | sort -u >"$UNION" || true
+          echo "--- union of all shards' observed records ($(grep -c '^RUN' "$UNION" 2>/dev/null || echo 0) RUN rows) ---"
+          . tests/qemu/facility_negctl_record.sh
+          COMMITTED=$(fnr_record_path tests/qemu)
+          if [ ! -s "$UNION" ]; then
+            echo "FATAL: no shard produced any observed record rows -- every shard must"
+            echo "       have failed before emitting one, so no verdict is possible."
+            exit 2
+          fi
+          if [ ! -f "$COMMITTED" ]; then
+            if [ "${FACILITY_NEGCTL_REQUIRE_RECORD:-0}" = "1" ]; then
+              echo "FAIL: FACILITY_NEGCTL_REQUIRE_RECORD=1 and no record is committed at $COMMITTED"
+              exit 1
+            fi
+            echo "NO COMMITTED RECORD -- nothing to compare against. See run_facility_negctl.sh."
+            exit 0
+          fi
+          if fnr_compare "$UNION" "$COMMITTED"; then
+            echo "ok: the committed record matches the union of every shard's observations, row for row"
+          else
+            exit 1
+          fi
 
   # -----------------------------------------------------------------------
   # Job 4: Conformance tests

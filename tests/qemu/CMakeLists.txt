@@ -182,3 +182,27 @@ add_test(
 set_tests_properties(facility_attribution_negctl PROPERTIES
     LABELS "harness"
     TIMEOUT 2400)
+
+# ---------------------------------------------------------------------------
+# THE RED-SET EQUALITY'S SUITE SCOPING, and its own negative control
+# (rd vms-b3b).
+#
+# run_facility_negctl.sh's red-set equality (check 6) used to compare bare
+# assertion TEXT, discarding which suite printed it -- so a same-text red from
+# a suite OUTSIDE a defect's suites_red could satisfy require_fail/
+# knock_on_fail in place of the suite the manifest actually named.
+# facility_negctl_equality.sh's fne_scope_map() is the fix: it scopes the
+# observed set to suites_red before the comparison runs.
+#
+# facility_negctl_equality_negctl.sh proves it with the REAL, MEASURED
+# collision (bind-client-no-register's shared text between test_syssvc_
+# ef_mproc.c and test_kmod_eflag_mproc.c) -- no QEMU, no container, in well
+# under a second. It pins the grounding facts first, so a future rewording
+# that removes the collision fails this file loudly instead of leaving it
+# testing a scenario that no longer exists.
+add_test(
+    NAME facility_negctl_equality
+    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_negctl_equality_negctl.sh
+            ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(facility_negctl_equality PROPERTIES LABELS "harness")

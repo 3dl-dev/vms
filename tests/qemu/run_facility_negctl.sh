@@ -50,6 +50,22 @@
 # too. The manifest can no longer be short by omission -- it can only be right,
 # or red.
 #
+# THE EQUALITY ITSELF WAS THEN FOUND TO BE KEYED ON TEXT ALONE (rd vms-b3b).
+# fail_map() already attributes every FAIL line to the suite that printed it --
+# but the comparison used to discard that attribution (`cut -f2-`) before
+# matching against require_fail/knock_on_fail, which is bare text. MEASURED: a
+# same-text FAIL line exists in two different suites' sources for three of
+# bind-client-no-register's named assertions; one of the two, test_kmod_
+# eflag_mproc.c, is not even in that defect's suites_red. A red from the WRONG
+# suite could therefore satisfy the equality while the RIGHT suite's own red
+# went missing, and the equality would not notice. The observed set is now
+# SCOPED to suites the defect's suites_red glob admits (facility_negctl_
+# equality.sh's fne_scope_map(), sourced above) before the comparison below
+# runs, so a same-text red from an out-of-scope suite can no longer stand in
+# for the one the manifest actually named. facility_negctl_equality_negctl.sh
+# is this fix's own negative control -- no QEMU needed, it feeds fabricated
+# fail_map()-shaped input straight at the scoping function.
+#
 # Every check has a stated failure mode it exists to catch. In particular:
 #
 #   - "at least one suite in the facility's set went red" catches a facility
@@ -123,6 +139,18 @@ if [ ! -f "$RECORD_LIB" ]; then
     exit 2
 fi
 . "$RECORD_LIB"
+
+# The (suite, assertion-text) identity the red-set equality (check 6, below)
+# is judged by (rd vms-b3b). See facility_negctl_equality.sh's own header for
+# the bug this closes and the sweep it was measured against.
+EQUALITY_LIB="$REPO_ROOT/tests/qemu/facility_negctl_equality.sh"
+if [ ! -f "$EQUALITY_LIB" ]; then
+    echo "FATAL: $EQUALITY_LIB is missing. The red-set equality's suite scoping"
+    echo "       depends on it; running without it would silently fall back to"
+    echo "       the text-only identity vms-b3b found unsound."
+    exit 2
+fi
+. "$EQUALITY_LIB"
 COMMITTED_RECORD=$(fnr_record_path "$REPO_ROOT/tests/qemu")
 # Defaults to a temp file: this script must never dirty the checkout it is
 # judging. Set FACILITY_NEGCTL_RECORD_OUT to keep the emitted record at a known
@@ -188,7 +216,7 @@ bad()   { echo "  FAIL: $*"; DEFECT_BAD=1; }
 # ---------------------------------------------------------------------------
 OUTFILE=$(mktemp)
 RUNLOG=$(mktemp)
-trap 'rm -f "$OUTFILE" "$OUTFILE.raw" "$OUTFILE.map" "$RUNLOG"
+trap 'rm -f "$OUTFILE" "$OUTFILE.raw" "$OUTFILE.map" "$OUTFILE.map.scoped" "$RUNLOG"
       if [ "$LIVE_RECORD_IS_TEMP" -eq 1 ]; then rm -f "$LIVE_RECORD"; fi' EXIT INT TERM
 
 # run_harness <defect|"">  -> normalised output in $OUTFILE
@@ -566,10 +594,27 @@ for defect in $DEFECT_LIST; do
     sh "$MANIFEST" field "$defect" knock_on_fail >>"$OUTFILE.exp"
     grep -v '^$' "$OUTFILE.exp" | sort -u >"$OUTFILE.exp2"
     fail_map >"$OUTFILE.map"
-    cut -f2- "$OUTFILE.map" | sort -u >"$OUTFILE.obs"
+    # SCOPED to suites this defect's suites_red admits (plus "(harness)"),
+    # BEFORE the text comparison -- see the header note on vms-b3b, above.
+    # shellcheck disable=SC2086
+    fne_scope_map "$red_globs" <"$OUTFILE.map" | sort -u >"$OUTFILE.map.scoped"
+    cut -f2- "$OUTFILE.map.scoped" | sort -u >"$OUTFILE.obs"
 
     miss=$(comm -23 "$OUTFILE.exp2" "$OUTFILE.obs")
     extra=$(comm -13 "$OUTFILE.exp2" "$OUTFILE.obs")
+
+    # DIAGNOSTIC ONLY, not a verdict input: a row that fail_map() saw but
+    # fne_scope_map() dropped is a same-text red from a suite OUTSIDE this
+    # defect's suites_red. It can never again satisfy the equality (that is
+    # the fix), but a reader debugging a MISS benefits from being told the
+    # text fired somewhere -- just not somewhere this defect is allowed to
+    # attribute it to. check 5 (ATTRIBUTION, above) already fails the control
+    # if that suite's own rc went nonzero; this line explains why, when it did.
+    dropped=$(comm -23 <(cut -f2- "$OUTFILE.map" | sort -u) "$OUTFILE.obs")
+    if [ -n "$dropped" ]; then
+        echo "  note: text also seen from a suite outside suites_red (excluded from the count):"
+        comm -23 <(sort -u "$OUTFILE.map") "$OUTFILE.map.scoped" | sed 's/^/    | /'
+    fi
     n_exp=$(grep -c . "$OUTFILE.exp2" || true)
     n_obs=$(grep -c . "$OUTFILE.obs" || true)
 
@@ -588,7 +633,7 @@ EOF
         ok "the red set is EXACTLY the $n_exp assertion(s) the manifest names (observed $n_obs), attributed to:"
         cut -f1 "$OUTFILE.map" | sort -u | sed 's/^/      /'
     fi
-    rm -f "$OUTFILE.exp" "$OUTFILE.exp2" "$OUTFILE.obs"
+    rm -f "$OUTFILE.exp" "$OUTFILE.exp2" "$OUTFILE.obs" "$OUTFILE.map.scoped"
     # $OUTFILE.map is NOT removed here any more -- the record emission at the
     # bottom of this loop body is what reads it, and it has to run after
     # $DEFECT_BAD is final.

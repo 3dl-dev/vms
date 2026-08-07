@@ -19,10 +19,17 @@
  *     itself through vmsfs path translation, in the calling process, with no
  *     executive-mediated access and no interlock against a concurrent
  *     sys$setuai in another process.
- * OVMX-USERSPACE: sys$setuai (vms-846.3) -- rewrites that same file directly.
- *     Its SYSPRV check reads pcb->cur_privs, the per-process word any process
- *     can set for itself through sys$setprv (see src/libvms/syssvc/sys_misc.c),
- *     so the authorization it enforces is the caller's own claim.
+ * OVMX-PARTIAL: sys$setuai (vms-846.3) -- exec: the SYSPRV test reads the
+ *     privilege mask the EXECUTIVE holds for the caller, through
+ *     vms_kif_getjpi_self(). That mask arrives only through
+ *     VMS_IOCTL_SETIDENT, which refuses any caller without SETPRV an identity
+ *     that is not a weakening of its own (src/kernel/vms_proctab.c). This line
+ *     is an upgrade rather than a correction -- see the disposition on
+ *     sys$setuai below (vms-cb5).
+ * OVMX-LOCAL: sys$setuai -- everything else. Once the test passes, this
+ *     process rewrites SYSUAF.DAT itself through vmsfs path translation, with
+ *     no executive mediation of the file and no interlock against a concurrent
+ *     sys$getuai in another process.
  */
 
 #include <stdint.h>
@@ -34,7 +41,7 @@
 #include "starlet.h"
 #include "uaidef.h"
 #include "prvdef.h"
-#include "vms/pcb.h"
+#include "vms_kif.h"
 
 /* Path to the system authorization file */
 #include "ovmx_layout.h"
@@ -375,10 +382,51 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
     if (!usrnam || !usrnam->dsc$a_pointer)
         return SS$_BADPARAM;
 
-    /* Check for SYSPRV privilege */
-    struct vms_pcb *pcb = vms_pcb_get();
-    if (pcb && !(pcb->cur_privs & PRV$M_SYSPRV)) {
-        return SS$_NOPRIV;
+    /*
+     * THE SYSPRV TEST READS THE EXECUTIVE (vms-cb5 round 5).
+     *
+     * WHAT STOOD HERE:
+     *
+     *     struct vms_pcb *pcb = vms_pcb_get();
+     *     if (pcb && !(pcb->cur_privs & PRV$M_SYSPRV))
+     *         return SS$_NOPRIV;
+     *
+     * Two defects, and the second is the one that decides. The mask came
+     * from the caller's own PCB, a per-process word sys$setprv
+     * (src/libvms/syssvc/sys_misc.c) lets any process write for itself --
+     * so the authorization was the caller's own claim. AND the guard read
+     * `pcb &&`: vms_pcb_get() returns NULL for a process that never called
+     * vms_pcb_init() (src/vmsprocess/vms_pcb.c), so for such a caller the
+     * condition was false and the test was SKIPPED. Not a test the caller
+     * controls -- no test. What is behind it is the UAI$_PWD case below,
+     * which writes an account's password hash into SYSUAF.DAT.
+     *
+     * The mask now comes from the row the EXECUTIVE holds for this process,
+     * the same source tools/vms_authorize.c's check_privilege() reads
+     * (vms-b2e). A process cannot widen that row for itself: the authorized
+     * mask is derived at registration from capable(CAP_SYS_ADMIN), and the
+     * only way to change it is VMS_IOCTL_SETIDENT, which without SETPRV
+     * accepts nothing but a weakening (src/kernel/vms_proctab.c).
+     *
+     * THERE IS NO ABSENT-EXECUTIVE BRANCH AND MUST NOT BE ONE (CLAUDE.md
+     * Rule 9). PID 1 refuses to bring OVMX up without /dev/vms, so on the
+     * one OVMX runtime this read cannot fail. If it fails anyway, this
+     * service refuses: a process whose privileges nothing can vouch for
+     * holds none. Substituting a process-local guess for a failed executive
+     * read is the defect above wearing a different name.
+     *
+     * PRV$M_SYSPRV is held equal to the executive's own VMS_PRV_M_SYSPRV by
+     * _Static_assert in src/libvms/prv_agreement.c, so the bit is pinned and
+     * not self-certified (CLAUDE.md Rule 8).
+     */
+    {
+        struct vms_procinfo self;
+
+        memset(&self, 0, sizeof(self));
+        if (!(vms_kif_getjpi_self(&self) & 1))
+            return SS$_NOPRIV;
+        if (!(self.cur_privs & PRV$M_SYSPRV))
+            return SS$_NOPRIV;
     }
 
     char username[32];
@@ -443,8 +491,26 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
         struct uaf_record tmp;
         int rc = parse_uaf_line(line, &tmp);
         if (rc == 1 && strcasecmp(tmp.username, username) == 0) {
-            /* Write the updated record */
-            fprintf(out, "%s|%s|%u|%u|%s|%u|%s\n",
+            /*
+             * %o, NOT %u, ON THE TWO UIC FIELDS (vms-e60, vms-cb5 round 5).
+             *
+             * parse_uaf_line() above reads them with strtoul(..., 8) -- the
+             * base vms-e60 derived from the oracle and moved every other
+             * SYSUAF reader and writer to. This fprintf was the site that
+             * did not move: it read octal and wrote decimal, so rewriting
+             * ANY record whose UIC digits differ between the two bases
+             * changed that account's UIC. DEFAULT ships 200|200, which this
+             * parsed as 128/128 and wrote back as "128|128", which the next
+             * read takes as octal 88/88 -- a different UIC, hence a
+             * different Linux uid/gid for the session LOGINOUT starts and a
+             * different owner for every protection decision taken against
+             * it. SYSTEM's 1|4 is the only shipped row that reads the same
+             * in both bases, which is what hid this.
+             *
+             * tools/vms_authorize.c's writer already uses %o; this is the
+             * same value written the same way, not a second answer.
+             */
+            fprintf(out, "%s|%s|%o|%o|%s|%u|%s\n",
                     rec.username, rec.password_hash,
                     rec.uic_group, rec.uic_member,
                     rec.default_dir, rec.flags, rec.privileges);

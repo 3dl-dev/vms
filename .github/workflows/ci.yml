@@ -173,6 +173,24 @@ jobs:
             ovmx-boot:latest \
             /test.sh
 
+      # vms-9b7. THE RELEASE PATH: boot -> provision -> boot. The operator's
+      # "%OVMX-F-EXECINIT, no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT" happened
+      # on exactly this path and NO COMMITTED TEST COVERED IT -- the persistent
+      # boot test above boots the same disk three times but never CHANGES
+      # SYSUAF between boots, so a system whose authorization file is edited
+      # (the entire point of having one) was untested end to end. Runs four
+      # cases: two controls that isolate the failure to the position of the
+      # sixth field separator rather than to the write path, the row that
+      # reproduced the halt, and a fail-stop negative control (SYSUAF with no
+      # SYSTEM row) proving this rig can still go red.
+      - name: Release e2e — boot, provision, boot
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_release_e2e.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
       # vms-0ff. Reuses the image built above (no extra build). Boots the REAL
       # runtime twice: once with the executive present (must come up), once
       # with vms.ko removed from the initramfs (must NOT come up). The second

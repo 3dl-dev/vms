@@ -1,11 +1,31 @@
 $! STARTUP.COM - OVMX System Startup Command Procedure
 $!
-$! Executed by STARTUP.EXE during boot from SYS$MANAGER:STARTUP.COM
 $! Runs after kernel modules and system disk mount. There is no logical
 $! name daemon to wait for: on VMS the logical name tables are
 $! executive-resident, not a service (vms-a4b) -- see the NOTE ON
 $! SERVICES in src/ovmx_init/ovmx_init.c.
 $! Edits to this file on the system disk persist across reboots.
+$!
+$! WHAT RUNS THIS PROCEDURE, AND UNDER WHOSE IDENTITY (vms-9b7).
+$!
+$! PID 1 (STARTUP.EXE) execs SYS$SYSTEM:PROVISION.EXE, which:
+$!   1. reads SYSUAF's SYSTEM record -- through libvms's ONE reader;
+$!   2. asks the EXECUTIVE to stamp that identity on itself, and halts the
+$!      boot if there is no SYSTEM record or the executive refuses;
+$!   3. provisions the accounts' home directories and the system tree's
+$!      ownership;
+$!   4. execs DCL.EXE on THIS FILE, in the SAME process.
+$!
+$! So this procedure -- and SYSTARTUP_VMS.COM after it -- runs under SYSTEM's
+$! identity as the executive recorded it, which is what OpenVMS does: STARTUP
+$! runs under username SYSTEM.
+$!
+$! PID 1 DOES NOT READ SYSUAF.DAT and must not start. It is statically linked,
+$! so when it did, it carried two hand-rolled 512-byte parsers of its own --
+$! two of five independent parsers of one format, whose disagreement over the
+$! line limit could leave the system with no readable SYSTEM record and no
+$! boot. Account provisioning and system identity are system management, and
+$! system management belongs on this path.
 $!
 $ SET NOON
 $!

@@ -52,6 +52,7 @@
 static sysuaf_record_t g_users[MAX_USERS];
 static int             g_nusers = 0;
 static int             g_dirty  = 0;   /* set when in-memory data modified */
+static int             g_load_errors = 0; /* records refused at load time */
 
 /* str_upcase() and str_trim() replaced by str_str_upcase()/str_trim() from str_util.h */
 
@@ -104,17 +105,25 @@ static int load_sysuaf(void)
         return -1;
     }
 
-    char line[MAX_LINE];
+    /* ONE READER (vms-9b7): sysuaf_read_line() + sysuaf_parse_line() from
+     * libvms. AUTHORIZE used to carry its own 1024-byte fgets loop and its
+     * own field split, one of five independent implementations of this
+     * format with three different buffer sizes between them. */
+    char line[SYSUAF_LINE_MAX];
     int lineno = 0;
-    while (fgets(line, sizeof(line), fp)) {
+    int too_long = 0;
+    while (sysuaf_read_line(fp, line, sizeof(line), &too_long)) {
         lineno++;
-        /* Skip comments and blank lines */
-        if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
-            continue;
 
-        str_trim(line);
-        if (line[0] == '\0')
+        /* A record that does not fit is REFUSED, not silently shortened.
+         * AUTHORIZE must not load a row it cannot faithfully write back:
+         * saving the truncated form would destroy the operator's data. */
+        if (too_long) {
+            fprintf(stderr, "%%UAF-E-RECTOOLONG, record at line %d exceeds "
+                    "%d bytes -- not loaded\n", lineno, SYSUAF_LINE_MAX - 1);
+            g_load_errors++;
             continue;
+        }
 
         if (g_nusers >= MAX_USERS) {
             fprintf(stderr, "%%UAF-W-OVERFLOW, too many users (max %d), "
@@ -122,51 +131,14 @@ static int load_sysuaf(void)
             continue;
         }
 
-        /* Parse: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
-         * Pipe delimiter avoids conflict with VMS device colons in DEFAULT_DIR. */
-        char *fields[7];
-        char buf[MAX_LINE];
-        strncpy(buf, line, sizeof(buf) - 1);
-        buf[sizeof(buf) - 1] = '\0';
-
-        char *p = buf;
-        int nf = 0;
-        for (nf = 0; nf < 7 && p != NULL; nf++) {
-            fields[nf] = p;
-            char *sep = strchr(p, '|');
-            if (sep) {
-                *sep = '\0';
-                p = sep + 1;
-            } else {
-                p = NULL;
-            }
-        }
-
-        if (nf < 5) {
+        int rc = sysuaf_parse_line(line, &g_users[g_nusers]);
+        if (rc == 0)
+            continue;   /* comment or blank */
+        if (rc < 0) {
             fprintf(stderr, "%%UAF-W-BADFORMAT, malformed record at line %d\n",
                     lineno);
             continue;
         }
-
-        sysuaf_record_t *r = &g_users[g_nusers];
-        memset(r, 0, sizeof(*r));
-
-        strncpy(r->username, fields[0], sizeof(r->username) - 1);
-        str_upcase(r->username);
-
-        strncpy(r->password_hash, fields[1], sizeof(r->password_hash) - 1);
-        /* OCTAL: SYSUAF.DAT UIC fields (vms-e60; derivation in
-         * src/libvms/rtl/sysuaf.c). Read, write, display and the
-         * /UIC=[g,m] parse below all move together or AUTHORIZE
-         * disagrees with the file it just wrote. */
-        r->uic_group  = (uint32_t)strtoul(fields[2], NULL, 8);
-        r->uic_member = (uint32_t)strtoul(fields[3], NULL, 8);
-        strncpy(r->default_dir, fields[4], sizeof(r->default_dir) - 1);
-
-        if (nf > 5 && fields[5])
-            strncpy(r->flags, fields[5], sizeof(r->flags) - 1);
-        if (nf > 6 && fields[6])
-            strncpy(r->privileges, fields[6], sizeof(r->privileges) - 1);
 
         g_nusers++;
     }
@@ -178,6 +150,22 @@ static int load_sysuaf(void)
 /* Write all users back to SYSUAF_PATH, with flock() for safety */
 static int save_sysuaf(void)
 {
+    /*
+     * REFUSE TO SAVE OVER RECORDS WE COULD NOT LOAD. save_sysuaf() rewrites
+     * the WHOLE file from g_users[], so if load_sysuaf() dropped a row --
+     * because it was longer than the record limit and reading its prefix
+     * would have corrupted it -- committing this save would DELETE that
+     * account. Losing an account silently is the same class of defect as
+     * losing the SYSTEM record silently, which is what this item exists to
+     * kill (vms-9b7).
+     */
+    if (g_load_errors) {
+        fprintf(stderr, "%%UAF-E-SAVEABORT, %d record(s) could not be read at "
+                "load time; refusing to rewrite SYSUAF and lose them\n",
+                g_load_errors);
+        return -1;
+    }
+
     /* Write to a temp file then rename for atomicity */
     char sysuaf_linux2[1024];
     vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux2, sizeof(sysuaf_linux2));
@@ -205,23 +193,42 @@ static int save_sysuaf(void)
     fprintf(fp, "# (no password, right or wrong, is accepted) -- see vms-08f and the\n");
     fprintf(fp, "# disposition comment on sysuaf_authenticate() in src/libvms/rtl/sysuaf.c.\n");
 
+    /*
+     * ONE WRITER (vms-9b7). The format string lived here AND in
+     * src/libvms/syssvc/sys_uai.c, and the two disagreed on the FLAGS field
+     * ("%s" here, "%u" there). It now lives in exactly one place --
+     * sysuaf_format_record() -- and that function REFUSES a record too long
+     * to be read back, rather than emitting one that a reader will silently
+     * truncate. Refusing is the whole point: a row this process cannot read
+     * back is a row that can leave the system with no SYSTEM record and no
+     * boot (measured, vms-9b7).
+     */
+    int refused = 0;
     for (int i = 0; i < g_nusers; i++) {
         const sysuaf_record_t *r = &g_users[i];
-        /* %o: the UIC fields are octal (vms-e60) -- writing them decimal
-         * would make AUTHORIZE unable to read back what it just saved. */
-        fprintf(fp, "%s|%s|%o|%o|%s|%s|%s\n",
-                r->username,
-                r->password_hash,
-                r->uic_group,
-                r->uic_member,
-                r->default_dir,
-                r->flags,
-                r->privileges);
+        char row[SYSUAF_LINE_MAX];
+        if (sysuaf_format_record(r, row, sizeof(row)) < 0) {
+            fprintf(stderr, "%%UAF-E-RECTOOLONG, record for %s exceeds the "
+                    "%d-byte SYSUAF record limit -- NOT WRITTEN\n",
+                    r->username, SYSUAF_LINE_MAX - 1);
+            refused++;
+            continue;
+        }
+        fprintf(fp, "%s\n", row);
     }
 
     fflush(fp);
     flock(fileno(fp), LOCK_UN);
     fclose(fp);
+
+    /* A refused record means the file on disk would not be what the operator
+     * asked for. Abandon the whole save rather than commit a partial one. */
+    if (refused) {
+        fprintf(stderr, "%%UAF-E-SAVEABORT, %d record(s) refused; SYSUAF not "
+                "updated\n", refused);
+        unlink(tmppath);
+        return -1;
+    }
 
     /* Atomic rename */
     if (rename(tmppath, sysuaf_linux2) != 0) {

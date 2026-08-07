@@ -81,6 +81,16 @@ FUSED_RE = re.compile(
 # with trailing space, e.g. "===*/" or "=== */".
 BENIGN_TAIL_RE = re.compile(r"^[ \t]*\*/[ \t]*$")
 
+# A tail that is a TABLE SEPARATOR ROW's remaining cells, not fused text: a
+# markdown-style "|------|------|" divider row is drawn as repeated
+# (pipe, run-of-divider-chars) groups -- the SAME divider-char alphabet this
+# checker already treats as a divider, just split into cells by '|'. Shape,
+# not content: every character after the initial run is either '|' or one of
+# the divider chars, and the line ends there (optional trailing whitespace).
+# A real fusion tail carries the NEXT COMMENT LINE's prose -- letters, words,
+# punctuation outside this alphabet -- so this can't be satisfied by accident.
+TABLE_ROW_TAIL_RE = re.compile(r"^(?:\|[=\-#*~]*)+[ \t]*$")
+
 Finding = namedtuple("Finding", "path lineno kind detail")
 
 
@@ -113,6 +123,8 @@ def check_text(path, text):
         # with a leading run remnant ("== */"), or genuine fused text.
         tail_after_run = tail.lstrip(runchar)
         if tail_after_run == "" or BENIGN_TAIL_RE.match(tail_after_run):
+            continue
+        if TABLE_ROW_TAIL_RE.match(tail):
             continue
         # A SPACE (or tab) right after the divider run is this codebase's
         # single-line banner convention -- "==== TITLE ====" -- not a lost

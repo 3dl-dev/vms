@@ -260,28 +260,29 @@
 #     reader that guessed at runtime values would red on every defensive branch
 #     in the tree. Execution is what closes this, and execution is rd vms-d33's
 #     question, not a reader's.
-#   - THE ROOT RULE IS BOUGHT AT TWO EDITS, RE-MEASURED AGAINST THIS REVISION
-#     rather than restated from the last one. Give a dead function a
-#     DECLARATION in a header the build compiles and it becomes a root, because
-#     that is exactly what an exported library entry point looks like and this
-#     gate cannot tell the two apart without linking. The emitted-call rule
-#     does not touch it -- the call in the dead function's own body is real
-#     code and the compiler emits it. MEASURED on this tree: ONE insertion into
+#   - THE ROOT RULE'S "prototyped in a header" CLAUSE IS SCOPED TO A NON-static
+#     DECLARATION (rd vms-41b). A declaration in a header the build compiles
+#     used to seed a root regardless of storage class, because that is exactly
+#     what an exported library entry point looks like and the P-record reading
+#     did not carry the static/extern qualifier at all. MEASURED, the recipe
+#     that bought it on this tree before the fix: ONE insertion into
 #     src/vmsdcl/include/dcl/dcl_cmd.h,
 #         #include "vms_kif.h"
 #         static void ovmx_dead_helper(void);
 #         static void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }
-#     plus retiring vms_kif_chkpriv's OVMX-UNWIRED token, is rc=0 at 44 entry
-#     points / 32 reached / 12 unwired with all 127 product translation units
-#     compiling clean. TWO edits across TWO files, one of them a public header.
-#     The `static` is what makes it link: nine translation units include that
-#     header, and a non-static definition would be nine duplicate symbols.
-#     THE SAME SHAPE THROUGH vms_kif.h ITSELF DOES NOT WORK, which is worth
-#     knowing before anyone tries it as a shortcut: section 0' excludes $KIF_H
-#     from the product text, so a declaration written beside the retired token
-#     -- two edits in ONE file -- makes no root. MEASURED: rc=1, naming
-#     vms_kif_chkpriv.
-#     What would close this class is execution evidence. It is not a compile.
+#     plus retiring vms_kif_chkpriv's OVMX-UNWIRED token -- TWO edits across TWO
+#     files, one of them a public header, `static` chosen so the multi-includer
+#     header would still link. A `static` declaration in a header can NEVER be
+#     the exported-API shape rule 2 exists for: each includer gets its own
+#     private symbol, not a shared entry point. RE-MEASURED against this
+#     revision: rc=1, naming vms_kif_chkpriv -- see negative control 48.
+#     THE SAME SHAPE THROUGH vms_kif.h ITSELF DOES NOT WORK EITHER, which is
+#     worth knowing before anyone tries it as a shortcut: section 0' excludes
+#     $KIF_H from the product text, so a declaration written beside the retired
+#     token -- two edits in ONE file -- makes no root regardless of storage
+#     class. MEASURED: rc=1, naming vms_kif_chkpriv.
+#     What would close the class of a genuinely NON-static header declaration
+#     with no in-tree caller is execution evidence. It is not a compile.
 #   - A FILE-SCOPE REFERENCE THIS READER CANNOT ATTRIBUTE CREDITS NOTHING. An
 #     address taken at file scope outside every brace, in a declarator shape
 #     neither $pendobj nor $pendarr names, belongs to no node and therefore
@@ -498,7 +499,7 @@ strip_comments() {
 #                                                             OBJECT with a
 #                                                             braced initialiser
 #                       E<TAB>rel<TAB>ENCLOSING<TAB>CALLEE    a call edge
-#                       P<TAB>rel<TAB>NAME                    a file-scope
+#                       P<TAB>rel<TAB>static|extern<TAB>NAME  a file-scope
 #                                                             DECLARATION
 #                       R<TAB>rel<TAB>ENCLOSING<TAB>NAME  an identifier NOT
 #                                           followed by "(", i.e. a name USED
@@ -642,7 +643,7 @@ call_edges() {
                     # A name followed by "(" at file scope whose statement ends
                     # in ";" is a DECLARATION -- a prototype.
                     if (pending != "" && want == "graph" && once("P" SUBSEP pending))
-                        print "P\t" rel "\t" pending
+                        print "P\t" rel "\t" (sawstatic ? "static" : "extern") "\t" pending
                     pending = ""; sawstatic = 0; pendobj = ""; pendarr = ""; objfrozen = 0
                     i++; continue
                 }
@@ -1842,7 +1843,13 @@ awk -F'\t' -v tuf="$WORK/tu_rel" -v seedf="$WORK/seedable" -v w="$WORK" \
     }
     $1 == "D" { defn[res($2, $4)] = 1; next }
     $1 == "O" { next }
-    $1 == "P" { if (!($2 in istu)) prot[$3] = 1; next }
+    # A "static" declaration in a header cannot be an exported entry point --
+    # each includer gets its own private symbol, which is exactly what a
+    # dead helper declared AND defined `static` inside a multi-includer
+    # header (e.g. dcl_cmd.h) looks like when it tries to buy a root off
+    # rule 2 (rd vms-41b). Only a NON-static declaration in a non-TU file
+    # is the exported-API-surface shape rule 2 exists for.
+    $1 == "P" { if (!($2 in istu) && $3 != "static") prot[$4] = 1; next }
     $1 == "E" {
         if (!emitted_ok($3, $4)) {
             nnoemit++

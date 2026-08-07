@@ -860,6 +860,16 @@ static void install_system(void)
     provision_dirs();
     copy_recursive(INITRAMFS_BACKUP, SYSDISK_MOUNT);
     provision_sysuaf_users();
+
+    /* Every file just written -- SYSUAF.DAT above all -- sits dirty in
+     * the page cache until the kernel's own periodic writeback runs
+     * (default ~30s). A user who reaches the login prompt below and
+     * quits QEMU before that timer fires (the documented "log out or
+     * Ctrl-A X here" step) loses the install: the next boot reads a
+     * system disk that was never actually written. Force it out now,
+     * while install_system() still knows the write is what must survive. */
+    sync();
+
     printf("%%STARTUP-I-INSTALLED, system installation complete\n");
 }
 

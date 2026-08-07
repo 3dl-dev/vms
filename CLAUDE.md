@@ -152,7 +152,7 @@ When artifacts disagree, resolve conflicts in this order:
 - **Assembly**: x86_64 and aarch64 in `src/libvmssys/arch/`
 - **Kernel modules**: Standalone Makefiles in `src/kernel/` and `src/kernel/vmsfs/`
 - **Specs and plans**: Structured markdown in `docs/`
-- **Tracking**: Beads for active work. `tracking/` files are historical reference — do not delete, but create new work as beads. The one exception is `tracking/rd-citations.tsv`, which is DERIVED state, not history: it is how the standing gates check that an exemption's cited rd item exists and is open without reaching rd (unavailable in CI). Regenerate it with `tools/gen_rd_citations.py` whenever a declaration's cited id changes; `ctest -R rd_citations_fresh` reds if it is stale
+- **Tracking**: Beads for active work. `tracking/` files are historical reference — do not delete, but create new work as beads.
 - **Tests**: Integration in `tests/integration/`, QEMU kernel tests in `tests/qemu/`, unit tests in `tests/libvmssys/`
 - **Build configs**: CMakeLists.txt hierarchy, Dockerfile.bootable (builds the runtime), src/kernel/Dockerfile + tests/qemu/Dockerfile (build/test tooling). The root Dockerfile + docker-compose.yml (glibc product container, Rule 9) are deleted.
 
@@ -205,11 +205,7 @@ vms/
 ├── tracking/              # Historical tracking (read-only reference)
 │   ├── roadmap.md         # Phase completion history
 │   ├── status.md          # Status snapshots
-│   ├── backlog.md         # Enhancement ideas (migrated to beads)
-│   └── rd-citations.tsv   # DERIVED, not history: rd status of every item id
-│                          # cited by an OVMX-<TOKEN>: declaration under src/
-│                          # and tools/. Regenerate with tools/gen_rd_citations.py
-│                          # — never hand-edit (vms-8cc).
+│   └── backlog.md         # Enhancement ideas (migrated to beads)
 └── .beads/                # Beads database (git-tracked)
 ```
 

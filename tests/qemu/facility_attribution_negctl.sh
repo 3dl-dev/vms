@@ -320,6 +320,36 @@ if measured_dependence "$WORK/pristine" 'sys$wflor' test_syssvc_ef_mproc; then
         ok "NO measured dependence, before or after the ignored call. sys\$readef's"
         echo "        standing UNMEASURED gap (rd vms-38c) is not moved by adding one more"
         echo "        call to the exact suite already cited as its proof."
+        echo "    PROVING THIS ARM CAN FAIL (rd vms-a4d): edit3 only touches"
+        echo "        tests/qemu/test_syssvc_ef_mproc.c, which measured_dependence()"
+        echo "        NEVER READS -- it queries facility_attribution.sh's OFFLINE join of"
+        echo "        cmd_sites() (reads src/, not tests/qemu/*.c) against the COMMITTED"
+        echo "        facility_negctl_observed.tsv (unregenerated here). So the 'ok' above"
+        echo "        is guaranteed no matter what edit3 does, UNLESS this arm can also be"
+        echo "        shown capable of a bad() verdict. Confirm capability: a REAL defect"
+        echo "        already mutates vms_ioctl_readef (derived, not assumed) -- fabricate"
+        echo "        ONE RED row attributing it to test_syssvc_ef_mproc in a throwaway copy"
+        echo "        of the record, and require this SAME query to flip to PAID."
+        _readef_defect=$(sh "$ATTR" sites | awk -F'\t' '$1=="SITE" && $5=="vms_ioctl_readef"{print $2; exit}')
+        if [ -z "$_readef_defect" ]; then
+            bad "FALSIFIABILITY PROOF FAILED: no defect's SITE names vms_ioctl_readef at"
+            echo "        all, so no fabrication could even be constructed to test capability."
+        else
+            echo "      real defect whose SITE mutates vms_ioctl_readef: $_readef_defect"
+            _fakerec="$WORK/bought2/tests/qemu/facility_negctl_observed.tsv.fake"
+            cp "$WORK/bought2/tests/qemu/facility_negctl_observed.tsv" "$_fakerec"
+            printf 'RED\t%s\ttest_syssvc_ef_mproc\tFABRICATED PROOF-OF-CAPABILITY ASSERTION\n' \
+                "$_readef_defect" >> "$_fakerec"
+            if FA_REPO_ROOT="$WORK/bought2" FA_RECORD="$_fakerec" \
+                    sh "$ATTR" depends test_syssvc_ef_mproc vms_ioctl_readef >/dev/null 2>&1; then
+                ok "the fabricated dependency IS detected (flips to PAID) -- this arm can"
+                echo "        fail, so its 'ok' for the real (inert) edit3 buy is real evidence"
+            else
+                bad "FALSIFIABILITY PROOF FAILED: even a fabricated RED row citing readef's"
+                echo "        own real SITE was not detected -- this arm cannot fail for ANY"
+                echo "        input and its 'ok' above proves nothing. Re-anchor it."
+            fi
+        fi
     fi
 else
     if measured_dependence "$WORK/bought" 'sys$wflor' test_syssvc_ef_mproc; then

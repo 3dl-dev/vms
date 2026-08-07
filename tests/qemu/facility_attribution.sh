@@ -501,29 +501,61 @@ cmd_selftest() {
         [ -s "$_st_tmp/chk2" ] && _st_bad=1
     fi
 
-    echo "--- 3. an IGNORED CALL produces NO attribution (the recorded trap) ---"
-    # THE CONTROL THIS FILE EXISTS FOR (vms-38c). The measured buy against the
-    # register was originally `(void)sys$wflor(0u, 0u);` after `return` -- but
-    # vms_ioctl_wflor is NOT a safe anchor to hardcode: vms-2b2's follow-up
-    # work (vms-2ed) later added a REAL defect that genuinely mutates it and
-    # reddens test_syssvc_ef_mproc, which is exactly the kind of coverage gain
-    # this instrument is supposed to notice -- a check that still expected
-    # wflor to be unprobed would itself become the stale, hand-maintained fact
-    # this file argues against. So the anchor is DERIVED fresh every run: pick
-    # whatever `handlers` currently reports UNPROBED, and prove no assertion
-    # is attributed to it.
-    _st_unprobed=$(cmd_handlers 2>/dev/null | awk -F'\t' '$1=="UNPROBED"{print $2; exit}')
-    if [ -z "$_st_unprobed" ]; then
-        echo "  FAIL: no UNPROBED handler exists to anchor this check -- every vms_ioctl_*"
-        echo "        handler now has some measured dependence, so this control has nothing"
-        echo "        left to prove and must be re-targeted, not left green by accident"
-        _st_bad=1
-    elif cmd_attribute 2>/dev/null | awk -F'\t' -v h="$_st_unprobed" '$5==h{f=1} END{exit(f?0:1)}'; then
-        echo "  FAIL: something is attributed to $_st_unprobed, which no defect mutates"
+    echo "--- 3. ATTR never names a function no defect's SITE really mutates (the recorded trap) ---"
+    # THE CONTROL THIS FILE EXISTS FOR (vms-38c), REWORKED (vms-a4d, overturning
+    # the vms-38c rework that shipped a tautology).
+    #
+    # THE BUG THAT WAS HERE: the previous version picked its anchor as the
+    # FIRST handler `cmd_handlers` reported UNPROBED -- which cmd_handlers
+    # defines (see above) as "no ATTR row AND no SITE row names it" -- and then
+    # asserted cmd_attribute had NO ROW NAMING THAT SAME HANDLER. That is the
+    # negation of the exact predicate the anchor was selected by: it could not
+    # fail for any state of the instrument, because whichever handler cleared
+    # the "no ATTR row" test to become the anchor was, by that same test,
+    # already known to clear it. Proved by mutation: poisoning FA_ATTR_CACHE
+    # with a fabricated `ATTR test_syssvc_ef_mproc / BOGUS ASSERTION /
+    # kernel/vms_dev.c / vms_ioctl_getlki / bogus-defect` row left this check
+    # printing "ok" for vms_ioctl_alloc while vms_ioctl_getlki -- a DIFFERENT,
+    # genuinely UNPROBED handler -- silently carried the fabrication. The check
+    # re-anchored around the fabrication instead of catching it.
+    #
+    # THE FIX: stop picking ONE anchor from ATTR's own complement. Assert the
+    # join's actual invariant, over EVERY row at once: cmd_attribute's function
+    # column can never contain a function that cmd_sites' function column does
+    # not ALSO contain, because that is what the join in cmd_attribute is
+    # DEFINED to produce (see the awk above: `if (!(d in site)) continue`).
+    # Checked as a set difference, a fabrication naming ANY function --
+    # not one hand-picked in advance -- is caught. And this check is proven
+    # CAPABLE of failing, in this same run, by replaying the auditor's exact
+    # fabrication against a scratch cache and confirming THIS SAME LOGIC flags
+    # it as orphaned.
+    cmd_sites > "$_st_tmp/sites3" 2>/dev/null
+    awk -F'\t' '$1=="SITE" && $5 !~ /^\(/ {print $5}' "$_st_tmp/sites3" | sort -u > "$_st_tmp/site_fns3"
+    FA_ATTR_CACHE='' cmd_attribute 2>/dev/null | cut -f5 | sort -u > "$_st_tmp/attr_fns3"
+    _st_orphan=$(comm -23 "$_st_tmp/attr_fns3" "$_st_tmp/site_fns3" 2>/dev/null | grep -v '^$')
+    if [ -n "$_st_orphan" ]; then
+        echo "  FAIL: cmd_attribute names a function no defect's SITE row mutates:"
+        printf '%s\n' "$_st_orphan" | sed 's/^/        | /'
         _st_bad=1
     else
-        echo "  ok: no assertion is attributed to $_st_unprobed -- nothing in the manifest"
-        echo "      mutates it, so an ignored call anywhere cannot manufacture a dependency"
+        echo "  ok: every function cmd_attribute names is a function some defect's SITE"
+        echo "      row really mutates -- an ignored call, a stale cache, or a hand-edit"
+        echo "      cannot manufacture an ATTR row outside that join"
+    fi
+
+    echo "    proving check 3 CAN fail: replaying the auditor's fabricated-cache attack"
+    _st_fake3="$_st_tmp/fake_attr_cache3"
+    printf 'ATTR\ttest_syssvc_ef_mproc\tBOGUS ASSERTION\tkernel/vms_dev.c\tvms_ioctl_getlki\tbogus-defect\n' > "$_st_fake3"
+    FA_ATTR_CACHE="$_st_fake3" cmd_attribute 2>/dev/null | cut -f5 | sort -u > "$_st_tmp/attr_fns3_fake"
+    _st_orphan_fake=$(comm -23 "$_st_tmp/attr_fns3_fake" "$_st_tmp/site_fns3" 2>/dev/null | grep -v '^$')
+    if [ -z "$_st_orphan_fake" ]; then
+        echo "  FAIL: FALSIFIABILITY PROOF FAILED -- the fabricated row (vms_ioctl_getlki,"
+        echo "        which has no real SITE) was NOT flagged as orphaned. This check is a"
+        echo "        tautology again; the 'ok' above proves nothing."
+        _st_bad=1
+    else
+        echo "  ok: the fabricated row IS flagged as orphaned ($_st_orphan_fake) -- this"
+        echo "      check can fail, and the pristine 'ok' above is therefore real evidence"
     fi
 
     echo "--- 4. the instrument is not vacuous: a real dependency IS attributed ---"
@@ -545,20 +577,25 @@ cmd_selftest() {
     # The check is only meaningful if the fabricated row PRODUCED something --
     # an empty result would pass the "does not reach wflor" test for free, and
     # that is how check 5 lied when its scratch had been deleted.
+    _st_real_fn=$(awk -F'\t' '$1=="SITE" && $2=="eflag-clref-noop" && $5 !~ /^\(/ {print $5; exit}' "$_st_tmp/sites3" 2>/dev/null)
     if ! cp "$FA_RECORD" "$_st_tmp/rec" 2>/dev/null; then
         echo "  FAIL: could not copy the record from $FA_RECORD"; _st_bad=1
+    elif [ -z "$_st_real_fn" ]; then
+        echo "  FAIL: eflag-clref-noop has no real SITE row to check against"; _st_bad=1
     else
         printf 'RED\teflag-clref-noop\ttest_syssvc_ef_mproc\tFABRICATED ASSERTION\n' >> "$_st_tmp/rec"
         FA_RECORD="$_st_tmp/rec" cmd_attribute 2>/dev/null \
             | awk -F'\t' '$3 == "FABRICATED ASSERTION"' > "$_st_tmp/fab"
-        _st_f1=$(cut -f5 "$_st_tmp/fab" | sort -u | tr '\n' ' ')
-        echo "    a fabricated RED row attributes only to: ${_st_f1:-(nothing)}"
+        cut -f5 "$_st_tmp/fab" | sort -u > "$_st_tmp/fab_fns"
+        _st_f1=$(tr '\n' ' ' < "$_st_tmp/fab_fns")
+        echo "    a fabricated RED row attributes only to: ${_st_f1:-(nothing)} (real SITE: $_st_real_fn)"
         if [ ! -s "$_st_tmp/fab" ]; then
             echo "  FAIL: the fabricated row produced NO rows at all, so this check judged"
             echo "        nothing. It must attribute to eflag-clref-noop's real site."
             _st_bad=1
-        elif [ -n "$_st_unprobed" ] && printf '%s' "$_st_f1" | grep -qF "$_st_unprobed"; then
-            echo "  FAIL: a hand-written record row reached an unprobed handler"; _st_bad=1
+        elif [ "$(wc -l < "$_st_tmp/fab_fns")" -ne 1 ] || [ "$(cat "$_st_tmp/fab_fns")" != "$_st_real_fn" ]; then
+            echo "  FAIL: attributed to '$_st_f1', not exactly eflag-clref-noop's real site"
+            _st_bad=1
         else
             echo "  ok: it is confined to the function that defect's sed REALLY mutates --"
             echo "      the record can lie about WHICH ASSERTION, never about WHICH FUNCTION"

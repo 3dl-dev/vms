@@ -144,6 +144,20 @@
 #   47 GREEN: a call through a helper the compiler INLINES      -> GREEN
 #   48 27 COMPOSED WITH A RENAME out of the vms_kif_ namespace  -> RED
 #
+# And the control (49) that pins what root rule 2 -- "every product function
+# PROTOTYPED IN A HEADER THE BUILD COMPILES" -- takes for granted: that a
+# header declaration is the exported-API shape the rule exists for. It was
+# not: a `static` declaration AND definition, both written inside a header
+# the build compiles into MULTIPLE translation units, was credited exactly
+# like an extern one, because the declaration reading (a "P" record) never
+# carried the static/extern qualifier. See the gate's own root-rule bullet in
+# section 0 (WHAT THIS GATE DOES NOT PROVE) for the measured recipe and the
+# rd vms-41b fix. This was a clean PASS at rc=0 on every gate revision through
+# rd vms-c79.
+#
+#   49 a dead helper declared AND defined `static` in a
+#      multi-includer header does not buy a root                -> RED
+#
 # Usage: test_kif_caller_census_negctl.sh [SRC_ROOT]
 
 set -u
@@ -191,8 +205,9 @@ QTEST="$ROOT/tests/qemu/test_kmod_devtab.c"
 TOPCM="$ROOT/CMakeLists.txt"
 SYSCM="$ROOT/src/libvmssys/CMakeLists.txt"
 STRC="$ROOT/src/libvmssys/vms_string.c"
+DCLCMDH="$ROOT/src/vmsdcl/include/dcl/dcl_cmd.h"
 
-MUTABLE="$H $C $SHOW $QTEST $TOPCM $SYSCM $STRC"
+MUTABLE="$H $C $SHOW $QTEST $TOPCM $SYSCM $STRC $DCLCMDH"
 
 # THE ID EVERY FIXTURE DECLARATION CITES: a label only (rd vms-dc7), not
 # verified against anything. Kept as real, currently-open tree ids purely by
@@ -1438,6 +1453,40 @@ else
         "the composed rename+shared-.inc exfiltration does not leave the census" \
         "kif_ttsetmode_apply
 $F_UNDECL" \
+        "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+        "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+        "$F_NO_BUILD" "$F_NO_IFACE" "$F_NO_EVIDENCE"
+fi
+
+# ---------------------------------------------------------------------------
+# 49. THE ROOT-RULE'S HEADER CLAUSE, AND ITS PRICE BEFORE rd vms-41b. Root
+#     rule 2 credits "every product function prototyped in a header the build
+#     compiles" because that is what an exported library entry point looks
+#     like. A `static` declaration in a header is never that: each includer
+#     gets its OWN private symbol, not a shared entry point, and dcl_cmd.h is
+#     included by MULTIPLE translation units (checked below, not assumed) --
+#     so a non-static definition there would not even link.
+#
+# FIXTURE CONSTRAINT, CHECKED RATHER THAN ASSUMED: this control only proves
+# the point if dcl_cmd.h really is included by more than one product .c file.
+# If it is ever narrowed to a single includer, the recipe still goes red for
+# the ordinary reason (a static in a header included once is no different
+# from a static in the .c itself) and this control would silently stop
+# testing the header case while still reporting PASS.
+if [ "$(grep -rl '#include "dcl/dcl_cmd.h"' "$ROOT/src" --include='*.c' 2>/dev/null | wc -l)" -lt 2 ]; then
+    echo "  FAIL: BROKEN FIXTURE (not a broken gate): control 49 needs a header"
+    echo "        included by more than one product .c file to prove a static"
+    echo "        header declaration is not credited as exported. dcl_cmd.h no"
+    echo "        longer qualifies; pick another multi-includer header."
+    record_verdict "a static declaration AND definition in a multi-includer header does not buy a root" 0
+else
+    sed -i "$RETIRE_CHKPRIV" "$H"
+    sed -i 's|^#include <stdint.h>$|#include <stdint.h>\n#include "vms_kif.h"\nstatic void ovmx_dead_helper(void);\nstatic void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }|' "$DCLCMDH"
+    expect_red "$H $DCLCMDH" \
+        "a static declaration AND definition in a multi-includer header does not buy a root" \
+        "vms_kif_chkpriv
+$F_UNDECL
+credit NOTHING: ovmx_dead_helper" \
         "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
         "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
         "$F_NO_BUILD" "$F_NO_IFACE" "$F_NO_EVIDENCE"

@@ -378,7 +378,7 @@ int main(int argc, char **argv)
 
     if (access("/dev/vms", F_OK) != 0) {
         printf("  FAIL: /dev/vms absent (executive not loaded)\n");
-        printf("=== RESULTS: 0 passed, 1 failed ===\n");
+        printf("=== test_kmod_bind: 0 passed, 1 failed ===\n");
         return 1;
     }
 
@@ -811,6 +811,6 @@ int main(int argc, char **argv)
     }
 
 done:
-    printf("=== RESULTS: %d passed, %d failed ===\n", pass, fail);
+    printf("=== test_kmod_bind: %d passed, %d failed ===\n", pass, fail);
     return fail == 0 ? 0 : 1;
 }

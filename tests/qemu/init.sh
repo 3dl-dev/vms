@@ -97,13 +97,31 @@ mkdir -p /tmp/vmsfs_backing /mnt/vmsfs
 #
 # The TOTAL_PASS/TOTAL_FAIL tally is kept for human readers and for
 # run_tests.sh's exit code; it is no longer the thing CI pins.
+#
+# ASSERTION-LEVEL TALLY (vms-215). A per-suite "N passed, M failed" line is a
+# SELF-REPORT: a suite that forgets to print one (test_kmod_bind did, until
+# this change) silently drops its assertions from any total built by summing
+# those lines. So ASSERT_PASS/ASSERT_FAIL below are not summed from the
+# suites' own tallies at all -- each suite's actual stdout is captured to a
+# file and grepped for the "  PASS:"/"  FAIL:" lines CHECK() really printed,
+# the byproduct of running, not the suite's opinion of itself. That total is
+# reconciled with the transcript by construction: it IS a count of the lines
+# in the transcript, so it cannot drift from them the way a self-report can.
+ASSERT_PASS=0
+ASSERT_FAIL=0
+SUITE_OUT=/tmp/suite_out.$$
 for test in /tests/test_kmod_* /tests/test_syssvc_*; do
     [ -x "$test" ] || continue
     name=$(basename "$test")
     echo ""
     echo "--- $name ---"
-    "$test"
+    "$test" >"$SUITE_OUT" 2>&1
     rc=$?
+    cat "$SUITE_OUT"
+    spass=$(grep -c "^  PASS:" "$SUITE_OUT")
+    sfail=$(grep -c "^  FAIL:" "$SUITE_OUT")
+    ASSERT_PASS=$((ASSERT_PASS+spass))
+    ASSERT_FAIL=$((ASSERT_FAIL+sfail))
     if [ $rc -eq 0 ]; then
         TOTAL_PASS=$((TOTAL_PASS+1))
     elif [ $rc -eq 77 ]; then
@@ -118,9 +136,11 @@ for test in /tests/test_kmod_* /tests/test_syssvc_*; do
     fi
     echo "=== SUITE $name rc=$rc ==="
 done
+rm -f "$SUITE_OUT"
 
 echo ""
 echo "=== FINAL RESULTS: $TOTAL_PASS suites passed, $TOTAL_FAIL suites failed ==="
+echo "=== ASSERTIONS: $ASSERT_PASS passed, $ASSERT_FAIL failed (derived from PASS/FAIL lines actually printed, not summed from suite self-reports) ==="
 echo ""
 
 # Show kernel log for debugging

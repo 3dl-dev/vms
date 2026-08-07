@@ -142,6 +142,7 @@
 #   45 ... the same buy in a translation unit built -O2         -> RED
 #   46 GREEN: a call under a RUNTIME-false condition is credited
 #   47 GREEN: a call through a helper the compiler INLINES      -> GREEN
+#   48 27 COMPOSED WITH A RENAME out of the vms_kif_ namespace  -> RED
 #
 # Usage: test_kif_caller_census_negctl.sh [SRC_ROOT]
 
@@ -202,7 +203,7 @@ FIX_ITEM2="vms-as1"
 
 # Files a control CREATES rather than edits. restore() removes them, because
 # a leftover fabricated caller would silently contaminate every later control.
-CREATED="$ROOT/src/libvmssys/kif_negctl_orphan.c $ROOT/src/libvmssys/vms_kif_close.inc $ROOT/src/libvmssys/vms_kif_close_proto.h $ROOT/src/libvmssys/vms_kif_ttsetmode.inc"
+CREATED="$ROOT/src/libvmssys/kif_negctl_orphan.c $ROOT/src/libvmssys/vms_kif_close.inc $ROOT/src/libvmssys/vms_kif_close_proto.h $ROOT/src/libvmssys/vms_kif_ttsetmode.inc $ROOT/src/libvmssys/vms_kif_ttsetmode_renamed.inc"
 
 key_of() { printf '%s' "${1#$ROOT/}" | tr '/.' '__'; }
 
@@ -1382,6 +1383,65 @@ sed -i 's|^vms_size_t vms_strlen(const char \*s)$|#include "vms_kif.h"\nstatic u
 sed -i 's|^    while (\*p)$|    (void)ovmx_inlined_helper();\n&|' "$STRC"
 expect_green "$H $C $STRC" \
     "a call through a helper the compiler inlines is still credited"
+
+# ---------------------------------------------------------------------------
+# 48. EXFILTRATION COMPOSED WITH A RENAME (vms-05e7), THE RECIPE 27's OWN
+#     COMMENT NAMED AS UNCLOSED. 27 shows the gate catches a body moved to a
+#     non-private .inc AS LONG AS THE NAME STAYS vms_kif_ttsetmode -- the
+#     third definition reading is namespaced. This composes that with a
+#     rename: mark the moved body `static`, rename it out of the vms_kif_
+#     namespace, #include it from vms_kif.c AND vms_string.c so it is neither
+#     interface-private nor namespaced, delete the prototype, retire the
+#     declaration, and add a floor-reference enum so the raw opcode floor
+#     stays satisfied. Same seven edits as the gate's own "WHAT THIS GATE DOES
+#     NOT SEE" writeup, reproduced here rather than merely cited.
+#
+#     THE .inc IS SYNTHESIZED, NOT EXTRACTED, for the same reason control 27's
+#     is: the real vms_kif_ttsetmode body uses vms_kif.c privates (struct
+#     vms_setmode_args, vms_memset, KIF_CALL) that vms_string.c does not have,
+#     so an extracted body would preprocess but not compile -- a broken
+#     fixture, not a working control. A self-contained stub with the same
+#     signature, renamed, exfiltrates the DEFINITION exactly as well while
+#     being a tree that actually builds.
+# ---------------------------------------------------------------------------
+TTINC48="$ROOT/src/libvmssys/vms_kif_ttsetmode_renamed.inc"
+cat > "$TTINC48" <<'EOF'
+#include "vms_kif.h"
+
+static uint32_t kif_ttsetmode_apply(uint32_t chan, uint32_t flags,
+                                     uint64_t setchar, uint64_t clrchar,
+                                     uint32_t width, uint32_t page)
+{
+    (void)chan; (void)flags; (void)setchar; (void)clrchar;
+    (void)width; (void)page;
+    return 0;
+}
+EOF
+sed -i '/^uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,$/,/^}$/c\
+#include "vms_kif_ttsetmode_renamed.inc"' "$C"
+printf '\n#include "vms_kif_ttsetmode_renamed.inc"\n' >> "$STRC"
+sed -i '/^uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,$/,/uint32_t width, uint32_t page);$/d' "$H"
+sed -i 's|OVMX-UNWIRED: vms_kif_ttsetmode (vms-a36)|(retired by negctl 48)|' "$H"
+printf '\nenum { kif_negctl_floor_ref48 = (int)VMS_IOCTL_TTSETMODE };\n' >> "$C"
+# THE FIXTURE CHECK THAT MATTERS IS THE REMOVAL, same rationale as control 27:
+# the real body -- identified by the KIF_CALL it issues -- must no longer be
+# in vms_kif.c, or this control ran against an unmutated tree.
+if ! created_landed "$TTINC48" || grep -q 'KIF_CALL(VMS_IOCTL_TTSETMODE' "$C"; then
+    echo "  FAIL: BROKEN FIXTURE (not a broken gate): control 48 did not move"
+    echo "        vms_kif_ttsetmode's body out of vms_kif.c -- its anchor no"
+    echo "        longer matches, so the tree it ran against was not the"
+    echo "        evasion. Re-anchor it."
+    record_verdict "the composed rename+shared-.inc exfiltration does not leave the census" 0
+    restore
+else
+    expect_red "$H $C $STRC" \
+        "the composed rename+shared-.inc exfiltration does not leave the census" \
+        "kif_ttsetmode_apply
+$F_UNDECL" \
+        "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+        "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+        "$F_NO_BUILD" "$F_NO_IFACE" "$F_NO_EVIDENCE"
+fi
 
 echo "  controls: $passed passed, $failed failed"
 if [ "$status" -eq 0 ]; then

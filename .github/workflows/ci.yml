@@ -499,8 +499,29 @@ jobs:
                   BAD="$BAD
             $suite: rc=0 -- claims SUCCESS through the public sys\$ API with NO /dev/vms present. A fake pass; expected the honest-skip code 77."
                 elif [ "$rc" != "77" ]; then
+                  # rc=1 (or any non-77, non-0 code) does NOT by itself mean a
+                  # fabricated success -- it only means "77 was not reached".
+                  # That has (at least) two distinct causes: a device-absent
+                  # assertion inside the suite failed (fabricated success,
+                  # vms-6b8's signature defect), OR some other assertion in
+                  # the suite failed for an unrelated reason. Printing one of
+                  # those as THE cause is a claim the suite's own FAIL lines
+                  # can refute (proven on PR #46, run 30725753152: both
+                  # fabricated-success assertions PASSED, DCL.EXE crashing was
+                  # the real defect). So report the CONDITION and paste this
+                  # suite's own FAIL lines and let the reader attribute --
+                  # vms-c9c.
+                  suite_fails=$(printf '%s\n' "$OUTPUT" | awk -v target="$suite" '
+                    /^=== SUITE / {
+                      if ($0 ~ ("^=== SUITE " target " rc=")) { printf "%s", buf; exit }
+                      buf=""
+                      next
+                    }
+                    { buf = buf $0 "\n" }
+                  ' | grep -F "FAIL:")
                   BAD="$BAD
-            $suite: rc=$rc -- expected the honest-skip code 77. A device-absent assertion inside the suite FAILED, which means a public sys\$ entry point reported SUCCESS with no executive present: a fabricated success (vms-6b8's signature defect). See the suite's own FAIL lines above."
+            $suite: rc=$rc -- expected the honest-skip code 77. Not reaching 77 means EITHER a device-absent assertion inside the suite failed (a fabricated success, vms-6b8's signature defect) OR some other assertion failed for an unrelated reason -- the suite's own FAIL line(s) below say which:
+            $suite_fails"
                 fi
                 ;;
               test_kmod_vmsfs*)

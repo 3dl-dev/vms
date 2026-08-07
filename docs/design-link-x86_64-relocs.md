@@ -24,19 +24,19 @@ outside this tree, multi-TU-only symbols, etc.) are excluded from the
 tally and listed below for transparency — they contribute no relocation
 data either way.
 
-## Result: 72 objects built, 13 failed to compile standalone
+## Result: 80 objects built, 5 failed to compile standalone
 
 ## Relocation types observed
 
 | r_type | count | distinct source objects | example source |
 |---|---|---|---|
-| R_X86_64_64 | 752 | 14 | src/libvms/rtl/lib_datetime.c |
+| R_X86_64_64 | 848 | 16 | src/libvms/rtl/lib_datetime.c |
 | R_X86_64_DTPOFF32 | 8 | 1 | src/libvms/rtl/lib_signal.c |
 | R_X86_64_GOTPC32_TLSDESC | 21 | 3 | src/libvms/rtl/lib_signal.c |
 | R_X86_64_GOTPCREL | 1 | 1 | src/vmsprocess/vms_pcb.c |
-| R_X86_64_PC32 | 2015 | 71 | src/libvms/descrip.c |
-| R_X86_64_PLT32 | 2522 | 68 | src/libvms/descrip.c |
-| R_X86_64_REX_GOTPCRELX | 37 | 10 | src/libvms/rtl/lib_misc.c |
+| R_X86_64_PC32 | 2358 | 79 | src/libvms/descrip.c |
+| R_X86_64_PLT32 | 3024 | 76 | src/libvms/descrip.c |
+| R_X86_64_REX_GOTPCRELX | 46 | 13 | src/libvms/rtl/lib_misc.c |
 | R_X86_64_TLSDESC_CALL | 22 | 3 | src/libvms/rtl/lib_signal.c |
 
 ## Cross-reference: LINK.EXE's existing R_AARCH64_* switch
@@ -85,20 +85,12 @@ same symbol, not overlapping responsibility for the same event.
 **Confirmed: LINK.EXE's job (this survey) and IMGACT's job (load-time
 DT_* relocs, already handled per vms-913.11) are not the same set.**
 
-## Objects that failed to compile standalone (13)
+## Objects that failed to compile standalone (5)
 
 ```
-src/libvms/syssvc/sys_assign.c: compilation terminated.
-src/libvms/syssvc/sys_event.c: compilation terminated.
-src/libvms/syssvc/sys_lock.c: compilation terminated.
-src/libvms/syssvc/sys_operator.c: compilation terminated.
-src/libvms/syssvc/sys_process.c: compilation terminated.
-src/libvms/syssvc/sys_qio.c: compilation terminated.
 src/libvms/syssvc/sys_uring.c: compilation terminated.
 src/vmsdcl/dcl_cmd_file.c: compilation terminated.
 src/vmsdcl/dcl_cmd_process.c: compilation terminated.
-src/vmsdcl/dcl_cmd_set.c: compilation terminated.
 src/vmsdcl/dcl_cmd_show.c: compilation terminated.
 src/vmsdcl/dcl_lexical.c: compilation terminated.
-src/vmsdcl/dcl_main.c: compilation terminated.
 ```

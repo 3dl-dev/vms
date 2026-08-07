@@ -305,6 +305,27 @@ set -u
 SRC_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 status=0
 
+# THE WORKTREE ESCAPE. "The product tree" means tracked source, not every
+# CMakeLists.txt findable under SRC_ROOT -- .claude/worktrees/ is a gitignored
+# dir of parallel repo checkouts (one per in-flight agent worktree), each with
+# its own full CMakeLists.txt set. A raw `find "$SRC_ROOT" -name CMakeLists.txt`
+# walks into them and reads their add_subdirectory()/install(TARGETS ...) as if
+# they were this tree's, flagging escapes that belong to a stale checkout, not
+# the product. Scope every CMakeLists.txt walk in this gate to what git tracks;
+# fall back to a pruned find only when SRC_ROOT is not a git work tree at all
+# (e.g. a tarball extraction with no .git).
+_cmakelists_z() {
+    if git -C "$SRC_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git -C "$SRC_ROOT" ls-files -z -- '*CMakeLists.txt' 'CMakeLists.txt' \
+            | sed -z "s|^|$SRC_ROOT/|"
+    else
+        find "$SRC_ROOT" -path '*/.claude/*' -prune -o -name CMakeLists.txt -print0 2>/dev/null
+    fi
+}
+_cmakelists_nl() {
+    _cmakelists_z | tr '\0' '\n'
+}
+
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
@@ -662,7 +683,7 @@ if [ -f "$SRC_ROOT/CMakeLists.txt" ]; then
     # target name it names is a product target regardless of which directory
     # declared it. See register_buildset.awk for where this list is consumed.
     INSTALLED_TARGETS="$WORK/installed_targets"
-    find "$SRC_ROOT" -name CMakeLists.txt -print0 2>/dev/null \
+    _cmakelists_z \
         | xargs -0 grep -hoE 'install\([[:space:]]*TARGETS[[:space:]]+[^)]*\)' 2>/dev/null \
         | sed -E 's/^install\([[:space:]]*TARGETS[[:space:]]*//' \
         | sed -E 's/[[:space:]]+(RUNTIME|LIBRARY|ARCHIVE|OBJECTS|FRAMEWORK|BUNDLE|PUBLIC_HEADER|PRIVATE_HEADER|RESOURCE|FILE_SET|EXPORT).*$//' \
@@ -730,7 +751,7 @@ if [ -f "$SRC_ROOT/CMakeLists.txt" ]; then
     OFF_OPTS="$WORK/off_options"
     : > "$OFF_OPTS"
     if [ -f "$WORK/cmk/CMakeCache.txt" ]; then
-        DECLARED_OPTS=$(find "$SRC_ROOT" -name CMakeLists.txt -print0 2>/dev/null \
+        DECLARED_OPTS=$(_cmakelists_z \
             | xargs -0 grep -hoE '^[[:space:]]*option\([[:space:]]*[A-Za-z0-9_]+' 2>/dev/null \
             | sed -E 's/^[[:space:]]*option\([[:space:]]*//' | sort -u)
         for _opt in $DECLARED_OPTS; do
@@ -745,7 +766,7 @@ if [ -f "$SRC_ROOT/CMakeLists.txt" ]; then
         awk -v OFFLIST="$(tr '\n' ' ' < "$OFF_OPTS")" -v RELDIR="$rel_dir" \
             -f "$OPTGUARD_AWK" "$cmf" >> "$OPTGUARD_OUT"
     done <<EOF
-$(find "$SRC_ROOT" -name CMakeLists.txt 2>/dev/null)
+$(_cmakelists_nl)
 EOF
     if [ -s "$OPTGUARD_OUT" ]; then
         echo "FAIL: BROKEN BUILD-SET SCAN: an add_subdirectory() is gated by an option"

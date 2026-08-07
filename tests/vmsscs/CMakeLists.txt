@@ -734,6 +734,33 @@ set_tests_properties(scs_env_figures PROPERTIES
     TIMEOUT 300
 )
 
+# vms-3f4 - THE MUTATION BATTERY FOR THE GATE ABOVE. Every comparable figures
+# gate in tests/vmsscs/ (t89, dir, disc, diskrun, reason, join_capability,
+# credit_live, mscp_srv) had one; this was the exception, and the root cause
+# behind 4 prior rounds (vms-182, vms-ab3, vms-c84) each finding a NEW gap in
+# the same MTYPE 8/9 doc gate that the previous round's fix had not covered.
+# test_scs_env_mutants.py copies src/vmsscs/ and the measurement tool into a
+# scratch tree, proves the UNMUTATED copy green (the control), applies each
+# mutant alone via OVMX_SCS_ENV_ROOT, requires a non-zero exit, and restores
+# and re-verifies the control after every one. A separate BENIGN_MUTANTS list
+# proves a content-preserving paragraph reflow does NOT red the gate. A
+# mutant that does not change the file is reported as a failure, never scored
+# as a kill. Nothing under src/, docs/, tools/ or tests/ is written. The
+# mutant COUNT is printed by the test, not restated here.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_env_mutants
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_env_mutants.py)
+else()
+    add_test(NAME scs_env_mutants
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_env_mutants_no_python3.cmake)
+endif()
+set_tests_properties(scs_env_mutants PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 300
+)
+
 add_executable(test_scs_disc test_scs_disc.c)
 target_include_directories(test_scs_disc PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsscs/include

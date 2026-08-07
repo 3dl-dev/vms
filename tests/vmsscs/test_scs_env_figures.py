@@ -180,18 +180,60 @@ check("vms-f03" in env_h and
 
 # A guessed name smuggled into the T9 #define's comment (vms-182's own
 # warning) would pass a bare 'unnamed' substring check -- a name-shaped
-# token (CamelCase or UPPER_SNAKE, more than one word/segment) anywhere in
-# that comment is exactly the pattern to catch, e.g. 'SPECIAL_CREDIT_RSP'.
-# Bare references like 'T9', '9', citation tokens ('vms-f03') and plain
-# all-caps single words ('UNNAMED', 'DELIBERATELY') must NOT trip this.
+# token anywhere in that comment is exactly the pattern to catch, e.g.
+# 'SPECIAL_CREDIT_RSP'. Bare references like 'T9', '9', citation tokens
+# ('vms-f03') and plain all-caps prose words ('UNNAMED', 'DELIBERATELY')
+# must NOT trip this.
+#
+# vms-3f4 (5th generation of this failure class, post-vms-c84 audit): the
+# original UPPER_SNAKE/PascalCase/camelCase-only pattern let FOUR more
+# guessed-name shapes survive with the gate green, reproduced by hand
+# against a scratch copy before this fix: a VMS-style $-identifier
+# ("SCS$CREDRSP"), a single bare ALL-CAPS word ("CREDRSP"), a spaced Title
+# Case phrase ("Special Credit Response") and a kebab-case phrase
+# ("special-credit-response"). All four are added below. The allowlist
+# mechanism that keeps this from over-triggering on the file's own
+# legitimate prose is NOT loosened or bypassed for them -- real identifiers
+# and real vocabulary are exempted BY NAME, same as before, never by
+# narrowing a pattern back down to dodge a false positive.
 _t9_comment_m = re.search(r"/\*(.*?)\*/", _t9_def)
 _t9_comment = _t9_comment_m.group(1) if _t9_comment_m else _t9_def
 _NAME_SHAPED = re.compile(
-    r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b"       # UPPER_SNAKE_CASE
-    r"|\b[A-Z][a-z]+(?:[A-Z][a-zA-Z0-9]*)+\b"  # PascalCase
-    r"|\b[a-z]+(?:[A-Z][a-zA-Z0-9]*)+\b"       # camelCase
+    r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b"        # UPPER_SNAKE_CASE
+    r"|\b[A-Z][a-z]+(?:[A-Z][a-zA-Z0-9]*)+\b"   # PascalCase
+    r"|\b[a-z]+(?:[A-Z][a-zA-Z0-9]*)+\b"        # camelCase
+    r"|\b[A-Za-z][A-Za-z0-9]*\$[A-Za-z0-9]+\b"  # VMS-style $-identifier
+    r"|\b[A-Z]{5,}\b"                           # bare ALL-CAPS word, meaningful length
+    r"|\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b"      # spaced Title Case phrase
+    r"|\b[a-z]+(?:-[a-z]+){2,}\b"               # kebab-case phrase, 3+ segments
 )
-_t9_name_hits = _NAME_SHAPED.findall(_t9_comment)
+
+# Real, already-defined identifiers and established prose vocabulary that
+# legitimately match one of the shapes above in THIS file -- exempted by
+# name, never by loosening the pattern.
+_ALLOWED_TOKENS = {
+    "SCS_ENV_ROUTE_UNKNOWN", "SCS_ENV_ROUTE_CONTROL", "SCS_ENV_ROUTE_MESSAGE",
+    "SCS_ENV_MTYPE_T8", "SCS_ENV_MTYPE_T9",
+    "SCS_ENV_MTYPE_APP_MESSAGE", "SCS_ENV_MTYPE_CONTROL_MAX",
+    "SCS_ENV_MTYPE_MAX_OBSERVED",
+    "SPECIAL", "CREDIT", "MESSAGE",                 # "SPECIAL CREDIT MESSAGE"
+    "DELIBERATELY", "COUNTED", "NEVER", "UNNAMED",  # ALL-CAPS emphasis words
+    "SYSGEN", "SCSFLOWCUSH",                        # real SYSGEN parameter name
+    "MTYPE",                                        # the field name itself
+}
+_ALLOWED_PHRASES = ("Pending Receive Credit",)
+
+
+def guessed_names(text, extra_allowed=()):
+    """Name-shaped tokens in `text` that are not on the allowlist -- the one
+    scan every MTYPE 8/9 carrier below runs."""
+    for phrase in _ALLOWED_PHRASES:
+        text = text.replace(phrase, "")
+    allowed = _ALLOWED_TOKENS | set(extra_allowed)
+    return [tok for tok in _NAME_SHAPED.findall(text) if tok not in allowed]
+
+
+_t9_name_hits = guessed_names(_t9_comment)
 check(not _t9_name_hits,
       f"scs_env.h's T9 #define comment contains a name-shaped token "
       f"{_t9_name_hits} -- MTYPE 9 must stay unnamed, not renamed to a "
@@ -205,25 +247,104 @@ check(not _t9_name_hits,
 # name-shaped-token scan there. The sentence legitimately carries
 # cross-reference identifiers to other things already named in this file
 # (e.g. the SCS_ENV_ROUTE_UNKNOWN dispatch value the same paragraph cites);
-# those are exempted by an explicit allowlist of real, already-defined
-# tokens -- never by loosening the pattern -- so a genuinely new guessed
-# name still trips it.
-_T9_SENT_ALLOWED_TOKENS = {
-    "SCS_ENV_ROUTE_UNKNOWN", "SCS_ENV_ROUTE_CONTROL", "SCS_ENV_ROUTE_MESSAGE",
-    "SCS_ENV_MTYPE_T8", "SCS_ENV_MTYPE_T9",
-    "SCS_ENV_MTYPE_APP_MESSAGE", "SCS_ENV_MTYPE_CONTROL_MAX",
-    "SCS_ENV_MTYPE_MAX_OBSERVED",
-}
-_t9_sent_name_hits = [tok for tok in _NAME_SHAPED.findall(_t9_sent)
-                      if tok not in _T9_SENT_ALLOWED_TOKENS]
+# those are exempted by the allowlist above -- never by loosening the
+# pattern.
+_t9_sent_name_hits = guessed_names(_t9_sent)
 check(not _t9_sent_name_hits,
       f"scs_env.h's T9-specific PROSE SENTENCE contains a name-shaped token "
       f"{_t9_sent_name_hits} -- MTYPE 9 must stay unnamed in the prose too, "
       f"not renamed to a guessed identifier (vms-c84: the #define-comment-"
       f"only scan missed exactly this carrier)")
 
-check("UNIDENTIFIED" not in env_h.upper(),
-      "scs_env.h no longer claims MTYPE 8 is unidentified (stale post-vms-f03)")
+# vms-3f4 (item 2): three more carriers were never scanned at all -- planting
+# a guessed name in any of them left the gate green. Reproduced by hand
+# against a scratch copy before this fix.
+
+# (i) The pre-#define block comment's own T8/T9 identification sentence
+# ("8 is the special credit message and 9 is its unnamed paired response").
+_predef_m = re.search(r"8 is the special credit message.*?above\.", env_h,
+                      re.S)
+check(_predef_m is not None,
+      "scs_env.h has lost the pre-#define block comment's T8/T9 "
+      "identification sentence")
+_predef_sent = _predef_m.group(0) if _predef_m else ""
+_predef_hits = guessed_names(_predef_sent)
+check(not _predef_hits,
+      f"scs_env.h's pre-#define block comment contains a name-shaped token "
+      f"{_predef_hits} -- this carrier went unscanned before vms-3f4")
+
+# (ii) The MTYPE-namespace paragraph PREAMBLE -- the text before "8 is the
+# ...", which the T8/T9-sentence anchors above never covered.
+_preamble_m = re.match(r".*?(?=\b8 is the\b)", _ns_flat, re.S)
+_preamble = _preamble_m.group(0) if _preamble_m else ""
+check(bool(_preamble.strip()),
+      "scs_env.h's MTYPE-namespace paragraph has no PREAMBLE before the T8 "
+      "sentence")
+_preamble_hits = guessed_names(_preamble)
+check(not _preamble_hits,
+      f"scs_env.h's MTYPE-namespace paragraph PREAMBLE contains a "
+      f"name-shaped token {_preamble_hits} -- this carrier went unscanned "
+      f"before vms-3f4")
+
+# (iii) The T8 sentence and the T8 #define comment: only the T9 sentence and
+# the T9 #define comment were ever scanned for name-shaped tokens.
+_t8_sent_hits = guessed_names(_t8_sent)
+check(not _t8_sent_hits,
+      f"scs_env.h's T8-specific PROSE SENTENCE contains a name-shaped token "
+      f"{_t8_sent_hits} -- this carrier went unscanned before vms-3f4")
+_t8_def_hits = guessed_names(_t8_def)
+check(not _t8_def_hits,
+      f"scs_env.h's T8 #define comment contains a name-shaped token "
+      f"{_t8_def_hits} -- this carrier went unscanned before vms-3f4")
+
+# (iv) scs_env_mtype_name()'s doc comment. Anchored to the comment
+# IMMEDIATELY preceding the declaration (nothing but whitespace between the
+# comment's closing "*/" and the declaration) -- a non-greedy regex from the
+# START of the file would instead span every comment in between, since
+# `.*?*/` only stops at the FIRST "*/...declaration" it can reach, which for
+# a non-unique intermediate boundary is the wrong one.
+_MTYPENAME_DECL = "const char *scs_env_mtype_name(unsigned mtype);"
+_mtypename_decl_idx = env_h.find(_MTYPENAME_DECL)
+_mtypename_cend = (env_h.rfind("*/", 0, _mtypename_decl_idx)
+                   if _mtypename_decl_idx != -1 else -1)
+_mtypename_cstart = (env_h.rfind("/*", 0, _mtypename_cend)
+                     if _mtypename_cend != -1 else -1)
+_mtypename_doc_ok = (
+    _mtypename_decl_idx != -1 and _mtypename_cend != -1 and
+    _mtypename_cstart != -1 and
+    env_h[_mtypename_cend + 2:_mtypename_decl_idx].strip() == "")
+check(_mtypename_doc_ok,
+      "scs_env.h has lost scs_env_mtype_name()'s doc comment")
+_mtypename_doc = (env_h[_mtypename_cstart:_mtypename_cend]
+                  if _mtypename_doc_ok else "")
+_mtypename_hits = guessed_names(_mtypename_doc)
+check(not _mtypename_hits,
+      f"scs_env_mtype_name()'s doc comment contains a name-shaped token "
+      f"{_mtypename_hits} -- this carrier went unscanned before vms-3f4")
+
+# vms-3f4 (item 3): this doc comment (from vms-ec7, never updated by vms-f03)
+# said "8 and 9 render as type 8/type 9 because they are NOT identified" --
+# contradicting the namespace paragraph's own claim that 8 IS identified
+# (the special credit message). Pin the carrier to the correct claim so a
+# regression back to "unidentified" fails on content, not just phrasing.
+check("special credit message" in _mtypename_doc.lower() and
+      "vms-f03" in _mtypename_doc,
+      "scs_env_mtype_name()'s doc comment identifies MTYPE 8 as the special "
+      "credit message (vms-3f4: this doc comment was stale, claiming 8 was "
+      "unidentified, contradicting the namespace paragraph)")
+
+# The anti-staleness check itself was too narrow: it looked for the single
+# literal token 'UNIDENTIFIED' and missed the equivalent 'NOT identified'
+# (two words, a space instead of no separator) that was actually LIVE in
+# this file (this doc comment, pre-fix). Match the semantic pattern --
+# un/not identified, with or without a hyphen or space -- everywhere in the
+# file, not one spelling.
+_STALE_UNIDENTIFIED_RE = re.compile(
+    r"\bUN\s*-?\s*IDENTIFIED\b|\bNOT\s+IDENTIFIED\b", re.I)
+check(_STALE_UNIDENTIFIED_RE.search(env_h) is None,
+      "scs_env.h no longer claims MTYPE 8 is un/not identified anywhere in "
+      "the file (stale post-vms-f03; vms-3f4 broadened this from a single "
+      "literal-token check, which missed 'NOT identified' phrasing)")
 check('"type 8"' in env_c and '"type 9"' in env_c,
       "scs_env.c renders MTYPE 8/9 as bare type numbers, never as a guessed name")
 

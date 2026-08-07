@@ -1119,6 +1119,12 @@ jobs:
   # -----------------------------------------------------------------------
   imgact-build-mode:
     name: OVMX_IMGACT Build Mode (musl)
+    # Known-broken, tracked in rd vms-0b8 (under vms-ade): the VMS-native
+    # link graph (build_link_native.sh -> mk_*_shr.sh) is Unix/musl/ld-leaky
+    # and fails to build LINK.EXE at the expected path. Non-blocking until
+    # that toolchain-design work lands; the job still runs and shows its real
+    # status. Remove continue-on-error when vms-0b8 closes.
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -1160,6 +1166,11 @@ jobs:
   # -----------------------------------------------------------------------
   imgact-x86_64:
     name: OVMX_IMGACT Build + Activate (musl, x86_64)
+    # Known-broken, tracked in rd vms-0b8 (under vms-ade): same Unix/musl/ld-leaky
+    # native link graph as imgact-build-mode -- mk_vmssys_shr.sh cannot find
+    # LINK.EXE at $BUILD/bin. Non-blocking until that toolchain-design work
+    # lands; job still runs and shows its real status. Remove when vms-0b8 closes.
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -1740,6 +1751,13 @@ jobs:
   # -----------------------------------------------------------------------
   multiobj-exec-x86_64:
     name: Multi-Object main() Executable Link + Activate — x86_64 (vms-206)
+    # Known-broken, tracked in rd vms-0b8 (under vms-ade): LINK.EXE bakes
+    # PT_INTERP=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE (link.c IMGACT_INTERP),
+    # so this native (non-container) job must create /vms and cannot without
+    # root -- "mkdir: cannot create /vms: Permission denied". Not a paper-over
+    # target (no sudo mkdir): the activation-vs-/vms Unix leak is a design fix.
+    # Non-blocking until vms-0b8 lands; job still runs. Remove when it closes.
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

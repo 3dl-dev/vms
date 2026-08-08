@@ -471,6 +471,7 @@ dcl-fident-name2num-host-passwd
 opcom-header-host-login-name
 setuai-sysprv-caller-declared
 register-adopt-pid-not-reported
+register-continue-identity-dropped
 rms-create-filespec-not-translated
 scratch-dir-owner-not-system"
 
@@ -3725,6 +3726,46 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    register-continue-identity-dropped)
+        case "$_f" in
+        facility)     echo "image-activation identity continuation (VMS_IOCTL_REGISTER_CONTINUE, src/kernel/vms_module.c vms_proc_continue_identity) -- OVMX's fork-per-image made invisible to VMS (vms-4d7, Option B)";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_identcont";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_continue_identity() stops SHARING the parent's VMS PID (\`shared_vms_pid = 0\` instead of \`= parent->vms_pid\`), so REGISTER_CONTINUE falls all the way back to the derive-from-capable() path -- exactly the pre-fix behaviour where an activated image got a fresh PCB and a privilege mask derived from CAP_SYS_ADMIN (never SYSPRV) instead of continuing its DCL. The identity copy above it is now dead: with vms_pid 0 the caller derives, so SYSTEM's RUN AUTHORIZE loses SYSPRV again. The register_continue ioctl still returns SS\$_NORMAL (the registration itself succeeds), which is why CONTINUE_STATUS=1 stays green -- only the IDENTITY it should have carried is gone, the same facade shape as the other *-not-recorded entries.";;
+        require_fail) cat <<'EOF'
+A: the continued image holds the PARENT's SYSPRV mask -- a readback, not a claim, and it never called setident
+A: AUTHORIZE printed its banner -- the continued image was ADMITTED
+A: the continued image was never refused
+A: AUTHORIZE exited 0 for the admitted session
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+B: the continued image holds the PARENT's REDUCED mask, with SYSPRV genuinely absent -- privileges did not reappear
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+ONE PROPERTY -- "an activated image continues its activator's identity" -- read
+in BOTH directions. Scenario A (require_fail) reads it upward: a SYSPRV parent's
+image must hold SYSPRV it never asked for; with the sharing removed the image
+derives an enforced-but-not-SYSPRV mask, so its SELF_PRIVS readback, AUTHORIZE's
+admission banner, the "never refused" check and the exit-0 check all go red at
+once -- one missing identity, four dependent observations. Scenario B (this
+knock-on) reads the SAME property downward: a parent that setident'd DOWN to
+FIELD must have its image inherit the REDUCED mask, so B's SELF_PRIVS readback
+compares against FIELD_PRIVS and also moves when the mask is derived instead of
+continued. B's REFUSAL assertions (NAOFIL/PRV, banner-absent, rc=1) stay GREEN
+under this defect -- the derived enforced mask lacks SYSPRV just as FIELD does,
+so AUTHORIZE refuses either way -- which is why only B's readback is named here
+and not B's refusal. CONTINUE_STATUS=1 stays green in both scenarios: the
+REGISTER_CONTINUE ioctl still succeeds, it just no longer continues. MEASURED
+red set is exactly these five assertions and no others.
+EOF
+                      ;;
+        esac;;
+
     rms-create-filespec-not-translated)
         case "$_f" in
         facility)     echo "RMS filespec-to-Linux-path translation on create (src/vmsrms/rms_core.c resolve_filename(), called by both sys\$open() and sys\$create()) -- a userspace consumer of vmsfs's translation, the same class as the dcl-fident-*/dcl-fuser-* entries above, not a vms.ko-dispatched ioctl";;
@@ -4220,6 +4261,17 @@ apply_edit() {
         # application (replaced by a comment), so a second apply finds no
         # match inside the range and is the no-op selftest requires.
         sed -i '/^    proc = vms_proc_find_or_err();$/,/^        return 0;$/ s|^        args.vms_pid = proc->vms_pid;$|        /* NEGCTL register-adopt-pid-not-reported: vms_pid not copied back on adopt */|' "$_file";;
+    register-continue-identity-dropped)
+        # UNIQUE TEXT: `shared_vms_pid = parent->vms_pid;` occurs once, at
+        # 8-space indentation inside vms_proc_continue_identity()'s hash walk.
+        # Forcing it to 0 makes vms_proc_continue_identity() report "no parent
+        # to continue", so REGISTER_CONTINUE falls back to derive-from-capable()
+        # -- the pre-fix behaviour. After substitution the `= parent->vms_pid;`
+        # text is gone, so a second apply finds no match: the no-op selftest
+        # requires. This is the whole continuation property in one store; the
+        # identity copy above it becomes dead because the caller derives when
+        # shared_vms_pid is 0.
+        sed -i 's|^        shared_vms_pid = parent->vms_pid;$|        shared_vms_pid = 0; /* NEGCTL register-continue-identity-dropped: image does not continue its activator */|' "$_file";;
     scratch-dir-owner-not-system)
         # Single-line, uniquely-anchored inside test_syssvc_scratch_
         # writable.c's OWN provisioning duplicate (see this defect's

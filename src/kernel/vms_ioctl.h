@@ -339,6 +339,43 @@ struct vms_register_args {
 
 #define VMS_IOCTL_REGISTER  _IOWR(VMS_IOC_MAGIC, 0x40, struct vms_register_args)
 
+/*
+ * VMS_IOCTL_REGISTER_CONTINUE - register a task that is CONTINUING an
+ * already-registered VMS process's identity, not starting a new one
+ * (vms-4d7, "Option B": the fork-per-image model made invisible to VMS).
+ *
+ * WHY THIS EXISTS. On OpenVMS, activating an image (RUN, a foreign
+ * command, a DCL utility) does NOT create a process -- the image is mapped
+ * into the CURRENT process and runs with its UIC, username and privileges;
+ * image rundown returns to DCL in the same process. OVMX instead fork()s +
+ * execve()s a fresh Linux process for every image, so without this the
+ * image would auto-register a BRAND NEW PCB and derive its own privilege
+ * mask from capable(CAP_SYS_ADMIN) -- which is why SYSTEM could not RUN
+ * AUTHORIZE (the child never held SYSPRV, though its DCL did).
+ *
+ * This ioctl tells the executive "the process you already have for my
+ * PARENT is the process I am continuing." The executive VALIDATES that
+ * relationship itself -- it reads the identity from the parent's PCB in
+ * the task hierarchy, never from anything the caller declares -- and
+ * shares the parent's VMS PID, UIC, user name and privilege masks onto
+ * this task. NOTHING is read from args (output-only, exactly like
+ * VMS_IOCTL_REGISTER); the struct returns the shared VMS PID.
+ *
+ * DISTINCT FROM A NEW PROCESS. SPAWN, RUN/DETACHED and $CREPRC create a
+ * genuinely new VMS process and use VMS_IOCTL_REGISTER (new PID, derived
+ * identity). Only image activation continues the caller's identity, and
+ * only DCL's image-activation path (src/vmsdcl/dcl_cmd_process.c) signals
+ * it -- see kif_bind() in src/libvmssys/vms_kif.c.
+ *
+ * SECURITY. The shared identity is the parent's CURRENT identity: a
+ * context that setident'd DOWN to an unprivileged UIC has reduced masks,
+ * so continuing it CANNOT resurrect a privilege. The caller cannot pick
+ * its parent (the executive reads real_parent), so this is not a path to
+ * borrow an unrelated privileged process's identity.
+ */
+#define VMS_IOCTL_REGISTER_CONTINUE \
+                            _IOWR(VMS_IOC_MAGIC, 0x41, struct vms_register_args)
+
 /* ================================================================
  * Device table (executive-resident I/O database)
  *

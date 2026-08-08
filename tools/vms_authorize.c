@@ -764,7 +764,28 @@ int main(int argc, char *argv[])
 
     /* Privilege check */
     if (!check_privilege()) {
-        fprintf(stderr, "%%UAF-F-NOAUTH, insufficient privilege to manage SYSUAF\n");
+        /*
+         * ORACLE-GROUNDED MESSAGE (vms-4d7). The old text
+         *   "%UAF-F-NOAUTH, insufficient privilege to manage SYSUAF"
+         * was INVENTED -- no such AUTHORIZE facility message exists on VMS,
+         * and %UAF-F-NOAUTH is not a real code. Captured on the reference
+         * lab (lab-2 replica vaxlab-7, OpenVMS VAX V7.3, node VAX2,
+         * 8-AUG-2026) by running AUTHORIZE from an account WITHOUT SYSPRV
+         * (user TESTNP, UIC [200,200], privileges TMPMBX+NETMBX) that is not
+         * the owner of SYS$SYSTEM:SYSUAF.DAT ([SYSTEM], protection RWE,RWE,,):
+         *
+         *   %UAF-E-NAOFIL, unable to open system authorization file (SYSUAF.DAT)
+         *   -RMS-E-PRV, insufficient privilege or file protection violation
+         *
+         * On VMS AUTHORIZE does not pre-check a privilege bit; it opens
+         * SYSUAF and RMS refuses a non-privileged non-owner. OVMX pre-checks
+         * SYSPRV (check_privilege() above) but must report what VMS reports.
+         * Capture and method: docs/oracle/vax73-authorize-privilege.md.
+         */
+        fprintf(stderr,
+            "%%UAF-E-NAOFIL, unable to open system authorization file (SYSUAF.DAT)\n");
+        fprintf(stderr,
+            "-RMS-E-PRV, insufficient privilege or file protection violation\n");
         return 1;
     }
 

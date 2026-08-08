@@ -10,6 +10,24 @@ larger docs tracked under `vms-d5b` (R6) for a future 1.0 release, not here.
 > or push a release tag — tagging is a separate, operator-owned step taken
 > once the full release chain is green.
 
+## Quick start (one command)
+
+```bash
+./boot.sh
+```
+
+That single command builds the bootable image if it isn't already built
+(~25-30 min cold, cached after that), creates a clean system disk on first
+run (or whenever you pass `--clean`), installs OVMX onto it, and drops you
+into an interactive QEMU console at the `Username:` prompt — log in as
+`SYSTEM` / `MANAGER` and you have a real DCL session. Run it again with no
+flags and it reuses the installed disk instead of reinstalling, so state
+persists across runs. `./boot.sh --help` lists the rest of the flags
+(`--clean`, `--rebuild`, `--slim`, `--disk`). The rest of this doc walks
+through what that command does step by step, plus the slim-initramfs
+reboot used to prove images load from the installed disk rather than the
+initramfs.
+
 Ground-sourcing note: this build was started for real while writing this
 doc (`docker build -f distro/Dockerfile.bootable -t ovmx-boot .` on a clean
 checkout, no cached image) and reached the kernel-module/userland compile

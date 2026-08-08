@@ -1,22 +1,33 @@
 #!/bin/bash
-# Boot OVMX in QEMU with persistent system disk.
+# ONE command: clean-install OVMX onto a fresh system disk, then boot it
+# interactively to a SYSTEM login / DCL prompt.
 #
 # Usage:
-#   ./boot.sh                          # Build (if needed), boot with default disk
+#   ./boot.sh                          # Build (if needed), clean install + boot
+#   ./boot.sh --clean                  # Force a fresh disk (delete and reinstall)
 #   ./boot.sh --disk path/to/disk.img  # Boot with specified disk image
-#   ./boot.sh --fresh                  # Force fresh disk (delete and recreate)
-#   ./boot.sh --rebuild                # Force Docker rebuild, then boot
+#   ./boot.sh --rebuild                # Force Docker image rebuild, then boot
 #   ./boot.sh --slim                   # Use slim initramfs (needs installed disk)
+#   ./boot.sh --help                   # Show this help
 #
-# First run:  Docker builds the image, creates blank dist/sysdisk.img,
-#             boots → STARTUP.EXE initializes disk and installs.
-# Later runs: Detects image + disk exist, boots immediately → fast.
+# First run (or --clean): Docker builds the image if needed, the container
+#             creates a blank system disk, and this SAME boot installs OVMX
+#             onto it (INITIALIZE.EXE + system seed) and continues straight
+#             into a login prompt — one continuous QEMU session.
+# Later runs (no flags):  Reuses the existing installed disk — boots
+#             immediately, state persists across runs.
+#
+# At the Username: prompt, log in as SYSTEM / MANAGER for a full-privilege
+# DCL session (or GUEST / GUEST for a restricted one).
 #
 # QEMU runs inside Docker — no host QEMU install needed.
 # The disk image is volume-mounted so writes persist on the host.
+# To exit QEMU: Ctrl-A then X.
 #
 # Environment:
 #   MEMORY  - Guest RAM (default: 512M)
+#
+# --fresh is accepted as a deprecated alias for --clean.
 
 set -e
 
@@ -40,7 +51,7 @@ while [ $# -gt 0 ]; do
             FORCE_REBUILD=1
             shift
             ;;
-        --fresh|-f)
+        --clean|--fresh|-f)
             FORCE_FRESH=1
             shift
             ;;
@@ -61,12 +72,12 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         --help|-h)
-            sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
             echo "Unknown option: $1" >&2
-            echo "Usage: $0 [--rebuild] [--fresh] [--slim] [--disk path]" >&2
+            echo "Usage: $0 [--clean] [--rebuild] [--slim] [--disk path]" >&2
             exit 1
             ;;
     esac
@@ -109,7 +120,7 @@ else
 fi
 
 if [ "$need_build" -eq 1 ]; then
-    echo "=== Building OVMX bootable image ==="
+    echo "=== Building image (compiles kernel modules + VMS-native toolchain + QEMU; ~25-30 min on a cold cache)... ==="
     BUILD_ARGS=""
     [ "$FORCE_REBUILD" -eq 1 ] && BUILD_ARGS="--no-cache"
     docker build -f "$SCRIPT_DIR/distro/Dockerfile.bootable" \
@@ -132,11 +143,16 @@ DISK_NAME="$(basename "$DISK")"
 
 mkdir -p "$DISK_DIR"
 
+CLEAN_INSTALL=0
 if [ "$FORCE_FRESH" -eq 1 ] && [ -z "$DISK_PATH" ]; then
     if [ -f "$DISK" ]; then
-        echo "=== Removing existing system disk ==="
+        echo "=== Creating clean system disk (removing existing $DISK_NAME)... ==="
         rm -f "$DISK"
     fi
+    CLEAN_INSTALL=1
+elif [ ! -f "$DISK" ]; then
+    echo "=== Creating clean system disk ($DISK_NAME does not exist yet)... ==="
+    CLEAN_INSTALL=1
 fi
 
 # --- Step 3: Boot via Docker ---
@@ -144,8 +160,13 @@ fi
 INITRD_ENV="fat"
 [ "$USE_SLIM" -eq 1 ] && INITRD_ENV="slim"
 
-echo "=== Booting OVMX (${MEMORY} RAM, disk: $DISK_NAME, initrd: $INITRD_ENV) ==="
-echo "=== Ctrl-A X to quit QEMU ==="
+if [ "$CLEAN_INSTALL" -eq 1 ]; then
+    echo "=== Booting — first boot installs OVMX (INITIALIZE + system seed), then logs in (${MEMORY} RAM, initrd: $INITRD_ENV) ==="
+else
+    echo "=== Booting — log in as SYSTEM (${MEMORY} RAM, disk: $DISK_NAME, initrd: $INITRD_ENV) ==="
+fi
+echo "=== Username: SYSTEM   Password: MANAGER   (or GUEST / GUEST for a restricted session) ==="
+echo "=== To exit QEMU: Ctrl-A then X ==="
 echo ""
 
 exec docker run --rm -it \

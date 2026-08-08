@@ -26,11 +26,15 @@
  *     OPERATOR.LOG by this process through vmsfs path translation, the request
  *     number is a counter private to this image, and there is no OPCOM process
  *     to request, so no operator is notified and no reply can ever come back.
- * OVMX-USERSPACE: sys$brkthruw (vms-905) -- open()s the resolved terminal
- *     device and write()s to it directly, falling back to the caller's own
- *     stdout when that open fails. No executive mediates the broadcast, so it
- *     reaches a terminal this process can already open itself and no other, and
- *     sndtyp (the VMS target class) is discarded.
+ * OVMX-PARTIAL: sys$brkthruw (vms-96e2) -- exec: the target terminal device
+ *     spec is resolved through the executive-resident LNM$SYSTEM table (vmsfs
+ *     path translation -> lnm_translate -> vms_kif_lnm_translate) for system
+ *     logical names before the device is opened.
+ * OVMX-LOCAL: sys$brkthruw -- open()s the resolved terminal device and write()s
+ *     to it directly, falling back to the caller's own stdout when that open
+ *     fails. No executive mediates the broadcast, so it reaches a terminal this
+ *     process can already open itself and no other, and sndtyp (the VMS target
+ *     class) is discarded.
  *
  * THE TWO SERVICES CITE DIFFERENT ITEMS ON PURPOSE (vms-fab). They shared vms-5b4,
  * which is the closed item that BUILT this register and owned neither of them.

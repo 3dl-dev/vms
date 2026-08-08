@@ -14,7 +14,10 @@ target_include_directories(vmslnm PUBLIC
     ${VMS_INCLUDE_DIR}
 )
 
-target_link_libraries(vmslnm PUBLIC pthread)
+# vmssys carries vms_kif_* -- the /dev/vms executive client. LNM$SYSTEM is
+# executive-resident (vms-d37/#193), so lnm_create/_delete/_translate route it
+# through vms_kif (vms-96e2). vmssys also exports the vms_kif.h include dir.
+target_link_libraries(vmslnm PUBLIC pthread vmssys)
 
 set_target_properties(vmslnm PROPERTIES
     PREFIX ""
@@ -30,7 +33,7 @@ if(OVMX_IMGACT)
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${VMS_INCLUDE_DIR}
     )
-    target_link_libraries(vmslnm_static PUBLIC pthread)
+    target_link_libraries(vmslnm_static PUBLIC pthread vmssys)
 endif()
 
 # There is no logical name daemon. On OpenVMS the logical name tables live in

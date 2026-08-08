@@ -2,14 +2,14 @@
  * lnm_client.c - Logical Name Client Library
  *
  * Provides the public API for logical name operations.
- * Currently uses in-process tables with a global static manager, so
- * SYSTEM/GROUP/JOB tables are per-process, not per-system — a process
- * cannot see a logical name DEFINE/SYSTEM'd by another process. On real
- * OpenVMS these tables are executive-resident (LNM$SYSTEM_TABLE); there
- * is no daemon to talk to. Placement (ioctl-per-translation vs. a
- * mmap'd shared arena behind /dev/vms) is an open operator ruling —
- * see vms-ln0 (gated) and vms-d37 (blocked twin). Do not add a
- * socket/daemon client here; that architecture was deleted (vms-a4b).
+ *
+ * LNM$SYSTEM is EXECUTIVE-RESIDENT (vms-d37/#193, wired here by vms-96e2):
+ * lnm_create/_delete/_translate route the SYSTEM table through vms_kif -> the
+ * /dev/vms arena, so a name DEFINE/SYSTEM'd by one process is visible to every
+ * other process on the node (real OpenVMS behaviour). LNM$PROCESS/JOB/GROUP
+ * stay in the process-private tables below (their executive residency is the
+ * deferred half of vms-d37). There is no daemon to talk to; the socket/daemon
+ * client was deleted (vms-a4b) -- do not reintroduce it.
  */
 
 #include <stdio.h>
@@ -21,9 +21,38 @@
 
 #include "vms/logical.h"
 #include "ssdef.h"
+#include "vms_kif.h"
 
 /* Default number of hash buckets per table */
 #define LNM_DEFAULT_BUCKETS 256
+
+/*
+ * is_system_table - true when table_name names the executive-resident
+ * LNM$SYSTEM table.
+ *
+ * vms-96e2 (on top of vms-d37/#193): LNM$SYSTEM is executive-resident. A name
+ * defined in it by one process must be visible to every other process on the
+ * node -- that is the whole reason SYS$UPDATE, DEFINE/SYSTEM'd by
+ * SYS$MANAGER:STARTUP.COM at boot, has to be seen by a later login process for
+ * @SYS$UPDATE:PARTS_SETUP.COM to resolve (the 0.2 demo blocker). So lnm_create,
+ * lnm_delete and lnm_translate route the SYSTEM table through vms_kif -> the
+ * /dev/vms executive arena (the #193 client), NOT the process-private tables
+ * kept here. Every consumer of this manager (DCL DEFINE/SHOW LOGICAL/F$TRNLNM
+ * and vmsfs filespec resolution) therefore reaches the one executive-resident
+ * table without a caller change and with no split-brain.
+ *
+ * vmsfs cannot call sys$crelnm/$trnlnm directly (libvms links vmsfs -- a cycle),
+ * so this manager, which sits below libvms and which both DCL and vmsfs already
+ * use, is where the executive routing goes; it reaches the SAME arena as
+ * libvms's sys$ services via the shared vms_kif client.
+ */
+static int is_system_table(const char *table_name)
+{
+    return table_name &&
+           (strcasecmp(table_name, LNM_SYSTEM_TABLE) == 0 ||
+            strcasecmp(table_name, "LNM$SYSTEM_TABLE") == 0 ||
+            strcasecmp(table_name, "SYSTEM") == 0);
+}
 
 /* Internal table functions from lnm_table.c */
 extern lnm_table_t *lnm_table_create(const char *name, uint32_t num_buckets);
@@ -238,6 +267,25 @@ uint32_t lnm_create(lnm_manager_t *mgr, const char *table_name,
     if (!equivalence)
         return SS$_BADPARAM;
 
+    /*
+     * LNM$SYSTEM is executive-resident (see is_system_table): the storage
+     * lives in vms.ko, not in this process, so a DEFINE/SYSTEM here is visible
+     * system-wide. On SS$_NOSUCHDEV the executive is unreachable -- which at
+     * OVMX runtime cannot happen (PID 1 pins it, Rule 9), so this only occurs
+     * under host BUILD/TEST tooling. There we keep the process-local SYSTEM
+     * table so the ctest suite that seeds SYS$SYSDEVICE etc. still runs; the
+     * executive-only migration of those host tests to the QEMU path is tracked
+     * by vms-96e2's follow-up (docs/design-lnm-executive-surface.md).
+     */
+    if (is_system_table(table_name)) {
+        const char *vals[1] = { equivalence };
+        uint32_t st = vms_kif_lnm_define(VMS_LNM_TBL_SYSTEM, logical_name,
+                                         vals, 1, attributes, acmode);
+        if (st != SS$_NOSUCHDEV)
+            return st;
+        /* tooling only: no executive -- keep it in the local SYSTEM table */
+    }
+
     lnm_table_t *table = lnm_find_table(mgr, table_name);
     if (!table)
         return SS$_NOLOGTAB;
@@ -336,6 +384,15 @@ uint32_t lnm_delete(lnm_manager_t *mgr, const char *table_name,
     uint32_t status = validate_logical_name(logical_name);
     if (!$VMS_STATUS_SUCCESS(status))
         return status;
+
+    /* LNM$SYSTEM is executive-resident: delete through vms_kif. SS$_NOSUCHDEV
+     * only under host tooling (no executive) -- fall through to the local
+     * SYSTEM table there (see is_system_table / lnm_create). */
+    if (is_system_table(table_name)) {
+        uint32_t st = vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, logical_name, acmode);
+        if (st != SS$_NOSUCHDEV)
+            return st;
+    }
 
     lnm_table_t *table = lnm_find_table(mgr, table_name);
     if (!table)

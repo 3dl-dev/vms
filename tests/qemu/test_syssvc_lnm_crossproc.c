@@ -46,12 +46,17 @@
 #include <string.h>
 #include <unistd.h>
 #include <poll.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <stdint.h>
 
 #include "starlet.h"
 #include "descrip.h"
 #include "lnmdef.h"
+#include "ovmx_layout.h"
+#include "vmsfs/device.h"
+#include "vmsfs/filespec.h"
 #include "ssdef.h"
 #include "vms_kif.h"
 
@@ -134,6 +139,32 @@ static uint32_t del(const char *table, const char *name)
     return sys$dellnm(&td, &nd, NULL);
 }
 
+/*
+ * THE 0.2 DEMO BLOCKER, proved cross-process (vms-96e2). SYS$MANAGER:STARTUP.COM
+ * does DEFINE/SYSTEM SYS$UPDATE at boot; a later login must @SYS$UPDATE:...,
+ * which only works if the name is executive-resident. Below, the PARENT does
+ * the DEFINE/SYSTEM (as STARTUP would) and stages the install procedure; the
+ * CHILD -- which never defines the name -- resolves SYS$UPDATE:PARTS_SETUP.COM
+ * through vmsfs (the @-command path) and OPENS it. The definition crosses
+ * processes only through the executive; the device table (DKA0: -> the mount,
+ * the ONE Unix-path bridge) is legitimately per-process, so each registers it.
+ */
+#define SYSUPD_VMS_DIR   "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSUPD]"
+#define SYSUPD_LINUX_DIR SYSDISK_MOUNT "/SYS0/SYSCOMMON/SYSUPD"
+#define SETUP_VMS_SPEC   "SYS$UPDATE:PARTS_SETUP.COM"
+
+/* mkdir -p for a plain Linux path in the rig's /vms. */
+static void mkpath(const char *path)
+{
+    char tmp[1024];
+    strncpy(tmp, path, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') { *p = '\0'; mkdir(tmp, 0755); *p = '/'; }
+    }
+    mkdir(tmp, 0755);
+}
+
 /* Same skip-vs-run decision, and same reasoning, as test_syssvc_ef_mproc.c:
  * open only to decide, never register by hand (kif_bind does that). */
 static int executive_present(void)
@@ -166,6 +197,34 @@ static int run_child(int c2p_write, int p2c_read)
         st = trn("LNM$FILE_DEV", "CROSSPROC", val, sizeof(val));
         CHECK((st & 1) && strcmp(val, "HELLO") == 0,
               "child: the parent's LNM$SYSTEM name resolves through the default search list too");
+
+        /*
+         * THE 0.2 DEMO PROOF (vms-96e2). The parent DEFINE/SYSTEM'd SYS$UPDATE
+         * (and SYS$SYSDEVICE it resolves through) and staged PARTS_SETUP.COM.
+         * This child never defined either name. It registers only DKA0: (the
+         * per-process Unix-path bridge), then:
+         *   (a) SHOW LOGICAL / F$TRNLNM path: sys$trnlnm(SYS$UPDATE) resolves;
+         *   (b) @-command path: vmsfs resolves SYS$UPDATE:PARTS_SETUP.COM and
+         *       the install procedure OPENS.
+         * Both work only because LNM$SYSTEM is executive-resident.
+         */
+        vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
+
+        st = trn("LNM$SYSTEM", "SYS$UPDATE", val, sizeof(val));
+        printf("  INFO: child: sys$trnlnm(SYS$UPDATE) status=%u value=\"%s\"\n", st, val);
+        CHECK((st & 1) && strcmp(val, SYSUPD_VMS_DIR) == 0,
+              "child: SYS$UPDATE DEFINE/SYSTEM'd by the parent resolves here (SHOW LOGICAL / F$TRNLNM)");
+
+        char lp[1024];
+        int rr = vmsfs_to_linux_path(SETUP_VMS_SPEC, lp, sizeof(lp));
+        printf("  INFO: child: vmsfs_to_linux_path(%s) r=%d path=\"%s\"\n",
+               SETUP_VMS_SPEC, rr, rr == 1 ? lp : "");
+        CHECK(rr == 1 && strncmp(lp, SYSUPD_LINUX_DIR, strlen(SYSUPD_LINUX_DIR)) == 0,
+              "child: @SYS$UPDATE:PARTS_SETUP.COM resolves under the kit directory (cross-process, via vmsfs)");
+        FILE *pf = (rr == 1) ? fopen(lp, "r") : NULL;
+        CHECK(pf != NULL,
+              "child: @SYS$UPDATE:PARTS_SETUP.COM OPENS -- the 0.2 demo blocker is clear");
+        if (pf) fclose(pf);
     }
 
     /* Child defines a name of its own; parent must read it back. */
@@ -242,6 +301,28 @@ int main(void)
     st = def("LNM$SYSTEM", "CROSSPROC", "HELLO");
     printf("  INFO: parent: sys$crelnm(LNM$SYSTEM, CROSSPROC=HELLO) returned status %u\n", st);
     CHECK(st & 1, "parent: sys$crelnm in LNM$SYSTEM reported success");
+
+    /*
+     * The 0.2 demo setup (vms-96e2): DEFINE/SYSTEM SYS$SYSDEVICE + SYS$UPDATE
+     * exactly as SYS$MANAGER:STARTUP.COM does at boot, and stage the install
+     * procedure where SYS$UPDATE: points. The child (a separate process) will
+     * resolve and open it without ever defining the name.
+     */
+    vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
+    (void)def("LNM$SYSTEM", "SYS$SYSDEVICE", SYSDISK_DEVICE ":");
+    uint32_t su = def("LNM$SYSTEM", "SYS$UPDATE", SYSUPD_VMS_DIR);
+    CHECK(su & 1,
+          "parent: DEFINE/SYSTEM SYS$UPDATE (the STARTUP.COM boot step) reported success");
+    mkpath(SYSUPD_LINUX_DIR);
+    {
+        char sp[1024];
+        if (vmsfs_to_linux_path(SETUP_VMS_SPEC, sp, sizeof(sp)) == 1) {
+            FILE *f = fopen(sp, "w");
+            if (f) { fputs("$! PARTS_SETUP.COM (cross-process proof)\n$ EXIT\n", f); fclose(f); }
+            printf("  INFO: parent: staged install procedure at %s\n", sp);
+        }
+    }
+
     if (send_token(p2c[1], 'P') < 0) fail++;
 
     /* Child defines CROSSPROC2; parent reads it back (B defines, A reads). */
@@ -277,6 +358,8 @@ int main(void)
 
     /* Tidy up so a re-run in the same booted guest starts clean. */
     (void)del("LNM$SYSTEM", "CROSSPROC2");
+    (void)del("LNM$SYSTEM", "SYS$UPDATE");
+    (void)del("LNM$SYSTEM", "SYS$SYSDEVICE");
 
     printf("=== test_syssvc_lnm_crossproc: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

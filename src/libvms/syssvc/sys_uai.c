@@ -16,10 +16,13 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-USERSPACE: sys$getuai (vms-846.3) -- opens and parses the SYSUAF file
- *     itself through vmsfs path translation, in the calling process, with no
- *     executive-mediated access and no interlock against a concurrent
- *     sys$setuai in another process.
+ * OVMX-PARTIAL: sys$getuai (vms-96e2) -- exec: the SYSUAF filespec is resolved
+ *     to a Linux path through the executive-resident LNM$SYSTEM table (vmsfs
+ *     path translation -> lnm_translate -> vms_kif_lnm_translate) for system
+ *     logical names.
+ * OVMX-LOCAL: sys$getuai -- opens and parses the SYSUAF file itself in the
+ *     calling process, with no executive-mediated access and no interlock
+ *     against a concurrent sys$setuai in another process.
  * OVMX-PARTIAL: sys$setuai (vms-846.3) -- exec: the SYSPRV test reads the
  *     privilege mask the EXECUTIVE holds for the caller, through
  *     vms_kif_getjpi_self(). That mask arrives only through

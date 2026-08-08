@@ -367,6 +367,19 @@ int main(void)
                     CHECK_EQ(parsed.fh2_fid.fid_seq, 1, "OVMXDIR seq == 1");
                     CHECK_EQ(parsed.fh2_backlink.fid_num, ODS2_FID_MFD,
                              "OVMXDIR backlink == MFD");
+                    /* [F10] regression guard (increment 6, vms-0f3): the
+                     * backlink's SEQ must match what the MFD's OWN header
+                     * actually self-declares (ODS2_FID_MFD, i.e. 4 -- see
+                     * ods2_volume_format()'s write_fh2_header(ODS2_FID_MFD,
+                     * ODS2_FID_MFD, ...) call), not the "first generation"
+                     * seq==1 convention used for the file's OWN identity.
+                     * wvol->mfd_fid previously carried seq==1 here, silently
+                     * producing a backlink that never matched the real MFD
+                     * header on disk -- exactly the FID self-consistency
+                     * mismatch Nankervis's accesshead() (and real VMS's
+                     * MOUNT-time FILENUMCHK) rejects. */
+                    CHECK_EQ(parsed.fh2_backlink.fid_seq, ODS2_FID_MFD,
+                             "OVMXDIR backlink seq == MFD's own fid_seq (4)");
                 }
             }
 

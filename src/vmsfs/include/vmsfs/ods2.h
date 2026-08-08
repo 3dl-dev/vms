@@ -749,8 +749,8 @@ ods2_status_t ods2_volume_list_dir(const ods2_volume_t *vol,
  *        did not change the outcome either. The remaining defect is
  *        therefore somewhere ELSE in this writer's volume-wide structure
  *        -- the SIMPLIFICATIONS list below's INDEXF.SYS single-contiguous-
- *        extent choice (vs. the real fixture's 3-extent fragmented map) is
- *        the leading untested candidate, since it is the only OTHER
+ *        extent choice (vs. the real fixture's 3-extent fragmented map) was
+ *        the leading untested candidate, since it was the only OTHER
  *        already-flagged "not reproduced, presumed OK" structural
  *        difference in the whole writer. NOT bisected further in this
  *        increment (out of the SECURITY.SYS-focused scope this work was
@@ -758,14 +758,60 @@ ods2_status_t ods2_volume_list_dir(const ods2_volume_t *vol,
  *        addendum for the full trial log and a concrete next-step
  *        recommendation.
  *
+ *        UPDATE (increment 6, vms-0f3): the INDEXF.SYS single-extent
+ *        candidate WAS confirmed load-bearing -- giving it a genuine
+ *        3-extent map (see [F12] below) moved the real-VAX MOUNT failure
+ *        from `-SYSTEM-W-FILENUMCHK` to a DIFFERENT secondary status,
+ *        `-SYSTEM-W-BADIRECTORY, bad directory file format`, a real,
+ *        reproducible state transition. `FILENUMCHK` is therefore
+ *        RESOLVED. `BADIRECTORY` is the new, NOT YET RESOLVED wall --
+ *        surviving both a directory-sort-order fix ([F13]) and a stray-
+ *        byte fix found while making it, so it is not (solely) a
+ *        directory-content-ordering issue. See PROVENANCE-real_vax_ods2.md's
+ *        increment-6 addendum for the full fix list, what was tried and
+ *        ruled out, and the recommended next diagnostic (a real-fixture
+ *        `[000000]` header+data splice, in step 3's style above).
+ *
+ *   [F10] wvol->mfd_fid.fid_seq bug (increment 6): was 1 (the "first
+ *        generation of a newly created file" convention) instead of
+ *        ODS2_FID_MFD (4, what the MFD's own on-disk fh2_fid.seq actually
+ *        is). Every caller-created top-level file/dir's fh2_backlink is
+ *        built from this struct, so it silently disagreed with the real
+ *        on-disk MFD header. See ods2_writer.c's [F10] comment. Tried
+ *        alone on lab-2: FILENUMCHK reproduced identically -- not
+ *        sufficient alone, but a real, kept fix.
+ *   [F11] fh2_fileowner/fh2_fileprot/fh2_reserved1/fh2_highwater
+ *        (increment 6): four previously-zero per-file-header fields found
+ *        non-zero on every one of the real fixture's 13 real headers via
+ *        a full field-by-field diff (see ods2_writer.c's [F11] comment
+ *        for the derivation of each). Tried together on lab-2:
+ *        FILENUMCHK reproduced identically -- not sufficient, but real
+ *        and kept.
+ *   [F12] INDEXF.SYS genuinely fragmented into 3 extents (increment 6):
+ *        re-derived the real shape directly off real_vax_ods2.dsk's own
+ *        FID1 header and found the actual reason for the fragmentation --
+ *        BITMAP.SYS's and 000000.DIR's own data extents sit PHYSICALLY
+ *        BETWEEN the home-block pair and the index file bitmap on the
+ *        real volume, not after the header area as this writer previously
+ *        placed them. Reordered the physical layout to match and gave
+ *        INDEXF.SYS a genuine 3-extent map via write_fh2_header_ext()
+ *        (see ods2_writer.c). CONFIRMED LOAD-BEARING: real-VAX MOUNT's
+ *        secondary status moved from FILENUMCHK to BADIRECTORY -- see the
+ *        UPDATE note above.
+ *   [F13] Directory entries must be in ascending name order (increment 6):
+ *        decoding the real fixture's own [000000] MFD directory block
+ *        record-by-record (not just via `strings`, unlike [F8]) showed
+ *        its 11 entries in strict ascending byte order by filename.
+ *        ods2_wvolume_dir_insert() now finds the correct sorted position
+ *        instead of always appending. Tried on lab-2: BADIRECTORY
+ *        persisted unchanged -- real and now byte-exact with the real
+ *        fixture's own order, but not (solely) BADIRECTORY's cause. A
+ *        related stray-byte regression (the sorted insert's word-
+ *        alignment pad byte, opened by memmove(), wasn't reset to the
+ *        0xFF empty-fill convention) was found and fixed in the same
+ *        pass; also did not change the MOUNT outcome.
+ *
  * SIMPLIFICATIONS -- explicitly [OVMX-inferred], NOT claimed byte-genuine:
- *   - INDEXF.SYS's own retrieval map is written as ONE contiguous extent
- *     covering home + alternate home + index bitmap + reserved headers +
- *     alternate index header. The real fixture's own FID 1 header uses 3
- *     extents (map_inuse == 6 words), not 1 -- this writer's layout is
- *     self-consistent and was chosen for simplicity, not measured to match
- *     real INITIALIZE's fragmentation choice. [F9]: this is the leading
- *     untested candidate for the remaining real-MOUNT FILENUMCHK failure.
  *   - Reserved-file and created-file timestamps are left zero.
  *   - The stub reserved files (BADBLK/CORIMG/VOLSET/CONTIN/BACKUP/BADLOG)
  *     get zero-length headers with no data extent, matching the real

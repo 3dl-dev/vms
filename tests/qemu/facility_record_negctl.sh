@@ -269,6 +269,18 @@ passed=$((passed + 1))
 # that the phrase "PROVEN ABLE TO GO RED" appears would pass on the sentence
 # "0 are PROVEN ABLE TO GO RED", which is the exact opposite of what it means
 # to check.
+#
+# THE FORBIDDEN FRAGMENT CARRIES A ", " PREFIX (vms-e5c/vms-221, MEASURED),
+# not just "0 are PROVEN ABLE TO GO RED": the real sentence this guards
+# against is "of those N, 0 are PROVEN ABLE TO GO RED", and grep -qF is a
+# plain substring search -- so an UNPREFIXED needle also matches "of those
+# N, 30 are PROVEN ABLE TO GO RED" (the tens digit's own trailing "0" reads
+# as the needle). Hit for real once the manifest's total named-suite count
+# happened to land on a multiple of ten (61 defects, 30 named suites,
+# vms-e5c's and vms-221's anchors merging in the same window) -- a false
+# "forbidden fragment" failure on an otherwise-correct PASS, not a defect
+# in the gate being tested. The comma-space anchors on the actual sentence
+# shape without switching this shared helper's matching mode off -F.
 EXP_PROVEN=$(awk -F'\t' '$1=="RED" { print $3 }' "$SB/pristine.tsv" \
              | grep -vFx '(harness)' | sort -u | wc -l)
 [ "$EXP_PROVEN" -ge 2 ] || { echo "  FAIL: BROKEN FIXTURE: only $EXP_PROVEN suite(s) in"
@@ -277,7 +289,7 @@ expect_green "a well-formed record moves suites into the PROVEN population, by c
     "$EXP_PROVEN are PROVEN ABLE TO GO RED" \
     "$F_REFUSE
 $F_NOTMEAS
-0 are PROVEN ABLE TO GO RED"
+, 0 are PROVEN ABLE TO GO RED"
 
 expect_green "the observed-executed count is derived from the record's RUN rows" \
     "$N_RUN of this manifest's" \

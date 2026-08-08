@@ -851,6 +851,19 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      # SHARD-BALLOON FIX (vms-86a part 2). MEASURED: the main-push run on
+      # d2d76fc failed on THREE shards AT ONCE (0/6, 1/6, 5/6) -- every shard
+      # runs QEMU + fork/pipe/multi-process tests, and with all 6 unbounded
+      # (GitHub's default matrix concurrency), they compete for host
+      # resources (CPU for 6 concurrent QEMU guests, IPC timing) alongside
+      # whatever else this workflow is already running. That's resource
+      # starvation, not a per-defect logic bug -- the same shard slice that
+      # fails under load passes standalone. Capping how many run AT ONCE
+      # (not how many run in total -- all 6 still execute, sequenced in
+      # batches) gives each shard the headroom it needs without trading away
+      # coverage or resurrecting the pre-#158 single-job wall-time problem.
+      # Revisit the number empirically if shards still balloon at 3.
+      max-parallel: 3
       matrix:
         shard: [0, 1, 2, 3, 4, 5]
 

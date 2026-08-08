@@ -81,6 +81,15 @@ void vms_kif_close(void);
  * executive assigned. */
 uint32_t vms_kif_register(uint32_t *vms_pid);
 
+/* Register the CALLING task as a CONTINUATION of its VMS parent's process
+ * rather than a new one (vms-4d7, Option B): the executive shares the
+ * parent's VMS PID, UIC, user name and privileges onto this task. DCL
+ * calls this in the forked child of an image activation, before execve, so
+ * the activated image runs with DCL's identity -- SYSTEM's RUN AUTHORIZE
+ * holds SYSPRV. Not for SPAWN / RUN/DETACHED / $CREPRC, which are genuinely
+ * new VMS processes and use vms_kif_register(). */
+uint32_t vms_kif_register_continue(void);
+
 /* Stamp an AUTHENTICATED identity onto this process ($GETJPI reads it
  * back, from any process). The caller must already hold SETPRV to
  * establish an identity that is not a weakening of its own -- so this

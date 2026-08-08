@@ -261,8 +261,13 @@ int main(void)
                   "B: the executive's own row holds exactly the OPER|WORLD "
                   "mask this run stamped, with SYSPRV genuinely absent");
         }
-        CHECK(strstr(outB, "%UAF-F-NOAUTH, insufficient privilege to manage SYSUAF") != NULL,
-              "B: AUTHORIZE refused the non-SYSPRV process with %UAF-F-NOAUTH");
+        /* Oracle-grounded refusal (vms-4d7): lab-2 vaxlab-7, OpenVMS VAX
+         * V7.3, a non-SYSPRV non-owner running AUTHORIZE gets this exact
+         * pair -- see docs/oracle/vax73-authorize-privilege.md. The old
+         * invented "%UAF-F-NOAUTH" text was replaced in tools/vms_authorize.c. */
+        CHECK(strstr(outB, "%UAF-E-NAOFIL, unable to open system authorization file (SYSUAF.DAT)") != NULL &&
+              strstr(outB, "-RMS-E-PRV, insufficient privilege or file protection violation") != NULL,
+              "B: AUTHORIZE refused the non-SYSPRV process with the oracle-grounded %UAF-E-NAOFIL / -RMS-E-PRV");
         CHECK(strstr(outB, "%UAF-I-AUTHVERSION") == NULL,
               "B: the non-SYSPRV process never saw the version banner -- it "
               "was refused before SYSUAF was ever touched");

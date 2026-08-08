@@ -86,4 +86,9 @@
 # kernel/vms_lnm.c (executive-resident LNM$SYSTEM), anchoring the new
 # test_syssvc_lnm_crossproc suite's cross-process DEASSIGN/SYSTEM assertion.
 # See its own entry in facility_defects.sh for what it covers and why.
-62
+# Raised to 63 by vms-4d7's register-continue-identity-dropped -- anchors the
+# new test_syssvc_identcont suite (image activation continues its activator's
+# VMS identity, Option B), the first mutation targeting
+# vms_proc_continue_identity() in kernel/vms_module.c. See its own entry in
+# facility_defects.sh for what it covers and why.
+63

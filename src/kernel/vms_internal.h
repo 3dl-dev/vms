@@ -526,7 +526,7 @@ struct vms_proc *vms_proc_find_or_err(void);
  */
 /* The VMS process ID is assigned by the executive (vms-2b8), so there is
  * no vms_pid parameter to pass: read proc->vms_pid afterwards. */
-struct vms_proc *vms_proc_register(pid_t pid);
+struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity);
 void vms_proc_free(struct vms_proc *proc);
 /* Tear down an entry the caller has ALREADY unlinked under
  * vms_proc_hash_lock (the unlink is the ownership claim). */

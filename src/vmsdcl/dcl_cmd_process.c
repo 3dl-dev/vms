@@ -34,6 +34,7 @@
 #include "prcdef.h"
 #include "msgdef.h"
 #include "ovmx_status.h"
+#include "vms_kif.h"
 
 int cmd_wait(struct dcl_command *cmd)
 {
@@ -1090,6 +1091,23 @@ int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
     pid_t pid = fork();
     if (pid == 0) {
         /* Child */
+        /*
+         * IMAGE ACTIVATION CONTINUES THIS PROCESS'S IDENTITY (vms-4d7,
+         * Option B). On OpenVMS, RUN / a foreign command / a DCL utility
+         * activates the image IN the current process -- same PID, same
+         * UIC, same privileges. OVMX fork()s+execve()s instead, so without
+         * this the image would auto-register a fresh PCB and derive its own
+         * privilege mask (that is why SYSTEM could not RUN AUTHORIZE: the
+         * child never held SYSPRV). We are still DCL here -- the fork has
+         * not yet been replaced -- so our real_parent is DCL and the
+         * executive can share DCL's VMS PID, UIC, user name and privileges
+         * onto this task. The PCB is keyed on the thread group and survives
+         * the execve below, so the activated image inherits it.
+         *
+         * This is ONLY for image activation. SPAWN / RUN/DETACHED / $CREPRC
+         * create genuinely new VMS processes and do not call this.
+         */
+        (void)vms_kif_register_continue();
         execv(linux_path, argv);
         _exit(1);
     } else if (pid > 0) {

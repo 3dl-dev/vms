@@ -13,14 +13,16 @@
  *       INDEXF.SYS header read, FM2 retrieval-pointer decode, directory list,
  *       plus negative cases (corrupt checksum, bad format string).
  *
- * VALIDATION SCOPE / BYTE-GENUINENESS CAVEAT:
- *   No real VMS-made ODS-2 image exists in the repo/corpus (checked: tests/
- *   corpus holds no ODS-2 disk image). This test therefore CONSTRUCTS a
- *   spec-conformant image. That proves the reader is self-consistent with the
- *   documented layout, NOT that the layout is byte-identical to what a real
- *   OpenVMS VAX writes. The FLAGGED NEXT INCREMENT is to INITIALIZE + populate
- *   a small ODS-2 volume on lab-1 (OpenVMS VAX V7.3), pull the raw image, and
- *   assert this reader parses it. Only then is byte-genuineness proven.
+ * VALIDATION SCOPE:
+ *   This test CONSTRUCTS a spec-conformant image, which proves the reader is
+ *   self-consistent with the documented layout -- NOT that the layout is
+ *   byte-identical to what a real OpenVMS VAX writes. That byte-genuineness
+ *   claim is proven separately, in test_ods2_real.c, which drives this same
+ *   reader over a REAL OpenVMS VAX V7.3 volume image pulled from lab-2
+ *   (tests/ods2/real_vax_ods2.dsk; see PROVENANCE-real_vax_ods2.md). Keep
+ *   both: this file's hand-built image gives fast, exact negative-case
+ *   control (corrupt checksum, bad format) that a real image can't easily
+ *   provide on demand.
  */
 
 #include "vmsfs/ods2.h"

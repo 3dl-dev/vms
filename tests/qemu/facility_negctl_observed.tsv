@@ -19,262 +19,33 @@
 # one observed failing assertion each, so shrinking this file is proportional
 # to what is being deleted, and visible.
 #
+# THIS COPY (vms-9b7): the union of run 31257368248's six per-shard slices
+# (tree 87d7fda), with the scratch-dir-owner-not-system rows re-observed on
+# this branch after test_syssvc_scratch_writable.c's 0755 fix -- that defect
+# turned from a no-op (RUN ... - fail, the LARP) into a real reddening of
+# test_syssvc_scratch_writable's A1/A2, measured by a real QEMU run of
+# run_facility_negctl.sh scratch-dir-owner-not-system on this branch. Every
+# other defect's rows are 87d7fda's, unchanged: the bind/lock knock_on_fail
+# edits only NAME reds that were already observed, so they add no rows.
+#
 # Row shapes (TAB-separated, exactly four fields):
 #   RUN <defect> <suites that went red, space-joined, or "-"> <pass|fail>
 #   RED <defect> <suite or (harness)> <assertion text observed FAILing>
 #
-# generated-at: 2026-08-07T03:17:10Z
-# tree-commit: bd029e949679e4e740847cdc0fbdfcd9c0dd7722
+# generated-at: 2026-08-08T14:12:33Z
+# tree-commit: 87d7fda08bfc85a4a9f06e392f99d1d41b00a20f
 # positive-control: pass
-# defects-in-manifest: 59
-# suites-derived: 30
-RUN	access-mode-escalation	test_kmod_access	pass
+# defects-in-manifest: 61
+# suites-derived: 33
 RED	access-mode-escalation	test_kmod_access	... and still does not hold CMKRNL afterwards
 RED	access-mode-escalation	test_kmod_access	... and the mode is still USER after the denied escalation
 RED	access-mode-escalation	test_kmod_access	KERNEL mode DENIED without CMKRNL (SS$_NOPRIV)
 RED	access-mode-escalation	test_kmod_access	an unprivileged process cannot $SETPRV itself CMKRNL
-RUN	kif-setmode-always-kernel	test_kmod_access	pass
-RED	kif-setmode-always-kernel	test_kmod_access	... and the mode really returned to USER
-RUN	getmode-buffer-not-written	test_kmod_access test_kmod_bind	pass
-RED	getmode-buffer-not-written	test_kmod_access	... and the mode is still USER after the denied escalation
-RED	getmode-buffer-not-written	test_kmod_access	... and the mode really changed
-RED	getmode-buffer-not-written	test_kmod_access	... and the mode really returned to USER
-RED	getmode-buffer-not-written	test_kmod_access	a process starts in USER mode
-RED	getmode-buffer-not-written	test_kmod_bind	adoption preserved the privilege mask SETIDENT established
-RUN	ast-setast-disable	test_kmod_ast test_syssvc_ast	pass
+RED	assign-terminal-bypasses-executive	test_syssvc_qio_terminal	A-WRITES/B-READS: a fresh child sees the reference sys$assign("TT:") added to OPA0: in the executive (public API, cross-process)
 RED	ast-setast-disable	test_kmod_ast	SETAST(enable) returns WASCLR (== prev state was disabled)
 RED	ast-setast-disable	test_kmod_ast	disable again: prev state was disabled
 RED	ast-setast-disable	test_syssvc_ast	SETAST(enable) returns WASCLR (== prev state was disabled)
 RED	ast-setast-disable	test_syssvc_ast	disable again: prev state was disabled
-RUN	eflag-clref-noop	test_kmod_eflag test_kmod_eflag_mproc test_syssvc_ef_local test_syssvc_ef_mproc	pass
-RED	eflag-clref-noop	test_kmod_eflag	cluster has flags 0,3,7,31 set
-RED	eflag-clref-noop	test_kmod_eflag	readef(5) after clear returns WASCLR
-RED	eflag-clref-noop	test_kmod_eflag_mproc	child: a common flag CLEARED BY THE PARENT reads clear here (A clears, B reads)
-RED	eflag-clref-noop	test_syssvc_ef_local	sys$readef(1) reported WASCLR after the clear
-RED	eflag-clref-noop	test_syssvc_ef_mproc	child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads, public API)
-RUN	eflag-waitfr-eintr-normal	test_syssvc_ef_mproc	pass
-RED	eflag-waitfr-eintr-normal	test_syssvc_ef_mproc	parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
-RED	eflag-waitfr-eintr-normal	test_syssvc_ef_mproc	parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
-RUN	eflag-setef-status-inverted	test_kmod_eflag test_syssvc_ef_local	pass
-RED	eflag-setef-status-inverted	test_kmod_eflag	setef(40) in cluster 1 returns WASCLR
-RED	eflag-setef-status-inverted	test_kmod_eflag	setef(5) again returns WASSET
-RED	eflag-setef-status-inverted	test_kmod_eflag	setef(5) returns WASCLR
-RED	eflag-setef-status-inverted	test_syssvc_ef_local	sys$setef(1) on an already-set flag reported WASSET
-RUN	eflag-readef-status-inverted	test_kmod_bind test_kmod_eflag test_syssvc_ef_local	pass
-RED	eflag-readef-status-inverted	test_kmod_bind	$READEF sees the flag this process just set
-RED	eflag-readef-status-inverted	test_kmod_bind	sibling thread sees the event flag the main thread set
-RED	eflag-readef-status-inverted	test_kmod_eflag	readef(5) after clear returns WASCLR
-RED	eflag-readef-status-inverted	test_kmod_eflag	readef(5) returns WASSET
-RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$readef(1) reported WASCLR after the clear
-RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$readef(1) reported WASCLR for the cleared flag
-RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$readef(1) reported WASSET after the flag was set
-RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$waitfr(1) left the flag SET -- it is not a counting semaphore
-RED	eflag-readef-status-inverted	test_syssvc_ef_local	the cluster state word agrees with the status: flag 1's bit is CLEAR
-RUN	eflag-ascefc-reassoc-status-wrong	test_kmod_eflag_mproc test_syssvc_ef_mproc	pass
-RED	eflag-ascefc-reassoc-status-wrong	test_kmod_eflag_mproc	child: ascefc joined the named common cluster
-RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	child: sys$ascefc joined the named common cluster
-RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	parent: sys$ascefc re-joined the permanent cluster by name
-RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
-RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
-RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	parent: wfland child never reported it was ready to block
-RUN	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	pass
-RED	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dacefc identifies the cluster from ANY flag number in it, not only the base
-RED	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dacefc released the last association to the permanent cluster
-RED	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dacefc released the marked cluster
-RUN	eflag-dlcefc-status-wrong	test_syssvc_ef_mproc	pass
-RED	eflag-dlcefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dlcefc accepted the permanent cluster by name
-RUN	eflag-wflor-status-wrong	test_syssvc_ef_mproc	pass
-RED	eflag-wflor-status-wrong	test_syssvc_ef_mproc	parent: sys$wflor returned with only ONE of the two mask flags set -- OR, not AND
-RUN	eflag-wfland-status-wrong	test_syssvc_ef_mproc	pass
-RED	eflag-wfland-status-wrong	test_syssvc_ef_mproc	parent: sys$wfland unblocked only once BOTH mask flags were set (AND, not OR)
-RUN	lock-compat-ex-cr	test_kmod_lock	pass
-RED	lock-compat-ex-cr	test_kmod_lock	ENQ EX+NOQUEUE denied (CR held)
-RUN	lock-compat-cr-ex	test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status	pass
-RED	lock-compat-cr-ex	test_kmod_lock_mproc	child: CR+NOQUEUE denied while parent holds EX (EX blocks CR)
-RED	lock-compat-cr-ex	test_kmod_lock_mproc	child: queued CR request still ungranted (NL) per GETLKI
-RED	lock-compat-cr-ex	test_kmod_lock_mproc	parent: cross-process GETLKI sees child's queued CR request
-RED	lock-compat-cr-ex	test_kmod_lock_mproc	parent: received blocking AST (astadr=sentinel, astprm=own lkid)
-RED	lock-compat-cr-ex	test_kmod_lock_sync	child: DELIVERAST returned completion AST (astadr/astprm sentinels)
-RED	lock-compat-cr-ex	test_kmod_lock_sync	parent: child (completion AST) exited clean
-RED	lock-compat-cr-ex	test_syssvc_lock	child: sys$enq CR+NOQUEUE denied while parent holds EX (public API)
-RED	lock-compat-cr-ex	test_syssvc_lock	child: sys$enqw EX granted after parent's sys$deq (cross-process release, public API)
-RED	lock-compat-cr-ex	test_syssvc_lock	parent: child's NOQUEUE-denial checks reported via public API
-RED	lock-compat-cr-ex	test_syssvc_lock	parent: child's post-release retry succeeded via public API
-RED	lock-compat-cr-ex	test_syssvc_lock_status	sys$enq(LCK$M_CONVERT) on a lock still queued (waiting) reports SS$_CVTUNGRANT (public API)
-RUN	lock-valblk-grant-not-delivered	test_kmod_lock_sync	pass
-RED	lock-valblk-grant-not-delivered	test_kmod_lock_sync	child: GETLKI value block equals the PARENT's, not this lock's own pre-grant value (blocked-then-granted valblk delivery)
-RED	lock-valblk-grant-not-delivered	test_kmod_lock_sync	parent: child (valblk grant) exited clean
-RUN	lock-enq-immediate-grant-status-wrong	test_kmod_bind test_kmod_lock test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status	pass
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_bind	$ENQ EX granted through /dev/vms
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_bind	main thread takes a lock
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ CR on TESTRES2
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ EX with value block
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ NL on TESTRES1
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ second CR on TESTRES2 (compatible)
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_mproc	child: CR granted on MPROCLOCK2 (own request)
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_mproc	parent: CR granted on MPROCLOCK2 concurrently with child's CR (CR+CR compatible)
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_mproc	parent: EX granted on MPROCLOCK1 with blkastadr set
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	child: EX granted on DLRES_Y
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX granted on ASTRES
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX granted on DLRES_X
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX granted on SYNCRES1
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX+VALBLK granted immediately on fresh VALBLKRES (publishes VALBLK_SEED)
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: child (completion AST) exited clean
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: child (deadlock) exited clean
-RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: child (sync block) exited clean
-RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	child: sys$enqw EX granted after parent's sys$deq (cross-process release, public API)
-RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	parent: child's NOQUEUE-denial checks reported via public API
-RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	parent: child's post-release retry succeeded via public API
-RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	parent: sys$enqw EX granted, real lock ID returned (public API)
-RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock_status	parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
-RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock_status	parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
-RUN	lock-deq-status-wrong	test_kmod_bind test_kmod_lock test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status	pass
-RED	lock-deq-status-wrong	test_kmod_bind	$DEQ released the lock
-RED	lock-deq-status-wrong	test_kmod_bind	sibling thread can $DEQ the lock the main thread took
-RED	lock-deq-status-wrong	test_kmod_lock	DEQ lock
-RED	lock-deq-status-wrong	test_kmod_lock_mproc	child: DEQ queued CR request
-RED	lock-deq-status-wrong	test_kmod_lock_mproc	parent: DEQ own EX lock
-RED	lock-deq-status-wrong	test_kmod_lock_sync	child: released its own granted EX on VALBLKRES
-RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: child (completion AST) exited clean
-RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: child (deadlock) exited clean
-RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: child (valblk grant) exited clean
-RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: released EX (should grant child)
-RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: released EX on ASTRES (grants child + queues AST)
-RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: released EX on VALBLKRES (grants child's queued request)
-RED	lock-deq-status-wrong	test_syssvc_lock	child: sys$deq released its own EX lock
-RED	lock-deq-status-wrong	test_syssvc_lock	parent: child's post-release retry succeeded via public API
-RED	lock-deq-status-wrong	test_syssvc_lock	parent: sys$deq released EX lock (public API)
-RED	lock-deq-status-wrong	test_syssvc_lock_status	parent: child (CVTUNGRANT holder) exited clean
-RED	lock-deq-status-wrong	test_syssvc_lock_status	parent: dequeued its still-queued CR lock
-RED	lock-deq-status-wrong	test_syssvc_lock_status	parent: released X (should unblock the child)
-RUN	lock-convert-mode-not-updated	test_kmod_lock	pass
-RED	lock-convert-mode-not-updated	test_kmod_lock	granted mode is CR
-RUN	devtab-owner-not-recorded	test_kmod_devtab	pass
-RED	devtab-owner-not-recorded	test_kmod_devtab	B sees the ownership A took with a channel alone (A writes, B reads)
-RED	devtab-owner-not-recorded	test_kmod_devtab	oracle: $ASSIGN to a non-shareable device nobody owns makes the caller its owner
-RED	devtab-owner-not-recorded	test_kmod_devtab	oracle: a channel to the free console makes us its owner, unallocated (TTA0: l.1136-1138)
-RED	devtab-owner-not-recorded	test_kmod_devtab	the refused $ALLOC neither took ownership nor allocated anything
-RUN	devtab-alloc-not-recorded	test_kmod_devtab test_syssvc_showdev	pass
-RED	devtab-alloc-not-recorded	test_kmod_devtab	B sees that A allocated the device
-RED	devtab-alloc-not-recorded	test_kmod_devtab	device reports itself allocated
-RED	devtab-alloc-not-recorded	test_kmod_devtab	oracle: allocating what we already own adds the allocation and one reference (OPA0: 2 -> 3, l.682)
-RED	devtab-alloc-not-recorded	test_syssvc_showdev	A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
-RED	devtab-alloc-not-recorded	test_syssvc_showdev	the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
-RUN	devtab-dassgn-status-wrong	test_kmod_devtab test_kmod_setterm test_syssvc_qio_terminal	pass
-RED	devtab-dassgn-status-wrong	test_kmod_devtab	channel deassigned
-RED	devtab-dassgn-status-wrong	test_kmod_devtab	last channel deassigned
-RED	devtab-dassgn-status-wrong	test_kmod_setterm	B returns its channel
-RED	devtab-dassgn-status-wrong	test_syssvc_qio_terminal	parent: sys$dassgn("TT:" channel) succeeded (public API)
-RUN	devtab-getdvi-devnam-status-wrong	test_kmod_devtab test_syssvc_qio_terminal test_syssvc_showdev test_syssvc_showterm	pass
-RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	B sees the ownership A took with a channel alone (A writes, B reads)
-RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	console OPA0: exists without any process creating it
-RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	device still exists after its owner dies
-RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	reference count returns to zero
-RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	this process can still read the device
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	A-WRITES/B-READS: a fresh child sees the reference sys$assign("TT:") added to OPA0: in the executive (public API, cross-process)
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	A-WRITES/B-READS: a second fresh child sees OPA0:'s reference count back at baseline after sys$dassgn (the release reached the executive, not just local bookkeeping)
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	parent: a fresh child process could read the executive's OPA0: row
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	parent: a second fresh child process could read the executive's OPA0: row
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	parent: baseline read of the executive's OPA0: row succeeded
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showdev	A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showdev	SHOW DEVICE OPA0: resolves the name through the executive and prints its row
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showdev	the console is still listed once the other process is gone
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	...and grid row 1 is the oracle's bytes again, so neither is the grid
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	...and the cleared Echo bit, in the grid cell the oracle prints it in
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	SHOW TERMINAL names _OPA0: once the executive holds the binding -- the SAME BINARY that named nothing a moment ago
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	grid row 1 is byte-for-byte the V7.3 capture
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	grid row 10 is byte-for-byte the V7.3 capture
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	grid row 2 is byte-for-byte the V7.3 capture
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	grid row 4 is byte-for-byte the V7.3 capture
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	the characteristics heading is printed (oracle section 2)
-RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	the last row carries the single remaining characteristic, unpadded
-RUN	devtab-devscan-found-status-wrong	test_kmod_devtab test_syssvc_showdev	pass
-RED	devtab-devscan-found-status-wrong	test_kmod_devtab	device scan lists the console terminal
-RED	devtab-devscan-found-status-wrong	test_kmod_devtab	device scan terminates with SS$_NOMOREDEV
-RED	devtab-devscan-found-status-wrong	test_syssvc_showdev	bare SHOW DEVICE lists OPA0: -- a device DCL has no other way to know about, read from the executive's table
-RED	devtab-devscan-found-status-wrong	test_syssvc_showdev	the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
-RED	devtab-devscan-found-status-wrong	test_syssvc_showdev	the listing carries the oracle's column header (section 4)
-RUN	setterm-binding-not-recorded	test_kmod_setterm test_syssvc_showterm	pass
-RED	setterm-binding-not-recorded	test_kmod_setterm	A's own row now names the console
-RED	setterm-binding-not-recorded	test_kmod_setterm	A-WRITES/B-READS: B reads OPA0: out of A's row -- a binding a different process made, which a per-process binding could not show
-RED	setterm-binding-not-recorded	test_kmod_setterm	and B's row now names the console
-RED	setterm-binding-not-recorded	test_kmod_setterm	the bound name is the device table's name for that channel
-RED	setterm-binding-not-recorded	test_kmod_setterm	the freshly activated image still finds its terminal -- nothing was carried across execve() in userspace
-RED	setterm-binding-not-recorded	test_syssvc_showterm	...and grid row 1 is the oracle's bytes again, so neither is the grid
-RED	setterm-binding-not-recorded	test_syssvc_showterm	...and the cleared Echo bit, in the grid cell the oracle prints it in
-RED	setterm-binding-not-recorded	test_syssvc_showterm	...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
-RED	setterm-binding-not-recorded	test_syssvc_showterm	SHOW TERMINAL names _OPA0: once the executive holds the binding -- the SAME BINARY that named nothing a moment ago
-RED	setterm-binding-not-recorded	test_syssvc_showterm	grid row 1 is byte-for-byte the V7.3 capture
-RED	setterm-binding-not-recorded	test_syssvc_showterm	grid row 10 is byte-for-byte the V7.3 capture
-RED	setterm-binding-not-recorded	test_syssvc_showterm	grid row 2 is byte-for-byte the V7.3 capture
-RED	setterm-binding-not-recorded	test_syssvc_showterm	grid row 4 is byte-for-byte the V7.3 capture
-RED	setterm-binding-not-recorded	test_syssvc_showterm	the characteristics heading is printed (oracle section 2)
-RED	setterm-binding-not-recorded	test_syssvc_showterm	the last row carries the single remaining characteristic, unpadded
-RUN	showterm-width-page-fabricated	test_syssvc_showterm	pass
-RED	showterm-width-page-fabricated	test_syssvc_showterm	...and still no Width or Page value anywhere in the output once the width is back to 132 -- the absence does not track the value either
-RED	showterm-width-page-fabricated	test_syssvc_showterm	...still no Width or Page value anywhere in the output while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost
-RED	showterm-width-page-fabricated	test_syssvc_showterm	SHOW TERMINAL prints no Width or Page VALUE anywhere in its output, in any layout -- not the one-line form vms-d0b deleted and not the oracle's own two-line Input/Output/LFfill/CRfill/Width/Page/Parity block either, with its unsourceable fields left blank (docs/oracle/vax73-terminal-device.md section 2)
-RUN	showterm-width-page-oracle-shaped	test_syssvc_showterm	pass
-RED	showterm-width-page-oracle-shaped	test_syssvc_showterm	...and still no Width or Page value anywhere in the output once the width is back to 132 -- the absence does not track the value either
-RED	showterm-width-page-oracle-shaped	test_syssvc_showterm	...still no Width or Page value anywhere in the output while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost
-RED	showterm-width-page-oracle-shaped	test_syssvc_showterm	SHOW TERMINAL prints no Width or Page VALUE anywhere in its output, in any layout -- not the one-line form vms-d0b deleted and not the oracle's own two-line Input/Output/LFfill/CRfill/Width/Page/Parity block either, with its unsourceable fields left blank (docs/oracle/vax73-terminal-device.md section 2)
-RUN	proctab-duplicate-name	test_kmod_procnam test_syssvc_procnam test_syssvc_setname test_syssvc_startup_service	pass
-RED	proctab-duplicate-name	test_kmod_procnam	duplicate process name rejected with SS$_DUPLNAM
-RED	proctab-duplicate-name	test_syssvc_procnam	sys$creprc refuses a duplicate process name with SS$_DUPLNAM
-RED	proctab-duplicate-name	test_syssvc_setname	SET PROCESS/NAME for a name already held refuses with the oracle-pinned two-line %SET-E-NOTSET / -SYSTEM-F-DUPLNAM shape
-RED	proctab-duplicate-name	test_syssvc_startup_service	starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM
-RED	proctab-duplicate-name	test_syssvc_startup_service	the service's name is released when the service dies
-RUN	proctab-crossgroup-identity	test_kmod_ident test_syssvc_procnam test_syssvc_showproc	pass
-RED	proctab-crossgroup-identity	test_kmod_ident	... and gets no part of that process's identity
-RED	proctab-crossgroup-identity	test_kmod_ident	... and the refusal returns no part of the row
-RED	proctab-crossgroup-identity	test_kmod_ident	... but WITHOUT its user name, UIC or privilege mask
-RED	proctab-crossgroup-identity	test_kmod_ident	TERMINAL REDACTION: the scan withholds D's terminal too, even though D genuinely bound one -- a caller that may not read D's identity may not read which terminal D is on either
-RED	proctab-crossgroup-identity	test_kmod_ident	WORLD CLAUSE ISOLATED: the same cross-group read, now without WORLD -> SS$_NOPRIV
-RED	proctab-crossgroup-identity	test_kmod_ident	an unprivileged process is REFUSED a process in another UIC group
-RED	proctab-crossgroup-identity	test_syssvc_procnam	the UNREADABLE row fabricates NO CPU figure at all
-RED	proctab-crossgroup-identity	test_syssvc_showproc	SHOW PROCESS/ID on an out-of-group process reports %SYSTEM-F-NOPRIV verbatim
-RED	proctab-crossgroup-identity	test_syssvc_showproc	the by-PID refusal printed no process header
-RUN	proctab-terminal-redaction-bypassed	test_kmod_ident	pass
-RED	proctab-terminal-redaction-bypassed	test_kmod_ident	TERMINAL REDACTION: the scan withholds D's terminal too, even though D genuinely bound one -- a caller that may not read D's identity may not read which terminal D is on either
-RUN	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam test_syssvc_procnam test_syssvc_showproc test_syssvc_startup_service	pass
-RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	a name held only in another UIC group does not resolve
-RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	name released when the process exits
-RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	unknown name does not resolve (SS$_NONEXPR)
-RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	unset name does not resolve (SS$_NONEXPR)
-RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_procnam	sys$getjpi by an unheld name returns SS$_NONEXPR
-RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_showproc	... and NOT %SYSTEM-F-NOPRIV: the group-scoped name search never reaches a process to be refused
-RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_showproc	SHOW PROCESS <name> on an out-of-group process reports %SYSTEM-W-NONEXPR -- the name search is group-scoped
-RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_showproc	an absent process name reports %SYSTEM-W-NONEXPR verbatim
-RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_startup_service	the service's name is released when the service dies
-RUN	proctab-procscan-nonexpr-status-wrong	test_kmod_ident test_kmod_procnam	pass
-RED	proctab-procscan-nonexpr-status-wrong	test_kmod_ident	the unprivileged scan terminates with SS$_NONEXPR
-RED	proctab-procscan-nonexpr-status-wrong	test_kmod_procnam	process scan terminates with SS$_NONEXPR
-RUN	ident-username-unguarded	test_kmod_ident	pass
-RED	ident-username-unguarded	test_kmod_ident	... and the executive still holds the name it authenticated
-RED	ident-username-unguarded	test_kmod_ident	... and the process is STILL UNNAMED (a process cannot name itself a user)
-RED	ident-username-unguarded	test_kmod_ident	A WRITES the user name, B READS it (identity is executive-resident)
-RED	ident-username-unguarded	test_kmod_ident	B resolves A BY NAME within the UIC group and sees the same identity
-RED	ident-username-unguarded	test_kmod_ident	USER NAME CLAUSE ISOLATED: own UIC, own mask, name "SYSTEM" -> SS$_NOPRIV
-RED	ident-username-unguarded	test_kmod_ident	USER NAME CLAUSE ISOLATED: same UIC, same mask, different name -> SS$_NOPRIV
-RED	ident-username-unguarded	test_kmod_ident	an UNNAMED process cannot stamp an identity at all -- there is no name it is allowed to hold constant
-RED	ident-username-unguarded	test_kmod_ident	the refused climb-back changed nothing
-RED	ident-username-unguarded	test_kmod_ident	the scan returns a SAME-GROUP row in full (no privilege needed)
-RUN	executive-not-pinned	test_kmod_pin	pass
-RED	executive-not-pinned	test_kmod_pin	an open /dev/vms descriptor holds a reference on vms.ko
-RED	executive-not-pinned	test_kmod_pin	rmmod vms is REFUSED while a descriptor is open (executive pinned)
-RED	executive-not-pinned	test_kmod_pin	the refusal is specifically 'module is in use'
-RUN	pcb-per-thread	test_kmod_bind test_kmod_ident	pass
-RED	pcb-per-thread	test_kmod_bind	sibling thread can $DEQ the lock the main thread took
-RED	pcb-per-thread	test_kmod_bind	sibling thread got the PROCESS's entry, not one of its own
-RED	pcb-per-thread	test_kmod_bind	sibling thread resolves in the process table
-RED	pcb-per-thread	test_kmod_bind	sibling thread sees the event flag the main thread set
-RED	pcb-per-thread	test_kmod_bind	sibling thread sees the process name the main thread set
-RED	pcb-per-thread	test_kmod_bind	sibling thread's cluster state carries the flag bit
-RED	pcb-per-thread	test_kmod_ident	... and sees the identity the other thread stamped
-RED	pcb-per-thread	test_kmod_ident	... as the SAME process, not a second one (one PCB per process)
-RED	pcb-per-thread	test_kmod_ident	a second thread of the process is known to the executive
-RUN	bind-client-no-register	test_kmod_bind test_syssvc_ast test_syssvc_authorize test_syssvc_ef_local test_syssvc_ef_mproc test_syssvc_ident test_syssvc_lock_status test_syssvc_procnam test_syssvc_setname test_syssvc_setuai test_syssvc_showdev test_syssvc_showproc test_syssvc_showterm test_syssvc_startup_service	pass
 RED	bind-client-no-register	test_kmod_bind	$DEQ released the lock
 RED	bind-client-no-register	test_kmod_bind	$ENQ EX granted through /dev/vms
 RED	bind-client-no-register	test_kmod_bind	$ENQ returned a lock id
@@ -374,7 +145,15 @@ RED	bind-client-no-register	test_syssvc_ident	G/OPCOM+: EVERY header names SHIPP
 RED	bind-client-no-register	test_syssvc_ident	G/OPCOM+: the named run established its identity through the executive (without this the header check below is about a process that is also unnamed)
 RED	bind-client-no-register	test_syssvc_ident	G: the executive HOLDS that name and reads it back -- so the subprocess's blank below is not the executive naming nobody
 RED	bind-client-no-register	test_syssvc_ident	G: the session established an authenticated identity
+RED	bind-client-no-register	test_syssvc_lock_status	child: EX granted on SYSSVC_STATUS_DLY (public API)
+RED	bind-client-no-register	test_syssvc_lock_status	child: blocked EX on SYSSVC_STATUS_DLX granted after parent releases X (public API)
+RED	bind-client-no-register	test_syssvc_lock_status	parent: EX granted on SYSSVC_STATUS_DLX (public API)
+RED	bind-client-no-register	test_syssvc_lock_status	parent: child (CVTUNGRANT holder) exited clean
+RED	bind-client-no-register	test_syssvc_lock_status	parent: child (deadlock) exited clean
 RED	bind-client-no-register	test_syssvc_lock_status	parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
+RED	bind-client-no-register	test_syssvc_lock_status	parent: child's report after the deadlock/release sequence has no failures
+RED	bind-client-no-register	test_syssvc_lock_status	parent: released X (should unblock the child)
+RED	bind-client-no-register	test_syssvc_lock_status	parent: sync sys$enqw closing the cycle rejected SS$_DEADLOCK (public API)
 RED	bind-client-no-register	test_syssvc_lock_status	parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
 RED	bind-client-no-register	test_syssvc_lock_status	sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
 RED	bind-client-no-register	test_syssvc_procnam	sys$creprc created the subject process
@@ -430,80 +209,335 @@ RED	bind-client-no-register	test_syssvc_startup_service	the executive resolves t
 RED	bind-client-no-register	test_syssvc_startup_service	the startup procedure announced the created process with %RUN-S-PROC_ID
 RED	bind-client-no-register	test_syssvc_startup_service	vms-69e: /DETACHED with /PRIORITY still creates the process and announces success
 RED	bind-client-no-register	test_syssvc_startup_service	vms-69e: and says NOTHING about the priority it discarded (this is the defect, asserted so it cannot be fixed silently)
-RUN	creprc-handshake-eintr	test_syssvc_procnam	pass
+RED	creprc-detach-intermediate-reaped	test_syssvc_startup_service	the creator of a detached process has no child to wait for
 RED	creprc-handshake-eintr	test_syssvc_procnam	sys$creprc returned, and reported no process lost, while the caller caught signals
-RUN	run-detached-name-dropped	test_syssvc_startup_service	pass
+RED	dcl-accounting-user-fabricated	test_syssvc_ident	G/ACCOUNTING: does not report SYSTEM's login history to an unnamed process
+RED	dcl-accounting-user-fabricated	test_syssvc_ident	G/ACCOUNTING: names no account for an unnamed process
+RED	dcl-fident-name2num-host-passwd	test_syssvc_ident	G/F$IDENTIFIER: NAME_TO_NUMBER answers 0 for a name OVMX holds no identifier for, in SHOW SYMBOL's own integer format
+RED	dcl-fident-name2num-host-passwd	test_syssvc_ident	G/F$IDENTIFIER: NAME_TO_NUMBER does NOT build a UIC out of the host passwd entry's uid/gid for that account
+RED	dcl-fident-num2name-bracketed-uic	test_syssvc_ident	G/F$IDENTIFIER: NUMBER_TO_NAME answers the NULL STRING for a UIC OVMX holds no identifier for -- what real VMS answers, for every input shape the oracle was asked
+RED	dcl-fident-num2name-bracketed-uic	test_syssvc_ident	G/F$IDENTIFIER: NUMBER_TO_NAME does NOT echo the caller's UIC back in brackets -- real VMS emits no bracketed UIC from F$IDENTIFIER for any input, so that was Rule 10's illegal third answer
+RED	dcl-fident-num2name-host-passwd	test_syssvc_ident	G/F$IDENTIFIER: NUMBER_TO_NAME answers the NULL STRING for a UIC OVMX holds no identifier for -- what real VMS answers, for every input shape the oracle was asked
+RED	dcl-fident-num2name-host-passwd	test_syssvc_ident	G/F$IDENTIFIER: NUMBER_TO_NAME does NOT answer with the HOST Linux account name for that uid, upcased -- the vms-f39 defect exactly
+RED	dcl-fident-num2name-host-passwd	test_syssvc_ident	G/F$USER: DCL does NOT answer with the Linux account name, upcased or otherwise -- the vms-f39 defect exactly
+RED	dcl-fuser-host-login-name	test_syssvc_ident	G/F$USER: DCL does NOT answer with the Linux account name, upcased or otherwise -- the vms-f39 defect exactly
+RED	dcl-fuser-host-login-name	test_syssvc_ident	G/F$USER: reports NO name for a process the executive has not named -- not the host Linux login name, not SYSTEM
+RED	dcl-fuser-system-fabricated	test_syssvc_ident	C: F$GETJPI("","USERNAME") reports NO name for a process the executive refused to name -- it does not fall back to a Linux account name or to SYSTEM
+RED	dcl-fuser-system-fabricated	test_syssvc_ident	C: SHOW PROCESS does NOT report SYSTEM for a process that only claimed it -- through the ioctl AND through VMS_USERNAME
+RED	dcl-fuser-system-fabricated	test_syssvc_ident	G/F$USER: does not answer with the literal SYSTEM
+RED	dcl-fuser-system-fabricated	test_syssvc_ident	G/F$USER: reports NO name for a process the executive has not named -- not the host Linux login name, not SYSTEM
+RED	dcl-logout-user-fabricated	test_syssvc_ident	G/LOGOUT: the logout line names no user, in cmd_logout's own "  %s      logged out at" format
+RED	dcl-logout-user-fabricated	test_syssvc_ident	G/LOGOUT: the session is not logged out as SYSTEM
+RED	dcl-print-owner-fabricated	test_syssvc_ident	G/PRINT: SHOW QUEUE shows the print job with an EMPTY owner, in cmd_show_queue's own column format
+RED	dcl-print-owner-fabricated	test_syssvc_ident	G/PRINT: the print job is NOT owned by SYSTEM
+RED	dcl-reply-operator-fabricated	test_syssvc_ident	G/REPLY: the OPCOM enable message names no operator
+RED	dcl-reply-operator-fabricated	test_syssvc_ident	G/REPLY: the console message does not name SYSTEM as the operator
+RED	dcl-submit-owner-fabricated	test_syssvc_ident	G/SUBMIT: SHOW QUEUE shows the batch job with an EMPTY owner
+RED	dcl-submit-owner-fabricated	test_syssvc_ident	G/SUBMIT: the batch job is NOT owned by SYSTEM
+RED	devtab-alloc-not-recorded	test_kmod_devtab	B sees that A allocated the device
+RED	devtab-alloc-not-recorded	test_kmod_devtab	device reports itself allocated
+RED	devtab-alloc-not-recorded	test_kmod_devtab	oracle: allocating what we already own adds the allocation and one reference (OPA0: 2 -> 3, l.682)
+RED	devtab-alloc-not-recorded	test_syssvc_showdev	A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
+RED	devtab-alloc-not-recorded	test_syssvc_showdev	the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
+RED	devtab-dassgn-status-wrong	test_kmod_devtab	channel deassigned
+RED	devtab-dassgn-status-wrong	test_kmod_devtab	last channel deassigned
+RED	devtab-dassgn-status-wrong	test_kmod_setterm	B returns its channel
+RED	devtab-dassgn-status-wrong	test_syssvc_qio_terminal	parent: sys$dassgn("TT:" channel) succeeded (public API)
+RED	devtab-devscan-found-status-wrong	test_kmod_devtab	device scan lists the console terminal
+RED	devtab-devscan-found-status-wrong	test_kmod_devtab	device scan terminates with SS$_NOMOREDEV
+RED	devtab-devscan-found-status-wrong	test_syssvc_showdev	bare SHOW DEVICE lists OPA0: -- a device DCL has no other way to know about, read from the executive's table
+RED	devtab-devscan-found-status-wrong	test_syssvc_showdev	the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
+RED	devtab-devscan-found-status-wrong	test_syssvc_showdev	the listing carries the oracle's column header (section 4)
+RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	B sees the ownership A took with a channel alone (A writes, B reads)
+RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	console OPA0: exists without any process creating it
+RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	device still exists after its owner dies
+RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	reference count returns to zero
+RED	devtab-getdvi-devnam-status-wrong	test_kmod_devtab	this process can still read the device
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	A-WRITES/B-READS: a fresh child sees the reference sys$assign("TT:") added to OPA0: in the executive (public API, cross-process)
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	A-WRITES/B-READS: a second fresh child sees OPA0:'s reference count back at baseline after sys$dassgn (the release reached the executive, not just local bookkeeping)
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	parent: a fresh child process could read the executive's OPA0: row
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	parent: a second fresh child process could read the executive's OPA0: row
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_qio_terminal	parent: baseline read of the executive's OPA0: row succeeded
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showdev	A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showdev	SHOW DEVICE OPA0: resolves the name through the executive and prints its row
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showdev	the console is still listed once the other process is gone
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	...and grid row 1 is the oracle's bytes again, so neither is the grid
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	...and the cleared Echo bit, in the grid cell the oracle prints it in
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	SHOW TERMINAL names _OPA0: once the executive holds the binding -- the SAME BINARY that named nothing a moment ago
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	grid row 1 is byte-for-byte the V7.3 capture
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	grid row 10 is byte-for-byte the V7.3 capture
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	grid row 2 is byte-for-byte the V7.3 capture
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	grid row 4 is byte-for-byte the V7.3 capture
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	the characteristics heading is printed (oracle section 2)
+RED	devtab-getdvi-devnam-status-wrong	test_syssvc_showterm	the last row carries the single remaining characteristic, unpadded
+RED	devtab-owner-not-recorded	test_kmod_devtab	B sees the ownership A took with a channel alone (A writes, B reads)
+RED	devtab-owner-not-recorded	test_kmod_devtab	oracle: $ASSIGN to a non-shareable device nobody owns makes the caller its owner
+RED	devtab-owner-not-recorded	test_kmod_devtab	oracle: a channel to the free console makes us its owner, unallocated (TTA0: l.1136-1138)
+RED	devtab-owner-not-recorded	test_kmod_devtab	the refused $ALLOC neither took ownership nor allocated anything
+RED	eflag-ascefc-reassoc-status-wrong	test_kmod_eflag_mproc	child: ascefc joined the named common cluster
+RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	child: sys$ascefc joined the named common cluster
+RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	parent: sys$ascefc re-joined the permanent cluster by name
+RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
+RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
+RED	eflag-ascefc-reassoc-status-wrong	test_syssvc_ef_mproc	parent: wfland child never reported it was ready to block
+RED	eflag-clref-noop	test_kmod_eflag	cluster has flags 0,3,7,31 set
+RED	eflag-clref-noop	test_kmod_eflag	readef(5) after clear returns WASCLR
+RED	eflag-clref-noop	test_kmod_eflag_mproc	child: a common flag CLEARED BY THE PARENT reads clear here (A clears, B reads)
+RED	eflag-clref-noop	test_syssvc_ef_local	sys$readef(1) reported WASCLR after the clear
+RED	eflag-clref-noop	test_syssvc_ef_mproc	child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads, public API)
+RED	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dacefc identifies the cluster from ANY flag number in it, not only the base
+RED	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dacefc released the last association to the permanent cluster
+RED	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dacefc released the marked cluster
+RED	eflag-dlcefc-status-wrong	test_syssvc_ef_mproc	parent: sys$dlcefc accepted the permanent cluster by name
+RED	eflag-readef-status-inverted	test_kmod_bind	$READEF sees the flag this process just set
+RED	eflag-readef-status-inverted	test_kmod_bind	sibling thread sees the event flag the main thread set
+RED	eflag-readef-status-inverted	test_kmod_eflag	readef(5) after clear returns WASCLR
+RED	eflag-readef-status-inverted	test_kmod_eflag	readef(5) returns WASSET
+RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$readef(1) reported WASCLR after the clear
+RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$readef(1) reported WASCLR for the cleared flag
+RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$readef(1) reported WASSET after the flag was set
+RED	eflag-readef-status-inverted	test_syssvc_ef_local	sys$waitfr(1) left the flag SET -- it is not a counting semaphore
+RED	eflag-readef-status-inverted	test_syssvc_ef_local	the cluster state word agrees with the status: flag 1's bit is CLEAR
+RED	eflag-setef-status-inverted	test_kmod_eflag	setef(40) in cluster 1 returns WASCLR
+RED	eflag-setef-status-inverted	test_kmod_eflag	setef(5) again returns WASSET
+RED	eflag-setef-status-inverted	test_kmod_eflag	setef(5) returns WASCLR
+RED	eflag-setef-status-inverted	test_syssvc_ef_local	sys$setef(1) on an already-set flag reported WASSET
+RED	eflag-waitfr-eintr-normal	test_syssvc_ef_mproc	parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
+RED	eflag-waitfr-eintr-normal	test_syssvc_ef_mproc	parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
+RED	eflag-wfland-status-wrong	test_syssvc_ef_mproc	parent: sys$wfland unblocked only once BOTH mask flags were set (AND, not OR)
+RED	eflag-wflor-status-wrong	test_syssvc_ef_mproc	parent: sys$wflor returned with only ONE of the two mask flags set -- OR, not AND
+RED	executive-not-pinned	test_kmod_pin	an open /dev/vms descriptor holds a reference on vms.ko
+RED	executive-not-pinned	test_kmod_pin	rmmod vms is REFUSED while a descriptor is open (executive pinned)
+RED	executive-not-pinned	test_kmod_pin	the refusal is specifically 'module is in use'
+RED	getmode-buffer-not-written	test_kmod_access	... and the mode is still USER after the denied escalation
+RED	getmode-buffer-not-written	test_kmod_access	... and the mode really changed
+RED	getmode-buffer-not-written	test_kmod_access	... and the mode really returned to USER
+RED	getmode-buffer-not-written	test_kmod_access	a process starts in USER mode
+RED	getmode-buffer-not-written	test_kmod_bind	adoption preserved the privilege mask SETIDENT established
+RED	ident-username-unguarded	test_kmod_ident	... and the executive still holds the name it authenticated
+RED	ident-username-unguarded	test_kmod_ident	... and the process is STILL UNNAMED (a process cannot name itself a user)
+RED	ident-username-unguarded	test_kmod_ident	A WRITES the user name, B READS it (identity is executive-resident)
+RED	ident-username-unguarded	test_kmod_ident	B resolves A BY NAME within the UIC group and sees the same identity
+RED	ident-username-unguarded	test_kmod_ident	USER NAME CLAUSE ISOLATED: own UIC, own mask, name "SYSTEM" -> SS$_NOPRIV
+RED	ident-username-unguarded	test_kmod_ident	USER NAME CLAUSE ISOLATED: same UIC, same mask, different name -> SS$_NOPRIV
+RED	ident-username-unguarded	test_kmod_ident	an UNNAMED process cannot stamp an identity at all -- there is no name it is allowed to hold constant
+RED	ident-username-unguarded	test_kmod_ident	the refused climb-back changed nothing
+RED	ident-username-unguarded	test_kmod_ident	the scan returns a SAME-GROUP row in full (no privilege needed)
+RED	kif-setmode-always-kernel	test_kmod_access	... and the mode really returned to USER
+RED	kstat-cvtungrant-mismapped	test_syssvc_lock_status	sys$enq(LCK$M_CONVERT) on a lock still queued (waiting) reports SS$_CVTUNGRANT (public API)
+RED	kstat-deadlock-mismapped	test_kmod_lock_sync	parent: child (completion AST) exited clean
+RED	kstat-deadlock-mismapped	test_kmod_lock_sync	parent: sync ENQ closing the cycle rejected SS$_DEADLOCK
+RED	kstat-deadlock-mismapped	test_syssvc_lock_status	parent: sync sys$enqw closing the cycle rejected SS$_DEADLOCK (public API)
+RED	kstat-ivlockid-mismapped	test_syssvc_lock_status	sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
+RED	lock-compat-cr-ex	test_kmod_lock_mproc	child: CR+NOQUEUE denied while parent holds EX (EX blocks CR)
+RED	lock-compat-cr-ex	test_kmod_lock_mproc	child: queued CR request still ungranted (NL) per GETLKI
+RED	lock-compat-cr-ex	test_kmod_lock_mproc	parent: cross-process GETLKI sees child's queued CR request
+RED	lock-compat-cr-ex	test_kmod_lock_mproc	parent: received blocking AST (astadr=sentinel, astprm=own lkid)
+RED	lock-compat-cr-ex	test_kmod_lock_sync	child: DELIVERAST returned completion AST (astadr/astprm sentinels)
+RED	lock-compat-cr-ex	test_kmod_lock_sync	parent: child (completion AST) exited clean
+RED	lock-compat-cr-ex	test_syssvc_lock	child: sys$enq CR+NOQUEUE denied while parent holds EX (public API)
+RED	lock-compat-cr-ex	test_syssvc_lock	child: sys$enqw EX granted after parent's sys$deq (cross-process release, public API)
+RED	lock-compat-cr-ex	test_syssvc_lock	parent: child's NOQUEUE-denial checks reported via public API
+RED	lock-compat-cr-ex	test_syssvc_lock	parent: child's post-release retry succeeded via public API
+RED	lock-compat-cr-ex	test_syssvc_lock_status	sys$enq(LCK$M_CONVERT) on a lock still queued (waiting) reports SS$_CVTUNGRANT (public API)
+RED	lock-compat-ex-cr	test_kmod_lock	ENQ EX+NOQUEUE denied (CR held)
+RED	lock-convert-mode-not-updated	test_kmod_lock	granted mode is CR
+RED	lock-deq-status-wrong	test_kmod_bind	$DEQ released the lock
+RED	lock-deq-status-wrong	test_kmod_bind	sibling thread can $DEQ the lock the main thread took
+RED	lock-deq-status-wrong	test_kmod_lock	DEQ lock
+RED	lock-deq-status-wrong	test_kmod_lock_mproc	child: DEQ queued CR request
+RED	lock-deq-status-wrong	test_kmod_lock_mproc	parent: DEQ own EX lock
+RED	lock-deq-status-wrong	test_kmod_lock_sync	child: released its own granted EX on VALBLKRES
+RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: child (completion AST) exited clean
+RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: child (deadlock) exited clean
+RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: child (valblk grant) exited clean
+RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: released EX (should grant child)
+RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: released EX on ASTRES (grants child + queues AST)
+RED	lock-deq-status-wrong	test_kmod_lock_sync	parent: released EX on VALBLKRES (grants child's queued request)
+RED	lock-deq-status-wrong	test_syssvc_lock	child: sys$deq released its own EX lock
+RED	lock-deq-status-wrong	test_syssvc_lock	parent: child's post-release retry succeeded via public API
+RED	lock-deq-status-wrong	test_syssvc_lock	parent: sys$deq released EX lock (public API)
+RED	lock-deq-status-wrong	test_syssvc_lock_status	parent: child (CVTUNGRANT holder) exited clean
+RED	lock-deq-status-wrong	test_syssvc_lock_status	parent: dequeued its still-queued CR lock
+RED	lock-deq-status-wrong	test_syssvc_lock_status	parent: released X (should unblock the child)
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_bind	$ENQ EX granted through /dev/vms
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_bind	main thread takes a lock
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ CR on TESTRES2
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ EX with value block
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ NL on TESTRES1
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock	ENQ second CR on TESTRES2 (compatible)
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_mproc	child: CR granted on MPROCLOCK2 (own request)
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_mproc	parent: CR granted on MPROCLOCK2 concurrently with child's CR (CR+CR compatible)
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_mproc	parent: EX granted on MPROCLOCK1 with blkastadr set
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	child: EX granted on DLRES_Y
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX granted on ASTRES
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX granted on DLRES_X
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX granted on SYNCRES1
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: EX+VALBLK granted immediately on fresh VALBLKRES (publishes VALBLK_SEED)
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: child (completion AST) exited clean
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: child (deadlock) exited clean
+RED	lock-enq-immediate-grant-status-wrong	test_kmod_lock_sync	parent: child (sync block) exited clean
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	child: sys$enqw EX granted after parent's sys$deq (cross-process release, public API)
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	parent: child's NOQUEUE-denial checks reported via public API
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	parent: child's post-release retry succeeded via public API
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock	parent: sys$enqw EX granted, real lock ID returned (public API)
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock_status	child: EX granted on SYSSVC_STATUS_DLY (public API)
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock_status	parent: EX granted on SYSSVC_STATUS_DLX (public API)
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock_status	parent: child (CVTUNGRANT holder) exited clean
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock_status	parent: child (deadlock) exited clean
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock_status	parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock_status	parent: child's report after the deadlock/release sequence has no failures
+RED	lock-enq-immediate-grant-status-wrong	test_syssvc_lock_status	parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
+RED	lock-valblk-grant-not-delivered	test_kmod_lock_sync	child: GETLKI value block equals the PARENT's, not this lock's own pre-grant value (blocked-then-granted valblk delivery)
+RED	lock-valblk-grant-not-delivered	test_kmod_lock_sync	parent: child (valblk grant) exited clean
+RED	opcom-header-host-login-name	test_syssvc_ident	G/OPCOM: EVERY header's user field is empty for a process the executive has not named -- sys$sndopr reads the executive's row, not the caller's PCB and not the passwd database (goes RED, not vacuous, when vms-afd propagates identity to SPAWN)
+RED	opcom-header-host-login-name	test_syssvc_ident	G/OPCOM: the operator record does NOT name the HOST Linux account -- the vms-f39 leak that survived in sys_operator.c
+RED	pcb-per-thread	test_kmod_bind	sibling thread can $DEQ the lock the main thread took
+RED	pcb-per-thread	test_kmod_bind	sibling thread got the PROCESS's entry, not one of its own
+RED	pcb-per-thread	test_kmod_bind	sibling thread resolves in the process table
+RED	pcb-per-thread	test_kmod_bind	sibling thread sees the event flag the main thread set
+RED	pcb-per-thread	test_kmod_bind	sibling thread sees the process name the main thread set
+RED	pcb-per-thread	test_kmod_bind	sibling thread's cluster state carries the flag bit
+RED	pcb-per-thread	test_kmod_ident	... and sees the identity the other thread stamped
+RED	pcb-per-thread	test_kmod_ident	... as the SAME process, not a second one (one PCB per process)
+RED	pcb-per-thread	test_kmod_ident	a second thread of the process is known to the executive
+RED	proctab-crossgroup-identity	test_kmod_ident	... and gets no part of that process's identity
+RED	proctab-crossgroup-identity	test_kmod_ident	... and the refusal returns no part of the row
+RED	proctab-crossgroup-identity	test_kmod_ident	... but WITHOUT its user name, UIC or privilege mask
+RED	proctab-crossgroup-identity	test_kmod_ident	TERMINAL REDACTION: the scan withholds D's terminal too, even though D genuinely bound one -- a caller that may not read D's identity may not read which terminal D is on either
+RED	proctab-crossgroup-identity	test_kmod_ident	WORLD CLAUSE ISOLATED: the same cross-group read, now without WORLD -> SS$_NOPRIV
+RED	proctab-crossgroup-identity	test_kmod_ident	an unprivileged process is REFUSED a process in another UIC group
+RED	proctab-crossgroup-identity	test_syssvc_procnam	the UNREADABLE row fabricates NO CPU figure at all
+RED	proctab-crossgroup-identity	test_syssvc_showproc	SHOW PROCESS/ID on an out-of-group process reports %SYSTEM-F-NOPRIV verbatim
+RED	proctab-crossgroup-identity	test_syssvc_showproc	the by-PID refusal printed no process header
+RED	proctab-duplicate-name	test_kmod_procnam	duplicate process name rejected with SS$_DUPLNAM
+RED	proctab-duplicate-name	test_syssvc_procnam	sys$creprc refuses a duplicate process name with SS$_DUPLNAM
+RED	proctab-duplicate-name	test_syssvc_setname	SET PROCESS/NAME for a name already held refuses with the oracle-pinned two-line %SET-E-NOTSET / -SYSTEM-F-DUPLNAM shape
+RED	proctab-duplicate-name	test_syssvc_startup_service	starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM
+RED	proctab-duplicate-name	test_syssvc_startup_service	the service's name is released when the service dies
+RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	a name held only in another UIC group does not resolve
+RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	name released when the process exits
+RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	unknown name does not resolve (SS$_NONEXPR)
+RED	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam	unset name does not resolve (SS$_NONEXPR)
+RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_procnam	sys$getjpi by an unheld name returns SS$_NONEXPR
+RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_showproc	... and NOT %SYSTEM-F-NOPRIV: the group-scoped name search never reaches a process to be refused
+RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_showproc	SHOW PROCESS <name> on an out-of-group process reports %SYSTEM-W-NONEXPR -- the name search is group-scoped
+RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_showproc	an absent process name reports %SYSTEM-W-NONEXPR verbatim
+RED	proctab-getjpi-nonexpr-status-wrong	test_syssvc_startup_service	the service's name is released when the service dies
+RED	proctab-procscan-nonexpr-status-wrong	test_kmod_ident	the unprivileged scan terminates with SS$_NONEXPR
+RED	proctab-procscan-nonexpr-status-wrong	test_kmod_procnam	process scan terminates with SS$_NONEXPR
+RED	proctab-terminal-redaction-bypassed	test_kmod_ident	TERMINAL REDACTION: the scan withholds D's terminal too, even though D genuinely bound one -- a caller that may not read D's identity may not read which terminal D is on either
+RED	register-adopt-pid-not-reported	test_kmod_setterm	and it is the same VMS process, so the binding was not re-made
+RED	rms-create-filespec-not-translated	test_syssvc_rms_scratch_create	every sys$put() across two periodic index-save reopens succeeded -- no silent mid-run EACCES
+RED	rms-create-filespec-not-translated	test_syssvc_rms_scratch_create	sys$close() (final index flush, a THIRD reopen of .rms_idx) succeeded
+RED	rms-create-filespec-not-translated	test_syssvc_rms_scratch_create	sys$connect() on the freshly created file succeeded
+RED	rms-create-filespec-not-translated	test_syssvc_rms_scratch_create	sys$create() did NOT fall back to treating the raw VMS spec string as a literal relative Linux path (the exact vms-221 regression shape)
+RED	rms-create-filespec-not-translated	test_syssvc_rms_scratch_create	sys$create() of the RMS indexed file under SYS$SCRATCH: succeeded (the vms-221 EACCES is gone)
+RED	rms-create-filespec-not-translated	test_syssvc_rms_scratch_create	sys$create() resolved the VMS filespec SYS$SCRATCH:VMS221.DAT to its REAL translated Linux path under /vms/SYSTMP -- pins the vms-221 regression directly: resolve_filename() (src/vmsrms/rms_core.c) used to check vmsfs_to_linux_path()'s return value with `== 0`, but that function returns a VMS status code (SS$_NORMAL == 1 on success, odd = success); the check never matched, so EVERY VMS-spec candidate silently fell through to being treated as a literal (relative) Linux path instead of a translated one
+RED	rms-create-filespec-not-translated	test_syssvc_rms_scratch_create	sys$put() #100 (first periodic index save, fresh .rms_idx create) succeeded
+RED	rms-create-filespec-not-translated	test_syssvc_rms_scratch_create	sys$put() #200 (SECOND periodic index save -- reopens the .rms_idx sidecar) succeeded
 RED	run-detached-name-dropped	test_syssvc_startup_service	RUN/DETACH/PROC= creates a detached process the executive knows by name
 RED	run-detached-name-dropped	test_syssvc_startup_service	SHOW SYSTEM, in a different process, lists the service by its VMS process name
 RED	run-detached-name-dropped	test_syssvc_startup_service	starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM
 RED	run-detached-name-dropped	test_syssvc_startup_service	the abbreviated form announces the process ID the executive assigned
 RED	run-detached-name-dropped	test_syssvc_startup_service	the executive resolves the service BY NAME after its creator exited
 RED	run-detached-name-dropped	test_syssvc_startup_service	vms-69e: /DETACHED with /PRIORITY still creates the process and announces success
-RUN	creprc-detach-intermediate-reaped	test_syssvc_startup_service	pass
-RED	creprc-detach-intermediate-reaped	test_syssvc_startup_service	the creator of a detached process has no child to wait for
-RUN	run-detached-not-detached	test_syssvc_startup_service	pass
 RED	run-detached-not-detached	test_syssvc_startup_service	the creator of a detached process has no child to wait for
 RED	run-detached-not-detached	test_syssvc_startup_service	the service left the session its creator ran in
-RUN	run-image-qualifier-refused	test_syssvc_startup_service	pass
 RED	run-image-qualifier-refused	test_syssvc_startup_service	RUN/DEBUG is refused naming the debugger, not process creation
 RED	run-image-qualifier-refused	test_syssvc_startup_service	RUN/NODEB is not refused as a subprocess request: the image runs
 RED	run-image-qualifier-refused	test_syssvc_startup_service	RUN/NODEBUG runs the image: it is not a subprocess request
 RED	run-image-qualifier-refused	test_syssvc_startup_service	parser-wide gap: an ambiguous abbreviation is not resolved, and OVMX has no %DCL-W-ABKEYW to refuse it with
-RUN	run-qualifier-not-abbreviated	test_syssvc_startup_service	pass
 RED	run-qualifier-not-abbreviated	test_syssvc_startup_service	RUN/DETACH/PROC= creates a detached process the executive knows by name
 RED	run-qualifier-not-abbreviated	test_syssvc_startup_service	RUN/PRIO is /PRIORITY: the abbreviation is refused and the image does not run
 RED	run-qualifier-not-abbreviated	test_syssvc_startup_service	RUN/PROC is /PROCESS_NAME: refused, image not run, nothing named in the executive
 RED	run-qualifier-not-abbreviated	test_syssvc_startup_service	the abbreviated form announces the process ID the executive assigned
-RUN	kstat-deadlock-mismapped	test_kmod_lock_sync test_syssvc_lock_status	pass
-RED	kstat-deadlock-mismapped	test_kmod_lock_sync	parent: child (completion AST) exited clean
-RED	kstat-deadlock-mismapped	test_kmod_lock_sync	parent: sync ENQ closing the cycle rejected SS$_DEADLOCK
-RED	kstat-deadlock-mismapped	test_syssvc_lock_status	parent: sync sys$enqw closing the cycle rejected SS$_DEADLOCK (public API)
-RUN	kstat-ivlockid-mismapped	test_syssvc_lock_status	pass
-RED	kstat-ivlockid-mismapped	test_syssvc_lock_status	sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
-RUN	kstat-cvtungrant-mismapped	test_syssvc_lock_status	pass
-RED	kstat-cvtungrant-mismapped	test_syssvc_lock_status	sys$enq(LCK$M_CONVERT) on a lock still queued (waiting) reports SS$_CVTUNGRANT (public API)
-RUN	assign-terminal-bypasses-executive	test_syssvc_qio_terminal	pass
-RED	assign-terminal-bypasses-executive	test_syssvc_qio_terminal	A-WRITES/B-READS: a fresh child sees the reference sys$assign("TT:") added to OPA0: in the executive (public API, cross-process)
-RUN	dcl-submit-owner-fabricated	test_syssvc_ident	pass
-RED	dcl-submit-owner-fabricated	test_syssvc_ident	G/SUBMIT: SHOW QUEUE shows the batch job with an EMPTY owner
-RED	dcl-submit-owner-fabricated	test_syssvc_ident	G/SUBMIT: the batch job is NOT owned by SYSTEM
-RUN	dcl-print-owner-fabricated	test_syssvc_ident	pass
-RED	dcl-print-owner-fabricated	test_syssvc_ident	G/PRINT: SHOW QUEUE shows the print job with an EMPTY owner, in cmd_show_queue's own column format
-RED	dcl-print-owner-fabricated	test_syssvc_ident	G/PRINT: the print job is NOT owned by SYSTEM
-RUN	dcl-logout-user-fabricated	test_syssvc_ident	pass
-RED	dcl-logout-user-fabricated	test_syssvc_ident	G/LOGOUT: the logout line names no user, in cmd_logout's own "  %s      logged out at" format
-RED	dcl-logout-user-fabricated	test_syssvc_ident	G/LOGOUT: the session is not logged out as SYSTEM
-RUN	dcl-reply-operator-fabricated	test_syssvc_ident	pass
-RED	dcl-reply-operator-fabricated	test_syssvc_ident	G/REPLY: the OPCOM enable message names no operator
-RED	dcl-reply-operator-fabricated	test_syssvc_ident	G/REPLY: the console message does not name SYSTEM as the operator
-RUN	dcl-accounting-user-fabricated	test_syssvc_ident	pass
-RED	dcl-accounting-user-fabricated	test_syssvc_ident	G/ACCOUNTING: does not report SYSTEM's login history to an unnamed process
-RED	dcl-accounting-user-fabricated	test_syssvc_ident	G/ACCOUNTING: names no account for an unnamed process
-RUN	dcl-fuser-system-fabricated	test_syssvc_ident	pass
-RED	dcl-fuser-system-fabricated	test_syssvc_ident	C: F$GETJPI("","USERNAME") reports NO name for a process the executive refused to name -- it does not fall back to a Linux account name or to SYSTEM
-RED	dcl-fuser-system-fabricated	test_syssvc_ident	C: SHOW PROCESS does NOT report SYSTEM for a process that only claimed it -- through the ioctl AND through VMS_USERNAME
-RED	dcl-fuser-system-fabricated	test_syssvc_ident	G/F$USER: does not answer with the literal SYSTEM
-RED	dcl-fuser-system-fabricated	test_syssvc_ident	G/F$USER: reports NO name for a process the executive has not named -- not the host Linux login name, not SYSTEM
-RUN	dcl-fuser-host-login-name	test_syssvc_ident	pass
-RED	dcl-fuser-host-login-name	test_syssvc_ident	G/F$USER: DCL does NOT answer with the Linux account name, upcased or otherwise -- the vms-f39 defect exactly
-RED	dcl-fuser-host-login-name	test_syssvc_ident	G/F$USER: reports NO name for a process the executive has not named -- not the host Linux login name, not SYSTEM
-RUN	dcl-fident-num2name-host-passwd	test_syssvc_ident	pass
-RED	dcl-fident-num2name-host-passwd	test_syssvc_ident	G/F$IDENTIFIER: NUMBER_TO_NAME answers the NULL STRING for a UIC OVMX holds no identifier for -- what real VMS answers, for every input shape the oracle was asked
-RED	dcl-fident-num2name-host-passwd	test_syssvc_ident	G/F$IDENTIFIER: NUMBER_TO_NAME does NOT answer with the HOST Linux account name for that uid, upcased -- the vms-f39 defect exactly
-RED	dcl-fident-num2name-host-passwd	test_syssvc_ident	G/F$USER: DCL does NOT answer with the Linux account name, upcased or otherwise -- the vms-f39 defect exactly
-RUN	dcl-fident-num2name-bracketed-uic	test_syssvc_ident	pass
-RED	dcl-fident-num2name-bracketed-uic	test_syssvc_ident	G/F$IDENTIFIER: NUMBER_TO_NAME answers the NULL STRING for a UIC OVMX holds no identifier for -- what real VMS answers, for every input shape the oracle was asked
-RED	dcl-fident-num2name-bracketed-uic	test_syssvc_ident	G/F$IDENTIFIER: NUMBER_TO_NAME does NOT echo the caller's UIC back in brackets -- real VMS emits no bracketed UIC from F$IDENTIFIER for any input, so that was Rule 10's illegal third answer
-RUN	dcl-fident-name2num-host-passwd	test_syssvc_ident	pass
-RED	dcl-fident-name2num-host-passwd	test_syssvc_ident	G/F$IDENTIFIER: NAME_TO_NUMBER answers 0 for a name OVMX holds no identifier for, in SHOW SYMBOL's own integer format
-RED	dcl-fident-name2num-host-passwd	test_syssvc_ident	G/F$IDENTIFIER: NAME_TO_NUMBER does NOT build a UIC out of the host passwd entry's uid/gid for that account
-RUN	opcom-header-host-login-name	test_syssvc_ident	pass
-RED	opcom-header-host-login-name	test_syssvc_ident	G/OPCOM: EVERY header's user field is empty for a process the executive has not named -- sys$sndopr reads the executive's row, not the caller's PCB and not the passwd database (goes RED, not vacuous, when vms-afd propagates identity to SPAWN)
-RED	opcom-header-host-login-name	test_syssvc_ident	G/OPCOM: the operator record does NOT name the HOST Linux account -- the vms-f39 leak that survived in sys_operator.c
-RUN	setuai-sysprv-caller-declared	test_syssvc_setuai	pass
+RED	scratch-dir-owner-not-system	test_syssvc_scratch_writable	SYSTEM's sys$create-equivalent open() succeeds under SYS$LOGIN:
+RED	scratch-dir-owner-not-system	test_syssvc_scratch_writable	SYSTEM's sys$create-equivalent open() succeeds under SYS$SCRATCH:
+RED	setterm-binding-not-recorded	test_kmod_setterm	A's own row now names the console
+RED	setterm-binding-not-recorded	test_kmod_setterm	A-WRITES/B-READS: B reads OPA0: out of A's row -- a binding a different process made, which a per-process binding could not show
+RED	setterm-binding-not-recorded	test_kmod_setterm	and B's row now names the console
+RED	setterm-binding-not-recorded	test_kmod_setterm	the bound name is the device table's name for that channel
+RED	setterm-binding-not-recorded	test_kmod_setterm	the freshly activated image still finds its terminal -- nothing was carried across execve() in userspace
+RED	setterm-binding-not-recorded	test_syssvc_showterm	...and grid row 1 is the oracle's bytes again, so neither is the grid
+RED	setterm-binding-not-recorded	test_syssvc_showterm	...and the cleared Echo bit, in the grid cell the oracle prints it in
+RED	setterm-binding-not-recorded	test_syssvc_showterm	...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
+RED	setterm-binding-not-recorded	test_syssvc_showterm	SHOW TERMINAL names _OPA0: once the executive holds the binding -- the SAME BINARY that named nothing a moment ago
+RED	setterm-binding-not-recorded	test_syssvc_showterm	grid row 1 is byte-for-byte the V7.3 capture
+RED	setterm-binding-not-recorded	test_syssvc_showterm	grid row 10 is byte-for-byte the V7.3 capture
+RED	setterm-binding-not-recorded	test_syssvc_showterm	grid row 2 is byte-for-byte the V7.3 capture
+RED	setterm-binding-not-recorded	test_syssvc_showterm	grid row 4 is byte-for-byte the V7.3 capture
+RED	setterm-binding-not-recorded	test_syssvc_showterm	the characteristics heading is printed (oracle section 2)
+RED	setterm-binding-not-recorded	test_syssvc_showterm	the last row carries the single remaining characteristic, unpadded
 RED	setuai-sysprv-caller-declared	test_syssvc_setuai	1-3: SYSUAF.DAT is byte-identical after all three refusals
 RED	setuai-sysprv-caller-declared	test_syssvc_setuai	1: $SETUAI refuses a caller with no PCB (was: no test ran at all)
 RED	setuai-sysprv-caller-declared	test_syssvc_setuai	2: $SETUAI refuses an authenticated identity without SYSPRV
 RED	setuai-sysprv-caller-declared	test_syssvc_setuai	3: $SETUAI refuses it anyway -- the PCB mask does not decide
+RED	showterm-width-page-fabricated	test_syssvc_showterm	...and still no Width or Page value anywhere in the output once the width is back to 132 -- the absence does not track the value either
+RED	showterm-width-page-fabricated	test_syssvc_showterm	...still no Width or Page value anywhere in the output while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost
+RED	showterm-width-page-fabricated	test_syssvc_showterm	SHOW TERMINAL prints no Width or Page VALUE anywhere in its output, in any layout -- not the one-line form vms-d0b deleted and not the oracle's own two-line Input/Output/LFfill/CRfill/Width/Page/Parity block either, with its unsourceable fields left blank (docs/oracle/vax73-terminal-device.md section 2)
+RED	showterm-width-page-oracle-shaped	test_syssvc_showterm	...and still no Width or Page value anywhere in the output once the width is back to 132 -- the absence does not track the value either
+RED	showterm-width-page-oracle-shaped	test_syssvc_showterm	...still no Width or Page value anywhere in the output while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost
+RED	showterm-width-page-oracle-shaped	test_syssvc_showterm	SHOW TERMINAL prints no Width or Page VALUE anywhere in its output, in any layout -- not the one-line form vms-d0b deleted and not the oracle's own two-line Input/Output/LFfill/CRfill/Width/Page/Parity block either, with its unsourceable fields left blank (docs/oracle/vax73-terminal-device.md section 2)
+RUN	access-mode-escalation	test_kmod_access	pass
+RUN	assign-terminal-bypasses-executive	test_syssvc_qio_terminal	pass
+RUN	ast-setast-disable	test_kmod_ast test_syssvc_ast	pass
+RUN	bind-client-no-register	test_kmod_bind test_syssvc_ast test_syssvc_authorize test_syssvc_ef_local test_syssvc_ef_mproc test_syssvc_ident test_syssvc_lock_status test_syssvc_procnam test_syssvc_setname test_syssvc_setuai test_syssvc_showdev test_syssvc_showproc test_syssvc_showterm test_syssvc_startup_service	fail
+RUN	creprc-detach-intermediate-reaped	test_syssvc_startup_service	pass
+RUN	creprc-handshake-eintr	test_syssvc_procnam	pass
+RUN	dcl-accounting-user-fabricated	test_syssvc_ident	pass
+RUN	dcl-fident-name2num-host-passwd	test_syssvc_ident	pass
+RUN	dcl-fident-num2name-bracketed-uic	test_syssvc_ident	pass
+RUN	dcl-fident-num2name-host-passwd	test_syssvc_ident	pass
+RUN	dcl-fuser-host-login-name	test_syssvc_ident	pass
+RUN	dcl-fuser-system-fabricated	test_syssvc_ident	pass
+RUN	dcl-logout-user-fabricated	test_syssvc_ident	pass
+RUN	dcl-print-owner-fabricated	test_syssvc_ident	pass
+RUN	dcl-reply-operator-fabricated	test_syssvc_ident	pass
+RUN	dcl-submit-owner-fabricated	test_syssvc_ident	pass
+RUN	devtab-alloc-not-recorded	test_kmod_devtab test_syssvc_showdev	pass
+RUN	devtab-dassgn-status-wrong	test_kmod_devtab test_kmod_setterm test_syssvc_qio_terminal	pass
+RUN	devtab-devscan-found-status-wrong	test_kmod_devtab test_syssvc_showdev	pass
+RUN	devtab-getdvi-devnam-status-wrong	test_kmod_devtab test_syssvc_qio_terminal test_syssvc_showdev test_syssvc_showterm	pass
+RUN	devtab-owner-not-recorded	test_kmod_devtab	pass
+RUN	eflag-ascefc-reassoc-status-wrong	test_kmod_eflag_mproc test_syssvc_ef_mproc	pass
+RUN	eflag-clref-noop	test_kmod_eflag test_kmod_eflag_mproc test_syssvc_ef_local test_syssvc_ef_mproc	pass
+RUN	eflag-dacefc-status-wrong	test_syssvc_ef_mproc	pass
+RUN	eflag-dlcefc-status-wrong	test_syssvc_ef_mproc	pass
+RUN	eflag-readef-status-inverted	test_kmod_bind test_kmod_eflag test_syssvc_ef_local	pass
+RUN	eflag-setef-status-inverted	test_kmod_eflag test_syssvc_ef_local	pass
+RUN	eflag-waitfr-eintr-normal	test_syssvc_ef_mproc	pass
+RUN	eflag-wfland-status-wrong	test_syssvc_ef_mproc	pass
+RUN	eflag-wflor-status-wrong	test_syssvc_ef_mproc	pass
+RUN	executive-not-pinned	test_kmod_pin	pass
+RUN	getmode-buffer-not-written	test_kmod_access test_kmod_bind	pass
+RUN	ident-username-unguarded	test_kmod_ident	pass
+RUN	kif-setmode-always-kernel	test_kmod_access	pass
+RUN	kstat-cvtungrant-mismapped	test_syssvc_lock_status	pass
+RUN	kstat-deadlock-mismapped	test_kmod_lock_sync test_syssvc_lock_status	pass
+RUN	kstat-ivlockid-mismapped	test_syssvc_lock_status	pass
+RUN	lock-compat-cr-ex	test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status	pass
+RUN	lock-compat-ex-cr	test_kmod_lock	pass
+RUN	lock-convert-mode-not-updated	test_kmod_lock	pass
+RUN	lock-deq-status-wrong	test_kmod_bind test_kmod_lock test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status	pass
+RUN	lock-enq-immediate-grant-status-wrong	test_kmod_bind test_kmod_lock test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status	fail
+RUN	lock-valblk-grant-not-delivered	test_kmod_lock_sync	pass
+RUN	opcom-header-host-login-name	test_syssvc_ident	pass
+RUN	pcb-per-thread	test_kmod_bind test_kmod_ident	pass
+RUN	proctab-crossgroup-identity	test_kmod_ident test_syssvc_procnam test_syssvc_showproc	pass
+RUN	proctab-duplicate-name	test_kmod_procnam test_syssvc_procnam test_syssvc_setname test_syssvc_startup_service	pass
+RUN	proctab-getjpi-nonexpr-status-wrong	test_kmod_procnam test_syssvc_procnam test_syssvc_showproc test_syssvc_startup_service	pass
+RUN	proctab-procscan-nonexpr-status-wrong	test_kmod_ident test_kmod_procnam	pass
+RUN	proctab-terminal-redaction-bypassed	test_kmod_ident	pass
 RUN	register-adopt-pid-not-reported	test_kmod_setterm	pass
-RED	register-adopt-pid-not-reported	test_kmod_setterm	and it is the same VMS process, so the binding was not re-made
+RUN	rms-create-filespec-not-translated	test_syssvc_rms_scratch_create	pass
+RUN	run-detached-name-dropped	test_syssvc_startup_service	pass
+RUN	run-detached-not-detached	test_syssvc_startup_service	pass
+RUN	run-image-qualifier-refused	test_syssvc_startup_service	pass
+RUN	run-qualifier-not-abbreviated	test_syssvc_startup_service	pass
+RUN	scratch-dir-owner-not-system	test_syssvc_scratch_writable	pass
+RUN	setterm-binding-not-recorded	test_kmod_setterm test_syssvc_showterm	pass
+RUN	setuai-sysprv-caller-declared	test_syssvc_setuai	pass
+RUN	showterm-width-page-fabricated	test_syssvc_showterm	pass
+RUN	showterm-width-page-oracle-shaped	test_syssvc_showterm	pass

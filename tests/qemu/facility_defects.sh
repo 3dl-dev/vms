@@ -1300,12 +1300,33 @@ child: sys$enqw EX granted after parent's sys$deq (cross-process release, public
 parent: child's post-release retry succeeded via public API
 parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
 parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
+child: EX granted on SYSSVC_STATUS_DLY (public API)
+parent: EX granted on SYSSVC_STATUS_DLX (public API)
+parent: child (CVTUNGRANT holder) exited clean
+parent: child's report after the deadlock/release sequence has no failures
 EOF
                       ;;
+        # FOUR MORE, ADDED vms-9b7 -- READ OFF THE DRIVER'S OWN "does NOT name
+        # them" LIST (shard 5/6 of the d2d76fc..87d7fda main-red run), NOT
+        # PREDICTED. These are test_syssvc_lock_status's deadlock/CVTUNGRANT
+        # public-API scenarios, and they arrived here for the same reason the
+        # setname/showterm reds arrived in bind-client-no-register: #182
+        # (vms-86a) taught test_syssvc_lock_status.c to ignore SIGPIPE, so a
+        # scenario whose setup $ENQ is corrupted now runs to a NAMED FAIL
+        # instead of dying rc=141 before the assertion prints. Each is the same
+        # uncontended-$ENQ-as-setup dependency the entries above have: the two
+        # "EX granted on SYSSVC_STATUS_DL[XY] (public API)" are the deadlock
+        # scenario's own setup grants reported SS$_NOTQUEUED instead of
+        # SS$_NORMAL; "child (CVTUNGRANT holder) exited clean" is the forked
+        # child failing that same setup and exiting nonzero; and "child's
+        # report after the deadlock/release sequence has no failures" is the
+        # parent reading back that the child DID fail. Nothing about deadlock
+        # detection, conversion or release was mutated -- the one corrupted
+        # status word upstream of every one of these explains all four.
         knock_on_why)
             _n_suites=$(defect_field lock-enq-immediate-grant-status-wrong suites_red | wc -w)
             _n_assert=$(( $(defect_field lock-enq-immediate-grant-status-wrong require_fail | wc -l) + $(defect_field lock-enq-immediate-grant-status-wrong knock_on_fail | wc -l) ))
-            echo "the SAME defect, observed a second (through twenty-second) time: every one of these ${_n_assert} assertions across ${_n_suites} suites first depends on an uncontended \$ENQ succeeding as its own setup step, and this mutation is the ONLY thing that changed -- nothing about compatibility, lock IDs, value blocks or AST delivery was touched. A wrong SS\$_NORMAL->SS\$_NOTQUEUED substitution on the one line every one of these calls passes through explains all of them at once; no other hypothesis does.";;
+            echo "the SAME defect, observed ${_n_assert} times in all: every one of these ${_n_assert} assertions across ${_n_suites} suites first depends on an uncontended \$ENQ succeeding as its own setup step, and this mutation is the ONLY thing that changed -- nothing about compatibility, lock IDs, value blocks or AST delivery was touched. A wrong SS\$_NORMAL->SS\$_NOTQUEUED substitution on the one line every one of these calls passes through explains all of them at once; no other hypothesis does.";;
         esac;;
 
     lock-deq-status-wrong)
@@ -2265,8 +2286,9 @@ EOF
         # (see its bootstrap()'s own comment) -- it opens /dev/vms only to
         # decide skip-vs-run, then drives sys$enq/enqw/deq, the public API --
         # so it is a genuine detector of this defect, not a widening of the
-        # blind set below. See knock_on_why for what it reddens and why the
-        # suite EXITS BY SIGNAL (rc=141) rather than completing.
+        # blind set below. See knock_on_why for what it reddens; its declared
+        # set grew from three to eleven when #182 (vms-86a) made the suite
+        # ignore SIGPIPE and run to completion instead of dying rc=141.
         #
         # All three (showterm, ident, lock_status) arrived on separate
         # branches; this list is the UNION, re-derived by running the control
@@ -2502,6 +2524,14 @@ G/OPCOM+: EVERY header names SHIPPING -- the executive's row DOES reach sys$sndo
 parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
 parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
 sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
+child: EX granted on SYSSVC_STATUS_DLY (public API)
+child: blocked EX on SYSSVC_STATUS_DLX granted after parent releases X (public API)
+parent: EX granted on SYSSVC_STATUS_DLX (public API)
+parent: child (CVTUNGRANT holder) exited clean
+parent: child (deadlock) exited clean
+parent: child's report after the deadlock/release sequence has no failures
+parent: released X (should unblock the child)
+parent: sync sys$enqw closing the cycle rejected SS$_DEADLOCK (public API)
 the executive's process table row for the holder became named
 a SECOND DCL.EXE's SHOW SYSTEM named the holder, which it did not create
 SET PROCESS/NAME for a name already held refuses with the oracle-pinned two-line %SET-E-NOTSET / -SYSTEM-F-DUPLNAM shape
@@ -2861,8 +2891,20 @@ bootstrap() does not hand-register (see the comment at its definition in
 tests/qemu/test_syssvc_lock_status.c) -- it opens /dev/vms only to decide
 skip-vs-run, exactly test_syssvc_procnam/showdev's shape, so it is a genuine
 new detector of the SAME missing bind, not a widening of blind_suites.
-Three assertions go red before the process DIES BY SIGNAL (rc=141, SIGPIPE),
-not a hang and not a clean suite failure -- traced, not guessed:
+ELEVEN assertions go red, and THE DECLARED SET GREW FROM THREE TO ELEVEN
+BECAUSE THE OBSERVATION GOT BETTER, NOT BECAUSE THE DEFECT CHANGED -- the same
+shape recorded for test_syssvc_showterm and test_syssvc_setname above. On the
+run that first added this suite (vms-2e5), the process DIED BY SIGNAL (rc=141,
+SIGPIPE) after only three reds: its writer/child failed the missing bind,
+exited, and the parent's next write to a now-readerless pipe raised the default
+SIGPIPE, so the whole back half of the suite never ran and could not be
+observed. #182 (vms-86a) taught test_syssvc_lock_status.c to ignore SIGPIPE so
+a dead IPC peer becomes a NAMED FAIL instead of rc=141 -- exactly the remedy
+test_syssvc_showterm and test_syssvc_setname record above -- so the suite now
+runs to completion under this mutation and the eight further reds it always
+produced become visible and nameable. READ OFF THE DRIVER'S OWN "does NOT name
+them" LIST (shard 0/6 of the d2d76fc..87d7fda main-red run), NOT PREDICTED.
+The three original reds, still red, and traced not guessed:
   1. scenario_ivlockid's sys$deq(0xDEADBEEF) reaches kif_call() -> kif_bind(),
      which (with vms_kif_register() deleted from kif_bind()) never registers;
      the kernel's per-call check rejects the unbound task with -ESRCH, which
@@ -2876,12 +2918,10 @@ not a hang and not a clean suite failure -- traced, not guessed:
      field <defect> <list> | grep IVLOCKID -- do not take this from the
      comment.)
   2. scenario_cvtungrant forks a child that also cannot register; the child's
-     own sys$enqw(EX) fails, so it _exit(1)s WITHOUT writing to ready_pipe --
-     the parent's read_bounded() sees EOF, not the expected byte, so "parent:
-     child took EX before the CVTUNGRANT probe" reddens (this assertion is
-     explicitly labelled setup-not-property in its own text for exactly this
-     reason: a registration failure trips the SETUP check, not the CVTUNGRANT
-     mapping the scenario exists to probe).
+     own sys$enqw(EX) fails, so "parent: child took EX before the CVTUNGRANT
+     probe" reddens (this assertion is explicitly labelled setup-not-property
+     in its own text for exactly this reason: a registration failure trips the
+     SETUP check, not the CVTUNGRANT mapping the scenario exists to probe).
   3. The parent's own sys$enq(CR) in the same scenario also fails to register,
      so lksb_q.lksb$l_lkid stays 0 and "parent: sys$enq CR queues behind the
      child's EX and still returns a real lock ID" reddens too. Because that
@@ -2891,15 +2931,26 @@ not a hang and not a clean suite failure -- traced, not guessed:
      the registration wall is upstream of the mapping this suite exists to
      assert, so a registration defect masks the mapping property rather than
      exercising it.
-  4. THE CRASH IS DETERMINISTIC, NOT FLAKY, under this specific mutation:
-     the child in step 2 always exits before the parent reaches its own
-     `write(go_pipe[1], ...)` handshake byte (it dies on its FIRST failed
-     call, long before the parent could plausibly still be running), so the
-     write always lands on a pipe with no reader and always raises SIGPIPE.
-     scenario_deadlock, and the "parent: dequeued its still-queued CR lock"
-     / "parent: child (CVTUNGRANT holder) exited clean" checks later in
-     scenario_cvtungrant, never run -- there is no assertion text for them
-     to redden, and none is claimed.
+THE EIGHT NOW-VISIBLE reds, every one the same unbound process failing every
+lock op it attempts, once SIGPIPE no longer truncates the suite:
+  - "parent: child (CVTUNGRANT holder) exited clean" -- the very check step 2
+     above noted "never runs" under the old rc=141 crash; it runs now, and the
+     child (which failed its setup $ENQ) did NOT exit clean, so it reddens.
+  - scenario_deadlock's own setup grants, "child: EX granted on
+     SYSSVC_STATUS_DLY (public API)", "parent: EX granted on SYSSVC_STATUS_DLX
+     (public API)" and "child: blocked EX on SYSSVC_STATUS_DLX granted after
+     parent releases X (public API)", are uncontended $ENQ/$ENQW from an
+     unbound process -- they never get their lock, so each reddens.
+  - "parent: released X (should unblock the child)" and "parent: sync sys$enqw
+     closing the cycle rejected SS$_DEADLOCK (public API)" are the deadlock
+     sequence's own release and cycle-closing steps failing the same wall.
+  - "parent: child (deadlock) exited clean" and "parent: child's report after
+     the deadlock/release sequence has no failures" are the parent reading
+     back that the forked child DID fail -- the same one-layer-down shape as
+     suite 3's forked-child reds above.
+None of these is a new defect: they are the whole of scenario_deadlock and the
+tail of scenario_cvtungrant reaching the identical missing-bind wall the three
+original reds hit, now that the suite survives long enough to assert about it.
 
 THE NINTH SUITE, test_syssvc_setname, ADDED vms-fbe ROUND 4 -- and it arrived
 as TWO defects in the suite itself, not as a discovery about this mutation.
@@ -3748,26 +3799,41 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        # MEASURED, not reasoned (vms-e5c). provision_writable_dir_for_test()
-        # chowns [SYSTMP]/[USERS] to SYSTEM's FULL UIC (both fields) before
-        # this suite's credential-drop probes run. This mutation drops only
-        # the MEMBER half of that ONE chown call to root (0), leaving the
-        # GROUP half alone -- so the directories end up root-owned but still
-        # SYSTEM-group-owned, exactly the "chown the group only" shape an
-        # earlier draft of the real fix (src/ovmx_init/ovmx_init.c) shipped
-        # and then measured broken: under a real QEMU boot, vmsfs's actual
-        # access decision (src/kernel/vmsfs/vmsfs_blkdev.c
-        # vmsfs_blkdev_permission()) is VMS SOGW, not Unix rwx, and
-        # VMSFS_PROT_DEFAULT denies WRITE to the Group category by default
-        # (same as a real VMS default protection) -- only the OWNER category
-        # (BOTH UIC fields matching) escapes that denial. The probes
-        # themselves are untouched (SYSTEM_UIC_MEMBER, used by
-        # try_create_as(), is a different symbol from the literal this
-        # mutation edits), so a SYSTEM probe whose UIC now only shares the
-        # GROUP field with the directory's owner is refused exactly like an
-        # unrelated account would be -- which is what test_syssvc_scratch_
-        # writable's positive (A1/A2) assertions catch.
-        why)          echo "provision_writable_dir_for_test() stops making its SYSTEM probe's UIC the actual OWNER of [SYSTMP]/[USERS] (only the UIC GROUP field still matches, the MEMBER field reverts to root/0) -- vmsfs's SOGW access decision denies WRITE to the GROUP category by default, so SYSTEM's sys\$create-equivalent open() under SYS\$SCRATCH:/SYS\$LOGIN: is refused exactly as it was before vms-e5c's fix to the real product code.";;
+        # MEASURED, not reasoned (vms-e5c, corrected vms-9b7 follow-up).
+        # provision_writable_dir_for_test() chowns [SYSTMP]/[USERS] to SYSTEM's
+        # FULL UIC (both fields) before this suite's credential-drop probes
+        # run. This mutation drops only the MEMBER half of that ONE chown call
+        # to root (0), leaving the GROUP half alone -- so the directories end
+        # up root-owned but still SYSTEM-group-owned, exactly the "chown the
+        # group only" shape an earlier draft of the real fix
+        # (src/ovmx_init/ovmx_init.c) shipped and then measured broken.
+        #
+        # WHAT ACTUALLY GATES THE PROBE, STATED HONESTLY. The A1/A2 assertions
+        # are a raw open(2) on the vmsfs_to_linux_path()-resolved BACKING PATH,
+        # not a call into vmsfs's own SOGW check: SYSDISK_MOUNT ("/vms") is a
+        # plain rootfs directory in THIS rig, not a vmsfs mount (tests/qemu/
+        # init.sh mounts vmsfs only at /mnt/vmsfs), so the Linux VFS's ordinary
+        # owner/group/other DAC on that path is what admits or refuses the
+        # create. That is why test_syssvc_scratch_writable.c provisions these
+        # directories at 0755, NOT the product's 0775: at 0775 the group WRITE
+        # bit alone would grant the SYSTEM probe (whose credential drop uses
+        # SYSTEM_UIC_GROUP, this directory's group) the create no matter who
+        # owns it, so dropping the owner would change nothing observable and
+        # the suite would pass with the defect injected -- an assertion that
+        # cannot fail, which is precisely the LARP this whole file exists to
+        # kill (it was live on the tree until vms-9b7). At 0755 the group
+        # category is r-x with no write, so the create succeeds for SYSTEM only
+        # through the OWNER category -- both UIC fields matching -- and dropping
+        # the MEMBER half to root removes exactly that, refusing SYSTEM's create
+        # just as an unrelated account is refused. The probes themselves are
+        # untouched (SYSTEM_UIC_MEMBER, used by try_create_as(), is a different
+        # symbol from the literal this mutation edits), so this defect reddens
+        # test_syssvc_scratch_writable's positive (A1/A2) assertions and only
+        # those. An EARLIER draft of this entry claimed the gate was vmsfs's
+        # SOGW decision (vmsfs_blkdev_permission / VMSFS_PROT_DEFAULT); that was
+        # wrong for this rig -- the open never reaches vmsfs -- and believing it
+        # is why the 0775 masking went unnoticed.
+        why)          echo "provision_writable_dir_for_test() stops making its SYSTEM probe's UIC the actual OWNER of [SYSTMP]/[USERS] (only the UIC GROUP field still matches, the MEMBER field reverts to root/0). The A1/A2 probe is a raw open(2) under Linux DAC on the /vms backing path (not a vmsfs mount in this rig), and the suite provisions these directories 0755 -- no group write -- so SYSTEM's sys\$create-equivalent open() under SYS\$SCRATCH:/SYS\$LOGIN: can succeed only through the OWNER category; with the owner reverted to root it is refused exactly as it was before vms-e5c's fix to the real product code.";;
         require_fail) cat <<'EOF'
 SYSTEM's sys$create-equivalent open() succeeds under SYS$SCRATCH:
 SYSTEM's sys$create-equivalent open() succeeds under SYS$LOGIN:

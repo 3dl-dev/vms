@@ -36,12 +36,24 @@
  *     Filed as a separate finding; not fixed here, and not silently routed
  *     around by weakening what this test checks.
  *
- * So this suite proves the thing THIS item actually owns -- the directory
- * permission decision vmsfs makes for a real sys$create-equivalent open(2)
- * -- directly, the same way test_syssvc_ident.c and test_syssvc_setuai.c
- * prove an executive/RMS decision without going through DCL or a shipped
- * application: a real credential drop to a real UIC, against a real
- * vmsfs-mounted /dev/vms.
+ * So this suite proves the thing THIS item actually owns -- that boot-time
+ * provisioning makes SYSTEM the OWNER of [SYSTMP]/[USERS] so a real
+ * sys$create-equivalent open(2) under SYS$SCRATCH:/SYS$LOGIN: succeeds for
+ * SYSTEM and not for an ordinary account -- directly, the same way
+ * test_syssvc_ident.c and test_syssvc_setuai.c prove an executive decision
+ * without going through DCL or a shipped application: a real credential drop
+ * to a real UIC, against a real insmod'd /dev/vms.
+ *
+ * WHAT ENFORCES THE DECISION HERE, STATED HONESTLY (vms-9b7 follow-up): the
+ * probe is a raw open(2) on the vmsfs_to_linux_path()-resolved BACKING PATH
+ * under SYS$SYSDEVICE (SYSDISK_MOUNT == "/vms"). In THIS rig /vms is a plain
+ * rootfs directory, NOT a vmsfs mount (tests/qemu/init.sh mounts vmsfs only at
+ * /mnt/vmsfs), so the access decision that gates the create is the Linux VFS's
+ * ordinary owner/group/other DAC on that path -- not vmsfs's SOGW check. That
+ * makes OWNERSHIP the property under test only if the directory does NOT hand
+ * write to the whole SYSTEM group: see provision_writable_dir_for_test()'s
+ * 0755 (not 0775) choice and its header for why that bit is load-bearing to
+ * this suite's negative control.
  *
  * TWO DIRECTIONS, ONE SUITE:
  *   A. SYSTEM (UIC [1,4]) sys$create-equivalent open() under SYS$SCRATCH:
@@ -51,9 +63,10 @@
  *      SYSTEM the owner, not the world writable (CLAUDE.md Rule 8 spirit:
  *      match the VMS UIC/protection model, not a Unix "everyone" bit).
  *
- * Requires a real, insmod'd vms.ko at /dev/vms (this is a vmsfs-mounted
- * system disk, and the CI negative-control rig boots with no executive at
- * all, vms-0ff): exits EXIT_SKIP (77) there, never a fake pass.
+ * Requires a real, insmod'd vms.ko at /dev/vms (the CI negative-control rig
+ * boots with no executive at all, vms-0ff): exits EXIT_SKIP (77) there, never
+ * a fake pass. (The gate is /dev/vms's presence, not that /vms is a vmsfs
+ * mount -- in this rig it is not; see the mechanism note above.)
  */
 
 #include <stdio.h>
@@ -188,9 +201,11 @@ static int try_create_as(const char *vms_device, const char *name,
 }
 
 /*
- * Provision one directory EXACTLY the way src/ovmx_init/ovmx_init.c's
- * provision_writable_dir() does at boot (mkdir 0775, chown to SYSTEM's UIC
- * -- both fields, chmod 0775) -- duplicated here, not called, because this
+ * Provision one directory the way src/ovmx_init/ovmx_init.c's
+ * provision_writable_dir() does at boot (mkdir, chown to SYSTEM's UIC -- both
+ * fields, chmod) -- but at 0755, not the product's 0775, for the
+ * negative-control reason spelled out on the function below; duplicated here,
+ * not called, because this
  * suite runs in the kernel-executive QEMU rig (tests/qemu/Dockerfile +
  * init.sh), which insmods vms.ko and drives the public sys$ API directly
  * WITHOUT ever running PID 1 / STARTUP.EXE's boot sequence. So [SYSTMP] and
@@ -214,16 +229,36 @@ static int try_create_as(const char *vms_device, const char *name,
  * because this duplicate -- not the product's -- is what actually executes
  * when this suite runs. Dropping MEMBER to root while leaving GROUP alone
  * reproduces the "group matches, owner does not" shape vms-e5c measured
- * broken (see provision_writable_dir_for_test's own header) and turns A1/A2
- * below red without touching the credential-drop side (SYSTEM_UIC_MEMBER is
- * still used unmutated by try_create_as()'s probes).
+ * broken and turns A1/A2 below red -- but ONLY because the mode below is 0755,
+ * not the product's 0775.
+ *
+ * WHY 0755 HERE AND NOT THE PRODUCT'S 0775 (vms-9b7 follow-up -- this is the
+ * fix that makes the negative control REAL): the A1/A2 probes are a raw
+ * open(2) under Linux DAC (see the file header -- /vms is not a vmsfs mount in
+ * this rig), and the SYSTEM probe's credential drop uses SYSTEM_UIC_GROUP,
+ * which IS this directory's group. At 0775 the group WRITE bit alone grants
+ * that probe the create regardless of who owns the directory -- so dropping
+ * the owner to root changes nothing the probe can observe, and the suite
+ * passes with the defect injected: an assertion that cannot fail. At 0755 the
+ * group category is r-x with no write, so the create can succeed for SYSTEM
+ * only through the OWNER category -- exactly the property boot-time
+ * provisioning establishes and exactly the property the injected defect
+ * removes -- so A1/A2 go red when the owner is dropped, and B1 (an ordinary
+ * account, neither owner nor in the group) is still refused. The 0775->0755
+ * delta from the product recipe is deliberate and confined to this test
+ * duplicate: it isolates OWNERSHIP from group membership so a raw-DAC probe
+ * can testify about ownership at all. Do NOT "restore" it to 0775 to match the
+ * product -- that re-hides the exact gap this control exists to catch. The
+ * chown line is left byte-identical to the product's so the sed anchor above
+ * still matches; SYSTEM_UIC_MEMBER, used by try_create_as()'s own credential
+ * drop, is a different symbol and stays unmutated.
  */
 static void provision_writable_dir_for_test(const char *path)
 {
-    mkdir(path, 0775);
+    mkdir(path, 0755);
     if (chown(path, (uid_t)SYSTEM_UIC_MEMBER, (gid_t)SYSTEM_UIC_GROUP) != 0)
         fprintf(stderr, "  SETUP-WARN: chown(%s) failed: %s\n", path, strerror(errno));
-    if (chmod(path, 0775) != 0)
+    if (chmod(path, 0755) != 0)
         fprintf(stderr, "  SETUP-WARN: chmod(%s) failed: %s\n", path, strerror(errno));
 }
 

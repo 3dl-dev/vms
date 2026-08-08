@@ -26,6 +26,7 @@
  */
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <net/if.h>
 #include <netpacket/packet.h>
 #include <signal.h>
@@ -35,6 +36,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -526,6 +528,11 @@ static uint64_t ovmx_incarnation_time(void)
  * function exists for. */
 #define OVMX_MSCP_SRV_CTLR_FLAGS   0xa004u
 #define OVMX_MSCP_SRV_CTLR_VERSION 0x0547u
+
+/* vms-6e1: the live block-transfer xfer hook's source-buffer NAME (Appendix D
+ * / scs_mscp_srv_blk_sink's own comment) -- OVMX's own local token, not
+ * wire-grounded; the field names a buffer on OVMX's side only. */
+#define OVMX_MSCP_SRV_SRC_BUF_NAME 0x4f584401u /* "OXD" + 1 */
 
 /* vms-760 PURE-SERVER disk-CLIENT (established-join): after OVMX reaches NEW as a
  * pure server, a real joiner is ALSO a disk CLIENT -- it opens its OWN
@@ -1664,19 +1671,142 @@ static int scsd_poller_ready = 0;
  * reason scsd_svc() is: SCSD_UNIT_TEST and test_scsd_wire.c build a world
  * without ever calling main().
  *
- * NO UNIT IS ATTACHED HERE. This item wires the responder so a command gets a
- * real end message instead of silence; it deliberately does NOT attach a
- * backing store or install a block-transfer xfer hook (scs_mscp_srv_attach_fd
- * / scs_mscp_srv_set_xfer) -- doing that is a live, wire-visible send path
- * this item has not run a lab bracket against (guardrail 23), and
- * scs_mscp_srv_handle() already answers a controller with zero attached units
- * HONESTLY (GET UNIT STATUS enumerates none, ONLINE/READ/WRITE answer
- * Unit-Offline) -- the same posture a real VMS server has with
- * MSCP_SERVE_ALL=1 and no drives. Attaching real media is follow-up work,
- * tracked outside this item.
+ * vms-6e1 CLOSES THE GAP vms-34b LEFT NAMED: "no backing store attached -- a
+ * shipped node honestly serves zero units". scsd_mscp_srv_state() now calls
+ * scsd_mscp_attach_unit0() below, which opens (creating if absent) a real
+ * regular file and attaches it as unit 0 via scs_mscp_srv_attach_fd() --
+ * the SAME function scs_mscp_srv.c's own unit tests use, not a parallel path.
+ * If that open/attach fails for any reason (no directory, no permission, a
+ * read-only root -- all realistic on a host that has not been configured for
+ * this), scsd_mscp_srv_state() falls back to exactly the prior behaviour:
+ * zero units attached, every command answered HONESTLY (Unit-Offline /
+ * Invalid Command), never a fake unit. That fallback is not new code; it is
+ * scs_mscp_srv_handle()'s existing "nothing attached" answer, unreachable-by
+ * -construction to a facade because the responder never fabricates a unit
+ * that was not actually attached.
+ *
+ * WHAT THIS DOES NOT DO. Design decision (1) in scs_mscp_srv.h is unchanged:
+ * a real VAX's MOUNT verification reads genuine ODS-2 structures, so a served
+ * volume a real VAX can actually mount still needs REAL ODS-2 CONTENT (a lab
+ * disk, or one a lab VAX INITIALIZEd) -- that is vms-600's job, run against a
+ * lab, and explicitly out of scope here (this item's brief: "do NOT need the
+ * lab here"). Absent OVMX_MSCP_UNIT0_IMAGE naming such a volume, the file
+ * created below is an ARBITRARY zero-filled block image: a real mechanism
+ * (open a file, serve its blocks, move real bytes for real READs) with
+ * placeholder content, so dropping in a genuine ODS-2 image later is a
+ * config change (set the env var to point at one), not a code change.
+ *
+ * v1's WRITE POLICY (design decision (2)) IS ALSO UNCHANGED, and deliberately
+ * so: scsd_mscp_srv_msg_input()'s WRITE dispatch still answers Write
+ * Protected unconditionally, because the wire mechanism a live WRITE needs
+ * (REQDAT -- the server PULLING data out of a class driver's host buffer) is
+ * still not wire-grounded (scs_mscp_srv.h's design decision (4)/(2)). Serving
+ * a live WRITE would mean guessing that shape, which Rule 8 forbids. The
+ * backing store's WRITE SIDE is real and reachable -- scs_mscp_srv_write_blocks()
+ * -- and this item's round-trip test proves it against the same attached
+ * file the live READ path serves from; it is just not wired to the WRITE
+ * opcode's wire dispatch, exactly as before.
  */
 static struct scs_mscp_srv scsd_mscp_srv;
 static int scsd_mscp_srv_ready = 0;
+static int scsd_mscp_unit0_fd = -1; /* the backing-store fd scs_mscp_srv_attach_fd()
+                                     * borrowed; owned here so it can be closed
+                                     * on the (untested, process-lifetime) exit
+                                     * path if one is ever added -- currently
+                                     * never closed, matching every other
+                                     * daemon-lifetime fd in this file. */
+
+/* vms-6e1: THE UNIT 0 BACKING STORE PATH. OVMX_MSCP_UNIT0_IMAGE lets an
+ * operator (or vms-600's lab harness) point this at a real image -- a lab
+ * disk, or one a lab VAX INITIALIZEd -- without needing write access to the
+ * default location. Unset, production behaviour is the SAME pattern
+ * sysgen_db_path() (sysgen_params.h) already established for this daemon's
+ * other on-disk state: a fixed default path, silently a no-op (falls back to
+ * "zero units", not a crash) if that path is not writable. */
+#define OVMX_MSCP_UNIT0_DEFAULT_PATH "/var/lib/ovmx/scs_mscp_unit0.dsk"
+
+/* Placeholder image size absent a real volume: 10 MiB of 512-byte blocks --
+ * enough for GET UNIT STATUS / ONLINE / READ to have real geometry to report
+ * and real bytes to move, small enough to create on first boot without
+ * asking an operator to size anything. An operator supplying a real image via
+ * OVMX_MSCP_UNIT0_IMAGE gets ITS size instead (see scsd_mscp_open_unit0()). */
+#define OVMX_MSCP_UNIT0_DEFAULT_BLOCKS 20480u
+
+/* P.UNTI (sec 6.12) must be non-zero; P.MEDI is a controller-chosen media type
+ * identifier. NEITHER IS VMS-AUTHENTIC -- public docs and the lab corpus give
+ * OVMX no real UDA50/RA-series identifier to reproduce for a unit OVMX itself
+ * invented, so both are OVMX'S OWN DESIGN CHOICE, labeled as such (Rule 8),
+ * not presented as a captured or documented value. */
+#define OVMX_MSCP_UNIT0_DESIGN_UNIT_ID  0x4f58000000000001ULL /* "OX" + unit 1 */
+#define OVMX_MSCP_UNIT0_DESIGN_MEDIA_ID 0x2f584600u /* OVMX design choice */
+
+static const char *scsd_mscp_unit0_image_path(void)
+{
+    const char *env = getenv("OVMX_MSCP_UNIT0_IMAGE");
+    return (env != NULL && env[0] != '\0') ? env : OVMX_MSCP_UNIT0_DEFAULT_PATH;
+}
+
+/*
+ * scsd_mscp_open_unit0 - open (creating if absent) the unit 0 backing-store
+ * file, growing it to at least OVMX_MSCP_UNIT0_DEFAULT_BLOCKS blocks if it is
+ * smaller (a fresh file, or a short one), and report its size in 512-byte
+ * blocks in *out_blocks. Returns an open read-write fd, or -1 on any failure
+ * (missing directory, permission, etc.) -- the caller's job is to treat -1 as
+ * "serve nothing", never to synthesize a unit anyway.
+ */
+static int scsd_mscp_open_unit0(uint32_t *out_blocks)
+{
+    const char *path = scsd_mscp_unit0_image_path();
+    int fd = open(path, O_RDWR | O_CREAT, 0600);
+    struct stat st;
+    uint64_t want_bytes;
+
+    if (fd < 0) {
+        return -1;
+    }
+    if (fstat(fd, &st) != 0) {
+        close(fd);
+        return -1;
+    }
+    want_bytes = (uint64_t)OVMX_MSCP_UNIT0_DEFAULT_BLOCKS * SCS_MSCP_BLOCK_SIZE;
+    if ((uint64_t)st.st_size < want_bytes) {
+        if (ftruncate(fd, (off_t)want_bytes) != 0) {
+            close(fd);
+            return -1;
+        }
+        st.st_size = (off_t)want_bytes;
+    }
+    /* Floor, not round: MSCP addresses whole 512-byte blocks (sec 5.3) and a
+     * partial trailing block is not one. */
+    *out_blocks = (uint32_t)((uint64_t)st.st_size / SCS_MSCP_BLOCK_SIZE);
+    return fd;
+}
+
+/*
+ * scsd_mscp_attach_unit0 - the vms-6e1 wiring: open the backing store and, if
+ * that succeeds, attach it as served unit 0. Failure is silent by design (see
+ * the module comment above) -- scs_mscp_srv_handle() already answers "nothing
+ * attached" honestly, and that is the correct behaviour on a host where the
+ * image path is not writable, not a bug to surface here.
+ */
+static void scsd_mscp_attach_unit0(struct scs_mscp_srv *srv)
+{
+    uint32_t blocks = 0;
+    int fd = scsd_mscp_open_unit0(&blocks);
+
+    if (fd < 0) {
+        return;
+    }
+    if (scs_mscp_srv_attach_fd(srv, 0, fd, blocks,
+                               OVMX_MSCP_UNIT0_DESIGN_UNIT_ID,
+                               OVMX_MSCP_UNIT0_DESIGN_MEDIA_ID,
+                               0 /* P.VSER: no genuine volume behind this yet */)
+        != 0) {
+        close(fd);
+        return;
+    }
+    scsd_mscp_unit0_fd = fd;
+}
 
 static struct scs_mscp_srv *scsd_mscp_srv_state(void)
 {
@@ -1686,6 +1816,7 @@ static struct scs_mscp_srv *scsd_mscp_srv_state(void)
         (void)scs_mscp_srv_set_ctlr_profile(&scsd_mscp_srv,
                                             OVMX_MSCP_SRV_CTLR_FLAGS,
                                             OVMX_MSCP_SRV_CTLR_VERSION);
+        scsd_mscp_attach_unit0(&scsd_mscp_srv);
         scsd_mscp_srv_ready = 1;
     }
     return &scsd_mscp_srv;
@@ -2448,6 +2579,16 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                                sixteen above: this is ordinary sequenced SCS
  *                                traffic on a connection that cannot exist
  *                                before its circuit does.
+ *
+ *   CHOKED, and new in vms-6e1:
+ *     scsd_mscp_live_xfer()      the live block-data-transfer xfer hook
+ *                                (design decision (4), scs_mscp_srv.h): sends
+ *                                the SCA block-transfer frames a READ's real
+ *                                backing-store bytes ride on, on the SAME OPEN
+ *                                circuit scsd_mscp_srv_msg_input() answers the
+ *                                command on -- called synchronously from
+ *                                inside its own scs_mscp_srv_handle() call,
+ *                                never independently.
  *
  *   NOT CLAIMED: that all sixteen have been exercised on a wire since the
  *   move. What IS true and mechanically checked is that none of them can reach
@@ -6219,6 +6360,76 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
  */
 
 /*
+ * vms-6e1: THE LIVE BLOCK-DATA-TRANSFER XFER HOOK -- wires design decision
+ * (4)'s reference implementation (scs_mscp_srv_blk_sink_xfer,
+ * scs_mscp_srv.h) onto this daemon's actual connection, so a live READ moves
+ * real bytes instead of always drawing the "no hook installed" Controller
+ * Error scsd_mscp_srv_msg_input() answered with before this item.
+ *
+ * REUSES, DOES NOT REIMPLEMENT: the buffer-descriptor decode and block-header
+ * math are scs_mscp_srv_blk_sink_xfer()'s own, already proven byte-exact
+ * against the vaxlab-9 capture by test_blk_sink_read_end_to_end
+ * (tests/vmsscs/test_scs_mscp_srv.c). This struct only adds what a LIVE
+ * connection needs beyond a test buffer: the frame is drained and sent
+ * immediately after each block (one frame in flight at a time -- `frame_buf`
+ * is sized for exactly one 512-byte block's frame), and each frame gets its
+ * OWN advancing send_seq via scs_seq_advance() -- the same per-frame
+ * sequencing discipline every other sender in this file follows (see this
+ * function's own end-message send, below).
+ *
+ * THE PER-FRAME SEQUENCING IS AN OVMX DESIGN CHOICE (Rule 8), not a
+ * transcription: no capture in the corpus shows a served multi-frame READ's
+ * sequence numbers, because the joiner corpus never mounts anything
+ * (scs_mscp_srv.h's own "WHAT THE JOINER CORPUS DOES NOT CONTAIN"). Advancing
+ * once per frame, like every other sequenced send in this file, is the
+ * conservative choice; it is not lab-verified and this item does not need a
+ * lab to land the mechanism (the brief: "do NOT need the lab here").
+ */
+struct scsd_mscp_live_xfer_ctx {
+    struct scs_mscp_srv_blk_sink sink;
+    uint8_t frame_buf[SCS_ENV_ETH_HDR_LEN + SCS_MSCP_BLK_HDR_OFF
+                      + SCS_MSCP_BLK_HDR_LEN + SCS_MSCP_BLOCK_SIZE];
+    struct scsd_rx *rx;
+    struct peer_state *ps;
+    unsigned frames_sent;
+    unsigned send_failures;
+};
+
+static long scsd_mscp_live_xfer(void *ctx, const uint8_t buffer_desc[12],
+                                uint32_t lbn, const uint8_t *data, size_t len)
+{
+    struct scsd_mscp_live_xfer_ctx *c = (struct scsd_mscp_live_xfer_ctx *)ctx;
+    long n;
+    ssize_t sent;
+
+    if (c == NULL || c->rx == NULL || c->ps == NULL) {
+        return -1;
+    }
+    /* One frame in flight: build into the fixed-size scratch buffer, send it,
+     * then reset so the next block starts from an empty buffer.
+     * sink.bytes_sent is NOT reset here -- it is what keeps the down-counting
+     * bytes_remaining field and the advancing dest_offset correct across the
+     * whole transfer (scs_mscp_srv_blk_sink_xfer's own contract). */
+    c->sink.used = 0;
+    c->sink.params.recv_ack = c->ps->vc.seq.recv_seq;
+    c->sink.params.send_seq = scs_seq_advance(&c->ps->vc.seq);
+    n = scs_mscp_srv_blk_sink_xfer(&c->sink, buffer_desc, lbn, data, len);
+    if (n < 0) {
+        return -1;
+    }
+    sent = send_frame_vc(c->rx->sock, c->rx->ifindex, c->ps, c->ps->pb,
+                         "MSCP block data (server READ)", c->sink.out,
+                         c->sink.used);
+    if (sent < 0) {
+        c->send_failures++;
+        return -1; /* honest failure -- handle_read() turns this into Host
+                    * Buffer Access Error, never a silent success */
+    }
+    c->frames_sent++;
+    return n;
+}
+
+/*
  * vms-34b: scsd_mscp_srv_msg_input - THE LIVE MSCP DISK-SERVER RESPONDER's
  * message-input routine (p. 2-29). Installed on the CDT allocated at
  * OVMX_MSCP_SERVER_CONID the moment OVMX accepts a member-opened MSCP$DISK
@@ -6241,10 +6452,15 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
  * received frame" and re-deriving a synthetic Ethernet+SCA header around
  * `msg` to satisfy it would be duplicate, divergeable work.
  *
- * NO BACKING STORE IS ATTACHED (scsd_mscp_srv_state()'s comment). Every
- * command therefore gets scs_mscp_srv_handle()'s honest "nothing is attached"
- * answer (Unit-Offline / Invalid Command / Write Protected) -- a real end
- * message, never silence, which is the whole point.
+ * vms-6e1: scsd_mscp_srv_state() now attaches a real backing store (unit 0)
+ * by default, and the xfer hook below is installed on EVERY call -- cheap,
+ * and it means a READ answers with real data whenever a unit is attached
+ * instead of only when some earlier call happened to opt in. Commands other
+ * than READ never reach scs_mscp_srv_handle()'s xfer() call at all, so
+ * installing it unconditionally changes nothing about how they are answered.
+ * If nothing is attached (scsd_mscp_attach_unit0() failed, e.g. no writable
+ * default path), scs_mscp_srv_handle() still answers Unit-Offline / Invalid
+ * Command / Write Protected -- the same honest posture as before this item.
  */
 static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
                                     size_t msglen, void *ctx)
@@ -6276,17 +6492,10 @@ static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
     size_t take = avail < sizeof(body) ? avail : sizeof(body);
     memcpy(body, cur.frame + hdr_off, take);
 
-    uint8_t end[SCS_MSCP_SRV_END_MAX];
-    long endlen = scs_mscp_srv_handle(scsd_mscp_srv_state(),
-                                      ps->mscp_srv_remote_conid, &v, body,
-                                      sizeof(body), end, sizeof(end));
-    if (endlen < 0) {
-        return; /* scs_mscp_srv_handle()'s own "cannot answer at all" case --
-                 * malformed/short input, not a command it declines (that path
-                 * returns a well-formed end message instead, per its own
-                 * contract). */
-    }
-
+    /* Built BEFORE scs_mscp_srv_handle() runs (unlike before this item) --
+     * the live xfer hook needs the connection identity to address block-
+     * transfer frames with, and scs_mscp_srv_handle() may call that hook
+     * synchronously, inside the call below, for a READ. */
     struct scs_mscp_params p;
     memset(&p, 0, sizeof(p));
     memcpy(p.dst_mac, ps_port_addr(ps), 6);
@@ -6302,8 +6511,49 @@ static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
     p.remote_conid = ps->mscp_srv_remote_conid; /* destination: the class driver's handle */
     p.local_conid = OVMX_MSCP_SERVER_CONID;     /* source: OVMX's own server handle */
     p.recv_ack = ps->vc.seq.recv_seq;
-    p.send_seq = scs_seq_advance(&ps->vc.seq);
     p.incarnation = ps->incarnation;
+
+    /* The READ command's own byte count (Table A-6 P.BCNT) primes the block
+     * sink's down-counting bytes_remaining field. Harmless to read for any
+     * other opcode -- the sink is only ever invoked from inside handle_read(). */
+    uint32_t bcnt = 0;
+    if (sizeof(body) >= SCS_MSCP_P_BCNT + 4u) {
+        bcnt = (uint32_t)body[SCS_MSCP_P_BCNT]
+             | ((uint32_t)body[SCS_MSCP_P_BCNT + 1] << 8)
+             | ((uint32_t)body[SCS_MSCP_P_BCNT + 2] << 16)
+             | ((uint32_t)body[SCS_MSCP_P_BCNT + 3] << 24);
+    }
+
+    struct scsd_mscp_live_xfer_ctx xfer_ctx;
+    memset(&xfer_ctx, 0, sizeof(xfer_ctx));
+    xfer_ctx.rx = cur.rx;
+    xfer_ctx.ps = ps;
+    scs_mscp_srv_blk_sink_init(&xfer_ctx.sink, &p, bcnt, xfer_ctx.frame_buf,
+                               sizeof(xfer_ctx.frame_buf));
+    /* The two UNGROUNDED per-connection/per-transfer block-header fields
+     * (scs_mscp_srv.h SCS_MSCP_BLK_F4/F6) have no known live value -- left 0,
+     * which scs_mscp_srv_blk_sink_init()'s zeroing already gives them.
+     * src_buf_name is OVMX's own local source-buffer token, not wire-grounded
+     * (scs_mscp_srv_blk_sink's own comment) -- any non-magic constant serves. */
+    xfer_ctx.sink.src_buf_name = OVMX_MSCP_SRV_SRC_BUF_NAME;
+    (void)scs_mscp_srv_set_xfer(scsd_mscp_srv_state(), scsd_mscp_live_xfer,
+                                &xfer_ctx);
+
+    uint8_t end[SCS_MSCP_SRV_END_MAX];
+    long endlen = scs_mscp_srv_handle(scsd_mscp_srv_state(),
+                                      ps->mscp_srv_remote_conid, &v, body,
+                                      sizeof(body), end, sizeof(end));
+    if (endlen < 0) {
+        return; /* scs_mscp_srv_handle()'s own "cannot answer at all" case --
+                 * malformed/short input, not a command it declines (that path
+                 * returns a well-formed end message instead, per its own
+                 * contract). */
+    }
+
+    p.send_seq = scs_seq_advance(&ps->vc.seq); /* the end message's own frame,
+                                                * sequenced after every block
+                                                * frame the xfer hook may have
+                                                * just sent */
 
     uint8_t frame[SCS_ENV_ETH_HDR_LEN + SCS_MSCP_BODY_OFF + SCS_MSCP_SRV_END_MAX];
     long flen = scs_mscp_srv_build_end_frame(&p, end, (size_t)endlen, frame,

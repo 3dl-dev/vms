@@ -190,11 +190,26 @@
  * refusing. scsd_mscp_srv_msg_input() (scsd.c) closes that: it decodes the
  * inbound command, calls scs_mscp_srv_handle() below, and sends the real end
  * message back. MSCP$DISK is now LISTENed by default (ovmx_mscp_server_enabled(),
- * OVMX_MSCP_SERVER=0 is the kill switch). No backing store is attached by
- * scsd.c itself, so a live node answers honestly with zero served units
- * (Unit-Offline / Invalid Command / Write Protected) until an operator wires
- * scs_mscp_srv_attach_fd()/scs_mscp_srv_set_xfer() to a real one -- that
- * remains follow-up work, not done here.
+ * OVMX_MSCP_SERVER=0 is the kill switch).
+ *
+ * BACKING STORE + LIVE XFER HOOK (vms-6e1): CLOSED. The paragraph above used to
+ * end here with "no backing store is attached by scsd.c itself... that remains
+ * follow-up work, not done here" -- vms-6e1 does that follow-up.
+ * scsd_mscp_attach_unit0() (scsd.c) opens (creating if absent) a real regular
+ * file and attaches it as unit 0 via scs_mscp_srv_attach_fd() -- the SAME
+ * function this file's own unit tests use, not a parallel path -- so a shipped
+ * node now advertises a real served unit instead of zero, by default. Design
+ * decision (1) is unchanged: the file scsd_mscp_attach_unit0() creates absent
+ * an operator-supplied OVMX_MSCP_UNIT0_IMAGE is an ARBITRARY zero-filled block
+ * image, not a genuine ODS-2 volume, so a real VAX's MOUNT verification (which
+ * reads real ODS-2 structures) still needs vms-600's lab-supplied image -- that
+ * acceptance stays separate and is NOT what this closes. What IS closed: READ
+ * over a live connection moves real bytes out of a real backing-store file,
+ * via scsd_mscp_live_xfer() (scsd.c), the live counterpart of
+ * scs_mscp_srv_blk_sink_xfer below that sends each block-transfer frame on the
+ * actual connection instead of into a test buffer. v1's WRITE OPCODE is
+ * UNCHANGED -- still Write Protected unconditionally (design decision (2))
+ * -- because REQDAT is still not wire-grounded; see that decision's own text.
  *
  * v1's WRITE REFUSAL (design decision (2)) IS UNCHANGED BY THIS ITEM. This
  * item grounds and implements the block-transfer WIRE MECHANISM for both

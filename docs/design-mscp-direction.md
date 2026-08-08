@@ -473,6 +473,36 @@ Alternatives teed up in the gate: (a) permanent "serves no disk" with the
 connect *refused* instead of accepted; (b) full server build now. Absent an
 answer, work proceeds on Phases A–C only, which no option forecloses.
 
+### Phase D part 2 — the live daemon attaches a real backing store (vms-6e1)
+
+`vms-34b` wired the responder into the live daemon (`scsd_mscp_srv_msg_input()`)
+but deliberately attached no unit — "no backing store attached... a shipped
+node honestly serves zero units", left as named follow-up. `vms-6e1` does that
+follow-up, entirely inside `src/vmsscs/`: `scsd_mscp_attach_unit0()` (scsd.c)
+opens — creating it, sized to a placeholder 10 MiB, if absent — a real regular
+file and attaches it as served unit 0 via `scs_mscp_srv_attach_fd()`, the same
+function `scs_mscp_srv.c`'s own unit tests use. `OVMX_MSCP_UNIT0_IMAGE` lets an
+operator (or `vms-600`'s lab harness) point this at a real image instead — a
+lab disk, or one a lab VAX `INITIALIZE`d — without a code change. `scsd_mscp_
+live_xfer()` (scsd.c) is the live counterpart of `scs_mscp_srv_blk_sink_xfer`:
+it sends each READ's block-transfer frame on the actual connection instead of
+into a test buffer, so a live READ now moves real backing-store bytes instead
+of drawing the "no hook installed" Controller Error.
+
+**What this does not do**, matching design decisions (1) and (2) exactly:
+absent an operator-supplied image the served content is an ARBITRARY
+zero-filled block image, not a genuine ODS-2 volume, so a real VAX's MOUNT
+verification still needs `vms-600`'s lab-supplied image — that acceptance
+stays separate, on purpose (this item's brief: "do NOT need the lab here").
+And v1's WRITE opcode is unchanged — still Write Protected unconditionally,
+because REQDAT (the wire mechanism a live WRITE needs) is still not
+wire-grounded. `tests/vmsscs/test_scsd_wire.c`'s
+`test_mscp_srv_read_serves_real_backing_store_bytes` proves the round trip
+end to end: known bytes written into the live unit's backing store via
+`scs_mscp_srv_write_blocks()`, then read back both through a real wire READ
+(SCC → ONLINE → READ, block-transfer frames parsed and compared byte-for-byte)
+and through a raw `pread()` of the image file itself.
+
 ---
 
 ## 4. Ground-source answers to standing questions (2026-08-05)

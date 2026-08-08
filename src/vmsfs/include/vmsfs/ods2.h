@@ -99,6 +99,15 @@ extern "C" {
 #define ODS2_RESFILES           10  /* hm2_resfiles observed on real fixture */
 
 /*
+ * SECURITY.SYS data allocation: 6 contiguous blocks (VBN1..6), matching the
+ * real fixture's observed retrieval-pointer count (see PROVENANCE-real_vax_
+ * ods2.md's increment-3 addendum: "SECURITY.SYS;1 ... map_inuse=2 (1 extent,
+ * CONTIG)" with a decoded block count of 6). Only VBN1 carries content
+ * (increment 4, [F6] below); VBN2..6 stay zeroed, matching the real fixture.
+ */
+#define ODS2_SECURITY_DATA_BLOCKS 6
+
+/*
  * File characteristics bits (fh2_filechar). [N] access.h FH2$M_* defines.
  * Only the two this writer needs are pulled in; access.h also defines
  * FH2$M_NOBACKUP (0x2), FH2$M_MARKDEL (0x8000), FH2$M_ERASE (0x20000).
@@ -620,6 +629,134 @@ ods2_status_t ods2_volume_list_dir(const ods2_volume_t *vol,
  *        leaving idoffset/mpoffset at 54/114) mounted cleanly. Full
  *        bisection trail (4 hybrid images, each isolating one variable)
  *        in PROVENANCE-real_vax_ods2.md's increment-3 addendum.
+ *   [F6] SECURITY.SYS's VBN1 data-block format (increment 4): derived PURELY by DIFFERENTIAL
+ *        BEHAVIORAL OBSERVATION on lab-2 (never disassembled, never copied
+ *        verbatim) -- 12 real `INITIALIZE`+`MOUNT` trials on pod `vaxlab-8`
+ *        across 9 distinct volume labels (lengths 1, 2, 3, 6, 7, 8, 12) and
+ *        2 device geometries (RX50/800 blocks, RX33/2400 blocks), each
+ *        pulled via `DUMP/BYTE` and a raw disk-image byte compare (`cmp -l`)
+ *        against the previous trial. Findings, all cross-validated across
+ *        every trial (see PROVENANCE-real_vax_ods2.md's increment-4
+ *        addendum for the full table):
+ *          - Offset 0x00 (4 bytes): a checksum. Zeroing it on an otherwise-
+ *            untouched real volume changes MOUNT's failure from success to
+ *            "%MOUNT-F-BADSECSYS ... -SYSTEM-E-BADCHECKSUM, message
+ *            checksum failure" -- i.e. this field IS enforced by a real
+ *            MOUNT, which is the actual reason increment 3's zero-filled/
+ *            size-matched stubs were rejected. ALGORITHM (fully derived,
+ *            reproduces all 12 samples exactly, see
+ *            ods2_security_checksum() in ods2_writer.c): let strlen = the
+ *            volume label's length in bytes; let n = ((78 + strlen) / 4) * 4
+ *            (integer division, i.e. round down to a multiple of 4); XOR
+ *            each of the n bytes starting at block offset 4 into one of 4
+ *            lanes by byte position modulo 4; the stored checksum is the
+ *            4 lanes packed as a little-endian longword. This is a plain
+ *            byte-lane XOR fold, NOT a CRC -- CRC-32 (several standard
+ *            polynomial/init/reflection variants) and additive-16/32 sums
+ *            were tried first and did NOT reproduce the observed values.
+ *          - Offset 0x08 (1 byte): equals 0x52 + strlen, i.e. the block
+ *            offset one past the end of the label text -- an "end of
+ *            variable data" pointer. Derived from a monotonic byte-for-
+ *            byte match across all 12 trials (value tracks strlen exactly).
+ *          - Offset 0x1C (4 bytes, ods2_uic_t layout): the volume's owner
+ *            UIC as a longword (member low word, group high word) -- every
+ *            trial used the implicit default (no /OWNER_UIC given) and
+ *            read back as [1,4] (SYSTEM), matching the SAME reserved
+ *            files' fh2_fileowner elsewhere on the same volume. NOT
+ *            independently varied (no trial used /OWNER_UIC), so "this
+ *            field is UIC and honors /OWNER_UIC" is [OVMX-inferred] by
+ *            analogy with the FH2 header's identically-shaped owner field;
+ *            the writer always emits SYSTEM [1,4] here, same as it does
+ *            for other reserved-file ownership.
+ *          - Offset 0x50 (word): strlen + 4.
+ *          - Offset 0x52 (strlen bytes): the volume label, ASCII, NOT
+ *            null-padded to any fixed width beyond the record's own extent
+ *            (trailing bytes through the end of the 512-byte block are 0).
+ *          - Offset 0x04..0x4F, EXCLUDING 0x08 and 0x1C-0x1F above: IDENTICAL
+ *            byte-for-byte across all 12 trials regardless of label content
+ *            OR volume geometry -- i.e. a fixed template for "zero ACL
+ *            entries" (a freshly-INITIALIZEd volume has never had an ACL
+ *            applied to it). This writer reproduces that CONSTANT template
+ *            verbatim (ods2_security_template[] in ods2_writer.c) because it
+ *            is deterministic content-independent structure, not per-volume
+ *            VSI-generated data -- the same category of reproduction as the
+ *            FH2$M_* bit values and reserved-file name/order already cited
+ *            under [N3]/[F] above, NOT the "copy one real file's bytes into
+ *            every volume" approach increment 3 correctly rejected. The
+ *            individual field MEANINGS within this constant region (quota
+ *            fields, ACL-journal state, etc. per the public "OpenVMS Guide
+ *            to System Security"'s volume-security-profile description)
+ *            were NOT decoded field-by-field; it is carried as an opaque,
+ *            [OVMX-inferred: byte layout observed and reproduced, semantics
+ *            of most individual bytes NOT decoded] structural constant.
+ *          - A single-character volume label (strlen == 1) has one
+ *            open discrepancy: this writer's checksum formula reproduces it
+ *            correctly (verified against 3 independent one-letter labels,
+ *            all identical), but during derivation an earlier, narrower
+ *            formula matched every length EXCEPT 1 by exactly one extra
+ *            XOR term; the FINAL formula above was re-derived to close
+ *            that gap and re-verified against all 12 samples (see
+ *            PROVENANCE increment-4 addendum) -- flagged here in case a
+ *            future 13th sample reopens it.
+ *   [F7] fh2_recattr.fat_efblk for SECURITY.SYS's header is set to 2 (not
+ *        map_count == 6), matching the real fixture's own SECURITY.SYS
+ *        header exactly (hiblk=6/efblk=2 -- re-decoded during this
+ *        increment; an EARLIER re-read had misremembered it as efblk=1).
+ *        Patched directly onto the header written by write_fh2_header()'s
+ *        generic path (which otherwise sets hiblk==efblk==map_count, the
+ *        already-accepted [OVMX-inferred] convention still used as-is for
+ *        INDEXF.SYS/BITMAP.SYS). This did NOT, by itself, change the real
+ *        MOUNT outcome (see the [F9] status note below) -- kept because it
+ *        is still a real, oracle-grounded correction over the generic
+ *        convention, not because it was proven load-bearing.
+ *   [F8] MFD directory entries for all 10 reserved files (increment 4):
+ *        discovered while bisecting a SECOND real-MOUNT failure that
+ *        survived the [F6] checksum fix -- see [F9]. Decoding the real
+ *        fixture's own [000000] directory data block (`strings` over the
+ *        raw bytes at its data LBN) showed named entries for 000000.DIR,
+ *        INDEXF.SYS, BITMAP.SYS, BADBLK.SYS, CORIMG.SYS, VOLSET.SYS,
+ *        CONTIN.SYS, BACKUP.SYS, BADLOG.SYS, AND SECURITY.SYS -- i.e. a
+ *        real INIT lists every reserved file by name in the MFD, not just
+ *        caller-created ones. This writer previously inserted none of
+ *        them. ods2_volume_format() now calls ods2_wvolume_dir_insert()
+ *        for all 10 before returning. A real, oracle-grounded finding
+ *        (kept regardless of [F9]'s outcome), but ALSO did not by itself
+ *        change the real MOUNT outcome.
+ *   [F9] CURRENT STATUS (increment 4, HONEST, NOT A SUCCESS CLAIM): the
+ *        SPECIFIC, NAMED increment-3 defect --
+ *        "%MOUNT-F-BADSECSYS ... -SYSTEM-E-BADCHECKSUM, message checksum
+ *        failure" -- IS resolved: induced-error testing on a real, other-
+ *        wise-untouched real-VAX volume (zeroing ONLY its SECURITY.SYS
+ *        checksum bytes) reproduces that exact BADCHECKSUM failure, and
+ *        ods2_security_build()'s output does not trigger it. HOWEVER, a
+ *        real end-to-end MOUNT of this writer's OWN complete volume output
+ *        does NOT reach completion: it still fails with
+ *        "%MOUNT-F-BADSECSYS ... -SYSTEM-W-FILENUMCHK, file identification
+ *        number check" -- a DIFFERENT secondary status than BADCHECKSUM.
+ *        Extensive lab-2 bisection (pod vaxlab-8) proves this is NOT about
+ *        SECURITY.SYS's own header or data content: splicing a REAL
+ *        fixture's own complete SECURITY.SYS header (every field: owner
+ *        UIC, fileprot, highwater, efblk, idoffset/mpoffset, all real)
+ *        -- with ONLY its retrieval-pointer LBN adjusted to point at this
+ *        writer's own correctly-checksummed data block -- into this
+ *        writer's own volume STILL reproduces FILENUMCHK, identically to
+ *        this writer's ORIGINAL zero-length stub (also re-verified: main-
+ *        branch's pre-increment-4 output shows FILENUMCHK too, not
+ *        BADCHECKSUM as increment-3's own PROVENANCE text describes --
+ *        that description apparently did not capture the secondary status
+ *        line for the exact zero-length-stub variant). Reducing maxfiles
+ *        from 200 to 13 (matching the real fixture's actual file count)
+ *        did not change the outcome either. The remaining defect is
+ *        therefore somewhere ELSE in this writer's volume-wide structure
+ *        -- the SIMPLIFICATIONS list below's INDEXF.SYS single-contiguous-
+ *        extent choice (vs. the real fixture's 3-extent fragmented map) is
+ *        the leading untested candidate, since it is the only OTHER
+ *        already-flagged "not reproduced, presumed OK" structural
+ *        difference in the whole writer. NOT bisected further in this
+ *        increment (out of the SECURITY.SYS-focused scope this work was
+ *        chartered under) -- see PROVENANCE-real_vax_ods2.md's increment-4
+ *        addendum for the full trial log and a concrete next-step
+ *        recommendation.
  *
  * SIMPLIFICATIONS -- explicitly [OVMX-inferred], NOT claimed byte-genuine:
  *   - INDEXF.SYS's own retrieval map is written as ONE contiguous extent
@@ -627,13 +764,17 @@ ods2_status_t ods2_volume_list_dir(const ods2_volume_t *vol,
  *     alternate index header. The real fixture's own FID 1 header uses 3
  *     extents (map_inuse == 6 words), not 1 -- this writer's layout is
  *     self-consistent and was chosen for simplicity, not measured to match
- *     real INITIALIZE's fragmentation choice.
+ *     real INITIALIZE's fragmentation choice. [F9]: this is the leading
+ *     untested candidate for the remaining real-MOUNT FILENUMCHK failure.
  *   - Reserved-file and created-file timestamps are left zero.
  *   - The stub reserved files (BADBLK/CORIMG/VOLSET/CONTIN/BACKUP/BADLOG)
  *     get zero-length headers with no data extent, matching the real
- *     fixture (all had map_inuse == 0 there too). SECURITY.SYS gets one
- *     contiguous zeroed data block (matching the real fixture's
- *     map_inuse == 2 / FH2$M_CONTIG) but no real ACL content.
+ *     fixture (all had map_inuse == 0 there too). SECURITY.SYS (increment 4,
+ *     [F6]/[F7] above) gets a genuine, clean-room-derived "zero ACL entries"
+ *     data block in VBN1 with a correctly-computed, oracle-validated
+ *     checksum -- see ods2_security_build() in ods2_writer.c -- resolving
+ *     the SPECIFIC increment-3 BADCHECKSUM failure mode. A full real MOUNT
+ *     still does not complete; see [F9].
  * ================================================================ */
 
 /* Volume-format parameters for ods2_volume_format(). */
@@ -735,6 +876,29 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                                       ods2_fid_t dir_fid,
                                       const char *name, uint16_t version,
                                       ods2_fid_t entry_fid);
+
+/*
+ * Build a genuine "zero ACL entries" SECURITY.SYS VBN1 data block for
+ * `volname` (1..12 characters) into `block` (must be ODS2_BLOCK_SIZE
+ * bytes; fully overwritten). `owner_uic` is the volume's owner UIC to
+ * embed at offset 0x1C -- see ods2.h's WRITER [F6] provenance comment for
+ * the full clean-room derivation (lab-2 differential trials) and which
+ * fields are understood vs. reproduced-as-observed-constant.
+ */
+ods2_status_t ods2_security_build(uint8_t block[ODS2_BLOCK_SIZE],
+                                  const char *volname, ods2_uic_t owner_uic);
+
+/*
+ * Recompute and validate the checksum ([F6]) of a SECURITY.SYS VBN1 data
+ * block. On success, copies the embedded volume label into `label_out`
+ * (NUL-terminated, up to label_out_size - 1 bytes) and the owner UIC into
+ * `*owner_out` (either out param may be NULL). Returns ODS2_ERR_CHECKSUM
+ * on mismatch, ODS2_ERR_FORMAT if the embedded length field is out of the
+ * 1..12 range.
+ */
+ods2_status_t ods2_security_parse(const void *block, size_t block_len,
+                                  char *label_out, size_t label_out_size,
+                                  ods2_uic_t *owner_out);
 
 #ifdef __cplusplus
 }

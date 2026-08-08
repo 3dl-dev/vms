@@ -151,6 +151,58 @@ ods2_status_t ods2_scb_parse(const void *block, size_t block_len,
     return ODS2_OK;
 }
 
+/*
+ * Recompute and validate the [F6] checksum of a SECURITY.SYS VBN1 data
+ * block (see ods2.h's WRITER provenance comment and ods2_writer.c's
+ * ods2_security_checksum() -- the SAME byte-lane XOR fold, reimplemented
+ * here so the reader has no link-time dependency on the writer).
+ */
+ods2_status_t ods2_security_parse(const void *block, size_t block_len,
+                                  char *label_out, size_t label_out_size,
+                                  ods2_uic_t *owner_out)
+{
+    const uint8_t *b = (const uint8_t *)block;
+    uint32_t stored, calc;
+    uint16_t lenfield;
+    size_t strlen_, total, n, i;
+    uint8_t lanes[4] = { 0, 0, 0, 0 };
+
+    if (!block)
+        return ODS2_ERR_ARGS;
+    if (block_len < ODS2_BLOCK_SIZE)
+        return ODS2_ERR_SIZE;
+
+    lenfield = le16(b + 0x50);
+    if (lenfield < 5 || lenfield > 16)   /* strlen 1..12, +4 */
+        return ODS2_ERR_FORMAT;
+    strlen_ = (size_t)lenfield - 4;
+
+    total = 78u + strlen_;
+    n = (total / 4u) * 4u;
+    for (i = 0; i < n; i++)
+        lanes[i % 4] ^= b[4 + i];
+    calc = (uint32_t)lanes[0] | ((uint32_t)lanes[1] << 8) |
+           ((uint32_t)lanes[2] << 16) | ((uint32_t)lanes[3] << 24);
+
+    stored = le32(b + 0);
+    if (stored != calc)
+        return ODS2_ERR_CHECKSUM;
+
+    if (label_out && label_out_size > 0) {
+        size_t copy_len = strlen_;
+        if (copy_len > label_out_size - 1)
+            copy_len = label_out_size - 1;
+        memcpy(label_out, b + 0x52, copy_len);
+        label_out[copy_len] = '\0';
+    }
+    if (owner_out) {
+        owner_out->uic_member = le16(b + 0x1C + 0);
+        owner_out->uic_group  = le16(b + 0x1C + 2);
+    }
+
+    return ODS2_OK;
+}
+
 const ods2_ident_t *ods2_fh2_ident(const void *header_block)
 {
     const uint8_t *b = (const uint8_t *)header_block;

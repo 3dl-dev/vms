@@ -74,7 +74,9 @@ struct dir_entry_capture {
 };
 
 struct dir_capture {
-    struct dir_entry_capture entries[8];
+    struct dir_entry_capture entries[16]; /* MFD now holds 10 reserved-file
+                                              entries (increment 4, [F8]) +
+                                              caller-created ones */
     int count;
 };
 
@@ -82,7 +84,7 @@ static int dir_collect(const char *name, unsigned name_len,
                        uint16_t version, const ods2_fid_t *fid, void *ctx)
 {
     struct dir_capture *c = (struct dir_capture *)ctx;
-    if (c->count < 8) {
+    if (c->count < 16) {
         struct dir_entry_capture *e = &c->entries[c->count];
         unsigned n = name_len < sizeof(e->name) - 1 ? name_len : sizeof(e->name) - 1;
         memcpy(e->name, name, n);
@@ -98,7 +100,7 @@ static const struct dir_entry_capture *find_entry(const struct dir_capture *c,
                                                    const char *name)
 {
     int i;
-    for (i = 0; i < c->count && i < 8; i++)
+    for (i = 0; i < c->count && i < 16; i++)
         if (strcmp(c->entries[i].name, name) == 0)
             return &c->entries[i];
     return NULL;
@@ -245,6 +247,40 @@ int main(void)
             }
         }
 
+        /* SECURITY.SYS's VBN1 data block (increment 4, [F6]) parses off
+         * its own map-derived first extent LBN, checksums, and round-trips
+         * the volume's own label + SYSTEM owner UIC. This is the writer's
+         * actual integration path (ods2_volume_format() -> write_fh2_header
+         * + ods2_security_build()), not just the standalone builder
+         * exercised in test_ods2_security.c. */
+        st = ods2_volume_read_header(&vol, ODS2_FID_SECURITY, hdr, sizeof(hdr));
+        CHECK_EQ(st, ODS2_OK, "read_header(SECURITY.SYS)");
+        if (st == ODS2_OK) {
+            memset(&ec, 0, sizeof(ec));
+            st = ods2_fh2_map_walk(hdr, extent_collect, &ec, NULL);
+            CHECK_EQ(st, ODS2_OK, "map_walk(SECURITY.SYS)");
+            CHECK_EQ(ec.n, 1, "SECURITY.SYS one extent");
+            if (ec.n >= 1) {
+                CHECK_EQ(ec.ext[0].count, ODS2_SECURITY_DATA_BLOCKS,
+                         "SECURITY.SYS extent is 6 blocks");
+                const uint8_t *sec_blk = ods2_volume_block(&vol, ec.ext[0].lbn);
+                CHECK(sec_blk != NULL, "SECURITY.SYS VBN1 block in range");
+                if (sec_blk) {
+                    char label[16];
+                    ods2_uic_t owner;
+                    st = ods2_security_parse(sec_blk, ODS2_BLOCK_SIZE,
+                                             label, sizeof(label), &owner);
+                    CHECK_EQ(st, ODS2_OK, "ods2_security_parse(SECURITY.SYS VBN1)");
+                    if (st == ODS2_OK) {
+                        CHECK(strcmp(label, "OVMXWRIT") == 0,
+                              "SECURITY.SYS label == volume label");
+                        CHECK_EQ(owner.uic_member, 4, "SECURITY.SYS owner member == SYSTEM");
+                        CHECK_EQ(owner.uic_group, 1, "SECURITY.SYS owner group == SYSTEM");
+                    }
+                }
+            }
+        }
+
         /* SCB parses off BITMAP.SYS's map-derived VBN1 */
         st = ods2_volume_read_header(&vol, ODS2_FID_BITMAP, hdr, sizeof(hdr));
         CHECK_EQ(st, ODS2_OK, "read_header(BITMAP.SYS)");
@@ -269,14 +305,38 @@ int main(void)
             }
         }
 
-        /* MFD lists exactly OVMXDIR.DIR */
+        /* MFD lists the 10 reserved system files (increment 4, [F8] -- a
+         * real VAX MOUNT rejected this writer's earlier output with
+         * "%MOUNT-F-BADSECSYS -SYSTEM-W-FILENUMCHK" even with a byte-
+         * identical-to-real SECURITY.SYS header+content, and bisection
+         * traced it to these missing directory entries -- see ods2.h/
+         * ods2_writer.c's [F8] provenance comment and PROVENANCE-
+         * real_vax_ods2.md's increment-4 addendum) plus OVMXDIR.DIR. */
         st = ods2_volume_read_header(&vol, ODS2_FID_MFD, hdr, sizeof(hdr));
         CHECK_EQ(st, ODS2_OK, "read_header(MFD)");
         if (st == ODS2_OK) {
             memset(&dc, 0, sizeof(dc));
             st = ods2_volume_list_dir(&vol, hdr, dir_collect, &dc);
             CHECK_EQ(st, ODS2_OK, "list_dir(MFD)");
-            CHECK_EQ(dc.count, 1, "MFD has exactly 1 entry");
+            CHECK_EQ(dc.count, 11, "MFD has exactly 11 entries (10 reserved + OVMXDIR.DIR)");
+
+            {
+                static const char *resnames[ODS2_RESFILES] = {
+                    "INDEXF.SYS", "BITMAP.SYS", "BADBLK.SYS", "000000.DIR",
+                    "CORIMG.SYS", "VOLSET.SYS", "CONTIN.SYS", "BACKUP.SYS",
+                    "BADLOG.SYS", "SECURITY.SYS",
+                };
+                uint32_t fid;
+                for (fid = 1; fid <= ODS2_RESFILES; fid++) {
+                    e = find_entry(&dc, resnames[fid - 1]);
+                    CHECK(e != NULL, "reserved file listed in MFD");
+                    if (e) {
+                        CHECK_EQ(e->version, 1, "reserved file dir version");
+                        CHECK_EQ(e->fid_num, fid, "reserved file dir fid");
+                    }
+                }
+            }
+
             e = find_entry(&dc, "OVMXDIR.DIR");
             CHECK(e != NULL, "OVMXDIR.DIR listed in MFD");
             if (e) {

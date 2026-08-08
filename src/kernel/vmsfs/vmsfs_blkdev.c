@@ -1223,6 +1223,32 @@ static int vmsfs_blkdev_getattr(struct mnt_idmap *idmap,
  * is stored and preserved but enforcement is deferred.
  * ================================================================ */
 
+/*
+ * vmsfs_current_uic - the UIC (owner) a NEWLY created inode should carry,
+ * derived from the creating process's own credentials (vms-221).
+ *
+ * fh_uic_group/fh_uic_member are separate on-disk fields from fh_protection
+ * (see vmsfs_ondisk.h) and vmsfs_blkdev_iget() reads them straight into the
+ * VFS inode (inode->i_uid = fh_uic_member, inode->i_gid = fh_uic_group).
+ * vmsfs_blkdev_create()/vmsfs_blkdev_mkdir() used to leave them at their
+ * memset(0) value -- every new file/directory was owned UIC [0,0] on disk,
+ * regardless of who created it. That is invisible on the file's OWN first
+ * open (Linux always lets the creator use what it just made, regardless of
+ * the resulting mode/protection), but it means every SUBSEQUENT reopen by
+ * the real creator falls through vmsfs_blkdev_permission()'s Owner check
+ * (creator's UIC != [0,0]) to Group or World, which VMSFS_PROT_DEFAULT
+ * denies WRITE. Matches plain Unix inode-creation semantics: the creator
+ * owns what it creates.
+ */
+static void vmsfs_current_uic(uint16_t *uic_member, uint16_t *uic_group)
+{
+    kuid_t euid = current_euid();
+    kgid_t egid = current_egid();
+
+    *uic_member = (uint16_t)__kuid_val(euid);
+    *uic_group  = (uint16_t)__kgid_val(egid);
+}
+
 static int vmsfs_blkdev_permission(struct mnt_idmap *idmap,
                                    struct inode *inode, int mask)
 {
@@ -1363,6 +1389,13 @@ static int vmsfs_blkdev_create(struct mnt_idmap *idmap, struct inode *dir,
     fh->fh_flags = cpu_to_le16(VMSFS_FH_INUSE);
     fh->fh_version = cpu_to_le16(new_version);
     fh->fh_protection = cpu_to_le16(VMSFS_PROT_DEFAULT);
+    {
+        uint16_t uic_member, uic_group;
+
+        vmsfs_current_uic(&uic_member, &uic_group);
+        fh->fh_uic_member = cpu_to_le16(uic_member);
+        fh->fh_uic_group = cpu_to_le16(uic_group);
+    }
     fh->fh_link_count = cpu_to_le16(1);
     strscpy(fh->fh_name, fname, sizeof(fh->fh_name));
     strscpy(fh->fh_type, ftype, sizeof(fh->fh_type));
@@ -1477,6 +1510,13 @@ static int vmsfs_blkdev_mkdir(struct mnt_idmap *idmap, struct inode *dir,
     fh->fh_flags = cpu_to_le16(VMSFS_FH_INUSE | VMSFS_FH_DIRECTORY);
     fh->fh_version = 0;  /* directories are unversioned */
     fh->fh_protection = cpu_to_le16(VMSFS_PROT_DEFAULT);
+    {
+        uint16_t uic_member, uic_group;
+
+        vmsfs_current_uic(&uic_member, &uic_group);
+        fh->fh_uic_member = cpu_to_le16(uic_member);
+        fh->fh_uic_group = cpu_to_le16(uic_group);
+    }
     fh->fh_link_count = cpu_to_le16(2);
     fh->fh_map_count = cpu_to_le16(1);
     strscpy(fh->fh_name, fname, sizeof(fh->fh_name));

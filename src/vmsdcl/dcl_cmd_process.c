@@ -1140,7 +1140,24 @@ int cmd_run(struct dcl_command *cmd)
         }
         if (WIFEXITED(wstatus)) {
             int exit_code = WEXITSTATUS(wstatus);
+            /* vms-17f9: a nonzero image exit must be SURFACED, not swallowed.
+             * Previously this returned SS$_ABORT silently, so a RUN that
+             * failed looked identical to one that succeeded (the de-risk that
+             * hunted a "no output" RUN, docs/derisk-vms-530-imgact-qemu.md). */
+            if (exit_code != 0)
+                dcl_error("DCL", 2, "ABORT",
+                          "image %s exited with error status %%X%08X",
+                          cmd->params[0], (unsigned)exit_code);
             return (exit_code == 0) ? SS$_NORMAL : SS$_ABORT;
+        }
+        /* vms-17f9: a child killed by a signal (a crash) was silently dropped
+         * here and cmd_run fell through to SS$_NORMAL, reporting success for an
+         * image that never ran. Report it and fail. */
+        if (WIFSIGNALED(wstatus)) {
+            dcl_error("DCL", 4, "ABORT",
+                      "image %s terminated abnormally (signal %d)",
+                      cmd->params[0], WTERMSIG(wstatus));
+            return SS$_ABORT;
         }
     } else {
         dcl_error("DCL", 4, "CREPRC", "cannot create process");

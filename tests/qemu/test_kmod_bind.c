@@ -362,6 +362,7 @@ static int unregistered_task_errno(void)
 
 int main(int argc, char **argv)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
     int pipefd[2];
     pid_t child;
     uint32_t status, state;
@@ -378,7 +379,7 @@ int main(int argc, char **argv)
 
     if (access("/dev/vms", F_OK) != 0) {
         printf("  FAIL: /dev/vms absent (executive not loaded)\n");
-        printf("=== RESULTS: 0 passed, 1 failed ===\n");
+        printf("=== test_kmod_bind: 0 passed, 1 failed ===\n");
         return 1;
     }
 
@@ -811,6 +812,6 @@ int main(int argc, char **argv)
     }
 
 done:
-    printf("=== RESULTS: %d passed, %d failed ===\n", pass, fail);
+    printf("=== test_kmod_bind: %d passed, %d failed ===\n", pass, fail);
     return fail == 0 ? 0 : 1;
 }

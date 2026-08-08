@@ -148,6 +148,18 @@ static int run_dcl(const char *username, uint32_t uic, uint64_t privs,
     if (pipe(in_pipe) < 0) return -1;
     if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
 
+    /*
+     * Flush every stdio buffer -- including this process's own (parent)
+     * stdout -- before forking. Without this, the child inherits a copy
+     * of the PARENT's unflushed stdout buffer; the child's own
+     * fflush(stdout) after dup2'ing the capture pipe then writes that
+     * inherited parent data into the child's pipe, splicing a prior
+     * run_dcl() call's transcript into this call's capture. Latent when
+     * stdout is line-buffered (console); live the moment stdout is fully
+     * buffered (redirected to a file) -- see vms-cdb.
+     */
+    fflush(NULL);
+
     pid_t pid = fork();
     if (pid < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
@@ -247,6 +259,18 @@ static int run_session_fork(char *out, size_t outsz)
     out[0] = '\0';
     if (pipe(in_pipe) < 0) return -1;
     if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+
+    /*
+     * Flush every stdio buffer -- including this process's own (parent)
+     * stdout -- before forking. Without this, the child inherits a copy
+     * of the PARENT's unflushed stdout buffer; the child's own
+     * fflush(stdout) after dup2'ing the capture pipe then writes that
+     * inherited parent data into the child's pipe, splicing a prior
+     * call's transcript into this call's capture. Latent when stdout is
+     * line-buffered (console); live the moment stdout is fully buffered
+     * (redirected to a file) -- see vms-cdb.
+     */
+    fflush(NULL);
 
     pid_t sess = fork();
     if (sess < 0) {
@@ -410,6 +434,18 @@ static void scenario_e_a_writes_b_reads(void)
         waitpid(a_pid, NULL, 0);
         return;
     }
+
+    /*
+     * Flush every stdio buffer -- including this process's own (parent)
+     * stdout -- before forking. Without this, the child inherits a copy
+     * of the PARENT's unflushed stdout buffer; the child's own
+     * fflush(stdout) after dup2'ing the capture pipe then writes that
+     * inherited parent data into the child's pipe, splicing a prior
+     * scenario's transcript into this scenario's capture. Latent when
+     * stdout is line-buffered (console); live the moment stdout is
+     * fully buffered (redirected to a file) -- see vms-cdb.
+     */
+    fflush(NULL);
 
     b_pid = fork();
     if (b_pid < 0) {
@@ -793,6 +829,18 @@ static int run_g_subprocess(const char *script, char *out, size_t outsz)
     out[0] = '\0';
     if (pipe(in_pipe) < 0) return -1;
     if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+
+    /*
+     * Flush every stdio buffer -- including this process's own (parent)
+     * stdout -- before forking. Without this, the child inherits a copy
+     * of the PARENT's unflushed stdout buffer; the child's own
+     * fflush(stdout) after dup2'ing the capture pipe then writes that
+     * inherited parent data into the child's pipe, splicing a prior
+     * call's transcript into this call's capture. Latent when stdout is
+     * line-buffered (console); live the moment stdout is fully buffered
+     * (redirected to a file) -- see vms-cdb.
+     */
+    fflush(NULL);
 
     pid_t sess = fork();
     if (sess < 0) {
@@ -1333,6 +1381,7 @@ static void scenario_g_unnamed_row_reports_nothing(void)
 
 int main(void)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
     static char outa[65536], outb[65536], outc[65536];
     uint32_t selfpid = 0;
 

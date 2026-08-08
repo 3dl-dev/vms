@@ -34,6 +34,7 @@ static int pass = 0, fail = 0;
 } while(0)
 
 int main(void) {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
     printf("=== test_kmod_lock ===\n");
 
     int fd = open("/dev/vms", O_RDWR);

@@ -407,6 +407,7 @@ static void scenario_deadlock(void)
 
 int main(void)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
     printf("=== test_syssvc_lock_status (executive-yielded VMS statuses, vms-2e5/vms-82a) ===\n");
 
     if (bootstrap("parent") < 0) {

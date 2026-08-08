@@ -274,6 +274,7 @@ static int run_child(int c2p_write, int p2c_read)
  * ================================================================ */
 int main(void)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
     int p2c[2], c2p[2];
     char tok;
     uint32_t st;

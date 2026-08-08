@@ -213,6 +213,7 @@ static void alt_group_helper(int wfd)
 
 int main(int argc, char **argv)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
     int pipefd[2];
     pid_t child;
     struct child_report rep;

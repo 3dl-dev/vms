@@ -58,6 +58,22 @@ RUN cmake -B /tmp/build -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=Re
 # Makefile, same musl container, same x86_64 target.
 RUN cd src/imgact && make CC=gcc ARCH=x86_64
 
+# PARTS.EXE — the OVMX 0.2 "it runs a real VMS app" demo (beads vms-e97/f20,
+# src/apps/parts/), built with the EXACT same cc -> LINK.EXE toolchain as
+# DCL.EXE/LOGINOUT.EXE above, via its own recipe (src/apps/parts/mk_parts.sh).
+# PARTS.EXE and the recipe are already on main (owned by vms-e97/f20); wiring
+# the build into this image and mastering the result into SYS$UPDATE: (below)
+# is vms-cde. CFLAGS mirror build_link_native.sh's x86_64 ARCHFLAG
+# (-mtls-dialect=gnu2) — this is the same alpine amd64 musl container that
+# built LINK.EXE/DECC$SHR.EXE/LIBVMSRMS$SHR.EXE above, so PARTS is compiled
+# and linked against those exact producer images.
+RUN CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mtls-dialect=gnu2" \
+    sh src/apps/parts/mk_parts.sh \
+        /tmp/build/bin/LINK.EXE \
+        /tmp/build/link-native/PARTS.EXE \
+        "/tmp/build/link-native/SYSLIB/DECC\$SHR.EXE" \
+        "/tmp/build/link-native/SYSLIB/LIBVMSRMS\$SHR.EXE"
+
 # Ground-source gate, baked into the build itself (not just asserted by a
 # separate CI job elsewhere): every artifact this stage ships must be a real
 # LINK.EXE-built x86_64 image with NO DT_NEEDED/DT_HASH (LINK.EXE emits no
@@ -79,7 +95,15 @@ RUN set -e; \
     if readelf -l src/imgact/IMGACT.EXE 2>/dev/null | grep -q INTERP; then \
         echo "FAIL: IMGACT.EXE itself must have no PT_INTERP"; exit 1; \
     fi; \
-    echo "OK: 9 VMS-native LINK.EXE artifacts (EM_X86_64, zero DT_NEEDED/DT_HASH) + IMGACT.EXE"
+    echo "OK: 9 VMS-native LINK.EXE artifacts (EM_X86_64, zero DT_NEEDED/DT_HASH) + IMGACT.EXE"; \
+    P=/tmp/build/link-native/PARTS.EXE; \
+    readelf -h "$P" | grep -q "Machine:.*X86-64" || { echo "FAIL: PARTS.EXE not EM_X86_64"; exit 1; }; \
+    NP=$(readelf -d "$P" 2>/dev/null | grep -c NEEDED || true); \
+    [ "$NP" -eq 0 ] || { echo "FAIL: PARTS.EXE has $NP DT_NEEDED entries (ld-linked, not VMS-native)"; exit 1; }; \
+    HP=$(readelf -d "$P" 2>/dev/null | grep -c HASH || true); \
+    [ "$HP" -eq 0 ] || { echo "FAIL: PARTS.EXE has $HP DT_HASH entries (ld-linked, not VMS-native)"; exit 1; }; \
+    readelf -l "$P" 2>/dev/null | grep -q INTERP || { echo "FAIL: PARTS.EXE has no PT_INTERP (not IMGACT-activated)"; exit 1; }; \
+    echo "OK: PARTS.EXE is VMS-native (EM_X86_64, zero DT_NEEDED/DT_HASH, PT_INTERP present)"
 
 FROM ubuntu:24.04 AS builder
 
@@ -96,6 +120,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=link-native /tmp/build/link-native/SYSLIB /link-native/SYSLIB
 COPY --from=link-native /tmp/build/link-native/SYSEXE /link-native/SYSEXE
 COPY --from=link-native /src/src/imgact/IMGACT.EXE /link-native/IMGACT.EXE
+COPY --from=link-native /tmp/build/link-native/PARTS.EXE /link-native/PARTS.EXE
 
 # Determine kernel version and ensure build symlink exists
 RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && echo "$KVER" > /tmp/kver && \
@@ -140,6 +165,7 @@ RUN cmake -B build-static \
 #   /vms/SYS0/SYSCOMMON/SYSLIB/  — shareable images
 #   /vms/SYS0/SYSCOMMON/SYSMGR/  — manager configs
 #   /vms/SYS0/SYSCOMMON/SYSHLP/  — help files
+#   /vms/SYS0/SYSCOMMON/SYSUPD/  — pre-PCSI layered-product install kits
 #   /vms/USERS/                   — user home directories
 RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
              /initramfs-fat/tmp /initramfs-fat/var /initramfs-fat/mnt \
@@ -148,6 +174,7 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSLIB \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSHLP \
+             /initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD \
              /initramfs-fat/vms/USERS && \
     # OVMX binaries → SYSEXE (STARTUP.EXE is also /init).
     # DCL.EXE + LOGINOUT.EXE + the 7 shareables are the VMS-native LINK.EXE
@@ -183,6 +210,19 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR/ && \
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # SYS$UPDATE: -- the standard VMS home for pre-PCSI layered-product
+    # install kits (vms-cde, parent vms-2579, docs/release-plan-0.2-to-0.5.md
+    # §4). SYS$UPDATE itself is DEFINEd in SYS$MANAGER:STARTUP.COM (copied
+    # above, not lnm_setup_defaults() -- see that file's own comment), so no
+    # logical-name wiring is needed here, only the files. PARTS_SETUP.COM
+    # (vms-977/#183) is staged in distro/rootfs/.../SYSUPD/ and copied
+    # wholesale; PARTS.EXE (vms-e97/f20), the kit's image, is built above and
+    # placed alongside it, exactly as PARTS_SETUP.COM's own header comment
+    # describes ("the PARTS kit ... is staged in SYS$UPDATE:"). PARTS creates
+    # its own indexed data file at runtime (src/apps/parts/parts.c generates
+    # records programmatically) -- no seed data file is needed or shipped.
+    cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSUPD/* /initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD/ && \
+    cp /link-native/PARTS.EXE /initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD/ && \
     # Ground-source gate: the SHIPPED DCL.EXE AND LOGINOUT.EXE (the files
     # that actually go into the initramfs STARTUP execs at boot, not a copy
     # elsewhere) must both be the VMS-native ET_DYN LINK.EXE output — no
@@ -206,6 +246,18 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
         [ "$H" -eq 0 ] || { echo "FAIL: shipped $name has $H DT_HASH entries"; exit 1; } && \
         echo "OK: shipped $name is VMS-native (EM_X86_64, zero DT_NEEDED/DT_HASH)"; \
     done && \
+    # Same shipped-bytes re-check for PARTS.EXE (vms-cde) -- the SYSUPD copy
+    # is what a booted system actually gets, not the /link-native/ build
+    # copy the link-native stage already checked.
+    PIMG="/initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD/PARTS.EXE" && \
+    readelf -h "$PIMG" | grep -q "Machine:.*X86-64" || { echo "FAIL: shipped PARTS.EXE not EM_X86_64"; exit 1; } && \
+    PN=$(readelf -d "$PIMG" 2>/dev/null | grep -c NEEDED || true) && \
+    [ "$PN" -eq 0 ] || { echo "FAIL: shipped PARTS.EXE has $PN DT_NEEDED entries"; exit 1; } && \
+    PH=$(readelf -d "$PIMG" 2>/dev/null | grep -c HASH || true) && \
+    [ "$PH" -eq 0 ] || { echo "FAIL: shipped PARTS.EXE has $PH DT_HASH entries"; exit 1; } && \
+    echo "OK: shipped PARTS.EXE is VMS-native (EM_X86_64, zero DT_NEEDED/DT_HASH)" && \
+    [ -f "/initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD/PARTS_SETUP.COM" ] || { echo "FAIL: PARTS_SETUP.COM missing from SYS\$UPDATE: (SYSUPD)"; exit 1; } && \
+    echo "OK: PARTS_SETUP.COM present under SYS\$UPDATE: (SYSUPD)" && \
     # Pack the fat initramfs
     cd /initramfs-fat && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx.cpio.gz && \
     echo "FAT initramfs: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"

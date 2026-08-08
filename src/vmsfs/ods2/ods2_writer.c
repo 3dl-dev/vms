@@ -251,19 +251,49 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
         efblk = 1;
         ffbyte = 0;
     } else {
-        /* Matches HELLO.TXT/WORLD.TXT/000000.DIR exactly (hiblk==efblk==
-         * block count); INDEXF.SYS/BITMAP.SYS/SECURITY.SYS showed a +1 (or,
-         * for SECURITY.SYS, a smaller) efblk in the real fixture -- this
-         * writer does not reproduce that quirk (see ods2.h WRITER
-         * simplifications), using the simpler hiblk==efblk convention for
-         * every file it creates or stubs, [OVMX-inferred] for those three. */
+        /* Matches HELLO.TXT/WORLD.TXT exactly (hiblk==efblk==block count);
+         * INDEXF.SYS/BITMAP.SYS/SECURITY.SYS showed a +1 (or, for
+         * SECURITY.SYS, a smaller) efblk in the real fixture, patched
+         * post-hoc below by their own dedicated writers.
+         *
+         * [F15] (increment 8, vms-0f3): DIRECTORY files are a THIRD case,
+         * not the same as plain data files. Directly re-decoding
+         * real_vax_ods2.dsk's own FID11 (OVMXDIR.DIR) header this
+         * increment (python struct-decode of the FH2 recattr + map area,
+         * not a transcription) gives hiblk=1, efblk=2, ffbyte=0 -- i.e.
+         * EFBLK EXCEEDS the file's own single allocated block (map extent
+         * is exactly 1 block at LBN 31; there is no second block backing
+         * "efblk=2"). This is the documented Files-11/RMS "end-of-file
+         * lands exactly on a block boundary" convention (OpenVMS Guide to
+         * File Applications / RMS Utility Reference: when the last valid
+         * byte is the last byte of a block, EFBLK is set to the FOLLOWING
+         * block and FFBYTE to 0 -- the position pointer can legitimately
+         * exceed the file's own allocation). Cross-checked against FID4
+         * (000000.DIR): hiblk=2/efblk=2/ffbyte=0 there is the SAME rule
+         * applied to a file whose trailing (2nd) block happens to already
+         * be allocated-but-empty -- consistent, not contradictory, once
+         * "efblk = (last block containing data) + 1" is the invariant
+         * rather than "efblk == hiblk". Every directory THIS writer
+         * creates (MFD and caller dirs alike, via ods2_wvolume_create_dir()
+         * and the MFD-population path above) is a single CONTIG block
+         * (total_count == 1), so hiblk+1 is the right generalization for
+         * both: it reproduces FID11 exactly and does not need to model
+         * FID4's separately-flagged [OVMX-inferred] "MFD is only 1 block"
+         * simplification (a REAL 2-block MFD is out of this writer's
+         * current capability regardless of this recattr fix). ffbyte
+         * stays 0, matching both real samples. */
         hiblk = total_count;
-        efblk = total_count;
-        if (kind == FH2_KIND_DATA && data_len > 0) {
-            size_t last_block_bytes = data_len - (size_t)(total_count - 1) * ODS2_BLOCK_SIZE;
-            ffbyte = (uint16_t)last_block_bytes; /* 1..512 */
-        } else {
+        if (kind == FH2_KIND_DIR) {
+            efblk = total_count + 1;
             ffbyte = 0;
+        } else {
+            efblk = total_count;
+            if (kind == FH2_KIND_DATA && data_len > 0) {
+                size_t last_block_bytes = data_len - (size_t)(total_count - 1) * ODS2_BLOCK_SIZE;
+                ffbyte = (uint16_t)last_block_bytes; /* 1..512 */
+            } else {
+                ffbyte = 0;
+            }
         }
     }
     h[offsetof(ods2_fh2_t, fh2_recattr) + offsetof(ods2_recattr_t, fat_rtype)]   = rtype;

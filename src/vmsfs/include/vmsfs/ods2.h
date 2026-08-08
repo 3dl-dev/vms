@@ -389,6 +389,38 @@ typedef struct ods2_scb {
  * ================================================================ */
 #define ODS2_DIR_END        0xFFFFu   /* dir_size sentinel: no more records */
 
+/*
+ * [F14] (increment 7, vms-0f3): dir_verlimit is NOT this entry's version
+ * number (that is dir_version, in the trailing value entry, and was
+ * already correct) -- it is a per-name version-LIMIT policy value, and it
+ * is NOT a single constant either. Byte-diffing tests/ods2/real_vax_ods2.dsk's
+ * own [000000] MFD directory block (FID 4, all 11 records) against this
+ * writer's own equivalent output found TWO distinct real values, cleanly
+ * split by whether the entry is one of the 10 traditionally-reserved
+ * files or a caller-created one:
+ *
+ *   - The 10 reserved-file entries (INDEXF.SYS .. SECURITY.SYS, i.e.
+ *     entry_fid.fid_num <= ODS2_RESFILES) ALL read verlimit == 0x0001 --
+ *     i.e. locked to their own (always 1) version, matching the "system
+ *     files are never versioned" VMS convention.
+ *   - OVMXDIR.DIR's own entry (fid_num 11, > ODS2_RESFILES) reads
+ *     verlimit == 0x7FFF (32767, "no limit set") -- confirmed again by
+ *     [OVMXDIR]'s OWN directory block (FID 11), where BOTH its entries
+ *     (HELLO.TXT, WORLD.TXT, also both fid_num > ODS2_RESFILES) read the
+ *     same 0x7FFF, despite different FIDs/content.
+ *
+ * ods2_wvolume_dir_insert() previously wrote the caller's `version`
+ * argument into dir_verlimit unconditionally -- coincidentally correct
+ * for reserved files (whose version is always 1) but wrong for every
+ * caller-created file/directory. See PROVENANCE-real_vax_ods2.md's
+ * increment-7 addendum for the splice-diagnostic trail that isolated
+ * this (a real-VAX MOUNT of a volume with the REAL fixture's own
+ * [000000] spliced in mounted clean, but then failed BADIRECTORY again
+ * on [OVMXDIR] alone -- proving the same dir-insert defect lived in both
+ * places).
+ */
+#define ODS2_DIR_VERLIMIT_DEFAULT  0x7FFFu   /* caller-created files/dirs */
+
 typedef struct ods2_dir_rec {
     uint16_t dir_size;          /* bytes in record AFTER this size word */
     uint16_t dir_verlimit;      /* version limit                        */

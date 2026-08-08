@@ -245,11 +245,27 @@ fi
 # --- 5. Independent corroboration: the VMS layer itself sees the file -------
 # Not just PARTS's own stdout claim -- a second, independent command in the
 # SAME DCL session confirms the file exists at the VMS filespec.
+#
+# CAUTION (found by actually running this test, vms-5dd CI-wiring pass): the
+# console is a cooked tty, so the guest echoes back every keystroke we send --
+# the raw DIR_SEG's FIRST line is the literal echoed input "DIRECTORY
+# SYS$SCRATCH:PARTS.DAT", which itself contains the substring "PARTS.DAT". A
+# bare `grep -qF 'PARTS.DAT'` over the whole segment therefore matches on the
+# echoed COMMAND, not on any line DIRECTORY actually printed, and would report
+# a false PASS even when DIRECTORY finds nothing (observed for real: a run
+# whose actual output was "Total of 0 files, 0 blocks." still made this
+# assertion green before this fix). Strip the echoed command line before
+# searching, and additionally require the "Total of" summary to report a
+# NONZERO file count -- corroboration means DIRECTORY found the file, not that
+# the string "PARTS.DAT" appears anywhere in the segment.
 DIR_OFF=$(wc -c <"$LOG")
-send 'DIRECTORY SYS$SCRATCH:PARTS.DAT'
+DIR_CMD='DIRECTORY SYS$SCRATCH:PARTS.DAT'
+send "$DIR_CMD"
 wait_for 'Total of' 20 "$DIR_OFF"
 DIR_SEG=$(segment_since "$DIR_OFF")
-if printf '%s\n' "$DIR_SEG" | grep -qF 'PARTS.DAT'; then
+DIR_BODY=$(printf '%s\n' "$DIR_SEG" | grep -vF "$DIR_CMD")
+if printf '%s\n' "$DIR_BODY" | grep -qE 'Total of [1-9][0-9]* files?, [0-9]+ blocks' \
+    && printf '%s\n' "$DIR_BODY" | grep -qF 'PARTS.DAT'; then
     ok "\$ DIRECTORY SYS\$SCRATCH:PARTS.DAT independently confirms the file exists"
 else
     bad "\$ DIRECTORY SYS\$SCRATCH:PARTS.DAT independently confirms the file exists"

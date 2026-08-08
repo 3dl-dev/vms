@@ -133,3 +133,31 @@ add_test(
             ${CMAKE_SOURCE_DIR}
 )
 set_tests_properties(kernel_executive_negctl_crash PROPERTIES LABELS "harness")
+
+# ---------------------------------------------------------------------------
+# THE 0.2 DEMO, END TO END (vms-5dd, parent vms-2579).
+#
+# Boots the ACTUAL mastered bootable image (distro/Dockerfile.bootable),
+# logs in as SYSTEM, runs the ACTUAL install procedure a manager would type
+# (`$ @SYS$UPDATE:PARTS_SETUP.COM`), then the ACTUAL foreign command
+# (`$ PARTS`), and asserts the keyed sys$get lookups are correct, the file
+# landed at SYS$SCRATCH:PARTS.DAT (a VMS filespec, not a Unix path), and no
+# fallback candidate was ever tried. See tests/qemu/test_parts_demo_e2e.sh's
+# header for the full "what this proves that nothing else does" case.
+#
+# SKIP_RETURN_CODE 77: this needs a real docker + QEMU boot that takes real
+# minutes (a blank-disk install, then a real RMS indexed-file load under QEMU
+# TCG emulation) and does NOT run under a bare `ctest` -- see
+# tests/qemu/run_parts_demo_e2e.sh's header for why an opt-in env var gates
+# it rather than SKIP_RETURN_CODE alone: unlike the test_syssvc_* binaries
+# above (which truly can never pass under ctest, anywhere), this one CAN pass
+# for real wherever docker is available -- it is opt-in to protect existing
+# CI job time budgets, not because it is unrunnable.
+add_test(
+    NAME parts_demo_e2e
+    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/run_parts_demo_e2e.sh
+)
+set_tests_properties(parts_demo_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 2400)

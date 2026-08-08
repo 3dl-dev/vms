@@ -64,14 +64,23 @@ static uint32_t fill_from_entry(const lnm_entry_t *entry,
  * vms_kif_lnm_translate returns 1 (found), 0 (executive present, name absent),
  * or -1 (executive unavailable). At OVMX runtime the executive is always
  * present (PID 1 pins it, Rule 9), so -1 is a host BUILD/TEST-tooling state
- * only; there we consult the process-local SYSTEM table so the ctest suite
- * that seeds SYS$SYSDEVICE etc. still runs. Migrating those host tests to the
- * QEMU path (and dropping this tooling branch) is vms-96e2's tracked follow-up.
+ * only.
+ *
+ * NO FALLBACK (vms-48ab, INV-6): -1 now returns SS$_NOSUCHDEV directly. There
+ * USED to be a process-local SYSTEM table consulted here so host ctest could
+ * still resolve names seeded via the vms-96e2 create-side fallback; both
+ * fallbacks were the same silent-per-process-fake shape Rule 9 forbids and
+ * both are gone together (a translate-side fallback with no matching
+ * create-side one would just find nothing, so there was never a case where
+ * removing one without the other made sense). This matches sys$trnlnm's
+ * already-honest SYSTEM read (src/libvms/syssvc/sys_logical.c). The host
+ * tests that relied on it moved to tests/qemu/test_syssvc_lnm_system.c.
  */
 static uint32_t translate_system(lnm_manager_t *mgr, const char *name,
                                  char *result, size_t result_size,
                                  uint16_t *result_length, uint32_t *attributes)
 {
+    (void)mgr;  /* no local fallback -- kept in the signature for callers */
     char equiv[LNM_MAX_VALUE + 1];
     uint32_t attr = 0;
     int r = vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, name, equiv,
@@ -82,14 +91,7 @@ static uint32_t translate_system(lnm_manager_t *mgr, const char *name,
     if (r == 0)
         return SS$_NOLOGNAM;      /* executive present, name absent */
 
-    /* r < 0: no executive (host tooling) -- local SYSTEM table */
-    if (mgr && mgr->system_table) {
-        lnm_entry_t *e = lnm_table_lookup(mgr->system_table, name);
-        if (e)
-            return fill_from_entry(e, result, result_size,
-                                   result_length, attributes);
-    }
-    return SS$_NOLOGNAM;
+    return SS$_NOSUCHDEV;         /* r < 0: executive absent -- no fallback */
 }
 
 /*

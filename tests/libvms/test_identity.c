@@ -72,15 +72,15 @@ static void capture_banner(void (*fn)(FILE *), char *out, size_t out_len)
     fclose(tmp);
 }
 
-static void define_logical(const char *name, const char *value)
+static uint32_t define_logical(const char *name, const char *value)
 {
-    lnm_create(lnm_get_manager(), LNM_SYSTEM_TABLE, name, value,
-               0, LNM_MODE_EXEC);
+    return lnm_create(lnm_get_manager(), LNM_SYSTEM_TABLE, name, value,
+                      0, LNM_MODE_EXEC);
 }
 
-static void undefine_logical(const char *name)
+static uint32_t undefine_logical(const char *name)
 {
-    lnm_delete(lnm_get_manager(), LNM_SYSTEM_TABLE, name, LNM_MODE_EXEC);
+    return lnm_delete(lnm_get_manager(), LNM_SYSTEM_TABLE, name, LNM_MODE_EXEC);
 }
 
 /* ------------------------------------------------------------------ */
@@ -202,6 +202,19 @@ static void test_node_name_buffer_safety(void)
 /* (b) Login banners come from logicals, not printf                    */
 /* ------------------------------------------------------------------ */
 
+/*
+ * NOTE (vms-48ab): SYS$WELCOME/SYS$ANNOUNCE are DEFINE/SYSTEM logicals --
+ * LNM$SYSTEM is executive-resident (vms-d37/vms-96e2), and this binary runs
+ * on the host with no /dev/vms. define_logical()/undefine_logical() above
+ * therefore now fail honestly with SS$_NOSUCHDEV (no per-process fallback,
+ * CLAUDE.md Rule 9 / INV-6) rather than silently taking effect. What used to
+ * be "define it and see the override" host coverage below is now "attempt
+ * to define it with no executive, and prove the banner does NOT silently
+ * change" -- itself a real INV-6 regression guard at the DCL-consumer level.
+ * The "with a real executive, the override actually works" proof (including
+ * the '@file' multi-line form) moved to tests/qemu/test_syssvc_lnm_system.c.
+ */
+
 static void test_welcome_banner(void)
 {
     printf("SYS$WELCOME (post-login banner):\n");
@@ -218,67 +231,22 @@ static void test_welcome_banner(void)
     check(strstr(got, "V7.3") == NULL,
           "built-in welcome no longer shows the hardcoded V7.3");
 
-    /* Defined as a string -> that string, verbatim. This is the behavior
-     * that was impossible before: the banner is a manager's to set. */
-    define_logical("SYS$WELCOME", "Welcome to the lab system");
-    capture_banner(ovmx_banner_welcome, got, sizeof(got));
-    check(strcmp(got, "Welcome to the lab system\n") == 0,
-          "defined SYS$WELCOME overrides the built-in banner");
-    check(strstr(got, "OVMX") == NULL,
-          "an overridden welcome does not also print the built-in");
-
-    /* Deassigning restores the built-in -- the round trip a sysadmin
-     * actually performs. */
-    undefine_logical("SYS$WELCOME");
+    /* No executive here, so DEFINE/SYSTEM SYS$WELCOME must fail honestly,
+     * and the banner must NOT silently switch to the attempted override. */
+    uint32_t st = define_logical("SYS$WELCOME", "Welcome to the lab system");
+    check(st == SS$_NOSUCHDEV,
+          "DEFINE/SYSTEM SYS$WELCOME fails SS$_NOSUCHDEV with no /dev/vms (no local fallback)");
     capture_banner(ovmx_banner_welcome, got, sizeof(got));
     check(strstr(got, "OVMX") != NULL,
-          "deassigning SYS$WELCOME restores the built-in banner");
-}
+          "a SYS$WELCOME define that failed honestly does NOT change the banner");
 
-static void test_welcome_banner_from_file(void)
-{
-    printf("SYS$WELCOME '@file' form (multi-line site banner):\n");
-
-    char got[OVMX_BANNER_MAXLEN];
-    char path[] = "/tmp/ovmx_welcome_XXXXXX";
-
-    int fd = mkstemp(path);
-    if (fd < 0) {
-        fprintf(stderr, "test_identity: mkstemp failed\n");
-        exit(1);
-    }
-    const char *body = "  Line one\n  Line two\n";
-    if (write(fd, body, strlen(body)) != (ssize_t)strlen(body)) {
-        fprintf(stderr, "test_identity: write failed\n");
-        exit(1);
-    }
-    close(fd);
-
-    char equiv[256];
-    snprintf(equiv, sizeof(equiv), "@%s", path);
-    define_logical("SYS$WELCOME", equiv);
+    /* Deassigning (also honest-fails) leaves the built-in in place too. */
+    st = undefine_logical("SYS$WELCOME");
+    check(st == SS$_NOSUCHDEV,
+          "DEASSIGN/SYSTEM SYS$WELCOME fails SS$_NOSUCHDEV with no /dev/vms (no local fallback)");
     capture_banner(ovmx_banner_welcome, got, sizeof(got));
-    check(strcmp(got, body) == 0,
-          "'@file' displays the file's contents verbatim (multi-line)");
-
-    /* Leading whitespace after '@' is tolerated. */
-    snprintf(equiv, sizeof(equiv), "@  %s", path);
-    define_logical("SYS$WELCOME", equiv);
-    capture_banner(ovmx_banner_welcome, got, sizeof(got));
-    check(strcmp(got, body) == 0, "'@ file' tolerates space after the '@'");
-
-    unlink(path);
-
-    /*
-     * A mistyped filespec must degrade silently: no output, and above all
-     * no errno string / Linux path leaking into a login session (INV-4).
-     */
-    define_logical("SYS$WELCOME", "@/tmp/ovmx-no-such-banner-file.txt");
-    capture_banner(ovmx_banner_welcome, got, sizeof(got));
-    check(got[0] == '\0',
-          "'@missing-file' prints nothing (no errno/Linux-path leak)");
-
-    undefine_logical("SYS$WELCOME");
+    check(strstr(got, "OVMX") != NULL,
+          "the built-in banner is unaffected throughout (no executive was ever reached)");
 }
 
 static void test_announce_banner(void)
@@ -293,10 +261,14 @@ static void test_announce_banner(void)
     check(got[0] == '\0',
           "undefined SYS$ANNOUNCE prints nothing (VMS default is silence)");
 
-    define_logical("SYS$ANNOUNCE", "Unauthorized access is prohibited.");
+    /* No executive here, so DEFINE/SYSTEM SYS$ANNOUNCE must fail honestly,
+     * and the pre-login banner must stay silent, not silently announce. */
+    uint32_t st = define_logical("SYS$ANNOUNCE", "Unauthorized access is prohibited.");
+    check(st == SS$_NOSUCHDEV,
+          "DEFINE/SYSTEM SYS$ANNOUNCE fails SS$_NOSUCHDEV with no /dev/vms (no local fallback)");
     capture_banner(ovmx_banner_announce, got, sizeof(got));
-    check(strcmp(got, "Unauthorized access is prohibited.\n") == 0,
-          "defined SYS$ANNOUNCE is displayed before the Username: prompt");
+    check(got[0] == '\0',
+          "a SYS$ANNOUNCE define that failed honestly leaves the pre-login banner silent");
 
     undefine_logical("SYS$ANNOUNCE");
 }
@@ -351,7 +323,6 @@ int main(void)
     test_node_identity(path);
     test_node_name_buffer_safety();
     test_welcome_banner();
-    test_welcome_banner_from_file();
     test_announce_banner();
 
     unlink(path);

@@ -10,6 +10,16 @@
  * stay in the process-private tables below (their executive residency is the
  * deferred half of vms-d37). There is no daemon to talk to; the socket/daemon
  * client was deleted (vms-a4b) -- do not reintroduce it.
+ *
+ * NO PER-PROCESS FALLBACK for LNM$SYSTEM (vms-48ab, CLAUDE.md Rule 9 / INV-6):
+ * vms-96e2 shipped a transitional fallback to a process-local SYSTEM table
+ * when /dev/vms was absent, so host ctest could still exercise DEFINE/SYSTEM.
+ * That was itself the silent-per-process-fake shape Rule 9 forbids, and
+ * vms-48ab removed it: create/delete/translate against LNM$SYSTEM now return
+ * SS$_NOSUCHDEV honestly with no executive, exactly like sys$crelnm/$trnlnm/
+ * $dellnm (src/libvms/syssvc/sys_logical.c) already did. The host tests that
+ * relied on the fallback moved to tests/qemu/test_syssvc_lnm_system.c, which
+ * proves this path against a real /dev/vms.
  */
 
 #include <stdio.h>
@@ -45,6 +55,10 @@
  * so this manager, which sits below libvms and which both DCL and vmsfs already
  * use, is where the executive routing goes; it reaches the SAME arena as
  * libvms's sys$ services via the shared vms_kif client.
+ *
+ * No fallback (vms-48ab): when /dev/vms is absent, callers below return
+ * vms_kif's SS$_NOSUCHDEV unchanged rather than silently using the
+ * process-local system_table.
  */
 static int is_system_table(const char *table_name)
 {
@@ -269,21 +283,21 @@ uint32_t lnm_create(lnm_manager_t *mgr, const char *table_name,
 
     /*
      * LNM$SYSTEM is executive-resident (see is_system_table): the storage
-     * lives in vms.ko, not in this process, so a DEFINE/SYSTEM here is visible
-     * system-wide. On SS$_NOSUCHDEV the executive is unreachable -- which at
-     * OVMX runtime cannot happen (PID 1 pins it, Rule 9), so this only occurs
-     * under host BUILD/TEST tooling. There we keep the process-local SYSTEM
-     * table so the ctest suite that seeds SYS$SYSDEVICE etc. still runs; the
-     * executive-only migration of those host tests to the QEMU path is tracked
-     * by vms-96e2's follow-up (docs/design-lnm-executive-surface.md).
+     * lives in vms.ko, not in this process, so a DEFINE/SYSTEM here is
+     * visible system-wide. NO FALLBACK (vms-48ab, CLAUDE.md Rule 9 / INV-6):
+     * on SS$_NOSUCHDEV the executive is unreachable -- at OVMX runtime that
+     * cannot happen (PID 1 pins it), so it means host BUILD/TEST tooling with
+     * no /dev/vms. There USED to be a process-local SYSTEM table fallback
+     * here so the ctest suite that seeds SYS$SYSDEVICE etc. could still run;
+     * that was itself the silent-per-process-fake shape Rule 9 forbids, and
+     * it is gone. The host tests that depended on it were migrated to
+     * tests/qemu/test_syssvc_lnm_system.c, which proves this path against a
+     * real /dev/vms (docs/design-lnm-executive-surface.md).
      */
     if (is_system_table(table_name)) {
         const char *vals[1] = { equivalence };
-        uint32_t st = vms_kif_lnm_define(VMS_LNM_TBL_SYSTEM, logical_name,
-                                         vals, 1, attributes, acmode);
-        if (st != SS$_NOSUCHDEV)
-            return st;
-        /* tooling only: no executive -- keep it in the local SYSTEM table */
+        return vms_kif_lnm_define(VMS_LNM_TBL_SYSTEM, logical_name,
+                                  vals, 1, attributes, acmode);
     }
 
     lnm_table_t *table = lnm_find_table(mgr, table_name);
@@ -385,14 +399,12 @@ uint32_t lnm_delete(lnm_manager_t *mgr, const char *table_name,
     if (!$VMS_STATUS_SUCCESS(status))
         return status;
 
-    /* LNM$SYSTEM is executive-resident: delete through vms_kif. SS$_NOSUCHDEV
-     * only under host tooling (no executive) -- fall through to the local
-     * SYSTEM table there (see is_system_table / lnm_create). */
-    if (is_system_table(table_name)) {
-        uint32_t st = vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, logical_name, acmode);
-        if (st != SS$_NOSUCHDEV)
-            return st;
-    }
+    /* LNM$SYSTEM is executive-resident: delete through vms_kif. NO FALLBACK
+     * (vms-48ab, INV-6): SS$_NOSUCHDEV means the executive is unreachable
+     * (host tooling only) and is returned honestly, never masked by a
+     * process-local delete (see is_system_table / lnm_create). */
+    if (is_system_table(table_name))
+        return vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, logical_name, acmode);
 
     lnm_table_t *table = lnm_find_table(mgr, table_name);
     if (!table)

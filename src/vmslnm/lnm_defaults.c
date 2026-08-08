@@ -22,6 +22,46 @@
 #include "ssdef.h"
 
 /*
+ * lnm_seed_system_locating - Define a SYSTEM logical, with a host-tooling
+ * process-scope fallback (vms-48ab, INV-6-preserving).
+ *
+ * At OVMX runtime, PID 1 pins /dev/vms (Rule 9), so the LNM$SYSTEM create
+ * below reaches the executive and that is the whole story: every process on
+ * the node sees the SAME system-wide value, exactly as VMS requires, and
+ * this function does nothing further.
+ *
+ * Under host BUILD/TEST tooling there is no executive, so vms-48ab's
+ * SS$_NOSUCHDEV comes back honestly. THIS FUNCTION DOES NOT ADD A FALLBACK
+ * TO THE REMOVED ONE: lnm_create/lnm_translate/lnm_delete against
+ * LNM$SYSTEM itself still have none, so an explicit LNM$SYSTEM lookup
+ * (SHOW LOGICAL/SYSTEM, F$TRNLNM(name,"LNM$SYSTEM")) still honestly reports
+ * SS$_NOSUCHDEV -- see tests/vmslnm/test_vmslnm.c's
+ * test_system_table_no_fallback() and tests/qemu/test_syssvc_lnm_system.c's
+ * no-executive branch, neither of which this function touches.
+ *
+ * What it does instead, only on that SS$_NOSUCHDEV, is define the SAME name
+ * with the SAME value in LNM$PROCESS_TABLE -- a real, disclosed, per-process
+ * VMS logical, not a disguise of the SYSTEM table (SHOW LOGICAL reports it
+ * as "(LNM$PROCESS_TABLE)", never as SYSTEM or shared). This is exactly the
+ * thing a sysadmin can always do on real VMS -- a process-level DEFINE
+ * shadows a system-level one -- so host tooling (ctest binaries, LOGINOUT.
+ * EXE's own authenticate step) can still locate SYS$SYSTEM:SYSUAF.DAT,
+ * SYS$SYSTEM:RIGHTSLIST.DAT, etc. through the default LNM$FILE_DEV search
+ * order, which checks PROCESS before SYSTEM. It never fires when the
+ * executive is present, so real multi-process SYSTEM-table semantics (a
+ * sysadmin's system-wide DEFINE/SYSTEM taking effect for every OTHER
+ * process) are completely unaffected.
+ */
+static void lnm_seed_system_locating(lnm_manager_t *mgr, const char *name,
+                                     const char *value, uint32_t attr)
+{
+    uint32_t st = lnm_create(mgr, LNM_SYSTEM_TABLE, name, value,
+                             attr, LNM_MODE_EXEC);
+    if (st == SS$_NOSUCHDEV)
+        lnm_create(mgr, LNM_PROCESS_TABLE, name, value, attr, LNM_MODE_EXEC);
+}
+
+/*
  * lnm_setup_defaults - Set up standard VMS system logicals.
  *
  * @mgr:      Manager instance
@@ -57,8 +97,7 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      * System disk device logical.
      * SYS$SYSDEVICE is the system disk — everything derives from here.
      */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SYSDEVICE", "DKA0:",
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    lnm_seed_system_locating(mgr, "SYS$SYSDEVICE", "DKA0:", LNM_ATTR_TERMINAL);
 
     /*
      * SYS$SYSROOT -> the system root directory [SYS0.] on the system disk.
@@ -68,9 +107,7 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      * SYS$xxx directory logicals below are the per-directory equivalences under
      * it, spelled out so a single translation resolves each in one step.
      */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SYSROOT",
-               "SYS$SYSDEVICE:[SYS0.]",
-               0, LNM_MODE_EXEC);
+    lnm_seed_system_locating(mgr, "SYS$SYSROOT", "SYS$SYSDEVICE:[SYS0.]", 0);
 
     /*
      * System directory logicals — VMS-native equivalences.
@@ -79,24 +116,20 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      */
 
     /* SYS$SYSTEM -> [SYS0.SYSCOMMON.SYSEXE] */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SYSTEM",
-               "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSEXE]",
-               0, LNM_MODE_EXEC);
+    lnm_seed_system_locating(mgr, "SYS$SYSTEM",
+                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSEXE]", 0);
 
     /* SYS$LIBRARY -> [SYS0.SYSCOMMON.SYSLIB] */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$LIBRARY",
-               "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB]",
-               0, LNM_MODE_EXEC);
+    lnm_seed_system_locating(mgr, "SYS$LIBRARY",
+                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB]", 0);
 
     /* SYS$SHARE -> [SYS0.SYSCOMMON.SYSLIB] (same as SYS$LIBRARY on VMS) */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SHARE",
-               "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB]",
-               0, LNM_MODE_EXEC);
+    lnm_seed_system_locating(mgr, "SYS$SHARE",
+                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB]", 0);
 
     /* SYS$MANAGER -> [SYS0.SYSCOMMON.SYSMGR] */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$MANAGER",
-               "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSMGR]",
-               0, LNM_MODE_EXEC);
+    lnm_seed_system_locating(mgr, "SYS$MANAGER",
+                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSMGR]", 0);
 
     /*
      * SYS$UPDATE -> [SYS0.SYSCOMMON.SYSUPD], the standard VMS home for pre-PCSI
@@ -106,19 +139,15 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      * before SYS$MANAGER:STARTUP.COM's DEFINE/SYSTEM runs; STARTUP.COM then
      * (re)defines the same value, an idempotent supersede.
      */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$UPDATE",
-               "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSUPD]",
-               0, LNM_MODE_EXEC);
+    lnm_seed_system_locating(mgr, "SYS$UPDATE",
+                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSUPD]", 0);
 
     /* SYS$HELP -> [SYS0.SYSCOMMON.SYSHLP] */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$HELP",
-               "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSHLP]",
-               0, LNM_MODE_EXEC);
+    lnm_seed_system_locating(mgr, "SYS$HELP",
+                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSHLP]", 0);
 
     /* SYS$SCRATCH -> system temp directory */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SCRATCH",
-               "SYS$SYSDEVICE:[SYSTMP]",
-               0, LNM_MODE_EXEC);
+    lnm_seed_system_locating(mgr, "SYS$SCRATCH", "SYS$SYSDEVICE:[SYSTMP]", 0);
 
     /*
      * Per-user logicals — defaults in SYSTEM table,
@@ -126,9 +155,7 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      */
 
     /* SYS$LOGIN -> default user area (overridden per-process) */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$LOGIN",
-               "SYS$SYSDEVICE:[USERS]",
-               0, LNM_MODE_EXEC);
+    lnm_seed_system_locating(mgr, "SYS$LOGIN", "SYS$SYSDEVICE:[USERS]", 0);
 
     /*
      * SYS$DISK, the terminal and the I/O channel logicals are PER-PROCESS on

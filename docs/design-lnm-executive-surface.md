@@ -51,22 +51,96 @@ without a second process-private store (split-brain) is the vmslnm manager
 itself, routing SYSTEM through the shared `vms_kif` client. The SYSTEM arena is
 identical to the one `sys$crelnm` uses — they are consistent by construction.
 
-## The host-tooling fallback (transitional, disclosed)
+## The host-tooling fallback — REMOVED (vms-48ab)
 
-At OVMX **runtime** the executive is always present (PID 1 pins `/dev/vms`,
-CLAUDE.md Rule 9), so the executive path is the whole story. Under host
-**BUILD/TEST tooling** (`ctest`) there is no executive; rather than red-line the
-~21 host DCL/integration tests that seed and resolve `SYS$SYSDEVICE:` etc., the
-SYSTEM path falls back to the process-local table **only when `vms_kif` reports
-`SS$_NOSUCHDEV`/unavailable**. This mirrors the pre-existing per-process
-behaviour of the whole manager; it is a strict improvement (the executive path
-is added, not removed) and it is disclosed in-code, never silent.
+vms-96e2 shipped a transitional fallback: under host **BUILD/TEST tooling**
+(`ctest`, no `/dev/vms`), `lnm_create`/`lnm_delete`/`lnm_translate` fell back to
+a process-local SYSTEM table so the ~21 host DCL/LNM/filespec tests that seed
+and resolve `SYS$SYSDEVICE:` etc. did not have to be touched immediately. That
+was disclosed in-code and in this doc, but it was still exactly the shape
+CLAUDE.md Rule 9 / INV-6 forbids: a silent per-process fake standing in for an
+executive facility. **vms-48ab removed it.**
 
-This fallback is the transitional piece. The end state is executive-only
-resolution with those host tests migrated to the QEMU path (tracked as
-vms-96e2's follow-up). It does not trip `tests/integration/test_runtime_target.sh`
-(no `/dev/vms`-absence branch in executable code; it keys on the returned VMS
-status), and it adds no `vms_kif_open()` presence test.
+`lnm_create`, `lnm_delete` and `lnm_translate`'s LNM$SYSTEM branches now return
+`vms_kif`'s status unchanged, with no local-table branch at all — the same
+honest `SS$_NOSUCHDEV`-with-no-executive behaviour `sys$crelnm/$trnlnm/$dellnm`
+(`src/libvms/syssvc/sys_logical.c`) already had from day one (that
+implementation never had a fallback to begin with; only this manager did).
+
+### `lnm_setup_defaults` still needs to seed *something*, host-side
+
+Removing the fallback surfaced a second-order gap the first pass of this fix
+missed: `lnm_setup_defaults()` (called by PID 1, `ovmx_provision`, DCL.EXE's
+`setup_session()`, and LOGINOUT.EXE) seeds the FILE-LOCATING baseline —
+`SYS$SYSDEVICE`, `SYS$SYSROOT`, `SYS$SYSTEM`, `SYS$LIBRARY`, `SYS$SHARE`,
+`SYS$MANAGER`, `SYS$UPDATE`, `SYS$HELP`, `SYS$SCRATCH`, `SYS$LOGIN` — entirely
+into `LNM$SYSTEM`. With no executive, ALL of them now fail honestly too,
+which broke host consumers that locate real files through them:
+`test_libvms_sysuaf_uic_base`/`test_libvms_rightslist` (SYS$SYSTEM:SYSUAF.DAT
+/ SYS$SYSTEM:RIGHTSLIST.DAT) and LOGINOUT.EXE's own `sysuaf_lookup()` in the
+`login-native` CI job.
+
+The fix, `lnm_seed_system_locating()` in `lnm_defaults.c`: try the SYSTEM
+create as before; **only** on `SS$_NOSUCHDEV`, also define the same name at
+**process** scope (`LNM$PROCESS_TABLE`). This is INV-6-preserving, not a
+reintroduction of the removed fallback:
+
+- It touches `lnm_setup_defaults` only — `lnm_create`/`lnm_translate`/
+  `lnm_delete` themselves are unchanged, so an explicit `LNM$SYSTEM` lookup
+  (what `test_system_table_no_fallback()` and `test_syssvc_lnm_system.c`'s
+  no-executive branch assert) still honestly reports `SS$_NOSUCHDEV`.
+- It never fires when the executive is present (the SYSTEM create already
+  succeeded), so real multi-process SYSTEM-table semantics — a sysadmin's
+  system-wide `DEFINE/SYSTEM` reaching every other process — are unaffected.
+- A process-level `DEFINE` shadowing a system-level one is a real, disclosed
+  VMS mechanism (`SHOW LOGICAL` reports it as `(LNM$PROCESS_TABLE)`, not
+  SYSTEM), not a disguise of the executive-resident table — the same shape
+  `dcl_filespec.c: dcl_translate_logical()`'s pre-existing SYS$DISK/SYS$LOGIN
+  fallback already uses.
+
+At OVMX **runtime** nothing changes: PID 1 pins `/dev/vms` (Rule 9), so the
+executive path was always the whole story there. The removal is only visible
+under host tooling, where `LNM$SYSTEM` operations (and anything that
+transitively resolves through it, including `lnm_setup_defaults`'s baseline —
+`SYS$SYSDEVICE`, `SYS$SYSTEM`, `SYS$LIBRARY`, `SYS$SCRATCH`, `SYS$LOGIN`,
+`SYS$UPDATE`, etc.) now fail honestly instead of quietly working from a
+process-local shadow. `tests/integration/test_runtime_target.sh` is unaffected
+either way (it keys on returned VMS status, not on a `/dev/vms`-absence branch
+in executable code, and there is now even less of one).
+
+### Where the migrated host coverage went
+
+- `tests/vmslnm/test_vmslnm.c`'s table-hierarchy/override scenario now targets
+  `LNM$GROUP` (still process-private) instead of `LNM$SYSTEM`, so it keeps
+  proving the same `lnm_translate` hierarchy logic without an executive. A new
+  `test_system_table_no_fallback()` asserts `lnm_create`/`_translate`/`_delete`
+  against `LNM$SYSTEM` return `SS$_NOSUCHDEV` on the host — the INV-6
+  regression guard at the unit level.
+- `tests/libvms/test_identity.c`'s SYS$WELCOME/SYS$ANNOUNCE "undefined →
+  built-in" checks stayed host-side (any non-`SS$_NORMAL` status already fell
+  through to the built-in banner in `ovmx_banner.h`, so they were never
+  fallback-dependent). The "defined → overridden" checks became "a define that
+  fails honestly does NOT change the banner" — proving INV-6 holds all the way
+  through the DCL-consumer layer, not just at `lnm_create` itself.
+- `tests/integration/test_parts_setup.sh` (vms-977) now seeds `SYS$UPDATE` with
+  a plain process-scoped `DEFINE`, not `DEFINE/SYSTEM`: the gate is about
+  `PARTS_SETUP.COM`'s own COPY/DEFINE/`:==` logic, which doesn't care what
+  table `SYS$UPDATE` lives in, so a process-scoped define exercises the same
+  logic without touching the executive. The real `DEFINE/SYSTEM SYS$UPDATE`
+  line from `SYS$MANAGER:STARTUP.COM`, against a real executive, running this
+  SAME committed `PARTS_SETUP.COM`, is proven end to end by
+  `tests/qemu/test_parts_demo_e2e.sh`.
+- **New**: `tests/qemu/test_syssvc_lnm_system.c` proves the vmslnm-MANAGER
+  API's `LNM$SYSTEM` path (as distinct from the `sys$` API
+  `test_syssvc_lnm_crossproc.c` already covered) against a real `/dev/vms`:
+  manager-level create/translate/delete round-trip, table hierarchy
+  (`LNM$FILE_DEV` finds a process override, `LNM$SYSTEM` itself is
+  unchanged underneath it), consistency with `sys$trnlnm` (same arena), and
+  the SYS$WELCOME/SYS$ANNOUNCE override scenarios (including the `@file`
+  multi-line form) that could no longer be proven host-side. Its no-executive
+  branch reproduces the INV-6 regression guard at the manager layer.
+  Negative control: `lnm-manager-delete-noop`
+  (`tests/qemu/facility_defects.sh`).
 
 ## Proof
 

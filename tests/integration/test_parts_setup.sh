@@ -17,7 +17,21 @@
 # to exercise (CLAUDE.md Rule 9's "executive facility" test requirement does
 # not apply to a COPY/DEFINE/:== command procedure). The full boot ->
 # @SYS$UPDATE:PARTS_SETUP.COM -> RUN PARTS chain under QEMU, with PARTS.EXE
-# actually mastered into the image, is vms-cde's e2e gate.
+# actually mastered into the image, is tests/qemu/test_parts_demo_e2e.sh's
+# e2e gate.
+#
+# WHY THE SETUP BELOW USES PLAIN "DEFINE SYS$UPDATE ...", NOT "DEFINE/SYSTEM"
+# (vms-48ab). LNM$SYSTEM is executive-resident (vms-d37/vms-96e2), and
+# vms-48ab removed the transitional host fallback that used to let
+# DEFINE/SYSTEM "work" locally with no /dev/vms (CLAUDE.md Rule 9 / INV-6):
+# it now fails honestly with SS$_NOSUCHDEV here, exactly like it does
+# everywhere else on the host. What this gate is actually proving --
+# PARTS_SETUP.COM's OWN COPY/DEFINE/:== logic, given a resolvable SYS$UPDATE
+# -- does not care what table SYS$UPDATE lives in, so a process-scoped
+# DEFINE gets the same exercise without touching the executive. The real
+# SYS$MANAGER:STARTUP.COM DEFINE/SYSTEM SYS$UPDATE line, against a real
+# /dev/vms, is proven end to end by tests/qemu/test_parts_demo_e2e.sh, which
+# runs this SAME committed PARTS_SETUP.COM through a real boot.
 #
 # PARTS.EXE STAND-IN: this gate does not build the VMS-native PARTS.EXE
 # (cc -> LINK.EXE -> IMGACT; that needs the musl link-native container, see
@@ -95,11 +109,29 @@ echo "  DCL under test:   $DCL"
 echo "  PARTS_SETUP.COM:  $SETUP_COM"
 echo "  PARTS stand-in:   $PARTS_STANDIN"
 
-# DEFINE/SYSTEM SYS$UPDATE simulates what SYS$MANAGER:STARTUP.COM already
-# does at real boot (distro/rootfs/.../SYSMGR/STARTUP.COM carries the same
-# line) -- this gate is about PARTS_SETUP.COM, not about re-proving STARTUP.
+# Process-scoped DEFINEs (not /SYSTEM, vms-48ab -- see header): SYS$MANAGER:
+# STARTUP.COM does DEFINE/SYSTEM at real boot, but this gate is about
+# PARTS_SETUP.COM's own logic, not about re-proving STARTUP or the executive.
+#
+# SYS$SYSDEVICE and SYS$SYSTEM must ALSO be defined here, not just
+# SYS$UPDATE (PARTS_SETUP.COM itself COPYs into SYS$SYSTEM:). On a real boot
+# (or under QEMU) both are executive-resident, seeded by
+# lnm_setup_defaults(); on the host, with no executive, they have no
+# fallback either (vms-48ab), so these equivalence strings ("SYS$SYSDEVICE:
+# [...]") would otherwise fail to resolve and vmsfs's device-resolution
+# would fall through to its OWN "assume system disk" default
+# (src/vmsfs/vmsfs_translate.c, unrelated to vms-48ab) -- which is the
+# AMBIENT /vms, not this gate's isolated $VROOT, silently breaking the
+# isolation this gate depends on (COPY would report success while writing
+# outside $VROOT). Defining SYS$SYSDEVICE as DKA0: here routes resolution
+# through the device table instead, which dcl_main.c's setup_session() DOES
+# map to $VROOT (via the VMS_ROOT env var) -- so this is not working around
+# a gap, it is giving this DCL session the pieces of the real boot-time
+# logical environment its device-table mapping already depends on.
 VMS_ROOT="$VROOT" "$DCL" >"$WORK/out" 2>"$WORK/err" <<'DCLCMDS'
-DEFINE/SYSTEM SYS$UPDATE SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSUPD]
+DEFINE SYS$SYSDEVICE DKA0:
+DEFINE SYS$SYSTEM SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSEXE]
+DEFINE SYS$UPDATE SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSUPD]
 @SYS$UPDATE:PARTS_SETUP.COM
 SHOW SYMBOL PARTS
 EXIT

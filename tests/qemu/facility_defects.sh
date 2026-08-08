@@ -473,7 +473,8 @@ setuai-sysprv-caller-declared
 register-adopt-pid-not-reported
 register-continue-identity-dropped
 rms-create-filespec-not-translated
-scratch-dir-owner-not-system"
+scratch-dir-owner-not-system
+lnm-manager-delete-noop"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -3915,6 +3916,38 @@ EOF
                       ;;
         esac;;
 
+    lnm-manager-delete-noop)
+        case "$_f" in
+        facility)     echo "vmslnm-manager LNM\$SYSTEM path (src/vmslnm/lnm_client.c + lnm_translate.c), the DCL/vmsfs-facing client vms-96e2 built on top of vms-d37's executive-resident LNM\$SYSTEM, hardened by vms-48ab (removal of its host-tooling fallback)";;
+        targets)      echo "vmslnm/lnm_client.c";;
+        suites_red)   echo "test_syssvc_lnm_system";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lnm_delete()'s LNM\$SYSTEM branch stops calling vms_kif_lnm_delete and returns SS\$_NORMAL directly, so DEASSIGN/SYSTEM through the vmslnm MANAGER API (what DCL, SHOW LOGICAL/F\$TRNLNM and vmsfs actually call -- distinct from the already-honest sys\$dellnm in src/libvms/syssvc/sys_logical.c) 'succeeds' without ever reaching vms.ko: the name stays defined in the executive arena. This is the SAME shape lnm-delete-noop reddens at the kernel-ioctl layer, one layer up -- the manager API vms-96e2 added on top of vms-d37's already-honest executive plumbing can independently reintroduce a fabricated delete, and nothing before test_syssvc_lnm_system.c (new with vms-48ab) called the manager API against a real executive to catch it.";;
+        require_fail) echo "manager: OVMX48AB\$VOL is gone from LNM\$SYSTEM after the manager's own delete";;
+        knock_on_fail) echo "banner: deassigning SYS\$WELCOME restores the built-in banner";;
+        knock_on_why)  cat <<'EOF'
+SAME CALL SITE, OBSERVED TWICE. Both reddened assertions read back a name
+through lnm_translate(LNM$SYSTEM/LNM$FILE_DEV, ...) after a prior
+lnm_delete(..., LNM_SYSTEM_TABLE, ...) call that the mutation turns into a
+no-op SS$_NORMAL: OVMX48AB$VOL in run_manager_system_and_hierarchy() and
+SYS$WELCOME in run_banner_override() (by the time it deassigns, SYS$WELCOME
+holds the '@file' equivalence from the preceding step, so the banner shows
+that file's content instead of the built-in). Every DEFINE/TRANSLATE
+assertion before either delete is untouched (the mutation is inside
+lnm_delete only), the "reports success" assertion for BOTH deletes still
+passes (the mutated line still returns SS$_NORMAL), and the process-table
+delete used to clean up OVMX48AB$VOL's override is a different table --
+is_system_table() is false for it -- so it takes the unmutated branch. That
+is why exactly these two "did it actually go away" assertions redden and no
+others: one property (a public LNM$SYSTEM delete reporting success for a
+mutation it did not perform), observed at its only two call sites in this
+suite.
+EOF
+                      ;;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -4306,6 +4339,19 @@ apply_edit() {
         # over a name it did not remove. A second apply finds no
         # `e->in_use = 0;` left and is the no-op selftest requires.
         sed -i 's|^    e->in_use = 0;$|    /* NEGCTL lnm-delete-noop: entry not freed */|' "$_file";;
+
+    lnm-manager-delete-noop)
+        # UNIQUE TEXT: this exact call+argument list occurs once in
+        # lnm_client.c, inside lnm_delete()'s LNM$SYSTEM branch (the
+        # LNM$PROCESS/JOB/GROUP delete path below it never calls vms_kif_*).
+        # Replacing the call with a bare `return SS$_NORMAL;` makes
+        # DEASSIGN/SYSTEM at the manager layer report success without ever
+        # reaching vms.ko, so a name it should have removed stays defined in
+        # the executive arena -- the manager-layer analogue of
+        # lnm-delete-noop's kernel-layer no-op. A second apply finds no
+        # `vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, ...)` call left inside this
+        # file and is the no-op selftest requires.
+        sed -i 's|        return vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, logical_name, acmode);|        return SS$_NORMAL; /* NEGCTL lnm-manager-delete-noop: never reaches vms.ko */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
@@ -4949,17 +4995,19 @@ cmd_selftest() {
 
         rm -rf "$_st_tmp/tree" "$_st_tmp/tests"
         mkdir -p "$_st_tmp/tree"
-        # libvms, vmsdcl and vmsrms are copied too: a defect may target the
-        # PRODUCT half of an interface (creprc-handshake-eintr and
-        # run-detached-name-dropped do, and rms-create-filespec-not-
-        # translated targets vmsrms/rms_core.c -- a userspace consumer of
-        # vmsfs's translation, the same class as the vmsdcl entries), and a
-        # target this function cannot see would be reported as a dead
-        # anchor on every run.
+        # libvms, vmsdcl, vmsrms and vmslnm are copied too: a defect may
+        # target the PRODUCT half of an interface (creprc-handshake-eintr and
+        # run-detached-name-dropped do, rms-create-filespec-not-translated
+        # targets vmsrms/rms_core.c -- a userspace consumer of vmsfs's
+        # translation, the same class as the vmsdcl entries -- and
+        # lnm-manager-delete-noop targets vmslnm/lnm_client.c, the
+        # DCL/vmsfs-facing manager built on top of the executive-resident
+        # LNM$SYSTEM), and a target this function cannot see would be
+        # reported as a dead anchor on every run.
         if ! cp -a "$_st_root/kernel" "$_st_root/libvmssys" "$_st_root/libvms" \
-                   "$_st_root/vmsdcl" "$_st_root/vmsrms" \
+                   "$_st_root/vmsdcl" "$_st_root/vmsrms" "$_st_root/vmslnm" \
                    "$_st_tmp/tree/" 2>/dev/null; then
-            echo "FAIL: cannot copy $_st_root/{kernel,libvmssys,libvms,vmsdcl,vmsrms} for the self-test"
+            echo "FAIL: cannot copy $_st_root/{kernel,libvmssys,libvms,vmsdcl,vmsrms,vmslnm} for the self-test"
             rm -rf "$_st_tmp"
             return 2
         fi

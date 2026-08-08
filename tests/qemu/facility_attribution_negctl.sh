@@ -431,24 +431,38 @@ else
     cat > "$WORK/ics.sh" <<'ICSEOF'
 #!/bin/sh
 set -u
+# A PRIVATE, PER-INVOCATION scratch dir (rd vms-d3c), not a fixed /tmp/w. This
+# script runs once per `docker run --rm`, so today's container gets its own
+# writable layer regardless -- but a fixed name is still the wrong thing to
+# write: it assumes container isolation is the only thing standing between
+# this and a collision, and that assumption is nowhere stated or enforced. A
+# future run under a shared /tmp bind-mount (build-cache volumes, `--pid=host`
+# style sharing, or simply invoking this script directly on a host instead of
+# in a container) would silently start colliding on `rm -rf` racing another
+# copy's `mkdir -p` mid-loop -- exactly the '/tmp directory-creation
+# contention' failure mode this fix exists to rule out structurally, not by
+# convention. mktemp -d guarantees a name no concurrent copy of this script
+# can also produce.
+W=$(mktemp -d) || { echo "FATAL: mktemp -d failed" >&2; exit 2; }
+trap 'rm -rf "$W"' EXIT INT TERM
 for d in $(sh /src/tests/qemu/facility_defects.sh list); do
     tg=$(sh /src/tests/qemu/facility_defects.sh field "$d" targets)
-    rm -rf /tmp/w
-    mkdir -p /tmp/w/src
+    rm -rf "$W/w"
+    mkdir -p "$W/w/src"
     for t in $tg; do
         [ -f "/src/repo/src/$t" ] || continue
-        mkdir -p "/tmp/w/src/$(dirname "$t")"
-        cp "/src/repo/src/$t" "/tmp/w/src/$t"
-        cp "/src/repo/src/$t" "/tmp/w/$(echo "$t" | tr / _)"
+        mkdir -p "$W/w/src/$(dirname "$t")"
+        cp "/src/repo/src/$t" "$W/w/src/$t"
+        cp "/src/repo/src/$t" "$W/w/$(echo "$t" | tr / _)"
     done
-    if ! sh /src/tests/qemu/facility_defects.sh apply "$d" /tmp/w/src >/dev/null 2>&1; then
+    if ! sh /src/tests/qemu/facility_defects.sh apply "$d" "$W/w/src" >/dev/null 2>&1; then
         printf 'CSITE\t%s\t(APPLY-FAILED)\t0\n' "$d"
         continue
     fi
     for t in $tg; do
-        [ -f "/tmp/w/src/$t" ] || continue
-        old="/tmp/w/$(echo "$t" | tr / _)"
-        diff "$old" "/tmp/w/src/$t" \
+        [ -f "$W/w/src/$t" ] || continue
+        old="$W/w/$(echo "$t" | tr / _)"
+        diff "$old" "$W/w/src/$t" \
           | sed -n 's/^\([0-9]*\)\(,[0-9]*\)\{0,1\}[acd].*$/\1/p' | sort -un \
           | while read -r l; do printf 'CSITE\t%s\t%s\t%s\n' "$d" "$t" "$l"; done
     done

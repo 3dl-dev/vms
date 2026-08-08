@@ -155,7 +155,14 @@ set_tests_properties(kernel_executive_negctl_crash PROPERTIES LABELS "harness")
 # CI job time budgets, not because it is unrunnable.
 add_test(
     NAME parts_demo_e2e
-    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/run_parts_demo_e2e.sh
+    # bash, not /bin/sh: run_parts_demo_e2e.sh uses `set -o pipefail`, a
+    # bashism that /bin/sh (dash on Ubuntu) rejects outright ("Illegal
+    # option -o pipefail"), which made this ctest entry fail before it
+    # ever reached its own SKIP_RETURN_CODE 77 gate -- pre-existing on the
+    # branch this fix started from (vms-5dd), never actually run by a
+    # bare `ctest`. Same convention as dcl-integration's `COMMAND bash
+    # run_dcl_tests.sh` above.
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_parts_demo_e2e.sh
 )
 set_tests_properties(parts_demo_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"

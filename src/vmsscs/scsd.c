@@ -7978,44 +7978,51 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 return;
             }
         }
-        /* vms-e81: FORM B -- the peer accepts OUR MSCP$DISK connect with an
-         * op-4 ACCEPT4 instead of an op-2 RESPONSE, and it is answered with an
-         * op-5 CONFIRM5 instead of an op-3 CONFIRM.
+        /* vms-e81: FORM B -- the peer's answer to OUR MSCP$DISK CONNECT_REQ
+         * carries op [46:48]=4 (once named ACCEPT4 by the vms-760 misreading)
+         * instead of an op-2 RESPONSE, and used to be answered with an op-5
+         * (once named CONFIRM5) instead of an op-3 CONFIRM.
          *
-         * OVMX implemented exactly half of each form: it EMITS op 4 as a
-         * server but could not CONSUME one as a client. So when VAX3 answered
-         * our connect with an op-4 we dropped it in silence, never sent the
-         * op-5 it was waiting for, and then retransmitted the same request 60
-         * times over 178 s against a peer that had already accepted it.
+         * vms-754 (2026-08-06) DECODED [46:48]=4/5 as the shared-namespace
+         * REJECT_REQ/REJECT_RSP, not an MSCP connect-ACCEPT/CONFIRM pair --
+         * "nothing follows it" (the Con.ID pair never carries application
+         * traffic again) is precisely the terminal-dialogue signature
+         * tools/cluster/scs_t45_measure.py found on EVERY MTYPE-4/5 exchange
+         * in the 47-capture lab-1 library (733/733 terminal, 0 ever followed
+         * by application traffic) against 388/394 for the undisputed
+         * ACCEPT_REQ (MTYPE 2) positive control -- see
+         * docs/cluster-protocol-spec.md sec 4h(1h) and scs_dir.h's
+         * SCS_DIR_OP_ACCEPT entry. vms-754 fixed the DECODE only and left the
+         * WIRE BEHAVIOUR as a named follow-up: this branch, when it fired
+         * against a REAL peer, marks ps->mscp_connected = 1 on a connection
+         * the peer actually REJECTED -- a false positive that stalled disk
+         * discovery forever believing a refused connect had succeeded.
          *
-         * Both forms are reference-legal on this SYSAP; which one you get is
-         * the peer's choice, not a property of the request. Answering an op-4
-         * with an op-3 would be inventing a pairing the reference never
-         * emits -- across 336 op-5 frames the reply to an op-4 is an op-5,
-         * every time. Nothing follows it: the Con.ID pair never appears again
-         * (334 silent, 2 retransmits), so we owe the peer nothing more.
-         *
-         * vms-754 (2026-08-06), NOT FIXED HERE -- flagged as a follow-up, out
-         * of scope for that item: "nothing follows it" is precisely the
-         * terminal-dialogue signature tools/cluster/scs_t45_measure.py found
-         * on EVERY MTYPE-4/5 exchange in the 47-capture lab-1 library (733/733
-         * terminal, 0 ever followed by application traffic), which is the
-         * REJECT_REQ/REJECT_RSP signature, not a bound connection that simply
-         * needs no more traffic -- see scs_dir.h's SCS_DIR_OP_ACCEPT entry.
-         * That means the branch below, when it fires against a REAL peer,
-         * marks ps->mscp_connected = 1 on a connection the peer actually
-         * REJECTED. Whether that is part of the vms-abd refusal is an open,
-         * separate question -- this is a wire-behaviour change to the
-         * server-first MSCP accept path and needs its own item, not a decode
-         * fix. */
+         * vms-257 (2026-08-08) FIXES the wire behaviour: an op-4 REJECT_REQ
+         * answering OUR MSCP$DISK connect no longer binds it. OVMX still
+         * sends the op-5 reply the wire pairing requires (62-byte REJECT_REQ
+         * -> 58-byte REJECT_RSP, 696 pairs over 26 pcaps,
+         * docs/cluster-protocol-spec.md sec 4h(1b) -- the byte shape
+         * scs_dir_build_mscp_confirm5() emits was always correct; only what
+         * the caller believed it MEANT was wrong), but leaves
+         * ps->mscp_connected at 0 and ps->join_step at JS_MSCP_CONNECT, so
+         * the existing JOIN_RETX_MAX retransmit timer (below, case
+         * JS_MSCP_CONNECT) resends the CONNECT_REQ on schedule -- the same
+         * retry-until-accepted pattern the reference itself uses (nine
+         * REJECT_REQ/RSP exchanges before a tenth attempt switches to
+         * ACCEPT_REQ/ACCEPT_RSP and succeeds, same section). Whether this
+         * false-accept explained part of the vms-abd refusal remains a
+         * separate, still-open question -- vms-257 fixes the misread, not
+         * vms-abd. */
         if (rconid == OVMX_MSCP_CONID && lconid != 0 &&
             dop == SCS_DIR_OP_ACCEPT) {
             struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
             if (ps != NULL && !ps->mscp_connected) {
-                /* recv accounting is done by the credit block earlier in the
-                 * receive path, exactly as for the op-2 sibling below. */
-                ps->mscp_remote_conid = lconid;
-                ps->mscp_connected = 1;
+                /* vms-257: do NOT set ps->mscp_remote_conid / mscp_connected
+                 * here -- op-4 is the peer REJECTING this connect, not
+                 * admitting it. recv accounting is done by the credit block
+                 * earlier in the receive path, exactly as for the op-2
+                 * sibling below. */
                 struct scs_dir_params c5;
                 memset(&c5, 0, sizeof(c5));
                 memcpy(c5.dst_mac, ps_port_addr(ps), 6);
@@ -8030,14 +8037,16 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 uint8_t f5[SCS_DIR_CONFIRM5_FRAME_LEN];
                 if (scs_dir_build_mscp_confirm5(&c5, f5) == 0 &&
                     send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
-                                  "SCS$DIRECTORY op=5 MSCP confirm",
+                                  "SCS$DIRECTORY op=5 REJECT_RSP",
                                   f5,
                                   sizeof(f5)) > 0) {
                     log_ts(stdout);
-                    printf(" SCSD-I-MSCPBOUND5, peer accepted OUR MSCP$DISK"
-                           " connect with op-4 ACCEPT4 -> sent op-5 CONFIRM5"
-                           " (local=0x%08X remote=0x%08X send_seq=%u)."
-                           " Nothing follows an op-5\n",
+                    printf(" SCSD-W-MSCPREJECTED, peer REJECTED OUR MSCP$DISK"
+                           " connect (op-4 REJECT_REQ) -> sent op-5"
+                           " REJECT_RSP; NOT binding (local=0x%08X"
+                           " remote=0x%08X send_seq=%u). join_step stays"
+                           " JS_MSCP_CONNECT so the retransmit timer resends"
+                           " CONNECT_REQ\n",
                            (unsigned)OVMX_MSCP_CONID, lconid, c5.send_seq);
                     fflush(stdout);
                 }

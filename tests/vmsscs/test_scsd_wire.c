@@ -5576,6 +5576,120 @@ static void test_mscp_srv_answers_a_command_on_a_live_connection(void)
 }
 
 /*
+ * (2a-2) vms-257 REGRESSION: A REAL PEER'S op-4 REJECT_REQ ANSWERING OUR
+ * MSCP$DISK CONNECT_REQ MUST NOT BE MISREAD AS AN ACCEPT.
+ *
+ * Before this item, scsd.c's FORM B branch (rconid == OVMX_MSCP_CONID &&
+ * dop == SCS_DIR_OP_ACCEPT) treated [46:48]==4 as "the peer accepted OUR
+ * MSCP$DISK connect with an op-4 ACCEPT4" and set ps->mscp_connected = 1.
+ * vms-754 decoded [46:48]==4/5 as the shared-namespace REJECT_REQ/REJECT_RSP
+ * (docs/cluster-protocol-spec.md sec 4h(1h): 733/733 MTYPE-4 dialogues in the
+ * 47-capture lab-1 library are terminal, 0 ever carry follow-up application
+ * traffic) but left the wire behaviour unfixed as a named follow-up -- so a
+ * real peer refusing OVMX's MSCP$DISK connect was recorded as a successful
+ * bind, permanently stalling disk discovery on a false positive.
+ *
+ * This fixture feeds scsd_handle_frame() a byte-exact op-4 frame built by
+ * scs_dir_build_mscp_accept() -- the SAME builder scsd.c's own server-side
+ * accept path uses, so the byte shape is the grounded af2-firsttimer
+ * template, not an invented one -- addressed FROM the peer TO OVMX's
+ * OVMX_MSCP_CONID, exactly as a real peer's answer to our CONNECT_REQ would
+ * arrive. Before vms-257 this fixture would have shown mscp_connected == 1
+ * and an "SCSD-I-MSCPBOUND5" log line; after it, the connect must stay
+ * unbound and the join sequencer must stay at JS_MSCP_CONNECT so the
+ * existing retransmit timer (case JS_MSCP_CONNECT, driven by
+ * scsd_peer_departure_sweep's caller) retries the CONNECT_REQ -- the
+ * reference's own retry-until-accepted pattern.
+ */
+static void test_mscp_connect_reject_req_is_not_misread_as_accept(void)
+{
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    CHECK(ps != NULL, "the fixture's circuit could not be opened");
+    if (ps == NULL) {
+        return;
+    }
+
+    /* Put the peer in exactly the state a real join sequencer reaches after
+     * sending OUR MSCP$DISK CONNECT_REQ (send_mscp_connect_request(),
+     * ps->join_step == JS_MSCP_CONNECT) and before any answer arrives. */
+    ps->join_step = JS_MSCP_CONNECT;
+    ps->js_retx = 0;
+    ps->mscp_connect_sent = 1;
+    ps->mscp_connected = 0;
+    ps->mscp_remote_conid = 0;
+    ps->incarnation = 1;
+
+    /* The peer's op-4 REJECT_REQ answering OUR connect: remote_conid echoes
+     * OUR handle (OVMX_MSCP_CONID, the wire fact scsd.c keys its rconid test
+     * on), local_conid is the peer's own (fake, this fixture's) fresh
+     * handle -- a real peer's op-4 always carries one (spec sec 4h(1a)).
+     * This is the very first frame on a freshly-opened circuit, so the p.
+     * 2-31 sequentiality check anchors on it (scs_vc_check_recv_seq) rather
+     * than gating on a specific send_seq value. */
+    struct scs_dir_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, r.rx.our_hw_mac, 6);
+    memcpy(p.src_mac, vax1_hw_mac, 6);
+    memcpy(p.src_logical, vax1_logical, 6);
+    memcpy(p.peer_logical, r.rx.our_src_logical, 6);
+    p.remote_conid = OVMX_MSCP_CONID;
+    p.local_conid = 0xB0180001u;    /* the peer's (fake) fresh MSCP handle */
+    p.incarnation = 1;
+    p.recv_ack = 0;
+    p.send_seq = 1;
+
+    uint8_t frame[SCS_DIR_CONFIRM_FRAME_LEN];
+    CHECK(scs_dir_build_mscp_accept(&p, frame) == 0,
+          "the op-4 REJECT_REQ fixture frame failed to build");
+
+    rx_feed(&r, frame, sizeof(frame));
+
+    CHECK(ps->mscp_connected == 0,
+          "a peer's op-4 REJECT_REQ answering OUR MSCP$DISK connect was"
+          " misread as an ACCEPT -- ps->mscp_connected got set");
+    CHECK(ps->mscp_remote_conid == 0,
+          "the peer's REJECT_REQ handle (0x%08X) was bound into"
+          " ps->mscp_remote_conid as if the connect had succeeded",
+          ps->mscp_remote_conid);
+    CHECK(ps->join_step == JS_MSCP_CONNECT,
+          "join_step advanced past JS_MSCP_CONNECT on a REJECTED connect"
+          " (now %d) -- the retransmit timer would no longer retry the"
+          " CONNECT_REQ", ps->join_step);
+    CHECK(!rxlog_has("SCSD-I-MSCPBOUND5"),
+          "the pre-vms-257 ACCEPT-misread log line still fired: '%s'", rxlog);
+    CHECK(rxlog_has("SCSD-W-MSCPREJECTED"),
+          "the daemon did not log the connect as rejected; log was: '%s'", rxlog);
+
+    /* The wire pairing still requires an op-5 reply (62-byte REJECT_REQ ->
+     * 58-byte REJECT_RSP, docs/cluster-protocol-spec.md sec 4h(1b)) -- vms-257
+     * fixes what the frame MEANT, not the byte shape scsd.c answers with.
+     * TWO frames go out, not one: the vms-691 VC engine credit-acks every
+     * sequenced 0x5b/0x4b message with its own 0x48 credit-return BEFORE the
+     * FORM B branch runs (scsd_handle_frame's receive path, earlier in the
+     * function) -- that is the standing p. 2-31/4h(3) credit obligation on
+     * ANY sequenced frame, unrelated to this branch's own REJECT_RSP reply,
+     * and unrelated to the vms-257 bug. The op-5 REJECT_RSP is sent second,
+     * so it is the captured "last frame" checked below. */
+    CHECK(scsd_test_frames == 2,
+          "expected exactly two reply frames (the standing 0x48 credit-return"
+          " plus the op-5 REJECT_RSP), got %u", scsd_test_frames);
+    CHECK(scsd_test_last_len == SCS_DIR_CONFIRM5_FRAME_LEN,
+          "the reply frame is %zu bytes, expected the op-5 REJECT_RSP length"
+          " %d", scsd_test_last_len, SCS_DIR_CONFIRM5_FRAME_LEN);
+    if (scsd_test_last_len >= 14 + 48) {
+        uint16_t replied_op = (uint16_t)(scsd_test_last_frame[14 + 46] |
+                                         (scsd_test_last_frame[14 + 47] << 8));
+        CHECK(replied_op == SCS_DIR_OP_MSCP_CONFIRM,
+              "the reply's op field is %u, expected %u (op-5 REJECT_RSP)",
+              (unsigned)replied_op, (unsigned)SCS_DIR_OP_MSCP_CONFIRM);
+    }
+}
+
+/*
  * (2b) THE OTHER KILL SWITCH MUST NOT BECOME A REFUSAL STORM.
  *
  * scsd_cdl_ready is only set when the connection state machine is enabled, so
@@ -8436,6 +8550,9 @@ int main(void)
     test_sdir_refuses_a_connect_request_for_an_unlisted_sysap();
     /* vms-34b: the MSCP$DISK server connection now answers, not just accepts. */
     test_mscp_srv_answers_a_command_on_a_live_connection();
+    /* vms-257: a real peer's op-4 REJECT_REQ answering OUR MSCP$DISK connect
+     * must not be misread as an ACCEPT. */
+    test_mscp_connect_reject_req_is_not_misread_as_accept();
     test_no_conn_fsm_does_not_turn_into_a_refusal_storm();
     /* The OTHER inbound-CONNECT_REQ branch: the 0x5b SCS$DIRECTORY path. */
     test_the_0x5b_directory_connect_is_scanned_before_it_is_accepted();

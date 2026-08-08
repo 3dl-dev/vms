@@ -267,27 +267,67 @@ check(re.search(r"REJECT_REQ", dir_c) is not None,
       "scs_dir.c no longer states that op 4/5 are actually REJECT_REQ/REJECT_RSP")
 
 # ===========================================================================
-# 4. THE FOLLOW-UP BUG STAYS ON THE RECORD (not fixed here -- vms-754 scope)
+# 4. THE CONSUME-SIDE BUG IS FIXED (vms-257) AND ITS HISTORY STAYS ON RECORD;
+#    THE BUILD-SIDE HALF STAYS ON RECORD AS STILL OPEN (out of scope here).
 # ===========================================================================
 # A generic "vms-abd|follow-?up|separate item|out of scope" OR-search is
 # vacuously satisfiable: scsd.c already carries THREE unrelated matches
 # (~line 547 "is a separate item", ~line 4992 "vms-abd", ~line 7803 "is an
-# open ... separate question") that have nothing to do with vms-754's own
-# follow-up disclosure. Pin to the SPECIFIC sentence each carrier actually
-# owns, and require BOTH -- scs_dir.c's op-4/op-5 builder comment and
-# scsd.c's FORM B accept-path comment are two independent places this fact
-# must survive, not interchangeable alternatives.
+# open ... separate question") that have nothing to do with this disclosure.
+# Pin to the SPECIFIC sentence each carrier actually owns, and require BOTH --
+# scs_dir.c's op-4/op-5 builder comment and scsd.c's FORM B accept-path
+# comment are two independent places this fact must survive, not
+# interchangeable alternatives. Matched whitespace-normalized (`flatten`)
+# because prose reflows across comment line-wraps and a literal substring
+# match is brittle against that, not against the fact itself.
+
+
+def flatten(text):
+    return " ".join(text.split())
+
+
 FOLLOWUP_PHRASE = {
     DIR_C: "scsd.c's server-first",
-    SCSD_C: "marks ps->mscp_connected = 1 on a connection the peer actually",
+    SCSD_C: "marks ps->mscp_connected = 1 on a connection",
 }
 for label, path, txt in (("scs_dir.c", DIR_C, dir_c), ("scsd.c", SCSD_C, scsd_c)):
     phrase = FOLLOWUP_PHRASE[path]
-    check(phrase in txt,
+    check(phrase in flatten(txt),
           f"{label} no longer carries the specific follow-up-disclosure phrase "
-          f"{phrase!r} -- the disclosure that the server-first MSCP accept "
-          f"path still misreads a REJECT_REQ/REJECT_RSP as ACCEPT/CONFIRM "
-          f"(vms-257) was deleted, not just reworded")
+          f"{phrase!r} -- the historical record of the server-first MSCP "
+          f"accept path's REJECT_REQ/REJECT_RSP-as-ACCEPT/CONFIRM misreading "
+          f"was deleted, not just reworded")
+
+# vms-257 fixed the CONSUME half (scsd.c's receive-path interpretation of a
+# peer's answer to OUR outbound MSCP$DISK connect); the BUILD half (scsd.c
+# emitting op-4 as its own server-side "accept" of a member's inbound
+# connect, scs_dir_build_mscp_accept) is a SEPARATE, still-open item -- do
+# not let this gate quietly start treating the build half as fixed too.
+check("vms-257" in scsd_c,
+      "scsd.c's FORM B comment no longer cites vms-257 -- the fix record was "
+      "deleted, not just reworded")
+check(flatten("scsd.c's server-first") in flatten(dir_c) and
+      re.search(r"BUILDS[^.]*ACCEPT|BUILDS[^.]*BINDS", dir_c),
+      "scs_dir.c no longer discloses that the BUILD half (scs_dir_build_mscp_"
+      "accept, OVMX's own op-4 server-side emission) is still unfixed and "
+      "out of scope for vms-257")
+
+# The actual fix, checked structurally rather than by prose alone: within the
+# FORM B receive-path branch (dop == SCS_DIR_OP_ACCEPT, i.e. a real peer's
+# op-4 REJECT_REQ answering OUR MSCP$DISK connect), scsd.c must NOT set
+# ps->mscp_connected -- that assignment on THIS branch is the exact bug.
+_form_b = re.search(
+    r"dop == SCS_DIR_OP_ACCEPT\)\s*\{.*?\n(?:.*\n)*?\s*return;\s*\n\s*\}",
+    scsd_c)
+check(_form_b is not None,
+      "could not locate the FORM B (dop == SCS_DIR_OP_ACCEPT) receive-path "
+      "branch in scsd.c at all -- has it moved or been removed?")
+if _form_b is not None:
+    check("mscp_connected = 1" not in _form_b.group(0),
+          "scsd.c's FORM B branch (a real peer's op-4 REJECT_REQ answering "
+          "OUR MSCP$DISK connect) still sets ps->mscp_connected = 1 -- the "
+          "vms-257 bug (misreading a REJECT as an ACCEPT) is not actually "
+          "fixed, only its comment changed")
 
 # ===========================================================================
 # 5. THE LAB FENCE (vms-096)

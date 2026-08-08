@@ -475,7 +475,8 @@ register-continue-identity-dropped
 rms-create-filespec-not-translated
 scratch-dir-owner-not-system
 lnm-manager-delete-noop
-lnm-group-scope-collapsed"
+lnm-group-scope-collapsed
+lnm-privilege-check-bypassed"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2520,7 +2521,7 @@ C: the executive refused an unprivileged process's attempt to become SYSTEM (SS$
 C: the privilege display is EMPTY -- the two privileges the executive granted an unprivileged process (TMPMBX, NETMBX) are both outside VMS_PRV_M_ENFORCED
 D: the session established its authenticated identity
 F: the executive accepted the SYSTEM/ALL identity this scenario needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)
-F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SETPRV,WORLD), not merely completes without rendering anything
+F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD), not merely completes without rendering anything
 G: the session established an authenticated identity
 G: the executive HOLDS that name and reads it back -- so the subprocess's blank below is not the executive naming nobody
 G/OPCOM+: the named run established its identity through the executive (without this the header check below is about a process that is also unnamed)
@@ -3992,6 +3993,61 @@ EOF
                       ;;
         esac;;
 
+    lnm-privilege-check-bypassed)
+        case "$_f" in
+        facility)     echo "SYSNAM/GRPNAM privilege enforcement on LNM\$SYSTEM/LNM\$GROUP mutation (lnm_priv_check() in vms_lnm.c, consulted by both VMS_IOCTL_LNM_DEFINE and VMS_IOCTL_LNM_DELETE), vms-5b7";;
+        targets)      echo "kernel/vms_lnm.c";;
+        suites_red)   echo "test_syssvc_lnm_privilege";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lnm_priv_check() stops consulting cur_privs and returns true unconditionally, so DEFINE/SYSTEM, DEASSIGN/SYSTEM, DEFINE/GROUP and DEASSIGN/GROUP all succeed for a caller holding NONE of SYSNAM/GRPNAM/GRPPRV/SYSPRV -- the exact privilege check vms-5b7 adds, bypassed in one shot because both ioctl handlers call this ONE function rather than each carrying its own copy of the switch.";;
+        require_fail) cat <<'EOF'
+SYSTEM: a process holding neither SYSNAM nor SYSPRV is refused SS$_NOPRIV
+SYSTEM: a process holding neither SYSNAM nor SYSPRV is refused DEASSIGN/SYSTEM SS$_NOPRIV
+GROUP: a process holding none of GRPNAM/GRPPRV/SYSPRV is refused SS$_NOPRIV
+GROUP: a process holding none of GRPNAM/GRPPRV/SYSPRV is refused DEASSIGN/GROUP SS$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+SYSTEM: the refused DEFINE never created the name (table unchanged)
+SYSTEM: the refused DELETE left the name and its value unchanged
+GROUP: the refused DEFINE never created the name (table unchanged)
+GROUP: the refused DELETE left the name and its value unchanged
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME DEFECT, OBSERVED A SECOND TIME PER TABLE, NOT A SECOND PROPERTY. Once
+lnm_priv_check() always returns true, the four "refused" DEFINE/DELETE
+calls above do not just report the wrong status -- they actually reach
+lnm_find()/lnm_alloc_slot() and mutate the arena, because the mutation
+removed the ONLY gate standing between an unprivileged caller and the
+table. So the "table unchanged" companion assertion for each of the four
+also flips: the DEFINE case's name now DOES appear where it should still
+be absent, and the DELETE case's name is now GONE (or its value replaced)
+where it should still be exactly what a privileged process originally
+wrote. Both members of each pair trace to the exact same missing check,
+not to two independent bugs -- which is why they are paired here as
+knock-on rather than each given a separate defect.
+
+WHAT STAYS GREEN, AND WHY. Every positive-privilege assertion in this
+suite (SYSNAM/SYSPRV/GRPNAM/GRPPRV each succeeding on their own) is
+UNCHANGED by this mutation: those callers already satisfied the real
+check and lnm_priv_check() always returning true changes nothing for
+them. The LNM$JOB assertions are untouched for the same reason: the
+default case already returned true before this mutation reached it.
+And no OTHER suite in this manifest sets up an unprivileged identity
+before writing LNM$SYSTEM/LNM$GROUP -- test_syssvc_lnm_system.c,
+test_syssvc_lnm_groupjob.c and test_syssvc_lnm_crossproc.c all act under
+the default registered-process identity, which already carries
+SYSNAM/GRPNAM (VMS_PRV_M_ENFORCED, vms_ioctl.h) for a process the
+executive derives as CAP_SYS_ADMIN-capable -- true for every process in
+this harness's initramfs. Those suites would pass identically whether or
+not the gate exists, so this mutation cannot redden them.
+EOF
+                      ;;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -4406,6 +4462,19 @@ apply_edit() {
         # second apply finds no `return proc->uic >> 16;` left and is the
         # no-op selftest requires.
         sed -i 's|        return proc->uic >> 16;   /\* UIC group \*/|        return 0; /* NEGCTL lnm-group-scope-collapsed: was proc->uic >> 16 */|' "$_file";;
+
+    lnm-privilege-check-bypassed)
+        # UNIQUE call-site text, occurring TWICE by design: vms_lnm.c's
+        # vms_ioctl_lnm_define() and vms_ioctl_lnm_delete() both gate
+        # through this exact call (that sharing is the point -- see
+        # lnm_priv_check()'s header comment). sed's substitution applies
+        # once per LINE with no /g needed, so a single command mutates
+        # BOTH call sites in the same pass: `0 &&` short-circuits before
+        # lnm_priv_check() is even called, so the `goto out_copy` refusal
+        # is unreachable in either handler. A second apply finds no
+        # `if (!lnm_priv_check(...))` left in the file and is the no-op
+        # selftest requires.
+        sed -i 's|    if (!lnm_priv_check(a->table, proc->cur_privs, \&a->status))|    if (0 \&\& !lnm_priv_check(a->table, proc->cur_privs, \&a->status)) /* NEGCTL lnm-privilege-check-bypassed */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

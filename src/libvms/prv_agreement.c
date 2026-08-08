@@ -30,6 +30,13 @@
  * via SDA READ SYS$SYSTEM:SYSDEF.STB; see docs/oracle/vax73-privileges.md
  * section 2 for the verbatim EVALUATE transcript.
  *
+ * SYSNAM/GRPNAM/GRPPRV (vms-5b7) are the one exception: that transcript
+ * did not query them. They are grounded instead via public $PRVDEF
+ * documentation plus the gaps the transcript's OTHER confirmed bits leave
+ * open -- see the comment beside VMS_PRV_V_SYSNAM in src/kernel/
+ * vms_ioctl.h for the full argument. Recorded here so a reader does not
+ * assume every assert below traces to the same live SDA session.
+ *
  * The check is confined to the privileges the two sides actually share --
  * the executive deliberately does not enumerate all 39, because it only
  * names privileges it can enforce or must store.
@@ -41,6 +48,8 @@
 
 _Static_assert(PRV$V_CMKRNL == VMS_PRV_V_CMKRNL, "PRV$V_CMKRNL disagrees with the executive");
 _Static_assert(PRV$V_CMEXEC == VMS_PRV_V_CMEXEC, "PRV$V_CMEXEC disagrees with the executive");
+_Static_assert(PRV$V_SYSNAM == VMS_PRV_V_SYSNAM, "PRV$V_SYSNAM disagrees with the executive");
+_Static_assert(PRV$V_GRPNAM == VMS_PRV_V_GRPNAM, "PRV$V_GRPNAM disagrees with the executive");
 _Static_assert(PRV$V_DETACH == VMS_PRV_V_DETACH, "PRV$V_DETACH disagrees with the executive");
 _Static_assert(PRV$V_LOG_IO == VMS_PRV_V_LOG_IO, "PRV$V_LOG_IO disagrees with the executive");
 _Static_assert(PRV$V_GROUP  == VMS_PRV_V_GROUP,  "PRV$V_GROUP disagrees with the executive");
@@ -53,6 +62,7 @@ _Static_assert(PRV$V_OPER   == VMS_PRV_V_OPER,   "PRV$V_OPER disagrees with the 
 _Static_assert(PRV$V_NETMBX == VMS_PRV_V_NETMBX, "PRV$V_NETMBX disagrees with the executive");
 _Static_assert(PRV$V_SYSPRV == VMS_PRV_V_SYSPRV, "PRV$V_SYSPRV disagrees with the executive");
 _Static_assert(PRV$V_BYPASS == VMS_PRV_V_BYPASS, "PRV$V_BYPASS disagrees with the executive");
+_Static_assert(PRV$V_GRPPRV == VMS_PRV_V_GRPPRV, "PRV$V_GRPPRV disagrees with the executive");
 
 /*
  * The masks the executive derives from those positions must agree too.
@@ -62,10 +72,14 @@ _Static_assert(PRV$V_BYPASS == VMS_PRV_V_BYPASS, "PRV$V_BYPASS disagrees with th
  */
 _Static_assert(PRV$M_CMKRNL == VMS_PRV_M_CMKRNL, "PRV$M_CMKRNL disagrees with the executive");
 _Static_assert(PRV$M_CMEXEC == VMS_PRV_M_CMEXEC, "PRV$M_CMEXEC disagrees with the executive");
+_Static_assert(PRV$M_SYSNAM == VMS_PRV_M_SYSNAM, "PRV$M_SYSNAM disagrees with the executive");
+_Static_assert(PRV$M_GRPNAM == VMS_PRV_M_GRPNAM, "PRV$M_GRPNAM disagrees with the executive");
 _Static_assert(PRV$M_SETPRV == VMS_PRV_M_SETPRV, "PRV$M_SETPRV disagrees with the executive");
 _Static_assert(PRV$M_TMPMBX == VMS_PRV_M_TMPMBX, "PRV$M_TMPMBX disagrees with the executive");
 _Static_assert(PRV$M_WORLD  == VMS_PRV_M_WORLD,  "PRV$M_WORLD disagrees with the executive");
 _Static_assert(PRV$M_NETMBX == VMS_PRV_M_NETMBX, "PRV$M_NETMBX disagrees with the executive");
+_Static_assert(PRV$M_SYSPRV == VMS_PRV_M_SYSPRV, "PRV$M_SYSPRV disagrees with the executive");
+_Static_assert(PRV$M_GRPPRV == VMS_PRV_M_GRPPRV, "PRV$M_GRPPRV disagrees with the executive");
 
 /*
  * F$GETJPI CURPRIV/AUTHPRIV NAME COVERAGE (vms-2b8 round 9; supersedes a

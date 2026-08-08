@@ -470,7 +470,8 @@ dcl-fident-name2num-host-passwd
 opcom-header-host-login-name
 setuai-sysprv-caller-declared
 register-adopt-pid-not-reported
-rms-create-filespec-not-translated"
+rms-create-filespec-not-translated
+scratch-dir-owner-not-system"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -3712,6 +3713,70 @@ EOF
                       ;;
         esac;;
 
+    scratch-dir-owner-not-system)
+        case "$_f" in
+        facility)     echo "PID 1 boot-time VMS directory provisioning (SYS\$SCRATCH:/SYS\$LOGIN:, src/ovmx_init/ovmx_init.c provision_writable_dir())";;
+        # NOT src/ovmx_init/ovmx_init.c. test_syssvc_scratch_writable.c runs
+        # in the kernel-executive QEMU rig (tests/qemu/Dockerfile + init.sh),
+        # which insmods vms.ko and drives the public sys$ API directly --
+        # PID 1 / STARTUP.EXE never boots there, so ovmx_init.c is never
+        # linked into this suite's binary and a mutation to it CANNOT reach
+        # this suite (MEASURED: qemu_syssvc_tests links against libvms only,
+        # not ovmx_init). The suite therefore carries its OWN duplicate of
+        # provision_writable_dir()'s recipe
+        # (provision_writable_dir_for_test(), with its own header explaining
+        # the duplication) so it can stand up [SYSTMP]/[USERS] itself before
+        # probing them -- and THAT is the copy an sed mutation has to reach
+        # for "detection" to be a true claim rather than a decorative one.
+        # ../ is relative to the src-root cmd_apply is given (src/), which
+        # is always a sibling of tests/ in every checkout this runs
+        # against -- the real driver's /src/repo/src (inject_and_run.sh,
+        # facility_attribution_negctl.sh) and this file's own cmd_selftest
+        # (which stages tests/qemu next to its src/ copy for exactly this).
+        targets)      echo "../tests/qemu/test_syssvc_scratch_writable.c";;
+        # This is NOT an executive/vms.ko facility -- it is PID 1's own
+        # userspace boot-time provisioning, outside the "every wired
+        # EXECUTIVE facility" scope this manifest otherwise covers (see the
+        # SCOPE, DECLARED header). It is admitted here, alongside the
+        # kernel-facility defects, only because
+        # tests/qemu/test_syssvc_scratch_writable.c is discovered by the same
+        # test_syssvc_* glob cmd_coverage floors, and the coverage check
+        # draws no distinction between "executive" and "PID 1 boot" for that
+        # floor -- so this suite needs a real anchor or the floor is wrong
+        # about it, not vice versa (vms-e5c).
+        suites_red)   echo "test_syssvc_scratch_writable";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        # MEASURED, not reasoned (vms-e5c). provision_writable_dir_for_test()
+        # chowns [SYSTMP]/[USERS] to SYSTEM's FULL UIC (both fields) before
+        # this suite's credential-drop probes run. This mutation drops only
+        # the MEMBER half of that ONE chown call to root (0), leaving the
+        # GROUP half alone -- so the directories end up root-owned but still
+        # SYSTEM-group-owned, exactly the "chown the group only" shape an
+        # earlier draft of the real fix (src/ovmx_init/ovmx_init.c) shipped
+        # and then measured broken: under a real QEMU boot, vmsfs's actual
+        # access decision (src/kernel/vmsfs/vmsfs_blkdev.c
+        # vmsfs_blkdev_permission()) is VMS SOGW, not Unix rwx, and
+        # VMSFS_PROT_DEFAULT denies WRITE to the Group category by default
+        # (same as a real VMS default protection) -- only the OWNER category
+        # (BOTH UIC fields matching) escapes that denial. The probes
+        # themselves are untouched (SYSTEM_UIC_MEMBER, used by
+        # try_create_as(), is a different symbol from the literal this
+        # mutation edits), so a SYSTEM probe whose UIC now only shares the
+        # GROUP field with the directory's owner is refused exactly like an
+        # unrelated account would be -- which is what test_syssvc_scratch_
+        # writable's positive (A1/A2) assertions catch.
+        why)          echo "provision_writable_dir_for_test() stops making its SYSTEM probe's UIC the actual OWNER of [SYSTMP]/[USERS] (only the UIC GROUP field still matches, the MEMBER field reverts to root/0) -- vmsfs's SOGW access decision denies WRITE to the GROUP category by default, so SYSTEM's sys\$create-equivalent open() under SYS\$SCRATCH:/SYS\$LOGIN: is refused exactly as it was before vms-e5c's fix to the real product code.";;
+        require_fail) cat <<'EOF'
+SYSTEM's sys$create-equivalent open() succeeds under SYS$SCRATCH:
+SYSTEM's sys$create-equivalent open() succeeds under SYS$LOGIN:
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -4058,6 +4123,20 @@ apply_edit() {
         # application (replaced by a comment), so a second apply finds no
         # match inside the range and is the no-op selftest requires.
         sed -i '/^    proc = vms_proc_find_or_err();$/,/^        return 0;$/ s|^        args.vms_pid = proc->vms_pid;$|        /* NEGCTL register-adopt-pid-not-reported: vms_pid not copied back on adopt */|' "$_file";;
+    scratch-dir-owner-not-system)
+        # Single-line, uniquely-anchored inside test_syssvc_scratch_
+        # writable.c's OWN provisioning duplicate (see this defect's
+        # `targets`/`why` for why the real product file cannot be the
+        # target). The exact call exists once; after substitution the OLD
+        # text ("(uid_t)SYSTEM_UIC_MEMBER, (gid_t)SYSTEM_UIC_GROUP) != 0)")
+        # is gone, so a second apply finds no match -- the no-op selftest
+        # requires. Drops only the MEMBER half of the chown to root (0); the
+        # GROUP half is untouched, and SYSTEM_UIC_MEMBER (a different
+        # symbol) still drives try_create_as()'s own credential drop
+        # unmutated -- reproducing "group matches, owner does not" without
+        # also turning the SYSTEM probe into literal root, which would
+        # bypass the property being tested instead of failing it.
+        sed -i 's|    if (chown(path, (uid_t)SYSTEM_UIC_MEMBER, (gid_t)SYSTEM_UIC_GROUP) != 0)|    if (chown(path, (uid_t)0, (gid_t)SYSTEM_UIC_GROUP) != 0) /* NEGCTL scratch-dir-owner-not-system: SYSTEM no longer owns [SYSTMP]/[USERS], only shares their group */|' "$_file";;
 
     rms-create-filespec-not-translated)
         # Unique text in the file -- resolve_filename()'s own
@@ -4709,7 +4788,7 @@ cmd_selftest() {
             done
         done
 
-        rm -rf "$_st_tmp/tree"
+        rm -rf "$_st_tmp/tree" "$_st_tmp/tests"
         mkdir -p "$_st_tmp/tree"
         # libvms, vmsdcl and vmsrms are copied too: a defect may target the
         # PRODUCT half of an interface (creprc-handshake-eintr and
@@ -4722,6 +4801,22 @@ cmd_selftest() {
                    "$_st_root/vmsdcl" "$_st_root/vmsrms" \
                    "$_st_tmp/tree/" 2>/dev/null; then
             echo "FAIL: cannot copy $_st_root/{kernel,libvmssys,libvms,vmsdcl,vmsrms} for the self-test"
+            rm -rf "$_st_tmp"
+            return 2
+        fi
+        # tests/qemu is staged as a SIBLING of tree (mirroring tree's own
+        # role as $_st_root, i.e. src/, with tests/qemu next to it in every
+        # real checkout) so a target like scratch-dir-owner-not-system's
+        # "../tests/qemu/test_syssvc_scratch_writable.c" -- relative to a
+        # src/ root, same convention the real driver's /src/repo/src uses --
+        # resolves here exactly as it does in inject_and_run.sh and
+        # facility_attribution_negctl.sh. Without this, that defect's own
+        # anchor would report a false BROKEN FIXTURE: not because the sed
+        # pattern moved, but because this dry run alone never staged the
+        # file it targets.
+        mkdir -p "$_st_tmp/tests"
+        if ! cp -a "$_st_tests" "$_st_tmp/tests/qemu" 2>/dev/null; then
+            echo "FAIL: cannot copy $_st_tests for the self-test"
             rm -rf "$_st_tmp"
             return 2
         fi

@@ -469,7 +469,8 @@ dcl-fident-num2name-bracketed-uic
 dcl-fident-name2num-host-passwd
 opcom-header-host-login-name
 setuai-sysprv-caller-declared
-register-adopt-pid-not-reported"
+register-adopt-pid-not-reported
+rms-create-filespec-not-translated"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -3627,6 +3628,46 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    rms-create-filespec-not-translated)
+        case "$_f" in
+        facility)     echo "RMS filespec-to-Linux-path translation on create (src/vmsrms/rms_core.c resolve_filename(), called by both sys\$open() and sys\$create()) -- a userspace consumer of vmsfs's translation, the same class as the dcl-fident-*/dcl-fuser-* entries above, not a vms.ko-dispatched ioctl";;
+        targets)      echo "vmsrms/rms_core.c";;
+        suites_red)   echo "test_syssvc_rms_scratch_create";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "resolve_filename() checked vmsfs_to_linux_path()'s return value with \`== 0\`, but that function returns a VMS status code (SS\$_NORMAL == 1 on success, odd = success -- \$VMS_STATUS_SUCCESS is the project-wide convention, never 0). The check never matched, so a VMS filespec (SYS\$SCRATCH:FOO.DAT) was never recognized as translated and silently fell through to being treated as a literal, relative Linux path -- resolving against the calling process's cwd instead of /vms/... This is the exact vms-221 regression: PARTS's sys\$create() under SYS\$SCRATCH: returned EACCES for a reason that had nothing to do with directory ownership, because it was never really looking at SYS\$SCRATCH: at all.";;
+        require_fail) cat <<'EOF'
+sys$create() of the RMS indexed file under SYS$SCRATCH: succeeded (the vms-221 EACCES is gone)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+sys$create() resolved the VMS filespec SYS$SCRATCH:VMS221.DAT to its REAL translated Linux path under /vms/SYSTMP -- pins the vms-221 regression directly: resolve_filename() (src/vmsrms/rms_core.c) used to check vmsfs_to_linux_path()'s return value with `== 0`, but that function returns a VMS status code (SS$_NORMAL == 1 on success, odd = success); the check never matched, so EVERY VMS-spec candidate silently fell through to being treated as a literal (relative) Linux path instead of a translated one
+sys$create() did NOT fall back to treating the raw VMS spec string as a literal relative Linux path (the exact vms-221 regression shape)
+sys$connect() on the freshly created file succeeded
+sys$put() #100 (first periodic index save, fresh .rms_idx create) succeeded
+sys$put() #200 (SECOND periodic index save -- reopens the .rms_idx sidecar) succeeded
+every sys$put() across two periodic index-save reopens succeeded -- no silent mid-run EACCES
+sys$close() (final index flush, a THIRD reopen of .rms_idx) succeeded
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+ONE LINE, ONE EARLY RETURN, EVERY LATER STAGE FOLLOWS MECHANICALLY -- not a
+second property. With the check reverted, sys$create()'s open() targets an
+unwritable relative path and returns non-success; test_syssvc_rms_scratch_
+create.c's child_main() checks $VMS_STATUS_SUCCESS(st) immediately after and
+_exit(0)s right there (see the file: "if (!$VMS_STATUS_SUCCESS(st)) { _exit(0);
+}"), before sys$connect(), any sys$put(), or sys$close() ever run. Each of
+those stages' status line is therefore simply ABSENT from the child's
+transcript, which field_is_ok() reports as not-OK for every one of them, and
+the "ALL_205_PUTS_SUCCEEDED" line is never printed either since the put loop
+never executes. The two RESOLVED_PATH knock-ons are the same single symptom
+observed a second way -- through the path string sys$create() computed,
+rather than through the status it returned -- not an independent defect.
+EOF
+                      ;;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -3973,6 +4014,16 @@ apply_edit() {
         # application (replaced by a comment), so a second apply finds no
         # match inside the range and is the no-op selftest requires.
         sed -i '/^    proc = vms_proc_find_or_err();$/,/^        return 0;$/ s|^        args.vms_pid = proc->vms_pid;$|        /* NEGCTL register-adopt-pid-not-reported: vms_pid not copied back on adopt */|' "$_file";;
+
+    rms-create-filespec-not-translated)
+        # Unique text in the file -- resolve_filename()'s own
+        # vmsfs_to_linux_path() success check, the exact line vms-221 fixed.
+        # Reverting $VMS_STATUS_SUCCESS(...) back to `== 0` (the original
+        # bug: vmsfs_to_linux_path() returns a VMS status code, SS$_NORMAL
+        # == 1 on success, never 0) makes the check never match again, so a
+        # second apply finds no $VMS_STATUS_SUCCESS(...) text left inside
+        # the `if (` and is the no-op selftest requires.
+        sed -i 's|if (\$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(spec, linux_path, sizeof(linux_path)))) {|if (vmsfs_to_linux_path(spec, linux_path, sizeof(linux_path)) == 0) { /* NEGCTL rms-create-filespec-not-translated */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
@@ -4616,14 +4667,17 @@ cmd_selftest() {
 
         rm -rf "$_st_tmp/tree"
         mkdir -p "$_st_tmp/tree"
-        # libvms and vmsdcl are copied too: a defect may target the PRODUCT
-        # half of an interface (creprc-handshake-eintr and
-        # run-detached-name-dropped do), and a target this function cannot see
-        # would be reported as a dead anchor on every run.
+        # libvms, vmsdcl and vmsrms are copied too: a defect may target the
+        # PRODUCT half of an interface (creprc-handshake-eintr and
+        # run-detached-name-dropped do, and rms-create-filespec-not-
+        # translated targets vmsrms/rms_core.c -- a userspace consumer of
+        # vmsfs's translation, the same class as the vmsdcl entries), and a
+        # target this function cannot see would be reported as a dead
+        # anchor on every run.
         if ! cp -a "$_st_root/kernel" "$_st_root/libvmssys" "$_st_root/libvms" \
-                   "$_st_root/vmsdcl" \
+                   "$_st_root/vmsdcl" "$_st_root/vmsrms" \
                    "$_st_tmp/tree/" 2>/dev/null; then
-            echo "FAIL: cannot copy $_st_root/{kernel,libvmssys,libvms,vmsdcl} for the self-test"
+            echo "FAIL: cannot copy $_st_root/{kernel,libvmssys,libvms,vmsdcl,vmsrms} for the self-test"
             rm -rf "$_st_tmp"
             return 2
         fi

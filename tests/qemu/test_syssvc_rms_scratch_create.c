@@ -377,8 +377,8 @@ int main(void)
           strstr(out, "RESOLVED_PATH=/vms/systmp/") != NULL,
           "sys$create() resolved the VMS filespec SYS$SCRATCH:VMS221.DAT to "
           "its REAL translated Linux path under /vms/SYSTMP -- pins the "
-          "vms-221 regression directly: resolve_filename() (src/vmsrms/"
-          "rms_core.c) used to check vmsfs_to_linux_path()'s return value "
+          "vms-221 regression directly: resolve_filename() (src/vmsrms/rms_core.c) "
+          "used to check vmsfs_to_linux_path()'s return value "
           "with `== 0`, but that function returns a VMS status code "
           "(SS$_NORMAL == 1 on success, odd = success); the check never "
           "matched, so EVERY VMS-spec candidate silently fell through to "
@@ -388,6 +388,7 @@ int main(void)
           "sys$create() did NOT fall back to treating the raw VMS spec "
           "string as a literal relative Linux path (the exact vms-221 "
           "regression shape)");
+    /* negctl: rms-create-filespec-not-translated */
     CHECK(field_is_ok(out, "CREATE_STATUS="),
           "sys$create() of the RMS indexed file under SYS$SCRATCH: succeeded "
           "(the vms-221 EACCES is gone)");

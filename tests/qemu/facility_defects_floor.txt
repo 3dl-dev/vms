@@ -68,4 +68,13 @@
 # before this entry was written, so the assertion it names is no longer
 # scheduler-dependent. See its own entry in facility_defects.sh for the
 # full account.
-58
+# Raised to 60 by vms-221's rms-create-filespec-not-translated -- the first
+# entry to target vmsrms/rms_core.c (a userspace consumer of vmsfs's
+# translation, same class as the vmsdcl entries) instead of src/kernel or
+# src/vmsdcl, anchoring the new test_syssvc_rms_scratch_create suite so it
+# is not left with a permission-only claim of being reddenable. cmd_selftest
+# also grew a copy of src/vmsrms into its throwaway tree for this entry (see
+# facility_defects.sh's cmd_selftest, "libvms, vmsdcl and vmsrms are copied
+# too"). (The 59th, following #176's addition to the manifest, was already
+# on the branch this rebased onto.)
+60

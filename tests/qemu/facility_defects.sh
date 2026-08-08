@@ -2306,7 +2306,17 @@ EOF
         # through the public sys$ API, same counter-example shape as
         # procnam/showdev/showproc/lock_status/authorize), so it is a genuine
         # detector of the same missing bind, not a widening of blind_suites.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status test_syssvc_setname test_syssvc_authorize test_syssvc_setuai";;
+        # test_syssvc_ast is the TWELFTH, added by #170 (vms-as1), which
+        # rewrote src/libvms/syssvc/sys_ast.c into a pure translation layer
+        # over /dev/vms: sys$setast now reaches the executive through the
+        # same kif_bind() -> vms_kif_register() auto-bind path as the suites
+        # above, so this defect reaches it too. #170 added it to
+        # ast-setast-disable's suites_red but missed this one -- same
+        # counter-example shape as procnam/showdev/showproc/lock_status/
+        # authorize/setuai (it opens /dev/vms only to decide skip-vs-run,
+        # then drives the public sys$ API), so it is a genuine detector, not
+        # a widening of blind_suites.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status test_syssvc_setname test_syssvc_authorize test_syssvc_setuai test_syssvc_ast";;
         # test_kmod_setterm (vms-d0b) joins the blind set, MEASURED in the
         # same run: it stayed rc=0 with the defect injected, because
         # open_and_register() hand-registers exactly like test_kmod_devtab

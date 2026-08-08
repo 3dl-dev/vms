@@ -105,6 +105,7 @@ static int executive_present(void)
 
 int main(void)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     uint32_t status;
     uint32_t ef_state;
 

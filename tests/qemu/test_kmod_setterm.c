@@ -192,6 +192,7 @@ static void bound_child(int wfd, int gfd, const char *self, int phase)
 
 int main(int argc, char **argv)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     struct bound_report pre, post, execed;
     struct vms_procinfo info;
     uint32_t status, chan = 0;

@@ -441,6 +441,7 @@ static int run_wfland_child(int c2p_write, const struct dsc$descriptor_s *nam)
 
 int main(void)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     int p2c[2], c2p[2];
     char tok;
     uint32_t st;

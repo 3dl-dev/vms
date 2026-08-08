@@ -182,6 +182,7 @@ static int run_child(int cfd, int c2p_write, int p2c_read)
  * ================================================================ */
 int main(void)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     printf("=== test_kmod_lock_mproc ===\n");
 
     int pfd = open_and_register();

@@ -40,6 +40,7 @@ static int pass = 0, fail = 0;
 } while(0)
 
 int main(void) {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     printf("=== test_kmod_eflag ===\n");
 
     int fd = open("/dev/vms", O_RDWR);

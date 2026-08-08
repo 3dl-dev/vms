@@ -600,6 +600,7 @@ static int process_d(int rfd, int wfd)
 
 int main(void)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     int a2b[2], b2a[2], a2d[2], d2a[2];
     pid_t child, dchild;
     struct b_report1 r1;

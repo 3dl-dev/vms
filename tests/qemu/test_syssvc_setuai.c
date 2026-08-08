@@ -318,6 +318,7 @@ static int executive_present(void)
 
 int main(void)
 {
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     static char before[8192], after[8192];
     static char row[1024], field[256];
     struct probe_result r1, r2, r3, r4;

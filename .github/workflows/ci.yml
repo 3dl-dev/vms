@@ -757,18 +757,19 @@ jobs:
   # This job injects ONE minimal defect per facility — the vms-e4d
   # compat[EX][CR] flip, mechanised, plus one of the same shape for every
   # other facility — boots each in QEMU against a REAL /dev/vms, and asserts
-  # that the COMPLETE set of assertions that went red is EXACTLY the set the
-  # manifest names for that defect, and that no suite outside the facility's
-  # own set failed.
+  # THE RUNTIME PROPERTY: the facility's OWN test suite goes RED
+  # (run_facility_negctl.sh checks 1-4/8). That behavioral proof -- defect
+  # injected, vms.ko rebuilt, booted for real, the suite reddens -- is what
+  # caught the #177 fake test.
   #
-  # THE EQUALITY IS THE POINT, and it is what round 1 of vms-e7d got wrong.
-  # That version checked minimality with a hand-maintained allowlist of
-  # sibling assertions that had to stay green; an adversary measured four of
-  # nine mutations reddening assertions the manifest named nowhere, while the
-  # job still printed "the mutation is minimal". A partial allowlist is
-  # satisfiable by something other than the property it certifies. The check
-  # now slices every FAIL line out of the run and requires set equality, so a
-  # mutation that trips an unnamed property cannot pass.
+  # TORN OUT (vms-49f), per the CLAUDE.md Rule 9 amendment: the per-defect
+  # EXACT red-set equality against the manifest's named set, the attribution to
+  # declared suites, and the committed-ledger comparison. Those are string
+  # relations over the harness's OWN self-declarations, not runtime behavior --
+  # "it may lint but MUST NOT be gated or worded as proof" -- and they re-broke
+  # on every executive change that shifted which assertions redden. They remain
+  # as non-gating lint inside run_facility_negctl.sh. The aggregate ledger job
+  # that used to compare the union against a committed 61 KB record is deleted.
   #
   # It also runs the PRISTINE image first as a positive control, so a harness
   # that fails indiscriminately cannot pass this job.
@@ -826,15 +827,14 @@ jobs:
   # by `NR % N`, so the split tracks the manifest as it grows or shrinks --
   # never a hand-maintained defect list that goes stale). Splitting shrinks
   # the SEQUENTIAL run inside any one job, which is what the timeout budgets
-  # against; it does not remove or narrow any check -- every shard still runs
-  # the same positive control, the same per-defect equality check (red set
-  # EXACTLY require_fail + knock_on_fail, attribution, blind-suite gaps) as
-  # the single job did, just over a subset of defects. The full-manifest
-  # comparison against the committed execution record (the check a deleter
-  # does not own) still runs, in the aggregate job below, over the UNION of
-  # every shard's observations -- so it is exactly as strict as before: a
-  # defect a shard dropped is a defect missing from that union, and the
-  # committed-record comparison catches it same as it always did.
+  # against; it does not remove or narrow the RUNTIME check -- every shard still
+  # runs the same positive control and the same per-defect runtime detection
+  # (the facility's own suite reddens against a real /dev/vms) as the single job
+  # did, just over a subset of defects. (The per-defect exact red-set equality,
+  # the attribution to declared suites, and the full-manifest committed-ledger
+  # comparison that a former aggregate job ran over the union of shards were
+  # TORN OUT as declaration gates in vms-49f -- see the block above. The shards
+  # no longer feed an aggregate ledger comparison.)
   kernel-executive-facility-negative-controls-shard:
     name: Kernel Executive — Per-Facility Negative Controls (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     if: ${{ github.event_name != 'pull_request' }}
@@ -873,15 +873,20 @@ jobs:
 
       # This job (across its shards) is the ONLY place the executive is
       # actually exercised, and rd vms-b1f means it does not run on a dev host
-      # at all. Each shard EMITS its slice of the execution-sourced
-      # attribution record (rd vms-d894, rd vms-659); the aggregate job below
-      # unions the slices and is where the full-manifest comparison against
-      # the committed record happens (FACILITY_NEGCTL_REQUIRE_RECORD is a
-      # FULL_RUN-only check in the driver, so it is not meaningful per-shard --
-      # see run_facility_negctl.sh's own "ONLY ON A FULL RUN" note).
-      - name: Every executive facility has a control that turns CI red and NAMES it (this shard's slice)
+      # at all. It injects each defect, rebuilds vms.ko, boots the guest against
+      # a REAL /dev/vms, and asserts the RUNTIME property: the facility's own
+      # suite goes RED (run_facility_negctl.sh checks 1-4/8).
+      #
+      # The driver still emits an observed record to RECORD_OUT, but it is now
+      # ADVISORY ONLY: the aggregate ledger job that used to union the shards and
+      # compare against a committed tests/qemu/facility_negctl_observed.tsv was
+      # deleted in vms-49f (a string relation over the harness's own
+      # self-declarations -- "it may lint but MUST NOT be gated", CLAUDE.md Rule
+      # 9 amendment). Nothing downstream reads the emitted record.
+      - name: Every executive facility has a control that turns CI red against a real /dev/vms (this shard's slice)
         env:
           CONTAINER_ENGINE: docker
+          # Advisory emission only; no longer uploaded or compared (vms-49f).
           FACILITY_NEGCTL_RECORD_OUT: ${{ runner.temp }}/facility_negctl_observed.tsv
         run: |
           set -eu
@@ -891,74 +896,6 @@ jobs:
           echo "$DEFECTS" | sed 's/^/  /'
           # shellcheck disable=SC2086
           tests/qemu/run_facility_negctl.sh $DEFECTS
-
-      # Uploaded even on failure: a run that went red is exactly when someone
-      # needs to see what it observed, and reading a shard's rows out of a job
-      # log is how a record gets transcribed wrong.
-      - name: Upload this shard's observed record slice
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: facility-negctl-observed-record-shard-${{ matrix.shard }}
-          path: ${{ runner.temp }}/facility_negctl_observed.tsv
-          if-no-files-found: warn
-
-  # Aggregate job: keeps the ORIGINAL job name (branch protection / docs may
-  # cite it, e.g. docs/VERDICT-vms-b33-phase2-*.md) and does the ONE check that
-  # is only meaningful over the FULL manifest -- comparing the union of every
-  # shard's observations against the committed
-  # tests/qemu/facility_negctl_observed.tsv, in both directions, exactly as
-  # the single-job driver did on a full run.
-  kernel-executive-facility-negative-controls:
-    name: Kernel Executive — Per-Facility Negative Controls (attribution)
-    if: ${{ github.event_name != 'pull_request' }}
-    needs: kernel-executive-facility-negative-controls-shard
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download every shard's observed record slice
-        uses: actions/download-artifact@v4
-        with:
-          pattern: facility-negctl-observed-record-shard-*
-          path: ${{ runner.temp }}/shards
-
-      # The union of every shard's rows, deduplicated. Shards partition the
-      # manifest by defect name, so no RUN row should collide across shards;
-      # `sort -u` is a safety net, not load-bearing on that partition.
-      - name: Union the shard records and compare against the committed record
-        env:
-          FACILITY_NEGCTL_REQUIRE_RECORD: 1
-        run: |
-          set -eu
-          UNION="${{ runner.temp }}/facility_negctl_observed.union.tsv"
-          find "${{ runner.temp }}/shards" -name '*.tsv' -print0 \
-            | xargs -0 cat 2>/dev/null | grep -v '^#' | grep -v '^[[:space:]]*$' \
-            | sort -u >"$UNION" || true
-          echo "--- union of all shards' observed records ($(grep -c '^RUN' "$UNION" 2>/dev/null || echo 0) RUN rows) ---"
-          . tests/qemu/facility_negctl_record.sh
-          COMMITTED=$(fnr_record_path tests/qemu)
-          if [ ! -s "$UNION" ]; then
-            echo "FATAL: no shard produced any observed record rows -- every shard must"
-            echo "       have failed before emitting one, so no verdict is possible."
-            exit 2
-          fi
-          if [ ! -f "$COMMITTED" ]; then
-            if [ "${FACILITY_NEGCTL_REQUIRE_RECORD:-0}" = "1" ]; then
-              echo "FAIL: FACILITY_NEGCTL_REQUIRE_RECORD=1 and no record is committed at $COMMITTED"
-              exit 1
-            fi
-            echo "NO COMMITTED RECORD -- nothing to compare against. See run_facility_negctl.sh."
-            exit 0
-          fi
-          if fnr_compare "$UNION" "$COMMITTED"; then
-            echo "ok: the committed record matches the union of every shard's observations, row for row"
-          else
-            exit 1
-          fi
 
   # -----------------------------------------------------------------------
   # Job 4: Conformance tests

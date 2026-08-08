@@ -377,7 +377,30 @@ static int resolve_filename(struct FAB *fab)
     int is_vms_spec = (strchr(spec, ':') != NULL || strchr(spec, '[') != NULL);
     if (is_vms_spec || strchr(spec, ';')) {
         char linux_path[1024];
-        if (vmsfs_to_linux_path(spec, linux_path, sizeof(linux_path)) == 0) {
+        /*
+         * vmsfs_to_linux_path() returns a VMS status code (SS$_NORMAL = 1 on
+         * success, per its own doc comment and $VMS_STATUS_SUCCESS: odd =
+         * success) -- NOT 0-on-success. This check used to read `== 0`,
+         * which is an EVEN (failure) value that the function never actually
+         * returns for a real error either (its failures are also VMS status
+         * codes, e.g. SS$_BADPARAM/SS$_NOSUCHDEV, all even). So this branch
+         * ALWAYS took the "not translated" fallback below and treated the
+         * raw VMS spec string ("SYS$SCRATCH:FOO.DAT") as a literal Linux
+         * path -- relative, since it does not start with '/' -- resolving
+         * against the process's cwd instead of the real /vms/... location.
+         * For a SYSTEM session whose cwd is not writable, every VMS-spec
+         * candidate (SYS$SCRATCH:, SYS$LOGIN:, DKA0:[USERS], SYS$SYSDEVICE:
+         * [SYSTMP]) failed open() with EACCES for that reason -- not a
+         * directory-permission problem at all -- which is exactly why
+         * PARTS's sys$create() kept landing on its last, Unix-path fallback
+         * candidate ("/tmp/PARTS.DAT") instead of any VMS filespec (vms-221).
+         * A plain open() call using vmsfs_to_linux_path() directly (as
+         * vms-e5c's own positive control does) never went through this
+         * broken check, which is why it always succeeded while sys$create()
+         * did not. sys$open() shares this same resolve_filename() and had
+         * the identical defect.
+         */
+        if ($VMS_STATUS_SUCCESS(vmsfs_to_linux_path(spec, linux_path, sizeof(linux_path)))) {
             strncpy(fab->_resolved_path, linux_path,
                     sizeof(fab->_resolved_path) - 1);
             fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';

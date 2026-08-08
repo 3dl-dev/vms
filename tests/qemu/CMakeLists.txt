@@ -47,10 +47,12 @@ function(qemu_syssvc_add_test name source)
     add_executable(${name} ${source})
     target_include_directories(${name} PRIVATE
         ${VMS_INCLUDE_DIR}
+        ${VMS_RMS_INCLUDE_DIR}
         ${CMAKE_SOURCE_DIR}/src/libvmssys
     )
     target_link_libraries(${name} PRIVATE
         vms
+        vmsrms
         pthread
         m
     )

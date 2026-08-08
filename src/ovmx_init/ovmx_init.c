@@ -553,6 +553,86 @@ static int is_system_installed(void)
 }
 
 /*
+ * SYSTEM's UIC, as a fixed OVMX substrate convention -- NOT a SYSUAF read
+ * (vms-e5c).
+ *
+ * [USERS] and [SYSTMP] are MFD-level siblings of [SYS0] (see the tree below),
+ * so PROVISION.EXE's provision_ownership() walk (src/ovmx_provision/
+ * ovmx_provision.c, which chowns [SYS0] and everything beneath it to
+ * whatever UIC SYSUAF's SYSTEM record carries once PID 1 has handed off)
+ * never reaches them. This file mkdir()s them at boot, as root, and until
+ * now they stayed root:root 0755 forever -- so a SYSTEM (UIC [1,4]) DCL
+ * session got EACCES on sys$create under SYS$SCRATCH: ([SYSTMP]) or the
+ * [USERS] area, and OVMX's own PARTS demo silently dropped all the way to
+ * its /tmp fallback candidate. That is a Unix leak in a "zero Unix leaks"
+ * narrative, and the root cause: no user-writable VMS directory existed
+ * for SYSTEM to fall into.
+ *
+ * WHY THIS IS A FULL [UIC_GROUP, UIC_MEMBER] MATCH, NOT A GROUP-ONLY ONE
+ * (MEASURED, vms-e5c). vmsfs's real access decision
+ * (src/kernel/vmsfs/vmsfs_blkdev.c, vmsfs_blkdev_permission()) is VMS SOGW,
+ * not Unix rwx: every new file/directory is stamped VMSFS_PROT_DEFAULT
+ * (0xAA00) at creation, which denies WRITE to the System and World
+ * categories alike, exactly like a real VMS default (S:RWED,O:RWED,G:RE,
+ * W:RE) -- and it is a per-inode field the kernel module controls,
+ * completely independent of the Linux mode bits a plain chmod(2) sets. An
+ * earlier version of this fix chowned the GROUP only and left owner as
+ * root, banking on a Linux-style "group-writable" bit; MEASURED under a
+ * real QEMU boot with the real executive, that gave SYSTEM (UIC [1,4],
+ * i.e. euid=4/egid=1 after LOGINOUT's credential drop) the GROUP category
+ * -- and GROUP is denied WRITE by VMSFS_PROT_DEFAULT precisely because
+ * that is what "group" access means by default on real VMS too. Only the
+ * OWNER category (BOTH euid AND egid matching the inode, per
+ * vmsfs_blkdev_permission()'s own check) escapes that default denial. So
+ * SYSTEM has to be made the actual owner -- [UIC_MEMBER, UIC_GROUP] BOTH
+ * -- not merely share its group.
+ *
+ * PID 1 does not read SYSUAF and must not grow a second opinion about who
+ * SYSTEM is (vms-9b7) -- that was two independent 512-byte parsers of one
+ * file disagreeing about a SYSTEM row, and the fix was that PID 1 stopped
+ * parsing it at all. So these values are NOT derived from a per-installation
+ * data file at boot; they are the fixed UIC the shipped
+ * distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT gives the SYSTEM
+ * account ("SYSTEM|...|1|4|..."), the same [1,4] this project treats as a
+ * standing convention elsewhere (e.g. the pre-vms-9b7 PID 1 stamped this
+ * exact pair before the executive became the source of truth for it). If a
+ * future SYSUAF ever moves SYSTEM to a different UIC, these constants have
+ * to move with it -- disclosed here so the coupling is not silently
+ * rediscovered as a boot-time mismatch.
+ */
+#define OVMX_SYSTEM_UIC_GROUP   1
+#define OVMX_SYSTEM_UIC_MEMBER  4
+
+/*
+ * mkdir a directory that SYSTEM must be able to sys$create into, and make
+ * SYSTEM its actual owner -- both UIC fields, not just the group (see the
+ * MEASURED note above for why group-only is not enough on vmsfs). This is
+ * an OVMX substrate-limit design choice, already established and labelled
+ * as such in provision_ownership()'s "DISCLOSED DIVERGENCE" note -- not
+ * presented as a VMS-authentic mechanism (on real VMS this area would stay
+ * SYSTEM-owned by the same account-provisioning step that creates every
+ * other SYSTEM-owned system directory; here it is PID 1, at first boot,
+ * stamping a fixed, disclosed UIC rather than an identity it looked up).
+ * chmod to 0775 as well so DIRECTORY/PROTECTION's Linux-mode fallback
+ * display (vmsfs_mode_to_protection) is not left claiming a stricter
+ * protection than what vms_prot's OWNER category (VMSFS_PROT_DEFAULT's
+ * zero-deny nibble) actually grants -- it does not change enforcement, only
+ * what a mode-based reader sees, since vmsfs's read/write DECISION never
+ * consults i_mode (see the MEASURED note above).
+ */
+static void provision_writable_dir(const char *path)
+{
+    mkdir(path, 0775);
+    if (chown(path, (uid_t)OVMX_SYSTEM_UIC_MEMBER,
+              (gid_t)OVMX_SYSTEM_UIC_GROUP) != 0 && errno != ENOENT)
+        fprintf(stderr, "%%STARTUP-W-OWNER, cannot set owner of %s: %s\n",
+                path, strerror(errno));
+    if (chmod(path, 0775) != 0 && errno != ENOENT)
+        fprintf(stderr, "%%STARTUP-W-OWNER, cannot set mode of %s: %s\n",
+                path, strerror(errno));
+}
+
+/*
  * Create the VMS directory tree following ODS-2 conventions.
  * mkdir is idempotent — safe to call even if directories already exist.
  *
@@ -563,7 +643,8 @@ static int is_system_installed(void)
  * SYS$LIBRARY [SYSLIB]  /vms/SYS0/SYSCOMMON/SYSLIB/
  * SYS$MANAGER [SYSMGR]  /vms/SYS0/SYSCOMMON/SYSMGR/
  * SYS$HELP [SYSHLP]     /vms/SYS0/SYSCOMMON/SYSHLP/
- * [USERS]               /vms/USERS/
+ * [USERS]               /vms/USERS/         -- SYSTEM-writable (vms-e5c)
+ * [SYSTMP]              /vms/SYSTMP/        -- SYSTEM-writable (vms-e5c)
  */
 static void provision_dirs(void)
 {
@@ -596,9 +677,9 @@ static void provision_dirs(void)
     vms_to_linux(VMS_SYSHLP, path, sizeof(path));
     mkdir(path, 0755);
     vms_to_linux(VMS_USERS, path, sizeof(path));
-    mkdir(path, 0755);
+    provision_writable_dir(path);
     vms_to_linux(VMS_SYSTMP, path, sizeof(path));
-    mkdir(path, 0755);
+    provision_writable_dir(path);
 
     mkdir("/tmp/ovmx", 0755);
     mkdir("/tmp/ovmx/locks", 0755);

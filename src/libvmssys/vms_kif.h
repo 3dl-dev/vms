@@ -138,20 +138,21 @@ uint32_t vms_kif_chkpriv(uint64_t mask);
 /* ================================================================
  * AST Delivery (3b)
  *
- * THE WHOLE FAMILY IS UNWIRED (vms-as1): src/vmsprocess delivers ASTs
- * per-process, so an AST declared in one process is unknown to every other.
+ * THE WHOLE FAMILY IS WIRED (vms-as1): src/libvms/syssvc/sys_ast.c is now a
+ * translation layer over the executive -- sys$dclast calls vms_kif_dclast,
+ * sys$setast calls vms_kif_setast and drains the queue through
+ * vms_kif_deliverast. The AST queue, the per-mode enable flag and the quota
+ * are the executive's (src/kernel/vms_ast.c), not this image's. Proof:
+ * tests/qemu/test_syssvc_ast.c.
  * ================================================================ */
 
-/* Declare AST at specified access mode
- * OVMX-UNWIRED: vms_kif_dclast (vms-as1) */
+/* Declare AST at specified access mode */
 uint32_t vms_kif_dclast(uint64_t astadr, uint64_t astprm, uint8_t acmode);
 
-/* Enable/disable AST delivery. Returns SS$_WASSET or SS$_WASCLR
- * OVMX-UNWIRED: vms_kif_setast (vms-as1) */
+/* Enable/disable AST delivery. Returns SS$_WASSET or SS$_WASCLR */
 uint32_t vms_kif_setast(int enable);
 
-/* Deliver next pending AST. Returns 0 if AST delivered, -1 if none
- * OVMX-UNWIRED: vms_kif_deliverast (vms-as1) */
+/* Deliver next pending AST. Returns 0 if AST delivered, -1 if none */
 int vms_kif_deliverast(uint64_t *astadr, uint64_t *astprm, uint8_t *acmode);
 
 /* ================================================================

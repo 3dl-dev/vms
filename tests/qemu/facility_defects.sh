@@ -679,7 +679,14 @@ EOF
         case "$_f" in
         facility)     echo "AST delivery (VMS_IOCTL_DCLAST/SETAST/DELIVERAST)";;
         targets)      echo "kernel/vms_ast.c";;
-        suites_red)   echo "test_kmod_ast";;
+        # test_syssvc_ast JOINS suites_red WITH vms-as1, which wired
+        # src/libvms/syssvc/sys_ast.c to the executive: sys$setast is now a
+        # translation layer over VMS_IOCTL_SETAST, so a defect injected into
+        # kernel/vms_ast.c's SETAST-disable path reaches the PUBLIC sys$ API
+        # too. Both suites carry the same two require_fail assertion texts, one
+        # layer apart (test_kmod_ast through raw ioctls, test_syssvc_ast through
+        # sys$setast), so the mutation reddens both and neither more.
+        suites_red)   echo "test_kmod_ast test_syssvc_ast";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;

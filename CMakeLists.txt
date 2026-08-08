@@ -559,6 +559,23 @@ if(BUILD_TESTS)
     else()
         message(STATUS "musl-gcc not found -- x86_64_reloc_survey_fresh test skipped")
     endif()
+
+    # PARTS_SETUP.COM (vms-977, under the vms-2579 0.2 "killer app" demo
+    # epic): the pre-PCSI layered-product install procedure for the PARTS
+    # demo (src/apps/parts/, vms-e97/vms-f20, #172/#179) -- COPY PARTS.EXE
+    # from the install kit (SYS$UPDATE:) to SYS$SYSTEM: and DEFINE PARTS as
+    # a foreign command. BEHAVIOURAL: runs the committed .COM through a real
+    # DCL.EXE in an isolated VMS_ROOT (never the shared /vms tree), using the
+    # host-built PARTS binary as a stand-in image -- COPY/DEFINE do not care
+    # about a file's ELF contents. Mastering the VMS-native PARTS.EXE into
+    # the bootable image and the full QEMU boot->install->run chain are
+    # vms-cde's e2e gate, not this one.
+    add_test(NAME parts_setup_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_parts_setup.sh
+                $<TARGET_FILE:vmsdcl> $<TARGET_FILE:PARTS>
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(parts_setup_gate PROPERTIES
+        LABELS "integration;parts" TIMEOUT 60)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

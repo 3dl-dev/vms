@@ -78,136 +78,40 @@ get_property(_qemu_syssvc_test_targets GLOBAL PROPERTY QEMU_SYSSVC_TEST_TARGETS)
 add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets})
 
 # ---------------------------------------------------------------------------
-# The negative-control manifest's OWN self-test (vms-e7d).
+# TORN OUT AS GATES (vms-49f), per the CLAUDE.md Rule 9 amendment.
 #
-# This one IS registered with add_test(), and the paragraph above does not
-# apply to it: it needs no /dev/vms, no vms.ko and no container. It copies
-# src/kernel and src/libvmssys to a temporary tree, applies each recorded
-# facility defect to the copy, and checks two things that can only be checked
-# against the CURRENT source:
+# Five ctest entries used to live here as GATES over the neg-control harness's
+# OWN self-declarations -- string relations, not runtime behavior:
 #
-#   * every mutation still finds its sed anchor -- a manifest that has drifted
-#     from the tree would inject NOTHING, and tests/qemu/run_facility_negctl.sh
-#     would then report the executive gate as having caught a defect that was
-#     never applied ("BROKEN FIXTURE, not a broken gate");
-#   * re-applying a mutation is detected as a no-op, which proves the
-#     injection-landed check fires rather than being a cmp that always passes;
-#   * every assertion text the manifest names exists LITERALLY in a suite
-#     source. The QEMU driver now requires the observed red set to EQUAL the
-#     named set, so a typo'd entry can never be observed and would fail the
-#     control blaming the executive for a manifest defect;
-#   * the coverage statement holds at every granularity -- every src/kernel/*.c
-#     has a control; every derived tests/qemu suite is either reachable by one
-#     or declared out of scope with a reason (being declared blind no longer
-#     counts as coverage -- vms-279); every defect is ANCHORED by a
-#     /* negctl: ... */ comment at the assertion it names, and every anchor
-#     names a live defect; and every defect has exactly two case arms here.
-#     The out-of-scope set (vmsfs) is printed, so this gate's PASS can never be
-#     read as a claim about the whole harness.
+#   * facility_negctl_manifest   (facility_defects.sh selftest) -- the manifest
+#                                is internally consistent: anchors land, named
+#                                assertion texts exist literally, the coverage
+#                                statement holds.
+#   * facility_negctl_record     (facility_record_negctl.sh) -- the execution
+#                                LEDGER reader is sound against a SYNTHETIC
+#                                record built from the manifest.
+#   * facility_attribution_*     (facility_attribution.sh + _negctl) -- joins
+#                                the committed ledger with mutation-derived
+#                                function names.
+#   * facility_negctl_equality   (facility_negctl_equality_negctl.sh) -- the
+#                                red-set EXACT-equality's suite scoping.
 #
-#     The anchor check is the floor under the SIZE of the manifest, and it is
-#     why this ctest matters more than it used to: MEASURED on the checkout
-#     that closed vms-b33, 37 of the 42 entries could be deleted one at a time
-#     with this test still green, and an exact set cover deleted 32 of 42 in
-#     one edit. Both are now caught. What is still possible, stated rather than
-#     claimed closed, is in facility_defects.sh's header.
+# The Rule 9 amendment: "A check over the tree's own self-declarations (census,
+# register, manifest, ledger) proves a string relation, not runtime behavior;
+# it may lint but MUST NOT be gated or worded as proof." These re-broke on
+# every executive change that shifted which assertions redden and consumed
+# enormous effort; a gameable declaration-gate is a tear-out, not a hardening
+# target. The property they gestured at -- "a defect is actually caught" -- is
+# already covered by the runtime proof: the QEMU per-facility negative-control
+# job (.github/workflows/ci.yml) injects each defect, rebuilds vms.ko, boots it
+# against a REAL /dev/vms, and asserts the facility's own suite goes RED
+# (run_facility_negctl.sh checks 1-4/8). That behavioral proof stays.
 #
-# It runs in seconds in the ordinary Build & Test job, so anchor drift is
-# caught there instead of twenty minutes into the QEMU job -- or, worse, not
-# at all, because a dead anchor makes the QEMU control go GREEN.
-add_test(
-    NAME facility_negctl_manifest
-    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_defects.sh
-            selftest ${CMAKE_SOURCE_DIR}
-)
-set_tests_properties(facility_negctl_manifest PROPERTIES LABELS "harness")
-
-# ---------------------------------------------------------------------------
-# The negative controls ON the execution-sourced attribution record
-# (rd vms-d894, rd vms-659).
-#
-# tests/qemu/facility_negctl_record.sh is what lets the STATIC gates say
-# anything execution-sourced at all: run_facility_negctl.sh emits a record of
-# what it observed, and `coverage` derives its observed count floor and its
-# PROVEN-able-to-go-red suite population from that record instead of from the
-# manifest's own declarations about itself.
-#
-# A reader like that has exactly one way to be wrong that matters: certifying a
-# record that contradicts the tree, which would turn "declared" back into
-# "PROVEN" on no evidence. So it gets its own controls, in a sandbox, against a
-# SYNTHETIC record built from the manifest -- no QEMU, no container, no
-# /dev/vms, and nothing it produces is evidence about the executive. It runs in
-# the ordinary Build & Test job in well under a minute.
-add_test(
-    NAME facility_negctl_record
-    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_record_negctl.sh
-            ${CMAKE_SOURCE_DIR}
-)
-set_tests_properties(facility_negctl_record PROPERTIES LABELS "harness")
-
-# ---------------------------------------------------------------------------
-# PER-ASSERTION RUNTIME ATTRIBUTION, and its own negative controls
-# (rd vms-38c, rd vms-d33, rd vms-2b2).
-#
-# tests/qemu/facility_attribution.sh joins WHAT EACH INJECTION REALLY MUTATES
-# (re-derived here, by running the real `facility_defects.sh apply` against a
-# throwaway tree and reading the enclosing function of every line the sed
-# actually changed) with WHAT REALLY WENT RED (the committed execution record).
-# The result is the one statement no static reader in this tree can make:
-#
-#     mutating <function> was OBSERVED to change the verdict of <assertion>.
-#
-# BOTH tests below run WITHOUT docker, QEMU or /dev/vms, in seconds, in the
-# ordinary Build & Test job -- deliberately. The instrument's whole value is
-# that it survives the buys that beat the static gates, and a control that only
-# runs in the twenty-minute QEMU job is a control nobody sees fail.
-#
-# facility_attribution_negctl.sh CONSTRUCTS THE 2-EDIT BUY rd vms-38c recorded
-# (flip sys$wflor's OVMX-PARTIAL+OVMX-LOCAL block to OVMX-EXECUTIVE, plus one
-# ignored call placed AFTER `return`), runs the OLD register against it -- which
-# must still exit 0, or the control is stale -- and then runs the measured check,
-# which must refuse it. It also diffs the attribution rows before and after the
-# ignored call to show it bought nothing. It invokes the register, so it is the
-# slower of the two; still no container.
-add_test(
-    NAME facility_attribution_selftest
-    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_attribution.sh selftest
-)
-set_tests_properties(facility_attribution_selftest PROPERTIES
-    LABELS "harness"
-    ENVIRONMENT "FA_REPO_ROOT=${CMAKE_SOURCE_DIR}")
-
-add_test(
-    NAME facility_attribution_negctl
-    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_attribution_negctl.sh
-)
-set_tests_properties(facility_attribution_negctl PROPERTIES
-    LABELS "harness"
-    TIMEOUT 2400)
-
-# ---------------------------------------------------------------------------
-# THE RED-SET EQUALITY'S SUITE SCOPING, and its own negative control
-# (rd vms-b3b).
-#
-# run_facility_negctl.sh's red-set equality (check 6) used to compare bare
-# assertion TEXT, discarding which suite printed it -- so a same-text red from
-# a suite OUTSIDE a defect's suites_red could satisfy require_fail/
-# knock_on_fail in place of the suite the manifest actually named.
-# facility_negctl_equality.sh's fne_scope_map() is the fix: it scopes the
-# observed set to suites_red before the comparison runs.
-#
-# facility_negctl_equality_negctl.sh proves it with the REAL, MEASURED
-# collision (bind-client-no-register's shared text between test_syssvc_
-# ef_mproc.c and test_kmod_eflag_mproc.c) -- no QEMU, no container, in well
-# under a second. It pins the grounding facts first, so a future rewording
-# that removes the collision fails this file loudly instead of leaving it
-# testing a scenario that no longer exists.
-add_test(
-    NAME facility_negctl_equality
-    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_negctl_equality_negctl.sh
-            ${CMAKE_SOURCE_DIR}
-)
-set_tests_properties(facility_negctl_equality PROPERTIES LABELS "harness")
+# The scripts remain in the tree and can be run by hand as INFORMATIONAL LINT
+# (`sh tests/qemu/facility_defects.sh selftest .`), but they are no longer
+# registered with add_test() and never gate. See docs/design-negctl-degate.md.
+# The committed ledger tests/qemu/facility_negctl_observed.tsv was deleted with
+# them; run_facility_negctl.sh now treats it as an absent advisory snapshot.
 
 # ---------------------------------------------------------------------------
 # THE kernel-executive-negative-control STEP MUST SURVIVE A CRASHING SUITE

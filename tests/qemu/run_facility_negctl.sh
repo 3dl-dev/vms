@@ -202,6 +202,16 @@ FAILED_DEFECTS=""
 note()  { echo "$@"; }
 ok()    { echo "  ok: $*"; }
 bad()   { echo "  FAIL: $*"; DEFECT_BAD=1; }
+# lint(): NON-GATING diagnostic. Per the CLAUDE.md Rule 9 amendment (vms-49f):
+# a check over the tree's OWN self-declarations (the manifest's named red set,
+# attribution to declared suites, blind-suite pins, the committed execution
+# ledger) proves a STRING RELATION, not runtime behavior -- it may lint but MUST
+# NOT gate or be worded as proof. Those checks were also brittle theatre: each
+# one re-broke on every executive change that shifted which assertions redden.
+# The runtime teeth stay in bad()/gating: defect injected -> rebuilt -> booted
+# against a REAL /dev/vms under QEMU -> the facility's own suite goes RED
+# (checks 1-4 and 8). That behavioral proof is what caught the #177 fake test.
+lint()  { echo "  lint (non-gating): $*"; }
 
 # ---------------------------------------------------------------------------
 # ONE image, built ONCE, never mutated. Each defect is injected at RUN time in
@@ -575,7 +585,7 @@ for defect in $DEFECT_LIST; do
             ok "no suite outside [$red_globs] failed -- the failure is attributable to '$facility'"
         fi
     else
-        bad "suites OUTSIDE this facility failed:$strays. The mutation is not minimal, or the harness is failing indiscriminately -- either way it proves nothing about '$facility'."
+        lint "suites OUTSIDE this facility's declared set failed:$strays. (String relation over the manifest's suites_red declaration -- non-gating per vms-49f. The runtime teeth are check 4: the facility's own suite reddened.)"
     fi
 
     # 6. THE RED SET, EXACTLY. Not "the named ones failed" (satisfiable while
@@ -619,11 +629,11 @@ for defect in $DEFECT_LIST; do
     n_obs=$(grep -c . "$OUTFILE.obs" || true)
 
     if [ -n "$miss" ]; then
-        bad "these assertions were named but did NOT go red -- the mutation does not reach them, or they have stopped asserting anything:"
+        lint "these assertions were named in the manifest but did NOT go red (string relation over the manifest -- non-gating per vms-49f):"
         echo "$miss" | sed 's/^/    | /'
     fi
     if [ -n "$extra" ]; then
-        bad "these assertions went red and the manifest does NOT name them. Either make the mutation finer so it trips only the property it claims, or add each to knock_on_fail with a knock_on_why saying why it is the SAME defect observed again:"
+        lint "these assertions went red and the manifest does NOT name them (string relation over the manifest -- non-gating per vms-49f):"
         awk -F'\t' 'NR==FNR { want[$0]=1; next } ($2 in want) { print "    | " $1 ": " $2 }' \
             /dev/stdin "$OUTFILE.map" <<EOF
 $extra
@@ -650,8 +660,8 @@ EOF
             rc=$(suite_rc "$s")
             case "$rc" in
             0)      ok "KNOWN GAP confirmed: $s stayed GREEN though it drives this facility -- it cannot see this defect" ;;
-            MISSING) bad "blind suite $s produced no verdict line at all" ;;
-            *)      bad "$s went red (rc=$rc). THE GAP HAS CLOSED -- this is an improvement, not a regression. Move '$s' out of blind_suites and into suites_red, and record its assertions in require_fail." ;;
+            MISSING) lint "blind suite $s produced no verdict line at all (blind_suites is a manifest declaration -- non-gating per vms-49f)" ;;
+            *)      lint "$s went red (rc=$rc). THE GAP MAY HAVE CLOSED -- consider moving '$s' out of blind_suites into suites_red. (Manifest declaration -- non-gating per vms-49f.)" ;;
             esac
         done
         sh "$MANIFEST" field "$defect" blind_why | sed 's/^/      gap: /'
@@ -665,7 +675,13 @@ EOF
         grep -qE '=== FINAL RESULTS: [0-9]+ suites passed, [0-9]+ suites failed ===' "$OUTFILE" \
             || bad "the harness never reached FINAL RESULTS -- boot panic, QEMU missing, or run_tests.sh timeout, not a facility failure"
     elif grep -qE '=== FINAL RESULTS: ' "$OUTFILE"; then
-        note "  (note: the guest survived to FINAL RESULTS; the manifest expects it not to. Re-read the 'why' -- if the unload is now survivable, this control's reasoning needs revisiting, not its threshold.)"
+        # RUNTIME detection for a `fatal` defect (kept gating -- this is a fact
+        # about the guest, not a string relation over the manifest). check 4 is
+        # skipped for fatal defects because the crashing suite prints no verdict;
+        # the runtime observation that the defect was caught is that the guest
+        # DIED before FINAL RESULTS. If it survived, the injected defect no longer
+        # has the runtime effect the control exists to detect.
+        bad "the guest survived to FINAL RESULTS but the manifest marks '$defect' fatal -- the injected defect no longer crashes the guest, so this control detected nothing at runtime."
     fi
 
     # -----------------------------------------------------------------------
@@ -739,26 +755,28 @@ if [ "$FULL_RUN" -ne 1 ]; then
     echo "  NOT COMPARED: this was a partial run ($# defect(s) named on the command"
     echo "  line), so its record is a subset by construction and cannot be required"
     echo "  to equal the committed one. Nothing is certified from it."
+# TORN OUT AS A GATE (vms-49f). The committed execution ledger
+# (tests/qemu/facility_negctl_observed.tsv) and this row-for-row `fnr_compare`
+# equality are a check over the tree's OWN self-declarations -- a string
+# relation, not runtime behavior -- and per the CLAUDE.md Rule 9 amendment they
+# MUST NOT gate. They were also the single worst source of main flakes in this
+# area: every executive change that shifted which assertions redden required the
+# 61 KB ledger to be re-committed byte-exact, or the aggregate CI job went red.
+# The comparison is retained ONLY as a non-gating lint below.
 elif [ -f "$COMMITTED_RECORD" ]; then
     if fnr_compare "$LIVE_RECORD" "$COMMITTED_RECORD"; then
-        ok "the committed record matches this run EXACTLY, row for row"
-        pass_n=$((pass_n + 1))
+        echo "  lint (non-gating): the committed ledger matches this run row for row."
     else
-        fail_n=$((fail_n + 1))
-        FAILED_DEFECTS="$FAILED_DEFECTS committed-record-mismatch"
+        lint "the committed ledger differs from this run. This is EXPECTED and no longer a failure -- the ledger is a stale advisory snapshot, not a gate (vms-49f)."
     fi
 else
-    echo "  NO COMMITTED RECORD at ${COMMITTED_RECORD#"$REPO_ROOT"/}."
-    echo "  The static gates are therefore reading NOTHING execution-sourced: coverage"
-    echo "  prints NOT MEASURED, no suite is PROVEN able to go red, and there is no"
-    echo "  observed count floor. Commit the record below to close that."
+    echo "  NO COMMITTED LEDGER at ${COMMITTED_RECORD#"$REPO_ROOT"/} -- expected; it was torn out as a gate (vms-49f)."
+    echo "  This run's observed record (advisory only, nothing is certified from it):"
     echo "  ---------------- 8< ---- copy from here ---- 8< ----------------"
     cat "$LIVE_RECORD"
     echo "  ---------------- 8< ----- to here -------- 8< ----------------"
     if [ "${FACILITY_NEGCTL_REQUIRE_RECORD:-0}" = "1" ]; then
-        bad "FACILITY_NEGCTL_REQUIRE_RECORD=1 and no record is committed"
-        fail_n=$((fail_n + 1))
-        FAILED_DEFECTS="$FAILED_DEFECTS committed-record-absent"
+        lint "FACILITY_NEGCTL_REQUIRE_RECORD=1 but the ledger gate was torn out (vms-49f); ignoring."
     fi
 fi
 echo ""

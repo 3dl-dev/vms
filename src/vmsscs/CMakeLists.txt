@@ -364,7 +364,11 @@ target_include_directories(scsd_exe PRIVATE
 # item was built but NOT linked into the daemon, exactly as scs_cdt.h said).
 # vms-578 adds vmsscs_mscp back: the worktree-760 CM layer merged into scsd.c
 # drives the MSCP$DISK client command builders after NEW.
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_mscp vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit)
+# vms-34b adds vmsscs_mscp_srv: scsd_mscp_srv_msg_input() calls the disk-server
+# responder (scs_mscp_srv_handle() etc.) built by vms-291/vms-4e31, which until
+# this item was compiled and unit-tested but never linked into the daemon that
+# is supposed to run it.
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_mscp vmsscs_mscp_srv vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

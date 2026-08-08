@@ -81,6 +81,28 @@ RUN set -e; \
     fi; \
     echo "OK: 9 VMS-native LINK.EXE artifacts (EM_X86_64, zero DT_NEEDED/DT_HASH) + IMGACT.EXE"
 
+# vms-530 day-1 GO/NO-GO de-risk scratch artifact: a trivial "hello, VMS"
+# main()-based executable, built with the SAME LINK.EXE this stage just
+# proved (ET_DYN, PT_INTERP=IMGACT.EXE, cross-image import from the REAL
+# DECC$SHR.EXE producer built above) — not a shipped OVMX image, not part
+# of link_native_graph. Exists to give the real QEMU boot below something
+# trivial to RUN and prove/disprove non-root IMGACT activation with
+# (docs/derisk-vms-530-imgact-qemu.md carries the verdict). Safe to delete
+# once vms-0b8 is resolved and this scratch program is no longer needed.
+RUN set -e; \
+    LINK_EXE=$(find /tmp/build -maxdepth 3 -name LINK.EXE | head -1); \
+    [ -n "$LINK_EXE" ] || { echo "FAIL: LINK.EXE tool not found under /tmp/build"; exit 1; }; \
+    gcc -fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mtls-dialect=gnu2 \
+        -c -o /tmp/hello_vms_derisk.o src/imgact/test/hello_vms_derisk.c && \
+    "$LINK_EXE" --executable \
+        --use "/tmp/build/link-native/SYSLIB/DECC\$SHR.EXE" \
+        -o "/tmp/build/link-native/SYSEXE/HELLOVMS.EXE" /tmp/hello_vms_derisk.o && \
+    readelf -h /tmp/build/link-native/SYSEXE/HELLOVMS.EXE | grep -q "Machine:.*X86-64" \
+        || { echo "FAIL: HELLOVMS.EXE not EM_X86_64"; exit 1; }; \
+    readelf -l /tmp/build/link-native/SYSEXE/HELLOVMS.EXE | grep -q INTERP \
+        || { echo "FAIL: HELLOVMS.EXE has no PT_INTERP"; exit 1; }; \
+    echo "OK: HELLOVMS.EXE (vms-530 scratch) built VMS-native, PT_INTERP present"
+
 FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -96,6 +118,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=link-native /tmp/build/link-native/SYSLIB /link-native/SYSLIB
 COPY --from=link-native /tmp/build/link-native/SYSEXE /link-native/SYSEXE
 COPY --from=link-native /src/src/imgact/IMGACT.EXE /link-native/IMGACT.EXE
+# vms-530 scratch de-risk artifact only — see the link-native stage comment.
+COPY --from=link-native /tmp/build/link-native/SYSEXE/HELLOVMS.EXE /link-native/HELLOVMS.EXE
 
 # Determine kernel version and ensure build symlink exists
 RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && echo "$KVER" > /tmp/kver && \
@@ -164,6 +188,9 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     cp "/link-native/SYSEXE/DCL.EXE"      /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp "/link-native/SYSEXE/LOGINOUT.EXE" /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp /link-native/SYSLIB/*.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSLIB/ && \
+    # vms-530 scratch de-risk artifact only (see link-native stage) -- not a
+    # shipped OVMX image, never referenced by STARTUP/LOGINOUT/DCL.
+    cp /link-native/HELLOVMS.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     # PROVISION.EXE -- the startup process (vms-9b7). PID 1 execs THIS, not
     # DCL.EXE: it establishes the SYSTEM identity from SYSUAF through the
     # executive and then execs DCL.EXE on STARTUP.COM in the same process. A

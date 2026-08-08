@@ -34,8 +34,8 @@ data either way.
 | R_X86_64_DTPOFF32 | 8 | 1 | src/libvms/rtl/lib_signal.c |
 | R_X86_64_GOTPC32_TLSDESC | 21 | 3 | src/libvms/rtl/lib_signal.c |
 | R_X86_64_GOTPCREL | 1 | 1 | src/vmsprocess/vms_pcb.c |
-| R_X86_64_PC32 | 2358 | 79 | src/libvms/descrip.c |
-| R_X86_64_PLT32 | 3024 | 76 | src/libvms/descrip.c |
+| R_X86_64_PC32 | 2351 | 79 | src/libvms/descrip.c |
+| R_X86_64_PLT32 | 3007 | 76 | src/libvms/descrip.c |
 | R_X86_64_REX_GOTPCRELX | 46 | 13 | src/libvms/rtl/lib_misc.c |
 | R_X86_64_TLSDESC_CALL | 22 | 3 | src/libvms/rtl/lib_signal.c |
 

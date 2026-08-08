@@ -474,7 +474,8 @@ register-adopt-pid-not-reported
 register-continue-identity-dropped
 rms-create-filespec-not-translated
 scratch-dir-owner-not-system
-lnm-manager-delete-noop"
+lnm-manager-delete-noop
+lnm-group-scope-collapsed"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -3948,6 +3949,49 @@ EOF
                       ;;
         esac;;
 
+    lnm-group-scope-collapsed)
+        case "$_f" in
+        facility)     echo "executive-resident LNM\$GROUP / LNM\$JOB (VMS_IOCTL_LNM_DEFINE/DELETE + the mmap arena, derive_scope_key() in vms_lnm.c), vms-aba -- the deferred other half of vms-d37's LNM\$SYSTEM residency";;
+        targets)      echo "kernel/vms_lnm.c";;
+        suites_red)   echo "test_syssvc_lnm_groupjob";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "derive_scope_key()'s LNM\$GROUP case stops returning the caller's UIC group (proc->uic >> 16) and returns 0 instead -- the same scope_key SYSTEM uses -- so a GROUP-scoped name becomes visible to every UIC group on the node instead of only the one that defined it. DEFINE/GROUP and TRANSLATE/GROUP both still succeed (the arena write/read path is untouched); only the ISOLATION between groups is gone.";;
+        require_fail) echo "C (different group, same job): does NOT see the GROUP-scoped name A defined";;
+        knock_on_fail) echo "";;
+        knock_on_why)  cat <<'EOF'
+SINGLE-PROPERTY BY CONSTRUCTION. The mutation touches only the LNM$GROUP
+case's return value in derive_scope_key(); the LNM$JOB case (proc->job_id)
+and the SYSTEM case (0, already correct) are untouched. Effects on every
+assertion in test_syssvc_lnm_groupjob.c:
+  - A's own DEFINE/GROUP, DEFINE/JOB and search-list reads of its own names
+    are unaffected -- A translates under its own (now-wrong-but-consistent)
+    scope_key 0, so it still finds what it just wrote.
+  - B (same group, same job) still passes both checks: B's real scope_key
+    (0, since B never setgid()s) also collapses to 0, which is what A wrote
+    under, so B still finds the GROUP name -- for the wrong reason, but the
+    assertion cannot tell, which is exactly why C's setgid() is the assertion
+    that MUST catch this and not B's.
+  - C (different group via setgid(ALT_UIC_GROUP), same job) is where the
+    defect surfaces: its JOB-name check is untouched (proc->job_id is not
+    mutated) and keeps passing, but its GROUP-name check now WRONGLY passes
+    too -- C's derived scope_key collapses to 0 same as A's, so the group
+    boundary that check exists to prove is gone. require_fail names exactly
+    that one assertion.
+  - D (same group, different job) is unaffected: D never setgid()s either,
+    so its GROUP read still resolves the same way it did before the
+    mutation (scope_key 0 either way for a process that never left the
+    default group), and its JOB check does not touch this code path at all.
+That is exactly one assertion turning from FAIL-if-correct-scoping to
+PASS-when-broken, which is why require_fail names it alone and knock_on_fail
+is empty -- a mutation to the JOB case would be the single-property sibling
+this one is not, and does not exist as a separate defect because the JOB
+case's return line has no reason to fail differently from GROUP's.
+EOF
+                      ;;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -4352,6 +4396,16 @@ apply_edit() {
         # `vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, ...)` call left inside this
         # file and is the no-op selftest requires.
         sed -i 's|        return vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, logical_name, acmode);|        return SS$_NORMAL; /* NEGCTL lnm-manager-delete-noop: never reaches vms.ko */|' "$_file";;
+
+    lnm-group-scope-collapsed)
+        # UNIQUE TEXT: this exact line occurs once in vms_lnm.c's
+        # derive_scope_key(), in the LNM$GROUP case only (the LNM$JOB case
+        # right below it returns proc->job_id and is untouched). Collapsing
+        # it to the same 0 the SYSTEM case returns makes a GROUP-scoped name
+        # visible to every UIC group, not just the one that defined it. A
+        # second apply finds no `return proc->uic >> 16;` left and is the
+        # no-op selftest requires.
+        sed -i 's|        return proc->uic >> 16;   /\* UIC group \*/|        return 0; /* NEGCTL lnm-group-scope-collapsed: was proc->uic >> 16 */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

@@ -976,6 +976,22 @@ static __thread struct vms_lnm_arena *vms_lnm_map = 0;
 static __thread vms_pid_t vms_lnm_map_pid = 0;
 
 /*
+ * This process's GROUP/JOB scope keys (vms-aba), cached the same way as
+ * the arena mapping above and for the same reason: fetching them is one
+ * ioctl (VMS_IOCTL_LNM_GETSCOPE), and paying it once per process keeps the
+ * translate hot path free of syscalls after the first call, exactly as the
+ * arena mmap does. NEITHER key may be recomputed locally from raw Linux
+ * credentials -- SETIDENT can set a UIC that does not match this task's
+ * uid/gid (see vms_ioctl_setident()), and JOB has no userspace
+ * representation at all -- so this cache is filled from the executive,
+ * never derived here.
+ */
+static __thread uint32_t vms_lnm_scope_group = 0;
+static __thread uint32_t vms_lnm_scope_job = 0;
+static __thread int vms_lnm_scope_valid = 0;
+static __thread vms_pid_t vms_lnm_scope_pid = 0;
+
+/*
  * vms_kif_lnm_arena - obtain (once) the read-only arena mapping.
  *
  * Binds first (open + register), then mmaps the arena off the /dev/vms fd.
@@ -1091,12 +1107,74 @@ uint32_t vms_kif_lnm_delete(uint32_t table, const char *name, uint8_t acmode)
     return args.status;
 }
 
+/*
+ * vms_kif_lnm_myscope - fetch (once per process) this caller's own GROUP
+ * and JOB scope keys via VMS_IOCTL_LNM_GETSCOPE.
+ *
+ * Cached exactly like vms_kif_lnm_arena()'s mapping, and invalidated the
+ * same way: a fork()'d child inherits the parent's TLS cache by value, but
+ * the executive keys scope by PROCESS (proc->job_id is set once at THIS
+ * process's own registration, vms_module.c), so a cached value under a
+ * different pid is stale and must be refetched.
+ *
+ * Returns 1 and fills *group_key / *job_key on success, 0 when the executive
+ * is unavailable (the caller treats that the same as "name not found" --
+ * vms_kif_lnm_arena() already failed the mmap bind in that case, so a
+ * GROUP/JOB translate never reaches here with no executive).
+ *
+ * Calls kif_call() DIRECTLY rather than through the KIF_CALL macro: that
+ * macro does `return _kif_st;` on a nonzero (dispatch-level failure) status,
+ * which is the right shape for the many vms_kif_* wrappers that themselves
+ * return a raw uint32_t SS$ status -- but this function returns an int
+ * success flag through OUT parameters, and a bare `return` of a nonzero
+ * SS$ code from inside it would come back to the caller as a truthy "1",
+ * with *group_key / *job_key left unset. kif_bind() still runs (kif_call()
+ * calls it internally), so there is no separate bind step needed here.
+ */
+static int vms_kif_lnm_myscope(uint32_t *group_key, uint32_t *job_key)
+{
+    struct vms_lnm_scope_args args;
+    vms_pid_t pid = vms_sys_getpid();
+    uint32_t kst;
+
+    if (vms_lnm_scope_valid && vms_lnm_scope_pid == pid) {
+        *group_key = vms_lnm_scope_group;
+        *job_key = vms_lnm_scope_job;
+        return 1;
+    }
+
+    vms_memset(&args, 0, sizeof(args));
+    kst = kif_call(VMS_IOCTL_LNM_GETSCOPE, &args);
+    if (kst != 0) {
+        /* Dispatch-level failure (unreachable executive, unregistered
+         * process): report it, no in-process substitute. */
+        return 0;
+    }
+
+    /* VMS odd/even success convention, checked directly: this is
+     * libvmssys, the freestanding base layer, and does not include
+     * libvms/ssdef.h's $VMS_STATUS_SUCCESS (that would invert the library
+     * dependency graph in CLAUDE.md). */
+    if (!(args.status & 1u))
+        return 0;
+
+    vms_lnm_scope_group = args.group_key;
+    vms_lnm_scope_job = args.job_key;
+    vms_lnm_scope_valid = 1;
+    vms_lnm_scope_pid = pid;
+
+    *group_key = vms_lnm_scope_group;
+    *job_key = vms_lnm_scope_job;
+    return 1;
+}
+
 int vms_kif_lnm_translate(uint32_t table, const char *name,
                           char *value, uint32_t valsz,
                           uint16_t *vallen, uint32_t *attrs)
 {
     struct vms_lnm_arena *a;
     uint32_t scope_key;
+    uint32_t group_key, job_key;
     int tries;
 
     if (!name || !value || valsz == 0)
@@ -1106,8 +1184,21 @@ int vms_kif_lnm_translate(uint32_t table, const char *name,
     if (!a)
         return -1;   /* executive absent -> caller renders SS$_NOSUCHDEV */
 
-    /* SYSTEM is singular (scope 0). GROUP/JOB scoping is deferred. */
-    scope_key = (table == VMS_LNM_TBL_SYSTEM) ? 0u : 0u;
+    /* SYSTEM is singular (scope 0). GROUP/JOB are this caller's own
+     * executive-derived scope keys (vms-aba) -- never recomputed locally
+     * (see vms_kif_lnm_myscope()). */
+    switch (table) {
+    case VMS_LNM_TBL_GROUP:
+    case VMS_LNM_TBL_JOB:
+        if (!vms_kif_lnm_myscope(&group_key, &job_key))
+            return -1;   /* executive absent -> SS$_NOSUCHDEV */
+        scope_key = (table == VMS_LNM_TBL_GROUP) ? group_key : job_key;
+        break;
+    case VMS_LNM_TBL_SYSTEM:
+    default:
+        scope_key = 0u;
+        break;
+    }
 
     /*
      * Seqlock read: sample the generation, walk the table, re-sample. Retry

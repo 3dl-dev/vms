@@ -3,23 +3,25 @@
  *
  * Provides the public API for logical name operations.
  *
- * LNM$SYSTEM is EXECUTIVE-RESIDENT (vms-d37/#193, wired here by vms-96e2):
- * lnm_create/_delete/_translate route the SYSTEM table through vms_kif -> the
- * /dev/vms arena, so a name DEFINE/SYSTEM'd by one process is visible to every
- * other process on the node (real OpenVMS behaviour). LNM$PROCESS/JOB/GROUP
- * stay in the process-private tables below (their executive residency is the
- * deferred half of vms-d37). There is no daemon to talk to; the socket/daemon
- * client was deleted (vms-a4b) -- do not reintroduce it.
+ * LNM$SYSTEM, LNM$GROUP and LNM$JOB are all EXECUTIVE-RESIDENT (vms-d37/#193
+ * wired SYSTEM via vms-96e2; vms-aba wires GROUP and JOB the same way):
+ * lnm_create/_delete/_translate route all three through vms_kif -> the
+ * /dev/vms arena, so a name DEFINE/SYSTEM'd, DEFINE/GROUP'd or DEFINE/JOB'd
+ * by one process is visible to every other process that shares its node
+ * (SYSTEM), UIC group (GROUP) or job tree (JOB) -- real OpenVMS behaviour.
+ * LNM$PROCESS stays in the process-private table below; it is per-process on
+ * VMS too and never reaches the executive. There is no daemon to talk to;
+ * the socket/daemon client was deleted (vms-a4b) -- do not reintroduce it.
  *
- * NO PER-PROCESS FALLBACK for LNM$SYSTEM (vms-48ab, CLAUDE.md Rule 9 / INV-6):
- * vms-96e2 shipped a transitional fallback to a process-local SYSTEM table
- * when /dev/vms was absent, so host ctest could still exercise DEFINE/SYSTEM.
- * That was itself the silent-per-process-fake shape Rule 9 forbids, and
- * vms-48ab removed it: create/delete/translate against LNM$SYSTEM now return
- * SS$_NOSUCHDEV honestly with no executive, exactly like sys$crelnm/$trnlnm/
- * $dellnm (src/libvms/syssvc/sys_logical.c) already did. The host tests that
- * relied on the fallback moved to tests/qemu/test_syssvc_lnm_system.c, which
- * proves this path against a real /dev/vms.
+ * NO PER-PROCESS FALLBACK for any of the three (vms-48ab / vms-aba,
+ * CLAUDE.md Rule 9 / INV-6): create/delete/translate against LNM$SYSTEM,
+ * LNM$GROUP or LNM$JOB return SS$_NOSUCHDEV honestly with no executive,
+ * exactly like sys$crelnm/$trnlnm/$dellnm (src/libvms/syssvc/sys_logical.c)
+ * already do for SYSTEM. vms-96e2 shipped (and vms-48ab removed) a
+ * transitional process-local SYSTEM fallback; GROUP/JOB never had one --
+ * they go straight to the honest-failure shape. The host tests that need a
+ * real executive moved to tests/qemu/ (test_syssvc_lnm_system.c for SYSTEM,
+ * test_syssvc_lnm_groupjob.c for GROUP/JOB).
  */
 
 #include <stdio.h>
@@ -66,6 +68,32 @@ static int is_system_table(const char *table_name)
            (strcasecmp(table_name, LNM_SYSTEM_TABLE) == 0 ||
             strcasecmp(table_name, "LNM$SYSTEM_TABLE") == 0 ||
             strcasecmp(table_name, "SYSTEM") == 0);
+}
+
+/*
+ * is_group_table / is_job_table - true when table_name names the
+ * executive-resident LNM$GROUP / LNM$JOB tables (vms-aba).
+ *
+ * Same routing rationale as is_system_table() above, one scope level down:
+ * LNM$GROUP is shared by every process in the caller's UIC group, LNM$JOB by
+ * every process in the caller's job tree (a login session and its SPAWNed
+ * subprocesses). Both are keyed in the executive by values derived from the
+ * caller's PCB (src/kernel/vms_lnm.c's derive_scope_key()), never by
+ * anything this client passes -- a process cannot declare its own group or
+ * job any more than it can declare its own UIC.
+ */
+static int is_group_table(const char *table_name)
+{
+    return table_name &&
+           (strcasecmp(table_name, LNM_GROUP_TABLE) == 0 ||
+            strcasecmp(table_name, "GROUP") == 0);
+}
+
+static int is_job_table(const char *table_name)
+{
+    return table_name &&
+           (strcasecmp(table_name, LNM_JOB_TABLE) == 0 ||
+            strcasecmp(table_name, "JOB") == 0);
 }
 
 /* Internal table functions from lnm_table.c */
@@ -300,6 +328,22 @@ uint32_t lnm_create(lnm_manager_t *mgr, const char *table_name,
                                   vals, 1, attributes, acmode);
     }
 
+    /*
+     * LNM$GROUP / LNM$JOB are executive-resident too (vms-aba, the same
+     * shape as SYSTEM above, one scope level down): the scope key is
+     * derived by the executive from the caller's PCB, never supplied here.
+     */
+    if (is_group_table(table_name)) {
+        const char *vals[1] = { equivalence };
+        return vms_kif_lnm_define(VMS_LNM_TBL_GROUP, logical_name,
+                                  vals, 1, attributes, acmode);
+    }
+    if (is_job_table(table_name)) {
+        const char *vals[1] = { equivalence };
+        return vms_kif_lnm_define(VMS_LNM_TBL_JOB, logical_name,
+                                  vals, 1, attributes, acmode);
+    }
+
     lnm_table_t *table = lnm_find_table(mgr, table_name);
     if (!table)
         return SS$_NOLOGTAB;
@@ -405,6 +449,12 @@ uint32_t lnm_delete(lnm_manager_t *mgr, const char *table_name,
      * process-local delete (see is_system_table / lnm_create). */
     if (is_system_table(table_name))
         return vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, logical_name, acmode);
+
+    /* LNM$GROUP / LNM$JOB, same shape, one scope level down (vms-aba). */
+    if (is_group_table(table_name))
+        return vms_kif_lnm_delete(VMS_LNM_TBL_GROUP, logical_name, acmode);
+    if (is_job_table(table_name))
+        return vms_kif_lnm_delete(VMS_LNM_TBL_JOB, logical_name, acmode);
 
     lnm_table_t *table = lnm_find_table(mgr, table_name);
     if (!table)

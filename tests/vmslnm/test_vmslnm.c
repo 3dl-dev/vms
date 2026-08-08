@@ -105,20 +105,27 @@ static void test_create_translate_delete(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Test: table hierarchy — group vs process                           */
+/* Test: table hierarchy — process, then no host fallback beyond it    */
 /*                                                                      */
-/* NOTE (vms-48ab): this used to exercise LNM_SYSTEM_TABLE, but         */
-/* LNM$SYSTEM is executive-resident (vms-d37/vms-96e2) and this binary  */
-/* runs on the host with no /dev/vms. LNM_GROUP_TABLE is still          */
-/* process-private (its executive residency is the deferred half of    */
-/* vms-d37, see lnm_client.c), so it exercises the exact same           */
-/* hierarchy/override logic in lnm_translate() without needing an      */
-/* executive. The SYSTEM-table equivalent of this scenario, against a  */
-/* real /dev/vms, is tests/qemu/test_syssvc_lnm_system.c.               */
+/* NOTE (vms-48ab, then vms-aba): this used to exercise LNM_SYSTEM_TABLE,*/
+/* then (vms-48ab) was re-targeted at LNM_GROUP_TABLE once SYSTEM       */
+/* became executive-resident, on the theory that GROUP was still        */
+/* process-private. vms-aba made LNM$GROUP and LNM$JOB executive-       */
+/* resident too (the deferred half of vms-d37, now shipped -- see       */
+/* lnm_client.c), so there is no second host-local table left to        */
+/* demonstrate a hierarchy/override against: LNM$PROCESS is the only    */
+/* one that still lives in this process. The override/hierarchy proof   */
+/* for PROCESS-over-JOB-over-GROUP-over-SYSTEM, against a real          */
+/* /dev/vms, now lives in tests/qemu/test_syssvc_lnm_groupjob.c          */
+/* (paralleling test_syssvc_lnm_system.c's SYSTEM equivalent). What      */
+/* remains provable on the host is that LNM$PROCESS itself still         */
+/* participates in the LNM$FILE_DEV search list ahead of the executive- */
+/* resident tables, and that GROUP/JOB fail honestly with no /dev/vms    */
+/* (INV-6) exactly like SYSTEM already does.                            */
 /* ------------------------------------------------------------------ */
 static void test_table_hierarchy(void)
 {
-    printf("\n--- table hierarchy ---\n");
+    printf("\n--- table hierarchy: process participates, group/job have no host fallback ---\n");
 
     lnm_manager_t *mgr = lnm_init();
     if (!mgr) { check(0, "lnm_init for hierarchy"); return; }
@@ -128,57 +135,42 @@ static void test_table_hierarchy(void)
     uint32_t attrs = 0;
     uint32_t st;
 
-    /* Put one name in group table, another in process table */
-    st = lnm_create(mgr, LNM_GROUP_TABLE,
-                    "SYS$VOLUME", "/vms/dka0",
-                    0, LNM_MODE_KERNEL);
-    check($VMS_STATUS_SUCCESS(st), "create SYS$VOLUME in group table");
-
+    /* LNM$PROCESS is still process-private and still found through the
+     * default search list, ahead of the executive-resident tables. */
     st = lnm_create(mgr, LNM_PROCESS_TABLE,
                     "PROC$LOCAL", "/proc/self",
                     0, LNM_MODE_USER);
     check($VMS_STATUS_SUCCESS(st), "create PROC$LOCAL in process table");
 
-    /* Translate from group table */
-    st = lnm_translate(mgr, LNM_GROUP_TABLE,
-                       "SYS$VOLUME", result, sizeof(result),
+    st = lnm_translate(mgr, LNM_FILE_DEV,
+                       "PROC$LOCAL", result, sizeof(result),
                        &result_len, &attrs);
-    check($VMS_STATUS_SUCCESS(st), "translate SYS$VOLUME from group table");
+    check($VMS_STATUS_SUCCESS(st), "PROC$LOCAL found via the LNM$FILE_DEV search list");
     result[result_len] = '\0';
-    check(strcmp(result, "/vms/dka0") == 0, "SYS$VOLUME resolves to /vms/dka0");
+    check(strcmp(result, "/proc/self") == 0, "PROC$LOCAL resolves to /proc/self");
 
-    /* PROC$LOCAL should NOT be in group table */
-    st = lnm_translate(mgr, LNM_GROUP_TABLE,
-                       "PROC$LOCAL", result, sizeof(result),
-                       &result_len, &attrs);
-    check(!$VMS_STATUS_SUCCESS(st), "PROC$LOCAL not found in group table");
-
-    /* PROC$LOCAL IS in process table */
-    st = lnm_translate(mgr, LNM_PROCESS_TABLE,
-                       "PROC$LOCAL", result, sizeof(result),
-                       &result_len, &attrs);
-    check($VMS_STATUS_SUCCESS(st), "PROC$LOCAL found in process table");
-
-    /* Override group logical with process-level one */
-    st = lnm_create(mgr, LNM_PROCESS_TABLE,
-                    "SYS$VOLUME", "/override",
+    /* GROUP and JOB have NO host fallback (vms-aba, INV-6): they must fail
+     * honestly with SS$_NOSUCHDEV on this host binary, the same as SYSTEM
+     * already does (test_system_table_no_fallback below). */
+    st = lnm_create(mgr, LNM_GROUP_TABLE, "OVMXABA$GROUP", "/should-not-land",
                     0, LNM_MODE_USER);
-    check($VMS_STATUS_SUCCESS(st), "create SYS$VOLUME override in process table");
+    check(st == SS$_NOSUCHDEV,
+          "lnm_create against LNM$GROUP fails SS$_NOSUCHDEV with no /dev/vms (no local fallback)");
 
-    st = lnm_translate(mgr, LNM_PROCESS_TABLE,
-                       "SYS$VOLUME", result, sizeof(result),
-                       &result_len, &attrs);
-    check($VMS_STATUS_SUCCESS(st), "process override of SYS$VOLUME found");
-    result[result_len] = '\0';
-    check(strcmp(result, "/override") == 0, "process override value is /override");
+    st = lnm_create(mgr, LNM_JOB_TABLE, "OVMXABA$JOB", "/should-not-land",
+                    0, LNM_MODE_USER);
+    check(st == SS$_NOSUCHDEV,
+          "lnm_create against LNM$JOB fails SS$_NOSUCHDEV with no /dev/vms (no local fallback)");
 
-    /* Group table still has original */
-    st = lnm_translate(mgr, LNM_GROUP_TABLE,
-                       "SYS$VOLUME", result, sizeof(result),
-                       &result_len, &attrs);
-    check($VMS_STATUS_SUCCESS(st), "group SYS$VOLUME still accessible");
-    result[result_len] = '\0';
-    check(strcmp(result, "/vms/dka0") == 0, "group SYS$VOLUME unchanged");
+    st = lnm_translate(mgr, LNM_GROUP_TABLE, "OVMXABA$GROUP",
+                       result, sizeof(result), &result_len, &attrs);
+    check(st == SS$_NOSUCHDEV,
+          "lnm_translate against LNM$GROUP fails SS$_NOSUCHDEV with no /dev/vms");
+
+    st = lnm_translate(mgr, LNM_JOB_TABLE, "OVMXABA$JOB",
+                       result, sizeof(result), &result_len, &attrs);
+    check(st == SS$_NOSUCHDEV,
+          "lnm_translate against LNM$JOB fails SS$_NOSUCHDEV with no /dev/vms");
 
     lnm_shutdown(mgr);
 }

@@ -336,6 +336,26 @@ struct vms_proc {
     uint32_t            uic;            /* (group << 16) | member */
 
     /*
+     * The JOB this process belongs to (vms-aba, LNM$JOB residency). A VMS
+     * job is a top-level process (an interactive login, or a detached
+     * process) plus every subprocess it spawns -- SPAWN's child stays in
+     * the parent's job (OpenVMS DCL Dictionary, SPAWN; System Services
+     * Reference, $CREPRC's JOBCTL parameter). job_id is set exactly once,
+     * at registration (see vms_proc_parent_job_id() in vms_module.c): a
+     * task whose real parent is ALREADY a registered VMS process inherits
+     * that parent's job_id -- true whether this registration is an image-
+     * activation CONTINUE of the very same VMS process, or a genuinely new
+     * PCB (a SPAWNed subprocess). A task with no registered parent (the
+     * top of a job tree: an interactive session's first process, a
+     * detached process, PID 1) becomes its own job root: job_id is set to
+     * its own freshly assigned vms_pid, exactly as a new VMS job's ID is
+     * the PID of the process that started it. NEVER supplied by the
+     * caller -- derived from task_struct ancestry, the same discipline as
+     * uic.
+     */
+    uint32_t            job_id;
+
+    /*
      * Authenticated user name (vms-2b8). Empty until an identity is
      * stamped by VMS_IOCTL_SETIDENT, which is the LOGINOUT path: a
      * process does not choose its user name any more than it chooses
@@ -596,6 +616,7 @@ struct file;
 struct vm_area_struct;
 long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_lnm_getscope(struct vms_proc *proc, unsigned long arg);
 /* Map the read-only logical-name arena into the caller (design §3.3). */
 int vms_lnm_mmap(struct file *filp, struct vm_area_struct *vma);
 

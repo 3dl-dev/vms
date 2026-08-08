@@ -96,4 +96,9 @@
 # as distinct from the sys$ API test_syssvc_lnm_crossproc.c already covers),
 # the first mutation targeting vmslnm/lnm_client.c. See its own entry in
 # facility_defects.sh for what it covers and why.
-64
+# Raised to 65 by vms-aba's lnm-group-scope-collapsed -- anchors the new
+# test_syssvc_lnm_groupjob suite (LNM$GROUP/LNM$JOB executive residency, the
+# deferred other half of vms-d37's LNM$SYSTEM work), the first mutation
+# targeting derive_scope_key()'s LNM$GROUP case in kernel/vms_lnm.c. See its
+# own entry in facility_defects.sh for what it covers and why.
+65

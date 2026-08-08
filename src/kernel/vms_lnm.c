@@ -8,12 +8,17 @@
  * TRANSLATES by reading a read-only mmap of the arena -- no syscall on the
  * hot path -- and MUTATES through the define/delete ioctls here.
  *
- * SCOPE OF THIS CHANGE (vms-d37 core): LNM$SYSTEM is fully executive-
- * resident and cross-process, which is what unblocks DEFINE/SYSTEM
- * propagation and the 0.2 demo. The arena format carries `table` and
- * `scope_key` so LNM$GROUP / LNM$JOB residency is a later data change and
- * not a flag-day; their scoping derivation is deferred (see the note in
- * derive_scope_key()).
+ * SCOPE (vms-d37 core + vms-aba increment): LNM$SYSTEM, LNM$GROUP and
+ * LNM$JOB are all fully executive-resident and cross-process. vms-d37 made
+ * SYSTEM executive-resident (unblocking DEFINE/SYSTEM propagation and the
+ * 0.2 demo) and carried `table` and `scope_key` in the arena format from
+ * day one so GROUP/JOB residency would be a data change, not a flag-day.
+ * vms-aba is that data change: derive_scope_key() now derives the UIC group
+ * for GROUP and the job tree for JOB from the caller's PCB (proc->uic,
+ * proc->job_id -- see vms_module.c's vms_proc_parent_job_id()), and
+ * VMS_IOCTL_LNM_GETSCOPE hands a caller its own two keys so the userspace
+ * read path (the mmap'd arena, no syscall) can filter GROUP/JOB entries
+ * exactly as it already does for SYSTEM's scope_key == 0.
  *
  * NO PER-PROCESS FALLBACK (CLAUDE.md Rule 9 / INV-6). There is no
  * non-executive path: a caller reaches these tables only through /dev/vms.
@@ -128,15 +133,22 @@ static inline void lnm_write_end(void)
 }
 
 /*
- * derive_scope_key - the scope of a mutation, taken from the PCB, never
- * from the caller (design §3.3).
+ * derive_scope_key - the scope of a mutation (or a GETSCOPE query), taken
+ * from the PCB, never from the caller (design §3.3).
  *
- * SYSTEM is singular (0). GROUP is per-UIC-group. JOB has no OVMX model
- * yet -- OVMX has no job trees -- so rather than invent a key semantic VMS
- * never showed us (Rule 10) the define/delete ioctls reject JOB for now;
- * this returns the UIC group as a placeholder that is never reached while
- * that rejection stands. LNM$GROUP / LNM$JOB executive residency is the
- * deferred follow-up flagged in the PR.
+ * SYSTEM is singular (0). GROUP is the caller's UIC group -- documented VMS
+ * behaviour (OpenVMS System Services Reference, $CRELNM/$TRNLNM: LNM$GROUP
+ * is shared by every process in the same UIC group). JOB is the caller's
+ * job tree, proc->job_id, set once at registration by
+ * vms_proc_parent_job_id() in vms_module.c: a top-level process (an
+ * interactive login, a detached process) is its own job root, and every
+ * subprocess it creates (SPAWN) inherits that root's job_id -- also
+ * documented VMS behaviour (DCL Dictionary, SPAWN). Both are DERIVED from
+ * the PCB the dispatcher already resolved from the caller's task, never
+ * supplied by the ioctl argument -- the same discipline as UIC derivation
+ * at registration (vms-2b8): a process that could name its own scope could
+ * read or clobber another group's or job's logical names by asking for
+ * their key.
  */
 static uint32_t derive_scope_key(uint32_t table, const struct vms_proc *proc)
 {
@@ -144,10 +156,21 @@ static uint32_t derive_scope_key(uint32_t table, const struct vms_proc *proc)
     case VMS_LNM_TBL_SYSTEM:
         return 0;
     case VMS_LNM_TBL_GROUP:
-    case VMS_LNM_TBL_JOB:
-    default:
         return proc->uic >> 16;   /* UIC group */
+    case VMS_LNM_TBL_JOB:
+        return proc->job_id;
+    default:
+        return 0;
     }
+}
+
+/* Is `table` one of the three executive-resident LNM tables? LNM$PROCESS
+ * is deliberately excluded -- it never reaches vms.ko (design §3.1). */
+static bool lnm_table_is_valid(uint32_t table)
+{
+    return table == VMS_LNM_TBL_SYSTEM ||
+           table == VMS_LNM_TBL_GROUP ||
+           table == VMS_LNM_TBL_JOB;
 }
 
 /* Find an in-use entry matching (table, scope_key, upcased name). */
@@ -208,12 +231,7 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
     }
 
     /* Validate the table id and the name (trust-boundary checks). */
-    if (a->table != VMS_LNM_TBL_SYSTEM) {
-        /*
-         * GROUP/JOB executive residency is deferred (see derive_scope_key).
-         * The userspace client does not route them here; reject defensively
-         * rather than store an entry no reader consults.
-         */
+    if (!lnm_table_is_valid(a->table)) {
         a->status = SS__BADPARAM;
         goto out_copy;
     }
@@ -315,7 +333,7 @@ long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg)
         goto out_free;
     }
 
-    if (a->table != VMS_LNM_TBL_SYSTEM) {
+    if (!lnm_table_is_valid(a->table)) {
         a->status = SS__BADPARAM;
         goto out_copy;
     }
@@ -354,4 +372,31 @@ out_copy:
 out_free:
     kfree(a);
     return ret;
+}
+
+/*
+ * vms_ioctl_lnm_getscope - hand the caller its own GROUP and JOB scope
+ * keys (vms-aba). See the VMS_IOCTL_LNM_GETSCOPE comment in vms_lnm.h for
+ * why the read path needs this even though translation itself is a
+ * zero-syscall mmap read: the scope_key to filter on is a derived fact,
+ * not something the reader may compute from anything it holds locally
+ * (SETIDENT can change a process's UIC to something the task's raw Linux
+ * credentials do not reflect -- see vms_ioctl_setident() -- so there is no
+ * safe local recomputation of the GROUP key, and JOB has no userspace
+ * representation at all). No write lock is needed: this only reads the
+ * caller's own PCB fields, already stable under the RCU/hash discipline
+ * vms_proc_find_or_err() gives every ioctl handler.
+ */
+long vms_ioctl_lnm_getscope(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_lnm_scope_args args;
+
+    memset(&args, 0, sizeof(args));
+    args.group_key = derive_scope_key(VMS_LNM_TBL_GROUP, proc);
+    args.job_key   = derive_scope_key(VMS_LNM_TBL_JOB, proc);
+    args.status    = SS__NORMAL;
+
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
 }

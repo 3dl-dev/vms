@@ -15,11 +15,17 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-USERSPACE: sys$crembx (vms-mb1) -- creates an AF_UNIX socketpair whose
- *     two ends both stay in the caller's own pcb->channels[]; the MBA<n>: unit
- *     number comes from the process-local counter mbx_next_unit, so two
- *     processes each independently create a device they both call MBA1:, and
- *     a socketpair end is not a thing an unrelated process can open.
+ * OVMX-PARTIAL: sys$crembx (vms-mb1) -- exec: it registers the mailbox's
+ *     logical name via sys$crelnm, which since vms-d37 reaches the executive
+ *     for the LNM$SYSTEM table; the mailbox itself (the AF_UNIX socketpair,
+ *     both ends in the caller's own pcb->channels[], and the MBA<n>: unit from
+ *     the process-local counter mbx_next_unit) is entirely local -- two
+ *     processes each independently create a device they both call MBA1:, and a
+ *     socketpair end is not a thing an unrelated process can open.
+ * OVMX-LOCAL: sys$crembx -- the logical name it creates is placed in
+ *     LNM$PROCESS_TABLE, which stays per-process; sys$crelnm's only
+ *     executive-reaching path is its LNM$SYSTEM branch, which crembx never
+ *     takes, so nothing of the mailbox answer is executive-resident here.
  * OVMX-USERSPACE: sys$delmbx (vms-mb1) -- closes the caller's own channel
  *     entry; no executive device table learns the mailbox is gone.
  */

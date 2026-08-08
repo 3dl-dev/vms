@@ -919,3 +919,218 @@ uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info)
 
     return args.status;
 }
+
+/* ================================================================
+ * Logical name tables (executive-resident LNM$SYSTEM, vms-d37)
+ * ================================================================ */
+
+/* VMS_PROT_READ / VMS_MAP_SHARED / VMS_MAP_FAILED come from vms_types.h
+ * (via vms_syscall.h) -- the same mmap flags the rest of libvmssys uses. */
+
+/*
+ * The read-only view of the executive's logical-name arena, mapped once
+ * per PROCESS. Thread-local like vms_dev_fd, and re-mapped after fork()
+ * exactly as the descriptor is re-bound: a child inherits the TLS pointer
+ * to a mapping that belongs to the parent's fd, so it is discarded and the
+ * child maps its own (guarded by the pid the mapping was made under).
+ */
+static __thread struct vms_lnm_arena *vms_lnm_map = 0;
+static __thread vms_pid_t vms_lnm_map_pid = 0;
+
+/*
+ * vms_kif_lnm_arena - obtain (once) the read-only arena mapping.
+ *
+ * Binds first (open + register), then mmaps the arena off the /dev/vms fd.
+ * Returns NULL when the executive is absent -- there is NO fallback: the
+ * caller must surface that as SS$_NOSUCHDEV, never fake a private table.
+ */
+static struct vms_lnm_arena *vms_kif_lnm_arena(void)
+{
+    vms_pid_t pid = vms_sys_getpid();
+    void *p;
+
+    if (vms_lnm_map && vms_lnm_map_pid == pid)
+        return vms_lnm_map;
+
+    /* Stale inherited mapping from a fork()'d parent: drop it. */
+    if (vms_lnm_map) {
+        vms_sys_munmap(vms_lnm_map, sizeof(struct vms_lnm_arena));
+        vms_lnm_map = 0;
+        vms_lnm_map_pid = 0;
+    }
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return 0;
+
+    p = vms_sys_mmap(0, sizeof(struct vms_lnm_arena),
+                     VMS_PROT_READ, VMS_MAP_SHARED,
+                     vms_dev_fd, VMS_LNM_MMAP_OFFSET);
+    if (p == VMS_MAP_FAILED || !p)
+        return 0;
+
+    /* Trust the mapping only if the executive's header validates. */
+    {
+        struct vms_lnm_arena *a = (struct vms_lnm_arena *)p;
+        if (a->magic != VMS_LNM_ARENA_MAGIC ||
+            a->version != VMS_LNM_ARENA_VERSION) {
+            vms_sys_munmap(p, sizeof(struct vms_lnm_arena));
+            return 0;
+        }
+    }
+
+    vms_lnm_map = (struct vms_lnm_arena *)p;
+    vms_lnm_map_pid = pid;
+    return vms_lnm_map;
+}
+
+/* Read the seqlock generation with acquire ordering. */
+static uint64_t lnm_gen_load(const struct vms_lnm_arena *a)
+{
+    return __atomic_load_n(&a->generation, __ATOMIC_ACQUIRE);
+}
+
+uint32_t vms_kif_lnm_define(uint32_t table, const char *name,
+                            const char *const *values, uint8_t num_values,
+                            uint32_t attributes, uint8_t acmode)
+{
+    struct vms_lnm_def_args args;
+    unsigned i;
+
+    if (!name || !values || num_values == 0 || num_values > VMS_LNM_MAX_EQUIV)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    /*
+     * Reaching the executive is REQUIRED. If the mapping is unavailable the
+     * executive is absent, so fail honestly rather than mutate nothing and
+     * report success (INV-6). The mmap doubles as the executive-present probe
+     * the mutation path needs.
+     */
+    if (!vms_kif_lnm_arena())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.table = table;
+    args.attributes = attributes;
+    args.acmode = acmode;
+    args.num_equiv = num_values;
+    vms_strncpy(args.name, name, VMS_LNM_MAX_NAME);
+    args.name[VMS_LNM_MAX_NAME] = '\0';
+    args.name_length = (uint16_t)vms_strlen(args.name);
+
+    for (i = 0; i < num_values; i++) {
+        const char *v = values[i] ? values[i] : "";
+        vms_strncpy(args.equiv[i].value, v, VMS_LNM_MAX_VALUE);
+        args.equiv[i].value[VMS_LNM_MAX_VALUE] = '\0';
+        args.equiv[i].length = (uint16_t)vms_strlen(args.equiv[i].value);
+        args.equiv[i].index = (uint8_t)i;
+    }
+
+    KIF_CALL(VMS_IOCTL_LNM_DEFINE, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_lnm_delete(uint32_t table, const char *name, uint8_t acmode)
+{
+    struct vms_lnm_del_args args;
+
+    if (!name)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    if (!vms_kif_lnm_arena())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.table = table;
+    args.acmode = acmode;
+    vms_strncpy(args.name, name, VMS_LNM_MAX_NAME);
+    args.name[VMS_LNM_MAX_NAME] = '\0';
+    args.name_length = (uint16_t)vms_strlen(args.name);
+
+    KIF_CALL(VMS_IOCTL_LNM_DELETE, &args);
+
+    return args.status;
+}
+
+int vms_kif_lnm_translate(uint32_t table, const char *name,
+                          char *value, uint32_t valsz,
+                          uint16_t *vallen, uint32_t *attrs)
+{
+    struct vms_lnm_arena *a;
+    uint32_t scope_key;
+    int tries;
+
+    if (!name || !value || valsz == 0)
+        return -1;
+
+    a = vms_kif_lnm_arena();
+    if (!a)
+        return -1;   /* executive absent -> caller renders SS$_NOSUCHDEV */
+
+    /* SYSTEM is singular (scope 0). GROUP/JOB scoping is deferred. */
+    scope_key = (table == VMS_LNM_TBL_SYSTEM) ? 0u : 0u;
+
+    /*
+     * Seqlock read: sample the generation, walk the table, re-sample. Retry
+     * on an odd (write in flight) or changed counter. Writes are rare and
+     * brief, so this effectively never spins; the bound keeps a pathological
+     * writer from wedging a reader.
+     */
+    for (tries = 0; tries < 1024; tries++) {
+        uint64_t g0 = lnm_gen_load(a);
+        uint32_t i, max;
+        int found = 0;
+        char vbuf[VMS_LNM_MAX_VALUE + 1];
+        uint16_t vlen = 0;
+        uint32_t vattr = 0;
+
+        if (g0 & 1ULL)
+            continue;   /* write in flight */
+
+        max = a->max_entries;
+        if (max > VMS_LNM_MAX_ENTRIES)
+            max = VMS_LNM_MAX_ENTRIES;
+
+        for (i = 0; i < max; i++) {
+            const struct vms_lnm_entry *e = &a->entries[i];
+
+            if (!e->in_use || e->table != table || e->scope_key != scope_key)
+                continue;
+            if (vms_strcasecmp(e->name, name) != 0)
+                continue;
+            if (e->num_equiv == 0)
+                continue;
+
+            vlen = e->equiv[0].length;
+            if (vlen > VMS_LNM_MAX_VALUE)
+                vlen = VMS_LNM_MAX_VALUE;
+            vms_memcpy(vbuf, e->equiv[0].value, vlen);
+            vbuf[vlen] = '\0';
+            vattr = e->attributes;
+            found = 1;
+            break;
+        }
+
+        /* Re-sample: if the arena changed under us, the read is not stable. */
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (lnm_gen_load(a) != g0)
+            continue;
+
+        if (!found)
+            return 0;
+
+        if (vlen >= valsz)
+            vlen = (uint16_t)(valsz - 1);
+        vms_memcpy(value, vbuf, vlen);
+        value[vlen] = '\0';
+        if (vallen)
+            *vallen = vlen;
+        if (attrs)
+            *attrs = vattr;
+        return 1;
+    }
+
+    /* Writer never quiesced -- treat as unavailable rather than guess. */
+    return -1;
+}

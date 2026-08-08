@@ -999,4 +999,13 @@ _Static_assert(VMS_IOCTL_SETTERM == 0xC0085645u,
 _Static_assert(VMS_IOCTL_REGISTER == 0xC0085640u,
                "VMS_IOCTL_REGISTER encodes differently here than on the reference build");
 
+/* ================================================================
+ * Logical name tables (executive-resident LNM$SYSTEM/GROUP/JOB).
+ *
+ * The arena format, the mmap read path and the define/delete ioctls live
+ * in vms_lnm.h, included here so every consumer of this header -- kernel
+ * and userspace, on either architecture -- gets one frozen definition.
+ * ================================================================ */
+#include "vms_lnm.h"
+
 #endif /* _VMS_IOCTL_H */

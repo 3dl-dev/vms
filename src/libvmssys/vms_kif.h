@@ -341,4 +341,44 @@ uint32_t vms_kif_getjpi_prcnam(const char *prcnam, struct vms_procinfo *info);
  * scan is exhausted. */
 uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info);
 
+/* ================================================================
+ * Logical name tables (executive-resident LNM$SYSTEM, vms-d37)
+ *
+ * The executive owns the LNM$SYSTEM storage, so a name defined here by
+ * one process is visible to every other process on the node. DEFINE and
+ * DELETE are mutations and go through an ioctl; TRANSLATE reads a
+ * read-only mmap of the arena and issues NO syscall on the hot path
+ * (design "C-corrected", docs/design-logical-name-placement.md).
+ *
+ * NO PER-PROCESS FALLBACK (CLAUDE.md Rule 9 / INV-6). If /dev/vms is
+ * absent the mapping cannot be obtained and the arena is NULL: define and
+ * delete return SS$_NOSUCHDEV, and translate reports "unavailable" (its
+ * caller then returns SS$_NOSUCHDEV). There is no non-executive table to
+ * fall back to -- that absence is the whole point.
+ * ================================================================ */
+
+/* Create or supersede a name in an executive-resident table.
+ * `table` is VMS_LNM_TBL_SYSTEM (GROUP/JOB deferred). `values` carries
+ * `num_values` equivalence strings (1..VMS_LNM_MAX_EQUIV). Returns the
+ * executive's SS$_ status, or SS$_NOSUCHDEV if the executive is absent.
+ * Wired: sys$crelnm (src/libvms/syssvc/sys_logical.c). */
+uint32_t vms_kif_lnm_define(uint32_t table, const char *name,
+                            const char *const *values, uint8_t num_values,
+                            uint32_t attributes, uint8_t acmode);
+
+/* Delete a name from an executive-resident table. SS$_NOLOGNAM if the
+ * name is not present, SS$_NOSUCHDEV if the executive is absent.
+ * Wired: sys$dellnm (src/libvms/syssvc/sys_logical.c). */
+uint32_t vms_kif_lnm_delete(uint32_t table, const char *name, uint8_t acmode);
+
+/* Translate a name by reading the mmap'd arena (no syscall on a warm
+ * mapping). Returns 1 and fills value/vallen/attrs when found, 0 when the
+ * name is absent from the table, or -1 when the executive/mapping is
+ * unavailable (the caller renders that as SS$_NOSUCHDEV). `value` receives
+ * the first (index 0) equivalence string, NUL-terminated.
+ * Wired: sys$trnlnm (src/libvms/syssvc/sys_logical.c). */
+int vms_kif_lnm_translate(uint32_t table, const char *name,
+                          char *value, uint32_t valsz,
+                          uint16_t *vallen, uint32_t *attrs);
+
 #endif /* _VMS_KIF_H */

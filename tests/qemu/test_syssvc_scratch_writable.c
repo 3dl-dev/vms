@@ -206,6 +206,17 @@ static int try_create_as(const char *vms_device, const char *name,
  * provision_writable_dir() is `static` in a PID-1-only translation unit
  * with no public header -- factoring it out is a src/ovmx_init change,
  * outside what a tests/qemu file may do.
+ *
+ * THE OWNER CHOWN BELOW IS THE NEGATIVE-CONTROL ANCHOR POINT
+ * (tests/qemu/facility_defects.sh, defect scratch-dir-owner-not-system):
+ * that manifest mutates THIS call (not src/ovmx_init/ovmx_init.c's, which
+ * this suite never links) to drop only the MEMBER half of the chown,
+ * because this duplicate -- not the product's -- is what actually executes
+ * when this suite runs. Dropping MEMBER to root while leaving GROUP alone
+ * reproduces the "group matches, owner does not" shape vms-e5c measured
+ * broken (see provision_writable_dir_for_test's own header) and turns A1/A2
+ * below red without touching the credential-drop side (SYSTEM_UIC_MEMBER is
+ * still used unmutated by try_create_as()'s probes).
  */
 static void provision_writable_dir_for_test(const char *path)
 {
@@ -252,12 +263,14 @@ int main(void)
                             SYSTEM_UIC_GROUP, SYSTEM_UIC_MEMBER,
                             detail, sizeof(detail));
     printf("  A1: %s\n", detail);
+    /* negctl: scratch-dir-owner-not-system */
     CHECK(rc == 1, "SYSTEM's sys$create-equivalent open() succeeds under SYS$SCRATCH:");
 
     rc = try_create_as("SYS$LOGIN:", "E5C_SYSTEM_LOGIN.DAT",
                         SYSTEM_UIC_GROUP, SYSTEM_UIC_MEMBER,
                         detail, sizeof(detail));
     printf("  A2: %s\n", detail);
+    /* negctl: scratch-dir-owner-not-system */
     CHECK(rc == 1, "SYSTEM's sys$create-equivalent open() succeeds under SYS$LOGIN:");
 
     /* --- B: an ordinary account must NOT succeed under SYS$SCRATCH: ----- */

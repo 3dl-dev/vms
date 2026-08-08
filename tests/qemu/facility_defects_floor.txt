@@ -77,4 +77,9 @@
 # facility_defects.sh's cmd_selftest, "libvms, vmsdcl and vmsrms are copied
 # too"). (The 59th, following #176's addition to the manifest, was already
 # on the branch this rebased onto.)
-60
+# Raised to 61 by vms-e5c's scratch-dir-owner-not-system -- anchors
+# test_syssvc_scratch_writable, whose own duplicated directory-provisioning
+# helper (not src/ovmx_init/ovmx_init.c, which this suite never links) is
+# the mutation target; see its own entry in facility_defects.sh for what it
+# covers and why.
+61

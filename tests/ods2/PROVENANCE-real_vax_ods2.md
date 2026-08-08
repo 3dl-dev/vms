@@ -222,3 +222,188 @@ It does NOT prove a full end-to-end `MOUNT` of a fresh, from-scratch
 follow-up item should either research SECURITY.SYS's real structure
 through legitimate means (if any exist) or get an operator ruling on
 shipping a reduced/no-security-subsystem volume characteristic instead.
+
+## Addendum (increment 4): SECURITY.SYS VBN1 checksum derivation, and the honest current state
+
+Increment 4's job: make an OVMX-written volume `MOUNT` to completion on a
+real VAX by giving SECURITY.SYS a genuine data block. This addendum records
+what was derived, what was fixed, and -- just as importantly -- what is
+still broken and how that was proven not to be about SECURITY.SYS itself.
+
+### The oracle: 12 real `INITIALIZE` + `MOUNT` trials on lab-2
+
+All work below used pod **`vaxlab-8`** (lab-1 not disturbed), repurposing
+its `RQ3` unit exactly as increment-2/3's procedure (`sim> detach rq3` /
+`set rq3 rx50` (or `rx33` for the size-differential trial) / `set rq3
+format=raw` / `attach rq3 <scratch file>` / `cont`, reached by sending the
+SIMH WRU character `^E` (0x05) through the console FIFO to break a running
+node back to `sim>`). Each trial: `INIT $2$DUA3: <LABEL>`, `MOUNT`, `DUMP/
+BYTE $2$DUA3:[000000]SECURITY.SYS` (cross-checked against a raw-image
+`xxd`/`cmp -l` pull, since DCL's `DUMP` hex-column byte order turned out to
+be unreliable to eyeball -- see below), `DISMOUNT`, pull the raw `.dsk` via
+`kubectl cp`.
+
+**Trap hit and worth recording**: DCL's `DUMP` (non-`/BYTE`) ASCII-column
+rendering of a hex-grouped line is NOT simply "read the hex left to right".
+The FIRST transcription attempt in this session mis-derived several bytes
+this way and had to be discarded once a raw `xxd` pull of the same bytes
+disagreed with it. **Always cross-check a DCL `DUMP` capture against a raw
+disk-image byte read before trusting field boundaries.**
+
+Labels used (chosen to vary length across every residue mod 4, and to
+share/vary specific characters for differential isolation): `A`, `B`, `C`
+(length 1), `AB`, `AC`, `BB` (length 2), `XYZ` (length 3), `SECTEST`,
+`ALPHA9Z` (length 7, different content), `TESTVOL1` (length 8),
+`ABCDEFGHIJKL` (length 12, the VMS volume-label maximum), and `BIGVOL` on a
+**second device geometry** (RX33/2400 blocks, vs. RX50/800 for every other
+trial) to confirm the format does not depend on volume size.
+
+### Finding 1: SECURITY.SYS's VBN1 data block is a real, checksummed record -- not a stub
+
+A fresh volume's `SECURITY.SYS` is NOT all-zero: it has `EFBLK=1`,
+`allocated=6` (one populated block, matching the `map_inuse=2`/6-block
+CONTIG extent increment-3 already found), and VBN1 contains a small,
+deterministic record. Zeroing ONLY the first 4 bytes of an otherwise-real,
+untouched, working volume's `SECURITY.SYS` VBN1 (leaving the rest of the
+REAL volume alone) turns a clean `MOUNT` into:
+
+```
+%MOUNT-F-BADSECSYS, failed to create or access SECURITY.SYS
+-SYSTEM-E-BADCHECKSUM, message checksum failure
+```
+
+This is direct, induced-error proof that (a) those 4 bytes are a checksum,
+and (b) a real MOUNT enforces it -- the actual reason increment 3's
+zero-filled/size-matched stubs were rejected (increment 3's own doc
+recorded the primary `%MOUNT-F-BADSECSYS` line but not this secondary
+status text for the specific zero-length-stub variant it shipped; see
+Finding 4 below for why that distinction turned out to matter).
+
+### Finding 2: the checksum algorithm (fully derived, 12/12 samples exact)
+
+Repeating the same label twice (`SECTEST`, init'd at the start and again
+after several other labels) reproduced the IDENTICAL checksum both times --
+ruling out a time/session-seeded value. Comparing labels that differ by
+exactly one character, one length, or one device geometry (see
+`tests/ods2/test_ods2_security.c`'s `g_oracle[]` table for the raw
+observed values) triangulated:
+
+```
+strlen  = length of the volume label
+n       = ((78 + strlen) / 4) * 4        (integer division: round down to a multiple of 4)
+lane[k] = XOR of every byte at block offset (4 + i) where i in [0, n) and i % 4 == k,  for k in 0..3
+checksum (little-endian longword) = lane[0] | (lane[1] << 8) | (lane[2] << 16) | (lane[3] << 24)
+```
+
+This is a plain byte-lane XOR fold, computed over a domain that starts
+right after the checksum field and extends through the label's own text
+(rounded down to a 4-byte boundary -- for `strlen == 1` this rounds all
+the way back to the fixed prefix, discarding the single label byte
+entirely, which is why one-character labels are a genuine, verified edge
+case: `A`/`B`/`C` all reproduce the SAME checksum `0x000f084d`). Standard
+CRC-32 (multiple polynomial/init/reflection/xorout combinations) and
+additive-16/32 sums were tried FIRST and did not reproduce any sample;
+the byte-lane XOR fold reproduces all 12 samples across 2 device
+geometries exactly. See `ods2_security_checksum()` in
+`src/vmsfs/ods2/ods2_writer.c` and its reader-side twin
+`ods2_security_parse()` in `ods2_reader.c`.
+
+### Finding 3: field layout
+
+Differencing same-length-different-label and same-label-different-geometry
+samples pinned:
+
+- Offset `0x08` (1 byte): `0x52 + strlen` -- the block offset one past the
+  end of the label text (an "end of variable data" pointer).
+- Offset `0x1C` (4 bytes): the volume's owner UIC (`ods2_uic_t` layout).
+  Every trial used the implicit default (no `/OWNER_UIC`), reading back as
+  `[1,4]` (SYSTEM) -- consistent with, but not independently proven
+  against, the same field's role elsewhere on the volume.
+- Offset `0x50` (word): `strlen + 4`.
+- Offset `0x52` (`strlen` bytes): the label text, ASCII, not padded beyond
+  its own extent.
+- Everything else in `0x04..0x4F`: byte-for-byte IDENTICAL across all 12
+  trials regardless of label OR geometry -- a fixed "zero ACL entries"
+  template, reproduced verbatim (`ods2_security_template[]`) as
+  deterministic structure, not copied VSI content (see ods2.h's [F6]
+  provenance comment for the full reasoning on why this is NOT the "copy
+  one real file's bytes into every volume" approach increment 3 correctly
+  rejected).
+
+### Finding 4: fixing the checksum was NOT enough -- a second, unrelated failure
+
+With `ods2_security_build()` producing a byte-exact, oracle-validated
+checksum, a full volume from `ods2_volume_format()` was dumped and MOUNTed
+on lab-2. Result:
+
+```
+%MOUNT-W-QUOTAFAIL, failed to activate quota file; volume locked
+-SYSTEM-W-FILENUMCHK, file identification number check
+%MOUNT-F-BADSECSYS, failed to create or access SECURITY.SYS
+-SYSTEM-W-FILENUMCHK, file identification number check
+```
+
+`QUOTAFAIL` is a red herring, confirmed separately: `MOUNT/NOQUOTA`
+suppresses it entirely and does not change `BADSECSYS`'s outcome. The real
+puzzle is `BADSECSYS` now citing **`FILENUMCHK`, not `BADCHECKSUM`** --
+i.e. a DIFFERENT secondary status than the one the checksum fix targets.
+Bisection trail, each step lab-2-verified on pod `vaxlab-8`:
+
+1. **`fh2_recattr.fat_efblk` set to 6 (map_count) instead of the real
+   fixture's own value.** Fixed to match the real fixture (which, re-
+   decoded carefully this pass via that fixture's OWN home block rather
+   than an assumed `hdr_base`, is `hiblk=6/efblk=2` -- NOT `efblk=1` as an
+   earlier note in this file mis-stated). No change to the MOUNT outcome.
+2. **Home block owner UIC `[0,0]` instead of `[1,4]`.** This writer never
+   set `hm2_volowner` anywhere (a pre-existing gap, not previously
+   flagged). Patched to SYSTEM `[1,4]`, checksums recomputed. No change.
+3. **The decisive test: splice the REAL fixture's own COMPLETE
+   SECURITY.SYS header** (every field -- owner UIC, fileprot, highwater,
+   efblk, idoffset/mpoffset, checksum, everything) into this writer's own
+   volume, with ONLY its retrieval-pointer LBN rewritten to point at this
+   writer's own correctly-checksummed data block (its `security_lbn`,
+   computed from this writer's own layout arithmetic, not the real
+   fixture's). **STILL fails identically with `FILENUMCHK`.** This
+   conclusively proves the defect is NOT in SECURITY.SYS's own header or
+   content -- both were, at this point, 100% real bytes (or real-
+   algorithm-derived bytes) pointing at each other correctly.
+4. **Directory entries.** A control MOUNT of an untouched real fixture came
+   back completely clean (no `QUOTAFAIL`, no `BADSECSYS` at all -- proving
+   these are NOT unconditional/expected messages on a healthy volume, as
+   an earlier increment-3 note had assumed). Decoding that real fixture's
+   own `[000000]` MFD data block (`strings` over the raw bytes at its data
+   LBN) showed it lists ALL 10 reserved files by name (`000000.DIR`,
+   `INDEXF.SYS`, `BITMAP.SYS`, `BADBLK.SYS`, `CORIMG.SYS`, `VOLSET.SYS`,
+   `CONTIN.SYS`, `BACKUP.SYS`, `BADLOG.SYS`, `SECURITY.SYS`), not just
+   caller-created ones -- this writer inserted none of them. Added (see
+   ods2.h's [F8]). **Still no change to the MOUNT outcome**, even combined
+   with step 3's real-header splice.
+5. **`maxfiles` reduced from 200 to 13** (matching the real fixture's
+   actual file count, to rule out some large-pre-reserved-index-file
+   interaction). **No change.**
+6. **Regression control**: re-built `main`'s pre-increment-4 output
+   (the original zero-length SECURITY.SYS stub) and MOUNTed it fresh.
+   It ALSO shows `FILENUMCHK`, not `BADCHECKSUM` -- meaning this exact
+   secondary status was already present before increment 4 touched
+   anything; increment 3's own PROVENANCE text describing `BADCHECKSUM`
+   for "a zero-length stub" did not capture this. (The BADCHECKSUM
+   behavior IS real and reproducible -- see Finding 1 -- but only when
+   induced onto an otherwise-conventional, fully-populated real volume,
+   not onto this writer's structurally-different-in-some-other-way
+   output.)
+
+**Conclusion**: the specific, named increment-3 defect (a real MOUNT
+enforcing SECURITY.SYS's content checksum) IS resolved and IS validated
+(Finding 1's induced-error test, Finding 2's 12-sample-exact algorithm).
+A full real-VAX MOUNT of this writer's own complete volume output still
+does not reach completion, but the remaining cause is proven to be
+somewhere else in the volume's structure -- most likely the already-
+documented [OVMX-inferred] simplification where `INDEXF.SYS`'s own
+retrieval map is written as ONE contiguous extent instead of the real
+fixture's 3 fragmented extents (the only OTHER "not reproduced, presumed
+OK" structural difference left in the writer). **Not bisected further in
+this increment** -- out of the SECURITY.SYS-focused scope this work was
+chartered under. Recommended next step: repeat step 3's splice technique,
+but for `INDEXF.SYS`'s OWN header/map, on a real fixture, to test whether
+a single-contiguous-extent `INDEXF.SYS` alone reproduces `FILENUMCHK` on
+an otherwise-100%-real volume.

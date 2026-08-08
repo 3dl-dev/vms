@@ -44,3 +44,17 @@ set_tests_properties(ods2_write PROPERTIES
     LABELS "unit;ods2;vmsfs"
     TIMEOUT 30
 )
+
+# Increment 4: SECURITY.SYS VBN1 data-block writer/reader
+# (ods2_security_build()/ods2_security_parse()). Offline round-trip plus a
+# regression pin against the real lab-2 checksum values that resolved the
+# increment-3 %MOUNT-F-BADSECSYS failure -- see ods2.h's WRITER [F6].
+add_executable(test_ods2_security test_ods2_security.c)
+target_include_directories(test_ods2_security PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_security PRIVATE ods2)
+
+add_test(NAME ods2_security COMMAND test_ods2_security)
+set_tests_properties(ods2_security PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)

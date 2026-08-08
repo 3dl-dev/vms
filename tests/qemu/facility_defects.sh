@@ -453,6 +453,7 @@ creprc-detach-intermediate-reaped
 run-detached-not-detached
 run-image-qualifier-refused
 run-qualifier-not-abbreviated
+lnm-delete-noop
 kstat-deadlock-mismapped
 kstat-ivlockid-mismapped
 kstat-cvtungrant-mismapped
@@ -3843,6 +3844,36 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    lnm-delete-noop)
+        case "$_f" in
+        facility)     echo "executive-resident logical name tables (VMS_IOCTL_LNM_DEFINE/DELETE + the mmap arena, LNM\$SYSTEM), vms-d37";;
+        targets)      echo "kernel/vms_lnm.c";;
+        suites_red)   echo "test_syssvc_lnm_crossproc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_lnm_delete stops clearing the entry's in_use flag but still reports SS\$_NORMAL, so DEASSIGN/SYSTEM 'succeeds' while the name stays defined -- a public delete reporting success for a mutation it did not perform. One condition, one process pair.";;
+        require_fail) echo "child: a name the parent DEASSIGN/SYSTEM'd is gone here too (delete is cross-process, and it is absence, not SS\$_NOSUCHDEV)";;
+        knock_on_fail) echo "";;
+        knock_on_why)  cat <<'EOF'
+SINGLE-PROPERTY BY CONSTRUCTION. The mutation removes only the `e->in_use = 0;`
+store in vms_ioctl_lnm_delete and leaves the returned status SS$_NORMAL, so:
+  - every DEFINE and TRANSLATE assertion still passes (the arena is written and
+    read exactly as before -- nothing on the define/translate path is touched);
+  - "parent: sys$dellnm in LNM$SYSTEM reported success" still passes (the
+    handler still finds the entry and still returns SS$_NORMAL);
+  - only the child's post-delete TRANSLATE reddens, because the name it should
+    no longer find is still present.
+That is exactly one assertion, which is why require_fail names it alone and
+knock_on_fail is empty. A mutation that instead skipped the store in
+vms_ioctl_lnm_define would redden four assertions at once (both child reads,
+the parent's read-back of the child's define, and the parent's own delete of a
+name that was never stored) -- the blunderbuss this manifest's method rule
+forbids -- so the delete path was chosen deliberately for its surgical scope.
+EOF
+                      ;;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -4213,6 +4244,16 @@ apply_edit() {
         # second apply finds no $VMS_STATUS_SUCCESS(...) text left inside
         # the `if (` and is the no-op selftest requires.
         sed -i 's|if (\$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(spec, linux_path, sizeof(linux_path)))) {|if (vmsfs_to_linux_path(spec, linux_path, sizeof(linux_path)) == 0) { /* NEGCTL rms-create-filespec-not-translated */|' "$_file";;
+
+    lnm-delete-noop)
+        # UNIQUE TEXT: `e->in_use = 0;` occurs only in vms_ioctl_lnm_delete.
+        # The define path clears the slot with memset() and then sets
+        # `e->in_use = 1;`, so this 4-space line is the delete's store alone.
+        # Replacing it with a no-op comment leaves the entry live while the
+        # handler still returns SS__NORMAL, so DEASSIGN/SYSTEM reports success
+        # over a name it did not remove. A second apply finds no
+        # `e->in_use = 0;` left and is the no-op selftest requires.
+        sed -i 's|^    e->in_use = 0;$|    /* NEGCTL lnm-delete-noop: entry not freed */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

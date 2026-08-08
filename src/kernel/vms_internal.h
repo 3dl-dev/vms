@@ -195,6 +195,29 @@
 #define SS__NOTALLPRIV  1664
 
 /*
+ * Logical-name statuses (vms-d37). Values are this tree's existing
+ * src/libvms/include/ssdef.h, NOT independently re-derived here, so the
+ * executive and the runtime cannot drift apart -- same discipline as the
+ * device-table block above.
+ *
+ *   SS$_SUPERSEDE 844  -- an existing name was replaced (ssdef.h, oracle
+ *                         provenance recorded there)
+ *   SS$_NOLOGNAM  444  -- no logical name match (ssdef.h, ORACLE-PINNED
+ *                         vms-8019)
+ *
+ * SS__EXLNMQUOTA IS THE ONE VALUE NOT YET IN ssdef.h. It is ORACLE-PINNED,
+ * not self-certified: docs/design-logical-name-placement.md §4.2 records the
+ * vms-ln0 round-3 veracity adversary running F$MESSAGE(8780) on the reference
+ * lab OpenVMS VAX V7.3 (lab-1, node vax1) and getting %SYSTEM-...-EXLNMQUOTA.
+ * The coupled ssdef.h edit is tracked in vms-556. It is the status the
+ * executive returns when the fixed arena is full -- VMS's "exceeded logical
+ * name quota" condition, not "insufficient memory".
+ */
+#define SS__SUPERSEDE   844
+#define SS__NOLOGNAM    444
+#define SS__EXLNMQUOTA  8780        /* oracle-pinned lab-1 F$MESSAGE (design §4.2, vms-556) */
+
+/*
  * Default privilege set for processes with no elevated credential.
  *
  * These are the two privileges OpenVMS grants essentially every user, so
@@ -568,6 +591,14 @@ long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
 bool vms_proc_may_read(const struct vms_proc *caller,
                        const struct vms_proc *target);
 
+/* Logical name tables (executive-resident LNM$SYSTEM/GROUP/JOB, vms-d37) */
+struct file;
+struct vm_area_struct;
+long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg);
+/* Map the read-only logical-name arena into the caller (design §3.3). */
+int vms_lnm_mmap(struct file *filp, struct vm_area_struct *vma);
+
 /* Subsystem init/cleanup */
 int vms_lock_init(void);
 void vms_lock_cleanup(void);
@@ -575,6 +606,8 @@ void vms_eflag_init(void);
 void vms_eflag_cleanup(void);
 int vms_devtab_init(void);
 void vms_devtab_cleanup(void);
+int vms_lnm_init(void);
+void vms_lnm_cleanup(void);
 
 /* Give back every channel a process holds (process teardown). */
 void vms_proc_release_channels(struct vms_proc *proc);

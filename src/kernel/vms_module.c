@@ -533,6 +533,12 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     case VMS_IOCTL_SETIDENT:
         return vms_ioctl_setident(proc, arg);
 
+    /* Logical name tables (executive-resident LNM$SYSTEM, vms-d37) */
+    case VMS_IOCTL_LNM_DEFINE:
+        return vms_ioctl_lnm_define(proc, arg);
+    case VMS_IOCTL_LNM_DELETE:
+        return vms_ioctl_lnm_delete(proc, arg);
+
     default:
         return -ENOTTY;
     }
@@ -581,6 +587,7 @@ static int vms_dev_release(struct inode *inode, struct file *filp)
 static const struct file_operations vms_fops = {
     .owner          = THIS_MODULE,
     .unlocked_ioctl = vms_dev_ioctl,
+    .mmap           = vms_lnm_mmap,      /* read-only logical-name arena (vms-d37) */
     .open           = vms_dev_open,
     .release        = vms_dev_release,
 };
@@ -682,10 +689,26 @@ static int __init vms_init(void)
         return ret;
     }
 
+    /*
+     * Bring up the logical-name arena before /dev/vms exists, for the same
+     * reason as the device table: the executive-resident tables are a
+     * property of the node, present before any process can ask (vms-d37).
+     */
+    ret = vms_lnm_init();
+    if (ret) {
+        pr_err("vms: failed to initialize logical-name arena: %d\n", ret);
+        vms_devtab_cleanup();
+        vms_lock_cleanup();
+        vms_eflag_cleanup();
+        kmem_cache_destroy(vms_proc_cache);
+        return ret;
+    }
+
     /* Register /dev/vms */
     ret = misc_register(&vms_misc);
     if (ret) {
         pr_err("vms: failed to register /dev/vms: %d\n", ret);
+        vms_lnm_cleanup();
         vms_devtab_cleanup();
         vms_lock_cleanup();
         vms_eflag_cleanup();
@@ -719,6 +742,7 @@ static void __exit vms_exit(void)
     vms_lock_cleanup();
     vms_eflag_cleanup();
     vms_devtab_cleanup();
+    vms_lnm_cleanup();
 
     kmem_cache_destroy(vms_proc_cache);
 

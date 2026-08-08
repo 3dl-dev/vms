@@ -82,4 +82,8 @@
 # helper (not src/ovmx_init/ovmx_init.c, which this suite never links) is
 # the mutation target; see its own entry in facility_defects.sh for what it
 # covers and why.
-61
+# Raised to 62 by vms-d37's lnm-delete-noop -- the first mutation targeting
+# kernel/vms_lnm.c (executive-resident LNM$SYSTEM), anchoring the new
+# test_syssvc_lnm_crossproc suite's cross-process DEASSIGN/SYSTEM assertion.
+# See its own entry in facility_defects.sh for what it covers and why.
+62

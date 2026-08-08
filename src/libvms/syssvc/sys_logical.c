@@ -2,15 +2,20 @@
  * sys_logical.c - Logical Name System Services
  *
  * Implements the VMS logical name services $CRELNM, $DELLNM, and $TRNLNM.
- * On real VMS these would communicate with the logical name daemon; this
- * implementation uses a simple in-process table (linked list per table)
- * until the vmslnm daemon is built.
  *
- * Supported tables:
- *   LNM$PROCESS_TABLE - Process-private logical names
- *   LNM$JOB           - Job-wide logical names
- *   LNM$GROUP          - Group-wide logical names
- *   LNM$SYSTEM_TABLE  - System-wide logical names
+ * Table placement (vms-d37):
+ *   LNM$PROCESS_TABLE - process-private, kept in logical_table[] here
+ *   LNM$JOB           - process-private for now (executive residency deferred)
+ *   LNM$GROUP         - process-private for now (executive residency deferred)
+ *   LNM$SYSTEM        - EXECUTIVE-RESIDENT: create/delete go through /dev/vms
+ *                       (vms_kif_lnm_define/_delete) and translate reads the
+ *                       read-only arena (vms_kif_lnm_translate). A name defined
+ *                       in LNM$SYSTEM by one process is therefore visible to
+ *                       every other process on the node.
+ *
+ * NO PER-PROCESS FALLBACK for LNM$SYSTEM (CLAUDE.md Rule 9 / INV-6): if
+ * /dev/vms is absent, the SYSTEM path fails honestly with SS$_NOSUCHDEV; it
+ * does NOT fall back to logical_table[].
  *
  * Logical names are stored case-insensitively (uppercased).
  */
@@ -19,21 +24,24 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * All three answer from logical_table[] in this file: a process-private array,
- * one linked list per table name. LNM$SYSTEM_TABLE is therefore private too --
- * a name defined in one process is invisible to every other, whatever table it
- * was defined in.
+ * LNM$PROCESS/JOB/GROUP still answer from logical_table[] (a process-private
+ * array). LNM$SYSTEM is executive-resident as of vms-d37: the SYSTEM branch of
+ * each service reaches a vms_kif_* entry point, so these are PARTIAL, not
+ * USERSPACE.
  *
- * vms-a4b, which these lines used to cite, is CLOSED: it closed on its deletion
- * half (VMSLNMD.EXE, a daemon OpenVMS does not have, is gone) and its own close
- * note records that vms-d37 owns making logical names executive-resident. So
- * that is what they cite.
- *
- * OVMX-USERSPACE: sys$crelnm (vms-d37) -- inserts into the process-private
- *     logical_table[] under lnm_mutex; no daemon and no executive are told.
- * OVMX-USERSPACE: sys$dellnm (vms-d37) -- removes from the same private table.
- * OVMX-USERSPACE: sys$trnlnm (vms-d37) -- searches the same private table, so
- *     the names it finds are the ones this process defined.
+ * OVMX-PARTIAL: sys$crelnm (vms-d37) -- exec: LNM$SYSTEM storage is the
+ *     executive's (vms_kif_lnm_define); PROCESS/JOB/GROUP stay in logical_table[].
+ * OVMX-LOCAL: sys$crelnm -- LNM$PROCESS_TABLE, LNM$JOB and LNM$GROUP creates
+ *     are still process-private in logical_table[] (JOB/GROUP executive
+ *     residency is the deferred half of vms-d37).
+ * OVMX-PARTIAL: sys$dellnm (vms-d37) -- exec: LNM$SYSTEM delete is the
+ *     executive's (vms_kif_lnm_delete); other tables stay process-private.
+ * OVMX-LOCAL: sys$dellnm -- LNM$PROCESS/JOB/GROUP deletes are served from the
+ *     process-private logical_table[], not the executive.
+ * OVMX-PARTIAL: sys$trnlnm (vms-d37) -- exec: LNM$SYSTEM translate reads the
+ *     executive's mmap arena (vms_kif_lnm_translate); other tables are local.
+ * OVMX-LOCAL: sys$trnlnm -- the LNM$PROCESS/JOB/GROUP steps of the search read
+ *     the process-private logical_table[]; only the LNM$SYSTEM step is executive.
  */
 
 #include <stdint.h>
@@ -43,6 +51,21 @@
 #include <pthread.h>
 #include "starlet.h"
 #include "str_util.h"
+#include "vms_kif.h"
+
+/*
+ * Map a VMS table-name string to an executive-resident table id, or 0 when
+ * the table is NOT executive-resident (PROCESS, JOB, GROUP -- kept local).
+ * Only LNM$SYSTEM moves to the executive in the vms-d37 core.
+ */
+static uint32_t lnm_exec_table_id(const char *table)
+{
+    if (strcasecmp(table, "LNM$SYSTEM") == 0 ||
+        strcasecmp(table, "LNM$SYSTEM_TABLE") == 0 ||
+        strcasecmp(table, "SYSTEM") == 0)
+        return VMS_LNM_TBL_SYSTEM;
+    return 0;
+}
 
 #define MAX_LOGICALS 1024
 #define MAX_EQUIV_LEN 256
@@ -119,6 +142,20 @@ uint32_t sys$crelnm(const uint32_t *attr,
         }
     }
 
+    /*
+     * LNM$SYSTEM is executive-resident: the storage lives in vms.ko, not in
+     * this process. Route the mutation through /dev/vms so the name is
+     * visible system-wide. No fallback -- SS$_NOSUCHDEV if the executive is
+     * absent (vms-d37, INV-6).
+     */
+    uint32_t exec_tbl = lnm_exec_table_id(table);
+    if (exec_tbl) {
+        const char *vals[1] = { equiv };
+        return vms_kif_lnm_define(exec_tbl, name, vals, 1,
+                                  attr ? *attr : 0,
+                                  acmode ? *acmode : LNM$C_USER);
+    }
+
     pthread_mutex_lock(&lnm_mutex);
 
     /* Check for existing entry (supersede) */
@@ -170,6 +207,11 @@ uint32_t sys$dellnm(const struct dsc$descriptor_s *tabnam,
     dsc$strncpy(table, tabnam, sizeof(table));
     dsc$strncpy(name, lognam, sizeof(name));
 
+    /* LNM$SYSTEM is executive-resident (vms-d37): delete through /dev/vms. */
+    uint32_t exec_tbl = lnm_exec_table_id(table);
+    if (exec_tbl)
+        return vms_kif_lnm_delete(exec_tbl, name, acmode ? *acmode : LNM$C_USER);
+
     pthread_mutex_lock(&lnm_mutex);
 
     struct logical_entry *entry = find_logical(table, name);
@@ -207,57 +249,103 @@ uint32_t sys$trnlnm(const uint32_t *attr,
     char name[LNM$C_NAMLENGTH + 1];
     dsc$strncpy(name, lognam, sizeof(name));
 
-    /* Standard table search order when no table is specified */
+    /*
+     * Standard table search order when no table is specified. LNM$SYSTEM is
+     * NOT in this list: it is executive-resident (vms-d37) and is consulted
+     * separately, after the process-private tables miss.
+     */
     static const char *search_order[] = {
-        "LNM$PROCESS_TABLE", "LNM$JOB", "LNM$GROUP",
-        "LNM$SYSTEM_TABLE", NULL
+        "LNM$PROCESS_TABLE", "LNM$JOB", "LNM$GROUP", NULL
     };
 
-    pthread_mutex_lock(&lnm_mutex);
+    /*
+     * Resolve into local storage (equiv value + attributes), from either the
+     * executive-resident LNM$SYSTEM arena or a process-private table, then
+     * fill the item list from those. Copying out of the in-process entry
+     * before dropping the mutex keeps the fill lock-free and lets both
+     * sources share one code path.
+     */
+    char equiv[MAX_EQUIV_LEN];
+    equiv[0] = '\0';
+    uint32_t found_attr = 0;
+    int have = 0;   /* 1 = found */
 
-    struct logical_entry *entry = NULL;
     if (tabnam && tabnam->dsc$a_pointer) {
         char table[LNM$C_TABNAMLEN + 1];
         dsc$strncpy(table, tabnam, sizeof(table));
-        entry = find_logical(table, name);
+
+        uint32_t exec_tbl = lnm_exec_table_id(table);
+        if (exec_tbl) {
+            /* LNM$SYSTEM: read the executive arena. No fallback (INV-6). */
+            int r = vms_kif_lnm_translate(exec_tbl, name, equiv,
+                                          sizeof(equiv), NULL, &found_attr);
+            if (r < 0) return SS$_NOSUCHDEV;   /* executive absent */
+            if (r == 0) return SS$_NOLOGNAM;
+            have = 1;
+        } else {
+            pthread_mutex_lock(&lnm_mutex);
+            struct logical_entry *e = find_logical(table, name);
+            if (e) {
+                strncpy(equiv, e->equiv, sizeof(equiv) - 1);
+                equiv[sizeof(equiv) - 1] = '\0';
+                found_attr = e->attr;
+                have = 1;
+            }
+            pthread_mutex_unlock(&lnm_mutex);
+            if (!have) return SS$_NOLOGNAM;
+        }
     } else {
-        /* Search all tables in standard order */
+        /* Process-private tables first, in standard order. */
+        pthread_mutex_lock(&lnm_mutex);
         for (int i = 0; search_order[i]; i++) {
-            entry = find_logical(search_order[i], name);
-            if (entry) break;
+            struct logical_entry *e = find_logical(search_order[i], name);
+            if (e) {
+                strncpy(equiv, e->equiv, sizeof(equiv) - 1);
+                equiv[sizeof(equiv) - 1] = '\0';
+                found_attr = e->attr;
+                have = 1;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&lnm_mutex);
+
+        /* Then LNM$SYSTEM, from the executive arena. */
+        if (!have) {
+            int r = vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, name, equiv,
+                                          sizeof(equiv), NULL, &found_attr);
+            if (r < 0) return SS$_NOSUCHDEV;   /* executive absent */
+            if (r == 0) return SS$_NOLOGNAM;
+            have = 1;
         }
     }
 
-    if (!entry) {
-        pthread_mutex_unlock(&lnm_mutex);
+    if (!have)
         return SS$_NOLOGNAM;
-    }
 
-    /* Fill in item list results */
+    /* Fill in item list results from the resolved value. */
     if (itmlst) {
         for (const struct item_list_3 *item = itmlst;
              item->buflen != 0 || item->item_code != 0; item++) {
             switch (item->item_code) {
                 case LNM$_STRING:
                     if (item->bufaddr) {
-                        uint16_t len = (uint16_t)strlen(entry->equiv);
+                        uint16_t len = (uint16_t)strlen(equiv);
                         if (len > item->buflen) len = item->buflen;
-                        memcpy(item->bufaddr, entry->equiv, len);
+                        memcpy(item->bufaddr, equiv, len);
                         if (item->retlen) *item->retlen = len;
                     }
                     break;
 
                 case LNM$_LENGTH:
                     if (item->bufaddr && item->buflen >= sizeof(uint32_t)) {
-                        *(uint32_t *)item->bufaddr =
-                            (uint32_t)strlen(entry->equiv);
+                        *(uint32_t *)item->bufaddr = (uint32_t)strlen(equiv);
                     }
                     if (item->retlen) *item->retlen = sizeof(uint32_t);
                     break;
 
                 case LNM$_ATTRIBUTES:
                     if (item->bufaddr && item->buflen >= sizeof(uint32_t)) {
-                        *(uint32_t *)item->bufaddr = entry->attr;
+                        *(uint32_t *)item->bufaddr = found_attr;
                     }
                     if (item->retlen) *item->retlen = sizeof(uint32_t);
                     break;
@@ -275,6 +363,5 @@ uint32_t sys$trnlnm(const uint32_t *attr,
         }
     }
 
-    pthread_mutex_unlock(&lnm_mutex);
     return SS$_NORMAL;
 }

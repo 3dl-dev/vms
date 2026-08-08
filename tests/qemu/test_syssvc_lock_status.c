@@ -57,6 +57,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <poll.h>
 #include <sys/wait.h>
 #include <stdint.h>
@@ -408,6 +409,32 @@ static void scenario_deadlock(void)
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
+
+    /*
+     * A BROKEN PIPE MUST BE A NAMED FAILURE, NOT A DEAD TEST (vms-86a).
+     *
+     * scenario_cvtungrant()'s parent writes a 'g' go-byte to go_pipe[1]
+     * whose only reader is child_cvtungrant_holder(). If that child exits
+     * early -- e.g. bootstrap()'s vms_kif_open() fails, or it is simply
+     * starved and reaped by something else -- every copy of go_pipe[0] is
+     * gone and the write lands on a pipe with no reader. With the DEFAULT
+     * SIGPIPE disposition that kills THIS PROCESS: the suite's verdict
+     * becomes rc=141 (128+13), printed before any assertion, attributing
+     * nothing.
+     *
+     * MEASURED, not hypothetical: main-push run 31250993719's neg-control
+     * shard 5/6 died exactly this way under shard-balloon load (6 neg-control
+     * shards plus other jobs running concurrently) on an otherwise
+     * byte-identical, previously-green commit. The remedy is the one
+     * tests/qemu/test_syssvc_showterm.c and test_syssvc_setname.c already
+     * apply for the identical failure shape: with SIGPIPE ignored, the
+     * write()/read() calls this file already checks (`!= 1`, `<= 0`) fail
+     * into their checked branches and report a real CHECK/FAIL instead of
+     * killing the program by signal. Nothing is weakened -- a signal death
+     * is replaced by a named failure, which is strictly more information.
+     */
+    signal(SIGPIPE, SIG_IGN);
+
     printf("=== test_syssvc_lock_status (executive-yielded VMS statuses, vms-2e5/vms-82a) ===\n");
 
     if (bootstrap("parent") < 0) {

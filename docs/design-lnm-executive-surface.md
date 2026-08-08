@@ -67,6 +67,37 @@ honest `SS$_NOSUCHDEV`-with-no-executive behaviour `sys$crelnm/$trnlnm/$dellnm`
 (`src/libvms/syssvc/sys_logical.c`) already had from day one (that
 implementation never had a fallback to begin with; only this manager did).
 
+### `lnm_setup_defaults` still needs to seed *something*, host-side
+
+Removing the fallback surfaced a second-order gap the first pass of this fix
+missed: `lnm_setup_defaults()` (called by PID 1, `ovmx_provision`, DCL.EXE's
+`setup_session()`, and LOGINOUT.EXE) seeds the FILE-LOCATING baseline —
+`SYS$SYSDEVICE`, `SYS$SYSROOT`, `SYS$SYSTEM`, `SYS$LIBRARY`, `SYS$SHARE`,
+`SYS$MANAGER`, `SYS$UPDATE`, `SYS$HELP`, `SYS$SCRATCH`, `SYS$LOGIN` — entirely
+into `LNM$SYSTEM`. With no executive, ALL of them now fail honestly too,
+which broke host consumers that locate real files through them:
+`test_libvms_sysuaf_uic_base`/`test_libvms_rightslist` (SYS$SYSTEM:SYSUAF.DAT
+/ SYS$SYSTEM:RIGHTSLIST.DAT) and LOGINOUT.EXE's own `sysuaf_lookup()` in the
+`login-native` CI job.
+
+The fix, `lnm_seed_system_locating()` in `lnm_defaults.c`: try the SYSTEM
+create as before; **only** on `SS$_NOSUCHDEV`, also define the same name at
+**process** scope (`LNM$PROCESS_TABLE`). This is INV-6-preserving, not a
+reintroduction of the removed fallback:
+
+- It touches `lnm_setup_defaults` only — `lnm_create`/`lnm_translate`/
+  `lnm_delete` themselves are unchanged, so an explicit `LNM$SYSTEM` lookup
+  (what `test_system_table_no_fallback()` and `test_syssvc_lnm_system.c`'s
+  no-executive branch assert) still honestly reports `SS$_NOSUCHDEV`.
+- It never fires when the executive is present (the SYSTEM create already
+  succeeded), so real multi-process SYSTEM-table semantics — a sysadmin's
+  system-wide `DEFINE/SYSTEM` reaching every other process — are unaffected.
+- A process-level `DEFINE` shadowing a system-level one is a real, disclosed
+  VMS mechanism (`SHOW LOGICAL` reports it as `(LNM$PROCESS_TABLE)`, not
+  SYSTEM), not a disguise of the executive-resident table — the same shape
+  `dcl_filespec.c: dcl_translate_logical()`'s pre-existing SYS$DISK/SYS$LOGIN
+  fallback already uses.
+
 At OVMX **runtime** nothing changes: PID 1 pins `/dev/vms` (Rule 9), so the
 executive path was always the whole story there. The removal is only visible
 under host tooling, where `LNM$SYSTEM` operations (and anything that

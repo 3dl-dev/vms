@@ -157,9 +157,96 @@ static uint32_t assign_vms_pid(void)
     return 0;   /* table is pathologically full: refuse to register */
 }
 
-struct vms_proc *vms_proc_register(pid_t pid)
+/*
+ * vms_proc_continue_identity - stamp this task's registered VMS parent's
+ * identity onto a not-yet-inserted child PCB (vms-4d7, Option B).
+ *
+ * This is what makes OVMX's fork-per-image invisible to VMS. On OpenVMS an
+ * activated image runs IN the current process; OVMX runs it in a fresh
+ * forked+exec'd process, so the executive is told (via
+ * VMS_IOCTL_REGISTER_CONTINUE, selected by kif_bind when DCL activated the
+ * image) to CONTINUE the parent rather than mint a new PCB.
+ *
+ * THE IDENTITY IS READ FROM THE PARENT'S PCB, NOT FROM THE CALLER. The
+ * caller declares only the RELATIONSHIP ("continue my parent"); which
+ * process is the parent comes from current->real_parent, which a process
+ * cannot forge, and the UIC/username/privileges come from that parent's
+ * executive row. This is the same discipline as UIC derivation: a derived
+ * fact, never an asserted one -- so it is not the self-declared-identity
+ * facade VMS_IOCTL_REGISTER's args were stripped to remove.
+ *
+ * SECURITY: the parent's CURRENT masks are copied. A parent that
+ * setident'd DOWN to an unprivileged identity has reduced masks, so
+ * continuing it cannot bring a privilege back -- the reduction now
+ * survives image activation, where under the derive-from-capable() path it
+ * did not.
+ *
+ * LOCKING: hash_lock covers uic/username/prcnam/terminal; mode_lock covers
+ * the privilege masks. Taken hash-outer then mode-inner, the same order as
+ * vms_ioctl_setident(), so an identity is never torn. proc is not yet in
+ * the hash, so its own fields need no lock.
+ *
+ * Returns the parent's VMS PID (nonzero) to be SHARED by this child, or 0
+ * when the task has no registered VMS parent -- in which case the caller
+ * derives an identity and mints a fresh VMS PID the ordinary way. 0 is not
+ * a valid VMS PID (assign_vms_pid never hands it out), so it is an
+ * unambiguous "no parent" sentinel.
+ */
+static uint32_t vms_proc_continue_identity(struct vms_proc *proc)
+{
+    struct task_struct *rp;
+    struct pid *parent_pid = NULL;
+    pid_t parent_tgid = 0;
+    struct vms_proc *parent;
+    uint32_t shared_vms_pid = 0;
+
+    rcu_read_lock();
+    rp = rcu_dereference(current->real_parent);
+    if (rp) {
+        parent_pid  = task_tgid(rp);
+        parent_tgid = task_tgid_nr(rp);
+    }
+    if (!parent_pid) {
+        rcu_read_unlock();
+        return 0;
+    }
+
+    spin_lock(&vms_proc_hash_lock);
+    hash_for_each_possible(vms_proc_hash, parent, hash_node, parent_tgid) {
+        if (parent->linux_pid != parent_tgid)
+            continue;
+        /*
+         * Recycle-safe: an entry keyed by this pid NUMBER is ours to
+         * continue only if it belongs to this same parent INSTANCE. The
+         * pinned struct pid is unique per instance; the number is reused.
+         * (Same check as vms_proc_find_or_err.)
+         */
+        if (parent->pid_ref != parent_pid)
+            continue;
+
+        proc->uic = parent->uic;
+        memcpy(proc->username, parent->username, sizeof(proc->username));
+        memcpy(proc->prcnam,   parent->prcnam,   sizeof(proc->prcnam));
+        memcpy(proc->terminal, parent->terminal, sizeof(proc->terminal));
+
+        spin_lock(&parent->mode_lock);
+        proc->perm_privs = parent->perm_privs;
+        proc->cur_privs  = parent->cur_privs;
+        spin_unlock(&parent->mode_lock);
+
+        shared_vms_pid = parent->vms_pid;
+        break;
+    }
+    spin_unlock(&vms_proc_hash_lock);
+    rcu_read_unlock();
+
+    return shared_vms_pid;
+}
+
+struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
 {
     struct vms_proc *existing, *proc;
+    uint32_t shared_vms_pid = 0;
     int i;
 
     proc = kmem_cache_zalloc(vms_proc_cache, GFP_KERNEL);
@@ -225,10 +312,28 @@ struct vms_proc *vms_proc_register(pid_t pid)
      * VMS_IOCTL_SETIDENT, where they are stored and reported because
      * VMS reports them -- but they are never conjured at registration.
      */
-    proc->perm_privs = capable(CAP_SYS_ADMIN)
-                     ? (VMS_PRV_M_ENFORCED | VMS_DEFAULT_PRIVS)
-                     : VMS_DEFAULT_PRIVS;
-    proc->cur_privs = proc->perm_privs;
+    /*
+     * CONTINUE THE PARENT, OR DERIVE (vms-4d7, Option B).
+     *
+     * When this registration is an IMAGE ACTIVATION continuing an
+     * already-registered VMS process (VMS_IOCTL_REGISTER_CONTINUE), the
+     * identity above is REPLACED by the parent's -- UIC, user name,
+     * process name, terminal and both privilege masks -- and this child
+     * SHARES the parent's VMS PID, so to the rest of the system DCL and
+     * the image it activated are one VMS process. See
+     * vms_proc_continue_identity(); it reads the parent's row, never the
+     * caller's word, and copies the parent's CURRENT (possibly reduced)
+     * masks so a setident-down cannot be undone by a fork.
+     */
+    if (continue_identity)
+        shared_vms_pid = vms_proc_continue_identity(proc);
+
+    if (shared_vms_pid == 0) {
+        proc->perm_privs = capable(CAP_SYS_ADMIN)
+                         ? (VMS_PRV_M_ENFORCED | VMS_DEFAULT_PRIVS)
+                         : VMS_DEFAULT_PRIVS;
+        proc->cur_privs = proc->perm_privs;
+    }
     spin_lock_init(&proc->mode_lock);
 
     /* Initialize AST queues */
@@ -276,7 +381,17 @@ struct vms_proc *vms_proc_register(pid_t pid)
      * first. Choosing it here, inside the critical section, is what
      * makes "unique among live processes" true rather than likely.
      */
-    proc->vms_pid = assign_vms_pid();
+    /*
+     * A CONTINUED image activation SHARES its parent's VMS PID rather than
+     * minting a new one (vms-4d7): the two Linux tasks are one VMS process,
+     * so $GETJPI must resolve either to the same identity. This is not the
+     * duplicate-PID defect vms-2b8 round 3 removed -- that was two DIFFERENT
+     * identities under one PID; here both rows carry the SAME identity by
+     * construction. assign_vms_pid()'s uniqueness scan still protects new
+     * processes: it walks the live table, so it will never hand a fresh
+     * process a PID a live continued child is already sharing.
+     */
+    proc->vms_pid = shared_vms_pid ? shared_vms_pid : assign_vms_pid();
     if (proc->vms_pid == 0) {
         spin_unlock(&vms_proc_hash_lock);
         put_pid(proc->pid_ref);
@@ -286,9 +401,9 @@ struct vms_proc *vms_proc_register(pid_t pid)
     hash_add_rcu(vms_proc_hash, &proc->hash_node, pid);
     spin_unlock(&vms_proc_hash_lock);
 
-    pr_info("vms: registered process pid=%d vms_pid=0x%08x uic=[%o,%o] privs=0x%llx (derived)\n",
+    pr_info("vms: registered process pid=%d vms_pid=0x%08x uic=[%o,%o] privs=0x%llx (%s)\n",
             pid, proc->vms_pid, proc->uic >> 16, proc->uic & 0xFFFFu,
-            proc->perm_privs);
+            proc->perm_privs, shared_vms_pid ? "continued" : "derived");
 
     return proc;
 }
@@ -364,7 +479,7 @@ void vms_proc_free(struct vms_proc *proc)
  * ioctl dispatch
  * ================================================================ */
 
-static long vms_ioctl_register(unsigned long arg)
+static long vms_ioctl_register(unsigned long arg, bool continue_identity)
 {
     struct vms_register_args args;
     struct vms_proc *proc;
@@ -418,7 +533,7 @@ static long vms_ioctl_register(unsigned long arg)
 
     /* current->tgid, not current->pid: one PCB per process, shared by
      * every thread in it (see vms_proc_find_or_err). */
-    proc = vms_proc_register(current->tgid);
+    proc = vms_proc_register(current->tgid, continue_identity);
     if (IS_ERR(proc)) {
         if (PTR_ERR(proc) != -EEXIST)
             return PTR_ERR(proc);   /* -ENOMEM -> SS$_INSFMEM at the boundary */
@@ -447,9 +562,13 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
 {
     struct vms_proc *proc;
 
-    /* REGISTER doesn't require an existing proc */
+    /* REGISTER doesn't require an existing proc. REGISTER_CONTINUE is the
+     * image-activation variant (vms-4d7): it continues the caller's already-
+     * registered VMS parent instead of deriving a fresh identity. */
     if (cmd == VMS_IOCTL_REGISTER)
-        return vms_ioctl_register(arg);
+        return vms_ioctl_register(arg, false);
+    if (cmd == VMS_IOCTL_REGISTER_CONTINUE)
+        return vms_ioctl_register(arg, true);
 
     /* All other ioctls require a registered process */
     proc = vms_proc_find_or_err();

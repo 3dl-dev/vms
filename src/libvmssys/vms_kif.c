@@ -111,28 +111,28 @@ void vms_kif_close(void)
     vms_bound_pid = 0;
 }
 
-uint32_t vms_kif_register(uint32_t *vms_pid)
+/*
+ * kif_register_req - issue ONE registration ioctl (REGISTER or the
+ * image-activation REGISTER_CONTINUE) and record the binding.
+ *
+ * No "executive absent" check. The executive is INTEGRAL: PID 1 refuses to
+ * bring the system up unless /dev/vms is open, and holds it open for the
+ * life of the system (src/ovmx_init/ovmx_init.c, executive_attach), so no
+ * caller can observe its absence. See CLAUDE.md Rule 9.
+ *
+ * NO privilege argument and NO process-ID argument (vms-2b8), and none for
+ * REGISTER_CONTINUE either (vms-4d7): the executive derives or continues
+ * the identity from the task hierarchy, never from anything the caller
+ * hands it. The assigned/shared VMS PID comes back out.
+ */
+static uint32_t kif_register_req(unsigned long req, uint32_t *vms_pid)
 {
     struct vms_register_args args;
     int rc;
 
-    /* No "executive absent" check. The executive is INTEGRAL: PID 1 refuses
-     * to bring the system up unless /dev/vms is open, and holds it open for
-     * the life of the system (src/ovmx_init/ovmx_init.c, executive_attach),
-     * so no caller can observe its absence. This guard used to report
-     * SS$_BADPARAM for that impossible case, which was doubly wrong -- it
-     * described an unreachable state, and it did so with a status that means
-     * something else entirely. See CLAUDE.md Rule 9. */
-
-    /* NO privilege argument and NO process-ID argument (vms-2b8). The
-     * executive derives the authorized mask and the UIC from this task's
-     * real credentials and ASSIGNS the VMS process ID itself; there is
-     * nothing for the caller to ask for, and so nothing to forge. The
-     * assigned ID comes back out -- like $CREPRC's pidadr, the executive
-     * tells the caller what it decided. */
     vms_memset(&args, 0, sizeof(args));
 
-    rc = vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_REGISTER, (unsigned long)&args);
+    rc = vms_sys_ioctl(vms_dev_fd, req, (unsigned long)&args);
     if (rc < 0)
         return vms_kif_kerr_to_ss(rc);
 
@@ -146,6 +146,44 @@ uint32_t vms_kif_register(uint32_t *vms_pid)
         *vms_pid = args.vms_pid;
 
     return args.status;
+}
+
+uint32_t vms_kif_register(uint32_t *vms_pid)
+{
+    return kif_register_req(VMS_IOCTL_REGISTER, vms_pid);
+}
+
+/*
+ * vms_kif_register_continue - register the CALLING task as a continuation
+ * of its VMS parent's process, not as a new one (vms-4d7, Option B).
+ *
+ * DCL calls this in the forked child of an image activation, BEFORE execve
+ * replaces the image (src/vmsdcl/dcl_cmd_process.c, dcl_activate_image).
+ * At that instant the child's real_parent is still DCL, so the executive
+ * can read DCL's identity and share its VMS PID, UIC, user name and
+ * privileges onto this task -- which is why SYSTEM's RUN AUTHORIZE now
+ * holds SYSPRV. The PCB is keyed on the thread group and survives the
+ * execve, so the activated image inherits the continued identity without
+ * doing anything itself (its own first kif call ADOPTS the existing row).
+ *
+ * The /dev/vms descriptor found in TLS here belongs to the PARENT (it was
+ * dup'd across fork), so it is dropped and a fresh one taken, exactly as
+ * kif_bind() does -- this child is accounted separately even though it
+ * shares the parent's VMS identity.
+ *
+ * Returns the registration status; on success vms_bound_pid is set so the
+ * post-execve image's kif_bind() is a no-op adopt.
+ */
+uint32_t vms_kif_register_continue(void)
+{
+    if (vms_dev_fd >= 0) {
+        vms_sys_close(vms_dev_fd);
+        vms_dev_fd = -1;
+    }
+    vms_bound_pid = 0;
+
+    (void)vms_kif_open();
+    return kif_register_req(VMS_IOCTL_REGISTER_CONTINUE, (uint32_t *)0);
 }
 
 /*

@@ -5,6 +5,17 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Full-coverage triggers: on ALL of these the path filter forces every output
+  # true (see the `changes` job), so the complete suite runs -- the union that
+  # gates `main` is unchanged. merge_group runs the full suite on the batched
+  # result before it lands (full coverage before merge, zero per-PR latency).
+  merge_group:
+  workflow_dispatch:
+  schedule:
+    # Nightly full suite, 07:17 UTC. Runs every job unconditionally, including
+    # the path-filtered heavy tiers and the harness negative controls lifted off
+    # the per-PR path. Coverage is MOVED here, never deleted.
+    - cron: '17 7 * * *'
 
 # Least-privilege GITHUB_TOKEN for every job in this workflow (jobs may narrow
 # further, none may widen without saying so here). Nothing in this file needs
@@ -16,12 +27,102 @@ on:
 permissions:
   contents: read
 
+# Per-PR latency: a new push to a PR cancels that PR's in-flight run so the queue
+# is not clogged by superseded commits. NEVER cancels main, merge_group, or the
+# nightly schedule -- each needs a complete run of the full suite.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # -----------------------------------------------------------------------
+  # changes: test-impact / path filter. Decides which heavy tiers a PR actually
+  # needs (quality-preserving: same inputs -> same verdict). On any NON-PR event
+  # every output is forced true, so the FULL suite runs and no coverage is lost;
+  # filtering only ever narrows the per-PR tier. `.github/workflows/**` is in
+  # every filter, so a CI change re-runs everything.
+  # -----------------------------------------------------------------------
+  changes:
+    name: Decide affected subsystems (path filter)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      core: ${{ steps.decide.outputs.core }}
+      toolchain: ${{ steps.decide.outputs.toolchain }}
+      kernel: ${{ steps.decide.outputs.kernel }}
+      boot: ${{ steps.decide.outputs.boot }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Path filter (PR only)
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            core:
+              - '.github/workflows/**'
+              - 'CMakeLists.txt'
+              - 'src/**'
+              - 'tests/**'
+              - 'third-party/**'
+              - 'tools/**'
+            toolchain:
+              - '.github/workflows/**'
+              - 'CMakeLists.txt'
+              - 'src/vmslink/**'
+              - 'src/imgact/**'
+              - 'src/libvms/**'
+              - 'src/libvmssys/**'
+              - 'src/vmsprocess/**'
+              - 'src/vmslnm/**'
+              - 'src/vmsfs/**'
+              - 'src/vmsrms/**'
+              - 'src/vmsdcl/**'
+              - 'src/vmsqueue/**'
+              - 'third-party/tcc/**'
+              - 'tools/**'
+            kernel:
+              - '.github/workflows/**'
+              - 'src/kernel/**'
+              - 'src/libvms/syssvc/**'
+              - 'src/libvmssys/vms_kif.*'
+              - 'tests/qemu/**'
+            boot:
+              - '.github/workflows/**'
+              - 'distro/**'
+              - 'src/ovmx_init/**'
+              - 'tests/qemu/test_persistent_boot.sh'
+              - 'tests/qemu/test_release_e2e.sh'
+              - 'tests/qemu/test_executive_integral.sh'
+              - 'tests/uat/**'
+
+      - name: Decide (force every output true on non-PR events)
+        id: decide
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            {
+              echo "core=${{ steps.filter.outputs.core }}"
+              echo "toolchain=${{ steps.filter.outputs.toolchain }}"
+              echo "kernel=${{ steps.filter.outputs.kernel }}"
+              echo "boot=${{ steps.filter.outputs.boot }}"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "core=true"
+              echo "toolchain=true"
+              echo "kernel=true"
+              echo "boot=true"
+            } >> "$GITHUB_OUTPUT"
+          fi
   # -----------------------------------------------------------------------
   # Job 1: Build and unit test (host, shared libs, readline)
   # -----------------------------------------------------------------------
   build-and-test:
     name: Build & Test
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.core == 'true' }}
     runs-on: ubuntu-latest
     # vms-32e grew the register negative-control suite 49->62 controls and added a
     # per-control citation check, taking this job from ~17m (main) to ~20m+ on the
@@ -132,7 +233,20 @@ jobs:
         run: |
           sudo mkdir -p /vms/SYS0/SYSCOMMON/{SYSEXE,SYSLIB,SYSMGR,SYSHLP}
           sudo chmod -R 777 /vms
-          cd build && ctest --output-on-failure
+          cd build
+          # Pre-merge PR tier drops ONLY the 3 slow-labelled per-control NEGATIVE
+          # controls (kif_caller_census_negctl / userspace_service_register_negctl
+          # / terminal_identity_negctl -- harness self-tests that recompile the
+          # tree per control, vms-819d). This is the repo's own documented fast
+          # loop (`ctest -LE slow`). Every PRODUCT gate -- unit tests, the
+          # positive census/register authenticity gates, all integration gates --
+          # still runs on every PR. The slow negative controls run in full via
+          # plain `ctest` on push-main / merge_group / nightly.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            ctest --output-on-failure -LE slow
+          else
+            ctest --output-on-failure
+          fi
 
   # -----------------------------------------------------------------------
   # Job 3: Persistent boot smoke test (QEMU)
@@ -144,6 +258,8 @@ jobs:
   # -----------------------------------------------------------------------
   persistent-boot:
     name: Persistent Boot Smoke Test
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -227,6 +343,8 @@ jobs:
   # -----------------------------------------------------------------------
   kernel-executive:
     name: Kernel Executive (vms.ko via /dev/vms, QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -234,8 +352,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build kernel executive test image
-        run: docker build -f tests/qemu/Dockerfile -t ovmx-ktest:latest .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Content-addressed gha layer cache: the vms.ko/vmsfs.ko + initramfs image
+      # is rebuilt only when the kernel/rootfs sources change, not every run --
+      # this is what keeps the real /dev/vms executive proof fast enough to stay
+      # in the pre-merge tier for kernel-touching PRs (never demoted to nightly).
+      # load: true keeps `docker run ovmx-ktest:latest` below working unchanged.
+      - name: Build kernel executive test image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-ktest:latest
+          cache-from: type=gha,scope=kernel-executive
+          cache-to: type=gha,mode=max,scope=kernel-executive
 
       - name: Boot QEMU, insmod vms.ko, run executive assertions against /dev/vms
         run: |
@@ -375,6 +509,7 @@ jobs:
   # -----------------------------------------------------------------------
   kernel-executive-negative-control:
     name: Kernel Executive — Negative Control (proves the gate can fail)
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -702,6 +837,7 @@ jobs:
   # committed-record comparison catches it same as it always did.
   kernel-executive-facility-negative-controls-shard:
     name: Kernel Executive — Per-Facility Negative Controls (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     # Budget per shard: roughly one Nth of the manifest's defects (the NR%n
     # partition below) plus the fixed image-build + positive-control cost
@@ -762,6 +898,7 @@ jobs:
   # the single-job driver did on a full run.
   kernel-executive-facility-negative-controls:
     name: Kernel Executive — Per-Facility Negative Controls (attribution)
+    if: ${{ github.event_name != 'pull_request' }}
     needs: kernel-executive-facility-negative-controls-shard
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -819,6 +956,8 @@ jobs:
   # -----------------------------------------------------------------------
   conformance:
     name: Conformance Tests
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.core == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -859,6 +998,8 @@ jobs:
   # -----------------------------------------------------------------------
   corpus-conformance:
     name: Corpus Conformance
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.core == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -903,6 +1044,8 @@ jobs:
   # -----------------------------------------------------------------------
   static-analysis:
     name: Static Analysis
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.core == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -1033,6 +1176,8 @@ jobs:
   # -----------------------------------------------------------------------
   uat-session:
     name: VMS User Acceptance Test
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -1082,6 +1227,8 @@ jobs:
   # -----------------------------------------------------------------------
   imgact-proof:
     name: IMGACT.EXE Activation Proof (musl)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -1119,6 +1266,8 @@ jobs:
   # -----------------------------------------------------------------------
   imgact-build-mode:
     name: OVMX_IMGACT Build Mode (musl)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     # Known-broken, tracked in rd vms-0b8 (under vms-ade): the VMS-native
     # link graph (build_link_native.sh -> mk_*_shr.sh) is Unix/musl/ld-leaky
     # and fails to build LINK.EXE at the expected path. Non-blocking until
@@ -1166,6 +1315,8 @@ jobs:
   # -----------------------------------------------------------------------
   imgact-x86_64:
     name: OVMX_IMGACT Build + Activate (musl, x86_64)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     # Known-broken, tracked in rd vms-0b8 (under vms-ade): same Unix/musl/ld-leaky
     # native link graph as imgact-build-mode -- mk_vmssys_shr.sh cannot find
     # LINK.EXE at $BUILD/bin. Non-blocking until that toolchain-design work
@@ -1204,6 +1355,8 @@ jobs:
   # -----------------------------------------------------------------------
   vmslink-mvp:
     name: LINK.EXE VMS-native Linker (MVP)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1242,6 +1395,8 @@ jobs:
   # -----------------------------------------------------------------------
   vmslink-x86_64:
     name: LINK.EXE VMS-native Linker — x86_64 relocs (vms-8f5/cd1/2e4)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1284,6 +1439,8 @@ jobs:
   # -----------------------------------------------------------------------
   decc-shr:
     name: DECC$SHR VMS-native C-RTL Shareable
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1324,6 +1481,8 @@ jobs:
   # -----------------------------------------------------------------------
   link-native-cmake:
     name: VMS-native LINK.EXE Graph via CMake (OVMX_LINK_NATIVE)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -1373,6 +1532,8 @@ jobs:
   # -----------------------------------------------------------------------
   link-native-cmake-x86_64:
     name: VMS-native LINK.EXE Graph via CMake, x86_64 (OVMX_LINK_NATIVE)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -1415,6 +1576,8 @@ jobs:
   # -----------------------------------------------------------------------
   imgact-symvec:
     name: IMGACT.EXE Symbol-Vector Activation
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1450,6 +1613,8 @@ jobs:
   # -----------------------------------------------------------------------
   libvmssys-native:
     name: libvmssys VMS-native Link + Activate
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1489,6 +1654,8 @@ jobs:
   # -----------------------------------------------------------------------
   decc-shr-activate:
     name: DECC$SHR C-RTL Activation (musl init)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1528,6 +1695,8 @@ jobs:
   # -----------------------------------------------------------------------
   shareable-import-activate:
     name: Lib-Shareable Transitive Import Activation
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1553,6 +1722,8 @@ jobs:
 
   tls-producer-over-crtl:
     name: TLS Producer / C-RTL Coexistence Activation
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1578,6 +1749,8 @@ jobs:
 
   vmsprocess-native:
     name: vmsprocess VMS-native Migration (LIBVMSPROCESS$SHR)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1603,6 +1776,8 @@ jobs:
 
   vmslnm-native:
     name: vmslnm VMS-native Migration (LIBVMSLNM$SHR)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1628,6 +1803,8 @@ jobs:
 
   vmsfs-native:
     name: vmsfs VMS-native Migration (LIBVMSFS$SHR)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1653,6 +1830,8 @@ jobs:
 
   libvms-native:
     name: libvms VMS-native Migration (LIBVMS$SHR)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -1678,6 +1857,8 @@ jobs:
 
   vmsrms-native:
     name: vmsrms VMS-native Migration (LIBVMSRMS$SHR)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -1714,6 +1895,8 @@ jobs:
   # -----------------------------------------------------------------------
   multiobj-exec:
     name: Multi-Object main() Executable Link + Activate
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1751,6 +1934,8 @@ jobs:
   # -----------------------------------------------------------------------
   multiobj-exec-x86_64:
     name: Multi-Object main() Executable Link + Activate — x86_64 (vms-206)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     # Known-broken, tracked in rd vms-0b8 (under vms-ade): LINK.EXE bakes
     # PT_INTERP=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE (link.c IMGACT_INTERP),
     # so this native (non-container) job must create /vms and cannot without
@@ -1791,6 +1976,8 @@ jobs:
   # -----------------------------------------------------------------------
   rodata-reloc-x86_64:
     name: Read-only-section relocations (switch jump tables) — x86_64 (vms-a66)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -1811,6 +1998,8 @@ jobs:
 
   exec-tls:
     name: Executable-Own TLS Link + Activate
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1846,6 +2035,8 @@ jobs:
   # -----------------------------------------------------------------------
   dcl-native:
     name: DCL.EXE VMS-native Link + Activate (self-hosting S1)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -1885,6 +2076,8 @@ jobs:
   # -----------------------------------------------------------------------
   dcl-native-x86_64:
     name: DCL.EXE VMS-native Link + Activate, x86_64 (vms-bdf done-condition)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -1919,6 +2112,8 @@ jobs:
   # -----------------------------------------------------------------------
   login-native:
     name: LOGINOUT.EXE VMS-native Link + Activate (login chain)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -1969,6 +2164,8 @@ jobs:
   # -----------------------------------------------------------------------
   tcc-object-native:
     name: tcc Object LINK.EXE Compatibility (S2 crux, musl)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -2019,6 +2216,8 @@ jobs:
   # -----------------------------------------------------------------------
   tcc-native:
     name: TCC.EXE VMS-native Link + Activate (self-hosting S2 endpoint)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -2056,6 +2255,8 @@ jobs:
   # -----------------------------------------------------------------------
   tcc-rms:
     name: TCC.EXE RMS File I/O (sys$open/$get read, sys$create/$put write)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -2110,6 +2311,8 @@ jobs:
   # -----------------------------------------------------------------------
   tcc-selfhost:
     name: TCC.EXE Self-Host Fixpoint (tcc compiles tcc inside OVMX, S2 summit)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

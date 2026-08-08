@@ -2522,6 +2522,16 @@ B: the executive's own row holds exactly the OPER|WORLD mask this run stamped, w
 4: the executive accepted the SYSPRV identity
 4: the executive's row for it holds SYSPRV
 4: the parent process reads the new default directory in the file
+sys$dclast reported success declaring an AST
+the AST declared through the PUBLIC sys$dclast is in the EXECUTIVE queue (a per-process fake would be invisible to the kernel reader)
+the executive round-tripped the astprm the public sys$dclast declared
+the executive round-tripped the astadr the public sys$dclast declared
+the executive round-tripped the access mode the public sys$dclast declared
+sys$dclast queued an AST while delivery was disabled
+sys$setast(1) delivered the queued AST through the public API
+the delivered AST ran with the astprm sys$dclast declared
+disable again: prev state was disabled
+SETAST(enable) returns WASCLR (== prev state was disabled)
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
@@ -2961,6 +2971,40 @@ genuinely had NO PCB" and "3: the probe's OWN PCB really does carry SYSPRV")
 because they read the PROBE's own memory, not the executive's row -- the
 same distinction that keeps this suite meaningful rather than a duplicate of
 the bind check itself.
+TEN MORE IN test_syssvc_ast, THE TWELFTH SUITE -- SAME MISSING BIND, READ OFF
+THE DRIVER'S OWN "does NOT name them" LIST, NOT PREDICTED. #170 (vms-as1)
+rewrote src/libvms/syssvc/sys_ast.c into a pure translation layer over
+/dev/vms: sys$dclast and sys$setast now reach the executive through the SAME
+kif_bind() -> vms_kif_register() auto-bind path every public-API suite here
+depends on, so deleting that register call takes the AST facility away from an
+unbound process exactly as it takes $SETEF/$GETJPI/$ENQ away. test_syssvc_ast.c
+does not hand-register (it opens /dev/vms only to decide skip-vs-run, then
+drives the public sys$ API), so it is a genuine new detector of this defect,
+not a widening of blind_suites. #170 correctly added it to ast-setast-disable's
+suites_red for its OWN minimal mutation, and #176 added it to THIS defect's
+suites_red so the suite is permitted to redden -- but neither declared the
+assertion texts, so the equality check (which is at PROPERTY granularity, not
+suite granularity) kept failing on an unnamed red set. The ten reds split into
+two groups, none a separate property:
+  - PART 1/2, executive residency and end-to-end delivery (eight): "sys$dclast
+    reported success declaring an AST" is the wall itself -- an unbound process
+    cannot reach the executive, so the very first declare fails. Every other
+    assertion in these parts reads back what that failed declare never put in
+    the executive queue: the residency readback and the three astprm/astadr/
+    acmode round-trips are the AST that is not there, "sys$dclast queued an AST
+    while delivery was disabled" is the same declare failing a second time, and
+    "sys$setast(1) delivered the queued AST" / "the delivered AST ran with the
+    astprm" read back a delivery of an AST that was never queued.
+  - PART 3, the SETAST previous-state return (two): "disable again: prev state
+    was disabled" and "SETAST(enable) returns WASCLR" are sys$setast reaching
+    the executive from the same unbound process -- the prev-state word comes
+    back wrong because the call never lands. (These are the ast-setast-disable
+    property observed a second time from a different angle: that defect mutates
+    the kernel's own prev-state word, this one denies the call a PCB at all.)
+WHAT STAYS GREEN, and it keeps this from being a blunderbuss: "the AST is NOT
+delivered while AST delivery is disabled" passes, because an AST that was never
+queued is trivially not delivered (g_fired stays 0) -- so the mutation reddens
+the properties that depend on the bind and leaves the one that does not.
 EOF
                       ;;
         esac;;

@@ -74,6 +74,64 @@ against this script pointed at the scratch file, and reverted:
 Zero survivors, zero false positives on the decoy. Restored with `cmp` against
 the pre-mutation copy after each run.
 
+VMS-CF0 FOLLOW-UP -- 3 DEMONSTRATED BYPASSES, CLOSED. The v1 gate above (M-1
+through M-4) scanned line by line and matched the assignment operator only
+when it sat DIRECTLY against the declared identifier. Three independent PoCs,
+each built as a scratch .c fixture and run against the v1 script, came back
+GREEN on an undisclosed `.cdt =` write -- i.e. silently passed the exact
+hazard the gate exists to catch:
+
+  B-1  SPLIT-ACROSS-LINES. Both the declaration and the assignment can be
+       broken across a newline and the per-line scanner loses them:
+           struct scs_mscp_params
+               mp;
+           mp
+               .cdt = &live_cdt;
+       Root cause: `for line in code_lines: DECL_RE.finditer(line)` /
+       `ASSIGN_RE.finditer(line)` never sees a match whose tokens straddle a
+       line boundary, because each line is a separate string. FIX: scan the
+       whole (comment/string-stripped) file as ONE string. A regex whitespace
+       class already matches a newline character, so `struct scs_mscp_params`
+       + newline + `mp` and `mp` + newline + `.cdt =` now match exactly as
+       their single-line forms always did. Line numbers for the ACK-adjacency
+       check are now recovered from the match offset via a newline-offset
+       table, not from list index.
+  B-2  TYPEDEF ALIAS. `DECL_RE` only recognizes the literal token sequence
+       `struct scs_mscp_params`; a typedef'd alias never enters `names`:
+           typedef struct scs_mscp_params mp_params_t;
+           mp_params_t mp;
+           mp.cdt = &live_cdt;   /* mp never collected -- not flagged */
+       FIX: a new `TYPEDEF_RE` finds `typedef struct scs_mscp_params ALIAS;`
+       in the same file and, for each alias found, runs a second decl scan
+       (`ALIAS ident;` / `ALIAS *ident;`) to fold those identifiers into the
+       same `names` set. Single-level only (an alias of an alias is out of
+       scope, same class of bound as the pre-existing "completely different
+       local variable name" note below) -- re-derive with
+       `grep -n typedef.*scs_mscp_params src/vmsscs/scsd.c src/vmsscs/scs_mscp_srv.c`
+       if that ever needs to grow.
+  B-3  NON-ADJACENT LHS. `ASSIGN_RE` required the identifier immediately
+       against `.`/`->` with only whitespace between; an array subscript or a
+       parenthesized dereference breaks that adjacency without changing the
+       meaning of the write:
+           struct scs_mscp_params arr[2];
+           arr[0].cdt = &live_cdt;          /* subscript between ident and . */
+           struct scs_mscp_params *pmp = &mp;
+           (*pmp).cdt = &live_cdt;          /* paren-deref instead of pmp->cdt */
+       FIX: `ASSIGN_RE` now tolerates zero or more single-level `[...]`
+       subscripts between the identifier and the `.`/`->`; a second regex,
+       `PAREN_DEREF_ASSIGN_RE`, matches the `(*ident).cdt =` / `(*ident)->cdt =`
+       shape directly. Both still require the captured identifier to be a
+       name collected by the declaration scan above, so the scs_poller /
+       scs_credit_waiter decoys (M-4) still do not fire, including through an
+       array or a paren-deref of THOSE types.
+
+Re-run against scsd.c and scs_mscp_srv.c as they stand today: still 0
+failures (no production caller wires a live CDT through any of these shapes
+either) -- B-1/B-2/B-3 are gate hardening, not a finding of a live hazard.
+Regression coverage for all three, plus the M-1..M-4 battery re-run against
+the whole-file scanner, lives in test_scs_mscp_cdt_hazard_bypasses.py
+(ctest scs_mscp_cdt_hazard_bypasses).
+
 THE ACKNOWLEDGMENT MUST NAME THE RESET, not just assert the word. A bare
 `/* CREDIT-HAZARD-ACKNOWLEDGED */` with no further text still passes THIS
 script (source-level intent, not code review, is what a grep-shaped gate can
@@ -104,16 +162,39 @@ ACK_TOKEN = "CREDIT-HAZARD-ACKNOWLEDGED"
 
 # Declarations of an identifier as struct scs_mscp_params -- by value, by
 # pointer, as a local, a parameter, or (rarer) a struct field. `const` is
-# optional and may repeat on either side of `struct`.
+# optional and may repeat on either side of `struct`. Matched against the
+# WHOLE file (not line by line) so a declaration split across a newline
+# (vms-cf0 B-1) is still found: `\s+` already matches `\n`.
 DECL_RE = re.compile(
     r"\b(?:const\s+)?struct\s+scs_mscp_params\s+(?:const\s+)?\*?\s*"
     r"([A-Za-z_][A-Za-z0-9_]*)\b"
 )
 
-# A `.cdt =` / `->cdt =` write, captured with the identifier immediately to its
-# left. `(?!=)` excludes `==` (a comparison, not a write).
+# vms-cf0 B-2: a typedef alias of struct scs_mscp_params, e.g.
+# `typedef struct scs_mscp_params mp_params_t;`. Single-level only -- an
+# alias of an alias is out of scope, same bound class as the name-typed scope
+# note below.
+TYPEDEF_RE = re.compile(
+    r"\btypedef\s+(?:const\s+)?struct\s+scs_mscp_params\s+(?:const\s+)?\*?\s*"
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*;"
+)
+
+# A `.cdt =` / `->cdt =` write, captured with the identifier to its left.
+# `(?!=)` excludes `==` (a comparison, not a write). vms-cf0 B-1: matched
+# against the whole file so a write split across a newline
+# (`mp\n    .cdt = x`) is still found. vms-cf0 B-3: tolerates zero or more
+# single-level `[...]` subscripts between the identifier and the `.`/`->` so
+# `arr[0].cdt = x` (arr declared `struct scs_mscp_params arr[N]`) is still
+# found; nested/multi-level subscripts are out of scope (same bound class).
 ASSIGN_RE = re.compile(
-    r"\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:\.|->)\s*cdt\b\s*=(?!=)"
+    r"\b([A-Za-z_][A-Za-z0-9_]*)\b(?:\s*\[[^\[\]]*\])*\s*(?:\.|->)\s*cdt\b\s*=(?!=)"
+)
+
+# vms-cf0 B-3: the `(*ident).cdt = x` / `(*ident)->cdt = x` shape -- a
+# parenthesized dereference used instead of `ident->cdt`. Same meaning, not
+# caught by ASSIGN_RE because a `)` sits between the identifier and the dot.
+PAREN_DEREF_ASSIGN_RE = re.compile(
+    r"\(\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*(?:\.|->)\s*cdt\b\s*=(?!=)"
 )
 
 
@@ -127,42 +208,77 @@ def strip_comments_and_strings(src):
     return out
 
 
+def _line_offsets(text):
+    """Start offset of each line (0-based line index -> char offset), for
+    recovering a line number from a whole-file regex match's .start()."""
+    offsets = [0]
+    for m in re.finditer("\n", text):
+        offsets.append(m.end())
+    return offsets
+
+
+def _offset_to_line(offsets, pos):
+    """0-based line index containing char offset `pos`, via binary search
+    over the line-start offsets from _line_offsets()."""
+    import bisect
+    return bisect.bisect_right(offsets, pos) - 1
+
+
 def scan(path):
     """Return (failures, hit_count) for one file."""
     with open(path, encoding="utf-8") as f:
         raw = f.read()
     raw_lines = raw.splitlines()
     code = strip_comments_and_strings(raw)
-    code_lines = code.splitlines()
 
-    names = set()
-    for line in code_lines:
-        for m in DECL_RE.finditer(line):
-            names.add(m.group(1))
+    # Collect every identifier declared as struct scs_mscp_params, plus (B-2)
+    # every identifier declared as a same-file typedef alias of it. Scanned
+    # as ONE string (not per line) so a split declaration (B-1) is found.
+    names = set(m.group(1) for m in DECL_RE.finditer(code))
+
+    for alias in set(m.group(1) for m in TYPEDEF_RE.finditer(code)):
+        alias_decl_re = re.compile(
+            r"\b(?:const\s+)?" + re.escape(alias) + r"\s+(?:const\s+)?\*?\s*"
+            r"([A-Za-z_][A-Za-z0-9_]*)\b"
+        )
+        names.update(m.group(1) for m in alias_decl_re.finditer(code))
+
+    offsets = _line_offsets(code)
+
+    matches = []  # (start_offset, identifier)
+    for m in ASSIGN_RE.finditer(code):
+        matches.append((m.start(), m.group(1)))
+    for m in PAREN_DEREF_ASSIGN_RE.finditer(code):
+        matches.append((m.start(), m.group(1)))
+    matches.sort(key=lambda t: t[0])
 
     failures = []
     hits = 0
-    for i, line in enumerate(code_lines):
-        for m in ASSIGN_RE.finditer(line):
-            if m.group(1) not in names:
-                continue
-            hits += 1
-            lineno = i + 1
-            window = raw_lines[max(0, i - 1): i + 2]  # prev, this, next
-            if not any(ACK_TOKEN in w for w in window):
-                failures.append(
-                    f"{os.path.relpath(path, ROOT)}:{lineno}: "
-                    f"`{m.group(1)}.cdt =` (or `->cdt =`) wires a live CDT into "
-                    f"a struct scs_mscp_params without a {ACK_TOKEN} comment on "
-                    f"the same or an adjacent line. This is the vms-73c "
-                    f"double-grant hazard: scs_mscp.c's live-credit branch PEEKS "
-                    f"the connection's Pending Receive Credit and does not reset "
-                    f"it, so an unstamped scsd_credit_stamp_outbound() exit can "
-                    f"grant the same credit twice on a later successful stamp. "
-                    f"Add a `/* {ACK_TOKEN}: <what resets pending_receive_credit "
-                    f"on the unstamped path> */` comment, or route through the "
-                    f"NULL default if this was not intentional."
-                )
+    seen_offsets = set()
+    for start, ident in matches:
+        if ident not in names:
+            continue
+        if start in seen_offsets:
+            continue
+        seen_offsets.add(start)
+        hits += 1
+        line_idx = _offset_to_line(offsets, start)
+        lineno = line_idx + 1
+        window = raw_lines[max(0, line_idx - 1): line_idx + 2]  # prev, this, next
+        if not any(ACK_TOKEN in w for w in window):
+            failures.append(
+                f"{os.path.relpath(path, ROOT)}:{lineno}: "
+                f"`{ident}.cdt =` (or `->cdt =`) wires a live CDT into "
+                f"a struct scs_mscp_params without a {ACK_TOKEN} comment on "
+                f"the same or an adjacent line. This is the vms-73c "
+                f"double-grant hazard: scs_mscp.c's live-credit branch PEEKS "
+                f"the connection's Pending Receive Credit and does not reset "
+                f"it, so an unstamped scsd_credit_stamp_outbound() exit can "
+                f"grant the same credit twice on a later successful stamp. "
+                f"Add a `/* {ACK_TOKEN}: <what resets pending_receive_credit "
+                f"on the unstamped path> */` comment, or route through the "
+                f"NULL default if this was not intentional."
+            )
     return failures, hits
 
 

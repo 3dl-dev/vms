@@ -398,6 +398,36 @@ set_tests_properties(scs_mscp_cdt_hazard PROPERTIES
     TIMEOUT 60
 )
 
+# vms-cf0, follow-up to vms-73c - THE BYPASS BATTERY for the gate above.
+#
+# 3 demonstrated bypasses of the v1 scs_mscp_cdt_hazard scanner came back
+# GREEN on an undisclosed live-CDT wire-up: a declaration or assignment split
+# across a newline (the scanner worked line by line), a typedef alias of
+# struct scs_mscp_params (the scanner only recognized the literal struct
+# keyword sequence), and an array subscript or parenthesized dereference
+# between the identifier and `.cdt`/`->cdt` (the scanner required immediate
+# adjacency). test_scs_mscp_cdt_hazard.py was hardened to whole-file
+# scanning, typedef-alias folding, and a broadened/second assignment pattern
+# to close all three. test_scs_mscp_cdt_hazard_bypasses.py is the regression
+# proof: it writes each PoC (plus its acknowledged and decoy counterparts,
+# and the original vms-73c M-1..M-4 battery) to throwaway fixtures and
+# asserts the hardened gate's exit code on each. Registered unconditionally,
+# exactly like scs_mscp_cdt_hazard above: a missing interpreter must make the
+# gate RED, never make it vanish.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_mscp_cdt_hazard_bypasses
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_mscp_cdt_hazard_bypasses.py)
+else()
+    add_test(NAME scs_mscp_cdt_hazard_bypasses
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_mscp_cdt_hazard_bypasses_no_python3.cmake)
+endif()
+set_tests_properties(scs_mscp_cdt_hazard_bypasses PROPERTIES
+    LABELS "unit;scs;cluster;mscp"
+    TIMEOUT 60
+)
+
 # vms-b1d - SCA datagram buffer management: the per-port DFREEQ and the
 # per-connection buffer count in the CDT (VAXcluster Principles pp. 2-42..2-43).
 # Covers both documented discard classes, the fact that a no-quota discard

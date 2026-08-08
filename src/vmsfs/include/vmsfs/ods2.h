@@ -27,12 +27,20 @@
  *       Wikipedia "Files-11"): home block / SCB / file header roles, and the
  *       structure-level word encoding (level 2, version 1 => 0x0201).
  *
- * BYTE-GENUINENESS IS NOT YET PROVEN. No real VMS-made ODS-2 image has been
- * parsed by this reader. The flagged next increment is to validate against a
- * real OpenVMS VAX 7.3 volume from lab-1 (see the test file and the PR body).
- * Fields marked "[OVMX-inferred]" below are those whose exact byte offset is
- * NOT cleanly published; they are labelled per Rule 8 and must be confirmed
- * against a real image before being relied upon.
+ * BYTE-GENUINENESS, INCREMENT 2 (this revision): validated against a REAL
+ * OpenVMS VAX V7.3 volume -- INITIALIZE'd, populated, and DISMOUNTed on
+ * lab-2 (`vaxlab-9`, since lab-1 was in active use elsewhere), the raw image
+ * pulled out byte-for-byte. See tests/ods2/real_vax_ods2.dsk (the fixture),
+ * tests/ods2/PROVENANCE-real_vax_ods2.md (exact commands + observed values),
+ * and tests/ods2/test_ods2_real.c (the test that drives this reader over it).
+ * Home block (checksums + "DECFILE11B  " + struclev 0x0201), the INDEXF.SYS
+ * and BITMAP.SYS/directory/data FH2 headers, FM2 retrieval-pointer decode,
+ * and directory listing all parsed the real image byte-exact -- no reader
+ * changes were needed for those paths. The SCB (struct ods2_scb below) DID
+ * need correction; see its per-field comments. Fields still marked
+ * "[OVMX-inferred]" below remain genuinely unconfirmed (single real sample,
+ * no induced-error test) and must not be relied on without further
+ * oracle work; this is recorded per Rule 8, not asserted as fact.
  */
 
 #ifndef _VMSFS_ODS2_H
@@ -252,25 +260,76 @@ typedef struct ods2_ident {
  *
  * The SCB carries volume summary info used for space allocation:
  * structure level, cluster factor, and volume size in blocks. [S]
- * Only the leading fields have a cleanly published byte layout; the
- * remaining fields are [OVMX-inferred] and MUST be confirmed against a
- * real BITMAP.SYS from lab-1 before being trusted (Rule 8). The trailing
- * word (offset 510) is the additive checksum, as with the home block. [S]
+ * The trailing word (offset 510) is the additive checksum, as with the
+ * home block. [S]
+ *
+ * INCREMENT 2 (Rule 8 oracle pass, tests/ods2/PROVENANCE-real_vax_ods2.md):
+ * a real lab-2 volume's SCB (BITMAP.SYS VBN1, real LBN 5 on that image) was
+ * dumped and cross-checked field-by-field against that same session's
+ * OpenVMS `SHOW DEVICE/FULL $2$DUA3:` output. Per-field results below;
+ * fields still flagged [OVMX-inferred] were NOT resolved by this pass
+ * (single sample, no induced-error test) and remain open per Rule 8 --
+ * "corrected" below means corrected relative to increment 1's comments,
+ * not that the true layout is now fully known.
  * ================================================================ */
 typedef struct ods2_scb {
-    uint16_t scb_struclev;      /*   0: structure level+version (0x0201) [S] */
-    uint16_t scb_cluster;       /*   2: storage bitmap cluster factor    [S] */
-    uint32_t scb_volsize;       /*   4: volume size in blocks            [S] */
-    uint32_t scb_blksize;       /*   8: [OVMX-inferred] blocking factor      */
-    uint32_t scb_sectors;       /*  12: [OVMX-inferred] sectors per track    */
-    uint32_t scb_tracks;        /*  16: [OVMX-inferred] tracks per cylinder  */
-    uint32_t scb_cylinders;     /*  20: [OVMX-inferred] cylinders            */
-    uint32_t scb_status;        /*  24: [OVMX-inferred] volume status        */
-    uint32_t scb_status2;       /*  28: [OVMX-inferred] volume status 2      */
-    uint16_t scb_writecnt;      /*  32: [OVMX-inferred] mount write count    */
-    char     scb_volockname[12];/*  34: [OVMX-inferred] volume lock name     */
-    uint8_t  scb_reserved[464]; /*  46: [OVMX-inferred] reserved             */
-    uint16_t scb_checksum;      /* 510: additive checksum, 255 words     [S] */
+    uint16_t scb_struclev;      /*   0: structure level+version (0x0201). CONFIRMED
+                                  *      byte-identical on the real image. [S] */
+    uint16_t scb_cluster;       /*   2: storage bitmap cluster factor. CONFIRMED:
+                                  *      value 1 matches SHOW DEVICE/FULL "Cluster
+                                  *      size". [S] */
+    uint32_t scb_volsize;       /*   4: volume size in blocks. CONFIRMED: value 800
+                                  *      matches SHOW DEVICE/FULL "Total blocks". [S] */
+    uint32_t scb_blksize;       /*   8: [OVMX-inferred, UNCONFIRMED] observed = 1 on
+                                  *      the real image; no SHOW DEVICE/FULL field
+                                  *      matched it, so this name/semantics is a
+                                  *      guess, not a finding. */
+    uint32_t scb_sectors;       /*  12: sectors per track. CONFIRMED: value 10
+                                  *      matches SHOW DEVICE/FULL "Sectors per
+                                  *      track" for the same real volume. */
+    uint32_t scb_tracks;        /*  16: tracks per cylinder. CONFIRMED: value 80
+                                  *      matches SHOW DEVICE/FULL "Tracks per
+                                  *      cylinder". */
+    uint32_t scb_cylinders;     /*  20: cylinders. CONFIRMED: value 1 matches SHOW
+                                  *      DEVICE/FULL "Total cylinders". */
+    uint32_t scb_status;        /*  24: [OVMX-inferred, UNCONFIRMED] observed = 0 on
+                                  *      a healthy, cleanly-dismounted real volume;
+                                  *      no error/mount-verify state was induced, so
+                                  *      this pass cannot say what a nonzero value
+                                  *      means. */
+    uint32_t scb_status2;       /*  28: [OVMX-inferred, UNCONFIRMED] observed = 0;
+                                  *      same caveat as scb_status. */
+    uint16_t scb_writecnt;      /*  32: [OVMX-inferred, CORRECTED-TO-UNKNOWN]
+                                  *      increment 1 called this "mount write
+                                  *      count"; the real image has 0 here while
+                                  *      OpenVMS itself reported "Mount count 1"
+                                  *      for that very volume in the same session
+                                  *      -- so that name is WRONG. Real semantics
+                                  *      undetermined; do not rely on the old name. */
+    char     scb_volockname[12];/*  34: PARTIALLY CONFIRMED, WIDTH CORRECTED: the
+                                  *      real image has ASCII "VAX1" starting here
+                                  *      (the mounting host's name -- matches SHOW
+                                  *      DEVICE/FULL "Host name"), so the FIELD
+                                  *      EXISTS and starts at the right offset.
+                                  *      But it is NOT a clean 12-byte space-padded
+                                  *      string as increment 1 assumed: bytes 8-19
+                                  *      of this field (offset 42-53) instead look
+                                  *      like a VMS 64-bit absolute-time quadword
+                                  *      (its last 4 bytes match hm2_credate's last
+                                  *      4 bytes on the same volume). The exact
+                                  *      field width is therefore still open; only
+                                  *      the leading host-name bytes are grounded. */
+    uint8_t  scb_reserved[464]; /*  46: CORRECTED (was asserted plain "reserved"):
+                                  *      NOT proven all-zero. This region's first 8
+                                  *      bytes are almost certainly the tail of the
+                                  *      timestamp described above, not padding;
+                                  *      bytes 54..509 were all-zero in the one real
+                                  *      sample examined here. No public spec covers
+                                  *      this area byte-for-byte, so it stays opaque
+                                  *      to this reader rather than guessing a
+                                  *      structure from a single sample. */
+    uint16_t scb_checksum;      /* 510: additive checksum, 255 words. CONFIRMED on
+                                  *      the real image. [S] */
 } ods2_scb_t;
 
 /* ================================================================
@@ -387,6 +446,16 @@ ods2_status_t ods2_fh2_parse(const void *block, size_t block_len,
 
 /* Locate the ident area inside a validated header block. */
 const ods2_ident_t *ods2_fh2_ident(const void *header_block);
+
+/*
+ * Parse and validate the Storage Control Block (SCB, BITMAP.SYS VBN1) from a
+ * raw 512-byte buffer into `out`. Validates the additive checksum and the
+ * structure-level word, same convention as ods2_home_parse / ods2_fh2_parse.
+ * Added in increment 2 alongside the real-image oracle pass (Rule 8) that
+ * confirmed/corrected the struct's per-field comments -- see ods2_scb_t.
+ */
+ods2_status_t ods2_scb_parse(const void *block, size_t block_len,
+                             ods2_scb_t *out);
 
 /*
  * Retrieval pointer (one contiguous VBN->LBN run) decoded from the map area.

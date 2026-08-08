@@ -122,6 +122,35 @@ ods2_status_t ods2_fh2_parse(const void *block, size_t block_len,
     return ODS2_OK;
 }
 
+/*
+ * Parse and validate the Storage Control Block (BITMAP.SYS VBN1). Same
+ * checksum+struclev convention as the home block / file headers. See
+ * ods2_scb_t in vmsfs/ods2.h for the increment-2 real-image findings on the
+ * fields this validates and exposes.
+ */
+ods2_status_t ods2_scb_parse(const void *block, size_t block_len,
+                             ods2_scb_t *out)
+{
+    const uint8_t *b = (const uint8_t *)block;
+    uint16_t stored, calc;
+
+    if (!block || !out)
+        return ODS2_ERR_ARGS;
+    if (block_len < ODS2_BLOCK_SIZE)
+        return ODS2_ERR_SIZE;
+
+    stored = le16(b + offsetof(ods2_scb_t, scb_checksum));
+    calc   = ods2_block_checksum(b);
+    if (stored != calc)
+        return ODS2_ERR_CHECKSUM;
+
+    if (le16(b + offsetof(ods2_scb_t, scb_struclev)) != ODS2_STRUCLEV_V2)
+        return ODS2_ERR_FORMAT;
+
+    memcpy(out, b, sizeof(*out));
+    return ODS2_OK;
+}
+
 const ods2_ident_t *ods2_fh2_ident(const void *header_block)
 {
     const uint8_t *b = (const uint8_t *)header_block;

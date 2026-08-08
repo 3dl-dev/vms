@@ -390,4 +390,53 @@ int vms_kif_lnm_translate(uint32_t table, const char *name,
                           char *value, uint32_t valsz,
                           uint16_t *vallen, uint32_t *attrs);
 
+/* ================================================================
+ * Mailboxes (executive-resident MBAn:, vms-d44)
+ *
+ * The executive owns the mailbox table (src/kernel/vms_mbx.c): the unit
+ * number, the message queue and the buffer-quota accounting. A mailbox
+ * created by one process is reachable by ANY other process that knows its
+ * device name (vms_kif_mbx_assign) or, for a named mailbox, the LNM$SYSTEM
+ * logical name sys$crembx defines for it (src/libvms/syssvc/sys_mailbox.c)
+ * -- unlike the AF_UNIX-socketpair implementation this replaces, where a
+ * second process could never reach the first's mailbox at all.
+ *
+ * NO PER-PROCESS FALLBACK (CLAUDE.md Rule 9 / INV-6): every entry point
+ * below returns SS$_NOSUCHDEV, never a private substitute, when /dev/vms
+ * is unreachable -- checked explicitly in vms_kif.c (mbx_bind_ok()) rather
+ * than inferred from the ioctl's own -EBADF, exactly as
+ * vms_kif_lnm_define()/_delete() probe the LNM arena mapping before
+ * mutating.
+ * ================================================================ */
+
+/* $CREMBX: create a mailbox and hand back a channel to it (an EXECUTIVE
+ * channel number -- see src/libvms/syssvc/sys_mailbox.c for how it is
+ * stored in the caller's PCB). `permanent` gates on PRMMBX privilege, a
+ * temporary mailbox on TMPMBX (both enforced by the executive, not here).
+ * devnam receives "MBAn:", NUL-terminated within devnam_sz. */
+uint32_t vms_kif_mbx_create(int permanent, uint32_t maxmsg, uint32_t bufquo,
+                            uint32_t *exec_chan, uint32_t *unit,
+                            char *devnam, uint32_t devnam_sz);
+
+/* $ASSIGN to an EXISTING mailbox by device name ("MBAn:"), the path an
+ * unrelated process uses to reach a mailbox it did not create. SS$_NOSUCHDEV
+ * if no such mailbox exists. */
+uint32_t vms_kif_mbx_assign(const char *devnam, uint32_t *exec_chan);
+
+/* $DELMBX: mark the mailbox behind `exec_chan` for deletion. Does not
+ * deassign `exec_chan` itself -- see vms_mbx.c's header. */
+uint32_t vms_kif_mbx_delmbx(uint32_t exec_chan);
+
+/* $QIO IO$_WRITEVBLK-equivalent: one message, moved whole. SS$_EXQUOTA if
+ * `len` exceeds the mailbox's MAXMSG or its remaining BUFQUO. */
+uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len);
+
+/* $QIO IO$_READVBLK-equivalent: blocks until a message is queued, then
+ * copies up to `bufsz` bytes of it into `buf` and reports the message's
+ * true length in *actlen (which may exceed bufsz if the caller's buffer
+ * was smaller than the message -- the excess is discarded, as $QIO
+ * truncates an oversized mailbox message into an undersized buffer). */
+uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                          uint32_t *actlen);
+
 #endif /* _VMS_KIF_H */

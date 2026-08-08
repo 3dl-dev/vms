@@ -378,6 +378,15 @@ void vms_proc_release_channels(struct vms_proc *proc)
         spin_unlock(&dev->lock);
     }
     spin_unlock(&vms_device_list_lock);
+
+    /*
+     * Mailbox channels (vms-d44) are a separate list (see vms_mbx.h) --
+     * give them back too, exactly as the device channels above. This is
+     * what makes a temporary mailbox whose creator dies without an
+     * explicit $DASSGN still get freed, instead of leaking for the life
+     * of the module.
+     */
+    vms_mbx_release_all(proc);
 }
 
 /* ================================================================
@@ -507,12 +516,23 @@ long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg)
         list_del(&ch->list);
     spin_unlock(&proc->chan_lock);
 
-    if (!ch) {
-        args.status = SS__IVCHAN;
-    } else {
+    if (ch) {
         device_release_channel(ch);
         kfree(ch);
         args.status = SS__NORMAL;
+    } else if (vms_mbx_dassgn(proc, args.chan) == 0) {
+        /*
+         * vms-d44: `chan` named a mailbox channel, not a device one --
+         * mailboxes are not struct vms_device rows (see vms_mbx.c's
+         * header), so they are not in proc->channels / chan_find_locked()
+         * above, but $DASSGN is still the ONE ioctl that releases either
+         * kind, drawing from the same channel-number space
+         * (proc->next_chan). vms_mbx_dassgn() has already dropped the
+         * mailbox's reference and freed it if that was the last one.
+         */
+        args.status = SS__NORMAL;
+    } else {
+        args.status = SS__IVCHAN;
     }
 
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))

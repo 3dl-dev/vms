@@ -428,6 +428,10 @@ struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
     proc->next_chan = 0;
     spin_lock_init(&proc->chan_lock);
 
+    /* Mailbox channels (vms-d44) -- a separate list, same chan_lock and
+     * next_chan counter as the device channels above (vms_mbx.h). */
+    INIT_LIST_HEAD(&proc->mbx_channels);
+
     /* Atomically check-and-insert under spinlock to avoid TOCTOU race */
     spin_lock(&vms_proc_hash_lock);
     hash_for_each_possible_rcu(vms_proc_hash, existing, hash_node, pid) {
@@ -735,6 +739,18 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     case VMS_IOCTL_LNM_GETSCOPE:
         return vms_ioctl_lnm_getscope(proc, arg);
 
+    /* Mailboxes (executive-resident MBAn:, vms-d44) */
+    case VMS_IOCTL_MBX_CREATE:
+        return vms_ioctl_mbx_create(proc, arg);
+    case VMS_IOCTL_MBX_ASSIGN:
+        return vms_ioctl_mbx_assign(proc, arg);
+    case VMS_IOCTL_MBX_WRITE:
+        return vms_ioctl_mbx_write(proc, arg);
+    case VMS_IOCTL_MBX_READ:
+        return vms_ioctl_mbx_read(proc, arg);
+    case VMS_IOCTL_MBX_DELMBX:
+        return vms_ioctl_mbx_delmbx(proc, arg);
+
     default:
         return -ENOTTY;
     }
@@ -900,10 +916,15 @@ static int __init vms_init(void)
         return ret;
     }
 
+    /* Mailbox table (vms-d44) -- starts empty, nothing that can fail here
+     * (see vms_mbx.c's vms_mbx_init()). */
+    vms_mbx_init();
+
     /* Register /dev/vms */
     ret = misc_register(&vms_misc);
     if (ret) {
         pr_err("vms: failed to register /dev/vms: %d\n", ret);
+        vms_mbx_cleanup();
         vms_lnm_cleanup();
         vms_devtab_cleanup();
         vms_lock_cleanup();
@@ -939,6 +960,7 @@ static void __exit vms_exit(void)
     vms_eflag_cleanup();
     vms_devtab_cleanup();
     vms_lnm_cleanup();
+    vms_mbx_cleanup();
 
     kmem_cache_destroy(vms_proc_cache);
 

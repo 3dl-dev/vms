@@ -174,6 +174,17 @@
  */
 #define SS__DEVALLOC    2112        /* device already allocated to another user */
 #define SS__DEVNOTALLOC 2136        /* device not allocated */
+/*
+ * SS__EXQUOTA -- this tree's existing src/libvms/include/ssdef.h value
+ * (SS$_EXQUOTA == 28), NOT independently re-derived here, same discipline
+ * as the device-table block above. ssdef.h carries no oracle citation for
+ * it (a pre-existing, single-lineage value); mailboxes (vms-d44) reuse it
+ * for "no room for this message" -- both a per-message size over maxmsg
+ * and the aggregate bufquo being full -- rather than inventing a new
+ * status this tree cannot oracle-pin (real VMS's SS$_MBFULL is not yet
+ * measured against any reference lab; see src/kernel/vms_mbx.c).
+ */
+#define SS__EXQUOTA     28
 
 /*
  * SS__NOTALLPRIV -- ORACLE-PINNED (vms-2b8).
@@ -414,6 +425,19 @@ struct vms_proc {
     spinlock_t          chan_lock;
 
     /*
+     * Mailbox channels (executive-resident MBAn:, vms-d44). A separate
+     * list from `channels` above because a mailbox is not a
+     * struct vms_device row (see src/kernel/vms_mbx.c's header) -- but the
+     * SAME channel-number space: mailbox channels are also drawn from
+     * next_chan under chan_lock, exactly like device channels, because on
+     * real VMS a process's channels are one number space regardless of
+     * device kind. vms_ioctl_dassgn() (vms_devtab.c) checks `channels`
+     * first and falls back to this list, so $DASSGN is one ioctl for
+     * either kind.
+     */
+    struct list_head    mbx_channels;   /* struct vms_mbx_chan */
+
+    /*
      * The job's terminal (vms-d0b). "" until VMS_IOCTL_SETTERM records
      * one, which the executive only does from a channel this process
      * already holds to a device of class DC$_TERM -- so the name is a
@@ -620,6 +644,22 @@ long vms_ioctl_lnm_getscope(struct vms_proc *proc, unsigned long arg);
 /* Map the read-only logical-name arena into the caller (design §3.3). */
 int vms_lnm_mmap(struct file *filp, struct vm_area_struct *vma);
 
+/* Mailboxes (executive-resident MBAn:, vms-d44) */
+long vms_ioctl_mbx_create(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_mbx_assign(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_mbx_delmbx(struct vms_proc *proc, unsigned long arg);
+/*
+ * Release one mailbox channel by number, for vms_ioctl_dassgn()'s fallback
+ * when `chan` is not in proc->channels. Returns 0 if `chan` named a
+ * mailbox channel (released), or -ENOENT if it did not (so the generic
+ * $DASSGN can report SS$_IVCHAN itself).
+ */
+int vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan);
+/* Give back every mailbox channel a dying process holds. */
+void vms_mbx_release_all(struct vms_proc *proc);
+
 /* Subsystem init/cleanup */
 int vms_lock_init(void);
 void vms_lock_cleanup(void);
@@ -629,6 +669,8 @@ int vms_devtab_init(void);
 void vms_devtab_cleanup(void);
 int vms_lnm_init(void);
 void vms_lnm_cleanup(void);
+void vms_mbx_init(void);
+void vms_mbx_cleanup(void);
 
 /* Give back every channel a process holds (process teardown). */
 void vms_proc_release_channels(struct vms_proc *proc);

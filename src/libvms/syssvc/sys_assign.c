@@ -249,10 +249,36 @@ uint32_t sys$assign(const struct dsc$descriptor_s *devnam,
 
     if (resolve_vms_device(name, &devres)) {
         if (devres.is_mailbox) {
-            /* Mailbox devices are handled by sys$crembx, not sys$assign directly.
-             * For now, return an error; the user should use sys$crembx. */
+            /*
+             * vms-d44: $ASSIGN to an EXISTING mailbox by device name -- the
+             * rendezvous path an UNRELATED process uses to reach a mailbox
+             * it did not $CREMBX itself (having learned "MBAn:" from a
+             * logical name translate, or the literal name). The mailbox is
+             * entirely the executive's (src/kernel/vms_mbx.c); there is no
+             * local fd to open, so this channel's fd stays -1 and
+             * IO$_READVBLK/WRITEVBLK route through exec_chan instead (see
+             * sys_qio.c's PCB_CHAN_MAILBOX check).
+             */
+            uint32_t mbx_exec_chan = 0;
+            uint32_t st = vms_kif_mbx_assign(name, &mbx_exec_chan);
+            if (!(st & 1)) {
+                pthread_mutex_unlock(&pcb->chan_lock);
+                return st;
+            }
+
+            pcb->channels[slot].fd = -1;
+            pcb->channels[slot].in_use = 1;
+            pcb->channels[slot].ref_count = 1;
+            pcb->channels[slot].flags = PCB_CHAN_MAILBOX;
+            pcb->channels[slot].mbx_peer_fd = -1;
+            pcb->channels[slot].exec_chan = mbx_exec_chan;
+            strncpy(pcb->channels[slot].devnam, name,
+                    sizeof(pcb->channels[slot].devnam) - 1);
+            pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';
+            *chan = (uint16_t)slot;
+
             pthread_mutex_unlock(&pcb->chan_lock);
-            return SS$_IVDEVNAM;
+            return SS$_NORMAL;
         }
 
         if (devres.is_terminal) {
@@ -421,4 +447,20 @@ uint32_t vms$$chan_exec_chan(uint16_t chan) {
     if (!pcb) return 0;
     if (!pcb->channels[chan].in_use) return 0;
     return pcb->channels[chan].exec_chan;
+}
+
+/*
+ * vms$$chan_is_mailbox - Internal helper: is this channel a mailbox
+ * channel (vms-d44)? Used by sys$qio to route IO$_READVBLK/WRITEVBLK to
+ * the executive (vms_kif_mbx_read/write) instead of the fd-based path --
+ * a mailbox channel's fd is always -1, since the mailbox itself is
+ * entirely the executive's.
+ */
+int vms$$chan_is_mailbox(uint16_t chan) {
+    if (chan == 0 || chan >= PCB_MAX_CHANNELS) return 0;
+
+    struct vms_pcb *pcb = vms_pcb_get();
+    if (!pcb) return 0;
+    if (!pcb->channels[chan].in_use) return 0;
+    return (pcb->channels[chan].flags & PCB_CHAN_MAILBOX) ? 1 : 0;
 }

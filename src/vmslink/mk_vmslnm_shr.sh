@@ -95,7 +95,7 @@ echo "mk_vmslnm_shr: LINK.EXE --shareable --use {DECC\$SHR,LIBVMSSYS\$SHR} -> $O
 # STRICT (no --allow-undefined): every libc/pthread import MUST bind to DECC$SHR,
 # and every vms_kif_lnm_* import MUST bind to LIBVMSSYS$SHR (vms-96e2).
 # shellcheck disable=SC2086
-"$LINK_EXE" --shareable --use "$DECC_SHR" "$SYS_SHR" \
+"$LINK_EXE" --shareable --use "$DECC_SHR" --use "$SYS_SHR" \
     --symbol-vector "$VEC" \
     --gsmatch "$GSMATCH" \
     -o "$OUT" $OBJS

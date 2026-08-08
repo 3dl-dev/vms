@@ -502,3 +502,135 @@ but not the file read-back, so it does not meet the bar.
 - **`MOUNT/OVERRIDE=SECURITY` is NOT a viable path to vms-0f3's goal.** It changes the mount-time message but does not produce a volume where files "read back" -- confirmed empirically this increment (Step 3). Do not document it as a supported workaround.
 - **The actual remaining wall is the pre-existing `FILENUMCHK`, proven (increment 4, splice test) to be independent of SECURITY.SYS.** This item's scope was SECURITY.SYS; that scope is closed. The `INDEXF.SYS` single-contiguous-extent bisection increment 4 already recommended as the next step remains the right next move, but it is a SEPARATE defect and should be tracked as a new/distinct item (increment 6), not folded back into vms-0f3.
 - **vms-600 (real VAX mounts an OVMX-served volume) stays blocked** -- not by SECURITY.SYS content (resolved) but by the `FILENUMCHK` defect this item did not investigate further, per its effort cap.
+## Addendum (increment 6, vms-0f3): INDEXF.SYS genuinely fragmented -- FILENUMCHK resolved, BADIRECTORY is the new wall
+
+Increment 6's job: chase FILENUMCHK to a real-VAX-MOUNT completion, following
+increment 5's recommendation. Method: local field-by-field diffing of this
+writer's own output against `real_vax_ods2.dsk` (already in the repo -- no
+new lab session needed for DERIVATION), each fix validated on lab-2 (pod
+**`vaxlab-7`**, RQ3 scratch unit, procedure identical to prior increments;
+lab-1 and no other lab-2 pod touched).
+
+### Fixes applied, in the order tried
+
+1. **`wvol->mfd_fid.fid_seq` bug**: was hardcoded to 1 (the "newly-created
+   file, first generation" convention) instead of `ODS2_FID_MFD` (4, what
+   the MFD's OWN on-disk header actually self-declares, per [F2]). Every
+   caller-created top-level file/dir's `fh2_backlink` is built from this
+   struct, so it silently disagreed with the MFD header it pointed at --
+   the same FID self-consistency class of bug Nankervis's `accesshead()`
+   (access.c) rejects. **Tried alone on lab-2: MOUNT reproduced FILENUMCHK
+   identically -- not sufficient alone**, but a real, kept fix (see
+   `ods2_writer.c`'s `[F10]` comment).
+2. **`fh2_fileowner`/`fh2_fileprot`/`fh2_reserved1`/`fh2_highwater`**: a
+   full field-by-field diff of every one of the 13 real headers against
+   this writer's own output (script below) found FOUR previously-zero
+   fields that are consistently non-zero on every real sample: owner
+   SYSTEM [1,4] (all 13), protection 0xFA00 (system/data files) or 0xBA00
+   (directories), a constant 0x0000FE00 at offset 56 correlating exactly
+   with "is one of the 10 traditionally-reserved files" (0 otherwise), and
+   `highwater == hiblk + 1` (all 13, once derived correctly -- see
+   `ods2_writer.c`'s `[F11]` comment for the full per-field derivation).
+   **Tried together on lab-2: MOUNT reproduced FILENUMCHK identically --
+   not sufficient either**, but real, oracle-grounded, and kept.
+3. **INDEXF.SYS's own retrieval map, genuinely fragmented into 3 extents**
+   (the leading candidate both increments 4 and 5 flagged but never
+   actually tried): re-derived the exact real shape by decoding
+   `real_vax_ods2.dsk`'s own FID1 header extents directly (not just citing
+   the increment-3 addendum's summary) --
+   `[(0,3), (altidxlbn,1), (ibmaplbn, ibmapsize+headers)]` -- and found
+   the REAL reason INDEXF.SYS is fragmented at all: `BITMAP.SYS`'s own
+   data (LBN 5-6) and `000000.DIR`'s own data (LBN 3-4) sit PHYSICALLY
+   BETWEEN the home-block pair and the index file bitmap on the real
+   volume -- this writer previously placed both AFTER the header area
+   instead, which is why a single contiguous INDEXF.SYS extent "worked"
+   internally (nothing else occupied that range) but didn't match reality.
+   Reordered the writer's own physical layout to match (MFD data, then
+   BITMAP.SYS data, then the index file bitmap + header area, then the
+   alternate index header, then SECURITY.SYS -- see `ods2_writer.c`'s
+   `[F12]` comment) and gave INDEXF.SYS a genuine 3-extent map via a new
+   `write_fh2_header_ext()` (extent-array) primitive.
+   **Lab-2 result: MOUNT's secondary status changed from
+   `-SYSTEM-W-FILENUMCHK` to `-SYSTEM-W-BADIRECTORY, bad directory file
+   format`** -- a real, reproducible state transition, proving the
+   single-contiguous-extent simplification WAS a genuine contributor to
+   FILENUMCHK (not proof it was the *only* one, given fixes 1-2 were
+   already in the image at this point, but a real fix nonetheless).
+4. **Directory entries not stored in ascending name order**: decoding the
+   real fixture's OWN `[000000]` MFD directory block RECORD-BY-RECORD
+   (not just via `strings`, as increment 4's `[F8]` pass did) showed its
+   11 entries in strict ascending byte order by filename -- `000000.DIR,
+   BACKUP.SYS, BADBLK.SYS, BADLOG.SYS, BITMAP.SYS, CONTIN.SYS, CORIMG.SYS,
+   INDEXF.SYS, OVMXDIR.DIR, SECURITY.SYS, VOLSET.SYS` -- NOT this writer's
+   own FID-creation-order insertion. `ods2_wvolume_dir_insert()` now finds
+   the correct sorted position and shifts the tail right instead of always
+   appending (`[F13]` in `ods2_writer.c`). **Lab-2 result: still
+   `BADIRECTORY`, no change** -- real and oracle-grounded (now byte-exact
+   with the real fixture's own entry order), but not (solely) the cause.
+5. **Regression found while implementing #4**: the sorted mid-block
+   insert's word-alignment pad byte (only present for odd-length names,
+   e.g. `OVMXDIR.DIR`, 11 chars) is opened by a `memmove()` and was left
+   holding stale pre-shift bytes instead of the `0xFF` empty-fill
+   convention every other unused byte in the block follows. Fixed by
+   explicitly `memset`-ing the vacated gap before the field writes.
+   **Lab-2 result: still `BADIRECTORY`, no change** to the outcome, but a
+   real byte-cleanliness bug regardless of whether it was load-bearing.
+
+### Honest current status
+
+`FILENUMCHK` is resolved (state-transition-confirmed on a real VAX, not
+merely inferred). The new wall, `-SYSTEM-W-BADIRECTORY, bad directory file
+format`, appears in the exact same MOUNT phase (immediately after
+`QUOTAFAIL`, immediately before `BADSECSYS`) while VMS scans `[000000]` by
+name for `QUOTA.SYS`/`SECURITY.SYS` -- i.e. it is very likely still about
+`[000000]`'s own directory-file validity, but the specific defect survived
+both the sort-order fix and the pad-byte fix, so it is NOT (solely) a
+content-ordering or stray-byte issue in the directory data block itself.
+
+**Diagnostic attempted and blocked**: tried `ANALYZE/DISK_STRUCTURE
+$2$DUA3:` (both `/FOREIGN`-mounted and fully dismounted) on lab-2 to get a
+direct, specific report instead of continuing to bisect blind --
+consistently failed with `%ANALDISK-F-GETDVI, error getting device
+characteristics, RVN 1 / -SYSTEM-F-WRONGACP, wrong ACP for device`,
+apparently a lab/emulated-RQDX3 tooling limitation unrelated to this
+volume's own format (a completely untouched real fixture would need to be
+tried against the same command to confirm whether this is lab-wide or
+volume-specific -- not done this increment, out of the remaining lab-trial
+budget).
+
+**Not yet tried / recommended next**: (a) confirm `ANALYZE/DISK_STRUCTURE`
+even works in this lab config at all, against the known-good real fixture,
+before spending further trials assuming it's usable; (b) a decisive splice
+test in the style of increment 4's step 3 -- take the REAL fixture's own
+complete, byte-exact `[000000]` FH2 header AND data block verbatim, graft
+them into this writer's own volume (translating only the retrieval-pointer
+LBN to point at this writer's own physically-placed MFD data), and see
+whether `BADIRECTORY` disappears; if it does, the defect is provably still
+in the MFD's header or data despite passing every check tried so far; if
+it does NOT, the defect is elsewhere entirely (a different reserved file,
+or the home block, or something in how MOUNT's quota/security phase itself
+navigates to `[000000]`) and the search should move there. (c) Field-by-
+field diff BITMAP.SYS's and INDEXF.SYS's headers again post-`[F12]`
+reordering (not done this increment) in case the layout change introduced
+a new, different discrepancy from the real fixture on top of resolving
+the extent-count one.
+
+### Reproduction
+
+```
+$ sim> detach rq3 / set rq3 rx50 / set rq3 format=raw / attach rq3 <scratch>.dsk
+$ (VMS) MOUNT $2$DUA3: OVMXWRIT
+%MOUNT-W-QUOTAFAIL, failed to activate quota file; volume locked
+-SYSTEM-W-BADIRECTORY, bad directory file format
+%MOUNT-F-BADSECSYS, failed to create or access SECURITY.SYS
+-SYSTEM-W-BADIRECTORY, bad directory file format
+```
+
+Local field-diff script used for fixes 1-2 (re-derivable any time from the
+fixture already in this repo, `tests/ods2/real_vax_ods2.dsk`, plus a fresh
+`ODS2_WRITE_DUMP=/tmp/x.dsk ./bin/test_ods2_write` build): decode each of
+the 13 real headers' `fh2_fileowner`/`fh2_fileprot`/offset-56 word/
+`fh2_highwater` alongside the equivalent FID's header in the writer's own
+dump (same `hdr_base + (fid - 1)` LBN formula both sides) and diff
+field-by-field. No new lab session is needed to REPRODUCE this derivation
+-- only to VALIDATE a candidate fix's effect on a real MOUNT.

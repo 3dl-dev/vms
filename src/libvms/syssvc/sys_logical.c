@@ -67,6 +67,18 @@ static uint32_t lnm_exec_table_id(const char *table)
     return 0;
 }
 
+/*
+ * LNM$FILE_DEV and LNM$DCL_LOGICAL are search LISTS, not tables: a translate
+ * named against one walks the standard table order (PROCESS -> JOB -> GROUP ->
+ * SYSTEM), exactly as an unspecified table does. This is the default RMS/DCL
+ * search path, so it must reach the executive-resident LNM$SYSTEM too.
+ */
+static int lnm_is_search_list(const char *table)
+{
+    return strcasecmp(table, "LNM$FILE_DEV") == 0 ||
+           strcasecmp(table, "LNM$DCL_LOGICAL") == 0;
+}
+
 #define MAX_LOGICALS 1024
 #define MAX_EQUIV_LEN 256
 
@@ -270,10 +282,21 @@ uint32_t sys$trnlnm(const uint32_t *attr,
     uint32_t found_attr = 0;
     int have = 0;   /* 1 = found */
 
-    if (tabnam && tabnam->dsc$a_pointer) {
-        char table[LNM$C_TABNAMLEN + 1];
+    /*
+     * Use the standard table search order when no table is named OR the named
+     * "table" is really a search list (LNM$FILE_DEV / LNM$DCL_LOGICAL).
+     * Otherwise resolve the one named table.
+     */
+    int use_search = (!tabnam || !tabnam->dsc$a_pointer);
+    char table[LNM$C_TABNAMLEN + 1];
+    table[0] = '\0';
+    if (!use_search) {
         dsc$strncpy(table, tabnam, sizeof(table));
+        if (lnm_is_search_list(table))
+            use_search = 1;
+    }
 
+    if (!use_search) {
         uint32_t exec_tbl = lnm_exec_table_id(table);
         if (exec_tbl) {
             /* LNM$SYSTEM: read the executive arena. No fallback (INV-6). */

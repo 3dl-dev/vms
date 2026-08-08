@@ -436,9 +436,12 @@ static void dir_build_common(const uint8_t *dst_mac, const uint8_t *src_mac,
      * scs_dir.h's SCS_DIR_OP_ACCEPT / SCS_DIR_OP_MSCP_CONFIRM entries for the
      * full grounding and the wire-behaviour follow-up this decode opens
      * (NOT fixed here -- out of scope for vms-754): scsd.c's server-first
-     * MSCP accept path still builds and consumes these bytes believing they
-     * mean ACCEPT/CONFIRM. The builders below keep emitting exactly the bytes
-     * they emitted before -- vms-754 is a decode, not a wire change. */
+     * MSCP accept path still BUILDS these bytes believing an op-4 BINDS a
+     * server connection (still open, a separate item -- the builders below
+     * keep emitting exactly the bytes they emitted before; vms-754 is a
+     * decode, not a wire change). The CONSUME half is fixed: vms-257
+     * (2026-08-08) stopped scsd.c from treating a peer's op-4 answer to OUR
+     * outbound MSCP$DISK connect as a bind -- see scsd.c's FORM B comment. */
     if (env != NULL) {
         (void)scs_env_build(out + 14, sca_len, env);
     }

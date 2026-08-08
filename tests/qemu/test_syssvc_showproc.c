@@ -558,7 +558,7 @@ static int device_absent_checks(void)
 
 int main(void)
 {
-    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     static char out[65536];
     static char script[512];
     char msg[256];

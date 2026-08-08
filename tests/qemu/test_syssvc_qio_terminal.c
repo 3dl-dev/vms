@@ -217,7 +217,7 @@ static int read_via_fresh_child(struct child_msg *out)
 
 int main(void)
 {
-    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     printf("=== test_syssvc_qio_terminal (public sys$assign/sys$qio to the executive's terminal) ===\n");
 
     /*

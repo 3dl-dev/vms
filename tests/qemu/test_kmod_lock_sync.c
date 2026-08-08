@@ -584,7 +584,7 @@ static void run_valblk_grant(int pfd, int *tot_pass, int *tot_fail)
 
 int main(void)
 {
-    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     printf("=== test_kmod_lock_sync ===\n");
 
     int pfd = open_and_register();

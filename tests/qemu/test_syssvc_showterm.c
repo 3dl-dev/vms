@@ -384,7 +384,7 @@ static const char *const HEADER_PREFIX =
 
 int main(void)
 {
-    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     char out[16384];
     int pipefd[2], stopfd[2];
     pid_t child;

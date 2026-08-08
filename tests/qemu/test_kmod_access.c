@@ -135,7 +135,7 @@ static int child_main(int wfd)
 
 int main(void)
 {
-    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     struct vms_register_args reg;
     struct vms_getmode_args gm;
     struct vms_priv_args pv;

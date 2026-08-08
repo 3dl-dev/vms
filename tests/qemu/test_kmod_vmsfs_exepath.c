@@ -456,7 +456,7 @@ out:
 
 int main(int argc, char **argv)
 {
-    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     if (argc >= 2 && strcmp(argv[1], "--grandchild") == 0) {
         /* Reached only if the SPAWN-style re-exec worked. */
         printf("    grandchild: re-exec via /proc/self/exe succeeded\n");

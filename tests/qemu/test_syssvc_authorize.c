@@ -201,7 +201,7 @@ static int executive_present(void)
 
 int main(void)
 {
-    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so an unflushed fork() cannot splice output */
+    setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
     printf("=== test_syssvc_authorize (AUTHORIZE's SYSPRV check, both directions, vms-4c2) ===\n");
 
     if (!executive_present()) {

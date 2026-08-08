@@ -12,9 +12,26 @@
 #
 # Usage:   tools/survey_x86_64_relocs.sh [--check]
 #   (no args)  regenerate docs/design-link-x86_64-relocs.md from a fresh build
-#   --check    regenerate into a temp file and diff against the committed doc;
-#              nonzero exit + diff output if the ground truth has drifted
-#              (this is what CI runs)
+#              (illustrative snapshot -- exact counts in this doc are NOT
+#              gated by --check, see vms-49bb below)
+#   --check    run a fresh survey and assert PROPERTIES of the observed
+#              relocation-type set (this is what CI runs):
+#                - every observed r_type has documented LINK.EXE analog
+#                  analysis (ANALYZED_X86_64_RELOC_TYPES below / the design
+#                  doc's cross-reference table)
+#                - none of the named FORBIDDEN_X86_64_RELOC_TYPES appear
+#                  (dynamic-only relocs, copy relocs, wrong PIC/TLS model)
+#                - at least one object actually built (survey didn't just
+#                  silently produce zero data)
+#              It does NOT diff exact per-type counts or the object-built
+#              count against the committed doc. vms-49bb: the previous
+#              `diff -u` exact-count golden broke on every benign
+#              reloc-count shift (any added/removed line of source in the
+#              surveyed components) -- it bit main 3 times (pre-#167, #170,
+#              #184) despite catching zero real regressions. A change that
+#              legitimately shifts how many R_X86_64_PC32 relocs exist is
+#              not news; a change that makes LINK.EXE-unmapped or
+#              dynamic-only relocation types show up in a static .o is.
 #
 # Requires: musl-gcc, readelf (binutils). Both are already host tooling on the
 # x86_64 dev host (CLAUDE.md: musl cross-compilation is build-tooling, not a
@@ -29,6 +46,68 @@ MODE=${1:-}
 
 CC=${CC:-musl-gcc}
 CFLAGS="-fPIC -O2 -mtls-dialect=gnu2 -c"
+
+# vms-49bb: the whitelist this check gates on, in place of the previous
+# exact-count golden diff.
+#
+# ANALYZED_X86_64_RELOC_TYPES — every relocation type LINK.EXE's x86_64
+# backend has documented analog analysis for, in
+# docs/design-link-x86_64-relocs.md's "Cross-reference: LINK.EXE's existing
+# R_AARCH64_* switch" table. It is fine for the fresh survey to observe a
+# SUBSET of this list (a component's code shrinking away a reloc type is not
+# a regression). It is NOT fine for the fresh survey to observe a type that
+# ISN'T here: that's either a toolchain/flag regression (see
+# FORBIDDEN_X86_64_RELOC_TYPES below) or a genuinely new relocation shape
+# LINK.EXE has never been analyzed against — either way it needs analog
+# analysis added to the design doc (and to this list) before it's expected,
+# not a silently-passing test. Keep this list and the design doc's
+# cross-reference table in sync — the check below enforces that they match.
+ANALYZED_X86_64_RELOC_TYPES="
+R_X86_64_64
+R_X86_64_PC32
+R_X86_64_PLT32
+R_X86_64_GOTPCREL
+R_X86_64_REX_GOTPCRELX
+R_X86_64_GOTPC32_TLSDESC
+R_X86_64_TLSDESC_CALL
+R_X86_64_DTPOFF32
+"
+
+# FORBIDDEN_X86_64_RELOC_TYPES — relocation types that must NEVER appear in a
+# static .o-file survey at OVMX's standardized x86_64 flags (-fPIC
+# -mtls-dialect=gnu2). Named explicitly (rather than just falling out of "not
+# in ANALYZED_X86_64_RELOC_TYPES") so a red test says WHAT broke:
+#   - R_X86_64_RELATIVE / GLOB_DAT / JUMP_SLOT: dynamic (DT_RELA/DT_JMPREL)
+#     relocations the LINKER synthesizes when building .dynamic/GOT/PLT
+#     sections -- never emitted by the compiler into a static .o. Seeing one
+#     here means something compiled as though it were already a linked
+#     ET_DYN image.
+#   - R_X86_64_COPY: copy relocation, a glibc/non-PIE-executable idiom with
+#     no place in a -fPIC musl build.
+#   - R_X86_64_IRELATIVE: ifunc resolver relocation, also linker/load-time
+#     synthesized, not compiler-emitted into a static .o.
+#   - R_X86_64_32 / R_X86_64_32S: absolute 32-bit relocations -- the
+#     signature of -fPIC silently not applying (position-dependent codegen).
+#   - R_X86_64_TLSGD / R_X86_64_TLSLD / R_X86_64_DTPMOD64 / R_X86_64_DTPOFF64
+#     / R_X86_64_TPOFF32 / R_X86_64_TPOFF64: General-Dynamic / Local-Dynamic
+#     or Initial-Exec / Local-Exec TLS models -- the signature of
+#     -mtls-dialect=gnu2 silently not applying (falling back to the default
+#     gnu TLSGD/LD model, or a non-PIC TLS model).
+FORBIDDEN_X86_64_RELOC_TYPES="
+R_X86_64_RELATIVE
+R_X86_64_GLOB_DAT
+R_X86_64_JUMP_SLOT
+R_X86_64_COPY
+R_X86_64_IRELATIVE
+R_X86_64_32
+R_X86_64_32S
+R_X86_64_TLSGD
+R_X86_64_TLSLD
+R_X86_64_DTPMOD64
+R_X86_64_DTPOFF64
+R_X86_64_TPOFF32
+R_X86_64_TPOFF64
+"
 
 command -v "$CC" >/dev/null 2>&1 || { echo "survey_x86_64_relocs: $CC not found" >&2; exit 1; }
 command -v readelf >/dev/null 2>&1 || { echo "survey_x86_64_relocs: readelf not found" >&2; exit 1; }
@@ -87,14 +166,36 @@ N_FAILED=$(wc -l < "$FAILED_LOG" | tr -d ' ')
 TYPES_SORTED="$WORK/types_sorted.txt"
 sort "$TALLY" > "$TYPES_SORTED"
 
+# Pulls the R_X86_64_* identifiers out of the committed doc's
+# "Cross-reference: LINK.EXE's existing R_AARCH64_* switch" table (and only
+# that table -- the earlier "Relocation types observed" table uses the same
+# first-column shape, so this scopes by section on purpose). Used by --check
+# to make sure the script's ANALYZED_X86_64_RELOC_TYPES whitelist and the
+# doc's hand-reviewed analog analysis haven't drifted apart.
+extract_doc_analyzed_types() {
+    awk '
+        /^## / {
+            if ($0 ~ /Cross-reference: LINK\.EXE.s existing/) { f=1 } else { f=0 }
+            next
+        }
+        f
+    ' "$OUT_DOC" | grep -oE '^\| R_X86_64_[A-Za-z0-9_]+ ' | tr -d '| '
+}
+
 gen_doc() {
     DEST=$1
     {
         echo "# x86_64 Relocation Survey — LINK.EXE grounding (vms-680)"
         echo
         echo "**Generated by \`tools/survey_x86_64_relocs.sh\` — do not hand-edit.**"
-        echo "Re-run the script to regenerate; \`tools/survey_x86_64_relocs.sh --check\`"
-        echo "(wired into CI) diffs a fresh run against this file and reds if it drifts."
+        echo "Re-run the script to regenerate. \`tools/survey_x86_64_relocs.sh --check\`"
+        echo "(wired into CI) does NOT diff this file byte-for-byte — the exact counts"
+        echo "below drift with every code change to the surveyed components and are"
+        echo "illustrative only, not gated (vms-49bb). What the check DOES gate: every"
+        echo "relocation type the fresh survey observes must appear in the analog table"
+        echo "below (mirrored as \`ANALYZED_X86_64_RELOC_TYPES\` in the script), and none"
+        echo "of the forbidden dynamic-only / wrong-PIC / wrong-TLS-model types"
+        echo "(\`FORBIDDEN_X86_64_RELOC_TYPES\` in the script) may appear at all."
         echo
         echo "## Method"
         echo
@@ -118,7 +219,15 @@ gen_doc() {
         echo
         echo "## Result: $N_BUILT objects built, $N_FAILED failed to compile standalone"
         echo
+        echo "(snapshot from the run that generated this file — informational only;"
+        echo "\`--check\` does not require these numbers to match a fresh run)"
+        echo
         echo "## Relocation types observed"
+        echo
+        echo "Counts below are a snapshot, not gated — see the note at the top of this"
+        echo "file. What IS gated is the *set* of types (must all appear in the"
+        echo "cross-reference table below) and the absence of the script's"
+        echo "\`FORBIDDEN_X86_64_RELOC_TYPES\`."
         echo
         echo "| r_type | count | distinct source objects | example source |"
         echo "|---|---|---|---|"
@@ -192,13 +301,57 @@ gen_doc() {
 }
 
 if [ "$MODE" = "--check" ]; then
-    TMP_DOC="$WORK/check_doc.md"
-    gen_doc "$TMP_DOC"
-    if ! diff -u "$OUT_DOC" "$TMP_DOC"; then
-        echo "survey_x86_64_relocs: committed $OUT_DOC is STALE — re-run tools/survey_x86_64_relocs.sh and commit" >&2
+    # vms-49bb: property-based check. NOT an exact-count diff against the
+    # committed doc (see the header comment and the doc's own note for why:
+    # exact counts drift on every benign code change and broke main three
+    # times — pre-#167, #170, #184 — for zero real regressions caught).
+    OBSERVED_TYPES=$(awk -F'\t' '{print $1}' "$TYPES_SORTED" | sort -u)
+
+    FAIL=0
+
+    if [ "$N_BUILT" -eq 0 ]; then
+        echo "survey_x86_64_relocs: 0 objects built out of the surveyed source set -- the survey produced no relocation data, so nothing was actually validated (toolchain/flags broken?)" >&2
+        FAIL=1
+    fi
+
+    FORBIDDEN_HIT=""
+    UNKNOWN_HIT=""
+    for t in $OBSERVED_TYPES; do
+        if printf '%s\n' $FORBIDDEN_X86_64_RELOC_TYPES | grep -qx "$t"; then
+            FORBIDDEN_HIT="$FORBIDDEN_HIT $t"
+        elif ! printf '%s\n' $ANALYZED_X86_64_RELOC_TYPES | grep -qx "$t"; then
+            UNKNOWN_HIT="$UNKNOWN_HIT $t"
+        fi
+    done
+
+    if [ -n "$FORBIDDEN_HIT" ]; then
+        echo "survey_x86_64_relocs: FORBIDDEN relocation type(s) observed in a static .o survey:$FORBIDDEN_HIT" >&2
+        echo "  each one indicates a specific known regression class (a dynamic-only reloc emitted into a static object, a copy reloc, or -fPIC/-mtls-dialect=gnu2 silently not applying) -- see FORBIDDEN_X86_64_RELOC_TYPES at the top of this script for which and why" >&2
+        FAIL=1
+    fi
+
+    if [ -n "$UNKNOWN_HIT" ]; then
+        echo "survey_x86_64_relocs: relocation type(s) observed with NO documented LINK.EXE analog analysis:$UNKNOWN_HIT" >&2
+        echo "  add analog analysis to docs/design-link-x86_64-relocs.md's 'Cross-reference: LINK.EXE's existing R_AARCH64_* switch' table AND to ANALYZED_X86_64_RELOC_TYPES in this script before this type is expected" >&2
+        FAIL=1
+    fi
+
+    DOC_TYPES=$(extract_doc_analyzed_types | sort -u)
+    SCRIPT_TYPES=$(printf '%s\n' $ANALYZED_X86_64_RELOC_TYPES | sed '/^$/d' | sort -u)
+    if [ "$DOC_TYPES" != "$SCRIPT_TYPES" ]; then
+        echo "survey_x86_64_relocs: ANALYZED_X86_64_RELOC_TYPES in this script and the analog table in $OUT_DOC have drifted apart -- keep them in sync" >&2
+        echo "  script: $(printf '%s ' $SCRIPT_TYPES)" >&2
+        echo "  doc:    $(printf '%s ' $DOC_TYPES)" >&2
+        FAIL=1
+    fi
+
+    if [ "$FAIL" -ne 0 ]; then
         exit 1
     fi
-    echo "survey_x86_64_relocs: $OUT_DOC matches a fresh survey ($N_BUILT built, $N_FAILED failed)"
+
+    echo "survey_x86_64_relocs: fresh survey OK -- $N_BUILT objects built, $N_FAILED failed to compile standalone"
+    echo "survey_x86_64_relocs: observed relocation types, all analyzed and none forbidden: $(printf '%s ' $OBSERVED_TYPES)"
+    echo "survey_x86_64_relocs: NOTE -- exact reloc counts in $OUT_DOC are an informational snapshot, not gated; re-run 'tools/survey_x86_64_relocs.sh' with no args to refresh it if desired"
 else
     gen_doc "$OUT_DOC"
     echo "survey_x86_64_relocs: wrote $OUT_DOC ($N_BUILT built, $N_FAILED failed)"

@@ -54,36 +54,38 @@ static uint32_t fill_from_entry(const lnm_entry_t *entry,
 }
 
 /*
- * translate_system - Translate a name in the executive-resident LNM$SYSTEM.
+ * translate_executive - Translate a name in an executive-resident table
+ * (LNM$SYSTEM, LNM$GROUP or LNM$JOB).
  *
- * vms-96e2: LNM$SYSTEM lives in vms.ko (vms-d37/#193), reached through the
- * read-only mmap arena via vms_kif_lnm_translate. This is why SYS$UPDATE,
- * DEFINE/SYSTEM'd at boot by one process, resolves in a later login process
- * (@SYS$UPDATE:PARTS_SETUP.COM).
+ * vms-96e2 wired LNM$SYSTEM through vms.ko (vms-d37/#193), reached via the
+ * read-only mmap arena through vms_kif_lnm_translate -- this is why
+ * SYS$UPDATE, DEFINE/SYSTEM'd at boot by one process, resolves in a later
+ * login process (@SYS$UPDATE:PARTS_SETUP.COM). vms-aba wires LNM$GROUP and
+ * LNM$JOB the same way: vms_kif_lnm_translate() itself resolves each
+ * caller's own GROUP/JOB scope key from the executive (never recomputed
+ * here), so this one helper serves all three tables.
  *
  * vms_kif_lnm_translate returns 1 (found), 0 (executive present, name absent),
  * or -1 (executive unavailable). At OVMX runtime the executive is always
  * present (PID 1 pins it, Rule 9), so -1 is a host BUILD/TEST-tooling state
  * only.
  *
- * NO FALLBACK (vms-48ab, INV-6): -1 now returns SS$_NOSUCHDEV directly. There
- * USED to be a process-local SYSTEM table consulted here so host ctest could
- * still resolve names seeded via the vms-96e2 create-side fallback; both
- * fallbacks were the same silent-per-process-fake shape Rule 9 forbids and
- * both are gone together (a translate-side fallback with no matching
- * create-side one would just find nothing, so there was never a case where
- * removing one without the other made sense). This matches sys$trnlnm's
+ * NO FALLBACK (vms-48ab / vms-aba, INV-6): -1 returns SS$_NOSUCHDEV directly
+ * for all three tables. SYSTEM USED to have a process-local fallback here so
+ * host ctest could still resolve names seeded via the vms-96e2 create-side
+ * fallback; that was the silent-per-process-fake shape Rule 9 forbids and it
+ * is gone (vms-48ab). GROUP/JOB never had one. This matches sys$trnlnm's
  * already-honest SYSTEM read (src/libvms/syssvc/sys_logical.c). The host
- * tests that relied on it moved to tests/qemu/test_syssvc_lnm_system.c.
+ * tests that need a real executive live in tests/qemu/
+ * (test_syssvc_lnm_system.c, test_syssvc_lnm_groupjob.c).
  */
-static uint32_t translate_system(lnm_manager_t *mgr, const char *name,
-                                 char *result, size_t result_size,
-                                 uint16_t *result_length, uint32_t *attributes)
+static uint32_t translate_executive(uint32_t table, const char *name,
+                                    char *result, size_t result_size,
+                                    uint16_t *result_length, uint32_t *attributes)
 {
-    (void)mgr;  /* no local fallback -- kept in the signature for callers */
     char equiv[LNM_MAX_VALUE + 1];
     uint32_t attr = 0;
-    int r = vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, name, equiv,
+    int r = vms_kif_lnm_translate(table, name, equiv,
                                   sizeof(equiv), NULL, &attr);
     if (r == 1)
         return fill_result(equiv, attr, result, result_size,
@@ -94,12 +96,38 @@ static uint32_t translate_system(lnm_manager_t *mgr, const char *name,
     return SS$_NOSUCHDEV;         /* r < 0: executive absent -- no fallback */
 }
 
+static uint32_t translate_system(lnm_manager_t *mgr, const char *name,
+                                 char *result, size_t result_size,
+                                 uint16_t *result_length, uint32_t *attributes)
+{
+    (void)mgr;  /* no local fallback -- kept in the signature for callers */
+    return translate_executive(VMS_LNM_TBL_SYSTEM, name, result, result_size,
+                               result_length, attributes);
+}
+
+static uint32_t translate_group(const char *name, char *result,
+                                size_t result_size, uint16_t *result_length,
+                                uint32_t *attributes)
+{
+    return translate_executive(VMS_LNM_TBL_GROUP, name, result, result_size,
+                               result_length, attributes);
+}
+
+static uint32_t translate_job(const char *name, char *result,
+                              size_t result_size, uint16_t *result_length,
+                              uint32_t *attributes)
+{
+    return translate_executive(VMS_LNM_TBL_JOB, name, result, result_size,
+                               result_length, attributes);
+}
+
 /*
  * lnm_translate - Look up a logical name in the specified table.
  *
  * If table_name is a search list (LNM$FILE_DEV / LNM$DCL_LOGICAL) or NULL,
- * searches process/job/group (process-private) then LNM$SYSTEM (executive-
- * resident). If found, returns the first equivalence string (index 0).
+ * searches LNM$PROCESS (process-private) then LNM$JOB, LNM$GROUP and
+ * LNM$SYSTEM in that order (all three executive-resident, vms-aba). If
+ * found, returns the first equivalence string (index 0).
  *
  * @mgr:           Logical name manager
  * @table_name:    Table to search (or LNM$FILE_DEV for search list)
@@ -131,31 +159,54 @@ uint32_t lnm_translate(lnm_manager_t *mgr, const char *table_name,
                      (strcasecmp(table_name, LNM_SYSTEM_TABLE) == 0 ||
                       strcasecmp(table_name, "LNM$SYSTEM_TABLE") == 0 ||
                       strcasecmp(table_name, "SYSTEM") == 0));
+    int is_group = (table_name &&
+                    (strcasecmp(table_name, LNM_GROUP_TABLE) == 0 ||
+                     strcasecmp(table_name, "GROUP") == 0));
+    int is_job = (table_name &&
+                 (strcasecmp(table_name, LNM_JOB_TABLE) == 0 ||
+                  strcasecmp(table_name, "JOB") == 0));
 
     if (is_system)
         return translate_system(mgr, logical_name, result, result_size,
                                 result_length, attributes);
+    if (is_group)
+        return translate_group(logical_name, result, result_size,
+                               result_length, attributes);
+    if (is_job)
+        return translate_job(logical_name, result, result_size,
+                             result_length, attributes);
 
     if (is_searchlist) {
-        /* Process-private tables first, in the standard order. */
-        lnm_table_t *tables[3];
-        tables[0] = mgr->process_table;
-        tables[1] = mgr->job_table;
-        tables[2] = mgr->group_table;
-        for (int i = 0; i < 3; i++) {
-            if (!tables[i])
-                continue;
-            lnm_entry_t *entry = lnm_table_lookup(tables[i], logical_name);
+        uint32_t st;
+
+        /* LNM$PROCESS first -- process-private, unchanged. */
+        if (mgr->process_table) {
+            lnm_entry_t *entry = lnm_table_lookup(mgr->process_table, logical_name);
             if (entry && entry->num_translations > 0)
                 return fill_from_entry(entry, result, result_size,
                                        result_length, attributes);
         }
-        /* Then LNM$SYSTEM, from the executive. */
+
+        /*
+         * Then JOB, GROUP, SYSTEM, all executive-resident, in the standard
+         * order (vms-aba). A miss (SS$_NOLOGNAM) falls through to the next
+         * table; an absent executive (SS$_NOSUCHDEV) is returned right away
+         * -- GROUP and SYSTEM would fail identically, so there is no point
+         * trying them (INV-6 honest failure, not a partial search).
+         */
+        st = translate_job(logical_name, result, result_size,
+                           result_length, attributes);
+        if (st != SS$_NOLOGNAM)
+            return st;
+        st = translate_group(logical_name, result, result_size,
+                             result_length, attributes);
+        if (st != SS$_NOLOGNAM)
+            return st;
         return translate_system(mgr, logical_name, result, result_size,
                                 result_length, attributes);
     }
 
-    /* A specific, non-system table. */
+    /* A specific, non-executive table (LNM$PROCESS or an unrecognised name). */
     lnm_table_t *table = lnm_find_table(mgr, table_name);
     if (!table)
         return SS$_NOLOGTAB;

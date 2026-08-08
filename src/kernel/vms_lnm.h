@@ -153,6 +153,28 @@ struct vms_lnm_del_args {
 #define VMS_IOCTL_LNM_DELETE  _IOWR(VMS_IOC_MAGIC, 0x61, struct vms_lnm_del_args)
 
 /*
+ * VMS_IOCTL_LNM_GETSCOPE - hand the CALLER its own GROUP and JOB scope keys
+ * (vms-aba). The read-only mmap arena is what keeps translation a zero-
+ * syscall operation (design "C-corrected", docs/design-logical-name-
+ * placement.md), but a reader still has to know WHICH scope_key belongs to
+ * it to filter the arena locally -- and that key is derived facts the
+ * kernel holds (proc->uic >> 16, proc->job_id), never something the caller
+ * may assert (see derive_scope_key() in vms_lnm.c, the ONLY place a
+ * mutation's scope is computed). This ioctl is the read path's equivalent:
+ * it returns the same two derived values so vms_kif can cache them once per
+ * process (exactly like the arena mapping itself) and filter entries
+ * locally on every translate without a further round trip.
+ */
+struct vms_lnm_scope_args {
+    uint32_t group_key;                 /* this caller's LNM$GROUP scope key */
+    uint32_t job_key;                   /* this caller's LNM$JOB scope key */
+    uint32_t status;                    /* return: SS$_ status */
+};
+
+#define VMS_IOCTL_LNM_GETSCOPE \
+                              _IOWR(VMS_IOC_MAGIC, 0x62, struct vms_lnm_scope_args)
+
+/*
  * Freeze the shared layouts. Every field is a fixed-width type, so aarch64
  * and x86_64 agree; a size change also renumbers the _IOWR request, so a
  * mismatched build fails here rather than mis-decoding at runtime.
@@ -165,5 +187,7 @@ _Static_assert(sizeof(struct vms_lnm_def_args) == 2352,
                "vms_lnm_def_args changed size -- VMS_IOCTL_LNM_DEFINE ABI break");
 _Static_assert(sizeof(struct vms_lnm_del_args) == 268,
                "vms_lnm_del_args changed size -- VMS_IOCTL_LNM_DELETE ABI break");
+_Static_assert(sizeof(struct vms_lnm_scope_args) == 12,
+               "vms_lnm_scope_args changed size -- VMS_IOCTL_LNM_GETSCOPE ABI break");
 
 #endif /* _VMS_LNM_H */

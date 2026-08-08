@@ -243,11 +243,77 @@ static uint32_t vms_proc_continue_identity(struct vms_proc *proc)
     return shared_vms_pid;
 }
 
+/*
+ * vms_proc_parent_job_id - the JOB this registration belongs to (vms-aba,
+ * LNM$JOB residency), inherited from the DIRECT parent's PCB if it already
+ * has one.
+ *
+ * A VMS job is a top-level process (an interactive login, a detached
+ * process) plus every subprocess it creates -- SPAWN's child stays in the
+ * parent's job (documented VMS behaviour: DCL Dictionary, SPAWN; System
+ * Services Reference, $CREPRC's JOBCTL parameter). This mirrors that
+ * inheritance rule directly against the task hierarchy: a task whose real
+ * parent is ALREADY a registered VMS process inherits that parent's
+ * job_id, whether this registration is an image-activation CONTINUE of the
+ * very same VMS process (vms_proc_continue_identity(), just above) or a
+ * genuinely new PCB such as a SPAWNed subprocess -- either way the child
+ * is part of the parent's job. Returns 0 when the real parent has no
+ * registered PCB, which the caller reads as "this task is a job root."
+ *
+ * Same read-the-parent's-row-never-the-caller's-word discipline as
+ * vms_proc_continue_identity(): a process cannot forge which job it
+ * belongs to any more than it can forge its own UIC.
+ */
+static uint32_t vms_proc_parent_job_id(void)
+{
+    struct task_struct *rp;
+    struct pid *parent_pid = NULL;
+    pid_t parent_tgid = 0;
+    struct vms_proc *parent;
+    uint32_t job_id = 0;
+
+    rcu_read_lock();
+    rp = rcu_dereference(current->real_parent);
+    if (rp) {
+        parent_pid  = task_tgid(rp);
+        parent_tgid = task_tgid_nr(rp);
+    }
+    if (!parent_pid) {
+        rcu_read_unlock();
+        return 0;
+    }
+
+    spin_lock(&vms_proc_hash_lock);
+    hash_for_each_possible(vms_proc_hash, parent, hash_node, parent_tgid) {
+        if (parent->linux_pid != parent_tgid)
+            continue;
+        /* Recycle-safe: see vms_proc_continue_identity(). */
+        if (parent->pid_ref != parent_pid)
+            continue;
+
+        job_id = parent->job_id;
+        break;
+    }
+    spin_unlock(&vms_proc_hash_lock);
+    rcu_read_unlock();
+
+    return job_id;
+}
+
 struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
 {
     struct vms_proc *existing, *proc;
     uint32_t shared_vms_pid = 0;
+    uint32_t parent_job_id;
     int i;
+
+    /*
+     * Read before the PCB exists and before any lock this function takes
+     * below -- vms_proc_parent_job_id() takes and releases
+     * vms_proc_hash_lock itself, the same pattern vms_proc_continue_identity()
+     * uses just below.
+     */
+    parent_job_id = vms_proc_parent_job_id();
 
     proc = kmem_cache_zalloc(vms_proc_cache, GFP_KERNEL);
     if (!proc)
@@ -398,12 +464,21 @@ struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
         kmem_cache_free(vms_proc_cache, proc);
         return ERR_PTR(-ENOSPC);
     }
+    /*
+     * JOB DERIVATION (vms-aba). Inherit the parent's job if it has one;
+     * otherwise this registration is a job root and its job IS its own
+     * freshly assigned vms_pid -- exactly as a new VMS job's ID is the PID
+     * of the process that started it. Finalised here, inside the same
+     * critical section as vms_pid, and before hash_add_rcu() publishes the
+     * entry, so no reader can observe a zero/unset job_id.
+     */
+    proc->job_id = parent_job_id ? parent_job_id : proc->vms_pid;
     hash_add_rcu(vms_proc_hash, &proc->hash_node, pid);
     spin_unlock(&vms_proc_hash_lock);
 
-    pr_info("vms: registered process pid=%d vms_pid=0x%08x uic=[%o,%o] privs=0x%llx (%s)\n",
+    pr_info("vms: registered process pid=%d vms_pid=0x%08x uic=[%o,%o] job=0x%08x privs=0x%llx (%s)\n",
             pid, proc->vms_pid, proc->uic >> 16, proc->uic & 0xFFFFu,
-            proc->perm_privs, shared_vms_pid ? "continued" : "derived");
+            proc->job_id, proc->perm_privs, shared_vms_pid ? "continued" : "derived");
 
     return proc;
 }
@@ -657,6 +732,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_lnm_define(proc, arg);
     case VMS_IOCTL_LNM_DELETE:
         return vms_ioctl_lnm_delete(proc, arg);
+    case VMS_IOCTL_LNM_GETSCOPE:
+        return vms_ioctl_lnm_getscope(proc, arg);
 
     default:
         return -ENOTTY;

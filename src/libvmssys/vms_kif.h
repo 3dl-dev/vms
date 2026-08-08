@@ -367,7 +367,7 @@ uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info);
  * ================================================================ */
 
 /* Create or supersede a name in an executive-resident table.
- * `table` is VMS_LNM_TBL_SYSTEM (GROUP/JOB deferred). `values` carries
+ * `table` is VMS_LNM_TBL_SYSTEM, _GROUP or _JOB (vms-aba). `values` carries
  * `num_values` equivalence strings (1..VMS_LNM_MAX_EQUIV). Returns the
  * executive's SS$_ status, or SS$_NOSUCHDEV if the executive is absent.
  * Wired: sys$crelnm (src/libvms/syssvc/sys_logical.c). */

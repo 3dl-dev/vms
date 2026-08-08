@@ -17,6 +17,7 @@
 
 #include "vms/logical.h"
 #include "ssdef.h"
+#include "vms_kif.h"
 
 /* Internal table functions from lnm_table.c */
 extern lnm_entry_t *lnm_table_lookup(lnm_table_t *table, const char *name);
@@ -24,44 +25,79 @@ extern lnm_entry_t *lnm_table_lookup(lnm_table_t *table, const char *name);
 /* From lnm_client.c */
 extern lnm_table_t *lnm_find_table(lnm_manager_t *mgr, const char *table_name);
 
-/*
- * search_file_dev - Search through the LNM$FILE_DEV search list.
- *
- * This implements the standard VMS logical name search order:
- *   1. LNM$PROCESS_TABLE
- *   2. LNM$JOB
- *   3. LNM$GROUP
- *   4. LNM$SYSTEM
- *
- * @mgr:  The logical name manager
- * @name: Logical name to search for
- *
- * Returns the entry if found, NULL otherwise.
- */
-static lnm_entry_t *search_file_dev(lnm_manager_t *mgr, const char *name)
+/* Copy an equivalence value + attributes into the caller's result buffers. */
+static uint32_t fill_result(const char *value, uint32_t attr,
+                            char *result, size_t result_size,
+                            uint16_t *result_length, uint32_t *attributes)
 {
-    lnm_table_t *tables[4];
-    tables[0] = mgr->process_table;
-    tables[1] = mgr->job_table;
-    tables[2] = mgr->group_table;
-    tables[3] = mgr->system_table;
+    size_t vallen = strlen(value);
+    if (vallen >= result_size)
+        vallen = result_size - 1;
+    memcpy(result, value, vallen);
+    result[vallen] = '\0';
+    if (result_length)
+        *result_length = (uint16_t)vallen;
+    if (attributes)
+        *attributes = attr;
+    return SS$_NORMAL;
+}
 
-    for (int i = 0; i < 4; i++) {
-        if (!tables[i])
-            continue;
-        lnm_entry_t *entry = lnm_table_lookup(tables[i], name);
-        if (entry)
-            return entry;
+/* Copy a found entry's index-0 equivalence into the result buffers. */
+static uint32_t fill_from_entry(const lnm_entry_t *entry,
+                                char *result, size_t result_size,
+                                uint16_t *result_length, uint32_t *attributes)
+{
+    if (!entry || entry->num_translations == 0)
+        return SS$_NOLOGNAM;
+    return fill_result(entry->translations[0].value, entry->attributes,
+                       result, result_size, result_length, attributes);
+}
+
+/*
+ * translate_system - Translate a name in the executive-resident LNM$SYSTEM.
+ *
+ * vms-96e2: LNM$SYSTEM lives in vms.ko (vms-d37/#193), reached through the
+ * read-only mmap arena via vms_kif_lnm_translate. This is why SYS$UPDATE,
+ * DEFINE/SYSTEM'd at boot by one process, resolves in a later login process
+ * (@SYS$UPDATE:PARTS_SETUP.COM).
+ *
+ * vms_kif_lnm_translate returns 1 (found), 0 (executive present, name absent),
+ * or -1 (executive unavailable). At OVMX runtime the executive is always
+ * present (PID 1 pins it, Rule 9), so -1 is a host BUILD/TEST-tooling state
+ * only; there we consult the process-local SYSTEM table so the ctest suite
+ * that seeds SYS$SYSDEVICE etc. still runs. Migrating those host tests to the
+ * QEMU path (and dropping this tooling branch) is vms-96e2's tracked follow-up.
+ */
+static uint32_t translate_system(lnm_manager_t *mgr, const char *name,
+                                 char *result, size_t result_size,
+                                 uint16_t *result_length, uint32_t *attributes)
+{
+    char equiv[LNM_MAX_VALUE + 1];
+    uint32_t attr = 0;
+    int r = vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, name, equiv,
+                                  sizeof(equiv), NULL, &attr);
+    if (r == 1)
+        return fill_result(equiv, attr, result, result_size,
+                           result_length, attributes);
+    if (r == 0)
+        return SS$_NOLOGNAM;      /* executive present, name absent */
+
+    /* r < 0: no executive (host tooling) -- local SYSTEM table */
+    if (mgr && mgr->system_table) {
+        lnm_entry_t *e = lnm_table_lookup(mgr->system_table, name);
+        if (e)
+            return fill_from_entry(e, result, result_size,
+                                   result_length, attributes);
     }
-
-    return NULL;
+    return SS$_NOLOGNAM;
 }
 
 /*
  * lnm_translate - Look up a logical name in the specified table.
  *
- * If table_name is LNM$FILE_DEV, searches process/job/group/system.
- * If found, returns the first equivalence string (index 0).
+ * If table_name is a search list (LNM$FILE_DEV / LNM$DCL_LOGICAL) or NULL,
+ * searches process/job/group (process-private) then LNM$SYSTEM (executive-
+ * resident). If found, returns the first equivalence string (index 0).
  *
  * @mgr:           Logical name manager
  * @table_name:    Table to search (or LNM$FILE_DEV for search list)
@@ -86,39 +122,43 @@ uint32_t lnm_translate(lnm_manager_t *mgr, const char *table_name,
     if (namelen == 0 || namelen > LNM_MAX_NAME)
         return SS$_IVLOGNAM;
 
-    lnm_entry_t *entry = NULL;
+    int is_searchlist = (!table_name ||
+                         strcasecmp(table_name, LNM_FILE_DEV) == 0 ||
+                         strcasecmp(table_name, LNM_DCL_LOGICAL) == 0);
+    int is_system = (table_name &&
+                     (strcasecmp(table_name, LNM_SYSTEM_TABLE) == 0 ||
+                      strcasecmp(table_name, "LNM$SYSTEM_TABLE") == 0 ||
+                      strcasecmp(table_name, "SYSTEM") == 0));
 
-    if (!table_name || strcasecmp(table_name, LNM_FILE_DEV) == 0) {
-        /* Search through the standard table hierarchy */
-        entry = search_file_dev(mgr, logical_name);
-    } else {
-        /* Search in a specific table */
-        lnm_table_t *table = lnm_find_table(mgr, table_name);
-        if (!table)
-            return SS$_NOLOGTAB;
-        entry = lnm_table_lookup(table, logical_name);
+    if (is_system)
+        return translate_system(mgr, logical_name, result, result_size,
+                                result_length, attributes);
+
+    if (is_searchlist) {
+        /* Process-private tables first, in the standard order. */
+        lnm_table_t *tables[3];
+        tables[0] = mgr->process_table;
+        tables[1] = mgr->job_table;
+        tables[2] = mgr->group_table;
+        for (int i = 0; i < 3; i++) {
+            if (!tables[i])
+                continue;
+            lnm_entry_t *entry = lnm_table_lookup(tables[i], logical_name);
+            if (entry && entry->num_translations > 0)
+                return fill_from_entry(entry, result, result_size,
+                                       result_length, attributes);
+        }
+        /* Then LNM$SYSTEM, from the executive. */
+        return translate_system(mgr, logical_name, result, result_size,
+                                result_length, attributes);
     }
 
-    if (!entry)
-        return SS$_NOLOGNAM;
-
-    if (entry->num_translations == 0)
-        return SS$_NOLOGNAM;
-
-    /* Return the first (index 0) equivalence string */
-    size_t vallen = entry->translations[0].length;
-    if (vallen >= result_size)
-        vallen = result_size - 1;
-
-    memcpy(result, entry->translations[0].value, vallen);
-    result[vallen] = '\0';
-
-    if (result_length)
-        *result_length = (uint16_t)vallen;
-    if (attributes)
-        *attributes = entry->attributes;
-
-    return SS$_NORMAL;
+    /* A specific, non-system table. */
+    lnm_table_t *table = lnm_find_table(mgr, table_name);
+    if (!table)
+        return SS$_NOLOGTAB;
+    return fill_from_entry(lnm_table_lookup(table, logical_name),
+                           result, result_size, result_length, attributes);
 }
 
 /*

@@ -15,11 +15,18 @@
 #       emit_shareable's cross-image import binding (vms-e65): PLT + import-GOT +
 #       `.vms$imp`. STRICT link (no --allow-undefined): every import MUST bind.
 #
-# vmslnm is a NEAR-LEAF: it depends only on pthread (from DECC$SHR) — NOT on
-# vmsprocess / vmsfs / libvms — and it defines NO __thread objects (readelf shows no
-# .tdata/.tbss in any of its 4 objects), so it is NOT a TLS producer. That makes it
-# the simplest migration so far: no PT_TLS, no --use LIBVMSSYS$SHR (no vms$/vms_kif_
-# freestanding syscall imports), just a plain shareable over DECC$SHR.
+# vmslnm defines NO __thread objects (readelf shows no .tdata/.tbss in any of its 4
+# objects), so it is NOT a TLS producer: no PT_TLS.
+#
+# It DOES --use LIBVMSSYS$SHR now (vms-96e2): LNM$SYSTEM is executive-resident
+# (vms-d37/#193), so lnm_client.c / lnm_translate.c call vms_kif_lnm_define/_delete/
+# _translate (the /dev/vms client in libvmssys). Those are CALL imports that must
+# bind cross-image to LIBVMSSYS$SHR (which exports them in its .vms$sv) — exactly as
+# the libc imports bind to DECC$SHR. LIBVMSSYS$SHR is located next to DECC$SHR in
+# the same system-image dir (override with $VMSSYS_SHR); it is freestanding, so it
+# adds no further transitive producer. STRICT link (no --allow-undefined): every
+# import MUST bind, so the vms_kif_lnm_* imports fail the link loudly if the
+# LIBVMSSYS$SHR vector ever drops them.
 #
 # Composition: the 4 vmslnm library translation units, compiled -fPIC musl:
 #   lnm_table.c lnm_translate.c lnm_client.c lnm_defaults.c
@@ -44,17 +51,22 @@ DECC_SHR=${3:?need path to DECC\$SHR.EXE (the C run-time producer)}
 HERE=$(cd "$(dirname "$0")" && pwd)                          # src/vmslink
 SRC=${4:-$(cd "$HERE/../vmslnm" && pwd)}                     # src/vmslnm
 LIBVMS_INC=${5:-$(cd "$HERE/../libvms/include" && pwd)}      # for ssdef.h / ovmx_layout.h
+VMSSYS_INC=$(cd "$HERE/../libvmssys" && pwd)                 # for vms_kif.h
+# LIBVMSSYS$SHR.EXE (vms_kif_lnm_* producer, vms-96e2): defaults to the same
+# system-image dir as DECC$SHR; override with $VMSSYS_SHR.
+SYS_SHR=${VMSSYS_SHR:-"$(dirname "$DECC_SHR")/LIBVMSSYS\$SHR.EXE"}
 CC=${CC:-gcc}
 GSMATCH=${GSMATCH:-LEQUAL,1,0}
 
 [ -f "$DECC_SHR" ] || { echo "mk_vmslnm_shr: DECC\$SHR.EXE not found: $DECC_SHR"; exit 1; }
+[ -f "$SYS_SHR" ]  || { echo "mk_vmslnm_shr: LIBVMSSYS\$SHR.EXE not found: $SYS_SHR (vmslnm now imports vms_kif_lnm_*; build it first or set \$VMSSYS_SHR)"; exit 1; }
 [ -d "$SRC" ]      || { echo "mk_vmslnm_shr: vmslnm src dir not found: $SRC"; exit 1; }
 
 WORK=${WORK:-/tmp/mk-vmslnm-shr}
 mkdir -p "$WORK"
 
 CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics}"
-INCS="-I$SRC/include -I$LIBVMS_INC"
+INCS="-I$SRC/include -I$LIBVMS_INC -I$VMSSYS_INC"
 
 echo "mk_vmslnm_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH"
 echo "mk_vmslnm_shr: src=$SRC  DECC\$SHR=$DECC_SHR"
@@ -79,10 +91,11 @@ lnm_enumerate=PROCEDURE,lnm_setup_defaults=PROCEDURE,\
 lnm_table_create=PROCEDURE,lnm_table_destroy=PROCEDURE,lnm_table_insert=PROCEDURE,\
 lnm_table_lookup=PROCEDURE,lnm_table_remove=PROCEDURE,lnm_table_enumerate=PROCEDURE"
 
-echo "mk_vmslnm_shr: LINK.EXE --shareable --use DECC\$SHR -> $OUT"
-# STRICT (no --allow-undefined): every libc/pthread import MUST bind to DECC$SHR.
+echo "mk_vmslnm_shr: LINK.EXE --shareable --use {DECC\$SHR,LIBVMSSYS\$SHR} -> $OUT"
+# STRICT (no --allow-undefined): every libc/pthread import MUST bind to DECC$SHR,
+# and every vms_kif_lnm_* import MUST bind to LIBVMSSYS$SHR (vms-96e2).
 # shellcheck disable=SC2086
-"$LINK_EXE" --shareable --use "$DECC_SHR" \
+"$LINK_EXE" --shareable --use "$DECC_SHR" --use "$SYS_SHR" \
     --symbol-vector "$VEC" \
     --gsmatch "$GSMATCH" \
     -o "$OUT" $OBJS

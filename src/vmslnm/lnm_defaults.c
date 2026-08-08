@@ -61,6 +61,18 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
                LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
 
     /*
+     * SYS$SYSROOT -> the system root directory [SYS0.] on the system disk.
+     * On OpenVMS this is a rooted (concealed) device pointing at the running
+     * system root; OVMX's layout puts the running root at SYS$SYSDEVICE:[SYS0.]
+     * (VSI OpenVMS System Manager's Manual, system directory structure). The
+     * SYS$xxx directory logicals below are the per-directory equivalences under
+     * it, spelled out so a single translation resolves each in one step.
+     */
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SYSROOT",
+               "SYS$SYSDEVICE:[SYS0.]",
+               0, LNM_MODE_EXEC);
+
+    /*
      * System directory logicals — VMS-native equivalences.
      * These map standard logical names to ODS-2 directory specs
      * on the system device.
@@ -86,6 +98,18 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
                "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSMGR]",
                0, LNM_MODE_EXEC);
 
+    /*
+     * SYS$UPDATE -> [SYS0.SYSCOMMON.SYSUPD], the standard VMS home for pre-PCSI
+     * layered-product install kits and their SETUP.COM procedures -- e.g.
+     * @SYS$UPDATE:PARTS_SETUP.COM (vms-977/vms-2579, the 0.2 demo). Seeded into
+     * the executive-resident SYSTEM table here so a login process sees it even
+     * before SYS$MANAGER:STARTUP.COM's DEFINE/SYSTEM runs; STARTUP.COM then
+     * (re)defines the same value, an idempotent supersede.
+     */
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$UPDATE",
+               "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSUPD]",
+               0, LNM_MODE_EXEC);
+
     /* SYS$HELP -> [SYS0.SYSCOMMON.SYSHLP] */
     lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$HELP",
                "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSHLP]",
@@ -106,8 +130,19 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
                "SYS$SYSDEVICE:[USERS]",
                0, LNM_MODE_EXEC);
 
+    /*
+     * SYS$DISK, the terminal and the I/O channel logicals are PER-PROCESS on
+     * OpenVMS (LNM$PROCESS_TABLE): SYS$DISK is the process default device, and
+     * SYS$INPUT/OUTPUT/ERROR/COMMAND point at THIS process's terminal, which
+     * differs between jobs (an interactive session vs. a batch job reading a
+     * command file). Seeding them into the process table is both correct and
+     * required now that LNM$SYSTEM is executive-resident and node-wide: a
+     * terminal logical placed in SYSTEM by one process would wrongly bind every
+     * other process on the node to this process's /dev/tty.
+     */
+
     /* SYS$DISK -> system device (process default device) */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$DISK", "SYS$SYSDEVICE",
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$DISK", "SYS$SYSDEVICE",
                0, LNM_MODE_EXEC);
 
     /*
@@ -118,7 +153,7 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
     const char *tty = ttyname(STDIN_FILENO);
     if (!tty)
         tty = "/dev/tty";
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "TT", tty,
+    lnm_create(mgr, LNM_PROCESS_TABLE, "TT", tty,
                LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
 
     /*
@@ -127,15 +162,15 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      * jobs get SYS$INPUT pointing at a command file).  For now
      * they all resolve through TT: → /dev/tty.
      */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$INPUT", "TT:",
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$INPUT", "TT:",
                0, LNM_MODE_EXEC);
 
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$OUTPUT", "TT:",
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$OUTPUT", "TT:",
                0, LNM_MODE_EXEC);
 
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$ERROR", "TT:",
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$ERROR", "TT:",
                0, LNM_MODE_EXEC);
 
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$COMMAND", "TT:",
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$COMMAND", "TT:",
                0, LNM_MODE_EXEC);
 }

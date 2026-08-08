@@ -48,6 +48,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)          # src/imgact/test
 IMGACT_DIR=$(cd "$HERE/.." && pwd)           # src/imgact
 LINK_DIR=$(cd "$IMGACT_DIR/../vmslink" && pwd)
 VMSLNM_DIR=$(cd "$IMGACT_DIR/../vmslnm" && pwd)
+LIBVMSSYS_DIR=$(cd "$IMGACT_DIR/../libvmssys" && pwd)   # vms_kif_lnm_* producer (vms-96e2)
 LIBVMS_INC=$(cd "$IMGACT_DIR/../libvms/include" && pwd)
 WORK=${WORK:-/tmp/vmslnm-native}
 rm -rf "$WORK"; mkdir -p "$WORK"
@@ -69,6 +70,14 @@ $CC -std=gnu11 -O2 -Wall -Wextra -I"$LINK_DIR/include" -o "$WORK/LINK.EXE" "$LIN
 echo "== mk_decc_shr.sh: whole-archive musl -> DECC\$SHR.EXE (production vector) =="
 sh "$LINK_DIR/mk_decc_shr.sh" "$WORK/LINK.EXE" "$SYSLIB/DECC\$SHR.EXE" "$LIBC" "$LIBGCC"
 readelf -SW "$SYSLIB/DECC\$SHR.EXE" | grep -q '\.vms\$sv' || { echo "FAIL: DECC\$SHR has no symbol vector"; exit 1; }
+
+# LIBVMSSYS$SHR: vmslnm's LNM$SYSTEM path imports vms_kif_lnm_* from it (vms-96e2),
+# so it must exist next to DECC$SHR for the STRICT vmslnm link AND for IMGACT to
+# resolve the transitive import when the consumer activates LIBVMSLNM$SHR.
+echo "== mk_vmssys_shr.sh: real src/libvmssys -> LIBVMSSYS\$SHR.EXE (vms_kif_* producer) =="
+CC="$CC" sh "$LINK_DIR/mk_vmssys_shr.sh" \
+    "$WORK/LINK.EXE" "$SYSLIB/LIBVMSSYS\$SHR.EXE" "$LIBVMSSYS_DIR"
+readelf -SW "$SYSLIB/LIBVMSSYS\$SHR.EXE" | grep -q '\.vms\$sv' || { echo "FAIL: LIBVMSSYS\$SHR has no symbol vector"; exit 1; }
 
 echo "== mk_vmslnm_shr.sh: real src/vmslnm -> LIBVMSLNM\$SHR.EXE =="
 # STRICT link inside the recipe (no --allow-undefined). If this fails on an

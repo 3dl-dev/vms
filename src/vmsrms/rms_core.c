@@ -25,13 +25,27 @@
  * the arbitration the process context is supposed to CALL, and vms-ci.7 already
  * built the lock manager it should call.
  *
- * OVMX-USERSPACE: sys$open (vms-407) -- open(2) on the translated path; the
+ * FILESPEC RESOLUTION NOW REACHES THE EXECUTIVE (vms-96e2). sys$open/$create/
+ * $erase take a VMS filespec and resolve it through vmsfs_to_linux_path ->
+ * lnm_translate -> vms_kif_lnm_translate, which reads the executive-resident
+ * LNM$SYSTEM table for system logical names (SYS$SYSDEVICE, SYS$UPDATE, ...).
+ * That step, and only that step, is the executive's; the RMS operation itself
+ * is still this process's. So they are PARTIAL, not wholly userspace.
+ *
+ * OVMX-PARTIAL: sys$open (vms-96e2) -- exec: the VMS filespec is translated to a
+ *     Linux path via the executive-resident LNM$SYSTEM table (vmsfs_to_linux_path
+ *     -> lnm_translate -> vms_kif_lnm_translate).
+ * OVMX-LOCAL: sys$open -- the open itself is open(2) on the translated path; the
  *     FAB share/access fields do not reach any arbitrator.
- * OVMX-USERSPACE: sys$create (vms-407) -- open(2) with O_CREAT, plus a
- *     .rms_meta sidecar written by this process.
+ * OVMX-PARTIAL: sys$create (vms-96e2) -- exec: same executive-resident filespec
+ *     resolution as sys$open, before the file is created.
+ * OVMX-LOCAL: sys$create -- open(2) with O_CREAT, plus a .rms_meta sidecar
+ *     written by this process.
  * OVMX-USERSPACE: sys$close (vms-407) -- close(2) of the caller's own fd.
- * OVMX-USERSPACE: sys$erase (vms-407) -- unlink(2) with no interlock against
- *     another process holding the file open.
+ * OVMX-PARTIAL: sys$erase (vms-96e2) -- exec: same executive-resident filespec
+ *     resolution as sys$open, before the file is removed.
+ * OVMX-LOCAL: sys$erase -- unlink(2) with no interlock against another process
+ *     holding the file open.
  * OVMX-USERSPACE: sys$connect (vms-407) -- initializes the stream-position
  *     fields (_current_offset/_eof/_last_rec_offset/_last_rec_size/rab$w_isi)
  *     directly inside the caller's own RAB. Measured: it never allocates;

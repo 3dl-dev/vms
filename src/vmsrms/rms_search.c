@@ -18,10 +18,14 @@
  * $SEARCH cited vms-5b4 until vms-fab; it is closed. vms-407 owns it with the
  * rest of RMS.
  *
- * OVMX-USERSPACE: sys$search (vms-407) -- walks the host directory with
- *     readdir(2) and matches in this process; the wildcard context lives in
- *     nam$$l_context in the caller's own NAM block, so the enumeration is a
- *     private snapshot with no executive file-system interlock behind it.
+ * OVMX-PARTIAL: sys$search (vms-96e2) -- exec: the VMS filespec is resolved to a
+ *     Linux directory through the executive-resident LNM$SYSTEM table
+ *     (vmsfs_to_linux_path -> lnm_translate -> vms_kif_lnm_translate) for system
+ *     logical names before the directory walk begins.
+ * OVMX-LOCAL: sys$search -- walks the host directory with readdir(2) and matches
+ *     in this process; the wildcard context lives in nam$$l_context in the
+ *     caller's own NAM block, so the enumeration is a private snapshot with no
+ *     executive file-system interlock behind it.
  */
 
 #include <stdio.h>

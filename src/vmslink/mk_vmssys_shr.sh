@@ -10,6 +10,7 @@
 #
 # LIBVMSSYS$SHR.EXE exports the /dev/vms client entry points (vms_kif_*: open/
 # enq/deq/convert/assign/dassgn/getdvi/setprn/getjpi/procscan/event-flag ops/
+# AST ops (dclast/setast/deliverast)/
 # devscan) plus vms_strlen — the FIRST producer in the b65/c39 graph (nothing
 # else exports these; DCL's SHOW SYSTEM and LOGINOUT's identity establishment
 # both import from it). Freestanding musl target: -fPIC -O2 -ffreestanding
@@ -71,7 +72,7 @@ echo "  cc arch/$ARCH/syscall.S"
 $CC -fPIC -c -o "$WORK/syscall.o" "$SRC/arch/$ARCH/syscall.S"
 OBJS="$OBJS $WORK/syscall.o"
 
-SYS_VEC="vms_strlen=PROCEDURE,vms_kif_open=PROCEDURE,vms_kif_enq=PROCEDURE,vms_kif_deq=PROCEDURE,vms_kif_convert=PROCEDURE,vms_kif_assign=PROCEDURE,vms_kif_dassgn=PROCEDURE,vms_kif_getdvi_chan=PROCEDURE,vms_kif_setprn=PROCEDURE,vms_kif_getjpi_self=PROCEDURE,vms_kif_getjpi_pid=PROCEDURE,vms_kif_getjpi_prcnam=PROCEDURE,vms_kif_procscan=PROCEDURE,vms_kif_setef=PROCEDURE,vms_kif_clref=PROCEDURE,vms_kif_readef=PROCEDURE,vms_kif_waitfr=PROCEDURE,vms_kif_wflor=PROCEDURE,vms_kif_wfland=PROCEDURE,vms_kif_ascefc=PROCEDURE,vms_kif_dacefc=PROCEDURE,vms_kif_dlcefc=PROCEDURE,vms_kif_devscan=PROCEDURE,vms_kif_getdvi_devnam=PROCEDURE,vms_kif_setident=PROCEDURE"
+SYS_VEC="vms_strlen=PROCEDURE,vms_kif_open=PROCEDURE,vms_kif_enq=PROCEDURE,vms_kif_deq=PROCEDURE,vms_kif_convert=PROCEDURE,vms_kif_assign=PROCEDURE,vms_kif_dassgn=PROCEDURE,vms_kif_getdvi_chan=PROCEDURE,vms_kif_setprn=PROCEDURE,vms_kif_getjpi_self=PROCEDURE,vms_kif_getjpi_pid=PROCEDURE,vms_kif_getjpi_prcnam=PROCEDURE,vms_kif_procscan=PROCEDURE,vms_kif_setef=PROCEDURE,vms_kif_clref=PROCEDURE,vms_kif_readef=PROCEDURE,vms_kif_waitfr=PROCEDURE,vms_kif_wflor=PROCEDURE,vms_kif_wfland=PROCEDURE,vms_kif_ascefc=PROCEDURE,vms_kif_dacefc=PROCEDURE,vms_kif_dlcefc=PROCEDURE,vms_kif_devscan=PROCEDURE,vms_kif_getdvi_devnam=PROCEDURE,vms_kif_setident=PROCEDURE,vms_kif_dclast=PROCEDURE,vms_kif_setast=PROCEDURE,vms_kif_deliverast=PROCEDURE"
 if [ -n "$EXTRA_VEC" ]; then
     SYS_VEC="$SYS_VEC,$EXTRA_VEC"
 fi

@@ -1076,6 +1076,129 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
 }
 
 /*
+ * dcl_activate_image - fork/exec a resolved image path and wait for it,
+ * surfacing a nonzero exit or fatal signal as SS$_ABORT.
+ *
+ * Shared by RUN (argv = {linux_path, NULL} -- RUN has never passed
+ * parameters to the image) and foreign-command dispatch in dcl_exec.c
+ * (argv = {linux_path, P1, ..., P8, NULL}). Extracted from cmd_run's
+ * body verbatim so this behavior change is refactor-only for RUN.
+ */
+int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
+                       const char *linux_path, char *argv[])
+{
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* Child */
+        execv(linux_path, argv);
+        _exit(1);
+    } else if (pid > 0) {
+        /* Parent - wait for child (WUNTRACED for Ctrl-Y stop support) */
+        extern volatile sig_atomic_t dcl_running_child;
+        dcl_running_child = (sig_atomic_t)pid;
+        int wstatus;
+        waitpid(pid, &wstatus, WUNTRACED);
+        dcl_running_child = 0;
+        if (WIFSTOPPED(wstatus)) {
+            /* Child was stopped by Ctrl-Y — save for CONTINUE */
+            printf("\nInterrupt\n");
+            ctx->interrupted_pid = pid;
+            return SS$_ABORT;
+        }
+        if (WIFEXITED(wstatus)) {
+            int exit_code = WEXITSTATUS(wstatus);
+            /* vms-17f9: a nonzero image exit must be SURFACED, not swallowed.
+             * Previously this returned SS$_ABORT silently, so a RUN that
+             * failed looked identical to one that succeeded (the de-risk that
+             * hunted a "no output" RUN, docs/derisk-vms-530-imgact-qemu.md). */
+            if (exit_code != 0)
+                dcl_error("DCL", 2, "ABORT",
+                          "image %s exited with error status %%X%08X",
+                          display_name, (unsigned)exit_code);
+            return (exit_code == 0) ? SS$_NORMAL : SS$_ABORT;
+        }
+        /* vms-17f9: a child killed by a signal (a crash) was silently dropped
+         * here and cmd_run fell through to SS$_NORMAL, reporting success for an
+         * image that never ran. Report it and fail. */
+        if (WIFSIGNALED(wstatus)) {
+            dcl_error("DCL", 4, "ABORT",
+                      "image %s terminated abnormally (signal %d)",
+                      display_name, WTERMSIG(wstatus));
+            return SS$_ABORT;
+        }
+    } else {
+        dcl_error("DCL", 4, "CREPRC", "cannot create process");
+        return SS$_ABORT;
+    }
+
+    return SS$_NORMAL;
+}
+
+/*
+ * dcl_exec_foreign_command - VMS "foreign command" dispatch.
+ *
+ * OpenVMS: "SYMBOL :== $image-spec" defines a foreign command. Typing
+ * the bare symbol afterwards activates image-spec, with the rest of
+ * the command line becoming the image's P1-P8 parameters -- the same
+ * effect as "RUN image-spec" would have if RUN forwarded parameters.
+ * A value of "$" alone (nothing after the dollar) defaults the image
+ * name to the symbol name itself (HELP SET SYMBOL, foreign commands).
+ *
+ * cmd->params[0..7] IS P1-P8 (DCL_MAX_PARAMS == 8, one array), already
+ * split out by the parser, so they are forwarded as argv[1..] to the
+ * activated image.
+ *
+ * OVMX difference (documented, not silent): real DCL never parses a
+ * foreign command's argument text at all -- it hands the whole raw
+ * command tail to the image as one string via LIB$GET_FOREIGN, and
+ * the image's own CLI callable routines (CLI$GET_VALUE etc.) pick
+ * P1-P8 back out of that string. OVMX's parser has already tokenized
+ * the line into cmd->params[]/cmd->qualifiers[] by the time dispatch
+ * decides this is a foreign command, and OVMX has no LIB$GET_FOREIGN.
+ * So this reconstructs a conventional argv from the parsed positional
+ * parameters instead of forwarding one untouched string -- same P1-P8
+ * values, delivered the Unix way. A "/qualifier" on a foreign-command
+ * line was already diverted into cmd->qualifiers[] by the parser
+ * before dispatch is decided, so it is not forwarded to the image;
+ * this is a lane limitation to flag, not an intended semantic.
+ */
+int dcl_exec_foreign_command(struct dcl_context *ctx, struct dcl_command *cmd,
+                             const char *symbol_value)
+{
+    const char *image_spec = symbol_value;
+    while (*image_spec == ' ' || *image_spec == '\t') image_spec++;
+    if (*image_spec == '\0') image_spec = cmd->verb;
+
+    char linux_path[1024];
+    dcl_resolve_path(ctx, image_spec, linux_path, sizeof(linux_path));
+
+    if (access(linux_path, X_OK) != 0) {
+        /* Try without .exe extension, or try with .EXE -- same fallback
+         * RUN uses, since a foreign command image is looked up the same
+         * way RUN's image parameter is. */
+        char try_path[1024];
+        snprintf(try_path, sizeof(try_path), "%s.exe", linux_path);
+        if (access(try_path, X_OK) == 0) {
+            strncpy(linux_path, try_path, sizeof(linux_path) - 1);
+            linux_path[sizeof(linux_path) - 1] = '\0';
+        } else {
+            dcl_error("DCL", 2, "IVIMAGE",
+                      "image not found - %s", image_spec);
+            return SS$_NOSUCHFILE;
+        }
+    }
+
+    char *argv[DCL_MAX_PARAMS + 2];
+    int argc = 0;
+    argv[argc++] = linux_path;
+    for (int i = 0; i < cmd->param_count && i < DCL_MAX_PARAMS; i++)
+        argv[argc++] = cmd->params[i];
+    argv[argc] = NULL;
+
+    return dcl_activate_image(ctx, image_spec, linux_path, argv);
+}
+
+/*
  * RUN - Execute a program.
  */
 int cmd_run(struct dcl_command *cmd)
@@ -1120,51 +1243,12 @@ int cmd_run(struct dcl_command *cmd)
     if (run_has_qualifier(cmd, "DETACHED"))
         return run_detached(ctx, cmd, linux_path);
 
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* Child */
-        execl(linux_path, linux_path, (char *)NULL);
-        _exit(1);
-    } else if (pid > 0) {
-        /* Parent - wait for child (WUNTRACED for Ctrl-Y stop support) */
-        extern volatile sig_atomic_t dcl_running_child;
-        dcl_running_child = (sig_atomic_t)pid;
-        int wstatus;
-        waitpid(pid, &wstatus, WUNTRACED);
-        dcl_running_child = 0;
-        if (WIFSTOPPED(wstatus)) {
-            /* Child was stopped by Ctrl-Y — save for CONTINUE */
-            printf("\nInterrupt\n");
-            ctx->interrupted_pid = pid;
-            return SS$_ABORT;
-        }
-        if (WIFEXITED(wstatus)) {
-            int exit_code = WEXITSTATUS(wstatus);
-            /* vms-17f9: a nonzero image exit must be SURFACED, not swallowed.
-             * Previously this returned SS$_ABORT silently, so a RUN that
-             * failed looked identical to one that succeeded (the de-risk that
-             * hunted a "no output" RUN, docs/derisk-vms-530-imgact-qemu.md). */
-            if (exit_code != 0)
-                dcl_error("DCL", 2, "ABORT",
-                          "image %s exited with error status %%X%08X",
-                          cmd->params[0], (unsigned)exit_code);
-            return (exit_code == 0) ? SS$_NORMAL : SS$_ABORT;
-        }
-        /* vms-17f9: a child killed by a signal (a crash) was silently dropped
-         * here and cmd_run fell through to SS$_NORMAL, reporting success for an
-         * image that never ran. Report it and fail. */
-        if (WIFSIGNALED(wstatus)) {
-            dcl_error("DCL", 4, "ABORT",
-                      "image %s terminated abnormally (signal %d)",
-                      cmd->params[0], WTERMSIG(wstatus));
-            return SS$_ABORT;
-        }
-    } else {
-        dcl_error("DCL", 4, "CREPRC", "cannot create process");
-        return SS$_ABORT;
-    }
-
-    return SS$_NORMAL;
+    /* RUN has never forwarded parameters to the image (unlike a foreign
+     * command -- see dcl_exec_foreign_command above); preserve that. */
+    char *argv[2];
+    argv[0] = linux_path;
+    argv[1] = NULL;
+    return dcl_activate_image(ctx, cmd->params[0], linux_path, argv);
 }
 
 /*

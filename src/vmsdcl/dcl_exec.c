@@ -16,6 +16,7 @@
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
 #include "dcl/cdu.h"
+#include "dcl/dcl_cmd.h"
 #include "ssdef.h"
 
 /* External functions */
@@ -1137,6 +1138,28 @@ int dcl_execute_command(struct dcl_command *cmd)
         ctx->last_severity = (uint32_t)(status & 7);
 
         /* Update $STATUS and $SEVERITY symbols */
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", status);
+        dcl_sym_set("$STATUS", buf, DCL_SYM_GLOBAL);
+        snprintf(buf, sizeof(buf), "%d", status & 7);
+        dcl_sym_set("$SEVERITY", buf, DCL_SYM_GLOBAL);
+
+        return status;
+    }
+
+    /* Foreign command dispatch (vms-96e): not a builtin, but if the verb
+     * is a DCL symbol whose value begins with '$', OpenVMS treats it as
+     * a foreign command -- "SYM :== $image-spec" then bare "SYM args"
+     * activates image-spec with args as P1-P8, the same as RUN would if
+     * RUN forwarded parameters. See dcl_exec_foreign_command() in
+     * dcl_cmd_process.c for the full semantics and documented OVMX
+     * deviations. */
+    const char *symval = dcl_sym_get(cmd->verb);
+    if (symval && symval[0] == '$') {
+        int status = dcl_exec_foreign_command(ctx, cmd, symval + 1);
+        ctx->last_status = (uint32_t)status;
+        ctx->last_severity = (uint32_t)(status & 7);
+
         char buf[32];
         snprintf(buf, sizeof(buf), "%d", status);
         dcl_sym_set("$STATUS", buf, DCL_SYM_GLOBAL);

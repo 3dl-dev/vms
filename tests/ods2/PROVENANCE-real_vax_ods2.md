@@ -886,3 +886,123 @@ This settles increment 6's open question: `WRONGACP` is a **lab-wide
 RQDX3/tooling limitation on this pod**, not specific to any OVMX-written
 volume's format. `ANALYZE/DISK_STRUCTURE` is not usable as a diagnostic
 on this lab config at all; do not spend further trials on it here.
+
+## Addendum (increment 9, vms-0f3): RMS variable-length-record framing -- full read-back achieved, vms-600 acceptance met
+
+Increment 9's charter: increment 8 left ONE wall -- `TYPE` of a real-VAX-
+mounted, all-OVMX-written data file printed nothing, even though `DUMP`
+proved the exact bytes were on disk.
+
+### Diagnosis: no new lab session needed for the on-disk framing rule -- direct byte decode of the fixture already in the repo
+
+`tests/ods2/real_vax_ods2.dsk`'s own FID12/FID13 (`HELLO.TXT`/`WORLD.TXT`)
+are REAL data written by a real VAX `COPY` (of `SYS$MANAGER:SYSTARTUP_VMS.COM`
+and `SYCONFIG.COM` respectively) -- i.e. genuine, already-collected oracle
+evidence of exactly the on-disk shape this increment needed, requiring no
+new lab-2 session to establish. A small local Python script fully decoded
+both files' raw bytes as a stream of `{2-byte LE length}{content}` records:
+
+```
+FID 12 HELLO.TXT:  412 records decoded, final offset 17218 bytes
+                    == (efblk=34-1)*512 + ffbyte=322 EXACTLY
+FID 13 WORLD.TXT:   16 records decoded, final offset 720 bytes
+                    == (efblk=2-1)*512  + ffbyte=208 EXACTLY
+```
+
+Both files decode CLEANLY end-to-end into their real, human-readable
+source text (the actual `SYSTARTUP_VMS.COM`/`SYCONFIG.COM` boilerplate),
+confirming three rules simultaneously:
+
+1. Each record is a 2-byte little-endian length word followed by that
+   many content bytes.
+2. A single `0x00` pad byte follows whenever the content length is ODD,
+   keeping the next record's length word on an even (word) offset. No
+   other padding exists.
+3. **Records MAY straddle a 512-byte block boundary.** An initial
+   hypothesis (matching this increment's own task brief) was that RMS
+   pads out to the next block whenever a record would not fit -- this
+   was directly DISPROVED by the decode: `HELLO.TXT`'s real record 13
+   starts at byte 492 of block 1 and ends at byte 39 of block 2, with no
+   padding or gap at the boundary. A block-boundary-avoidance
+   implementation would have been a genuine, oracle-contradicted bug.
+
+`fh2_recattr`'s `rtype`/`rattrib` were ALREADY correct on this writer
+(`ODS2_RTYPE_VAR`=2, `ODS2_RAT_CR`=0x02, set since increment 3) -- the
+defect was purely that `ods2_wvolume_create_file()` wrote `data` as a raw,
+unframed byte copy. A second, smaller defect was also found by this same
+decode: `fat_rsize` is NOT a fixed 0 for data files as increment 3's
+writer comment claimed (never itself re-checked against this field) --
+the real values are 105 and 66, each exactly the LONGEST record actually
+written to that file (`fat_maxrec` stays 0 in both real samples, matching
+"no cap specified").
+
+### Fix
+
+`ods2_wvolume_create_file()` (`ods2_writer.c`) now treats caller-supplied
+bytes as newline-delimited text lines -- `[OVMX-inferred]`, this writer's
+own design choice for its own byte-buffer API, not read off any oracle --
+and frames each line as one on-disk VAR record via a new two-pass
+`ods2_var_frame_lines()` helper: pass 1 sizes the framed stream (and finds
+the longest record, for `fat_rsize`) before data blocks are allocated;
+pass 2 writes the identical framing into the now-allocated blocks. The
+file's `fh2_recattr.fat_ffbyte`/`fat_efblk` are computed from the FRAMED
+length, not the caller's raw `data_len`, and `fat_rsize` is patched
+post-write to the longest record's length -- both documented as `[F16]`
+in `ods2.h`.
+
+`ods2_reader.c` gained `ods2_var_records_decode()` (decode a VAR-record
+stream into newline-joined text, given the file's true valid byte count)
+and `ods2_file_read_text()` (the single-extent convenience wrapper,
+computing that byte count via the new `ods2_recattr_data_bytes()` inline
+helper in `ods2.h`), so the round-trip test exercises the SAME decode a
+real VAX's RMS performs, not a bypass of the on-disk framing.
+`tests/ods2/test_ods2_write.c` was updated to use it, and gained a new
+`MANYLINE.TXT` case (40 lines, 640 on-disk bytes, spanning 2 allocated
+blocks with the boundary landing mid-record) to regression-guard finding
+3 above. Offline `ctest -R ods2` stays green (4/4); `-Wall -Wextra` clean
+on all four changed files.
+
+### Validation: lab-2 pod `vaxlab-9` (the same pod increments 2/8 used), RQ3 scratch unit, procedure identical to every prior increment; restored to its original `cdrom`/ISO attach afterward; lab-1 and no other lab-2 pod touched
+
+```
+$ MOUNT $2$DUA3: OVMXWRIT
+%MOUNT-I-MOUNTED, OVMXWRIT mounted on _$2$DUA3: (VAX1)
+
+$ TYPE $2$DUA3:[OVMXDIR]HELLO.TXT
+hello from the OVMX ODS-2 writer
+
+$ TYPE $2$DUA3:[OVMXDIR]WORLD.TXT
+genuine Files-11 bytes
+
+$ TYPE $2$DUA3:[OVMXDIR]MANYLINE.TXT
+line  0 text
+line  1 text
+...
+line 39 text
+```
+
+All 40 `MANYLINE.TXT` lines printed exactly, including the ones whose
+on-disk record straddles the block-1/block-2 boundary -- confirming
+finding 3 above on the real hardware, not just in the offline decode.
+
+`DIRECTORY/FULL` independently confirms the RECATTR fields this fix
+computes, from VMS's OWN parse of the header this writer wrote (not an
+OVMX self-report):
+
+```
+$ DIRECTORY/FULL $2$DUA3:[OVMXDIR]HELLO.TXT
+...
+Record format:      Variable length, maximum 0 bytes, longest 32 bytes
+Record attributes:  Carriage return carriage control
+...
+Total of 1 file, 1/1 block.
+```
+
+`strlen("hello from the OVMX ODS-2 writer")` (the file's one real record,
+trailing `\n` stripped) is exactly 32 -- VMS's own "longest 32 bytes"
+matches this writer's computed `fat_rsize` exactly.
+
+**This is full `vms-600` acceptance: a real VAX both `MOUNT`s an
+OVMX-written ODS-2 volume cleanly (increment 8) AND reads its files'
+actual content via `TYPE`/`DIRECTORY/FULL` (this increment) -- the
+directory-traversal half and the file-content half are both closed.**

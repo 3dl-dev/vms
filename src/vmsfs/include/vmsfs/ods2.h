@@ -162,10 +162,40 @@ static inline uint32_t ods2_fid_number(const ods2_fid_t *f)
  * 65536 on every one. See tests/ods2/PROVENANCE-real_vax_ods2.md's
  * increment-3 addendum.
  */
+/*
+ * fat_rattrib bits (RMS "record attributes", FAB$B_RAT's on-disk analog).
+ * Public convention [S] (OpenVMS RMS Reference Manual / Guide to File
+ * Applications): FTN = Fortran carriage control, CR = implied
+ * carriage-return carriage control (the common case for plain text files),
+ * PRN = print-file carriage control, BLK = fixed-length records may not
+ * span a block boundary. fat_rtype's small-integer values are the on-disk
+ * analog of FAB$B_RFM: 1 = FIXED, 2 = VARIABLE, 3 = VFC, 4 = STREAM,
+ * 5 = STREAMLF, 6 = STREAMCR.
+ */
+#define ODS2_RAT_FTN   0x01u
+#define ODS2_RAT_CR    0x02u
+#define ODS2_RAT_PRN   0x04u
+#define ODS2_RAT_BLK   0x08u
+#define ODS2_RTYPE_VAR 2u
+
 typedef struct ods2_recattr {
     uint8_t  fat_rtype;         /*  0: record type / file organization */
     uint8_t  fat_rattrib;       /*  1: record attributes               */
-    uint16_t fat_rsize;         /*  2: record size                     */
+    /* [F16] (increment 9, vms-0f3): re-decoded directly off
+     * tests/ods2/real_vax_ods2.dsk's own FID12/FID13 (HELLO.TXT/WORLD.TXT,
+     * both real-VMS-COPY'd files) this increment -- fat_rsize is NOT a
+     * fixed 0 for variable-length data files as increment 3's writer
+     * comment claimed (never itself re-checked against this field). The
+     * real values are 105 and 66 respectively, which exactly match each
+     * file's own LONGEST on-disk record's content length (confirmed by
+     * fully decoding both files' VAR-record streams -- see
+     * ods2_var_records_decode() and PROVENANCE-real_vax_ods2.md's
+     * increment-9 addendum). I.e. for RFM=VAR, RMS sets RSIZE to the
+     * longest record actually written when no fixed size was specified at
+     * creation (fat_maxrec stays 0 in both real samples, matching "no cap
+     * given"). ods2_writer.c's ods2_wvolume_create_file() now reproduces
+     * this instead of hardcoding 0. */
+    uint16_t fat_rsize;         /*  2: record size (VAR: longest record)*/
     uint16_t fat_hiblk[2];      /*  4: highest allocated VBN (hi,lo)    */
     uint16_t fat_efblk[2];      /*  8: end-of-file VBN (hi,lo)          */
     uint16_t fat_ffbyte;        /* 12: first free byte in EOF block     */
@@ -190,6 +220,27 @@ static inline uint32_t ods2_recattr_hiblk(const ods2_recattr_t *r)
 static inline uint32_t ods2_recattr_efblk(const ods2_recattr_t *r)
 {
     return (uint32_t)r->fat_efblk[1] | ((uint32_t)r->fat_efblk[0] << 16);
+}
+
+/*
+ * [F16] (increment 9, vms-0f3): the file's total VALID data byte count,
+ * counted from VBN 1 -- (efblk-1)*512 + ffbyte. Formula confirmed exact
+ * against tests/ods2/real_vax_ods2.dsk's own FID12/FID13: fully decoding
+ * HELLO.TXT's VAR-record stream (see ods2_var_records_decode()) consumes
+ * exactly 17218 bytes with clean zero-fill after, and
+ * (efblk=34-1)*512+ffbyte=322 == 17218 exactly; WORLD.TXT likewise
+ * (efblk=2-1)*512+ffbyte=208 == 720, matching its own last real record's
+ * end offset exactly. This is the documented Files-11/RMS "EFBLK/FFBYTE
+ * express an end-of-file position, not an allocation size" convention
+ * (see ods2_writer.c's [F15] comment for the companion directory-side
+ * finding) -- not previously used by the reader to bound a data file's
+ * own content.
+ */
+static inline size_t ods2_recattr_data_bytes(const ods2_recattr_t *r)
+{
+    uint32_t efblk = ods2_recattr_efblk(r);
+    size_t base = efblk > 0 ? (size_t)(efblk - 1) * ODS2_BLOCK_SIZE : 0;
+    return base + r->fat_ffbyte;
 }
 
 /* ================================================================
@@ -599,6 +650,47 @@ typedef int (*ods2_dir_cb)(const char *name, unsigned name_len,
 ods2_status_t ods2_volume_list_dir(const ods2_volume_t *vol,
                                    const void *dir_header_block,
                                    ods2_dir_cb cb, void *ctx);
+
+/*
+ * [F16] (increment 9, vms-0f3): decode a contiguous RMS variable-length
+ * (RFM=VAR) record stream -- as ods2_wvolume_create_file() now writes it,
+ * and as tests/ods2/real_vax_ods2.dsk's own real-VMS-written HELLO.TXT/
+ * WORLD.TXT are laid out on disk -- into a newline-joined text buffer (one
+ * '\n' appended after each decoded record's content, reconstructing the
+ * usual "one VMS record == one text line" convention). `data_bytes` MUST
+ * be the file's true valid byte count (see ods2_recattr_data_bytes()), not
+ * the raw allocated-block span, since trailing zero-fill past end-of-file
+ * is not itself record-framed and would otherwise decode as spurious
+ * zero-length records.
+ *
+ * On-disk record framing, confirmed by fully decoding both real fixture
+ * files byte-for-byte against their own SHOW DEVICE-reported end-of-file
+ * position (see PROVENANCE-real_vax_ods2.md's increment-9 addendum):
+ * each record is a 2-byte little-endian length word followed by that many
+ * content bytes; a single 0x00 pad byte follows whenever the content
+ * length is odd, so the next record's length word always starts on an
+ * even byte offset. Records are packed back-to-back with NO other
+ * padding -- in particular a record MAY straddle a 512-byte block
+ * boundary (an initial hypothesis that they could not was directly
+ * disproved by this decode: real record 13 of HELLO.TXT starts at byte
+ * 492 of block 1 and ends at byte 39 of block 2).
+ *
+ * Returns ODS2_ERR_SIZE if `out` is too small, ODS2_ERR_FORMAT if a
+ * record's length word would read past `data_bytes`.
+ */
+ods2_status_t ods2_var_records_decode(const void *data, size_t data_bytes,
+                                      char *out, size_t out_cap,
+                                      size_t *out_len);
+
+/*
+ * Convenience wrapper: parse+validate a data file's own header block,
+ * require it have exactly one retrieval-pointer extent (the only shape
+ * ods2_wvolume_create_file() ever produces), and decode its VAR-record
+ * content via ods2_var_records_decode() above.
+ */
+ods2_status_t ods2_file_read_text(const ods2_volume_t *vol,
+                                  const void *file_header_block,
+                                  char *out, size_t out_cap, size_t *out_len);
 
 /* ================================================================
  * WRITER  (implemented in ods2/ods2_writer.c) -- increment 3.

@@ -5575,6 +5575,260 @@ static void test_mscp_srv_answers_a_command_on_a_live_connection(void)
           "the answer's P.CRF does not echo the command's (sec 5.1)");
 }
 
+static void mscp_test_poke_le32(uint8_t *body, size_t off, uint32_t v)
+{
+    body[off + 0] = (uint8_t)(v & 0xffu);
+    body[off + 1] = (uint8_t)((v >> 8) & 0xffu);
+    body[off + 2] = (uint8_t)((v >> 16) & 0xffu);
+    body[off + 3] = (uint8_t)((v >> 24) & 0xffu);
+}
+
+/*
+ * (2a-1a) vms-6e1: A LIVE READ SERVES REAL BACKING-STORE BYTES, ROUND-TRIPPED.
+ *
+ * vms-34b wired the responder to a live connection but attached no backing
+ * store, so a real MOUNT could reach GET UNIT STATUS/ONLINE but every READ
+ * drew Controller Error (design decision (4)'s honest refusal, scs_mscp_srv.h)
+ * -- "a shipped node honestly serves zero units". This is the positive-path
+ * proof that gap is closed: scsd_mscp_attach_unit0() (scsd.c) attaches a real
+ * file as unit 0, scsd_mscp_srv_msg_input() installs the live block-transfer
+ * xfer hook (scsd_mscp_live_xfer) on every call, and a READ over THIS wire
+ * path -- SCC, ONLINE, then READ -- answers SUCCESS with block-transfer
+ * frames carrying the SAME bytes written into the backing store through the
+ * SAME attached unit: a genuine write-then-read-back round trip, not a
+ * fabricated success.
+ *
+ * v1's WRITE OPCODE stays Write Protected on the wire (design decision (2),
+ * unchanged by this item -- REQDAT is still not wire-grounded); this test
+ * writes the backing store directly, the way an operator (or vms-600's lab
+ * harness) provisioning a served volume would, not via a live WRITE command.
+ */
+static void test_mscp_srv_read_serves_real_backing_store_bytes(void)
+{
+    char img_path[] = "/tmp/ovmx_test_mscp_unit0_XXXXXX";
+    int tmpfd = mkstemp(img_path);
+
+    CHECK(tmpfd >= 0, "test fixture: could not create a temp backing-store file");
+    if (tmpfd < 0) {
+        return;
+    }
+    close(tmpfd); /* scsd_mscp_attach_unit0() opens its own fd on this path */
+    CHECK(setenv("OVMX_MSCP_UNIT0_IMAGE", img_path, 1) == 0, "setenv failed");
+
+    /* Force a fresh attach against the temp image -- scsd_mscp_srv_state() is
+     * a lazily-initialized daemon-lifetime singleton, and an earlier test in
+     * this file (test_mscp_srv_answers_a_command_on_a_live_connection) may
+     * already have latched it with no unit attached, since the DEFAULT path
+     * is not expected to be writable in a sandboxed test run. */
+    if (scsd_mscp_unit0_fd >= 0) {
+        close(scsd_mscp_unit0_fd);
+        scsd_mscp_unit0_fd = -1;
+    }
+    memset(&scsd_mscp_srv, 0, sizeof(scsd_mscp_srv));
+    scsd_mscp_srv_ready = 0;
+
+    struct scs_mscp_srv *srv = scsd_mscp_srv_state();
+    struct scs_mscp_srv_unit *u0 = scs_mscp_srv_find_unit(srv, 0);
+    CHECK(u0 != NULL,
+          "scsd_mscp_attach_unit0() did not attach unit 0 against a writable"
+          " temp path -- the vms-6e1 wiring did not run");
+    if (u0 == NULL) {
+        (void)unsetenv("OVMX_MSCP_UNIT0_IMAGE");
+        (void)unlink(img_path);
+        return;
+    }
+
+    /* THE WRITE HALF OF THE ROUND TRIP: known bytes into two real blocks of
+     * the SAME attached backing store, via the already-tested primitive
+     * (scs_mscp_srv_write_blocks, proven end to end by
+     * test_write_block_transfer_end_to_end in test_scs_mscp_srv.c) -- not
+     * fabricated in memory. */
+    uint8_t want0[SCS_MSCP_BLOCK_SIZE], want1[SCS_MSCP_BLOCK_SIZE];
+    memset(want0, 0xa5, sizeof(want0));
+    memset(want1, 0x5a, sizeof(want1));
+    CHECK(scs_mscp_srv_write_blocks(u0, 5, want0, 1) == (long)sizeof(want0),
+          "writing block 5 into the live unit's backing store failed");
+    CHECK(scs_mscp_srv_write_blocks(u0, 6, want1, 1) == (long)sizeof(want1),
+          "writing block 6 into the live unit's backing store failed");
+
+    /* THE WIRE SETUP: the same MSCP$DISK connect + SCC dance
+     * test_mscp_srv_answers_a_command_on_a_live_connection uses. */
+    uint8_t req[sizeof(cap_vaxcluster_connect_req)];
+    subst_sysap_name(req, cap_vaxcluster_connect_req,
+                     sizeof(cap_vaxcluster_connect_req), "MSCP$DISK");
+
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    rx_feed(&r, req, sizeof(req));
+
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->mscp_srv_bound == 1,
+          "the daemon did not bind the MSCP$DISK server connection");
+    struct scs_cdt *mcdt = scs_cdl_lookup(&scsd_cdl, OVMX_MSCP_SERVER_CONID);
+    CHECK(mcdt != NULL, "no CDT was allocated at OVMX_MSCP_SERVER_CONID");
+    if (mcdt == NULL) {
+        (void)unsetenv("OVMX_MSCP_UNIT0_IMAGE");
+        (void)unlink(img_path);
+        return;
+    }
+
+    struct scs_mscp_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, r.rx.our_hw_mac, 6);
+    memcpy(p.src_mac, vax1_hw_mac, 6);
+    memcpy(p.src_logical, vax1_logical, 6);
+    memcpy(p.peer_logical, r.rx.our_src_logical, 6);
+    p.remote_conid = OVMX_MSCP_SERVER_CONID;   /* destination: OVMX */
+    p.local_conid = ps->mscp_srv_remote_conid; /* source: the class driver */
+
+    /* sec 3.4: SET CONTROLLER CHARACTERISTICS first. */
+    uint8_t scc[SCS_MSCP_FRAME_LEN];
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = (uint16_t)(ps->vc.seq.recv_seq + 1u);
+    p.cmd_ref = 1;
+    CHECK(scs_mscp_build_scc(&p, scc) == 0, "the SCC command fixture failed to build");
+    rx_feed(&r, scc, sizeof(scc));
+
+    /* ONLINE, sec 6.13/3.4's precondition for a transfer command. Built with
+     * the generic scs_mscp_build_command() (production code, exported by
+     * scs_mscp.h): the client library ships no ONLINE builder of its own
+     * (OVMX never sends one -- scs_mscp.h's own scope note), so this test
+     * plays the class driver's role directly, the same way
+     * tests/vmsscs/test_scs_mscp_srv.c's make_command() does at the library
+     * level. */
+    struct scs_mscp_cmd conline;
+    memset(&conline, 0, sizeof(conline));
+    conline.cmd_ref = 2;
+    conline.unit = 0;
+    conline.opcode = SCS_MSCP_OP_ONLINE;
+    uint8_t online_cmd[SCS_MSCP_FRAME_LEN];
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = (uint16_t)(ps->vc.seq.recv_seq + 1u);
+    CHECK(scs_mscp_build_command(&p, &conline, online_cmd) == 0,
+          "the ONLINE command fixture failed to build");
+    rx_feed(&r, online_cmd, sizeof(online_cmd));
+
+    /* READ, LBN 5, 2 blocks (1024 bytes) -- exactly the two blocks written
+     * above. */
+    struct scs_mscp_cmd cread;
+    memset(&cread, 0, sizeof(cread));
+    cread.cmd_ref = 3;
+    cread.unit = 0;
+    cread.opcode = SCS_MSCP_OP_READ;
+    uint8_t read_cmd[SCS_MSCP_FRAME_LEN];
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = (uint16_t)(ps->vc.seq.recv_seq + 1u);
+    CHECK(scs_mscp_build_command(&p, &cread, read_cmd) == 0,
+          "the READ command fixture failed to build");
+    uint8_t *read_body = read_cmd + 14 + SCS_MSCP_BODY_OFF;
+    mscp_test_poke_le32(read_body, SCS_MSCP_P_BCNT, 2u * SCS_MSCP_BLOCK_SIZE);
+    mscp_test_poke_le32(read_body, SCS_MSCP_P_LBN, 5u);
+    /* the host buffer descriptor: {offset, SCS buffer NAME, SCS connection ID} */
+    mscp_test_poke_le32(read_body, SCS_MSCP_P_BUFF + 0, 0x2000u);
+    mscp_test_poke_le32(read_body, SCS_MSCP_P_BUFF + 4, 0x4444u);
+    mscp_test_poke_le32(read_body, SCS_MSCP_P_BUFF + 8, ps->mscp_srv_remote_conid);
+
+    unsigned frames_before = scsd_test_frames;
+    long blocks_read_before = (long)srv->blocks_read;
+    rx_feed(&r, read_cmd, sizeof(read_cmd));
+
+    CHECK((long)srv->blocks_read == blocks_read_before + 2,
+          "the READ did not pull both blocks out of the real backing store");
+    /* AT LEAST 3 new frames (>=, not ==): this connection's general receive
+     * dispatch (scsd_handle_frame(), op6/op8 credit-control handling
+     * unrelated to MSCP) can interleave a short control frame of its own
+     * ahead of a command's answer -- test_mscp_srv_answers_a_command_on_a_
+     * live_connection's own sibling assertion is the same ">" shape, not "==",
+     * for the same reason. What THIS item's wiring guarantees is the two
+     * block-transfer frames and the end message, identified below by
+     * PARSING, not by position from frames_before -- so an unrelated extra
+     * frame ahead of them cannot make this test pass OR fail for the wrong
+     * reason. */
+    CHECK(scsd_test_frames >= frames_before + 3,
+          "expected at least 3 frames on the wire (two block-transfer frames"
+          " plus the end message), got %u",
+          scsd_test_frames - frames_before);
+    if (scsd_test_frames < frames_before + 3) {
+        (void)unsetenv("OVMX_MSCP_UNIT0_IMAGE");
+        (void)unlink(img_path);
+        return;
+    }
+
+    /* The three frames THIS READ produced are the LAST three sent overall:
+     * scsd_mscp_srv_msg_input() sends the block-transfer frames and then the
+     * end message, in that order, and nothing else sends after it returns. */
+    unsigned block0_idx = scsd_test_frames - 3;
+    unsigned block1_idx = scsd_test_frames - 2;
+    unsigned end_idx = scsd_test_frames - 1;
+
+    const uint8_t *want[2] = {want0, want1};
+    unsigned idx[2] = {block0_idx, block1_idx};
+    for (unsigned i = 0; i < 2; i++) {
+        const uint8_t *frame = scsd_test_ring[idx[i] % SCSD_TEST_RING];
+        size_t flen = scsd_test_ring_len[idx[i] % SCSD_TEST_RING];
+        struct scs_mscp_srv_blk_view bv;
+        memset(&bv, 0, sizeof(bv));
+        CHECK(scs_mscp_srv_blk_parse_frame(frame, flen, &bv) == 0,
+              "block-transfer frame %u does not parse", i);
+        CHECK(bv.data_len == SCS_MSCP_BLOCK_SIZE && bv.data != NULL
+                  && memcmp(bv.data, want[i], SCS_MSCP_BLOCK_SIZE) == 0,
+              "block-transfer frame %u does not carry the real backing-store"
+              " bytes written for LBN %u -- READ answered without moving real"
+              " data",
+              i, 5u + i);
+        CHECK(bv.hdr.dest_conid == ps->mscp_srv_remote_conid,
+              "block-transfer frame %u is not addressed to the class driver's"
+              " own handle",
+              i);
+    }
+
+    /* The end message: SUCCESS, all 1024 bytes reported moved. */
+    const uint8_t *endframe = scsd_test_ring[end_idx % SCSD_TEST_RING];
+    size_t endlen = scsd_test_ring_len[end_idx % SCSD_TEST_RING];
+    struct scs_mscp_view v;
+    CHECK(scs_mscp_parse(endframe, endlen, &v) == 0,
+          "the READ's end message does not parse as MSCP-over-SCS");
+    CHECK(v.is_end == 1, "the third frame is not an end message");
+    CHECK(v.base_opcode == SCS_MSCP_OP_READ,
+          "the end message does not answer READ");
+    CHECK(v.status_major == SCS_MSCP_ST_SUCCESS,
+          "the READ was not answered SUCCESS -- status major %u",
+          (unsigned)v.status_major);
+    CHECK(v.cmd_ref == cread.cmd_ref,
+          "the end message's P.CRF does not echo the READ command's");
+    uint32_t bcnt = (uint32_t)endframe[14 + SCS_MSCP_BODY_OFF + SCS_MSCP_E_BCNT]
+                    | ((uint32_t)endframe[14 + SCS_MSCP_BODY_OFF + SCS_MSCP_E_BCNT + 1] << 8)
+                    | ((uint32_t)endframe[14 + SCS_MSCP_BODY_OFF + SCS_MSCP_E_BCNT + 2] << 16)
+                    | ((uint32_t)endframe[14 + SCS_MSCP_BODY_OFF + SCS_MSCP_E_BCNT + 3] << 24);
+    CHECK(bcnt == 2u * SCS_MSCP_BLOCK_SIZE,
+          "the end message's byte count is %u, expected all 1024 bytes"
+          " reported moved",
+          (unsigned)bcnt);
+
+    /* Independent confirmation, at the storage layer, that what the wire just
+     * delivered really is what is sitting in the backing-store file (not just
+     * what scs_mscp_srv_read_blocks() happens to also compute the same way):
+     * a raw pread() of the image file OVMX_MSCP_UNIT0_IMAGE named. */
+    int checkfd = open(img_path, O_RDONLY);
+    CHECK(checkfd >= 0, "could not reopen the backing-store file to verify it");
+    if (checkfd >= 0) {
+        uint8_t raw0[SCS_MSCP_BLOCK_SIZE], raw1[SCS_MSCP_BLOCK_SIZE];
+        CHECK(pread(checkfd, raw0, sizeof(raw0),
+                    (off_t)5 * SCS_MSCP_BLOCK_SIZE) == (ssize_t)sizeof(raw0)
+                  && memcmp(raw0, want0, sizeof(raw0)) == 0,
+              "the raw image file's block 5 does not hold what was written");
+        CHECK(pread(checkfd, raw1, sizeof(raw1),
+                    (off_t)6 * SCS_MSCP_BLOCK_SIZE) == (ssize_t)sizeof(raw1)
+                  && memcmp(raw1, want1, sizeof(raw1)) == 0,
+              "the raw image file's block 6 does not hold what was written");
+        close(checkfd);
+    }
+
+    (void)unsetenv("OVMX_MSCP_UNIT0_IMAGE");
+    (void)unlink(img_path);
+}
+
 /*
  * (2a-2) vms-257 REGRESSION: A REAL PEER'S op-4 REJECT_REQ ANSWERING OUR
  * MSCP$DISK CONNECT_REQ MUST NOT BE MISREAD AS AN ACCEPT.
@@ -8550,6 +8804,8 @@ int main(void)
     test_sdir_refuses_a_connect_request_for_an_unlisted_sysap();
     /* vms-34b: the MSCP$DISK server connection now answers, not just accepts. */
     test_mscp_srv_answers_a_command_on_a_live_connection();
+    /* vms-6e1: a live READ now serves real backing-store bytes, round-tripped. */
+    test_mscp_srv_read_serves_real_backing_store_bytes();
     /* vms-257: a real peer's op-4 REJECT_REQ answering OUR MSCP$DISK connect
      * must not be misread as an ACCEPT. */
     test_mscp_connect_reject_req_is_not_misread_as_accept();

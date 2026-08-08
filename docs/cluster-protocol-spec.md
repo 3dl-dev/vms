@@ -4121,47 +4121,77 @@ For visibility, every field NOT marked GROUNDED above:
   *transmits*, if anything, on declaring a peer gone — OVMX transmits nothing at
   that moment, which is an absence of evidence, not evidence of absence.
 
-- **THE BLOCK DATA TRANSFER SERVICE — DELIBERATELY UNIMPLEMENTED, and this is
-  its only durable record** (`vms-941`, closed as RECORDED; written down here by
-  `vms-096` after an audit found the deferral existed nowhere in the tree).
+- **THE BLOCK DATA TRANSFER SERVICE.** ~~DELIBERATELY UNIMPLEMENTED~~
+  **UN-DEFERRED (`vms-4e31`) and BUILT; command/end path LIVE-WIRED
+  (`vms-34b`); the block-transfer wire itself still unexercised live.**
+  Originally recorded here as closed-deliberately-deferred (`vms-941`,
+  `vms-096`'s audit note) when OVMX served no real storage to a cluster peer.
+  That premise changed twice since, and this entry is corrected rather than
+  reissued so the history stays visible:
 
-  SCA offers SYSAPs three services. OVMX implements the datagram and message
-  services (§4(h), `scs_dgram.c`, `scs_credit.c`). It implements **none** of the
-  third, and the omission is a decision rather than an oversight. What is being
-  deferred, from *VAXcluster Principles* ch. 2 sec 2.7 (pp. 2-32..2-41) and
-  sec 2.9 (pp. 2-45..2-46):
+  1. **`vms-4e31` un-deferred it.** A real VAX serving a disk to another real
+     VAX was captured for the first time (lab-2 `vaxlab-9`, 2026-08-06 —
+     `docs/design-mscp-direction.md`, "Phase D part 1's lab capture"),
+     decoding the 28-byte block-transfer header (dest connection ID; two
+     UNGROUNDED per-connection/per-transfer constants at `+4`/`+6`; a
+     down-counting bytes-remaining field; source/destination buffer names and
+     offsets) and two framing traps no manual gives away: READ's final chunk
+     piggybacks into the SAME frame as the end message, and WRITE's
+     request/response headers are byte-identical (only data presence
+     distinguishes them). `src/vmsscs/scs_mscp_srv.c` now **builds and
+     parses** this wire shape end to end against a real backing store
+     (`scs_mscp_srv_blk_sink`, `scs_mscp_srv_read_blocks`/`_write_blocks`),
+     proven by `tests/vmsscs/test_scs_mscp_srv.c` /
+     `test_scs_mscp_srv_mutants.py`. v1's WRITE REFUSAL (design decision (2),
+     below) is unchanged — the mechanism exists, the policy still says no.
+  2. **`vms-34b` wired the RESPONDER into the live daemon.** Before this, no
+     CDT was ever allocated at `OVMX_MSCP_SERVER_CONID` (`scs_mscp.h`'s own
+     comment named this gap), so `scs_cdl_deliver_message()` resolved
+     `SCS_DELIVER_NO_CDT` for every command a real class driver sent after the
+     accept, and it vanished in silence — accept-then-black-hole, worse than a
+     refusal. `scsd_mscp_srv_msg_input()` (`scsd.c`) now decodes the inbound
+     command and calls `scs_mscp_srv_handle()`, so SET CONTROLLER
+     CHARACTERISTICS / GET UNIT STATUS / ONLINE / READ / WRITE all get a real
+     end message on the wire. `MSCP$DISK` is LISTENed by default now that this
+     is true (§4(o)/scsd.c's `ovmx_mscp_server_enabled()`). **No backing store
+     is attached by `scsd.c` itself** — a shipped node answers honestly with
+     zero served units (Unit-Offline / Invalid Command / Write Protected)
+     until an operator wires `scs_mscp_srv_attach_fd()`/`_set_xfer()` to a real
+     one, which is unstarted follow-up work, not implied by this entry.
 
-  | mechanism | pages | what it is |
-  |---|---|---|
-  | **Named buffers** | 2-32..2-34 | a SYSAP declares a region of its own memory to SCS and receives an opaque *buffer name*, which it may then hand to the remote SYSAP; the name, not the address, is what the far end quotes |
-  | **Buffer mapping** | 2-34..2-36 | the port maps a named buffer for direct port-to-port access, so the transfer never passes through the SYSAP's own copy loop |
-  | **`SNDDAT` / `REQDAT`** | 2-36..2-38 | the two directions of the transfer: SEND DATA pushes into a remote named buffer, REQUEST DATA pulls from one. These are port *commands*, not connection-control message types, and neither appears in the `[46:48]` namespace §4(h)(1a) grounds |
-  | **Buffer Descriptor Table (BDT)** | 2-34..2-36 | the per-port table the buffer names index into |
-  | **Class Driver Request Packets (CDRPs)** | 2-38..2-40 | the request context a class driver queues to the port for the duration of a transfer |
-  | **RSPID / Request Descriptor Table (RDT)** | 2-40..2-41 | the response identifier a request carries so its (possibly much later, possibly out-of-order) completion can be matched back to its CDRP |
-  | **Pool / BDT / RDT SCS Waits** | 2-45..2-46 | the three additional wait states a SYSAP can be suspended in when the resource it needs — non-paged pool, a BDT entry, an RDT entry — is exhausted. Siblings of the Credit Wait `scs_credit.c` does implement |
+  What is STILL not proven, and is the live successor to the old un-defer
+  trigger: **a real VAX has not yet MOUNTed a unit OVMX serves over this wired
+  path.** vms-291's own headline ("a real VAX in a lab-2/lab-Alpha cluster
+  runs MOUNT against the OVMX-served unit") remains open — everything above is
+  measured at the module-test and synthetic-live-frame level
+  (`tests/vmsscs/test_scsd_wire.c`'s
+  `test_mscp_srv_answers_a_command_on_a_live_connection`), not yet against a
+  real class driver on a real wire with a real backing store attached. That is
+  a lab bracket (guardrail 23), not a code change, and is the next gate.
 
-  **WHY IT IS DEFERRED:** every one of these exists to move bulk data between a
-  disk class driver and a disk *server*, and **OVMX serves no real storage to a
-  cluster peer.** OVMX's MSCP work (`vms-760`, `scs_mscp.c`) is the disk
-  **client** side, and its purpose is admission: a joiner that never presents a
-  disk-client connection is not promoted to MEMBER. A client that reads nothing
-  issues no `REQDAT` and is asked for no `SNDDAT`. Implementing the service now
-  would be a large, entirely untestable surface — there is no traffic on our lab
-  wire to ground it against, because nothing in our lab asks OVMX for data.
+  SCA offers SYSAPs three services. OVMX now implements all three at the
+  module level — datagram and message (§4(h), `scs_dgram.c`, `scs_credit.c`)
+  from before, block data transfer (this entry) as of `vms-4e31`/`vms-34b`.
+  What is being described, from *VAXcluster Principles* ch. 2 sec 2.7
+  (pp. 2-32..2-41) and sec 2.9 (pp. 2-45..2-46):
 
-  **THE UN-DEFER TRIGGER, so this is a decision with an expiry and not a
-  permanent silence.** Revisit the moment EITHER holds:
-  1. OVMX serves real storage to a cluster peer (an OVMX MSCP **server**, not
-     client), or
-  2. a peer issues a `SNDDAT`/`REQDAT` — or any port command naming a buffer —
-     that OVMX must answer. Today that cannot arise, because OVMX declares no
-     named buffers and a peer can only address one it has been given.
+  | mechanism | pages | what it is | OVMX status |
+  |---|---|---|---|
+  | **Named buffers** | 2-32..2-34 | a SYSAP declares a region of its own memory to SCS and receives an opaque *buffer name*, which it may then hand to the remote SYSAP; the name, not the address, is what the far end quotes | buffer NAME correlation implemented (`SCS_MSCP_BLK_SRC_NAME`/`_DST_NAME`); no SYSAP-side buffer table — OVMX only ever plays the served-block side |
+  | **Buffer mapping** | 2-34..2-36 | the port maps a named buffer for direct port-to-port access, so the transfer never passes through the SYSAP's own copy loop | not modeled; OVMX moves bytes through `scs_mscp_srv_blk_sink`/the backing-store pread/pwrite path instead, which is wire-compatible but not an implementation of this VMS-internal mechanism |
+  | **`SNDDAT` / `REQDAT`** | 2-36..2-38 | the two directions of the transfer: SEND DATA pushes into a remote named buffer, REQUEST DATA pulls from one. These are port *commands*, not connection-control message types, and neither appears in the `[46:48]` namespace §4(h)(1a) grounds | the WIRE SHAPE both ride (the 28-byte block header) is built/parsed; the command NAMES `SNDDAT`/`REQDAT` are not decoded fields anywhere in OVMX, per the book's own silence on their wire encoding |
+  | **Buffer Descriptor Table (BDT)** | 2-34..2-36 | the per-port table the buffer names index into | not modeled (OVMX-internal equivalent is the caller-supplied buffer name/offset carried straight from the command) |
+  | **Class Driver Request Packets (CDRPs)** | 2-38..2-40 | the request context a class driver queues to the port for the duration of a transfer | not modeled; OVMX's request lifetime is the synchronous `scs_mscp_srv_handle()` call |
+  | **RSPID / Request Descriptor Table (RDT)** | 2-40..2-41 | the response identifier a request carries so its (possibly much later, possibly out-of-order) completion can be matched back to its CDRP | not needed yet — OVMX answers synchronously, so nothing is ever outstanding across calls |
+  | **Pool / BDT / RDT SCS Waits** | 2-45..2-46 | the three additional wait states a SYSAP can be suspended in when the resource it needs — non-paged pool, a BDT entry, an RDT entry — is exhausted. Siblings of the Credit Wait `scs_credit.c` does implement | not implemented; no resource pool exists to exhaust |
 
-  **NOT CLAIMED:** that the seven mechanisms above are decoded. They are *named*
-  from the public book, at page granularity, so a future implementer knows what
-  the gap contains. No byte layout for any of them appears anywhere in OVMX, and
-  none has been observed on our wire.
+  **NOT CLAIMED:** that every VMS-internal mechanism above (buffer mapping,
+  BDT, CDRPs, RSPID/RDT, the three SCS Waits) is decoded or implemented — only
+  the WIRE SHAPE a class driver and a server exchange is. They stay *named*
+  from the public book, at page granularity, so a future implementer knows
+  what OVMX's synchronous, pool-free design deliberately does not reproduce.
+  The two per-connection/per-transfer header constants (`+4`, `+6`) also stay
+  UNGROUNDED — carried through opaquely, never interpreted.
 
 - HELLO/SOLICIT: the offset-30 "per-frame word" is **now GROUNDED for the
   directed values (b2/b3/b4) in §4(a).1** (`vms-d94`, the NISCA channel-verify

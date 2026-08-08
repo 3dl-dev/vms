@@ -235,6 +235,9 @@ target_link_libraries(test_scsd_wire PRIVATE
     # vms-578: the merged scsd.c drives the MSCP$DISK client builders, so the
     # unit-test seam needs them too (it #includes scsd.c whole).
     vmsscs_mscp
+    # vms-34b: scsd.c now also drives the MSCP disk-server RESPONDER
+    # (scsd_mscp_srv_msg_input() calls scs_mscp_srv_handle() etc.), same reason.
+    vmsscs_mscp_srv
 )
 
 add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)

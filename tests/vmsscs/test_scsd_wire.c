@@ -5227,39 +5227,54 @@ static void subst_sysap_name(uint8_t *dst, const uint8_t *src, size_t len,
 }
 
 /*
- * (1) THE RESPONDER ANSWERS FROM THE QUEUE, AND THE KILL SWITCH PUTS THE OLD
- * HARDCODED COMPARE BACK. Guardrail 23: the ON measurement is taken and the
- * counter it gates is confirmed to have moved BEFORE anything is claimed about
- * what turning the switch off achieves.
+ * (1) THE RESPONDER ANSWERS FROM THE QUEUE, AND THE KILL SWITCHES PUT THE OLD
+ * BEHAVIOUR BACK. Guardrail 23: the ON measurement is taken and the counter it
+ * gates is confirmed to have moved BEFORE anything is claimed about what
+ * turning a switch off achieves.
+ *
+ * REWRITTEN (vms-34b, operator ruling 2026-08-06: BUILD THE FULL SERVER).
+ * MSCP$DISK is now IN the queue by default: scsd_mscp_srv_msg_input() (scsd.c)
+ * gives the accept path a real message-input routine, so advertising the
+ * SYSAP is no longer the INV-6 facade this test used to assert against --
+ * accepting the connection with nothing behind it was. Two independent kill
+ * switches exist and this test now exercises both: OVMX_NO_SDIR=1 (unchanged,
+ * withdraws the WHOLE queue) and the new OVMX_MSCP_SERVER=0 (withdraws only
+ * the MSCP$DISK entry, leaving VMS$VAXcluster/SCS$DIRECTORY untouched).
  */
 static void test_sdir_lookup_is_answered_from_the_queue(void)
 {
-    /* The three queries, renumbered contiguously behind the SCA#21 connect
+    /* The four queries, renumbered contiguously behind the SCA#21 connect
      * (send_seq 1) so the replay does not read as a sequence gap. */
     uint8_t q_tape[sizeof(cap_lookup_mscptape)];
     uint8_t q_vc[sizeof(cap_lookup_vaxcluster)];
     uint8_t q_dir[sizeof(cap_lookup_mscptape)];
+    uint8_t q_mscp[sizeof(cap_lookup_mscptape)];
     memcpy(q_tape, cap_lookup_mscptape, sizeof(q_tape));
     seq_stamp(q_tape, 2);
     memcpy(q_vc, cap_lookup_vaxcluster, sizeof(q_vc));
     seq_stamp(q_vc, 3);
     subst_sysap_name(q_dir, cap_lookup_mscptape, sizeof(q_dir), "SCS$DIRECTORY");
     seq_stamp(q_dir, 4);
+    subst_sysap_name(q_mscp, cap_lookup_mscptape, sizeof(q_mscp), "MSCP$DISK");
+    seq_stamp(q_mscp, 5);
 
-    /* --- SDIR ON --- */
+    /* --- SDIR ON, MSCP$DISK server ON (the shipped default) --- */
     CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_MSCP_SERVER") == 0, "unsetenv failed");
     struct rxworld r;
     rxworld_init(&r, vax2_hw_mac, our_logical);
     (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
     rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
 
     const struct scs_sdir_queue *q = scs_svc_sdir(scsd_svc());
-    CHECK(scs_sdir_count(q) == 2,
-          "the daemon queued %u SDIRs, expected VMS$VAXcluster + SCS$DIRECTORY",
+    CHECK(scs_sdir_count(q) == 3,
+          "the daemon queued %u SDIRs, expected VMS$VAXcluster + SCS$DIRECTORY"
+          " + MSCP$DISK",
           scs_sdir_count(q));
-    CHECK(scs_sdir_peek(q, "MSCP$DISK") == NULL,
-          "the daemon LISTENs for MSCP$DISK -- it has no MSCP server, so"
-          " advertising one is exactly the INV-6 failure");
+    CHECK(scs_sdir_peek(q, "MSCP$DISK") != NULL,
+          "the daemon does not LISTEN for MSCP$DISK by default -- vms-34b wired"
+          " scsd_mscp_srv_msg_input() so that is no longer the INV-6 facade it"
+          " used to be");
 
     /* MISS: a name not in the queue gets the GROUNDED marker. */
     long sent_before = r.rx.dir_lookup_sent;
@@ -5289,6 +5304,14 @@ static void test_sdir_lookup_is_answered_from_the_queue(void)
           "SCS$DIRECTORY -- which the daemon had just accepted a connection for --"
           " still resolves to 'NOT PRESENT HERE'");
 
+    /* THE OTHER ANSWER THAT CHANGES: MSCP$DISK. vms-34b's whole point. */
+    rx_feed(&r, q_mscp, sizeof(q_mscp));
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) != 0,
+          "MSCP$DISK -- which scsd_mscp_srv_msg_input() can now actually"
+          " answer -- still resolves to 'NOT PRESENT HERE'");
+    CHECK(memcmp(scsd_test_last_frame + 14 + 62, "MSCP$DISK       ", 16) == 0,
+          "the MSCP$DISK response did not echo the queried name back");
+
     /* --- SDIR OFF: the gated behaviour must be SUPPRESSED, not merely
      * unmeasured. Same frames, same code path. --- */
     CHECK(setenv("OVMX_NO_SDIR", "1", 1) == 0, "setenv failed");
@@ -5311,8 +5334,38 @@ static void test_sdir_lookup_is_answered_from_the_queue(void)
     CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) == 0,
           "OVMX_NO_SDIR=1 did not restore the pre-vms-7fe answer for"
           " SCS$DIRECTORY");
-
+    rx_feed(&r2, q_mscp, sizeof(q_mscp));
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) == 0,
+          "OVMX_NO_SDIR=1 did not also withdraw the MSCP$DISK answer");
     CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+
+    /* --- THE NARROWER KILL SWITCH: OVMX_MSCP_SERVER=0 withdraws ONLY
+     * MSCP$DISK, leaving the rest of the queue exactly as it was. This is the
+     * distinction vms-578 built and vms-34b's default flip must not erase. --- */
+    CHECK(setenv("OVMX_MSCP_SERVER", "0", 1) == 0, "setenv failed");
+    struct rxworld r3;
+    rxworld_init(&r3, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r3, vax1_hw_mac, vax1_logical);
+    rx_feed(&r3, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    const struct scs_sdir_queue *q3 = scs_svc_sdir(scsd_svc());
+    CHECK(scs_sdir_count(q3) == 2,
+          "OVMX_MSCP_SERVER=0 left %u SDIRs queued, expected exactly"
+          " VMS$VAXcluster + SCS$DIRECTORY", scs_sdir_count(q3));
+    CHECK(scs_sdir_peek(q3, "MSCP$DISK") == NULL,
+          "OVMX_MSCP_SERVER=0 did not withdraw the MSCP$DISK LISTEN");
+    /* q_tape/q_vc/q_mscp carry FIXED baked-in seq numbers 2/3/5 (contiguous
+     * behind the seq-1 connect, matching the ON/OFF arms above) -- p. 2-31's
+     * sequentiality guarantee breaks the circuit on a gap, so they must be
+     * fed in that same seq order here too, not cherry-picked. */
+    rx_feed(&r3, q_tape, sizeof(q_tape));
+    rx_feed(&r3, q_vc, sizeof(q_vc));
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) != 0,
+          "OVMX_MSCP_SERVER=0 also changed the unrelated VMS$VAXcluster answer");
+    rx_feed(&r3, q_dir, sizeof(q_dir));
+    rx_feed(&r3, q_mscp, sizeof(q_mscp));
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) == 0,
+          "OVMX_MSCP_SERVER=0 did not withdraw the MSCP$DISK lookup answer");
+    CHECK(unsetenv("OVMX_MSCP_SERVER") == 0, "unsetenv failed");
 }
 
 /*
@@ -5326,8 +5379,17 @@ static void test_sdir_lookup_is_answered_from_the_queue(void)
  * branch once left this file at 723 checks, 0 failures.
  *
  * The 0x4b VMS$VAXcluster branch keys on the SCS message type and a zero
- * destination Con.ID, so ANY target name reaches the p. 2-48 scan through it --
- * which is why this case can rename the target to MSCP$DISK and get a miss.
+ * destination Con.ID, so ANY target name reaches the p. 2-48 scan through it.
+ *
+ * REWRITTEN (vms-34b). This case used to rename the target to MSCP$DISK to
+ * get a miss; MSCP$DISK is now LISTENed by default (test 1, above), so that
+ * frame no longer exercises a refusal at all -- it hits the (b1.5) MSCP
+ * server accept path instead (see
+ * test_mscp_srv_answers_a_command_on_a_live_connection, below, which is that
+ * frame's new home). MSCP$TAPE takes over as the still-genuinely-unlisted
+ * example: nothing in this tree ever registers it (spec sec 4.8: OVMX serves
+ * no tape at all, docs/design-mscp-direction.md), so it stays a real refusal
+ * regardless of the MSCP$DISK server flag.
  */
 static void test_sdir_refuses_a_connect_request_for_an_unlisted_sysap(void)
 {
@@ -5335,7 +5397,7 @@ static void test_sdir_refuses_a_connect_request_for_an_unlisted_sysap(void)
      * changed to a SYSAP OVMX does not serve. See subst_sysap_name(). */
     uint8_t req[sizeof(cap_vaxcluster_connect_req)];
     subst_sysap_name(req, cap_vaxcluster_connect_req,
-                     sizeof(cap_vaxcluster_connect_req), "MSCP$DISK");
+                     sizeof(cap_vaxcluster_connect_req), "MSCP$TAPE");
 
     CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
     struct rxworld r;
@@ -5400,6 +5462,117 @@ static void test_sdir_refuses_a_connect_request_for_an_unlisted_sysap(void)
           "OVMX_NO_SDIR=1 did not restore the pre-vms-7fe accept of a connect"
           " request whose target name nothing here listens for");
     CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+}
+
+/*
+ * (2a) vms-34b: THE MSCP$DISK CONNECT NO LONGER BLACK-HOLES ITS COMMANDS.
+ *
+ * Before this item, feeding the daemon an op=0 CONNECT-REQUEST naming
+ * MSCP$DISK got a real op=1 echo + op=4 accept (worktree-760, unchanged) but
+ * every command sent afterwards on that connection vanished: no CDT was ever
+ * allocated at OVMX_MSCP_SERVER_CONID (scs_mscp.h's own comment names this),
+ * so scs_cdl_deliver_message() always resolved SCS_DELIVER_NO_CDT and the
+ * daemon answered with silence -- accept-then-black-hole, a worse facade than
+ * refusing the connect outright ("silence is never a response",
+ * scs_mscp_srv.h). This is the positive-path proof that the gap is closed:
+ * the SAME renamed-to-MSCP$DISK connect frame the old
+ * test_sdir_refuses_a_connect_request_for_an_unlisted_sysap used to feed (see
+ * its rewrite, above) now gets a GET UNIT STATUS answered end to end.
+ */
+static void test_mscp_srv_answers_a_command_on_a_live_connection(void)
+{
+    uint8_t req[sizeof(cap_vaxcluster_connect_req)];
+    subst_sysap_name(req, cap_vaxcluster_connect_req,
+                     sizeof(cap_vaxcluster_connect_req), "MSCP$DISK");
+
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_MSCP_SERVER") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+
+    rx_feed(&r, req, sizeof(req));
+
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->mscp_srv_bound == 1,
+          "the daemon did not bind the MSCP$DISK server connection");
+    struct scs_cdt *mcdt = scs_cdl_lookup(&scsd_cdl, OVMX_MSCP_SERVER_CONID);
+    CHECK(mcdt != NULL,
+          "no CDT was allocated at OVMX_MSCP_SERVER_CONID -- a command sent"
+          " now would still resolve SCS_DELIVER_NO_CDT and vanish");
+    if (mcdt == NULL) {
+        return;
+    }
+    CHECK(mcdt->msg_input == scsd_mscp_srv_msg_input,
+          "the MSCP server CDT's message-input routine is not"
+          " scsd_mscp_srv_msg_input");
+
+    /* Commands are addressed FROM the class driver's own handle (learned from
+     * the connect above) TO OVMX's server handle, sequenced as the next frame
+     * the daemon's own p. 2-31 sequentiality guarantee expects (the SAME
+     * contiguous-renumbering convention seq_stamp() applies elsewhere in this
+     * file, read back from live peer state at each step rather than
+     * hardcoded, since it advances after every delivered frame). */
+    struct scs_mscp_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, r.rx.our_hw_mac, 6); /* this fixture's OVMX role is vax2_hw_mac,
+                                            * not the unrelated our_hw_mac global --
+                                            * see rxworld_init()'s hw_mac param */
+    memcpy(p.src_mac, vax1_hw_mac, 6);
+    memcpy(p.src_logical, vax1_logical, 6);
+    memcpy(p.peer_logical, r.rx.our_src_logical, 6);
+    p.remote_conid = OVMX_MSCP_SERVER_CONID;   /* destination: OVMX */
+    p.local_conid = ps->mscp_srv_remote_conid; /* source: the class driver */
+
+    /* sec 3.4: SET CONTROLLER CHARACTERISTICS is the precondition for
+     * anything else -- a GET UNIT STATUS sent first is correctly refused
+     * Invalid Command (measured below is what surfaced this ordering
+     * requirement is enforced end to end, not merely by the unit tests). */
+    uint8_t scc[SCS_MSCP_FRAME_LEN];
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = (uint16_t)(ps->vc.seq.recv_seq + 1u);
+    p.cmd_ref = 1;
+    CHECK(scs_mscp_build_scc(&p, scc) == 0, "the SCC command fixture failed to build");
+    rx_feed(&r, scc, sizeof(scc));
+
+    long ends_before = (long)scsd_mscp_srv.ends_sent;
+    long cmds_before = (long)scsd_mscp_srv.cmds_received;
+    unsigned sends_before = scsd_test_frames;
+
+    uint8_t cmd[SCS_MSCP_FRAME_LEN];
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = (uint16_t)(ps->vc.seq.recv_seq + 1u);
+    p.cmd_ref = 2;
+    p.unit = 0;
+    CHECK(scs_mscp_build_gus(&p, cmd) == 0, "the GUS command fixture failed to build");
+    rx_feed(&r, cmd, sizeof(cmd));
+
+    CHECK((long)scsd_mscp_srv.cmds_received == cmds_before + 1,
+          "scs_mscp_srv_handle() never ran -- the command did not reach the"
+          " responder");
+    CHECK((long)scsd_mscp_srv.ends_sent == ends_before + 1,
+          "the responder did not build an end message for the command");
+    CHECK(scsd_test_frames > sends_before,
+          "no frame was transmitted in answer -- the command was answered"
+          " internally but the daemon sent nothing back (silence, the exact"
+          " failure this item closes)");
+
+    /* The frame actually on the wire: a well-formed MSCP-over-SCS end
+     * message, addressed back to the class driver, decodable by the same
+     * scs_mscp_parse() a real class driver's receive path would use. */
+    struct scs_mscp_view v;
+    CHECK(scs_mscp_parse(scsd_test_last_frame, scsd_test_last_len, &v) == 0,
+          "the answer frame does not parse as MSCP-over-SCS");
+    CHECK(v.is_end == 1, "the answer is not an end message");
+    CHECK(v.opcode == (SCS_MSCP_OP_GET_UNIT_STATUS | SCS_MSCP_END_BIT),
+          "the answer's opcode is 0x%02x, expected GET UNIT STATUS's end code",
+          v.opcode);
+    CHECK(v.remote_conid == ps->mscp_srv_remote_conid,
+          "the answer is not addressed to the class driver's own handle");
+    CHECK(v.local_conid == OVMX_MSCP_SERVER_CONID,
+          "the answer's source Con.ID is not OVMX's own MSCP server handle");
+    CHECK(v.cmd_ref == p.cmd_ref,
+          "the answer's P.CRF does not echo the command's (sec 5.1)");
 }
 
 /*
@@ -8261,6 +8434,8 @@ int main(void)
     /* vms-7fe: the SDIR queue as the daemon uses it, and its kill switch. */
     test_sdir_lookup_is_answered_from_the_queue();
     test_sdir_refuses_a_connect_request_for_an_unlisted_sysap();
+    /* vms-34b: the MSCP$DISK server connection now answers, not just accepts. */
+    test_mscp_srv_answers_a_command_on_a_live_connection();
     test_no_conn_fsm_does_not_turn_into_a_refusal_storm();
     /* The OTHER inbound-CONNECT_REQ branch: the 0x5b SCS$DIRECTORY path. */
     test_the_0x5b_directory_connect_is_scanned_before_it_is_accepted();

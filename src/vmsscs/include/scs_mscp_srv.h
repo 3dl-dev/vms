@@ -183,9 +183,18 @@
  * absence -- the deliberate refusal design decision (4) established -- into
  * real serving; leaving it uninstalled still refuses, honestly, exactly as
  * before -- the kill switch is not removed, only given something real to gate.
- * MSCP$DISK is still NOT registered via LISTEN (vms-61b2) for a different
- * reason: that is about advertising the service on the wire, not about
- * whether this module can serve one.
+ * MSCP$DISK REGISTRATION (vms-61b2): CLOSED by vms-34b. scsd.c never had a CDT
+ * at OVMX_MSCP_SERVER_CONID until then, so every command this module could
+ * already answer correctly in its own unit tests still vanished in silence on
+ * the live wire (SCS_DELIVER_NO_CDT) -- accept-then-black-hole, worse than
+ * refusing. scsd_mscp_srv_msg_input() (scsd.c) closes that: it decodes the
+ * inbound command, calls scs_mscp_srv_handle() below, and sends the real end
+ * message back. MSCP$DISK is now LISTENed by default (ovmx_mscp_server_enabled(),
+ * OVMX_MSCP_SERVER=0 is the kill switch). No backing store is attached by
+ * scsd.c itself, so a live node answers honestly with zero served units
+ * (Unit-Offline / Invalid Command / Write Protected) until an operator wires
+ * scs_mscp_srv_attach_fd()/scs_mscp_srv_set_xfer() to a real one -- that
+ * remains follow-up work, not done here.
  *
  * v1's WRITE REFUSAL (design decision (2)) IS UNCHANGED BY THIS ITEM. This
  * item grounds and implements the block-transfer WIRE MECHANISM for both

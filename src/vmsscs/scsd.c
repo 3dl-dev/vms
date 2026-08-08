@@ -54,6 +54,8 @@
 #include "scs_sdir.h"
 #include "scs_member.h"
 #include "scs_mscp.h"
+#include "scs_mscp_srv.h" /* vms-34b: THE live disk-server responder -- see
+                           * scsd_mscp_srv_state() / scsd_mscp_srv_msg_input(). */
 #include "scs_poll.h"
 #include "scs_reason.h"
 #include "scs_env.h" /* vms-ec7: THE shared SCS message envelope (build + parse + dispatch) */
@@ -334,29 +336,45 @@ static uint32_t g_ovmx_conid_base;   /* 0 until first use; high word, <<16 */
  *   test_sdir_lookup_is_answered_from_the_queue and
  *   test_sdir_refuses_a_connect_request_for_an_unlisted_sysap.
  *
- * BOTH ARE DEFENSIBLE AND vms-578 IS NOT ENTITLED TO PICK. Advertising a SYSAP
- * whose commands OVMX cannot serve is the INV-6 shape the authenticity program
- * exists to kill; refusing it may be what stops the join. So the behaviour is
- * kept WHOLE and put behind one flag, and the flag drives EVERYTHING -- the
- * LISTEN registration, the lookup affirmative and the inbound connect accept --
- * so the queue can never disagree with the wire again.
+ * BOTH WERE DEFENSIBLE, AND THE RULING CAME IN (vms-34b, operator, 2026-08-06):
+ * BUILD THE FULL SERVER. "Advertising a SYSAP whose commands OVMX cannot
+ * serve is the INV-6 shape" is exactly why this flag stayed OFF by default
+ * for as long as that was true -- but it stopped being true the moment
+ * scsd_mscp_srv_msg_input() below started existing. vms-291 (PR #131) built
+ * the responder (SCC/GUS/ONLINE/READ/WRITE end messages, byte-exact against a
+ * real captured VAX server) and vms-4e31 (PR #142) un-deferred vms-941's block
+ * data transfer -- but NEITHER wired the responder to the live daemon: no CDT
+ * was ever allocated at OVMX_MSCP_SERVER_CONID, so every command a real class
+ * driver sent after the op=4 accept was silently dropped
+ * (SCS_DELIVER_NO_CDT), which is a WORSE facade than refusing the connect
+ * outright -- "silence is never a response" (scs_mscp_srv.h). vms-34b closes
+ * that: the accept path below now allocates the CDT and installs
+ * scsd_mscp_srv_msg_input(), so every command gets a real, honest end message
+ * (Unit-Offline / Invalid Command / Write Protected when nothing is attached,
+ * a real answer once an operator attaches a unit) instead of vanishing. THAT
+ * is what makes flipping this flag's default honest rather than a bigger lie.
  *
- * DEFAULT OFF: the shipped build behaves exactly as work/vms-187-closure did,
- * and every gate stays green with nothing edited. OVMX_MSCP_SERVER=1 selects
- * the worktree-760 behaviour; that is the setting the lab bracket runs, and the
- * escalation this item returns is which of the two should become the default.
+ * DEFAULT ON. The flag drives EVERYTHING -- the LISTEN registration, the
+ * lookup affirmative and the inbound connect accept -- so the queue can never
+ * disagree with the wire. OVMX_MSCP_SERVER=0 is the kill switch, preserved
+ * because a wire-visible default flip ships one (project convention). Setting
+ * it to exactly "1" (the old opt-in spelling) is unaffected: still on.
  *
- * GUARDRAIL 23 -- THE SWITCH WAS RUN. lab-2 pod vaxlab-4, 2026-08-05, arms B2
- * (off) and B4 (on): SDIR listening 2 -> 3, MSCP-SERVER-ACCEPTS-SENT 0 -> 4,
- * SCSD-I-MSCPSRV lines 0 -> 10. All three gated behaviours move together,
- * which is the point of putting them on one flag. BOTH ARMS JOINED
- * (CLUSTER_NODES=3, XITDONE=1) -- so the MSCP$DISK affirmative is NOT, on this
- * lab, what decides a first join, and this item makes no claim that it is.
+ * GUARDRAIL 23 -- THE SWITCH WAS RUN BOTH WAYS BEFORE THIS DEFAULT FLIPPED.
+ * lab-2 pod vaxlab-4, 2026-08-05, arms B2 (off) and B4 (on): SDIR listening
+ * 2 -> 3, MSCP-SERVER-ACCEPTS-SENT 0 -> 4, SCSD-I-MSCPSRV lines 0 -> 10. All
+ * three gated behaviours move together, which is the point of putting them on
+ * one flag. BOTH ARMS JOINED (CLUSTER_NODES=3, XITDONE=1) -- so the MSCP$DISK
+ * affirmative was not, on that lab, what decided a first join
+ * (docs/cluster-protocol-spec.md sec 4(O.1)). That measurement is why this
+ * default flip is not expected to change join behaviour; it has not been
+ * re-run against the CDT wiring added here, which is why the kill switch
+ * stays available rather than being deleted.
  */
 static int ovmx_mscp_server_enabled(void)
 {
     const char *env = getenv("OVMX_MSCP_SERVER");
-    return (env != NULL && env[0] == '1' && env[1] == '\0') ? 1 : 0;
+    return !(env != NULL && env[0] == '0' && env[1] == '\0');
 }
 
 static uint32_t ovmx_conid_base(void)
@@ -481,6 +499,33 @@ static uint64_t ovmx_incarnation_time(void)
  * 0x0001 VC(local)/0x0002 VC(joiner)/0x0007 dir-server/0x0008 dir-client/
  * 0x000A MSCP-client. Opaque to the peer (OVMX design choice, scs_connect.h). */
 #define OVMX_MSCP_SERVER_CONID (ovmx_conid_base() | 0x000Bu)
+
+/* vms-34b: THE LIVE MSCP DISK-SERVER RESPONDER's controller identity.
+ *
+ * P.CNTI (sec 6.16 controller identifier): OVMX DESIGN CHOICE. scs_mscp_srv.h
+ * records that a real controller's P.CNTI carries its own node logical-address
+ * suffix in the low word -- an OBSERVATION about shape, not a spec requirement
+ * (sec 6.16 does not publish a required layout, only "a unique identifier for
+ * this controller"). Copying a captured VAX/HSC's own value here would claim
+ * OVMX's controller IS that specific real device, which Rule 8 forbids; this
+ * value is OVMX's own and stable across restarts.
+ * P.CTMO (sec 6.16 controller timeout, seconds): 20, matching the peer-timeout
+ * default OVMX already uses elsewhere (scs_depart.h
+ * SCS_DEPART_LISTEN_TIMEOUT_DEFAULT_MS / 1000) rather than a second, unrelated
+ * invented number. */
+#define OVMX_MSCP_SRV_CTLR_ID      ((uint64_t)0x4F564D5800000001ULL) /* "OVMX" + 1 */
+#define OVMX_MSCP_SRV_CTLR_TIMEOUT 20u
+
+/* The SCC end message's two GROUNDED-BUT-UNEXPLAINED fields
+ * (docs/design-mscp-direction.md Phase D, scs_mscp_srv.h): every SET
+ * CONTROLLER CHARACTERISTICS end message in the lab corpus (954/954) carries
+ * P.CNTF=0xa004 and the Table A-7 "reserved" word at [18:20]=0x0547, values no
+ * public spec explains but every real VMS 7.3 server sends. Passed to
+ * scs_mscp_srv_set_ctlr_profile() so OVMX's own SCC end message is not
+ * distinguishable from a real controller's on the wire -- that is what the
+ * function exists for. */
+#define OVMX_MSCP_SRV_CTLR_FLAGS   0xa004u
+#define OVMX_MSCP_SRV_CTLR_VERSION 0x0547u
 
 /* vms-760 PURE-SERVER disk-CLIENT (established-join): after OVMX reaches NEW as a
  * pure server, a real joiner is ALSO a disk CLIENT -- it opens its OWN
@@ -1569,6 +1614,12 @@ static unsigned long sysap_cm_messages = 0;      /* ... and it was a CM dialogue
 static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t msglen,
                                  void *ctx);
 
+/* vms-34b: installed on the MSCP$DISK SERVER CDT (OVMX_MSCP_SERVER_CONID)
+ * the moment OVMX accepts a member-opened MSCP$DISK connect. Defined with the
+ * receive dispatch, next to scsd_sysap_msg_input, for the same reason. */
+static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
+                                    size_t msglen, void *ctx);
+
 /*
  * vms-561: the node's SCS SERVICE PORT -- the object the five architected
  * services (LISTEN, CONNECT, ACCEPT, REJECT, DISCONNECT) run against. One per
@@ -1603,6 +1654,42 @@ static struct scs_svc_port scsd_svc_port;
  * for what it does and what it deliberately does not do. */
 static struct scs_poller scsd_poller;
 static int scsd_poller_ready = 0;
+
+/*
+ * vms-34b: THE LIVE MSCP DISK-SERVER RESPONDER -- one controller per node,
+ * matching the DSRV shape docs/design-mscp-direction.md sec 2 describes (one
+ * node, not one per peer: sec 4.8's "load balancing" and per-host HQB/HULB
+ * bookkeeping already live INSIDE struct scs_mscp_srv, keyed by the conid
+ * scsd_mscp_srv_msg_input() passes in). Lazily initialized for the same
+ * reason scsd_svc() is: SCSD_UNIT_TEST and test_scsd_wire.c build a world
+ * without ever calling main().
+ *
+ * NO UNIT IS ATTACHED HERE. This item wires the responder so a command gets a
+ * real end message instead of silence; it deliberately does NOT attach a
+ * backing store or install a block-transfer xfer hook (scs_mscp_srv_attach_fd
+ * / scs_mscp_srv_set_xfer) -- doing that is a live, wire-visible send path
+ * this item has not run a lab bracket against (guardrail 23), and
+ * scs_mscp_srv_handle() already answers a controller with zero attached units
+ * HONESTLY (GET UNIT STATUS enumerates none, ONLINE/READ/WRITE answer
+ * Unit-Offline) -- the same posture a real VMS server has with
+ * MSCP_SERVE_ALL=1 and no drives. Attaching real media is follow-up work,
+ * tracked outside this item.
+ */
+static struct scs_mscp_srv scsd_mscp_srv;
+static int scsd_mscp_srv_ready = 0;
+
+static struct scs_mscp_srv *scsd_mscp_srv_state(void)
+{
+    if (!scsd_mscp_srv_ready) {
+        scs_mscp_srv_init(&scsd_mscp_srv, OVMX_MSCP_SRV_CTLR_ID,
+                          OVMX_MSCP_SRV_CTLR_TIMEOUT);
+        (void)scs_mscp_srv_set_ctlr_profile(&scsd_mscp_srv,
+                                            OVMX_MSCP_SRV_CTLR_FLAGS,
+                                            OVMX_MSCP_SRV_CTLR_VERSION);
+        scsd_mscp_srv_ready = 1;
+    }
+    return &scsd_mscp_srv;
+}
 
 static struct scs_svc_port *scsd_svc(void)
 {
@@ -1666,12 +1753,30 @@ static struct scs_svc_port *scsd_svc(void)
          *                   is the gate doing its job. Escalated rather than
          *                   decided; OVMX_DISKLESS=1 already withdraws the
          *                   lookup-side affirmative for bisecting.
+         *
+         *                   SUPERSEDED (vms-34b, operator ruling 2026-08-06):
+         *                   the product decision above came back BUILD THE
+         *                   FULL SERVER, and "OVMX cannot serve" stopped being
+         *                   true once scsd_mscp_srv_msg_input() (below) gave
+         *                   the accept path below a real message-input
+         *                   routine. The INV-6 gap this paragraph describes is
+         *                   closed, not by picking the cheaper branch, but by
+         *                   making the responder real -- see
+         *                   ovmx_mscp_server_enabled()'s comment for the
+         *                   current state and test_sdir_lookup_is_answered_
+         *                   from_the_queue / test_sdir_refuses_a_connect_
+         *                   request_for_an_unlisted_sysap (rewritten,
+         *                   tests/vmsscs/test_scsd_wire.c) for the gates that
+         *                   now assert the new truth. Left in place as the
+         *                   record of what was tried and why it wasn't done
+         *                   sooner -- not a currently-accurate description.
          */
         (void)scs_listen(&scsd_svc_port, "VMS$VAXcluster", NULL, NULL);
         (void)scs_listen(&scsd_svc_port, "SCS$DIRECTORY", NULL, NULL);
-        /* vms-578: registered ONLY when OVMX is configured as an MSCP$DISK
-         * server, so the queue always describes what the daemon will actually
-         * do. See ovmx_mscp_server_enabled(). */
+        /* vms-578/vms-34b: registered ONLY when OVMX is configured as an
+         * MSCP$DISK server, so the queue always describes what the daemon
+         * will actually do. See ovmx_mscp_server_enabled() (default ON as of
+         * vms-34b). */
         if (ovmx_mscp_server_enabled()) {
             (void)scs_listen(&scsd_svc_port, "MSCP$DISK", NULL, NULL);
         }
@@ -2335,6 +2440,14 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *   its frame. Answering an op 6 -- the DISCONNECT_REQUEST of spec sec 4(h)(1a)
  *   -- is scs_disc_build_response()'s job, driven off the CDT by the vms-dd5
  *   classifier, and that path IS live and tested.
+ *
+ *   CHOKED, and new in vms-34b:
+ *     scsd_mscp_srv_msg_input()  the MSCP disk-server responder's end message,
+ *                                answering a command a real class driver sent
+ *                                on an OPEN circuit -- the same argument as the
+ *                                sixteen above: this is ordinary sequenced SCS
+ *                                traffic on a connection that cannot exist
+ *                                before its circuit does.
  *
  *   NOT CLAIMED: that all sixteen have been exercised on a wire since the
  *   move. What IS true and mechanically checked is that none of them can reach
@@ -6105,6 +6218,102 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
  * at the delivery site is what will notice the first frame that could be one.
  */
 
+/*
+ * vms-34b: scsd_mscp_srv_msg_input - THE LIVE MSCP DISK-SERVER RESPONDER's
+ * message-input routine (p. 2-29). Installed on the CDT allocated at
+ * OVMX_MSCP_SERVER_CONID the moment OVMX accepts a member-opened MSCP$DISK
+ * connect (scsd_handle_frame()'s (b1.5) block, below). Every application
+ * message (MTYPE 10) the class driver sends on that connection afterwards
+ * reaches here through the SAME scs_cdl_deliver_message() path
+ * scsd_sysap_msg_input() uses (the generic dispatch inside scsd_handle_frame)
+ * -- this is what "an MSCP command responder exists" means for a LIVE
+ * connection now, not only for scs_mscp_srv.c's own unit tests. Before this
+ * item no CDT was ever allocated at OVMX_MSCP_SERVER_CONID (scs_mscp.h's own
+ * comment on struct scs_mscp_params::cdt names this), so every command a real
+ * class driver sent after the op=4 accept resolved SCS_DELIVER_NO_CDT and was
+ * silently dropped -- exactly the facade "an MSCP command responder exists"
+ * is supposed to rule out.
+ *
+ * `msg`/`msglen` are the p. 4-15 payload scs_cdl_deliver_message() already
+ * extracted; this routine instead re-parses the RAW frame through
+ * scsd_rx_current (the same OVMX DESIGN CHOICE scsd_sysap_msg_input() uses --
+ * see its own comment), because scs_mscp_parse()'s contract is "a whole
+ * received frame" and re-deriving a synthetic Ethernet+SCA header around
+ * `msg` to satisfy it would be duplicate, divergeable work.
+ *
+ * NO BACKING STORE IS ATTACHED (scsd_mscp_srv_state()'s comment). Every
+ * command therefore gets scs_mscp_srv_handle()'s honest "nothing is attached"
+ * answer (Unit-Offline / Invalid Command / Write Protected) -- a real end
+ * message, never silence, which is the whole point.
+ */
+static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
+                                    size_t msglen, void *ctx)
+{
+    (void)cdt;
+    (void)msg;
+    (void)msglen;
+    struct peer_state *ps = (struct peer_state *)ctx;
+    struct scsd_rx_frame cur = scsd_rx_current;
+    struct scs_mscp_view v;
+
+    if (ps == NULL || cur.frame == NULL || cur.rx == NULL ||
+        scs_mscp_parse(cur.frame, (size_t)cur.len, &v) != 0) {
+        return; /* not a well-formed MSCP-over-SCS frame -- nothing safe to
+                 * answer */
+    }
+    if (v.is_end) {
+        /* sec 5.1: a controller ANSWERS commands, it does not receive end
+         * messages. scs_mscp_srv_handle() would refuse this itself (returns
+         * -1) for the same reason; caught here too so no body is even sliced
+         * out of a frame that cannot be a command. */
+        return;
+    }
+
+    uint8_t body[SCS_MSCP_BODY_LEN];
+    memset(body, 0, sizeof(body));
+    size_t hdr_off = (size_t)SCS_ENV_ETH_HDR_LEN + (size_t)SCS_MSCP_BODY_OFF;
+    size_t avail = (size_t)cur.len > hdr_off ? (size_t)cur.len - hdr_off : 0;
+    size_t take = avail < sizeof(body) ? avail : sizeof(body);
+    memcpy(body, cur.frame + hdr_off, take);
+
+    uint8_t end[SCS_MSCP_SRV_END_MAX];
+    long endlen = scs_mscp_srv_handle(scsd_mscp_srv_state(),
+                                      ps->mscp_srv_remote_conid, &v, body,
+                                      sizeof(body), end, sizeof(end));
+    if (endlen < 0) {
+        return; /* scs_mscp_srv_handle()'s own "cannot answer at all" case --
+                 * malformed/short input, not a command it declines (that path
+                 * returns a well-formed end message instead, per its own
+                 * contract). */
+    }
+
+    struct scs_mscp_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, ps_port_addr(ps), 6);
+    memcpy(p.src_mac, cur.rx->our_hw_mac, 6);
+    memcpy(p.src_logical, cur.rx->our_src_logical, 6);
+    memcpy(p.peer_logical, ps_sys_addr(ps), 6);
+    /* THE DIRECTION: OVMX is the SERVER here, answering FROM its own server
+     * handle TO the class driver's handle -- the opposite pairing from the
+     * op=0/op=1/op=4 handshake above, where OVMX was echoing the MEMBER's
+     * handle as "remote" while binding its own as local. Here OVMX is the one
+     * addressing the frame, so its own handle is the SOURCE and the member's
+     * is the DESTINATION. */
+    p.remote_conid = ps->mscp_srv_remote_conid; /* destination: the class driver's handle */
+    p.local_conid = OVMX_MSCP_SERVER_CONID;     /* source: OVMX's own server handle */
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = scs_seq_advance(&ps->vc.seq);
+    p.incarnation = ps->incarnation;
+
+    uint8_t frame[SCS_ENV_ETH_HDR_LEN + SCS_MSCP_BODY_OFF + SCS_MSCP_SRV_END_MAX];
+    long flen = scs_mscp_srv_build_end_frame(&p, end, (size_t)endlen, frame,
+                                             sizeof(frame));
+    if (flen > 0) {
+        (void)send_frame_vc(cur.rx->sock, cur.rx->ifindex, ps, ps->pb,
+                            "MSCP end message (server)", frame, (size_t)flen);
+    }
+}
+
 static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
 {
     if (n < 14) {
@@ -8252,6 +8461,42 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                            " local=0x%08X remote=0x%08X (server-first)\n",
                            (unsigned)OVMX_MSCP_SERVER_CONID, m_lconid);
                     fflush(stdout);
+
+                    /* vms-34b: GIVE THE CONNECTION A CDT, so the commands the
+                     * class driver is about to send have somewhere to be
+                     * delivered. Before this item scsd.c never allocated one
+                     * at OVMX_MSCP_SERVER_CONID (scs_mscp.h's own comment
+                     * names this), so scs_cdl_deliver_message() always
+                     * resolved SCS_DELIVER_NO_CDT here and every command was
+                     * dropped in silence -- accept-then-black-hole, the exact
+                     * facade this posture exists to avoid. OVMX_MSCP_SERVER_
+                     * CONID is a fixed compile-time constant reused across
+                     * connections (a documented anomaly, see the comment
+                     * above prev_srv_remote_conid), so a SECOND MSCP$DISK
+                     * connect from the same or a different peer finds the
+                     * SAME CDT already allocated: just re-point its
+                     * remote_conid at the new m_lconid rather than trying (and
+                     * failing) to allocate the same slot twice. */
+                    struct scs_cdt *mcdt = scs_cdl_lookup(&scsd_cdl,
+                                                          OVMX_MSCP_SERVER_CONID);
+                    if (mcdt == NULL) {
+                        mcdt = scs_cdl_alloc_conid(&scsd_cdl,
+                                                   OVMX_MSCP_SERVER_CONID,
+                                                   "MSCP$DISK",
+                                                   "VMS$DISK_CL_DRVR", ps->pb);
+                    }
+                    if (mcdt != NULL) {
+                        scs_cdt_set_remote_conid(mcdt, m_lconid);
+                        scs_cdt_set_handlers(mcdt, scsd_mscp_srv_msg_input,
+                                             NULL, NULL, ps);
+                    } else {
+                        log_ts(stdout);
+                        printf(" SCSD-W-MSCPSRVNOCDT, accepted the connect but"
+                               " could not allocate its CDT -- commands on"
+                               " this connection will be dropped, not"
+                               " answered\n");
+                        fflush(stdout);
+                    }
                 }
             }
             return;

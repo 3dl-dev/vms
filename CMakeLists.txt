@@ -576,6 +576,21 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(parts_setup_gate PROPERTIES
         LABELS "integration;parts" TIMEOUT 60)
+
+    # Foreign-command dispatch (vms-96e): "SYM :== $image" then a BARE "SYM
+    # args" must activate the image with args as P1-P8, the same as real VMS
+    # (LOGIN.COM's "XXX :== $DEV:[DIR]XXX.EXE" pattern). Before this, only
+    # "RUN image" reached image activation -- dcl_find_verb() checked ONLY
+    # the static builtin_verbs[] table, so a bare foreign-command verb fell
+    # straight through to %DCL-W-IVVERB. BEHAVIOURAL: runs DCL.EXE for real
+    # against disposable shell-script images built into a temp dir, and (if
+    # the PARTS demo target is available) proves the exact "PARTS :==
+    # $SYS$SYSTEM:PARTS.EXE" / "$ PARTS" shape end to end.
+    add_test(NAME foreign_command_dispatch_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_foreign_command_dispatch.sh
+                $<TARGET_FILE:vmsdcl> $<TARGET_FILE:PARTS>)
+    set_tests_properties(foreign_command_dispatch_gate PROPERTIES
+        LABELS "integration;dcl" TIMEOUT 60)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

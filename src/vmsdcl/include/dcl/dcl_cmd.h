@@ -121,6 +121,18 @@ int ensure_queue_init(void);
 int dcl_exec_utility(const char *exe_name, const char *facility,
                      char *argv[], int argc);
 
+/* Image activation, shared by RUN and foreign-command dispatch
+ * (dcl_cmd_process.c) */
+int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
+                       const char *linux_path, char *argv[]);
+
+/* Foreign-command dispatch: a DCL symbol whose value begins with '$'
+ * names an image to activate when the symbol is typed bare.
+ * symbol_value is the symbol's value with the leading '$' already
+ * stripped (dcl_cmd_process.c; called from dcl_exec.c's verb dispatch). */
+int dcl_exec_foreign_command(struct dcl_context *ctx, struct dcl_command *cmd,
+                             const char *symbol_value);
+
 /* External functions used by command implementations */
 extern void dcl_error(const char *facility, int severity, const char *ident,
                       const char *fmt, ...);

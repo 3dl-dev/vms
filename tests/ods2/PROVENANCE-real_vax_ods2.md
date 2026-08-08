@@ -407,3 +407,98 @@ chartered under. Recommended next step: repeat step 3's splice technique,
 but for `INDEXF.SYS`'s OWN header/map, on a real fixture, to test whether
 a single-contiguous-extent `INDEXF.SYS` alone reproduces `FILENUMCHK` on
 an otherwise-100%-real volume.
+
+## Addendum (increment 5, `vms-0f3`): DUMP/ANALYZE characterization + MOUNT/OVERRIDE test, and the RECOMMENDATION
+
+This increment's charter was narrow and bounded: (1) `DUMP`/`ANALYZE` a
+real freshly-`INITIALIZE`d volume's `SECURITY.SYS` from the OS's own tool
+vantage (not just raw-byte decode) to double-check increment 4's
+characterization, (2) confirm increment 4's writer output against a fresh
+lab-2 MOUNT, (3) test `MOUNT/OVERRIDE=SECURITY` as a candidate pragmatic
+path, and (4) recommend A (derivable)/B (override)/C (wall). Lab-2 pod
+`vaxlab-3` (fresh scratch RX50 unit on RQ3, restored to its original
+CD-ROM attach afterward; lab-1 and no other pod's state touched).
+
+### Step 1: `DUMP`/`ANALYZE` on a fresh real `INITIALIZE`, cross-checking increment 4
+
+`$ INITIALIZE DUA3: OVMXI5 /STRUCTURE=2` + `$ MOUNT DUA3: OVMXI5` (clean,
+`%MOUNT-I-MOUNTED`, no warnings). `DUMP/HEADER/BLOCK=(START:0,COUNT:1)`
+on `SECURITY.SYS` confirms the file header increment 4 already derived:
+`End of file block 1 / Allocated 6`, `Highest block: 6`, `Contiguous`,
+`Map area words in use: 2`, owner `[SYSTEM]`. `DUMP/BLOCK=(START:1,COUNT:1)`
+(the VBN1 data block itself) shows the volume label `OVMXI5` at the
+expected offset (row `000040`, matching increment 4's `SECURITY_LABEL_OFF
+= 0x52`) and, decisively: **every byte from roughly offset 0x66 through
+the end of the 512-byte block (offsets `000060`-`0001E0` in the dump) is
+literal zero.** This is the OS's own `DUMP` utility confirming, from a
+different vantage than increment 4's raw-byte diffing, that a freshly
+initialized volume's default `SECURITY.SYS` VBN1 content is NOT an
+elaborate ACL database -- it is a small (~0x66-byte) fixed header +
+label, followed by ~410 bytes of nothing. `ANALYZE/DISK_STRUCTURE` on the
+same volume reports only the expected (harmless) `QUOTA.SYS` open failure
+and raises nothing about `SECURITY.SYS` -- the analyzer itself does not
+treat this file as needing further content. **This corroborates increment
+4's Finding 3 rather than changing it**, from an independent tool vantage,
+and rules out "the DUMP-decode missed something" as a residual doubt.
+
+### Step 2: current writer output vs. lab-2, fresh confirmation
+
+Built `tests/ods2/test_ods2_write.c` (`ODS2_WRITE_DUMP=/tmp/ovmx-i5.dsk`),
+`kubectl cp`'d it into the pod (md5 verified equal before/after), attached
+it as `RQ3`, `SIMH` recognized it (`Contains ODS2 File system`, correct
+volume name/format/size). `MOUNT DUA3: OVMXWRIT`:
+
+```
+%MOUNT-W-QUOTAFAIL, failed to activate quota file; volume locked
+-SYSTEM-W-FILENUMCHK, file identification number check
+%MOUNT-F-BADSECSYS, failed to create or access SECURITY.SYS
+-SYSTEM-W-FILENUMCHK, file identification number check
+```
+
+Exactly reproduces increment 4's end state on a fresh lab-2 trial
+(different pod, same writer code) -- no regression, no improvement from a
+plain `MOUNT`. Consistent with increment 4's splice-test proof that this
+`FILENUMCHK` is not caused by `SECURITY.SYS`'s own content.
+
+### Step 3: `MOUNT/OVERRIDE=SECURITY` -- mounts, but does NOT satisfy the acceptance bar
+
+```
+$ MOUNT/OVERRIDE=SECURITY DUA3: OVMXWRIT
+%MOUNT-W-QUOTAFAIL, failed to activate quota file; volume locked
+-SYSTEM-W-FILENUMCHK, file identification number check
+%MOUNT-I-MOUNTED, OVMXWRIT mounted on _$2$DUA3: (VAX1)
+```
+
+`MOUNT/OVERRIDE=SECURITY` DOES suppress the fatal `BADSECSYS` and DOES
+report `MOUNT-I-MOUNTED`. But the volume this produces is not actually
+usable: every attempt to touch the file system through DCL after this
+mount fails with the SAME `FILENUMCHK` the mount itself carried as a
+warning --
+
+```
+$ DIRECTORY/SIZE $2$DUA3:[000000]
+%DIRECT-E-OPENIN, error opening $2$DUA3:[000000]*.*;* as input
+-RMS-E-DNF, directory not found
+-SYSTEM-W-FILENUMCHK, file identification number check
+$ TYPE $2$DUA3:[OVMXDIR]HELLO.TXT
+%TYPE-W-SEARCHFAIL, error searching for $2$DUA3:[OVMXDIR]HELLO.TXT;
+-RMS-E-DNF, directory not found
+-SYSTEM-W-FILENUMCHK, file identification number check
+```
+
+Even a bare `[000000]` (MFD) directory listing and a direct-by-name file
+open both fail. `/OVERRIDE=SECURITY` only silences the mount-time error
+message for the specific subsystem it names; it does nothing about the
+underlying, SECURITY.SYS-unrelated defect (per increment 4's splice
+proof, most likely the `INDEXF.SYS` single-contiguous-extent
+simplification) that makes every subsequent file lookup fail the same
+`FILENUMCHK` check. **vms-0f3's acceptance criterion is "MOUNTs to
+completion... and files read back"** -- this arm gets the MOUNT message
+but not the file read-back, so it does not meet the bar.
+
+### RECOMMENDATION: **A** for SECURITY.SYS specifically -- the format IS clean-room derivable and IS already implemented; **not B** (override doesn't deliver a working volume) as a solution to vms-0f3's stated goal; the real remaining wall is a DIFFERENT, already-identified defect outside this item's scope
+
+- **SECURITY.SYS's on-disk content is DERIVABLE (A), and increment 4 already derived and shipped it.** Two independent characterization passes now agree (increment 4's byte-diff triangulation across 12 samples, and this increment's direct `DUMP`/`ANALYZE` on a fresh sample): the "ACL database" a real MOUNT enforces is, on a default volume, a small fixed checksum+header+label template followed by zero-fill -- not an open, VSI-proprietary ACL structure requiring undocumented content. `ods2_security_build()`/`ods2_security_parse()` in `src/vmsfs/ods2/ods2_writer.c` / `ods2_reader.c` already implement this, oracle-validated. **No further work on SECURITY.SYS's format is indicated.**
+- **`MOUNT/OVERRIDE=SECURITY` is NOT a viable path to vms-0f3's goal.** It changes the mount-time message but does not produce a volume where files "read back" -- confirmed empirically this increment (Step 3). Do not document it as a supported workaround.
+- **The actual remaining wall is the pre-existing `FILENUMCHK`, proven (increment 4, splice test) to be independent of SECURITY.SYS.** This item's scope was SECURITY.SYS; that scope is closed. The `INDEXF.SYS` single-contiguous-extent bisection increment 4 already recommended as the next step remains the right next move, but it is a SEPARATE defect and should be tracked as a new/distinct item (increment 6), not folded back into vms-0f3.
+- **vms-600 (real VAX mounts an OVMX-served volume) stays blocked** -- not by SECURITY.SYS content (resolved) but by the `FILENUMCHK` defect this item did not investigate further, per its effort cap.

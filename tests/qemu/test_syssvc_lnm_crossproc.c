@@ -311,7 +311,11 @@ int main(void)
     vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
     (void)def("LNM$SYSTEM", "SYS$SYSDEVICE", SYSDISK_DEVICE ":");
     uint32_t su = def("LNM$SYSTEM", "SYS$UPDATE", SYSUPD_VMS_DIR);
-    CHECK(su & 1,
+    /* SS$_NORMAL for a fresh name, SS$_SUPERSEDE if a prior suite in this same
+     * booted guest already seeded SYS$UPDATE via lnm_setup_defaults (the
+     * executive's LNM$SYSTEM persists across suites) -- both are a successful
+     * DEFINE/SYSTEM. */
+    CHECK((su & 1) || su == SS$_SUPERSEDE,
           "parent: DEFINE/SYSTEM SYS$UPDATE (the STARTUP.COM boot step) reported success");
     mkpath(SYSUPD_LINUX_DIR);
     {

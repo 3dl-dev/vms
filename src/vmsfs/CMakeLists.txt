@@ -15,6 +15,10 @@ set_target_properties(vmsfs PROPERTIES
 )
 install(TARGETS vmsfs LIBRARY DESTINATION ${VMS_SHARE_DIR})
 
+# Genuine ODS-2 (Files-11 level 2) structures + reader — a new, standalone
+# module distinct from the ODS-2-inspired on-disk format. See ods2/.
+add_subdirectory(ods2)
+
 # Static twin for the static PID-1 bootstrap (STARTUP.EXE). IMGACT mode only.
 if(OVMX_IMGACT)
     add_library(vmsfs_static STATIC ${VMSFS_SOURCES})

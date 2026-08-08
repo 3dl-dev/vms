@@ -257,6 +257,7 @@ int main(void)
     st = ods2_volume_read_header(&vol, 12 /* HELLO.TXT */, hdr, sizeof(hdr));
     CHECK_EQ(st, ODS2_OK, "read_header(HELLO.TXT)");
     if (st == ODS2_OK) {
+        ods2_fh2_t parsed;
         memset(&ec, 0, sizeof(ec));
         st = ods2_fh2_map_walk(hdr, extent_collect, &ec, NULL);
         CHECK_EQ(st, ODS2_OK, "map_walk(HELLO.TXT)");
@@ -265,11 +266,22 @@ int main(void)
             CHECK_EQ(ec.ext[0].lbn, 32, "HELLO.TXT extent LBN");
             CHECK_EQ(ec.ext[0].count, 34, "HELLO.TXT extent count == real 34 blocks");
         }
+        /* RECATTR hiblk/efblk, added in increment 3: ground-truthed against
+         * this SAME real fixture (see the ods2_recattr_t comment / the
+         * PROVENANCE increment-3 addendum) -- hiblk/efblk both equal the
+         * file's own allocated block count for a plain data file. */
+        st = ods2_fh2_parse(hdr, ODS2_BLOCK_SIZE, &parsed);
+        CHECK_EQ(st, ODS2_OK, "fh2_parse(HELLO.TXT)");
+        if (st == ODS2_OK) {
+            CHECK_EQ(ods2_recattr_hiblk(&parsed.fh2_recattr), 34, "HELLO.TXT hiblk == 34");
+            CHECK_EQ(ods2_recattr_efblk(&parsed.fh2_recattr), 34, "HELLO.TXT efblk == 34");
+        }
     }
 
     st = ods2_volume_read_header(&vol, 13 /* WORLD.TXT */, hdr, sizeof(hdr));
     CHECK_EQ(st, ODS2_OK, "read_header(WORLD.TXT)");
     if (st == ODS2_OK) {
+        ods2_fh2_t parsed;
         memset(&ec, 0, sizeof(ec));
         st = ods2_fh2_map_walk(hdr, extent_collect, &ec, NULL);
         CHECK_EQ(st, ODS2_OK, "map_walk(WORLD.TXT)");
@@ -278,6 +290,25 @@ int main(void)
             CHECK_EQ(ec.ext[0].lbn, 66, "WORLD.TXT extent LBN");
             CHECK_EQ(ec.ext[0].count, 2, "WORLD.TXT extent count == real 2 blocks");
         }
+        st = ods2_fh2_parse(hdr, ODS2_BLOCK_SIZE, &parsed);
+        CHECK_EQ(st, ODS2_OK, "fh2_parse(WORLD.TXT)");
+        if (st == ODS2_OK) {
+            CHECK_EQ(ods2_recattr_hiblk(&parsed.fh2_recattr), 2, "WORLD.TXT hiblk == 2");
+            CHECK_EQ(ods2_recattr_efblk(&parsed.fh2_recattr), 2, "WORLD.TXT efblk == 2");
+        }
+    }
+
+    /* INDEXF.SYS's own hiblk: 21 blocks (3-extent map: 3+1+17), independent
+     * of ods2_writer.c's own single-contiguous-extent simplification for
+     * the SAME file -- see PROVENANCE increment-3 addendum. */
+    st = ods2_volume_read_header(&vol, ODS2_FID_INDEXF, hdr, sizeof(hdr));
+    CHECK_EQ(st, ODS2_OK, "re-read_header(INDEXF.SYS)");
+    if (st == ODS2_OK) {
+        ods2_fh2_t parsed;
+        st = ods2_fh2_parse(hdr, ODS2_BLOCK_SIZE, &parsed);
+        CHECK_EQ(st, ODS2_OK, "fh2_parse(INDEXF.SYS)");
+        if (st == ODS2_OK)
+            CHECK_EQ(ods2_recattr_hiblk(&parsed.fh2_recattr), 21, "INDEXF.SYS hiblk == 21");
     }
 
     free(img);

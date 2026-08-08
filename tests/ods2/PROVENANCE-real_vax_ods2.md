@@ -109,3 +109,116 @@ layout of `scb_volockname` / `scb_reserved`. See the per-field comments on
 what was confirmed, corrected, or left open. A second real volume (ideally
 with an *induced* error/mount-verify condition, and a second mount to see
 whether `scb_writecnt` moves) would be needed to close those.
+
+## Addendum (increment 3, the ODS-2 WRITER): reserved-file names/order
+
+While building the writer (`src/vmsfs/ods2/ods2_writer.c`), this SAME fixture
+was decoded further -- reading the ident area and `fh2_filechar` of every
+reserved-file header (LBN `hdr_base + (fid - 1)` for fid 1..13) -- to ground
+`hm2_resfiles == 10` and the reserved-file names/order the writer needed but
+increment 2 never examined. This is observed-oracle grounding under Rule 8
+(re-reading the already-collected real fixture), not a new lab session and
+not a public-doc citation:
+
+```
+FID  1  INDEXF.SYS;1    filechar=0x0000  map_inuse=6 (3 extents)
+FID  2  BITMAP.SYS;1    filechar=0x0080  map_inuse=2 (1 extent, CONTIG)
+FID  3  BADBLK.SYS;1    filechar=0x0000  map_inuse=0 (no data)
+FID  4  000000.DIR;1    filechar=0x2080  map_inuse=2 (1 extent, DIRECTORY|CONTIG)
+FID  5  CORIMG.SYS;1    filechar=0x0000  map_inuse=0 (no data)
+FID  6  VOLSET.SYS;1    filechar=0x0000  map_inuse=0 (no data)
+FID  7  CONTIN.SYS;1    filechar=0x0000  map_inuse=0 (no data)
+FID  8  BACKUP.SYS;1    filechar=0x0000  map_inuse=0 (no data)
+FID  9  BADLOG.SYS;1    filechar=0x0000  map_inuse=0 (no data)
+FID 10  SECURITY.SYS;1  filechar=0x0080  map_inuse=2 (1 extent, CONTIG)
+FID 11  OVMXDIR.DIR;1   filechar=0x2080  map_inuse=2 (the [OVMXDIR] created earlier)
+FID 12  HELLO.TXT;1     filechar=0x0000  map_inuse=2
+FID 13  WORLD.TXT;1     filechar=0x0000  map_inuse=2
+```
+
+`0x0080` and `0x2000` were then cross-checked against Nankervis's
+`access.h` (`FH2$M_CONTIG = 0x80`, `FH2$M_DIRECTORY = 0x2000`, both public,
+same repo increments 1-2 already cite) -- confirming BITMAP.SYS, SECURITY.SYS,
+and both directories are marked `CONTIGUOUS`, and both directories are also
+marked `DIRECTORY`. `INDEXF.SYS` is the only reserved file with more than one
+retrieval-pointer extent; `ods2_writer.c` deliberately does NOT reproduce that
+fragmentation (see its `[OVMX-inferred]` simplification note) -- it gives
+INDEXF.SYS a single contiguous extent instead. Storage-bitmap bit semantics
+(1 = free, 0 = allocated; 32-bit-word/4096-bits-per-block packing) are NOT
+from this fixture (a raw bit dump wasn't cross-checked against a SHOW
+DEVICE/FULL free-block count in this pass) -- they come from Nankervis's
+`deallocfile()` in `access.c`, cited in full in `ods2.h`'s WRITER section.
+
+## Addendum (increment 3): lab-2 MOUNT bisection trail
+
+The writer's cross-checked-genuineness step: write a volume with `ods2_writer.c`,
+attach it to a **real** OpenVMS VAX V7.3 node on lab-2 (pod `vaxlab-5`, RQ3
+temporarily repurposed exactly as the increment-2 procedure above, RX50
+geometry: 800 blocks / 10 sectors / 80 tracks / 1 cylinder, chosen to match
+the already-proven-working increment-2 geometry), and `MOUNT` it for real.
+SIMH's own RQDX3 attach-time probe recognized every image in this trail as
+"Contains ODS2 File system" with the correct volume name/format/size --
+that only proves the HOME BLOCK parses, not that VMS's own F11X ACP accepts
+it. Four rounds of real MOUNT failures were bisected to their root causes:
+
+1. **First real MOUNT attempt**: `Files-11 home block not found on volume`
+   preceded by `%MOUNT-W-IDXHDRBAD, index file header is bad; backup used`.
+   Root cause found by re-decoding the real fixture's own `fh2_recattr`
+   (`hiblk`/`efblk` word order was backwards, see the `ods2_recattr_t`
+   comment) and `fh2_backlink` (was zero; must point to the containing
+   directory, FID 4/MFD for every reserved file -- see `ods2.h` [F2]).
+   Fixed both; MOUNT still failed identically.
+2. **Isolating "is IDXHDRBAD+backup-used even survivable?"**: corrupted
+   ONLY the real fixture's own FID 1 checksum (leaving its real, correct
+   alternate at LBN 24 untouched) -- MOUNT recovered via the backup and
+   mounted cleanly. Corrupting BOTH real FID 1 and its real alternate
+   reproduced our EXACT failure pair on an otherwise 100% real, working
+   volume -- proving the symptom is generically "both index headers look
+   bad to MOUNT", not evidence of a deep structural issue elsewhere.
+3. **Bisecting our own construction** via three more hybrid images (real
+   fixture bytes everywhere except one deliberately swapped structure):
+   - Real FID1/BITMAP/etc + OUR home block (fed the real geometry) →
+     **mounted cleanly**. Home-block construction exonerated.
+   - Real home + OUR reconstructed FID1 header (exact real 3-extent map,
+     exact real recattr/backlink, but OUR chosen `fh2_idoffset`/
+     `fh2_mpoffset`/`fh2_acoffset` values 54/114/114 instead of real's
+     40/100/255) → **failed identically**. Header construction implicated.
+   - Real FID1 header verbatim, with ONLY its three offset bytes changed
+     to 54/114/114 (ident/map bytes physically relocated to match,
+     checksum recomputed, every other field -- fileowner, `fh2_reserved1`,
+     fileprot, highwater, recattr, backlink, fid -- untouched) → **failed
+     identically**. This isolated the fault to the offset VALUES
+     themselves, not their surrounding content.
+   - Same test with ONLY `fh2_acoffset` changed back to the real sentinel
+     255 (idoffset/mpoffset left at 54/114) → **mounted cleanly**.
+     **Root cause: `fh2_acoffset` must be the sentinel 255 ("no ACL
+     area"), not an arbitrary "empty area starts right after mpoffset"
+     value.** See `ods2.h` [F4].
+4. **End-to-end with the writer's own complete output** (all fixes
+   applied): MOUNT progressed past the entire index/home/bitmap/MFD
+   validation with no IDXHDRBAD at all, then failed differently --
+   `%MOUNT-W-QUOTAFAIL` (non-fatal, no `QUOTA.SYS` present, expected) then
+   `%MOUNT-F-BADSECSYS, failed to create or access SECURITY.SYS` (fatal).
+   Tried SECURITY.SYS as a fake 1-block CONTIG allocation, a size-matched
+   (6 blocks, the real fixture's observed size) zero-filled allocation,
+   and a zero-length stub (matching the other 6 unpopulated reserved
+   files) -- **all three fail identically**. Real MOUNT requires genuine
+   ACL-database CONTENT in SECURITY.SYS, not merely its presence or
+   correct size. **KNOWN LIMITATION, not resolved in this increment**:
+   SECURITY.SYS's internal format is VSI-proprietary and undocumented,
+   out of clean-room reach per Rule 8 -- and copying the real fixture's
+   own SECURITY.SYS bytes into every OVMX-written volume would be
+   redistributing VSI-generated content wholesale, not deriving a format
+   from observed behavior, so that path was deliberately NOT taken.
+
+**What this proves and does not.** Steps 1-3 prove, on a real VAX, that
+this writer's home block, INDEXF.SYS, BITMAP.SYS/SCB, MFD, and (via the
+full end-to-end run reaching well past all of their validation with zero
+IDXHDRBAD warnings) directory-record insertion and file creation are
+genuinely byte-correct enough for OpenVMS's own F11X ACP to accept and
+walk -- not just this reader's own (separately-implemented) validation.
+It does NOT prove a full end-to-end `MOUNT` of a fresh, from-scratch
+`ods2_writer.c` volume succeeds today: SECURITY.SYS blocks that. A
+follow-up item should either research SECURITY.SYS's real structure
+through legitimate means (if any exist) or get an operator ruling on
+shipping a reduced/no-security-subsystem volume characteristic instead.

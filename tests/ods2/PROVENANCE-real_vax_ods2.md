@@ -753,6 +753,122 @@ written last block, e.g. one holding enough entries to need a second
 block with only one entry in it) to disambiguate hiblk/efblk's actual
 rule before generalizing it into the writer.
 
+## Addendum (increment 8, vms-0f3): `dir_rec` efblk/hiblk fixed -- FULL CLEAN MOUNT achieved, files list, new wall on plain-file content
+
+Increment 8's charter: diagnose and fix the ONE remaining `[OVMXDIR]`
+`BADIRECTORY` defect increment 7 isolated to this writer's own
+directory-file construction, then prove a real-VAX state transition.
+
+### Diagnosis: no new lab session needed -- direct byte decode of the fixture already in the repo
+
+Increment 7 flagged, but did not pursue (effort-capped), a field-by-field
+`fh2_recattr` diff of this writer's `[OVMXDIR]`/`[000000]` headers against
+`tests/ods2/real_vax_ods2.dsk`'s own FID11/FID4, noting `OVMXDIR.DIR`'s
+real `efblk` (2) exceeds its own `hiblk` (1) and flagging that a single
+real sample wasn't enough to safely generalize a rule. This increment
+re-derived both fields with a small local Python script doing a proper
+struct-level decode (home block -> `hdr_base` -> FH2 header -> recattr ->
+map-area format-1 extent decode), not a transcription, confirming exactly:
+
+```
+FID  4 (000000.DIR):  extent=[LBN 3, count 2]   hiblk=2  efblk=2  ffbyte=0
+FID 11 (OVMXDIR.DIR):  extent=[LBN 31, count 1]  hiblk=1  efblk=2  ffbyte=0
+```
+
+FID11's `efblk=2` genuinely exceeds its own 1-block allocation -- not a
+decode error. This matches the documented Files-11/RMS convention that
+EFBLK/FFBYTE express an end-of-file *position*, not an allocation size:
+when the last valid byte lands exactly on a block boundary, EFBLK is set
+to the block *following* the last one with data (FFBYTE 0), even if that
+following block was never separately allocated. FID4's `hiblk==efblk==2`
+is the SAME rule applied to a file whose trailing block happens to
+already be allocated -- not a contradiction once "efblk = (last block
+containing data) + 1" is the invariant instead of "efblk == hiblk".
+Every directory this writer itself creates (the MFD and every
+caller-created directory, via `ods2_wvolume_create_dir()` and the
+MFD-population path) is a single CONTIG block, so `efblk = hiblk + 1,
+ffbyte = 0` generalizes cleanly to both without needing to reproduce the
+real fixture's 2-block MFD (a separate, already-flagged, still-open
+simplification).
+
+### Fix
+
+`write_fh2_header_ext()`'s `FH2_KIND_DIR` branch in `ods2_writer.c` (the
+recattr-computation `else` arm for `total_count > 0`) now sets
+`efblk = total_count + 1` for directories, keeping `hiblk = total_count`
+and `ffbyte = 0`. Documented as `[F15]` in `ods2.h`. Offline `ctest -R
+ods2` stays green (no existing test asserts directory hiblk/efblk, so no
+regression risk there); `-Wall -Wextra` clean.
+
+### Validation: lab-2 pod `vaxlab-9` (the SAME pod increment 2 originally
+collected `real_vax_ods2.dsk` on), RQ3 scratch unit, procedure identical
+to every prior increment; restored to its original `cdrom`/ISO attach
+afterward; lab-1 and no other lab-2 pod touched.
+
+```
+$ MOUNT $2$DUA3: OVMXWRIT
+%MOUNT-I-MOUNTED, OVMXWRIT mounted on _$2$DUA3: (VAX1)
+```
+
+**Completely clean -- zero warnings.** No `QUOTAFAIL`, no `BADIRECTORY`,
+no `BADSECSYS`. This is the first fully-clean real-VAX `MOUNT` of an
+all-OVMX-written volume across all 8 increments of this effort.
+
+```
+$ DIRECTORY $2$DUA3:[OVMXDIR]
+Directory $2$DUA3:[OVMXDIR]
+HELLO.TXT;1         WORLD.TXT;1
+Total of 2 files.
+
+$ DIRECTORY $2$DUA3:[000000]
+Directory $2$DUA3:[000000]
+000000.DIR;1        BACKUP.SYS;1        BADBLK.SYS;1        BADLOG.SYS;1
+BITMAP.SYS;1        CONTIN.SYS;1        CORIMG.SYS;1        INDEXF.SYS;1
+OVMXDIR.DIR;1       SECURITY.SYS;1      VOLSET.SYS;1
+Total of 11 files.
+```
+
+Both directories, including the writer's own MFD, are now fully
+traversable by a real VAX. **This meets vms-0f3's acceptance criterion's
+directory-traversal half.**
+
+### The file-content half: a new, separate wall found (NOT chased, per this increment's effort cap)
+
+```
+$ TYPE $2$DUA3:[OVMXDIR]HELLO.TXT
+$
+```
+
+`TYPE` returns to the prompt with no output and no error message.
+`DUMP` of the same file proves the bytes genuinely are on disk:
+
+```
+$ DUMP $2$DUA3:[OVMXDIR]HELLO.TXT
+File ID (12,1,0)   End of file block 1 / Allocated 1
+Virtual block number 1 (00000001), 512 (0200) bytes
+ 72657469 72772032 2D53444F 20584D56 4F206568 74206D6F 7266206F 6C6C6568 hello from the OVMX ODS-2 writer 000000
+ 00000000 ... 0000000A ................................ 000020
+ (zero-fill through end of block)
+```
+
+The exact 34-byte string `ods2_wvolume_create_file()` was given
+(`"hello from the OVMX ODS-2 writer\n"`) is present verbatim at the start
+of the block. The likely cause: this writer stores plain-file content as
+a raw byte stream, but the file's own `fh2_recattr` declares
+`rattrib=0x02` (variable-length records, implied carriage control) --
+under that record format, RMS expects each on-disk record to begin with
+its own 2-byte little-endian record-length word, which this writer never
+writes. `TYPE`'s record-oriented read likely misparses the first two
+content bytes (`he` = `0x6568`) as a bogus record length and gives up
+without emitting anything. **Not diagnosed further or fixed this
+increment** -- charter was `[OVMXDIR]`'s `BADIRECTORY` specifically, and
+that defect is resolved and lab-confirmed. Recommended as **increment 9's
+target**: implement RMS variable-length-record framing (or determine
+`ods2_wvolume_create_file()`'s intended record attribute is wrong and it
+should mark files as `rattrib=0` "no record processing"/stream-LF
+instead -- both are legitimate, undecided design choices, not yet
+distinguished by any oracle observation this increment made).
+
 ### `ANALYZE/DISK_STRUCTURE`: confirmed lab-wide, not volume-specific
 
 Per increment 6's open question: retried `ANALYZE/DISK_STRUCTURE

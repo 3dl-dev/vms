@@ -843,6 +843,63 @@ ods2_status_t ods2_volume_list_dir(const ods2_volume_t *vol,
  *        0xFF empty-fill convention) was found and fixed in the same
  *        pass; also did not change the MOUNT outcome.
  *
+ *        UPDATE (increment 7, vms-0f3): a real-fixture splice of [000000]'s
+ *        own FH2 header + data block (byte-exact, only the retrieval
+ *        pointer LBN rewritten) mounted CLEAN on a real VAX -- isolating
+ *        the still-open BADIRECTORY defect to this writer's OWN [000000]
+ *        construction. The splice ALSO exposed a second, independent
+ *        instance of the same defect class on [OVMXDIR] (100% this
+ *        writer's own code, untouched by the splice). A dir_verlimit
+ *        field-confusion bug was found and fixed ([F14] below) but proved
+ *        NOT sufficient alone for either directory.
+ *
+ *        UPDATE (increment 8, vms-0f3): [F15] below (efblk/hiblk for
+ *        directory files) WAS the remaining defect for [OVMXDIR]. Fixed,
+ *        and validated end-to-end on a real VAX (lab-2 pod vaxlab-9):
+ *        `MOUNT $2$DUA3: OVMXWRIT` returns `%MOUNT-I-MOUNTED` with ZERO
+ *        warnings (no QUOTAFAIL, no BADIRECTORY, no BADSECSYS -- the
+ *        first fully clean real-VAX MOUNT of an all-OVMX-written volume),
+ *        `DIRECTORY $2$DUA3:[000000]` lists all 11 entries, and
+ *        `DIRECTORY $2$DUA3:[OVMXDIR]` lists both HELLO.TXT and
+ *        WORLD.TXT. **MOUNT-to-completion and directory traversal are
+ *        therefore ACHIEVED.** `DUMP` confirms HELLO.TXT's exact raw
+ *        bytes are present on disk, but `TYPE` of that same file shows no
+ *        content -- a NEW, separate wall: this writer stores plain-text
+ *        file data as a raw byte stream, not as RMS variable-length
+ *        records (each of which needs its own 2-byte little-endian
+ *        length-prefix word on disk); `TYPE`'s record-oriented read
+ *        apparently misparses the first content bytes as a bogus record
+ *        length. NOT investigated further this increment (out of the
+ *        [OVMXDIR]-BADIRECTORY-focused scope) -- recommended as
+ *        increment 9's target. See PROVENANCE-real_vax_ods2.md's
+ *        increment-8 addendum for the full lab-2 transcript.
+ *   [F15] (increment 8, vms-0f3): fh2_recattr.fat_efblk for DIRECTORY
+ *        files is NOT simply hiblk (the writer's prior assumption,
+ *        correct for 000000.DIR's real sample but never independently
+ *        checked against a second directory). Directly re-decoding
+ *        real_vax_ods2.dsk's own FID11 (OVMXDIR.DIR) header via a
+ *        struct-level byte decode (not a transcription) this increment
+ *        gives hiblk=1 (map extent is exactly 1 block, LBN 31 count 1)
+ *        but efblk=2 -- EFBLK EXCEEDS the file's own allocation. This
+ *        matches the documented Files-11/RMS convention that EFBLK/FFBYTE
+ *        express an end-of-file POSITION, not an allocation size: when
+ *        the last valid byte lands exactly on a block boundary, EFBLK is
+ *        set to the FOLLOWING block (FFBYTE 0) even if that block was
+ *        never separately allocated. Re-checked against 000000.DIR's own
+ *        real header: hiblk=2/efblk=2/ffbyte=0 is the SAME rule applied
+ *        to a file whose second (trailing) block happens to already be
+ *        allocated -- not a contradiction once "efblk = (last block with
+ *        data) + 1" is the invariant instead of "efblk == hiblk". Every
+ *        directory this writer creates (MFD and caller directories alike)
+ *        is a single CONTIG block, so `efblk = hiblk + 1, ffbyte = 0`
+ *        generalizes correctly to both without needing to model a
+ *        real multi-block MFD (a separately-flagged, still-open
+ *        [OVMX-inferred] simplification -- see SIMPLIFICATIONS below).
+ *        Fixed in write_fh2_header_ext()'s FH2_KIND_DIR branch
+ *        (ods2_writer.c). CONFIRMED LOAD-BEARING: real-VAX MOUNT of the
+ *        full writer output went from BADIRECTORY to a completely clean
+ *        `%MOUNT-I-MOUNTED` with both [000000] and [OVMXDIR] listable.
+ *
  * SIMPLIFICATIONS -- explicitly [OVMX-inferred], NOT claimed byte-genuine:
  *   - Reserved-file and created-file timestamps are left zero.
  *   - The stub reserved files (BADBLK/CORIMG/VOLSET/CONTIN/BACKUP/BADLOG)
@@ -852,7 +909,15 @@ ods2_status_t ods2_volume_list_dir(const ods2_volume_t *vol,
  *     data block in VBN1 with a correctly-computed, oracle-validated
  *     checksum -- see ods2_security_build() in ods2_writer.c -- resolving
  *     the SPECIFIC increment-3 BADCHECKSUM failure mode. A full real MOUNT
- *     still does not complete; see [F9].
+ *     NOW COMPLETES CLEANLY (increment 8, [F15]) and both [000000] and
+ *     [OVMXDIR] are directory-listable; see [F9]'s UPDATE trail. The
+ *     writer's MFD is still a single block (vs. the real fixture's 2 --
+ *     out of reach until multi-block directory growth is implemented) and
+ *     data-file content is a raw byte stream rather than RMS
+ *     variable-length records with per-record length prefixes, so `TYPE`
+ *     of a plain data file does not yet show its content even though the
+ *     bytes are genuinely on disk (confirmed via `DUMP`) -- open for a
+ *     future increment.
  * ================================================================ */
 
 /* Volume-format parameters for ods2_volume_format(). */

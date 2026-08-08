@@ -1,0 +1,68 @@
+# OVMX 0.2
+
+**The 0.2 milestone: OVMX installs, boots, and runs a real VMS application on a real executive — proven end-to-end under QEMU, with zero Unix leaking through the demo.**
+
+0.2 is anchored by one executed proof, not a checklist of claims: a dedicated CI
+gate boots the actual mastered bootable image under QEMU and drives the whole
+pitch — install → login → run a VMS app → keyed record I/O → independent
+confirmation — failing loudly rather than skipping. If that gate is green, the
+demo really happened.
+
+## The demo (the 0.2 hook)
+
+A single boot proves the chain, end to end, against the real `vms.ko` executive
+over `/dev/vms`:
+
+1. Boot a blank disk → `STARTUP.EXE` initializes and installs the system → login prompt.
+2. Log in as `SYSTEM` / `MANAGER`.
+3. `$ @SYS$UPDATE:PARTS_SETUP.COM` — the install procedure resolves through the
+   **executive-resident system logical names** and runs to `%PARTS-I-DONE`.
+4. `$ PARTS` — a VMS C application (foreign command) builds an **RMS indexed
+   file**, loads 10,000 records, and does **keyed random `sys$get`** lookups
+   (`PN000001`/`PN005000`/`PN010000` found; `PN999999` → NOTFOUND).
+5. The data file lands at `SYS$SCRATCH:PARTS.DAT` — a VMS filespec, first
+   candidate, **no `/tmp` fallback, zero Unix paths** in the transcript.
+6. `$ DIRECTORY SYS$SCRATCH:PARTS.DAT` independently confirms
+   `PARTS.DAT;1, Total of 1 file` — proving VMS file versioning, not a stdout claim.
+
+## What landed in 0.2
+
+- **Executive-resident system logical names.** `LNM$SYSTEM` lives in the executive
+  (`vms.ko`), reached via `/dev/vms`. `DEFINE/SYSTEM`, `SHOW LOGICAL`, `F$TRNLNM`,
+  and filespec resolution all route through it, so a name defined by one process
+  is seen by another — the cross-process behavior a real system needs. `@SYS$UPDATE:`
+  resolves in a fresh login session.
+- **Image activation continues the activator's VMS identity.** On VMS, running an
+  image does not create a process. OVMX's fork-per-image is now made invisible to
+  VMS: an activated image shares its activator's VMS PID, UIC, username, and
+  privileges — so `SYSTEM` can `RUN AUTHORIZE`. A privilege-reduced context still
+  cannot regain privileges. (Interim "Option B"; true in-process activation is the
+  1.0 target.)
+- **DCL file versioning.** `DIRECTORY` and filespec lookup honor VMS version
+  numbers (`NAME.TYP;n`): a bare name lists all versions, `;n` matches one, opens
+  take the highest.
+- **Genuine ODS-2 (Files-11).** A byte-faithful ODS-2 reader validated against a
+  real OpenVMS VAX V7.3 volume, plus a write path a real VAX MOUNTs through the
+  home block, INDEXF.SYS, BITMAP.SYS, the MFD, and directories — the foundation for
+  a real VAX mounting an OVMX-served volume.
+- **`./boot.sh`** — one command to build and boot OVMX in QEMU with a persistent
+  system disk.
+
+## Known limitations (tracked)
+
+- **System logical names keep a host-only fallback** for non-QEMU CI tooling; the
+  QEMU proof is genuine, but the fallback is scheduled for removal (`vms-48ab`).
+- **ODS-2 volumes do not yet fully MOUNT on a real VAX** — MOUNT completes through
+  the directory structure but stops at `SECURITY.SYS`, whose format is being derived
+  clean-room from lab observation (`vms-0f3`). No VSI bytes are copied.
+- **Image activation is the interim "Option B."** True in-process activation — no
+  fork, needing `vms.ko` P0/P1 address regions and access modes — is the 1.0 target
+  (`vms-68f`).
+
+## Authenticity
+
+Everything here is proven against the real executive over `/dev/vms` under QEMU —
+never a per-process userspace fake. VMS constants, messages, and formats are
+grounded in public OpenVMS documentation and observation of the reference labs
+(the AUTHORIZE privilege message, for example, was captured live from an OpenVMS
+VAX V7.3 system), never disassembled or copied from VSI/HPE binaries.

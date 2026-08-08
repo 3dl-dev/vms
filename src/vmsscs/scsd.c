@@ -26,6 +26,7 @@
  */
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <net/if.h>
 #include <netpacket/packet.h>
 #include <signal.h>
@@ -35,6 +36,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -526,6 +528,17 @@ static uint64_t ovmx_incarnation_time(void)
  * function exists for. */
 #define OVMX_MSCP_SRV_CTLR_FLAGS   0xa004u
 #define OVMX_MSCP_SRV_CTLR_VERSION 0x0547u
+
+/* vms-600: P.MEDI for a served unit. docs/cluster-protocol-spec.md sec on
+ * P.MEDI (the GUS-end-message field table) decodes this GROUNDED value --
+ * AA-L619A-TK sec 4.17 + Appendix C's worked example, calibrated against the
+ * lab's own RQ0/RQ1 config -- as DU RA92: `0x2564105c`. OVMX is not RA92
+ * hardware and a served unit here is a FILE, so this is a labeled DESIGN
+ * CHOICE riding on a real decode, not a hardware claim: geometry
+ * (track/group/cylinder/RCT) is left at scs_mscp_srv_attach_fd()'s spec
+ * default of 0 ("0 if inapplicable", sec 6.12) rather than asserting RA92
+ * geometry for a volume whose real block count is whatever file is attached. */
+#define OVMX_MSCP_SRV_MEDIA_ID 0x2564105cu
 
 /* vms-760 PURE-SERVER disk-CLIENT (established-join): after OVMX reaches NEW as a
  * pure server, a real joiner is ALSO a disk CLIENT -- it opens its OWN
@@ -1620,6 +1633,14 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
 static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
                                     size_t msglen, void *ctx);
 
+/* vms-600: the MSCP disk-server responder's LIVE block-transfer sender --
+ * scs_mscp_srv_xfer_fn's real implementation for a wire connection, as
+ * opposed to test_scs_mscp_srv.c's in-memory scs_mscp_srv_blk_sink_xfer().
+ * Defined below send_frame_vc() (needs the choke point); forward-declared
+ * here so scsd_mscp_srv_state() can install it with scs_mscp_srv_set_xfer(). */
+static long scsd_mscp_srv_xfer(void *ctx, const uint8_t buffer_desc[12],
+                               uint32_t lbn, const uint8_t *data, size_t len);
+
 /*
  * vms-561: the node's SCS SERVICE PORT -- the object the five architected
  * services (LISTEN, CONNECT, ACCEPT, REJECT, DISCONNECT) run against. One per
@@ -1664,19 +1685,113 @@ static int scsd_poller_ready = 0;
  * reason scsd_svc() is: SCSD_UNIT_TEST and test_scsd_wire.c build a world
  * without ever calling main().
  *
- * NO UNIT IS ATTACHED HERE. This item wires the responder so a command gets a
- * real end message instead of silence; it deliberately does NOT attach a
- * backing store or install a block-transfer xfer hook (scs_mscp_srv_attach_fd
- * / scs_mscp_srv_set_xfer) -- doing that is a live, wire-visible send path
- * this item has not run a lab bracket against (guardrail 23), and
- * scs_mscp_srv_handle() already answers a controller with zero attached units
- * HONESTLY (GET UNIT STATUS enumerates none, ONLINE/READ/WRITE answer
- * Unit-Offline) -- the same posture a real VMS server has with
- * MSCP_SERVE_ALL=1 and no drives. Attaching real media is follow-up work,
- * tracked outside this item.
+ * vms-600 CLOSES THE GAP THIS COMMENT USED TO DESCRIBE ("no unit is attached
+ * here"). A real VAX cannot MOUNT a unit this daemon never claims to serve --
+ * so scsd_mscp_srv_state() now attaches a backing store, READ ONLY, from
+ * OVMX_MSCP_SRV_UNIT_FILE if that env var is set, and installs the live
+ * block-transfer sender below unconditionally (installing it costs nothing
+ * when no unit is attached -- READ/WRITE never reach a unit that GET UNIT
+ * STATUS never enumerated). Left UNSET (the default, e.g. every existing
+ * ctest/CI run), the daemon keeps EXACTLY vms-34b's honest zero-unit posture:
+ * no fd is opened, GET UNIT STATUS enumerates nothing, ONLINE/READ/WRITE
+ * answer Unit-Offline. Nothing here changes behaviour for a node that never
+ * sets the variable.
+ *
+ * THE VOLUME MUST BE A GENUINE, USABLE ODS-2 VOLUME -- see the
+ * [[mscp-serve-actual-volume]] memory and scs_mscp_srv.h design decision (1):
+ * MSCP is filesystem-agnostic (it serves logical blocks, not files), and
+ * OVMX's own vmsfs is NOT ODS-2-compatible, so the CONTENT that makes a served
+ * unit real is that the bytes are a volume real VMS RMS can parse -- produced
+ * either by a real VAX (tests/ods2/real_vax_ods2.dsk) or by OVMX's own
+ * src/vmsfs/ods2 writer, itself verified against real-VAX MOUNT+DIRECTORY+TYPE
+ * (vms-0f3). A blank placeholder file would answer ONLINE/READ honestly at
+ * the WIRE level while being INV-6 dishonest at the VOLUME level -- this
+ * function does not create or fabricate a volume, only opens whatever
+ * OVMX_MSCP_SRV_UNIT_FILE already names, so that dishonesty is the caller's
+ * to make, not this daemon's.
  */
 static struct scs_mscp_srv scsd_mscp_srv;
 static int scsd_mscp_srv_ready = 0;
+static int scsd_mscp_srv_unit_fd = -1; /* -1 == nothing attached */
+
+/* vms-600: the live xfer hook's per-command scratch state -- see
+ * scsd_mscp_srv_xfer()'s own comment for why one static instance is correct
+ * for a single-threaded, synchronous responder. */
+static struct scsd_mscp_srv_xfer_ctx {
+    int                    sock;
+    int                    ifindex;
+    struct peer_state     *ps;
+    struct scs_mscp_params tmpl;  /* addressing/identity; seq fields overwritten per frame */
+    uint32_t               bytes_total;
+    uint32_t               bytes_sent;
+    uint32_t               src_buf_name;
+    uint16_t               conn_const;  /* UNGROUNDED wire field [4:6] -- see scs_mscp_srv.h */
+    uint16_t               xfer_const;  /* UNGROUNDED wire field [6:8] -- increments per transfer */
+} scsd_mscp_xfer_ctx;
+static uint16_t scsd_mscp_xfer_generation = 0;
+
+static void scsd_mscp_srv_maybe_attach(struct scs_mscp_srv *srv)
+{
+    const char *path = getenv("OVMX_MSCP_SRV_UNIT_FILE");
+    if (path == NULL) {
+        return; /* the default: no unit, vms-34b's honest zero-unit posture */
+    }
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        fprintf(stderr,
+                "SCSD-E-MSCPUNITOPEN, cannot open OVMX_MSCP_SRV_UNIT_FILE"
+                " '%s': %s -- serving with zero attached units\n",
+                path, strerror(errno));
+        return;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size < (off_t)SCS_MSCP_BLOCK_SIZE) {
+        fprintf(stderr,
+                "SCSD-E-MSCPUNITSIZE, '%s' is not at least one %u-byte block"
+                " -- refusing to serve it rather than claim a unit that isn't"
+                " there\n",
+                path, SCS_MSCP_BLOCK_SIZE);
+        close(fd);
+        return;
+    }
+    uint32_t nblocks = (uint32_t)((uint64_t)st.st_size / SCS_MSCP_BLOCK_SIZE);
+
+    int unit = 0;
+    const char *unit_env = getenv("OVMX_MSCP_SRV_UNIT");
+    if (unit_env != NULL) {
+        unit = atoi(unit_env);
+    }
+    if (unit < 0 || unit > 0xffff) {
+        fprintf(stderr,
+                "SCSD-E-MSCPUNITNUM, OVMX_MSCP_SRV_UNIT='%s' is out of range\n",
+                unit_env);
+        close(fd);
+        return;
+    }
+
+    /* P.UNTI (sec 6.12) must be non-zero and unique to this unit; scs_mscp_srv.h
+     * documents OVMX's own controller identity as "OVMX"+n (OVMX_MSCP_SRV_CTLR_ID)
+     * -- this follows the same OVMX DESIGN CHOICE pattern rather than inventing
+     * an unrelated scheme, since neither is derived from any oracle (OVMX has
+     * no real hardware serial number to report). */
+    uint64_t unit_id = 0x4F564D5800000000ULL | (uint64_t)(unsigned)(unit + 1);
+
+    if (scs_mscp_srv_attach_fd(srv, (uint16_t)unit, fd, nblocks, unit_id,
+                               OVMX_MSCP_SRV_MEDIA_ID, 1u) != 0) {
+        fprintf(stderr,
+                "SCSD-E-MSCPUNITATTACH, scs_mscp_srv_attach_fd() refused unit"
+                " %d from '%s'\n",
+                unit, path);
+        close(fd);
+        return;
+    }
+    scsd_mscp_srv_unit_fd = fd;
+    fprintf(stderr,
+            "SCSD-I-MSCPUNIT, serving unit %d from '%s' (%u blocks, %llu"
+            " bytes, read-only)\n",
+            unit, path, nblocks,
+            (unsigned long long)((uint64_t)nblocks * SCS_MSCP_BLOCK_SIZE));
+}
 
 static struct scs_mscp_srv *scsd_mscp_srv_state(void)
 {
@@ -1686,6 +1801,13 @@ static struct scs_mscp_srv *scsd_mscp_srv_state(void)
         (void)scs_mscp_srv_set_ctlr_profile(&scsd_mscp_srv,
                                             OVMX_MSCP_SRV_CTLR_FLAGS,
                                             OVMX_MSCP_SRV_CTLR_VERSION);
+        scsd_mscp_srv_maybe_attach(&scsd_mscp_srv);
+        /* Installed unconditionally: a READ can only reach this hook once
+         * scs_mscp_srv_handle() has found an online unit, so installing it
+         * with nothing attached changes nothing (the same "no unit" answers
+         * as before still fire first). */
+        (void)scs_mscp_srv_set_xfer(&scsd_mscp_srv, scsd_mscp_srv_xfer,
+                                    &scsd_mscp_xfer_ctx);
         scsd_mscp_srv_ready = 1;
     }
     return &scsd_mscp_srv;
@@ -2448,6 +2570,17 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                                sixteen above: this is ordinary sequenced SCS
  *                                traffic on a connection that cannot exist
  *                                before its circuit does.
+ *
+ *   CHOKED, and new in vms-600:
+ *     scsd_mscp_srv_xfer()       the live scs_mscp_srv_xfer_fn: the SCA
+ *                                block-transfer frames a READ streams before
+ *                                its end message, addressed with the SAME
+ *                                Con.ID pair on the SAME OPEN circuit as that
+ *                                end message -- exactly the traffic p. 2-31
+ *                                describes, called synchronously from inside
+ *                                scs_mscp_srv_handle() while
+ *                                scsd_mscp_srv_msg_input() (above) is still
+ *                                on the stack.
  *
  *   NOT CLAIMED: that all sixteen have been exercised on a wire since the
  *   move. What IS true and mechanically checked is that none of them can reach
@@ -6218,6 +6351,89 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
  * at the delivery site is what will notice the first frame that could be one.
  */
 
+/* vms-600: a private little-endian u32 reader, matching the read side of a
+ * host buffer descriptor (sec 5.3: {offset, SCS buffer NAME, SCS connection
+ * ID}, 12 bytes) the same way scs_mscp_srv.c's own static get_le32() does --
+ * not exported, so each translation unit that needs it keeps its own copy
+ * rather than sharing a wire-parsing helper across a module boundary. */
+static uint32_t scsd_mscp_le32(const uint8_t *s)
+{
+    return (uint32_t)s[0] | ((uint32_t)s[1] << 8) | ((uint32_t)s[2] << 16)
+           | ((uint32_t)s[3] << 24);
+}
+
+/* vms-600: OVMX's own SCS buffer name for the source half of a block
+ * transfer. OVMX never allocates a real SCS named buffer (scs_mscp_srv.h:
+ * "no SYSAP-side buffer table -- OVMX only ever plays the served-block
+ * side"), so this is an OVMX DESIGN CHOICE label, not a decode -- "OVM" in
+ * ASCII, chosen only so a capture shows an obviously-synthetic value rather
+ * than a suspiciously plausible one. */
+#define OVMX_MSCP_SRV_XFER_SRC_BUFNAME 0x004F564Du
+
+/*
+ * vms-600: scsd_mscp_srv_xfer - THE LIVE scs_mscp_srv_xfer_fn (see its
+ * typedef in scs_mscp_srv.h, design decision (4)). Called SYNCHRONOUSLY from
+ * inside scs_mscp_srv_handle(), once per 512-byte block a READ moves --
+ * scsd_mscp_srv_msg_input() populates scsd_mscp_xfer_ctx immediately before
+ * that call and it stays valid for the whole of it, because this daemon is
+ * single-threaded and synchronous (design decision (3)): there is never more
+ * than one command in flight, so one static context is correct and costs no
+ * allocation.
+ *
+ * Builds the 28-byte SCA block-transfer header (scs_mscp_srv.h "SCA BLOCK
+ * DATA TRANSFER", vms-4e31) from the command's own host buffer descriptor
+ * plus this transfer's running byte count, then sends it through
+ * send_frame_vc() -- the SAME choke point every other SCS-layer sender in
+ * this file uses (p. 2-31: no traffic on a circuit that is not OPEN). A
+ * block-transfer frame is ordinary sequenced traffic on the class driver's
+ * own connection, ADDRESSED using the SAME Con.ID pair as the end message
+ * that will follow it, not a formation packet -- so it is CHOKED like every
+ * other sequenced sender, not exempted. See this function's entry in the SEND
+ * SITE TABLE above send_frame_vc().
+ */
+static long scsd_mscp_srv_xfer(void *ctx, const uint8_t buffer_desc[12],
+                               uint32_t lbn, const uint8_t *data, size_t len)
+{
+    (void)lbn;
+    struct scsd_mscp_srv_xfer_ctx *c = (struct scsd_mscp_srv_xfer_ctx *)ctx;
+    if (c == NULL || c->ps == NULL || buffer_desc == NULL || data == NULL) {
+        return -1;
+    }
+
+    struct scs_mscp_blk_hdr h;
+    memset(&h, 0, sizeof(h));
+    /* Appendix D / docs/design-mscp-direction.md's decoded buffer descriptor:
+     * { u32 offset, u32 SCS buffer NAME, u32 SCS connection ID }. */
+    h.dest_conid      = scsd_mscp_le32(buffer_desc + 8);
+    h.f4              = c->conn_const;
+    h.f6              = c->xfer_const;
+    /* Down-counting, INCLUDING this frame's own data (docs/design-mscp-
+     * direction.md's capture decode). */
+    h.bytes_remaining = c->bytes_total - c->bytes_sent;
+    h.src_buf_name    = c->src_buf_name;
+    h.dest_offset     = scsd_mscp_le32(buffer_desc + 0) + c->bytes_sent;
+    h.dest_buf_name   = scsd_mscp_le32(buffer_desc + 4);
+    h.src_offset      = c->bytes_sent;
+
+    struct scs_mscp_params p = c->tmpl;
+    p.recv_ack = c->ps->vc.seq.recv_seq;
+    p.send_seq = scs_seq_advance(&c->ps->vc.seq);
+
+    uint8_t frame[SCS_ENV_ETH_HDR_LEN + SCS_MSCP_BLK_HDR_OFF
+                  + SCS_MSCP_BLK_HDR_LEN + SCS_MSCP_BLOCK_SIZE];
+    long flen = scs_mscp_srv_build_block_frame(&p, &h, data, len, frame,
+                                               sizeof(frame));
+    if (flen < 0) {
+        return -1;
+    }
+    if (send_frame_vc(c->sock, c->ifindex, c->ps, c->ps->pb,
+                      "MSCP block data (server)", frame, (size_t)flen) <= 0) {
+        return -1;
+    }
+    c->bytes_sent += (uint32_t)len;
+    return (long)len;
+}
+
 /*
  * vms-34b: scsd_mscp_srv_msg_input - THE LIVE MSCP DISK-SERVER RESPONDER's
  * message-input routine (p. 2-29). Installed on the CDT allocated at
@@ -6241,10 +6457,14 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
  * received frame" and re-deriving a synthetic Ethernet+SCA header around
  * `msg` to satisfy it would be duplicate, divergeable work.
  *
- * NO BACKING STORE IS ATTACHED (scsd_mscp_srv_state()'s comment). Every
- * command therefore gets scs_mscp_srv_handle()'s honest "nothing is attached"
- * answer (Unit-Offline / Invalid Command / Write Protected) -- a real end
- * message, never silence, which is the whole point.
+ * WHETHER A BACKING STORE IS ATTACHED depends on OVMX_MSCP_SRV_UNIT_FILE
+ * (scsd_mscp_srv_state()'s comment, vms-600). Unset -- every existing
+ * ctest/CI configuration -- every command still gets scs_mscp_srv_handle()'s
+ * honest "nothing is attached" answer (Unit-Offline / Invalid Command / Write
+ * Protected), unchanged from vms-34b. Set, a READ against an online unit now
+ * also drives scsd_mscp_srv_xfer() (above) to put real block data on the wire
+ * before the end message below it -- either way a real end message, never
+ * silence, which is the whole point.
  */
 static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
                                     size_t msglen, void *ctx)
@@ -6275,6 +6495,32 @@ static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
     size_t avail = (size_t)cur.len > hdr_off ? (size_t)cur.len - hdr_off : 0;
     size_t take = avail < sizeof(body) ? avail : sizeof(body);
     memcpy(body, cur.frame + hdr_off, take);
+
+    /* vms-600: prime the live xfer hook's scratch state BEFORE the call that
+     * may invoke it. scs_mscp_srv_handle() reaches scsd_mscp_srv_xfer() only
+     * from inside a READ against an online unit, but populating this
+     * unconditionally (rather than branching on v.base_opcode here too) keeps
+     * the "what the xfer hook sees" logic in exactly one place. */
+    scsd_mscp_xfer_ctx.sock = cur.rx->sock;
+    scsd_mscp_xfer_ctx.ifindex = cur.rx->ifindex;
+    scsd_mscp_xfer_ctx.ps = ps;
+    memset(&scsd_mscp_xfer_ctx.tmpl, 0, sizeof(scsd_mscp_xfer_ctx.tmpl));
+    memcpy(scsd_mscp_xfer_ctx.tmpl.dst_mac, ps_port_addr(ps), 6);
+    memcpy(scsd_mscp_xfer_ctx.tmpl.src_mac, cur.rx->our_hw_mac, 6);
+    memcpy(scsd_mscp_xfer_ctx.tmpl.src_logical, cur.rx->our_src_logical, 6);
+    memcpy(scsd_mscp_xfer_ctx.tmpl.peer_logical, ps_sys_addr(ps), 6);
+    scsd_mscp_xfer_ctx.tmpl.remote_conid = ps->mscp_srv_remote_conid;
+    scsd_mscp_xfer_ctx.tmpl.local_conid = OVMX_MSCP_SERVER_CONID;
+    scsd_mscp_xfer_ctx.tmpl.incarnation = ps->incarnation;
+    scsd_mscp_xfer_ctx.bytes_total =
+        (v.base_opcode == SCS_MSCP_OP_READ && !v.is_end
+         && take >= (size_t)SCS_MSCP_P_BCNT + 4)
+            ? scsd_mscp_le32(body + SCS_MSCP_P_BCNT)
+            : 0;
+    scsd_mscp_xfer_ctx.bytes_sent = 0;
+    scsd_mscp_xfer_ctx.src_buf_name = OVMX_MSCP_SRV_XFER_SRC_BUFNAME;
+    scsd_mscp_xfer_ctx.conn_const = 0; /* UNGROUNDED wire field -- scs_mscp_srv.h */
+    scsd_mscp_xfer_ctx.xfer_const = ++scsd_mscp_xfer_generation;
 
     uint8_t end[SCS_MSCP_SRV_END_MAX];
     long endlen = scs_mscp_srv_handle(scsd_mscp_srv_state(),

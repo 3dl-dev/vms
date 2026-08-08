@@ -5651,6 +5651,273 @@ static void test_mscp_srv_answers_a_command_on_a_live_connection(void)
           "the answer's P.CRF does not echo the command's (sec 5.1)");
 }
 
+/* vms-600: a private little-endian u32 poke, matching scsd_mscp_le32()'s
+ * read side. Needed because scs_mscp_build_command() only lays down the
+ * 12-byte MSCP header + (for SCC only) its own parameter area -- struct
+ * scs_mscp_cmd carries no fields for a transfer command's byte count, LBN or
+ * host buffer descriptor (they belong to Phase D, the SERVER side, not the
+ * client builder), so a READ test fixture has to patch them into the
+ * already-built, already-zeroed body by hand, exactly as
+ * test_scs_mscp_srv.c's make_command()/wle32() do at the module level. */
+static void poke_le32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v & 0xffu);
+    p[1] = (uint8_t)((v >> 8) & 0xffu);
+    p[2] = (uint8_t)((v >> 16) & 0xffu);
+    p[3] = (uint8_t)((v >> 24) & 0xffu);
+}
+
+/*
+ * (2a-1a) vms-600: THE LIVE ATTACH + LIVE BLOCK-TRANSFER PATH.
+ *
+ * test_mscp_srv_answers_a_command_on_a_live_connection (above) proves the
+ * responder answers on a live connection with ZERO units attached -- the
+ * vms-34b posture this daemon still defaults to. This is the OTHER half
+ * vms-600 needed closed: with OVMX_MSCP_SRV_UNIT_FILE naming a real backing
+ * file, GET UNIT STATUS/ONLINE see a real unit and a READ against it puts
+ * REAL block-transfer frames -- built by scsd_mscp_srv_xfer(), the LIVE wire
+ * sender wired through send_frame_vc(), not test_scs_mscp_srv.c's in-memory
+ * scs_mscp_srv_blk_sink_xfer() -- on the wire before its end message,
+ * carrying the backing file's ACTUAL bytes back to the class driver.
+ *
+ * This is still not a real VAX on a real wire (that is the lab bracket vms-600
+ * itself calls for); it is the daemon-level proof that the wiring this item
+ * adds -- env-var attach, live xfer through the one choke point every other
+ * SCS sender uses -- is exercised end to end through the same
+ * scsd_handle_frame() dispatch a real class driver's frames would take.
+ */
+static void test_mscp_srv_live_attach_serves_real_blocks(void)
+{
+    const unsigned NBLK = 4;
+    char path[128];
+    snprintf(path, sizeof(path), "/tmp/vms600-scsd-img-%d.raw", (int)getpid());
+    int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    CHECK(fd >= 0, "test fixture: could not create the backing image");
+    if (fd < 0) {
+        return;
+    }
+    uint8_t blk[SCS_MSCP_BLOCK_SIZE];
+    for (unsigned i = 0; i < NBLK; i++) {
+        memset(blk, (int)(0xA0 + i), sizeof(blk));
+        /* A marker so a wrong LBN, or a fake/zeroed answer, cannot pass. */
+        blk[0] = 'G';
+        blk[1] = 'E';
+        blk[2] = 'N';
+        blk[3] = (uint8_t)i;
+        CHECK(write(fd, blk, sizeof(blk)) == (ssize_t)sizeof(blk),
+              "test fixture: could not write block %u", i);
+    }
+    close(fd);
+
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_MSCP_SERVER") == 0, "unsetenv failed");
+    CHECK(setenv("OVMX_MSCP_SRV_UNIT_FILE", path, 1) == 0, "setenv failed");
+    CHECK(unsetenv("OVMX_MSCP_SRV_UNIT") == 0, "unsetenv failed"); /* -> unit 0 */
+
+    /* scsd_mscp_srv_state() lazily inits ONCE per process; an earlier test in
+     * this binary may already have run it with the variable unset. Force a
+     * fresh init so THIS test's env var is the one actually read -- the same
+     * pattern test_no_conn_fsm_does_not_turn_into_a_refusal_storm() uses on
+     * scsd_cdl_ready. */
+    if (scsd_mscp_srv_unit_fd >= 0) {
+        close(scsd_mscp_srv_unit_fd);
+        scsd_mscp_srv_unit_fd = -1;
+    }
+    scsd_mscp_srv_ready = 0;
+
+    uint8_t req[sizeof(cap_vaxcluster_connect_req)];
+    subst_sysap_name(req, cap_vaxcluster_connect_req,
+                     sizeof(cap_vaxcluster_connect_req), "MSCP$DISK");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    rx_feed(&r, req, sizeof(req));
+
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->mscp_srv_bound == 1,
+          "the daemon did not bind the MSCP$DISK server connection");
+
+    struct scs_mscp_srv *srv = scsd_mscp_srv_state();
+    struct scs_mscp_srv_unit *u = scs_mscp_srv_find_unit(srv, 0);
+    CHECK(u != NULL, "OVMX_MSCP_SRV_UNIT_FILE did not attach unit 0");
+    if (u == NULL) {
+        goto cleanup;
+    }
+    CHECK(u->unit_size == NBLK,
+          "the attached unit reports %u blocks, expected %u (the real file"
+          " size)",
+          u->unit_size, NBLK);
+
+    struct scs_mscp_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, r.rx.our_hw_mac, 6);
+    memcpy(p.src_mac, vax1_hw_mac, 6);
+    memcpy(p.src_logical, vax1_logical, 6);
+    memcpy(p.peer_logical, r.rx.our_src_logical, 6);
+    p.remote_conid = OVMX_MSCP_SERVER_CONID;   /* destination: OVMX */
+    p.local_conid = ps->mscp_srv_remote_conid; /* source: the class driver */
+
+    /* sec 3.4: SET CONTROLLER CHARACTERISTICS is the precondition. */
+    uint8_t scc[SCS_MSCP_FRAME_LEN];
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = (uint16_t)(ps->vc.seq.recv_seq + 1u);
+    p.cmd_ref = 100;
+    CHECK(scs_mscp_build_scc(&p, scc) == 0,
+          "the SCC command fixture failed to build");
+    rx_feed(&r, scc, sizeof(scc));
+
+    /* ONLINE (sec 6.13): READ answers Unit-Available, not Success, on a unit
+     * that has not been brought Unit-Online -- see handle_read()'s own gate. */
+    struct scs_mscp_cmd c;
+    uint8_t online[SCS_MSCP_FRAME_LEN];
+    memset(&c, 0, sizeof(c));
+    c.cmd_ref = 101;
+    c.unit = 0;
+    c.opcode = SCS_MSCP_OP_ONLINE;
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = (uint16_t)(ps->vc.seq.recv_seq + 1u);
+    CHECK(scs_mscp_build_command(&p, &c, online) == 0,
+          "the ONLINE command fixture failed to build");
+    rx_feed(&r, online, sizeof(online));
+
+    struct scs_mscp_view vonline;
+    CHECK(scs_mscp_parse(scsd_test_last_frame, scsd_test_last_len, &vonline)
+              == 0,
+          "the ONLINE answer does not parse as MSCP-over-SCS");
+    CHECK(vonline.is_end && vonline.base_opcode == SCS_MSCP_OP_ONLINE,
+          "the ONLINE answer is not an ONLINE end message");
+    CHECK(scs_mscp_status_major(vonline.status) == SCS_MSCP_ST_SUCCESS,
+          "ONLINE did not succeed (status major %u)",
+          scs_mscp_status_major(vonline.status));
+
+    /* READ 2 blocks starting at LBN 1 -- straddling the middle of the unit,
+     * so a fixed-LBN bug (always block 0, say) cannot pass unnoticed. */
+    unsigned sends_before = scsd_test_frames;
+    uint8_t readcmd[SCS_MSCP_FRAME_LEN];
+    memset(&c, 0, sizeof(c));
+    c.cmd_ref = 102;
+    c.unit = 0;
+    c.opcode = SCS_MSCP_OP_READ;
+    p.recv_ack = ps->vc.seq.recv_seq;
+    p.send_seq = (uint16_t)(ps->vc.seq.recv_seq + 1u);
+    CHECK(scs_mscp_build_command(&p, &c, readcmd) == 0,
+          "the READ command fixture failed to build");
+    {
+        size_t bodyoff = (size_t)SCS_ENV_ETH_HDR_LEN + (size_t)SCS_MSCP_BODY_OFF;
+        poke_le32(readcmd + bodyoff + SCS_MSCP_P_BCNT, 2u * SCS_MSCP_BLOCK_SIZE);
+        poke_le32(readcmd + bodyoff + SCS_MSCP_P_LBN, 1u);
+        /* the host buffer descriptor: {offset, SCS buffer NAME, SCS Con.ID} */
+        poke_le32(readcmd + bodyoff + SCS_MSCP_P_BUFF + 0, 0x2000u);
+        poke_le32(readcmd + bodyoff + SCS_MSCP_P_BUFF + 4, 0x3000u);
+        poke_le32(readcmd + bodyoff + SCS_MSCP_P_BUFF + 8, 0x40004000u);
+    }
+    rx_feed(&r, readcmd, sizeof(readcmd));
+
+    CHECK(scsd_test_frames > sends_before,
+          "no frame was transmitted while answering the READ");
+
+    /*
+     * Classify every frame sent while answering this READ instead of pinning
+     * an exact count: the p. 2-31 SCS layer legitimately interleaves its OWN
+     * traffic (measured live here -- a periodic 0x48 credit-return, the SAME
+     * mechanism scs_reflect_credit()/the SEND SITE TABLE's "0x48
+     * credit-return" entry names) around whatever a command handler sends,
+     * and this test's job is the MSCP-level content, not a census of the SCS
+     * layer's own flow control. A block-transfer frame is identified by
+     * scs_mscp_srv_blk_parse_frame() succeeding AND carrying exactly one
+     * whole block of data (the parser's header-shape check alone is not
+     * enough -- the READ end message below is also long enough to pass the
+     * length check, and is excluded by requiring a full-block payload).
+     */
+    unsigned block_frames_found = 0;
+    int end_found = 0;
+    uint8_t seen_block1[SCS_MSCP_BLOCK_SIZE], seen_block2[SCS_MSCP_BLOCK_SIZE];
+    uint32_t seen_conid[2] = { 0, 0 };
+    uint32_t seen_bufname[2] = { 0, 0 };
+    uint32_t seen_offset[2] = { 0, 0 };
+    struct scs_mscp_view vread;
+    memset(&vread, 0, sizeof(vread));
+
+    for (unsigned i = sends_before; i < scsd_test_frames; i++) {
+        size_t idx = (size_t)i % SCSD_TEST_RING;
+        const uint8_t *fr = scsd_test_ring[idx];
+        size_t frlen = scsd_test_ring_len[idx];
+
+        struct scs_mscp_srv_blk_view bv;
+        memset(&bv, 0, sizeof(bv));
+        if (scs_mscp_srv_blk_parse_frame(fr, frlen, &bv) == 0 && bv.data != NULL
+            && bv.data_len == SCS_MSCP_BLOCK_SIZE) {
+            if (block_frames_found < 2) {
+                memcpy(block_frames_found == 0 ? seen_block1 : seen_block2,
+                       bv.data, SCS_MSCP_BLOCK_SIZE);
+                seen_conid[block_frames_found] = bv.hdr.dest_conid;
+                seen_bufname[block_frames_found] = bv.hdr.dest_buf_name;
+                seen_offset[block_frames_found] = bv.hdr.dest_offset;
+            }
+            block_frames_found++;
+            continue;
+        }
+
+        struct scs_mscp_view v2;
+        if (scs_mscp_parse(fr, frlen, &v2) == 0 && v2.is_end
+            && v2.base_opcode == SCS_MSCP_OP_READ) {
+            end_found++;
+            vread = v2;
+        }
+    }
+
+    CHECK(block_frames_found == 2,
+          "found %u SCA block-transfer frame(s) carrying a whole block,"
+          " expected exactly 2 (one per requested block)",
+          block_frames_found);
+    CHECK(end_found == 1,
+          "found %d READ end message(s) among the frames sent, expected"
+          " exactly 1",
+          end_found);
+
+    uint8_t expect1[SCS_MSCP_BLOCK_SIZE], expect2[SCS_MSCP_BLOCK_SIZE];
+    CHECK(scs_mscp_srv_read_blocks(u, 1, 1, expect1, sizeof(expect1)) > 0,
+          "test fixture: could not re-read LBN 1 directly");
+    CHECK(scs_mscp_srv_read_blocks(u, 2, 1, expect2, sizeof(expect2)) > 0,
+          "test fixture: could not re-read LBN 2 directly");
+    CHECK(block_frames_found >= 1
+              && memcmp(seen_block1, expect1, SCS_MSCP_BLOCK_SIZE) == 0,
+          "the first block-transfer frame does not carry LBN 1's REAL"
+          " content -- either a fake success or the wrong block");
+    CHECK(block_frames_found >= 2
+              && memcmp(seen_block2, expect2, SCS_MSCP_BLOCK_SIZE) == 0,
+          "the second block-transfer frame does not carry LBN 2's REAL"
+          " content");
+    CHECK(seen_conid[0] == 0x40004000u && seen_conid[1] == 0x40004000u,
+          "the block frames do not address the host's own Con.ID from its"
+          " buffer descriptor");
+    CHECK(seen_bufname[0] == 0x3000u && seen_bufname[1] == 0x3000u,
+          "the block frames do not carry the host's buffer NAME");
+    CHECK(seen_offset[0] == 0x2000u,
+          "the first block frame's destination offset is not the buffer"
+          " descriptor's base offset");
+    CHECK(seen_offset[1] == 0x2000u + SCS_MSCP_BLOCK_SIZE,
+          "the second block frame's offset did not advance by one block");
+
+    /* The end message: real Success, real byte count -- not the always-refuse
+     * Controller Error a missing xfer hook (or an unattached unit) answers
+     * with. */
+    CHECK(scs_mscp_status_major(vread.status) == SCS_MSCP_ST_SUCCESS,
+          "the READ did not succeed (status major %u) -- a real VAX would see"
+          " a refusal, not the data it just asked for",
+          scs_mscp_status_major(vread.status));
+
+cleanup:
+    CHECK(unsetenv("OVMX_MSCP_SRV_UNIT_FILE") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_MSCP_SRV_UNIT") == 0, "unsetenv failed");
+    if (scsd_mscp_srv_unit_fd >= 0) {
+        close(scsd_mscp_srv_unit_fd);
+        scsd_mscp_srv_unit_fd = -1;
+    }
+    scsd_mscp_srv_ready = 0; /* leave later tests their own zero-unit posture */
+    unlink(path);
+}
+
 /*
  * (2a-2) vms-257 REGRESSION: A REAL PEER'S op-4 REJECT_REQ ANSWERING OUR
  * MSCP$DISK CONNECT_REQ MUST NOT BE MISREAD AS AN ACCEPT.
@@ -8630,6 +8897,9 @@ int main(void)
     test_sdir_refuses_a_connect_request_for_an_unlisted_sysap();
     /* vms-34b: the MSCP$DISK server connection now answers, not just accepts. */
     test_mscp_srv_answers_a_command_on_a_live_connection();
+    /* vms-600: with a real unit attached, the same live path serves real
+     * blocks over a real block-transfer frame, not just a status word. */
+    test_mscp_srv_live_attach_serves_real_blocks();
     /* vms-257: a real peer's op-4 REJECT_REQ answering OUR MSCP$DISK connect
      * must not be misread as an ACCEPT. */
     test_mscp_connect_reject_req_is_not_misread_as_accept();

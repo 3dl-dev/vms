@@ -2448,6 +2448,82 @@ static void test_null_source_conid_binds_nothing(void)
           "a null-source frame released the add-member burst");
 }
 
+/*
+ * vms-770 (vms-a61 audit) -- A SHORT SEQAPP DATA FRAME MUST NOT BE MISREAD AS
+ * A CONNECT-REQUEST.
+ *
+ * scs_connect_parse's has_conid used to BE branch (c)'s length-class test:
+ * before vms-a61 it was set ONLY for the 110-/190-byte classes, so "SEQAPP +
+ * has_conid" already meant "a CONNECT/ACCEPT-class frame". vms-a61 widened
+ * has_conid to every envelope-conformant class (58/62/66/86/94 too --
+ * scs_env.h; correct THERE, since the Con.ID pair sits at the same fixed
+ * offset on all seven classes), which silently deleted that guarantee for
+ * every caller leaning on it. scsd.c's branch (c) was the one caller that did:
+ * with no other guard, a 58-content SEQAPP frame (scs_credit.h's "0x4B13
+ * family" -- ordinary data/credit traffic) whose destination Con.ID happens
+ * to be 0 would fall into the CONNECT-RESPONSE completion dialogue and OVMX
+ * would TRANSMIT a bogus CONNECT-ECHO/CONNECT-RESPONSE answering a frame that
+ * was never a CONNECT_REQ.
+ *
+ * THE INPUT IS BUILT BY THE PRODUCTION ENVELOPE BUILDER (scs_env_build_frame),
+ * exactly as test_scs_connect.c's has_conid-widening test does, so a
+ * hand-typed mistake in the conformance fields cannot make this fixture
+ * vacuous: a successful build already proves the frame is envelope-conformant
+ * before scsd.c ever sees it. buf[30]/[31] (SCS_MSGTYPE_SEQAPP / GROUNDED) are
+ * set explicitly since they sit outside the envelope scs_env_build_frame owns.
+ */
+static void test_short_seqapp_frame_with_null_dest_conid_sends_no_connect_response(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    CHECK(ps != NULL, "no peer slot for the fixture's circuit");
+    if (ps == NULL) {
+        return;
+    }
+
+    uint8_t frame[14 + SCS_ENV_HDR_END];
+    memset(frame, 0, sizeof(frame));
+    memcpy(frame + OFF_ETH_DST, vax2_hw_mac, 6); /* directed to OVMX */
+    memcpy(frame + OFF_ETH_SRC, vax1_hw_mac, 6); /* from the open-circuit peer */
+    frame[12] = (uint8_t)(SCA_ETHERTYPE >> 8);
+    frame[13] = (uint8_t)(SCA_ETHERTYPE & 0xff);
+
+    uint8_t *content = frame + 14;
+    uint16_t lenword = (uint16_t)(SCS_ENV_HDR_END - 2);
+    content[0] = (uint8_t)(lenword & 0xffu);
+    content[1] = (uint8_t)((lenword >> 8) & 0xffu);
+    frame[30] = SCS_MSGTYPE_SEQAPP; /* 0x4b -- the SAME opcode a real CONNECT_REQ carries */
+    frame[31] = SCS_FORMAT_CONST;   /* 0x13 -- GROUNDED */
+
+    struct scs_env_fields f;
+    f.mtype = SCS_ENV_MTYPE_APP_MESSAGE; /* ordinary data, NOT a connect handshake MTYPE */
+    f.credit = 0;
+    f.dest_conid = 0;          /* the shape that used to gate CONNECT-RESPONSE completion */
+    f.src_conid = 0x62C50009u; /* an arbitrary, already-established peer handle */
+    CHECK(scs_env_build_frame(frame, sizeof(frame), &f) == 0,
+          "scs_env_build_frame built the 58-content fixture");
+
+    long resp_before = r.rx.connect_resp_sent;
+    unsigned frames_before = scsd_test_frames;
+    rxlog_reset();
+
+    rx_feed(&r, frame, sizeof(frame));
+
+    CHECK(r.rx.connect_resp_sent == resp_before,
+          "a 58-content SEQAPP data frame with dest Con.ID 0 made the daemon"
+          " send %ld CONNECT-RESPONSE(s), expected 0",
+          r.rx.connect_resp_sent - resp_before);
+    CHECK(scsd_test_frames == frames_before,
+          "%u frame(s) went out answering a 58-content data frame as if it were"
+          " a CONNECT-REQUEST",
+          scsd_test_frames - frames_before);
+    CHECK(ps->connected == 0,
+          "OVMX bound the VMS$VAXcluster connection off a 58-content data frame");
+    CHECK(!rxlog_has("SCSD-I-CONNRESP"),
+          "the daemon logged a CONNECT-RESPONSE for a non-connect frame");
+}
+
 /* ==========================================================================
  * vms-7c0 -- THE p. 2-29 DELIVERY PATH, DRIVEN BY A REAL CAPTURED APPLICATION
  * MESSAGE ADDRESSED TO ONE OF OVMX'S OWN Con.IDs.
@@ -8505,6 +8581,10 @@ int main(void)
     test_captured_connect_rsp_drives_the_classifier();
     test_captured_ovmx_accept_req_opens_the_joiner();
     test_null_source_conid_binds_nothing();
+    /* vms-770 (vms-a61 audit): has_conid no longer implies the 110-/190-byte
+     * connect classes, so branch (c) must not treat a short SEQAPP data frame
+     * as a CONNECT-REQUEST. */
+    test_short_seqapp_frame_with_null_dest_conid_sends_no_connect_response();
     /* vms-7c0: the p. 2-29 delivery path -- a real captured application message
      * reaching its SYSAP by CONID lookup through the CDL, plus the two refusals
      * that make the lookup a gate rather than a formality. */

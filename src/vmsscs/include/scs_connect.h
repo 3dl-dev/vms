@@ -357,9 +357,14 @@ struct scs_connect_view {
     uint16_t total_sca_len;  /* LE u16 at abs 14 + 2 */
     uint8_t  msgtype;        /* abs 30 (0x41/0x5b/0x4b/0x48) */
     uint8_t  format;         /* abs 31 (expect 0x13) */
-    uint32_t remote_conid;   /* abs 64 LE u32 (valid only for the 110/190-byte Con.ID classes) */
+    uint32_t remote_conid;   /* abs 64 LE u32 (valid only when has_conid is set) */
     uint32_t local_conid;    /* abs 68 LE u32 */
-    int      has_conid;      /* 1 if total_sca_len is a Con.ID-bearing class (110 or 190) */
+    int      has_conid;      /* 1 if the frame is envelope-conformant (vms-a61: every
+                               * SCS length class -- 58/62/66/86/94/110/190 -- carries
+                               * the Con.ID pair at this fixed offset, not just 110/190.
+                               * A caller that needs a SPECIFIC class (e.g. scsd.c's
+                               * CONNECT/ACCEPT completion, which only 110/190 carry)
+                               * must check total_sca_len itself -- see vms-770. */
     /* --- vms-fdd: the peer's SCA connect data, valid only when
      * has_connect_data == 1 (110-byte class, message type CONNECT_REQ or
      * ACCEPT_REQ). conn_msgtype is [46:48] and is filled whenever the frame

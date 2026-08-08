@@ -8924,6 +8924,26 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         if (v.msgtype != SCS_MSGTYPE_SEQAPP || !v.has_conid) {
             return;
         }
+        /* vms-770 (vms-a61 audit): has_conid used to BE the length-class test
+         * this branch needs -- scs_connect_parse only set it for the 110-/190-
+         * byte classes, so "SEQAPP + has_conid" meant "a CONNECT/ACCEPT-class
+         * frame" for free. vms-a61 widened has_conid to every envelope-
+         * conformant class (58/62/66/86/94 too, scs_env.h), which is the
+         * correct fix THERE (the Con.ID pair is exactly as grounded on those
+         * classes) but silently deleted the length-class guarantee this branch
+         * was relying on. Left alone, a short SEQAPP data/credit frame (e.g.
+         * the 58-content class, scs_credit.h's "0x4B13 family") whose
+         * destination Con.ID happens to be 0 would fall into the
+         * CONNECT-RESPONSE completion dialogue below and OVMX would transmit
+         * a bogus CONNECT-ECHO/CONNECT-RESPONSE answering a frame that was
+         * never a CONNECT_REQ. Restore the scoping explicitly instead of
+         * leaning on has_conid's old side effect: only the 110-byte
+         * CONNECT/ACCEPT class and the 190-byte add-member class carry a
+         * connect handshake this branch knows how to complete. */
+        if (v.total_sca_len != SCS_CONNECT_SCA_LEN &&
+            v.total_sca_len != SCS_MEMBER_SCA_LEN) {
+            return;
+        }
         struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
         if (ps == NULL) {
             return;
@@ -9142,8 +9162,11 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
          * guard of this block:
          *   - reaching here needs v.msgtype == SCS_MSGTYPE_SEQAPP, i.e.
          *     buf[30] == 0x4b, which is in (b1)'s opcode set;
-         *   - reaching here needs v.has_conid, which scs_connect_parse only
-         *     sets for the 110-/190-byte classes with len >= 72, so (b1)'s
+         *   - reaching here ALSO needs the explicit vms-770 length-class
+         *     guard above (v.total_sca_len == 110 or 190) -- has_conid alone
+         *     no longer implies this since vms-a61 widened it to every
+         *     envelope-conformant class, so this comment's proof now leans on
+         *     that guard rather than on has_conid itself -- so (b1)'s
          *     `n >= 72` holds too;
          *   - (b1) RETURNS whenever rconid == OVMX_JOINER_CONID && lconid != 0.
          * So the only frame that could ever have reached a joiner branch here

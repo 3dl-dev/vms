@@ -21,9 +21,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef ODS2_REAL_FIXTURE
-#error "ODS2_REAL_FIXTURE must be defined by CMake to the fixture's path"
-#endif
+/* The fixture's absolute path is supplied at run time via the ODS2_REAL_FIXTURE
+ * environment variable (set by CTest in tests/ods2/CMakeLists.txt). It is passed
+ * this way rather than as a -D string macro so CMake does not emit
+ * backslash-escaped quotes into compile_commands.json (rejected by the
+ * kif_caller_census authenticity gate). */
+static const char *fixture_path(void)
+{
+    const char *p = getenv("ODS2_REAL_FIXTURE");
+    return (p && *p) ? p : "real_vax_ods2.dsk";
+}
 
 static int g_failures = 0;
 
@@ -56,12 +63,13 @@ static int g_failures = 0;
 
 static uint8_t *load_fixture(size_t *len_out)
 {
-    FILE *f = fopen(ODS2_REAL_FIXTURE, "rb");
+    const char *path = fixture_path();
+    FILE *f = fopen(path, "rb");
     uint8_t *buf;
     long sz;
 
     if (!f) {
-        printf("  FAIL: cannot open fixture %s\n", ODS2_REAL_FIXTURE);
+        printf("  FAIL: cannot open fixture %s\n", path);
         g_failures++;
         return NULL;
     }
@@ -144,7 +152,7 @@ int main(void)
     const struct dir_entry_capture *e;
 
     printf("=== ODS-2 reader vs a REAL OpenVMS VAX V7.3 volume ===\n");
-    printf("fixture: %s\n", ODS2_REAL_FIXTURE);
+    printf("fixture: %s\n", fixture_path());
 
     img = load_fixture(&img_len);
     if (!img) {

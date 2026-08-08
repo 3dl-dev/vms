@@ -159,6 +159,12 @@ add_subdirectory(src/vmsdcl)
 add_subdirectory(src/vmsscs)
 
 if(BUILD_TESTS)
+    # PARTS demo application (RMS indexed file) + its host functional gate
+    # (beads vms-e97/vms-f20). Guarded by BUILD_TESTS so the distro image build
+    # (Dockerfile.bootable, BUILD_TESTS=OFF) is unaffected; the VMS-native
+    # PARTS.EXE is built separately by src/apps/parts/mk_parts.sh.
+    add_subdirectory(src/apps/parts)
+
     add_subdirectory(tests/libvms)
     add_subdirectory(tests/vmsprocess)
     add_subdirectory(tests/vmslnm)

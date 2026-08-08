@@ -34,6 +34,46 @@ struct dir_entry {
     struct stat st;
 };
 
+/*
+ * dcl_filename_component - Extract the raw NAME.TYPE;VERSION text a user
+ * typed in a VMS filespec (device:[dir]NAME.TYPE;VERSION), without
+ * touching it.
+ *
+ * This is deliberately NOT the same as taking the basename of whatever
+ * dcl_resolve_path()/dcl_resolve_filespec() resolved: for a bare name
+ * (no ";N"), filespec resolution may collapse it down to one literal
+ * on-disk version (see dcl_filespec.c's resolve_version_suffix(), which
+ * exists so single-file commands like TYPE/COPY/DELETE can fopen() the
+ * real "name.type;N" file a bare reference implies). DIRECTORY and PURGE
+ * must NOT see that collapsed name — VMS's own rule is that a bare name
+ * lists/considers ALL versions, only an explicit ";N" narrows to one.
+ * Callers that need "match every version" semantics (via
+ * vmsfs_wildcard_match(), which already knows the version rules) must
+ * feed it the version marker exactly as the user typed it, not a
+ * synthesized one.
+ *
+ * Returns NULL for a raw Linux path passthrough (starts with '/', './'
+ * or '../' — see dcl_resolve_path()), which carries no VMS version
+ * marker to preserve; the caller should fall back to its own basename
+ * logic in that case.
+ */
+static const char *dcl_filename_component(const char *spec)
+{
+    if (!spec) return NULL;
+    if (spec[0] == '/' || (spec[0] == '.' && (spec[1] == '/' || spec[1] == '.')))
+        return NULL;
+
+    const char *p = spec;
+    const char *bracket_end = strrchr(spec, ']');
+    if (bracket_end) {
+        p = bracket_end + 1;
+    } else {
+        const char *col = strrchr(spec, ':');
+        if (col) p = col + 1;
+    }
+    return p;
+}
+
 /* Compare directory entries: name ascending (case-insensitive), version descending */
 static int dir_entry_cmp(const void *a, const void *b)
 {
@@ -69,13 +109,16 @@ int cmd_directory(struct dcl_command *cmd)
         if (stat(linux_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
             /* It's a directory */
         } else {
-            /* Might be a wildcard pattern - split dir and pattern */
+            /* Might be a wildcard pattern - split dir and pattern.
+             * Use the ORIGINAL filename+version text, not linux_dir's own
+             * basename — see dcl_filename_component()'s doc comment. */
+            const char *orig = dcl_filename_component(cmd->params[0]);
             char *last_slash = strrchr(linux_dir, '/');
             if (last_slash) {
-                pattern = strdup(last_slash + 1);
+                pattern = strdup((orig && orig[0]) ? orig : last_slash + 1);
                 *(last_slash + 1) = '\0';
             } else {
-                pattern = strdup(linux_dir);
+                pattern = strdup((orig && orig[0]) ? orig : linux_dir);
                 vmsfs_to_linux_path(ctx->default_dir, linux_dir, sizeof(linux_dir));
             }
         }
@@ -888,15 +931,18 @@ int cmd_purge(struct dcl_command *cmd)
             strncpy(linux_dir, resolved, sizeof(linux_dir) - 1);
             linux_dir[sizeof(linux_dir) - 1] = '\0';
         } else {
-            /* Split path into directory + filename pattern */
+            /* Split path into directory + filename pattern. Use the
+             * ORIGINAL filename+version text, not resolved's own
+             * basename — see dcl_filename_component()'s doc comment. */
+            const char *orig = dcl_filename_component(cmd->params[0]);
             char *last_slash = strrchr(resolved, '/');
             if (last_slash) {
-                pattern = strdup(last_slash + 1);
+                pattern = strdup((orig && orig[0]) ? orig : last_slash + 1);
                 *(last_slash + 1) = '\0';
                 strncpy(linux_dir, resolved, sizeof(linux_dir) - 1);
                 linux_dir[sizeof(linux_dir) - 1] = '\0';
             } else {
-                pattern = strdup(resolved);
+                pattern = strdup((orig && orig[0]) ? orig : resolved);
                 vmsfs_to_linux_path(ctx->default_dir, linux_dir, sizeof(linux_dir));
             }
         }

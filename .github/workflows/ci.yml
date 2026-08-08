@@ -321,6 +321,66 @@ jobs:
             /test.sh
 
   # -----------------------------------------------------------------------
+  # Job 2b: PARTS 0.2 Demo E2E (vms-1c8, epic vms-2579/vms-5dd)
+  #
+  # The OVMX 0.2 "killer app" demo, end to end, against a REAL docker+QEMU
+  # boot of the actual shipped image (tests/qemu/test_parts_demo_e2e.sh, see
+  # that file's header for exactly what it proves and why nothing else does):
+  # boot -> SYSTEM/MANAGER login -> `@SYS$UPDATE:PARTS_SETUP.COM` -> the bare
+  # foreign command `$ PARTS` -> a 10000-record RMS indexed load with keyed
+  # lookups -> zero /tmp leaks -> an INDEPENDENT `$ DIRECTORY
+  # SYS$SCRATCH:PARTS.DAT` from the SAME session corroborating the file
+  # really exists (not just PARTS's own stdout claim).
+  #
+  # This is a REAL, EXECUTED proof, never a CI substitute: the harness
+  # (tests/qemu/run_parts_demo_e2e.sh) only SKIPs (exit 77) when docker
+  # itself is unavailable, which is never true on this runner, so the step
+  # below fails loudly if it ever sees that exit code instead of silently
+  # passing — a lane that can't boot vms.ko and run the demo is "unproven
+  # here", not proven otherwise (CLAUDE.md Rule 9).
+  #
+  # Runs whenever a PR touches the surfaces this demo exercises (DCL/vmsfs/
+  # RMS/boot assembly) or on any push/schedule/merge_group, same convention
+  # as persistent-boot above.
+  # -----------------------------------------------------------------------
+  parts-demo-e2e:
+    name: PARTS 0.2 Demo E2E (real boot, RMS load, DIRECTORY corroboration)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.core == 'true' || needs.changes.outputs.boot == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: PARTS 0.2 demo e2e — boot, install, run, verify
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_parts_demo_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: parts_demo_e2e SKIPPED in CI — this gate must actually run the real boot+demo, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
   # Job 3b: Kernel Executive (vms-e4d, epic vms-6b8 PHASE 0 HARD BARRIER)
   #
   # This is the ONLY CI job that boots a real kernel, insmods vms.ko, and runs

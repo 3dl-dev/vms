@@ -459,53 +459,63 @@ printf '/* OVMX-USERSPACE: sys$negctl_ghost ('"$CITE_FIX_ID"') -- negctl orphan 
 expect_red "$EVENT" "a declaration naming a service that does not exist" \
     "DECLARES SOMETHING THAT IS NOT A SERVICE: sys\$negctl_ghost"
 
+# These generic declaration-parser controls USED sys$setast as their victim,
+# but vms-as1 wired src/libvms/syssvc/sys_ast.c to the executive, so sys$setast
+# is now an OVMX-PARTIAL/OVMX-LOCAL mixture rather than a single OVMX-USERSPACE
+# line -- the wrong shape for these single-declaration parse controls. They are
+# retargeted to sys$gettim (src/libvms/syssvc/sys_time.c, $TIME), a stable
+# single OVMX-USERSPACE service and this file's established generic victim (the
+# asm-label and relocation controls below already use it). The property under
+# test is the gate's DECLARATION PARSER and is agnostic to which service; each
+# control still resets the tree via restore().
+
 # The declaration must sit with the implementation. Parked in another file it
 # is a central register again, and it rots when the implementation moves.
-sed -i 's|^ \* OVMX-USERSPACE: sys\$setast (vms-as1)|  * NEGCTL-MOVED-AWAY: sys$setast (vms-as1)|' "$AST"
-printf '/* OVMX-USERSPACE: sys$setast (vms-as1) -- negctl wrong translation unit */\n' >> "$EVENT"
-expect_red "$AST $EVENT" "a declaration parked in a translation unit that does not define the service" \
-    "DECLARED IN THE WRONG TRANSLATION UNIT: sys\$setast"
+sed -i 's|^ \* OVMX-USERSPACE: sys\$gettim (vms-642)|  * NEGCTL-MOVED-AWAY: sys$gettim (vms-642)|' "$TIME"
+printf '/* OVMX-USERSPACE: sys$gettim (vms-642) -- negctl wrong translation unit */\n' >> "$EVENT"
+expect_red "$TIME $EVENT" "a declaration parked in a translation unit that does not define the service" \
+    "DECLARED IN THE WRONG TRANSLATION UNIT: sys\$gettim"
 
 # Two declarations for one service: which item is the live one?
-printf '/* OVMX-USERSPACE: sys$setast (vms-as1) -- negctl duplicate */\n' >> "$AST"
-expect_red "$AST" "one service declared twice" \
-    "DECLARED MORE THAN ONCE: sys\$setast"
+printf '/* OVMX-USERSPACE: sys$gettim (vms-642) -- negctl duplicate */\n' >> "$TIME"
+expect_red "$TIME" "one service declared twice" \
+    "DECLARED MORE THAN ONCE: sys\$gettim"
 
 # The item id is the whole point of "declared against an item". Removing it
 # also removes the declaration (an unparseable line declares nothing) -- that
 # second red is a consequence of this one, not a separate defect.
-sed -i 's|OVMX-USERSPACE: sys\$setast (vms-as1) --|OVMX-USERSPACE: sys$setast --|' "$AST"
-expect_red "$AST" "a declaration with no item id" \
+sed -i 's|OVMX-USERSPACE: sys\$gettim (vms-642) --|OVMX-USERSPACE: sys$gettim --|' "$TIME"
+expect_red "$TIME" "a declaration with no item id" \
     "malformed OVMX declaration"
 
 # The reason is the register's content: an id alone records that somebody
 # noticed, not what answers instead. Same consequential second red as above.
-sed -i 's|\(OVMX-USERSPACE: sys\$setast (vms-as1)\) --.*|\1|' "$AST"
-expect_red "$AST" "a declaration with an item id but no reason" \
+sed -i 's|\(OVMX-USERSPACE: sys\$gettim (vms-642)\) --.*|\1|' "$TIME"
+expect_red "$TIME" "a declaration with an item id but no reason" \
     "malformed OVMX declaration"
 
 # Deleting the declaration outright must not quietly re-hide the facade.
-sed -i '/OVMX-USERSPACE: sys\$setast (vms-as1)/d' "$AST"
-expect_red "$AST" "a declaration simply deleted" \
-    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$setast"
+sed -i '/OVMX-USERSPACE: sys\$gettim (vms-642)/d' "$TIME"
+expect_red "$TIME" "a declaration simply deleted" \
+    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$gettim"
 
 # THE ANTI-SHRINK PROPERTY. Renaming the definition out of the sys$ namespace
 # (and taking its declaration with it) removes the service from the DEFINITION
 # reading. The prototype half of the union still holds it, and NAMES it.
-sed -i 's|^uint32_t sys\$setast(|uint32_t ovmx_negctl_setast(|' "$AST"
-sed -i '/OVMX-USERSPACE: sys\$setast (vms-as1)/d' "$AST"
-expect_red "$AST" "a service renamed out of the sys\$ namespace to shrink the universe" \
-    "PROTOTYPE WITH NO DEFINITION: sys\$setast"
+sed -i 's|^uint32_t sys\$gettim(|uint32_t ovmx_negctl_gettim(|' "$TIME"
+sed -i '/OVMX-USERSPACE: sys\$gettim (vms-642)/d' "$TIME"
+expect_red "$TIME" "a service renamed out of the sys\$ namespace to shrink the universe" \
+    "PROTOTYPE WITH NO DEFINITION: sys\$gettim"
 
 # THE OTHER HALF OF THE UNION. Deleting the PROTOTYPE removes the service from
 # the header reading; the definition reading still holds it, so dropping the
 # declaration alongside must still be a RED. Without this control the union is
 # only proven from the prototype side (the rename above), and the header could
 # quietly become the whole universe.
-sed -i '/^uint32_t sys\$setast(/d' "$STARLET"
-sed -i '/OVMX-USERSPACE: sys\$setast/d' "$AST"
-expect_red "$STARLET $AST" "a prototype deleted to shrink the universe, declaration dropped with it" \
-    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$setast"
+sed -i '/^uint32_t sys\$gettim(/d' "$STARLET"
+sed -i '/OVMX-USERSPACE: sys\$gettim/d' "$TIME"
+expect_red "$STARLET $TIME" "a prototype deleted to shrink the universe, declaration dropped with it" \
+    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$gettim"
 
 # THE ANTI-SHRINK PROPERTY FROM THE SIDE THAT USED TO WORK (vms-f26). The two
 # controls above rename the definition OR delete the prototype; each is caught

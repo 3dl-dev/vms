@@ -1119,11 +1119,14 @@ expect_green "$TIME $LIBVMSCM" \
 
 # RULE 10'S SECOND ANSWER MUST STAY OPEN. Deleting the service outright --
 # definition, prototype and declaration together -- is the honest fix, and the
-# register must not stand in its way.
-sed -i '/OVMX-USERSPACE: sys\$setast/d' "$AST"
-sed -i 's|^uint32_t sys\$setast(uint32_t enbflg) {|static uint32_t ovmx_negctl_removed(uint32_t enbflg) {|' "$AST"
-sed -i '/^uint32_t sys\$setast(/d' "$STARLET"
-expect_green "$AST $STARLET" "deleting a service outright (definition + prototype + declaration) stays green"
+# register must not stand in its way. Retargeted from sys$setast to sys$gettim
+# (vms-as1): sys$setast is no longer a single OVMX-USERSPACE line, so deleting
+# its "declaration" by that anchor left the PARTIAL/LOCAL pair behind and the
+# service half-deleted. sys$gettim is a clean single-declaration service.
+sed -i '/OVMX-USERSPACE: sys\$gettim/d' "$TIME"
+sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr) {|static uint32_t ovmx_negctl_removed(uint64_t *timadr) {|' "$TIME"
+sed -i '/^uint32_t sys\$gettim(/d' "$STARLET"
+expect_green "$TIME $STARLET" "deleting a service outright (definition + prototype + declaration) stays green"
 
 # --------------------------------------------------------- structural guards --
 # Three of the gate's FAIL paths are not properties of an individual service:

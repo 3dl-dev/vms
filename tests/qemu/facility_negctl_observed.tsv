@@ -41,9 +41,11 @@ RED	getmode-buffer-not-written	test_kmod_access	... and the mode really changed
 RED	getmode-buffer-not-written	test_kmod_access	... and the mode really returned to USER
 RED	getmode-buffer-not-written	test_kmod_access	a process starts in USER mode
 RED	getmode-buffer-not-written	test_kmod_bind	adoption preserved the privilege mask SETIDENT established
-RUN	ast-setast-disable	test_kmod_ast	pass
+RUN	ast-setast-disable	test_kmod_ast test_syssvc_ast	pass
 RED	ast-setast-disable	test_kmod_ast	SETAST(enable) returns WASCLR (== prev state was disabled)
 RED	ast-setast-disable	test_kmod_ast	disable again: prev state was disabled
+RED	ast-setast-disable	test_syssvc_ast	SETAST(enable) returns WASCLR (== prev state was disabled)
+RED	ast-setast-disable	test_syssvc_ast	disable again: prev state was disabled
 RUN	eflag-clref-noop	test_kmod_eflag test_kmod_eflag_mproc test_syssvc_ef_local test_syssvc_ef_mproc	pass
 RED	eflag-clref-noop	test_kmod_eflag	cluster has flags 0,3,7,31 set
 RED	eflag-clref-noop	test_kmod_eflag	readef(5) after clear returns WASCLR
@@ -272,7 +274,7 @@ RED	pcb-per-thread	test_kmod_bind	sibling thread's cluster state carries the fla
 RED	pcb-per-thread	test_kmod_ident	... and sees the identity the other thread stamped
 RED	pcb-per-thread	test_kmod_ident	... as the SAME process, not a second one (one PCB per process)
 RED	pcb-per-thread	test_kmod_ident	a second thread of the process is known to the executive
-RUN	bind-client-no-register	test_kmod_bind test_syssvc_authorize test_syssvc_ef_local test_syssvc_ef_mproc test_syssvc_ident test_syssvc_lock_status test_syssvc_procnam test_syssvc_setname test_syssvc_setuai test_syssvc_showdev test_syssvc_showproc test_syssvc_showterm test_syssvc_startup_service	pass
+RUN	bind-client-no-register	test_kmod_bind test_syssvc_ast test_syssvc_authorize test_syssvc_ef_local test_syssvc_ef_mproc test_syssvc_ident test_syssvc_lock_status test_syssvc_procnam test_syssvc_setname test_syssvc_setuai test_syssvc_showdev test_syssvc_showproc test_syssvc_showterm test_syssvc_startup_service	pass
 RED	bind-client-no-register	test_kmod_bind	$DEQ released the lock
 RED	bind-client-no-register	test_kmod_bind	$ENQ EX granted through /dev/vms
 RED	bind-client-no-register	test_kmod_bind	$ENQ returned a lock id
@@ -286,6 +288,16 @@ RED	bind-client-no-register	test_kmod_bind	forked child resolves itself in the p
 RED	bind-client-no-register	test_kmod_bind	forked child's $SETEF reaches the executive
 RED	bind-client-no-register	test_kmod_bind	the executive entry is this process's own
 RED	bind-client-no-register	test_kmod_bind	vms_kif_open() then a BARE vms_kif_setident() reaches the executive with no explicit register
+RED	bind-client-no-register	test_syssvc_ast	SETAST(enable) returns WASCLR (== prev state was disabled)
+RED	bind-client-no-register	test_syssvc_ast	disable again: prev state was disabled
+RED	bind-client-no-register	test_syssvc_ast	sys$dclast queued an AST while delivery was disabled
+RED	bind-client-no-register	test_syssvc_ast	sys$dclast reported success declaring an AST
+RED	bind-client-no-register	test_syssvc_ast	sys$setast(1) delivered the queued AST through the public API
+RED	bind-client-no-register	test_syssvc_ast	the AST declared through the PUBLIC sys$dclast is in the EXECUTIVE queue (a per-process fake would be invisible to the kernel reader)
+RED	bind-client-no-register	test_syssvc_ast	the delivered AST ran with the astprm sys$dclast declared
+RED	bind-client-no-register	test_syssvc_ast	the executive round-tripped the access mode the public sys$dclast declared
+RED	bind-client-no-register	test_syssvc_ast	the executive round-tripped the astadr the public sys$dclast declared
+RED	bind-client-no-register	test_syssvc_ast	the executive round-tripped the astprm the public sys$dclast declared
 RED	bind-client-no-register	test_syssvc_authorize	A: AUTHORIZE exited 0 for the admitted session
 RED	bind-client-no-register	test_syssvc_authorize	A: AUTHORIZE printed its version banner -- the SYSPRV holder was ADMITTED
 RED	bind-client-no-register	test_syssvc_authorize	A: the SYSPRV holder was never refused

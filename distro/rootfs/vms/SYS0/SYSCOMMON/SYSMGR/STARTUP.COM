@@ -36,6 +36,14 @@ $! Define system-wide logical names
 $ DEFINE/SYSTEM SYS$STARTUP SYS$MANAGER
 $ DEFINE/SYSTEM SYS$LOGIN SYS$MANAGER
 $!
+$! SYS$UPDATE -- [SYS0.SYSCOMMON.SYSUPD], the standard VMS home for
+$! pre-PCSI layered-product install kits and their SETUP.COM procedures
+$! (e.g. SYS$UPDATE:PARTS_SETUP.COM, vms-977/vms-2579). Not one of the
+$! logicals lnm_setup_defaults() hardcodes (src/vmslnm/lnm_defaults.c) --
+$! defined here, the same way SYS$STARTUP/SYS$LOGIN above are, rather than
+$! adding to that baseline table.
+$ DEFINE/SYSTEM SYS$UPDATE SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSUPD]
+$!
 $! Login banners are NOT set here -- LOGINOUT reads SYS$ANNOUNCE and
 $! SYS$WELCOME, which a manager defines in SYS$MANAGER:SYLOGICALS.CONF.
 $! The startup banner itself is displayed by STARTUP.EXE from the system

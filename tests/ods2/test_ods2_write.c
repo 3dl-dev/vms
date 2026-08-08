@@ -112,9 +112,11 @@ int main(void)
     ods2_format_params_t params;
     ods2_wvolume_t wvol;
     ods2_status_t st;
-    ods2_fid_t ovmxdir_fid, hello_fid, world_fid;
+    ods2_fid_t ovmxdir_fid, hello_fid, world_fid, manyline_fid;
     const char hello_data[] = "hello from the OVMX ODS-2 writer\n";
     const char world_data[] = "genuine Files-11 bytes\n";
+    char manyline_data[40 * 16 + 1];
+    size_t manyline_len = 0;
 
     printf("=== ODS-2 writer round-trip (increment 3) ===\n");
 
@@ -154,6 +156,31 @@ int main(void)
 
     st = ods2_wvolume_dir_insert(&wvol, ovmxdir_fid, "WORLD.TXT", 1, world_fid);
     CHECK_EQ(st, ODS2_OK, "dir_insert(OVMXDIR, WORLD.TXT)");
+
+    /* MANYLINE.TXT (increment 9, vms-0f3, [F16]): a regression case for the
+     * "records may straddle a 512-byte block boundary" finding (see
+     * ods2.h's ods2_var_records_decode() comment) -- 40 lines of 13
+     * content bytes each (16 bytes on disk per record: 2-byte prefix + 13
+     * + 1 word-alignment pad byte) = 640 on-disk bytes, spanning 2
+     * allocated blocks with the boundary landing mid-record. Created here
+     * (before the dump below) so a real-VAX lab-2 MOUNT/TYPE cross-check
+     * exercises it too, not just the ctest reader round-trip. */
+    {
+        unsigned li;
+        for (li = 0; li < 40; li++) {
+            int n = sprintf(manyline_data + manyline_len, "line %2u text\n", li);
+            manyline_len += (size_t)n;
+        }
+        manyline_data[manyline_len] = '\0';
+
+        st = ods2_wvolume_create_file(&wvol, "MANYLINE.TXT", 1,
+                                      (const uint8_t *)manyline_data, manyline_len,
+                                      ovmxdir_fid, &manyline_fid);
+        CHECK_EQ(st, ODS2_OK, "create_file(MANYLINE.TXT)");
+        st = ods2_wvolume_dir_insert(&wvol, ovmxdir_fid, "MANYLINE.TXT", 1,
+                                     manyline_fid);
+        CHECK_EQ(st, ODS2_OK, "dir_insert(OVMXDIR, MANYLINE.TXT)");
+    }
 
     /* Optional: dump the finished image to disk for a manual lab-2 MOUNT
      * cross-check (see PROVENANCE-real_vax_ods2.md / the increment-3 PR
@@ -386,7 +413,7 @@ int main(void)
             memset(&dc, 0, sizeof(dc));
             st = ods2_volume_list_dir(&vol, hdr, dir_collect, &dc);
             CHECK_EQ(st, ODS2_OK, "list_dir(OVMXDIR)");
-            CHECK_EQ(dc.count, 2, "OVMXDIR has exactly 2 entries");
+            CHECK_EQ(dc.count, 3, "OVMXDIR has exactly 3 entries");
 
             e = find_entry(&dc, "HELLO.TXT");
             CHECK(e != NULL, "HELLO.TXT listed");
@@ -401,46 +428,100 @@ int main(void)
                 CHECK_EQ(e->version, 1, "WORLD.TXT version");
                 CHECK_EQ(e->fid_num, ods2_fid_number(&world_fid), "WORLD.TXT fid");
             }
+
+            e = find_entry(&dc, "MANYLINE.TXT");
+            CHECK(e != NULL, "MANYLINE.TXT listed");
+            if (e) {
+                CHECK_EQ(e->version, 1, "MANYLINE.TXT version");
+                CHECK_EQ(e->fid_num, ods2_fid_number(&manyline_fid), "MANYLINE.TXT fid");
+            }
         }
 
-        /* HELLO.TXT / WORLD.TXT data round-trips byte-for-byte */
+        /* HELLO.TXT / WORLD.TXT data round-trips through the RMS VAR-record
+         * framing (increment 9, vms-0f3, [F16]): ods2_wvolume_create_file()
+         * no longer writes a raw byte copy -- it frames each line as an
+         * RMS variable-length record (2-byte LE length prefix, real-VAX
+         * oracle-confirmed on-disk shape, see ods2.h/ods2_reader.c's [F16]
+         * comments) so a real VAX's RMS can actually TYPE the file, not
+         * just DUMP its bytes. ods2_file_read_text() is the SAME decode
+         * path a real VAX's RMS VAR-record reader implements, so this is a
+         * genuine round-trip through the on-disk framing, not a bypass of
+         * it. */
         st = ods2_volume_read_header(&vol, ods2_fid_number(&hello_fid),
                                      hdr, sizeof(hdr));
         CHECK_EQ(st, ODS2_OK, "read_header(HELLO.TXT)");
         if (st == ODS2_OK) {
             ods2_fh2_t parsed;
-            memset(&ec, 0, sizeof(ec));
-            st = ods2_fh2_map_walk(hdr, extent_collect, &ec, NULL);
-            CHECK_EQ(st, ODS2_OK, "map_walk(HELLO.TXT)");
-            CHECK_EQ(ec.n, 1, "HELLO.TXT one extent");
-            if (ec.n >= 1) {
-                const uint8_t *data = ods2_volume_block(&vol, ec.ext[0].lbn);
-                CHECK(data != NULL, "HELLO.TXT data block in range");
-                if (data)
-                    CHECK(memcmp(data, hello_data, strlen(hello_data)) == 0,
-                          "HELLO.TXT content round-trips");
-            }
+            char text[256];
+            size_t text_len = 0;
+
             st = ods2_fh2_parse(hdr, ODS2_BLOCK_SIZE, &parsed);
             CHECK_EQ(st, ODS2_OK, "fh2_parse(HELLO.TXT)");
-            if (st == ODS2_OK)
+            if (st == ODS2_OK) {
+                CHECK_EQ(parsed.fh2_recattr.fat_rtype, ODS2_RTYPE_VAR,
+                         "HELLO.TXT rtype == VAR");
+                CHECK_EQ(parsed.fh2_recattr.fat_rattrib, ODS2_RAT_CR,
+                         "HELLO.TXT rattrib == implied CR");
+                CHECK_EQ(parsed.fh2_recattr.fat_rsize, strlen(hello_data) - 1,
+                         "HELLO.TXT rsize == its one record's length");
                 CHECK_EQ(parsed.fh2_backlink.fid_num, ods2_fid_number(&ovmxdir_fid),
                          "HELLO.TXT backlink == OVMXDIR");
+            }
+
+            st = ods2_file_read_text(&vol, hdr, text, sizeof(text), &text_len);
+            CHECK_EQ(st, ODS2_OK, "ods2_file_read_text(HELLO.TXT)");
+            if (st == ODS2_OK) {
+                CHECK_EQ(text_len, strlen(hello_data), "HELLO.TXT decoded length");
+                CHECK(memcmp(text, hello_data, strlen(hello_data)) == 0,
+                      "HELLO.TXT content round-trips through VAR framing");
+            }
         }
 
         st = ods2_volume_read_header(&vol, ods2_fid_number(&world_fid),
                                      hdr, sizeof(hdr));
         CHECK_EQ(st, ODS2_OK, "read_header(WORLD.TXT)");
         if (st == ODS2_OK) {
+            char text[256];
+            size_t text_len = 0;
+
+            st = ods2_file_read_text(&vol, hdr, text, sizeof(text), &text_len);
+            CHECK_EQ(st, ODS2_OK, "ods2_file_read_text(WORLD.TXT)");
+            if (st == ODS2_OK) {
+                CHECK_EQ(text_len, strlen(world_data), "WORLD.TXT decoded length");
+                CHECK(memcmp(text, world_data, strlen(world_data)) == 0,
+                      "WORLD.TXT content round-trips through VAR framing");
+            }
+        }
+
+        /* Regression case for the increment-9 diagnosis: a real VAX record
+         * MAY straddle a 512-byte block boundary (direct byte decode of
+         * tests/ods2/real_vax_ods2.dsk's own HELLO.TXT proved this -- see
+         * ods2.h's ods2_var_records_decode() comment); only word-alignment
+         * padding applies. MANYLINE.TXT (created above, before the dump)
+         * has 40 lines spanning 2 allocated blocks with the boundary
+         * landing mid-record, to prove this writer's own output survives
+         * exactly that case round-trip. */
+        st = ods2_volume_read_header(&vol, ods2_fid_number(&manyline_fid),
+                                     hdr, sizeof(hdr));
+        CHECK_EQ(st, ODS2_OK, "read_header(MANYLINE.TXT)");
+        if (st == ODS2_OK) {
+            char text[40 * 16 + 8];
+            size_t text_len = 0;
+
             memset(&ec, 0, sizeof(ec));
             st = ods2_fh2_map_walk(hdr, extent_collect, &ec, NULL);
-            CHECK_EQ(st, ODS2_OK, "map_walk(WORLD.TXT)");
-            CHECK_EQ(ec.n, 1, "WORLD.TXT one extent");
-            if (ec.n >= 1) {
-                const uint8_t *data = ods2_volume_block(&vol, ec.ext[0].lbn);
-                CHECK(data != NULL, "WORLD.TXT data block in range");
-                if (data)
-                    CHECK(memcmp(data, world_data, strlen(world_data)) == 0,
-                          "WORLD.TXT content round-trips");
+            CHECK_EQ(st, ODS2_OK, "map_walk(MANYLINE.TXT)");
+            CHECK_EQ(ec.n, 1, "MANYLINE.TXT one extent");
+            if (ec.n >= 1)
+                CHECK(ec.ext[0].count >= 2,
+                      "MANYLINE.TXT allocation spans >=2 blocks");
+
+            st = ods2_file_read_text(&vol, hdr, text, sizeof(text), &text_len);
+            CHECK_EQ(st, ODS2_OK, "ods2_file_read_text(MANYLINE.TXT)");
+            if (st == ODS2_OK) {
+                CHECK_EQ(text_len, manyline_len, "MANYLINE.TXT decoded length");
+                CHECK(memcmp(text, manyline_data, manyline_len) == 0,
+                      "MANYLINE.TXT content round-trips across a block boundary");
             }
         }
     }

@@ -476,3 +476,94 @@ ods2_status_t ods2_volume_list_dir(const ods2_volume_t *vol,
         return st;
     return c.st;
 }
+
+/* ---- RMS variable-length (RFM=VAR) record decode [F16], increment 9 ---- */
+
+ods2_status_t ods2_var_records_decode(const void *data, size_t data_bytes,
+                                      char *out, size_t out_cap,
+                                      size_t *out_len)
+{
+    const uint8_t *b = (const uint8_t *)data;
+    size_t off = 0, w = 0;
+
+    if (!data || (!out && out_cap > 0))
+        return ODS2_ERR_ARGS;
+
+    while (off < data_bytes) {
+        uint16_t rlen;
+        size_t content_end, next;
+
+        if (off + 2 > data_bytes)
+            return ODS2_ERR_FORMAT; /* truncated length word */
+        rlen = le16(b + off);
+        content_end = off + 2 + rlen;
+        if (content_end > data_bytes)
+            return ODS2_ERR_FORMAT; /* record body runs past EOF */
+
+        if (w + (size_t)rlen + 1 > out_cap) /* +1 for the '\n' this writes */
+            return ODS2_ERR_SIZE;
+        if (rlen > 0)
+            memcpy(out + w, b + off + 2, rlen);
+        w += rlen;
+        out[w++] = '\n';
+
+        next = content_end;
+        if (rlen & 1)
+            next++;             /* word-alignment pad byte -- see [F16] */
+        off = next;
+    }
+
+    if (out_len)
+        *out_len = w;
+    return ODS2_OK;
+}
+
+/* Context + map-walk callback: capture the file's single retrieval-pointer
+ * extent (ods2_wvolume_create_file() never produces more than one). */
+struct single_extent_ctx {
+    ods2_extent_t ext;
+    unsigned      n;
+};
+
+static int single_extent_cb(const ods2_extent_t *ext, void *ctx)
+{
+    struct single_extent_ctx *c = (struct single_extent_ctx *)ctx;
+    if (c->n == 0)
+        c->ext = *ext;
+    c->n++;
+    return 0;
+}
+
+ods2_status_t ods2_file_read_text(const ods2_volume_t *vol,
+                                  const void *file_header_block,
+                                  char *out, size_t out_cap, size_t *out_len)
+{
+    ods2_fh2_t hdr;
+    struct single_extent_ctx ec = { { 0, 0 }, 0 };
+    ods2_status_t st;
+    const uint8_t *blk;
+    size_t data_bytes;
+
+    if (!vol || !file_header_block || (!out && out_cap > 0))
+        return ODS2_ERR_ARGS;
+
+    st = ods2_fh2_parse(file_header_block, ODS2_BLOCK_SIZE, &hdr);
+    if (st != ODS2_OK)
+        return st;
+
+    st = ods2_fh2_map_walk(file_header_block, single_extent_cb, &ec, NULL);
+    if (st != ODS2_OK)
+        return st;
+    if (ec.n != 1)
+        return ODS2_ERR_RANGE; /* multi-extent data files unsupported here */
+
+    blk = ods2_volume_block(vol, ec.ext.lbn);
+    if (!blk)
+        return ODS2_ERR_RANGE;
+
+    data_bytes = ods2_recattr_data_bytes(&hdr.fh2_recattr);
+    if (data_bytes > (size_t)ec.ext.count * ODS2_BLOCK_SIZE)
+        return ODS2_ERR_FORMAT; /* recattr claims more data than allocated */
+
+    return ods2_var_records_decode(blk, data_bytes, out, out_cap, out_len);
+}

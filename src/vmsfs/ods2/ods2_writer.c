@@ -137,9 +137,18 @@ static ods2_status_t encode_map_extent(uint8_t *mp, uint32_t lbn, uint32_t count
  * (tests/ods2/real_vax_ods2.dsk, see PROVENANCE increment-3 addendum):
  * system files (INDEXF/BITMAP/BADBLK/CORIMG/CONTIN) show rtype=1/rattrib=0,
  * both directories (000000.DIR/OVMXDIR.DIR) show rtype=2/rattrib=0x08, and
- * both plain data files (HELLO.TXT/WORLD.TXT) show rtype=2/rattrib=0x02.
- * rsize/maxrec: system files use 512/512; data files use 0/0 (variable,
- * no max); directories use 512/512 to match 000000.DIR/OVMXDIR.DIR.
+ * both plain data files (HELLO.TXT/WORLD.TXT) show rtype=2/rattrib=0x02
+ * (ODS2_RTYPE_VAR / ODS2_RAT_CR -- variable-length records, implied
+ * carriage-return carriage control). maxrec: all three kinds use a fixed
+ * cap (512) EXCEPT data files, which use 0 (no cap -- matches the real
+ * fixture, where neither HELLO.TXT nor WORLD.TXT specifies one either).
+ *
+ * rsize is NOT a fixed preset for data files: [F16] (increment 9, vms-0f3)
+ * re-decoding the real fixture's OWN FID12/FID13 found rsize=105/66, each
+ * exactly the longest RECORD actually written to that file, not 0 as this
+ * comment previously (and wrongly -- never itself re-checked) claimed. See
+ * ods2_wvolume_create_file()'s post-write rsize patch below and the
+ * ods2_recattr_t comment in ods2.h.
  */
 enum fh2_kind { FH2_KIND_SYSTEM = 0, FH2_KIND_DIR, FH2_KIND_DATA };
 
@@ -1012,6 +1021,86 @@ static void fid_from_num(uint32_t num, ods2_fid_t *out)
  * File / directory creation
  * ================================================================ */
 
+/*
+ * [F16] (increment 9, vms-0f3): frame caller-supplied bytes as an RMS
+ * variable-length (RFM=VAR) record stream -- the on-disk shape a real VAX
+ * expects given this writer's own FH2_KIND_DATA recattr preset
+ * (rtype=ODS2_RTYPE_VAR, rattrib=ODS2_RAT_CR, see write_fh2_header_ext()).
+ * Previously ods2_wvolume_create_file() wrote `data` to disk completely
+ * unframed -- a real VAX's DUMP proved the bytes were genuinely present,
+ * but TYPE printed nothing: RMS's VAR-record reader expects every record
+ * to begin with its own 2-byte little-endian length word, which a raw
+ * byte copy never supplies (see tests/ods2/PROVENANCE-real_vax_ods2.md's
+ * increment-8 addendum, where this was first isolated but not chased).
+ *
+ * [OVMX-inferred] `data` is treated as newline-delimited TEXT LINES, one
+ * VMS record per line with the terminator itself stripped (a lone '\r'
+ * immediately before the '\n' is stripped too, so CRLF source text also
+ * works) -- i.e. the same shape COPY/EDIT produce on a real VAX. A
+ * trailing '\n' does not produce a spurious empty final record; an
+ * embedded blank line ("\n\n") does, matching ordinary line-splitting.
+ * This is a design choice this writer makes for its own caller-supplied
+ * byte buffers, not something read off any oracle -- arbitrary binary
+ * content is out of scope.
+ *
+ * On-disk record framing itself IS oracle-grounded: see
+ * ods2_var_records_decode()'s provenance comment in ods2.h -- 2-byte LE
+ * length prefix, one 0x00 pad byte after an odd-length record to keep the
+ * next length word word-aligned, and (confirmed by direct byte decode of
+ * tests/ods2/real_vax_ods2.dsk's own HELLO.TXT, which spans 34 blocks)
+ * NO extra padding at 512-byte block boundaries -- records may straddle
+ * them freely.
+ *
+ * Two-pass: pass 1 (dst == NULL) computes the total framed length and the
+ * longest record's content length (for fat_rsize, see [F16] in ods2.h)
+ * without writing anything, so the caller can size/allocate the file's
+ * data blocks first; pass 2 (dst != NULL, pointing at those now-allocated
+ * blocks) performs the identical walk and actually writes the bytes.
+ */
+static void ods2_var_frame_lines(const uint8_t *data, size_t data_len,
+                                 uint8_t *dst, size_t *total_len_out,
+                                 uint16_t *max_reclen_out)
+{
+    size_t i, line_start = 0, off = 0;
+    uint16_t max_reclen = 0;
+
+    for (i = 0; i <= data_len; i++) {
+        int at_end = (i == data_len);
+
+        if (!at_end && data[i] != '\n')
+            continue;
+        if (at_end && line_start == data_len)
+            break; /* no dangling partial line -- empty file, or data
+                     * already ended cleanly on a '\n' */
+
+        {
+            size_t content_len = i - line_start;
+            if (content_len > 0 && data[line_start + content_len - 1] == '\r')
+                content_len--;               /* CRLF source text */
+            if (content_len > max_reclen)
+                max_reclen = (uint16_t)(content_len > 0xFFFFu ? 0xFFFFu
+                                                               : content_len);
+
+            if (dst) {
+                put16(dst + off, (uint16_t)content_len);
+                if (content_len > 0)
+                    memcpy(dst + off + 2, data + line_start, content_len);
+            }
+            off += 2 + content_len;
+            if (content_len & 1) {
+                if (dst)
+                    dst[off] = 0;             /* word-alignment pad byte */
+                off++;
+            }
+        }
+        line_start = i + 1;
+    }
+
+    *total_len_out = off;
+    if (max_reclen_out)
+        *max_reclen_out = max_reclen;
+}
+
 ods2_status_t ods2_wvolume_create_file(ods2_wvolume_t *wvol,
                                        const char *name, uint16_t version,
                                        const uint8_t *data, size_t data_len,
@@ -1020,11 +1109,17 @@ ods2_status_t ods2_wvolume_create_file(ods2_wvolume_t *wvol,
 {
     uint32_t fidnum, lbn, nblocks;
     ods2_status_t st;
+    size_t framed_len;
+    uint16_t max_reclen;
 
     if (!wvol || !name || (!data && data_len > 0) || !fid_out)
         return ODS2_ERR_ARGS;
 
-    nblocks = (uint32_t)((data_len + ODS2_BLOCK_SIZE - 1) / ODS2_BLOCK_SIZE);
+    /* Pass 1: size the framed record stream (see ods2_var_frame_lines()'s
+     * provenance comment above) before allocating data blocks. */
+    ods2_var_frame_lines(data, data_len, NULL, &framed_len, &max_reclen);
+
+    nblocks = (uint32_t)((framed_len + ODS2_BLOCK_SIZE - 1) / ODS2_BLOCK_SIZE);
     if (nblocks == 0)
         nblocks = 1;   /* even a zero-length file gets one data block */
 
@@ -1032,22 +1127,40 @@ ods2_status_t ods2_wvolume_create_file(ods2_wvolume_t *wvol,
     if (st != ODS2_OK)
         return st;
 
-    if (data_len > 0)
-        memcpy(wblk(wvol, lbn), data, data_len);
-    /* tail padding beyond data_len is already zero from volume-format's
-     * initial memset (never reused, since the bump allocator never
-     * revisits blocks). */
+    /* Pass 2: write the same framing for real into the now-allocated
+     * blocks. Tail padding beyond framed_len is already zero from
+     * volume-format's initial memset (never reused, since the bump
+     * allocator never revisits blocks). */
+    if (framed_len > 0)
+        ods2_var_frame_lines(data, data_len, wblk(wvol, lbn), &framed_len,
+                             &max_reclen);
 
     st = alloc_fid(wvol, &fidnum);
     if (st != ODS2_OK)
         return st;
 
     /* seq == 1 (first generation) for a freshly created file; backlink ==
-     * parent_dir. [F2] see ods2.h. */
+     * parent_dir. [F2] see ods2.h. `framed_len` (not the caller's raw
+     * data_len) is what write_fh2_header_ext's FH2_KIND_DATA branch uses
+     * to compute fh2_recattr's efblk/ffbyte -- it must match what is
+     * actually on disk. */
     st = write_fh2_header(wvol, fidnum, 1, name, version, 0, FH2_KIND_DATA,
-                          lbn, nblocks, data_len, parent_dir);
+                          lbn, nblocks, framed_len, parent_dir);
     if (st != ODS2_OK)
         return st;
+
+    /* [F16] fat_rsize = the longest record actually written (see ods2.h's
+     * ods2_recattr_t comment) -- write_fh2_header_ext's generic
+     * FH2_KIND_DATA preset always leaves rsize at 0 (correct for a
+     * zero-record file), so patch it here exactly like the existing
+     * INDEXF.SYS/BITMAP.SYS/SECURITY.SYS post-write field patches above. */
+    if (max_reclen > 0) {
+        uint8_t *fh = wblk(wvol, wvol->hdr_base_lbn + (fidnum - 1));
+        size_t rsize_off = offsetof(ods2_fh2_t, fh2_recattr) +
+                           offsetof(ods2_recattr_t, fat_rsize);
+        put16(fh + rsize_off, max_reclen);
+        put16(fh + offsetof(ods2_fh2_t, fh2_checksum), ods2_block_checksum(fh));
+    }
 
     fid_from_num(fidnum, fid_out);
     return ODS2_OK;

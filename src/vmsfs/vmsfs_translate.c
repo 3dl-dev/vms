@@ -797,7 +797,8 @@ int vmsfs_to_vms_spec(const char *linux_path, char *vms_spec, size_t spec_size)
 }
 
 /*
- * vmsfs_wildcard_match - Match a filename against a VMS wildcard pattern.
+ * wildcard_match_core - Match a name against a VMS wildcard pattern,
+ * with no notion of file versions (pure character-level matching).
  *
  * VMS wildcard characters:
  *   *  - Match zero or more characters
@@ -808,10 +809,8 @@ int vmsfs_to_vms_spec(const char *linux_path, char *vms_spec, size_t spec_size)
  *
  * Returns 1 if the name matches the pattern, 0 if not.
  */
-int vmsfs_wildcard_match(const char *pattern, const char *name)
+static int wildcard_match_core(const char *pattern, const char *name)
 {
-    if (!pattern || !name) return 0;
-
     const char *p = pattern;
     const char *n = name;
 
@@ -823,10 +822,10 @@ int vmsfs_wildcard_match(const char *pattern, const char *name)
 
             /* Try matching the rest of the pattern at each position */
             while (*n) {
-                if (vmsfs_wildcard_match(p, n)) return 1;
+                if (wildcard_match_core(p, n)) return 1;
                 n++;
             }
-            return vmsfs_wildcard_match(p, n);
+            return wildcard_match_core(p, n);
         } else if (*p == '%' || *p == '?') {
             /* Percent or question mark: match exactly one character */
             p++;
@@ -845,4 +844,95 @@ int vmsfs_wildcard_match(const char *pattern, const char *name)
     while (*p == '*') p++;
 
     return (*p == '\0' && *n == '\0') ? 1 : 0;
+}
+
+/*
+ * Split a trailing ";N" / ";" / ";*" version marker off a filespec
+ * component. Only a marker whose digits are all numeric (or empty, or a
+ * bare wildcard character) is recognized as a version — anything else
+ * (e.g. a literal ';' that isn't a VMS version) is left in the base
+ * string, matching vmsfs_parse_filespec()'s own rules.
+ *
+ * On return, *base_len is the length of the name/pattern before the
+ * version marker (or the full length if there was none), *has_version
+ * indicates whether a recognized marker was present, and *version is:
+ *   - the numeric value, when the marker was one or more digits
+ *   - 0, when the marker was bare (";") or wildcard (";*"/";%") — VMS
+ *     convention for "unspecified" / "highest"
+ */
+static void split_version_marker(const char *s, size_t *base_len,
+                                  int *has_version, long *version)
+{
+    size_t len = strlen(s);
+    *base_len = len;
+    *has_version = 0;
+    *version = 0;
+
+    const char *semi = strrchr(s, ';');
+    if (!semi) return;
+
+    const char *v = semi + 1;
+    if (*v == '\0' || *v == '*' || *v == '%') {
+        *base_len = (size_t)(semi - s);
+        *has_version = 1;
+        *version = 0;
+        return;
+    }
+
+    int alldigits = 1;
+    for (const char *q = v; *q; q++) {
+        if (!isdigit((unsigned char)*q)) { alldigits = 0; break; }
+    }
+    if (!alldigits) return;  /* Not a recognized version marker */
+
+    *base_len = (size_t)(semi - s);
+    *has_version = 1;
+    *version = strtol(v, NULL, 10);
+}
+
+/*
+ * vmsfs_wildcard_match - Match a filename against a VMS wildcard pattern.
+ *
+ * Version-aware: VMS files carry a ";N" version on disk (see
+ * vmsfs_version.c). A pattern with no version, a bare ";", or ";*"/";0"
+ * matches ANY version of a name (VMS: "DIRECTORY FOO.DAT" lists every
+ * version; ";0" means "the highest version", not literal version 0). A
+ * pattern with an explicit ";N" (N>0) matches only that exact version. A
+ * name with no version marker at all (e.g. a plain directory) matches on
+ * its own without any version filtering.
+ *
+ * Returns 1 if the name matches the pattern, 0 if not.
+ */
+int vmsfs_wildcard_match(const char *pattern, const char *name)
+{
+    if (!pattern || !name) return 0;
+
+    size_t pat_base_len, name_base_len;
+    int pat_has_version, name_has_version;
+    long pat_version, name_version;
+
+    split_version_marker(pattern, &pat_base_len, &pat_has_version, &pat_version);
+    split_version_marker(name, &name_base_len, &name_has_version, &name_version);
+
+    /* A specific requested version (N>0) must match the name's version
+     * exactly, when the name has one. A pattern version of 0 (bare ";"
+     * or ";0") means "highest" — for wildcard/listing purposes that
+     * matches any version, so it imposes no filter here. */
+    if (pat_has_version && pat_version > 0 &&
+        name_has_version && name_version != pat_version) {
+        return 0;
+    }
+
+    char pat_base[VMSFS_MAX_FILESPEC];
+    char name_base[VMSFS_MAX_FILESPEC];
+
+    if (pat_base_len >= sizeof(pat_base)) pat_base_len = sizeof(pat_base) - 1;
+    memcpy(pat_base, pattern, pat_base_len);
+    pat_base[pat_base_len] = '\0';
+
+    if (name_base_len >= sizeof(name_base)) name_base_len = sizeof(name_base) - 1;
+    memcpy(name_base, name, name_base_len);
+    name_base[name_base_len] = '\0';
+
+    return wildcard_match_core(pat_base, name_base);
 }

@@ -20,6 +20,7 @@
 #include "ssdef.h"
 #include "vms/logical.h"
 #include "vmsfs/filespec.h"
+#include "vmsfs/version.h"
 #include "ovmx_layout.h"
 
 /* Forward declaration of logical name translation */
@@ -30,22 +31,93 @@ extern int vmsfs_find_case_insensitive(const char *dir_path, const char *name,
                                         char *result, size_t result_size);
 
 /*
- * Strip a VMS version suffix (;N) from a Linux path in-place.
- * Only strips if the suffix is a valid version number.
+ * Resolve the VMS version marker on a Linux path in-place.
+ *
+ * sys$create() (src/vmsrms/rms_core.c) names files on disk with a real
+ * ";N" suffix — "PARTS.DAT" is actually stored as "parts.dat;1". VMS
+ * filespec lookup rules for a *specific* file (as opposed to a
+ * DIRECTORY/PURGE wildcard scan, handled separately by
+ * vmsfs_wildcard_match()) are:
+ *
+ *   - An explicit ";N" (N>0) names that exact version — left untouched;
+ *     it is up to the caller's stat()/open() to report NOT FOUND if that
+ *     version does not exist.
+ *   - No version, a bare ";", or ";0" all mean "the highest existing
+ *     version" — resolved here by scanning the directory the same way
+ *     rms_core.c's own rms_resolve_version() does, and appending the
+ *     ";N" that is actually on disk.
+ *   - If no version of the file exists yet at all (the caller is about
+ *     to create it, e.g. a COPY target), the path is left unversioned —
+ *     this preserves prior behavior for file creation.
+ *   - If only a legacy unversioned file exists (no ";N" copy at all —
+ *     vmsfs_get_highest_version() reports that case as "version 1" per
+ *     its own contract), the path is left unversioned too, since that is
+ *     what is actually on disk.
  */
-static void strip_version_suffix(char *path)
+static void resolve_version_suffix(char *path, size_t path_size)
 {
-    char *semi = strrchr(path, ';');
-    if (!semi) return;
+    char *last_slash = strrchr(path, '/');
+    char *filename = last_slash ? last_slash + 1 : path;
 
-    /* Only strip if everything after ; is digits */
-    const char *p = semi + 1;
-    if (*p == '\0') return;  /* bare ; with nothing after */
-    while (*p) {
-        if (!isdigit((unsigned char)*p)) return;
-        p++;
+    char *semi = strrchr(filename, ';');
+    if (semi) {
+        const char *p = semi + 1;
+        if (*p == '\0') {
+            *semi = '\0';  /* Bare ';' -> resolve to highest, below */
+        } else {
+            int alldigits = 1;
+            for (const char *q = p; *q; q++) {
+                if (!isdigit((unsigned char)*q)) { alldigits = 0; break; }
+            }
+            if (!alldigits) return;  /* Not a recognized version marker */
+
+            long ver = strtol(p, NULL, 10);
+            if (ver != 0) return;   /* Explicit ;N (N>0) — leave as-is */
+            *semi = '\0';           /* ;0 -> resolve to highest, below */
+        }
     }
-    *semi = '\0';
+
+    if (!last_slash) return;  /* No directory to scan against */
+
+    char dir_part[VMSFS_MAX_PATH];
+    size_t dir_len = (size_t)(filename - path - 1);
+    if (dir_len == 0 || dir_len >= sizeof(dir_part)) return;
+    memcpy(dir_part, path, dir_len);
+    dir_part[dir_len] = '\0';
+
+    char basename_buf[VMSFS_MAX_NAME + 1] = "";
+    char ext_buf[VMSFS_MAX_TYPE + 1] = "";
+    char *dot = strrchr(filename, '.');
+    if (dot) {
+        size_t blen = (size_t)(dot - filename);
+        if (blen >= sizeof(basename_buf)) blen = sizeof(basename_buf) - 1;
+        memcpy(basename_buf, filename, blen);
+        basename_buf[blen] = '\0';
+        strncpy(ext_buf, dot + 1, sizeof(ext_buf) - 1);
+        ext_buf[sizeof(ext_buf) - 1] = '\0';
+    } else {
+        strncpy(basename_buf, filename, sizeof(basename_buf) - 1);
+        basename_buf[sizeof(basename_buf) - 1] = '\0';
+    }
+    if (!basename_buf[0]) return;
+
+    int highest = vmsfs_get_highest_version(dir_part, basename_buf,
+                                             ext_buf[0] ? ext_buf : NULL);
+    if (highest <= 0) return;  /* File doesn't exist at all yet */
+
+    /* Confirm a real "name.type;highest" file exists before appending —
+     * vmsfs_get_highest_version() also reports "1" for a plain
+     * unversioned file, which must NOT get a synthesized ";1" suffix
+     * since no file by that literal name exists. */
+    size_t flen = strlen(filename);
+    size_t avail = path_size - (size_t)(filename - path);
+    int n = snprintf(filename + flen, avail - flen, ";%d", highest);
+    if (n < 0 || (size_t)n >= avail - flen) return;
+
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        filename[flen] = '\0';  /* Not real — fall back to unversioned */
+    }
 }
 
 /*
@@ -129,8 +201,8 @@ int dcl_resolve_filespec(struct dcl_context *ctx, const char *spec,
         return -1;
     }
 
-    /* Strip version suffix — Linux filesystem doesn't use ;N */
-    strip_version_suffix(linux_path);
+    /* Resolve the VMS version marker against what's actually on disk. */
+    resolve_version_suffix(linux_path, path_size);
 
     /* Enhanced case-insensitive resolution */
     resolve_case(linux_path, path_size);

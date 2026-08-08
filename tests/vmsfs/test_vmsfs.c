@@ -253,6 +253,58 @@ static void test_wildcard_match(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Test: vmsfs_wildcard_match version awareness (vms-1c8)             */
+/*                                                                     */
+/* sys$create() (src/vmsrms/rms_core.c) names files on disk with a    */
+/* real ";N" suffix -- "PARTS.DAT" is stored as "parts.dat;1" -- so    */
+/* DIRECTORY/PURGE's directory-entry matching must treat a pattern's  */
+/* version marker per VMS rules: no marker (or a bare ";"/";0") means  */
+/* "any version", an explicit ";N" (N>0) means exactly that version.  */
+/* ------------------------------------------------------------------ */
+static void test_wildcard_match_versioned(void)
+{
+    printf("\n--- vmsfs_wildcard_match (version-aware, vms-1c8) ---\n");
+
+    /* Bare name (no version marker) matches a versioned on-disk file --
+     * this is the exact DIRECTORY SYS$SCRATCH:PARTS.DAT failure. */
+    check(vmsfs_wildcard_match("PARTS.DAT", "parts.dat;1") == 1,
+          "bare name matches version 1 on disk");
+    check(vmsfs_wildcard_match("PARTS.DAT", "parts.dat;7") == 1,
+          "bare name matches any version on disk");
+
+    /* Explicit version must match only that version */
+    check(vmsfs_wildcard_match("PARTS.DAT;1", "parts.dat;1") == 1,
+          "explicit ;1 matches version 1");
+    check(vmsfs_wildcard_match("PARTS.DAT;2", "parts.dat;1") == 0,
+          "explicit ;2 does not match version 1");
+    check(vmsfs_wildcard_match("PARTS.DAT;1", "parts.dat;2") == 0,
+          "explicit ;1 does not match version 2");
+
+    /* Bare ";" and ";0" both mean "highest"/"unspecified" for matching
+     * purposes -- neither narrows to one version. */
+    check(vmsfs_wildcard_match("PARTS.DAT;", "parts.dat;3") == 1,
+          "bare ';' matches any version");
+    check(vmsfs_wildcard_match("PARTS.DAT;0", "parts.dat;3") == 1,
+          "';0' matches any version");
+
+    /* Wildcards combine with version-awareness */
+    check(vmsfs_wildcard_match("*.DAT", "parts.dat;1") == 1,
+          "*.DAT matches a versioned name");
+    check(vmsfs_wildcard_match("*.DAT", "parts.exe;1") == 0,
+          "*.DAT does not match a versioned name with a different type");
+    check(vmsfs_wildcard_match("*.DAT;2", "parts.dat;1") == 0,
+          "*.DAT;2 does not match version 1");
+    check(vmsfs_wildcard_match("*.DAT;2", "parts.dat;2") == 1,
+          "*.DAT;2 matches version 2");
+
+    /* An unversioned on-disk name (no ";N" at all, e.g. a directory
+     * entry or a legacy file) is unaffected by a pattern's version
+     * marker -- there is nothing to filter against. */
+    check(vmsfs_wildcard_match("PARTS.DAT;1", "parts.dat") == 1,
+          "explicit-version pattern still matches a name with no version marker");
+}
+
+/* ------------------------------------------------------------------ */
 /* Test: vmsfs_get_highest_version / vmsfs_list_versions              */
 /* ------------------------------------------------------------------ */
 static void test_versions(void)
@@ -329,6 +381,7 @@ int main(void)
     test_compose_filespec();
     test_translate_directory();
     test_wildcard_match();
+    test_wildcard_match_versioned();
     test_versions();
 
     if (failures == 0)

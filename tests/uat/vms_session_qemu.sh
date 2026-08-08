@@ -856,26 +856,28 @@ check_response 'SHOW PROCESS' 'Process name: "SYSTEM"'
 # privileges OVMX stores but does not enforce are no longer printed at all
 # (see src/vmsdcl/dcl_cmd_show.c's cmd_show_process_privileges). SYSTEM's
 # DISPLAYED authorized mask on this runtime -- after masking -- is exactly
-# CMKRNL, CMEXEC, SETPRV, WORLD.
+# CMKRNL, CMEXEC, SYSNAM, GRPNAM, SETPRV, WORLD (SYSNAM/GRPNAM joined the
+# enforced set in vms-5b7, LNM$SYSTEM/LNM$GROUP privilege enforcement).
 #
 # THAT IS NOT THE SAME CLAIM AS "SYSUAF AUTHORIZES SYSTEM EXACTLY THAT SET",
 # and round 3's comment here said the latter -- false, corrected round 4.
 # MEASURED: distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT's SYSTEM row
 # reads `SYSTEM||1|4|SYS$SYSDEVICE:[SYSMGR]||ALL` -- the seventh field,
-# privileges, is the literal string ALL, not a 4-privilege
-# list. The four names below are what SURVIVES THE VMS_PRV_M_ENFORCED
-# INTERSECTION of that ALL mask, which is a strict subset -- SYSPRV,
-# BYPASS, OPER, and 30 others (37 named rows in vms_priv_names[], minus
-# the 4 shown, minus these 3 named here) are authorized by SYSUAF and correctly
-# do NOT appear here, because nothing in vms.ko enforces them (see that
-# constant's own comment). The old pattern would now silently pass on an
-# EMPTY privilege block too (TMPMBX/NETMBX/OPER can't appear, but neither
-# can anything else, and grep -qE against an empty capture only fails,
-# which happens to be visible -- verified this round: the old pattern
-# really did go red against the corrected output, it was not a silent
-# pass). It is corrected here rather than widened to accept both, because
-# accepting both would hide a future regression back to the unmasked
-# display.
+# privileges, is the literal string ALL, not a short list. The six names
+# below are what SURVIVES THE VMS_PRV_M_ENFORCED INTERSECTION of that ALL
+# mask, which is a strict subset -- SYSPRV, BYPASS, OPER, and the rest of
+# the 37 named rows in vms_priv_names[] (minus the 6 shown) are authorized
+# by SYSUAF and correctly do NOT appear here, because nothing in vms.ko
+# enforces them for THIS surface (see that constant's own comment; SYSNAM/
+# GRPNAM are the exception vms-5b7 adds, enforced narrowly by vms_lnm.c
+# rather than by this DCL display). The old pattern would now silently
+# pass on an EMPTY privilege block too (TMPMBX/NETMBX/OPER can't appear,
+# but neither can anything else, and grep -qE against an empty capture
+# only fails, which happens to be visible -- verified this round: the old
+# pattern really did go red against the corrected output, it was not a
+# silent pass). It is corrected here rather than widened to accept both,
+# because accepting both would hide a future regression back to the
+# unmasked display.
 check_response_at "$IDX_PRIV_ORIGINAL" '(CMKRNL|CMEXEC|SETPRV|WORLD)'
 
 # F$PRIVILEGE MUST AGREE WITH SHOW PROCESS/PRIVILEGES ABOUT THE SAME
@@ -949,8 +951,13 @@ check_response_at "$IDX_PRIORITY_SET" 'NOPRIV'
 # block above). Ascending bit-position order, matching the oracle's own
 # CURPRIV example (CMKRNL before CMEXEC) -- NOT alphabetical, which is
 # SHOW PROCESS/PRIVILEGES's own, different, VMS display convention.
-check_response 'SHOW SYMBOL IDENT_CURPRIV' 'IDENT_CURPRIV = "CMKRNL,CMEXEC,SETPRV,WORLD"'
-check_response 'SHOW SYMBOL IDENT_AUTHPRIV' 'IDENT_AUTHPRIV = "CMKRNL,CMEXEC,SETPRV,WORLD"'
+# SYSNAM/GRPNAM (bit positions 2/3, between CMEXEC and SETPRV) joined
+# VMS_PRV_M_ENFORCED in vms-5b7 (LNM$SYSTEM/LNM$GROUP privilege
+# enforcement) -- this literal is DERIVED from that mask's current
+# definition, not a number owned by this test; update it again whenever
+# VMS_PRV_M_ENFORCED (src/kernel/vms_ioctl.h) changes.
+check_response 'SHOW SYMBOL IDENT_CURPRIV' 'IDENT_CURPRIV = "CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD"'
+check_response 'SHOW SYMBOL IDENT_AUTHPRIV' 'IDENT_AUTHPRIV = "CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD"'
 
 # SEVERITY LETTER, ASSERTED (vms-2b8 round 5's own fix, uncovered until
 # round 6): %OVMX-W-NOSETPRV printed as a Warning next to a function that
@@ -1049,7 +1056,7 @@ check_response 'SET TIME 1-JAN-2030:00:00:00' 'no privilege for SET TIME'
 #   drop absent     -> [000,000]   (root, as every session used to be)
 #
 # That difference is not cosmetic. While sessions ran as root, every
-# subprocess also registered holding CMKRNL|CMEXEC|SETPRV|WORLD, and
+# subprocess also registered holding CMKRNL|CMEXEC|SYSNAM|GRPNAM|SETPRV|WORLD, and
 # SETPRV is what VMS_IOCTL_SETIDENT requires to claim any identity at
 # all -- an ordinary user's subprocess could stamp itself SYSTEM with
 # SYSUAF's privilege ALL (reproduced against a real /dev/vms; the refusal is

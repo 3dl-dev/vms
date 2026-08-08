@@ -456,7 +456,7 @@ static bool username_is_valid(const char *name)
  * capable(CAP_SYS_ADMIN) and a fresh UIC from the task's real
  * credentials, and inherits nothing from the parent's row. So a process
  * that drops to FIELD/[200,10] and then forks a child which is STILL
- * LINUX ROOT gives that child CMKRNL|CMEXEC|SETPRV|WORLD at
+ * LINUX ROOT gives that child CMKRNL|CMEXEC|SYSNAM|GRPNAM|SETPRV|WORLD at
  * registration, and SETPRV is precisely what lets it stamp itself
  * SYSTEM. The reduction survived exactly until the next fork.
  *

@@ -80,6 +80,8 @@ struct vms_mode_args {
 
 #define VMS_PRV_V_CMKRNL     0
 #define VMS_PRV_V_CMEXEC     1
+#define VMS_PRV_V_SYSNAM     2
+#define VMS_PRV_V_GRPNAM     3
 #define VMS_PRV_V_DETACH     5
 #define VMS_PRV_V_LOG_IO     7
 #define VMS_PRV_V_GROUP      8
@@ -92,13 +94,54 @@ struct vms_mode_args {
 #define VMS_PRV_V_NETMBX    20
 #define VMS_PRV_V_SYSPRV    28
 #define VMS_PRV_V_BYPASS    29
+#define VMS_PRV_V_GRPPRV    34
 
+/*
+ * SYSNAM (2) / GRPNAM (3) / GRPPRV (34) -- ORACLE-PIN NOTE (vms-5b7).
+ *
+ * docs/oracle/vax73-privileges.md section 2's EVALUATE transcript did not
+ * include these three symbols (the session that produced it queried the
+ * bits it needed at the time), so they are not re-derivations of a live
+ * SDA read the way CMKRNL/CMEXEC/DETACH/LOG_IO/GROUP above are. They ARE
+ * independently grounded two ways:
+ *
+ *   1. Section 4 of that same document transcribes a real `SHOW PROCESS/
+ *      PRIVILEGES` from VAX1 naming SYSNAM ("may insert in system logical
+ *      name table"), GRPNAM ("may insert in group logical name table") and
+ *      GRPPRV ("may access group objects via system protection") as real,
+ *      distinct VAX 7.3 privileges with exactly these descriptions -- so
+ *      their EXISTENCE and MEANING are oracle-observed, only their bit
+ *      POSITIONS are not from that transcript.
+ *   2. The bit positions themselves are public $PRVDEF documentation (VSI
+ *      OpenVMS System Services Reference Manual, OpenVMS Guide to System
+ *      Security) and have been invariant across VAX/Alpha/Itanium/x86 for
+ *      exactly these three low bits. They are also the ONLY values that
+ *      fit the gaps the oracle-confirmed neighbors above leave open: with
+ *      CMKRNL=0 and CMEXEC=1 confirmed, and DETACH=5 confirmed, bits 2-4
+ *      are unassigned to anything else the oracle named, and 2/3 (5 CANNOT
+ *      be SYSNAM or GRPNAM -- it is oracle-confirmed DETACH) are exactly
+ *      where public $PRVDEF puts SYSNAM/GRPNAM. Likewise GRPPRV=34 is the
+ *      only unclaimed slot between oracle-confirmed BYPASS=29 and the
+ *      pre-existing (unconfirmed-but-undisputed) READALL=35 in
+ *      src/libvms/include/prvdef.h.
+ *
+ * Per CLAUDE.md Rule 8 this is the "public $PRVDEF/$SSDEF documentation"
+ * branch of the oracle-pin requirement, not the live-lab branch -- stated
+ * so a future reader does not mistake this for a from-scratch SDA read.
+ * src/libvms/include/prvdef.h already carried PRV$V_SYSNAM=2/PRV$V_GRPNAM=3
+ * /PRV$V_GRPPRV=34 from before this item; the _Static_assert below is what
+ * makes THIS copy agree with that one, not what re-derives either.
+ */
 #define VMS_PRV_M_CMKRNL    (1ULL << VMS_PRV_V_CMKRNL)
 #define VMS_PRV_M_CMEXEC    (1ULL << VMS_PRV_V_CMEXEC)
+#define VMS_PRV_M_SYSNAM    (1ULL << VMS_PRV_V_SYSNAM)
+#define VMS_PRV_M_GRPNAM    (1ULL << VMS_PRV_V_GRPNAM)
 #define VMS_PRV_M_SETPRV    (1ULL << VMS_PRV_V_SETPRV)
 #define VMS_PRV_M_TMPMBX    (1ULL << VMS_PRV_V_TMPMBX)
 #define VMS_PRV_M_WORLD     (1ULL << VMS_PRV_V_WORLD)
 #define VMS_PRV_M_NETMBX    (1ULL << VMS_PRV_V_NETMBX)
+#define VMS_PRV_M_SYSPRV    (1ULL << VMS_PRV_V_SYSPRV)
+#define VMS_PRV_M_GRPPRV    (1ULL << VMS_PRV_V_GRPPRV)
 
 /*
  * The privileges the OVMX executive actually ENFORCES today.
@@ -112,10 +155,25 @@ struct vms_mode_args {
  *   SETPRV  vms_ioctl_setprv widening; vms_ioctl_setident granting
  *   WORLD   vms_ioctl_getjpi / vms_ioctl_procscan reading a process
  *           OUTSIDE the caller's UIC group (vms_proc_may_read)
+ *   SYSNAM  vms_ioctl_lnm_define / vms_ioctl_lnm_delete against
+ *           LNM$SYSTEM (vms-5b7)
+ *   GRPNAM  vms_ioctl_lnm_define / vms_ioctl_lnm_delete against
+ *           LNM$GROUP (vms-5b7)
  * Bits outside this set are STORED and REPORTED (they come from SYSUAF
  * and VMS reports them) but nothing in this tree gates on them. Adding
  * a privilege here without adding the check it names is the defect this
  * constant exists to prevent.
+ *
+ * SYSPRV AND GRPPRV ARE DELIBERATELY ABSENT even though vms_lnm.c's new
+ * check also accepts either as an alternate to SYSNAM/GRPNAM (real,
+ * documented VMS behaviour -- OpenVMS DCL Dictionary, DEFINE: SYSPRV
+ * substitutes for SYSNAM on LNM$SYSTEM, and SYSPRV or GRPPRV substitutes
+ * for GRPNAM on LNM$GROUP). Adding them here would tell every OTHER
+ * reader of this mask (dcl_cmd_set.c's enforced_privs_held(), SHOW
+ * PROCESS/PRIVILEGES, F$PRIVILEGE) that OVMX enforces SYSPRV/GRPPRV in
+ * the general VMS sense -- bypass system/group object protection
+ * everywhere -- which remains false pending vms-pv1. They are consulted
+ * by exactly one narrow code path, not enforced as their own control.
  *
  * GROUP IS DELIBERATELY ABSENT, and that is a measurement rather than an
  * oversight. The obvious guess -- GROUP to read another process in your
@@ -127,7 +185,8 @@ struct vms_mode_args {
  * enforce GROUP anywhere, so it is not listed here.
  */
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | \
-                             VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD)
+                             VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD | \
+                             VMS_PRV_M_SYSNAM | VMS_PRV_M_GRPNAM)
 
 struct vms_priv_args {
     uint64_t mask;          /* privilege mask to set/clear/check */

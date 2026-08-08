@@ -211,6 +211,52 @@ static void upcase(char *s)
         *s = (char)toupper((unsigned char)*s);
 }
 
+/*
+ * lnm_priv_check - the ONE gate DEFINE and DELETE both consult (vms-5b7).
+ *
+ * Real, documented VMS behaviour (OpenVMS DCL Dictionary, DEFINE): creating
+ * OR deleting a name in LNM$SYSTEM requires SYSNAM or SYSPRV; LNM$GROUP
+ * requires GRPNAM, GRPPRV or SYSPRV. LNM$JOB (and LNM$PROCESS, which never
+ * reaches this ioctl) need no privilege at all. VMS gates DEASSIGN
+ * identically to DEFINE, which is why one function serves both callers
+ * instead of two copies of the same switch. The bit values are oracle-
+ * pinned -- see the comment beside VMS_PRV_V_SYSNAM in vms_ioctl.h.
+ *
+ * Checked against cur_privs (the ENABLED mask), the same privilege the
+ * executive consults everywhere else it gates on privilege (vms_access.c,
+ * vms_proctab.c) -- not perm_privs, which is the AUTHORIZED ceiling a
+ * process may not currently have enabled (SET PROCESS/PRIVILEGE can
+ * disable an authorized privilege without touching perm_privs).
+ *
+ * On refusal, *status is set to SS$_NOPRIV (36, oracle-pinned, docs/oracle/
+ * vax73-privileges.md §1) and the caller must not touch the table: both
+ * vms_ioctl_lnm_define() and vms_ioctl_lnm_delete() call this BEFORE
+ * deriving scope_key, let alone before lnm_find()/lnm_alloc_slot() touch
+ * an entry.
+ */
+static bool lnm_priv_check(uint32_t table, uint64_t cur_privs, uint32_t *status)
+{
+    bool ok;
+
+    switch (table) {
+    case VMS_LNM_TBL_SYSTEM:
+        ok = (cur_privs & (VMS_PRV_M_SYSNAM | VMS_PRV_M_SYSPRV)) != 0;
+        break;
+    case VMS_LNM_TBL_GROUP:
+        ok = (cur_privs & (VMS_PRV_M_GRPNAM | VMS_PRV_M_GRPPRV |
+                            VMS_PRV_M_SYSPRV)) != 0;
+        break;
+    default:
+        /* LNM$JOB: no privilege required (real VMS behaviour). */
+        ok = true;
+        break;
+    }
+
+    if (!ok)
+        *status = SS__NOPRIV;
+    return ok;
+}
+
 /* ---- ioctl handlers ------------------------------------------------ */
 
 long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
@@ -251,21 +297,12 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
 
     upcase(a->name);
 
-    /*
-     * PRIVILEGE ENFORCEMENT IS DEFERRED, stated loudly rather than faked.
-     * Real VMS requires SYSNAM to write LNM$SYSTEM (and GRPNAM for
-     * LNM$GROUP) -- documented behaviour -- but the SYSNAM/GRPNAM privilege
-     * BIT VALUES are not yet pinned in this tree (src/kernel/vms_ioctl.h's
-     * VMS_PRV_V_* set does not carry them, and PRV$V_SYSNAM/PRV$V_GRPNAM
-     * must be read from SYSDEF.STB on the oracle exactly as the existing
-     * bits were, vms-2b8). Gating on a GUESSED bit would be self-
-     * certification and could refuse the SYSTEM identity that seeds the
-     * defaults at boot. So this ioctl currently enforces only that the
-     * caller is a registered process (the dispatcher already did that). The
-     * SYSNAM/GRPNAM check is deferred to a follow-up that pins the bits
-     * against the oracle first -- filed as an rd item (see PR body), NOT
-     * routed to the operator for sign-off.
-     */
+    /* PRIVILEGE ENFORCEMENT (vms-5b7) -- see lnm_priv_check()'s header for
+     * the full rationale and oracle citation. On refusal the arena is
+     * untouched: this returns before scope_key is even derived, let alone
+     * before lnm_find()/lnm_alloc_slot() touch the table. */
+    if (!lnm_priv_check(a->table, proc->cur_privs, &a->status))
+        goto out_copy;
 
     scope_key = derive_scope_key(a->table, proc);
 
@@ -345,7 +382,9 @@ long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg)
     }
     upcase(a->name);
 
-    /* Privilege enforcement deferred -- see vms_ioctl_lnm_define(). */
+    /* Same gate as create (vms-5b7) -- see lnm_priv_check()'s header. */
+    if (!lnm_priv_check(a->table, proc->cur_privs, &a->status))
+        goto out_copy;
 
     scope_key = derive_scope_key(a->table, proc);
 

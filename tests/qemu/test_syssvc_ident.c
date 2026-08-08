@@ -230,7 +230,7 @@ static void dump(const char *label, const char *text)
  * mask from capable(CAP_SYS_ADMIN) and inherits nothing from its
  * parent's row. So while LOGINOUT left the session running as Linux
  * root, a FIELD/[200,10] session could fork a child, the child
- * registered holding CMKRNL|CMEXEC|SETPRV|WORLD before executing an
+ * registered holding CMKRNL|CMEXEC|SYSNAM|GRPNAM|SETPRV|WORLD before executing an
  * instruction, and SETPRV let it stamp itself SYSTEM [1,4] with SYSUAF's
  * privilege ALL. Measured, not argued: the child's DCL printed
  * "User: SYSTEM ... [001,004] ... SETPRV ... WORLD".
@@ -1539,7 +1539,7 @@ int main(void)
      * applied to the reporting side a second time). The grid used to show
      * the whole authorized mask (NETMBX/OPER/TMPMBX here); it now shows
      * only the intersection with VMS_PRV_M_ENFORCED
-     * (src/kernel/vms_ioctl.h: CMKRNL|CMEXEC|SETPRV|WORLD) -- the
+     * (src/kernel/vms_ioctl.h: CMKRNL|CMEXEC|SYSNAM|GRPNAM|SETPRV|WORLD) -- the
      * privileges some vms.ko code path will actually refuse an operation
      * over. A's mask (TMPMBX|NETMBX|OPER) shares none of those bits, so
      * the grid is correctly EMPTY: nothing in it is enforced, so nothing
@@ -1808,8 +1808,12 @@ int main(void)
      *    to, so its rendered value is in the captured output, and the
      *    assertion requires the literal enforced-privilege string for
      *    SYSTEM/SYSUAF-ALL (cur_privs = ~0ULL, so VMS_PRV_M_ENFORCED's
-     *    four bits -- CMKRNL, CMEXEC, SETPRV, WORLD, in that ascending
-     *    bit-position order -- are all set), not merely its presence.
+     *    bits -- CMKRNL, CMEXEC, SYSNAM, GRPNAM, SETPRV, WORLD, in that
+     *    ascending bit-position order -- are all set), not merely its
+     *    presence. SYSNAM/GRPNAM joined the set in vms-5b7 (LNM$SYSTEM/
+     *    LNM$GROUP privilege enforcement) -- this string is DERIVED from
+     *    VMS_PRV_M_ENFORCED's current definition, not a number owned by
+     *    this test; it must be updated again whenever that mask changes.
      *
      *    PROVEN BY MUTATION (vms-2b8 round 9), real bootable image, real
      *    QEMU: temporarily changing dcl_lexical.c's
@@ -1845,10 +1849,10 @@ int main(void)
               "F: the executive accepted the SYSTEM/ALL identity this scenario "
               "needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)");
         /* negctl-knockon: bind-client-no-register */
-        CHECK(strstr(outf, "IDENT_CURPRIV = \"CMKRNL,CMEXEC,SETPRV,WORLD\"") != NULL,
+        CHECK(strstr(outf, "IDENT_CURPRIV = \"CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD\"") != NULL,
               "F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced "
-              "privilege names (CMKRNL,CMEXEC,SETPRV,WORLD), not merely "
-              "completes without rendering anything");
+              "privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD), "
+              "not merely completes without rendering anything");
     }
 
     /* ----------------------------------------------------------------

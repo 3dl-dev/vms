@@ -299,7 +299,7 @@ static void start_session(const sysuaf_record_t *rec)
      * at registration from capable(CAP_SYS_ADMIN) -- see
      * vms_proc_register() in src/kernel/vms_module.c. So until this
      * call, every DCL session AND EVERY PROCESS IT SPAWNS ran as Linux
-     * root: each child registered holding CMKRNL|CMEXEC|SETPRV|WORLD
+     * root: each child registered holding CMKRNL|CMEXEC|SYSNAM|GRPNAM|SETPRV|WORLD
      * before it executed a single instruction, and SETPRV is exactly
      * what VMS_IOCTL_SETIDENT requires to establish an arbitrary
      * identity. It was proven by execution, not argued: an ordinary

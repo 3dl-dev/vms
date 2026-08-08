@@ -86,12 +86,14 @@ static void test_layout(void)
         ods2_fid_t f = { 0x0002, 1, 0, 0x01 };  /* nmx=1 -> 0x10002 */
         CHECK_EQ(ods2_fid_number(&f), 0x10002, "fid number nmx<<16");
     }
-    /* RECATTR word-swapped longword reconstruction. */
+    /* RECATTR word-swapped longword reconstruction: word[0] is HIGH,
+     * word[1] is LOW -- corrected in increment 3 against real fixture
+     * data (see the ods2_recattr_t comment for the oracle evidence). */
     {
         ods2_recattr_t r;
         memset(&r, 0, sizeof(r));
-        r.fat_hiblk[0] = 0x1234; r.fat_hiblk[1] = 0x0001;
-        CHECK_EQ(ods2_recattr_hiblk(&r), 0x00011234, "recattr hiblk lo+hi<<16");
+        r.fat_hiblk[0] = 0x0001; r.fat_hiblk[1] = 0x1234;
+        CHECK_EQ(ods2_recattr_hiblk(&r), 0x00011234, "recattr hiblk hi<<16+lo");
     }
 }
 

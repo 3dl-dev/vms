@@ -78,12 +78,33 @@ extern "C" {
 /*
  * Reserved file IDs. The index file INDEXF.SYS is always file number 1.
  * BITMAP.SYS (storage bitmap) is file 2; 000000.DIR (MFD) is file 4. [S]
+ *
+ * FIDs 6-10 (VOLSET.SYS, CONTIN.SYS, BACKUP.SYS, BADLOG.SYS, SECURITY.SYS)
+ * and hm2_resfiles == 10 are NOT from public docs -- they were read directly
+ * off the real-VAX fixture tests/ods2/real_vax_ods2.dsk (the same increment-2
+ * fixture, see PROVENANCE-real_vax_ods2.md) by decoding each reserved
+ * header's ident area, as part of increment 3 (the writer). This is
+ * observed-oracle grounding under Rule 8, not a public-doc citation.
  */
 #define ODS2_FID_INDEXF         1   /* INDEXF.SYS                          */
 #define ODS2_FID_BITMAP         2   /* BITMAP.SYS (SCB + storage bitmap)   */
 #define ODS2_FID_BADBLK         3   /* BADBLK.SYS                          */
 #define ODS2_FID_MFD            4   /* 000000.DIR (master file directory)  */
 #define ODS2_FID_CORIMG         5   /* CORIMG.SYS                          */
+#define ODS2_FID_VOLSET         6   /* VOLSET.SYS   [real-fixture oracle]  */
+#define ODS2_FID_CONTIN         7   /* CONTIN.SYS   [real-fixture oracle]  */
+#define ODS2_FID_BACKUP         8   /* BACKUP.SYS   [real-fixture oracle]  */
+#define ODS2_FID_BADLOG         9   /* BADLOG.SYS   [real-fixture oracle]  */
+#define ODS2_FID_SECURITY       10  /* SECURITY.SYS [real-fixture oracle]  */
+#define ODS2_RESFILES           10  /* hm2_resfiles observed on real fixture */
+
+/*
+ * File characteristics bits (fh2_filechar). [N] access.h FH2$M_* defines.
+ * Only the two this writer needs are pulled in; access.h also defines
+ * FH2$M_NOBACKUP (0x2), FH2$M_MARKDEL (0x8000), FH2$M_ERASE (0x20000).
+ */
+#define ODS2_FH2_M_CONTIG       0x0080u   /* contiguous allocation   [N] */
+#define ODS2_FH2_M_DIRECTORY    0x2000u   /* file is a directory     [N] */
 
 /* ================================================================
  * Primitive VMS on-disk types
@@ -116,15 +137,28 @@ static inline uint32_t ods2_fid_number(const ods2_fid_t *f)
 
 /*
  * Record attributes area (FAT). 32 bytes. [N] access.h struct RECATTR.
- * hiblk/efblk are stored as two 16-bit halves (VAX word-swapped longword):
- * value = low + (high << 16).
+ *
+ * hiblk/efblk are stored as two 16-bit halves. CORRECTED in increment 3
+ * (the ODS-2 writer, src/vmsfs/ods2/ods2_writer.c): the field is (hi, lo)
+ * word order, NOT (lo, hi) as increment 1 assumed -- value = word[1] +
+ * (word[0] << 16). This was never oracle-checked in increments 1-2 (the
+ * PROVENANCE confirmed-list never mentions hiblk/efblk); increment 3
+ * decoded fat_hiblk on all 13 real files in tests/ods2/real_vax_ods2.dsk
+ * and cross-checked the corrected formula against each file's OWN FM2
+ * map-derived block count (independently decoded, not read from any
+ * field) -- exact match on all 13 (INDEXF.SYS=21, BITMAP.SYS=2,
+ * 000000.DIR=2, SECURITY.SYS=6, OVMXDIR.DIR=1, HELLO.TXT=34, WORLD.TXT=2,
+ * and 0 for every zero-length reserved stub); the OLD (lo, hi) formula
+ * produced values in the hundred-thousands, off by exactly a factor of
+ * 65536 on every one. See tests/ods2/PROVENANCE-real_vax_ods2.md's
+ * increment-3 addendum.
  */
 typedef struct ods2_recattr {
     uint8_t  fat_rtype;         /*  0: record type / file organization */
     uint8_t  fat_rattrib;       /*  1: record attributes               */
     uint16_t fat_rsize;         /*  2: record size                     */
-    uint16_t fat_hiblk[2];      /*  4: highest allocated VBN (lo,hi)    */
-    uint16_t fat_efblk[2];      /*  8: end-of-file VBN (lo,hi)          */
+    uint16_t fat_hiblk[2];      /*  4: highest allocated VBN (hi,lo)    */
+    uint16_t fat_efblk[2];      /*  8: end-of-file VBN (hi,lo)          */
     uint16_t fat_ffbyte;        /* 12: first free byte in EOF block     */
     uint8_t  fat_bktsize;       /* 14: bucket size                      */
     uint8_t  fat_vfcsize;       /* 15: VFC header size                  */
@@ -135,14 +169,18 @@ typedef struct ods2_recattr {
     uint16_t fat_versions;      /* 30: default version limit            */
 } ods2_recattr_t;
 
-/* Reconstruct fat_hiblk / fat_efblk as a 32-bit VBN. [N] */
+/*
+ * Reconstruct fat_hiblk / fat_efblk as a 32-bit VBN: word[1] is the LOW
+ * half, word[0] is the HIGH half -- see the ods2_recattr_t comment for the
+ * increment-3 real-fixture correction (increments 1-2 had this backwards).
+ */
 static inline uint32_t ods2_recattr_hiblk(const ods2_recattr_t *r)
 {
-    return (uint32_t)r->fat_hiblk[0] | ((uint32_t)r->fat_hiblk[1] << 16);
+    return (uint32_t)r->fat_hiblk[1] | ((uint32_t)r->fat_hiblk[0] << 16);
 }
 static inline uint32_t ods2_recattr_efblk(const ods2_recattr_t *r)
 {
-    return (uint32_t)r->fat_efblk[0] | ((uint32_t)r->fat_efblk[1] << 16);
+    return (uint32_t)r->fat_efblk[1] | ((uint32_t)r->fat_efblk[0] << 16);
 }
 
 /* ================================================================
@@ -411,7 +449,8 @@ typedef enum ods2_status {
     ODS2_ERR_CHECKSUM,      /* stored checksum mismatch               */
     ODS2_ERR_FORMAT,        /* format string / structure level bad    */
     ODS2_ERR_RANGE,         /* LBN/VBN out of range                   */
-    ODS2_ERR_NOTFOUND       /* file / entry not found                 */
+    ODS2_ERR_NOTFOUND,      /* file / entry not found                 */
+    ODS2_ERR_NOSPACE        /* no free blocks/FIDs/directory room     */
 } ods2_status_t;
 
 const char *ods2_strerror(ods2_status_t st);
@@ -519,6 +558,183 @@ typedef int (*ods2_dir_cb)(const char *name, unsigned name_len,
 ods2_status_t ods2_volume_list_dir(const ods2_volume_t *vol,
                                    const void *dir_header_block,
                                    ods2_dir_cb cb, void *ctx);
+
+/* ================================================================
+ * WRITER  (implemented in ods2/ods2_writer.c) -- increment 3.
+ *
+ * Produces a genuine ODS-2 volume image: primary + alternate home block,
+ * the index file bitmap, the ten traditional reserved system files
+ * (INDEXF.SYS .. SECURITY.SYS, ODS2_FID_* above), the storage bitmap
+ * (BITMAP.SYS: SCB + real free/allocated bit accounting), and the MFD
+ * ([000000]). After ods2_volume_format(), a caller can create additional
+ * files/directories with real FM2 retrieval-pointer extents and directory-
+ * record insertion into an existing directory.
+ *
+ * CLEAN-ROOM PROVENANCE (Rule 8), increment-3 additions beyond what
+ * ods2_reader.c / this header already cite for increments 1-2:
+ *
+ *   [N2] Storage-bitmap bit semantics and packing, from Paul Nankervis's
+ *        deallocfile() in simh/simtools extracters/ods2/access.c
+ *        (https://github.com/simh/simtools/blob/master/extracters/ods2/access.c):
+ *        a bit value of 1 means the block/cluster is FREE, 0 means
+ *        ALLOCATED (deallocfile ORs a mask into the bitmap word to mark
+ *        blocks free again). Bits are packed as 32-bit little-endian
+ *        words, 4096 bits (one 512-byte block) per bitmap VBN; VBN =
+ *        (LBN / cluster) / 4096 + 2 (VBN 1 is the SCB, matching increment
+ *        2's confirmed SCB-at-VBN1 finding); word index = (clusterno %
+ *        4096) / 32; bit index = clusterno % 32. The SAME function's
+ *        index-file-bitmap code (which clears a bit on file deallocation)
+ *        grounds the index file bitmap's (hm2_ibmaplbn) analogous packing,
+ *        with the opposite sense: bit == 1 means the FID IS in use.
+ *   [N3] FH2$M_DIRECTORY (0x2000) and FH2$M_CONTIG (0x80) file-
+ *        characteristic bits, from access.h's FH2$M_* defines (same file,
+ *        same repo).
+ *   [F]  The ten traditional reserved file names/order and hm2_resfiles ==
+ *        10: NOT from public docs -- read directly off the real-VAX
+ *        fixture tests/ods2/real_vax_ods2.dsk (increment 2's fixture) by
+ *        decoding each reserved header's ident area. Observed-oracle
+ *        grounding under Rule 8; see PROVENANCE-real_vax_ods2.md addendum.
+ *   [F2] fh2_backlink and fh2_fid.seq semantics: discovered empirically
+ *        when a first writer draft, which left fh2_backlink all-zero, was
+ *        lab-tested against a real VAX and rejected ("%MOUNT-W-IDXHDRBAD,
+ *        index file header is bad; backup used" then "Files-11 home block
+ *        not found on volume"). Re-decoding the real fixture's headers
+ *        showed EVERY one of the 10 reserved files has fh2_backlink ==
+ *        FID 4 (000000.DIR, including 000000.DIR's own header backlinking
+ *        to ITSELF) and fh2_fid.seq == its own fid_num (1..10); the
+ *        user-created files (FID 11 OVMXDIR.DIR, FID 12/13 HELLO.TXT/
+ *        WORLD.TXT) have fh2_fid.seq == 1 and fh2_backlink == their real
+ *        parent directory's FID (4 for OVMXDIR, 11 for the two files
+ *        inside it). This writer reproduces both rules exactly.
+ *   [F4] fh2_acoffset MUST be the sentinel value 255 ("no ACL area"), not
+ *        an arbitrary "empty area starts here" value equal to fh2_mpoffset
+ *        -- even though fh2_idoffset/fh2_mpoffset ARE genuinely flexible
+ *        (the reader locates ident/map purely via these stored offsets,
+ *        with no fixed expectation). This was the LAST bug found after
+ *        [F2]/RECATTR/LBN-0 fixes still failed to mount: bisected on
+ *        lab-2 by taking the real fixture's own byte-for-byte-working FID1
+ *        header and changing ONLY its 3 offset bytes to this writer's
+ *        chosen values (54/114/114 instead of real's 40/100/255) --
+ *        MOUNT rejected THAT alone with the identical IDXHDRBAD/home-
+ *        block-not-found pair, and setting acoffset back to 255 (while
+ *        leaving idoffset/mpoffset at 54/114) mounted cleanly. Full
+ *        bisection trail (4 hybrid images, each isolating one variable)
+ *        in PROVENANCE-real_vax_ods2.md's increment-3 addendum.
+ *
+ * SIMPLIFICATIONS -- explicitly [OVMX-inferred], NOT claimed byte-genuine:
+ *   - INDEXF.SYS's own retrieval map is written as ONE contiguous extent
+ *     covering home + alternate home + index bitmap + reserved headers +
+ *     alternate index header. The real fixture's own FID 1 header uses 3
+ *     extents (map_inuse == 6 words), not 1 -- this writer's layout is
+ *     self-consistent and was chosen for simplicity, not measured to match
+ *     real INITIALIZE's fragmentation choice.
+ *   - Reserved-file and created-file timestamps are left zero.
+ *   - The stub reserved files (BADBLK/CORIMG/VOLSET/CONTIN/BACKUP/BADLOG)
+ *     get zero-length headers with no data extent, matching the real
+ *     fixture (all had map_inuse == 0 there too). SECURITY.SYS gets one
+ *     contiguous zeroed data block (matching the real fixture's
+ *     map_inuse == 2 / FH2$M_CONTIG) but no real ACL content.
+ * ================================================================ */
+
+/* Volume-format parameters for ods2_volume_format(). */
+typedef struct ods2_format_params {
+    uint32_t    total_blocks;  /* volume size in blocks; must be large
+                                   enough for the fixed reserved-file layout
+                                   (a few dozen blocks) plus intended data */
+    uint32_t    maxfiles;      /* index file capacity; must be >= ODS2_RESFILES */
+    const char *volname;       /* <= 12 chars; space-padded on write */
+} ods2_format_params_t;
+
+/*
+ * Writer handle for an in-memory volume image under construction. `image`
+ * is caller-owned (typically a heap buffer of total_blocks * ODS2_BLOCK_SIZE
+ * bytes) and is written into directly by every ods2_wvolume_*() call.
+ */
+typedef struct ods2_wvolume {
+    uint8_t  *image;
+    size_t    image_len;
+    uint32_t  nblocks;
+    uint32_t  maxfiles;
+    uint32_t  ibmap_lbn;            /* hm2_ibmaplbn                        */
+    uint32_t  ibmap_size;           /* hm2_ibmapsize, in blocks            */
+    uint32_t  hdr_base_lbn;         /* ibmap_lbn + ibmap_size               */
+    uint32_t  bitmap_scb_lbn;       /* BITMAP.SYS VBN1 (the SCB)            */
+    uint32_t  bitmap_data_blocks;   /* BITMAP.SYS VBN2.. bit-block count    */
+    uint32_t  next_free_lbn;        /* bump allocator watermark, blocks     */
+    uint32_t  next_free_fid;        /* bump allocator watermark, FIDs       */
+    ods2_fid_t mfd_fid;             /* FID of [000000] (ODS2_FID_MFD)       */
+} ods2_wvolume_t;
+
+/*
+ * Format a fresh, genuine ODS-2 volume into `image` (already sized to
+ * params->total_blocks * ODS2_BLOCK_SIZE bytes -- caller-owned, will be
+ * zero-filled by this call). Writes the home block pair, index file
+ * bitmap, the ten reserved system files, BITMAP.SYS's SCB + storage
+ * bitmap, and the empty MFD. `wvol` is initialized for subsequent
+ * ods2_wvolume_*() calls.
+ */
+ods2_status_t ods2_volume_format(uint8_t *image, size_t image_len,
+                                 const ods2_format_params_t *params,
+                                 ods2_wvolume_t *wvol);
+
+/*
+ * Allocate `count` contiguous free blocks via the storage bitmap
+ * (first-fit from the bump watermark). Marks them allocated (bit -> 0)
+ * in BITMAP.SYS's on-disk bitmap. Returns ODS2_ERR_NOSPACE if the volume
+ * has no contiguous run of that size left before its end.
+ */
+ods2_status_t ods2_wvolume_alloc_blocks(ods2_wvolume_t *wvol,
+                                        uint32_t count, uint32_t *lbn_out);
+
+/*
+ * Create a new file with a single contiguous data extent holding `data`
+ * (data_len bytes, rounded up to whole blocks; the tail of the last block
+ * is zero-padded). Allocates the next free FID, writes its FH2 header
+ * (ident name "NAME;version", FM2 map, checksum, fh2_backlink == parent_dir
+ * -- see below) and marks its FID bit used in the index file bitmap. Does
+ * NOT insert a directory entry -- call ods2_wvolume_dir_insert() separately
+ * (with the SAME parent_dir).
+ *
+ * `parent_dir` is the FID of the directory this file will be inserted
+ * into (e.g. wvol->mfd_fid, or a FID from ods2_wvolume_create_dir()) --
+ * required because a real VAX MOUNT validates fh2_backlink and rejects a
+ * volume where it is zero/unresolvable ("index file header is bad" /
+ * "Files-11 home block not found"), discovered while lab-testing this
+ * writer; see ods2.h's WRITER provenance note below and
+ * PROVENANCE-real_vax_ods2.md's increment-3 addendum.
+ */
+ods2_status_t ods2_wvolume_create_file(ods2_wvolume_t *wvol,
+                                       const char *name, uint16_t version,
+                                       const uint8_t *data, size_t data_len,
+                                       ods2_fid_t parent_dir,
+                                       ods2_fid_t *fid_out);
+
+/*
+ * Create a new, empty directory file: one contiguous data block
+ * initialized to "no records" (all 0xFF, matching ODS2_DIR_END sentinel
+ * at offset 0), FH2 header with FH2$M_DIRECTORY | FH2$M_CONTIG set and
+ * fh2_backlink == parent_dir. Does NOT insert a directory entry in the
+ * parent -- call ods2_wvolume_dir_insert() separately (e.g. against
+ * wvol->mfd_fid).
+ */
+ods2_status_t ods2_wvolume_create_dir(ods2_wvolume_t *wvol,
+                                      const char *name, uint16_t version,
+                                      ods2_fid_t parent_dir,
+                                      ods2_fid_t *fid_out);
+
+/*
+ * Insert a {name, version, entry_fid} directory record into the single
+ * data block of directory `dir_fid` (as read via ods2_volume_read_header
+ * on the wvolume's own image). Walks existing records the same way
+ * ods2_volume_list_dir()/dir_scan_block() do, to find the first free
+ * (ODS2_DIR_END) slot, and writes the new record there. Only ONE data
+ * block per directory is supported (no directory growth) -- returns
+ * ODS2_ERR_NOSPACE if the record does not fit.
+ */
+ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
+                                      ods2_fid_t dir_fid,
+                                      const char *name, uint16_t version,
+                                      ods2_fid_t entry_fid);
 
 #ifdef __cplusplus
 }

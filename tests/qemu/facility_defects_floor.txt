@@ -91,4 +91,9 @@
 # VMS identity, Option B), the first mutation targeting
 # vms_proc_continue_identity() in kernel/vms_module.c. See its own entry in
 # facility_defects.sh for what it covers and why.
-63
+# Raised to 64 by vms-48ab's lnm-manager-delete-noop -- anchors the new
+# test_syssvc_lnm_system suite (the vmslnm-MANAGER API's LNM$SYSTEM path,
+# as distinct from the sys$ API test_syssvc_lnm_crossproc.c already covers),
+# the first mutation targeting vmslnm/lnm_client.c. See its own entry in
+# facility_defects.sh for what it covers and why.
+64

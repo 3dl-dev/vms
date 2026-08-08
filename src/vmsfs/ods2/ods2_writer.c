@@ -1208,7 +1208,15 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
     memset(blk + insert_off, 0xFF, needed);
 
     put16(blk + insert_off + 0, (uint16_t)(rec_end - insert_off - 2)); /* dir_size */
-    put16(blk + insert_off + 2, version);                        /* dir_verlimit */
+    /* [F14] dir_verlimit is the per-NAME version-limit POLICY field, not
+     * this entry's own version (that is dir_version, in the value entry
+     * below, and was already correct). See ods2.h's [F14] comment: the
+     * real fixture's own MFD splits cleanly by whether the entry is one
+     * of the 10 reserved files (verlimit == 1, its own locked version) or
+     * caller-created (verlimit == 0x7FFF, "no limit set"). */
+    put16(blk + insert_off + 2,
+          (entry_fid.fid_num <= ODS2_RESFILES) ? version
+                                                : ODS2_DIR_VERLIMIT_DEFAULT);
     blk[insert_off + 4] = 0;                                     /* dir_flags */
     blk[insert_off + 5] = (uint8_t)namecount;                    /* dir_namecount */
     memcpy(blk + name_off, name, namecount);

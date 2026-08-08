@@ -634,3 +634,139 @@ the 13 real headers' `fh2_fileowner`/`fh2_fileprot`/offset-56 word/
 dump (same `hdr_base + (fid - 1)` LBN formula both sides) and diff
 field-by-field. No new lab session is needed to REPRODUCE this derivation
 -- only to VALIDATE a candidate fix's effect on a real MOUNT.
+
+## Addendum (increment 7, vms-0f3): splice-isolated BADIRECTORY to `dir_verlimit`; a SECOND directory-file defect remains
+
+Increment 7's charter: run the splice diagnostic increment 6 recommended
+(graft the real fixture's own `[000000]` MFD header+data, verbatim, into
+this writer's own volume) to localize `BADIRECTORY`, fix what it finds,
+and prove a real-VAX state transition. Lab-2 pod **`vaxlab-4`** (RQ3
+scratch unit, procedure identical to prior increments; restored to its
+original `cdrom`/ISO attach afterward; lab-1 and no other lab-2 pod
+touched). All splicing/diffing done with local Python scripts operating
+directly on `tests/ods2/real_vax_ods2.dsk` and a fresh writer dump -- no
+new lab session needed for the diagnosis itself, only for validating each
+candidate against a real MOUNT.
+
+### Step 1: the prescribed splice -- decisive, and answers the isolation question
+
+Took the real fixture's own complete FID4 (`000000.DIR`) FH2 header and
+its first directory data block, byte-exact, and grafted them into this
+writer's own volume: the header's retrieval pointer was rewritten to
+point at a copy of that same real data placed in a completely unused
+region of this writer's volume (LBN 797-798, far from anything the
+writer's own layout touches for a 3-file volume), and the header
+checksum recomputed over the patched bytes -- every other header field
+(backlink, fid, fileprot, owner, idoffset/mpoffset/acoffset, recattr,
+ident, filechar) is 100% the real fixture's own bytes. Confirmed offline
+first (checksum recomputes correctly, map area decodes to the new LBN,
+all 11 directory records decode in the same ascending order the real
+fixture uses) before spending a lab trial.
+
+**Real-VAX result: `%MOUNT-I-MOUNTED, OVMXWRIT mounted on _$2$DUA3:
+(VAX1)` -- clean, with NO warnings at all** (no QUOTAFAIL, no BADSECSYS,
+no BADIRECTORY). This directly answers increment 6's isolation question:
+**the defect IS in this writer's own `[000000]` MFD header/data**, not in
+SECURITY.SYS, not in INDEXF.SYS's map, not elsewhere in the volume-wide
+layout -- all of those are apparently fine once `[000000]` itself is
+real. `DIRECTORY/SIZE $2$DUA3:[000000]` on the spliced volume lists all
+11 entries with correct sizes.
+
+### Step 2: the same splice exposes a SECOND, independent defect
+
+`DIRECTORY/SIZE $2$DUA3:[OVMXDIR]` on that same cleanly-mounted, spliced
+volume -- i.e. `[OVMXDIR]`'s own header and directory data, 100% this
+writer's own construction, untouched by the splice -- still fails:
+
+```
+%DIRECT-E-OPENIN, error opening $2$DUA3:[OVMXDIR]*.*;* as input
+-RMS-E-FND, ACP file or directory lookup failed
+-SYSTEM-W-BADIRECTORY, bad directory file format
+```
+
+This proves the SAME class of defect (BADIRECTORY) exists independently
+in this writer's directory-creation path in general, not only in
+`ods2_volume_format()`'s MFD-population loop -- i.e. fixing `[000000]`
+alone would not have been sufficient even if this writer's own MFD
+defect were fixed.
+
+### Step 3: `dir_verlimit` field-confusion bug found, fixed, and confirmed real -- but NOT sufficient alone
+
+Byte-by-byte decoding of the real fixture's own `[000000]` MFD block
+(all 11 records) and `[OVMXDIR]` block (both records) found
+`ods2_wvolume_dir_insert()` writing the wrong value into `dir_verlimit`
+(offset+2 of each directory record): it wrote the caller's `version`
+argument (the entry's OWN version number), but the real fixture shows a
+DIFFERENT, per-name POLICY value there -- `0x0001` for all 10
+reserved-file entries (their version is always 1, so this coincidentally
+matched and hid the bug), and `0x7FFF` ("no limit set") for every
+caller-created entry (`OVMXDIR.DIR` in the MFD, and `HELLO.TXT`/
+`WORLD.TXT` in `[OVMXDIR]` itself) -- values that do NOT match the
+version-number hypothesis. Fixed in `ods2_wvolume_dir_insert()`
+(`src/vmsfs/ods2/ods2_writer.c`) and documented as `[F14]` in `ods2.h`:
+`dir_verlimit = version` when `entry_fid.fid_num <= ODS2_RESFILES`, else
+`ODS2_DIR_VERLIMIT_DEFAULT` (`0x7FFF`). Offline tests (`ctest -R ods2`)
+stay green; the fixed writer's own `[000000]` and `[OVMXDIR]` blocks now
+match the real fixture's `dir_verlimit` byte-for-byte in every record.
+
+**This is a real, oracle-grounded, kept fix -- but it does NOT resolve
+BADIRECTORY by itself.** Re-tested twice on lab-2 with the fix applied:
+(a) the full unspliced writer output still shows `BADIRECTORY` on
+`[000000]` at MOUNT time, identical to before the fix; (b) the fixed
+writer's volume with the SAME `[000000]` real-data splice as step 1
+mounts clean, but `[OVMXDIR]` still shows the exact same `BADIRECTORY`
+as step 2. The `dir_verlimit` bug was real but not load-bearing for this
+particular failure -- the same "real, kept, not sufficient alone"
+pattern increments 4-6 already hit repeatedly with other fields.
+
+### Step 4: the next candidate, found but NOT fixed this increment (effort-capped)
+
+Field-by-field diffing this writer's own `[OVMXDIR]`/`[000000]` FH2
+headers against the real fixture's (script logic: decode `fat_hiblk`/
+`fat_efblk` as two hi/lo 16-bit words per `ods2_recattr_t`'s documented
+layout, both sides) found:
+
+```
+real  FID11 (OVMXDIR.DIR): hiblk=1  efblk=2  (1 block allocated)
+ours  FID11 (OVMXDIR.DIR): hiblk=1  efblk=1
+real  FID4  (000000.DIR):  hiblk=2  efblk=2  (2 blocks allocated)
+ours  FID4  (000000.DIR):  hiblk=1  efblk=1  (this writer's MFD is only
+                                               1 block, a pre-existing,
+                                               separately-flagged
+                                               [OVMX-inferred] size
+                                               simplification)
+```
+
+`OVMXDIR.DIR`'s real `efblk` (2) EXCEEDS its own `hiblk`/allocated size
+(1) -- the same "+1, full-block" convention increment 6's `[F12]` already
+found for `INDEXF.SYS`/`BITMAP.SYS`, generalizing to directory files too.
+But `000000.DIR`'s real values (`hiblk==efblk==2`, no `+1`) do NOT fit
+that same rule at face value with only ONE real sample of each shape to
+compare (a 1-block-allocated directory vs. a 2-block-allocated one) --
+not enough to safely generalize a rule without risking a regression on
+the field that's already known to matter for MOUNT. **Not fixed this
+increment, per the effort cap (isolate + fix ONE wall, do not chase
+subsequent ones).** Flagged as the leading next candidate for increment
+8, with the concrete numbers above and the recommendation to get a
+THIRD real sample (a directory with >1 allocated block but a partially-
+written last block, e.g. one holding enough entries to need a second
+block with only one entry in it) to disambiguate hiblk/efblk's actual
+rule before generalizing it into the writer.
+
+### `ANALYZE/DISK_STRUCTURE`: confirmed lab-wide, not volume-specific
+
+Per increment 6's open question: retried `ANALYZE/DISK_STRUCTURE
+$2$DUA3:` on pod `vaxlab-4`, both against this writer's own (dismounted)
+output AND -- the new check -- against the pristine, untouched, known-good
+`real_vax_ods2.dsk` fixture attached fresh to the same pod. **Both fail
+identically**:
+
+```
+%ANALDISK-F-GETDVI, error getting device characteristics, RVN 1
+-SYSTEM-F-WRONGACP, wrong ACP for device
+```
+
+This settles increment 6's open question: `WRONGACP` is a **lab-wide
+RQDX3/tooling limitation on this pod**, not specific to any OVMX-written
+volume's format. `ANALYZE/DISK_STRUCTURE` is not usable as a diagnostic
+on this lab config at all; do not spend further trials on it here.

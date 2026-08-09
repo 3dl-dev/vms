@@ -388,6 +388,23 @@ unsigned scs_vc_retry_limit(void);
  */
 int scs_vc_early_ack_enabled(void);
 
+/* vms-694: how many round-0 STARTs a peer may re-issue against an already-OPEN
+ * circuit before OVMX names the "peer is withholding its round-2 ACK" stall
+ * (spec sec 4(w) SCSSYSTEMID conflict / admission refusal). A clean join never
+ * re-STARTs after OPEN, so any nonzero threshold is safe; 3 waits out a lone
+ * stray retransmit while still firing well inside the ~110 s a lab run lasts. */
+#define SCS_VC_NOACK_STALL_THRESHOLD 3u
+
+/*
+ * scs_vc_noack_stall - 1 when this circuit is wedged in the "peer withholds its
+ * round-2 ACK" stall: OPEN on our side, our round-2 ACK not yet sent
+ * (start_acked == 0, a daemon-layer latch passed in), and the peer has re-issued
+ * round-0 START at least `threshold` times since we opened. Pure and log-only;
+ * see scs_vc.c for the live grounding.
+ */
+int scs_vc_noack_stall(const struct scs_pb *pb, int start_acked,
+                       unsigned long threshold);
+
 /*
  * scs_vc_classify_round - map an observed 0x41 frame onto a formation event
  * per design choice 1 above. `is_ack` is the 46-byte no-identity class

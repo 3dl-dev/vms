@@ -386,8 +386,50 @@ enum scs_vc_action scs_vc_fsm_recv(struct scs_pb *pb, enum scs_vc_event ev,
         /* "each port driver simply discards the ACK it receives from the other
          * node because it already considers the virtual circuit to be OPEN."
          * (p. 2-12) */
+        if (ev == SCS_VC_EV_START) {
+            /* vms-694: a round-0 START arriving on an already-OPEN circuit is the
+             * peer RE-STARTING formation from the beginning -- it does not accept
+             * our side as open. On a clean join this never happens: the peer sends
+             * its round-2 ACK and stays open. A peer that keeps doing this is
+             * withholding its round-2 ACK (admission refusal); count it so the
+             * daemon can name the condition rather than loop silently. */
+            pb->fsm.start_after_open++;
+        }
         return SCS_VC_ACT_NONE;
     }
+}
+
+/*
+ * scs_vc_noack_stall - vms-694: is this circuit wedged in the "peer withholds its
+ * round-2 ACK" stall?
+ *
+ * GROUNDED live (2026-08-09, lab-2). A fresh identity joins cleanly: the member
+ * sends round-0 START, round-1 STACK, AND round-2 ACK, so OVMX's round-2 ACK goes
+ * out (`start_acked` latches) and the join sequencer ignites. A returning/duplicate
+ * SCSSYSTEMID (spec sec 4(w)) makes the member detect a conflict and REFUSE: it
+ * sends START then STACK, OVMX's circuit reaches OPEN -- but the member never sends
+ * its round-2 ACK. It re-issues round-0 START indefinitely (measured 45-59x over
+ * ~110 s across two runs; the clean control had zero). Because the default ACK
+ * trigger waits for the peer's own round-2 ACK, `start_acked` never latches and the
+ * sequencer never fires its first CONNECT-REQUEST -- the exact "VC-START stall" that
+ * had been misread as a formation regression.
+ *
+ * Pure predicate over the PB's formation state plus the caller's start_acked latch
+ * (which lives above this layer, in the daemon's peer_state). Returns 1 only when
+ * the circuit is OPEN on our side, we have NOT put our round-2 ACK out, and the peer
+ * has re-STARTed at least `threshold` times since we opened. Log-only: nothing here
+ * touches the wire.
+ */
+int scs_vc_noack_stall(const struct scs_pb *pb, int start_acked,
+                       unsigned long threshold)
+{
+    if (pb == NULL || threshold == 0) {
+        return 0;
+    }
+    if (pb->vc_state != SCS_VC_OPEN || start_acked) {
+        return 0;
+    }
+    return pb->fsm.start_after_open >= threshold;
 }
 
 int scs_vc_fsm_timer_expired(const struct scs_pb *pb, uint64_t now_ms,

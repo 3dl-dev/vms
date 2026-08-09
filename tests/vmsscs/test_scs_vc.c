@@ -585,6 +585,65 @@ static void test_fsm_implied_ack(void)
     check(scs_vc_is_circuit_packet(0x0c) == 0, "circuit packet: a HELLO is not one");
 }
 
+/* vms-694: the "peer withholds its round-2 ACK" stall detector. GROUNDED live
+ * on lab-2 (2026-08-09): a returning/duplicate SCSSYSTEMID (spec sec 4(w)) makes
+ * the member send round-0 START + round-1 STACK, let OVMX's circuit reach OPEN,
+ * then re-issue round-0 START indefinitely without ever sending its round-2 ACK
+ * -- so start_acked never latches and the join sequencer never ignites. A clean
+ * identity on the same build joined with the member's round-2 ACK present and
+ * ZERO post-OPEN re-STARTs. This asserts the predicate that names that stall. */
+static void test_fsm_noack_stall_detect(void)
+{
+    printf("[fsm] vms-694 sec 4(w) 'peer withholds round-2 ACK' stall detector\n");
+    struct fsm_fixture f;
+    fsm_fixture_init(&f);
+
+    /* Drive to OPEN the way a real join does: our START, peer STACK. The FSM
+     * asks us to send our round-2 ACK -- but the daemon layer owns whether it
+     * actually goes out (start_acked), which is what this stall is about. */
+    scs_vc_fsm_send_start(f.pb, 0);
+    scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 10);              /* -> START RECEIVED */
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_STACK, 20) == SCS_VC_ACT_SEND_ACK,
+          "noack: peer STACK opens the circuit and asks for our ACK");
+    check(f.pb->vc_state == SCS_VC_OPEN, "noack: circuit OPEN on our side");
+    check(f.pb->fsm.start_after_open == 0, "noack: no post-OPEN re-STARTs yet");
+
+    /* The CLEAN control: the peer sent its round-2 ACK, so the daemon latched
+     * start_acked. No stall regardless of anything else. */
+    check(scs_vc_noack_stall(f.pb, /*start_acked=*/1,
+                             SCS_VC_NOACK_STALL_THRESHOLD) == 0,
+          "noack: a peer that sent its round-2 ACK (start_acked=1) never stalls");
+
+    /* The STALL: our round-2 ACK never went out (start_acked=0) and the peer
+     * re-issues round-0 START on the already-OPEN circuit. Each is counted and
+     * classified as 'none' (p. 2-12), exactly the live 'START received -> none,
+     * VC OPEN' loop. */
+    check(scs_vc_noack_stall(f.pb, 0, SCS_VC_NOACK_STALL_THRESHOLD) == 0,
+          "noack: below threshold with no re-STARTs -- not yet a stall");
+    for (unsigned i = 1; i <= SCS_VC_NOACK_STALL_THRESHOLD; i++) {
+        check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 30 + i) == SCS_VC_ACT_NONE,
+              "noack: a round-0 START on an OPEN circuit is discarded");
+        check(f.pb->vc_state == SCS_VC_OPEN, "noack: circuit stays OPEN");
+    }
+    check(f.pb->fsm.start_after_open == SCS_VC_NOACK_STALL_THRESHOLD,
+          "noack: every post-OPEN re-START was counted");
+    check(scs_vc_noack_stall(f.pb, 0, SCS_VC_NOACK_STALL_THRESHOLD) == 1,
+          "noack: at threshold with start_acked=0 -- STALL detected");
+
+    /* A peer STACK (not START) on the OPEN circuit is NOT a fresh re-START and
+     * must not inflate the counter. */
+    unsigned long before = f.pb->fsm.start_after_open;
+    scs_vc_fsm_recv(f.pb, SCS_VC_EV_STACK, 100);
+    check(f.pb->fsm.start_after_open == before,
+          "noack: a STACK on an OPEN circuit does not count as a re-START");
+
+    /* Null / disabled-threshold safety. */
+    check(scs_vc_noack_stall(NULL, 0, SCS_VC_NOACK_STALL_THRESHOLD) == 0,
+          "noack: NULL pb rejected");
+    check(scs_vc_noack_stall(f.pb, 0, 0) == 0,
+          "noack: threshold 0 disables the detector");
+}
+
 /* The NISCA config-round -> Figure 2-7 packet-class mapping (design choice 1). */
 static void test_fsm_round_classification(void)
 {
@@ -1046,6 +1105,7 @@ int main(void)
     test_fsm_retry_and_abandon();
     test_fsm_repeated_start_hits_the_limit();
     test_fsm_implied_ack();
+    test_fsm_noack_stall_detect();
     test_fsm_round_classification();
     test_fsm_kill_switch();
     test_fsm_null_safety();

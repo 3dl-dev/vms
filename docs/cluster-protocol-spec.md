@@ -5623,6 +5623,86 @@ or binary examined.
 > not MSCP$DISK. Full bracket + evidence paths:
 > `docs/design-rejoin-mscp-silence.md` §7.
 
+### 4(z) `SHOW CLUSTER` "NEW" tracks TRANSITION COMPLETION, not a missing display step — a COMPLETING join reaches the peer's CSB `member`; `NEW` reproduces only when the transition does not complete (`XITDONE=0`) (GROUNDED live, `vms-071`, 2026-08-09)
+
+**What this resolves.** `vms-071` (filed 2026-08-09T03:38Z) carried the premise
+"OVMX joins and reaches member-OPEN, but on the PEER a `SHOW CLUSTER` displays
+OVMX's node as `NEW`, not `MEMBER`" — the frontier §4(L)(7)/§4(x) left. It
+predates the completed per-peer-Con.ID fix stack (#221 `622fbe0` — §4(x)'s
+RESOLVED, 2026-08-08 23:35 — plus #235/#237/#239, §4(O.6)–§4(O.8)). A live
+bracket at HEAD shows the premise **conflates two distinct outcomes**, and the
+`NEW`/`MEMBER` split is governed by whether OVMX's state transition **completes
+(`XITDONE`)**, not by any display artifact or missing joiner emission.
+
+**The discriminator, and why it is sound.** `SHOW CLUSTER`'s per-node status is
+rendered **from the peer's CSB** (Davis 7-25: "The MEMBERS class of data
+displayed by `SHOW CLUSTER` is obtained from the CSBs"; §4(L)(5), §4(q)). The
+CSB carries a connectivity `State` (Davis 7-23/24: the ten states `NEW…OPEN`)
+**and** membership `Flags`. The sound oracle is the **peer's** CSB read on the
+peer — never OVMX's own display (a rejected-evidence class). `csbwatch.sh`
+parks VAX1 in SDA sampling `SHOW CLUSTER/NODE=<ident>` *through* the join;
+`csbcycle.sh` does the same across a **real** node's kill→rejoin control.
+
+**Arm A — a COMPLETING join reaches `member`, byte-identical to a real member.**
+Fresh identities on `vaxlab-11`/`vaxlab-12`, peers already `MEMBER`/`MEMBER`
+(the §4(x) ESTABLISHED case), each `XITDONE=1` (all 12 barrier steps released,
+`VAXCLMEMBER=2`):
+
+| run | peer's CSB for OVMX (SDA) | samples |
+|---|---|---|
+| `OVMXS0` (`vaxlab-11`, `XITDONE=1`) | `State: 01 open`, `Flags: 02060002 member,selected,status_rcvd`, `CSID 00010003`, real `CDT 87A0BAC0`, live seq (`Next 00BE`/`ack 00BC`) | **17/17**, T+6 s→T+180 s, never regresses |
+| `OVMXU0` (`vaxlab-11`, `XITDONE=1`) | `State: 01 open`, `Flags: 02060002 member,…` | t+60 s and t+120 s |
+| real MEMBER control (VAX2, same dumps) | `State: 01 open`, `Flags: 02060002 member,selected,status_rcvd` | — |
+
+OVMX's completing-join `Flags` (`02060002 member,selected,status_rcvd`) are
+**byte-identical** to the real member VAX2's, and the DCL `SHOW CLUSTER`
+*utility* renders VAX2's `02060002` CSB as `| VMS V7.3 | MEMBER |`. Because the
+utility STATUS is a function of exactly those CSB flags, an OVMX CSB carrying
+the identical flag word renders `MEMBER` too. Evidence:
+`work/vms071A.csb`, `work/vms071dual.out`, `scsd-vms071{A,dual}.log`,
+`d94-vms071{A,dual}.pcap` (identities proven on wire).
+
+**Arm B — `NEW` reproduces only when the transition does NOT complete.** A
+`OVMXT0` **rejoin** on `vaxlab-12` (its own first join there had `XITDONE`;
+the rejoin did not) logged `XITDONE=0` — the barrier never released — and the
+DCL utility on that quiet console printed `| OVMXT0 | VMX V0.1 | NEW |` beside
+`VAX1`/`VAX2` `MEMBER`. `NEW` is the correct status of a node whose CSB was
+allocated (Davis 7-23: "the CSB has just been allocated") but whose state
+transition did not finish — not a display bug, and not a completing join
+rendered wrong. Evidence: `work/vms071util2.out`, `scsd-util2.log`.
+
+**Real-node control (Arm C).** `csbcycle` killed the real VAX2 and watched its
+CSB on VAX1: `01 open` → `09 wait` (~100 s, connectivity lost) → `01 open` on
+readmission. Steady MEMBER = `01 open`; a *retained* CSB reconnects
+`wait→…→open` without passing back through `NEW`. `work/vms071ctl.csb`.
+
+**Where the original `NEW` reading came from.** The pre-#221 §4(x) runs showed
+`SHOW CLUSTER` `NEW` with `CLUSTER_NODES` stuck at 2 — the **Con.ID-collision**
+bug (a distinct, now-fixed defect), and those runs also did not complete the
+transition. Once #221 gave each concurrent peer its own Con.ID block, a fresh
+join's add-member traffic is delivered both ways, the coordinator completes the
+transition, and the CSB reaches `member` — exactly §4(q)'s prediction
+("`NEW → MEMBER` is member-side state produced by the transition; there is
+nothing extra for a joiner to emit").
+
+**Honest caveat on the utility read.** The DCL `SHOW CLUSTER` *utility* is
+directly readable only on a **non-completing** join, because a completing
+transition floods the peer's operator console (OPCOM overrun, §4e.1) and the
+utility never renders — which is precisely why the CSB is read in SDA. So the
+`MEMBER` conclusion for a completing OVMX join rests on the SDA CSB (the
+utility's own data source) carrying the member-identical `02060002` flags, not
+on a direct utility `MEMBER` print for OVMX. The residual **rejoin does not
+reliably complete** (`XITDONE=0`) is the separately-tracked
+rejoin/reject-storm problem (§1h, `vms-2f3`), not a `SHOW CLUSTER` display
+step.
+
+**Disposition.** REFUTATION of the display-gap framing — no code change.
+`NEW` is the accurate rendering of an incomplete transition; a completing join
+reaches the peer's CSB `member` (byte-identical to a real member). `vmsscs|scs`
+ctest 50/50 at HEAD (unchanged, no code touched). Clean-room: subject/peer
+state from our SDA + our captures; CSB-state semantics from the host-only Davis
+transcript (page cites only). No VSI/HPE source or binary examined.
+
 ## 6. Using the dissector
 
 ```

@@ -309,6 +309,13 @@ struct vms_lock_entry {
     wait_queue_head_t   wait_wq;        /* sync ENQ ($ENQW): blocker sleeps here */
     int                 grant_state;    /* sync wake: 0=pending, SS__NORMAL=granted,
                                          *            SS__DEADLOCK=cycle detected */
+    uint8_t             acmode;         /* access mode $ENQ was issued from
+                                         * (0-3). NOT a lock mode (see
+                                         * granted_mode above). Image rundown
+                                         * (vms-68f.v) dequeues locks owned at
+                                         * USER mode; inner-mode locks are
+                                         * process-permanent. See
+                                         * vms_proc_rundown_locks(). */
 };
 
 /* Lock resource (named resource in the lock database) */
@@ -587,6 +594,12 @@ struct vms_channel {
     uint32_t            chan;
     pid_t               owner_linux_pid;/* process holding this channel */
     struct vms_device   *dev;
+    uint8_t             acmode;         /* access mode $ASSIGN was issued from
+                                         * (0-3). Image rundown (vms-68f.v)
+                                         * deassigns channels owned at USER
+                                         * mode; inner-mode channels are
+                                         * process-permanent. See
+                                         * vms_proc_rundown_channels(). */
 };
 
 /* ================================================================
@@ -755,5 +768,20 @@ void vms_proc_release_channels(struct vms_proc *proc);
 /* Lock manager helpers */
 void vms_proc_release_locks(struct vms_proc *proc);
 void vms_proc_release_common_ef(struct vms_proc *proc);
+
+/*
+ * Image rundown (vms-68f.v, SYS$RUNDWN image-scoped release --
+ * docs/design-in-process-activation.md Part II §A.2.1, §A.6.1). Each releases
+ * ONLY this process's resources owned at access mode >= min_acmode (numerically
+ * greater == less privileged == outer), leaving process-permanent (inner-mode)
+ * state intact. Image rundown passes min_acmode = PSL_C_USER, so exactly the
+ * USER-mode (image) resources are released and everything a supervisor/exec/
+ * kernel-mode context owns survives -- the "P0 dies, P1 survives" split at the
+ * resource level (the process-permanent P1 extent is under its own lock and is
+ * never touched here). Grounding per resource class: docs/oracle/
+ * image-rundown-resource-classes.md. */
+void vms_proc_rundown_channels(struct vms_proc *proc, uint8_t min_acmode);
+void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode);
+void vms_proc_rundown_asts(struct vms_proc *proc, uint8_t min_acmode);
 
 #endif /* _VMS_INTERNAL_H */

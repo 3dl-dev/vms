@@ -483,6 +483,7 @@ p1-map-not-recorded
 p0-unmap-clears-p1
 super-mode-escalation
 image-rundown-without-entry
+image-rundown-leaks-user-lock
 imgact-p1-not-protected"
 
 # ---------------------------------------------------------------------------
@@ -4295,6 +4296,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    image-rundown-leaks-user-lock)
+        case "$_f" in
+        facility)     echo "SYS\$RUNDWN image-scoped resource release (VMS_IOCTL_IMAGE_RUNDOWN, vms-68f.v -- increment (v) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.1 step 2 / §A.6.1; class grounding docs/design-image-rundown-resource-classes.md)";;
+        targets)      echo "kernel/vms_access.c";;
+        suites_red)   echo "test_kmod_rundown";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_image_rundown() stops calling vms_proc_rundown_locks(), so a lock the activated image \$ENQed at USER access mode is NOT dequeued when the image runs down -- it survives into DCL with a still-valid lock ID, leaking image-scoped executive state across the activation. This is exactly the 'rundown completeness' the design (§A.6.1) names as the hard part: get the image-scoped-vs-process-permanent split wrong and resources leak across images in one process (a bug the fork model never had because the child's death was a sledgehammer). The mutation removes ONLY the lock release: the Supervisor-mode (process-permanent) lock was never in the release set so it is unaffected, and the sibling channel and AST releases in the same handler are untouched -- the image still runs down and returns to Supervisor. Only the one assertion that reads the image lock back can tell the difference. One minimal mutation, one property.";;
+        require_fail) cat <<'EOF'
+image rundown DEQUEUED the User-mode lock (its lkid is now invalid)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     imgact-p1-not-protected)
         case "$_f" in
         facility)     echo "in-process image activation, critical-P1 protection (imgact_activate() -> vms_kif_p1_protect, vms-68f.iv -- increment (iv) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.3(b))";;
@@ -4841,6 +4859,18 @@ apply_edit() {
         # image_active is touched) is a plain assignment, never an `if`
         # naming it, so this pattern cannot match there.
         sed -i 's|^    if (!proc->image_active) {$|    if (0 \&\& !proc->image_active) { /* NEGCTL image-rundown-without-entry */|' "$_file";;
+
+    image-rundown-leaks-user-lock)
+        # UNIQUE TEXT, no range anchor needed: vms_proc_rundown_locks() is
+        # called exactly once in the file -- vms_ioctl_image_rundown's release
+        # block. Replacing that one call with a comment leaves the sibling
+        # vms_proc_rundown_channels()/vms_proc_rundown_asts() calls and the
+        # mode restore untouched, so the image still runs down and returns to
+        # Supervisor; only the image's USER-mode lock stops being released.
+        # The declaration in kernel/vms_internal.h is a different file, never
+        # $_file for this defect (targets is kernel/vms_access.c), so it is
+        # unaffected.
+        sed -i 's|    vms_proc_rundown_locks(proc, rundown_mode);|    /* NEGCTL image-rundown-leaks-user-lock: image locks not released */|' "$_file";;
 
     imgact-p1-not-protected)
         # UNIQUE TEXT, no range anchor needed: the RO protect is the only

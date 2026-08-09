@@ -212,3 +212,35 @@ long vms_ioctl_deliverast(struct vms_proc *proc, unsigned long arg)
     /* No ASTs to deliver */
     return -EAGAIN;
 }
+
+/*
+ * vms_proc_rundown_asts - image rundown's AST flush (vms-68f.v).
+ *
+ * Discard the pending ASTs queued at access mode >= min_acmode (image rundown
+ * passes PSL_C_USER, so the image's USER-mode ASTs), leaving inner-mode
+ * (process-permanent) AST queues untouched. ASTs are the one class already
+ * segregated per access mode -- proc->ast[m] is the queue for mode m (see
+ * struct vms_proc) -- so image-scoped selection is exact and needs no added
+ * field. This mirrors the per-mode drain vms_proc_free_claimed() does at
+ * process death, restricted to the outer modes rundown owns. Grounding:
+ * docs/design-image-rundown-resource-classes.md (user-mode ASTs are flushed
+ * at image rundown; the enable flag is left as-is -- rundown flushes queued
+ * entries, it does not re-arm delivery).
+ */
+void vms_proc_rundown_asts(struct vms_proc *proc, uint8_t min_acmode)
+{
+    struct vms_ast_entry *ast, *tmp;
+    int m;
+
+    for (m = min_acmode; m <= PSL_C_USER; m++) {
+        struct vms_ast_state *st = &proc->ast[m];
+
+        spin_lock(&st->lock);
+        list_for_each_entry_safe(ast, tmp, &st->pending, list) {
+            list_del(&ast->list);
+            kfree(ast);
+        }
+        st->count = 0;
+        spin_unlock(&st->lock);
+    }
+}

@@ -487,36 +487,72 @@ static void notify_blocking_asts(struct vms_lock_resource *res,
  * Process lock cleanup
  * ================================================================ */
 
+/*
+ * Tear down one lock and free it. Caller holds proc->lock_list_lock and has
+ * already unlinked (or is about to unlink) the entry from proc->locks via the
+ * list_for_each_entry_safe cursor. Shared verbatim by full process teardown
+ * (vms_proc_release_locks) and image rundown (vms_proc_rundown_locks) so the
+ * two cannot drift.
+ */
+static void lock_teardown_locked(struct vms_lock_entry *lock)
+{
+    struct vms_lock_resource *res = lock->resource;
+
+    /* Remove from resource lists */
+    spin_lock(&res->lock);
+    if (lock->waiting)
+        list_del(&lock->res_waiting);
+    else
+        list_del(&lock->res_granted);
+
+    /* Write back value block if held */
+    if ((lock->flags & LCK_M_VALBLK) && !lock->waiting)
+        memcpy(res->valblk, lock->valblk, LCK_VALBLK_SIZE);
+
+    try_grant_waiters(res);
+    spin_unlock(&res->lock);
+
+    /* Remove from process list and ID tree */
+    list_del(&lock->proc_list);
+    lock_remove_id(lock);
+
+    resource_release(res);
+    kmem_cache_free(vms_lock_cache, lock);
+}
+
 void vms_proc_release_locks(struct vms_proc *proc)
 {
     struct vms_lock_entry *lock, *tmp;
 
     spin_lock(&proc->lock_list_lock);
-    list_for_each_entry_safe(lock, tmp, &proc->locks, proc_list) {
-        struct vms_lock_resource *res = lock->resource;
-
-        /* Remove from resource lists */
-        spin_lock(&res->lock);
-        if (lock->waiting)
-            list_del(&lock->res_waiting);
-        else
-            list_del(&lock->res_granted);
-
-        /* Write back value block if held */
-        if ((lock->flags & LCK_M_VALBLK) && !lock->waiting)
-            memcpy(res->valblk, lock->valblk, LCK_VALBLK_SIZE);
-
-        try_grant_waiters(res);
-        spin_unlock(&res->lock);
-
-        /* Remove from process list and ID tree */
-        list_del(&lock->proc_list);
-        lock_remove_id(lock);
-
-        resource_release(res);
-        kmem_cache_free(vms_lock_cache, lock);
-    }
+    list_for_each_entry_safe(lock, tmp, &proc->locks, proc_list)
+        lock_teardown_locked(lock);
     proc->lock_count = 0;
+    spin_unlock(&proc->lock_list_lock);
+}
+
+/*
+ * vms_proc_rundown_locks - image rundown's lock release (vms-68f.v).
+ *
+ * Dequeue only the locks this process enqueued at access mode >= min_acmode
+ * (image rundown passes PSL_C_USER, so only USER-mode locks an activated image
+ * held), leaving inner-mode (process-permanent) locks granted. A skipped lock
+ * keeps its lkid valid; a released one's lkid becomes SS$_IVLOCKID on the next
+ * $DEQ, which is exactly the property test_kmod_rundown.c asserts. Grounding:
+ * docs/design-image-rundown-resource-classes.md ($DEQ acmode semantics).
+ */
+void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode)
+{
+    struct vms_lock_entry *lock, *tmp;
+
+    spin_lock(&proc->lock_list_lock);
+    list_for_each_entry_safe(lock, tmp, &proc->locks, proc_list) {
+        if (lock->acmode < min_acmode)
+            continue;   /* inner-mode: process-permanent, survives rundown */
+        lock_teardown_locked(lock);
+        if (proc->lock_count > 0)
+            proc->lock_count--;
+    }
     spin_unlock(&proc->lock_list_lock);
 }
 
@@ -646,6 +682,18 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
     lock->waiting = 0;
     init_waitqueue_head(&lock->wait_wq);
     lock->grant_state = 0;
+
+    /*
+     * Record the access mode $ENQ was issued from, so image rundown can tell
+     * an image-scoped (USER) lock from a process-permanent one (vms-68f.v).
+     * VMS $ENQ takes an acmode maximized against the caller's mode; OVMX
+     * records the caller's current mode. Note this is the ACCESS mode
+     * (0-3), NOT the lock mode in requested_mode/granted_mode (NL..EX, 0-5).
+     * See docs/design-image-rundown-resource-classes.md.
+     */
+    spin_lock(&proc->mode_lock);
+    lock->acmode = proc->current_mode;
+    spin_unlock(&proc->mode_lock);
 
     if (args.flags & LCK_M_VALBLK)
         memcpy(lock->valblk, args.valblk, LCK_VALBLK_SIZE);

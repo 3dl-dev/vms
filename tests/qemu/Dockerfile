@@ -283,7 +283,13 @@ RUN cd /src/repo && \
     # test_syssvc_imgact_realimg.c activates in-process (the flip). Same aggregate
     # (qemu_syssvc_tests now DEPENDS on testreal_inproc), entered via the auxv ABI.
     echo "--- TESTREAL.EXE (the real-image in-process flip subject, test_syssvc_imgact_realimg) ---" && \
-    ls -la build-static/bin/TESTREAL.EXE
+    ls -la build-static/bin/TESTREAL.EXE && \
+    # TESTEXTERN.EXE + TESTEXTERN_FOREIGN.EXE (vms-db2): the EXTERNAL-image flip
+    # subjects test_syssvc_imgact_extern.c activates (PT_INTERP naming the OVMX
+    # loader runs in-process; a foreign interp forks). Same aggregate
+    # (qemu_syssvc_tests now DEPENDS on both).
+    echo "--- TESTEXTERN.EXE / TESTEXTERN_FOREIGN.EXE (external-image flip subjects, test_syssvc_imgact_extern) ---" && \
+    ls -la build-static/bin/TESTEXTERN.EXE build-static/bin/TESTEXTERN_FOREIGN.EXE
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
@@ -440,6 +446,18 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp /src/repo/build-static/bin/TESTREAL.EXE /initramfs/tests/TESTREAL.EXE || \
       { echo "FATAL: TESTREAL.EXE was not built into the static tree -- the real-image in-process flip would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/tests/TESTREAL.EXE && \
+    # TESTEXTERN.EXE + TESTEXTERN_FOREIGN.EXE (vms-db2), staged at /tests/ --
+    # tests/qemu/test_syssvc_imgact_extern.c activates them in-process by those
+    # default paths (overridable via OVMX_TESTEXTERN / OVMX_TESTEXTERN_FOREIGN).
+    # Neither matches a test_* glob. Absence is FATAL, not skipped: a missing
+    # subject would turn the external-image flip's same-PID/flows-back/SYS$EXIT
+    # and the foreign-interp-forks assertions into no-ops with the job green.
+    { cp /src/repo/build-static/bin/TESTEXTERN.EXE /initramfs/tests/TESTEXTERN.EXE || \
+      { echo "FATAL: TESTEXTERN.EXE was not built into the static tree -- the external-image in-process flip would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x /initramfs/tests/TESTEXTERN.EXE && \
+    { cp /src/repo/build-static/bin/TESTEXTERN_FOREIGN.EXE /initramfs/tests/TESTEXTERN_FOREIGN.EXE || \
+      { echo "FATAL: TESTEXTERN_FOREIGN.EXE was not built into the static tree -- the foreign-interp negative control would go unproven"; exit 1; }; } && \
+    chmod +x /initramfs/tests/TESTEXTERN_FOREIGN.EXE && \
     # THE SYSTEM DATA FILES F$IDENTIFIER READS (vms-2f8).
     #
     # F$IDENTIFIER used to answer from a hardcoded pair of names inside

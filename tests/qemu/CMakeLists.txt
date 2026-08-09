@@ -168,12 +168,49 @@ target_link_options(testreal_inproc PRIVATE
 set_target_properties(testreal_inproc PROPERTIES
     PREFIX "" OUTPUT_NAME "TESTREAL" SUFFIX ".EXE")
 
+# TESTEXTERN.EXE -- the EXTERNAL-image subject test_syssvc_imgact_extern.c
+# activates in-process (vms-db2, the external-image flip). TESTREAL plus a real
+# PT_INTERP: an .interp section names the OVMX loader
+# (/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE, matching src/vmslink/link.c), which the
+# linker wraps in a PT_INTERP program header -- the defining trait of a genuinely
+# external LINK.EXE executable. Same freestanding static-PIE build + .vms$got
+# pinning as TESTREAL. TESTEXTERN_FOREIGN.EXE is the anti-over-acceptance control:
+# identical eligibility but a FOREIGN interp, which must force the fork path.
+add_executable(testextern_inproc testextern_inproc.c)
+target_include_directories(testextern_inproc PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+    ${CMAKE_SOURCE_DIR}/src/vmslink/include)
+target_compile_options(testextern_inproc PRIVATE
+    -std=gnu11 -O2 -Wall -Wextra
+    -fPIC -fno-plt -ffreestanding -fno-stack-protector -fno-builtin
+    -fno-asynchronous-unwind-tables -fvisibility=hidden)
+target_link_options(testextern_inproc PRIVATE
+    -nostdlib -nostartfiles -shared
+    -Wl,-e,extern_start -Wl,-z,norelro -Wl,--build-id=none
+    -Wl,--section-start=.vms$got=0x200000)
+set_target_properties(testextern_inproc PROPERTIES
+    PREFIX "" OUTPUT_NAME "TESTEXTERN" SUFFIX ".EXE")
+
+add_executable(testextern_foreign testextern_foreign.c)
+target_include_directories(testextern_foreign PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+    ${CMAKE_SOURCE_DIR}/src/vmslink/include)
+target_compile_options(testextern_foreign PRIVATE
+    -std=gnu11 -O2 -Wall -Wextra
+    -fPIC -fno-plt -ffreestanding -fno-stack-protector -fno-builtin
+    -fno-asynchronous-unwind-tables -fvisibility=hidden)
+target_link_options(testextern_foreign PRIVATE
+    -nostdlib -nostartfiles -shared
+    -Wl,-e,extern_start -Wl,-z,norelro -Wl,--build-id=none)
+set_target_properties(testextern_foreign PROPERTIES
+    PREFIX "" OUTPUT_NAME "TESTEXTERN_FOREIGN" SUFFIX ".EXE")
+
 # Single build target covering every registered test_syssvc_* binary, so
 # callers (tests/qemu/Dockerfile) never need to name a specific test. It also
 # pulls in TESTIMG.EXE so a `--target qemu_syssvc_tests` build stages the
 # subject alongside its suite.
 get_property(_qemu_syssvc_test_targets GLOBAL PROPERTY QEMU_SYSSVC_TEST_TARGETS)
-add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg_inproc testreal_inproc)
+add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg_inproc testreal_inproc testextern_inproc testextern_foreign)
 
 # ---------------------------------------------------------------------------
 # TORN OUT AS GATES (vms-49f), per the CLAUDE.md Rule 9 amendment.

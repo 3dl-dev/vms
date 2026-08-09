@@ -692,14 +692,37 @@ imports, or the SysV auxv entry ABI — still returns `SS$_UNSUPPORTED` and
      in-test control that an **unpublished** producer refuses the flip (`SS$_UNSUPPORTED` → fork), so
      the flip's success depends on genuine resident binding — not a LARP.
 
-   **STILL DEFERRED in item 1** (why the *full external* real image still forks): a genuinely
-   external `LINK.EXE` image carrying a **`PT_INTERP`** (it names IMGACT.EXE as its loader), an
-   **own `PT_TLS`**, a **symbolic (PLT) reloc**, or a `.vms$imp` import naming a **non-resident**
-   producer is still refused `SS$_UNSUPPORTED` and **forks** — re-homing the 55 KB freestanding
-   `src/imgact/imgact.c` loader body (PT_INTERP handling, PT_TLS/DTV append, the full shareable
-   dependency graph) as an in-process library is the remaining unit, deferred to avoid a hasty LARP.
-2. **The flip of the remaining REAL-image classes** (PT_INTERP / own-PT_TLS / non-resident-import)
-   in `dcl_activate_image()`, gated on the loader re-homing above being QEMU-proven per class.
+   **LANDED (vms-db2, §A.8 remainder item 2 — the EXTERNAL-image `PT_INTERP` flip):** a genuinely
+   external `LINK.EXE` image is distinguished from the realimg class above by carrying a **`PT_INTERP`**
+   — LINK.EXE writes `/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE` (`src/vmslink/link.c` `IMGACT_INTERP`) so
+   the kernel/fork path activates it by exec'ing IMGACT.EXE. Before this, `imgact_activate()` rejected
+   **any** `PT_INTERP` outright and `dcl_activate_image()` forked. The flip: in-process activation
+   **is** that loader, so `imgact_interp_is_ours()` (`src/libvms/syssvc/sys_imgact.c`) reads the
+   `PT_INTERP` string from the still-open image fd (before any mmap or executive call) and, if its
+   **basename is `IMGACT.EXE`**, does **not** disqualify the image — it takes the in-process path and
+   does the interpreter's job in DCL's own process. A `PT_INTERP` naming a **foreign** loader (a real
+   `ld.so`, a `#!` shell) is refused `SS$_UNSUPPORTED` so the caller forks. Proven against a real
+   `/dev/vms` (`tests/qemu/test_syssvc_imgact_extern.c`, subject `testextern_inproc.c` = the realimg
+   subject **plus** that `PT_INTERP`): the external image runs in-process — same VMS **and** Linux PID
+   (no fork), SYS$EXIT returns to DCL with the image's exit code, a process-permanent event flag it set
+   flows back, resident `__thread` shared. Two anti-LARP controls: `testextern_foreign.c` (an image
+   in-process-eligible in every other respect but named by a **foreign** interpreter) is refused
+   `SS$_UNSUPPORTED` and does not run — accepting our loader's name is not accepting a foreign one; and
+   the unpublished-producer control (imports don't bind → refused). Negctl-anchored
+   `extern-interp-check-rejects-ours` (mutating `imgact_interp_is_ours` to reject the OVMX loader's own
+   name reddens the flip's same-PID/SS$_NORMAL assertions in the real QEMU rig).
+
+   **STILL DEFERRED in item 1** (why the *full external* real image still forks): an external image
+   carrying an **own `PT_TLS`** (the DTV-append / TLS-absorb-over-resident-C-RTL case, §A.8 item 4), a
+   **symbolic (PLT) reloc** (a `PT_DYNAMIC` DT_HASH image — the dead musl.so path, vms-913.6), or a
+   `.vms$imp` import naming a **non-resident** producer (requires mapping the missing producer graph
+   into DCL's process and running its C-RTL/ctor init in-process) is still refused `SS$_UNSUPPORTED`
+   and **forks**. Re-homing the remainder of the 55 KB freestanding `src/imgact/imgact.c` loader body
+   (PT_TLS/DTV append, non-resident shareable dependency-graph mapping) as an in-process library is the
+   remaining unit, deferred to avoid a hasty LARP.
+2. **The flip of the remaining REAL-image classes** (own-PT_TLS / non-resident-import / symbolic-PLT)
+   in `dcl_activate_image()`, gated on the loader re-homing above being QEMU-proven per class. The
+   `PT_INTERP`-bearing class (resident imports, no own PT_TLS) is DONE (above).
 3. **True Ctrl-Y / `CONTINUE`** for the in-process image (the option (b) asm follow-on above).
 4. **Service-level `$CRELNM`/`DEFINE/PROCESS` flows-back by a real image.** This increment proved
    executive-mediated flows-back with `$SETEF` (a process-permanent event flag the in-process image

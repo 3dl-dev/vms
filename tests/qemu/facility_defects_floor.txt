@@ -173,4 +173,13 @@
 # the new test_syssvc_imgact_realimg suite -- proven against a real /dev/vms
 # (same VMS+Linux PID, SYS$EXIT returns, an event flag the image set flows back,
 # resident TLS shared). See its own entry in facility_defects.sh.
-77
+# Raised to 78 by vms-db2's extern-interp-check-rejects-ours -- the
+# §A.8-remainder item 2 / EXTERNAL-image flip: a genuinely external LINK.EXE
+# image names its loader (IMGACT.EXE) in PT_INTERP, and in-process activation IS
+# that loader, so imgact_activate now accepts such a PT_INTERP and runs the image
+# IN DCL's process (a foreign interp still forks). Targets libvms/syssvc/
+# sys_imgact.c (imgact_interp_is_ours's basename match) and anchors the new
+# test_syssvc_imgact_extern suite -- proven against a real /dev/vms (same
+# VMS+Linux PID, SYS$EXIT returns, event flag flows back, resident TLS shared),
+# with an in-suite foreign-interp control proving a foreign loader still forks.
+78

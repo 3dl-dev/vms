@@ -246,6 +246,49 @@ static int imgact_readat(int fd, void *buf, unsigned long n, long off)
     return 0;
 }
 
+/*
+ * PT_INTERP acceptance for the EXTERNAL-image flip (vms-db2, §A.8 remainder
+ * item 2 -- the PT_INTERP-bearing class). A genuinely external LINK.EXE image
+ * names its loader in PT_INTERP: LINK.EXE emits
+ * "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE" (src/vmslink/link.c IMGACT_INTERP), so
+ * the kernel/fork path activates it by exec'ing IMGACT.EXE. In-process
+ * activation IS that loader, so an interp naming the OVMX loader (basename
+ * IMGACT.EXE) does NOT disqualify the image -- imgact_activate does the
+ * interpreter's job in DCL's own process. An interp naming ANYTHING else (a
+ * foreign ld.so, a #! shell) is not ours to run in-process and is refused
+ * (SS$_UNSUPPORTED) so the caller forks. Reading the interp string and matching
+ * our own loader's name is an OVMX convention (Rule 8 -- no VMS byte format is
+ * claimed; the ELF/PT_INTERP mechanics are the public System V ABI).
+ *
+ * Returns 1 if the interp at file offset `off` (length `sz`, NUL-terminated per
+ * the ABI) has basename IMGACT_LOADER_BASENAME, 0 otherwise (including any read
+ * error or an implausibly long interp). Read from the still-open image fd via
+ * imgact_readat (lseek+read; DECC$SHR universals) before any mmap or executive
+ * call, so a foreign-interp image forks with no executive interaction.
+ */
+#define IMGACT_LOADER_BASENAME "IMGACT.EXE"
+static int imgact_interp_is_ours(int fd, unsigned long off, unsigned long sz)
+{
+    char buf[256];
+    if (sz == 0 || sz > sizeof buf)
+        return 0;
+    if (imgact_readat(fd, buf, sz, (long)off) != 0)
+        return 0;
+    buf[sz - 1] = '\0';   /* the PT_INTERP string is NUL-terminated (p_filesz) */
+
+    /* basename = the tail after the last '/' (or the whole string if none). */
+    const char *bn = buf;
+    for (const char *p = buf; *p; p++)
+        if (*p == '/')
+            bn = p + 1;
+
+    const char *want = IMGACT_LOADER_BASENAME;
+    unsigned long j = 0;
+    while (want[j] && bn[j] == want[j])
+        j++;
+    return want[j] == '\0' && bn[j] == '\0';
+}
+
 /* Scan PT_NOTE segments for the OVMX in-process marker, returning its 4-byte
  * descriptor (the entry-ABI flag word, IMGACT_ABI_*) or -1 if no marker note is
  * present. A descriptor shorter than 4 bytes reads as IMGACT_ABI_MARKER (the
@@ -423,10 +466,18 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
         close(fd);
         return SS$_BADPARAM;
     }
+    unsigned long interp_off = 0, interp_sz = 0;
     for (i = 0; i < eh.e_phnum; i++) {
-        if (ph[i].p_type == PT_INTERP) {   /* wants the loader -> fork path */
-            close(fd);
-            return SS$_UNSUPPORTED;
+        if (ph[i].p_type == PT_INTERP) {
+            /* An external LINK.EXE image names its loader here. In-process
+             * activation IS the loader, so we DON'T reject on sight (as this
+             * did before the external-image flip); capture the interp string's
+             * location and validate below that it names the OVMX loader. An
+             * interp naming a foreign loader still forks (imgact_interp_is_ours
+             * -> SS$_UNSUPPORTED). (vms-db2, §A.8 remainder item 2) */
+            interp_off = ph[i].p_offset;
+            interp_sz  = ph[i].p_filesz;
+            continue;
         }
         /* PT_TLS deferred (vms-db2): sharing the resident DECC$SHR's musl TLS
          * with an in-process image is §A.8-remainder item 4, not this sub-step.
@@ -438,6 +489,13 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
         if (ph[i].p_type == PT_LOAD &&
             ph[i].p_vaddr + ph[i].p_memsz > span_hi)
             span_hi = ph[i].p_vaddr + ph[i].p_memsz;
+    }
+    /* A PT_INTERP that does not name the OVMX loader is a foreign interpreter
+     * (a real ld.so, a shebang) we must not run in-process -- fork it. Checked
+     * from the still-open fd, before any mmap or executive call. */
+    if (interp_sz && !imgact_interp_is_ours(fd, interp_off, interp_sz)) {
+        close(fd);
+        return SS$_UNSUPPORTED;
     }
     if (span_hi == 0 || IMGACT_ROUND(span_hi) > IMGACT_P0_WINDOW) {
         close(fd);

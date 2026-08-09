@@ -210,4 +210,13 @@
 # longer drain and execute the KERNEL/EXEC/SUPER AST queues. The mutation reverts
 # the scan lower bound to PSL_C_KERNEL and anchors the new test_syssvc_ast_secmode
 # suite's cross-mode assertion. See its own entry in facility_defects.sh.
-81
+# Raised to 82 by vms-pv1's setprv-grants-unauthorized -- the $SETPRV MUTATION
+# write-through: sys$setprv (src/libvms/syssvc/sys_misc.c) now routes through the
+# executive (vms_kif_setprv -> vms_ioctl_setprv, kernel/vms_access.c), which
+# authorizes the grant against the caller's AUTHORIZED mask instead of a process
+# writing pcb->cur_privs for itself. The mutation drops the authorized-subset
+# intersection so an unprivileged caller is granted any privilege it names, and
+# anchors the new test_syssvc_setprv suite's denial-path assertion (plus the two
+# raw-ioctl setprv assertions test_kmod_access already carries). See its own
+# entry in facility_defects.sh.
+82

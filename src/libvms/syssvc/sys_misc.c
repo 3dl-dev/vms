@@ -12,12 +12,7 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-USERSPACE: sys$setprv (vms-pv1) -- sets pcb->cur_privs/perm_privs in
- *     the per-process PCB and returns SS$_NORMAL. Nothing validates the grant
- *     and nothing outside the process reads pcb->cur_privs, so a process can
- *     award itself any privilege and the grant binds nothing but its own
- *     later in-process checks (sys$setuai's SYSPRV test is one of them). The
- *     executive's vms_kif_setprv is declared OVMX-UNWIRED against this item.
+ * OVMX-EXECUTIVE: sys$setprv (vms-pv1) proof=tests/qemu/test_syssvc_setprv.c -- the privilege mutation is the executive's: sys$setprv routes to vms_kif_setprv (VMS_IOCTL_SETPRV -> vms_ioctl_setprv, kernel/vms_access.c), which authorizes the grant against this process's AUTHORIZED mask (a caller without SETPRV cannot widen past it -- SS$_NOTALLPRIV/SS$_NOPRIV) and OWNS the result. A process can no longer award itself a privilege by writing pcb->cur_privs (the vms-b2e LARP class this closes). The PCB masks below are only a COPY of the executive's, re-read via $GETJPI-self for the two remaining in-process readers (sys_process.c fork inheritance, vmsprocess/access_modes.c's CMKRNL/CMEXEC mode gate) -- not part of the answer sys$setprv returns, which is wholly the executive's.
  * OVMX-USERSPACE: sys$getsyi (vms-642) -- answers from uname() and host
  *     sysconf() values, not from an executive system block. csidadr and
  *     nodename are both discarded ((void)csidadr; (void)nodename;), so a
@@ -36,6 +31,7 @@
 #include "vms/pcb.h"
 #include "sysgen_params.h"
 #include "ovmx_identity.h"
+#include "vms_kif.h"        /* the executive OWNS privilege state (vms-pv1) */
 
 /*
  * sys$setprv - Set or clear process privileges.
@@ -54,29 +50,45 @@ uint32_t sys$setprv(uint32_t enbflg, const uint64_t *prvadr,
     struct vms_pcb *pcb = vms_pcb_get();
     if (!pcb) return SS$_BADPARAM;
 
-    pthread_mutex_lock(&pcb->priv_lock);
+    uint64_t mask = prvadr ? *prvadr : 0;
+    uint64_t prev = 0;
 
-    /* Return previous privileges */
-    if (prvprv) *prvprv = pcb->cur_privs;
+    /*
+     * THE MUTATION IS THE EXECUTIVE'S (vms-pv1). Route it through /dev/vms:
+     * vms_ioctl_setprv (kernel/vms_access.c) authorizes the request against
+     * this process's AUTHORIZED (permanent) mask -- a caller without SETPRV
+     * that reaches outside it gets the authorized subset and SS$_NOTALLPRIV,
+     * and cannot widen the authorized mask at all (SS$_NOPRIV) -- and OWNS the
+     * resulting state. This is what a process may NOT do for itself: writing
+     * pcb->cur_privs directly was the vms-b2e per-process privilege LARP, a
+     * self-assertion nothing authoritative read. If /dev/vms is unreachable the
+     * kif layer returns an error status (INV-6, CLAUDE.md Rule 9); we never
+     * fall back to a per-process fake grant.
+     */
+    uint32_t st = vms_kif_setprv(mask, enbflg ? 1 : 0, prmflg ? 1 : 0, &prev);
 
-    if (prvadr) {
-        if (enbflg) {
-            /* Enable specified privileges */
-            pcb->cur_privs |= *prvadr;
-            if (prmflg) {
-                pcb->perm_privs |= *prvadr;
-            }
-        } else {
-            /* Disable specified privileges */
-            pcb->cur_privs &= ~(*prvadr);
-            if (prmflg) {
-                pcb->perm_privs &= ~(*prvadr);
-            }
-        }
+    /*
+     * Mirror the executive's AUTHORITATIVE masks into the PCB, read back from
+     * the executive itself ($GETJPI-self). This is a COPY of executive-owned
+     * state, never an independent decision: the two remaining in-process
+     * readers -- sys_process.c fork inheritance and vmsprocess/access_modes.c's
+     * CMKRNL/CMEXEC mode gate -- then see exactly what the executive holds. If
+     * the read-back cannot reach the executive we leave the cache alone rather
+     * than invent a mask.
+     */
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    if (vms_kif_getjpi_self(&info) & 1) {
+        pthread_mutex_lock(&pcb->priv_lock);
+        pcb->cur_privs = info.cur_privs;
+        pcb->perm_privs = info.perm_privs;
+        pthread_mutex_unlock(&pcb->priv_lock);
     }
 
-    pthread_mutex_unlock(&pcb->priv_lock);
-    return SS$_NORMAL;
+    /* The previous mask reported to the caller is the executive's, not a
+     * pre-call snapshot of the local cache. */
+    if (prvprv) *prvprv = prev;
+    return st;
 }
 
 /*

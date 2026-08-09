@@ -412,6 +412,7 @@ if [ -f "$FNR_LIB" ]; then
 fi
 
 DEFECTS="access-mode-escalation
+setprv-grants-unauthorized
 kif-setmode-always-kernel
 getmode-buffer-not-written
 ast-setast-disable
@@ -616,6 +617,47 @@ mode-derived authority. The equality check caught the change on the first run
 after the rebase and named both extras with their suite; the previous
 allowlist would have passed silently, which is precisely the failure this
 round was re-dispatched to fix.
+EOF
+                      ;;
+        esac;;
+
+    setprv-grants-unauthorized)
+        case "$_f" in
+        facility)     echo "access modes and privileges (\$SETPRV authorization against the AUTHORIZED mask, VMS_IOCTL_SETPRV)";;
+        targets)      echo "kernel/vms_access.c";;
+        # test_syssvc_setprv drives the PUBLIC sys$setprv (vms-pv1 wired it to
+        # vms_kif_setprv -> VMS_IOCTL_SETPRV), and test_kmod_access drives the
+        # raw ioctl -- both reach vms_ioctl_setprv's !may_exceed authorization,
+        # so this one mutation reddens both, one layer apart. test_kmod_access's
+        # two reds are the same self-award seen through the raw ioctl.
+        suites_red)   echo "test_kmod_access test_syssvc_setprv";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_setprv() stops intersecting an unprivileged caller's request with its AUTHORIZED mask: for a caller that may NOT exceed its authorization (no SETPRV and not in KERNEL mode) it enables the FULL requested mask instead of the authorized subset, so the process is granted -- and the executive then reports it holding -- any privilege it names. That is the exact self-award \$SETPRV exists to refuse (the vms-b2e privilege LARP, one layer down). One term dropped from one assignment.";;
+        require_fail) cat <<'EOF'
+a forked child without SETPRV is REFUSED CMKRNL it is not authorized for (SS$_NOTALLPRIV)
+the executive still reports CMKRNL NOT held for the unauthorized child
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+an unprivileged process cannot $SETPRV itself CMKRNL
+... and still does not hold CMKRNL afterwards
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+THE SAME DEFECT, OBSERVED THROUGH THE RAW IOCTL. test_kmod_access.c's
+unprivileged child (l.116-122) requests CMKRNL through VMS_IOCTL_SETPRV in USER
+mode holding no SETPRV -- the identical !may_exceed authorization path the
+public sys$setprv assertions exercise. With the authorized-subset intersection
+removed the child is granted CMKRNL, so "an unprivileged process cannot $SETPRV
+itself CMKRNL" (its status is now SS$_NORMAL) and "... and still does not hold
+CMKRNL afterwards" (chkpriv now reports it held) both go red. These are the two
+setprv assertions test_kmod_access already carries as access-mode-escalation
+knock-ons; they redden here for the DIFFERENT reason that the authorization
+itself was inverted, not that the caller reached KERNEL mode first. No setmode
+assertion in either suite moves -- this mutation touches only the enable
+!may_exceed branch, which the root parent and every setmode path skip.
 EOF
                       ;;
         esac;;
@@ -4498,6 +4540,11 @@ apply_edit() {
     case "$_d" in
     access-mode-escalation)
         sed -i 's|if (!(proc->cur_privs \& PRV_M_CMKRNL)) {|if (0 /* NEGCTL access-mode-escalation */) {|' "$_file";;
+    setprv-grants-unauthorized)
+        # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
+        # replacement drops the `& proc->perm_privs` term, so a second apply
+        # finds no match and is the no-op selftest requires.
+        sed -i 's|uint64_t allowed = args.mask \& proc->perm_privs;|uint64_t allowed = args.mask; /* NEGCTL setprv-grants-unauthorized */|' "$_file";;
     kif-setmode-always-kernel)
         sed -i 's|    args.mode = mode;|    args.mode = 0; /* NEGCTL kif-setmode-always-kernel */|' "$_file";;
     getmode-buffer-not-written)

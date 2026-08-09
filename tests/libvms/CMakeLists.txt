@@ -50,6 +50,14 @@ libvms_add_test(test_libvms_lib_rtl_batch
 libvms_add_test(test_libvms_lib_rtl_batch2
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_rtl_batch2.c)
 
+# Test 3d: vms-801 R2.2 conformance batch 3 — lib$init/stat/show/free_timer,
+# lib$sys_asctim delta formatting, lib$show/stat/find/show/verify VM-zone
+# introspection, lib$convert_date_string/get_maximum_date_length/
+# format_date_time/get_date_format, lib$get_users_language/sys_getmsg,
+# lib$lookup_key, and lib$get_command/get_foreign RMS$_EOF behavior.
+libvms_add_test(test_libvms_lib_rtl_batch3
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_rtl_batch3.c)
+
 # Test 5: mth$sin / mth$cos / mth$sqrt / mth$exp / mth$alog / mth$power / etc.
 libvms_add_test(test_libvms_mth_routines
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mth_routines.c)

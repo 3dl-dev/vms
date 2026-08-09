@@ -128,6 +128,12 @@ jobs:
     # per-control citation check, taking this job from ~17m (main) to ~20m+ on the
     # same runner class. The 20m cap left under 3 minutes of margin; raised for
     # headroom. Suite runtime growth is tracked in rd (vms-32e).
+    #
+    # userspace_service_register_negctl (the suite above) is TORN OUT / de-gated
+    # (vms-b44) and no longer runs in this job at all -- this job's wall time is
+    # therefore now well under 35m, not measured down since de-gating only ever
+    # frees headroom. Left as-is rather than guessed down; re-derive from a
+    # measurement if this is ever revisited.
     timeout-minutes: 35
 
     steps:
@@ -234,14 +240,19 @@ jobs:
           sudo mkdir -p /vms/SYS0/SYSCOMMON/{SYSEXE,SYSLIB,SYSMGR,SYSHLP}
           sudo chmod -R 777 /vms
           cd build
-          # Pre-merge PR tier drops ONLY the 3 slow-labelled per-control NEGATIVE
-          # controls (kif_caller_census_negctl / userspace_service_register_negctl
-          # / terminal_identity_negctl -- harness self-tests that recompile the
-          # tree per control, vms-819d). This is the repo's own documented fast
-          # loop (`ctest -LE slow`). Every PRODUCT gate -- unit tests, the
-          # positive census/register authenticity gates, all integration gates --
-          # still runs on every PR. The slow negative controls run in full via
-          # plain `ctest` on push-main / merge_group / nightly.
+          # kif_caller_census_negctl / userspace_service_register_negctl /
+          # terminal_identity_negctl (vms-819d's 3 slow-labelled per-control
+          # harness self-tests) are TORN OUT / de-gated (vms-b44, same ruling
+          # as vms-49f / CLAUDE.md Rule 9): each reran a source-scan gate
+          # against a mutated sandbox copy of the tree -- a string relation
+          # over the tree's own self-declaration, never touching vms.ko,
+          # QEMU, or /dev/vms. They are no longer registered with ctest at
+          # all (scripts remain in tests/integration/ as manual lint). The
+          # `-LE slow` filter below is kept for what still legitimately
+          # carries the label: tests/qemu's opt-in QEMU-boot tests (e.g.
+          # parts_demo_e2e). Every PRODUCT gate -- unit tests, the positive
+          # census/register authenticity gates, all integration gates --
+          # still runs on every PR.
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             ctest --output-on-failure -LE slow
           else

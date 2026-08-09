@@ -40,6 +40,8 @@ add_library(vms ${OVMX_LIB_TYPE}
     rtl/str_routines.c
     rtl/mth_routines.c
     rtl/ots_routines.c
+    rtl/lib_strconv.c
+    rtl/lib_xlate_tables.c
     syssvc/sys_float.c
     syssvc/sys_uai.c
     syssvc/sys_device.c

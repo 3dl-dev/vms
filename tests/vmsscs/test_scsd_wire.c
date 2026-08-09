@@ -1607,13 +1607,24 @@ static void test_joiner_retransmit_is_not_an_illegal_event(void)
 }
 
 /*
- * OVMX's three Con.IDs are node-global, so a SECOND peer cannot have its own
- * CDT at the same Con.ID. That must be visible, not silently wrong: conn_bind
- * refuses rather than allocating a Con.ID that differs from the one on the
- * wire. This is the limitation scs_cdt.h records, asserted rather than asserted
- * in prose.
+ * vms-694: PER-PEER Con.IDs -- a SECOND peer gets its OWN distinct Con.ID and
+ * its OWN CDT, so two established members never collide in the node-wide CDL.
+ *
+ * This test USED TO assert the opposite -- that peer B was REFUSED a CDT because
+ * OVMX's Con.IDs were node-global constants (b->cdt_joiner == NULL). That
+ * limitation WAS the bug: when OVMX joined an already-running cluster with two
+ * members, both peers echoed the one fixed OVMX_JOINER_CONID, the second peer's
+ * reply resolved to the first peer's CDT, and scs_cdl_resolve() dropped it as
+ * SCS_DELIVER_SRC_MISMATCH (SCSD-W-RXSRCMISMATCH) -- so the join never advanced
+ * past status=NEW (docs/cluster-protocol-spec.md sec 4(t)/4(x), reproduced live
+ * 3x on lab-2). The fix gives peer slot i its own 0x10-wide Con.ID block; this
+ * test now proves the two connections coexist and that peer B's echo resolves
+ * to peer B, NOT to peer A -- i.e. the RXSRCMISMATCH drop is gone.
+ *
+ * Peer slot 0 keeps the historical fixed value (offset 0) so every single-peer
+ * capture and the replay library replay byte-identically; only slot 1+ moves.
  */
-static void test_second_peer_connection_is_refused_not_faked(void)
+static void test_second_peer_gets_its_own_conid_not_a_collision(void)
 {
     struct world w;
     world_init(&w);
@@ -1622,7 +1633,8 @@ static void test_second_peer_connection_is_refused_not_faked(void)
 
     static const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x01, 0x01, 0x01};
     static const uint8_t mac_b[6] = {0x08, 0x00, 0x2b, 0x02, 0x02, 0x02};
-    static const uint8_t sysid[6] = {0xaa, 0x00, 0x04, 0x00, 0x31, 0x05};
+    static const uint8_t sysid_a[6] = {0xaa, 0x00, 0x04, 0x00, 0x31, 0x05};
+    static const uint8_t sysid_b[6] = {0xaa, 0x00, 0x04, 0x00, 0x32, 0x05};
 
     struct peer_state *a = peer_find_or_add(&w.cfg, &w.pdt, w.peers, mac_a);
     struct peer_state *b = peer_find_or_add(&w.cfg, &w.pdt, w.peers, mac_b);
@@ -1630,8 +1642,8 @@ static void test_second_peer_connection_is_refused_not_faked(void)
     if (a == NULL || b == NULL) {
         return;
     }
-    ps_learn_sys_addr(&w.cfg, a, sysid);
-    ps_learn_sys_addr(&w.cfg, b, sysid);
+    ps_learn_sys_addr(&w.cfg, a, sysid_a);
+    ps_learn_sys_addr(&w.cfg, b, sysid_b);
     (void)scs_pb_open(&w.cfg, a->pb);
     (void)scs_pb_open(&w.cfg, b->pb);
 
@@ -1640,15 +1652,63 @@ static void test_second_peer_connection_is_refused_not_faked(void)
     CHECK(send_joiner_connect_request(7, 1, &w.cfg, b, b->pb, our_hw_mac, our_logical) == 1,
           "peer B send");
 
+    /* BOTH peers get a CDT now -- the fix. */
     CHECK(a->cdt_joiner != NULL, "peer A got no CDT");
-    CHECK(b->cdt_joiner == NULL,
-          "peer B was given a CDT at a node-global Con.ID already claimed by peer A"
-          " -- the CDL would then be describing the wrong connection");
-    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1 + scs_sdir_count(scs_svc_sdir(scsd_svc())),
-          "expected one connection CDT beside %u listening CDT(s), CDL holds %u",
+    CHECK(b->cdt_joiner != NULL,
+          "peer B was REFUSED a CDT -- the node-global-Con.ID collision the fix"
+          " was supposed to remove is still present");
+    CHECK(a->cdt_joiner != b->cdt_joiner, "the two peers share one CDT");
+
+    /* Peer slot 0 keeps the historical value; slot 1 is a distinct block. */
+    CHECK(a->cdt_joiner->local_conid == PS_JOINER_CONID(a),
+          "peer A's Con.ID 0x%08X != PS_JOINER_CONID(a) 0x%08X",
+          (unsigned)a->cdt_joiner->local_conid, (unsigned)PS_JOINER_CONID(a));
+    CHECK(a->cdt_joiner->local_conid == OVMX_JOINER_CONID,
+          "peer slot 0's Con.ID 0x%08X is NOT the historical OVMX_JOINER_CONID"
+          " 0x%08X -- single-peer captures would no longer replay byte-identically",
+          (unsigned)a->cdt_joiner->local_conid, (unsigned)OVMX_JOINER_CONID);
+    CHECK(b->cdt_joiner->local_conid == PS_JOINER_CONID(b),
+          "peer B's Con.ID 0x%08X != PS_JOINER_CONID(b) 0x%08X",
+          (unsigned)b->cdt_joiner->local_conid, (unsigned)PS_JOINER_CONID(b));
+    CHECK(a->cdt_joiner->local_conid != b->cdt_joiner->local_conid,
+          "the two peers were handed the SAME local Con.ID 0x%08X -- the collision"
+          " is not fixed", (unsigned)a->cdt_joiner->local_conid);
+    CHECK((b->cdt_joiner->local_conid & 0xFFFFu) ==
+              ((a->cdt_joiner->local_conid & 0xFFFFu) + OVMX_PEER_CONID_STRIDE),
+          "peer B's block is not one stride above peer A's (A=0x%04X B=0x%04X)",
+          (unsigned)(a->cdt_joiner->local_conid & 0xFFFFu),
+          (unsigned)(b->cdt_joiner->local_conid & 0xFFFFu));
+
+    /* Two connection CDTs coexist in the CDL now, not one. */
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 2 + scs_sdir_count(scs_svc_sdir(scsd_svc())),
+          "expected TWO connection CDTs beside %u listening CDT(s), CDL holds %u",
           scs_sdir_count(scs_svc_sdir(scsd_svc())), scs_cdl_in_use_count(&scsd_cdl));
-    /* Peer B still SENDS -- the machine is a recorder, never a gate. */
-    CHECK(scsd_test_frames >= 2, "peer B's frame was suppressed by the state machine");
+
+    /* THE CLINCHER: peer B's echo resolves to peer B, not peer A. Bind each
+     * connection's remote handle to a DISTINCT peer value (what each member
+     * supplies in its ACCEPT_REQ), then deliver a frame carrying peer B's local
+     * Con.ID as destination and peer B's remote as source. Under the old
+     * node-global scheme both peers shared peer A's Con.ID, so this frame would
+     * resolve to peer A's CDT and MISMATCH on the source (peer A's remote); with
+     * per-peer Con.IDs it resolves cleanly to peer B. */
+    scs_cdt_set_remote_conid(a->cdt_joiner, 0xAAAA0001u);
+    scs_cdt_set_remote_conid(b->cdt_joiner, 0xBBBB0002u);
+    struct scs_cdt *out = NULL;
+    int rb = scs_cdl_resolve(&scsd_cdl, b->cdt_joiner->local_conid, 0xBBBB0002u, &out);
+    CHECK(rb == SCS_DELIVER_OK && out == b->cdt_joiner,
+          "peer B's echo did not resolve to peer B (rc=%d, out=%p vs b=%p) --"
+          " this is the RXSRCMISMATCH drop the fix removes",
+          rb, (void *)out, (void *)b->cdt_joiner);
+    /* And peer B's source must NOT resolve against peer A's Con.ID (proving the
+     * two really are separate connections, the way the bug conflated them). */
+    out = NULL;
+    int ra = scs_cdl_resolve(&scsd_cdl, a->cdt_joiner->local_conid, 0xBBBB0002u, &out);
+    CHECK(ra == SCS_DELIVER_SRC_MISMATCH,
+          "peer B's source (0xBBBB0002) wrongly resolved against peer A's Con.ID"
+          " (rc=%d) -- the connections are still conflated", ra);
+
+    /* Both peers still SENT -- the state machine is a recorder, never a gate. */
+    CHECK(scsd_test_frames >= 2, "a peer's frame was suppressed by the state machine");
 }
 
 /* ==========================================================================
@@ -2249,10 +2309,12 @@ static void test_member_connect_on_a_closed_circuit_is_a_counted_refusal(void)
  * FRAME PROVENANCE, exactly: cap_connect_rsp is pcap frame #32 byte for byte
  * EXCEPT the four bytes at [64:68], the destination Con.ID, which are retargeted
  * from VAX1's handle 0x63050008 to OVMX_JOINER_CONID. That edit is unavoidable
- * and it is the only one: OVMX's three Con.IDs are node-global constants, so a
- * frame addressed to OVMX cannot carry a VAX's handle. Everything the classifier
- * reads apart from that field -- the opcode at [30], the length, the [46:48]
- * message type -- is the captured wire.
+ * and it is the only one: the frame is addressed to OVMX's OWN joiner handle,
+ * which is this single peer's PS_JOINER_CONID -- and since it is the first peer
+ * added (slot 0) that value is exactly OVMX_JOINER_CONID (vms-694: slot 0 keeps
+ * the historical Con.ID). A frame addressed to OVMX cannot carry a VAX's handle
+ * in that field. Everything the classifier reads apart from that field -- the
+ * opcode at [30], the length, the [46:48] message type -- is the captured wire.
  */
 static void test_captured_connect_rsp_drives_the_classifier(void)
 {
@@ -4629,9 +4691,10 @@ static void test_rejoin_reaches_the_p221_refresh(void)
      * it. (The rejoin here opens no new connection, so 5 is the figure to expect
      * from that mutant, not 10.) */
     /* The CDT is allocated HERE rather than taken from ps->cdt_* because this
-     * fixture's formation does not bind one (the daemon's Con.IDs are
-     * node-global, so an earlier fixture in this process already holds the CDL
-     * slots -- see the SCSD-W-CONNSLOT line in the log above). What is
+     * fixture's formation does not bind one (it exercises the departure
+     * accounting, not connection formation). scs_cdl_alloc takes the next free
+     * CDL slot on this peer's PB, which is all the DFREEQ accounting needs. What
+     * is
      * PRODUCTION about this assertion is everything that matters: the CDL is the
      * daemon's own scsd_cdl, the port is the daemon's own r.w.pdt, the circuit
      * is the one the captured frames built, and the teardown is rx_sweep ->
@@ -9108,7 +9171,7 @@ int main(void)
     /* vms-dd5: the daemon's use of the connection state machine + the CDL. */
     test_conn_fsm_does_not_change_the_wire();
     test_joiner_retransmit_is_not_an_illegal_event();
-    test_second_peer_connection_is_refused_not_faked();
+    test_second_peer_gets_its_own_conid_not_a_collision();
     /* vms-fb1: the SAME machine, driven through the daemon's receive dispatch
      * with frames taken byte-exact off the reference-lab wire. */
     test_captured_directory_connect_drives_the_machine();

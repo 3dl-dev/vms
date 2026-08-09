@@ -565,6 +565,97 @@ static uint64_t ovmx_incarnation_time(void)
 #define SCS_DIR_OVMX_CONID        (ovmx_conid_base() | 0x0007u)
 #define SCS_DIR_OVMX_JOINER_CONID (ovmx_conid_base() | 0x0008u)
 
+/*
+ * vms-694 / vms-584: PER-PEER Con.IDs -- the fix for the established-multi-peer
+ * NEW->MEMBER stall (docs/cluster-protocol-spec.md sec 4(t)/4(x)).
+ *
+ * Every macro above puts a FIXED low word on the wire for a given connection
+ * class -- 0x0001 local VC, 0x0002 joiner VC, 0x0007/0x0008 directory, 0x000A
+ * MSCP client, 0x000B MSCP server, 0x000C/0x000D pure-server. Fixed means
+ * NODE-GLOBAL: OVMX offered the identical Con.ID to EVERY peer, so the moment a
+ * SECOND established member answered, its reply resolved to the SAME CDL slot
+ * (the low 16 bits index the CDL, scs_cdt.h) that the first peer's connection
+ * had already bound. scs_cdl_resolve() then dropped it as SCS_DELIVER_SRC_
+ * MISMATCH (SCSD-W-RXSRCMISMATCH): the second peer's legitimate CM traffic was
+ * silently discarded and the join to a running 2+-member cluster never
+ * advanced past status=NEW. Reproduced live 3x on lab-2 (vaxlab-0). This is the
+ * fixed-vs-per-peer hazard scsd_svc_slot_refused() and the vms-73c/vms-298
+ * comments (MSCP-server path below) had already flagged as "NOT FIXED HERE."
+ *
+ * THE FIX: each concurrently-live peer gets its OWN 0x10-wide block of low
+ * words. peer slot i uses (i * OVMX_PEER_CONID_STRIDE) | <class>, so the two
+ * nodes' connections land in DISTINCT CDL slots and each peer's echo resolves
+ * to its own CDT. peer slot 0 keeps offset 0 -- i.e. the EXACT historical
+ * class-slot values -- so every single-peer capture and the 19-frame replay
+ * library replay byte-identically; only the 2nd+ peer moves.
+ *
+ * Rule 8 / clean-room: the wire framing/echo/match rules are UNCHANGED. A
+ * Con.ID is an opaque handle the peer echoes and never validates (grounded,
+ * vms-584: 30+ CONNECT sequences carry unpredictable values, all answered). The
+ * VALUE allocation is local policy; the block offset is OVMX's own design
+ * choice, opaque to the peer exactly as the per-boot high word is, and never
+ * presented as VMS-authentic. VMS's own allocator is a single monotonic counter
+ * shared across classes (grounded, lines above); OVMX keeps its fixed class
+ * slots + a per-peer block, which is a labeled OVMX derivation, not a claim of
+ * VMS-authenticity.
+ */
+#define OVMX_PEER_CONID_STRIDE 0x10u
+/* Connection-class low nibbles (must each be < OVMX_PEER_CONID_STRIDE and
+ * distinct, so class = low & (STRIDE-1) and peer index = low / STRIDE). */
+#define OVMX_CONID_CLS_LOCAL   0x0001u  /* member-opened VMS$VAXcluster VC */
+#define OVMX_CONID_CLS_JOINER  0x0002u  /* OVMX-opened VMS$VAXcluster VC */
+#define OVMX_CONID_CLS_DIR     0x0007u  /* SCS$DIRECTORY server (member-opened) */
+#define OVMX_CONID_CLS_DIRJ    0x0008u  /* SCS$DIRECTORY client (OVMX-opened) */
+#define OVMX_CONID_CLS_DIRPOLL 0x0009u  /* SCS$DIR_LOOKUP poller (OVMX-opened) */
+#define OVMX_CONID_CLS_MSCP    0x000Au  /* MSCP$DISK client (OVMX-opened) */
+#define OVMX_CONID_CLS_MSCPSRV 0x000Bu  /* MSCP$DISK server (member-opened) */
+#define OVMX_CONID_CLS_PSDIR   0x000Cu  /* pure-server SCS$DIRECTORY client */
+#define OVMX_CONID_CLS_PSMSCP  0x000Du  /* pure-server MSCP$DISK client */
+
+/* OVMX's own handle of class `cls` for peer `ps` -- the per-peer replacement
+ * for the fixed OVMX_*_CONID macros. `ps` must be non-NULL. */
+#define PS_CONID(ps, cls) \
+    (ovmx_conid_base() | (uint32_t)(ps)->conid_off | (uint32_t)(cls))
+#define PS_LOCAL_CONID(ps)          PS_CONID((ps), OVMX_CONID_CLS_LOCAL)
+#define PS_JOINER_CONID(ps)         PS_CONID((ps), OVMX_CONID_CLS_JOINER)
+#define PS_SCS_DIR_CONID(ps)        PS_CONID((ps), OVMX_CONID_CLS_DIR)
+#define PS_SCS_DIR_JOINER_CONID(ps) PS_CONID((ps), OVMX_CONID_CLS_DIRJ)
+/* vms-694: the poller handle (scs_dir.h's SCS_DIR_OVMX_POLL_CONID, class 0x0009)
+ * is folded in here too. scs_dir.h defines it against the COMPILE-TIME base
+ * because the vms-760 #undef that moved every other directory handle onto the
+ * per-boot ovmx_conid_base() missed it -- so it was the one OVMX handle that did
+ * NOT reseed per incarnation (the exact defect that #undef fixed for its
+ * siblings). Routing it through PS_CONID both makes it per-peer AND puts it on
+ * the per-boot base like every other handle. */
+#define PS_SCS_DIR_POLL_CONID(ps)   PS_CONID((ps), OVMX_CONID_CLS_DIRPOLL)
+#define PS_MSCP_CONID(ps)           PS_CONID((ps), OVMX_CONID_CLS_MSCP)
+#define PS_MSCP_SERVER_CONID(ps)    PS_CONID((ps), OVMX_CONID_CLS_MSCPSRV)
+#define PS_PS_DIR_CONID(ps)         PS_CONID((ps), OVMX_CONID_CLS_PSDIR)
+#define PS_PS_MSCP_CONID(ps)        PS_CONID((ps), OVMX_CONID_CLS_PSMSCP)
+
+/*
+ * Does `conid` name one of OVMX's OWN per-peer handles of connection class
+ * `cls` (any peer slot)? This replaces the receive-side `rconid == OVMX_*_CONID`
+ * equality tests: the frame is still routed to its peer by src MAC
+ * (peer_find_or_add), so this only has to confirm the ECHOED handle is our
+ * handle FOR THAT CLASS -- for peer slot 0 it matches exactly the historical
+ * constant, and it now ALSO matches slots 1..N-1 (the values the fix put on the
+ * wire), which the old equality test dropped. The high word must be our base
+ * and the peer-index field must be in range, so a stray/foreign Con.ID that
+ * merely shares a class nibble does not match.
+ */
+static inline int ovmx_conid_is_class(uint32_t conid, uint16_t cls)
+{
+    if ((conid & 0xFFFF0000u) != ovmx_conid_base()) {
+        return 0;
+    }
+    unsigned low = (unsigned)(conid & 0xFFFFu);
+    if ((low & (OVMX_PEER_CONID_STRIDE - 1u)) != (unsigned)cls) {
+        return 0;
+    }
+    return (low / OVMX_PEER_CONID_STRIDE) < (unsigned)OVMX_MAX_PEERS;
+}
+
 /* vms-760 pure-server disk-client state machine (stop-and-wait; one drive frame
  * outstanding). Advanced receive-driven by VAX1's echoes on OUR PS conids. NEVER
  * opens a VMS$VAXcluster VC (that would short-circuit admission -- the whole
@@ -720,6 +811,13 @@ enum join_step {
 
 struct peer_state {
     struct scs_pb *pb;        /* Path Block: this peer's port + virtual circuit; NULL = free slot */
+    /* vms-694: this peer's per-peer Con.ID low-word block offset (peer slot
+     * index * OVMX_PEER_CONID_STRIDE). Slot 0 is 0 -- the historical fixed
+     * class slots -- so single-peer captures are byte-identical; each further
+     * concurrently-live peer gets a distinct block so two peers never collide
+     * in the node-wide CDL. Set once at allocation (peer_find_or_add), used via
+     * the PS_*_CONID(ps) macros. */
+    uint16_t conid_off;
     /* vms-17f: CLOCK_MONOTONIC ms at which this peer was last heard from AT ALL
      * -- any 0x6007 frame carrying its source MAC, multicast beacons included,
      * not only the ones addressed to us. That breadth is deliberate: a node that
@@ -954,9 +1052,9 @@ struct peer_state {
      * booleans above (dir_connected/connected/joiner_connected) are NOT
      * replaced: they still gate every send, so the machine is a recorder, not a
      * gate. */
-    struct scs_cdt *cdt_dir;    /* SCS$DIRECTORY,   local Con.ID = SCS_DIR_OVMX_CONID */
-    struct scs_cdt *cdt_member; /* VMS$VAXcluster the MEMBER opened, local = OVMX_LOCAL_CONID */
-    struct scs_cdt *cdt_joiner; /* VMS$VAXcluster OVMX opened,       local = OVMX_JOINER_CONID */
+    struct scs_cdt *cdt_dir;    /* SCS$DIRECTORY,   local Con.ID = PS_SCS_DIR_CONID(this peer) */
+    struct scs_cdt *cdt_member; /* VMS$VAXcluster the MEMBER opened, local = PS_LOCAL_CONID(this peer) */
+    struct scs_cdt *cdt_joiner; /* VMS$VAXcluster OVMX opened,       local = PS_JOINER_CONID(this peer) */
     /* vms-abc: has send_frame_vc() already announced that THIS circuit carries
      * no traffic? The refusal is a per-circuit fact, not a per-frame one, and
      * the daemon re-enters the refusing paths at the peer's HELLO cadence
@@ -1047,6 +1145,14 @@ static struct peer_state *peer_find_or_add(struct scs_config *cfg, struct scs_pd
     }
     memset(&tbl[free_slot], 0, sizeof(tbl[free_slot]));
     tbl[free_slot].pb = pb;
+    /* vms-694: assign this peer's per-peer Con.ID block. Slot index * stride,
+     * so slot 0 keeps offset 0 (the historical fixed class slots) and every
+     * other concurrently-live peer gets a distinct 0x10-wide block -- the fix
+     * for the node-global Con.ID collision that dropped a 2nd member's CM
+     * traffic as SCSD-W-RXSRCMISMATCH. Stable for the life of the slot; a
+     * departed slot reused later gets the same offset, and its old CDTs were
+     * released by scs_pb_depart(). */
+    tbl[free_slot].conid_off = (uint16_t)((unsigned)free_slot * OVMX_PEER_CONID_STRIDE);
     /* vms-17f: first contact IS contact. Without this stamp a slot allocated by
      * a frame that never reaches peer_touch() would sit at last_rx_ms 0 forever
      * and the departure sweep would have nothing to age it from. */
@@ -1594,21 +1700,26 @@ static void ps_channel_up(struct peer_state *ps)
  * that vms-e1a explicitly left out. It is a RECORDER, not a gate: every
  * `if (!ps->dir_connected)` / `if (!ps->joiner_connected)` guard that decided
  * what OVMX sends is untouched and still decides it, the builders are called
- * with the same arguments in the same order, and the three Con.IDs are claimed
- * at their existing fixed values. No byte moves. See scs_conn.h's WIRE VERDICT.
+ * with the same arguments in the same order, and each peer's Con.IDs are
+ * claimed at their per-peer values (peer slot 0 = the historical fixed values).
+ * No byte moves for the single-peer case. See scs_conn.h's WIRE VERDICT.
  *
  * THE MAPPING FROM OBSERVED FRAME TO SCA MESSAGE is the weak claim here and it
  * is stated at each call site below, with its grounding, so it can be checked
  * against the frame that triggers it.
  *
- * KNOWN LIMIT, stated rather than hidden: OVMX's three Con.IDs are NODE-GLOBAL
- * (OVMX_LOCAL_CONID / OVMX_JOINER_CONID / SCS_DIR_OVMX_CONID are macros, not
- * per-peer allocations), so exactly one peer's connections can occupy those
- * three CDL slots. This is the same blocker scs_cdt.h recorded. conn_bind()
- * therefore LOGS and returns NULL for a second peer rather than allocating a
- * different Con.ID than the one on the wire, which would make the CDL lie. In
- * the lab (one VAX) this never fires; on a 3-node cluster the second peer's
- * connections are simply not tracked, and the log says which.
+ * vms-694: THE NODE-GLOBAL Con.ID LIMIT IS GONE for the case that mattered.
+ * OVMX's Con.IDs used to be node-global macros, so exactly one peer's
+ * connections could occupy the CDL slots and a second established member's
+ * connection was refused a CDT (scsd_svc_slot_refused) -- the blocker scs_cdt.h
+ * recorded and the reason a JOIN to a running 2+-member cluster stalled at
+ * status=NEW. Con.IDs are now PER-PEER (PS_*_CONID(ps); see the block at their
+ * definition): peer slot i gets its own 0x10-wide low-word block, slot 0 keeps
+ * the historical values, so each concurrently-live peer occupies its own CDL
+ * slots. The one residual case scsd_svc_slot_refused still covers is a CDL
+ * genuinely full, or the same peer opening a SECOND connection of the SAME
+ * class (still one per-peer slot per class) -- a distinct, out-of-scope
+ * limitation (a real node allocates a fresh pair per connection, vms-298).
  */
 
 /* The node-wide Connection Descriptor List (p. 2-29). File scope so the send
@@ -2287,17 +2398,19 @@ static int scsd_svc_no_builder(struct scs_cdt *cdt, enum scs_conn_action act)
 
 /*
  * scsd_svc_slot_refused - the SCS_SVC_NOCDT log, which conn_bind() used to
- * carry. OVMX's three Con.IDs are NODE-GLOBAL (see the KNOWN LIMIT above), so a
- * second peer's connection cannot have its own CDT at the same Con.ID. The
- * frame still went out (the state machine is a recorder, never a gate); what is
- * lost is the tracking, and that is what this says.
+ * carry. vms-694 made Con.IDs PER-PEER, so a DIFFERENT peer's connection no
+ * longer collides (that was the join-blocking bug). This now fires only when
+ * the CDL is genuinely full, or the SAME peer opens a SECOND connection of the
+ * SAME class -- one per-peer slot per class -- which is the out-of-scope
+ * per-connection-allocation limitation (vms-298). The frame still went out (the
+ * state machine is a recorder, never a gate); what is lost is the tracking.
  */
 static void scsd_svc_slot_refused(uint32_t local_conid, const char *local_sysap)
 {
     log_ts(stderr);
     fprintf(stderr,
             " SCSD-W-CONNSLOT, CDL slot for Con.ID 0x%08X (%s) is already"
-            " claimed -- OVMX's Con.IDs are node-global, so this peer's"
+            " claimed -- the same peer/class Con.ID is still live, so this"
             " connection is NOT tracked by the connection state machine\n",
             (unsigned)local_conid, local_sysap);
     fflush(stderr);
@@ -4146,7 +4259,7 @@ static int send_joiner_connect_request(int sock, int ifindex, struct scs_config 
     memcpy(cp.src_mac, our_hw_mac, 6);
     memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
     memcpy(cp.peer_logical, path.sb != NULL ? path.sb->system_id : zero_addr, 6);
-    cp.local_conid = OVMX_JOINER_CONID;
+    cp.local_conid = PS_JOINER_CONID(ps);
     cp.remote_conid = 0; /* CONNECT-REQUEST: the member's Con.ID is not yet known */
     cp.recv_ack = ps->vc.seq.recv_seq; /* always ack the member's latest send_seq */
     /* vms-abc: FIRST send or RETRANSMIT? The sequence number is allocated once
@@ -4188,7 +4301,7 @@ static int send_joiner_connect_request(int sock, int ifindex, struct scs_config 
      * scsd_sysap_msg_input() for the measurement that says why. */
     a.msg_input = scsd_sysap_msg_input;
     a.sysap_ctx = ps;
-    a.conid = OVMX_JOINER_CONID;
+    a.conid = PS_JOINER_CONID(ps);
     a.emit = scsd_svc_emit_connect_req;
     a.emit_ctx = &ec;
 
@@ -4197,7 +4310,7 @@ static int send_joiner_connect_request(int sock, int ifindex, struct scs_config 
     enum scs_svc_status st = scs_connect(scsd_svc(), &a, &cdt);
     scsd_svc_settle(mark);
     if (st == SCS_SVC_NOCDT) {
-        scsd_svc_slot_refused(OVMX_JOINER_CONID, "VMS$VAXcluster");
+        scsd_svc_slot_refused(PS_JOINER_CONID(ps), "VMS$VAXcluster");
     }
     if (ec.sent) {
         if (cdt != NULL) {
@@ -4504,7 +4617,7 @@ static void scsd_poll_dir_params(struct scsd_rx *rx, struct peer_state *ps,
     memcpy(dp->src_mac, rx->our_hw_mac, 6);
     memcpy(dp->src_logical, rx->our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
     memcpy(dp->peer_logical, ps_sys_addr(ps), 6);
-    dp->local_conid = SCS_DIR_OVMX_POLL_CONID;
+    dp->local_conid = PS_SCS_DIR_POLL_CONID(ps);
     dp->incarnation = ps->incarnation; /* sec 4i echo, same rule as the responder */
     dp->recv_ack = ps->vc.seq.recv_seq;
     dp->send_seq = scs_seq_advance(&ps->vc.seq);
@@ -4573,7 +4686,7 @@ static int scsd_poll_emit(void *ctx, struct scs_cdt *cdt, enum scs_conn_action a
                    " local_conid=0x%08X (p. 2-50: all replies in)\n",
                    ps_port_addr(dps)[0], ps_port_addr(dps)[1], ps_port_addr(dps)[2],
                    ps_port_addr(dps)[3], ps_port_addr(dps)[4], ps_port_addr(dps)[5],
-                   (unsigned)SCS_DIR_OVMX_POLL_CONID);
+                   (unsigned)PS_SCS_DIR_POLL_CONID(dps));
             fflush(stdout);
         }
         return r;
@@ -4606,7 +4719,7 @@ static int scsd_poll_emit(void *ctx, struct scs_cdt *cdt, enum scs_conn_action a
            " %02x:%02x:%02x:%02x:%02x:%02x local_conid=0x%08X seq=%u\n",
            ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
            ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
-           (unsigned)SCS_DIR_OVMX_POLL_CONID, dp.send_seq);
+           (unsigned)PS_SCS_DIR_POLL_CONID(ps), dp.send_seq);
     fflush(stdout);
     return SCS_SVC_EMIT_SENT;
 }
@@ -4631,7 +4744,7 @@ static int scsd_poll_inquire(void *ctx, struct scs_cdt *cdt, const uint8_t node[
     memcpy(lp.src_logical, dp.src_logical, 6);
     memcpy(lp.peer_logical, dp.peer_logical, 6);
     lp.remote_conid = ps->poll_remote_conid;
-    lp.local_conid = SCS_DIR_OVMX_POLL_CONID;
+    lp.local_conid = PS_SCS_DIR_POLL_CONID(ps);
     lp.recv_ack = dp.recv_ack;
     lp.send_seq = dp.send_seq;
     lp.incarnation = dp.incarnation;
@@ -4692,7 +4805,7 @@ static void scsd_poll_found(const char *sysap, const uint8_t node[6], void *ctx)
         log_ts(stdout);
         printf(" SCSD-I-CONNREQ, sent OUR VMS$VAXcluster CONNECT-REQUEST"
                " local_conid=0x%08X seq=%u (poller discovery)\n",
-               OVMX_JOINER_CONID, ps->joiner_req_seq);
+               PS_JOINER_CONID(ps), ps->joiner_req_seq);
         fflush(stdout);
     }
 }
@@ -4760,7 +4873,7 @@ static int send_mscp_connect_request(int sock, int ifindex, struct peer_state *p
     memcpy(cp.src_mac, our_hw_mac, 6);
     memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
     memcpy(cp.peer_logical, ps_sys_addr(ps), 6);
-    cp.local_conid = OVMX_MSCP_CONID;
+    cp.local_conid = PS_MSCP_CONID(ps);
     cp.remote_conid = 0; /* CONNECT-REQUEST: the member's Con.ID is not yet known */
     cp.recv_ack = ps->vc.seq.recv_seq; /* always ack the member's latest send_seq */
     if (ps->mscp_req_seq == 0) {
@@ -4808,7 +4921,7 @@ static int ps_mscp_disc(int sock, int ifindex, struct peer_state *ps,
     memcpy(mp.src_logical, our_src_logical, 6);
     memcpy(mp.peer_logical, ps_sys_addr(ps), 6);
     mp.remote_conid = ps->mscp_remote_conid;
-    mp.local_conid = OVMX_MSCP_CONID;
+    mp.local_conid = PS_MSCP_CONID(ps);
     mp.recv_ack = ps->vc.seq.recv_seq;
     mp.send_seq = scs_seq_advance(&ps->vc.seq);
     mp.incarnation = ps->incarnation;
@@ -4859,7 +4972,7 @@ static int send_own_dir_connect_request(int sock, int ifindex, struct peer_state
     memcpy(dp.src_mac, our_hw_mac, 6);
     memcpy(dp.src_logical, our_src_logical, 6);
     memcpy(dp.peer_logical, ps_sys_addr(ps), 6);
-    dp.local_conid = SCS_DIR_OVMX_JOINER_CONID;
+    dp.local_conid = PS_SCS_DIR_JOINER_CONID(ps);
     dp.remote_conid = 0;
     dp.recv_ack = ps->vc.seq.recv_seq;
     if (ps->own_dir_req_seq == 0) {
@@ -4898,7 +5011,7 @@ static int send_own_dir_lookup(int sock, int ifindex, struct peer_state *ps,
     memcpy(lp.src_logical, our_src_logical, 6);
     memcpy(lp.peer_logical, ps_sys_addr(ps), 6);
     lp.remote_conid = ps->own_dir_remote_conid; /* member's handle on OUR dir connection */
-    lp.local_conid = SCS_DIR_OVMX_JOINER_CONID;
+    lp.local_conid = PS_SCS_DIR_JOINER_CONID(ps);
     lp.recv_ack = ps->vc.seq.recv_seq;
     if (retx) {
         lp.send_seq = ps->js_lookup_seq;       /* REUSE the outstanding seq */
@@ -4951,7 +5064,7 @@ static int send_own_dir_confirm(int sock, int ifindex, struct peer_state *ps,
     memcpy(dp.src_logical, our_src_logical, 6);
     memcpy(dp.peer_logical, ps_sys_addr(ps), 6);
     dp.remote_conid = ps->own_dir_remote_conid;
-    dp.local_conid = SCS_DIR_OVMX_JOINER_CONID;
+    dp.local_conid = PS_SCS_DIR_JOINER_CONID(ps);
     dp.recv_ack = ps->vc.seq.recv_seq;
     dp.send_seq = scs_seq_advance(&ps->vc.seq);
     dp.incarnation = ps->incarnation;
@@ -4985,7 +5098,7 @@ static int ps_send_dir_connect(int sock, int ifindex, struct peer_state *ps,
     memcpy(dp.src_mac, our_hw_mac, 6);
     memcpy(dp.src_logical, our_src_logical, 6);
     memcpy(dp.peer_logical, ps_sys_addr(ps), 6);
-    dp.local_conid = OVMX_PS_DIR_CONID;
+    dp.local_conid = PS_PS_DIR_CONID(ps);
     dp.remote_conid = 0;
     dp.recv_ack = ps->vc.seq.recv_seq;
     if (ps->psc_dir_req_seq == 0) {
@@ -5022,7 +5135,7 @@ static int ps_send_dir_confirm(int sock, int ifindex, struct peer_state *ps,
     memcpy(dp.src_logical, our_src_logical, 6);
     memcpy(dp.peer_logical, ps_sys_addr(ps), 6);
     dp.remote_conid = ps->psc_dir_remote_conid;
-    dp.local_conid = OVMX_PS_DIR_CONID;
+    dp.local_conid = PS_PS_DIR_CONID(ps);
     dp.recv_ack = ps->vc.seq.recv_seq;
     dp.send_seq = scs_seq_advance(&ps->vc.seq);
     dp.incarnation = ps->incarnation;
@@ -5051,7 +5164,7 @@ static int ps_send_dir_lookup(int sock, int ifindex, struct peer_state *ps,
     memcpy(lp.src_logical, our_src_logical, 6);
     memcpy(lp.peer_logical, ps_sys_addr(ps), 6);
     lp.remote_conid = ps->psc_dir_remote_conid;
-    lp.local_conid = OVMX_PS_DIR_CONID;
+    lp.local_conid = PS_PS_DIR_CONID(ps);
     lp.recv_ack = ps->vc.seq.recv_seq;
     if (retx) {
         lp.send_seq = ps->psc_lookup_seq;
@@ -5086,7 +5199,7 @@ static int ps_send_mscp_connect(int sock, int ifindex, struct peer_state *ps,
     memcpy(cp.src_mac, our_hw_mac, 6);
     memcpy(cp.src_logical, our_src_logical, 6);
     memcpy(cp.peer_logical, ps_sys_addr(ps), 6);
-    cp.local_conid = OVMX_PS_MSCP_CONID;
+    cp.local_conid = PS_PS_MSCP_CONID(ps);
     cp.remote_conid = 0;
     cp.recv_ack = ps->vc.seq.recv_seq;
     if (ps->psc_mscp_req_seq == 0) {
@@ -5121,7 +5234,7 @@ static int ps_send_mscp_confirm(int sock, int ifindex, struct peer_state *ps,
     memcpy(dp.src_logical, our_src_logical, 6);
     memcpy(dp.peer_logical, ps_sys_addr(ps), 6);
     dp.remote_conid = ps->psc_mscp_remote_conid;
-    dp.local_conid = OVMX_PS_MSCP_CONID;
+    dp.local_conid = PS_PS_MSCP_CONID(ps);
     dp.recv_ack = ps->vc.seq.recv_seq;
     dp.send_seq = scs_seq_advance(&ps->vc.seq);
     dp.incarnation = ps->incarnation;
@@ -5474,7 +5587,7 @@ static int scs_send_disconnect_self(int sock, int ifindex, struct peer_state *ps
     /* Con.ID pair: remote = the peer's handle on OUR server dir connection,
      * local = ours. */
     uint32_t rc = ps->dir_remote_conid;
-    uint32_t lc = (uint32_t)SCS_DIR_OVMX_CONID;
+    uint32_t lc = (uint32_t)PS_SCS_DIR_CONID(ps);
     d[64] = (uint8_t)rc;  d[65] = (uint8_t)(rc >> 8);
     d[66] = (uint8_t)(rc >> 16); d[67] = (uint8_t)(rc >> 24);
     d[68] = (uint8_t)lc;  d[69] = (uint8_t)(lc >> 8);
@@ -5527,7 +5640,7 @@ static void ps_fill_mscp(const struct peer_state *ps, const uint8_t our_hw_mac[6
     memcpy(mp->src_logical, our_src_logical, 6);
     memcpy(mp->peer_logical, ps_sys_addr(ps), 6);
     mp->remote_conid = ps->psc_mscp_remote_conid;
-    mp->local_conid = OVMX_PS_MSCP_CONID;
+    mp->local_conid = PS_PS_MSCP_CONID(ps);
     mp->recv_ack = ps->vc.seq.recv_seq;
     mp->send_seq = send_seq;
     mp->incarnation = ps->incarnation;
@@ -5699,13 +5812,13 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                     !mv.is_member_txn) {
                     int c = cm_send_config_burst(rx->sock, (int)rx->ifindex, ps,
                                                  rx->our_hw_mac, rx->our_src_logical,
-                                                 OVMX_LOCAL_CONID, ps->remote_conid);
+                                                 PS_LOCAL_CONID(ps), ps->remote_conid);
                     rx->cm_config_frames += c;
                     log_ts(stdout);
                     printf(" SCSD-I-CMCONFIG, answered member config with add-member"
                            " burst (%d frames) on the member VC local=0x%08X"
                            " remote=0x%08X (server-first)\n",
-                           c, (unsigned)OVMX_LOCAL_CONID, ps->remote_conid);
+                           c, (unsigned)PS_LOCAL_CONID(ps), ps->remote_conid);
                     fflush(stdout);
 
                     /* THE IMMEDIATE DISK-DISCOVERY TRIGGER STOOD HERE AND IS
@@ -5828,10 +5941,10 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                 /* Remember which VC this dialogue rides so the poll-loop
                  * flush can answer on the same one. */
                 if (cm_on_joiner_vc) {
-                    ps->cm_local_conid = OVMX_JOINER_CONID;
+                    ps->cm_local_conid = PS_JOINER_CONID(ps);
                     ps->cm_remote_conid = ps->joiner_remote_conid;
                 } else {
-                    ps->cm_local_conid = OVMX_LOCAL_CONID;
+                    ps->cm_local_conid = PS_LOCAL_CONID(ps);
                     ps->cm_remote_conid = ps->remote_conid;
                 }
 
@@ -5966,7 +6079,7 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                     !ps->cfg_sent && ps->connected) {
                     int c = cm_send_config_burst(rx->sock, (int)rx->ifindex, ps,
                                                  rx->our_hw_mac, rx->our_src_logical,
-                                                 OVMX_LOCAL_CONID,
+                                                 PS_LOCAL_CONID(ps),
                                                  ps->remote_conid);
                     rx->cm_config_frames += c;
                     log_ts(stdout);
@@ -6284,10 +6397,10 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                      * the member-opened one otherwise. */
                     if (cm_on_joiner_vc) {
                         mp.remote_conid = ps->joiner_remote_conid;
-                        mp.local_conid = OVMX_JOINER_CONID;
+                        mp.local_conid = PS_JOINER_CONID(ps);
                     } else {
                         mp.remote_conid = ps->remote_conid;
-                        mp.local_conid = OVMX_LOCAL_CONID;
+                        mp.local_conid = PS_LOCAL_CONID(ps);
                     }
                     mp.incarnation = ps->incarnation;
                     mp.recv_ack = ps->vc.seq.recv_seq;
@@ -6555,7 +6668,7 @@ static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
     memcpy(scsd_mscp_xfer_ctx.tmpl.src_logical, cur.rx->our_src_logical, 6);
     memcpy(scsd_mscp_xfer_ctx.tmpl.peer_logical, ps_sys_addr(ps), 6);
     scsd_mscp_xfer_ctx.tmpl.remote_conid = ps->mscp_srv_remote_conid;
-    scsd_mscp_xfer_ctx.tmpl.local_conid = OVMX_MSCP_SERVER_CONID;
+    scsd_mscp_xfer_ctx.tmpl.local_conid = PS_MSCP_SERVER_CONID(ps);
     scsd_mscp_xfer_ctx.tmpl.incarnation = ps->incarnation;
     scsd_mscp_xfer_ctx.bytes_total =
         (v.base_opcode == SCS_MSCP_OP_READ && !v.is_end
@@ -6591,7 +6704,7 @@ static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
      * addressing the frame, so its own handle is the SOURCE and the member's
      * is the DESTINATION. */
     p.remote_conid = ps->mscp_srv_remote_conid; /* destination: the class driver's handle */
-    p.local_conid = OVMX_MSCP_SERVER_CONID;     /* source: OVMX's own server handle */
+    p.local_conid = PS_MSCP_SERVER_CONID(ps);   /* source: OVMX's own server handle */
     p.recv_ack = ps->vc.seq.recv_seq;
     p.send_seq = scs_seq_advance(&ps->vc.seq);
     p.incarnation = ps->incarnation;
@@ -6680,7 +6793,7 @@ static void scsd_join_retx_for_peer(struct scsd_rx *rx, struct peer_state *ps, l
                 log_ts(stdout);
                 printf(" SCSD-I-CONNREQ, retransmit OUR VMS$VAXcluster"
                        " CONNECT-REQUEST local_conid=0x%08X seq=%u\n",
-                       OVMX_JOINER_CONID, ps->joiner_req_seq);
+                       PS_JOINER_CONID(ps), ps->joiner_req_seq);
                 fflush(stdout);
             }
         }
@@ -6922,7 +7035,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                      * peer's, which on a rejoin never comes -- so perform ours
                      * here, on the one signal that reliably marks the stall.
                      * Opt-in: OVMX_DIR_SELF_DISCONNECT=1. */
-                    if (cm_op == 8 && cm_rc == SCS_DIR_OVMX_CONID &&
+                    if (cm_op == 8 && ovmx_conid_is_class(cm_rc, OVMX_CONID_CLS_DIR) &&
                         !ps->psc_self_disc_sent &&
                         ps->dir_remote_conid != 0 &&
                         getenv("OVMX_DIR_SELF_DISCONNECT") != NULL &&
@@ -6935,7 +7048,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                                " disconnect call (op 6) remote=0x%08X local=0x%08X."
                                " DTJ v1n5 p.25: the teardown is symmetric\n",
                                (unsigned)ps->dir_remote_conid,
-                               (unsigned)SCS_DIR_OVMX_CONID);
+                               (unsigned)PS_SCS_DIR_CONID(ps));
                         fflush(stdout);
                     }
                 }
@@ -8076,7 +8189,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             log_ts(stdout);
             printf(" SCSD-I-JOINSEQ, opened OUR SCS$DIRECTORY client"
                    " connect local=0x%08X seq=%u (join step 1/8)\n",
-                   (unsigned)SCS_DIR_OVMX_JOINER_CONID, ps->own_dir_req_seq);
+                   (unsigned)PS_SCS_DIR_JOINER_CONID(ps), ps->own_dir_req_seq);
             fflush(stdout);
         }
         }
@@ -8111,7 +8224,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         uint16_t ps_dop = (uint16_t)buf[60] | ((uint16_t)buf[61] << 8);
 
         /* --- frames on OUR PS SCS$DIRECTORY connection --- */
-        if (ps_rconid == OVMX_PS_DIR_CONID && ps_lconid != 0) {
+        if (ovmx_conid_is_class(ps_rconid, OVMX_CONID_CLS_PSDIR) && ps_lconid != 0) {
             struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
             if (ps == NULL) {
                 return;
@@ -8167,7 +8280,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         }
 
         /* --- frames on OUR PS MSCP$DISK connection --- */
-        if (ps_rconid == OVMX_PS_MSCP_CONID && ps_lconid != 0) {
+        if (ovmx_conid_is_class(ps_rconid, OVMX_CONID_CLS_PSMSCP) && ps_lconid != 0) {
             struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
             if (ps == NULL) {
                 return;
@@ -8322,7 +8435,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
          * the discovery walk. SCC-END (0x84) -> next SCC or first GUS; GUS-END
          * (0x83) -> next unit = returned unit-word + 1, until status OFFLINE ends
          * the list. GROUNDED on vax3-2to3. */
-        if (rconid == OVMX_MSCP_CONID && dop != SCS_DIR_OP_RESPONSE) {
+        if (ovmx_conid_is_class(rconid, OVMX_CONID_CLS_MSCP) && dop != SCS_DIR_OP_RESPONSE) {
             struct scs_mscp_view mv2;
             if (scs_mscp_parse(buf, (size_t)n, &mv2) == 0 && mv2.is_end) {
                 struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
@@ -8388,7 +8501,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
          * false-accept explained part of the vms-abd refusal remains a
          * separate, still-open question -- vms-257 fixes the misread, not
          * vms-abd. */
-        if (rconid == OVMX_MSCP_CONID && lconid != 0 &&
+        if (ovmx_conid_is_class(rconid, OVMX_CONID_CLS_MSCP) && lconid != 0 &&
             dop == SCS_DIR_OP_ACCEPT) {
             struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
             if (ps != NULL && !ps->mscp_connected) {
@@ -8404,7 +8517,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 memcpy(c5.src_logical, rx->our_src_logical, 6);
                 memcpy(c5.peer_logical, ps_sys_addr(ps), 6);
                 c5.remote_conid = lconid;              /* peer's handle, its op-4 [54] */
-                c5.local_conid = OVMX_MSCP_CONID;      /* ours, from our op-0 */
+                c5.local_conid = PS_MSCP_CONID(ps);    /* ours, from our op-0 */
                 c5.incarnation = ps->incarnation;
                 c5.recv_ack = ps->vc.seq.recv_seq;
                 c5.send_seq = scs_seq_advance(&ps->vc.seq);
@@ -8421,13 +8534,13 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                            " remote=0x%08X send_seq=%u). join_step stays"
                            " JS_MSCP_CONNECT so the retransmit timer resends"
                            " CONNECT_REQ\n",
-                           (unsigned)OVMX_MSCP_CONID, lconid, c5.send_seq);
+                           (unsigned)PS_MSCP_CONID(ps), lconid, c5.send_seq);
                     fflush(stdout);
                 }
             }
             return;
         }
-        if (rconid == OVMX_MSCP_CONID && lconid != 0 && dop == SCS_DIR_OP_RESPONSE) {
+        if (ovmx_conid_is_class(rconid, OVMX_CONID_CLS_MSCP) && lconid != 0 && dop == SCS_DIR_OP_RESPONSE) {
             struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
             if (ps != NULL && !ps->mscp_connected) {
                 ps->mscp_remote_conid = lconid;
@@ -8435,7 +8548,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 log_ts(stdout);
                 printf(" SCSD-I-MSCPBOUND, member accepted OUR MSCP$DISK"
                        " connect: local=0x%08X remote=0x%08X\n",
-                       (unsigned)OVMX_MSCP_CONID, lconid);
+                       (unsigned)PS_MSCP_CONID(ps), lconid);
                 fflush(stdout);
                 /* vms-760: CONFIRM the MSCP connection (op=3) before proceeding.
                  * GROUNDED on the 2->3 reference: VAX3 sends its MSCP op=3 confirm
@@ -8450,7 +8563,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                     memcpy(mc.src_logical, rx->our_src_logical, 6);
                     memcpy(mc.peer_logical, ps_sys_addr(ps), 6);
                     mc.remote_conid = ps->mscp_remote_conid;
-                    mc.local_conid = OVMX_MSCP_CONID;
+                    mc.local_conid = PS_MSCP_CONID(ps);
                     mc.recv_ack = ps->vc.seq.recv_seq;
                     mc.send_seq = scs_seq_advance(&ps->vc.seq);
                     mc.incarnation = ps->incarnation;
@@ -8468,7 +8581,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 if (ps_mscp_disc(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac, rx->our_src_logical)) {
                     log_ts(stdout);
                     printf(" SCSD-I-MSCPDISC, started disk discovery (SCC #1)"
-                           " on MSCP conid 0x%08X\n", (unsigned)OVMX_MSCP_CONID);
+                           " on MSCP conid 0x%08X\n", (unsigned)PS_MSCP_CONID(ps));
                     fflush(stdout);
                 }
                 if (ps->join_step == JS_MSCP_CONNECT) {
@@ -8484,7 +8597,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             }
             return;
         }
-        if (rconid == OVMX_JOINER_CONID && lconid != 0 && dop == SCS_DIR_OP_RESPONSE) {
+        if (ovmx_conid_is_class(rconid, OVMX_CONID_CLS_JOINER) && lconid != 0 && dop == SCS_DIR_OP_RESPONSE) {
             struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
             if (ps != NULL && !ps->joiner_connected) {
                 ps->joiner_remote_conid = lconid;
@@ -8508,7 +8621,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 log_ts(stdout);
                 printf(" SCSD-I-JOINBOUND, member accepted OUR VMS$VAXcluster"
                        " connect: local=0x%08X remote=0x%08X\n",
-                       OVMX_JOINER_CONID, lconid);
+                       PS_JOINER_CONID(ps), lconid);
                 fflush(stdout);
                 /* vms-760: CONFIRM the VMS$VAXcluster VC (op=3) BEFORE the
                  * add-member burst -- the same load-bearing confirm the MSCP
@@ -8533,7 +8646,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                     memcpy(vc.src_logical, rx->our_src_logical, 6);
                     memcpy(vc.peer_logical, ps_sys_addr(ps), 6);
                     vc.remote_conid = ps->joiner_remote_conid;
-                    vc.local_conid = OVMX_JOINER_CONID;
+                    vc.local_conid = PS_JOINER_CONID(ps);
                     vc.recv_ack = ps->vc.seq.recv_seq;
                     vc.send_seq = scs_seq_advance(&ps->vc.seq);
                     vc.incarnation = ps->incarnation;
@@ -8553,7 +8666,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 if (!ps->joiner_cm_sent) {
                     int c = cm_send_config_burst(rx->sock, rx->ifindex, ps, rx->our_hw_mac,
                                                  rx->our_src_logical,
-                                                 OVMX_JOINER_CONID, lconid);
+                                                 PS_JOINER_CONID(ps), lconid);
                     rx->cm_config_frames += c;
                     ps->joiner_cm_sent = 1;
                     ps->joiner_cm_ms = monotonic_ms();
@@ -8569,7 +8682,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         }
         /* vms-760: frames on OUR SCS$DIRECTORY client connection (rconid ==
          * our dir handle). Two kinds, distinguished by op: */
-        if (rconid == SCS_DIR_OVMX_JOINER_CONID && lconid != 0) {
+        if (ovmx_conid_is_class(rconid, OVMX_CONID_CLS_DIRJ) && lconid != 0) {
             struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
             if (ps == NULL) {
                 return;
@@ -8610,7 +8723,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                     log_ts(stdout);
                     printf(" SCSD-I-JOINSEQ, MSCP$DISK HIT; 2nd lookup + MSCP$DISK"
                            " connect local=0x%08X seq=%u (step 5/8)\n",
-                           (unsigned)OVMX_MSCP_CONID, ps->mscp_req_seq);
+                           (unsigned)PS_MSCP_CONID(ps), ps->mscp_req_seq);
                     fflush(stdout);
                 } else if (ps->join_step == JS_DIR_LOOKUP_VC && affirmative &&
                            getenv("OVMX_NO_OWN_VC") != NULL) {
@@ -8671,7 +8784,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                     log_ts(stdout);
                     printf(" SCSD-I-JOINSEQ, VMS$VAXcluster HIT; VC connect"
                            " local=0x%08X seq=%u (step 7/8)\n",
-                           OVMX_JOINER_CONID, ps->joiner_req_seq);
+                           PS_JOINER_CONID(ps), ps->joiner_req_seq);
                     fflush(stdout);
                 }
                 return;
@@ -8686,7 +8799,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 log_ts(stdout);
                 printf(" SCSD-I-OWNDIRBOUND, member accepted OUR SCS$DIRECTORY"
                        " connect: local=0x%08X remote=0x%08X\n",
-                       (unsigned)SCS_DIR_OVMX_JOINER_CONID, lconid);
+                       (unsigned)PS_SCS_DIR_JOINER_CONID(ps), lconid);
                 fflush(stdout);
                 /* op=3 confirm (fire-and-forget), then the first lookup. */
                 send_own_dir_confirm(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac,
@@ -8775,14 +8888,18 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                  * A true retransmit carries the SAME peer Con.ID; a new
                  * connection carries a different one. So key on that.
                  *
-                 * NOT FIXED HERE, and it needs its own grounding: we still
-                 * offer the SAME local handle (OVMX_MSCP_SERVER_CONID is a
-                 * compile-time constant) for every such connection. A Con.ID
-                 * identifies a connection ENDPOINT and real nodes allocate a
-                 * fresh pair per connection. Both anomalies were present on
-                 * those three frames at once and the capture cannot separate
-                 * them, so this fixes the one that is unambiguously wrong and
-                 * leaves the other visible. */
+                 * PARTLY FIXED by vms-694, the rest still needs its own
+                 * grounding. The CROSS-PEER half is fixed: OVMX now offers a
+                 * PER-PEER server handle (PS_MSCP_SERVER_CONID(ps)), so two
+                 * DIFFERENT members no longer collide on one CDL slot. What is
+                 * still node-fixed is the SAME peer opening a SECOND MSCP$DISK
+                 * connection: it is offered the SAME per-peer handle as the
+                 * first (one server slot per peer), where a real node allocates
+                 * a fresh pair per connection. That residual anomaly and the
+                 * seq one below were present on those three frames at once and
+                 * the capture cannot separate them, so vms-298 fixed the seq
+                 * (unambiguously wrong) and left the per-connection handle
+                 * visible. */
                 int retx = ps->mscp_srv_bound &&
                            prev_srv_remote_conid == m_lconid;
                 if (!retx) {
@@ -8826,7 +8943,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 }
 
                 /* op=4 accept: bind OUR fresh MSCP server handle. */
-                dp.local_conid = OVMX_MSCP_SERVER_CONID;
+                dp.local_conid = PS_MSCP_SERVER_CONID(ps);
                 dp.recv_ack = ps->vc.seq.recv_seq;
                 dp.send_seq = ps->mscp_srv_accept_seq;
                 uint8_t aframe[SCS_DIR_CONFIRM_FRAME_LEN];
@@ -8842,29 +8959,28 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                     log_ts(stdout);
                     printf(" SCSD-I-MSCPSRV, accepted member MSCP$DISK connect:"
                            " local=0x%08X remote=0x%08X (server-first)\n",
-                           (unsigned)OVMX_MSCP_SERVER_CONID, m_lconid);
+                           (unsigned)PS_MSCP_SERVER_CONID(ps), m_lconid);
                     fflush(stdout);
 
                     /* vms-34b: GIVE THE CONNECTION A CDT, so the commands the
                      * class driver is about to send have somewhere to be
                      * delivered. Before this item scsd.c never allocated one
-                     * at OVMX_MSCP_SERVER_CONID (scs_mscp.h's own comment
+                     * at the MSCP server handle (scs_mscp.h's own comment
                      * names this), so scs_cdl_deliver_message() always
                      * resolved SCS_DELIVER_NO_CDT here and every command was
                      * dropped in silence -- accept-then-black-hole, the exact
-                     * facade this posture exists to avoid. OVMX_MSCP_SERVER_
-                     * CONID is a fixed compile-time constant reused across
-                     * connections (a documented anomaly, see the comment
-                     * above prev_srv_remote_conid), so a SECOND MSCP$DISK
-                     * connect from the same or a different peer finds the
-                     * SAME CDT already allocated: just re-point its
-                     * remote_conid at the new m_lconid rather than trying (and
-                     * failing) to allocate the same slot twice. */
+                     * facade this posture exists to avoid. vms-694: the server
+                     * handle is now PER-PEER (PS_MSCP_SERVER_CONID(ps)), so two
+                     * DIFFERENT members get distinct CDTs; only the SAME peer's
+                     * SECOND MSCP$DISK connect finds its own SAME CDT already
+                     * allocated (the residual per-connection limit above), in
+                     * which case we re-point its remote_conid at the new
+                     * m_lconid rather than allocating the same slot twice. */
                     struct scs_cdt *mcdt = scs_cdl_lookup(&scsd_cdl,
-                                                          OVMX_MSCP_SERVER_CONID);
+                                                          PS_MSCP_SERVER_CONID(ps));
                     if (mcdt == NULL) {
                         mcdt = scs_cdl_alloc_conid(&scsd_cdl,
-                                                   OVMX_MSCP_SERVER_CONID,
+                                                   PS_MSCP_SERVER_CONID(ps),
                                                    "MSCP$DISK",
                                                    "VMS$DISK_CL_DRVR", ps->pb);
                     }
@@ -8888,7 +9004,8 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         /* op=5 CONFIRM binding OUR MSCP$DISK server connection: the member
          * acks our op=4 accept (remote Con.ID == OUR server handle, local ==
          * the member's MSCP client handle). Con.ID-signature, opcode-agnostic. */
-        if (mop == SCS_DIR_OP_MSCP_CONFIRM && m_rconid == OVMX_MSCP_SERVER_CONID) {
+        if (mop == SCS_DIR_OP_MSCP_CONFIRM &&
+            ovmx_conid_is_class(m_rconid, OVMX_CONID_CLS_MSCPSRV)) {
             struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
             if (ps != NULL) {
                 if (!ps->vc.initialized) {
@@ -8900,7 +9017,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 log_ts(stdout);
                 printf(" SCSD-I-MSCPSRVOK, member confirmed OUR MSCP$DISK server"
                        " connection: local=0x%08X remote=0x%08X\n",
-                       (unsigned)OVMX_MSCP_SERVER_CONID, m_lconid);
+                       (unsigned)PS_MSCP_SERVER_CONID(ps), m_lconid);
                 fflush(stdout);
             }
             return;
@@ -8928,7 +9045,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
          * in this file whose [50:54] names the poller's own handle, so the test
          * is exact and cannot capture the peer-opened directory connection. */
         if (scs_dir_parse(buf, (size_t)n, &dv) == 0 &&
-            dv.remote_conid == SCS_DIR_OVMX_POLL_CONID) {
+            ovmx_conid_is_class(dv.remote_conid, OVMX_CONID_CLS_DIRPOLL)) {
             struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
             if (ps == NULL) {
                 return;
@@ -8948,7 +9065,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                  * connection at the peer. Same call the receive path already
                  * makes for the two VMS$VAXcluster connections. */
                 struct scs_cdt *pc = scs_cdl_lookup(&scsd_cdl,
-                                                    SCS_DIR_OVMX_POLL_CONID);
+                                                    PS_SCS_DIR_POLL_CONID(ps));
                 if (pc != NULL) {
                     scs_cdt_set_remote_conid(pc, dv.local_conid);
                 }
@@ -9066,7 +9183,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 memcpy(dp.src_logical, rx->our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                 memcpy(dp.peer_logical, ps_sys_addr(ps), 6);
                 dp.remote_conid = ps->dir_remote_conid;
-                dp.local_conid = SCS_DIR_OVMX_CONID;
+                dp.local_conid = PS_SCS_DIR_CONID(ps);
                 /* vms-246 (§4i established-join): echo the member's current
                  * node-incarnation into the directory [22:24], the same
                  * value it stamps in its own 0x5b connect-request and its
@@ -9114,7 +9231,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                  * scsd_sysap_msg_input() for the measurement that says why. */
                 da.msg_input = scsd_sysap_msg_input;
                 da.sysap_ctx = ps;
-                da.conid = SCS_DIR_OVMX_CONID;
+                da.conid = PS_SCS_DIR_CONID(ps);
                 da.remote_conid = ps->dir_remote_conid;
                 da.emit = scsd_svc_emit_dir_accept;
                 da.emit_ctx = &ec;
@@ -9130,7 +9247,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                  * the SEPARATE CDT's, never dsdir's listening Con.ID. */
                 scs_sdir_connect_answered(scs_svc_sdir_mut(scsd_svc()), dsdir);
                 if (dst == SCS_SVC_NOCDT) {
-                    scsd_svc_slot_refused(SCS_DIR_OVMX_CONID, "SCS$DIRECTORY");
+                    scsd_svc_slot_refused(PS_SCS_DIR_CONID(ps), "SCS$DIRECTORY");
                 }
                 if (dcdt != NULL) {
                     ps->cdt_dir = dcdt;
@@ -9141,7 +9258,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                     log_ts(stdout);
                     printf(" SCSD-I-DIRCONN, bound SCS$DIRECTORY: remote=0x%08X"
                            " local=0x%08X with peer %02x:%02x:%02x:%02x:%02x:%02x\n",
-                           ps->dir_remote_conid, (unsigned)SCS_DIR_OVMX_CONID,
+                           ps->dir_remote_conid, (unsigned)PS_SCS_DIR_CONID(ps),
                            ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
                            ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5]);
                     fflush(stdout);
@@ -9168,7 +9285,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                         log_ts(stdout);
                         printf(" SCSD-I-CONNREQ, sent OUR VMS$VAXcluster CONNECT-REQUEST"
                                " local_conid=0x%08X seq=%u (active joiner, prompt)\n",
-                               OVMX_JOINER_CONID, ps->joiner_req_seq);
+                               PS_JOINER_CONID(ps), ps->joiner_req_seq);
                         fflush(stdout);
                     }
                 }
@@ -9184,7 +9301,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 memcpy(lp.peer_logical, ps_sys_addr(ps), 6);
                 lp.remote_conid = ps->dir_remote_conid ? ps->dir_remote_conid
                                                        : dv.local_conid;
-                lp.local_conid = SCS_DIR_OVMX_CONID;
+                lp.local_conid = PS_SCS_DIR_CONID(ps);
                 lp.recv_ack = ps->vc.seq.recv_seq;
                 lp.send_seq = scs_seq_advance(&ps->vc.seq);
                 lp.incarnation = ps->incarnation; /* §4i established-join echo (see connect branch) */
@@ -9388,7 +9505,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             memcpy(cp.src_mac, rx->our_hw_mac, 6);
             memcpy(cp.src_logical, rx->our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
             memcpy(cp.peer_logical, ps_sys_addr(ps), 6);
-            cp.local_conid = OVMX_LOCAL_CONID;
+            cp.local_conid = PS_LOCAL_CONID(ps);
             cp.remote_conid = v.local_conid;
             cp.recv_ack = ps->vc.seq.recv_seq;
             cp.send_seq = scs_seq_advance(&ps->vc.seq);
@@ -9472,7 +9589,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
              * scsd_sysap_msg_input() for the measurement that says why. */
             ma.msg_input = scsd_sysap_msg_input;
             ma.sysap_ctx = ps;
-            ma.conid = OVMX_LOCAL_CONID;
+            ma.conid = PS_LOCAL_CONID(ps);
             ma.remote_conid = v.local_conid;
             ma.retransmit = !first;
             ma.emit = scsd_svc_emit_member_accept;
@@ -9485,7 +9602,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             /* p. 2-50 / scs_sdir.h DESIGN CHOICE 3, as above. */
             scs_sdir_connect_answered(scs_svc_sdir_mut(scsd_svc()), msdir);
             if (mst == SCS_SVC_NOCDT) {
-                scsd_svc_slot_refused(OVMX_LOCAL_CONID, "VMS$VAXcluster");
+                scsd_svc_slot_refused(PS_LOCAL_CONID(ps), "VMS$VAXcluster");
             }
             if (mcdt != NULL) {
                 ps->cdt_member = mcdt;
@@ -9501,7 +9618,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 printf(" SCSD-I-CONNRESP, %s peer VMS$VAXcluster CONNECT-REQUEST:"
                        " remote=0x%08X local=0x%08X recv_ack=%u send_seq=%u incarnation=%u\n",
                        first ? "answered" : "re-answered",
-                       v.local_conid, OVMX_LOCAL_CONID, cp.recv_ack, cp.send_seq,
+                       v.local_conid, PS_LOCAL_CONID(ps), cp.recv_ack, cp.send_seq,
                        cp.incarnation ? cp.incarnation : 1);
                 fflush(stdout);
                 /* vms-d94: do NOT send the add-member burst on this
@@ -9958,7 +10075,7 @@ static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
         memcpy(cp.src_mac, rx->our_hw_mac, 6);
         memcpy(cp.src_logical, rx->our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
         memcpy(cp.peer_logical, ps_sys_addr(ps), 6);
-        cp.local_conid = OVMX_LOCAL_CONID;
+        cp.local_conid = PS_LOCAL_CONID(ps);
         cp.remote_conid = 0;
         /* vms-c6d: re-send the SAME outstanding sequenced message -- reuse the
          * recorded unacked send_seq (do NOT advance) and the current recv_ack. */
@@ -9996,7 +10113,7 @@ static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
          * scsd_sysap_msg_input() for the measurement that says why. */
         ra.msg_input = scsd_sysap_msg_input;
         ra.sysap_ctx = ps;
-        ra.conid = OVMX_LOCAL_CONID;
+        ra.conid = PS_LOCAL_CONID(ps);
         ra.emit = scsd_svc_emit_connect_req;
         ra.emit_ctx = &rec;
 
@@ -10193,7 +10310,7 @@ static unsigned scsd_diskrun_ungate_tick(struct scsd_rx *rx, uint64_t now_ms)
             printf(" SCSD-I-PSCUNGATE, no op 6 on our server dir connection"
                    " after %lums -- opened OUR SCS$DIRECTORY client connect"
                    " local=0x%08X seq=%u (disk-discovery step 1, UNGATED)\n",
-                   gate_ms, (unsigned)OVMX_PS_DIR_CONID, ps->psc_dir_req_seq);
+                   gate_ms, (unsigned)PS_PS_DIR_CONID(ps), ps->psc_dir_req_seq);
             fflush(stdout);
         }
     }
@@ -10620,9 +10737,10 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                     rx->peers[i].padded_replies, rx->peers[i].padded_initiated,
                     rx->peers[i].peer_padded_sca,
                     /* "untracked" is NOT a state: it means no CDT was ever bound
-                     * for that connection (machine off, or the node-global
-                     * Con.ID slot belonged to another peer). Do not read it as
-                     * CLOSED. */
+                     * for that connection (machine off, the connection not yet
+                     * formed, or the CDL genuinely full). Con.IDs are per-peer
+                     * now (vms-694), so it no longer means the slot belonged to
+                     * another peer. Do not read it as CLOSED. */
                     rx->peers[i].cdt_dir ? scs_conn_state_name(scs_conn_state_of(rx->peers[i].cdt_dir))
                                      : "untracked",
                     rx->peers[i].cdt_member

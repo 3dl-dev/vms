@@ -18,7 +18,8 @@ vms-y := vms_module.o \
          vms_lock.o \
          vms_devtab.o \
          vms_proctab.o \
-         vms_lnm.o
+         vms_lnm.o \
+         vms_mbx.o
 
 ccflags-y := -I$(src)
 

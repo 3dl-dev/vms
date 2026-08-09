@@ -43,6 +43,7 @@
 /* Import from sys_assign.c */
 extern int vms$$chan_to_fd(uint16_t chan);
 extern uint32_t vms$$chan_exec_chan(uint16_t chan);
+extern int vms$$chan_is_mailbox(uint16_t chan);
 
 /* Import from sys_uring.c */
 extern int vms_uring_init(void);
@@ -170,6 +171,71 @@ static uint32_t qio_sync(int fd, uint32_t base_func, void *iosb_ptr,
 }
 
 /*
+ * qio_mailbox_op - IO$_READVBLK/WRITEVBLK for a MAILBOX channel (vms-d44).
+ *
+ * A mailbox channel's fd is always -1 (see sys_assign.c): the mailbox --
+ * its message queue, its buffer-quota accounting -- is entirely the
+ * executive's (src/kernel/vms_mbx.c), so there is no local file descriptor
+ * for io_uring or read()/write() to operate on. This bypasses BOTH: one
+ * $QIO/$QIOW call in, one vms_kif_mbx_read/write() ioctl round trip out,
+ * synchronously -- exactly like qio_sync()'s non-uring fallback, except
+ * there is no uring path to try first for a device that isn't a fd at all.
+ *
+ * $QIO's blocking mailbox read is what real VMS documents (the read
+ * completes when a message arrives), so a synchronous ioctl that blocks in
+ * the executive is the faithful shape here, not a deficiency to route
+ * around: vms_kif_mbx_read() already retries on EINTR the same way
+ * sys$waitfr's kif_wait_call() does (see vms_kif.c).
+ */
+static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
+                                void *p1, uint32_t p2, uint32_t efn,
+                                void (*astadr)(uint32_t), uint32_t astprm) {
+    struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+    uint32_t exec_chan = vms$$chan_exec_chan(chan);
+    uint32_t base_func = func & 0xFF;
+    uint32_t st;
+    uint32_t actlen = 0;
+
+    switch (base_func) {
+        case IO$_READVBLK:
+        case IO$_READLBLK:
+        case IO$_READPBLK:
+            if (!p1) { st = SS$_BADPARAM; break; }
+            st = vms_kif_mbx_read(exec_chan, p1, p2, &actlen);
+            break;
+
+        case IO$_WRITEVBLK:
+        case IO$_WRITELBLK:
+        case IO$_WRITEPBLK:
+            if (!p1) { st = SS$_BADPARAM; break; }
+            st = vms_kif_mbx_write(exec_chan, p1, p2);
+            if (st & 1) actlen = p2;
+            break;
+
+        case IO$_NOP:
+            st = SS$_NORMAL;
+            break;
+
+        default:
+            st = SS$_ILLIOFUNC;
+            break;
+    }
+
+    if (iosb) {
+        iosb->iosb$w_status = (uint16_t)st;
+        iosb->iosb$w_bcnt = (actlen > 65535) ? 65535 : (uint16_t)actlen;
+        iosb->iosb$l_dev_depend = actlen;
+    }
+
+    if (st & 1) {
+        if (efn != 0) sys$setef(efn);
+        if (astadr) astadr(astprm);
+    }
+
+    return st;
+}
+
+/*
  * qio_validate_and_classify - Shared validation for sys$qio and sys$qiow.
  *
  * Resolves the channel to an fd, validates the function code and buffer,
@@ -285,6 +351,9 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
                   uint32_t p4, uint32_t p5, uint32_t p6) {
     (void)p4; (void)p5; (void)p6;
 
+    if (vms$$chan_is_mailbox(chan))
+        return qio_mailbox_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
+
     int fd, is_read;
     uint32_t status = qio_validate_and_classify(chan, func, iosb_ptr, p1,
                                                  efn, astadr, astprm,
@@ -318,6 +387,9 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
                    void *p1, uint32_t p2, uint32_t p3,
                    uint32_t p4, uint32_t p5, uint32_t p6) {
     (void)p4; (void)p5; (void)p6;
+
+    if (vms$$chan_is_mailbox(chan))
+        return qio_mailbox_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
 
     int fd, is_read;
     uint32_t status = qio_validate_and_classify(chan, func, iosb_ptr, p1,

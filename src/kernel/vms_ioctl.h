@@ -85,6 +85,12 @@ struct vms_mode_args {
 #define VMS_PRV_V_DETACH     5
 #define VMS_PRV_V_LOG_IO     7
 #define VMS_PRV_V_GROUP      8
+#define VMS_PRV_V_PRMMBX    11  /* create permanent mailbox (vms-d44; mirrors
+                                 * the already oracle-pinned bit position this
+                                 * tree carries in src/libvms/include/prvdef.h's
+                                 * PRV$V_PRMMBX -- not independently re-derived
+                                 * here, same discipline as the other bits in
+                                 * this block. */
 #define VMS_PRV_V_PSWAPM    12
 #define VMS_PRV_V_SETPRI    13
 #define VMS_PRV_V_SETPRV    14
@@ -137,6 +143,7 @@ struct vms_mode_args {
 #define VMS_PRV_M_SYSNAM    (1ULL << VMS_PRV_V_SYSNAM)
 #define VMS_PRV_M_GRPNAM    (1ULL << VMS_PRV_V_GRPNAM)
 #define VMS_PRV_M_SETPRV    (1ULL << VMS_PRV_V_SETPRV)
+#define VMS_PRV_M_PRMMBX    (1ULL << VMS_PRV_V_PRMMBX)
 #define VMS_PRV_M_TMPMBX    (1ULL << VMS_PRV_V_TMPMBX)
 #define VMS_PRV_M_WORLD     (1ULL << VMS_PRV_V_WORLD)
 #define VMS_PRV_M_NETMBX    (1ULL << VMS_PRV_V_NETMBX)
@@ -1103,5 +1110,14 @@ _Static_assert(VMS_IOCTL_REGISTER == 0xC0085640u,
  * and userspace, on either architecture -- gets one frozen definition.
  * ================================================================ */
 #include "vms_lnm.h"
+
+/* ================================================================
+ * Mailboxes (executive-resident MBAn:, vms-d44).
+ *
+ * The ioctl structures and request numbers live in vms_mbx.h, included
+ * here for the same reason as vms_lnm.h above: one frozen definition for
+ * every consumer, kernel and userspace, on either architecture.
+ * ================================================================ */
+#include "vms_mbx.h"
 
 #endif /* _VMS_IOCTL_H */

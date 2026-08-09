@@ -1263,3 +1263,137 @@ int vms_kif_lnm_translate(uint32_t table, const char *name,
     /* Writer never quiesced -- treat as unavailable rather than guess. */
     return -1;
 }
+
+/* ================================================================
+ * Mailboxes (executive-resident MBAn:, vms-d44)
+ * ================================================================ */
+
+/*
+ * mbx_bind_ok - bind (open + register) and report whether /dev/vms is
+ * actually reachable, so a mailbox call can fail honestly with
+ * SS$_NOSUCHDEV rather than let a bad-fd ioctl fall through kif_call()'s
+ * generic errno mapping to SS$_BUGCHECK (CLAUDE.md Rule 9 / INV-6). Same
+ * technique as vms_kif_lnm_arena()'s mmap probe, without an mmap step of
+ * its own: mailboxes have no read-only arena to map, so this checks the
+ * bound descriptor directly.
+ */
+static int mbx_bind_ok(void)
+{
+    kif_bind();
+    return vms_dev_fd >= 0;
+}
+
+uint32_t vms_kif_mbx_create(int permanent, uint32_t maxmsg, uint32_t bufquo,
+                            uint32_t *exec_chan, uint32_t *unit,
+                            char *devnam, uint32_t devnam_sz)
+{
+    struct vms_mbx_create_args args;
+
+    if (!mbx_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.permanent = permanent ? 1 : 0;
+    args.maxmsg = maxmsg;
+    args.bufquo = bufquo;
+
+    KIF_CALL(VMS_IOCTL_MBX_CREATE, &args);
+
+    if (args.status & 1) {
+        if (exec_chan) *exec_chan = args.chan;
+        if (unit) *unit = args.unit;
+        if (devnam && devnam_sz > 0) {
+            vms_strncpy(devnam, args.devnam, devnam_sz - 1);
+            devnam[devnam_sz - 1] = '\0';
+        }
+    }
+    return args.status;
+}
+
+uint32_t vms_kif_mbx_assign(const char *devnam, uint32_t *exec_chan)
+{
+    struct vms_mbx_assign_args args;
+
+    if (!devnam || !exec_chan)
+        return SS$_BADPARAM;
+    if (!mbx_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, sizeof(args.devnam) - 1);
+    args.devnam[sizeof(args.devnam) - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_MBX_ASSIGN, &args);
+
+    if (args.status & 1) *exec_chan = args.chan;
+    return args.status;
+}
+
+uint32_t vms_kif_mbx_delmbx(uint32_t exec_chan)
+{
+    struct vms_mbx_delmbx_args args;
+
+    if (!mbx_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+
+    KIF_CALL(VMS_IOCTL_MBX_DELMBX, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len)
+{
+    struct vms_mbx_write_args args;
+
+    if (!buf)
+        return SS$_BADPARAM;
+    if (len > VMS_MBX_IOCTL_MAXLEN)
+        return SS$_EXQUOTA;
+    if (!mbx_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.len = len;
+    vms_memcpy(args.data, buf, len);
+
+    KIF_CALL(VMS_IOCTL_MBX_WRITE, &args);
+
+    return args.status;
+}
+
+/*
+ * vms_kif_mbx_read - blocks until a message is queued. Uses
+ * kif_wait_call(), the same EINTR-retry helper $WAITFR/$WFLOR/$WFLAND use:
+ * the executive's VMS_IOCTL_MBX_READ handler returns -ERESTARTSYS with no
+ * status on a signal (see vms_mbx.c), exactly like a VMS mailbox read,
+ * which has no "the wait was interrupted" condition value to report.
+ */
+uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                          uint32_t *actlen)
+{
+    struct vms_mbx_read_args args;
+    uint32_t n;
+
+    if (!buf)
+        return SS$_BADPARAM;
+    if (!mbx_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.bufsz = (bufsz > VMS_MBX_IOCTL_MAXLEN) ? VMS_MBX_IOCTL_MAXLEN : bufsz;
+
+    KIF_WAIT_CALL(VMS_IOCTL_MBX_READ, &args);
+
+    if (args.status & 1) {
+        n = args.len;
+        if (n > args.bufsz) n = args.bufsz;
+        vms_memcpy(buf, args.data, n);
+        if (actlen) *actlen = args.len;
+    }
+    return args.status;
+}

@@ -101,4 +101,18 @@
 # deferred other half of vms-d37's LNM$SYSTEM work), the first mutation
 # targeting derive_scope_key()'s LNM$GROUP case in kernel/vms_lnm.c. See its
 # own entry in facility_defects.sh for what it covers and why.
-65
+#
+# NOTE: this file was not updated when lnm-privilege-check-bypassed and
+# mbx-not-shared landed (DEFECTS reached 67 without a matching entry here).
+# Not fixed retroactively by this edit -- the floor is a MINIMUM, and 67 >=
+# 65 still passed -- but flagged so the gap is not mistaken for a re-derived
+# count. The line below only asserts the count as of THIS entry, vms-5bdc.
+#
+# Raised to 68 by vms-5bdc's p0-map-not-recorded -- vms-68f.i, the P0
+# program-region bookkeeping foundation of the Option A in-process image
+# activation design (docs/design-in-process-activation.md Part II). The
+# first mutation targeting the new kernel/vms_p0.c, anchoring the new
+# test_kmod_p0 suite (VMS_IOCTL_P0_MAP/P0_UNMAP, reflected through
+# $GETJPI's new p0_base/p0_limit fields). See its own entry in
+# facility_defects.sh for what it covers and why.
+68

@@ -450,6 +450,22 @@ struct vms_proc {
      */
     char                terminal[VMS_DEVNAM_SIZE];
 
+    /*
+     * P0 program-region extent (vms-68f.i, in-process image activation
+     * foundation). [p0_base, p0_limit) is the VA range VMS_IOCTL_P0_MAP
+     * last registered for this process; both zero while no image is
+     * mapped into P0. See the struct vms_procinfo comment in
+     * vms_ioctl.h for what this ioctl pair does and does not claim.
+     *
+     * A dedicated lock rather than mode_lock or hash_lock: this is
+     * accounting for a fact userspace already established (the P0
+     * window mmap), not a decision the executive is enforcing, and it
+     * has no ordering dependency on either of those locks' contents.
+     */
+    uint64_t            p0_base;
+    uint64_t            p0_limit;
+    spinlock_t          p0_lock;
+
     struct rcu_head     rcu;
 };
 
@@ -634,6 +650,14 @@ long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
  * definition in vms_proctab.c and docs/oracle/vax73-privileges.md §5. */
 bool vms_proc_may_read(const struct vms_proc *caller,
                        const struct vms_proc *target);
+
+/*
+ * P0 program region (vms-68f.i, in-process image activation foundation).
+ * Records/clears [p0_base, p0_limit) for the calling process; see
+ * vms_p0.c and the struct vms_p0_args comment in vms_ioctl.h.
+ */
+long vms_ioctl_p0_map(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_p0_unmap(struct vms_proc *proc, unsigned long arg);
 
 /* Logical name tables (executive-resident LNM$SYSTEM/GROUP/JOB, vms-d37) */
 struct file;

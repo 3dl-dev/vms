@@ -432,6 +432,11 @@ struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
      * next_chan counter as the device channels above (vms_mbx.h). */
     INIT_LIST_HEAD(&proc->mbx_channels);
 
+    /* P0 program region (vms-68f.i): unmapped until VMS_IOCTL_P0_MAP
+     * records an extent. kmem_cache_zalloc() above already zeroed
+     * p0_base/p0_limit; only the lock needs initializing. */
+    spin_lock_init(&proc->p0_lock);
+
     /* Atomically check-and-insert under spinlock to avoid TOCTOU race */
     spin_lock(&vms_proc_hash_lock);
     hash_for_each_possible_rcu(vms_proc_hash, existing, hash_node, pid) {
@@ -750,6 +755,12 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_mbx_read(proc, arg);
     case VMS_IOCTL_MBX_DELMBX:
         return vms_ioctl_mbx_delmbx(proc, arg);
+
+    /* P0 program region (vms-68f.i, in-process image activation foundation) */
+    case VMS_IOCTL_P0_MAP:
+        return vms_ioctl_p0_map(proc, arg);
+    case VMS_IOCTL_P0_UNMAP:
+        return vms_ioctl_p0_unmap(proc, arg);
 
     default:
         return -ENOTTY;

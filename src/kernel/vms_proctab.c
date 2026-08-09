@@ -211,6 +211,16 @@ static void proc_fill_info(const struct vms_proc *proc,
      */
     memcpy(info->terminal, proc->terminal, VMS_DEVNAM_SIZE);
     info->terminal[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    /*
+     * P0 program-region extent (vms-68f.i). Same placement as terminal
+     * just above -- below the redaction early return, not above it: a
+     * process's memory layout is part of what the oracle's blanket
+     * cross-group refusal withholds (docs/oracle/vax73-privileges.md
+     * §5), not a fact enumeration alone exposes.
+     */
+    info->p0_base = proc->p0_base;
+    info->p0_limit = proc->p0_limit;
 }
 
 /*

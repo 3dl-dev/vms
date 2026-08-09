@@ -959,6 +959,61 @@ uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info)
 }
 
 /* ================================================================
+ * P0 program region (vms-68f.i, in-process image activation foundation)
+ * ================================================================ */
+
+/*
+ * Both calls below bind (open + register) and check the descriptor
+ * DIRECTLY, inline, rather than through a shared static helper: this
+ * facility has no read-only arena to mmap the way vms_kif_lnm_arena()
+ * does, and a named helper not itself prefixed vms_kif_ would be a new,
+ * unreachable entry in tests/integration/test_kif_caller_census.sh's
+ * definition-side universe with no way to declare it unwired (the
+ * escape hatch's own pattern requires the vms_kif_ prefix -- see that
+ * script's OVMX-UNWIRED regex). Two lines duplicated twice is cheaper
+ * than a helper the census cannot let through cleanly.
+ */
+
+uint32_t vms_kif_p0_map(uint64_t base, uint64_t limit)
+{
+    struct vms_p0_args args;
+
+    if (base == 0 || limit <= base)
+        return SS$_BADPARAM;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.base = base;
+    args.limit = limit;
+
+    KIF_CALL(VMS_IOCTL_P0_MAP, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_p0_unmap(uint64_t *old_base, uint64_t *old_limit)
+{
+    struct vms_p0_args args;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+
+    KIF_CALL(VMS_IOCTL_P0_UNMAP, &args);
+
+    if (args.status & 1) {
+        if (old_base) *old_base = args.base;
+        if (old_limit) *old_limit = args.limit;
+    }
+    return args.status;
+}
+
+/* ================================================================
  * Logical name tables (executive-resident LNM$SYSTEM, vms-d37)
  * ================================================================ */
 

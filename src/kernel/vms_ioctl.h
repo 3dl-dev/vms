@@ -854,6 +854,33 @@ struct vms_procinfo {
      * no channel to, and cannot name a device that does not exist.
      */
     char     terminal[VMS_DEVNAM_SIZE];   /* "" when the job has no terminal */
+
+    /*
+     * P0 program-region extent (vms-68f.i, in-process image activation
+     * foundation -- docs/design-in-process-activation.md Part II §A.2.1).
+     * [p0_base, p0_limit) is the virtual-address range VMS_IOCTL_P0_MAP
+     * last registered for this process; both zero when no image is
+     * currently mapped into P0 (the process has never RUN an image
+     * in-process, or the last one was rundown by VMS_IOCTL_P0_UNMAP).
+     *
+     * OVMX DESIGN CHOICE (CLAUDE.md Rule 8), stated rather than implied:
+     * OpenVMS publishes no $GETJPI item that reports a raw P0 base/limit
+     * virtual address pair -- what is pinned to the design (IDSM,
+     * "Process Address Space") is the PROPERTY these two fields exist to
+     * make observable: a P0 program region that exists while an image is
+     * activated and is gone after image rundown, distinct from P1
+     * (process-permanent) state. There is no VMS wire format being
+     * claimed for these two field names or their byte layout.
+     *
+     * WITHHELD WITH THE REST OF THE IDENTITY on a row the caller may not
+     * $GETJPI, same placement rule as `terminal` above: a process's
+     * memory layout is not something a same-UIC-group stranger gets for
+     * free either, and the oracle's blanket refusal in
+     * docs/oracle/vax73-privileges.md §5 covers "every item", not a
+     * subset.
+     */
+    uint64_t p0_base;
+    uint64_t p0_limit;
 };
 
 /*
@@ -1066,14 +1093,19 @@ struct vms_setterm_args {
  * the kernel module and every userspace client are rebuilt together
  * from this one header, so the break is a compile-time event, not a
  * runtime mis-decode.
+ *
+ * THEY MOVED AGAIN WHEN p0_base/p0_limit WERE ADDED (vms-68f.i):
+ * procinfo 96 -> 112, getjpi_args 168 -> 184, procscan_args 104 -> 120,
+ * and with them the GETJPI and PROCSCAN request numbers a second time.
+ * Same discipline, same reason.
  */
-_Static_assert(sizeof(struct vms_procinfo) == 96,
+_Static_assert(sizeof(struct vms_procinfo) == 112,
                "vms_procinfo layout changed: process-table ioctl ABI break");
 _Static_assert(sizeof(struct vms_setprn_args) == 72,
                "vms_setprn_args layout changed: VMS_IOCTL_SETPRN ABI break");
-_Static_assert(sizeof(struct vms_getjpi_args) == 168,
+_Static_assert(sizeof(struct vms_getjpi_args) == 184,
                "vms_getjpi_args layout changed: VMS_IOCTL_GETJPI ABI break");
-_Static_assert(sizeof(struct vms_procscan_args) == 104,
+_Static_assert(sizeof(struct vms_procscan_args) == 120,
                "vms_procscan_args layout changed: VMS_IOCTL_PROCSCAN ABI break");
 _Static_assert(sizeof(struct vms_setterm_args) == 8,
                "vms_setterm_args layout changed: VMS_IOCTL_SETTERM ABI break");
@@ -1091,9 +1123,9 @@ _Static_assert(VMS_PRCNAM_XFER > VMS_PRCNAM_SIZE,
                "VMS_PRCNAM_XFER must exceed VMS_PRCNAM_SIZE or oversized names get truncated into valid ones");
 _Static_assert(VMS_IOCTL_SETPRN == 0xC0485641u,
                "VMS_IOCTL_SETPRN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_GETJPI == 0xC0A85642u,
+_Static_assert(VMS_IOCTL_GETJPI == 0xC0B85642u,
                "VMS_IOCTL_GETJPI encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_PROCSCAN == 0xC0685643u,
+_Static_assert(VMS_IOCTL_PROCSCAN == 0xC0785643u,
                "VMS_IOCTL_PROCSCAN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_SETIDENT == 0xC0305644u,
                "VMS_IOCTL_SETIDENT encodes differently here than on the reference build");
@@ -1101,6 +1133,68 @@ _Static_assert(VMS_IOCTL_SETTERM == 0xC0085645u,
                "VMS_IOCTL_SETTERM encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_REGISTER == 0xC0085640u,
                "VMS_IOCTL_REGISTER encodes differently here than on the reference build");
+
+/* ================================================================
+ * P0 program region (vms-68f.i, in-process image activation foundation)
+ *
+ * docs/design-in-process-activation.md Part II, §A.2.1. On OpenVMS,
+ * activating an image maps it into the process's P0 (program) region;
+ * image rundown deletes that region and leaves P1 (process-permanent
+ * state -- DCL's own code/data, the user stack, LNM$PROCESS) untouched.
+ * There is exactly one VMS process throughout (§A.1.1, §A.1.3).
+ *
+ * THIS INCREMENT ONLY: the executive RECORDS a process's current P0
+ * extent so it is observable (via struct vms_procinfo.p0_base/p0_limit,
+ * above) and can be cleared. It does not itself map or unmap any memory
+ * -- the P0 window reservation and the per-image PT_LOAD mmaps into it
+ * are DCL/imgact$activate's job, in userspace, per the design's
+ * MAP_FIXED-into-a-PROT_NONE-reservation model (§A.2.1 steps 1-4). This
+ * ioctl pair is the executive's half of step 4 ("register the P0 extent
+ * ... so it knows this process has an image mapped") and of rundown step
+ * 4 ("executive marks the process image-less"). Activating an image in
+ * P0 (increment iv), rundown releasing image-scoped executive state
+ * (increment v) and the access-mode transitions around them (increment
+ * iii) are NOT this increment's scope.
+ *
+ * INV-6: no /dev/vms -> the vms_kif_p0_map/p0_unmap wrappers return
+ * SS$_NOSUCHDEV (src/libvmssys/vms_kif.c) -- there is no per-process
+ * fallback that fabricates a mapped-or-unmapped answer when the
+ * executive cannot be reached.
+ *
+ * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): this ioctl pair, its argument
+ * layout and its request numbers are OVMX's own -- OpenVMS publishes no
+ * public byte-level interface for "tell the executive my P0 extent",
+ * only the property being reproduced (see the vms_procinfo comment
+ * above). Nothing here is presented as a VMS-authentic wire format.
+ */
+
+struct vms_p0_args {
+    uint64_t base;      /* P0_MAP: in, region base VA. P0_UNMAP: out, the
+                         * extent that WAS mapped (0 if none was). */
+    uint64_t limit;     /* P0_MAP: in, region limit VA (exclusive).
+                         * P0_UNMAP: out, same convention as base. */
+    uint32_t status;    /* return: SS$_ status */
+    uint32_t pad;
+};
+
+#define VMS_IOCTL_P0_MAP    _IOWR(VMS_IOC_MAGIC, 0x63, struct vms_p0_args)
+#define VMS_IOCTL_P0_UNMAP  _IOWR(VMS_IOC_MAGIC, 0x64, struct vms_p0_args)
+
+/*
+ * ABI lock, same discipline as the process-table block above: these
+ * ioctls fold sizeof(struct vms_p0_args) into their request number, so a
+ * struct-size drift silently renumbers the ioctl (-ENOTTY, not a
+ * mis-decode) rather than failing to compile. 0x63/0x64 sit in the gap
+ * between the logical-name ioctls (vms_lnm.h, 0x60-0x62) and the mailbox
+ * ioctls (vms_mbx.h, 0x70-0x74) -- neither header is touched by this
+ * addition.
+ */
+_Static_assert(sizeof(struct vms_p0_args) == 24,
+               "vms_p0_args layout changed: VMS_IOCTL_P0_MAP/P0_UNMAP ABI break");
+_Static_assert(VMS_IOCTL_P0_MAP == 0xC0185663u,
+               "VMS_IOCTL_P0_MAP encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_P0_UNMAP == 0xC0185664u,
+               "VMS_IOCTL_P0_UNMAP encodes differently here than on the reference build");
 
 /* ================================================================
  * Logical name tables (executive-resident LNM$SYSTEM/GROUP/JOB).

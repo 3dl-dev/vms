@@ -2,14 +2,33 @@
 # Bead vms-9dd, pillar vms-ade. These are host tools built by the bootstrap
 # toolchain: they read ELF .o and write OVMX shareable images (ELF ET_DYN +
 # .vms$sv symbol vector). They are not themselves VMS images.
+#
+# HOST-TOOL exemption from OVMX_IMGACT (vms-0b8): when OVMX_IMGACT=ON the top-
+# level CMakeLists injects `-Wl,--dynamic-linker=/vms/.../IMGACT.EXE` into the
+# GLOBAL CMAKE_EXE_LINKER_FLAGS so OVMX *runtime* executables (DCL.EXE, ...)
+# carry PT_INTERP=IMGACT.EXE. LINK.EXE is NOT a runtime image — it is a build
+# tool that must EXECUTE on the build host during `cmake --build` (the
+# link_native_graph target runs it to produce the shareable graph). Poisoning
+# its PT_INTERP with a path that does not exist on the build host makes exec
+# fail with ENOENT/127 ("LINK.EXE: not found" even though the file is present),
+# which is exactly what kept the OVMX_IMGACT musl CI jobs red. Link these host
+# tools statically so they have NO PT_INTERP and run regardless of the image
+# activator — the standalone src/imgact/Makefile / src/vmslink Makefile path
+# builds them as ordinary host binaries for the same reason.
+set(OVMX_HOST_TOOL_LINK_OPTS "")
+if(OVMX_IMGACT)
+    set(OVMX_HOST_TOOL_LINK_OPTS -static)
+endif()
 
 add_executable(vmslink link.c)
 target_include_directories(vmslink PRIVATE include)
+target_link_options(vmslink PRIVATE ${OVMX_HOST_TOOL_LINK_OPTS})
 set_target_properties(vmslink PROPERTIES OUTPUT_NAME "LINK" SUFFIX ".EXE")
 install(TARGETS vmslink RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
 add_executable(vmsdump dump_image.c)
 target_include_directories(vmsdump PRIVATE include)
+target_link_options(vmsdump PRIVATE ${OVMX_HOST_TOOL_LINK_OPTS})
 set_target_properties(vmsdump PROPERTIES OUTPUT_NAME "OVMXDUMP" SUFFIX "")
 install(TARGETS vmsdump RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 

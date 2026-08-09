@@ -33,8 +33,14 @@ add_executable(imgact
     ${IMGACT_ARCHDIR}/start.S
 )
 
-# Shared OVMX image + symbol-vector format/resolver (LINK.EXE contract).
-target_include_directories(imgact PRIVATE ${CMAKE_SOURCE_DIR}/src/vmslink/include)
+# Shared OVMX image + symbol-vector format/resolver (LINK.EXE contract), plus
+# the libvms public headers for the resident-producer registry ABI
+# (imgact_prodreg.h — struct imgact_prod_pub, imgact_publish_producers; vms-db2).
+# Mirrors the standalone src/imgact/Makefile include path (-I../vmslink/include
+# -I../libvms/include) so the CMake OVMX_IMGACT build sees the same headers.
+target_include_directories(imgact PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmslink/include
+    ${CMAKE_SOURCE_DIR}/src/libvms/include)
 
 target_compile_options(imgact PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-std=gnu11>

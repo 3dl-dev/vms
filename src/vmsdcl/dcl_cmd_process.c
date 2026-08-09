@@ -1165,16 +1165,19 @@ int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
      * foreign command / a DCL utility activates the image IN this process --
      * no new PID -- and image rundown returns here. This is the dispatch
      * point: imgact_activate() runs the image in-process when it is
-     * in-process-eligible and a real /dev/vms is present. TWO classes now take
-     * the in-process path (vms-db2, the real-image FLIP): increment iv's marker
-     * image entered through the (a0,a1) function ABI, AND a REAL image entered
-     * through the SysV auxv `_start` ABI whose .vms$imp universal-symbol imports
-     * all bind to the ALREADY-RESIDENT producer -- it ends by calling the
+     * in-process-eligible and a real /dev/vms is present. The in-process path
+     * now takes (vms-db2): increment iv's marker image entered through the
+     * (a0,a1) function ABI; a REAL image entered through the SysV auxv `_start`
+     * ABI whose .vms$imp imports all bind to the ALREADY-RESIDENT producer; AND
+     * (the EXTERNAL-image flip) such an image carrying a PT_INTERP that names
+     * the OVMX loader (IMGACT.EXE) -- a genuinely external LINK.EXE executable,
+     * whose interpreter in-process activation itself is. It ends by calling the
      * resident SYS$EXIT (imgact_image_exit), which returns control HERE in the
-     * same process. It still returns SS$_UNSUPPORTED for an image with a
-     * PT_INTERP, an own PT_TLS, a symbolic (PLT) reloc, or an import naming a
-     * NON-resident producer -- a full external LINK.EXE image not yet flipped,
-     * deferred on vms-db2 -- and SS$_NOSUCHDEV with no executive, in which cases
+     * same process. It still returns SS$_UNSUPPORTED for an image with a FOREIGN
+     * PT_INTERP (a real ld.so, a shebang), an own PT_TLS, a symbolic (PLT)
+     * reloc, or an import naming a NON-resident producer -- the full 55 KB
+     * loader re-homing (PT_TLS/DTV, non-resident producer mapping) is the
+     * deferred remainder on vms-db2 -- and SS$_NOSUCHDEV with no executive, in which cases
      * activation falls through to the fork()+execve() model below (design
      * §A.6.6: the fork stays the fallback for those classes; SPAWN / RUN/DETACHED
      * / PIPE never take this path -- they create genuinely new processes).

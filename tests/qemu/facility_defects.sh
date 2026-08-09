@@ -487,7 +487,8 @@ image-rundown-leaks-user-lock
 imgact-p1-not-protected
 consumer-import-not-bound-to-resident
 publish-does-not-populate-registry
-realimg-auxv-argc-wrong"
+realimg-auxv-argc-wrong
+extern-interp-check-rejects-ours"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4396,6 +4397,26 @@ EOF
         knock_on_why)  echo "SAME DEFECT, OBSERVED THROUGH THE EXECUTIVE FLOWS-BACK. With argc laid wrong the in-process real image never reaches its resident vms_kif_setef call (it exits early on the bad-ABI branch), so the event flag DCL reads back afterwards is clear. The wrong exit code (require_fail) and the missing event flag (this assertion) are two faces of the one mis-built auxv stack, not two independent properties: both say the image was handed a stack it could not trust, so it did none of its resident-service work.";;
         esac;;
 
+    extern-interp-check-rejects-ours)
+        case "$_f" in
+        facility)     echo "in-process image activation, ACCEPTING a PT_INTERP that names the OVMX loader for a genuinely EXTERNAL image (imgact_activate() -> imgact_interp_is_ours, vms-db2 -- the §A.8-remainder item 2 / external-image flip of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.8: a real LINK.EXE executable names IMGACT.EXE in PT_INTERP, and in-process activation IS that loader, so the image runs in DCL's process instead of forking)";;
+        targets)      echo "libvms/syssvc/sys_imgact.c";;
+        suites_red)   echo "test_syssvc_imgact_extern";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "imgact_interp_is_ours() returns 0 for EVERY interpreter (the final \`return want[j] == '\\0' && bn[j] == '\\0';\` replaced by \`return 0;\`), so an image that names the OVMX loader (IMGACT.EXE) in its PT_INTERP -- a genuinely external LINK.EXE executable -- is now treated as FOREIGN-interpreted and REFUSED the in-process path (SS\$_UNSUPPORTED -> the caller forks). This is exactly the class the external-image flip exists to run in-process: the PT_INTERP acceptance is what makes a real linker-produced executable eligible. TESTEXTERN.EXE carries such a PT_INTERP; with the check mutated to reject it, imgact_activate refuses TESTEXTERN and it never runs in DCL's process, so the suite's SS\$_NORMAL / same-PID / SYS\$EXIT-returned / flows-back / shared-TLS assertions all fail. The foreign-interp control (TESTEXTERN_FOREIGN) still returns SS\$_UNSUPPORTED under the mutation, and the no-PT_INTERP TESTREAL image (interp_sz == 0) never reaches this check, so ONLY the external-image flip assertions can tell the difference -- one minimal mutation, one property (accepting the OVMX loader's own PT_INTERP is load-bearing, not decorative).";;
+        require_fail) cat <<'EOF'
+the EXTERNAL image (with a PT_INTERP naming the OVMX loader) ran in-process and returned SS$_NORMAL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the VMS PID is UNCHANGED across the RUN of an EXTERNAL image -- no fork (the crux)
+EOF
+                      ;;
+        knock_on_why)  echo "SAME DEFECT, OBSERVED THROUGH THE NO-FORK CRUX. With imgact_interp_is_ours rejecting the OVMX loader's own name, TESTEXTERN is refused the in-process path entirely -- it never activates in DCL's process, so the VMS PID recorded after the (failed) activation is not compared against a run that happened in-process. The refused SS\$_NORMAL (require_fail) and the unproven same-PID (this assertion) are two faces of the one over-strict interp check: both say the external image was denied the in-process path its PT_INTERP naming the OVMX loader should have granted it.";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -4977,6 +4998,17 @@ apply_edit() {
         # bad-ABI SYS$EXIT code and skips its resident-service work. Idempotent:
         # after the edit there is no `w[k++] = 1;` left to match.
         sed -i 's|w\[k++\] = 1;.*argc.*|w[k++] = 0; /* NEGCTL realimg-auxv-argc-wrong: argc mis-built */|' "$_file";;
+
+    extern-interp-check-rejects-ours)
+        # UNIQUE TEXT: imgact_interp_is_ours()'s final basename-match return is
+        # the only `return want[j] == '\0' && bn[j] == '\0';` in the file.
+        # Forcing it to 0 makes EVERY PT_INTERP read as foreign, so an external
+        # image naming the OVMX loader is refused the in-process path and forks
+        # -- the whole point of the external-image flip. The foreign-interp
+        # control still returns SS$_UNSUPPORTED and the no-PT_INTERP TESTREAL
+        # never reaches this function, so only the external flip's assertions
+        # redden. Idempotent: after the edit there is no such return left to match.
+        sed -i "s|    return want\[j\] == '\\\\0' \&\& bn\[j\] == '\\\\0';|    return 0; /* NEGCTL extern-interp-check-rejects-ours: OVMX loader rejected */|" "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

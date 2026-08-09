@@ -17,21 +17,29 @@
  * src/libvms/syssvc/sys_imgact.c's header.)
  *
  * SCOPE -- a PROVEN PARTIAL, honest about its ceiling.
- * imgact_activate() takes the in-process path ONLY for an image that carries
- * the OVMX in-process marker note (IMGACT_NOTE_*), has no PT_INTERP, no PT_TLS,
- * and only R_*_RELATIVE dynamic relocations -- i.e. a position-independent OVMX
- * image entered through the (a0,a1) function-call ABI below. Such an image MAY
- * now import universals from an already-resident shareable through a .vms$imp
- * table: those imports are bound to the RESIDENT producer via the registry in
- * imgact_prodreg.h (vms-db2), never a private copy. An import naming a producer
- * that is NOT resident, or any image with a PT_INTERP / PT_TLS / the SysV auxv
- * entry ABI (a real DCL utility, a LINK.EXE _start image), returns
- * SS$_UNSUPPORTED so the caller keeps the fork model (design §A.6.6 / §A.8
- * remainder: B stays the RUN fallback until IMGACT publishes the resident
- * registry at DCL startup and the auxv-entry/exit + shared-TLS pieces land, at
- * which point real images flip in-process). With no /dev/vms it returns
- * SS$_NOSUCHDEV and refuses to run the image at all (INV-6: no per-process fake
- * of an executive facility).
+ * imgact_activate() takes the in-process path for an image that carries the
+ * OVMX in-process marker note (IMGACT_NOTE_*), has no own PT_TLS, and only
+ * R_*_RELATIVE dynamic relocations (no symbolic PLT). It is entered either
+ * through the increment-iv (a0,a1) function-call ABI or, for a REAL image, the
+ * SysV auxv `_start` ABI (IMGACT_ABI_AUXV). Such an image MAY import universals
+ * from an already-resident shareable through a .vms$imp table: those imports are
+ * bound to the RESIDENT producer via the registry in imgact_prodreg.h (vms-db2),
+ * never a private copy.
+ *
+ * PT_INTERP (vms-db2, the EXTERNAL-image flip, §A.8 remainder item 2). A
+ * genuinely external LINK.EXE image names its loader in PT_INTERP
+ * (src/vmslink/link.c emits "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"). In-process
+ * activation IS that loader, so an interp whose basename is the OVMX loader
+ * (IMGACT.EXE) does NOT disqualify the image -- imgact_activate does the
+ * interpreter's job in DCL's own process. An interp naming a FOREIGN loader (a
+ * real ld.so, a #! shell) is refused SS$_UNSUPPORTED so the caller forks.
+ *
+ * Still refused (SS$_UNSUPPORTED -> caller forks): an image with its OWN PT_TLS,
+ * a symbolic (PLT) reloc, or a .vms$imp import naming a NON-resident producer --
+ * the full 55 KB loader re-homing (PT_TLS/DTV append, in-process mapping of a
+ * non-resident producer graph) is the deferred remainder (design §A.8 item 1/4).
+ * With no /dev/vms it returns SS$_NOSUCHDEV and refuses to run the image at all
+ * (INV-6: no per-process fake of an executive facility).
  *
  * THE ENTRY ABI (OVMX design choice, Rule 8 -- no VMS byte format claimed):
  * an eligible image is entered as `long entry(long a0, long a1)`; a0/a1 are

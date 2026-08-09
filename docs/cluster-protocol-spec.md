@@ -4886,6 +4886,16 @@ For visibility, every field NOT marked GROUNDED above:
 
 ### 5(z) OPEN — the last gap to `MEMBER` (current frontier)
 
+> **UPDATED 2026-08-09 (`vms-694`).** The `MEMBER ACHIEVED` result below is a
+> pristine 3-node **FORMATION** (lab-1, all peers boot with OVMX). A **different**
+> gap now blocks `NEW → MEMBER` on an **ESTABLISHED** cluster (peers already
+> running before OVMX joins, lab-2): OVMX's own fixed-per-role Con.IDs
+> (`OVMX_JOINER_CONID` etc.) collide across multiple pre-existing peers, so a
+> second peer's reciprocal CM traffic is silently dropped as
+> `SCS_DELIVER_SRC_MISMATCH` before it ever reaches the CM layer described
+> below. See §4(x) for the live evidence (3/3 lab-2 runs) and the root cause in
+> `scs_cdt.c`. Not yet fixed — scoped as the next deliverable in §4(x).
+
 **Resolved since the previous entry** (which wrongly concluded admission was
 gated above the SCS layer — it was a half-open VC, §4m, plus a directed-HELLO
 addressing bug, §4a.0). OVMX now:
@@ -5161,6 +5171,99 @@ both on 1602. Every experiment run under a collided identity produces a null
 result that reads as a `vms-2f3` stall. The uniqueness guard added in `vms-1ae`
 refuses the collision at mint time (and names the store it collides with);
 `tests/integration/test_lab_identity_unique.sh` is its gate.
+
+### 4(x) NEW→MEMBER on an ESTABLISHED multi-peer cluster: the joiner's own Con.ID collides across peers (GROUNDED live, `vms-694`, 2026-08-09)
+
+**What this is.** §4(L)(7) and §5(z) left `NEW → MEMBER` open. §5(z)'s own
+`MEMBER ACHIEVED` result (`docs/HANDOFF-vms-760.md` §1) was on a **pristine
+3-node lab-1 FORMATION** — all peers boot alongside OVMX. This section grounds a
+**distinct** failure that only appears in an **ESTABLISHED** cluster (peers
+already `MEMBER`/`MEMBER` before OVMX starts, lab-2 `vaxlab-0`, VAX1 sysid 1025 +
+VAX2 sysid 1026): the join sequencer (`OVMX_JOIN_SEQ=1`) now reliably drives a
+fresh identity through all 8 steps to `SCSD-I-CMCONFIG2` (deferred `op 0x02` to
+the chosen peer, per §4(L)) and `SHOW CLUSTER` status `NEW` — but the peer's
+reciprocal traffic **never arrives**, across three independent 150 s lab-2 runs:
+
+| run (tag) | peer sent `op 0x02` | `CLUSTER_NODES` after 150–156 s | inbound CM frames from peers |
+|---|---|---|---|
+| `vms694A` (pre-cadence-fix) | — (stalled earlier, §1h) | 2 (unchanged) | 0 |
+| `vms694fix` (post-#211 retx fix) | node 2 (VAX2, default `cm_pick_coordinator`) | 2 (unchanged) | 0 (`CM census` empty of inbound `cat 0x0*`) |
+| `vms694memb1` (`OVMX_CFG2_PEER=1` forced to VAX1) | node 1 (VAX1) | 2 (unchanged) | 0 |
+
+**The root cause, found in the daemon's OWN receive path, not the wire.** Every
+run logs repeated `SCSD-W-RXSRCMISMATCH` for **both** peers on **both** of
+OVMX's own client Con.IDs (`SCS$DIRECTORY` role and the `VMS$VAXcluster` joiner
+role) — e.g. `vms694memb1`'s SCSD log:
+
+```
+[02:17:04.181] SCSD-W-RXSRCMISMATCH, application message for conid=0x68CA0002
+  carries source conid=0xEABD000F, which is not that connection's remote
+  handle (p. 2-35) -- not delivered
+```
+
+(the same signature appears for the default-peer run, `vms694cadence-scsd.log`
+lines 117–187, and for the rejoin run, `vms694cadence-rejoin-scsd.log` lines
+862–908 — three separate runs, 100% reproduction). `0x68CA0002` is
+`OVMX_JOINER_CONID` (`scsd.c`); the two peers' frames addressed to it carry
+**two different** source Con.IDs (`0x2F5E000A` from VAX2, `0xEABD000F` from
+VAX1) because each peer independently allocates its own handle for the
+connection **we** opened to **it**.
+
+`scs_cdt.c`'s `scs_cdl_lookup()` keys a connection descriptor **purely on our
+local Con.ID** and holds exactly one bound `remote_conid` per slot;
+`scs_cdl_resolve()` accepts a frame only if its source Con.ID matches that one
+stored value (`SCS_DELIVER_SRC_MISMATCH` otherwise). But `OVMX_JOINER_CONID` —
+like `SCS_DIR_OVMX_JOINER_CONID`, `OVMX_LOCAL_CONID`, `OVMX_MSCP_CONID`, and the
+other role Con.IDs in `scsd.c` — is a **single fixed value for the entire
+daemon incarnation** (`ovmx_conid_base() | 0x0002u` etc.), shared by every peer.
+With one pre-existing peer this is invisible; with **two or more**, whichever
+peer's ACCEPT lands first wins that slot's binding and every other peer's
+legitimate reciprocal frames on the same role are silently dropped as
+`SRC_MISMATCH` forever after — which is exactly what all three runs show:
+zero inbound CM traffic, regardless of which specific peer is asked to
+reciprocate, because **neither** peer's Con.ID is ever the one already bound
+(or one is bound and the config request goes to the other).
+
+**This is not a fresh problem — it is the failure mode §4(t) already predicted.**
+§4(t) (`vms-584`) grounded that a real node allocates Con.IDs from **one
+monotonic counter per incarnation, shared across all service classes**, so no
+two simultaneous connections — even to different peers, even in the same role —
+ever share a value, and explicitly noted *"the peer binds whatever is offered
+and never validates the value... that is what makes changing OVMX's allocation
+safe."* `scsd.c`'s per-role **fixed** constants satisfy that grounding only in
+the single-peer case; §4(t)'s own reasoning already flags the multi-peer case
+as unsafe, and this section is the first live reproduction of the consequence.
+
+**Why lab-1's `MEMBER ACHIEVED` (07-30, §5(z)) may not have hit this.** Not
+established here — plausibly the coordinator-selection heuristic (`cm_pick_
+coordinator`, §4(L) citing `vax3-2to3-established-join`) happened to target
+the one peer whose Con.ID slot won the race in that run, or the FORMATION
+choreography (peers and joiner boot together) binds connections in a different
+order than an ESTABLISHED join does. Do not assume the 3-node success is
+Con.ID-collision-free without checking its own capture for `SRC_MISMATCH`
+equivalents — that check was not performed as part of this entry.
+
+**Scoped next step (NOT done here — see below for why).** Replace the fixed
+per-role joiner Con.IDs with a genuine per-peer allocation (e.g. a low-word
+counter seeded at today's constant, so the *first* peer/connection in any run
+keeps today's value and every existing single-peer test is unaffected; the
+*second* and later peers get distinct values), and re-key `scs_cdl`'s
+connection lookup — or thread a per-`peer_state` Con.ID — so two simultaneous
+connections of the same role never collide. Candidates: `OVMX_JOINER_CONID`
+(`scsd.c:493`), `SCS_DIR_OVMX_JOINER_CONID` (`scsd.c:566`), and the `OVMX_PS_*`
+pure-server variants (`scsd.c:553-554`) — roughly 15 production call sites in
+`scsd.c` plus ~30 test call sites in `tests/vmsscs/test_scsd_wire.c`,
+`test_scs_cdt.c` and `test_scs_dir.c` that assert against the literal macro.
+
+**Why this bounded increment stops at diagnosis.** The fix touches core CDT
+plumbing shared by every wire test in this file (which this epic's own context
+already flags as having rejected 12 rounds of under-grounded changes), and
+correctness requires re-verifying against the full 19-capture/141k-frame replay
+library (§4(m) precedent) before it can be trusted — beyond one session's bounded
+scope. The diagnosis is reproducible and cheap to re-check without a lab: any
+unit test that opens two `peer_state`s and drives both through the joiner-VC
+accept path, then delivers an app-message from the second peer, should surface
+`SCS_DELIVER_SRC_MISMATCH` today.
 
 ## 6. Using the dissector
 

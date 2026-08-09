@@ -1008,12 +1008,24 @@ jobs:
             '
 
   # -----------------------------------------------------------------------
-  # Job 5: Corpus conformance — compile tier1-examples against OVMX headers
+  # Job 5: Corpus conformance — compile+run tier1-examples against OVMX
   #
-  # This is a metric job, not a gate. It NEVER fails the build due to
-  # compile/link/run failures in the corpus — those are expected gaps.
-  # It DOES fail on regressions: a program that previously passed but
-  # now fails compilation.
+  # This is a GATE with a FALSIFIABLE FLOOR, not just a metric job.
+  #   - It fails on compile/link REGRESSIONS (a program that previously
+  #     passed but now fails compilation) — enforced by run_corpus.sh's
+  #     own exit code.
+  #   - It fails if the RUN-PASS count drops BELOW the committed baseline
+  #     floor in tests/conformance/corpus_baseline.json — enforced by the
+  #     "Enforce run-pass floor" step below. This catches run-pass -> run-
+  #     fail/link-fail/compile-fail slides that the compile-only regression
+  #     check does not see.
+  #
+  # The floor is exactly what run_corpus.sh measured on the committed tree
+  # (see the baseline's timestamp + summary). It is honest, not inflated:
+  # if run-pass is 42/229, the floor is 42. Raising the headline number
+  # means raising the committed baseline with a real measurement — never
+  # hand-editing it. No continue-on-error, no `|| true`: a floor that
+  # cannot fail is not a floor.
   #
   # The JSON report is uploaded as a build artifact for trend analysis.
   # -----------------------------------------------------------------------
@@ -1044,8 +1056,32 @@ jobs:
               { cmake --build build --parallel "$(nproc)"; } >&2
               bash /src/tests/conformance/run_corpus.sh /src/tests/conformance/corpus_baseline.json
             ' > corpus_report.json
-        # Exit code 0 = no regressions (even if many compile-fail)
-        # Exit code 1 = regression detected (previously-passing program now fails)
+        # Exit code 0 = no compile/link regressions (even if many compile-fail)
+        # Exit code 1 = compile/link regression (previously-passing program now fails)
+
+      # -------------------------------------------------------------------
+      # FALSIFIABLE FLOOR: fail the build if run-pass fell below the
+      # committed baseline. Runs on the ubuntu-latest host (jq is present);
+      # both files are plain JSON produced by the SAME harness, so the
+      # comparison is exact. This step is what converts the job from
+      # regression-only to a real conformance floor (vms-801, R2.0).
+      # -------------------------------------------------------------------
+      - name: Enforce run-pass floor (falsifiable conformance gate)
+        run: |
+          floor=$(jq '.summary."run-pass"' tests/conformance/corpus_baseline.json)
+          current=$(jq '.summary."run-pass"' corpus_report.json)
+          total=$(jq '.total' corpus_report.json)
+          echo "Corpus run-pass floor (committed baseline): ${floor}"
+          echo "Corpus run-pass current (this build):       ${current} / ${total}"
+          if ! [ "${floor}" -ge 0 ] 2>/dev/null || ! [ "${current}" -ge 0 ] 2>/dev/null; then
+            echo "::error::Could not read run-pass counts (floor='${floor}' current='${current}') — report or baseline malformed"
+            exit 1
+          fi
+          if [ "${current}" -lt "${floor}" ]; then
+            echo "::error::Corpus conformance REGRESSION — run-pass ${current} dropped below committed floor ${floor}. Fix the regression, or (if intended) re-run run_corpus.sh and commit the new corpus_baseline.json."
+            exit 1
+          fi
+          echo "Conformance floor held: ${current} >= ${floor}"
 
       - name: Upload corpus report
         if: always()

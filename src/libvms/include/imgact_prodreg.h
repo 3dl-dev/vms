@@ -27,7 +27,7 @@
  *
  * SCOPE (vms-db2, the flagged §A.8 remainder landed as a proven sub-step). This
  * is the import-binding-to-resident-shareable mechanism, proven in isolation
- * (tests/qemu/test_syssvc_imgact_bind.c: a resident producer with shared
+ * (tests/qemu/test_imgact_bind.c: a resident producer with shared
  * internal state, a consumer bound to it by vector index, the consumer's call
  * reaching the SAME resident instance -- genuine sharing, not a copy). What is
  * NOT here (still deferred, fork fallback intact -- real images do NOT activate
@@ -103,7 +103,7 @@ struct imgact_prod_pub {
  *
  * This is the substantive, isolation-testable half of §A.8-remainder gap 1: the
  * registry-population routine LIVES here in LIBVMS$SHR (host-testable, no
- * /dev/vms, proven by tests/qemu/test_syssvc_imgact_publish.c -- publish makes a
+ * /dev/vms, proven by tests/qemu/test_imgact_publish.c -- publish makes a
  * consumer's later bind reach the resident producer; skip it and the bind is
  * refused and the caller forks). The IMGACT-side glue that resolves this symbol
  * by name and marshals g_prods[] into the list is the thin, runtime-only

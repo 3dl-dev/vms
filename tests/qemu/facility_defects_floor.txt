@@ -146,8 +146,12 @@
 # .vms$imp imports must bind to the ALREADY-RESIDENT LIBVMS$SHR/DECC$SHR the
 # process holds, not a private copy (which would share nothing). Targets
 # libvms/syssvc/imgact_prodreg.c (imgact_bind_imports_resident's GOT-cell store)
-# and anchors the new test_syssvc_imgact_bind suite's genuine-sharing property,
+# and anchors the new test_imgact_bind suite's genuine-sharing property,
 # proven in isolation without /dev/vms. See its own entry in facility_defects.sh.
+# (test_imgact_bind was test_syssvc_imgact_bind through #225 -- renamed by a
+# main-red classification fix: it never touches /dev/vms and the
+# test_syssvc_ prefix wrongly put it under ci.yml's kernel-executive-negative-
+# control "must honest-skip 77" contract.)
 # Raised to 76 by vms-db2's publish-does-not-populate-registry -- the
 # §A.8-remainder gap 1 (publish the registry at runtime): IMGACT.EXE hands the
 # resident LIBVMS$SHR/DECC$SHR producer bases it mapped across to the registry
@@ -155,7 +159,9 @@
 # resolve against them -- the binding mechanism (consumer-import-not-bound-to-
 # resident) had nothing to bind against until this. Targets
 # libvms/syssvc/imgact_prodreg.c (imgact_publish_producers's register loop) and
-# anchors the new test_syssvc_imgact_publish suite's publish-then-share property,
+# anchors the new test_imgact_publish suite's publish-then-share property,
+# (landed directly as test_imgact_publish, never as test_syssvc_imgact_publish
+# -- see test_imgact_bind's note above; same classification reasoning.)
 # proven in isolation without /dev/vms. No image class is flipped -- real images
 # still fork (the IMGACT-side glue's end-to-end proof rides on the native-link
 # runtime, vms-0b8). See its own entry in facility_defects.sh.

@@ -111,9 +111,14 @@ RUN KVER=$(cat /tmp/kver) && \
 # by pattern and dispatched to a build recipe by pattern, so a suite added by
 # a future item reaches the image with no Dockerfile edit. Three recipes:
 #
-#   test_syssvc_*.c            -> NOT built here; built by the cmake/musl
-#                                 stage below against the REAL src/libvms
-#                                 public sys$ API (vms-1d9).
+#   test_syssvc_*.c,           -> NOT built here; built by the cmake/musl
+#   test_imgact_*.c               stage below against the REAL src/libvms
+#                                 public sys$ API (vms-1d9). test_imgact_*
+#                                 (was test_syssvc_imgact_bind/publish --
+#                                 main-red classification fix) needs the same
+#                                 recipe: it #includes imgact_prodreg.h, a
+#                                 libvms public header not on this early raw-
+#                                 gcc stage's include path.
 #   test_kmod_*.c that include -> NOT built here; built below against
 #   "vms_kif.h"                   src/libvmssys (the real kernel-interface
 #                                 client), see that stage's comment. This
@@ -147,6 +152,7 @@ COPY tests/qemu/test_*.c /src/tests/qemu/
 RUN for f in /src/tests/qemu/test_*.c; do \
         case "$f" in \
             */test_syssvc_*.c) continue;; \
+            */test_imgact_*.c) continue;; \
         esac; \
         if grep -q '#include "vms_kif.h"' "$f"; then continue; fi; \
         out="${f%.c}"; \
@@ -246,6 +252,8 @@ RUN cd /src/repo && \
     && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
+    echo "--- test_imgact_* binaries (userspace-only, no /dev/vms needed, static musl) ---" && \
+    ls -la build-static/bin/test_imgact_* && \
     # DCL.EXE (already built above in the qemu_syssvc_tests/vmsdcl target
     # list), so a suite can run a real user-visible DCL COMMAND against a
     # real executive. SHOW SYSTEM is a READER of the executive's process
@@ -365,18 +373,38 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # kernel-only harness this item exists to replace, and the QEMU job
     # stays green while proving nothing about src/libvms.
     { [ "$n_syssvc" -ge 1 ] || { echo "FATAL: no test_syssvc_* binary staged into the initramfs -- the userspace public-sys\$ layer would be untested"; exit 1; }; } && \
+    # Userspace-only imgact suites (test_imgact_bind, test_imgact_publish --
+    # main-red classification fix, were test_syssvc_imgact_bind/publish
+    # through #225/#226). Staged the SAME way, by glob, so a future
+    # test_imgact_*.c reaches QEMU with no Dockerfile edit -- but kept OUT of
+    # the test_syssvc_* glob above on purpose: ci.yml's kernel-executive-
+    # negative-control job polices every test_syssvc_* suite to return the
+    # honest-skip code 77 with no /dev/vms, and these two suites never touch
+    # /dev/vms at all, so they legitimately return 0 in that job and would
+    # trip its "fabricated success" check for a real, non-executive pass.
+    # Still staged here (not just built) so run_facility_negctl.sh's per-
+    # facility proofs (consumer-import-not-bound-to-resident, publish-does-
+    # not-populate-registry) keep seeing these suites run and go red under
+    # their fault injection -- see that script's own EXPECTED derivation.
+    n_imgact=0 && \
+    for f in /src/repo/build-static/bin/test_imgact_*; do \
+        [ -x "$f" ] || continue; \
+        cp "$f" /initramfs/tests/; \
+        n_imgact=$((n_imgact+1)); \
+    done && \
+    { [ "$n_imgact" -ge 2 ] || { echo "FATAL: expected at least 2 test_imgact_* binaries (test_imgact_bind, test_imgact_publish) staged into the initramfs, found $n_imgact"; exit 1; }; } && \
     # The shipped DCL image, staged at BOTH paths its two sets of consumers
     # expect: /bin/DCL.EXE (vms-8019's test_syssvc_procnam.c and
     # test_syssvc_showproc.c hard-code execl("/bin/DCL.EXE", ...)) and
     # /tests/DCL.EXE (vms-fb9's test_syssvc_showdev.c defaults DCL_PATH to
     # /tests/DCL.EXE, overridable via OVMX_DCL). init.sh execs everything
-    # matching /tests/test_kmod_* or /tests/test_syssvc_*; "DCL.EXE" matches
-    # neither glob, so staging it under /tests/ does not make init.sh try to
-    # run it as a suite. DCL is not a suite -- it is a subject the suites
-    # drive. Absence is FATAL rather than skipped, for the same reason the
-    # n_syssvc check above is: a missing subject would silently turn the
-    # SHOW SYSTEM / SHOW DEVICE assertions into no-ops with the job still
-    # green.
+    # matching /tests/test_kmod_*, /tests/test_syssvc_* or /tests/test_imgact_*;
+    # "DCL.EXE" matches none of those globs, so staging it under /tests/ does
+    # not make init.sh try to run it as a suite. DCL is not a suite -- it is
+    # a subject the suites drive. Absence is FATAL rather than skipped, for
+    # the same reason the n_syssvc check above is: a missing subject would
+    # silently turn the SHOW SYSTEM / SHOW DEVICE assertions into no-ops
+    # with the job still green.
     { cp /src/repo/build-static/bin/DCL.EXE /initramfs/bin/DCL.EXE || \
       { echo "FATAL: DCL.EXE was not built into the static tree -- SHOW SYSTEM would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/bin/DCL.EXE && \

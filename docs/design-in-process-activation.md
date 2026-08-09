@@ -639,7 +639,7 @@ imports, or the SysV auxv entry ABI — still returns `SS$_UNSUPPORTED` and
      cell. `imgact_activate()` now applies `.vms$rel` and calls it for a marker image that
      carries a `.vms$imp`; an import naming a non-resident producer returns `SS$_UNSUPPORTED`
      so the caller **forks** (never a private-copy bind — the LARP).
-   - **Proof (`tests/qemu/test_syssvc_imgact_bind.c`, negctl `consumer-import-not-bound-to-resident`):**
+   - **Proof (`tests/qemu/test_imgact_bind.c`, negctl `consumer-import-not-bound-to-resident`):**
      a resident producer with shared internal state; a consumer that imports its universal by
      vector index and calls it through the bound GOT cell; the consumer's call reaches the
      **same** instance the test also mutates (counter 1 then 2 — genuine sharing, not a copy).
@@ -647,16 +647,33 @@ imports, or the SysV auxv entry ABI — still returns `SS$_UNSUPPORTED` and
      environment; the P0-map/mode-transition/rundown that *wrap* a full activation stay proven
      separately against a real `/dev/vms` (`test_syssvc_imgact_inproc`).
 
-   **STILL DEFERRED in item 1** (why real images still fork — no flip): (a) **IMGACT publishing
-   the registry at DCL startup** — nothing calls `imgact_register_producer()` in the live boot
-   path yet, so at runtime the registry is empty and a real image's imports do not resolve;
-   (b) **entering a real `LINK.EXE` image** through its SysV auxv/stack `_start` ABI (not the
-   `(a0,a1)` marker ABI) and **intercepting its `SYS$EXIT`** to return to DCL instead of
-   terminating the process; (c) **`PT_TLS`** — sharing the resident `DECC$SHR`'s musl TLS with
-   the in-process image (a TLS-bearing image is refused `SS$_UNSUPPORTED` today).
+   **LANDED (vms-db2, §A.8 remainder gap 1 — "publish the registry at runtime"):** the
+   registry from the previous item was populated by nothing in the live boot path, so at
+   runtime it stayed empty and a real image's `.vms$imp` imports had nothing to bind
+   against. `imgact_publish_producers()` (`src/libvms/syssvc/imgact_prodreg.c` +
+   `include/imgact_prodreg.h`) closes this: a `LIBVMS$SHR` universal that registers a whole
+   producer list in one call. `IMGACT.EXE` (`activate_symbol_vector` in `src/imgact/imgact.c`)
+   calls it once, after binding the executable's own imports and driving the C-RTL init:
+   it resolves `imgact_publish_producers` from the resident `LIBVMS$SHR` symbol vector
+   **by name** (no link-time dependency, no `DT_NEEDED` — IMGACT stays freestanding) and
+   marshals its private `g_prods[]` across. Best-effort: a graph with no producer exporting
+   the symbol (a non-`libvms` executable) publishes nothing and activates exactly as before.
+   **Proof (`tests/qemu/test_imgact_publish.c`, negctl `publish-does-not-populate-registry`):**
+   same anti-LARP shared-counter construction as `test_imgact_bind` above — publishing a
+   resident producer is what lets a consumer's later import bind to it and reach the SAME
+   instance the test mutates. Pure userspace, no `/dev/vms` needed. **No image class is
+   flipped by this** — real images still fork; the IMGACT-side glue's own end-to-end proof
+   (a real `LINK.EXE` image importing resident producers, activated in-process) rides on the
+   native-link `DCL.EXE` runtime, which is blocked on the quarantined toolchain (`vms-0b8`).
+
+   **STILL DEFERRED in item 1** (why real images still fork — no flip): (a) **entering a real
+   `LINK.EXE` image** through its SysV auxv/stack `_start` ABI (not the `(a0,a1)` marker ABI)
+   and **intercepting its `SYS$EXIT`** to return to DCL instead of terminating the process;
+   (b) **`PT_TLS`** — sharing the resident `DECC$SHR`'s musl TLS with the in-process image
+   (a TLS-bearing image is refused `SS$_UNSUPPORTED` today).
 2. **The flip of REAL images to in-process** in `dcl_activate_image()`, gated on (1)
    being QEMU-proven per image class. Until then the fork stays for those classes.
-3. **True Ctrl-Y / `CONTINUE`** for the in-process image (the option (b) asm follow-on above).
+3. **True Ctrl-Y / `CONTINUE`** for the in-process image (the option (a) asm follow-on above).
 4. **Executive-mediated flows-back** ($SETEF / $CRELNM into LNM$PROCESS *by a real image*),
    which arrives with (1): a real image linked against the resident `LIBVMS$SHR` can call
    the services properly. This increment proved the address-space flows-back mechanism with

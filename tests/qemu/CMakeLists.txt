@@ -78,6 +78,52 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
 endforeach()
 
 # ---------------------------------------------------------------------------
+# USERSPACE-ONLY imgact tests -- test_imgact_bind, test_imgact_publish
+# (main-red classification fix; test_imgact_bind was test_syssvc_imgact_bind
+# through #225).
+#
+# .github/workflows/ci.yml's kernel-executive-negative-control job derives its
+# "must be a real executive suite" policed set from the test_syssvc_*.c glob
+# above and requires every member to return the honest-skip code 77 when
+# /dev/vms is absent -- a test_syssvc_* suite that returns 0 with no executive
+# is the LARP shape that job exists to catch. These two suites prove pure
+# userspace .vms$imp import binding / resident-producer registry publish (see
+# their own file headers) -- they never touch /dev/vms and correctly return 0
+# in EVERY environment, executive present or not. Naming them test_syssvc_*
+# put them under a contract that does not apply to them and made the negative-
+# control job flag a correct pass as a fabricated one (main went red on
+# test_syssvc_imgact_bind for exactly this reason). test_imgact_* is the
+# correct, non-executive name: it is excluded from the test_syssvc_*.c glob
+# above (and so from ci.yml's and run_facility_negctl.sh's test_syssvc_*
+# policing) automatically, by construction, not by an added exception.
+#
+# Built through the SAME qemu_syssvc_add_test() plumbing (same libvms link,
+# same include path -- test_imgact_bind.c/test_imgact_publish.c #include
+# imgact_prodreg.h, a libvms public header) so they still land in
+# build-static/bin/ and still run inside the QEMU harness (tests/qemu/
+# Dockerfile, tests/qemu/init.sh both glob test_imgact_* alongside
+# test_syssvc_*) -- run_facility_negctl.sh's consumer-import-not-bound-to-
+# resident / publish-does-not-populate-registry per-facility proofs still
+# attribute these suites' FAIL: lines correctly (see that script's own
+# EXPECTED derivation, widened to include tests/qemu/test_imgact_*.c).
+#
+# UNLIKE test_syssvc_*, these two also get a real ctest add_test(): the
+# "WHY THERE IS NO add_test() HERE" comment above this file's top applies to
+# binaries that NEED a real /dev/vms and so can only ever report ctest
+# "Skipped" (a permanently-skipped test is a failing test, project Rule 10).
+# test_imgact_bind/test_imgact_publish need no /dev/vms and genuinely pass
+# under a bare `ctest` on any host -- exactly the case that comment's
+# reasoning does not cover, and exactly what their own file headers already
+# claimed ("runs and asserts in EVERY environment, including the CI host
+# build") but nothing had actually gated until now.
+qemu_syssvc_add_test(test_imgact_bind test_imgact_bind.c)
+qemu_syssvc_add_test(test_imgact_publish test_imgact_publish.c)
+add_test(NAME test_imgact_bind COMMAND test_imgact_bind)
+add_test(NAME test_imgact_publish COMMAND test_imgact_publish)
+set_tests_properties(test_imgact_bind test_imgact_publish PROPERTIES
+    LABELS "userspace-imgact")
+
+# ---------------------------------------------------------------------------
 # TESTIMG.EXE -- the in-process-eligible image test_syssvc_imgact_inproc.c
 # activates in DCL's own process (vms-68f increment iv). A freestanding,
 # position-independent ET_DYN with the OVMX in-process marker note, no

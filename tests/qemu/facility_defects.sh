@@ -4339,7 +4339,7 @@ EOF
         case "$_f" in
         facility)     echo "in-process image activation, .vms\$imp import binding to an ALREADY-RESIDENT shareable (imgact_bind_imports_resident(), vms-db2 -- the §A.8-remainder import-binding-to-resident-shareable sub-step of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.2)";;
         targets)      echo "libvms/syssvc/imgact_prodreg.c";;
-        suites_red)   echo "test_syssvc_imgact_bind";;
+        suites_red)   echo "test_imgact_bind";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -4359,7 +4359,7 @@ EOF
         case "$_f" in
         facility)     echo "in-process image activation, PUBLISHING the resident-producer registry at runtime (imgact_publish_producers(), vms-db2 -- the §A.8-remainder gap 1 of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.8: IMGACT hands the LIBVMS\$SHR/DECC\$SHR bases it mapped across to the registry so a later in-process RUN can bind to them)";;
         targets)      echo "libvms/syssvc/imgact_prodreg.c";;
-        suites_red)   echo "test_syssvc_imgact_publish";;
+        suites_red)   echo "test_imgact_publish";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -5157,7 +5157,15 @@ cmd_coverage() {
     fi
 
     # --- 2. suites -------------------------------------------------------
-    _cov_derived=$(ls "$_cov_tests"/test_kmod_*.c "$_cov_tests"/test_syssvc_*.c 2>/dev/null \
+    # ALSO test_imgact_*.c (main-red classification fix): pure-userspace
+    # suites (test_imgact_bind, test_imgact_publish -- were test_syssvc_
+    # imgact_bind/publish through #225/#226) that never touch /dev/vms, so
+    # they are deliberately OUTSIDE ci.yml's test_kmod_*/test_syssvc_*
+    # policed set (see tests/qemu/CMakeLists.txt's comment on them) but they
+    # ARE covered by negctl anchors and belong in THIS coverage universe --
+    # widening it here, unlike ci.yml, does not put them under the
+    # test_syssvc_*-must-honest-skip-77 contract.
+    _cov_derived=$(ls "$_cov_tests"/test_kmod_*.c "$_cov_tests"/test_syssvc_*.c "$_cov_tests"/test_imgact_*.c 2>/dev/null \
                    | xargs -n1 basename | sed 's/\.c$//' | sort)
     _uncovered=""
     _blind_only=""
@@ -5274,7 +5282,7 @@ cmd_coverage() {
 
     _anch_raw=$( (cd "$_cov_tests" && grep -Hno \
         '/\* negctl\(-knockon\)\{0,1\}: [a-z0-9][a-z0-9-]* \*/' \
-        test_kmod_*.c test_syssvc_*.c) 2>/dev/null )
+        test_kmod_*.c test_syssvc_*.c test_imgact_*.c) 2>/dev/null )
 
     printf '%s\n' "$_anch_raw" | while IFS= read -r _anch; do
         [ -n "$_anch" ] || continue
@@ -5667,7 +5675,7 @@ cmd_selftest() {
     # deleted, every whitespace run collapsed to one space, the whole corpus on
     # one line. That is deliberately loose -- this check exists to catch a
     # TYPO, not to parse C.
-    cat "$_st_tests"/test_kmod_*.c "$_st_tests"/test_syssvc_*.c 2>/dev/null \
+    cat "$_st_tests"/test_kmod_*.c "$_st_tests"/test_syssvc_*.c "$_st_tests"/test_imgact_*.c 2>/dev/null \
         | tr -d '"\\' | tr '\n\t' '  ' | tr -s ' ' >"$_st_tmp.src"
     _st_absent=""
     for _st_d in $DEFECTS; do

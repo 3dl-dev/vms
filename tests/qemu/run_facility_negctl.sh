@@ -322,8 +322,21 @@ fail_map() {
 # twice on real runs: a hand-maintained list stops protecting every suite
 # added after it was written, and an exact-count pin turns CI red on a
 # legitimate addition.
+#
+# ALSO INCLUDES test_imgact_*.c (main-red classification fix), DELIBERATELY
+# WIDER than ci.yml's kernel-executive / kernel-executive-negative-control
+# jobs' own EXPECTED (test_kmod_*.c + test_syssvc_*.c only). Those two CI jobs
+# must NOT see test_imgact_* -- it is userspace-only and would misclassify
+# under kernel-executive-negative-control's "every test_syssvc_* must return
+# the honest-skip 77" rule (the exact bug this rename fixed). But THIS script
+# needs test_imgact_* in its own "known" suite set (fail_map() below) so a
+# `--- test_imgact_bind ---` / `--- test_imgact_publish ---` banner is
+# recognised and its FAIL: lines get attributed to the right suite instead of
+# falling through to "(harness)" -- otherwise the consumer-import-not-bound-
+# to-resident / publish-does-not-populate-registry per-facility proofs could
+# never satisfy their red-set equality check.
 # ---------------------------------------------------------------------------
-EXPECTED=$(cd "$REPO_ROOT" && ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c 2>/dev/null \
+EXPECTED=$(cd "$REPO_ROOT" && ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c tests/qemu/test_imgact_*.c 2>/dev/null \
            | xargs -n1 basename | sed 's/\.c$//' | sort)
 N_EXPECTED=$(echo "$EXPECTED" | grep -c . || true)
 

@@ -1,9 +1,9 @@
 /*
- * test_syssvc_imgact_publish.c - PUBLISHING the resident-producer registry at
+ * test_imgact_publish.c - PUBLISHING the resident-producer registry at
  * runtime, proven in ISOLATION (vms-db2, docs/design-in-process-activation.md
  * Part II §A.8 remainder gap 1: "publish the registry at runtime").
  *
- * THE PROBLEM. imgact_bind_imports_resident() (proven by test_syssvc_imgact_bind)
+ * THE PROBLEM. imgact_bind_imports_resident() (proven by test_imgact_bind)
  * can bind a RUN'd image's .vms$imp imports to an ALREADY-RESIDENT producer --
  * but ONLY if the registry knows which producers are resident. At runtime the
  * registry was EMPTY: IMGACT.EXE maps LIBVMS$SHR/DECC$SHR into the process, keeps
@@ -26,6 +26,13 @@
  * (The IMGACT-side glue that marshals g_prods[] and resolves this symbol by name
  * is the thin, runtime-only remainder whose end-to-end proof rides on the
  * native-link runtime -- vms-0b8; no class is flipped here, fork fallback stays.)
+ *
+ * NAMING. Landed directly as test_imgact_publish (not test_syssvc_imgact_
+ * publish, the name the original PR proposed): the same main-red classification
+ * bug that renamed test_syssvc_imgact_bind -> test_imgact_bind (see that file's
+ * header) applies here for the identical reason -- this suite never touches
+ * /dev/vms and legitimately returns 0 whether or not the executive is present,
+ * so it must stay outside ci.yml's test_syssvc_*-must-honest-skip-77 contract.
  *
  * THE ANTI-LARP CONSTRUCTION. A "resident producer" holds shared internal state
  * (a counter in THIS process). PUBLISH records it; a consumer imports its
@@ -126,7 +133,7 @@ static const struct ovmx_imp_header *build_consumer_imp(const char *soname,
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
-    printf("=== test_syssvc_imgact_publish (publish resident registry at runtime, vms-db2) ===\n");
+    printf("=== test_imgact_publish (publish resident registry at runtime, vms-db2) ===\n");
 
     const struct ovmx_sv_header *sv = build_producer_sv();
 
@@ -199,6 +206,6 @@ int main(void)
     CHECK(imgact_publish_producers((const struct imgact_prod_pub *)&pass, -1) == SS$_BADPARAM,
           "a negative producer count is rejected (SS$_BADPARAM)");
 
-    printf("=== test_syssvc_imgact_publish: %d passed, %d failed ===\n", pass, fail);
+    printf("=== test_imgact_publish: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
 }

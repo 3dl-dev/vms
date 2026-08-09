@@ -1339,7 +1339,7 @@ static struct ovmx_prod *find_crtl_producer(void)
  * has no producer exporting the symbol (a non-libvms executable, or an older
  * shareable) publishes nothing and activates exactly as before -- no regression.
  * The registry-population logic itself lives in LIBVMS$SHR and is proven in
- * isolation (test_syssvc_imgact_publish); the fork fallback for real images
+ * isolation (test_imgact_publish); the fork fallback for real images
  * stays until the full real-image in-process flip lands. */
 static void publish_resident_producers(void)
 {

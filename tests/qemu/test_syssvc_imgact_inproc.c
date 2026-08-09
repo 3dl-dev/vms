@@ -24,6 +24,15 @@
  *   4. A real image (no OVMX in-process marker / a PT_INTERP) is REFUSED the
  *      in-process path with SS$_UNSUPPORTED, so RUN of a real image still uses
  *      fork -- the in-process path did not hijack every activation.
+ *   5. THE PAYOFF (vms-68f.v): a side effect the in-process image leaves in
+ *      DCL's own address space -- a store into a writable P1 cell -- is visible
+ *      to DCL AFTER the image runs down, at the SAME PID. This is the exact
+ *      thing Option B (the fork) could never do (line 149 of the design: the
+ *      child's write landed in a separate, dead address space), and it is the
+ *      mechanism behind a process-permanent DEFINE flowing back to DCL.
+ *   6. vms_kif_p1_map (wired in this increment by dcl_p1_init) round-trips: a
+ *      registered P1 extent is reported back by $GETJPI. This is the wrapper->
+ *      kernel->$GETJPI path DCL's startup P1 registration depends on.
  *
  * Requires a real, insmod'd vms.ko at /dev/vms. With no executive it exits
  * EXIT_SKIP (77), never a fake pass: imgact_activate() fails SS$_NOSUCHDEV and
@@ -195,6 +204,62 @@ int main(void)
         CHECK(su == SS$_UNSUPPORTED,
               "a real image is REFUSED the in-process path (SS$_UNSUPPORTED) so "
               "RUN still forks for it -- the in-process path did not hijack it");
+    }
+
+    /* --- 4. THE PAYOFF: a side effect the image leaves in DCL's address
+     * space flows back after rundown, same PID (vms-68f.v). A writable P1
+     * cell DCL owns -- NOT the protected critical page -- is zeroed; the
+     * in-process image (mode 2) stores a sentinel into it; after the image
+     * runs down DCL reads the sentinel. Under Option B (a forked child) the
+     * store landed in the child's separate address space and was gone the
+     * moment control returned -- this assertion is exactly what A buys and B
+     * could not. */
+    {
+        void *p1cell = mmap(NULL, PGSZ, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(p1cell != MAP_FAILED, "allocated a writable P1 cell DCL owns");
+        *(volatile long *)p1cell = 0;               /* DCL's value before */
+
+        ran = 0; image_rc = -1;
+        st = activate_capture(img, 2 /*flow-back store*/,
+                              (long)(uintptr_t)p1cell, &cp1, &ran, &image_rc);
+        CHECK(st == SS$_NORMAL, "the flow-back image ran in-process and returned");
+        CHECK(ran, "the flow-back image produced its output");
+
+        memset(&after, 0, sizeof after);
+        vms_kif_getjpi_self(&after);
+        CHECK(before.vms_pid == after.vms_pid,
+              "the VMS PID is UNCHANGED across the flow-back RUN -- same process");
+        CHECK(getpid() == linux_before,
+              "the Linux PID is UNCHANGED -- no fork happened");
+        /* THE PAYOFF ASSERTION. If activation forked (Option B), this cell
+         * would be untouched (the write hit a dead child address space). */
+        CHECK(*(volatile long *)p1cell == 0x0F10B4C0L,
+              "the value the in-process image stored into DCL's P1 cell is "
+              "VISIBLE to DCL after rundown -- the payoff a fork could never "
+              "deliver (process-permanent DEFINE flows back)");
+        CHECK(after.p0_base == 0 && after.p0_limit == 0,
+              "the flow-back image's P0 was torn down at rundown");
+        munmap(p1cell, PGSZ);
+    }
+
+    /* --- 5. vms_kif_p1_map round-trips to $GETJPI (the path dcl_p1_init uses
+     * to register DCL's P1 control region at startup, vms-68f.v). Register a
+     * page as this process's P1 extent and confirm $GETJPI reports it. */
+    {
+        void *p1 = mmap(NULL, PGSZ * 2, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(p1 != MAP_FAILED, "allocated a P1 control-region block");
+        uint64_t p1b = (uint64_t)(uintptr_t)p1;
+        uint64_t p1l = p1b + PGSZ * 2;
+        CHECK(vms_kif_p1_map(p1b, p1l) == SS$_NORMAL,
+              "vms_kif_p1_map registered the P1 extent (the call dcl_p1_init makes)");
+        struct vms_procinfo pj;
+        memset(&pj, 0, sizeof pj);
+        vms_kif_getjpi_self(&pj);
+        CHECK(pj.p1_base == p1b && pj.p1_limit == p1l,
+              "$GETJPI reports the registered P1 extent -- the wiring is live");
+        munmap(p1, PGSZ * 2);
     }
 
     munmap(crit, PGSZ);

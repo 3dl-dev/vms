@@ -402,12 +402,11 @@ uint32_t vms_kif_p0_unmap(uint64_t *old_base, uint64_t *old_limit);
 /* Register [base, limit) as this process's P1 extent. SS$_BADPARAM for a
  * degenerate or out-of-address-space range; overwrites any previously-
  * registered extent (see vms_p1.c for why that is not an error).
- * OVMX-UNWIRED: vms_kif_p1_map (vms-6f1) -- DCL laying a real P1 control-region
- * window at process startup and registering its extent here is increment v of
- * vms-68f. Increment iv (in-process activation, imgact_activate(),
- * src/libvms/syssvc/sys_imgact.c) protects critical-P1 pages with
- * vms_kif_p1_protect() directly but registers no P1 extent, so nothing in the
- * product calls this one yet. */
+ * Wired (vms-68f.v): dcl_p1_init() (src/vmsdcl/dcl_cmd_process.c) lays a real
+ * P1 control block at DCL startup and registers its extent here, so $GETJPI
+ * reports this process's P1 region and dcl_activate_image() protects its
+ * critical page while an in-process image runs -- the census gate is what
+ * proves it has a product caller. */
 uint32_t vms_kif_p1_map(uint64_t base, uint64_t limit);
 
 /* ================================================================

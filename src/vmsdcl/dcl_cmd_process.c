@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/mman.h>
 #include <errno.h>
 #include <signal.h>
 #include <fcntl.h>
@@ -1077,6 +1078,75 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
     return SS$_NORMAL;
 }
 
+/* ================================================================
+ * P1 control region (vms-68f.v, docs/design-in-process-activation.md
+ * Part II §A.1.1/§A.2.1).
+ *
+ * DCL's process-permanent state lives in P1, the process CONTROL region:
+ * it is established once at process startup and survives every image
+ * activation and rundown -- the opposite of P0, which imgact_activate()
+ * maps per-image and tears down at rundown. Increments (i)-(iv) recorded
+ * P0 extents, transitioned access mode and protected a CALLER-SUPPLIED
+ * critical range, but nothing in the product had yet laid a real P1
+ * control block or registered its extent -- vms_kif_p1_map (vms-6f1) sat
+ * UNWIRED. This is that wiring: dcl_p1_init() reserves a page-aligned P1
+ * block, stores a process-permanent marker in its critical page, and
+ * registers [base,limit) with the executive so $GETJPI reports this
+ * process's P1 region. dcl_activate_image() then hands the critical page
+ * to imgact_activate(), so the design's critical-P1 mprotect (§A.2.3(b))
+ * protects a REAL live DCL datum for the duration of an in-process image,
+ * not the test's stand-in.
+ * ================================================================ */
+static uint64_t g_p1_base;          /* 0 until dcl_p1_init established it */
+static uint64_t g_p1_limit;
+static uint64_t g_p1_crit_base;
+static uint64_t g_p1_crit_limit;
+
+void dcl_p1_init(void)
+{
+    if (g_p1_base)                  /* idempotent: established once */
+        return;
+
+    /* 4096 is the page size assumed tree-wide (imgact.c's IMGACT_PGSZ and the
+     * P0-window math in sys_imgact.c both hardcode it); use the same constant
+     * rather than sysconf so this block's geometry matches the loader's. */
+    const unsigned long pg = 4096;
+    size_t sz = pg * 2;             /* page 0: critical; page 1: mutable */
+
+    void *blk = mmap(NULL, sz, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (blk == MAP_FAILED)
+        return;                     /* no P1 window: RUN passes NULL critical */
+
+    /* Page 0 carries a process-permanent marker so its read-only
+     * protection during an activation guards a real datum, not an empty
+     * page -- the enforced half of the access-mode model has something to
+     * enforce. */
+    *(volatile uint64_t *)blk = 0x3150584D564FULL;   /* "OVMXP1" LE */
+
+    g_p1_base       = (uint64_t)(uintptr_t)blk;
+    g_p1_limit      = g_p1_base + sz;
+    g_p1_crit_base  = g_p1_base;
+    g_p1_crit_limit = g_p1_base + (uint64_t)pg;
+
+    /* Register the extent with the executive. Best-effort / INV-6: with no
+     * /dev/vms this returns SS$_NOSUCHDEV and we hold the block WITHOUT an
+     * executive record rather than faking one -- $GETJPI simply reports no
+     * P1 extent, which is honest (the executive is absent). */
+    (void)vms_kif_p1_map(g_p1_base, g_p1_limit);
+}
+
+int dcl_p1_critical_range(uint64_t *base, uint64_t *limit)
+{
+    if (!g_p1_base)
+        return 0;
+    if (base)
+        *base = g_p1_crit_base;
+    if (limit)
+        *limit = g_p1_crit_limit;
+    return 1;
+}
+
 /*
  * dcl_activate_image - fork/exec a resolved image path and wait for it,
  * surfacing a nonzero exit or fatal signal as SS$_ABORT.
@@ -1105,12 +1175,20 @@ int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
      * land in increment v; SPAWN / RUN/DETACHED / PIPE never take this path).
      * The eligibility decision is made from the ELF alone, before any
      * executive call, so the fork fallback for real images does not depend on
-     * /dev/vms. No critical-P1 range is registered here yet (increment v); the
-     * QEMU suite proves the p1_protect path directly.
+     * /dev/vms. DCL's REAL critical-P1 range (dcl_p1_init, above) is handed to
+     * imgact_activate() so the design's §A.2.3(b) mprotect protects DCL's own
+     * process-permanent P1 page for the duration of the in-process image -- a
+     * wild write from the User-mode image faults instead of corrupting DCL. If
+     * dcl_p1_init() could not establish a P1 block, the range is NULL and this
+     * behaves exactly as increment iv did.
      */
     {
         int image_rc = 0;
-        uint32_t ia = imgact_activate(linux_path, 0, 0, NULL, &image_rc);
+        struct imgact_critp1 cp1;
+        const struct imgact_critp1 *cpp = NULL;
+        if (dcl_p1_critical_range(&cp1.base, &cp1.limit))
+            cpp = &cp1;
+        uint32_t ia = imgact_activate(linux_path, 0, 0, cpp, &image_rc);
         /*
          * ONLY a genuine in-process run bypasses the fork: SS$_NORMAL (the
          * image ran and returned) or SS$_ACCVIO (it ran, faulted, and was run

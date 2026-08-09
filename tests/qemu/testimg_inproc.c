@@ -18,6 +18,16 @@
  *               page mprotect'd read-only while the image runs faults instead
  *               of being corrupted (design §A.2.3(b)); the store never returns
  *               when the protection holds.
+ *   mode == 2 : store a distinctive sentinel to *addr, where *addr is a
+ *               WRITABLE cell DCL owns in its own address space -- used to
+ *               prove the PAYOFF: a side effect the in-process image leaves in
+ *               DCL's memory is visible to DCL AFTER the image runs down
+ *               (design §A.3 "process-permanent DEFINE flows back", line 149's
+ *               exact B-limitation). Under Option B the image was a separate
+ *               Linux process, so this write landed in a dead address space and
+ *               could never flow back; in-process (same PID, one address space)
+ *               it does. This is the mechanism behind LNM$PROCESS DEFINE
+ *               flowing back to DCL.
  */
 #include <stdint.h>
 
@@ -67,11 +77,17 @@ static const struct {
     5, 4, IMGACT_NOTE_TYPE, { 'O', 'V', 'M', 'X', 0, 0, 0, 0 }, 1u
 };
 
+/* The sentinel mode==2 leaves in DCL's writable P1 cell -- "FLOBACK", the
+ * value the suite reads back after rundown to prove the write flowed back. */
+#define IMG_FLOWBACK_SENTINEL 0x0F10B4C0L
+
 long img_entry(long mode, long addr)
 {
     static const char banner[] = "OVMX-INPROC-IMAGE-RAN\n";
     img_syscall3(IMG_SYS_write, 1, (long)banner, (long)(sizeof(banner) - 1));
     if (mode == 1)
         *(volatile long *)addr = 0xdead;   /* faults if addr is protected RO */
+    else if (mode == 2)
+        *(volatile long *)addr = IMG_FLOWBACK_SENTINEL;  /* flows back to DCL */
     return 0;
 }

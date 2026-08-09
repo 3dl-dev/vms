@@ -3971,6 +3971,72 @@ the next increment — not driving a `con_sent` that does not persist.
 Captures/logs on the tank volume: `/data/training/vax/k8s-labs/{vaxlab-0,vaxlab-8,vaxlab-9}/logs/d94-CR{head,ctl,fix2}.pcap`
 and `scsd-CR*.log`; per-cycle CDT samples in `…/cluster/work/CR{head,ctl,fix2}.csb`. 2026-08-09.
 
+#### 4(O.7) OVMX's OWN state machine DOES model the VMS$VAXcluster connection — `joiner=CLOSED` in the exit summary was a teardown-sampling artifact, and OVMX now latches the membership fact (GROUNDED live, `vms-694`)
+
+**The premise §4(O.6) relocated the frontier to is itself over-read, in the same
+teardown-sampling way as `con_sent`.** §4(O.6) recorded that OVMX's exit summary
+reads `connected=no ... conn[member=untracked joiner=CLOSED]` while the peer holds
+the `VMS$VAXcluster → OVMX` connection `0002 open`, and inferred that OVMX "never
+tracks it as an open SCS connection". The daemon's OWN connection-FSM history
+(`SCSD-I-CONNFSM` lines, emitted by `scs_conn_fsm_step`) refutes the inference:
+on all three CR runs the joiner CDT is driven, BY THE DAEMON off the member's
+real frames, through the full Figure 2-14 source column and holds OPEN for the
+run —
+
+```
+conid=0xC1960002 VMS$VAXcluster->VMS$VAXcluster: CLOSED --SVC_CONNECT--> CONNECT SENT
+conid=0xC1960002 VMS$VAXcluster->VMS$VAXcluster: CONNECT SENT --RCV_CONNECT_RSP--> CONNECT ACK
+conid=0xC1960002 VMS$VAXcluster->VMS$VAXcluster: CONNECT ACK --RCV_ACCEPT_REQ--> OPEN   (SCSD-I-JOINBOUND)
+   … run: 204 cm_responses, sysap_send=210 sysap_recv=217 carried on this CDT …
+conid=0xC1960002 VMS$VAXcluster->VMS$VAXcluster: OPEN --SVC_DISCONNECT--> DISC SENT      (graceful teardown at SIGTERM)
+conid=0xC1960002 VMS$VAXcluster->VMS$VAXcluster: DISC SENT --RCV_DISCONNECT_RSP--> DISC ACK
+conid=0xC1960002 VMS$VAXcluster->VMS$VAXcluster: DISC ACK --RCV_DISCONNECT_REQ--> CLOSED
+```
+
+So the connection **is** modelled, across its full lifecycle, and it is the
+mirror-image (p. 2-28) of the peer's `0002 open` CDT. The exit summary read
+`joiner=CLOSED` only because it samples the CDT AFTER the graceful DISCONNECT the
+daemon runs at shutdown — the identical teardown-sampling error §4(O.6) caught in
+`con_sent`. The other two fields are not the connection either: `connected=` and
+`conn[member=]` track the **member-opened** VMS$VAXcluster connection (`cdt_member`),
+which this wire never creates — the member reciprocates the add-member dialogue on
+OVMX's OWN joiner VC (envelope census: zero inbound VMS$VAXcluster `CONNECT_REQ`;
+`RX-CONTROL` `CONNECT_REQ` are the MSCP/dir reject-storm), so there is one
+VMS$VAXcluster connection per peer (`cdt_joiner`), not two.
+
+**What was genuinely missing, and the fix (`vms-694`).** OVMX kept no DURABLE
+record that the connection reached OPEN, so every reader — including the item that
+dispatched this increment — took the post-teardown/`connected=no` sample as
+"not modelled". OVMX now latches `peer_state.vaxcluster_open_reached` the moment
+the connection reaches OPEN (`ps_note_vaxcluster_open`, called off the JOINBOUND
+`conn_step`), logs `SCSD-I-VAXCLMEMBER` once, and reports `vaxcluster_member=CONNECTED(reached-OPEN)`
+in the exit summary. It is read from the CDT the FSM actually drove (no fabricated
+connection — anti-LARP), and it SURVIVES the teardown sample; it is cleared only
+on a genuine re-START session reset. Fail-pre/pass-post: `test_scsd_wire.c`
+`test_joinbound_models_vaxcluster_membership_and_survives_teardown` drives the two
+REAL captured frames (`cap_ovmx_joiner_connect_rsp`, `cap_ovmx_joiner_accept_req`)
+through the daemon to OPEN, asserts the latch set, then runs the production
+`scs_disconnect` and asserts the fact survives — FAILS with the latch removed,
+PASSES with it. Wire-invisible (local bookkeeping + one log line; no frame
+emitted or changed), so no kill-switch is required.
+
+**Live bracket (CLEAN pod, FRESH identity, `vms-694`, 2026-08-09).** `vaxlab-4`
+(virgin `CN_2`), identity `OVMXV0` minted through `mk_sysgen.py` — no `%PEA0`,
+no `SCSD-W-VCNOACK` (0/0; §4(w) hygiene satisfied), `OVMXV0` proven on the wire
+(guardrail 18):
+
+| what | before this fix | with the fix (this run) |
+|---|---|---|
+| join | `XITDONE=1`, `CLUSTER_NODES` 2→3 (real F$GETSYI) | unchanged: `XITDONE=1`, `CN_3` at t+13 s |
+| latch on the wire | — (no such log line) | `SCSD-I-VAXCLMEMBER … reached OPEN` fires once per peer (joiner conids `0x93EA0002`, `0x93EA0012`) |
+| exit-summary membership | `connected=no … conn[member=untracked joiner=CLOSED]` — read as "not modelled" | `vaxcluster_member=CONNECTED(reached-OPEN)` on BOTH peers, *beside* the unchanged `connected=no … joiner=CLOSED` — the modelled fact now survives the teardown sample |
+
+The two fields sitting side by side in the same line (`vaxcluster_member=CONNECTED(reached-OPEN)`
+with `conn[joiner=CLOSED]`) is the artifact made visible: the connection reached
+OPEN and OVMX models it, while the raw CDT read is the post-teardown CLOSED that
+misled §4(O.6)'s reader. Logs: `/data/training/vax/k8s-labs/vaxlab-4/logs/scsd-vms694O7.log`,
+`d94-vms694O7.pcap`. 2026-08-09.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

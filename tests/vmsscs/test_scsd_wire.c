@@ -2511,6 +2511,84 @@ static void test_null_source_conid_binds_nothing(void)
 }
 
 /*
+ * vms-694 (§4(O.7)) -- OVMX MODELS ITS OWN VMS$VAXcluster MEMBERSHIP, AND THE
+ * MODEL SURVIVES THE TEARDOWN SAMPLE.
+ *
+ * The dispatch that opened this item read the daemon's exit summary --
+ * `connected=no ... conn[member=untracked joiner=CLOSED]` -- and concluded
+ * "OVMX's state machine never models the VMS$VAXcluster connection the peer
+ * holds open". Three live CR runs (§4(O.6)/§4(O.7)) refuted that: the run's own
+ * CONNFSM history shows cdt_joiner walk CLOSED -> CONNECT SENT -> CONNECT ACK ->
+ * OPEN off the member's real CONNECT_RSP + ACCEPT_REQ, hold OPEN and carry SYSAP
+ * data all run, then reach CLOSED only via the GRACEFUL DISCONNECT at shutdown.
+ * The exit summary sampled the CDT AFTER that teardown, so it read CLOSED.
+ *
+ * This case pins the fix: OVMX now LATCHES `vaxcluster_open_reached` when the
+ * connection reaches OPEN (so its self-view models the connection), and that
+ * fact SURVIVES a subsequent production DISCONNECT (so the teardown sample can
+ * no longer misrepresent it). Every transition here is driven by scsd.c off the
+ * two REAL captured frames, exactly as test_captured_ovmx_accept_req_opens_the_joiner;
+ * the latch is set by the DAEMON, never by this test.
+ *
+ * FAILS PRE-FIX: there is no such latch, so the daemon's only membership signal
+ * for a joiner-bound member is ps->connected, which stays 0 -- OVMX cannot say
+ * it is a connected member even while its own FSM drove the connection to OPEN.
+ */
+static void test_joinbound_models_vaxcluster_membership_and_survives_teardown(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
+
+    struct peer_state *ps =
+        peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
+    CHECK(ps != NULL, "peer slot");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&r.w.cfg, ps, ovmx760_member_sysid);
+    (void)scs_pb_open(&r.w.cfg, ps->pb);
+    CHECK(send_joiner_connect_request(7, 1, &r.w.cfg, ps, NULL, r.hw_mac, r.logical) == 1,
+          "the joiner CONNECT-REQUEST was not sent");
+
+    /* PRECONDITION: before the member answers, OVMX is NOT yet a member. */
+    CHECK(ps->vaxcluster_open_reached == 0,
+          "OVMX modelled itself a VMS$VAXcluster member before the connection"
+          " reached OPEN");
+
+    /* Drive to OPEN through the daemon off the two real captured frames. */
+    rx_feed(&r, cap_ovmx_joiner_connect_rsp, sizeof(cap_ovmx_joiner_connect_rsp));
+    CHECK(ps->vaxcluster_open_reached == 0,
+          "the bare CONNECT_RSP (CONNECT ACK, not OPEN) already latched membership");
+    rx_feed(&r, cap_ovmx_joiner_accept_req, sizeof(cap_ovmx_joiner_accept_req));
+
+    /* The FSM reached OPEN (the same assertion the sibling case makes) ... */
+    CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_OPEN,
+          "PRECONDITION: the member's real ACCEPT_REQ left the joiner connection"
+          " %s, expected OPEN",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
+    /* ... and OVMX now MODELS itself as a connected member -- the fact the exit
+     * summary's `connected=no` could never carry. */
+    CHECK(ps->vaxcluster_open_reached == 1,
+          "the joiner connection reached OPEN but OVMX did not model itself as a"
+          " connected VMS$VAXcluster member of the peer");
+
+    /* THE POINT: gracefully DISCONNECT (the production teardown the daemon runs
+     * at shutdown) so the CDT leaves OPEN -- and the membership fact must SURVIVE
+     * that sample, which is exactly what the exit summary got wrong. */
+    enum scs_svc_status dst = scs_disconnect(scsd_svc(), ps->cdt_joiner, NULL);
+    CHECK(dst != SCS_SVC_BADARG && dst != SCS_SVC_BADSTATE,
+          "the production DISCONNECT service refused the OPEN joiner connection (%d)",
+          (int)dst);
+    CHECK(scs_conn_state_of(ps->cdt_joiner) != SCS_CONN_OPEN,
+          "PRECONDITION: DISCONNECT left the joiner connection in OPEN, so this"
+          " case cannot test teardown survival");
+    CHECK(ps->vaxcluster_open_reached == 1,
+          "OVMX's modelled membership was lost the moment the connection left"
+          " OPEN at teardown -- this is the §4(O.6)/§4(O.7) teardown-sampling"
+          " artifact the latch exists to defeat");
+}
+
+/*
  * vms-770 (vms-a61 audit) -- A SHORT SEQAPP DATA FRAME MUST NOT BE MISREAD AS
  * A CONNECT-REQUEST.
  *
@@ -9281,6 +9359,10 @@ int main(void)
     test_captured_connect_rsp_drives_the_classifier();
     test_captured_ovmx_accept_req_opens_the_joiner();
     test_null_source_conid_binds_nothing();
+    /* vms-694 (§4(O.7)): OVMX models its own VMS$VAXcluster membership off the
+     * FSM reaching OPEN, and the fact survives the graceful teardown that fooled
+     * the exit summary into `connected=no ... joiner=CLOSED`. */
+    test_joinbound_models_vaxcluster_membership_and_survives_teardown();
     /* vms-770 (vms-a61 audit): has_conid no longer implies the 110-/190-byte
      * connect classes, so branch (c) must not treat a short SEQAPP data frame
      * as a CONNECT-REQUEST. */

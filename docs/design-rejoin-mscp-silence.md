@@ -133,6 +133,23 @@ captures (which reached the MSCP step); the current-build VC-START stall is a
 separate, upstream blocker that must be cleared before the §1 fix can be
 bracketed live.
 
+> **RESOLVED (2026-08-09, `vms-694`) — it was NEITHER a regression NOR a timing
+> artifact: it was a §4(w) SCSSYSTEMID identity conflict on a polluted pod.** The
+> VC-START runs above (`OVMXR0`/`OVMXR8`, `OVMXR8j1`) all reused `SCSSYSTEMID`
+> **1812**, which `vaxlab-8`'s peer already held (`%PEA0, Remote System Conflicts
+> with Known System - REMOTE NODE OVMXR0`). A conflicting member sends START +
+> STACK but **withholds its round-2 ACK** and re-issues round-0 START forever, so
+> `start_acked` never latches and the sequencer never fires its first CONNECT-REQ —
+> exactly the stall recorded here. Proven the same session on the same `main` build:
+> a **fresh** identity (`OVMXW0`/1877, `OVMXX0`/1888) on a **clean** pod (`vaxlab-9`)
+> reached `CLUSTER_NODES=3`/`XITDONE=1` at t+13 s with the member's round-2 ACK
+> present. The VC-formation FSM is byte-unchanged since `f874b04`, so #221's
+> fresh-join is intact. Full grounding + the new `SCSD-W-VCNOACK` diagnostic that
+> now names this trap: `docs/cluster-protocol-spec.md` §4(w.1). **This does NOT
+> touch §1**: the Rule-of-Total-Connectivity MSCP diagnosis stands; it must be
+> bracketed on a CLEAN pod with a FRESH identity (never reuse a `SCSSYSTEMID` a pod
+> has seen), which is what the §2 runs failed to do.
+
 ---
 
 ## 3. Why this is NOT one of the already-handled failure modes

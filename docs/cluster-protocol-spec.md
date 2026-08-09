@@ -5173,6 +5173,65 @@ result that reads as a `vms-2f3` stall. The uniqueness guard added in `vms-1ae`
 refuses the collision at mint time (and names the store it collides with);
 `tests/integration/test_lab_identity_unique.sh` is its gate.
 
+#### 4(w.1) The conflict's VC-FORMATION signature: the peer WITHHOLDS its round-2 ACK (GROUNDED live, `vms-694`, 2026-08-09)
+
+§4(w) reads the conflict at the console and off the aggregate capture. This grounds
+what it looks like **one layer up, at the 0x41 VC-formation handshake** — because
+that signature had been misread as a VC-formation *regression* and nearly re-filed
+as a code defect (`docs/design-rejoin-mscp-silence.md` §2's "either a regression
+since Aug-3 or a pod/timing artifact"). It is neither: it is §4(w).
+
+**The dialogue, both ways, same build, same session.** The 0/0/1/1/2/2 config-round
+handshake (§4g) completes only when the member sends its **round-2 ACK**. Whether it
+does is the whole discriminator:
+
+| run | pod | identity (`SCSSYSTEMID`) | member round-2 ACK (`STARTRX ack round=2`) | `START-ACK-SENT` | `CONNECT-REQ-SENT` | post-OPEN re-STARTs (`START received -> none, VC OPEN`) | outcome |
+|---|---|---|---|---|---|---|---|
+| clean | `vaxlab-9` | `OVMXW0` / **1877** (fresh) | **2** | **2** | **2** | **0** | **JOINED `CLUSTER_NODES=3` `XITDONE=1`, t+13 s** |
+| clean | `vaxlab-9` | `OVMXX0` / **1888** (fresh) | **2** | **2** | **2** | **0** | **JOINED `CLUSTER_NODES=3` `XITDONE=1`, t+13 s** |
+| conflict | `vaxlab-8` | `OVMXV0` / **1812** (reused — peer holds a record) | **0** | **0** | **0** | 29 | STALL `CLUSTER_NODES=2` |
+| conflict | `vaxlab-8` | `OVMXR0` / **1812** (reused) | **0** | **0** | **0** | 59 | STALL `CLUSTER_NODES=2` |
+
+On a **clean** identity the member sends round-0 START, round-1 STACK **and round-2
+ACK**; OVMX's round-2 ACK then goes out (`start_acked` latches), and the join
+sequencer's first `SCS$DIRECTORY` CONNECT-REQUEST ignites on that same edge. On a
+**conflicting** identity (`vaxlab-8` had `%PEA0, Remote System Conflicts with Known
+System - REMOTE NODE OVMXR0` on `SCSSYSTEMID` 1812) the member sends START and STACK
+— OVMX's circuit reaches OPEN on the STACK — but then **withholds its round-2 ACK and
+re-issues round-0 START indefinitely** (29 and 59 times across the two runs; the
+clean control had zero). Because OVMX's default ACK trigger waits for the peer's own
+round-2 frame (the pre-`vms-4071` fresh-join ordering; `OVMX_VC_EARLY_ACK` off),
+`start_acked` never latches and the sequencer never fires — `CONNECT-REQ-SENT=0`.
+This is the "VC-START stall": half of a formation the member is deliberately not
+completing, not a formation bug on OVMX's side.
+
+**Doc grounding.** Davis *VAXcluster Principles* p. 2-14 (host-only transcript
+`part2.md:105-111`): "A response of either ACK or STACK will advance the circuit to
+the OPEN state; and if the response is STACK, the port driver will issue an ACK," and
+p. 2-14/2-16 (`part2.md:181`): after issuing its STACK the port driver "is waiting
+for an ACK from the remote port driver" and "will simply reissue the STACK after its
+timer expires." A member refusing admission never leaves that wait — hence the
+endless re-START and the absent round-2 ACK. OVMX's FSM implements the STACK→issue-ACK
+rule (`scs_vc.c` `scs_vc_fsm_recv`, START RECEIVED + STACK → `SEND_ACK`); it is the
+daemon's `scsd_vc_ack_due()` gate that (correctly, for a clean join) withholds OVMX's
+ACK until the peer's round-2 arrives.
+
+**#221's fresh-join is INTACT on current `main`.** Both clean rows above are the same
+`main` build (this session) that produced the conflict rows, default environment, no
+`OVMX_JOIN_SEQ` — reaching `CLUSTER_NODES=3`/`XITDONE=1` at t+13 s. The VC-formation
+FSM (`scs_vc.c`, `scs_start.c`) is byte-unchanged since the `f874b04` first-join proof
+(§4(O.1)/§4(O.2)); there is no regression. The prior VC-START stalls were §4(w)
+identity conflicts on a polluted pod (reused `SCSSYSTEMID` 1812), nothing more.
+
+**The daemon now NAMES this instead of looping on it silently.** `scs_vc_noack_stall()`
+(`scs_vc.c`) is true when the circuit is OPEN, `start_acked` is still 0, and the peer
+has re-issued round-0 START ≥ `SCS_VC_NOACK_STALL_THRESHOLD` (3) times since OPEN
+(counted in `fsm.start_after_open`). On that edge `scsd.c` emits **`SCSD-W-VCNOACK`**
+once per peer, pointing at the `%PEA0` conflict and telling the operator to mint a
+fresh identity. Log-only — nothing new on the wire. Bracketed live: it fired on both
+conflict runs (naming 3 re-STARTs) and stayed silent on both clean joins. Unit test:
+`tests/vmsscs/test_scs_vc.c::test_fsm_noack_stall_detect`.
+
 ### 4(x) NEW→MEMBER on an ESTABLISHED multi-peer cluster: the joiner's own Con.ID collides across peers (GROUNDED live, `vms-694`, 2026-08-09)
 
 **What this is.** §4(L)(7) and §5(z) left `NEW → MEMBER` open. §5(z)'s own

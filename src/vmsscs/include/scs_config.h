@@ -164,6 +164,14 @@ struct scs_vc_fsm {
     /* Observability only. */
     unsigned long reissues;          /* total reissues over this PB's life */
     unsigned long implied_acks;      /* p. 2-16 implied ACKs honored */
+    unsigned long start_after_open;  /* vms-694: round-0 STARTs the peer re-issued
+                                      * AFTER our circuit reached OPEN. On a clean
+                                      * formation this stays 0 (the peer sends its
+                                      * round-2 ACK and both sides open). A peer that
+                                      * WITHHOLDS its round-2 ACK -- e.g. it detected
+                                      * an SCSSYSTEMID conflict (spec sec 4(w)) and is
+                                      * refusing admission -- re-STARTs round-0 forever
+                                      * instead, and this counts those. */
 };
 
 /* Remote port type (p. 2-11). OVMX values, not a wire encoding. */

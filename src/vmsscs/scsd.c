@@ -842,6 +842,7 @@ struct peer_state {
     struct scs_vc vc;              /* seq/ack tracking + credit + retransmit (embeds scs_seq_state) */
     int      start_replied;        /* we answered the peer's 0x41 START (sent round 0/1) */
     int      start_acked;          /* we sent the round-2 46-byte ack -> START complete */
+    int      vc_noack_warned;      /* vms-694: SCSD-W-VCNOACK already emitted for this peer */
     long     start_replies;        /* count of 0x41 frames we sent to this peer */
     long     credit_sent;          /* vms-691: 0x48 credit-returns we sent this peer */
     /* --- vms-246: SCS$DIRECTORY / SCS$DIR_LOOKUP responder state --- */
@@ -8192,6 +8193,35 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                    (unsigned)PS_SCS_DIR_JOINER_CONID(ps), ps->own_dir_req_seq);
             fflush(stdout);
         }
+        }
+
+        /* vms-694: NAME THE "peer withholds its round-2 ACK" STALL rather than
+         * loop on it silently. The circuit is OPEN on our side, but the peer keeps
+         * re-issuing round-0 START and never sends its round-2 ACK, so start_acked
+         * never latches and the join sequencer above never ignites. GROUNDED live
+         * (2026-08-09, lab-2): a returning/duplicate SCSSYSTEMID is refused by the
+         * member exactly this way (spec sec 4(w)) -- the clean-identity control on
+         * the same build joined at t+13 s with the member's round-2 ACK present. A
+         * silent loop here is the INV-6 shape: it made a §4(w) identity conflict
+         * read as a VC-formation regression. Log-only; emitted once per peer. */
+        if (!ps->vc_noack_warned &&
+            scs_vc_noack_stall(ps->pb, ps->start_acked,
+                               SCS_VC_NOACK_STALL_THRESHOLD)) {
+            ps->vc_noack_warned = 1;
+            log_ts(stderr);
+            fprintf(stderr,
+                    " SCSD-W-VCNOACK, virtual circuit OPEN but peer %02x:%02x:%02x:"
+                    "%02x:%02x:%02x has re-issued round-0 START %lu time(s) WITHOUT"
+                    " sending its round-2 ACK -- our round-2 ACK never went out"
+                    " (start_acked=0) and the join sequencer will not ignite. This"
+                    " is the admission-refusal signature: most often a returning or"
+                    " duplicate SCSSYSTEMID (spec sec 4(w)); check the peer console"
+                    " for %%PEA0 'Remote System Conflicts with Known System'. Mint a"
+                    " fresh identity on a pod that has never seen it.\n",
+                    ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                    ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+                    ps->pb->fsm.start_after_open);
+            fflush(stderr);
         }
         return;
     }

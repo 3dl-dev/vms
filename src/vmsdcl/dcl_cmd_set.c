@@ -682,14 +682,15 @@ static int cmd_set_process(struct dcl_command *cmd)
          * contradiction is now structurally impossible regardless of what
          * this command does. But the command still cannot honestly claim
          * to have changed anything the executive enforces: MATCH VMS would
-         * mean calling vms_kif_setprv() (src/libvmssys/vms_kif.c), which
-         * exists but is declared OVMX-UNWIRED in vms_kif.h pending vms-pv1
-         * ($SETPRV wiring is that item's job, not this one's, and this
-         * round is under an explicit instruction not to touch that
-         * declaration or the vms_kif caller census while it is mid-flight
-         * on another branch). So this is HIDE, not MATCH, until vms-pv1
-         * lands: no local mutation, and a loud, honest diagnostic instead
-         * of silent success.
+         * mean calling sys$setprv(), which vms-pv1 has now wired to the
+         * executive (src/libvms/syssvc/sys_misc.c -> vms_kif_setprv ->
+         * vms_ioctl_setprv, so vms_kif_setprv is no longer OVMX-UNWIRED).
+         * Routing THIS command through it -- parsing privs_val into a mask,
+         * calling sys$setprv, and mapping the executive's status
+         * (SS$_NORMAL / SS$_NOTALLPRIV / SS$_NOPRIV) to DCL output pinned to
+         * the oracle -- is the deferred remainder tracked as vms-e5d7. Until
+         * that lands this stays HIDE, not MATCH: no local mutation, and a
+         * loud, honest diagnostic instead of silent success.
          *
          * SEVERITY LETTER FIXED TO I, round 5: this printed as a WARNING
          * (%OVMX-W-) while the function falls through to `return
@@ -710,7 +711,7 @@ static int cmd_set_process(struct dcl_command *cmd)
          */
         printf("%%OVMX-I-NOSETPRV, SET PROCESS/PRIVILEGES does not change "
                "the executive's privilege state on this system yet "
-               "(vms-pv1) -- no privileges were changed\n");
+               "(vms-e5d7) -- no privileges were changed\n");
     }
 
     return SS$_NORMAL;

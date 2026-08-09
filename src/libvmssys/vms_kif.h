@@ -135,8 +135,10 @@ uint32_t vms_kif_setmode(uint8_t mode);
  * OVMX-UNWIRED: vms_kif_getmode (vms-pv1) */
 uint32_t vms_kif_getmode(uint8_t *mode, uint64_t *cur_privs, uint64_t *perm_privs);
 
-/* Set/clear privileges. Returns previous privilege mask in *prev
- * OVMX-UNWIRED: vms_kif_setprv (vms-pv1) -- $SETPRV does not reach here yet */
+/* Set/clear privileges. Returns previous privilege mask in *prev.
+ * Wired (vms-pv1): sys$setprv (src/libvms/syssvc/sys_misc.c) routes the $SETPRV
+ * mutation here so the executive OWNS and AUTHORIZES the privilege state -- the
+ * census gate is what proves it has a product caller. */
 uint32_t vms_kif_setprv(uint64_t mask, int enable, int permanent, uint64_t *prev);
 
 /* Check if privileges are held. Returns SS$_NORMAL or SS$_NOPRIV

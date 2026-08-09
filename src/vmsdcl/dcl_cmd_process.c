@@ -20,6 +20,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <dirent.h>
 
 #include "dcl/context.h"
 #include "dcl/parser.h"
@@ -1148,6 +1149,105 @@ int dcl_p1_critical_range(uint64_t *base, uint64_t *limit)
 }
 
 /*
+ * dcl_resolve_activatable - resolve an image spec to an activatable Linux path.
+ *
+ * VMS activates an image with READ access + EXECUTE file protection (not a Unix
+ * execute bit), and `RUN FOO` / a foreign command run the HIGHEST version of the
+ * file. But an OVMX image produced by LINK.EXE through RMS lands on the Linux
+ * backing store as "FOO.EXE;1" (sys$create mints a ;version) and frequently
+ * without a Unix +x bit. The old up-front access(X_OK) gate therefore refused to
+ * activate a freshly linked image -- which is exactly what BUILD.COM must do
+ * (vms-615). This resolver accepts a readable file (imgact_activate reads it),
+ * fills in a missing .EXE type, and resolves the highest ;version.
+ *
+ * `resolved` is filled from `linux_path` (already run through dcl_resolve_path).
+ * Returns 1 on success, 0 if nothing activatable was found.
+ */
+static int dcl_try_readable(const char *p, char *out, size_t sz)
+{
+    if (access(p, R_OK) == 0 && access(p, X_OK) != 0) {
+        /* readable but not +x: only accept a regular file (an OVMX image),
+         * never a directory that happens to be readable. */
+        struct stat st;
+        if (stat(p, &st) != 0 || !S_ISREG(st.st_mode))
+            return 0;
+    } else if (access(p, R_OK) != 0) {
+        return 0;
+    }
+    strncpy(out, p, sz - 1);
+    out[sz - 1] = '\0';
+    return 1;
+}
+
+static int dcl_highest_version(const char *path, char *out, size_t sz)
+{
+    const char *slash = strrchr(path, '/');
+    if (!slash) return 0;
+    char dir[1024], leaf[512];
+    size_t dl = (size_t)(slash - path);
+    if (dl >= sizeof(dir)) return 0;
+    memcpy(dir, path, dl);
+    dir[dl] = '\0';
+    strncpy(leaf, slash + 1, sizeof(leaf) - 1);
+    leaf[sizeof(leaf) - 1] = '\0';
+    size_t ll = strlen(leaf);
+    if (ll == 0) return 0;
+
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    struct dirent *e;
+    long best = -1;
+    char bestname[512] = "";
+    while ((e = readdir(d)) != NULL) {
+        const char *semi = strrchr(e->d_name, ';');
+        if (!semi) continue;
+        if ((size_t)(semi - e->d_name) != ll) continue;
+        if (strncasecmp(e->d_name, leaf, ll) != 0) continue;
+        /* The part after ';' must be a PURE version number. Without this, a
+         * "<leaf>;N.rms_meta" / ".rms_idx" RMS sidecar (which shares the leaf
+         * and whose atol() also yields N) can be picked instead of the real
+         * image, and imgact then opens a 20-byte non-ELF sidecar (vms-615). */
+        const char *vs = semi + 1;
+        if (!*vs) continue;
+        int alldig = 1;
+        for (const char *q = vs; *q; q++)
+            if (*q < '0' || *q > '9') { alldig = 0; break; }
+        if (!alldig) continue;
+        long v = atol(vs);
+        if (v > best) {
+            best = v;
+            strncpy(bestname, e->d_name, sizeof(bestname) - 1);
+            bestname[sizeof(bestname) - 1] = '\0';
+        }
+    }
+    closedir(d);
+    if (best < 0) return 0;
+    snprintf(out, sz, "%s/%s", dir, bestname);
+    return 1;
+}
+
+int dcl_resolve_activatable(const char *linux_path, char *resolved, size_t sz)
+{
+    if (dcl_try_readable(linux_path, resolved, sz)) return 1;
+
+    char cand[1024];
+    snprintf(cand, sizeof(cand), "%s.exe", linux_path);
+    if (dcl_try_readable(cand, resolved, sz)) return 1;
+    snprintf(cand, sizeof(cand), "%s.EXE", linux_path);
+    if (dcl_try_readable(cand, resolved, sz)) return 1;
+
+    /* RMS ;version resolution: highest "<leaf>;N" in the directory. */
+    if (dcl_highest_version(linux_path, cand, sizeof(cand)) &&
+        dcl_try_readable(cand, resolved, sz))
+        return 1;
+    snprintf(cand, sizeof(cand), "%s.EXE", linux_path);
+    if (dcl_highest_version(cand, cand, sizeof(cand)) &&
+        dcl_try_readable(cand, resolved, sz))
+        return 1;
+    return 0;
+}
+
+/*
  * dcl_activate_image - fork/exec a resolved image path and wait for it,
  * surfacing a nonzero exit or fatal signal as SS$_ABORT.
  *
@@ -1318,32 +1418,69 @@ int dcl_exec_foreign_command(struct dcl_context *ctx, struct dcl_command *cmd,
     if (*image_spec == '\0') image_spec = cmd->verb;
 
     char linux_path[1024];
+    char resolved_path[1024];
     dcl_resolve_path(ctx, image_spec, linux_path, sizeof(linux_path));
 
-    if (access(linux_path, X_OK) != 0) {
-        /* Try without .exe extension, or try with .EXE -- same fallback
-         * RUN uses, since a foreign command image is looked up the same
-         * way RUN's image parameter is. */
-        char try_path[1024];
-        snprintf(try_path, sizeof(try_path), "%s.exe", linux_path);
-        if (access(try_path, X_OK) == 0) {
-            strncpy(linux_path, try_path, sizeof(linux_path) - 1);
-            linux_path[sizeof(linux_path) - 1] = '\0';
-        } else {
-            dcl_error("DCL", 2, "IVIMAGE",
-                      "image not found - %s", image_spec);
-            return SS$_NOSUCHFILE;
-        }
+    /* Resolve to an activatable path: fills a missing .EXE type and the RMS
+     * ;version, and accepts a readable OVMX image (not just a +x file) so a
+     * freshly linked image activates -- the RUN path uses the same resolver. */
+    if (dcl_resolve_activatable(linux_path, resolved_path, sizeof(resolved_path))) {
+        strncpy(linux_path, resolved_path, sizeof(linux_path) - 1);
+        linux_path[sizeof(linux_path) - 1] = '\0';
+    } else {
+        dcl_error("DCL", 2, "IVIMAGE",
+                  "image not found - %s", image_spec);
+        return SS$_NOSUCHFILE;
     }
 
-    char *argv[DCL_MAX_PARAMS + 2];
+    /* Build argv from the RAW command tail (cmd->rest) when the parser
+     * captured it -- this is the OpenVMS-faithful whole-line delivery: real DCL
+     * hands the entire foreign-command tail to the image and the image's CRTL
+     * splits it into argc/argv, so the DCL_MAX_PARAMS (P1-P8) cap does NOT apply
+     * to a foreign command. OVMX's parser had previously tokenized only P1-P8,
+     * which capped argv at 8 and made a native `LINK --executable --use A --use
+     * B ... -o X Y` invocation (well over 8 tokens) impossible. We whitespace-
+     * split the raw tail here instead; a value with embedded spaces is a known
+     * lane limitation (real DCL/CRTL honour "quoted strings" -- OVMX does not
+     * yet). Falls back to the tokenized params[] if rest is empty. vms-615. */
+#define DCL_FC_MAX_ARGV 128
+    char *argv[DCL_FC_MAX_ARGV];
     int argc = 0;
     argv[argc++] = linux_path;
-    for (int i = 0; i < cmd->param_count && i < DCL_MAX_PARAMS; i++)
-        argv[argc++] = cmd->params[i];
+
+    char tailbuf[DCL_MAX_LINE];
+    if (cmd->rest[0] != '\0') {
+        strncpy(tailbuf, cmd->rest, sizeof(tailbuf) - 1);
+        tailbuf[sizeof(tailbuf) - 1] = '\0';
+        /* Whitespace-split, but honour "double quotes" the way DECC$CRTL does
+         * when it parses a foreign-command line into argv: a quoted span is one
+         * argument and the quotes are stripped (so `PARTS LOAD 5 "dev:file.dat"`
+         * delivers a clean filename, and `FOO "hello"` delivers hello). Tokens
+         * are compacted in place -- the write cursor never overtakes the read
+         * cursor. */
+        char *s = tailbuf;
+        while (*s && argc < DCL_FC_MAX_ARGV - 1) {
+            while (*s == ' ' || *s == '\t') s++;
+            if (!*s) break;
+            char *arg = s;
+            char *w = s;
+            int inq = 0;
+            while (*s && (inq || (*s != ' ' && *s != '\t'))) {
+                if (*s == '"') { inq = !inq; s++; continue; }
+                *w++ = *s++;
+            }
+            if (*s) s++;          /* consume the delimiter */
+            *w = '\0';
+            argv[argc++] = arg;
+        }
+    } else {
+        for (int i = 0; i < cmd->param_count && argc < DCL_FC_MAX_ARGV - 1; i++)
+            argv[argc++] = cmd->params[i];
+    }
     argv[argc] = NULL;
 
     return dcl_activate_image(ctx, image_spec, linux_path, argv);
+#undef DCL_FC_MAX_ARGV
 }
 
 /*
@@ -1370,20 +1507,18 @@ int cmd_run(struct dcl_command *cmd)
     }
 
     char linux_path[1024];
+    char resolved_path[1024];
     dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
 
-    /* Check if executable exists */
-    if (access(linux_path, X_OK) != 0) {
-        /* Try without .exe extension, or try with .EXE */
-        char try_path[1024];
-        snprintf(try_path, sizeof(try_path), "%s.exe", linux_path);
-        if (access(try_path, X_OK) == 0) {
-            strncpy(linux_path, try_path, sizeof(linux_path) - 1);
-        } else {
-            dcl_error("DCL", 2, "IVIMAGE",
-                      "image not found - %s", cmd->params[0]);
-            return SS$_NOSUCHFILE;
-        }
+    /* Resolve to an activatable path (fills .EXE, resolves the RMS ;version,
+     * accepts a readable OVMX image) -- shared with foreign-command dispatch. */
+    if (dcl_resolve_activatable(linux_path, resolved_path, sizeof(resolved_path))) {
+        strncpy(linux_path, resolved_path, sizeof(linux_path) - 1);
+        linux_path[sizeof(linux_path) - 1] = '\0';
+    } else {
+        dcl_error("DCL", 2, "IVIMAGE",
+                  "image not found - %s", cmd->params[0]);
+        return SS$_NOSUCHFILE;
     }
 
     /* /DETACHED creates a detached process -- a service -- instead of

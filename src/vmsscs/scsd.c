@@ -1461,7 +1461,17 @@ static struct {
     int      valid;
     uint64_t formed;          /* the cluster we were admitted to */
     uint16_t founding_sysid;  /* its founding node, as we knew it then */
+    unsigned generation;      /* vms-e15: how many times this identity has been
+                               * admitted. 1 on the first admission; the op 0x02
+                               * REJOIN form carries prior+1 at body[36:40]. */
 } ovmx_prior;
+
+/* vms-e15: the membership generation THIS run is admitted as -- 1 for a first
+ * join, prior.generation+1 (floor 2) for a rejoin. Persisted on admission so a
+ * restarted OVMX increments across boots, as a real VAX's incarnation ordinal
+ * does. Only its non-zero presence on a rejoin is grounded (see
+ * scs_member_build_config); the value is an OVMX ordinal, not a VMS byte. */
+static unsigned ovmx_run_generation = 1;
 
 /*
  * Where the prior-admission record lives: "<sysgen store>.cluster". Keyed on
@@ -1493,11 +1503,17 @@ static void prior_admission_load(void)
     }
     unsigned long long formed = 0;
     unsigned sysid = 0;
+    unsigned generation = 0;
     if (fscanf(f, "formed=%llx founding_sysid=%u", &formed, &sysid) == 2 &&
         formed != 0) {
         ovmx_prior.valid = 1;
         ovmx_prior.formed = (uint64_t)formed;
         ovmx_prior.founding_sysid = (uint16_t)sysid;
+        /* generation is a later field: an old sidecar lacks it (fscanf misses,
+         * generation stays 0) and a rejoin then floors to 2. */
+        if (fscanf(f, " generation=%u", &generation) == 1) {
+            ovmx_prior.generation = generation;
+        }
     }
     fclose(f);
     if (ovmx_prior.valid) {
@@ -1523,9 +1539,10 @@ static void prior_admission_save(void)
     if (f == NULL) {
         return;
     }
-    fprintf(f, "formed=%016llx founding_sysid=%u\n",
+    fprintf(f, "formed=%016llx founding_sysid=%u generation=%u\n",
             (unsigned long long)ovmx_cluster.formed,
-            (unsigned)ovmx_cluster.founding_sysid);
+            (unsigned)ovmx_cluster.founding_sysid,
+            ovmx_run_generation);
     fclose(f);
     log_ts(stdout);
     printf(" SCSD-I-PRIORCLU, recorded our admission to cluster"
@@ -1572,15 +1589,44 @@ static void cm_apply_rejoin_form(struct scs_member_params *mp)
     mp->rejoin = 1;
     mp->founding_sysid = fs;
     mp->cluster_formed = ovmx_cluster.formed;
+
+    /* vms-e15: body[36:40] -- the membership generation ordinal. A real rejoin
+     * carries a non-zero value here (9/2/2/3 across four specimens); OVMX left
+     * it zero. OVMX now emits it for WIRE FIDELITY. This run's generation is
+     * prior+1 (floor 2 -- the SECOND membership of an identity we were admitted
+     * to once). The value is an OVMX ordinal, not member-validated; only its
+     * non-zero presence on a rejoin is grounded.
+     *
+     * ⚠ This is NOT the readmission fix (spec sec 4(O.10), proven live): with
+     * body[36:40]=2 the member still declines to reciprocate on the joiner VC and
+     * XITDONE stays 0. The real blocker is downstream and is deferred to vms-694.
+     *
+     * OVMX_REJOIN_GEN=0 forces body[36:40] back to zero (the historical form) so
+     * the change stays bisectable and the kill-switch gates exactly its own field. */
+    {
+        const char *gen_off = getenv("OVMX_REJOIN_GEN");
+        if (gen_off != NULL && gen_off[0] == '0') {
+            ovmx_run_generation = 0;
+        } else {
+            unsigned base = (ovmx_prior.generation >= 1) ? ovmx_prior.generation : 1;
+            ovmx_run_generation = base + 1;
+        }
+        mp->rejoin_generation = ovmx_run_generation;
+    }
+
     if (!announced) {
         announced = 1;
         log_ts(stdout);
         printf(" SCSD-I-CMREJOIN, op 0x02 takes the REJOIN form: prior"
-               " state=1, founding node %u, founding time 0x%016llx."
-               " We were admitted to this same cluster before, and a real VAX"
-               " that crash-rejoins says so (crash-rejoin #1297); OVMX has"
-               " always sent the first-join form here\n",
-               (unsigned)fs, (unsigned long long)ovmx_cluster.formed);
+               " state=1, founding node %u, founding time 0x%016llx,"
+               " membership generation %u (body[36:40]). A real VAX that"
+               " crash-rejoins carries a non-zero generation here"
+               " (crash-rejoin #1297=9) and OVMX now matches it (wire fidelity)."
+               " NOTE (vms-e15): this alone does NOT complete readmission -- the"
+               " member still declines to reciprocate on the joiner VC; see"
+               " spec sec 4(O.10), blocker deferred to vms-694\n",
+               (unsigned)fs, (unsigned long long)ovmx_cluster.formed,
+               ovmx_run_generation);
         fflush(stdout);
     }
 }

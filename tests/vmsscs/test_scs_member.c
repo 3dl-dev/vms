@@ -496,6 +496,25 @@ static void test_op02_rejoin_form(void)
     mp.rejoin = 1;
     mp.founding_sysid = 1025;
     mp.cluster_formed = formed;
+
+    /* vms-e15: FAIL-PRE. A rejoin with generation 0 (the historical form OVMX
+     * emitted, and what OVMX_REJOIN_GEN=0 forces) leaves body[36:40] zero. Every
+     * real rejoin carries a NON-ZERO body[36:40] (9/2/2/3 across four specimens);
+     * a full byte-diff vs the SUCCESS oracle (frame 1297) leaves [36:40] the sole
+     * rejoin-discriminating body field OVMX omitted. NOTE: this is a WIRE-SHAPE
+     * test -- filling [36:40] is grounded but does NOT by itself complete
+     * readmission (spec sec 4(O.10), proven live; blocker deferred to vms-694). */
+    mp.rejoin_generation = 0;
+    uint8_t rej0[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_config(&mp, rej0) == 0, "build_config rejoin gen=0 ok");
+    CHECK(rej0[B + 36] == 0 && rej0[B + 37] == 0 &&
+          rej0[B + 38] == 0 && rej0[B + 39] == 0,
+          "PRE: rejoin with generation 0 leaves body[36:40] zero (the historical form)");
+
+    /* PASS-POST. A rejoin carrying a membership generation (here 2, the second
+     * membership of a once-admitted identity) fills body[36:40] with that LE
+     * longword, matching the shape of every real rejoin specimen. */
+    mp.rejoin_generation = 2;
     uint8_t rej[SCS_MEMBER_FRAME_LEN];
     CHECK(scs_member_build_config(&mp, rej) == 0, "build_config rejoin ok");
     CHECK(rej[B + 20] == 0x01 && rej[B + 21] == 0x00,
@@ -504,12 +523,19 @@ static void test_op02_rejoin_form(void)
           "rejoin op 0x02 body[22:24] = 1025, the founding node's SCSSYSTEMID");
     CHECK(memcmp(rej + B + 28, founding_time, 8) == 0,
           "rejoin op 0x02 body[28:36] = the cluster founding time, verbatim");
-
-    /* [36:40] is NOT determined (9/3/2 across specimens) and [40:52] stays
-     * zero -- neither moves in this experiment. */
-    CHECK(rej[B + 36] == 0 && rej[B + 37] == 0 &&
+    CHECK(rej[B + 36] == 0x02 && rej[B + 37] == 0 &&
           rej[B + 38] == 0 && rej[B + 39] == 0,
-          "rejoin op 0x02 leaves the undetermined body[36:40] zero");
+          "POST: rejoin op 0x02 body[36:40] = the membership generation, non-zero");
+
+    /* [40:52] stays zero -- it varies (spaces/zeros) across successful rejoins,
+     * so it carries nothing the member needs; deliberately not moved. */
+    int rz = 1;
+    for (int i = 40; i < 52; i++) {
+        if (rej[B + i] != 0) {
+            rz = 0;
+        }
+    }
+    CHECK(rz, "rejoin op 0x02 leaves body[40:52] zero");
 
     /* Nothing else may move. Assert the changed OFFSETS, not a count: the
      * specimen's own values happen to contain zero bytes (body[21], body[28]
@@ -521,12 +547,13 @@ static void test_op02_rejoin_form(void)
             continue;
         }
         int off = i - B;
-        if (!((off >= 20 && off < 24) || (off >= 28 && off < 36))) {
+        if (!((off >= 20 && off < 24) || (off >= 28 && off < 36) ||
+              (off >= 36 && off < 40))) {
             outside = 1;
         }
     }
     CHECK(!outside,
-          "rejoin form touches ONLY body[20:24] and body[28:36]");
+          "rejoin form touches ONLY body[20:24], body[28:36] and body[36:40]");
 }
 
 /*

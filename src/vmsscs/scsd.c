@@ -620,7 +620,25 @@ enum join_step {
     JS_DONE
 };
 #define JOIN_RETX_TIMEOUT_MS 400u  /* stop-and-wait step retransmit (< member's ~1.4s START-reissue) */
-#define JOIN_RETX_MAX        6u
+/* vms-694 (2026-08-09): 6 is BELOW the reference's own grounded requirement.
+ * A live lab-2 rejoin (vms-600 #209's vaxlab-0 capture, vms600-scsd.log)
+ * reproduced the vms-2f3 stall directly: the peer answered OUR MSCP$DISK
+ * CONNECT_REQ with an op-4 REJECT_REQ on the REJOIN attempt (fresh joins to
+ * the same pod moments earlier had bound cleanly), OVMX's join_step stuck at
+ * JS_MSCP_CONNECT and retransmitted CONNECT_REQ, and the run's own duration
+ * timer closed the VC after only 6 retransmits with the peer still refusing.
+ * docs/cluster-protocol-spec.md sec (1h) already documents WHY the real
+ * protocol needs more attempts than that: two real VAXes in
+ * af2-firsttimer-established-20260728.pcap run "NINE consecutive 4/5
+ * exchanges ... at ~10 s intervals ... and a TENTH attempt switches message
+ * type entirely -- to 2/3 -- and succeeds". A cap of 6 gives up three
+ * attempts short of where the reference itself first succeeds, so OVMX was
+ * never going to get in on a rejoin no matter how long the caller waited.
+ * 12 clears the grounded floor of 9 rejects-then-accept with margin for wire
+ * jitter; it does not change what OVMX puts on the wire, only how many times
+ * it retries the SAME CONNECT_REQ before conceding. See
+ * tests/vmsscs/test_scsd_wire.c's nine-reject regression. */
+#define JOIN_RETX_MAX        12u
 /* vms-e81: a NEWCOMER gets a far longer offer window than a settled peer.
  * Run by5: OVMX correctly opened its SCS$DIRECTORY to VAX3, VAX3 never
  * answered, and OVMX gave up after 6 retries / ~12 s -- WHILE VAX3 WAS STILL

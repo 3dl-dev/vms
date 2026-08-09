@@ -878,6 +878,18 @@ struct peer_state {
      * connection (formation-clean-2node.pcap idx52 CONNECT-REQ -> idx59 CM). */
     int      joiner_connect_sent;  /* we sent our own VMS$VAXcluster CONNECT-REQUEST */
     int      joiner_connected;     /* the member accepted it (Con.ID pair bound) */
+    /* vms-694 (§4(O.7)): OVMX's OWN model of "am I a connected VMS$VAXcluster
+     * member of this peer", LATCHED the moment the VMS$VAXcluster SYSAP
+     * connection (cdt_joiner, or cdt_member if it ever reaches OPEN) hits the
+     * Figure 2-14 OPEN state. It is a LATCH, not a live read, on purpose: the
+     * graceful DISCONNECT the daemon issues at shutdown legitimately drives the
+     * CDT OPEN->...->CLOSED, so a state SAMPLED at teardown reads CLOSED even
+     * though the connection was open and carrying SYSAP data all through the run
+     * (proven live, §4(O.6)/§4(O.7)). Sampling the CDT at exit is what made the
+     * exit summary read joiner=CLOSED and misled readers into "OVMX never models
+     * the connection". This latch is the honest membership fact and it SURVIVES
+     * the teardown sample. Cleared only on a genuine re-START session reset. */
+    int      vaxcluster_open_reached;
     uint32_t joiner_remote_conid;  /* the member's Con.ID on OUR connection (from its response) */
     int      joiner_cm_sent;       /* we sent the add-member burst on our own connection */
     long     joiner_cm_ms;         /* monotonic_ms() when that burst went out */
@@ -2454,6 +2466,60 @@ static void conn_step(struct scs_cdt *cdt, enum scs_conn_event ev, const char *e
                (unsigned)cdt->local_conid, scs_conn_action_name(t.action));
         fflush(stdout);
     }
+}
+
+/*
+ * vms-694 (§4(O.7)) -- REFLECT THE MODELLED VMS$VAXcluster CONNECTION IN OVMX'S
+ * OWN MEMBERSHIP STATE.
+ *
+ * The peer holds the VMS$VAXcluster SYSAP connection OPEN (its SDA shows
+ * `VMS$VAXcluster -> OVMX 0002 open` for the whole run, §4(O.6)). On OVMX's side
+ * that connection is the CDT it opened, cdt_joiner, and the daemon's own
+ * connection state machine DOES drive it CLOSED -> CONNECT SENT -> CONNECT ACK
+ * -> OPEN off the member's real CONNECT_RSP + ACCEPT_REQ (proven by the run's
+ * CONNFSM history, and by test_captured_ovmx_accept_req_opens_the_joiner). What
+ * was MISSING was any DURABLE record on the peer_state that this happened: the
+ * only aggregate signals, ps->connected and a raw exit-time read of the CDT,
+ * both describe a DIFFERENT or a POST-TEARDOWN state --
+ *   - ps->connected tracks the *member-opened* VMS$VAXcluster connection
+ *     (cdt_member), which the add-member wire never creates (the member
+ *     reciprocates on OUR joiner VC), so it stays 0; and
+ *   - the CDT sampled at exit reads CLOSED because the daemon gracefully
+ *     DISCONNECTs at shutdown (§4(O.7)).
+ * Together they made every reader (this item's own dispatch included) conclude
+ * "OVMX's state machine never models the connection", which is false.
+ *
+ * This helper latches the honest fact the moment the modelled connection reaches
+ * OPEN, so OVMX's self-view matches the connection the peer holds open and the
+ * fact survives the teardown sample. It reads the CDT the state machine actually
+ * drove; it does not fabricate a connection (anti-LARP: cdt_joiner genuinely
+ * reaches OPEN on the wire). Idempotent; logs once per admission.
+ */
+static void ps_note_vaxcluster_open(struct peer_state *ps)
+{
+    if (ps == NULL || ps->vaxcluster_open_reached) {
+        return;
+    }
+    enum scs_conn_state js = (ps->cdt_joiner != NULL)
+                                 ? scs_conn_state_of(ps->cdt_joiner)
+                                 : SCS_CONN_CLOSED;
+    enum scs_conn_state ms = (ps->cdt_member != NULL)
+                                 ? scs_conn_state_of(ps->cdt_member)
+                                 : SCS_CONN_CLOSED;
+    if (js != SCS_CONN_OPEN && ms != SCS_CONN_OPEN) {
+        return;
+    }
+    ps->vaxcluster_open_reached = 1;
+    log_ts(stdout);
+    printf(" SCSD-I-VAXCLMEMBER, VMS$VAXcluster SYSAP connection reached OPEN"
+           " (conid=0x%08X %s) -- OVMX now models itself as a connected cluster"
+           " member of this peer; this is the mirror of the peer's own"
+           " 'VMS$VAXcluster -> OVMX 0002 open' CDT (spec 4(O.7))\n",
+           (unsigned)(js == SCS_CONN_OPEN && ps->cdt_joiner != NULL
+                          ? ps->cdt_joiner->local_conid
+                          : (ps->cdt_member != NULL ? ps->cdt_member->local_conid : 0u)),
+           js == SCS_CONN_OPEN ? "joiner-opened" : "member-opened");
+    fflush(stdout);
 }
 
 #ifdef SCSD_UNIT_TEST
@@ -7949,6 +8015,12 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             ps->mscp_connect_sent = 0; ps->mscp_connected = 0;
             ps->connected = 0; ps->connect_sent = 0; ps->remote_conid = 0;
             ps->joiner_connect_sent = 0; ps->joiner_connected = 0;
+            /* vms-694 (§4(O.7)): a re-START is a genuine loss of THIS membership
+             * incarnation -- the VMS$VAXcluster connection must be re-formed and
+             * re-reach OPEN before OVMX may again model itself as a member. This
+             * is NOT the graceful-shutdown teardown (which must keep the latch);
+             * it is the peer tearing the session down, so drop the honest fact. */
+            ps->vaxcluster_open_reached = 0;
             ps->cm_config_sent = 0; ps->cfg_sent = 0;
             ps->join_step = JS_IDLE; ps->js_retx = 0;
             ps->greet_due_ms = 0;
@@ -8648,6 +8720,13 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                  * reported unemitted rather than silently skipped. */
                 scs_cdt_set_remote_conid(ps->cdt_joiner, lconid);
                 conn_step(ps->cdt_joiner, SCS_CONN_EV_RCV_ACCEPT_REQ, NULL);
+                /* vms-694 (§4(O.7)): the conn_step above is the transition that
+                 * reaches OPEN (Figure 2-14) for the VMS$VAXcluster SYSAP
+                 * connection the peer holds open. Latch that into OVMX's own
+                 * membership self-view now, off the CDT the daemon just drove --
+                 * so OVMX models the connection and the fact survives the
+                 * graceful teardown that closes the CDT at shutdown. */
+                ps_note_vaxcluster_open(ps);
                 log_ts(stdout);
                 printf(" SCSD-I-JOINBOUND, member accepted OUR VMS$VAXcluster"
                        " connect: local=0x%08X remote=0x%08X\n",
@@ -10752,7 +10831,7 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                     " rx->credit_sent=%ld retx=%u remote_conid=0x%08X"
                     " cm_config=%s cm_responses=%ld sysap_send=%u sysap_recv=%u"
                     " padded_replies=%ld padded_init=%d peer_padded_sca=%u"
-                    " conn[dir=%s member=%s joiner=%s]\n",
+                    " vaxcluster_member=%s conn[dir=%s member=%s joiner=%s]\n",
                     pa[0], pa[1], pa[2], pa[3], pa[4], pa[5],
                     scs_vc_state_name(rx->peers[i].pb->vc_state),
                     rx->peers[i].channel_up ? "UP" : "down", rx->peers[i].directed_replies,
@@ -10766,6 +10845,15 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                     rx->peers[i].sysap_send, rx->peers[i].sysap_recv,
                     rx->peers[i].padded_replies, rx->peers[i].padded_initiated,
                     rx->peers[i].peer_padded_sca,
+                    /* vms-694 (§4(O.7)): the honest membership fact, LATCHED when
+                     * the VMS$VAXcluster SYSAP connection reached OPEN, so it does
+                     * NOT read "no" merely because the CDT was gracefully closed
+                     * at teardown. Read THIS, not `connected=` (which tracks the
+                     * member-opened connection the add-member wire never creates)
+                     * nor the post-teardown `conn[joiner=]` sample, to answer "is
+                     * OVMX a connected cluster member of this peer". */
+                    rx->peers[i].vaxcluster_open_reached
+                        ? "CONNECTED(reached-OPEN)" : "no",
                     /* "untracked" is NOT a state: it means no CDT was ever bound
                      * for that connection (machine off, the connection not yet
                      * formed, or the CDL genuinely full). Con.IDs are per-peer

@@ -97,7 +97,7 @@ done
 WORK=${WORK:-/tmp/mk-dcl}
 mkdir -p "$WORK"
 
-CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics}"
+CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics -U_FORTIFY_SOURCE}"
 DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
 INCS="-I$DCL/include -I$REPO_SRC/libvms/include -I$REPO_SRC/vmsfs/include \
 -I$REPO_SRC/vmslnm/include -I$REPO_SRC/vmsrms/include \

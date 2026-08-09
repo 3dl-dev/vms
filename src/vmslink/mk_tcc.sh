@@ -121,7 +121,7 @@ $CC -DC2STR "$TCC_SRC/conftest.c" -o "$WORK/c2str.exe"
 "$WORK/c2str.exe" "$TCC_SRC/include/tccdefs.h" "$WORK/tccdefs_.h"
 [ -f "$WORK/tccdefs_.h" ] || { echo "mk_tcc: c2str did not produce tccdefs_.h"; exit 1; }
 
-CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics"
+CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics -U_FORTIFY_SOURCE"
 # -DOVMX_RMS_IO (vms-4ba.5): activates the three #ifdef seams in
 # libtcc.c/tccpp.c/tccelf.c that route tcc's primary-source read + object
 # write through RMS instead of raw open()/read()/write(). Applied uniformly

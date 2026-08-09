@@ -65,7 +65,7 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 WORK=${WORK:-/tmp/mk-vmslnm-shr}
 mkdir -p "$WORK"
 
-CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics}"
+CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics -U_FORTIFY_SOURCE}"
 INCS="-I$SRC/include -I$LIBVMS_INC -I$VMSSYS_INC"
 
 echo "mk_vmslnm_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH"

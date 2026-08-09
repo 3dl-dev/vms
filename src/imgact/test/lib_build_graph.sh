@@ -28,6 +28,15 @@
 #   run_test_x86_64.sh -- x86_64's default TLS dialect is the GD model, not
 #   TLSDESC). The mk_*_shr.sh recipes read this through CFLAGS (env-
 #   overridable, vms-cb5f); IMGACT.EXE's own Makefile reads ARCH directly.
+# -U_FORTIFY_SOURCE (vms-0b8): defense-in-depth against the glibc
+#   `_FORTIFY_SOURCE` header rewrite (fprintf -> __fprintf_chk etc). Alpine's
+#   musl-target gcc never triggers this (musl's headers don't fortify), but
+#   any of these OVMX sources compiled by an ambient HOST gcc (Ubuntu/Debian
+#   default on _FORTIFY_SOURCE=3 at -O1+) would emit unresolvable __*_chk
+#   references that LINK.EXE's --use graph (all producers are musl, none
+#   export glibc's fortify ABI) can never satisfy. See mk_decc_shr.sh's
+#   filter_tls_members() for the OTHER half of this leak (the same symptom
+#   entering via a whole-archived HOST libgcc.a instead of an OVMX object).
 
 build_producer_graph() {
     ARCH=${ARCH:-aarch64}
@@ -36,7 +45,7 @@ build_producer_graph() {
         x86_64)  ARCHFLAG="-mtls-dialect=gnu2" ;;
         *) echo "build_producer_graph: unsupported ARCH=$ARCH (expected aarch64 or x86_64)"; exit 1 ;;
     esac
-    LIBCFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector $ARCHFLAG"
+    LIBCFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -U_FORTIFY_SOURCE $ARCHFLAG"
 
     echo "== build IMGACT.EXE + LINK.EXE ($ARCH) =="
     ( cd "$IMGACT_DIR" && make CC="$CC" ARCH="$ARCH" clean >/dev/null 2>&1 || true; make CC="$CC" ARCH="$ARCH" ) >/dev/null 2>&1

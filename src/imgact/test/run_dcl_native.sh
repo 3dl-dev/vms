@@ -81,7 +81,7 @@ echo "-- (DCL's own +32 DECC\$SHR universals were part of that graph build) --"
 
 echo
 echo "== compile the real src/vmsdcl (21 TUs) + src/vmsqueue VMS-native ($ARCH) =="
-CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector $DCL_ARCHFLAG"
+CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -U_FORTIFY_SOURCE $DCL_ARCHFLAG"
 DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
 # -I$LIBVMSSYS_DIR (vms-8019): dcl_cmd_show.c includes "vms_kif.h" — SHOW SYSTEM
 # reads the executive's process table through vms_kif_procscan().

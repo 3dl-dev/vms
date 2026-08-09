@@ -77,7 +77,7 @@ done
 WORK=${WORK:-/tmp/mk-libvms-shr}
 mkdir -p "$WORK"
 
-CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics}"
+CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics -U_FORTIFY_SOURCE}"
 # Sibling include dirs: own headers + libvmssys (vms_kif.h) + vmsprocess/vmslnm/
 # vmsfs/vmsrms public headers (prototypes referenced across the RTL/syssvc).
 INCS="-I$SRC/include -I$HERE/../libvmssys \

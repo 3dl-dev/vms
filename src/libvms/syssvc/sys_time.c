@@ -209,6 +209,35 @@ uint32_t sys$bintim(const struct dsc$descriptor_s *timbuf, uint64_t *timadr) {
     int day, year, hour = 0, min = 0, sec = 0, hun = 0;
     char mon[4] = {0};
 
+    /*
+     * A VMS delta time has the form "[dddd ]hh:mm:ss[.cc]" with no month
+     * name — e.g. "1 01:00:00.00" (1 day, 1 hour).  It is stored as a
+     * NEGATIVE quadword whose magnitude is the interval in 100ns units
+     * (the same negative-is-delta convention sys$setimr uses).  Detect it
+     * by the absence of the "dd-MMM-yyyy" date part: a delta string has a
+     * ':' but no '-' introducing a month.
+     */
+    if (strchr(buf, ':') != NULL && strstr(buf, "-") == NULL) {
+        int d_days = 0, d_h = 0, d_m = 0, d_s = 0, d_cc = 0;
+        int n = sscanf(buf, "%d %d:%d:%d.%d",
+                       &d_days, &d_h, &d_m, &d_s, &d_cc);
+        if (n < 4) {
+            /* No leading day count: "hh:mm:ss[.cc]" */
+            d_days = 0;
+            n = sscanf(buf, "%d:%d:%d.%d", &d_h, &d_m, &d_s, &d_cc);
+            if (n < 3) return SS$_BADPARAM;
+        }
+        if (d_days < 0 || d_h < 0 || d_m < 0 || d_s < 0 || d_cc < 0)
+            return SS$_BADPARAM;
+
+        uint64_t ticks =
+            ((uint64_t)d_days * 86400ULL + (uint64_t)d_h * 3600ULL +
+             (uint64_t)d_m * 60ULL + (uint64_t)d_s) * 10000000ULL +
+            (uint64_t)d_cc * 100000ULL;
+        *timadr = (uint64_t)(-(int64_t)ticks);   /* delta: stored negative */
+        return SS$_NORMAL;
+    }
+
     if (sscanf(buf, "%d-%3s-%d %d:%d:%d.%d",
                &day, mon, &year, &hour, &min, &sec, &hun) < 3) {
         return SS$_BADPARAM;

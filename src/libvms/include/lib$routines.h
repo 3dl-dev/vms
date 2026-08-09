@@ -406,6 +406,102 @@ uint32_t lib$add_times(
 );
 
 /**
+ * lib$cvt_vectim - Convert a 7-word numeric time vector to VMS binary time
+ *
+ * @param timvec          7 words: year, month, day, hour, minute, second,
+ *                        hundredths
+ * @param resultant_time  Pointer to receive the quadword binary time
+ *
+ * @return  SS$_NORMAL on success, LIB$_INVARG on an out-of-range field
+ */
+uint32_t lib$cvt_vectim(
+    const uint16_t timvec[7],
+    void *resultant_time
+);
+
+/* ================================================================
+ * String translation / conversion / locale routines (vms-801 R2.2).
+ * Implemented in rtl/lib_strconv.c; translation tables in
+ * rtl/lib_xlate_tables.c.
+ * ================================================================ */
+
+/**
+ * lib$scopy_r_dx - Copy a source string (length + address by reference)
+ *                  into a destination descriptor of any class.
+ *
+ * @param srclen  Pointer to the word source length
+ * @param srcadr  Pointer to the source string bytes
+ * @param dst     Destination descriptor (CLASS_S or CLASS_D)
+ *
+ * @return  SS$_NORMAL, LIB$_STRTRU (truncated), or an error status
+ */
+uint32_t lib$scopy_r_dx(
+    const uint16_t *srclen,
+    const char *srcadr,
+    struct dsc$descriptor_s *dst
+);
+
+/**
+ * lib$cvt_dx_dx - Convert a source descriptor (atomic integer or text)
+ *                 to a destination text descriptor.
+ *
+ * @param src_desc  Source descriptor
+ * @param dst_desc  Destination descriptor
+ * @param retlen    Pointer to receive the resulting text length
+ *
+ * @return  SS$_NORMAL on success, LIB$_INVARG for an unsupported dtype
+ */
+uint32_t lib$cvt_dx_dx(
+    const void *src_desc,
+    void *dst_desc,
+    uint16_t *retlen
+);
+
+/**
+ * lib$movtc - Move translated characters (VAX MOVTC).
+ *
+ * @param src    Source string descriptor
+ * @param fill   Fill descriptor (first byte is the fill character)
+ * @param table  256-byte translation table descriptor
+ * @param dst    Destination string descriptor
+ *
+ * @return  SS$_NORMAL, or LIB$_STRTRU if the source was truncated
+ */
+uint32_t lib$movtc(
+    const struct dsc$descriptor_s *src,
+    const struct dsc$descriptor_s *fill,
+    const struct dsc$descriptor_s *table,
+    struct dsc$descriptor_s *dst
+);
+
+/**
+ * lib$tra_asc_ebc - Translate an ASCII string to EBCDIC (CP037).
+ * lib$tra_ebc_asc - Translate an EBCDIC string to ASCII (CP037).
+ */
+uint32_t lib$tra_asc_ebc(
+    const struct dsc$descriptor_s *src,
+    struct dsc$descriptor_s *dst
+);
+uint32_t lib$tra_ebc_asc(
+    const struct dsc$descriptor_s *src,
+    struct dsc$descriptor_s *dst
+);
+
+/**
+ * lib$currency / lib$digit_sep / lib$radix_point - Return the locale
+ * currency symbol / digit separator / radix point (US defaults "$" ","
+ * ".").
+ *
+ * @param dst     Destination descriptor to receive the symbol
+ * @param retlen  Pointer to receive the symbol length
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$currency(struct dsc$descriptor_s *dst, uint16_t *retlen);
+uint32_t lib$digit_sep(struct dsc$descriptor_s *dst, uint16_t *retlen);
+uint32_t lib$radix_point(struct dsc$descriptor_s *dst, uint16_t *retlen);
+
+/**
  * lib$mult_delta_time - Multiply delta time by scalar
  *
  * @param multiplier  Pointer to longword multiplier

@@ -111,6 +111,7 @@ rtl/ovmx_accounting rtl/lib_vm rtl/lib_output rtl/lib_signal rtl/lib_datetime rt
 rtl/lib_dyndesc rtl/lib_logical rtl/lib_symbol rtl/lib_string_ops rtl/lib_bitops \
 rtl/lib_arith rtl/lib_charscan rtl/lib_queue rtl/lib_tree rtl/lib_common \
 rtl/lib_eventflags rtl/str_routines rtl/mth_routines rtl/ots_routines rtl/sha256 \
+rtl/lib_strconv rtl/lib_xlate_tables \
 rtl/sysuaf rtl/rightslist rtl/str_util"
 
 OBJS=""

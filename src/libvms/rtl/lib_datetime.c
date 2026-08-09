@@ -15,6 +15,7 @@
 #include "ssdef.h"
 #include "descrip.h"
 #include "lib$routines.h"
+#include "libdef.h"
 #include "gen64def.h"
 
 /* Forward declaration for sys$faol from sys_fao.c */
@@ -237,6 +238,128 @@ uint32_t lib$sys_faol(const struct dsc$descriptor_s *ctrl_str,
     }
 
     return sys$faol(ctrl_str, outlen, out_str, prmlst ? args : NULL);
+}
+
+/*
+ * VMS internal time representation used by the routines below:
+ *   - An ABSOLUTE time is a POSITIVE 64-bit count of 100ns intervals
+ *     since 17-Nov-1858.
+ *   - A DELTA time is a NEGATIVE 64-bit value whose magnitude is the
+ *     interval in 100ns intervals.  (This matches the convention
+ *     sys$setimr already uses: negative == delta, and sys$bintim now
+ *     produces a negative quadword for a delta-format string.)
+ *
+ * Reference: OpenVMS RTL Library (LIB$) Manual — LIB$ADD_TIMES,
+ * LIB$SUB_TIMES; OpenVMS Programming Concepts (system time format).
+ */
+
+/*
+ * lib$add_times - Add two quadword times.
+ *
+ * Documented combinations (at least one operand must be a delta time):
+ *   absolute + delta -> absolute
+ *   delta    + delta -> delta
+ * Adding two absolute times is invalid.
+ */
+uint32_t lib$add_times(const void *time1, const void *time2, void *result) {
+    if (!time1 || !time2 || !result) return SS$_BADPARAM;
+
+    int64_t a = (int64_t)*(const uint64_t *)time1;
+    int64_t b = (int64_t)*(const uint64_t *)time2;
+    int a_delta = (a < 0), b_delta = (b < 0);
+
+    int64_t r;
+    if (!a_delta && !b_delta) {
+        return LIB$_INVARG;             /* absolute + absolute is invalid */
+    } else if (a_delta && b_delta) {
+        r = a + b;                      /* delta + delta -> (longer) delta */
+    } else {
+        int64_t abs_t = a_delta ? b : a;   /* the absolute operand */
+        int64_t delt  = a_delta ? a : b;   /* the delta operand (negative) */
+        r = abs_t - delt;               /* absolute + |delta| -> later abs */
+    }
+
+    *(uint64_t *)result = (uint64_t)r;
+    return SS$_NORMAL;
+}
+
+/*
+ * lib$sub_times - Subtract time2 from time1.
+ *
+ * Documented combinations:
+ *   absolute - absolute -> delta
+ *   absolute - delta    -> absolute
+ *   delta    - delta    -> delta
+ * Returns LIB$_NEGTIM if the result would be a negative absolute time
+ * (i.e. time1 < time2 for the absolute-minus-absolute case).
+ */
+uint32_t lib$sub_times(const void *time1, const void *time2, void *result) {
+    if (!time1 || !time2 || !result) return SS$_BADPARAM;
+
+    int64_t a = (int64_t)*(const uint64_t *)time1;
+    int64_t b = (int64_t)*(const uint64_t *)time2;
+    int a_delta = (a < 0), b_delta = (b < 0);
+
+    int64_t r;
+    if (!a_delta && !b_delta) {
+        /* absolute - absolute -> delta (stored negative) */
+        int64_t diff = a - b;
+        if (diff < 0) return LIB$_NEGTIM;
+        r = -diff;
+    } else if (!a_delta && b_delta) {
+        /* absolute - delta -> earlier absolute: abs - |delta| = a + b */
+        r = a + b;
+    } else if (a_delta && b_delta) {
+        /* delta - delta -> delta */
+        r = a - b;
+    } else {
+        /* delta - absolute is invalid */
+        return LIB$_INVARG;
+    }
+
+    *(uint64_t *)result = (uint64_t)r;
+    return SS$_NORMAL;
+}
+
+/*
+ * lib$cvt_vectim - Convert a 7-word numeric time vector to VMS binary time.
+ *
+ * Input vector (7 words):
+ *   [0] year (e.g. 2003)   [1] month (1-12)  [2] day (1-31)
+ *   [3] hour (0-23)        [4] minute (0-59) [5] second (0-59)
+ *   [6] hundredths (0-99)
+ *
+ * Produces an absolute VMS quadword time.
+ */
+uint32_t lib$cvt_vectim(const uint16_t timvec[7], void *resultant_time) {
+    if (!timvec || !resultant_time) return SS$_BADPARAM;
+
+    int year = timvec[0], month = timvec[1], day = timvec[2];
+    int hour = timvec[3], min = timvec[4], sec = timvec[5], hun = timvec[6];
+
+    if (month < 1 || month > 12 || day < 1 || day > 31 ||
+        hour > 23 || min > 59 || sec > 59 || hun > 99) {
+        return LIB$_INVARG;
+    }
+
+    struct tm tm_val;
+    memset(&tm_val, 0, sizeof(tm_val));
+    tm_val.tm_year = year - 1900;
+    tm_val.tm_mon  = month - 1;
+    tm_val.tm_mday = day;
+    tm_val.tm_hour = hour;
+    tm_val.tm_min  = min;
+    tm_val.tm_sec  = sec;
+
+    time_t t = timegm(&tm_val);
+    if (t == (time_t)-1) return LIB$_INVARG;
+
+    uint64_t vmstime = (uint64_t)t * 10000000ULL
+                     + (uint64_t)hun * 100000ULL
+                     + VMS_EPOCH_OFFSET;
+    *(uint64_t *)resultant_time = vmstime;
+
+    return SS$_NORMAL;
 }
 
 /*

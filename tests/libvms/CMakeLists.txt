@@ -43,6 +43,13 @@ libvms_add_test(test_libvms_str_routines
 libvms_add_test(test_libvms_lib_rtl_batch
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_rtl_batch.c)
 
+# Test 3c: vms-801 R2.2 conformance batch 2 — ots$ int<->text conversions,
+# ots$move3/move5/powjj, lib$add_times/sub_times/cvt_vectim (date/time),
+# lib$scopy_r_dx/cvt_dx_dx, lib$movtc/tra_asc_ebc/tra_ebc_asc, lib$currency/
+# digit_sep/radix_point, plus sys$bintim delta-time parsing.
+libvms_add_test(test_libvms_lib_rtl_batch2
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_rtl_batch2.c)
+
 # Test 5: mth$sin / mth$cos / mth$sqrt / mth$exp / mth$alog / mth$power / etc.
 libvms_add_test(test_libvms_mth_routines
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mth_routines.c)

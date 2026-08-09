@@ -194,4 +194,14 @@
 # observes 101, not a private-copy 1). Fenced to a pure leaf producer (no own
 # PT_TLS, no C-RTL bootstrap that would reprogram the thread pointer -- the
 # deferred remainder, which forks). See its own entry in facility_defects.sh.
-79
+# Raised to 80 by vms-db2's tlsdesc-offset-not-biased -- the §A.8-remainder item 4
+# OWN-PT_TLS sub-step (the DTV-append / TLS-absorb case #236 fenced): an image with
+# its OWN PT_TLS now runs in-process, given its own TLS block whose .vms$tls TLSDESC
+# entries imgact_setup_own_tls biases against DCL's UNCHANGED thread pointer, so the
+# image's __thread data is its own while DCL's TP/TLS and the resident universals'
+# TLS are untouched (the no-clobber crux). Targets libvms/syssvc/sys_imgact.c
+# (imgact_setup_own_tls's TP-relative bias) and anchors the new test_syssvc_imgact_tls
+# suite -- proven against a real /dev/vms (same VMS+Linux PID, SYS$EXIT returns, own
+# TLS distinct + correct, DCL's TP and a DCL __thread datum unchanged, resident TLS
+# still reached, event flag flows back). See its own entry in facility_defects.sh.
+80

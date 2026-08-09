@@ -89,6 +89,57 @@
 typedef long (*imgact_entryfn)(long, long);
 
 /*
+ * Resident TLSDESC static resolver (vms-db2, §A.8 remainder item 4 -- own-PT_TLS
+ * in-process). Returns descriptor->arg (word 1, the biased TP-relative offset of
+ * the variable) in the return register, PRESERVING every other register per the
+ * TLSDESC ABI -- the same contract IMGACT.EXE's __tlsdesc_static keeps
+ * (src/imgact/arch, per-arch start.S). entry[0] of every biased .vms$tls descriptor
+ * points here and the in-process image's TLSDESC access sequence calls it.
+ * Hidden: this is an internal libvms address written into the image's own
+ * descriptor cell, NOT a C-RTL universal -- it never enters the .vms$sv symbol
+ * vector or the kif SYS_VEC, so adding it triggers no cascade. `mov`/`ldr` set
+ * no flags, so the caller's condition codes survive the call too. */
+__asm__(
+    ".text\n"
+    ".p2align 4\n"
+    ".globl ovmx_tlsdesc_static\n"
+    ".hidden ovmx_tlsdesc_static\n"
+#if defined(__x86_64__)
+    ".type ovmx_tlsdesc_static,@function\n"
+    "ovmx_tlsdesc_static:\n"
+    "    movq 8(%rax), %rax\n"      /* return descriptor->arg (TP-rel offset) */
+    "    ret\n"
+    ".size ovmx_tlsdesc_static,.-ovmx_tlsdesc_static\n"
+#elif defined(__aarch64__)
+    ".type ovmx_tlsdesc_static,%function\n"
+    "ovmx_tlsdesc_static:\n"
+    "    ldr x0, [x0, #8]\n"        /* return descriptor->arg (TP-rel offset) */
+    "    ret\n"
+    ".size ovmx_tlsdesc_static,.-ovmx_tlsdesc_static\n"
+#endif
+);
+extern void ovmx_tlsdesc_static(void);
+
+/* Read the process's ALREADY-PROGRAMMED thread pointer without reprogramming it
+ * (the whole point of the own-TLS-over-DCL case). x86_64: musl stores the TCB
+ * self-pointer at %fs:0, so the FS base is readable there (no rdfsbase needed),
+ * matching IMGACT.EXE's imgact_get_tp. aarch64: TPIDR_EL0. */
+static inline unsigned long imgact_read_tp(void)
+{
+#if defined(__x86_64__)
+    unsigned long tp;
+    __asm__ volatile("mov %%fs:0, %0" : "=r"(tp));
+    return tp;
+#elif defined(__aarch64__)
+    unsigned long tp;
+    __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tp));
+    return tp;
+#else
+    return 0;
+#endif
+}
+
+/*
  * Activation is not reentrant (VMS runs one image at a time per process), so
  * the recovery state is file-scope. A nested in-process activation is out of
  * scope for this increment; the entry gate refuses a second ENTER_IMAGE while
@@ -424,6 +475,91 @@ static void imgact_apply_vms_rel(unsigned long base,
 }
 
 /*
+ * Give an in-process image with its OWN PT_TLS a DISTINCT TLS block whose
+ * __thread data is its own, WITHOUT reprogramming the process thread pointer
+ * (vms-db2, docs/design-in-process-activation.md §A.8 remainder item 4 -- the
+ * DTV-append / TLS-absorb-over-resident-C-RTL case). Reprogramming TP is exactly
+ * what IMGACT.EXE does for a FRESH-process image (setup_tls); doing it here would
+ * clobber DCL's own TLS and every resident universal's TLS -- the LARP risk #236
+ * fenced. This re-homes IMGACT.EXE's absorb_tls_over_crtl (src/imgact/imgact.c,
+ * bead vms-616) as an in-process library routine:
+ *
+ *   1. Allocate the image its OWN per-thread block [.tdata init image | .tbss 0].
+ *   2. Read DCL's already-programmed TP; delta = block - TP (signed, wraps).
+ *   3. Bias each OVMX .vms$tls TLSDESC entry: word[0] = the resident resolver
+ *      (ovmx_tlsdesc_static), word[1] += delta (LINK pre-fills word[1] with the
+ *      variable's MODULE-relative offset). The standard TLSDESC access
+ *      (TP + resolver()) then computes TP + (block - TP) + module_off =
+ *      block + module_off -- INSIDE the image's own block -- while TP, DCL's TLS
+ *      and the resident universals' TLS are untouched.
+ *
+ * This is the SAME arithmetic on both TLS variants (Drepper I aarch64 / II
+ * x86_64): the block's real address minus TP absorbs the variant's sign, so no
+ * per-variant math is needed here (IMGACT.EXE's variant math is only for the
+ * fresh-TP layout this routine deliberately avoids).
+ *
+ * FENCED (INV-6, no half-done TLS): only the OVMX .vms$tls carrier -- a
+ * TLSDESC-model own-TLS image, which LINK.EXE emits with NO PT_DYNAMIC -- is
+ * handled. A PT_TLS image with NO .vms$tls (a fixed local-exec/initial-exec
+ * TP-offset model, whose accesses bake a TP offset we cannot place beside DCL's
+ * live TLS) is refused SS$_UNSUPPORTED so the caller forks. Single image module
+ * only: a producer in the graph carrying its OWN PT_TLS stays deferred
+ * (imgact_map_producer already refuses that class). The block is process-local
+ * mmap (like absorb_tls_over_crtl's), freed by the caller at rundown.
+ *
+ * Returns SS$_NORMAL (block set in out_blk / out_len), SS$_UNSUPPORTED (deferred
+ * class -> fork), or SS$_INSFMEM. Pure userspace -- no /dev/vms.
+ */
+static uint32_t imgact_setup_own_tls(unsigned long base,
+                                     unsigned long tls_image,
+                                     unsigned long tls_filesz,
+                                     unsigned long tls_memsz,
+                                     unsigned long tls_align,
+                                     unsigned long tls_sec_addr,
+                                     unsigned long tls_sec_size,
+                                     void **out_blk, unsigned long *out_len)
+{
+    /* The .vms$tls carrier is REQUIRED (the TLSDESC-model own-TLS class). A
+     * PT_TLS image lacking it uses a fixed TP-offset model we cannot place
+     * beside DCL's TLS -> refuse (fork). */
+    if (!tls_sec_addr || tls_sec_size < sizeof(struct ovmx_tls_header))
+        return SS$_UNSUPPORTED;
+    const struct ovmx_tls_header *th =
+        (const struct ovmx_tls_header *)(base + tls_sec_addr);
+    if (th->magic != OVMX_TLS_MAGIC || th->count == 0 || th->count > 4096)
+        return SS$_UNSUPPORTED;
+    /* The count entry_off[] must fit inside the located section. */
+    if (tls_sec_size < sizeof *th + (unsigned long)th->count * sizeof(uint64_t))
+        return SS$_UNSUPPORTED;
+    /* A per-thread block is a page-aligned mmap; alignment beyond a page is not
+     * supported (matches IMGACT.EXE's absorb_tls_over_crtl overalignment fence). */
+    if (tls_align > IMGACT_PGSZ)
+        return SS$_UNSUPPORTED;
+
+    unsigned long len = IMGACT_ROUND(tls_memsz ? tls_memsz : 1);
+    void *blk = mmap(NULL, len, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (blk == MAP_FAILED)
+        return SS$_INSFMEM;
+    if (tls_filesz)
+        memcpy(blk, (void *)tls_image, tls_filesz);
+    /* .tbss tail stays zero (anonymous mapping). */
+
+    /* delta: signed distance from DCL's TP to this block's base. TLSDESC returns
+     * module_off + delta; TP + that == block + module_off. */
+    unsigned long delta = (unsigned long)blk - imgact_read_tp();
+    const uint64_t *eo = (const uint64_t *)(base + tls_sec_addr + sizeof *th);
+    for (uint32_t k = 0; k < th->count; k++) {
+        unsigned long *desc = (unsigned long *)(base + (unsigned long)eo[k]);
+        desc[0] = (unsigned long)&ovmx_tlsdesc_static;   /* resident resolver   */
+        desc[1] += delta;   /* module-relative -> TP-relative bias (vms-db2)    */
+    }
+    *out_blk = blk;
+    *out_len = len;
+    return SS$_NORMAL;
+}
+
+/*
  * SYS$SHARE search directory for a producer named only by soname -- the same
  * fallback SYSLIB IMGACT.EXE uses (src/imgact/imgact.c IMGACT_FALLBACK_SYSLIB).
  * A producer whose .vms$imp soname is an absolute/relative path is opened as
@@ -663,6 +799,16 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
      * (vms-db2). Located from the file while fd is open; applied after mapping. */
     unsigned long imp_addr = 0, imp_size = 0, rel_addr = 0, rel_size = 0;
     int have_imp = 0, have_rel = 0;
+    /* Own-PT_TLS geometry (vms-db2, §A.8 item 4). Captured from the PT_TLS phdr;
+     * the per-image TLS block is allocated and its .vms$tls TLSDESC entries
+     * biased against DCL's TP before the image is entered, and the block is freed
+     * at rundown (tls_blk volatile: set before the enter/setjmp, freed in the
+     * common teardown after a possible longjmp). */
+    int have_own_tls = 0;
+    unsigned long tls_vaddr = 0, tls_filesz = 0, tls_memsz = 0, tls_align = 1;
+    unsigned long tls_sec_addr = 0, tls_sec_size = 0;
+    void * volatile tls_blk = MAP_FAILED;
+    volatile unsigned long tls_blk_len = 0;
     /* volatile: read/used after a possible longjmp out of the image (a fault),
      * so their values must not be left indeterminate by the non-local jump. */
     void * volatile win = MAP_FAILED;
@@ -708,12 +854,20 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
             interp_sz  = ph[i].p_filesz;
             continue;
         }
-        /* PT_TLS deferred (vms-db2): sharing the resident DECC$SHR's musl TLS
-         * with an in-process image is §A.8-remainder item 4, not this sub-step.
-         * A TLS-bearing image forks until then -- no half-done TLS. */
+        /* Own PT_TLS (vms-db2, §A.8 item 4): capture the geometry; the image
+         * gets its OWN TLS block, biased against DCL's TP (imgact_setup_own_tls
+         * below), rather than forking. Handled only for the OVMX .vms$tls
+         * TLSDESC carrier -- a PT_TLS image without .vms$tls is refused there and
+         * forks (no half-done TLS). .tbss is a per-thread template, not mapped
+         * memory, so PT_TLS does NOT extend span_hi (the PT_LOAD holding .tdata
+         * does). */
         if (ph[i].p_type == PT_TLS) {
-            close(fd);
-            return SS$_UNSUPPORTED;
+            have_own_tls = 1;
+            tls_vaddr  = ph[i].p_vaddr;
+            tls_filesz = ph[i].p_filesz;
+            tls_memsz  = ph[i].p_memsz;
+            tls_align  = ph[i].p_align ? ph[i].p_align : 1;
+            continue;
         }
         if (ph[i].p_type == PT_LOAD &&
             ph[i].p_vaddr + ph[i].p_memsz > span_hi)
@@ -737,6 +891,11 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
      * a no-op and its activation path is byte-for-byte what increment iv did. */
     have_imp = imgact_find_section(fd, OVMX_IMP_SECTION, &imp_addr, &imp_size);
     have_rel = imgact_find_section(fd, OVMX_REL_SECTION, &rel_addr, &rel_size);
+    /* .vms$tls: the OVMX TLSDESC-entry carrier for an own-PT_TLS image (vms-db2).
+     * Located while the file is open; the image's TLSDESC descriptors it points
+     * at are biased below (imgact_setup_own_tls), after the image is mapped. */
+    if (have_own_tls)
+        (void)imgact_find_section(fd, OVMX_TLS_SECTION, &tls_sec_addr, &tls_sec_size);
 
     /* ---- 2. Reserve the P0 window and map the image into it ----------- */
     win = mmap(NULL, IMGACT_P0_WINDOW, PROT_NONE,
@@ -802,6 +961,24 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
             imgact_map_producer);
         if (!(status & 1))
             goto out_unmap;   /* unbound import -> caller keeps the fork path */
+    }
+
+    /* Own-PT_TLS: give the image its own TLS block, biased against DCL's TP, so
+     * its __thread data is ITS OWN while DCL's TP/TLS and the resident universals'
+     * TLS are untouched (vms-db2, §A.8 item 4). Done while segments are still RW
+     * (the .vms$tls descriptors it writes live in a writable image section) and
+     * BEFORE any executive call, so a deferred-class TLS image (no .vms$tls) forks
+     * with no /dev/vms interaction (INV-6). The block is freed at rundown. */
+    if (have_own_tls) {
+        void *blk = NULL;
+        unsigned long blen = 0;
+        status = imgact_setup_own_tls(base, base + tls_vaddr, tls_filesz,
+                                      tls_memsz, tls_align,
+                                      tls_sec_addr, tls_sec_size, &blk, &blen);
+        if (!(status & 1))
+            goto out_unmap;   /* deferred TLS class / OOM -> caller forks */
+        tls_blk = blk;
+        tls_blk_len = blen;
     }
 
     /* Reprotect each segment to its final PT_LOAD permissions. */
@@ -929,6 +1106,8 @@ out_p0:
 out_unmap:
     if (fd >= 0)
         close(fd);
+    if (tls_blk != MAP_FAILED)
+        munmap((void *)tls_blk, tls_blk_len);   /* free the per-image TLS block */
     if (win != MAP_FAILED)
         munmap(win, IMGACT_P0_WINDOW);   /* collapse the P0 window */
     return status;

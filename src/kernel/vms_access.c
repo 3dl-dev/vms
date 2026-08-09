@@ -187,10 +187,28 @@ out:
  * requires NO privilege check of its own -- the executive already proved
  * the caller legitimately descended, and the target is not caller-chosen,
  * it is the executive's own recorded fact.
+ *
+ * IMAGE-SCOPED RESOURCE RELEASE (vms-68f.v, docs/design-in-process-
+ * activation.md Part II §A.2.1 step 2, §A.6.1 -- "rundown completeness is
+ * the hard part"). On OpenVMS, image rundown does not just switch mode: it
+ * releases the resources the image owned -- the channels it $ASSIGNed, the
+ * locks it $ENQed, the ASTs it declared -- all at USER access mode, while
+ * process-permanent (inner-mode) state survives so DCL resumes intact. This
+ * handler now does that: the mode being run down (proc->current_mode, USER on
+ * every path ENTER_IMAGE built) is captured, and after the mode is restored
+ * the executive dequeues exactly this process's resources owned at that mode
+ * or outer. The P1 control-region extent is under its own lock and is never
+ * named here, so "P0/image state dies at rundown, P1 survives" holds at the
+ * resource level too. Which classes are image-scoped vs process-permanent is
+ * grounded per class in docs/design-image-rundown-resource-classes.md, not
+ * guessed (Rule 8). Release runs OUTSIDE mode_lock (the resource lists have
+ * their own locks; one PCB, one image at a time, so no concurrent activation
+ * races it) -- the same discipline vms_proc_free_claimed() uses.
  */
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_modexfer_args args;
+    uint8_t rundown_mode;
 
     memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
@@ -207,11 +225,17 @@ long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg)
     }
 
     args.prev_mode = proc->current_mode;
+    rundown_mode = proc->current_mode;   /* the image's mode (PSL_C_USER) */
     proc->current_mode = proc->pre_image_mode;
     proc->image_active = 0;
     args.new_mode = proc->current_mode;
 
     spin_unlock(&proc->mode_lock);
+
+    /* Release the image's resources; process-permanent state is left alone. */
+    vms_proc_rundown_locks(proc, rundown_mode);
+    vms_proc_rundown_channels(proc, rundown_mode);
+    vms_proc_rundown_asts(proc, rundown_mode);
 
     args.status = SS__NORMAL;
 

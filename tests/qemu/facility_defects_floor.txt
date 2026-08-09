@@ -131,4 +131,14 @@
 # in-process image cannot corrupt DCL's critical P1" (the p1_protect the
 # activation applies before ENTER_IMAGE). See its own entry in
 # facility_defects.sh for what it covers and why.
-71
+# Raised to 74 by vms-cd48's image-rundown-leaks-user-lock -- vms-68f.v,
+# SYS$RUNDWN image-scoped resource release (image rundown dequeues the locks,
+# deassigns the channels and flushes the ASTs an activated image held at USER
+# mode, while process-permanent inner-mode state survives). Targets
+# vms_ioctl_image_rundown()'s own body (kernel/vms_access.c) and anchors the
+# new test_kmod_rundown suite's key property. (This also closes the standing
+# gap the note above flags: super-mode-escalation and image-rundown-without-
+# entry, vms-68f.iii, had pushed the true count to 73 without the floor being
+# raised; 74 is the re-derived `echo $DEFECTS | wc -w`.) See its own entry in
+# facility_defects.sh for what it covers and why.
+74

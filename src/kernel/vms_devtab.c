@@ -389,6 +389,47 @@ void vms_proc_release_channels(struct vms_proc *proc)
     vms_mbx_release_all(proc);
 }
 
+/*
+ * vms_proc_rundown_channels - image rundown's channel release (vms-68f.v).
+ *
+ * Deassign only the DEVICE channels this process took at access mode >=
+ * min_acmode (image rundown passes PSL_C_USER, so only the USER-mode channels
+ * an activated image assigned), leaving supervisor/exec/kernel-mode channels
+ * -- which are process-permanent -- assigned. This is the resource-level half
+ * of "P0 dies at rundown, P1 survives": a channel an image $ASSIGNed is
+ * image-scoped and goes here; a channel DCL holds across activations does not.
+ * Grounding per class (which classes are image-scoped): docs/oracle/
+ * image-rundown-resource-classes.md.
+ *
+ * NOT released here, deliberately (see that doc's "process-permanent" column):
+ *   - mailbox channels (proc->mbx_channels): released only at process death by
+ *     vms_mbx_release_all(); image-scoping them is a flagged follow-up, and
+ *     NOT releasing them at rundown is the pre-vms-68f.v status quo (no leak
+ *     regression -- they still free when the process exits).
+ *   - a device the process $ALLOCated: an explicit allocation's rundown class
+ *     (image vs process) is not yet oracle-pinned, so this leaves it to process
+ *     teardown rather than guess (Rule 8). Deassigning a USER channel still
+ *     drops any IMPLICIT ownership resting on that channel, via
+ *     device_release_channel(), exactly as full teardown does.
+ */
+void vms_proc_rundown_channels(struct vms_proc *proc, uint8_t min_acmode)
+{
+    struct vms_channel *ch, *tmp;
+    LIST_HEAD(doomed);
+
+    spin_lock(&proc->chan_lock);
+    list_for_each_entry_safe(ch, tmp, &proc->channels, list)
+        if (ch->acmode >= min_acmode)
+            list_move(&ch->list, &doomed);
+    spin_unlock(&proc->chan_lock);
+
+    list_for_each_entry_safe(ch, tmp, &doomed, list) {
+        list_del(&ch->list);
+        device_release_channel(ch);
+        kfree(ch);
+    }
+}
+
 /* ================================================================
  * ioctl handlers
  * ================================================================ */
@@ -464,6 +505,18 @@ long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg)
 
     ch->dev = dev;
     ch->owner_linux_pid = proc->linux_pid;
+
+    /*
+     * Record the access mode $ASSIGN was issued from, so image rundown can
+     * tell an image-scoped (USER) channel from a process-permanent one
+     * (vms-68f.v). VMS $ASSIGN takes an acmode maximized against the caller's
+     * mode; OVMX records the caller's current mode, which is that maximum for
+     * every caller that does not ask for a more privileged one -- the only
+     * callers OVMX has. See docs/design-image-rundown-resource-classes.md.
+     */
+    spin_lock(&proc->mode_lock);
+    ch->acmode = proc->current_mode;
+    spin_unlock(&proc->mode_lock);
 
     spin_lock(&dev->lock);
     dev->refcnt++;

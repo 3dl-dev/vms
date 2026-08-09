@@ -639,6 +639,33 @@ enum join_step {
  * it retries the SAME CONNECT_REQ before conceding. See
  * tests/vmsscs/test_scsd_wire.c's nine-reject regression. */
 #define JOIN_RETX_MAX        12u
+/* vms-694 (2026-08-09): the MSCP$DISK CONNECT-REQUEST retransmit CADENCE --
+ * grounded SEPARATELY from the generic JOIN_RETX_TIMEOUT_MS above, not folded
+ * into it, because JOIN_RETX_TIMEOUT_MS ALSO drives JS_DIR_CONNECT,
+ * JS_DIR_LOOKUP_{TAPE,DISK,VC} and JS_VC_CONNECT (plus PSC_DIR_CONNECT /
+ * PSC_DIR_LOOKUP_* under OVMX_PURE_SERVER), none of which this measurement
+ * covers -- widening it would be an UNGROUNDED change to steps nobody has
+ * measured. Two sources, in agreement:
+ *   (1) docs/cluster-protocol-spec.md sec (1h): "a different Con.ID family
+ *       runs NINE consecutive 4/5 exchanges between the same two nodes at
+ *       ~10 s intervals with a STRICTLY INCREASING Con.ID ... and a TENTH
+ *       attempt switches message type entirely -- to 2/3 -- and succeeds".
+ *   (2) Direct re-measurement off the SAME capture
+ *       (af2-firsttimer-established-20260728.pcap), real-VAX-source (OUI
+ *       08:00:2b) 62-byte msgtype-4/5 frames only, sorted by wire timestamp:
+ *       28 frames, 27 inter-frame deltas, 25 "steady-state" deltas (the other
+ *       2 are >100s idle gaps between separate reject-storm runs, not this
+ *       cadence) span 9.489s-10.434s, mean 10.023s, and the great majority
+ *       cluster tightly at 9.99-10.02s -- the three ~10.2-10.4s outliers are
+ *       each the FIRST retry after one of those idle gaps, not the steady
+ *       cadence. 10000ms is the grounded value both sources converge on.
+ * OVMX's prior 400ms (JOIN_RETX_TIMEOUT_MS, shared with every other step) was
+ * 25x too fast against this reference -- retrying at 25x the real cadence
+ * risks a real peer treating OVMX as misbehaving mid-reject-storm, which is
+ * exactly the storm JOIN_RETX_MAX=12 (above) exists to survive. Override for
+ * LAB EXPERIMENTS ONLY, never for production cadence: OVMX_MSCP_CONNECT_
+ * RETX_MS (see mscp_connect_retx_timeout_ms()). */
+#define MSCP_CONNECT_RETX_TIMEOUT_MS 10000u
 /* vms-e81: a NEWCOMER gets a far longer offer window than a settled peer.
  * Run by5: OVMX correctly opened its SCS$DIRECTORY to VAX3, VAX3 never
  * answered, and OVMX gave up after 6 retries / ~12 s -- WHILE VAX3 WAS STILL
@@ -6579,6 +6606,29 @@ static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
 }
 
 /*
+ * mscp_connect_retx_timeout_ms - vms-694: the grounded ~10s MSCP$DISK
+ * CONNECT-REQUEST retransmit cadence (MSCP_CONNECT_RETX_TIMEOUT_MS above),
+ * with a lab-only override. Same shape as scsd_shutdown_wait_ms() below:
+ * OVMX_MSCP_CONNECT_RETX_MS, a non-negative decimal milliseconds value, lets
+ * a lab run trade authenticity for turnaround time deliberately and
+ * visibly -- it must never be the default path, so an absent/malformed/
+ * negative value always falls back to the grounded constant rather than to
+ * some other guess.
+ */
+static long mscp_connect_retx_timeout_ms(void)
+{
+    const char *e = getenv("OVMX_MSCP_CONNECT_RETX_MS");
+    if (e != NULL && e[0] != '\0') {
+        char *end = NULL;
+        long v = strtol(e, &end, 10);
+        if (end != NULL && *end == '\0' && v >= 0) {
+            return v;
+        }
+    }
+    return (long)MSCP_CONNECT_RETX_TIMEOUT_MS;
+}
+
+/*
  * scsd_join_retx_for_peer - vms-694: the join-sequencer's per-step CONNECT-
  * REQUEST retransmit (both the JS_IDLE closure-branch joiner retransmit and
  * the worktree-760 step sequencer), factored out of scsd_handle_frame()'s
@@ -6647,7 +6697,13 @@ static void scsd_join_retx_for_peer(struct scsd_rx *rx, struct peer_state *ps, l
                                                : JOIN_RETX_MAX)) {
         long last_ms = ps->js_last_tx.tv_sec * 1000L +
                        ps->js_last_tx.tv_nsec / 1000000L;
-        if ((now_ms - last_ms) >= (long)JOIN_RETX_TIMEOUT_MS) {
+        /* vms-694: JS_MSCP_CONNECT alone rides the grounded ~10s MSCP$DISK
+         * CONNECT-REQUEST cadence -- every other step here keeps the generic
+         * JOIN_RETX_TIMEOUT_MS, which this measurement does not cover. */
+        long step_timeout_ms = (ps->join_step == JS_MSCP_CONNECT)
+                                    ? mscp_connect_retx_timeout_ms()
+                                    : (long)JOIN_RETX_TIMEOUT_MS;
+        if ((now_ms - last_ms) >= step_timeout_ms) {
             int sent = 0;
             switch (ps->join_step) {
             case JS_DIR_CONNECT:
@@ -7674,7 +7730,14 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             long now_ms = monotonic_ms();
             long last_ms = ps->psc_last_tx.tv_sec * 1000L +
                            ps->psc_last_tx.tv_nsec / 1000000L;
-            if ((now_ms - last_ms) >= (long)JOIN_RETX_TIMEOUT_MS) {
+            /* vms-694: PSC_MSCP_CONNECT is the SAME MSCP$DISK CONNECT-REQUEST
+             * wire message as JS_MSCP_CONNECT above, so it rides the same
+             * grounded ~10s cadence; the other PS steps keep the generic
+             * JOIN_RETX_TIMEOUT_MS. */
+            long step_timeout_ms = (ps->psc_step == PSC_MSCP_CONNECT)
+                                        ? mscp_connect_retx_timeout_ms()
+                                        : (long)JOIN_RETX_TIMEOUT_MS;
+            if ((now_ms - last_ms) >= step_timeout_ms) {
                 int sent = 0;
                 switch (ps->psc_step) {
                 case PSC_DIR_CONNECT:

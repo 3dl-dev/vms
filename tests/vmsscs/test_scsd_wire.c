@@ -6225,6 +6225,83 @@ static void test_join_retx_survives_a_peer_gone_quiet_on_directed_hello(void)
 }
 
 /*
+ * (2a-5) vms-694: THE MSCP$DISK CONNECT-REQUEST RETRANSMIT MUST FIRE AT THE
+ * GROUNDED ~10s REFERENCE CADENCE -- AND MUST NOT FIRE EARLY.
+ *
+ * docs/cluster-protocol-spec.md sec (1h) grounds the interval between two
+ * REAL VAXes' own MSCP$DISK CONNECT-REQUEST retries at ~10 SECONDS ("a
+ * different Con.ID family runs NINE consecutive 4/5 exchanges ... at ~10 s
+ * intervals"), independently re-measured directly off the same capture
+ * (af2-firsttimer-established-20260728.pcap: 25 steady-state inter-frame
+ * deltas, band 9.489s-10.434s, mean 10.023s -- see the
+ * MSCP_CONNECT_RETX_TIMEOUT_MS comment in scsd.c for the full figure). The
+ * prior shared JOIN_RETX_TIMEOUT_MS (400ms) was 25x too fast against this
+ * reference for exactly this step.
+ *
+ * This is a VIRTUAL-CLOCK test, not a real-time wait: scsd_join_retx_tick()
+ * already takes its "now" as an explicit now_ms parameter rather than
+ * reading the wall clock itself, so the test drives it with a fictitious
+ * timeline (base_now_ms, chosen arbitrarily -- never real time) and writes
+ * ps->js_last_tx directly (never clock_gettime) to place the "last send" at
+ * an exact, chosen distance before that instant. That proves BOTH halves of
+ * the cadence claim cheaply and deterministically: one tick short of
+ * MSCP_CONNECT_RETX_TIMEOUT_MS the code must NOT retransmit, and at exactly
+ * that many ms it MUST.
+ */
+static void test_mscp_connect_retx_fires_at_grounded_cadence_not_early(void)
+{
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_NO_JOIN_RETX_TICK") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_MSCP_CONNECT_RETX_MS") == 0, "unsetenv failed");
+
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    CHECK(ps != NULL, "the fixture's circuit could not be opened");
+    if (ps == NULL) {
+        return;
+    }
+
+    ps->start_acked = 1;
+    ps->join_step = JS_MSCP_CONNECT;
+    ps->js_retx = 0;
+    ps->mscp_connect_sent = 1;
+    ps->mscp_connected = 0;
+    ps->mscp_remote_conid = 0;
+    ps->incarnation = 1;
+
+    /* An arbitrary fictitious instant on the injected timeline -- large
+     * enough that "base_now_ms - cadence_ms" never goes negative, otherwise
+     * unrelated to any real clock. */
+    const long base_now_ms = 5000000L;
+    const long cadence_ms = mscp_connect_retx_timeout_ms();
+    CHECK(cadence_ms == (long)MSCP_CONNECT_RETX_TIMEOUT_MS,
+          "OVMX_MSCP_CONNECT_RETX_MS leaked into this test's environment"
+          " (cadence_ms=%ld, expected the grounded default %ld)",
+          cadence_ms, (long)MSCP_CONNECT_RETX_TIMEOUT_MS);
+
+    /* One millisecond short of the cadence: MUST NOT retransmit yet. */
+    long early_ms = base_now_ms - (cadence_ms - 1);
+    ps->js_last_tx.tv_sec = early_ms / 1000;
+    ps->js_last_tx.tv_nsec = (early_ms % 1000) * 1000000L;
+    scsd_join_retx_tick(&r.rx, (uint64_t)base_now_ms);
+    CHECK(ps->js_retx == 0,
+          "MSCP CONNECT_REQ retransmit fired 1ms before the grounded %ldms"
+          " cadence (js_retx=%u) -- docs/cluster-protocol-spec.md sec (1h)"
+          " and the direct pcap re-measurement both ground this at ~10s",
+          cadence_ms, ps->js_retx);
+
+    /* Exactly at the cadence: MUST retransmit. */
+    long due_ms = base_now_ms - cadence_ms;
+    ps->js_last_tx.tv_sec = due_ms / 1000;
+    ps->js_last_tx.tv_nsec = (due_ms % 1000) * 1000000L;
+    scsd_join_retx_tick(&r.rx, (uint64_t)base_now_ms);
+    CHECK(ps->js_retx == 1,
+          "MSCP CONNECT_REQ retransmit did not fire once the grounded %ldms"
+          " cadence had fully elapsed (js_retx=%u)", cadence_ms, ps->js_retx);
+}
+
+/*
  * (2b) THE OTHER KILL SWITCH MUST NOT BECOME A REFUSAL STORM.
  *
  * scsd_cdl_ready is only set when the connection state machine is enabled, so
@@ -9102,6 +9179,10 @@ int main(void)
      * still arriving -- a live lab-2 rejoin showed it going silent with
      * retry-count headroom left. */
     test_join_retx_survives_a_peer_gone_quiet_on_directed_hello();
+    /* vms-694: the MSCP CONNECT_REQ retransmit cadence itself must be the
+     * grounded ~10s reference value, and must not fire early -- virtual
+     * clock, no real sleep. */
+    test_mscp_connect_retx_fires_at_grounded_cadence_not_early();
     test_no_conn_fsm_does_not_turn_into_a_refusal_storm();
     /* The OTHER inbound-CONNECT_REQ branch: the 0x5b SCS$DIRECTORY path. */
     test_the_0x5b_directory_connect_is_scanned_before_it_is_accepted();

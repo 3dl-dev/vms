@@ -4119,6 +4119,103 @@ was never missing — the FSM bookkeeping was blind to it. Logs:
 `/data/training/vax/k8s-labs/vaxlab-10/logs/scsd-vms694O8.log`, `d94-vms694O8.pcap`.
 2026-08-09.
 
+---
+
+#### 4(O.9) The rejoin refusal is the CM READMISSION transaction, NOT the VC-START identity conflict — an independent HEAD re-bracket, and the two timing-dependent surface modes (GROUNDED live, `vms-694`, 2026-08-09)
+
+**Frame.** After five refutation-class resolutions this session (§4(O.6)–§4(z))
+cleared the *fresh-join* accounting artifacts, the single genuine open admission
+bug was: **a just-departed identity's rejoin does not complete (`XITDONE=0`).**
+This subsection re-brackets it clean at HEAD, ELIMINATES the standing hypothesis
+that it is the §4(w)/#230 `SCSSYSTEMID` identity conflict, and locates the stall
+precisely. It CONFIRMS and refines §4(O.2)/§4(O.3) (`vms-449`) on current `main`.
+
+**Method.** One virgin lab-2 pod (`vaxlab-10`, scaled up fresh, verified `CN_2`),
+`SCSD.EXE` built from `main` at `a283f6a` (all of #221 per-peer Con.ID +
+the §4i.B incarnation echo + the `cm_apply_rejoin_form` REJOIN form present),
+`OVMX_JOIN_SEQ=1`, `connwatch.sh` sampling VAX1's CDT for our identity *while
+OVMX runs* (guardrail 22). Identity proven from capture bytes each run
+(guardrail 18). Four arms:
+
+| arm | identity | scenario | verdict |
+|---|---|---|---|
+| a | `OVMXA4`/1812 | first join, no prior-admission sidecar | **`XITDONE=1`** (peer CSB `member`, `CN` 2→3) |
+| c | `OVMXA4`/1812 | rejoin ~45 s later (sidecar present) | **`XITDONE=0`** |
+| E | `OVMXA4`/1812 | rejoin ~7 min later (peer CSB in `long_break`) | **`XITDONE=0`** |
+| d | `OVMXB0`/1813 | fresh id, same pod, after c/E were refused | **`XITDONE=1`** |
+
+Arm d admits a fresh identity on the very pod that just refused the reused one —
+so the stall is **id-reuse, not a broken pod** (guardrail 20, the control sits
+after the refusals).
+
+**⛔ The §4(w)/#230 identity-conflict hypothesis is ELIMINATED as the rejoin
+cause.** Across all three rejoin/join runs the VC-START completes cleanly: **0
+`%PEA0`, 0 `SCSD-W-VCNOACK`, VC reaches `OPEN` on every peer, `start_acked=1`**,
+and the member correctly advertises the returning node's **node-incarnation N=2
+(arm c) / N=3 (arm E)** in its directed HELLO `[78:80]` (§4i.B), which OVMX reads
+off the wire and echoes into its `0x41` START `[22:24]` (`SCSD-I-INCARN` +
+`SCSD-I-STARTTX … incarnation=2`). The peer never withholds its round-2 ACK.
+Whatever refuses the rejoin lives **downstream of the VC**, at the connection-
+manager readmission — exactly where §4(O.2) put it, and NOT at the START gate.
+(The `%PEA0, Port has Closed Virtual Circuit` on VAX1's console is the *normal*
+teardown when OVMX exits — "lost connection", not "Remote System Conflicts".)
+
+**Two timing-dependent SURFACE modes of the one refusal** (this is the new datum
+over §4(O.2), which only sampled the slow mode):
+
+- **Fast rejoin (arm c, residual connection still live).** OVMX returns ~45 s
+  after the kill, while the peer still holds arm a's `VMS$VAXcluster ← OVMXA4`
+  CDT at `0002 open`. The peer then puts OVMX's *new* joiner-initiated
+  `VMS$VAXcluster` CONNECT-REQ into **`000B rej_sent` / blocked `0003 rej_pend`,
+  `Rej/Disconn Reason` non-zero** (SDA column-overflows it to `****`) — stable
+  T+5 s→T+150 s. This is the first **explicit SCS-connection-layer REJECTION**
+  captured on a rejoin (the "reject" the reject-storm thread is named for): the
+  member refuses a second `VMS$VAXcluster` connection to a node it still has an
+  open one to. No `JOINBOUND`, no CM add-member burst, no barrier. OVMX's joiner
+  connection parks at `CONNECT ACK`, `remote_conid=0`.
+
+- **Slow rejoin (arm E, connections torn down, CSB `long_break`).** By ~7 min the
+  peer has torn its connections down (`No Connections Found`) and holds OVMXA4's
+  CSB in **`wait / long_break`, CSID `00000000`, Nodes back to 2** — never
+  freeing it. Now the member **accepts** OVMX's joiner `VMS$VAXcluster` connect
+  (`SCSD-I-JOINBOUND local=0x33FE0002 remote=0xD155000E`), OVMX sends the
+  add-member burst **and** the REJOIN form of op 0x02 (`SCSD-I-CMREJOIN`,
+  `cm_apply_rejoin_form`, `rejoin=1` + founding time/sysid). The member then
+  **ABANDONS the CM readmission transaction** — the joiner VC goes `DISC SENT`,
+  no state-transition barrier runs, `XITDONE=0`. This is §4(O.2)'s "neither
+  completes nor aborts" observation, now located: OVMX's op 0x02 REJOIN form is
+  *exercised but incomplete* — it does not carry whatever the member needs to
+  re-admit a node whose CSB it holds in `long_break` and re-allocate the fresh
+  CSB a real crash-rejoin earns (`csbcycle.sh` §4j).
+
+**Verdict: a real OVMX incompleteness, NOT inherent record-aging.** A real VAX
+that is `kill -9`'d, crash-removed and rebooted rejoins under an unchanged
+`SCSNODE`/`SCSSYSTEMID` (`vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`), and
+the fresh-id controls join every time. Waiting for the peer to reach `long_break`
+does **not** rescue OVMX (arm E). So the rejoin is not gated by an aging timeout
+one can wait out; it is gated by a CM readmission transaction OVMX does not yet
+complete. `cm_apply_rejoin_form` (added by `vms-2f3`) is the right lever and the
+right place — it is simply not yet sufficient for the member to finish the
+transition.
+
+**Correct operational response TODAY:** mint a **fresh** `SCSNODE`/`SCSSYSTEMID`
+for each OVMX (re)start — never reuse a just-departed identity — proven by arm d.
+The VMS-faithful behaviour (same identity across restarts, as a real VAX does) is
+the next increment: complete the op 0x02 REJOIN-form CM transaction against
+`vax3-class03-crash-REJOIN-SUCCESS`. Filed as `vms-694`'s rejoin-completion child.
+
+**Explicit non-claims.** (1) This does not isolate *which* byte of the REJOIN-form
+op 0x02 the member requires to finish the transition — that is the follow-up RE.
+(2) The `Rej/Disconn Reason` value is recorded as *non-zero* (SDA rendered `****`),
+not decoded to a specific SCS reject code. (3) The fast/slow split is a function of
+how long the peer's own connection teardown takes after our departure; the exact
+threshold is not measured (two timepoints, 45 s and ~7 min).
+
+**Evidence** (host, tank volume):
+`/data/training/vax/k8s-labs/vaxlab-10/logs/scsd-{a4join1,a4rejoin,a4rejoin2,b0fresh}.log`,
+`/data/training/vax/cluster/work/{a4join1,a4rejoin,a4rejoin2,b0fresh}.{csb,status}`,
+`d94-{a4join1,a4rejoin,a4rejoin2,b0fresh}.pcap`.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

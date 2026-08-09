@@ -277,3 +277,33 @@ wiring is not.
 `/data/training/vax/k8s-labs/vaxlab-9/logs/scsd-z2joinON.log`,
 `/data/training/vax/k8s-labs/vaxlab-7/logs/scsd-k0killsw.log`,
 `/data/training/vax/cluster/work/{z2joinON,k0killsw}.{csb,status}`.
+
+---
+
+## 8. The rejoin residual, re-bracketed clean and LOCATED (`vms-694`, 2026-08-09)
+
+After §7 falsified the MSCP-accept diagnosis, the genuine open bug narrowed to
+**a just-departed identity's rejoin not completing (`XITDONE=0`)**. That is now
+freshly bracketed at HEAD and located. Full record + evidence:
+`docs/cluster-protocol-spec.md` **§4(O.9)** (and the prior `vms-449` grounding at
+§4(O.2)/§4(O.3)). Summary:
+
+- **Clean bracket** on one virgin pod (`vaxlab-10`, `SCSD.EXE` from `main`
+  `a283f6a`): first join `OVMXA4`/1812 → `XITDONE=1`; **rejoin same id →
+  `XITDONE=0`** (both fast, ~45 s, and slow, ~7 min); **fresh id `OVMXB0`/1813 on
+  the same pod → `XITDONE=1`**. The stall is id-reuse, not a broken pod.
+- **The §4(w)/#230 identity-conflict hypothesis is ELIMINATED as the cause:** the
+  VC-START completes on every rejoin (0 `%PEA0`, 0 `VCNOACK`, VC `OPEN`,
+  `start_acked=1`, member advertises incarnation N=2/3 and OVMX echoes it into
+  `0x41 [22:24]`). The refusal is **downstream of the VC**, at CM readmission.
+- **Two surface modes of the one refusal:** fast rejoin — the peer holds the
+  prior `VMS$VAXcluster 0002 open` CDT and **rejects** OVMX's new joiner connect
+  (`000B rej_sent`, non-zero reason); slow rejoin — the peer holds OVMXA4's CSB
+  in `long_break`, **accepts** the connect (`JOINBOUND`), OVMX sends the op 0x02
+  REJOIN form (`cm_apply_rejoin_form`), and the member then **abandons** the CM
+  transaction (`DISC SENT`, no barrier).
+- **Not inherent aging.** A real VAX crash-rejoins under the same id
+  (`vax3-class03-crash-REJOIN-SUCCESS`). The gap is OVMX's op 0x02 REJOIN form is
+  *exercised but incomplete*. **Operational response now:** mint a fresh identity
+  per boot (arm d). **Fix (next increment):** complete the op 0x02 REJOIN-form CM
+  transaction against that capture so a reused identity re-admits.

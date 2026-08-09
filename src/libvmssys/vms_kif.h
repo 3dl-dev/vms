@@ -366,10 +366,10 @@ uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info);
 /* Register [base, limit) as this process's current P0 extent. SS$_BADPARAM
  * for a degenerate or out-of-address-space range; overwrites any
  * previously-registered extent (see vms_p0.c for why that is not an error).
- * OVMX-UNWIRED: vms_kif_p0_map (vms-6f1) -- imgact$activate, the in-process
- * activation library that calls this once it has mapped an image's PT_LOAD
- * segments into the P0 window, is increment iv of vms-68f; nothing in the
- * product calls it yet. */
+ * Wired (vms-6f1, increment iv): imgact_activate() (src/libvms/syssvc/
+ * sys_imgact.c) calls this once it has mapped an in-process image's PT_LOAD
+ * segments into the P0 window, and dcl_activate_image() dispatches RUN through
+ * it -- the census gate is what proves it has a product caller. */
 uint32_t vms_kif_p0_map(uint64_t base, uint64_t limit);
 
 /* Clear this process's P0 extent (image rundown). Always succeeds
@@ -377,9 +377,11 @@ uint32_t vms_kif_p0_map(uint64_t base, uint64_t limit);
  * both optional -- receive the extent that WAS registered, zero if none
  * was, so a caller can observe what was just freed without a separate
  * $GETJPI round trip.
- * OVMX-UNWIRED: vms_kif_p0_unmap (vms-6f1) -- SYS$RUNDWN's library path
- * (vms-68f increment v) is what will call this; nothing in the product
- * calls it yet. */
+ * Wired (vms-6f1, increment iv): imgact_activate()'s rundown path
+ * (src/libvms/syssvc/sys_imgact.c) calls this to mark the process image-less
+ * after the in-process image returns and its P0 window is collapsed -- the
+ * census gate is what proves it has a product caller. (Full SYS$RUNDWN
+ * resource release -- channels, P0 locks, image ASTs -- is increment v.) */
 uint32_t vms_kif_p0_unmap(uint64_t *old_base, uint64_t *old_limit);
 
 /* ================================================================
@@ -400,9 +402,12 @@ uint32_t vms_kif_p0_unmap(uint64_t *old_base, uint64_t *old_limit);
 /* Register [base, limit) as this process's P1 extent. SS$_BADPARAM for a
  * degenerate or out-of-address-space range; overwrites any previously-
  * registered extent (see vms_p1.c for why that is not an error).
- * OVMX-UNWIRED: vms_kif_p1_map (vms-6f1) -- imgact$activate / DCL's own
- * startup path, which is what will lay a real P1 window and register it
- * here, is increment iv of vms-68f; nothing in the product calls it yet. */
+ * OVMX-UNWIRED: vms_kif_p1_map (vms-6f1) -- DCL laying a real P1 control-region
+ * window at process startup and registering its extent here is increment v of
+ * vms-68f. Increment iv (in-process activation, imgact_activate(),
+ * src/libvms/syssvc/sys_imgact.c) protects critical-P1 pages with
+ * vms_kif_p1_protect() directly but registers no P1 extent, so nothing in the
+ * product calls this one yet. */
 uint32_t vms_kif_p1_map(uint64_t base, uint64_t limit);
 
 /* ================================================================
@@ -422,19 +427,21 @@ uint32_t vms_kif_p1_map(uint64_t base, uint64_t limit);
  * PSL_C_SUPER. On success, *prev_mode / *new_mode (both optional) report the
  * transition (PSL_C_SUPER -> PSL_C_USER) and the executive records the
  * mode to restore.
- * OVMX-UNWIRED: vms_kif_enter_image (vms-6f1) -- imgact$activate, the
- * in-process activation library that calls this when it enters an
- * image's code, is increment iv of vms-68f; nothing in the product calls
- * it yet. */
+ * Wired (vms-6f1, increment iv): imgact_activate() (src/libvms/syssvc/
+ * sys_imgact.c) calls this to descend into an in-process image's code before
+ * swapcontext'ing to its entry, and dcl_activate_image() dispatches RUN
+ * through it -- the census gate is what proves it has a product caller. */
 uint32_t vms_kif_enter_image(uint8_t *prev_mode, uint8_t *new_mode);
 
 /* Run an image down: refused SS$_NOPRIV unless a matching vms_kif_
  * enter_image() is still open for this process. On success, *prev_mode/
  * *new_mode (both optional) report the transition (PSL_C_USER -> whatever
  * the matching ENTER_IMAGE recorded) and the open descent is closed.
- * OVMX-UNWIRED: vms_kif_image_rundown (vms-6f1) -- SYS$RUNDWN's library
- * path (vms-68f increment v) is what will call this; nothing in the
- * product calls it yet. */
+ * Wired (vms-6f1, increment iv): imgact_activate() (src/libvms/syssvc/
+ * sys_imgact.c) calls this when the in-process image returns, restoring
+ * Supervisor before it swapcontexts back to DCL -- the census gate is what
+ * proves it has a product caller. (Full SYS$RUNDWN resource release is
+ * increment v.) */
 uint32_t vms_kif_image_rundown(uint8_t *prev_mode, uint8_t *new_mode);
 
 /*
@@ -456,9 +463,10 @@ uint32_t vms_kif_image_rundown(uint8_t *prev_mode, uint8_t *new_mode);
  * Returns SS$_BADPARAM for a degenerate range, SS$_ACCVIO if the
  * underlying mprotect(2) itself fails (e.g. the range is not currently
  * mapped), SS$_NORMAL on success.
- * OVMX-UNWIRED: vms_kif_p1_protect (vms-6f1) -- imgact$activate's
- * enter/rundown sequence (increments iv/v) is what will call this
- * around a real image entry; nothing in the product calls it yet. */
+ * Wired (vms-6f1, increment iv): imgact_activate() (src/libvms/syssvc/
+ * sys_imgact.c) calls this to mprotect a caller-supplied critical-P1 range
+ * read-only before entering an in-process image in User mode, and read/write
+ * again at rundown -- the census gate is what proves it has a product caller. */
 uint32_t vms_kif_p1_protect(uint64_t base, uint64_t limit, int writable);
 
 /* ================================================================

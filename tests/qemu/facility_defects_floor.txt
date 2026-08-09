@@ -124,4 +124,11 @@
 # property, "P0 deleted on rundown, P1 survives", reflected through
 # $GETJPI's new p1_base/p1_limit fields. See their own entries in
 # facility_defects.sh for what each covers and why.
-70
+# Raised to 71 by vms-6f1's imgact-p1-not-protected -- vms-68f.iv, in-process
+# image activation (imgact_activate(), the fork-per-image replacement). The
+# first mutation targeting libvms/syssvc/sys_imgact.c, anchoring the new
+# test_syssvc_imgact_inproc suite's enforced-half property, "a User-mode
+# in-process image cannot corrupt DCL's critical P1" (the p1_protect the
+# activation applies before ENTER_IMAGE). See its own entry in
+# facility_defects.sh for what it covers and why.
+71

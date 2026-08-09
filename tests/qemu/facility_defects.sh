@@ -482,7 +482,8 @@ p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
 super-mode-escalation
-image-rundown-without-entry"
+image-rundown-without-entry
+imgact-p1-not-protected"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4294,6 +4295,26 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    imgact-p1-not-protected)
+        case "$_f" in
+        facility)     echo "in-process image activation, critical-P1 protection (imgact_activate() -> vms_kif_p1_protect, vms-68f.iv -- increment (iv) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.3(b))";;
+        targets)      echo "libvms/syssvc/sys_imgact.c";;
+        suites_red)   echo "test_syssvc_imgact_inproc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "imgact_activate() STOPS mprotect'ing the caller's critical-P1 range read-only before it descends to User and enters the in-process image: the vms_kif_p1_protect(critp1->base, critp1->limit, 0) call is replaced by an unconditional SS\$_NORMAL, so the image runs with DCL's crown-jewel P1 pages still writable. This is the exact enforcement §A.2.3(b) names -- the ENFORCED half of the access-mode model -- and the defect is the LARP shape it exists to kill: activation reports the image ran (and it did) while the protection that makes a User-mode image unable to corrupt DCL's P1 was never applied. A hostile image's wild write then SUCCEEDS instead of faulting, so it neither takes an access violation nor leaves the sentinel intact. The benign path is untouched (it never writes the page), and the ENTER_IMAGE/rundown/P0 mechanics are untouched (the image still runs in-process and returns), so only the two assertions that read the protection back can tell the difference -- one minimal mutation, one property.";;
+        require_fail) cat <<'EOF'
+the critical-P1 sentinel is INTACT -- the User-mode image could not corrupt DCL's P1 (the protection held at the MMU)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the image's wild write to the protected P1 page was an access violation
+EOF
+                      ;;
+        knock_on_why)  echo "SAME DEFECT, OBSERVED ON THE OTHER SIDE OF THE SAME WRITE. With the page left writable the hostile image's store completes instead of faulting, so imgact_activate() returns SS\$_NORMAL rather than SS\$_ACCVIO -- the missing fault (this assertion) and the corrupted sentinel (require_fail) are the two visible faces of the one skipped mprotect, not two independent properties.";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -4820,6 +4841,16 @@ apply_edit() {
         # image_active is touched) is a plain assignment, never an `if`
         # naming it, so this pattern cannot match there.
         sed -i 's|^    if (!proc->image_active) {$|    if (0 \&\& !proc->image_active) { /* NEGCTL image-rundown-without-entry */|' "$_file";;
+
+    imgact-p1-not-protected)
+        # UNIQUE TEXT, no range anchor needed: the RO protect is the only
+        # vms_kif_p1_protect call in the file whose third argument is 0 (the
+        # two restore calls pass 1). Replacing it with an unconditional
+        # SS$_NORMAL leaves the `if (!(status & 1))` bail-out that follows
+        # structurally satisfied, so activation proceeds to ENTER_IMAGE with
+        # the critical-P1 page still writable -- nothing after it shifts, and
+        # the paired restore-to-writable calls (`, 1)`) are not matched.
+        sed -i 's|status = vms_kif_p1_protect(critp1->base, critp1->limit, 0);|status = SS$_NORMAL; /* NEGCTL imgact-p1-not-protected: critical-P1 left writable */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

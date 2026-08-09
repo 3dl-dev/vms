@@ -264,7 +264,13 @@ RUN cd /src/repo && \
     # everyone else needs the real binary run against a real /dev/vms,
     # not a unit test of the read helper in isolation.
     echo "--- AUTHORIZE.EXE (the shipped image test_syssvc_authorize drive) ---" && \
-    ls -la build-static/bin/AUTHORIZE.EXE
+    ls -la build-static/bin/AUTHORIZE.EXE && \
+    # TESTIMG.EXE (vms-68f iv): the in-process-eligible image
+    # test_syssvc_imgact_inproc.c activates in DCL's own process. Built by the
+    # qemu_syssvc_tests aggregate (which now DEPENDS on testimg_inproc), so it
+    # arrives with the suites -- no separate --target name to drift.
+    echo "--- TESTIMG.EXE (the in-process activation subject, test_syssvc_imgact_inproc) ---" && \
+    ls -la build-static/bin/TESTIMG.EXE
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
@@ -383,6 +389,15 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp /src/repo/build-static/bin/AUTHORIZE.EXE /initramfs/bin/AUTHORIZE.EXE || \
       { echo "FATAL: AUTHORIZE.EXE was not built into the static tree -- the SYSPRV positive control would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/bin/AUTHORIZE.EXE && \
+    # TESTIMG.EXE (vms-68f iv), staged at /tests/TESTIMG.EXE --
+    # tests/qemu/test_syssvc_imgact_inproc.c activates it in-process by that
+    # default path (overridable via OVMX_TESTIMG). It matches no test_* glob,
+    # so init.sh never runs it as a suite -- it is the subject, not a suite.
+    # Absence is FATAL, not skipped: a missing subject would turn the same-PID
+    # and critical-P1 assertions into no-ops with the job still green.
+    { cp /src/repo/build-static/bin/TESTIMG.EXE /initramfs/tests/TESTIMG.EXE || \
+      { echo "FATAL: TESTIMG.EXE was not built into the static tree -- the in-process activation proof would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x /initramfs/tests/TESTIMG.EXE && \
     # THE SYSTEM DATA FILES F$IDENTIFIER READS (vms-2f8).
     #
     # F$IDENTIFIER used to answer from a hardcoded pair of names inside

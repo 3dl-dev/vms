@@ -5296,6 +5296,48 @@ connection of the SAME class still reuses one per-peer slot per class, where a
 real node allocates a fresh pair per connection (`vms-298`). That is a
 per-connection concern, not the cross-peer collision this section is about.
 
+### 4(y) The Rule of Total Connectivity — cluster admission is BIDIRECTIONAL (GROUNDED, `vms-694`, 2026-08-09)
+
+**What this grounds.** Why a coordinator answers a joiner's `JS_MSCP_CONNECT` with
+**silence** (neither ACCEPT nor REJECT) rather than a reject: it is not an SCS
+connection-layer refusal at all, it is the connection *manager* **abandoning the
+state transition** because the joiner failed the Rule of Total Connectivity.
+
+**Doc grounding — Davis, *VAXcluster Principles* (1993), ch. 7 JOIN CLUSTER.**
+- p. 7-37: a joiner "will attempt to join the existing cluster only after the
+  number of cluster members it **has connectivity with** equals that count."
+- p. 7-39 ("Rule of Total Connectivity"): the coordinator VAX_A "describes VAX_B
+  to each of the current VAXcluster members, and they respond by indicating
+  whether or not they have connectivity with VAX_B… **VAX_B must report having
+  connectivity with all the current cluster members, and they must all report
+  having connectivity with VAX_B. Otherwise, VAX_A abandons the state transition
+  at this point.**"
+- p. (ch. 2) definition: "An SCS connection exists (i.e., the local Connection
+  Manager has connectivity) with the remote." So a member "has connectivity with
+  the joiner" **only when its own SCS connection TO the joiner is established** —
+  which requires the **joiner to accept the member's inbound connect**.
+
+**Consequence for the wire.** Admission is bidirectional and mutual. A joiner that
+drives only the OUTBOUND half (joiner→member: dir connect, MSCP client connect, VC
+connect, add-member) reaches proposed/`NEW` but every member reports "no
+connectivity with the joiner", so the coordinator abandons — the joiner sees
+**silence** on the connect it is waiting on. "Abandon" emits nothing; the explicit
+SCS reject (CONNECT_RSP/REJECT_REQ, §4(m)) is a *different* layer.
+
+**Live corroboration (real-VAX SDA, our lab).** In `w1C.conn`/`w4B.conn` the
+member's inbound connect to OVMX parks unaccepted — `VMS$DISK_CL_DRVR →
+OVMX::MSCP$DISK`, state `con_sent`/`con_pend`, remote Con.ID `00000000` — while in
+the success arm `w3A.conn` (OVMX servicing the inbound half) every CDT reads
+`0002 open`. OVMX-side SUMMARY of a member-reaching run (`scsd-vms694memb1.log`):
+`connect_scans=2` yet `MSCP-SERVER-ACCEPTS-SENT=0`, `no-such-sysap-sent=0`,
+`RX-CDL no-cdt=22` — the members connected inbound, OVMX found the SYSAP, accepted
+none, and dropped their follow-on messages. Full diagnosis + proposed fix:
+`docs/design-rejoin-mscp-silence.md`.
+
+**Clean-room.** Doc cites are the host-only Davis transcript (page cites only);
+wire/peer-state claims are from our captures and real-VAX SDA. No VSI/HPE source
+or binary examined.
+
 ## 6. Using the dissector
 
 ```

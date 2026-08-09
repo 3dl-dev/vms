@@ -159,11 +159,38 @@ long vms_ioctl_setast(struct vms_proc *proc, unsigned long arg)
  * vms_ioctl_deliverast - Deliver next pending AST
  *
  * Called by the userspace runtime to fetch the next deliverable AST.
- * Scans from kernel mode (0) to user mode (3), returning the first
- * AST from an enabled queue. The AST is removed from the kernel queue.
+ * Returns the highest-priority (most privileged) AST from an ENABLED queue
+ * at the caller's CURRENT access mode or OUTER (less privileged), removing
+ * it from the queue.
  *
- * Returns the AST entry via the shared vms_ast_args structure.
- * If no ASTs are pending, returns status indicating nothing to deliver.
+ * SECURITY: DELIVERY IS BOUNDED BELOW BY THE CALLER'S CURRENT MODE (vms-as1).
+ *
+ * This scan used to start at PSL_C_KERNEL unconditionally, so it delivered
+ * an AST from ANY enabled queue regardless of the caller's mode. Combined
+ * with vms_module.c registering every mode's queue enabled=1 by default,
+ * that was an ACCESS-MODE ESCALATION: a user-mode process calling
+ * sys$setast(1) drains through this ioctl (deliver_pending_asts() in
+ * src/libvms/syssvc/sys_ast.c loops it to exhaustion), so a user-mode
+ * $SETAST executed the AST routines queued for KERNEL/EXEC/SUPER mode --
+ * privileged routines the executive holds for delivery only at those modes.
+ *
+ * The bound closes exactly that: an AST declared for a MORE privileged mode
+ * (numerically lower) than the caller's current mode is never handed back.
+ * A user-mode caller (current_mode == PSL_C_USER) drains ONLY the user-mode
+ * queue; an exec-mode caller drains exec/super/user; a kernel-mode caller
+ * drains all four. The inner-mode ASTs are not lost -- they stay queued
+ * until the process is genuinely executing at (or inside) that mode.
+ *
+ * THIS IS AN OVMX CONTAINMENT CHOICE, NOT VMS-AUTHENTIC AST PREEMPTION
+ * (clean-room, Rule 8). On real VMS a kernel-mode AST preempts a process
+ * running in user mode by TRAPPING to kernel mode to run the routine, so
+ * inner ASTs are delivered "over" outer execution. OVMX has no in-process
+ * mode-switch trap: an AST routine handed back here is dispatched as an
+ * ordinary userspace call at the process's real OS privilege. Delivering an
+ * inner-mode routine to an outer-mode drain would therefore run a privileged
+ * routine WITHOUT privilege -- so OVMX scopes delivery to the caller's mode
+ * and outer instead of reproducing VMS's upward-preemption. Labelled here as
+ * an OVMX design decision; not presented as VMS behaviour.
  *
  * This is the polling interface. The kernel can also proactively
  * notify via signals when ASTs are queued (future enhancement).
@@ -173,11 +200,18 @@ long vms_ioctl_deliverast(struct vms_proc *proc, unsigned long arg)
     struct vms_ast_args args;
     struct vms_ast_entry *entry;
     int mode;
+    uint8_t cur_mode;
 
     memset(&args, 0, sizeof(args));
 
-    /* Scan from most privileged to least */
-    for (mode = PSL_C_KERNEL; mode <= PSL_C_USER; mode++) {
+    spin_lock(&proc->mode_lock);
+    cur_mode = proc->current_mode;
+    spin_unlock(&proc->mode_lock);
+
+    /* Scan from the caller's current mode toward least privileged. Never
+     * below cur_mode: an inner (more privileged) AST is not the caller's to
+     * run at its current mode (see the header comment -- vms-as1). */
+    for (mode = cur_mode; mode <= PSL_C_USER; mode++) {
         struct vms_ast_state *ast_state = &proc->ast[mode];
 
         spin_lock(&ast_state->lock);

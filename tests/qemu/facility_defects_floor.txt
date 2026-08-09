@@ -204,4 +204,10 @@
 # suite -- proven against a real /dev/vms (same VMS+Linux PID, SYS$EXIT returns, own
 # TLS distinct + correct, DCL's TP and a DCL __thread datum unchanged, resident TLS
 # still reached, event flag flows back). See its own entry in facility_defects.sh.
-80
+# Raised to 81 by vms-as1's ast-deliver-crossmode-escalation -- the AST-delivery
+# access-mode SECURITY fix: vms_ioctl_deliverast (kernel/vms_ast.c) is now bounded
+# below by the caller's current access mode, so a user-mode $SETAST(1) can no
+# longer drain and execute the KERNEL/EXEC/SUPER AST queues. The mutation reverts
+# the scan lower bound to PSL_C_KERNEL and anchors the new test_syssvc_ast_secmode
+# suite's cross-mode assertion. See its own entry in facility_defects.sh.
+81

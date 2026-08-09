@@ -28,6 +28,12 @@
  *   E -> x (execute)
  *   D -> w (delete maps to write permission on parent directory)
  *
+ * The VMS_PROT_* bit values and shifts below are PINNED, not chosen here
+ * -- see src/libvms/include/ovmx_fileprot.h for the citation (VSI OpenVMS
+ * Wiki $CRMPSC + the FA00 default-protection worked example) and for why
+ * this is the single shared definition src/libvms/syssvc/sys_security.c
+ * also includes (vms-f81: the two used to disagree).
+ *
  * OVMX Project - VMS Filesystem Semantics Layer
  */
 
@@ -38,24 +44,7 @@
 
 #include "vmsfs/filespec.h"
 #include "ssdef.h"
-
-/* VMS protection bit positions within each 4-bit category */
-#define VMS_PROT_R  0x01  /* Read */
-#define VMS_PROT_W  0x02  /* Write */
-#define VMS_PROT_E  0x04  /* Execute */
-#define VMS_PROT_D  0x08  /* Delete */
-
-/* Shift positions for each category in the 16-bit protection word */
-#define VMS_PROT_SYSTEM_SHIFT  0
-#define VMS_PROT_OWNER_SHIFT   4
-#define VMS_PROT_GROUP_SHIFT   8
-#define VMS_PROT_WORLD_SHIFT   12
-
-/* All access denied (all bits set) */
-#define VMS_PROT_ALL_DENIED  0x0F
-
-/* No access denied (no bits set = full access) */
-#define VMS_PROT_ALL_ALLOWED 0x00
+#include "ovmx_fileprot.h"
 
 /*
  * vmsfs_protection_to_mode - Convert VMS SOGW protection to Unix mode_t.

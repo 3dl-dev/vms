@@ -86,8 +86,24 @@ add_test(NAME test_libvms_identity COMMAND test_libvms_identity)
 # Test 12: vms-2b8 — the SYSTEM protection category is "UIC group <=
 # MAXSYSGROUP", not "UID 0". Guards the rule RMS enforces file protection
 # with once a session really runs as the authenticated user's UIC.
-libvms_add_test(test_libvms_protection
+#
+# vms-f81 extended this test to round-trip real files through
+# vmsfs_mode_to_protection() (vmsfs) and sys$chkpro() (vms) together, so
+# it needs vmsfs linked in -- not via libvms_add_test(), same reason
+# test_libvms_identity above isn't.
+add_executable(test_libvms_protection
     ${CMAKE_CURRENT_SOURCE_DIR}/test_protection.c)
+target_include_directories(test_libvms_protection PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+)
+target_link_libraries(test_libvms_protection PRIVATE
+    vms
+    vmsfs
+    pthread
+    m
+)
+add_test(NAME test_libvms_protection COMMAND test_libvms_protection)
 
 # ...and the fixture that lets it run honestly on a host whose distro policy
 # blocks unprivileged user namespaces (rd vms-bd7). test_protection.c

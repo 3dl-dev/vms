@@ -182,20 +182,35 @@ int main(void)
     return 0;
 }
 EOF
-# Work around a pre-existing, SEPARATE cross-module bug surfaced by this bead
-# (not fixed here — see run_tcc_rms.sh's header / the vms-4ba.5 findings):
-# sys$open's protection check (rms_core.c rms_check_protection ->
-# vms$check_access, src/libvms/syssvc/sys_security.c) reads the SYSTEM/OWNER/
-# GROUP/WORLD nibbles at shifts 12/8/4/0, while vmsfs_mode_to_protection()
-# (src/vmsfs/vmsfs_protect.c), which built the protection word being read,
-# packs them at shifts 0/4/8/12 (reversed) — and rms_core.c's own
-# RMS_PROT_READ/WRITE/EXECUTE/DELETE access-type bits (0x08/0x04/0x02/0x01)
-# don't match vmsfs's VMS_PROT_R/W/E/D bit meanings (0x01/0x02/0x04/0x08)
-# either. The two mismatches happen to cancel out for a file whose relevant
-# nibble is 0x0 (all access allowed) but not in general. chmod 666 forces
-# that fully-permissive nibble so this bead's real target — the RMS I/O PATH
-# itself — can be proven without also being gated on an unrelated,
-# security-adjacent access-control bug that deserves its own review.
+# STALE AS OF vms-f81 (2026-08-09) -- kept in place, NOT verified removable
+# this session; re-read before trusting this comment further.
+#
+# What this chmod 666 originally worked around no longer exists in the form
+# described below: rms_check_protection() and its vms$check_access() call
+# (the second mismatch described here) were DELETED by vms-2b8 (operator
+# ruling 2026-07-31) -- sys$open now has NO protection pre-check at all, it
+# is real open()/EACCES/EPERM only (see src/vmsrms/rms_core.c's comment at
+# the deletion site). Separately, vms-f81 fixed the OTHER mismatch this
+# comment described (vmsfs_mode_to_protection vs. sys$chkpro's shifts) by
+# pinning both to src/libvms/include/ovmx_fileprot.h. Given both, this
+# script's TCC.EXE process almost certainly reads hello.c as root, for
+# which Linux open() ignores the file's mode bits entirely -- meaning the
+# chmod 666 below is very likely dead weight now, not a live workaround.
+# NOT REMOVED HERE: this script only runs under arm64 musl Alpine (own
+# header above), which this session's x86_64 host cannot exercise without
+# the emulated-container path .github/workflows/ci.yml drives, and that CI
+# job is one of the three already quarantined as non-blocking (vms-0b8,
+# commit d4b1c76) -- pulling it forward to verify a comment would be
+# disproportionate to this bead's scope. Original text, preserved for
+# whoever verifies and removes the chmod:
+#   "sys$open's protection check (rms_core.c rms_check_protection ->
+#    vms$check_access, src/libvms/syssvc/sys_security.c) reads the
+#    SYSTEM/OWNER/GROUP/WORLD nibbles at shifts 12/8/4/0, while
+#    vmsfs_mode_to_protection() (src/vmsfs/vmsfs_protect.c), which built
+#    the protection word being read, packs them at shifts 0/4/8/12
+#    (reversed) -- and rms_core.c's own RMS_PROT_READ/WRITE/EXECUTE/DELETE
+#    access-type bits (0x08/0x04/0x02/0x01) don't match vmsfs's
+#    VMS_PROT_R/W/E/D bit meanings (0x01/0x02/0x04/0x08) either."
 chmod 666 "$WORK/hello.c"
 set +e
 "$SYSEXE/TCC.EXE" -c "$WORK/hello.c" -o "$WORK/hello.o" > "$WORK/tcc-compile.out" 2>&1

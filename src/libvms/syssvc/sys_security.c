@@ -8,13 +8,16 @@
  *   High 16 bits = group number (mapped from Linux GID)
  *   Low 16 bits  = member number (mapped from Linux UID)
  *
- * Protection mask: 16 bits in SOGW order:
- *   Bits 15-12: System access (RWED)
- *   Bits 11-8:  Owner access (RWED)
- *   Bits  7-4:  Group access (RWED)
- *   Bits  3-0:  World access (RWED)
+ * Protection mask: 16 bits in SOGW order (PINNED -- see
+ * src/libvms/include/ovmx_fileprot.h for the citation and for why this
+ * is the shared definition; this file used to carry its own MIRROR-IMAGE
+ * shifts and bit values that disagreed with vmsfs_protect.c, vms-f81):
+ *   Bits  3-0:  System access (RWED)
+ *   Bits  7-4:  Owner access (RWED)
+ *   Bits 11-8:  Group access (RWED)
+ *   Bits 15-12: World access (RWED)
  *
- * Each 4-bit nibble: bit3=Read, bit2=Write, bit1=Execute, bit0=Delete
+ * Each 4-bit nibble: bit0=Read, bit1=Write, bit2=Execute, bit3=Delete
  * A SET bit means access is DENIED (VMS convention: protection bits
  * deny access, the opposite of Unix permission bits).
  */
@@ -36,18 +39,24 @@
 #include <sys/types.h>
 #include "starlet.h"
 #include "ovmx_secparam.h"
+#include "ovmx_fileprot.h"
 
-/* Protection access type flags */
-#define PROT$M_READ    0x08
-#define PROT$M_WRITE   0x04
-#define PROT$M_EXECUTE 0x02
-#define PROT$M_DELETE  0x01
+/*
+ * Protection access type flags and category offsets -- aliased onto the
+ * single pinned encoding in ovmx_fileprot.h (vms-f81) so this file and
+ * vmsfs_protect.c cannot drift apart again. Kept as PROT$M_/PROT$V_ names
+ * because that is what sys$chkpro's own parameter documentation below
+ * and its callers already spell them.
+ */
+#define PROT$M_READ    VMS_PROT_R
+#define PROT$M_WRITE   VMS_PROT_W
+#define PROT$M_EXECUTE VMS_PROT_E
+#define PROT$M_DELETE  VMS_PROT_D
 
-/* Category offsets in the 16-bit protection mask */
-#define PROT$V_SYSTEM  12
-#define PROT$V_OWNER   8
-#define PROT$V_GROUP   4
-#define PROT$V_WORLD   0
+#define PROT$V_SYSTEM  VMS_PROT_SYSTEM_SHIFT
+#define PROT$V_OWNER   VMS_PROT_OWNER_SHIFT
+#define PROT$V_GROUP   VMS_PROT_GROUP_SHIFT
+#define PROT$V_WORLD   VMS_PROT_WORLD_SHIFT
 
 /*
  * OVMX_MAXSYSGROUP -- the SYSGEN parameter that decides which UIC groups

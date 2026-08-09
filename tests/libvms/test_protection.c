@@ -102,15 +102,24 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include "ovmx_secparam.h"
+#include "ovmx_fileprot.h"
 
 extern uint32_t sys$chkpro(void *objpro);
 extern uint32_t vms$get_uic(void);
+extern uint16_t vmsfs_mode_to_protection(mode_t mode);
 
-/* Requested-access flags and the SOGW nibble layout, as sys_security.c
- * defines them: a SET protection bit DENIES the access. */
-#define PROT_READ      0x08
-#define PROT_WRITE     0x04
+/* Requested-access flags, aliased onto the single pinned encoding in
+ * ovmx_fileprot.h (vms-f81) rather than hand-copied -- a SET protection
+ * bit DENIES the access. Round 5 of this comment said "as sys_security.c
+ * defines them", which was itself the bug: sys_security.c's PROT$M_READ
+ * used to be 0x08 (the DELETE bit under the pinned encoding), and this
+ * file copied that wrong value, so the two could never disagree no
+ * matter how sys$chkpro's shift order drifted. Both now derive from the
+ * one grounded header. */
+#define PROT_READ      VMS_PROT_R
+#define PROT_WRITE     VMS_PROT_W
 
 #define UIC(g, m)      (((uint32_t)(g) << 16) | (uint32_t)(m))
 
@@ -176,6 +185,40 @@ static uint32_t chkpro(uint32_t owner_uic, uint16_t prot, uint16_t access)
         uint16_t access_type;
     } pro = { owner_uic, prot, access };
     return sys$chkpro(&pro);
+}
+
+/*
+ * protection_for_mode - create a REAL file at `unix_mode`, run it through
+ * vmsfs_mode_to_protection() (src/vmsfs/vmsfs_protect.c -- the producer
+ * side of vms-f81's cross-module contract), and hand back the resulting
+ * VMS protection word. Exits the process on any setup failure: a helper
+ * that silently returned garbage on error would make the caller's
+ * assertions meaningless.
+ */
+static uint16_t protection_for_mode(mode_t unix_mode)
+{
+    char path[] = "/tmp/ovmx_test_protection_XXXXXX";
+    int fd = mkstemp(path);
+    if (fd < 0) {
+        perror("protection_for_mode: mkstemp");
+        exit(1);
+    }
+    if (fchmod(fd, unix_mode) != 0) {
+        perror("protection_for_mode: fchmod");
+        close(fd);
+        unlink(path);
+        exit(1);
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        perror("protection_for_mode: fstat");
+        close(fd);
+        unlink(path);
+        exit(1);
+    }
+    close(fd);
+    unlink(path);
+    return vmsfs_mode_to_protection(st.st_mode);
 }
 
 /*
@@ -359,8 +402,12 @@ int main(void)
     check((chkpro(UIC(65534, 65534), 0x0000u, PROT_READ) & 1) != 0,
           "a protection mask that denies nothing grants access");
 
-    /* S:RWE,O:RWE,G:,W: = nothing for group or world */
-    uint16_t prot_s_o_only = 0x00FFu;
+    /* S:RWED,O:RWED,G:,W: = nothing for group or world. 0xFF00 under the
+     * pinned encoding (ovmx_fileprot.h): System@bits3-0=0x0 (full grant),
+     * Owner@bits7-4=0x0 (full grant), Group@bits11-8=0xF (all denied),
+     * World@bits15-12=0xF (all denied) -- the same 0xFF00 literal
+     * src/vmsrms/rms_core.c's rms_get_default_protection() returns. */
+    uint16_t prot_s_o_only = 0xFF00u;
     uint32_t st;
     int ok;
 
@@ -477,6 +524,98 @@ int main(void)
     check(ok && (st & 1) == 0,
           "non-owner, non-SYSTEM, non-same-group UIC refused a file "
           "with G:,W: denied (WORLD)");
+
+    /*
+     * ============================================================
+     * vms-f81 -- the cross-module contract itself: a REAL file, at a
+     * REAL Unix mode, run through vmsfs_mode_to_protection() (the
+     * PRODUCER, src/vmsfs/vmsfs_protect.c) and then sys$chkpro() (the
+     * CONSUMER, sys_security.c), for every category. Everything above
+     * this point hand-built its own protection words and so could not
+     * have caught the two modules disagreeing about how a word is laid
+     * out -- only about what sys$chkpro does once handed one. This is
+     * the test that was missing: it fails if EITHER module's nibble
+     * shift or intra-nibble bit order drifts from ovmx_fileprot.h,
+     * because it round-trips through both.
+     *
+     * mode-644 SYSTEM-read is THE originally reported symptom (a mode-644
+     * file denies root/SYSTEM read): vmsfs_mode_to_protection packed the
+     * System nibble at shift 0, sys$chkpro (pre-fix) read it at shift 12
+     * -- the bit it actually inspected for a "System caller reading a
+     * 644 file" was 644's WORLD nibble reinterpreted through the wrong
+     * shift, not System's real (always-granted) nibble, and the bug
+     * being a false DENIAL rather than a false GRANT depended on which
+     * mode happened to be under test, not on the encoding being right.
+     * ============================================================
+     */
+    uint32_t owner_uic_ex = UIC(300, 301);
+
+    /* mode 644 = rw-r--r-- */
+    uint16_t prot644 = protection_for_mode(0644);
+    ok = run_chkpro_as(5, 5001, owner_uic_ex, prot644, PROT_READ, &st);
+    check(ok && (st & 1) != 0,
+          "vms-f81 HEADLINE CASE: SYSTEM-category caller reads a "
+          "mode-644 file (vmsfs_mode_to_protection -> sys$chkpro) -- "
+          "GRANTED");
+    ok = run_chkpro_as(300, 301, owner_uic_ex, prot644, PROT_READ, &st);
+    check(ok && (st & 1) != 0,
+          "mode 644: OWNER reads own file -- GRANTED");
+    ok = run_chkpro_as(300, 301, owner_uic_ex, prot644, VMS_PROT_E, &st);
+    check(ok && (st & 1) == 0,
+          "mode 644: OWNER has no execute bit -- DENIED");
+    ok = run_chkpro_as(300, 999, owner_uic_ex, prot644, PROT_READ, &st);
+    check(ok && (st & 1) != 0,
+          "mode 644: GROUP (same group, different member) reads -- "
+          "GRANTED");
+    ok = run_chkpro_as(300, 999, owner_uic_ex, prot644, PROT_WRITE, &st);
+    check(ok && (st & 1) == 0,
+          "mode 644: GROUP has no write bit -- DENIED");
+    ok = run_chkpro_as(400, 401, owner_uic_ex, prot644, PROT_READ, &st);
+    check(ok && (st & 1) != 0,
+          "mode 644: WORLD (unrelated UIC) reads -- GRANTED");
+    ok = run_chkpro_as(400, 401, owner_uic_ex, prot644, PROT_WRITE, &st);
+    check(ok && (st & 1) == 0,
+          "mode 644: WORLD has no write bit -- DENIED");
+
+    /* mode 600 = rw------- */
+    uint16_t prot600 = protection_for_mode(0600);
+    ok = run_chkpro_as(5, 5001, owner_uic_ex, prot600, PROT_READ, &st);
+    check(ok && (st & 1) != 0,
+          "mode 600: SYSTEM-category caller reads -- GRANTED "
+          "(SYSTEM always full access)");
+    ok = run_chkpro_as(300, 301, owner_uic_ex, prot600, PROT_READ, &st);
+    check(ok && (st & 1) != 0,
+          "mode 600: OWNER reads own file -- GRANTED");
+    ok = run_chkpro_as(300, 999, owner_uic_ex, prot600, PROT_READ, &st);
+    check(ok && (st & 1) == 0,
+          "mode 600: GROUP has no access -- DENIED");
+    ok = run_chkpro_as(400, 401, owner_uic_ex, prot600, PROT_READ, &st);
+    check(ok && (st & 1) == 0,
+          "mode 600: WORLD has no access -- DENIED");
+
+    /* mode 755 = rwxr-xr-x */
+    uint16_t prot755 = protection_for_mode(0755);
+    ok = run_chkpro_as(300, 999, owner_uic_ex, prot755, VMS_PROT_E, &st);
+    check(ok && (st & 1) != 0,
+          "mode 755: GROUP executes -- GRANTED");
+    ok = run_chkpro_as(300, 999, owner_uic_ex, prot755, PROT_WRITE, &st);
+    check(ok && (st & 1) == 0,
+          "mode 755: GROUP has no write bit -- DENIED");
+    ok = run_chkpro_as(400, 401, owner_uic_ex, prot755, VMS_PROT_E, &st);
+    check(ok && (st & 1) != 0,
+          "mode 755: WORLD executes -- GRANTED");
+
+    /* mode 640 = rw-r----- */
+    uint16_t prot640 = protection_for_mode(0640);
+    ok = run_chkpro_as(300, 999, owner_uic_ex, prot640, PROT_READ, &st);
+    check(ok && (st & 1) != 0,
+          "mode 640: GROUP reads -- GRANTED");
+    ok = run_chkpro_as(400, 401, owner_uic_ex, prot640, PROT_READ, &st);
+    check(ok && (st & 1) == 0,
+          "mode 640: WORLD has no access -- DENIED");
+    ok = run_chkpro_as(7, 7001, owner_uic_ex, prot640, PROT_READ, &st);
+    check(ok && (st & 1) != 0,
+          "mode 640: SYSTEM-category caller reads -- GRANTED");
 
     printf("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED");
     return failures == 0 ? 0 : 1;

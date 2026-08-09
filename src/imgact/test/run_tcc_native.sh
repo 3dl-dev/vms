@@ -178,11 +178,15 @@ EOF
 # mk_tcc.sh now builds TCC.EXE with RMS file I/O (vms-4ba.5: OVMX_RMS_IO) —
 # see run_tcc_rms.sh for the full RMS-path proof. Two side effects that also
 # apply to THIS (vms-4ba.4) harness now:
-#  (1) sys$open's protection check has a pre-existing, separate cross-module
-#      bit-layout mismatch (vmsfs_mode_to_protection vs. sys_security.c's
-#      vms$check_access — see run_tcc_rms.sh's header comment) that denies
-#      root read access to a plain mode-644 file; chmod 666 sidesteps it
-#      without touching that (unrelated, security-adjacent) code.
+#  (1) STALE AS OF vms-f81 (2026-08-09) — see run_tcc_rms.sh's header
+#      comment at its own chmod 666 for the full, current account: the
+#      rms_check_protection()/vms$check_access() pre-check this used to
+#      describe was deleted by vms-2b8, and the OTHER mismatch it named
+#      (vmsfs_mode_to_protection vs. sys$chkpro shifts) was fixed by
+#      vms-f81 (both now pinned to src/libvms/include/ovmx_fileprot.h).
+#      The chmod 666 below is likely dead weight now but NOT verified
+#      removable this session (arm64-musl-only harness, quarantined CI
+#      job — see run_tcc_rms.sh for why).
 #  (2) sys$create always mints a literal VMS version suffix on disk
 #      ("hello.o;1"), so the real produced artifact is no longer a bare
 #      "hello.o".

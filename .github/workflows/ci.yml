@@ -1289,12 +1289,15 @@ jobs:
     name: OVMX_IMGACT Build Mode (musl)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    # Known-broken, tracked in rd vms-0b8 (under vms-ade): the VMS-native
-    # link graph (build_link_native.sh -> mk_*_shr.sh) is Unix/musl/ld-leaky
-    # and fails to build LINK.EXE at the expected path. Non-blocking until
-    # that toolchain-design work lands; the job still runs and shows its real
-    # status. Remove continue-on-error when vms-0b8 closes.
-    continue-on-error: true
+    # vms-0b8 FIXED (was: LINK.EXE "not found" in link_native_graph). Root cause
+    # was NOT a target-ordering bug: OVMX_IMGACT=ON injects
+    # -Wl,--dynamic-linker=/vms/.../IMGACT.EXE into the GLOBAL CMAKE_EXE_LINKER_FLAGS,
+    # which poisoned the PT_INTERP of the HOST build tool LINK.EXE (vmslink) — a
+    # tool that must EXECUTE during `cmake --build` to produce the shareable
+    # graph. exec then failed ENOENT/127 (file present, interpreter absent).
+    # Fixed by linking the vmslink host tools statically in IMGACT mode
+    # (src/vmslink/CMakeLists.txt) + adding src/libvms/include to the imgact
+    # target's include path (src/imgact/CMakeLists.txt, for imgact_prodreg.h).
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -1338,11 +1341,11 @@ jobs:
     name: OVMX_IMGACT Build + Activate (musl, x86_64)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    # Known-broken, tracked in rd vms-0b8 (under vms-ade): same Unix/musl/ld-leaky
-    # native link graph as imgact-build-mode -- mk_vmssys_shr.sh cannot find
-    # LINK.EXE at $BUILD/bin. Non-blocking until that toolchain-design work
-    # lands; job still runs and shows its real status. Remove when vms-0b8 closes.
-    continue-on-error: true
+    # vms-0b8 FIXED — same host-tool PT_INTERP poisoning as imgact-build-mode
+    # (LINK.EXE, a build-host tool, was given PT_INTERP=IMGACT.EXE via the global
+    # CMAKE_EXE_LINKER_FLAGS in OVMX_IMGACT mode and could not exec during the
+    # link_native_graph build step). Fixed in src/vmslink/CMakeLists.txt (static
+    # host tools) + src/imgact/CMakeLists.txt (libvms include for imgact_prodreg.h).
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -1948,22 +1951,22 @@ jobs:
   # synthesizes REAL x86_64 machine code, not the aarch64 words it silently
   # reused before vms-206, for (1) the crt0 entry stub of a main()-based
   # --executable and (2) the PLT stub + import-CALL routing for a cross-image
-  # R_X86_64_PLT32 call to a --use producer's universal. Runs natively (both
-  # the runner and the project's dev host are x86_64) — no docker, no QEMU,
-  # no emulation in the path under test: the real kernel ELF loader invokes
-  # IMGACT.EXE via PT_INTERP exactly as it would for any process.
+  # R_X86_64_PLT32 call to a --use producer's universal.
+  #
+  # Runs in a NATIVE x86_64 alpine container (vms-0b8): the runner is x86_64, so
+  # this container executes on the HOST kernel with NO qemu/emulation in the path
+  # under test — the real Linux ELF loader invokes IMGACT.EXE via PT_INTERP
+  # exactly as it would for any process, identical to the arm64 sibling's model
+  # and to the now-green imgact-x86_64 activation proof. The container gives the
+  # root-owned mount namespace the harness needs to stage IMGACT.EXE at its baked
+  # PT_INTERP path /vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE (the REAL OVMX SYSDISK
+  # deployment path — not a Unix leak to design around). Previously this job ran
+  # bare on the runner as the non-root user and could not `mkdir /vms`.
   # -----------------------------------------------------------------------
   multiobj-exec-x86_64:
     name: Multi-Object main() Executable Link + Activate — x86_64 (vms-206)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
-    # Known-broken, tracked in rd vms-0b8 (under vms-ade): LINK.EXE bakes
-    # PT_INTERP=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE (link.c IMGACT_INTERP),
-    # so this native (non-container) job must create /vms and cannot without
-    # root -- "mkdir: cannot create /vms: Permission denied". Not a paper-over
-    # target (no sudo mkdir): the activation-vs-/vms Unix leak is a design fix.
-    # Non-blocking until vms-0b8 lands; job still runs. Remove when it closes.
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -1973,8 +1976,14 @@ jobs:
 
       - name: Link + activate a multi-object main() program through IMGACT.EXE (native x86_64)
         run: |
-          export CC=gcc WORK=/tmp/multiobj-exec-x86_64
-          sh src/imgact/test/run_multiobj_exec_x86_64.sh
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/multiobj-exec-x86_64
+              sh /src/src/imgact/test/run_multiobj_exec_x86_64.sh
+            '
 
   # -----------------------------------------------------------------------
   # Job: Read-only-section relocations — x86_64 (vms-a66)

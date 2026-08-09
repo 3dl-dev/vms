@@ -340,6 +340,30 @@ EXPECTED=$(cd "$REPO_ROOT" && ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc
            | xargs -n1 basename | sed 's/\.c$//' | sort)
 N_EXPECTED=$(echo "$EXPECTED" | grep -c . || true)
 
+# EXECUTION ORDER, distinct from the SORTED set above (found this round).
+# EXPECTED is sorted alphabetically -- correct for every SET use (fail_map's
+# known set, the coverage floor, the positive control's per-suite sweep). But
+# the `fatal` isolation checks below (3 and 5) are not set operations: they ask
+# "which suites ran BEFORE the one that crashes the guest", and "before" is
+# defined by init.sh's ACTUAL run order, not by the alphabet. init.sh (line
+# ~187) globs `/tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_*`,
+# so it runs every kmod suite, THEN every syssvc suite, THEN every imgact
+# suite -- each group in its own sorted order. That matched the sorted set
+# exactly while the families were only test_kmod_* and test_syssvc_* (k < s),
+# which is why the old check 3 comment could claim "shell glob order ... is the
+# sorted derived set". test_imgact_* broke that equivalence: it sorts FIRST
+# (i < k) but RUNS LAST. So for the one fatal control whose suite is a kmod
+# suite (executive-not-pinned -> test_kmod_pin), the sorted "before" set wrongly
+# included test_imgact_bind/publish, which init.sh never reaches because the
+# guest is already dead by the time the imgact group would run -- and check 3
+# then failed them as "NEVER RAN". EXEC_ORDER models init.sh's real order, and
+# the fatal path uses it so "before the crash" means what init.sh actually did.
+EXEC_ORDER=$(cd "$REPO_ROOT" && \
+    { ls tests/qemu/test_kmod_*.c   2>/dev/null | sort
+      ls tests/qemu/test_syssvc_*.c 2>/dev/null | sort
+      ls tests/qemu/test_imgact_*.c 2>/dev/null | sort; } \
+    | xargs -n1 basename | sed 's/\.c$//')
+
 echo "=========================================================="
 echo " Per-facility negative controls for the executive (vms-e7d)"
 echo "=========================================================="
@@ -527,15 +551,19 @@ for defect in $DEFECT_LIST; do
     fi
 
     # --- Where the run is expected to stop, for a `fatal` defect ------------
-    # init.sh runs the suites in shell glob order (`/tests/test_kmod_*` then
-    # `/tests/test_syssvc_*`), which is the sorted derived set, so the suites
-    # that must have run cleanly BEFORE the fatal one are known without
-    # depending on the crashed run's own output. If init.sh ever reordered
-    # them, those suites would be missing their verdict lines and this control
-    # would go red loudly -- the safe direction.
+    # init.sh runs the suites in shell glob order: `/tests/test_kmod_*` then
+    # `/tests/test_syssvc_*` then `/tests/test_imgact_*` (init.sh ~line 187) --
+    # which is EXEC_ORDER, NOT the alphabetically-sorted EXPECTED (test_imgact_*
+    # sorts first but runs last; see EXEC_ORDER's definition). Walking EXEC_ORDER
+    # here makes "the suites that ran cleanly BEFORE the fatal one" exactly the
+    # ones init.sh actually reached before the crash, without depending on the
+    # crashed run's own output. If init.sh ever reordered its glob, EXEC_ORDER
+    # (derived to mirror it) must be updated in lockstep -- a mismatch shows up
+    # as a suite missing its verdict line and this control goes red loudly, the
+    # safe direction.
     stop_at=""
     if [ "$isolation" = "fatal" ]; then
-        for s in $EXPECTED; do
+        for s in $EXEC_ORDER; do
             # shellcheck disable=SC2086
             if matches_globs "$s" $red_globs; then stop_at="$s"; break; fi
         done
@@ -545,9 +573,9 @@ for defect in $DEFECT_LIST; do
     # 3. Verdict lines. Every suite that was expected to RUN must have
     #    produced one: the defect rebuild must not have quietly dropped a
     #    binary from the initramfs. For a `fatal` defect that is every suite
-    #    up to the one that kills the guest.
+    #    init.sh runs (EXEC_ORDER) up to the one that kills the guest.
     reached=0
-    for s in $EXPECTED; do
+    for s in $EXEC_ORDER; do
         if [ "$isolation" = "fatal" ] && [ "$s" = "$stop_at" ]; then break; fi
         if [ "$(suite_rc "$s")" = "MISSING" ]; then
             bad "$s NEVER RAN (no verdict line) -- dropped from the initramfs by the defect rebuild, or the guest died before reaching it"
@@ -582,7 +610,7 @@ for defect in $DEFECT_LIST; do
     #    `fatal` defect the claim is narrower and honest: everything that ran
     #    BEFORE the facility's suite stayed green. Nothing runs after.
     strays=""
-    for s in $EXPECTED; do
+    for s in $EXEC_ORDER; do
         if [ "$isolation" = "fatal" ] && [ "$s" = "$stop_at" ]; then break; fi
         rc=$(suite_rc "$s")
         # shellcheck disable=SC2086

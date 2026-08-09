@@ -165,6 +165,34 @@ if [ "$n_syssvc" -lt 1 ]; then
     echo "FATAL: no test_syssvc_* binary staged after the rebuild"
     exit 4
 fi
+
+# THE USERSPACE-ONLY imgact SUITES, RE-STAGED TOO (found this round).
+# test_imgact_bind / test_imgact_publish are built by the qemu_syssvc_tests
+# target above (qemu_syssvc_add_test() plumbing) into build-static/bin, but
+# they are named test_imgact_*, NOT test_syssvc_*, so the syssvc loop above
+# does not copy them -- and the /src/tests/qemu/test_* loop only copies the
+# in-source gcc-built kmod binaries, never these cmake outputs. Before this
+# block, a defect injected into libvms/syssvc/imgact_prodreg.c (consumer-
+# import-not-bound-to-resident, publish-does-not-populate-registry) was
+# recompiled into build-static/bin/test_imgact_* and then NEVER re-staged, so
+# the initramfs kept the PRISTINE image-build binary: the mutated suite never
+# ran, the control could not go red, and the per-facility gate reported the
+# defect as caught while proving nothing (the exact stale-binary failure this
+# script's DCL.EXE two-copies note documents for src/vmsdcl -- same class,
+# different suite family). Same >=2 guard the image build carries (tests/qemu/
+# Dockerfile), for the same reason.
+n_imgact=0
+for f in /src/repo/build-static/bin/test_imgact_*; do
+    [ -x "$f" ] || continue
+    cp "$f" /initramfs/tests/ || exit 4
+    n_imgact=$((n_imgact + 1))
+done
+if [ "$n_imgact" -lt 2 ]; then
+    echo "FATAL: expected at least 2 test_imgact_* binaries (test_imgact_bind,"
+    echo "  test_imgact_publish) staged after the rebuild, found $n_imgact --"
+    echo "  a userspace imgact defect would run against a stale pristine binary."
+    exit 4
+fi
 ( cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz ) || exit 4
 echo "Re-staged initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
 

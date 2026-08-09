@@ -86,6 +86,27 @@ void imgact_prodreg_reset(void)
     g_nresident = 0;
 }
 
+uint32_t imgact_publish_producers(const struct imgact_prod_pub *prods, int n)
+{
+    if (!prods || n < 0)
+        return SS$_BADPARAM;
+
+    /* Register each resident producer in turn. This loop IS the "publish the
+     * registry at runtime" mechanism (§A.8 gap 1): before it runs the registry
+     * is empty and a real image's imports cannot resolve in-process (they fork);
+     * after it runs the process's resident LIBVMS$SHR/DECC$SHR are findable so
+     * imgact_bind_imports_resident can bind an activated image to them. A
+     * failure to record any one producer is surfaced, not swallowed -- a
+     * half-published registry would bind some imports to the resident copy and
+     * leave others unresolved, exactly the partial-share the invariants forbid. */
+    for (int i = 0; i < n; i++) {
+        uint32_t st = imgact_register_producer(prods[i].soname, prods[i].base, prods[i].sv);
+        if (!(st & 1))
+            return st;
+    }
+    return SS$_NORMAL;
+}
+
 uint32_t imgact_bind_imports_resident(uint64_t base,
                                       const struct ovmx_imp_header *imp)
 {

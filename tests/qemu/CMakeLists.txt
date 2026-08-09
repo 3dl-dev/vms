@@ -72,10 +72,33 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
     qemu_syssvc_add_test(${_name} ${_src})
 endforeach()
 
+# ---------------------------------------------------------------------------
+# TESTIMG.EXE -- the in-process-eligible image test_syssvc_imgact_inproc.c
+# activates in DCL's own process (vms-68f increment iv). A freestanding,
+# position-independent ET_DYN with the OVMX in-process marker note, no
+# PT_INTERP and no symbolic relocations, entered through imgact_activate()'s
+# (a0,a1) ABI -- the same freestanding static-PIE shape IMGACT.EXE uses, but
+# built in the normal graph (not OVMX_IMGACT mode) so it ships with the static
+# musl test build. It is a SUBJECT, not a suite: its name matches no test_*
+# glob, so init.sh never runs it as one.
+add_executable(testimg_inproc testimg_inproc.c)
+target_include_directories(testimg_inproc PRIVATE ${CMAKE_SOURCE_DIR}/src/libvms/include)
+target_compile_options(testimg_inproc PRIVATE
+    -std=gnu11 -O2 -Wall -Wextra
+    -fPIC -ffreestanding -fno-stack-protector -fno-builtin
+    -fno-asynchronous-unwind-tables)
+target_link_options(testimg_inproc PRIVATE
+    -nostdlib -nostartfiles -shared
+    -Wl,-e,img_entry -Wl,-z,norelro -Wl,--build-id=none)
+set_target_properties(testimg_inproc PROPERTIES
+    PREFIX "" OUTPUT_NAME "TESTIMG" SUFFIX ".EXE")
+
 # Single build target covering every registered test_syssvc_* binary, so
-# callers (tests/qemu/Dockerfile) never need to name a specific test.
+# callers (tests/qemu/Dockerfile) never need to name a specific test. It also
+# pulls in TESTIMG.EXE so a `--target qemu_syssvc_tests` build stages the
+# subject alongside its suite.
 get_property(_qemu_syssvc_test_targets GLOBAL PROPERTY QEMU_SYSSVC_TEST_TARGETS)
-add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets})
+add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg_inproc)
 
 # ---------------------------------------------------------------------------
 # TORN OUT AS GATES (vms-49f), per the CLAUDE.md Rule 9 amendment.

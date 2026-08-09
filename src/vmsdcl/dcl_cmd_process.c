@@ -35,6 +35,7 @@
 #include "msgdef.h"
 #include "ovmx_status.h"
 #include "vms_kif.h"
+#include "imgact_activate.h"
 
 int cmd_wait(struct dcl_command *cmd)
 {
@@ -1088,6 +1089,49 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
 int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
                        const char *linux_path, char *argv[])
 {
+    /*
+     * IN-PROCESS IMAGE ACTIVATION (vms-68f increment iv,
+     * docs/design-in-process-activation.md Part II). On OpenVMS, RUN / a
+     * foreign command / a DCL utility activates the image IN this process --
+     * no new PID -- and image rundown returns here. This is the dispatch
+     * point: imgact_activate() runs the image in-process when it is
+     * in-process-eligible (an OVMX image with the in-process marker note, no
+     * PT_INTERP, relative-only relocs, entered through the (a0,a1) ABI) and a
+     * real /dev/vms is present. It returns SS$_UNSUPPORTED for every other
+     * image -- a real DCL utility, a dynamically bound image, anything wanting
+     * the SysV auxv entry ABI -- and SS$_NOSUCHDEV with no executive, in which
+     * cases activation falls through to the fork()+execve() model below (B,
+     * design §A.6.6: the fork stays the fallback until A's loader and images
+     * land in increment v; SPAWN / RUN/DETACHED / PIPE never take this path).
+     * The eligibility decision is made from the ELF alone, before any
+     * executive call, so the fork fallback for real images does not depend on
+     * /dev/vms. No critical-P1 range is registered here yet (increment v); the
+     * QEMU suite proves the p1_protect path directly.
+     */
+    {
+        int image_rc = 0;
+        uint32_t ia = imgact_activate(linux_path, 0, 0, NULL, &image_rc);
+        /*
+         * ONLY a genuine in-process run bypasses the fork: SS$_NORMAL (the
+         * image ran and returned) or SS$_ACCVIO (it ran, faulted, and was run
+         * down; DCL survives). EVERY other status -- SS$_UNSUPPORTED (not an
+         * in-process image: a real utility, a #!/bin/sh script, a dynamic
+         * image), SS$_NOSUCHDEV (no executive), SS$_NOSUCHFILE/SS$_BADPARAM
+         * (imgact could not load it) -- means the image was NOT activated
+         * in-process, so activation falls through to the fork()+execve() model
+         * below, which handles all of those (a shebang script included).
+         */
+        if (ia == SS$_NORMAL || ia == SS$_ACCVIO) {
+            if (ia == SS$_NORMAL && image_rc != 0) {
+                dcl_error("DCL", 2, "ABORT",
+                          "image %s exited with error status %%X%08X",
+                          display_name, (unsigned)image_rc);
+                return SS$_ABORT;
+            }
+            return (ia == SS$_NORMAL) ? SS$_NORMAL : SS$_ABORT;
+        }
+    }
+
     pid_t pid = fork();
     if (pid == 0) {
         /* Child */

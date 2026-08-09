@@ -2401,3 +2401,81 @@ jobs:
               export CC=gcc WORK=/tmp/tcc-selfhost TCC_EXPECT_LINK=1
               sh /src/src/imgact/test/run_tcc_selfhost.sh
             '
+
+  # -----------------------------------------------------------------------
+  # link-native — self-host S3.1 proof (bead vms-b5a): LINK.EXE runs AS an
+  # OVMX image. Sibling of tcc-native/tcc-rms: the SAME producer graph +
+  # IMGACT.EXE, but here it is the LINKER ITSELF (link.c + its RMS I/O shim,
+  # ovmx_link_rms_io.c) that is compiled freestanding-musl (-DOVMX_RMS_IO)
+  # and self-linked (a bootstrap LINK.EXE --executable --use {DECC$SHR + the
+  # five OVMX shareables}, mk_link.sh) into a PT_INTERP=IMGACT.EXE image.
+  # IMGACT activates that native LINK.EXE and it links a real gcc-seed hello.o
+  # into a runnable HELLO.EXE — reading the .o via RMS sys$open/$get (byte-
+  # exact, FAB$C_FIX mrs=1: no EOF space-pad) and writing the .EXE via RMS
+  # sys$create/$put (byte-exact, mrs=0: per-put length) — with NO host
+  # LINK.EXE anywhere in that linking path (the bootstrap LINK.EXE only BUILDS
+  # the native image, which CLAUDE.md Rule 9 explicitly allows). The proof
+  # asserts an RMS trace (VMS-odd statuses), a read/write byte-count cross-
+  # check against both files' on-disk sizes, and that HELLO.EXE IMGACT-
+  # activates and prints 'hello', exit 0. link.c is arch-agnostic, so unlike
+  # the tcc harnesses this runs on BOTH arm64 (below) and x86_64 (further
+  # below, native on GitHub's x86_64 runner, no QEMU).
+  #
+  # LINK_EXPECT (default 1, BLOCKING — mirrors TCC_EXPECT_LINK/DCL_EXPECT_LINK):
+  # a failure of the native LINK.EXE build or the activated-link step is a real
+  # regression.
+  # -----------------------------------------------------------------------
+  link-native:
+    name: LINK.EXE VMS-native Self-Link + Activate (self-hosting S3.1, arm64)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Self-link link.c into a native LINK.EXE, activate it, link hello.o -> HELLO.EXE via RMS, activate HELLO.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=aarch64 WORK=/tmp/link-native LINK_EXPECT=1
+              sh /src/src/imgact/test/run_link_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # link-native-x86_64 — the x86_64 analog of link-native above (bead vms-b5a).
+  # Shares run_link_native.sh verbatim (ARCH=x86_64 is a parameter, not a fork).
+  # GitHub's runner IS x86_64, so the alpine:3.20/amd64 container runs natively
+  # and the native LINK.EXE activates directly — no QEMU binfmt in the loop.
+  # -----------------------------------------------------------------------
+  link-native-x86_64:
+    name: LINK.EXE VMS-native Self-Link + Activate (self-hosting S3.1, x86_64)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Self-link link.c into a native LINK.EXE, activate it, link hello.o -> HELLO.EXE via RMS, activate HELLO.EXE (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/link-native-x86_64 LINK_EXPECT=1
+              sh /src/src/imgact/test/run_link_native.sh
+            '

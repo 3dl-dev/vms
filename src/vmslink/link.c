@@ -20,8 +20,14 @@
  * --allow-undefined, references not yet defined (compiler runtime / crt) are
  * recorded as deferred imports for the C RTL to satisfy at activation (vms-61f).
  *
- * This program is a host tool built by the normal (bootstrap) toolchain; it is
- * the tool that makes VMS images, not itself a VMS image yet.
+ * This program is built by the normal (bootstrap) toolchain to make VMS images.
+ * With -DOVMX_RMS_IO (bead vms-b5a) it is ALSO compiled freestanding-musl and
+ * self-linked into an OVMX image (mk_link.sh): its input-object read and its
+ * output-image write are then routed through OVMX's RMS system services
+ * (ovmx_link_rms_io.c) instead of raw open()/read()/write(), so LINK.EXE runs
+ * AS a VMS-native image under IMGACT — self-host S3.1. The four #ifdef
+ * OVMX_RMS_IO seams below (slurp/output-write/file_is_archive) are the only
+ * behavioral difference; without the define this stays the plain host tool.
  */
 #define _GNU_SOURCE
 #include <elf.h>
@@ -35,6 +41,10 @@
 
 #include "ovmx_image.h"
 #include "ovmx_symvec.h"
+
+#ifdef OVMX_RMS_IO
+#include "ovmx_link_rms_io.h"   /* vms-b5a: RMS-backed object read + image write */
+#endif
 
 /* ABS64 pointer-initializer relocation (S+A written as a 64-bit word — used in
  * .rela.data for pointer tables like stdio FILE structs). Guarded. (vms-004) */
@@ -437,6 +447,13 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
 /* Read a whole file into a fresh malloc buffer (kept live for the run). */
 static uint8_t *slurp(const char *path, size_t *out_size)
 {
+#ifdef OVMX_RMS_IO
+    /* vms-b5a: route the input-object read through RMS (sys$open/$get to EOF).
+     * Byte-exact (mrs=1) — see ovmx_link_rms_io.h. */
+    uint8_t *rbuf = ovmx_link_rms_slurp(path, out_size);
+    if (!rbuf) die("cannot open input file (RMS)");
+    return rbuf;
+#else
     int fd = open(path, O_RDONLY);
     if (fd < 0) die("cannot open input file");
     struct stat st;
@@ -453,6 +470,7 @@ static uint8_t *slurp(const char *path, size_t *out_size)
     close(fd);
     *out_size = sz;
     return buf;
+#endif
 }
 
 /* Load a single relocatable object from a file path. */
@@ -2050,10 +2068,18 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     sh[ix_str].sh_name = sn_off[ix_str]; sh[ix_str].sh_type = SHT_STRTAB;
     sh[ix_str].sh_offset = off_shstr; sh[ix_str].sh_size = sn_sz; sh[ix_str].sh_addralign = 1;
 
+#ifdef OVMX_RMS_IO
+    /* vms-b5a: route the output-image write through RMS (sys$create/$put/$close).
+     * Byte-exact (mrs=0, per-put length) — see ovmx_link_rms_io.h. sys$create
+     * mints a VMS version suffix, so the image lands on disk as "<out>;1". */
+    if (ovmx_link_rms_write(out, img, file_sz) != 0)
+        die("cannot create output image (RMS)");
+#else
     int fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0755);
     if (fd < 0) die("cannot create output image");
     if (write(fd, img, file_sz) != (ssize_t)file_sz) die("short write output");
     close(fd);
+#endif
     int totrel = 0; for (int i = 0; i < nobj; i++) totrel += objs[i].nreloc;
     /* ABS64 data pointers written = filled .vms$rel slots minus the resolved
      * GOT cells (GOT slots are pushed into rel_off first). */
@@ -2086,12 +2112,21 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 /* Peek an input file's first bytes to tell an `ar` archive from a bare .o. */
 static int file_is_archive(const char *path)
 {
+#ifdef OVMX_RMS_IO
+    /* vms-b5a: sniff the magic through RMS (open/get/close) — same input path
+     * as slurp(), just the first AR_MAGIC_LEN bytes. */
+    char m[AR_MAGIC_LEN];
+    int r = ovmx_link_rms_peek(path, m, AR_MAGIC_LEN);
+    if (r < 0) die("cannot open input file (RMS)");
+    return r == AR_MAGIC_LEN && memcmp(m, AR_MAGIC, AR_MAGIC_LEN) == 0;
+#else
     int fd = open(path, O_RDONLY);
     if (fd < 0) die("cannot open input file");
     char m[AR_MAGIC_LEN];
     ssize_t r = read(fd, m, AR_MAGIC_LEN);
     close(fd);
     return r == AR_MAGIC_LEN && memcmp(m, AR_MAGIC, AR_MAGIC_LEN) == 0;
+#endif
 }
 
 int main(int argc, char **argv)

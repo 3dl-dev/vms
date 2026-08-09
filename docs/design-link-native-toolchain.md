@@ -374,3 +374,44 @@ indices 9–16 with `ast_init` still at 17, **and** a consumer object naming
   activation exercises. A program that spawns additional pthreads would need each
   new thread's block populated with the producer's TLS module by musl itself (a
   DTV-registration path), which is not implemented. Tracked as **vms-244**.
+
+### 7.8 LINK.EXE self-hosts — the linker is itself an OVMX image (vms-b5a)
+
+Self-host **S3.1**: `LINK.EXE` no longer has to be a host tool at runtime. `link.c`
+is now **also** compiled freestanding-musl (`-fPIC -ffreestanding -fno-builtin
+-fno-stack-protector` + the per-arch flag, `-DOVMX_RMS_IO`) and **linked by
+LINK.EXE with itself** — `LINK.EXE --executable --use {DECC$SHR + the five OVMX
+shareables}` (recipe: `src/vmslink/mk_link.sh`) — into a `PT_INTERP=IMGACT.EXE`
+OVMX image. IMGACT activates it and it runs *inside OVMX* with no `ld`/`ld.so`,
+exactly like `DCL.EXE`/`TCC.EXE`. This is the same bring-up `TCC.EXE` got in
+vms-4ba.3–.5, now applied to the linker.
+
+**Two LINK.EXE roles — do not conflate.** The `vmslink` CMake target and the
+bootstrap `$WORK/LINK.EXE` the harnesses build are still ordinary host tools; a
+host LINK.EXE **builds** the native LINK.EXE image. That is explicitly allowed
+(CLAUDE.md Rule 9: a build step is not an activation proof; the gate is that the
+**output** runs natively). Nothing in the shipped/CMake path changed — the host
+`vmslink` target is untouched.
+
+**RMS I/O (mirrors tcc's vms-4ba.5 scoping).** Under `-DOVMX_RMS_IO`, `link.c`'s
+input-object read and output-image write route through RMS
+(`src/vmslink/ovmx_link_rms_io.c`): `sys$open`/`$connect`/`$get`→EOF/`$close` for
+the object, `sys$create`/`$connect`/`$put`/`$close` for the image — so the linker
+itself no longer calls raw `open()/read()/write()` for those two files. Both are
+**byte-exact**: the read uses `FAB$C_FIX` with `fab$w_mrs=1` (one exact byte per
+record — a larger FIX record size makes `rms_seq_get` space-pad the final partial
+record and report `rsz=recsize`, which would round a binary object's size up and
+corrupt its tail); the write uses `FAB$C_FIX` with `fab$w_mrs=0` (each `sys$put`'s
+own length, no padding — the same path tcc's `ovmx_rms_deliver_file` proved). The
+`--use` producer-shareable reads (`load_producer`) are left on the stock `open()`
+path, the direct analog of the header-search reads tcc left on stock. `sys$create`
+mints a VMS version suffix, so a native-LINK.EXE output `FOO.EXE` lands on disk as
+`FOO.EXE;1`.
+
+**Proof.** `src/imgact/test/run_link_native.sh` (CI jobs `link-native` arm64 +
+`link-native-x86_64`) self-links `link.c` into a native LINK.EXE, IMGACT-activates
+it, has it link a real gcc-seed `hello.o` into `HELLO.EXE` — asserting an RMS
+trace (VMS-odd statuses) and a read/write byte-count cross-check against both
+files' on-disk sizes — then activates `HELLO.EXE` and checks it prints `hello`,
+exit 0. No host LINK.EXE anywhere in that linking path. Arch-agnostic (both
+arm64 and x86_64), unlike the tcc harnesses.

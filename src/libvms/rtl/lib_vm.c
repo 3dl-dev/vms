@@ -23,6 +23,7 @@
 
 #include <stdint.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <pthread.h>
@@ -75,6 +76,9 @@ struct vm_zone {
     uint32_t         zone_id;
     pthread_mutex_t  lock;
 
+    /* Zone name (from lib$create_vm_zone); empty for the default zone */
+    char             name[64];
+
     /* Lookaside free lists for small allocations */
     struct free_block *lookaside[LOOKASIDE_CLASSES];
 
@@ -88,6 +92,9 @@ struct vm_zone {
     /* Statistics */
     uint64_t         total_alloc;
     uint64_t         total_free;
+    uint64_t         get_vm_calls;   /* successful lib$get_vm calls */
+    uint64_t         free_vm_calls;  /* successful lib$free_vm calls */
+    uint64_t         expand_calls;   /* times a new extent was mmap'd */
 };
 
 /* ================================================================
@@ -180,6 +187,7 @@ static void *zone_bump_alloc(struct vm_zone *zone, uint32_t total_size)
     /* Link into zone's extent list */
     ext->next = zone->extents;
     zone->extents = ext;
+    zone->expand_calls++;
 
     /* Set up bump allocator on new extent */
     uint32_t usable = ext->size - ext->used;
@@ -202,6 +210,7 @@ static void *zone_large_alloc(struct vm_zone *zone, uint32_t total_size)
 
     ext->next = zone->extents;
     zone->extents = ext;
+    zone->expand_calls++;
 
     return ext->base;
 }
@@ -276,6 +285,7 @@ uint32_t lib$get_vm(const uint32_t *num_bytes, void **base_adr, ...)
     }
 
     zone->total_alloc += user_size;
+    zone->get_vm_calls++;
     pthread_mutex_unlock(&zone->lock);
 
     /* Write header */
@@ -338,6 +348,7 @@ uint32_t lib$free_vm(const uint32_t *num_bytes, void **base_adr, ...)
      * The memory stays mapped until lib$delete_vm_zone. */
 
     zone->total_free += hdr->size;
+    zone->free_vm_calls++;
     pthread_mutex_unlock(&zone->lock);
 
     *base_adr = NULL;
@@ -358,6 +369,26 @@ uint32_t lib$create_vm_zone(uint32_t *zone_id, ...)
 
     ensure_init();
 
+    /*
+     * Extract the optional zone name. In the VMS argument order the
+     * zone-name descriptor is the 11th argument overall, i.e. the 10th
+     * variadic argument after zone-id:
+     *   algorithm(1) algorithm-arg(2) flags(3) extend-size(4)
+     *   initial-size(5) block-size(6) alignment(7) page-limit(8)
+     *   smallest-block-size(9) zone-name(10) [get-page(11) free-page(12)]
+     */
+    const struct dsc$descriptor_s *name_dsc = NULL;
+    {
+        va_list ap;
+        va_start(ap, zone_id);
+        for (int i = 1; i <= 10; i++) {
+            void *arg = va_arg(ap, void *);
+            if (i == 10)
+                name_dsc = (const struct dsc$descriptor_s *)arg;
+        }
+        va_end(ap);
+    }
+
     pthread_mutex_lock(&zone_table_lock);
 
     /* Find free slot (skip zone 0 = default) */
@@ -376,6 +407,15 @@ uint32_t lib$create_vm_zone(uint32_t *zone_id, ...)
     zones[zid].active = 1;
     zones[zid].zone_id = zid;
     pthread_mutex_init(&zones[zid].lock, NULL);
+
+    /* Record the zone name if one was supplied. */
+    if (name_dsc && name_dsc->dsc$a_pointer && name_dsc->dsc$w_length > 0) {
+        uint16_t n = name_dsc->dsc$w_length;
+        if (n > sizeof(zones[zid].name) - 1)
+            n = sizeof(zones[zid].name) - 1;
+        memcpy(zones[zid].name, name_dsc->dsc$a_pointer, n);
+        zones[zid].name[n] = '\0';
+    }
 
     pthread_mutex_unlock(&zone_table_lock);
 
@@ -452,4 +492,180 @@ uint32_t lib$free_vm_page(const uint32_t *num_pages, void **base_adr)
 {
     uint32_t bytes = num_pages ? *num_pages * VMS_PAGE_SIZE : 0;
     return lib$free_vm(&bytes, base_adr);
+}
+
+/* ================================================================
+ * Zone introspection / statistics
+ *
+ * Reference: OpenVMS RTL Library (LIB$) Manual — LIB$SHOW_VM,
+ * LIB$STAT_VM, LIB$FIND_VM_ZONE, LIB$SHOW_VM_ZONE, LIB$VERIFY_VM_ZONE.
+ * ================================================================ */
+
+/*
+ * lib$stat_vm - Return one statistic about the default zone.
+ *
+ * Documented statistic codes (LIB$K_VM_*):
+ *   1 = number of calls to LIB$GET_VM
+ *   2 = number of calls to LIB$FREE_VM
+ *   3 = number of times memory was expanded (extents mmap'd)
+ *   4 = number of bytes still allocated
+ * The statistics describe the default (process) zone, zone 0.
+ */
+uint32_t lib$stat_vm(const int32_t *code, uint32_t *value)
+{
+    if (!code || !value)
+        return SS$_BADPARAM;
+
+    ensure_init();
+
+    struct vm_zone *zone = &zones[0];
+    pthread_mutex_lock(&zone->lock);
+
+    uint32_t result;
+    switch (*code) {
+    case 1: result = (uint32_t)zone->get_vm_calls;  break;
+    case 2: result = (uint32_t)zone->free_vm_calls; break;
+    case 3: result = (uint32_t)zone->expand_calls;  break;
+    case 4: result = (uint32_t)(zone->total_alloc - zone->total_free); break;
+    default:
+        pthread_mutex_unlock(&zone->lock);
+        return LIB$_INVARG;
+    }
+
+    pthread_mutex_unlock(&zone->lock);
+    *value = result;
+    return SS$_NORMAL;
+}
+
+/*
+ * lib$show_vm - Output summary statistics for the default zone.
+ *
+ * Writes a one-line summary of the default zone's allocation activity to
+ * SYS$OUTPUT (stdout here). VMS accepts an optional code, output routine
+ * and argument; when no output routine is supplied the summary goes to
+ * SYS$OUTPUT.
+ */
+uint32_t lib$show_vm(void)
+{
+    ensure_init();
+
+    struct vm_zone *zone = &zones[0];
+    pthread_mutex_lock(&zone->lock);
+    uint64_t gets = zone->get_vm_calls;
+    uint64_t frees = zone->free_vm_calls;
+    uint64_t expands = zone->expand_calls;
+    pthread_mutex_unlock(&zone->lock);
+
+    printf("LIB$GET_VM count = %llu, LIB$FREE_VM count = %llu, "
+           "expansions = %llu\n",
+           (unsigned long long)gets,
+           (unsigned long long)frees,
+           (unsigned long long)expands);
+    fflush(stdout);
+
+    return SS$_NORMAL;
+}
+
+/*
+ * lib$find_vm_zone - Iterate over all active 32-bit zones.
+ *
+ * context must be initialized to 0 before the first call; it holds the
+ * id of the next zone to examine. Each call returns the id of the next
+ * active zone (including the default zone 0) through zone_id and advances
+ * context. Returns LIB$_NOTFOU when no more zones exist.
+ */
+uint32_t lib$find_vm_zone(uint32_t *context, uint32_t *zone_id)
+{
+    if (!context || !zone_id)
+        return SS$_BADPARAM;
+
+    ensure_init();
+
+    pthread_mutex_lock(&zone_table_lock);
+    for (uint32_t zid = *context; zid < MAX_ZONES; zid++) {
+        if (zones[zid].active) {
+            *zone_id = zid;
+            *context = zid + 1;
+            pthread_mutex_unlock(&zone_table_lock);
+            return SS$_NORMAL;
+        }
+    }
+    pthread_mutex_unlock(&zone_table_lock);
+
+    return LIB$_NOTFOU;
+}
+
+/*
+ * lib$show_vm_zone - Format information about one zone and deliver it.
+ *
+ * Produces the standard default line
+ *   'Zone ID = nnnnnn, Zone Name = "name"'
+ * and passes it, as a string descriptor, to the caller's action routine
+ * together with user_arg. When no action routine is supplied the line is
+ * written to SYS$OUTPUT (stdout). detail selects the amount of output on
+ * VMS; here the summary line is always produced.
+ */
+uint32_t lib$show_vm_zone(const uint32_t *zone_id,
+                          const int32_t *detail,
+                          uint32_t (*action_rtn)(struct dsc$descriptor_s *,
+                                                 void *),
+                          void *user_arg)
+{
+    (void)detail;
+
+    if (!zone_id)
+        return SS$_BADPARAM;
+
+    uint32_t zid = *zone_id;
+    if (zid >= MAX_ZONES || !zones[zid].active)
+        return LIB$_BADZONE;
+
+    char line[128];
+    int len = snprintf(line, sizeof(line),
+                       "Zone ID = %u, Zone Name = \"%s\"",
+                       zid, zones[zid].name);
+    if (len < 0)
+        len = 0;
+    if (len > (int)sizeof(line) - 1)
+        len = (int)sizeof(line) - 1;
+
+    struct dsc$descriptor_s line_d = {
+        (uint16_t)len, DSC$K_DTYPE_T, DSC$K_CLASS_S, line
+    };
+
+    if (action_rtn)
+        return action_rtn(&line_d, user_arg);
+
+    printf("%.*s\n", len, line);
+    fflush(stdout);
+    return SS$_NORMAL;
+}
+
+/*
+ * lib$verify_vm_zone - Verify the integrity of a zone.
+ *
+ * A full VMS implementation walks the zone's internal structures. Here we
+ * validate that the zone id refers to an active zone and that its extent
+ * chain is self-consistent (each extent's used count fits its size).
+ */
+uint32_t lib$verify_vm_zone(const uint32_t *zone_id)
+{
+    if (!zone_id)
+        return SS$_BADPARAM;
+
+    uint32_t zid = *zone_id;
+    if (zid >= MAX_ZONES || !zones[zid].active)
+        return LIB$_BADZONE;
+
+    struct vm_zone *zone = &zones[zid];
+    pthread_mutex_lock(&zone->lock);
+    for (struct extent *e = zone->extents; e; e = e->next) {
+        if (e->used > e->size) {
+            pthread_mutex_unlock(&zone->lock);
+            return LIB$_INVARG;
+        }
+    }
+    pthread_mutex_unlock(&zone->lock);
+
+    return SS$_NORMAL;
 }

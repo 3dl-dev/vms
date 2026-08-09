@@ -418,3 +418,181 @@ uint32_t lib$find_file_end(uint32_t *context) {
 
     return SS$_NORMAL;
 }
+
+/* ================================================================
+ * Message and keyword-table routines
+ *
+ * Reference: OpenVMS RTL Library (LIB$) Manual — LIB$SYS_GETMSG,
+ * LIB$GET_USERS_LANGUAGE, LIB$LOOKUP_KEY.
+ * ================================================================ */
+
+extern uint32_t sys$getmsg(uint32_t msgid, uint16_t *msglen,
+                           struct dsc$descriptor_s *bufadr,
+                           uint32_t flags, uint32_t *outadr);
+extern uint32_t sys$trnlnm(const uint32_t *attr,
+                           const struct dsc$descriptor_s *tabnam,
+                           const struct dsc$descriptor_s *lognam,
+                           const uint8_t *acmode,
+                           const struct item_list_3 *itmlst);
+
+#define LNM_STRING_CODE 2   /* LNM$_STRING */
+
+/*
+ * lib$sys_getmsg - Retrieve the message text for a condition value.
+ *
+ * A thin LIB$ wrapper over sys$getmsg (starlet). The flags argument
+ * selects which message components are returned (text, identification,
+ * severity, facility); the corpus passes 0x0F for the full message.
+ */
+uint32_t lib$sys_getmsg(const uint32_t *msgid, uint16_t *msglen,
+                        struct dsc$descriptor_s *bufadr,
+                        const uint32_t *flags) {
+    if (!msgid || !bufadr)
+        return SS$_BADPARAM;
+    uint32_t f = flags ? *flags : 0x0F;
+    return sys$getmsg(*msgid, msglen, bufadr, f, NULL);
+}
+
+/*
+ * lib$get_users_language - Return the user's natural language.
+ *
+ * The language is taken from the logical name SYS$LANGUAGE. When that
+ * logical is not defined (the default OVMX state) the routine returns
+ * LIB$_ENGLUSED — "English used" — exactly as documented.
+ */
+uint32_t lib$get_users_language(struct dsc$descriptor_s *language) {
+    if (!language || !language->dsc$a_pointer)
+        return SS$_BADPARAM;
+
+    char value[256];
+    uint16_t retlen = 0;
+    struct item_list_3 itm[2];
+    memset(itm, 0, sizeof(itm));
+    itm[0].buflen = sizeof(value);
+    itm[0].item_code = LNM_STRING_CODE;
+    itm[0].bufaddr = value;
+    itm[0].retlen = &retlen;
+
+    struct dsc$descriptor_s lognam = {
+        12, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"SYS$LANGUAGE"
+    };
+
+    uint32_t st = sys$trnlnm(NULL, NULL, &lognam, NULL, itm);
+    if (st != SS$_NORMAL || retlen == 0) {
+        /* No language logical defined — English is used. */
+        return LIB$_ENGLUSED;
+    }
+
+    uint16_t copylen = retlen;
+    if (copylen > language->dsc$w_length) copylen = language->dsc$w_length;
+    memcpy(language->dsc$a_pointer, value, copylen);
+    if (language->dsc$b_class == DSC$K_CLASS_S &&
+        copylen < language->dsc$w_length) {
+        memset(language->dsc$a_pointer + copylen, ' ',
+               language->dsc$w_length - copylen);
+    }
+    return SS$_NORMAL;
+}
+
+/*
+ * lib$lookup_key - Look up a (possibly abbreviated) keyword in a key table.
+ *
+ * The key table is a longword vector:
+ *   table[0]        = count of longwords that follow
+ *   table[1], [2]   = &keyword-ascic, key-value
+ *   table[3], [4]   = &keyword-ascic, key-value   ...
+ * where each keyword is a counted (ASCIC) string: a length byte followed
+ * by the characters. The input is matched case-sensitively against the
+ * keywords, honoring unique abbreviation:
+ *   - an exact full-length match wins outright;
+ *   - otherwise a prefix that matches exactly one keyword is accepted;
+ *   - a prefix matching several keywords is LIB$_AMBKEY;
+ *   - no match is LIB$_UNRKEY.
+ * On success the full keyword is returned in keyword (if supplied) and its
+ * value through key_value.
+ *
+ * Reference: OpenVMS RTL Library (LIB$) Manual — LIB$LOOKUP_KEY.
+ */
+uint32_t lib$lookup_key(const struct dsc$descriptor_s *input,
+                        const uint32_t *table,
+                        uint32_t *key_value,
+                        struct dsc$descriptor_s *keyword,
+                        uint16_t *keyword_len) {
+    if (!input || !input->dsc$a_pointer || !table)
+        return SS$_BADPARAM;
+
+    const char *in = input->dsc$a_pointer;
+    uint16_t inlen = input->dsc$w_length;
+    /* Trim trailing spaces from the input. */
+    while (inlen > 0 && in[inlen - 1] == ' ')
+        inlen--;
+    if (inlen == 0)
+        return LIB$_UNRKEY;
+
+    uint32_t entries = table[0] / 2;   /* each entry is 2 longwords */
+
+    int match_index = -1;
+    int exact = 0;
+    int ambiguous = 0;
+
+    for (uint32_t e = 0; e < entries; e++) {
+        const unsigned char *ascic =
+            (const unsigned char *)(uintptr_t)table[1 + e * 2];
+        if (!ascic)
+            continue;
+        uint8_t klen = ascic[0];
+        const char *kstr = (const char *)&ascic[1];
+
+        if (inlen > klen)
+            continue;   /* input longer than keyword: cannot match */
+
+        if (memcmp(in, kstr, inlen) != 0)
+            continue;   /* prefix mismatch */
+
+        if (inlen == klen) {
+            /* Exact full-length match wins immediately. */
+            match_index = (int)e;
+            exact = 1;
+            break;
+        }
+
+        /* Abbreviation match. */
+        if (match_index < 0) {
+            match_index = (int)e;
+        } else {
+            ambiguous = 1;
+        }
+    }
+
+    if (match_index < 0)
+        return LIB$_UNRKEY;
+    if (ambiguous && !exact)
+        return LIB$_AMBKEY;
+
+    const unsigned char *ascic =
+        (const unsigned char *)(uintptr_t)table[1 + (uint32_t)match_index * 2];
+    uint8_t klen = ascic[0];
+    const char *kstr = (const char *)&ascic[1];
+    uint32_t value = table[2 + (uint32_t)match_index * 2];
+
+    if (key_value)
+        *key_value = value;
+
+    if (keyword && keyword->dsc$a_pointer) {
+        uint16_t copylen = klen;
+        if (copylen > keyword->dsc$w_length)
+            copylen = keyword->dsc$w_length;
+        memcpy(keyword->dsc$a_pointer, kstr, copylen);
+        if (keyword->dsc$b_class == DSC$K_CLASS_S &&
+            copylen < keyword->dsc$w_length) {
+            memset(keyword->dsc$a_pointer + copylen, ' ',
+                   keyword->dsc$w_length - copylen);
+        }
+        if (keyword_len)
+            *keyword_len = copylen;
+    } else if (keyword_len) {
+        *keyword_len = klen;
+    }
+
+    return SS$_NORMAL;
+}

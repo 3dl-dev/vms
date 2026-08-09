@@ -385,7 +385,279 @@ uint32_t lib$cvt_from_internal_time(const uint32_t *operation,
  */
 uint32_t lib$sys_asctim(uint16_t *timlen, struct dsc$descriptor_s *timbuf,
                         const struct _generic_64 *timadr, uint32_t cvtflg) {
+    /*
+     * A delta time is a negative quadword (the OVMX negative-is-delta
+     * convention). sys$asctim only formats absolute times, so format the
+     * delta here as "dddd hh:mm:ss.cc" — the VMS delta-time text form.
+     * This is what makes LIB$STAT_TIMER's elapsed-time quadword print.
+     */
+    if (timbuf && timbuf->dsc$a_pointer && timadr &&
+        (int64_t)timadr->gen64$q_quadword < 0) {
+        uint64_t ticks = (uint64_t)(-(int64_t)timadr->gen64$q_quadword);
+        uint64_t hun = ticks / 100000ULL;                 /* hundredths */
+        unsigned cc = (unsigned)(hun % 100); hun /= 100;
+        unsigned ss = (unsigned)(hun % 60);  hun /= 60;
+        unsigned mm = (unsigned)(hun % 60);  hun /= 60;
+        unsigned hh = (unsigned)(hun % 24);  hun /= 24;
+        unsigned dd = (unsigned)hun;
+
+        char buf[32];
+        int len = snprintf(buf, sizeof(buf), "%u %02u:%02u:%02u.%02u",
+                           dd, hh, mm, ss, cc);
+        uint16_t copylen = (uint16_t)len;
+        if (copylen > timbuf->dsc$w_length) copylen = timbuf->dsc$w_length;
+        memcpy(timbuf->dsc$a_pointer, buf, copylen);
+        if (timlen) *timlen = copylen;
+        return SS$_NORMAL;
+    }
+
     const uint64_t *raw_timadr = timadr ? &timadr->gen64$q_quadword : NULL;
 
     return sys$asctim(timlen, timbuf, raw_timadr, cvtflg);
+}
+
+/* ================================================================
+ * Locale-independent date/time formatting (LIB$DT facility)
+ *
+ * Reference: OpenVMS RTL Library (LIB$) Manual — LIB$CONVERT_DATE_STRING,
+ * LIB$GET_MAXIMUM_DATE_LENGTH, LIB$FORMAT_DATE_TIME, LIB$GET_DATE_FORMAT.
+ * ================================================================ */
+
+/* Forward decls for the logical-name translation used by get_date_format. */
+struct item_list_3;
+extern uint32_t sys$trnlnm(const uint32_t *attr,
+                           const struct dsc$descriptor_s *tabnam,
+                           const struct dsc$descriptor_s *lognam,
+                           const uint8_t *acmode,
+                           const struct item_list_3 *itmlst);
+
+/* Item-list entry (matches lnmdef.h struct item_list_3). */
+struct dt_item_list_3 {
+    uint16_t  buflen;
+    uint16_t  item_code;
+    void     *bufaddr;
+    uint16_t *retlen;
+};
+#define DT_LNM_STRING 2   /* LNM$_STRING */
+
+static const char *const dt_months[] = {
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
+};
+
+/*
+ * lib$convert_date_string - Convert an absolute date/time string (or one
+ * of the relative keywords TODAY / TOMORROW / YESTERDAY / NOW) to a VMS
+ * absolute binary quadword time.
+ *
+ * The optional defaulted-date, flags, defaulted-fields and context
+ * arguments are accepted for source compatibility.
+ */
+uint32_t lib$convert_date_string(const struct dsc$descriptor_s *input,
+                                 uint64_t *out_time, ...) {
+    if (!input || !input->dsc$a_pointer || !out_time)
+        return LIB$_INVARG;
+
+    /* Uppercase-copy and trim the input into a local buffer. */
+    char str[128];
+    uint16_t n = input->dsc$w_length;
+    if (n > sizeof(str) - 1) n = sizeof(str) - 1;
+    uint16_t j = 0;
+    for (uint16_t i = 0; i < n; i++) {
+        char c = input->dsc$a_pointer[i];
+        str[j++] = (char)toupper((unsigned char)c);
+    }
+    str[j] = '\0';
+    /* Trim leading/trailing spaces. */
+    char *s = str;
+    while (*s == ' ' || *s == '\t') s++;
+    size_t sl = strlen(s);
+    while (sl > 0 && (s[sl - 1] == ' ' || s[sl - 1] == '\t')) s[--sl] = '\0';
+
+    time_t base = time(NULL);
+    struct tm tmv;
+    localtime_r(&base, &tmv);
+
+    if (strcmp(s, "NOW") == 0) {
+        uint64_t vt = (uint64_t)base * 10000000ULL + VMS_EPOCH_OFFSET;
+        *out_time = vt;
+        return SS$_NORMAL;
+    }
+
+    int rel_days = 0;
+    int relative = 1;
+    if (strcmp(s, "TODAY") == 0)          rel_days = 0;
+    else if (strcmp(s, "TOMORROW") == 0)  rel_days = 1;
+    else if (strcmp(s, "YESTERDAY") == 0) rel_days = -1;
+    else relative = 0;
+
+    if (relative) {
+        /* Midnight of the current day, shifted by rel_days. */
+        struct tm midnight = tmv;
+        midnight.tm_hour = 0;
+        midnight.tm_min = 0;
+        midnight.tm_sec = 0;
+        midnight.tm_mday += rel_days;
+        midnight.tm_isdst = -1;
+        time_t t = mktime(&midnight);
+        if (t == (time_t)-1) return LIB$_INVARG;
+        *out_time = (uint64_t)t * 10000000ULL + VMS_EPOCH_OFFSET;
+        return SS$_NORMAL;
+    }
+
+    /* Absolute form: "dd-MMM-yyyy[ hh:mm:ss[.cc]]". */
+    int day = 0, year = 0, hour = 0, minute = 0, sec = 0, hun = 0;
+    char mon[4] = {0};
+    int matched = sscanf(s, "%d-%3[A-Z]-%d %d:%d:%d.%d",
+                         &day, mon, &year, &hour, &minute, &sec, &hun);
+    if (matched < 3)
+        return LIB$_INVARG;
+
+    int month = -1;
+    for (int i = 0; i < 12; i++) {
+        if (strncmp(mon, dt_months[i], 3) == 0) { month = i; break; }
+    }
+    if (month < 0)
+        return LIB$_INVARG;
+
+    struct tm at;
+    memset(&at, 0, sizeof(at));
+    at.tm_year = year - 1900;
+    at.tm_mon  = month;
+    at.tm_mday = day;
+    at.tm_hour = hour;
+    at.tm_min  = minute;
+    at.tm_sec  = sec;
+    time_t t = timegm(&at);
+    if (t == (time_t)-1) return LIB$_INVARG;
+
+    *out_time = (uint64_t)t * 10000000ULL
+              + (uint64_t)hun * 100000ULL
+              + VMS_EPOCH_OFFSET;
+    return SS$_NORMAL;
+}
+
+/*
+ * lib$get_maximum_date_length - Return the maximum length, in bytes, of a
+ * formatted output date/time string for the requested fields.
+ *
+ * The OVMX standard output format is "dd-MMM-yyyy hh:mm:ss.cc"; we report
+ * a length that safely bounds any date+time field combination.
+ */
+uint32_t lib$get_maximum_date_length(int32_t *length, void *context,
+                                     const uint32_t *flags) {
+    (void)context;
+    if (!length)
+        return LIB$_INVARG;
+
+    uint32_t f = flags ? *flags : (LIB$M_DATE_FIELDS | LIB$M_TIME_FIELDS);
+    int len = 0;
+    if (f & LIB$M_DATE_FIELDS) len += 11;   /* dd-MMM-yyyy */
+    if ((f & LIB$M_DATE_FIELDS) && (f & LIB$M_TIME_FIELDS)) len += 1; /* space */
+    if (f & LIB$M_TIME_FIELDS) len += 11;   /* hh:mm:ss.cc */
+    if (len == 0) len = 23;                 /* both, by default */
+
+    *length = len;
+    return SS$_NORMAL;
+}
+
+/*
+ * lib$format_date_time - Format an input (or the current) binary time as a
+ * date/time string, honoring the date/time field flags.
+ */
+uint32_t lib$format_date_time(struct dsc$descriptor_s *out,
+                              const void *in_time, void *context,
+                              uint16_t *out_len, const uint32_t *flags) {
+    (void)context;
+    if (!out || !out->dsc$a_pointer)
+        return LIB$_INVARG;
+
+    time_t t;
+    long hundredths = 0;
+    if (in_time) {
+        uint64_t vt = *(const uint64_t *)in_time;
+        if (vt < VMS_EPOCH_OFFSET) return LIB$_INVARG;
+        vt -= VMS_EPOCH_OFFSET;
+        t = (time_t)(vt / 10000000ULL);
+        hundredths = (long)((vt % 10000000ULL) / 100000ULL);
+    } else {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        t = ts.tv_sec;
+        hundredths = ts.tv_nsec / 10000000L;
+    }
+
+    struct tm tmv;
+    localtime_r(&t, &tmv);
+
+    uint32_t f = flags ? *flags : (LIB$M_DATE_FIELDS | LIB$M_TIME_FIELDS);
+    if ((f & (LIB$M_DATE_FIELDS | LIB$M_TIME_FIELDS)) == 0)
+        f = LIB$M_DATE_FIELDS | LIB$M_TIME_FIELDS;
+
+    char buf[64];
+    int len = 0;
+    if (f & LIB$M_DATE_FIELDS) {
+        len += snprintf(buf + len, sizeof(buf) - (size_t)len,
+                        "%02d-%s-%04d",
+                        tmv.tm_mday, dt_months[tmv.tm_mon],
+                        tmv.tm_year + 1900);
+    }
+    if ((f & LIB$M_DATE_FIELDS) && (f & LIB$M_TIME_FIELDS)) {
+        len += snprintf(buf + len, sizeof(buf) - (size_t)len, " ");
+    }
+    if (f & LIB$M_TIME_FIELDS) {
+        len += snprintf(buf + len, sizeof(buf) - (size_t)len,
+                        "%02d:%02d:%02d.%02ld",
+                        tmv.tm_hour, tmv.tm_min, tmv.tm_sec, hundredths);
+    }
+
+    uint16_t copylen = (uint16_t)len;
+    if (copylen > out->dsc$w_length) copylen = out->dsc$w_length;
+    memcpy(out->dsc$a_pointer, buf, copylen);
+    if (out->dsc$b_class == DSC$K_CLASS_S && copylen < out->dsc$w_length) {
+        memset(out->dsc$a_pointer + copylen, ' ',
+               out->dsc$w_length - copylen);
+    }
+    if (out_len) *out_len = copylen;
+
+    return SS$_NORMAL;
+}
+
+/*
+ * lib$get_date_format - Return the current output date format string.
+ *
+ * The format is taken from the logical name LIB$DT_FORMAT. When that
+ * logical is not defined (as is the case in the default OVMX environment)
+ * the routine returns LIB$_DEFFORUSE — "default format used" — exactly as
+ * documented, leaving the caller's descriptor empty.
+ */
+uint32_t lib$get_date_format(struct dsc$descriptor_s *out,
+                             void *context) {
+    (void)context;
+    if (!out)
+        return LIB$_INVARG;
+
+    char value[256];
+    uint16_t retlen = 0;
+    struct dt_item_list_3 itm[2];
+    memset(itm, 0, sizeof(itm));
+    itm[0].buflen = sizeof(value);
+    itm[0].item_code = DT_LNM_STRING;
+    itm[0].bufaddr = value;
+    itm[0].retlen = &retlen;
+
+    struct dsc$descriptor_s lognam = {
+        13, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"LIB$DT_FORMAT"
+    };
+
+    uint32_t st = sys$trnlnm(NULL, NULL, &lognam, NULL,
+                             (const struct item_list_3 *)itm);
+    if (st != SS$_NORMAL || retlen == 0) {
+        /* Logical undefined — the default format is used. */
+        return LIB$_DEFFORUSE;
+    }
+
+    /* Return the translated format string into the caller's descriptor. */
+    (void)lib$scopy_r_dx(&retlen, value, out);
+    return SS$_NORMAL;
 }

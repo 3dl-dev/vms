@@ -400,6 +400,9 @@ struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
                          : VMS_DEFAULT_PRIVS;
         proc->cur_privs = proc->perm_privs;
     }
+    /* image_active/pre_image_mode (vms-68f.iii): kmem_cache_zalloc() above
+     * already zeroed both, so a fresh process starts with no controlled
+     * descent open, exactly what VMS_IOCTL_IMAGE_RUNDOWN's guard needs. */
     spin_lock_init(&proc->mode_lock);
 
     /* Initialize AST queues */
@@ -672,6 +675,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_setmode(proc, arg);
     case VMS_IOCTL_GETMODE:
         return vms_ioctl_getmode(proc, arg);
+    case VMS_IOCTL_ENTER_IMAGE:
+        return vms_ioctl_enter_image(proc, arg);
+    case VMS_IOCTL_IMAGE_RUNDOWN:
+        return vms_ioctl_image_rundown(proc, arg);
     case VMS_IOCTL_SETPRV:
         return vms_ioctl_setprv(proc, arg);
     case VMS_IOCTL_CHKPRIV:

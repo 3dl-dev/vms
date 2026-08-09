@@ -402,6 +402,25 @@ struct vms_proc {
     uint64_t            perm_privs;     /* permanent privileges */
     spinlock_t          mode_lock;
 
+    /*
+     * Controlled mode-transition pairing (vms-68f.iii, in-process image
+     * activation foundation, increment (iii) -- docs/design-in-process-
+     * activation.md Part II §A.1.3, §A.2.3). VMS_IOCTL_ENTER_IMAGE sets
+     * image_active=1 and records the mode it descended FROM in
+     * pre_image_mode; VMS_IOCTL_IMAGE_RUNDOWN requires image_active==1,
+     * restores current_mode to pre_image_mode, and clears image_active.
+     * That guard -- not current_mode alone -- is what makes RUNDOWN a
+     * PAIRED return rather than a second way to request an arbitrary mode:
+     * a process that never legitimately descended (image_active==0) cannot
+     * manufacture a return leg, and a process that already returned cannot
+     * replay one. Both fields are read and written entirely under
+     * mode_lock, alongside current_mode itself -- no separate lock, because
+     * the three are one state machine and must never be observed
+     * half-updated relative to each other.
+     */
+    uint8_t             image_active;     /* 1 while a controlled descent is open */
+    uint8_t             pre_image_mode;   /* mode to restore on IMAGE_RUNDOWN */
+
     /* AST state (3b) - one queue per access mode */
     struct vms_ast_state ast[4];
 
@@ -621,6 +640,12 @@ void vms_proc_reap_dead(void);
 
 /* Access mode (3a) */
 long vms_ioctl_setmode(struct vms_proc *proc, unsigned long arg);
+/* Controlled mode-transition pair (vms-68f.iii): the CHMx/REI-equivalent
+ * DCL uses to enter an image (Supervisor -> User) and to run it down
+ * (User -> Supervisor). See vms_ioctl.h's VMS_IOCTL_ENTER_IMAGE/
+ * VMS_IOCTL_IMAGE_RUNDOWN comment for why this is not just SETMODE twice. */
+long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);

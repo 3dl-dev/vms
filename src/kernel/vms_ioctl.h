@@ -34,6 +34,23 @@
 
 /* ================================================================
  * Access Mode (3a)
+ *
+ * PSL_C_KERNEL..PSL_C_USER, AND THE VALUES 0..3 -- ORACLE-PINNED TO PUBLIC
+ * DOCUMENTATION (CLAUDE.md Rule 8, the public-$PSLDEF branch, not a live
+ * lab session: no SDA read is needed for a fact this stable across VMS's
+ * history). OpenVMS's four processor access modes, most to least
+ * privileged, and their 2-bit PSL<current mode> field encoding are
+ * published in:
+ *   - *OpenVMS Internals and Data Structures* (IDSM), "Access Modes and
+ *     the Processor Status Longword" -- names the four modes in this exact
+ *     order and states the field is 2 bits, VAX PSL<26:25>.
+ *   - the public $PSLDEF macro (VSI OpenVMS System Services Reference
+ *     Manual; OpenVMS Calling Standard) -- PSL$C_KERNEL=0, PSL$C_EXEC=1,
+ *     PSL$C_SUPER=2, PSL$C_USER=3.
+ * This tree has carried these four constants since vms-2b8; this comment
+ * states increment (iii) of the in-process-activation design's requested
+ * citation (docs/design-in-process-activation.md Part II §A.1.2) -- it
+ * does not change a value.
  * ================================================================ */
 
 #define PSL_C_KERNEL    0
@@ -1293,6 +1310,88 @@ _Static_assert(sizeof(struct vms_p1_args) == 24,
                "vms_p1_args layout changed: VMS_IOCTL_P1_MAP ABI break");
 _Static_assert(VMS_IOCTL_P1_MAP == 0xC0185665u,
                "VMS_IOCTL_P1_MAP encodes differently here than on the reference build");
+
+/* ================================================================
+ * Access-mode transition primitive (vms-68f.iii, in-process image
+ * activation foundation, increment (iii))
+ *
+ * docs/design-in-process-activation.md Part II §A.1.2, §A.1.3, §A.2.3.
+ * DCL activates an image by dropping to User mode to enter it, and image
+ * rundown returns to Supervisor -- the CHMx/REI-equivalent transition pair
+ * this increment provides. It is deliberately NOT the general-purpose
+ * VMS_IOCTL_SETMODE above (which can request ANY mode and is gated purely
+ * on the CMEXEC/CMKRNL privilege bits): ENTER_IMAGE/IMAGE_RUNDOWN are a
+ * PAIRED, EXECUTIVE-VERIFIED descent-and-return, so the return leg can
+ * never be used to reach an arbitrary mode -- only the exact mode the
+ * matching ENTER_IMAGE recorded, and only once, per struct vms_proc's
+ * image_active flag (vms_internal.h). This is what makes it "controlled":
+ * a caller that never legitimately descended cannot manufacture a return.
+ *
+ * VMS_IOCTL_ENTER_IMAGE: the CALLER'S CURRENT MODE MUST BE PSL_C_SUPER (SS$_
+ * NOPRIV otherwise -- descending is not offered from Kernel/Exec, which this
+ * increment's ceiling does not need: DCL's command loop is the Supervisor
+ * caller the design names, §A.1.2). On success, records the prior mode and
+ * sets current mode to PSL_C_USER; image_active becomes 1. No privilege is
+ * required to DESCEND (§A.2.3(a): "lowering mode is unprivileged"), matching
+ * VMS_IOCTL_SETMODE's own existing rule for a drop.
+ *
+ * VMS_IOCTL_IMAGE_RUNDOWN: refused (SS$_NOPRIV) unless image_active is
+ * currently 1 -- i.e. unless THIS process is mid a controlled descent that
+ * ENTER_IMAGE actually performed. On success, restores current mode to
+ * whatever ENTER_IMAGE recorded (Supervisor, on every path this increment's
+ * design uses) and clears image_active, so a second RUNDOWN with no
+ * intervening ENTER_IMAGE is refused the same way. THIS is the negative
+ * control the design's §A.5 item 5 and this item's own task both name:
+ * a User-mode caller cannot manufacture its way back to Supervisor except
+ * through this exact pair, and cannot replay the return leg.
+ *
+ * ENFORCEMENT CEILING (Rule 10, stated plainly): this is software-tracked
+ * current-mode plus a paired-transition check, not a hardware ring. See
+ * §A.2.3 for the full honesty statement -- what this DOES enforce is real
+ * (the /dev/vms boundary refuses the escalation), what it does not (per-page
+ * four-mode memory protection) is Intel MPK/PKU territory, explicitly
+ * DEFERRED post-1.0 (vms-978) and NOT implemented here.
+ *
+ * INV-6: no /dev/vms -> the vms_kif_enter_image/vms_kif_image_rundown
+ * wrappers (src/libvmssys/vms_kif.c) return SS$_NOSUCHDEV -- there is no
+ * per-process fallback that fabricates a mode transition when the executive
+ * cannot be reached.
+ *
+ * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): this ioctl pair, its argument
+ * layout and its request numbers are OVMX's own -- OpenVMS publishes no
+ * public byte-level interface for "tell the executive to perform a
+ * change-mode transition"; CHMx/REI are VAX/Alpha/x86 PRIVILEGED
+ * INSTRUCTIONS, not a documented wire format. What is pinned to the design
+ * (IDSM, "Access Modes and the PSL"; §A.1.2-§A.1.3 above) is the PROPERTY
+ * these two ioctls exist to reproduce in software: a controlled descent to
+ * User for image execution and a controlled, paired return to Supervisor at
+ * rundown. Nothing here is presented as a VMS-authentic wire format.
+ */
+
+struct vms_modexfer_args {
+    uint8_t  prev_mode;     /* return: mode before this transition */
+    uint8_t  new_mode;      /* return: mode after this transition */
+    uint8_t  pad[2];
+    uint32_t status;        /* return: SS$_ status */
+};
+
+#define VMS_IOCTL_ENTER_IMAGE    _IOWR(VMS_IOC_MAGIC, 0x66, struct vms_modexfer_args)
+#define VMS_IOCTL_IMAGE_RUNDOWN  _IOWR(VMS_IOC_MAGIC, 0x67, struct vms_modexfer_args)
+
+/*
+ * ABI lock, same discipline as the P0/P1 blocks above: these ioctls fold
+ * sizeof(struct vms_modexfer_args) into their request number, so a
+ * struct-size drift silently renumbers the ioctl (-ENOTTY, not a
+ * mis-decode) rather than failing to compile. 0x66/0x67 sit in the gap
+ * between the P1 ioctl (0x65, just above) and the mailbox ioctls
+ * (vms_mbx.h, 0x70-0x74) -- neither is touched by this addition.
+ */
+_Static_assert(sizeof(struct vms_modexfer_args) == 8,
+               "vms_modexfer_args layout changed: VMS_IOCTL_ENTER_IMAGE/IMAGE_RUNDOWN ABI break");
+_Static_assert(VMS_IOCTL_ENTER_IMAGE == 0xC0085666u,
+               "VMS_IOCTL_ENTER_IMAGE encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_IMAGE_RUNDOWN == 0xC0085667u,
+               "VMS_IOCTL_IMAGE_RUNDOWN encodes differently here than on the reference build");
 
 /* ================================================================
  * Logical name tables (executive-resident LNM$SYSTEM/GROUP/JOB).

@@ -45,13 +45,31 @@
  * privileged mode requires the appropriate privilege:
  *   - To kernel mode: PRV$M_CMKRNL
  *   - To exec mode: PRV$M_CMEXEC (or CMKRNL)
- *   - To super mode: from user only, no special priv (less privileged)
+ *   - To super mode: PRV$M_CMEXEC (or CMKRNL)
  *   - To user mode: always allowed (least privileged)
  *
  * Actually in VMS, you can only go to more privileged modes with
  * change-mode instructions. Going to less privileged is via REI.
  * We enforce: you can go to equal or more privileged if you have
  * the right privilege. Going less privileged is always OK.
+ *
+ * SUPER NOW REQUIRES PRIVILEGE TOO (vms-68f.iii, in-process image
+ * activation increment (iii) -- docs/design-in-process-activation.md
+ * Part II §A.2.3(a)). This used to say "to super mode: from user only, no
+ * special priv (less privileged)" -- backwards: SUPER (2) is a LOWER,
+ * i.e. MORE privileged, number than USER (3), so raising into it is an
+ * escalation by this function's own stated rule, and the design is
+ * explicit that raising User->Super/Exec/Kernel all require the
+ * change-mode privilege VMS names (CMEXEC/CMKRNL). Leaving Super
+ * unguarded meant ANY unprivileged caller already in User mode could
+ * request Super and be granted it outright -- the exact "cannot raise its
+ * own mode except via the controlled transition" property this increment
+ * exists to enforce, previously true for Kernel/Exec only. The paired,
+ * privilege-free route into User (VMS_IOCTL_ENTER_IMAGE, vms_access.c
+ * below) and back (VMS_IOCTL_IMAGE_RUNDOWN) is EXECUTIVE-VERIFIED instead
+ * of privilege-gated -- it can only return to the exact mode a matching
+ * ENTER_IMAGE recorded, never to an arbitrary target -- which is why it
+ * does not need this same guard.
  */
 long vms_ioctl_setmode(struct vms_proc *proc, unsigned long arg)
 {
@@ -77,17 +95,122 @@ long vms_ioctl_setmode(struct vms_proc *proc, unsigned long arg)
                 args.status = SS__NOPRIV;
                 goto out;
             }
-        } else if (args.mode == PSL_C_EXEC) {
+        } else if (args.mode == PSL_C_EXEC || args.mode == PSL_C_SUPER) {
             if (!(proc->cur_privs & (PRV_M_CMEXEC | PRV_M_CMKRNL))) {
                 spin_unlock(&proc->mode_lock);
                 args.status = SS__NOPRIV;
                 goto out;
             }
         }
-        /* super mode (2) from user (3) is OK without special priv */
     }
 
     proc->current_mode = args.mode;
+    spin_unlock(&proc->mode_lock);
+
+    args.status = SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_enter_image - VMS_IOCTL_ENTER_IMAGE: the controlled descent
+ * DCL (Supervisor) uses to enter an activated image (User) (vms-68f.iii,
+ * docs/design-in-process-activation.md Part II §A.1.3, §A.2.3).
+ *
+ * Refused SS$_NOPRIV unless the caller's CURRENT mode is exactly
+ * PSL_C_SUPER -- this increment's ceiling only needs DCL's own descent
+ * (the design's command loop, §A.1.2), and refusing every other starting
+ * mode is what makes the paired return (VMS_IOCTL_IMAGE_RUNDOWN) able to
+ * restore a SINGLE recorded mode rather than a caller-chosen one. No
+ * privilege is required to descend -- lowering mode is always allowed,
+ * the same rule VMS_IOCTL_SETMODE already applies to a drop.
+ *
+ * On success: pre_image_mode records PSL_C_SUPER (what to restore),
+ * current_mode becomes PSL_C_USER, image_active becomes 1. A second
+ * ENTER_IMAGE while image_active is already 1 is refused the same way
+ * (current_mode is PSL_C_USER by then, not PSL_C_SUPER) -- there is no
+ * nested-descent case in this increment's design.
+ */
+long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_modexfer_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    spin_lock(&proc->mode_lock);
+
+    if (proc->current_mode != PSL_C_SUPER) {
+        args.prev_mode = proc->current_mode;
+        args.new_mode = proc->current_mode;
+        spin_unlock(&proc->mode_lock);
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+
+    args.prev_mode = proc->current_mode;
+    proc->pre_image_mode = proc->current_mode;
+    proc->current_mode = PSL_C_USER;
+    proc->image_active = 1;
+    args.new_mode = proc->current_mode;
+
+    spin_unlock(&proc->mode_lock);
+
+    args.status = SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_image_rundown - VMS_IOCTL_IMAGE_RUNDOWN: the controlled,
+ * PAIRED return DCL uses when an activated image exits (vms-68f.iii,
+ * docs/design-in-process-activation.md Part II §A.1.3, §A.2.3).
+ *
+ * Refused SS$_NOPRIV unless image_active is currently 1 -- i.e. unless
+ * THIS process is mid a descent that VMS_IOCTL_ENTER_IMAGE actually
+ * performed. THIS is the enforcement the design's negative control names:
+ * a caller cannot manufacture a return to Supervisor by calling RUNDOWN
+ * cold (no privilege, no prior ENTER_IMAGE, current_mode already
+ * PSL_C_USER by default at registration -- see vms_module.c), and cannot
+ * replay a second RUNDOWN after a first one already cleared the flag.
+ *
+ * On success: current_mode is restored to whatever ENTER_IMAGE recorded
+ * in pre_image_mode (PSL_C_SUPER on every path this design uses), and
+ * image_active is cleared. Unlike VMS_IOCTL_SETMODE's raise path, this
+ * requires NO privilege check of its own -- the executive already proved
+ * the caller legitimately descended, and the target is not caller-chosen,
+ * it is the executive's own recorded fact.
+ */
+long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_modexfer_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    spin_lock(&proc->mode_lock);
+
+    if (!proc->image_active) {
+        args.prev_mode = proc->current_mode;
+        args.new_mode = proc->current_mode;
+        spin_unlock(&proc->mode_lock);
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+
+    args.prev_mode = proc->current_mode;
+    proc->current_mode = proc->pre_image_mode;
+    proc->image_active = 0;
+    args.new_mode = proc->current_mode;
+
     spin_unlock(&proc->mode_lock);
 
     args.status = SS__NORMAL;

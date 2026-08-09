@@ -278,7 +278,12 @@ RUN cd /src/repo && \
     # qemu_syssvc_tests aggregate (which now DEPENDS on testimg_inproc), so it
     # arrives with the suites -- no separate --target name to drift.
     echo "--- TESTIMG.EXE (the in-process activation subject, test_syssvc_imgact_inproc) ---" && \
-    ls -la build-static/bin/TESTIMG.EXE
+    ls -la build-static/bin/TESTIMG.EXE && \
+    # TESTREAL.EXE (vms-db2): the REAL-image-class subject
+    # test_syssvc_imgact_realimg.c activates in-process (the flip). Same aggregate
+    # (qemu_syssvc_tests now DEPENDS on testreal_inproc), entered via the auxv ABI.
+    echo "--- TESTREAL.EXE (the real-image in-process flip subject, test_syssvc_imgact_realimg) ---" && \
+    ls -la build-static/bin/TESTREAL.EXE
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
@@ -426,6 +431,15 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp /src/repo/build-static/bin/TESTIMG.EXE /initramfs/tests/TESTIMG.EXE || \
       { echo "FATAL: TESTIMG.EXE was not built into the static tree -- the in-process activation proof would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/tests/TESTIMG.EXE && \
+    # TESTREAL.EXE (vms-db2), staged at /tests/TESTREAL.EXE --
+    # tests/qemu/test_syssvc_imgact_realimg.c activates it in-process by that
+    # default path (overridable via OVMX_TESTREAL). Matches no test_* glob, so
+    # init.sh never runs it as a suite. Absence is FATAL, not skipped: a missing
+    # subject would turn the real-image flip's same-PID/flows-back/SYS$EXIT
+    # assertions into no-ops with the job still green.
+    { cp /src/repo/build-static/bin/TESTREAL.EXE /initramfs/tests/TESTREAL.EXE || \
+      { echo "FATAL: TESTREAL.EXE was not built into the static tree -- the real-image in-process flip would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x /initramfs/tests/TESTREAL.EXE && \
     # THE SYSTEM DATA FILES F$IDENTIFIER READS (vms-2f8).
     #
     # F$IDENTIFIER used to answer from a hardcoded pair of names inside

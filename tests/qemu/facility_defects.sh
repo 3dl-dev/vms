@@ -486,7 +486,8 @@ image-rundown-without-entry
 image-rundown-leaks-user-lock
 imgact-p1-not-protected
 consumer-import-not-bound-to-resident
-publish-does-not-populate-registry"
+publish-does-not-populate-registry
+realimg-auxv-argc-wrong"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4375,6 +4376,26 @@ EOF
         knock_on_why)  echo "SAME DEFECT, OBSERVED FROM THE OTHER PARTY TO THE SHARED STATE. With the registry left empty by the skipped publish the consumer's import is refused and its GOT cell stays at its stub, so it never increments the resident counter; when the test (as DCL) calls the same producer directly it sees 1, not 2. The consumer's missing effect (this assertion) and the consumer's call never reaching the resident producer (require_fail) are the two visible faces of the one skipped registry population, not two independent properties: both say publish recorded nothing, so nothing could bind.";;
         esac;;
 
+    realimg-auxv-argc-wrong)
+        case "$_f" in
+        facility)     echo "in-process image activation, SysV auxv _start entry for a REAL image (imgact_activate() -> imgact_build_auxv_stack + imgact_enter_auxv, vms-db2 -- the §A.8-remainder gap 2 + FLIP of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.1: a real image is entered through the constructed argc/argv/envp/auxv stack, and its SYS\$EXIT returns to DCL)";;
+        targets)      echo "libvms/syssvc/sys_imgact.c";;
+        suites_red)   echo "test_syssvc_imgact_realimg";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "imgact_build_auxv_stack() lays argc = 0 instead of 1 onto the initial process stack (the one \`w[k++] = 1;\` for argc replaced by \`w[k++] = 0;\`), so the real image is still ENTERED through the SysV _start ABI and still runs, but the auxv stack it reads is WRONG. This is the LARP shape the flip must not have: activation reports SS\$_NORMAL (the image ran, control returned) while the constructed stack -- the whole point of the real-image entry ABI -- carried a wrong argc. TESTREAL reads argc off that stack; seeing it != 1 it takes its bad-ABI SYS\$EXIT code and touches NEITHER the executive event flag NOR the resident TLS, so the image's exit code comes back wrong and its process-permanent flows-back never happens. The mapping, mode descent, rundown and P0 teardown are untouched (the image still runs in-process at the same PID and returns), so only the assertions that read the image's SYS\$EXIT code and its flows-back can tell the difference -- one minimal mutation, one property (the auxv stack is load-bearing, not decorative).";;
+        require_fail) cat <<'EOF'
+SYS$EXIT returned control to DCL with the image's exit code -- the command loop resumed in the same process (not a fault, not a process exit)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+a process-permanent event flag SET by the in-process real image is visible to DCL after rundown -- executive flows-back the fork (Option B, per-child flags) never could
+EOF
+                      ;;
+        knock_on_why)  echo "SAME DEFECT, OBSERVED THROUGH THE EXECUTIVE FLOWS-BACK. With argc laid wrong the in-process real image never reaches its resident vms_kif_setef call (it exits early on the bad-ABI branch), so the event flag DCL reads back afterwards is clear. The wrong exit code (require_fail) and the missing event flag (this assertion) are two faces of the one mis-built auxv stack, not two independent properties: both say the image was handed a stack it could not trust, so it did none of its resident-service work.";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -4946,6 +4967,16 @@ apply_edit() {
         # runtime state before this gap closed). The malformed-argument refusals
         # return before the loop and are unaffected.
         sed -i 's|        uint32_t st = imgact_register_producer(prods\[i\].soname, prods\[i\].base, prods\[i\].sv);|        uint32_t st = SS$_NORMAL; (void)prods; /* NEGCTL publish-does-not-populate-registry: producer not recorded */|' "$_file";;
+
+    realimg-auxv-argc-wrong)
+        # UNIQUE TEXT: the only `w[k++] = 1;` in imgact_build_auxv_stack is argc
+        # (every other auxv word is a type keyword or a value != 1). Laying argc
+        # as 0 leaves the whole auxv-entry path structurally intact -- the image
+        # is still entered at _start on the constructed stack and still runs --
+        # but the stack it reads carries a wrong argc, so TESTREAL takes its
+        # bad-ABI SYS$EXIT code and skips its resident-service work. Idempotent:
+        # after the edit there is no `w[k++] = 1;` left to match.
+        sed -i 's|w\[k++\] = 1;.*argc.*|w[k++] = 0; /* NEGCTL realimg-auxv-argc-wrong: argc mis-built */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

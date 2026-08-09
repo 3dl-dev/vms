@@ -351,6 +351,38 @@ uint32_t vms_kif_getjpi_prcnam(const char *prcnam, struct vms_procinfo *info);
 uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info);
 
 /* ================================================================
+ * P0 program region (vms-68f.i, in-process image activation foundation)
+ *
+ * Records/clears this process's P0 program-region extent with the
+ * executive, so it is reflected in $GETJPI (struct vms_procinfo's
+ * p0_base/p0_limit above) -- docs/design-in-process-activation.md Part II
+ * §A.2.1. Neither call maps or unmaps any memory itself: the P0 window
+ * reservation and the per-image mmaps into it are DCL's and
+ * imgact$activate's job in userspace: this pair only RECORDS the extent
+ * for executive bookkeeping and cross-process/$GETJPI visibility.
+ * INV-6: no /dev/vms -> SS$_NOSUCHDEV, no per-process fake.
+ * ================================================================ */
+
+/* Register [base, limit) as this process's current P0 extent. SS$_BADPARAM
+ * for a degenerate or out-of-address-space range; overwrites any
+ * previously-registered extent (see vms_p0.c for why that is not an error).
+ * OVMX-UNWIRED: vms_kif_p0_map (vms-6f1) -- imgact$activate, the in-process
+ * activation library that calls this once it has mapped an image's PT_LOAD
+ * segments into the P0 window, is increment iv of vms-68f; nothing in the
+ * product calls it yet. */
+uint32_t vms_kif_p0_map(uint64_t base, uint64_t limit);
+
+/* Clear this process's P0 extent (image rundown). Always succeeds
+ * (clearing an already-clear extent is a no-op). *old_base and *old_limit --
+ * both optional -- receive the extent that WAS registered, zero if none
+ * was, so a caller can observe what was just freed without a separate
+ * $GETJPI round trip.
+ * OVMX-UNWIRED: vms_kif_p0_unmap (vms-6f1) -- SYS$RUNDWN's library path
+ * (vms-68f increment v) is what will call this; nothing in the product
+ * calls it yet. */
+uint32_t vms_kif_p0_unmap(uint64_t *old_base, uint64_t *old_limit);
+
+/* ================================================================
  * Logical name tables (executive-resident LNM$SYSTEM, vms-d37)
  *
  * The executive owns the LNM$SYSTEM storage, so a name defined here by

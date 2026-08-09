@@ -477,7 +477,8 @@ scratch-dir-owner-not-system
 lnm-manager-delete-noop
 lnm-group-scope-collapsed
 lnm-privilege-check-bypassed
-mbx-not-shared"
+mbx-not-shared
+p0-map-not-recorded"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4106,6 +4107,54 @@ EOF
                       ;;
         esac;;
 
+    p0-map-not-recorded)
+        case "$_f" in
+        facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
+        targets)      echo "kernel/vms_p0.c";;
+        suites_red)   echo "test_kmod_p0";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_p0_map() validates the extent, then SKIPS the two stores under proc->p0_lock (proc->p0_base = args.base; proc->p0_limit = args.limit;) while still returning SS\$_NORMAL -- exactly the shape INV-6 exists to catch: the ioctl REPORTS success without the executive actually holding the fact. Every validation-only assertion (the three degenerate-extent refusals, and the post-refusal GETJPI check) is untouched, because none of them ever reaches the deleted stores; only the assertions that read the extent BACK after a claimed-successful MAP can tell the difference.";;
+        require_fail) cat <<'EOF'
+GETJPI reflects the mapped P0 extent: p0_base/p0_limit match what VMS_IOCTL_P0_MAP just registered
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+A-WRITES/B-READS: B reads A's mapped P0 extent out of A's row -- a fact a per-process notion of P0 could not show
+P0_UNMAP reports the exact extent it just freed
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME DEFECT, OBSERVED DOWNSTREAM OF ITS ONE ROOT. proc->p0_base/p0_limit
+never leave zero after the deleted stores, so every later read of them --
+not only the self-read named as require_fail -- reports the same absence:
+process B's cross-process GETJPI(PID=A) sees no extent (the p0_base/
+p0_limit copied into struct vms_procinfo by proc_fill_info() are the same
+zeroed fields the mutation left behind), and VMS_IOCTL_P0_UNMAP's
+"report what you freed" copy (args.base = proc->p0_base; before the
+clear) has nothing but zero to copy out, so old_base/old_limit read back
+as 0 instead of the window's real addresses. One deleted pair of stores,
+three assertions naming the same missing fact from three different call
+sites -- not three independent properties.
+
+WHAT STAYS GREEN, AND WHY. The three degenerate-extent refusals and the
+post-refusal GETJPI check never reach vms_ioctl_p0_map's success path at
+all, so the deleted stores are never in their control flow. B's own row
+(no extent) is unaffected -- B never calls P0_MAP on itself in this
+suite. VMS_IOCTL_P0_UNMAP's status and its "GETJPI shows nothing after
+unmap" follow-on both stay green for an unfortunate reason worth stating
+plainly: unmapping an already-empty extent is defined as success (see
+vms_p0.c's own header), so clearing a p0_base/p0_limit that the mutation
+had already left at zero is indistinguishable from clearing a real one --
+a coincidentally correct answer to a differently-broken question, the
+same caveat mbx-not-shared's own knock_on_why records for its final
+mailbox-is-gone assertion. The idempotent-second-unmap assertion is
+unaffected for the identical reason.
+EOF
+                      ;;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -4552,6 +4601,26 @@ apply_edit() {
         # (it reads "if (!mbx ||" instead), so a second apply finds nothing
         # left to match -- the no-op selftest requires.
         sed -i '/^long vms_ioctl_mbx_assign/,/^}$/ s|    if (!mbx) {|    if (!mbx \|\| mbx->owner_linux_pid != proc->linux_pid) { /* NEGCTL mbx-not-shared */|' "$_file";;
+
+    p0-map-not-recorded)
+        # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =
+        # args.base;` immediately followed by `proc->p0_limit = args.limit;`
+        # occurs exactly once in the file, inside the spin_lock(&proc->
+        # p0_lock)/spin_unlock() pair that is this ioctl's whole success
+        # path -- vms_ioctl_p0_unmap's own body only READS proc->p0_base/
+        # p0_limit (into args, before clearing them), never assigns them
+        # from args, so there is no second occurrence to disambiguate
+        # against. Deleting the two stores and leaving `args.status =
+        # SS__NORMAL;` right after them makes P0_MAP report success while
+        # the executive keeps recording no extent at all -- INV-6's exact
+        # shape: honest failure or a fact the executive genuinely holds,
+        # never a claimed success over nothing. After substitution neither
+        # deleted assignment's text remains, so a second apply finds
+        # nothing left to match -- the no-op selftest requires.
+        sed -i '/^long vms_ioctl_p0_map/,/^}$/ {
+            s|^    proc->p0_base = args.base;$|    /* NEGCTL p0-map-not-recorded: extent not stored */|
+            s|^    proc->p0_limit = args.limit;$||
+        }' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

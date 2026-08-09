@@ -489,7 +489,8 @@ consumer-import-not-bound-to-resident
 publish-does-not-populate-registry
 realimg-auxv-argc-wrong
 extern-interp-check-rejects-ours
-nonres-producer-not-mapped"
+nonres-producer-not-mapped
+tlsdesc-offset-not-biased"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4438,6 +4439,26 @@ EOF
         knock_on_why)  echo "SAME DEFECT, OBSERVED THROUGH THE FIRST RUN. With the mapped producer never registered, the consumer's prod_bump import cannot bind on EITHER run, so imgact_activate refuses the image (SS\$_UNSUPPORTED) and the first run never activates in-process -- there is no SS\$_NORMAL, no banner, no counter to share. The refused first run (this assertion) and the unshared second-run counter (require_fail) are two faces of the one skipped registration: both say the mapped producer was invisible to the binder, so nothing could bind to it.";;
         esac;;
 
+    tlsdesc-offset-not-biased)
+        case "$_f" in
+        facility)     echo "in-process image activation, GIVING an own-PT_TLS image its OWN TLS block biased against DCL's thread pointer (imgact_activate() -> imgact_setup_own_tls, vms-db2 -- the §A.8-remainder item 4 DTV-append / TLS-absorb sub-step of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.2 + §A.8: an image with its OWN PT_TLS gets a distinct per-thread block whose .vms\$tls TLSDESC entries resolve to the image's block via DCL's UNCHANGED thread pointer, so its __thread data is its own while DCL's TP/TLS are never reprogrammed)";;
+        targets)      echo "libvms/syssvc/sys_imgact.c";;
+        suites_red)   echo "test_syssvc_imgact_tls";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "imgact_setup_own_tls() STOPS adding the block's TP-relative bias to each .vms\$tls TLSDESC entry (the one \`desc[1] += delta;\` replaced by \`desc[1] += 0;\`), so the descriptor keeps only the variable's MODULE-relative offset (0 for the first datum) instead of (block - TP) + module_offset. The resident resolver then returns 0 and the image's TLSDESC access computes TP + 0 -- landing in DCL's OWN TLS block, NOT the image's. This is the exact clobber the own-PT_TLS increment exists to avoid: the image is still entered in-process (mapping, mode descent, rundown untouched), but its __thread access reads DCL's TLS instead of its own private block. TESTTLS reads its own datum first and, seeing it is not the init magic the activator copied into the image's block, takes its distinct bad-TLS-init SYS\$EXIT code and touches NOTHING else (no resident bump, no event flag, no own-TLS write -- so no actual corruption of DCL's TLS, only a wrong read). Only the assertions that read the image's SYS\$EXIT success code and its flows-back can tell the difference -- one minimal mutation, one property (biasing the TLSDESC offset against DCL's TP is load-bearing, not decorative).";;
+        require_fail) cat <<'EOF'
+SYS$EXIT returned control to DCL with the image's success code -- the image read its OWN __thread init magic, wrote and re-read its own TLS, and bumped the resident TLS, all before exiting (own TLS correct)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+a process-permanent event flag SET by the in-process own-PT_TLS image is visible to DCL after rundown (executive flows-back)
+EOF
+                      ;;
+        knock_on_why)  echo "SAME DEFECT, OBSERVED THROUGH THE EXECUTIVE FLOWS-BACK. With the TP bias dropped, TESTTLS's very first own-TLS read returns DCL's TLS (not its init magic), so it bails on the bad-TLS-init branch BEFORE reaching its resident vms_kif_setef call -- the event flag DCL reads back afterwards is clear. The wrong exit code (require_fail) and the missing event flag (this assertion) are two faces of the one dropped bias: both say the image's own __thread access did not reach the image's own block, so it did none of its later resident-service work.";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -5043,6 +5064,18 @@ apply_edit() {
         # unused warning; status is read by the `if (!(status & 1))` that
         # follows. Idempotent: after the edit no such call is left to match.
         sed -i 's|    uint32_t status = imgact_register_producer(soname, (uint64_t)base, sv);|    uint32_t status = SS$_UNSUPPORTED; /* NEGCTL nonres-producer-not-mapped: mapped producer not registered */|' "$_file";;
+
+    tlsdesc-offset-not-biased)
+        # UNIQUE TEXT: imgact_setup_own_tls's per-entry TP-relative bias is the
+        # only `desc[1] += delta;` in the file. Forcing the addend to 0 leaves the
+        # descriptor carrying only the variable's module-relative offset, so the
+        # image's TLSDESC access lands in DCL's TLS block instead of the image's
+        # own -- the clobber the own-PT_TLS increment exists to avoid. The `(void)
+        # delta` keeps delta referenced so the mutated file still compiles under
+        # -Wall -Wextra (delta is otherwise used only on this line); the image
+        # still runs in-process, only its own __thread read is wrong.
+        # Idempotent: after the edit no `desc[1] += delta;` is left to match.
+        sed -i 's|        desc\[1\] += delta;.*|        desc[1] += 0; (void)delta; /* NEGCTL tlsdesc-offset-not-biased: TP bias dropped */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

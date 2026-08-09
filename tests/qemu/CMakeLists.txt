@@ -252,12 +252,35 @@ target_link_options(testnonres_inproc PRIVATE
 set_target_properties(testnonres_inproc PROPERTIES
     PREFIX "" OUTPUT_NAME "TESTNONRES" SUFFIX ".EXE")
 
+# TESTTLS.EXE -- the OWN-PT_TLS REAL-image subject test_syssvc_imgact_tls.c
+# activates in-process (vms-db2, the DTV-append / TLS-absorb flip). TESTREAL plus
+# its OWN PT_TLS (a .tdata __thread datum -> a PT_TLS program header) reached
+# through the OVMX .vms$tls TLSDESC path the activator biases against DCL's thread
+# pointer. Same freestanding static-PIE build + .vms$got pinning as TESTREAL, plus
+# .vms$tdesc (the writable TLSDESC descriptor the activator fills) pinned so the
+# .vms$tls entry names its image-relative offset as a link-time constant.
+add_executable(testtls_inproc testtls_inproc.c)
+target_include_directories(testtls_inproc PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+    ${CMAKE_SOURCE_DIR}/src/vmslink/include)
+target_compile_options(testtls_inproc PRIVATE
+    -std=gnu11 -O2 -Wall -Wextra
+    -fPIC -fno-plt -ffreestanding -fno-stack-protector -fno-builtin
+    -fno-asynchronous-unwind-tables -fvisibility=hidden)
+target_link_options(testtls_inproc PRIVATE
+    -nostdlib -nostartfiles -shared
+    -Wl,-e,tls_start -Wl,-z,norelro -Wl,--build-id=none
+    -Wl,--section-start=.vms$got=0x200000
+    -Wl,--section-start=.vms$tdesc=0x210000)
+set_target_properties(testtls_inproc PROPERTIES
+    PREFIX "" OUTPUT_NAME "TESTTLS" SUFFIX ".EXE")
+
 # Single build target covering every registered test_syssvc_* binary, so
 # callers (tests/qemu/Dockerfile) never need to name a specific test. It also
 # pulls in TESTIMG.EXE so a `--target qemu_syssvc_tests` build stages the
 # subject alongside its suite.
 get_property(_qemu_syssvc_test_targets GLOBAL PROPERTY QEMU_SYSSVC_TEST_TARGETS)
-add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg_inproc testreal_inproc testextern_inproc testextern_foreign testprod_shr testnonres_inproc)
+add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg_inproc testreal_inproc testextern_inproc testextern_foreign testprod_shr testnonres_inproc testtls_inproc)
 
 # ---------------------------------------------------------------------------
 # TORN OUT AS GATES (vms-49f), per the CLAUDE.md Rule 9 amendment.

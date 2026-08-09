@@ -682,7 +682,8 @@ imports, or the SysV auxv entry ABI — still returns `SS$_UNSUPPORTED` and
    - **(b) TLS for the no-own-PT_TLS class.** Such an image is entered on DCL's **unchanged thread
      pointer**, so its resident-RTL calls reach DCL's resident TLS, not a private copy — proven by a
      resident `__thread` datum the image bumps through an imported call and DCL reads back. A
-     PT_TLS-*bearing* image (DTV append) is still refused `SS$_UNSUPPORTED` (deferred, below).
+     PT_TLS-*bearing* image (DTV append) was refused `SS$_UNSUPPORTED` at this point; that own-`PT_TLS`
+     case is now **DONE** (`imgact_setup_own_tls`, the DTV-append flip — see the item-4 LANDED block below).
    - **THE FLIP.** `dcl_activate_image()` runs this class — an OVMX image entered via the auxv ABI
      whose imports all bind to resident producers — **in-process (no `fork()`/`execve()`)**. Proven:
      same VMS **and** Linux PID across the RUN; SYS$EXIT returns to DCL with the image's exit code; a
@@ -739,20 +740,50 @@ imports, or the SysV auxv entry ABI — still returns `SS$_UNSUPPORTED` and
    `imgact_register_producer` of the mapped producer leaves it invisible to the binder → the consumer
    forks → the flip's same-PID/shared-counter assertions redden in the real QEMU rig).
 
-   **STILL DEFERRED in item 1** (why the *full external* real image still forks): an image (or a
-   producer in its graph) carrying an **own `PT_TLS`** (the DTV-append / TLS-absorb-over-resident-C-RTL
-   case, §A.8 item 4), a **symbolic (PLT) reloc** (a `PT_DYNAMIC` DT_HASH image — the dead musl.so path,
-   vms-913.6), or a **non-resident producer that itself needs a C-RTL bootstrap** (`__init_libc` — its
-   in-process activation would reprogram the thread pointer, and running its ctor init in-process is not
-   yet done) is still refused `SS$_UNSUPPORTED` and **forks**. Re-homing the remainder of the 55 KB
-   freestanding `src/imgact/imgact.c` loader body (PT_TLS/DTV append; in-process C-RTL-producer
-   bootstrap without clobbering DCL's TP) as an in-process library is the remaining unit, deferred to
-   avoid a hasty LARP. The **non-resident producer mapping for a pure leaf producer is DONE** (above);
-   what remains is the TLS/C-RTL-producer classes.
-2. **The flip of the remaining REAL-image classes** (own-PT_TLS / symbolic-PLT / a non-resident
-   producer that needs a C-RTL bootstrap) in `dcl_activate_image()`, gated on the loader re-homing above
-   being QEMU-proven per class. The `PT_INTERP`-bearing class (resident imports, no own PT_TLS) is DONE,
-   and the **non-resident-producer class for a pure leaf producer** is DONE (both above).
+   **LANDED (vms-db2, §A.8 remainder item 4 — the OWN-`PT_TLS` / DTV-append flip, the case #236
+   flagged as the real LARP risk):** an image carrying its **own `PT_TLS`** now runs in-process — given
+   its **own distinct TLS block**, biased against DCL's **UNCHANGED** thread pointer, so its `__thread`
+   data is *its own* while DCL's TP/TLS and every resident universal's TLS are left untouched. The prior
+   flips (realimg/extern/nonres) REFUSED any own-`PT_TLS` image precisely because the fresh-process TLS
+   setup (`IMGACT.EXE`'s `setup_tls`) *reprograms* the thread pointer, which in DCL's own process would
+   clobber DCL's TLS. `imgact_setup_own_tls()` (`src/libvms/syssvc/sys_imgact.c`) re-homes `IMGACT.EXE`'s
+   `absorb_tls_over_crtl` (bead vms-616) as an in-process routine: it allocates the image its own
+   per-thread block (`.tdata` init image copied, `.tbss` zeroed), reads DCL's already-programmed TP, and
+   biases each OVMX `.vms$tls` TLSDESC entry — word[0] ← a resident resolver (`ovmx_tlsdesc_static`, a
+   hidden libvms function, **not** a C-RTL universal, no `.vms$sv`/SYS_VEC entry, no cascade), word[1]
+   `+= (block − TP)` — so the standard TLSDESC access (`TP + resolver()`) lands **inside the image's own
+   block** while TP is never reprogrammed. **Fenced (INV-6, no half-done TLS):** only the OVMX `.vms$tls`
+   carrier (a TLSDESC-model own-TLS image, which LINK.EXE emits with no `PT_DYNAMIC`) is handled; a
+   `PT_TLS` image with **no** `.vms$tls` (a fixed local-exec/initial-exec TP-offset model that cannot be
+   placed beside DCL's live TLS) is refused `SS$_UNSUPPORTED` so the caller **forks**. Single image
+   module only — a *producer* in the graph carrying its own `PT_TLS` stays deferred (below).
+   **Proven against a real `/dev/vms`** (`tests/qemu/test_syssvc_imgact_tls.c`, subject
+   `testtls_inproc.c` = the realimg subject **plus** an own `PT_TLS` reached through a hand-built
+   `.vms$tls`/`.vms$tdesc` TLSDESC path): the own-`PT_TLS` image runs in-process — **same VMS and Linux
+   PID** (no fork); SYS$EXIT returns to DCL; the image reads its **own** `__thread` init magic, writes
+   and re-reads a sentinel in its **own** slot, and its write does **not** land on the resident TLS
+   (distinct blocks); the resident universal it also calls reaches the **RESIDENT** `__thread` (moved by
+   exactly its delta); and — the **no-clobber crux** — DCL's **thread pointer** and a DCL `__thread`
+   datum set before the RUN are **both UNCHANGED** after. Negctl-anchored `tlsdesc-offset-not-biased`
+   (dropping the `TP` bias on the `.vms$tls` entries makes the image's access land in DCL's TLS instead
+   of its own → the own-TLS-correct / flows-back assertions redden in the real QEMU rig — QEMU-verified:
+   suite goes 14 passed / 3 failed).
+
+   **STILL DEFERRED in item 1** (why the *full external* real image can still fork): an image (or a
+   producer in its graph) with a **symbolic (PLT) reloc** (a `PT_DYNAMIC` DT_HASH image — the dead
+   musl.so path, vms-913.6), or a **non-resident producer that itself needs a C-RTL bootstrap**
+   (`__init_libc` — its in-process activation would reprogram the thread pointer, and running its ctor
+   init in-process is not yet done), or a **producer carrying its own `PT_TLS`** (`imgact_map_producer`
+   still refuses that — only the *activated image's* own `PT_TLS`, not a mapped producer's, is handled
+   above) is still refused `SS$_UNSUPPORTED` and **forks**. The remaining unit is the symbolic-PLT and
+   in-process C-RTL-producer-bootstrap (plus producer-own-`PT_TLS`) classes, deferred to avoid a hasty
+   LARP. The **image's own `PT_TLS` (DTV-append) is DONE** (above); the **non-resident producer mapping
+   for a pure leaf producer is DONE** (above).
+2. **The flip of the remaining REAL-image classes** (symbolic-PLT / a non-resident producer that needs a
+   C-RTL bootstrap / a producer with its own `PT_TLS`) in `dcl_activate_image()`, gated on the loader
+   re-homing above being QEMU-proven per class. The `PT_INTERP`-bearing class (resident imports, no own
+   PT_TLS) is DONE, the **non-resident-producer class for a pure leaf producer** is DONE, and the
+   **image's own-`PT_TLS` class** is DONE (all above).
 3. **True Ctrl-Y / `CONTINUE`** for the in-process image (the option (b) asm follow-on above).
 4. **Service-level `$CRELNM`/`DEFINE/PROCESS` flows-back by a real image.** This increment proved
    executive-mediated flows-back with `$SETEF` (a process-permanent event flag the in-process image

@@ -296,7 +296,12 @@ RUN cd /src/repo && \
     # TESTPROD in-process to bind it. Same aggregate (qemu_syssvc_tests DEPENDS on
     # testprod_shr + testnonres_inproc).
     echo "--- TESTPROD.EXE / TESTNONRES.EXE (non-resident-producer flip subjects, test_syssvc_imgact_nonres) ---" && \
-    ls -la build-static/bin/TESTPROD.EXE build-static/bin/TESTNONRES.EXE
+    ls -la build-static/bin/TESTPROD.EXE build-static/bin/TESTNONRES.EXE && \
+    # TESTTLS.EXE (vms-db2): the OWN-PT_TLS flip subject test_syssvc_imgact_tls.c
+    # activates -- TESTREAL plus its own PT_TLS reached through the biased .vms$tls
+    # TLSDESC path. Same aggregate (qemu_syssvc_tests DEPENDS on testtls_inproc).
+    echo "--- TESTTLS.EXE (the own-PT_TLS in-process flip subject, test_syssvc_imgact_tls) ---" && \
+    ls -la build-static/bin/TESTTLS.EXE
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
@@ -482,6 +487,14 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp /src/repo/build-static/bin/TESTPROD.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSLIB/TESTPROD.EXE || \
       { echo "FATAL: TESTPROD.EXE was not built into the static tree -- the non-resident producer the activator maps would be missing and the flip would fork unproven"; exit 1; }; } && \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSLIB/TESTPROD.EXE && \
+    # TESTTLS.EXE (vms-db2), the OWN-PT_TLS flip -- tests/qemu/test_syssvc_imgact_tls.c
+    # activates TESTTLS at /tests/ (default, overridable via OVMX_TESTTLS). It carries
+    # its own PT_TLS reached through the .vms$tls TLSDESC path the activator biases
+    # against DCL's thread pointer. Matches no test_* glob. Absence is FATAL: a missing
+    # subject turns the own-TLS/no-clobber assertions into no-ops with the job green.
+    { cp /src/repo/build-static/bin/TESTTLS.EXE /initramfs/tests/TESTTLS.EXE || \
+      { echo "FATAL: TESTTLS.EXE was not built into the static tree -- the own-PT_TLS in-process flip would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x /initramfs/tests/TESTTLS.EXE && \
     # THE SYSTEM DATA FILES F$IDENTIFIER READS (vms-2f8).
     #
     # F$IDENTIFIER used to answer from a hardcoded pair of names inside

@@ -2589,6 +2589,76 @@ static void test_joinbound_models_vaxcluster_membership_and_survives_teardown(vo
 }
 
 /*
+ * vms-694 (§4(O.8)) -- THE JOINER VC's op=3 CONNECT-CONFIRM IS BUILT AND SENT,
+ * SO THE FSM MUST RECORD IT -- NOT LOG A FALSE "no builder" CONNNOACT.
+ *
+ * GROUNDED, vax3-2to3-established-join-20260730.pcap frame 139 (§4(m)): a real
+ * VAX joiner sends op=3 CONNECT-CONFIRM (62-byte) on its OWN VMS$VAXcluster VC
+ * right after the member's op=2 ACCEPT (frame 136) and BEFORE the add-member
+ * config burst (frames 142/143). It is load-bearing -- omit it and the member
+ * never runs the dialogue. OVMX builds the same frame with
+ * scs_dir_build_connect_confirm and puts it on the wire (measured op=3 x2, one
+ * per peer, in d94-vms694O7.pcap). The FSM names the Figure 2-14
+ * RCV_ACCEPT_REQ->OPEN action "send ACCEPT_RSP" -- the SAME op=3 frame.
+ *
+ * Before §4(O.8), conn_step for that transition was passed emitted=NULL, so
+ * scsd.c logged SCSD-W-CONNNOACT ("OVMX has no builder ... nothing was sent")
+ * in the SAME millisecond as the SCSD-I-JOINCONFIRM proving the frame WAS sent
+ * (join log lines 70/73). This drives the two REAL captured frames to OPEN and
+ * asserts the machine records the emit: the confirm frame goes out, JOINCONFIRM
+ * is logged, and the FSM adds NO unemitted action / NO CONNNOACT for it. FAILS
+ * pre-fix (the NULL scored one unemitted action + logged CONNNOACT).
+ */
+static void test_joiner_vc_op3_confirm_is_recorded_not_reported_unbuilt(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
+
+    struct peer_state *ps =
+        peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
+    CHECK(ps != NULL, "peer slot");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&r.w.cfg, ps, ovmx760_member_sysid);
+    (void)scs_pb_open(&r.w.cfg, ps->pb);
+    CHECK(send_joiner_connect_request(7, 1, &r.w.cfg, ps, NULL, r.hw_mac, r.logical) == 1,
+          "the joiner CONNECT-REQUEST was not sent");
+
+    /* op=1 CONNECT-ECHO: CONNECT SENT -> CONNECT ACK, no action, no emit. */
+    rx_feed(&r, cap_ovmx_joiner_connect_rsp, sizeof(cap_ovmx_joiner_connect_rsp));
+
+    /* Bracket EXACTLY the ACCEPT_REQ frame -- the one that drives
+     * RCV_ACCEPT_REQ->OPEN, whose action is the op=3 confirm. */
+    unsigned long unemitted_before = conn_unemitted_actions;
+    unsigned frames_before = scsd_test_frames;
+    rxlog_reset();
+    rx_feed(&r, cap_ovmx_joiner_accept_req, sizeof(cap_ovmx_joiner_accept_req));
+
+    CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_OPEN,
+          "PRECONDITION: the member's real ACCEPT_REQ did not leave the joiner"
+          " connection OPEN (%s)",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
+
+    /* The op=3 CONNECT-CONFIRM actually went out on the wire ... */
+    CHECK(scsd_test_frames > frames_before,
+          "the joiner VC reached OPEN but no op=3 CONNECT-CONFIRM frame was sent");
+    CHECK(rxlog_has("SCSD-I-JOINCONFIRM"),
+          "the daemon did not log the op=3 VMS$VAXcluster confirm it must send");
+
+    /* ... so the FSM must NOT score the 'send ACCEPT_RSP' action unemitted --
+     * that is the FALSE CONNNOACT this fix removes. */
+    CHECK(conn_unemitted_actions == unemitted_before,
+          "the joiner VC's op=3 confirm was emitted (SCSD-I-JOINCONFIRM), yet"
+          " the FSM scored %lu unemitted action(s) for it -- the false 'no"
+          " builder' CONNNOACT §4(O.8) removes",
+          conn_unemitted_actions - unemitted_before);
+    CHECK(!rxlog_has("SCSD-W-CONNNOACT"),
+          "the daemon logged SCSD-W-CONNNOACT for the op=3 confirm it just sent"
+          " -- the false alarm §4(O.8) removes");
+}
+
+/*
  * vms-770 (vms-a61 audit) -- A SHORT SEQAPP DATA FRAME MUST NOT BE MISREAD AS
  * A CONNECT-REQUEST.
  *
@@ -9363,6 +9433,7 @@ int main(void)
      * FSM reaching OPEN, and the fact survives the graceful teardown that fooled
      * the exit summary into `connected=no ... joiner=CLOSED`. */
     test_joinbound_models_vaxcluster_membership_and_survives_teardown();
+    test_joiner_vc_op3_confirm_is_recorded_not_reported_unbuilt();
     /* vms-770 (vms-a61 audit): has_conid no longer implies the 110-/190-byte
      * connect classes, so branch (c) must not treat a short SEQAPP data frame
      * as a CONNECT-REQUEST. */

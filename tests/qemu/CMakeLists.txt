@@ -205,12 +205,59 @@ target_link_options(testextern_foreign PRIVATE
 set_target_properties(testextern_foreign PROPERTIES
     PREFIX "" OUTPUT_NAME "TESTEXTERN_FOREIGN" SUFFIX ".EXE")
 
+# TESTPROD.EXE -- a NON-RESIDENT producer shareable the activator MAPS in-process
+# when TESTNONRES.EXE's .vms$imp names it (vms-db2, the non-resident-producer
+# sub-step). A pure leaf OVMX symbol-vector shareable: a .vms$sv exporting
+# prod_bump (PROCEDURE) + prod_counter (DATA), pinned so its .vms$sv values are
+# link-time-constant image-relative vaddrs (0x100000 code / 0x200000 data). No
+# entry point (never entered), no PT_TLS/PT_INTERP/PT_DYNAMIC (imgact_map_producer
+# accepts exactly this class; anything heavier forks).
+add_executable(testprod_shr testprod_shr.c)
+target_include_directories(testprod_shr PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+    ${CMAKE_SOURCE_DIR}/src/vmslink/include)
+target_compile_options(testprod_shr PRIVATE
+    -std=gnu11 -O2 -Wall -Wextra
+    -fPIC -fno-plt -ffreestanding -fno-stack-protector -fno-builtin
+    -fno-asynchronous-unwind-tables -fvisibility=hidden)
+target_link_options(testprod_shr PRIVATE
+    -nostdlib -nostartfiles -shared
+    -Wl,-z,norelro -Wl,--build-id=none
+    # Pin the producer's code + data so testprod_shr.c's .vms$sv value literals
+    # (0x100000 prod_bump, 0x200000 prod_counter) name their image-relative
+    # vaddrs exactly -- the same as-time-constant trick the consumer subjects use
+    # for .vms$got. ovmx_sv_resolve biases these by the mapped load base.
+    -Wl,--section-start=.vms$pcode=0x100000
+    -Wl,--section-start=.vms$pdata=0x200000)
+set_target_properties(testprod_shr PROPERTIES
+    PREFIX "" OUTPUT_NAME "TESTPROD" SUFFIX ".EXE")
+
+# TESTNONRES.EXE -- the consumer whose .vms$imp names the NON-RESIDENT TESTPROD
+# (plus the resident LIBVMS$SHR for SYS$EXIT). test_syssvc_imgact_nonres.c
+# activates it in-process; the activator maps TESTPROD to bind prod_bump. Same
+# freestanding static-PIE build + .vms$got pinning as TESTREAL, entered at
+# nonres_start via the SysV auxv _start ABI.
+add_executable(testnonres_inproc testnonres_inproc.c)
+target_include_directories(testnonres_inproc PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+    ${CMAKE_SOURCE_DIR}/src/vmslink/include)
+target_compile_options(testnonres_inproc PRIVATE
+    -std=gnu11 -O2 -Wall -Wextra
+    -fPIC -fno-plt -ffreestanding -fno-stack-protector -fno-builtin
+    -fno-asynchronous-unwind-tables -fvisibility=hidden)
+target_link_options(testnonres_inproc PRIVATE
+    -nostdlib -nostartfiles -shared
+    -Wl,-e,nonres_start -Wl,-z,norelro -Wl,--build-id=none
+    -Wl,--section-start=.vms$got=0x200000)
+set_target_properties(testnonres_inproc PROPERTIES
+    PREFIX "" OUTPUT_NAME "TESTNONRES" SUFFIX ".EXE")
+
 # Single build target covering every registered test_syssvc_* binary, so
 # callers (tests/qemu/Dockerfile) never need to name a specific test. It also
 # pulls in TESTIMG.EXE so a `--target qemu_syssvc_tests` build stages the
 # subject alongside its suite.
 get_property(_qemu_syssvc_test_targets GLOBAL PROPERTY QEMU_SYSSVC_TEST_TARGETS)
-add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg_inproc testreal_inproc testextern_inproc testextern_foreign)
+add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg_inproc testreal_inproc testextern_inproc testextern_foreign testprod_shr testnonres_inproc)
 
 # ---------------------------------------------------------------------------
 # TORN OUT AS GATES (vms-49f), per the CLAUDE.md Rule 9 amendment.

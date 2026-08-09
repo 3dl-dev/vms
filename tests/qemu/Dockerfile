@@ -289,7 +289,14 @@ RUN cd /src/repo && \
     # loader runs in-process; a foreign interp forks). Same aggregate
     # (qemu_syssvc_tests now DEPENDS on both).
     echo "--- TESTEXTERN.EXE / TESTEXTERN_FOREIGN.EXE (external-image flip subjects, test_syssvc_imgact_extern) ---" && \
-    ls -la build-static/bin/TESTEXTERN.EXE build-static/bin/TESTEXTERN_FOREIGN.EXE
+    ls -la build-static/bin/TESTEXTERN.EXE build-static/bin/TESTEXTERN_FOREIGN.EXE && \
+    # TESTPROD.EXE + TESTNONRES.EXE (vms-db2): the NON-RESIDENT-producer flip
+    # subjects test_syssvc_imgact_nonres.c activates. TESTNONRES's .vms$imp names
+    # TESTPROD (a producer DCL does not hold resident); the activator maps
+    # TESTPROD in-process to bind it. Same aggregate (qemu_syssvc_tests DEPENDS on
+    # testprod_shr + testnonres_inproc).
+    echo "--- TESTPROD.EXE / TESTNONRES.EXE (non-resident-producer flip subjects, test_syssvc_imgact_nonres) ---" && \
+    ls -la build-static/bin/TESTPROD.EXE build-static/bin/TESTNONRES.EXE
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
@@ -458,6 +465,23 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp /src/repo/build-static/bin/TESTEXTERN_FOREIGN.EXE /initramfs/tests/TESTEXTERN_FOREIGN.EXE || \
       { echo "FATAL: TESTEXTERN_FOREIGN.EXE was not built into the static tree -- the foreign-interp negative control would go unproven"; exit 1; }; } && \
     chmod +x /initramfs/tests/TESTEXTERN_FOREIGN.EXE && \
+    # TESTNONRES.EXE + TESTPROD.EXE (vms-db2), the non-resident-producer flip --
+    # tests/qemu/test_syssvc_imgact_nonres.c activates TESTNONRES at /tests/
+    # (default, overridable via OVMX_TESTNONRES). TESTNONRES's .vms$imp names
+    # TESTPROD, which the activator (imgact_map_producer) resolves via SYS$SHARE
+    # = /vms/SYS0/SYSCOMMON/SYSLIB, so TESTPROD is staged THERE (not /tests) --
+    # exactly the path the mapper searches. Neither matches a test_* glob.
+    # Absence is FATAL, not skipped: a missing consumer turns the same-PID/
+    # shared-instance assertions into no-ops with the job green; a missing
+    # producer would make the flip fork (SS$_UNSUPPORTED) and the suite fail --
+    # which is the honest outcome, but FATAL-here keeps the intent explicit.
+    { cp /src/repo/build-static/bin/TESTNONRES.EXE /initramfs/tests/TESTNONRES.EXE || \
+      { echo "FATAL: TESTNONRES.EXE was not built into the static tree -- the non-resident-producer in-process flip would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x /initramfs/tests/TESTNONRES.EXE && \
+    mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSLIB && \
+    { cp /src/repo/build-static/bin/TESTPROD.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSLIB/TESTPROD.EXE || \
+      { echo "FATAL: TESTPROD.EXE was not built into the static tree -- the non-resident producer the activator maps would be missing and the flip would fork unproven"; exit 1; }; } && \
+    chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSLIB/TESTPROD.EXE && \
     # THE SYSTEM DATA FILES F$IDENTIFIER READS (vms-2f8).
     #
     # F$IDENTIFIER used to answer from a hardcoded pair of names inside

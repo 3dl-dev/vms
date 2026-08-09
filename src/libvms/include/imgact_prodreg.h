@@ -144,4 +144,38 @@ void imgact_prodreg_reset(void);
 uint32_t imgact_bind_imports_resident(uint64_t base,
                                       const struct ovmx_imp_header *imp);
 
+/*
+ * A producer-mapping callback (vms-db2, §A.8 remainder item 1 -- the
+ * NON-RESIDENT producer sub-step). On OpenVMS an image may import a universal
+ * from a shareable the process does NOT already hold resident; the activator
+ * maps that shareable into the process (once, process-permanent) and binds to
+ * it. imgact_bind_imports_mapped() below realises that: when a named producer
+ * is not in the registry it calls this callback, which must map the producer
+ * shareable by `soname`, register it (imgact_register_producer), and return
+ * SS$_NORMAL if it is now resident -- or SS$_UNSUPPORTED to leave the import
+ * unbound so the caller forks (a producer the mapper refuses to map in-process,
+ * e.g. one carrying its own PT_TLS or a C-RTL bootstrap that would reprogram the
+ * thread pointer -- the deferred remainder). The mapping (file I/O, mmap) lives
+ * in the activator (src/libvms/syssvc/sys_imgact.c: imgact_map_producer); this
+ * registry stays pure userspace, so the isolation test binds resident-only with
+ * a NULL callback and is unchanged.
+ */
+typedef uint32_t (*imgact_mapper_fn)(const char *soname);
+
+/*
+ * Bind a consumer image's .vms$imp imports, mapping any named producer that is
+ * not yet resident via `map` (NULL = resident-only, identical to
+ * imgact_bind_imports_resident). For each import: find the producer in the
+ * registry; if absent and `map` is non-NULL, call map(soname) and look again;
+ * then GSMATCH+index-resolve and write the resolved address into the consumer's
+ * GOT cell at base+patch_off. Returns SS$_NORMAL (all bound), SS$_BADPARAM
+ * (malformed .vms$imp), or SS$_UNSUPPORTED (a producer is not resident and could
+ * not be mapped, or a GSMATCH/index mismatch -- caller forks). The single
+ * `*cell = addr;` store is the anti-LARP crux (see imgact_bind_imports_resident
+ * and the consumer-import-not-bound-to-resident negative control).
+ */
+uint32_t imgact_bind_imports_mapped(uint64_t base,
+                                    const struct ovmx_imp_header *imp,
+                                    imgact_mapper_fn map);
+
 #endif /* _IMGACT_PRODREG_H */

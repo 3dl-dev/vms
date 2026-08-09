@@ -485,7 +485,8 @@ super-mode-escalation
 image-rundown-without-entry
 image-rundown-leaks-user-lock
 imgact-p1-not-protected
-consumer-import-not-bound-to-resident"
+consumer-import-not-bound-to-resident
+publish-does-not-populate-registry"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4338,7 +4339,7 @@ EOF
         case "$_f" in
         facility)     echo "in-process image activation, .vms\$imp import binding to an ALREADY-RESIDENT shareable (imgact_bind_imports_resident(), vms-db2 -- the §A.8-remainder import-binding-to-resident-shareable sub-step of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.2)";;
         targets)      echo "libvms/syssvc/imgact_prodreg.c";;
-        suites_red)   echo "test_syssvc_imgact_bind";;
+        suites_red)   echo "test_imgact_bind";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -4352,6 +4353,26 @@ the test sees the consumer's increment to the SAME resident counter (genuine sha
 EOF
                       ;;
         knock_on_why)  echo "SAME DEFECT, OBSERVED FROM THE OTHER PARTY TO THE SHARED STATE. With the GOT cell left at its stub the consumer never increments the resident counter, so when the test (as DCL) calls the same producer directly it sees 1, not 2 -- the consumer's missing effect (this assertion) and the consumer's call landing on the stub (require_fail) are the two visible faces of the one skipped store, not two independent properties: both say the image bound to nothing resident.";;
+        esac;;
+
+    publish-does-not-populate-registry)
+        case "$_f" in
+        facility)     echo "in-process image activation, PUBLISHING the resident-producer registry at runtime (imgact_publish_producers(), vms-db2 -- the §A.8-remainder gap 1 of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.8: IMGACT hands the LIBVMS\$SHR/DECC\$SHR bases it mapped across to the registry so a later in-process RUN can bind to them)";;
+        targets)      echo "libvms/syssvc/imgact_prodreg.c";;
+        suites_red)   echo "test_imgact_publish";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "imgact_publish_producers() STOPS calling imgact_register_producer for each producer in the list (the one \`imgact_register_producer(...)\` call replaced by a no-op that keeps prods referenced and leaves st = SS\$_NORMAL), so publish still returns SS\$_NORMAL -- it just records NOTHING. This is the LARP shape the authenticity invariants exist to kill: publish reports success (and the status says so) while the registry stays EMPTY, exactly the runtime state IMGACT left it in before this gap was closed -- so a later in-process RUN's .vms\$imp import finds no resident producer, imgact_bind_imports_resident refuses it (SS\$_UNSUPPORTED) and the caller forks, sharing nothing with the resident LIBVMS\$SHR/DECC\$SHR. The malformed-argument refusals (NULL list, negative count) return before this loop and are untouched, so only the assertions that publish a producer and then observe a consumer reach its SHARED counter can tell the difference -- one minimal mutation, one property.";;
+        require_fail) cat <<'EOF'
+the consumer's imported call reached the PUBLISHED resident producer -- it returned the resident counter value 1, not the unbound stub
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the test sees the consumer's increment to the SAME resident counter publish made reachable (genuine sharing, not a private copy)
+EOF
+                      ;;
+        knock_on_why)  echo "SAME DEFECT, OBSERVED FROM THE OTHER PARTY TO THE SHARED STATE. With the registry left empty by the skipped publish the consumer's import is refused and its GOT cell stays at its stub, so it never increments the resident counter; when the test (as DCL) calls the same producer directly it sees 1, not 2. The consumer's missing effect (this assertion) and the consumer's call never reaching the resident producer (require_fail) are the two visible faces of the one skipped registry population, not two independent properties: both say publish recorded nothing, so nothing could bind.";;
         esac;;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
@@ -4915,6 +4936,17 @@ apply_edit() {
         # around this line and are unaffected.
         sed -i 's|        \*cell = addr;|        (void)cell; (void)addr; /* NEGCTL consumer-import-not-bound-to-resident: import left unbound */|' "$_file";;
 
+    publish-does-not-populate-registry)
+        # UNIQUE TEXT, no range anchor needed: the imgact_register_producer(...)
+        # call inside imgact_publish_producers is the only one on a single line
+        # (imgact_activate's own callers are elsewhere). Replacing it with a
+        # SS$_NORMAL assignment that keeps prods referenced leaves publish's loop
+        # and its SS$_NORMAL return structurally intact -- publish still reports
+        # success, it just records no producer, so the registry stays empty (the
+        # runtime state before this gap closed). The malformed-argument refusals
+        # return before the loop and are unaffected.
+        sed -i 's|        uint32_t st = imgact_register_producer(prods\[i\].soname, prods\[i\].base, prods\[i\].sv);|        uint32_t st = SS$_NORMAL; (void)prods; /* NEGCTL publish-does-not-populate-registry: producer not recorded */|' "$_file";;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -5125,7 +5157,15 @@ cmd_coverage() {
     fi
 
     # --- 2. suites -------------------------------------------------------
-    _cov_derived=$(ls "$_cov_tests"/test_kmod_*.c "$_cov_tests"/test_syssvc_*.c 2>/dev/null \
+    # ALSO test_imgact_*.c (main-red classification fix): pure-userspace
+    # suites (test_imgact_bind, test_imgact_publish -- were test_syssvc_
+    # imgact_bind/publish through #225/#226) that never touch /dev/vms, so
+    # they are deliberately OUTSIDE ci.yml's test_kmod_*/test_syssvc_*
+    # policed set (see tests/qemu/CMakeLists.txt's comment on them) but they
+    # ARE covered by negctl anchors and belong in THIS coverage universe --
+    # widening it here, unlike ci.yml, does not put them under the
+    # test_syssvc_*-must-honest-skip-77 contract.
+    _cov_derived=$(ls "$_cov_tests"/test_kmod_*.c "$_cov_tests"/test_syssvc_*.c "$_cov_tests"/test_imgact_*.c 2>/dev/null \
                    | xargs -n1 basename | sed 's/\.c$//' | sort)
     _uncovered=""
     _blind_only=""
@@ -5242,7 +5282,7 @@ cmd_coverage() {
 
     _anch_raw=$( (cd "$_cov_tests" && grep -Hno \
         '/\* negctl\(-knockon\)\{0,1\}: [a-z0-9][a-z0-9-]* \*/' \
-        test_kmod_*.c test_syssvc_*.c) 2>/dev/null )
+        test_kmod_*.c test_syssvc_*.c test_imgact_*.c) 2>/dev/null )
 
     printf '%s\n' "$_anch_raw" | while IFS= read -r _anch; do
         [ -n "$_anch" ] || continue
@@ -5635,7 +5675,7 @@ cmd_selftest() {
     # deleted, every whitespace run collapsed to one space, the whole corpus on
     # one line. That is deliberately loose -- this check exists to catch a
     # TYPO, not to parse C.
-    cat "$_st_tests"/test_kmod_*.c "$_st_tests"/test_syssvc_*.c 2>/dev/null \
+    cat "$_st_tests"/test_kmod_*.c "$_st_tests"/test_syssvc_*.c "$_st_tests"/test_imgact_*.c 2>/dev/null \
         | tr -d '"\\' | tr '\n\t' '  ' | tr -s ' ' >"$_st_tmp.src"
     _st_absent=""
     for _st_d in $DEFECTS; do

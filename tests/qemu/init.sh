@@ -111,7 +111,14 @@ fi
 # (kernel lock manager, ASTs, event flags, access modes, vmsfs). test_syssvc_*
 # drive the same /dev/vms through the PUBLIC sys$ API in src/libvms instead
 # (vms-1d9) -- exercising the userspace system-service layer the ioctl tests
-# cannot see at all.
+# cannot see at all. test_imgact_* (main-red classification fix; were
+# test_syssvc_imgact_bind/publish through #225/#226) touch NEITHER /dev/vms
+# NOR any kernel-executive path -- pure userspace .vms$imp binding / resident-
+# producer registry logic, run here only so run_facility_negctl.sh's per-
+# facility fault-injection proofs keep seeing them execute inside this
+# harness. They are deliberately excluded from .github/workflows/ci.yml's
+# test_syssvc_*-derived policed set (which requires rc=77 with no /dev/vms):
+# these two legitimately return 0 whether or not the executive is present.
 #
 # PER-SUITE VERDICT LINE (vms-1d9). After each suite we print
 #
@@ -177,7 +184,7 @@ SUITE_FIFO=/tmp/suite_fifo.$$
 # shipped). 20s is slack for an ORPHAN to be force-reaped, not for a suite to
 # finish; see below for why that distinction is the whole fix.
 SUITE_DRAIN_TIMEOUT=${SUITE_DRAIN_TIMEOUT:-20}
-for test in /tests/test_kmod_* /tests/test_syssvc_*; do
+for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_*; do
     [ -x "$test" ] || continue
     name=$(basename "$test")
     echo "" >&4

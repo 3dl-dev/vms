@@ -1,5 +1,5 @@
 /*
- * test_syssvc_imgact_bind.c - the .vms$imp import-binding-to-RESIDENT-shareable
+ * test_imgact_bind.c - the .vms$imp import-binding-to-RESIDENT-shareable
  * mechanism, proven in ISOLATION (vms-db2, docs/design-in-process-activation.md
  * Part II §A.2.2 + §A.8 remainder item 1).
  *
@@ -23,6 +23,23 @@
  * the resident-shareable binding -- and proves genuine sharing without a fork
  * and without the executive, so it runs and asserts in EVERY environment
  * (including the CI host build), not just under QEMU.
+ *
+ * NAMING (main-red fix, was test_syssvc_imgact_bind through #225). The
+ * kernel-executive-negative-control CI job (.github/workflows/ci.yml) derives
+ * its "must be a real executive suite" policed set from the test_syssvc_*
+ * glob and requires every member to return the honest-skip code 77 when
+ * /dev/vms is absent -- because a test_syssvc_* suite that returns 0 with no
+ * executive is the LARP shape that job exists to catch. This suite was
+ * originally given the test_syssvc_ prefix (it does drive a public sys$-
+ * adjacent mechanism) but, per the paragraph above, never touches /dev/vms
+ * and legitimately returns 0 whether or not the executive is present -- so
+ * under that job it was misclassified and tripped as a false LARP positive.
+ * test_imgact_bind is the userspace name; it is built, run, and gated
+ * (tests/qemu/CMakeLists.txt add_test()) like any host test, and it still
+ * runs inside the QEMU harness (tests/qemu/init.sh, tests/qemu/Dockerfile)
+ * so run_facility_negctl.sh's consumer-import-not-bound-to-resident proof
+ * keeps working -- it is simply excluded from ci.yml's test_syssvc_*-must-
+ * skip contract, which only ever applied to suites that need the executive.
  *
  * THE ANTI-LARP CONSTRUCTION. A "resident producer" holds shared internal state
  * (a counter in THIS process). A "consumer image" imports the producer's
@@ -146,7 +163,7 @@ static const struct ovmx_imp_header *build_consumer_imp(const char *soname,
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
-    printf("=== test_syssvc_imgact_bind (.vms$imp -> RESIDENT shareable, vms-db2) ===\n");
+    printf("=== test_imgact_bind (.vms$imp -> RESIDENT shareable, vms-db2) ===\n");
 
     const struct ovmx_sv_header *sv = build_producer_sv();
 
@@ -244,6 +261,6 @@ int main(void)
               "a .vms$imp with a bad magic is rejected (SS$_BADPARAM)");
     }
 
-    printf("=== test_syssvc_imgact_bind: %d passed, %d failed ===\n", pass, fail);
+    printf("=== test_imgact_bind: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
 }

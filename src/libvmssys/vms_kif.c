@@ -1034,6 +1034,72 @@ uint32_t vms_kif_p1_map(uint64_t base, uint64_t limit)
 }
 
 /* ================================================================
+ * Access-mode transition primitive (vms-68f.iii, in-process image
+ * activation foundation, increment (iii))
+ *
+ * Both calls bind and check the descriptor directly, inline, for the
+ * same reason vms_kif_p0_map/p0_unmap/p1_map do above: no shared arena,
+ * and a named helper without the vms_kif_ prefix would be an unreachable
+ * entry in tests/integration/test_kif_caller_census.sh's universe.
+ * ================================================================ */
+
+uint32_t vms_kif_enter_image(uint8_t *prev_mode, uint8_t *new_mode)
+{
+    struct vms_modexfer_args args;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+
+    KIF_CALL(VMS_IOCTL_ENTER_IMAGE, &args);
+
+    if (prev_mode) *prev_mode = args.prev_mode;
+    if (new_mode) *new_mode = args.new_mode;
+    return args.status;
+}
+
+uint32_t vms_kif_image_rundown(uint8_t *prev_mode, uint8_t *new_mode)
+{
+    struct vms_modexfer_args args;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+
+    KIF_CALL(VMS_IOCTL_IMAGE_RUNDOWN, &args);
+
+    if (prev_mode) *prev_mode = args.prev_mode;
+    if (new_mode) *new_mode = args.new_mode;
+    return args.status;
+}
+
+/*
+ * vms_kif_p1_protect - NOT an ioctl. See the header comment for why:
+ * this wraps a real mprotect(2) on the caller's own address space, the
+ * enforced half of the design's critical-P1 mechanism, and it has no
+ * /dev/vms dependency at all.
+ */
+uint32_t vms_kif_p1_protect(uint64_t base, uint64_t limit, int writable)
+{
+    int prot;
+
+    if (base == 0 || limit <= base)
+        return SS$_BADPARAM;
+
+    prot = writable ? (VMS_PROT_READ | VMS_PROT_WRITE) : VMS_PROT_READ;
+
+    if (vms_sys_mprotect((void *)(unsigned long)base,
+                          (vms_size_t)(limit - base), prot) != 0)
+        return SS$_ACCVIO;
+
+    return SS$_NORMAL;
+}
+
+/* ================================================================
  * Logical name tables (executive-resident LNM$SYSTEM, vms-d37)
  * ================================================================ */
 

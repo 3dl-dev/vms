@@ -480,7 +480,9 @@ lnm-privilege-check-bypassed
 mbx-not-shared
 p0-map-not-recorded
 p1-map-not-recorded
-p0-unmap-clears-p1"
+p0-unmap-clears-p1
+super-mode-escalation
+image-rundown-without-entry"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4256,6 +4258,42 @@ EOF
                       ;;
         esac;;
 
+    super-mode-escalation)
+        case "$_f" in
+        facility)     echo "access-mode transition + boundary enforcement (VMS_IOCTL_SETMODE/ENTER_IMAGE/IMAGE_RUNDOWN, vms-68f.iii -- increment (iii) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.3)";;
+        targets)      echo "kernel/vms_access.c";;
+        suites_red)   echo "test_kmod_modeswitch";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_setmode()'s raise-to-SUPER branch stops requiring CMEXEC/CMKRNL, reverting to this item's pre-fix behaviour (\"to super mode: from user only, no special priv\") where SUPER (2) is a MORE privileged mode than USER (3) by the function's own numbering, so an unprivileged caller could self-promote into the mode the design reserves for DCL's command loop. One disjunct removed from one condition, mirroring exactly how access-mode-escalation inverts the KERNEL-mode check.";;
+        require_fail) cat <<'EOF'
+SUPER mode DENIED without CMEXEC/CMKRNL (SS$_NOPRIV)
+... and the mode is still USER after the denied SUPER escalation
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    image-rundown-without-entry)
+        case "$_f" in
+        facility)     echo "access-mode transition + boundary enforcement (VMS_IOCTL_ENTER_IMAGE/IMAGE_RUNDOWN, vms-68f.iii -- increment (iii) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.3)";;
+        targets)      echo "kernel/vms_access.c";;
+        suites_red)   echo "test_kmod_modeswitch";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_image_rundown() stops requiring proc->image_active before restoring current_mode, so a caller that never went through a matching VMS_IOCTL_ENTER_IMAGE -- current_mode is PSL_C_USER by default at registration, image_active is 0, pre_image_mode is whatever kmem_cache_zalloc() left it (PSL_C_KERNEL, 0) -- can call the RETURN leg of the controlled transition cold and have the executive move it to pre_image_mode anyway. This is the exact 'cannot raise its own mode except via the controlled transition' property the design's negative control (§A.5 item 5) and this item's own task both name: the guard, not current_mode, is what makes RUNDOWN a paired return instead of a second SETMODE.";;
+        require_fail) cat <<'EOF'
+IMAGE_RUNDOWN refused with no active image entry
+... and the mode is still USER after the refused IMAGE_RUNDOWN -- no door reaches Supervisor without the controlled transition
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -4759,6 +4797,29 @@ apply_edit() {
         sed -i '/^long vms_ioctl_p0_unmap/,/^}$/ {
             s|^    proc->p0_limit = 0;$|    proc->p0_limit = 0; /* NEGCTL p0-unmap-clears-p1 */\n    proc->p1_base = 0;\n    proc->p1_limit = 0;|
         }' "$_file";;
+
+    super-mode-escalation)
+        # UNIQUE TEXT, no range anchor needed: this exact disjunction (EXEC
+        # OR SUPER) occurs once in the file -- vms_ioctl_setmode's own
+        # raise-mode branch. Dropping "|| args.mode == PSL_C_SUPER" reverts
+        # SUPER to this item's pre-fix behaviour while leaving KERNEL's own
+        # branch (a few lines above, a different `if`) and EXEC's own
+        # privilege check (still reached for args.mode == PSL_C_EXEC)
+        # completely untouched -- a caller requesting EXEC is unaffected;
+        # only a caller requesting SUPER stops being checked at all.
+        sed -i 's|^        } else if (args\.mode == PSL_C_EXEC \|\| args\.mode == PSL_C_SUPER) {$|        } else if (args.mode == PSL_C_EXEC) { /* NEGCTL super-mode-escalation: SUPER no longer requires privilege */|' "$_file";;
+
+    image-rundown-without-entry)
+        # UNIQUE TEXT, no range anchor needed: this exact guard occurs once
+        # in the file -- vms_ioctl_image_rundown's own image_active check.
+        # `0 &&` is the same always-false idiom access-mode-escalation and
+        # lock-valblk-grant-not-delivered already use in this file: the
+        # guard's THEN-branch (the refusal) becomes structurally
+        # unreachable rather than deleted, so nothing after it shifts.
+        # vms_ioctl_enter_image's own body (the ONLY other place
+        # image_active is touched) is a plain assignment, never an `if`
+        # naming it, so this pattern cannot match there.
+        sed -i 's|^    if (!proc->image_active) {$|    if (0 \&\& !proc->image_active) { /* NEGCTL image-rundown-without-entry */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

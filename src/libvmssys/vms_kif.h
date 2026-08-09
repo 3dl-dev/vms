@@ -406,6 +406,62 @@ uint32_t vms_kif_p0_unmap(uint64_t *old_base, uint64_t *old_limit);
 uint32_t vms_kif_p1_map(uint64_t base, uint64_t limit);
 
 /* ================================================================
+ * Access-mode transition primitive (vms-68f.iii, in-process image
+ * activation foundation, increment (iii))
+ *
+ * The CHMx/REI-equivalent pair: a controlled descent into an activated
+ * image (Supervisor -> User) and the paired, executive-verified return at
+ * image rundown (User -> Supervisor). docs/design-in-process-
+ * activation.md Part II §A.1.3, §A.2.3. See vms_ioctl.h's
+ * VMS_IOCTL_ENTER_IMAGE/VMS_IOCTL_IMAGE_RUNDOWN comment for why this is a
+ * distinct pair from vms_kif_setmode() rather than two calls to it.
+ * INV-6: no /dev/vms -> SS$_NOSUCHDEV, no per-process fake.
+ * ================================================================ */
+
+/* Enter an image: refused SS$_NOPRIV unless the caller is currently in
+ * PSL_C_SUPER. On success, *prev_mode / *new_mode (both optional) report the
+ * transition (PSL_C_SUPER -> PSL_C_USER) and the executive records the
+ * mode to restore.
+ * OVMX-UNWIRED: vms_kif_enter_image (vms-6f1) -- imgact$activate, the
+ * in-process activation library that calls this when it enters an
+ * image's code, is increment iv of vms-68f; nothing in the product calls
+ * it yet. */
+uint32_t vms_kif_enter_image(uint8_t *prev_mode, uint8_t *new_mode);
+
+/* Run an image down: refused SS$_NOPRIV unless a matching vms_kif_
+ * enter_image() is still open for this process. On success, *prev_mode/
+ * *new_mode (both optional) report the transition (PSL_C_USER -> whatever
+ * the matching ENTER_IMAGE recorded) and the open descent is closed.
+ * OVMX-UNWIRED: vms_kif_image_rundown (vms-6f1) -- SYS$RUNDWN's library
+ * path (vms-68f increment v) is what will call this; nothing in the
+ * product calls it yet. */
+uint32_t vms_kif_image_rundown(uint8_t *prev_mode, uint8_t *new_mode);
+
+/*
+ * vms_kif_p1_protect - the CRITICAL-P1 MPROTECT MECHANISM (vms-68f.iii,
+ * docs/design-in-process-activation.md Part II §A.2.3(b)).
+ *
+ * NOT an ioctl -- there is no VMS_IOCTL_* behind this call. [base, limit)
+ * is a real page-aligned range in THIS PROCESS's own address space (the
+ * design's "DCL's crown-jewel P1 structures", typically a sub-range
+ * registered with vms_kif_p1_map()); this wraps a real mprotect(2)
+ * (vms_sys_mprotect(), src/libvmssys/vms_syscall.h) to PROT_READ (writable
+ * == 0) while an image runs in User mode, or back to PROT_READ|PROT_WRITE
+ * (writable != 0) at rundown. This IS the enforced half of §A.2.3(b): a
+ * wild write from an in-process image to a protected P1 page faults at
+ * the MMU, genuinely, regardless of the software current-mode tracking
+ * above -- it does not depend on /dev/vms being reachable at all, so
+ * there is no INV-6 fallback question for this call the way there is for
+ * an ioctl-backed one.
+ * Returns SS$_BADPARAM for a degenerate range, SS$_ACCVIO if the
+ * underlying mprotect(2) itself fails (e.g. the range is not currently
+ * mapped), SS$_NORMAL on success.
+ * OVMX-UNWIRED: vms_kif_p1_protect (vms-6f1) -- imgact$activate's
+ * enter/rundown sequence (increments iv/v) is what will call this
+ * around a real image entry; nothing in the product calls it yet. */
+uint32_t vms_kif_p1_protect(uint64_t base, uint64_t limit, int writable);
+
+/* ================================================================
  * Logical name tables (executive-resident LNM$SYSTEM, vms-d37)
  *
  * The executive owns the LNM$SYSTEM storage, so a name defined here by

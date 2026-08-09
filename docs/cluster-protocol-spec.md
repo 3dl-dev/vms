@@ -3905,6 +3905,72 @@ for. Re-derive: `docs/HANDOFF-vms-2f3.md` §4(O.2) for the original bracket;
 this section's numbers come from `tests/lab/tools/lab2run.sh` runs
 `8e4A2`/`8e4B1` on `vaxlab-6`, 2026-08-06.
 
+#### 4(O.6) The VMS$VAXcluster SYSAP connection DOES reach `0002 open` — `0007 con_sent` "at teardown" was a sampling artifact (GROUNDED live, `vms-694`)
+
+**The premise this item was dispatched on is REFUTED.** The frontier was stated
+as: OVMX is admitted at CNXMAN but *the peer's `VMS$VAXcluster ← OVMX` CDT sits
+`0007 con_sent`, never `0002 open`, at teardown* — the cluster-management SYSAP
+connection supposedly never completes. Measured against the peer's own SDA
+**while OVMX is still running**, it completes and stays open; the `con_sent`
+reading was an artifact of sampling the peer **after** OVMX exited.
+
+**Method.** Three arms, three **virgin CN_2** lab-2 pods, three **fresh**
+`SCSSYSTEMID`s minted through `mk_sysgen.py` (no `%PEA0 … Conflicts`, no
+`SCSD-W-VCNOACK` on any arm — §4(w) hygiene satisfied). Unlike the prior rounds
+that recorded `con_sent`, the peer's CDT state is sampled **every ~5 s during
+the run** via `SDA> SHOW CONNECTIONS` (the `/NODE=` filter resolves only once
+the identity is an admitted member; the unfiltered form does not), not only in
+one end-of-run snapshot. Runner: a `connwatch.sh` variant sampling all
+connections per cycle; identity proven on the wire (`strings … | grep OVMX..`),
+guardrail 18.
+
+| arm | binary | pod | identity / SYSSYSTEMID | `VMS$VAXcluster→OVMX` mid-run | at T-END (post-`pkill`) | join |
+|---|---|---|---|---|---|---|
+| `CRhead` | `main` reverted (no switch) | `vaxlab-0` | `OVMXF0` / 1817 | **29/29 `0002 open`** | `0007 con_sent` (new Con.ID) | `XITDONE=1` |
+| `CRctl` | +switch, `OVMX_CONNRSP_FIRST_ONLY=1` (= HEAD's first-only echo path, wire-identical) | `vaxlab-8` | `OVMXD0` / 1813 | **29/29 `0002 open`** | `0007 con_sent` (`36A8000D`) | `XITDONE=1` |
+| `CRfix2` | +switch default (echo re-answered every CONNECT_REQ) | `vaxlab-9` | `OVMXE0` / 1815 | **35/35 `0002 open`** | `0007 con_sent` (new Con.ID) | `XITDONE=1` |
+
+**What `con_sent` at teardown actually is.** In every arm the `0007 con_sent`
+CDT in the end-of-run `SHOW CONNECTIONS` carries a **different, higher Con.ID**
+than the `0002 open` CDT that was present all through the run (e.g. `CRctl`: open
+throughout, then at T-END a *new* `36A8000D` in `con_sent` to `OVMXD0`). That is
+the peer noticing OVMX vanished (`pkill SCSD.EXE` at T+`DUR`) and **immediately
+re-opening** a VMS$VAXcluster connection to the now-dead node — a `CONNECT_REQ`
+that can never be answered, hence `con_sent`. It is the peer reacting to OVMX's
+death, not a formation failure. Davis Figure 2-14 / p. 2-23 describe the source
+leaving CONNECT SENT only on a received `CONNECT_RSP`; with OVMX gone there is no
+responder, exactly as the figure predicts.
+
+**A sub-hypothesis was tested and is also refuted: the op=1 CONNECT-ECHO
+`first`-gate is not the cause.** `scsd.c`'s member-connect answer emits its op=1
+`CONNECT-ECHO` (the `CONNECT_RSP`) only on the first bind (`first =
+!ps->connected`), re-answering retransmits with the op=2 `ACCEPT_REQ` alone —
+the asymmetry §4(O.1) measured and declined to bless. An `OVMX_CONNRSP_FIRST_ONLY`
+kill switch was added to bracket it (`CRctl` = first-only, `CRfix2` =
+re-answer-every) and **made no difference to the open outcome**: both reach
+`0002 open` and hold it. The switch was reverted; it changed nothing on the wire
+that mattered. (`CRfix2` also joins cleanly, `XITDONE=1` — an earlier
+`echo-every` arm on `vaxlab-7` stalled at START, `start_acked=0`, before ever
+reaching the member-connect path; that was a pod-level SIMH/br0 fault, the same
+class §4(O.5)'s caveat records, not the code path.)
+
+**The real open question this relocates the frontier to — recorded, not fixed.**
+The peer holds the connection **open**, but OVMX's *own* exit summary for the
+same peer reads `connected=no conn[member=untracked joiner=CLOSED]`, `connect_sent=0`,
+and OVMX receives **zero 110-byte CONNECT-class frames** (envelope census on
+`CRctl`: 190×547, plus 41/58/62/66 — no 110). OVMX's VMS$VAXcluster connection
+is bound through the **190-byte add-member CM dialogue** (`SCSD-I-JOINBOUND,
+member accepted OUR VMS$VAXcluster connect`), which the peer treats as an open
+SCS connection, while OVMX's *SCS connection state machine* never tracks it as
+such. So the gap is not on the wire and not `con_sent`: it is that **OVMX's CDT
+bookkeeping does not model the VMS$VAXcluster connection the peer already
+considers open**. Making OVMX's state machine track that connection (so it can
+carry and account for cluster-management SYSAP data, and tear it down cleanly) is
+the next increment — not driving a `con_sent` that does not persist.
+
+Captures/logs on the tank volume: `/data/training/vax/k8s-labs/{vaxlab-0,vaxlab-8,vaxlab-9}/logs/d94-CR{head,ctl,fix2}.pcap`
+and `scsd-CR*.log`; per-cycle CDT samples in `…/cluster/work/CR{head,ctl,fix2}.csb`. 2026-08-09.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

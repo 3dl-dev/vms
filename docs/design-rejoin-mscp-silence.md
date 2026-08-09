@@ -214,3 +214,66 @@ copyrighted — page cites only, never committed). All wire/peer-state claims ar
 from OUR lab captures and real-VAX SDA output. No VSI/HPE source or binary was
 examined. The bidirectional-connectivity admission rule is GROUNDED (Davis p.7-39
 + live peer CDT), added to `docs/cluster-protocol-spec.md` §4(y).
+
+---
+
+## 7. The §1 MSCP-accept diagnosis is FALSIFIED by its own required bracket (`vms-694`, 2026-08-09)
+
+**Status: the §4 fix was NOT implemented — because the code-gap it targets does
+not exist at HEAD, and the accept it proposes to drive is not the admission
+discriminator.** This section is the durable record so the next session does not
+re-implement a phantom fix. Bracketed exactly as §5 required: a CLEAN pod, a
+FRESH never-admitted identity, `OVMX_JOIN_SEQ=1`, kill-switch control (guardrail
+23), SCSD.EXE built from this branch (== `main` at `542fb57`, no wire change).
+
+### 7a. The receive-path accept is ALREADY driven, independent of `join_step`
+
+Measured directly through `scsd_handle_frame()`
+(`tests/vmsscs/test_scsd_wire.c::test_joinseq_accepts_members_inbound_mscp_connect`):
+a peer parked at `JS_MSCP_CONNECT` that receives the member's inbound op=0
+MSCP$DISK connect DOES emit the op=1 echo + op=4 accept and DOES allocate the
+server CDT at `PS_MSCP_SERVER_CONID(ps)`. The `(b1.5)` block (`scsd.c`, "SERVER-
+FIRST established-join") is gated on `ovmx_mscp_server_enabled()`, **not** on the
+sequencer state, so §1b's "JOIN_SEQ drives only the outbound half" is not true of
+the code at HEAD. #221 (per-peer Con.ID) + the pre-existing `(b1.5)`/`(b2)`
+default-path accepts already answer both the member's MSCP$DISK and SCS$DIRECTORY
+inbound connects during admission.
+
+### 7b. Live bracket — the kill-switch does NOT gate admission
+
+| arm | pod / ident | env | MSCP-ACCEPTS-SENT | outcome |
+|---|---|---|---|---|
+| positive | vaxlab-9 / OVMXZ2 (1812) | `OVMX_JOIN_SEQ=1` | **30** | `XITDONE=1`, step 8/8 add-member, member CONFIRMED our server (`SCSD-I-MSCPSRVOK`); peer CDT `MSCP$DISK ← OVMXZ2::VMS$DISK_CL_DRVR` = `0002 open` |
+| kill-switch | vaxlab-7 / OVMXK0 (1812) | `OVMX_JOIN_SEQ=1 OVMX_MSCP_SERVER=0` | **0** | `XITDONE=1`, step 8/8 add-member — STILL admitted |
+
+**Membership was real in BOTH arms**, proven on the peer's own console at SCSD
+exit: `Node OVMXZ2 (csid 00010005) has been removed from the VAXcluster` /
+`Node OVMXK0 (csid 00010003) ... removed`. A node only gets a CSID and a
+"removed" line if it had been configured IN. So OVMX joins as a full VAXcluster
+member with the MSCP$DISK server ON *or* OFF — the members' connectivity to OVMX
+is satisfied by the VMS$VAXcluster + SCS$DIRECTORY connections, not by the
+MSCP$DISK connect, and the §1 "Rule of Total Connectivity ⇒ MSCP accept" chain
+does not hold for admission on this lab config.
+
+### 7c. What the §2 pre-#221 "silence" actually was
+
+Already resolved in the §2 RESOLVED note: an `SCSSYSTEMID` identity conflict on a
+polluted pod (spec §4(w.1)). On the clean/fresh-id bracket §5 itself mandated, the
+JS_MSCP_CONNECT stall does not reproduce. The real advance past JS_MSCP_CONNECT
+was landed by #221 + the §4(w) identity-conflict fix, not by an MSCP-accept
+change.
+
+### 7d. Residual, filed on `vms-694` (not this branch's scope)
+
+Not admission, but not yet the full `w3A` all-open steady state either: in both
+arms the peer's `VMS$VAXcluster ← OVMX::VMS$VAXcluster` CDT was sampled at
+`0007 con_sent` (not `0002 open`) at teardown, and the ON arm's member repeatedly
+re-opened MSCP$DISK connects (the vms-298 residual per-connection-handle churn:
+each "SECOND MSCP$DISK connect" is offered the SAME per-peer server handle). These
+are the open questions worth the next increment — the MSCP-accept receive-path
+wiring is not.
+
+**Evidence paths** (host, tank volume):
+`/data/training/vax/k8s-labs/vaxlab-9/logs/scsd-z2joinON.log`,
+`/data/training/vax/k8s-labs/vaxlab-7/logs/scsd-k0killsw.log`,
+`/data/training/vax/cluster/work/{z2joinON,k0killsw}.{csb,status}`.

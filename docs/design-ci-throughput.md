@@ -40,7 +40,7 @@ Long poles (wall-clock, sorted):
 
 | Job | min | What it does / why it's long |
 |---|---|---|
-| **Build & Test** | **25.4** | Full tree build + `ctest`. Dominated by 3 `slow`-labelled per-control **negative-control** loops (`kif_caller_census_negctl` T/O 1800s, `userspace_service_register_negctl` 1500s, `terminal_identity_negctl` 600s) that recompile the tree per control (vms-819d). |
+| **Build & Test** | **25.4** | Full tree build + `ctest`. Dominated by 3 `slow`-labelled per-control **negative-control** loops (`kif_caller_census_negctl` T/O 1800s, `userspace_service_register_negctl` 1500s, `terminal_identity_negctl` 600s) that recompile the tree per control (vms-819d). **SUPERSEDED 2026-08-09 (vms-b44):** all 3 are torn out / de-gated as declaration-gate theatre (CLAUDE.md Rule 9) — each proved only that a source-scan gate can be tripped by known evasions of itself, never touching `vms.ko`/QEMU/`/dev/vms`. They no longer register with `ctest` at all (scripts kept in `tests/integration/` as manual lint), so this job's actual wall-clock is now well under 25.4 min — not re-measured here. |
 | **Persistent Boot Smoke Test** | 13.9 | Builds bootable image (gha layer cache) + 3 QEMU boots. |
 | Facility neg-controls (6 shards) | ~5–6.5 ea | Clean per-facility rebuild + QEMU boot per injected defect. **Harness self-test.** |
 | Static Analysis | 6.0 | Full build + clang-tidy + cppcheck (informational, always exit 0). |
@@ -95,7 +95,12 @@ Moved off the per-PR path (still run on push-`main` + merge_group + nightly):
   purpose is to prove the executive/attribution harness can go red.
 - The **3 `slow`-labelled `_negctl` ctest gates** inside Build & Test — excluded
   on PRs via `ctest -LE slow` (the repo's own documented fast-loop convention,
-  vms-819d) and run in full via plain `ctest` on non-PR events.
+  vms-819d) and run in full via plain `ctest` on non-PR events. **SUPERSEDED
+  2026-08-09 (vms-b44):** these 3 are now torn out / de-gated entirely (see
+  the Build & Test row above) rather than merely tier-demoted — they never ran
+  against a real executive, so demoting them to non-PR-only still gave them
+  more CI weight than a string-relation self-test over the tree's own
+  declarations warrants.
 
 All are negative controls (harness self-tests), not product checks. This is the
 *only* tier move; it removes **zero** product coverage from the per-PR gate.

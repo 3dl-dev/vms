@@ -186,11 +186,21 @@ if(BUILD_TESTS)
     # when it is not (see tests/qemu/CMakeLists.txt).
     add_subdirectory(tests/qemu)
 
-    # A full local `ctest` run is dominated by three of the negctl gates
-    # below (each carries a `slow` label to say so) and can take tens of
-    # minutes on this host (vms-819d). Run `ctest -LE slow` for a fast loop.
+    # A full local `ctest` run used to be dominated by three negctl gates
+    # (`slow`-labelled, vms-819d): kif_caller_census_negctl,
+    # userspace_service_register_negctl, terminal_identity_negctl. All three
+    # are TORN OUT / de-gated (vms-b44, same ruling as vms-49f) — each
+    # reran a SOURCE-SCAN gate against a mutated sandbox copy of the tree,
+    # proving only that the gate can be tripped by known evasions of itself
+    # (a string relation over the tree's own self-declaration), never
+    # touching vms.ko, QEMU, or /dev/vms. Their scripts remain in
+    # tests/integration/ as manual, non-gating lint; they are no longer
+    # registered with add_test() and no longer carry the `slow` label. The
+    # `slow` label still exists for tests/qemu's real QEMU-boot tests (e.g.
+    # parts_demo_e2e) — `ctest -LE slow` remains meaningful for those.
     #
-    # `ctest --timeout N` on the command line CANNOT be used to bound them:
+    # `ctest --timeout N` on the command line CANNOT be used to bound a slow
+    # test that still carries its own TIMEOUT property:
     # it is documented as a DEFAULT, used only for tests that carry no
     # explicit CMake TIMEOUT property. Every gate below sets its own TIMEOUT,
     # so it always wins over the CLI flag regardless of N — this was
@@ -272,26 +282,17 @@ if(BUILD_TESTS)
     set_tests_properties(kif_caller_census PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 600)
 
-    # ... and the evasions, run against a sandbox copy of the tree. Each must
-    # drive the census RED for its own specific reason, and four GREEN controls
-    # pin the rules from the other side — including that a function reached only
-    # through a LIVE callback table still counts (vms-c13).
-    add_test(NAME kif_caller_census_negctl
-        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_kif_caller_census_negctl.sh
-                ${CMAKE_CURRENT_SOURCE_DIR})
-    # TIMEOUT raised from 300 (vms-e2b): each control runs a gate that
-    # configures cmake and preprocesses every product translation unit.
-    # MEASURED 3m29s on workshop at 29 controls; 37 after vms-8cc added the
-    # citation controls, 43 after vms-c13 added the reachability ones.
-    #
-    # `slow` label added (vms-819d): this is one of the two negctl gates that
-    # measured 5+ minutes on workshop (341s at the control count above), the
-    # dominant cost in a full local `ctest` run. `ctest -LE slow` gives a fast
-    # local loop without weakening what this gate asserts or touching its
-    # TIMEOUT. See the top-of-file note on why `ctest --timeout` cannot be
-    # used for this instead.
-    set_tests_properties(kif_caller_census_negctl PROPERTIES
-        LABELS "integration;authenticity;slow" TIMEOUT 1800)
+    # ...and the evasions, run against a sandbox copy of the tree — TORN OUT
+    # / de-gated (vms-b44, same ruling as vms-49f / CLAUDE.md Rule 9). This
+    # mutated the SOURCE tree and reran test_kif_caller_census.sh (a source
+    # scan) against the mutant, asserting the scan went RED for the expected
+    # reason. That proves the census can be tripped by known evasions of
+    # itself — a string relation over the tree's own self-declaration — and
+    # never booted vms.ko, ran QEMU, or touched /dev/vms. No longer
+    # registered with add_test(); the script stays in tree at
+    # tests/integration/test_kif_caller_census_negctl.sh and can still be run
+    # by hand (`sh tests/integration/test_kif_caller_census_negctl.sh`) as
+    # informational, non-gating lint.
 
     # The citation-ledger apparatus that used to sit here (rd_citations_fresh,
     # rd_citations_partial_list, tracking/rd-citations.tsv, tools/gen_rd_citations.py)
@@ -344,38 +345,21 @@ if(BUILD_TESTS)
     set_tests_properties(userspace_service_register PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 300)
 
-    # ...and the evasions, on a sandbox copy of the tree. The GREEN controls
-    # carry as much weight as the RED ones here: the register's design rests on
-    # firing for an undeclared impostor and NOT for legitimate pure computation,
-    # and on leaving Rule 10's second answer (delete the service outright) open.
-    # Each control runs the whole gate, and the gate now compiles the tree for
-    # its symbol scan, so the wall clock is (controls x compiles). Measured on
-    # an 8-core box: 99s for 34 controls before the symbol scan, 180s for 39
-    # after. Re-measured on a 16-core box for vms-c19: 328s for 44 controls
-    # before, 387s for 49 after -- the added cmake configure per gate run costs
-    # about 0.4s per control, and the control COUNT is what moved. Re-measured
-    # again on the same 16-core box for vms-32e: 390s for 49 controls, 514s for
-    # 62 -- 13 citation controls added, and the per-control cost is unchanged.
-    # The timeout is set well clear of that because a CI runner has fewer cores
-    # and the compiles are what parallelise; it is raised with the control
-    # count, not to accommodate a slowdown.
-    #
-    # vms-38c added a MEASURED/UNMEASURED column to the gate's report, which
-    # calls tests/qemu/facility_attribution.sh once per gate run. Measured on
-    # the same 16-core box by hiding that script and re-running: 9.28s without
-    # it, 10.83s with -- +1.55s per control, so roughly +95s across the current
-    # control count, well inside the existing headroom. Recorded rather than
-    # absorbed, per this block's convention. That +1.55s is what FA_ATTR_CACHE
-    # buys: without the cache the gate re-ran all 42 injections once per
-    # OVMX-EXECUTIVE claim instead of once per run.
-    add_test(NAME userspace_service_register_negctl
-        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_userspace_service_register_negctl.sh
-                ${CMAKE_CURRENT_SOURCE_DIR})
-    # `slow` label added (vms-819d): the other of the two negctl gates that
-    # measured 5+ minutes on workshop (390-514s at the control counts noted
-    # above). See kif_caller_census_negctl above for what the label is for.
-    set_tests_properties(userspace_service_register_negctl PROPERTIES
-        LABELS "integration;authenticity;slow" TIMEOUT 1500)
+    # ...and the evasions, on a sandbox copy of the tree — TORN OUT / de-gated
+    # (vms-b44, same ruling as vms-49f / CLAUDE.md Rule 9). The script's own
+    # header already said what this is: each control mutates the SOURCE and
+    # reruns test_userspace_service_register.sh's symbol scan against the
+    # mutant, including edits to OVMX-EXECUTIVE citation comments that name a
+    # proof file under tests/qemu/. Quoting the script's own header verbatim:
+    # "What none of this executes is the OVMX PRODUCT: no vms.ko, no QEMU, no
+    # /dev/vms, nothing that could tell an executive-resident answer from a
+    # per-process one." A citation comment matching a filename is a string
+    # relation, not proof the cited file was ever run against a real
+    # executive. The proof that DOES touch the product is
+    # tests/qemu/run_facility_negctl.sh, unaffected by this change. No longer
+    # registered with add_test(); the script stays in tree at
+    # tests/integration/test_userspace_service_register_negctl.sh and can
+    # still be run by hand as informational, non-gating lint.
 
     # Rule 10/11 standing gate (vms-fb9): a process does not name its own
     # terminal, and SHOW DEVICE does not invent device rows. Keeps the
@@ -389,28 +373,14 @@ if(BUILD_TESTS)
         LABELS "integration;authenticity" TIMEOUT 60)
 
     # ...and the evasions, one minimal mutation per property, on a sandbox
-    # copy of the tree. A gate nobody tries to evade asserts nothing.
-    add_test(NAME terminal_identity_negctl
-        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_terminal_identity_negctl.sh
-                ${CMAKE_CURRENT_SOURCE_DIR})
-    # TIMEOUT raised from 120 (rd vms-008). The 120 was never derived from a
-    # measurement and the suite outgrew it: MEASURED on workshop 2026-08-04,
-    # 147s wall-clock for a run that exits rc=0 with "16 passed, 0 failed".
-    # ctest was killing a PASSING test, which reads in the report exactly like
-    # a broken one -- the same trap as a timeout-kill rendering as a plain
-    # "fail" in CI (rd vms-86a). 16 controls at ~9s each, and each control
-    # runs the whole gate against a sandbox copy of the tree, so the cost
-    # scales with the control count: every control added here has silently
-    # spent this budget. 600 is 4x the measured time, matching the headroom
-    # kif_caller_census carries for slower CI runners. If this is approached
-    # again, measure and say so here rather than doubling it blind.
-    # `slow` label added (vms-819d): MEASURED 147s at 16 controls above --
-    # under the 5-minute mark alone, but it is one of the four gates that
-    # together make a full local `ctest` run take tens of minutes and get
-    # misread as a hang. `ctest -LE slow` excludes it along with the other
-    # two heavy negctl gates.
-    set_tests_properties(terminal_identity_negctl PROPERTIES
-        LABELS "integration;authenticity;slow" TIMEOUT 600)
+    # copy of the tree — TORN OUT / de-gated (vms-b44, same ruling as vms-49f
+    # / CLAUDE.md Rule 9). This reran test_terminal_identity.sh (a source
+    # scan, C comments stripped) against a mutated sandbox copy of src/ and
+    # asserted the scan went RED for the expected reason -- a string relation
+    # over the tree's own self-declaration, no vms.ko, no QEMU, no /dev/vms.
+    # No longer registered with add_test(); the script stays in tree at
+    # tests/integration/test_terminal_identity_negctl.sh and can still be run
+    # by hand as informational, non-gating lint.
 
     # Rule 10/11 standing gate (vms-cb5): the DERIVED census of every writer
     # and reader of the identity environment variables, across src/ AND

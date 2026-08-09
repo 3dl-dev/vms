@@ -466,6 +466,26 @@ struct vms_proc {
     uint64_t            p0_limit;
     spinlock_t          p0_lock;
 
+    /*
+     * P1 control-region extent (vms-68f.ii, in-process image activation
+     * foundation, increment (ii)). [p1_base, p1_limit) is the VA range
+     * VMS_IOCTL_P1_MAP last registered for this process; zero until
+     * registered. See the struct vms_procinfo comment in vms_ioctl.h for
+     * what this ioctl does and does not claim.
+     *
+     * A DEDICATED LOCK, DELIBERATELY SEPARATE FROM p0_lock -- this is the
+     * mechanism, not decoration, behind "P0 deleted on rundown, P1
+     * survives": vms_ioctl_p0_unmap() (vms_p0.c) takes p0_lock and touches
+     * only p0_base/p0_limit, so it cannot observe or clear p1_base/
+     * p1_limit even by accident of lock scope. A shared lock would not by
+     * itself break the invariant, but a shared CLEAR PATH would -- keeping
+     * the fields under separate locks makes that a structural fact rather
+     * than a discipline someone has to remember while editing vms_p0.c.
+     */
+    uint64_t            p1_base;
+    uint64_t            p1_limit;
+    spinlock_t          p1_lock;
+
     struct rcu_head     rcu;
 };
 
@@ -658,6 +678,14 @@ bool vms_proc_may_read(const struct vms_proc *caller,
  */
 long vms_ioctl_p0_map(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_p0_unmap(struct vms_proc *proc, unsigned long arg);
+
+/*
+ * P1 control region (vms-68f.ii, in-process image activation foundation,
+ * increment (ii)). Records [p1_base, p1_limit) for the calling process;
+ * no unmap -- see vms_p1.c and the struct vms_p1_args comment in
+ * vms_ioctl.h for why P1 has no rundown counterpart.
+ */
+long vms_ioctl_p1_map(struct vms_proc *proc, unsigned long arg);
 
 /* Logical name tables (executive-resident LNM$SYSTEM/GROUP/JOB, vms-d37) */
 struct file;

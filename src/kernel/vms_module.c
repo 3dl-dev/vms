@@ -437,6 +437,13 @@ struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
      * p0_base/p0_limit; only the lock needs initializing. */
     spin_lock_init(&proc->p0_lock);
 
+    /* P1 control region (vms-68f.ii): unregistered until VMS_IOCTL_P1_MAP
+     * records an extent. Separate lock from p0_lock -- see the p1_lock
+     * comment in vms_internal.h for why that separation is the mechanism
+     * behind "P0 deleted on rundown, P1 survives", not decoration.
+     * kmem_cache_zalloc() above already zeroed p1_base/p1_limit. */
+    spin_lock_init(&proc->p1_lock);
+
     /* Atomically check-and-insert under spinlock to avoid TOCTOU race */
     spin_lock(&vms_proc_hash_lock);
     hash_for_each_possible_rcu(vms_proc_hash, existing, hash_node, pid) {
@@ -761,6 +768,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_p0_map(proc, arg);
     case VMS_IOCTL_P0_UNMAP:
         return vms_ioctl_p0_unmap(proc, arg);
+
+    /* P1 control region (vms-68f.ii, same design, increment (ii)) */
+    case VMS_IOCTL_P1_MAP:
+        return vms_ioctl_p1_map(proc, arg);
 
     default:
         return -ENOTTY;

@@ -221,6 +221,15 @@ static void proc_fill_info(const struct vms_proc *proc,
      */
     info->p0_base = proc->p0_base;
     info->p0_limit = proc->p0_limit;
+
+    /*
+     * P1 control-region extent (vms-68f.ii). Same placement as p0_base/
+     * p0_limit just above -- below the redaction early return, for the
+     * same reason: a process's memory layout is part of what the oracle's
+     * blanket cross-group refusal withholds.
+     */
+    info->p1_base = proc->p1_base;
+    info->p1_limit = proc->p1_limit;
 }
 
 /*

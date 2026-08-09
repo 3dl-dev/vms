@@ -36,6 +36,13 @@ libvms_add_test(test_libvms_lib_bitops
 libvms_add_test(test_libvms_str_routines
     ${CMAKE_CURRENT_SOURCE_DIR}/test_str_routines.c)
 
+# Test 3b: vms-801 R2.2 conformance batch — lib$addx/subx/emul/ediv (extended
+# arithmetic), lib$ffs/ffc (bit scan), lib$crc_table/crc, lib$scanc/skpc/char,
+# lib$analyze_sdesc(_64), lib$insqhi/insqti/remqhi/remqti (self-relative
+# queues), lib$insert_tree/lookup_tree/traverse_tree, lib$get_common/put_common
+libvms_add_test(test_libvms_lib_rtl_batch
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_rtl_batch.c)
+
 # Test 5: mth$sin / mth$cos / mth$sqrt / mth$exp / mth$alog / mth$power / etc.
 libvms_add_test(test_libvms_mth_routines
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mth_routines.c)

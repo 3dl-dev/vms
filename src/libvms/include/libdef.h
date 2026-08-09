@@ -47,6 +47,18 @@ extern "C" {
 
 #define LIB$_FACILITY       21          /* LIB$ facility number */
 
+/* TRUE / FALSE — many ported VMS C sources (e.g. the eight-cubed LIB$
+ * examples) use these bare boolean constants and expect them from a
+ * commonly-included VMS header.  DECC makes them available through its
+ * predefines; provide them here (guarded) as an OVMX source-compat
+ * convenience so those sources build.  Not a VMS-authentic libdef symbol. */
+#ifndef FALSE
+#define FALSE 0
+#endif
+#ifndef TRUE
+#define TRUE 1
+#endif
+
 /* Success (severity = 1) */
 #define LIB$_NORMAL         0x00158001  /* Normal successful completion */
 #define LIB$_STRTRU         0x00158004  /* String truncated (warning, sev=0) */

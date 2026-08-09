@@ -390,21 +390,52 @@ int scs_member_build_config(const struct scs_member_params *p,
      * EQUALS the founding time, VAX1 and only VAX1 in the corpus, matching SDA's
      * Found Node SYSID with zero residuals.
      *
-     * [36:40] reads 9 / 3 / 2 across the real rejoin specimens and is NOT
-     * determined -- not the epoch, not a CSID. It stays zero rather than
-     * carrying a guess. Real rejoins also put twelve 0x20 spaces at [40:52];
-     * 9 of 12 genuine specimens carry zeros there and are acked identically
-     * (see above), so that stays zero too. Both are one-line variables for a
-     * later run, deliberately not moved in the same experiment as this.
+     * body[36:40] -- THE MEMBERSHIP GENERATION ORDINAL (vms-e15, was the
+     * "undetermined 9/3/2" one-line variable above). It is NON-ZERO on every
+     * real rejoin (crash-rejoin #1297 = 9, af2 #2923 = 2, af2-firsttimer #2636
+     * = 2, e81 #2969 = 3) and ZERO on every real first join (vax3-2to3 #285,
+     * formation-ci1 #67, e81 #255). It is the ONLY op 0x02 BODY field that
+     * discriminates a rejoin from a first join and that OVMX omitted: body[10:12]
+     * ("AP"/"IS") is ruled out (e81 rejoin #2969 carries zero there and still
+     * succeeds -- vms-760's stale-buffer reading holds), and body[40:52] is ruled
+     * out (spaces on crash-rejoin, zeros on af2/e81 -- varies within successes).
+     * A full byte-diff of OVMX's rejoin op 0x02 (d94-a4rejoin2 frame 356) against
+     * the SUCCESS oracle (frame 1297) leaves exactly these three as the only
+     * structural differences; [36:40] is the sole one that distinguishes rejoins.
+     * OVMX now emits it for WIRE FIDELITY -- a real rejoiner carries it and OVMX
+     * did not.
+     *
+     * ⚠ NOT SUFFICIENT FOR READMISSION -- PROVEN LIVE (vms-e15, spec sec 4(O.10)).
+     * Filling body[36:40] does NOT make the member re-admit OVMX. Live slow-mode
+     * bracket on lab-2 vaxlab-10: with body[36:40]=2 the member accepted OVMX's
+     * connect (JOINBOUND) and OVMX's op 0x02 reached it, yet the member still sent
+     * ZERO sequenced frames on OVMX's joiner VC (only HELLOs) -- byte-for-byte the
+     * same stall as body[36:40]=0 -- and XITDONE stayed 0. So the rejoin
+     * incompleteness is NOT in the op 0x02 body; it is the member declining to
+     * reciprocate config on the joiner VC (the sec 4L(7) NEW->MEMBER point, on a
+     * rejoin). That blocker is deferred to vms-694. This field is a grounded,
+     * regression-free wire correction and a prerequisite a real readmission needs
+     * -- it is not, on its own, the readmission fix.
+     *
+     * The exact value is NOT member-validated -- the four rejoin specimens carry
+     * four different values and every one is re-admitted -- so it is an OVMX
+     * ordinal, NOT a VMS-authentic byte (spec sec 5): the count of this identity's
+     * admissions, supplied by the caller (cm_apply_rejoin_form) from the
+     * prior-admission sidecar. Only its non-zero presence on a rejoin is grounded.
+     *
+     * body[40:52] stays zero: it is spaces on crash-rejoin but zeros on af2/e81
+     * and both are re-admitted, so it carries nothing the member needs (see
+     * vms-760's survey). Deliberately not moved.
      *
      * MUST STAY CONDITIONAL. A genuinely fresh identity has to keep sending
-     * zeros, because every real FIRST join does.
+     * zeros in all four, because every real FIRST join does.
      */
     if (p->rejoin) {
         uint8_t *b = out + 14 + SCS_MEMBER_BODY_OFF;
         put_le16(b + 20, 1);
         put_le16(b + 22, p->founding_sysid);
         put_le64(b + 28, p->cluster_formed);
+        put_le32(b + 36, p->rejoin_generation);
     }
 
     return 0;

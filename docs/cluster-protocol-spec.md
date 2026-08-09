@@ -4206,6 +4206,9 @@ the next increment: complete the op 0x02 REJOIN-form CM transaction against
 
 **Explicit non-claims.** (1) This does not isolate *which* byte of the REJOIN-form
 op 0x02 the member requires to finish the transition — that is the follow-up RE.
+**(Answered in §4(O.10), and the answer is negative: the op 0x02 body carries exactly
+one field OVMX omits (`body[36:40]`), and filling it does NOT finish the transition —
+the readmission blocker is not in the op 0x02 body at all.)**
 (2) The `Rej/Disconn Reason` value is recorded as *non-zero* (SDA rendered `****`),
 not decoded to a specific SCS reject code. (3) The fast/slow split is a function of
 how long the peer's own connection teardown takes after our departure; the exact
@@ -4215,6 +4218,91 @@ threshold is not measured (two timepoints, 45 s and ~7 min).
 `/data/training/vax/k8s-labs/vaxlab-10/logs/scsd-{a4join1,a4rejoin,a4rejoin2,b0fresh}.log`,
 `/data/training/vax/cluster/work/{a4join1,a4rejoin,a4rejoin2,b0fresh}.{csb,status}`,
 `d94-{a4join1,a4rejoin,a4rejoin2,b0fresh}.pcap`.
+
+#### 4(O.10) The op 0x02 REJOIN body is not where the readmission stall lives — `body[36:40]` is the one field OVMX omits, and filling it does NOT re-admit (GROUNDED live, `vms-e15`, 2026-08-09)
+
+**Frame.** §4(O.9)'s non-claim (1) — "this does not isolate *which* byte of the
+REJOIN-form op 0x02 the member requires" — is the RE this subsection does, against
+the SUCCESS oracle `vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`. The answer is
+sharper than expected and **negative**: the op 0x02 body carries exactly one field
+OVMX omits, and completing it does **not** finish the transition. The rejoin
+incompleteness is therefore **not in the op 0x02 body**.
+
+**The op 0x02 body diff (GROUNDED, byte-for-byte).** A full 190-byte diff of OVMX's
+rejoin op 0x02 (`d94-a4rejoin2` frame 356, slow mode, HEAD+`cm_apply_rejoin_form`)
+against the SUCCESS oracle's rejoin op 0x02 (frame 1297, a real VAX3 crash-rejoining
+under an unchanged identity) leaves — after the legitimate identity/session bytes
+(MACs, Con.IDs, sequence counters, the per-cluster founding time) — **exactly three
+structural differences**, all in the SYSAP body:
+
+| body off | SUCCESS oracle #1297 | OVMX #356 | verdict |
+|---|---|---|---|
+| `[10:12]` | `41 50` ("AP") | `00 00` | **ruled out** — `e81` rejoin #2969 carries `00 00` here and is re-admitted; vms-760's stale-buffer reading holds |
+| `[36:40]` | `09 00 00 00` | `00 00 00 00` | **the sole rejoin discriminator OVMX omits** (see below) |
+| `[40:52]` | twelve `0x20` | twelve `0x00` | **ruled out** — spaces on crash-rejoin, zeros on `af2`/`e81`; varies within successes |
+
+`body[36:40]` is **NON-ZERO on 4/4 real rejoin specimens** (`#1297`=9, `af2 #2923`=2,
+`af2-firsttimer #2636`=2, `e81 #2969`=3) and **ZERO on 3/3 real first joins**
+(`vax3-2to3 #285`, `formation-ci1 #67`, `e81 #255`). Its value is **not
+member-validated** — the four rejoiners carry four different values and every one is
+re-admitted — so it is read as a **membership generation ordinal** (the af2 capture's
+own "2nd/3rd incarnation" language) and OVMX supplies its OWN admission count (spec
+sec 5, an OVMX ordinal, not a VMS-authentic byte). Only its **non-zero presence on a
+rejoin** is grounded.
+
+**The choreography the member drives for a real rejoiner (GROUNDED, #1297+).** After
+VAX3's op 0x02 (frame 1297) the member (VAX2) **immediately** answers **on VAX3's
+joiner VC**: `cat 0x04 op 0x04` (1299), then `cat 0x01 op 0x03` **commit** (1303,
+VAX3 `0x81`-responds 1304), `cat 0x01 op 0x05` **lock-rebuild** (1306+, VAX3
+`0x81`-responds 1313–1316), `cat 0x01 op 0x06` **barrier** (1320+). That is the
+readmission a rejoiner earns.
+
+**⛔ Filling `body[36:40]` does NOT trigger it — PROVEN LIVE.** A slow-mode bracket on
+lab-2 `vaxlab-10` (virgin pod, fresh identity `OVMXG0`/1888, `SCSD.EXE` built with
+the `body[36:40]` change):
+
+| arm | env | scenario | on the wire | verdict |
+|---|---|---|---|---|
+| A | default | first join | op 0x02 first-join form (`[36:40]=0`) | **`XITDONE=1`**, sidecar `generation=1` persisted |
+| B | `OVMX_REJOIN_GEN=0` | rejoin, peer still holds member | fast-refuse: peer rejects the joiner connect, op 0x02 never sent | **`XITDONE=0`** |
+| D | default | rejoin from `long_break` (slow mode) | op 0x02 REJOIN form, **`[36:40]=02`** on the wire (frame 323), member accepted the connect (`JOINBOUND`) | **`XITDONE=0`** |
+
+In arm D the member **accepted** OVMX's connect and OVMX's op 0x02 with `[36:40]=2`
+**reached it on the JOINBOUND VC** — and the member then sent **ZERO sequenced frames
+back on OVMX's joiner VC** (only HELLOs), byte-for-byte the same silence as the
+`[36:40]=0` pre-fix run (`d94-a4rejoin2` frame 356: the member likewise answered the
+joiner VC with HELLOs only, 0 sequenced frames). **The stall is identical with and
+without `body[36:40]`.**
+
+**Verdict.** `body[36:40]` is a **grounded, regression-free wire correction** — a real
+rejoiner carries it, OVMX now does too, and it is a prerequisite a completed
+readmission needs — but it is **not** the readmission fix. The blocker is the member
+**declining to reciprocate config on the joiner VC** — the same `NEW → MEMBER`
+non-reciprocation point §4(L)(7) hit for the *fresh* join, now on a *rejoin* — for a
+reason that is **not in the op 0x02 body** (ruled out live). What makes the member
+drive VAX3's joiner VC (frame 1299) but not OVMX's is the open frontier. Candidate,
+observed but not isolated: on some timing arms the member opens its OWN
+`VMS$VAXcluster` CONNECT-REQ *to* the returning node (re-establishing the residual
+CDT it still holds) and OVMX has **no `CONNECT_RSP` builder** for it (`SCSD-W-CONNNOACT`
+in `scsd-e15C.log`) — a rejoin-specific exchange a first join never sees. **Filed as
+`vms-694`'s next rejoin-completion increment.**
+
+**What shipped (`vms-e15`).** OVMX emits `body[36:40]` = its persisted membership
+generation on a rejoin (`scs_member_build_config`; `cm_apply_rejoin_form` supplies
+the value from the prior-admission sidecar, which now also persists the count).
+Kill-switch `OVMX_REJOIN_GEN=0` forces the field back to zero. Fail-pre/pass-post
+wire-shape test in `tests/vmsscs/test_scs_member.c::test_op02_rejoin_form`.
+
+**Explicit non-claims.** (1) This does **not** re-admit a reused identity —
+`XITDONE=1` on a rejoin is NOT achieved and stays open on `vms-694`. (2) `body[36:40]`
+is grounded only as "non-zero on a rejoin"; the ordinal *reading* and OVMX's value are
+an OVMX design choice (spec sec 5). (3) The member's joiner-VC non-reciprocation is
+located but its trigger is not isolated.
+
+**Evidence** (host, tank volume):
+`/data/training/vax/k8s-labs/vaxlab-10/logs/scsd-e15{A,B,C,D}.log`,
+`/data/training/vax/cluster/work/e15{A,B,C,D}.{status,csb}`,
+`d94-e15{A,B,C,D}.pcap`; op 0x02 diff tool `/tmp/framediff.py` (session-local).
 
 ## 5. Summary of unknown/inferred fields (RE gaps)
 

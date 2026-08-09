@@ -177,6 +177,14 @@ struct scs_member_params {
     int      rejoin;          /* body[20:22]=1 -- "I hold prior cluster state" */
     uint16_t founding_sysid;  /* body[22:24]  the founding node's SCSSYSTEMID */
     /* body[28:36] reuses cluster_formed above -- the same COPIED quadword. */
+    /* vms-e15: body[36:40] -- the membership GENERATION ordinal a rejoiner
+     * carries. NON-ZERO on 4/4 real crash-rejoin specimens (9/2/2/3), ZERO on
+     * 3/3 first-joins; the member SILENTLY DROPS a rejoin op 0x02 that leaves it
+     * zero (d94-a4rejoin2 frame 356). The exact value is an OVMX-tracked ordinal
+     * (spec sec 5) -- the member does not validate it (the four specimens carry
+     * four different values and all succeed), only its non-zero presence on a
+     * rejoin. Zero => leave body[36:40] zero (the first-join form / kill-switch). */
+    uint32_t rejoin_generation;
 };
 
 /*

@@ -6033,6 +6033,119 @@ static void test_mscp_connect_reject_req_is_not_misread_as_accept(void)
 }
 
 /*
+ * (2a-3) vms-694 REGRESSION: OVMX MUST OUTLAST THE REFERENCE'S OWN
+ * NINE-REJECT REJOIN PATTERN AT JS_MSCP_CONNECT, NOT GIVE UP SHORT OF IT.
+ *
+ * A live lab-2 rejoin (vms-600 #209's evidence run, vaxlab-0
+ * k8s-labs/vaxlab-0/logs/vms600-scsd.log) reproduced the vms-2f3 stall
+ * directly: a fresh join to the pod bound OUR MSCP$DISK connect cleanly, but
+ * when the SAME peer sysid rejoined ~47s later (its system block "REFRESHED,
+ * rejoin"), the peer answered OUR MSCP$DISK CONNECT_REQ with an op-4
+ * REJECT_REQ, and kept doing so on every retransmit -- OVMX never got past
+ * JS_MSCP_CONNECT before the run's own duration timer tore the VC down at
+ * retransmit #6.
+ *
+ * docs/cluster-protocol-spec.md sec (1h) already grounds why: two REAL VAXes
+ * in af2-firsttimer-established-20260728.pcap run "NINE consecutive 4/5
+ * exchanges ... at ~10 s intervals ... and a TENTH attempt switches message
+ * type entirely -- to 2/3 -- and succeeds". Retry-until-accepted across
+ * repeated REJECT_REQ is the reference's OWN behaviour on this exact Con.ID
+ * pair, not a fault peculiar to OVMX. The pre-fix JOIN_RETX_MAX (6) capped
+ * OVMX three attempts short of where the reference itself first succeeds --
+ * a real OVMX node in this state could never rejoin no matter how long the
+ * daemon ran.
+ *
+ * This fixture feeds the SAME op-4 REJECT_REQ fixture the vms-257 test above
+ * uses, nine times running, each preceded by a directed HELLO from the peer
+ * (the "coarsely HELLO-driven" trigger the JS_MSCP_CONNECT retransmit case
+ * rides -- scsd.c's own comment at the retransmit block) with
+ * ps->js_last_tx backdated to force the retransmit-eligible window without
+ * a real sleep (the gate reads monotonic_ms(), which is not mockable here).
+ * Before the JOIN_RETX_MAX fix this fails at the ninth CHECK below: OVMX's
+ * own retransmit condition (`js_retx < JOIN_RETX_MAX`) goes false at six and
+ * the daemon silently stops resending CONNECT_REQ, three rejects short of
+ * the reference's own floor.
+ */
+static void test_mscp_connect_retx_survives_nine_reference_rejects(void)
+{
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    CHECK(ps != NULL, "the fixture's circuit could not be opened");
+    if (ps == NULL) {
+        return;
+    }
+
+    /* Put the peer in exactly the state the join sequencer reaches after
+     * sending OUR MSCP$DISK CONNECT_REQ, with the HELLO-driven retransmit
+     * case (rx->do_connect && ps->start_acked && join_step ==
+     * JS_MSCP_CONNECT) live. */
+    ps->start_acked = 1;
+    ps->join_step = JS_MSCP_CONNECT;
+    ps->js_retx = 0;
+    ps->mscp_connect_sent = 1;
+    ps->mscp_connected = 0;
+    ps->mscp_remote_conid = 0;
+    ps->incarnation = 1;
+    memset(&ps->js_last_tx, 0, sizeof(ps->js_last_tx));
+
+    struct scs_hello_params hp;
+    memset(&hp, 0, sizeof(hp));
+    memcpy(hp.src_mac, vax1_hw_mac, 6);
+    memcpy(hp.src_logical, vax1_logical, 6);
+    memcpy(hp.peer_logical, our_logical, 6);
+    memcpy(hp.node_name, "VAX1  ", SCS_HELLO_NODENAME_LEN);
+    hp.node_name[SCS_HELLO_NODENAME_LEN] = '\0';
+    static const uint8_t nonce[4] = {0, 0, 0, 0};
+
+    for (unsigned i = 0; i < 9; i++) {
+        /* Backdate the retransmit clock so the very next directed HELLO
+         * makes the JS_MSCP_CONNECT case eligible, without a real sleep. */
+        memset(&ps->js_last_tx, 0, sizeof(ps->js_last_tx));
+
+        uint8_t hello[SCS_HELLO_FRAME_LEN];
+        CHECK(scs_hello_build_directed_frame(&hp, r.rx.our_hw_mac, nonce, 1, 0,
+                                             hello) == 0,
+              "directed HELLO fixture failed to build (reject #%u)", i + 1);
+        rx_feed(&r, hello, sizeof(hello));
+
+        struct scs_dir_params p;
+        memset(&p, 0, sizeof(p));
+        memcpy(p.dst_mac, r.rx.our_hw_mac, 6);
+        memcpy(p.src_mac, vax1_hw_mac, 6);
+        memcpy(p.src_logical, vax1_logical, 6);
+        memcpy(p.peer_logical, r.rx.our_src_logical, 6);
+        p.remote_conid = OVMX_MSCP_CONID;
+        p.local_conid = 0xB0180001u + i; /* the peer's (fake) handle, one per attempt */
+        p.incarnation = 1;
+        p.recv_ack = ps->vc.seq.recv_seq;
+        p.send_seq = (uint16_t)(i + 1);
+
+        uint8_t frame[SCS_DIR_CONFIRM_FRAME_LEN];
+        CHECK(scs_dir_build_mscp_accept(&p, frame) == 0,
+              "the op-4 REJECT_REQ fixture frame failed to build (reject #%u)",
+              i + 1);
+        rx_feed(&r, frame, sizeof(frame));
+
+        CHECK(ps->mscp_connected == 0,
+              "the connect got bound on reject #%u -- an op-4 REJECT_REQ was"
+              " misread as an accept", i + 1);
+        CHECK(ps->join_step == JS_MSCP_CONNECT,
+              "join_step left JS_MSCP_CONNECT after reject #%u (now %d)",
+              i + 1, ps->join_step);
+    }
+
+    CHECK(ps->js_retx >= 9,
+          "OVMX stopped retransmitting OUR MSCP$DISK connect after %u"
+          " retry/retries -- the reference itself (docs/cluster-protocol-"
+          "spec.md sec (1h)) is refused NINE times before a tenth attempt"
+          " succeeds, so JOIN_RETX_MAX must allow at least that many before"
+          " OVMX gives up on a rejoin", ps->js_retx);
+}
+
+/*
  * (2b) THE OTHER KILL SWITCH MUST NOT BECOME A REFUSAL STORM.
  *
  * scsd_cdl_ready is only set when the connection state machine is enabled, so
@@ -8903,6 +9016,9 @@ int main(void)
     /* vms-257: a real peer's op-4 REJECT_REQ answering OUR MSCP$DISK connect
      * must not be misread as an ACCEPT. */
     test_mscp_connect_reject_req_is_not_misread_as_accept();
+    /* vms-694: JOIN_RETX_MAX must outlast the reference's own nine-reject
+     * rejoin pattern at JS_MSCP_CONNECT. */
+    test_mscp_connect_retx_survives_nine_reference_rejects();
     test_no_conn_fsm_does_not_turn_into_a_refusal_storm();
     /* The OTHER inbound-CONNECT_REQ branch: the 0x5b SCS$DIRECTORY path. */
     test_the_0x5b_directory_connect_is_scanned_before_it_is_accepted();

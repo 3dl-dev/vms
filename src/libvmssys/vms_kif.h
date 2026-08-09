@@ -383,6 +383,29 @@ uint32_t vms_kif_p0_map(uint64_t base, uint64_t limit);
 uint32_t vms_kif_p0_unmap(uint64_t *old_base, uint64_t *old_limit);
 
 /* ================================================================
+ * P1 control region (vms-68f.ii, in-process image activation foundation,
+ * increment (ii))
+ *
+ * Records this process's P1 (process-permanent control-region) extent
+ * with the executive, so it is reflected in $GETJPI (struct
+ * vms_procinfo's p1_base/p1_limit above) -- docs/design-in-process-
+ * activation.md Part II §A.1.1, §A.2.1. Like vms_kif_p0_map, this does
+ * not map or unmap any memory itself: laying DCL's actual process-
+ * permanent state into a P1 window is DCL/imgact$activate's job in
+ * userspace. Unlike P0, there is no unmap counterpart -- P1 lasts for
+ * the process's lifetime; see vms_p1.c for why.
+ * INV-6: no /dev/vms -> SS$_NOSUCHDEV, no per-process fake.
+ * ================================================================ */
+
+/* Register [base, limit) as this process's P1 extent. SS$_BADPARAM for a
+ * degenerate or out-of-address-space range; overwrites any previously-
+ * registered extent (see vms_p1.c for why that is not an error).
+ * OVMX-UNWIRED: vms_kif_p1_map (vms-6f1) -- imgact$activate / DCL's own
+ * startup path, which is what will lay a real P1 window and register it
+ * here, is increment iv of vms-68f; nothing in the product calls it yet. */
+uint32_t vms_kif_p1_map(uint64_t base, uint64_t limit);
+
+/* ================================================================
  * Logical name tables (executive-resident LNM$SYSTEM, vms-d37)
  *
  * The executive owns the LNM$SYSTEM storage, so a name defined here by

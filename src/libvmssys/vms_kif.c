@@ -1013,6 +1013,26 @@ uint32_t vms_kif_p0_unmap(uint64_t *old_base, uint64_t *old_limit)
     return args.status;
 }
 
+uint32_t vms_kif_p1_map(uint64_t base, uint64_t limit)
+{
+    struct vms_p1_args args;
+
+    if (base == 0 || limit <= base)
+        return SS$_BADPARAM;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.base = base;
+    args.limit = limit;
+
+    KIF_CALL(VMS_IOCTL_P1_MAP, &args);
+
+    return args.status;
+}
+
 /* ================================================================
  * Logical name tables (executive-resident LNM$SYSTEM, vms-d37)
  * ================================================================ */

@@ -5397,6 +5397,18 @@ none, and dropped their follow-on messages. Full diagnosis + proposed fix:
 wire/peer-state claims are from our captures and real-VAX SDA. No VSI/HPE source
 or binary examined.
 
+> **CAVEAT (`vms-694`, 2026-08-09).** The Davis p.7-39 rule itself (admission is
+> bidirectional; each member must have an SCS connection to the joiner) stands as
+> documentation. What a live kill-switch bracket on a CLEAN pod with a FRESH
+> identity FALSIFIED is the *application* used to explain the JS_MSCP_CONNECT
+> silence — that the missing connectivity was the member's inbound **MSCP$DISK**
+> connect. At HEAD OVMX already accepts that connect during admission, and with
+> the accept fully disabled (`OVMX_MSCP_SERVER=0`) OVMX STILL joins as a full
+> member (peer logs "removed from the VAXcluster" at exit → it had a CSID). The
+> connectivity that gates membership is the VMS$VAXcluster/SCS$DIRECTORY layer,
+> not MSCP$DISK. Full bracket + evidence paths:
+> `docs/design-rejoin-mscp-silence.md` §7.
+
 ## 6. Using the dissector
 
 ```

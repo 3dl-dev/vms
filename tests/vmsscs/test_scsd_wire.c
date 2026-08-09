@@ -6365,6 +6365,107 @@ static void test_mscp_connect_retx_fires_at_grounded_cadence_not_early(void)
 }
 
 /*
+ * (2a-6) vms-694: A PEER MID-JOIN_SEQ (join_step == JS_MSCP_CONNECT) MUST
+ * STILL ACCEPT THE MEMBER'S INBOUND MSCP$DISK CONNECT.
+ *
+ * docs/design-rejoin-mscp-silence.md sec 4 proposed this as a FAIL-pre/PASS-post
+ * regression, on the hypothesis that OVMX's JOIN_SEQ sequencer drives only the
+ * OUTBOUND half and never accepts the members' inbound MSCP$DISK connect during
+ * admission (the "Rule of Total Connectivity" MSCP diagnosis, sec 1). A live
+ * bracket on a CLEAN pod with a FRESH identity (guardrail 23) FALSIFIED that
+ * code-gap: the receive-path accept is ALREADY driven regardless of join_step,
+ * so there is no fix to fail-pre against, and the accept turned out NOT to be
+ * the admission discriminator either -- OVMX joins as a full member with the
+ * MSCP server ON *or* OFF. Evidence (vms-694, 2026-08-09):
+ *   - positive  (OVMX_JOIN_SEQ=1, server ON):  vaxlab-9/OVMXZ2, XITDONE=1,
+ *     MSCP-SERVER-ACCEPTS-SENT=30, peer's MSCP$DISK<-OVMX CDT reached 0002 open;
+ *   - kill-switch(OVMX_JOIN_SEQ=1, OVMX_MSCP_SERVER=0): vaxlab-7/OVMXK0,
+ *     XITDONE=1, MSCP-SERVER-ACCEPTS-SENT=0 -- STILL admitted (peer logged
+ *     "Node OVMXK0 ... removed from the VAXcluster" on exit, i.e. it had been a
+ *     member). The pre-#221 "silence" was the sec 4(w) identity conflict, not
+ *     this. Full write-up: docs/design-rejoin-mscp-silence.md sec 7.
+ *
+ * So this is a REGRESSION GUARD for coverage the code ALREADY HAS, not a fix
+ * proof: it drives the member's inbound connect through scsd_handle_frame() with
+ * the peer parked at JS_MSCP_CONNECT (never accepting by hand next to the
+ * assertion), asserts the server-accept fires, and -- the switch that gates its
+ * own change -- asserts OVMX_MSCP_SERVER=0 withholds it.
+ */
+static void test_joinseq_accepts_members_inbound_mscp_connect(void)
+{
+    uint8_t req[sizeof(cap_vaxcluster_connect_req)];
+    subst_sysap_name(req, cap_vaxcluster_connect_req,
+                     sizeof(cap_vaxcluster_connect_req), "MSCP$DISK");
+
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_MSCP_SERVER") == 0, "unsetenv failed"); /* server ON */
+
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    CHECK(ps != NULL, "the fixture's circuit could not be opened");
+    if (ps == NULL) {
+        return;
+    }
+
+    /* The exact state the JOIN_SEQ sequencer sits in after it has sent OUR
+     * outbound MSCP$DISK CONNECT_REQ and is waiting on the member's accept --
+     * i.e. mid-admission, the window sec 1 claimed the inbound accept is
+     * skipped in. */
+    ps->join_step = JS_MSCP_CONNECT;
+    ps->js_retx = 0;
+    ps->mscp_connect_sent = 1;
+    ps->mscp_connected = 0;
+    ps->mscp_remote_conid = 0;
+    ps->incarnation = 1;
+
+    long accepts_before = ps->mscp_srv_accepts;
+    rx_feed(&r, req, sizeof(req));
+
+    CHECK(ps->mscp_srv_bound == 1,
+          "a peer parked at JS_MSCP_CONNECT did not accept the member's inbound"
+          " MSCP$DISK connect -- the receive-path server-accept was not driven");
+    CHECK(ps->mscp_srv_accepts == accepts_before + 1,
+          "the inbound MSCP$DISK connect was not answered with exactly one op=4"
+          " accept (accepts went %ld -> %ld)", accepts_before, ps->mscp_srv_accepts);
+    struct scs_cdt *mcdt = scs_cdl_lookup(&scsd_cdl, PS_MSCP_SERVER_CONID(ps));
+    CHECK(mcdt != NULL,
+          "no CDT was allocated at PS_MSCP_SERVER_CONID -- the member's follow-on"
+          " commands would resolve SCS_DELIVER_NO_CDT and vanish");
+    if (mcdt != NULL) {
+        CHECK(mcdt->msg_input == scsd_mscp_srv_msg_input,
+              "the server CDT's message-input routine is not scsd_mscp_srv_msg_input");
+    }
+    /* Accepting the member's INBOUND connect is orthogonal to OVMX's OWN
+     * outbound step: it must not perturb the join sequencer's cursor. */
+    CHECK(ps->join_step == JS_MSCP_CONNECT,
+          "accepting the member's inbound connect disturbed join_step (now %d)",
+          ps->join_step);
+
+    /* --- THE KILL SWITCH THAT GATES THIS CHANGE. Same frame, same mid-JOIN_SEQ
+     * state, OVMX_MSCP_SERVER=0: MSCP$DISK is withdrawn from the LISTEN queue and
+     * ovmx_mscp_server_enabled() is false, so the (b1.5) accept branch is not
+     * taken and nothing is bound. --- */
+    CHECK(setenv("OVMX_MSCP_SERVER", "0", 1) == 0, "setenv failed");
+    struct rxworld r2;
+    rxworld_init(&r2, vax2_hw_mac, our_logical);
+    struct peer_state *ps2 = open_circuit_to(&r2, vax1_hw_mac, vax1_logical);
+    CHECK(ps2 != NULL, "the kill-switch fixture's circuit could not be opened");
+    if (ps2 != NULL) {
+        ps2->join_step = JS_MSCP_CONNECT;
+        ps2->mscp_connect_sent = 1;
+        ps2->incarnation = 1;
+        rx_feed(&r2, req, sizeof(req));
+        CHECK(ps2->mscp_srv_bound == 0,
+              "OVMX_MSCP_SERVER=0 still bound the member's inbound MSCP$DISK"
+              " connect -- the kill switch does not gate the accept");
+        CHECK(scs_cdl_lookup(&scsd_cdl, PS_MSCP_SERVER_CONID(ps2)) == NULL,
+              "OVMX_MSCP_SERVER=0 still allocated a server CDT");
+    }
+    CHECK(unsetenv("OVMX_MSCP_SERVER") == 0, "unsetenv failed");
+}
+
+/*
  * (2b) THE OTHER KILL SWITCH MUST NOT BECOME A REFUSAL STORM.
  *
  * scsd_cdl_ready is only set when the connection state machine is enabled, so
@@ -9246,6 +9347,10 @@ int main(void)
      * grounded ~10s reference value, and must not fire early -- virtual
      * clock, no real sleep. */
     test_mscp_connect_retx_fires_at_grounded_cadence_not_early();
+    /* vms-694: a peer mid-JOIN_SEQ still accepts the member's inbound MSCP$DISK
+     * connect (regression guard; the live bracket falsified the code-gap the
+     * design proposed -- see the function comment and design doc sec 7). */
+    test_joinseq_accepts_members_inbound_mscp_connect();
     test_no_conn_fsm_does_not_turn_into_a_refusal_storm();
     /* The OTHER inbound-CONNECT_REQ branch: the 0x5b SCS$DIRECTORY path. */
     test_the_0x5b_directory_connect_is_scanned_before_it_is_accepted();

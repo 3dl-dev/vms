@@ -429,8 +429,8 @@ uint32_t vms_kif_p1_map(uint64_t base, uint64_t limit);
  * mode to restore.
  * Wired (vms-6f1, increment iv): imgact_activate() (src/libvms/syssvc/
  * sys_imgact.c) calls this to descend into an in-process image's code before
- * swapcontext'ing to its entry, and dcl_activate_image() dispatches RUN
- * through it -- the census gate is what proves it has a product caller. */
+ * entering its entry point, and dcl_activate_image() dispatches RUN through
+ * it -- the census gate is what proves it has a product caller. */
 uint32_t vms_kif_enter_image(uint8_t *prev_mode, uint8_t *new_mode);
 
 /* Run an image down: refused SS$_NOPRIV unless a matching vms_kif_
@@ -439,9 +439,9 @@ uint32_t vms_kif_enter_image(uint8_t *prev_mode, uint8_t *new_mode);
  * the matching ENTER_IMAGE recorded) and the open descent is closed.
  * Wired (vms-6f1, increment iv): imgact_activate() (src/libvms/syssvc/
  * sys_imgact.c) calls this when the in-process image returns, restoring
- * Supervisor before it swapcontexts back to DCL -- the census gate is what
- * proves it has a product caller. (Full SYS$RUNDWN resource release is
- * increment v.) */
+ * Supervisor before control returns to DCL -- the census gate is what proves
+ * it has a product caller. (Full SYS$RUNDWN resource release is increment
+ * v.) */
 uint32_t vms_kif_image_rundown(uint8_t *prev_mode, uint8_t *new_mode);
 
 /*

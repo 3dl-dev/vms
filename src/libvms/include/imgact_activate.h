@@ -8,8 +8,13 @@
  * the process's PID, then image rundown returns control to DCL in the SAME
  * process. OVMX has always fork()+execve()'d a fresh Linux process per image
  * (src/vmsdcl/dcl_cmd_process.c); this is the library that runs an image
- * IN-PROCESS instead -- no fork, same VMS PID, entered in User mode via
- * swapcontext across a vms.ko-mediated Supervisor->User transition.
+ * IN-PROCESS instead -- no fork, same VMS PID, entered in User mode across a
+ * vms.ko-mediated Supervisor->User transition. (Increment iv enters the image
+ * with a direct call and recovers a fault with setjmp/longjmp; the separate P0
+ * User stack + swapcontext return path the design prefers waits for increment
+ * v -- the ucontext family is not a DECC$SHR universal, so the fork
+ * replacement must avoid it to link into the VMS-native DCL.EXE. See
+ * src/libvms/syssvc/sys_imgact.c's header.)
  *
  * SCOPE OF INCREMENT (iv) -- a PROVEN PARTIAL, honest about its ceiling.
  * imgact_activate() takes the in-process path ONLY for an image that carries
@@ -25,10 +30,9 @@
  * run the image at all (INV-6: no per-process fake of an executive facility).
  *
  * THE ENTRY ABI (OVMX design choice, Rule 8 -- no VMS byte format claimed):
- * an eligible image is entered as `long entry(long a0, long a1)` on its own
- * User-mode stack in the P0 window; a0/a1 are passed straight through from
- * this call. It returns to DCL by RETURNING (rundown then swapcontext back),
- * never by exiting the process.
+ * an eligible image is entered as `long entry(long a0, long a1)`; a0/a1 are
+ * passed straight through from this call. It returns to DCL by RETURNING
+ * (rundown then the call returns), never by exiting the process.
  */
 #ifndef _IMGACT_ACTIVATE_H
 #define _IMGACT_ACTIVATE_H

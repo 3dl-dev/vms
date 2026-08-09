@@ -8,7 +8,7 @@
  * always fork()+execve()'d a fresh Linux process per image. imgact_activate()
  * (src/libvms/syssvc/sys_imgact.c), dispatched by dcl_activate_image(), runs an
  * in-process-eligible image WITHOUT forking: mapped into a P0 window, entered
- * in User mode via swapcontext across a vms.ko Supervisor->User transition,
+ * in User mode across a vms.ko Supervisor->User transition,
  * with DCL's critical-P1 pages mprotect'd read-only for the duration.
  *
  * WHAT THIS SUITE ASSERTS against a real /dev/vms:
@@ -29,7 +29,9 @@
  * EXIT_SKIP (77), never a fake pass: imgact_activate() fails SS$_NOSUCHDEV and
  * refuses to run the image at all (INV-6).
  */
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -6,17 +6,34 @@
  * the image into a reserved P0 window (MAP_FIXED), records the extent with the
  * executive (vms_kif_p0_map), protects DCL's critical P1 pages
  * (vms_kif_p1_protect), transitions Supervisor->User (vms_kif_enter_image),
- * enters the image's entry on its own User-mode stack via swapcontext, and on
- * the image's return runs it down (vms_kif_image_rundown / vms_kif_p1_protect
- * restore / vms_kif_p0_unmap) and swapcontexts back to DCL -- same PID
- * throughout. See docs/design-in-process-activation.md Part II §A.2 and
- * src/libvms/include/imgact_activate.h for the model, the eligibility gate and
- * the ceiling of THIS increment.
+ * enters the image's entry point, and on the image's return runs it down
+ * (vms_kif_image_rundown / vms_kif_p1_protect restore / vms_kif_p0_unmap) and
+ * returns to DCL -- same PID throughout. See
+ * docs/design-in-process-activation.md Part II §A.2 and
+ * src/libvms/include/imgact_activate.h for the model and this increment's
+ * ceiling.
+ *
+ * ENTRY + RETURN MECHANISM, AND WHY NOT swapcontext (increment iv ceiling).
+ * The design (§A.6.4) prefers swapcontext onto a separate User-mode stack in
+ * the P0 window so Ctrl-Y/CONTINUE re-entry is natural. THAT is deferred to
+ * increment v: the ucontext family (makecontext/swapcontext/getcontext) and
+ * sigaltstack are NOT universals of DECC$SHR, so an imgact_activate that used
+ * them would not link into the VMS-native DCL.EXE (LINK.EXE --executable --use
+ * {DECC$SHR,...}, the self-hosting path) -- and the fork replacement must link
+ * everywhere DCL does. So iv enters the image with a direct call on the
+ * process's own stack and recovers a faulting image with setjmp/longjmp + a
+ * SIGSEGV handler (all DECC$SHR universals). The KEY PROPERTY -- the image runs
+ * in DCL's process, same PID, no fork -- holds identically; only the separate
+ * P0 stack and Ctrl-Y re-entry wait for v. Every libc symbol this file uses
+ * (open/lseek/read/close, mmap/mprotect/munmap, memcmp/memset, sigaction/
+ * sigemptyset/sigaddset/sigprocmask, setjmp/longjmp) is already a DECC$SHR
+ * universal, so adding sys_imgact.c to the shareable (mk_libvms_shr.sh) needs
+ * no C-RTL expansion.
  *
  * INV-6 (CLAUDE.md Rule 9). Every executive step goes through /dev/vms; with
  * no executive the vms_kif_* calls return SS$_NOSUCHDEV and this function
  * refuses to run the image -- it never silently falls back to a per-process
- * "dlopen and pretend". The eligibility decision (SS$_UNSUPPORTED for any
+ * "load and pretend". The eligibility decision (SS$_UNSUPPORTED for any
  * non-in-process image) is made from the ELF alone, BEFORE any executive call,
  * so a real image's fork fallback does not depend on /dev/vms being present.
  *
@@ -26,7 +43,9 @@
  * critical-P1 mprotect, service-boundary mode) vs. modeled is stated in the
  * design; this file implements the enforced half.
  */
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
@@ -34,7 +53,6 @@
 #include <elf.h>
 #include <signal.h>
 #include <setjmp.h>
-#include <ucontext.h>
 #include <sys/mman.h>
 
 #include "ssdef.h"
@@ -54,9 +72,8 @@
 
 /* P0 window: a contiguous reservation the image's PT_LOADs map into with
  * MAP_FIXED, so "P0 deleted at rundown" is genuinely enforced at the MMU
- * (design §A.2.1). 64 MiB covers any freestanding OVMX image plus its stack. */
+ * (design §A.2.1). 64 MiB covers any freestanding OVMX image. */
 #define IMGACT_P0_WINDOW   (64UL * 1024 * 1024)
-#define IMGACT_IMG_STACK   (256UL * 1024)
 #define IMGACT_PGSZ        4096UL
 #define IMGACT_TRUNC(x)    ((x) & ~(IMGACT_PGSZ - 1))
 #define IMGACT_ROUND(x)    (((x) + IMGACT_PGSZ - 1) & ~(IMGACT_PGSZ - 1))
@@ -66,33 +83,42 @@ typedef long (*imgact_entryfn)(long, long);
 
 /*
  * Activation is not reentrant (VMS runs one image at a time per process), so
- * the context the SIGSEGV recovery and the swapcontext trampoline need is
- * file-scope. A nested in-process activation is out of scope for this
- * increment; the entry gate refuses a second ENTER_IMAGE while one is open.
+ * the fault-recovery jmp_buf is file-scope. A nested in-process activation is
+ * out of scope for this increment; the entry gate refuses a second
+ * ENTER_IMAGE while one is open.
  */
-static ucontext_t     g_return_ctx;
-static ucontext_t     g_image_ctx;
-static imgact_entryfn g_entry;
-static long           g_a0, g_a1;
-static long           g_image_ret;
-static sigjmp_buf     g_fault_jb;
+static jmp_buf        g_fault_jb;
 static volatile sig_atomic_t g_faulted;
-
-static void imgact_trampoline(void)
-{
-    g_image_ret = g_entry(g_a0, g_a1);
-}
 
 /*
  * SIGSEGV while the image runs (e.g. a wild write to a protected critical-P1
- * page) is converted to $EXIT(SS$_ACCVIO)+rundown: siglongjmp back onto DCL's
- * stack, abandoning the image context. Design §A.6.3 (pragmatic first).
+ * page) is converted to $EXIT(SS$_ACCVIO)+rundown: longjmp back onto DCL's
+ * frame, abandoning the image. Design §A.6.3 (pragmatic first). The image runs
+ * on the process's own stack (not sigaltstack) and the fault here is a data
+ * write, so the stack is intact and the handler runs on it fine.
  */
 static void imgact_segv(int sig)
 {
     (void)sig;
     g_faulted = 1;
-    siglongjmp(g_fault_jb, 1);
+    longjmp(g_fault_jb, 1);
+}
+
+/* Read exactly n bytes at file offset off (pread is not a DECC$SHR universal;
+ * lseek+read are). Returns 0 on success, -1 otherwise. */
+static int imgact_readat(int fd, void *buf, unsigned long n, long off)
+{
+    unsigned char *p = buf;
+    if (lseek(fd, off, SEEK_SET) != off)
+        return -1;
+    while (n) {
+        long r = read(fd, p, n);
+        if (r <= 0)
+            return -1;
+        p += r;
+        n -= (unsigned long)r;
+    }
+    return 0;
 }
 
 /* Scan PT_NOTE segments for the OVMX in-process marker. */
@@ -166,8 +192,11 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
     Elf64_Ehdr eh;
     Elf64_Phdr ph[IMGACT_MAXPHDR];
     int fd, i;
-    unsigned long base, span_lo = ~0UL, span_hi = 0;
-    void *win = MAP_FAILED, *stk = MAP_FAILED;
+    unsigned long base, span_hi = 0;
+    /* volatile: read/used after a possible longjmp out of the image (a fault),
+     * so their values must not be left indeterminate by the non-local jump. */
+    void * volatile win = MAP_FAILED;
+    volatile long image_ret = -1;
     uint32_t status;
 
     if (image_rc)
@@ -179,7 +208,7 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
     fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0)
         return SS$_NOSUCHFILE;
-    if (pread(fd, &eh, sizeof eh, 0) != (long)sizeof eh ||
+    if (imgact_readat(fd, &eh, sizeof eh, 0) != 0 ||
         memcmp(eh.e_ident, ELFMAG, SELFMAG) != 0 ||
         eh.e_ident[EI_CLASS] != ELFCLASS64) {
         close(fd);
@@ -191,8 +220,8 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
         close(fd);
         return SS$_UNSUPPORTED;
     }
-    if (pread(fd, ph, sizeof(Elf64_Phdr) * eh.e_phnum, eh.e_phoff) !=
-        (long)(sizeof(Elf64_Phdr) * eh.e_phnum)) {
+    if (imgact_readat(fd, ph, sizeof(Elf64_Phdr) * eh.e_phnum,
+                      (long)eh.e_phoff) != 0) {
         close(fd);
         return SS$_BADPARAM;
     }
@@ -201,13 +230,11 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
             close(fd);
             return SS$_UNSUPPORTED;
         }
-        if (ph[i].p_type == PT_LOAD) {
-            if (ph[i].p_vaddr < span_lo) span_lo = ph[i].p_vaddr;
-            if (ph[i].p_vaddr + ph[i].p_memsz > span_hi)
-                span_hi = ph[i].p_vaddr + ph[i].p_memsz;
-        }
+        if (ph[i].p_type == PT_LOAD &&
+            ph[i].p_vaddr + ph[i].p_memsz > span_hi)
+            span_hi = ph[i].p_vaddr + ph[i].p_memsz;
     }
-    if (span_hi == 0 || IMGACT_ROUND(span_hi) + IMGACT_IMG_STACK > IMGACT_P0_WINDOW) {
+    if (span_hi == 0 || IMGACT_ROUND(span_hi) > IMGACT_P0_WINDOW) {
         close(fd);
         return SS$_UNSUPPORTED;
     }
@@ -231,8 +258,8 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
         if (m == MAP_FAILED) { status = SS$_INSFMEM; goto out_unmap; }
         if (ph[i].p_filesz &&
-            pread(fd, (void *)(base + ph[i].p_vaddr), ph[i].p_filesz,
-                  ph[i].p_offset) != (long)ph[i].p_filesz) {
+            imgact_readat(fd, (void *)(base + ph[i].p_vaddr),
+                          ph[i].p_filesz, (long)ph[i].p_offset) != 0) {
             status = SS$_BADPARAM; goto out_unmap;
         }
     }
@@ -266,12 +293,6 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
     if (!(status & 1))
         goto out_unmap;   /* SS$_NOSUCHDEV etc. -- image NOT run */
 
-    /* Image's own User-mode stack, inside the P0 window's tail. */
-    stk = mmap((void *)(base + IMGACT_P0_WINDOW - IMGACT_IMG_STACK),
-               IMGACT_IMG_STACK, PROT_READ | PROT_WRITE,
-               MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-    if (stk == MAP_FAILED) { status = SS$_INSFMEM; goto out_p0; }
-
     /* ---- 4. Protect critical P1, descend to User, enter the image ----- */
     if (critp1 && critp1->limit > critp1->base) {
         status = vms_kif_p1_protect(critp1->base, critp1->limit, 0);
@@ -287,32 +308,26 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
     }
 
     {
-        stack_t     ss;
         struct sigaction sa, old;
-        /* Fixed size, not SIGSTKSZ: glibc >= 2.34 makes SIGSTKSZ a sysconf()
-         * call, not a compile-time constant usable as an array dimension. */
-        static char altstk[32768];
+        imgact_entryfn entry = (imgact_entryfn)(base + eh.e_entry);
 
-        ss.ss_sp = altstk; ss.ss_size = sizeof altstk; ss.ss_flags = 0;
-        sigaltstack(&ss, NULL);
         memset(&sa, 0, sizeof sa);
         sa.sa_handler = imgact_segv;
-        sa.sa_flags = SA_ONSTACK;
         sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
         sigaction(SIGSEGV, &sa, &old);
 
-        g_entry = (imgact_entryfn)(base + eh.e_entry);
-        g_a0 = a0; g_a1 = a1; g_image_ret = -1; g_faulted = 0;
-
-        getcontext(&g_image_ctx);
-        g_image_ctx.uc_stack.ss_sp   = stk;
-        g_image_ctx.uc_stack.ss_size = IMGACT_IMG_STACK;
-        g_image_ctx.uc_link          = &g_return_ctx;
-        makecontext(&g_image_ctx, imgact_trampoline, 0);
-
-        if (sigsetjmp(g_fault_jb, 1) == 0)
-            swapcontext(&g_return_ctx, &g_image_ctx);   /* runs the image */
-        /* control is back in DCL's process, on DCL's stack, same PID */
+        g_faulted = 0;
+        if (setjmp(g_fault_jb) == 0) {
+            image_ret = entry(a0, a1);       /* the image runs, same PID */
+        } else {
+            /* Recovered from a fault. longjmp (not siglongjmp) left SIGSEGV
+             * blocked in the process mask; unblock it explicitly. */
+            sigset_t unb;
+            sigemptyset(&unb);
+            sigaddset(&unb, SIGSEGV);
+            sigprocmask(SIG_UNBLOCK, &unb, NULL);
+        }
 
         sigaction(SIGSEGV, &old, NULL);
     }
@@ -324,7 +339,7 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
 
     status = g_faulted ? SS$_ACCVIO : SS$_NORMAL;
     if (!g_faulted && image_rc)
-        *image_rc = (int)g_image_ret;
+        *image_rc = (int)image_ret;
 
 out_p0:
     {
@@ -335,6 +350,6 @@ out_unmap:
     if (fd >= 0)
         close(fd);
     if (win != MAP_FAILED)
-        munmap(win, IMGACT_P0_WINDOW);   /* collapse the P0 window (stk is inside it) */
+        munmap(win, IMGACT_P0_WINDOW);   /* collapse the P0 window */
     return status;
 }

@@ -107,8 +107,9 @@ uint32_t imgact_publish_producers(const struct imgact_prod_pub *prods, int n)
     return SS$_NORMAL;
 }
 
-uint32_t imgact_bind_imports_resident(uint64_t base,
-                                      const struct ovmx_imp_header *imp)
+uint32_t imgact_bind_imports_mapped(uint64_t base,
+                                    const struct ovmx_imp_header *imp,
+                                    imgact_mapper_fn map)
 {
     if (!imp || imp->magic != OVMX_IMP_MAGIC)
         return SS$_BADPARAM;
@@ -125,8 +126,17 @@ uint32_t imgact_bind_imports_resident(uint64_t base,
 
         uint64_t prod_base = 0;
         const struct ovmx_sv_header *sv = 0;
-        if (!imgact_find_producer(soname, &prod_base, &sv))
-            return SS$_UNSUPPORTED;   /* not resident -> caller forks */
+        if (!imgact_find_producer(soname, &prod_base, &sv)) {
+            /* Not yet resident. With a mapper, ask it to map+register the
+             * producer in-process (the NON-RESIDENT producer sub-step); then
+             * look again. Without a mapper (resident-only bind), or if the
+             * mapper refuses (a producer we cannot safely map in-process --
+             * PT_TLS / C-RTL bootstrap, the deferred remainder), the import
+             * stays unbound and the caller forks. */
+            if (!map || !(map(soname) & 1) ||
+                !imgact_find_producer(soname, &prod_base, &sv))
+                return SS$_UNSUPPORTED;   /* not resident/mappable -> forks */
+        }
 
         uint64_t addr = ovmx_sv_resolve(sv, ie[k].sv_index, prod_base,
                                         ie[k].req_major, ie[k].req_minor);
@@ -144,4 +154,12 @@ uint32_t imgact_bind_imports_resident(uint64_t base,
         *cell = addr;
     }
     return SS$_NORMAL;
+}
+
+uint32_t imgact_bind_imports_resident(uint64_t base,
+                                      const struct ovmx_imp_header *imp)
+{
+    /* Resident-only bind: no mapper, so a not-resident producer forks. The
+     * isolation test (test_imgact_bind) exercises exactly this path. */
+    return imgact_bind_imports_mapped(base, imp, 0);
 }

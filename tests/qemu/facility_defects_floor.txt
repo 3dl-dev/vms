@@ -182,4 +182,16 @@
 # test_syssvc_imgact_extern suite -- proven against a real /dev/vms (same
 # VMS+Linux PID, SYS$EXIT returns, event flag flows back, resident TLS shared),
 # with an in-suite foreign-interp control proving a foreign loader still forks.
-78
+# Raised to 79 by vms-db2's nonres-producer-not-mapped -- the §A.8-remainder
+# item 1 NON-RESIDENT-producer sub-step: a real image may import a universal
+# from a shareable DCL does NOT hold resident; imgact_map_producer maps it into
+# DCL's process (once, process-permanent -- re-homed from IMGACT.EXE's
+# load_ovmx_producer), registers it, and binds the consumer to that one mapped
+# instance. Targets libvms/syssvc/sys_imgact.c (imgact_map_producer's registry
+# store) and anchors the new test_syssvc_imgact_nonres suite -- proven against a
+# real /dev/vms (same VMS+Linux PID, SYS$EXIT returns, and a SHARED-instance
+# proof: the suite mutates the mapped producer's counter to 100 and a second run
+# observes 101, not a private-copy 1). Fenced to a pure leaf producer (no own
+# PT_TLS, no C-RTL bootstrap that would reprogram the thread pointer -- the
+# deferred remainder, which forks). See its own entry in facility_defects.sh.
+79

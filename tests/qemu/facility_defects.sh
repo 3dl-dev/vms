@@ -488,7 +488,8 @@ imgact-p1-not-protected
 consumer-import-not-bound-to-resident
 publish-does-not-populate-registry
 realimg-auxv-argc-wrong
-extern-interp-check-rejects-ours"
+extern-interp-check-rejects-ours
+nonres-producer-not-mapped"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4417,6 +4418,26 @@ EOF
         knock_on_why)  echo "SAME DEFECT, OBSERVED THROUGH THE NO-FORK CRUX. With imgact_interp_is_ours rejecting the OVMX loader's own name, TESTEXTERN is refused the in-process path entirely -- it never activates in DCL's process, so the VMS PID recorded after the (failed) activation is not compared against a run that happened in-process. The refused SS\$_NORMAL (require_fail) and the unproven same-PID (this assertion) are two faces of the one over-strict interp check: both say the external image was denied the in-process path its PT_INTERP naming the OVMX loader should have granted it.";;
         esac;;
 
+    nonres-producer-not-mapped)
+        case "$_f" in
+        facility)     echo "in-process image activation, MAPPING a NON-RESIDENT producer shareable so a real image's .vms\$imp import can bind to it (imgact_activate() -> imgact_map_producer, vms-db2 -- the §A.8-remainder item 1 non-resident-producer sub-step of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.2: an image may import a universal from a shareable the process does NOT hold; the activator maps it in-process, once/process-permanent, and binds to that one instance)";;
+        targets)      echo "libvms/syssvc/sys_imgact.c";;
+        suites_red)   echo "test_syssvc_imgact_nonres";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "imgact_map_producer() STOPS registering the producer it just mapped (the one \`uint32_t status = imgact_register_producer(soname, (uint64_t)base, sv);\` replaced by \`status = SS\$_UNSUPPORTED;\`), so the producer is genuinely mapped into the process but never entered into the resident-producer registry -- imgact_find_producer therefore still does not find it, imgact_bind_imports_mapped leaves the consumer's prod_bump import unbound, and imgact_activate returns SS\$_UNSUPPORTED so dcl_activate_image FORKS the image instead of running it in-process. This is exactly the class the non-resident-producer flip exists to run in-process: TESTNONRES imports prod_bump from TESTPROD, a producer DCL does not hold; with the registration skipped the mapping does nothing usable, so the suite's SS\$_NORMAL / same-PID / shared-counter assertions all fail (the image forks). The resident-producer path (realimg/extern, whose producers ARE published) never calls imgact_map_producer, and the import-binding store (consumer-import-not-bound-to-resident) is a different line in a different file, so ONLY the non-resident flip's assertions can tell the difference -- one minimal mutation, one property (registering the mapped producer is load-bearing, not decorative).";;
+        require_fail) cat <<'EOF'
+the second run's bump returned 101 -- it reached the SAME mapped producer instance the suite set to 100 (a per-consumer private copy would have returned 1) -- genuine single-instance sharing
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+TESTNONRES ran in-process and returned SS$_NORMAL
+EOF
+                      ;;
+        knock_on_why)  echo "SAME DEFECT, OBSERVED THROUGH THE FIRST RUN. With the mapped producer never registered, the consumer's prod_bump import cannot bind on EITHER run, so imgact_activate refuses the image (SS\$_UNSUPPORTED) and the first run never activates in-process -- there is no SS\$_NORMAL, no banner, no counter to share. The refused first run (this assertion) and the unshared second-run counter (require_fail) are two faces of the one skipped registration: both say the mapped producer was invisible to the binder, so nothing could bind to it.";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -5009,6 +5030,19 @@ apply_edit() {
         # never reaches this function, so only the external flip's assertions
         # redden. Idempotent: after the edit there is no such return left to match.
         sed -i "s|    return want\[j\] == '\\\\0' \&\& bn\[j\] == '\\\\0';|    return 0; /* NEGCTL extern-interp-check-rejects-ours: OVMX loader rejected */|" "$_file";;
+
+    nonres-producer-not-mapped)
+        # UNIQUE TEXT: imgact_map_producer's registration of the producer it
+        # just mapped is the only imgact_register_producer(soname, ...) call in
+        # the file (imgact_publish_producers, the other caller, is in
+        # imgact_prodreg.c -- a different $_file). Forcing status to
+        # SS$_UNSUPPORTED leaves the mapped producer unregistered, so the
+        # not-resident bind path never finds it and the consumer forks -- the
+        # whole point of the non-resident-producer flip. base/sv are referenced
+        # earlier (reprotect, imgact_relocate, the C-RTL fence) so no -Werror
+        # unused warning; status is read by the `if (!(status & 1))` that
+        # follows. Idempotent: after the edit no such call is left to match.
+        sed -i 's|    uint32_t status = imgact_register_producer(soname, (uint64_t)base, sv);|    uint32_t status = SS$_UNSUPPORTED; /* NEGCTL nonres-producer-not-mapped: mapped producer not registered */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

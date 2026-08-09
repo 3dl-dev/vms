@@ -59,7 +59,8 @@
 #include "vms_kif.h"
 #include "imgact_activate.h"
 #include "ovmx_image.h"       /* .vms$imp / .vms$rel section names + structs */
-#include "imgact_prodreg.h"   /* imgact_bind_imports_resident() (vms-db2)     */
+#include "ovmx_symvec.h"      /* ovmx_sv_entries/names (producer C-RTL fence) */
+#include "imgact_prodreg.h"   /* imgact_bind_imports_mapped() (vms-db2)       */
 
 #if defined(__x86_64__)
 #  define IMGACT_EM       EM_X86_64
@@ -422,6 +423,234 @@ static void imgact_apply_vms_rel(unsigned long base,
         *(uint64_t *)(uintptr_t)(base + off[k]) += base;
 }
 
+/*
+ * SYS$SHARE search directory for a producer named only by soname -- the same
+ * fallback SYSLIB IMGACT.EXE uses (src/imgact/imgact.c IMGACT_FALLBACK_SYSLIB).
+ * A producer whose .vms$imp soname is an absolute/relative path is opened as
+ * given first.
+ */
+#define IMGACT_SYSSHARE "/vms/SYS0/SYSCOMMON/SYSLIB"
+
+static int imgact_streq(const char *a, const char *b)
+{
+    while (*a && *a == *b) { a++; b++; }
+    return *a == '\0' && *b == '\0';
+}
+
+/* Join dir + "/" + name into buf (bounded); returns 0 on success, -1 if it does
+ * not fit. Freestanding-safe (no strlen/strcpy universal needed here). */
+static int imgact_pathjoin(char *buf, unsigned long bufsz,
+                           const char *dir, const char *name)
+{
+    unsigned long i = 0;
+    for (const char *p = dir; *p; p++) {
+        if (i + 1 >= bufsz) return -1;
+        buf[i++] = *p;
+    }
+    if (i + 1 >= bufsz) return -1;
+    buf[i++] = '/';
+    for (const char *p = name; *p; p++) {
+        if (i + 1 >= bufsz) return -1;
+        buf[i++] = *p;
+    }
+    buf[i] = '\0';
+    return 0;
+}
+
+/*
+ * Does a mapped producer's .vms$sv export musl's C-RTL bootstrap __init_libc?
+ * That marks it a C-RTL producer (DECC$SHR) whose activation would drive
+ * musl's __init_libc and REPROGRAM the process thread pointer -- fatal to run
+ * in DCL's own process (it would clobber DCL's TLS). Such a producer is refused
+ * in-process (the deferred remainder); the consumer forks. Reached by NAME
+ * (the .vms$sv name blob exists for diagnostics + exactly this), not by index.
+ */
+static int imgact_producer_needs_crtl(const struct ovmx_sv_header *sv)
+{
+    if (!sv || sv->magic != OVMX_SV_MAGIC)
+        return 0;
+    const struct ovmx_sv_entry *e = ovmx_sv_entries(sv);
+    const char *names = ovmx_sv_names(sv);
+    for (uint32_t k = 0; k < sv->count; k++) {
+        if (e[k].kind == OVMX_SV_RETIRED)
+            continue;
+        if (imgact_streq(names + e[k].name_off, "__init_libc"))
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * Map a NON-RESIDENT producer shareable into DCL's process and register it, so
+ * a consumer's .vms$imp import can bind to it (vms-db2, §A.8 remainder item 1 --
+ * the non-resident producer sub-step). This re-homes src/imgact/imgact.c's
+ * load_ovmx_producer() as an in-process library routine: it maps the producer's
+ * PT_LOADs with a PLAIN mmap (NOT the P0 window -- a shareable is process-
+ * permanent on VMS, surviving image rundown, which is also what lets a second
+ * consumer bind to the SAME instance), applies its .vms$rel self-relative
+ * fixups, locates its .vms$sv, registers it (imgact_register_producer), and
+ * recursively binds its OWN .vms$imp against the registry (transitive graph).
+ *
+ * FENCED to the class the design proves here (the rest stays deferred/forks,
+ * SS$_UNSUPPORTED): a producer carrying its OWN PT_TLS, a PT_INTERP, a
+ * PT_DYNAMIC (symbolic relocs), or a C-RTL bootstrap (__init_libc -- it would
+ * reprogram the thread pointer, §A.8 item 4) is refused. A pure leaf/
+ * computational OVMX symbol-vector shareable maps safely in-process.
+ *
+ * Returns SS$_NORMAL if the producer is now resident; SS$_UNSUPPORTED if it is
+ * not found, malformed, or of a deferred class (the caller forks); SS$_INSFMEM
+ * on an mmap failure. Pure userspace -- no /dev/vms (the executive-mediated P0/
+ * mode/rundown that wrap the consumer's own activation stay in imgact_activate).
+ */
+static uint32_t imgact_map_producer(const char *soname)
+{
+    Elf64_Ehdr eh;
+    Elf64_Phdr ph[IMGACT_MAXPHDR];
+    char path[256];
+    int fd = -1, i;
+
+    if (!soname || soname[0] == '\0')
+        return SS$_BADPARAM;
+    /* Already resident (a re-entrant find; also dedups a diamond dependency). */
+    if (imgact_find_producer(soname, 0, 0))
+        return SS$_NORMAL;
+
+    /* Search: the name as given (absolute/relative), then SYS$SHARE (SYSLIB). */
+    fd = open(soname, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        if (imgact_pathjoin(path, sizeof path, IMGACT_SYSSHARE, soname) == 0)
+            fd = open(path, O_RDONLY | O_CLOEXEC);
+    }
+    if (fd < 0)
+        return SS$_UNSUPPORTED;   /* not found -> consumer forks */
+
+    if (imgact_readat(fd, &eh, sizeof eh, 0) != 0 ||
+        memcmp(eh.e_ident, ELFMAG, SELFMAG) != 0 ||
+        eh.e_ident[EI_CLASS] != ELFCLASS64 ||
+        eh.e_type != ET_DYN || eh.e_machine != IMGACT_EM ||
+        eh.e_phnum == 0 || eh.e_phnum > IMGACT_MAXPHDR) {
+        close(fd);
+        return SS$_UNSUPPORTED;
+    }
+    if (imgact_readat(fd, ph, sizeof(Elf64_Phdr) * eh.e_phnum,
+                      (long)eh.e_phoff) != 0) {
+        close(fd);
+        return SS$_UNSUPPORTED;
+    }
+
+    /* Fence: an OWN PT_TLS or a PT_INTERP is a deferred class -> fork. (A
+     * PT_DYNAMIC is NOT rejected here: every -shared ET_DYN carries one, but a
+     * pure OVMX symbol-vector producer has no symbolic relocations through it --
+     * imgact_relocate below rejects any that are symbolic, applying only
+     * R_*_RELATIVE, exactly as the consumer path does.) */
+    unsigned long lo = ~0UL, hi = 0;
+    for (i = 0; i < eh.e_phnum; i++) {
+        if (ph[i].p_type == PT_TLS || ph[i].p_type == PT_INTERP) {
+            close(fd);
+            return SS$_UNSUPPORTED;
+        }
+        if (ph[i].p_type == PT_LOAD) {
+            unsigned long a = IMGACT_TRUNC(ph[i].p_vaddr);
+            unsigned long z = IMGACT_ROUND(ph[i].p_vaddr + ph[i].p_memsz);
+            if (a < lo) lo = a;
+            if (z > hi) hi = z;
+        }
+    }
+    if (lo == ~0UL || hi <= lo) {
+        close(fd);
+        return SS$_UNSUPPORTED;
+    }
+
+    /* Locate the OVMX symbol-vector sections while the file is open (image-
+     * relative addrs; applied against the mapped image below). */
+    unsigned long sv_addr = 0, sv_size = 0, imp_addr = 0, imp_size = 0;
+    unsigned long rel_addr = 0, rel_size = 0;
+    if (!imgact_find_section(fd, OVMX_SV_SECTION, &sv_addr, &sv_size)) {
+        close(fd);
+        return SS$_UNSUPPORTED;   /* not an OVMX producer -> fork */
+    }
+    int have_imp = imgact_find_section(fd, OVMX_IMP_SECTION, &imp_addr, &imp_size);
+    int have_rel = imgact_find_section(fd, OVMX_REL_SECTION, &rel_addr, &rel_size);
+
+    /* Map the producer's span with a PLAIN mmap (process-permanent, NOT the P0
+     * window): reserve [lo,hi), read each PT_LOAD, then reprotect to final. */
+    unsigned long span = hi - lo;
+    void *map = mmap(NULL, span, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (map == MAP_FAILED) {
+        close(fd);
+        return SS$_INSFMEM;
+    }
+    unsigned long base = (unsigned long)map - lo;   /* load bias */
+    for (i = 0; i < eh.e_phnum; i++) {
+        if (ph[i].p_type != PT_LOAD || ph[i].p_filesz == 0)
+            continue;
+        if (imgact_readat(fd, (void *)(base + ph[i].p_vaddr),
+                          ph[i].p_filesz, (long)ph[i].p_offset) != 0) {
+            munmap(map, span);
+            close(fd);
+            return SS$_UNSUPPORTED;
+        }
+    }
+    close(fd);
+
+    const struct ovmx_sv_header *sv =
+        (const struct ovmx_sv_header *)(base + sv_addr);
+    if (sv->magic != OVMX_SV_MAGIC || imgact_producer_needs_crtl(sv)) {
+        munmap(map, span);
+        return SS$_UNSUPPORTED;   /* C-RTL producer -> deferred, fork */
+    }
+
+    /* Apply any R_*_RELATIVE relocations through PT_DYNAMIC and refuse a
+     * symbolic PLT/reloc (a producer needing symbolic ELF binding is the
+     * deferred class -> fork). Pages are still writable here. Then bias the
+     * producer's own .vms$rel self-relative slots. Both no-ops for a pure PIC
+     * symbol-vector producer that carries neither. */
+    if (imgact_relocate(base, ph, eh.e_phnum) != 0) {
+        munmap(map, span);
+        return SS$_UNSUPPORTED;
+    }
+    if (have_rel)
+        imgact_apply_vms_rel(base, rel_addr, rel_size);
+
+    /* Reprotect each PT_LOAD to its final permissions. */
+    for (i = 0; i < eh.e_phnum; i++) {
+        if (ph[i].p_type != PT_LOAD)
+            continue;
+        unsigned long a = IMGACT_TRUNC(ph[i].p_vaddr);
+        unsigned long z = IMGACT_ROUND(ph[i].p_vaddr + ph[i].p_memsz);
+        int pr = 0;
+        if (ph[i].p_flags & PF_R) pr |= PROT_READ;
+        if (ph[i].p_flags & PF_W) pr |= PROT_WRITE;
+        if (ph[i].p_flags & PF_X) pr |= PROT_EXEC;
+        mprotect((void *)(base + a), z - a, pr);
+    }
+
+    /* Register it resident BEFORE resolving its own imports, so a dependency
+     * cycle dedups through imgact_find_producer (imgact.c's ordering). */
+    uint32_t status = imgact_register_producer(soname, (uint64_t)base, sv);
+    if (!(status & 1)) {
+        munmap(map, span);
+        return status;
+    }
+
+    /* Transitively bind the producer's OWN .vms$imp against the registry (a lib
+     * shareable importing from another producer), mapping further non-resident
+     * producers recursively. If a dependency cannot be bound the whole producer
+     * is unusable in-process -> refuse so the consumer forks. */
+    if (have_imp) {
+        status = imgact_bind_imports_mapped(
+            (uint64_t)base,
+            (const struct ovmx_imp_header *)(base + imp_addr),
+            imgact_map_producer);
+        if (!(status & 1))
+            return status;   /* left registered; harmless (it is genuinely
+                              * mapped, only its deps failed -- a later attempt
+                              * re-finds it resident and re-checks). */
+    }
+    return SS$_NORMAL;
+}
+
 uint32_t imgact_activate(const char *path, long a0, long a1,
                          const struct imgact_critp1 *critp1,
                          int *image_rc)
@@ -561,9 +790,16 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
     if (have_rel)
         imgact_apply_vms_rel(base, rel_addr, rel_size);
     if (have_imp) {
-        status = imgact_bind_imports_resident(
+        /* Bind each import to an ALREADY-RESIDENT producer; a named producer
+         * that is NOT resident is mapped in-process (imgact_map_producer, the
+         * NON-RESIDENT producer sub-step, vms-db2) and bound to. A producer we
+         * cannot safely map in-process (PT_TLS / C-RTL bootstrap -- deferred)
+         * leaves the import unbound -> SS$_UNSUPPORTED -> the caller forks. No
+         * LARP: never a private producer copy. */
+        status = imgact_bind_imports_mapped(
             (uint64_t)base,
-            (const struct ovmx_imp_header *)(base + imp_addr));
+            (const struct ovmx_imp_header *)(base + imp_addr),
+            imgact_map_producer);
         if (!(status & 1))
             goto out_unmap;   /* unbound import -> caller keeps the fork path */
     }

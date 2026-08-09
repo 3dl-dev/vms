@@ -712,17 +712,47 @@ imports, or the SysV auxv entry ABI — still returns `SS$_UNSUPPORTED` and
    `extern-interp-check-rejects-ours` (mutating `imgact_interp_is_ours` to reject the OVMX loader's own
    name reddens the flip's same-PID/SS$_NORMAL assertions in the real QEMU rig).
 
-   **STILL DEFERRED in item 1** (why the *full external* real image still forks): an external image
-   carrying an **own `PT_TLS`** (the DTV-append / TLS-absorb-over-resident-C-RTL case, §A.8 item 4), a
-   **symbolic (PLT) reloc** (a `PT_DYNAMIC` DT_HASH image — the dead musl.so path, vms-913.6), or a
-   `.vms$imp` import naming a **non-resident** producer (requires mapping the missing producer graph
-   into DCL's process and running its C-RTL/ctor init in-process) is still refused `SS$_UNSUPPORTED`
-   and **forks**. Re-homing the remainder of the 55 KB freestanding `src/imgact/imgact.c` loader body
-   (PT_TLS/DTV append, non-resident shareable dependency-graph mapping) as an in-process library is the
-   remaining unit, deferred to avoid a hasty LARP.
-2. **The flip of the remaining REAL-image classes** (own-PT_TLS / non-resident-import / symbolic-PLT)
-   in `dcl_activate_image()`, gated on the loader re-homing above being QEMU-proven per class. The
-   `PT_INTERP`-bearing class (resident imports, no own PT_TLS) is DONE (above).
+   **LANDED (vms-db2, §A.8 remainder item 1 — the NON-RESIDENT producer sub-step, mapping half):** a
+   real image whose `.vms$imp` names a producer the process does **not** hold resident now runs
+   in-process — the activator **maps the missing producer** and binds to it. `imgact_map_producer()`
+   (`src/libvms/syssvc/sys_imgact.c`) re-homes `IMGACT.EXE`'s `load_ovmx_producer()` as an in-process
+   library routine: it opens the producer (by soname, searching `SYS$SHARE` =
+   `/vms/SYS0/SYSCOMMON/SYSLIB`), maps its `PT_LOAD`s with a **plain `mmap` OUTSIDE the P0 window** (a
+   shareable is process-permanent on VMS — it survives image rundown, which is also exactly what lets a
+   *second* consumer bind to the **same** instance), applies its `R_*_RELATIVE`/`.vms$rel` fixups,
+   locates its `.vms$sv`, **registers it** (`imgact_register_producer`), and recursively binds its own
+   `.vms$imp` (the transitive graph). `imgact_bind_imports_mapped()` (`imgact_prodreg.c`) is the binder
+   that calls this mapper on a not-resident producer (the resident-only `imgact_bind_imports_resident`
+   is now a NULL-mapper wrapper — the isolation test is unchanged). **Fenced** to the class this
+   sub-step proves: a producer carrying its **own `PT_TLS`**, a **`PT_INTERP`**, a **symbolic PLT/reloc**
+   (via `imgact_relocate`), or a **C-RTL bootstrap** (it exports `__init_libc`, so activating it would
+   drive musl and **reprogram the thread pointer** — clobbering DCL's TLS) is refused `SS$_UNSUPPORTED`
+   so the consumer **forks**; a pure leaf/computational OVMX symbol-vector shareable maps safely
+   in-process. **Proven against a real `/dev/vms`** (`tests/qemu/test_syssvc_imgact_nonres.c`, consumer
+   `testnonres_inproc.c` importing `prod_bump` from the **non-resident** producer `testprod_shr.c` =
+   `TESTPROD.EXE`, staged in `SYS$SHARE`): the consumer runs in-process — **same VMS and Linux PID**
+   (no fork), SYS$EXIT returns to DCL, back in Supervisor with P0 torn down; and the **genuine-sharing**
+   crux — after the first run leaves the mapped producer's counter at 1, the suite mutates that counter
+   (reached through the registry base) to **100** and a **second** run observes **101**, proving the
+   consumer reached the **same** mapped instance the suite mutated (a per-consumer private copy would
+   read 1), mapped **once** (registry dedup). Negctl-anchored `nonres-producer-not-mapped` (skipping the
+   `imgact_register_producer` of the mapped producer leaves it invisible to the binder → the consumer
+   forks → the flip's same-PID/shared-counter assertions redden in the real QEMU rig).
+
+   **STILL DEFERRED in item 1** (why the *full external* real image still forks): an image (or a
+   producer in its graph) carrying an **own `PT_TLS`** (the DTV-append / TLS-absorb-over-resident-C-RTL
+   case, §A.8 item 4), a **symbolic (PLT) reloc** (a `PT_DYNAMIC` DT_HASH image — the dead musl.so path,
+   vms-913.6), or a **non-resident producer that itself needs a C-RTL bootstrap** (`__init_libc` — its
+   in-process activation would reprogram the thread pointer, and running its ctor init in-process is not
+   yet done) is still refused `SS$_UNSUPPORTED` and **forks**. Re-homing the remainder of the 55 KB
+   freestanding `src/imgact/imgact.c` loader body (PT_TLS/DTV append; in-process C-RTL-producer
+   bootstrap without clobbering DCL's TP) as an in-process library is the remaining unit, deferred to
+   avoid a hasty LARP. The **non-resident producer mapping for a pure leaf producer is DONE** (above);
+   what remains is the TLS/C-RTL-producer classes.
+2. **The flip of the remaining REAL-image classes** (own-PT_TLS / symbolic-PLT / a non-resident
+   producer that needs a C-RTL bootstrap) in `dcl_activate_image()`, gated on the loader re-homing above
+   being QEMU-proven per class. The `PT_INTERP`-bearing class (resident imports, no own PT_TLS) is DONE,
+   and the **non-resident-producer class for a pure leaf producer** is DONE (both above).
 3. **True Ctrl-Y / `CONTINUE`** for the in-process image (the option (b) asm follow-on above).
 4. **Service-level `$CRELNM`/`DEFINE/PROCESS` flows-back by a real image.** This increment proved
    executive-mediated flows-back with `$SETEF` (a process-permanent event flag the in-process image

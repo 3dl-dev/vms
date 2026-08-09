@@ -4037,6 +4037,88 @@ OPEN and OVMX models it, while the raw CDT read is the post-teardown CLOSED that
 misled §4(O.6)'s reader. Logs: `/data/training/vax/k8s-labs/vaxlab-4/logs/scsd-vms694O7.log`,
 `d94-vms694O7.pcap`. 2026-08-09.
 
+#### 4(O.8) The joiner VC's `SCSD-W-CONNNOACT` for `ACCEPT_RSP` was a FALSE ALARM — OVMX builds and sends that frame (the op=3 CONNECT-CONFIRM), and the FSM step was merely blind to it (GROUNDED live, `vms-694`)
+
+**The premise §4(O.7) left as remainder (a) is REFUTED-AS-STATED.** §4(O.7)
+flagged: *"`SCSD-W-CONNNOACT` — OVMX still has no `ACCEPT_RSP` builder at OPEN
+(connection works without it)"*, reading the warning as a genuine faithfulness
+gap — a load-bearing frame OVMX omits. It is not. OVMX **has** a builder for that
+frame and **puts it on the wire twice**, once per peer. The warning was fired by a
+`conn_step` FSM-bookkeeping call that was passed `emitted=NULL` while the very same
+frame went out 41 source lines — and, in the run log, the *same millisecond* —
+later.
+
+**The frame the FSM names `send ACCEPT_RSP` IS §4(m)'s op=3 CONNECT-CONFIRM, and
+it is LOAD-BEARING.** The Figure 2-14 source-column transition
+`CONNECT ACK --RCV_ACCEPT_REQ--> OPEN` carries the action the FSM labels
+"send ACCEPT_RSP" (`scs_conn.c`). On the wire that is the 62-byte op=3
+CONNECT-CONFIRM the *initiator* sends to acknowledge the peer's op=2
+CONNECT-RESPONSE (§4(m)), and on the `VMS$VAXcluster` VC specifically it is what
+makes the peer run the add-member dialogue at all (§4(m), "Omit frame 139 and
+everything from 145 onward disappears"). It is not optional and OVMX must send it —
+and does.
+
+**GROUNDED three ways that OVMX already emits it.**
+1. *The real oracle.* In `vax3-2to3-established-join-20260730.pcap` a real VAX
+   joiner opens its own `VMS$VAXcluster` VC (initiator Con.ID `0x18E30009`) and
+   drives it `op=0 CONNECT-REQ (#132) → op=1 CONNECT-ECHO (#135, M→J) → op=2
+   CONNECT-RESPONSE (#136, M→J, binds `0x3552000E`) → op=3 CONNECT-CONFIRM (#139,
+   J→M) →` the 190-byte add-member config (#142+). The op=3 confirm precedes the
+   config burst, exactly as §4(m) states.
+2. *OVMX matches it.* In `d94-vms694O7.pcap` (§4(O.7)) OVMX drives its own VC
+   `O→M op=0 → M→O op=1 → M→O op=2 → O→M op=3 CONNECT-CONFIRM`, byte-for-byte the
+   same shape, and the OVMX-sourced connection-control histogram carries `op=3 ×2`
+   (one per peer) — these are the `ACCEPT_RSP ×2` §4(O)/§4(O.1)/§4(O.2) counted on
+   every joining arm. The builder is `scs_dir_build_connect_confirm`, sent at
+   `scsd.c`'s JOINBOUND site as `SCSD-I-JOINCONFIRM`.
+3. *The log catches the contradiction in the act.* `scsd-vms694O7.log` line 70:
+   `SCSD-W-CONNNOACT, conid=0x93EA0012: … 'send ACCEPT_RSP' … OVMX has no builder
+   for it -- nothing was sent`; line 73, **same Con.ID, same 17:13:15.248**:
+   `SCSD-I-JOINCONFIRM, confirmed OUR VMS$VAXcluster VC (op=3 seq=5)`. The frame
+   the warning said was never built was sent three lines later.
+
+**Root cause.** `scsd.c` called `conn_step(ps->cdt_joiner, RCV_ACCEPT_REQ, NULL)`
+to record the transition to OPEN, then built and sent the op=3 confirm in a
+separate block below. `conn_step`'s `emitted` argument is "the frame the daemon
+actually put on the wire for this step"; passing `NULL` made the FSM log the
+action as unemitted (`SCSD-W-CONNNOACT`, `actions-required-but-not-emitted++`) for
+a frame the daemon does emit. The FSM step and the emit were decoupled.
+
+**Fix (`vms-694`, wire-INVISIBLE).** Build and send the op=3 CONNECT-CONFIRM
+first, capture its identity, and pass it to `conn_step` so the FSM records the
+emit instead of a false unemitted action. No frame is added, removed, reordered on
+the wire, or changed — the confirm was already the next frame out and still is;
+only the FSM's internal accounting and one spurious log line change. Because it is
+wire-invisible (§4(O.7) precedent), no kill switch is required. Fail-pre/pass-post:
+`test_scsd_wire.c` `test_joiner_vc_op3_confirm_is_recorded_not_reported_unbuilt`
+drives the two REAL captured frames (`cap_ovmx_joiner_connect_rsp`,
+`cap_ovmx_joiner_accept_req`) to OPEN, asserts the op=3 confirm went out
+(`SCSD-I-JOINCONFIRM`, frame count rose) AND that the FSM scored **no** unemitted
+action / logged **no** `SCSD-W-CONNNOACT` for it — FAILS with the pre-fix `NULL`
+(scores 1 unemitted, logs CONNNOACT), PASSES with the emit passed. `vmsscs|scs`
+ctest 50/50 + the new case.
+
+**Live bracket (CLEAN pod, FRESH identity, `vms-694`, 2026-08-09).** `vaxlab-10`
+(virgin `CN_2`, scaled fresh for this run), identity `OVMXR0`/`SCSSYSTEMID 1852`
+minted through `mk_sysgen.py`, `OVMXR0` proven on the wire (guardrail 18); no
+`%PEA0`, no `SCSD-W-VCNOACK` (§4(w) hygiene satisfied):
+
+| what | §4(O.7) (pre-fix, `d94-vms694O7`) | with the fix (this run, `d94-vms694O8`) |
+|---|---|---|
+| `SCSD-W-CONNNOACT` on the joiner VC | 2 (one per peer) | **0** |
+| `CONN-FSM actions-required-but-not-emitted` | 2 | **0** |
+| `SCSD-I-JOINCONFIRM` (op=3 confirm sent) | 2 | **2** (unchanged) |
+| op=3 CONNECT-CONFIRM on the wire | ×2 | **×2** (from OVMX hw MAC `3e:c7:c3:43:69:a7`, `l=0x5F1A0012`, `l=0x5F1A0002` — the two JOINBOUND joiner Con.IDs) |
+| join | `XITDONE=1`, `CN` 2→3 | unchanged: `XITDONE=1`, `CN_3` at t+13 s (real VAX `F$GETSYI`) |
+
+The op=3 confirm is on the wire both runs (wire-invisible), the false CONNNOACT is
+gone, and admission is unaffected. This is the fourth teardown/artifact-class
+frontier this session resolved without a wire change (after bidirectional-accept
+§4(y)/#232, con_sent §4(O.6)/#235, joiner=CLOSED §4(O.7)/#237): the op=3 confirm
+was never missing — the FSM bookkeeping was blind to it. Logs:
+`/data/training/vax/k8s-labs/vaxlab-10/logs/scsd-vms694O8.log`, `d94-vms694O8.pcap`.
+2026-08-09.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

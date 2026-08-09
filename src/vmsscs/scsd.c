@@ -8710,31 +8710,26 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 scs_poll_connected(scsd_poll(rx), "VMS$VAXcluster", ps_sys_addr(ps));
                 /* vms-dd5: the member's answer to OUR CONNECT_REQ, carrying
                  * BOTH Con.IDs -- message type 2, ACCEPT_REQ (spec sec
-                 * 4(h)(1a)). If the peer's message-type-1 CONNECT_RSP was
-                 * seen, the classifier above already moved this connection
-                 * to CONNECT ACK and this step is the DOCUMENTED Figure 2-14
-                 * transition to OPEN; if that frame was lost, this arrives in
-                 * CONNECT SENT and runs through the LABELED OVMX row instead,
-                 * and its log line says which. Either way the ACCEPT_RSP the
-                 * machine then requires has no OVMX builder, so it is
-                 * reported unemitted rather than silently skipped. */
+                 * 4(h)(1a)) = op=2 CONNECT-RESPONSE (§4(m)). If the peer's
+                 * message-type-1 CONNECT_RSP was seen, the classifier above
+                 * already moved this connection to CONNECT ACK and the step
+                 * below is the DOCUMENTED Figure 2-14 transition to OPEN; if
+                 * that frame was lost, this arrives in CONNECT SENT and runs
+                 * through the LABELED OVMX row instead, and its log line says
+                 * which. The transition's action -- the FSM names it "send
+                 * ACCEPT_RSP" -- IS the op=3 CONNECT-CONFIRM that OVMX builds
+                 * and sends just below (§4(O.8)); it is passed to conn_step so
+                 * the machine records the emit instead of falsely reporting it
+                 * unemitted. */
                 scs_cdt_set_remote_conid(ps->cdt_joiner, lconid);
-                conn_step(ps->cdt_joiner, SCS_CONN_EV_RCV_ACCEPT_REQ, NULL);
-                /* vms-694 (§4(O.7)): the conn_step above is the transition that
-                 * reaches OPEN (Figure 2-14) for the VMS$VAXcluster SYSAP
-                 * connection the peer holds open. Latch that into OVMX's own
-                 * membership self-view now, off the CDT the daemon just drove --
-                 * so OVMX models the connection and the fact survives the
-                 * graceful teardown that closes the CDT at shutdown. */
-                ps_note_vaxcluster_open(ps);
                 log_ts(stdout);
                 printf(" SCSD-I-JOINBOUND, member accepted OUR VMS$VAXcluster"
                        " connect: local=0x%08X remote=0x%08X\n",
                        PS_JOINER_CONID(ps), lconid);
                 fflush(stdout);
-                /* vms-760: CONFIRM the VMS$VAXcluster VC (op=3) BEFORE the
+                /* vms-760/§4(m): CONFIRM the VMS$VAXcluster VC (op=3) BEFORE the
                  * add-member burst -- the same load-bearing confirm the MSCP
-                 * connection gets above (§4(m)).
+                 * connection gets above.
                  * GROUNDED, vax3-2to3-established-join-20260730.pcap: VAX3's VC
                  * CONNECT-REQ is frame 132 (ss=10), VAX1's op=2 ACCEPT frame 136
                  * (ss=11, +0.9391), VAX3's op=3 CONFIRM frame 139 (ss=13, +0.9393,
@@ -8746,7 +8741,14 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                  * it but its connection manager never runs the add-member dialogue
                  * on it, so the config burst is ignored -- SHOW CLUSTER stays NEW
                  * with ZERO member-initiated traffic back (d94-disc2/disc3.pcap,
-                 * where OVMX sends only op=10 on conid 0x4f580002, never op=3). */
+                 * where OVMX sends only op=10 on conid 0x4f580002, never op=3).
+                 * §4(O.8): this op=3 confirm IS Figure 2-14's ACCEPT_RSP for the
+                 * joiner VC. Build and send it FIRST, then hand its identity to
+                 * the conn_step below so the FSM's "send ACCEPT_RSP" action is
+                 * recorded as emitted -- NOT reported as CONNNOACT/"no builder"
+                 * for a frame OVMX has a builder for and puts on the wire twice
+                 * (once per peer), measured byte-matching VAX3's frame 139. */
+                const char *vc_confirm_emitted = NULL;
                 {
                     struct scs_dir_params vc;
                     memset(&vc, 0, sizeof(vc));
@@ -8762,9 +8764,10 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                     uint8_t vf[SCS_DIR_CONFIRM_FRAME_LEN];
                     if (scs_dir_build_connect_confirm(&vc, vf) == 0) {
                         send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
-                                  "VMS$VAXcluster op=1 CONNECT-ECHO",
+                                  "VMS$VAXcluster op=3 CONNECT-CONFIRM",
                                   vf, sizeof(vf));
                         scs_vc_record_sent(&ps->vc, vc.send_seq, monotonic_ms());
+                        vc_confirm_emitted = "VMS$VAXcluster op=3 CONNECT-CONFIRM";
                         log_ts(stdout);
                         printf(" SCSD-I-JOINCONFIRM, confirmed OUR VMS$VAXcluster"
                                " VC (op=3 seq=%u) before the add-member burst\n",
@@ -8772,6 +8775,20 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                         fflush(stdout);
                     }
                 }
+                /* Now record the Figure 2-14 RCV_ACCEPT_REQ->OPEN transition,
+                 * telling the machine the op=3 confirm it just emitted. If the
+                 * builder above failed, vc_confirm_emitted stays NULL and the
+                 * CONNNOACT warning correctly fires (a genuine gap); on the
+                 * normal path it is non-NULL and the false alarm is gone. */
+                conn_step(ps->cdt_joiner, SCS_CONN_EV_RCV_ACCEPT_REQ,
+                          vc_confirm_emitted);
+                /* vms-694 (§4(O.7)): the conn_step above is the transition that
+                 * reaches OPEN (Figure 2-14) for the VMS$VAXcluster SYSAP
+                 * connection the peer holds open. Latch that into OVMX's own
+                 * membership self-view now, off the CDT the daemon just drove --
+                 * so OVMX models the connection and the fact survives the
+                 * graceful teardown that closes the CDT at shutdown. */
+                ps_note_vaxcluster_open(ps);
                 if (!ps->joiner_cm_sent) {
                     int c = cm_send_config_burst(rx->sock, rx->ifindex, ps, rx->our_hw_mac,
                                                  rx->our_src_logical,

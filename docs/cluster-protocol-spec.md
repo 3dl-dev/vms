@@ -4894,7 +4894,8 @@ For visibility, every field NOT marked GROUNDED above:
 > second peer's reciprocal CM traffic is silently dropped as
 > `SCS_DELIVER_SRC_MISMATCH` before it ever reaches the CM layer described
 > below. See §4(x) for the live evidence (3/3 lab-2 runs) and the root cause in
-> `scs_cdt.c`. Not yet fixed — scoped as the next deliverable in §4(x).
+> `scs_cdt.c`. **FIXED** by per-peer Con.ID allocation (`vms-694`, 2026-08-09) —
+> see the RESOLVED subsection in §4(x).
 
 **Resolved since the previous entry** (which wrongly concluded admission was
 gated above the SCS layer — it was a half-open VC, §4m, plus a directed-HELLO
@@ -5255,15 +5256,45 @@ pure-server variants (`scsd.c:553-554`) — roughly 15 production call sites in
 `scsd.c` plus ~30 test call sites in `tests/vmsscs/test_scsd_wire.c`,
 `test_scs_cdt.c` and `test_scs_dir.c` that assert against the literal macro.
 
-**Why this bounded increment stops at diagnosis.** The fix touches core CDT
+**Why the diagnosis entry above stopped at diagnosis.** The fix touches core CDT
 plumbing shared by every wire test in this file (which this epic's own context
 already flags as having rejected 12 rounds of under-grounded changes), and
 correctness requires re-verifying against the full 19-capture/141k-frame replay
-library (§4(m) precedent) before it can be trusted — beyond one session's bounded
-scope. The diagnosis is reproducible and cheap to re-check without a lab: any
-unit test that opens two `peer_state`s and drives both through the joiner-VC
-accept path, then delivers an app-message from the second peer, should surface
-`SCS_DELIVER_SRC_MISMATCH` today.
+library (§4(m) precedent) before it can be trusted. The diagnosis is reproducible
+and cheap to re-check without a lab: any unit test that opens two `peer_state`s
+and drives both through the joiner-VC accept path, then delivers an app-message
+from the second peer, surfaces `SCS_DELIVER_SRC_MISMATCH` on the pre-fix tree.
+
+#### RESOLVED (`vms-694`, 2026-08-09) — per-peer Con.ID allocation
+
+The scoped step above LANDED. Each `peer_state` now carries a `conid_off` low-word
+block offset (`peer_slot_index * 0x10`), assigned in `peer_find_or_add`. OVMX's
+handles are formed through `PS_*_CONID(ps)` macros (`ovmx_conid_base() |
+ps->conid_off | <class>`) at every send site, and the receive path matches an
+echoed handle with `ovmx_conid_is_class(conid, <class>)` (the frame is still
+routed to its peer by src MAC, so this only confirms the class). **Peer slot 0
+keeps offset 0 — i.e. the exact historical class-slot values — so every
+single-peer capture and the full replay library replay byte-identically; only the
+2nd+ concurrently-live peer moves into its own 0x10-wide block.** This is a
+labeled OVMX derivation (Rule 8): the wire framing/echo/match rules are unchanged
+and the block offset is opaque to the peer exactly as the per-boot high word is.
+
+Converted classes (all now per-peer): `0x01` local VC, `0x02` joiner VC, `0x07`
+dir-server, `0x08` dir-client, `0x09` poller (which had *also* been left on the
+compile-time base by the vms-760 `#undef` — now on the per-boot base like its
+siblings), `0x0A` MSCP client, `0x0B` MSCP server, `0x0C`/`0x0D` pure-server.
+
+Regression proof: `tests/vmsscs/test_scsd_wire.c
+::test_second_peer_gets_its_own_conid_not_a_collision` (which previously ASSERTED
+the bug — that peer B was refused a CDT — and now asserts the fix) drives two
+peers through the joiner accept path and checks BOTH bind distinct CDTs at
+distinct Con.IDs, that peer B's echo resolves to peer B (not `SRC_MISMATCH`), and
+that peer slot 0 still equals `OVMX_JOINER_CONID`. Full `vmsscs|scs` ctest: 50/50.
+
+Residual (out of scope, distinct limitation): the SAME peer opening a SECOND
+connection of the SAME class still reuses one per-peer slot per class, where a
+real node allocates a fresh pair per connection (`vms-298`). That is a
+per-connection concern, not the cross-peer collision this section is about.
 
 ## 6. Using the dissector
 

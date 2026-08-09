@@ -484,7 +484,8 @@ p0-unmap-clears-p1
 super-mode-escalation
 image-rundown-without-entry
 image-rundown-leaks-user-lock
-imgact-p1-not-protected"
+imgact-p1-not-protected
+consumer-import-not-bound-to-resident"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4333,6 +4334,26 @@ EOF
         knock_on_why)  echo "SAME DEFECT, OBSERVED ON THE OTHER SIDE OF THE SAME WRITE. With the page left writable the hostile image's store completes instead of faulting, so imgact_activate() returns SS\$_NORMAL rather than SS\$_ACCVIO -- the missing fault (this assertion) and the corrupted sentinel (require_fail) are the two visible faces of the one skipped mprotect, not two independent properties.";;
         esac;;
 
+    consumer-import-not-bound-to-resident)
+        case "$_f" in
+        facility)     echo "in-process image activation, .vms\$imp import binding to an ALREADY-RESIDENT shareable (imgact_bind_imports_resident(), vms-db2 -- the §A.8-remainder import-binding-to-resident-shareable sub-step of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.2)";;
+        targets)      echo "libvms/syssvc/imgact_prodreg.c";;
+        suites_red)   echo "test_syssvc_imgact_bind";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "imgact_bind_imports_resident() STOPS writing the resolved RESIDENT producer address into the consumer's GOT cell (the one \`*cell = addr;\` store replaced by a no-op that keeps cell/addr referenced), so binding still resolves the universal and still returns SS\$_NORMAL -- it just never points the consumer at the resident producer. This is the exact LARP shape the authenticity invariants exist to kill: activation reports the import bound (and the status says so) while the image shares NOTHING with the resident LIBVMS\$SHR/DECC\$SHR the process already holds -- its call lands on its pre-bind stub, not the one instance DCL uses, so a \$CRELNM/DEFINE it made would never flow back. The registry lookup, GSMATCH resolve and the malformed/not-resident/mismatch refusals are all untouched (they run before this store or on other paths), so only the assertions that read the bound cell back and observe the SHARED counter can tell the difference -- one minimal mutation, one property.";;
+        require_fail) cat <<'EOF'
+the consumer's imported call reached the RESIDENT producer -- it returned the resident counter value 1, not the unbound stub
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the test sees the consumer's increment to the SAME resident counter (genuine sharing, not a private copy)
+EOF
+                      ;;
+        knock_on_why)  echo "SAME DEFECT, OBSERVED FROM THE OTHER PARTY TO THE SHARED STATE. With the GOT cell left at its stub the consumer never increments the resident counter, so when the test (as DCL) calls the same producer directly it sees 1, not 2 -- the consumer's missing effect (this assertion) and the consumer's call landing on the stub (require_fail) are the two visible faces of the one skipped store, not two independent properties: both say the image bound to nothing resident.";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -4881,6 +4902,18 @@ apply_edit() {
         # the critical-P1 page still writable -- nothing after it shifts, and
         # the paired restore-to-writable calls (`, 1)`) are not matched.
         sed -i 's|status = vms_kif_p1_protect(critp1->base, critp1->limit, 0);|status = SS$_NORMAL; /* NEGCTL imgact-p1-not-protected: critical-P1 left writable */|' "$_file";;
+
+    consumer-import-not-bound-to-resident)
+        # UNIQUE TEXT, no range anchor needed: `*cell = addr;` is the only store
+        # of a resolved resident address into a consumer GOT cell in the file.
+        # Replacing it with a no-op that keeps cell/addr referenced (no unused-
+        # variable warning that could confuse a -Werror build) leaves the loop's
+        # structure and its SS$_NORMAL return intact -- binding still resolves
+        # the universal, it just never points the consumer at the resident
+        # producer, so the image shares nothing (the LARP shape). The sibling
+        # refusal paths (bad magic, not-resident, GSMATCH) return before or
+        # around this line and are unaffected.
+        sed -i 's|        \*cell = addr;|        (void)cell; (void)addr; /* NEGCTL consumer-import-not-bound-to-resident: import left unbound */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

@@ -1,0 +1,107 @@
+/*
+ * imgact_prodreg.h - resident-producer registry + resident import binding for
+ * in-process image activation (vms-db2, docs/design-in-process-activation.md
+ * Part II §A.2.2 and §A.8 remainder item 1).
+ *
+ * THE PROBLEM THIS SOLVES. On OpenVMS a shareable image (LIBVMS$SHR, DECC$SHR,
+ * ...) is mapped ONCE per process and every image the process activates binds
+ * to that ONE resident copy through the symbol vector -- which is why a
+ * $CRELNM/DEFINE by a RUN'd image lands in the SAME libvms state DCL uses and
+ * flows back. OVMX's in-process activator (imgact_activate,
+ * src/libvms/syssvc/sys_imgact.c) must do the same: bind an activated image's
+ * .vms$imp imports to the ALREADY-RESIDENT producer, NOT a private copy (a
+ * private copy is the LARP the authenticity invariants forbid -- the image
+ * would look activated but share nothing).
+ *
+ * The freestanding IMGACT.EXE (src/imgact/imgact.c, the PT_INTERP loader) maps
+ * producers into a fresh process and keeps their bases + symbol vectors in its
+ * OWN private `static g_prods[]`, then discards that knowledge at hand-off:
+ * nothing exported, no /proc parse, no dl_iterate_phdr -- an in-process
+ * activator has no way to find a resident producer. This registry is that
+ * missing mechanism: a process-permanent table of (soname, load base, .vms$sv)
+ * for the producers resident in THIS process, published once (by IMGACT at the
+ * process's own activation, in the eventual real-image flip) and consumed by
+ * imgact_bind_imports_resident() to bind a later in-process image's imports to
+ * them. It re-homes imgact.c's bind_imports() as library code whose producer
+ * source is the registry (resident) instead of a fresh mmap.
+ *
+ * SCOPE (vms-db2, the flagged §A.8 remainder landed as a proven sub-step). This
+ * is the import-binding-to-resident-shareable mechanism, proven in isolation
+ * (tests/qemu/test_syssvc_imgact_bind.c: a resident producer with shared
+ * internal state, a consumer bound to it by vector index, the consumer's call
+ * reaching the SAME resident instance -- genuine sharing, not a copy). What is
+ * NOT here (still deferred, fork fallback intact -- real images do NOT activate
+ * in-process): IMGACT publishing this registry at DCL startup; entering a real
+ * LINK.EXE image through its SysV auxv/stack _start ABI + intercepting its
+ * SYS$EXIT to return to DCL; sharing the resident DECC$SHR's musl TLS. See
+ * sys_imgact.c and the design's §A.8 remainder.
+ *
+ * Rule 8: the .vms$sv/.vms$imp format is OVMX's own (ovmx_image.h); no VMS byte
+ * layout is claimed. The resident-once, bind-by-vector-position SEMANTICS are
+ * public VMS (shareable images installed /SHARED; Linker Utility Manual).
+ */
+#ifndef _IMGACT_PRODREG_H
+#define _IMGACT_PRODREG_H
+
+#include <stdint.h>
+#include "ovmx_image.h"   /* struct ovmx_sv_header / ovmx_imp_header */
+
+/* Upper bound on resident producers tracked (matches imgact.c's g_prods[32]:
+ * the whole OVMX producer graph -- DECC$SHR, the 5 LIBVMS* shareables, RMS --
+ * is well under this). */
+#define IMGACT_MAX_RESIDENT 32
+
+/*
+ * Register an already-resident producer shareable so later in-process
+ * activations can bind to it. `soname` is the producer image name a consumer's
+ * .vms$imp records (e.g. "LIBVMS$SHR.EXE"); `base` is its run-time load bias
+ * (0 if its symbol-vector values are already absolute); `sv` points at its
+ * mapped .vms$sv header. Re-registering the same soname updates it in place.
+ *
+ * Returns SS$_NORMAL, SS$_BADPARAM (null/oversized args), or SS$_INSFMEM (table
+ * full). This is a pure userspace record -- no /dev/vms -- but it is meaningful
+ * ONLY inside a process that genuinely has the named producer mapped; a caller
+ * that registers a producer it did not map would be faking residency, which the
+ * isolation test guards against by mutating shared producer state.
+ */
+uint32_t imgact_register_producer(const char *soname, uint64_t base,
+                                  const struct ovmx_sv_header *sv);
+
+/*
+ * Look up a registered resident producer by soname. On success returns 1 and
+ * fills base and sv; returns 0 if not registered. Either out-pointer may be NULL.
+ */
+int imgact_find_producer(const char *soname, uint64_t *base,
+                         const struct ovmx_sv_header **sv);
+
+/*
+ * Empty the registry. The honest default state is EMPTY (no producer is
+ * resident until something maps and registers one); used by tests for a clean
+ * per-case slate.
+ */
+void imgact_prodreg_reset(void);
+
+/*
+ * Bind a mapped consumer image's .vms$imp imports against the registered
+ * resident producers. `base` is the consumer's load bias; `imp` its mapped
+ * .vms$imp header. For each import record: find the named producer in the
+ * registry, GSMATCH+index-resolve the universal (ovmx_sv_resolve), and write
+ * the resolved RESIDENT address into the consumer's GOT cell at base+patch_off.
+ *
+ * Returns:
+ *   SS$_NORMAL      every import bound to a resident producer
+ *   SS$_BADPARAM    malformed .vms$imp (bad magic)
+ *   SS$_UNSUPPORTED a named producer is not resident, or its GSMATCH/vector
+ *                   index does not resolve -- the image cannot be activated
+ *                   in-process (the caller keeps the fork fallback). Mapped to
+ *                   SS$_UNSUPPORTED (not a new %IMGACT-F-NOSHRIMG/-SHRIDMISMAT
+ *                   status) deliberately: inventing ungrounded SS$_ constants is
+ *                   barred by the VMS-purity guardrail, and SS$_UNSUPPORTED is
+ *                   exactly the "fall through to fork" signal dcl_activate_image
+ *                   already routes on. The real-image flip (a follow-on) will
+ *                   ground+cite the proper hard-error codes.
+ */
+uint32_t imgact_bind_imports_resident(uint64_t base,
+                                      const struct ovmx_imp_header *imp);
+
+#endif /* _IMGACT_PRODREG_H */

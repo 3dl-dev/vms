@@ -621,6 +621,39 @@ imports, or the SysV auxv entry ABI — still returns `SS$_UNSUPPORTED` and
    dependency graph mapped once. This is the bulk of the increment and is deferred as a
    unit — attempting it hastily risks a silent LARP (an image that *looks* activated but
    does not truly share DCL's libvms state), which the authenticity invariants forbid.
+
+   **LANDED (vms-db2, a proven sub-step of item 1 — the binding mechanism, in isolation):**
+   The `.vms$imp` **import binding to an already-resident producer** now exists as library
+   code and is proven genuinely-sharing in isolation. Two pieces shipped, both in
+   `LIBVMS$SHR` (`src/libvms/syssvc/imgact_prodreg.c` + `include/imgact_prodreg.h`):
+   - a **resident-producer registry** — `imgact_register_producer(soname, base, .vms$sv)` /
+     `imgact_find_producer()` — the mechanism the design's §A.2.2 assumed but which did **not
+     exist**: `IMGACT.EXE` keeps producer bases in its own private `static g_prods[]` and
+     **discards** them at hand-off (no exported symbol, no `/proc/self/maps`, no
+     `dl_iterate_phdr`), so in-process `libvms` had no way to find the `LIBVMS$SHR`/`DECC$SHR`
+     the process already holds. This registry is that missing published table.
+   - `imgact_bind_imports_resident(base, .vms$imp)` — re-homes `imgact.c`'s `bind_imports`
+     as library code whose producer source is the **registry (resident)**, not a fresh
+     `mmap`: for each import it GSMATCH+index-resolves (`ovmx_sv_resolve`) against the
+     resident producer and writes the resolved **resident** address into the consumer's GOT
+     cell. `imgact_activate()` now applies `.vms$rel` and calls it for a marker image that
+     carries a `.vms$imp`; an import naming a non-resident producer returns `SS$_UNSUPPORTED`
+     so the caller **forks** (never a private-copy bind — the LARP).
+   - **Proof (`tests/qemu/test_syssvc_imgact_bind.c`, negctl `consumer-import-not-bound-to-resident`):**
+     a resident producer with shared internal state; a consumer that imports its universal by
+     vector index and calls it through the bound GOT cell; the consumer's call reaches the
+     **same** instance the test also mutates (counter 1 then 2 — genuine sharing, not a copy).
+     This binding is pure userspace, so the proof needs **no** `/dev/vms` and runs in every
+     environment; the P0-map/mode-transition/rundown that *wrap* a full activation stay proven
+     separately against a real `/dev/vms` (`test_syssvc_imgact_inproc`).
+
+   **STILL DEFERRED in item 1** (why real images still fork — no flip): (a) **IMGACT publishing
+   the registry at DCL startup** — nothing calls `imgact_register_producer()` in the live boot
+   path yet, so at runtime the registry is empty and a real image's imports do not resolve;
+   (b) **entering a real `LINK.EXE` image** through its SysV auxv/stack `_start` ABI (not the
+   `(a0,a1)` marker ABI) and **intercepting its `SYS$EXIT`** to return to DCL instead of
+   terminating the process; (c) **`PT_TLS`** — sharing the resident `DECC$SHR`'s musl TLS with
+   the in-process image (a TLS-bearing image is refused `SS$_UNSUPPORTED` today).
 2. **The flip of REAL images to in-process** in `dcl_activate_image()`, gated on (1)
    being QEMU-proven per image class. Until then the fork stays for those classes.
 3. **True Ctrl-Y / `CONTINUE`** for the in-process image (the option (b) asm follow-on above).

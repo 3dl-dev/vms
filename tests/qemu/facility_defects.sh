@@ -415,6 +415,7 @@ DEFECTS="access-mode-escalation
 kif-setmode-always-kernel
 getmode-buffer-not-written
 ast-setast-disable
+ast-deliver-crossmode-escalation
 eflag-clref-noop
 eflag-waitfr-eintr-normal
 eflag-setef-status-inverted
@@ -715,6 +716,30 @@ EOF
         require_fail) cat <<'EOF'
 disable again: prev state was disabled
 SETAST(enable) returns WASCLR (== prev state was disabled)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why) echo "";;
+        esac;;
+
+    ast-deliver-crossmode-escalation)
+        case "$_f" in
+        facility)     echo "AST delivery (VMS_IOCTL_DCLAST/SETAST/DELIVERAST), cross-mode delivery scope";;
+        targets)      echo "kernel/vms_ast.c";;
+        # test_syssvc_ast_secmode is the ONLY suite that exercises cross-mode
+        # delivery (vms-as1): it declares a KERNEL-mode AST and a USER-mode AST
+        # and, at USER mode, drains through the PUBLIC sys$setast. Every other
+        # AST suite (test_kmod_ast, test_syssvc_ast) declares and delivers at
+        # USER mode only with inner queues empty, so scanning from PSL_C_KERNEL
+        # vs from the caller's mode makes NO difference to them -- which is why
+        # this mutation reddens exactly one assertion in exactly one suite.
+        suites_red)   echo "test_syssvc_ast_secmode";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_deliverast scans from PSL_C_KERNEL again instead of the caller's current access mode, so a user-mode \$SETAST(1) drains (and executes) the KERNEL-mode AST queue -- the access-mode escalation vms-as1's delivery bound closes. Declaring, quota and the per-mode enable flag are untouched; only the delivery SCOPE regresses, so only the cross-mode security assertion reddens (the USER-mode AST is still delivered, and the later at-KERNEL-mode drain still finds g_kfired set, so neither of those reddens).";;
+        require_fail) cat <<'EOF'
+a user-mode $SETAST(1) did NOT execute the KERNEL-mode AST
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -4479,6 +4504,8 @@ apply_edit() {
         sed -i '/^long vms_ioctl_getmode/,/^}$/ s|if (copy_to_user(|if (1 \|\| copy_to_user(|' "$_file";;
     ast-setast-disable)
         sed -i 's|ast_state->enabled = args.enable ? 1 : 0;|ast_state->enabled = 1; /* NEGCTL ast-setast-disable */|' "$_file";;
+    ast-deliver-crossmode-escalation)
+        sed -i 's|    for (mode = cur_mode; mode <= PSL_C_USER; mode++) {|    for (mode = PSL_C_KERNEL; mode <= PSL_C_USER; mode++) { /* NEGCTL ast-deliver-crossmode-escalation */|' "$_file";;
     eflag-clref-noop)
         sed -i 's|\*flags \&= ~(1U << bit);|/* NEGCTL eflag-clref-noop: the bit is not cleared */|' "$_file";;
     eflag-waitfr-eintr-normal)

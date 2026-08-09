@@ -555,6 +555,83 @@ fake; fail honestly without `/dev/vms`). Dependency chain (i)←(ii)←(iii)←(
   PID. Anchored on the `facility_defects` red-floor / green-property convention; never
   a census/string gate. **This increment is the definition of done for vms-68f.**
 
+## A.8 Increment (v) landed state — the same-PID payoff proven, real-image loader flagged (vms-db2)
+
+This records what increment (v) actually shipped, re-derivable by running the suite —
+not a frozen "A is done". Runtime status is re-derived by the §A.5 QEMU suite.
+
+### Shipped and proven
+
+- **P1 is a real, registered control region.** `dcl_p1_init()`
+  (`src/vmsdcl/dcl_cmd_process.c`) lays a page-aligned P1 control block at DCL
+  startup, stores a process-permanent marker in its critical page, and registers
+  `[base,limit)` via `vms_kif_p1_map()` — the call that had sat **UNWIRED** since
+  increment (ii). `$GETJPI` now reports this process's P1 extent; the caller census
+  proves the wiring (`vms_kif_p1_map`'s `OVMX-UNWIRED` declaration is retired).
+- **The critical-P1 protection now guards DCL's own P1.** `dcl_activate_image()`
+  hands `dcl_p1_critical_range()` (the real P1 critical page) to `imgact_activate()`
+  instead of `NULL`, so §A.2.3(b)'s `mprotect` protects a live DCL datum while an
+  in-process image runs.
+- **THE PAYOFF, proven against real `/dev/vms`** (`tests/qemu/test_syssvc_imgact_inproc.c`,
+  subject `testimg_inproc.c` mode 2): a value the in-process image stores into a
+  writable cell DCL owns is **visible to DCL after the image runs down, at the same
+  VMS PID and the same Linux PID** — the exact thing Option B could never do (its
+  forked child's write landed in a separate, dead address space; line 149). This is
+  the mechanism behind a process-permanent `DEFINE` flowing back to DCL: one address
+  space, one process. Same-PID (Linux and VMS), P0-torn-down-at-rundown and the
+  `mprotect` enforcement (a User-mode image's wild write to protected P1 faults →
+  `SS$_ACCVIO`, DCL survives) are all asserted in the same negctl-anchored suite
+  (`imgact-p1-not-protected`).
+
+### The swapcontext tension — decision recorded (design §A.6.4)
+
+Increment (iv) entered the image with a **direct call** on DCL's own stack because
+`swapcontext`/`makecontext` (the design's preferred separate-P0-User-stack return) is
+**not** part of the DECC$SHR universal set the VMS-native `DCL.EXE` links against, and
+the fork replacement must link everywhere DCL does (musl-static / bootable / native-link).
+
+**Decision: option (b).** The separate User-mode P0 stack and the eventual
+Ctrl-Y/`CONTINUE` re-entry will be built with **already-exported primitives only** —
+`setjmp`/`longjmp` (both DECC$SHR universals) plus a small per-arch **manual
+User-mode stack switch** in the P0 window — **not** by adding the `ucontext` family to
+DECC$SHR. Rationale: DECC$SHR is the C-RTL universal surface; the `ucontext` family is
+not part of the OVMX C-RTL the self-hosting `DCL.EXE` binds to, so exporting it would be
+a C-RTL expansion done to serve the activator rather than the RTL — the wrong reason to
+grow the frozen vector (`docs/design-link-native-toolchain.md`, symbol-vector
+positional freeze). `setjmp`/`longjmp` + a manual stack switch keep the fork replacement
+linkable in every context and match VMS's separate per-mode stacks. **True Ctrl-Y/
+`CONTINUE` *resume* additionally needs the image's full register context saved at the
+interrupt point** (which `setjmp` cannot capture for later re-entry from a different call
+chain); that is done by saving/restoring the interrupted register set with a per-arch asm
+trampoline — the concrete follow-on this decision commits option (b) to.
+
+### The flagged REMAINDER (fork fallback retained — no regression)
+
+The in-process path still takes only **OVMX-marker / no-PT_INTERP / relative-reloc-only**
+images (increment iv's class); every REAL image — one with a `PT_INTERP`, symbolic
+imports, or the SysV auxv entry ABI — still returns `SS$_UNSUPPORTED` and
+`dcl_activate_image()` **forks** it (design §A.6.6). Not yet done:
+
+1. **The full real-image loader as an in-process library.** Re-homing `src/imgact/imgact.c`
+   (a 55 KB freestanding, `-nostdlib`, self-relocating static-PIE with its own libc/
+   syscall layer) into a library DCL calls in-process: `PT_INTERP` handling, the
+   `.vms$sv`/`.vms$imp` **symbol-vector import binding to an already-resident
+   `LIBVMS$SHR`** (so the image and DCL share ONE libvms — the prerequisite for a real
+   `$CRELNM`/`DEFINE/PROCESS` by the image to flow back), `PT_TLS`, and the shareable
+   dependency graph mapped once. This is the bulk of the increment and is deferred as a
+   unit — attempting it hastily risks a silent LARP (an image that *looks* activated but
+   does not truly share DCL's libvms state), which the authenticity invariants forbid.
+2. **The flip of REAL images to in-process** in `dcl_activate_image()`, gated on (1)
+   being QEMU-proven per image class. Until then the fork stays for those classes.
+3. **True Ctrl-Y / `CONTINUE`** for the in-process image (the option (b) asm follow-on above).
+4. **Executive-mediated flows-back** ($SETEF / $CRELNM into LNM$PROCESS *by a real image*),
+   which arrives with (1): a real image linked against the resident `LIBVMS$SHR` can call
+   the services properly. This increment proved the address-space flows-back mechanism with
+   a freestanding image's direct memory store; the service-level proof rides on (1).
+
+`SPAWN` / `RUN/DETACHED` / `$CREPRC` / `PIPE` stages are untouched — they create genuinely
+new VMS processes and always will (§A.3).
+
 ## Appendix — VMS documentation references
 
 | Topic | Public reference (Rule 8) |

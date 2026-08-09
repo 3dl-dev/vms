@@ -121,6 +121,28 @@ int ensure_queue_init(void);
 int dcl_exec_utility(const char *exe_name, const char *facility,
                      char *argv[], int argc);
 
+/* P1 control-region establishment (vms-68f.v, in-process image activation).
+ *
+ * DCL's process-permanent state lives in P1 (the control region), which
+ * survives every image activation and rundown -- unlike P0, the per-image
+ * program region imgact_activate() maps and tears down. dcl_p1_init() lays a
+ * real page-aligned P1 control block at process startup and registers its
+ * extent with the executive (vms_kif_p1_map), so $GETJPI reports this
+ * process's P1 base/limit -- the wiring the header of vms_kif_p1_map (vms-6f1)
+ * had been left waiting for since increment (ii). Idempotent and best-effort:
+ * with no /dev/vms the extent is simply not registered (INV-6: no per-process
+ * fake), and DCL runs unchanged. Called once from dcl_main().
+ * dcl_cmd_process.c owns the block so dcl_activate_image() can hand its
+ * protected sub-range straight to imgact_activate(). */
+void dcl_p1_init(void);
+
+/* Report DCL's CRITICAL-P1 range -- the crown-jewel sub-range of the P1
+ * control block that imgact_activate() mprotect()s read-only while an image
+ * runs in User mode (design §A.2.3(b)). Fills *base/*limit and returns 1 when
+ * a P1 block was established, 0 otherwise (so dcl_activate_image passes NULL,
+ * exactly as before dcl_p1_init ran). */
+int dcl_p1_critical_range(uint64_t *base, uint64_t *limit);
+
 /* Image activation, shared by RUN and foreign-command dispatch
  * (dcl_cmd_process.c) */
 int dcl_activate_image(struct dcl_context *ctx, const char *display_name,

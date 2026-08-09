@@ -474,6 +474,14 @@ int main(int argc, char *argv[])
     dcl_context_init(&dcl_ctx);
     setup_session(&dcl_ctx);
 
+    /* Establish and register DCL's P1 control region (vms-68f.v). This lays
+     * the process-permanent control block whose extent $GETJPI reports and
+     * whose critical page imgact_activate() protects while an in-process
+     * image runs -- the wiring vms_kif_p1_map had been waiting for since
+     * increment (ii). Best-effort: absent /dev/vms it registers nothing and
+     * DCL runs unchanged (INV-6, no per-process fake). */
+    dcl_p1_init();
+
     /* Set VEOF to Ctrl+Z (VMS convention) */
     setup_vms_eof();
 

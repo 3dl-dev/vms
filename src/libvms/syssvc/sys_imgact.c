@@ -58,6 +58,8 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "imgact_activate.h"
+#include "ovmx_image.h"       /* .vms$imp / .vms$rel section names + structs */
+#include "imgact_prodreg.h"   /* imgact_bind_imports_resident() (vms-db2)     */
 
 #if defined(__x86_64__)
 #  define IMGACT_EM       EM_X86_64
@@ -185,6 +187,70 @@ static int imgact_relocate(unsigned long base, const Elf64_Phdr *ph, int n)
     return 0;
 }
 
+/*
+ * Locate an OVMX symbol-vector section (.vms$imp / .vms$rel) by name via the
+ * image's ELF section-header table, returning its image-relative vaddr + size.
+ * Returns 1 on hit (fills addr and size), 0 otherwise. Re-homed from imgact.c's
+ * ovmx_find_section but over lseek/read (DECC$SHR universals) instead of
+ * imgact's freestanding sys_pread. Bounded section/strtab counts keep it
+ * allocation-free. (vms-db2)
+ */
+static int imgact_find_section(int fd, const char *want,
+                               unsigned long *addr, unsigned long *size)
+{
+    Elf64_Ehdr eh;
+    Elf64_Shdr sh[64];
+    static char strtab[4096];   /* file-scope-sized; activation is serial */
+    unsigned long ssz, stsz;
+
+    if (imgact_readat(fd, &eh, sizeof eh, 0) != 0)
+        return 0;
+    if (eh.e_shnum == 0 || eh.e_shnum > 64 || eh.e_shentsize != sizeof(Elf64_Shdr) ||
+        eh.e_shstrndx >= eh.e_shnum)
+        return 0;
+    ssz = (unsigned long)eh.e_shnum * sizeof(Elf64_Shdr);
+    if (imgact_readat(fd, sh, ssz, (long)eh.e_shoff) != 0)
+        return 0;
+    stsz = sh[eh.e_shstrndx].sh_size;
+    if (stsz == 0 || stsz > sizeof strtab)
+        return 0;
+    if (imgact_readat(fd, strtab, stsz, (long)sh[eh.e_shstrndx].sh_offset) != 0)
+        return 0;
+    for (int i = 0; i < eh.e_shnum; i++) {
+        if (sh[i].sh_name >= stsz)
+            continue;
+        const char *nm = strtab + sh[i].sh_name;
+        unsigned long j = 0;
+        while (want[j] && nm[j] == want[j])
+            j++;
+        if (want[j] == '\0' && nm[j] == '\0') {
+            *addr = sh[i].sh_addr;
+            *size = sh[i].sh_size;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Apply an OVMX .vms$rel self-relative fixup table: add the load bias to every
+ * image-relative 8-byte slot LINK.EXE recorded (the VMS-native equivalent of
+ * R_*_RELATIVE without a PT_DYNAMIC). No-op when the image has no .vms$rel. The
+ * target pages must be writable (they are: activation reprotects to final perms
+ * AFTER this). (vms-db2, re-homed from imgact.c apply_vms_rel.)
+ */
+static void imgact_apply_vms_rel(unsigned long base,
+                                 unsigned long rel_addr, unsigned long rel_size)
+{
+    const struct ovmx_rel_header *rh =
+        (const struct ovmx_rel_header *)(base + rel_addr);
+    if (rel_size < sizeof *rh || rh->magic != OVMX_REL_MAGIC)
+        return;
+    const uint64_t *off = (const uint64_t *)((const char *)rh + sizeof *rh);
+    for (uint32_t k = 0; k < rh->count; k++)
+        *(uint64_t *)(uintptr_t)(base + off[k]) += base;
+}
+
 uint32_t imgact_activate(const char *path, long a0, long a1,
                          const struct imgact_critp1 *critp1,
                          int *image_rc)
@@ -193,6 +259,10 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
     Elf64_Phdr ph[IMGACT_MAXPHDR];
     int fd, i;
     unsigned long base, span_hi = 0;
+    /* OVMX symbol-vector cross-image import + self-relative fixup sections
+     * (vms-db2). Located from the file while fd is open; applied after mapping. */
+    unsigned long imp_addr = 0, imp_size = 0, rel_addr = 0, rel_size = 0;
+    int have_imp = 0, have_rel = 0;
     /* volatile: read/used after a possible longjmp out of the image (a fault),
      * so their values must not be left indeterminate by the non-local jump. */
     void * volatile win = MAP_FAILED;
@@ -230,6 +300,13 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
             close(fd);
             return SS$_UNSUPPORTED;
         }
+        /* PT_TLS deferred (vms-db2): sharing the resident DECC$SHR's musl TLS
+         * with an in-process image is §A.8-remainder item 4, not this sub-step.
+         * A TLS-bearing image forks until then -- no half-done TLS. */
+        if (ph[i].p_type == PT_TLS) {
+            close(fd);
+            return SS$_UNSUPPORTED;
+        }
         if (ph[i].p_type == PT_LOAD &&
             ph[i].p_vaddr + ph[i].p_memsz > span_hi)
             span_hi = ph[i].p_vaddr + ph[i].p_memsz;
@@ -238,6 +315,13 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
         close(fd);
         return SS$_UNSUPPORTED;
     }
+
+    /* Locate the OVMX cross-image import table (.vms$imp) and self-relative
+     * fixup table (.vms$rel), if any, while the file is still open. A zero-
+     * import image (e.g. the freestanding TESTIMG.EXE) has neither, so this is
+     * a no-op and its activation path is byte-for-byte what increment iv did. */
+    have_imp = imgact_find_section(fd, OVMX_IMP_SECTION, &imp_addr, &imp_size);
+    have_rel = imgact_find_section(fd, OVMX_REL_SECTION, &rel_addr, &rel_size);
 
     /* ---- 2. Reserve the P0 window and map the image into it ----------- */
     win = mmap(NULL, IMGACT_P0_WINDOW, PROT_NONE,
@@ -275,6 +359,26 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
         status = SS$_UNSUPPORTED;
         goto out_unmap;
     }
+
+    /* OVMX symbol-vector cross-image binding (vms-db2). Segments are still RW
+     * here (reprotect is below), so both the .vms$rel self-relative slots and
+     * the .vms$imp GOT cells are writable. Apply .vms$rel first (bias the
+     * image's own self-relative slots), THEN bind imports so a .vms$sv value a
+     * producer exports has already been biased before a consumer reads it --
+     * the same order imgact.c uses. Each import binds to an ALREADY-RESIDENT
+     * producer (imgact_prodreg); an image naming a producer that is not
+     * resident cannot be activated in-process and returns SS$_UNSUPPORTED, so
+     * dcl_activate_image forks it (no LARP: never a private producer copy). */
+    if (have_rel)
+        imgact_apply_vms_rel(base, rel_addr, rel_size);
+    if (have_imp) {
+        status = imgact_bind_imports_resident(
+            (uint64_t)base,
+            (const struct ovmx_imp_header *)(base + imp_addr));
+        if (!(status & 1))
+            goto out_unmap;   /* unbound import -> caller keeps the fork path */
+    }
+
     /* Reprotect each segment to its final PT_LOAD permissions. */
     for (i = 0; i < eh.e_phnum; i++) {
         if (ph[i].p_type != PT_LOAD)

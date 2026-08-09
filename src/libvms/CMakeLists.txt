@@ -41,12 +41,17 @@ add_library(vms ${OVMX_LIB_TYPE}
     syssvc/sys_operator.c
     syssvc/sys_condition.c
     syssvc/sys_imgact.c
+    syssvc/imgact_prodreg.c
     rtl/sha256.c
     rtl/sysuaf.c
     rtl/rightslist.c
     rtl/str_util.c
 )
 target_include_directories(vms PUBLIC include ${VMS_RMS_INCLUDE_DIR} ${VMS_FS_INCLUDE_DIR} ${VMS_LNM_INCLUDE_DIR} ${VMS_PROCESS_INCLUDE_DIR})
+# sys_imgact.c + imgact_prodreg.c consume the OVMX symbol-vector image format
+# (ovmx_image.h / ovmx_symvec.h) -- the same single-source-of-truth headers
+# LINK.EXE and IMGACT.EXE share (vms-db2). PRIVATE: only these TUs need them.
+target_include_directories(vms PRIVATE ${CMAKE_SOURCE_DIR}/src/vmslink/include)
 # vmssys provides vms_kif_* (the /dev/vms ioctl wrappers used by sys_lock.c
 # to reach the kernel lock manager).
 target_link_libraries(vms PUBLIC vmsprocess vmsfs vmssys pthread m)

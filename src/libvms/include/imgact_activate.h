@@ -16,18 +16,22 @@
  * replacement must avoid it to link into the VMS-native DCL.EXE. See
  * src/libvms/syssvc/sys_imgact.c's header.)
  *
- * SCOPE OF INCREMENT (iv) -- a PROVEN PARTIAL, honest about its ceiling.
+ * SCOPE -- a PROVEN PARTIAL, honest about its ceiling.
  * imgact_activate() takes the in-process path ONLY for an image that carries
- * the OVMX in-process marker note (IMGACT_NOTE_*), has no PT_INTERP, and has
- * only R_*_RELATIVE dynamic relocations -- i.e. a freestanding, position-
- * independent OVMX image entered through the (a0,a1) function-call ABI below.
- * EVERY other image -- a real DCL utility with a PT_INTERP, a dynamically
- * bound image, anything expecting the SysV auxv/stack entry ABI -- returns
- * SS$_UNSUPPORTED so the caller keeps the fork model (design §A.6.6: B stays
- * the RUN fallback until A's loader and images exist; the full loader,
- * shareable-image resolution, TLS, and the dcl flip for real images are
- * increment (v)+). With no /dev/vms it returns SS$_NOSUCHDEV and refuses to
- * run the image at all (INV-6: no per-process fake of an executive facility).
+ * the OVMX in-process marker note (IMGACT_NOTE_*), has no PT_INTERP, no PT_TLS,
+ * and only R_*_RELATIVE dynamic relocations -- i.e. a position-independent OVMX
+ * image entered through the (a0,a1) function-call ABI below. Such an image MAY
+ * now import universals from an already-resident shareable through a .vms$imp
+ * table: those imports are bound to the RESIDENT producer via the registry in
+ * imgact_prodreg.h (vms-db2), never a private copy. An import naming a producer
+ * that is NOT resident, or any image with a PT_INTERP / PT_TLS / the SysV auxv
+ * entry ABI (a real DCL utility, a LINK.EXE _start image), returns
+ * SS$_UNSUPPORTED so the caller keeps the fork model (design §A.6.6 / §A.8
+ * remainder: B stays the RUN fallback until IMGACT publishes the resident
+ * registry at DCL startup and the auxv-entry/exit + shared-TLS pieces land, at
+ * which point real images flip in-process). With no /dev/vms it returns
+ * SS$_NOSUCHDEV and refuses to run the image at all (INV-6: no per-process fake
+ * of an executive facility).
  *
  * THE ENTRY ABI (OVMX design choice, Rule 8 -- no VMS byte format claimed):
  * an eligible image is entered as `long entry(long a0, long a1)`; a0/a1 are

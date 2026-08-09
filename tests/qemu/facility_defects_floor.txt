@@ -141,4 +141,11 @@
 # entry, vms-68f.iii, had pushed the true count to 73 without the floor being
 # raised; 74 is the re-derived `echo $DEFECTS | wc -w`.) See its own entry in
 # facility_defects.sh for what it covers and why.
-74
+# Raised to 75 by vms-db2's consumer-import-not-bound-to-resident -- the
+# §A.8-remainder import-binding-to-resident-shareable sub-step: a RUN'd image's
+# .vms$imp imports must bind to the ALREADY-RESIDENT LIBVMS$SHR/DECC$SHR the
+# process holds, not a private copy (which would share nothing). Targets
+# libvms/syssvc/imgact_prodreg.c (imgact_bind_imports_resident's GOT-cell store)
+# and anchors the new test_syssvc_imgact_bind suite's genuine-sharing property,
+# proven in isolation without /dev/vms. See its own entry in facility_defects.sh.
+75

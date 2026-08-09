@@ -49,6 +49,11 @@ function(qemu_syssvc_add_test name source)
         ${VMS_INCLUDE_DIR}
         ${VMS_RMS_INCLUDE_DIR}
         ${CMAKE_SOURCE_DIR}/src/libvmssys
+        # ovmx_image.h / ovmx_symvec.h -- the OVMX symbol-vector image format the
+        # in-process resident-import-binding test constructs against (vms-db2).
+        # imgact_prodreg.h (a libvms public header) includes ovmx_image.h, so any
+        # syssvc test touching the resident registry needs this on its path.
+        ${CMAKE_SOURCE_DIR}/src/vmslink/include
     )
     target_link_libraries(${name} PRIVATE
         vms

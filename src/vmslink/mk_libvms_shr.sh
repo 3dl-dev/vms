@@ -82,7 +82,8 @@ CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mn
 # vmsfs/vmsrms public headers (prototypes referenced across the RTL/syssvc).
 INCS="-I$SRC/include -I$HERE/../libvmssys \
 -I$HERE/../vmsprocess/include -I$HERE/../vmslnm/include \
--I$HERE/../vmsfs/include -I$HERE/../vmsrms/include"
+-I$HERE/../vmsfs/include -I$HERE/../vmsrms/include \
+-I$HERE/include"   # ovmx_image.h/ovmx_symvec.h for sys_imgact + imgact_prodreg (vms-db2)
 
 echo "mk_libvms_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH"
 echo "mk_libvms_shr: src=$SRC"
@@ -105,7 +106,7 @@ syssvc/sys_assign syssvc/sys_mailbox syssvc/sys_qio syssvc/sys_uring syssvc/sys_
 syssvc/sys_time syssvc/sys_process syssvc/sys_memory syssvc/sys_logical syssvc/sys_ast \
 syssvc/sys_lock syssvc/sys_misc syssvc/sys_security syssvc/sys_fao syssvc/sys_msg \
 syssvc/sys_float syssvc/sys_uai syssvc/sys_device syssvc/sys_operator syssvc/sys_condition \
-syssvc/sys_imgact \
+syssvc/sys_imgact syssvc/imgact_prodreg \
 rtl/ovmx_accounting rtl/lib_vm rtl/lib_output rtl/lib_signal rtl/lib_datetime rtl/lib_misc \
 rtl/lib_dyndesc rtl/lib_logical rtl/lib_symbol rtl/lib_string_ops rtl/lib_bitops \
 rtl/lib_eventflags rtl/str_routines rtl/mth_routines rtl/ots_routines rtl/sha256 \

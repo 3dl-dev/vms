@@ -144,12 +144,36 @@ target_link_options(testimg_inproc PRIVATE
 set_target_properties(testimg_inproc PROPERTIES
     PREFIX "" OUTPUT_NAME "TESTIMG" SUFFIX ".EXE")
 
+# TESTREAL.EXE -- the REAL-image-class subject test_syssvc_imgact_realimg.c
+# activates in-process (vms-db2, the flip). Same freestanding static-PIE build
+# as TESTIMG, but entered at real_start through the SysV auxv _start ABI (not the
+# (a0,a1) img_entry ABI) and carrying a .vms$imp import table its GOT cells bind
+# to the resident producer. Entry symbol is real_start; the link-time-constant
+# patch_off (cell - __ehdr_start) means it still builds with zero dynamic relocs.
+add_executable(testreal_inproc testreal_inproc.c)
+target_include_directories(testreal_inproc PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+    ${CMAKE_SOURCE_DIR}/src/vmslink/include)
+target_compile_options(testreal_inproc PRIVATE
+    -std=gnu11 -O2 -Wall -Wextra
+    -fPIC -fno-plt -ffreestanding -fno-stack-protector -fno-builtin
+    -fno-asynchronous-unwind-tables -fvisibility=hidden)
+target_link_options(testreal_inproc PRIVATE
+    -nostdlib -nostartfiles -shared
+    -Wl,-e,real_start -Wl,-z,norelro -Wl,--build-id=none
+    # Pin .vms$got so testreal_inproc.c's .vms$imp patch_off literals (0x200000+)
+    # name the GOT cells' image-relative vaddrs exactly -- a hand-assembled
+    # object cannot compute those as assembly-time constants.
+    -Wl,--section-start=.vms$got=0x200000)
+set_target_properties(testreal_inproc PROPERTIES
+    PREFIX "" OUTPUT_NAME "TESTREAL" SUFFIX ".EXE")
+
 # Single build target covering every registered test_syssvc_* binary, so
 # callers (tests/qemu/Dockerfile) never need to name a specific test. It also
 # pulls in TESTIMG.EXE so a `--target qemu_syssvc_tests` build stages the
 # subject alongside its suite.
 get_property(_qemu_syssvc_test_targets GLOBAL PROPERTY QEMU_SYSSVC_TEST_TARGETS)
-add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg_inproc)
+add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg_inproc testreal_inproc)
 
 # ---------------------------------------------------------------------------
 # TORN OUT AS GATES (vms-49f), per the CLAUDE.md Rule 9 amendment.

@@ -555,7 +555,7 @@ fake; fail honestly without `/dev/vms`). Dependency chain (i)←(ii)←(iii)←(
   PID. Anchored on the `facility_defects` red-floor / green-property convention; never
   a census/string gate. **This increment is the definition of done for vms-68f.**
 
-## A.8 Increment (v) landed state — the same-PID payoff proven, real-image loader flagged (vms-db2)
+## A.8 Increment (v)+(vi) landed state — the same-PID payoff, then the REAL-image FLIP proven (vms-db2)
 
 This records what increment (v) actually shipped, re-derivable by running the suite —
 not a frozen "A is done". Runtime status is re-derived by the §A.5 QEMU suite.
@@ -666,18 +666,45 @@ imports, or the SysV auxv entry ABI — still returns `SS$_UNSUPPORTED` and
    (a real `LINK.EXE` image importing resident producers, activated in-process) rides on the
    native-link `DCL.EXE` runtime, which is blocked on the quarantined toolchain (`vms-0b8`).
 
-   **STILL DEFERRED in item 1** (why real images still fork — no flip): (a) **entering a real
-   `LINK.EXE` image** through its SysV auxv/stack `_start` ABI (not the `(a0,a1)` marker ABI)
-   and **intercepting its `SYS$EXIT`** to return to DCL instead of terminating the process;
-   (b) **`PT_TLS`** — sharing the resident `DECC$SHR`'s musl TLS with the in-process image
-   (a TLS-bearing image is refused `SS$_UNSUPPORTED` today).
-2. **The flip of REAL images to in-process** in `dcl_activate_image()`, gated on (1)
-   being QEMU-proven per image class. Until then the fork stays for those classes.
-3. **True Ctrl-Y / `CONTINUE`** for the in-process image (the option (a) asm follow-on above).
-4. **Executive-mediated flows-back** ($SETEF / $CRELNM into LNM$PROCESS *by a real image*),
-   which arrives with (1): a real image linked against the resident `LIBVMS$SHR` can call
-   the services properly. This increment proved the address-space flows-back mechanism with
-   a freestanding image's direct memory store; the service-level proof rides on (1).
+   **LANDED (vms-db2, gap 2 + THE FLIP — a real-image class runs in-process):** the two gap-2
+   pieces and the flip itself are now proven against a real `/dev/vms`
+   (`tests/qemu/test_syssvc_imgact_realimg.c`, subject `testreal_inproc.c`, 14 assertions):
+   - **(a) SysV auxv `_start` entry + SYS$EXIT interception.** `imgact_activate()` now reads the
+     marker note's ABI descriptor (`IMGACT_ABI_AUXV`, `imgact_activate.h`); for an auxv image it
+     builds the initial process stack (`imgact_build_auxv_stack`: argc/argv/envp/auxv per the
+     System V ABI) on a **separate User-mode stack in the P0 window** and enters `_start` through a
+     per-arch manual stack switch (`imgact_enter_auxv`, inline asm — option (b), NO ucontext). The
+     image ends by calling the resident **`imgact_image_exit`** (SYS$EXIT), which — while an
+     in-process activation is open (`g_inproc_active`) — `longjmp`s back to `imgact_activate` and
+     returns to DCL **in the same process** instead of `exit_group`-ing (which would kill DCL). The
+     image reaches that routine only by binding its `.vms$imp` imports to the **resident** producer,
+     so the SAME `imgact_image_exit`/`vms_kif_setef` DCL holds is what runs.
+   - **(b) TLS for the no-own-PT_TLS class.** Such an image is entered on DCL's **unchanged thread
+     pointer**, so its resident-RTL calls reach DCL's resident TLS, not a private copy — proven by a
+     resident `__thread` datum the image bumps through an imported call and DCL reads back. A
+     PT_TLS-*bearing* image (DTV append) is still refused `SS$_UNSUPPORTED` (deferred, below).
+   - **THE FLIP.** `dcl_activate_image()` runs this class — an OVMX image entered via the auxv ABI
+     whose imports all bind to resident producers — **in-process (no `fork()`/`execve()`)**. Proven:
+     same VMS **and** Linux PID across the RUN; SYS$EXIT returns to DCL with the image's exit code; a
+     process-permanent **event flag the in-process image `$SETEF`'d flows back** to DCL after rundown
+     (executive-mediated — Option B's per-child flags never could, line 144); back in Supervisor with
+     P0 torn down. Negctl-anchored `realimg-auxv-argc-wrong` (the auxv stack is load-bearing) plus the
+     in-test control that an **unpublished** producer refuses the flip (`SS$_UNSUPPORTED` → fork), so
+     the flip's success depends on genuine resident binding — not a LARP.
+
+   **STILL DEFERRED in item 1** (why the *full external* real image still forks): a genuinely
+   external `LINK.EXE` image carrying a **`PT_INTERP`** (it names IMGACT.EXE as its loader), an
+   **own `PT_TLS`**, a **symbolic (PLT) reloc**, or a `.vms$imp` import naming a **non-resident**
+   producer is still refused `SS$_UNSUPPORTED` and **forks** — re-homing the 55 KB freestanding
+   `src/imgact/imgact.c` loader body (PT_INTERP handling, PT_TLS/DTV append, the full shareable
+   dependency graph) as an in-process library is the remaining unit, deferred to avoid a hasty LARP.
+2. **The flip of the remaining REAL-image classes** (PT_INTERP / own-PT_TLS / non-resident-import)
+   in `dcl_activate_image()`, gated on the loader re-homing above being QEMU-proven per class.
+3. **True Ctrl-Y / `CONTINUE`** for the in-process image (the option (b) asm follow-on above).
+4. **Service-level `$CRELNM`/`DEFINE/PROCESS` flows-back by a real image.** This increment proved
+   executive-mediated flows-back with `$SETEF` (a process-permanent event flag the in-process image
+   set, read back by DCL); a `DEFINE/PROCESS` into LNM$PROCESS by a real image rides on LNM$PROCESS
+   residency and the same resident-`LIBVMS$SHR` binding this increment established.
 
 `SPAWN` / `RUN/DETACHED` / `$CREPRC` / `PIPE` stages are untouched — they create genuinely
 new VMS processes and always will (§A.3).

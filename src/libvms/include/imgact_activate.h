@@ -51,6 +51,20 @@
 #define IMGACT_NOTE_TYPE  0x4f564d58u   /* 'O','V','M','X' */
 
 /*
+ * The note's 4-byte descriptor is a flag word declaring the image's entry ABI
+ * (vms-db2, §A.8 remainder gap 2a). Bit 0 is the in-process marker itself (set
+ * on every in-process-eligible image); bit 1 (IMGACT_ABI_AUXV) declares the
+ * image is entered through the SysV auxv `_start` ABI -- a REAL image's entry:
+ * the activator constructs the initial process stack (argc/argv/envp/auxv) and
+ * jumps to `_start`, which reads it exactly as the kernel-launched case. An
+ * image WITHOUT bit 1 uses increment iv's (a0,a1) function-call ABI (the marker
+ * TESTIMG.EXE). imgact_activate() reads this to pick the entry path, so wiring
+ * the auxv path in cannot change how an existing (a0,a1) marker image activates.
+ */
+#define IMGACT_ABI_MARKER 0x1u   /* desc bit 0: in-process-eligible (always set) */
+#define IMGACT_ABI_AUXV   0x2u   /* desc bit 1: entered via SysV auxv _start     */
+
+/*
  * A page-aligned range in the CALLER's own address space (DCL's crown-jewel
  * P1 structures, design §A.2.3(b)) to mprotect() read-only while the image
  * runs in User mode, restored to read/write at rundown. Optional: pass NULL
@@ -76,5 +90,28 @@ struct imgact_critp1 {
 uint32_t imgact_activate(const char *path, long a0, long a1,
                          const struct imgact_critp1 *critp1,
                          int *image_rc);
+
+/*
+ * SYS$EXIT for an IN-PROCESS image (vms-db2, §A.8 remainder gap 2b -- "intercept
+ * SYS$EXIT to return to DCL instead of terminating the process").
+ *
+ * On OpenVMS a real image ends by calling SYS$EXIT, which runs image rundown and
+ * returns control to the CLI in the SAME process. OVMX's native crt0 ends an
+ * image with a raw `exit_group` syscall (src/libvmssys/arch/<arch>/crt0.S) --
+ * fatal
+ * for an in-process image, because it would terminate DCL too. A real image
+ * activated in-process therefore calls THIS routine (a LIBVMS$SHR universal it
+ * imports from the resident shareable, exactly as it imports every other
+ * service) instead: when an in-process activation is open, it does NOT exit the
+ * process -- it unwinds back to imgact_activate() (via the setjmp/longjmp path,
+ * design §A.6.4 option (b)), which runs the image down and returns to DCL. When
+ * no in-process activation is open (a forked/normal image called it), it exits
+ * the process with `code`, so the routine is safe in both worlds.
+ *
+ * This is the faithful SYS$EXIT->return-to-DCL crux of the real-image flip: the
+ * image reaches it through resident-producer import binding (imgact_prodreg.h),
+ * so the SAME resident routine DCL's process holds is what unwinds the image.
+ */
+void imgact_image_exit(int code);
 
 #endif /* _IMGACT_ACTIVATE_H */

@@ -165,4 +165,12 @@
 # proven in isolation without /dev/vms. No image class is flipped -- real images
 # still fork (the IMGACT-side glue's end-to-end proof rides on the native-link
 # runtime, vms-0b8). See its own entry in facility_defects.sh.
-76
+# Raised to 77 by vms-db2's realimg-auxv-argc-wrong -- the §A.8-remainder gap 2
+# + the FLIP: a REAL image (entered through the SysV auxv _start ABI, its
+# .vms$imp imports bound to the resident producer, ending with the resident
+# SYS$EXIT that returns to DCL) now runs IN-PROCESS, same PID, no fork. Targets
+# libvms/syssvc/sys_imgact.c (imgact_build_auxv_stack's argc word) and anchors
+# the new test_syssvc_imgact_realimg suite -- proven against a real /dev/vms
+# (same VMS+Linux PID, SYS$EXIT returns, an event flag the image set flows back,
+# resident TLS shared). See its own entry in facility_defects.sh.
+77

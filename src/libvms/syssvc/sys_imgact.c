@@ -76,6 +76,10 @@
  * MAP_FIXED, so "P0 deleted at rundown" is genuinely enforced at the MMU
  * (design §A.2.1). 64 MiB covers any freestanding OVMX image. */
 #define IMGACT_P0_WINDOW   (64UL * 1024 * 1024)
+/* User-mode image stack for the auxv ABI, at the top of the P0 window (freed
+ * with the whole window at rundown). VMS gives an image a separate User stack;
+ * this is its P0-window analogue (design §A.6.4 option (b)). */
+#define IMGACT_IMG_STACK   (256UL * 1024)
 #define IMGACT_PGSZ        4096UL
 #define IMGACT_TRUNC(x)    ((x) & ~(IMGACT_PGSZ - 1))
 #define IMGACT_ROUND(x)    (((x) + IMGACT_PGSZ - 1) & ~(IMGACT_PGSZ - 1))
@@ -85,25 +89,144 @@ typedef long (*imgact_entryfn)(long, long);
 
 /*
  * Activation is not reentrant (VMS runs one image at a time per process), so
- * the fault-recovery jmp_buf is file-scope. A nested in-process activation is
- * out of scope for this increment; the entry gate refuses a second
- * ENTER_IMAGE while one is open.
+ * the recovery state is file-scope. A nested in-process activation is out of
+ * scope for this increment; the entry gate refuses a second ENTER_IMAGE while
+ * one is open.
+ *
+ * g_img_jb is the single recovery point set by setjmp() in imgact_activate()
+ * before the image is entered, and reached two ways (longjmp value distinguishes
+ * them): IMGACT_JB_FAULT from the SIGSEGV handler (a wild write; -> SS$_ACCVIO),
+ * IMGACT_JB_EXIT from imgact_image_exit() (the image called SYS$EXIT; a normal
+ * return to DCL, exit code in g_exit_code). g_inproc_active gates
+ * imgact_image_exit: only while an in-process image is running does SYS$EXIT
+ * unwind rather than terminate the process.
  */
-static jmp_buf        g_fault_jb;
+#define IMGACT_JB_FAULT 1
+#define IMGACT_JB_EXIT  2
+static jmp_buf               g_img_jb;
 static volatile sig_atomic_t g_faulted;
+static volatile sig_atomic_t g_inproc_active;
+static volatile int          g_exit_code;
 
 /*
  * SIGSEGV while the image runs (e.g. a wild write to a protected critical-P1
  * page) is converted to $EXIT(SS$_ACCVIO)+rundown: longjmp back onto DCL's
  * frame, abandoning the image. Design §A.6.3 (pragmatic first). The image runs
- * on the process's own stack (not sigaltstack) and the fault here is a data
- * write, so the stack is intact and the handler runs on it fine.
+ * on a separate P0-window stack (auxv ABI) or the process stack ((a0,a1) ABI);
+ * either way the fault here is a data write, so the handler's own frame is fine.
  */
 static void imgact_segv(int sig)
 {
     (void)sig;
     g_faulted = 1;
-    longjmp(g_fault_jb, 1);
+    longjmp(g_img_jb, IMGACT_JB_FAULT);
+}
+
+/*
+ * SYS$EXIT for an in-process image (imgact_activate.h). See that header for the
+ * model. While an in-process activation is open this UNWINDS to imgact_activate
+ * (return to DCL, same process); otherwise it terminates the process, so a
+ * forked/normal image that reaches the resident copy still exits correctly.
+ */
+void imgact_image_exit(int code)
+{
+    if (g_inproc_active) {
+        g_exit_code = code;
+        longjmp(g_img_jb, IMGACT_JB_EXIT);
+    }
+    _exit(code);
+}
+
+/*
+ * Enter an image at its SysV `_start` with rsp pointing at a constructed initial
+ * process stack, on a separate User-mode stack in the P0 window (design §A.6.4
+ * option (b): a manual per-arch stack switch built from already-exported
+ * primitives, NOT the ucontext family). `entry` is the absolute _start address;
+ * `sp` the 16-byte-aligned top of the constructed stack (its first quadword is
+ * argc, the SysV ABI). This never returns through here: the image leaves only by
+ * calling SYS$EXIT (imgact_image_exit -> longjmp) or by faulting (SIGSEGV ->
+ * longjmp), both of which unwind to imgact_activate's setjmp, not to this frame.
+ * rdx=0 tells the crt there is no rtld_fini to register (exactly what the kernel
+ * hands a static image). Marked noreturn so the compiler keeps no live state
+ * across the switch.
+ */
+__attribute__((noreturn))
+static void imgact_enter_auxv(unsigned long entry, unsigned long sp)
+{
+#if defined(__x86_64__)
+    __asm__ volatile(
+        "mov %1, %%rsp\n\t"   /* switch to the constructed User-mode stack   */
+        "xor %%ebp, %%ebp\n\t"/* clear frame pointer (as the kernel does)    */
+        "xor %%edx, %%edx\n\t"/* rdx = 0: no rtld_fini                       */
+        "jmp *%0\n\t"         /* jump to the image's _start (no return addr) */
+        : : "r"(entry), "r"(sp) : "memory");
+#elif defined(__aarch64__)
+    __asm__ volatile(
+        "mov sp, %1\n\t"      /* switch to the constructed User-mode stack   */
+        "mov x29, xzr\n\t"    /* clear frame pointer                         */
+        "mov x0, xzr\n\t"     /* x0 = 0: no rtld_fini                        */
+        "br %0\n\t"           /* branch to the image's _start                */
+        : : "r"(entry), "r"(sp) : "memory");
+#else
+    (void)entry; (void)sp;
+#endif
+    __builtin_unreachable();
+}
+
+/*
+ * Build the SysV initial process stack the auxv ABI hands _start, at the top of
+ * a writable region [stk_lo, stk_hi) in the P0 window. Lays argc/argv/envp/auxv
+ * per the System V x86-64/AArch64 process-initialization ABI (public, Rule 8 --
+ * no VMS format claimed): one arg (the image name), no env, and the auxv entries
+ * a static-PIE crt reads (AT_PHDR/PHENT/PHNUM, AT_ENTRY, AT_PAGESZ, AT_RANDOM,
+ * AT_NULL). Returns the 16-byte-aligned rsp (points at argc), or 0 if it does
+ * not fit. `phdr_va` is the run-time address of the mapped program headers.
+ */
+static unsigned long imgact_build_auxv_stack(unsigned long stk_lo,
+                                             unsigned long stk_hi,
+                                             unsigned long entry,
+                                             unsigned long phdr_va,
+                                             unsigned long phent,
+                                             unsigned long phnum)
+{
+    /* String/AT_RANDOM area at the very top; then the aligned control block
+     * below it. All writes stay within [stk_lo, stk_hi). */
+    static const char argv0[] = "OVMX-IMAGE";
+    unsigned long top = stk_hi;
+
+    /* 16 random bytes for AT_RANDOM (crt stack-canary seed). */
+    top -= 16;
+    unsigned long rand_va = top;
+    for (int i = 0; i < 16; i++)
+        ((unsigned char *)rand_va)[i] = (unsigned char)(0x5A ^ i);
+
+    top -= sizeof(argv0);
+    unsigned long argv0_va = top;
+    memcpy((void *)argv0_va, argv0, sizeof(argv0));
+
+    /* Control block: argc, argv[0], NULL, envp NULL, then 6 auxv pairs + AT_NULL
+     * pair. 4 + 12 + 2 = 18 quadwords; round the base DOWN to 16-byte alignment
+     * so rsp (at argc) satisfies the ABI. */
+    unsigned long words = 4 + 12 + 2;   /* see below */
+    unsigned long sp = top - words * 8;
+    sp &= ~0xFUL;
+    if (sp < stk_lo)
+        return 0;
+
+    unsigned long *w = (unsigned long *)sp;
+    unsigned long k = 0;
+    w[k++] = 1;                 /* argc */
+    w[k++] = argv0_va;          /* argv[0] */
+    w[k++] = 0;                 /* argv terminator */
+    w[k++] = 0;                 /* envp terminator (no env) */
+    w[k++] = 6;   w[k++] = 4096;        /* AT_PAGESZ */
+    w[k++] = 3;   w[k++] = phdr_va;     /* AT_PHDR   */
+    w[k++] = 4;   w[k++] = phent;       /* AT_PHENT  */
+    w[k++] = 5;   w[k++] = phnum;       /* AT_PHNUM  */
+    w[k++] = 9;   w[k++] = entry;       /* AT_ENTRY  */
+    w[k++] = 25;  w[k++] = rand_va;     /* AT_RANDOM */
+    w[k++] = 0;   w[k++] = 0;           /* AT_NULL   */
+    return sp;
 }
 
 /* Read exactly n bytes at file offset off (pread is not a DECC$SHR universal;
@@ -123,8 +246,11 @@ static int imgact_readat(int fd, void *buf, unsigned long n, long off)
     return 0;
 }
 
-/* Scan PT_NOTE segments for the OVMX in-process marker. */
-static int imgact_has_marker(unsigned long base, const Elf64_Phdr *ph, int n)
+/* Scan PT_NOTE segments for the OVMX in-process marker, returning its 4-byte
+ * descriptor (the entry-ABI flag word, IMGACT_ABI_*) or -1 if no marker note is
+ * present. A descriptor shorter than 4 bytes reads as IMGACT_ABI_MARKER (the
+ * increment-iv (a0,a1) default) so an older marker image keeps its ABI. */
+static long imgact_marker_desc(unsigned long base, const Elf64_Phdr *ph, int n)
 {
     for (int i = 0; i < n; i++) {
         if (ph[i].p_type != PT_NOTE)
@@ -139,11 +265,13 @@ static int imgact_has_marker(unsigned long base, const Elf64_Phdr *ph, int n)
             unsigned char *desc = name + ((ns + 3u) & ~3u);
             if (ns == sizeof(IMGACT_NOTE_OWNER) && ty == IMGACT_NOTE_TYPE &&
                 memcmp(name, IMGACT_NOTE_OWNER, 4) == 0)
-                return 1;
+                return (ds >= 4 && desc + 4 <= end)
+                           ? (long)(*(uint32_t *)desc)
+                           : (long)IMGACT_ABI_MARKER;
             p = desc + ((ds + 3u) & ~3u);
         }
     }
-    return 0;
+    return -1;
 }
 
 /*
@@ -350,8 +478,11 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
     close(fd);
     fd = -1;
 
-    /* Positive in-process marker: nothing that lacks it takes this path. */
-    if (!imgact_has_marker(base, ph, eh.e_phnum)) {
+    /* Positive in-process marker: nothing that lacks it takes this path. Its
+     * descriptor selects the entry ABI -- IMGACT_ABI_AUXV (a real image entered
+     * through SysV _start) vs. the increment-iv (a0,a1) function-call ABI. */
+    long abi = imgact_marker_desc(base, ph, eh.e_phnum);
+    if (abi < 0) {
         status = SS$_UNSUPPORTED;
         goto out_unmap;
     }
@@ -413,7 +544,33 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
 
     {
         struct sigaction sa, old;
-        imgact_entryfn entry = (imgact_entryfn)(base + eh.e_entry);
+        unsigned long entry_va = base + eh.e_entry;
+        /* For the auxv ABI, build the User-mode stack up front (before the mode
+         * descent / setjmp) so a failure here is a clean refusal, not a mid-run
+         * abort. The stack lives at the top of the P0 window and is freed with
+         * the whole window at rundown. */
+        unsigned long sp = 0;
+        if (abi & IMGACT_ABI_AUXV) {
+            unsigned long stk_hi = base + IMGACT_P0_WINDOW;
+            unsigned long stk_lo = stk_hi - IMGACT_IMG_STACK;
+            /* Never let the image span and its User stack overlap. */
+            if (stk_lo < base + IMGACT_ROUND(span_hi)) {
+                status = SS$_UNSUPPORTED;
+                goto out_enter_fail;
+            }
+            if (mmap((void *)stk_lo, IMGACT_IMG_STACK, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED) {
+                status = SS$_INSFMEM;
+                goto out_enter_fail;
+            }
+            sp = imgact_build_auxv_stack(stk_lo, stk_hi, entry_va,
+                                         base + eh.e_phoff, eh.e_phentsize,
+                                         eh.e_phnum);
+            if (sp == 0) {
+                status = SS$_INSFMEM;
+                goto out_enter_fail;
+            }
+        }
 
         memset(&sa, 0, sizeof sa);
         sa.sa_handler = imgact_segv;
@@ -422,8 +579,22 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
         sigaction(SIGSEGV, &sa, &old);
 
         g_faulted = 0;
-        if (setjmp(g_fault_jb) == 0) {
-            image_ret = entry(a0, a1);       /* the image runs, same PID */
+        g_exit_code = 0;
+        g_inproc_active = 1;   /* SYS$EXIT now unwinds instead of terminating */
+        int jv = setjmp(g_img_jb);
+        if (jv == 0) {
+            if (abi & IMGACT_ABI_AUXV) {
+                /* Enter the real image at _start on its own P0 stack. It leaves
+                 * ONLY by calling SYS$EXIT (imgact_image_exit -> longjmp EXIT) or
+                 * by faulting (SIGSEGV -> longjmp FAULT); imgact_enter_auxv never
+                 * returns here. */
+                imgact_enter_auxv(entry_va, sp);
+            } else {
+                imgact_entryfn entry = (imgact_entryfn)entry_va;
+                image_ret = entry(a0, a1);   /* (a0,a1) ABI: returns normally */
+            }
+        } else if (jv == IMGACT_JB_EXIT) {
+            image_ret = g_exit_code;         /* SYS$EXIT returned to DCL */
         } else {
             /* Recovered from a fault. longjmp (not siglongjmp) left SIGSEGV
              * blocked in the process mask; unblock it explicitly. */
@@ -432,6 +603,7 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
             sigaddset(&unb, SIGSEGV);
             sigprocmask(SIG_UNBLOCK, &unb, NULL);
         }
+        g_inproc_active = 0;
 
         sigaction(SIGSEGV, &old, NULL);
     }
@@ -444,6 +616,16 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
     status = g_faulted ? SS$_ACCVIO : SS$_NORMAL;
     if (!g_faulted && image_rc)
         *image_rc = (int)image_ret;
+    goto out_p0;
+
+out_enter_fail:
+    /* Failed to prepare the User-mode image stack after descending to User mode:
+     * run the image down (restores Supervisor) and unprotect P1, preserving the
+     * failure `status` (do NOT overwrite it with the normal-run verdict). */
+    g_inproc_active = 0;
+    vms_kif_image_rundown(NULL, NULL);
+    if (critp1 && critp1->limit > critp1->base)
+        vms_kif_p1_protect(critp1->base, critp1->limit, 1);
 
 out_p0:
     {

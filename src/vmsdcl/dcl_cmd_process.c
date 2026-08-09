@@ -1165,14 +1165,19 @@ int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
      * foreign command / a DCL utility activates the image IN this process --
      * no new PID -- and image rundown returns here. This is the dispatch
      * point: imgact_activate() runs the image in-process when it is
-     * in-process-eligible (an OVMX image with the in-process marker note, no
-     * PT_INTERP, relative-only relocs, entered through the (a0,a1) ABI) and a
-     * real /dev/vms is present. It returns SS$_UNSUPPORTED for every other
-     * image -- a real DCL utility, a dynamically bound image, anything wanting
-     * the SysV auxv entry ABI -- and SS$_NOSUCHDEV with no executive, in which
-     * cases activation falls through to the fork()+execve() model below (B,
-     * design §A.6.6: the fork stays the fallback until A's loader and images
-     * land in increment v; SPAWN / RUN/DETACHED / PIPE never take this path).
+     * in-process-eligible and a real /dev/vms is present. TWO classes now take
+     * the in-process path (vms-db2, the real-image FLIP): increment iv's marker
+     * image entered through the (a0,a1) function ABI, AND a REAL image entered
+     * through the SysV auxv `_start` ABI whose .vms$imp universal-symbol imports
+     * all bind to the ALREADY-RESIDENT producer -- it ends by calling the
+     * resident SYS$EXIT (imgact_image_exit), which returns control HERE in the
+     * same process. It still returns SS$_UNSUPPORTED for an image with a
+     * PT_INTERP, an own PT_TLS, a symbolic (PLT) reloc, or an import naming a
+     * NON-resident producer -- a full external LINK.EXE image not yet flipped,
+     * deferred on vms-db2 -- and SS$_NOSUCHDEV with no executive, in which cases
+     * activation falls through to the fork()+execve() model below (design
+     * §A.6.6: the fork stays the fallback for those classes; SPAWN / RUN/DETACHED
+     * / PIPE never take this path -- they create genuinely new processes).
      * The eligibility decision is made from the ELF alone, before any
      * executive call, so the fork fallback for real images does not depend on
      * /dev/vms. DCL's REAL critical-P1 range (dcl_p1_init, above) is handed to

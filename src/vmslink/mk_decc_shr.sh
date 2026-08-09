@@ -73,6 +73,29 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 # different musl/libgcc build carrying the same dead subsystems) on either
 # architecture without edits here.
 #
+# SECOND, INDEPENDENT taint class filtered by the SAME function (vms-0b8, the
+# "Unix-leaky toolchain jobs" quarantine item; blocks vms-db2's in-process
+# activation): a glibc `_FORTIFY_SOURCE` artifact. Empirically found running
+# this recipe with a HOST (non-Alpine) toolchain's libgcc.a: Ubuntu/Debian
+# gcc packages are themselves BUILT with `_FORTIFY_SOURCE` hardening on, so
+# libgcc.a ships a member -- `_eprintf.o`, the ancient `__eprintf()` helper
+# for old-style `assert()` failure messages, dead code no OVMX source calls
+# -- whose OWN fprintf() call got rewritten to `__fprintf_chk` when THAT
+# member was compiled, decades ago, by the distro. Nothing in musl's libc.a
+# or the rest of libgcc.a defines `__fprintf_chk` (it is a glibc-only ABI
+# symbol; musl's headers never rewrite fprintf() in the first place -- an
+# Alpine-native (musl-target) gcc's own libgcc.a carries no such member, so
+# the CI jobs that run inside the Alpine container never hit this), so
+# whole-archiving an unfiltered host libgcc.a fails STRICT with "%LINK-F-
+# ERROR, unresolved external symbol '__fprintf_chk'" -- a real Unix/glibc
+# leak by the letter of vms-0b8, just entering through the host toolchain's
+# own prebuilt libgcc.a rather than through any OVMX-compiled object. Any
+# member with an unresolved `__*_chk` reference is exactly this class of
+# dead weight (DECC$SHR is a musl C-RTL; it can never legitimately need a
+# glibc fortify entry point), so it is seeded into the SAME tainted-member
+# set below and removed by the SAME fixed-point dead-code closure as the
+# TLS case -- no second closure implementation, no hardcoded object names.
+#
 # The direct TLS-tainted set is not the whole dead subsystem, though: gcc's
 # decimal-float library has non-TLS "glue" objects that call INTO it without
 # touching TLS themselves -- e.g. libgcc's _addsub_dd.o/_addsub_sd.o (the
@@ -118,7 +141,8 @@ filter_tls_members() {
     for o in "$dir"/*.o; do
         [ -f "$o" ] || continue
         if readelf -SW "$o" 2>/dev/null | grep -qE '\.tdata|\.tbss' || \
-           readelf -rW "$o" 2>/dev/null | grep -q 'TLSGD'; then
+           readelf -rW "$o" 2>/dev/null | grep -q 'TLSGD' || \
+           nm "$o" 2>/dev/null | grep -qE '^[0-9a-f ]*U __[A-Za-z0-9_]*_chk$'; then
             basename "$o" >> "$removed"
         fi
     done
@@ -139,7 +163,7 @@ filter_tls_members() {
     done
 
     if [ -s "$removed" ]; then
-        echo "mk_decc_shr: filtered TLS-tainted member(s) [direct + dead-code callers pulled in by the reference-graph closure] out of $(basename "$src") (DECC\$SHR stays a non-TLS producer, vms-212): $(tr '\n' ' ' < "$removed")" >&2
+        echo "mk_decc_shr: filtered TLS- and/or glibc-fortify-tainted member(s) [direct + dead-code callers pulled in by the reference-graph closure] out of $(basename "$src") (DECC\$SHR stays a non-TLS, non-glibc producer, vms-212/vms-0b8): $(tr '\n' ' ' < "$removed")" >&2
         while read -r b; do rm -f "$dir/$b"; done < "$removed"
         out="$dir/filtered.a"
         ( cd "$dir" && ar rcs "$out" ./*.o )

@@ -79,7 +79,7 @@ done
 WORK=${WORK:-/tmp/mk-vmsrms-shr}
 mkdir -p "$WORK"
 
-CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics}"
+CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics -U_FORTIFY_SOURCE}"
 INCS="-I$SRC/include -I$LIBVMS_INC -I$VMSFS_INC"
 
 echo "mk_vmsrms_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH"

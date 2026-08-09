@@ -56,7 +56,7 @@ ARCH=${ARCH:-aarch64}
 WORK=${WORK:-/tmp/mk-vmssys-shr}
 mkdir -p "$WORK"
 
-CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-stack-protector -fno-builtin -mno-outline-atomics}"
+CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-stack-protector -fno-builtin -mno-outline-atomics -U_FORTIFY_SOURCE}"
 CFLAGS="$CFLAGS -I$SRC"
 
 echo "mk_vmssys_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH  ARCH=$ARCH"

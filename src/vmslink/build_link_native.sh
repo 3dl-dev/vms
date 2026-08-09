@@ -52,7 +52,7 @@ case "$ARCH" in
     x86_64)  ARCHFLAG="-mtls-dialect=gnu2" ;;
     *) echo "build_link_native: FAIL: unsupported ARCH=$ARCH (expected aarch64 or x86_64)" >&2; exit 1 ;;
 esac
-LIBCFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector $ARCHFLAG"
+LIBCFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -U_FORTIFY_SOURCE $ARCHFLAG"
 
 LIBC=${LIBC:-$($CC -print-file-name=libc.a)}
 LIBGCC=${LIBGCC:-$($CC -print-libgcc-file-name)}

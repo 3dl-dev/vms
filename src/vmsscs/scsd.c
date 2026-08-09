@@ -6578,6 +6578,115 @@ static void scsd_mscp_srv_msg_input(struct scs_cdt *cdt, const void *msg,
     }
 }
 
+/*
+ * scsd_join_retx_for_peer - vms-694: the join-sequencer's per-step CONNECT-
+ * REQUEST retransmit (both the JS_IDLE closure-branch joiner retransmit and
+ * the worktree-760 step sequencer), factored out of scsd_handle_frame()'s
+ * directed-HELLO branch so it is reachable from TWO places: unchanged, from
+ * that same branch (so a peer that keeps directing HELLO at OVMX sees no
+ * behaviour change), and NEW, from scsd_join_retx_tick() on the main loop's
+ * own clock.
+ *
+ * WHY THE SECOND CALLER. Before this, the block below ran ONLY when a
+ * directed HELLO arrived FROM THIS PEER -- the original comment's own words
+ * were "Coarsely HELLO-driven". A live lab-2 rejoin (vms-694, 2026-08-09)
+ * showed exactly the failure mode that coupling invites: OVMX's join stuck at
+ * JS_MSCP_CONNECT, js_retx frozen at 6 with JOIN_RETX_MAX=12 (six retries of
+ * headroom unused), while the run's own trace showed HELLO and credit traffic
+ * still flowing with BOTH peers for the rest of the run. Six retransmits and
+ * then silence, capped well short of the retry ceiling, is what this function
+ * being reachable only from a directed-HELLO branch produces the moment that
+ * SPECIFIC peer's directed-HELLO flag to OVMX goes quiet (p. 2-14: an
+ * established/verified channel has no architectural reason to keep directing
+ * HELLO at OVMX) -- a condition that reflects the PEER's own channel-verify
+ * state, not whether OVMX's MSCP$DISK connect ever got answered. OVMX's own
+ * retransmit going silent with the peer never having refused it a further
+ * time is fully explained without invoking any peer-side rate limiting: OVMX
+ * simply stopped asking.
+ *
+ * scsd_join_retx_tick() closes that gap by driving this SAME logic from the
+ * main loop's SO_RCVTIMEO-driven wakeup, independent of what frame (if any)
+ * last arrived from this peer. Both callers gate on the same
+ * ps->js_last_tx / ps->last_joiner_req timestamps, so running from both sites
+ * cannot double-send within one JOIN_RETX_TIMEOUT_MS window -- whichever
+ * caller runs first in a given window wins, and the other sees the guard
+ * clock ineligible.
+ */
+static void scsd_join_retx_for_peer(struct scsd_rx *rx, struct peer_state *ps, long now_ms)
+{
+    if (rx == NULL || ps == NULL) {
+        return;
+    }
+
+    if (ps->join_step == JS_IDLE && scsd_joiner_retransmit_pending(rx, ps)) {
+        long last_ms = ps->last_joiner_req.tv_sec * 1000L +
+                       ps->last_joiner_req.tv_nsec / 1000000L;
+        if ((now_ms - last_ms) >= 1000) {
+            /* vms-398: name the NODE, not the circuit -- CONNECT picks
+             * the OPEN virtual circuit via CONFIG_SYS (p. 2-47). */
+            if (send_joiner_connect_request(rx->sock, rx->ifindex, rx->cfg, ps, NULL,
+                                            rx->our_hw_mac, rx->our_src_logical)) {
+                rx->connect_req_sent++;
+                log_ts(stdout);
+                printf(" SCSD-I-CONNREQ, retransmit OUR VMS$VAXcluster"
+                       " CONNECT-REQUEST local_conid=0x%08X seq=%u\n",
+                       OVMX_JOINER_CONID, ps->joiner_req_seq);
+                fflush(stdout);
+            }
+        }
+    }
+
+    /* vms-760: the join SEQUENCER drives each step's PROMPT send from the
+     * receive path (SCSD-I-JOINSEQ). Here we only RETRANSMIT the current
+     * outstanding step (reusing its stored send_seq -- never advancing, or
+     * we reopen the 760mscp hole) if its response has not arrived, capped
+     * at JOIN_RETX_MAX. */
+    if (rx->do_connect && ps->start_acked && ps->join_step != JS_IDLE &&
+        ps->join_step != JS_DONE && ps->join_step != JS_ADD_MEMBER &&
+        ps->js_retx < (ps->appeared_after_join ? JOIN_GREET_RETX_MAX
+                                               : JOIN_RETX_MAX)) {
+        long last_ms = ps->js_last_tx.tv_sec * 1000L +
+                       ps->js_last_tx.tv_nsec / 1000000L;
+        if ((now_ms - last_ms) >= (long)JOIN_RETX_TIMEOUT_MS) {
+            int sent = 0;
+            switch (ps->join_step) {
+            case JS_DIR_CONNECT:
+                sent = send_own_dir_connect_request(rx->sock, (int)rx->ifindex, ps,
+                                                    rx->our_hw_mac, rx->our_src_logical);
+                clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
+                break;
+            case JS_DIR_LOOKUP_TAPE:
+            case JS_DIR_LOOKUP_DISK:
+            case JS_DIR_LOOKUP_VC:
+                sent = send_own_dir_lookup(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac,
+                                           rx->our_src_logical, NULL, 1);
+                break;
+            case JS_MSCP_CONNECT:
+                sent = send_mscp_connect_request(rx->sock, (int)rx->ifindex, ps,
+                                                 rx->our_hw_mac, rx->our_src_logical);
+                clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
+                break;
+            case JS_VC_CONNECT:
+                /* vms-578: the vms-398 signature -- name the NODE, not the
+                 * circuit; CONNECT picks the OPEN VC via CONFIG_SYS (p. 2-47). */
+                sent = send_joiner_connect_request(rx->sock, rx->ifindex, rx->cfg, ps, NULL,
+                                                   rx->our_hw_mac, rx->our_src_logical);
+                clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
+                break;
+            default:
+                break;
+            }
+            if (sent) {
+                ps->js_retx++;
+                log_ts(stdout);
+                printf(" SCSD-I-JOINSEQ, retransmit join step %d (retx %u)\n",
+                       ps->join_step, ps->js_retx);
+                fflush(stdout);
+            }
+        }
+    }
+}
+
 static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
 {
     if (n < 14) {
@@ -7415,77 +7524,15 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
          * SEQUENCER, which retransmits whichever step is outstanding. On the
          * pure-server path join_step stays JS_IDLE and only the first runs; on
          * the sequencer path only the second runs. Neither is reachable from the
-         * other's configuration, which is why keeping both is not a duplicate. */
-        if (ps->join_step == JS_IDLE && scsd_joiner_retransmit_pending(rx, ps)) {
-            long now_ms = monotonic_ms();
-            long last_ms = ps->last_joiner_req.tv_sec * 1000L +
-                           ps->last_joiner_req.tv_nsec / 1000000L;
-            if ((now_ms - last_ms) >= 1000) {
-                /* vms-398: name the NODE, not the circuit -- CONNECT picks
-                 * the OPEN virtual circuit via CONFIG_SYS (p. 2-47). */
-                if (send_joiner_connect_request(rx->sock, rx->ifindex, rx->cfg, ps, NULL,
-                                                rx->our_hw_mac, rx->our_src_logical)) {
-                    rx->connect_req_sent++;
-                    log_ts(stdout);
-                    printf(" SCSD-I-CONNREQ, retransmit OUR VMS$VAXcluster"
-                           " CONNECT-REQUEST local_conid=0x%08X seq=%u\n",
-                           OVMX_JOINER_CONID, ps->joiner_req_seq);
-                    fflush(stdout);
-                }
-            }
-        }
-
-        /* vms-760: the join SEQUENCER drives each step's PROMPT send from the
-         * receive path (SCSD-I-JOINSEQ). Here we only RETRANSMIT the current
-         * outstanding step (reusing its stored send_seq -- never advancing, or
-         * we reopen the 760mscp hole) if its response has not arrived, capped
-         * at JOIN_RETX_MAX. Coarsely HELLO-driven; the happy path advances
-         * receive-driven and never needs this. */
-        if (rx->do_connect && ps->start_acked && ps->join_step != JS_IDLE &&
-            ps->join_step != JS_DONE && ps->join_step != JS_ADD_MEMBER &&
-            ps->js_retx < (ps->appeared_after_join ? JOIN_GREET_RETX_MAX
-                                                   : JOIN_RETX_MAX)) {
-            long now_ms = monotonic_ms();
-            long last_ms = ps->js_last_tx.tv_sec * 1000L +
-                           ps->js_last_tx.tv_nsec / 1000000L;
-            if ((now_ms - last_ms) >= (long)JOIN_RETX_TIMEOUT_MS) {
-                int sent = 0;
-                switch (ps->join_step) {
-                case JS_DIR_CONNECT:
-                    sent = send_own_dir_connect_request(rx->sock, (int)rx->ifindex, ps,
-                                                        rx->our_hw_mac, rx->our_src_logical);
-                    clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
-                    break;
-                case JS_DIR_LOOKUP_TAPE:
-                case JS_DIR_LOOKUP_DISK:
-                case JS_DIR_LOOKUP_VC:
-                    sent = send_own_dir_lookup(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac,
-                                               rx->our_src_logical, NULL, 1);
-                    break;
-                case JS_MSCP_CONNECT:
-                    sent = send_mscp_connect_request(rx->sock, (int)rx->ifindex, ps,
-                                                     rx->our_hw_mac, rx->our_src_logical);
-                    clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
-                    break;
-                case JS_VC_CONNECT:
-                    /* vms-578: the vms-398 signature -- name the NODE, not the
-                     * circuit; CONNECT picks the OPEN VC via CONFIG_SYS (p. 2-47). */
-                    sent = send_joiner_connect_request(rx->sock, rx->ifindex, rx->cfg, ps, NULL,
-                                                       rx->our_hw_mac, rx->our_src_logical);
-                    clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
-                    break;
-                default:
-                    break;
-                }
-                if (sent) {
-                    ps->js_retx++;
-                    log_ts(stdout);
-                    printf(" SCSD-I-JOINSEQ, retransmit join step %d (retx %u)\n",
-                           ps->join_step, ps->js_retx);
-                    fflush(stdout);
-                }
-            }
-        }
+         * other's configuration, which is why keeping both is not a duplicate.
+         *
+         * vms-694: this used to be the ONLY place either driver ran, which made
+         * both "coarsely HELLO-driven" -- see scsd_join_retx_for_peer()'s header
+         * for why a live lab-2 rejoin showed that starving OVMX's own retransmit
+         * silent with retry headroom left. The logic is unchanged here (same
+         * function, same call), and scsd_join_retx_tick() now ALSO drives it
+         * from the main loop's own clock. */
+        scsd_join_retx_for_peer(rx, ps, (long)monotonic_ms());
 
         /* vms-e81: the newcomer greet timer. A member opens its OWN
          * SCS$DIRECTORY (then MSCP$DISK) to a node that joined after us,
@@ -9909,6 +9956,38 @@ static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
 }
 
 /*
+ * scsd_join_retx_tick - vms-694: drive scsd_join_retx_for_peer() from the main
+ * loop's OWN clock, for every peer with an outstanding join step, so a
+ * stalled step (JS_MSCP_CONNECT in particular) is retried even when the
+ * peer's directed HELLO to OVMX pauses or reverts to plain/undirected framing.
+ * See scsd_join_retx_for_peer()'s header for the lab evidence this closes.
+ *
+ * ADDITIVE, NOT A REPLACEMENT: scsd_handle_frame()'s directed-HELLO branch
+ * keeps calling the SAME per-peer helper unchanged, so a peer that keeps
+ * directing HELLO at OVMX sees no behaviour change from this. Both call sites
+ * gate on the same ps->js_last_tx / ps->last_joiner_req timestamps, so this
+ * tick cannot double-send within one JOIN_RETX_TIMEOUT_MS window of a
+ * HELLO-triggered send, or vice versa.
+ *
+ * OVMX_NO_JOIN_RETX_TICK=1 disables this call (guardrail 23: prove the gated
+ * behaviour is suppressed) so the pre-fix HELLO-only path can be reproduced
+ * in isolation to confirm this tick is what closes the stall.
+ */
+static void scsd_join_retx_tick(struct scsd_rx *rx, uint64_t now_ms)
+{
+    if (rx == NULL || !rx->do_connect || getenv("OVMX_NO_JOIN_RETX_TICK") != NULL) {
+        return;
+    }
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &rx->peers[i];
+        if (ps->pb == NULL) {
+            continue;
+        }
+        scsd_join_retx_for_peer(rx, ps, (long)now_ms);
+    }
+}
+
+/*
  * scsd_diskrun_gate_ms - how long the pure-server disk-discovery run waits
  * before it opens OUR SCS$DIRECTORY client connection anyway.
  *
@@ -10860,6 +10939,13 @@ int main(int argc, char **argv)
         /* vms-abc moved the body into scsd_retransmit_tick() so a test can
          * reach it, and made retransmit exhaustion break the circuit. */
         scsd_retransmit_tick(&rx, monotonic_ms());
+
+        /* --- vms-694: the join sequencer's own per-step retransmit (JS_DIR_
+         * CONNECT / JS_MSCP_CONNECT / JS_VC_CONNECT / ...), now ALSO driven
+         * here on the loop's own clock rather than solely from a directed
+         * HELLO received from the stalled peer. See scsd_join_retx_tick()'s
+         * header for the lab evidence. OVMX_NO_JOIN_RETX_TICK=1 disables it. */
+        scsd_join_retx_tick(&rx, monotonic_ms());
 
         /* --- DISK DISCOVERY HAS EXACTLY ONE TRIGGER, AND THIS CALL IS IT.
          * vms-ebb moved the body into scsd_diskrun_ungate_tick() so a test can

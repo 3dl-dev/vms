@@ -6146,6 +6146,85 @@ static void test_mscp_connect_retx_survives_nine_reference_rejects(void)
 }
 
 /*
+ * (2a-4) vms-694: THE RETRANSMIT MUST SURVIVE A PEER THAT GOES QUIET ON
+ * DIRECTED HELLO, NOT JUST ONE THAT KEEPS REJECTING.
+ *
+ * The nine-reject regression above proves OVMX outlasts the reference's own
+ * REJECT_REQ pattern -- but a live lab-2 rejoin (vms-694, 2026-08-09) hit a
+ * DIFFERENT failure after that fix landed: OVMX's own retransmit went silent
+ * at retx=6 -- six retries of headroom still left under JOIN_RETX_MAX=12 --
+ * while the run's own trace showed HELLO and credit traffic still flowing
+ * with BOTH peers for the rest of the run. Root cause: every retransmit for
+ * an outstanding join step (JS_DIR_CONNECT / JS_MSCP_CONNECT / JS_VC_CONNECT)
+ * ran ONLY from inside scsd_handle_frame()'s directed-HELLO branch -- the
+ * "Coarsely HELLO-driven" trigger the old comment there named outright. A
+ * peer that stops flagging ITS OWN HELLO as directed at OVMX -- architecturally
+ * unremarkable once it considers a channel verified, p. 2-14 -- silently
+ * starves OVMX's retry no matter how much retry-count headroom remains,
+ * because nothing else in the file ever re-checked the outstanding step.
+ * OVMX's own retransmit going quiet is fully explained without any peer-side
+ * rate limiting: OVMX simply stopped asking.
+ *
+ * This fixture reproduces that starvation directly: put the peer in
+ * JS_MSCP_CONNECT and never feed a single HELLO frame of ANY kind -- directed
+ * or plain. Before this fix, nothing in scsd.c would ever retransmit here.
+ * scsd_join_retx_tick() is the new main-loop-driven caller that closes it, so
+ * the test drives THAT function directly on its own clock, exactly as the
+ * daemon's main loop now does every iteration regardless of what (if
+ * anything) was just received.
+ */
+static void test_join_retx_survives_a_peer_gone_quiet_on_directed_hello(void)
+{
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_NO_JOIN_RETX_TICK") == 0, "unsetenv failed");
+
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    CHECK(ps != NULL, "the fixture's circuit could not be opened");
+    if (ps == NULL) {
+        return;
+    }
+
+    ps->start_acked = 1;
+    ps->join_step = JS_MSCP_CONNECT;
+    ps->js_retx = 0;
+    ps->mscp_connect_sent = 1;
+    ps->mscp_connected = 0;
+    ps->mscp_remote_conid = 0;
+    ps->incarnation = 1;
+    memset(&ps->js_last_tx, 0, sizeof(ps->js_last_tx));
+
+    /* NOT ONE HELLO frame -- directed or otherwise -- is fed anywhere in this
+     * test. The gate reads monotonic_ms() (not mockable here, same as the
+     * nine-reject fixture above), so each iteration backdates ps->js_last_tx
+     * to force the retransmit-eligible window without a real sleep -- the
+     * SAME technique the nine-reject fixture uses, just driven by the tick
+     * function instead of a directed HELLO. The pre-fix HELLO-only path would
+     * leave js_retx at 0 forever no matter how many ticks ran. */
+    for (unsigned i = 0; i < 3; i++) {
+        memset(&ps->js_last_tx, 0, sizeof(ps->js_last_tx));
+        scsd_join_retx_tick(&r.rx, monotonic_ms());
+        CHECK(ps->js_retx == i + 1,
+              "scsd_join_retx_tick() did not retransmit on tick %u with no"
+              " HELLO of any kind ever fed to this peer (js_retx=%u) -- the"
+              " join-sequencer retransmit is still coupled to directed-HELLO"
+              " reception", i + 1, ps->js_retx);
+    }
+
+    /* Guardrail 23: the kill switch must suppress exactly the behaviour it
+     * names, run and confirmed here rather than asserted. */
+    CHECK(setenv("OVMX_NO_JOIN_RETX_TICK", "1", 1) == 0, "setenv failed");
+    unsigned before = ps->js_retx;
+    memset(&ps->js_last_tx, 0, sizeof(ps->js_last_tx));
+    scsd_join_retx_tick(&r.rx, monotonic_ms());
+    CHECK(ps->js_retx == before,
+          "OVMX_NO_JOIN_RETX_TICK=1 did not suppress the tick-driven"
+          " retransmit (js_retx moved from %u to %u)", before, ps->js_retx);
+    CHECK(unsetenv("OVMX_NO_JOIN_RETX_TICK") == 0, "unsetenv failed");
+}
+
+/*
  * (2b) THE OTHER KILL SWITCH MUST NOT BECOME A REFUSAL STORM.
  *
  * scsd_cdl_ready is only set when the connection state machine is enabled, so
@@ -9019,6 +9098,10 @@ int main(void)
     /* vms-694: JOIN_RETX_MAX must outlast the reference's own nine-reject
      * rejoin pattern at JS_MSCP_CONNECT. */
     test_mscp_connect_retx_survives_nine_reference_rejects();
+    /* vms-694: the retransmit must not depend on the peer's directed HELLO
+     * still arriving -- a live lab-2 rejoin showed it going silent with
+     * retry-count headroom left. */
+    test_join_retx_survives_a_peer_gone_quiet_on_directed_hello();
     test_no_conn_fsm_does_not_turn_into_a_refusal_storm();
     /* The OTHER inbound-CONNECT_REQ branch: the 0x5b SCS$DIRECTORY path. */
     test_the_0x5b_directory_connect_is_scanned_before_it_is_accepted();

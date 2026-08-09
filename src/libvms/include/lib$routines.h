@@ -19,6 +19,17 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include "descrip.h"
+/* gen64def.h supplies the __int64 / unsigned __int64 aliases that ported
+ * VMS (DECC) sources use as builtin 64-bit integer types, plus GENERIC_64.
+ * DECC provides __int64 as a compiler builtin; gcc does not, so pulling it
+ * in here makes ported sources that only #include <lib$routines.h> (directly
+ * or via errchk.h) compile without each having to include gen64def.h. */
+#include "gen64def.h"
+/* libdef.h is the single source of truth for the LIB$_ condition values
+ * (LIB$_NORMAL, LIB$_NOTFOU, LIB$_KEYNOTFOU, LIB$_ONEENTQUE, ...).  Pull
+ * it in so anything that includes lib$routines.h sees those codes with a
+ * consistent value regardless of include order. */
+#include "libdef.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -769,29 +780,14 @@ uint32_t lib$tparse(
 /* ================================================================
  * LIB$ condition value definitions
  *
- * Conditions specific to LIB$ routines.
+ * The LIB$_ condition values live in <libdef.h> (facility 21, the
+ * VMS-correct encoding).  This header formerly carried a SECOND, private
+ * copy of them with a wrong facility number (128 / 0x0080xxxx); every
+ * source that included both headers then saw a redefinition warning and,
+ * worse, a value that depended on include order.  The duplicate is
+ * deleted and libdef.h (included above) is now the single source of
+ * truth, so LIB$_NOTFOU / LIB$_KEYNOTFOU / ... are consistent everywhere.
  * ================================================================ */
-
-#define LIB$_NORMAL     0x00801001  /* Normal completion */
-#define LIB$_STRTRU     0x00801004  /* String truncated (warning) */
-#define LIB$_INVARG     0x00800014  /* Invalid argument */
-#define LIB$_INSVIRMEM  0x00800124  /* Insufficient virtual memory */
-#define LIB$_INVSTRDES  0x00800134  /* Invalid string descriptor */
-#define LIB$_NEGTIM     0x00800144  /* Negative time */
-#define LIB$_NOTFOU     0x00800154  /* Not found */
-#define LIB$_FATERRLIB  0x00800164  /* Fatal error in library */
-#define LIB$_INTLOGERR  0x00800174  /* Internal logic error */
-#define LIB$_NOCLI      0x00800184  /* No CLI present */
-#define LIB$_UNECLIERR  0x00800194  /* Unexpected CLI error */
-#define LIB$_AMBKEY     0x008001A4  /* Ambiguous keyword */
-#define LIB$_AMBVAL     0x008001B4  /* Ambiguous value */
-#define LIB$_NOSUCHSYM  0x008001C4  /* No such symbol */
-#define LIB$_INSCLIMEM  0x008001D4  /* Insufficient CLI memory */
-#define LIB$_BADZONE    0x008001E4  /* Bad zone */
-#define LIB$_KEYNOTFOU  0x008001F4  /* Key not found */
-#define LIB$_WRONUMARG  0x00800204  /* Wrong number of arguments */
-#define LIB$_BADSUBSCR  0x00800214  /* Bad subscript */
-#define LIB$_SYNTAXERR  0x00800224  /* Syntax error */
 
 /* Symbol table type codes for lib$get_symbol / lib$set_symbol */
 #define LIB$K_CLI_LOCAL_SYM     1   /* Local symbol */
@@ -1098,6 +1094,353 @@ uint32_t lib$getdvi(
     void *resultval,
     struct dsc$descriptor_s *resultstring,
     uint16_t *string_length
+);
+
+/* ================================================================
+ * Extended (multiple-precision) arithmetic routines
+ *
+ * Reference: OpenVMS RTL Library (LIB$) Manual — LIB$ADDX, LIB$SUBX,
+ *            LIB$EMUL, LIB$EDIV; OpenVMS VAX Architecture Reference
+ *            Manual (the ADAWI/EMUL/EDIV instruction semantics these
+ *            jacket).
+ * ================================================================ */
+
+/**
+ * lib$addx - Add two multiple-precision binary numbers.
+ *
+ * @param addend        First operand: array of longwords, low order first
+ * @param augend        Second operand: array of longwords, low order first
+ * @param sum           Result: addend + augend (may alias an input)
+ * @param array_length  Optional pointer to the number of longwords in each
+ *                      operand.  If omitted (NULL), the operands are a
+ *                      single quadword (2 longwords).
+ *
+ * @return  SS$_NORMAL
+ */
+uint32_t lib$addx(
+    const uint32_t *addend,
+    const uint32_t *augend,
+    uint32_t *sum,
+    const int32_t *array_length
+);
+
+/**
+ * lib$subx - Subtract two multiple-precision binary numbers (sum = minuend
+ *            - subtrahend).
+ *
+ * @param minuend       Array of longwords, low order first
+ * @param subtrahend    Array of longwords, low order first
+ * @param difference    Result: minuend - subtrahend
+ * @param array_length  Optional longword count (default 2 = one quadword)
+ *
+ * @return  SS$_NORMAL
+ */
+uint32_t lib$subx(
+    const uint32_t *minuend,
+    const uint32_t *subtrahend,
+    uint32_t *difference,
+    const int32_t *array_length
+);
+
+/**
+ * lib$emul - Extended multiply: product(64) = multiplier*multiplicand +
+ *            addend, using signed 32-bit operands.
+ *
+ * @param multiplier    Pointer to signed longword multiplier
+ * @param multiplicand  Pointer to signed longword multiplicand
+ * @param addend        Pointer to signed longword addend
+ * @param product       Pointer to signed quadword receiving the result
+ *
+ * @return  SS$_NORMAL
+ */
+uint32_t lib$emul(
+    const int32_t *multiplier,
+    const int32_t *multiplicand,
+    const int32_t *addend,
+    long long *product
+);
+
+/**
+ * lib$ediv - Extended divide: quotient = dividend/divisor,
+ *            remainder = dividend - (quotient*divisor).  The remainder
+ *            carries the sign of the dividend.
+ *
+ * @param divisor    Pointer to signed longword divisor
+ * @param dividend   Pointer to signed quadword dividend
+ * @param quotient   Pointer to signed longword receiving the quotient
+ * @param remainder  Pointer to signed longword receiving the remainder
+ *
+ * @return  SS$_NORMAL, or LIB$_INVARG if divisor is zero
+ */
+uint32_t lib$ediv(
+    const int32_t *divisor,
+    const long long *dividend,
+    int32_t *quotient,
+    int32_t *remainder
+);
+
+/* ================================================================
+ * Bit-scan routines (find first set / clear bit in a bit field)
+ * Reference: OpenVMS RTL Library (LIB$) Manual — LIB$FFS, LIB$FFC.
+ * ================================================================ */
+
+/**
+ * lib$ffs - Find the first set bit in a bit field.
+ *
+ * @param start_position  Pointer to the longword start bit position
+ * @param size            Pointer to the byte field size (0..32 bits)
+ * @param base_address    Base of the bit field
+ * @param find_position   Receives the bit position (relative to
+ *                        base_address) of the first set bit
+ *
+ * @return  SS$_NORMAL if a set bit was found, LIB$_NOTFOU otherwise
+ */
+uint32_t lib$ffs(
+    const int32_t *start_position,
+    const uint8_t *size,
+    const void *base_address,
+    int32_t *find_position
+);
+
+/**
+ * lib$ffc - Find the first clear bit in a bit field.
+ *
+ * @param start_position  Pointer to the longword start bit position
+ * @param size            Pointer to the byte field size (0..32 bits)
+ * @param base_address    Base of the bit field
+ * @param find_position   Receives the bit position (relative to
+ *                        base_address) of the first clear bit
+ *
+ * @return  SS$_NORMAL if a clear bit was found, LIB$_NOTFOU otherwise
+ */
+uint32_t lib$ffc(
+    const int32_t *start_position,
+    const uint8_t *size,
+    const void *base_address,
+    int32_t *find_position
+);
+
+/* ================================================================
+ * Cyclic redundancy check
+ * Reference: OpenVMS RTL Library (LIB$) Manual — LIB$CRC_TABLE, LIB$CRC.
+ * ================================================================ */
+
+/**
+ * lib$crc_table - Build the 16-longword CRC table used by lib$crc.
+ *
+ * @param polynomial  Pointer to the longword CRC polynomial
+ * @param table       16-longword array to receive the table
+ */
+void lib$crc_table(
+    const uint32_t *polynomial,
+    uint32_t *table
+);
+
+/**
+ * lib$crc - Compute a cyclic redundancy check over a string, nibble at a
+ *           time, using a table built by lib$crc_table.
+ *
+ * @param table       The 16-longword table from lib$crc_table
+ * @param initial     Pointer to the longword initial CRC value
+ * @param string      Descriptor of the data to checksum
+ *
+ * @return  The computed CRC (a function value, not a status code)
+ */
+uint32_t lib$crc(
+    const uint32_t *table,
+    const uint32_t *initial,
+    const struct dsc$descriptor_s *string
+);
+
+/* ================================================================
+ * Character scan / classify / convert
+ * Reference: OpenVMS RTL Library (LIB$) Manual — LIB$SCANC, LIB$SKPC,
+ *            LIB$CHAR, LIB$ANALYZE_SDESC.
+ * ================================================================ */
+
+/**
+ * lib$scanc - Scan a string for a character whose 256-byte table entry,
+ *             ANDed with mask, is non-zero.
+ *
+ * @param string  Descriptor of the string to scan
+ * @param table   256-byte classification table
+ * @param mask    Pointer to the byte mask
+ *
+ * @return  The 1-based position of the first matching character, or 0 if
+ *          none matched.
+ */
+uint32_t lib$scanc(
+    const struct dsc$descriptor_s *string,
+    const uint8_t *table,
+    const uint8_t *mask
+);
+
+/**
+ * lib$skpc - Skip equal characters: find the first character of a string
+ *            that is not equal to a given character.
+ *
+ * @param character  Descriptor whose first byte is the character to skip
+ * @param string     Descriptor of the string to scan
+ *
+ * @return  The 1-based position of the first non-matching character, or 0
+ *          if every character matched.
+ */
+uint32_t lib$skpc(
+    const struct dsc$descriptor_s *character,
+    const struct dsc$descriptor_s *string
+);
+
+/**
+ * lib$char - Convert a byte value to a one-character string.
+ *
+ * @param destination  Destination string descriptor
+ * @param ascii_code   Pointer to the byte value to convert
+ *
+ * @return  SS$_NORMAL, or LIB$_STRTRU if the destination is zero length
+ */
+uint32_t lib$char(
+    struct dsc$descriptor_s *destination,
+    const uint8_t *ascii_code
+);
+
+/**
+ * lib$analyze_sdesc - Return the length and data address described by any
+ *                     class of string descriptor.
+ *
+ * @param input_descriptor  The descriptor to analyze
+ * @param data_length       Receives the data length (word)
+ * @param data_address      Receives the data address
+ *
+ * @return  SS$_NORMAL
+ */
+uint32_t lib$analyze_sdesc(
+    const void *input_descriptor,
+    uint16_t *data_length,
+    void **data_address
+);
+
+/**
+ * lib$analyze_sdesc_64 - 64-bit form of lib$analyze_sdesc: returns a
+ *                        quadword length and a 64-bit data address.
+ *
+ * @param input_descriptor  The descriptor to analyze
+ * @param data_length       Receives the data length (quadword)
+ * @param data_address      Receives the data address
+ *
+ * @return  SS$_NORMAL
+ */
+uint32_t lib$analyze_sdesc_64(
+    const void *input_descriptor,
+    uint64_t *data_length,
+    void **data_address
+);
+
+/* ================================================================
+ * Self-relative interlocked queue routines
+ * Reference: OpenVMS RTL Library (LIB$) Manual — LIB$INSQHI, LIB$INSQTI,
+ *            LIB$REMQHI, LIB$REMQTI; OpenVMS VAX Architecture Reference
+ *            Manual (self-relative queue format: quadword header of two
+ *            longword self-relative offsets).
+ * ================================================================ */
+
+/**
+ * lib$insqhi - Insert an entry at the head of a self-relative queue.
+ *
+ * @param entry        The queue entry to insert
+ * @param header       The quadword queue header
+ * @param retry_count  Optional retry count for the secondary interlock
+ *
+ * @return  LIB$_ONEENTQUE if the queue was empty (now one entry),
+ *          else SS$_NORMAL
+ */
+uint32_t lib$insqhi(void *entry, void *header, const uint32_t *retry_count);
+
+/**
+ * lib$insqti - Insert an entry at the tail of a self-relative queue.
+ * @see lib$insqhi
+ */
+uint32_t lib$insqti(void *entry, void *header, const uint32_t *retry_count);
+
+/**
+ * lib$remqhi - Remove the entry at the head of a self-relative queue.
+ *
+ * @param header       The quadword queue header
+ * @param addr         Receives the address of the removed entry
+ * @param retry_count  Optional retry count for the secondary interlock
+ *
+ * @return  LIB$_QUEWASEMP if the queue was empty, LIB$_ONEENTQUE if the
+ *          removed entry was the last one (queue now empty), else SS$_NORMAL
+ */
+uint32_t lib$remqhi(void *header, void *addr, const uint32_t *retry_count);
+
+/**
+ * lib$remqti - Remove the entry at the tail of a self-relative queue.
+ * @see lib$remqhi
+ */
+uint32_t lib$remqti(void *header, void *addr, const uint32_t *retry_count);
+
+/* ================================================================
+ * Balanced binary tree routines
+ * Reference: OpenVMS RTL Library (LIB$) Manual — LIB$INSERT_TREE,
+ *            LIB$LOOKUP_TREE, LIB$TRAVERSE_TREE.
+ * ================================================================ */
+
+/**
+ * lib$insert_tree - Insert a node into a binary tree, calling user
+ *                   compare and allocate routines.
+ *
+ * @param treehead      Pointer to the tree-head cell (a node pointer)
+ * @param symbol        The key to insert (passed through to the callbacks)
+ * @param flags         Control flags (bit 0 = no duplicates)
+ * @param compare_rtn   int compare(symbol, node) -> <0/0/>0
+ * @param allocate_rtn  int allocate(symbol, &newnode, user_data) -> status
+ * @param newnode       Receives the matched or newly-allocated node
+ * @param user_data     Opaque value passed to allocate_rtn
+ *
+ * @return  SS$_NORMAL on insert, LIB$_KEYALRINS if the key already exists,
+ *          or an allocate_rtn error status
+ */
+uint32_t lib$insert_tree(
+    void *treehead,
+    void *symbol,
+    const uint32_t *flags,
+    int (*compare_rtn)(void),
+    int (*allocate_rtn)(void),
+    void *newnode,
+    void *user_data
+);
+
+/**
+ * lib$lookup_tree - Look up a node in a binary tree by key.
+ *
+ * @param treehead     Pointer to the tree-head cell
+ * @param symbol       The key to find
+ * @param compare_rtn  int compare(symbol, node) -> <0/0/>0
+ * @param node         Receives the matching node
+ *
+ * @return  SS$_NORMAL if found, LIB$_KEYNOTFOU otherwise
+ */
+uint32_t lib$lookup_tree(
+    void *treehead,
+    void *symbol,
+    int (*compare_rtn)(void),
+    void *node
+);
+
+/**
+ * lib$traverse_tree - Visit every node of a binary tree in key order,
+ *                     calling a user action routine for each.
+ *
+ * @param treehead   Pointer to the tree-head cell
+ * @param action_rtn int action(node, user_data) -> status (odd to continue)
+ * @param user_data  Opaque value passed to action_rtn
+ *
+ * @return  SS$_NORMAL, or the first non-success status from action_rtn
+ */
+uint32_t lib$traverse_tree(
+    void *treehead,
+    int (*action_rtn)(void),
+    void *user_data
 );
 
 #ifdef __cplusplus

@@ -279,3 +279,68 @@ uint32_t lib$insv(const int32_t *source, const int32_t *pos,
 
     return SS$_NORMAL;
 }
+
+/* ================================================================
+ * Bit-scan routines: LIB$FFS (find first set) / LIB$FFC (find first
+ * clear).  Each searches a bit field described by a start position and
+ * a size (0..32 bits) within a byte array and returns the position of
+ * the first matching bit, measured relative to base_address's bit 0.
+ *
+ * Reference: OpenVMS RTL Library (LIB$) Manual — LIB$FFS, LIB$FFC.
+ * Both return SS$_NORMAL when a matching bit is found and LIB$_NOTFOU
+ * when the whole field lacks one.
+ * ================================================================ */
+
+/* Return bit N (0/1) of the byte array at base, N measured from bit 0. */
+static int bitscan_get(const void *base, int32_t n)
+{
+    const unsigned char *p = (const unsigned char *)base;
+    return (p[n / 8] >> (n % 8)) & 1;
+}
+
+/*
+ * lib$ffs - Find the first set bit in the field [start, start+size).
+ */
+uint32_t lib$ffs(const int32_t *start_position, const uint8_t *size,
+                 const void *base_address, int32_t *find_position)
+{
+    if (!start_position || !size || !base_address || !find_position)
+        return SS$_BADPARAM;
+
+    int32_t start = *start_position;
+    uint8_t sz = *size;
+
+    for (uint8_t i = 0; i < sz; i++) {
+        if (bitscan_get(base_address, start + i)) {
+            *find_position = start + i;
+            return SS$_NORMAL;
+        }
+    }
+
+    /* VMS clears the position when no bit is found. */
+    *find_position = 0;
+    return LIB$_NOTFOU;
+}
+
+/*
+ * lib$ffc - Find the first clear bit in the field [start, start+size).
+ */
+uint32_t lib$ffc(const int32_t *start_position, const uint8_t *size,
+                 const void *base_address, int32_t *find_position)
+{
+    if (!start_position || !size || !base_address || !find_position)
+        return SS$_BADPARAM;
+
+    int32_t start = *start_position;
+    uint8_t sz = *size;
+
+    for (uint8_t i = 0; i < sz; i++) {
+        if (!bitscan_get(base_address, start + i)) {
+            *find_position = start + i;
+            return SS$_NORMAL;
+        }
+    }
+
+    *find_position = 0;
+    return LIB$_NOTFOU;
+}

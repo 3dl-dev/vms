@@ -31,6 +31,11 @@ add_library(vms ${OVMX_LIB_TYPE}
     rtl/lib_symbol.c
     rtl/lib_string_ops.c
     rtl/lib_bitops.c
+    rtl/lib_arith.c
+    rtl/lib_charscan.c
+    rtl/lib_queue.c
+    rtl/lib_tree.c
+    rtl/lib_common.c
     rtl/lib_eventflags.c
     rtl/str_routines.c
     rtl/mth_routines.c

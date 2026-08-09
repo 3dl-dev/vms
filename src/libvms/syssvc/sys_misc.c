@@ -47,42 +47,48 @@
  */
 uint32_t sys$setprv(uint32_t enbflg, const uint64_t *prvadr,
                     uint32_t prmflg, uint64_t *prvprv) {
-    struct vms_pcb *pcb = vms_pcb_get();
-    if (!pcb) return SS$_BADPARAM;
-
     uint64_t mask = prvadr ? *prvadr : 0;
     uint64_t prev = 0;
 
     /*
-     * THE MUTATION IS THE EXECUTIVE'S (vms-pv1). Route it through /dev/vms:
-     * vms_ioctl_setprv (kernel/vms_access.c) authorizes the request against
-     * this process's AUTHORIZED (permanent) mask -- a caller without SETPRV
-     * that reaches outside it gets the authorized subset and SS$_NOTALLPRIV,
-     * and cannot widen the authorized mask at all (SS$_NOPRIV) -- and OWNS the
-     * resulting state. This is what a process may NOT do for itself: writing
+     * THE MUTATION IS THE EXECUTIVE'S (vms-pv1), and it does NOT depend on a
+     * userspace PCB existing. Route it through /dev/vms: vms_ioctl_setprv
+     * (kernel/vms_access.c) authorizes the request against this process's
+     * AUTHORIZED (permanent) mask -- a caller without SETPRV that reaches
+     * outside it gets the authorized subset and SS$_NOTALLPRIV, and cannot
+     * widen the authorized mask at all (SS$_NOPRIV) -- and OWNS the resulting
+     * state. This is what a process may NOT do for itself: writing
      * pcb->cur_privs directly was the vms-b2e per-process privilege LARP, a
      * self-assertion nothing authoritative read. If /dev/vms is unreachable the
      * kif layer returns an error status (INV-6, CLAUDE.md Rule 9); we never
-     * fall back to a per-process fake grant.
+     * fall back to a per-process fake grant. (Gating the whole service on
+     * vms_pcb_get() would have made the executive-authoritative operation
+     * fail SS$_BADPARAM for any caller without a userspace PCB -- the PCB is a
+     * cache, not the authority.)
      */
     uint32_t st = vms_kif_setprv(mask, enbflg ? 1 : 0, prmflg ? 1 : 0, &prev);
 
     /*
-     * Mirror the executive's AUTHORITATIVE masks into the PCB, read back from
-     * the executive itself ($GETJPI-self). This is a COPY of executive-owned
-     * state, never an independent decision: the two remaining in-process
-     * readers -- sys_process.c fork inheritance and vmsprocess/access_modes.c's
-     * CMKRNL/CMEXEC mode gate -- then see exactly what the executive holds. If
-     * the read-back cannot reach the executive we leave the cache alone rather
-     * than invent a mask.
+     * Best-effort: mirror the executive's AUTHORITATIVE masks into the PCB
+     * when this process has one, read back from the executive itself
+     * ($GETJPI-self). This is a COPY of executive-owned state, never an
+     * independent decision: the two remaining in-process readers --
+     * sys_process.c fork inheritance and vmsprocess/access_modes.c's
+     * CMKRNL/CMEXEC mode gate -- then see exactly what the executive holds. No
+     * PCB (a bare image that never called vms_pcb_init) and no executive
+     * read-back both leave the cache alone rather than invent a mask; the
+     * status returned above is still the executive's.
      */
-    struct vms_procinfo info;
-    memset(&info, 0, sizeof(info));
-    if (vms_kif_getjpi_self(&info) & 1) {
-        pthread_mutex_lock(&pcb->priv_lock);
-        pcb->cur_privs = info.cur_privs;
-        pcb->perm_privs = info.perm_privs;
-        pthread_mutex_unlock(&pcb->priv_lock);
+    struct vms_pcb *pcb = vms_pcb_get();
+    if (pcb) {
+        struct vms_procinfo info;
+        memset(&info, 0, sizeof(info));
+        if (vms_kif_getjpi_self(&info) & 1) {
+            pthread_mutex_lock(&pcb->priv_lock);
+            pcb->cur_privs = info.cur_privs;
+            pcb->perm_privs = info.perm_privs;
+            pthread_mutex_unlock(&pcb->priv_lock);
+        }
     }
 
     /* The previous mask reported to the caller is the executive's, not a

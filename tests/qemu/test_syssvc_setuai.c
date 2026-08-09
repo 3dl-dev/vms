@@ -18,10 +18,12 @@
  *      condition false and the service ran with NO privilege test at all.
  *      Scenario 1 is exactly that process.
  *
- *   2. THE MASK WAS THE CALLER'S OWN WORD. sys$setprv
- *      (src/libvms/syssvc/sys_misc.c) writes pcb->cur_privs for the calling
- *      process with no validation of any kind. Scenario 3 grants itself
- *      SYSPRV that way, over an executive row that does not hold it.
+ *   2. THE MASK WAS THE CALLER'S OWN WORD. A process could write pcb->cur_privs
+ *      for itself -- once through sys$setprv (before vms-pv1 routed $SETPRV
+ *      through the executive), and still through a direct write to the PCB it
+ *      owns. Scenario 3 plants SYSPRV in the PCB that way, over an executive
+ *      row that does not hold it, and $SETUAI must still refuse: the caller's
+ *      own claim about itself does not decide the privilege test.
  *
  * SO THE PRIVILEGE TEST HAS TO BE READ FROM SOMEWHERE THE CALLER CANNOT
  * WRITE, which on OVMX means the executive's row (CLAUDE.md Rule 11): the
@@ -230,12 +232,18 @@ static int run_probe(unsigned stage, const char *name, uint32_t uic,
 
         if (stage & STAGE_PCB_SYSPRV) {
             /* The honor-system route, staged deliberately: a process
-             * awarding itself SYSPRV in memory it owns. */
+             * awarding itself SYSPRV in memory it owns. This used to go
+             * through sys$setprv, but vms-pv1 routed $SETPRV through the
+             * executive, which REFUSES SYSPRV to this non-SETPRV caller and
+             * mirrors its own (SYSPRV-less) mask back into the PCB -- so
+             * sys$setprv can no longer plant the divergence this scenario
+             * needs. The plant is therefore a DIRECT write into the process's
+             * own PCB, which is the sharpest form of the threat $SETUAI must
+             * resist: the caller's word about itself, written straight into
+             * memory it owns, still does not decide the privilege test. */
             pcb = vms_pcb_init(0);
-            if (pcb) {
-                uint64_t want = PRV$M_SYSPRV;
-                (void)sys$setprv(1, &want, 1, NULL);
-            }
+            if (pcb)
+                pcb->cur_privs |= PRV$M_SYSPRV;
         }
 
         memset(&self, 0, sizeof(self));

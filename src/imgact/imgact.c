@@ -43,6 +43,7 @@
 #include "ovmx_image.h"   /* OVMX symbol-vector image format (LINK.EXE) */
 #include "ovmx_symvec.h"  /* shared resolver + GSMATCH (bead vms-8d5)  */
 #include "known_images.h" /* Known Image DB lookup (bead vms-913.5; wired vms-30d) */
+#include "imgact_prodreg.h" /* publish resident producers into LIBVMS$SHR (vms-db2) */
 
 #ifndef AT_EXECFN
 #define AT_EXECFN 31
@@ -1326,6 +1327,42 @@ static struct ovmx_prod *find_crtl_producer(void)
 	return 0;
 }
 
+/* Publish the producers IMGACT mapped into the resident LIBVMS$SHR registry
+ * (vms-db2, design §A.8 remainder gap 1). IMGACT keeps producer bases in its
+ * OWN private g_prods[] and discarded them at hand-off; the in-process activator
+ * (imgact_activate, inside LIBVMS$SHR) therefore had an EMPTY resident-producer
+ * registry at runtime and could not bind a later RUN'd image's .vms$imp imports
+ * to the LIBVMS$SHR/DECC$SHR this process already holds. This hands them across:
+ * resolve imgact_publish_producers (a LIBVMS$SHR universal) BY NAME from
+ * whichever producer exports it, marshal g_prods[] into the published-producer
+ * ABI (imgact_prodreg.h), and call it once. Best-effort: a consumer whose graph
+ * has no producer exporting the symbol (a non-libvms executable, or an older
+ * shareable) publishes nothing and activates exactly as before -- no regression.
+ * The registry-population logic itself lives in LIBVMS$SHR and is proven in
+ * isolation (test_syssvc_imgact_publish); the fork fallback for real images
+ * stays until the full real-image in-process flip lands. */
+static void publish_resident_producers(void)
+{
+	unsigned long pub = 0;
+	for (int i = 0; i < g_nprods; i++) {
+		pub = sv_find_named(&g_prods[i], "imgact_publish_producers");
+		if (pub)
+			break;
+	}
+	if (!pub)
+		return;   /* no LIBVMS$SHR in this graph: nothing to publish into */
+
+	struct imgact_prod_pub list[32];
+	int n = 0;
+	for (int i = 0; i < g_nprods && n < 32; i++) {
+		list[n].soname = g_prods[i].name;
+		list[n].base   = g_prods[i].base;
+		list[n].sv     = g_prods[i].sv;
+		n++;
+	}
+	((uint32_t (*)(const struct imgact_prod_pub *, int))pub)(list, n);
+}
+
 /* Run musl's own libc bootstrap for a mapped C-RTL producer: program the thread
  * pointer, build the TCB + TLS musl-style, set the stack guard, and make malloc
  * usable. After this returns, every universal in the C-RTL is callable. */
@@ -1410,6 +1447,13 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 		 * consumer (which may call into that producer's TLS-using code) runs. */
 		setup_symvec_tls();
 	}
+
+	/* Hand the resident producer bases across to LIBVMS$SHR's registry so a
+	 * later in-process RUN can bind to them (vms-db2, §A.8 gap 1). AFTER the
+	 * C-RTL init above: imgact_publish_producers -> imgact_register_producer
+	 * calls strlen/strncmp/strncpy, DECC$SHR universals that are only usable once
+	 * musl (drive_crtl_init) has run and LIBVMS$SHR's own imports are bound. */
+	publish_resident_producers();
 }
 
 unsigned long imgact_bootstrap(unsigned long *sp)

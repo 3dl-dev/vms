@@ -75,6 +75,46 @@ int imgact_find_producer(const char *soname, uint64_t *base,
                          const struct ovmx_sv_header **sv);
 
 /*
+ * One resident producer as IMGACT.EXE hands it across to LIBVMS$SHR at the
+ * process's own activation (vms-db2, §A.8 remainder item 1 -- "publish the
+ * registry at runtime"). This is the ABI of the IMGACT->LIBVMS$SHR publish call:
+ * IMGACT keeps the producers it mapped in its OWN private g_prods[] (soname +
+ * run-time base + mapped .vms$sv) and, having no way to reach into the resident
+ * LIBVMS$SHR's data, marshals them into an array of these and calls
+ * imgact_publish_producers() -- a LIBVMS$SHR universal it resolves from that
+ * shareable's symbol vector BY NAME -- to hand the bases across. See
+ * src/imgact/imgact.c publish_resident_producers() and
+ * docs/design-in-process-activation.md Part II §A.8.
+ */
+struct imgact_prod_pub {
+    const char                  *soname;  /* producer image name (.vms$imp records this) */
+    uint64_t                     base;    /* its run-time load bias */
+    const struct ovmx_sv_header *sv;      /* its mapped .vms$sv header */
+};
+
+/*
+ * Publish a set of already-resident producers into the registry in ONE call --
+ * the entry point IMGACT.EXE invokes at the process's own activation so that
+ * later in-process activations (imgact_bind_imports_resident) can bind a real
+ * image's .vms$imp imports to the SAME resident LIBVMS$SHR/DECC$SHR the process
+ * already holds. Registering each in turn via imgact_register_producer(); stops
+ * and returns the first non-success status. Returns SS$_NORMAL on success,
+ * SS$_BADPARAM for a null list or negative count.
+ *
+ * This is the substantive, isolation-testable half of §A.8-remainder gap 1: the
+ * registry-population routine LIVES here in LIBVMS$SHR (host-testable, no
+ * /dev/vms, proven by tests/qemu/test_syssvc_imgact_publish.c -- publish makes a
+ * consumer's later bind reach the resident producer; skip it and the bind is
+ * refused and the caller forks). The IMGACT-side glue that resolves this symbol
+ * by name and marshals g_prods[] into the list is the thin, runtime-only
+ * remainder (its end-to-end proof rides on the native-link runtime, vms-0b8).
+ * Registering a producer this process did not actually map would be faking
+ * residency -- the isolation test guards against that by mutating shared
+ * producer state through the published base.
+ */
+uint32_t imgact_publish_producers(const struct imgact_prod_pub *prods, int n);
+
+/*
  * Empty the registry. The honest default state is EMPTY (no producer is
  * resident until something maps and registers one); used by tests for a clean
  * per-case slate.

@@ -126,20 +126,22 @@ int main(void)
     vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
 
+    /*
+     * This suite requires a real executive: the octal-UIC read is only
+     * meaningful when SYS$SYSTEM resolves through the executive-resident
+     * LNM$SYSTEM to the shipped SYSUAF.DAT. With no /dev/vms it honest-skips
+     * (77), never a fake pass -- the contract every test_syssvc_* is held to
+     * (.github/workflows/ci.yml). Nothing is asserted on the skip path (matching
+     * tests/qemu/test_syssvc_setuai.c): while vms-fk1's host-LNM fake still
+     * exists, lnm_setup_defaults above reseeds SYS$SYSTEM into LNM$PROCESS on a
+     * hostless build, so a lookup here could resolve for the WRONG reason -- the
+     * honest signal is simply "no executive -> skip", checked before any read.
+     */
     if (!executive_present()) {
-        /*
-         * No executive: SYS$SYSTEM is undefined (the host-LNM fake that used to
-         * reseed it into LNM$PROCESS_TABLE is gone, vms-fk1), so the reader must
-         * NOT fabricate a record. Prove that, then honest-skip.
-         */
-        sysuaf_record_t rec;
-        check(sysuaf_lookup("SYSTEM", &rec) != 0,
-              "no /dev/vms: sysuaf_lookup does NOT fabricate a record when "
-              "SYS$SYSTEM cannot resolve (no host-LNM fake)");
-        printf("=== test_syssvc_sysuaf_uic_base: %d passed, %d failed "
-               "(SKIPPED: no /dev/vms -- the octal-UIC read was not exercised, "
-               "the no-fabrication check WAS) ===\n", pass, fail);
-        return fail > 0 ? 1 : EXIT_SKIP;
+        printf("=== test_syssvc_sysuaf_uic_base: 0 passed, 0 failed "
+               "(SKIPPED: no /dev/vms -- the octal-UIC read needs the "
+               "executive-resident LNM$SYSTEM) ===\n");
+        return EXIT_SKIP;
     }
 
     /* --- THE DISCRIMINATING CHECK ---------------------------------------

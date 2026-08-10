@@ -103,15 +103,26 @@ docker build -f Dockerfile.bootable -o dist .
               ├── lnm_setup_defaults + init_search_paths (SYS$SYSTEM:, SYS$SHARE: resolve)
               ├── (no logical name daemon — deleted, vms-a4b; VMS has no such process)
               └── exec SYS$SYSTEM:PROVISION.EXE — where PID 1 used to exec DCL.EXE
-                    │  The startup process. Links libvms; reads SYSUAF's SYSTEM
-                    │  record through the ONE reader (sysuaf_lookup). vms-9b7.
-                    ├── vms_kif_setident() on ITSELF → this process now holds SYSTEM [1,4]
+                    │  The startup process. EXEC_INIT's shape (vms-a17e): vms.ko
+                    │  constructs the SYSTEM identity itself, from constants it owns
+                    │  (VMS_SYSTEM_UIC [1,4], VMS_PRV_M_SYSTEM_ALL) -- the OPA0:
+                    │  device-table precedent applied to identity. This image reads
+                    │  SYSUAF for NEITHER of the two fields that used to feed
+                    │  setident; its ONE remaining SYSUAF read (sysuaf_read_line/
+                    │  sysuaf_parse_line, vms-9b7) is home-directory provisioning.
+                    ├── vms_kif_establish_system() → the executive stamps SYSTEM
+                    │     [1,4]/ALL onto THIS process (no username/uic/privs args --
+                    │     nothing for this process to have supplied)
                     ├── provision home directories + system-tree ownership
+                    │     (also the "does SYSUAF have a SYSTEM account at all"
+                    │     continuity check -- #278's halt, now riding this read)
                     └── exec DCL.EXE on SYS$MANAGER:STARTUP.COM — SAME PROCESS.
                           exec(2) preserves the executive's SYSTEM identity, so
                           STARTUP.COM / SYSTARTUP_VMS.COM run under SYSTEM, exactly
                           as OpenVMS (STARTUP runs as SYSTEM). Login shells (vmsdcl)
-                          launch afterward.
+                          launch afterward. LOGINOUT (tools/vms_login.c) — not this
+                          image — is SYSUAF's FIRST reader for an authenticated
+                          identity, matching OpenVMS.
 ```
 
 ### SYSUAF.DAT — one format, one reader, one writer (vms-9b7)

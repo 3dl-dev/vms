@@ -254,6 +254,41 @@
  */
 #define VMS_DEFAULT_PRIVS   (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX)
 
+/*
+ * The SYSTEM process's CONSTRUCTED identity (vms-a17e).
+ *
+ * On OpenVMS, EXEC_INIT constructs the system process's identity; LOGINOUT
+ * is SYSUAF's FIRST reader. Until this item OVMX inverted that: a userspace
+ * process (src/ovmx_provision/ovmx_provision.c) read SYSUAF's SYSTEM record
+ * and asked the executive to stamp it via VMS_IOCTL_SETIDENT, which is the
+ * exact shape reserved for LOGINOUT authenticating an arbitrary user. The
+ * fix follows the OPA0: precedent in vms_devtab.c: the executive creates
+ * the fact itself, from constants it owns, rather than trusting a
+ * caller-supplied value that happens to have come from a file read.
+ * vms_ioctl_establish_system() (vms_proctab.c) is the ioctl that hands a
+ * process this identity -- note it takes NO username/uic/privs arguments,
+ * unlike VMS_IOCTL_SETIDENT: there is nothing for a caller to supply.
+ *
+ * UIC [1,4] -- ORACLE-PINNED, not invented here. AUTHORIZE's own SYSUAF.DAT
+ * is owned by UIC [1,4] (docs/oracle/vax73-authorize-privilege.md: "owner
+ * UIC [1,4]", from the reference lab's OpenVMS VAX V7.3 AUTHORIZE probe).
+ * src/libvms/syssvc/sys_security.c's uic_is_system() cites the identical
+ * fact ("the SYSTEM account's real UIC [1,4]"), and
+ * tools/vmsfs_master.c's MASTER_UIC_GROUP/MASTER_UIC_MEMBER encode the same
+ * pair for the same account. Three independent sites, one number.
+ *
+ * Privileges ALL -- OpenVMS ships its default SYSTEM account with every
+ * privilege (OpenVMS System Manager's Manual, default UAF template); OVMX's
+ * own distro/rootfs/.../SYSUAF.DAT SYSTEM record carries PRIVILEGES=ALL,
+ * which is the fact this constant constructs rather than a file OVMX reads
+ * at boot to learn it. VMS_PRV_M_SYSTEM_ALL mirrors userspace's PRV$M_ALL
+ * (src/libvms/include/prvdef.h) -- both are simply "every bit", so unlike
+ * VMS_PRV_M_ENFORCED this needs no _Static_assert bit-position agreement
+ * with that header.
+ */
+#define VMS_SYSTEM_UIC          ((1u << 16) | 4u)   /* [1,4] */
+#define VMS_PRV_M_SYSTEM_ALL    (~(uint64_t)0)
+
 /* ================================================================
  * Per-process VMS state
  *
@@ -777,6 +812,10 @@ long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
+/* Construct the SYSTEM identity onto the caller (vms-a17e) -- the
+ * OPA0:-style counterpart to vms_ioctl_setident() that takes no
+ * caller-supplied username/uic/privs; see VMS_SYSTEM_UIC's comment. */
+long vms_ioctl_establish_system(struct vms_proc *proc, unsigned long arg);
 
 /* May `caller` read `target`'s identity? Oracle-pinned rule -- see the
  * definition in vms_proctab.c and docs/oracle/vax73-privileges.md §5. */

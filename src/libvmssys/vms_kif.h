@@ -101,14 +101,35 @@ uint32_t vms_kif_register_continue(void);
  * it (an OVMX design choice -- see vms_ioctl.h).
  *
  * WIRED (vms-2b8): tools/vms_login.c (LOGINOUT) calls this after SYSUAF
- * authentication, and src/ovmx_provision/ovmx_provision.c (PROVISION.EXE --
- * the startup process PID 1 execs, which then execs DCL.EXE on STARTUP.COM in
- * the same process, vms-9b7) calls it for the SYSTEM identity that system
- * startup runs under. src/vmsdcl/dcl_main.c and
- * dcl_cmd_show.c read the row back through vms_kif_getjpi_self() instead of
- * the environment. */
+ * authentication -- an arbitrary authenticated user, which is exactly what
+ * this call is for. src/vmsdcl/dcl_main.c and dcl_cmd_show.c read the row
+ * back through vms_kif_getjpi_self() instead of the environment.
+ *
+ * src/ovmx_provision/ovmx_provision.c (PROVISION.EXE) used to call this
+ * too, for the fixed SYSTEM identity system startup runs under -- moved to
+ * vms_kif_establish_system() below (vms-a17e), because SYSTEM is not an
+ * arbitrary authenticated user: it is a constant the executive itself now
+ * constructs. */
 uint32_t vms_kif_setident(const char *username, uint32_t uic,
                           uint64_t authorized_privs);
+
+/* Construct the SYSTEM identity onto this process (vms-a17e). The
+ * OPA0:-style counterpart to vms_kif_setident() above: no username, uic,
+ * or privilege mask to supply -- SYSTEM/[1,4]/ALL are constants the
+ * executive already owns (VMS_SYSTEM_UIC / VMS_PRV_M_SYSTEM_ALL,
+ * src/kernel/vms_internal.h), the same way OPA0: is a constant
+ * vms_devtab_init() creates at module load rather than a value a process
+ * registers.
+ *
+ * WIRED: src/ovmx_provision/ovmx_provision.c (PROVISION.EXE) calls this in
+ * place of a SYSUAF read + vms_kif_setident() -- so PROVISION.EXE never
+ * opens SYS$SYSTEM:SYSUAF.DAT to become SYSTEM. Its
+ * vms_kif_getjpi_self() readback afterward is unchanged: it still reports
+ * the executive's verdict, never what it asked for -- there is simply
+ * nothing left for it to have asked for.
+ *
+ * SS$_NOPRIV if the caller lacks CAP_SYS_ADMIN. */
+uint32_t vms_kif_establish_system(void);
 
 /* Translate a failed ioctl's negative errno into a VMS status.
  *

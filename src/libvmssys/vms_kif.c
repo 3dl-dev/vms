@@ -1006,6 +1006,34 @@ uint32_t vms_kif_setident(const char *username, uint32_t uic,
     return args.status;
 }
 
+/*
+ * vms_kif_establish_system - ask the executive to construct the SYSTEM
+ * identity onto this process (vms-a17e).
+ *
+ * UNLIKE vms_kif_setident(), THIS TAKES NO IDENTITY ARGUMENTS. There is no
+ * username, uic, or privilege mask to supply: SYSTEM/[1,4]/ALL are
+ * constants the executive already owns (VMS_SYSTEM_UIC and
+ * VMS_PRV_M_SYSTEM_ALL, src/kernel/vms_internal.h), constructed the same
+ * way OPA0: is -- by the executive itself, from module init, not read out
+ * of a file by whoever calls this. PROVISION.EXE (src/ovmx_provision/
+ * ovmx_provision.c) is the one caller, and calling this is now the whole
+ * of what it does to become SYSTEM: no SYSUAF lookup precedes it.
+ *
+ * SS$_NOPRIV if the caller lacks CAP_SYS_ADMIN (see
+ * vms_ioctl_establish_system()'s comment in vms_ioctl.h for why that gate,
+ * not SETPRV, is what this checks).
+ */
+uint32_t vms_kif_establish_system(void)
+{
+    struct vms_establish_system_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+
+    KIF_CALL(VMS_IOCTL_ESTABLISH_SYSTEM, &args);
+
+    return args.status;
+}
+
 uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info)
 {
     struct vms_procscan_args args;

@@ -24,10 +24,17 @@
 # THE VARIABLE IS THE POSITION OF THE SIXTH FIELD SEPARATOR, not the write path
 # and not the length as such. Four cases run:
 #
-#   short     103-byte SYSTEM row, sixth separator at  99  -- CONTROL, must boot
-#   inwin     502-byte SYSTEM row, sixth separator at 387  -- CONTROL, must boot
-#   longrow   675-byte SYSTEM row, sixth separator at 560  -- past 511, must boot
-#   norecord  NO SYSTEM row at all                         -- must HALT
+#   short       103-byte SYSTEM row, sixth separator at  99  -- CONTROL, must boot
+#   inwin       502-byte SYSTEM row, sixth separator at 387  -- CONTROL, must boot
+#   longrow     675-byte SYSTEM row, sixth separator at 560  -- past 511, must boot
+#   norecord    NO SYSTEM row at all                         -- must HALT
+#
+# A fifth case (poisoned_uic, vms-a17e) is not about the sixth separator at
+# all -- see its own comment below -- and proves identity establishment reads
+# SYSUAF zero times: a SYSTEM row carrying a UIC and privilege string that are
+# NOT [1,4]/ALL must still produce "[1,4] established by the executive",
+# because the executive constructs that identity from its own constant now,
+# never from this file.
 #
 # All four are written by the same DCL session through the same commands into
 # the same file on the same rig. If the rig itself broke SYSUAF, "short" would
@@ -180,7 +187,13 @@ OTHER_ROWS=(
 # ---------------------------------------------------------------------------
 # $3 = "up" (must boot) or "halt" (must fail-stop with the EXECINIT message).
 run_case() {
-    local tag="$1" system_row="$2" expect="${3:-up}"
+    # uic (5th arg) is the SYSUAF-FILE-CONTENT UIC this case's row carries --
+    # used ONLY by the sanity check a few lines down that the DCL WRITE
+    # actually landed in the file. It defaults to "1|4" because that is what
+    # every case except poisoned_uic (vms-a17e) writes. It is NOT a claim
+    # about what identity the boot ends up with: see that check's own
+    # comment for why the two can legitimately differ.
+    local tag="$1" system_row="$2" expect="${3:-up}" uic="${4:-1|4}"
     local disk="/tmp/e2e-$tag.img"
     local log1="/tmp/e2e-$tag-boot1.log"
     local log2="/tmp/e2e-$tag-boot2.log"
@@ -247,9 +260,12 @@ run_case() {
     send 'TYPE SYS$SYSTEM:SYSUAF.DAT'; sleep 3
 
     # The edit must actually be in the file this session can read, or the rest
-    # of the case is measuring nothing.
+    # of the case is measuring nothing. Checks for THIS CASE'S OWN uic (see
+    # the "uic" parameter comment above) -- poisoned_uic's row genuinely
+    # contains "50|50", not "1|4", and grepping the wrong pair here would
+    # fail even though the poison landed exactly as intended.
     if [ -n "$system_row" ]; then
-        if grep -qF "SYSTEM|$HASH|1|4|" "$log1"; then rc=0; else rc=1; fi
+        if grep -qF "SYSTEM|$HASH|$uic|" "$log1"; then rc=0; else rc=1; fi
         record "$tag boot 1: the edited SYSTEM row is readable in-session" "$rc"
     else
         if grep -qF "OPERATOR||1|6|" "$log1"; then rc=0; else rc=1; fi
@@ -275,24 +291,31 @@ run_case() {
 
     if [ "$expect" = "halt" ]; then
         # NEGATIVE CONTROL. Proves this whole rig can still go RED, and proves
-        # the fail-stop SURVIVED being moved out of PID 1 into PROVISION.EXE.
+        # the fail-stop SURVIVED being moved out of PID 1 into PROVISION.EXE,
+        # and then survived a second move (vms-a17e): identity establishment
+        # no longer reads SYSUAF at all (vms_kif_establish_system() constructs
+        # SYSTEM's identity as an executive constant regardless of what SYSUAF
+        # contains), so this halt no longer comes from a failed identity read
+        # -- it rides provision_home_directories()'s SYSUAF walk instead,
+        # which is why the message changed from "no SYSTEM record" /
+        # "the system process has no authorized identity" to the text below.
         # A fail-stop that was relocated and never fired again is a fail-stop
         # that was deleted (Rule 10: the condition is made unreachable, and it
         # only stays unreachable if entering it still stops the system).
-        if waitfor '%OVMX-F-EXECINIT, no SYSTEM record' 120 "$log2"; then
+        if waitfor '%OVMX-F-EXECINIT, no SYSTEM account' 120 "$log2"; then
             rc=0
         else
             rc=1
         fi
         kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
-        record "$tag boot 2: HALTS with '%OVMX-F-EXECINIT, no SYSTEM record'" "$rc"
+        record "$tag boot 2: HALTS with '%OVMX-F-EXECINIT, no SYSTEM account'" "$rc"
 
-        if grep -qF '%OVMX-I-EXECINIT, the system process has no authorized identity' "$log2"; then
+        if grep -qF '%OVMX-I-EXECINIT, no session could ever authenticate as SYSTEM' "$log2"; then
             rc=0
         else
             rc=1
         fi
-        record "$tag boot 2: the detail line is the same one PID 1 printed" "$rc"
+        record "$tag boot 2: the detail line is PROVISION.EXE's SYSTEM-account continuity check" "$rc"
 
         # ...and it must NOT reach a login prompt. A system with no identity
         # that hands out a console is the exact thing the halt exists to stop.
@@ -311,8 +334,8 @@ run_case() {
     # THE ASSERTION THE OPERATOR'S FAILURE WAS. Whole-log grep is safe: this is
     # a boot-time diagnostic printed before any prompt exists, so nothing this
     # script typed can have produced it.
-    if grep -qF '%OVMX-F-EXECINIT, no SYSTEM record' "$log2"; then rc=1; else rc=0; fi
-    record "$tag boot 2: NO '%OVMX-F-EXECINIT, no SYSTEM record' halt" "$rc"
+    if grep -qF '%OVMX-F-EXECINIT, no SYSTEM account' "$log2"; then rc=1; else rc=0; fi
+    record "$tag boot 2: NO '%OVMX-F-EXECINIT, no SYSTEM account' halt" "$rc"
 
     # And the positive half: an identity was actually established, with the
     # right values. Asserting only the absence of the halt would pass on a boot
@@ -472,11 +495,58 @@ run_case inwin  "$(make_system_row 247 63)"
 # boot; here it must not.
 run_case longrow "$(make_system_row 420 63)" up
 
+# CASE 5 (vms-a17e) -- THE ZERO-SYSUAF-READS-FOR-IDENTITY PROOF. This row
+# names UIC [50,50] and PRIVILEGES=NONE for the SYSTEM account -- neither
+# [1,4] nor ALL. Before vms-a17e this would have produced
+# "system identity SYSTEM [62,62] established by the executive" (50 decimal
+# is 62 octal) with no enforced privileges beyond the CAP_SYS_ADMIN default,
+# because PROVISION.EXE read exactly these two fields out of this row and
+# handed them to VMS_IOCTL_SETIDENT. After vms-a17e, vms_kif_establish_system()
+# takes no username/uic/privs arguments at all -- SYSTEM/[1,4]/ALL are
+# vms.ko's own VMS_SYSTEM_UIC / VMS_PRV_M_SYSTEM_ALL constants (vms_internal.h)
+# -- so [1,4] MUST still appear, proving the poisoned UIC in this file was
+# never read to construct it. Same HASH as every other case, so login still
+# succeeds; only the UIC/privileges fields are wrong on purpose.
+#
+# WHAT THIS DOES *NOT* CLAIM, and why the boot-1 "row is readable in-session"
+# sanity check below correctly reports [50,50] rather than [1,4]. There are
+# TWO identities in this boot, established by two DIFFERENT mechanisms, and
+# vms-a17e touches only one of them:
+#
+#   the STARTUP process (PROVISION.EXE, execs into STARTUP.COM/
+#   SYSTARTUP_VMS.COM)  -- identity from vms_kif_establish_system(), an
+#   executive CONSTANT, independent of SYSUAF by design (this item).
+#
+#   the INTERACTIVE session opened by typing SYSTEM/MANAGER at the login
+#   prompt below -- identity from tools/vms_login.c (LOGINOUT), which reads
+#   SYSUAF's SYSTEM row and calls VMS_IOCTL_SETIDENT with WHATEVER uic that
+#   row names. LOGINOUT-reads-SYSUAF is correct, unmodified VMS behaviour
+#   ("LOGINOUT is SYSUAF's FIRST reader") and is exactly what this item's
+#   own goal statement asks for -- it would be a REGRESSION for LOGINOUT to
+#   ignore this file. So a real interactive SYSTEM/MANAGER session against
+#   this poisoned row genuinely authenticates as UIC [50,50]; that is not
+#   probed here because the boot process's identity, not the login
+#   session's, is this item's whole scope.
+#
+# So the "$uic" argument below (used only by the file-landed sanity check,
+# not by any identity assertion) is 50|50 -- the actual, correctly-poisoned
+# content of the file -- while the SEPARATE "SYSTEM [1,4] established by the
+# executive" assertion in the shared "up" path a few lines down is the one
+# that has to stay [1,4] regardless. Confirmed on a real boot: it does.
+run_case poisoned_uic "SYSTEM|$HASH|50|50|SYS\$SYSDEVICE:[SYSMGR]||NONE" up "50|50"
+
 # NEGATIVE CONTROL. SYSUAF with NO SYSTEM row at all -- a condition VMS is never
 # in, which OVMX therefore makes unreachable rather than handles (Rule 10). This
 # must still stop the system, from its new home in PROVISION.EXE. Without this
 # case the three above are all "did not halt" assertions with nothing showing
 # they could ever have halted.
+#
+# vms-a17e moved WHERE this check lives (see run_case's "expect=halt" branch):
+# identity establishment no longer reads SYSUAF at all, so the halt now comes
+# from provision_home_directories()'s pre-existing account-provisioning walk
+# recognizing it never saw a SYSTEM row, not from a failed identity lookup.
+# The functional guarantee this case exists to prove -- no SYSTEM account
+# means no login prompt, ever -- is unchanged.
 run_case norecord "" halt
 
 # NEGATIVE CONTROL 2 (vms-56c). The startup process image itself is deleted off

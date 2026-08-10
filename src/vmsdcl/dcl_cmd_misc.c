@@ -2404,13 +2404,36 @@ int cmd_phone(struct dcl_command *cmd)
 /* ================================================================== */
 
 /*
- * PRODUCT - Software product management (minimal PCSI emulation).
+ * PRODUCT - Software product management (PCSI-equivalent, bead vms-df9).
  *
- * PRODUCT SHOW PRODUCT — list installed products
- * PRODUCT SHOW HISTORY — show installation date
+ * PRODUCT INSTALL <name> /SOURCE=<kit-filespec> [/DESTINATION=<devdir>]
+ * PRODUCT SHOW PRODUCT [/DESTINATION=<devdir>]  — list installed products
+ * PRODUCT SHOW HISTORY [/DESTINATION=<devdir>]  — show installation dates
+ *
+ * WRAPS SYS$SYSTEM:PRODUCT.EXE (src/product/product.c) -- same pattern as
+ * cmd_analyze/cmd_install/cmd_sysgen/cmd_sysman/cmd_mail in this file: the
+ * builtin verb only parses DCL syntax and re-execs the real external
+ * utility via dcl_exec_utility(), it does not implement kit reading, the
+ * product database, or file placement itself (vms-df9 constraint #1 --
+ * DCL stays a shell). THIS REPLACES an earlier version that implemented
+ * PRODUCT SHOW PRODUCT/HISTORY directly here (a fat builtin) and had no
+ * PRODUCT.EXE at all; every other operation was a bare %PCSI-E-NOTIMPL.
+ *
+ * /SOURCE is resolved through dcl_resolve_path() before being handed to
+ * PRODUCT.EXE (same as COPY/LINK's own input-file resolution), so it
+ * accepts both an ordinary VMS filespec and a quoted literal Linux path.
+ * /DESTINATION is a bare device name (canonicalized upper-case with a
+ * trailing colon, like cmd_mount's own device-name handling) -- not a
+ * filespec, so it is passed through uncooked; PRODUCT.EXE resolves it to
+ * a mount point itself (src/product/product.c's pd_resolve_destination(),
+ * the same "pure function of the device name" cmd_mount()/cmd_dismount()
+ * already rely on, duplicated there rather than shared so PRODUCT.EXE
+ * carries no dependency on this process's per-fork state).
  */
 int cmd_product(struct dcl_command *cmd)
 {
+    struct dcl_context *ctx = dcl_get_context();
+
     if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
         dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
         return SS$_NORMAL;
@@ -2422,45 +2445,77 @@ int cmd_product(struct dcl_command *cmd)
     for (int i = 0; subcmd[i]; i++)
         subcmd[i] = (char)toupper((unsigned char)subcmd[i]);
 
-    if (strcmp(subcmd, "SHOW") != 0) {
-        dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
-        return SS$_NORMAL;
-    }
+    char *argv[8] = {NULL};
+    int argc = 0;
+    argv[argc++] = NULL;      /* placeholder for resolved binary path */
+    argv[argc++] = subcmd;
 
-    /* Need a second parameter for SHOW sub-subcommand */
-    if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
-        dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
-        return SS$_NORMAL;
-    }
-
+    /* Declared at function scope (not nested inside the if/else below) so
+     * the pointers stashed into argv[] stay valid until dcl_exec_utility()
+     * actually reads them -- a buffer scoped to a nested block would have
+     * its lifetime end before that call. */
+    char source_arg[1200];
+    char dest_arg[32];
     char showwhat[32];
-    strncpy(showwhat, cmd->params[1], sizeof(showwhat) - 1);
-    showwhat[sizeof(showwhat) - 1] = '\0';
-    for (int i = 0; showwhat[i]; i++)
-        showwhat[i] = (char)toupper((unsigned char)showwhat[i]);
+    char dev[16];
 
-    if (strcmp(showwhat, "PRODUCT") == 0) {
-        printf("----------------------------------- ----------- -----------\n");
-        printf("PRODUCT                             KIT TYPE    STATE\n");
-        printf("----------------------------------- ----------- -----------\n");
-        printf("OVMX %-30s Full LP     Installed\n", ovmx_product_version());
-        printf("----------------------------------- ----------- -----------\n");
-        printf("1 product found\n");
-        return SS$_NORMAL;
-    } else if (strcmp(showwhat, "HISTORY") == 0) {
-        time_t now = time(NULL);
-        struct tm *tm = localtime(&now);
-        printf("----------------------------------- ----------- ----------- -----------\n");
-        printf("PRODUCT                             KIT TYPE    STATE       DATE\n");
-        printf("----------------------------------- ----------- ----------- -----------\n");
-        printf("OVMX %-30s Full LP     Installed   %2d-%s-%04d\n",
-               ovmx_product_version(),
-               tm->tm_mday, vms_months[tm->tm_mon], 1900 + tm->tm_year);
-        printf("----------------------------------- ----------- ----------- -----------\n");
-        printf("1 item found\n");
-        return SS$_NORMAL;
+    if (strcmp(subcmd, "INSTALL") == 0) {
+        if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
+            dcl_error("PCSI", 2, "NOPROD", "missing product name");
+            return SS$_BADPARAM;
+        }
+        argv[argc++] = cmd->params[1];
+
+        const char *src = dcl_qualifier_value(cmd, "SOURCE");
+        if (!src || !src[0]) {
+            dcl_error("PCSI", 2, "NOSOURCE", "missing /SOURCE kit filespec");
+            return SS$_BADPARAM;
+        }
+        char linuxpath[1024];
+        dcl_resolve_path(ctx, src, linuxpath, sizeof(linuxpath));
+        snprintf(source_arg, sizeof(source_arg), "/SOURCE=%s", linuxpath);
+        argv[argc++] = source_arg;
+
+        const char *dst = dcl_qualifier_value(cmd, "DESTINATION");
+        if (dst && dst[0]) {
+            size_t n = strlen(dst);
+            if (n >= sizeof(dev) - 1) n = sizeof(dev) - 2;
+            size_t i;
+            for (i = 0; i < n; i++)
+                dev[i] = (char)toupper((unsigned char)dst[i]);
+            dev[i] = '\0';
+            if (i == 0 || dev[i - 1] != ':') { dev[i] = ':'; dev[i + 1] = '\0'; }
+            snprintf(dest_arg, sizeof(dest_arg), "/DESTINATION=%s", dev);
+            argv[argc++] = dest_arg;
+        }
+    } else if (strcmp(subcmd, "SHOW") == 0) {
+        if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
+            dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
+            return SS$_NORMAL;
+        }
+        strncpy(showwhat, cmd->params[1], sizeof(showwhat) - 1);
+        showwhat[sizeof(showwhat) - 1] = '\0';
+        for (int i = 0; showwhat[i]; i++)
+            showwhat[i] = (char)toupper((unsigned char)showwhat[i]);
+        argv[argc++] = showwhat;
+
+        const char *dst = dcl_qualifier_value(cmd, "DESTINATION");
+        if (dst && dst[0]) {
+            size_t n = strlen(dst);
+            if (n >= sizeof(dev) - 1) n = sizeof(dev) - 2;
+            size_t i;
+            for (i = 0; i < n; i++)
+                dev[i] = (char)toupper((unsigned char)dst[i]);
+            dev[i] = '\0';
+            if (i == 0 || dev[i - 1] != ':') { dev[i] = ':'; dev[i + 1] = '\0'; }
+            snprintf(dest_arg, sizeof(dest_arg), "/DESTINATION=%s", dev);
+            argv[argc++] = dest_arg;
+        }
     } else {
         dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
         return SS$_NORMAL;
     }
+
+    argv[argc] = NULL;
+    return dcl_exec_utility("PRODUCT.EXE", "PCSI", argv, argc);
 }

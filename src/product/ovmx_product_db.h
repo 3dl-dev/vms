@@ -58,7 +58,7 @@ extern "C" {
 struct ovmx_product_record {
     char     pr_name[OVMX_PRODDB_NAME_MAX];        /* e.g. "OVMX X86VMS VMS" */
     char     pr_producer[OVMX_PRODDB_PRODUCER_MAX]; /* e.g. "OVMX" */
-    char     pr_version[OVMX_PRODDB_VERSION_MAX];   /* e.g. "V0.1" */
+    char     pr_version[OVMX_PRODDB_VERSION_MAX];   /* copied from the kit header verbatim -- never a literal here (INV-1) */
     uint64_t pr_install_time;   /* seconds since epoch, when PRODUCT INSTALL ran */
     uint32_t pr_file_count;     /* files the kit placed (from kh_file_count) */
     uint32_t pr_state;          /* OVMX_PRODUCT_STATE_* */

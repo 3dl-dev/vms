@@ -626,6 +626,7 @@ if(BUILD_TOOLS)
     add_subdirectory(src/ovmx_provision)  # PROVISION.EXE (startup process, vms-9b7)
     add_subdirectory(src/vmslink)   # LINK.EXE + OVMXDUMP (VMS-native linker)
     add_subdirectory(src/install)   # INSTALL.EXE (known image database, vms-913.5)
+    add_subdirectory(src/product)   # PRODUCT.EXE (PCSI-equivalent installer, vms-df9)
 endif()
 
 # Install VMS system disk (ODS-2 directory structure)

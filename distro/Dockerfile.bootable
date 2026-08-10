@@ -262,6 +262,55 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     cd /initramfs-fat && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx.cpio.gz && \
     echo "FAT initramfs: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"
 
+# -- Distribution system-disk image (vms-8ab) ----------------------------------
+# Master a PRE-INSTALLED, bootable VMSFS system disk from the SAME populated
+# /vms system tree the fat initramfs just assembled above (/initramfs-fat/vms:
+# the [SYS0][SYSCOMMON][SYSEXE][SYSLIB][SYSMGR][SYSHLP][SYSUPD][USERS] tree with
+# DCL.EXE/LOGINOUT.EXE/IMGACT.EXE/PROVISION.EXE, the SYSLIB shareables, SYSUAF,
+# STARTUP.COM, PARTS). Kernel modules are deliberately NOT on the disk — they are
+# initramfs cargo (/initramfs-fat/lib/modules), loaded before any disk exists.
+#
+# This is the artifact a §6-stripped PID 1 boots (mount-or-halt,
+# docs/design-init-scope.md §6): the disk arrives ALREADY installed, so no
+# self-install runs. The SLIM initramfs below (STARTUP.EXE + vms.ko + vmsfs.ko +
+# minimal config) mounts this image at /vms and finds the full system on it.
+#
+# Clean-room Rule 8: vmsfs_master (tools/vmsfs_master.c) is factory BUILD
+# tooling — it is never shipped on the media, never given a VMS name, never run
+# at boot. The on-disk byte layout comes entirely from the single shared
+# description in src/kernel/vmsfs/vmsfs_ondisk.h (the same header vmsfs.ko and
+# INITIALIZE.EXE use); VMSFS is an OVMX design choice, labeled as such in that
+# header and in the tool — NOT presented as byte-authentic ODS-2. The mastering
+# policy (SYSTEM UIC [1,4], every file version ;1, the OVMXSYS volume label) is
+# an OVMX build-tool choice, not a VMS-authentic fact.
+#
+# 64 MB matches the system-disk convention used everywhere else (boot.sh /
+# run-qemu.sh / test_persistent_boot.sh all size a blank DKA0: at 64M) and
+# leaves free space for runtime writes (e.g. PARTS creating its indexed data
+# file), while staying well above the tree's own footprint.
+RUN /src/build-static/bin/vmsfs_master master \
+        /boot/ovmx-distrib.img OVMXSYS /initramfs-fat/vms 64 && \
+    /src/build-static/bin/vmsfs_master list /boot/ovmx-distrib.img && \
+    # Ground-source gate, baked into the build: extract the mastered image back
+    # out with the tool's round-trip reader and prove the login chain the SLIM
+    # boot depends on (LOGINOUT -> DCL, via IMGACT, established by PROVISION) is
+    # actually PRESENT on the disk and byte-identical to what the fat initramfs
+    # staged. A mastered image that does not carry these cannot reach a login
+    # prompt, so this is checked here, not merely asserted downstream.
+    rm -rf /tmp/distrib-verify && \
+    /src/build-static/bin/vmsfs_master extract /boot/ovmx-distrib.img /tmp/distrib-verify && \
+    for name in DCL.EXE LOGINOUT.EXE IMGACT.EXE PROVISION.EXE SYSUAF.DAT; do \
+        SRC="/initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/$name" && \
+        OUT="/tmp/distrib-verify/SYS0/SYSCOMMON/SYSEXE/$name" && \
+        [ -f "$OUT" ] || { echo "FAIL: mastered ovmx-distrib.img missing SYS\$SYSTEM:$name"; exit 1; } && \
+        cmp -s "$SRC" "$OUT" || { echo "FAIL: mastered SYS\$SYSTEM:$name differs from staged bytes"; exit 1; } && \
+        echo "OK: ovmx-distrib.img carries SYS\$SYSTEM:$name (byte-identical to staged)"; \
+    done && \
+    [ -f /tmp/distrib-verify/SYS0/SYSCOMMON/SYSMGR/STARTUP.COM ] || { echo "FAIL: mastered image missing SYS\$MANAGER:STARTUP.COM"; exit 1; } && \
+    echo "OK: ovmx-distrib.img carries SYS\$MANAGER:STARTUP.COM" && \
+    rm -rf /tmp/distrib-verify && \
+    echo "DISTRIB image: $(ls -lh /boot/ovmx-distrib.img | awk '{print $5}')"
+
 # -- SLIM initramfs ------------------------------------------------------------
 # Bootstrap-only: STARTUP.EXE + INITIALIZE.EXE + kernel modules + config.
 # All other binaries (DCL, LOGIN, HELP) must be on the system disk.
@@ -334,6 +383,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /boot/vmlinuz /boot/vmlinuz
 COPY --from=builder /boot/initramfs-ovmx.cpio.gz /boot/initramfs-ovmx.cpio.gz
 COPY --from=builder /boot/initramfs-ovmx-slim.cpio.gz /boot/initramfs-ovmx-slim.cpio.gz
+# Pre-installed distribution system disk (vms-8ab). The SLIM initramfs boots
+# this; a §6-stripped PID 1 mounts it or halts (docs/design-init-scope.md §6).
+COPY --from=builder /boot/ovmx-distrib.img /boot/ovmx-distrib.img
 # Negative controls for test_executive_integral.sh only — never a runtime.
 COPY --from=builder /boot/initramfs-ovmx-noexec.cpio.gz /boot/initramfs-ovmx-noexec.cpio.gz
 COPY --from=builder /boot/initramfs-ovmx-nodev.cpio.gz /boot/initramfs-ovmx-nodev.cpio.gz
@@ -342,6 +394,11 @@ ENV MEMORY=512M
 
 # INITRD=fat (default) — use fat initramfs for first boot / install
 # INITRD=slim          — use slim initramfs for subsequent boots (system disk required)
+# DISTRIB=1             — boot the PRE-INSTALLED distribution disk (vms-8ab): seed
+#                         the disk from /boot/ovmx-distrib.img when it does not yet
+#                         exist (instead of a blank disk PID 1 would self-install),
+#                         and force the SLIM initramfs. This is the §6 mount-or-halt
+#                         shape: an already-installed disk, no self-install.
 # SYSDISK_NAME          — disk filename inside /data volume (default: sysdisk.img)
 #
 # boot.sh mounts a host directory at /data so the container owns the disk
@@ -357,6 +414,7 @@ CMD ARCH=$(uname -m) && \
         MACHINE=""; \
         CONSOLE="console=ttyS0"; \
     fi && \
+    if [ -n "${DISTRIB:-}" ]; then INITRD=slim; fi && \
     if [ "${INITRD:-fat}" = "slim" ]; then \
         INITRAMFS=/boot/initramfs-ovmx-slim.cpio.gz; \
     else \
@@ -367,7 +425,13 @@ CMD ARCH=$(uname -m) && \
     else \
         DISK="/tmp/sysdisk.img"; \
     fi && \
-    if [ ! -e "$DISK" ]; then truncate -s 64M "$DISK"; fi && \
+    if [ ! -e "$DISK" ]; then \
+        if [ -n "${DISTRIB:-}" ]; then \
+            cp /boot/ovmx-distrib.img "$DISK"; \
+        else \
+            truncate -s 64M "$DISK"; \
+        fi; \
+    fi && \
     exec $QEMU $MACHINE \
         -kernel /boot/vmlinuz \
         -initrd "$INITRAMFS" \

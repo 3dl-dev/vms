@@ -8,6 +8,9 @@
 #   ./boot.sh --disk path/to/disk.img  # Boot with specified disk image
 #   ./boot.sh --rebuild                # Force Docker image rebuild, then boot
 #   ./boot.sh --slim                   # Use slim initramfs (needs installed disk)
+#   ./boot.sh --distrib                # Boot the PRE-INSTALLED distribution disk
+#                                      #   (dist/ovmx-distrib.img, mastered at build;
+#                                      #    slim initramfs, no self-install — vms-8ab)
 #   ./boot.sh --help                   # Show this help
 #
 # First run (or --clean): Docker builds the image if needed, the container
@@ -42,6 +45,7 @@ MEMORY="${MEMORY:-512M}"
 FORCE_REBUILD=0
 FORCE_FRESH=0
 USE_SLIM=0
+USE_DISTRIB=0
 DISK_PATH=""
 
 # Parse arguments
@@ -57,6 +61,10 @@ while [ $# -gt 0 ]; do
             ;;
         --slim|-s)
             USE_SLIM=1
+            shift
+            ;;
+        --distrib)
+            USE_DISTRIB=1
             shift
             ;;
         --disk|-d)
@@ -77,7 +85,7 @@ while [ $# -gt 0 ]; do
             ;;
         *)
             echo "Unknown option: $1" >&2
-            echo "Usage: $0 [--clean] [--rebuild] [--slim] [--disk path]" >&2
+            echo "Usage: $0 [--clean] [--rebuild] [--slim] [--distrib] [--disk path]" >&2
             exit 1
             ;;
     esac
@@ -159,8 +167,16 @@ fi
 
 INITRD_ENV="fat"
 [ "$USE_SLIM" -eq 1 ] && INITRD_ENV="slim"
+# --distrib forces the slim initramfs and a pre-installed disk (see below).
+[ "$USE_DISTRIB" -eq 1 ] && INITRD_ENV="slim"
 
-if [ "$CLEAN_INSTALL" -eq 1 ]; then
+if [ "$USE_DISTRIB" -eq 1 ]; then
+    if [ "$CLEAN_INSTALL" -eq 1 ]; then
+        echo "=== Booting — seeding disk from the PRE-INSTALLED distribution image (dist/ovmx-distrib.img), then logging in (${MEMORY} RAM, initrd: slim) ==="
+    else
+        echo "=== Booting — log in as SYSTEM (${MEMORY} RAM, disk: $DISK_NAME, initrd: slim, pre-installed distribution disk) ==="
+    fi
+elif [ "$CLEAN_INSTALL" -eq 1 ]; then
     echo "=== Booting — first boot installs OVMX (INITIALIZE + system seed), then logs in (${MEMORY} RAM, initrd: $INITRD_ENV) ==="
 else
     echo "=== Booting — log in as SYSTEM (${MEMORY} RAM, disk: $DISK_NAME, initrd: $INITRD_ENV) ==="
@@ -172,6 +188,7 @@ echo ""
 exec docker run --rm -it \
     -e MEMORY="$MEMORY" \
     -e INITRD="$INITRD_ENV" \
+    -e DISTRIB="$([ "$USE_DISTRIB" -eq 1 ] && echo 1)" \
     -e SYSDISK_NAME="$DISK_NAME" \
     -v "$DISK_DIR:/data" \
     "$IMAGE"

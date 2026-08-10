@@ -1376,14 +1376,18 @@ static int vms_kif_lnm_myscope(uint32_t *group_key, uint32_t *job_key)
     return 1;
 }
 
-int vms_kif_lnm_translate(uint32_t table, const char *name,
+int vms_kif_lnm_translate(uint32_t table, const char *name, uint8_t index,
                           char *value, uint32_t valsz,
-                          uint16_t *vallen, uint32_t *attrs)
+                          uint16_t *vallen, uint32_t *attrs,
+                          uint8_t *num_equiv)
 {
     struct vms_lnm_arena *a;
     uint32_t scope_key;
     uint32_t group_key, job_key;
     int tries;
+
+    if (num_equiv)
+        *num_equiv = 0;
 
     if (!name || !value || valsz == 0)
         return -1;
@@ -1417,10 +1421,12 @@ int vms_kif_lnm_translate(uint32_t table, const char *name,
     for (tries = 0; tries < 1024; tries++) {
         uint64_t g0 = lnm_gen_load(a);
         uint32_t i, max;
-        int found = 0;
+        int name_found = 0;   /* the logical name itself exists in-scope */
+        int idx_found = 0;    /* AND `index` is one of its equivalence strings */
         char vbuf[VMS_LNM_MAX_VALUE + 1];
         uint16_t vlen = 0;
         uint32_t vattr = 0;
+        uint8_t nequiv = 0;
 
         if (g0 & 1ULL)
             continue;   /* write in flight */
@@ -1439,13 +1445,18 @@ int vms_kif_lnm_translate(uint32_t table, const char *name,
             if (e->num_equiv == 0)
                 continue;
 
-            vlen = e->equiv[0].length;
-            if (vlen > VMS_LNM_MAX_VALUE)
-                vlen = VMS_LNM_MAX_VALUE;
-            vms_memcpy(vbuf, e->equiv[0].value, vlen);
-            vbuf[vlen] = '\0';
+            name_found = 1;
+            nequiv = e->num_equiv;
             vattr = e->attributes;
-            found = 1;
+
+            if (index < e->num_equiv) {
+                vlen = e->equiv[index].length;
+                if (vlen > VMS_LNM_MAX_VALUE)
+                    vlen = VMS_LNM_MAX_VALUE;
+                vms_memcpy(vbuf, e->equiv[index].value, vlen);
+                vbuf[vlen] = '\0';
+                idx_found = 1;
+            }
             break;
         }
 
@@ -1454,7 +1465,10 @@ int vms_kif_lnm_translate(uint32_t table, const char *name,
         if (lnm_gen_load(a) != g0)
             continue;
 
-        if (!found)
+        if (num_equiv)
+            *num_equiv = name_found ? nequiv : 0;
+
+        if (!idx_found)
             return 0;
 
         if (vlen >= valsz)
@@ -1472,15 +1486,19 @@ int vms_kif_lnm_translate(uint32_t table, const char *name,
     return -1;
 }
 
-/* The public enumerate record tracks the arena's name/value widths. If the
- * arena ABI ever changes width this fails at compile time rather than
- * silently truncating a listed name or value. */
+/* The public enumerate record tracks the arena's name/value/equiv widths. If
+ * the arena ABI ever changes width this fails at compile time rather than
+ * silently truncating a listed name, value, or search-list entry. */
 _Static_assert(sizeof(((struct vms_kif_lnm_enum_rec *)0)->name)
                == VMS_LNM_MAX_NAME + 1,
                "vms_kif_lnm_enum_rec.name width != arena name width");
-_Static_assert(sizeof(((struct vms_kif_lnm_enum_rec *)0)->value)
+_Static_assert(sizeof(((struct vms_kif_lnm_enum_rec *)0)->values[0])
                == VMS_LNM_MAX_VALUE + 1,
-               "vms_kif_lnm_enum_rec.value width != arena value width");
+               "vms_kif_lnm_enum_rec.values width != arena value width");
+_Static_assert(sizeof(((struct vms_kif_lnm_enum_rec *)0)->values)
+               / sizeof(((struct vms_kif_lnm_enum_rec *)0)->values[0])
+               == VMS_LNM_MAX_EQUIV,
+               "vms_kif_lnm_enum_rec.values count != arena equiv count");
 
 int vms_kif_lnm_enumerate(uint32_t table,
                           struct vms_kif_lnm_enum_rec *out, uint32_t max_out)
@@ -1535,7 +1553,7 @@ int vms_kif_lnm_enumerate(uint32_t table,
 
         for (i = 0; i < max && n < max_out; i++) {
             const struct vms_lnm_entry *e = &a->entries[i];
-            uint16_t vlen;
+            uint8_t nv, k;
 
             if (!e->in_use || e->table != table || e->scope_key != scope_key)
                 continue;
@@ -1545,11 +1563,17 @@ int vms_kif_lnm_enumerate(uint32_t table,
             vms_strncpy(out[n].name, e->name, VMS_LNM_MAX_NAME);
             out[n].name[VMS_LNM_MAX_NAME] = '\0';
 
-            vlen = e->equiv[0].length;
-            if (vlen > VMS_LNM_MAX_VALUE)
-                vlen = VMS_LNM_MAX_VALUE;
-            vms_memcpy(out[n].value, e->equiv[0].value, vlen);
-            out[n].value[vlen] = '\0';
+            nv = e->num_equiv;
+            if (nv > VMS_LNM_MAX_EQUIV)
+                nv = VMS_LNM_MAX_EQUIV;
+            for (k = 0; k < nv; k++) {
+                uint16_t vlen = e->equiv[k].length;
+                if (vlen > VMS_LNM_MAX_VALUE)
+                    vlen = VMS_LNM_MAX_VALUE;
+                vms_memcpy(out[n].values[k], e->equiv[k].value, vlen);
+                out[n].values[k][vlen] = '\0';
+            }
+            out[n].num_values = nv;
 
             out[n].attributes = e->attributes;
             n++;

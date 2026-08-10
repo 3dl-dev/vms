@@ -213,7 +213,8 @@ static int do_translate(uint32_t table, const char *name, uint32_t reader_uic,
         if (!(sst & 1)) {
             found = -1;
         } else {
-            found = vms_kif_lnm_translate(table, name, buf, sizeof(buf), &vallen, &attrs);
+            found = vms_kif_lnm_translate(table, name, 0, buf, sizeof(buf),
+                                          &vallen, &attrs, NULL);
         }
         int32_t rc = found;
         {

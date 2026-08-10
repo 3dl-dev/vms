@@ -85,8 +85,8 @@ static uint32_t translate_executive(uint32_t table, const char *name,
 {
     char equiv[LNM_MAX_VALUE + 1];
     uint32_t attr = 0;
-    int r = vms_kif_lnm_translate(table, name, equiv,
-                                  sizeof(equiv), NULL, &attr);
+    int r = vms_kif_lnm_translate(table, name, 0, equiv,
+                                  sizeof(equiv), NULL, &attr, NULL);
     if (r == 1)
         return fill_result(equiv, attr, result, result_size,
                            result_length, attributes);
@@ -323,4 +323,109 @@ uint32_t lnm_translate_iterative(lnm_manager_t *mgr, const char *table_name,
     }
 
     return SS$_RESULTOVF;
+}
+
+/*
+ * lnm_translate_values - vms-420: the multi-value counterpart of
+ * lnm_translate(). A SPECIFIC table only (never the LNM$FILE_DEV /
+ * LNM$DCL_LOGICAL search-list alias -- a caller wanting the search-list
+ * default's ALL values would need to pick which table's values to show,
+ * exactly as lnm_translate()'s search-list branch picks which table's
+ * single value to show; SHOW LOGICAL's callers already loop tables
+ * themselves for that reason).
+ *
+ * SYSTEM/GROUP/JOB read the executive arena by walking vms_kif_lnm_translate
+ * with an increasing index (0, 1, 2, ...) until it reports the entry's
+ * num_equiv reached -- the same "no fallback" honesty as lnm_translate()'s
+ * translate_executive(): an unavailable executive returns SS$_NOSUCHDEV
+ * directly (CLAUDE.md Rule 9 / INV-6), never a partial or fabricated result.
+ * LNM$PROCESS_TABLE (and any other local table) already stores every
+ * equivalence string in entry->translations[] (lnm_create_multi), so those
+ * are copied out directly under no lock beyond the table's own (none is
+ * currently taken for reads elsewhere in this file either).
+ */
+uint32_t lnm_translate_values(lnm_manager_t *mgr, const char *table_name,
+                               const char *logical_name,
+                               char values[][LNM_MAX_VALUE + 1],
+                               uint8_t max_values, uint8_t *num_values,
+                               uint32_t *attributes)
+{
+    if (num_values)
+        *num_values = 0;
+
+    if (!mgr || !logical_name || !values || max_values == 0)
+        return SS$_BADPARAM;
+
+    size_t namelen = strlen(logical_name);
+    if (namelen == 0 || namelen > LNM_MAX_NAME)
+        return SS$_IVLOGNAM;
+
+    int is_system = (table_name &&
+                     (strcasecmp(table_name, LNM_SYSTEM_TABLE) == 0 ||
+                      strcasecmp(table_name, "LNM$SYSTEM_TABLE") == 0 ||
+                      strcasecmp(table_name, "SYSTEM") == 0));
+    int is_group = (table_name &&
+                    (strcasecmp(table_name, LNM_GROUP_TABLE) == 0 ||
+                     strcasecmp(table_name, "GROUP") == 0));
+    int is_job = (table_name &&
+                 (strcasecmp(table_name, LNM_JOB_TABLE) == 0 ||
+                  strcasecmp(table_name, "JOB") == 0));
+
+    if (is_system || is_group || is_job) {
+        uint32_t exec_tbl = is_system ? VMS_LNM_TBL_SYSTEM
+                          : is_group  ? VMS_LNM_TBL_GROUP
+                                      : VMS_LNM_TBL_JOB;
+        uint8_t idx, nequiv = 0, filled = 0;
+        uint32_t attr = 0;
+
+        for (idx = 0; ; idx++) {
+            char equiv[LNM_MAX_VALUE + 1];
+            uint8_t this_nequiv = 0;
+            int r = vms_kif_lnm_translate(exec_tbl, logical_name, idx, equiv,
+                                          sizeof(equiv), NULL, &attr,
+                                          &this_nequiv);
+            if (r < 0)
+                return SS$_NOSUCHDEV;        /* executive absent -- no fallback */
+            if (idx == 0 && this_nequiv == 0)
+                return SS$_NOLOGNAM;         /* name not present at all */
+            nequiv = this_nequiv;
+            if (!r)
+                break;                       /* idx reached the end of the list */
+            if (filled < max_values) {
+                strncpy(values[filled], equiv, LNM_MAX_VALUE);
+                values[filled][LNM_MAX_VALUE] = '\0';
+                filled++;
+            }
+            if (idx + 1 >= nequiv)
+                break;
+        }
+
+        if (num_values)
+            *num_values = filled;
+        if (attributes)
+            *attributes = attr;
+        return SS$_NORMAL;
+    }
+
+    /* A local table (LNM$PROCESS_TABLE or an unrecognised name). */
+    lnm_table_t *table = lnm_find_table(mgr, table_name);
+    if (!table)
+        return SS$_NOLOGTAB;
+
+    lnm_entry_t *entry = lnm_table_lookup(table, logical_name);
+    if (!entry || entry->num_translations == 0)
+        return SS$_NOLOGNAM;
+
+    uint8_t n = entry->num_translations;
+    if (n > max_values)
+        n = max_values;
+    for (uint8_t i = 0; i < n; i++) {
+        strncpy(values[i], entry->translations[i].value, LNM_MAX_VALUE);
+        values[i][LNM_MAX_VALUE] = '\0';
+    }
+    if (num_values)
+        *num_values = n;
+    if (attributes)
+        *attributes = entry->attributes;
+    return SS$_NORMAL;
 }

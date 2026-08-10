@@ -340,6 +340,27 @@ static void test_multi_equivalence(void)
     lnm_table_t *tbl = lnm_find_table(mgr, LNM_PROCESS_TABLE);
     check(tbl != NULL, "found process table");
 
+    /*
+     * vms-420: lnm_translate() (above) only ever returns equivalence index
+     * 0 -- that is exactly the shape of the defect this item fixed (DEFINE
+     * FOO BAR,BAZ + SHOW LOGICAL FOO dropped BAZ). lnm_translate_values()
+     * is the multi-value counterpart SHOW LOGICAL now uses; confirm it
+     * returns ALL THREE equivalence strings, in order, for this same entry.
+     */
+    char values[LNM_MAX_SEARCHLIST][LNM_MAX_VALUE + 1];
+    uint8_t nvalues = 0;
+    uint32_t vst = lnm_translate_values(mgr, LNM_PROCESS_TABLE, "VMS$SEARCH",
+                                        values, LNM_MAX_SEARCHLIST,
+                                        &nvalues, NULL);
+    check($VMS_STATUS_SUCCESS(vst), "lnm_translate_values on VMS$SEARCH succeeds");
+    check(nvalues == 3, "lnm_translate_values reports all 3 equivalence strings");
+    check(nvalues == 3 && strcmp(values[0], "/vms/dka0") == 0,
+          "lnm_translate_values index 0 is /vms/dka0");
+    check(nvalues == 3 && strcmp(values[1], "/vms/dkb0") == 0,
+          "lnm_translate_values index 1 is /vms/dkb0 (dropped before vms-420)");
+    check(nvalues == 3 && strcmp(values[2], "/vms/dkc0") == 0,
+          "lnm_translate_values index 2 is /vms/dkc0 (dropped before vms-420)");
+
     lnm_shutdown(mgr);
 }
 

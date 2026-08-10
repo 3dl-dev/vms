@@ -541,21 +541,35 @@ uint32_t vms_kif_lnm_define(uint32_t table, const char *name,
 uint32_t vms_kif_lnm_delete(uint32_t table, const char *name, uint8_t acmode);
 
 /* Translate a name by reading the mmap'd arena (no syscall on a warm
- * mapping). Returns 1 and fills value/vallen/attrs when found, 0 when the
- * name is absent from the table, or -1 when the executive/mapping is
- * unavailable (the caller renders that as SS$_NOSUCHDEV). `value` receives
- * the first (index 0) equivalence string, NUL-terminated.
+ * mapping). `index` selects WHICH equivalence string of a (possibly
+ * multi-valued, i.e. search-list) logical name to return -- 0 is the
+ * first, mirroring VMS $TRNLNM's index argument (a caller enumerates a
+ * search list by calling again with index+1 until this returns 0).
+ * Returns 1 and fills value/vallen/attrs when `index` names a value that
+ * exists, 0 when the name is absent OR `index` is beyond the entry's last
+ * equivalence string (vms-420: previously this always read index 0 only,
+ * which is why DEFINE FOO BAR,BAZ + SHOW LOGICAL FOO silently dropped
+ * BAZ), or -1 when the executive/mapping is unavailable (the caller
+ * renders that as SS$_NOSUCHDEV). If `num_equiv` is non-NULL and the name
+ * IS present in the table (regardless of whether `index` itself is in
+ * range), it receives the entry's total equivalence count, so a caller
+ * enumerating a search list knows when it has reached the end; it is set
+ * to 0 when the name is not found at all.
  * Wired: sys$trnlnm (src/libvms/syssvc/sys_logical.c). */
-int vms_kif_lnm_translate(uint32_t table, const char *name,
+int vms_kif_lnm_translate(uint32_t table, const char *name, uint8_t index,
                           char *value, uint32_t valsz,
-                          uint16_t *vallen, uint32_t *attrs);
+                          uint16_t *vallen, uint32_t *attrs,
+                          uint8_t *num_equiv);
 
-/* One record produced by vms_kif_lnm_enumerate: a logical name and its
- * FIRST (index 0) equivalence string, both NUL-terminated. Sizes track the
- * arena's VMS_LNM_MAX_NAME/VALUE (asserted in vms_kif.c). */
+/* One record produced by vms_kif_lnm_enumerate: a logical name and ALL of
+ * its equivalence strings (vms-420 -- previously only index 0 was carried,
+ * which is why an enumerated search-list logical showed just its first
+ * value), NUL-terminated. Sizes track the arena's VMS_LNM_MAX_NAME/VALUE/
+ * EQUIV (asserted in vms_kif.c). */
 struct vms_kif_lnm_enum_rec {
     char     name[VMS_LNM_MAX_NAME + 1];
-    char     value[VMS_LNM_MAX_VALUE + 1];
+    uint8_t  num_values;                          /* 1..VMS_LNM_MAX_EQUIV */
+    char     values[VMS_LNM_MAX_EQUIV][VMS_LNM_MAX_VALUE + 1];
     uint32_t attributes;
 };
 

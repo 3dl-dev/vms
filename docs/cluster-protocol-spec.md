@@ -4731,7 +4731,15 @@ connections that are not open on the member — which stalls per-VC delivery (p.
 2-31: an undeliverable message can break the VC). Isolating it needs an
 experiment that varies the connection SET OVMX drives the readmission over (drive
 op 0x02 and only the model/params on the single member-initiated VMS$VAXcluster
-Con.ID, suppress the other sequenced sends), not a `send_seq` change.
+Con.ID, suppress the other sequenced sends), not a `send_seq` change. **[REFINED —
+see §4(O.15): the frame the member freezes on (`f167`, `ss=20`) rides a connection
+that DID reach OPEN on the member, and it is byte-identical to the 58-byte `0x4b`
+frames the SUCCESS oracle sends and the member ACKS — so the "sequenced message on a
+connection not open on the member" reading does not hold for the freeze frame
+itself. The grounded root is that OVMX opens its OWN SCS$DIRECTORY and MSCP$DISK
+CLIENT connections to the COORDINATOR member and front-loads that member's VC with
+~19 messages of directory + disk-discovery traffic BEFORE op 0x02 (`ss=21`), where
+the oracle rejoiner keeps the coordinator's VC lean and reaches op 0x02 at `ss=14`.]**
 
 **Kill-switch / test note.** This subsection ships **no wire change** (it refutes
 a proposed change and records where the frontier actually is), so it carries no
@@ -4752,6 +4760,126 @@ XITDONE=0, `send_seq` 3..27 contiguous, member `recv_ack` frozen at 19,
 `tests/lab/tools/rejoin_arm_lab2.sh`; code `src/vmsscs/scsd.c:864/1021` (one
 `ps->vc.seq` per peer) and `src/vmsscs/scs_vc.c` (the VC seq engine);
 measurement `tools/cluster/dissect_sca.py`.
+
+#### 4(O.15) The rejoin readmission stalls because OVMX FRONT-LOADS the coordinator member's virtual circuit with its OWN SCS$DIRECTORY + MSCP$DISK client discovery, so op 0x02 lands at `ss=21` behind the point (`ss=19→20`) where the member stops advancing `recv_seq` — the freeze frame is a VALID op-5 directory CONFIRM5, byte-identical to one the SUCCESS oracle sends and the member ACKS, so it is NEITHER the frame's content NOR an unopened Con.ID; the oracle rejoiner keeps that VC lean and reaches op 0x02 at `ss=14` (GROUNDED, SUCCESS oracle + same-day live lab-2 bracket, freeze-frame forensic, `vms-e15`, 2026-08-10)
+
+**Frame.** §4(O.14) refuted the per-connection-`send_seq` candidate and left the
+open question: WHY does the member stop advancing its per-VC `recv_seq` at
+`ss=19→20`, stranding op 0x02 behind it? Its leading (not-yet-isolated) hypothesis
+was "OVMX emitting sequenced messages on member connections that are not open on the
+member." This subsection pins the exact freeze frame, REFUTES that hypothesis for
+the freeze frame itself, and relocates the root to the SHAPE of OVMX's readmission
+stream on the coordinator's VC.
+
+**The freeze frame, pinned (GROUNDED, `d94-bc2B1rejoin.pcap`, OVMX
+`66:fb:26:46:a3:49` → coordinator VAX2 `08:00:2b:f2:30:ed`; `send_seq` at abs 34 and
+`recv_ack` at abs 32 are the §4(O.14)/`scs_seqgap_measure.py` grounded offsets, read
+for every sequenced envelope regardless of length class).** On the OVMX→VAX2 VC the
+member's `recv_ack` ceiling over the WHOLE capture is **19** (last at `f165`) and
+never reaches 20. OVMX's `ss=20` frame is **`f167`: a 58-byte `0x4b` SCS$DIRECTORY
+op-5 CONFIRM5** (`SCS_DIR_CONFIRM5`, `src/vmsscs/scs_dir.c`; vms-754 flags op-5's
+identity as the shared-namespace REJECT_RSP shape) riding the **member-opened**
+SCS$DIRECTORY connection (OVMX `local=0x22770017` / VAX2 `remote=0x6F16000D` — the
+connection VAX2 opened and OVMX answered, `SCSD-I-DIRCONN ... remote=0x6F16000D
+local=0x22770017 with peer 08:00:2b:f2:30:ed`, which reached `--RCV_ACCEPT_RSP-->
+OPEN`). OVMX's op 0x02 rides `ss=21/22/24` (`f170/f171/f207`, the 190-byte class on
+the VMS$VAXcluster VC `local=0x22770011` / `remote=0x6F1B0010`) — several messages
+BEHIND the frozen point, so it is never delivered; VAX2 sends `cm_responses=0`, no
+op 0x04 reciprocation (its only two 190-byte frames to OVMX are its OWN op 0x01
+advertisement, not a reciprocation), then breaks the VC (`conn[member=DISC SENT]`),
+`XITDONE=0`.
+
+**REFUTATION — the freeze frame is neither malformed nor on an unopened Con.ID.**
+Two grounded facts kill §4(O.14)'s leading hypothesis for `f167`:
+1. **It rides an OPEN connection.** The member-opened SCS$DIRECTORY connection
+   `0x22770017`/`0x6F16000D` reached the Figure-2-14 OPEN state on both sides (the
+   DIRCONN bind above), so this is not "a sequenced message on a connection not open
+   on the member."
+2. **It is byte-identical to a frame the oracle sends AND the member ACKS.** In the
+   SUCCESS oracle the crash-rejoiner VAX3 (`08:00:2b:11:22:33`) sends 58-byte `0x4b`
+   op-5 frames to VAX2 (`08:00:2b:78:56:b9`) at `f1251 ss=8` and `f1262 ss=13`, with
+   the identical trailing body shape (`… 01 00 00 02 0e 00 04 00 …` then the Con.ID
+   pair), and VAX2 walks its `recv_seq` straight through them to op 0x02 at `ss=14`
+   (`f1298`), reciprocated at `f1299`. So the 58-byte op-5 CONFIRM5 frame class is a
+   normal, ackable part of a SUCCESSFUL rejoin — the freeze is not in this frame.
+
+**ROOT (GROUNDED) — OVMX bloats the COORDINATOR's VC; the oracle keeps it lean.**
+The difference is which connections ride the one VC that must carry the readmission.
+`send_seq` is per-VC (§4(O.14)), so every connection OVMX multiplexes onto the
+coordinator VAX2 shares VAX2's single sequence. OVMX opens, to VAX2:
+
+| OVMX conid | VAX2 conid | connection | `send_seq` it consumes on VAX2's VC |
+|---|---|---|---|
+| `0x22770018` | `0xAA8C000C` | **OVMX's OWN** SCS$DIRECTORY client (`SCSD-I-OWNDIRBOUND`) | 1, 2, 3, 6, 8, 13 |
+| `0x22770017` | `0x6F16000D` | member-opened SCS$DIRECTORY (OVMX answers) | 5, 7, 10, 14, 15, **20 = freeze** |
+| `0x2277001A` | `0x6F18000E` | **OVMX's OWN** MSCP$DISK client (`SCSD-I-MSCPBOUND`) | 9, 11, 12, 16, 19, 23 |
+| `0x22770011` | `0x6F1B0010` | member-opened VMS$VAXcluster (op 0x02 rides here) | 18, **21, 22, 24 = op 0x02** |
+
+OVMX opens its OWN SCS$DIRECTORY and OWN MSCP$DISK CLIENT connections to VAX2 and
+runs directory lookups + MSCP disk discovery (SCC + GET UNIT STATUS walk) on them —
+so ~19 of OVMX's sequenced messages to VAX2 are its own discovery traffic, and op
+0x02 does not ride until `ss=21`. The SUCCESS oracle's rejoiner keeps VAX2's VC
+LEAN: §4(O.11)'s connect census shows VAX3 opens its OWN SCS$DIRECTORY (`f1264`) and
+MSCP$DISK (`f1277`) client connections to **VAX1** (the OTHER member) and merely
+ANSWERS VAX2's inbound connects — so on the VAX3→VAX2 VC the whole stream is
+contiguous `4..22` with op 0x02 at `ss=14`. A rejoiner runs its disk discovery
+against a NON-coordinator member and keeps the coordinator's VC carrying essentially
+only the readmission; OVMX runs it against BOTH, including the coordinator, and buries
+op 0x02 under it.
+
+**The blocker relocates AGAIN, and is now NONE of the prior candidates NOR the
+freeze frame's content.** Not the op 0x02 body (§4(O.10)); not the connection
+selection (§4(O.11/12) — op 0x02 IS on the member-initiated VMS$VAXcluster VC); not
+SYSAP-contiguity (§4(O.13)); not a per-connection `send_seq` gap (§4(O.14)); and not
+the `ss=20` frame's payload (this subsection — identical to an acked oracle frame).
+It is that OVMX front-loads the coordinator's one readmission VC with its own
+directory + disk-discovery client traffic, and the member stops advancing `recv_seq`
+at `ss=19→20` — before op 0x02 at `ss=21` is ever reached. Whatever makes VAX2 stop
+at the `ss=20` CONFIRM5 (a frame it accepts in the oracle) does so only because OVMX
+placed ~19 messages of its own discovery ahead of the readmission on the single VC
+that must carry it, where the oracle placed none.
+
+**Two live candidates for the fix increment (open, `vms-694`).**
+1. **COORDINATOR-LEAN readmission (leading).** On a rejoin, do NOT open OVMX's own
+   SCS$DIRECTORY / MSCP$DISK CLIENT connections to the COORDINATOR member (the one
+   whose VMS$VAXcluster VC drives op 0x02); keep that VC carrying only
+   model/params/op 0x02, and run disk discovery against a NON-coordinator member, as
+   the oracle does (§4(O.11) census). Oracle-grounded and wire-visible (op 0x02 moves
+   to `ss≈14`; the own-dir/own-MSCP frames leave the coordinator's VC) → it ships an
+   env kill-switch, a fail-pre/pass-post frame-replay test on the coordinator VC's
+   pre-op-0x02 stream length, and a live rejoin bracket flipping `XITDONE` 0→1. This
+   is the isolation experiment §4(O.14) asked for, now with its target named, and is
+   the next fix increment — more than this RE subsection.
+2. **WHY VAX2 will not deliver the `ss=20` CONFIRM5 specifically** (subordinate).
+   Whether OVMX's op-5 (vms-754: REJECT_RSP-shaped) directory frame is the wrong
+   message for the member-opened directory connection's state needs the op-4/op-5
+   directory-handshake identities pinned against the oracle's directory exchange,
+   which the non-190 Con.ID/offset ungroundedness (§4(d)) currently blocks. Candidate
+   1 subsumes it if removing the bloat means the member never has to deliver that
+   frame ahead of op 0x02.
+
+**Kill-switch / test note.** This subsection ships **no wire change** (it pins the
+freeze frame, refutes the frame-content and Con.ID-not-open readings, and relocates
+the frontier to the coordinator-VC bloat), so it carries no new kill-switch or
+fail-pre/pass-post frame test — exactly as §4(O.14) and #270. The evidence is the
+freeze-point forensic on a same-day live bracket, the oracle contrast, and the
+connect census. Full `scs`/`vmsscs` ctest stays green.
+
+**Evidence** (host, tank volume): SUCCESS oracle
+`/data/training/vax/cluster/captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`
+(VAX3→VAX2 contiguous `send_seq` `4..22`, op 0x02 `f1298 ss=14`, reciprocation
+`f1299`; identical-class 58-byte op-5 frames `f1251 ss=8`, `f1262 ss=13`, acked;
+§4(O.11) connect census f1170–1400 — VAX3's own dir/MSCP go to VAX1); live bracket
+`/data/training/vax/k8s-labs/vaxlab-7/logs/d94-bc2B1rejoin.pcap` (member `recv_ack`
+ceiling 19 at `f165`; freeze frame `f167 ss=20`, 58-byte `0x4b` dir op-5 on
+`0x22770017`/`0x6F16000D`; op 0x02 `f170/f171/f207 ss=21/22/24` on
+`0x22770011`/`0x6F1B0010`) and `scsd-bc2B1rejoin.log` (`OWNDIRBOUND local=0x22770018`,
+`MSCPBOUND local=0x2277001A`, `CMCONFIG2 ... local=0x22770011 remote=0x6F1B0010`,
+`RX-CDL no-cdt=14`, `cm_responses=0`, `conn[member=DISC SENT]`, `XITDONE=0`); code
+`src/vmsscs/scsd.c` (`send_own_dir_connect_request`, `send_mscp_connect_request`,
+`ps_mscp_disc`, the join-step client half) and `src/vmsscs/scs_dir.c`
+(`dir_confirm5_tmpl`, `SCS_DIR_CONFIRM5`); measurement `tools/cluster/dissect_sca.py`
++ the freeze-point forensic (`send_seq`/`recv_ack` at abs 34/32).
 
 ## 5. Summary of unknown/inferred fields (RE gaps)
 

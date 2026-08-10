@@ -634,3 +634,19 @@ install(DIRECTORY distro/rootfs/vms/ DESTINATION /vms
     DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
                          GROUP_READ GROUP_EXECUTE
                          WORLD_READ WORLD_EXECUTE)
+
+# `make release` — convenience wrapper for tools/cut-release.sh (vms-d73,
+# epic vms-a84 RELEASE ENGINEERING). The script is the actual machinery
+# (git-archives HEAD to a clean tree, runs the containerized build, emits
+# dist/release-<version>/ with SHA256SUMS + release-manifest.json) -- this
+# target only makes it reachable as `make release` / `ninja release` from an
+# already-configured build dir. Not part of ALL; run it explicitly. For
+# options (--ref, --out-dir, --no-cache, ...) call tools/cut-release.sh
+# directly -- see its --help.
+add_custom_target(release
+    COMMAND ${CMAKE_SOURCE_DIR}/tools/cut-release.sh
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Cutting an OVMX release bundle via tools/cut-release.sh"
+    VERBATIM
+    USES_TERMINAL
+)

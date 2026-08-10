@@ -109,6 +109,19 @@ FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Reproducible-build clock (vms-d73, tools/cut-release.sh). Every wall-clock
+# timestamp this stage bakes into a shipped artifact -- the OVMX kit header's
+# kh_build_time (tools/ovmx_kit_pack.c) and the mastered VMSFS image's
+# fh_created/fh_modified/fh_accessed fields (tools/vmsfs_master.c) -- reads
+# this instead of time(NULL) when it is set, and every cpio/initramfs pack
+# step below normalizes its input file timestamps to it. Default 0 (the Unix
+# epoch) so ordinary builds (boot.sh, other CI jobs) that never pass the
+# build-arg still produce a deterministic, harmless value; cut-release.sh
+# passes the real HEAD commit time so a release's artifacts carry an honest,
+# reproducible date instead of 1970.
+ARG SOURCE_DATE_EPOCH=0
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake gcc make musl-tools linux-libc-dev \
     linux-headers-generic linux-image-generic \
@@ -301,8 +314,21 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     echo "OK: shipped PARTS.EXE is VMS-native (EM_X86_64, zero DT_NEEDED/DT_HASH)" && \
     [ -f "/initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD/PARTS_SETUP.COM" ] || { echo "FAIL: PARTS_SETUP.COM missing from SYS\$UPDATE: (SYSUPD)"; exit 1; } && \
     echo "OK: PARTS_SETUP.COM present under SYS\$UPDATE: (SYSUPD)" && \
-    # Pack the fat initramfs
-    cd /initramfs-fat && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx.cpio.gz && \
+    # Pack the fat initramfs. Reproducibility (vms-d73): normalize every file's
+    # mtime to SOURCE_DATE_EPOCH (cp resets mtime to build wall-clock, which
+    # the cpio "newc" format embeds per entry); sort the cpio member order --
+    # find(1)'s raw readdir order is not a byte-reproducibility guarantee even
+    # when the create sequence is identical; drop gzip's embedded mtime (-n);
+    # and --reproducible (measured necessary, not theoretical -- vms-d73 CI
+    # caught a real diff without it), which is GNU cpio's own name for
+    # --ignore-devno --ignore-dirnlink --renumber-inodes. Without it, cpio's
+    # "newc" format embeds the REAL filesystem inode number of every entry
+    # (verified directly: two byte-identical directory trees, created
+    # independently with identical mtimes, still produced different cpio
+    # archives purely from inode allocation differing across builds) -- file
+    # CONTENT and mtimes being reproducible is not sufficient on its own.
+    find /initramfs-fat -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
+    cd /initramfs-fat && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx.cpio.gz && \
     echo "FAT initramfs: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"
 
 # -- OVMX OS kit (vms-0b6) ------------------------------------------------------
@@ -334,6 +360,12 @@ RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SY
         echo "$LISTING" | grep -q "$name" || { echo "FAIL: ovmx-os.kit manifest missing $name"; exit 1; }; \
         echo "OK: ovmx-os.kit manifest names $name"; \
     done && \
+    # Persist the listing as a build artifact (vms-d73, tools/cut-release.sh):
+    # the release script folds this into release-manifest.json and re-checks
+    # DCL.EXE/LOGINOUT.EXE/STARTUP.COM against the SHIPPED kit's own listing,
+    # not just this build-time variable. SOURCE_DATE_EPOCH normalization above
+    # makes the embedded "Built:" line (kh_build_time) reproducible too.
+    echo "$LISTING" > /boot/ovmx-os.kit.manifest.txt && \
     # Round-trip the kit itself here too (not just in ctest): extract and
     # byte-compare every payload file against the staged tree that was
     # packed. A flag file (not a loop exit code) carries failure out of the
@@ -448,8 +480,9 @@ RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
     # Minimal config — SYSUAF + manager files (STARTUP.EXE reads these at boot)
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-slim/vms/SYS0/SYSCOMMON/SYSMGR/ && \
-    # Pack the slim initramfs
-    cd /initramfs-slim && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx-slim.cpio.gz && \
+    # Pack the slim initramfs (reproducibility normalization, see FAT step above)
+    find /initramfs-slim -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
+    cd /initramfs-slim && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx-slim.cpio.gz && \
     echo "SLIM initramfs: $(ls -lh /boot/initramfs-ovmx-slim.cpio.gz | awk '{print $5}')"
 
 # -- NOEXEC initramfs (negative control) ---------------------------------------
@@ -464,7 +497,8 @@ RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
 # precisely the state OVMX exists to make unreachable (CLAUDE.md Rule 9).
 RUN cp -a /initramfs-fat /initramfs-noexec && \
     rm -f /initramfs-noexec/lib/modules/vms.ko && \
-    cd /initramfs-noexec && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx-noexec.cpio.gz && \
+    find /initramfs-noexec -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
+    cd /initramfs-noexec && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx-noexec.cpio.gz && \
     echo "NOEXEC initramfs: $(ls -lh /boot/initramfs-ovmx-noexec.cpio.gz | awk '{print $5}')"
 
 # -- NODEV initramfs (negative control) -----------------------------------------
@@ -480,7 +514,8 @@ RUN cp -a /initramfs-fat /initramfs-noexec && \
 # Test artifact, not a runtime -- same rule as NOEXEC above.
 RUN cp -a /initramfs-fat /initramfs-nodev && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-nodev/lib/modules/vms.ko && \
-    cd /initramfs-nodev && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx-nodev.cpio.gz && \
+    find /initramfs-nodev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
+    cd /initramfs-nodev && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx-nodev.cpio.gz && \
     echo "NODEV initramfs: $(ls -lh /boot/initramfs-ovmx-nodev.cpio.gz | awk '{print $5}')"
 
 # Ensure vmlinuz symlink exists
@@ -510,6 +545,12 @@ COPY --from=builder /boot/ovmx-distrib.img /boot/ovmx-distrib.img
 # carried here so the build's kit artifact is retrievable like the other
 # `-o dist` outputs, not buried inside the builder stage.
 COPY --from=builder /boot/ovmx-os.kit /boot/ovmx-os.kit
+# The kit's own internal file listing (vms-d73, tools/cut-release.sh) --
+# carried out alongside the kit itself so a release cut can fold "the kit's
+# internal manifest names DCL.EXE/LOGINOUT.EXE/STARTUP.COM" into
+# release-manifest.json from the actual shipped kit, without needing
+# ovmx_kit_pack on the release host.
+COPY --from=builder /boot/ovmx-os.kit.manifest.txt /boot/ovmx-os.kit.manifest.txt
 # Negative controls for test_executive_integral.sh only — never a runtime.
 COPY --from=builder /boot/initramfs-ovmx-noexec.cpio.gz /boot/initramfs-ovmx-noexec.cpio.gz
 COPY --from=builder /boot/initramfs-ovmx-nodev.cpio.gz /boot/initramfs-ovmx-nodev.cpio.gz

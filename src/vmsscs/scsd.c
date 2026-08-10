@@ -1814,6 +1814,15 @@ static int cm_rejoin_lean_vc(void)
  * cm_pick_coordinator's header): no wire-visible coordinator flag was found.
  * This is therefore an OVMX SELECTION choice -- wire-visible (op 0x02's ss moves)
  * and kill-switched -- not presented as VMS-authentic.
+ *
+ * TIMING CAVEAT (live vaxlab-0): the two members complete their 0x41 START in a
+ * NON-deterministic order, and this predicate is evaluated at each peer's own-dir
+ * INITIATION -- so the strict-max-plus-lower-peer heuristic below only suppresses
+ * the coordinator when the NON-coordinator (lower) member happened to appear
+ * first. When the coordinator appears first, no lower peer is yet known, it is not
+ * suppressed, and the result is the pre-fix bloat (NO regression, but the fix does
+ * not engage). OVMX_CFG2_PEER removes the timing dependence entirely by naming the
+ * coordinator's node number up front, and is the deterministic path for a bracket.
  */
 static int cm_peer_is_coordinator(struct peer_state *tbl, struct peer_state *ps)
 {

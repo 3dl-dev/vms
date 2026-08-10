@@ -279,6 +279,28 @@ if(BUILD_TESTS)
     set_tests_properties(cmake_shims_tracked_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # vms-55a (epic vms-a84 RELEASE ENGINEERING): docs/install-guide.md and
+    # docs/upgrade-guide.md must not silently drift from the e2e gates that
+    # actually prove them (tests/qemu/test_product_install_e2e.sh,
+    # tests/qemu/test_upgrade_e2e.sh). Pure source/text scan via
+    # tools/check_guide_drift.py -- no docker, no QEMU.
+    add_test(NAME guide_drift_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_guide_drift.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(guide_drift_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
+    # Negative controls for the above -- proves the comparator actually goes
+    # red on real drift (wrong command text, a dropped step, a reordering,
+    # and a reverted kit name), and distinguishes that from the "no
+    # GUIDE-STEPS block at all" fixture-error path. See the file header for
+    # why an always-OK checker would make the gate above vacuous.
+    add_test(NAME guide_drift_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_guide_drift_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(guide_drift_negctl PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
     # vms-791 (0.4 installer Tier-0): the VMSFS media-mastering tool must
     # produce an image that reads back byte-exact. Masters a synthetic tree
     # (subdirs, a >5-entry directory, a multi-block file, a binary file, an

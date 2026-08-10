@@ -69,6 +69,8 @@ jobs:
               - 'tests/**'
               - 'third-party/**'
               - 'tools/**'
+              - 'docs/install-guide.md'
+              - 'docs/upgrade-guide.md'
             toolchain:
               - '.github/workflows/**'
               - 'CMakeLists.txt'
@@ -106,6 +108,8 @@ jobs:
             release:
               - '.github/workflows/**'
               - 'tools/cut-release.sh'
+              - 'tools/gen_release_notes.py'
+              - 'tools/check_guide_drift.py'
               - 'distro/Dockerfile.bootable'
               - 'tools/ovmx_kit_pack.c'
               - 'tools/vmsfs_master.c'
@@ -119,6 +123,10 @@ jobs:
               - 'tests/qemu/test_release_acceptance_e2e.sh'
               - 'tests/qemu/run_release_acceptance_e2e.sh'
               - 'tests/qemu/test_parts_demo_e2e.sh'
+              - 'docs/install-guide.md'
+              - 'docs/upgrade-guide.md'
+              - 'tests/integration/test_guide_drift.sh'
+              - 'tests/integration/test_guide_drift_negctl.sh'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -426,14 +434,19 @@ jobs:
       # build input) -- the reproducibility claim is scoped to the four real
       # release artifacts and their checksums, which is exactly what this
       # step compares. SHA256SUMS also carries no such field, so it is
-      # compared byte-for-byte too, not just semantically.
+      # compared byte-for-byte too, not just semantically. RELEASE-NOTES-
+      # <version>.md (vms-55a) is generated from git history that is fixed
+      # for a given commit and carries no wall-clock stamp of its own (see
+      # tools/gen_release_notes.py's header) -- it belongs in this same
+      # byte-identical set, found by glob since its name is version-suffixed.
       - name: Assert the two cuts are byte-identical
         run: |
           set -euo pipefail
           A="dist/release-a"
           B="dist/release-b"
           FAIL=0
-          for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img ovmx-os.kit ovmx-os.kit.manifest.txt SHA256SUMS; do
+          NOTES_A=$(basename "$(ls "$A"/RELEASE-NOTES-*.md)")
+          for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img ovmx-os.kit ovmx-os.kit.manifest.txt "$NOTES_A" SHA256SUMS; do
             if cmp -s "$A/$f" "$B/$f"; then
               echo "OK: $f is byte-identical across both cuts"
             else
@@ -443,7 +456,7 @@ jobs:
             fi
           done
           [ "$FAIL" -eq 0 ] || { echo "Reproducibility check FAILED"; exit 1; }
-          echo "All release artifacts + SHA256SUMS are byte-identical across two independent --no-cache cuts."
+          echo "All release artifacts + release notes + SHA256SUMS are byte-identical across two independent --no-cache cuts."
 
       # Defense in depth against a bug in the script's own checksum step:
       # recompute sha256 directly against the shipped bytes and compare

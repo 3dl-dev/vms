@@ -165,7 +165,7 @@ login "$LOG"
 
 # --- 1. MOUNT the pre-formatted second disk ----------------------------
 OFF=$(wc -c <"$LOG")
-send 'MOUNT DKA100: WORK'
+send 'MOUNT DKA100: WORK'  # GUIDE-STEP (docs/install-guide.md, tools/check_guide_drift.py)
 if wait_for '%MOUNT-I-MOUNTED, WORK mounted on _DKA100:' "$RUN_TIMEOUT" "$OFF"; then
     ok "MOUNT DKA100: succeeds (real mount(2) via the executive)"
 else
@@ -188,7 +188,7 @@ fi
 
 # --- 3. PRODUCT INSTALL the real kit from SYS$UPDATE: onto DKA100: -----
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT INSTALL VMS /SOURCE=SYS$UPDATE:OVMX-OS.KIT /DESTINATION=DKA100:'
+send 'PRODUCT INSTALL VMS /SOURCE=SYS$UPDATE:OVMX-OS.KIT /DESTINATION=DKA100:'  # GUIDE-STEP (docs/install-guide.md, tools/check_guide_drift.py)
 if wait_for '%PCSI-I-DONE' "$RUN_TIMEOUT" "$OFF"; then
     ok "PRODUCT INSTALL reports %PCSI-I-DONE"
 else
@@ -247,7 +247,7 @@ fi
 #        keyed by the kit's OWN embedded name (not the DCL command's
 #        product-name parameter "VMS") ------------------------------------
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT SHOW PRODUCT /DESTINATION=DKA100:'
+send 'PRODUCT SHOW PRODUCT /DESTINATION=DKA100:'  # GUIDE-STEP (docs/install-guide.md, tools/check_guide_drift.py)
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SHOW_SEG_BEFORE=$(segment_since "$OFF")
 if printf '%s\n' "$SHOW_SEG_BEFORE" | grep -qiE 'X86VMS VMS' \
@@ -261,7 +261,7 @@ fi
 # DISMOUNT before killing QEMU so umount(2) flushes the volume cleanly
 # (same reasoning as test_mount_e2e.sh).
 OFF=$(wc -c <"$LOG")
-send 'DISMOUNT DKA100:'
+send 'DISMOUNT DKA100:'  # GUIDE-STEP (docs/install-guide.md, tools/check_guide_drift.py)
 wait_for '%DISMOUNT-I-DISMOUNTED' "$RUN_TIMEOUT" "$OFF"
 
 kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null; QPID=""

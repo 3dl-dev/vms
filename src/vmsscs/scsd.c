@@ -3980,8 +3980,16 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
      * The unconditional send is what an established VAX1 answers with a bare
      * cat-0x04 instead of entering reconfiguration. The `pure` guard and the
      * deferred retry are therefore kept; the closure's version is dropped
-     * DELIBERATELY, not lost. Send now goes through the choke point. */
-    if (!pure) {
+     * DELIBERATELY, not lost. Send now goes through the choke point.
+     *
+     * vms-46f (spec 4(O.17)): on the REJOIN credit-first path the config MUST
+     * also be deferred here so it does not ride AHEAD of the op-6 special-credit
+     * request. The SUCCESS oracle's order is model(ss10), params(ss11),
+     * op7(ss12), op6(ss13), op02(ss14) -- model+params precede op-6, but the
+     * config (op02) follows it. Emitting the config in this burst would put an
+     * op 0x02 ahead of op-6 (still credit-starved). It rides via the deferred
+     * SCSD-I-CMCONFIG2 path, which the fix gates behind the op-6 latch. */
+    if (!pure && !rejoin_credit_first_enabled()) {
         mp.recv_ack = ps->vc.seq.recv_seq;
         mp.send_seq = scs_seq_advance(&ps->vc.seq);
         mp.sysap_send_msg = ps->sysap_send++;

@@ -203,6 +203,7 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSHLP \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD \
+             "/initramfs-fat/vms/SYS0/SYSCOMMON/SYS\$STARTUP" \
              /initramfs-fat/vms/USERS \
              /initramfs-fat/vms/SYSTMP && \
     # OVMX binaries → SYSEXE (STARTUP.EXE is also /init).
@@ -254,6 +255,11 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-fat/lib/modules/ && \
     # System disk config files → VMS-standard locations
     cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR/ && \
+    # SYS$STARTUP: (vms-21a) -- STDRV's phase/component data files
+    # (VMS$PHASES.DAT, VMS$VMS.DAT). STARTUP.COM's phase driver opens these
+    # by filespec at boot; without this copy every OPEN fails %RMS-E-FNF and
+    # every phase (and every site file the driver invokes) silently never runs.
+    cp -r "distro/rootfs/vms/SYS0/SYSCOMMON/SYS\$STARTUP/"* "/initramfs-fat/vms/SYS0/SYSCOMMON/SYS\$STARTUP/" && \
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # OVMXVMSSYS.PAR (vms-d34): the initial SYSGEN parameter file, seeded
@@ -342,15 +348,18 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
 # ovmx_kit_pack (tools/ovmx_kit_pack.c) is factory BUILD tooling -- same
 # class as vmsfs_master above: never shipped on the media, plain host name,
 # never run at boot. It treats the direct children of its staging directory
-# as top-level VMS directories, so a scratch tree carrying only the four
+# as top-level VMS directories, so a scratch tree carrying only the five
 # component directories (not SYSUPD, which holds PARTS -- a separate,
 # already-a-kit-shaped layered product, not the OS payload) is assembled
-# here before packing.
-RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SYSHLP && \
+# here before packing. SYS$STARTUP (vms-21a) ships so a PRODUCT INSTALL
+# upgrade carries STDRV's phase/component data files, same as any other
+# system directory.
+RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SYSHLP "/kit-stage/SYS\$STARTUP" && \
     cp -r /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/. /kit-stage/SYSEXE/ && \
     cp -r /initramfs-fat/vms/SYS0/SYSCOMMON/SYSLIB/. /kit-stage/SYSLIB/ && \
     cp -r /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR/. /kit-stage/SYSMGR/ && \
     cp -r /initramfs-fat/vms/SYS0/SYSCOMMON/SYSHLP/. /kit-stage/SYSHLP/ 2>/dev/null ; \
+    cp -r "/initramfs-fat/vms/SYS0/SYSCOMMON/SYS\$STARTUP/." "/kit-stage/SYS\$STARTUP/" && \
     /src/build-static/bin/ovmx_kit_pack pack /boot/ovmx-os.kit /kit-stage "X86VMS VMS" && \
     /src/build-static/bin/ovmx_kit_pack list /boot/ovmx-os.kit && \
     # Ground-source gate: the kit manifest must actually name the images the
@@ -445,6 +454,21 @@ RUN /src/build-static/bin/vmsfs_master master \
     done && \
     [ -f /tmp/distrib-verify/SYS0/SYSCOMMON/SYSMGR/STARTUP.COM ] || { echo "FAIL: mastered image missing SYS\$MANAGER:STARTUP.COM"; exit 1; } && \
     echo "OK: ovmx-distrib.img carries SYS\$MANAGER:STARTUP.COM" && \
+    # vms-21a: STDRV's phase-driver data files must be on the mastered disk,
+    # or every OPEN in STARTUP.COM's phase driver fails %RMS-E-FNF and no
+    # phase (and no site file the driver invokes) ever runs.
+    [ -f "/tmp/distrib-verify/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$PHASES.DAT" ] || { echo "FAIL: mastered image missing SYS\$STARTUP:VMS\$PHASES.DAT"; exit 1; } && \
+    [ -f "/tmp/distrib-verify/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$VMS.DAT" ] || { echo "FAIL: mastered image missing SYS\$STARTUP:VMS\$VMS.DAT"; exit 1; } && \
+    echo "OK: ovmx-distrib.img carries SYS\$STARTUP:VMS\$PHASES.DAT and VMS\$VMS.DAT" && \
+    [ -f /tmp/distrib-verify/SYS0/SYSCOMMON/SYSMGR/SYCONFIG.COM ] || { echo "FAIL: mastered image missing SYS\$MANAGER:SYCONFIG.COM"; exit 1; } && \
+    [ -f /tmp/distrib-verify/SYS0/SYSCOMMON/SYSMGR/SYLOGICALS.COM ] || { echo "FAIL: mastered image missing SYS\$MANAGER:SYLOGICALS.COM"; exit 1; } && \
+    echo "OK: ovmx-distrib.img carries SYS\$MANAGER:SYCONFIG.COM and SYLOGICALS.COM" && \
+    # The LARP config files this work deletes must never come back on the
+    # mastered image -- a regression that recreates distro/rootfs/.../
+    # OVMX.CONF would silently ship it again without this gate.
+    [ ! -f /tmp/distrib-verify/SYS0/SYSCOMMON/SYSMGR/OVMX.CONF ] || { echo "FAIL: mastered image carries deleted SYS\$MANAGER:OVMX.CONF"; exit 1; } && \
+    [ ! -f /tmp/distrib-verify/SYS0/SYSCOMMON/SYSMGR/SYLOGICALS.CONF ] || { echo "FAIL: mastered image carries deleted SYS\$MANAGER:SYLOGICALS.CONF"; exit 1; } && \
+    echo "OK: ovmx-distrib.img carries neither OVMX.CONF nor SYLOGICALS.CONF" && \
     # The SYSTEM-writable persistent directories must be baked in: PID 1 no
     # longer creates them (vms-2f0), so if the mastering source ever loses them
     # SYS$SCRATCH:/SYS$LOGIN: writes fail at runtime (%RMS-E-DNF). Assert both

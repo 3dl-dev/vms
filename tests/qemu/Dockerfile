@@ -254,6 +254,13 @@ RUN cd /src/repo && \
     ls -la build-static/bin/test_syssvc_* && \
     echo "--- test_imgact_* binaries (userspace-only, no /dev/vms needed, static musl) ---" && \
     ls -la build-static/bin/test_imgact_* && \
+    # test_corpus_* + corpus_seed_lnm (vms-08c): the unmodified device-corpus
+    # programs (tests/corpus/tier1-examples/lib_getdvi.c, sys_device_scan.c)
+    # built against the real src/libvms public sys$ API, plus the LNM$SYSTEM
+    # seeding fixture tests/qemu/init.sh runs ahead of them. See
+    # tests/qemu/CMakeLists.txt's "DEVICE-CORPUS PROGRAMS" comment.
+    echo "--- test_corpus_* binaries + corpus_seed_lnm fixture (vms-08c, static musl) ---" && \
+    ls -la build-static/bin/test_corpus_lib_getdvi build-static/bin/test_corpus_sys_device_scan build-static/bin/corpus_seed_lnm && \
     # DCL.EXE (already built above in the qemu_syssvc_tests/vmsdcl target
     # list), so a suite can run a real user-visible DCL COMMAND against a
     # real executive. SHOW SYSTEM is a READER of the executive's process
@@ -416,6 +423,28 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
         n_imgact=$((n_imgact+1)); \
     done && \
     { [ "$n_imgact" -ge 2 ] || { echo "FATAL: expected at least 2 test_imgact_* binaries (test_imgact_bind, test_imgact_publish) staged into the initramfs, found $n_imgact"; exit 1; }; } && \
+    # Device-corpus programs under a real /dev/vms (vms-08c). Staged by
+    # glob, same convention as test_syssvc_*/test_imgact_* above, so a
+    # future test_corpus_*.c reaches QEMU with no Dockerfile edit. Kept OUT
+    # of the test_syssvc_* glob for the reason in tests/qemu/CMakeLists.txt's
+    # "DEVICE-CORPUS PROGRAMS" comment: these are unmodified upstream
+    # programs, not a suite this project can hold to the honest-skip-77
+    # contract it wrote for its OWN test_syssvc_* suites.
+    n_corpus=0 && \
+    for f in /src/repo/build-static/bin/test_corpus_*; do \
+        [ -x "$f" ] || continue; \
+        cp "$f" /initramfs/tests/; \
+        n_corpus=$((n_corpus+1)); \
+    done && \
+    { [ "$n_corpus" -ge 2 ] || { echo "FATAL: expected at least 2 test_corpus_* binaries (test_corpus_lib_getdvi, test_corpus_sys_device_scan) staged into the initramfs, found $n_corpus"; exit 1; }; } && \
+    # corpus_seed_lnm (vms-08c): the LNM$SYSTEM seeding fixture, staged
+    # separately (no test_ prefix -- it is not a suite, see its own header
+    # comment). Absence is FATAL, not skipped: without it lib_getdvi's
+    # SYS$SYSDEVICE lookup would silently miss and the corpus suite above
+    # would go red for the wrong reason (fixture absent, not a real defect).
+    { cp /src/repo/build-static/bin/corpus_seed_lnm /initramfs/tests/corpus_seed_lnm || \
+      { echo "FATAL: corpus_seed_lnm was not built into the static tree -- lib_getdvi's SYS\$SYSDEVICE lookup would go unseeded"; exit 1; }; } && \
+    chmod +x /initramfs/tests/corpus_seed_lnm && \
     # The shipped DCL image, staged at BOTH paths its two sets of consumers
     # expect: /bin/DCL.EXE (vms-8019's test_syssvc_procnam.c and
     # test_syssvc_showproc.c hard-code execl("/bin/DCL.EXE", ...)) and

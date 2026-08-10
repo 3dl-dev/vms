@@ -78,6 +78,44 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
 endforeach()
 
 # ---------------------------------------------------------------------------
+# DEVICE-CORPUS PROGRAMS UNDER A REAL /dev/vms (vms-08c).
+#
+# #258 (vms-dv1) correctly converted sys$getdvi/sys$device_scan from a
+# per-process host fake to readers of the executive's device table -- and
+# that honestly took two corpus programs, lib_getdvi.c and sys_device_scan.c
+# (tests/corpus/tier1-examples/, unmodified Eight-Cubed downloads --
+# tests/corpus/PROVENANCE.md, never edited or copied), from a FAKE run-pass
+# to a run-crash under tests/conformance/run_corpus.sh's HOST harness, which
+# has no /dev/vms (Rule 9) and so cannot run either program at all. That is
+# an honest floor drop on the host, not a regression: the coverage those two
+# programs give still exists, just only where an executive is real.
+#
+# These two targets build the SAME canonical corpus sources (never a copy --
+# provenance forbids editing or duplicating them) with the SAME
+# qemu_syssvc_add_test() recipe every real src/libvms-linked suite in this
+# file uses, so they run against a genuine /dev/vms inside this QEMU
+# harness. Named test_corpus_* (not test_syssvc_*) deliberately: ci.yml's
+# kernel-executive-negative-control job polices every test_syssvc_*.c to
+# return the honest-skip code 77 with no executive -- a contract this
+# project wrote for ITS OWN suites. These two are unmodified upstream
+# programs whose no-executive behavior is whatever errchk_sig()/lib$signal()
+# actually does (the same run-crash run_corpus.sh already measures on the
+# host), not a thing to design an honest-skip contract for -- the same
+# reasoning that keeps test_imgact_* out of that glob (see this file's
+# comment on that section, below).
+qemu_syssvc_add_test(test_corpus_lib_getdvi
+    ${CMAKE_SOURCE_DIR}/tests/corpus/tier1-examples/lib_getdvi.c)
+qemu_syssvc_add_test(test_corpus_sys_device_scan
+    ${CMAKE_SOURCE_DIR}/tests/corpus/tier1-examples/sys_device_scan.c)
+
+# corpus_seed_lnm -- a harness FIXTURE, not a suite (no test_ prefix, so
+# tests/qemu/init.sh's suite loop never runs it as one; see its own header
+# comment). Built the same way so it shares the exact link graph (and so the
+# exact LNM$SYSTEM arena) the two corpus suites above run against.
+qemu_syssvc_add_test(corpus_seed_lnm
+    ${CMAKE_SOURCE_DIR}/tests/qemu/corpus_seed_lnm.c)
+
+# ---------------------------------------------------------------------------
 # USERSPACE-ONLY imgact tests -- test_imgact_bind, test_imgact_publish
 # (main-red classification fix; test_imgact_bind was test_syssvc_imgact_bind
 # through #225).

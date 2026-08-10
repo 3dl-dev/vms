@@ -184,7 +184,22 @@ SUITE_FIFO=/tmp/suite_fifo.$$
 # shipped). 20s is slack for an ORPHAN to be force-reaped, not for a suite to
 # finish; see below for why that distinction is the whole fix.
 SUITE_DRAIN_TIMEOUT=${SUITE_DRAIN_TIMEOUT:-20}
-for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_*; do
+
+# CORPUS DEVICE-COVERAGE FIXTURE (vms-08c). tests/corpus/tier1-examples/
+# lib_getdvi.c (an unmodified Eight-Cubed download) asks $GETDVI about the
+# VMS logical name SYS$SYSDEVICE: -- this rig never runs STARTUP.COM, so
+# nothing has defined it yet. corpus_seed_lnm calls the same
+# lnm_setup_defaults() STARTUP.COM would trigger, into the executive-resident
+# LNM$SYSTEM arena every later process (including test_corpus_lib_getdvi
+# below) reads. Run explicitly, once, here -- ahead of the suite loop and
+# NOT through its glob, whose iteration order this must not depend on. Not a
+# suite itself: no "=== SUITE ... ===" line, its own exit code is not
+# tallied (see tests/qemu/corpus_seed_lnm.c's header for why).
+if [ -x /tests/corpus_seed_lnm ]; then
+    /tests/corpus_seed_lnm >&4 2>&1
+fi
+
+for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/test_corpus_*; do
     [ -x "$test" ] || continue
     name=$(basename "$test")
     echo "" >&4

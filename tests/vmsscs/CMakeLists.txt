@@ -144,6 +144,24 @@ set_tests_properties(vmsscs_member_unit PROPERTIES
     TIMEOUT 30
 )
 
+# vms-7a9 - CEVOTES/QUORUM computation + quorum gate. The quorum DYNAMICS are not
+# wire-observable (single vote config in every capture, vms-41d), so this is a
+# known-answer unit test of the documented algorithm against the 5-node worked
+# example (CM transcript ch7-part01 pp. 7-5..7-7; VMScluster Systems sec 2.3.5/
+# 2.3.6/2.3.8), plus the quorum-loss block-and-wait gate (vms-2d6). Links
+# vmsscs_member too for the one wire-grounded assertion: VOTES round-trips
+# through the 190-byte VC body[22:24] (spec sec 4j).
+add_executable(test_scs_quorum test_scs_quorum.c)
+target_include_directories(test_scs_quorum PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+target_link_libraries(test_scs_quorum PRIVATE vmsscs_quorum vmsscs_member)
+add_test(NAME vmsscs_quorum_unit COMMAND test_scs_quorum)
+set_tests_properties(vmsscs_quorum_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
 # vms-7be - SB/PB/PDT configuration queue: the architected replacement for the
 # MAC-keyed peer struct. Asserts the documented queue transitions of VAXcluster
 # Principles ch. 2 (pp. 2-11..2-21), including the p. 2-21 Note (an old SB with
@@ -238,6 +256,9 @@ target_link_libraries(test_scsd_wire PRIVATE
     # vms-34b: scsd.c now also drives the MSCP disk-server RESPONDER
     # (scsd_mscp_srv_msg_input() calls scs_mscp_srv_handle() etc.), same reason.
     vmsscs_mscp_srv
+    # vms-7a9: scsd.c folds each peer's advertised VOTES into the connection-
+    # manager quorum model (scs_quorum_*), so the whole-file test seam needs it.
+    vmsscs_quorum
 )
 
 add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)

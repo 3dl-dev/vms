@@ -4488,6 +4488,33 @@ proactive burst, `SCSD-I-CMCONFIG2`).
 
 For visibility, every field NOT marked GROUNDED above:
 
+- **QUORUM/CEVOTES DYNAMICS ARE DOCUMENTED, NOT WIRE-GROUNDED (`vms-7a9`,
+  `vms-41d`, `vms-2d6`).** The per-node **VOTES** field IS grounded on the wire
+  (§4j, VC `body[22:24]`, LE u16, across four vote configurations) and OVMX both
+  advertises it (`scs_member_build_params`) and consumes it (`scs_member_parse`
+  → `v.votes`/`v.has_votes`). The **quorum arithmetic**, however, has NO wire
+  contrast: every reference-lab capture ran one vote configuration (VOTES 1/0/0,
+  `EXPECTED_VOTES` held at 1 in every config, `F$GETSYI` QUORUM=1), so no
+  captured byte binds the quorum value. OVMX therefore implements the quorum
+  recomputation from the **documented algorithm** — VMScluster Systems for
+  OpenVMS §2.3.5 "Calculating Cluster Votes" (`New CEVOTES = max{max
+  EXPECTED_VOTES; ΣVOTES; Old CEVOTES}`, `QUORUM = (New CEVOTES + 2)/2` rounded
+  down, and the connection manager "never decreases" the value), cross-checked
+  against the mined CM transcript ch7-part01 pp. 7-5…7-7 (same rule + a 5-node
+  worked example; HOST-ONLY, cited by page, never committed). The code is
+  `src/vmsscs/scs_quorum.c`; the proof is the known-answer unit test
+  `tests/vmsscs/test_scs_quorum.c` against that worked example — **not** a
+  fabricated wire assertion. The quorum-loss BEHAVIOUR (survivors block-and-wait,
+  no reconfiguration) is grounded by `vms-2d6` and modelled by
+  `scs_quorum_gate()` → `SCS_QUORUM_BLOCK`.
+- **`EXPECTED_VOTES` — an unresolved wire RE gap (`vms-41d`).** It is almost
+  certainly a sibling field of VOTES in the same op-0x01 body, but it was held at
+  1 in every capture, so no offset is grounded. The quorum model seeds each
+  peer's `EXPECTED_VOTES` from its advertised VOTES until a controlled-reconfig
+  capture (`SET EXPECTED_VOTES` varied, byte-diff the op-0x01 body — same runbook
+  as `vms-cd0`) grounds it. Enforcing the gate against a live peer is
+  admission-gated / lab-bracketed at 0.4.
+
 - **THE 110-CONTENT TYPE-10 RESIDUE — `body[48:52]`, four bytes past the end of
   the documented message (`vms-4eb`).** §4(h)(1e) decodes that class as the MSCP
   `GET UNIT STATUS` end message and every field AA-L619A-TK Table A-7 defines

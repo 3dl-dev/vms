@@ -474,6 +474,17 @@ int scs_member_parse(const uint8_t *frame, size_t len, struct scs_member_view *v
     v->opcode = body[9];
     v->is_response = (v->category & SCS_MEMBER_RESPONSE_BIT) ? 1 : 0;
 
+    /* vms-7a9: consume the peer's advertised VOTES from the cat-0x01 op-0x01
+     * cluster-parameters message. VOTES is a GROUNDED LE u16 at body[22:24]
+     * (abs 94), grounded across four vote configurations (spec sec 4j). Only
+     * meaningful on the params opcode; leave has_votes=0 elsewhere so a caller
+     * never reads a votes value out of a frame that does not carry one. */
+    if ((v->category & 0x7f) == SCS_MEMBER_CAT_CONFIG &&
+        v->opcode == SCS_MEMBER_OP_PARAMS) {
+        v->votes = get_le16(body + SCS_MEMBER_VOTES_BODYOFF);
+        v->has_votes = 1;
+    }
+
     /* A member-driven transaction the joiner must 0x81-respond to: a
      * category-0x01 (non-response) commit (0x03) or lock-rebuild (0x05). */
     v->is_member_txn = (!v->is_response &&

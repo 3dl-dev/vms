@@ -97,6 +97,16 @@ target_include_directories(vmsscs_member PUBLIC
 # the inner length / format word / MTYPE / credit / Con.ID-pair stores.
 target_link_libraries(vmsscs_member PUBLIC vmsscs_env)
 
+# vms-7a9 - connection-manager CEVOTES/QUORUM computation + quorum gate. Pure
+# state + arithmetic (no frame, no socket): the documented state-transition
+# quorum recomputation (VMScluster Systems sec 2.3.5; CM transcript ch7-part01
+# pp. 7-5..7-7) plus the quorum-loss block-and-wait gate (vms-2d6). Consumes the
+# VOTES field scs_member parses off the 190-byte VC body[22:24] (spec sec 4j).
+add_library(vmsscs_quorum STATIC scs_quorum.c)
+target_include_directories(vmsscs_quorum PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 # vms-7be - SCA System Blocks / Path Blocks / Port Descriptor Tables and the
 # VMS SCA Configuration Queue (VAXcluster Principles ch. 2, pp. 2-11..2-21).
 # Pure state: builds no frame, parses no frame, opens no socket -- it replaces
@@ -368,7 +378,7 @@ target_include_directories(scsd_exe PRIVATE
 # responder (scs_mscp_srv_handle() etc.) built by vms-291/vms-4e31, which until
 # this item was compiled and unit-tested but never linked into the daemon that
 # is supposed to run it.
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_mscp vmsscs_mscp_srv vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_quorum vmsscs_mscp vmsscs_mscp_srv vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

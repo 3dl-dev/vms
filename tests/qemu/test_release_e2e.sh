@@ -187,7 +187,13 @@ OTHER_ROWS=(
 # ---------------------------------------------------------------------------
 # $3 = "up" (must boot) or "halt" (must fail-stop with the EXECINIT message).
 run_case() {
-    local tag="$1" system_row="$2" expect="${3:-up}"
+    # uic (5th arg) is the SYSUAF-FILE-CONTENT UIC this case's row carries --
+    # used ONLY by the sanity check a few lines down that the DCL WRITE
+    # actually landed in the file. It defaults to "1|4" because that is what
+    # every case except poisoned_uic (vms-a17e) writes. It is NOT a claim
+    # about what identity the boot ends up with: see that check's own
+    # comment for why the two can legitimately differ.
+    local tag="$1" system_row="$2" expect="${3:-up}" uic="${4:-1|4}"
     local disk="/tmp/e2e-$tag.img"
     local log1="/tmp/e2e-$tag-boot1.log"
     local log2="/tmp/e2e-$tag-boot2.log"
@@ -254,9 +260,12 @@ run_case() {
     send 'TYPE SYS$SYSTEM:SYSUAF.DAT'; sleep 3
 
     # The edit must actually be in the file this session can read, or the rest
-    # of the case is measuring nothing.
+    # of the case is measuring nothing. Checks for THIS CASE'S OWN uic (see
+    # the "uic" parameter comment above) -- poisoned_uic's row genuinely
+    # contains "50|50", not "1|4", and grepping the wrong pair here would
+    # fail even though the poison landed exactly as intended.
     if [ -n "$system_row" ]; then
-        if grep -qF "SYSTEM|$HASH|1|4|" "$log1"; then rc=0; else rc=1; fi
+        if grep -qF "SYSTEM|$HASH|$uic|" "$log1"; then rc=0; else rc=1; fi
         record "$tag boot 1: the edited SYSTEM row is readable in-session" "$rc"
     else
         if grep -qF "OPERATOR||1|6|" "$log1"; then rc=0; else rc=1; fi
@@ -498,7 +507,33 @@ run_case longrow "$(make_system_row 420 63)" up
 # -- so [1,4] MUST still appear, proving the poisoned UIC in this file was
 # never read to construct it. Same HASH as every other case, so login still
 # succeeds; only the UIC/privileges fields are wrong on purpose.
-run_case poisoned_uic "SYSTEM|$HASH|50|50|SYS\$SYSDEVICE:[SYSMGR]||NONE" up
+#
+# WHAT THIS DOES *NOT* CLAIM, and why the boot-1 "row is readable in-session"
+# sanity check below correctly reports [50,50] rather than [1,4]. There are
+# TWO identities in this boot, established by two DIFFERENT mechanisms, and
+# vms-a17e touches only one of them:
+#
+#   the STARTUP process (PROVISION.EXE, execs into STARTUP.COM/
+#   SYSTARTUP_VMS.COM)  -- identity from vms_kif_establish_system(), an
+#   executive CONSTANT, independent of SYSUAF by design (this item).
+#
+#   the INTERACTIVE session opened by typing SYSTEM/MANAGER at the login
+#   prompt below -- identity from tools/vms_login.c (LOGINOUT), which reads
+#   SYSUAF's SYSTEM row and calls VMS_IOCTL_SETIDENT with WHATEVER uic that
+#   row names. LOGINOUT-reads-SYSUAF is correct, unmodified VMS behaviour
+#   ("LOGINOUT is SYSUAF's FIRST reader") and is exactly what this item's
+#   own goal statement asks for -- it would be a REGRESSION for LOGINOUT to
+#   ignore this file. So a real interactive SYSTEM/MANAGER session against
+#   this poisoned row genuinely authenticates as UIC [50,50]; that is not
+#   probed here because the boot process's identity, not the login
+#   session's, is this item's whole scope.
+#
+# So the "$uic" argument below (used only by the file-landed sanity check,
+# not by any identity assertion) is 50|50 -- the actual, correctly-poisoned
+# content of the file -- while the SEPARATE "SYSTEM [1,4] established by the
+# executive" assertion in the shared "up" path a few lines down is the one
+# that has to stay [1,4] regardless. Confirmed on a real boot: it does.
+run_case poisoned_uic "SYSTEM|$HASH|50|50|SYS\$SYSDEVICE:[SYSMGR]||NONE" up "50|50"
 
 # NEGATIVE CONTROL. SYSUAF with NO SYSTEM row at all -- a condition VMS is never
 # in, which OVMX therefore makes unreachable rather than handles (Rule 10). This

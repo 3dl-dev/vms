@@ -121,6 +121,7 @@ int main(void)
     CHECK(st == SS_NORMAL, "GET_RESMASTER after ENQ");
     CHECK(rm.found == 1, "resource now present");
     CHECK(rm.dir_csid == rm.local_csid, "directory is still self");
+    /* negctl: resdir-master-csid-not-reported */
     CHECK(rm.master_csid == rm.local_csid, "resource is mastered on this node");
     CHECK(rm.is_local_master == 1, "is_local_master set");
     CHECK(rm.n_granted == 1, "one lock granted on the resource");

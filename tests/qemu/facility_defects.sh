@@ -433,6 +433,7 @@ lock-valblk-grant-not-delivered
 lock-enq-immediate-grant-status-wrong
 lock-deq-status-wrong
 lock-convert-mode-not-updated
+resdir-master-csid-not-reported
 devtab-owner-not-recorded
 devtab-alloc-not-recorded
 devtab-dassgn-status-wrong
@@ -1540,6 +1541,28 @@ EOF
         why)          echo "\$ENQ/CONVERT's immediate-conversion branch stops updating lock->granted_mode to the newly-requested mode (the assignment deleted). The call still reports SS\$_NORMAL -- conversion \"succeeded\" -- but GETLKI on the same lock afterward reads back the OLD granted mode, not the one just requested.";;
         require_fail) cat <<'EOF'
 granted mode is CR
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    resdir-master-csid-not-reported)
+        case "$_f" in
+        facility)     echo "distributed lock manager -- DLM resource-directory + local-mastering readback (VMS_IOCTL_GET_RESMASTER, vms-ci.5 DB)";;
+        targets)      echo "kernel/vms_lock.c";;
+        # vms_kif_get_resmaster()/VMS_IOCTL_GET_RESMASTER is reached by no
+        # suite but test_kmod_resdir (grep across tests/qemu and
+        # src/libvmssys confirms it) -- the raw-ioctl diagnostic this defect
+        # is the only caller of.
+        suites_red)   echo "test_kmod_resdir";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_get_resmaster()'s copy-out of the resource's master CSID is pinned to 0, while the INTERNAL res->master_csid state the mastering decision and is_local_master's own compat check are computed from is left untouched -- \$ENQ still masters the resource locally and grants through the existing single-node lock manager exactly as before. This isolates the DIAGNOSTIC READBACK from the ACTUAL mastering state, the same DISPLAY/STATE class devtab-alloc-not-recorded catches on the device table: a resource that IS locally mastered is reported to the one reader that exists (GET_RESMASTER) as though it were not.";;
+        require_fail) cat <<'EOF'
+resource is mastered on this node
+DLMRES2 mastered locally, 1 granted
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -4835,6 +4858,16 @@ apply_edit() {
         # conversion branch), not an unbraced single-statement `if`, so there
         # is no dangling-body hazard here.
         sed -i '/^long vms_ioctl_convert/,/^}$/ s|^        lock->granted_mode = args\.lkmode;$|        /* NEGCTL lock-convert-mode-not-updated: granted_mode left unchanged */|' "$_file";;
+    resdir-master-csid-not-reported)
+        # `args.master_csid = res->master_csid;` is the ONLY assignment to
+        # that field in the file (vms_ioctl_get_resmaster's sole copy-out),
+        # so anchoring on it directly is unambiguous. The replacement
+        # statement no longer contains the anchor text (`res->master_csid`
+        # is dropped, not just reassigned), so a second apply finds no match
+        # -- the no-op the selftest requires. res->master_csid itself (the
+        # value is_local_master and the mastering decision are computed
+        # from) is untouched, so this isolates the READBACK from the STATE.
+        sed -i 's|        args.master_csid = res->master_csid;|        args.master_csid = 0; /* NEGCTL resdir-master-csid-not-reported */|' "$_file";;
     devtab-owner-not-recorded)
         # Range-anchored, NOT `0,/re/` (first-match). There are two
         # `dev->owner_pid =` writes -- $ASSIGN's implicit ownership and

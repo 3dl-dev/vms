@@ -251,4 +251,12 @@
 # not handed back -- and anchors the new test_kmod_disk suite's two
 # backing-name assertions. See its own entry in facility_defects.sh for what
 # it covers and why.
-85
+# Raised to 86 by vms-6bdf's resdir-master-csid-not-reported -- the missing
+# per-facility negative control for test_kmod_resdir (vms-ci.5 DB / #264),
+# flagged by the vms-3e8 agent as a coverage-gate gap: that suite had NO
+# negctl entry at all. Targets vms_ioctl_get_resmaster()'s (kernel/vms_lock.c)
+# sole master_csid copy-out; the internal res->master_csid state the
+# mastering decision and is_local_master are computed from is untouched, so
+# this isolates the DIAGNOSTIC READBACK from the ACTUAL mastering state. See
+# its own entry in facility_defects.sh for what it covers and why.
+86

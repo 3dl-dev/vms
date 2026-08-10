@@ -212,6 +212,76 @@ static void fill_dvi_item(const struct item_list_3 *item,
 }
 
 /*
+ * device_lookup_translated - resolve devnam against the executive's device
+ * table, falling back to LNM$SYSTEM logical-name translation when a literal
+ * lookup misses (vms-08c).
+ *
+ * Real $GETDVI accepts a logical name for devnam -- SYS$SYSDEVICE: is the
+ * standard VMS idiom for "the system disk", and every corpus program that
+ * reads its free space passes it literally (tests/corpus/tier1-examples/
+ * lib_getdvi.c, an unmodified Eight-Cubed download -- provenance forbids
+ * editing it to use a physical name instead). The executive's device table
+ * only holds physical unit names (OPA0:, DKA0:, ...; src/kernel/vms_devtab.c),
+ * so a literal lookup on a logical name legitimately misses first. This does
+ * NOT invent a per-process answer: it re-asks the SAME LNM$SYSTEM arena every
+ * process on the node reads (vms_kif_lnm_translate, the identical call
+ * src/libvms/syssvc/sys_logical.c's sys$trnlnm already makes), and retries the
+ * physical lookup with whatever it finds. A device the executive genuinely
+ * does not have -- because neither a unit nor a logical name resolves it --
+ * still comes back SS$_NOSUCHDEV, not fabricated.
+ *
+ * Bounded to a few hops (a logical can name another logical, e.g.
+ * SYS$DISK -> SYS$SYSDEVICE -> DKA0:) the same way
+ * src/vmsfs/vmsfs_translate.c's vmsfs_resolve_device_r guards against a
+ * translation loop. An equivalence is retried AS-IS, colon included --
+ * lnm_seed_system_locating's device-class values are already a bare
+ * physical spec ("DKA0:", matching vms_devtab's own stored form exactly) --
+ * so a directory-bearing equivalence (SYS$SYSROOT-style, "SYS$SYSDEVICE:
+ * [SYS0.]") simply fails the next physical lookup and the next LNM lookup in
+ * turn, degrading to the honest SS$_NOSUCHDEV below rather than guessing
+ * where the device name ends.
+ */
+#define DEVICE_XLATE_MAX_DEPTH 8
+
+static uint32_t device_lookup_translated(const char *devnam_in,
+                                         struct vms_devinfo *info)
+{
+    char cur[VMS_DEVNAM_SIZE];
+    int depth;
+
+    strncpy(cur, devnam_in, sizeof(cur) - 1);
+    cur[sizeof(cur) - 1] = '\0';
+
+    for (depth = 0; depth < DEVICE_XLATE_MAX_DEPTH; depth++) {
+        uint32_t status = vms_kif_getdvi_devnam(cur, info);
+        if (status != SS$_NOSUCHDEV)
+            return status;   /* SS$_NORMAL, or a different failure -- done */
+
+        /* Not a physical unit; try it as a SYSTEM-table logical name.
+         * Names are keyed WITHOUT a trailing colon (lnm_seed_system_locating,
+         * src/vmslnm/lnm_defaults.c), so strip one before looking it up. */
+        char key[VMS_DEVNAM_SIZE];
+        size_t klen = strlen(cur);
+        if (klen > 0 && cur[klen - 1] == ':')
+            klen--;
+        if (klen == 0 || klen >= sizeof(key))
+            return SS$_NOSUCHDEV;
+        memcpy(key, cur, klen);
+        key[klen] = '\0';
+
+        char equiv[256];   /* >= VMS_LNM_MAX_VALUE+1 (src/kernel/vms_lnm.h) */
+        int r = vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, key, 0,
+                                      equiv, sizeof(equiv), NULL, NULL, NULL);
+        if (r <= 0)
+            return SS$_NOSUCHDEV;   /* no such logical, or executive absent */
+
+        strncpy(cur, equiv, sizeof(cur) - 1);
+        cur[sizeof(cur) - 1] = '\0';
+    }
+    return SS$_NOSUCHDEV;   /* translation loop -- refuse, do not guess */
+}
+
+/*
  * sys$getdvi - Get Device/Volume Information.
  *
  * Either chan (an assigned channel) or devnam (a name descriptor) identifies
@@ -255,7 +325,7 @@ uint32_t sys$getdvi(uint32_t efn, uint16_t chan,
     /* Ask the executive for the row. */
     struct vms_devinfo info;
     uint32_t status = have_name
-        ? vms_kif_getdvi_devnam(devnam_str, &info)
+        ? device_lookup_translated(devnam_str, &info)
         : vms_kif_getdvi_chan(chan, &info);
 
     if (status == SS$_NORMAL) {

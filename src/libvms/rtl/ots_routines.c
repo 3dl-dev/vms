@@ -411,32 +411,58 @@ int32_t ots$powjj(const int32_t base, const int32_t exponent) {
  *            OTS$DIVC/OTS$MULC/OTS$POWCC/OTS$POWCJ descriptions.
  * ================================================================ */
 
-/* (real1 + i*imag1) / (real2 + i*imag2) */
-static double complex ots_divc_impl(double r1, double i1, double r2, double i2) {
-    return (r1 + i1 * I) / (r2 + i2 * I);
-}
+/*
+ * The complex results are computed with explicit real arithmetic and
+ * assembled with CMPLX (no complex '*'/'/' operators and no libm complex
+ * functions) so this object imports only the real libm entry points the
+ * C-RTL already exports — the OVMX VMS-native link graph binds every
+ * libc/libm import to DECC$SHR with no libgcc helpers, so __muldc3 /
+ * __divdc3 / cpow / cabs must not appear.
+ */
+
 /* (real1 + i*imag1) * (real2 + i*imag2) */
 static double complex ots_mulc_impl(double r1, double i1, double r2, double i2) {
-    return (r1 + i1 * I) * (r2 + i2 * I);
+    return CMPLX(r1 * r2 - i1 * i2, r1 * i2 + i1 * r2);
 }
-/* (base_real + i*base_imag) ** (exp_real + i*exp_imag) */
+/* (real1 + i*imag1) / (real2 + i*imag2) */
+static double complex ots_divc_impl(double r1, double i1, double r2, double i2) {
+    double d = r2 * r2 + i2 * i2;
+    return CMPLX((r1 * r2 + i1 * i2) / d, (i1 * r2 - r1 * i2) / d);
+}
+/* (base_real + i*base_imag) ** (exp_real + i*exp_imag) via z^w = exp(w*ln z) */
 static double complex ots_powcc_impl(double br, double bi, double er, double ei) {
-    return cpow(br + bi * I, er + ei * I);
+    if (br == 0.0 && bi == 0.0)
+        return CMPLX(0.0, 0.0);
+    double lnr  = log(sqrt(br * br + bi * bi));  /* ln|z|            */
+    double th   = atan2(bi, br);                 /* arg z            */
+    double pr   = er * lnr - ei * th;            /* Re(w * ln z)     */
+    double pi   = er * th  + ei * lnr;           /* Im(w * ln z)     */
+    double mag  = exp(pr);
+    return CMPLX(mag * cos(pi), mag * sin(pi));
 }
 /* (base_real + i*base_imag) ** j  (complex raised to an integer power) */
 static double complex ots_powcj_impl(double br, double bi, int32_t j) {
-    double complex base = br + bi * I;
-    double complex result = 1.0 + 0.0 * I;
+    double rr = 1.0, ri = 0.0;   /* running result */
+    double xr = br,  xi = bi;    /* running square */
     uint32_t e = (j < 0) ? (uint32_t)(-(int64_t)j) : (uint32_t)j;
-    double complex b = base;
     while (e) {
-        if (e & 1u) result *= b;
+        if (e & 1u) {
+            double nr = rr * xr - ri * xi;
+            double ni = rr * xi + ri * xr;
+            rr = nr; ri = ni;
+        }
         e >>= 1;
-        if (e) b *= b;
+        if (e) {
+            double nr = xr * xr - xi * xi;
+            double ni = 2.0 * xr * xi;
+            xr = nr; xi = ni;
+        }
     }
-    if (j < 0)
-        result = (1.0 + 0.0 * I) / result;
-    return result;
+    if (j < 0) {                 /* reciprocal: 1 / (rr + ri i) */
+        double d = rr * rr + ri * ri;
+        return CMPLX(rr / d, -ri / d);
+    }
+    return CMPLX(rr, ri);
 }
 
 double complex ots$divct_r3(double r1, double i1, double r2, double i2) {
@@ -488,13 +514,14 @@ static uint32_t ots_cnvout_impl(double value, struct dsc$descriptor_s *dest,
     if (precision > 34) precision = 34;   /* well beyond IEEE double range */
 
     char out[80];
-    int neg = signbit(value) && !isnan(value);
+    int is_nan = (value != value);
+    int neg = (value < 0.0);
     double v = fabs(value);
     size_t pos = 0;
 
     if (neg) out[pos++] = '-';
 
-    if (v == 0.0 || isnan(v) || isinf(v)) {
+    if (v == 0.0 || is_nan) {
         /* Zero (and non-finite) get a normalized zero mantissa / exp 0. */
         out[pos++] = '0';
         out[pos++] = '.';

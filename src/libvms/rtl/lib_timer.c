@@ -308,7 +308,8 @@ static double vax_f_to_double(const void *p) {
     uint32_t frac = bits & 0x7FFFFFu;
     if (exp == 0) return sign ? -0.0 : 0.0;   /* zero / (reserved) */
     double m = (double)((1u << 23) | frac) / (double)(1u << 24); /* [0.5,1) */
-    double val = ldexp(m, exp - 128);
+    double val = m * pow(2.0, (double)(exp - 128)); /* pow, not ldexp: the
+        VMS-native link graph imports libm from DECC$SHR, which exports pow */
     return sign ? -val : val;
 }
 
@@ -329,7 +330,7 @@ static double vax_d_to_double(const void *p) {
     uint64_t frac = bits & 0x7FFFFFFFFFFFFFULL;     /* 55 bits */
     if (exp == 0) return sign ? -0.0 : 0.0;
     double m = (double)((1ULL << 55) | frac) / (double)(1ULL << 56); /* [0.5,1) */
-    double val = ldexp(m, exp - 128);
+    double val = m * pow(2.0, (double)(exp - 128));
     return sign ? -val : val;
 }
 
@@ -340,7 +341,7 @@ static double vax_g_to_double(const void *p) {
     uint64_t frac = bits & 0xFFFFFFFFFFFFFULL;      /* 52 bits */
     if (exp == 0) return sign ? -0.0 : 0.0;
     double m = (double)((1ULL << 52) | frac) / (double)(1ULL << 53); /* [0.5,1) */
-    double val = ldexp(m, exp - 1024);
+    double val = m * pow(2.0, (double)(exp - 1024));
     return sign ? -val : val;
 }
 

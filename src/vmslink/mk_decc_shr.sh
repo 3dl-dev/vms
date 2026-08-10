@@ -367,7 +367,9 @@ fcntl=PROCEDURE,\
 setsid=PROCEDURE,\
 \
 setvbuf=PROCEDURE,setgid=PROCEDURE,setuid=PROCEDURE,setgroups=PROCEDURE,\
-getegid=PROCEDURE"
+getegid=PROCEDURE,\
+\
+nanosleep=PROCEDURE"
 
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets
@@ -405,6 +407,13 @@ getegid=PROCEDURE"
 #     getegid was not. (strtok_r, also referenced by LOGINOUT via privs.h's
 #     parse_privilege_string(), was ALREADY exported -- appended earlier for
 #     a prior consumer -- so it is not part of this block.)
+#
+# nanosleep APPENDED for vms-801 R2.2 batch 4 (append-only -> prior consumers'
+# vector indices unchanged, GSMATCH LEQUAL-compatible). lib$wait (rtl/lib_timer.c)
+# is the first consumer: it suspends the caller for a sub-second real-time
+# interval, which sleep() (whole seconds, already exported) cannot express.
+# nanosleep() is a plain C-RTL entry point musl's libc.a defines, so DECC$SHR is
+# the right producer.
 #
 # THE GENERAL RULE, because this is the commonest way to break the VMS-native
 # toolchain jobs: EVERY libc call added to an OVMX library is a claim that

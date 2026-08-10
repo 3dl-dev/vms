@@ -45,6 +45,18 @@
  *     VMSFS_PROT_DEFAULT for the exact same class of mastered system files,
  *     applied here independently (this header does not include
  *     vmsfs_ondisk.h -- the kit format has no vmsfs dependency).
+ *   - Per-entry installer flags (`ke_flags`, vms-2c9) -- in particular
+ *     OVMX_KIT_ENTRY_FLAG_SEED_ONCE, marking a kit-shipped file as a SITE
+ *     template (SYSTARTUP_VMS.COM, SYCONFIG.COM, SYLOGICALS.COM) that a
+ *     later PRODUCT INSTALL (an upgrade) must never reprovision once it
+ *     exists on the target. VSI has never published a PCSI per-entry flags
+ *     field; this bitmask, its bit assignment, and its "preserve if already
+ *     present" semantics are entirely OVMX's own invention. The underlying
+ *     BEHAVIOR it approximates -- real OpenVMS sites are drilled never to
+ *     let an OS upgrade touch SYS$MANAGER: startup procedures once seeded
+ *     -- is standard, documented VMS system-management practice (Guide to
+ *     OpenVMS System Management), just not a fact about PCSI's own kit
+ *     format.
  *
  * SCOPE (vms-0b6): this header defines the container only -- what a kit
  * FILE looks like on disk. Building one is tools/ovmx_kit_pack.c (factory
@@ -120,12 +132,36 @@ struct ovmx_kit_header {
     uint32_t kh_reserved2;                      /* 124 */
 } __attribute__((packed));                      /* 128 bytes total */
 
+/*
+ * ke_flags bit assignments (vms-2c9, OVMX-INVENTED, Rule 8 -- see the file
+ * header comment). This field occupies what was previously `ke_reserved`
+ * (uint16_t, offset 134): the struct's size and layout do not change, so
+ * this is NOT a kit format version bump.
+ *
+ * BACKWARD COMPATIBLE BY CONSTRUCTION: tools/ovmx_kit_pack.c has always
+ * calloc()d its entry array, so every kit built before this flag existed
+ * has these two bytes zeroed on disk. 0 means "no flags" -- a pre-vms-2c9
+ * kit installs exactly as it always has (src/product/product.c's
+ * do_install() writes every listed file unconditionally, every time,
+ * including on an upgrade). Only a kit packed by a vms-2c9-or-later
+ * ovmx_kit_pack sets OVMX_KIT_ENTRY_FLAG_SEED_ONCE, and only for the
+ * site-customizable files it chooses to (tools/ovmx_kit_pack.c's
+ * is_seed_once_filename()).
+ */
+#define OVMX_KIT_ENTRY_FLAG_SEED_ONCE  ((uint16_t)0x0001)
+    /* Write this entry's file only if the target does NOT already exist on
+     * the destination volume (a fresh install, or an upgrade target that
+     * has never had this file). If the target already exists (an upgrade
+     * over an already-populated destination), PRESERVE it -- do not
+     * truncate/overwrite, and do not touch its protection or owner UIC.
+     * See src/product/product.c do_install(). */
+
 struct ovmx_kit_entry {
     char     ke_filespec[OVMX_KIT_FILESPEC_MAX]; /*   0: target VMS filespec, e.g. "SYS$COMMON:[SYSEXE]DCL.EXE" */
     uint16_t ke_protection;                      /* 128: VMS SOGW mask (ovmx_fileprot.h encoding) */
     uint16_t ke_uic_group;                       /* 130: owner UIC group */
     uint16_t ke_uic_member;                      /* 132: owner UIC member */
-    uint16_t ke_reserved;                        /* 134 */
+    uint16_t ke_flags;                           /* 134: OVMX_KIT_ENTRY_FLAG_* bitmask; 0 on every kit predating vms-2c9 */
     uint64_t ke_size;                            /* 136: file content length in bytes */
     uint64_t ke_offset;                          /* 144: absolute byte offset of content in the kit file */
     uint32_t ke_checksum;                        /* 152: ovmx_kit_checksum() over the file content */

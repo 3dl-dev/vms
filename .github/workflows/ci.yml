@@ -490,20 +490,16 @@ jobs:
   # making it roll forward automatically each release) is tracked
   # separately, not done here (no gold-plating this item's scope).
   #
-  # tests/qemu/test_upgrade_e2e.sh's own header carries THE FINDING measured
-  # while building this gate: PRODUCT INSTALL's do_install() overwrites
-  # every kit-listed file unconditionally, including
-  # SYS$MANAGER:SYSTARTUP_VMS.COM (shipped BY the kit) -- so a site
-  # customization appended to that file does NOT survive an upgrade
-  # (assertion (b) below). User data outside the kit's file list (assertion
-  # (a)) and the version bump (assertion (c)) DO survive; the whole machine
-  # still boots after the upgrade (assertion (d)). This is a REAL, MEASURED
-  # gap in product install, not a test bug -- see the filed follow-up in
-  # this PR's description. The run step is `continue-on-error` so this
-  # tracked, honest finding does not block unrelated merges while it stays
-  # visibly red on every run until product.c grows seed-once/site-file
-  # semantics (a kit-format change, its own design-change cascade, larger
-  # than vms-f05's scope).
+  # tests/qemu/test_upgrade_e2e.sh's own header carries the history: PRODUCT
+  # INSTALL's do_install() used to overwrite every kit-listed file
+  # unconditionally, including SYS$MANAGER:SYSTARTUP_VMS.COM (shipped BY
+  # the kit) -- so a site customization appended to that file did NOT
+  # survive an upgrade (assertion (b)). FIXED by vms-2c9 (kit-format
+  # "seed once" metadata, OVMX_KIT_ENTRY_FLAG_SEED_ONCE): (b) now passes
+  # alongside (a) user-data survival, (c) the version bump, and (d) the
+  # machine still booting after the upgrade. This job is a REAL, FULLY
+  # ENFORCING gate -- no `continue-on-error`, every assertion is expected
+  # to pass on every run, and a red run here blocks the merge.
   # -----------------------------------------------------------------------
   upgrade-e2e:
     name: install -> UPGRADE -> boot e2e (vms-f05)
@@ -547,7 +543,6 @@ jobs:
 
       - name: install -> UPGRADE -> boot e2e
         id: upgrade_e2e
-        continue-on-error: true
         run: |
           set +e
           OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
@@ -561,11 +556,6 @@ jobs:
           fi
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit "$rc"
-
-      - name: Report the tracked finding if the gate went red
-        if: steps.upgrade_e2e.outcome == 'failure'
-        run: |
-          echo "::warning::upgrade_e2e is red — expected as of vms-f05 if only assertion (b) (site-config survival) failed: PRODUCT INSTALL clobbers SYS\$MANAGER:SYSTARTUP_VMS.COM on upgrade (see tests/qemu/test_upgrade_e2e.sh header, 'THE FINDING'). Any OTHER failing assertion is a NEW regression, not this tracked gap — check the step log above."
 
   # -----------------------------------------------------------------------
   # Job 2b: PARTS 0.2 Demo E2E (vms-1c8, epic vms-2579/vms-5dd)

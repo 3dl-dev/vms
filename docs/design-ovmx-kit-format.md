@@ -95,9 +95,57 @@ layout, exactly the pattern `vmsfs_ondisk.h` already established for
 | `ke_filespec` | `char[128]` | Target VMS filespec, e.g. `"SYS$COMMON:[SYSEXE]DCL.EXE"` |
 | `ke_protection` | `uint16` | VMS SOGW protection mask (`ovmx_fileprot.h` encoding) |
 | `ke_uic_group` / `ke_uic_member` | `uint16` each | Owner UIC |
+| `ke_flags` | `uint16` | `OVMX_KIT_ENTRY_FLAG_*` bitmask (§3.4). `0` on every kit predating vms-2c9 |
 | `ke_size` | `uint64` | Payload length in bytes |
 | `ke_offset` | `uint64` | Absolute byte offset of the payload in the kit file |
 | `ke_checksum` | `uint32` | XOR-fold checksum of the file content |
+
+### 3.4 `ke_flags` — per-entry installer hints (vms-2c9)
+
+Added to fix a real upgrade-safety bug: `PRODUCT.EXE`'s installer
+(`src/product/product.c` `do_install()`) used to write every kit-listed
+file unconditionally, every time, including `SYS$MANAGER:
+SYSTARTUP_VMS.COM` — a file the OS kit itself ships (`distro/
+Dockerfile.bootable`'s kit-stage copies the whole `SYSMGR` tree in). A
+second `PRODUCT INSTALL` of a newer kit over an already-installed
+destination therefore clobbered any site customization to that file, the
+exact failure real OpenVMS sites are drilled to fear from an OS upgrade
+(`vms-f05`'s `tests/qemu/test_upgrade_e2e.sh` measured this against a real
+`vms.ko`/`vmsfs.ko` boot).
+
+**Not a format version bump.** `ke_flags` reuses the two bytes that were
+previously `ke_reserved` — same offset (134), same size, same 160-byte
+entry. `tools/ovmx_kit_pack.c` has always `calloc()`d its entry array, so
+every kit built before this flag existed already has these bytes zeroed.
+`0` means "no flags," which is exactly today's behavior — a pre-vms-2c9
+kit installs identically to before this change (backward/API compatible
+by construction, no reader-side version check needed).
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `OVMX_KIT_ENTRY_FLAG_SEED_ONCE` | `0x0001` | Write this entry's file only if the target does not already exist on the destination volume. If it already exists (an upgrade over an already-populated destination), PRESERVE it — skip the write, leave content/protection/owner UIC untouched. |
+
+**Rule 8 labeling.** VSI has never published a PCSI per-entry flags field;
+this bitmask, its bit assignment, and its "preserve if already present"
+semantics are entirely OVMX's own invention. The underlying behavior it
+approximates — real OpenVMS sites never let an OS upgrade reprovision
+`SYS$MANAGER:` startup procedures once seeded — is standard, documented
+VMS system-management practice (Guide to OpenVMS System Management), not a
+claim about PCSI's own kit format.
+
+**Who sets it.** `tools/ovmx_kit_pack.c`'s `is_seed_once_filename()`
+flags exactly the canonical OpenVMS site-customization startup procedures
+by basename — `SYSTARTUP_VMS.COM`, `SYCONFIG.COM`, `SYLOGICALS.COM` — and
+nothing else. Product/system files (`DCL.EXE`, `STARTUP.COM`, etc.) are
+never flagged: those must keep overwriting on every `PRODUCT INSTALL`,
+which is the whole point of an upgrade. `ovmx_kit_pack list` renders a
+flagged entry with a trailing `[seed-once]` marker.
+
+**Who reads it.** `src/product/product.c do_install()`: before writing an
+entry, if `OVMX_KIT_ENTRY_FLAG_SEED_ONCE` is set and `stat()` on the
+target path succeeds, the entry is skipped (counted separately as
+"preserved" in the `%PCSI-I-DONE` summary) rather than opened with
+`O_TRUNC`.
 
 ### 3.3 Version single-sourcing (constraint)
 

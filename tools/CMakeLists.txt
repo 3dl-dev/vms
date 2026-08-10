@@ -236,3 +236,32 @@ set_target_properties(vms_analyze PROPERTIES
     SUFFIX ".EXE"
 )
 install(TARGETS vms_analyze RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
+# vmsfs_master - VMSFS media-mastering build tool (host tooling).
+#
+# Populates a VMSFS/ODS-2 image from a source directory tree so vms-8ab can
+# master dist/ovmx-distrib.img.  Per docs/design-vms-faithful-install.md §3.3
+# this is FACTORY tooling: it is NOT installed onto the media, keeps a plain
+# host name (no .EXE, no VMS name), and is never run at boot. Shares the single
+# format description in src/kernel/vmsfs/vmsfs_ondisk.h with INITIALIZE.EXE and
+# vmsfs.ko.
+add_executable(vmsfs_master
+    vmsfs_master.c
+)
+
+target_include_directories(vmsfs_master PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
+)
+
+target_compile_definitions(vmsfs_master PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(vmsfs_master PRIVATE
+    -Wall -Wextra
+)
+
+set_target_properties(vmsfs_master PROPERTIES
+    OUTPUT_NAME "vmsfs_master"
+)

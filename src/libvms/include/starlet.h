@@ -837,10 +837,15 @@ uint32_t sys$dclexh(void *desblk);
  * public flags to the kernel layout at the /dev/vms boundary so kernel
  * numbering never leaks into this compat surface.
  *
- * Provenance: bit positions are single-source, from the FreeVMS lckdef.h
- * reproduction (github.com/ztmr/FreeVMS). VSI/HPE manuals document the flag
- * names and semantics but publish no numeric values; verified 2026-07-26.
- * Not independently confirmed against an official VSI $LCKDEF extract. */
+ * Provenance: pinned against the OpenVMS VAX V7.3 reference oracle (lab-2
+ * vaxlab-7) on 2026-08-10 by TWO independent documented-tool methods —
+ * (A) LIBRARY/EXTRACT=$LCKDEF from SYS$LIBRARY:STARLET.MLB, and (B) a MACRO-32
+ * `$LCKDEF GLOBAL` assembly whose symbol table was read with SEARCH. Both
+ * agreed exactly on all 14 $ENQ flags. $LCKDEF is architecture-independent, so
+ * a VAX oracle is authoritative. (These match the earlier FreeVMS lckdef.h
+ * reproduction, github.com/ztmr/FreeVMS, now superseded as the citation.)
+ * The full extract is quoted in <lckdef.h>, which carries the same layout.
+ * See vms-982. */
 #define LCK$M_VALBLK    0x0001  /* Lock has a 16-byte value block */
 #define LCK$M_CONVERT   0x0002  /* Convert the existing lock named by lkid */
 #define LCK$M_NOQUEUE   0x0004  /* Fail immediately (SS$_NOTQUEUED) if not grantable */

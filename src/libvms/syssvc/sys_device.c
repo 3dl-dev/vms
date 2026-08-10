@@ -1,279 +1,227 @@
 /*
  * sys_device.c - Device Information System Services
  *
- * Implements sys$getdvi and sys$getdviw for querying device
- * and volume attributes.  VMS device names are mapped to Linux
- * mount points and character devices.
- *
- * Device name mapping:
- *   SYS$DISK:, DUA0:, $1$DUA0:  -> /
- *   TT:, _TTAn:, _FTAn:         -> terminal (isatty on stdin/stdout)
- *   MBAn:                        -> mailbox virtual device
- *
- * For disk devices, volume information is obtained via statvfs().
- * For terminal devices, termios/ioctl provides terminal properties.
+ * Implements sys$getdvi / sys$getdviw / sys$device_scan as READERS of the
+ * EXECUTIVE'S device table (src/kernel/vms_devtab.c), reached through the
+ * vms_kif layer over /dev/vms. What these services report about a device is
+ * what every process on the node sees -- not a per-process idea of what a
+ * device looks like.
  */
 
 /*
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * These three cited vms-fb9 until vms-fab. vms-fb9 is closed: it converted DCL's
- * SHOW DEVICE and F$DEVICE into readers of the executive device table, and it
- * had to reach vms_kif_* DIRECTLY because converting THESE services turned CI
- * red -- tests/libvms/test_lib_fb3.c asserts their invented answers. vms-911 is
- * the item that finding was filed as, and it names both services.
+ * WHAT THESE THREE USED TO BE, and why the shape mattered more than the code.
+ * Until vms-dv1 these services answered from classify_device() plus
+ * statvfs()/termios on the HOST and a compiled-in scan_devices[] table: a
+ * per-process fiction that reported SS$_NORMAL for devices the executive had
+ * never heard of and enumerated the same fixed list on every system whatever
+ * was actually configured. DCL's SHOW DEVICE and F$DEVICE were converted to
+ * read the executive by vms-fb9, but they had to reach vms_kif_* DIRECTLY
+ * because these services still fabricated -- tests/libvms/test_lib_fb3.c
+ * asserted their invented answers. vms-911 filed that finding; vms-dv1 closes
+ * it by making the PUBLIC services readers of the same one table, so a program
+ * that never touched DCL sees exactly what SHOW DEVICE sees.
  *
- * OVMX-USERSPACE: sys$getdvi (vms-911) -- answers from classify_device() in
- *     this file plus statvfs()/termios on the host, not from the executive
- *     device table.
- * OVMX-USERSPACE: sys$getdviw (vms-911) -- tail-calls sys$getdvi, so it
- *     inherits that answer exactly.
- * OVMX-USERSPACE: sys$device_scan (vms-911) -- enumerates the compiled-in
- *     scan_devices[] table below, so it reports the same devices on every
- *     system whatever is actually configured or mounted.
+ * OVMX-PARTIAL: sys$getdvi (vms-dv1) -- exec: the device's identity (name,
+ *     class, type), ownership (owner PID and UIC), allocation and reference/
+ *     error/operation counts come from the EXECUTIVE device table via
+ *     vms_kif_getdvi_devnam() (by name) or vms_kif_getdvi_chan() (by an
+ *     assigned channel). A device the executive does not have is refused
+ *     (SS$_NOSUCHDEV), not fabricated -- the upgrade from the old
+ *     classify_device()+statvfs() host fake (vms-911).
+ * OVMX-LOCAL: sys$getdvi -- the DVI$_ item-code marshalling into the caller's
+ *     item list runs in this process, and the volume/geometry items
+ *     (MAXBLOCK/FREEBLOCKS/VOLNAM/MOUNTCNT/...) answer 0 because the executive
+ *     does not track volume state yet (a documented vms-dv1 remainder: volume
+ *     state arrives with MOUNT).
+ * OVMX-PARTIAL: sys$getdviw (vms-dv1) -- exec: tail-calls sys$getdvi, so the
+ *     executive supplies exactly the same half.
+ * OVMX-LOCAL: sys$getdviw -- inherits sys$getdvi's userspace remainder exactly.
+ * OVMX-PARTIAL: sys$device_scan (vms-dv1) -- exec: every device it yields is a
+ *     row of the EXECUTIVE'S I/O database, enumerated through vms_kif_devscan();
+ *     it can no longer report a device the executive does not have.
+ * OVMX-LOCAL: sys$device_scan -- the wildcard (wildnam) and DVS$_DEVCLASS
+ *     filtering that select which of those executive rows the caller sees are
+ *     applied in this process.
  */
 
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <sys/statvfs.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <termios.h>
-#include <sys/ioctl.h>
 #include "starlet.h"
 #include "dvidef.h"
 #include "dcdef.h"
 #include "dvsdef.h"
+#include "vms_kif.h"        /* pulls in struct vms_devinfo, VMS_DEVNAM_SIZE */
 
 /*
- * Device type codes — a subset of VMS DT$_ values.
- * These are not defined in a separate header, so we define the
- * subset used by OVMX here.
+ * VMS standard block size. Device-independent (a VMS logical block is 512
+ * bytes on every device class), so it is a constant, not per-device state
+ * fabricated for a device the executive does not describe.
  */
-#define DT$_DISK        26   /* Generic disk */
-#define DT$_TERMINAL    66   /* Terminal */
-#define DT$_MAILBOX    101   /* Mailbox */
-#define DT$_UNKNOWN      0
+#define VMS_BLOCK_SIZE  512
 
 /*
- * Device status bits (DVI$_STS / device characteristics DVI$_DEVCHAR).
- * These are a subset of VMS DEV$M_ values.
+ * DVI$_DEVCHAR bits (DEV$M_) that OVMX can derive from the executive's
+ * device row TODAY. This is a deliberately small set: the executive models a
+ * device's class, type, ownership and allocation, so the two device-state
+ * bits below are honest; the rest of the DEV$M_ namespace (SHR, MNT, RCK, WCK,
+ * SPL, ...) is not tracked by the executive yet and is therefore NOT invented
+ * here. The disk/volume flags the old fake set from statvfs are gone with it.
  */
-#define DEV$M_MNT    0x00000200  /* Device is mounted */
 #define DEV$M_ALL    0x00000008  /* Device is allocated */
 #define DEV$M_AVL    0x00000020  /* Device is available */
-#define DEV$M_SHR    0x00000010  /* Device is shareable */
 
 /*
- * Classify a VMS device name into a device class.
- *
- * Handles:
- *   TT:, _TTAn:, _FTAn:   -> DC$_TERM
- *   MBAn:                   -> DC$_MAILBOX
- *   SYS$DISK:, DUAn:, etc. -> DC$_DISK
+ * dev_unit - the unit number as a pure function of the physical name
+ * (trailing decimal digits before the colon). Derived, not fabricated: e.g.
+ * "OPA0:" -> 0, "DKA100:" -> 100. No digits -> 0.
  */
-static int classify_device(const char *devnam, char *linux_path, size_t pathsz)
+static uint32_t dev_unit(const char *devnam)
 {
-    if (!devnam || !devnam[0]) {
-        if (linux_path) {
-            strncpy(linux_path, "/", pathsz);
-            linux_path[pathsz - 1] = '\0';
+    const char *p = devnam;
+    const char *last_digit_run = NULL;
+
+    /* Find the last run of digits (the unit trails the controller). */
+    while (*p) {
+        if (*p >= '0' && *p <= '9') {
+            if (!last_digit_run)
+                last_digit_run = p;
+        } else {
+            last_digit_run = NULL;
         }
-        return DC$_DISK;
+        p++;
     }
-
-    /* Uppercase comparison prefix */
-    char upper[64];
-    strncpy(upper, devnam, sizeof(upper) - 1);
-    upper[sizeof(upper) - 1] = '\0';
-    for (size_t i = 0; upper[i]; i++)
-        if (upper[i] >= 'a' && upper[i] <= 'z')
-            upper[i] = (char)(upper[i] - 'a' + 'A');
-
-    /* Strip trailing colon */
-    size_t ulen = strlen(upper);
-    if (ulen > 0 && upper[ulen - 1] == ':')
-        upper[ulen - 1] = '\0';
-
-    /* Terminal devices */
-    if (strncmp(upper, "TT",   2) == 0 ||
-        strncmp(upper, "_TTA", 4) == 0 ||
-        strncmp(upper, "_FTA", 4) == 0) {
-        if (linux_path) {
-            strncpy(linux_path, "/dev/tty", pathsz);
-            linux_path[pathsz - 1] = '\0';
-        }
-        return DC$_TERM;
-    }
-
-    /* Mailbox */
-    if (strncmp(upper, "MBA", 3) == 0) {
-        if (linux_path) {
-            linux_path[0] = '\0';
-        }
-        return DC$_MAILBOX;
-    }
-
-    /* Disk: SYS$DISK, DUA, DKA, $1$DUA, etc. — map to root filesystem */
-    if (linux_path) {
-        strncpy(linux_path, "/", pathsz);
-        linux_path[pathsz - 1] = '\0';
-    }
-    return DC$_DISK;
+    if (!last_digit_run)
+        return 0;
+    return (uint32_t)strtoul(last_digit_run, NULL, 10);
 }
 
 /*
- * Fill a single DVI item from device information.
+ * Fill one DVI item from an executive device row. Only item codes the
+ * executive genuinely describes are answered with data; the rest return a
+ * longword 0 (or empty string), never a host-derived value.
  */
 static void fill_dvi_item(const struct item_list_3 *item,
-                           int devclass, int devtype,
-                           const char *devnam_str,
-                           const char *linux_path)
+                          const struct vms_devinfo *info)
 {
     switch (item->item_code) {
 
-        case DVI$_DEVNAM: {
-            uint16_t len = (uint16_t)strlen(devnam_str);
-            if (len > item->buflen) len = item->buflen;
-            if (item->bufaddr) memcpy(item->bufaddr, devnam_str, len);
-            if (item->retlen) *item->retlen = len;
-            break;
-        }
+    case DVI$_DEVNAM:
+    case DVI$_FULLDEVNAM:
+    case DVI$_ALLDEVNAM: {
+        /* Single-node system: the full name is the physical name. A cluster
+         * node prefix ("node$") is a documented remainder (vms-dv1). */
+        uint16_t len = (uint16_t)strlen(info->devnam);
+        if (len > item->buflen) len = item->buflen;
+        if (item->bufaddr) memcpy(item->bufaddr, info->devnam, len);
+        if (item->retlen) *item->retlen = len;
+        break;
+    }
 
-        case DVI$_FULLDEVNAM: {
-            uint16_t len = (uint16_t)strlen(devnam_str);
-            if (len > item->buflen) len = item->buflen;
-            if (item->bufaddr) memcpy(item->bufaddr, devnam_str, len);
-            if (item->retlen) *item->retlen = len;
-            break;
-        }
+    case DVI$_UNIT:
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = dev_unit(info->devnam);
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
 
-        case DVI$_DEVCLASS: {
-            if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                *(uint32_t *)item->bufaddr = (uint32_t)devclass;
-            if (item->retlen) *item->retlen = sizeof(uint32_t);
-            break;
-        }
+    case DVI$_DEVCLASS:
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = info->devclass;
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
 
-        case DVI$_DEVTYPE: {
-            if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                *(uint32_t *)item->bufaddr = (uint32_t)devtype;
-            if (item->retlen) *item->retlen = sizeof(uint32_t);
-            break;
-        }
+    case DVI$_DEVTYPE:
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = info->devtype;
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
 
-        case DVI$_MAXBLOCK: {
-            if (devclass == DC$_DISK && linux_path && linux_path[0]) {
-                struct statvfs svfs;
-                if (statvfs(linux_path, &svfs) == 0) {
-                    /* Blocks in 512-byte VMS blocks */
-                    uint32_t blks = (uint32_t)(svfs.f_blocks *
-                                    (svfs.f_frsize / 512));
-                    if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                        *(uint32_t *)item->bufaddr = blks;
-                    if (item->retlen) *item->retlen = sizeof(uint32_t);
-                    break;
-                }
-            }
-            if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                *(uint32_t *)item->bufaddr = 0;
-            if (item->retlen) *item->retlen = sizeof(uint32_t);
-            break;
-        }
+    case DVI$_DEVCHAR: {
+        /* Only the bits the executive can ground (see DEV$M_ note above). */
+        uint32_t chars = DEV$M_AVL;             /* present in the I/O DB */
+        if (info->allocated) chars |= DEV$M_ALL;
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = chars;
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
+    }
 
-        case DVI$_FREEBLOCKS: {
-            if (devclass == DC$_DISK && linux_path && linux_path[0]) {
-                struct statvfs svfs;
-                if (statvfs(linux_path, &svfs) == 0) {
-                    uint32_t free_blks = (uint32_t)(svfs.f_bavail *
-                                         (svfs.f_frsize / 512));
-                    if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                        *(uint32_t *)item->bufaddr = free_blks;
-                    if (item->retlen) *item->retlen = sizeof(uint32_t);
-                    break;
-                }
-            }
-            if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                *(uint32_t *)item->bufaddr = 0;
-            if (item->retlen) *item->retlen = sizeof(uint32_t);
-            break;
-        }
+    case DVI$_REFCNT:
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = info->refcnt;
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
 
-        case DVI$_VOLNAM: {
-            /* Return a synthetic volume label based on mount point */
-            const char *volnam = "OVMX";
-            uint16_t len = (uint16_t)strlen(volnam);
-            if (len > item->buflen) len = item->buflen;
-            if (item->bufaddr) memcpy(item->bufaddr, volnam, len);
-            if (item->retlen) *item->retlen = len;
-            break;
-        }
+    case DVI$_ERRCNT:
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = info->errcnt;
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
 
-        case DVI$_MOUNTCNT: {
-            /* Always report 1 for mounted devices */
-            if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                *(uint32_t *)item->bufaddr = (devclass == DC$_DISK) ? 1 : 0;
-            if (item->retlen) *item->retlen = sizeof(uint32_t);
-            break;
-        }
+    case DVI$_OPCNT:
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = (uint32_t)info->opcnt;
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
 
-        case DVI$_DEVCHAR: {
-            uint32_t chars = 0;
-            if (devclass == DC$_DISK)
-                chars = DEV$M_MNT | DEV$M_AVL | DEV$M_SHR;
-            else if (devclass == DC$_TERM)
-                chars = DEV$M_AVL;
-            if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                *(uint32_t *)item->bufaddr = chars;
-            if (item->retlen) *item->retlen = sizeof(uint32_t);
-            break;
-        }
+    case DVI$_PID:
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = info->owner_pid;
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
 
-        case DVI$_BLOCKSIZE: {
-            /* VMS standard block size is 512 bytes */
-            if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                *(uint32_t *)item->bufaddr = 512;
-            if (item->retlen) *item->retlen = sizeof(uint32_t);
-            break;
-        }
+    case DVI$_OWNUIC:
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = info->owner_uic;
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
 
-        case DVI$_UNIT: {
-            if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                *(uint32_t *)item->bufaddr = 0;
-            if (item->retlen) *item->retlen = sizeof(uint32_t);
-            break;
-        }
+    case DVI$_AVAILABLE:
+        /* A device the executive lists is available; it models no offline
+         * state yet, so "present" is the honest answer to "available". */
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = 1;
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
 
-        case DVI$_AVAILABLE: {
-            if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                *(uint32_t *)item->bufaddr = 1;
-            if (item->retlen) *item->retlen = sizeof(uint32_t);
-            break;
-        }
+    case DVI$_BLOCKSIZE:
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = VMS_BLOCK_SIZE;
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
 
-        default:
-            /* Unknown item — fill with zeros */
-            if (item->bufaddr && item->buflen > 0)
-                memset(item->bufaddr, 0,
-                       (item->buflen < sizeof(uint32_t)) ?
-                       item->buflen : sizeof(uint32_t));
-            if (item->retlen) *item->retlen = 0;
-            break;
+    default:
+        /*
+         * Everything else -- volume geometry (MAXBLOCK/FREEBLOCKS/VOLNAM/
+         * MOUNTCNT/CLUSTER/...) and the rest of the DEV$M_/boolean space --
+         * is not tracked by the executive yet (volume state arrives with
+         * MOUNT; a documented remainder on vms-dv1). Answer a longword 0
+         * rather than a host-derived value: an honest "not known" beats the
+         * statvfs() fiction this rewrite removed.
+         */
+        if (item->bufaddr && item->buflen > 0)
+            memset(item->bufaddr, 0,
+                   (item->buflen < sizeof(uint32_t)) ?
+                   item->buflen : sizeof(uint32_t));
+        if (item->retlen) *item->retlen = 0;
+        break;
     }
 }
 
 /*
  * sys$getdvi - Get Device/Volume Information.
  *
- * Returns device and volume attributes for the specified device.
- * Either chan (channel) or devnam (name descriptor) identifies the device;
- * devnam takes priority in this implementation.
+ * Either chan (an assigned channel) or devnam (a name descriptor) identifies
+ * the device; devnam takes priority when both are supplied. The device is
+ * resolved in the EXECUTIVE'S table, so the row is the same one every process
+ * on the node sees. A device the executive does not have is SS$_NOSUCHDEV; a
+ * channel this process does not hold is SS$_IVCHAN -- neither is invented
+ * here, both come back from the executive.
  *
- * @param efn      Event flag (ignored — synchronous)
+ * @param efn      Event flag (ignored -- synchronous)
  * @param chan     I/O channel (0 if using devnam)
  * @param devnam   Descriptor of device name (NULL if using chan)
  * @param itmlst   Item list of DVI$_ codes to retrieve
@@ -288,34 +236,41 @@ uint32_t sys$getdvi(uint32_t efn, uint16_t chan,
                     void (*astadr)(uint32_t), uint32_t astprm,
                     uint32_t nullarg)
 {
-    (void)efn; (void)chan; (void)astadr; (void)astprm; (void)nullarg;
+    (void)efn; (void)astadr; (void)astprm; (void)nullarg;
 
     if (!itmlst)
         return SS$_BADPARAM;
 
-    /* Extract device name */
-    char devnam_str[64] = "";
-    if (devnam && devnam->dsc$a_pointer)
+    /* Extract the device name, if one was given. */
+    char devnam_str[VMS_DEVNAM_SIZE] = "";
+    int have_name = 0;
+    if (devnam && devnam->dsc$a_pointer && devnam->dsc$w_length > 0) {
         dsc$strncpy(devnam_str, devnam, sizeof(devnam_str));
-
-    /* Classify the device */
-    char linux_path[256];
-    int devclass = classify_device(devnam_str, linux_path, sizeof(linux_path));
-    int devtype;
-    switch (devclass) {
-        case DC$_DISK:    devtype = DT$_DISK;     break;
-        case DC$_TERM:    devtype = DT$_TERMINAL; break;
-        case DC$_MAILBOX: devtype = DT$_MAILBOX;  break;
-        default:          devtype = DT$_UNKNOWN;  break;
+        have_name = (devnam_str[0] != '\0');
     }
 
-    /* Walk item list */
-    const struct item_list_3 *items = (const struct item_list_3 *)itmlst;
-    for (; items->buflen != 0 || items->item_code != 0; items++) {
-        fill_dvi_item(items, devclass, devtype, devnam_str, linux_path);
-    }
+    if (!have_name && chan == 0)
+        return SS$_BADPARAM;
 
-    uint32_t status = SS$_NORMAL;
+    /* Ask the executive for the row. */
+    struct vms_devinfo info;
+    uint32_t status = have_name
+        ? vms_kif_getdvi_devnam(devnam_str, &info)
+        : vms_kif_getdvi_chan(chan, &info);
+
+    if (status == SS$_NORMAL) {
+        info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+        /* Walk the item list, filling each from the executive's row. */
+        const struct item_list_3 *items = (const struct item_list_3 *)itmlst;
+        for (; items->buflen != 0 || items->item_code != 0; items++)
+            fill_dvi_item(items, &info);
+    }
+    /*
+     * On failure nothing is filled: the caller learns the device could not be
+     * read from $STATUS / the IOSB, and no item receives an invented value.
+     */
+
     if (iosb) {
         iosb->iosb$w_status = (uint16_t)status;
         iosb->iosb$w_bcnt   = 0;
@@ -326,7 +281,7 @@ uint32_t sys$getdvi(uint32_t efn, uint16_t chan,
 /*
  * sys$getdviw - Get Device/Volume Information (synchronous wait variant).
  *
- * Identical to sys$getdvi — our implementation is already synchronous.
+ * Identical to sys$getdvi -- our implementation is already synchronous.
  */
 uint32_t sys$getdviw(uint32_t efn, uint16_t chan,
                      struct dsc$descriptor_s *devnam,
@@ -338,34 +293,14 @@ uint32_t sys$getdviw(uint32_t efn, uint16_t chan,
 }
 
 /*
- * Minimal static device table for SYS$DEVICE_SCAN, mirroring the
- * devices classify_device() above already recognizes (SYS$DISK/DKA0 as
- * the root disk, TT: as the controlling terminal, MBA0 as a
- * representative mailbox device). OVMX doesn't maintain a dynamic
- * device database, so the scan enumerates this fixed set.
- */
-struct scan_device {
-    const char *name;
-    int         devclass;
-};
-
-static const struct scan_device scan_devices[] = {
-    { "SYS$DISK", DC$_DISK },
-    { "DKA0",     DC$_DISK },
-    { "TT",       DC$_TERM },
-    { "MBA0",     DC$_MAILBOX },
-};
-#define SCAN_DEVICE_COUNT (sizeof(scan_devices) / sizeof(scan_devices[0]))
-
-/*
  * vms$$wild_match - Minimal VMS wildcard matcher (case-insensitive).
  *
  * Supports '*' (any sequence, including empty) and '%' (exactly one
- * character) — the wildcard characters documented for the wildnam
- * argument of $DEVICE_SCAN in the OpenVMS System Services Reference
- * Manual.
+ * character) -- the wildcard characters documented for the wildnam argument
+ * of $DEVICE_SCAN in the OpenVMS System Services Reference Manual.
  */
-static int vms$$wild_match(const char *pat, const char *str) {
+static int vms$$wild_match(const char *pat, const char *str)
+{
     if (!pat || !*pat) return 1;  /* empty pattern matches everything */
 
     if (*pat == '*') {
@@ -386,15 +321,31 @@ static int vms$$wild_match(const char *pat, const char *str) {
     return vms$$wild_match(pat + 1, str + 1);
 }
 
+/* Copy a name with its trailing colon stripped, upper-cased, for matching. */
+static void strip_for_match(char *dst, size_t dstsz, const char *src)
+{
+    size_t i = 0;
+    for (; src[i] && i + 1 < dstsz && src[i] != ':'; i++) {
+        char c = src[i];
+        dst[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+    }
+    dst[i] = '\0';
+}
+
 /*
- * sys$device_scan - Scan for devices matching a wildcard name/item filter.
+ * sys$device_scan - Scan for devices matching a wildcard name / item filter.
  *
  * See the doc comment in starlet.h for the overall contract. ctx is a
- * caller-zeroed GENERIC_64: gen64$l_longword[0] holds the next index
- * into scan_devices[] to examine, gen64$l_longword[1] is a
- * "matched at least one device so far" flag used to distinguish the
- * SS$_NOSUCHDEV (nothing ever matched) vs SS$_NOMOREDEV (matched
- * before, now exhausted) termination cases.
+ * caller-zeroed GENERIC_64 used as an opaque cursor:
+ *   gen64$l_longword[0] -- the next EXECUTIVE scan index to examine.
+ *   gen64$l_longword[1] -- "matched at least one device so far", used to
+ *                          distinguish SS$_NOSUCHDEV (nothing ever matched)
+ *                          from SS$_NOMOREDEV (matched before, now exhausted).
+ *
+ * The device rows come from the executive (vms_kif_devscan); the wildcard and
+ * DVS$_DEVCLASS filter are applied here to those rows, exactly as $DEVICE_SCAN
+ * filters the I/O database. A per-process program can no longer enumerate a
+ * device the executive does not have.
  */
 uint32_t sys$device_scan(struct dsc$descriptor_s *devnam, uint16_t *devnamlen,
                          const struct dsc$descriptor_s *wildnam,
@@ -402,21 +353,18 @@ uint32_t sys$device_scan(struct dsc$descriptor_s *devnam, uint16_t *devnamlen,
 {
     if (!devnam || !devnam->dsc$a_pointer || !ctx) return SS$_BADPARAM;
 
-    char pattern[64] = "*";
+    /* Wildcard pattern (default '*'), colon-stripped and upper-cased. */
+    char pattern[VMS_DEVNAM_SIZE] = "*";
     if (wildnam && wildnam->dsc$a_pointer && wildnam->dsc$w_length > 0) {
+        char raw[VMS_DEVNAM_SIZE];
         size_t plen = wildnam->dsc$w_length;
-        if (plen > sizeof(pattern) - 1) plen = sizeof(pattern) - 1;
-        memcpy(pattern, wildnam->dsc$a_pointer, plen);
-        pattern[plen] = '\0';
-        /* Strip trailing colon, matching classify_device()'s convention. */
-        size_t plen2 = strlen(pattern);
-        if (plen2 > 0 && pattern[plen2 - 1] == ':') pattern[plen2 - 1] = '\0';
+        if (plen > sizeof(raw) - 1) plen = sizeof(raw) - 1;
+        memcpy(raw, wildnam->dsc$a_pointer, plen);
+        raw[plen] = '\0';
+        strip_for_match(pattern, sizeof(pattern), raw);
     }
 
-    /* Optional DVS$_DEVCLASS filter from itmlst (single-entry item list,
-     * matching the corpus convention — see dvsitms in
-     * tests/corpus/tier1-examples/sys_device_scan.c). Field layout is
-     * the same struct item_list_3 sys$getdvi already parses above. */
+    /* Optional DVS$_DEVCLASS filter from itmlst (single-entry item list). */
     int have_class_filter = 0;
     uint32_t class_filter = 0;
     if (itmlst) {
@@ -433,22 +381,40 @@ uint32_t sys$device_scan(struct dsc$descriptor_s *devnam, uint16_t *devnamlen,
     uint32_t idx = ctx->gen64$l_longword[0];
     uint32_t matched_any = ctx->gen64$l_longword[1];
 
-    for (; idx < SCAN_DEVICE_COUNT; idx++) {
-        if (have_class_filter && scan_devices[idx].devclass != (int)class_filter)
-            continue;
-        if (!vms$$wild_match(pattern, scan_devices[idx].name))
+    for (;;) {
+        struct vms_devinfo info;
+        uint32_t st = vms_kif_devscan(&idx, &info);
+
+        if (st == SS$_NOMOREDEV) {
+            ctx->gen64$l_longword[0] = idx;
+            return matched_any ? SS$_NOMOREDEV : SS$_NOSUCHDEV;
+        }
+        if (st != SS$_NORMAL) {
+            /* An ioctl-level failure or an executive that could not answer.
+             * Report it as-is; do not fabricate a device to cover it up. */
+            ctx->gen64$l_longword[0] = idx;
+            return st;
+        }
+
+        info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+        if (have_class_filter && info.devclass != class_filter)
             continue;
 
-        uint16_t len = (uint16_t)strlen(scan_devices[idx].name);
+        char cmpname[VMS_DEVNAM_SIZE];
+        strip_for_match(cmpname, sizeof(cmpname), info.devnam);
+        if (!vms$$wild_match(pattern, cmpname))
+            continue;
+
+        /* Match: hand the caller this device name (colon-stripped, as the
+         * old contract and the tier1 corpus example expect). */
+        uint16_t len = (uint16_t)strlen(cmpname);
         if (len > devnam->dsc$w_length) len = devnam->dsc$w_length;
-        memcpy(devnam->dsc$a_pointer, scan_devices[idx].name, len);
+        memcpy(devnam->dsc$a_pointer, cmpname, len);
         if (devnamlen) *devnamlen = len;
 
-        ctx->gen64$l_longword[0] = idx + 1;
+        ctx->gen64$l_longword[0] = idx;   /* devscan already advanced idx */
         ctx->gen64$l_longword[1] = 1;
         return SS$_NORMAL;
     }
-
-    ctx->gen64$l_longword[0] = idx;
-    return matched_any ? SS$_NOMOREDEV : SS$_NOSUCHDEV;
 }

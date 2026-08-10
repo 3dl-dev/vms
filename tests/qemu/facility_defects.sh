@@ -1570,7 +1570,11 @@ EOF
         # so this is the narrowest mutation that can redden the user-visible
         # reader without disturbing $ALLOC/$DALLOC's own bookkeeping (which
         # reads dev->allocated directly, never through this copy).
-        suites_red)   echo "test_kmod_devtab test_syssvc_showdev";;
+        # test_syssvc_getdvi.c (vms-dv1) is the C-API sibling of the DCL-driven
+        # test_syssvc_showdev: its "B sees that A allocated the device" step
+        # reads the same devinfo_fill() allocation flag through the PUBLIC
+        # sys$getdvi, so pinning that copy to 0 reddens it too.
+        suites_red)   echo "test_kmod_devtab test_syssvc_showdev test_syssvc_getdvi";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -1636,7 +1640,7 @@ EOF
         # in the tree uses, so a wrong status on it cascades widely. Real
         # run_facility_negctl.sh output, not a static guess, is what fixed
         # this suites_red/require_fail/knock_on_fail set.
-        suites_red)   echo "test_kmod_devtab test_syssvc_qio_terminal test_syssvc_showdev test_syssvc_showterm";;
+        suites_red)   echo "test_kmod_devtab test_syssvc_qio_terminal test_syssvc_showdev test_syssvc_showterm test_syssvc_getdvi";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -1668,6 +1672,9 @@ the last row carries the single remaining characteristic, unpadded
 ...and the cleared Echo bit, in the grid cell the oracle prints it in
 ...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
 ...and grid row 1 is the oracle's bytes again, so neither is the grid
+the console is not allocated before any process allocates it
+B sees that A allocated the device
+the allocation is gone once the other process exits (not a constant)
 EOF
                       ;;
         knock_on_why)
@@ -1690,7 +1697,9 @@ EOF
         # MEASURED (not the entry's first guess): SHOW DEVICE with no
         # argument drives DEVSCAN too (the "bare listing"), so this
         # reaches test_syssvc_showdev as well as test_kmod_devtab.
-        suites_red)   echo "test_kmod_devtab test_syssvc_showdev";;
+        # test_syssvc_getdvi (vms-dv1) drives sys$device_scan directly, whose
+        # loop ends the moment DEVSCAN's first row returns the wrong status.
+        suites_red)   echo "test_kmod_devtab test_syssvc_showdev test_syssvc_getdvi";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -2443,7 +2452,7 @@ EOF
         # authorize/setuai (it opens /dev/vms only to decide skip-vs-run,
         # then drives the public sys$ API), so it is a genuine detector, not
         # a widening of blind_suites.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status test_syssvc_setname test_syssvc_authorize test_syssvc_setuai test_syssvc_ast";;
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status test_syssvc_setname test_syssvc_authorize test_syssvc_setuai test_syssvc_ast test_syssvc_getdvi";;
         # test_kmod_setterm (vms-d0b) joins the blind set, MEASURED in the
         # same run: it stayed rc=0 with the defect injected, because
         # open_and_register() hand-registers exactly like test_kmod_devtab
@@ -2667,6 +2676,12 @@ sys$setast(1) delivered the queued AST through the public API
 the delivered AST ran with the astprm sys$dclast declared
 disable again: prev state was disabled
 SETAST(enable) returns WASCLR (== prev state was disabled)
+device scan lists the console terminal
+device scan terminates with SS$_NOMOREDEV
+this process can still read the device
+the console is not allocated before any process allocates it
+B sees that A allocated the device
+the allocation is gone once the other process exits (not a constant)
 EOF
                       ;;
         knock_on_why) cat <<'EOF'

@@ -113,26 +113,60 @@ static void test_deltva_64(void)
 /* ------------------------------------------------------------------ */
 static void test_getdvi(void)
 {
-    printf("Testing lib$getdvi...\n");
+    printf("Testing lib$getdvi / sys$getdvi (executive device table, vms-dv1)...\n");
 
-    struct dsc$descriptor_s device_d = dsc$init("SYS$DISK:");
-    uint32_t item_code = DVI$_FREEBLOCKS;
-    uint32_t freeblocks = 0;
-
-    uint32_t st = lib$getdvi(&item_code, 0, &device_d, &freeblocks, 0, 0);
-    check(st == SS$_NORMAL, "lib$getdvi returns SS$_NORMAL");
-
-    /* Cross-check against the sys$getdvi path lib$getdvi wraps. */
-    uint32_t direct_freeblocks = 0;
-    struct item_list_3 il[2] = {
-        { sizeof(uint32_t), (uint16_t)DVI$_FREEBLOCKS, &direct_freeblocks, NULL },
+    /*
+     * These services now READ the executive device table (src/kernel/
+     * vms_devtab.c) through vms_kif, not classify_device()+statvfs() on the
+     * host. This is a libvms UNIT test with no /dev/vms, so the executive is
+     * usually unreachable here; the executive-backed CROSS-PROCESS proof runs
+     * in QEMU (tests/qemu/test_syssvc_getdvi.c). What this asserts is the
+     * property that holds in BOTH environments: the services never fabricate.
+     *
+     * Probe the console OPA0: the executive creates at init to learn which
+     * environment we are in.
+     */
+    struct dsc$descriptor_s opa0_d = dsc$init("OPA0:");
+    uint32_t devclass = 0;
+    struct item_list_3 probe[2] = {
+        { sizeof(uint32_t), (uint16_t)DVI$_DEVCLASS, &devclass, NULL },
         { 0, 0, NULL, NULL }
     };
-    uint32_t dst = sys$getdvi(0, 0, &device_d, il, NULL, NULL, 0, 0);
-    check(dst == SS$_NORMAL, "sys$getdvi (direct) returns SS$_NORMAL");
-    check(freeblocks == direct_freeblocks,
-          "lib$getdvi agrees with a direct sys$getdvi call");
+    int have_exec = (sys$getdvi(0, 0, &opa0_d, probe, NULL, NULL, 0, 0)
+                     == SS$_NORMAL);
 
+    if (have_exec) {
+        check(devclass == DC$_TERM,
+              "sys$getdvi reports OPA0: as a terminal read from the executive");
+
+        /* A device the executive does not have is REFUSED, not fabricated --
+         * the old fake returned SS$_NORMAL for any name. */
+        struct dsc$descriptor_s zz_d = dsc$init("ZZA0:");
+        uint32_t zzclass = 0;
+        struct item_list_3 zil[2] = {
+            { sizeof(uint32_t), (uint16_t)DVI$_DEVCLASS, &zzclass, NULL },
+            { 0, 0, NULL, NULL }
+        };
+        check(sys$getdvi(0, 0, &zz_d, zil, NULL, NULL, 0, 0) != SS$_NORMAL,
+              "sys$getdvi refuses a device the executive does not have");
+    } else {
+        /*
+         * No /dev/vms. The proof the fake is gone is that SYS$DISK: -- for
+         * which the old host-backed code always returned SS$_NORMAL with
+         * invented freeblocks -- now FAILS rather than fabricating.
+         */
+        struct dsc$descriptor_s sysdisk_d = dsc$init("SYS$DISK:");
+        uint32_t item_code = DVI$_FREEBLOCKS;
+        uint32_t freeblocks = 0xdead;
+        check(lib$getdvi(&item_code, 0, &sysdisk_d, &freeblocks, 0, 0)
+                  != SS$_NORMAL,
+              "lib$getdvi does NOT fabricate a SYS$DISK answer without an executive");
+    }
+
+    /* Argument validation is decided before the executive is consulted, so it
+     * holds in either environment. */
+    struct dsc$descriptor_s device_d = dsc$init("SYS$DISK:");
+    uint32_t freeblocks = 0;
     check(lib$getdvi(NULL, 0, &device_d, &freeblocks, 0, 0) == SS$_BADPARAM,
           "lib$getdvi(NULL item_code) returns SS$_BADPARAM");
 }
@@ -159,8 +193,15 @@ static void test_dgblsc(void)
 /* ------------------------------------------------------------------ */
 static void test_device_scan(void)
 {
-    printf("Testing sys$device_scan...\n");
+    printf("Testing sys$device_scan (executive device table, vms-dv1)...\n");
 
+    /*
+     * sys$device_scan now enumerates the EXECUTIVE'S I/O database through
+     * vms_kif_devscan(), not the compiled-in scan_devices[] the old fake
+     * returned identically on every system. With no /dev/vms it reports a
+     * failure rather than that fixed list; the real cross-process enumeration
+     * is proven in QEMU (tests/qemu/test_syssvc_getdvi.c).
+     */
     char device[64];
     struct dsc$descriptor_s device_d = {
         sizeof(device) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, device
@@ -174,36 +215,42 @@ static void test_device_scan(void)
                                  &wild_d, NULL, &ctx)) == SS$_NORMAL) {
         count++;
         device_d.dsc$w_length = sizeof(device) - 1;
-        check(count < 100, "sys$device_scan terminates (loop guard)");
         if (count >= 100) break;
     }
-    check(count > 0, "sys$device_scan('*') enumerates at least one device");
-    check(st == SS$_NOMOREDEV,
-          "sys$device_scan exhausts the list with SS$_NOMOREDEV");
 
-    /* A pattern that matches nothing should report SS$_NOSUCHDEV. */
-    GENERIC_64 ctx2 = { 0 };
-    struct dsc$descriptor_s nomatch_d = dsc$init("ZZZNOTADEVICE");
-    device_d.dsc$w_length = sizeof(device) - 1;
-    st = sys$device_scan(&device_d, &device_d.dsc$w_length, &nomatch_d,
-                         NULL, &ctx2);
-    check(st == SS$_NOSUCHDEV,
-          "sys$device_scan with no matches returns SS$_NOSUCHDEV");
+    if (count > 0) {
+        /* Executive reachable: it enumerated its real devices and then said
+         * it was done, and a name it does not have never matches. */
+        check(count < 100, "sys$device_scan terminates");
+        check(st == SS$_NOMOREDEV,
+              "sys$device_scan exhausts the executive's table with SS$_NOMOREDEV");
 
-    /* DVS$_DEVCLASS filter narrows the result set. */
-    GENERIC_64 ctx3 = { 0 };
-    unsigned int want_class = DC$_TERM;
-    ILE3 dvsitms[] = {
-        { 4, DVS$_DEVCLASS, &want_class, NULL },
-        { 0, 0, NULL, NULL }
-    };
-    device_d.dsc$w_length = sizeof(device) - 1;
-    st = sys$device_scan(&device_d, &device_d.dsc$w_length, &wild_d,
-                         dvsitms, &ctx3);
-    check(st == SS$_NORMAL,
-          "sys$device_scan with DVS$_DEVCLASS=DC$_TERM finds a terminal");
+        GENERIC_64 ctx2 = { 0 };
+        struct dsc$descriptor_s nomatch_d = dsc$init("ZZZNOTADEVICE");
+        device_d.dsc$w_length = sizeof(device) - 1;
+        check(sys$device_scan(&device_d, &device_d.dsc$w_length, &nomatch_d,
+                              NULL, &ctx2) == SS$_NOSUCHDEV,
+              "sys$device_scan with no matches returns SS$_NOSUCHDEV");
 
-    check(sys$device_scan(NULL, NULL, &wild_d, NULL, &ctx3) == SS$_BADPARAM,
+        /* DVS$_DEVCLASS filter narrows to the console terminal. */
+        GENERIC_64 ctx3 = { 0 };
+        unsigned int want_class = DC$_TERM;
+        ILE3 dvsitms[] = {
+            { 4, DVS$_DEVCLASS, &want_class, NULL },
+            { 0, 0, NULL, NULL }
+        };
+        device_d.dsc$w_length = sizeof(device) - 1;
+        check(sys$device_scan(&device_d, &device_d.dsc$w_length, &wild_d,
+                              dvsitms, &ctx3) == SS$_NORMAL,
+              "sys$device_scan with DVS$_DEVCLASS=DC$_TERM finds a terminal");
+    } else {
+        /* No /dev/vms: a failure, never the old fixed fabricated list. */
+        check(st != SS$_NORMAL && st != SS$_NOMOREDEV,
+              "sys$device_scan does NOT enumerate a fabricated list without an executive");
+    }
+
+    GENERIC_64 ctxbp = { 0 };
+    check(sys$device_scan(NULL, NULL, &wild_d, NULL, &ctxbp) == SS$_BADPARAM,
           "sys$device_scan(NULL devnam) returns SS$_BADPARAM");
 }
 

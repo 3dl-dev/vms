@@ -492,7 +492,8 @@ publish-does-not-populate-registry
 realimg-auxv-argc-wrong
 extern-interp-check-rejects-ours
 nonres-producer-not-mapped
-tlsdesc-offset-not-biased"
+tlsdesc-offset-not-biased
+devtab-getdvi-userspace-alloc-dropped"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4558,6 +4559,58 @@ EOF
         knock_on_why)  echo "SAME DEFECT, OBSERVED THROUGH THE EXECUTIVE FLOWS-BACK. With the TP bias dropped, TESTTLS's very first own-TLS read returns DCL's TLS (not its init magic), so it bails on the bad-TLS-init branch BEFORE reaching its resident vms_kif_setef call -- the event flag DCL reads back afterwards is clear. The wrong exit code (require_fail) and the missing event flag (this assertion) are two faces of the one dropped bias: both say the image's own __thread access did not reach the image's own block, so it did none of its later resident-service work.";;
         esac;;
 
+    devtab-getdvi-userspace-alloc-dropped)
+        case "$_f" in
+        facility)     echo "device table -- sys\$getdvi's USERSPACE translation of the executive's allocation bit (DVI\$_DEVCHAR)";;
+        targets)      echo "libvms/syssvc/sys_device.c";;
+        # vms-vx1 (executive R3 veracity gate). THE ONLY device-table entry
+        # whose target is the USERSPACE C-API layer, not the executive.
+        #
+        # WHY THIS EXISTS, distinct from the five kernel devtab entries above.
+        # devtab-alloc-not-recorded reddens the SAME assertion ("B sees that A
+        # allocated the device"), but it mutates the EXECUTIVE (devinfo_fill()
+        # in kernel/vms_devtab.c), so it reddens that assertion in ALL THREE of
+        # test_kmod_devtab, test_syssvc_showdev AND test_syssvc_getdvi at once.
+        # The gating teeth of a negctl are check 4 (a suite in suites_red went
+        # red), which the raw test_kmod_devtab satisfies regardless of what the
+        # userspace sys_device.c translation does -- so a devtab reader that
+        # silently reverted to a per-process view (the vms-dv1 fake class:
+        # classify_device()+statvfs()+a compiled-in scan_devices[] that showed
+        # the same devices on every system) would NOT be caught by any devtab
+        # entry above. THIS entry closes that: its target is sys_device.c's own
+        # DVI$_DEVCHAR translation, and its suites_red is test_syssvc_getdvi
+        # ALONE -- because that is the only suite that reaches the executive's
+        # allocation state THROUGH the shipped public sys$getdvi (SHOW DEVICE
+        # drives DCL.EXE, which calls vms_kif_* directly and never enters
+        # sys_device.c; test_kmod_devtab uses the raw ioctls). So this control
+        # fires IFF the userspace C API stops reflecting the executive's shared
+        # allocation -- the exact "cannot silently revert to a per-process
+        # fake" property vms-vx1 (INV-6) exists to enforce, made a first-class
+        # firing negctl at the C-API layer rather than left implicit in the
+        # kernel-executive-negative-control honest-skip-77 job.
+        #
+        # test_syssvc_getdvi step 4 ("B sees that A allocated the device") is a
+        # genuine A-writes/B-reads: a forked child $ALLOCates OPA0: through the
+        # executive and THIS process, which touched nothing, must observe the
+        # DEV$M_ALL bit via sys$getdvi. Masking the one line that OR's
+        # DEV$M_ALL in from info->allocated makes the C API report the console
+        # unallocated even while a DIFFERENT process holds it -- a per-process
+        # view. Steps 2 and 5 ("not allocated before"/"...after") still pass:
+        # a bit that is NEVER set is correctly not-set in those windows, so the
+        # red set is exactly this one assertion, in this one suite.
+        suites_red)   echo "test_syssvc_getdvi";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys_device.c's DVI\$_DEVCHAR handler stops OR-ing DEV\$M_ALL in from the executive's info->allocated flag (\`if (info->allocated) chars |= DEV\$M_ALL;\` guarded to \`if (0 && ...)\`), so sys\$getdvi -- the shipped public C API -- reports a device as unallocated even when the executive says another process holds it. The row's identity, class and existence still come from the executive (nothing else in the translation changes); only the allocation bit is dropped on the read side, which is precisely the per-process device view vms-dv1 converted away from. SHOW DEVICE (DCL -> vms_kif directly) and the raw-ioctl test_kmod_devtab do not pass through this line and stay green, isolating the failure to the C-API translation layer.";;
+        require_fail) cat <<'EOF'
+B sees that A allocated the device
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -5182,6 +5235,20 @@ apply_edit() {
         # still runs in-process, only its own __thread read is wrong.
         # Idempotent: after the edit no `desc[1] += delta;` is left to match.
         sed -i 's|        desc\[1\] += delta;.*|        desc[1] += 0; (void)delta; /* NEGCTL tlsdesc-offset-not-biased: TP bias dropped */|' "$_file";;
+
+    devtab-getdvi-userspace-alloc-dropped)
+        # UNIQUE TEXT: the DVI$_DEVCHAR handler's `if (info->allocated) chars |=
+        # DEV$M_ALL;` is the only place sys_device.c derives the allocation bit
+        # from the executive's row. Guarding it with `0 &&` drops that bit from
+        # the C API's answer (a per-process view -- the vms-dv1 fake class),
+        # while info->allocated stays referenced (short-circuit, no -Werror
+        # unused warning) and chars is still written and read below. Same
+        # constant-false-guard shape as assign-terminal-bypasses-executive.
+        # `@` delimiter because the line contains `|=`. Idempotent: after the
+        # edit the line reads `if (0 && info->allocated) ...`, which the pattern
+        # `if (info->allocated) ...` no longer matches -- a second apply is a
+        # BROKEN FIXTURE, as selftest requires.
+        sed -i 's@if (info->allocated) chars |= DEV$M_ALL;@if (0 \&\& info->allocated) chars |= DEV$M_ALL; /* NEGCTL devtab-getdvi-userspace-alloc-dropped */@' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

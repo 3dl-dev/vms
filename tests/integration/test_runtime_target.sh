@@ -539,6 +539,134 @@ else
     echo "  OK: no per-call executive-presence test"
 fi
 
+# --- 5. The retired per-process fakes (vms-fk1) must not return --------
+# PHASE 4 of the executive retrofit (docs/design-executive-retrofit.md) deleted
+# five per-process userspace fakes, each of which reported success while
+# sharing nothing across processes -- the INV-6 / Rule 11 facade class. Each
+# now has an executive-backed replacement, proven against a REAL /dev/vms under
+# the kernel-executive QEMU job (init.sh globs tests/qemu/test_syssvc_*):
+#   event flags  -> test_syssvc_ef_mproc.c      (A sets a common flag, B sees it)
+#   mailbox      -> test_syssvc_mbx_crossproc.c (A writes MBA1:, B reads it)
+#   device table -> test_syssvc_getdvi.c        (executive I/O DB, not the host)
+#   LNM$SYSTEM   -> test_syssvc_lnm_system.c    (A DEFINE/SYSTEM, B translates)
+#   privileges   -> test_syssvc_setprv.c        (executive owns the grant)
+# This section forbids their REINTRODUCTION. Every check has a minimal negative
+# control in test_runtime_target_negctl.sh that trips it AND NO OTHER.
+#
+# Comment lines are excluded throughout: these files DOCUMENT what the fakes
+# were ("...the old classify_device()+statvfs() host fake..."), and that prose
+# must not trip the gate -- only executable code that resurrects the mechanism.
+
+syssvc="$SRC_ROOT/src/libvms/syssvc"
+
+# not_in_code <file> <ERE> -- non-comment matches in one file, empty if none.
+not_in_code() {
+    [ -f "$1" ] || return 0
+    grep -nE "$2" "$1" 2>/dev/null \
+        | grep -vE '^[0-9]+:[[:space:]]*(\*|//|/\*)' || true
+}
+
+# (a) EVENT FLAGS -- no per-process cluster STATE. The executive owns all 128
+# flags (src/kernel/vms_eflag.c), reached via sys_event.c; the deleted fake
+# kept a private copy of the four clusters in struct vms_pcb behind ef_lock /
+# ef_cond. The LIB$ flag-NUMBER allocator (src/libvms/rtl/lib_eventflags.c:
+# ef_bitmap/ef_lock) is per-process on VMS too and is NOT a fake -- so this
+# bans the cluster-STATE fields (ef_clusters, ef_cond, PCB_EF_CLUSTERS) and a
+# resurrected event_flags.c, never the generic allocator lock.
+ef_hits=$(grep -rnE '\bef_clusters\b|\bef_cond\b|\bPCB_EF_CLUSTERS\b' \
+            --include=*.c --include=*.h "$SRC_ROOT/src" 2>/dev/null \
+          | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(\*|//|/\*)' || true)
+ef_file=$(find "$SRC_ROOT/src" -name 'event_flags.c' 2>/dev/null || true)
+if [ -n "$ef_hits" ] || [ -n "$ef_file" ]; then
+    echo "FAIL: per-process event-flag cluster state has returned:"
+    [ -n "$ef_hits" ] && echo "$ef_hits" | sed 's/^/  /'
+    [ -n "$ef_file" ] && echo "  resurrected file: $ef_file"
+    echo "  -> event flags live in the executive (src/kernel/vms_eflag.c),"
+    echo "     reached via sys_event.c. Do not keep a private copy in the PCB."
+    status=1
+else
+    echo "  OK: no per-process event-flag cluster state (executive owns the flags)"
+fi
+
+# (b) MAILBOX -- no AF_UNIX socketpair mailbox. A mailbox is shared system
+# state (vms.ko, src/kernel/vms_mbx.c); the deleted fake built a socketpair
+# private to the creating process and named it MBA1:, so no unrelated process
+# could ever open it. Scoped to sys_mailbox.c, the enumerated fake's home.
+mbx_hits=$(not_in_code "$syssvc/sys_mailbox.c" 'socketpair[[:space:]]*\(')
+if [ -n "$mbx_hits" ]; then
+    echo "FAIL: sys_mailbox.c creates a private socketpair mailbox:"
+    echo "$mbx_hits" | sed 's/^/  /'
+    echo "  -> \$CREMBX is executive-resident (vms_kif_mbx_create); a socketpair"
+    echo "     end is not a device an unrelated process can open (INV-6)."
+    status=1
+else
+    echo "  OK: sys_mailbox.c has no private socketpair mailbox"
+fi
+
+# (c) DEVICE TABLE -- \$GETDVI / \$DEVICE_SCAN read the EXECUTIVE'S device table
+# (src/kernel/vms_devtab.c), never the host. The deleted fake answered from
+# classify_device()+statvfs()/termios and a compiled-in scan_devices[] table,
+# reporting SS\$_NORMAL for devices the executive never heard of. (DCL's lexical
+# F\$GETDVI in dcl_lexical.c legitimately uses statvfs for volume free-space, a
+# documented vms-dv1 remainder -- so this is scoped to sys_device.c only.)
+dev_hits=$(not_in_code "$syssvc/sys_device.c" '\bstatvfs\b|\bclassify_device\b|\bscan_devices\b')
+if [ -n "$dev_hits" ]; then
+    echo "FAIL: sys_device.c fabricates device state from the host:"
+    echo "$dev_hits" | sed 's/^/  /'
+    echo "  -> \$GETDVI/\$DEVICE_SCAN must read the executive device table"
+    echo "     (vms_kif_getdvi_*/vms_kif_devscan), not statvfs()/a static list."
+    status=1
+else
+    echo "  OK: sys_device.c reads the executive device table, not the host"
+fi
+
+# (d) LNM\$SYSTEM -- the public logical-name services must route the SYSTEM
+# table through the executive (vms_kif_lnm_define/_translate), so a name one
+# process defines is visible node-wide. The deleted fake served LNM\$SYSTEM from
+# a process-private array (logical_table[]). PRESENCE check: a reintroduction
+# replaces the executive call with local storage, removing the token.
+# (LNM\$PROCESS staying local is VMS-correct and is deliberately not touched.)
+log_c="$syssvc/sys_logical.c"
+if [ -f "$log_c" ]; then
+    have_def=$(not_in_code "$log_c" 'vms_kif_lnm_define')
+    have_trn=$(not_in_code "$log_c" 'vms_kif_lnm_translate')
+    if [ -z "$have_def" ] || [ -z "$have_trn" ]; then
+        echo "FAIL: sys_logical.c no longer routes LNM\$SYSTEM through the executive"
+        [ -z "$have_def" ] && echo "  -> no vms_kif_lnm_define call (SYSTEM create went local?)"
+        [ -z "$have_trn" ] && echo "  -> no vms_kif_lnm_translate call (SYSTEM read went local?)"
+        echo "     LNM\$SYSTEM is executive-resident (vms-d37); a process-private"
+        echo "     SYSTEM table is exactly the fake this closed."
+        status=1
+    else
+        echo "  OK: sys_logical.c routes LNM\$SYSTEM through the executive"
+    fi
+else
+    echo "FAIL: $log_c is missing -- the logical-name services live there"
+    status=1
+fi
+
+# (e) PRIVILEGES -- \$SETPRV is the executive's grant (vms_kif_setprv ->
+# kernel/vms_access.c), authorized against this process's permanent mask. The
+# deleted fake let a process award itself a privilege by writing pcb->cur_privs
+# (the vms-b2e LARP). PRESENCE check: a reintroduction replaces the executive
+# call with a local grant, removing the token. (The PCB masks are a read-back
+# CACHE of the executive's answer, not the grant -- see sys_misc.c.)
+misc_c="$syssvc/sys_misc.c"
+if [ -f "$misc_c" ]; then
+    have_setprv=$(not_in_code "$misc_c" 'vms_kif_setprv')
+    if [ -z "$have_setprv" ]; then
+        echo "FAIL: sys_misc.c no longer routes \$SETPRV through the executive"
+        echo "  -> no vms_kif_setprv call: a process must not grant itself"
+        echo "     privilege by writing pcb->cur_privs (INV-6 / vms-b2e)."
+        status=1
+    else
+        echo "  OK: sys_misc.c routes \$SETPRV through the executive"
+    fi
+else
+    echo "FAIL: $misc_c is missing -- \$SETPRV lives there"
+    status=1
+fi
+
 # --- 4. Rule 9 must still be in CLAUDE.md ------------------------------
 # The gate enforces the mechanics; CLAUDE.md carries the reasoning. If the
 # rule is deleted, the gate is cargo cult -- fail loudly rather than drift.

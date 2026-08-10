@@ -71,9 +71,35 @@ KIF_ORIG="$WORK/vms_kif.c.orig"
 cp "$INIT_C" "$INIT_ORIG"
 cp "$KIF_C" "$KIF_ORIG"
 
+# vms-fk1: the Phase-4 fake checks (gate section 5) each mutate one of these
+# facility files. Same discipline as INIT_C/KIF_C above: snapshot a pristine
+# copy so injection_landed() can prove the mutation really landed and restore()
+# can revert it. An anchor that stops matching (a rename) makes the edit a
+# silent no-op -- caught as a BROKEN FIXTURE, not certified as a caught evasion.
+PCB_H="$ROOT/src/vmsprocess/include/vms/pcb.h"
+MBX_C="$ROOT/src/libvms/syssvc/sys_mailbox.c"
+DEV_C="$ROOT/src/libvms/syssvc/sys_device.c"
+LOG_C="$ROOT/src/libvms/syssvc/sys_logical.c"
+MISC_C="$ROOT/src/libvms/syssvc/sys_misc.c"
+PCB_ORIG="$WORK/pcb.h.orig"
+MBX_ORIG="$WORK/sys_mailbox.c.orig"
+DEV_ORIG="$WORK/sys_device.c.orig"
+LOG_ORIG="$WORK/sys_logical.c.orig"
+MISC_ORIG="$WORK/sys_misc.c.orig"
+cp "$PCB_H" "$PCB_ORIG"
+cp "$MBX_C" "$MBX_ORIG"
+cp "$DEV_C" "$DEV_ORIG"
+cp "$LOG_C" "$LOG_ORIG"
+cp "$MISC_C" "$MISC_ORIG"
+
 restore() {
     cp "$INIT_ORIG" "$INIT_C"
     cp "$KIF_ORIG" "$KIF_C"
+    cp "$PCB_ORIG" "$PCB_H"
+    cp "$MBX_ORIG" "$MBX_C"
+    cp "$DEV_ORIG" "$DEV_C"
+    cp "$LOG_ORIG" "$LOG_C"
+    cp "$MISC_ORIG" "$MISC_C"
 }
 
 # ---------------------------------------------------------------------------
@@ -106,6 +132,11 @@ pristine_copy_of() {
     case "$1" in
         "$INIT_C") echo "$INIT_ORIG" ;;
         "$KIF_C")  echo "$KIF_ORIG" ;;
+        "$PCB_H")  echo "$PCB_ORIG" ;;
+        "$MBX_C")  echo "$MBX_ORIG" ;;
+        "$DEV_C")  echo "$DEV_ORIG" ;;
+        "$LOG_C")  echo "$LOG_ORIG" ;;
+        "$MISC_C") echo "$MISC_ORIG" ;;
         *)         echo "" ;;
     esac
 }
@@ -450,6 +481,53 @@ static int kif_bind(void)
 EOF
 replace_bind "$WORK/bind.c"
 expect_red "$KIF_C" "3c(vii) ONE LINE: 'int rc = vms_kif_open(); switch (rc) { ... }'" "$R_PROBE"
+
+# ===========================================================================
+# CHECK 5 (vms-fk1) -- the retired per-process fakes must not return. One
+# control per fake; each mutation lives in a DIFFERENT file, so no mutation
+# can trip another's property, which is exactly the minimality the forbidden
+# list below asserts. Each reintroduces the real deleted mechanism (a private
+# cluster field, a socketpair, a host statvfs) or removes the executive route
+# that replaced it (the LNM$SYSTEM / $SETPRV ioctl call).
+# ===========================================================================
+R_FK_EF='per-process event-flag cluster state has returned'
+R_FK_MBX='sys_mailbox.c creates a private socketpair mailbox'
+R_FK_DEV='sys_device.c fabricates device state from the host'
+R_FK_LNM='sys_logical.c no longer routes LNM$SYSTEM through the executive'
+R_FK_PRV='sys_misc.c no longer routes $SETPRV through the executive'
+
+# (a) EVENT FLAGS: a private cluster-state field returns to struct vms_pcb.
+# This is the exact ef_clusters[] the fake kept behind ef_lock/ef_cond.
+sed -i 's/^    pthread_mutex_t priv_lock;$/    pthread_mutex_t priv_lock;\n    uint32_t ef_clusters[4];/' "$PCB_H"
+expect_red "$PCB_H" "5(a) per-process event-flag cluster field re-added to the PCB" \
+    "$R_FK_EF" "$R_FK_MBX" "$R_FK_DEV" "$R_FK_LNM" "$R_FK_PRV"
+
+# (b) MAILBOX: $CREMBX builds an AF_UNIX socketpair again -- an MBA1: private
+# to the creating process that no other process can open.
+sed -i 's/^    (void)acmode;$/    (void)acmode;\n    int __sv[2]; socketpair(1, 2, 0, __sv);/' "$MBX_C"
+expect_red "$MBX_C" "5(b) sys_mailbox.c rebuilds a private socketpair mailbox" \
+    "$R_FK_MBX" "$R_FK_EF" "$R_FK_DEV" "$R_FK_LNM" "$R_FK_PRV"
+
+# (c) DEVICE TABLE: $GETDVI answers device state from the host again (statvfs),
+# the classify_device()+statvfs() fake that reported devices the executive
+# never had.
+sed -i 's|^#define VMS_BLOCK_SIZE  512$|#define VMS_BLOCK_SIZE  512\nstatic int __devfake(void){ struct statvfs __v; return statvfs("/", \&__v); }|' "$DEV_C"
+expect_red "$DEV_C" "5(c) sys_device.c fabricates device state from host statvfs" \
+    "$R_FK_DEV" "$R_FK_EF" "$R_FK_MBX" "$R_FK_LNM" "$R_FK_PRV"
+
+# (d) LNM$SYSTEM: the executive route for the SYSTEM table is torn out, sending
+# DEFINE/SYSTEM back to the process-private logical_table[]. Removing the
+# vms_kif_lnm_define call is exactly what that reintroduction does.
+sed -i 's|^        return vms_kif_lnm_define(exec_tbl, name, vals, 1,$|        return SS$_NORMAL;  /* evasion: SYSTEM back to logical_table */|' "$LOG_C"
+expect_red "$LOG_C" "5(d) sys_logical.c drops the LNM\$SYSTEM executive route" \
+    "$R_FK_LNM" "$R_FK_EF" "$R_FK_MBX" "$R_FK_DEV" "$R_FK_PRV"
+
+# (e) PRIVILEGES: $SETPRV stops asking the executive and would grant locally --
+# a process awarding itself privilege, the vms-b2e LARP. Removing the
+# vms_kif_setprv call is that reintroduction.
+sed -i 's|^    uint32_t st = vms_kif_setprv(mask, enbflg ? 1 : 0, prmflg ? 1 : 0, &prev);$|    uint32_t st = SS$_NORMAL;  /* evasion: local grant, no executive */|' "$MISC_C"
+expect_red "$MISC_C" "5(e) sys_misc.c drops the \$SETPRV executive route" \
+    "$R_FK_PRV" "$R_FK_EF" "$R_FK_MBX" "$R_FK_DEV" "$R_FK_LNM"
 
 echo ""
 echo "=== Rule 9 negative controls: $passed passed, $failed failed ==="

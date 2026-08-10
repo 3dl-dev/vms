@@ -224,6 +224,10 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     # command fails %SYSGEN-F-NOIMG and SYS$SYSTEM:OVMXVMSSYS.PAR can never
     # be read or written on the real runtime.
     cp build-static/bin/SYSGEN.EXE     /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # PRODUCT.EXE (vms-df9): `$ PRODUCT INSTALL`/`SHOW PRODUCT`
+    # dcl_exec_utility()'s for it at SYS$SYSTEM: -- without this copy every
+    # PRODUCT operation fails %PCSI-F-NOIMG on the real runtime.
+    cp build-static/bin/PRODUCT.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # The setuid-root mount(2)/umount(2) helper (vms-651, tools/
     # vms_mount_helper.c) -- NOT a VMS image, lives outside SYS$SYSTEM: at a
     # fixed Linux path (ovmx_layout.h VMS_MOUNT_HELPER_PATH). Owned by root
@@ -345,7 +349,23 @@ RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SY
     [ ! -f /tmp/kit-verify.failed ] || { echo "FAIL: ovmx-os.kit round-trip had byte mismatches"; exit 1; } && \
     echo "OK: ovmx-os.kit round-tripped byte-exact against the staged tree" && \
     rm -rf /tmp/kit-verify && \
-    echo "OS kit: $(ls -lh /boot/ovmx-os.kit | awk '{print $5}')"
+    echo "OS kit: $(ls -lh /boot/ovmx-os.kit | awk '{print $5}')" && \
+    # Also stage the kit onto the DISTRIB image itself, at SYS$UPDATE: (vms-df9
+    # ground-source test), same shelf PARTS.EXE/PARTS_SETUP.COM already use.
+    # WHY HERE AND NOT A RAW VIRTIO DISK: a PRODUCT INSTALL ground-source test
+    # needs the guest to read the kit's bytes as SYSTEM. A THIRD raw virtio
+    # block device (e.g. /dev/vdc) is owned root:root mode 0600 by devtmpfs (no
+    # udev in this minimal initramfs to relax it), so SYSTEM's real UIC-derived
+    # uid/gid (vms_login.c: uid=member, gid=group, [1,4] -> uid 4/gid 1) gets
+    # EPERM reading it directly -- correctly: OVMX has no "VMS privilege
+    # overrides Unix file permission" path for raw devices, so faking one just
+    # to make a test pass would be the exact LARP class CLAUDE.md Rule 9
+    # exists to prevent. Landing the kit as an ordinary SYSTEM-owned file on
+    # the ALREADY-MOUNTED system disk (the same path SYSEXE/SYSLIB/SYSUPD
+    # content already reaches SYSTEM through) sidesteps the whole problem
+    # instead of working around it.
+    cp /boot/ovmx-os.kit /initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD/OVMX-OS.KIT && \
+    echo "OK: ovmx-os.kit staged at SYS\$UPDATE:OVMX-OS.KIT for the distrib image"
 
 # -- Distribution system-disk image (vms-8ab) ----------------------------------
 # Master a PRE-INSTALLED, bootable VMSFS system disk from the SAME populated

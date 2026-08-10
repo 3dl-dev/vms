@@ -416,3 +416,24 @@ set_tests_properties(mount_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 900)
+
+# ---------------------------------------------------------------------------
+# PRODUCT INSTALL onto a real vmsfs volume (vms-df9).
+#
+# Boots the actual mastered bootable image, MOUNTs a second real virtio disk
+# (formatted VMSFS on the host first, same as mount_e2e above), PRODUCT
+# INSTALLs the real OS kit already baked into the image (/boot/ovmx-os.kit)
+# from a third read-only virtio disk, RUNs the installed HELP.EXE FROM THE
+# TARGET device (the anti-LARP crux -- a kit that only wrote a manifest
+# cannot pass this), and confirms PRODUCT SHOW PRODUCT plus the installed
+# files survive a full QEMU process restart. See
+# tests/qemu/test_product_install_e2e.sh's header for the full ground-source
+# shape. Same opt-in convention as mount_e2e above, for the same reason.
+add_test(
+    NAME product_install_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_product_install_e2e.sh
+)
+set_tests_properties(product_install_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 900)

@@ -125,6 +125,18 @@ endif()
 add_library(known_images STATIC src/imgact/known_images.c)
 target_include_directories(known_images PUBLIC src/imgact)
 
+# Shared OVMX kit-container reader (bead vms-df9, docs/design-ovmx-kit-
+# format.md). Plain POSIX C, no freestanding constraint, builds
+# unconditionally like known_images above -- both tools/ovmx_kit_pack
+# (factory build tooling, BUILD_TOOLS-gated) and PRODUCT.EXE (hosted
+# SYS$SYSTEM: utility, also BUILD_TOOLS-gated) link it, so it must exist
+# before either add_subdirectory below.
+add_library(ovmx_kit_reader STATIC src/product/ovmx_kit_reader.c)
+target_include_directories(ovmx_kit_reader PUBLIC
+    src/product
+    src/libvms/include
+)
+
 if(BUILD_TESTS)
     add_executable(test_known_images src/imgact/test/test_known_images.c)
     target_link_libraries(test_known_images PRIVATE known_images)
@@ -614,6 +626,7 @@ if(BUILD_TOOLS)
     add_subdirectory(src/ovmx_provision)  # PROVISION.EXE (startup process, vms-9b7)
     add_subdirectory(src/vmslink)   # LINK.EXE + OVMXDUMP (VMS-native linker)
     add_subdirectory(src/install)   # INSTALL.EXE (known image database, vms-913.5)
+    add_subdirectory(src/product)   # PRODUCT.EXE (PCSI-equivalent installer, vms-df9)
 endif()
 
 # Install VMS system disk (ODS-2 directory structure)

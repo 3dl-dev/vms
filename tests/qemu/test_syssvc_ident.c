@@ -1848,7 +1848,6 @@ int main(void)
         CHECK(strstr(outf, "SETIDENT_STATUS=1") != NULL,
               "F: the executive accepted the SYSTEM/ALL identity this scenario "
               "needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)");
-        /* negctl-knockon: bind-client-no-register */
         /* vms-651 added PRV$M_MOUNT (bit 17, right after WORLD's bit 16) to
          * VMS_PRV_M_ENFORCED -- cmd_mount/cmd_dismount now really gate on it
          * (src/vmsdcl/dcl_cmd_misc.c), so it is no longer merely stored and
@@ -1857,6 +1856,7 @@ int main(void)
          * for it. The render loop walks bits 0..63 in ascending order
          * (src/vmsdcl/dcl_lexical.c lex_getjpi()), so MOUNT (17) renders
          * immediately after WORLD (16). */
+        /* negctl-knockon: bind-client-no-register */
         CHECK(strstr(outf, "IDENT_CURPRIV = \"CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT\"") != NULL,
               "F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced "
               "privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT), "

@@ -1,6 +1,6 @@
 # STARTUP.EXE: faithfulness review and scope reduction to bootstrap
 
-**Status:** design review, awaiting operator ruling on §6.
+**Status:** §6 RULED by operator 2026-08-10 — **STRIP ALL OF IT** (see §6 ruling block; grounded in §1: the VMS boot chain never installs).
 **Target:** `src/ovmx_init/ovmx_init.c` (1414 lines at review time).
 **Method:** read the file against the publicly documented OpenVMS boot chain
 (VMS Internals & Data Structures; *OpenVMS System Manager's Manual*, startup
@@ -209,6 +209,30 @@ installs" user experience the release docs describe, while making the install a
 path — which is exactly how VMS models standalone BACKUP and VMSINSTAL. (a) is
 more faithful but changes the shipped release artifact mid-0.1, which is a
 scope call, not mine.
+
+---
+
+### ►►► OPERATOR RULING — 2026-08-10: "STRIP ALL OF IT" (see ruling 1 / §1)
+
+The operator ruled the maximal strip: **PID 1 does NO install work.** Every line
+§2 marks a "scope violation" — `INITIALIZE`-on-blank (:417–437), overlay mode
+(:449–460), `install_system` / `provision_dirs` / `provision_seed_files` /
+`provision_ownership`, `copy_recursive` / `copy_seed_file`, `is_system_installed`,
+the `INITRAMFS_BACKUP` copy dance, and re-ownership — is **deleted**. PID 1 keeps
+only the bootstrap set §2 marks "Keep": mount the Linux plumbing, `sethostname`,
+`executive_attach()` (load `vms.ko` + pin `/dev/vms`), load `vmsfs.ko`, mount the
+system disk (`/dev/vda`), run STARTUP — and if the disk is not a properly
+installed system volume, **it halts** (VMS: "finds them or does not boot"). This
+is stricter than the doc's own (b) recommendation — the operator took (a)'s
+PID-1 shape.
+
+**Consequence (load-bearing):** installation moves ENTIRELY to the separate,
+faithful installer path — the 0.4 installer spine (`791` kit-master → `8ab`
+bootable image → `df9` PCSI `PRODUCT INSTALL`, `651` MOUNT / `f812` INITIALIZE
+as operator commands). A stripped PID 1 can only boot an already-installed disk,
+so **`vms-2f0` (the strip) lands with / after `vms-8ab`** (which produces the
+installed disk) — never before, or nothing boots. `vms-2f0` scope = the full
+delete above; no residual install branch, no overlay, no self-init.
 
 Everything in §3 and §5 except the install path itself is independent of this
 ruling and can proceed either way.

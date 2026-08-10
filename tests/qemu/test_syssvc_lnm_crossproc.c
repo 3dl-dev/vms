@@ -59,6 +59,7 @@
 #include "vmsfs/filespec.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "vms/logical.h"
 
 #define EXIT_SKIP 77
 #define PEER_TIMEOUT_MS 20000
@@ -175,6 +176,27 @@ static int executive_present(void)
     return 1;
 }
 
+/*
+ * Enumerate probe: SHOW LOGICAL (and SHOW LOGICAL/SYSTEM) does not translate a
+ * single name -- it LISTS a table. That path is lnm_enumerate() (the vmslnm
+ * MANAGER API DCL's cmd_show_logical calls), which for LNM$SYSTEM must walk the
+ * executive-resident arena, not the empty process-private system_table. This
+ * callback records whether the enumeration produced a specific name=value pair,
+ * so the child can prove a name the PARENT defined is present in a LISTING it
+ * runs in its own process (vms-96e2 enumerate closure).
+ */
+struct enum_probe { const char *want_name; const char *want_val; int found; };
+
+static int enum_probe_cb(const char *name, const lnm_entry_t *entry, void *ctx)
+{
+    struct enum_probe *p = (struct enum_probe *)ctx;
+    if (strcmp(name, p->want_name) == 0 &&
+        entry->num_translations > 0 &&
+        strcmp(entry->translations[0].value, p->want_val) == 0)
+        p->found = 1;
+    return 0;
+}
+
 static int run_child(int c2p_write, int p2c_read)
 {
     struct child_msg msg;
@@ -225,6 +247,23 @@ static int run_child(int c2p_write, int p2c_read)
         CHECK(pf != NULL,
               "child: @SYS$UPDATE:PARTS_SETUP.COM OPENS -- the 0.2 demo blocker is clear");
         if (pf) fclose(pf);
+
+        /*
+         * SHOW LOGICAL / SHOW LOGICAL/SYSTEM proof (vms-96e2 enumerate
+         * closure): a cross-process define must not only TRANSLATE in another
+         * process, it must be LISTED there. lnm_enumerate(LNM$SYSTEM) is the
+         * exact manager-API path DCL's cmd_show_logical walks; here it must
+         * surface the parent's CROSSPROC=HELLO from THIS separate process,
+         * proving the enumerate reads the shared executive arena and not the
+         * empty process-private system_table.
+         */
+        struct enum_probe ep = { "CROSSPROC", "HELLO", 0 };
+        uint32_t est = lnm_enumerate(lnm_get_manager(), LNM_SYSTEM_TABLE,
+                                     enum_probe_cb, &ep);
+        printf("  INFO: child: lnm_enumerate(LNM$SYSTEM) status=%u found=%d\n",
+               est, ep.found);
+        CHECK(est == SS$_NORMAL && ep.found,
+              "child: SHOW LOGICAL's enumerate path LISTS the parent's CROSSPROC=HELLO (cross-process listing reads the shared executive table, not a process-private copy)");
     }
 
     /* Child defines a name of its own; parent must read it back. */

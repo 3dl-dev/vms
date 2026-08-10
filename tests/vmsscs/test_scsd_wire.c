@@ -3195,6 +3195,136 @@ static void test_rejoin_drives_readmission_on_the_member_initiated_connection(vo
           " member connection with the fix suppressed");
 }
 
+/* ==========================================================================
+ * vms-71d -- ON A REJOIN THE op 0x02 CONFIG RIDES THE MEMBER CONNECTION AS THE
+ * CONTIGUOUS SYSAP MESSAGE #3, WITH NO STANDALONE cat-0x04 ACK AHEAD OF IT.
+ *
+ * GROUNDED, SUCCESS oracle vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap
+ * (spec sec 4(O.13)). On the member-initiated connection the crash-rejoiner
+ * VAX3 sends its add-member advertisement as THREE CONTIGUOUS SYSAP messages --
+ * op 0x14 model (f1257, sms=1), op 0x01 params (f1258, sms=2), op 0x02 config
+ * (f1298, sms=3, ams=2) -- and the coordinator reciprocates op 0x04 ~1 ms later
+ * (f1299). VAX3 emits NO standalone cat-0x04 in that window; its first is f1330
+ * (sms=9), AFTER the reciprocation. The config's own ams field (=2) carries the
+ * acknowledgment of the member's model+params.
+ *
+ * OVMX's poll-loop flush emitted a cat-0x04 op 0x00 ack BETWEEN params (sms=2)
+ * and the deferred op 0x02, consuming sms=3 and pushing the config to sms=4 (a
+ * frame the reference never sends there; live vaxlab-11 2026-08-10 op 0x02 sms=4,
+ * member silent, XITDONE=0). rejoin_hold_standalone_ack() holds that ack until
+ * the op 0x02 is on the wire so the SYSAP number the config consumes is 3, not 4.
+ *
+ * WHAT IS DRIVEN, AND BY WHOM. The peer_state is built by the production receive
+ * path (peer_find_or_add / ps_learn_sys_addr / scs_pb_open). The add-member burst
+ * is emitted by cm_send_config_burst() -- the production sender, three production
+ * call sites -- through send_frame_vc(). The hold decision is made by the
+ * production rejoin_hold_standalone_ack() gate; the ack, when not held, is emitted
+ * by the production cm_send_ack(). NOTHING re-implements the sequence: the SYSAP
+ * numbers are read from ps->sysap_send exactly as the daemon advances them.
+ *
+ * ARM A (fix active) -> the deferred op 0x02 consumes sms=3 (contiguous).
+ * ARM B (OVMX_REJOIN_ACKHOLD=0, the matched kill-switch control = pre-fix
+ *        behaviour) -> the flush ack consumes sms=3 and the op 0x02 would be
+ *        sms=4. This is what makes ARM A a fail-pre/pass-post result.
+ * ========================================================================== */
+static uint16_t rejoin_op02_sysap_after_burst_and_flush(int ackhold_off)
+{
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    if (ps == NULL) {
+        return 0;
+    }
+
+    if (ackhold_off) {
+        setenv("OVMX_REJOIN_ACKHOLD", "0", 1); /* the kill-switch = pre-fix */
+    } else {
+        unsetenv("OVMX_REJOIN_ACKHOLD");
+    }
+    /* Pure/server-first join mode -- the live rejoin path. The add-member burst is
+     * MODEL+PARAMS only and the op 0x02 config is DEFERRED (cm_send_config_burst's
+     * `pure` guard), so ps->sysap_send is 3 after the burst and the deferred op
+     * 0x02 is the frame whose SYSAP number the flush ack shifts. */
+    setenv("OVMX_JOIN_SEQ", "1", 1);
+    ovmx_prior.valid = 1;              /* PRIORCLU: this is a rejoin */
+    unsetenv("OVMX_REJOIN_TARGET");    /* fix path on */
+
+    /* The member opened its VMS$VAXcluster connection; scsd.c answers it and binds
+     * cdt_member (Figure-2-14 TARGET) through the production receive path. */
+    rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
+    if (ps->cdt_member == NULL) {
+        ovmx_prior.valid = 0;
+        unsetenv("OVMX_REJOIN_ACKHOLD");
+        CHECK(0, "PRECONDITION: the member CONNECT-REQUEST did not bind cdt_member");
+        return 0;
+    }
+    uint32_t member_local = PS_LOCAL_CONID(ps);
+    uint32_t member_remote = ps->remote_conid;
+
+    /* Received-counter preconditions that the member's own model+params set on the
+     * CM connection: the CM Con.ID pair is known, we have received two SYSAP
+     * messages from the member (its model+params) and have not yet acked them, and
+     * the flush timer is stale. These are inputs to the flush decision, not the
+     * decision itself. */
+    ps->cm_local_conid = member_local;
+    ps->cm_remote_conid = member_remote;
+    ps->sysap_recv = 2;
+    ps->sysap_acked = 0;
+    ps->cm_last_ack_ms = 0; /* long stale -> the flush timer is eligible */
+
+    /* Production add-member burst on the member connection: op 0x14 (sms=1),
+     * op 0x01 (sms=2). Leaves ps->sysap_send == 3. */
+    (void)cm_send_config_burst(r.rx.sock, r.rx.ifindex, ps, r.rx.our_hw_mac,
+                               r.rx.our_src_logical, member_local, member_remote);
+
+    /* The poll-loop flush call site (scsd.c), gated by the production
+     * rejoin_hold_standalone_ack() -- the ONLY term the vms-71d fix adds. With the
+     * fix active the ack is held (sysap_send stays 3); with the kill-switch it
+     * fires and consumes sms=3, so the deferred op 0x02 would be sms=4. */
+    if (r.rx.do_connect && ps->cm_local_conid != 0 &&
+        ps->sysap_recv != ps->sysap_acked &&
+        !rejoin_hold_standalone_ack(ps) &&
+        (monotonic_ms() - ps->cm_last_ack_ms) >= (long)SCS_CM_ACK_FLUSH_MS) {
+        cm_send_ack(r.rx.sock, r.rx.ifindex, ps, r.rx.our_hw_mac, r.rx.our_src_logical);
+    }
+
+    uint16_t op02_sysap = ps->sysap_send; /* the number the deferred op 0x02 consumes */
+
+    ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_ACKHOLD");
+    unsetenv("OVMX_JOIN_SEQ");
+    return op02_sysap;
+}
+
+static void test_rejoin_op02_is_contiguous_sysap_msg3_not_shifted_by_a_stray_ack(void)
+{
+    /* ARM A -- fix active. */
+    uint16_t op02_fix = rejoin_op02_sysap_after_burst_and_flush(0);
+    CHECK(op02_fix == 3,
+          "REJOIN: the deferred op 0x02 would ride SYSAP msg#%u, expected 3"
+          " (contiguous after model=1/params=2, matching SUCCESS oracle f1298)"
+          " -- a standalone cat-0x04 ack was NOT held ahead of it", op02_fix);
+
+    /* ARM B -- matched kill-switch control = pre-fix behaviour. */
+    uint16_t op02_off = rejoin_op02_sysap_after_burst_and_flush(1);
+    CHECK(op02_off == 4,
+          "KILL-SWITCH (OVMX_REJOIN_ACKHOLD=0): the deferred op 0x02 rode SYSAP"
+          " msg#%u, expected the pre-fix 4 (the flush ack consumed sms=3) -- the"
+          " hold does not gate on its switch", op02_off);
+
+    /* First join (no PRIORCLU) must be byte-unchanged: the gate never holds. */
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    if (ps != NULL) {
+        ovmx_prior.valid = 0; /* first join */
+        ps->joiner_cfg2_sent = 0;
+        CHECK(rejoin_hold_standalone_ack(ps) == 0,
+              "FIRST JOIN: the standalone-ack hold engaged on a non-rejoin -- the"
+              " working first-join path must be untouched (guard 8)");
+    }
+}
+
 
 /* ==========================================================================
  * vms-aa1 -- FLOW CONTROL ACCOUNTS FOR TRAFFIC THAT ACTUALLY FLOWS.
@@ -9642,6 +9772,10 @@ int main(void)
      * VMS$VAXcluster connection (rejoiner = Figure-2-14 TARGET, spec §4(O.11)),
      * not OVMX's own outbound joiner VC; gated by OVMX_REJOIN_TARGET. */
     test_rejoin_drives_readmission_on_the_member_initiated_connection();
+    /* vms-71d: on a REJOIN the op 0x02 config rides the member connection as the
+     * CONTIGUOUS SYSAP msg#3, with no standalone cat-0x04 ack shifting it to #4
+     * (SUCCESS oracle f1257/f1258/f1298); gated by OVMX_REJOIN_ACKHOLD. */
+    test_rejoin_op02_is_contiguous_sysap_msg3_not_shifted_by_a_stray_ack();
     test_joiner_vc_op3_confirm_is_recorded_not_reported_unbuilt();
     /* vms-770 (vms-a61 audit): has_conid no longer implies the 110-/190-byte
      * connect classes, so branch (c) must not treat a short SEQAPP data frame

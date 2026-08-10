@@ -4536,6 +4536,111 @@ unit `tests/vmsscs/test_scsd_wire.c`; code
 `src/vmsscs/scsd.c` (`cm_rejoin_target_mode`, step 7/8 branch, `SCSD-I-CMREADMIT`
 proactive burst, `SCSD-I-CMCONFIG2`).
 
+#### 4(O.13) On the member connection the rejoiner's add-member advertisement is model→params→config as THREE CONTIGUOUS SYSAP messages with NO standalone cat-0x04 ahead of the op 0x02 — OVMX inserted one, shifting the config to sms=4; removing it makes the op 0x02 byte-match the oracle but STILL does not re-admit (GROUNDED, SUCCESS oracle + live vaxlab-11 bracket, `vms-71d`, 2026-08-10)
+
+**Frame.** §4(O.12) put OVMX's op 0x02 on the member-initiated connection (the
+oracle's topology) but `XITDONE` stayed 0: the member sends no `op 0x04`
+reciprocation. This subsection isolates, against the SUCCESS oracle, exactly what
+the rejoiner's op 0x02 must look like on that connection — and finds a grounded
+SYSAP-sequence divergence, fixes it, and records that the fix is (again)
+necessary-not-sufficient.
+
+**The SUCCESS-oracle SYSAP sequence on the member connection (GROUNDED,
+`vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`, connection VAX3 `lcid=45B80009`
+/ VAX2 `lcid=0CC6000D`).** The crash-rejoiner VAX3 sends its add-member
+advertisement as THREE CONTIGUOUS SYSAP messages, then the member reciprocates
+~1 ms later:
+
+| frame | dir | cat/op | SYSAP `sms` | SYSAP `ams` | SCS `send_seq` |
+|---|---|---|---|---|---|
+| f1257 | VAX3→VAX2 | 0x01 / 0x14 (model) | 1 | 0 | 10 |
+| f1258 | VAX3→VAX2 | 0x01 / 0x01 (params) | 2 | 0 | 11 |
+| f1298 | VAX3→VAX2 | 0x01 / 0x02 (config) | **3** | 2 | 14 |
+| f1299 | VAX2→VAX3 | 0x04 / 0x04 (reciprocation) | 3 | **3** | 14 |
+
+VAX3's op 0x02 is SYSAP `sms=3`, immediately following model(1)+params(2), and
+its `ams=2` acknowledges the member's own model+params inline. VAX3 emits **no
+standalone cat-0x04 ack in this window**; its FIRST is f1330 (`sms=9`), AFTER the
+member's op 0x04. The member's reciprocation f1299 acks VAX3's op 0x02 both at the
+SCS level (`recv_ack=14` = the config's `send_seq`) and at the SYSAP level
+(`ams=3` = the config's `sms`). The op 0x02, arriving in-sequence as the expected
+next SYSAP message, IS the trigger.
+
+**The OVMX divergence (GROUNDED, live vaxlab-11 fresh CN_2 pod, identity
+`OVMXR1/1971`, `OVMX_JOIN_SEQ=1`, HEAD before the fix, 2026-08-10).** On the
+member connection (`lcid=0xBF240001`) OVMX's SYSAP stream was: op 0x14 (`sms=1`),
+op 0x01 (`sms=2`), **cat 0x04 op 0x00 (`sms=3`)**, op 0x02 (`sms=4`, `ams=2`). The
+poll-loop flush (`cm_send_ack`, scsd.c) fired between params and the deferred op
+0x02 — the very ack the daemon's own `SCSD-W-STRAYACK` flags as "the reference
+acks within ~1 ms and never acks an op 0x01" — consuming `sms=3` and pushing the
+config to `sms=4`. The coordinator (`08:00:2b:e0:68:e3`) received it and sent
+nothing back; `XITDONE=0`. So OVMX inserts a SYSAP message the oracle never sends
+in that window, and its op 0x02 does not ride the contiguous `sms=3` slot the
+oracle's does.
+
+**The fix (`src/vmsscs/scsd.c`, `rejoin_hold_standalone_ack`, wire-visible,
+kill-switched).** On a rejoin (`cm_rejoin_target_mode()`), HOLD the standalone
+cat-0x04 CM ack — at both emission sites, the poll-loop flush and the receive-path
+batch ack — until the deferred op 0x02 has ridden the member connection
+(`!joiner_cfg2_sent`). The op 0x02's own `ams` field (`=sysap_recv=2`) carries the
+acknowledgment inline, exactly as the oracle carries it (f1298 `ams=2`); after the
+op 0x02 the hold releases and normal flushing resumes for the member-driven
+commit / lock-rebuild / barrier round (the reference's post-reciprocation acks,
+first at f1330). Kill-switch `OVMX_REJOIN_ACKHOLD=0` restores the pre-fix
+behaviour. Scoped to the rejoin readmission so the working first-join path is
+byte-unchanged (guard 8).
+
+**Unit bracket (fail-pre/pass-post + matched control).**
+`tests/vmsscs/test_scsd_wire.c:test_rejoin_op02_is_contiguous_sysap_msg3_-`
+`not_shifted_by_a_stray_ack` drives the production receive path + `cm_send_config_-`
+`burst()` + the production `rejoin_hold_standalone_ack()`-gated `cm_send_ack()`,
+then reads the SYSAP number the deferred op 0x02 would consume. ARM A (fix) → 3;
+ARM B (`OVMX_REJOIN_ACKHOLD=0`) → 4 (the pre-fix stray-ack shift); first-join
+(no PRIORCLU) → the gate never holds. Neutering the gate reds ARM A. `scs`/`vmsscs`
+ctest green.
+
+**Live bracket (lab-2 `vaxlab-11`, fresh CN_2 pod, identity `OVMXR1/1971`,
+`OVMX_JOIN_SEQ=1`, departed→rejoin triple, 2026-08-10).**
+
+| arm | scenario | op 0x02 on member conn | XITDONE |
+|---|---|---|---|
+| A1 | first join (no sidecar) | — (fix inactive) | **1** |
+| B1 | rejoin same-id, fix active | `sms=3`, contiguous after model(1)+params(2); stray cat-0x04 HELD to `sms=4` AFTER the config (f228 then f242) | **0** |
+| C1 | rejoin same-id, `OVMX_REJOIN_ACKHOLD=0` (kill-switch) | cat-0x04 `sms=3` THEN op 0x02 `sms=4` (f203/f204) — pre-fix | **0** |
+
+**Verdict — the SYSAP-contiguity fix is proven wire-visible but
+NECESSARY-NOT-SUFFICIENT.** Arm B1 vs C1 is a clean, kill-switched, wire-visible
+bracket: the fix makes OVMX's op 0x02 byte-match the oracle's SYSAP framing
+(`sms=3`, `ams=2`, no standalone cat-0x04 ahead of it, contiguous after model +
+params). But `XITDONE` did not flip — the member still does not reciprocate.
+
+**The relocated frontier (GROUNDED, live).** With the fix, on the member
+connection (`lcid=0xF08A0011` / member `lcid=0xE5520010`) the member's LAST frame
+before going silent is its own op 0x01 params (`send_seq=21`, `recv_ack=18`); after
+OVMX sends model (`ss=21`), params (`ss=22`) and op 0x02 (`ss=24`), the member's
+`recv_ack` never advances past 18 — it never SCS-acknowledges OVMX's readmission
+frames, and sends no reciprocation and no further sequenced frame on that
+connection. In the SUCCESS oracle the member's reciprocation f1299 carries
+`recv_ack=14`, exactly the config's `send_seq`. So the residual is at the SCS
+sequenced-**delivery** layer or the member's CM readmission-state gate: even a
+byte-faithful op 0x02 is not being accepted/delivered on OVMX's member connection.
+A live candidate to run next: OVMX draws `send_seq` from one per-peer VC counter
+across all of its connections to that peer, so the member connection sees a sparse
+subsequence (21, 22, 24 — 19/20/23 consumed on other conids); whether the member's
+per-connection expected-next rejects that gap is the open question. Filed on
+`vms-694`.
+
+**Evidence** (host, tank volume): SUCCESS oracle
+`/data/training/vax/cluster/captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`
+(SYSAP sequence f1257/f1258/f1298/f1299; first standalone cat-0x04 f1330); live
+bracket `/data/training/vax/k8s-labs/vaxlab-11/logs/scsd-71dA2rejoinfix.log`
+(pre-fix op 0x02 `send_msg=4`), `scsd-71dB1fix.log` + `d94-71dB1fix.pcap` (fix: op
+0x02 `sms=3`, cat-0x04 held to `sms=4`; member `recv_ack` stuck at 18),
+`scsd-71dC1killsw.log` + `d94-71dC1killsw.pcap` (kill-switch: cat-0x04 `sms=3`
+then op 0x02 `sms=4`); driver `tests/lab/tools/rejoin_arm_lab2.sh`; code
+`src/vmsscs/scsd.c` (`rejoin_hold_standalone_ack`, the two `cm_send_ack` call
+sites); unit `tests/vmsscs/test_scsd_wire.c`.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

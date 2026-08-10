@@ -6166,6 +6166,59 @@ ctest 50/50 at HEAD (unchanged, no code touched). Clean-room: subject/peer
 state from our SDA + our captures; CSB-state semantics from the host-only Davis
 transcript (page cites only). No VSI/HPE source or binary examined.
 
+### 4(aa) RECNXINTERVAL — surviving a virtual-circuit breakage without leaving the cluster (GROUNDED transcript, `vms-c7d`)
+
+When the local Connection Manager (module `CNXMAN`) loses its SCS connection to
+a remote Connection Manager for **any reason not involving a "last gasp"
+datagram**, it does **not** expel the node. It holds the node's membership and
+retries the connection on a fixed cadence for a bounded period; only if every
+attempt fails does it start a state transition. This is the reconnect behavior
+OVMX reproduces in `src/vmsscs/scs_recnx.c` and wires into the CM in `scsd.c`.
+
+**The CSB connectivity states (GROUNDED, transcript ch7-part02 pp. 7-23/7-24).**
+Each remote CM is represented locally by a Cluster System Block whose
+"connectivity" field is one of **ten** states, listed by the transcript in this
+order: `NEW`, `CONNECT`, `ACCEPT`, `OPEN` ("the normal state of a CSB"),
+`DISCONNECT`, `WAIT` ("connectivity has been lost … a timeout is in progress"),
+`RECONNECT` ("a reconnect attempt … is in progress"), `REACCEPT`, `DEAD` (an old
+incarnation), `LOCAL` (the CSB for the local CM). `enum scs_csb_conn_state`
+carries these exact names. (The `vms-c7d` brief named the loss/retry states
+"TIMEOUT/RECONNECTING"; those map onto the book's `WAIT`/`RECONNECT`, and the
+source-of-truth hierarchy keeps the book's names.)
+
+**The reconnect loop (GROUNDED, transcript p. 7-30).** Verbatim: "the local
+Connection Manager will attempt **once a second** to establish another
+connection … If all such reconnect attempts fail, and **if no other Connection
+Manager has already instituted a cluster state transition**, then the local
+Connection Manager starts a state transition to reconfigure the cluster." The
+bounded period is "the **maximum** of the local value for `RECNXINTERVAL` and a
+port dependent number supplied by the remote Connection Manager." For a **LAN**
+virtual circuit that remote number "was **fixed at 16** prior to Version 5.5.
+But starting with Version 5.5, the remote system supplies the value of its
+**`TIMVCFAIL`** parameter." Worked example (reproduced in the unit test): local
+`RECNXINTERVAL` 20, remote `TIMVCFAIL` 10 → period = `max(10,20)` = 20 s. A
+"last gasp" (BUGCHECK / `SHUTDOWN.COM`, p. 7-29) is the contrast: the port
+driver closes the VC at once and a transition follows immediately — no reconnect
+wait.
+
+**OVMX design choices (labeled; §5 discipline — the book publishes the RULES,
+not a numeric constant for any of this).** The `RECNXINTERVAL` fallback default
+(20, `OVMX_RECNXINTERVAL` override) is OVMX configuration, not a claimed VMS
+invariant; the once-a-second cadence and the pre-V5.5 LAN constant 16 are
+PUBLISHED and used verbatim. On period expiry OVMX **proposes** a transition and
+lets the transition decide removal — it does not itself drop the member mid-loop.
+The reconnect **state machine, cadence and membership-hold are LIVE** and proven
+on an injected clock (`tests/vmsscs/test_scs_recnx.c`: inject a VC breakage, drive
+`scs_csb_reconnect_tick` — 1/sec for `max(RECNX,remote)`, membership held, then
+propose; the `OVMX_NO_RECNX_RECONNECT=1` kill switch is the fail-pre arm, RUN not
+asserted). The **emission of reconnect frames onto the wire and the live
+observation that a real peer restores the VC within the interval are the
+admission-gated 0.4 LIVE BRACKET** — CI has no `/dev/vms` and no lab, so OVMX
+invents no new reconnect wire bytes here; a re-formation reuses the existing,
+validated `scs_vc` formation path. Clean-room: state/timing from the host-only
+transcript (page cites only) and the public *VMScluster Systems* manual; no
+VSI/HPE source or binary examined.
+
 ## 6. Using the dissector
 
 ```

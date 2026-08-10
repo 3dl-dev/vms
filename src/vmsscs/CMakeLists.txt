@@ -107,6 +107,16 @@ target_include_directories(vmsscs_quorum PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# vms-c7d - the Connection Manager CSB connectivity state machine and the
+# RECNXINTERVAL virtual-circuit-breakage reconnect loop (transcript ch7-part02
+# pp. 7-23/7-24 and p. 7-30). Pure state + clock: builds no frame, opens no
+# socket; every time value is a caller-supplied monotonic-ms stamp so the loop
+# is unit-testable by injecting a breakage and driving the clock.
+add_library(vmsscs_recnx STATIC scs_recnx.c)
+target_include_directories(vmsscs_recnx PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 # vms-7be - SCA System Blocks / Path Blocks / Port Descriptor Tables and the
 # VMS SCA Configuration Queue (VAXcluster Principles ch. 2, pp. 2-11..2-21).
 # Pure state: builds no frame, parses no frame, opens no socket -- it replaces
@@ -378,7 +388,7 @@ target_include_directories(scsd_exe PRIVATE
 # responder (scs_mscp_srv_handle() etc.) built by vms-291/vms-4e31, which until
 # this item was compiled and unit-tested but never linked into the daemon that
 # is supposed to run it.
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_quorum vmsscs_mscp vmsscs_mscp_srv vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_quorum vmsscs_recnx vmsscs_mscp vmsscs_mscp_srv vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

@@ -162,6 +162,22 @@ set_tests_properties(vmsscs_quorum_unit PROPERTIES
     TIMEOUT 30
 )
 
+# vms-c7d - the CSB connectivity state machine and the RECNXINTERVAL reconnect
+# loop. Pure state + injected clock: the fail-pre/pass-post proof injects a VC
+# breakage and drives the clock through scs_csb_reconnect_tick(), never
+# hand-setting the state next to an assertion. Runs the OVMX_NO_RECNX_RECONNECT
+# kill switch (guardrail 23) as the fail-pre arm.
+add_executable(test_scs_recnx test_scs_recnx.c)
+target_include_directories(test_scs_recnx PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+target_link_libraries(test_scs_recnx PRIVATE vmsscs_recnx)
+add_test(NAME vmsscs_recnx_unit COMMAND test_scs_recnx)
+set_tests_properties(vmsscs_recnx_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
 # vms-7be - SB/PB/PDT configuration queue: the architected replacement for the
 # MAC-keyed peer struct. Asserts the documented queue transitions of VAXcluster
 # Principles ch. 2 (pp. 2-11..2-21), including the p. 2-21 Note (an old SB with
@@ -259,6 +275,10 @@ target_link_libraries(test_scsd_wire PRIVATE
     # vms-7a9: scsd.c folds each peer's advertised VOTES into the connection-
     # manager quorum model (scs_quorum_*), so the whole-file test seam needs it.
     vmsscs_quorum
+    # vms-c7d: scsd.c drives a per-peer CSB connectivity state machine + the
+    # RECNXINTERVAL reconnect loop (scs_csb_*), so the whole-file test seam
+    # needs the reconnect library too.
+    vmsscs_recnx
 )
 
 add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)

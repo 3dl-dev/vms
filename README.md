@@ -55,6 +55,8 @@ cd build && ctest --output-on-failure
 
 - [Architecture](docs/architecture.md) — component layers, boot sequence, data flow
 - [Building](docs/building.md) — all build modes, CMake options, kernel modules
+- [Install Guide](docs/install-guide.md) — `PRODUCT INSTALL` a kit onto a target volume (steps checked in CI against the real e2e gate)
+- [Upgrade Guide](docs/upgrade-guide.md) — upgrade an installed system in place, preserving site config and user data (steps checked in CI against the real e2e gate)
 
 ## Project Status
 

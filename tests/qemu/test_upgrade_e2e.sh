@@ -194,7 +194,7 @@ login "$LOG"
 
 # --- 1. MOUNT the kit carrier and the blank target ----------------------
 OFF=$(wc -c <"$LOG")
-send 'MOUNT DKA200: KITS'
+send 'MOUNT DKA200: KITS'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
 if wait_for '%MOUNT-I-MOUNTED, KITS mounted on _DKA200:' "$RUN_TIMEOUT" "$OFF"; then
     ok "MOUNT DKA200: (kit carrier) succeeds"
 else
@@ -202,7 +202,7 @@ else
 fi
 
 OFF=$(wc -c <"$LOG")
-send 'MOUNT DKA100: WORK'
+send 'MOUNT DKA100: WORK'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
 if wait_for '%MOUNT-I-MOUNTED, WORK mounted on _DKA100:' "$RUN_TIMEOUT" "$OFF"; then
     ok "MOUNT DKA100: (upgrade target) succeeds"
 else
@@ -289,7 +289,7 @@ fi
 # THE UPGRADE
 # =====================================================================
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT INSTALL VMS /SOURCE=DKA200:[SYSUPD]OVMX-OS-UPGRADE.KIT /DESTINATION=DKA100:'
+send 'PRODUCT INSTALL VMS /SOURCE=DKA200:[SYSUPD]OVMX-OS-UPGRADE.KIT /DESTINATION=DKA100:'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
 if wait_for '%PCSI-I-DONE' "$RUN_TIMEOUT" "$OFF"; then
     ok "PRODUCT INSTALL (UPGRADE) reports %PCSI-I-DONE"
 else
@@ -325,7 +325,7 @@ fi
 
 # --- (c) the version advanced ---------------------------------------------
 OFF=$(wc -c <"$LOG")
-send 'PRODUCT SHOW PRODUCT /DESTINATION=DKA100:'
+send 'PRODUCT SHOW PRODUCT /DESTINATION=DKA100:'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 UPG_SHOW=$(segment_since "$OFF")
 echo "$UPG_SHOW"
@@ -337,10 +337,10 @@ fi
 
 # DISMOUNT before killing QEMU so umount(2) flushes the volumes cleanly.
 OFF=$(wc -c <"$LOG")
-send 'DISMOUNT DKA100:'
+send 'DISMOUNT DKA100:'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
 wait_for '%DISMOUNT-I-DISMOUNTED' "$RUN_TIMEOUT" "$OFF"
 OFF=$(wc -c <"$LOG")
-send 'DISMOUNT DKA200:'
+send 'DISMOUNT DKA200:'  # GUIDE-STEP (docs/upgrade-guide.md, tools/check_guide_drift.py)
 wait_for '%DISMOUNT-I-DISMOUNTED' "$RUN_TIMEOUT" "$OFF"
 
 kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null; QPID=""

@@ -26,7 +26,13 @@
 #      internal file manifest (tools/ovmx_kit_pack.c) so DCL.EXE/LOGINOUT.EXE/
 #      STARTUP.COM's presence in the shipped kit is asserted from the CUT
 #      BUNDLE itself, not merely from the build's internal log.
-#   5. Writes the bundle to dist/release-<version>/ (or --out-dir).
+#   5. Generates RELEASE-NOTES-<version>.md via tools/gen_release_notes.py --
+#      the merged git history since the previous release tag, never a
+#      hand-written changelog (vms-55a, epic vms-a84). Run against the
+#      ORIGINAL repo's git history (the archived scratch tree at $SRC_DIR has
+#      no .git), scoped to exactly the commit being cut so a cut from an
+#      older ref never carries notes for commits after it.
+#   6. Writes the bundle to dist/release-<version>/ (or --out-dir).
 #
 # Byte-reproducibility (the vms-d73 DONE criterion) depends on
 # SOURCE_DATE_EPOCH: two cuts of the SAME commit must embed the SAME clock
@@ -71,7 +77,7 @@ NO_CACHE=0
 SOURCE_DATE_EPOCH_OVERRIDE=""
 
 usage() {
-    sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,64p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -202,10 +208,20 @@ for name in "DCL.EXE" "LOGINOUT.EXE" "STARTUP.COM"; do
 done
 log "OS kit manifest names DCL.EXE, LOGINOUT.EXE, STARTUP.COM (ground-source check on the shipped kit)"
 
+# --- Release notes: GENERATED from merged history, never hand-maintained ---
+# Run against REPO_ROOT (full git history), not $SRC_DIR (a bare git-archive
+# tree with no .git) -- scoped to exactly $COMMIT so the notes never include
+# anything after the commit actually being cut.
+RELEASE_NOTES_FILE="RELEASE-NOTES-$PRODUCT_VERSION.md"
+python3 "$SCRIPT_DIR/gen_release_notes.py" \
+    --repo-root "$REPO_ROOT" --ref "$COMMIT" \
+    --out "$OUT_DIR/$RELEASE_NOTES_FILE" \
+    || fail "gen_release_notes.py failed"
+
 # --- Checksums ---------------------------------------------------------------
 (
     cd "$OUT_DIR"
-    sha256sum "${ARTIFACT_ORDER[@]}" ovmx-os.kit.manifest.txt > SHA256SUMS
+    sha256sum "${ARTIFACT_ORDER[@]}" ovmx-os.kit.manifest.txt "$RELEASE_NOTES_FILE" > SHA256SUMS
 )
 log "wrote $OUT_DIR/SHA256SUMS"
 
@@ -243,6 +259,11 @@ bytes_of() { stat -c%s "$OUT_DIR/$1"; }
     printf '    "file": "ovmx-os.kit.manifest.txt",\n'
     printf '    "sha256": "%s",\n' "$(sha256_of "ovmx-os.kit.manifest.txt")"
     printf '    "names_verified_present": ["DCL.EXE", "LOGINOUT.EXE", "STARTUP.COM"]\n'
+    printf '  },\n'
+    printf '  "release_notes": {\n'
+    printf '    "file": "%s",\n' "$RELEASE_NOTES_FILE"
+    printf '    "sha256": "%s",\n' "$(sha256_of "$RELEASE_NOTES_FILE")"
+    printf '    "generated_by": "tools/gen_release_notes.py"\n'
     printf '  }\n'
     printf '}\n'
 } > "$MANIFEST"

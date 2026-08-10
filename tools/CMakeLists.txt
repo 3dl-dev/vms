@@ -302,6 +302,7 @@ target_include_directories(ovmx_kit_pack PRIVATE
     ${VMS_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/product
 )
 
 target_compile_definitions(ovmx_kit_pack PRIVATE
@@ -315,7 +316,9 @@ target_compile_options(ovmx_kit_pack PRIVATE
 
 # vms-d34: pulls sysgen_params.h transitively via ovmx_identity.h, which now
 # calls through to vmsfs for SYS$SYSTEM:OVMXVMSSYS.PAR version resolution.
-target_link_libraries(ovmx_kit_pack PRIVATE vmsfs vmslnm)
+# ovmx_kit_reader (vms-df9): the shared kit open/validate/read module list
+# and extract now call instead of hand-rolling their own second parser.
+target_link_libraries(ovmx_kit_pack PRIVATE vmsfs vmslnm ovmx_kit_reader)
 
 set_target_properties(ovmx_kit_pack PROPERTIES
     OUTPUT_NAME "ovmx_kit_pack"

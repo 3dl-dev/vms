@@ -44,6 +44,8 @@ static int vmsfs_blkdev_getattr(struct mnt_idmap *idmap,
                                 u32 request_mask, unsigned int query_flags);
 static int vmsfs_blkdev_permission(struct mnt_idmap *idmap,
                                    struct inode *inode, int mask);
+static int vmsfs_blkdev_setattr(struct mnt_idmap *idmap,
+                                struct dentry *dentry, struct iattr *attr);
 static int vmsfs_blkdev_create(struct mnt_idmap *idmap, struct inode *dir,
                                struct dentry *dentry, umode_t mode, bool excl);
 static int vmsfs_blkdev_mkdir(struct mnt_idmap *idmap, struct inode *dir,
@@ -63,6 +65,7 @@ const struct inode_operations vmsfs_blkdev_dir_iops = {
     .lookup     = vmsfs_blkdev_lookup,
     .getattr    = vmsfs_blkdev_getattr,
     .permission = vmsfs_blkdev_permission,
+    .setattr    = vmsfs_blkdev_setattr,
     .create     = vmsfs_blkdev_create,
     .mkdir      = vmsfs_blkdev_mkdir,
     .unlink     = vmsfs_blkdev_unlink,
@@ -79,6 +82,7 @@ const struct file_operations vmsfs_blkdev_dir_fops = {
 const struct inode_operations vmsfs_blkdev_file_iops = {
     .getattr    = vmsfs_blkdev_getattr,
     .permission = vmsfs_blkdev_permission,
+    .setattr    = vmsfs_blkdev_setattr,
 };
 
 const struct file_operations vmsfs_blkdev_file_fops = {
@@ -340,6 +344,19 @@ int vmsfs_blkdev_flush_inode(struct super_block *sb, struct inode *inode)
     fh->fh_modified = cpu_to_le64(ktime_get_real_seconds());
     fh->fh_link_count = cpu_to_le16(inode->i_nlink);
     fh->fh_protection = cpu_to_le16(vi->vms_prot);
+
+    /*
+     * Owner UIC (vms-df9): persist whatever the in-core inode currently
+     * carries. vmsfs_blkdev_create()/mkdir() set this to the creator's own
+     * UIC (vmsfs_current_uic()); vmsfs_blkdev_setattr() below updates it on
+     * a real chown(2) (e.g. PRODUCT INSTALL applying a kit entry's owner
+     * UIC that differs from the installer's own). Without this the on-disk
+     * fh_uic_member/fh_uic_group only ever reflected the FIRST write here
+     * that happened to run before this field existed -- they were never
+     * updated after creation at all.
+     */
+    fh->fh_uic_member = cpu_to_le16((uint16_t)__kuid_val(inode->i_uid));
+    fh->fh_uic_group  = cpu_to_le16((uint16_t)__kgid_val(inode->i_gid));
 
     /* Update retrieval pointers */
     fh->fh_map_count = cpu_to_le16(vi->map_count);
@@ -1247,6 +1264,56 @@ static void vmsfs_current_uic(uint16_t *uic_member, uint16_t *uic_group)
 
     *uic_member = (uint16_t)__kuid_val(euid);
     *uic_group  = (uint16_t)__kgid_val(egid);
+}
+
+/*
+ * vmsfs_blkdev_setattr - chmod(2)/chown(2) against a real block-device
+ * vmsfs mount (vms-df9).
+ *
+ * WHY THIS WAS MISSING. Neither vmsfs_blkdev_file_iops nor
+ * vmsfs_blkdev_dir_iops defined .setattr at all, so a chmod(2)/chown(2)
+ * syscall against a mounted vmsfs blkdev file fell through to the VFS's
+ * built-in fallback (setattr_copy() into the in-core inode only,
+ * mark_inode_dirty()) -- it updated inode->i_mode/i_uid/i_gid in memory,
+ * but vmsfs_blkdev_flush_inode() (the ONLY path that writes fh_protection
+ * back to disk) reads from vi->vms_prot, a separate cached field this path
+ * never touched. DCL's SET PROTECTION (src/vmsdcl/dcl_cmd_set.c,
+ * cmd_set_protection) has called plain chmod() since it was written,
+ * silently doing nothing durable against a blkdev-mode mount -- invisible
+ * until PRODUCT INSTALL needed to apply per-file protection/UIC from kit
+ * metadata onto a live mount and found nothing to call.
+ *
+ * setattr_prepare() still does the real permission gate before anything
+ * here runs: a chown(2) to a UIC other than the caller's own requires
+ * CAP_CHOWN (Linux root), exactly like any other filesystem -- OVMX has no
+ * separate "VMS privilege overrides Unix chown" path (vmsfs.ko doesn't talk
+ * to vms.ko/PRV$M_* at all), so a kit shipping files owned by an account
+ * other than the one running PRODUCT INSTALL fails here with -EPERM. Every
+ * kit ovmx_kit_pack currently produces uses OVMX_KIT_UIC_*_DEFAULT ==
+ * SYSTEM [1,4], and PRODUCT INSTALL is expected to run as SYSTEM, so this
+ * is a real limitation but not one the shipped kits hit today.
+ */
+static int vmsfs_blkdev_setattr(struct mnt_idmap *idmap,
+                                struct dentry *dentry, struct iattr *attr)
+{
+    struct inode *inode = d_inode(dentry);
+    struct vmsfs_inode_info *vi = VMSFS_I(inode);
+    int error;
+
+    error = setattr_prepare(idmap, dentry, attr);
+    if (error)
+        return error;
+
+    if (attr->ia_valid & ATTR_MODE) {
+        /* attr->ia_mode may carry S_IFREG/S_IFDIR bits too; mask to the
+         * rwx-only bits vmsfs_mode_to_vmsprot() expects. */
+        vi->vms_prot = vmsfs_mode_to_vmsprot(attr->ia_mode & 0777);
+    }
+
+    setattr_copy(idmap, inode, attr);
+    mark_inode_dirty(inode);
+
+    return 0;
 }
 
 static int vmsfs_blkdev_permission(struct mnt_idmap *idmap,

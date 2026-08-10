@@ -47,6 +47,7 @@
 
 #include "ovmx_kit_format.h"
 #include "ovmx_identity.h"
+#include "ovmx_kit_reader.h"
 
 /* ================================================================
  * Shared helpers
@@ -337,51 +338,50 @@ done:
 
 /* ================================================================
  * list / extract: shared reader
+ *
+ * The actual open/validate/read-entries/read-file-content logic lives in
+ * src/product/ovmx_kit_reader.c (vms-df9) -- PRODUCT.EXE needs the exact
+ * same sequence to install a kit's payload, and duplicating it here a
+ * second time is the "hand-roll a second kit parser" vms-df9's spec
+ * forbids. This file keeps only the %KITPACK-shaped error rendering and
+ * its own list/extract presentation logic.
  * ================================================================ */
 
-struct kit_reader {
-    int fd;
-    struct ovmx_kit_header hdr;
-};
+typedef ovmx_kit_reader_t kit_reader_t;
 
-static int reader_open(struct kit_reader *r, const char *kitfile)
+static int reader_open(kit_reader_t *r, const char *kitfile)
 {
-    r->fd = open(kitfile, O_RDONLY);
-    if (r->fd < 0) {
+    int rc = ovmx_kit_reader_open(r, kitfile);
+    switch (rc) {
+    case OVMX_KIT_READER_OK:
+        return 0;
+    case OVMX_KIT_READER_ERR_OPEN:
         fprintf(stderr, "%%KITPACK-F-OPENIN, cannot open %s: %s\n",
                 kitfile, strerror(errno));
         return -1;
-    }
-    if (read(r->fd, &r->hdr, sizeof(r->hdr)) != (ssize_t)sizeof(r->hdr) ||
-        memcmp(r->hdr.kh_magic, OVMX_KIT_MAGIC, OVMX_KIT_MAGIC_LEN) != 0) {
+    case OVMX_KIT_READER_ERR_NOTKIT:
         fprintf(stderr, "%%KITPACK-F-NOTKIT, %s is not an OVMX kit file\n", kitfile);
-        close(r->fd);
         return -1;
-    }
-    uint32_t want = r->hdr.kh_checksum;
-    struct ovmx_kit_header check = r->hdr;
-    check.kh_checksum = 0;
-    if (ovmx_kit_checksum(&check, sizeof(check)) != want) {
+    case OVMX_KIT_READER_ERR_CHKSUM:
         fprintf(stderr, "%%KITPACK-F-CHKSUM, %s header checksum mismatch\n", kitfile);
-        close(r->fd);
+        return -1;
+    default:
+        fprintf(stderr, "%%KITPACK-F-OPENIN, cannot open %s\n", kitfile);
         return -1;
     }
-    return 0;
 }
 
-static int read_entries(struct kit_reader *r, struct ovmx_kit_entry **out)
+static int read_entries(kit_reader_t *r, struct ovmx_kit_entry **out)
 {
-    struct ovmx_kit_entry *e = calloc(r->hdr.kh_file_count, sizeof(*e));
-    if (!e) { fprintf(stderr, "%%KITPACK-F-NOMEM, out of memory\n"); return -1; }
-    if (lseek(r->fd, (off_t)r->hdr.kh_index_offset, SEEK_SET) < 0) {
-        free(e); return -1;
+    int rc = ovmx_kit_reader_entries(r, out);
+    if (rc == OVMX_KIT_READER_ERR_NOMEM) {
+        fprintf(stderr, "%%KITPACK-F-NOMEM, out of memory\n");
+        return -1;
     }
-    size_t want = (size_t)r->hdr.kh_file_count * sizeof(*e);
-    if (read(r->fd, e, want) != (ssize_t)want) {
+    if (rc != OVMX_KIT_READER_OK) {
         fprintf(stderr, "%%KITPACK-F-READ, short read of kit index\n");
-        free(e); return -1;
+        return -1;
     }
-    *out = e;
     return 0;
 }
 
@@ -413,7 +413,7 @@ static void protection_to_text(uint16_t prot, char *out, size_t outlen)
 
 static int do_list(const char *kitfile)
 {
-    struct kit_reader r;
+    kit_reader_t r;
     if (reader_open(&r, kitfile) < 0)
         return 1;
 
@@ -436,7 +436,7 @@ static int do_list(const char *kitfile)
     printf("Files:      %u\n\n", r.hdr.kh_file_count);
 
     struct ovmx_kit_entry *entries;
-    if (read_entries(&r, &entries) < 0) { close(r.fd); return 1; }
+    if (read_entries(&r, &entries) < 0) { ovmx_kit_reader_close(&r); return 1; }
 
     for (uint32_t i = 0; i < r.hdr.kh_file_count; i++) {
         struct ovmx_kit_entry *e = &entries[i];
@@ -448,55 +448,26 @@ static int do_list(const char *kitfile)
     }
 
     free(entries);
-    close(r.fd);
-    return 0;
-}
-
-/*
- * Reverse a target filespec ("SYS$COMMON:[SYSEXE.SUB]FOO.DAT") into a
- * relative host path ("SYSEXE/SUB/FOO.DAT"), the mirror of
- * reldir_to_bracket()/walk_stage() above. "[000000]" maps to the output
- * root (no directory component).
- */
-static int filespec_to_relpath(const char *filespec, char *out, size_t outlen)
-{
-    const char *lb = strchr(filespec, '[');
-    const char *rb = lb ? strchr(lb, ']') : NULL;
-    if (!lb || !rb || rb <= lb) {
-        fprintf(stderr, "%%KITPACK-E-BADSPEC, malformed filespec: %s\n", filespec);
-        return -1;
-    }
-    char dir[256];
-    size_t dlen = (size_t)(rb - lb - 1);
-    if (dlen >= sizeof(dir)) dlen = sizeof(dir) - 1;
-    memcpy(dir, lb + 1, dlen);
-    dir[dlen] = '\0';
-    for (char *p = dir; *p; p++)
-        if (*p == '.') *p = '/';
-
-    const char *name = rb + 1;
-
-    if (strcmp(dir, "000000") == 0)
-        snprintf(out, outlen, "%s", name);
-    else
-        snprintf(out, outlen, "%s/%s", dir, name);
+    ovmx_kit_reader_close(&r);
     return 0;
 }
 
 static int do_extract(const char *kitfile, const char *outdir)
 {
-    struct kit_reader r;
+    kit_reader_t r;
     if (reader_open(&r, kitfile) < 0)
         return 1;
 
     struct ovmx_kit_entry *entries;
-    if (read_entries(&r, &entries) < 0) { close(r.fd); return 1; }
+    if (read_entries(&r, &entries) < 0) { ovmx_kit_reader_close(&r); return 1; }
 
     int rc = 0;
     for (uint32_t i = 0; i < r.hdr.kh_file_count; i++) {
         struct ovmx_kit_entry *e = &entries[i];
         char rel[4096];
-        if (filespec_to_relpath(e->ke_filespec, rel, sizeof(rel)) != 0) {
+        if (ovmx_kit_reader_relpath(e->ke_filespec, rel, sizeof(rel)) != 0) {
+            fprintf(stderr, "%%KITPACK-E-BADSPEC, malformed filespec: %s\n",
+                    e->ke_filespec);
             rc = 1; break;
         }
 
@@ -533,22 +504,19 @@ static int do_extract(const char *kitfile, const char *outdir)
             rc = 1; break;
         }
 
-        if (e->ke_size > 0) {
-            uint8_t *buf = malloc(e->ke_size);
-            if (!buf) {
-                fprintf(stderr, "%%KITPACK-F-NOMEM, out of memory\n");
-                close(out); rc = 1; break;
-            }
-            if (lseek(r.fd, (off_t)e->ke_offset, SEEK_SET) < 0 ||
-                read(r.fd, buf, e->ke_size) != (ssize_t)e->ke_size) {
-                fprintf(stderr, "%%KITPACK-F-READ, short read for %s\n", e->ke_filespec);
-                free(buf); close(out); rc = 1; break;
-            }
-            if (ovmx_kit_checksum(buf, e->ke_size) != e->ke_checksum) {
+        uint8_t *buf = NULL;
+        int rrc = ovmx_kit_reader_read_file(&r, e, &buf);
+        if (rrc != OVMX_KIT_READER_OK) {
+            if (rrc == OVMX_KIT_READER_ERR_CHKSUM)
                 fprintf(stderr, "%%KITPACK-F-CHKSUM, content checksum mismatch: %s\n",
                         e->ke_filespec);
-                free(buf); close(out); rc = 1; break;
-            }
+            else if (rrc == OVMX_KIT_READER_ERR_NOMEM)
+                fprintf(stderr, "%%KITPACK-F-NOMEM, out of memory\n");
+            else
+                fprintf(stderr, "%%KITPACK-F-READ, short read for %s\n", e->ke_filespec);
+            close(out); rc = 1; break;
+        }
+        if (buf) {
             if (write(out, buf, e->ke_size) != (ssize_t)e->ke_size) {
                 fprintf(stderr, "%%KITPACK-F-WRITE, write failed for %s\n", path);
                 free(buf); close(out); rc = 1; break;
@@ -563,7 +531,7 @@ static int do_extract(const char *kitfile, const char *outdir)
                r.hdr.kh_file_count, kitfile, outdir);
 
     free(entries);
-    close(r.fd);
+    ovmx_kit_reader_close(&r);
     return rc;
 }
 

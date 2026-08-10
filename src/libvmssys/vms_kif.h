@@ -311,6 +311,23 @@ uint32_t vms_kif_getdvi_chan(uint32_t chan, struct vms_devinfo *info);
  * Wired: the census gate is what proves it has a product caller. */
 uint32_t vms_kif_devscan(uint32_t *index, struct vms_devinfo *info);
 
+/* Resolve a DISK unit name (DKA0:, DKA100:, ...) to the Linux block device
+ * the executive enumerated it from at module init. On success (odd status)
+ * `backing` receives the vda/vdb/... name (up to backing_size-1 chars, always
+ * NUL-terminated) and the major/minor pair -- both optional -- the backing dev_t.
+ * SS$_NOSUCHDEV if there is no such unit; SS$_IVDEVNAM if the name is
+ * malformed or names a device that is not a disk. Enumeration of the units
+ * themselves is the existing vms_kif_devscan() (disk units appear in the
+ * table as DC$_DISK rows); this is the companion that hands back the backing
+ * device the process must open. The executive owns the fact -- the process
+ * never scans /sys/block itself (Rule 11).
+ * OVMX-UNWIRED: vms_kif_disk_resolve (vms-651) -- MOUNT is the consumer: real
+ * MOUNT/DISMOUNT (vms-651) resolves a unit to its Linux block device to open
+ * it. vms-651 is blocked on this item (vms-3e8) and wires it. */
+uint32_t vms_kif_disk_resolve(const char *devnam, char *backing,
+                              uint32_t backing_size,
+                              uint32_t *major, uint32_t *minor);
+
 /* Set terminal characteristics through an assigned channel (the
  * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN
  * if the caller holds no such channel.

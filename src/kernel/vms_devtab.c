@@ -32,6 +32,8 @@
 #include <linux/string.h>
 #include <linux/cred.h>
 #include <linux/uidgid.h>
+#include <linux/blkdev.h>       /* lookup_bdev() -- resolve /dev/vdX to a dev_t */
+#include <linux/kdev_t.h>       /* MAJOR()/MINOR() */
 
 #include "vms_internal.h"
 
@@ -40,6 +42,7 @@
  * executive and the runtime cannot disagree about what a class means.
  */
 #define DC__TERM        6   /* DC$_TERM */
+#define DC__DISK        1   /* DC$_DISK */
 
 /*
  * Device type codes: 0 is "Unknown".
@@ -202,6 +205,94 @@ static struct vms_device *vms_devtab_create(const char *devnam,
     return dev;
 }
 
+/*
+ * Disk unit naming (vms-3e8).
+ *
+ * PROVENANCE (CLAUDE.md Rule 8, published-doc-derived). A VMS device name is
+ * "ddcu:" -- a two-letter device code, a controller letter, and a unit number
+ * (VSI OpenVMS I/O User's Reference Manual; OpenVMS User's Manual, "Devices").
+ * DK is the device code for a direct-access DISK on a generic/SCSI controller,
+ * A is the first controller, and for such disks the unit number encodes the
+ * SCSI target as target*100 (+LUN) -- so the first target is DKA0:, the second
+ * DKA100:, the third DKA200:, which is the numbering documented for SCSI disks
+ * and observed on SCSI-based OpenVMS systems. None of this is copied from VSI
+ * source; it is the published external naming convention.
+ *
+ * WHAT IS AN OVMX DESIGN CHOICE, labelled as such (Rule 8): virtio-blk has no
+ * SCSI target, so mapping "the Nth virtio block device (vd[a-z]) to SCSI target
+ * N" -- vda->DKA0:, vdb->DKA100:, vdc->DKA200: -- is OVMX's, not VMS's. It is
+ * the natural positional mapping, and it is stable (a device's letter fixes its
+ * unit), but it is not presented as VMS-authentic.
+ *
+ * ENUMERATION. The block layer exports no module-callable iterator over its
+ * gendisks, so the executive enumerates the virtio-blk NAME SPACE it can name:
+ * it probes /dev/vda../dev/vdz with lookup_bdev(), and creates a unit ONLY for
+ * a name that resolves to a real block device. A gap in the name space is a gap
+ * in the unit space -- no unit is invented for a device that is not there
+ * (INV-6: the executive reports what it knows, never a plausible fake).
+ */
+#define VMS_DISK_UNITS      26          /* vda .. vdz */
+
+static void vms_devtab_probe_disks(void)
+{
+    int i;
+
+    for (i = 0; i < VMS_DISK_UNITS; i++) {
+        char path[16];
+        char devnam[VMS_DEVNAM_SIZE];
+        char backing[VMS_BACKING_SIZE];
+        struct vms_device *disk;
+        dev_t dev;
+        int n;
+
+        n = snprintf(path, sizeof(path), "/dev/vd%c", 'a' + i);
+        if (n < 0 || n >= (int)sizeof(path))
+            continue;
+
+        /*
+         * lookup_bdev() resolves the /dev node to a dev_t without opening the
+         * device. -ENOENT here is the ordinary case (this letter has no disk);
+         * it is not an error, just the end of the contiguous run.
+         */
+        if (lookup_bdev(path, &dev) != 0)
+            continue;
+
+        snprintf(devnam,  sizeof(devnam),  "DKA%u:", (unsigned)i * 100u);
+        snprintf(backing, sizeof(backing), "vd%c", 'a' + i);
+
+        /*
+         * A disk is shareable=0 here for the same honest reason the console is
+         * (section 7.3): no OVMX test exercises a shareable disk's ownership
+         * yet, and claiming shareable=1 without an assertion behind it would be
+         * the unmeasured claim the console's comment warns against. Filled in
+         * when a disk ownership test lands.
+         */
+        disk = vms_devtab_create(devnam, DC__DISK, VMS_DT_UNKNOWN,
+                                 0 /* shareable */, 0 /* devchar */,
+                                 0 /* width */, 0 /* page */);
+        if (!disk) {
+            pr_warn("vms: out of memory creating disk unit %s (%s)\n",
+                    devnam, backing);
+            return;
+        }
+
+        /*
+         * Set the backing under dev->lock for form, though nothing else runs
+         * yet: this is module init, before misc_register() creates /dev/vms,
+         * so no process can be reading the table. The lock keeps the write
+         * paired with vms_ioctl_disk_resolve()'s read, which does take it.
+         */
+        spin_lock(&disk->lock);
+        strscpy(disk->backing, backing, sizeof(disk->backing));
+        disk->backing_major = MAJOR(dev);
+        disk->backing_minor = MINOR(dev);
+        spin_unlock(&disk->lock);
+
+        pr_info("vms: disk unit %s -> %s (%u:%u)\n",
+                devnam, backing, MAJOR(dev), MINOR(dev));
+    }
+}
+
 int vms_devtab_init(void)
 {
     struct vms_device *console;
@@ -225,6 +316,14 @@ int vms_devtab_init(void)
                                 VMS_CONSOLE_WIDTH, VMS_CONSOLE_PAGE);
     if (!console)
         return -ENOMEM;
+
+    /*
+     * Enumerate the node's disks the way a VMS driver enters its units at boot
+     * (vms-3e8): DKA0: for the first virtio block device, DKA100: for the
+     * second, and so on. Like the console above, no process introduces these
+     * -- they exist in the executive's I/O database before /dev/vms does.
+     */
+    vms_devtab_probe_disks();
 
     pr_info("vms: device table initialized, console terminal %s created\n",
             VMS_CONSOLE_DEVNAM);
@@ -723,6 +822,70 @@ long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg)
     }
     spin_unlock(&dev->lock);
     spin_unlock(&vms_device_list_lock);
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * Resolve a DISK unit to the Linux block device the executive enumerated it
+ * from (vms-3e8). Read-only: it reports the vda/vdb/... name and the dev_t the
+ * unit was created against at module init, so a process that must open the
+ * backing device (MOUNT, vms-651) asks the executive rather than scanning
+ * /sys/block for itself -- the fact lives in the executive (CLAUDE.md Rule 11).
+ *
+ * SS$_NOSUCHDEV      no unit by that name in the table.
+ * SS$_IVDEVNAM       the name is not a legal device name, OR it names a device
+ *                    that is not a DISK (only disk units have a backing block
+ *                    device; asking for OPA0:'s backing is a category error).
+ *                    The not-a-disk verdict is an OVMX design choice (Rule 8):
+ *                    this facility has no VMS counterpart to pin a status
+ *                    against, so IVDEVNAM -- "this name is not a (disk) device
+ *                    name for this operation" -- is the closest honest answer.
+ */
+long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_diskresolve_args args;
+    struct vms_device *dev;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+
+    (void)proc;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    spin_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        spin_unlock(&vms_device_list_lock);
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+    if (dev->devclass != DC__DISK) {
+        spin_unlock(&vms_device_list_lock);
+        args.status = SS__IVDEVNAM;
+        goto out;
+    }
+
+    spin_lock(&dev->lock);
+    strscpy(args.backing, dev->backing, sizeof(args.backing));
+    args.backing_major = dev->backing_major;
+    args.backing_minor = dev->backing_minor;
+    spin_unlock(&dev->lock);
+    spin_unlock(&vms_device_list_lock);
+
+    args.status = SS__NORMAL;
 
 out:
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))

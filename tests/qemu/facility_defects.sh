@@ -438,6 +438,7 @@ devtab-alloc-not-recorded
 devtab-dassgn-status-wrong
 devtab-getdvi-devnam-status-wrong
 devtab-devscan-found-status-wrong
+disk-backing-not-resolved
 setterm-binding-not-recorded
 showterm-width-page-fabricated
 showterm-width-page-oracle-shaped
@@ -1742,6 +1743,37 @@ the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) re
 EOF
                       ;;
         knock_on_why)  echo "the SAME defect, observed a second through fifth time: every one of these assertions depends on \$DEVICE_SCAN succeeding on its first row, and this mutation is the ONLY thing that changed.";;
+        esac;;
+
+    disk-backing-not-resolved)
+        case "$_f" in
+        facility)     echo "disk unit resolution (VMS_IOCTL_DISK_RESOLVE): the executive hands a process the Linux block device a DK unit was enumerated from";;
+        targets)      echo "kernel/vms_devtab.c";;
+        # vms-3e8. vms_ioctl_disk_resolve() copies the backing device name in
+        # exactly one place -- the strscpy from dev->backing into args.backing.
+        # Anchoring on that one line zeroes the name the resolve hands back
+        # while leaving SS$_NORMAL and the dev_t (major/minor) intact, so the
+        # executive REPORTS the unit resolved and hands back an EMPTY backing:
+        # the facade shape (reports success, shares nothing) on the one fact
+        # this facility exists to carry. test_kmod_disk is the only suite that
+        # calls vms_kif_disk_resolve, so this reddens it alone -- its two
+        # backing-name assertions (DKA0:->vda, DKA100:->vdb), while the
+        # resolve-status, dev_t-match and negative-control assertions stay
+        # green because none of them reads the backing NAME.
+        suites_red)   echo "test_kmod_disk";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_disk_resolve() still looks the unit up, still checks it is a DISK, still returns SS\$_NORMAL and still fills in the backing dev_t (major/minor) -- it just hands back an EMPTY backing device NAME. So a process is told DKA0: resolved and given no device to open: the INV-6 facade shape (success reported, the fact not shared), isolated to the ONE field this facility exists to carry. The resolve status, the dev_t match against /dev/vda, and the NOSUCHDEV / IVDEVNAM negative controls are all untouched -- none of them reads the backing name -- so only the two backing-name assertions can tell the difference.";;
+        require_fail) cat <<'EOF'
+DKA0: backing device is vda (the executive's enumeration)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+DKA100: backing device is vdb (the executive's enumeration)
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME empty-name defect, observed a second time on the second disk: the mutation zeroes the ONE strscpy every resolve passes through, so DKA100:'s backing name comes back empty exactly as DKA0:'s does. Both are the one skipped name-copy observed on the two units, not two independent properties -- the dev_t match for both disks stays green because major/minor are still copied, which is what shows this is the NAME write and not the whole resolve.";;
         esac;;
 
     setterm-binding-not-recorded)
@@ -4839,6 +4871,16 @@ apply_edit() {
         # this function, so the range is not load-bearing for uniqueness,
         # only for the naming convention this file's devtab-* entries share.
         sed -i '/^long vms_ioctl_devscan/,/^}$/ s|^        args\.status = SS__NORMAL;$|        args.status = SS__NOSUCHDEV; /* NEGCTL devtab-devscan-found-status-wrong */|' "$_file";;
+    disk-backing-not-resolved)
+        # vms_ioctl_disk_resolve() copies the backing device name in exactly
+        # one place. Anchoring on that strscpy zeroes the name the resolve
+        # hands back while leaving the SS$_NORMAL status and the dev_t
+        # (major/minor) intact -- the executive reports "resolved" and hands
+        # back an EMPTY backing device, the facade shape (reports success,
+        # shares nothing). The replacement statement does not contain the
+        # anchor text, so a second apply finds no match and is the no-op the
+        # selftest requires.
+        sed -i 's|    strscpy(args.backing, dev->backing, sizeof(args.backing));|    args.backing[0] = 0; /* NEGCTL disk-backing-not-resolved: the backing name is not handed back */|' "$_file";;
     setterm-binding-not-recorded)
         # vms_ioctl_setterm() has exactly one write to proc->terminal, and it
         # is the only strscpy in the file whose destination is a proc field --

@@ -243,4 +243,12 @@
 # mutation disables the added SUPER gate (0 &&) and anchors the new SUPER-refusal
 # assertion added to test_syssvc_ast_secmode's PART B (the credential-dropped
 # USER-mode child). See its own entry in facility_defects.sh.
-84
+# Raised to 85 by vms-3e8's disk-backing-not-resolved -- the executive now
+# enumerates the node's virtio disks into DK units (DKA0:/DKA100:/...) at
+# module init and resolves a unit to its backing Linux block device
+# (VMS_IOCTL_DISK_RESOLVE, kernel/vms_devtab.c). The mutation zeroes the one
+# backing-name copy in vms_ioctl_disk_resolve() -- success reported, the name
+# not handed back -- and anchors the new test_kmod_disk suite's two
+# backing-name assertions. See its own entry in facility_defects.sh for what
+# it covers and why.
+85

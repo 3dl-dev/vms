@@ -336,6 +336,30 @@ check_lists_console() {
     fi
 }
 
+# --- Property 3b: with an executive, the DISK units are listed too --------
+# The executive enumerates the node's virtio disks into DK units at module init
+# (vms-3e8: DKA0: from vda, DKA100: from vdb, ...) and SHOW DEVICE reads them
+# from the SAME table the console comes from -- a disk row is not invented by
+# DCL any more than OPA0: is. Asserted only on a guest that actually has a disk
+# unit: this gate also runs where no virtio disk is attached, and a device that
+# cannot exist there must not be required. When a DKA unit IS present it must be
+# a real row (name in columns 0-23, "Online" status), exactly like OPA0:.
+check_lists_disk() {
+    label="$1"; cmdline="$2"
+    run_show "$cmdline"
+    if grep -q '^DKA[0-9]*: ' "$WORK/out"; then
+        first=$(grep -m1 '^DKA[0-9]*: ' "$WORK/out")
+        if printf '%s' "$first" | grep -q 'Online'; then
+            echo "  OK: $label listed an executive disk unit ($(printf '%s' "$first" | awk '{print $1}')) as a real row"
+        else
+            fail "$label listed a DK disk unit without the oracle Device Status column" \
+                 "the row was:" "       | $first"
+        fi
+    else
+        echo "  (no DK disk unit present in this guest -- the executive enumerated no virtio disk; nothing to assert)"
+    fi
+}
+
 if [ "$HAVE_EXEC" -eq 0 ]; then
     check_no_rows "bare SHOW DEVICE" 'SHOW DEVICE'
     check_no_rows "SHOW DEVICE OPA0:" 'SHOW DEVICE OPA0:'
@@ -350,6 +374,7 @@ if [ "$HAVE_EXEC" -eq 0 ]; then
 else
     check_lists_console "bare SHOW DEVICE" 'SHOW DEVICE'
     check_lists_console "SHOW DEVICE OPA0:" 'SHOW DEVICE OPA0:'
+    check_lists_disk "bare SHOW DEVICE" 'SHOW DEVICE'
     # A device the executive does not have must still be refused with the
     # oracle's own message -- this half of Rule 10 is "match VMS".
     run_show 'SHOW DEVICE ZZA0:'

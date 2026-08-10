@@ -33,7 +33,18 @@ ARCH=$(uname -m)
 # the aarch64 branch below is left on the single-console (round-1) shape,
 # disclosed, not silently assumed fixed -- see the comment there.
 ASSERT_TRANSCRIPT=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
-trap 'rm -f "$ASSERT_TRANSCRIPT"' EXIT
+
+# Two blank virtio disks (vms-3e8). The executive enumerates the node's virtio
+# block devices into DK units (DKA0: from vda, DKA100: from vdb) at module init
+# -- test_kmod_disk asserts that against a real vms.ko, so the guest must
+# actually HAVE two virtio disks. Raw sparse files, never mounted or formatted:
+# the test reads only the unit->backing-device mapping, so their content does
+# not matter. Cleaned up with the transcript below (ONE trap, all temp files --
+# see the trap note further down).
+OVMX_DISK0=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
+OVMX_DISK1=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
+truncate -s 16M "$OVMX_DISK0" "$OVMX_DISK1"
+trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1"' EXIT
 
 # Select QEMU binary and machine config based on architecture
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
@@ -78,6 +89,10 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -nodefaults \
     -serial stdio \
     "${SECOND_SERIAL[@]}" \
+    -drive if=none,id=ovmxdisk0,file="$OVMX_DISK0",format=raw \
+    -device virtio-blk-pci,drive=ovmxdisk0 \
+    -drive if=none,id=ovmxdisk1,file="$OVMX_DISK1",format=raw \
+    -device virtio-blk-pci,drive=ovmxdisk1 \
     2>&1) || true
 
 # Splice the assertion transcript (ttyS1, if this arch has one) back into
@@ -121,7 +136,7 @@ OUTPUT_FILE=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 # ONE trap, both temp files: a second `trap ... EXIT` REPLACES the first
 # rather than stacking with it, so registering ASSERT_TRANSCRIPT's cleanup
 # separately above would have silently dropped it the moment this line ran.
-trap 'rm -f "$OUTPUT_FILE" "$ASSERT_TRANSCRIPT"' EXIT
+trap 'rm -f "$OUTPUT_FILE" "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1"' EXIT
 printf '%s\n' "$OUTPUT" > "$OUTPUT_FILE"
 
 if harness_verdict_zero_failures "$OUTPUT_FILE"; then

@@ -220,6 +220,12 @@ struct scs_member_view {
     uint16_t sysap_ack_msg;  /* body[2:4] */
     uint16_t txn;            /* body[4:6] */
     uint16_t checksum;       /* body[6:8] */
+    uint16_t votes;          /* body[22:24] VOTES (op 0x01 only; 0 otherwise).
+                              * GROUNDED LE u16 across four vote configs (spec
+                              * sec 4j) -- consumed by the quorum model (vms-7a9). */
+    int      has_votes;      /* 1 iff this is a cat-0x01 op-0x01 params frame
+                              * (so votes==0 means genuinely non-voting, not
+                              * "field absent"). */
     int      is_response;    /* category & 0x80 */
     int      is_member_txn;  /* member-driven commit/lock-rebuild the joiner must
                               * 0x81-respond to: category==0x01 (not response) &&

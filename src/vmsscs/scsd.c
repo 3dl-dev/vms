@@ -59,6 +59,7 @@
 #include "scs_mscp_srv.h" /* vms-34b: THE live disk-server responder -- see
                            * scsd_mscp_srv_state() / scsd_mscp_srv_msg_input(). */
 #include "scs_poll.h"
+#include "scs_quorum.h" /* vms-7a9: CEVOTES/QUORUM computation + quorum gate */
 #include "scs_reason.h"
 #include "scs_env.h" /* vms-ec7: THE shared SCS message envelope (build + parse + dispatch) */
 #include "scs_rx.h"
@@ -1432,6 +1433,61 @@ static struct {
      * Learned, never computed (Rule 10). */
     uint16_t founding_sysid;
 } ovmx_cluster;
+
+/*
+ * vms-7a9: THE CONNECTION-MANAGER QUORUM MODEL. The connection manager consumes
+ * each peer's advertised VOTES (grounded at the 190-byte VC body[22:24], spec
+ * sec 4j) and OVMX's own non-voting contribution, and at every state transition
+ * recomputes New CEVOTES = max{EXPECTED_VOTES; SUM VOTES; Old CEVOTES} and
+ * QUORUM = (New CEVOTES + 2)/2 (VMScluster Systems sec 2.3.5; CM transcript
+ * ch7-part01 pp. 7-5..7-7). scs_quorum.c holds the pure arithmetic + gate; this
+ * is the live model instance the daemon feeds off the wire.
+ *
+ * ENFORCEMENT SCOPE. The gate (quorum-lost -> block-and-wait, no reconfigure --
+ * vms-2d6) is COMPUTED and EXPOSED here; wiring it to suspend live I/O against a
+ * real peer is admission-gated and lab-bracketed at 0.4 (this item is the
+ * computation + consume + advertise, unit-proven). EXPECTED_VOTES is an RE gap
+ * on the wire (held at 1 in every capture), so the model seeds each peer's
+ * EXPECTED_VOTES from its advertised VOTES until a wire contrast grounds it.
+ */
+static struct scs_quorum cm_quorum;
+static int cm_quorum_inited;
+static int cm_quorum_last_present = -1; /* -1 = unknown; else last gate result */
+
+/*
+ * cm_quorum_note_peer_votes - fold a peer's just-parsed op-0x01 VOTES into the
+ * quorum model, keyed by the peer's stable VMS$VAXcluster Con.ID, recompute, and
+ * log when the quorum state (present<->lost) changes. Called only for a genuine
+ * cat-0x01 op-0x01 cluster-parameters frame (view.has_votes == 1).
+ */
+static void cm_quorum_note_peer_votes(uint32_t peer_key, uint16_t peer_votes)
+{
+    if (!cm_quorum_inited) {
+        scs_quorum_init(&cm_quorum);
+        cm_quorum_inited = 1;
+        /* OVMX's own contribution: non-voting (design sec 8), keyed on its own
+         * SCSSYSTEMID so it can never break VAX quorum. */
+        scs_quorum_set_member(&cm_quorum, resolve_scssystemid(),
+                              SCS_MEMBER_VOTES_NONVOTING, 1, 1);
+    }
+    /* EXPECTED_VOTES: seed from advertised VOTES (RE gap -- see above). */
+    scs_quorum_set_member(&cm_quorum, peer_key, peer_votes, peer_votes, 1);
+    scs_quorum_recompute(&cm_quorum);
+
+    int present = scs_quorum_present(&cm_quorum);
+    if (present != cm_quorum_last_present) {
+        cm_quorum_last_present = present;
+        log_ts(stdout);
+        printf(" SCSD-I-QUORUM, CEVOTES=%u QUORUM=%u present_votes=%u -> %s"
+               " (peer 0x%08X votes=%u)\n",
+               (unsigned)cm_quorum.cevotes, (unsigned)cm_quorum.quorum,
+               (unsigned)cm_quorum.present_votes,
+               present ? "quorum PRESENT (cluster runs)"
+                       : "quorum LOST (suspend + wait, no reconfigure)",
+               (unsigned)peer_key, (unsigned)peer_votes);
+        fflush(stdout);
+    }
+}
 
 /*
  * vms-2f3: PRIOR-ADMISSION STATE -- the one thing a rebooted VAX has that a
@@ -5951,6 +6007,14 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                     ps->cm_recv_advanced_ms = monotonic_ms();
                     ps->cm_last_recv_cat = mv.category;
                     ps->cm_last_recv_op = mv.opcode;
+                }
+
+                /* vms-7a9: consume the peer's advertised VOTES from its
+                 * cat-0x01 op-0x01 cluster-parameters message (grounded LE u16
+                 * at VC body[22:24], spec sec 4j) and fold it into the quorum
+                 * model, keyed by the peer's stable VMS$VAXcluster Con.ID. */
+                if (mv.has_votes) {
+                    cm_quorum_note_peer_votes(ps->remote_conid, mv.votes);
                 }
 
                 /* vms-d94 (FORMATION): the burst rides OUR joiner connection,

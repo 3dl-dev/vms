@@ -116,6 +116,9 @@ jobs:
               - 'tests/qemu/test_upgrade_e2e.sh'
               - 'tests/qemu/run_upgrade_e2e.sh'
               - 'tests/qemu/test_product_install_e2e.sh'
+              - 'tests/qemu/test_release_acceptance_e2e.sh'
+              - 'tests/qemu/run_release_acceptance_e2e.sh'
+              - 'tests/qemu/test_parts_demo_e2e.sh'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -559,6 +562,104 @@ jobs:
           fi
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2d: GENERALIZED RELEASE-ACCEPTANCE GATE (vms-a86f, epic vms-a84
+  # RELEASE ENGINEERING)
+  #
+  # The PARTS 0.2 demo below (Job 2b) is PARTS-0.2-SPECIFIC and boots the DEV
+  # bootable image built straight from the working tree -- it has never once
+  # booted the actual thing a release recipient receives, and nothing checks
+  # that the shipped version matches what was cut. This job is that
+  # generalized, versioned proof:
+  #
+  #   1. Cuts a REAL release bundle via tools/cut-release.sh (vms-d73) --
+  #      never a hand-built artifact.
+  #   2. Boots that CUT bundle's own vmlinuz/initramfs-ovmx-slim.cpio.gz/
+  #      ovmx-distrib.img (bind-mounted into the ovmx-boot image, which here
+  #      supplies qemu-system-x86_64 and general boot tooling ONLY -- same
+  #      convention as upgrade-e2e above; the image's own baked-in /boot/* is
+  #      never touched).
+  #   3. Runs the SAME PARTS acceptance scenario as parts_demo_e2e (login ->
+  #      @PARTS_SETUP -> $ PARTS -> keyed RMS lookups -> DIRECTORY
+  #      corroboration) against the CUT artifact instead of a dev build.
+  #   4. Asserts `$ PRODUCT SHOW PRODUCT` on the booted artifact reports
+  #      EXACTLY the OVMX_PRODUCT_VERSION the cut recorded in its own
+  #      release-manifest.json.
+  #
+  # THE NEGATIVE CONTROL (second step below): reruns the identical gate
+  # against the SAME cut bundle, but with a deliberately wrong expected
+  # version substituted in (OVMX_EXPECTED_PRODUCT_VERSION_OVERRIDE) and
+  # OVMX_SKIP_PARTS_SCENARIO=1 (a fast boot+login+version-check-only run --
+  # no need to repeat the ~25-minute RMS load just to prove a string
+  # disagrees). This step is EXPECTED to fail (rc=1); the step inverts that
+  # expectation itself, so a run where the gate does NOT fail on a version
+  # mismatch is what turns this job red -- proving the version-match
+  # assertion above is a real, enforcing gate rather than one that always
+  # reports success no matter what it is fed.
+  # -----------------------------------------------------------------------
+  release-acceptance-e2e:
+    name: Release-acceptance gate — boot the CUT artifact, verify shipped version (vms-a86f)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cut the release bundle (tools/cut-release.sh, never hand-built)
+        run: |
+          tools/cut-release.sh --out-dir "${{ github.workspace }}/dist/release-acceptance"
+
+      - name: Build bootable image (qemu tooling only -- boots the cut bundle's own artifacts)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Release-acceptance gate — boot the cut artifact, run the PARTS scenario, verify the shipped version
+        id: acceptance
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+          OVMX_RELEASE_DIR="${{ github.workspace }}/dist/release-acceptance" \
+            tests/qemu/run_release_acceptance_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: release_acceptance_e2e SKIPPED in CI — this gate must actually run the real boot+demo, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+      - name: NEGATIVE CONTROL — a wrong expected version must redden the gate
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+          OVMX_RELEASE_DIR="${{ github.workspace }}/dist/release-acceptance" \
+          OVMX_EXPECTED_PRODUCT_VERSION_OVERRIDE="V0.0-NEGATIVE-CONTROL-DOES-NOT-EXIST" \
+          OVMX_SKIP_PARTS_SCENARIO=1 \
+            tests/qemu/run_release_acceptance_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: the negative control PASSED against a deliberately wrong expected version — the version-match gate is not actually enforcing." >&2
+            exit 1
+          fi
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: the negative control SKIPPED instead of running for real — cannot prove the gate reddens." >&2
+            exit 1
+          fi
+          echo "Negative control confirmed: the gate correctly reddened (exit $rc) on a genuine version disagreement."
+          exit 0
 
   # -----------------------------------------------------------------------
   # Job 2b: PARTS 0.2 Demo E2E (vms-1c8, epic vms-2579/vms-5dd)

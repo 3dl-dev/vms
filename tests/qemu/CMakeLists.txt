@@ -486,3 +486,29 @@ set_tests_properties(boot_scsnode_hostname_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 900)
+
+# ---------------------------------------------------------------------------
+# GENERALIZED RELEASE-ACCEPTANCE GATE (vms-a86f, epic vms-a84 RELEASE
+# ENGINEERING).
+#
+# Boots the ACTUAL tools/cut-release.sh (vms-d73) release bundle -- never a
+# dev build -- runs the same PARTS 0.2 demo acceptance scenario as
+# parts_demo_e2e above, and asserts the artifact's own
+# `$ PRODUCT SHOW PRODUCT` reports exactly the OVMX_PRODUCT_VERSION the cut
+# recorded in its release-manifest.json (an independent record, not
+# re-derived from the artifact under test). Includes an in-transcript
+# negative control proving the version-match comparator can actually detect
+# a disagreement; see .github/workflows/ci.yml's release-acceptance-e2e job
+# for the heavier complementary negative control (rerunning this whole gate
+# with a genuinely wrong expected version and asserting the GATE ITSELF
+# reddens). Requires a prebuilt bundle -- see run_release_acceptance_e2e.sh's
+# header for the local reproduction recipe. Same opt-in convention as
+# upgrade_e2e above, for the same reason.
+add_test(
+    NAME release_acceptance_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_release_acceptance_e2e.sh
+)
+set_tests_properties(release_acceptance_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 2400)

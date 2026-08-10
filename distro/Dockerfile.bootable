@@ -316,12 +316,19 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     echo "OK: PARTS_SETUP.COM present under SYS\$UPDATE: (SYSUPD)" && \
     # Pack the fat initramfs. Reproducibility (vms-d73): normalize every file's
     # mtime to SOURCE_DATE_EPOCH (cp resets mtime to build wall-clock, which
-    # the cpio "newc" format embeds per entry) and sort the cpio member order
-    # -- find(1)'s raw readdir order is not a byte-reproducibility guarantee
-    # even when the create sequence is identical -- and drop gzip's embedded
-    # mtime (-n) so the compressed stream's bytes depend only on content.
+    # the cpio "newc" format embeds per entry); sort the cpio member order --
+    # find(1)'s raw readdir order is not a byte-reproducibility guarantee even
+    # when the create sequence is identical; drop gzip's embedded mtime (-n);
+    # and --reproducible (measured necessary, not theoretical -- vms-d73 CI
+    # caught a real diff without it), which is GNU cpio's own name for
+    # --ignore-devno --ignore-dirnlink --renumber-inodes. Without it, cpio's
+    # "newc" format embeds the REAL filesystem inode number of every entry
+    # (verified directly: two byte-identical directory trees, created
+    # independently with identical mtimes, still produced different cpio
+    # archives purely from inode allocation differing across builds) -- file
+    # CONTENT and mtimes being reproducible is not sufficient on its own.
     find /initramfs-fat -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
-    cd /initramfs-fat && find . | sort | cpio -o -H newc 2>/dev/null | gzip -n > /boot/initramfs-ovmx.cpio.gz && \
+    cd /initramfs-fat && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx.cpio.gz && \
     echo "FAT initramfs: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"
 
 # -- OVMX OS kit (vms-0b6) ------------------------------------------------------
@@ -475,7 +482,7 @@ RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
     cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-slim/vms/SYS0/SYSCOMMON/SYSMGR/ && \
     # Pack the slim initramfs (reproducibility normalization, see FAT step above)
     find /initramfs-slim -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
-    cd /initramfs-slim && find . | sort | cpio -o -H newc 2>/dev/null | gzip -n > /boot/initramfs-ovmx-slim.cpio.gz && \
+    cd /initramfs-slim && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx-slim.cpio.gz && \
     echo "SLIM initramfs: $(ls -lh /boot/initramfs-ovmx-slim.cpio.gz | awk '{print $5}')"
 
 # -- NOEXEC initramfs (negative control) ---------------------------------------
@@ -491,7 +498,7 @@ RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
 RUN cp -a /initramfs-fat /initramfs-noexec && \
     rm -f /initramfs-noexec/lib/modules/vms.ko && \
     find /initramfs-noexec -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
-    cd /initramfs-noexec && find . | sort | cpio -o -H newc 2>/dev/null | gzip -n > /boot/initramfs-ovmx-noexec.cpio.gz && \
+    cd /initramfs-noexec && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx-noexec.cpio.gz && \
     echo "NOEXEC initramfs: $(ls -lh /boot/initramfs-ovmx-noexec.cpio.gz | awk '{print $5}')"
 
 # -- NODEV initramfs (negative control) -----------------------------------------
@@ -508,7 +515,7 @@ RUN cp -a /initramfs-fat /initramfs-noexec && \
 RUN cp -a /initramfs-fat /initramfs-nodev && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-nodev/lib/modules/vms.ko && \
     find /initramfs-nodev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
-    cd /initramfs-nodev && find . | sort | cpio -o -H newc 2>/dev/null | gzip -n > /boot/initramfs-ovmx-nodev.cpio.gz && \
+    cd /initramfs-nodev && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx-nodev.cpio.gz && \
     echo "NODEV initramfs: $(ls -lh /boot/initramfs-ovmx-nodev.cpio.gz | awk '{print $5}')"
 
 # Ensure vmlinuz symlink exists

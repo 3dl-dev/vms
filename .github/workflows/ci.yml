@@ -97,6 +97,7 @@ jobs:
               - 'tests/qemu/test_persistent_boot.sh'
               - 'tests/qemu/test_release_e2e.sh'
               - 'tests/qemu/test_executive_integral.sh'
+              - 'tests/qemu/test_distrib_boot.sh'
               - 'tests/uat/**'
 
       - name: Decide (force every output true on non-PR events)
@@ -328,6 +329,22 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_executive_integral.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-8ab. Reuses the image built above (no extra build). Boots the SLIM
+      # initramfs against /boot/ovmx-distrib.img — the PRE-INSTALLED distribution
+      # disk the mastering stage produced at build time — and drives a real
+      # SYSTEM/MANAGER login over the console, proving DCL/LOGINOUT/IMGACT and
+      # the SYSLIB shareables all resolve FROM THE MASTERED DISK (the slim
+      # initramfs carries none of them). Nothing installed this disk; vmsfs_master
+      # did. This is the §6 mount-or-halt shape that unblocks stripping install
+      # out of PID 1 (vms-2f0).
+      - name: Distribution disk boots to login (pre-installed, no self-install)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_distrib_boot.sh:/test.sh:ro \
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh

@@ -39,6 +39,11 @@ KERNEL=/boot/vmlinuz
 INITRD_OK=/boot/initramfs-ovmx.cpio.gz
 INITRD_NOEXEC=/boot/initramfs-ovmx-noexec.cpio.gz
 INITRD_NODEV=/boot/initramfs-ovmx-nodev.cpio.gz
+# Boot A needs a real installed system disk to actually COME UP: PID 1 no longer
+# installs a blank disk (vms-2f0), so it is seeded from the mastered image. Boots
+# B and C halt at the executive gate BEFORE the disk is ever mounted, so they can
+# keep an empty disk — the point of those controls is the executive, not the disk.
+DISTRIB_IMG=/boot/ovmx-distrib.img
 ARCH=$(uname -m)
 
 PASS=0
@@ -107,7 +112,12 @@ fi
 # --- Boot A: executive present → the system comes up --------------------
 echo "--- Boot A: executive present ---"
 DISK_A=/tmp/exec-integral-a.img
-rm -f "$DISK_A"; truncate -s 64M "$DISK_A"
+rm -f "$DISK_A"
+if [ ! -f "$DISTRIB_IMG" ]; then
+    echo "FAIL: $DISTRIB_IMG is missing — Boot A needs an installed disk to come up."
+    exit 1
+fi
+cp "$DISTRIB_IMG" "$DISK_A"
 OUT_A=$(run_qemu "$INITRD_OK" "$DISK_A")
 
 check "Boot A: executive attached" "$OUT_A" '%OVMX-I-EXEC'

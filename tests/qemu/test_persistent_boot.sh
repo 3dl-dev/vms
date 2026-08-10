@@ -1,13 +1,35 @@
 #!/bin/bash
-# test_persistent_boot.sh - Verify persistent system disk across QEMU reboots
+# test_persistent_boot.sh - PID 1 is bootstrap-only: mount the installed disk,
+#                           or HALT (vms-2f0)
 #
-# Runs inside the ovmx-boot Docker image (has QEMU + kernel + initramfs).
-# Tests the install-once / boot-many model:
-#   Boot 1: blank disk → STARTUP.EXE initializes, formats, installs
-#   Boot 2: same disk  → STARTUP.EXE detects installed system, skips install
-#   Boot 3: same disk, SLIM initramfs → STARTUP.EXE (bootstrap only) boots to
-#           a login prompt, DCL runs, shareable images load from the
-#           installed system disk's SYS$LIBRARY (vms-913.10)
+# Runs inside the ovmx-boot Docker image (has QEMU + kernel + the FAT and SLIM
+# initramfs variants + /boot/ovmx-distrib.img, the mastered distribution disk).
+#
+# WHAT THIS PROVES (operator ruling 2026-08-10, docs/design-init-scope.md §6
+# "STRIP ALL OF IT")
+#
+# PID 1 no longer installs, initializes, seeds or provisions ANYTHING. A booting
+# VMS system finds its system disk installed or does not boot (§1). This test
+# therefore no longer proves "blank disk -> install" (that path is deleted); it
+# proves the two halves of the mount-or-halt shape the strip leaves behind:
+#
+#   POSITIVE: the SLIM initramfs boots the PRE-INSTALLED distribution disk
+#             (/boot/ovmx-distrib.img, mastered at BUILD time by vms-8ab, NOT by
+#             PID 1) and reaches a SYSTEM login prompt. No install / initialize /
+#             overlay code path runs, and %STDRV-I-STARTUP begun PRECEDES the
+#             login (the F1 STDRV-bracket fix), with NO "completed" counterpart.
+#
+#   NEGATIVE (halt control): a BLANK, uninitialized disk -> PID 1 HALTS honestly
+#             with the OVMX-facility SYSINIT mount failure. NO boot banner, NO
+#             login prompt, NO install message, NO %STARTUP-W-MOUNTFAIL, NO
+#             overlay. The disk is NOT initialized and NOT installed. This is run
+#             with the FAT initramfs on purpose: the initramfs that used to carry
+#             the self-install path now halts instead, proving the path is gone.
+#
+# A gate that cannot go red is decoration; the negative control is what proves
+# the halt discriminates (same reasoning as test_executive_integral.sh Boot
+# B/C). The full positive login + DCL-from-disk proof lives in
+# test_distrib_boot.sh; this file focuses on the halt and the STDRV ordering.
 #
 # Usage:
 #   docker build -f distro/Dockerfile.bootable -t ovmx-boot .
@@ -16,12 +38,12 @@
 #
 # Exit code 0 = all checks pass, 1 = failures
 
-set -euo pipefail
+set -uo pipefail
 
 TIMEOUT=90
-DISK="/tmp/test-sysdisk.img"
+DISTRIB_IMG=/boot/ovmx-distrib.img
 KERNEL=/boot/vmlinuz
-INITRD=/boot/initramfs-ovmx.cpio.gz
+FAT_INITRD=/boot/initramfs-ovmx.cpio.gz
 SLIM_INITRD=/boot/initramfs-ovmx-slim.cpio.gz
 ARCH=$(uname -m)
 
@@ -29,7 +51,6 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-# Select QEMU binary based on architecture
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
     QEMU=qemu-system-aarch64
     MACHINE="-machine virt -cpu cortex-a57"
@@ -45,27 +66,35 @@ check() {
     TOTAL=$((TOTAL + 1))
     if echo "$output" | grep -qF "$pattern"; then
         if [ "$expect" = "present" ]; then
-            echo "  PASS: $desc"
-            PASS=$((PASS + 1))
+            echo "  PASS: $desc"; PASS=$((PASS + 1))
         else
-            echo "  FAIL: $desc (pattern found but should be absent: $pattern)"
-            FAIL=$((FAIL + 1))
+            echo "  FAIL: $desc (pattern found but should be absent: $pattern)"; FAIL=$((FAIL + 1))
         fi
     else
         if [ "$expect" = "absent" ]; then
-            echo "  PASS: $desc (correctly absent)"
-            PASS=$((PASS + 1))
+            echo "  PASS: $desc (correctly absent)"; PASS=$((PASS + 1))
         else
-            echo "  FAIL: $desc (pattern not found: $pattern)"
-            FAIL=$((FAIL + 1))
+            echo "  FAIL: $desc (pattern not found: $pattern)"; FAIL=$((FAIL + 1))
         fi
     fi
 }
 
+record() {
+    local desc="$1" rc="$2"
+    TOTAL=$((TOTAL + 1))
+    if [ "$rc" -eq 0 ]; then echo "  PASS: $desc"; PASS=$((PASS + 1))
+    else echo "  FAIL: $desc"; FAIL=$((FAIL + 1)); fi
+}
+
+# Boot to a captured console log, up to TIMEOUT. No interactive input is needed:
+# both the login prompt (positive) and the halt diagnostic (negative) are
+# printed by the boot itself before any prompt exists.
 run_qemu() {
+    local initrd="$1" disk="$2"
+    # shellcheck disable=SC2086
     timeout "$TIMEOUT" $QEMU $MACHINE \
         -kernel "$KERNEL" \
-        -initrd "$INITRD" \
+        -initrd "$initrd" \
         -nographic \
         -append "$CONSOLE loglevel=3 quiet" \
         -m 256M \
@@ -73,224 +102,82 @@ run_qemu() {
         -nic none \
         -nodefaults \
         -serial stdio \
-        -drive file="$DISK",format=raw,if=virtio \
+        -drive file="$disk",format=raw,if=virtio \
         -no-reboot \
         </dev/null 2>&1 || true
 }
 
-echo "=== OVMX Persistent Boot Smoke Test ==="
-echo "Architecture: $ARCH"
-echo "QEMU: $QEMU"
-echo "Kernel: $KERNEL"
-echo "Initrd: $INITRD"
+echo "=== OVMX mount-or-halt gate (vms-2f0) ==="
+echo "Architecture: $ARCH   QEMU: $QEMU"
+echo "Kernel: $KERNEL   Distribution image: $DISTRIB_IMG"
 echo ""
 
-# --- Boot 1: Fresh install (blank disk) ---
-echo "--- Creating blank 64M system disk ---"
-truncate -s 64M "$DISK"
-echo ""
-
-echo "--- Boot 1: Fresh install (blank disk) ---"
-OUTPUT1=$(run_qemu)
-
-# Show first 40 lines for diagnostics
-echo "$OUTPUT1" | head -40
-echo "[... truncated ...]"
-echo ""
-
-check "Boot 1: system disk detected"      "$OUTPUT1" "%STARTUP-I-SYSDISK"
-check "Boot 1: blank disk initialized"    "$OUTPUT1" "%STARTUP-I-INIT, initializing"
-check "Boot 1: disk mounted"              "$OUTPUT1" "%STARTUP-I-MOUNTED"
-check "Boot 1: install started"           "$OUTPUT1" "%STARTUP-I-INSTALL, installing"
-check "Boot 1: install completed"         "$OUTPUT1" "%STARTUP-I-INSTALLED"
-check "Boot 1: boot banner"              "$OUTPUT1" "OpenVMS-compatible"
-# The boot chain reaches SITE startup. STARTUP.COM's last act is
-# @SYS$MANAGER:SYSTARTUP_VMS.COM, which is where services are started
-# (vms-47b) -- so a boot that stops before it starts nothing at all.
-# This asserts the procedure RAN by matching a line only that procedure
-# prints; "no error appeared" is not evidence that it was invoked.
-check "Boot 1: site startup ran"          "$OUTPUT1" \
-      "The OVMX system is now executing the site-specific startup commands."
-echo ""
-
-# Verify disk is not empty (persistence proof — data was written)
-DISK_BYTES=$(stat -c%s "$DISK" 2>/dev/null || stat -f%z "$DISK" 2>/dev/null)
-echo "Disk size after boot 1: $DISK_BYTES bytes"
-echo ""
-
-# --- Boot 2: Persistent reboot (same disk) ---
-echo "--- Boot 2: Persistent reboot (same disk) ---"
-OUTPUT2=$(run_qemu)
-
-echo "$OUTPUT2" | head -40
-echo "[... truncated ...]"
-echo ""
-
-check "Boot 2: system disk detected"      "$OUTPUT2" "%STARTUP-I-SYSDISK"
-check "Boot 2: disk mounted"              "$OUTPUT2" "%STARTUP-I-MOUNTED"
-check "Boot 2: install skipped"           "$OUTPUT2" "%STARTUP-I-SYSBOOT"
-check "Boot 2: no disk initialization"    "$OUTPUT2" "%STARTUP-I-INIT, initializing" "absent"
-check "Boot 2: no install"                "$OUTPUT2" "%STARTUP-I-INSTALL, installing" "absent"
-check "Boot 2: boot banner"              "$OUTPUT2" "OpenVMS-compatible"
-# Also on the SECOND boot, from the INSTALLED system disk rather than
-# from the initramfs copy: the procedure has to have been provisioned to
-# the disk, not just shipped in the image.
-check "Boot 2: site startup ran"          "$OUTPUT2" \
-      "The OVMX system is now executing the site-specific startup commands."
-echo ""
-
-# --- SLIM initramfs content check (static) ---
-# The slim initramfs is a DISTINCT artifact from the fat one (Dockerfile.bootable,
-# "SLIM initramfs" stage): STARTUP.EXE (/init) + INITIALIZE.EXE + kernel modules
-# + config only. DCL.EXE, LOGINOUT.EXE, IMGACT.EXE and the SYSLIB shareables are
-# deliberately NOT packed into it -- they must come from the installed system
-# disk. Checked directly against the cpio listing rather than assumed from the
-# Dockerfile recipe, so a future recipe change that accidentally re-fattens the
-# slim image is caught here, not just read off comments.
-echo "--- SLIM initramfs content check (static) ---"
-SLIM_LISTING=$(zcat "$SLIM_INITRD" | cpio -t 2>/dev/null || true)
-# GNU cpio's listing strips the leading "./" that `find .` produced when the
-# archive was packed (verified locally: an entry packed as "./init" lists as
-# bare "init") -- matched here with a WHOLE-LINE (-x) check, not check()'s
-# substring match, so this cannot be satisfied by some other path that merely
-# contains the four letters "init".
-TOTAL=$((TOTAL + 1))
-if printf '%s\n' "$SLIM_LISTING" | grep -qxF "init"; then
-    echo "  PASS: Slim initramfs: has /init (STARTUP.EXE)"
-    PASS=$((PASS + 1))
+# --- Precondition: the mastered image exists -------------------------------
+if [ -f "$DISTRIB_IMG" ]; then
+    record "Mastered distribution image present in the built image" 0
 else
-    echo "  FAIL: Slim initramfs: has /init (STARTUP.EXE) (bare 'init' entry not found)"
-    FAIL=$((FAIL + 1))
+    record "Mastered distribution image present in the built image" 1
+    echo "FATAL: $DISTRIB_IMG missing — the mastering stage did not run"
+    exit 1
 fi
-check "Slim initramfs: no DCL.EXE"                  "$SLIM_LISTING" "DCL.EXE"      "absent"
-check "Slim initramfs: no LOGINOUT.EXE"             "$SLIM_LISTING" "LOGINOUT.EXE" "absent"
-check "Slim initramfs: no IMGACT.EXE"               "$SLIM_LISTING" "IMGACT.EXE"   "absent"
-check "Slim initramfs: no SYSLIB directory"         "$SLIM_LISTING" "SYSLIB"       "absent"
 echo ""
 
-# --- Boot 3: SLIM initramfs, subsequent boot, login + DCL from disk ---
-# Reuses the SAME $DISK Boot 1/2 already installed. The slim initramfs (just
-# proven above to carry none of DCL.EXE/LOGINOUT.EXE/IMGACT.EXE/SYSLIB) cannot
-# supply a working login session on its own -- so a real login reaching a real
-# DCL prompt here is direct, functional proof that LOGINOUT.EXE, IMGACT.EXE and
-# the SYSLIB shareables (LIBVMS$SHR etc.) are all resolved from the mounted
-# system disk's SYS$SYSTEM:/SYS$LIBRARY:, not from the initramfs (vms-913.10
-# done condition). This drives a real login (SYSTEM/MANAGER, the same real
-# SHA256-backed credential tests/uat/vms_session_qemu.sh uses -- vms-72c) over
-# the QEMU serial console rather than merely booting and reading log lines, the
-# same reason that harness exists: a banner alone is not proof DCL runs.
-echo "--- Boot 3: SLIM initramfs (subsequent boot, login + DCL from disk) ---"
+# --- POSITIVE: SLIM initramfs boots the pre-installed disk to login --------
+echo "--- POSITIVE: SLIM initramfs + pre-installed distribution disk ---"
+POS_DISK="/tmp/mount-or-halt-installed.img"
+rm -f "$POS_DISK"
+cp "$DISTRIB_IMG" "$POS_DISK"
+OUT_POS=$(run_qemu "$SLIM_INITRD" "$POS_DISK")
+echo "$OUT_POS" | head -40
+echo "[... truncated ...]"
+echo ""
 
-SLIM_CONSOLE_LOG="/tmp/test-console-slim.log"
-SLIM_FIFO="/tmp/test-console-slim.in"
-rm -f "$SLIM_CONSOLE_LOG" "$SLIM_FIFO"
-mkfifo "$SLIM_FIFO"
+check "positive: executive attached"          "$OUT_POS" "%OVMX-I-EXEC"
+check "positive: system disk DKA0: mounted"    "$OUT_POS" "%STARTUP-I-MOUNTED"
+check "positive: STDRV begun printed"          "$OUT_POS" "%STDRV-I-STARTUP, OVMX startup begun"
+check "positive: reaches the login prompt"     "$OUT_POS" "Username:"
+# The strip: none of the install/initialize/overlay lines may appear.
+check "positive: NO install ran"               "$OUT_POS" "%STARTUP-I-INSTALL"    absent
+check "positive: NO blank-disk initialize"     "$OUT_POS" "%STARTUP-I-INIT"       absent
+check "positive: NO overlay mount-fail warning" "$OUT_POS" "%STARTUP-W-MOUNTFAIL" absent
+check "positive: NO honest halt on a good disk" "$OUT_POS" "%OVMX-F-SYSINIT"      absent
+# F1: there is exactly ONE STDRV line and it is the "begun" one — the invented
+# "completed" line is deleted, not repositioned.
+check "positive: NO invented STDRV completed line" "$OUT_POS" "%STDRV-I-STARTUP, OVMX startup completed" absent
 
-# shellcheck disable=SC2086
-timeout "$TIMEOUT" $QEMU $MACHINE \
-    -kernel "$KERNEL" \
-    -initrd "$SLIM_INITRD" \
-    -nographic \
-    -append "$CONSOLE loglevel=3 quiet" \
-    -m 256M \
-    -smp 1 \
-    -nic none \
-    -nodefaults \
-    -serial stdio \
-    -drive file="$DISK",format=raw,if=virtio \
-    -no-reboot \
-    <"$SLIM_FIFO" >"$SLIM_CONSOLE_LOG" 2>&1 &
-SLIM_QEMU_PID=$!
-exec 4>"$SLIM_FIFO"
+# F1 ordering: the STDRV "begun" bracket precedes the login prompt. On the
+# collapsed pre-fix code they printed together, after startup; here "begun"
+# comes first. Compare the byte offsets in the console stream.
+BEGUN_POS=$(printf '%s' "$OUT_POS" | grep -aboF "%STDRV-I-STARTUP, OVMX startup begun" | head -1 | cut -d: -f1)
+USER_POS=$(printf '%s' "$OUT_POS" | grep -aboF "Username:" | head -1 | cut -d: -f1)
+if [ -n "$BEGUN_POS" ] && [ -n "$USER_POS" ] && [ "$BEGUN_POS" -lt "$USER_POS" ]; then rc=0; else rc=1; fi
+record "positive: %STDRV-I-STARTUP begun precedes the login prompt (F1 bracket)" "$rc"
+echo ""
 
-slim_cleanup() {
-    exec 4>&- 2>/dev/null || true
-    kill "$SLIM_QEMU_PID" 2>/dev/null || true
-    wait "$SLIM_QEMU_PID" 2>/dev/null || true
-    rm -f "$SLIM_FIFO"
-}
-trap slim_cleanup EXIT
+# --- NEGATIVE (halt control): blank disk -> honest halt --------------------
+echo "--- NEGATIVE: blank/uninitialized disk + FAT initramfs -> honest halt ---"
+NEG_DISK="/tmp/mount-or-halt-blank.img"
+rm -f "$NEG_DISK"
+truncate -s 64M "$NEG_DISK"
+OUT_NEG=$(run_qemu "$FAT_INITRD" "$NEG_DISK")
+echo "$OUT_NEG" | head -40
+echo "[... truncated ...]"
+echo ""
 
-slim_send() { printf '%s\r' "$1" >&4; }
-
-# Non-fatal wait: returns 1 on timeout/guest-death instead of exiting, so
-# every step below can be recorded as its own PASS/FAIL and the script still
-# reaches "--- Results ---" with a diagnosable tally, matching how Boot 1/2
-# above report (rather than aborting the whole test on the first mishap).
-slim_wait_for() {
-    local pattern="$1" limit="${2:-30}" since="${3:-0}" waited=0
-    while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$SLIM_CONSOLE_LOG" 2>/dev/null | grep -qF "$pattern"; then
-            return 0
-        fi
-        if ! kill -0 "$SLIM_QEMU_PID" 2>/dev/null; then
-            return 1
-        fi
-        sleep 0.25
-        waited=$((waited + 1))
-    done
-    return 1
-}
-
-record() {
-    local desc="$1" rc="$2"
-    TOTAL=$((TOTAL + 1))
-    if [ "$rc" -eq 0 ]; then
-        echo "  PASS: $desc"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: $desc"
-        FAIL=$((FAIL + 1))
-    fi
-}
-
-# Each step is gated on the previous one succeeding: once the guest is dead
-# or wedged, sending more input into it cannot produce a meaningful result,
-# so the remaining steps are skipped (still counted FAIL below) rather than
-# hanging out their own timeouts one after another.
-SLIM_OK=1
-
-if slim_wait_for '%OVMX-I-EXEC' 60; then rc=0; else rc=1; SLIM_OK=0; fi
-record "Boot 3: executive attached (slim boot)" "$rc"
-
-if [ "$SLIM_OK" -eq 1 ]; then
-    if slim_wait_for 'Username:' 60; then rc=0; else rc=1; SLIM_OK=0; fi
-    record "Boot 3: login prompt appears (slim boot)" "$rc"
-fi
-
-if [ "$SLIM_OK" -eq 1 ]; then
-    SLIM_LOGIN_OFFSET=$(wc -c <"$SLIM_CONSOLE_LOG")
-    slim_send 'SYSTEM'
-    if slim_wait_for 'Password:' 30 "$SLIM_LOGIN_OFFSET"; then rc=0; else rc=1; SLIM_OK=0; fi
-    record "Boot 3: password prompt appears" "$rc"
-fi
-
-if [ "$SLIM_OK" -eq 1 ]; then
-    slim_send 'MANAGER'
-    if slim_wait_for 'Welcome to OVMX' 30 "$SLIM_LOGIN_OFFSET"; then rc=0; else rc=1; SLIM_OK=0; fi
-    record "Boot 3: SYSTEM login succeeds (LOGINOUT.EXE activated from disk)" "$rc"
-fi
-
-if [ "$SLIM_OK" -eq 1 ]; then
-    SLIM_CMD_OFFSET=$(wc -c <"$SLIM_CONSOLE_LOG")
-    slim_send 'SHOW TIME'
-    if slim_wait_for '$ ' 15 "$SLIM_CMD_OFFSET"; then rc=0; else rc=1; SLIM_OK=0; fi
-    record "Boot 3: DCL prompt returns after SHOW TIME (DCL.EXE activated from disk)" "$rc"
-
-    if [ "$rc" -eq 0 ]; then
-        SLIM_SEGMENT=$(tail -c "+$((SLIM_CMD_OFFSET + 1))" "$SLIM_CONSOLE_LOG" | tr -d '\r')
-        CURYEAR=$(date +%Y)
-        if printf '%s' "$SLIM_SEGMENT" | grep -qF "$CURYEAR"; then
-            crc=0
-        else
-            crc=1
-        fi
-        record "Boot 3: SHOW TIME returns the real date (shareables loaded from disk SYS\$LIBRARY)" "$crc"
-    fi
-fi
-
-slim_cleanup
-trap - EXIT
+check "negative: executive attached (halt is AFTER the executive)" "$OUT_NEG" "%OVMX-I-EXEC"
+check "negative: honest OVMX-facility SYSINIT halt"                 "$OUT_NEG" "%OVMX-F-SYSINIT"
+# Either honest halt is acceptable: the blank disk fails to mount as vmsfs, or
+# (were an empty volume to mount) it carries no SYS$SYSTEM:DCL.EXE. Both name
+# the system disk DKA0: and both are ovmx_sysinit_halt — neither installs it.
+check "negative: halt names the system disk DKA0:"                 "$OUT_NEG" "system disk DKA0:"
+# The strip: the blank disk must NOT be initialized, installed, or overlaid,
+# and the boot must NOT reach a banner or a login prompt.
+check "negative: NO blank-disk initialize"       "$OUT_NEG" "%STARTUP-I-INIT"       absent
+check "negative: NO install ran"                 "$OUT_NEG" "%STARTUP-I-INSTALL"    absent
+check "negative: NO overlay mount-fail warning"  "$OUT_NEG" "%STARTUP-W-MOUNTFAIL"  absent
+check "negative: NO boot banner (system did not come up)" "$OUT_NEG" "OpenVMS-compatible" absent
+check "negative: NO login prompt on an uninstalled disk"  "$OUT_NEG" "Username:"          absent
+check "negative: NO STDRV begun (startup never ran)"      "$OUT_NEG" "%STDRV-I-STARTUP"   absent
 echo ""
 
 # --- Results ---
@@ -299,18 +186,15 @@ echo "  RESULTS: $PASS/$TOTAL checks passed, $FAIL failed"
 echo "=========================================="
 
 if [ "$FAIL" -eq 0 ]; then
-    echo "  ALL PERSISTENT BOOT CHECKS PASSED"
+    echo "  ALL MOUNT-OR-HALT CHECKS PASSED"
     exit 0
 else
-    echo "  PERSISTENT BOOT CHECKS FAILED"
+    echo "  MOUNT-OR-HALT CHECKS FAILED"
     echo ""
-    echo "--- Boot 1 full output ---"
-    echo "$OUTPUT1"
+    echo "--- POSITIVE full output ---"
+    echo "$OUT_POS"
     echo ""
-    echo "--- Boot 2 full output ---"
-    echo "$OUTPUT2"
-    echo ""
-    echo "--- Boot 3 (slim) full console log ---"
-    cat "$SLIM_CONSOLE_LOG" 2>/dev/null || echo "(no slim console log captured)"
+    echo "--- NEGATIVE full output ---"
+    echo "$OUT_NEG"
     exit 1
 fi

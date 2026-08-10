@@ -402,6 +402,7 @@ static int do_install(int argc, char *argv[])
     }
 
     uint32_t installed = 0;
+    uint32_t preserved = 0;
     int failed = 0;
     for (uint32_t i = 0; i < r.hdr.kh_file_count && !failed; i++) {
         struct ovmx_kit_entry *e = &entries[i];
@@ -415,6 +416,31 @@ static int do_install(int argc, char *argv[])
 
         char target[8192];
         pd_kit_target_path(&dest, rel, target, sizeof(target));
+
+        /*
+         * vms-2c9: a seed-once entry (a site-customizable template the kit
+         * ships, e.g. SYS$MANAGER:SYSTARTUP_VMS.COM -- ovmx_kit_format.h's
+         * OVMX_KIT_ENTRY_FLAG_SEED_ONCE) is written only when the target
+         * does not already exist. Absent means either a fresh install or a
+         * destination that has never had this file: write it below like
+         * any other entry. Present means an UPGRADE over an
+         * already-populated destination -- that copy is the SITE'S, not
+         * the kit's, so PRESERVE it: skip the write entirely, leaving its
+         * content, protection, and owner UIC untouched, rather than
+         * clobbering a site customization the way real OpenVMS never
+         * reprovisions SYS$MANAGER: startup procedures once seeded (the
+         * failure vms-f05's upgrade-e2e gate measured). A kit with no flag
+         * on this entry (every kit built before vms-2c9, ke_flags == 0)
+         * never takes this branch, so install behavior for such kits is
+         * unchanged (API/format backward compat).
+         */
+        if (e->ke_flags & OVMX_KIT_ENTRY_FLAG_SEED_ONCE) {
+            struct stat st;
+            if (stat(target, &st) == 0) {
+                preserved++;
+                continue;
+            }
+        }
 
         if (pd_mkdir_parent_of_file(target) != 0) {
             fprintf(stderr, "%%PCSI-E-MKDIR, cannot create directory for %s: %s\n",
@@ -507,8 +533,9 @@ static int do_install(int argc, char *argv[])
 
     ovmx_kit_reader_close(&r);
 
-    printf("%%PCSI-I-DONE, product installation completed, %u file(s) installed\n",
-           installed);
+    printf("%%PCSI-I-DONE, product installation completed, %u file(s) installed, "
+           "%u file(s) preserved (site-owned)\n",
+           installed, preserved);
     return 0;
 }
 

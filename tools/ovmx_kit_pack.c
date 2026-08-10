@@ -60,6 +60,33 @@ static void upcase(char *s)
             *s -= 32;
 }
 
+/*
+ * is_seed_once_filename - OVMX build-tool policy (vms-2c9, Rule 8): which
+ * kit-shipped files are SITE-owned templates once installed, rather than
+ * product-owned files an upgrade must always replace. Matched against the
+ * three canonical OpenVMS site-customization startup procedures (Guide to
+ * OpenVMS System Management) by basename only -- the bracket directory a
+ * kit entry lands in is walk_stage()'s own policy, not part of this
+ * decision. @name is already uppercased by the caller.
+ *
+ * Deliberately NOT applied to product/system files (DCL.EXE, STARTUP.COM,
+ * etc.) -- those must keep overwriting on every PRODUCT INSTALL, which is
+ * the whole point of an upgrade.
+ */
+static int is_seed_once_filename(const char *name)
+{
+    static const char *const seed_once_names[] = {
+        "SYSTARTUP_VMS.COM",
+        "SYCONFIG.COM",
+        "SYLOGICALS.COM",
+        NULL,
+    };
+    for (int i = 0; seed_once_names[i]; i++)
+        if (strcmp(name, seed_once_names[i]) == 0)
+            return 1;
+    return 0;
+}
+
 /* ================================================================
  * pack mode
  * ================================================================ */
@@ -68,6 +95,7 @@ struct pack_entry {
     char     filespec[OVMX_KIT_FILESPEC_MAX];
     char     host_path[4096];
     uint64_t size;
+    int      seed_once;   /* vms-2c9: OVMX_KIT_ENTRY_FLAG_SEED_ONCE for this entry */
 };
 
 struct pack_list {
@@ -77,7 +105,7 @@ struct pack_list {
 };
 
 static void pack_list_add(struct pack_list *l, const char *filespec,
-                          const char *host_path, uint64_t size)
+                          const char *host_path, uint64_t size, int seed_once)
 {
     if (l->count == l->cap) {
         size_t nc = l->cap ? l->cap * 2 : 32;
@@ -90,6 +118,7 @@ static void pack_list_add(struct pack_list *l, const char *filespec,
     snprintf(e->filespec, sizeof(e->filespec), "%s", filespec);
     snprintf(e->host_path, sizeof(e->host_path), "%s", host_path);
     e->size = size;
+    e->seed_once = seed_once;
 }
 
 /*
@@ -184,7 +213,8 @@ static void walk_stage(const char *root, const char *reldir, struct pack_list *l
                 exit(1);
             }
 
-            pack_list_add(l, filespec, childfull, (uint64_t)st.st_size);
+            pack_list_add(l, filespec, childfull, (uint64_t)st.st_size,
+                         is_seed_once_filename(name));
         } else {
             fprintf(stderr, "%%KITPACK-W-SKIP, skipping non-regular %s\n", childfull);
         }
@@ -288,6 +318,7 @@ static int do_pack(const char *kitfile, const char *stagedir,
         ke->ke_protection = OVMX_KIT_PROT_DEFAULT;
         ke->ke_uic_group  = OVMX_KIT_UIC_GROUP_DEFAULT;
         ke->ke_uic_member = OVMX_KIT_UIC_MEMBER_DEFAULT;
+        ke->ke_flags  = pe->seed_once ? OVMX_KIT_ENTRY_FLAG_SEED_ONCE : 0;
         ke->ke_size   = pe->size;
         ke->ke_offset = off;
         off += pe->size;
@@ -464,9 +495,10 @@ static int do_list(const char *kitfile)
         struct ovmx_kit_entry *e = &entries[i];
         char pt[64];
         protection_to_text(e->ke_protection, pt, sizeof(pt));
-        printf("%-40s %10llu bytes  [%u,%u]  %s\n",
+        printf("%-40s %10llu bytes  [%u,%u]  %s%s\n",
                e->ke_filespec, (unsigned long long)e->ke_size,
-               e->ke_uic_group, e->ke_uic_member, pt);
+               e->ke_uic_group, e->ke_uic_member, pt,
+               (e->ke_flags & OVMX_KIT_ENTRY_FLAG_SEED_ONCE) ? "  [seed-once]" : "");
     }
 
     free(entries);

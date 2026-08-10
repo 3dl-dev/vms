@@ -49,25 +49,20 @@
 #      restart (not tmpfs).
 #
 # =============================================================================
-# THE FINDING (measured against the tree this test was written against,
-# 2026-08-10, current do_install() in src/product/product.c): (a) and (c)
-# PASS. (b) FAILS. do_install() writes every kit-listed file with
-# O_WRONLY|O_CREAT|O_TRUNC unconditionally -- there is no notion of a
-# site-owned file a later install must not touch. SYS$MANAGER:
-# SYSTARTUP_VMS.COM is shipped BY THE KIT (distro/Dockerfile.bootable's
-# kit-stage copies the whole SYSMGR tree in), so a second PRODUCT INSTALL
-# overwrites the site's customized copy with the kit's stock one -- exactly
-# the failure mode real OpenVMS sites are drilled to fear from an OS
-# upgrade, and exactly why real VMS treats SYS$MANAGER: startup procedures
-# as the site's, never reprovisioned by an OS kit once seeded. A real,
-# minimal fix needs kit-entry-level "seed once, never replace" metadata (a
-# kit format change, its own design-change cascade per CLAUDE.md) -- larger
-# than this item's scope. Filed as a separate gap (see vms-f05's closing
-# note); THIS gate is intentionally left red on assertion (b) rather than
-# weakened, per the item's own instructions. The job wiring in
-# .github/workflows/ci.yml marks this step continue-on-error with the same
-# citation so the finding stays visible on every run without blocking
-# unrelated merges.
+# THE FINDING, AND THE FIX (vms-2c9). Originally measured 2026-08-10
+# against the tree this test was written against: (a) and (c) passed, (b)
+# FAILED -- do_install() wrote every kit-listed file with
+# O_WRONLY|O_CREAT|O_TRUNC unconditionally, with no notion of a site-owned
+# file a later install must not touch, so a second PRODUCT INSTALL
+# overwrote the site's customized SYS$MANAGER:SYSTARTUP_VMS.COM with the
+# kit's stock copy -- exactly the failure mode real OpenVMS sites are
+# drilled to fear from an OS upgrade. FIXED by vms-2c9: kit-entry-level
+# "seed once, never replace" metadata (ovmx_kit_format.h's
+# OVMX_KIT_ENTRY_FLAG_SEED_ONCE, set by tools/ovmx_kit_pack.c for
+# SYSTARTUP_VMS.COM/SYCONFIG.COM/SYLOGICALS.COM, read by do_install()).
+# Assertion (b) is now a REAL, ENFORCING assertion like (a)/(c)/(d) -- this
+# gate no longer ships with a known-red assertion, and the CI job no
+# longer runs it under continue-on-error (.github/workflows/ci.yml).
 # =============================================================================
 #
 # Usage (run INSIDE the bootable image, like test_product_install_e2e.sh):
@@ -83,8 +78,8 @@
 # Env knobs: BOOT_TIMEOUT (default 90), RUN_TIMEOUT (default 90), same
 # meaning as test_product_install_e2e.sh.
 #
-# Exit 0 = every assertion passed. Exit 1 = at least one FAIL (expected
-# today: assertion (b), see THE FINDING above).
+# Exit 0 = every assertion passed (a)-(d). Exit 1 = a regression -- every
+# assertion here is now expected to pass on every run.
 
 set -uo pipefail
 
@@ -314,12 +309,10 @@ if [ "$(printf '%s' "$USER_AFTER" | tr -d '[:space:]')" = "$(printf '%s' "$USER_
     && printf '%s' "$USER_AFTER" | grep -qF "$USER_DATA_CONTENT"; then
     ok "(a) DKA100:[USER]DATA.TXT survives the upgrade byte-identical"
 else
-    bad "(a) DKA100:[USER]DATA.TXT did NOT survive the upgrade identically"
-    echo "  before: $USER_BEFORE"
-    echo "  after:  $USER_AFTER"
+    dump_and_die "(a) DKA100:[USER]DATA.TXT did NOT survive the upgrade identically -- before: $USER_BEFORE / after: $USER_AFTER"
 fi
 
-# --- (b) site config survives ---------------------------------------------
+# --- (b) site config survives (vms-2c9: seed-once preservation) ----------
 OFF=$(wc -c <"$LOG")
 send 'TYPE DKA100:[SYSMGR]SYSTARTUP_VMS.COM'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
@@ -327,7 +320,7 @@ SITE_AFTER=$(segment_since "$OFF" | grep -vF "$SITE_CMD")
 if printf '%s' "$SITE_AFTER" | grep -qF "$SITE_MARKER"; then
     ok "(b) the site customization marker survives the upgrade"
 else
-    bad "(b) the site customization marker did NOT survive the upgrade -- PRODUCT INSTALL clobbered SYS\$MANAGER:SYSTARTUP_VMS.COM (see this file's THE FINDING header comment)"
+    bad "(b) the site customization marker did NOT survive the upgrade -- PRODUCT INSTALL clobbered SYS\$MANAGER:SYSTARTUP_VMS.COM (vms-2c9 seed-once preservation regressed -- see OVMX_KIT_ENTRY_FLAG_SEED_ONCE in src/libvms/include/ovmx_kit_format.h and do_install() in src/product/product.c)"
 fi
 
 # --- (c) the version advanced ---------------------------------------------
@@ -339,7 +332,7 @@ echo "$UPG_SHOW"
 if printf '%s\n' "$UPG_SHOW" | grep -qF 'V0.2' && ! printf '%s\n' "$UPG_SHOW" | grep -qF 'V0.1'; then
     ok "(c) PRODUCT SHOW PRODUCT reports the UPGRADE version (V0.2), not the baseline"
 else
-    bad "(c) PRODUCT SHOW PRODUCT does not show the advanced version after the upgrade"
+    dump_and_die "(c) PRODUCT SHOW PRODUCT does not show the advanced version after the upgrade: $UPG_SHOW"
 fi
 
 # DISMOUNT before killing QEMU so umount(2) flushes the volumes cleanly.
@@ -377,7 +370,7 @@ if [ "$(printf '%s' "$USER_RESTART" | tr -d '[:space:]')" = "$(printf '%s' "$USE
     && printf '%s' "$USER_RESTART" | grep -qF "$USER_DATA_CONTENT"; then
     ok "(a) DKA100:[USER]DATA.TXT survives a full QEMU restart after the upgrade"
 else
-    bad "(a) DKA100:[USER]DATA.TXT did NOT survive the QEMU restart"
+    dump_and_die "(a) DKA100:[USER]DATA.TXT did NOT survive the QEMU restart: $USER_RESTART"
 fi
 
 OFF=$(wc -c <"$LOG")
@@ -387,7 +380,7 @@ SEG=$(segment_since "$OFF")
 if printf '%s\n' "$SEG" | grep -qF 'V0.2'; then
     ok "(c) the advanced version persists across a full QEMU restart (disk, not tmpfs)"
 else
-    bad "(c) the advanced version did not persist across the QEMU restart"
+    dump_and_die "(c) the advanced version did not persist across the QEMU restart: $SEG"
 fi
 
 kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null; QPID=""

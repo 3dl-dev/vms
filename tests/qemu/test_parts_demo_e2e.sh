@@ -85,6 +85,10 @@ SETUP_TIMEOUT="${SETUP_TIMEOUT:-60}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-1500}"
 KERNEL=/boot/vmlinuz
 INITRD=/boot/initramfs-ovmx.cpio.gz
+# PRE-INSTALLED distribution disk (vms-8ab): PID 1 no longer installs on a blank
+# disk (vms-2f0, operator ruling 2026-08-10), so this demo seeds its disk from
+# the mastered image and boots an already-installed system.
+DISTRIB_IMG=/boot/ovmx-distrib.img
 ARCH=$(uname -m)
 
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
@@ -97,7 +101,7 @@ else
     CONSOLE="console=ttyS0"
 fi
 
-for f in "$KERNEL" "$INITRD"; do
+for f in "$KERNEL" "$INITRD" "$DISTRIB_IMG"; do
     [ -f "$f" ] || { echo "FATAL: $f not found - run this inside the ovmx-boot image (see header)"; exit 1; }
 done
 command -v "$QEMU" >/dev/null 2>&1 || { echo "FATAL: $QEMU not available"; exit 1; }
@@ -114,7 +118,7 @@ DISK=/tmp/parts-e2e.img
 LOG=/tmp/parts-e2e-console.log
 FIFO=/tmp/parts-e2e-console.in
 rm -f "$DISK" "$LOG" "$FIFO"
-truncate -s 64M "$DISK"
+cp "$DISTRIB_IMG" "$DISK"
 mkfifo "$FIFO"
 
 cleanup() { [ -n "${QPID:-}" ] && kill "$QPID" 2>/dev/null; }

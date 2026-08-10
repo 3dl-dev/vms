@@ -2,9 +2,21 @@
  * ovmx_init.c - OVMX Boot Orchestrator (STARTUP.EXE)
  *
  * PID 1 / ENTRYPOINT for OVMX on its one runtime target: the real-kernel /
- * QEMU path (CLAUDE.md Rule 9). Handles the entire boot sequence: filesystem
- * setup, kernel module loading, VMS directory provisioning, boot banner,
- * and console login loop.
+ * QEMU path (CLAUDE.md Rule 9). This is SYSBOOT + EXEC_INIT + SYSINIT and
+ * NOTHING ELSE (docs/design-init-scope.md, operator ruling 2026-08-10 "STRIP
+ * ALL OF IT"): mount the Linux substrate, attach the executive, load vmsfs.ko,
+ * mount the system disk -- or halt -- hand off to STARTUP.COM, run the console
+ * login loop.
+ *
+ * IT DOES NOT INSTALL, INITIALIZE OR PROVISION ANYTHING. A booting VMS system
+ * FINDS its system disk already installed or does not boot (design-init-scope.md
+ * §1): nothing in the VMS boot chain creates the directory tree, copies system
+ * files, seeds SYSUAF, re-owns the tree, or initializes a blank volume. Those
+ * are VMSINSTAL / PCSI / INITIALIZE / AUTHORIZE -- operator commands run once on
+ * a system that is NOT the one booting. OVMX puts them in the installer spine
+ * (vms-791 kit-master -> vms-8ab mastered disk image -> vms-df9 PCSI), never
+ * here. PID 1 mounts the pre-installed disk or halts honestly (no overlay, no
+ * auto-INITIALIZE, no first-boot install).
  *
  * IT DOES NOT READ SYS$SYSTEM:SYSUAF.DAT (vms-9b7). Account provisioning,
  * system-tree ownership and the SYSTEM identity are system management, and
@@ -21,7 +33,6 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <time.h>
-#include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -43,14 +54,14 @@
 #include "vms_kif.h"
 
 #define SYSDISK_DEV      "/dev/vda"
-#define INITRAMFS_BACKUP "/tmp/initramfs_vms"
 
 /*
- * SYS$SYSTEM / SYS$LIBRARY as Linux paths — initialized at runtime after
- * the device table is populated so VMS specs can be translated.
+ * SYS$SYSTEM as a Linux path — initialized at runtime after the device table
+ * is populated so VMS specs can be translated. Used only to confirm the mounted
+ * system disk is a properly installed volume (DCL.EXE present) before handing
+ * off to STARTUP.COM.
  */
 static char sysexe_linux[512];
-static char syslib_linux[512];
 
 static const char *vms_months[] = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -79,7 +90,6 @@ static const char *vms_to_linux(const char *vms_spec, char *buf, size_t bufsz)
 static void init_search_paths(void)
 {
     vms_to_linux(VMS_SYSEXE, sysexe_linux, sizeof(sysexe_linux));
-    vms_to_linux(VMS_SYSLIB, syslib_linux, sizeof(syslib_linux));
 }
 
 static void sigterm_handler(int sig)
@@ -204,6 +214,27 @@ static void ovmx_exec_halt(const char *what, const char *detail)
 }
 
 /*
+ * SYSINIT stage halt: the system disk is not there, will not mount, or is not
+ * a properly installed system volume. This is the "finds them or does not
+ * boot" condition (design-init-scope.md §1): VMS's SYSINIT mounts the system
+ * disk and cannot proceed without it, and OVMX's stripped PID 1 does NOT
+ * install, initialize or fall back to an ephemeral overlay -- installation is
+ * the installer spine's job, not the booting kernel's (operator ruling
+ * 2026-08-10). There is NO oracle-pinned VMS status for a failed system-disk
+ * mount, so this wears the OVMX facility (named for the correct VMS stage,
+ * SYSINIT), never a fabricated VMS message (Rule 10) -- the same shape as
+ * ovmx_exec_halt above. Halting is fail-honest, the opposite of the silent
+ * overlay fallback this replaces.
+ */
+static void ovmx_sysinit_halt(const char *what, const char *detail)
+{
+    fprintf(stderr, "%%OVMX-F-SYSINIT, %s\n", what);
+    if (detail)
+        fprintf(stderr, "%%OVMX-I-SYSINIT, %s\n", detail);
+    halt_now();
+}
+
+/*
  * Load a kernel module. Returns 0 on success, -1 with errno set otherwise.
  * Callers decide whether a failure is survivable -- for the executive it is
  * not (see executive_attach).
@@ -292,87 +323,16 @@ static void executive_attach(void)
 }
 
 /*
- * Recursive copy of a directory tree (for vmsfs backing dir).
- * Handles regular files, directories, and symlinks.
- */
-static void copy_recursive(const char *src, const char *dst)
-{
-    struct stat st;
-    if (stat(src, &st) != 0)
-        return;
-
-    mkdir(dst, st.st_mode & 07777);
-
-    DIR *d = opendir(src);
-    if (!d) return;
-
-    struct dirent *ent;
-    while ((ent = readdir(d)) != NULL) {
-        if (ent->d_name[0] == '.' &&
-            (ent->d_name[1] == '\0' ||
-             (ent->d_name[1] == '.' && ent->d_name[2] == '\0')))
-            continue;
-
-        char src_path[512], dst_path[512];
-        int src_len = snprintf(src_path, sizeof(src_path), "%s/%s", src, ent->d_name);
-        int dst_len = snprintf(dst_path, sizeof(dst_path), "%s/%s", dst, ent->d_name);
-        if (src_len >= (int)sizeof(src_path) || dst_len >= (int)sizeof(dst_path)) {
-            fprintf(stderr, "%%STARTUP-W-PATHTRUNC, path too long, skipping: %s/%s\n",
-                    src, ent->d_name);
-            continue;
-        }
-
-        struct stat es;
-        if (lstat(src_path, &es) != 0)
-            continue;
-
-        if (S_ISDIR(es.st_mode)) {
-            copy_recursive(src_path, dst_path);
-        } else if (S_ISLNK(es.st_mode)) {
-            char link_target[512];
-            ssize_t len = readlink(src_path, link_target, sizeof(link_target) - 1);
-            if (len > 0) {
-                link_target[len] = '\0';
-                symlink(link_target, dst_path);
-            }
-        } else if (S_ISREG(es.st_mode)) {
-            int sfd = open(src_path, O_RDONLY);
-            if (sfd < 0) continue;
-            int dfd = open(dst_path, O_WRONLY | O_CREAT | O_TRUNC, es.st_mode & 07777);
-            if (dfd < 0) { close(sfd); continue; }
-            char buf[4096];
-            ssize_t n;
-            while ((n = read(sfd, buf, sizeof(buf))) > 0) {
-                ssize_t total = 0;
-                while (total < n) {
-                    ssize_t w = write(dfd, buf + total, (size_t)(n - total));
-                    if (w < 0) {
-                        if (errno == EINTR) continue;
-                        fprintf(stderr, "%%STARTUP-W-COPYERR, write failed for %s: %s\n",
-                                dst_path, strerror(errno));
-                        goto copy_done;
-                    }
-                    total += w;
-                }
-            }
-            copy_done:
-            close(dfd);
-            close(sfd);
-        }
-    }
-    closedir(d);
-}
-
-/*
- * Bare-metal bootstrap: mount filesystems, set hostname, load kernel
- * modules, mount vmsfs. Called when running as PID 1 on bare metal
- * or QEMU — not inside a Docker container.
+ * Bare-metal bootstrap: mount the Linux substrate, set hostname, attach the
+ * executive, load vmsfs.ko, and MOUNT THE SYSTEM DISK OR HALT. Called when
+ * running as PID 1 on bare metal or QEMU.
  *
- * Two modes:
- *   1. Block-device mode: /dev/vda (virtio disk) present — mount vmsfs
- *      directly on the block device. If blank, run INITIALIZE.EXE first.
- *   2. Overlay mode: no block device — copy /vms to backing dir, mount
- *      vmsfs overlay (ephemeral, existing behavior).
+ * This is SYSINIT: it mounts the pre-installed system disk. It does NOT
+ * install, initialize, or fall back to an ephemeral overlay -- a booting VMS
+ * system finds its system disk or does not boot (design-init-scope.md §1,
+ * operator ruling 2026-08-10). A disk that is absent or will not mount is a
+ * fail-honest halt (ovmx_sysinit_halt), never a silent overlay onto a tmpfs
+ * tree the way the deleted code did.
  */
 static void bare_metal_init(void)
 {
@@ -389,15 +349,12 @@ static void bare_metal_init(void)
     /* Set hostname */
     sethostname("OVMX", 4);
 
-    /* The executive comes up before anything else runs -- including
-     * INITIALIZE.EXE below, which is an OVMX image like any other and so is
-     * covered by the same guarantee. */
+    /* The executive comes up before anything else runs. */
     executive_attach();
 
-    /* vmsfs.ko is the filesystem, not the executive; a failure here shows up
-     * as a mount failure below, which already has its own handling. The
-     * executive itself is loaded and pinned by executive_attach(), called
-     * from main() once /dev exists. */
+    /* vmsfs.ko is the filesystem, not the executive; a failure here surfaces
+     * as the mount failure below, which halts honestly. The executive itself
+     * is loaded and pinned by executive_attach(). */
     if (load_kernel_module("/lib/modules/vmsfs.ko") != 0 && errno != EEXIST) {
         fprintf(stderr, "%%STARTUP-W-MODFAIL, failed to load vmsfs.ko: %s\n",
                 strerror(errno));
@@ -405,329 +362,59 @@ static void bare_metal_init(void)
 
     struct stat vms_st;
     if (stat(SYSDISK_MOUNT, &vms_st) != 0)
-        return;  /* No system disk root in initramfs */
+        return;  /* No system disk mount point in initramfs */
 
-    /* Check for system disk (virtio block device) */
+    /* The system disk must be a real virtio block device. There is no overlay
+     * and no auto-initialize fallback: if it is not here, the system does not
+     * come up (design-init-scope.md §1). */
     struct stat vda_st;
-    if (stat(SYSDISK_DEV, &vda_st) == 0 && S_ISBLK(vda_st.st_mode)) {
-        printf("%%STARTUP-I-SYSDISK, mounting system disk DKA0:\n");
-
-        /* Back up initramfs before mounting over it */
-        copy_recursive(SYSDISK_MOUNT, INITRAMFS_BACKUP);
-
-        /* Try mounting — succeeds if disk is already formatted */
-        int rc = mount(SYSDISK_DEV, SYSDISK_MOUNT, "vmsfs", 0, NULL);
-        if (rc != 0) {
-            /* Disk is blank or unformatted — run INITIALIZE.EXE */
-            printf("%%STARTUP-I-INIT, initializing blank system disk\n");
-
-            char init_path[256];
-            snprintf(init_path, sizeof(init_path),
-                     "%s/SYS0/SYSCOMMON/SYSEXE/INITIALIZE.EXE",
-                     INITRAMFS_BACKUP);
-
-            pid_t pid = fork();
-            if (pid == 0) {
-                execl(init_path, "INITIALIZE.EXE",
-                      SYSDISK_DEV, "OVMX", (char *)NULL);
-                _exit(1);
-            }
-            if (pid > 0) {
-                int ws;
-                waitpid(pid, &ws, 0);
-            }
-
-            rc = mount(SYSDISK_DEV, SYSDISK_MOUNT, "vmsfs", 0, NULL);
-        }
-
-        if (rc == 0) {
-            printf("%%STARTUP-I-MOUNTED, system disk DKA0: mounted\n");
-            return;
-        }
-
-        printf("%%STARTUP-W-MOUNTFAIL, system disk mount failed (errno=%d), using overlay\n",
-               errno);
-        /* Fall through to overlay mode */
+    if (stat(SYSDISK_DEV, &vda_st) != 0 || !S_ISBLK(vda_st.st_mode)) {
+        ovmx_sysinit_halt(
+            "no system disk " SYSDISK_DEV " (DKA0:)",
+            "the system disk is not present; OVMX does not install one at boot");
     }
 
-    /* Overlay mode — no system disk or block-device mount failed */
-    mkdir("/var", 0755);
-    mkdir("/var/vmsfs", 0755);
+    printf("%%STARTUP-I-SYSDISK, mounting system disk DKA0:\n");
 
-    /* Use backup if we already copied for a failed blkdev attempt */
-    struct stat backup_st;
-    if (stat(INITRAMFS_BACKUP, &backup_st) == 0)
-        copy_recursive(INITRAMFS_BACKUP, "/var/vmsfs");
-    else
-        copy_recursive(SYSDISK_MOUNT, "/var/vmsfs");
+    /* Mount the pre-installed disk, or halt. A blank or unformatted disk fails
+     * to mount as vmsfs -- and PID 1 does NOT initialize it (that is the
+     * installer spine's INITIALIZE/PCSI job, run out of band). */
+    if (mount(SYSDISK_DEV, SYSDISK_MOUNT, "vmsfs", 0, NULL) != 0) {
+        ovmx_sysinit_halt(
+            "system disk DKA0: (" SYSDISK_DEV ") would not mount",
+            "the volume is not an installed VMSFS system disk; "
+            "OVMX does not initialize or install it at boot");
+    }
 
-    mount("none", SYSDISK_MOUNT, "vmsfs", 0, "backing=/var/vmsfs,case_blind=1");
+    printf("%%STARTUP-I-MOUNTED, system disk DKA0: mounted\n");
 }
 
 /* ------------------------------------------------------------------ */
-/* System install / boot separation                                   */
+/* Installed-volume gate                                              */
 /* ------------------------------------------------------------------ */
 
 /*
- * Copy a single file from src to dst if dst does not exist.
- * Used to seed system data files (SYSUAF.DAT, RIGHTSLIST.DAT,
- * STARTUP.COM) from initramfs to the mounted system disk on first boot.
+ * The mounted system disk must be a PROPERLY INSTALLED system volume, or the
+ * system does not come up. VMS "finds them or does not boot"
+ * (design-init-scope.md §1): the boot chain never creates the system tree, so
+ * a volume that mounts but carries no SYS$SYSTEM:DCL.EXE is not one OVMX can
+ * boot from -- and PID 1 does NOT install it (that is the installer spine's
+ * job). DCL.EXE is the marker: it is the image LOGINOUT activates for every
+ * interactive session, so its absence means there is nothing to hand a login
+ * to. This replaces is_system_installed()'s "install if missing" branch with
+ * an honest halt, exactly as the operator ruled.
  */
-static void copy_seed_file(const char *src, const char *dst, mode_t mode)
-{
-    int sfd = open(src, O_RDONLY);
-    if (sfd < 0)
-        return;  /* No seed file in initramfs */
-
-    int dfd = open(dst, O_WRONLY | O_CREAT | O_EXCL, mode);
-    if (dfd < 0) {
-        close(sfd);
-        return;  /* Already exists or cannot create */
-    }
-
-    char buf[4096];
-    ssize_t n;
-    while ((n = read(sfd, buf, sizeof(buf))) > 0) {
-        ssize_t written = write(dfd, buf, (size_t)n);
-        if (written < 0)
-            break;
-    }
-
-    close(dfd);
-    close(sfd);
-}
-
-/*
- * Provision seed data files onto the system disk.
- * On first boot (or after disk re-initialization), these files may
- * not exist on the system disk. Copy seed versions from the initramfs
- * backup so that SYSUAF, RIGHTSLIST, and STARTUP.COM are available
- * from the mounted system disk, not the initramfs.
- *
- * On subsequent boots, existing files are preserved (no overwrite).
- */
-static void provision_seed_files(void)
-{
-    char src[512], dst[512];
-
-    /* SYSUAF.DAT → SYS$SYSTEM (0600: contains password hashes) */
-    vms_to_linux(VMS_SYSUAF_PATH, dst, sizeof(dst));
-    snprintf(src, sizeof(src), "%s/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT",
-             INITRAMFS_BACKUP);
-    copy_seed_file(src, dst, 0600);
-
-    /* RIGHTSLIST.DAT → SYS$SYSTEM (0600: security data) */
-    vms_to_linux(VMS_RIGHTSLIST_PATH, dst, sizeof(dst));
-    snprintf(src, sizeof(src), "%s/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT",
-             INITRAMFS_BACKUP);
-    copy_seed_file(src, dst, 0600);
-
-    /* STARTUP.COM → SYS$MANAGER (0644: command procedure) */
-    vms_to_linux(VMS_STARTUP_PATH, dst, sizeof(dst));
-    snprintf(src, sizeof(src), "%s/SYS0/SYSCOMMON/SYSMGR/STARTUP.COM",
-             INITRAMFS_BACKUP);
-    copy_seed_file(src, dst, 0644);
-
-    /* SYSTARTUP_VMS.COM → SYS$MANAGER (0644: command procedure).
-     * STARTUP.COM invokes it unconditionally, so a system disk installed
-     * before this file existed must gain it here or every boot after an
-     * upgrade would report it missing. */
-    vms_to_linux(VMS_SYSTARTUP_PATH, dst, sizeof(dst));
-    snprintf(src, sizeof(src), "%s/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM",
-             INITRAMFS_BACKUP);
-    copy_seed_file(src, dst, 0644);
-}
-
-/*
- * Check if the system is already installed on the system disk.
- * DCL.EXE in SYSEXE is the marker — if the file exists, a prior install
- * (or the initramfs backing itself, in overlay mode) populated the tree
- * and we can skip straight to boot.
- */
-static int is_system_installed(void)
+static void require_installed_system(void)
 {
     char path[512];
     snprintf(path, sizeof(path), "%s/DCL.EXE", sysexe_linux);
     struct stat st;
-    return (stat(path, &st) == 0);
-}
-
-/*
- * SYSTEM's UIC, as a fixed OVMX substrate convention -- NOT a SYSUAF read
- * (vms-e5c).
- *
- * [USERS] and [SYSTMP] are MFD-level siblings of [SYS0] (see the tree below),
- * so PROVISION.EXE's provision_ownership() walk (src/ovmx_provision/
- * ovmx_provision.c, which chowns [SYS0] and everything beneath it to
- * whatever UIC SYSUAF's SYSTEM record carries once PID 1 has handed off)
- * never reaches them. This file mkdir()s them at boot, as root, and until
- * now they stayed root:root 0755 forever -- so a SYSTEM (UIC [1,4]) DCL
- * session got EACCES on sys$create under SYS$SCRATCH: ([SYSTMP]) or the
- * [USERS] area, and OVMX's own PARTS demo silently dropped all the way to
- * its /tmp fallback candidate. That is a Unix leak in a "zero Unix leaks"
- * narrative, and the root cause: no user-writable VMS directory existed
- * for SYSTEM to fall into.
- *
- * WHY THIS IS A FULL [UIC_GROUP, UIC_MEMBER] MATCH, NOT A GROUP-ONLY ONE
- * (MEASURED, vms-e5c). vmsfs's real access decision
- * (src/kernel/vmsfs/vmsfs_blkdev.c, vmsfs_blkdev_permission()) is VMS SOGW,
- * not Unix rwx: every new file/directory is stamped VMSFS_PROT_DEFAULT
- * (0xAA00) at creation, which denies WRITE to the System and World
- * categories alike, exactly like a real VMS default (S:RWED,O:RWED,G:RE,
- * W:RE) -- and it is a per-inode field the kernel module controls,
- * completely independent of the Linux mode bits a plain chmod(2) sets. An
- * earlier version of this fix chowned the GROUP only and left owner as
- * root, banking on a Linux-style "group-writable" bit; MEASURED under a
- * real QEMU boot with the real executive, that gave SYSTEM (UIC [1,4],
- * i.e. euid=4/egid=1 after LOGINOUT's credential drop) the GROUP category
- * -- and GROUP is denied WRITE by VMSFS_PROT_DEFAULT precisely because
- * that is what "group" access means by default on real VMS too. Only the
- * OWNER category (BOTH euid AND egid matching the inode, per
- * vmsfs_blkdev_permission()'s own check) escapes that default denial. So
- * SYSTEM has to be made the actual owner -- [UIC_MEMBER, UIC_GROUP] BOTH
- * -- not merely share its group.
- *
- * PID 1 does not read SYSUAF and must not grow a second opinion about who
- * SYSTEM is (vms-9b7) -- that was two independent 512-byte parsers of one
- * file disagreeing about a SYSTEM row, and the fix was that PID 1 stopped
- * parsing it at all. So these values are NOT derived from a per-installation
- * data file at boot; they are the fixed UIC the shipped
- * distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT gives the SYSTEM
- * account ("SYSTEM|...|1|4|..."), the same [1,4] this project treats as a
- * standing convention elsewhere (e.g. the pre-vms-9b7 PID 1 stamped this
- * exact pair before the executive became the source of truth for it). If a
- * future SYSUAF ever moves SYSTEM to a different UIC, these constants have
- * to move with it -- disclosed here so the coupling is not silently
- * rediscovered as a boot-time mismatch.
- */
-#define OVMX_SYSTEM_UIC_GROUP   1
-#define OVMX_SYSTEM_UIC_MEMBER  4
-
-/*
- * mkdir a directory that SYSTEM must be able to sys$create into, and make
- * SYSTEM its actual owner -- both UIC fields, not just the group (see the
- * MEASURED note above for why group-only is not enough on vmsfs). This is
- * an OVMX substrate-limit design choice, already established and labelled
- * as such in provision_ownership()'s "DISCLOSED DIVERGENCE" note -- not
- * presented as a VMS-authentic mechanism (on real VMS this area would stay
- * SYSTEM-owned by the same account-provisioning step that creates every
- * other SYSTEM-owned system directory; here it is PID 1, at first boot,
- * stamping a fixed, disclosed UIC rather than an identity it looked up).
- * chmod to 0775 as well so DIRECTORY/PROTECTION's Linux-mode fallback
- * display (vmsfs_mode_to_protection) is not left claiming a stricter
- * protection than what vms_prot's OWNER category (VMSFS_PROT_DEFAULT's
- * zero-deny nibble) actually grants -- it does not change enforcement, only
- * what a mode-based reader sees, since vmsfs's read/write DECISION never
- * consults i_mode (see the MEASURED note above).
- */
-static void provision_writable_dir(const char *path)
-{
-    mkdir(path, 0775);
-    if (chown(path, (uid_t)OVMX_SYSTEM_UIC_MEMBER,
-              (gid_t)OVMX_SYSTEM_UIC_GROUP) != 0 && errno != ENOENT)
-        fprintf(stderr, "%%STARTUP-W-OWNER, cannot set owner of %s: %s\n",
-                path, strerror(errno));
-    if (chmod(path, 0775) != 0 && errno != ENOENT)
-        fprintf(stderr, "%%STARTUP-W-OWNER, cannot set mode of %s: %s\n",
-                path, strerror(errno));
-}
-
-/*
- * Create the VMS directory tree following ODS-2 conventions.
- * mkdir is idempotent — safe to call even if directories already exist.
- *
- * MFD [000000]:         /vms/
- * [SYS0]                /vms/SYS0/
- * [SYS0.SYSCOMMON]      /vms/SYS0/SYSCOMMON/
- * SYS$SYSTEM [SYSEXE]   /vms/SYS0/SYSCOMMON/SYSEXE/
- * SYS$LIBRARY [SYSLIB]  /vms/SYS0/SYSCOMMON/SYSLIB/
- * SYS$MANAGER [SYSMGR]  /vms/SYS0/SYSCOMMON/SYSMGR/
- * SYS$HELP [SYSHLP]     /vms/SYS0/SYSCOMMON/SYSHLP/
- * [USERS]               /vms/USERS/         -- SYSTEM-writable (vms-e5c)
- * [SYSTMP]              /vms/SYSTMP/        -- SYSTEM-writable (vms-e5c)
- */
-static void provision_dirs(void)
-{
-    char path[512];
-    int n;
-
-    /* MFD and intermediate directories */
-    mkdir(SYSDISK_MOUNT, 0755);
-    vms_to_linux(VMS_SYSROOT, path, sizeof(path));
-    /* Validate path wasn't truncated before manipulating it */
-    n = (int)strlen(path);
-    if (n <= 0 || n >= (int)sizeof(path) - 1) {
-        fprintf(stderr, "%%STARTUP-E-PATHTRUNC, VMS_SYSROOT path too long\n");
-        return;
+    if (stat(path, &st) != 0) {
+        ovmx_sysinit_halt(
+            "system disk DKA0: is not an installed OVMX system volume",
+            "SYS$SYSTEM:DCL.EXE is absent; install the system with the "
+            "OVMX installer before booting -- PID 1 does not install one");
     }
-    /* Create SYS0 first, then SYS0/SYSCOMMON */
-    char *last_slash = strrchr(path, '/');
-    if (last_slash) {
-        *last_slash = '\0';
-        mkdir(path, 0755);   /* SYS0 */
-        *last_slash = '/';
-    }
-    mkdir(path, 0755);       /* SYS0/SYSCOMMON */
-
-    /* System directories */
-    mkdir(sysexe_linux, 0755);
-    mkdir(syslib_linux, 0755);
-    vms_to_linux(VMS_SYSMGR, path, sizeof(path));
-    mkdir(path, 0755);
-    vms_to_linux(VMS_SYSHLP, path, sizeof(path));
-    mkdir(path, 0755);
-    vms_to_linux(VMS_USERS, path, sizeof(path));
-    provision_writable_dir(path);
-    vms_to_linux(VMS_SYSTMP, path, sizeof(path));
-    provision_writable_dir(path);
-
-    mkdir("/tmp/ovmx", 0755);
-    mkdir("/tmp/ovmx/locks", 0755);
-}
-
-/*
- * Install the OVMX system onto the system disk.
- *
- * Creates the ODS-2 directory tree, then copies the real files from the
- * initramfs backup (INITRAMFS_BACKUP, populated by bare_metal_init before
- * the system disk was mounted over it) onto the now-mounted system disk.
- *
- * IT DOES NOT PROVISION ACCOUNTS, AND MUST NOT (vms-9b7). This used to end
- * with provision_sysuaf_users(), which read SYSUAF.DAT and created and
- * chowned each account's home directory. Creating accounts' directories is
- * ACCOUNT PROVISIONING -- on OpenVMS it is AUTHORIZE's job, driven from a
- * DCL procedure -- and it is the same shape as the services this function's
- * own NOTE below refuses to start here. It now runs from SYS$MANAGER:
- * STARTUP.COM, in PROVISION.EXE, which is an ordinary image linking the
- * ordinary libraries. This function copies files; that is all it does.
- *
- * Only reached when is_system_installed() found no DCL.EXE on the mounted
- * disk — i.e. a blank block-device disk just initialized by INITIALIZE.EXE.
- * In overlay mode the backing store is the initramfs copy itself, so
- * DCL.EXE is already there and this function is never called.
- *
- * No symlinks: this is a real copy onto real vmsfs storage, so binaries
- * and libraries land at their VMS paths as real files, not indirection.
- */
-static void install_system(void)
-{
-    printf("%%STARTUP-I-INSTALL, installing OVMX system to DKA0:\n");
-    provision_dirs();
-    copy_recursive(INITRAMFS_BACKUP, SYSDISK_MOUNT);
-    /* Every file just written sits dirty in the page cache until the
-     * kernel's own periodic writeback runs (default ~30s). A user who
-     * reaches the login prompt below and quits QEMU before that timer
-     * fires (the documented "log out or Ctrl-A X here" step) loses the
-     * install: the next boot reads a system disk that was never actually
-     * written. Force it out now, while install_system() still knows the
-     * write is what must survive.
-     *
-     * SYSUAF.DAT is among those files, and that is the ONLY relationship
-     * this sync() has to it now (vms-9b7): install_system() copies it and
-     * never reads it. Account provisioning moved to PROVISION.EXE. */
-    sync();
-
-    printf("%%STARTUP-I-INSTALLED, system installation complete\n");
 }
 
 /*
@@ -812,6 +499,34 @@ static void run_startup(void)
     }
 }
 
+/*
+ * %STDRV-I-STARTUP, begun -- printed by STDRV, the startup driver, BEFORE the
+ * startup procedure runs (F1, docs/design-init-scope.md §3.1). On VMS this
+ * line BRACKETS the startup: "begun" precedes every phase. It used to print
+ * from display_boot_banner() AFTER run_startup() had already finished -- an
+ * empty bracket, re-reading the clock between two printfs with no work between
+ * them -- so it is moved here and called immediately before run_startup().
+ *
+ * There is NO "completed" counterpart. The Alpha 8.4 clean-boot capture
+ * (2026-08-07, docs/design-boot-faithful.md §3.5) shows VMS prints
+ * "%STDRV-I-STARTUP, OpenVMS startup begun" ONCE and no "completed" line
+ * anywhere in the boot; the old "completed" line was an OVMX invention and is
+ * deleted, not repositioned.
+ */
+static void print_stdrv_begun(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    struct tm tm;
+    localtime_r(&ts.tv_sec, &tm);
+
+    printf("%%STDRV-I-STARTUP, OVMX startup begun at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+           tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+           tm.tm_hour, tm.tm_min, tm.tm_sec,
+           (int)(ts.tv_nsec / 10000000));
+    fflush(stdout);
+}
+
 static void display_boot_banner(void)
 {
     struct timespec ts;
@@ -825,21 +540,6 @@ static void display_boot_banner(void)
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
-
-    printf("%%STDRV-I-STARTUP, OVMX startup begun at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
-           tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
-           tm.tm_hour, tm.tm_min, tm.tm_sec,
-           (int)(ts.tv_nsec / 10000000));
-
-    /* Re-read time for "completed" message */
-    clock_gettime(CLOCK_REALTIME, &ts);
-    localtime_r(&ts.tv_sec, &tm);
-
-    printf("%%STDRV-I-STARTUP, OVMX startup completed at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
-           tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
-           tm.tm_hour, tm.tm_min, tm.tm_sec,
-           (int)(ts.tv_nsec / 10000000));
-    printf("\n");
 }
 
 /*
@@ -934,36 +634,31 @@ int main(void)
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
     init_search_paths();
 
-    /* Step 2: Install system if not already on the system disk */
-    if (is_system_installed()) {
-        printf("%%STARTUP-I-SYSBOOT, system disk detected, skipping install\n");
-    } else {
-        install_system();
-    }
+    /* Step 2: The system disk must already carry an installed system, or the
+     * boot stops here. PID 1 NO LONGER INSTALLS, INITIALIZES, SEEDS OR
+     * PROVISIONS anything (operator ruling 2026-08-10, "STRIP ALL OF IT",
+     * docs/design-init-scope.md §2/§6): install_system(), provision_dirs(),
+     * provision_seed_files(), the INITIALIZE-on-blank fork, the overlay mode,
+     * and the INITRAMFS_BACKUP copy dance are all deleted. Installation lives
+     * ENTIRELY in the installer spine (vms-791 -> vms-8ab mastered disk image
+     * -> vms-df9 PCSI). A booting VMS system finds its system disk installed or
+     * does not boot -- so a mounted volume without SYS$SYSTEM:DCL.EXE is a
+     * fail-honest halt, never a self-install. */
+    require_installed_system();
 
-    /* Step 2b: Ensure seed data files exist on system disk.
-     * On first boot, install copies the whole tree but subsequent
-     * boots skip install. Seed files that were added after install
-     * (e.g., RIGHTSLIST.DAT, STARTUP.COM) are provisioned here
-     * without overwriting existing files. */
-    provision_seed_files();
-
-    /* Steps 2b' and 2c -- system-tree ownership and the SYSTEM identity --
-     * USED TO STAND HERE and have moved to SYS$MANAGER:STARTUP.COM
-     * (PROVISION.EXE). See the Step 1 note above. Nothing between
-     * provision_seed_files() and run_startup() reads SYSUAF any more, and
-     * nothing here may start doing so again. */
-
-    /* Step 3: Run STARTUP.COM.
+    /* Step 3: %STDRV-I-STARTUP begun, then run STARTUP.COM.
+     * The STDRV "begun" bracket precedes the startup procedure (F1) -- it used
+     * to print AFTER run_startup() from display_boot_banner().
+     *
      * There is no logical name daemon to start first: on VMS the logical name
      * tables are executive-resident, not a service (vms-a4b).
      *
-     * This is ALSO where the system's services start, and the only place
-     * they do: STARTUP.COM invokes SYSTARTUP_VMS.COM, which invokes each
-     * service's own startup procedure, which creates it with
-     * RUN/DETACHED under a VMS process name (vms-47b). STARTUP.EXE
-     * deliberately starts none of its own -- see the NOTE ON SERVICES
-     * above. */
+     * run_startup() is ALSO where the system's services start, and the only
+     * place they do: STARTUP.COM invokes SYSTARTUP_VMS.COM, which invokes each
+     * service's own startup procedure, which creates it with RUN/DETACHED under
+     * a VMS process name (vms-47b). STARTUP.EXE deliberately starts none of its
+     * own -- see the NOTE ON SERVICES above. */
+    print_stdrv_begun();
     run_startup();
 
     /* Step 4: Boot banner */
@@ -1075,9 +770,10 @@ int main(void)
              * partial.
              *
              * MADE UNREACHABLE, NOT HANDLED, per Rule 10's other answer:
-             * LOGINOUT.EXE is a required system file, provisioned onto
-             * every system disk by install_system() (this file,
-             * "install once, boot forever" -- see is_system_installed())
+             * LOGINOUT.EXE is a required system file, present on every
+             * installed system disk (the installer spine writes the whole
+             * system tree; require_installed_system() above has already
+             * halted the boot if the mounted volume is not installed at all)
              * before the login loop below can ever run, so failing to
              * exec it here is the same class of condition as vms.ko or
              * /dev/vms being absent (executive_attach(), above) --

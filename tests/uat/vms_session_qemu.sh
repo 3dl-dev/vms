@@ -65,6 +65,10 @@ set -uo pipefail
 
 KERNEL=/boot/vmlinuz
 INITRD=/boot/initramfs-ovmx.cpio.gz
+# PRE-INSTALLED distribution disk (vms-8ab): PID 1 no longer installs on a blank
+# disk (vms-2f0, operator ruling 2026-08-10 "STRIP ALL OF IT"), so the UAT seeds
+# its disk from the mastered image and boots an already-installed system.
+DISTRIB_IMG=/boot/ovmx-distrib.img
 DISK=/tmp/uat-sysdisk.img
 CONSOLE_LOG=/tmp/uat-console.log
 FIFO=/tmp/uat-console.in
@@ -295,7 +299,12 @@ else
 fi
 
 rm -f "$DISK" "$CONSOLE_LOG" "$FIFO"
-truncate -s 64M "$DISK"
+if [ ! -f "$DISTRIB_IMG" ]; then
+    echo "FATAL: $DISTRIB_IMG not found — run this inside the ovmx-boot image;"
+    echo "       a stripped PID 1 cannot install a blank disk (vms-2f0)."
+    exit 1
+fi
+cp "$DISTRIB_IMG" "$DISK"
 mkfifo "$FIFO"
 
 echo "=== OVMX UAT — scripted VMS session (real kernel, QEMU) ==="

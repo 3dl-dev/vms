@@ -157,8 +157,10 @@ RUN cmake -B build-static \
     && cmake --build build-static --parallel $(nproc) 2>&1
 
 # -- FAT initramfs -------------------------------------------------------------
-# All OVMX binaries included. STARTUP.EXE detects a blank /dev/vda and
-# installs the full OS onto it. Use this for first boot or recovery.
+# All OVMX binaries included. This tree is the source the mastering step below
+# bakes into the pre-installed ovmx-distrib.img; PID 1 no longer installs onto a
+# blank disk (vms-2f0, docs/design-init-scope.md §6 — it mounts an installed
+# disk or halts). The fat initramfs itself is retained for build/test use.
 #
 # ODS-2 directory layout:
 #   /vms/SYS0/SYSCOMMON/SYSEXE/  — executables
@@ -166,7 +168,19 @@ RUN cmake -B build-static \
 #   /vms/SYS0/SYSCOMMON/SYSMGR/  — manager configs
 #   /vms/SYS0/SYSCOMMON/SYSHLP/  — help files
 #   /vms/SYS0/SYSCOMMON/SYSUPD/  — pre-PCSI layered-product install kits
-#   /vms/USERS/                   — user home directories
+#   /vms/USERS/                   — user home directories  (SYS$LOGIN base)
+#   /vms/SYSTMP/                  — system scratch (SYS$SCRATCH -> [SYSTMP])
+#
+# [SYSTMP] and [USERS] are SYSTEM-writable persistent system-disk directories.
+# They used to be created (and chowned to SYSTEM [1,4]) at boot by PID 1's
+# provision_dirs()/provision_writable_dir(), which vms-2f0 DELETED under the
+# operator's "STRIP ALL OF IT" ruling (docs/design-init-scope.md §6: PID 1 does
+# no install work). They belong to the INSTALLED system, so they are created
+# HERE, in the tree the mastering step (below) bakes into ovmx-distrib.img.
+# vmsfs_master masters every directory owned by SYSTEM UIC [1,4] with
+# VMSFS_PROT_DEFAULT (tools/vmsfs_master.c: MASTER_UIC_*, write_header) -- the
+# exact ownership + protection provision_writable_dir() set, so SYSTEM (the
+# OWNER category) can sys$create scratch/user files in them.
 RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
              /initramfs-fat/tmp /initramfs-fat/var /initramfs-fat/mnt \
              /initramfs-fat/lib/modules \
@@ -175,7 +189,8 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSHLP \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD \
-             /initramfs-fat/vms/USERS && \
+             /initramfs-fat/vms/USERS \
+             /initramfs-fat/vms/SYSTMP && \
     # OVMX binaries → SYSEXE (STARTUP.EXE is also /init).
     # DCL.EXE + LOGINOUT.EXE + the 7 shareables are the VMS-native LINK.EXE
     # graph (link-native stage above, beads vms-b6a/vms-6da/vms-d0f5e) — ET_DYN
@@ -308,6 +323,13 @@ RUN /src/build-static/bin/vmsfs_master master \
     done && \
     [ -f /tmp/distrib-verify/SYS0/SYSCOMMON/SYSMGR/STARTUP.COM ] || { echo "FAIL: mastered image missing SYS\$MANAGER:STARTUP.COM"; exit 1; } && \
     echo "OK: ovmx-distrib.img carries SYS\$MANAGER:STARTUP.COM" && \
+    # The SYSTEM-writable persistent directories must be baked in: PID 1 no
+    # longer creates them (vms-2f0), so if the mastering source ever loses them
+    # SYS$SCRATCH:/SYS$LOGIN: writes fail at runtime (%RMS-E-DNF). Assert both
+    # are present so a regression is caught at BUILD, not in the PARTS demo.
+    [ -d /tmp/distrib-verify/SYSTMP ] || { echo "FAIL: mastered image missing [SYSTMP] (SYS\$SCRATCH:)"; exit 1; } && \
+    [ -d /tmp/distrib-verify/USERS ]  || { echo "FAIL: mastered image missing [USERS]"; exit 1; } && \
+    echo "OK: ovmx-distrib.img carries SYSTEM-writable [SYSTMP] and [USERS]" && \
     rm -rf /tmp/distrib-verify && \
     echo "DISTRIB image: $(ls -lh /boot/ovmx-distrib.img | awk '{print $5}')"
 

@@ -99,7 +99,20 @@ BOOT_TIMEOUT=300
 SETTLE_SECS="${SETTLE_SECS:-60}"     # see THE WRITEBACK TRAP above
 KERNEL=/boot/vmlinuz
 INITRD=/boot/initramfs-ovmx.cpio.gz
+# The PRE-INSTALLED distribution disk (vms-8ab), mastered at BUILD time. Since
+# PID 1 no longer installs on a blank disk (vms-2f0, operator ruling 2026-08-10
+# "STRIP ALL OF IT"), every case here SEEDS its disk from this image -- a plain
+# byte copy -- instead of truncating a blank one. Boot 1 then boots an already
+# installed system and a real SYSTEM session edits SYS$SYSTEM:SYSUAF.DAT on it,
+# exactly as before; only the way the disk comes to exist changed.
+DISTRIB_IMG=/boot/ovmx-distrib.img
 ARCH=$(uname -m)
+
+if [ ! -f "$DISTRIB_IMG" ]; then
+    echo "FAIL: $DISTRIB_IMG is missing — the mastering stage did not run;"
+    echo "      a stripped PID 1 cannot install a blank disk, so this test needs it."
+    exit 1
+fi
 
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
     QEMU=qemu-system-aarch64
@@ -162,7 +175,7 @@ OTHER_ROWS=(
 )
 
 # ---------------------------------------------------------------------------
-# One case: fresh disk -> install boot -> edit SYSUAF from a SYSTEM session
+# One case: pre-installed disk -> boot -> edit SYSUAF from a SYSTEM session
 #           -> reboot -> the system must come up with an identity.
 # ---------------------------------------------------------------------------
 # $3 = "up" (must boot) or "halt" (must fail-stop with the EXECINIT message).
@@ -184,7 +197,7 @@ run_case() {
     echo "=========================================================="
 
     rm -f "$disk" "$log1" "$log2" "$fifo"
-    truncate -s 64M "$disk"
+    cp "$DISTRIB_IMG" "$disk"
     mkfifo "$fifo"
 
     # shellcheck disable=SC2086
@@ -210,7 +223,7 @@ run_case() {
 
     # --- Boot 1: install ---
     if waitfor 'Username:' 120 "$log1"; then rc=0; else rc=1; fi
-    record "$tag boot 1: install completes and reaches the login prompt" "$rc"
+    record "$tag boot 1: pre-installed disk boots and reaches the login prompt" "$rc"
     if [ "$rc" -ne 0 ]; then
         kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&-
         echo "--- boot 1 log ---"; cat "$log1"
@@ -353,7 +366,7 @@ run_provision_missing_case() {
     echo "=========================================================="
 
     rm -f "$disk" "$log1" "$log2" "$fifo"
-    truncate -s 64M "$disk"
+    cp "$DISTRIB_IMG" "$disk"
     mkfifo "$fifo"
 
     # shellcheck disable=SC2086
@@ -379,7 +392,7 @@ run_provision_missing_case() {
 
     # --- Boot 1: install, then delete the startup image off the disk ---
     if waitfor 'Username:' 120 "$log1"; then rc=0; else rc=1; fi
-    record "$tag boot 1: install completes and reaches the login prompt" "$rc"
+    record "$tag boot 1: pre-installed disk boots and reaches the login prompt" "$rc"
     if [ "$rc" -ne 0 ]; then
         kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&-
         echo "--- boot 1 log ---"; cat "$log1"

@@ -74,7 +74,11 @@ the operation OVMX must reproduce. Grounds §4(m) and §4(n).
 | `af2-firsttimer-established-20260728.pcap` | 51072 | §4(i).B — fresh-identity **first-timer** VX3/1050 joins established VAX1 (STARTs SCA 2558–2563), then **2nd** (20170–20175) and **3rd** (33591–33596) incarnations; grounds the `[22:24]` incarnation counter 1→2→3 and its `[78:80]` HELLO advertisement (vms-af2) |
 | `formation-ci1.pcap` | 18541 | §1 message-class census (Table 2), §4(e) MSCP, large block-transfer frames, §4(h) 0x5b/0x48 scale re-validation (605/622 frames, vms-560), §4(k) the 2 padded-HELLO channel-size-verification frames (idx 5990/7534) — the acked case |
 | `ci3-addmember-20260728.pcap` | 1922 | §4(k) NISCA channel packet-size verification: 25 unacked padded directed HELLOs VAX1→OVMX (1500/1069/853/745B), the retransmit ladder, the stalled-join wall (vms-84f) |
-| `scs-dlm-lockconflict.pcap` | 100 | §4(f) DLM section |
+| `scs-dlm-lockconflict.pcap` | 100 | §4(f) DLM section (mixed-op; superseded for field-decode by the `ac4-*` single-op captures) |
+| `ac4-{MCR,MCW,MPR,MPW2,MEX}.pcap` | ~15 ea | §4(f).1 lock-mode byte — same resource `OVMXAAAA`, mode-only diff CR/CW/PR/PW/EX = 1/2/3/4/5 (`vms-ac4`, lab-2 `vaxlab-10`) |
+| `ac4-RBBBB.pcap` / `ac4-LEN.pcap` | ~15 ea | §4(f).1 resource-name (`OVMXBBBB`) and name-length (`OVMXLONGNAME`, len 0x0c) diffs (`vms-ac4`) |
+| `ac4-LKID2.pcap` / `ac4-MPW.pcap` / `ac4-CVT.pcap` | ~20–40 ea | §4(f).1 requester + master lock-ids (byte-exact vs SDA) and the CONVERT opcode `0x07` (`vms-ac4`) |
+| `ac4-DENY.pcap` | ~20 | §4(f).1 grant-vs-deny status discriminator (NOQUEUE against an EX holder) (`vms-ac4`) |
 | `scs-node-leave.pcap` | 2901 | cross-check only (teardown, not separately decoded here) |
 | `satellite-niscs-boot-solicit.pcap` | 231 | §4(c) SOLICIT |
 | `sda-scs-extract-vax1.txt` | — | decoder ring for all ConID/credit/tunable citations |
@@ -392,7 +396,7 @@ DLM and MSCP sections below.
 | 32 | 32 | SCS sequence-number region: two 16-bit counters, each repeated up to 3×, zero-padded to 32 bits; a constant `0x0012` (=18 decimal) sits at offset 38–39 | the `18` is **GROUNDED**: byte-exact match to SYSGEN `NISCS_LAN_OVRHD 18`. The repeated 16-bit values plausibly correspond to the CSB's "Next seq. number" / "Last seq num rcvd" / "Last ack. seq num" triad documented in SDA `SHOW CLUSTER`, but the specific mapping of which repeat is which CSB field is **inferred**, not independently confirmed. |
 | **64** | **4** | **Remote Connection ID**, LE `uint32` | **GROUNDED**: e.g. bytes `09 00 c5 62` = `0x62C50009`, byte-exact to VAX1's `Local Con. ID` for `VMS$VAXcluster` in the SDA decoder ring, appearing in a frame sent BY VAX2 — i.e. this field is the *destination's* Con.ID as the sender addresses it. |
 | **68** | **4** | **Local Connection ID**, LE `uint32` | **GROUNDED**: the complementary value (e.g. `0x33580008`, VAX2's own Con.ID) — confirmed the pair swaps consistently with send direction (VAX1→VAX2 frames show `remote=0x33580008 (VAX2)`, `local=0x62C50009 (VAX1)`, and vice versa for VAX2→VAX1 frames). This directly matches CDT terminology "Local Con. ID" / "Remote Con. ID" from `SHOW CONNECTIONS`. |
-| 72 | 132 | SYSAP-specific message body | **the transaction envelope is now GROUNDED in §4(j)** (`vms-f85`): a SYSAP-level send-msg#/ack-msg# counter pair, a transaction-id/checksum correlation token, a message-category/flags byte (bit `0x80` = response), and an opcode. The `VMS$VAXcluster` connection-manager add-member dialogue rides here, and the joiner's **VOTES** field is grounded at body-offset 22 (abs 94). The per-opcode DLM/MSCP sub-fields (lock mode, resource-id, status; §4f) remain undecoded. |
+| 72 | 132 | SYSAP-specific message body | **the transaction envelope is now GROUNDED in §4(j)** (`vms-f85`): a SYSAP-level send-msg#/ack-msg# counter pair, a transaction-id/checksum correlation token, a message-category/flags byte (bit `0x80` = response), and an opcode. The `VMS$VAXcluster` connection-manager add-member dialogue rides here, and the joiner's **VOTES** field is grounded at body-offset 22 (abs 94). The per-opcode DLM lock sub-fields (lock mode, resource name/length, requester + master lock-ids, grant/deny status) are now **GROUNDED in §4(f).1** (`vms-ac4`); the MSCP command sub-fields are grounded in §4(n). |
 
 ### 4(e) MSCP disk-serving request/response framing
 
@@ -483,14 +487,59 @@ citation, not a claim about undocumented internal structure):
   `VMS$VAXcluster` SCS connection as the lock traffic, not because it is
   itself a raw `$ENQ`/`$DEQ` wire field).
 
-**What is NOT grounded**: the byte offsets for lock mode (NL/CR/CW/PR/PW/
-EX), resource-ID/lock-ID values, and completion status
-(`SS$_NORMAL`/`SS$_ENQLKOVF`-equivalent) within the 132-byte message body
-following the Con.ID pair. We could not locate a field we could
-confidently map to "lock granted" vs. "lock denied" purely from wire
-diffing — the resource-name strings and burst timing are the only
-grounded correlation to the T1/T2/T3 narrative. This is flagged as an open
-RE gap (see report to PM / follow-on item).
+**Update (`vms-ac4`, 2026-08-10): the DLM SYSAP body IS now byte-grounded.**
+The `scs-dlm-lockconflict.pcap` scenario above mixed many operations and could
+not isolate a single field's meaning (the reason `vms-ac4` was spawned). The
+field map below was pinned instead from **fresh single-operation captures** on a
+lab-2 pod (`vaxlab-10`), driving KNOWN one-at-a-time `$ENQ`/convert/`$DEQ`
+operations at controlled resource names and lock modes and byte-diffing captures
+that differ in exactly one variable. See the new subsection **§4(f).1**.
+
+#### 4(f).1 The DLM lock-request/response body — GROUNDED field map (`vms-ac4`)
+
+**Specimens & method (new lab captures, single-operation, one-variable diffs).**
+On a healthy 2-node cluster (`vaxlab-10`, `CLUSTER_NODES=2`) a NULL-mode holder
+was placed on VAX2 for each test resource (so VAX2 masters the tree and every
+VAX1 request crosses the wire and is granted), then VAX1 issued one lock op per
+capture via a purpose-built MACRO-32 `$ENQ` driver (`DLMENQ`/`DLMCVT`, resource
+name + mode taken from the foreign command line). All DLM traffic rides the
+190-byte `VMS$VAXcluster` VC (§4f above) as **category `0x02`** (request) /
+**`0x82`** (response) frames (§4j envelope). Body offsets are **SYSAP-body-relative**
+(`body[0]` = payload[58] = **abs frame offset 72**; add 72 for the absolute
+offset). Captures live at
+`/data/training/vax/cluster/captures-lab2/vms-ac4/ac4-*.pcap`; the decoder
+`tools/cluster/dlm_body.py --verify <dir>` re-asserts every claim below against
+them.
+
+| body off | abs | Size | Field | Grounding (the one-variable diff that pins it) |
+|---|---|---|---|---|
+| 8 | 80 | 1 | **message category** — `0x02` DLM request, `0x82` response (bit `0x80`) | §4j; reconfirmed on every ac4 frame |
+| 9 | 81 | 1 | **DLM opcode** — **`0x01` = new-lock ENQ request**, **`0x07` = lock CONVERT** | **GROUNDED**: the `0x01`/`0x81` pair carries every fresh `$ENQ`; the convert driver's mode-change step is the only `0x07` frame in `ac4-CVT.pcap` (SCA f13, VAX1→VAX2), paired with a `0x87` reply. *(This grounds the `cat 0x02 op 0x01` request `vms-2d6` flagged as "a DLM request we have never grounded".)* |
+| 20 | 92 | 4 | **requester lock-id / PID** (LE u32) — in an **ENQ request** it holds the requesting **process PID**; in the **grant response** it is the requester's assigned **local lock-id** | **GROUNDED byte-exact vs SDA** in two captures: the `0x81` grant carries the value SDA `SHOW LOCKS` reports as the requester's *process copy* — `ac4-LKID2` → `0x310000AB`, `ac4-MPW` → `0x0D000380`. In the fresh `0x01` request it instead reads the PID form `0x2020021x` (constant `0x2020021c` across all six console-issued captures = the interactive SYSTEM process; a different value under a SPAWNed subprocess). A CONVERT `0x07` request — where the lock already exists — already carries the real local lock-id here (`ac4-CVT` `0x5000038A`). |
+| 24 | 96 | 4 | **master lock-id** (LE u32) — the lock's id on the resource-master node | **GROUNDED byte-exact vs SDA** (the *master copy* id): `ac4-LKID2` → `0x520006AF`, `ac4-MPW` → `0x4A0006AC`, `ac4-CVT` → `0x120004B9`. Present in **both** the request and the response of an established lock (the request references the master's RSB). |
+| 30 | 102 | 1 | **requested lock mode** — `NL=0 CR=1 CW=2 PR=3 PW=4 EX=5` | **GROUNDED by a clean six-value one-variable diff** on the *same* resource `OVMXAAAA`: `ac4-MCR/MCW/MPR/MPW2/MEX` read `body[30] = 01/02/03/04/05` and the NL acquire in `ac4-CVT` reads `00`, byte-for-byte the documented encoding (VAXcluster Principles Table 6-1 p. 6-2 and the numeric map NL=0…EX=5 p. 6-3; identical to `lckdef.h` `LCK$K_*`). The CONVERT `0x07` request carries the **new** mode here (`ac4-CVT` NL→EX reads `05`). Cross-checks against the resource diff: `body[30]` is `04` in **both** `ac4-MPW2` (OVMXAAAA) and `ac4-RBBBB` (OVMXBBBB), i.e. it tracks *mode*, not resource. |
+| 46 | 118 | 1 | constant `0x03` preceding the resource name | observed constant, all ac4 request frames |
+| 47 | 119 | 1 | **resource-name length** (bytes) | **GROUNDED by a length diff**: `0x08` for the 8-byte `OVMXAAAA`/`OVMXBBBB`, `0x0c` for the 12-byte `OVMXLONGNAME` (`ac4-LEN`), `0x16`=22 for the XQP `F11B$aSYSDSK1…` locks seen incidentally in `ac4-CVT`. |
+| 48 | 120 | *len* | **resource name** (ASCII, the `$ENQ` `resnam` string) | **GROUNDED by a resource diff**: same mode PW, `ac4-MPW2` carries `OVMXAAAA` and `ac4-RBBBB` carries `OVMXBBBB` at `body[48]` — the only bytes that change are the name itself (`41→42`), with `body[30]` (mode) unchanged. |
+
+**Completion status — GROUNDED as a grant/deny message-shape discriminator, not
+a literal code.** Byte-diffing a **granted** PW request (`ac4-LKID2`, resource
+held NL) against a **NOQUEUE-denied** PW request (`ac4-DENY`, resource held EX by
+VAX2 → `$ENQ` returns `%X2124`) shows the master's reply distinguishes the two
+outcomes by *shape*, holding the PW request otherwise constant:
+
+- **granted** → the `0x81` reply **assigns** the requester's local lock-id at
+  `body[20]` (the PID placeholder is replaced by a real lock-id, SDA-confirmed)
+  and does **not** echo the resource name;
+- **denied (`SS$_NOTQUEUED`)** → the reply leaves `body[20]` as the request's PID
+  placeholder, clears the mode byte `body[30]` to `0x00`, and **echoes the
+  resource name** back at `body[48]`.
+
+The literal VMS status longword (`SS$_NORMAL`=1 / `SS$_NOTQUEUED`=`%X2124`) does
+**not** appear anywhere in the reply body — `SS$_NORMAL`'s `0x0001` at `body[4:6]`
+is a constant present on grant *and* deny, so it is not the status. The requester
+infers the outcome from the reply shape. The exact denied-reply status encoding
+is left inferred (§5(dlm)).
 
 ### 4(g) Connection-manager membership handshake (VMS$VAXcluster join)
 
@@ -2219,9 +2268,12 @@ inferred.
   not isolated (coordinator CSID = cluster ID confound).
 - **transaction checksum `body[6:8]`** — grounded as a correlation token; its
   derivation is one-way and not recoverable from passive capture.
-- **opcode `0x02`/`0x03`/`0x05`/`0x06` sub-field semantics** beyond the envelope,
-  and the category-`0x04` ack opcode meanings (`0x49`/`0x00`), remain undecoded —
-  they are the same DLM/MSCP body-decode gap flagged in §4d/§4f.
+- **Category-`0x02` DLM lock sub-fields are now GROUNDED in §4(f).1** (`vms-ac4`):
+  opcode `0x01` = ENQ, `0x07` = CONVERT, with the lock-mode / resource-name+length
+  / requester + master lock-id / grant-vs-deny fields pinned by single-op
+  captures. The remaining undecoded items are the **category-`0x01` opcode
+  `0x03`/`0x05`/`0x06`** membership/rebuild sub-field semantics beyond the
+  envelope, and the category-`0x04` ack opcode meanings (`0x49`/`0x00`).
 
 **What `vms-224` needs to drive OVMX to MEMBER (byte-level).** After the `0x4b`
 connect binds `VMS$VAXcluster`, OVMX must, on the 190-byte VC: (1) send
@@ -4488,6 +4540,25 @@ proactive burst, `SCSD-I-CMCONFIG2`).
 
 For visibility, every field NOT marked GROUNDED above:
 
+- **§5(dlm) — DLM body: what §4(f).1 does NOT ground (`vms-ac4`).** The
+  category-`0x02` lock request/response fields (mode, resource name/length,
+  requester + master lock-ids, opcodes `0x01`/`0x07`) ARE grounded. Still open:
+  (1) the **literal denied-reply status encoding** — the grant/deny outcome is
+  grounded as a message-*shape* discriminator, but the byte(s) (if any) that
+  encode `SS$_NOTQUEUED` vs a queued-then-blocked vs a deadlock (`SS$_DEADLOCK`)
+  reply were not isolated; only NL-holder grants and one EX-holder NOQUEUE denial
+  were captured. (2) The **lock value block** (16-byte `LKSB` VALBLK) round-trip —
+  not exercised (driver requested no VALBLK). (3) The **`$DEQ` release** frame —
+  present in the enqueue+deq captures but not separately byte-diffed for its own
+  field map. (4) The **category-`0x01` opcode `0x05` lock/resource-database
+  rebuild** body (fires only on a state transition; the envelope is grounded in
+  §4j/§4o but the per-lock rebuild payload needs a join/leave event and a
+  whole-database diff, not a single-op diff). (5) `body[10:20]` and `body[28:30]`
+  between the envelope and the lock-mode byte carry small per-request values
+  (e.g. `body[28:30]` reads `0x0100` in requests) not individually pinned. The
+  requester + master lock-ids are grounded against the SDA decoder ring, the
+  strongest available oracle; the checksum derivation (`body[6:8]`) remains
+  one-way (§4j).
 - **QUORUM/CEVOTES DYNAMICS ARE DOCUMENTED, NOT WIRE-GROUNDED (`vms-7a9`,
   `vms-41d`, `vms-2d6`).** The per-node **VOTES** field IS grounded on the wire
   (§4j, VC `body[22:24]`, LE u16, across four vote configurations) and OVMX both

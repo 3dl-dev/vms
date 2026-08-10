@@ -437,3 +437,24 @@ set_tests_properties(product_install_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 900)
+
+# ---------------------------------------------------------------------------
+# install -> UPGRADE -> boot (vms-f05, epic vms-a84 RELEASE ENGINEERING).
+#
+# Cuts two real tools/cut-release.sh bundles (a BASELINE and an UPGRADE,
+# different OVMX_PRODUCT_VERSION), PRODUCT INSTALLs the baseline onto a
+# blank volume, writes real user state + a site customization, PRODUCT
+# INSTALLs the upgrade over the SAME volume, and asserts the user state
+# and site customization survive, the version advanced, and the machine
+# still boots. Requires the two bundles to be prebuilt -- see
+# run_upgrade_e2e.sh's header for the local reproduction recipe and
+# .github/workflows/ci.yml's upgrade-e2e job for how CI produces them.
+# Same opt-in convention as product_install_e2e above, for the same reason.
+add_test(
+    NAME upgrade_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_upgrade_e2e.sh
+)
+set_tests_properties(upgrade_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 900)

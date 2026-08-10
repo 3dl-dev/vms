@@ -922,6 +922,10 @@ struct peer_state {
     int      joiner_cm_sent;       /* we sent the add-member burst on our own connection */
     long     joiner_cm_ms;         /* monotonic_ms() when that burst went out */
     int      joiner_cfg2_sent;     /* vms-760: the DEFERRED op 0x02 config/topology went out */
+    int      rejoin_credit_first_sent; /* vms-46f: OVMX's op-6 special-credit request rode the
+                                    * coordinator's SCS$DIRECTORY connection AHEAD of op 0x02
+                                    * (spec 4(O.17), Davis pp. 2-43/2-44). Gates the deferred
+                                    * op 0x02 on a rejoin so op-6 provably precedes it. */
     uint16_t sysap_acked;          /* vms-760: highest peer send-msg# we have cat-0x04 acked */
     long     cm_acks;              /* cat-0x04 acks emitted to this peer */
     long     cm_last_ack_ms;       /* monotonic_ms() of our last cat-0x04 ack */
@@ -1790,6 +1794,33 @@ static int cm_rejoin_lean_vc(void)
         return 0;
     }
     const char *off = getenv("OVMX_REJOIN_LEAN_VC");
+    if (off != NULL && off[0] == '0' && off[1] == '\0') {
+        return 0;
+    }
+    return 1;
+}
+
+/*
+ * rejoin_credit_first_enabled - vms-46f (spec 4(O.17)): THE root-cause fix for
+ * the rejoin stall. On a rejoin the coordinator returns cm_responses=0 because
+ * it is SEND-CREDIT-STARVED (Davis pp. 2-43/2-45): OVMX never returns Pending
+ * Receive Credit to it, so its Send Credit to OVMX is never replenished and it
+ * cannot transmit its op 0x04 reciprocation (Credit Wait). The SUCCESS oracle
+ * INITIATES its own op-6 special-credit request on the coordinator's
+ * SCS$DIRECTORY connection BEFORE op 0x02 (f1261 ss=13, THEN op 0x02 f1297
+ * ss=14); OVMX deferred its op-6 to ss=14/15 -- too late. This switch makes
+ * OVMX send the op-6 credit round AHEAD of the deferred op 0x02 on a rejoin.
+ *
+ * Kill-switch OVMX_REJOIN_CREDIT_FIRST=0 restores the pre-fix order (op 0x02
+ * first, credit-starved coordinator). Gated on cm_rejoin_target_mode() so it
+ * fires only on a detected rejoin; the first-join burst is unchanged.
+ */
+static int rejoin_credit_first_enabled(void)
+{
+    if (!cm_rejoin_target_mode()) {
+        return 0;
+    }
+    const char *off = getenv("OVMX_REJOIN_CREDIT_FIRST");
     if (off != NULL && off[0] == '0' && off[1] == '\0') {
         return 0;
     }
@@ -3180,6 +3211,17 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *     scs_reflect_credit()    the op8->op9 / op6->op7 credit handshake reply
  *     scs_send_disconnect_self() self-directed teardown, hand-built frame
  *
+ *   CHOKED, and new in vms-46f: the REJOIN CREDIT-FIRST emitter.
+ *     scs_send_rejoin_credit_op6() OVMX's op-6 special-credit request on the
+ *                                  coordinator's SCS$DIRECTORY connection,
+ *                                  emitted AHEAD of the deferred op 0x02 on a
+ *                                  rejoin so the coordinator's Send Credit is
+ *                                  replenished (spec 4(O.17), Davis pp.
+ *                                  2-43/2-44). The frame is OVMX's own grounded
+ *                                  76-byte op-6 (scs_dir_disc_tmpl); it is a
+ *                                  sequenced SCS message on the OPEN directory
+ *                                  circuit, choked like the sixteen above.
+ *
  *   SIXTEEN, NOT SEVENTEEN (vms-096). scs_send_disconnect() was listed here and
  *   is DELETED: its only call site was a `cm_op == 6` block nested inside
  *   `cm_op == 8`, so it was unreachable and no build of this branch ever emitted
@@ -3938,8 +3980,16 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
      * The unconditional send is what an established VAX1 answers with a bare
      * cat-0x04 instead of entering reconfiguration. The `pure` guard and the
      * deferred retry are therefore kept; the closure's version is dropped
-     * DELIBERATELY, not lost. Send now goes through the choke point. */
-    if (!pure) {
+     * DELIBERATELY, not lost. Send now goes through the choke point.
+     *
+     * vms-46f (spec 4(O.17)): on the REJOIN credit-first path the config MUST
+     * also be deferred here so it does not ride AHEAD of the op-6 special-credit
+     * request. The SUCCESS oracle's order is model(ss10), params(ss11),
+     * op7(ss12), op6(ss13), op02(ss14) -- model+params precede op-6, but the
+     * config (op02) follows it. Emitting the config in this burst would put an
+     * op 0x02 ahead of op-6 (still credit-starved). It rides via the deferred
+     * SCSD-I-CMCONFIG2 path, which the fix gates behind the op-6 latch. */
+    if (!pure && !rejoin_credit_first_enabled()) {
         mp.recv_ack = ps->vc.seq.recv_seq;
         mp.send_seq = scs_seq_advance(&ps->vc.seq);
         mp.sysap_send_msg = ps->sysap_send++;
@@ -6067,6 +6117,65 @@ static int scs_send_disconnect_self(int sock, int ifindex, struct peer_state *ps
     d[56] = (uint8_t)inner_len; d[57] = (uint8_t)(inner_len >> 8);
 
     return send_frame_vc(sock, ifindex, ps, ps->pb, "CM self-disconnect (hand-built)", d, sizeof(d)) > 0;
+}
+
+/* vms-46f (spec 4(O.17)): INITIATE OVMX's own op-6 special-credit request on the
+ * coordinator's SCS$DIRECTORY connection during a REJOIN, ahead of the deferred
+ * op 0x02.
+ *
+ * WHY. On a rejoin the coordinator is SEND-CREDIT-STARVED (Davis pp. 2-43/2-45):
+ * OVMX never returns Pending Receive Credit, so the coordinator's Send Credit to
+ * OVMX is never replenished and it cannot transmit its op 0x04 reciprocation
+ * (Credit Wait) -- cm_responses=0, XITDONE=0. The SUCCESS oracle sends its op-6
+ * (f1261, ss=13) BEFORE op 0x02 (f1297, ss=14); OVMX deferred its op-6 to
+ * ss=14/15. This function emits that op-6 up front so the ordering matches.
+ *
+ * THE FRAME is byte-for-byte OVMX's own grounded op-6 on the SCS$DIRECTORY
+ * connection (scs_dir_disc_tmpl, observed on our own wire at d94-Q1A;
+ * Rule 8 -- not derived from any VSI/HPE source). The op field at abs[60] is 6.
+ * The Pending Receive Credit that this exchange returns is banked separately by
+ * the caller (scs_credit_release_buffer on the directory CDT) so the following
+ * op 0x02 (a 190-byte MTYPE-10, a credit class) piggybacks it at abs[48:50] --
+ * the mechanism the coordinator needs to recover Send Credit. Whether that ALONE
+ * completes readmission is what the live bracket answers (spec 4(O.17)). */
+static int scs_send_rejoin_credit_op6(int sock, int ifindex, struct peer_state *ps,
+                                      const uint8_t our_hw_mac[6],
+                                      const uint8_t our_src_logical[6])
+{
+    uint8_t d[76];
+    memcpy(d, scs_dir_disc_tmpl, sizeof(d));
+    memcpy(d + 0, ps_port_addr(ps), 6);
+    memcpy(d + 6, our_hw_mac, 6);
+    memcpy(d + 14 + 2, ps_sys_addr(ps), 6);
+    memcpy(d + 14 + 10, our_src_logical, 6);
+
+    uint16_t rseq = ps->vc.seq.recv_seq;
+    uint16_t sseq = scs_seq_advance(&ps->vc.seq);
+    d[32] = (uint8_t)rseq; d[33] = (uint8_t)(rseq >> 8);
+    d[40] = (uint8_t)rseq; d[41] = (uint8_t)(rseq >> 8);
+    d[48] = (uint8_t)rseq; d[49] = (uint8_t)(rseq >> 8);
+    d[34] = (uint8_t)sseq; d[35] = (uint8_t)(sseq >> 8);
+    d[44] = (uint8_t)sseq; d[45] = (uint8_t)(sseq >> 8);
+
+    /* Con.ID pair: remote = the coordinator's handle on OUR server dir
+     * connection, local = ours (the same 0x0C640007/0x8DE4000D pair the freeze
+     * forensic named, spec 4(O.17)). */
+    uint32_t rc = ps->dir_remote_conid;
+    uint32_t lc = (uint32_t)PS_SCS_DIR_CONID(ps);
+    d[64] = (uint8_t)rc;  d[65] = (uint8_t)(rc >> 8);
+    d[66] = (uint8_t)(rc >> 16); d[67] = (uint8_t)(rc >> 24);
+    d[68] = (uint8_t)lc;  d[69] = (uint8_t)(lc >> 8);
+    d[70] = (uint8_t)(lc >> 16); d[71] = (uint8_t)(lc >> 24);
+
+    /* DERIVE the length words -- never inherit (the vms-760 stall rule). */
+    uint16_t sca_len = (uint16_t)(sizeof(d) - 14 - 2); /* 60 */
+    uint16_t inner_len = (uint16_t)(sizeof(d) - 58);   /* 18 */
+    d[14] = (uint8_t)sca_len;   d[15] = (uint8_t)(sca_len >> 8);
+    d[56] = (uint8_t)inner_len; d[57] = (uint8_t)(inner_len >> 8);
+
+    return send_frame_vc(sock, ifindex, ps, ps->pb,
+                         "rejoin op-6 special-credit request (spec 4(O.17))",
+                         d, sizeof(d)) > 0;
 }
 
 /* scs_send_disconnect() STOOD HERE AND IS DELETED (vms-096).
@@ -8304,17 +8413,61 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             (monotonic_ms() - cfg_settle_ms) < (long)JOIN_CFG2_MAX_WAIT_MS) {
             cfg_settle_ms = monotonic_ms(); /* hold the timer open */
         }
+        /* vms-46f (spec 4(O.17)): THE root-cause fix. Before the deferred op 0x02
+         * rides the wire on a REJOIN, INITIATE OVMX's op-6 special-credit request
+         * on the coordinator's SCS$DIRECTORY connection and RETURN Pending Receive
+         * Credit -- mirroring the SUCCESS oracle's f1261(ss=13) op-6 ahead of
+         * f1297(ss=14) op 0x02. Without this the coordinator stays SEND-CREDIT
+         * STARVED (Davis pp. 2-43/2-45), cannot transmit its op 0x04 reciprocation
+         * (Credit Wait), and returns cm_responses=0 / XITDONE=0. The op 0x02 gate
+         * below additionally REQUIRES this latch on the fix path, so op-6 provably
+         * precedes op 0x02. Kill-switch OVMX_REJOIN_CREDIT_FIRST=0 restores the
+         * pre-fix order. Requires the coordinator to have opened its SCS$DIRECTORY
+         * connection (dir_remote_conid learned) -- grounded present on a rejoin
+         * (spec 4(O.17): OVMX f60 op=9 on 0x0C640007/0x8DE4000D). */
+        if (rejoin_credit_first_enabled() && rx->do_connect &&
+            !ps->appeared_after_join && ps->cfg_sent &&
+            !ps->joiner_cfg2_sent && !ps->rejoin_credit_first_sent &&
+            ps->dir_remote_conid != 0) {
+            /* p. 2-43/2-44: hand the received directory buffer back as Pending
+             * Receive Credit, then return it on the wire ahead of op 0x02 so the
+             * 190-byte op 0x02 (a credit class) piggybacks it at abs[48:50]. */
+            if (ps->cdt_dir != NULL) {
+                (void)scs_credit_release_buffer(ps->cdt_dir);
+            }
+            if (scs_send_rejoin_credit_op6(rx->sock, (int)rx->ifindex, ps,
+                                           rx->our_hw_mac, rx->our_src_logical)) {
+                ps->rejoin_credit_first_sent = 1;
+                rx->cm_config_frames++;
+                log_ts(stdout);
+                printf(" SCSD-I-CREDITFIRST, REJOIN: initiated op-6 special-credit"
+                       " request on the coordinator's SCS$DIRECTORY connection"
+                       " (local=0x%08X remote=0x%08X) BEFORE op 0x02 -- returns"
+                       " Pending Receive Credit so the coordinator can send its"
+                       " op 0x04 reciprocation (spec 4(O.17), Davis pp. 2-43/2-44)\n",
+                       (unsigned)PS_SCS_DIR_CONID(ps),
+                       (unsigned)ps->dir_remote_conid);
+                fflush(stdout);
+            }
+        }
+
         /* vms-e81: op 0x02 is the JOINER's add-member request. A member never
          * sends one -- in neither pure-VMS control does VAX1 or VAX2 ever send
          * op 0x02 to the newcomer. We were sending it to a node that was not
          * yet a member: an established member asking a newcomer to admit IT.
          * Together with the joiner-form op 0x01 that told the newcomer twice,
          * by two mechanisms, that we were trying to join. */
+        /* vms-46f: on the fix path (rejoin + kill-switch on), HOLD op 0x02 until
+         * the op-6 credit round has ridden the wire -- this is what makes op-6
+         * provably precede op 0x02 (spec 4(O.17)). Off the fix path the extra
+         * clause is a no-op, so the first-join and kill-switch orders are
+         * unchanged. */
         if (rx->do_connect && !ps->appeared_after_join &&
             ps->cfg_sent && !ps->joiner_cfg2_sent &&
             (getenv("OVMX_CFG2_ALL") != NULL ||
              cm_pick_coordinator(rx->peers) == ps) &&
-            (monotonic_ms() - cfg_settle_ms) >= (long)JOIN_CFG2_DELAY_MS) {
+            (monotonic_ms() - cfg_settle_ms) >= (long)JOIN_CFG2_DELAY_MS &&
+            (!rejoin_credit_first_enabled() || ps->rejoin_credit_first_sent)) {
             struct scs_member_params mp;
             memset(&mp, 0, sizeof(mp));
             memcpy(mp.dst_mac, ps_port_addr(ps), 6);
@@ -8474,6 +8627,8 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
              * it is the peer tearing the session down, so drop the honest fact. */
             ps->vaxcluster_open_reached = 0;
             ps->cm_config_sent = 0; ps->cfg_sent = 0;
+            ps->rejoin_credit_first_sent = 0; /* vms-46f: re-run the op-6 credit round
+                                               * when the VC re-forms (spec 4(O.17)) */
             ps->join_step = JS_IDLE; ps->js_retx = 0;
             ps->greet_due_ms = 0;
             /* vms-578: re-arm the vms-4071 formation state machine too.

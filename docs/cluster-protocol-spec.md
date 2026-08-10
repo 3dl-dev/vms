@@ -4977,6 +4977,139 @@ is NOT, and those two are the isolated candidates. (3) The op 0x02 body is uncha
 `cm_lean_vc_suppress_peer`, the two own-dir initiation gates); measurement
 `tools/cluster/dissect_sca.py` + `send_seq` at abs `[34:36]`.
 
+#### 4(O.17) The coordinator returns `cm_responses=0` because it is SEND-CREDIT-STARVED, not because op 0x02 is malformed or mis-sequenced: OVMX never returns Pending Receive Credit to the coordinator — the SUCCESS-oracle rejoiner INITIATES its own op-6 special-credit request on the `SCS$DIRECTORY` connection BEFORE op 0x02, and OVMX defers its op-6 until AFTER op 0x02 (too late) — so the coordinator's Send Credit to OVMX is never replenished, it cannot transmit its op 0x04 reciprocation (SCS Credit Wait, Davis pp. 2-43/2-45), and the readmission stalls. The late STRAY cat-0x04 ack (§4(O.16) lead 1) is REFUTED as causal; the op-5 directory-frame (lead 2) is REFINED to the op-6/op-8 special-credit exchange on that connection (GROUNDED, SUCCESS oracle + live lab-2 `d94-RfixCFG2` freeze-point forensic + *VAXcluster Principles* pp. 2-43/2-44/2-45 & 7-37/7-38, `vms-96f`, 2026-08-10)
+
+**Frame.** §4(O.16) delivered op 0x02 to the coordinator LEAN (`ss=12`) and IN-ORDER
+and found readmission still incomplete (`cm_responses=0`, no op 0x04), naming two
+isolated leads independent of `send_seq`: (1) a late STRAY `cat-0x04` ack of op 0x01
+`msg#2` at ~9.8 s; (2) the op-5 `SCS$DIRECTORY` directory-frame question. This
+subsection reads the fix-arm capture frame-by-frame against the SUCCESS oracle,
+REFUTES lead 1, REFINES lead 2, and — following the operator's structural steer to
+map OVMX against the documented protocol rather than byte-diff in isolation —
+identifies the FUNDAMENTALLY MISSING protocol step as SCS **Send Credit** flow
+control (Davis ch. 2), one layer BENEATH the connection-manager JOIN protocol.
+
+**The coordinator's virtual circuit freezes at OVMX `send_seq=8`; op 0x02 (`ss=12`)
+is NEVER delivered (GROUNDED, `d94-RfixCFG2.pcap`, OVMX `6a:85:cb:48:e0:62` →
+coordinator VAX2 `08:00:2b:8e:b7:85`; VC `recv_ack` at abs `[32:34]`).** The
+coordinator's cumulative `recv_ack` toward OVMX advances `…6,7,8` and then FREEZES at
+**8** for the whole run (last-advanced `f61`; still 8 at the teardown retransmits
+`f146`/`f174`, which are `0x7b` retransmits of the coordinator's own `ss=11` params).
+OVMX's op 0x02 rides `f178 ss=12` (190-byte `cat 0x01 op 0x02` on the member-initiated
+`VMS$VAXcluster` VC `local=0x0C640001`/`remote=0x8D1B000C`) — four messages behind the
+frozen point — so the coordinator's connection manager never receives the readmission
+request, never proposes addition, sends no op 0x04, and tears the VCs down
+(`cm_responses=0`, `XITDONE=0`). The coordinator's own console confirms it: across ALL
+FOUR rejoin runs on this pod VAX2 logs only `lost connection to node OVMX90`, and NEVER
+`received VAXcluster membership request` / `proposed addition of node OVMX90` — the two
+lines it DID log for the first-join at `19:19:55` (`vaxlab-0/logs/vax2.log`). The
+readmission request is dropped BELOW the CM layer.
+
+**Lead 1 (the STRAY `cat-0x04` ack) is REFUTED as causal.** `SCSD-W-STRAYACK` fires at
+`20:20:14.489`, naming `msg#2` 9795 ms stale — ~3 s AFTER op 0x02 went out
+(`SCSD-I-CMCONFIG2` `20:20:11.492`) and it rides `ss≥14` (`f834`/`f835`), DOWNSTREAM of
+the `ss=8` freeze. A frame emitted after, and behind, the freeze cannot be the cause of
+a freeze that already happened. The stray ack is a symptom of the same silence (OVMX
+still holds `sysap_recv=2` because the coordinator went quiet), not its cause.
+
+**The freeze frame is OVMX's `ss=9` = the op-9 special-credit RESPONSE, on the
+coordinator-opened `SCS$DIRECTORY` connection — not an op-5 CONFIRM5 (GROUNDED, op field
+at abs `[60:62]`).** On that connection (OVMX `local=0x0C640007`/coordinator
+`remote=0x8DE4000D`) the coordinator sends `f59 op=8` (the p. 2-44 special credit
+message, `ss=8`) and OVMX answers `f60 op=9` (`ss=9`, `scs_reflect_credit`). A byte diff
+of OVMX's op-9 (`f60`) against the oracle's ACCEPTED op-9 (`f1255`) shows the frame is
+byte-faithful: every difference is either a correctly-patched sequence counter or a
+field echoed from the respective op-8 request (the credit byte at `[48:50]` is 2 vs 1
+because OVMX's inbound op-8 carried 2 where the oracle's carried 1). The stream SHAPE is
+identical to the oracle through `ss=9` (`op 1,2,10,10,10,10,1,2,9`). So the freeze is
+NEITHER the op-9 payload NOR the op-5 frame content (§4(O.15) already showed the op-5
+CONFIRM5 is byte-identical to an acked oracle frame).
+
+**ROOT (GROUNDED, oracle contrast + Davis pp. 2-43/2-44/2-45) — OVMX never returns
+Pending Receive Credit, so the coordinator runs out of Send Credit and cannot
+reciprocate.** SCA gives the message service a debit/credit flow control (p. 2-43): the
+receiving SYSAP extends N *Send Credits* (its receive-buffer count) to the sender; the
+sender must hold ≥ 1 Send Credit to transmit an application (MTYPE-10) message, and with
+none it enters **Credit Wait** — the operation is SUSPENDED, the frame is NOT sent
+(p. 2-45). Credit is replenished by the header piggyback and, when one direction is
+quiet, by a **special credit message** carrying the *Pending Receive Credit* count
+(p. 2-44). The SUCCESS oracle runs this bidirectionally on the `SCS$DIRECTORY` VC before
+op 0x02, and the coordinator's `recv_ack` advances in lock-step with it:
+
+| oracle frame | dir | op | `ss` | VAX2 `recv_ack` |
+|---|---|---|---|---|
+| f1251 | VAX2→VAX3 | 8 (special-credit msg) | 8 | 8 |
+| f1255 | VAX3→VAX2 | 9 (response) | 9 | — |
+| **f1261** | **VAX3→VAX2** | **6 (special-credit REQUEST)** | **13** | — |
+| f1262 | VAX2→VAX3 | 7 (response) | 13 | **13** |
+| f1297 | VAX3→VAX2 | op 0x02 config | 14 | — |
+| f1299 | VAX2→VAX3 | op 0x04 reciprocation | 15 | **14** |
+
+The rejoiner VAX3 **INITIATES its own op-6 special-credit request (`f1261`, `ss=13`)
+BEFORE op 0x02 (`f1297`, `ss=14`)**, returning Pending Receive Credit to the coordinator;
+only then does VAX2's `recv_ack` climb `8→11→13→14`, deliver op 0x02, and reciprocate
+op 0x04 (`f1299`, itself a 190-byte MTYPE-10 that piggybacks 3 credits at `[48:50]`).
+OVMX does the OPPOSITE ORDER: it sends op 0x02 at `ss=12` and defers its op-6 to
+`ss=14/15` (`f834`/`f835`) — AFTER op 0x02 and after the freeze. OVMX's exit summary
+proves the starvation directly: `CREDIT: … starved=10 … grants=0 grant-units=0` — it
+transmitted 10 application frames with no Send Credit (p. 2-45 violated) and banked ZERO
+credit grants. The coordinator, its Send Credit to OVMX consumed by its own model+params
+and never replenished, cannot transmit its op 0x04 reciprocation (an MTYPE-10 message
+needs a Send Credit, p. 2-43) — it is in Credit Wait, can only retransmit its params, and
+finally tears the VC down. This is why `cm_responses=0`: not a rejected op 0x02, a
+credit-starved coordinator that cannot answer one.
+
+**Why this was invisible until now.** `scs_credit.c` DELIBERATELY leaves the special
+credit message alone — its census called the op-8/op-9 credit byte "an unnamed constant"
+and declined to bank it (guard against a wire claim with no observation); and `scsd.c`
+(the `scs_reflect_credit` block, ~line 5870) records that OVMX ANSWERS op-6/op-8 but
+that INITIATING one "is REQUIRED, is NOT implemented here." Davis p. 2-44 now GROUNDS the
+identification (the special credit message and its Pending-Receive-Credit payload are
+documented), and the oracle GROUNDS the requirement (a completing rejoin sends op-6
+before op 0x02). The "unnamed constant" caveat is thereby upgraded: MTYPE 8/6 is the
+p. 2-44 special credit message, and OVMX's non-initiation of it is the rejoin blocker.
+
+**What the fix increment must do (`vms-694` child).** On a rejoin, OVMX must run the
+rejoiner's half of SCS Send Credit flow control on the coordinator's `SCS$DIRECTORY`
+connection BEFORE it sends op 0x02: INITIATE an op-6 special-credit request returning its
+Pending Receive Credit (as the oracle does at `f1261 ss=13`), and honor Credit Wait
+rather than transmitting the CM readmission starved. Concretely the deferred op 0x02 send
+must be ORDERED after the op-6/op-7 credit round on that connection, mirroring the
+oracle's `…op9(9), model(10), params(11), op7(12), op6(13), op02(14)`. This is
+wire-visible (a new op-6 appears before op 0x02) → it ships an env kill-switch, a
+fail-pre/pass-post frame test asserting op-6 precedes op 0x02 on the rejoin stream, and a
+live rejoin bracket flipping `XITDONE` 0→1. Whether the credit return ALONE completes
+readmission, or the coordinator then also needs the JOIN Phase-1 connectivity handshake
+(pp. 7-38/7-39, the Rule of Total Connectivity dialogue) it currently never reaches, is a
+question the bracket answers once the credit starvation is removed as a confound — the
+same necessary-vs-sufficient discipline §4(O.12)/§4(O.16) applied to their fixes.
+
+**Non-claims.** (1) The op-9 frame content is byte-faithful and is NOT the blocker
+(byte diff `f60` vs `f1255`). (2) The op 0x02 body is unchanged (§4(O.10)); this is a
+credit/ordering gap, not a payload gap. (3) This subsection ships NO wire change — it is
+a freeze-point forensic + oracle contrast + book grounding, so (like §4(O.14)/§4(O.15))
+it carries no kill-switch or frame test; those belong to the fix increment. (4) The
+special-credit op-numbering (6 request / 7 response / 8 message / 9 response) is read from
+the shared MTYPE namespace `{0..10}` (`scs_env.h`, §4(h)(1a)); p. 2-44 names the
+mechanism, not the on-wire opcodes, which remain observation-grounded.
+
+**Evidence** (host, tank volume): SUCCESS oracle
+`/data/training/vax/cluster/captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`
+(VAX3→VAX2 credit rounds `f1251`/`f1255`/`f1259`-`f1262`, rejoiner op-6 `f1261 ss=13`
+BEFORE op 0x02 `f1297 ss=14`, reciprocation `f1299`; VAX2 `recv_ack` `8→11→13→14`);
+live fix-arm `/data/training/vax/k8s-labs/vaxlab-0/logs/d94-RfixCFG2.pcap` (coordinator
+`recv_ack` frozen at 8; freeze frame OVMX `f60 op=9 ss=9` on `SCS$DIRECTORY`
+`0x0C640007`/`0x8DE4000D`; op 0x02 `f178 ss=12`; OVMX op-6 not until `f834`/`f835`
+`ss=14/15`) and `scsd-RfixCFG2.log` (`CREDIT: … starved=10 … grants=0`, `STRAYACK …
+9795 ms`, `cm_responses=0`, `XITDONE=0`) and `vax2.log` (no `received … membership
+request` on any rejoin); *VAXcluster Principles* (Davis 1993, HOST-ONLY, cited by page,
+never committed) pp. 2-43 (Send Credit), 2-44 (special credit message / Pending Receive
+Credit), 2-45 (Credit Wait), 7-37/7-38 (JOIN request + coordinator quorum tests); code
+`src/vmsscs/scs_credit.c` (the MTYPE-8/9 "left alone" census; `scs_credit_grant_from_peer`)
+and `src/vmsscs/scsd.c` (`scs_reflect_credit` "initiate … NOT implemented", the credit
+accounting counters, `SCSD-W-STRAYACK`); measurement `tools/cluster/dissect_sca.py`
+(op field abs `[60:62]`, `recv_ack` abs `[32:34]`, `send_seq` abs `[34:36]`).
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

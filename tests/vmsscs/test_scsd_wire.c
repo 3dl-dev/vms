@@ -3327,6 +3327,164 @@ static void test_rejoin_op02_is_contiguous_sysap_msg3_not_shifted_by_a_stray_ack
 
 
 /* ==========================================================================
+ * vms-9af -- ON A REJOIN, KEEP THE COORDINATOR'S VC LEAN: OVMX'S OWN
+ * SCS$DIRECTORY + MSCP$DISK CLIENT HALF IS SUPPRESSED TO THE COORDINATOR SO
+ * op 0x02 RIDES AT A LOW send_seq INSTEAD OF BEHIND THE MEMBER'S recv_ack CEILING.
+ *
+ * GROUNDED, spec sec 4(O.15) (vms-e15, SUCCESS oracle + live lab-2 bracket).
+ * send_seq is per-VC (sec 4(O.14)); every connection OVMX multiplexes onto the
+ * coordinator shares that VC's one send_seq. On the stalling rejoin OVMX opened
+ * its OWN SCS$DIRECTORY client (own-dir connect + confirm + three lookups) and
+ * OWN MSCP$DISK client (connect) to the coordinator, so ~6 (live: ~19, with the
+ * member-opened dir interleaved and retransmits) of its own frames rode the
+ * coordinator's VC AHEAD of op 0x02 -- pushing op 0x02 to ss=21, behind the
+ * member's recv_ack ceiling of 19, where it was never delivered (XITDONE=0). The
+ * SUCCESS oracle keeps that VC lean (its own dir/MSCP go to a NON-coordinator,
+ * sec 4(O.11)) so op 0x02 reaches the coordinator at ss=14, under the ceiling.
+ *
+ * WHAT IS DRIVEN, AND BY WHOM. The peer_states are built by the production
+ * receive path (peer_find_or_add / ps_learn_sys_addr / scs_pb_open via
+ * open_circuit_to). The suppress DECISION is the production gate
+ * cm_lean_vc_suppress_peer(); the coordinator IDENTITY is the production
+ * cm_peer_is_coordinator() (highest node number, cm_pick_coordinator's rule).
+ * When NOT suppressed, the client half is the daemon's OWN senders
+ * (send_own_dir_connect_request / _confirm / send_own_dir_lookup /
+ * send_mscp_connect_request), called in the daemon's own order -- each advancing
+ * the coordinator's ps->vc.seq exactly as it does live. The op 0x02 send_seq is
+ * read from the production scs_seq_advance(&coord->vc.seq). Nothing re-implements
+ * the sequence numbering.
+ *
+ * ARM A (fix active) -> the client half is SUPPRESSED to the coordinator, so
+ *        op 0x02 rides at the lean baseline (ss=1 on a fresh VC).
+ * ARM B (OVMX_REJOIN_LEAN_VC=0, the matched kill-switch control = pre-fix
+ *        behaviour) -> the client half rides the coordinator's VC, so op 0x02 is
+ *        pushed CLIENT_HALF_FRAMES higher -- the sec 4(O.15) stranding shape.
+ * This is what makes ARM A a fail-pre/pass-post result, not an unfalsifiable
+ * assertion.
+ * ========================================================================== */
+
+/* The coordinator is a DISTINCT peer from the non-coordinator, with a HIGHER
+ * DECnet node number (peer_node_number = sys_addr[4] | sys_addr[5]<<8). */
+static const uint8_t noncoord_hw[6]      = {0xaa, 0x00, 0x04, 0x00, 0x01, 0x04};
+static const uint8_t noncoord_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x01, 0x04}; /* nn 0x0401 */
+static const uint8_t coord_hw[6]         = {0x08, 0x00, 0x2b, 0x0c, 0x0c, 0x0c};
+static const uint8_t coord_logical[6]    = {0xaa, 0x00, 0x04, 0x00, 0x02, 0x04}; /* nn 0x0402 -> coordinator */
+
+#define VMS9AF_CLIENT_HALF_FRAMES 6u
+
+/* Drive the coordinator's VC through a rejoin the way the daemon does, and return
+ * the send_seq the deferred op 0x02 would consume. lean_off flips the kill-switch
+ * (pre-fix). *base_out receives the fresh VC's baseline send_seq. */
+static uint16_t rejoin_coord_op02_send_seq(int lean_off, uint16_t *base_out)
+{
+    struct rxworld r;
+    rxworld_init(&r, our_hw_mac, our_logical);
+    struct peer_state *noncoord = open_circuit_to(&r, noncoord_hw, noncoord_logical);
+    struct peer_state *coord    = open_circuit_to(&r, coord_hw, coord_logical);
+    if (noncoord == NULL || coord == NULL) {
+        return 0;
+    }
+
+    setenv("OVMX_JOIN_SEQ", "1", 1);
+    ovmx_prior.valid = 1;              /* PRIORCLU: this is a rejoin */
+    unsetenv("OVMX_REJOIN_TARGET");    /* rejoin-target topology on */
+    unsetenv("OVMX_CFG2_PEER");        /* use the highest-node-number coordinator rule */
+    if (lean_off) {
+        setenv("OVMX_REJOIN_LEAN_VC", "0", 1); /* kill-switch = pre-fix */
+    } else {
+        unsetenv("OVMX_REJOIN_LEAN_VC");
+    }
+
+    if (base_out != NULL) {
+        *base_out = coord->vc.seq.send_seq;
+    }
+
+    /* The single production gate decides whether ANY of OVMX's own dir/MSCP
+     * client traffic rides the coordinator's VC. When it does, these production
+     * senders -- in the daemon's own order -- are what consume the send_seq. */
+    if (!cm_lean_vc_suppress_peer(r.rx.peers, coord)) {
+        send_own_dir_connect_request(r.rx.sock, (int)r.rx.ifindex, coord,
+                                     r.rx.our_hw_mac, r.rx.our_src_logical);
+        send_own_dir_confirm(r.rx.sock, (int)r.rx.ifindex, coord,
+                             r.rx.our_hw_mac, r.rx.our_src_logical);
+        send_own_dir_lookup(r.rx.sock, (int)r.rx.ifindex, coord, r.rx.our_hw_mac,
+                            r.rx.our_src_logical, "MSCP$TAPE", 0);
+        send_own_dir_lookup(r.rx.sock, (int)r.rx.ifindex, coord, r.rx.our_hw_mac,
+                            r.rx.our_src_logical, "MSCP$DISK", 0);
+        send_own_dir_lookup(r.rx.sock, (int)r.rx.ifindex, coord, r.rx.our_hw_mac,
+                            r.rx.our_src_logical, "MSCP$DISK", 0);
+        send_mscp_connect_request(r.rx.sock, (int)r.rx.ifindex, coord,
+                                  r.rx.our_hw_mac, r.rx.our_src_logical);
+    }
+
+    uint16_t op02 = scs_seq_advance(&coord->vc.seq); /* the send_seq op 0x02 rides */
+
+    ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_LEAN_VC");
+    unsetenv("OVMX_JOIN_SEQ");
+    return op02;
+}
+
+static void test_rejoin_keeps_coordinator_vc_lean_so_op02_rides_low(void)
+{
+    /* ARM A -- the fix active: the client half is SUPPRESSED to the coordinator,
+     * so op 0x02 rides at the lean baseline. */
+    uint16_t base_fix = 0;
+    uint16_t op02_fix = rejoin_coord_op02_send_seq(0, &base_fix);
+    CHECK(op02_fix == base_fix,
+          "REJOIN(lean): op 0x02 would ride the coordinator's VC at send_seq %u,"
+          " expected the lean baseline %u -- OVMX's own dir/MSCP client half must"
+          " NOT precede it on the coordinator's VC (spec 4(O.15))",
+          op02_fix, base_fix);
+
+    /* ARM B -- the matched kill-switch control (OVMX_REJOIN_LEAN_VC=0) = pre-fix
+     * behaviour: the client half rides the coordinator's VC, pushing op 0x02
+     * CLIENT_HALF_FRAMES higher. This is the sec 4(O.15) coordinator-VC bloat that
+     * strands op 0x02 behind the member's recv_ack ceiling. */
+    uint16_t base_off = 0;
+    uint16_t op02_off = rejoin_coord_op02_send_seq(1, &base_off);
+    CHECK(op02_off == (uint16_t)(base_off + VMS9AF_CLIENT_HALF_FRAMES),
+          "KILL-SWITCH (OVMX_REJOIN_LEAN_VC=0): op 0x02 rode send_seq %u, expected"
+          " the pre-fix bloated %u (baseline %u + %u client-half frames) -- the"
+          " suppression does not gate on its switch",
+          op02_off, (uint16_t)(base_off + VMS9AF_CLIENT_HALF_FRAMES), base_off,
+          VMS9AF_CLIENT_HALF_FRAMES);
+
+    CHECK(op02_off > op02_fix,
+          "REJOIN: the fix did not move op 0x02 to a LOWER send_seq (pre-fix %u vs"
+          " fixed %u) -- the whole point is a leaner coordinator VC", op02_off,
+          op02_fix);
+
+    /* The fix keeps discovery running against a NON-coordinator member (spec
+     * 4(O.11) census): the non-coordinator peer is NEVER suppressed on a rejoin. */
+    struct rxworld r;
+    rxworld_init(&r, our_hw_mac, our_logical);
+    struct peer_state *noncoord = open_circuit_to(&r, noncoord_hw, noncoord_logical);
+    struct peer_state *coord    = open_circuit_to(&r, coord_hw, coord_logical);
+    if (noncoord != NULL && coord != NULL) {
+        setenv("OVMX_JOIN_SEQ", "1", 1);
+        ovmx_prior.valid = 1;
+        unsetenv("OVMX_REJOIN_TARGET");
+        unsetenv("OVMX_CFG2_PEER");
+        unsetenv("OVMX_REJOIN_LEAN_VC");
+        CHECK(cm_lean_vc_suppress_peer(r.rx.peers, coord) == 1,
+              "REJOIN: the coordinator (higher node number) was NOT identified for"
+              " lean-VC suppression");
+        CHECK(cm_lean_vc_suppress_peer(r.rx.peers, noncoord) == 0,
+              "REJOIN: the NON-coordinator was wrongly suppressed -- disk discovery"
+              " must still run against it (spec 4(O.11))");
+
+        /* FIRST JOIN (no PRIORCLU) must be untouched: nobody is suppressed. */
+        ovmx_prior.valid = 0;
+        coord->lean_vc_suppressed = 0;
+        CHECK(cm_lean_vc_suppress_peer(r.rx.peers, coord) == 0,
+              "FIRST JOIN: lean-VC suppression engaged on a non-rejoin -- the"
+              " working first-join client half must be untouched");
+        unsetenv("OVMX_JOIN_SEQ");
+    }
+}
+
+/* ==========================================================================
  * vms-aa1 -- FLOW CONTROL ACCOUNTS FOR TRAFFIC THAT ACTUALLY FLOWS.
  *
  * vms-76e/vms-1d2 built the pp. 2-43..2-45 account and vms-b1d the DFREEQ, all
@@ -9776,6 +9934,11 @@ int main(void)
      * CONTIGUOUS SYSAP msg#3, with no standalone cat-0x04 ack shifting it to #4
      * (SUCCESS oracle f1257/f1258/f1298); gated by OVMX_REJOIN_ACKHOLD. */
     test_rejoin_op02_is_contiguous_sysap_msg3_not_shifted_by_a_stray_ack();
+    /* vms-9af: on a rejoin the coordinator's VC is kept LEAN -- OVMX's own
+     * SCS$DIRECTORY + MSCP$DISK client half is suppressed to the coordinator so
+     * op 0x02 rides at a low send_seq, not behind the recv_ack ceiling (4(O.15));
+     * gated by OVMX_REJOIN_LEAN_VC. */
+    test_rejoin_keeps_coordinator_vc_lean_so_op02_rides_low();
     test_joiner_vc_op3_confirm_is_recorded_not_reported_unbuilt();
     /* vms-770 (vms-a61 audit): has_conid no longer implies the 110-/190-byte
      * connect classes, so branch (c) must not treat a short SEQAPP data frame

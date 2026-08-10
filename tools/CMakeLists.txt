@@ -105,6 +105,8 @@ add_executable(vms_monitor
 
 target_include_directories(vms_monitor PRIVATE
     ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
 )
 
 target_compile_definitions(vms_monitor PRIVATE
@@ -115,6 +117,10 @@ target_compile_definitions(vms_monitor PRIVATE
 target_compile_options(vms_monitor PRIVATE
     -Wall -Wextra
 )
+
+# vms-d34: pulls sysgen_params.h transitively via ovmx_identity.h, which now
+# calls through to vmsfs for SYS$SYSTEM:OVMXVMSSYS.PAR version resolution.
+target_link_libraries(vms_monitor PRIVATE vmsfs vmslnm)
 
 set_target_properties(vms_monitor PROPERTIES
     OUTPUT_NAME "MONITOR"
@@ -174,6 +180,8 @@ add_executable(vms_sysgen
 
 target_include_directories(vms_sysgen PRIVATE
     ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
 )
 
 target_compile_definitions(vms_sysgen PRIVATE
@@ -184,6 +192,11 @@ target_compile_definitions(vms_sysgen PRIVATE
 target_compile_options(vms_sysgen PRIVATE
     -Wall -Wextra
 )
+
+# vms-d34: USE/WRITE CURRENT now resolve SYS$SYSTEM:OVMXVMSSYS.PAR through
+# vmsfs (device/logical translation + real file-version creation), so the
+# tool needs the vmsfs link it didn't before.
+target_link_libraries(vms_sysgen PRIVATE vmsfs vmslnm)
 
 set_target_properties(vms_sysgen PROPERTIES
     OUTPUT_NAME "SYSGEN"
@@ -197,6 +210,8 @@ add_executable(vms_sysman
 
 target_include_directories(vms_sysman PRIVATE
     ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
 )
 
 target_compile_definitions(vms_sysman PRIVATE
@@ -207,6 +222,10 @@ target_compile_definitions(vms_sysman PRIVATE
 target_compile_options(vms_sysman PRIVATE
     -Wall -Wextra
 )
+
+# vms-d34: includes sysgen_params.h directly, which now calls through to
+# vmsfs for SYS$SYSTEM:OVMXVMSSYS.PAR version resolution.
+target_link_libraries(vms_sysman PRIVATE vmsfs vmslnm)
 
 set_target_properties(vms_sysman PROPERTIES
     OUTPUT_NAME "SYSMAN"
@@ -281,6 +300,8 @@ add_executable(ovmx_kit_pack
 
 target_include_directories(ovmx_kit_pack PRIVATE
     ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
 )
 
 target_compile_definitions(ovmx_kit_pack PRIVATE
@@ -291,6 +312,10 @@ target_compile_definitions(ovmx_kit_pack PRIVATE
 target_compile_options(ovmx_kit_pack PRIVATE
     -Wall -Wextra
 )
+
+# vms-d34: pulls sysgen_params.h transitively via ovmx_identity.h, which now
+# calls through to vmsfs for SYS$SYSTEM:OVMXVMSSYS.PAR version resolution.
+target_link_libraries(ovmx_kit_pack PRIVATE vmsfs vmslnm)
 
 set_target_properties(ovmx_kit_pack PROPERTIES
     OUTPUT_NAME "ovmx_kit_pack"

@@ -8,8 +8,10 @@
 #
 # No dependency on any other OVMX library for the classify/hello builders
 # (plain POSIX + stdint); scsd_exe additionally pulls in src/libvms/include
-# header-only readers (sysgen_params.h, cluster_authorize.h) for node/group
-# identity -- no link dependency, they are static inline.
+# readers (sysgen_params.h, cluster_authorize.h) for node/group identity.
+# sysgen_params.h's readers are still static inline, but (vms-d34) now call
+# through to vmsfs (SYS$SYSTEM:OVMXVMSSYS.PAR version resolution), so scsd_exe
+# DOES carry a real link dependency on vmsfs/vmslnm now -- see scsd_exe below.
 
 # vms-ec7 (MSCP epic Phase A) - THE SCS MESSAGE ENVELOPE, as a layer. One build
 # path, one parse path, one set of offsets, one MTYPE namespace, shared by every
@@ -379,6 +381,8 @@ add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libvms/include
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
 )
 # vms-dd5 links vmsscs_conn (and, transitively, vmsscs_cdt -- which until this
 # item was built but NOT linked into the daemon, exactly as scs_cdt.h said).
@@ -388,7 +392,11 @@ target_include_directories(scsd_exe PRIVATE
 # responder (scs_mscp_srv_handle() etc.) built by vms-291/vms-4e31, which until
 # this item was compiled and unit-tested but never linked into the daemon that
 # is supposed to run it.
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_quorum vmsscs_recnx vmsscs_mscp vmsscs_mscp_srv vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit)
+# vms-d34: sysgen_params.h's readers now resolve SYS$SYSTEM:OVMXVMSSYS.PAR
+# through vmsfs (highest-version lookup) instead of a bare Linux path, so
+# scsd_exe needs the vmsfs/vmslnm link it previously didn't (see the
+# header-only claim at the top of this file -- no longer true).
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_quorum vmsscs_recnx vmsscs_mscp vmsscs_mscp_srv vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit vmsfs vmslnm)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

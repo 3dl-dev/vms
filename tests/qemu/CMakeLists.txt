@@ -373,3 +373,26 @@ set_tests_properties(parts_demo_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 2400)
+
+# ---------------------------------------------------------------------------
+# SYSGEN PARAMETER FILE VERSIONING, END TO END (vms-d34).
+#
+# Boots the ACTUAL mastered bootable image (same distro/Dockerfile.bootable
+# as parts_demo_e2e above), logs in as SYSTEM, and proves -- against the
+# REAL mounted volume, not a mock -- that WRITE CURRENT creates a genuine
+# vmsfs file version (;2 over the seeded ;1) and USE CURRENT reads it back
+# at the highest version, across independent SYSGEN.EXE processes. See
+# tests/qemu/test_sysgen_versioning_e2e.sh's header for the full sequence
+# and what would make it fail honestly.
+#
+# Same opt-in/SKIP convention as parts_demo_e2e (see run_sysgen_versioning_
+# e2e.sh's header): real docker + QEMU boot, real minutes, gated behind
+# OVMX_QEMU_FULL_E2E=1 so it does not run under a bare `ctest`.
+add_test(
+    NAME sysgen_versioning_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_sysgen_versioning_e2e.sh
+)
+set_tests_properties(sysgen_versioning_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 600)

@@ -12,8 +12,8 @@
  *       test_lib_rtl.c — return the configured values, not the hostname.
  *
  * Uses OVMX_SYSGEN_PATH to point the readers at a private temp file so
- * the test needs no write access to /etc/ovmx (not writable by a
- * non-root CI/dev user; see sysgen_db_path() in sysgen_params.h).
+ * the test needs no /vms mount or vmsfs translation (see
+ * sysgen_current_path() in sysgen_params.h, vms-d34).
  *
  * F$GETSYI("SCSNODE") vs. F$GETSYI("NODENAME") divergence (b) is proven
  * at the DCL layer by tests/dcl/test_lexical_scsnode.sh.

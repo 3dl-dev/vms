@@ -16,8 +16,8 @@
  *      banner change, and must get the built-in back when they deassign.
  *
  * Uses OVMX_SYSGEN_PATH to point the SCSNODE reader at a private temp file
- * (same technique as test_sysgen_identity.c) so no write access to
- * /etc/ovmx is needed.
+ * (same technique as test_sysgen_identity.c) so no /vms mount is needed
+ * (vms-d34).
  */
 
 #include <stdio.h>

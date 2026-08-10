@@ -1,43 +1,33 @@
 /*
- * test_rightslist.c - F$IDENTIFIER's source is the rights database (vms-2f8)
+ * test_syssvc_rightslist.c - F$IDENTIFIER's source is the rights database
+ * (vms-2f8), proven against a real /dev/vms (vms-d37).
  *
- * WHAT THIS ASSERTS, AND WHY IT ASSERTS IT AGAINST THE SHIPPED FILES.
+ * MIGRATED FROM tests/libvms/test_rightslist.c. The host version staged the
+ * shipped RIGHTSLIST.DAT/SYSUAF.DAT under a private root, pointed DKA0: at it,
+ * and located SYS$SYSTEM:RIGHTSLIST.DAT by resolving the SYS$SYSTEM logical IN
+ * THIS PROCESS -- which only worked because lnm_seed_system_locating() reseeded
+ * the executive-resident LNM$SYSTEM names into LNM$PROCESS_TABLE when there was
+ * no executive. That process-scope fallback is the host-LNM fake CLAUDE.md
+ * Rule 9 / INV-6 forbids and vms-fk1 deletes; nothing may depend on it. So this
+ * assertion now runs where SYS$SYSTEM is genuinely executive-resident -- the
+ * booted QEMU guest -- reading the ACTUAL SHIPPED files at SYS$SYSTEM: (no
+ * staged fixture, no argv: /vms in the guest IS the product's own system disk),
+ * and honest-skips (77) with no /dev/vms like every other test_syssvc_* suite.
  *
- * OVMX shipped SYS$SYSTEM:RIGHTSLIST.DAT from the day the boot path
- * provisioned it, and nothing read it: F$IDENTIFIER answered from two
- * hardcoded names. This test drives the reader that replaced them, against
- * the ACTUAL SHIPPED RIGHTSLIST.DAT and SYSUAF.DAT (argv[1], argv[2]) rather
- * than a fixture invented here, so the assertion always runs against what
- * boots and cannot drift from it.
+ * WHAT THIS ASSERTS. OVMX shipped SYS$SYSTEM:RIGHTSLIST.DAT from the day the
+ * boot path provisioned it, and nothing read it: F$IDENTIFIER answered from two
+ * hardcoded names. This drives the reader that replaced them against what
+ * boots, so the assertion cannot drift from the shipped data.
  *
- * THE ORACLE is docs/oracle/vax73-rights-database.md -- OpenVMS VAX V7.3,
- * lab node VAX1, 2026-08-05, live DCL plus AUTHORIZE SHOW/IDENTIFIER/FULL.
- * Every value below is measured there. None is chosen here.
+ * THE ORACLE is docs/oracle/vax73-rights-database.md -- OpenVMS VAX V7.3, lab
+ * node VAX1, 2026-08-05, live DCL plus AUTHORIZE SHOW/IDENTIFIER/FULL. Every
+ * value below is measured there. None is chosen here.
  *
  * THE MISSES ON 1..5 ARE ASSERTIONS, NOT FILLER. The shipped RIGHTSLIST.DAT
- * used to read
- *
- *     INTERACTIVE:1:RESOURCE  BATCH:2  NETWORK:3  LOCAL:4  REMOTE:5
- *
- * and on real VMS not one of 1..5 is an identifier at all -- each answers
- * the null string. They distinguish "reads the rights database" from "reads
- * the rights database and the rights database is right".
- *
- * WHICH ASSERTION CATCHES WHICH MUTATION WAS MEASURED, NOT ASSUMED, and the
- * first guess at it was wrong. Two mutations were run against this file:
- *
- *   A. the OLD shipped file verbatim  ->  8 FAIL, and NOT the 1..5 misses.
- *      Its rows carry bare decimal values, which parse_value() rejects
- *      outright, so no row resolves and the POSITIVE checks are what fail.
- *      (The first draft of this comment claimed the 1..5 misses caught this
- *      case. They do not. Measured.)
- *   B. the old NUMBERING carried into the new notation -- LOCAL:%X00000004
- *      and so on  ->  17 FAIL, INCLUDING all five 1..5 misses.
- *
- * B is the mutation the misses exist for: someone wires the reader up, keeps
- * the invented numbers, and every "is it reading the file" check passes.
- * Neither mutation is caught by both populations, which is why both
- * populations are here.
+ * used to read INTERACTIVE:1 BATCH:2 NETWORK:3 LOCAL:4 REMOTE:5, and on real
+ * VMS not one of 1..5 is an identifier at all -- each answers the null string.
+ * They distinguish "reads the rights database" from "reads the rights database
+ * and the rights database is right".
  */
 
 #include <stdio.h>
@@ -45,16 +35,18 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stdint.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
 
 #include "rightslist.h"
+#include "ssdef.h"
 #include "ovmx_layout.h"
 #include "vmsfs/device.h"
 #include "vms/logical.h"
+#include "vms_kif.h"
 
-static int failures = 0;
+#define EXIT_SKIP 77
+
+static int pass = 0;
+static int fail = 0;
 
 static void check(int cond, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
@@ -68,10 +60,11 @@ static void check(int cond, const char *fmt, ...)
     va_end(ap);
 
     if (cond) {
-        printf("  OK: %s\n", label);
+        printf("  PASS: %s\n", label);
+        pass++;
     } else {
         printf("  FAIL: %s\n", label);
-        failures++;
+        fail++;
     }
 }
 
@@ -107,68 +100,51 @@ static void check_miss_value(uint32_t value, const char *why)
     check(rc != 0, "%u is NOT an identifier -- %s", value, why);
 }
 
-static void copy_file(const char *from, const char *to)
+/* Probe only -- vms_kif_open()/close() decide skip-vs-run and nothing else. */
+static int executive_present(void)
 {
-    FILE *in = fopen(from, "rb");
-    if (!in) {
-        fprintf(stderr, "test_rightslist: cannot read %s\n", from);
-        exit(1);
-    }
-    FILE *out = fopen(to, "wb");
-    if (!out) {
-        fprintf(stderr, "test_rightslist: cannot write %s\n", to);
-        exit(1);
-    }
-    char buf[4096];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
-        fwrite(buf, 1, n, out);
-    fclose(in);
-    fclose(out);
+    int fd = vms_kif_open();
+    if (fd < 0)
+        return 0;
+    vms_kif_close();
+    return 1;
 }
 
-int main(int argc, char **argv)
+int main(void)
 {
-    printf("test_rightslist: F$IDENTIFIER reads the rights database (vms-2f8)\n");
+    printf("=== test_syssvc_rightslist: F$IDENTIFIER reads the rights database "
+           "(vms-2f8/vms-d37) ===\n");
 
-    if (argc < 3) {
-        fprintf(stderr,
-                "usage: %s <shipped RIGHTSLIST.DAT> <shipped SYSUAF.DAT>\n",
-                argv[0]);
-        return 1;
+    /*
+     * Bootstrap filespec resolution the same way every shipped image does and
+     * tests/qemu/test_syssvc_setuai.c does: the device table for DKA0:, the
+     * executive-resident logical name table for SYS$SYSTEM. RIGHTSLIST_PATH is
+     * "SYS$SYSTEM:RIGHTSLIST.DAT" and SYSUAF_PATH "SYS$SYSTEM:SYSUAF.DAT", so
+     * both halves are needed and the SYS$SYSTEM half resolves only in the guest.
+     */
+    vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
+    lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
+
+    if (!executive_present()) {
+        /*
+         * No executive: SYS$SYSTEM is undefined (the host-LNM fake is gone,
+         * vms-fk1), so the reader must NOT fabricate an identifier. Prove that,
+         * then honest-skip.
+         */
+        uint32_t v = 0;
+        check(rightslist_name_to_value("BATCH", &v) != 0,
+              "no /dev/vms: rightslist reader does NOT fabricate an identifier "
+              "when SYS$SYSTEM cannot resolve (no host-LNM fake)");
+        printf("=== test_syssvc_rightslist: %d passed, %d failed "
+               "(SKIPPED: no /dev/vms -- the rights-database reads were not "
+               "exercised, the no-fabrication check WAS) ===\n", pass, fail);
+        return fail > 0 ? 1 : EXIT_SKIP;
     }
-
-    /* Stage the SHIPPED files under a private root and point DKA0: at it, so
-     * this test reads the product's own data rather than whatever the host
-     * happens to have mounted at /vms. Same arrangement as
-     * test_sysuaf_uic_base.c. */
-    char root[] = "/tmp/ovmx_rights_XXXXXX";
-    if (!mkdtemp(root)) {
-        fprintf(stderr, "test_rightslist: mkdtemp failed\n");
-        return 1;
-    }
-
-    char dir[512], rights[640], uaf[640];
-    snprintf(dir, sizeof(dir), "%s/SYS0", root);                  mkdir(dir, 0755);
-    snprintf(dir, sizeof(dir), "%s/SYS0/SYSCOMMON", root);        mkdir(dir, 0755);
-    snprintf(dir, sizeof(dir), "%s/SYS0/SYSCOMMON/SYSEXE", root); mkdir(dir, 0755);
-    snprintf(rights, sizeof(rights),
-             "%s/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT", root);
-    snprintf(uaf, sizeof(uaf),
-             "%s/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT", root);
-    copy_file(argv[1], rights);
-    copy_file(argv[2], uaf);
-
-    /* Both halves of filespec resolution, the same pair AUTHORIZE's main()
-     * sets up: the device table for DKA0:, the logical name table for
-     * SYS$SYSTEM. */
-    vmsfs_device_add(SYSDISK_DEVICE, root);
-    lnm_setup_defaults(lnm_get_manager(), root);
 
     /* --- general identifiers, from RIGHTSLIST.DAT --------------------- */
     printf("\n general identifiers (RIGHTSLIST.DAT)\n");
     check_roundtrip("BATCH",       0x80000001u, "oracle: DCL prints -2147483647");
-    check_roundtrip("DIALUP",      0x80000002u, "oracle: absent from OVMX entirely before this");
+    check_roundtrip("DIALUP",      0x80000002u, "oracle: absent from OVMX entirely before vms-2f8");
     check_roundtrip("INTERACTIVE", 0x80000003u, "oracle: DCL prints -2147483645");
     check_roundtrip("LOCAL",       0x80000004u, "oracle: DCL prints -2147483644");
     check_roundtrip("NETWORK",     0x80000005u, "oracle: DCL prints -2147483643");
@@ -232,8 +208,6 @@ int main(int argc, char **argv)
         check(0, "LOCAL resolves, for the regression check");
     }
 
-    unlink(rights);
-    unlink(uaf);
-    printf("\ntest_rightslist: %d failure(s)\n", failures);
-    return failures ? 1 : 0;
+    printf("=== test_syssvc_rightslist: %d passed, %d failed ===\n", pass, fail);
+    return fail > 0 ? 1 : 0;
 }

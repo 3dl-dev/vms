@@ -183,6 +183,35 @@ static int cmd_show_logical(struct dcl_command *cmd)
 {
     lnm_manager_t *mgr = lnm_get_manager();
 
+    /*
+     * Scope qualifiers (OpenVMS DCL Dictionary, SHOW LOGICAL): /PROCESS, /JOB,
+     * /GROUP and /SYSTEM each restrict the operation to the named table --
+     * "/SYSTEM ... Displays the system logical name table (LNM$SYSTEM)", and
+     * likewise for the others. With NONE given, all four are shown/searched,
+     * which is the search-list default; the qualifiers may be combined to show
+     * several. Before this a qualified SHOW LOGICAL enumerated (or a named
+     * lookup searched) all four regardless -- SHOW LOGICAL/SYSTEM dumped the
+     * process, job and group tables too.
+     */
+    int q_process = dcl_has_qualifier(cmd, "PROCESS");
+    int q_job     = dcl_has_qualifier(cmd, "JOB");
+    int q_group   = dcl_has_qualifier(cmd, "GROUP");
+    int q_system  = dcl_has_qualifier(cmd, "SYSTEM");
+    int q_any     = q_process || q_job || q_group || q_system;
+    int want[4];   /* PROCESS, JOB, GROUP, SYSTEM, in search order */
+    want[0] = q_any ? q_process : 1;
+    want[1] = q_any ? q_job     : 1;
+    want[2] = q_any ? q_group   : 1;
+    want[3] = q_any ? q_system  : 1;
+
+    const char *tnames[4] = {
+        LNM_PROCESS_TABLE, LNM_JOB_TABLE, LNM_GROUP_TABLE, LNM_SYSTEM_TABLE
+    };
+    /* Display label per table -- LNM$PROCESS shows as LNM$PROCESS_TABLE. */
+    const char *tlabels[4] = {
+        "LNM$PROCESS_TABLE", "LNM$JOB", "LNM$GROUP", "LNM$SYSTEM"
+    };
+
     if (cmd->param_count >= 2) {
         /* SHOW LOGICAL <name> — look up and display a specific logical */
         /* Note: param[0] is the subcommand "LOGICAL" (from SHOW LOGICAL) */
@@ -196,6 +225,29 @@ static int cmd_show_logical(struct dcl_command *cmd)
         upper_name[i] = '\0';
 
         char value[256];
+
+        /*
+         * A scope qualifier restricts the lookup to the named table(s), so a
+         * name that exists only in LNM$PROCESS is NOT reported by SHOW
+         * LOGICAL/SYSTEM. Without a qualifier, the default search list applies.
+         */
+        if (q_any) {
+            if (mgr) {
+                for (int t = 0; t < 4; t++) {
+                    if (!want[t]) continue;
+                    uint32_t st = lnm_translate(mgr, tnames[t], upper_name,
+                                                value, sizeof(value), NULL, NULL);
+                    if (st == SS$_NORMAL || st == SS$_SUPERSEDE) {
+                        printf("   \"%s\" = \"%s\" (%s)\n",
+                               upper_name, value, tnames[t]);
+                        return SS$_NORMAL;
+                    }
+                }
+            }
+            dcl_error("DCL", 0, "NOLOG", "no logical name match");
+            return SS$_NOLOGNAM;
+        }
+
         if (dcl_translate_logical(upper_name, value, sizeof(value)) == 0) {
             /*
              * Determine which table the name was found in so we can
@@ -209,10 +261,6 @@ static int cmd_show_logical(struct dcl_command *cmd)
                 search[1] = mgr->job_table;
                 search[2] = mgr->group_table;
                 search[3] = mgr->system_table;
-                const char *tnames[4] = {
-                    LNM_PROCESS_TABLE, LNM_JOB_TABLE,
-                    LNM_GROUP_TABLE,   LNM_SYSTEM_TABLE
-                };
                 for (int t = 0; t < 4; t++) {
                     if (!search[t]) continue;
                     uint32_t st = lnm_translate(mgr, tnames[t], upper_name,
@@ -229,25 +277,20 @@ static int cmd_show_logical(struct dcl_command *cmd)
             return SS$_NOLOGNAM;
         }
     } else {
-        /* Show all logical names from all tables */
+        /* Enumerate the requested table(s) — all four unless a scope
+         * qualifier narrows it. */
         if (mgr) {
             struct show_lnm_ctx sctx;
+            int shown = 0;
 
-            printf("(LNM$PROCESS_TABLE)\n\n");
-            sctx.table_name = LNM_PROCESS_TABLE;
-            lnm_enumerate(mgr, LNM_PROCESS_TABLE, show_lnm_callback, &sctx);
-
-            printf("\n(LNM$JOB)\n\n");
-            sctx.table_name = LNM_JOB_TABLE;
-            lnm_enumerate(mgr, LNM_JOB_TABLE, show_lnm_callback, &sctx);
-
-            printf("\n(LNM$GROUP)\n\n");
-            sctx.table_name = LNM_GROUP_TABLE;
-            lnm_enumerate(mgr, LNM_GROUP_TABLE, show_lnm_callback, &sctx);
-
-            printf("\n(LNM$SYSTEM)\n\n");
-            sctx.table_name = LNM_SYSTEM_TABLE;
-            lnm_enumerate(mgr, LNM_SYSTEM_TABLE, show_lnm_callback, &sctx);
+            for (int t = 0; t < 4; t++) {
+                if (!want[t]) continue;
+                if (shown) printf("\n");
+                printf("(%s)\n\n", tlabels[t]);
+                sctx.table_name = tnames[t];
+                lnm_enumerate(mgr, tnames[t], show_lnm_callback, &sctx);
+                shown = 1;
+            }
         } else {
             /* LNM not available — show nothing (graceful degrade) */
             printf("(LNM$PROCESS_TABLE)\n\n");

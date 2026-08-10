@@ -188,6 +188,19 @@ static void test_table_hierarchy(void)
 /* syssvc/sys_logical.c). The corresponding "it works against a real    */
 /* executive" proof lives in tests/qemu/test_syssvc_lnm_system.c.       */
 /* ------------------------------------------------------------------ */
+/* Records whether the enumerate callback fired. With no executive,
+ * lnm_enumerate of LNM$SYSTEM/GROUP/JOB must fail SS$_NOSUCHDEV and list
+ * NOTHING -- never fabricate a system-wide listing from a process-private
+ * table (vms-96e2 enumerate closure, same INV-6 discipline as create/
+ * translate/delete above). */
+static int g_noexec_enum_hits = 0;
+static int noexec_enum_cb(const char *name, const lnm_entry_t *entry, void *ctx)
+{
+    (void)name; (void)entry; (void)ctx;
+    g_noexec_enum_hits++;
+    return 0;
+}
+
 static void test_system_table_no_fallback(void)
 {
     printf("\n--- LNM$SYSTEM has no host fallback (vms-48ab, INV-6) ---\n");
@@ -222,6 +235,22 @@ static void test_system_table_no_fallback(void)
                        result, sizeof(result), &result_len, &attrs);
     check(st == SS$_NOSUCHDEV,
           "LNM$FILE_DEV search falling through to LNM$SYSTEM fails SS$_NOSUCHDEV with no /dev/vms");
+
+    /* SHOW LOGICAL's enumerate path (lnm_enumerate) is executive-routed for
+     * SYSTEM/GROUP/JOB too: with no /dev/vms it must fail honestly and list
+     * nothing, not walk a process-private table (vms-96e2 enumerate closure). */
+    g_noexec_enum_hits = 0;
+    st = lnm_enumerate(mgr, LNM_SYSTEM_TABLE, noexec_enum_cb, NULL);
+    check(st == SS$_NOSUCHDEV && g_noexec_enum_hits == 0,
+          "lnm_enumerate against LNM$SYSTEM fails SS$_NOSUCHDEV and lists nothing with no /dev/vms (no fabricated system-wide listing)");
+
+    st = lnm_enumerate(mgr, LNM_GROUP_TABLE, noexec_enum_cb, NULL);
+    check(st == SS$_NOSUCHDEV,
+          "lnm_enumerate against LNM$GROUP fails SS$_NOSUCHDEV with no /dev/vms");
+
+    st = lnm_enumerate(mgr, LNM_JOB_TABLE, noexec_enum_cb, NULL);
+    check(st == SS$_NOSUCHDEV,
+          "lnm_enumerate against LNM$JOB fails SS$_NOSUCHDEV with no /dev/vms");
 }
 
 /* ------------------------------------------------------------------ */

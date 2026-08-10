@@ -1441,6 +1441,102 @@ int vms_kif_lnm_translate(uint32_t table, const char *name,
     return -1;
 }
 
+/* The public enumerate record tracks the arena's name/value widths. If the
+ * arena ABI ever changes width this fails at compile time rather than
+ * silently truncating a listed name or value. */
+_Static_assert(sizeof(((struct vms_kif_lnm_enum_rec *)0)->name)
+               == VMS_LNM_MAX_NAME + 1,
+               "vms_kif_lnm_enum_rec.name width != arena name width");
+_Static_assert(sizeof(((struct vms_kif_lnm_enum_rec *)0)->value)
+               == VMS_LNM_MAX_VALUE + 1,
+               "vms_kif_lnm_enum_rec.value width != arena value width");
+
+int vms_kif_lnm_enumerate(uint32_t table,
+                          struct vms_kif_lnm_enum_rec *out, uint32_t max_out)
+{
+    struct vms_lnm_arena *a;
+    uint32_t scope_key;
+    uint32_t group_key, job_key;
+    int tries;
+
+    if (!out || max_out == 0)
+        return -1;
+
+    a = vms_kif_lnm_arena();
+    if (!a)
+        return -1;   /* executive absent -> caller renders SS$_NOSUCHDEV */
+
+    /* Same scope resolution as vms_kif_lnm_translate: SYSTEM is singular
+     * (scope 0); GROUP/JOB use this caller's own executive-derived keys,
+     * never recomputed here. */
+    switch (table) {
+    case VMS_LNM_TBL_GROUP:
+    case VMS_LNM_TBL_JOB:
+        if (!vms_kif_lnm_myscope(&group_key, &job_key))
+            return -1;
+        scope_key = (table == VMS_LNM_TBL_GROUP) ? group_key : job_key;
+        break;
+    case VMS_LNM_TBL_SYSTEM:
+    default:
+        scope_key = 0u;
+        break;
+    }
+
+    /*
+     * Seqlock read, exactly as the translate path: sample the generation,
+     * walk the table collecting matches into out[], re-sample. A retry
+     * overwrites out[] from the start (idempotent), so a torn snapshot is
+     * never returned. The callback is invoked by the caller AFTER this
+     * returns a stable snapshot -- never mid-walk, so a retry cannot
+     * double-deliver an entry.
+     */
+    for (tries = 0; tries < 1024; tries++) {
+        uint64_t g0 = lnm_gen_load(a);
+        uint32_t i, max;
+        uint32_t n = 0;
+
+        if (g0 & 1ULL)
+            continue;   /* write in flight */
+
+        max = a->max_entries;
+        if (max > VMS_LNM_MAX_ENTRIES)
+            max = VMS_LNM_MAX_ENTRIES;
+
+        for (i = 0; i < max && n < max_out; i++) {
+            const struct vms_lnm_entry *e = &a->entries[i];
+            uint16_t vlen;
+
+            if (!e->in_use || e->table != table || e->scope_key != scope_key)
+                continue;
+            if (e->num_equiv == 0)
+                continue;
+
+            vms_strncpy(out[n].name, e->name, VMS_LNM_MAX_NAME);
+            out[n].name[VMS_LNM_MAX_NAME] = '\0';
+
+            vlen = e->equiv[0].length;
+            if (vlen > VMS_LNM_MAX_VALUE)
+                vlen = VMS_LNM_MAX_VALUE;
+            vms_memcpy(out[n].value, e->equiv[0].value, vlen);
+            out[n].value[vlen] = '\0';
+
+            out[n].attributes = e->attributes;
+            n++;
+        }
+
+        /* Re-sample: if the arena changed under us, the snapshot is not
+         * stable -- retry the whole walk. */
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (lnm_gen_load(a) != g0)
+            continue;
+
+        return (int)n;
+    }
+
+    /* Writer never quiesced -- treat as unavailable rather than guess. */
+    return -1;
+}
+
 /* ================================================================
  * Mailboxes (executive-resident MBAn:, vms-d44)
  * ================================================================ */

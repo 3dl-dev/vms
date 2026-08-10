@@ -523,6 +523,31 @@ int vms_kif_lnm_translate(uint32_t table, const char *name,
                           char *value, uint32_t valsz,
                           uint16_t *vallen, uint32_t *attrs);
 
+/* One record produced by vms_kif_lnm_enumerate: a logical name and its
+ * FIRST (index 0) equivalence string, both NUL-terminated. Sizes track the
+ * arena's VMS_LNM_MAX_NAME/VALUE (asserted in vms_kif.c). */
+struct vms_kif_lnm_enum_rec {
+    char     name[VMS_LNM_MAX_NAME + 1];
+    char     value[VMS_LNM_MAX_VALUE + 1];
+    uint32_t attributes;
+};
+
+/* Enumerate every name in an executive-resident table (VMS_LNM_TBL_SYSTEM,
+ * _GROUP or _JOB), filtered to THIS caller's own scope exactly as
+ * vms_kif_lnm_translate() filters -- SYSTEM is node-wide (scope 0),
+ * GROUP/JOB are the caller's executive-derived scope keys (never recomputed
+ * locally). Fills up to `max_out` records into `out` and returns the number
+ * filled (>=0), or -1 when the executive/mapping is unavailable (the caller
+ * renders that as SS$_NOSUCHDEV). The arena holds at most VMS_LNM_MAX_ENTRIES
+ * names, so a caller sizing `out` to that never truncates; a smaller buffer
+ * caps the return at `max_out`. Reads the read-only mmap arena under the SAME
+ * seqlock as vms_kif_lnm_translate -- no syscall on a warm mapping, and a
+ * torn snapshot is retried, never returned.
+ * Wired: lnm_enumerate (src/vmslnm/lnm_client.c), the path DCL SHOW LOGICAL
+ * walks so a DEFINE/SYSTEM by one process is listed by another. */
+int vms_kif_lnm_enumerate(uint32_t table,
+                          struct vms_kif_lnm_enum_rec *out, uint32_t max_out);
+
 /* ================================================================
  * Mailboxes (executive-resident MBAn:, vms-d44)
  *

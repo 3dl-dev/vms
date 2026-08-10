@@ -487,6 +487,66 @@ uint32_t lnm_enumerate(lnm_manager_t *mgr, const char *table_name,
     if (!mgr || !callback)
         return SS$_BADPARAM;
 
+    /*
+     * LNM$SYSTEM/GROUP/JOB are executive-resident (vms-96e2/vms-aba): a name
+     * DEFINE/SYSTEM'd by one process must be LISTED by another, not merely
+     * translatable -- SHOW LOGICAL (and SHOW LOGICAL/SYSTEM) enumerate the
+     * table, and that display has to reflect the ONE shared table, exactly
+     * like lnm_translate already routes these three through the executive.
+     * Walk the read-only arena via vms_kif and hand each entry to the
+     * caller's callback through a synthesized lnm_entry_t, so DCL's existing
+     * SHOW LOGICAL enumerate path needs no change and shows no split-brain.
+     *
+     * NO FALLBACK (vms-48ab / CLAUDE.md Rule 9 / INV-6): with no executive
+     * vms_kif_lnm_enumerate returns -1 and this returns SS$_NOSUCHDEV -- the
+     * same honest failure lnm_translate/lnm_create/lnm_delete give for these
+     * tables. It never lists the process-private system_table (empty at
+     * runtime, since the seeded defaults live in the executive), so a listing
+     * can never fabricate a system-wide name that is not actually shared.
+     */
+    if (is_system_table(table_name) || is_group_table(table_name) ||
+        is_job_table(table_name)) {
+        uint32_t exec_tbl = is_system_table(table_name) ? VMS_LNM_TBL_SYSTEM
+                          : is_group_table(table_name)  ? VMS_LNM_TBL_GROUP
+                                                        : VMS_LNM_TBL_JOB;
+        struct vms_kif_lnm_enum_rec *recs =
+            calloc(VMS_LNM_MAX_ENTRIES, sizeof(*recs));
+        if (!recs)
+            return SS$_INSFMEM;
+
+        int n = vms_kif_lnm_enumerate(exec_tbl, recs, VMS_LNM_MAX_ENTRIES);
+        if (n < 0) {
+            free(recs);
+            return SS$_NOSUCHDEV;
+        }
+
+        for (int i = 0; i < n; i++) {
+            lnm_entry_t entry;
+            size_t nl, vl;
+
+            memset(&entry, 0, sizeof(entry));
+            nl = strlen(recs[i].name);
+            if (nl > LNM_MAX_NAME) nl = LNM_MAX_NAME;
+            memcpy(entry.name, recs[i].name, nl);
+            entry.name[nl] = '\0';
+            entry.name_length = (uint16_t)nl;
+            entry.attributes = recs[i].attributes;
+            entry.acmode = LNM_MODE_EXEC;
+            entry.num_translations = 1;
+            vl = strlen(recs[i].value);
+            if (vl > LNM_MAX_VALUE) vl = LNM_MAX_VALUE;
+            memcpy(entry.translations[0].value, recs[i].value, vl);
+            entry.translations[0].value[vl] = '\0';
+            entry.translations[0].length = (uint16_t)vl;
+            entry.translations[0].index = 0;
+
+            if (callback(entry.name, &entry, ctx) != 0)
+                break;
+        }
+        free(recs);
+        return SS$_NORMAL;
+    }
+
     lnm_table_t *table = lnm_find_table(mgr, table_name);
     if (!table)
         return SS$_NOLOGTAB;

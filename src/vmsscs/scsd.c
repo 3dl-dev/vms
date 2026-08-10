@@ -1826,16 +1826,37 @@ static int cm_peer_is_coordinator(struct peer_state *tbl, struct peer_state *ps)
         uint16_t f = (uint16_t)strtoul(force, NULL, 0);
         return (nn == f || (nn & 0x03ff) == f) ? 1 : 0;
     }
-    uint16_t best = 0;
+    /* This peer is the coordinator ONLY IF it is the STRICT MAXIMUM node number
+     * AND at least one OTHER peer with a LOWER node number is already known.
+     *
+     * The "lower peer exists" guard is load-bearing, not cosmetic. The own-dir
+     * client connect fires per peer as each completes its 0x41 START, at
+     * different times. A bare "highest known" test suppressed the FIRST member to
+     * appear (it was momentarily the highest known), then suppressed the SECOND
+     * too once it appeared and became the highest -- leaving NO member for OVMX's
+     * own dir/MSCP discovery, so the member never saw OVMX's MSCP$DISK connect and
+     * never reciprocated (live vaxlab-0, both members LEANVC-suppressed,
+     * XITDONE=0). The oracle keeps exactly ONE VC (the coordinator's) lean and
+     * runs discovery against the OTHER member (spec 4(O.11) census). Requiring a
+     * strictly-lower peer to be present means: the lower (non-coordinator) member
+     * is never suppressed (nothing higher than it is required), and the higher
+     * (coordinator) member is suppressed only once that non-coordinator exists to
+     * carry discovery. OVMX_CFG2_PEER names the coordinator deterministically when
+     * the appearance order cannot be relied on. */
+    int lower_peer_seen = 0;
     for (int i = 0; i < OVMX_MAX_PEERS; i++) {
-        if (tbl[i].pb != NULL) {
-            uint16_t n2 = peer_node_number(&tbl[i]);
-            if (n2 > best) {
-                best = n2;
-            }
+        if (&tbl[i] == ps || tbl[i].pb == NULL) {
+            continue;
+        }
+        uint16_t n2 = peer_node_number(&tbl[i]);
+        if (n2 > nn) {
+            return 0;              /* someone higher -> ps is not the coordinator */
+        }
+        if (n2 < nn) {
+            lower_peer_seen = 1;   /* a non-coordinator member to run discovery against */
         }
     }
-    return (best != 0 && nn == best) ? 1 : 0;
+    return lower_peer_seen ? 1 : 0;
 }
 
 /*

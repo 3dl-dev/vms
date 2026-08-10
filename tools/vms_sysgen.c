@@ -5,16 +5,25 @@
  * Parameters are stored in a binary database file compatible with
  * the sysgen_params.h format.
  *
+ * vms-d34: USE/WRITE CURRENT resolve SYS$SYSTEM:OVMXVMSSYS.PAR (ovmx_layout.h's
+ * VMS_PARAMS_PATH) through vmsfs, not a bare Linux path. WRITE CURRENT always
+ * creates a NEW FILE VERSION (the highest existing version + 1 -- a real
+ * vmsfs version, ";2" over ";1", matching the oracle's ALPHAVMSSYS.PAR
+ * behavior, docs/design-boot-faithful.md §3.4); USE CURRENT reads the file
+ * at its HIGHEST existing version. WRITE/USE <filename> (an explicit target
+ * other than CURRENT) are unchanged: a literal path, no vmsfs translation,
+ * no versioning -- this is what the unit tests use via OVMX_SYSGEN_PATH.
+ *
  * Usage: SYSGEN
  *   Commands:
- *     USE CURRENT          - Load from /etc/ovmx/sysparams.dat
+ *     USE CURRENT          - Load the highest version of SYS$SYSTEM:OVMXVMSSYS.PAR
  *     USE DEFAULT          - Load factory defaults
- *     USE <filename>       - Load from specified file
+ *     USE <filename>       - Load from specified file (no versioning)
  *     SHOW <parameter>     - Display one parameter
  *     SHOW /ALL            - Display all parameters
  *     SET <param> <value>  - Change a parameter value
- *     WRITE CURRENT        - Write to /etc/ovmx/sysparams.dat
- *     WRITE <filename>     - Write to specified file
+ *     WRITE CURRENT        - Write a NEW VERSION of SYS$SYSTEM:OVMXVMSSYS.PAR
+ *     WRITE <filename>     - Write to specified file (no versioning)
  *     EXIT                 - Exit SYSGEN
  *     HELP                 - Show available commands
  */
@@ -29,6 +38,10 @@
 #include <unistd.h>
 
 #include "sysgen_params.h"
+#include "ovmx_layout.h"
+#include "ssdef.h"
+#include "vmsfs/filespec.h"
+#include "vmsfs/version.h"
 
 /* ================================================================== */
 /*                    Default Parameter Database                       */
@@ -149,6 +162,53 @@ static char *str_trim(char *s)
 /*                    Database I/O Functions                           */
 /* ================================================================== */
 
+/*
+ * resolve_params_location - Translate VMS_PARAMS_PATH (SYS$SYSTEM:
+ * OVMXVMSSYS.PAR) through vmsfs and split the result into the directory
+ * plus name/ext vmsfs_get_highest_version()/vmsfs_create_new_version()
+ * want. Mirrors the split already done at the RMS/DCL layer (rms_core.c's
+ * rms_next_version, dcl_filespec.c's resolve_version_suffix).
+ *
+ * Returns 0 on success, -1 if the filespec cannot be translated.
+ */
+static int resolve_params_location(char *dir, size_t dirlen, char *name,
+                                    size_t namelen, char *ext, size_t extlen)
+{
+    char linux_path[VMSFS_MAX_PATH];
+    if (!$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(VMS_PARAMS_PATH, linux_path,
+                                                  sizeof(linux_path)))) {
+        return -1;
+    }
+
+    const char *slash = strrchr(linux_path, '/');
+    const char *base = slash ? slash + 1 : linux_path;
+
+    if (slash) {
+        size_t dlen = (size_t)(slash - linux_path);
+        if (dlen >= dirlen) dlen = dirlen - 1;
+        memcpy(dir, linux_path, dlen);
+        dir[dlen] = '\0';
+    } else {
+        dir[0] = '\0';
+    }
+
+    char basebuf[VMSFS_MAX_NAME + VMSFS_MAX_TYPE + 2];
+    strncpy(basebuf, base, sizeof(basebuf) - 1);
+    basebuf[sizeof(basebuf) - 1] = '\0';
+
+    char *dot = strrchr(basebuf, '.');
+    if (dot) {
+        *dot = '\0';
+        strncpy(ext, dot + 1, extlen - 1);
+        ext[extlen - 1] = '\0';
+    } else {
+        ext[0] = '\0';
+    }
+    strncpy(name, basebuf, namelen - 1);
+    name[namelen - 1] = '\0';
+    return 0;
+}
+
 static void load_defaults(void)
 {
     memset(&working_set, 0, sizeof(working_set));
@@ -232,6 +292,67 @@ static int write_to_file(const char *path)
     return 0;
 }
 
+/*
+ * write_new_version - WRITE CURRENT's real body: create a NEW FILE VERSION
+ * of SYS$SYSTEM:OVMXVMSSYS.PAR (the highest existing version + 1, via
+ * vmsfs_create_new_version -- a real vmsfs version, not an in-memory
+ * counter, matching the oracle's ALPHAVMSSYS.PAR ";2" over ";1" behavior,
+ * docs/design-boot-faithful.md §3.4) and write the working set into it.
+ *
+ * Returns 0 on success, -1 on error (messages already printed).
+ */
+static int write_new_version(void)
+{
+    if (!working_set_loaded) {
+        fprintf(stderr, "%%SYSGEN-E-NODATA, no parameter set loaded\n");
+        fprintf(stderr, "-SYSGEN-I-USECMD, use USE CURRENT or USE DEFAULT first\n");
+        return -1;
+    }
+
+    char dir[VMSFS_MAX_PATH], name[VMSFS_MAX_NAME + 1], ext[VMSFS_MAX_TYPE + 1];
+    if (resolve_params_location(dir, sizeof(dir), name, sizeof(name),
+                                 ext, sizeof(ext)) != 0) {
+        fprintf(stderr,
+                "%%SYSGEN-E-OPENOUT, error resolving " "SYS$SYSTEM:OVMXVMSSYS.PAR\n");
+        return -1;
+    }
+    /* vmsfs_create_new_version() needs a real directory to scan/create in;
+     * an empty dir (relative filespec with no device) means "here". */
+    if (!dir[0]) strncpy(dir, ".", sizeof(dir) - 1);
+
+    char path[VMSFS_MAX_PATH];
+    int new_version = 0;
+    int status = vmsfs_create_new_version(dir, name, ext, path, sizeof(path),
+                                           &new_version);
+    if (!$VMS_STATUS_SUCCESS(status)) {
+        fprintf(stderr,
+                "%%SYSGEN-E-OPENOUT, error creating a new version of "
+                "SYS$SYSTEM:OVMXVMSSYS.PAR\n");
+        return -1;
+    }
+
+    /* vmsfs_create_new_version() already created the file (O_CREAT|O_EXCL,
+     * empty) to claim the version number race-free; reopen it to write the
+     * actual bytes. */
+    FILE *fp = fopen(path, "wb");
+    if (!fp) {
+        fprintf(stderr, "%%SYSGEN-E-OPENOUT, error opening %s for output - %s\n",
+                path, strerror(errno));
+        return -1;
+    }
+    if (fwrite(&working_set, sizeof(working_set), 1, fp) != 1) {
+        fclose(fp);
+        fprintf(stderr, "%%SYSGEN-E-WRITEERR, error writing %s\n", path);
+        return -1;
+    }
+    fclose(fp);
+
+    working_set_modified = 0;
+    printf("%%SYSGEN-I-WRITTEN, %u parameters written to "
+           "SYS$SYSTEM:OVMXVMSSYS.PAR;%d\n", working_set.count, new_version);
+    return 0;
+}
+
 /* ================================================================== */
 /*                      Command Handlers                              */
 /* ================================================================== */
@@ -251,10 +372,26 @@ static void cmd_use(const char *arg)
     }
 
     if (strcasecmp(target, "CURRENT") == 0) {
-        if (load_from_file(SYSGEN_DEFAULT_PATH) == 0) {
-            printf("%%SYSGEN-I-LOADED, %u parameters loaded from %s\n",
-                   working_set.count, SYSGEN_DEFAULT_PATH);
-        } else {
+        char dir[VMSFS_MAX_PATH], name[VMSFS_MAX_NAME + 1], ext[VMSFS_MAX_TYPE + 1];
+        char path[VMSFS_MAX_PATH];
+        int loaded = 0;
+
+        if (resolve_params_location(dir, sizeof(dir), name, sizeof(name),
+                                     ext, sizeof(ext)) == 0) {
+            int highest = vmsfs_get_highest_version(dir[0] ? dir : ".", name, ext);
+            if (highest >= 1) {
+                int n = snprintf(path, sizeof(path), "%s/%s.%s;%d",
+                                  dir, name, ext, highest);
+                if (n > 0 && (size_t)n < sizeof(path) &&
+                    load_from_file(path) == 0) {
+                    printf("%%SYSGEN-I-LOADED, %u parameters loaded from %s\n",
+                           working_set.count, path);
+                    loaded = 1;
+                }
+            }
+        }
+
+        if (!loaded) {
             printf("%%SYSGEN-I-NOCURRENT, no current parameter file found\n");
             printf("-SYSGEN-I-USEDEF, loading factory defaults\n");
             load_defaults();
@@ -281,11 +418,34 @@ static void show_header(void)
            "--------------", "-------", "-------", "-------", "-------");
 }
 
+/*
+ * format_sysgen_string_field - Render a string-typed parameter value the
+ * way SHOW displays it: double-quoted and space-padded to the field's full
+ * stored width (SYSGEN_STRVAL_LEN-1 content bytes), e.g. "OVMX   " for a
+ * 4-char value. docs/design-boot-faithful.md §3.1 (the Alpha oracle's
+ * SYSBOOT> SHOW SCSNODE) shows the same quoted-and-padded shape for a
+ * string parameter; this SHOW is a different program (SYSGEN.EXE, not
+ * SYSBOOT>) so the exact field width is an OVMX display choice, not a
+ * byte-for-byte match -- matching storage width is what's observed here.
+ */
+static void format_sysgen_string_field(const char *val, char *out, size_t outlen)
+{
+    char padded[SYSGEN_STRVAL_LEN];
+    size_t i = 0;
+    for (; i < sizeof(padded) - 1 && val[i]; i++) padded[i] = val[i];
+    for (; i < sizeof(padded) - 1; i++) padded[i] = ' ';
+    padded[sizeof(padded) - 1] = '\0';
+    snprintf(out, outlen, "\"%s\"", padded);
+}
+
 static void show_param(const struct sysgen_param *p)
 {
     if (p->type == SYSGEN_TYPE_STRING) {
+        char cur[SYSGEN_STRVAL_LEN + 2], def[SYSGEN_STRVAL_LEN + 2];
+        format_sysgen_string_field(p->str_current, cur, sizeof(cur));
+        format_sysgen_string_field(p->str_default, def, sizeof(def));
         printf("  %-32s %10s %10s %10s %10s",
-               p->name, p->str_current, p->str_default, "-", "-");
+               p->name, cur, def, "-", "-");
     } else {
         printf("  %-32s %10u %10u %10u %10u",
                p->name, p->current, p->default_val, p->min_val, p->max_val);
@@ -471,7 +631,7 @@ static void cmd_write(const char *arg)
     char *target = str_trim(buf);
 
     if (strlen(target) == 0 || strcasecmp(target, "CURRENT") == 0) {
-        write_to_file(SYSGEN_DEFAULT_PATH);
+        write_new_version();
     } else {
         write_to_file(target);
     }
@@ -483,8 +643,7 @@ static void cmd_help(void)
     printf("  SYSGEN Commands:\n");
     printf("  ================\n");
     printf("\n");
-    printf("  USE CURRENT          Load parameters from %s\n",
-           SYSGEN_DEFAULT_PATH);
+    printf("  USE CURRENT          Load the highest version of SYS$SYSTEM:OVMXVMSSYS.PAR\n");
     printf("  USE DEFAULT          Load factory default parameters\n");
     printf("  USE <filename>       Load parameters from specified file\n");
     printf("\n");
@@ -494,8 +653,7 @@ static void cmd_help(void)
     printf("\n");
     printf("  SET <param> <value>  Change a parameter value\n");
     printf("\n");
-    printf("  WRITE CURRENT        Write parameters to %s\n",
-           SYSGEN_DEFAULT_PATH);
+    printf("  WRITE CURRENT        Write a NEW VERSION of SYS$SYSTEM:OVMXVMSSYS.PAR\n");
     printf("  WRITE <filename>     Write parameters to specified file\n");
     printf("\n");
     printf("  HELP                 Display this help\n");

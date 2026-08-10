@@ -14,9 +14,9 @@ trap 'rm -rf "$TMPDIR"' EXIT
 SYSPARAMS="$TMPDIR/sysparams.dat"
 
 if [ -x "$SYSGEN" ]; then
-    # SYSGEN's WRITE <filename> writes wherever asked — no /etc/ovmx
-    # write access needed, matching sysgen_db_path()'s OVMX_SYSGEN_PATH
-    # override used by the readers below.
+    # SYSGEN's WRITE <filename> (as opposed to WRITE CURRENT) writes wherever
+    # asked, no /vms mount needed, matching sysgen_current_path()'s
+    # OVMX_SYSGEN_PATH override used by the readers below (vms-d34).
     printf 'USE DEFAULT\nSET SCSNODE testnd\nSET SCSSYSTEMID 4242\nWRITE %s\nEXIT\n' \
         "$SYSPARAMS" | "$SYSGEN" >/dev/null 2>&1
 fi

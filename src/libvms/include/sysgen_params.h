@@ -10,6 +10,17 @@
  * alongside the existing numeric SYSGEN parameters. The version bump
  * is a clean format cut — there is no persisted v1 production data
  * (the v1 reader was dead code), so no migration path is needed.
+ *
+ * vms-d34: the store moves off the bare Linux path /etc/ovmx/sysparams.dat
+ * onto the system disk as SYS$SYSTEM:OVMXVMSSYS.PAR (ovmx_layout.h's
+ * VMS_PARAMS_PATH), read through vmsfs and versioned like the oracle's
+ * ALPHAVMSSYS.PAR (WRITE creates a new highest version; USE reads the
+ * highest — docs/design-boot-faithful.md §3.4). The BINARY LAYOUT below
+ * (struct sysgen_param / sysgen_file) is unchanged by that move and remains
+ * an OVMX INVENTION, not a VMS-authentic byte format — CLAUDE.md Rule 8:
+ * ALPHAVMSSYS.PAR's internal layout is not published anywhere OVMX may
+ * read, so OVMX defines and labels its own here. Only the FILE NAME SHAPE
+ * and the VERSIONING BEHAVIOR are observed facts being matched.
  */
 #ifndef SYSGEN_PARAMS_H
 #define SYSGEN_PARAMS_H
@@ -20,10 +31,14 @@
 #include <string.h>
 #include <strings.h>
 
+#include "ovmx_layout.h"
+#include "ssdef.h"
+#include "vmsfs/filespec.h"
+#include "vmsfs/version.h"
+
 #define SYSGEN_MAGIC        0x53595347  /* "SYSG" */
 #define SYSGEN_VERSION      2            /* v2: typed (numeric/string) params */
 #define SYSGEN_MAX_PARAMS   64
-#define SYSGEN_DEFAULT_PATH "/etc/ovmx/sysparams.dat"
 
 /* Parameter flags */
 #define SYSGEN_F_DYNAMIC        0x01    /* Can be changed without reboot */
@@ -61,17 +76,86 @@ struct sysgen_file {
 };
 
 /*
- * sysgen_db_path - Resolve the path to the SYSGEN parameter database.
- *
- * Honors OVMX_SYSGEN_PATH when set, so tests and tools can point the
- * readers at an alternate file without needing write access to
- * /etc/ovmx (which requires root). Production code paths never set
- * this env var, so behavior there is unchanged.
+ * sysgen_split_dir_base - Split a Linux path into its directory and its
+ * name/ext parts (the shape vmsfs_get_highest_version() wants). Mirrors the
+ * pattern already used at the RMS/DCL layer (rms_core.c's rms_next_version,
+ * dcl_filespec.c's resolve_version_suffix).
  */
-static inline const char *sysgen_db_path(void)
+static inline void sysgen_split_dir_base(const char *linux_path, char *dir,
+                                          size_t dirlen, char *name,
+                                          size_t namelen, char *ext,
+                                          size_t extlen)
 {
-    const char *p = getenv("OVMX_SYSGEN_PATH");
-    return (p && *p) ? p : SYSGEN_DEFAULT_PATH;
+    const char *slash = strrchr(linux_path, '/');
+    const char *base = slash ? slash + 1 : linux_path;
+
+    if (slash) {
+        size_t dlen = (size_t)(slash - linux_path);
+        if (dlen >= dirlen) dlen = dirlen - 1;
+        memcpy(dir, linux_path, dlen);
+        dir[dlen] = '\0';
+    } else {
+        dir[0] = '\0';
+    }
+
+    char basebuf[VMSFS_MAX_NAME + VMSFS_MAX_TYPE + 2];
+    strncpy(basebuf, base, sizeof(basebuf) - 1);
+    basebuf[sizeof(basebuf) - 1] = '\0';
+
+    char *dot = strrchr(basebuf, '.');
+    if (dot) {
+        *dot = '\0';
+        strncpy(ext, dot + 1, extlen - 1);
+        ext[extlen - 1] = '\0';
+    } else {
+        ext[0] = '\0';
+    }
+    strncpy(name, basebuf, namelen - 1);
+    name[namelen - 1] = '\0';
+}
+
+/*
+ * sysgen_current_path - Resolve the Linux path to READ the current SYSGEN
+ * parameter database (USE CURRENT's semantics: highest existing version).
+ *
+ * Honors OVMX_SYSGEN_PATH when set: tests and tools point the readers at a
+ * private, literal, unversioned temp file (no /vms mount needed). Production
+ * code paths never set this env var: the store resolves through vmsfs to
+ * SYS$SYSTEM:OVMXVMSSYS.PAR's directory (ovmx_layout.h's VMS_PARAMS_PATH)
+ * and reads the HIGHEST version on disk there, matching the oracle's
+ * ALPHAVMSSYS.PAR behavior (docs/design-boot-faithful.md §3.4).
+ *
+ * Returns 0 on success (path written to buf), -1 if no version of the file
+ * exists yet or the filespec cannot be translated.
+ */
+static inline int sysgen_current_path(char *buf, size_t buflen)
+{
+    if (!buf || buflen == 0) return -1;
+
+    const char *override = getenv("OVMX_SYSGEN_PATH");
+    if (override && *override) {
+        strncpy(buf, override, buflen - 1);
+        buf[buflen - 1] = '\0';
+        return 0;
+    }
+
+    char linux_path[VMSFS_MAX_PATH];
+    if (!$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(VMS_PARAMS_PATH, linux_path,
+                                                  sizeof(linux_path)))) {
+        return -1;
+    }
+
+    char dir[VMSFS_MAX_PATH];
+    char name[VMSFS_MAX_NAME + 1];
+    char ext[VMSFS_MAX_TYPE + 1];
+    sysgen_split_dir_base(linux_path, dir, sizeof(dir), name, sizeof(name),
+                          ext, sizeof(ext));
+
+    int highest = vmsfs_get_highest_version(dir[0] ? dir : ".", name, ext);
+    if (highest < 1) return -1;
+
+    int n = snprintf(buf, buflen, "%s/%s.%s;%d", dir, name, ext, highest);
+    return (n > 0 && (size_t)n < buflen) ? 0 : -1;
 }
 
 /*
@@ -85,7 +169,10 @@ static inline int sysgen_read_param(const char *name, uint32_t *value)
 {
     if (!name || !value) return -1;
 
-    FILE *fp = fopen(sysgen_db_path(), "rb");
+    char path[VMSFS_MAX_PATH];
+    if (sysgen_current_path(path, sizeof(path)) != 0) return -1;
+
+    FILE *fp = fopen(path, "rb");
     if (!fp) return -1;
 
     struct sysgen_file db;
@@ -119,7 +206,10 @@ static inline int sysgen_read_string(const char *name, char *buf, size_t buflen)
 {
     if (!name || !buf || buflen == 0) return -1;
 
-    FILE *fp = fopen(sysgen_db_path(), "rb");
+    char path[VMSFS_MAX_PATH];
+    if (sysgen_current_path(path, sizeof(path)) != 0) return -1;
+
+    FILE *fp = fopen(path, "rb");
     if (!fp) return -1;
 
     struct sysgen_file db;

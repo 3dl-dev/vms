@@ -120,6 +120,15 @@
 
 #define VMS_RIGHTSLIST_PATH   "SYS$SYSTEM:RIGHTSLIST.DAT"
 #define VMS_QMAN_DB          "SYS$MANAGER:QMAN$MASTER.DAT"
+/* SYSGEN parameter file (vms-d34). NAME SHAPE and VERSIONING BEHAVIOR are
+ * observed facts (docs/design-boot-faithful.md §3.4: the Alpha oracle's
+ * SYS$SYSROOT:[SYSEXE]ALPHAVMSSYS.PAR;2 over ;1 -- WRITE creates a new
+ * highest version, USE reads the highest). The BINARY LAYOUT behind this
+ * name (struct sysgen_file / sysgen_param in sysgen_params.h) is an OVMX
+ * INVENTION, not VMS-authentic -- CLAUDE.md Rule 8: ALPHAVMSSYS.PAR's
+ * internal byte format is not published anywhere OVMX may read, so this is
+ * OVMX's own representation, labeled as such at its definition. */
+#define VMS_PARAMS_PATH      "SYS$SYSTEM:OVMXVMSSYS.PAR"
 
 /* ------------------------------------------------------------------ */
 /* Linux paths — derived from SYSDISK_MOUNT                           */

@@ -218,6 +218,11 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     cp build-static/bin/MONITOR.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/INITIALIZE.EXE /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/INSTALL.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # SYSGEN.EXE (vms-d34): `$ SYSGEN` (src/vmsdcl/dcl_cmd_misc.c cmd_sysgen)
+    # dcl_exec_utility()'s for it at SYS$SYSTEM: -- without this copy the
+    # command fails %SYSGEN-F-NOIMG and SYS$SYSTEM:OVMXVMSSYS.PAR can never
+    # be read or written on the real runtime.
+    cp build-static/bin/SYSGEN.EXE     /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # Kernel modules
     cp src/kernel/vms.ko /initramfs-fat/lib/modules/ && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-fat/lib/modules/ && \
@@ -225,6 +230,16 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR/ && \
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # OVMXVMSSYS.PAR (vms-d34): the initial SYSGEN parameter file, seeded
+    # with factory defaults (SCSNODE=OVMX). Staged UNVERSIONED, same
+    # convention as SYSUAF.DAT/RIGHTSLIST.DAT above -- vmsfs_master (below)
+    # stamps every mastered regular file as version ;1 itself and does not
+    # parse a literal ";N" already in a source-tree filename (it would land
+    # in the TYPE field instead, corrupting the name), so the on-disk
+    # result is the real, already-versioned OVMXVMSSYS.PAR;1 and WRITE
+    # CURRENT's very first run on a fresh install lands on ;2 -- exactly
+    # like the oracle's ALPHAVMSSYS.PAR (docs/design-boot-faithful.md sec 3.4).
+    cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/OVMXVMSSYS.PAR /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # SYS$UPDATE: -- the standard VMS home for pre-PCSI layered-product
     # install kits (vms-cde, parent vms-2579, docs/release-plan-0.2-to-0.5.md
     # §4). SYS$UPDATE itself is DEFINEd in SYS$MANAGER:STARTUP.COM (copied

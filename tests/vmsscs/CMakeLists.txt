@@ -255,9 +255,15 @@ add_executable(test_scsd_wire test_scsd_wire.c)
 target_include_directories(test_scsd_wire PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsscs/include
     ${CMAKE_SOURCE_DIR}/src/libvms/include
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
 )
 
 target_link_libraries(test_scsd_wire PRIVATE
+    # vms-d34: this test #includes scsd.c whole, which pulls in
+    # sysgen_params.h -- now backed by vmsfs (SYS$SYSTEM:OVMXVMSSYS.PAR
+    # version resolution) instead of a bare Linux path.
+    vmsfs vmslnm
     vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir
     vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn
     vmsscs_depart vmsscs_dgram vmsscs_svc vmsscs_reason vmsscs_disc
@@ -367,8 +373,14 @@ set_tests_properties(scs_credit_figures PROPERTIES
 # is passed through: the gate must run under whatever toolchain configured the
 # tree, musl-gcc included. Registered unconditionally.
 if(Python3_Interpreter_FOUND)
+    # vms-d34: scsd.c pulls in sysgen_params.h, whose readers now call
+    # through to vmsfs (SYS$SYSTEM:OVMXVMSSYS.PAR version resolution) --
+    # this standalone scratch-tree compile can no longer link with headers
+    # alone, so point it at the already-built vmsfs/vmslnm libraries.
     add_test(NAME scs_credit_live_mutants
              COMMAND ${CMAKE_COMMAND} -E env OVMX_CC=${CMAKE_C_COMPILER}
+                     OVMX_VMSFS_LIB=$<TARGET_FILE:vmsfs>
+                     OVMX_VMSLNM_LIB=$<TARGET_FILE:vmslnm>
                      ${Python3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_credit_live_mutants.py)
 else()

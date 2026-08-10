@@ -40,6 +40,14 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 SRC_DIR = os.path.join(ROOT, "src", "vmsscs")
 TEST_C = os.path.join(HERE, "test_scsd_wire.c")
 CC = os.environ.get("OVMX_CC") or os.environ.get("CC") or "cc"
+# vms-d34: sysgen_params.h's readers (pulled in via scsd.c) now call vmsfs
+# functions for real, so this scratch compile needs the already-built
+# vmsfs/vmslnm libraries -- CMake passes their paths through (see
+# tests/vmsscs/CMakeLists.txt). Empty when run outside CMake/ctest; the
+# build below then fails at link time with a clear undefined-reference
+# error rather than a silent mislink.
+VMSFS_LIB = os.environ.get("OVMX_VMSFS_LIB")
+VMSLNM_LIB = os.environ.get("OVMX_VMSLNM_LIB")
 
 # (name, old, new). `old` must appear EXACTLY ONCE in the scratch scsd.c.
 MUTANTS = [
@@ -99,7 +107,15 @@ def build_and_run(scratch, tag):
     cmd = [CC, "-std=gnu11", "-O0",
            "-I", os.path.join(scratch, "vmsscs", "include"),
            "-I", os.path.join(scratch, "libvms_include"),
+           "-I", os.path.join(scratch, "vmsfs_include"),
            "-o", binpath] + sources
+    extra_libs = [lib for lib in (VMSFS_LIB, VMSLNM_LIB) if lib]
+    cmd += extra_libs
+    for lib in extra_libs:
+        # Full-path shared-object link inputs don't carry their own rpath;
+        # without this the binary links but fails at exec with "cannot open
+        # shared object file".
+        cmd += ["-Wl,-rpath," + os.path.dirname(lib)]
     cp = subprocess.run(cmd, capture_output=True, text=True)
     if cp.returncode != 0:
         sys.stdout.write(cp.stderr[-4000:])
@@ -115,6 +131,11 @@ def main():
         shutil.copytree(SRC_DIR, os.path.join(scratch, "vmsscs"))
         shutil.copytree(os.path.join(ROOT, "src", "libvms", "include"),
                         os.path.join(scratch, "libvms_include"))
+        # vms-d34: sysgen_params.h (in libvms_include, pulled in by scsd.c)
+        # now calls through to vmsfs (SYS$SYSTEM:OVMXVMSSYS.PAR version
+        # resolution), so this standalone compile needs vmsfs's headers too.
+        shutil.copytree(os.path.join(ROOT, "src", "vmsfs", "include"),
+                        os.path.join(scratch, "vmsfs_include"))
         # The test #includes "../../src/vmsscs/scsd.c"; keep that path valid
         # inside the scratch tree by placing the test two levels down.
         test_dir = os.path.join(scratch, "a", "b")

@@ -60,6 +60,31 @@
 # side before it reaches the backing file. SETTLE_SECS below is what makes
 # each case's boot-1 edit real for boot 2 to read.
 #
+# =============================================================================
+# HARNESS HANG POST-MORTEM (2026-08-10, vms-b6a7)
+# =============================================================================
+# An earlier version of this file wrapped the QEMU launch in a helper
+# function called via command substitution: QP=$(boot_qemu disk log fifo).
+# That construct reliably STALLED with no qemu process ever appearing (ps
+# inside the container showed only the stuck subshell, no timeout/qemu
+# child at all) -- reproduced twice, isolated by direct comparison against
+# an inlined version of the identical qemu invocation that boots to
+# Username: in ~9 seconds every time. Root cause not fully isolated beyond
+# "the function+$(...) shape reliably wedges launching a backgrounded
+# process that has its own stdin/stdout/stderr redirected away from the
+# subshell" -- but the FIX is not to explain bash's internals, it is to
+# stop doing the thing that wedges: every QEMU boot below is launched
+# INLINE, exactly as test_release_e2e.sh and test_sysgen_versioning_e2e.sh
+# already do (both proven working). No boot_qemu() helper. Do not
+# reintroduce one.
+#
+# Independently, `timeout N cmd` alone (no -k) only SENDS SIGTERM at N and
+# then WAITS for the child to exit -- if the child is unresponsive that wait
+# is itself unbounded. Every QEMU invocation below uses `timeout -k 15 N`
+# so an unresponsive QEMU is SIGKILLed 15s after the SIGTERM, a real ceiling
+# rather than a best-effort one (same principle as the df9 lane's
+# `timeout 1860 qemu-system-x86_64 ...` hard-kill wrapper).
+#
 # Usage:
 #   docker build -f distro/Dockerfile.bootable -t ovmx-boot .
 #   docker run --rm -v $PWD/tests/qemu/test_boot_scsnode_hostname_e2e.sh:/test.sh:ro \
@@ -105,35 +130,27 @@ record() {
 }
 check() {
     local desc="$1" log="$2" pattern="$3" expect="${4:-present}"
-    if grep -qF "$pattern" "$log" 2>/dev/null; then
+    # "--" is load-bearing: several patterns checked below start with "-"
+    # (VMS's real continuation-line convention, e.g. "-OVMX-I-NOPARAMS, ...")
+    # and without it grep tries to parse "-OVMX..." as options and silently
+    # never matches (measured 2026-08-10: `grep -F "-OVMX-I-..."` exits 1
+    # against a log that demonstrably contains the string byte-for-byte;
+    # `grep -F -- "-OVMX-I-..."` finds it immediately).
+    if grep -qF -- "$pattern" "$log" 2>/dev/null; then
         if [ "$expect" = "present" ]; then record "$desc" 0; else record "$desc" 1; fi
     else
         if [ "$expect" = "absent" ]; then record "$desc" 0; else record "$desc" 1; fi
     fi
 }
-
-boot_qemu() {  # disk  log  fifo
-    local disk="$1" log="$2" fifo="$3"
-    rm -f "$fifo"; mkfifo "$fifo"
-    # shellcheck disable=SC2086
-    timeout "$BOOT_TIMEOUT" $QEMU $MACHINE \
-        -kernel "$KERNEL" -initrd "$INITRD" \
-        -nographic -append "$CONSOLE loglevel=3 quiet" \
-        -m 256M -smp 1 -nic none -nodefaults -serial stdio \
-        -drive file="$disk",format=raw,if=virtio,cache=writethrough \
-        -no-reboot <"$fifo" >"$log" 2>&1 &
-    echo $!
-}
 waitfor() {  # pattern  limit-seconds  log
     local pat="$1" lim="${2:-60}" log="$3" w=0
     while [ $w -lt $((lim * 4)) ]; do
         grep -qF "$pat" "$log" 2>/dev/null && return 0
-        kill -0 "$QP" 2>/dev/null || return 1
+        kill -0 "$qp" 2>/dev/null || return 1
         sleep 0.25; w=$((w + 1))
     done
     return 1
 }
-killwait() { kill "$QP" 2>/dev/null; wait "$QP" 2>/dev/null; exec 4>&- 2>/dev/null; }
 
 echo "=== SCSNODE -> real hostname across reboot (vms-b6a7) ==="
 echo "arch=$ARCH qemu=$QEMU"
@@ -150,8 +167,16 @@ POS_LOG2=/tmp/scsnode-e2e-pos-boot2.log
 POS_FIFO=/tmp/scsnode-e2e-pos.in
 rm -f "$POS_DISK" "$POS_LOG1" "$POS_LOG2" "$POS_FIFO"
 cp "$DISTRIB_IMG" "$POS_DISK"
+mkfifo "$POS_FIFO"
 
-QP=$(boot_qemu "$POS_DISK" "$POS_LOG1" "$POS_FIFO")
+# shellcheck disable=SC2086
+timeout -k 15 "$BOOT_TIMEOUT" $QEMU $MACHINE \
+    -kernel "$KERNEL" -initrd "$INITRD" \
+    -nographic -append "$CONSOLE loglevel=3 quiet" \
+    -m 256M -smp 1 -nic none -nodefaults -serial stdio \
+    -drive file="$POS_DISK",format=raw,if=virtio,cache=writethrough \
+    -no-reboot <"$POS_FIFO" >"$POS_LOG1" 2>&1 &
+qp=$!
 exec 4>"$POS_FIFO"
 send() { printf '%s\r' "$1" >&4; }
 
@@ -189,9 +214,17 @@ if [ "$rc" -eq 0 ]; then
     echo "  (settling ${SETTLE_SECS}s for guest writeback)"
     sleep "$SETTLE_SECS"
 fi
-killwait
+kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
 
-QP=$(boot_qemu "$POS_DISK" "$POS_LOG2" "$POS_FIFO")
+rm -f "$POS_FIFO"; mkfifo "$POS_FIFO"
+# shellcheck disable=SC2086
+timeout -k 15 "$BOOT_TIMEOUT" $QEMU $MACHINE \
+    -kernel "$KERNEL" -initrd "$INITRD" \
+    -nographic -append "$CONSOLE loglevel=3 quiet" \
+    -m 256M -smp 1 -nic none -nodefaults -serial stdio \
+    -drive file="$POS_DISK",format=raw,if=virtio,cache=writethrough \
+    -no-reboot <"$POS_FIFO" >"$POS_LOG2" 2>&1 &
+qp=$!
 exec 4>"$POS_FIFO"
 
 if waitfor 'Username:' 120 "$POS_LOG2"; then rc=0; else rc=1; fi
@@ -213,7 +246,7 @@ if [ "$rc" -eq 0 ]; then
     check "boot 2: F\$GETSYI(NODENAME) reads ALPHA9 (the REAL Linux hostname, set by sethostname())" \
         "$POS_LOG2" 'HOST2 = "ALPHA9"'
 fi
-killwait
+kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
 
 if [ "$FAIL" -ne 0 ]; then
     echo "--- CASE 1 boot 1 log ---"; cat "$POS_LOG1"
@@ -232,8 +265,16 @@ NEG_LOG2=/tmp/scsnode-e2e-neg-boot2.log
 NEG_FIFO=/tmp/scsnode-e2e-neg.in
 rm -f "$NEG_DISK" "$NEG_LOG1" "$NEG_LOG2" "$NEG_FIFO"
 cp "$DISTRIB_IMG" "$NEG_DISK"
+mkfifo "$NEG_FIFO"
 
-QP=$(boot_qemu "$NEG_DISK" "$NEG_LOG1" "$NEG_FIFO")
+# shellcheck disable=SC2086
+timeout -k 15 "$BOOT_TIMEOUT" $QEMU $MACHINE \
+    -kernel "$KERNEL" -initrd "$INITRD" \
+    -nographic -append "$CONSOLE loglevel=3 quiet" \
+    -m 256M -smp 1 -nic none -nodefaults -serial stdio \
+    -drive file="$NEG_DISK",format=raw,if=virtio,cache=writethrough \
+    -no-reboot <"$NEG_FIFO" >"$NEG_LOG1" 2>&1 &
+qp=$!
 exec 4>"$NEG_FIFO"
 
 if waitfor 'Username:' 120 "$NEG_LOG1"; then rc=0; else rc=1; fi
@@ -247,14 +288,27 @@ if [ "$rc" -eq 0 ]; then
     # A fresh copy of the distribution disk carries exactly one version.
     send 'DELETE SYS$SYSTEM:OVMXVMSSYS.PAR;1'; sleep 1
     send 'DIRECTORY SYS$SYSTEM:OVMXVMSSYS.PAR'; sleep 2
-    check "boot 1: OVMXVMSSYS.PAR is gone (DIRECTORY finds nothing)" "$NEG_LOG1" "%DIRECT-"
+    # Measured 2026-08-10: an exact (non-wildcard) filespec with zero matches
+    # reports "Total of 0 files, 0 blocks." -- there is no "%DIRECT-..."
+    # error line for this shape (that facility is for other DIRECTORY
+    # failure modes). This is the actual, correct, honest zero-files report;
+    # the original assertion here guessed the wrong message shape.
+    check "boot 1: OVMXVMSSYS.PAR is gone (DIRECTORY finds nothing)" "$NEG_LOG1" "Total of 0 files, 0 blocks."
 
     echo "  (settling ${SETTLE_SECS}s for guest writeback)"
     sleep "$SETTLE_SECS"
 fi
-killwait
+kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
 
-QP=$(boot_qemu "$NEG_DISK" "$NEG_LOG2" "$NEG_FIFO")
+rm -f "$NEG_FIFO"; mkfifo "$NEG_FIFO"
+# shellcheck disable=SC2086
+timeout -k 15 "$BOOT_TIMEOUT" $QEMU $MACHINE \
+    -kernel "$KERNEL" -initrd "$INITRD" \
+    -nographic -append "$CONSOLE loglevel=3 quiet" \
+    -m 256M -smp 1 -nic none -nodefaults -serial stdio \
+    -drive file="$NEG_DISK",format=raw,if=virtio,cache=writethrough \
+    -no-reboot <"$NEG_FIFO" >"$NEG_LOG2" 2>&1 &
+qp=$!
 exec 4>"$NEG_FIFO"
 
 if waitfor 'Username:' 120 "$NEG_LOG2"; then rc=0; else rc=1; fi
@@ -278,7 +332,7 @@ if [ "$rc" -eq 0 ]; then
     check "boot 2: F\$GETSYI(NODENAME) falls back to the default OVMX (not silence, not corrupted)" \
         "$NEG_LOG2" 'HOST3 = "OVMX"'
 fi
-killwait
+kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
 
 if [ "$FAIL" -ne 0 ]; then
     echo "--- CASE 2 boot 1 log ---"; cat "$NEG_LOG1"

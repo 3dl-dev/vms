@@ -18,6 +18,18 @@
 #   BOOT_TIMEOUT           forwarded to the gate itself.
 #   SETTLE_SECS            forwarded to the gate itself (writeback settle).
 #
+# HARD OUTER BOUND (vms-b6a7 harness fix, 2026-08-10). A run of this gate
+# was observed to run past its BOOT_TIMEOUT-per-boot budget with the
+# container never exiting -- the gate script bounds each QEMU invocation
+# with `timeout`, but nothing bounded the SCRIPT itself, so any blocking
+# call that is not a bounded QEMU wait (there was one: a plain `exec 4>fifo`
+# open, since fixed) is a hang with no ceiling. This wrapper is the backstop
+# for exactly that unknown-unknown class, the same way the df9 lane hard-
+# kills its qemu-system-x86_64 invocation: `timeout --kill-after=30 <budget>`
+# wraps the ENTIRE docker run, and a named, unique container (never the
+# shared, racy "latest"-tag style name) is force-removed on any exit path so
+# a killed wrapper cannot leave an orphaned container running server-side.
+#
 # Usage:
 #   docker build -t ovmx-boot -f distro/Dockerfile.bootable .
 #   OVMX_QEMU_FULL_E2E=1 tests/qemu/run_boot_scsnode_hostname_e2e.sh
@@ -27,6 +39,15 @@ set -uo pipefail
 SKIP=77
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 IMAGE="${OVMX_BOOT_IMAGE:-ovmx-boot}"
+BOOT_TIMEOUT="${BOOT_TIMEOUT:-180}"
+SETTLE_SECS="${SETTLE_SECS:-60}"
+# 4 boots, each up to BOOT_TIMEOUT, 2 settle sleeps, plus generous slack for
+# DCL interaction (sends/waitfors well under BOOT_TIMEOUT each) and image
+# I/O. Comfortably under the CI job's own 30-minute job timeout.
+TOTAL_BUDGET=$(( BOOT_TIMEOUT * 4 + SETTLE_SECS * 2 + 300 ))
+CONTAINER_NAME="ovmx-boot-scsnode-e2e-$$"
+cleanup() { docker kill "$CONTAINER_NAME" >/dev/null 2>&1 || true; }
+trap cleanup EXIT INT TERM
 
 if [ "${OVMX_QEMU_FULL_E2E:-0}" != "1" ]; then
     echo "SKIP: boot_scsnode_hostname_e2e requires OVMX_QEMU_FULL_E2E=1 (real docker+QEMU boot, real minutes)."
@@ -49,10 +70,16 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     fi
 fi
 
-exec docker run --rm \
-    -e "BOOT_TIMEOUT=${BOOT_TIMEOUT:-180}" \
-    -e "SETTLE_SECS=${SETTLE_SECS:-60}" \
+timeout --kill-after=30 "$TOTAL_BUDGET" \
+    docker run --rm --name "$CONTAINER_NAME" \
+    -e "BOOT_TIMEOUT=${BOOT_TIMEOUT}" \
+    -e "SETTLE_SECS=${SETTLE_SECS}" \
     -v "$REPO_ROOT/tests/qemu/test_boot_scsnode_hostname_e2e.sh:/test.sh:ro" \
     --entrypoint bash \
     "$IMAGE" \
     /test.sh
+rc=$?
+if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+    echo "FATAL: boot_scsnode_hostname_e2e exceeded its hard ${TOTAL_BUDGET}s budget and was killed -- this is a gate defect (a hang), not a test failure to investigate case-by-case." >&2
+fi
+exit "$rc"

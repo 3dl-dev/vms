@@ -398,7 +398,6 @@ set_tests_properties(sysgen_versioning_e2e PROPERTIES
     TIMEOUT 600)
 
 # ---------------------------------------------------------------------------
-<<<<<<< HEAD
 # MOUNT/DISMOUNT ARE REAL mount(2)/umount(2) (vms-651).
 #
 # Boots the ACTUAL mastered bootable image TWICE against a SECOND, real

@@ -2,8 +2,10 @@
  * ovmx_banner.h - SYS$ANNOUNCE / SYS$WELCOME banner resolution (INV-1)
  *
  * On OpenVMS the login banners are NOT compiled into LOGINOUT -- they are
- * system logical names a manager defines at boot (SYS$MANAGER:SYLOGICALS.COM,
- * OVMX: SYS$MANAGER:SYLOGICALS.CONF):
+ * system logical names a manager defines at boot
+ * (SYS$MANAGER:SYLOGICALS.COM, same on OVMX since vms-21a -- SYLOGICALS.COM
+ * is a real DCL site procedure, not the SYLOGICALS.CONF config-file LARP it
+ * replaced):
  *
  *   SYS$ANNOUNCE  displayed BEFORE the "Username:" prompt. Undefined by
  *                 default -- nothing is printed.

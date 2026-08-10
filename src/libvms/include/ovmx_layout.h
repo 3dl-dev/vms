@@ -16,6 +16,9 @@
  *   [SYS0.SYSCOMMON.SYSLIB]        SYS$LIBRARY/SYS$SHARE — libraries
  *   [SYS0.SYSCOMMON.SYSMGR]        SYS$MANAGER — admin configs
  *   [SYS0.SYSCOMMON.SYSHLP]        SYS$HELP — help files
+ *   [SYS0.SYSCOMMON.SYS$STARTUP]   SYS$STARTUP — the startup driver's phase
+ *                                   and component data files (vms-21a,
+ *                                   docs/design-boot-faithful.md §3.2/§3.3)
  *   [USERS]                         User home directories
  *   [SYSTMP]                        Scratch / temporary files
  */
@@ -62,6 +65,19 @@
 #define VMS_SYSLIB       SYSDISK_DEVICE ":[SYS0.SYSCOMMON.SYSLIB]"
 #define VMS_SYSMGR       SYSDISK_DEVICE ":[SYS0.SYSCOMMON.SYSMGR]"
 #define VMS_SYSHLP       SYSDISK_DEVICE ":[SYS0.SYSCOMMON.SYSHLP]"
+/*
+ * SYS$STARTUP -- the startup driver's home directory (vms-21a). Measured
+ * (docs/design-boot-faithful.md §3.2): the real logical is the SEARCH LIST
+ * "SYS$SYSROOT:[SYS$STARTUP]" then "SYS$MANAGER". OVMX does not model
+ * SYS$SYSROOT as a rooted logical that itself reaches SYSCOMMON (it flattens
+ * every SYSCOMMON subdirectory directly off SYS$SYSDEVICE -- see
+ * lnm_setup_defaults()'s own SYS$MANAGER, which is seeded the same way
+ * instead of via SYS$SYSROOT:[SYSMGR]), so the first search-list element is
+ * this flattened path rather than the oracle's literal "SYS$SYSROOT:
+ * [SYS$STARTUP]" text -- STARTUP.COM's own DEFINE/SYSTEM documents this at
+ * the point it runs.
+ */
+#define VMS_SYS_STARTUP  SYSDISK_DEVICE ":[SYS0.SYSCOMMON.SYS$STARTUP]"
 #define VMS_USERS        SYSDISK_DEVICE ":[USERS]"
 #define VMS_SYSTMP       SYSDISK_DEVICE ":[SYSTMP]"
 
@@ -79,12 +95,39 @@
  * starts none of its own -- see the NOTE ON SERVICES in
  * src/ovmx_init/ovmx_init.c (vms-47b). */
 #define VMS_SYSTARTUP_PATH   "SYS$MANAGER:SYSTARTUP_VMS.COM"
+/*
+ * SYCONFIG.COM / SYLOGICALS.COM (vms-21a) -- the other two documented
+ * OpenVMS site-customization startup procedures (VSI OpenVMS System
+ * Manager's Manual, "Customizing Startup"), invoked by STARTUP.COM's phase
+ * driver at CONFIG and BASEENVIRON respectively -- see STARTUP.COM's own
+ * comments for the exact call sites. These REPLACE the Unix-shell-flavored
+ * SYS$MANAGER:OVMX.CONF and SYS$MANAGER:SYLOGICALS.CONF (deleted, zero
+ * readers, docs/design-boot-faithful.md §2.4): a real VMS site file is a
+ * command PROCEDURE a manager edits with DCL commands in it, never a
+ * KEY=VALUE config file. Both are seed-once on upgrade (vms-2c9,
+ * tools/ovmx_kit_pack.c is_seed_once_filename()).
+ */
+#define VMS_SYCONFIG_PATH    "SYS$MANAGER:SYCONFIG.COM"
+#define VMS_SYLOGICALS_PATH  "SYS$MANAGER:SYLOGICALS.COM"
 #define VMS_HELPLIB_PATH     "SYS$HELP:HELPLIB.HLP"
-/* Reserved: zero readers as of vms-a4b (its only reader, lnm_daemon.c,
- * was deleted). Not wired to anything until the executive-resident
- * logical name work lands — see vms-ln0 (gated, operator sign-off
- * pending) and vms-d37. Do not add a reader without that ruling. */
-#define VMS_LNM_CONF_PATH    "SYS$MANAGER:SYLOGICALS.CONF"
+/*
+ * STDRV's phase-driver data files, under SYS$STARTUP: (vms-21a).
+ *
+ * VMS$PHASES.DAT -- the nine phase names, VERBATIM as measured
+ * (docs/design-boot-faithful.md §3.3, Alpha 8.4 oracle capture): a plain
+ * list of names, one per line, is a DATA FILE under Rule 8 -- reading it
+ * during the lab capture was permitted and its content is OBSERVED, not
+ * invented.
+ *
+ * VMS$VMS.DAT -- the phase -> component-procedure registration. Only the
+ * FILE NAME is observed (§3.3's DIRECTORY listing); VSI's internal byte
+ * format was never read and is not reproduced. The line format STARTUP.COM
+ * parses ("PHASE-NAME procedure-filespec", one component per line) is an
+ * OVMX INVENTION, labeled as such at every place that reads or writes it
+ * (Rule 8) -- never presented as VMS-authentic.
+ */
+#define VMS_PHASES_DAT_PATH     "SYS$STARTUP:VMS$PHASES.DAT"
+#define VMS_COMPONENTS_DAT_PATH "SYS$STARTUP:VMS$VMS.DAT"
 #define VMS_SSH_HOST_KEY     "SYS$MANAGER:SSH_HOST_RSA_KEY"
 
 /* ------------------------------------------------------------------ */

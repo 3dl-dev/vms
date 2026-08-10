@@ -1,0 +1,24 @@
+!
+! VMS$VMS.DAT - STDRV component registration database
+!
+! OVMX-DEFINED FORMAT (CLAUDE.md Rule 8): only the FILE NAME is observed
+! from the OpenVMS Alpha V8.4 oracle (docs/design-boot-faithful.md sec 3.3,
+! DIRECTORY SYS$STARTUP:*.DAT). VSI's internal byte layout for this file was
+! never read and is not reproduced here -- this line format is an OVMX
+! invention, parsed by SYS$MANAGER:STARTUP.COM's RUN_COMPONENTS subroutine.
+!
+! One component per line:
+!
+!     phase-name  procedure-filespec
+!
+! separated by whitespace. "phase-name" must exactly match one of the nine
+! names in SYS$STARTUP:VMS$PHASES.DAT. STARTUP.COM runs "procedure-filespec"
+! (with @) when its phase comes up in the driver loop. Lines beginning with
+! "!" and blank lines are comments/ignored.
+!
+! OVMX registers no components here yet -- there is no OVMX-authored
+! per-phase driver procedure to name. An empty phase runs empty: STARTUP.COM
+! prints nothing for a phase with no registered component, which is honest
+! (docs/design-boot-faithful.md sec4 target #4) rather than inventing a
+! component to demonstrate the mechanism against.
+!

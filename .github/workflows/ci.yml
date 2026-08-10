@@ -102,6 +102,7 @@ jobs:
               - 'tests/qemu/test_release_e2e.sh'
               - 'tests/qemu/test_executive_integral.sh'
               - 'tests/qemu/test_distrib_boot.sh'
+              - 'tests/qemu/test_startup_phase_driver.sh'
               - 'tests/qemu/test_boot_scsnode_hostname_e2e.sh'
               - 'tests/qemu/run_boot_scsnode_hostname_e2e.sh'
               - 'tests/uat/**'
@@ -375,6 +376,21 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_distrib_boot.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-21a. Reuses the image built above (no extra build). Boots the same
+      # pre-installed distribution disk and, over a real login session, proves
+      # STARTUP.COM is now a real STDRV phase driver: SHOW LOGICAL SYS$STARTUP
+      # names the measured multi-value search list, SYS$STARTUP:/SYS$MANAGER:
+      # carry the phase-driver's data files and the new site files, and
+      # SYS$MANAGER:OVMX.CONF is verified absent from the booted, mounted
+      # system disk (not merely deleted from the source tree).
+      - name: STARTUP.COM phase driver — SYS$STARTUP search list, OVMX.CONF gone
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_startup_phase_driver.sh:/test.sh:ro \
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh

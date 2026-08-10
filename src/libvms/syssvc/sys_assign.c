@@ -41,6 +41,8 @@
 #include <pthread.h>
 #include <ctype.h>
 #include "starlet.h"
+#include "descrip.h"
+#include "lnmdef.h"
 #include "vms/pcb.h"
 #include "vms_kif.h"
 
@@ -190,6 +192,79 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
 }
 
 /*
+ * assign_resolve_mailbox_by_name - reach a mailbox by its LOGICAL NAME (vms-mb1).
+ *
+ * sys$crembx publishes the name a mailbox was created with (its lognam
+ * argument) into the executive-resident LNM$SYSTEM table, pointing at the
+ * mailbox's own "MBAn:" device name (src/libvms/syssvc/sys_mailbox.c, on the
+ * executive-resident LNM$SYSTEM of vms-d37 / vms-d44). An UNRELATED process
+ * that knows only that NAME -- never the unit number, and holding no pipe or
+ * shared fd to the creator -- reaches the same executive-resident mailbox by
+ * translating the name here. That is exactly what OpenVMS $ASSIGN does with
+ * its device-name argument: it translates it through the logical-name tables
+ * before it looks a device up (OpenVMS I/O User's Reference, $ASSIGN). This
+ * iterates (a logical may point at another logical) with the same small cap
+ * VMS uses, and stops the instant a translation resolves to a mailbox device.
+ *
+ * SCOPED TO THE MAILBOX CASE ON PURPOSE. The caller consults this ONLY when
+ * the raw name is not already a recognized device, and ADOPTS the result ONLY
+ * when it resolves to a mailbox -- so SYS$INPUT/SYS$OUTPUT/OPA0: and ordinary
+ * file assignment keep exactly the behaviour they had before this item. The
+ * translation uses the public sys$trnlnm with no table named, i.e. the
+ * standard search order, which reaches the executive-resident LNM$SYSTEM after
+ * the process-private tables miss (src/libvms/syssvc/sys_logical.c).
+ *
+ * Returns 1 and fills *out with the "MBAn:" device name (and *devres with its
+ * resolution) when the name resolves to a mailbox; 0 otherwise.
+ */
+static int assign_resolve_mailbox_by_name(const char *name,
+                                          char *out, size_t outsz,
+                                          struct vms_device_result *devres) {
+    char cur[256];
+
+    /* Strip a single trailing ':' so "MYBOX" and "MYBOX:" translate the same
+     * logical name (the name $CREMBX defines carries no device colon). */
+    size_t n = strlen(name);
+    if (n >= sizeof(cur)) n = sizeof(cur) - 1;
+    memcpy(cur, name, n);
+    cur[n] = '\0';
+    if (n > 0 && cur[n - 1] == ':') cur[n - 1] = '\0';
+    if (cur[0] == '\0') return 0;
+
+    for (int depth = 0; depth < 10; depth++) {
+        struct dsc$descriptor_s namdsc;
+        vms_cstr_to_desc(&namdsc, cur);
+
+        char equiv[256];
+        uint16_t rl = 0;
+        struct item_list_3 itmlst[2];
+        memset(itmlst, 0, sizeof(itmlst));
+        itmlst[0].buflen    = (uint16_t)(sizeof(equiv) - 1);
+        itmlst[0].item_code = LNM$_STRING;
+        itmlst[0].bufaddr   = equiv;
+        itmlst[0].retlen    = &rl;
+        equiv[0] = '\0';
+
+        uint32_t st = sys$trnlnm(NULL, NULL, &namdsc, NULL, itmlst);
+        if (!(st & 1)) return 0;                 /* not a logical name */
+        if (rl >= sizeof(equiv)) rl = (uint16_t)(sizeof(equiv) - 1);
+        equiv[rl] = '\0';
+        if (rl == 0 || strcmp(equiv, cur) == 0) return 0;  /* no progress */
+
+        if (resolve_vms_device(equiv, devres) && devres->is_mailbox) {
+            strncpy(out, equiv, outsz - 1);
+            out[outsz - 1] = '\0';
+            return 1;
+        }
+
+        /* Not a mailbox yet -- follow another level of indirection. */
+        strncpy(cur, equiv, sizeof(cur) - 1);
+        cur[sizeof(cur) - 1] = '\0';
+    }
+    return 0;
+}
+
+/*
  * sys$assign - Assign an I/O channel to a device.
  *
  * On VMS, this assigns a channel number to a device. On OVMX, we resolve
@@ -247,7 +322,25 @@ uint32_t sys$assign(const struct dsc$descriptor_s *devnam,
     int fd = -1;
     uint32_t exec_chan = 0;
 
-    if (resolve_vms_device(name, &devres)) {
+    int resolved = resolve_vms_device(name, &devres);
+    if (!resolved) {
+        /*
+         * vms-mb1: the raw name is not a literal device -- it may be a
+         * mailbox LOGICAL NAME an unrelated process is using to reach a
+         * mailbox by name (sys$crembx published it in LNM$SYSTEM). Translate
+         * it; if it resolves to a mailbox device, adopt that "MBAn:" name and
+         * fall into the mailbox assign path below. Nothing else changes.
+         */
+        char mbxdev[256];
+        if (assign_resolve_mailbox_by_name(name, mbxdev, sizeof(mbxdev),
+                                           &devres)) {
+            strncpy(name, mbxdev, sizeof(name) - 1);
+            name[sizeof(name) - 1] = '\0';
+            resolved = 1;
+        }
+    }
+
+    if (resolved) {
         if (devres.is_mailbox) {
             /*
              * vms-d44: $ASSIGN to an EXISTING mailbox by device name -- the

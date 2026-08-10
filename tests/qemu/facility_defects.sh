@@ -4189,9 +4189,9 @@ EOF
 
     mbx-not-shared)
         case "$_f" in
-        facility)     echo "mailboxes (VMS_IOCTL_MBX_CREATE/ASSIGN/WRITE/READ/DELMBX, executive-resident MBAn:), vms-d44";;
+        facility)     echo "mailboxes (VMS_IOCTL_MBX_CREATE/ASSIGN/WRITE/READ/DELMBX, executive-resident MBAn:), vms-d44 + named-mailbox rendezvous by logical name, vms-mb1";;
         targets)      echo "kernel/vms_mbx.c";;
-        suites_red)   echo "test_kmod_mbx";;
+        suites_red)   echo "test_kmod_mbx test_syssvc_mbx_crossproc";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -4210,6 +4210,8 @@ oracle: $DELMBX alone does not deassign or delete -- the mailbox is still assign
 B: $DASSGN channel 1
 B: $DASSGN channel 2
 B: $DASSGN channel 3 (the last one)
+reader: $ASSIGN by LOGICAL NAME reaches the creator's mailbox cross-process (sys$assign translates the name through LNM$SYSTEM to MBAn:)
+reader: $QIO READVBLK returns the EXACT message the creator wrote (byte-exact, right length) -- named-mailbox message delivery through the executive
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
@@ -4240,6 +4242,25 @@ the mailbox's refcnt reached zero and it was freed exactly as it would be
 if B had genuinely never touched it at all, which is a coincidentally
 correct answer to a differently-broken question, not evidence the defect
 is narrower than claimed.
+
+THE SAME ONE ROOT, OBSERVED IN test_syssvc_mbx_crossproc TOO (vms-mb1).
+That suite proves the by-NAME half: the creator (process A) $CREMBXes a
+mailbox WITH a logical name -- published in the executive-resident
+LNM$SYSTEM (vms-d37) -- and an unrelated reader (process B) reaches it with
+sys$assign(NAME), which translates the name through LNM$SYSTEM to the
+"MBAn:" unit. The name resolves fine (LNM is a different facility); it is
+the executive's mailbox $ASSIGN of that unit, by a caller that is not the
+creator, that this same creator-pid check refuses. So the reader's by-name
+$ASSIGN goes red, and the delivery read that depends on the channel it
+never got goes red with it (the read is issued unconditionally on the
+would-be channel precisely so it reddens BY NAME under this defect rather
+than being skipped). The creator's own $CREMBX and $QIO WRITEVBLK to its
+OWN mailbox stay green (A is always its own mailbox's creator), and the
+never-defined-name control stays green (it names no mailbox, so the check
+has nothing to discriminate on). Two suites, one root: a mailbox reachable
+only by its creator is the exact socketpair facade the executive replaced,
+whether the second process reaches for it by unit (test_kmod_mbx) or by
+name (test_syssvc_mbx_crossproc).
 EOF
                       ;;
         esac;;

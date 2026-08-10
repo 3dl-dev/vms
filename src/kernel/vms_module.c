@@ -721,6 +721,9 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_convert(proc, arg);
     case VMS_IOCTL_GETLKI:
         return vms_ioctl_getlki(proc, arg);
+    /* DLM resource-directory + mastering readback (vms-ci.5 DB) */
+    case VMS_IOCTL_GET_RESMASTER:
+        return vms_ioctl_get_resmaster(proc, arg);
 
     /* Device table (executive-resident I/O database) */
     case VMS_IOCTL_ASSIGN:

@@ -369,10 +369,43 @@ struct vms_getlki_args {
     uint32_t pad;
 };
 
+/*
+ * DLM resource-directory + mastering readback (vms-ci.5 DB).
+ *
+ * A READ-ONLY diagnostic view of a resource's DLM state: which node is its
+ * DIRECTORY (dir_csid, the node reached by hashing resnam), which node
+ * MASTERS it (master_csid, 0 until mastered on first $ENQ), and how many
+ * locks are granted on it. It does NOT create or master a resource -- an
+ * unknown name comes back found=0 with master_csid=0 -- so it can be called
+ * before and after an $ENQ to prove the local-master path actually mastered
+ * the resource, rather than a test asserting a hand-set structure.
+ *
+ * is_local_master is (master_csid == local_csid), surfaced so a test need not
+ * know the CSID value. Grounding: IDSM lock-management directory lookups
+ * (mined transcript ch6-part02 pp. 6-18..6-35); docs/design-cluster-node.md §5.
+ */
+struct vms_resmaster_args {
+    char     resnam[32];        /* in: resource name (null-terminated) */
+    uint32_t found;             /* return: 1 if a resource block exists */
+    uint32_t local_csid;        /* return: this node's CSID */
+    uint32_t dir_csid;          /* return: directory node CSID for resnam */
+    uint32_t master_csid;       /* return: mastering node CSID; 0 = unmastered */
+    uint32_t is_local_master;   /* return: 1 if mastered by this node */
+    uint32_t n_granted;         /* return: granted locks on the resource */
+    uint32_t status;            /* return: SS$_ status */
+    uint32_t pad;
+};
+
 #define VMS_IOCTL_ENQ       _IOWR(VMS_IOC_MAGIC, 0x30, struct vms_enq_args)
 #define VMS_IOCTL_DEQ       _IOWR(VMS_IOC_MAGIC, 0x31, struct vms_deq_args)
 #define VMS_IOCTL_CONVERT   _IOWR(VMS_IOC_MAGIC, 0x32, struct vms_enq_args)
 #define VMS_IOCTL_GETLKI    _IOWR(VMS_IOC_MAGIC, 0x33, struct vms_getlki_args)
+/*
+ * Lock-manager ioctl range is 0x30-0x3F (device table starts at 0x50); 0x34
+ * is the next free slot after GETLKI. DC/DD (remote forward, remaster) are
+ * 0.4 and do not add a new ioctl here -- they extend the enqueue path.
+ */
+#define VMS_IOCTL_GET_RESMASTER _IOWR(VMS_IOC_MAGIC, 0x34, struct vms_resmaster_args)
 
 /* ================================================================
  * Process registration

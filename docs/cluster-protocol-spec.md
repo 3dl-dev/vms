@@ -4881,6 +4881,102 @@ ceiling 19 at `f165`; freeze frame `f167 ss=20`, 58-byte `0x4b` dir op-5 on
 (`dir_confirm5_tmpl`, `SCS_DIR_CONFIRM5`); measurement `tools/cluster/dissect_sca.py`
 + the freeze-point forensic (`send_seq`/`recv_ack` at abs 34/32).
 
+#### 4(O.16) The coordinator-lean fix WORKS ON THE WIRE — op 0x02 moves from `ss=24` to `ss=12` when OVMX's own dir/MSCP client half is suppressed to the coordinator — but it is NECESSARY-NOT-SUFFICIENT: with op 0x02 delivered lean AND in-order AND well under any ceiling, the coordinator STILL returns `cm_responses=0` and tears the VC down, so the freeze is NOT the send_seq position alone (GROUNDED, live lab-2 matched kill-switch bracket, `vms-9af`, 2026-08-10)
+
+**Frame.** §4(O.15) located the rejoin stall at coordinator-VC BLOAT (OVMX front-loads
+its own `SCS$DIRECTORY` + `MSCP$DISK` client discovery onto the one VC that must carry
+the readmission, so op 0x02 lands at `ss=21`, behind the member's `recv_ack` ceiling
+of 19) and named candidate 1 — keep the coordinator's VC LEAN — as the leading fix.
+This subsection SHIPS that fix and BRACKETS it live. The bloat is real and removable
+and op 0x02 does move under the ceiling; **`XITDONE` still does not flip**, so the
+`ss=20→21` freeze is necessary-not-sufficiently explained by the bloat, exactly as
+§4(O.12) found for the connection-selection fix.
+
+**The change (`src/vmsscs/scsd.c`, wire-visible, kill-switched).** On a detected
+rejoin (`cm_rejoin_target_mode()` → PRIORCLU sidecar) OVMX now SUPPRESSES its own
+`SCS$DIRECTORY` + `MSCP$DISK` CLIENT connects to the COORDINATOR member — the peer
+whose `VMS$VAXcluster` VC carries op 0x02 — and runs that discovery against a
+NON-coordinator member instead, matching the §4(O.11) oracle census. The coordinator
+is `cm_peer_is_coordinator()` (the op-0x02 recipient: strict-maximum node number with
+a lower peer present, or `OVMX_CFG2_PEER` named). Suppressing the single own-dir
+CONNECT (join step 1/8) prevents the whole client-half cascade (dir lookups → MSCP
+connect → MSCP discovery) on that VC. Gate: `cm_rejoin_lean_vc()`; kill-switch
+`OVMX_REJOIN_LEAN_VC=0` restores the pre-fix bloat.
+
+**The matched bracket (GROUNDED, live lab-2 `vaxlab-0`, one identity `OVMX90`/1973
+throughout, `OVMX_JOIN_SEQ=1 OVMX_CFG2_PEER=2` so the coordinator is deterministically
+node 2 = SCSSYSTEMID 1026 ↔ the oracle's VAX2; first-join arm established membership
+and wrote the PRIORCLU sidecar, 2026-08-10).** op 0x02's per-VC `send_seq` read at abs
+`[34:36]` on OVMX's own 190-byte config frame to the coordinator:
+
+| arm | `OVMX_REJOIN_LEAN_VC` | `SCSD-I-LEANVC` | own-dir binds to members (`OWNDIRBOUND`) | op 0x02 `send_seq` to coordinator | `XITDONE` |
+|---|---|---|---|---|---|
+| RfixCFG2 (fix) | on (default) | fires once (node 2) | **1** (non-coordinator only) | **`ss=12`** (LEAN, ≈ oracle `ss=14`) | **0** |
+| RoffCFG2 (kill-switch) | `=0` | none | **2** (both members, the bloat) | **`ss=24`** (BLOATED, above the §4(O.15) `ss=21` point) | **0** |
+
+The fix does EXACTLY what §4(O.15) predicted and is wire-visible in three independent
+readings: `LEANVC` fires for the coordinator only, `OWNDIRBOUND` drops from 2 to 1
+(OVMX's own client half leaves the coordinator's VC and stays on the non-coordinator's,
+per the oracle), and **op 0x02's `send_seq` drops from 24 to 12** — comfortably under
+the member's ceiling and below even the oracle's `ss=14`. The op 0x02 also rides as the
+contiguous SYSAP `send_msg=3` (§4(O.13)/vms-71d), so it is lean in BOTH the per-VC
+sequence and the SYSAP sequence.
+
+**And it is STILL not enough (GROUNDED, same bracket).** In the fix arm, with op 0x02
+delivered to the coordinator at `ss=12` — lean, in-order, well under the ceiling — the
+coordinator (`08:00:2b:8e:b7:85`, node 2) returns **`cm_responses=0`**: no `cat-0x04`
+op 0x04 reciprocation, no op 0x03 commit, no barrier. After ~10 s both members drive
+every connection `OPEN --SVC_DISCONNECT--> DISC SENT` and OVMX's exit summary shows
+`vaxcluster_member=no`, `conn[dir=DISC SENT member=DISC SENT]`, `XITDONE=0` — the same
+teardown as the pre-fix arm. So removing the coordinator-VC bloat, though real and
+oracle-aligned, does NOT by itself complete readmission: **the member's refusal to
+reciprocate op 0x04 survives op 0x02 arriving lean**, which refutes "op 0x02 was
+stranded only because it was behind the `recv_ack` ceiling" as the WHOLE story.
+
+**The frontier relocates to §4(O.15)'s candidate 2, now isolated.** With the bloat
+removed as a confound, the live blocker is: *why does the coordinator decline op 0x04
+reciprocation when op 0x02 reaches it lean and in-order?* Two grounded threads for the
+next increment (`vms-694`): (1) a **late STRAY cat-0x04 ack** — in the fix arm OVMX
+emits a `cat-0x04` ack naming SYSAP `msg#2` (the op 0x01 params) ~9.8 s after that
+frame, where the reference acks within ~1 ms and NEVER acks an op 0x01
+(`SCSD-W-STRAYACK`); this is a distinct stray-ack from the one vms-71d's
+`rejoin_hold_standalone_ack()` holds, and it fires on the member-initiated VC after
+op 0x02. (2) the §4(O.15) candidate-2 question of whether OVMX's op-5 directory frame
+is the wrong message for the member-opened directory connection's state, which the
+non-190 Con.ID/offset ungroundedness (§4(d)) still blocks. Neither is the send_seq
+position, which this bracket has now taken off the table.
+
+**What ships (`vms-9af`).** The coordinator-lean change (kill-switch
+`OVMX_REJOIN_LEAN_VC`, coordinator id `cm_peer_is_coordinator` / `OVMX_CFG2_PEER`), a
+fail-pre/pass-post unit test
+(`tests/vmsscs/test_scsd_wire.c:test_rejoin_keeps_coordinator_vc_lean_so_op02_rides_low`
+— ARM A suppressed → op 0x02 at the lean baseline, ARM B `OVMX_REJOIN_LEAN_VC=0` →
+op 0x02 bloated by the client-half frame count; non-coordinator never suppressed;
+first-join untouched), and this live bracket. `scs`/`vmsscs` ctest stays green. It is a
+real wire improvement (op 0x02 now rides lean, matching the oracle) that is a strict
+PREREQUISITE for readmission without being its completion — banked, not a dead end.
+
+**Non-claims.** (1) This does not claim which member is "the" coordinator is grounded —
+`OVMX_CFG2_PEER=2` NAMES it (node 2 ↔ the oracle's VAX2 by SCSSYSTEMID); the default
+heuristic (strict-max node number with a lower peer present) is START-order dependent
+and best-effort, never presented as VMS-authentic. (2) It does not claim the stray-ack
+or the op-5 directory frame IS the residual blocker — only that the send_seq position
+is NOT, and those two are the isolated candidates. (3) The op 0x02 body is unchanged
+(§4(O.10)); this is a connection-population change, not a payload change.
+
+**Evidence** (host, tank volume): live bracket
+`/data/training/vax/k8s-labs/vaxlab-0/logs/` — `d94-RfixCFG2.pcap` (op 0x02 frame 178,
+`cat 0x01 op 0x02`, OVMX `6a:85:cb:48:e0:62` → coordinator, `send_seq=12`) vs
+`d94-RoffCFG2.pcap` (op 0x02 frame 217, `send_seq=24`); `scsd-RfixCFG2.log`
+(`LEANVC ... node 2`, one `OWNDIRBOUND`, `CMCONFIG2 ... to node 2 ... send_msg=3`,
+`SCSD-W-STRAYACK ... msg#2 ... 9795 ms`, `cm_responses=0`, `conn[member=DISC SENT]`,
+`XITDONE=0`) vs `scsd-RoffCFG2.log` (no `LEANVC`, two `OWNDIRBOUND`, op 0x02
+`send_seq=24`); first-join `scsd-9afF2.log` (`XITDONE=1`, sidecar
+`formed=00bc0c7124275ac0 founding_sysid=1025 generation=1`); code
+`src/vmsscs/scsd.c` (`cm_rejoin_lean_vc`, `cm_peer_is_coordinator`,
+`cm_lean_vc_suppress_peer`, the two own-dir initiation gates); measurement
+`tools/cluster/dissect_sca.py` + `send_seq` at abs `[34:36]`.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

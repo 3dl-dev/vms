@@ -1171,6 +1171,44 @@ struct vms_ident_args {
 };
 
 /*
+ * Construct the SYSTEM identity onto the calling process (vms-a17e).
+ *
+ * THE OPA0: PRECEDENT, APPLIED TO IDENTITY. On OpenVMS, EXEC_INIT
+ * constructs the system process's identity; LOGINOUT is SYSUAF's FIRST
+ * reader. Before this ioctl, OVMX inverted that: a userspace process
+ * (PROVISION.EXE) read SYSUAF's SYSTEM record and handed the values to
+ * VMS_IOCTL_SETIDENT -- the exact ioctl reserved for LOGINOUT
+ * authenticating an ARBITRARY user. This ioctl is different in the one
+ * way that matters: IT TAKES NO IDENTITY ARGUMENTS. There is no
+ * username, uic, or authorized_privs field for a caller to supply,
+ * because the identity is not a claim being ratified -- it is a
+ * constant the executive already owns (VMS_SYSTEM_UIC /
+ * VMS_PRV_M_SYSTEM_ALL, vms_internal.h), exactly as OPA0:'s name and
+ * characteristics are constants vms_devtab_init() creates at module
+ * load rather than values a process registers.
+ *
+ * THE GATE IS THE SAME REAL KERNEL CREDENTIAL vms_proc_register()
+ * already uses to decide the enforced privilege set: capable
+ * (CAP_SYS_ADMIN). This is not a new trust boundary -- a CAP_SYS_ADMIN
+ * caller could already reach an equivalent result today by calling
+ * VMS_IOCTL_SETIDENT("SYSTEM", [1,4], PRV$M_ALL) itself (it holds
+ * SETPRV via VMS_PRV_M_ENFORCED, so vms_ioctl_setident()'s subset check
+ * never engages). What moves is WHERE the specific values SYSTEM/[1,4]/
+ * ALL live: compiled into the executive, not read out of
+ * SYS$SYSTEM:SYSUAF.DAT by the caller first.
+ *
+ * (Self-targeted only, same as VMS_IOCTL_SETIDENT, and for the same
+ * reason: OVMX has no VMS behaviour pinned for stamping ANOTHER
+ * process's identity.)
+ *
+ * SS$_NOPRIV if the caller lacks CAP_SYS_ADMIN.
+ */
+struct vms_establish_system_args {
+    uint32_t status;      /* return: SS$_ status */
+    uint32_t pad;
+};
+
+/*
  * Record the calling process's TERMINAL in the executive (vms-d0b).
  *
  * OVMX DESIGN CHOICE (CLAUDE.md Rule 8), stated rather than implied:
@@ -1210,6 +1248,7 @@ struct vms_setterm_args {
 #define VMS_IOCTL_PROCSCAN  _IOWR(VMS_IOC_MAGIC, 0x43, struct vms_procscan_args)
 #define VMS_IOCTL_SETIDENT  _IOWR(VMS_IOC_MAGIC, 0x44, struct vms_ident_args)
 #define VMS_IOCTL_SETTERM   _IOWR(VMS_IOC_MAGIC, 0x45, struct vms_setterm_args)
+#define VMS_IOCTL_ESTABLISH_SYSTEM  _IOWR(VMS_IOC_MAGIC, 0x46, struct vms_establish_system_args)
 
 /*
  * ABI lock for the process-table ioctls (vms-8019).
@@ -1264,6 +1303,8 @@ _Static_assert(sizeof(struct vms_setterm_args) == 8,
                "vms_setterm_args layout changed: VMS_IOCTL_SETTERM ABI break");
 _Static_assert(sizeof(struct vms_ident_args) == 48,
                "vms_ident_args layout changed: VMS_IOCTL_SETIDENT ABI break");
+_Static_assert(sizeof(struct vms_establish_system_args) == 8,
+               "vms_establish_system_args layout changed: VMS_IOCTL_ESTABLISH_SYSTEM ABI break");
 _Static_assert(sizeof(struct vms_register_args) == 8,
                "vms_register_args layout changed: VMS_IOCTL_REGISTER ABI break");
 /*
@@ -1284,6 +1325,8 @@ _Static_assert(VMS_IOCTL_SETIDENT == 0xC0305644u,
                "VMS_IOCTL_SETIDENT encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_SETTERM == 0xC0085645u,
                "VMS_IOCTL_SETTERM encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_ESTABLISH_SYSTEM == 0xC0085646u,
+               "VMS_IOCTL_ESTABLISH_SYSTEM encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_REGISTER == 0xC0085640u,
                "VMS_IOCTL_REGISTER encodes differently here than on the reference build");
 

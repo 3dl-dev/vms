@@ -44,17 +44,19 @@
  * ============================================================================
  * WHY THIS IMAGE IS THE STARTUP PROCESS, AND NOT SOMETHING STARTUP.COM CALLS
  * ============================================================================
- * vms_kif_setident() stamps THE CALLING PROCESS. An identity established by a
+ * vms_kif_establish_system() (formerly vms_kif_setident()'s job, see
+ * vms-a17e above) stamps THE CALLING PROCESS. An identity established by a
  * short-lived helper invoked from a DCL procedure would evaporate when the
  * helper exited, leaving nothing on the node holding SYSTEM.
  *
  * So PID 1 execs THIS image where it used to exec DCL.EXE, and this image
  * execs DCL.EXE on SYS$MANAGER:STARTUP.COM when it is done. exec(2) preserves
- * the process, so the executive's row -- SYSTEM, [1,4], SYSUAF's authorized
- * privilege mask -- carries into the DCL that runs STARTUP.COM and
- * SYSTARTUP_VMS.COM. That is LOGINOUT's exact shape (read the authorized
- * record, ask the executive to stamp it, exec the CLI), run for the startup
- * process, and it is what OpenVMS does: STARTUP runs under username SYSTEM.
+ * the process, so the executive's row -- SYSTEM, [1,4], the SYSTEM privilege
+ * mask -- carries into the DCL that runs STARTUP.COM and SYSTARTUP_VMS.COM.
+ * That is LOGINOUT's shape one step further corrected (ask the executive to
+ * construct the identity, exec the CLI -- there is no record left for this
+ * image to read first), run for the startup process, and it is what
+ * OpenVMS does: STARTUP runs under username SYSTEM.
  *
  * It also answers the ordering question the design left open -- "the identity
  * must be established before STARTUP.COM can act as SYSTEM" -- in the only way
@@ -66,10 +68,21 @@
  * declares nothing about itself, which is the whole of Rule 11.
  *
  * ============================================================================
- * ONE READER
+ * ONE READER -- AND, AS OF vms-a17e, ONE FEWER JOB FOR IT TO DO
  * ============================================================================
- * This image links libvms and calls sysuaf_lookup(). There is no second parse
- * of SYSUAF anywhere in the boot path any more.
+ * This image no longer calls sysuaf_lookup() at all. The SYSTEM identity
+ * this file used to read out of SYSUAF's SYSTEM record now comes from the
+ * executive's own constants (vms_kif_establish_system(), see the comment at
+ * its call site in main() below) -- EXEC_INIT constructs the system
+ * process's identity on OpenVMS, and vms.ko now does the OVMX equivalent at
+ * module init, so this image has nothing left to read for it.
+ *
+ * The one SYSUAF read that remains here is provision_home_directories()'s
+ * walk of every account for home-directory provisioning -- a distinct
+ * concern (VMS's own account provisioning, not identity establishment) that
+ * goes through the same sysuaf_read_line()/sysuaf_parse_line() pair every
+ * other reader in the tree uses. There is still no second parser of SYSUAF
+ * anywhere in the boot path.
  */
 
 #include <stdio.h>
@@ -107,11 +120,15 @@ static const char *vms_to_linux(const char *vms_spec, char *buf, size_t bufsz)
  * FAIL-STOP, and deliberately so.
  *
  * This carries the SAME facility, the SAME two lines and the SAME
- * power-off-instead-of-exit behaviour PID 1's ovmx_exec_halt() had when this
- * check lived there, because it is the same condition: the system does not
- * come up without an authorized identity for the system process. Rule 10 is
- * explicit that a condition VMS never faces gets made unreachable rather than
- * handled, and that there is no plausible-looking default to pick.
+ * power-off-instead-of-exit behaviour PID 1's ovmx_exec_halt() had when the
+ * original check lived there. Two conditions reach it now (vms-a17e split
+ * what used to be one): no SYSTEM account anywhere in SYSUAF (nobody could
+ * ever authenticate as SYSTEM again -- see provision_home_directories()),
+ * and the executive refusing to construct or read back the system process's
+ * identity (a condition that should be unreachable given CAP_SYS_ADMIN, but
+ * is checked rather than assumed). Rule 10 is explicit that a condition VMS
+ * never faces gets made unreachable rather than handled, and that there is
+ * no plausible-looking default to pick.
  *
  * The facility is OVMX, not a VMS one, because the event is OVMX's -- the
  * message names an OVMX file layout and an OVMX bootstrap, and inventing a
@@ -208,12 +225,13 @@ static void own_tree(const char *path, uint32_t uic_group, uint32_t uic_member)
  * can create and delete in SYS$SYSTEM: and SYS$MANAGER:, and an ordinary user
  * cannot.
  *
- * WHICH UIC IS NOT HARDCODED HERE. It is the UIC this process just had stamped
- * into the executive from SYSUAF's SYSTEM record -- the same record LOGINOUT
- * authenticates against. The two CANNOT disagree any more, because there is
- * now one read and one parser: the whole reason they could disagree was that
- * the file protection and the executive identity were computed by two
- * different parsers of one file.
+ * WHICH UIC IS NOT HARDCODED IN THIS FUNCTION -- it is `info.uic`, read back
+ * from the executive after vms_kif_establish_system() (vms-a17e), not from
+ * SYSUAF. It IS hardcoded one level up, in vms.ko's VMS_SYSTEM_UIC
+ * (vms_internal.h) -- but that constant and SYSUAF's SYSTEM row are
+ * oracle-pinned to the SAME fact ([1,4], docs/oracle/vax73-authorize-
+ * privilege.md), not read from one another, so they cannot drift apart the
+ * way two independent parsers of one file could.
  *
  * WHY IT RUNS ON EVERY BOOT, not just at install: PID 1's
  * provision_seed_files() adds files to the tree after the install step is
@@ -266,15 +284,28 @@ static void provision_ownership(uint32_t sys_grp, uint32_t sys_mem)
  * sysuaf_parse_line(), the same pair every other reader in the tree uses, so
  * an over-length row is REPORTED here and not silently downgraded into a
  * different account (vms-9b7).
+ *
+ * ALSO THE SYSTEM-ACCOUNT CONTINUITY CHECK (vms-a17e). Identity
+ * establishment no longer reads SYSUAF -- vms_kif_establish_system()
+ * constructs SYSTEM's identity as an executive constant regardless of
+ * what SYSUAF contains -- but "SYSUAF has no SYSTEM account at all" is
+ * still a condition worth a fail-stop for a reason that has nothing to do
+ * with identity: no session could ever authenticate as SYSTEM again.
+ * Rather than add a SECOND SYSUAF read to check for that, this walk
+ * (which runs anyway, for home-directory provisioning) reports whether it
+ * saw one. Returns 1 if a SYSTEM row was seen, 0 otherwise -- including
+ * when the file could not be opened at all, which is the same "no SYSTEM
+ * account" condition by a different route.
  */
-static void provision_home_directories(void)
+static int provision_home_directories(void)
 {
     char sysuaf_path[512];
     vms_to_linux(VMS_SYSUAF_PATH, sysuaf_path, sizeof(sysuaf_path));
     FILE *fp = fopen(sysuaf_path, "r");
     if (!fp)
-        return;
+        return 0;
 
+    int saw_system = 0;
     char line[SYSUAF_LINE_MAX];
     int too_long = 0;
     while (sysuaf_read_line(fp, line, sizeof(line), &too_long)) {
@@ -288,6 +319,8 @@ static void provision_home_directories(void)
         sysuaf_record_t rec;
         if (sysuaf_parse_line(line, &rec) != 1)
             continue;
+        if (strcmp(rec.username, "SYSTEM") == 0)
+            saw_system = 1;
         if (rec.default_dir[0] == '\0')
             continue;
 
@@ -302,6 +335,7 @@ static void provision_home_directories(void)
         own_object(home_linux, rec.uic_group, rec.uic_member);
     }
     fclose(fp);
+    return saw_system;
 }
 
 /* ------------------------------------------------------------------ */
@@ -316,30 +350,42 @@ int main(void)
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
 
     /*
-     * THE ONE READ. sysuaf_lookup() is libvms's single SYSUAF reader; it
-     * reports an over-length record rather than truncating it into a shorter
-     * one, which is the defect that made this exact halt reachable.
+     * ACCOUNT-PROVISIONING AND THE ONE REMAINING SYSUAF READ, FIRST
+     * (vms-a17e). provision_home_directories() is unrelated to identity --
+     * it creates every account's home directory -- but its walk is also
+     * where "does SYSUAF have a SYSTEM account at all" gets answered, so
+     * the fail-stop below rides that read instead of adding a second one
+     * (see the function's own comment). Deliberately BEFORE identity
+     * establishment: a SYSUAF with no SYSTEM account must halt before
+     * anything prints "system identity ... established", exactly as it did
+     * when this same check lived in the now-deleted SYSUAF-for-identity
+     * read (#278).
      */
-    sysuaf_record_t sys;
-    if (sysuaf_lookup("SYSTEM", &sys) != 0)
-        provision_halt("no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT",
-                       "the system process has no authorized identity");
-
-    uint32_t uic = (sys.uic_group << 16) | sys.uic_member;
-    uint64_t privs = sysuaf_parse_privileges(sys.privileges);
+    if (!provision_home_directories())
+        provision_halt("no SYSTEM account in SYS$SYSTEM:SYSUAF.DAT",
+                       "no session could ever authenticate as SYSTEM");
 
     /*
-     * ASK THE EXECUTIVE. VMS_IOCTL_SETIDENT refuses any caller that does not
-     * hold SETPRV an identity that is not a weakening of its own, and SETPRV
-     * is derived in vms.ko from capable(CAP_SYS_ADMIN) at registration -- a
-     * credential no process can grant itself. So the executive can say no,
-     * which is the difference between an identity and a claim (Rule 11).
+     * ASK THE EXECUTIVE TO CONSTRUCT THE IDENTITY (vms-a17e). NO SYSUAF READ
+     * PRECEDES THIS. SYSTEM/[1,4]/ALL are no longer values this process
+     * reads out of SYS$SYSTEM:SYSUAF.DAT and hands to the executive -- they
+     * are constants vms.ko owns from module init (VMS_SYSTEM_UIC /
+     * VMS_PRV_M_SYSTEM_ALL, src/kernel/vms_internal.h), constructed the same
+     * way OPA0: is: by the executive itself, before any process asks. This
+     * is the OpenVMS shape restored -- EXEC_INIT constructs the system
+     * process's identity; LOGINOUT (tools/vms_login.c) is SYSUAF's FIRST
+     * reader, not this image.
+     *
+     * The refusal path is unchanged: vms_kif_establish_system() can still
+     * say no (SS$_NOPRIV, if this process somehow lacks CAP_SYS_ADMIN),
+     * which is still the difference between an identity and a claim
+     * (Rule 11) -- there is just nothing left for THIS process to claim.
      */
-    uint32_t st = vms_kif_setident("SYSTEM", uic, privs);
+    uint32_t st = vms_kif_establish_system();
     if (!(st & 1)) {
         char detail[64];
         snprintf(detail, sizeof(detail), "SS$ status %u", (unsigned)st);
-        provision_halt("the executive refused the system process's identity",
+        provision_halt("the executive refused to construct the system process's identity",
                        detail);
     }
 
@@ -358,12 +404,15 @@ int main(void)
     fflush(stdout);
 
     /*
-     * Ownership LAST among the two provisioning steps, and after the identity
-     * stamp: it is the LAST writer of ownership, so that accounts sharing a
-     * directory (SYSUAF ships SYSTEM and OPERATOR both defaulted to [SYSMGR])
-     * cannot leave the system tree owned by whichever record was read last.
+     * Ownership LAST among the two provisioning steps: it is the LAST writer
+     * of ownership, so that accounts sharing a directory (SYSUAF ships
+     * SYSTEM and OPERATOR both defaulted to [SYSMGR]) cannot leave the
+     * system tree owned by whichever record was read last.
+     * provision_home_directories() already ran, above (vms-a17e moved it
+     * earlier to double as the SYSTEM-account continuity check) -- the
+     * relative order that matters here is unchanged, home directories then
+     * this.
      */
-    provision_home_directories();
     provision_ownership(info.uic >> 16, info.uic & 0xFFFFu);
 
     /*

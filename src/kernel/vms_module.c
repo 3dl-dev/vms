@@ -754,6 +754,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_procscan(proc, arg);
     case VMS_IOCTL_SETIDENT:
         return vms_ioctl_setident(proc, arg);
+    case VMS_IOCTL_ESTABLISH_SYSTEM:
+        return vms_ioctl_establish_system(proc, arg);
 
     /* Logical name tables (executive-resident LNM$SYSTEM, vms-d37) */
     case VMS_IOCTL_LNM_DEFINE:
@@ -934,6 +936,19 @@ static int __init vms_init(void)
         kmem_cache_destroy(vms_proc_cache);
         return ret;
     }
+
+    /*
+     * Announce the SYSTEM identity constant before /dev/vms exists, for the
+     * same reason the device table just did (vms-a17e): VMS_SYSTEM_UIC and
+     * VMS_PRV_M_SYSTEM_ALL (vms_internal.h) are facts the executive owns
+     * from module load, not values any process registers or supplies.
+     * vms_ioctl_establish_system() stamps them onto a process later, on
+     * request (PROVISION.EXE, at boot) -- this line is the proof that what
+     * gets stamped was already true before that process, or SYSUAF, existed
+     * to the executive at all.
+     */
+    pr_info("vms: system identity constant SYSTEM [%o,%o] privileges=ALL established by the executive\n",
+            VMS_SYSTEM_UIC >> 16, VMS_SYSTEM_UIC & 0xFFFFu);
 
     /*
      * Bring up the logical-name arena before /dev/vms exists, for the same

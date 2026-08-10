@@ -29,6 +29,7 @@
 #include <linux/mutex.h>
 #include <linux/string.h>
 #include <linux/pid.h>
+#include <linux/capability.h>
 
 #include "vms_internal.h"
 
@@ -601,6 +602,61 @@ long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg)
      * single uaf$q_priv quadword, so OVMX has one mask.
      */
     proc->cur_privs  = args.authorized_privs;
+
+    spin_unlock(&proc->mode_lock);
+    spin_unlock(&vms_proc_hash_lock);
+
+    args.status = SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_establish_system - construct the SYSTEM identity onto the
+ * caller (vms-a17e).
+ *
+ * See struct vms_establish_system_args in vms_ioctl.h for the full design
+ * rationale (the OPA0: precedent applied to identity) and
+ * VMS_SYSTEM_UIC/VMS_PRV_M_SYSTEM_ALL in vms_internal.h for where the
+ * constants are grounded. In one line: this is vms_ioctl_setident() with
+ * the identity fixed to a constant the executive owns instead of a value
+ * the caller read out of SYSUAF, so PROVISION.EXE (the only caller) never
+ * has to open SYS$SYSTEM:SYSUAF.DAT to become SYSTEM.
+ *
+ * capable(CAP_SYS_ADMIN) is the same real kernel credential
+ * vms_proc_register() already reads to decide the enforced privilege set
+ * at registration -- not a new gate, and not one a process can grant
+ * itself. A caller without it gets SS$_NOPRIV, the same status
+ * vms_ioctl_setident() returns for the analogous refusal.
+ *
+ * Locking mirrors vms_ioctl_setident(): hash_lock outer, mode_lock inner,
+ * both held across the whole read-decide-write so no concurrent caller on
+ * this same process can interleave with the write.
+ */
+long vms_ioctl_establish_system(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_establish_system_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    if (!capable(CAP_SYS_ADMIN)) {
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+
+    spin_lock(&vms_proc_hash_lock);
+    spin_lock(&proc->mode_lock);
+
+    memset(proc->username, 0, VMS_USERNAME_SIZE);
+    strncpy(proc->username, "SYSTEM", VMS_USERNAME_SIZE - 1);
+    proc->uic        = VMS_SYSTEM_UIC;
+    proc->perm_privs = VMS_PRV_M_SYSTEM_ALL;
+    proc->cur_privs  = VMS_PRV_M_SYSTEM_ALL;
 
     spin_unlock(&proc->mode_lock);
     spin_unlock(&vms_proc_hash_lock);

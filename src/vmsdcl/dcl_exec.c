@@ -571,16 +571,45 @@ static void cp_eval_operand(cond_parser_t *cp, const char *raw,
         s[--slen] = '\0';
 
     /* Unquote */
+    int was_quoted = 0;
     if (slen >= 2 && s[0] == '"' && s[slen-1] == '"') {
         s[slen-1] = '\0';
         s++;
         slen -= 2;
+        was_quoted = 1;
     }
 
     /* Lexical function */
-    if (strncasecmp(s, "F$", 2) == 0 && cp->cctx) {
+    if (!was_quoted && strncasecmp(s, "F$", 2) == 0 && cp->cctx) {
         dcl_eval_lexical(cp->cctx, s, buf, bufsz);
         return;
+    }
+
+    /* Automatic symbol substitution (VMS DCL "IF"/"WHILE" expressions):
+     * an UNQUOTED operand that is a valid symbol name is replaced by its
+     * value -- e.g. `IF P2 .EQS. ""` tests the value of P2, not the literal
+     * "P2".  A quoted operand is always a literal string.  If the token is
+     * not a defined symbol it is left as-is (OVMX keeps the literal rather
+     * than raising %DCL-W-UNDSYM, matching the lenient integer-operand path
+     * and parse_primary()). */
+    if (!was_quoted && slen > 0 &&
+        (isalpha((unsigned char)s[0]) || s[0] == '_' || s[0] == '$')) {
+        int is_symname = 1;
+        for (size_t k = 0; k < slen; k++) {
+            char c = s[k];
+            if (!(isalnum((unsigned char)c) || c == '_' || c == '$')) {
+                is_symname = 0;
+                break;
+            }
+        }
+        if (is_symname) {
+            const char *val = dcl_sym_get(s);
+            if (val) {
+                strncpy(buf, val, bufsz - 1);
+                buf[bufsz - 1] = '\0';
+                return;
+            }
+        }
     }
 
     strncpy(buf, s, bufsz - 1);
@@ -854,14 +883,16 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
             /* Remove surrounding quotes */
             size_t slen = strlen(subst);
             char *sv = subst;
+            int was_quoted = 0;
             if (slen >= 2 && sv[0] == '"' && sv[slen - 1] == '"') {
                 sv[slen - 1] = '\0';
                 sv++;
                 slen -= 2;
+                was_quoted = 1;
             }
 
             /* Lexical function after substitution */
-            if (strncasecmp(sv, "F$", 2) == 0) {
+            if (!was_quoted && strncasecmp(sv, "F$", 2) == 0) {
                 char result[DCL_MAX_VALUE];
                 dcl_eval_lexical(ctx, sv, result, sizeof(result));
                 char *endp;
@@ -877,7 +908,37 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
                 if (*endp == '\0' && sv[0] != '\0') {
                     dcl_sym_set_int(cmd->verb, (int32_t)val, scope);
                 } else {
-                    dcl_sym_set(cmd->verb, sv, scope);
+                    /* Automatic symbol substitution on an `=` right-hand side:
+                     * `A = B` assigns the VALUE of symbol B (VMS treats the RHS
+                     * of `=`/`==` as an expression).  This is what makes the
+                     * `SRC = P'N'` parameter-indexing idiom work: 'N' expands to
+                     * "2" giving the token P2, which is then resolved to the
+                     * value of parameter P2.  A quoted RHS stays literal; an
+                     * undefined symbol is kept as-is (lenient, no %DCL-W-UNDSYM). */
+                    const char *rv = NULL;
+                    if (!was_quoted && sv[0] != '\0' &&
+                        (isalpha((unsigned char)sv[0]) || sv[0] == '_' || sv[0] == '$')) {
+                        int is_symname = 1;
+                        for (char *q = sv; *q; q++) {
+                            if (!(isalnum((unsigned char)*q) || *q == '_' || *q == '$')) {
+                                is_symname = 0;
+                                break;
+                            }
+                        }
+                        if (is_symname)
+                            rv = dcl_sym_get(sv);
+                    }
+                    if (rv) {
+                        /* Preserve integer typing when the value is numeric. */
+                        char *ep2;
+                        long iv = strtol(rv, &ep2, 0);
+                        if (*ep2 == '\0' && rv[0] != '\0')
+                            dcl_sym_set_int(cmd->verb, (int32_t)iv, scope);
+                        else
+                            dcl_sym_set(cmd->verb, rv, scope);
+                    } else {
+                        dcl_sym_set(cmd->verb, sv, scope);
+                    }
                 }
             }
         }

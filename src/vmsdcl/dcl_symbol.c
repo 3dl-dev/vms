@@ -238,14 +238,48 @@ int dcl_sym_substitute(const char *input, char *output, size_t outlen)
     size_t i = 0;
 
     while (i < in_len && out < outlen - 1) {
-        /* Check for quoted string - don't substitute inside */
+        /* Quoted string.  Inside a "..." string a SINGLE apostrophe is a
+         * literal character, but a DOUBLED apostrophe ''symbol' performs
+         * symbol substitution (VMS DCL User's Manual, "Symbol Substitution
+         * Within Character Strings").  So copy the string verbatim except for
+         * the ''symbol' form, which we expand. */
         if (input[i] == '"') {
-            output[out++] = input[i++];
+            output[out++] = input[i++];      /* opening " */
             while (i < in_len && out < outlen - 1) {
+                /* Doubled apostrophe: ''symbol' -> value of symbol */
+                if (input[i] == '\'' && i + 1 < in_len && input[i + 1] == '\'') {
+                    i += 2;                  /* skip the two opening apostrophes */
+                    char symname[256];
+                    size_t si = 0;
+                    while (i < in_len && si < sizeof(symname) - 1) {
+                        char c = input[i];
+                        if (c == '\'') { i++; break; }   /* closing ' */
+                        if (isalnum((unsigned char)c) || c == '_' || c == '$') {
+                            symname[si++] = c;
+                            i++;
+                        } else {
+                            break;
+                        }
+                    }
+                    symname[si] = '\0';
+                    if (si > 0) {
+                        const char *val = dcl_sym_get(symname);
+                        if (val) {
+                            size_t vlen = strlen(val);
+                            if (out + vlen < outlen) {
+                                memcpy(output + out, val, vlen);
+                                out += vlen;
+                            }
+                        }
+                        /* undefined symbol -> substitute nothing */
+                    }
+                    continue;
+                }
+
                 output[out++] = input[i];
                 if (input[i] == '"') {
                     i++;
-                    /* Check for doubled quote */
+                    /* Check for doubled quote (escaped ") */
                     if (i < in_len && input[i] == '"') {
                         output[out++] = input[i++];
                     } else {

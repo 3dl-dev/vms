@@ -2517,3 +2517,43 @@ jobs:
               export CC=gcc WORK=/tmp/build-com-native BUILD_EXPECT=1
               sh /src/src/imgact/test/run_build_com_native.sh
             '
+
+  # link-selfhost-native — self-host S4 FIXPOINT (bead vms-62b, the vms-678
+  # Build-native 1.0 gate): OVMX builds a nontrivial OVMX component (the OVMX
+  # linker LINK.EXE) from WITHIN OVMX and proves it byte-stable. A multi-TU
+  # BUILD.COM, driven from a DCL session with ZERO bash in the build path, has
+  # the OVMX-native TCC.EXE compile link.c + ovmx_link_rms_io.c and the native
+  # gen1 LINK.EXE link them into gen2; gen2 is installed as SYS$SYSTEM:LINK.EXE
+  # and links LINK.EXE again into gen3; the job FAILs unless gen2 == gen3
+  # byte-for-byte (the tcc gen2==gen3 fixpoint, now for LINK.EXE). aarch64-only
+  # for the same reason as tcc-native/build-com-native (tinycc configure keys
+  # off uname -m); runs under arm64 binfmt/QEMU emulation. LINK_SELFHOST_EXPECT=1
+  # (BLOCKING): any native build, either @BUILD run, or a gen2!=gen3 mismatch is
+  # a real regression.
+  # -----------------------------------------------------------------------
+  link-selfhost-native:
+    name: LINK.EXE self-host fixpoint — OVMX builds LINK.EXE, gen2==gen3, no bash (self-hosting S4)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build the native toolchain + DCL.EXE, then @BUILD LINK.EXE inside OVMX twice and assert gen2==gen3 (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/link-selfhost-native LINK_SELFHOST_EXPECT=1
+              sh /src/src/imgact/test/run_link_selfhost_native.sh
+            '

@@ -121,10 +121,14 @@ uint32_t vms_kif_kerr_to_ss(int err);
 /* ================================================================
  * Access Mode (3a)
  *
- * THE WHOLE FAMILY IS UNWIRED: no product code calls any of it, so
- * privileges and access modes are still whatever a process says they are
- * (src/vmsdcl/dcl_main.c reads VMS_PRIVILEGES from the environment).
- * vms-pv1 is the item that makes the executive the enforcer.
+ * STALE AS A BLANKET CLAIM (corrected here, not re-derived): setmode/getmode
+ * remain unwired -- privileges and access modes are still whatever a process
+ * says they are (src/vmsdcl/dcl_main.c reads VMS_PRIVILEGES from the
+ * environment) -- but setprv and, as of vms-651, chkpriv are NOT: sys$setprv
+ * routes real $SETPRV mutations through the executive, and cmd_mount/
+ * cmd_dismount ask it whether PRV$M_MOUNT is held before touching a volume.
+ * vms-pv1 is the item that makes the executive the enforcer for the REST of
+ * this family.
  * ================================================================ */
 
 /* Set access mode. Returns SS$_ status
@@ -142,8 +146,10 @@ uint32_t vms_kif_getmode(uint8_t *mode, uint64_t *cur_privs, uint64_t *perm_priv
 uint32_t vms_kif_setprv(uint64_t mask, int enable, int permanent, uint64_t *prev);
 
 /* Check if privileges are held. Returns SS$_NORMAL or SS$_NOPRIV
- * OVMX-UNWIRED: vms_kif_chkpriv (vms-pv1) -- no privilege check in OVMX asks
- * the executive, which is why any process can still claim any privilege */
+ * Wired (vms-651): cmd_mount/cmd_dismount (src/vmsdcl/dcl_cmd_misc.c) check
+ * PRV$M_MOUNT this way before mount(2)/umount(2)ing a volume -- the first
+ * product path that asks the executive whether a privilege is held, rather
+ * than trusting a self-declared mask. */
 uint32_t vms_kif_chkpriv(uint64_t mask);
 
 /* ================================================================
@@ -280,21 +286,25 @@ uint32_t vms_kif_dassgn(uint32_t chan);
  * makes a process the device's owner. SS$_DEVALLOC when it is already
  * allocated to another process or another process holds channels to
  * it; SS$_NOSUCHDEV when there is no such device.
- * OVMX-UNWIRED: vms_kif_alloc (vms-dv1) */
+ * Wired (vms-651): cmd_mount (src/vmsdcl/dcl_cmd_misc.c) claims the unit in
+ * the executive's device table before mount(2)ing its backing block device,
+ * so a second process cannot MOUNT (or ALLOCATE, once vms-dv1 lands) the
+ * same unit out from under it. ALLOCATE/DEALLOCATE as their own DCL verbs
+ * remain vms-dv1's to wire; this is a second, independent caller. */
 uint32_t vms_kif_alloc(const char *devnam);
 
 /* $DALLOC the device. SS$_DEVNOTALLOC if this process does not have it
  * allocated.
- * OVMX-UNWIRED: vms_kif_dalloc (vms-dv1) */
+ * Wired (vms-651): cmd_dismount releases the claim vms_kif_alloc() took,
+ * after umount(2) succeeds. */
 uint32_t vms_kif_dalloc(const char *devnam);
 
 /* vms_kif_alloc_op() is the static body those two share inside vms_kif.c.
  * It has no prototype here and is not part of the interface, but the census
  * universe is the union of what this header prototypes and what vms_kif.c
  * defines -- static definitions included, so that marking a definition static
- * cannot drop it out of the census. It is reached only from $ALLOC/$DALLOC,
- * so while they are unwired it is unwired too, and it says so:
- * OVMX-UNWIRED: vms_kif_alloc_op (vms-dv1) -- shared body of the two above */
+ * cannot drop it out of the census. It is reached from $ALLOC/$DALLOC, both
+ * wired (vms-651), so it is wired too. */
 
 /* Read a device row by name. SS$_NOSUCHDEV if there is no such device.
  * Wired: the census gate is what proves it has a product caller. */
@@ -321,9 +331,9 @@ uint32_t vms_kif_devscan(uint32_t *index, struct vms_devinfo *info);
  * table as DC$_DISK rows); this is the companion that hands back the backing
  * device the process must open. The executive owns the fact -- the process
  * never scans /sys/block itself (Rule 11).
- * OVMX-UNWIRED: vms_kif_disk_resolve (vms-651) -- MOUNT is the consumer: real
- * MOUNT/DISMOUNT (vms-651) resolves a unit to its Linux block device to open
- * it. vms-651 is blocked on this item (vms-3e8) and wires it. */
+ * Wired (vms-651): cmd_mount resolves the unit to its backing block device
+ * this way, then mount(2)s "/dev/<backing>" as vmsfs at the unit's mount
+ * point. */
 uint32_t vms_kif_disk_resolve(const char *devnam, char *backing,
                               uint32_t backing_size,
                               uint32_t *major, uint32_t *minor);

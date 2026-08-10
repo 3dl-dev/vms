@@ -50,6 +50,7 @@
 #include "ovmx_layout.h"
 #include "ovmx_identity.h"
 #include "ssdef.h"
+#include "dcdef.h"
 /* PID 1's identity is established THROUGH the executive, not declared. */
 #include "vms_kif.h"
 
@@ -235,6 +236,54 @@ static void ovmx_sysinit_halt(const char *what, const char *detail)
 }
 
 /*
+ * Pre-create every disk unit's mount point directory, as root, before any
+ * VMS session -- which runs de-privileged under its SYSUAF UIC (LOGINOUT
+ * setuid()/setgid()'s every session onto it, tools/vms_login.c) -- ever
+ * needs one (vms-651).
+ *
+ * WHY THIS HAS TO HAPPEN HERE, not in DCL. mkdir(2) under a directory's
+ * parent needs write+search there for the CALLING process's uid/gid; a VMS
+ * session's Linux uid IS its SYSUAF UIC member number, not root (VMS
+ * privilege is not Linux capability -- see the vms_kif_disk_mount() comment
+ * in src/kernel/vms_devtab.c for the other half of this), so it cannot
+ * create a NEW directory under /mnt (root-owned, mode 0755) no matter what
+ * VMS privilege it holds. PID 1 is the one thing on the node still root at
+ * this point in boot, so it is the one thing that can create these
+ * directories -- MOUNT (src/vmsdcl/dcl_cmd_misc.c) only ever targets a path
+ * that already exists.
+ *
+ * The disk units come from the executive's own enumeration
+ * (vms_kif_devscan(), src/kernel/vms_devtab.c -- vda -> DKA0:, vdb ->
+ * DKA100:, ...), not a second, independent scan of /dev (Rule 11): PID 1
+ * asks the SAME table MOUNT will ask.
+ */
+static void provision_disk_mount_points(void)
+{
+    struct vms_devinfo info;
+    uint32_t index = 0;
+
+    mkdir("/mnt", 0755);
+
+    while (vms_kif_devscan(&index, &info) == SS$_NORMAL) {
+        if (info.devclass != DC$_DISK)
+            continue;
+
+        char name[VMS_DEVNAM_SIZE];
+        strncpy(name, info.devnam, sizeof(name) - 1);
+        name[sizeof(name) - 1] = '\0';
+        size_t len = strlen(name);
+        if (len > 0 && name[len - 1] == ':')
+            name[len - 1] = '\0';
+        for (size_t i = 0; name[i]; i++)
+            name[i] = (char)tolower((unsigned char)name[i]);
+
+        char mount_point[64];
+        snprintf(mount_point, sizeof(mount_point), "/mnt/%s", name);
+        mkdir(mount_point, 0755);
+    }
+}
+
+/*
  * Load a kernel module. Returns 0 on success, -1 with errno set otherwise.
  * Callers decide whether a failure is survivable -- for the executive it is
  * not (see executive_attach).
@@ -351,6 +400,11 @@ static void bare_metal_init(void)
 
     /* The executive comes up before anything else runs. */
     executive_attach();
+
+    /* MOUNT (vms-651) needs every disk unit's mount point to already exist
+     * before any de-privileged VMS session tries to use one -- see the
+     * function's own comment for why this can only happen here, as root. */
+    provision_disk_mount_points();
 
     /* vmsfs.ko is the filesystem, not the executive; a failure here surfaces
      * as the mount failure below, which halts honestly. The executive itself

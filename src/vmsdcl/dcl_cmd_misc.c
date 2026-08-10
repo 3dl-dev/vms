@@ -43,7 +43,9 @@
 #include "starlet.h"
 #include "ovmx_identity.h"
 #include "vmsfs/filespec.h"
+#include "vmsfs/device.h"
 #include "ovmx_layout.h"
+#include "vms_kif.h"
 
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
@@ -1590,9 +1592,166 @@ int cmd_tcpip(struct dcl_command *cmd)
 /* ================================================================== */
 
 /*
- * MOUNT - Mount a VMS device (virtual mapping to a directory).
+ * Compute the mount point a device name uses. A PURE FUNCTION of the name --
+ * any process can compute it without asking anyone, exactly like
+ * SYSDISK_MOUNT is a compile-time constant for DKA0: (ovmx_layout.h). This is
+ * what lets "is this unit mounted" be answered from /proc/mounts (real,
+ * global, kernel-reported truth) instead of a per-process table entry.
+ * "/mnt/<devnam>" matches the vmsfs mount-point convention the QEMU kernel
+ * tests already use (tests/qemu/test_kmod_vmsfs*.c).
+ */
+static void mount_point_for_device(const char *log_name, char *buf, size_t sz)
+{
+    char lower[16];
+    size_t i;
+    for (i = 0; log_name[i] && i < sizeof(lower) - 1; i++)
+        lower[i] = (char)tolower((unsigned char)log_name[i]);
+    lower[i] = '\0';
+    snprintf(buf, sz, "/mnt/%s", lower);
+}
+
+/*
+ * Is `mount_point` present in the kernel's own mount table right now?
+ * Cross-process, kernel-reported truth -- not a field only this process
+ * could see.
+ *
+ * Parsed by hand with fopen/fgets rather than glibc's getmntent(3):
+ * DECC$SHR's symbol vector (src/vmslink/mk_decc_shr.sh) exports the plain
+ * stdio family DCL already links against everywhere, but not
+ * setmntent/getmntent/endmntent -- those are a glibc-only convenience this
+ * tree has never needed before, and pulling them in here broke the
+ * VMS-native LINK.EXE build of DCL.EXE (%LINK-F-ERROR, unresolved external
+ * symbol 'setmntent'; measured building distro/Dockerfile.bootable).
+ */
+static int mount_point_is_mounted(const char *mount_point)
+{
+    FILE *fp = fopen("/proc/mounts", "r");
+    if (!fp)
+        return 0;
+
+    /* /proc/mounts format: "<source> <mount_point> <fstype> <opts> <freq>
+     * <passno>\n", space-separated. Compare the SECOND field's exact
+     * extent, not a substring -- "/mnt/dka1" must not match
+     * "/mnt/dka100". */
+    char line[512];
+    size_t mp_len = strlen(mount_point);
+    int found = 0;
+    while (fgets(line, sizeof(line), fp)) {
+        char *field2 = strchr(line, ' ');
+        if (!field2) continue;
+        field2++;
+        char *after = strchr(field2, ' ');
+        if (!after) continue;
+        size_t flen = (size_t)(after - field2);
+        if (flen == mp_len && strncmp(field2, mount_point, flen) == 0) {
+            found = 1;
+            break;
+        }
+    }
+    fclose(fp);
+    return found;
+}
+
+/*
+ * Fork, continue THIS session's VMS identity onto the child, and exec the
+ * setuid-root mount helper (tools/vms_mount_helper.c, vms-651) -- the one
+ * thing on the node still able to mount(2)/umount(2) once LOGINOUT has
+ * setuid()/setgid()'d the session onto its SYSUAF UIC. See that file's
+ * header comment for the full reasoning (including why a kernel-mediated
+ * mount does not work on this platform) and for why the helper re-derives
+ * its own authorization rather than trusting argv.
+ *
+ * vms_kif_register_continue() is called in the CHILD, before execv() --
+ * the SAME "forked child before doing privileged work inherits the
+ * parent's authenticated identity" shape image activation already uses
+ * (its own doc comment in src/libvmssys/vms_kif.h says so explicitly) --
+ * so the helper's PRV$M_MOUNT check sees THIS session, not a fresh,
+ * unauthenticated registration: pid/tgid survive exec(), uid/gid/
+ * capabilities do not, and vms.ko's registration is keyed on the former.
+ *
+ * Returns the helper's exit code (0 success, 1 mount/umount itself failed,
+ * 2 usage error, 3 PRV$M_MOUNT not held), or -1 if the helper could not be
+ * forked/exec'd/waited at all. On exit code 1, *helper_errno receives the
+ * errno the helper's mount(2)/umount(2) call failed with.
+ */
+static int run_mount_helper(char *const argv[], int *helper_errno)
+{
+    if (helper_errno)
+        *helper_errno = 0;
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0)
+        return -1;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[1]);
+        (void)vms_kif_open();
+        (void)vms_kif_register_continue();
+        execv(VMS_MOUNT_HELPER_PATH, argv);
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    char errbuf[256];
+    ssize_t n = read(pipefd[0], errbuf, sizeof(errbuf) - 1);
+    close(pipefd[0]);
+    errbuf[n > 0 ? n : 0] = '\0';
+
+    int wstatus;
+    if (waitpid(pid, &wstatus, 0) < 0 || !WIFEXITED(wstatus))
+        return -1;
+
+    int rc = WEXITSTATUS(wstatus);
+    if (rc == 1 && helper_errno) {
+        int e = 0;
+        if (sscanf(errbuf, "ERRNO %d", &e) == 1)
+            *helper_errno = e;
+    }
+    return rc;
+}
+
+/*
+ * MOUNT - mount(2) a VMS disk unit's backing block device as vmsfs (vms-651).
  *
  * Syntax: MOUNT device: label [/SYSTEM]
+ *
+ * KILLED (vms-651, docs/design-vms-faithful-install.md sec 3.1/3.3): the
+ * facade this replaced never called mount(2). It wrote a per-process
+ * userspace device table (struct vms_device / vms_device_table[] in
+ * src/vmsdcl/dcl_builtin.c -- deleted with this change, its only two
+ * readers), used getcwd() as the "mount path", and printed
+ * %MOUNT-I-MOUNTED unconditionally: success reported, nothing shared with
+ * any other process or the disk -- the Rule 9 defect class exactly.
+ *
+ * WHAT THIS DOES NOW:
+ *   - PRV$M_MOUNT is checked through the executive (vms_kif_chkpriv, which
+ *     asks vms_ioctl_chkpriv to read proc->cur_privs -- kernel-resident
+ *     state, not a userspace getuid() check nothing here could forge).
+ *   - The unit is resolved to its backing Linux block device through the
+ *     executive (vms_kif_disk_resolve, vms-3e8) -- this process never
+ *     scans /sys/block itself (Rule 11).
+ *   - "Already mounted" is answered by the kernel's OWN mount table
+ *     (/proc/mounts), not a struct field only this process could see.
+ *   - The unit is claimed in the executive's device table (vms_kif_alloc,
+ *     wired here for the first time) so a second process cannot mount the
+ *     same unit out from under this one.
+ *   - mount(2) attaches "/dev/<backing>" as vmsfs at the unit's mount
+ *     point, and the per-process VMS-filespec translator (vmsfs_device_add,
+ *     src/vmsfs/vmsfs_device.c -- the same mechanism DKA0:/SYSDISK_MOUNT
+ *     already uses) learns the mapping so CREATE/OPEN against this device
+ *     resolve for the rest of this session.
+ *   - A mount(2) failure has no oracle-pinned VMS status (VMS has no
+ *     Linux mount(2) underneath it), so it is reported as an honest OVMX
+ *     facility (Rule 10), the same shape ovmx_sysinit_halt() uses in
+ *     src/ovmx_init/ovmx_init.c for the system disk's own mount failure.
  */
 int cmd_mount(struct dcl_command *cmd)
 {
@@ -1624,55 +1783,7 @@ int cmd_mount(struct dcl_command *cmd)
         dev_name[nlen + 1] = '\0';
     }
 
-    /* Check if already mounted */
-    struct vms_device *existing = vms_find_device(dev_name);
-    if (existing && existing->mounted) {
-        dcl_error("MOUNT", 2, "DEVMOUNT",
-                  "device already mounted - _%s", dev_name);
-        return SS$_DEVMOUNT;
-    }
-
-    /* Get volume label */
-    char label[16] = "OVMX";
-    if (cmd->param_count >= 2) {
-        size_t llen = strlen(cmd->params[1]);
-        if (llen >= sizeof(label)) llen = sizeof(label) - 1;
-        for (size_t i = 0; i < llen; i++)
-            label[i] = (char)toupper((unsigned char)cmd->params[1][i]);
-        label[llen] = '\0';
-    }
-
-    /* Use current directory as mount path */
-    char linux_path[256];
-    if (!getcwd(linux_path, sizeof(linux_path))) {
-        strncpy(linux_path, "/", sizeof(linux_path) - 1);
-        linux_path[sizeof(linux_path) - 1] = '\0';
-    }
-
-    /* Add or update device table entry */
-    struct vms_device *dev = existing;
-    if (!dev) {
-        if (vms_device_count >= VMS_MAX_DEVICES) {
-            dcl_error("MOUNT", 2, "DEVFULL",
-                      "device table full");
-            return SS$_DEVALLOC;
-        }
-        dev = &vms_device_table[vms_device_count++];
-    }
-    strncpy(dev->vms_name, dev_name, sizeof(dev->vms_name) - 1);
-    dev->vms_name[sizeof(dev->vms_name) - 1] = '\0';
-    strncpy(dev->linux_path, linux_path, sizeof(dev->linux_path) - 1);
-    dev->linux_path[sizeof(dev->linux_path) - 1] = '\0';
-    strncpy(dev->volume_label, label, sizeof(dev->volume_label) - 1);
-    dev->volume_label[sizeof(dev->volume_label) - 1] = '\0';
-    dev->mounted = 1;
-
-    /* Create logical name for device -> linux path */
-    const char *table = LNM_PROCESS_TABLE;
-    if (dcl_has_qualifier(cmd, "SYSTEM"))
-        table = LNM_SYSTEM_TABLE;
-
-    /* Strip trailing colon for logical name */
+    /* Strip trailing colon for the logical name / filespec-translator key */
     char log_name[16];
     strncpy(log_name, dev_name, sizeof(log_name) - 1);
     log_name[sizeof(log_name) - 1] = '\0';
@@ -1680,9 +1791,122 @@ int cmd_mount(struct dcl_command *cmd)
     if (lnlen > 0 && log_name[lnlen - 1] == ':')
         log_name[lnlen - 1] = '\0';
 
+    char mount_point[64];
+    mount_point_for_device(log_name, mount_point, sizeof(mount_point));
+
+    (void)vms_kif_open();
+
+    /* PRIVILEGE (vms-651 constraint): ask the executive, not getuid(). */
+    uint32_t pst = vms_kif_chkpriv(PRV$M_MOUNT);
+    if (pst == SS$_NOPRIV) {
+        dcl_error("SYSTEM", 4, "NOPRIV",
+                  "insufficient privilege or object protection violation");
+        return SS$_NOPRIV;
+    }
+    if (!(pst & 1)) {
+        /* Executive-unreachable / ioctl-level failure -- $STATUS carries
+         * it, nothing rendered (Rule 10; see cmd_show_device's identical
+         * default: case in dcl_cmd_show.c for the reasoning). */
+        return pst;
+    }
+
+    /* Resolve the unit to its backing block device through the executive
+     * (vms_kif_disk_resolve, vms-3e8) -- the process never scans /sys/block
+     * itself (Rule 11). */
+    char backing[VMS_BACKING_SIZE];
+    memset(backing, 0, sizeof(backing));
+    uint32_t rst = vms_kif_disk_resolve(dev_name, backing, sizeof(backing),
+                                         NULL, NULL);
+    switch (rst) {
+    case SS$_NORMAL:
+        break;
+    case SS$_NOSUCHDEV:
+        dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
+        return SS$_NOSUCHDEV;
+    case SS$_IVDEVNAM:
+        dcl_error("SYSTEM", 0, "IVDEVNAM", "invalid device name");
+        return SS$_IVDEVNAM;
+    default:
+        return rst;
+    }
+
+    if (mount_point_is_mounted(mount_point)) {
+        dcl_error("MOUNT", 2, "DEVMOUNT",
+                  "device already mounted - _%s", dev_name);
+        return SS$_DEVMOUNT;
+    }
+
+    /* Claim the unit in the executive's device table (vms-651 wires
+     * vms_kif_alloc for the first time). */
+    uint32_t ast = vms_kif_alloc(dev_name);
+    if (ast == SS$_DEVALLOC) {
+        dcl_error("SYSTEM", 0, "DEVALLOC",
+                  "device already allocated to another user");
+        return SS$_DEVALLOC;
+    }
+    if (!(ast & 1))
+        return ast;
+
+    /* Volume label -- informational only; vmsfs does not read it back.
+     * Kept for command-line compatibility. */
+    char label[16] = "OVMX";
+    if (cmd->param_count >= 2) {
+        size_t llen = strlen(cmd->params[1]);
+        if (llen >= sizeof(label)) llen = sizeof(label) - 1;
+        for (size_t k = 0; k < llen; k++)
+            label[k] = (char)toupper((unsigned char)cmd->params[1][k]);
+        label[llen] = '\0';
+    }
+
+    /*
+     * The actual mount(2), performed by the setuid-root helper
+     * (tools/vms_mount_helper.c, vms-651): LOGINOUT setuid()/setgid()'s
+     * every VMS session onto its SYSUAF UIC (tools/vms_login.c), so THIS
+     * process holds no Linux capability regardless of the PRV$M_MOUNT it
+     * was just found to hold -- mount(2) itself requires CAP_SYS_ADMIN
+     * unconditionally. The helper re-derives PRV$M_MOUNT from the
+     * executive itself (it does not trust this process's claim) before
+     * doing anything privileged -- see its header comment for why a
+     * kernel-mediated mount is not available on this platform and for the
+     * full security reasoning. The mount point already exists --
+     * src/ovmx_init/ovmx_init.c's provision_disk_mount_points() created it,
+     * as root, before any session dropped privilege.
+     */
+    char backing_path[VMS_BACKING_SIZE + 8];
+    snprintf(backing_path, sizeof(backing_path), "/dev/%s", backing);
+    char *helper_argv[] = {
+        (char *)VMS_MOUNT_HELPER_PATH, (char *)"mount",
+        backing_path, mount_point, NULL
+    };
+    int helper_errno = 0;
+    int hrc = run_mount_helper(helper_argv, &helper_errno);
+    if (hrc == 3) {
+        vms_kif_dalloc(dev_name);
+        dcl_error("SYSTEM", 4, "NOPRIV",
+                  "insufficient privilege or object protection violation");
+        return SS$_NOPRIV;
+    }
+    if (hrc != 0) {
+        vms_kif_dalloc(dev_name);
+        dcl_error("OVMX", 4, "MOUNTFAIL",
+                  "%s would not mount as vmsfs: %s", dev_name,
+                  hrc == 1 ? strerror(helper_errno) : "mount helper did not run");
+        return SS$_BUGCHECK;
+    }
+
+    /* Tell the per-process VMS-filespec translator (the same mechanism
+     * DKA0:/SYSDISK_MOUNT already uses) so filespecs against this device
+     * resolve for the rest of this session. */
+    vmsfs_device_add(log_name, mount_point);
+
+    /* Create logical name for device -> linux path */
+    const char *table = LNM_PROCESS_TABLE;
+    if (dcl_has_qualifier(cmd, "SYSTEM"))
+        table = LNM_SYSTEM_TABLE;
+
     lnm_manager_t *mgr = lnm_get_manager();
     if (mgr) {
-        lnm_create(mgr, table, log_name, linux_path,
+        lnm_create(mgr, table, log_name, mount_point,
                    LNM_ATTR_TERMINAL, LNM_MODE_USER);
     }
 
@@ -1692,9 +1916,13 @@ int cmd_mount(struct dcl_command *cmd)
 
 
 /*
- * DISMOUNT - Dismount a VMS device.
+ * DISMOUNT - umount(2) a VMS disk unit dismounted by MOUNT (vms-651).
  *
  * Syntax: DISMOUNT device:
+ *
+ * Mirrors cmd_mount(): PRV$M_MOUNT through the executive, "is it mounted"
+ * from /proc/mounts, umount(2), then release the executive's claim
+ * (vms_kif_dalloc) and the filespec-translator entry.
  */
 int cmd_dismount(struct dcl_command *cmd)
 {
@@ -1718,16 +1946,6 @@ int cmd_dismount(struct dcl_command *cmd)
         dev_name[nlen + 1] = '\0';
     }
 
-    struct vms_device *dev = vms_find_device(dev_name);
-    if (!dev || !dev->mounted) {
-        dcl_error("DISMOUNT", 2, "DEVNOTMNT",
-                  "device is not mounted - _%s", dev_name);
-        return SS$_DEVNOTMOUNT;
-    }
-
-    dev->mounted = 0;
-
-    /* Remove logical name */
     char log_name[16];
     strncpy(log_name, dev_name, sizeof(log_name) - 1);
     log_name[sizeof(log_name) - 1] = '\0';
@@ -1735,6 +1953,49 @@ int cmd_dismount(struct dcl_command *cmd)
     if (lnlen > 0 && log_name[lnlen - 1] == ':')
         log_name[lnlen - 1] = '\0';
 
+    char mount_point[64];
+    mount_point_for_device(log_name, mount_point, sizeof(mount_point));
+
+    (void)vms_kif_open();
+
+    uint32_t pst = vms_kif_chkpriv(PRV$M_MOUNT);
+    if (pst == SS$_NOPRIV) {
+        dcl_error("SYSTEM", 4, "NOPRIV",
+                  "insufficient privilege or object protection violation");
+        return SS$_NOPRIV;
+    }
+    if (!(pst & 1))
+        return pst;
+
+    if (!mount_point_is_mounted(mount_point)) {
+        dcl_error("DISMOUNT", 2, "DEVNOTMNT",
+                  "device is not mounted - _%s", dev_name);
+        return SS$_DEVNOTMOUNT;
+    }
+
+    /* The actual umount(2), performed by the setuid-root helper -- see the
+     * matching comment on the mount(2) call in cmd_mount(). */
+    char *helper_argv[] = {
+        (char *)VMS_MOUNT_HELPER_PATH, (char *)"umount", mount_point, NULL
+    };
+    int helper_errno = 0;
+    int hrc = run_mount_helper(helper_argv, &helper_errno);
+    if (hrc == 3) {
+        dcl_error("SYSTEM", 4, "NOPRIV",
+                  "insufficient privilege or object protection violation");
+        return SS$_NOPRIV;
+    }
+    if (hrc != 0) {
+        dcl_error("OVMX", 4, "DISMOUNTFAIL",
+                  "%s would not unmount: %s", dev_name,
+                  hrc == 1 ? strerror(helper_errno) : "mount helper did not run");
+        return SS$_BUGCHECK;
+    }
+
+    vms_kif_dalloc(dev_name);
+    vmsfs_device_remove(log_name);
+
+    /* Remove logical name */
     lnm_manager_t *mgr = lnm_get_manager();
     if (mgr) {
         lnm_delete(mgr, LNM_PROCESS_TABLE, log_name, LNM_MODE_USER);

@@ -396,3 +396,23 @@ set_tests_properties(sysgen_versioning_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 600)
+
+# ---------------------------------------------------------------------------
+# MOUNT/DISMOUNT ARE REAL mount(2)/umount(2) (vms-651).
+#
+# Boots the ACTUAL mastered bootable image TWICE against a SECOND, real
+# virtio disk (formatted VMSFS on the host first -- see run_mount_e2e.sh):
+# MOUNT DKA100:, CREATE a real file on it, DISMOUNT, re-MOUNT, then a full
+# QEMU process restart against the SAME disk file, proving the file landed
+# on the disk and not a tmpfs. See tests/qemu/test_mount_e2e.sh's header for
+# the full ground-source shape. Same opt-in convention as parts_demo_e2e
+# above, for the same reason (a real docker+QEMU boot, real minutes, must
+# not tax a bare `ctest` run's time budget).
+add_test(
+    NAME mount_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_mount_e2e.sh
+)
+set_tests_properties(mount_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 900)

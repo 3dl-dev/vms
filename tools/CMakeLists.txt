@@ -320,3 +320,35 @@ target_link_libraries(ovmx_kit_pack PRIVATE vmsfs vmslnm)
 set_target_properties(ovmx_kit_pack PROPERTIES
     OUTPUT_NAME "ovmx_kit_pack"
 )
+
+# vms_mount_helper - setuid-root privileged mount(2)/umount(2) helper for
+# DCL's MOUNT/DISMOUNT (vms-651). See tools/vms_mount_helper.c's header for
+# why this exists: LOGINOUT drops every VMS session to its SYSUAF UIC (no
+# Linux capability survives that), and there is no exported kernel-module
+# API that can graft a mount onto a path on a process's behalf, so this is
+# the one Unix-classic escape hatch (setuid-root, re-derives its own
+# authorization from the executive, never trusts its caller). NOT a VMS
+# image: no ".EXE" suffix, not installed under SYS$SYSTEM:, invoked by an
+# absolute Linux path DCL never shows a user.
+add_executable(vms_mount_helper
+    vms_mount_helper.c
+)
+
+target_include_directories(vms_mount_helper PRIVATE
+    ${VMS_INCLUDE_DIR}
+)
+
+target_compile_definitions(vms_mount_helper PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(vms_mount_helper PRIVATE
+    -Wall -Wextra
+)
+
+target_link_libraries(vms_mount_helper PRIVATE vms)
+
+set_target_properties(vms_mount_helper PROPERTIES
+    OUTPUT_NAME "vms_mount_helper"
+)

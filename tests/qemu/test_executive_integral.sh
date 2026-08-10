@@ -121,7 +121,7 @@ cp "$DISTRIB_IMG" "$DISK_A"
 OUT_A=$(run_qemu "$INITRD_OK" "$DISK_A")
 
 check "Boot A: executive attached" "$OUT_A" '%OVMX-I-EXEC'
-check "Boot A: system came up (boot banner)" "$OUT_A" 'OVMX V0.1'
+check "Boot A: system came up (boot banner)" "$OUT_A" 'OVMX V0.2'
 check "Boot A: no executive-image load error" "$OUT_A" '%EXECINIT, error loading system file' absent
 check "Boot A: no OVMX-facility exec halt" "$OUT_A" '%OVMX-F-EXECINIT' absent
 echo ""
@@ -145,7 +145,7 @@ check "Boot B: carries the oracle's status for a missing file" "$OUT_B" 'R0 = 00
 # The load-bearing assertions: the system genuinely did NOT come up. Before
 # vms-0ff, this boot printed a severity-W warning and proceeded to a full DCL
 # session with no executive at all.
-check "Boot B: NO boot banner (system did not come up)" "$OUT_B" 'OVMX V0.1'  absent
+check "Boot B: NO boot banner (system did not come up)" "$OUT_B" 'OVMX V0.2'  absent
 check "Boot B: NO login prompt"                         "$OUT_B" 'Username:'  absent
 check "Boot B: startup did not complete"                "$OUT_B" '%STDRV-I-STARTUP, OVMX startup completed' absent
 echo ""
@@ -167,7 +167,7 @@ OUT_C=$(run_qemu "$INITRD_NODEV" "$DISK_C")
 
 check "Boot C: reports the OVMX-facility exec halt" "$OUT_C" '%OVMX-F-EXECINIT, VMS executive device /dev/vms did not open'
 check "Boot C: NO fabricated bare EXECINIT (no R0)" "$OUT_C" '%EXECINIT, error loading system file' absent
-check "Boot C: NO boot banner (system did not come up)" "$OUT_C" 'OVMX V0.1' absent
+check "Boot C: NO boot banner (system did not come up)" "$OUT_C" 'OVMX V0.2' absent
 check "Boot C: NO login prompt"                          "$OUT_C" 'Username:' absent
 check "Boot C: startup did not complete"                 "$OUT_C" '%STDRV-I-STARTUP, OVMX startup completed' absent
 echo ""

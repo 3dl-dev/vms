@@ -109,6 +109,10 @@ jobs:
               - 'src/libvms/include/ovmx_identity.h'
               - 'src/libvms/include/ovmx_kit_format.h'
               - 'src/kernel/vmsfs/vmsfs_ondisk.h'
+              - 'src/product/**'
+              - 'tests/qemu/test_upgrade_e2e.sh'
+              - 'tests/qemu/run_upgrade_e2e.sh'
+              - 'tests/qemu/test_product_install_e2e.sh'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -468,6 +472,100 @@ jobs:
             -v ${{ github.workspace }}/tests/qemu/test_distrib_boot.sh:/test.sh:ro \
             ubuntu:24.04 \
             bash -c "apt-get update -qq && apt-get install -y --no-install-recommends qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio >/dev/null 2>&1 && bash /test.sh"
+
+  # -----------------------------------------------------------------------
+  # Job 2c: install -> UPGRADE -> boot (vms-f05, epic vms-a84 RELEASE ENGINEERING)
+  #
+  # Fresh install is proven (Job 2 above, Job 2b's PARTS demo, vms-df9's
+  # product-install-e2e); a 0.N -> 0.N+1 UPGRADE preserving user state was
+  # completely untested before this job -- exactly where real systems break.
+  # Cuts TWO real tools/cut-release.sh bundles (never hand-faked "0.N"/
+  # "0.N+1"): BASELINE from a fixed, recorded commit
+  # (28a929b2, "tests: install->UPGRADE->boot e2e gate scaffolding" -- the
+  # commit right before this same PR bumped OVMX_PRODUCT_VERSION V0.1 ->
+  # V0.2) and UPGRADE from this workflow's own commit (HEAD). This is a
+  # deliberately PINNED historical pair, not a rolling N/N+1 -- it exists to
+  # structurally prove the upgrade MECHANISM once, against a real version
+  # jump this repository actually made. Re-pinning it to a later pair (or
+  # making it roll forward automatically each release) is tracked
+  # separately, not done here (no gold-plating this item's scope).
+  #
+  # tests/qemu/test_upgrade_e2e.sh's own header carries THE FINDING measured
+  # while building this gate: PRODUCT INSTALL's do_install() overwrites
+  # every kit-listed file unconditionally, including
+  # SYS$MANAGER:SYSTARTUP_VMS.COM (shipped BY the kit) -- so a site
+  # customization appended to that file does NOT survive an upgrade
+  # (assertion (b) below). User data outside the kit's file list (assertion
+  # (a)) and the version bump (assertion (c)) DO survive; the whole machine
+  # still boots after the upgrade (assertion (d)). This is a REAL, MEASURED
+  # gap in product install, not a test bug -- see the filed follow-up in
+  # this PR's description. The run step is `continue-on-error` so this
+  # tracked, honest finding does not block unrelated merges while it stays
+  # visibly red on every run until product.c grows seed-once/site-file
+  # semantics (a kit-format change, its own design-change cascade, larger
+  # than vms-f05's scope).
+  # -----------------------------------------------------------------------
+  upgrade-e2e:
+    name: install -> UPGRADE -> boot e2e (vms-f05)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cut the BASELINE release (pinned commit, pre version-bump)
+        run: |
+          tools/cut-release.sh --ref 28a929b2 --out-dir "${{ github.workspace }}/dist/upgrade-baseline"
+
+      - name: Cut the UPGRADE release (this commit)
+        run: |
+          tools/cut-release.sh --ref HEAD --out-dir "${{ github.workspace }}/dist/upgrade-upgrade"
+
+      - name: Build host tools (INITIALIZE.EXE, vmsfs_master)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TOOLS=ON -DBUILD_TESTS=OFF
+          cmake --build build -j"$(nproc)" --target vms_initialize vmsfs_master
+
+      - name: Build bootable image (qemu tooling only -- boots the two cuts' own artifacts)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: install -> UPGRADE -> boot e2e
+        id: upgrade_e2e
+        continue-on-error: true
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+          OVMX_BASELINE_RELEASE_DIR="${{ github.workspace }}/dist/upgrade-baseline" \
+          OVMX_UPGRADE_RELEASE_DIR="${{ github.workspace }}/dist/upgrade-upgrade" \
+            tests/qemu/run_upgrade_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: upgrade_e2e SKIPPED in CI — this gate must actually run the real boot+upgrade, never skip silently." >&2
+            exit 1
+          fi
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Report the tracked finding if the gate went red
+        if: steps.upgrade_e2e.outcome == 'failure'
+        run: |
+          echo "::warning::upgrade_e2e is red — expected as of vms-f05 if only assertion (b) (site-config survival) failed: PRODUCT INSTALL clobbers SYS\$MANAGER:SYSTARTUP_VMS.COM on upgrade (see tests/qemu/test_upgrade_e2e.sh header, 'THE FINDING'). Any OTHER failing assertion is a NEW regression, not this tracked gap — check the step log above."
 
   # -----------------------------------------------------------------------
   # Job 2b: PARTS 0.2 Demo E2E (vms-1c8, epic vms-2579/vms-5dd)

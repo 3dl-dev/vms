@@ -611,6 +611,20 @@ struct vms_device {
     uint32_t            page;
 
     /*
+     * Disk backing (devclass == DC$_DISK, vms-3e8). The Linux block device
+     * this unit was enumerated from at module init -- "vda" for DKA0:, "vdb"
+     * for DKA100:, and so on. Empty and zero for every non-disk device (the
+     * console has no backing block device). This is what lets a process
+     * resolve a VMS unit to the block device it must open (MOUNT, vms-651)
+     * without scanning /sys/block itself: the fact lives here, in the
+     * executive (CLAUDE.md Rule 11). Set once at init, before /dev/vms
+     * exists, and read (under `lock`) by vms_ioctl_disk_resolve().
+     */
+    char                backing[VMS_BACKING_SIZE];
+    uint32_t            backing_major;
+    uint32_t            backing_minor;
+
+    /*
      * Every channel currently assigned to this device, by any process.
      * The device has to know this to decide when implicit ownership
      * ends: it ends when the owner has no channel left, not when any
@@ -746,6 +760,13 @@ long vms_ioctl_devscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg);
+/*
+ * Resolve a DISK unit to its backing Linux block device (vms-3e8). Read-only:
+ * reports the vda/vdb/... name and dev_t the executive enumerated the unit
+ * from at module init, so a process (MOUNT, vms-651) need never scan
+ * /sys/block itself. SS$_NOSUCHDEV / SS$_IVDEVNAM as in the header.
+ */
+long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg);
 /* The job-to-terminal binding. Lives with the channel machinery because
  * its argument is a channel; the value it writes is process-table
  * state (struct vms_proc::terminal). */

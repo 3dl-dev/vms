@@ -518,6 +518,15 @@ struct vms_register_args {
 #define VMS_DEVNAM_SIZE 16
 
 /*
+ * Size of a disk unit's BACKING Linux block-device name (e.g. "vda"), NUL
+ * included. Long enough for the virtio-blk name space (vd[a-z], and vd[a-z][a-z]
+ * if it ever grows). This is an OVMX construct with no VMS counterpart -- a VMS
+ * unit is not "backed by" a Linux block device -- so the size is an OVMX design
+ * choice (CLAUDE.md Rule 8), not a published VMS field width.
+ */
+#define VMS_BACKING_SIZE 16
+
+/*
  * Terminal characteristics.
  *
  * PROVENANCE (CLAUDE.md rules 8 and 10): the NAMES below and the fact
@@ -722,6 +731,35 @@ struct vms_setmode_args {
 #define VMS_IOCTL_DALLOC    _IOWR(VMS_IOC_MAGIC, 0x56, struct vms_alloc_args)
 
 /*
+ * Resolve a DISK unit to the Linux block device the executive enumerated it
+ * from (vms-3e8). The executive creates DKA0:/DKA100:/... at module init by
+ * enumerating the node's virtio block devices (src/kernel/vms_devtab.c), so it
+ * -- not the process -- is the one thing that knows which Linux block device
+ * (vda/vdb/...) backs each VMS disk unit. A process that needs to open the
+ * backing device (MOUNT, vms-651) asks the executive rather than scanning
+ * /sys/block itself: the fact lives in the executive (CLAUDE.md Rule 11).
+ *
+ * OVMX CONSTRUCT, labelled (CLAUDE.md Rule 8): "the Linux block device behind a
+ * VMS unit" has no VMS counterpart, so no public OpenVMS document publishes this
+ * exchange. The DEVICE NAMING it resolves is doc-derived (see vms_devtab.c); the
+ * backing-device coupling reported here is the OVMX side of that bridge.
+ *
+ * SS$_NOSUCHDEV if there is no such unit; SS$_IVDEVNAM if the name is not a
+ * legal device name, or names a device that is not a DISK (only disk units have
+ * a backing block device).
+ */
+struct vms_diskresolve_args {
+    char     devnam[VMS_DEVNAM_SIZE];   /* in: disk unit name, e.g. "DKA0:" */
+    char     backing[VMS_BACKING_SIZE]; /* out: Linux block device, e.g. "vda" */
+    uint32_t backing_major;             /* out: backing dev_t major */
+    uint32_t backing_minor;             /* out: backing dev_t minor */
+    uint32_t status;                    /* return: SS$_ status */
+    uint32_t pad;
+};
+
+#define VMS_IOCTL_DISK_RESOLVE _IOWR(VMS_IOC_MAGIC, 0x57, struct vms_diskresolve_args)
+
+/*
  * The kernel module and the userspace client compile these structures
  * separately, from this one header, and then pass them across the
  * /dev/vms boundary by raw address. If a field is ever reordered,
@@ -753,6 +791,8 @@ _Static_assert(sizeof(struct vms_setmode_args) == 40,
                "struct vms_setmode_args changed size -- IO$_SETMODE would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_alloc_args) == 24,
                "struct vms_alloc_args changed size -- $ALLOC/$DALLOC would decode at the wrong offsets");
+_Static_assert(sizeof(struct vms_diskresolve_args) == 48,
+               "struct vms_diskresolve_args changed size -- disk unit resolution would decode at the wrong offsets");
 
 _Static_assert(VMS_IOCTL_ASSIGN == 0xC0185650u,
                "VMS_IOCTL_ASSIGN encodes differently here than on the reference build");
@@ -768,6 +808,8 @@ _Static_assert(VMS_IOCTL_ALLOC == 0xC0185655u,
                "VMS_IOCTL_ALLOC encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_DALLOC == 0xC0185656u,
                "VMS_IOCTL_DALLOC encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_DISK_RESOLVE == 0xC0305657u,
+               "VMS_IOCTL_DISK_RESOLVE encodes differently here than on the reference build");
 
 /* ================================================================
  * Process table (executive-resident PCB directory)

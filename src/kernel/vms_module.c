@@ -740,6 +740,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_alloc(proc, arg);
     case VMS_IOCTL_DALLOC:
         return vms_ioctl_dalloc(proc, arg);
+    case VMS_IOCTL_DISK_RESOLVE:
+        return vms_ioctl_disk_resolve(proc, arg);
     case VMS_IOCTL_SETTERM:
         return vms_ioctl_setterm(proc, arg);
 

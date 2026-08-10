@@ -248,3 +248,12 @@ add_test(NAME test_libvms_rightslist
 # implementations disagreed on.
 libvms_add_test(test_libvms_sysuaf_line_limit
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_line_limit.c)
+
+# vms-982 — the LCK$M_/LCK$K_ constants in <lckdef.h> must match the authentic
+# OpenVMS $LCKDEF layout, pinned by two independent documented-tool methods on
+# the VAX V7.3 oracle (LIBRARIAN extract + MACRO-32 symbol table). Guards the
+# nine wrong (several SWAPPED) bits this header carried, which made three corpus
+# programs pass wrong $ENQ flag patterns. Compile-time _Static_asserts — drift
+# fails the build.
+libvms_add_test(test_libvms_lock_flag_bits
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lock_flag_bits.c)

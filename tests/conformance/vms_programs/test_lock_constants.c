@@ -7,9 +7,13 @@
  * invented values (vms-b27); this test pins them so any future drift fails
  * the build instead of silently breaking real VMS programs.
  *
- * Values: authentic OpenVMS $LCKDEF/$SSDEF (single-lineage community
- * reproduction — FreeVMS lckdef.h, Nankervis/ODS2 ssdef.h; verified
- * 2026-07-26). See the provenance comments in starlet.h / ssdef.h.
+ * Values: authentic OpenVMS $LCKDEF/$SSDEF. The $LCKDEF flag/mode values are
+ * now pinned against the OpenVMS VAX V7.3 oracle (lab-2 vaxlab-7, 2026-08-10)
+ * by two independent documented-tool methods — LIBRARY/EXTRACT=$LCKDEF from
+ * SYS$LIBRARY:STARLET.MLB and a MACRO-32 $LCKDEF symbol-table read (vms-982);
+ * the compile-time guard is tests/libvms/test_lock_flag_bits.c. $SSDEF codes
+ * remain from the Nankervis/ODS2 reproduction. See provenance in starlet.h /
+ * ssdef.h / lckdef.h.
  *
  * NOTE: the kernel lock manager uses a DIFFERENT internal bitmask
  * (src/kernel/vms_ioctl.h LCK_M_*); sys_lock.c translates at the /dev/vms

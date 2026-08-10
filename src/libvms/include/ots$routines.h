@@ -36,6 +36,19 @@
 extern "C" {
 #endif
 
+/*
+ * __unknown_params - on the native VMS C compiler this is a builtin macro
+ * meaning "the parameter list is unspecified" (an empty prototype, K&R
+ * style).  The Eight-Cubed corpus declares the register-return complex
+ * routines with it, e.g.
+ *     extern double complex ots$divct_r3 (__unknown_params);
+ * so provide the same expansion here (an empty parameter list) when the
+ * host compiler has not already defined it.
+ */
+#ifndef __unknown_params
+#define __unknown_params
+#endif
+
 /* ================================================================
  * Text-to-integer conversion routines
  *
@@ -604,16 +617,16 @@ int32_t ots$powjj(
  * ================================================================ */
 
 /* G_floating complex variants (VAX G_float format) */
-extern double complex ots$divcg_r3;   /* divide complex G */
-extern double complex ots$mulcg_r3;   /* multiply complex G */
-extern double complex ots$powcgcg_r3; /* complex G ** complex G */
-extern double complex ots$powcgj_r3;  /* complex G ** integer */
+extern double complex ots$divcg_r3(__unknown_params);   /* divide complex G */
+extern double complex ots$mulcg_r3(__unknown_params);   /* multiply complex G */
+extern double complex ots$powcgcg_r3(__unknown_params); /* complex G ** complex G */
+extern double complex ots$powcgj_r3(__unknown_params);  /* complex G ** integer */
 
 /* IEEE T_floating complex variants (IEEE double) */
-extern double complex ots$divct_r3;   /* divide complex T */
-extern double complex ots$mulct_r3;   /* multiply complex T */
-extern double complex ots$powctct_r3; /* complex T ** complex T */
-extern double complex ots$powctj_r3;  /* complex T ** integer */
+extern double complex ots$divct_r3(__unknown_params);   /* divide complex T */
+extern double complex ots$mulct_r3(__unknown_params);   /* multiply complex T */
+extern double complex ots$powctct_r3(__unknown_params); /* complex T ** complex T */
+extern double complex ots$powctj_r3(__unknown_params);  /* complex T ** integer */
 
 #ifdef __cplusplus
 }

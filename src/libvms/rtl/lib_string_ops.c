@@ -22,6 +22,7 @@
 #include <string.h>
 #include "ssdef.h"
 #include "descrip.h"
+#include "libdef.h"
 #include "lib$routines.h"
 
 /*
@@ -266,4 +267,93 @@ uint32_t lib$spanc(const struct dsc$descriptor_s *str,
 
     /* All characters matched - return 0 (no non-matching char found) */
     return 0;
+}
+
+/*
+ * lib$scopy_dxdx - Copy a source string (passed by descriptor) to a
+ *                  destination string (passed by descriptor).
+ *
+ * Handles any source class (fixed CLASS_S, dynamic CLASS_D, or varying
+ * CLASS_VS) and delivers the bytes to a fixed, dynamic, or varying
+ * destination:
+ *
+ *   CLASS_D  - the destination buffer is (re)allocated to the source
+ *              length and dsc$w_length is set to the copied length.
+ *   CLASS_S  - the destination keeps its fixed length; the string is
+ *              copied and space-filled if the source is shorter, or
+ *              truncated (returning LIB$_STRTRU) if the source is longer.
+ *   CLASS_VS - up to dsc$w_maxstrlen bytes are copied into the varying
+ *              body and its current-length word (CURLEN) is updated;
+ *              LIB$_STRTRU is returned if the source was truncated.
+ *
+ * Returns SS$_NORMAL, LIB$_STRTRU if the source was truncated to fit a
+ * fixed/varying destination, SS$_BADPARAM on a bad descriptor, or
+ * LIB$_INSVIRMEM if a dynamic (re)allocation fails.
+ *
+ * Reference: OpenVMS RTL Library (LIB$) Manual - LIB$SCOPY_DXDX,
+ *            "Copy a Source String Passed by Descriptor to a
+ *            Destination String".
+ */
+uint32_t lib$scopy_dxdx(const struct dsc$descriptor_s *src,
+                        struct dsc$descriptor_s *dest) {
+    if (!dest)
+        return SS$_BADPARAM;
+
+    /* Resolve the source bytes and length, honoring a varying source. */
+    const char *sptr = NULL;
+    uint16_t slen = 0;
+    if (src && src->dsc$a_pointer) {
+        if (src->dsc$b_class == DSC$K_CLASS_VS) {
+            const struct dsc$varying_string *vs =
+                (const struct dsc$varying_string *)src->dsc$a_pointer;
+            sptr = vs->dsc$a_body;
+            slen = vs->dsc$w_curlen;
+        } else {
+            sptr = src->dsc$a_pointer;
+            slen = src->dsc$w_length;
+        }
+    }
+
+    switch (dest->dsc$b_class) {
+    case DSC$K_CLASS_D: {
+        struct dsc$descriptor_d *dd = (struct dsc$descriptor_d *)dest;
+        /* Reallocate only when the current size differs. */
+        if (dd->dsc$w_length != slen || dd->dsc$a_pointer == NULL) {
+            vms_desc_free(dd);
+            if (slen > 0 && vms_desc_alloc(dd, slen) != 0)
+                return LIB$_INSVIRMEM;
+        }
+        if (slen > 0 && sptr)
+            memcpy(dd->dsc$a_pointer, sptr, slen);
+        dd->dsc$w_length = slen;
+        return SS$_NORMAL;
+    }
+
+    case DSC$K_CLASS_VS: {
+        struct dsc$descriptor_vs *dv = (struct dsc$descriptor_vs *)dest;
+        struct dsc$varying_string *vs =
+            (struct dsc$varying_string *)dv->dsc$a_pointer;
+        if (!vs)
+            return SS$_BADPARAM;
+        uint16_t cap = dv->dsc$w_maxstrlen;
+        uint16_t n = (slen <= cap) ? slen : cap;
+        if (n > 0 && sptr)
+            memcpy(vs->dsc$a_body, sptr, n);
+        vs->dsc$w_curlen = n;
+        return (slen > cap) ? LIB$_STRTRU : SS$_NORMAL;
+    }
+
+    case DSC$K_CLASS_S:
+    default: {
+        if (!dest->dsc$a_pointer)
+            return SS$_BADPARAM;
+        uint16_t cap = dest->dsc$w_length;
+        uint16_t n = (slen <= cap) ? slen : cap;
+        if (n > 0 && sptr)
+            memcpy(dest->dsc$a_pointer, sptr, n);
+        if (cap > n)                    /* space-fill the remainder */
+            memset(dest->dsc$a_pointer + n, ' ', cap - n);
+        return (slen > cap) ? LIB$_STRTRU : SS$_NORMAL;
+    }
+    }
 }

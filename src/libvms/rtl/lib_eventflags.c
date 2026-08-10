@@ -47,10 +47,10 @@
 static uint64_t ef_bitmap = 0;
 static pthread_mutex_t ef_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* Error codes for lib$get_ef */
-#define LIB$_EF_ALRFRE  0x00801814  /* Event flag already free */
-#define LIB$_EF_RESSYS  0x00801824  /* Event flag reserved for system */
-#define LIB$_INSEF      0x00801834  /* Insufficient event flags */
+/* Event-flag allocator status codes now live in <libdef.h> (included via
+ * lib$routines.h) so callers and tests can reference them by name:
+ * LIB$_EF_ALRFRE, LIB$_EF_RESSYS, LIB$_INSEF, LIB$_EF_ALRRES. */
+#include "libdef.h"
 
 /*
  * lib$get_ef - Allocate a free local event flag.
@@ -115,6 +115,48 @@ uint32_t lib$free_ef(const uint32_t *efn)
     }
 
     ef_bitmap &= ~bit;
+    pthread_mutex_unlock(&ef_lock);
+
+    return SS$_NORMAL;
+}
+
+/*
+ * lib$reserve_ef - Reserve a specific local event flag.
+ *
+ * Reserves the event flag number *efn for exclusive use so that a
+ * subsequent lib$get_ef will not hand it out.  Unlike lib$get_ef (which
+ * chooses any free flag), the caller names the flag it wants.  The flag
+ * is drawn from the same allocatable pool lib$get_ef manages (24-63);
+ * flags below that range are reserved for the RTL/system.
+ *
+ * Parameters:
+ *   efn - Pointer to the event flag number to reserve
+ *
+ * Returns: SS$_NORMAL on success,
+ *          LIB$_EF_RESSYS if the flag is in the system-reserved range,
+ *          LIB$_EF_ALRRES if the flag is already reserved/allocated,
+ *          SS$_BADPARAM for a bad argument or out-of-range flag.
+ *
+ * Reference: OpenVMS RTL Library (LIB$) Manual - LIB$RESERVE_EF.
+ */
+uint32_t lib$reserve_ef(const uint32_t *efn)
+{
+    if (!efn) return SS$_BADPARAM;
+
+    uint32_t flag = *efn;
+
+    if (flag < EF_FIRST) return LIB$_EF_RESSYS;   /* RTL/system-reserved */
+    if (flag > EF_LAST)  return SS$_BADPARAM;
+
+    int idx = (int)(flag - EF_FIRST);
+    uint64_t bit = (uint64_t)1 << (unsigned)idx;
+
+    pthread_mutex_lock(&ef_lock);
+    if (ef_bitmap & bit) {
+        pthread_mutex_unlock(&ef_lock);
+        return LIB$_EF_ALRRES;
+    }
+    ef_bitmap |= bit;
     pthread_mutex_unlock(&ef_lock);
 
     return SS$_NORMAL;

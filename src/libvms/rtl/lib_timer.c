@@ -32,10 +32,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
+#include <errno.h>
 #include <sys/resource.h>
 #include <pthread.h>
 #include "ssdef.h"
 #include "descrip.h"
+#include "libwaitdef.h"
 #include "lib$routines.h"
 
 #define MAX_TIMERS 128
@@ -269,5 +272,108 @@ uint32_t lib$free_timer(uint32_t *handle)
     pthread_mutex_unlock(&timer_lock);
 
     *handle = 0;
+    return SS$_NORMAL;
+}
+
+/* ================================================================
+ * LIB$WAIT - suspend the caller for a real-time interval
+ *
+ * lib$wait(seconds, [flags], [float-type]) delays the calling thread
+ * for the number of seconds given by the floating value at `seconds`.
+ * The float-type argument names the storage format of that value:
+ *
+ *   LIB$K_VAX_F / VAX_D / VAX_G  - VAX F/D/G_floating
+ *   LIB$K_IEEE_S / IEEE_T        - IEEE single / double
+ *
+ * When float-type is omitted the value is taken to be IEEE single, the
+ * native single-precision format on this (x86-64 / IEEE) platform.  The
+ * VAX formats are decoded from their documented bit layouts so a caller
+ * that really holds VAX-format data is honored, even though the OVMX C
+ * compiler emits IEEE floats.
+ *
+ * Reference: OpenVMS RTL Library (LIB$) Manual - LIB$WAIT; the VAX
+ * floating formats are per the public "VAX Floating-Point" definitions.
+ * ================================================================ */
+
+/* Reassemble a VAX float's 16-bit words (stored low-address-first) into
+ * the natural big-endian-field ordering used by the bit-field formulas. */
+static double vax_f_to_double(const void *p) {
+    uint32_t raw;
+    memcpy(&raw, p, 4);
+    uint32_t w0 = raw & 0xFFFFu;
+    uint32_t w1 = (raw >> 16) & 0xFFFFu;
+    uint32_t bits = (w0 << 16) | w1;
+    int sign = (bits >> 31) & 1;
+    int exp  = (int)((bits >> 23) & 0xFF);
+    uint32_t frac = bits & 0x7FFFFFu;
+    if (exp == 0) return sign ? -0.0 : 0.0;   /* zero / (reserved) */
+    double m = (double)((1u << 23) | frac) / (double)(1u << 24); /* [0.5,1) */
+    double val = ldexp(m, exp - 128);
+    return sign ? -val : val;
+}
+
+static uint64_t vax_reassemble64(const void *p) {
+    uint64_t raw;
+    memcpy(&raw, p, 8);
+    uint64_t w0 = (raw >>  0) & 0xFFFFu;
+    uint64_t w1 = (raw >> 16) & 0xFFFFu;
+    uint64_t w2 = (raw >> 32) & 0xFFFFu;
+    uint64_t w3 = (raw >> 48) & 0xFFFFu;
+    return (w0 << 48) | (w1 << 32) | (w2 << 16) | w3;
+}
+
+static double vax_d_to_double(const void *p) {
+    uint64_t bits = vax_reassemble64(p);
+    int sign = (int)((bits >> 63) & 1);
+    int exp  = (int)((bits >> 55) & 0xFF);          /* 8-bit, bias 128 */
+    uint64_t frac = bits & 0x7FFFFFFFFFFFFFULL;     /* 55 bits */
+    if (exp == 0) return sign ? -0.0 : 0.0;
+    double m = (double)((1ULL << 55) | frac) / (double)(1ULL << 56); /* [0.5,1) */
+    double val = ldexp(m, exp - 128);
+    return sign ? -val : val;
+}
+
+static double vax_g_to_double(const void *p) {
+    uint64_t bits = vax_reassemble64(p);
+    int sign = (int)((bits >> 63) & 1);
+    int exp  = (int)((bits >> 52) & 0x7FF);         /* 11-bit, bias 1024 */
+    uint64_t frac = bits & 0xFFFFFFFFFFFFFULL;      /* 52 bits */
+    if (exp == 0) return sign ? -0.0 : 0.0;
+    double m = (double)((1ULL << 52) | frac) / (double)(1ULL << 53); /* [0.5,1) */
+    double val = ldexp(m, exp - 1024);
+    return sign ? -val : val;
+}
+
+uint32_t lib$wait(const void *seconds, const uint32_t *flags,
+                  const uint32_t *float_type) {
+    (void)flags;   /* reserved / control flags (e.g. LIB$K_NOWAKE) */
+    if (!seconds)
+        return SS$_BADPARAM;
+
+    uint32_t ft = float_type ? *float_type : LIB$K_IEEE_S;
+    double secs;
+    switch (ft) {
+    case LIB$K_IEEE_S: { float f; memcpy(&f, seconds, sizeof f); secs = (double)f; break; }
+    case LIB$K_IEEE_T: { double d; memcpy(&d, seconds, sizeof d); secs = d; break; }
+    case LIB$K_VAX_F:  secs = vax_f_to_double(seconds); break;
+    case LIB$K_VAX_D:  secs = vax_d_to_double(seconds); break;
+    case LIB$K_VAX_G:  secs = vax_g_to_double(seconds); break;
+    default:           return SS$_BADPARAM;
+    }
+
+    if (!(secs >= 0.0))          /* rejects NaN and negatives */
+        return SS$_BADPARAM;
+    if (secs > 100000.0)         /* documented upper bound */
+        secs = 100000.0;
+
+    struct timespec req, rem;
+    req.tv_sec  = (time_t)secs;
+    req.tv_nsec = (long)((secs - (double)req.tv_sec) * 1e9);
+    if (req.tv_nsec < 0) req.tv_nsec = 0;
+    if (req.tv_nsec > 999999999L) req.tv_nsec = 999999999L;
+
+    while (nanosleep(&req, &rem) != 0 && errno == EINTR)
+        req = rem;             /* resume the remaining interval after an AST/signal */
+
     return SS$_NORMAL;
 }

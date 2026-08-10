@@ -11,8 +11,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
+#include <math.h>
+#include <complex.h>
 #include "ssdef.h"
 #include "descrip.h"
+/* NB: ots$routines.h is deliberately NOT included here — several of the
+ * older ots$cvt_* signatures in this file predate and diverge from the
+ * prototypes in that header (a pre-existing divergence).  The routines
+ * added below (complex arithmetic, cnvout, cvt_t) are ABI-compatible with
+ * their header prototypes; the corpus and the header are the callers. */
 
 /*
  * ots$cvt_l_ti - Convert longword integer to decimal text in a descriptor.
@@ -382,4 +390,254 @@ int32_t ots$powjj(const int32_t base, const int32_t exponent) {
         if (e) b *= b;
     }
     return result;
+}
+
+/* ================================================================
+ * Complex arithmetic routines (vms-801 R2.2 batch 4)
+ *
+ * OTS$xxxCx_R3 are the compiler-support routines for COMPLEX
+ * arithmetic.  The "_r3" forms take the two operands' real and
+ * imaginary parts as separate scalar arguments and return the
+ * complex result in the floating-point return registers (double
+ * complex).  The trailing type letter is the float format:
+ *   g = VAX G_floating, t = IEEE T_floating (both 64-bit double).
+ *
+ * On this IEEE platform G_float and T_float are both computed with
+ * native IEEE double precision, so the G and T entry points share
+ * the same arithmetic (the distinction is the caller's declared
+ * operand format, which is already native double here).
+ *
+ * Reference: OpenVMS RTL "OTS$ (Object Time System) Reference" -
+ *            OTS$DIVC/OTS$MULC/OTS$POWCC/OTS$POWCJ descriptions.
+ * ================================================================ */
+
+/* (real1 + i*imag1) / (real2 + i*imag2) */
+static double complex ots_divc_impl(double r1, double i1, double r2, double i2) {
+    return (r1 + i1 * I) / (r2 + i2 * I);
+}
+/* (real1 + i*imag1) * (real2 + i*imag2) */
+static double complex ots_mulc_impl(double r1, double i1, double r2, double i2) {
+    return (r1 + i1 * I) * (r2 + i2 * I);
+}
+/* (base_real + i*base_imag) ** (exp_real + i*exp_imag) */
+static double complex ots_powcc_impl(double br, double bi, double er, double ei) {
+    return cpow(br + bi * I, er + ei * I);
+}
+/* (base_real + i*base_imag) ** j  (complex raised to an integer power) */
+static double complex ots_powcj_impl(double br, double bi, int32_t j) {
+    double complex base = br + bi * I;
+    double complex result = 1.0 + 0.0 * I;
+    uint32_t e = (j < 0) ? (uint32_t)(-(int64_t)j) : (uint32_t)j;
+    double complex b = base;
+    while (e) {
+        if (e & 1u) result *= b;
+        e >>= 1;
+        if (e) b *= b;
+    }
+    if (j < 0)
+        result = (1.0 + 0.0 * I) / result;
+    return result;
+}
+
+double complex ots$divct_r3(double r1, double i1, double r2, double i2) {
+    return ots_divc_impl(r1, i1, r2, i2);
+}
+double complex ots$divcg_r3(double r1, double i1, double r2, double i2) {
+    return ots_divc_impl(r1, i1, r2, i2);
+}
+double complex ots$mulct_r3(double r1, double i1, double r2, double i2) {
+    return ots_mulc_impl(r1, i1, r2, i2);
+}
+double complex ots$mulcg_r3(double r1, double i1, double r2, double i2) {
+    return ots_mulc_impl(r1, i1, r2, i2);
+}
+double complex ots$powctct_r3(double br, double bi, double er, double ei) {
+    return ots_powcc_impl(br, bi, er, ei);
+}
+double complex ots$powcgcg_r3(double br, double bi, double er, double ei) {
+    return ots_powcc_impl(br, bi, er, ei);
+}
+double complex ots$powctj_r3(double br, double bi, int32_t j) {
+    return ots_powcj_impl(br, bi, j);
+}
+double complex ots$powcgj_r3(double br, double bi, int32_t j) {
+    return ots_powcj_impl(br, bi, j);
+}
+
+/* ================================================================
+ * OTS$CNVOUT - Convert a floating value to text (vms-801 R2.2 batch 4)
+ *
+ * Produces the VMS OTS$CNVOUT normalized-scientific representation:
+ *   [-]0.dddddddddE(+/-)dd
+ * where there are `precision` significant digits after "0." and the
+ * mantissa is normalized to the range [0.1, 1.0).  For example
+ * value 2.71828182 with precision 9 yields "0.271828182E+01".
+ *
+ * The result is placed in the caller's fixed-length string descriptor
+ * and dsc$w_length is set to the number of characters written; the
+ * text is truncated to the descriptor's capacity if necessary.
+ *
+ * Reference: OpenVMS RTL "OTS$ (Object Time System) Reference" -
+ *            OTS$CNVOUT.
+ * ================================================================ */
+static uint32_t ots_cnvout_impl(double value, struct dsc$descriptor_s *dest,
+                                uint32_t precision) {
+    if (!dest || !dest->dsc$a_pointer)
+        return SS$_BADPARAM;
+    if (precision < 1) precision = 1;
+    if (precision > 34) precision = 34;   /* well beyond IEEE double range */
+
+    char out[80];
+    int neg = signbit(value) && !isnan(value);
+    double v = fabs(value);
+    size_t pos = 0;
+
+    if (neg) out[pos++] = '-';
+
+    if (v == 0.0 || isnan(v) || isinf(v)) {
+        /* Zero (and non-finite) get a normalized zero mantissa / exp 0. */
+        out[pos++] = '0';
+        out[pos++] = '.';
+        for (uint32_t i = 0; i < precision; i++) out[pos++] = '0';
+        out[pos++] = 'E';
+        out[pos++] = '+';
+        out[pos++] = '0';
+        out[pos++] = '0';
+    } else {
+        /* Render with one leading digit and precision-1 fraction digits,
+         * then shift the decimal point left one place (d.fff -> 0.dfff)
+         * which raises the printed exponent by one. */
+        char sci[80];
+        snprintf(sci, sizeof(sci), "%.*E", (int)(precision - 1), v);
+
+        /* Collect the significant digits (skip the '.') up to 'E'. */
+        char digits[64];
+        size_t nd = 0;
+        const char *p = sci;
+        for (; *p && *p != 'E' && *p != 'e'; p++) {
+            if (*p >= '0' && *p <= '9' && nd < sizeof(digits))
+                digits[nd++] = *p;
+        }
+        int sci_exp = 0;
+        if (*p == 'E' || *p == 'e')
+            sci_exp = (int)strtol(p + 1, NULL, 10);
+        int vms_exp = sci_exp + 1;   /* mantissa becomes 0.ddd... */
+
+        out[pos++] = '0';
+        out[pos++] = '.';
+        for (size_t i = 0; i < nd; i++) out[pos++] = digits[i];
+
+        out[pos++] = 'E';
+        out[pos++] = (vms_exp < 0) ? '-' : '+';
+        int ae = (vms_exp < 0) ? -vms_exp : vms_exp;
+        char expbuf[8];
+        int el = snprintf(expbuf, sizeof(expbuf), "%02d", ae);
+        for (int i = 0; i < el; i++) out[pos++] = expbuf[i];
+    }
+
+    uint16_t cap = dest->dsc$w_length;
+    uint16_t n = (pos <= cap) ? (uint16_t)pos : cap;
+    memcpy(dest->dsc$a_pointer, out, n);
+    dest->dsc$w_length = n;
+    return SS$_NORMAL;
+}
+
+uint32_t ots$cnvout_t(const double *value, struct dsc$descriptor_s *dest,
+                      const uint32_t precision) {
+    if (!value) return SS$_BADPARAM;
+    return ots_cnvout_impl(*value, dest, precision);
+}
+uint32_t ots$cnvout_g(const double *value, struct dsc$descriptor_s *dest,
+                      const uint32_t precision) {
+    if (!value) return SS$_BADPARAM;
+    return ots_cnvout_impl(*value, dest, precision);
+}
+uint32_t ots$cnvout_d(const double *value, struct dsc$descriptor_s *dest,
+                      const uint32_t precision) {
+    if (!value) return SS$_BADPARAM;
+    return ots_cnvout_impl(*value, dest, precision);
+}
+uint32_t ots$cnvout_f(const float *value, struct dsc$descriptor_s *dest,
+                      const uint32_t precision) {
+    if (!value) return SS$_BADPARAM;
+    return ots_cnvout_impl((double)*value, dest, precision);
+}
+
+/* ================================================================
+ * OTS$CVT_T_x - Convert text to a floating value (vms-801 R2.2 batch 4)
+ *
+ * Parses a numeric character string into a floating value.  VMS
+ * accepts the usual "[-]ddd.ddd[E(+/-)dd]" form and also the form
+ * where the exponent is introduced directly by its sign with no 'E'
+ * (e.g. "0.12456789+3" == 0.12456789E+3 == 124.56789).
+ *
+ * Signature (per the OTS$ manual): the source descriptor, the output
+ * address, then optional digits-in-fraction, scale-factor and flags
+ * arguments.  Leading/trailing blanks are ignored.
+ *
+ * Reference: OpenVMS RTL "OTS$ (Object Time System) Reference" -
+ *            OTS$CVT_T_x (text to F/D/G/H/S/T floating).
+ * ================================================================ */
+static uint32_t ots_cvt_t_impl(const struct dsc$descriptor_s *src, double *out,
+                               int digits) {
+    if (!src || !src->dsc$a_pointer || !out)
+        return SS$_BADPARAM;
+
+    /* Build a strtod-parseable copy: skip blanks, and insert 'E' before a
+     * '+'/'-' that follows a digit or '.' and is not already after 'E'. */
+    char buf[128];
+    size_t bn = 0;
+    int seen_digit = 0;
+    int seen_point = 0;
+    for (uint16_t i = 0; i < src->dsc$w_length && bn < sizeof(buf) - 2; i++) {
+        char c = src->dsc$a_pointer[i];
+        if (c == ' ' || c == '\t')
+            continue;                        /* ignore embedded blanks */
+        if ((c == '+' || c == '-') && seen_digit &&
+            bn > 0 && buf[bn - 1] != 'E' && buf[bn - 1] != 'e') {
+            buf[bn++] = 'E';                 /* implied exponent marker */
+        }
+        if (c >= '0' && c <= '9') seen_digit = 1;
+        if (c == '.') seen_point = 1;
+        buf[bn++] = c;
+    }
+    buf[bn] = '\0';
+    if (bn == 0 || !seen_digit)
+        return SS$_BADPARAM;
+
+    char *end = NULL;
+    errno = 0;
+    double v = strtod(buf, &end);
+    if (end == buf)
+        return SS$_BADPARAM;
+
+    /* If no explicit decimal point was present and a fractional-digit count
+     * was supplied, apply the implied decimal point (VMS "digits" arg). */
+    if (!seen_point && digits > 0)
+        v /= pow(10.0, (double)digits);
+
+    *out = v;
+    return SS$_NORMAL;
+}
+
+uint32_t ots$cvt_t_t(const struct dsc$descriptor_s *src, double *dest, ...) {
+    return ots_cvt_t_impl(src, dest, 0);
+}
+uint32_t ots$cvt_t_g(const struct dsc$descriptor_s *src, double *dest, ...) {
+    return ots_cvt_t_impl(src, dest, 0);
+}
+uint32_t ots$cvt_t_d(const struct dsc$descriptor_s *src, double *dest, ...) {
+    return ots_cvt_t_impl(src, dest, 0);
+}
+uint32_t ots$cvt_t_s(const struct dsc$descriptor_s *src, float *dest, ...) {
+    double v = 0.0;
+    uint32_t st = ots_cvt_t_impl(src, &v, 0);
+    if (st == SS$_NORMAL && dest) *dest = (float)v;
+    return st;
+}
+uint32_t ots$cvt_t_f(const struct dsc$descriptor_s *src, float *dest, ...) {
+    double v = 0.0;
+    uint32_t st = ots_cvt_t_impl(src, &v, 0);
+    if (st == SS$_NORMAL && dest) *dest = (float)v;
+    return st;
 }

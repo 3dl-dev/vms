@@ -92,6 +92,12 @@ extern "C" {
 #define LIB$_UNRKEY         0x00158092  /* Unrecognized keyword */
 #define LIB$_SECINTFAI      0x0015809A  /* Secondary interlock failure */
 
+/* Event-flag allocator status codes (LIB$GET_EF/FREE_EF/RESERVE_EF). */
+#define LIB$_EF_ALRFRE      0x00801814  /* Event flag already free */
+#define LIB$_EF_RESSYS      0x00801824  /* Event flag reserved to system */
+#define LIB$_INSEF          0x00801834  /* Insufficient event flags */
+#define LIB$_EF_ALRRES      0x0080184C  /* Event flag already reserved */
+
 /* Severe/fatal (severity = 4) */
 #define LIB$_BUGCHECK       0x00158004  /* Internal consistency failure */
 

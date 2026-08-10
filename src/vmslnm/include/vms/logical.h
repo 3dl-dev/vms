@@ -20,6 +20,19 @@
 #define LNM_MAX_DEPTH    10
 #define LNM_MAX_INDEX    128
 
+/*
+ * LNM_MAX_SEARCHLIST - the number of equivalence strings lnm_translate_values()
+ * will return for one name (vms-420). Matches VMS_LNM_MAX_EQUIV
+ * (src/kernel/vms_lnm.h), the executive arena's per-entry cap for SYSTEM/
+ * GROUP/JOB -- named independently here rather than including vms_kif.h so
+ * this header stays usable without pulling in the /dev/vms client. A
+ * LNM$PROCESS entry can locally hold more (up to LNM_MAX_INDEX, via
+ * lnm_create_multi), but no OVMX search list in practice approaches either
+ * cap, so capping display/enumeration at the executive's number keeps the
+ * local and executive-resident tables' search-list shape consistent.
+ */
+#define LNM_MAX_SEARCHLIST 8
+
 /* Attributes */
 #define LNM_ATTR_CONCEALED  0x01
 #define LNM_ATTR_TERMINAL   0x02
@@ -95,6 +108,27 @@ uint32_t lnm_translate(lnm_manager_t *mgr, const char *table_name,
 uint32_t lnm_translate_iterative(lnm_manager_t *mgr, const char *table_name,
                                   const char *logical_name, char *result,
                                   size_t result_size, uint16_t *result_length);
+
+/*
+ * lnm_translate_values - fetch ALL equivalence strings (search-list order)
+ * for `logical_name` in a SPECIFIC table_name (LNM$PROCESS_TABLE, LNM$JOB,
+ * LNM$GROUP or LNM$SYSTEM -- NOT the LNM$FILE_DEV search-list alias). Fills
+ * up to `max_values` entries into `values[]` (each NUL-terminated) and sets
+ * *num_values to the entry's true count, capped at `max_values` (see
+ * LNM_MAX_SEARCHLIST). *attributes, if non-NULL, receives the entry's
+ * attributes (vms-420: the multi-value counterpart of lnm_translate(), which
+ * only ever returns equivalence index 0).
+ *
+ * Returns SS$_NORMAL on success, SS$_NOLOGNAM if the name is not present in
+ * this table, SS$_NOLOGTAB if table_name names no table, or SS$_NOSUCHDEV
+ * for SYSTEM/GROUP/JOB when the executive is unavailable (CLAUDE.md Rule 9 /
+ * INV-6 -- no per-process fallback).
+ */
+uint32_t lnm_translate_values(lnm_manager_t *mgr, const char *table_name,
+                               const char *logical_name,
+                               char values[][LNM_MAX_VALUE + 1],
+                               uint8_t max_values, uint8_t *num_values,
+                               uint32_t *attributes);
 
 /* Enumeration callback */
 typedef int (*lnm_enum_callback_t)(const char *name, const lnm_entry_t *entry, void *ctx);

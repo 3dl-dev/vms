@@ -356,7 +356,7 @@ uint32_t lnm_create(lnm_manager_t *mgr, const char *table_name,
 }
 
 /*
- * lnm_create_multi - Create a multi-valued logical name.
+ * lnm_create_multi - Create a multi-valued (search-list) logical name.
  *
  * @mgr:          Manager instance
  * @table_name:   Target table
@@ -382,6 +382,32 @@ uint32_t lnm_create_multi(lnm_manager_t *mgr, const char *table_name,
 
     if (!equivalences || num_equiv <= 0)
         return SS$_BADPARAM;
+
+    /*
+     * LNM$SYSTEM/GROUP/JOB are executive-resident (vms-d37/vms-aba) exactly
+     * as lnm_create() routes their single-value case above -- vms-420 found
+     * this multi-value entry point never made that check at all, so
+     * DEFINE/SYSTEM of a search-list logical (e.g. SYS$STARTUP) silently
+     * fell through to the LOCAL table below instead, which is invisible to
+     * every other process (the opposite of what SYSTEM residency means).
+     * NO FALLBACK (CLAUDE.md Rule 9 / INV-6): SS$_NOSUCHDEV means no
+     * /dev/vms, returned honestly, never masked by a process-local define.
+     * The executive arena holds at most VMS_LNM_MAX_EQUIV (8) equivalence
+     * strings per entry (src/kernel/vms_lnm.h) -- vms_kif_lnm_define caps
+     * num_values there itself; a caller asking for more than 8 on one of
+     * these three tables gets only the first 8, same as calling
+     * vms_kif_lnm_define directly.
+     */
+    if (is_system_table(table_name) || is_group_table(table_name) ||
+        is_job_table(table_name)) {
+        uint32_t exec_tbl = is_system_table(table_name) ? VMS_LNM_TBL_SYSTEM
+                          : is_group_table(table_name)  ? VMS_LNM_TBL_GROUP
+                                                        : VMS_LNM_TBL_JOB;
+        uint8_t nv = (num_equiv > VMS_LNM_MAX_EQUIV)
+                   ? VMS_LNM_MAX_EQUIV : (uint8_t)num_equiv;
+        return vms_kif_lnm_define(exec_tbl, logical_name, equivalences, nv,
+                                  attributes, acmode);
+    }
 
     if (num_equiv > LNM_MAX_INDEX)
         num_equiv = LNM_MAX_INDEX;
@@ -522,7 +548,8 @@ uint32_t lnm_enumerate(lnm_manager_t *mgr, const char *table_name,
 
         for (int i = 0; i < n; i++) {
             lnm_entry_t entry;
-            size_t nl, vl;
+            size_t nl;
+            uint8_t nv;
 
             memset(&entry, 0, sizeof(entry));
             nl = strlen(recs[i].name);
@@ -532,13 +559,22 @@ uint32_t lnm_enumerate(lnm_manager_t *mgr, const char *table_name,
             entry.name_length = (uint16_t)nl;
             entry.attributes = recs[i].attributes;
             entry.acmode = LNM_MODE_EXEC;
-            entry.num_translations = 1;
-            vl = strlen(recs[i].value);
-            if (vl > LNM_MAX_VALUE) vl = LNM_MAX_VALUE;
-            memcpy(entry.translations[0].value, recs[i].value, vl);
-            entry.translations[0].value[vl] = '\0';
-            entry.translations[0].length = (uint16_t)vl;
-            entry.translations[0].index = 0;
+
+            /* vms-420: carry EVERY equivalence string the arena reported,
+             * not just index 0 -- previously a SYSTEM/GROUP/JOB search-list
+             * logical enumerated (SHOW LOGICAL with no name) as if it had
+             * only one value, the same drop the named-lookup path had. */
+            nv = recs[i].num_values;
+            if (nv > LNM_MAX_INDEX) nv = LNM_MAX_INDEX;
+            for (uint8_t k = 0; k < nv; k++) {
+                size_t vl = strlen(recs[i].values[k]);
+                if (vl > LNM_MAX_VALUE) vl = LNM_MAX_VALUE;
+                memcpy(entry.translations[k].value, recs[i].values[k], vl);
+                entry.translations[k].value[vl] = '\0';
+                entry.translations[k].length = (uint16_t)vl;
+                entry.translations[k].index = k;
+            }
+            entry.num_translations = nv;
 
             if (callback(entry.name, &entry, ctx) != 0)
                 break;

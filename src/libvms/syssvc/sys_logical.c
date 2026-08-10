@@ -299,9 +299,14 @@ uint32_t sys$trnlnm(const uint32_t *attr,
     if (!use_search) {
         uint32_t exec_tbl = lnm_exec_table_id(table);
         if (exec_tbl) {
-            /* LNM$SYSTEM: read the executive arena. No fallback (INV-6). */
-            int r = vms_kif_lnm_translate(exec_tbl, name, equiv,
-                                          sizeof(equiv), NULL, &found_attr);
+            /* LNM$SYSTEM: read the executive arena. No fallback (INV-6).
+             * Index 0 -- sys$trnlnm's own multi-value (LNM$_STRING item
+             * list repetition) support is a separate, not-yet-wired gap;
+             * this call site still returns the search list's first value,
+             * matching its pre-existing single-value item-list handling. */
+            int r = vms_kif_lnm_translate(exec_tbl, name, 0, equiv,
+                                          sizeof(equiv), NULL, &found_attr,
+                                          NULL);
             if (r < 0) return SS$_NOSUCHDEV;   /* executive absent */
             if (r == 0) return SS$_NOLOGNAM;
             have = 1;
@@ -334,8 +339,9 @@ uint32_t sys$trnlnm(const uint32_t *attr,
 
         /* Then LNM$SYSTEM, from the executive arena. */
         if (!have) {
-            int r = vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, name, equiv,
-                                          sizeof(equiv), NULL, &found_attr);
+            int r = vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, name, 0, equiv,
+                                          sizeof(equiv), NULL, &found_attr,
+                                          NULL);
             if (r < 0) return SS$_NOSUCHDEV;   /* executive absent */
             if (r == 0) return SS$_NOLOGNAM;
             have = 1;

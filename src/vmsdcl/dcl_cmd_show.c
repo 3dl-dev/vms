@@ -163,12 +163,43 @@ struct show_lnm_ctx {
     const char *table_name;
 };
 
+/*
+ * print_lnm_search_list - render a logical name's equivalence string(s) in
+ * the shape real SHOW LOGICAL uses for a search-list (multi-valued) logical
+ * (vms-420, oracle-pinned against OpenVMS VAX V7.3, lab-2/vaxlab-0):
+ *
+ *    "FOO" = "BAR" (LNM$PROCESS_TABLE)
+ *         = "BAZ"
+ *
+ * i.e. the first value shares the name/table line; every further value gets
+ * its own continuation line, 8 spaces then "= \"value\"" -- fixed indentation,
+ * not aligned to the name's length. `values`/`n` must have n >= 1.
+ */
+static void print_lnm_search_list(const char *name, const char *table_label,
+                                  char values[][LNM_MAX_VALUE + 1], uint8_t n)
+{
+    if (n == 0)
+        return;
+    printf("   \"%s\" = \"%s\" (%s)\n", name, values[0], table_label);
+    for (uint8_t i = 1; i < n; i++)
+        printf("        = \"%s\"\n", values[i]);
+}
+
 static int show_lnm_callback(const char *name, const lnm_entry_t *entry, void *ctx)
 {
     struct show_lnm_ctx *sctx = (struct show_lnm_ctx *)ctx;
     if (entry->num_translations > 0) {
-        printf("   \"%s\" = \"%s\" (%s)\n",
-               name, entry->translations[0].value, sctx->table_name);
+        /* Capped at LNM_MAX_SEARCHLIST, the same display cap
+         * lnm_translate_values() uses, to keep this stack buffer small. */
+        uint8_t n = entry->num_translations;
+        char values[LNM_MAX_SEARCHLIST][LNM_MAX_VALUE + 1];
+        if (n > LNM_MAX_SEARCHLIST)
+            n = LNM_MAX_SEARCHLIST;
+        for (uint8_t i = 0; i < n; i++) {
+            strncpy(values[i], entry->translations[i].value, LNM_MAX_VALUE);
+            values[i][LNM_MAX_VALUE] = '\0';
+        }
+        print_lnm_search_list(name, sctx->table_name, values, n);
     }
     return 0;
 }
@@ -225,21 +256,30 @@ static int cmd_show_logical(struct dcl_command *cmd)
         upper_name[i] = '\0';
 
         char value[256];
+        char values[LNM_MAX_SEARCHLIST][LNM_MAX_VALUE + 1];
+        uint8_t nvalues;
 
         /*
          * A scope qualifier restricts the lookup to the named table(s), so a
          * name that exists only in LNM$PROCESS is NOT reported by SHOW
          * LOGICAL/SYSTEM. Without a qualifier, the default search list applies.
+         *
+         * vms-420: both branches below used to call lnm_translate(), which
+         * only ever returns equivalence index 0 -- so DEFINE FOO BAR,BAZ
+         * followed by SHOW LOGICAL FOO showed "FOO" = "BAR" with BAZ
+         * silently dropped. lnm_translate_values() returns every value in
+         * the found table, and print_lnm_search_list() renders all of them
+         * in the oracle-pinned search-list shape.
          */
         if (q_any) {
             if (mgr) {
                 for (int t = 0; t < 4; t++) {
                     if (!want[t]) continue;
-                    uint32_t st = lnm_translate(mgr, tnames[t], upper_name,
-                                                value, sizeof(value), NULL, NULL);
-                    if (st == SS$_NORMAL || st == SS$_SUPERSEDE) {
-                        printf("   \"%s\" = \"%s\" (%s)\n",
-                               upper_name, value, tnames[t]);
+                    uint32_t st = lnm_translate_values(mgr, tnames[t], upper_name,
+                                                       values, LNM_MAX_SEARCHLIST,
+                                                       &nvalues, NULL);
+                    if (st == SS$_NORMAL) {
+                        print_lnm_search_list(upper_name, tnames[t], values, nvalues);
                         return SS$_NORMAL;
                     }
                 }
@@ -250,10 +290,11 @@ static int cmd_show_logical(struct dcl_command *cmd)
 
         if (dcl_translate_logical(upper_name, value, sizeof(value)) == 0) {
             /*
-             * Determine which table the name was found in so we can
-             * show the correct table name in the output.
+             * Determine which table the name was found in, and fetch ALL of
+             * its equivalence strings from that same table.
              */
             const char *found_table = LNM_PROCESS_TABLE;
+            nvalues = 0;
             if (mgr) {
                 /* Search tables in order to find where the name lives */
                 lnm_table_t *search[4];
@@ -263,15 +304,23 @@ static int cmd_show_logical(struct dcl_command *cmd)
                 search[3] = mgr->system_table;
                 for (int t = 0; t < 4; t++) {
                     if (!search[t]) continue;
-                    uint32_t st = lnm_translate(mgr, tnames[t], upper_name,
-                                                value, sizeof(value), NULL, NULL);
-                    if (st == SS$_NORMAL || st == SS$_SUPERSEDE) {
+                    uint32_t st = lnm_translate_values(mgr, tnames[t], upper_name,
+                                                       values, LNM_MAX_SEARCHLIST,
+                                                       &nvalues, NULL);
+                    if (st == SS$_NORMAL) {
                         found_table = tnames[t];
                         break;
                     }
                 }
             }
-            printf("   \"%s\" = \"%s\" (%s)\n", upper_name, value, found_table);
+            if (nvalues == 0) {
+                /* dcl_translate_logical()'s own fallback (SYS$DISK,
+                 * SYS$LOGIN) resolved this name outside any LNM table. */
+                strncpy(values[0], value, LNM_MAX_VALUE);
+                values[0][LNM_MAX_VALUE] = '\0';
+                nvalues = 1;
+            }
+            print_lnm_search_list(upper_name, found_table, values, nvalues);
         } else {
             dcl_error("DCL", 0, "NOLOG", "no logical name match");
             return SS$_NOLOGNAM;

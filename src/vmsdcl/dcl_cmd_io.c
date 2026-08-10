@@ -67,8 +67,20 @@ int cmd_assign(struct dcl_command *cmd)
  *   /GROUP               — create in LNM$GROUP
  *   /SYSTEM              — create in LNM$SYSTEM
  *
+ * Format: DEFINE logical-name equivalence-string[,equivalence-string...]
+ * A comma-separated equivalence list creates a search-list (multi-valued)
+ * logical name -- e.g. DEFINE SYS$STARTUP SYS$SYSROOT:[SYS$STARTUP],
+ * SYS$MANAGER, exactly like real DCL. vms-420: this used to read only
+ * params[1] and silently drop every equivalence string after the first
+ * (DEFINE FOO BAR,BAZ created "FOO" = "BAR" with BAZ gone) because the
+ * parser already splits a comma-separated parameter list into separate
+ * cmd->params[] entries (dcl_parser.c's TOK_COMMA case) -- there was
+ * simply nothing here consuming params[2..].
+ *
  * If the LNM manager is not available, fall back to storing as a
- * global DCL symbol so callers don't lose the value entirely.
+ * global DCL symbol so callers don't lose the value entirely (only the
+ * first equivalence string survives that fallback -- DCL symbols are
+ * single-valued and have no search-list concept).
  */
 int cmd_define(struct dcl_command *cmd)
 {
@@ -79,7 +91,10 @@ int cmd_define(struct dcl_command *cmd)
     }
 
     const char *logname = cmd->params[0];
-    const char *equiv   = cmd->params[1];
+    int num_equiv = cmd->param_count - 1;
+    const char *equivs[DCL_MAX_PARAMS];
+    for (int e = 0; e < num_equiv; e++)
+        equivs[e] = cmd->params[1 + e];
 
     /* Uppercase the logical name */
     char upper_name[256];
@@ -99,16 +114,17 @@ int cmd_define(struct dcl_command *cmd)
 
     lnm_manager_t *mgr = lnm_get_manager();
     if (mgr) {
-        uint32_t status = lnm_create(mgr, table, upper_name, equiv,
-                                     LNM_ATTR_TERMINAL, LNM_MODE_USER);
+        uint32_t status = lnm_create_multi(mgr, table, upper_name, equivs,
+                                           num_equiv, LNM_ATTR_TERMINAL,
+                                           LNM_MODE_USER);
         if (status != SS$_NORMAL && status != SS$_SUPERSEDE) {
             dcl_error("DCL", 2, "LNMFAIL",
                       "failed to create logical name \\%s\\", upper_name);
             return (int)status;
         }
     } else {
-        /* Graceful fallback: store as global symbol */
-        dcl_sym_set(upper_name, equiv, DCL_SYM_GLOBAL);
+        /* Graceful fallback: store as global symbol (first value only) */
+        dcl_sym_set(upper_name, equivs[0], DCL_SYM_GLOBAL);
     }
 
     return SS$_NORMAL;

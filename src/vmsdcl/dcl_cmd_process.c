@@ -1433,7 +1433,7 @@ int dcl_exec_foreign_command(struct dcl_context *ctx, struct dcl_command *cmd,
         return SS$_NOSUCHFILE;
     }
 
-    /* Build argv from the RAW command tail (cmd->rest) when the parser
+    /* Build argv from the RAW command tail (cmd->raw_tail) when the parser
      * captured it -- this is the OpenVMS-faithful whole-line delivery: real DCL
      * hands the entire foreign-command tail to the image and the image's CRTL
      * splits it into argc/argv, so the DCL_MAX_PARAMS (P1-P8) cap does NOT apply
@@ -1442,15 +1442,15 @@ int dcl_exec_foreign_command(struct dcl_context *ctx, struct dcl_command *cmd,
      * B ... -o X Y` invocation (well over 8 tokens) impossible. We whitespace-
      * split the raw tail here instead; a value with embedded spaces is a known
      * lane limitation (real DCL/CRTL honour "quoted strings" -- OVMX does not
-     * yet). Falls back to the tokenized params[] if rest is empty. vms-615. */
+     * yet). Falls back to the tokenized params[] if raw_tail is empty. vms-615. */
 #define DCL_FC_MAX_ARGV 128
     char *argv[DCL_FC_MAX_ARGV];
     int argc = 0;
     argv[argc++] = linux_path;
 
     char tailbuf[DCL_MAX_LINE];
-    if (cmd->rest[0] != '\0') {
-        strncpy(tailbuf, cmd->rest, sizeof(tailbuf) - 1);
+    if (cmd->raw_tail[0] != '\0') {
+        strncpy(tailbuf, cmd->raw_tail, sizeof(tailbuf) - 1);
         tailbuf[sizeof(tailbuf) - 1] = '\0';
         /* Whitespace-split, but honour "double quotes" the way DECC$CRTL does
          * when it parses a foreign-command line into argv: a quoted span is one

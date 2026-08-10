@@ -256,17 +256,20 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
      * image's own CRTL splits it into argc/argv, so the P1-P8 (DCL_MAX_PARAMS)
      * cap that the token loop below enforces does not apply to foreign commands.
      * The token loop still runs afterward for builtins/qualifiers; cmd->rest is
-     * only consumed by dcl_exec_foreign_command (and was already the field the
-     * IF/PIPE/assignment paths use). vms-615. */
+     * only consumed by dcl_exec_foreign_command. It is kept in its OWN field
+     * (raw_tail), NOT cmd->rest, because cmd->rest has existing consumers that
+     * assume it is empty for an ordinary command (e.g. cmd_spawn appends it as a
+     * post-pipe remnant -- populating rest here made `SPAWN SHOW PROCESS` spawn
+     * "SHOW PROCESS SHOW PROCESS"). vms-615. */
     {
         const char *tail = lex.input + lex.pos;
         while (*tail == ' ' || *tail == '\t') tail++;
-        strncpy(cmd->rest, tail, sizeof(cmd->rest) - 1);
-        cmd->rest[sizeof(cmd->rest) - 1] = '\0';
-        size_t rl = strlen(cmd->rest);
-        while (rl > 0 && (cmd->rest[rl - 1] == ' ' || cmd->rest[rl - 1] == '\t' ||
-                          cmd->rest[rl - 1] == '\n'))
-            cmd->rest[--rl] = '\0';
+        strncpy(cmd->raw_tail, tail, sizeof(cmd->raw_tail) - 1);
+        cmd->raw_tail[sizeof(cmd->raw_tail) - 1] = '\0';
+        size_t rl = strlen(cmd->raw_tail);
+        while (rl > 0 && (cmd->raw_tail[rl - 1] == ' ' || cmd->raw_tail[rl - 1] == '\t' ||
+                          cmd->raw_tail[rl - 1] == '\n'))
+            cmd->raw_tail[--rl] = '\0';
     }
 
     /* Parse the rest of the tokens */

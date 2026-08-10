@@ -41,6 +41,12 @@ struct dcl_command {
     int  qualifier_count;
     char label[DCL_MAX_LABEL];             /* Label if present */
     char rest[DCL_MAX_LINE];               /* Unparsed rest of line */
+    char raw_tail[DCL_MAX_LINE];           /* Raw arg tail after the verb, kept
+                                            * separately from `rest` so it can be
+                                            * delivered verbatim as a foreign
+                                            * command's argv without disturbing
+                                            * the `rest` consumers (SPAWN, PIPE,
+                                            * assignments). vms-615. */
 };
 
 /* Parse a DCL command line into a command structure */

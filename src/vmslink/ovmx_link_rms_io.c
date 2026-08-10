@@ -47,6 +47,17 @@ static int rms_open_read(const char *path, struct FAB *fab, struct RAB *rab,
     if (!(st & 1))
         return 0;
 
+    /* sys$open runs load_metadata(), which restores the file's STORED record
+     * format from its .rms_meta sidecar -- e.g. an object written by TCC's RMS
+     * shim as FAB$C_FIX with mrs=0, which rms_seq_get then reads as 512-byte
+     * records and rejects against our 1-byte buffer with RMS$_RTB. LINK wants
+     * RAW BYTES regardless of how the producer framed the file, so re-assert
+     * 1-byte fixed records AFTER the open. This makes the byte-exact read work
+     * for a TCC-produced .OBJ (the self-host S3.2 compile->link path, vms-615)
+     * as well as the plain gcc/RMS-less objects it already handled. */
+    fab->fab$b_rfm = FAB$C_FIX;
+    fab->fab$w_mrs = 1;
+
     *rab = cc$rms_rab;
     rab->rab$l_fab = fab;
     st = sys$connect(rab);

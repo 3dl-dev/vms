@@ -249,6 +249,29 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
         return 0;
     }
 
+    /* Capture the raw, unparsed argument tail (everything after the verb) into
+     * cmd->rest WITHOUT advancing the lexer. This is what a foreign-command
+     * dispatch hands to the activated image as argv the OpenVMS way -- real DCL
+     * passes the whole command tail to the image (LIB$GET_FOREIGN) and the
+     * image's own CRTL splits it into argc/argv, so the P1-P8 (DCL_MAX_PARAMS)
+     * cap that the token loop below enforces does not apply to foreign commands.
+     * The token loop still runs afterward for builtins/qualifiers; cmd->rest is
+     * only consumed by dcl_exec_foreign_command. It is kept in its OWN field
+     * (raw_tail), NOT cmd->rest, because cmd->rest has existing consumers that
+     * assume it is empty for an ordinary command (e.g. cmd_spawn appends it as a
+     * post-pipe remnant -- populating rest here made `SPAWN SHOW PROCESS` spawn
+     * "SHOW PROCESS SHOW PROCESS"). vms-615. */
+    {
+        const char *tail = lex.input + lex.pos;
+        while (*tail == ' ' || *tail == '\t') tail++;
+        strncpy(cmd->raw_tail, tail, sizeof(cmd->raw_tail) - 1);
+        cmd->raw_tail[sizeof(cmd->raw_tail) - 1] = '\0';
+        size_t rl = strlen(cmd->raw_tail);
+        while (rl > 0 && (cmd->raw_tail[rl - 1] == ' ' || cmd->raw_tail[rl - 1] == '\t' ||
+                          cmd->raw_tail[rl - 1] == '\n'))
+            cmd->raw_tail[--rl] = '\0';
+    }
+
     /* Parse the rest of the tokens */
     while (1) {
         if (dcl_lexer_next(&lex, &tok) != 0) break;

@@ -60,6 +60,7 @@
                            * scsd_mscp_srv_state() / scsd_mscp_srv_msg_input(). */
 #include "scs_poll.h"
 #include "scs_quorum.h" /* vms-7a9: CEVOTES/QUORUM computation + quorum gate */
+#include "scs_recnx.h"  /* vms-c7d: CSB connectivity states + RECNXINTERVAL reconnect loop */
 #include "scs_reason.h"
 #include "scs_env.h" /* vms-ec7: THE shared SCS message envelope (build + parse + dispatch) */
 #include "scs_rx.h"
@@ -93,6 +94,26 @@ static uint64_t monotonic_ms(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
+}
+
+/*
+ * scsd_recnxinterval - the local SYSGEN RECNXINTERVAL, in seconds, that sizes
+ * the RECNXINTERVAL reconnect period (vms-c7d, transcript p. 7-30). OVMX
+ * configuration, NOT a claimed VMS invariant: OVMX_RECNXINTERVAL overrides the
+ * SCS_RECNX_DEFAULT_RECNXINTERVAL fallback (the reference lab runs 20). A value
+ * of 0 or an unparseable one leaves the default, so the read is a function
+ * rather than an inline strtoul -- a test can state what the interval was.
+ */
+static unsigned scsd_recnxinterval(void)
+{
+    const char *e = getenv("OVMX_RECNXINTERVAL");
+    if (e != NULL && *e != '\0') {
+        unsigned long v = strtoul(e, NULL, 10);
+        if (v > 0UL && v <= 65535UL) {
+            return (unsigned)v;
+        }
+    }
+    return SCS_RECNX_DEFAULT_RECNXINTERVAL;
 }
 
 /* vms-9f3: OVMX's own local 100ns-tick clock for the HELLO timer field (abs
@@ -891,6 +912,12 @@ struct peer_state {
      * the connection". This latch is the honest membership fact and it SURVIVES
      * the teardown sample. Cleared only on a genuine re-START session reset. */
     int      vaxcluster_open_reached;
+    /* vms-c7d: this peer's Cluster System Block connectivity slice -- the
+     * CSB state machine (transcript pp. 7-23/7-24) and the RECNXINTERVAL
+     * reconnect bookkeeping (p. 7-30). OPEN when the VMS$VAXcluster connection
+     * latches, WAIT (membership HELD) on a non-last-gasp VC break, driven once
+     * per second by scsd_recnx_tick(). See scs_recnx.h. */
+    struct scs_csb csb;
     uint32_t joiner_remote_conid;  /* the member's Con.ID on OUR connection (from its response) */
     int      joiner_cm_sent;       /* we sent the add-member burst on our own connection */
     long     joiner_cm_ms;         /* monotonic_ms() when that burst went out */
@@ -1167,6 +1194,9 @@ static struct peer_state *peer_find_or_add(struct scs_config *cfg, struct scs_pd
      * departed slot reused later gets the same offset, and its old CDTs were
      * released by scs_pb_depart(). */
     tbl[free_slot].conid_off = (uint16_t)((unsigned)free_slot * OVMX_PEER_CONID_STRIDE);
+    /* vms-c7d: this peer's CSB starts NEW (p. 7-24). Seeded with the local
+     * RECNXINTERVAL so a later VC break sizes its reconnect period correctly. */
+    scs_csb_init(&tbl[free_slot].csb, /*is_local=*/0, scsd_recnxinterval());
     /* vms-17f: first contact IS contact. Without this stamp a slot allocated by
      * a frame that never reaches peer_touch() would sit at last_rx_ms 0 forever
      * and the departure sweep would have nothing to age it from. */
@@ -2653,6 +2683,10 @@ static void ps_note_vaxcluster_open(struct peer_state *ps)
         return;
     }
     ps->vaxcluster_open_reached = 1;
+    /* vms-c7d: the CM's SCS connection to this remote CM is OPEN -> the CSB
+     * reaches OPEN and this node is a held cluster member (transcript p. 7-24).
+     * A later reconnect returns here through the same latch. */
+    scs_csb_connectivity_gained(&ps->csb, monotonic_ms());
     log_ts(stdout);
     printf(" SCSD-I-VAXCLMEMBER, VMS$VAXcluster SYSAP connection reached OPEN"
            " (conid=0x%08X %s) -- OVMX now models itself as a connected cluster"
@@ -2662,6 +2696,50 @@ static void ps_note_vaxcluster_open(struct peer_state *ps)
                           ? ps->cdt_joiner->local_conid
                           : (ps->cdt_member != NULL ? ps->cdt_member->local_conid : 0u)),
            js == SCS_CONN_OPEN ? "joiner-opened" : "member-opened");
+    fflush(stdout);
+}
+
+/*
+ * scsd_recnx_note_vc_loss - vms-c7d: a virtual circuit to a remote Connection
+ * Manager has broken for a reason that is NOT a "last gasp" departure (a
+ * sequentiality or delivery guarantee failure, p. 2-31). Drive this peer's CSB
+ * to WAIT so the RECNXINTERVAL reconnect loop runs and MEMBERSHIP IS HELD across
+ * the reconnect period (transcript p. 7-30: "Do not presume that the remote
+ * system has left ... the local Connection Manager will attempt once a second to
+ * establish another connection"). The once-a-second beat and the period expiry
+ * are scsd_recnx_tick()'s job; this only enters the wait.
+ *
+ * OVMX_NO_RECNX_RECONNECT=1 (scs_csb_connectivity_lost's kill switch, guardrail
+ * 23) reverts this to the pre-vms-c7d behaviour: membership is dropped at once
+ * and a transition is proposed, with no WAIT and no reconnect.
+ */
+static void scsd_recnx_note_vc_loss(struct peer_state *ps, uint64_t now_ms)
+{
+    if (ps == NULL) {
+        return;
+    }
+    enum scs_recnx_action a =
+        scs_csb_connectivity_lost(&ps->csb, now_ms, /*last_gasp=*/0);
+    log_ts(stdout);
+    if (ps->csb.state == SCS_CSB_WAIT) {
+        printf(" SCSD-I-RECNXWAIT, connectivity to %02x:%02x:%02x:%02x:%02x:%02x"
+               " lost -- CSB -> WAIT, membership HELD; reconnecting once/sec for"
+               " up to %u s (max local RECNXINTERVAL %u, remote %u) (p. 7-30)\n",
+               ps->pb->remote_port_addr[0], ps->pb->remote_port_addr[1],
+               ps->pb->remote_port_addr[2], ps->pb->remote_port_addr[3],
+               ps->pb->remote_port_addr[4], ps->pb->remote_port_addr[5],
+               scs_recnx_timeout_secs(ps->csb.local_recnxinterval,
+                                      ps->csb.remote_port_value),
+               ps->csb.local_recnxinterval, ps->csb.remote_port_value);
+    } else {
+        printf(" SCSD-I-RECNXDROP, connectivity to %02x:%02x:%02x:%02x:%02x:%02x"
+               " lost -- %s [" SCS_RECNX_NO_RECONNECT_ENV "=1: membership dropped"
+               " immediately, no reconnect]\n",
+               ps->pb->remote_port_addr[0], ps->pb->remote_port_addr[1],
+               ps->pb->remote_port_addr[2], ps->pb->remote_port_addr[3],
+               ps->pb->remote_port_addr[4], ps->pb->remote_port_addr[5],
+               scs_recnx_action_name(a));
+    }
     fflush(stdout);
 }
 
@@ -7340,6 +7418,12 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 if (scs_vc_break_enabled()) {
                     vc_breaks++;
                     vc_conns_broken += broken;
+                    /* vms-c7d: a sequentiality failure is a connectivity loss,
+                     * NOT a last-gasp departure -- the peer did not announce it
+                     * is leaving. Enter the CSB WAIT state and HOLD membership;
+                     * scsd_recnx_tick() runs the once-a-second RECNXINTERVAL
+                     * reconnect loop (transcript p. 7-30). */
+                    scsd_recnx_note_vc_loss(ps, monotonic_ms());
                     /* The circuit is gone. No credit-return, and no further
                      * dispatch of a frame that arrived on it. */
                     return;
@@ -10384,6 +10468,10 @@ static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
             if (scs_vc_break_enabled()) {
                 vc_breaks++;
                 vc_conns_broken += broken;
+                /* vms-c7d: delivery exhaustion is a connectivity loss, not a
+                 * last-gasp departure -- enter CSB WAIT, hold membership, let
+                 * the RECNXINTERVAL reconnect loop run (transcript p. 7-30). */
+                scsd_recnx_note_vc_loss(ps, now_ms);
             }
             continue;
         }
@@ -10492,6 +10580,66 @@ static void scsd_join_retx_tick(struct scsd_rx *rx, uint64_t now_ms)
             continue;
         }
         scsd_join_retx_for_peer(rx, ps, (long)now_ms);
+    }
+}
+
+/*
+ * scsd_recnx_tick - vms-c7d: drive each peer's CSB RECNXINTERVAL reconnect loop
+ * from the main loop's own clock (transcript p. 7-30). For every peer whose CSB
+ * is in WAIT/RECONNECT after a non-last-gasp VC break, this fires the
+ * once-a-second reconnect beat and, when the max(RECNXINTERVAL, remote) period
+ * expires with no peer-started transition, proposes a cluster state transition.
+ * A peer whose circuit is OPEN (the normal case) is inert here.
+ *
+ * WHAT THIS SHIPS AT 0.3, AND WHAT IT DOES NOT. The state machine, the cadence
+ * and the membership-hold are LIVE (and the unit test proves them on an injected
+ * clock). The reconnect ATTEMPT and the transition PROPOSAL are logged here but
+ * the actual emission of reconnect frames onto the wire, and the live
+ * observation that a real peer restores the VC within the interval, are the
+ * admission-gated 0.4 LIVE BRACKET -- they need a real peer and a real VC
+ * breakage, which CI (no /dev/vms, no lab) cannot supply. OVMX therefore does
+ * NOT invent new reconnect wire bytes here; a re-formation reuses the existing,
+ * validated scs_vc formation path when a directed HELLO next arrives.
+ *
+ * OVMX_NO_RECNX_TICK=1 disables this loop driver (guardrail 23: prove the gated
+ * behaviour is suppressed). OVMX_NO_RECNX_RECONNECT=1 is the deeper switch: it
+ * stops any peer ever entering WAIT, so this tick has nothing to act on.
+ */
+static void scsd_recnx_tick(struct scsd_rx *rx, uint64_t now_ms)
+{
+    if (rx == NULL || getenv("OVMX_NO_RECNX_TICK") != NULL) {
+        return;
+    }
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &rx->peers[i];
+        if (ps->pb == NULL) {
+            continue;
+        }
+        if (ps->csb.state != SCS_CSB_WAIT && ps->csb.state != SCS_CSB_RECONNECT) {
+            continue;
+        }
+        enum scs_recnx_action a =
+            scs_csb_reconnect_tick(&ps->csb, now_ms, /*peer_transition_started=*/0);
+        if (a == SCS_RECNX_ACT_RECONNECT) {
+            log_ts(stdout);
+            printf(" SCSD-I-RECNXTRY, reconnect attempt %u to"
+                   " %02x:%02x:%02x:%02x:%02x:%02x (CSB RECONNECT, membership"
+                   " still HELD) (p. 7-30)\n",
+                   ps->csb.attempts,
+                   ps->pb->remote_port_addr[0], ps->pb->remote_port_addr[1],
+                   ps->pb->remote_port_addr[2], ps->pb->remote_port_addr[3],
+                   ps->pb->remote_port_addr[4], ps->pb->remote_port_addr[5]);
+            fflush(stdout);
+        } else if (a == SCS_RECNX_ACT_PROPOSE_TRANSITION) {
+            log_ts(stdout);
+            printf(" SCSD-I-RECNXEXPIRED, RECNXINTERVAL period elapsed with no"
+                   " reconnect to %02x:%02x:%02x:%02x:%02x:%02x -- proposing a"
+                   " cluster state transition to remove it (p. 7-30)\n",
+                   ps->pb->remote_port_addr[0], ps->pb->remote_port_addr[1],
+                   ps->pb->remote_port_addr[2], ps->pb->remote_port_addr[3],
+                   ps->pb->remote_port_addr[4], ps->pb->remote_port_addr[5]);
+            fflush(stdout);
+        }
     }
 }
 
@@ -11464,6 +11612,13 @@ int main(int argc, char **argv)
          * HELLO received from the stalled peer. See scsd_join_retx_tick()'s
          * header for the lab evidence. OVMX_NO_JOIN_RETX_TICK=1 disables it. */
         scsd_join_retx_tick(&rx, monotonic_ms());
+
+        /* --- vms-c7d: the RECNXINTERVAL reconnect loop. For a peer whose VC
+         * broke (not a last gasp), retry the connection once a second and HOLD
+         * its membership for max(RECNXINTERVAL, remote) seconds before proposing
+         * a transition (transcript p. 7-30). Inert unless a CSB is in
+         * WAIT/RECONNECT. OVMX_NO_RECNX_TICK=1 disables it. */
+        scsd_recnx_tick(&rx, monotonic_ms());
 
         /* --- DISK DISCOVERY HAS EXACTLY ONE TRIGGER, AND THIS CALL IS IT.
          * vms-ebb moved the body into scsd_diskrun_ungate_tick() so a test can

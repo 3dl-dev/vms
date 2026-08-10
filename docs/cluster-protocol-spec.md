@@ -4628,7 +4628,11 @@ A live candidate to run next: OVMX draws `send_seq` from one per-peer VC counter
 across all of its connections to that peer, so the member connection sees a sparse
 subsequence (21, 22, 24 — 19/20/23 consumed on other conids); whether the member's
 per-connection expected-next rejects that gap is the open question. Filed on
-`vms-694`.
+`vms-694`. **[ANSWERED — see §4(O.14): NO. `send_seq` is per-VC (Davis pp.
+2-30/2-31), the oracle's rejoiner→member stream is CONTIGUOUS, and the "sparse
+subsequence" here was a measurement artifact of tabulating only the 190-byte
+frames. The per-connection-counter candidate is REFUTED; the residual is the
+member freezing its per-VC `recv_seq` mid-stream, not a per-connection gap.]**
 
 **Evidence** (host, tank volume): SUCCESS oracle
 `/data/training/vax/cluster/captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`
@@ -4640,6 +4644,114 @@ bracket `/data/training/vax/k8s-labs/vaxlab-11/logs/scsd-71dA2rejoinfix.log`
 then op 0x02 `sms=4`); driver `tests/lab/tools/rejoin_arm_lab2.sh`; code
 `src/vmsscs/scsd.c` (`rejoin_hold_standalone_ack`, the two `cm_send_ack` call
 sites); unit `tests/vmsscs/test_scsd_wire.c`.
+
+#### 4(O.14) SCS `send_seq` is PER-VIRTUAL-CIRCUIT, not per-connection — the §4(O.13) "sparse subsequence" reading was a MEASUREMENT ARTIFACT, and the per-connection-counter candidate is REFUTED; the real residual is the member freezing its per-VC `recv_seq` mid-stream so the op 0x02 (behind the frozen point) is never delivered (GROUNDED, transcript pp. 2-30/2-31 + SUCCESS oracle + fresh live lab-2 bracket, `vms-bc2`, 2026-08-10)
+
+**Frame.** §4(O.13) closed with a candidate: OVMX "draws `send_seq` from one
+per-peer VC counter across all of its connections to that peer, so the member
+connection sees a sparse subsequence (21, 22, 24 — 19/20/23 consumed on other
+conids); whether the member's per-connection expected-next rejects that gap is
+the open question." This subsection answers that question against the public
+docs, the SUCCESS oracle, and a fresh live rejoin, and the answer is
+**negative on every axis**: `send_seq` is a per-VC counter (so a per-connection
+subsequence is expected and correct, not a bug), OVMX already implements it that
+way, and the "sparse subsequence" table in §4(O.13) was an artifact of tabulating
+only the 190-byte Con.ID-bearing frames and omitting the small (58/62/94-byte)
+frames that carry the intervening sequence numbers.
+
+**`send_seq` is per-VC — public-doc grounding (Davis, *VAXcluster Principles*,
+ch. 2 §2.5–2.6, pp. 2-30/2-31; HOST-ONLY, cited by page).** p. 2-30 defines the
+message service: "SCS also guarantees that a set of messages sent to a **common
+destination** will arrive in the order in which they were sent" — the ordered
+unit is the destination *node/port*, not the connection. p. 2-31 makes the scope
+explicit: "if either the guarantee of message delivery or the guarantee of
+message sequentiality cannot be satisfied, the **virtual circuit** between the
+ports involved will be explicitly broken … then **every connection supported by
+this virtual circuit is also broken**." Sequentiality is a property of the VC
+(the port pair) and its failure tears down *all* connections on it. The
+deliberate contrast is p. 2-38 (transcript part4): "flow control for the SCS
+message service is done on a **per connection basis**" — credit is per-CDT,
+sequencing is per-VC. So one `send_seq`/`recv_seq` pair spans all connections
+multiplexed on a VC.
+
+**`send_seq` is per-VC — oracle grounding (`vax3-class03-crash-REJOIN-SUCCESS-`
+`20260801.pcap`).** The crash-rejoiner VAX3 keeps INDEPENDENT counters per peer:
+its `send_seq` to VAX2 and its `send_seq` to VAX1 both pass through 14 in the same
+window (f1297 VAX3→VAX2 `ss=14`; f1264 VAX3→VAX1 `ss=14`) — two separate VCs, two
+separate counters. Within the VAX3→VAX2 VC the counter is **fully contiguous
+across all connections and frame classes**: `4,5,6,…,22` with NO gaps (measured
+over f1243–f1335, `tools/cluster/dissect_sca.py`). The op 0x02 config rides
+`ss=14`, immediately after `ss=13` (f1261, a 62-byte frame) and `ss=12` (f1260, a
+58-byte frame) — the two frames §4(O.13)'s 190-byte-only table did not see. There
+is **no sparse subsequence** in the success case; the member's `recv_ack` walks
+the contiguous VC stream and reciprocates at f1299 (`recv_ack=14` = the config's
+`send_seq`).
+
+**OVMX already implements per-VC `send_seq`, and its member-VC stream is
+contiguous on fresh live wire.** `src/vmsscs/scsd.c:864` holds ONE
+`struct scs_vc vc` per `peer_state`; :1021 "All sends ride the shared per-channel
+`ps->vc.seq`"; every emitter calls `scs_seq_advance(&ps->vc.seq)`. This is
+architecturally identical to the oracle. A fresh lab-2 rejoin (vaxlab-7, identity
+`OVMXB0/1973`, `OVMX_JOIN_SEQ=1`, HEAD, 2026-08-10) shows OVMX's OVMX→member VC
+`send_seq` = `3,4,5,…,27` **contiguous** (`d94-bc2B1rejoin.pcap`, filtered to real
+SCS classes 0x41/0x4b/0x5b, all destined to the member MAC). OVMX's own VC engine
+reports `VC-GUARANTEES: seq-gaps=0 vc-breaks=0`. **Building per-connection
+counters would DIVERGE from the oracle (whose rejoiner uses one per-VC counter)
+and is the wrong fix — do not build it.**
+
+**The relocated residual (GROUNDED, fresh live bracket, reproduced identically on
+two independent captures).** With a contiguous per-VC stream, the rejoin still
+stalls. On the member-initiated VC the member acks OVMX's readmission stream only
+up to a fixed point and then goes silent — in BOTH the prior `vaxlab-11`
+(`recv_ack` last = 19, was reported as "18" in §4(O.13) from the 190-byte frames
+only) and the fresh `vaxlab-7` run the member's last sequenced frame carries
+`recv_ack=19`, while OVMX's op 0x02 rides `ss=24` (model `ss=21`, params `ss=22`
+on the member VMS$VAXcluster Con.ID pair). The op 0x02 is therefore several
+messages BEHIND the point where the member's per-VC `recv_seq` stops advancing, so
+it is never delivered to the member's CM SYSAP; the member sends `cm_responses=0`,
+no op 0x04 reciprocation, then abandons the sequenced VC and reverts to
+HELLO-only (`mt=0xb3`), and the connection ends `conn[member=DISC SENT]`,
+`vaxcluster_member=no`. **XITDONE=0** (fresh bracket: arm 1 first-join
+**XITDONE=1** + sidecar `generation=1`; arm 2 same-id rejoin **XITDONE=0**). So
+the blocker is NOT the op 0x02 payload (§4(O.10)), NOT the connection selection
+(§4(O.11/12)), NOT the SYSAP-contiguity (§4(O.13)), and NOT a per-connection
+sequence gap (this subsection): it is that the member's per-VC `recv_seq` freezes
+mid-stream, stranding the op 0x02 behind it.
+
+**Next isolation target (open, on `vms-694`).** WHY does the member stop
+advancing `recv_seq` at that point? The first frame the member never acks is a
+58-byte `0x4b` sequenced message (fresh: f167 `ss=20`; prior: f162 `ss=20`), and
+OVMX is spraying the readmission across several distinct member Con.IDs
+(`6F18000E`, `6F16000D`, `6F1B0010`, … — Con.ID reads for the non-190 classes are
+NOT independently grounded, spec §4(d) docstring). OVMX's OWN receive side mirrors
+a connection-identity mismatch: `RX-CDL … no-cdt=14` (14 of 26 sequenced
+app-messages match no open CDT). The leading (not-yet-isolated) hypothesis is a
+rejoin-specific CDT/Con.ID mismatch — OVMX emitting sequenced messages on member
+connections that are not open on the member — which stalls per-VC delivery (p.
+2-31: an undeliverable message can break the VC). Isolating it needs an
+experiment that varies the connection SET OVMX drives the readmission over (drive
+op 0x02 and only the model/params on the single member-initiated VMS$VAXcluster
+Con.ID, suppress the other sequenced sends), not a `send_seq` change.
+
+**Kill-switch / test note.** This subsection ships **no wire change** (it refutes
+a proposed change and records where the frontier actually is), so it carries no
+new kill-switch or fail-pre/pass-post frame test; the evidence is the oracle
+`send_seq` contiguity, the code sites, and the live XITDONE 1-vs-0 bracket. Full
+`scs`/`vmsscs` ctest stays green.
+
+**Evidence** (host, tank volume): public doc Davis pp. 2-30/2-31/2-38
+(`/home/baron/cluster/transcript/part3.md` §2.5–2.6, `part4.md` §2.8, HOST-ONLY);
+SUCCESS oracle
+`/data/training/vax/cluster/captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`
+(VAX3→VAX2 `send_seq` 4..22 contiguous, f1243–f1335; independent VAX3→VAX1
+counter); fresh live bracket
+`/data/training/vax/k8s-labs/vaxlab-7/logs/scsd-bc2A1join.log` (first-join
+XITDONE=1 + sidecar), `scsd-bc2B1rejoin.log` + `d94-bc2B1rejoin.pcap` (rejoin
+XITDONE=0, `send_seq` 3..27 contiguous, member `recv_ack` frozen at 19,
+`cm_responses=0`, `conn[member=DISC SENT]`, `RX-CDL no-cdt=14`); driver
+`tests/lab/tools/rejoin_arm_lab2.sh`; code `src/vmsscs/scsd.c:864/1021` (one
+`ps->vc.seq` per peer) and `src/vmsscs/scs_vc.c` (the VC seq engine);
+measurement `tools/cluster/dissect_sca.py`.
 
 ## 5. Summary of unknown/inferred fields (RE gaps)
 

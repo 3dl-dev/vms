@@ -53,6 +53,12 @@
 #include "dcdef.h"
 /* PID 1's identity is established THROUGH the executive, not declared. */
 #include "vms_kif.h"
+/* SYS$SYSTEM:OVMXVMSSYS.PAR reader (vms-b6a7) -- the SAME header vms_sysgen.c,
+ * scsd.c, and the DCL lexicals already use (sysgen_read_string/sysgen_read_
+ * param). PID 1 adds NO second parser (vms-9b7 is exactly that defect
+ * class): it links vmsfs statically already (CMakeLists.txt's vmsfs_static
+ * in OVMX_IMGACT mode), which is all this header-only reader needs. */
+#include "sysgen_params.h"
 
 #define SYSDISK_DEV      "/dev/vda"
 
@@ -395,10 +401,15 @@ static void bare_metal_init(void)
     mkdir("/dev/shm", 0755);
     mount("tmpfs", "/dev/shm", "tmpfs", 0, NULL);
 
-    /* Set hostname */
-    sethostname("OVMX", 4);
-
-    /* The executive comes up before anything else runs. */
+    /* NO hardcoded sethostname() HERE (vms-b6a7: "the hardcoded OVMX
+     * hostname DIES"). The real node name is SYS$SYSTEM:OVMXVMSSYS.PAR's
+     * SCSNODE parameter, and that file is ON the system disk -- unreadable
+     * until the disk is mounted and the device table / logical names are up
+     * (Step 1b in main(), below). read_boot_parameters() sets the hostname
+     * once that is true; see its header for the ordering divergence this
+     * forces from real VMS's boot-driver-I/O SYSBOOT read.
+     *
+     * The executive comes up before anything else runs. */
     executive_attach();
 
     /* MOUNT (vms-651) needs every disk unit's mount point to already exist
@@ -469,6 +480,64 @@ static void require_installed_system(void)
             "SYS$SYSTEM:DCL.EXE is absent; install the system with the "
             "OVMX installer before booting -- PID 1 does not install one");
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* Boot parameters (vms-b6a7)                                         */
+/* ------------------------------------------------------------------ */
+
+/*
+ * read_boot_parameters - SYSBOOT's job: read SYS$SYSTEM:OVMXVMSSYS.PAR and
+ * set the system's identity from it. Called once the system disk is mounted
+ * AND confirmed installed (require_installed_system(), above), and once the
+ * device table / logical names are live (main()'s Step 1b) -- vmsfs
+ * translation of VMS_PARAMS_PATH needs both.
+ *
+ * ORDERING DIVERGENCE, DISCLOSED (docs/design-boot-faithful.md, "ORDERING
+ * NOTE"): real VMS's SYSBOOT reads the parameter file BEFORE the executive
+ * attaches, through boot-driver I/O that never mounts a filesystem in the
+ * Unix sense. OVMX's substrate has no analogue of boot-driver I/O -- the
+ * parameter file is an ordinary file ON the system disk, unreadable until
+ * vmsfs has mounted it -- so this necessarily runs AFTER the mount and
+ * AFTER the executive attaches. Named here as a substrate limit, not hidden
+ * as if OVMX read it VMS's way (the same discipline provision_ownership()'s
+ * MAXSYSGROUP note already carries).
+ *
+ * SHARES THE READER (vms-9b7): sysgen_read_string()/sysgen_read_param() are
+ * the exact functions vms_sysgen.c, scsd.c and the DCL F$GETSYI lexicals
+ * already use. This function adds no parser of its own -- it links vmsfs
+ * (statically, via the existing vmsfs_static target) and calls the one
+ * reader every other consumer calls. "Parameters the executive or later
+ * stages need are held for them" is satisfied by the parameter file
+ * REMAINING on the mounted, persistent system disk: PROVISION.EXE and every
+ * later stage can read the identical file through the identical reader --
+ * no separate in-memory hand-off is needed or added.
+ *
+ * Missing or corrupt SYS$SYSTEM:OVMXVMSSYS.PAR on an already-INSTALLED
+ * volume (require_installed_system() already confirmed DCL.EXE is present)
+ * is NOT the mount-or-halt condition above. There is no oracle capture of
+ * what VMS does with a missing/corrupt ALPHAVMSSYS.PAR, so OVMX does not
+ * invent a VMS message for it (Rule 10): it boots on the compiled-in
+ * default node name and says so with an explicitly OVMX-facility warning --
+ * loud, not silent, and never dressed up as a VMS diagnostic.
+ */
+static void read_boot_parameters(void)
+{
+    char node[SYSGEN_STRVAL_LEN];
+
+    if (sysgen_read_string("SCSNODE", node, sizeof(node)) == 0 && node[0] != '\0') {
+        sethostname(node, strlen(node));
+        printf("%%OVMX-I-SCSNODE, node name %s set from SYS$SYSTEM:OVMXVMSSYS.PAR\n",
+               node);
+        return;
+    }
+
+    fprintf(stderr,
+            "%%OVMX-W-NOPARAMS, SYS$SYSTEM:OVMXVMSSYS.PAR is missing or unreadable\n");
+    fprintf(stderr,
+            "-OVMX-I-NOPARAMS, booting with default node name %s\n",
+            OVMX_DEFAULT_NODENAME);
+    sethostname(OVMX_DEFAULT_NODENAME, strlen(OVMX_DEFAULT_NODENAME));
 }
 
 /*
@@ -699,6 +768,16 @@ int main(void)
      * does not boot -- so a mounted volume without SYS$SYSTEM:DCL.EXE is a
      * fail-honest halt, never a self-install. */
     require_installed_system();
+
+    /* Step 2b: SYSBOOT's job -- read SYS$SYSTEM:OVMXVMSSYS.PAR and set the
+     * system's identity (sethostname) from its SCSNODE parameter (vms-b6a7,
+     * docs/design-boot-faithful.md §4.1). Must run after Step 1b (the
+     * device table / logical names that make VMS_PARAMS_PATH resolvable)
+     * and after require_installed_system() confirms this is a real
+     * installed volume, not a blank one. See read_boot_parameters()'s own
+     * header for the ordering divergence from real VMS and the honest
+     * missing/corrupt-file fallback. */
+    read_boot_parameters();
 
     /* Step 3: %STDRV-I-STARTUP begun, then run STARTUP.COM.
      * The STDRV "begun" bracket precedes the startup procedure (F1) -- it used

@@ -95,10 +95,13 @@ jobs:
               - '.github/workflows/**'
               - 'distro/**'
               - 'src/ovmx_init/**'
+              - 'src/libvms/include/sysgen_params.h'
               - 'tests/qemu/test_persistent_boot.sh'
               - 'tests/qemu/test_release_e2e.sh'
               - 'tests/qemu/test_executive_integral.sh'
               - 'tests/qemu/test_distrib_boot.sh'
+              - 'tests/qemu/test_boot_scsnode_hostname_e2e.sh'
+              - 'tests/qemu/run_boot_scsnode_hostname_e2e.sh'
               - 'tests/uat/**'
             release:
               - '.github/workflows/**'
@@ -613,6 +616,60 @@ jobs:
           rc=$?
           if [ "$rc" -eq 77 ]; then
             echo "FATAL: parts_demo_e2e SKIPPED in CI — this gate must actually run the real boot+demo, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2c: SCSNODE -> real hostname across reboot (vms-b6a7)
+  #
+  # STARTUP.EXE's SYSBOOT role reads SYS$SYSTEM:OVMXVMSSYS.PAR and sets the
+  # actual Linux hostname from SCSNODE (the hardcoded sethostname("OVMX", 4)
+  # is gone). Boots the ACTUAL mastered bootable image TWICE per case (the
+  # closest thing OVMX's substrate has to "reboot" — see the gate's own
+  # header): once to SYSGEN SET SCSNODE / WRITE CURRENT (or, in the negative
+  # case, DELETE the seeded parameter file), once to prove what the next
+  # boot does with it. See tests/qemu/test_boot_scsnode_hostname_e2e.sh for
+  # the full two-case sequence (positive: SCSNODE follows across reboot;
+  # negative: missing/corrupt .PAR on an installed disk boots on defaults
+  # with an honest OVMX-facility warning, never a fabricated VMS message).
+  #
+  # Same SKIP_RETURN_CODE 77 => hard CI failure convention as parts-demo-e2e
+  # above: this gate must actually run the real boot, never skip silently.
+  # -----------------------------------------------------------------------
+  boot-scsnode-hostname-e2e:
+    name: SCSNODE -> real hostname across reboot (vms-b6a7)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: SCSNODE -> hostname e2e — boot, SYSGEN, reboot, verify
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_boot_scsnode_hostname_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: boot_scsnode_hostname_e2e SKIPPED in CI — this gate must actually run the real boot, never skip silently." >&2
             exit 1
           fi
           exit "$rc"

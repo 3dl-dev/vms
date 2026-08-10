@@ -630,7 +630,12 @@ EOF
         # raw ioctl -- both reach vms_ioctl_setprv's !may_exceed authorization,
         # so this one mutation reddens both, one layer apart. test_kmod_access's
         # two reds are the same self-award seen through the raw ioctl.
-        suites_red)   echo "test_kmod_access test_syssvc_setprv";;
+        # test_syssvc_setprv_dcl JOINS suites_red WITH vms-e5d7, which wired
+        # DCL's SET PROCESS/PRIVILEGES to the same public sys$setprv: an
+        # unauthorized process typing the COMMAND reaches the identical
+        # !may_exceed authorization, so the mutation reddens its two DCL-surface
+        # assertions too (see knock_on_why).
+        suites_red)   echo "test_kmod_access test_syssvc_setprv test_syssvc_setprv_dcl";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -643,6 +648,8 @@ EOF
         knock_on_fail) cat <<'EOF'
 an unprivileged process cannot $SETPRV itself CMKRNL
 ... and still does not hold CMKRNL afterwards
+an unauthorized SET PROCESS/PRIVILEGES=CMKRNL prints the oracle-pinned %SYSTEM-W-NOTALLPRIV, not a fabricated success
+SHOW PROCESS/PRIVILEGES shows CMKRNL NOT held for the unauthorized process -- the executive refused to widen it
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
@@ -658,6 +665,16 @@ knock-ons; they redden here for the DIFFERENT reason that the authorization
 itself was inverted, not that the caller reached KERNEL mode first. No setmode
 assertion in either suite moves -- this mutation touches only the enable
 !may_exceed branch, which the root parent and every setmode path skip.
+
+THE SAME DEFECT, OBSERVED THROUGH THE DCL COMMAND (vms-e5d7). A DCL.EXE forked
+with dropped credentials (test_syssvc_setprv_dcl.c) runs SET
+PROCESS/PRIVILEGES=CMKRNL, which now calls the same public sys$setprv. With the
+authorized-subset intersection removed the executive grants CMKRNL, so the
+command no longer prints %SYSTEM-W-NOTALLPRIV ("... prints the oracle-pinned
+%SYSTEM-W-NOTALLPRIV ..." goes red) and its own SHOW PROCESS/PRIVILEGES then
+lists CMKRNL as held ("... shows CMKRNL NOT held ..." goes red). Its
+AUTHORIZED-process assertions (SET ...=ALL as root) do NOT move: root takes the
+may_exceed branch this mutation leaves untouched.
 EOF
                       ;;
         esac;;

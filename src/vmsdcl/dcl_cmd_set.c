@@ -26,6 +26,9 @@
 #include "ssdef.h"
 #include "vms/logical.h"
 #include "vms/privs.h"
+#include "prv_names.h"    /* VMS_PRIV_NAME_LIST -- the VMS privilege keyword
+                           * dictionary, the SAME single source SHOW
+                           * PROCESS/PRIVILEGES renders from (dcl_cmd_show.c) */
 #include "starlet.h"
 #include "vmsfs/filespec.h"
 #include "vms_kif.h"
@@ -495,6 +498,110 @@ static int cmd_set_control(struct dcl_command *cmd)
  * /PRIORITY= — set base priority; requires ALTPRI privilege
  * /PRIVILEGES= — set process privileges; requires SETPRV or OPER
  */
+/*
+ * parse_priv_setlist - split a SET PROCESS/PRIVILEGES value into the mask to
+ * ENABLE and the mask to DISABLE.
+ *
+ * The DCL parser (dcl_parser.c) preserves the surrounding parentheses of a
+ * list value, so "/PRIVILEGES=(SYSPRV,NOCMKRNL)" arrives here as the literal
+ * string "(SYSPRV,NOCMKRNL)" and "/PRIVILEGES=ALL" as "ALL". VMS negates a
+ * single privilege by prefixing its keyword with NO -- e.g.
+ * SET PROCESS/PRIVILEGE=(NOSETPRV,NOSYSPRV), the exact form the oracle drove
+ * in docs/oracle/vax73-privileges.md §3/§5.2. `default_disable` (set by an
+ * explicit /DISABLE) flips the sense of an un-prefixed keyword, and a NO
+ * prefix flips it again, so the two combine by XOR; with neither /DISABLE nor
+ * a NO prefix a keyword ENABLES, which is the plain VMS default.
+ *
+ * The keyword set is the VMS privilege dictionary itself: prv_names.h's
+ * VMS_PRIV_NAME_LIST -- the SAME single source SHOW PROCESS/PRIVILEGES renders
+ * from (src/vmsdcl/dcl_cmd_show.c) -- plus the ALL pseudo-keyword. No VMS
+ * privilege name begins with the letters "NO", so a leading "NO" is an
+ * unambiguous negation prefix, never part of a keyword.
+ *
+ * An unrecognized keyword is copied to *bad and the function returns -1
+ * without producing any mask, so the caller applies NO privilege change at
+ * all (VMS refuses the whole command on a bad keyword).
+ *
+ * Returns 0 on success (masks filled), -1 on an unknown keyword.
+ */
+static int parse_priv_setlist(const char *val, int default_disable,
+                              uint64_t *enable, uint64_t *disable,
+                              char *bad, size_t badsz)
+{
+    static const struct { const char *name; uint64_t bit; } priv_kw[] = {
+#define PK(n, m, d) { #n, (m) },
+        VMS_PRIV_NAME_LIST(PK)
+#undef PK
+        { NULL, 0 }
+    };
+
+    *enable = 0;
+    *disable = 0;
+    if (bad && badsz) bad[0] = '\0';
+    if (!val || !*val)
+        return 0;
+
+    char buf[512];
+    strncpy(buf, val, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    /* Strip one layer of the surrounding parentheses the parser preserves. */
+    char *p = buf;
+    size_t blen = strlen(p);
+    if (blen >= 2 && p[0] == '(' && p[blen - 1] == ')') {
+        p[blen - 1] = '\0';
+        p++;
+    }
+
+    char *saveptr = NULL;
+    for (char *tok = strtok_r(p, ",", &saveptr); tok;
+         tok = strtok_r(NULL, ",", &saveptr)) {
+        /* Trim surrounding whitespace. */
+        while (*tok == ' ' || *tok == '\t') tok++;
+        size_t tl = strlen(tok);
+        while (tl > 0 && (tok[tl - 1] == ' ' || tok[tl - 1] == '\t'))
+            tok[--tl] = '\0';
+        if (tl == 0)
+            continue;
+
+        int negate = 0;
+        const char *name = tok;
+        if (tl > 2 && (tok[0] == 'N' || tok[0] == 'n') &&
+                      (tok[1] == 'O' || tok[1] == 'o')) {
+            negate = 1;
+            name = tok + 2;
+        }
+
+        uint64_t bit;
+        if (strcasecmp(name, "ALL") == 0) {
+            bit = PRV$M_ALL;
+        } else {
+            int found = 0;
+            for (int i = 0; priv_kw[i].name; i++) {
+                if (strcasecmp(name, priv_kw[i].name) == 0) {
+                    bit = priv_kw[i].bit;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) {
+                if (bad && badsz) {
+                    strncpy(bad, tok, badsz - 1);
+                    bad[badsz - 1] = '\0';
+                }
+                return -1;
+            }
+        }
+
+        if (default_disable ^ negate)
+            *disable |= bit;
+        else
+            *enable |= bit;
+    }
+
+    return 0;
+}
+
 static int cmd_set_process(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -644,74 +751,116 @@ static int cmd_set_process(struct dcl_command *cmd)
     }
 
     /*
-     * /PRIVILEGES=(priv,...) — requires SETPRV or OPER. Gated on
-     * enforced_privs_held() (vms-2b8 round 5), the same source
-     * F$PRIVILEGE and SHOW PROCESS/PRIVILEGES read; SETPRV IS in
-     * VMS_PRV_M_ENFORCED, so a genuinely SETPRV-holding identity still
-     * passes this gate.
+     * /PRIVILEGES=(priv,...) — HIDE->MATCH (vms-e5d7). The mutation is the
+     * EXECUTIVE'S: this parses the keyword list into an enable/disable mask
+     * pair and calls sys$setprv, which routes through vms_kif_setprv ->
+     * VMS_IOCTL_SETPRV -> vms_ioctl_setprv (src/kernel/vms_access.c). The
+     * executive authorizes the request against THIS process's AUTHORIZED
+     * (permanent) mask and OWNS the result -- it is not a DCL-local decision.
+     *
+     * NO DCL PRE-GATE, DELIBERATELY. The block this replaces gated on
+     * enforced_privs_held() and refused the whole command with SS$_NOPRIV
+     * unless the caller already held SETPRV/SYSPRV/BYPASS. That gate is
+     * WRONG against the oracle and had to go for faithful behaviour:
+     *   - docs/oracle/vax73-privileges.md §3: a process WITHOUT SETPRV
+     *     successfully ran SET PROCESS/PRIVILEGE=SYSPRV and got SYSPRV back
+     *     (%X10000001) -- enabling a privilege ALREADY in the authorized mask
+     *     needs no SETPRV. The pre-gate refused exactly that.
+     *   - docs/oracle/vax73-privileges.md §5.2: a process with NOALL still
+     *     ran SET PROCESS/PRIVILEGE=(NOALL). Disabling needs no privilege
+     *     either; the pre-gate refused that too.
+     * On real VMS, ANY process may ISSUE SET PROCESS/PRIVILEGE; the executive
+     * decides what it actually gets. Removing the pre-gate does NOT weaken
+     * security: the executive is the sole authority and still refuses to
+     * widen a process past its authorized mask (SS$_NOTALLPRIV, the
+     * authorized subset only -- proven for the DCL surface in
+     * tests/qemu/test_syssvc_setprv_dcl.c and at the service layer in
+     * tests/qemu/test_syssvc_setprv.c). The old gate was a redundant, wrong
+     * userspace pre-check that BLOCKED the authentic partial-grant path.
+     *
+     * ctx->privileges is intentionally not written: F$PRIVILEGE and SHOW
+     * PROCESS/PRIVILEGES both ask the executive fresh (dcl_lexical.c,
+     * dcl_cmd_show.c), and sys$setprv already mirrors the executive's
+     * resulting mask into pcb->cur_privs for the two in-process readers.
      */
     const char *privs_val = dcl_qualifier_value(cmd, "PRIVILEGES");
     if (privs_val && *privs_val) {
-        uint64_t held = enforced_privs_held();
-        if (!(held & PRV$M_SETPRV) &&
-            !(held & PRV$M_SYSPRV) &&
-            !(held & PRV$M_BYPASS)) {
-            dcl_error("SET", 2, "NOPRIV",
-                      "no privilege for SET PROCESS /PRIVILEGES");
-            return SS$_NOPRIV;
-        }
         /*
-         * DOES NOT REACH THE EXECUTIVE, AND SAYS SO (vms-2b8 round 4,
-         * Rule 10's HIDE answer). This used to overwrite ctx->privileges
-         * outright with parse_privilege_string(pv) -- a local,
-         * unauthenticated self-assertion with no connection to the
-         * executive's real mask. MEASURED, this was a live bug: it
-         * silently discarded whatever ctx->privileges held (including
-         * SETPRV/CMKRNL/CMEXEC/WORLD, the executive's real enforced set)
-         * and replaced it with only the newly-named privilege, so the
-         * VERY NEXT SET PROCESS/PRIVILEGES call on the same session could
-         * fail its own SETPRV gate above -- a session locking itself out
-         * of a command it was genuinely authorized for, purely because an
-         * unrelated prior call had clobbered the local cache. And because
-         * dcl_lexical.c's F$PRIVILEGE used to read that same
-         * ctx->privileges, this command could make F$PRIVILEGE and SHOW
-         * PROCESS/PRIVILEGES (which reads the executive directly) disagree
-         * about the SAME process at the SAME moment -- this item's whole
-         * subject. F$PRIVILEGE no longer reads ctx->privileges at all (it
-         * asks the executive fresh, every call), so that specific
-         * contradiction is now structurally impossible regardless of what
-         * this command does. But the command still cannot honestly claim
-         * to have changed anything the executive enforces: MATCH VMS would
-         * mean calling sys$setprv(), which vms-pv1 has now wired to the
-         * executive (src/libvms/syssvc/sys_misc.c -> vms_kif_setprv ->
-         * vms_ioctl_setprv, so vms_kif_setprv is no longer OVMX-UNWIRED).
-         * Routing THIS command through it -- parsing privs_val into a mask,
-         * calling sys$setprv, and mapping the executive's status
-         * (SS$_NORMAL / SS$_NOTALLPRIV / SS$_NOPRIV) to DCL output pinned to
-         * the oracle -- is the deferred remainder tracked as vms-e5d7. Until
-         * that lands this stays HIDE, not MATCH: no local mutation, and a
-         * loud, honest diagnostic instead of silent success.
-         *
-         * SEVERITY LETTER FIXED TO I, round 5: this printed as a WARNING
-         * (%OVMX-W-) while the function falls through to `return
-         * SS$_NORMAL` below -- a success status. On VMS the severity
-         * field's low bit is the success/failure discriminator DCL's own
-         * $STATUS and ON-condition logic branch on: W and F are the
-         * "unsuccessful" side (bit clear), S and I are "successful" (bit
-         * set), so a W-severity message paired with a SS$_NORMAL return
-         * is not cosmetic -- it is an OVMX-invented message disagreeing
-         * with the OVMX-invented status it sits next to. This is an
-         * OVMX-facility diagnostic for a condition VMS does not have
-         * (Rule 10 allows that; it is not the VMS SETPRV facility's own
-         * voice), so there is no VMS wording to match -- only its own
-         * severity to make consistent with its own status, matching the
-         * I + SS$_NORMAL pairing this file already uses for other
-         * acknowledged-but-inert commands (cmd_set_host's
-         * %SET-I-NOTAVAIL, cmd_set_audit's %SET-I-INTSET).
+         * VMS negates per-keyword with a NO prefix. /ENABLE and /DISABLE are
+         * honoured as the default direction for un-prefixed keywords (default
+         * = enable), a superset that reduces to plain VMS behaviour when
+         * neither is given. A NO prefix flips the direction of its keyword
+         * regardless.
          */
-        printf("%%OVMX-I-NOSETPRV, SET PROCESS/PRIVILEGES does not change "
-               "the executive's privilege state on this system yet "
-               "(vms-e5d7) -- no privileges were changed\n");
+        int default_disable = (dcl_qualifier_value(cmd, "DISABLE") != NULL);
+        if (dcl_qualifier_value(cmd, "ENABLE") != NULL)
+            default_disable = 0;
+
+        uint64_t enable_mask = 0, disable_mask = 0;
+        char bad[64];
+        if (parse_priv_setlist(privs_val, default_disable,
+                               &enable_mask, &disable_mask,
+                               bad, sizeof(bad)) != 0) {
+            /*
+             * Unknown privilege keyword. %CLI-W-IVKEYW is the standard VMS
+             * CLI keyword-validation message (VSI DCL Dictionary); the exact
+             * terminal shape for this specific command was not oracle-captured
+             * this session, so the text is the documented CLI wording, not a
+             * self-certified SETPRV-facility invention. No privilege was
+             * changed -- the whole list is rejected.
+             */
+            dcl_error("CLI", 0 /* W */, "IVKEYW",
+                      "unrecognized keyword - check validity and spelling, "
+                      "\\%s\\", bad);
+            return SS$_BADPARAM;
+        }
+
+        uint64_t prev = 0;
+        uint32_t st = SS$_NORMAL;
+
+        /* Disabling is always allowed (oracle §3); apply it first so a mixed
+         * list that also enables cannot leave a privilege the caller asked to
+         * drop still set. */
+        if (disable_mask) {
+            uint32_t d = sys$setprv(0 /* disable */, &disable_mask, 0, &prev);
+            if (!(d & 1))
+                st = d;
+        }
+        if (enable_mask && (st & 1))
+            st = sys$setprv(1 /* enable */, &enable_mask, 0, &prev);
+
+        /*
+         * Map the EXECUTIVE'S status to DCL output. The message TEXT, IDENT,
+         * SEVERITY and FACILITY are oracle-pinned in
+         * docs/oracle/vax73-privileges.md §1 (F$MESSAGE round-trips on VAX1,
+         * OpenVMS VAX V7.3) and the STATUS the executive returns for each
+         * condition is pinned in §3; see §8 for the one residual (the choice
+         * to surface the message as a bare pass-through rather than a %SET-
+         * wrapper was not captured on the oracle and is flagged there).
+         */
+        if (st & 1) {
+            /* Success: VMS prints nothing (oracle §3: a successful
+             * SET PROCESS/PRIVILEGE returns %X10000001 and is silent). */
+        } else if (st == SS$_NOTALLPRIV) {
+            dcl_error("SYSTEM", 0 /* W */, "NOTALLPRIV",
+                      "not all requested privileges authorized");
+        } else if (st == SS$_NOPRIV) {
+            dcl_error("SYSTEM", 4 /* F */, "NOPRIV",
+                      "insufficient privilege or object protection violation");
+        } else {
+            /*
+             * The executive was unreachable (INV-6 / CLAUDE.md Rule 9). This
+             * is a condition OpenVMS never faces, so it gets an OVMX-branded
+             * honest report with the raw status -- NOT a fabricated %SYSTEM-
+             * message, exactly as SET PROCESS/NAME does above. In the product
+             * this is unreachable (PID 1 refuses to boot without /dev/vms);
+             * only the CI negative-control rig can observe it.
+             */
+            dcl_error("OVMX", 4 /* F */, "SETPRVFAIL",
+                      "SET PROCESS/PRIVILEGES could not reach the executive "
+                      "(status %%X%08X)", st);
+        }
+        return (int)st;
     }
 
     return SS$_NORMAL;
@@ -988,11 +1137,12 @@ static int cmd_set_time(struct dcl_command *cmd)
      * 10's HIDE answer, applied honestly rather than left implicit: a
      * bare %SET-E-NOPRIV reads as "your account needs OPER, go get it",
      * which is false on this build -- no account can. Say so in the
-     * message text instead of leaving the reader to infer it, exactly
-     * as the round-5 fix already does for SET PROCESS/PRIVILEGES's
-     * %OVMX-I-NOSETPRV. Restoring real grantability is vms-pv1's job
-     * (wiring vms_kif_setprv into VMS_PRV_M_ENFORCED); this round only
-     * has to stop hiding that the capability disappeared.
+     * message text instead of leaving the reader to infer it. (SET
+     * PROCESS/PRIVILEGES itself is no longer a HIDE stub -- vms-e5d7
+     * wired it to the executive-backed sys$setprv -- but SET TIME stays
+     * HIDE here because OPER is still outside VMS_PRV_M_ENFORCED: OVMX
+     * enforces no priority/time privilege for any account yet, so this
+     * gate can grant to none.)
      *
      * ROUND 7: the message this printed named SYSUAF ("OPER is
      * authorized by SYSUAF but not yet enforced") -- true of SYSTEM and

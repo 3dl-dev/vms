@@ -621,3 +621,51 @@ number."
 - `F$FAO("!XL", F$GETJPI("","UIC"))` does NOT give the numeric UIC:
   `F$GETJPI(...,"UIC")` already returns the translated STRING `[SYSTEM]`, and
   `!XL` then formats its descriptor address (observed `7FFEC964`).
+
+---
+
+## 8. DCL `SET PROCESS/PRIVILEGES` — the command surface (vms-e5d7)
+
+**Item:** vms-e5d7 (the DCL-surface remainder of vms-pv1). **Method:** derived
+from the pins already in this file (§1 message text, §3 executive status), not
+a new lab capture. What is and is not pinned is stated explicitly below.
+
+`src/vmsdcl/dcl_cmd_set.c`'s `SET PROCESS/PRIVILEGES=(...)` now parses the
+keyword list into an enable/disable mask pair and calls `sys$setprv`, which
+routes the mutation through the executive (`vms_kif_setprv` ->
+`VMS_IOCTL_SETPRV` -> `vms_ioctl_setprv`, `src/kernel/vms_access.c`). The
+executive is the sole authority; DCL maps the status it returns to output:
+
+| Executive status                | DCL output (facility / severity / ident) |
+|---------------------------------|-------------------------------------------|
+| `SS$_NORMAL` (success)          | *nothing* — silent, per §3 (`%X10000001`) |
+| `SS$_NOTALLPRIV` (1664)         | `%SYSTEM-W-NOTALLPRIV, not all requested privileges authorized` (§1) |
+| `SS$_NOPRIV` (36)               | `%SYSTEM-F-NOPRIV, insufficient privilege or object protection violation` (§1) |
+| executive unreachable (INV-6)   | `%OVMX-F-SETPRVFAIL, ... could not reach the executive (status %Xnnnnnnnn)` — OVMX-branded, NOT a fabricated `%SYSTEM-` message (Rule 10) |
+
+**What is PINNED:** the message text, ident, severity letter and facility for
+each status (§1, F$MESSAGE round-trips on VAX1); and the executive STATUS for
+each condition (§3: enabling a privilege already authorized needs no SETPRV
+and succeeds; reaching outside the authorized mask without SETPRV enables the
+authorized subset and returns `SS$_NOTALLPRIV`, not `SS$_NOPRIV`).
+
+**What is NOT pinned — flagged for operator sign-off (same class as §3's
+permanent-widen status and §5.7):** whether real DCL surfaces the message as
+the BARE `%SYSTEM-...` shown above (a pass-through of the service status) or
+wraps it in a command-level envelope the way `SET PROCESS/NAME` does
+(`%SET-E-NOTSET` + a `-SYSTEM-F-...` continuation, pinned for that command in
+`src/kernel/vms_ioctl.h`). This specific command's terminal transcript for an
+unauthorized request was not captured on the oracle this session. OVMX emits
+the bare pass-through, which is consistent with the pinned service status; if a
+later capture shows a `%SET-` wrapper, it is a one-line change in the status
+-> output mapping in `cmd_set_process()`. The message TEXT does not change
+either way — it stays the §1 pin.
+
+**No DCL pre-gate.** The prior code refused the whole command with
+`SS$_NOPRIV` unless the caller already held SETPRV/SYSPRV/BYPASS. That
+contradicted §3 (a non-SETPRV process enabled an authorized SYSPRV and
+succeeded) and §5.2 (a process ran `SET PROCESS/PRIVILEGE=(NOALL)`), so it was
+removed: on VMS any process may ISSUE the command and the executive decides
+the result. Removing it does not weaken security — the executive still refuses
+to widen a process past its authorized mask, proven end-to-end through the DCL
+surface in `tests/qemu/test_syssvc_setprv_dcl.c`.

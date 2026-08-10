@@ -920,12 +920,11 @@ check_response 'SHOW SYMBOL IDENT_SETPRV' 'IDENT_SETPRV = "TRUE"'
 # call, the same source SHOW PROCESS/PRIVILEGES reads, instead of the local,
 # SET-PROCESS-mutable ctx->privileges -- so the two cannot disagree by
 # construction, regardless of what SET PROCESS/PRIVILEGES does locally. That
-# command itself no longer claims a success it cannot deliver either: it
-# prints %OVMX-I-NOSETPRV (informational, matching the SS$_NORMAL it
-# returns -- round 5 fixed a W/success mismatch here too) and leaves
-# ctx->privileges untouched, because actually reaching the executive is
-# vms-pv1's job (vms_kif_setprv exists but is deliberately left
-# OVMX-UNWIRED pending that item), not this one's.
+# command now REACHES the executive (vms-e5d7): it routes the mutation through
+# sys$setprv -> vms_kif_setprv and leaves ctx->privileges untouched (sys$setprv
+# mirrors the executive's resulting mask into pcb->cur_privs for the in-process
+# readers; F$PRIVILEGE and SHOW both read the executive fresh). A successful
+# enable is silent, matching VMS (docs/oracle/vax73-privileges.md §3/§8).
 #
 # Checked BY POSITION (check_response_at), not by command text: 'SHOW
 # PROCESS /PRIVILEGES' and the F$PRIVILEGE pattern both already ran once
@@ -959,63 +958,44 @@ check_response_at "$IDX_PRIORITY_SET" 'NOPRIV'
 check_response 'SHOW SYMBOL IDENT_CURPRIV' 'IDENT_CURPRIV = "CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD"'
 check_response 'SHOW SYMBOL IDENT_AUTHPRIV' 'IDENT_AUTHPRIV = "CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD"'
 
-# SEVERITY LETTER, ASSERTED (vms-2b8 round 5's own fix, uncovered until
-# round 6): %OVMX-W-NOSETPRV printed as a Warning next to a function that
-# falls through to `return SS$_NORMAL` -- a success status -- contradicted
-# itself (W is DCL's "unsuccessful" severity, SS$_NORMAL is success). Round
-# 5 changed the letter to I; nothing asserted it. 'SET
-# PROCESS/PRIVILEGES=(OPER)' is unique text in SYSTEM_CMDS (unlike 'SHOW
-# PROCESS /PRIVILEGES', it never repeats), so a plain check_response is
-# safe here without the by-position anchor the surrounding checks need.
-check_response 'SET PROCESS/PRIVILEGES=(OPER)' 'OVMX-I-NOSETPRV'
-check_not_response 'SET PROCESS/PRIVILEGES=(OPER)' 'OVMX-W-NOSETPRV'
+# SET PROCESS/PRIVILEGES IS NOW WIRED TO THE EXECUTIVE (vms-e5d7). It used to
+# be a HIDE stub that printed %OVMX-I-NOSETPRV and changed nothing; it now
+# routes the mutation through sys$setprv -> the executive
+# (docs/oracle/vax73-privileges.md §8), and there is no DCL pre-gate. For THIS
+# session -- SYSTEM, which holds SETPRV and is authorized for privilege ALL --
+# enabling OPER is granted, and (matching VMS, oracle §3) a SUCCESSFUL SET
+# PROCESS/PRIVILEGE prints NOTHING. So the old %OVMX-*-NOSETPRV facade must be
+# GONE in either severity. 'SET PROCESS/PRIVILEGES=(OPER)' is unique text in
+# SYSTEM_CMDS, so a plain check_not_response is safe. The genuine grant/deny
+# behaviour (authorized ALL enables; an unauthorized request yields
+# %SYSTEM-W-NOTALLPRIV and stays unheld; SHOW reflects the executive mask) is
+# proven end-to-end against a real /dev/vms in
+# tests/qemu/test_syssvc_setprv_dcl.c.
+check_not_response 'SET PROCESS/PRIVILEGES=(OPER)' 'NOSETPRV'
 
-# DEFECT-1 POSITIVE CONTROL (vms-2b8 round 6): the GRANT path, not just
-# the deny path. Every proof above this point (IDX_ALTPRI/IDX_PRIORITY_SET,
-# SET TIME below) shows enforced_privs_held() REFUSING an operation; none
-# shows it GRANTING one, and a gate that consults nothing and refuses
-# unconditionally would pass every deny assertion in this file exactly as
-# well as a correct gate does. This is the counterpart: SET
-# PROCESS/PRIVILEGES's own gate (src/vmsdcl/dcl_cmd_set.c,
-# cmd_set_process) reads the SAME enforced_privs_held() as SET
-# PROCESS/PRIORITY, requiring SETPRV||SYSPRV||BYPASS -- and SETPRV IS one
-# of the four bits VMS_PRV_M_ENFORCED names, so the SYSTEM session (which
-# holds it, proven above by IDENT_SETPRV/IDENT_SETPRV2) must be let past
-# this gate. The absence of %SET-E-NOPRIV here (checked negatively,
-# because a command that failed the gate would print NOPRIV and not
-# OVMX-I-NOSETPRV -- the two are mutually exclusive outcomes of the same
-# branch) is the grant: the gate was consulted and it said yes.
+# POSITIVE CONTROL -- the GRANT path. SET PROCESS/PRIVILEGES=(OPER) for this
+# SYSTEM session must SUCCEED: OPER is within SYSTEM's authorization and it
+# holds SETPRV, so the executive grants it and DCL prints no error. A refusal
+# would print %SET-E-NOPRIV or %SYSTEM-*, so its ABSENCE here is the grant.
+# (OPER is outside VMS_PRV_M_ENFORCED, so SHOW PROCESS/PRIVILEGES does not
+# display it -- which is why the desync assertions above read SHOW's ENFORCED
+# privileges, and the executive-visible grant/deny cycle is proven directly in
+# tests/qemu/test_syssvc_setprv_dcl.c.)
 #
-# VERIFIED NON-VACUOUS BY MUTATION, one property at a time
-# (src/vmsdcl/dcl_cmd_set.c's enforced_privs_held()), each rebuilt
-# (podman build -f distro/Dockerfile.bootable) and re-booted under QEMU
-# from a clean image, real runs, real counts:
-#   BASELINE (this file's own fix, unmodified): 47 passed / 0 failed.
-#   Body forced to `return 0;` (always-refuse): 45 passed / 2 failed --
-#     BOTH failures on 'SET PROCESS/PRIVILEGES=(OPER)': the
-#     'OVMX-I-NOSETPRV' presence check above and this grant check below
-#     ('should NOT contain NOPRIV') -- the command now printed
-#     %SET-E-NOPRIV instead. IDX_ALTPRI/IDX_PRIORITY_SET (the PRIORITY
-#     deny pair) and the SET TIME deny assertion below stayed GREEN,
-#     correctly: they were already refused, and still are.
-#   Body forced to `return ~(uint64_t)0;` (always-grant): 45 passed / 2
-#     failed -- IDX_PRIORITY_SET ('NOPRIV') went RED (SET
-#     PROCESS/PRIORITY=6 was silently authorized), AND the SET TIME deny
-#     assertion below went RED too (its gate passed on the strength of
-#     the forced OPER bit, so cmd_set_time fell through to the REAL
-#     settimeofday(2) call, which failed with a genuine OS-level EPERM --
-#     this session runs as UID 4/SYSTEM post-drop, not root -- printing a
-#     DIFFERENT message, "cannot set system time - insufficient OS
-#     privilege", that no longer matches the gate-refusal text the
-#     assertion looks for). Both grant checks on 'SET
-#     PROCESS/PRIVILEGES=(OPER)' stayed GREEN (unsurprising: SETPRV
-#     already granted this one before the mutation too; the point of
-#     this run is that the DENY side is not vacuous, not that the grant
-#     side moves).
-# Each mutation flips exactly the assertion class it should (deny-only or
-# grant-only) and no other -- the pairing is not satisfiable by a gate
-# that always refuses or always grants, only by one that actually
-# consults the mask.
+# NOTE (vms-e5d7): SET PROCESS/PRIVILEGES no longer consults
+# enforced_privs_held() -- the executive authorizes it now, and the old DCL
+# pre-gate was removed (it wrongly refused enabling an already-authorized
+# privilege, docs/oracle/vax73-privileges.md §3/§8). The remaining
+# enforced_privs_held() gates are SET PROCESS/PRIORITY and SET TIME, both
+# deny-only on this build (ALTPRI/OPER/SYSPRV/BYPASS are all outside
+# VMS_PRV_M_ENFORCED). VERIFIED NON-VACUOUS BY MUTATION
+# (src/vmsdcl/dcl_cmd_set.c's enforced_privs_held(), rebuilt + re-booted under
+# QEMU): forcing the body to `return ~(uint64_t)0;` (always-grant) reddens
+# IDX_PRIORITY_SET ('NOPRIV' -- SET PROCESS/PRIORITY=6 becomes silently
+# authorized) AND the SET TIME deny assertion below (its gate passes on the
+# forced OPER bit, so cmd_set_time falls through to the real settimeofday(2),
+# which fails with a genuine OS EPERM printing a DIFFERENT message than the
+# gate-refusal text). So a gate that always grants is caught by the deny pair.
 check_not_response 'SET PROCESS/PRIVILEGES=(OPER)' 'NOPRIV'
 
 # DEFECT-1 REGRESSION PROOF, SET TIME (see the SYSTEM_CMDS block above for

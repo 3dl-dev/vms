@@ -148,6 +148,7 @@ int main(void)
     check_roundtrip("BATCH",       0x80000001u, "oracle: DCL prints -2147483647");
     check_roundtrip("DIALUP",      0x80000002u, "oracle: absent from OVMX entirely before vms-2f8");
     check_roundtrip("INTERACTIVE", 0x80000003u, "oracle: DCL prints -2147483645");
+    /* negctl: rightslist-general-hex-as-decimal */
     check_roundtrip("LOCAL",       0x80000004u, "oracle: DCL prints -2147483644");
     check_roundtrip("NETWORK",     0x80000005u, "oracle: DCL prints -2147483643");
     check_roundtrip("REMOTE",      0x80000006u, "oracle: DCL prints -2147483642");

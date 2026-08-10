@@ -131,6 +131,7 @@ static int run_child(int c2p_write, int p2c_read)
               "child: the parent's SYSTEM search-list logical reports BOTH equivalence strings here");
         CHECK(n == 2 && strcmp(values[0], TEST_VAL0) == 0,
               "child: equivalence index 0 matches the parent's define");
+        /* negctl: lnm-searchlist-equiv-truncated */
         CHECK(n == 2 && strcmp(values[1], TEST_VAL1) == 0,
               "child: equivalence index 1 (previously dropped, vms-420) matches the parent's define");
 

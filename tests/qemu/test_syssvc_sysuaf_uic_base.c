@@ -152,6 +152,7 @@ int main(void)
 
     /* GUEST discriminates too, and in the member field rather than the group,
      * so a fix that changed only one of the two fields still fails here. */
+    /* negctl: sysuaf-uic-radix-decimal */
     check_uic("GUEST", 0200, 0201, "member field is octal as well as group");
 
     /* --- LIVENESS ANCHOR, NOT A DISCRIMINATOR ---------------------------

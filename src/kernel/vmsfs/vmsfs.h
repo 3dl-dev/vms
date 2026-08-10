@@ -218,47 +218,6 @@ static inline umode_t vmsfs_prot_to_mode(uint16_t prot)
             vmsfs_sogw_nibble_to_mode(wld_deny);
 }
 
-/*
- * Inverse of vmsfs_prot_to_mode(): build a SOGW denial nibble from a
- * Unix-style rwx nibble (as chmod(2) hands in via struct iattr.ia_mode).
- * Used by vmsfs_blkdev_setattr() (vms-df9) so SET PROTECTION / chmod(2)
- * against a real block-device vmsfs mount actually reaches the on-disk
- * fh_protection field, not just the in-core inode's display-only i_mode.
- */
-static inline uint8_t vmsfs_mode_to_sogw_nibble(umode_t mode_bits)
-{
-    uint8_t deny = 0;
-
-    if (!(mode_bits & 0x4)) deny |= VMSFS_PROT_R;
-    if (!(mode_bits & 0x2)) deny |= VMSFS_PROT_W;
-    if (!(mode_bits & 0x1)) deny |= VMSFS_PROT_E;
-    return deny;
-}
-
-/*
- * Build a 16-bit SOGW protection word from a Unix mode_t. Mirrors
- * src/vmsfs/vmsfs_protect.c's vmsfs_mode_to_protection() (userspace twin,
- * used by DCL's SET PROTECTION and by PRODUCT.EXE to convert kit-metadata
- * protection into a chmod(2) call) bit-for-bit -- same shifts/bit values,
- * pinned in ovmx_fileprot.h and reproduced here as VMSFS_PROT_*
- * (vmsfs_ondisk.h) since this is a separate compilation unit (kernel
- * module vs. hosted userspace lib) with no shared header between them.
- *
- * System category is not representable in a Unix mode_t (only 9 rwx bits
- * exist) -- left at 0 (full access), the same policy the userspace twin
- * documents for its own SYSTEM nibble.
- */
-static inline uint16_t vmsfs_mode_to_vmsprot(umode_t mode)
-{
-    uint8_t own_deny = vmsfs_mode_to_sogw_nibble((mode >> 6) & 0x7);
-    uint8_t grp_deny = vmsfs_mode_to_sogw_nibble((mode >> 3) & 0x7);
-    uint8_t wld_deny = vmsfs_mode_to_sogw_nibble(mode & 0x7);
-
-    return (uint16_t)((own_deny << VMSFS_PROT_OWN_SHIFT) |
-                       (grp_deny << VMSFS_PROT_GRP_SHIFT) |
-                       (wld_deny << VMSFS_PROT_WLD_SHIFT));
-}
-
 /* ================================================================
  * Block-device mode operations (vmsfs_blkdev.c)
  * ================================================================ */

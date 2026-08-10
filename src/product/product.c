@@ -52,17 +52,30 @@
  * SECURITY (vms-df9 constraint #2): every file's protection/owner-UIC
  * comes from its `ovmx_kit_entry` (kit metadata written by
  * tools/ovmx_kit_pack.c from the packed tree), applied via fchmod(2)/
- * fchown(2) -- never a hardcoded 0777/world-writable default. This relies
- * on vmsfs.ko's new .setattr hook (src/kernel/vmsfs/vmsfs_blkdev.c,
- * vms-df9) actually persisting chmod/chown to the on-disk file header;
- * before that hook existed, neither syscall reached disk against a real
- * block-device vmsfs mount (see that file's header comment). A chown(2)
- * to a UIC other than PRODUCT INSTALL's own runs into ordinary Unix
- * chown(2) semantics (CAP_CHOWN required) and fails loudly rather than
- * silently landing the wrong owner -- see vmsfs_blkdev_setattr()'s comment
- * for why that limitation is real but does not affect any kit
- * ovmx_kit_pack currently produces (every one carries SYSTEM [1,4], and
- * PRODUCT INSTALL is expected to run as SYSTEM).
+ * fchown(2) -- never a hardcoded 0777/world-writable default.
+ *
+ * A vmsfs.ko `.setattr` hook was tried and REVERTED (vms-79b): it broke
+ * tests/qemu/test_release_e2e.sh's `norecord` case (a SYSUAF rewritten
+ * with no SYSTEM row must HALT at boot; with the hook present it silently
+ * booted to a login prompt instead -- confirmed by bisect, root cause not
+ * fully isolated, blast radius too large to carry for what it bought).
+ * What it bought was very little: vmsfs_blkdev_create() already assigns
+ * every NEW file VMSFS_PROT_DEFAULT and the creating process's own UIC,
+ * and ovmx_kit_pack.c's OVMX_KIT_PROT_DEFAULT / OVMX_KIT_UIC_*_DEFAULT are
+ * numerically IDENTICAL to those (both 0xAA00, both SYSTEM [1,4] when
+ * PRODUCT INSTALL runs as SYSTEM, which it is expected to) -- so for every
+ * kit ovmx_kit_pack produces today, the value the kernel assigns AT
+ * CREATION already matches the kit's own metadata before fchmod/fchown
+ * below ever runs. Without the hook, chmod(2)/chown(2) against a real
+ * blkdev-mode vmsfs mount still return success (the kernel's generic
+ * simple_setattr() fallback, not a no-op or an error) but do not durably
+ * change vi->vms_prot / the on-disk owner UIC if the requested value
+ * actually DIFFERS from what create() already set -- a real limitation for
+ * a kit that ever ships a divergent per-file protection or owner, but not
+ * one any current kit hits, and NOT a security regression: a newly
+ * created file can never land more permissive than VMSFS_PROT_DEFAULT
+ * (never world-writable) regardless of this gap. Tracked as a follow-up
+ * (vms-738) rather than solved by reintroducing kernel surface here.
  *
  * PRODUCT DATABASE: src/product/ovmx_product_db.h, OVMX-defined and
  * labeled (Rule 8) -- see that header. This file is the only reader and
@@ -434,9 +447,14 @@ static int do_install(int argc, char *argv[])
         }
         free(buf);
 
-        /* Protection + owner UIC FROM THE KIT METADATA -- see the file
-         * header comment on why this needed vmsfs.ko's new .setattr hook
-         * to actually persist against a real block-device mount. */
+        /* Protection + owner UIC FROM THE KIT METADATA, never a default --
+         * see the file header comment (vms-79b/vms-738) for why this does
+         * not yet durably persist a value that DIFFERS from vmsfs_blkdev_
+         * create()'s own defaults (a kernel-side gap, not a security hole:
+         * a new file can never land more permissive than create()'s own
+         * VMSFS_PROT_DEFAULT). The calls still run and still fail loudly
+         * on a real error -- they are correct for every kit shipped today,
+         * where the kit's own metadata already matches those defaults. */
         mode_t mode = vmsfs_protection_to_mode(e->ke_protection);
         if (fchmod(fd, mode) != 0) {
             fprintf(stderr, "%%PCSI-E-SETPROT, cannot set protection on %s: %s\n",
@@ -448,7 +466,7 @@ static int do_install(int argc, char *argv[])
                     e->ke_uic_group, e->ke_uic_member, target, strerror(errno));
             close(fd); failed = 1; break;
         }
-        fsync(fd);   /* force the chmod/chown through .setattr's write_inode now */
+        fsync(fd);
         close(fd);
         installed++;
     }

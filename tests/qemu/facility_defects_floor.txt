@@ -233,4 +233,14 @@
 # control fires IFF the C API stops reflecting executive-owned state, making
 # INV-6 ("cannot silently revert to a per-process fake") a first-class firing
 # negctl at the C-API layer. See its own entry in facility_defects.sh.
-83
+# Raised to 84 by vms-95a's dclast-super-mode-escalation -- the $DCLAST
+# access-mode SECURITY fix, the companion to vms-68f.iii's setmode SUPER gate
+# (super-mode-escalation) and vms-as1's AST-delivery bound (ast-deliver-
+# crossmode-escalation): vms_ioctl_dclast (kernel/vms_ast.c) gated declaring an
+# AST at KERNEL and EXEC but let SUPER fall through unchecked, so a USER-mode
+# caller could plant a SUPER AST without CMEXEC/CMKRNL (surviving image rundown,
+# which flushes only USER-mode ASTs, to run when DCL next drains SUPER). The
+# mutation disables the added SUPER gate (0 &&) and anchors the new SUPER-refusal
+# assertion added to test_syssvc_ast_secmode's PART B (the credential-dropped
+# USER-mode child). See its own entry in facility_defects.sh.
+84

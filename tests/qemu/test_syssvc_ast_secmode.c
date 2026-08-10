@@ -86,8 +86,9 @@ static void user_ast(uint32_t prm)   { (void)prm; g_ufired++; }
 
 /* What the unprivileged child reports back to the parent. */
 struct child_report {
-    uint32_t chkpriv_cmkrnl;   /* executive's CMKRNL verdict for the child */
-    int      deliver_rc;       /* rc of the child draining ITS own queue */
+    uint32_t chkpriv_cmkrnl;      /* executive's CMKRNL verdict for the child */
+    int      deliver_rc;          /* rc of the child draining ITS own queue */
+    uint32_t dclast_super_status; /* status of the child's sys$dclast at SUPER (vms-95a) */
 };
 
 static int executive_present(void)
@@ -219,6 +220,14 @@ int main(void)
 
             rep.chkpriv_cmkrnl = vms_kif_chkpriv(VMS_PRV_M_CMKRNL);
 
+            /* SECURITY (vms-95a): this child is at USER mode and, having
+             * dropped root, holds NO CMEXEC/CMKRNL. Declaring an AST at the
+             * more-privileged SUPER mode must be REFUSED by the executive. The
+             * $DCLAST access-mode gate checked KERNEL and EXEC but not SUPER,
+             * so before the fix this returned SS$_NORMAL and queued a SUPER AST
+             * an untrusted USER-mode image could plant for DCL to run. */
+            rep.dclast_super_status = sys$dclast(user_ast, MAGIC_U, PSL_C_SUPER);
+
             /* The child enables delivery for its own USER mode and drains.
              * The parent's AST is in the PARENT's executive PCB -- the child
              * must get nothing. */
@@ -247,6 +256,10 @@ int main(void)
             CHECK(rep.deliver_rc != 0,
                   "the parent's queued AST is invisible to the child "
                   "(the executive keys the AST queue per process)");
+
+            /* negctl: dclast-super-mode-escalation */
+            CHECK(!(rep.dclast_super_status & 1),
+                  "a USER-mode child without CMEXEC/CMKRNL is REFUSED sys$dclast at SUPER mode");
 
             /* The parent still holds its own AST: deliver it now. */
             (void)sys$setast(1);

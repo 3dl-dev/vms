@@ -984,6 +984,10 @@ struct peer_state {
     int      own_dir_lookup_sent;  /* we sent our VMS$VAXcluster lookup-request on it */
     uint16_t own_dir_req_seq;      /* send_seq of our dir CONNECT-REQUEST (retransmits REUSE it) */
     struct timespec last_own_dir;  /* CLOCK_MONOTONIC of our last own-dir send (retx rate-limit) */
+    int      lean_vc_suppressed;   /* vms-9af: this peer is the rejoin COORDINATOR and its
+                                    * VC is kept LEAN -- OVMX's OWN dir/MSCP client half is
+                                    * suppressed here so op 0x02 rides at a low send_seq.
+                                    * Latched once, to log SCSD-I-LEANVC exactly once. */
     /* --- vms-760: OVMX's OWN MSCP$DISK client connection to the member
      * (VMS$DISK_CL_DRVR -> MSCP$DISK, clean-ref formation-clean-2node.pcap SCA
      * idx35 connect -> idx39 member accept). This is the connection OVMX has
@@ -1756,6 +1760,107 @@ static int cm_rejoin_target_mode(void)
         return 0;
     }
     return ovmx_prior.valid ? 1 : 0;
+}
+
+/*
+ * cm_rejoin_lean_vc - vms-9af: on a rejoin, keep the COORDINATOR member's
+ * virtual circuit LEAN by SUPPRESSING OVMX's OWN SCS$DIRECTORY + MSCP$DISK
+ * CLIENT connects to the coordinator (the peer whose VMS$VAXcluster VC carries
+ * the op 0x02 readmission).
+ *
+ * GROUNDED (spec sec 4(O.15), vms-e15, SUCCESS oracle + live lab-2 bracket).
+ * send_seq is per-VC (sec 4(O.14)); every connection OVMX multiplexes onto the
+ * coordinator shares that one VC's sequence. When OVMX opens its OWN
+ * SCS$DIRECTORY + MSCP$DISK client connections to the coordinator and runs
+ * directory + disk discovery on them, ~19 of its own sequenced messages precede
+ * the readmission, so op 0x02 lands at ss=21 -- BEHIND the member's recv_ack
+ * ceiling of 19 -- and is never delivered; the member breaks the VC, XITDONE=0.
+ * The SUCCESS oracle rejoiner keeps the coordinator's VC lean: it opens its own
+ * dir/MSCP client connections to a NON-coordinator member (sec 4(O.11) census)
+ * and merely ANSWERS the coordinator's inbound connects, so op 0x02 reaches the
+ * coordinator at ss=14, under the ceiling, and completes.
+ *
+ * Kill-switch OVMX_REJOIN_LEAN_VC=0 disables this (restores opening the client
+ * half to EVERY member, coordinator included -- the pre-fix stall). Gated on
+ * cm_rejoin_target_mode() so it fires only on a detected rejoin.
+ */
+static int cm_rejoin_lean_vc(void)
+{
+    if (!cm_rejoin_target_mode()) {
+        return 0;
+    }
+    const char *off = getenv("OVMX_REJOIN_LEAN_VC");
+    if (off != NULL && off[0] == '0' && off[1] == '\0') {
+        return 0;
+    }
+    return 1;
+}
+
+/*
+ * cm_peer_is_coordinator - vms-9af: is this peer the "coordinator" whose
+ * VMS$VAXcluster VC carries the op 0x02 readmission -- the VC that must stay
+ * lean on a rejoin?
+ *
+ * Decided the SAME way the deferred op 0x02 recipient is (cm_pick_coordinator /
+ * OVMX_CFG2_PEER), but usable BEFORE config exchange: the own-dir client connect
+ * is join step 1/8, which fires right after the 0x41 START handshake, before any
+ * peer has cfg_sent. peer_node_number() reads the SCA logical address (present
+ * post-START), so the highest-node-number rule -- cm_pick_coordinator's rule
+ * MINUS the cfg_sent filter -- is evaluable here and stable (node numbers do not
+ * change). OVMX_CFG2_PEER, when set, names the coordinator's node number
+ * deterministically and wins.
+ *
+ * HOW a real joiner identifies the coordinator is NOT grounded (see
+ * cm_pick_coordinator's header): no wire-visible coordinator flag was found.
+ * This is therefore an OVMX SELECTION choice -- wire-visible (op 0x02's ss moves)
+ * and kill-switched -- not presented as VMS-authentic.
+ */
+static int cm_peer_is_coordinator(struct peer_state *tbl, struct peer_state *ps)
+{
+    if (ps == NULL || ps->pb == NULL) {
+        return 0;
+    }
+    uint16_t nn = peer_node_number(ps);
+    const char *force = getenv("OVMX_CFG2_PEER");
+    if (force != NULL) {
+        uint16_t f = (uint16_t)strtoul(force, NULL, 0);
+        return (nn == f || (nn & 0x03ff) == f) ? 1 : 0;
+    }
+    uint16_t best = 0;
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        if (tbl[i].pb != NULL) {
+            uint16_t n2 = peer_node_number(&tbl[i]);
+            if (n2 > best) {
+                best = n2;
+            }
+        }
+    }
+    return (best != 0 && nn == best) ? 1 : 0;
+}
+
+/*
+ * cm_lean_vc_suppress_peer - vms-9af: should OVMX's OWN dir/MSCP client half be
+ * suppressed for THIS peer right now? True iff coordinator-lean mode is active
+ * (rejoin + kill-switch on) and this peer is the coordinator. Latches
+ * ps->lean_vc_suppressed and logs SCSD-I-LEANVC once so the wire-visible
+ * decision appears in the transcript exactly one time per peer.
+ */
+static int cm_lean_vc_suppress_peer(struct peer_state *tbl, struct peer_state *ps)
+{
+    if (!cm_rejoin_lean_vc() || !cm_peer_is_coordinator(tbl, ps)) {
+        return 0;
+    }
+    if (!ps->lean_vc_suppressed) {
+        ps->lean_vc_suppressed = 1;
+        log_ts(stdout);
+        printf(" SCSD-I-LEANVC, REJOIN: SUPPRESS OUR OWN SCS$DIRECTORY + MSCP$DISK"
+               " client half to the COORDINATOR node %u -- keep its VC LEAN so op"
+               " 0x02 rides at a low send_seq (spec 4(O.15)); disk discovery runs"
+               " against a NON-coordinator member\n",
+               (unsigned)(peer_node_number(ps) & 0x03ff));
+        fflush(stdout);
+    }
+    return 1;
 }
 
 /*
@@ -8057,7 +8162,8 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
          * only prerequisite is a completed 0x41 START handshake. */
         if (rx->do_connect && ps->greet_due_ms != 0 &&
             (long)monotonic_ms() >= ps->greet_due_ms &&
-            ps->join_step == JS_IDLE && !ps->own_dir_sent) {
+            ps->join_step == JS_IDLE && !ps->own_dir_sent &&
+            !cm_lean_vc_suppress_peer(rx->peers, ps)) { /* vms-9af: lean coordinator VC */
             ps->greet_due_ms = 0;
             if (send_own_dir_connect_request(rx->sock, (int)rx->ifindex, ps,
                                              rx->our_hw_mac, rx->our_src_logical)) {
@@ -8571,6 +8677,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         }
         if (rx->join_seq_enabled && !ps->appeared_after_join &&
             ps->join_step == JS_IDLE && !ps->own_dir_sent &&
+            !cm_lean_vc_suppress_peer(rx->peers, ps) && /* vms-9af: lean coordinator VC */
             send_own_dir_connect_request(rx->sock, (int)rx->ifindex, ps,
                                          rx->our_hw_mac, rx->our_src_logical)) {
             ps->join_step = JS_DIR_CONNECT;

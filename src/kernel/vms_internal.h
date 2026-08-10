@@ -146,6 +146,19 @@
 #define SS__VALNOTVALID 2544        /* value block not valid (ssdef.h SS$_VALNOTVALID) */
 
 /*
+ * SS__UNSUPPORTED -- this tree's existing src/libvms/include/ssdef.h value
+ * (SS$_UNSUPPORTED == 2296; also src/libvmssys/vms_errno.h), NOT independently
+ * re-derived here, same discipline as the device-table block above so the
+ * executive and the runtime cannot drift apart. The kernel DLM scaffolding
+ * (vms-ci.5 DB) returns it for the paths that are honestly 0.4, not yet built:
+ * an $ENQ whose resource DIRECTORY or MASTER resolves to a REMOTE node, which
+ * would have to be forwarded over the VMS$VAXcluster VC (DC) or driven through
+ * remastering (DD). It is the honest "not built yet" answer -- never a
+ * fabricated remote grant (INV-6 spirit).
+ */
+#define SS__UNSUPPORTED 2296        /* unsupported operation (ssdef.h SS$_UNSUPPORTED) */
+
+/*
  * Device-table statuses. Values are this tree's existing ssdef.h
  * (src/libvms/include/ssdef.h) -- they are NOT independently
  * re-derived here, so the executive and the runtime cannot drift
@@ -328,6 +341,27 @@ struct vms_lock_resource {
     spinlock_t          lock;
     int                 refcount;
     struct vms_lock_resource *parent;
+
+    /*
+     * DLM directory + mastering (vms-ci.5 DB, LOCAL scaffolding).
+     *
+     * On OpenVMS every resource is MASTERED on one node, found via a
+     * DIRECTORY node reached by hashing the resource name (IDSM lock-
+     * management chapter, "directory lookups" -- mined transcript
+     * ch6-part02, pp. 6-18..6-35; and docs/design-cluster-node.md §5).
+     * dir_csid is the CSID of the directory node for this name; master_csid
+     * is the CSID of the node that masters the resource, 0 until it is
+     * mastered on first use. Both are resolved and read under `lock` above.
+     *
+     * LOCAL SCAFFOLDING: the cluster is a stub-of-one, so both resolve to
+     * vms_local_csid and the enqueue grants through the existing single-node
+     * lock manager. Forwarding an enqueue to a REMOTE directory/master over
+     * the VMS$VAXcluster VC (DC) and dynamic remastering on state transitions
+     * (DD) are 0.4 -- the enqueue path returns SS$_UNSUPPORTED for a non-local
+     * directory/master rather than fabricating a remote answer (INV-6 spirit).
+     */
+    uint32_t            dir_csid;       /* directory node CSID for `name` */
+    uint32_t            master_csid;    /* mastering node CSID; 0 = unmastered */
 };
 
 /* Per-process VMS state */
@@ -684,6 +718,25 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
+/*
+ * DLM resource-directory + mastering (vms-ci.5 DB). Read-only diagnostic:
+ * report the directory node, the mastering node and the granted-lock count
+ * for a resource name, so the local-master scaffolding is observable against
+ * a real /dev/vms (tests/qemu/test_kmod_resdir.c) rather than asserted from a
+ * hand-set structure.
+ */
+long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
+
+/*
+ * This node's cluster system ID (CSID) for the DLM (vms-ci.5 DB).
+ *
+ * LOCAL SCAFFOLDING: a single-node "cluster of one". The value is an OVMX
+ * local default (an insmod module parameter, default non-zero -- 0 is
+ * reserved for "unmastered"); the real CSID is assigned by the connection
+ * manager at cluster join, which will feed it in 0.4 (vms-ci.5 DC). It is
+ * never a claim of a VMS-authentic CSID layout (CLAUDE.md Rule 8).
+ */
+extern uint32_t vms_local_csid;
 
 /* Device table (executive-resident I/O database) */
 long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg);

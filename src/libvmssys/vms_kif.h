@@ -231,6 +231,19 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
                           uint32_t *requested_mode, char *resnam,
                           uint8_t *valblk);
 
+/* Read a resource's DLM directory + mastering state (vms-ci.5 DB).
+ * OVMX-UNWIRED: vms_kif_get_resmaster (vms-ci.5) -- a READ-ONLY DLM
+ * resource-master diagnostic with no product path: no sys$ service issues it.
+ * It exists so the kernel's LOCAL resource-directory + mastering scaffolding
+ * (directory hashes to self, resource mastered on first $ENQ) is observable
+ * against a real /dev/vms -- exercised only by tests/qemu/test_kmod_resdir.c,
+ * the same footing as vms_kif_getlki above. When 0.4 gives the DLM a product
+ * reader (SHOW CLUSTER / a lock-master query), wire it and delete this line. */
+uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
+                               uint32_t *local_csid, uint32_t *dir_csid,
+                               uint32_t *master_csid, uint32_t *is_local_master,
+                               uint32_t *n_granted);
+
 /* ================================================================
  * Device table (executive-resident I/O database)
  *

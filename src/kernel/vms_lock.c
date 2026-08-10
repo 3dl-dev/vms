@@ -29,6 +29,7 @@
 #include <linux/jhash.h>
 #include <linux/wait.h>
 #include <linux/jiffies.h>
+#include <linux/moduleparam.h>
 
 #include "vms_internal.h"
 
@@ -266,6 +267,122 @@ static void resource_release(struct vms_lock_resource *res)
         }
     }
     spin_unlock(&vms_res_hash_lock);
+}
+
+/* ================================================================
+ * DLM resource directory + mastering (vms-ci.5 DB) -- LOCAL scaffolding
+ *
+ * On OpenVMS the lock database is distributed: every resource is MASTERED on
+ * one node, and to find the master a node hashes the resource name to a
+ * DIRECTORY node, which holds the name->master mapping. An enqueue routes to
+ * the master; a directory/master on another node is reached over SCS. VMS's
+ * directory lookup is the documented 3-case algorithm (IDSM lock-management
+ * chapter, "directory lookups" -- mined transcript ch6-part02, pp. 6-18..6-35;
+ * summarized in docs/design-cluster-node.md §5):
+ *
+ *   (1) this node is the directory AND masters the resource -> grant locally;
+ *   (2) this node is the directory, another node masters it -> route to master;
+ *   (3) this node is not the directory -> inquire of the directory node, which
+ *       returns the master (or assigns the requester as master on first use).
+ *
+ * This is the LOCAL scaffolding for that model. Membership is a stub-of-one
+ * (a "cluster of one"), so the directory vector has a single entry -- this
+ * node -- and every name resolves to the local CSID: case (1) always, self is
+ * both directory and master, and the grant runs through the existing single-
+ * node lock manager below unchanged. The multi-node membership view and the
+ * remote paths (case (2)/(3) forwarding over the VMS$VAXcluster VC, and
+ * dynamic remastering on state transitions) are 0.4 (vms-ci.5 DC/DD): the
+ * enqueue path returns SS$_UNSUPPORTED for a non-local directory or master
+ * rather than fabricating a remote answer (INV-6 spirit).
+ * ================================================================ */
+
+/*
+ * This node's CSID. 0 is reserved for "unmastered" (struct vms_lock_resource
+ * .master_csid), so the default is a non-zero OVMX local placeholder. It is a
+ * module parameter so the connection manager (0.4) or a test can set the real
+ * CSID at insmod time; it is NOT a claim of a VMS-authentic CSID value or
+ * layout (CLAUDE.md Rule 8) -- real CSIDs are assigned by the CM at join.
+ */
+uint32_t vms_local_csid = 1;
+module_param(vms_local_csid, uint, 0444);
+MODULE_PARM_DESC(vms_local_csid,
+    "OVMX DLM: this node's cluster system ID (local scaffolding; the connection manager assigns the real CSID at cluster join in 0.4)");
+
+/*
+ * Number of directory-participating nodes in the membership view. A stub-of-
+ * one for local scaffolding; 0.4 (vms-ci.5 DC) feeds the live membership from
+ * the connection manager / quorum (src/vmsscs/scs_quorum.c). Kept as a helper
+ * so the directory hash below is written against a real member count, not a
+ * hard-coded modulus that would have to change shape when membership grows.
+ */
+static unsigned int dlm_membership_count(void)
+{
+    return 1;
+}
+
+/*
+ * The CSID of the idx-th member of the directory vector. Stub-of-one: the only
+ * member is this node. 0.4 indexes the live membership table here.
+ */
+static uint32_t dlm_member_csid(unsigned int idx)
+{
+    (void)idx;
+    return vms_local_csid;
+}
+
+/*
+ * dlm_directory_csid - which node is the DIRECTORY for a resource name.
+ *
+ * The documented algorithm hashes the resource name and selects, modulo the
+ * number of directory-participating nodes, an entry of the cluster directory
+ * vector that names the directory node (IDSM lock-management, "directory
+ * lookups", ch6-part02 pp. 6-18..6-35). The STRUCTURE -- hash(name) -> index
+ * -> directory node -- is that algorithm; the SPECIFIC hash (jhash, the same
+ * one resource_hash_key uses) is an OVMX design choice, because public docs do
+ * not publish VMS's directory hash function (CLAUDE.md Rule 8).
+ *
+ * Stub-of-one membership makes this resolve to the local CSID for every name;
+ * the hash + modulo + vector indexing are nonetheless real so that growing the
+ * membership in 0.4 is a change to dlm_membership_count()/dlm_member_csid(),
+ * not to the lookup path.
+ */
+static uint32_t dlm_directory_csid(const char *name)
+{
+    unsigned int n = dlm_membership_count();
+    unsigned int idx = n ? (jhash(name, strnlen(name, 32), 0) % n) : 0;
+
+    return dlm_member_csid(idx);
+}
+
+/*
+ * dlm_resolve_master - resolve the directory + master for a resource, mastering
+ * it locally on first use.
+ *
+ * Called with res->lock held. Resolves res->dir_csid (once, lazily) via the
+ * directory hash; if this node is the directory and the resource is not yet
+ * mastered, masters it here (mastered on first use, case (1)). Returns
+ * SS$_NORMAL when the resource is directoried AND mastered locally -- the only
+ * case the single-node lock manager can serve. Returns SS$_UNSUPPORTED when
+ * the directory or the master is a REMOTE node: forwarding that request over
+ * the VMS$VAXcluster VC (DC) and remastering (DD) are 0.4. Never fabricates a
+ * remote grant.
+ */
+static uint32_t dlm_resolve_master(struct vms_lock_resource *res)
+{
+    if (res->dir_csid == 0)
+        res->dir_csid = dlm_directory_csid(res->name);
+
+    if (res->dir_csid != vms_local_csid)
+        return SS__UNSUPPORTED;      /* case (3): remote directory -- 0.4 */
+
+    /* We are the directory. Master on first use (case (1)). */
+    if (res->master_csid == 0)
+        res->master_csid = vms_local_csid;
+
+    if (res->master_csid != vms_local_csid)
+        return SS__UNSUPPORTED;      /* case (2): remote master -- 0.4 */
+
+    return SS__NORMAL;
 }
 
 /* ================================================================
@@ -662,6 +779,33 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
+    /*
+     * DLM directory lookup + master resolution (vms-ci.5 DB) BEFORE anything
+     * is granted. For the local scaffolding this masters the resource on this
+     * node -- self is both the directory (name hashes to the local CSID) and
+     * the master -- and falls through to the single-node lock manager below
+     * unchanged. A resource whose directory or master resolves to a REMOTE
+     * node would have to be forwarded over the VMS$VAXcluster VC (DC) or driven
+     * through remastering (DD), which are 0.4: fail honestly with
+     * SS$_UNSUPPORTED rather than fabricate a remote grant, releasing the
+     * resource block we may have just created for it. In a cluster of one this
+     * branch is unreachable (the directory hash always yields the local CSID),
+     * which is exactly why it is an honest deferral and not fake remote state.
+     */
+    {
+        uint32_t dlm_st;
+
+        spin_lock(&res->lock);
+        dlm_st = dlm_resolve_master(res);
+        spin_unlock(&res->lock);
+
+        if (dlm_st != SS__NORMAL) {
+            resource_release(res);
+            args.status = dlm_st;
+            goto out;
+        }
+    }
+
     /* Allocate lock entry */
     lock = kmem_cache_zalloc(vms_lock_cache, GFP_KERNEL);
     if (!lock) {
@@ -1035,6 +1179,68 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
 
     args.status = SS__NORMAL;
     lock_put(lock);  /* drop lock_find_by_id reference */
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_get_resmaster - read a resource's DLM directory + mastering state
+ * (vms-ci.5 DB). READ-ONLY: it reports which node is the directory for the
+ * name, which node masters the resource (0 = not yet mastered), whether this
+ * node is the master, and how many locks are granted. It does NOT create or
+ * master a resource -- an unknown name returns found=0, master_csid=0 -- so a
+ * test can call it before and after an $ENQ to prove the local-master path
+ * actually mastered the resource, instead of asserting a hand-set structure.
+ */
+long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_resmaster_args args;
+    struct vms_lock_resource *res;
+
+    (void)proc;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    args.resnam[31] = '\0';
+    if (args.resnam[0] == '\0') {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+
+    args.local_csid = vms_local_csid;
+    /*
+     * The directory node for this name is a property of the name and the
+     * membership, independent of whether the resource currently exists -- so
+     * report it even when found=0. This is the same hash the enqueue path
+     * masters through.
+     */
+    args.dir_csid = dlm_directory_csid(args.resnam);
+
+    /* Read the resource block, if one exists, without creating it. */
+    spin_lock(&vms_res_hash_lock);
+    res = resource_find(args.resnam);
+    if (res) {
+        struct vms_lock_entry *granted;
+        uint32_t n = 0;
+
+        spin_lock(&res->lock);
+        args.found = 1;
+        args.master_csid = res->master_csid;
+        args.is_local_master =
+            (res->master_csid != 0 && res->master_csid == vms_local_csid) ? 1 : 0;
+        list_for_each_entry(granted, &res->granted, res_granted)
+            n++;
+        args.n_granted = n;
+        spin_unlock(&res->lock);
+    }
+    spin_unlock(&vms_res_hash_lock);
+
+    args.status = SS__NORMAL;
 
 out:
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))

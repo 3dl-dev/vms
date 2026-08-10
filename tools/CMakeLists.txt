@@ -265,3 +265,33 @@ target_compile_options(vmsfs_master PRIVATE
 set_target_properties(vmsfs_master PROPERTIES
     OUTPUT_NAME "vmsfs_master"
 )
+
+# ovmx_kit_pack - OVMX product kit packer (vms-0b6, factory BUILD tooling).
+#
+# Packs a staged SYSEXE/SYSLIB/SYSMGR/SYSHLP tree into an OVMX kit file (the
+# OVMX-invented, Rule-8-labeled container -- src/libvms/include/
+# ovmx_kit_format.h) and inspects/extracts one. Per
+# docs/design-vms-faithful-install.md sec 3.3 policy (same class as
+# vmsfs_master above): never installed onto the media, plain host name (no
+# .EXE, no VMS name), never run at boot. Consuming a kit at install time
+# (PRODUCT INSTALL) is vms-df9's job.
+add_executable(ovmx_kit_pack
+    ovmx_kit_pack.c
+)
+
+target_include_directories(ovmx_kit_pack PRIVATE
+    ${VMS_INCLUDE_DIR}
+)
+
+target_compile_definitions(ovmx_kit_pack PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(ovmx_kit_pack PRIVATE
+    -Wall -Wextra
+)
+
+set_target_properties(ovmx_kit_pack PROPERTIES
+    OUTPUT_NAME "ovmx_kit_pack"
+)

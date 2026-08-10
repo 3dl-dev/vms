@@ -277,6 +277,52 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     cd /initramfs-fat && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx.cpio.gz && \
     echo "FAT initramfs: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"
 
+# -- OVMX OS kit (vms-0b6) ------------------------------------------------------
+# Package the just-staged SYSEXE/SYSLIB/SYSMGR/SYSHLP payload into an OVMX
+# product kit file, the container docs/design-ovmx-kit-format.md defines
+# (OVMX-invented, Rule-8-labeled -- src/libvms/include/ovmx_kit_format.h).
+# This is the "kit packaging at build" row of
+# docs/design-vms-faithful-install.md §3.3; consuming the kit (PRODUCT
+# INSTALL, the product database) is vms-df9's job, not this build's.
+#
+# ovmx_kit_pack (tools/ovmx_kit_pack.c) is factory BUILD tooling -- same
+# class as vmsfs_master above: never shipped on the media, plain host name,
+# never run at boot. It treats the direct children of its staging directory
+# as top-level VMS directories, so a scratch tree carrying only the four
+# component directories (not SYSUPD, which holds PARTS -- a separate,
+# already-a-kit-shaped layered product, not the OS payload) is assembled
+# here before packing.
+RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SYSHLP && \
+    cp -r /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/. /kit-stage/SYSEXE/ && \
+    cp -r /initramfs-fat/vms/SYS0/SYSCOMMON/SYSLIB/. /kit-stage/SYSLIB/ && \
+    cp -r /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR/. /kit-stage/SYSMGR/ && \
+    cp -r /initramfs-fat/vms/SYS0/SYSCOMMON/SYSHLP/. /kit-stage/SYSHLP/ 2>/dev/null ; \
+    /src/build-static/bin/ovmx_kit_pack pack /boot/ovmx-os.kit /kit-stage "X86VMS VMS" && \
+    /src/build-static/bin/ovmx_kit_pack list /boot/ovmx-os.kit && \
+    # Ground-source gate: the kit manifest must actually name the images the
+    # login chain depends on, not just carry a file count.
+    LISTING=$(/src/build-static/bin/ovmx_kit_pack list /boot/ovmx-os.kit) && \
+    for name in "DCL.EXE" "LOGINOUT.EXE" "STARTUP.COM"; do \
+        echo "$LISTING" | grep -q "$name" || { echo "FAIL: ovmx-os.kit manifest missing $name"; exit 1; }; \
+        echo "OK: ovmx-os.kit manifest names $name"; \
+    done && \
+    # Round-trip the kit itself here too (not just in ctest): extract and
+    # byte-compare every payload file against the staged tree that was
+    # packed. A flag file (not a loop exit code) carries failure out of the
+    # `find | while` pipeline subshell -- POSIX sh, not bash, runs this RUN
+    # step, so `exit 1` inside the pipeline would only kill the subshell.
+    rm -rf /tmp/kit-verify && \
+    /src/build-static/bin/ovmx_kit_pack extract /boot/ovmx-os.kit /tmp/kit-verify && \
+    rm -f /tmp/kit-verify.failed && \
+    find /kit-stage -type f | while read -r f; do \
+        rel=$(echo "$f" | sed 's#^/kit-stage/##'); \
+        cmp -s "$f" "/tmp/kit-verify/$rel" || { echo "FAIL: ovmx-os.kit did not round-trip $rel"; touch /tmp/kit-verify.failed; }; \
+    done && \
+    [ ! -f /tmp/kit-verify.failed ] || { echo "FAIL: ovmx-os.kit round-trip had byte mismatches"; exit 1; } && \
+    echo "OK: ovmx-os.kit round-tripped byte-exact against the staged tree" && \
+    rm -rf /tmp/kit-verify && \
+    echo "OS kit: $(ls -lh /boot/ovmx-os.kit | awk '{print $5}')"
+
 # -- Distribution system-disk image (vms-8ab) ----------------------------------
 # Master a PRE-INSTALLED, bootable VMSFS system disk from the SAME populated
 # /vms system tree the fat initramfs just assembled above (/initramfs-fat/vms:
@@ -408,6 +454,11 @@ COPY --from=builder /boot/initramfs-ovmx-slim.cpio.gz /boot/initramfs-ovmx-slim.
 # Pre-installed distribution system disk (vms-8ab). The SLIM initramfs boots
 # this; a §6-stripped PID 1 mounts it or halts (docs/design-init-scope.md §6).
 COPY --from=builder /boot/ovmx-distrib.img /boot/ovmx-distrib.img
+# OVMX OS kit (vms-0b6, docs/design-ovmx-kit-format.md). Not consumed by
+# anything that boots today -- vms-df9's PRODUCT INSTALL is the consumer --
+# carried here so the build's kit artifact is retrievable like the other
+# `-o dist` outputs, not buried inside the builder stage.
+COPY --from=builder /boot/ovmx-os.kit /boot/ovmx-os.kit
 # Negative controls for test_executive_integral.sh only — never a runtime.
 COPY --from=builder /boot/initramfs-ovmx-noexec.cpio.gz /boot/initramfs-ovmx-noexec.cpio.gz
 COPY --from=builder /boot/initramfs-ovmx-nodev.cpio.gz /boot/initramfs-ovmx-nodev.cpio.gz

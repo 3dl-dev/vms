@@ -29,7 +29,10 @@ SSOT="src/libvms/include/ovmx_identity.h"
 # DATA (e.g. the software-version field of a captured SCS START packet),
 # not OVMX's own identity. They must match the specimen, not our version.
 #
-# distro/**/STARTUP.COM and SYLOGICALS.CONF are scanned as text below.
+# distro/**/STARTUP.COM and SYLOGICALS.COM are scanned as text below.
+# (SYLOGICALS.CONF -- the Unix-config-file LARP -- was deleted by vms-21a;
+# SYLOGICALS.COM, a real DCL site procedure, is where a banner override now
+# lives, so it is the file this gate checks instead.)
 
 echo "INV-1 identity SSOT gate: scanning for hardcoded version literals"
 
@@ -57,7 +60,8 @@ fi
 
 # --- 2. Boot-time DCL/config must not bake in a banner version ------
 for f in "$SRC_ROOT/distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/STARTUP.COM" \
-         "$SRC_ROOT/distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/SYLOGICALS.CONF"; do
+         "$SRC_ROOT/distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/SYLOGICALS.COM" \
+         "$SRC_ROOT/distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/SYCONFIG.COM"; do
     [ -f "$f" ] || continue
     bad=$(grep -nE '(OpenVMS V|OVMX V)[0-9]' "$f" | grep -v '^[0-9]*:[[:space:]]*#' || true)
     if [ -n "$bad" ]; then

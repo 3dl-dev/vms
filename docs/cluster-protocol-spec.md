@@ -4408,6 +4408,82 @@ OPEN ignored; arm D outbound JOINBOUND + no reciprocation); OVMX code sites
 and `conn_step`/`scsd_svc_no_builder` (the CONNNOACT that is the false alarm),
 `src/vmsscs/scs_conn.c` Figure-2-14 target column (rows at lines 65–82).
 
+#### 4(O.12) The rejoin fix: bind CM readmission to the member-initiated connection on a rejoin (`vms-4838`)
+
+**Frame.** §4(O.11) located the bug (OVMX drives op 0x02 on its own outbound
+joiner VC; a rejoin member reciprocates only on the connection *it* opened) and
+specified the fix. This subsection records the implementation and its brackets.
+
+**The change (`src/vmsscs/scsd.c`, wire-visible, kill-switched).** A rejoin is
+detected at runtime by the PRIORCLU fact `ovmx_prior.valid` — this identity holds
+a persisted prior-admission sidecar, i.e. a member legitimately still holds a
+residual CDT for it. `cm_rejoin_target_mode()` gates the change on that fact and
+on the `OVMX_REJOIN_TARGET` kill-switch (`=0` forces the historical first-join
+topology). On a rejoin OVMX now:
+
+1. **suppresses its own outbound `VMS$VAXcluster` connect** at join step 7/8
+   (the `OVMX_NO_OWN_VC` branch now also fires automatically for a rejoin), and
+   awaits the member's inbound connect;
+2. **drives the add-member burst — and the deferred op 0x02 that follows it — on
+   the member-initiated CDT's Con.ID pair** (`PS_LOCAL_CONID(ps)` /
+   `ps->remote_conid`), not on its own joiner handle. Two triggers cover it: the
+   server-first reactive trigger (if the member sends config first) and, because
+   the SUCCESS oracle shows the TARGET sends op 0x02 *first* (f1297, before the
+   member reciprocates at f1299), a **proactive** trigger (`SCSD-I-CMREADMIT`)
+   that fires the burst on the HELLO clock the moment the member-opened
+   connection reaches OPEN.
+
+The frame **contents** are unchanged from what OVMX already sends — this is a
+connection-**selection** change, not a payload change (§4(O.11) non-claim 1).
+
+**Unit bracket (fail-pre/pass-post + matched control).**
+`tests/vmsscs/test_scsd_wire.c:test_rejoin_drives_readmission_on_the_member_-`
+`initiated_connection` drives the daemon off real captured frames: OVMX answers
+the member's `VMS$VAXcluster` CONNECT-REQUEST (binding `cdt_member` as the
+TARGET), the member's ACCEPT_RSP drives that connection to OPEN, and scsd.c's own
+tail path runs `cm_send_config_burst()` on the member Con.ID pair. Arm A (fix
+active) → the burst rides the member connection (`cfg_local_conid` =
+`PS_LOCAL_CONID`, `cfg_remote_conid` = the member's handle). Arm B
+(`OVMX_REJOIN_TARGET=0`) → no burst rides the member connection (the pre-fix
+stall). `scs`/`vmsscs` ctest 50/50.
+
+**Live bracket (lab-2 `vaxlab-9`, fresh CN_2 pod, identity `OVMXN0/1993`, one
+pod = one isolated 2-node VAXcluster; `OVMX_JOIN_SEQ=1`, 2026-08-10).** The
+departed→rejoin triple, same identity throughout:
+
+| arm | scenario | topology observed | XITDONE |
+|---|---|---|---|
+| 1 | first join (no sidecar; fix inactive — `cm_rejoin_target_mode()`=0) | OVMX opens its own outbound VC (step 7/8), JOINBOUND, op 0x02 on OUR joiner VC | **1** (unchanged) |
+| 2 | rejoin same-id, `OVMX_REJOIN_TARGET=0` (kill-switch, pre-fix) | `JOINSEQ VC connect local=0xA8D30002 step 7/8`; op 0x02 on OVMX's OWN outbound joiner VC | **0** |
+| 3 | rejoin same-id, fix active | `NOT opening our own VC (REJOIN, member-initiated topology)`; add-member burst + op 0x02 driven on the **member connection** (`CMCONFIG ... local=0x99D10001 remote=0x0B660010`) | **0** |
+
+**Verdict — the connection-selection fix is proven but NECESSARY-NOT-SUFFICIENT.**
+Arm 3 vs arm 2 is a clean, wire-visible bracket: the fix does exactly what
+§4(O.11) specified — OVMX stops opening its redundant outbound `VMS$VAXcluster`
+connect and drives the op 0x02 readmission on the member-initiated connection, as
+the SUCCESS oracle does. But **`XITDONE` did not flip to 1**: with op 0x02 now on
+the correct (member-initiated) connection, the member STILL does not reciprocate
+(`op 0x04` ack = 0, no op 0x03 commit, no barrier). So §4(O.11)'s connection-
+selection is confirmed necessary (the oracle's topology) but is **not sufficient**
+to complete readmission — the member's non-reciprocation persists on the correct
+connection. That non-reciprocation is the relocated frontier (filed on `vms-694`).
+(Note: in this lab run the member sent its config first, so the reactive
+`SCSD-I-CMCONFIG` trigger fired and the proactive `SCSD-I-CMREADMIT` path — for
+the oracle's target-sends-op-0x02-first ordering — was not exercised live; it is
+covered by the unit bracket.)
+
+**Kill-switch (guardrail 23).** `OVMX_REJOIN_TARGET=0` reproduces the pre-fix
+behaviour (arm 2: op 0x02 on OVMX's own outbound VC); with it unset a rejoin
+drives readmission on the member-initiated connection (arm 3). RUN and confirmed
+suppressed before recording the above.
+
+**Evidence** (host, tank volume): live bracket
+`/data/training/vax/k8s-labs/vaxlab-9/logs/scsd-n0{join1,rejoinoff,rejoinfix}.log`
+and `/data/training/vax/cluster/work/n0{join1,rejoinoff,rejoinfix}.status`;
+unit `tests/vmsscs/test_scsd_wire.c`; code
+`src/vmsscs/scsd.c` (`cm_rejoin_target_mode`, step 7/8 branch, `SCSD-I-CMREADMIT`
+proactive burst, `SCSD-I-CMCONFIG2`).
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

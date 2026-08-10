@@ -2991,6 +2991,211 @@ static void test_captured_app_message_reaches_the_sysap_through_the_cdl(void)
           " captured 0x01/0x14", ps->cm_last_recv_cat, ps->cm_last_recv_op);
 }
 
+/*
+ * vms-4838 -- ON A REJOIN, OVMX DRIVES THE ADD-MEMBER READMISSION ON THE
+ * MEMBER-INITIATED VMS$VAXcluster CONNECTION (rejoiner = Figure-2-14 TARGET),
+ * NOT ON ITS OWN OUTBOUND JOINER VC.
+ *
+ * GROUNDED (spec §4(O.11), SUCCESS oracle vax3-class03-crash-REJOIN-SUCCESS):
+ * a crash-rejoiner never opens its own outbound VMS$VAXcluster connect; each
+ * established member opens the connect *to* the returning node (f1202, f1248),
+ * the rejoiner answers as the TARGET, and it then drives op 0x02 (f1297) and the
+ * whole readmission on THAT member-initiated connection. OVMX's default
+ * sequencer drives op 0x02 on its OWN outbound VC, which a rejoin member
+ * refuses/ignores -> op 0x02 never lands where the member is listening ->
+ * XITDONE=0 (arms C/D). The fix binds the add-member burst (and the deferred
+ * op 0x02 that follows it) to the member-opened connection's Con.ID pair when
+ * this is a rejoin (cm_rejoin_target_mode() -> ovmx_prior.valid).
+ *
+ * WHAT THIS CASE DRIVES, and by whom. Every transition is performed by
+ * src/vmsscs/scsd.c off frames fed to scsd_handle_frame(): OVMX answers the
+ * member's real VMS$VAXcluster CONNECT-REQUEST (cap_vaxcluster_connect_req,
+ * binding cdt_member as the TARGET), the member's ACCEPT_RSP drives that
+ * connection to OPEN, and scsd.c ITSELF then runs cm_send_config_burst() on the
+ * member connection's Con.ID pair from its own tail path (SCSD-I-CMREADMIT). The
+ * daemon is never hand-driven: no case calls conn_step() or cm_send_config_burst()
+ * -- they run because scsd_handle_frame() decided to.
+ *
+ * The one synthesized input is the member's ACCEPT_RSP: cap_ovmx_joiner_connect_rsp
+ * (a real 66-byte connection-control frame) with its message-type byte set to 3
+ * (ACCEPT_RSP, the Figure-2-14 RCV_ACCEPT_RSP that advances ACCEPT SENT -> OPEN),
+ * its destination Con.ID retargeted to OVMX's member-connection handle, and its
+ * MACs set member->OVMX. Every edited field is self-checked so a mistranscription
+ * of the base cannot make the assertion vacuous. (A control frame carries no
+ * SYSAP sequence, so it drives the connection to OPEN without a p. 2-31 gap.)
+ *
+ * FAILS PRE-FIX via the matched OVMX_REJOIN_TARGET=0 kill-switch control (arm B):
+ * with the fix suppressed the burst does NOT ride the member connection (the
+ * pre-fix stall), and with it active (arm A) it DOES. That is guardrail 23: the
+ * switch is RUN and the gated behaviour is shown suppressed.
+ */
+static void poke_le32_field(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v & 0xff);
+    p[1] = (uint8_t)((v >> 8) & 0xff);
+    p[2] = (uint8_t)((v >> 16) & 0xff);
+    p[3] = (uint8_t)((v >> 24) & 0xff);
+}
+
+static int rejoin_drive_member_readmission(int rejoin_target_on,
+                                           uint32_t *member_local_out,
+                                           uint32_t *member_remote_out,
+                                           unsigned long *cm_frames_out,
+                                           uint32_t *cfg_local_out,
+                                           uint32_t *cfg_remote_out,
+                                           int *cm_config_sent_out,
+                                           int *member_open_out)
+{
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    if (ps == NULL) {
+        return 0;
+    }
+
+    if (rejoin_target_on) {
+        unsetenv("OVMX_REJOIN_TARGET");
+    } else {
+        setenv("OVMX_REJOIN_TARGET", "0", 1); /* the kill-switch */
+    }
+
+    /* This identity has been admitted before: the PRIORCLU fact that makes this
+     * a rejoin. The daemon reads it through cm_rejoin_target_mode(). */
+    ovmx_prior.valid = 1;
+
+    /* The member opens its VMS$VAXcluster connection to us; scsd.c answers it and
+     * binds cdt_member (Figure-2-14 TARGET). */
+    rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
+    if (ps->cdt_member == NULL || ps->connected != 1) {
+        CHECK(0, "PRECONDITION: the member's CONNECT-REQUEST did not bind"
+                 " cdt_member/ps->connected");
+        ovmx_prior.valid = 0;
+        unsetenv("OVMX_REJOIN_TARGET");
+        return 0;
+    }
+    uint32_t member_local = PS_LOCAL_CONID(ps);
+    uint32_t member_remote = ps->remote_conid;
+    CHECK(member_remote == 0x62C50009u,
+          "PRECONDITION: cdt_member remote Con.ID is 0x%08X, expected the"
+          " member's 0x62C50009 off the wire", member_remote);
+    CHECK(scs_conn_state_of(ps->cdt_member) == SCS_CONN_ACCEPT_SENT,
+          "PRECONDITION: cdt_member is %s after the CONNECT-REQUEST, expected"
+          " ACCEPT SENT", scs_conn_state_name(scs_conn_state_of(ps->cdt_member)));
+
+    /* The member's ACCEPT_RSP, retargeted onto the member connection. Base is the
+     * real 66-byte connection-control frame; the ONLY edits are the message-type
+     * byte (1->3), the destination Con.ID (onto the member connection), and the
+     * MACs (member->OVMX). Self-checked. */
+    uint8_t arsp[sizeof(cap_ovmx_joiner_connect_rsp)];
+    memcpy(arsp, cap_ovmx_joiner_connect_rsp, sizeof(arsp));
+    CHECK(arsp[60] == 0x01,
+          "the base control frame's message-type byte is 0x%02x, expected 0x01"
+          " (CONNECT_RSP) -- the fixture moved and this control proves nothing",
+          arsp[60]);
+    memcpy(arsp + 0, vax2_hw_mac, 6);   /* dst = OVMX */
+    memcpy(arsp + 6, vax1_hw_mac, 6);   /* src = the member */
+    arsp[60] = 0x03;                    /* ACCEPT_RSP (Figure-2-14 RCV_ACCEPT_RSP) */
+    poke_le32_field(arsp + 64, member_local); /* the member's ACCEPT_RSP to OUR ACCEPT_REQ */
+    /* Keep the VC's p. 2-31 sequence contiguous: the ACCEPT_RSP is the next
+     * sequenced SCS message the peer sends after its CONNECT-REQUEST, so its
+     * send_seq (abs [34:36], the field scsd.c checks for a gap) must be the VC's
+     * next expected recv, not the unrelated value the 760-capture frame carried.
+     * The [44:46] mirror is set to match. */
+    {
+        uint16_t next_seq = (uint16_t)(ps->vc.seq.recv_seq + 1);
+        arsp[34] = (uint8_t)(next_seq & 0xff);
+        arsp[35] = (uint8_t)((next_seq >> 8) & 0xff);
+        arsp[44] = (uint8_t)(next_seq & 0xff);
+        arsp[45] = (uint8_t)((next_seq >> 8) & 0xff);
+    }
+
+    rx_feed(&r, arsp, sizeof(arsp));
+    int member_open = (scs_conn_state_of(ps->cdt_member) == SCS_CONN_OPEN);
+
+    /* A directed HELLO from the member drives scsd_handle_frame()'s HELLO-clocked
+     * periodic block, where the REJOIN proactive readmission runs once cdt_member
+     * is OPEN -- the same clock the existing deferred op 0x02 runs on. */
+    {
+        struct scs_hello_params hp;
+        memset(&hp, 0, sizeof(hp));
+        memcpy(hp.src_mac, vax1_hw_mac, 6);
+        memcpy(hp.src_logical, vax1_logical, 6);
+        memcpy(hp.peer_logical, our_logical, 6);
+        memcpy(hp.node_name, "VAX1  ", SCS_HELLO_NODENAME_LEN);
+        hp.node_name[SCS_HELLO_NODENAME_LEN] = '\0';
+        static const uint8_t nonce[4] = {0, 0, 0, 0};
+        uint8_t hello[SCS_HELLO_FRAME_LEN];
+        if (scs_hello_build_directed_frame(&hp, r.rx.our_hw_mac, nonce, 1, 0,
+                                           hello) == 0) {
+            rx_feed(&r, hello, sizeof(hello));
+        }
+    }
+
+    unsetenv("OVMX_REJOIN_TARGET");
+    ovmx_prior.valid = 0; /* leave the global as the other cases expect it */
+
+    if (member_local_out) *member_local_out = member_local;
+    if (member_remote_out) *member_remote_out = member_remote;
+    if (cm_frames_out) *cm_frames_out = (unsigned long)r.rx.cm_config_frames;
+    if (cfg_local_out) *cfg_local_out = ps->cfg_local_conid;
+    if (cfg_remote_out) *cfg_remote_out = ps->cfg_remote_conid;
+    if (cm_config_sent_out) *cm_config_sent_out = ps->cm_config_sent;
+    if (member_open_out) *member_open_out = member_open;
+    return 1;
+}
+
+static void test_rejoin_drives_readmission_on_the_member_initiated_connection(void)
+{
+    uint32_t member_local = 0, member_remote = 0;
+    unsigned long cm_frames = 0;
+    uint32_t cfg_local = 0, cfg_remote = 0;
+    int cm_config_sent = 0;
+    int member_open = 0;
+
+    /* ARM A -- the fix active: the add-member burst rides the MEMBER connection. */
+    if (!rejoin_drive_member_readmission(1, &member_local, &member_remote,
+                                         &cm_frames, &cfg_local, &cfg_remote,
+                                         &cm_config_sent, &member_open)) {
+        return;
+    }
+    CHECK(member_open,
+          "PRECONDITION: the member's ACCEPT_RSP did not drive cdt_member to OPEN"
+          " -- the readmission trigger gates on that OPEN");
+    CHECK(cm_frames > 0,
+          "REJOIN: no add-member config frame rode the member-initiated"
+          " connection (%lu) -- op 0x02 readmission never reached the CDT the"
+          " member is listening on", cm_frames);
+    CHECK(cm_config_sent == 1,
+          "REJOIN: the daemon did not mark the add-member config as sent on the"
+          " member connection");
+    CHECK(cfg_local == member_local,
+          "REJOIN: the readmission burst rode local Con.ID 0x%08X, expected the"
+          " member connection's 0x%08X (NOT OVMX's own joiner handle)",
+          cfg_local, member_local);
+    CHECK(cfg_remote == member_remote,
+          "REJOIN: the readmission burst named remote Con.ID 0x%08X, expected the"
+          " member's own 0x%08X", cfg_remote, member_remote);
+
+    /* ARM B -- the matched kill-switch control (OVMX_REJOIN_TARGET=0): the fix is
+     * suppressed, so the member connection carries NO readmission burst. This is
+     * the pre-fix behaviour, and it is what makes ARM A a fail-pre/pass-post
+     * result rather than an unfalsifiable assertion. */
+    unsigned long cm_frames_off = 0;
+    int cm_config_sent_off = 0;
+    if (!rejoin_drive_member_readmission(0, NULL, NULL, &cm_frames_off, NULL, NULL,
+                                         &cm_config_sent_off, NULL)) {
+        return;
+    }
+    CHECK(cm_frames_off == 0,
+          "KILL-SWITCH (OVMX_REJOIN_TARGET=0): %lu add-member frame(s) still rode"
+          " the member connection -- the change does not gate on its switch",
+          cm_frames_off);
+    CHECK(cm_config_sent_off == 0,
+          "KILL-SWITCH: the daemon still marked the add-member config sent on the"
+          " member connection with the fix suppressed");
+}
+
+
 /* ==========================================================================
  * vms-aa1 -- FLOW CONTROL ACCOUNTS FOR TRAFFIC THAT ACTUALLY FLOWS.
  *
@@ -9433,6 +9638,10 @@ int main(void)
      * FSM reaching OPEN, and the fact survives the graceful teardown that fooled
      * the exit summary into `connected=no ... joiner=CLOSED`. */
     test_joinbound_models_vaxcluster_membership_and_survives_teardown();
+    /* vms-4838: on a REJOIN the add-member readmission rides the MEMBER-initiated
+     * VMS$VAXcluster connection (rejoiner = Figure-2-14 TARGET, spec §4(O.11)),
+     * not OVMX's own outbound joiner VC; gated by OVMX_REJOIN_TARGET. */
+    test_rejoin_drives_readmission_on_the_member_initiated_connection();
     test_joiner_vc_op3_confirm_is_recorded_not_reported_unbuilt();
     /* vms-770 (vms-a61 audit): has_conid no longer implies the 110-/190-byte
      * connect classes, so branch (c) must not treat a short SEQAPP data frame

@@ -1632,6 +1632,47 @@ static void cm_apply_rejoin_form(struct scs_member_params *mp)
 }
 
 /*
+ * vms-4838: is this a REJOIN that must run CM readmission on the MEMBER-INITIATED
+ * VMS$VAXcluster connection (rejoiner = Figure-2-14 TARGET), rather than on
+ * OVMX's own outbound joiner VC?
+ *
+ * GROUNDED (spec sec 4(O.11), SUCCESS oracle vax3-class03-crash-REJOIN-SUCCESS):
+ * a crash-rejoiner NEVER opens its own outbound VMS$VAXcluster connect; BOTH
+ * established members open the VMS$VAXcluster CONNECT_REQ *to* the returning
+ * node (f1202, f1248) and the rejoiner answers each as the TARGET (echo f1249 +
+ * accept-req f1250, lcid 45b80009), then drives the ENTIRE readmission
+ * choreography -- op 0x02 (f1297) -> member cat 0x04 op 0x04 (f1299) -> op 0x03
+ * commit (f1303) -> op 0x05 lock-rebuild (f1306) -> op 0x06 barrier (f1320) --
+ * on that member-initiated connection. OVMX's default sequencer ALWAYS opens its
+ * own outbound VMS$VAXcluster connect at step 7/8 and drives op 0x02 there:
+ * correct for a FIRST join (the member ACCEPTs it -> OPEN -> XITDONE=1), WRONG
+ * for a rejoin (the member refuses/ignores the outbound while its own inbound
+ * connect reaches OPEN and is left idle -> op 0x02 never lands where the member
+ * is listening -> XITDONE=0).
+ *
+ * The runtime discriminator is the PRIORCLU fact: ovmx_prior.valid means this
+ * identity holds a persisted prior-admission record (SCSD-I-PRIORCLU) -- i.e. a
+ * member legitimately still holds a residual CDT for it and will re-open the
+ * VMS$VAXcluster connection to us. This is a checkable fact, not a preference.
+ *
+ * Kill-switch OVMX_REJOIN_TARGET=0 forces the historical first-join topology
+ * (drive on OVMX's own outbound VC) so the pre-fix stall stays reproducible and
+ * the change stays bisectable (guardrail 23). OVMX_NO_OWN_VC keeps forcing the
+ * member-initiated topology ON unconditionally, as before (its manual override).
+ */
+static int cm_rejoin_target_mode(void)
+{
+    if (getenv("OVMX_NO_OWN_VC") != NULL) {
+        return 1;
+    }
+    const char *off = getenv("OVMX_REJOIN_TARGET");
+    if (off != NULL && off[0] == '0' && off[1] == '\0') {
+        return 0;
+    }
+    return ovmx_prior.valid ? 1 : 0;
+}
+
+/*
  * vms-584: RE-LEARN the cluster-wide facts from the TRANSITION-OPEN.
  *
  * COPY-ONCE WAS THE WRONG MODEL, AND op 0x01 WAS THE WRONG SOURCE. Run by13
@@ -5921,7 +5962,7 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                  * config ss=12 -> joiner config ss=12). Fire once, on the first
                  * member SYSAP config frame (not a commit/lock txn). */
                 if ((getenv("OVMX_PURE_SERVER") != NULL ||
-                     getenv("OVMX_NO_OWN_VC") != NULL) && !ps->cm_config_sent &&
+                     cm_rejoin_target_mode()) && !ps->cm_config_sent &&
                     !mv.is_member_txn) {
                     int c = cm_send_config_burst(rx->sock, (int)rx->ifindex, ps,
                                                  rx->our_hw_mac, rx->our_src_logical,
@@ -7885,6 +7926,38 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
          * and, while any peer we have an open channel to has still not
          * configured, keep waiting -- bounded, so a permanently silent peer
          * cannot block the join forever. */
+        /* vms-4838: on a REJOIN, drive the add-member config burst PROACTIVELY
+         * on the MEMBER-INITIATED VMS$VAXcluster connection the moment it
+         * reaches OPEN -- do NOT wait for a member CM config frame the way the
+         * server-first trigger (SCSD-I-CMCONFIG) does. GROUNDED (spec 4(O.11),
+         * SUCCESS oracle): the rejoiner (Figure-2-14 TARGET) sends op 0x02
+         * (f1297) FIRST, and only THEN does the member reciprocate (cat 0x04 op
+         * 0x04, f1299). On a rejoin the member is waiting for us; if OVMX also
+         * waits for the member the readmission deadlocks (arm C/D, XITDONE=0).
+         *
+         * The burst rides the member CDT's Con.ID pair (PS_LOCAL_CONID(ps) /
+         * ps->remote_conid, the same pair the reactive trigger uses), so
+         * cm_send_config_burst() stamps cfg_local_conid/cfg_remote_conid to the
+         * member connection and the DEFERRED op 0x02 below rides it too. The
+         * frame CONTENTS are unchanged from what OVMX already sends -- this is a
+         * connection-SELECTION fix, not a payload change (spec 4(O.11)). */
+        if (cm_rejoin_target_mode() && rx->do_connect &&
+            !ps->appeared_after_join && !ps->cm_config_sent &&
+            ps->cdt_member != NULL &&
+            scs_conn_state_of(ps->cdt_member) == SCS_CONN_OPEN) {
+            int c = cm_send_config_burst(rx->sock, (int)rx->ifindex, ps,
+                                         rx->our_hw_mac, rx->our_src_logical,
+                                         PS_LOCAL_CONID(ps), ps->remote_conid);
+            rx->cm_config_frames += c;
+            log_ts(stdout);
+            printf(" SCSD-I-CMREADMIT, REJOIN: drove add-member burst (%d frames)"
+                   " PROACTIVELY on the MEMBER-INITIATED VMS$VAXcluster connection"
+                   " local=0x%08X remote=0x%08X (Figure-2-14 TARGET, spec 4(O.11))"
+                   " -- deferred op 0x02 + reciprocation follow on THIS conid\n",
+                   c, (unsigned)PS_LOCAL_CONID(ps), ps->remote_conid);
+            fflush(stdout);
+        }
+
         long cfg_settle_ms = 0;
         int cfg_waiting_on_peer = 0;
         for (int pi = 0; pi < OVMX_MAX_PEERS; pi++) {
@@ -7938,9 +8011,13 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 rx->cm_config_frames++;
                 log_ts(stdout);
                 printf(" SCSD-I-CMCONFIG2, sent DEFERRED op 0x02 config/topology"
-                       " to node %u on OUR joiner VC (send_msg=%u ack_msg=%u)"
-                       " -- expect its 0x04 ack then its op 0x03 COMMIT\n",
+                       " to node %u on the %s VC local=0x%08X remote=0x%08X"
+                       " (send_msg=%u ack_msg=%u) -- expect its 0x04 ack then its"
+                       " op 0x03 COMMIT\n",
                        (unsigned)(peer_node_number(ps) & 0x03ff),
+                       cm_rejoin_target_mode() ? "MEMBER-initiated (rejoin)"
+                                               : "OUR joiner",
+                       (unsigned)ps->cfg_local_conid, (unsigned)ps->cfg_remote_conid,
                        mp.sysap_send_msg, mp.sysap_ack_msg);
                 fflush(stdout);
             }
@@ -8898,11 +8975,21 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                            (unsigned)PS_MSCP_CONID(ps), ps->mscp_req_seq);
                     fflush(stdout);
                 } else if (ps->join_step == JS_DIR_LOOKUP_VC && affirmative &&
-                           getenv("OVMX_NO_OWN_VC") != NULL) {
-                    /* vms-760: run the joiner's CLIENT half (own directory +
-                     * MSCP$DISK discovery) but do NOT open our own
+                           cm_rejoin_target_mode()) {
+                    /* vms-760 / vms-4838: run the joiner's CLIENT half (own
+                     * directory + MSCP$DISK discovery) but do NOT open our own
                      * VMS$VAXcluster VC -- leave that to the member, and let
                      * the add-member dialogue ride the VC IT opens.
+                     *
+                     * vms-4838: this branch now fires AUTOMATICALLY on a REJOIN
+                     * (cm_rejoin_target_mode() -> ovmx_prior.valid), not only
+                     * under the manual OVMX_NO_OWN_VC override. GROUNDED (spec
+                     * 4(O.11)): a crash-rejoiner never opens its own outbound
+                     * VMS$VAXcluster connect; the members open one *to* it and
+                     * it drives CM readmission as the TARGET. Opening our own
+                     * outbound here is exactly the arm-C/arm-D bug -- the member
+                     * refuses/ignores it and OVMX's op 0x02 never reaches the
+                     * connection the member is actually listening on.
                      *
                      * GROUNDED motivation, vax3-2to3-established-join pcap:
                      * there is exactly ONE VC per node pair, and the peer that
@@ -8917,7 +9004,12 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                     ps->js_retx = 0;
                     log_ts(stdout);
                     printf(" SCSD-I-JOINSEQ, VMS$VAXcluster HIT; NOT opening our own"
-                           " VC (OVMX_NO_OWN_VC) -- awaiting the member's VC connect\n");
+                           " VC (%s) -- awaiting the member's VC connect,"
+                           " then driving CM readmission on it as the Figure-2-14"
+                           " TARGET (spec 4(O.11))\n",
+                           getenv("OVMX_NO_OWN_VC") != NULL
+                               ? "OVMX_NO_OWN_VC"
+                               : "REJOIN, member-initiated topology");
                     fflush(stdout);
                 } else if (ps->join_step == JS_DIR_LOOKUP_VC && affirmative &&
                            ps->appeared_after_join && ps->connected) {

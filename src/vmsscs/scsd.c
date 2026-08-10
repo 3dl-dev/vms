@@ -1759,6 +1759,49 @@ static int cm_rejoin_target_mode(void)
 }
 
 /*
+ * vms-71d: on a REJOIN, HOLD the standalone category-0x04 CM ack until OVMX's
+ * own op 0x02 config has ridden the member-initiated connection.
+ *
+ * GROUNDED, SUCCESS oracle vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap
+ * (spec sec 4(O.13)). On the member-initiated connection the crash-rejoiner VAX3
+ * sends its add-member advertisement as THREE CONTIGUOUS SYSAP messages --
+ * op 0x14 model (f1257, sms=1), op 0x01 params (f1258, sms=2), op 0x02 config
+ * (f1298, sms=3, ams=2) -- and the coordinator reciprocates op 0x04 ~1 ms later
+ * (f1299, ams=3). VAX3 emits NO standalone cat-0x04 in that window; its FIRST is
+ * f1330 (sms=9), AFTER the reciprocation. The config's own ams field (=2) is
+ * what acknowledges the member's model+params -- no separate ack frame is used.
+ *
+ * OVMX's poll-loop flush (and, in principle, the receive-path batch ack) instead
+ * emitted a cat-0x04 op 0x00 ack BETWEEN params (sms=2) and the deferred op 0x02,
+ * consuming sms=3 and pushing the op 0x02 to sms=4 -- a frame the reference never
+ * sends there, and a config the coordinator did not treat as the one it
+ * reciprocates to (live vaxlab-11 2026-08-10: op 0x02 sms=4, member silent,
+ * XITDONE=0). Holding the standalone ack until the op 0x02 is on the wire makes
+ * OVMX's stream model(1)->params(2)->config(3) exactly as the oracle does; the
+ * op 0x02 already carries ams=sysap_recv (=2), so the acknowledgment is not lost,
+ * only carried inline as the reference carries it. After the op 0x02 the hold
+ * releases and normal ack flushing resumes to carry the member-driven commit /
+ * lock-rebuild / barrier round (the reference's own post-reciprocation acks).
+ *
+ * Scoped to the rejoin readmission (cm_rejoin_target_mode() && !joiner_cfg2_sent)
+ * so the working first-join path is byte-unchanged (guard 8). Wire-visible ->
+ * kill-switch OVMX_REJOIN_ACKHOLD=0 restores the pre-fix behaviour (the standalone
+ * ack fires before op 0x02, op 0x02 rides sms=4) so the change stays bisectable
+ * and the stall stays reproducible (guardrail 23).
+ */
+static int rejoin_hold_standalone_ack(const struct peer_state *ps)
+{
+    if (!cm_rejoin_target_mode() || ps->joiner_cfg2_sent) {
+        return 0;
+    }
+    const char *off = getenv("OVMX_REJOIN_ACKHOLD");
+    if (off != NULL && off[0] == '0' && off[1] == '\0') {
+        return 0; /* kill-switch: pre-fix behaviour */
+    }
+    return 1;
+}
+
+/*
  * vms-584: RE-LEARN the cluster-wide facts from the TRANSITION-OPEN.
  *
  * COPY-ONCE WAS THE WRONG MODEL, AND op 0x01 WAS THE WRONG SOURCE. Run by13
@@ -6394,6 +6437,7 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                  * them. Consume them, advance our ack-msg#, emit nothing. */
                 if (cm_plain_req && mv.opcode == SCS_MEMBER_OP_MEMBERSHIP &&
                     (uint16_t)(ps->sysap_recv - ps->sysap_acked) >= SCS_CM_ACK_EVERY &&
+                    !rejoin_hold_standalone_ack(ps) && /* vms-71d */
                     cm_send_ack(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac, rx->our_src_logical)) {
                     log_ts(stdout);
                     printf(" SCSD-I-CMACK, cat-0x04 ack (ack_msg=%u)\n",
@@ -8046,6 +8090,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
          * flush gives the reference's frame economy without the stall. */
         if (rx->do_connect && ps->cm_local_conid != 0 &&
             ps->sysap_recv != ps->sysap_acked &&
+            !rejoin_hold_standalone_ack(ps) && /* vms-71d */
             (monotonic_ms() - ps->cm_last_ack_ms) >= (long)SCS_CM_ACK_FLUSH_MS) {
             cm_send_ack(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac, rx->our_src_logical);
         }

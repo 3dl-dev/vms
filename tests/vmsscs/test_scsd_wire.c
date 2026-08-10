@@ -3196,6 +3196,214 @@ static void test_rejoin_drives_readmission_on_the_member_initiated_connection(vo
 }
 
 /* ==========================================================================
+ * vms-46f (spec 4(O.17)) -- ON A REJOIN OVMX INITIATES ITS op-6 SPECIAL-CREDIT
+ * REQUEST ON THE COORDINATOR'S SCS$DIRECTORY CONNECTION *BEFORE* THE DEFERRED
+ * op 0x02, SO THE COORDINATOR IS NOT SEND-CREDIT-STARVED.
+ *
+ * GROUNDED (spec 4(O.17), SUCCESS oracle + *VAXcluster Principles* Davis pp.
+ * 2-43/2-44/2-45): the coordinator returns cm_responses=0 because it is
+ * SEND-CREDIT-STARVED -- OVMX never returns Pending Receive Credit, so the
+ * coordinator cannot transmit its op 0x04 reciprocation (Credit Wait). The
+ * SUCCESS rejoiner sends op-6 (f1261, ss=13) BEFORE op 0x02 (f1297, ss=14);
+ * OVMX deferred its op-6 to ss=14/15 (too late). The fix reorders it ahead.
+ *
+ * WHAT IS DRIVEN, AND BY WHOM. The coordinator opens BOTH its SCS$DIRECTORY
+ * connection (cap_dir_connect_req -> ps->dir_remote_conid, cdt_dir) and its
+ * VMS$VAXcluster connection (cap_vaxcluster_connect_req + a retargeted
+ * ACCEPT_RSP -> cdt_member OPEN) to OVMX. scsd_handle_frame()'s own tail path
+ * then, off two directed HELLOs, emits the op-6 special-credit request
+ * (scs_send_rejoin_credit_op6) and the deferred op 0x02 (production senders,
+ * send_frame_vc choke point). NOTHING is hand-driven.
+ *
+ * FAIL-PRE / PASS-POST via the matched OVMX_REJOIN_CREDIT_FIRST=0 kill-switch:
+ *   PASS-POST (fix on):  the op-6 (76-byte, [60]=6, on the DIRECTORY Con.ID
+ *                        pair) is emitted, and it PRECEDES the 204-byte op 0x02
+ *                        config ([80]=0x01,[81]=0x02) in the emission ring;
+ *                        rejoin_credit_first_sent latches 1.
+ *   FAIL-PRE (fix off):  NO op-6 special-credit request rides ahead of op 0x02
+ *                        (the pre-fix "old order" that leaves the coordinator
+ *                        starved); rejoin_credit_first_sent stays 0.
+ * (Whether the credit return ALONE flips XITDONE is the LIVE lab-2 bracket's
+ * measurement -- exit summary CREDIT: grants>0 -- per 4(O.17)'s
+ * necessary-vs-sufficient framing; this case pins the wire-visible ordering.)
+ */
+static void feed_directed_hello_from_member(struct rxworld *r)
+{
+    struct scs_hello_params hp;
+    memset(&hp, 0, sizeof(hp));
+    memcpy(hp.src_mac, vax1_hw_mac, 6);
+    memcpy(hp.src_logical, vax1_logical, 6);
+    memcpy(hp.peer_logical, our_logical, 6);
+    memcpy(hp.node_name, "VAX1  ", SCS_HELLO_NODENAME_LEN);
+    hp.node_name[SCS_HELLO_NODENAME_LEN] = '\0';
+    static const uint8_t nonce[4] = {0, 0, 0, 0};
+    uint8_t hello[SCS_HELLO_FRAME_LEN];
+    if (scs_hello_build_directed_frame(&hp, r->rx.our_hw_mac, nonce, 1, 0, hello) == 0) {
+        rx_feed(r, hello, sizeof(hello));
+    }
+}
+
+static int rejoin_credit_first_drive(int credit_first_on,
+                                     int *op6_idx_out, int *op02_idx_out,
+                                     int *op6_on_dir_out, int *latch_out,
+                                     unsigned *frames_out)
+{
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    if (ps == NULL) {
+        return 0;
+    }
+
+    /* This identity has been admitted before -> cm_rejoin_target_mode(). */
+    ovmx_prior.valid = 1;
+    unsetenv("OVMX_REJOIN_TARGET");
+    if (credit_first_on) {
+        unsetenv("OVMX_REJOIN_CREDIT_FIRST");
+    } else {
+        setenv("OVMX_REJOIN_CREDIT_FIRST", "0", 1); /* the kill-switch */
+    }
+    /* CFG2_ALL makes the deferred op 0x02 eligible without depending on the
+     * coordinator-pick heuristic in this two-connection fixture. */
+    setenv("OVMX_CFG2_ALL", "1", 1);
+
+    /* (a) the coordinator opens its VMS$VAXcluster connection; OVMX answers and
+     * a retargeted ACCEPT_RSP drives cdt_member to OPEN (same construction as
+     * test_rejoin_drives_readmission_...). */
+    rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
+    if (ps->cdt_member == NULL || ps->connected != 1) {
+        CHECK(0, "PRECONDITION: the member CONNECT-REQUEST did not bind cdt_member");
+        goto cleanup_fail;
+    }
+    {
+        uint8_t arsp[sizeof(cap_ovmx_joiner_connect_rsp)];
+        memcpy(arsp, cap_ovmx_joiner_connect_rsp, sizeof(arsp));
+        CHECK(arsp[60] == 0x01,
+              "the base control frame's message-type byte is 0x%02x, expected 0x01",
+              arsp[60]);
+        memcpy(arsp + 0, vax2_hw_mac, 6);   /* dst = OVMX */
+        memcpy(arsp + 6, vax1_hw_mac, 6);   /* src = the coordinator */
+        arsp[60] = 0x03;                    /* ACCEPT_RSP */
+        poke_le32_field(arsp + 64, PS_LOCAL_CONID(ps));
+        uint16_t next_seq = (uint16_t)(ps->vc.seq.recv_seq + 1);
+        arsp[34] = (uint8_t)(next_seq & 0xff);
+        arsp[35] = (uint8_t)((next_seq >> 8) & 0xff);
+        arsp[44] = (uint8_t)(next_seq & 0xff);
+        arsp[45] = (uint8_t)((next_seq >> 8) & 0xff);
+        rx_feed(&r, arsp, sizeof(arsp));
+    }
+    if (scs_conn_state_of(ps->cdt_member) != SCS_CONN_OPEN) {
+        CHECK(0, "PRECONDITION: the member ACCEPT_RSP did not drive cdt_member OPEN");
+        goto cleanup_fail;
+    }
+
+    /* (b) STAGE the learned SCS$DIRECTORY handle. On a rejoin the coordinator
+     * ALSO opens its SCS$DIRECTORY connection to OVMX (cap_dir_connect_req sets
+     * dir_remote_conid; spec 4(O.17): OVMX f60 op=9 on 0x0C640007/0x8DE4000D).
+     * Replaying that frame here fights the member VC's p. 2-31 sequence, so the
+     * one learned fact the credit-first path reads -- the coordinator's directory
+     * handle -- is set directly to the grounded 0x8DE4000D value. cdt_dir is left
+     * NULL (the release_buffer call is NULL-guarded); the frame the fix emits is
+     * built from PS_SCS_DIR_CONID(ps) + dir_remote_conid, both present. */
+    ps->dir_remote_conid = 0x8DE4000Du;
+
+    /* From here is the readmission emission stream. */
+    scsd_test_frames = 0;
+
+    /* HELLO #1 drives the add-member burst AND the op-6 credit-first (no delay). */
+    feed_directed_hello_from_member(&r);
+    /* Age cfg_ms so the deferred op 0x02's JOIN_CFG2_DELAY_MS window has elapsed. */
+    ps->cfg_ms -= (long)(JOIN_CFG2_DELAY_MS + 1000u);
+    /* HELLO #2: the deferred op 0x02 now fires (gated behind the op-6 latch on
+     * the fix path). */
+    feed_directed_hello_from_member(&r);
+
+    int op6 = -1, op02 = -1, op6_on_dir = 0;
+    unsigned n = scsd_test_frames < SCSD_TEST_RING ? scsd_test_frames : SCSD_TEST_RING;
+    for (unsigned i = 0; i < n; i++) {
+        const uint8_t *f = scsd_test_ring[i];
+        size_t len = scsd_test_ring_len[i];
+        if (len == 76 && f[60] == 0x06 && op6 < 0) {
+            op6 = (int)i;
+            uint32_t rc = le32_at(f + 64), lc = le32_at(f + 68);
+            if (lc == (uint32_t)PS_SCS_DIR_CONID(ps) && rc == ps->dir_remote_conid) {
+                op6_on_dir = 1;
+            }
+        }
+        if (len == 204 && f[80] == 0x01 && f[81] == 0x02 && op02 < 0) {
+            op02 = (int)i;
+        }
+    }
+
+    if (op6_idx_out) *op6_idx_out = op6;
+    if (op02_idx_out) *op02_idx_out = op02;
+    if (op6_on_dir_out) *op6_on_dir_out = op6_on_dir;
+    if (latch_out) *latch_out = ps->rejoin_credit_first_sent;
+    if (frames_out) *frames_out = scsd_test_frames;
+
+    ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_TARGET");
+    unsetenv("OVMX_REJOIN_CREDIT_FIRST");
+    unsetenv("OVMX_CFG2_ALL");
+    return 1;
+
+cleanup_fail:
+    ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_TARGET");
+    unsetenv("OVMX_REJOIN_CREDIT_FIRST");
+    unsetenv("OVMX_CFG2_ALL");
+    return 0;
+}
+
+static void test_rejoin_op6_special_credit_precedes_op02(void)
+{
+    /* ARM A -- the fix active: op-6 rides ahead of op 0x02 on the directory VC. */
+    int op6 = -2, op02 = -2, op6_on_dir = 0, latch = -1;
+    unsigned frames = 0;
+    if (!rejoin_credit_first_drive(1, &op6, &op02, &op6_on_dir, &latch, &frames)) {
+        return;
+    }
+    CHECK(frames <= SCSD_TEST_RING,
+          "the readmission stream emitted %u frames (> ring %u) -- the ring"
+          " wrapped and emission order cannot be trusted; tighten the fixture",
+          frames, (unsigned)SCSD_TEST_RING);
+    CHECK(op6 >= 0,
+          "FIX: OVMX emitted NO op-6 special-credit request (76-byte, [60]=6)"
+          " on the rejoin stream -- the credit round never rode the wire");
+    CHECK(op6_on_dir,
+          "FIX: the op-6 did not ride the coordinator's SCS$DIRECTORY Con.ID"
+          " pair (local=PS_SCS_DIR_CONID / remote=dir_remote_conid, spec 4(O.17))");
+    CHECK(op02 >= 0,
+          "FIX: the deferred op 0x02 config (204-byte, [80]=0x01,[81]=0x02) never"
+          " rode -- the fixture did not reach the readmission send");
+    CHECK(op6 >= 0 && op02 >= 0 && op6 < op02,
+          "FIX: op-6 (ring idx %d) did NOT precede op 0x02 (ring idx %d) -- the"
+          " coordinator stays send-credit-starved (spec 4(O.17))", op6, op02);
+    CHECK(latch == 1,
+          "FIX: rejoin_credit_first_sent latched %d, expected 1", latch);
+
+    /* ARM B -- the matched kill-switch (OVMX_REJOIN_CREDIT_FIRST=0): the pre-fix
+     * "old order" -- op 0x02 rides with NO op-6 ahead of it, so the coordinator
+     * is left send-credit-starved. This is what makes ARM A fail-pre/pass-post. */
+    int op6_off = -2, op02_off = -2, op6_on_dir_off = 0, latch_off = -1;
+    unsigned frames_off = 0;
+    if (!rejoin_credit_first_drive(0, &op6_off, &op02_off, &op6_on_dir_off,
+                                   &latch_off, &frames_off)) {
+        return;
+    }
+    CHECK(op6_off < 0,
+          "KILL-SWITCH (OVMX_REJOIN_CREDIT_FIRST=0): an op-6 special-credit"
+          " request (ring idx %d) still rode with the fix suppressed -- the"
+          " change does not gate on its switch", op6_off);
+    CHECK(op02_off >= 0,
+          "KILL-SWITCH: the deferred op 0x02 did not ride -- the control arm did"
+          " not reach the same send point as the fix arm");
+    CHECK(latch_off == 0,
+          "KILL-SWITCH: rejoin_credit_first_sent latched %d with the fix"
+          " suppressed, expected 0", latch_off);
+}
+
+/* ==========================================================================
  * vms-71d -- ON A REJOIN THE op 0x02 CONFIG RIDES THE MEMBER CONNECTION AS THE
  * CONTIGUOUS SYSAP MESSAGE #3, WITH NO STANDALONE cat-0x04 ACK AHEAD OF IT.
  *
@@ -9930,6 +10138,7 @@ int main(void)
      * VMS$VAXcluster connection (rejoiner = Figure-2-14 TARGET, spec §4(O.11)),
      * not OVMX's own outbound joiner VC; gated by OVMX_REJOIN_TARGET. */
     test_rejoin_drives_readmission_on_the_member_initiated_connection();
+    test_rejoin_op6_special_credit_precedes_op02(); /* vms-46f, spec 4(O.17) */
     /* vms-71d: on a REJOIN the op 0x02 config rides the member connection as the
      * CONTIGUOUS SYSAP msg#3, with no standalone cat-0x04 ack shifting it to #4
      * (SUCCESS oracle f1257/f1258/f1298); gated by OVMX_REJOIN_ACKHOLD. */

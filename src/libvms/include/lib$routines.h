@@ -1007,6 +1007,41 @@ uint32_t lib$free_ef(
     const uint32_t *efn
 );
 
+/**
+ * lib$reserve_ef - Reserve a specific local event flag
+ *
+ * Reserves the named event flag so a later lib$get_ef will not allocate
+ * it.  The flag comes from the same pool lib$get_ef manages (24-63).
+ *
+ * @param efn  Pointer to the event flag number to reserve
+ *
+ * @return  SS$_NORMAL on success, LIB$_EF_RESSYS if system-reserved,
+ *          LIB$_EF_ALRRES if already reserved, SS$_BADPARAM if bad.
+ */
+uint32_t lib$reserve_ef(
+    const uint32_t *efn
+);
+
+/* ================================================================
+ * Real-time delay
+ * ================================================================ */
+
+/**
+ * lib$wait - Suspend the caller for a real-time interval
+ *
+ * @param seconds     Pointer to a floating value of seconds to wait
+ * @param flags       Optional pointer to control flags (may be NULL)
+ * @param float_type  Optional pointer to a LIB$K_ float format code
+ *                    (see libwaitdef.h); NULL means IEEE single
+ *
+ * @return  SS$_NORMAL on success, SS$_BADPARAM on a bad argument
+ */
+uint32_t lib$wait(
+    const void *seconds,
+    const uint32_t *flags,
+    const uint32_t *float_type
+);
+
 /* ================================================================
  * String and Character Operation Routines
  * ================================================================ */
@@ -1126,6 +1161,23 @@ uint32_t lib$spanc(
     const struct dsc$descriptor_s *str,
     const unsigned char *table,
     const unsigned char *mask
+);
+
+/**
+ * lib$scopy_dxdx - Copy a source string (by descriptor) to a
+ *                  destination string (by descriptor)
+ *
+ * Handles fixed (CLASS_S), dynamic (CLASS_D) and varying (CLASS_VS)
+ * destinations; the dynamic case is (re)sized to the source length.
+ *
+ * @param src   Source string descriptor
+ * @param dest  Destination string descriptor
+ *
+ * @return  SS$_NORMAL, LIB$_STRTRU on truncation, or an error status
+ */
+uint32_t lib$scopy_dxdx(
+    const struct dsc$descriptor_s *src,
+    struct dsc$descriptor_s *dest
 );
 
 /* ================================================================

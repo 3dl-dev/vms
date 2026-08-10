@@ -55,7 +55,16 @@ INCLUDE_FLAGS="-I/src/src/libvms/include -I/src/src/vmsprocess/include -I/src/sr
 # still works for it. (Harness bug found + fixed under vms-801.4 — was
 # silently producing 100% compile-fail via "cannot find -lvmsrms" etc.)
 LIB_FLAGS="-L/src/build/lib -l:LIBVMSRMS\$SHR.EXE -l:LIBVMSFS\$SHR.EXE -l:LIBVMS\$SHR.EXE -l:LIBVMSPROCESS\$SHR.EXE -lvmssys -lpthread -lm"
-CFLAGS="-O2"
+# -D__IEEE_FLOAT=1 declares the platform floating-point mode. On VMS the C
+# compiler predefines __G_FLOAT / __D_FLOAT / __IEEE_FLOAT from the /FLOAT
+# qualifier; host gcc predefines none of them, so a corpus program guarded by
+# "#if __G_FLOAT ... #elif __IEEE_FLOAT ... #else #error" cannot even
+# preprocess. OVMX on x86-64 uses IEEE floating point, so the correct, honest
+# mode to declare is __IEEE_FLOAT (the analog of CC/FLOAT=IEEE). This only lets
+# such programs COMPILE past the guard; they still must link the real routine
+# and run correctly to be counted run-pass. (Platform-config fix, not a floor
+# inflation — same class of harness correctness fix as the -l: link fix above.)
+CFLAGS="-O2 -D__IEEE_FLOAT=1"
 
 # errchk.h is in the tier1-examples directory itself
 INCLUDE_FLAGS="${INCLUDE_FLAGS} -I${CORPUS_DIR}"

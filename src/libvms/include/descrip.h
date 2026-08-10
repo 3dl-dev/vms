@@ -129,6 +129,35 @@ struct dsc$descriptor_d {
 };
 
 /*
+ * Varying string descriptor - CLASS_VS
+ *
+ * Describes a varying-length string (VMS DSC$K_CLASS_VS, DTYPE_VT).
+ * Unlike CLASS_S/CLASS_D the first word is the MAXIMUM string length,
+ * and dsc$a_pointer points at the varying-string object itself, whose
+ * layout is a 16-bit current-length word (CURLEN) followed by the
+ * string body.  See struct dsc$varying_string below.
+ *
+ * Reference: OpenVMS Programming Concepts Manual, "Varying-Length
+ * Character-String Descriptor (CLASS_VS)".
+ */
+struct dsc$descriptor_vs {
+    uint16_t  dsc$w_maxstrlen; /* Maximum length of the string body in bytes */
+    uint8_t   dsc$b_dtype;     /* Data type code (DSC$K_DTYPE_VT) */
+    uint8_t   dsc$b_class;     /* Descriptor class code (DSC$K_CLASS_VS) */
+    char     *dsc$a_pointer;   /* Address of the varying-string object */
+};
+
+/*
+ * Varying-string object referenced by a CLASS_VS descriptor: a current
+ * length word (CURLEN) immediately followed by the string body.  CURLEN
+ * gives the number of valid bytes currently held in the body.
+ */
+struct dsc$varying_string {
+    uint16_t  dsc$w_curlen;    /* Current length of the string body in bytes */
+    char      dsc$a_body[1];   /* String body (variable length) */
+};
+
+/*
  * Array descriptor - CLASS_A
  *
  * Describes a contiguous array of elements. Extends the basic

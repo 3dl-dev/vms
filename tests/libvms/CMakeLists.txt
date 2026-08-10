@@ -58,6 +58,13 @@ libvms_add_test(test_libvms_lib_rtl_batch2
 libvms_add_test(test_libvms_lib_rtl_batch3
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_rtl_batch3.c)
 
+# Test 3e: vms-801 R2.2 conformance batch 4 — lib$scopy_dxdx (S/D/VS string
+# copy), lib$reserve_ef (specific event-flag reservation), lib$wait (real-time
+# delay; IEEE + VAX float decode), ots$divct_r3/mulct_r3/powctct_r3/powctj_r3
+# (complex arithmetic), ots$cnvout_t (float->sci text), ots$cvt_t_t (text->float).
+libvms_add_test(test_libvms_lib_rtl_batch4
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_rtl_batch4.c)
+
 # Test 5: mth$sin / mth$cos / mth$sqrt / mth$exp / mth$alog / mth$power / etc.
 libvms_add_test(test_libvms_mth_routines
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mth_routines.c)

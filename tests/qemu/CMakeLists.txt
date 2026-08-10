@@ -398,6 +398,7 @@ set_tests_properties(sysgen_versioning_e2e PROPERTIES
     TIMEOUT 600)
 
 # ---------------------------------------------------------------------------
+<<<<<<< HEAD
 # MOUNT/DISMOUNT ARE REAL mount(2)/umount(2) (vms-651).
 #
 # Boots the ACTUAL mastered bootable image TWICE against a SECOND, real
@@ -455,6 +456,34 @@ add_test(
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_upgrade_e2e.sh
 )
 set_tests_properties(upgrade_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 900)
+
+# ---------------------------------------------------------------------------
+# SCSNODE -> REAL HOSTNAME ACROSS REBOOT, END TO END (vms-b6a7).
+#
+# Boots the ACTUAL mastered bootable image (same distro/Dockerfile.bootable
+# as parts_demo_e2e/sysgen_versioning_e2e above) and proves, against the
+# REAL mounted volume and a REAL second boot -- not a mock -- that
+# STARTUP.EXE's SYSBOOT role reads SYS$SYSTEM:OVMXVMSSYS.PAR and sets the
+# actual Linux hostname (sethostname(2), read back via F$GETSYI("NODENAME"))
+# from SCSNODE, and that a missing/corrupt parameter file on an already-
+# installed disk boots on defaults with an honest OVMX-facility warning
+# rather than a fabricated VMS message or a silent halt. See
+# tests/qemu/test_boot_scsnode_hostname_e2e.sh's header for the full
+# two-case sequence and why F$GETSYI("NODENAME") is the right assertion
+# (not F$GETSYI("SCSNODE") or SHOW SYSTEM, both of which already read the
+# .PAR file directly and would pass unchanged).
+#
+# Same opt-in/SKIP convention as the other qemu-full-boot gates: real
+# docker + QEMU boot, real minutes, gated behind OVMX_QEMU_FULL_E2E=1 so it
+# does not run under a bare `ctest`.
+add_test(
+    NAME boot_scsnode_hostname_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_boot_scsnode_hostname_e2e.sh
+)
+set_tests_properties(boot_scsnode_hostname_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 900)

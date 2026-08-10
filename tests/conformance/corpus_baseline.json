@@ -5,9 +5,9 @@
     "compile-pass": 0,
     "compile-fail": 72,
     "link-fail": 47,
-    "run-pass": 91,
+    "run-pass": 89,
     "run-fail": 8,
-    "run-crash": 11
+    "run-crash": 13
   },
   "programs": [
     {
@@ -461,7 +461,7 @@
     {
       "name": "lib_getdvi",
       "file": "tier1-examples/lib_getdvi.c",
-      "status": "run-pass",
+      "status": "run-crash",
       "errors": [],
       "missing_symbols": [],
       "missing_headers": []
@@ -1261,7 +1261,7 @@
     {
       "name": "sys_device_scan",
       "file": "tier1-examples/sys_device_scan.c",
-      "status": "run-pass",
+      "status": "run-crash",
       "errors": [],
       "missing_symbols": [],
       "missing_headers": []

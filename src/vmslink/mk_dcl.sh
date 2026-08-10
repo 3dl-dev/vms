@@ -25,8 +25,12 @@
 #         - vmsfs_* filespec/protection/device universals              -> LIBVMSFS$SHR;
 #         - the libvms runtime universals (sys$sndopr, str_upcase_copy,
 #           ovmx_accounting_get_lastlogin, vms_terminal_*/vms_term_*,
-#           vms_severity_char/vms_strerror, AND the DATA tables vms_months /
-#           vms_device_table / vms_device_count)                       -> LIBVMS$SHR.
+#           vms_severity_char/vms_strerror, AND the DATA table vms_months)
+#                                                                       -> LIBVMS$SHR.
+#           (vms_device_table / vms_device_count, the per-process MOUNT
+#            facade, were DELETED by vms-651 along with the facade itself --
+#            MOUNT/DISMOUNT now go through mount(2)/umount(2) and the
+#            executive's device table, not a struct in this image.)
 #       IMGACT pulls the full producer graph TRANSITIVELY from DCL's .vms$imp.
 #   (c) is itself a single-TLS-object image: dcl_messages.o defines the __thread
 #       message buffer (10 TLSDESC relocs) — within emit_shareable's supported

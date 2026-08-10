@@ -146,4 +146,14 @@
 #define VMS_USERS_DIR    SYSDISK_MOUNT "/USERS"
 #define VMS_TEMP_DIR     SYSDISK_MOUNT "/SYSTMP"
 
+/*
+ * The setuid-root mount(2)/umount(2) helper MOUNT/DISMOUNT fork+exec
+ * (tools/vms_mount_helper.c, vms-651). NOT a VMS filespec and never named
+ * to a user: DCL never shows this path, the same way it never shows the
+ * console device name it derives internally. Lives outside the VMS tree
+ * entirely (not under SYSDISK_MOUNT) because it must be reachable even
+ * when no volume is mounted yet -- it is what MOUNT uses to mount one.
+ */
+#define VMS_MOUNT_HELPER_PATH "/sbin/vms_mount_helper"
+
 #endif /* __OVMX_LAYOUT_H */

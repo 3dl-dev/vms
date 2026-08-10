@@ -41,42 +41,6 @@ const char *vms_months[] = {
 };
 
 /* ================================================================== */
-/*                     VMS Device Table                                */
-/* ================================================================== */
-
-struct vms_device vms_device_table[VMS_MAX_DEVICES];
-int vms_device_count = 0;
-
-/*
- * Find a device in the table by VMS name (case-insensitive).
- * The name may or may not include trailing colon.
- */
-struct vms_device *vms_find_device(const char *name)
-{
-    char upper[16];
-    size_t len = strlen(name);
-    if (len >= sizeof(upper)) len = sizeof(upper) - 1;
-    for (size_t i = 0; i < len; i++)
-        upper[i] = (char)toupper((unsigned char)name[i]);
-    upper[len] = '\0';
-    /* Strip trailing colon for comparison */
-    if (len > 0 && upper[len - 1] == ':')
-        upper[--len] = '\0';
-
-    for (int i = 0; i < vms_device_count; i++) {
-        char dev[16];
-        strncpy(dev, vms_device_table[i].vms_name, sizeof(dev) - 1);
-        dev[sizeof(dev) - 1] = '\0';
-        size_t dlen = strlen(dev);
-        if (dlen > 0 && dev[dlen - 1] == ':')
-            dev[--dlen] = '\0';
-        if (strcasecmp(upper, dev) == 0)
-            return &vms_device_table[i];
-    }
-    return NULL;
-}
-
-/* ================================================================== */
 /*                     Command Table                                   */
 /* ================================================================== */
 

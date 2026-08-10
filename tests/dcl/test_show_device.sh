@@ -1,6 +1,6 @@
 #!/bin/bash
 # TEST: SHOW DEVICE prints no device row it did not read from the executive
-# EXPECT: contains:%MOUNT-I-MOUNTED, TESTDISK mounted on _DUA0:
+# EXPECT: contains:DCL-ALIVE
 # EXPECT: contains:$STATUS = 676
 # EXPECT_NOT: regex:^Device +Device +Error
 # EXPECT_NOT: contains:NOSUCHDEV
@@ -10,6 +10,7 @@
 # EXPECT_NOT: regex:^[A-Z0-9$_]+: +(Mounted|Dismounted)
 # EXPECT_NOT: contains:%OVMX-F-EXECDEV
 # EXPECT_NOT: contains:%OVMX-F-NODEVTAB
+# EXPECT_NOT: contains:%MOUNT-I-MOUNTED
 #
 # WHAT THIS ASSERTS, and what it deliberately does not (vms-fb9).
 #
@@ -51,6 +52,9 @@
 #                     reasoned, in tests/qemu/test_syssvc_showdev.c and
 #                     tests/uat/vms_session_qemu.sh, which both see OPA0: on
 #                     every run against a real /dev/vms
+#   %MOUNT-I-MOUNTED  MOUNT's own facade success message, deleted product-wide
+#                     by vms-651 (real mount(2), never a per-process fake) --
+#                     kept here as history the same way the others are.
 #
 # NOSUCHDEV is forbidden here for a different reason -- Rule 10, not row
 # fabrication. The oracle measured "%SYSTEM-W-NOSUCHDEV, no such device
@@ -59,35 +63,32 @@
 # all, so printing that message would be a false statement in VMS's own
 # voice.
 #
-# THE POSITIVE ANCHOR IS NOW $STATUS, NOT A PRINTED MESSAGE (vms-fb9 r5).
-# With no /dev/vms, vms_kif_open() fails and every subsequent ioctl this
-# process issues fails too (EBADF on the resulting negative descriptor),
-# which src/libvmssys/vms_kif.c's vms_kif_kerr_to_ss() maps -- through its
-# closed, oracle-pinned errno set -- to SS$_BUGCHECK (676) by default. SHOW
-# DEVICE no longer renders that to the user (rule 10: "the executive did not
-# answer" is not a user-facing condition), but it still sets $STATUS, and
-# SHOW SYMBOL $STATUS reads it back. This is what stops the test passing
-# vacuously because SHOW DEVICE prints nothing whatsoever OR because DCL
-# never reached it: MOUNT alone leaves $STATUS = 1 (measured, see the MOUNT-
-# only case below), so 676 can ONLY appear if SHOW DEVICE itself ran the
-# devscan/getdvi call and hit the no-executive ioctl failure. Measured by
-# running `printf 'MOUNT DUA0: TESTDISK\nSHOW SYMBOL $STATUS\n' | DCL.EXE`
-# in isolation: $STATUS = 1, not 676, confirming MOUNT's own status is not
-# what this anchor is keying on.
+# THE POSITIVE ANCHOR IS $STATUS, NOT A PRINTED MESSAGE (vms-fb9 r5). With no
+# /dev/vms, vms_kif_open() fails and every subsequent ioctl this process
+# issues fails too (EBADF on the resulting negative descriptor), which
+# src/libvmssys/vms_kif.c's vms_kif_kerr_to_ss() maps -- through its closed,
+# oracle-pinned errno set -- to SS$_BUGCHECK (676) by default. SHOW DEVICE no
+# longer renders that to the user (rule 10: "the executive did not answer" is
+# not a user-facing condition), but it still sets $STATUS, and SHOW SYMBOL
+# $STATUS reads it back.
 #
-# MOUNT DUA0: runs FIRST on purpose. It populates that process-local table,
-# so SHOW DEVICE in the same process would print DUA0: from it if it still
-# had that source. The paired EXPECT on MOUNT's own message is what stops
-# this test passing vacuously because DCL never started.
+# THE LIVENESS ANCHOR CHANGED FROM MOUNT TO A BARE WRITE (vms-651). Before
+# vms-651, MOUNT DUA0: TESTDISK succeeded even with no executive (the
+# facade), leaving $STATUS = 1 -- proof DCL was alive and running commands
+# BEFORE SHOW DEVICE, so a later $STATUS = 676 could only have come from
+# SHOW DEVICE itself. vms-651 deleted that facade: MOUNT now asks the
+# executive too (vms_kif_chkpriv before anything else), so with no /dev/vms
+# it ALSO fails via the same ioctl path and ALSO leaves $STATUS = 676 --
+# using it as the liveness anchor would make this test pass vacuously
+# whether or not SHOW DEVICE itself touched the executive. `WRITE SYS$OUTPUT`
+# never asks the executive at all, so it is now the anchor: EXPECT
+# "DCL-ALIVE" proves the session ran a command, and it leaves $STATUS = 1,
+# so a later $STATUS = 676 can only be SHOW DEVICE's.
 #
 # ANCHORING (this repo has shipped assertions satisfiable by something other
 # than the behaviour under test, so it is spelled out): the EXPECT_NOT
-# patterns are line-anchored or contain column runs precisely because MOUNT's
-# own success message contains the strings "DUA0:" and "TESTDISK". An
-# unanchored `EXPECT_NOT: contains:DUA0:` would be tripped by MOUNT's message
-# no matter what SHOW DEVICE did; an unanchored `contains:Mounted` likewise,
-# by "mounted on". The old fabricated rows started at column 0 with the
-# device name; MOUNT's messages start with "%MOUNT-".
+# patterns are line-anchored or contain column runs precisely because the
+# old fabricated rows started at column 0 with the device name.
 #
 # WHAT IS NOT ASSERTED HERE: that SHOW DEVICE shows OPA0: when an executive
 # IS present. That needs a real /dev/vms and cannot run under ctest at all
@@ -96,4 +97,4 @@
 # executive, including the A-writes/B-reads case where another process
 # allocates the console and SHOW DEVICE observes it.
 VMSDCL="${VMSDCL:-vmsdcl}"
-printf 'MOUNT DUA0: TESTDISK\nSHOW DEVICE\nSHOW SYMBOL $STATUS\nSHOW DEVICE DUA0:\n' | $VMSDCL 2>&1
+printf 'WRITE SYS$OUTPUT "DCL-ALIVE"\nSHOW DEVICE\nSHOW SYMBOL $STATUS\nSHOW DEVICE DUA0:\n' | $VMSDCL 2>&1

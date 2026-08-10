@@ -99,21 +99,6 @@ int cmd_product(struct dcl_command *cmd);
 /* VMS month abbreviations */
 extern const char *vms_months[];
 
-/* VMS device table */
-#define VMS_MAX_DEVICES 64
-
-struct vms_device {
-    char vms_name[16];
-    char linux_path[256];
-    char volume_label[16];
-    int  mounted;
-};
-
-extern struct vms_device vms_device_table[VMS_MAX_DEVICES];
-extern int vms_device_count;
-
-struct vms_device *vms_find_device(const char *name);
-
 /* Queue initialization helper */
 int ensure_queue_init(void);
 

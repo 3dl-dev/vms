@@ -113,6 +113,20 @@ struct vms_mode_args {
 #define VMS_PRV_V_SETPRV    14
 #define VMS_PRV_V_TMPMBX    15
 #define VMS_PRV_V_WORLD     16
+#define VMS_PRV_V_MOUNT     17  /* execute the MOUNT ACP function (vms-651).
+                                 * Public $PRVDEF documentation bit position
+                                 * (VSI OpenVMS System Services Reference
+                                 * Manual / Guide to System Security), same
+                                 * provenance class as SYSNAM/GRPNAM/GRPPRV
+                                 * above -- invariant across VAX/Alpha/
+                                 * Itanium/x86, and the only unclaimed slot
+                                 * between oracle-confirmed WORLD=16 and
+                                 * OPER=18. src/libvms/include/prvdef.h
+                                 * already carried PRV$V_MOUNT=17 from before
+                                 * this item; the _Static_assert in
+                                 * prv_agreement.c is what makes this copy
+                                 * agree with that one, not what re-derives
+                                 * either. */
 #define VMS_PRV_V_OPER      18
 #define VMS_PRV_V_NETMBX    20
 #define VMS_PRV_V_SYSPRV    28
@@ -163,6 +177,7 @@ struct vms_mode_args {
 #define VMS_PRV_M_PRMMBX    (1ULL << VMS_PRV_V_PRMMBX)
 #define VMS_PRV_M_TMPMBX    (1ULL << VMS_PRV_V_TMPMBX)
 #define VMS_PRV_M_WORLD     (1ULL << VMS_PRV_V_WORLD)
+#define VMS_PRV_M_MOUNT     (1ULL << VMS_PRV_V_MOUNT)
 #define VMS_PRV_M_NETMBX    (1ULL << VMS_PRV_V_NETMBX)
 #define VMS_PRV_M_SYSPRV    (1ULL << VMS_PRV_V_SYSPRV)
 #define VMS_PRV_M_GRPPRV    (1ULL << VMS_PRV_V_GRPPRV)
@@ -183,6 +198,11 @@ struct vms_mode_args {
  *           LNM$SYSTEM (vms-5b7)
  *   GRPNAM  vms_ioctl_lnm_define / vms_ioctl_lnm_delete against
  *           LNM$GROUP (vms-5b7)
+ *   MOUNT   cmd_mount / cmd_dismount (src/vmsdcl/dcl_cmd_misc.c) call
+ *           vms_kif_chkpriv(PRV$M_MOUNT) -- itself vms_ioctl_chkpriv,
+ *           i.e. THIS check against proc->cur_privs -- before mount(2)/
+ *           umount(2)ing a volume (vms-651). Real kernel-enforced state,
+ *           not a userspace getuid() check.
  * Bits outside this set are STORED and REPORTED (they come from SYSUAF
  * and VMS reports them) but nothing in this tree gates on them. Adding
  * a privilege here without adding the check it names is the defect this
@@ -210,7 +230,8 @@ struct vms_mode_args {
  */
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | \
                              VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD | \
-                             VMS_PRV_M_SYSNAM | VMS_PRV_M_GRPNAM)
+                             VMS_PRV_M_SYSNAM | VMS_PRV_M_GRPNAM | \
+                             VMS_PRV_M_MOUNT)
 
 struct vms_priv_args {
     uint64_t mask;          /* privilege mask to set/clear/check */

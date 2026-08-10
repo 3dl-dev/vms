@@ -183,6 +183,7 @@ RUN cmake -B build-static \
 # OWNER category) can sys$create scratch/user files in them.
 RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
              /initramfs-fat/tmp /initramfs-fat/var /initramfs-fat/mnt \
+             /initramfs-fat/sbin \
              /initramfs-fat/lib/modules \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSLIB \
@@ -223,6 +224,14 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     # command fails %SYSGEN-F-NOIMG and SYS$SYSTEM:OVMXVMSSYS.PAR can never
     # be read or written on the real runtime.
     cp build-static/bin/SYSGEN.EXE     /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # The setuid-root mount(2)/umount(2) helper (vms-651, tools/
+    # vms_mount_helper.c) -- NOT a VMS image, lives outside SYS$SYSTEM: at a
+    # fixed Linux path (ovmx_layout.h VMS_MOUNT_HELPER_PATH). Owned by root
+    # with the setuid bit set HERE, at build time, so no boot-time step ever
+    # has to (a de-privileged session couldn't set it on itself anyway).
+    cp build-static/bin/vms_mount_helper /initramfs-fat/sbin/vms_mount_helper && \
+    chown root:root /initramfs-fat/sbin/vms_mount_helper && \
+    chmod 4755 /initramfs-fat/sbin/vms_mount_helper && \
     # Kernel modules
     cp src/kernel/vms.ko /initramfs-fat/lib/modules/ && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-fat/lib/modules/ && \
@@ -400,12 +409,19 @@ RUN /src/build-static/bin/vmsfs_master master \
 # Use this after the system disk has been installed via the fat initramfs.
 RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
              /initramfs-slim/tmp /initramfs-slim/var /initramfs-slim/mnt \
+             /initramfs-slim/sbin \
              /initramfs-slim/lib/modules \
              /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE \
              /initramfs-slim/vms/SYS0/SYSCOMMON/SYSMGR && \
     # Bootstrap binaries only
     cp build-static/bin/STARTUP.EXE    /initramfs-slim/init && \
     cp build-static/bin/INITIALIZE.EXE /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # MOUNT/DISMOUNT (vms-651) need this on a slim boot too -- DCL comes off
+    # the system disk there, but the helper still lives at the same fixed
+    # Linux path outside the VMS tree.
+    cp build-static/bin/vms_mount_helper /initramfs-slim/sbin/vms_mount_helper && \
+    chown root:root /initramfs-slim/sbin/vms_mount_helper && \
+    chmod 4755 /initramfs-slim/sbin/vms_mount_helper && \
     # Kernel modules
     cp src/kernel/vms.ko /initramfs-slim/lib/modules/ && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-slim/lib/modules/ && \

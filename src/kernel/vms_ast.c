@@ -84,6 +84,23 @@ long vms_ioctl_dclast(struct vms_proc *proc, unsigned long arg)
             args.status = SS__NOPRIV;
             goto out;
         }
+        /*
+         * SUPER was left behind (vms-95a): the KERNEL and EXEC checks above
+         * gate a declaration at a more privileged mode, but SUPER (PSL_C_SUPER
+         * = 2, MORE privileged than USER = 3 by this function's own numbering)
+         * fell through with NO check, so a USER-mode caller could declare an
+         * AST at SUPER without CMEXEC/CMKRNL. Combined with image rundown
+         * flushing only USER-mode ASTs, such a SUPER AST survives the image and
+         * runs when DCL next drains SUPER -- an escalation. This mirrors the
+         * SUPER gate vms_ioctl_setmode() already carries (vms_access.c); $DCLAST
+         * is the same access-mode asymmetry, closed here.
+         */
+        if (args.acmode == PSL_C_SUPER &&
+            !(proc->cur_privs & (PRV_M_CMEXEC | PRV_M_CMKRNL))) {
+            spin_unlock(&proc->mode_lock);
+            args.status = SS__NOPRIV;
+            goto out;
+        }
     }
     spin_unlock(&proc->mode_lock);
 

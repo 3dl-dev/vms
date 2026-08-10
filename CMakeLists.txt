@@ -267,6 +267,22 @@ if(BUILD_TESTS)
     set_tests_properties(cmake_shims_tracked_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # vms-791 (0.4 installer Tier-0): the VMSFS media-mastering tool must
+    # produce an image that reads back byte-exact. Masters a synthetic tree
+    # (subdirs, a >5-entry directory, a multi-block file, a binary file, an
+    # empty file) and the real distro/rootfs/vms tree, then extracts each and
+    # diffs. Guarded on BUILD_TOOLS (the vmsfs_master target is defined later,
+    # when add_subdirectory(tools) runs; the generator expression below is
+    # resolved at generate time, after that target exists).
+    if(BUILD_TOOLS)
+        add_test(NAME vmsfs_master_roundtrip
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_vmsfs_master_roundtrip.sh
+                    $<TARGET_FILE:vmsfs_master>
+                    ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(vmsfs_master_roundtrip PROPERTIES
+            LABELS "integration;tools" TIMEOUT 120)
+    endif()
+
     # vms_kif caller census (vms-7fb): every kernel-interface entry point is
     # either reached from the product or declared unwired against an item.
     # The Rule 9 gate is shaped to catch a FALLBACK; a facility implemented

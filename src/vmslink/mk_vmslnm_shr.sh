@@ -82,6 +82,14 @@ done
 # function defined in the 4 objects above). Each becomes a PROCEDURE universal in
 # .vms$sv. Order is the append-only vector contract — DO NOT reorder or delete once
 # consumers bind indices; only append (GSMATCH LEQUAL-compatible).
+#
+# lnm_translate_values (vms-420) is APPENDED at the tail, not interleaved next to
+# lnm_translate/lnm_translate_iterative above, precisely because of that append-only
+# rule: DCL's cmd_show_logical calls it cross-shareable (the multi-value/search-list
+# read that backs SHOW LOGICAL's display of every equivalence string, not just index
+# 0), so a native LINK of DCL.EXE/LOGINOUT.EXE/etc. resolves it here or fails loudly
+# with an unresolved external -- exactly the failure this comment exists to prevent
+# a repeat of.
 VEC="\
 lnm_init=PROCEDURE,lnm_shutdown=PROCEDURE,lnm_get_manager=PROCEDURE,\
 lnm_find_table=PROCEDURE,\
@@ -89,7 +97,8 @@ lnm_create=PROCEDURE,lnm_create_multi=PROCEDURE,lnm_delete=PROCEDURE,\
 lnm_translate=PROCEDURE,lnm_translate_iterative=PROCEDURE,\
 lnm_enumerate=PROCEDURE,lnm_setup_defaults=PROCEDURE,\
 lnm_table_create=PROCEDURE,lnm_table_destroy=PROCEDURE,lnm_table_insert=PROCEDURE,\
-lnm_table_lookup=PROCEDURE,lnm_table_remove=PROCEDURE,lnm_table_enumerate=PROCEDURE"
+lnm_table_lookup=PROCEDURE,lnm_table_remove=PROCEDURE,lnm_table_enumerate=PROCEDURE,\
+lnm_translate_values=PROCEDURE"
 
 echo "mk_vmslnm_shr: LINK.EXE --shareable --use {DECC\$SHR,LIBVMSSYS\$SHR} -> $OUT"
 # STRICT (no --allow-undefined): every libc/pthread import MUST bind to DECC$SHR,

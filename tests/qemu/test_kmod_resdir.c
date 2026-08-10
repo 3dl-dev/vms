@@ -31,6 +31,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include "vms_ioctl.h"
+#include "vms_kif.h"
 
 #define SS_NORMAL 1
 
@@ -41,13 +42,20 @@ static int pass = 0, fail = 0;
     else { printf("  FAIL: %s\n", msg); fail++; } \
 } while(0)
 
+/*
+ * Read a resource's DLM directory + mastering state through the real
+ * kernel-interface client wrapper (src/libvmssys/vms_kif.c), the same client
+ * the product would call -- not a hand-rolled ioctl copy. Fills `out` for the
+ * assertions below.
+ */
 static uint32_t resmaster(int fd, const char *name,
                           struct vms_resmaster_args *out)
 {
+    (void)fd; /* vms_kif_get_resmaster manages its own /dev/vms binding */
     memset(out, 0, sizeof(*out));
-    strncpy(out->resnam, name, sizeof(out->resnam) - 1);
-    ioctl(fd, VMS_IOCTL_GET_RESMASTER, out);
-    return out->status;
+    return vms_kif_get_resmaster(name, &out->found, &out->local_csid,
+                                 &out->dir_csid, &out->master_csid,
+                                 &out->is_local_master, &out->n_granted);
 }
 
 static uint32_t enq(int fd, const char *name, uint32_t mode, uint32_t *lkid_out)

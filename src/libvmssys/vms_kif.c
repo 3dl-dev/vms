@@ -657,6 +657,42 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
     return args.status;
 }
 
+/*
+ * vms_kif_get_resmaster - read a resource's DLM directory + mastering state
+ * (vms-ci.5 DB). Issues VMS_IOCTL_GET_RESMASTER, the read-only diagnostic that
+ * reports which node is the directory for the name, which node masters the
+ * resource (0 = unmastered), whether this node is the master, and how many
+ * locks are granted -- WITHOUT creating or mastering the resource. No sys$
+ * service calls this; it exists so the kernel's local resource-directory +
+ * mastering scaffolding is observable against a real /dev/vms (see the
+ * OVMX-UNWIRED declaration in vms_kif.h and tests/qemu/test_kmod_resdir.c).
+ */
+uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
+                               uint32_t *local_csid, uint32_t *dir_csid,
+                               uint32_t *master_csid, uint32_t *is_local_master,
+                               uint32_t *n_granted)
+{
+    struct vms_resmaster_args args;
+
+    if (!resnam)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.resnam, resnam, sizeof(args.resnam) - 1);
+    args.resnam[sizeof(args.resnam) - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_GET_RESMASTER, &args);
+
+    if (found) *found = args.found;
+    if (local_csid) *local_csid = args.local_csid;
+    if (dir_csid) *dir_csid = args.dir_csid;
+    if (master_csid) *master_csid = args.master_csid;
+    if (is_local_master) *is_local_master = args.is_local_master;
+    if (n_granted) *n_granted = args.n_granted;
+
+    return args.status;
+}
+
 /* ================================================================
  * Device table (executive-resident I/O database)
  *

@@ -283,6 +283,20 @@ if(BUILD_TESTS)
             LABELS "integration;tools" TIMEOUT 120)
     endif()
 
+    # vms-0b6: the OVMX kit packer (tools/ovmx_kit_pack.c) must produce a kit
+    # file that reads back byte-exact. Packs a synthetic SYSEXE/SYSLIB/SYSMGR/
+    # SYSHLP tree (nested subdir, empty dir, empty file, binary file, a
+    # no-type file), checks the `list` manifest names every staged file, then
+    # extracts and byte-compares every payload file. Guarded on BUILD_TOOLS
+    # for the same generator-expression-timing reason as vmsfs_master above.
+    if(BUILD_TOOLS)
+        add_test(NAME ovmx_kit_pack_roundtrip
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_ovmx_kit_pack_roundtrip.sh
+                    $<TARGET_FILE:ovmx_kit_pack>)
+        set_tests_properties(ovmx_kit_pack_roundtrip PROPERTIES
+            LABELS "integration;tools" TIMEOUT 60)
+    endif()
+
     # vms_kif caller census (vms-7fb): every kernel-interface entry point is
     # either reached from the product or declared unwired against an item.
     # The Rule 9 gate is shaped to catch a FALLBACK; a facility implemented

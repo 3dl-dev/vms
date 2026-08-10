@@ -446,6 +446,28 @@ if(BUILD_TESTS)
     # tests/integration/test_terminal_identity_negctl.sh and can still be run
     # by hand as informational, non-gating lint.
 
+    # Rule 11 standing gate (vms-a17e): PID 1 / PROVISION.EXE constructs no
+    # identity from SYSUAF. vms.ko owns SYSTEM's identity as its own
+    # constants (VMS_SYSTEM_UIC / VMS_PRV_M_SYSTEM_ALL), the OPA0: device-
+    # table precedent applied to identity -- see vms_ioctl_establish_system()
+    # in src/kernel/vms_proctab.c. Source scan, C comments stripped.
+    add_test(NAME system_identity_no_sysuaf_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_system_identity_no_sysuaf.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(system_identity_no_sysuaf_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
+    # ...and the evasions, one minimal mutation per property, on a sandbox
+    # copy of the tree -- no vms.ko, no QEMU, no /dev/vms. The BEHAVIOURAL
+    # proof against a real /dev/vms is tests/qemu/test_release_e2e.sh's
+    # "poisoned_uic" case (a real boot with a SYSUAF SYSTEM row carrying
+    # UIC [50,50]/PRIVILEGES=NONE still reports "SYSTEM [1,4] established").
+    add_test(NAME system_identity_no_sysuaf_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_system_identity_no_sysuaf_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(system_identity_no_sysuaf_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
     # Rule 10/11 standing gate (vms-cb5): the DERIVED census of every writer
     # and reader of the identity environment variables, across src/ AND
     # tools/. The gate above scans src/ only, and both the reachable writer

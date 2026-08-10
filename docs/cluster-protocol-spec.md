@@ -4304,6 +4304,110 @@ located but its trigger is not isolated.
 `/data/training/vax/cluster/work/e15{A,B,C,D}.{status,csb}`,
 `d94-e15{A,B,C,D}.pcap`; op 0x02 diff tool `/tmp/framediff.py` (session-local).
 
+#### 4(O.11) On a rejoin the CM readmission runs on the MEMBER-INITIATED VMS$VAXcluster connection (rejoiner = TARGET), not on the joiner's own outbound VC — and the `CONNECT_RSP`-builder candidate is REFUTED (GROUNDED, SUCCESS oracle + live first-join/rejoin bracket, `vms-2248`, 2026-08-10)
+
+**Frame.** §4(O.10) located the rejoin blocker at "the member declines to
+reciprocate config on OVMX's joiner VC" and left two things open: (1) *why* the
+member drives the real rejoiner's joiner VC (SUCCESS #1299) but not OVMX's, and
+(2) the candidate that OVMX's missing `CONNECT_RSP` builder (`SCSD-W-CONNNOACT`)
+for the member's inbound `VMS$VAXcluster` connect is the gap. This subsection
+answers (1) against the SUCCESS oracle and **refutes** (2).
+
+**The connect census of the SUCCESS oracle (GROUNDED, `vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`, every `CONNECT_REQ` — `rcid==0`, SYSAP name in body — over the readmission window f1170–f1400).** The
+crash-rejoiner VAX3 opens only two connections outbound, and **neither is
+`VMS$VAXcluster`**:
+
+| frame | dir | SYSAP | who opens |
+|---|---|---|---|
+| f1184 | VAX1→VAX3 | `SCS$DIRECTORY` | member → rejoiner |
+| f1202 | VAX1→VAX3 | **`VMS$VAXcluster`** | **member → rejoiner** |
+| f1230 | VAX2→VAX3 | `SCS$DIRECTORY` | member → rejoiner |
+| f1248 | VAX2→VAX3 | **`VMS$VAXcluster`** | **member → rejoiner** |
+| f1264 | VAX3→VAX1 | `SCS$DIRECTORY` | rejoiner → member |
+| f1277 | VAX3→VAX1 | `MSCP$DISK` | rejoiner → member |
+
+Both established members open the `VMS$VAXcluster` connection **to** the
+returning node; the rejoiner **never opens its own outbound `VMS$VAXcluster`
+connect**. The rejoiner answers each member's connect as the Figure-2-14
+TARGET (NODE_2): for VAX2's f1248 (`lcid=0cc6000d`, `rcid=0`), VAX3 sends the
+`CONNECT_RSP` echo f1249 (`rcid=0cc6000d`, `lcid=0`) then the `ACCEPT_REQ`
+f1250 supplying its own conid (`lcid=45b80009`); VAX2 `ACCEPT_RSP`s f1252 and
+the connection opens. **The entire readmission choreography then runs on that
+member-initiated connection, on VAX3's TARGET-side conid `45b80009`**: op 0x02
+f1297 (`lcid=45b80009`) → member reciprocation `cat 0x04 op 0x04` f1299 → op
+0x03 commit f1303 → op 0x05 lock-rebuild f1306 → op 0x06 barrier f1320. This is
+the "Rule of Total Connectivity" (§4(y), Davis p.7-39) made byte-concrete for a
+rejoin: the coordinator re-opens its `VMS$VAXcluster` connection to the
+returning node and drives CM readmission over it.
+
+**The OVMX bug (GROUNDED, live first-join vs rejoin bracket, same pod
+`vaxlab-10`, same build — arms A/C/D).** OVMX's join sequencer *always* opens
+its OWN outbound `VMS$VAXcluster` connect at join step 7/8 and drives op 0x02 /
+CM on that outbound joiner VC. That is correct for a FIRST join and WRONG for a
+rejoin:
+
+| arm | scenario | OVMX outbound VMS$VAXcluster | member-initiated inbound | op 0x02 | result |
+|---|---|---|---|---|---|
+| A | first join | `0x28E40002` reaches **OPEN** (`CONNECT ACK --RCV_ACCEPT_REQ--> OPEN`, line 82 — member ACCEPTs it) | — | sent on outbound VC (line 317), member acks 0x04 | **`XITDONE=1`** |
+| C | rejoin, fast | `0x9CEF0002` **parks in CONNECT ACK forever** (member sends bare `CONNECT_RSP`, never `ACCEPT_REQ`; line 1133) | `0x9CEF0001` reaches **OPEN** (line 143) — but the sequencer never touches it | **NEVER SENT** (sequencer waits on its own outbound to OPEN) | **`XITDONE=0`** |
+| D | rejoin, slow (`long_break`) | `0xE0860002` accepted (`JOINBOUND`, line 110) | none opened this arm | sent on outbound VC (line 292) — member sends **zero** sequenced frames back | **`XITDONE=0`** |
+
+The discriminator is the acceptance of OVMX's *outbound* `VMS$VAXcluster`
+connect: a first-join member ACCEPTs it and reciprocates on it; a rejoin member
+either refuses it and opens its own inbound instead (arm C — the SUCCESS
+oracle's topology, which OVMX then ignores for CM) or accepts it but still will
+not reciprocate config on it (arm D). Either way the member's CM readmission is
+bound to the **member-initiated** connection, and OVMX drives CM only on its
+**own outbound** VC.
+
+**The `CONNECT_RSP`-builder candidate is REFUTED (6th refutation-class finding
+of this thread).** The `SCSD-W-CONNNOACT` for the member's inbound
+`VMS$VAXcluster` `CONNECT_REQ` is a FALSE ALARM of the same class as §4(O.8):
+OVMX ALREADY answers that inbound connect and it reaches OPEN. e15C, conid
+`0x9CEF0001` remote `0x302B000F`: `CLOSED --RCV_CONNECT_REQ--> CONNECT REC`
+(CONNNOACT fires here — no separate echo frame) `--SVC_ACCEPT--> ACCEPT SENT`
+(`SCSD-I-CONNRESP, answered peer VMS$VAXcluster CONNECT-REQUEST`)
+`--RCV_ACCEPT_RSP--> OPEN` (line 143). The connection the member opened is
+bidirectionally OPEN on OVMX's side. Building a standalone `CONNECT_RSP` echo
+would not change readmission: the gap is not that OVMX fails to *answer* the
+member's connection, it is that OVMX never *drives CM readmission on* it.
+
+**Verdict / the fix (next increment, `vms-2248`'s child).** On a rejoin
+(`SCSD-I-PRIORCLU`/`CMREJOIN` detected), OVMX must run the op 0x02 CM
+readmission — and the op 0x04-ack / op 0x03-commit / op 0x05-lockrb / op 0x06-
+barrier dialogue that follows — on the **member-initiated `VMS$VAXcluster`
+connection** (the TARGET-side CDT that reaches OPEN), NOT on its own outbound
+joiner VC. Concretely the sequencer must stop gating step 8 on its own outbound
+connect reaching OPEN for a rejoin, and instead bind `cm_apply_rejoin_form` +
+the deferred op 0x02 send to the member-initiated CDT once that reaches OPEN.
+This is **wire-visible** (op 0x02 moves to a different conid, and OVMX's
+redundant outbound connect should be suppressed to match the oracle, which
+never sends one) → it ships an env kill-switch, a fail-pre/pass-post
+frame-replay test, and a live rejoin bracket flipping `XITDONE` 0→1 vs the
+current stall. This is more than one increment beyond this RE task and is filed
+as such.
+
+**Explicit non-claims.** (1) The op 0x02 body is not re-opened — §4(O.10) ruled
+it out; this is a *connection-selection* bug, not a payload bug. (2) The slow
+arm (D) shows the member accepting OVMX's outbound yet not reciprocating; the
+oracle-grounded fix targets the member-initiated connection (arm C's topology,
+which the oracle confirms), and whether arm D's member would reciprocate once
+OVMX stops competing with its own outbound is a live question for the fix
+increment's bracket, not asserted here. (3) The readmission opcode-level
+choreography (0x02/0x04/0x03/0x05/0x06) is grounded as the SUCCESS oracle's
+frame *sequence and conid*; the SYSAP-body opcode fields inside each remain as
+§4(L)/§5 have them.
+
+**Evidence** (host, tank volume): SUCCESS oracle
+`/data/training/vax/cluster/captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`
+(connect census f1170–1400; choreography f1248–1320); live bracket
+`/data/training/vax/k8s-labs/vaxlab-10/logs/scsd-e15{A,C,D}.log`
+(arm A first-join OPEN+`XITDONE=1`; arm C outbound-parked-CONNECT-ACK + inbound
+OPEN ignored; arm D outbound JOINBOUND + no reciprocation); OVMX code sites
+`src/vmsscs/scsd.c` join sequencer step 7/8 (`SCSD-I-JOINSEQ ... VC connect`)
+and `conn_step`/`scsd_svc_no_builder` (the CONNNOACT that is the false alarm),
+`src/vmsscs/scs_conn.c` Figure-2-14 target column (rows at lines 65–82).
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

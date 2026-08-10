@@ -51,6 +51,7 @@ jobs:
       toolchain: ${{ steps.decide.outputs.toolchain }}
       kernel: ${{ steps.decide.outputs.kernel }}
       boot: ${{ steps.decide.outputs.boot }}
+      release: ${{ steps.decide.outputs.release }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -99,6 +100,15 @@ jobs:
               - 'tests/qemu/test_executive_integral.sh'
               - 'tests/qemu/test_distrib_boot.sh'
               - 'tests/uat/**'
+            release:
+              - '.github/workflows/**'
+              - 'tools/cut-release.sh'
+              - 'distro/Dockerfile.bootable'
+              - 'tools/ovmx_kit_pack.c'
+              - 'tools/vmsfs_master.c'
+              - 'src/libvms/include/ovmx_identity.h'
+              - 'src/libvms/include/ovmx_kit_format.h'
+              - 'src/kernel/vmsfs/vmsfs_ondisk.h'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -109,6 +119,7 @@ jobs:
               echo "toolchain=${{ steps.filter.outputs.toolchain }}"
               echo "kernel=${{ steps.filter.outputs.kernel }}"
               echo "boot=${{ steps.filter.outputs.boot }}"
+              echo "release=${{ steps.filter.outputs.release }}"
             } >> "$GITHUB_OUTPUT"
           else
             {
@@ -116,6 +127,7 @@ jobs:
               echo "toolchain=true"
               echo "kernel=true"
               echo "boot=true"
+              echo "release=true"
             } >> "$GITHUB_OUTPUT"
           fi
   # -----------------------------------------------------------------------
@@ -348,6 +360,114 @@ jobs:
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh
+
+  # -----------------------------------------------------------------------
+  # cut-release-reproducible (vms-d73, epic vms-a84 RELEASE ENGINEERING)
+  #
+  # tools/cut-release.sh is the FIRST piece of release-engineering machinery:
+  # a repeatable "cut a release" command replacing the previous hand-rolled
+  # per-cut process (build the image, copy artifacts out, hand-write
+  # checksums). This job is that command's ground-source proof:
+  #
+  #   1. Run cut-release.sh TWICE, from the SAME commit, each with
+  #      --no-cache so the two builds share nothing (a cache hit would prove
+  #      cache reuse, not reproducibility) — and diff the four release
+  #      artifacts (vmlinuz, initramfs-ovmx-slim.cpio.gz, ovmx-distrib.img,
+  #      ovmx-os.kit) byte-for-byte.
+  #   2. Recompute SHA256SUMS against the actual bundle bytes and compare
+  #      against what the script wrote, so a bug in the script's own
+  #      checksum step cannot self-certify.
+  #   3. Reuse the EXISTING boot-smoke harness (tests/qemu/test_distrib_boot.sh
+  #      — the same one persistent-boot above runs against a normal build) to
+  #      boot the freshly-cut bundle's own vmlinuz/initramfs/distrib.img to a
+  #      real SYSTEM login prompt, rather than reinventing that proof.
+  #
+  # Two full containerized builds (~25-30 min cold each per boot.sh) make this
+  # the heaviest job in the workflow; it is gated behind the `release` path
+  # filter so ordinary PRs that do not touch release-engineering surfaces
+  # don't pay for it, and still runs in full on push/merge_group/schedule.
+  # -----------------------------------------------------------------------
+  cut-release-reproducible:
+    name: cut-release is byte-reproducible + boots (vms-d73)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # First independent cut. --no-cache on both cuts is the point: this
+      # proves the BUILD is reproducible, not that BuildKit's cache is.
+      - name: Cut release A (clean tree, no cache)
+        run: |
+          tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-a"
+
+      - name: Cut release B (independent clean tree, no cache)
+        run: |
+          tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-b"
+
+      # The manifest's own "cut_at_utc" field legitimately differs between
+      # the two invocations (it is wall-clock metadata ABOUT the cut, not a
+      # build input) -- the reproducibility claim is scoped to the four real
+      # release artifacts and their checksums, which is exactly what this
+      # step compares. SHA256SUMS also carries no such field, so it is
+      # compared byte-for-byte too, not just semantically.
+      - name: Assert the two cuts are byte-identical
+        run: |
+          set -euo pipefail
+          A="dist/release-a"
+          B="dist/release-b"
+          FAIL=0
+          for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img ovmx-os.kit ovmx-os.kit.manifest.txt SHA256SUMS; do
+            if cmp -s "$A/$f" "$B/$f"; then
+              echo "OK: $f is byte-identical across both cuts"
+            else
+              echo "FAIL: $f DIFFERS between the two independent cuts"
+              cmp "$A/$f" "$B/$f" || true
+              FAIL=1
+            fi
+          done
+          [ "$FAIL" -eq 0 ] || { echo "Reproducibility check FAILED"; exit 1; }
+          echo "All release artifacts + SHA256SUMS are byte-identical across two independent --no-cache cuts."
+
+      # Defense in depth against a bug in the script's own checksum step:
+      # recompute sha256 directly against the shipped bytes and compare
+      # against what release-manifest.json / SHA256SUMS claim.
+      - name: Recompute checksums and compare against the emitted manifest
+        run: |
+          set -euo pipefail
+          cd dist/release-a
+          sha256sum -c SHA256SUMS
+          for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img ovmx-os.kit; do
+            REAL=$(sha256sum "$f" | awk '{print $1}')
+            # Each artifact is emitted as a single JSON line (cut-release.sh
+            # printf's one object per line, no embedded newlines) -- a plain
+            # grep+sed extraction is exact and needs no JSON library.
+            CLAIMED=$(grep "\"component\": \"$f\"" release-manifest.json | sed -n 's/.*"sha256": "\([a-f0-9]*\)".*/\1/p')
+            [ -n "$CLAIMED" ] || { echo "FAIL: $f not found in release-manifest.json"; exit 1; }
+            [ "$REAL" = "$CLAIMED" ] || { echo "FAIL: $f real=$REAL manifest=$CLAIMED"; exit 1; }
+            echo "OK: release-manifest.json sha256 for $f matches the actual artifact bytes"
+          done
+
+      # THE BOOT PROOF. Reuses tests/qemu/test_distrib_boot.sh verbatim
+      # against the CUT bundle's own artifacts (bind-mounted at the fixed
+      # /boot/ paths the script expects) instead of reinventing it — the same
+      # QEMU boot-to-login assertions persistent-boot already runs against a
+      # normal (non-cut) build.
+      - name: Boot the freshly-cut bundle to a login prompt
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/dist/release-a/vmlinuz:/boot/vmlinuz:ro \
+            -v ${{ github.workspace }}/dist/release-a/initramfs-ovmx-slim.cpio.gz:/boot/initramfs-ovmx-slim.cpio.gz:ro \
+            -v ${{ github.workspace }}/dist/release-a/ovmx-distrib.img:/boot/ovmx-distrib.img:ro \
+            -v ${{ github.workspace }}/tests/qemu/test_distrib_boot.sh:/test.sh:ro \
+            ubuntu:24.04 \
+            bash -c "apt-get update -qq && apt-get install -y --no-install-recommends qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio >/dev/null 2>&1 && bash /test.sh"
 
   # -----------------------------------------------------------------------
   # Job 2b: PARTS 0.2 Demo E2E (vms-1c8, epic vms-2579/vms-5dd)

@@ -313,6 +313,30 @@ static void assign_data(struct node *dir, uint32_t *next_lbn)
  * Block writer
  * ================================================================ */
 
+/*
+ * master_build_time - the timestamp stamped into every mastered file's
+ * fh_created/fh_modified/fh_accessed (write_header() applies one value to
+ * every entry, not per-file real mtimes -- see build_tree() above, which
+ * only carries st_size out of lstat(), never st_mtime).
+ *
+ * Reproducibility (vms-d73, tools/cut-release.sh): time(NULL) would make this
+ * the one wall-clock difference between two otherwise byte-identical masters
+ * of the same staged tree. SOURCE_DATE_EPOCH (Dockerfile.bootable exports it
+ * from its own build-arg of the same name, default 0) is authoritative when
+ * set; a real release build passes the release commit's timestamp.
+ */
+static time_t master_build_time(void)
+{
+    const char *sde = getenv("SOURCE_DATE_EPOCH");
+    if (sde && sde[0] != '\0') {
+        char *end = NULL;
+        long v = strtol(sde, &end, 10);
+        if (end != sde && *end == '\0' && v >= 0)
+            return (time_t)v;
+    }
+    return time(NULL);
+}
+
 static int wr_block(int fd, uint32_t lbn, const void *buf)
 {
     off_t off = (off_t)lbn * VMSFS_BLOCK_SIZE;
@@ -582,7 +606,7 @@ static int do_master(const char *image, const char *label,
         return 1;
     }
 
-    time_t now = time(NULL);
+    time_t now = master_build_time();
     uint8_t zero[VMSFS_BLOCK_SIZE];
     memset(zero, 0, sizeof(zero));
 

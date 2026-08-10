@@ -192,6 +192,28 @@ static void walk_stage(const char *root, const char *reldir, struct pack_list *l
     closedir(d);
 }
 
+/*
+ * kitpack_build_time - the timestamp stamped into kh_build_time.
+ *
+ * Reproducibility (vms-d73, tools/cut-release.sh): a plain time(NULL) makes
+ * kh_build_time the one wall-clock byte difference between two otherwise
+ * byte-identical kit builds of the same tree. When SOURCE_DATE_EPOCH is set
+ * (Dockerfile.bootable exports it from its own build-arg of the same name,
+ * default 0) it is authoritative; a real build passes the release commit's
+ * timestamp, so the field stays honest instead of freezing at the epoch.
+ */
+static time_t kitpack_build_time(void)
+{
+    const char *sde = getenv("SOURCE_DATE_EPOCH");
+    if (sde && sde[0] != '\0') {
+        char *end = NULL;
+        long v = strtol(sde, &end, 10);
+        if (end != sde && *end == '\0' && v >= 0)
+            return (time_t)v;
+    }
+    return time(NULL);
+}
+
 static int entry_cmp(const void *a, const void *b)
 {
     const struct pack_entry *ea = a;
@@ -236,7 +258,7 @@ static int do_pack(const char *kitfile, const char *stagedir,
     snprintf(hdr.kh_producer, sizeof(hdr.kh_producer), "%s", producer);
     snprintf(hdr.kh_product_version, sizeof(hdr.kh_product_version), "%s",
              OVMX_PRODUCT_VERSION);
-    hdr.kh_build_time = (uint64_t)time(NULL);
+    hdr.kh_build_time = (uint64_t)kitpack_build_time();
     hdr.kh_file_count = (uint32_t)l.count;
     hdr.kh_index_offset = sizeof(struct ovmx_kit_header);
     hdr.kh_payload_offset = hdr.kh_index_offset +

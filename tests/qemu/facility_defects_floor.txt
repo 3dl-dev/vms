@@ -219,4 +219,18 @@
 # anchors the new test_syssvc_setprv suite's denial-path assertion (plus the two
 # raw-ioctl setprv assertions test_kmod_access already carries). See its own
 # entry in facility_defects.sh.
-82
+# Raised to 83 by vms-vx1's devtab-getdvi-userspace-alloc-dropped -- the
+# executive-R3 veracity gate (epic vms-6b8). The FIRST device-table entry whose
+# target is the USERSPACE C-API layer (libvms/syssvc/sys_device.c) rather than
+# the executive: every devtab entry above mutates kernel/vms_devtab.c, so its
+# gating check-4 red is satisfied by the raw-ioctl test_kmod_devtab regardless
+# of what the sys$getdvi translation does -- a C-API reader that silently
+# reverted to a per-process device view (the vms-dv1 fake class) would pass them
+# all. This entry mutates sys_device.c's own DVI$_DEVCHAR handler (drops the
+# DEV$M_ALL bit it OR's in from the executive's info->allocated) and scopes
+# suites_red to test_syssvc_getdvi ALONE -- the only suite that reaches the
+# executive's shared allocation through the shipped public sys$getdvi -- so the
+# control fires IFF the C API stops reflecting executive-owned state, making
+# INV-6 ("cannot silently revert to a per-process fake") a first-class firing
+# negctl at the C-API layer. See its own entry in facility_defects.sh.
+83

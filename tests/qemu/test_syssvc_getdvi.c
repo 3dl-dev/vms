@@ -251,6 +251,7 @@ int main(void)
     int alloc_during = 0;
     uint32_t st_during = opa0_alloc_state(&alloc_during);
     /* negctl: devtab-alloc-not-recorded */
+    /* negctl: devtab-getdvi-userspace-alloc-dropped */
     /* negctl-knockon: devtab-getdvi-devnam-status-wrong */
     /* negctl-knockon: bind-client-no-register */
     CHECK(st_during == SS$_NORMAL && alloc_during,

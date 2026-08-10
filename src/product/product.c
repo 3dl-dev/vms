@@ -572,7 +572,19 @@ static int do_show(int argc, char *argv[])
         } else {
             for (uint32_t i = 0; i < db.db_record_count; i++) {
                 struct ovmx_product_record *pr = &db.db_records[i];
-                printf("%-36s %-11s %s\n", pr->pr_name, "Full LP",
+                /* The PRODUCT column carries name AND version as one
+                 * identifier -- matching real PCSI's own SHOW PRODUCT shape
+                 * (e.g. "VSI I64VMS OPENVMS V8.4-2L1") and this file's own
+                 * synthesize_fallback path just above, which already embeds
+                 * ovmx_product_version() the same way. Before this fix the
+                 * real (non-fallback) path printed pr_name alone, so a
+                 * PRODUCT SHOW PRODUCT against an actually-installed system
+                 * could never show WHICH version was installed or whether
+                 * an upgrade had changed it -- found building vms-f05's
+                 * install->UPGRADE->boot gate, which needs exactly that. */
+                char namever[OVMX_PRODDB_NAME_MAX + 32];
+                snprintf(namever, sizeof(namever), "%s %s", pr->pr_name, pr->pr_version);
+                printf("%-36s %-11s %s\n", namever, "Full LP",
                        pr->pr_state == OVMX_PRODUCT_STATE_INSTALLED ? "Installed" : "Unknown");
             }
             printf("----------------------------------- ----------- -----------\n");
@@ -599,7 +611,10 @@ static int do_show(int argc, char *argv[])
             struct ovmx_product_record *pr = &db.db_records[i];
             time_t it = (time_t)pr->pr_install_time;
             struct tm *tmv = localtime(&it);
-            printf("%-36s %-11s %-11s %2d-%s-%04d\n", pr->pr_name, "Full LP",
+            /* Same name+version identifier as SHOW PRODUCT above. */
+            char namever[OVMX_PRODDB_NAME_MAX + 32];
+            snprintf(namever, sizeof(namever), "%s %s", pr->pr_name, pr->pr_version);
+            printf("%-36s %-11s %-11s %2d-%s-%04d\n", namever, "Full LP",
                    pr->pr_state == OVMX_PRODUCT_STATE_INSTALLED ? "Installed" : "Unknown",
                    tmv->tm_mday, pd_months[tmv->tm_mon], 1900 + tmv->tm_year);
         }

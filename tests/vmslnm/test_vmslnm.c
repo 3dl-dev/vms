@@ -255,50 +255,71 @@ static void test_system_table_no_fallback(void)
 
 /* ------------------------------------------------------------------ */
 /* Test: iterative translation (logical pointing to another logical)   */
+/*                                                                      */
+/* vms-240: drives the unified filespec-aware driver lnm_translate_     */
+/* filespec() (which replaced the removed, filespec-blind iterative     */
+/* translator) and proves it (a) composes a non-terminal                */
+/* A -> B -> C chain through every hop and (b) STOPS at a terminal      */
+/* translation instead of recursing into what looks like a further      */
+/* name.                                                                */
 /* ------------------------------------------------------------------ */
 static void test_iterative_translation(void)
 {
-    printf("\n--- iterative translation ---\n");
+    printf("\n--- iterative translation (lnm_translate_filespec) ---\n");
 
     lnm_manager_t *mgr = lnm_init();
     if (!mgr) { check(0, "lnm_init for iterative"); return; }
 
     char result[256];
     uint16_t result_len = 0;
+    uint32_t attrs = 0;
     uint32_t st;
 
-    /* A -> B -> C (chain of logicals) */
+    /* (a) NON-terminal chain A -> B -> C -> "/usr/local/vms". */
     st = lnm_create(mgr, LNM_PROCESS_TABLE, "FINAL$DIR", "/usr/local/vms", 0, LNM_MODE_USER);
     check($VMS_STATUS_SUCCESS(st), "create FINAL$DIR");
-
-    /* B points to C (FINAL$DIR) */
     st = lnm_create(mgr, LNM_PROCESS_TABLE, "MID$DIR", "FINAL$DIR", 0, LNM_MODE_USER);
     check($VMS_STATUS_SUCCESS(st), "create MID$DIR -> FINAL$DIR");
-
-    /* A points to B (MID$DIR) */
     st = lnm_create(mgr, LNM_PROCESS_TABLE, "START$DIR", "MID$DIR", 0, LNM_MODE_USER);
     check($VMS_STATUS_SUCCESS(st), "create START$DIR -> MID$DIR");
 
-    /* Iterative translate: should follow the chain */
-    st = lnm_translate_iterative(mgr, LNM_PROCESS_TABLE,
-                                  "START$DIR", result, sizeof(result),
-                                  &result_len);
-    check($VMS_STATUS_SUCCESS(st), "iterative translate START$DIR");
-    if ($VMS_STATUS_SUCCESS(st)) {
-        result[result_len] = '\0';
-        /* Should resolve to FINAL$DIR or /usr/local/vms depending on impl */
-        check(result_len > 0, "iterative result non-empty");
-    }
-
-    /* Non-iterative: should return MID$DIR directly */
-    uint32_t attrs = 0;
+    /* The unified driver composes through ALL hops to the final value. */
     result_len = 0;
-    st = lnm_translate(mgr, LNM_PROCESS_TABLE,
-                       "START$DIR", result, sizeof(result),
-                       &result_len, &attrs);
-    check($VMS_STATUS_SUCCESS(st), "non-iterative translate START$DIR");
+    st = lnm_translate_filespec(mgr, LNM_PROCESS_TABLE, "START$DIR",
+                                result, sizeof(result), &result_len, &attrs);
+    check($VMS_STATUS_SUCCESS(st), "filespec translate START$DIR");
     result[result_len] = '\0';
-    check(strcmp(result, "MID$DIR") == 0, "non-iterative gives first-level value MID$DIR");
+    check(strcmp(result, "/usr/local/vms") == 0,
+          "non-terminal chain composes A->B->C to /usr/local/vms");
+
+    /* Single-level lnm_translate still returns only the first hop. */
+    result_len = 0;
+    st = lnm_translate(mgr, LNM_PROCESS_TABLE, "START$DIR",
+                       result, sizeof(result), &result_len, &attrs);
+    check($VMS_STATUS_SUCCESS(st), "single-level translate START$DIR");
+    result[result_len] = '\0';
+    check(strcmp(result, "MID$DIR") == 0, "single-level gives first hop MID$DIR");
+
+    /* (b) TERMINAL translation stops the chain at itself. TSTOP is terminal
+     * and translates to TNEXT, which itself translates to TFINAL. Honoring
+     * LNM$M_TERMINAL, the driver returns TNEXT and does NOT recurse to TFINAL. */
+    st = lnm_create(mgr, LNM_PROCESS_TABLE, "TFINAL", "final-value", 0, LNM_MODE_USER);
+    check($VMS_STATUS_SUCCESS(st), "create TFINAL");
+    st = lnm_create(mgr, LNM_PROCESS_TABLE, "TNEXT", "TFINAL", 0, LNM_MODE_USER);
+    check($VMS_STATUS_SUCCESS(st), "create TNEXT -> TFINAL");
+    st = lnm_create(mgr, LNM_PROCESS_TABLE, "TSTOP", "TNEXT",
+                    LNM_ATTR_TERMINAL, LNM_MODE_USER);
+    check($VMS_STATUS_SUCCESS(st), "create TSTOP -> TNEXT (terminal)");
+
+    result_len = 0;
+    st = lnm_translate_filespec(mgr, LNM_PROCESS_TABLE, "TSTOP",
+                                result, sizeof(result), &result_len, &attrs);
+    check($VMS_STATUS_SUCCESS(st), "filespec translate TSTOP");
+    result[result_len] = '\0';
+    check(strcmp(result, "TNEXT") == 0,
+          "terminal translation stops at TNEXT (does NOT recurse to TFINAL)");
+    check(strcmp(result, "final-value") != 0,
+          "terminal translation did NOT chain through to final-value");
 
     lnm_shutdown(mgr);
 }

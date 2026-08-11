@@ -33,3 +33,20 @@ set_tests_properties(vmsrms_concealed_rooted PROPERTIES
     LABELS "unit;rms;lnm"
     TIMEOUT 30
 )
+
+# vms-240: iterative device-field LNM resolution through $PARSE and the unified
+# TERMINAL-honoring driver (lnm_translate_filespec). Host LNM$PROCESS, no
+# /dev/vms needed.
+add_executable(test_iterative_translation test_iterative_translation.c)
+target_include_directories(test_iterative_translation PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_iterative_translation PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_iterative_translation COMMAND test_iterative_translation)
+set_tests_properties(vmsrms_iterative_translation PROPERTIES
+    LABELS "unit;rms;lnm"
+    TIMEOUT 30
+)

@@ -407,7 +407,7 @@ static int vmsfs_resolve_device_r(const char *device, char *linux_dir,
                 return vmsfs_to_linux_path_one(equiv, linux_dir, dir_size);
             }
 
-            /* Equivalence is another logical or device name — recurse.
+            /* Equivalence is another logical or device name.
              * Uses the same single-value lnm_translate() above, so a
              * search-list device's OWN equivalences are already the
              * per-member specs the fan-out substituted; there is no second
@@ -416,6 +416,35 @@ static int vmsfs_resolve_device_r(const char *device, char *linux_dir,
             if (elen > 0 && equiv[elen - 1] == ':') {
                 equiv[elen - 1] = '\0';  /* Strip trailing colon */
             }
+
+            /*
+             * vms-240: honor LNM$M_TERMINAL. A terminal translation is the
+             * FINAL equivalence -- it must NOT be re-translated as a further
+             * logical name (VSI OpenVMS System Services Reference, $TRNLNM
+             * item LNM$_ATTRIBUTES / LNM$M_TERMINAL; VSI OpenVMS User's
+             * Manual, iterative translation stops at a terminal name). It may
+             * still name a PHYSICAL device (e.g. SYS$SYSDEVICE -> DKA0:,
+             * seeded terminal), so resolve it once against the device table --
+             * that is device resolution, not logical-name translation -- but
+             * never recurse back into logical-name chaining. Before vms-240
+             * this flag was ignored on the file path, which is the only reason
+             * the always-TERMINAL DEFINE default (now fixed) did not already
+             * break device-logical chains.
+             */
+            if (attrs & LNM_ATTR_TERMINAL) {
+                char term_dev[VMSFS_MAX_DEVICE + 1];
+                strncpy(term_dev, equiv, sizeof(term_dev) - 1);
+                term_dev[sizeof(term_dev) - 1] = '\0';
+                str_upcase(term_dev);
+                if (vmsfs_device_resolve(term_dev, linux_dir, dir_size) == SS$_NORMAL)
+                    return SS$_NORMAL;
+                /* Terminal name that is not a known device: honest fallback,
+                 * no logical-name chaining past the terminal translation. */
+                strncpy(linux_dir, vms_default_root, dir_size - 1);
+                linux_dir[dir_size - 1] = '\0';
+                return SS$_NORMAL;
+            }
+
             return vmsfs_resolve_device_r(equiv, linux_dir, dir_size, depth + 1);
         }
     }

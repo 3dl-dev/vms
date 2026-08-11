@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
 #include <unistd.h>
 #include <errno.h>
@@ -19,6 +20,59 @@
 #include "ssdef.h"
 #include "vms/logical.h"
 #include "vmsfs/filespec.h"
+
+/*
+ * ci_word_present - case-insensitive test for keyword `word` inside the
+ * /TRANSLATION_ATTRIBUTES value string (a single keyword like "TERMINAL" or a
+ * parenthesised list like "(CONCEALED,TERMINAL)"). Bounded on both sides so
+ * "TERMINAL" does not match inside a longer token.
+ */
+static int ci_word_present(const char *hay, const char *word)
+{
+    size_t wl = strlen(word);
+    for (const char *p = hay; *p; p++) {
+        if (strncasecmp(p, word, wl) == 0) {
+            char before = (p == hay) ? '\0' : p[-1];
+            char after = p[wl];
+            int lb = !(isalnum((unsigned char)before) || before == '_');
+            int ra = !(isalnum((unsigned char)after) || after == '_');
+            if (lb && ra)
+                return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * lnm_attrs_from_qualifier - LNM$M_* translation attributes for DEFINE/ASSIGN,
+ * from the /TRANSLATION_ATTRIBUTES qualifier.
+ *
+ * The VMS default is NON-terminal, non-concealed: a plain DEFINE/ASSIGN
+ * associates NO translation attributes with the logical, so its equivalence
+ * remains subject to further (iterative) logical-name translation (VSI OpenVMS
+ * DCL Dictionary, DEFINE /TRANSLATION_ATTRIBUTES). /TRANSLATION_ATTRIBUTES=
+ * TERMINAL marks the logical terminal (LNM$M_TERMINAL -- iterative translation
+ * stops at it); =CONCEALED marks a concealed-device logical (LNM$M_CONCEALED).
+ *
+ * vms-240: this REPLACES the previous unconditional LNM_ATTR_TERMINAL, which
+ * was the OPPOSITE of the VMS default. It only ever "worked" because both
+ * iterative translators (the now-removed one in src/vmslnm and
+ * vmsfs_resolve_device_r) ignored the TERMINAL flag; the moment vms-240 makes
+ * them honor it, an always-terminal default would break every A -> B -> C
+ * DEFINE chain, so the default MUST be non-terminal.
+ */
+static uint32_t lnm_attrs_from_qualifier(struct dcl_command *cmd)
+{
+    uint32_t attrs = 0;
+    const char *ta = dcl_qualifier_value(cmd, "TRANSLATION_ATTRIBUTES");
+    if (ta && ta[0]) {
+        if (ci_word_present(ta, "TERMINAL"))
+            attrs |= LNM_ATTR_TERMINAL;
+        if (ci_word_present(ta, "CONCEALED"))
+            attrs |= LNM_ATTR_CONCEALED;
+    }
+    return attrs;
+}
 
 /*
  * ASSIGN - Assign a logical name.
@@ -95,7 +149,8 @@ int cmd_assign(struct dcl_command *cmd)
     lnm_manager_t *mgr = lnm_get_manager();
     if (mgr) {
         uint32_t status = lnm_create(mgr, table, upper_name, equiv,
-                                     LNM_ATTR_TERMINAL, LNM_MODE_USER);
+                                     lnm_attrs_from_qualifier(cmd),
+                                     LNM_MODE_USER);
         if (status != SS$_NORMAL && status != SS$_SUPERSEDE) {
             dcl_error("DCL", 2, "LNMFAIL",
                       "failed to create logical name \\%s\\", upper_name);
@@ -170,7 +225,8 @@ int cmd_define(struct dcl_command *cmd)
     lnm_manager_t *mgr = lnm_get_manager();
     if (mgr) {
         uint32_t status = lnm_create_multi(mgr, table, upper_name, equivs,
-                                           num_equiv, LNM_ATTR_TERMINAL,
+                                           num_equiv,
+                                           lnm_attrs_from_qualifier(cmd),
                                            LNM_MODE_USER);
         if (status != SS$_NORMAL && status != SS$_SUPERSEDE) {
             dcl_error("DCL", 2, "LNMFAIL",

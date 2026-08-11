@@ -215,114 +215,188 @@ uint32_t lnm_translate(lnm_manager_t *mgr, const char *table_name,
 }
 
 /*
- * lnm_translate_iterative - Translate a logical name iteratively.
+ * lnm_translate_filespec - the ONE filespec-aware iterative logical-name
+ * translation driver (vms-240).
  *
- * Translates the logical name, then if the result is itself a logical
- * name, translates again, up to LNM_MAX_DEPTH times.
+ * This replaces the filespec-BLIND iterative translator removed here, which
+ * fed the WHOLE input string to lnm_translate() at every hop and used an ad-hoc
+ * "stop if it contains '/' or starts with '.'" heuristic to guess when a
+ * translation had turned into a path -- and, worse, IGNORED the LNM$M_TERMINAL
+ * translation attribute so a terminal logical kept on translating. (That path only
+ * appeared to work because the file-side resolver, vmsfs_resolve_device_r(),
+ * also ignored LNM$M_TERMINAL; vms-240 makes both honor it.)
  *
- * Iteration stops when:
- *   - The result is not a logical name (not found in any table)
- *   - The LNM_ATTR_TERMINAL attribute is set on the entry
- *   - Maximum depth (LNM_MAX_DEPTH) is exceeded
+ * Semantics, grounded in public VSI OpenVMS documentation:
  *
- * Uses the LNM$FILE_DEV search list at each level.
+ *   - Filespec-aware stripping. Only the leading DEVICE field -- the text up
+ *     to the first device colon, after an optional "node::" prefix -- is a
+ *     candidate for logical-name translation. The directory/name/type/version
+ *     tail is preserved verbatim and re-attached to the final device. A bare
+ *     string carrying no filespec punctuation is translated whole (the plain
+ *     A -> B -> C logical chain).
  *
- * @mgr:           Logical name manager
- * @table_name:    Initial table to search (or LNM$FILE_DEV)
- * @logical_name:  Name to translate
- * @result:        Buffer to receive the final equivalence string
- * @result_size:   Size of the result buffer
- * @result_length: Receives the length of the result (may be NULL)
+ *   - LNM$M_TERMINAL is honored. A translation carrying LNM_ATTR_TERMINAL is
+ *     the FINAL equivalence: iteration stops and the value is NOT re-fed as a
+ *     further logical name (VSI OpenVMS System Services Reference, $TRNLNM
+ *     item code LNM$_ATTRIBUTES / mask LNM$M_TERMINAL; VSI OpenVMS User's
+ *     Manual, "Logical Name Translation" -- iterative translation stops at a
+ *     terminal name).
  *
- * Returns SS$_NORMAL on success, SS$_NOLOGNAM if the initial name
- * is not found, SS$_RESULTOVF if max depth is exceeded.
+ *   - LNM$M_CONCEALED is honored. A concealed device logical NAMES a device
+ *     and is kept in the file specification rather than replaced by its
+ *     equivalence (VSI OpenVMS User's Manual, "Concealed-Device Logical
+ *     Names"). Concealment ends device substitution exactly like a terminal
+ *     translation, and the concealed NAME -- not its equivalence -- stays in
+ *     the result. (Rooted-directory COMPOSITION of a concealed device is a
+ *     filespec-level concern handled in src/vmsfs; this driver only decides
+ *     where device substitution stops.)
+ *
+ *   - Only a device-shaped equivalence substitutes. A hop that resolves to a
+ *     directory-bearing spec ("dev:[dir]") is left to the filespec layer, not
+ *     folded into the device field here; iteration stops keeping the last
+ *     bare device name. A "dev:" equivalence (no directory) substitutes.
+ *
+ *   - Depth-guarded (LNM_MAX_DEPTH) against a translation loop.
+ *
+ * @table_name:    table/search-list to translate through (normally
+ *                 LNM$FILE_DEV); passed straight to lnm_translate().
+ * @attributes:    if non-NULL, receives the attributes of the translation
+ *                 that ended the chain (0 if nothing translated).
+ *
+ * `result` always receives a usable filespec: the fully substituted spec, or
+ * the original input when nothing translated. Returns SS$_NORMAL, SS$_BADPARAM
+ * for a bad argument, or SS$_RESULTOVF if LNM_MAX_DEPTH is exceeded (result
+ * still holds the best-effort partial substitution).
  */
-uint32_t lnm_translate_iterative(lnm_manager_t *mgr, const char *table_name,
-                                  const char *logical_name, char *result,
-                                  size_t result_size, uint16_t *result_length)
+static void lnm_copy_out(const char *s, char *result, size_t result_size,
+                         uint16_t *result_length)
 {
-    if (!mgr || !logical_name || !result || result_size == 0)
+    size_t l = strlen(s);
+    if (l >= result_size)
+        l = result_size - 1;
+    memcpy(result, s, l);
+    result[l] = '\0';
+    if (result_length)
+        *result_length = (uint16_t)l;
+}
+
+uint32_t lnm_translate_filespec(lnm_manager_t *mgr, const char *table_name,
+                                const char *filespec, char *result,
+                                size_t result_size, uint16_t *result_length,
+                                uint32_t *attributes)
+{
+    if (attributes)
+        *attributes = 0;
+    if (result_length)
+        *result_length = 0;
+    if (!mgr || !filespec || !result || result_size == 0)
         return SS$_BADPARAM;
 
-    char current[LNM_MAX_VALUE + 1];
-    char next_val[LNM_MAX_VALUE + 1];
-    uint32_t attrs;
+    /* Optional "node::" prefix -- preserved, never translated. */
+    char node_prefix[LNM_MAX_VALUE + 1];
+    node_prefix[0] = '\0';
+    const char *scan = filespec;
+    const char *dcolon = strstr(filespec, "::");
+    if (dcolon) {
+        size_t np = (size_t)(dcolon - filespec) + 2;   /* include "::" */
+        if (np >= sizeof(node_prefix))
+            np = sizeof(node_prefix) - 1;
+        memcpy(node_prefix, filespec, np);
+        node_prefix[np] = '\0';
+        scan = dcolon + 2;
+    }
 
-    strncpy(current, logical_name, sizeof(current) - 1);
+    /* Device field = text up to the first device colon in `scan`. */
+    char devname[LNM_MAX_VALUE + 1];
+    const char *tail = "";       /* everything after the device colon */
+    int had_colon = 0;
+    const char *colon = strchr(scan, ':');
+    if (colon) {
+        size_t dn = (size_t)(colon - scan);
+        if (dn >= sizeof(devname))
+            dn = sizeof(devname) - 1;
+        memcpy(devname, scan, dn);
+        devname[dn] = '\0';
+        tail = colon + 1;
+        had_colon = 1;
+    } else {
+        /* No device colon: a filespec with directory/name/type punctuation
+         * has no device to translate -- return it unchanged. A bare token is
+         * translated whole (the A -> B -> C chain). */
+        if (strpbrk(scan, "[]<>.;/") != NULL) {
+            lnm_copy_out(filespec, result, result_size, result_length);
+            return SS$_NORMAL;
+        }
+        strncpy(devname, scan, sizeof(devname) - 1);
+        devname[sizeof(devname) - 1] = '\0';
+    }
+
+    if (devname[0] == '\0') {
+        lnm_copy_out(filespec, result, result_size, result_length);
+        return SS$_NORMAL;
+    }
+
+    char current[LNM_MAX_VALUE + 1];
+    strncpy(current, devname, sizeof(current) - 1);
     current[sizeof(current) - 1] = '\0';
 
-    for (int depth = 0; depth < LNM_MAX_DEPTH; depth++) {
-        uint16_t len = 0;
-        attrs = 0;
-
-        uint32_t status = lnm_translate(mgr, table_name, current,
-                                         next_val, sizeof(next_val),
-                                         &len, &attrs);
-
-        if (status != SS$_NORMAL && status != SS$_SUPERSEDE) {
-            if (depth == 0) {
-                /* The very first name was not found */
-                return SS$_NOLOGNAM;
-            }
-            /*
-             * Previous translation gave us 'current' which is not
-             * itself a logical name -- that is the final value.
-             */
-            size_t curlen = strlen(current);
-            if (curlen >= result_size)
-                curlen = result_size - 1;
-            memcpy(result, current, curlen);
-            result[curlen] = '\0';
-            if (result_length)
-                *result_length = (uint16_t)curlen;
-            return SS$_NORMAL;
+    uint32_t last_attr = 0;
+    int overflow = 0;
+    for (int depth = 0; ; depth++) {
+        if (depth >= LNM_MAX_DEPTH) {
+            overflow = 1;
+            break;
         }
 
-        /* Got a translation */
-        if (attrs & LNM_ATTR_TERMINAL) {
-            /* Terminal -- do not translate further */
-            size_t vlen = strlen(next_val);
-            if (vlen >= result_size)
-                vlen = result_size - 1;
-            memcpy(result, next_val, vlen);
-            result[vlen] = '\0';
-            if (result_length)
-                *result_length = (uint16_t)vlen;
-            return SS$_NORMAL;
+        char next[LNM_MAX_VALUE + 1];
+        uint16_t nlen = 0;
+        uint32_t attr = 0;
+        uint32_t st = lnm_translate(mgr, table_name, current, next,
+                                    sizeof(next), &nlen, &attr);
+        if (st != SS$_NORMAL && st != SS$_SUPERSEDE)
+            break;               /* current is not a logical -> final device */
+        if (nlen >= sizeof(next))
+            nlen = sizeof(next) - 1;
+        next[nlen] = '\0';
+        last_attr = attr;
+
+        if (attr & LNM_ATTR_CONCEALED)
+            break;               /* concealed: keep the NAME (current) */
+
+        if (strpbrk(next, "[]<>") != NULL) {
+            /* Directory-bearing equivalence: not a plain device
+             * substitution -- leave the device to the filespec layer and stop
+             * with the last bare device name in `current`. */
+            break;
         }
 
-        /* The result might be another logical name; continue iterating */
-        strncpy(current, next_val, sizeof(current) - 1);
+        strncpy(current, next, sizeof(current) - 1);
         current[sizeof(current) - 1] = '\0';
 
-        /*
-         * Heuristic: if the result contains a '/' or starts with '.',
-         * it is a filesystem path, not a logical name. Stop iterating.
-         */
-        if (strchr(current, '/') != NULL || current[0] == '.') {
-            size_t curlen = strlen(current);
-            if (curlen >= result_size)
-                curlen = result_size - 1;
-            memcpy(result, current, curlen);
-            result[curlen] = '\0';
-            if (result_length)
-                *result_length = (uint16_t)curlen;
-            return SS$_NORMAL;
-        }
+        if (attr & LNM_ATTR_TERMINAL)
+            break;               /* terminal: `next` is final, no re-translate */
+        if (strchr(current, ':') != NULL)
+            break;               /* "dev:" concrete device -> stop */
     }
 
-    /* Max depth exceeded -- return whatever we have */
-    {
-        size_t curlen = strlen(current);
-        if (curlen >= result_size)
-            curlen = result_size - 1;
-        memcpy(result, current, curlen);
-        result[curlen] = '\0';
-        if (result_length)
-            *result_length = (uint16_t)curlen;
+    if (attributes)
+        *attributes = last_attr;
+
+    /* Reassemble node_prefix + final-device + tail. `current` is a bare name
+     * or a "dev:" form (never directory-bearing -- we stop before adopting
+     * one), so normalise to exactly one device colon before the tail. */
+    char out[LNM_MAX_VALUE * 2 + 8];
+    if (had_colon) {
+        size_t cl = strlen(current);
+        if (cl > 0 && current[cl - 1] == ':')
+            current[cl - 1] = '\0';    /* "DKA100:" -> "DKA100" */
+        snprintf(out, sizeof(out), "%s%s:%s", node_prefix, current, tail);
+    } else {
+        snprintf(out, sizeof(out), "%s%s", node_prefix, current);
     }
 
-    return SS$_RESULTOVF;
+    lnm_copy_out(out, result, result_size, result_length);
+    return overflow ? SS$_RESULTOVF : SS$_NORMAL;
 }
 
 /*

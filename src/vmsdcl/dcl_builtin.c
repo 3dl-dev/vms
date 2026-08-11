@@ -232,19 +232,26 @@ static const struct dcl_qual_def q_none[] = {
 /* Logical-name placement qualifiers, shared by ASSIGN/DEFINE/DEASSIGN. The
  * handlers read SYSTEM/GROUP/JOB (and treat their absence as /PROCESS, the
  * VMS default), so /PROCESS is listed as the explicit form of that default. */
+/* /TRANSLATION_ATTRIBUTES=(keyword,...) selects the LNM$M_* translation
+ * attributes (CONCEALED, TERMINAL) of the created logical (VSI OpenVMS DCL
+ * Dictionary, DEFINE /TRANSLATION_ATTRIBUTES). Absent it, the logical has NO
+ * translation attributes -- the VMS default the handlers now honor (vms-240):
+ * non-terminal, so its equivalence stays subject to iterative translation. */
 static const struct dcl_qual_def q_assign[] = {
-    { "PROCESS", CDU_VT_NONE,  0,            NULL, NULL },
-    { "SYSTEM",  CDU_VT_NONE,  0,            NULL, NULL },
-    { "GROUP",   CDU_VT_NONE,  0,            NULL, NULL },
-    { "JOB",     CDU_VT_NONE,  0,            NULL, NULL },
-    { "TABLE",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "PROCESS",                 CDU_VT_NONE,  0,            NULL, NULL },
+    { "SYSTEM",                  CDU_VT_NONE,  0,            NULL, NULL },
+    { "GROUP",                   CDU_VT_NONE,  0,            NULL, NULL },
+    { "JOB",                     CDU_VT_NONE,  0,            NULL, NULL },
+    { "TABLE",                   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "TRANSLATION_ATTRIBUTES",  CDU_VT_LIST,  0,            NULL, NULL },
     QUAL_END
 };
 static const struct dcl_qual_def q_define[] = {
-    { "PROCESS", CDU_VT_NONE, 0, NULL, NULL },
-    { "SYSTEM",  CDU_VT_NONE, 0, NULL, NULL },
-    { "GROUP",   CDU_VT_NONE, 0, NULL, NULL },
-    { "JOB",     CDU_VT_NONE, 0, NULL, NULL },
+    { "PROCESS",                 CDU_VT_NONE, 0, NULL, NULL },
+    { "SYSTEM",                  CDU_VT_NONE, 0, NULL, NULL },
+    { "GROUP",                   CDU_VT_NONE, 0, NULL, NULL },
+    { "JOB",                     CDU_VT_NONE, 0, NULL, NULL },
+    { "TRANSLATION_ATTRIBUTES",  CDU_VT_LIST, 0, NULL, NULL },
     QUAL_END
 };
 static const struct dcl_qual_def q_deassign[] = {

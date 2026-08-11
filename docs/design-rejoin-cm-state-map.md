@@ -140,4 +140,109 @@ This is the exact shape of "a CM phase OVMX never performs": not another byte in
 but **the joiner's participation in the coordinator's clusterwide connectivity verification
 with ALL members**, which OVMX only ever exercises against the coordinator.
 
-<!-- WIRE-CONFIRMATION SECTION: filled from the oracle/live flow analysis below. -->
+## 4. Wire confirmation (GROUNDED this session, `vms-f61`)
+
+### 4.1 The SUCCESS oracle readmission IS 3-party and MEMBER-DRIVEN
+
+Flow analysis of `vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap` (VAX3 rejoiner
+`08:00:2b:11:22:33`; VAX1 `aa:00:04:00:01:04`; VAX2 `08:00:2b:78:56:b9`) shows **two
+complete, independent, symmetric bring-up sequences run sequentially**, one per member:
+
+- **VAX1↔VAX3** (f1176–1218): **VAX1 opens** the `VMS$VAXcluster` connect (f1200) → VAX3
+  answers as TARGET (f1201) → VAX1 op00 (f1202) → **VAX3 op02** (f1204) → **VAX1 op03**
+  (f1206) → op06/op07 (f1213–1217).
+- **VAX2↔VAX3** (f1224–1263): **VAX2 opens** (f1246) → VAX3 answers (f1247) → VAX2 op00
+  (f1248) → **VAX3 op02** (f1250) → **VAX2 op03** (f1252) → op06/op07 (f1259–1262).
+- **Then the two established members reconcile the new membership with each other** via
+  `op0c` (f1308 VAX1→VAX2 70 B, f1312 VAX2→VAX1 526 B) amid all-pairs `op0a`.
+
+VAX3 originates **no** outbound `VMS$VAXcluster` connect anywhere; both members open toward
+it and VAX3 answers each as TARGET. VAX3 sends op02 to **VAX1 first**, then VAX2, and **both
+members independently run the full op02/op03 exchange.** Admission requires VAX3 to be
+independently admitted by **both** members and then reconciled between them (`op0c`) — a
+three-party protocol, exactly the Rule of Total Connectivity (p. 7-39) and the FORM/JOIN
+connectivity dialogue (pp. 7-34/7-37/7-39).
+
+**Corrected opcode reading (supersedes the §4(O.10) vocabulary for this window):** there is
+**no distinct `op04` value at abs[60]**. The member's "reciprocation" the daemon waits for
+is **`op03` — the member's COMMIT on the connection *it* opened** (Phase 2, "point of no
+return," pp. 7-41/7-42). op06/op07 close the per-member handshake; `op0c` is the
+member↔member membership reconciliation.
+
+### 4.2 The OVMX rejoin — reaches both members, admitted by neither (GROUNDED, daemon summary)
+
+Same identity/pod first-join-vs-rejoin bracket (`vaxlab-1`, identity `OVMA60`,
+`scsd-a63V1.log` first-join vs `scsd-a63V2rejoin.log` rejoin), read from the daemon's own
+per-peer exit summary:
+
+| per-peer counter | first-join (SUCCESS, `XITDONE=1`) | rejoin (FAIL, `XITDONE=0`) |
+|---|---|---|
+| `cm_responses` (M1026 / VAX1) | **76 / 151** | **0 / 0** |
+| `cm_config` | YES | no |
+| `vaxcluster_member` | CONNECTED(reached-OPEN) | no |
+| VC / channel / dir | OPEN / UP / YES | OPEN / UP / YES |
+
+Both members reciprocate the CM dialogue on the first join and **neither** does on the
+rejoin, with the **same identity on the same pod**. OVMX *does* reach both members at
+VC/channel/directory level and *does* drive op-6 + op 0x02 REJOIN toward both — so the
+"OVMX only talks to the coordinator" hypothesis (§3) is **REFUTED**. The failure is that the
+members will not engage the CM JOIN dialogue for a **returning** identity.
+
+### 4.3 Candidate causes REFUTED this session (kept, so they are not re-chased)
+
+- **Quorum self-suspend — NOT the cause.** OVMX logs `present_votes 1→0 → quorum LOST
+  (suspend + wait)` on the rejoin — but the **identical** benign 1→0 flip appears on the
+  SUCCESSFUL first-join (`scsd-a63V1.log` 02:32:34.028→.102), which then reaches `XITDONE`
+  170 ms later. The quorum flip is a transient, not the blocker.
+- **`remote_conid=0x00000000` / `connect_sent=0` — NOT anomalies.** Both appear on the
+  successful first-join's per-peer summary too. OVMX answers member-driven connects
+  (`CONNECT_REQ=39 received, connect_sent=0`) on both paths; that is the oracle's topology
+  (members open), not a defect.
+- **Stale `incarnation_time` — NOT the live cause.** `ovmx_incarnation_time()` reads
+  `CLOCK_REALTIME` at nanosecond resolution per process start, so every rejoin presents a
+  **fresh** [66:74] incarnation. The vms-2f3 live-incarnation fix is present and working;
+  it is necessary-but-not-sufficient. (Its own code comment, `scs_start.c:155-164`, records
+  the abandon that a *frozen* incarnation caused — the member reusing OVMX's old System
+  Block and its VC sequence state — which no longer applies since the value is now live.)
+- **"OVMX ignores the non-coordinator" — REFUTED** (§4.2): OVMX reaches and drives both.
+
+## 5. Where the frontier stands, and the responsible next step
+
+The rejoin blocker is the same one §4(O.20) reached, now grounded from two more angles: with
+the wire delivery clean (recv_seq unfrozen, op 0x02 delivered in-order, REJOIN form,
+incarnation fresh, both members reached), **the established members still run zero of the
+member-driven per-member op02/op03 JOIN handshakes for a returning identity** — they
+reconcile *among themselves* (`op0c`) but do not admit OVMX. On a first join, with an
+identity the cluster has never held, both members run the full handshake and OVMX joins.
+
+Per the book this is the member deciding, for a node whose CSB it has held, between
+**re-admitting it as a fresh JOIN** (p. 7-24 DEAD → p. 7-25 "a new CSB is created for it just
+as if it were joining the cluster for the first time") and treating the return as some other
+transition. **What OVMX must present so that every member runs the fresh per-member JOIN
+handshake — not just the coordinator, and not a member↔member reconciliation that excludes
+OVMX — is the open frontier.** The oracle's shape names the target precisely: OVMX must
+elicit, from **each** member independently, that member opening its `VMS$VAXcluster`
+connection to OVMX and driving op00→(OVMX op02)→**op03 commit** on it, culminating in the
+members' `op0c` reconciliation *including* OVMX.
+
+**Discipline (why no speculative wire change ships here).** Every remaining lever is a wire
+behaviour toward a live VAX, and OVMX's own code records that an ungrounded control frame in
+this exact region has crashed real VAX nodes and frozen `recv_seq` (`scsd.c`
+`cm_response_shape`; the `vms-760` runt precedent; §4(O.19)/§4(O.20)). The next increment must
+be an **isolation experiment**, not a guess: instrument, per member, whether that member
+opens a fresh `VMS$VAXcluster` connect to OVMX after OVMX's fresh-incarnation START and
+whether OVMX's answer reaches the state on which the member gates its op02/op03 — i.e. pin
+whether the member is running a JOIN transition for OVMX at all, or a member↔member
+transition that leaves OVMX out. That experiment, grounded against the oracle's two
+per-member handshakes, is what turns "the members do not engage" into a named, fixable state.
+
+### 5.1 First increment shipped by `vms-f61`
+
+A **safe, log-only, kill-switched** readmission diagnostic (`SCSD-I-READMITMAP`,
+`OVMX_NO_READMITMAP=1` to silence) that emits, at exit, per member: whether OVMX presented a
+fresh incarnation, whether that member opened a `VMS$VAXcluster` connect to OVMX, the
+per-member `cm_responses` / `op03`-commit count, and the readmission verdict. It ships no
+wire change (guard 8: the working first-join path is byte-unchanged), with a fail-pre/pass-post
+unit test, and a live lab bracket re-grounding the relocated frontier (below). It exists so
+the next isolation is one log line, not another pcap dig.
+

@@ -10168,6 +10168,56 @@ static void test_rejoin_op9_stamps_our_own_incarnation(void)
     (void)unsetenv("OVMX_CREDIT_NO_INCARN_ECHO");
 }
 
+/*
+ * vms-f61 (spec §4(O.21)): the READMISSION-MAP verdict names, per member, whether
+ * that member ran the per-member JOIN handshake for a (re)joining node. The
+ * frontier state is NO-ENGAGE: transport up, but cm_responses==0 -- the members
+ * do not engage the CM JOIN for a returning identity. This is the fail-pre/pass-post
+ * gate on the verdict classifier readmit_verdict_of() (a pure read; no wire change).
+ */
+static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
+{
+    struct world w;
+    world_init(&w);
+    const uint8_t mac[6] = {0x08, 0x00, 0x2b, 0x11, 0x22, 0x33};
+    struct peer_state *ps = peer_find_or_add(&w.cfg, &w.pdt, w.peers, mac);
+    CHECK(ps != NULL, "peer_find_or_add returned NULL");
+    if (ps == NULL) {
+        return;
+    }
+
+    /* No channel yet -> NO-CHANNEL. */
+    ps->channel_up = 0;
+    ps->cm_responses = 0;
+    ps->vaxcluster_open_reached = 0;
+    CHECK(readmit_verdict_of(ps) == READMIT_NO_CHANNEL,
+          "a peer with no channel must read NO-CHANNEL, got %s",
+          readmit_verdict_name(readmit_verdict_of(ps)));
+
+    /* THE REJOIN FRONTIER: transport up, member sent ZERO CM responses. */
+    ps->channel_up = 1;
+    ps->cm_responses = 0;
+    ps->vaxcluster_open_reached = 0;
+    CHECK(readmit_verdict_of(ps) == READMIT_NO_ENGAGE,
+          "transport up + cm_responses=0 must read NO-ENGAGE (returning-identity"
+          " non-admission, spec 4(O.21)), got %s",
+          readmit_verdict_name(readmit_verdict_of(ps)));
+
+    /* A member that sent CM responses but did not latch membership. */
+    ps->cm_responses = 76;
+    ps->vaxcluster_open_reached = 0;
+    CHECK(readmit_verdict_of(ps) == READMIT_ENGAGED_NC,
+          "cm_responses>0 without the membership latch must read ENGAGED-NOT-LATCHED,"
+          " got %s", readmit_verdict_name(readmit_verdict_of(ps)));
+
+    /* The SUCCESS shape: member ran the JOIN handshake and membership latched. */
+    ps->cm_responses = 151;
+    ps->vaxcluster_open_reached = 1;
+    CHECK(readmit_verdict_of(ps) == READMIT_ADMITTED,
+          "the membership latch must read ADMITTED, got %s",
+          readmit_verdict_name(readmit_verdict_of(ps)));
+}
+
 int main(void)
 {
     /* THE FAILURE STREAM, taken before anything can dup2() over fd 2. See
@@ -10342,6 +10392,8 @@ int main(void)
      * main()'s loop, driven through the loop functions themselves. */
     test_vc_reissue_tick_drives_the_daemon_loop();
     test_poll_refresh_tick_drives_the_daemon_loop();
+    /* vms-f61 (spec §4(O.21)): the readmission-map verdict classifier. */
+    test_readmit_verdict_classifies_the_rejoin_frontier();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"

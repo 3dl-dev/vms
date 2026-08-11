@@ -880,3 +880,45 @@ CRASH: VAX2 `%SYSBOOT`/`%SYSINIT` reboot). Code `src/vmsscs/scsd.c`
 (`ovmx_rejoin_cleanleave`, `cm_rejoin_target_mode`, `cm_apply_rejoin_form`,
 `scsd_emit_clean_departure`), `src/vmsscs/scs_member.c` (`scs_member_build_depart`). Runner
 `tests/lab/tools/abrun.sh`. *VAXcluster Principles* pp. 7-24/7-25/7-29.
+
+## 14. The AUTHENTIC port-level last-gasp RE'd VAX-vs-VAX and shipped (safe, default) in place of the crashing op-0x0d; XITDONE still 0 — the removal signal is necessary-not-sufficient, frontier = returning-identity CM-JOIN NO-ENGAGE (`vms-708`, spec §4(O.30))
+
+§13 shipped fresh-first-join return (safe) and proved the op-0x0d CM last-gasp CRASHES the VAX,
+leaving the AUTHENTIC port-level last-gasp (Davis p. 7-29) un-RE'd and deferred. `vms-708` RE's it
+BY OBSERVATION of two REAL-VAX clean leaves on a virgin `vaxlab-0` and ships OVMX's clean-room emit.
+
+**THE DATAGRAM (GROUNDED, 2 specimens).** The last frame a real VAX (VAX1) emits on `SHUTDOWN.COM`
+`REMOVE_NODE` — its TRUE final frame, then silence — is a **120-byte MULTICAST HELLO** identical to a
+periodic multicast HELLO EXCEPT at two fields: **abs-30 `0x00a0` → `0x00b1`** (departure marker) and
+**abs-68..71 `0` → the cluster nonce `ee053 95b`** (the departing node authenticates its last gasp with
+the shared cluster token). `d94-708-leave` frame 4899 and `d94-708-leave2` frame 5015 agree byte-for-byte
+on the diff; `0x00b1`+nonce appears EXACTLY ONCE per capture. On the wire the coordinator stops
+addressing the leaver by +3.3 s — no ~16–20 s RECNXINTERVAL reconnect storm — corroborating prompt
+removal (spec §4(O.30)).
+
+**What OVMX ships (clean-room, default-on, kill-switched).** `scs_hello_build_lastgasp_frame()`
+(a multicast HELLO with abs-30 `0xb1` + cluster nonce) and `scsd_emit_port_lastgasp()` emit ONE such
+frame as OVMX's true final frame at shutdown, **REPLACING** the crashing op-0x0d
+(`scsd_emit_clean_departure`, now RE-probe-only under opt-in `OVMX_LASTGASP`). Kill switches
+`OVMX_NO_PORT_LASTGASP=1` / `OVMX_REJOIN_CLEANLEAVE=0`. A HELLO variant is the SAFE class (best-effort
+channel traffic below the VC, no SCS transition state) — the whole point of RE'ing the port-level signal
+instead of guessing a CM-layer one. Fail-pre/pass-post builder test (`tests/vmsscs/test_scs_hello.c`),
+send site in the census (`test_scsd_send_sites.py`). `scs` ctest 54/54.
+
+**LIVE RESULT — emit is SAFE; XITDONE still 0 (frontier relocated).** Current-source daemon
+(`md5=2e75a29e`) on `vaxlab-0`: F1 joins (`admitted=2 XITDONE`), departs emitting `SCSD-I-LASTGASP`,
+and **NO VAX bugchecks** — the decisive contrast with §13's op-0x0d crash. The return J is STILL not
+admitted: `admitted=0 no_engage=2`, both members run ZERO CM responses, `incarnation=2`,
+`proposing_delta=0`; holds under a 95 s settle too. **The authentic removal signal is
+necessary-not-sufficient.** Relocated frontier: the members do not run the per-member op-02/op-03
+CM-JOIN handshake for a RETURNING SCSSYSTEMID even after a clean last-gasp departure and full removal
+— a member-side ENGAGEMENT question, independent of the removal signal and the settle length, and NOT
+the op-0x0d crash region. Deferred to a dedicated CM-JOIN-engagement increment.
+
+Evidence (host, tank volume): RE captures `/data/training/vax/k8s-labs/vaxlab-0/logs/d94-708-leave.pcap`
+(frame 4899), `d94-708-leave2.pcap` (frame 5015), `d94-708-formation.pcap`; live proof
+`scsd-ab-F1.log` (`SCSD-I-LASTGASP`, `admitted=2 XITDONE`), `scsd-ab-J.log` (`admitted=0 no_engage=2`),
+`/data/training/vax/cluster/work/abrun-fix.csb`; no bugcheck in `vax1.log`/`vax2.log`. Code
+`src/vmsscs/scs_hello.c` (`scs_hello_build_lastgasp_frame`), `src/vmsscs/include/scs_hello.h`
+(`SCS_HELLO_PFW_LASTGASP`), `src/vmsscs/scsd.c` (`scsd_emit_port_lastgasp`). Runner
+`tests/lab/tools/abrun.sh`. *VAXcluster Principles* p. 7-29.

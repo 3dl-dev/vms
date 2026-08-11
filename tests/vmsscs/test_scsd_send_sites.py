@@ -262,6 +262,9 @@ CHANNEL_CALLERS = {
                                   # reply, one-shot proactive padded HELLO
     "scsd_hello_beacon_emit": 1,  # the periodic multicast beacon off main()'s
                                   # timer loop
+    "scsd_emit_port_lastgasp": 1, # vms-708 (spec 4(O.30)): the port-level
+                                  # clean-leave last gasp -- one final multicast
+                                  # HELLO (abs-30 b1 + cluster nonce) at shutdown
 }
 chan_callers = {}
 for i, line in enumerate(code_lines):

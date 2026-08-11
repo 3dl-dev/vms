@@ -141,6 +141,16 @@ int scs_hello_build_frame(const struct scs_hello_params *p,
 #define SCS_HELLO_PFW_INIT     0xb2 /* channel INIT (member's first directed contact only; sec 4a) */
 #define SCS_HELLO_PFW_REQUEST  0xb3 /* channel-verify REQUEST/probe (sec 4a offset-30) */
 #define SCS_HELLO_PFW_CONFIRM  0xb4 /* channel-verify CONFIRM/ack -- terminal (sec 4a offset-30) */
+#define SCS_HELLO_PFW_LASTGASP 0xb1 /* PORT-LEVEL CLEAN-LEAVE "last gasp" (spec sec 4(O.30), vms-708).
+                                     * GROUNDED: on SHUTDOWN.COM the departing VAX's PEDRIVER emits
+                                     * exactly ONE final multicast HELLO whose abs-30 word is 0x00b1
+                                     * (vs 0x00a0 on a periodic multicast HELLO). Two independent
+                                     * real-VAX clean-leave captures (VAX1, vaxlab-0, 2026-08-11):
+                                     * d94-708-leave frame 4899, d94-708-leave2 frame 5015 -- b1
+                                     * appears EXACTLY ONCE per capture, as VAX1's true final frame.
+                                     * b1 sits one below the b2/b3/b4 channel-verify family; OVMX does
+                                     * not claim to know the bit semantics, only the observed word.
+                                     * VAXcluster Principles p. 7-29 (the port-level "last gasp"). */
 
 /*
  * scs_hello_response_pfw - the GROUNDED abs-30 response rule (spec sec 4a).
@@ -220,6 +230,45 @@ int scs_hello_build_directed_frame(const struct scs_hello_params *p,
                                     uint16_t incarnation,
                                     uint8_t per_frame_word,
                                     uint8_t out[SCS_HELLO_FRAME_LEN]);
+
+/*
+ * scs_hello_build_lastgasp_frame - Build the PORT-LEVEL CLEAN-LEAVE "last gasp"
+ * datagram (vms-708, spec sec 4(O.30)). This is the AUTHENTIC immediate-removal
+ * signal a real VAX emits on SHUTDOWN.COM (VAXcluster Principles p. 7-29), RE'd
+ * by observation of two real-VAX clean leaves -- it REPLACES the ungrounded
+ * CM-layer op-0x0d self-departure open (scs_member_build_depart), which a live
+ * bracket proved CRASHES the real coordinator (spec 4(O.29)).
+ *
+ * The frame is byte-for-byte a standard MULTICAST HELLO (scs_hello_build_frame,
+ * dst = the cluster group multicast) EXCEPT for the two -- and only two --
+ * semantic fields that distinguish the last gasp on the wire. Both are GROUNDED
+ * against d94-708-leave frame 4899 AND d94-708-leave2 frame 5015 (byte-diff vs a
+ * normal multicast HELLO from the SAME node in the SAME capture: identical apart
+ * from these two fields plus the live abs-96 100ns timer):
+ *
+ *   - abs-30 per-frame word: 0x00a0 (periodic multicast HELLO) -> 0x00b1
+ *     (SCS_HELLO_PFW_LASTGASP). The departure marker.
+ *   - abs-68..71 connect/join nonce: 0x00000000 (zero on every periodic
+ *     multicast HELLO) -> the shared cluster token. The departing node
+ *     authenticates its last gasp with the cluster nonce it already carries on
+ *     its directed HELLOs (the lab's ee-05-39-5b; REPLAYED for a known cluster
+ *     exactly as scs_hello_build_directed_frame does, NOT a credential impl).
+ *
+ * Everything else -- node name, addresses, cap span, the abs-96 live 100ns tick
+ * (p->timer_tick), the HELLO tail -- is the plain multicast HELLO, unchanged.
+ * A HELLO variant is the SAFE class to emit: it is best-effort CHANNEL traffic
+ * below the virtual circuit (p. 2-33), carries no SCS transition state, and is
+ * exactly what the reference node put on the wire -- unlike the op-0x0d SCS
+ * class-0x04 open that drove CNXMAN into an inconsistent-state bugcheck.
+ *
+ * `nonce` supplies the 4 wire-order cluster-token bytes (abs 68-71); pass the
+ * same lab nonce the directed-HELLO path uses. `p` supplies OVMX's identity and
+ * multicast dst exactly as for scs_hello_build_frame. Returns 0 on success, -1
+ * if any pointer arg is NULL or node_name is too long.
+ */
+int scs_hello_build_lastgasp_frame(const struct scs_hello_params *p,
+                                   const uint8_t nonce[4],
+                                   uint8_t out[SCS_HELLO_FRAME_LEN]);
 
 /*
  * --- vms-9f3: NISCA channel packet-size verification (padded directed HELLO,

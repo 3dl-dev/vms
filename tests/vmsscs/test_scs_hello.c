@@ -144,6 +144,43 @@ int main(void)
     check(scs_hello_build_frame(&p_toolong, out) == -1,
           "node name with no NUL terminator in a 7-byte buffer rejected");
 
+    /* --- vms-708 (spec 4(O.30)): PORT-LEVEL clean-leave LAST GASP ---
+     * The authentic immediate-removal datagram a real VAX emits on SHUTDOWN.COM
+     * (Davis p.7-29), RE'd VAX-vs-VAX off vaxlab-0 (d94-708-leave frame 4899 +
+     * d94-708-leave2 frame 5015). It is a plain MULTICAST HELLO differing at
+     * EXACTLY two semantic fields: abs-30 a0->b1 and abs-68..71 zero->cluster
+     * token. This test rebuilds a normal HELLO and the last gasp from the SAME
+     * params and byte-diffs them, asserting the diff is precisely those two
+     * fields (mirroring the two-specimen wire analysis). */
+    static const uint8_t lg_nonce[4] = { 0xee, 0x05, 0x39, 0x5b }; /* the lab cluster token */
+    uint8_t ref[SCS_HELLO_FRAME_LEN];
+    uint8_t lg[SCS_HELLO_FRAME_LEN];
+    check(scs_hello_build_frame(&p, ref) == 0, "reference multicast HELLO builds");
+    check(scs_hello_build_lastgasp_frame(&p, lg_nonce, lg) == 0, "last-gasp frame builds");
+
+    check(lg[30] == SCS_HELLO_PFW_LASTGASP && lg[30] == 0xb1,
+          "last gasp abs-30 == 0xb1 (SCS_HELLO_PFW_LASTGASP), vs 0xa0 on a normal HELLO");
+    check(ref[30] == 0xa0, "reference HELLO abs-30 == 0xa0 (the field that changed)");
+    check(lg[31] == 0x00, "last gasp abs-31 == 0x00 (high byte unchanged)");
+    check_bytes(lg + 68, lg_nonce, 4, "last gasp abs-68..71 == cluster token (ee 05 39 5b)");
+    check(memcmp(ref + 68, "\0\0\0\0", 4) == 0, "reference HELLO abs-68..71 == 0 (the field that changed)");
+
+    /* The byte-diff between a normal multicast HELLO and the last gasp built from
+     * the SAME params must be EXACTLY abs-30 and abs-68..71 -- no other field.
+     * (The abs-96 live timer is identical here because timer_tick is fixed.) */
+    int diff_ok = 1;
+    for (int i = 14; i < SCS_HELLO_FRAME_LEN; i++) {
+        int expected_diff = (i == 30) || (i >= 68 && i <= 71);
+        if ((ref[i] != lg[i]) != expected_diff) { diff_ok = 0; break; }
+    }
+    check(diff_ok,
+          "last gasp differs from a normal multicast HELLO at EXACTLY abs-30 and"
+          " abs-68..71 -- the two RE'd fields, nothing else (2-specimen grounded)");
+
+    check(scs_hello_build_lastgasp_frame(NULL, lg_nonce, lg) == -1, "NULL params rejected");
+    check(scs_hello_build_lastgasp_frame(&p, NULL, lg) == -1, "NULL nonce rejected");
+    check(scs_hello_build_lastgasp_frame(&p, lg_nonce, NULL) == -1, "NULL output rejected");
+
     printf("test_scs_hello: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

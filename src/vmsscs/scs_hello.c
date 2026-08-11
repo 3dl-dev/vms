@@ -152,6 +152,36 @@ int scs_hello_build_frame(const struct scs_hello_params *p,
     return 0;
 }
 
+int scs_hello_build_lastgasp_frame(const struct scs_hello_params *p,
+                                   const uint8_t nonce[4],
+                                   uint8_t out[SCS_HELLO_FRAME_LEN])
+{
+    if (p == NULL || nonce == NULL || out == NULL) {
+        return -1;
+    }
+
+    /* vms-708 (spec sec 4(O.30)): the PORT-LEVEL clean-leave last gasp is a
+     * plain MULTICAST HELLO with exactly two fields changed. Lay down the
+     * multicast HELLO first (this validates node_name and returns -1 on a bad
+     * arg), then patch the two departure-distinguishing fields. See scs_hello.h
+     * for the byte-level provenance (two real-VAX specimens). */
+    int rc = scs_hello_build_frame(p, out);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* abs-30 per-frame word: a0 -> b1 (the last-gasp marker). abs-31 stays 0. */
+    out[30] = SCS_HELLO_PFW_LASTGASP;
+    out[31] = 0x00;
+
+    /* abs-68..71 connect/join nonce: 0 -> the shared cluster token. The
+     * departing node authenticates the last gasp with the cluster nonce
+     * (REPLAYED for a known cluster, as the directed-HELLO path; spec sec 4g). */
+    memcpy(out + 68, nonce, 4);
+
+    return 0;
+}
+
 uint8_t scs_hello_response_pfw(uint8_t recv_pfw)
 {
     /* GROUNDED request/response rule (spec sec 4a offset-30): reply X+1 up to b4;

@@ -236,7 +236,34 @@ whether the member is running a JOIN transition for OVMX at all, or a member↔m
 transition that leaves OVMX out. That experiment, grounded against the oracle's two
 per-member handshakes, is what turns "the members do not engage" into a named, fixable state.
 
-### 5.1 First increment shipped by `vms-f61`
+### 5.1 Live lab proof of the relocated frontier (`vms-f61`, `vaxlab-0`, 2026-08-11)
+
+A first-join→rejoin bracket on a fresh CN_2 pod, **one identity `OVXF61`/1961 throughout**,
+the static READMITMAP daemon (`md5=4a3977f0…`, staged+verified in-pod), `OVMX_JOIN_SEQ=1`,
+hard `timeout` on every op:
+
+| arm | scenario | `cm_responses` (VAX1 / node-2) | READMITMAP verdict | incarnation presented | `XITDONE` |
+|---|---|---|---|---|---|
+| A1 | first join (no sidecar) | **186 / 40** | both **ADMITTED**; SUMMARY `admitted=2 no_engage=0` | `0x00bc0cccd00e23cc` (live) | **1** (CN_3) |
+| B2 | rejoin, same id | **0 / 0** | both **NO-ENGAGE**; SUMMARY **RETURNING-IDENTITY NON-ADMISSION** `admitted=0 no_engage=2` | `0x00bc0ccd1991e23a` (live) | **0** (stays CN_2) |
+
+The bracket confirms the frontier exactly: with the **same identity on the same pod** and a
+**distinct live incarnation** presented on each arm (so a fresh incarnation reached both
+members), the first join admits cleanly (both members ran the per-member JOIN handshake) and
+the rejoin elicits **zero** CM responses from **both** members (`member_vc=DISC SENT`). The
+`READMITMAP-SUMMARY` names the state directly — `RETURNING-IDENTITY NON-ADMISSION: every
+reached member ran ZERO per-member JOIN handshakes`. This is the §4(O.10)/§4(O.20) member
+non-reciprocation, now (a) grounded to the per-member JOIN-handshake count, (b) proven not to
+be an incarnation-freshness problem (both arms carry live, distinct incarnations), and (c)
+surfaced as a single verdict line for the next isolation. `XITDONE` did NOT flip — as expected;
+this increment MAPS the missing state and instruments it, it does not fix it.
+
+Evidence (host, tank volume): `/data/training/vax/k8s-labs/vaxlab-0/logs/scsd-f61-A1firstjoin.log`
+(XITDONE=1, READMITMAP admitted=2) and `scsd-f61-B2rejoin.log` (XITDONE=0, READMITMAP
+no_engage=2), with `d94-f61-A1firstjoin.pcap` / `d94-f61-B2rejoin.pcap` (identity `OVXF61` on
+the wire both arms).
+
+### 5.2 First increment shipped by `vms-f61`
 
 A **safe, log-only, kill-switched** readmission diagnostic (`SCSD-I-READMITMAP`,
 `OVMX_NO_READMITMAP=1` to silence) that emits, at exit, per member: whether OVMX presented a

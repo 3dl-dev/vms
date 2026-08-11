@@ -73,7 +73,7 @@
 | REQUEST | Real `sys$sndopr()` OPC request. |
 | RUN | Real image activation (`dcl_activate_image()`/`run_detached()`) with its own honour/refuse qualifier layer. |
 | SEARCH | Real line-by-line string search over a real file. |
-| **SET** | Dispatcher — DEFAULT/PROMPT/VERIFY/TERMINAL/PROTECTION/PROCESS/FILE/UIC/WORKING_SET/TIME/ENTRY/QUEUE do genuine executive-backed work. **Named FACADE subcommands still open: ACCOUNTING, PASSWORD, VOLUME** — see below. |
+| **SET** | Dispatcher — DEFAULT/PROMPT/VERIFY/TERMINAL/PROTECTION/PROCESS/FILE/UIC/WORKING_SET/TIME/ENTRY/QUEUE do genuine executive-backed work. **vms-e9e:** PASSWORD moved REAL (see below). **Named FACADE subcommands still open: ACCOUNTING, VOLUME** — see below. |
 | **SHOW** | Dispatcher — PROCESS/SYSTEM/DEVICE/MEMORY/LOGICAL/STATUS read real executive state, deliberately blank rather than fabricate on failure. **Named FACADE subcommand still open: LICENSE** — see below. |
 | SORT | Real line-read/`qsort`/write. |
 | SPAWN | Real `fork`/`execl` subprocess with real `/NOWAIT`, `/OUTPUT` redirection. |
@@ -106,7 +106,7 @@ the same convention `docs/design-dcl-fidelity.md` §1 used):
 |---|---|
 | SET AUDIT | **Fixed this session** (vms-6f4 Phase 0): now honestly refuses (`SS$_UNSUPPORTED`) instead of toggling `ctx->audit_enabled`, a per-process bool nothing else could observe. |
 | SET ACCOUNTING | Still open — toggles `ctx->accounting_enabled` (same dead-bool shape as the old SET AUDIT) and prints `%SET-I-INTSET` as if it succeeded. |
-| SET PASSWORD | Still open — `cmd_set_password()` prints `%SET-I-PASSWORD, password change not fully implemented` (admits it) but returns `SS$_NORMAL` (fake success) and never touches SYSUAF. |
+| SET PASSWORD | **Fixed (vms-e9e): moved to REAL** — see §"vms-e9e — SET PASSWORD moves FACADE to REAL" below. Was: `cmd_set_password()` printed `%SET-I-PASSWORD, password change not fully implemented` (admits it) but returned `SS$_NORMAL` (fake success) and never touched SYSUAF. |
 | SET VOLUME | Still open — prints `%SET-I-NOTIMPL` but returns `SS$_NORMAL` for an operation that does nothing. |
 | SHOW LICENSE | Still open — `cmd_show_license()` prints two invented, unconditional LMF-style rows (fixed 0/0/100 Avail/Actv) with no disclosure at all — the least-honest of the four. |
 
@@ -225,3 +225,56 @@ facade canary (`tests/dcl/test_facade_gate_phase0.sh`) moved from
 `ASSIGN .../SYSTEM` (now wired, no longer a facade) to `ASSIGN .../TABLE`
 (still honestly refused) so it keeps testing a real refusal rather than a
 now-fixed path.
+
+## vms-e9e — SET PASSWORD moves FACADE to REAL
+
+`cmd_set_password()` (`src/vmsdcl/dcl_cmd_set.c`) used to print
+`%SET-I-PASSWORD, password change not fully implemented` and
+`Full SYSUAF.DAT rewrite is planned for a future release.` while returning
+`SS$_NORMAL` — an `-I-` (success-toned) lie for a total no-op, worse than an
+honest error under INV-DCL because it looks like it worked.
+
+It now implements the real public OpenVMS DCL Dictionary "SET PASSWORD"
+self-service exchange (Rule 8 citation:
+<https://www.digiater.nl/openvms/doc/ia64-v8.3/opsys/vmsos83/9996/9996pro_205.html>,
+<https://wiki.vmssoftware.com/SET_PASSWORD>): `Old password:` / `New
+password:` / `Verification:`, no terminal echo, verified against the real
+SYSUAF hash (`sysuaf_authenticate()`), and on match writes a real new hash
+back through a new shared library function, `sysuaf_write_record()`
+(`src/libvms/rtl/sysuaf.c`) — a second CALLER of the existing ONE writer
+(`sysuaf_format_record()`, vms-9b7/INV-1), not a second SYSUAF format.
+Mismatch, blank, and under-length (Dictionary default `PWDMINIMUM` of 6)
+all honestly refuse without writing.
+
+**Deviation from the item's initial framing, flagged per CLAUDE.md Rule 5:**
+the item description anticipated a `/USER=` qualifier or a name parameter
+for changing another account's password under SYSPRV. The public DCL
+Dictionary entry fetched for this fix shows SET PASSWORD takes **no
+parameters** and has exactly three qualifiers — `/GENERATE`, `/SECONDARY`,
+`/SYSTEM` — none of which name another account. There is no DCL-level way
+to change someone else's password; that is AUTHORIZE's job
+(`tools/vms_authorize.c`'s `cmd_modify()`, already SYSPRV-gated). Ground
+truth (source-of-truth hierarchy #1, CLAUDE.md) overrides the item's
+initial assumption: implemented per the Dictionary, not per the
+anticipated-but-unverified `/USER=` shape. `/SECONDARY` and `/SYSTEM`
+(gated on SECURITY privilege, matching the Dictionary) both honestly refuse
+— OVMX has no secondary-password field and no per-node system-password
+subsystem.
+
+Veracity: `tests/libvms/test_sysuaf_write_veracity.c` drives the exact
+mechanism `cmd_set_password()` calls (`sysuaf_lookup` →
+`sysuaf_authenticate` → `sysuaf_write_record`) against a real
+`SYS$SYSTEM:SYSUAF.DAT` resolved through the same path translation
+AUTHORIZE and LOGIN use, in an isolated temp DKA0: root — changes
+`TESTUSER`'s password and proves the NEW password now authenticates, the
+OLD one no longer does, and a bystander row is untouched. This is the
+"host test driving `sysuaf_authenticate` before/after" the item allowed as
+an alternative to a QEMU-login proof, since `sysuaf_write_record()` needs
+no `/dev/vms` (plain file I/O plus the same host-tooling LNM fallback
+AUTHORIZE/LOGIN already rely on, `src/vmslnm/lnm_defaults.c`).
+`tests/dcl/test_set_password_veracity.sh` is the DCL-surface companion —
+proves the facade text/status is gone (`SET PASSWORD/BOGUS` →
+`%DCL-W-IVQUAL`, `/SECONDARY` and `/GENERATE` → honest `%DCL-W-NOTIMPL`, an
+extra parameter → `%DCL-E-MAXPARM`) without needing a real identity, which
+bare host ctest does not have (Rule 9/INV-6: no per-process identity
+fake).

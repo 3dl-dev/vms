@@ -109,6 +109,7 @@ jobs:
             release:
               - '.github/workflows/**'
               - 'tools/cut-release.sh'
+              - 'tools/publish-release.sh'
               - 'tools/gen_release_notes.py'
               - 'tools/check_guide_drift.py'
               - 'distro/Dockerfile.bootable'
@@ -128,6 +129,7 @@ jobs:
               - 'docs/upgrade-guide.md'
               - 'tests/integration/test_guide_drift.sh'
               - 'tests/integration/test_guide_drift_negctl.sh'
+              - 'tests/integration/test_publish_release.sh'
 
       - name: Decide (force every output true on non-PR events)
         id: decide

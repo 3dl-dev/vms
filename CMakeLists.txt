@@ -324,6 +324,20 @@ if(BUILD_TESTS)
     set_tests_properties(guide_drift_negctl PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
+    # vms-644 (epic vms-a84 RELEASE ENGINEERING): tools/publish-release.sh takes
+    # a cut bundle and publishes its artifacts + generated notes to a GitHub
+    # Release. This gate runs the publisher inside a throwaway git repo against
+    # a stub `gh` -- no GitHub, no network -- and asserts BOTH the happy path
+    # (all assets attached, generated notes used as the body, notes recorded
+    # in-tree) AND the negative controls that make it non-vacuous: a corrupt
+    # bundle or a tag that disagrees with the bundle is refused before any gh
+    # call. Pure shell; no docker, no QEMU.
+    add_test(NAME publish_release_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_publish_release.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(publish_release_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
     # vms-791 (0.4 installer Tier-0): the VMSFS media-mastering tool must
     # produce an image that reads back byte-exact. Masters a synthetic tree
     # (subdirs, a >5-entry directory, a multi-block file, a binary file, an

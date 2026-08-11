@@ -180,3 +180,40 @@ substrate R2 ("run every VMS app we can find") stands on — an app that calls `
 search-list logical, or installs under a concealed root, needs Engines A+B real. Recommend adopting
 it as a named program that parents `vms-b9a` (Engine A) and `vms-ed7` (Engine B), with new Tier-2/3
 epics filed as they're funded.
+
+## 9. The experience surfaces — the "totally fooled at login" test
+
+The §1–§8 map is the *nouns* (verbs, lexicals, utilities, logicals). Passing all of it still fails
+the "log in and be fooled" test, which lives in three surfaces audited 2026-08-11 (all vs `origin/main`).
+These are where a VMS user's muscle memory pokes, and each is now a filed epic under `vms-8ad`.
+
+### 9.1 Interactive session mechanics — `vms-21a7` (folds `vms-46b`)
+Tells in the first 30 seconds: welcome banner says **OVMX not OpenVMS** (badged fallback — INV-0
+tension, operator call); `No previous interactive login recorded.` and `Maximum login attempts
+exceeded.` are **invented strings**; **Ctrl-T does nothing** (reflexive on VMS); missing `Last
+non-interactive login`/`N failures`/new-Mail-count lines (the mail helper exists but is never
+called); **DISUSER/captive/expired-password flags ignored — a disabled account logs straight in**
+(fidelity *and* security, `sysuaf.c:449` hash-only). RECALL is readline-gated; Ctrl-A/H/R carry
+readline not VMS semantics; a dead duplicate banner emitter sits in `dcl_main.c:369`.
+
+### 9.2 DCL command language (scripting) — `vms-3983`
+The biggest uncovered gap: you can pass every `SHOW` and be exposed the moment a `LOGIN.COM` runs.
+**`$STATUS` is the wrong type (decimal, not `%Xhhhhhhhh`) and is not refreshed after most commands —
+including command-not-found — so after a mistyped command it shows a stale *success* and
+`IF .NOT. $STATUS THEN GOTO err` silently misses the error, in every procedure.** Plus: no
+per-procedure local symbol scope (inner locals leak to the caller); `CALL/SUBROUTINE/ENDSUBROUTINE`
+absent; `DECK/EOD` absent (in-stream data parsed as commands → `IVVERB` cascade); `ON` handler
+narrow; `@`-params not uppercased; `F$MODE` misreports scripts as BATCH. Solid: expression eval,
+IF/GOTO/GOSUB, `@` nesting, the qualifier keystone.
+
+### 9.3 File/RMS user-visible experience — `vms-1c6`
+The surface a user lives in, and it's a Linux reskin: **`DIRECTORY/FULL` is one wrong line, not the
+per-file block** (no File ID, dates, record format, org); dates are `st_mtime` with hardcoded `.00`
+(the correct formatter exists, unused); **`COPY`/`CREATE` silently overwrite instead of making `;2`**
+(they bypass RMS with raw `fopen`); `[...]` ellipsis doesn't recurse; wildcards non-uniform across
+commands; protection/UIC fabricated from `st_mode` (System always full, W/D collapsed);
+`SET FILE/EXPIRATION_DATE` corrupts the displayed date. On-disk `;N` versioning, `PURGE/KEEP`, and
+the datetime RTL are genuinely real — just not wired to the DCL surface.
+
+**Bottom line:** the "totally fooled" bar is gated by 9.2 (`$STATUS`) and 9.3 (`DIRECTORY`/versions)
+more than by any missing verb. Sequence these into Tier 1 alongside Engine B.

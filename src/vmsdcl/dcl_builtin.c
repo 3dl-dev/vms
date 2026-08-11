@@ -138,6 +138,15 @@ static const struct dcl_qual_def q_dump[] = {
     { "BLOCKS", CDU_VT_VALUE, 0, NULL, NULL },
     QUAL_END
 };
+/* STOP (vms-1a8, docs/design-dcl-fidelity.md sec 5 Phase 2). The Dictionary
+ * lists /IDENTIFICATION as the only qualifier on this (process-control) STOP
+ * entry -- /QUEUE, /CPU, /NETWORK belong to the SEPARATE STOP/QUEUE etc.
+ * dictionary entries, which OVMX has never implemented, so they draw the
+ * authentic %DCL-W-IVQUAL here rather than being silently accepted. */
+static const struct dcl_qual_def q_stop[] = {
+    { "IDENTIFICATION", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
 /* APPEND and DIFFERENCES read NO qualifiers today: an explicit empty table
  * makes any qualifier on them fail honestly with %DCL-W-IVQUAL rather than be
  * silently swallowed. */
@@ -242,8 +251,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Sort records in a file", q_sort },
     { "SPAWN",       cmd_spawn,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Create a subprocess" },
-    { "STOP",        cmd_stop,        CDU_F_ABBREV, 2,
-      "Stop the current process" },
+    { "STOP",        cmd_stop,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
+      "Terminate the current image or command, or delete a named process", q_stop },
     { "SUBMIT",      cmd_submit,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Submit a command procedure to a batch queue", q_submit },
     { "SYSGEN",      cmd_sysgen,      CDU_F_ABBREV | CDU_F_PARAM, 4,

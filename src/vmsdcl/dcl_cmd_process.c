@@ -1863,14 +1863,125 @@ int cmd_exit(struct dcl_command *cmd)
 }
 
 /*
- * STOP - Forceful exit.
+ * stop_target_qual - the value of /IDENTIFICATION, given by any
+ * abbreviation of two characters or more ("/ID" is how the Dictionary's
+ * own examples write it). Same pattern as show_process_target_qual()
+ * (dcl_cmd_show.c): dcl_qualifier_value() only matches an exact name, and
+ * STOP has no CDU qualifier table of its own to canonicalise abbreviations
+ * through dcl_validate_qualifiers() (see q_stop[] / dcl_builtin.c -- STOP's
+ * table declares ONLY IDENTIFICATION, so a table lookup can't shortcut this
+ * either without duplicating the same prefix rule).
+ */
+static const char *stop_target_qual(const struct dcl_command *cmd)
+{
+    if (!cmd) return NULL;
+    for (int i = 0; i < cmd->qualifier_count; i++) {
+        if (cmd->qualifiers[i].negated) continue;
+        if (dcl_match_command(cmd->qualifiers[i].name, "IDENTIFICATION", 2))
+            return cmd->qualifiers[i].value;
+    }
+    return NULL;
+}
+
+/*
+ * STOP - INV-DCL FACADE KILL (vms-1a8, docs/design-dcl-fidelity.md sec 5
+ * Phase 2). Was `(void)cmd; ctx->exit_requested = 1; return SS$_NORMAL;` --
+ * it ignored its target parameter and /IDENTIFICATION qualifier entirely
+ * and unconditionally self-exited the CURRENT DCL context, claiming
+ * SS$_NORMAL for a named target it never looked at.
+ *
+ * SCOPE (clean-room, OpenVMS DCL Dictionary -- "STOP" entry,
+ * https://www.mrynet.com/FTP/operatingsystems/VMS/docs/ssb71/9996/
+ * 9996p062.htm): this covers the two process-TARGET forms the Dictionary
+ * documents -- a process-name parameter ("must share the same group
+ * number in its UIC as the current process") and /IDENTIFICATION=pid ("an
+ * alternative to the process-name parameter", reaching outside the
+ * caller's group) -- plus the bare no-target form, which the Dictionary
+ * describes as abnormal termination of the CURRENT image/command levels,
+ * unstacking to the DCL prompt: precisely the ctx->exit_requested path
+ * already here, now reached only when there is genuinely no target.
+ * STOP/QUEUE, STOP/CPU and STOP/NETWORK are DIFFERENT Dictionary entries
+ * (queue and cluster-node control, not process control) and are OUT OF
+ * SCOPE: neither was ever implemented, so this file has never claimed
+ * them, and STOP has no qualifier table entry for /QUEUE or /CPU or
+ * /NETWORK below -- typing one now draws the authentic %DCL-W-IVQUAL
+ * rather than silent acceptance, which is the honest answer INV-DCL
+ * requires when a form is not implemented.
+ *
+ * The two target forms both go through sys$delprc (src/libvms/syssvc/
+ * sys_process.c), which is what now actually resolves the name/pid
+ * against the EXECUTIVE process table and enforces the Dictionary's
+ * GROUP/WORLD privilege rule -- see that function's own comment for the
+ * full citation and the reasoning. STOP is a thin DCL-syntax wrapper over
+ * it, the same relationship RUN has to sys$creprc above.
  */
 int cmd_stop(struct dcl_command *cmd)
 {
-    (void)cmd;
     struct dcl_context *ctx = dcl_get_context();
-    ctx->exit_requested = 1;
-    ctx->exit_status = 0;
+
+    const char *idval = stop_target_qual(cmd);
+    int have_name = (cmd->param_count >= 1 && cmd->params[0][0] != '\0');
+
+    if (!idval && !have_name) {
+        /* No target: abnormal termination of the current image/command
+         * levels, unstacking to DCL -- unchanged from before this item. */
+        ctx->exit_requested = 1;
+        ctx->exit_status = 0;
+        return SS$_NORMAL;
+    }
+
+    struct dsc$descriptor_s namdsc;
+    const struct dsc$descriptor_s *namdsc_p = NULL;
+    char upper_name[VMS_PRCNAM_XFER];
+    uint32_t pid_val = 0;
+    const uint32_t *pid_p = NULL;
+
+    if (idval) {
+        /*
+         * /IDENTIFICATION overrides the process-name parameter (Dictionary,
+         * verbatim: "an alternative to the process-name parameter") -- so
+         * this branch is taken whenever /ID was specified, whether or not
+         * a name parameter was ALSO given, matching SHOW PROCESS's already-
+         * established precedence (dcl_cmd_show.c cmd_show_process()).
+         *
+         * The PID is hex, like every other VMS process-id text OVMX reads
+         * (SHOW PROCESS/IDENTIFICATION, ATTACH/ID) -- $GETJPI's JPI$_PID is
+         * printed and read as an 8-hex-digit value tree-wide.
+         */
+        char *end = NULL;
+        unsigned long v;
+        errno = 0;
+        v = strtoul(idval, &end, 16);
+        if (idval[0] == '\0' || !end || *end != '\0' || errno == ERANGE ||
+            v > 0xFFFFFFFFUL) {
+            dcl_error("DCL", 2, "IVIDENT",
+                      "invalid value - %s - for /IDENTIFICATION qualifier",
+                      idval);
+            return SS$_BADPARAM;
+        }
+        pid_val = (uint32_t)v;
+        pid_p = &pid_val;
+    } else {
+        /* Process-name parameter: upcased, like every other unquoted DCL
+         * token (DCL upcases before the executive ever sees a name -- see
+         * find_by_name()'s comment in src/kernel/vms_proctab.c). */
+        size_t i;
+        for (i = 0; i + 1 < sizeof(upper_name) && cmd->params[0][i]; i++)
+            upper_name[i] = (char)toupper((unsigned char)cmd->params[0][i]);
+        upper_name[i] = '\0';
+        namdsc = dsc_from_str(upper_name);
+        namdsc_p = &namdsc;
+    }
+
+    uint32_t status = sys$delprc(pid_p, namdsc_p);
+    if (!(status & 1)) {
+        /* The authentic VMS condition, exactly as sys$getmsg renders it
+         * (run_print_condition, above) -- SS$_NONEXPR for no such process,
+         * SS$_NOPRIV for missing GROUP/WORLD, never a fabricated STOP-
+         * facility message standing in for the executive's own answer. */
+        run_print_condition(status, 0);
+        return status;
+    }
     return SS$_NORMAL;
 }
 

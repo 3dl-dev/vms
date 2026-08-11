@@ -497,8 +497,16 @@ static void handle_connection(ssh_session session)
         setenv("VMS_UIC_MEMBER",  uic_member_str, 1);
         setenv("VMS_DEFAULT_DIR", sysuaf_rec.default_dir, 1);
         setenv("VMS_PRIVILEGES",  sysuaf_rec.privileges,  1);
-        setenv("SYS$LOGIN",       sysuaf_rec.default_dir, 1);
-        setenv("SYS$SCRATCH",     "/tmp",                 1);
+
+        /*
+         * SYS$LOGIN / SYS$SCRATCH ARE NO LONGER ENV VARS (vms-e48). They used
+         * to be setenv'd here (and SYS$SCRATCH was hardcoded to the Linux path
+         * "/tmp", a Linux path wearing a VMS logical's name) -- a facade, since
+         * F$TRNLNM never read the environment. DCL's --login path now
+         * establishes SYS$LOGIN / SYS$LOGIN_DEVICE / SYS$SCRATCH as REAL
+         * LNM$PROCESS logicals from VMS_DEFAULT_DIR (above), so an SSH session
+         * gets the same truthful per-user logicals a console login does.
+         */
 
         /* ---- Step 3: Display VMS login banner ---- */
         static const char *months[] = {
@@ -531,8 +539,15 @@ static void handle_connection(ssh_session session)
         ovmx_accounting_record_login(sysuaf_rec.username);
         fflush(stdout);
 
-        /* ---- Step 4: Exec vmsdcl --login ---- */
-        execl(DCL_SHELL_PATH, "vmsdcl", "--login", (char *)NULL);
+        /* ---- Step 4: Exec vmsdcl --login ----
+         * Hand over the SYSUAF login command file (LGICMD, or the documented
+         * SYS$LOGIN:LOGIN.COM default) exactly as LOGINOUT does (vms-e48), so
+         * an SSH session honours the account's LGICMD instead of a hardcoded
+         * default. */
+        char ssh_lgicmd[256];
+        sysuaf_login_command_file(&sysuaf_rec, ssh_lgicmd, sizeof(ssh_lgicmd));
+        execl(DCL_SHELL_PATH, "vmsdcl", "--login", "--lgicmd", ssh_lgicmd,
+              (char *)NULL);
 
         /* Fallback if vmsdcl is not installed */
         perror("vmsdcl");

@@ -33,6 +33,7 @@
 #include "ovmx_identity.h"
 #include "vms/privs.h"
 #include "vms/logical.h"
+#include "sysuaf.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 /* The executive process table: this process's identity is READ from it. */
@@ -485,12 +486,17 @@ int main(int argc, char *argv[])
     /* Set VEOF to Ctrl+Z (VMS convention) */
     setup_vms_eof();
 
-    /* Check for --login flag */
+    /* Check for --login flag, and the login command file LOGINOUT hands over
+     * with --lgicmd <spec> (vms-e48: the SYSUAF LGICMD field, already resolved
+     * to its documented default by LOGINOUT when the field was empty). */
     int login_mode = 0;
+    const char *login_lgicmd = NULL;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--login") == 0) {
             login_mode = 1;
             dcl_ctx.logged_in = 1;
+        } else if (strcmp(argv[i], "--lgicmd") == 0 && i + 1 < argc) {
+            login_lgicmd = argv[++i];
         }
     }
 
@@ -545,20 +551,46 @@ int main(int argc, char *argv[])
     /* Execute login scripts when in login mode */
     if (login_mode) {
         struct stat st;
+
+        /*
+         * ESTABLISH THE PER-USER IDENTITY LOGICALS (vms-e48).
+         *
+         * SYS$LOGIN / SYS$LOGIN_DEVICE / SYS$SCRATCH become REAL LNM$PROCESS
+         * logicals, sourced from the SYSUAF default device/directory that
+         * LOGINOUT read and conveyed through VMS_DEFAULT_DIR (which
+         * dcl_context_init already copied into ctx->default_dir). This is what
+         * makes F$TRNLNM("SYS$LOGIN") return this user's real home instead of
+         * the generic SYS$SYSDEVICE:[USERS] default -- and it runs here, in the
+         * surviving CLI process, because LNM$PROCESS is per-process state that
+         * does not cross the execl() from vms_login. It must happen BEFORE the
+         * login command procedures run, so their F$TRNLNM / SYS$LOGIN:-relative
+         * filespecs resolve against the real home.
+         */
+        lnm_manager_t *login_mgr = lnm_get_manager();
+        if (login_mgr && dcl_ctx.default_dir[0])
+            lnm_define_login_logicals(login_mgr, dcl_ctx.default_dir);
+
         /* System-wide login script */
         char sylogin_linux[1024];
         vmsfs_to_linux_path(SYLOGIN_PATH, sylogin_linux, sizeof(sylogin_linux));
         if (stat(sylogin_linux, &st) == 0 && S_ISREG(st.st_mode)) {
             dcl_execute_script(sylogin_linux, 0, NULL);
         }
-        /* Per-user login script */
-        const char *home = getenv("SYS$LOGIN");
-        if (home && home[0]) {
-            char user_login[512];
-            snprintf(user_login, sizeof(user_login), "%s/LOGIN.COM", home);
-            if (stat(user_login, &st) == 0 && S_ISREG(st.st_mode)) {
-                dcl_execute_script(user_login, 0, NULL);
-            }
+
+        /*
+         * Per-user login command file: the SYSUAF LGICMD field LOGINOUT handed
+         * over via --lgicmd, or the documented SYS$LOGIN:LOGIN.COM default
+         * (vms-e48). Resolved through vmsfs_to_linux_path(), which translates
+         * the SYS$LOGIN logical just defined above -- NOT getenv("SYS$LOGIN")
+         * with a hardcoded "/LOGIN.COM" tail, and NOT the SYSUAF field ignored.
+         */
+        const char *lgicmd_spec =
+            (login_lgicmd && login_lgicmd[0]) ? login_lgicmd
+                                              : SYSUAF_DEFAULT_LGICMD;
+        char user_login[1024];
+        if (vmsfs_to_linux_path(lgicmd_spec, user_login, sizeof(user_login)) == 1
+            && stat(user_login, &st) == 0 && S_ISREG(st.st_mode)) {
+            dcl_execute_script(user_login, 0, NULL);
         }
     }
 

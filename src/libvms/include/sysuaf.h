@@ -58,8 +58,11 @@
 #define SYSUAF_SEP_STR       "|"
 
 /* Field order and count. Rows carrying fewer than SYSUAF_MIN_FIELDS are
-   malformed; FLAGS and PRIVILEGES may be absent on a legacy row. */
-#define SYSUAF_FIELD_COUNT   7
+   malformed; FLAGS, PRIVILEGES and LGICMD may be absent on a legacy row.
+   LGICMD (field 8, vms-e48) is a trailing OPTIONAL field: a row that omits it
+   parses exactly as before (empty LGICMD), and the writer omits it when empty,
+   so pre-vms-e48 SYSUAF.DAT rows round-trip byte-identically. */
+#define SYSUAF_FIELD_COUNT   8
 #define SYSUAF_MIN_FIELDS    5
 
 enum {
@@ -69,8 +72,20 @@ enum {
     SYSUAF_F_UIC_MEMBER = 3,
     SYSUAF_F_DEFDIR     = 4,
     SYSUAF_F_FLAGS      = 5,
-    SYSUAF_F_PRIVILEGES = 6
+    SYSUAF_F_PRIVILEGES = 6,
+    SYSUAF_F_LGICMD     = 7
 };
+
+/*
+ * The login command file run at login when the account's LGICMD field is
+ * empty (vms-e48). VSI OpenVMS System Manager's Manual, AUTHORIZE /LGICMD:
+ * "If you omit this qualifier, the OpenVMS operating system uses the default,
+ * SYS$LOGIN:LOGIN.COM." SYS$LOGIN is the per-user login logical this same
+ * item establishes, so the default resolves through it to the user's own
+ * home -- one definition, used by LOGINOUT (tools/vms_login.c) and by DCL's
+ * login-mode fallback (src/vmsdcl/dcl_main.c).
+ */
+#define SYSUAF_DEFAULT_LGICMD  "SYS$LOGIN:LOGIN.COM"
 
 /*
  * THE UIC FIELDS ARE OCTAL (vms-e60). Derivation -- from the oracle, not
@@ -99,6 +114,8 @@ typedef struct {
     char     default_dir[256];
     char     flags[64];
     char     privileges[256];
+    char     lgicmd[256];       /* login command file (SYSUAF LGICMD); empty
+                                   means the SYSUAF_DEFAULT_LGICMD default */
 } sysuaf_record_t;
 
 /*
@@ -235,6 +252,18 @@ int sysuaf_authenticate(const sysuaf_record_t *rec, const char *password);
 
 /* Parse VMS privilege string (e.g. "TMPMBX,NETMBX,OPER") into bitmask */
 uint64_t sysuaf_parse_privileges(const char *priv_string);
+
+/*
+ * Resolve the login command file for an account (vms-e48): the SYSUAF LGICMD
+ * field when it is set, otherwise SYSUAF_DEFAULT_LGICMD. This is the ONE place
+ * the "field empty -> documented default" rule is applied, so LOGINOUT
+ * (tools/vms_login.c) and any other caller cannot disagree about the default.
+ * The result is a VMS filespec (e.g. "DKA100:[SMITH]LOGIN.COM" or
+ * "SYS$LOGIN:LOGIN.COM"); the caller translates it through the logical-name /
+ * device tables like any other filespec. 'out' is always NUL-terminated.
+ */
+void sysuaf_login_command_file(const sysuaf_record_t *rec,
+                               char *out, size_t outsz);
 
 /*
  * Rewrite ONE existing row of SYSUAF_PATH in place with the record given

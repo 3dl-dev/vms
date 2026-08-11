@@ -163,6 +163,12 @@ int sysuaf_parse_line(char *line, sysuaf_record_t *rec)
     if (nf > SYSUAF_F_PRIVILEGES)
         strncpy(rec->privileges, fields[SYSUAF_F_PRIVILEGES],
                 sizeof(rec->privileges) - 1);
+    /* LGICMD is the trailing OPTIONAL field (vms-e48). A legacy 5-7 field row
+     * leaves it empty, which sysuaf_login_command_file() reads as "use the
+     * documented SYS$LOGIN:LOGIN.COM default". */
+    if (nf > SYSUAF_F_LGICMD)
+        strncpy(rec->lgicmd, fields[SYSUAF_F_LGICMD],
+                sizeof(rec->lgicmd) - 1);
 
     return 1;
 }
@@ -192,8 +198,29 @@ int sysuaf_format_record(const sysuaf_record_t *rec, char *out, size_t outsz)
     if (!rec || !out || outsz == 0)
         return -1;
 
+    /*
+     * LGICMD (vms-e48) is written as a trailing field ONLY when it is set.
+     * An account with no LGICMD formats to the exact 7-field line it did
+     * before this field existed, so every pre-vms-e48 SYSUAF.DAT row (all of
+     * which have an empty LGICMD) round-trips byte-identically -- the writer
+     * gains a field without rewriting the rest of the file. This is still ONE
+     * format: the optional tail mirrors how FLAGS/PRIVILEGES are already
+     * optional on the read side.
+     */
     char tmp[SYSUAF_LINE_MAX * 2];
-    int n = snprintf(tmp, sizeof(tmp), "%s|%s|%o|%o|%s|%s|%s",
+    int n;
+    if (rec->lgicmd[0]) {
+        n = snprintf(tmp, sizeof(tmp), "%s|%s|%o|%o|%s|%s|%s|%s",
+                     rec->username,
+                     rec->password_hash,
+                     (unsigned)rec->uic_group,
+                     (unsigned)rec->uic_member,
+                     rec->default_dir,
+                     rec->flags,
+                     rec->privileges,
+                     rec->lgicmd);
+    } else {
+        n = snprintf(tmp, sizeof(tmp), "%s|%s|%o|%o|%s|%s|%s",
                      rec->username,
                      rec->password_hash,
                      (unsigned)rec->uic_group,
@@ -201,6 +228,7 @@ int sysuaf_format_record(const sysuaf_record_t *rec, char *out, size_t outsz)
                      rec->default_dir,
                      rec->flags,
                      rec->privileges);
+    }
 
     /* n + 1 for the newline the caller appends; the line must fit in
      * SYSUAF_LINE_MAX so that sysuaf_read_line() can read it back whole. */
@@ -558,4 +586,18 @@ int sysuaf_write_record(const sysuaf_record_t *rec)
 uint64_t sysuaf_parse_privileges(const char *priv_string)
 {
     return parse_privilege_string(priv_string);
+}
+
+/* ------------------------------------------------------------------ */
+/* sysuaf_login_command_file (vms-e48)                                 */
+/* ------------------------------------------------------------------ */
+
+void sysuaf_login_command_file(const sysuaf_record_t *rec,
+                               char *out, size_t outsz)
+{
+    if (!out || outsz == 0)
+        return;
+    const char *spec = (rec && rec->lgicmd[0]) ? rec->lgicmd
+                                               : SYSUAF_DEFAULT_LGICMD;
+    snprintf(out, outsz, "%s", spec);
 }

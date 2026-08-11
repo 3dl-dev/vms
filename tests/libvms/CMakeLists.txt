@@ -273,3 +273,25 @@ target_link_libraries(test_libvms_accounting_veracity PRIVATE
 )
 add_test(NAME test_libvms_accounting_veracity
          COMMAND test_libvms_accounting_veracity)
+
+# vms-e48 -- per-user identity logicals (SYS$LOGIN / SYS$LOGIN_DEVICE /
+# SYS$SCRATCH) are REAL LNM$PROCESS logicals sourced from the SYSUAF record,
+# not Linux env vars, so F$TRNLNM returns the user's home instead of the
+# generic [USERS] default; and the SYSUAF LGICMD field is honoured over the
+# old hardcoded /LOGIN.COM. Needs vmslnm (lnm_define_login_logicals /
+# lnm_translate) alongside vms (sysuaf parse + login command file), so it is
+# not built via libvms_add_test(), same reason test_libvms_identity above isn't.
+add_executable(test_libvms_login_logicals
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_login_logicals.c)
+target_include_directories(test_libvms_login_logicals PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+)
+target_link_libraries(test_libvms_login_logicals PRIVATE
+    vms
+    vmslnm
+    pthread
+    m
+)
+add_test(NAME test_libvms_login_logicals
+         COMMAND test_libvms_login_logicals)

@@ -176,4 +176,30 @@ uint32_t lnm_enumerate(lnm_manager_t *mgr, const char *table_name,
 /* Setup default system logicals */
 void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root);
 
+/*
+ * lnm_define_login_logicals - establish the per-user identity logicals at
+ * login (vms-e48). Given the account's SYSUAF default device+directory
+ * (e.g. "DKA100:[SMITH]" or "SYS$SYSDEVICE:[SYSMGR]"), defines, as REAL
+ * LNM$PROCESS logicals through the same lnm_create() path DEFINE uses:
+ *
+ *   SYS$LOGIN         -> default_dir          (default device + directory)
+ *   SYS$LOGIN_DEVICE  -> the device field of default_dir (up to and
+ *                        including the first ':')
+ *   SYS$SCRATCH       -> default_dir          (VMS default: = SYS$LOGIN)
+ *
+ * These are process-scope on purpose (LNM$PROCESS_TABLE): they need no
+ * executive, so they work under host BUILD/TEST tooling exactly as at
+ * runtime, and each login process gets its own. A process-table entry
+ * shadows the generic SYS$LOGIN -> SYS$SYSDEVICE:[USERS] default that
+ * lnm_setup_defaults() seeds (LNM$FILE_DEV searches PROCESS first), so
+ * F$TRNLNM("SYS$LOGIN") returns THIS user's home, not the generic default.
+ *
+ * Semantics pinned to public docs (VSI OpenVMS DCL Dictionary, "SYS$LOGIN /
+ * SYS$LOGIN_DEVICE / SYS$SCRATCH"; System Manager's Manual, SYSUAF default
+ * device/directory): LOGINOUT establishes these from the SYSUAF record at
+ * login. Returns SS$_NORMAL/SS$_SUPERSEDE on success, or the first failing
+ * lnm_create() status; SS$_BADPARAM if mgr or default_dir is missing.
+ */
+uint32_t lnm_define_login_logicals(lnm_manager_t *mgr, const char *default_dir);
+
 #endif /* __VMS_LOGICAL_H */

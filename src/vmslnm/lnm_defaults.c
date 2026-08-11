@@ -201,3 +201,59 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
     lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$COMMAND", "TT:",
                0, LNM_MODE_EXEC);
 }
+
+/*
+ * lnm_define_login_logicals - per-user identity logicals from SYSUAF (vms-e48).
+ *
+ * WHAT THIS REPLACES: SYS$LOGIN/SYS$SCRATCH used to be Linux environment
+ * variables -- vms_login setenv'd them and DCL getenv'd them -- so
+ * F$TRNLNM("SYS$LOGIN") never saw the user's real home and returned the
+ * generic SYS$SYSDEVICE:[USERS] default lnm_setup_defaults() seeds. These are
+ * now REAL LNM$PROCESS logicals created through the same lnm_create() path
+ * DEFINE uses, so translation is truthful.
+ *
+ * Contract and doc citations are on the declaration in vms/logical.h.
+ */
+/* lnm_create() reports a replaced name with SS$_SUPERSEDE (844), which is an
+ * EVEN success code -- so plain (status & 1) would read a supersede as a
+ * failure. SYS$LOGIN et al. deliberately supersede the generic defaults
+ * lnm_setup_defaults() seeded, so both codes are success here (the same pair
+ * dcl_translate_logical() accepts). */
+#define LNM_LOGIN_OK(st)  ((st) == SS$_NORMAL || (st) == SS$_SUPERSEDE)
+
+uint32_t lnm_define_login_logicals(lnm_manager_t *mgr, const char *default_dir)
+{
+    if (!mgr || !default_dir || !default_dir[0])
+        return SS$_BADPARAM;
+
+    /* SYS$LOGIN: the account's full default device + directory. Supersedes the
+     * generic [USERS] default seeded in this same table (or in SYSTEM at
+     * runtime); the LNM$FILE_DEV search order checks PROCESS first. */
+    uint32_t st = lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$LOGIN",
+                             default_dir, 0, LNM_MODE_SUPER);
+    if (!LNM_LOGIN_OK(st))
+        return st;
+
+    /* SYS$LOGIN_DEVICE: the device field of default_dir -- everything up to
+     * and including the first ':'. Only defined when default_dir names a
+     * device (it always does when it comes from a SYSUAF record). */
+    const char *colon = strchr(default_dir, ':');
+    if (colon) {
+        size_t devlen = (size_t)(colon - default_dir) + 1;   /* keep the ':' */
+        char device[LNM_MAX_VALUE + 1];
+        if (devlen > LNM_MAX_VALUE)
+            devlen = LNM_MAX_VALUE;
+        memcpy(device, default_dir, devlen);
+        device[devlen] = '\0';
+        st = lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$LOGIN_DEVICE",
+                        device, 0, LNM_MODE_SUPER);
+        if (!LNM_LOGIN_OK(st))
+            return st;
+    }
+
+    /* SYS$SCRATCH: VMS default is the same as SYS$LOGIN (the login directory
+     * doubles as the default scratch area). VSI OpenVMS DCL Dictionary. */
+    st = lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SCRATCH",
+                    default_dir, 0, LNM_MODE_SUPER);
+    return st;
+}

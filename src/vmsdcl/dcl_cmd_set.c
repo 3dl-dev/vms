@@ -35,6 +35,7 @@
 #include "vms_kif.h"
 #include "sysuaf.h"
 #include "sha256.h"
+#include "ovmx_accounting.h"
 
 /* Forward declarations for queue subcommands (dcl_cmd_process.c) */
 extern int cmd_set_entry(struct dcl_command *cmd);
@@ -1571,21 +1572,84 @@ static int cmd_set_audit(struct dcl_command *cmd)
 }
 
 /*
- * SET ACCOUNTING /ENABLE /DISABLE - Toggle accounting.
+ * SET ACCOUNTING /ENABLE /DISABLE - Toggle accounting (vms-17d, INV-DCL;
+ * docs/design-dcl-fidelity.md sec 5, docs/dcl-verb-fidelity-scoreboard.md
+ * "SET ACCOUNTING - moves FACADE to REAL").
+ *
+ * THE FACADE THIS REPLACES. cmd_set_accounting() used to set
+ * ctx->accounting_enabled -- a per-DCL-CONTEXT bool no other process, no
+ * later DCL session, and no reboot could observe -- and print
+ * "%SET-I-INTSET, accounting enabled/disabled" as if it had. Meanwhile
+ * ovmx_accounting_record_login() (login/SSH's accounting writer) ran
+ * UNCONDITIONALLY: SET ACCOUNTING controlled nothing. INV-DCL's banned
+ * fake-success class exactly.
+ *
+ * THE FIX. ovmx_accounting_set_enabled()/ovmx_accounting_is_enabled()
+ * (src/libvms/rtl/ovmx_accounting.c) persist a REAL, system-wide flag
+ * (VMS_ACCOUNTING_STATE_PATH); ovmx_accounting_record_login() now checks
+ * it before writing. SHOW ACCOUNTING (dcl_cmd_show.c) reads the SAME flag.
+ *
+ * Qualifiers per the public OpenVMS DCL Dictionary SET ACCOUNTING entry
+ * (<https://wiki.vmssoftware.com/SET_ACCOUNTING>, fetched for this fix):
+ * /ENABLE[=(class[,...])] and /DISABLE[=(class[,...])], each keyword
+ * naming a resource class (IMAGE, LOGIN_FAILURE, MESSAGE, PRINT, PROCESS)
+ * to start/stop tracking. OVMX has no per-class accounting -- only the
+ * single system-wide login record ovmx_accounting.c already writes -- so
+ * bare /ENABLE and /DISABLE flip that one real flag, and a class list
+ * (a value on /ENABLE or /DISABLE) draws the authentic
+ * "not implemented" refusal (SS$_UNSUPPORTED) instead of silently
+ * accepting granularity nothing honours.
  */
 static int cmd_set_accounting(struct dcl_command *cmd)
 {
-    struct dcl_context *ctx = dcl_get_context();
+    static const struct dcl_qual_def accounting_quals[] = {
+        { "ENABLE",  CDU_VT_LIST, 0, NULL, NULL },
+        { "DISABLE", CDU_VT_LIST, 0, NULL, NULL },
+        { NULL, 0, 0, NULL, NULL },
+    };
+    struct dcl_verb accounting_verb_shim = { .quals = accounting_quals };
+    uint32_t qstatus = dcl_validate_qualifiers(&accounting_verb_shim, cmd);
+    if (qstatus != SS$_NORMAL)
+        return (int)qstatus;
 
-    if (dcl_has_qualifier(cmd, "ENABLE")) {
-        ctx->accounting_enabled = 1;
+    int has_enable = dcl_has_qualifier(cmd, "ENABLE");
+    int has_disable = dcl_has_qualifier(cmd, "DISABLE");
+    const char *enable_val = dcl_qualifier_value(cmd, "ENABLE");
+    const char *disable_val = dcl_qualifier_value(cmd, "DISABLE");
+
+    if ((has_enable && enable_val && enable_val[0]) ||
+        (has_disable && disable_val && disable_val[0])) {
+        dcl_error("SET", 0, "NOTIMPL",
+                  "per-class accounting (/ENABLE=(class,...) or "
+                  "/DISABLE=(class,...)) is not implemented in OVMX - "
+                  "no state changed");
+        return SS$_UNSUPPORTED;
+    }
+
+    /* /ENABLE and /DISABLE together (each with no class list) is
+     * degenerate for OVMX's single-flag model (real VMS allows both only
+     * when their keyword lists don't overlap -- meaningless once neither
+     * side names classes). Same precedence the pre-existing facade already
+     * had (if/else if): /ENABLE wins, deterministically. */
+    if (has_enable) {
+        if (ovmx_accounting_set_enabled(1) != 0) {
+            dcl_error("OVMX", 2, "WRITEFAIL",
+                      "unable to write accounting state - \\%s\\",
+                      VMS_ACCOUNTING_STATE_PATH);
+            return SS$_BADPARAM;
+        }
         printf("%%SET-I-INTSET, accounting enabled\n");
-    } else if (dcl_has_qualifier(cmd, "DISABLE")) {
-        ctx->accounting_enabled = 0;
+    } else if (has_disable) {
+        if (ovmx_accounting_set_enabled(0) != 0) {
+            dcl_error("OVMX", 2, "WRITEFAIL",
+                      "unable to write accounting state - \\%s\\",
+                      VMS_ACCOUNTING_STATE_PATH);
+            return SS$_BADPARAM;
+        }
         printf("%%SET-I-INTSET, accounting disabled\n");
     } else {
         printf("%%SET-I-INTSET, accounting is %s\n",
-               ctx->accounting_enabled ? "enabled" : "disabled");
+               ovmx_accounting_is_enabled() ? "enabled" : "disabled");
     }
     return SS$_NORMAL;
 }

@@ -1,4 +1,31 @@
-# OVMX Architecture
+# OpenVMX Architecture
+
+## Product / Substrate Layering
+
+Following the GNU/Linux naming convention, this repo builds two named
+layers, not one:
+
+- **OpenVMX** (`OVMX_PRODUCT_NAME`) — the VMS-compatible **product**: what a
+  human logs into and what identifies itself on VMS-facing surfaces (login
+  banner, `SHOW SYSTEM`, `MONITOR`, DCL). This is Layer 4 and above in the
+  component-layer diagram below.
+- **OVMX/Linux** (`OVMX_SUBSTRATE_NAME`, with the slash — exactly like
+  "GNU/Linux") — the Linux **substrate** underneath: kernel, boot sequence,
+  and distro build tooling. Roughly the equivalent of the VAX/Alpha hardware
+  OpenVMS itself ran on, except here the "hardware" is a Linux distribution.
+  This is Layers 0-3 and the boot path (Layer 6).
+
+The two identities are printed in that order at boot: `src/ovmx_init/ovmx_init.c`
+prints the OVMX/Linux substrate banner first, then hands off through
+STARTUP.EXE to the OpenVMX product identity a user actually sees. Single
+source of truth for both: `src/libvms/include/ovmx_identity.h`
+(`OVMX_PRODUCT_NAME`, `OVMX_SUBSTRATE_NAME`).
+
+The bare, un-slashed token `OVMX` survives in a handful of places this
+layering deliberately does **not** touch — the `OVMX$_` VMS facility-code
+prefix, the SCS/cluster wire node-name fallback, the IMGACT ELF-note owner,
+and `OVMX_*`/`ovmx_*` source identifiers generally. These are machine-read,
+not brand, and are pinned by `tests/integration/test_frozen_identity_tokens.sh`.
 
 ## Invariant: Clean-Room Cluster Interop
 
@@ -81,7 +108,7 @@ kernel/ (out-of-tree, separate build)
 
 ## Boot Sequence
 
-OVMX has exactly one runtime: the real-kernel/QEMU path (CLAUDE.md Rule 9).
+OpenVMX has exactly one runtime: the real-kernel/QEMU path (CLAUDE.md Rule 9).
 `distro/Dockerfile.bootable` is build TOOLING that produces the kernel +
 initramfs — it is not itself a runtime.
 

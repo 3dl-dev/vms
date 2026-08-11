@@ -8,7 +8,7 @@
 
 ## 1. Goal
 
-An OVMX Linux node joins a customer's live VMScluster: it appears in `SHOW
+An OVMX/Linux node joins a customer's live VMScluster: it appears in `SHOW
 CLUSTER`, participates in the distributed lock manager, serves/accesses MSCP
 disks, and can host a workload evacuated from a VSI node — with no Unix leaks
 visible to VMS peers or applications. This is Rail A (`vms-ci`); it converges

@@ -214,6 +214,56 @@ static int cmd_set_terminal(struct dcl_command *cmd)
     struct vms_terminal *term = &ctx->terminal;
     int changed = 0;
 
+    /*
+     * vms-6f4 Phase 0 (docs/design-dcl-fidelity.md sec 5): SET TERMINAL is
+     * the canary verb for the qualifier-grammar hole. struct dcl_verb
+     * (dcl/cdu.h) carries no per-verb declaration of legal qualifiers for
+     * ANY command, so parse_qualifier() (dcl_parser.c) upcases and stores
+     * whatever token followed '/' with no reference to what SET TERMINAL
+     * actually accepts -- SET TERMINAL/FDAFS silently returned
+     * SS$_NORMAL. %DCL-W-IVQUAL was structurally unreachable.
+     *
+     * This is a TARGETED validation for this one verb, against the exact
+     * qualifier set already implemented below (function header comment,
+     * lines 195-206) -- it is NOT the general per-verb qualifier table
+     * (that is Phase 1, vms-097). See run_resolve_qualifier() in
+     * dcl_cmd_process.c for the existing precedent of a single verb
+     * building its own table because the shared parser/dispatch offers no
+     * way to reject a qualifier at all.
+     *
+     * Runs before any state is touched, so an invalid qualifier rejects
+     * the whole line with nothing applied -- matching the oracle, where
+     * DCL validates the qualifier table before the verb routine is ever
+     * entered (VAX1 capture, dcl_cmd_process.c:726: "%DCL-W-IVQUAL,
+     * unrecognized qualifier - check validity, spelling, and placement").
+     */
+    static const char *const terminal_known_qualifiers[] = {
+        "WIDTH", "PAGE", "SPEED", "PARITY", "DEVICE_TYPE", "DEVICE",
+        "ECHO", "WRAP", "BROADCAST", "TYPEAHEAD", "HOSTSYNC", "TTSYNC",
+        "LINE_EDITING", "INSERT", "OVERSTRIKE", "SCOPE", "LOWERCASE",
+        "UPPERCASE", "TAB", "MECHTAB", "HOLDSCREEN", "EIGHTBIT",
+        "READSYNC", "PASTHRU", "ESCAPE", "FORM", "FULLDUP", "HALFDUP",
+        "MODEM", "PAGE_CHAR", "SECURE", "FALLBACK", "DIALUP", "OPER",
+        "ALTYPEAHD", "RUNOUT",
+    };
+    for (int qi = 0; qi < cmd->qualifier_count; qi++) {
+        const char *qname = cmd->qualifiers[qi].name;
+        int known = 0;
+        for (size_t k = 0; k < sizeof(terminal_known_qualifiers) /
+                                sizeof(terminal_known_qualifiers[0]); k++) {
+            if (strcasecmp(qname, terminal_known_qualifiers[k]) == 0) {
+                known = 1;
+                break;
+            }
+        }
+        if (!known) {
+            dcl_error("DCL", 0, "IVQUAL",
+                      "unrecognized qualifier - check validity, spelling, "
+                      "and placement - \\%s\\", qname);
+            return SS$_IVQUAL;
+        }
+    }
+
     /* /WIDTH=n */
     const char *width_val = dcl_qualifier_value(cmd, "WIDTH");
     if (width_val && *width_val) {
@@ -1269,22 +1319,27 @@ static int cmd_set_host(struct dcl_command *cmd)
 
 /*
  * SET AUDIT /ENABLE /DISABLE - Toggle security auditing.
+ *
+ * vms-6f4 Phase 0 (docs/design-dcl-fidelity.md sec 5): SET AUDIT is a named
+ * facade -- it used to flip ctx->audit_enabled (a per-process bool no other
+ * process, reboot, or real audit trail could observe) and print an "-I-"
+ * message while returning SS$_NORMAL. That is INV-DCL's banned fake-success
+ * class: the printed text and the numeric status both told the caller the
+ * operation succeeded, and nothing did.
+ *
+ * SET AUDIT is real, privileged VMS syntax (DCL Dictionary), so the honest
+ * answer is not a syntax rejection (IVQUAL/IVKEYW) -- the syntax is fine.
+ * OVMX has no security-auditing subsystem behind it (that is Phase 2's
+ * job), so this reports the genuine VMS "operation not supported" status
+ * (SS$_UNSUPPORTED, ssdef.h) and touches no state, rather than claim a
+ * toggle that has no effect.
  */
 static int cmd_set_audit(struct dcl_command *cmd)
 {
-    struct dcl_context *ctx = dcl_get_context();
-
-    if (dcl_has_qualifier(cmd, "ENABLE")) {
-        ctx->audit_enabled = 1;
-        printf("%%SET-I-INTSET, auditing enabled\n");
-    } else if (dcl_has_qualifier(cmd, "DISABLE")) {
-        ctx->audit_enabled = 0;
-        printf("%%SET-I-INTSET, auditing disabled\n");
-    } else {
-        printf("%%SET-I-INTSET, security auditing is %s\n",
-               ctx->audit_enabled ? "enabled" : "disabled");
-    }
-    return SS$_NORMAL;
+    (void)cmd;
+    dcl_error("SET", 0, "NOTIMPL",
+              "security auditing is not implemented in OVMX - no state changed");
+    return SS$_UNSUPPORTED;
 }
 
 /*

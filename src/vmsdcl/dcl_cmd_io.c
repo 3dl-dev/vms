@@ -37,6 +37,28 @@ int cmd_assign(struct dcl_command *cmd)
     const char *equiv   = cmd->params[0];
     const char *logname = cmd->params[1];
 
+    /*
+     * vms-6f4 Phase 0 (docs/design-dcl-fidelity.md sec 5): ASSIGN/SYSTEM
+     * is a named facade. /SYSTEM, /JOB, /GROUP, and /TABLE select a
+     * target logical-name table (DCL Dictionary, ASSIGN) -- real,
+     * privileged VMS syntax. ASSIGN does not yet reach the logical-name
+     * manager at all (it writes upper_name into the DCL SYMBOL table,
+     * dcl_sym_set(), below -- see cmd_define() for the real LNM path
+     * DEFINE already uses); wiring ASSIGN the same way is Phase 2's job.
+     * Until then, silently discarding these qualifiers and claiming
+     * SS$_NORMAL -- the previous behavior -- is exactly INV-DCL's banned
+     * "silent qualifier acceptance": the caller asked for a specific
+     * table placement and got a same-named DCL symbol instead, with no
+     * indication anything different happened. Refuse honestly instead.
+     */
+    if (dcl_has_qualifier(cmd, "SYSTEM") || dcl_has_qualifier(cmd, "JOB") ||
+        dcl_has_qualifier(cmd, "GROUP") || dcl_has_qualifier(cmd, "TABLE")) {
+        dcl_error("DCL", 0, "NOTIMPL",
+                  "ASSIGN /SYSTEM, /JOB, /GROUP, and /TABLE are not yet "
+                  "implemented - no logical name was created");
+        return SS$_UNSUPPORTED;
+    }
+
     /* Uppercase the logical name (VMS convention) */
     char upper_name[256];
     size_t i;
@@ -44,8 +66,9 @@ int cmd_assign(struct dcl_command *cmd)
         upper_name[i] = (char)toupper((unsigned char)logname[i]);
     upper_name[i] = '\0';
 
-    /* /TABLE qualifier selects target table — stub: we have one table */
-    /* /PROCESS (default), /JOB, /GROUP, /SYSTEM — all map to global for now */
+    /* /PROCESS (default) maps to the DCL global symbol table for now;
+     * see the comment above for why the other table-selecting qualifiers
+     * are refused rather than silently mapped here too. */
     int scope = DCL_SYM_GLOBAL;
     if (dcl_has_qualifier(cmd, "PROCESS")) scope = DCL_SYM_GLOBAL;
 

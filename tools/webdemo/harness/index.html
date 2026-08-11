@@ -1,0 +1,43 @@
+<!doctype html><html><head><meta charset="utf-8">
+<!-- Snapshot-capture harness: boots the OVMX guest FRESH under our qemu-wasm and
+     exposes window.__ovmxTerm (screen) + window.__ovmxMod (emscripten module) so
+     tools/webdemo/capture.js can drive the monitor (savevm) and export the qcow2.
+     Not the shipped page — this exists only to MAKE the snapshot. -->
+<link rel="stylesheet" href="assets/xterm.css">
+<script src="coi-serviceworker.js"></script>
+<script src="assets/xterm.js"></script><script src="assets/xterm-pty.js"></script>
+<script src="module.js"></script><script src="load-rom.js"></script>
+</head><body><div id="terminal"></div>
+<script type="module">
+const term = new Terminal({ cols: 100, rows: 34, convertEol: true });
+term.open(document.getElementById('terminal')); window.__ovmxTerm = term;
+const { master, slave } = openpty(); term.loadAddon(master); Module.pty = slave;
+const gunzip = async (u) => {
+  const r = await fetch(u);
+  const s = r.body.pipeThrough(new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(s).arrayBuffer());
+};
+Module.preRun = Module.preRun || [];
+Module.preRun.push((m) => {
+  m.addRunDependency('p'); const mk = (p) => { try { m.FS.mkdir(p); } catch (e) {} };
+  Promise.all([
+    fetch('vmlinuz').then((r) => r.arrayBuffer()),
+    fetch('initramfs-ovmx.cpio.gz').then((r) => r.arrayBuffer()),
+    gunzip('sysdisk.qcow2.gz'),
+  ]).then(([k, i, d]) => {
+    mk('/pack-kernel'); mk('/pack-initramfs'); mk('/pack-disk');
+    m.FS.writeFile('/pack-kernel/vmlinuz', new Uint8Array(k));
+    m.FS.writeFile('/pack-initramfs/initramfs-ovmx.cpio.gz', new Uint8Array(i));
+    m.FS.writeFile('/pack-disk/sysdisk.qcow2', d);
+    m.removeRunDependency('p');
+  });
+});
+import('./out.js').then((mm) => mm.default(Module).then((mod) => {
+  window.__ovmxMod = mod;
+  const op = mod.TTY.stream_ops.poll, pty = mod.pty;
+  mod.TTY.stream_ops.poll = function (s, t) {
+    if (!pty.readable) return (pty.readable ? 1 : 0) | (pty.writable ? 4 : 0);
+    return op.call(s, s, t);
+  };
+}));
+</script></body></html>

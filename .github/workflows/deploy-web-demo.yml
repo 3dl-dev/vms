@@ -1,0 +1,115 @@
+name: deploy-web-demo
+
+# Auto-track the latest release on the in-browser demo. When an OVMX release is
+# published, rebuild the demo payload FROM that release's own assets + our
+# qemu-wasm binary, capture the boot snapshot in CI, and push the result to
+# openvmx-site. No hand-copying; the site always tracks the newest release.
+#
+# ONE-TIME SETUP (see tools/webdemo/README.md):
+#   - secret DEPLOY_TOKEN: a fine-grained PAT with
+#       * contents:read on 3dl-dev/qemu-wasm   (download our qemu-wasm binary)
+#       * contents:write on 3dl-dev/openvmx-site (push the rebuilt demo)
+#   - 3dl-dev/qemu-wasm must have a published Release carrying
+#       qemu-system-x86_64.wasm / out.js / qemu-system-x86_64.worker.js
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: OVMX release tag to build the demo from (e.g. 0.3)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout capture tooling
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: tag
+        run: echo "tag=${{ github.event.release.tag_name || github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+
+      - name: Install qemu-img + Playwright
+        run: |
+          sudo apt-get update && sudo apt-get install -y qemu-utils
+          npm init -y >/dev/null 2>&1
+          npm i -D playwright@1.47.0
+          npx playwright install --with-deps chromium
+
+      - name: Download OVMX release web artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p rel
+          gh release download "${{ steps.tag.outputs.tag }}" --repo "${{ github.repository }}" -D rel \
+            -p vmlinuz -p initramfs-ovmx-slim.cpio.gz -p ovmx-distrib.img
+          ls -la rel
+
+      - name: Download our qemu-wasm binary (latest fork release)
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          mkdir -p qw
+          gh release download --repo 3dl-dev/qemu-wasm -D qw \
+            -p qemu-system-x86_64.wasm -p out.js -p qemu-system-x86_64.worker.js
+          ls -la qw
+
+      - name: Checkout openvmx-site
+        uses: actions/checkout@v4
+        with:
+          repository: 3dl-dev/openvmx-site
+          token: ${{ secrets.DEPLOY_TOKEN }}
+          path: site
+
+      - name: Assemble capture harness
+        run: |
+          H=harness-run; mkdir -p "$H/assets"
+          cp tools/webdemo/harness/index.html "$H/index.html"
+          cp tools/webdemo/harness/module.js "$H/module.js"
+          cp qw/qemu-system-x86_64.wasm qw/out.js qw/qemu-system-x86_64.worker.js "$H/"
+          # stable bits reused from the current site (ROMs, xterm, coi shim)
+          cp site/boot/load-rom.js site/boot/load-rom.data "$H/"
+          cp site/boot/coi-serviceworker.js "$H/"
+          cp site/boot/assets/xterm.js site/boot/assets/xterm.css site/boot/assets/xterm-pty.js "$H/assets/"
+          cp rel/vmlinuz "$H/vmlinuz"
+          cp rel/initramfs-ovmx-slim.cpio.gz "$H/initramfs-ovmx.cpio.gz"
+          qemu-img convert -O qcow2 rel/ovmx-distrib.img "$H/distrib.qcow2"
+          gzip -9 -c "$H/distrib.qcow2" > "$H/sysdisk.qcow2.gz"; rm -f "$H/distrib.qcow2"
+          ls -la "$H"
+
+      - name: Capture boot snapshot (headless, under our qemu-wasm)
+        run: |
+          node tools/webdemo/coi-server.js harness-run 8099 &
+          sleep 2
+          node tools/webdemo/capture.js http://localhost:8099 snap.qcow2
+          gzip -9 -c snap.qcow2 > sysdisk.qcow2.gz
+          ls -la sysdisk.qcow2.gz
+
+      - name: Update openvmx-site payload
+        run: |
+          B=site/boot
+          cp qw/qemu-system-x86_64.wasm qw/out.js qw/qemu-system-x86_64.worker.js "$B/"
+          cp rel/vmlinuz "$B/vmlinuz"
+          cp rel/initramfs-ovmx-slim.cpio.gz "$B/initramfs-ovmx.cpio.gz"
+          cp sysdisk.qcow2.gz "$B/sysdisk.qcow2.gz"
+          # cache-bust the payload so clients fetch the new set, not a stale one
+          VER="${{ steps.tag.outputs.tag }}-${{ github.run_number }}"
+          sed -i "s/const PAYLOAD_VER = '[^']*'/const PAYLOAD_VER = '${VER}'/" "$B/index.html" || true
+          grep -n "PAYLOAD_VER" "$B/index.html" | head -1 || true
+
+      - name: Commit + push to openvmx-site
+        run: |
+          cd site
+          git config user.name "ovmx-release-bot"
+          git config user.email "bot@3dl.dev"
+          git add boot
+          if git diff --cached --quiet; then echo "no change to publish"; exit 0; fi
+          git commit -m "demo: auto-update to OVMX ${{ steps.tag.outputs.tag }} (release-triggered)"
+          git push

@@ -1194,6 +1194,24 @@ int dcl_execute_command(struct dcl_command *cmd)
     /* Look up the verb in the command table */
     const struct dcl_verb *verb = dcl_find_verb(cmd->verb);
     if (verb) {
+        /* Phase 1 keystone (docs/design-dcl-fidelity.md sec 4): validate the
+         * parsed qualifiers against the verb's declared table BEFORE the
+         * handler runs, so an unknown qualifier is rejected with the authentic
+         * %DCL-W-IVQUAL (or %DCL-W-IVKEYW for a bad keyword) instead of being
+         * silently accepted. For verbs not yet retrofit with a table
+         * (verb->quals == NULL) this returns SS$_NORMAL and nothing changes. */
+        int qstatus = dcl_validate_qualifiers(verb, cmd);
+        if (qstatus != SS$_NORMAL) {
+            ctx->last_status = (uint32_t)qstatus;
+            ctx->last_severity = (uint32_t)(qstatus & 7);
+            char sbuf[32];
+            snprintf(sbuf, sizeof(sbuf), "%d", qstatus);
+            dcl_sym_set("$STATUS", sbuf, DCL_SYM_GLOBAL);
+            snprintf(sbuf, sizeof(sbuf), "%d", qstatus & 7);
+            dcl_sym_set("$SEVERITY", sbuf, DCL_SYM_GLOBAL);
+            return qstatus;
+        }
+
         int status = verb->handler(cmd);
         ctx->last_status = (uint32_t)status;
         ctx->last_severity = (uint32_t)(status & 7);

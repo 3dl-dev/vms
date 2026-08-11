@@ -5239,6 +5239,127 @@ measurement `tools/cluster/dissect_sca.py`.
 > tracked separately; it does not affect any datum above (the sidecar WAS carried IN to
 > both rejoin arms, verified `carried prior-admission sidecar (57 bytes)`).
 
+#### 4(O.19) There is NO "special-credit handshake to complete": the op-6/op-7/op-8/op-9 exchange §4(O.17)/§4(O.18) read as SCS Send-Credit flow control is the SCS$DIRECTORY connection's DISCONNECT + teardown-prologue, and BOTH §4(O.18) candidates are REFUTED — the coordinator withholds op-7 for the same reason it withholds op 0x04: its per-VC `recv_seq` FREEZES at OVMX `send_seq=10`, so OVMX's op-9 (`ss=11`), its op-6 DISCONNECT_REQ (`ss=12`) and the deferred op 0x02 (`ss=13`) all ride behind the frozen point and are never delivered — this is the §4(O.14)/§4(O.15) freeze, now pinned to the frame at `ss=11`, and #291's op-6 is a mislabeled disconnect that CANNOT help (GROUNDED, SUCCESS oracle frame-by-frame + the same `vaxlab-0` fix-arm capture §4(O.18) ran + `scs_env.h` MTYPE namespace + `scs_t89_measure.py` + *VAXcluster Principles* pp. 2-43/2-44/2-45, `vms-b1db`, 2026-08-11)
+
+**Frame.** §4(O.18) left two candidates for why the coordinator retransmits op-8 ×34 and
+never sends op-7 to OVMX's op-6: (1) OVMX's op-9 sends a credit COUNT the coordinator
+rejects (Davis pp. 2-44/2-45), or (2) the CM JOIN Phase-1 dialogue is never entered
+(pp. 7-37/7-39). This subsection reads the fix-arm capture frame-by-frame against the
+SUCCESS oracle and against OVMX's own MTYPE namespace, REFUTES BOTH, and shows the
+op-6/7/8/9 "credit handshake" was a mis-layering: those opcodes are the SCS$DIRECTORY
+connection being torn down, riding the same virtual circuit whose `recv_seq` freeze
+§4(O.14)/§4(O.15) already identified as the rejoin blocker. It ships NO wire change.
+
+**op-6/op-7 are DISCONNECT_REQ / DISCONNECT_RSP, not a "special-credit request/response"
+(GROUNDED, `scs_env.h` + `scs_t89_measure.py` + oracle wire).** In OVMX's shared MTYPE
+namespace at content `[46]` (abs `[60]`), `6 = SCS_ENV_MTYPE_DISCONNECT_REQ` and
+`7 = DISCONNECT_RSP` (`src/vmsscs/include/scs_env.h`); `scsd.c`'s own deleted-function
+comment states it flatly — *"op 6 IS the DISCONNECT_REQUEST of spec sec 4(h)(1a)"*. On the
+oracle wire op-6/op-7 is a **bidirectional connection close**: for every op-6 (62-byte,
+credit 0) the peer immediately returns an op-7 (58-byte, credit 0) with the Con.ID pair
+swapped, then reverses roles (oracle `f1214` op-6 VAX1→rejoiner → `f1215` op-7 →
+`f1216` op-6 rejoiner→VAX1 → `f1218` op-7). op-8/op-9 is the teardown PROLOGUE that
+immediately precedes it (`scs_t89_measure.py`: 131/131 type-8 dialogues are SCS$DIRECTORY
+and biconditional with teardown; op-8 → op-9 → op-6 → op-7). So "op-6 = OVMX's own
+special-credit request" (§4(O.17)/§4(O.18)) mislabels a DISCONNECT_REQ, and
+`scs_send_rejoin_credit_op6()` confirms it in code: it builds the frame from
+`scs_dir_disc_tmpl` (a 76-byte DISCONNECT_REQ template, op field `[60]=6`, credit `[62]=0`)
+— it returns NO credit at all.
+
+**The coordinator's per-VC `recv_seq` freezes at OVMX `send_seq=10` and never advances —
+op-9, op-6 and op 0x02 all ride behind it (GROUNDED, `d94-v46f-Rfix.pcap`, OVMX
+`d6:1c:18:40:c0:ff`, `recv_ack` abs `[32:34]`, `send_seq` abs `[34:36]`, op abs `[60]`).**
+On BOTH coordinator VCs the cumulative `recv_ack` toward OVMX climbs to **10** and then
+FREEZES for the whole run (max `recv_ack` = 10 from VAX1 `aa:00:04:00:01:04` AND from VAX2
+`08:00:2b:8e:b7:85`; op-7 count toward OVMX = **0**). OVMX's directory + member connections
+to each peer share ONE per-VC `send_seq` (§4(O.14)): to VAX2 the SCS$DIRECTORY conid
+`0x2B2C0017` and the member conid `0x2B2C0012` interleave a single counter `1..16`. What
+sits at each position after the freeze:
+
+| OVMX frame | `send_seq` | conid | what it is |
+|---|---|---|---|
+| `f63` op-10 (94 B) | 10 | `0x2B2C0017` dir | last directory-lookup msg the coordinator ACCEPTS (`recv_ack`→10) |
+| `f65` **op-9** (58 B) | **11** | `0x2B2C0017` dir | teardown-prologue response — **coordinator drops it, `recv_ack` stays 10** |
+| `f142` **op-6** (62 B) | **12** | `0x2B2C0017` dir | #291's "credit-first" frame = a DISCONNECT_REQ — behind the freeze, never processed → no op-7 |
+| `f143` **op 0x02** (190 B) | **13** | `0x2B2C0012` member | the deferred CM add-member config (`SCSD-I-CMCONFIG2`) — behind the freeze → `cm_responses=0` |
+
+The coordinator keeps RETRANSMITTING op-8 (mt16 `0x4b`→`0x7b`, `SCSD-I-CREDITRETX` every
+~3 s) because from its side the VC is stuck at 10; it never reaches the op-6→op-7 close,
+never opens the config connection, never delivers op 0x02, and finally tears down
+(`XITDONE=0`). So "why won't the coordinator send op-7?" has one answer: **op-7 is a
+DISCONNECT_RSP, and OVMX's op-6 (`ss=12`) is behind the same frozen point that already
+dropped its op-9 (`ss=11`)** — there is no separate credit transaction being withheld.
+
+**Candidate 1 (wrong op-9 credit COUNT) — REFUTED.** OVMX's op-9 credit `[62:64]=2`
+correctly ECHOES the coordinator's op-8 credit `2`, exactly as the oracle echoes `1→1`
+(`f1206` op-8 cr 1 → `f1211` op-9 cr 1). The frame is dropped at the VC-sequence layer
+(`recv_seq` frozen at 10) BEFORE any credit accounting runs, so the credit value cannot be
+the cause. A byte diff of OVMX's op-9 vs the oracle's ACCEPTED op-9 leaves exactly three
+deltas — `send_seq` (VC position), the echoed credit, and content `[22:24]` (abs `[36:38]`:
+OVMX inherits `1` from the op-8; the oracle rejoiner sends `2`) — and none is a
+credit-count field. (See the residual lead below for `[22:24]`.)
+
+**Candidate 2 (CM JOIN Phase-1 never entered) — REFUTED as the proximate cause.** The
+coordinator never reaches ANY connection-manager layer: it is stuck retransmitting a
+transport-layer directory-connection teardown message, three `send_seq` positions below
+the op 0x02 that would even begin JOIN. Phase-1 (pp. 7-37/7-39) is downstream of a freeze
+that happens first; it cannot be gating what the wire never gets to.
+
+**#291 (`OVMX_REJOIN_CREDIT_FIRST`) cannot close rejoin, by construction.** Its op-6 is a
+DISCONNECT_REQ emitted at `ss=12` — already behind the freeze — so it moves nothing; and by
+inserting a frame ahead of op 0x02 it pushes the config from `ss=12` to `ss=13`, deeper
+behind the frozen point. This is why the fix arm and the (unconditional-CREDITRETX) control
+arm are indistinguishable at `XITDONE=0` (§4(O.18) confound). The op-6-first ordering is
+not wrong so much as IRRELEVANT: it operates entirely inside the un-delivered region.
+
+**What the fix increment must do (`vms-694` child).** Abandon the Send-Credit framing — the
+blocker is NOT credit starvation and NOT JOIN Phase-1. It is the §4(O.14)/§4(O.15)
+per-VC `recv_seq` freeze, now pinned to a single frame: **OVMX's `send_seq=11` (the op-9
+directory-teardown-prologue response on the coordinator's SCS$DIRECTORY VC) is the frame
+the coordinator refuses to advance past.** The next increment must determine WHY that one
+frame is dropped while OVMX's `send_seq≤10` are accepted, then make it acceptable so
+`recv_seq` climbs past 10 and the op-6 close, the config connection and op 0x02 all deliver.
+The lead on the record is content `[22:24]` (abs `[36:38]`): the oracle rejoiner's op-9
+carries `2` there and OVMX carries `1` (inherited unchanged from the op-8 by
+`scs_reflect_credit()`, which never rewrites abs `[36:38]`); across the oracle the field is
+`1` on coordinator→member frames and `2` on member→coordinator frames on these directory
+dialogues, so its semantics must be GROUNDED (a path/channel or per-direction selector, not
+yet named) before OVMX changes it — a wrong guess here is exactly the "over-declared runt"
+class `scs_reflect_credit()`'s own `vms-760` comment records as having frozen `recv_seq`
+before. This is a `recv_seq`-delivery question, continuous with §4(O.14), NOT the
+pp. 2-44/7-39 questions §4(O.17)/§4(O.18) posed.
+
+**Non-claims.** (1) NO wire change ships here — a freeze-point + opcode-identity forensic,
+so (like §4(O.14)–§4(O.18)) it carries no kill-switch or frame test. (2) This does NOT
+resolve the §4(O.14) ROOT — WHY the coordinator drops `send_seq=11` — it PINS the freeze to
+that frame and refutes the two §4(O.18) candidates; `[22:24]` is a lead, not a grounded
+cause. (3) The opcode re-identification (6/7 = DISCONNECT, 8/9 = teardown prologue) is the
+`scs_env.h`/`scs_t89_measure.py`/oracle reading and does not touch the still-open RE gap of
+what a "special credit message" looks like on this wire (§4(h)(1f), `vms-7e7`). (4) `recv_ack`
+high-water = 10 is read across possible VC-incarnation restarts (§4(O.18) note); it
+establishes "the ceiling is 10 and op-7 never appears", not a byte-fixed freeze frame.
+
+**Evidence** (host, tank volume): SUCCESS oracle
+`/data/training/vax/cluster/captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`
+(op-8/op-9 teardown prologue `f1206`/`f1211`, bidirectional op-6/op-7 close
+`f1214`/`f1215`/`f1216`/`f1218`, coordinator opens the config connection `f1203` op-0 and
+sends 190-byte config `f1208`/`f1209`; rejoiner op-9 `[22:24]=2`); live fix arm
+`/data/training/vax/k8s-labs/vaxlab-0/logs/d94-v46f-Rfix.pcap` (coordinator `recv_ack`
+frozen at 10 on both VCs, op-7×0; OVMX op-9 `ss=11` `f65`/`f102`, op-6 DISCONNECT `ss=12`
+`f142`/`f150`, deferred op 0x02 `ss=13` `f143`; shared per-VC `send_seq` `1..16` across dir
+conid `0x2B2C0017` + member conid `0x2B2C0012`) and `scsd-v46f-Rfix.log`
+(`SCSD-I-CREDITFIRST`, `SCSD-I-CREDITRETX ×34`, `SCSD-I-CMCONFIG2 … local=0x2B2C0012`,
+`cm_responses=0`, `XITDONE=0`); code `src/vmsscs/scsd.c` (`scs_send_rejoin_credit_op6`
+builds from `scs_dir_disc_tmpl`; `scs_reflect_credit` never rewrites abs `[36:38]`;
+the deleted-`scs_send_disconnect` comment "op 6 IS the DISCONNECT_REQUEST") and
+`src/vmsscs/include/scs_env.h` (MTYPE 6/7 = DISCONNECT_REQ/RSP, 8/9 = special-credit
+msg/paired response); measurement `tools/cluster/scs_t89_measure.py` (op-8/op-9 biconditional
+with teardown) and `tools/cluster/dissect_sca.py` (op abs `[60]`, `recv_ack` abs `[32:34]`,
+`send_seq` abs `[34:36]`); *VAXcluster Principles* (Davis 1993, HOST-ONLY, cited by page,
+never committed) pp. 2-43 (Send Credit), 2-44 (special credit message / Pending Receive
+Credit), 2-45 (Credit Wait), 7-37/7-39 (JOIN / Rule of Total Connectivity — the layer the
+wire never reaches).
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

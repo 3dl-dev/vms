@@ -284,4 +284,17 @@
 # both fill_proc_acct() call sites reddens test_kmod_procacct, and the two
 # knock-on suites test_syssvc_showproc and test_syssvc_procnam, with nothing
 # outside the declared set failing.
-90
+#
+# Raised 90 -> 91 (vms-05b): added delprc-privcheck-bypassed, the negative
+# control that anchors test_syssvc_delprc -- the suite #318 (vms-1a8) added
+# without a matching negctl defect, leaving it in-scope but unanchored and
+# reddening the coverage meta-check on main. PRODUCT-half mutation in
+# libvms/syssvc/sys_process.c: making sys$delprc's `if (!authorized)` refusal
+# unreachable lets a caller without GROUP or WORLD delete a same-group target,
+# reddening exactly the P3 SS$_NOPRIV assertion (the "still ALIVE" sibling
+# stays green -- the killed target is the suite's own $CREPRC child, so it
+# becomes a zombie and kill(pid, 0) still returns 0; see the entry in
+# facility_defects.sh). Mutation-verified against a real /dev/vms via
+# run_facility_negctl.sh: the harness reds, vms.ko stays loaded, and
+# test_syssvc_delprc goes red with nothing outside the declared set failing.
+91

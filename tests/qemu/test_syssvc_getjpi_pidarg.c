@@ -198,7 +198,13 @@ int main(void)
          * no-fabrication checks hold, 1 if any fabricated. */
         return fail > 0 ? 1 : EXIT_SKIP;
     }
-    close(fd);
+    /*
+     * Do NOT close(fd): vms_kif_open() caches it in the static vms_dev_fd,
+     * and every vms_kif_* call below (in this process and, by inheritance,
+     * in the forked A and the exec'd DCL) reuses that cached descriptor.
+     * Closing it here left A's vms_kif_register() with a stale fd -- the
+     * pristine positive control's "process A never published its VMS PID".
+     */
 
     /* ---- Fork the TARGET, process A, and hold it alive. ---- */
     int a_out[2], a_hold[2];
@@ -281,6 +287,7 @@ int main(void)
          * origin/main every one of these carries B's identity instead. */
         CHECK(strstr(out, want_prc) != NULL,
               "F$GETJPI(<A pid>,\"PRCNAM\") == A's process name (not the caller's)");
+        /* negctl: getjpi-pidarg-discarded */
         CHECK(strstr(out, want_usr) != NULL,
               "F$GETJPI(<A pid>,\"USERNAME\") == A's username (not the caller's)");
         CHECK(strstr(out, want_pid) != NULL,

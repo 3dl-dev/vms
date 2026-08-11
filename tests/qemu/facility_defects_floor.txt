@@ -297,4 +297,17 @@
 # facility_defects.sh). Mutation-verified against a real /dev/vms via
 # run_facility_negctl.sh: the harness reds, vms.ko stays loaded, and
 # test_syssvc_delprc goes red with nothing outside the declared set failing.
-91
+#
+# Raised 91 -> 92 (vms-9e2): added getjpi-pidarg-discarded, the negative
+# control that anchors test_syssvc_getjpi_pidarg -- the suite this change
+# adds for "F$GETJPI honors its pid argument", in-scope but otherwise
+# unanchored (the main-red hole delprc-privcheck-bypassed just closed for
+# test_syssvc_delprc). PRODUCT-half mutation in vmsdcl/dcl_lexical.c:
+# forcing lex_getjpi's target resolution always-true down the self branch
+# (`if (1 ...)`) discards the pid argument, so F$GETJPI answers about the
+# caller again (the vms-9e2 facade), reddening the four pid-target identity
+# assertions in the suite's executive scenario (PRCNAM/USERNAME/PID and the
+# paired "did NOT report the caller's identity"); the self-form and liveness
+# assertions stay green. Mutation-verified against a real /dev/vms via
+# run_facility_negctl.sh.
+92

@@ -116,7 +116,19 @@ def previous_release_tag(repo_root, ref):
         proc = run(repo_root, 'merge-base', '--is-ancestor', tag, ref, check=False)
         return proc.returncode == 0
 
-    ancestors = [t for t in candidates if is_ancestor(t)]
+    # A commit is its own ancestor, so a candidate tag that points at the SAME
+    # commit as --ref would be picked as the "previous" release and yield an
+    # empty range -- notes with zero commits. That is exactly what happens when
+    # --ref IS a release tag: the tag-push publish path (.github/workflows/
+    # release.yml checks out the tag and runs cut-release.sh --ref <tag>) and
+    # any retroactive cut of an existing tag. Exclude tags resolving to --ref's
+    # own commit; the previous release is the highest STRICT ancestor.
+    ref_sha = run(repo_root, 'rev-parse', f'{ref}^{{commit}}').stdout.strip()
+
+    def same_commit(tag):
+        return run(repo_root, 'rev-parse', f'{tag}^{{commit}}').stdout.strip() == ref_sha
+
+    ancestors = [t for t in candidates if not same_commit(t) and is_ancestor(t)]
     if not ancestors:
         return None
 

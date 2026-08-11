@@ -475,6 +475,7 @@ dcl-fuser-host-login-name
 dcl-fident-num2name-host-passwd
 dcl-fident-num2name-bracketed-uic
 dcl-fident-name2num-host-passwd
+getjpi-pidarg-discarded
 opcom-header-host-login-name
 setuai-sysprv-caller-declared
 register-adopt-pid-not-reported
@@ -3988,6 +3989,59 @@ EOF
         knock_on_why)  echo "MEASURED: this control's red set is 2, not the 1 round 3 declared, and it was 2 before round 4 touched anything -- the omission is round 3's, found by running the control rather than reasoning about it. The mutation restores the passwd lookup AT the miss, the only place it ever was, so the miss stops being 0 and becomes the UIC built from the passwd entry. The require_fail line names that fabricated UIC; this line is the oracle-pinned miss value failing on the same answer. One behaviour, both ends -- there is no finer mutation, because the deleted lookup and the miss value are the same branch.";;
         esac;;
 
+    getjpi-pidarg-discarded)
+        case "$_f" in
+        facility)     echo "F\$GETJPI's pid argument -- the DCL lexical honoring it and reading the executive process row for the NAMED target (src/vmsdcl/dcl_lexical.c lex_getjpi), vms-9e2";;
+        targets)      echo "vmsdcl/dcl_lexical.c";;
+        # PRODUCT-half defect, the same class as delprc-privcheck-bypassed and
+        # the dcl-f* family above: the property lives in the DCL lexical layer
+        # (vmsdcl), NOT in vms.ko, so no kernel mutation can reach it.
+        # lex_getjpi() RESOLVES its target through the executive
+        # (vms_kif_getjpi_pid for a hex pid, vms_kif_getjpi_self for the null
+        # "current process" form) and answers every item from THAT row. This
+        # mutation forces the resolution down the self branch for EVERY call --
+        # the always-true `if (1 ...)` idiom -- so the pid argument is parsed
+        # and discarded and F$GETJPI answers about the CALLER again, exactly the
+        # vms-9e2 facade (F$GETJPI("OTHERPROC","PID") -> the caller's PID).
+        #
+        # MEASURED to the FOUR pid-target identity assertions in the suite's
+        # executive scenario, NOT the self-form or the liveness checks: with
+        # the resolution self-pinned, F$GETJPI(<A's pid>, PRCNAM/USERNAME/PID)
+        # returns the DCL caller B's own row instead of target A's, reddening
+        # all three "== A's ..." checks plus the paired "did NOT report the
+        # caller B's own identity" negative. The self form F$GETJPI("",...)
+        # STILL reads the caller's own row (it always did), so
+        # "SELF_USERNAME == B" stays green, and A is still alive when B reads
+        # (the mutation changes only which row B's F$GETJPI resolves), so the
+        # liveness check stays green too.
+        suites_red)   echo "test_syssvc_getjpi_pidarg";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lex_getjpi() stops honoring its pid argument: the target resolution is forced down the vms_kif_getjpi_self() branch for every call (the always-true \`if (1 ...)\` idiom), so a hex pid naming another process is parsed and discarded and F\$GETJPI answers PID/USERNAME/PRCNAM out of the CALLER's own executive row -- the vms-9e2 facade restored. Parsing, the null current-process form, the honest-failure path and every item's read-from-the-resolved-row are otherwise untouched; only WHICH row is resolved for a named pid changes, so a foreign-pid read that must return the target's identity returns the caller's instead.";;
+        require_fail) cat <<'EOF'
+F$GETJPI(<A pid>,"USERNAME") == A's username (not the caller's)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+F$GETJPI(<A pid>,"PRCNAM") == A's process name (not the caller's)
+F$GETJPI(<A pid>,"PID") echoes A's pid (not the caller's)
+F$GETJPI(<A pid>,...) did NOT simply report the caller B's own identity
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+All four are the SAME facade seen through different items: with the target
+resolution self-pinned, B's F$GETJPI(<A's pid>, X) reads B's own executive row
+for every identity item, so A's process name, username and pid each come back
+as B's, and the paired negative (the answer IS the caller's identity) fires
+with them. They are one property -- "the pid argument selects the row" -- read
+off one mutation, not four independent regressions; the self-form and liveness
+assertions in the same suite are untouched because the mutation changes only
+which row a NAMED pid resolves to.
+EOF
+                      ;;
+        esac;;
+
     opcom-header-host-login-name)
         case "$_f" in
         facility)     echo "the user field of sys\$sndopr's OPCOM header -- i.e. of every record OVMX writes to OPERATOR.LOG (src/libvms/syssvc/sys_operator.c get_current_username)";;
@@ -5422,6 +5476,18 @@ apply_edit() {
         sed -i '/^static int lex_identifier(/,/^}$/ s|^            snprintf(result, result_size, "0");$|            { struct passwd *pw_ = getpwnam(id_str); if (pw_) { snprintf(result, result_size, "%d", (int)((pw_->pw_gid << 16) \| (pw_->pw_uid \& 0xFFFF))); } else { snprintf(result, result_size, "0"); } } /* NEGCTL dcl-fident-name2num-host-passwd */|' "$_file";;
     opcom-header-host-login-name)
         sed -i '/^static void get_current_username(/,/^}$/ s|^    strncpy(buf, info.username, bufsz - 1);$|    if (!info.username[0]) { struct passwd *pw_ = getpwuid(getuid()); if (pw_) { strncpy(buf, pw_->pw_name, bufsz - 1); buf[bufsz - 1] = 0; return; } } strncpy(buf, info.username, bufsz - 1); /* NEGCTL opcom-header-host-login-name */|' "$_file";;
+    getjpi-pidarg-discarded)
+        # The ONE edit, in vmsdcl/dcl_lexical.c. `if (target[0] == '\0') {` is
+        # UNIQUE with its trailing ` {` -- it opens lex_getjpi's target
+        # resolution (the self-vs-pid fork); the MODE branch's `if (target[0]
+        # == '\0')` a few lines below has no ` {` and is not matched. Forcing
+        # it always-true self-pins the resolution, so the hex pid is discarded
+        # and F$GETJPI answers about the caller (the vms-9e2 facade). After
+        # substitution the line reads `if (1 /* ... */) {`, so a second apply
+        # finds no `if (target[0] == '\0') {` to match -- the idempotent no-op
+        # cmd_selftest requires. The else (getjpi_pid) branch is still compiled
+        # (so pid/endp stay used, no unused-variable warning), just never taken.
+        sed -i "s|    if (target\[0\] == '\\\\0') {|    if (1 /* NEGCTL getjpi-pidarg-discarded */) {|" "$_file";;
     # Deletes the mask test and NOTHING ELSE. The vms_kif_getjpi_self() read
     # above it is left in place on purpose: with it removed as well, the
     # mutation would also delete the Rule 9 refusal-on-failed-read, and the

@@ -1,0 +1,91 @@
+vms-5bc — LIVE op-6 credit-first rejoin bracket (#291 / vms-46f), spec 4(O.18)
+Lab: lab-2 vaxlab-0 (clean, CN=2 re-verified per arm). Daemon: SCSD.EXE static, md5=e909cbdaa7473249cda01b3e6e8e4b58 (byte-identical all arms).
+Identity OVX460, SCSSYSTEMID founding 1025, sidecar generation=1. OVMX_CFG2_PEER=2 all arms. Captured 2026-08-11.
+Raw pcaps/logs (HOST-ONLY, tank): /data/training/vax/k8s-labs/vaxlab-0/logs/{scsd,d94}-v46f-{A1,Rfix,Rctl}.{log,pcap}
+
+=================== ARM 1: FIRST-JOIN (establishes prior-admission sidecar) ===================
+===== ARM 1: FIRST JOIN =====
+[00:33:02] staged SCSD.EXE at /lab/run-v46f-A1/SCSD.EXE md5=e909cbdaa7473249cda01b3e6e8e4b58 (verified in-pod)
+[00:33:03] no prior-admission sidecar -- this identity has never been admitted anywhere
+[00:33:18] JOINED -- CLUSTER_NODES=3
+[00:36:13] XITDONE=1  RETX=0  PSC-UNGATED=PSC-UNGATED=0
+NO SIDECAR -- first join failed, aborting bracket
+sidecar pulled: formed=00bc0cb094786960 founding_sysid=1025 generation=1  -> JOINED CN_3, XITDONE=1
+
+=================== ARM 2: REJOIN FIX (OVMX_REJOIN_CREDIT_FIRST ON, default) ===================
+===== ARM v46f-Rfix (env: OVMX_CFG2_PEER=2 ) =====
+[00:53:01] staged SCSD.EXE at /lab/run-v46f-Rfix/SCSD.EXE md5=e909cbdaa7473249cda01b3e6e8e4b58 (verified in-pod)
+[00:53:01] carried prior-admission sidecar (57 bytes)
+[00:55:40] NOT JOINED -- last CN_2
+[00:56:11] post-run md5 verified: /lab/run-v46f-Rfix/SCSD.EXE unchanged (e909cbdaa7473249cda01b3e6e8e4b58)
+----- METRICS v46f-Rfix -----
+XITDONE=0
+CREDITFIRST(op-6-first emits)=2
+CMCONFIG2(op02 sends)=1
+CREDIT summary:   CREDIT: stamped=10 units-sent=8 starved=4 no-cdt=0 banked=12 units-recv=4 grants=2 grant-units=20 buffers-released=12
+cm_responses: cm_responses=0
+vax2 console (last rejoin-relevant lines):
+00:55:42.82 Node VAX2 (csid 00010002) lost connection to node OVX460
+%CNXMAN,  timed-out lost connection to system OVX460
+00:56:02.37 Node VAX2 (csid 00010002) timed-out lost connection to node OVX460
+--- wire order (OVMX d6:1c:18:40:c0:ff) ---
+#   1 len= 204 OVMX->coord recv_ack=  5 send_seq=  6  op14 model
+#   2 len= 204 OVMX->coord recv_ack=  5 send_seq=  7  op01 params
+#   3 len= 204 coord->OVMX recv_ack=  5 send_seq=  7  op14 model
+#   4 len= 204 coord->OVMX recv_ack=  5 send_seq=  8  op01 params
+#   5 len= 204 OVMX->coord recv_ack=  5 send_seq=  6  op14 model
+#   6 len= 204 OVMX->coord recv_ack=  5 send_seq=  7  op01 params
+#   7 len= 204 coord->OVMX recv_ack=  5 send_seq=  7  op14 model
+#   8 len= 204 coord->OVMX recv_ack=  5 send_seq=  8  op01 params
+#   9 len=  76 OVMX->coord recv_ack= 11 send_seq= 12  op-6 special-credit-REQ
+#  10 len= 204 OVMX->coord recv_ack= 11 send_seq= 13  op02 config
+#  11 len=  76 OVMX->coord recv_ack= 11 send_seq= 12  op-6 special-credit-REQ
+#  12 len=  76 OVMX->coord recv_ack=  1 send_seq=  1  op-6 special-credit-REQ
+#  13 len=  76 OVMX->coord recv_ack=  1 send_seq=  2  op-6 special-credit-REQ
+#  14 len=  76 OVMX->coord recv_ack= 11 send_seq= 15  op-6 special-credit-REQ
+#  15 len=  76 OVMX->coord recv_ack= 11 send_seq= 16  op-6 special-credit-REQ
+----- END v46f-Rfix -----
+
+=================== ARM 3: REJOIN CONTROL (OVMX_REJOIN_CREDIT_FIRST=0) ===================
+===== ARM v46f-Rctl (env: OVMX_CFG2_PEER=2 OVMX_REJOIN_CREDIT_FIRST=0) =====
+[00:56:46] staged SCSD.EXE at /lab/run-v46f-Rctl/SCSD.EXE md5=e909cbdaa7473249cda01b3e6e8e4b58 (verified in-pod)
+[00:56:46] carried prior-admission sidecar (57 bytes)
+[00:59:25] NOT JOINED -- last CN_2
+[00:59:56] post-run md5 verified: /lab/run-v46f-Rctl/SCSD.EXE unchanged (e909cbdaa7473249cda01b3e6e8e4b58)
+----- METRICS v46f-Rctl -----
+XITDONE=0
+CREDITFIRST(op-6-first emits)=0
+CMCONFIG2(op02 sends)=1
+CREDIT summary:   CREDIT: stamped=17 units-sent=14 starved=4 no-cdt=0 banked=19 units-recv=15 grants=2 grant-units=20 buffers-released=19
+cm_responses: cm_responses=0
+vax2 console (last rejoin-relevant lines):
+00:59:26.96 Node VAX2 (csid 00010002) lost connection to node OVX460
+%CNXMAN,  timed-out lost connection to system OVX460
+00:59:47.50 Node VAX2 (csid 00010002) timed-out lost connection to node OVX460
+--- wire order (OVMX d6:1c:18:40:c0:ff) ---
+#   1 len= 204 OVMX->coord recv_ack=  5 send_seq=  6  op14 model
+#   2 len= 204 OVMX->coord recv_ack=  5 send_seq=  7  op01 params
+#   3 len= 204 OVMX->coord recv_ack=  5 send_seq=  8  op02 config
+#   4 len= 204 coord->OVMX recv_ack=  5 send_seq=  7  op14 model
+#   5 len= 204 coord->OVMX recv_ack=  5 send_seq=  8  op01 params
+#   6 len= 204 OVMX->coord recv_ack=  5 send_seq=  6  op14 model
+#   7 len= 204 OVMX->coord recv_ack=  5 send_seq=  7  op01 params
+#   8 len= 204 OVMX->coord recv_ack=  5 send_seq=  8  op02 config
+#   9 len= 204 coord->OVMX recv_ack=  5 send_seq=  7  op14 model
+#  10 len= 204 coord->OVMX recv_ack=  5 send_seq=  8  op01 params
+#  11 len= 204 OVMX->coord recv_ack= 17 send_seq= 18  op02 config
+#  12 len=  76 OVMX->coord recv_ack= 17 send_seq= 20  op-6 special-credit-REQ
+#  13 len=  76 OVMX->coord recv_ack= 17 send_seq= 21  op-6 special-credit-REQ
+#  14 len=  76 OVMX->coord recv_ack=  1 send_seq=  1  op-6 special-credit-REQ
+#  15 len=  76 OVMX->coord recv_ack=  1 send_seq=  2  op-6 special-credit-REQ
+#  16 len= 204 ? recv_ack=10074 send_seq=14378  op04 RECIP
+----- END v46f-Rctl -----
+
+=================== FIX-arm credit-op census (SCS$DIRECTORY conid 0x2B2C0007/0017) ===================
+coord->OVMX op-8 (credit/ready, retransmit loop): 34   OVMX->coord op-9 (response): 34
+OVMX->coord op-6 (OVMX's credit REQUEST, the fix): 6    coord->OVMX op-7 (response to op-6): 0  <== never reciprocated
+Coordinator recv_ack toward OVMX on member CM VC: advances 8->10 (was FROZEN at 8 in 4(O.17)); re-freezes; op02 undelivered.
+
+VERDICT: FIX arm XITDONE=0 (rejoin NOT closed). Control XITDONE=0. Credit-first fires correctly + credit flows,
+but the op-6/op-8 special-credit handshake never COMPLETES (coord loops op-8, never sends op-7), so the coordinator
+never reaches CM readmission (cm_responses=0, no op 0x04, VAX2 never logs 'membership request'). Necessary-not-sufficient.

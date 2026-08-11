@@ -63,8 +63,17 @@
  *     array; no executive records that the process has an exit handler.
  * OVMX-USERSPACE: sys$forcex (vms-pt1) -- with no pidadr it degenerates to
  *     sys$exit on the caller; otherwise kill() by Linux pid. prcnam discarded.
- * OVMX-USERSPACE: sys$delprc (vms-pt1) -- kill(SIGTERM) by Linux pid, or the
- *     caller's own pid when pidadr is NULL. prcnam discarded.
+ * OVMX-PARTIAL: sys$delprc (vms-1a8) -- exec: the target is now RESOLVED in
+ *     the executive, by prcnam (within the caller's UIC group) or by VMS
+ *     pid (any group, gated by WORLD -- see sys$delprc's own comment), the
+ *     same way sys$getjpi resolves above; a caller without GROUP/WORLD for
+ *     an other-process target is refused SS$_NOPRIV, and a target the
+ *     executive does not carry is SS$_NONEXPR. OVMX-LOCAL: the actual
+ *     termination is still kill(SIGTERM) against the resolved Linux pid --
+ *     OVMX has no executive-side "delete this PCB" primitive of its own,
+ *     so the signal is the mechanism, same as sys$exit's _exit(). What
+ *     changed is that this now signals the process the EXECUTIVE named,
+ *     not whatever Linux pid number a caller's argument happened to be.
  * OVMX-USERSPACE: sys$hiber (vms-pt1) -- pause() on the calling thread; the
  *     executive has no record that this process is hibernating.
  * OVMX-USERSPACE: sys$wake (vms-pt1) -- kill(SIGCONT) by Linux pid, or the
@@ -94,6 +103,7 @@
 #include "starlet.h"
 #include "ovmx_status.h"
 #include "prcdef.h"
+#include "prvdef.h"
 #include "vms/pcb.h"
 #include "vms_kif.h"
 
@@ -877,21 +887,116 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
 }
 
 /*
- * sys$delprc - Delete (terminate) a process.
+ * sys$delprc - Delete (terminate) a process (vms-1a8).
  *
- * Sends SIGTERM to the target process. If pidadr is NULL and prcnam
- * is NULL, terminates the current process.
+ * A READER (to resolve the target) and ACTOR (to terminate it) against the
+ * EXECUTIVE process table, replacing the OVMX-USERSPACE shape documented at
+ * the top of this file: the old sys$delprc treated its pidadr argument as a
+ * bare Linux pid number and discarded prcnam outright, so it had never gone
+ * near the executive and could not implement $DELPRC's documented interface
+ * at all -- there was no path here from a VMS process NAME to anything this
+ * function understood. That is what left DCL's STOP command (cmd_stop,
+ * src/vmsdcl/dcl_cmd_process.c) unable to do anything but self-exit: it had
+ * no real service under it to call.
+ *
+ * The target is resolved exactly as sys$getjpi resolves it above: prcnam
+ * names a process WITHIN THE CALLER'S OWN UIC GROUP (vms_kif_getjpi_prcnam,
+ * src/kernel/vms_proctab.c find_by_name), otherwise a non-zero *pidadr names
+ * one BY VMS PROCESS ID in ANY group (vms_kif_getjpi_pid), otherwise the
+ * caller. A target the executive does not carry comes back as the
+ * executive's own SS$_NONEXPR -- never a raw kill() against a Linux pid
+ * number nothing in the executive ever named.
+ *
+ * PRIVILEGE. OpenVMS DCL Dictionary, STOP command (process-name parameter /
+ * IDENTIFICATION qualifier form; https://www.mrynet.com/FTP/
+ * operatingsystems/VMS/docs/ssb71/9996/9996p062.htm, "OpenVMS DCL
+ * Dictionary"): the process-name parameter is scoped to "the same group
+ * number in its UIC as the current process"; stopping another process in
+ * your own group requires GROUP privilege, stopping one outside it requires
+ * WORLD, and /IDENTIFICATION=pid is "an alternative to the process-name
+ * parameter" for reaching a process outside the caller's group. Deleting
+ * the caller's OWN process takes no privilege at all (there is nothing to
+ * authorize).
+ *
+ * The WORLD half of that rule is already enforced by the RESOLUTION above,
+ * not by a separate check here: a cross-group pid target cannot even be
+ * READ without WORLD (vms_proc_may_read() in vms_proctab.c refuses it with
+ * SS$_NOPRIV before this function ever sees a row), and the process-name
+ * selector never searches outside the caller's group in the first place --
+ * matching the Dictionary's own "process-name is same-group-only, use
+ * /IDENTIFICATION to reach further" division of labour. So a target that
+ * reaches the code below has ALREADY proven it is either the caller's own
+ * process, a same-group process, or a cross-group process the caller holds
+ * WORLD to even see -- and the WORLD case needs no further gate. Only the
+ * same-group "another process" case is still ungated at that point, and
+ * that is what the explicit check below closes.
+ *
+ * THIS IS A DIFFERENT FINDING FROM vms_proc_may_read()'s, DELIBERATELY.
+ * That function's own comment records the oracle-measured, counter-to-
+ * expectation result that a same-group $GETJPI READ needs NO privilege at
+ * all. Reusing that verdict for TERMINATION here would be exactly the
+ * confusion CLAUDE.md Rule 10 warns against: two different operations, and
+ * the Dictionary is explicit they carry different requirements for the
+ * same-group case (freely readable; GROUP-gated to delete). The GROUP/WORLD
+ * halves of THIS check are grounded in the Dictionary text quoted above,
+ * not in a fresh oracle session -- unlike vms_proc_may_read()'s READ rule,
+ * this DELETE rule has not yet been measured against the reference lab; a
+ * lab confirmation pass is follow-up work, not blocking (Rule 10 permits
+ * citing the public Dictionary directly; nothing here is invented).
  */
 uint32_t sys$delprc(const uint32_t *pidadr,
                     const struct dsc$descriptor_s *prcnam) {
-    (void)prcnam;
-    pid_t pid;
-    if (pidadr) {
-        pid = (pid_t)*pidadr;
+    struct vms_procinfo target, self_info;
+    uint32_t status;
+
+    if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0) {
+        char key[VMS_PRCNAM_XFER];
+        dsc$strncpy(key, prcnam, sizeof(key));
+        status = vms_kif_getjpi_prcnam(key, &target);
+    } else if (pidadr && *pidadr != 0) {
+        status = vms_kif_getjpi_pid(*pidadr, &target);
     } else {
-        pid = getpid();
+        status = vms_kif_getjpi_self(&target);
     }
-    if (kill(pid, SIGTERM) < 0) return SS$_NONEXPR;
+    if (!(status & 1))
+        return status;
+
+    status = vms_kif_getjpi_self(&self_info);
+    if (!(status & 1))
+        return status;
+
+    if (target.vms_pid != self_info.vms_pid) {
+        int same_group = ((target.uic >> 16) == (self_info.uic >> 16));
+        /* WORLD is the BROADER privilege ("affect any process, any group")
+         * and so authorizes a same-group delete too, same as it authorizes
+         * everything GROUP does; GROUP alone does not reach outside the
+         * caller's own group. A same-group target is therefore authorized
+         * by EITHER bit, a cross-group one by WORLD alone -- caught live by
+         * tests/qemu/test_syssvc_delprc.c P1/P2, whose caller holds WORLD
+         * (the executive's default privileged-registration grant,
+         * VMS_PRV_M_ENFORCED) but not GROUP (granted to nobody by default;
+         * nothing enforced it before this item). Requiring GROUP outright
+         * for the same-group case -- this function's first version --
+         * refused that caller's own same-group STOP with SS$_NOPRIV. */
+        uint64_t authorized = self_info.cur_privs &
+            (same_group ? (PRV$M_GROUP | PRV$M_WORLD) : PRV$M_WORLD);
+        if (!authorized)
+            return SS$_NOPRIV;
+    }
+
+    /*
+     * THE TERMINATION ITSELF REMAINS SIGTERM-BY-LINUX-PID (OVMX design
+     * choice, Rule 8): OVMX has no executive-side "delete this PCB"
+     * primitive distinct from the process actually dying, the same way
+     * sys$exit() above is _exit() rather than a call into the executive.
+     * What vms-1a8 changes is WHOSE Linux pid this is -- the row the
+     * executive resolved and authorized above, not an unchecked caller
+     * argument. A race where the target exits between resolution and this
+     * kill() is reported the same way VMS reports "not there any more":
+     * SS$_NONEXPR.
+     */
+    if (kill((pid_t)target.linux_pid, SIGTERM) < 0)
+        return SS$_NONEXPR;
     return SS$_NORMAL;
 }
 

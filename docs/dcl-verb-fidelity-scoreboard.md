@@ -29,7 +29,8 @@
 | **FACADE** | Prints a plausible VMS success message and/or returns a success status while doing little or nothing that persists or that any other process could observe. The banned class INV-DCL exists to kill. |
 | **STUB** | Near-total placeholder — typically an immediate, honest refusal with no logic behind it. |
 
-**Totals (re-derived post-vms-263): 49 REAL · 3 PARTIAL · 1 FACADE · 1 STUB (54 verbs).**
+**Totals (re-derived after vms-263 + vms-1a8): 50 REAL · 3 PARTIAL · 0 top-level FACADE · 1 STUB (54 verbs).** ASSIGN (vms-263) moved PARTIAL→REAL and STOP (vms-1a8) moved FACADE→REAL; see their rows under REAL below.
+The 4 named SET/SHOW sub-facades (ACCOUNTING/PASSWORD/VOLUME/LICENSE) are still open -- see the FACADE section below.
 
 ## REAL (49)
 
@@ -77,6 +78,7 @@
 | **SHOW** | Dispatcher — PROCESS/SYSTEM/DEVICE/MEMORY/LOGICAL/STATUS read real executive state, deliberately blank rather than fabricate on failure. **Named FACADE subcommand still open: LICENSE** — see below. |
 | SORT | Real line-read/`qsort`/write. |
 | SPAWN | Real `fork`/`execl` subprocess with real `/NOWAIT`, `/OUTPUT` redirection. |
+| **STOP** | **Fixed (vms-1a8):** the process-target forms (a process-name parameter, `/IDENTIFICATION=pid`) now resolve the target through the real executive process table and terminate it via `sys$delprc`, which enforces the DCL Dictionary's GROUP/WORLD privilege rule (`SS$_NOPRIV` for a same-group target without GROUP, refused with the target left alive) and returns the authentic `SS$_NONEXPR` for a nonexistent target. Bare `STOP` (no target) is unchanged: abnormal termination of the current image/command, unstacking to DCL. `STOP/QUEUE`, `/CPU`, `/NETWORK` are separate Dictionary entries, never implemented, and now draw the authentic `%DCL-W-IVQUAL` instead of silent acceptance. Ground-source: `tests/dcl/test_stop_facade_gate.sh` (host, proves no more `$STATUS=1` for an unreachable target) + `tests/qemu/test_syssvc_delprc.c` (real `vms.ko`: a named/`PID`-targeted process is actually created by one process and actually terminated by another, confirmed gone from both Linux and the executive's table; the privilege refusal leaves the target alive; nonexistent targets return `SS$_NONEXPR`). |
 | SUBMIT | Real submission into the queue manager to SYS$BATCH. |
 | SYSGEN | Forks/execs real `SYSGEN.EXE`. |
 | SYSMAN | Forks/execs real `SYSMAN.EXE`. |
@@ -93,11 +95,9 @@
 | HELP | Really lists all 54 verbs with interactive "Topic?" recursion, but flat printf text (no HLB), with hardcoded sub-help for only SHOW/SET/DIRECTORY. |
 | INQUIRE | Genuinely prompts/reads/sets a symbol, but `/NOPUNCTUATION` maps to "don't upcase input" instead of its real meaning (suppress trailing prompt punctuation) — right name, wrong semantics. |
 
-## FACADE (1 top-level; 4 named sub-facades under SET/SHOW)
+## FACADE (0 top-level; 4 named sub-facades under SET/SHOW)
 
-| Verb | Evidence |
-|---|---|
-| **STOP** | `cmd_stop()` ignores its target parameter/qualifiers entirely and unconditionally tears down the *current* session, returning `SS$_NORMAL` as if the named target were stopped. |
+No top-level verb is FACADE as of vms-1a8 (STOP moved to REAL above).
 
 Named sub-facades (do not change the SET/SHOW top-level bucket, called out per
 the same convention `docs/design-dcl-fidelity.md` §1 used):
@@ -138,8 +138,8 @@ worth recording so the board stays accurate):**
 `docs/design-dcl-fidelity.md` §5):**
 - The qualifier-grammar hole itself, for the other 53 verbs (Phase 1,
   `vms-097`).
-- STOP's ignored target, SET ACCOUNTING/PASSWORD/VOLUME, SHOW LICENSE (Phase
-  2's fake-success sweep).
+- SET ACCOUNTING/PASSWORD/VOLUME, SHOW LICENSE (Phase 2's fake-success sweep).
+  STOP's ignored target is DONE (vms-1a8, see the STOP row under REAL above).
 - HELP as a real hierarchical library, terminal-characteristic presentation
   fidelity (Phases 3-4).
 

@@ -406,7 +406,7 @@ wait_for 'Username:' "$BOOT_TIMEOUT" || fail_with_console "ERROR: no login promp
 # Password: authenticated successfully, including a deliberately wrong
 # one. MEASURED directly against a real QEMU boot of this exact image,
 # before SYSTEM's SYSUAF row gained a real hash: sending SYSTEM /
-# TOTALLY_WRONG_PASSWORD reached "Welcome to OVMX" and a DCL prompt. That
+# TOTALLY_WRONG_PASSWORD reached "Welcome to OpenVMX" and a DCL prompt. That
 # is precisely the veracity gap this item's DONE CONDITION names ("a bad
 # password is refused") and precisely what "a login that prints a banner
 # and reaches a DCL prompt... passes today against the facade" (this
@@ -439,9 +439,9 @@ fi
 # The refusal must be a REFUSAL, not incidental text alongside a session
 # that was granted anyway -- checked on the SAME segment as the positive
 # check above so this cannot pass by printing both.
-if printf '%s' "$BADPW_SEGMENT" | grep -qF 'Welcome to OVMX'; then
+if printf '%s' "$BADPW_SEGMENT" | grep -qF 'Welcome to OpenVMX'; then
     FAIL=$((FAIL + 1))
-    ERRORS="${ERRORS}\n  FAIL: a wrong password reached a session anyway ('Welcome to OVMX' present)"
+    ERRORS="${ERRORS}\n  FAIL: a wrong password reached a session anyway ('Welcome to OpenVMX' present)"
 else
     PASS=$((PASS + 1))
 fi
@@ -460,7 +460,7 @@ REALLOGIN_OFFSET=$(wc -c <"$CONSOLE_LOG")
 send 'SYSTEM'
 wait_for 'Password:' "$STEP_TIMEOUT" "$REALLOGIN_OFFSET" || fail_with_console "ERROR: no password prompt"
 send 'MANAGER'
-wait_for 'Welcome to OVMX' "$STEP_TIMEOUT" "$REALLOGIN_OFFSET" || fail_with_console "ERROR: login did not succeed"
+wait_for 'Welcome to OpenVMX' "$STEP_TIMEOUT" "$REALLOGIN_OFFSET" || fail_with_console "ERROR: login did not succeed"
 
 # --- Drive the session -----------------------------------------------------
 # Same command list as the SSH UAT, except SET DEFAULT SYS$MANAGER: (see the
@@ -527,7 +527,7 @@ wait_for 'logged out' "$STEP_TIMEOUT" "$LOGIN_OFFSET" || fail_with_console "ERRO
 #
 # Every wait below is anchored to LOGIN_OFFSET -- the byte offset captured
 # immediately BEFORE 'LOGOUT' was sent -- because every string being waited
-# for ('Username:', 'Password:', 'Welcome to OVMX') already appears earlier
+# for ('Username:', 'Password:', 'Welcome to OpenVMX') already appears earlier
 # in the log from session 1, and an unanchored wait_for would return
 # instantly on session 1's output and then type GUEST's commands into a
 # dead session.
@@ -593,9 +593,9 @@ fi
 # Same shape as the SYSTEM check above: the refusal must be a REFUSAL, not
 # incidental text alongside a session granted anyway -- checked on the
 # SAME segment so this cannot pass by printing both.
-if printf '%s' "$OPBADPW_SEGMENT" | grep -qF 'Welcome to OVMX'; then
+if printf '%s' "$OPBADPW_SEGMENT" | grep -qF 'Welcome to OpenVMX'; then
     FAIL=$((FAIL + 1))
-    ERRORS="${ERRORS}\n  FAIL: OPERATOR + a wrong password reached a session anyway ('Welcome to OVMX' present)"
+    ERRORS="${ERRORS}\n  FAIL: OPERATOR + a wrong password reached a session anyway ('Welcome to OpenVMX' present)"
 else
     PASS=$((PASS + 1))
 fi
@@ -611,7 +611,7 @@ send 'GUEST'
 wait_for 'Password:' "$STEP_TIMEOUT" "$GUEST_OFFSET" \
     || fail_with_console "ERROR: no password prompt for GUEST"
 send 'GUEST'
-wait_for 'Welcome to OVMX' "$STEP_TIMEOUT" "$GUEST_OFFSET" \
+wait_for 'Welcome to OpenVMX' "$STEP_TIMEOUT" "$GUEST_OFFSET" \
     || fail_with_console "ERROR: GUEST login did not succeed"
 
 for cmd in "${USER_CMDS[@]}"; do
@@ -633,8 +633,8 @@ OUTPUT=$(cat "$CONSOLE_LOG")
 # would be new, unvalidated surface) and excludes the login-prompt echo of
 # the username/password we sent.
 WELCOME_OFFSET=0
-if grep -qF 'Welcome to OVMX' "$CONSOLE_LOG"; then
-    WELCOME_OFFSET=$(grep -aboF 'Welcome to OVMX' "$CONSOLE_LOG" | head -1 | cut -d: -f1)
+if grep -qF 'Welcome to OpenVMX' "$CONSOLE_LOG"; then
+    WELCOME_OFFSET=$(grep -aboF 'Welcome to OpenVMX' "$CONSOLE_LOG" | head -1 | cut -d: -f1)
 fi
 SESSION_OUTPUT=$(tail -c "+$((WELCOME_OFFSET + 1))" "$CONSOLE_LOG")
 

@@ -1,0 +1,26 @@
+# os-release - Linux substrate distro metadata (rd vms-700/vms-296/vms-3de)
+#
+# GNU/Linux-style dual identity: this file describes the SUBSTRATE (the
+# Linux base layer OVMX's product runs on), never the product itself. It
+# follows the freedesktop.org os-release(5) convention every Linux
+# distribution ships at /etc/os-release, so standard Linux tooling
+# (systemd, package managers, `uname`-adjacent scripts) that inspects this
+# file sees an honest answer about the KERNEL/substrate layer.
+#
+# The VMS-compatible PRODUCT identity ("OpenVMX V0.3 - OpenVMS-compatible")
+# is a SEPARATE, VMS-facing surface -- SHOW SYSTEM, MONITOR, the DCL login
+# banner, sourced from src/libvms/include/ovmx_identity.h
+# (OVMX_PRODUCT_BANNER). It is deliberately NOT duplicated here: a VMS
+# session never reads this file (INV-4 -- no Linux leak on a VMS-facing
+# surface), and this file never claims to be the VMS-compatible product.
+#
+# NAME/VERSION_ID here are hand-maintained text, not generated from the
+# identity SSOT (this file predates any process boots enough Linux to run
+# a generator) -- keep VERSION_ID in step with OVMX_PRODUCT_VERSION in
+# ovmx_identity.h by hand when that changes.
+NAME="OVMX/Linux"
+ID=ovmx
+PRETTY_NAME="OVMX/Linux"
+VERSION="0.3 (substrate)"
+VERSION_ID="0.3"
+HOME_URL="https://openvmx.3dl.dev"

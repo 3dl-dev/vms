@@ -128,7 +128,7 @@ dump_and_die() {
 
 # --- 1. Boot the pre-installed disk to the login prompt ---------------------
 if wait_for '%OVMX-I-EXEC' 30; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
-if wait_for '%STDRV-I-STARTUP, OVMX startup begun' "$BOOT_TIMEOUT"; then
+if wait_for '%STDRV-I-STARTUP, OpenVMX startup begun' "$BOOT_TIMEOUT"; then
     ok "STDRV begun (STARTUP.COM ran)"
 else
     dump_and_die "STDRV begun never printed within ${BOOT_TIMEOUT}s"
@@ -149,7 +149,7 @@ fi
 LOGIN_OFF=$(wc -c <"$LOG")
 send 'SYSTEM'
 wait_for 'Password:' "$CMD_TIMEOUT" "$LOGIN_OFF" && send 'MANAGER'
-if wait_for 'Welcome to OVMX' "$CMD_TIMEOUT" "$LOGIN_OFF"; then
+if wait_for 'Welcome to OpenVMX' "$CMD_TIMEOUT" "$LOGIN_OFF"; then
     ok "SYSTEM logs in through the JOB_CONTROL-created session (LOGINOUT.EXE activated)"
 else
     dump_and_die "SYSTEM login failed"

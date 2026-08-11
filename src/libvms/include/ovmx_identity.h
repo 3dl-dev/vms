@@ -17,7 +17,7 @@
  * 1. OVMX PRODUCT VERSION -- the brand, ours, shown to HUMANS.
  *    OVMX tags its own version (V0.1 at first release -> V1 eventually).
  *    Human-facing surfaces show it badged per INV-0:
- *        "OVMX V0.1 - OpenVMS-compatible"
+ *        "OpenVMX V0.1 - OpenVMS-compatible"
  *    A human surface must NEVER answer "OpenVMS Vx.y" bare: that claims to
  *    BE VSI's product as-to-source, which is the passing-off line INV-0
  *    draws. "OpenVMS"/"VMS" are VSI trademarks -- clean-room RE licenses
@@ -44,6 +44,41 @@
  * release documentation / the ~/vax lab) with operator sign-off, never
  * self-certified. The V9.2-x FAMILY is operator-ruled (D1); the patch level
  * and the field's blank-padding width are open -- see rd vms-e652 notes.
+ *
+ * ---------------------------------------------------------------------
+ * DUAL-IDENTITY REBRAND, GNU/Linux-STYLE (operator ruling, rd vms-700 /
+ * vms-296 / vms-3de, 2026-08-11)
+ * ---------------------------------------------------------------------
+ * The single word "OVMX" used to name two different things at once: the
+ * VMS-compatible PRODUCT a human logs into, and the Linux-kernel SUBSTRATE
+ * it runs on. This split follows the GNU/Linux convention -- "GNU/Linux"
+ * names the base (kernel + userland underneath), while a distribution built
+ * on it carries its own separate brand:
+ *
+ *   PRODUCT (OVMX_PRODUCT_NAME) = "OpenVMX" -- the VMS-compatible
+ *   environment a human touches: login banner, SHOW SYSTEM, MONITOR, DCL
+ *   identity. This is what changed here.
+ *
+ *   SUBSTRATE (OVMX_SUBSTRATE_NAME) = "OVMX/Linux" -- the Linux base layer
+ *   underneath, WITH THE SLASH, exactly like "GNU/Linux": an operating
+ *   ENVIRONMENT layered on a KERNEL, not the environment itself. Surfaced
+ *   at early boot (before STARTUP.EXE hands off to the OpenVMX/VMS
+ *   environment -- src/ovmx_init/ovmx_init.c) and in distro build metadata
+ *   (distro/Dockerfile.bootable LABELs, distro/rootfs/etc/os-release).
+ *   Never shown on a VMS-facing surface -- see INV-4's "no Linux leak on a
+ *   VMS-facing surface" note on ovmx_node_name() below; this is the mirror
+ *   image, an intentionally LINUX-facing surface.
+ *
+ * The bare, un-slashed "OVMX" token remains load-bearing as a NON-BRAND
+ * machine identifier in many places this rebrand must NOT touch: VMS
+ * facility/status codes (OVMX$_* in src/libvms/status.c), the IMGACT
+ * ELF-note owner (imgact_activate.h), the SCS/cluster wire OS-name field
+ * (src/vmsscs/scsd.c), nodename fallbacks (OVMX_DEFAULT_NODENAME, below),
+ * and the kit/product-database producer field (OVMX_VENDOR_TOKEN, below --
+ * deliberately NOT OVMX_PRODUCT_NAME, so this rebrand does not silently
+ * reflow into on-disk kit/product records). See
+ * tests/integration/test_frozen_identity_tokens.sh, the tripwire gate that
+ * pins these byte values against a future blind rename.
  */
 #ifndef OVMX_IDENTITY_H
 #define OVMX_IDENTITY_H
@@ -55,7 +90,7 @@
 
 /* ---- Brand identity (human surfaces, INV-0) ---------------------- */
 
-#define OVMX_PRODUCT_NAME       "OVMX"
+#define OVMX_PRODUCT_NAME       "OpenVMX"
 #define OVMX_PRODUCT_VERSION    "V0.3"
 
 /*
@@ -66,11 +101,45 @@
  */
 #define OVMX_COMPAT_BADGE       "OpenVMS-compatible"
 
-/* "OVMX V0.1" -- brand + version, no badge (tight columns, e.g. MONITOR). */
+/* "OpenVMX V0.1" -- brand + version, no badge (tight columns, e.g. MONITOR). */
 #define OVMX_PRODUCT_ID         OVMX_PRODUCT_NAME " " OVMX_PRODUCT_VERSION
 
-/* "OVMX V0.1 - OpenVMS-compatible" -- the full honest human answer. */
+/* "OpenVMX V0.1 - OpenVMS-compatible" -- the full honest human answer. */
 #define OVMX_PRODUCT_BANNER     OVMX_PRODUCT_ID " - " OVMX_COMPAT_BADGE
+
+/*
+ * OVMX_VENDOR_TOKEN -- the machine-facing vendor/producer identifier baked
+ * into on-disk formats OVMX invented itself: the kit-container producer
+ * field and the product-database producer field
+ * (tools/ovmx_kit_pack.c, src/product/ovmx_product_db.h, PRODUCT SHOW
+ * PRODUCT's "Producer:" column). DELIBERATELY NOT OVMX_PRODUCT_NAME: this
+ * is a stable machine-read identifier, already baked into shipped kit
+ * files, and must not silently reflow every time the human-facing brand
+ * changes (see the DUAL-IDENTITY REBRAND note above).
+ */
+#define OVMX_VENDOR_TOKEN        "OVMX"
+
+/* ---- Substrate identity (GNU/Linux-style dual identity) ----------
+ *
+ * "OVMX/Linux" -- WITH THE SLASH, exactly like "GNU/Linux" -- names the
+ * Linux-kernel substrate OVMX_PRODUCT_NAME ("OpenVMX") runs on top of. See
+ * the DUAL-IDENTITY REBRAND note above for the full rationale and the two
+ * surfaces this is shown on (early boot, distro metadata). Distinct from,
+ * and always printed BEFORE, the product banner.
+ */
+#define OVMX_SUBSTRATE_NAME     "OVMX/Linux"
+#define OVMX_SUBSTRATE_BANNER   OVMX_SUBSTRATE_NAME " -- Linux kernel substrate"
+
+/*
+ * ovmx_substrate_banner - The early-boot substrate identity line. Printed
+ * BEFORE ovmx_product_banner() so a boot reads "OVMX/Linux" substrate
+ * coming up, THEN "OpenVMX" product -- see src/ovmx_init/ovmx_init.c
+ * main(), which prints this literally first.
+ */
+static inline const char *ovmx_substrate_banner(void)
+{
+    return OVMX_SUBSTRATE_BANNER;
+}
 
 /* ---- VMS-compat identity (machine surfaces, true-to-arch) -------- */
 

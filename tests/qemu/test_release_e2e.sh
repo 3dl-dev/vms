@@ -246,7 +246,7 @@ run_case() {
     # --- Provision: a real SYSTEM session edits the real SYSUAF ---
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 3
-    if waitfor 'Welcome to OVMX' 60 "$log1"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 60 "$log1"; then rc=0; else rc=1; fi
     record "$tag boot 1: SYSTEM logs in" "$rc"
 
     send 'OPEN/WRITE UF SYS$SYSTEM:SYSUAF.DAT'; sleep 1
@@ -424,7 +424,7 @@ run_provision_missing_case() {
 
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 3
-    if waitfor 'Welcome to OVMX' 60 "$log1"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 60 "$log1"; then rc=0; else rc=1; fi
     record "$tag boot 1: SYSTEM logs in" "$rc"
 
     send 'DELETE/LOG SYS$SYSTEM:PROVISION.EXE'; sleep 2

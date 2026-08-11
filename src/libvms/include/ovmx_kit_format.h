@@ -36,8 +36,10 @@
  *     (echoing the Alpha oracle's "DEC AXPVMS VMS" shape -- vendor, arch
  *     code, "VMS" -- with OVMX's own honest vendor token and an OVMX arch
  *     code for x86-64, never "DEC" or "VSI"). Assembled by the packer from
- *     OVMX_PRODUCT_NAME (ovmx_identity.h) plus a literal arch/product
- *     suffix; the VERSION portion is OVMX_PRODUCT_VERSION, not a second
+ *     OVMX_VENDOR_TOKEN (ovmx_identity.h) plus a literal arch/product
+ *     suffix -- deliberately NOT OVMX_PRODUCT_NAME (the "OpenVMX" human
+ *     brand, rd vms-700): this is a stable machine-read vendor token, not
+ *     the brand. The VERSION portion is OVMX_PRODUCT_VERSION, not a second
  *     hardcoded literal (see tools/ovmx_kit_pack.c).
  *   - Default per-file protection/owner-UIC policy for packed files: SYSTEM
  *     UIC [1,4], S:RWED,O:RWED,G:RE,W:RE (0xAA00) -- the OVMX build-tool

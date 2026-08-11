@@ -96,10 +96,19 @@ static void test_brand_identity(void)
 
     const char *banner = ovmx_product_banner();
 
-    check(strstr(banner, "OVMX") != NULL,
-          "human banner names OVMX");
+    /* Dual-identity rebrand (rd vms-700/vms-296/vms-3de): the PRODUCT
+     * humans see is "OpenVMX", not the bare "OVMX" token -- that token now
+     * names the Linux substrate instead (OVMX_SUBSTRATE_NAME, "OVMX/Linux",
+     * see test_substrate_identity()). */
+    check(strcmp(ovmx_product_version(), OVMX_PRODUCT_VERSION) == 0
+          && strcmp(OVMX_PRODUCT_NAME, "OpenVMX") == 0,
+          "product name is OpenVMX (rd vms-700)");
+    check(strstr(banner, "OpenVMX") != NULL,
+          "human banner names OpenVMX (product identity)");
     check(strstr(banner, "OpenVMS-compatible") != NULL,
           "human banner carries the INV-0 'OpenVMS-compatible' badge");
+    check(strstr(banner, "OVMX/Linux") == NULL,
+          "human product banner does not carry the OVMX/Linux substrate name");
 
     /*
      * INV-0's hard line: a human surface may say it is OpenVMS-COMPATIBLE,
@@ -110,6 +119,28 @@ static void test_brand_identity(void)
           "human banner does not open by claiming to BE OpenVMS");
     check(strstr(banner, "(tm)") == NULL,
           "human banner does not assert VSI's trademark symbol");
+}
+
+/*
+ * test_substrate_identity - GNU/Linux-style dual identity (rd vms-700/
+ * vms-296/vms-3de). "OVMX/Linux" (WITH the slash, like "GNU/Linux") names
+ * the Linux-kernel substrate, distinct from and printed before the
+ * "OpenVMX" product identity at early boot (src/ovmx_init/ovmx_init.c).
+ */
+static void test_substrate_identity(void)
+{
+    printf("Substrate identity (OVMX/Linux, GNU/Linux-style):\n");
+
+    check(strcmp(OVMX_SUBSTRATE_NAME, "OVMX/Linux") == 0,
+          "substrate name is OVMX/Linux, with the slash");
+
+    const char *substrate = ovmx_substrate_banner();
+    check(strstr(substrate, "OVMX/Linux") != NULL,
+          "substrate banner names OVMX/Linux");
+    check(strcmp(substrate, ovmx_product_banner()) != 0,
+          "substrate banner is distinct from the product banner");
+    check(strstr(substrate, "OpenVMX") == NULL,
+          "substrate banner does not carry the OpenVMX product brand");
 }
 
 static void test_compat_identity(void)
@@ -224,8 +255,8 @@ static void test_welcome_banner(void)
     /* Undefined -> built-in default, sourced from the identity SSOT. */
     undefine_logical("SYS$WELCOME");
     capture_banner(ovmx_banner_welcome, got, sizeof(got));
-    check(strstr(got, "OVMX") != NULL,
-          "undefined SYS$WELCOME falls back to the built-in OVMX banner");
+    check(strstr(got, "OpenVMX") != NULL,
+          "undefined SYS$WELCOME falls back to the built-in OpenVMX banner");
     check(strstr(got, "OpenVMS-compatible") != NULL,
           "built-in welcome carries the INV-0 badge");
     check(strstr(got, "V7.3") == NULL,
@@ -237,7 +268,7 @@ static void test_welcome_banner(void)
     check(st == SS$_NOSUCHDEV,
           "DEFINE/SYSTEM SYS$WELCOME fails SS$_NOSUCHDEV with no /dev/vms (no local fallback)");
     capture_banner(ovmx_banner_welcome, got, sizeof(got));
-    check(strstr(got, "OVMX") != NULL,
+    check(strstr(got, "OpenVMX") != NULL,
           "a SYS$WELCOME define that failed honestly does NOT change the banner");
 
     /* Deassigning (also honest-fails) leaves the built-in in place too. */
@@ -245,7 +276,7 @@ static void test_welcome_banner(void)
     check(st == SS$_NOSUCHDEV,
           "DEASSIGN/SYSTEM SYS$WELCOME fails SS$_NOSUCHDEV with no /dev/vms (no local fallback)");
     capture_banner(ovmx_banner_welcome, got, sizeof(got));
-    check(strstr(got, "OVMX") != NULL,
+    check(strstr(got, "OpenVMX") != NULL,
           "the built-in banner is unaffected throughout (no executive was ever reached)");
 }
 
@@ -319,6 +350,7 @@ int main(void)
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
 
     test_brand_identity();
+    test_substrate_identity();
     test_compat_identity();
     test_node_identity(path);
     test_node_name_buffer_safety();

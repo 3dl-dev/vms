@@ -142,7 +142,7 @@ echo ""
 check "Container 2: system disk detected (install skipped)" "$BOOT2_OUTPUT" "%STARTUP-I-SYSBOOT"
 check "Container 2: executive attached" "$BOOT2_OUTPUT" "%OVMX-I-EXEC"
 check "Container 2: does NOT report missing SYSTEM record" "$BOOT2_OUTPUT" "%OVMX-F-EXECINIT" absent
-check "Container 2: SYSTEM login succeeds (LOGINOUT.EXE from disk)" "$BOOT2_OUTPUT" "Welcome to OVMX"
+check "Container 2: SYSTEM login succeeds (LOGINOUT.EXE from disk)" "$BOOT2_OUTPUT" "Welcome to OpenVMX"
 check "Container 2: SHOW TIME returns a real DCL prompt (DCL.EXE from disk)" "$BOOT2_OUTPUT" "$"
 
 echo "=========================================="

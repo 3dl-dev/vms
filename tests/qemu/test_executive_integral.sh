@@ -147,7 +147,7 @@ check "Boot B: carries the oracle's status for a missing file" "$OUT_B" 'R0 = 00
 # session with no executive at all.
 check "Boot B: NO boot banner (system did not come up)" "$OUT_B" 'OVMX V0.3'  absent
 check "Boot B: NO login prompt"                         "$OUT_B" 'Username:'  absent
-check "Boot B: startup did not complete"                "$OUT_B" '%STDRV-I-STARTUP, OVMX startup completed' absent
+check "Boot B: startup did not complete"                "$OUT_B" '%STDRV-I-STARTUP, OpenVMX startup completed' absent
 echo ""
 
 # --- Boot C (NEGATIVE CONTROL): module loads, /dev/vms never appears --------
@@ -169,7 +169,7 @@ check "Boot C: reports the OVMX-facility exec halt" "$OUT_C" '%OVMX-F-EXECINIT, 
 check "Boot C: NO fabricated bare EXECINIT (no R0)" "$OUT_C" '%EXECINIT, error loading system file' absent
 check "Boot C: NO boot banner (system did not come up)" "$OUT_C" 'OVMX V0.3' absent
 check "Boot C: NO login prompt"                          "$OUT_C" 'Username:' absent
-check "Boot C: startup did not complete"                 "$OUT_C" '%STDRV-I-STARTUP, OVMX startup completed' absent
+check "Boot C: startup did not complete"                 "$OUT_C" '%STDRV-I-STARTUP, OpenVMX startup completed' absent
 echo ""
 
 if [ "$FAIL" -eq 0 ]; then

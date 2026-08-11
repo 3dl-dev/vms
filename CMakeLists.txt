@@ -237,6 +237,17 @@ if(BUILD_TESTS)
     set_tests_properties(identity_ssot_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # Dual-identity rebrand tripwire (rd vms-700/vms-296/vms-3de): the
+    # OpenVMX product rebrand must NOT touch the "OVMX" tokens that are
+    # load-bearing as non-brand machine identifiers -- the OVMX$_ facility
+    # name, the IMGACT ELF-note owner, the SCS wire OS-name field, nodename
+    # fallbacks, and the kit/product-db vendor token. Source scan.
+    add_test(NAME frozen_identity_tokens_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_frozen_identity_tokens.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(frozen_identity_tokens_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
     # Rule 9 standing gate: ONE runtime target (kernel/QEMU). Docker is not a
     # runtime, and no executive facility may silently fall back to a
     # per-process userspace fake when /dev/vms is absent. Source scan.

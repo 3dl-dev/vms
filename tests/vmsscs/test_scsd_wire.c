@@ -10266,6 +10266,18 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
           "OVMX drove op 0x02 to the coordinator (joiner_cfg2_sent) with 0 CM"
           " responses back must read JOIN-ABANDONED (spec 4(O.24)), got %s",
           readmit_verdict_name(readmit_verdict_of(ps)));
+    /* vms-9a7 (spec §4(O.25)) fail-pre/pass-post: coordinator-side SDA proved the
+     * coordinator's CNXMAN never PROPOSES the addition (its VMS$VAXcluster reconnect
+     * to the returning id never settles OPEN) -- it does NOT "ignore" a received
+     * request. The JOIN-ABANDONED verdict text must carry that corrected, grounded
+     * explanation and cite §4(O.25); before vms-9a7 it said only "IGNORES ... Davis
+     * p.7-38 ... spec 4(O.24)". */
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "4(O.25)") != NULL,
+          "JOIN-ABANDONED text must cite the coordinator-SDA refinement spec 4(O.25),"
+          " got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "CNXMAN never PROPOSES") != NULL,
+          "JOIN-ABANDONED text must state the grounded finding (CNXMAN never proposes"
+          " the addition), got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
     /* The real Rr shape: op02 driven, but OVMX's VC ended CONNSTUCK so the open
      * latch never fired. Still JOIN-ABANDONED -- the driven-op02 fact governs. */
     ps->vaxcluster_open_reached = 0;

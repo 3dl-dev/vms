@@ -556,6 +556,18 @@ static int device_absent_checks(void)
               strstr(out, "Privileges:") == NULL &&
               strstr(out, "Process quotas:") == NULL,
               "SHOW PROCESS fabricates no process fields with no executive");
+
+        /* /ALL degrades the same honest way: no fabricated process-table
+         * banner, no hardcoded state, when there is no executive to read
+         * (vms-70eb). This is the negctl mirror of
+         * tests/dcl/test_show_process_all_no_fabrication.sh. */
+        if (run_dcl("SHOW PROCESS/ALL\nLOGOUT\n", -1, NULL,
+                    out, sizeof(out)) == 0) {
+            CHECK(strstr(out, "Processes at") == NULL &&
+                  strstr(out, "LEF") == NULL,
+                  "SHOW PROCESS/ALL fabricates no process table with no "
+                  "executive");
+        }
     }
 
     printf("=== test_syssvc_showproc: %d passed, %d failed (SKIPPED: no /dev/vms) ===\n",
@@ -782,6 +794,43 @@ int main(void)
           "SHOW PROCESS prints no fabricated quota block");
     CHECK(strstr(out, "_FTA0:") == NULL,
           "SHOW PROCESS invents no _FTA0: process/terminal name");
+
+    /* ---------------------------------------------------------------
+     * P6a. SHOW PROCESS/ALL IS "ALL INFO ABOUT THIS PROCESS", NOT A
+     *      PROCESS TABLE, AND IT FABRICATES NOTHING (vms-70eb).
+     *
+     *      The deleted /ALL branch printed a "      Processes at <date>"
+     *      line and a "Process Name / PID / UIC / State" table whose one
+     *      row carried ctx->process_name (the DCL context's self-declared
+     *      name, not the executive's) and a HARDCODED "LEF" state. The
+     *      oracle (docs/oracle/vax73-show-system-process.md Section 4)
+     *      names that shape "the wrong shape AND a fabrication": VMS /ALL
+     *      is the plain display followed by the extra per-process sections.
+     *
+     *      OVMX /ALL now renders the plain display -- every field from the
+     *      caller's executive row -- and appends the one extra section it
+     *      can source, the two privilege blocks (the same reader
+     *      SHOW PROCESS/PRIVILEGES uses). So the header pair and User
+     *      Identifier: must be present, "Authorized privileges:" and
+     *      "Process privileges:" must be present, and the fabricated
+     *      table's "Processes at" / table heading / "LEF" must be gone.
+     * --------------------------------------------------------------- */
+    CHECK(run_dcl("SHOW PROCESS/ALL\nLOGOUT\n", -1, NULL, out, sizeof(out)) == 0,
+          "SHOW PROCESS/ALL ran under the real DCL.EXE");
+    CHECK(line_containing(out, "Process ID:") != NULL &&
+          line_starting(out, "User Identifier:") != NULL,
+          "SHOW PROCESS/ALL prints the plain per-process display "
+          "(header pair + User Identifier:), executive-sourced");
+    CHECK(line_starting(out, "Authorized privileges:") != NULL &&
+          line_starting(out, "Process privileges:") != NULL,
+          "SHOW PROCESS/ALL appends the two privilege blocks it CAN "
+          "source -- the sourceable half of VMS's /ALL");
+    CHECK(strstr(out, "Processes at") == NULL,
+          "SHOW PROCESS/ALL prints no fabricated \"Processes at\" table "
+          "banner -- /ALL is not a process table");
+    CHECK(strstr(out, "LEF") == NULL,
+          "SHOW PROCESS/ALL invents no scheduler State (the hardcoded "
+          "\"LEF\" is gone) -- OVMX holds no VMS state, as SHOW SYSTEM omits");
 
     /* ---------------------------------------------------------------
      * P7. SELECTING BY PROCESS ID reaches the same row, and /ID=0 is the

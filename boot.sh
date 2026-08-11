@@ -11,6 +11,11 @@
 #   ./boot.sh --distrib                # Boot the PRE-INSTALLED distribution disk
 #                                      #   (dist/ovmx-distrib.img, mastered at build;
 #                                      #    slim initramfs, no self-install — vms-8ab)
+#   ./boot.sh --flags R5,R6            # Conversational boot (vms-b81): halt at
+#                                      #   SYSBOOT> before the executive attaches.
+#                                      #   Bit 0 of R6 is the conversational bit --
+#                                      #   --flags 0,1 matches the oracle's own
+#                                      #   `boot -flags 0,1` example.
 #   ./boot.sh --help                   # Show this help
 #
 # First run (or --clean): Docker builds the image if needed, the container
@@ -47,6 +52,7 @@ FORCE_FRESH=0
 USE_SLIM=0
 USE_DISTRIB=0
 DISK_PATH=""
+BOOT_FLAGS=""
 
 # Parse arguments
 while [ $# -gt 0 ]; do
@@ -67,6 +73,18 @@ while [ $# -gt 0 ]; do
             USE_DISTRIB=1
             shift
             ;;
+        --flags)
+            if [ -z "$2" ]; then
+                echo "Error: --flags requires an R5,R6 argument" >&2
+                exit 1
+            fi
+            BOOT_FLAGS="$2"
+            shift 2
+            ;;
+        --flags=*)
+            BOOT_FLAGS="${1#--flags=}"
+            shift
+            ;;
         --disk|-d)
             if [ -z "$2" ]; then
                 echo "Error: --disk requires a path argument" >&2
@@ -85,7 +103,7 @@ while [ $# -gt 0 ]; do
             ;;
         *)
             echo "Unknown option: $1" >&2
-            echo "Usage: $0 [--clean] [--rebuild] [--slim] [--distrib] [--disk path]" >&2
+            echo "Usage: $0 [--clean] [--rebuild] [--slim] [--distrib] [--disk path] [--flags R5,R6]" >&2
             exit 1
             ;;
     esac
@@ -189,6 +207,7 @@ exec docker run --rm -it \
     -e MEMORY="$MEMORY" \
     -e INITRD="$INITRD_ENV" \
     -e DISTRIB="$([ "$USE_DISTRIB" -eq 1 ] && echo 1)" \
+    -e BOOT_FLAGS="$BOOT_FLAGS" \
     -e SYSDISK_NAME="$DISK_NAME" \
     -v "$DISK_DIR:/data" \
     "$IMAGE"

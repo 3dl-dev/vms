@@ -70,6 +70,12 @@
  * class): it links vmsfs statically already (CMakeLists.txt's vmsfs_static
  * in OVMX_IMGACT mode), which is all this header-only reader needs. */
 #include "sysgen_params.h"
+/* SYSBOOT> conversational-boot prompt (vms-b81) -- operates on the SAME
+ * SYS$SYSTEM:OVMXVMSSYS.PAR, just resolved to a raw Linux directory
+ * (VMS_SYSTEM_DIR) instead of through vmsfs_to_linux_path(), because it has
+ * to run before the device table exists -- see sysboot.h and
+ * bare_metal_init() below. */
+#include "sysboot.h"
 
 #define SYSDISK_DEV      "/dev/vda"
 
@@ -87,6 +93,20 @@ static const char *vms_months[] = {
 };
 
 static volatile sig_atomic_t shutdown_requested = 0;
+
+/*
+ * A SYSBOOT> conversational session's result (vms-b81), stashed by
+ * bare_metal_init() so read_boot_parameters() -- which runs later, in
+ * main(), once the device table exists -- uses THIS in-memory parameter
+ * set instead of re-reading SYS$SYSTEM:OVMXVMSSYS.PAR from disk. That
+ * re-read is exactly what VMS persistence semantics forbid here: SET
+ * inside the prompt is in-memory-only for this boot, and re-reading the
+ * file afterward would silently discard it (the file was never written
+ * unless the operator ran WRITE). A flagless boot never sets this and
+ * read_boot_parameters() falls through to its original, unchanged path.
+ */
+static int conversational_boot_result_valid = 0;
+static struct sysgen_file conversational_boot_params;
 
 /*
  * Translate a VMS filespec to a Linux path.
@@ -412,57 +432,130 @@ static void bare_metal_init(void)
     mkdir("/dev/shm", 0755);
     mount("tmpfs", "/dev/shm", "tmpfs", 0, NULL);
 
-    /* NO hardcoded sethostname() HERE (vms-b6a7: "the hardcoded OVMX
-     * hostname DIES"). The real node name is SYS$SYSTEM:OVMXVMSSYS.PAR's
-     * SCSNODE parameter, and that file is ON the system disk -- unreadable
-     * until the disk is mounted and the device table / logical names are up
-     * (Step 1b in main(), below). read_boot_parameters() sets the hostname
-     * once that is true; see its header for the ordering divergence this
-     * forces from real VMS's boot-driver-I/O SYSBOOT read.
-     *
-     * The executive comes up before anything else runs. */
-    executive_attach();
+    /*
+     * Conversational boot (vms-b81): the substrate's boot-flag register is
+     * the kernel cmdline (sysboot.h). Reading it needs only the /proc mount
+     * just above and produces no output -- checking it here, before
+     * anything else in this function runs, is what lets the branch below
+     * satisfy docs/design-boot-faithful.md §3.1: NOTHING precedes
+     * "SYSBOOT> ", not even the executive-attach line that is otherwise the
+     * very first thing this function ever prints.
+     */
+    if (!sysboot_conversational_requested()) {
+        /* ---- Flagless boot: EXACTLY the code that stood here before
+         * this item, unchanged in content and order. ---- */
 
-    /* MOUNT (vms-651) needs every disk unit's mount point to already exist
-     * before any de-privileged VMS session tries to use one -- see the
-     * function's own comment for why this can only happen here, as root. */
-    provision_disk_mount_points();
+        /* NO hardcoded sethostname() HERE (vms-b6a7: "the hardcoded OVMX
+         * hostname DIES"). The real node name is SYS$SYSTEM:OVMXVMSSYS.PAR's
+         * SCSNODE parameter, and that file is ON the system disk --
+         * unreadable until the disk is mounted and the device table /
+         * logical names are up (Step 1b in main(), below).
+         * read_boot_parameters() sets the hostname once that is true; see
+         * its header for the ordering divergence this forces from real
+         * VMS's boot-driver-I/O SYSBOOT read.
+         *
+         * The executive comes up before anything else runs. */
+        executive_attach();
 
-    /* vmsfs.ko is the filesystem, not the executive; a failure here surfaces
-     * as the mount failure below, which halts honestly. The executive itself
-     * is loaded and pinned by executive_attach(). */
-    if (load_kernel_module("/lib/modules/vmsfs.ko") != 0 && errno != EEXIST) {
-        fprintf(stderr, "%%STARTUP-W-MODFAIL, failed to load vmsfs.ko: %s\n",
-                strerror(errno));
+        /* MOUNT (vms-651) needs every disk unit's mount point to already
+         * exist before any de-privileged VMS session tries to use one --
+         * see the function's own comment for why this can only happen
+         * here, as root. */
+        provision_disk_mount_points();
+
+        /* vmsfs.ko is the filesystem, not the executive; a failure here
+         * surfaces as the mount failure below, which halts honestly. The
+         * executive itself is loaded and pinned by executive_attach(). */
+        if (load_kernel_module("/lib/modules/vmsfs.ko") != 0 && errno != EEXIST) {
+            fprintf(stderr, "%%STARTUP-W-MODFAIL, failed to load vmsfs.ko: %s\n",
+                    strerror(errno));
+        }
+
+        struct stat vms_st;
+        if (stat(SYSDISK_MOUNT, &vms_st) != 0)
+            return;  /* No system disk mount point in initramfs */
+
+        /* The system disk must be a real virtio block device. There is no
+         * overlay and no auto-initialize fallback: if it is not here, the
+         * system does not come up (design-init-scope.md §1). */
+        struct stat vda_st;
+        if (stat(SYSDISK_DEV, &vda_st) != 0 || !S_ISBLK(vda_st.st_mode)) {
+            ovmx_sysinit_halt(
+                "no system disk " SYSDISK_DEV " (DKA0:)",
+                "the system disk is not present; OVMX does not install one at boot");
+        }
+
+        printf("%%STARTUP-I-SYSDISK, mounting system disk DKA0:\n");
+
+        /* Mount the pre-installed disk, or halt. A blank or unformatted disk
+         * fails to mount as vmsfs -- and PID 1 does NOT initialize it (that
+         * is the installer spine's INITIALIZE/PCSI job, run out of band). */
+        if (mount(SYSDISK_DEV, SYSDISK_MOUNT, "vmsfs", 0, NULL) != 0) {
+            ovmx_sysinit_halt(
+                "system disk DKA0: (" SYSDISK_DEV ") would not mount",
+                "the volume is not an installed VMSFS system disk; "
+                "OVMX does not initialize or install it at boot");
+        }
+
+        printf("%%STARTUP-I-MOUNTED, system disk DKA0: mounted\n");
+        return;
     }
+
+    /*
+     * ---- Conversational boot path (vms-b81) ----
+     *
+     * SYSBOOT needs the system disk mounted to read/write the real
+     * SYS$SYSTEM:OVMXVMSSYS.PAR (sysboot.h's header comment explains why it
+     * cannot go through the normal filespec translator this early). Mounting
+     * it needs only vmsfs.ko, not the executive -- unlike the flagless
+     * branch above, executive_attach() is deliberately NOT called until
+     * after the prompt returns.
+     *
+     * The diagnostic lines the flagless branch prints INLINE, as each step
+     * happens, are DEFERRED here to after the (optional) prompt instead:
+     * same text, same order relative to each other, just moved as a whole
+     * block -- because on this path they would otherwise print before
+     * SYSBOOT>, which the oracle capture (§3.1) shows nothing does.
+     */
+    int vmsfs_load_failed =
+        (load_kernel_module("/lib/modules/vmsfs.ko") != 0 && errno != EEXIST);
+    int vmsfs_errno = errno;
 
     struct stat vms_st;
-    if (stat(SYSDISK_MOUNT, &vms_st) != 0)
-        return;  /* No system disk mount point in initramfs */
+    if (stat(SYSDISK_MOUNT, &vms_st) == 0) {
+        struct stat vda_st;
+        if (stat(SYSDISK_DEV, &vda_st) != 0 || !S_ISBLK(vda_st.st_mode)) {
+            ovmx_sysinit_halt(
+                "no system disk " SYSDISK_DEV " (DKA0:)",
+                "the system disk is not present; OVMX does not install one at boot");
+        }
+        if (mount(SYSDISK_DEV, SYSDISK_MOUNT, "vmsfs", 0, NULL) != 0) {
+            ovmx_sysinit_halt(
+                "system disk DKA0: (" SYSDISK_DEV ") would not mount",
+                "the volume is not an installed VMSFS system disk; "
+                "OVMX does not initialize or install it at boot");
+        }
 
-    /* The system disk must be a real virtio block device. There is no overlay
-     * and no auto-initialize fallback: if it is not here, the system does not
-     * come up (design-init-scope.md §1). */
-    struct stat vda_st;
-    if (stat(SYSDISK_DEV, &vda_st) != 0 || !S_ISBLK(vda_st.st_mode)) {
-        ovmx_sysinit_halt(
-            "no system disk " SYSDISK_DEV " (DKA0:)",
-            "the system disk is not present; OVMX does not install one at boot");
+        /* The disk is mounted and SYS$SYSTEM (VMS_SYSTEM_DIR, a raw Linux
+         * path -- ovmx_layout.h) is reachable. Load the real parameter file
+         * (or factory defaults if it is not there yet), run the prompt, and
+         * stash the result for read_boot_parameters(). */
+        sysboot_load_working_set(&conversational_boot_params, VMS_SYSTEM_DIR,
+                                  "OVMXVMSSYS", "PAR");
+        sysboot_run_prompt(&conversational_boot_params, VMS_SYSTEM_DIR,
+                            "OVMXVMSSYS", "PAR", VMS_STARTUP_PATH);
+        conversational_boot_result_valid = 1;
+
+        printf("%%STARTUP-I-SYSDISK, mounting system disk DKA0:\n");
+        printf("%%STARTUP-I-MOUNTED, system disk DKA0: mounted\n");
     }
 
-    printf("%%STARTUP-I-SYSDISK, mounting system disk DKA0:\n");
+    if (vmsfs_load_failed)
+        fprintf(stderr, "%%STARTUP-W-MODFAIL, failed to load vmsfs.ko: %s\n",
+                strerror(vmsfs_errno));
 
-    /* Mount the pre-installed disk, or halt. A blank or unformatted disk fails
-     * to mount as vmsfs -- and PID 1 does NOT initialize it (that is the
-     * installer spine's INITIALIZE/PCSI job, run out of band). */
-    if (mount(SYSDISK_DEV, SYSDISK_MOUNT, "vmsfs", 0, NULL) != 0) {
-        ovmx_sysinit_halt(
-            "system disk DKA0: (" SYSDISK_DEV ") would not mount",
-            "the volume is not an installed VMSFS system disk; "
-            "OVMX does not initialize or install it at boot");
-    }
-
-    printf("%%STARTUP-I-MOUNTED, system disk DKA0: mounted\n");
+    executive_attach();
+    provision_disk_mount_points();
 }
 
 /* ------------------------------------------------------------------ */
@@ -534,6 +627,33 @@ static void require_installed_system(void)
  */
 static void read_boot_parameters(void)
 {
+    /*
+     * A SYSBOOT> conversational session already loaded (and possibly SET)
+     * the parameter set this boot, in bare_metal_init() -- vms-b81. Use
+     * THAT in-memory result instead of re-reading OVMXVMSSYS.PAR from disk:
+     * re-reading would silently discard an in-memory-only SET (VMS
+     * persistence semantics -- SET is this-boot-only, WRITE is the only
+     * thing that touches the file, and CONTINUE does not call WRITE). A
+     * flagless boot never sets conversational_boot_result_valid and falls
+     * through to the original read below, unchanged.
+     */
+    if (conversational_boot_result_valid) {
+        const char *node = sysboot_get_string(&conversational_boot_params, "SCSNODE");
+        if (node && node[0] != '\0') {
+            sethostname(node, strlen(node));
+            printf("%%OVMX-I-SCSNODE, node name %s set from SYS$SYSTEM:OVMXVMSSYS.PAR\n",
+                   node);
+            return;
+        }
+        fprintf(stderr,
+                "%%OVMX-W-NOPARAMS, SYS$SYSTEM:OVMXVMSSYS.PAR is missing or unreadable\n");
+        fprintf(stderr,
+                "-OVMX-I-NOPARAMS, booting with default node name %s\n",
+                OVMX_DEFAULT_NODENAME);
+        sethostname(OVMX_DEFAULT_NODENAME, strlen(OVMX_DEFAULT_NODENAME));
+        return;
+    }
+
     char node[SYSGEN_STRVAL_LEN];
 
     if (sysgen_read_string("SCSNODE", node, sizeof(node)) == 0 && node[0] != '\0') {

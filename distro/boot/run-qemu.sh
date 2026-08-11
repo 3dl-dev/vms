@@ -5,8 +5,15 @@
 #   ./distro/boot/run-qemu.sh [kernel] [initrd]
 #
 # Environment variables:
-#   MEMORY  - Guest RAM (default: 512M)
-#   DISK    - Path to system disk image (optional; passed as /dev/vda if set)
+#   MEMORY     - Guest RAM (default: 512M)
+#   DISK       - Path to system disk image (optional; passed as /dev/vda if set)
+#   BOOT_FLAGS - Conversational boot (vms-b81): "R5,R6" appended to the
+#                kernel cmdline as ovmx.flags=R5,R6. Bit 0 of R6 is the
+#                conversational bit -- BOOT_FLAGS=0,1 halts STARTUP.EXE at
+#                a SYSBOOT> prompt before the executive attaches, matching
+#                the oracle's own `boot -flags 0,1` example
+#                (docs/design-boot-faithful.md §2.2/§3.1). Unset (the
+#                default) boots straight through -- SYSBOOT> never appears.
 #
 # Initramfs variants:
 #   initramfs-ovmx.cpio.gz       — fat: all binaries (first boot / install)
@@ -48,11 +55,16 @@ if [ -n "$DISK" ]; then
     DISK_ARGS="-drive file=$DISK,format=raw,if=virtio,cache=writeback"
 fi
 
+APPEND="$CONSOLE loglevel=3 quiet"
+if [ -n "$BOOT_FLAGS" ]; then
+    APPEND="$APPEND ovmx.flags=$BOOT_FLAGS"
+fi
+
 exec $QEMU $MACHINE \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
     -nographic \
-    -append "$CONSOLE loglevel=3 quiet" \
+    -append "$APPEND" \
     -m "$MEMORY" \
     -smp 2 \
     -nic none \

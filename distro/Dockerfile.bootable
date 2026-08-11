@@ -567,7 +567,11 @@ RUN KVER=$(cat /tmp/kver) && \
     fi
 
 # -- Runner stage --------------------------------------------------------------
-# Minimal image with just QEMU and boot artifacts.
+# Minimal image with just QEMU and boot artifacts. `expect` is test tooling,
+# not a runtime dependency (CLAUDE.md Rule 9 distinction) -- it drives the
+# SYSBOOT> conversational-boot proof (tests/qemu/test_sysboot_conversational.sh,
+# vms-b81) over the real serial console, the same way this stage's QEMU boots
+# every other test in tests/qemu/.
 FROM ubuntu:24.04 AS runner
 
 # Distro metadata (rd vms-700/vms-296/vms-3de, GNU/Linux-style dual
@@ -586,7 +590,7 @@ LABEL org.opencontainers.image.title="OVMX/Linux" \
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio \
+    qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio expect \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /boot/vmlinuz /boot/vmlinuz
@@ -619,6 +623,12 @@ ENV MEMORY=512M
 #                         exist (instead of a blank disk PID 1 would self-install),
 #                         and force the SLIM initramfs. This is the §6 mount-or-halt
 #                         shape: an already-installed disk, no self-install.
+# BOOT_FLAGS            — Conversational boot (vms-b81): "R5,R6" appended to the
+#                         kernel cmdline as ovmx.flags=R5,R6. Bit 0 of R6 is the
+#                         conversational bit -- BOOT_FLAGS=0,1 halts STARTUP.EXE
+#                         at a SYSBOOT> prompt before the executive attaches
+#                         (docs/design-boot-faithful.md §2.2/§3.1). Unset boots
+#                         straight through.
 # SYSDISK_NAME          — disk filename inside /data volume (default: sysdisk.img)
 #
 # boot.sh mounts a host directory at /data so the container owns the disk
@@ -652,11 +662,13 @@ CMD ARCH=$(uname -m) && \
             truncate -s 64M "$DISK"; \
         fi; \
     fi && \
+    APPEND="$CONSOLE loglevel=3 quiet" && \
+    if [ -n "${BOOT_FLAGS:-}" ]; then APPEND="$APPEND ovmx.flags=$BOOT_FLAGS"; fi && \
     exec $QEMU $MACHINE \
         -kernel /boot/vmlinuz \
         -initrd "$INITRAMFS" \
         -nographic \
-        -append "$CONSOLE loglevel=3 quiet" \
+        -append "$APPEND" \
         -m $MEMORY \
         -smp 2 \
         -nic none \

@@ -435,8 +435,13 @@ static void setup_session(struct dcl_context *ctx)
          * VMS keeps as a single fixed differential. Same SYSTEM-then-PROCESS
          * seeding as SYS$NODE. Identity stays OVMX; only the clock's zone is
          * described.
+         *
+         * No explicit tzset(): localtime_r resolves the zone (and fills
+         * tm_gmtoff / tm_zone) internally on both glibc and musl, and tzset is
+         * NOT one of the DECC$SHR universals the VMS-native LINK.EXE graph
+         * resolves against (it is not in mk_decc_shr.sh's vector) -- calling it
+         * broke the native DCL.EXE link. time / localtime_r ARE universals.
          */
-        tzset();
         {
             time_t tznow = time(NULL);
             struct tm lt;

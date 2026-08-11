@@ -10486,13 +10486,28 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
           "JOIN-ABANDONED text must state op 0x02 now rides <=18 and is DELIVERED"
           " (the §4(O.26) ceiling gate is closed), got %s",
           readmit_verdict_name(READMIT_JOIN_ABANDONED));
-    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "returning-identity non-admission") != NULL,
-          "JOIN-ABANDONED text must state the relocated frontier -- the coordinator"
-          " proposes nothing for a returning identity even with op 0x02 delivered,"
-          " got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
     CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "never settles OPEN") == NULL,
           "JOIN-ABANDONED text must NO LONGER claim the reconnect never settles OPEN"
           " (§4(O.25) sampling artifact, corrected by vms-c40/§4(O.26)), got %s",
+          readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    /* vms-358 (spec §4(O.28)) fail-pre/pass-post: three coordinator-SDA brackets
+     * name the retained state and CORRECT the 'returning-identity non-admission /
+     * held-before' framing this text carried since §4(O.20). The coordinator keeps
+     * NO persistent per-identity block; qf_failed_node is a RED HERRING (a fresh id
+     * admits with it set once the prior node's teardown SETTLES -- cq358 arm D); the
+     * return collides with the departed node's OWN per-SCSSYSTEMID CSB held in
+     * reconnect/wait (long_break) that OVMX's rejoin-form return keeps alive. The
+     * text must now cite §4(O.28) and NOT claim a persistent "held before" block. */
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "4(O.28)") != NULL,
+          "JOIN-ABANDONED text must cite the coordinator-SDA isolation spec 4(O.28),"
+          " got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "RED HERRING") != NULL,
+          "JOIN-ABANDONED text must state qf_failed_node is a RED HERRING (not the"
+          " gate; a settled fresh id admits with it set -- §4(O.28)), got %s",
+          readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "held before") == NULL,
+          "JOIN-ABANDONED text must NO LONGER claim a persistent 'held before' block"
+          " (refuted by the §4(O.28) brackets), got %s",
           readmit_verdict_name(READMIT_JOIN_ABANDONED));
     /* The real Rr shape: op02 driven, but OVMX's VC ended CONNSTUCK so the open
      * latch never fired. Still JOIN-ABANDONED -- the driven-op02 fact governs. */

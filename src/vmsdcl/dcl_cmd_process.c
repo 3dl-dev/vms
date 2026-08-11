@@ -160,9 +160,20 @@ int cmd_submit(struct dcl_command *cmd)
         return sts;
     }
 
-    /* Get queue name (/QUEUE=name, default SYS$BATCH) */
+    /* Get queue name (/QUEUE=name; default is the queue SYS$BATCH translates
+     * to). SYS$BATCH is a logical name for the default batch queue (VSI OpenVMS
+     * DCL Dictionary, SUBMIT), so a DEFINE SYS$BATCH <queue> redirects a bare
+     * SUBMIT live (vms-f89). Read at point of use, not hardcoded; the seeded
+     * default is "SYS$BATCH" (lnm_setup_defaults). */
+    char qbuf[256];
     const char *queue_name = dcl_qualifier_value(cmd, "QUEUE");
-    if (!queue_name || !queue_name[0]) queue_name = "SYS$BATCH";
+    if (!queue_name || !queue_name[0]) {
+        if (dcl_translate_logical("SYS$BATCH", qbuf, sizeof(qbuf)) == 0
+                && qbuf[0])
+            queue_name = qbuf;
+        else
+            queue_name = "SYS$BATCH";
+    }
 
     /* Format job name from filename (uppercase, strip path and extension) */
     const char *bn = strrchr(cmd->params[0], ']');
@@ -252,9 +263,20 @@ int cmd_print(struct dcl_command *cmd)
         return sts;
     }
 
-    /* Get queue name (/QUEUE=name, default SYS$PRINT) */
+    /* Get queue name (/QUEUE=name; default is the queue SYS$PRINT translates
+     * to). SYS$PRINT is a logical name for the default print queue (VSI OpenVMS
+     * DCL Dictionary, PRINT), so a DEFINE SYS$PRINT <queue> redirects a bare
+     * PRINT live (vms-f89). Read at point of use, not hardcoded; the seeded
+     * default is "SYS$PRINT" (lnm_setup_defaults). */
+    char qbuf[256];
     const char *queue_name = dcl_qualifier_value(cmd, "QUEUE");
-    if (!queue_name || !queue_name[0]) queue_name = "SYS$PRINT";
+    if (!queue_name || !queue_name[0]) {
+        if (dcl_translate_logical("SYS$PRINT", qbuf, sizeof(qbuf)) == 0
+                && qbuf[0])
+            queue_name = qbuf;
+        else
+            queue_name = "SYS$PRINT";
+    }
 
     /* Format filename for display (uppercase, keep extension) */
     const char *bn = strrchr(cmd->params[0], ']');

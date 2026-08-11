@@ -75,6 +75,40 @@ static uint32_t lnm_attrs_from_qualifier(struct dcl_command *cmd)
 }
 
 /*
+ * dcl_logical_is_terminal - does a resolved SYS$OUTPUT / SYS$INPUT / SYS$ERROR
+ * equivalence name the terminal (the default), rather than a file to redirect
+ * through? (vms-f89)
+ *
+ * The seeded default equivalence is "TT:" (lnm_setup_defaults), the terminal
+ * device; a plain string like a file spec or a VMS/Linux path is a redirect
+ * target. An empty/undefined equivalence is treated as the terminal, which
+ * preserves the pre-vms-f89 behavior of writing to / reading from the
+ * process's own stdout/stdin when the logical is not defined.
+ */
+static int dcl_logical_is_terminal(const char *equiv)
+{
+    if (!equiv || !equiv[0])
+        return 1;
+    char t[64];
+    strncpy(t, equiv, sizeof(t) - 1);
+    t[sizeof(t) - 1] = '\0';
+    size_t n = strlen(t);
+    if (n && t[n - 1] == ':')
+        t[n - 1] = '\0';
+    if (strcasecmp(t, "TT") == 0 || strcasecmp(t, "SYS$COMMAND") == 0)
+        return 1;
+    if (strncasecmp(equiv, "/dev/tty", 8) == 0)
+        return 1;
+    return 0;
+}
+
+/* Cached SYS$INPUT stream for a file-redirected SYS$INPUT, so successive
+ * READ SYS$INPUT calls advance through the file rather than re-reading line 1
+ * (vms-f89). Keyed by resolved path; re-opened when the redirection changes. */
+static FILE *g_sysinput_fp;
+static char  g_sysinput_key[1024];
+
+/*
  * ASSIGN - Assign a logical name.
  * Format: ASSIGN equivalence-name logical-name
  *                 [/PROCESS | /JOB | /GROUP | /SYSTEM] [/TABLE=table-name]
@@ -462,6 +496,59 @@ int cmd_read(struct dcl_command *cmd)
         return SS$_NORMAL;
     }
 
+    /*
+     * SYS$INPUT: resolve through real logical translation (vms-f89) so a
+     * DEFINE SYS$INPUT <file> redirects READ, mirroring cmd_write's SYS$OUTPUT
+     * path. A terminal equivalence (the default) reads the process stdin; any
+     * other equivalence is a file whose lines successive READs advance through.
+     * SYS$INPUT is the process-permanent logical name for the default input
+     * stream (VSI OpenVMS DCL Dictionary).
+     */
+    if (!fp && strcasecmp(channel_name, "SYS$INPUT") == 0) {
+        char equiv[1024];
+        int redirected = 0;
+        char linux_path[1024];
+        if (dcl_translate_logical("SYS$INPUT", equiv, sizeof(equiv)) == 0 &&
+                equiv[0] && !dcl_logical_is_terminal(equiv)) {
+            dcl_resolve_path(ctx, equiv, linux_path, sizeof(linux_path));
+            redirected = 1;
+        }
+
+        if (redirected) {
+            if (!g_sysinput_fp || strcmp(g_sysinput_key, linux_path) != 0) {
+                if (g_sysinput_fp)
+                    fclose(g_sysinput_fp);
+                g_sysinput_fp = fopen(linux_path, "r");
+                strncpy(g_sysinput_key, linux_path, sizeof(g_sysinput_key) - 1);
+                g_sysinput_key[sizeof(g_sysinput_key) - 1] = '\0';
+            }
+            if (!g_sysinput_fp) {
+                dcl_sym_set(symbol_name, "", DCL_SYM_LOCAL);
+                return SS$_ENDOFFILE;
+            }
+            char rline[4096];
+            if (!fgets(rline, sizeof(rline), g_sysinput_fp)) {
+                dcl_sym_set(symbol_name, "", DCL_SYM_LOCAL);
+                return SS$_ENDOFFILE;
+            }
+            size_t rl = strlen(rline);
+            if (rl > 0 && rline[rl - 1] == '\n') rline[rl - 1] = '\0';
+            dcl_sym_set(symbol_name, rline, DCL_SYM_LOCAL);
+            return SS$_NORMAL;
+        }
+
+        /* Terminal SYS$INPUT: read one line from the process stdin. */
+        char tbuf[4096];
+        if (!fgets(tbuf, sizeof(tbuf), stdin)) {
+            dcl_sym_set(symbol_name, "", DCL_SYM_LOCAL);
+            return SS$_ENDOFFILE;
+        }
+        size_t tl = strlen(tbuf);
+        if (tl > 0 && tbuf[tl - 1] == '\n') tbuf[tl - 1] = '\0';
+        dcl_sym_set(symbol_name, tbuf, DCL_SYM_LOCAL);
+        return SS$_NORMAL;
+    }
+
     if (!fp) {
         dcl_error("DCL", 2, "IVLOGNAM",
                   "channel %s is not open", channel_name);
@@ -498,20 +585,44 @@ int cmd_write(struct dcl_command *cmd)
 
     const char *channel_name = cmd->params[0];
 
-    /* Check for SYS$OUTPUT special channel */
-    if (strcasecmp(channel_name, "SYS$OUTPUT") == 0) {
-        for (int i = 1; i < cmd->param_count; i++) {
-            printf("%s", cmd->params[i]);
-        }
-        printf("\n");
-        return SS$_NORMAL;
-    }
+    /*
+     * SYS$OUTPUT / SYS$ERROR: resolve through real logical-name translation
+     * (vms-f89). Previously these were string-matched and ALWAYS went to the
+     * process stdout/stderr, so DEFINE SYS$OUTPUT <file> did NOT redirect --
+     * an INV-DCL facade (the string match named the subsystem's shape without
+     * consulting the logical). Now the equivalence is translated at point of
+     * use: a terminal equivalence (the "TT:" default) writes to the terminal,
+     * any other equivalence is a file the output is appended to, so a
+     * redefinition takes effect live. SYS$OUTPUT / SYS$ERROR are the
+     * process-permanent logical names for the default output/error streams
+     * (VSI OpenVMS DCL Dictionary; System Manager's Manual, logical names).
+     */
+    if (strcasecmp(channel_name, "SYS$OUTPUT") == 0 ||
+        strcasecmp(channel_name, "SYS$ERROR") == 0) {
+        int is_err = (strcasecmp(channel_name, "SYS$ERROR") == 0);
 
-    if (strcasecmp(channel_name, "SYS$ERROR") == 0) {
-        for (int i = 1; i < cmd->param_count; i++) {
-            fprintf(stderr, "%s", cmd->params[i]);
+        char equiv[1024];
+        if (dcl_translate_logical(channel_name, equiv, sizeof(equiv)) == 0 &&
+                equiv[0] && !dcl_logical_is_terminal(equiv)) {
+            char linux_path[1024];
+            dcl_resolve_path(ctx, equiv, linux_path, sizeof(linux_path));
+            FILE *fp = fopen(linux_path, "a");
+            if (!fp) {
+                dcl_error("RMS", 2, "OPENOUT",
+                          "error opening %s as output", equiv);
+                return SS$_NOSUCHFILE;
+            }
+            for (int i = 1; i < cmd->param_count; i++)
+                fprintf(fp, "%s", cmd->params[i]);
+            fprintf(fp, "\n");
+            fclose(fp);
+            return SS$_NORMAL;
         }
-        fprintf(stderr, "\n");
+
+        FILE *out = is_err ? stderr : stdout;
+        for (int i = 1; i < cmd->param_count; i++)
+            fprintf(out, "%s", cmd->params[i]);
+        fprintf(out, "\n");
         return SS$_NORMAL;
     }
 

@@ -3444,7 +3444,7 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                           guard here -- scs_vc_fsm_*() decides what may be
  *                           sent from each state, which is a stricter check
  *                           than "is it OPEN", not a weaker one.
- *     send_frame_channel()  ALL NISCA HELLO traffic, called from 4 sites in 2
+ *     send_frame_channel()  ALL NISCA HELLO traffic, called from 5 sites in 3
  *                           functions -- a set and a count BOTH PINNED by the
  *                           census (CHANNEL_CALLERS), so this paragraph
  *                           re-derives:
@@ -3454,7 +3454,13 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                             scsd_hello_beacon_emit()  1 -- the periodic
  *                               MULTICAST beacon off main()'s timer, the one
  *                               that increments rx.hello_sent and is reported
- *                               in the exit summary.
+ *                               in the exit summary;
+ *                             scsd_emit_port_lastgasp() 1 -- the vms-708 (spec
+ *                               4(O.30)) PORT-LEVEL clean-leave last gasp, a
+ *                               single final MULTICAST HELLO at shutdown (abs-30
+ *                               b1 + cluster nonce, Davis p.7-29). Rides the
+ *                               HELLO exemption for the same reason the beacon
+ *                               does: addressed to the cluster multicast, no VC.
  *                           See that function for the reason; in short, HELLO
  *                           is CHANNEL maintenance BELOW the virtual circuit
  *                           and is the only thing that re-establishes a
@@ -11551,6 +11557,58 @@ static unsigned scsd_emit_clean_departure(struct scsd_rx *rx)
     return sent;
 }
 
+/*
+ * scsd_emit_port_lastgasp - vms-708 (spec 4(O.30)): emit OVMX's AUTHENTIC
+ * PORT-LEVEL clean-leave "last gasp" datagram. This is the RE'd
+ * immediate-removal signal a REAL VAX puts on the wire on SHUTDOWN.COM
+ * (VAXcluster Principles p. 7-29), captured VAX-vs-VAX off vaxlab-0
+ * (d94-708-leave frame 4899 + d94-708-leave2 frame 5015, 2026-08-11): a single
+ * final MULTICAST HELLO whose abs-30 word is 0xb1 (vs 0xa0 periodic) carrying
+ * the cluster nonce (vs zero). It drives peers to remove the departing node
+ * WITHOUT the RECNXINTERVAL reconnect wait (the wire showed the coordinator
+ * stop addressing the leaver by +3.3s -- no ~16-20s directed-reconnect storm).
+ *
+ * It REPLACES the CM-layer op-0x0d self-departure (scsd_emit_clean_departure),
+ * which a live bracket proved CRASHES the coordinator (spec 4(O.29)): that was
+ * a class-0x04 SCS transition-OPEN emitted out of choreography. THIS is a plain
+ * HELLO variant -- best-effort CHANNEL traffic BELOW the virtual circuit
+ * (p. 2-33), carrying no SCS transition state, and byte-for-byte what the
+ * reference node emitted. DEFAULT ON.
+ *
+ * Kill switches: OVMX_NO_PORT_LASTGASP=1 suppresses just this frame (the SCS
+ * DISCONNECT teardown still runs); OVMX_REJOIN_CLEANLEAVE=0 restores the whole
+ * pre-clean-leave path. Rides send_frame_channel() -- the NISCA HELLO exemption
+ * (the last gasp is addressed to the cluster multicast, rides no VC), same as
+ * the periodic beacon; registered in the SEND SITE TABLE and the send-site
+ * census (CHANNEL_CALLERS).
+ */
+static unsigned scsd_emit_port_lastgasp(struct scsd_rx *rx)
+{
+    if (!ovmx_rejoin_cleanleave() || getenv("OVMX_NO_PORT_LASTGASP") != NULL) {
+        return 0;
+    }
+    if (rx->hello_params == NULL || rx->lab_nonce == NULL) {
+        return 0;
+    }
+    rx->hello_params->timer_tick = hello_timer_tick100(); /* live 100ns tick, as the beacon */
+    uint8_t frame[SCS_HELLO_FRAME_LEN];
+    if (scs_hello_build_lastgasp_frame(rx->hello_params, rx->lab_nonce, frame) != 0) {
+        return 0;
+    }
+    ssize_t sent = send_frame_channel(rx->sock, rx->ifindex, rx->hello_params->dst_mac,
+                                      frame, sizeof(frame));
+    if (sent <= 0) {
+        return 0;
+    }
+    log_ts(stdout);
+    printf(" SCSD-I-LASTGASP, emitted PORT-LEVEL clean-leave last gasp to the"
+           " cluster multicast (HELLO abs-30=0xb1 + cluster nonce, spec 4(O.30),"
+           " Davis p.7-29) -- peers should REMOVE us immediately, no"
+           " RECNXINTERVAL reconnect wait\n");
+    fflush(stdout);
+    return 1;
+}
+
 static void scsd_shutdown_teardown(struct scsd_rx *rx, uint8_t *buf, size_t bufsz)
 {
     struct scs_svc_port *port = scsd_svc();
@@ -11605,6 +11663,9 @@ static void scsd_shutdown_teardown(struct scsd_rx *rx, uint8_t *buf, size_t bufs
         }
     }
     if (driven == 0) {
+        /* No VC to disconnect, but still announce departure at the port level
+         * (vms-708): the multicast last gasp rides no circuit. */
+        (void)scsd_emit_port_lastgasp(rx);
         return;
     }
 
@@ -11637,6 +11698,13 @@ static void scsd_shutdown_teardown(struct scsd_rx *rx, uint8_t *buf, size_t bufs
                " blocking on a peer\n", disc_shutdown_pending, wait_ms);
     }
     fflush(stdout);
+
+    /* vms-708 (spec 4(O.30)): the port-level clean-leave last gasp is OVMX's
+     * TRUE final frame -- emitted AFTER the SCS DISCONNECT dialogue, exactly as
+     * the reference VAX emits it after its own dismount/disconnect traffic. This
+     * is the authentic immediate-removal signal that REPLACES the crashing
+     * op-0x0d (spec 4(O.29)). */
+    (void)scsd_emit_port_lastgasp(rx);
 }
 
 /*

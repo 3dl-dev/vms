@@ -1,0 +1,104 @@
+# release.yml - cut an OVMX release bundle and publish it to GitHub Releases
+# (vms-644, epic vms-a84 RELEASE ENGINEERING).
+#
+# This is the "ship THROUGH the machinery" trigger (release-engineering
+# pillar): pushing a release-shaped tag (e.g. `0.4`, `0.3-1`, `v1.0.0`) is the
+# deliberate, human-authorized act that starts a release. On that tag push
+# this workflow runs the SAME machinery a developer would run by hand --
+# tools/cut-release.sh then tools/publish-release.sh -- so a published release
+# is never hand-assembled: it is the reproducible bundle, its generated notes,
+# and its checksums, attached to a GitHub Release.
+#
+# It deliberately does NOT create the tag; the tag push is the input. The
+# reproducibility / acceptance / upgrade gates run in ci.yml on the pushed
+# commit; publish-release.sh independently re-verifies the bundle's SHA256SUMS
+# before uploading, so corrupt bytes are never published.
+#
+# workflow_dispatch is provided so a maintainer can also cut+publish an
+# existing tag by hand, and choose a draft (default) so the final "make it
+# public" click stays with a human -- publishing is the one externally-visible
+# step, and defaulting to a draft keeps it gated.
+
+name: Cut and Publish Release
+
+on:
+  push:
+    tags:
+      # Release-shaped tags only: 0.4, 0.3-1, v1.0.0, 1.2.3 ... (this repo's
+      # tags are bare like "0.3"; a leading v and a "-1" point suffix are both
+      # allowed). Non-release tags (wip/*, migration/*) never match.
+      - '[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+-[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to cut and publish (e.g. 0.4)'
+        required: true
+      draft:
+        description: 'Publish as a draft (default true; the final public step stays manual)'
+        type: boolean
+        default: true
+
+# Creating a GitHub Release needs write access to repository contents.
+permissions:
+  contents: write
+
+jobs:
+  cut-and-publish:
+    name: cut-release + publish to GitHub Releases
+    runs-on: ubuntu-latest
+    # A full containerized cut is ~25-30 min cold (kernel + VMS-native
+    # toolchain + QEMU image); mirror cut-release-reproducible's budget.
+    timeout-minutes: 150
+
+    steps:
+      - name: Resolve the release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "draft=${{ github.event.inputs.draft }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            # A tag pushed here is a deliberate release; publish it (not a draft).
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout the tagged commit (full history for release notes)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          # gen_release_notes.py walks history from the previous release tag,
+          # so the whole history and all tags must be present.
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Cut the reproducible bundle from the tagged commit into a known dir.
+      - name: Cut the release bundle
+        run: |
+          tools/cut-release.sh --ref "${{ steps.tag.outputs.tag }}" \
+            --out-dir "${{ github.workspace }}/dist/release-cut"
+
+      # Publish artifacts + generated notes. --no-record-notes: committing the
+      # in-tree notes record is a source change for a PR, not something a
+      # tag-triggered publish should push back to the branch. The publisher
+      # re-verifies SHA256SUMS before any upload.
+      - name: Publish to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DRAFT_FLAG=""
+          if [ "${{ steps.tag.outputs.draft }}" = "true" ]; then
+            DRAFT_FLAG="--draft"
+          fi
+          tools/publish-release.sh \
+            --bundle-dir "${{ github.workspace }}/dist/release-cut" \
+            --tag "${{ steps.tag.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --no-record-notes \
+            $DRAFT_FLAG

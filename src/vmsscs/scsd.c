@@ -11494,7 +11494,7 @@ static const char *readmit_verdict_name(enum readmit_verdict v)
     case READMIT_NO_CHANNEL: return "NO-CHANNEL(never reached transport)";
     case READMIT_NO_ENGAGE:  return "NO-ENGAGE(member sent 0 CM responses, SYSAP never re-opened -- returning-id non-admission, spec 4(O.21))";
     case READMIT_RECLAIMED_NOJOIN: return "RECLAIMED-NOJOIN(SYSAP re-opened + member reclaimed the CSB & read our incarnation, but ran 0 CM JOIN -- relocated frontier, spec 4(O.23))";
-    case READMIT_JOIN_ABANDONED: return "JOIN-ABANDONED(OVMX drove op 0x02 to the coordinator, coordinator ran 0 CM JOIN -- no op 0x12 relay, no op 0x03 commit; coordinator SDA (vms-9a7): CNXMAN never PROPOSES the addition -- its VMS$VAXcluster reconnect to the returning id never settles OPEN (con_sent/reconnect, timed-out lost connection), so CNXMAN receives no membership request to propose -- NOT an ignored request; Davis p.7-38/7-40/7-46 -- relocated frontier to the SCS connection layer, spec 4(O.25))";
+    case READMIT_JOIN_ABANDONED: return "JOIN-ABANDONED(OVMX drove op 0x02 to the coordinator, coordinator ran 0 CM JOIN -- no op 0x12 relay, no op 0x03 commit; coordinator SDA (vms-c40, CORRECTS vms-9a7/4(O.25)): the member-initiated VMS$VAXcluster reconnect DOES reach a stable OPEN (SHOW CONNECTIONS State 0002 open, Remote Con.ID = OUR handle) together with its SCS$DIRECTORY + MSCP$DISK connections; the connection is then LOST ~10 ms after OVMX drives its op 0x02 readmission config on it, because OVMX's own dir/MSCP discovery bloats the send_seq so op 0x01/op 0x02 ride ss=21/22 -- PAST the coordinator's recv_ack ceiling (18) on that VC -- and the lean-VC suppression (4(O.15)) engages too late; the coordinator never delivers op 0x02, CNXMAN never proposes, the connection reverts to con_sent/03 reconnect and times out. So it is NOT never-opens (4(O.25)) and NOT an ignored request; the gate is op 0x02 readmission delivery breaking an already-OPEN member connection -- relocated frontier to the send_seq-ceiling/lean-VC family, spec 4(O.26))";
     case READMIT_ENGAGED_NC: return "ENGAGED-NOT-LATCHED(CM responses seen, membership not OPEN)";
     case READMIT_ADMITTED:   return "ADMITTED(member ran JOIN handshake, membership OPEN)";
     default:                 return "?";
@@ -11804,13 +11804,16 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                      && (no_engage + reclaimed_nojoin + join_abandoned) == reached)
                         ? (join_abandoned > 0
                             ? "RETURNING-IDENTITY NON-ADMISSION (RELOCATED FRONTIER, spec"
-                              " 4(O.24)): OVMX DROVE its op 0x02 join request to the"
-                              " coordinator and the coordinator ran ZERO CM JOIN -- no op"
-                              " 0x12 relay, no op 0x03 commit. It is NOT an op02 omission"
-                              " (OVMX did its part); the coordinator IGNORES/ABANDONS the"
-                              " returning identity's join request (Davis p.7-38). Next"
-                              " isolation: SDA on the COORDINATOR's CLUB/nodemap to see why"
-                              " it declines an op02-driven ADD for a reclaimed identity"
+                              " 4(O.26), CORRECTS 4(O.25)): the member-initiated"
+                              " VMS$VAXcluster connection DOES reach a stable OPEN on the"
+                              " return (coordinator SDA, vms-c40), then BREAKS ~10 ms after"
+                              " OVMX drives op 0x02 on it -- OVMX's own dir/MSCP discovery"
+                              " bloats send_seq so op 0x01/op 0x02 ride ss=21/22, past the"
+                              " coordinator's recv_ack ceiling (18) on that VC, and lean-VC"
+                              " (4(O.15)) engages too late; the coordinator never delivers op"
+                              " 0x02, CNXMAN never proposes, the VC reverts to reconnect."
+                              " Next isolation: make lean-VC/credit-first engage BEFORE op"
+                              " 0x02 so it rides under the ceiling on the member connection"
                           : reclaimed_nojoin > 0
                             ? "RETURNING-IDENTITY NON-ADMISSION (RELOCATED FRONTIER, spec"
                               " 4(O.23)): member(s) RECLAIMED the residual CSB and re-opened"

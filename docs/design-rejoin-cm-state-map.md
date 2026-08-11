@@ -663,3 +663,67 @@ addition because the `VMS$VAXcluster` reconnect to the returning identity never 
 cm_responses==0`), kill-switch `OVMX_NO_READMITMAP` unchanged, fail-pre/pass-post case in
 `tests/vmsscs/test_scsd_wire.c`, byte-unchanged on the wire. Still a non-admission (never `ADMITTED`;
 INV-6). *VAXcluster Principles* pp. 7-24/7-25/7-37/7-38/7-39/7-40/7-46.
+
+## 10. CORRECTION — the member-initiated reconnect DOES reach OPEN; op 0x02 breaks it (`vms-c40`, spec §4(O.26))
+
+§9 (`vms-9a7`) relocated the frontier to the SCS connection layer on the reading that the
+coordinator's member-initiated `VMS$VAXcluster` reconnect "never reaches a stable OPEN"
+(`con_sent`/`reconnect`, `Remote Con. ID 0`). `vms-c40` re-ran the SAME single-factor bracket with
+DENSER connection sampling on the **current** build (re-proven to drive op 0x02 on the return — not a
+stale binary; `build-9a7` lived in a since-deleted worktree and could not be trusted line-for-line),
+and the reading is CORRECTED one layer back up.
+
+### 10.1 The connection DOES open (coordinator SDA)
+
+`SHOW CONNECTIONS/NODE` on the coordinator across the return, virgin `vaxlab-1`, identity `OVXC0`:
+
+| moment | coordinator's `VMS$VAXcluster` CDT to the returner | note |
+|---|---|---|
+| fresh join | `State 0002 open`, `Remote Con. ID = OUR fresh handle` | admitted; `CNXMAN proposing addition` |
+| return R+4 s | **`State 0002 open`, `Remote Con. ID 653B0001` (OUR return handle)** | opens — with `SCS$DIRECTORY` + `MSCP$DISK` also `open` |
+| return R+17 s → end | `State 0007 con_sent` / `03 reconnect`, `Remote Con. ID 0` | broke back to reconnect; times out |
+
+So §9's "never settles OPEN" sampled only the post-break phase. OVMX's op=1 `CONNECT_RSP` echo
+(`send_seq 17`, dcid = coordinator handle) + op=2 `ACCEPT_REQ` (`send_seq 18`, supplies our handle
+`653B0001`), both wire-proven correctly addressed, DO open the connection.
+
+### 10.2 What breaks it — op 0x02 rides past the coordinator's `recv_ack` ceiling
+
+Coordinator console: `%CNXMAN, lost connection to system OVXC0` at `08:50:23.75`. OVMX daemon:
+`CMCONFIG2` drives op 0x02 on the member connection at `08:50:23.74` — the SAME 10 ms. Per-`send_seq`
+decode of `d94-c40repB.pcap` on the membership VC:
+
+| CM op | `send_seq` | coordinator `recv_ack` ceiling on this VC |
+|---|---|---|
+| op 0x01 params | 21 | **18** |
+| op 0x02 config | 22 | **18** |
+
+OVMX's OWN `SCS$DIRECTORY` + `MSCP$DISK` client discovery to the coordinator bloats the shared per-VC
+`send_seq` (spec §4(O.14)), so op 0x01/op 0x02 land at 21/22 — 3–4 past the coordinator's `recv_ack`
+ceiling of 18. The coordinator never delivers them, `CNXMAN` never proposes (no second
+`received VAXcluster membership request`), and the OPEN connection reverts to `03 reconnect`. The
+`vms-9af` lean-VC suppression (§4(O.15)) fired at `08:50:25` — ~1.3 s AFTER the op 0x02 and the break,
+too late to keep the VC lean. Post-break, op 0x05/op 0x06 are addressed to `Remote Con. ID 0`.
+
+### 10.3 Relocated frontier + fix design
+
+The gate is NOT the SCS connection layer (it opens) and NOT CM admission (CNXMAN is willing — it
+proposed the fresh join identically). It is **op 0x02 readmission DELIVERY on an already-OPEN member
+connection**: op 0x02 rides past the coordinator's `recv_ack` ceiling because OVMX's own discovery
+traffic precedes it, and lean-VC engages too late. This is the same `send_seq`-ceiling / lean-VC-timing
+family as §4(O.15) `vms-9af`, §4(O.17) `vms-46f` and §4(O.10) `vms-e15` — now PROVEN open-then-break
+with coordinator SDA rather than inferred from the joiner side. The next increment (deferred to
+`vms-694`): make lean-VC / credit-first engage BEFORE op 0x02 is driven on the member-initiated
+connection (deterministically via `OVMX_CFG2_PEER`, or defer op 0x02 until the coordinator's VC is
+lean) so op 0x02 rides UNDER the ceiling. That is a wire-visible sequencing change in the crash-prone
+op02/START region and is NOT made here (guard 8; "no speculative wire change until isolated").
+
+### 10.4 What `vms-c40` ships (no wire change)
+
+(1) This §10 and the spec §4(O.26) note. (2) The denser-sampled coordinator-SDA bracket above,
+grounding the open-then-break. (3) A `READMITMAP` verdict-text correction: `JOIN-ABANDONED` no longer
+says the reconnect "never settles OPEN"; it states the grounded finding — the connection settles OPEN
+then breaks when op 0x02 rides past the `recv_ack` ceiling. Classifier logic UNCHANGED
+(`joiner_cfg2_sent && cm_responses==0`), kill-switch `OVMX_NO_READMITMAP` unchanged, fail-pre/pass-post
+case in `tests/vmsscs/test_scsd_wire.c`, byte-unchanged on the wire. Still a non-admission (never
+`ADMITTED`; INV-6). *VAXcluster Principles* pp. 2-43/2-44/2-45/7-37/7-40/7-46.

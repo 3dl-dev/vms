@@ -34,11 +34,12 @@
 #include "dcl/dcl_cmd.h"
 #include "dcl/symbol.h"
 #include "ssdef.h"
-/* sys$setprv routes the F$SETPRV privilege mutation through the executive
- * (/dev/vms); its declaration and the PRV$M_* masks live here. */
-#include "starlet.h"
 /* Kernel-interface client: F$DEVICE enumerates the executive's device
- * table through it (vms-fb9). See the note above populate_device_list. */
+ * table through it (vms-fb9), and F$SETPRV routes its privilege mutation
+ * through vms_kif_setprv() here -- the SAME already-wired executive edge
+ * DCL.EXE's native link resolves for F$GETJPI/F$DEVICE, NOT a new
+ * cross-shareable-image call into libvms's sys$ vector. See the note above
+ * populate_device_list. */
 #include "vms_kif.h"
 #include <vms/privs.h>
 #include "vmsfs/filespec.h"
@@ -3101,7 +3102,11 @@ static int lex_cunits(struct dcl_context *ctx, const char *args,
     }
 
     char *endp = NULL;
-    long long number = strtoll(a_num, &endp, 10);
+    /* strtol (not strtoll): long is 64-bit on OVMX's x86_64/aarch64/axp
+     * targets, so it covers the same range, and it is already a DECC$SHR
+     * universal the DCL.EXE native link resolves -- strtoll is not exported
+     * and would break the LINK.EXE graph (vms-61f). */
+    long long number = (long long)strtol(a_num, &endp, 10);
     if (endp == a_num) { if (ctx) ctx->last_status = SS$_BADPARAM; return -1; }
 
     long long bytes = number * from_mult;
@@ -3124,10 +3129,14 @@ static int lex_cunits(struct dcl_context *ctx, const char *args,
  *
  * INV-6 / EXECUTIVE: the privilege mutation is the executive's, not a
  * userspace fake. The prior mask is read with vms_kif_getjpi_self() and the
- * change is applied with sys$setprv (which routes to vms_kif_setprv ->
- * VMS_IOCTL_SETPRV and authorizes the grant against this process's AUTHORIZED
- * mask). With no /dev/vms the getjpi read fails and F$SETPRV returns the honest
- * VMS error via $STATUS -- never a fabricated privilege string.
+ * change is applied with vms_kif_setprv() -- the SAME kernel-interface client
+ * edge sys$setprv itself uses (VMS_IOCTL_SETPRV -> vms_ioctl_setprv, which
+ * authorizes the grant against this process's AUTHORIZED mask). Calling
+ * vms_kif_setprv directly (rather than the sys$setprv wrapper) keeps F$SETPRV
+ * on the executive edge DCL.EXE's native link already resolves for F$GETJPI/
+ * F$DEVICE, adding no new cross-shareable-image import. With no /dev/vms the
+ * getjpi read fails and F$SETPRV returns the honest VMS error via $STATUS --
+ * never a fabricated privilege string.
  */
 static int lex_setprv(struct dcl_context *ctx, const char *args,
                       char *result, size_t result_size)
@@ -3188,12 +3197,12 @@ static int lex_setprv(struct dcl_context *ctx, const char *args,
         if (n > 0 && (size_t)n < result_size - rl) rl += (size_t)n;
     }
 
-    /* Apply the change through the executive. Authorization failures
-     * (SS$_NOTALLPRIV for an unauthorized enable) are NOT fatal to F$SETPRV --
-     * VMS still returns the prior-state string; the privilege simply does not
-     * take. */
-    if (enable_mask)  sys$setprv(1, &enable_mask, 0, NULL);
-    if (disable_mask) sys$setprv(0, &disable_mask, 0, NULL);
+    /* Apply the change through the executive (vms_kif_setprv: mask, enable,
+     * permanent, prev). Authorization failures (SS$_NOTALLPRIV for an
+     * unauthorized enable) are NOT fatal to F$SETPRV -- VMS still returns the
+     * prior-state string; the privilege simply does not take. */
+    if (enable_mask)  vms_kif_setprv(enable_mask, 1, 0, NULL);
+    if (disable_mask) vms_kif_setprv(disable_mask, 0, 0, NULL);
     return 0;
 }
 

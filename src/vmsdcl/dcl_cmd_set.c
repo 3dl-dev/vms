@@ -1655,12 +1655,168 @@ static int cmd_set_accounting(struct dcl_command *cmd)
 }
 
 /*
- * SET VOLUME - Set volume characteristics (requires mounted VMSFS).
+ * SET VOLUME - modify characteristics of a mounted vmsfs volume (vms-309).
+ *
+ * Syntax: SET VOLUME device-name[:]
+ *
+ * Clean-room (Rule 8): syntax, access requirement, and qualifier list from
+ * the public OpenVMS DCL Dictionary SET VOLUME entry
+ * (<https://wiki.vmssoftware.com/SET_VOLUME>,
+ * <https://www.digiater.nl/openvms/doc/ia64-v8.3/opsys/vmsos83/9996/9996pro_225.html>,
+ * fetched for this fix). Syntax is "SET VOLUME device-name[:][,...]" —
+ * "the name of one or more mounted Files-11 volumes"; requires ownership
+ * or control access to the volume. 22 qualifiers besides /LABEL:
+ * /ACCESSED /CACHE /DATA_CHECK /ERASE_ON_DELETE /EXTENSION
+ * /FILE_PROTECTION /HIGHWATER_MARKING /LIMIT /LOG /MOUNT_VERIFICATION
+ * /OWNER_UIC /PROTECTION /REBUILD /RETENTION /SIZE /STRUCTURE_LEVEL
+ * /SUBSYSTEM /UNLOAD /USER_NAME /VOLUME_CHARACTERISTICS /WINDOWS
+ * /WRITETHROUGH. /LABEL=volume-label: "Assigns a 1-12 character ANSI name
+ * to the volume ... remains in effect until it is changed explicitly;
+ * dismounting the volume does not affect the label."
+ *
+ * THE FACADE THIS REPLACES (docs/dcl-verb-fidelity-scoreboard.md, "SET
+ * VOLUME — still open"): cmd_set_volume() used to print "%SET-I-NOTIMPL,
+ * SET VOLUME requires a mounted VMSFS volume" and unconditionally return
+ * SS$_NORMAL — a success-toned no-op for EVERY invocation, mounted device
+ * or not, real qualifier or garbage. INV-DCL's banned class.
+ *
+ * SCOPE (vms-309): honest errors, not a real /LABEL write-back — vmsfs
+ * plumbing for it does not exist. cmd_mount()'s own /LABEL parameter,
+ * above, already says as much: "Volume label -- informational only;
+ * vmsfs does not read it back." Independently confirmed here:
+ * src/kernel/vmsfs/ (the kernel module MOUNT actually mount(2)s) declares
+ * no ioctl at all (grep -rn ioctl src/kernel/vmsfs/*.c is empty) — there
+ * is no in-kernel path to rewrite hb_volname (vmsfs_ondisk.h) on a volume
+ * that is CURRENTLY mounted. Patching the raw block device underneath a
+ * live mount from userspace would not be an honest substitute: vmsfs_super.c
+ * reads block 1 into sbi->home ONCE at mount and never re-reads it, so an
+ * external write would either be invisible to the live mount or get
+ * clobbered by the kernel's own cached copy on next write-back — silent
+ * corruption, exactly what INV-6/INV-DCL exist to prevent, not an honest
+ * refusal. A real /LABEL needs a new vmsfs.ko ioctl (recompute
+ * hb_checksum, write through the mount's own buffer head, update
+ * sbi->home) — kernel module interface work, CLAUDE.md Design Change
+ * Cascade-sized, not a facade-kill patch. Filed as a follow-up (see
+ * docs/dcl-verb-fidelity-scoreboard.md's SET VOLUME section).
+ *
+ * Every qualifier below therefore draws the authentic SS$_UNSUPPORTED
+ * refusal instead of the old no-op success — including /LABEL. A bare
+ * "SET VOLUME device:" with NO qualifier is not itself dishonest (the
+ * Dictionary does not forbid it): it genuinely verifies the device names
+ * a mounted volume and changes nothing else, claiming nothing more.
  */
 static int cmd_set_volume(struct dcl_command *cmd)
 {
-    (void)cmd;
-    printf("%%SET-I-NOTIMPL, SET VOLUME requires a mounted VMSFS volume\n");
+    static const struct dcl_qual_def volume_quals[] = {
+        { "ACCESSED",               CDU_VT_NONE,  0,                 NULL, NULL },
+        { "CACHE",                  CDU_VT_NONE,  CDU_Q_NEGATABLE,   NULL, NULL },
+        { "DATA_CHECK",             CDU_VT_LIST,  CDU_Q_NEGATABLE,   NULL, NULL },
+        { "ERASE_ON_DELETE",        CDU_VT_NONE,  CDU_Q_NEGATABLE,   NULL, NULL },
+        { "EXTENSION",              CDU_VT_VALUE, 0,                 NULL, NULL },
+        { "FILE_PROTECTION",        CDU_VT_LIST,  0,                 NULL, NULL },
+        { "HIGHWATER_MARKING",      CDU_VT_NONE,  CDU_Q_NEGATABLE,   NULL, NULL },
+        { "LABEL",                  CDU_VT_VALUE, CDU_Q_VALREQ,      NULL, NULL },
+        { "LIMIT",                  CDU_VT_VALUE, 0,                 NULL, NULL },
+        { "LOG",                    CDU_VT_NONE,  CDU_Q_NEGATABLE,   NULL, NULL },
+        { "MOUNT_VERIFICATION",     CDU_VT_NONE,  CDU_Q_NEGATABLE,   NULL, NULL },
+        { "OWNER_UIC",              CDU_VT_VALUE, 0,                 NULL, NULL },
+        { "PROTECTION",             CDU_VT_LIST,  0,                 NULL, NULL },
+        { "REBUILD",                CDU_VT_NONE,  CDU_Q_NEGATABLE,   NULL, NULL },
+        { "RETENTION",              CDU_VT_VALUE, 0,                 NULL, NULL },
+        { "SIZE",                   CDU_VT_VALUE, 0,                 NULL, NULL },
+        { "STRUCTURE_LEVEL",        CDU_VT_VALUE, 0,                 NULL, NULL },
+        { "SUBSYSTEM",              CDU_VT_LIST,  0,                 NULL, NULL },
+        { "UNLOAD",                 CDU_VT_NONE,  0,                 NULL, NULL },
+        { "USER_NAME",              CDU_VT_LIST,  0,                 NULL, NULL },
+        { "VOLUME_CHARACTERISTICS", CDU_VT_LIST,  0,                 NULL, NULL },
+        { "WINDOWS",                CDU_VT_VALUE, 0,                 NULL, NULL },
+        { "WRITETHROUGH",           CDU_VT_NONE,  CDU_Q_NEGATABLE,   NULL, NULL },
+        { NULL, 0, 0, NULL, NULL },
+    };
+    struct dcl_verb volume_verb_shim = { .quals = volume_quals };
+    uint32_t qstatus = dcl_validate_qualifiers(&volume_verb_shim, cmd);
+    if (qstatus != SS$_NORMAL)
+        return (int)qstatus;
+
+    /* cmd->params[0] is "VOLUME" (the SET subcommand keyword); [1] is the
+     * device name, matching cmd_mount()/cmd_dismount()'s own single-device
+     * handling in this same source file (dcl_cmd_misc.c). A comma-separated
+     * device LIST (the Dictionary's "device-name[:][,...]") is a disclosed
+     * scope limit -- not implemented, same as MOUNT/DISMOUNT. */
+    if (cmd->param_count < 2) {
+        dcl_error("DCL", 2, "NODEVICE", "no device specified");
+        return SS$_BADPARAM;
+    }
+    if (cmd->param_count > 2) {
+        dcl_error("DCL", 2, "MAXPARM", "too many parameters");
+        return SS$_BADPARAM;
+    }
+
+    const char *device = cmd->params[1];
+    size_t dlen = strlen(device);
+    if (dlen < 2 || dlen >= 15) {
+        dcl_error("SET", 2, "IVDEVNAM", "invalid device name - \\%s\\", device);
+        return SS$_IVDEVNAM;
+    }
+    char dev_name[16];
+    for (size_t i = 0; i < dlen; i++)
+        dev_name[i] = (char)toupper((unsigned char)device[i]);
+    dev_name[dlen] = '\0';
+    if (dev_name[dlen - 1] != ':') {
+        dev_name[dlen] = ':';
+        dev_name[dlen + 1] = '\0';
+    }
+
+    char log_name[16];
+    strncpy(log_name, dev_name, sizeof(log_name) - 1);
+    log_name[sizeof(log_name) - 1] = '\0';
+    size_t lnlen = strlen(log_name);
+    if (lnlen > 0 && log_name[lnlen - 1] == ':')
+        log_name[lnlen - 1] = '\0';
+
+    char mount_point[64];
+    mount_point_for_device(log_name, mount_point, sizeof(mount_point));
+
+    if (!mount_point_is_mounted(mount_point)) {
+        /* Dictionary: device-name "specifies the name of one or more
+         * MOUNTED Files-11 volumes" -- the same authentic status
+         * DISMOUNT already returns for an unmounted target
+         * (cmd_dismount(), above in dcl_cmd_misc.c), not the old
+         * success-toned NOTIMPL. */
+        dcl_error("SET", 2, "DEVNOTMNT", "device is not mounted - _%s", dev_name);
+        return SS$_DEVNOTMOUNT;
+    }
+
+    /* Mounted. Every SET VOLUME qualifier changes a characteristic OVMX's
+     * vmsfs cannot yet persist back to a live volume (see the function
+     * header) -- /LABEL included. Report a specific, honest refusal per
+     * qualifier given, so the operator knows exactly what did not happen. */
+    if (dcl_has_qualifier(cmd, "LABEL")) {
+        dcl_error("SET", 0, "NOTIMPL",
+                  "SET VOLUME/LABEL is not implemented in OVMX - "
+                  "no state changed (vmsfs has no volume-label write-back "
+                  "path for a mounted volume)");
+        return SS$_UNSUPPORTED;
+    }
+    static const char *const other_volume_quals[] = {
+        "ACCESSED", "CACHE", "DATA_CHECK", "ERASE_ON_DELETE", "EXTENSION",
+        "FILE_PROTECTION", "HIGHWATER_MARKING", "LIMIT", "LOG",
+        "MOUNT_VERIFICATION", "OWNER_UIC", "PROTECTION", "REBUILD",
+        "RETENTION", "SIZE", "STRUCTURE_LEVEL", "SUBSYSTEM", "UNLOAD",
+        "USER_NAME", "VOLUME_CHARACTERISTICS", "WINDOWS", "WRITETHROUGH",
+        NULL,
+    };
+    for (int i = 0; other_volume_quals[i]; i++) {
+        if (dcl_has_qualifier(cmd, other_volume_quals[i])) {
+            dcl_error("SET", 0, "NOTIMPL",
+                      "SET VOLUME/%s is not implemented in OVMX - "
+                      "no state changed", other_volume_quals[i]);
+            return SS$_UNSUPPORTED;
+        }
+    }
+
+    /* No qualifier given: the device genuinely is a mounted volume and
+     * nothing else was asked for -- a real, if pointless, no-op. */
     return SS$_NORMAL;
 }
 

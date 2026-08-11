@@ -86,6 +86,14 @@ int cmd_recall(struct dcl_command *cmd);
 int cmd_tcpip(struct dcl_command *cmd);
 int cmd_mount(struct dcl_command *cmd);
 int cmd_dismount(struct dcl_command *cmd);
+
+/* Shared with dcl_cmd_set.c's cmd_set_volume() (vms-309): the same
+ * "is this unit mounted, per the kernel's own /proc/mounts" check
+ * MOUNT/DISMOUNT use -- a pure function of the device name, no /dev/vms
+ * dependency, so it works identically on host ctest (nothing ever mounted
+ * there) and inside a real QEMU boot. */
+void mount_point_for_device(const char *log_name, char *buf, size_t sz);
+int  mount_point_is_mounted(const char *mount_point);
 int cmd_edit(struct dcl_command *cmd);
 int cmd_attach(struct dcl_command *cmd);
 int cmd_convert(struct dcl_command *cmd);

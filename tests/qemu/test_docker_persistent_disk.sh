@@ -118,7 +118,7 @@ echo ""
 
 check "Container 1: install started" "$BOOT1_OUTPUT" "%STARTUP-I-INSTALL"
 check "Container 1: install completed" "$BOOT1_OUTPUT" "%STARTUP-I-INSTALLED"
-check "Container 1: boot banner" "$BOOT1_OUTPUT" "OVMX V0.3"
+check "Container 1: boot banner" "$BOOT1_OUTPUT" "OpenVMX V0.3"
 check "Container 1: reached login prompt" "$BOOT1_OUTPUT" "Username:"
 
 if [ ! -f "$WORKDIR/sysdisk.img" ]; then

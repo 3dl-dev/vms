@@ -238,8 +238,8 @@ static void run_banner_override(void)
 
     /* Undefined -> built-in, same as the host test. */
     capture_banner(ovmx_banner_welcome, got, sizeof(got));
-    CHECK(strstr(got, "OVMX") != NULL,
-          "banner: undefined SYS$WELCOME falls back to the built-in OVMX banner");
+    CHECK(strstr(got, OVMX_PRODUCT_NAME) != NULL,
+          "banner: undefined SYS$WELCOME falls back to the built-in OpenVMX banner");
 
     /* Defined via DEFINE/SYSTEM (the manager API DCL actually calls) ->
      * that string, verbatim, against a REAL executive. */
@@ -250,7 +250,7 @@ static void run_banner_override(void)
     capture_banner(ovmx_banner_welcome, got, sizeof(got));
     CHECK(strcmp(got, "Welcome to the lab system\n") == 0,
           "banner: defined SYS$WELCOME overrides the built-in banner (real executive)");
-    CHECK(strstr(got, "OVMX") == NULL,
+    CHECK(strstr(got, OVMX_PRODUCT_NAME) == NULL,
           "banner: an overridden welcome does not also print the built-in");
 
     /* '@file' form: multi-line site banner. */
@@ -277,7 +277,7 @@ static void run_banner_override(void)
     CHECK(st & 1, "banner: DEASSIGN/SYSTEM SYS$WELCOME succeeds");
     capture_banner(ovmx_banner_welcome, got, sizeof(got));
     /* negctl-knockon: lnm-manager-delete-noop */
-    CHECK(strstr(got, "OVMX") != NULL,
+    CHECK(strstr(got, OVMX_PRODUCT_NAME) != NULL,
           "banner: deassigning SYS$WELCOME restores the built-in banner");
 
     /* SYS$ANNOUNCE: silence by default, displayed once defined. */

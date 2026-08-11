@@ -213,7 +213,7 @@ static inline const char *ovmx_product_version(void)
 
 /*
  * ovmx_product_banner - The full badged human identity,
- * "OVMX V0.1 - OpenVMS-compatible" (INV-0).
+ * "OpenVMX V0.3 - OpenVMS-compatible" (INV-0).
  */
 static inline const char *ovmx_product_banner(void)
 {

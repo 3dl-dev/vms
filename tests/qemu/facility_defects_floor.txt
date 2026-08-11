@@ -259,4 +259,22 @@
 # mastering decision and is_local_master are computed from is untouched, so
 # this isolates the DIAGNOSTIC READBACK from the ACTUAL mastering state. See
 # its own entry in facility_defects.sh for what it covers and why.
-86
+#
+# Raised to 89 by vms-6d6's lnm-searchlist-equiv-truncated,
+# rightslist-general-hex-as-decimal and sysuaf-uic-radix-decimal -- the last
+# three pre-existing coverage-gate gaps from #284/#272 (vms-420, vms-d37):
+# test_syssvc_lnm_searchlist, test_syssvc_rightslist and
+# test_syssvc_sysuaf_uic_base had NO per-facility negctl entry at all, the
+# same class of hole vms-6bdf/#293 closed for test_kmod_resdir. Targets
+# kernel/vms_lnm.c (the multi-value DEFINE's stored equivalence count),
+# libvms/rtl/rightslist.c (RIGHTSLIST.DAT's %X general-identifier radix) and
+# libvms/include/sysuaf.h (SYSUAF.DAT's shared UIC read radix) respectively.
+# Every in-scope suite is now covered -- `coverage` names none as ungated.
+# All three were mutation-verified against a real /dev/vms via
+# run_facility_negctl.sh: each reddens the harness, vms.ko stays loaded, and
+# the facility's own suite(s) go red with nothing outside the declared set
+# failing. See their own entries in facility_defects.sh for what each covers
+# and why, and for the genuine knock-on suites each mutation was measured to
+# also reach (test_syssvc_ident for two of the three; test_syssvc_setuai for
+# sysuaf-uic-radix-decimal, found by running it, not predicted).
+89

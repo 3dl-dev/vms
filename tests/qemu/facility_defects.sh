@@ -496,7 +496,10 @@ realimg-auxv-argc-wrong
 extern-interp-check-rejects-ours
 nonres-producer-not-mapped
 tlsdesc-offset-not-biased
-devtab-getdvi-userspace-alloc-dropped"
+devtab-getdvi-userspace-alloc-dropped
+lnm-searchlist-equiv-truncated
+rightslist-general-hex-as-decimal
+sysuaf-uic-radix-decimal"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4712,6 +4715,207 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    # -------------------------------------------------------------------
+    # vms-6d6: the three suites #284/#272 (vms-420, vms-d37) left with NO
+    # per-facility negative control at all -- the same coverage-gate hole
+    # vms-6bdf/#293 just closed for test_kmod_resdir. Baselined before this
+    # change: `coverage` named all three in both "NAMED BY NO defect's
+    # suites_red" and "in-scope suite(s) with NO anchor at all".
+    # -------------------------------------------------------------------
+
+    lnm-searchlist-equiv-truncated)
+        case "$_f" in
+        facility)     echo "executive-resident multi-value (search-list) logical names -- the stored equivalence COUNT (VMS_IOCTL_LNM_DEFINE's num_equiv field, kernel/vms_lnm.c), vms-420";;
+        targets)      echo "kernel/vms_lnm.c";;
+        # No other suite in this manifest's known set calls lnm_create_multi
+        # or reads a logical at any equivalence index above 0 (grep across
+        # tests/qemu confirms it: test_syssvc_lnm_privilege is the only other
+        # vms_kif_lnm_translate() caller with an explicit index argument, and
+        # it always passes 0). A single-value DEFINE always carries
+        # a->num_equiv == 1, so pinning the stored count to 1 is a no-op for
+        # every one of them.
+        suites_red)   echo "test_syssvc_lnm_searchlist";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_lnm_define()'s NEW-ENTRY branch (the fresh-arena-slot path; the SUPERSEDE branch a few lines above it, taken only when the name is already defined, is untouched) pins the stored e->num_equiv to 1 regardless of how many equivalence strings the caller's DEFINE/SYSTEM actually supplied. The full equiv[] array is still memcpy'd into the entry whole -- every value the caller wrote is genuinely IN the arena -- but the entry's own recorded COUNT says there is only one, so every reader that trusts that count (the mmap TRANSLATE-by-index path, lnm_translate_values(), SHOW LOGICAL's enumerate) sees a one-value logical no matter how many were defined. This is the vms-420 defect itself (DEFINE FOO BAR,BAZ silently dropping BAZ) reintroduced at the one call site that stores the count -- test_syssvc_lnm_searchlist.c exists specifically to catch a regression here, and its TEST_NAME is namespaced so this suite's DEFINE always lands on the NEW-ENTRY branch, never SUPERSEDE.";;
+        require_fail) cat <<'EOF'
+child: equivalence index 1 (previously dropped, vms-420) matches the parent's define
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+parent: reads its own multi-value SYSTEM define back with both values, in order
+child: the parent's SYSTEM search-list logical reports BOTH equivalence strings here
+child: equivalence index 0 matches the parent's define
+child: vms_kif_lnm_translate index 0 matches and reports num_equiv=2
+child: vms_kif_lnm_translate index 1 matches and reports num_equiv=2
+child: vms_kif_lnm_translate index 2 (past the end) reports "no more", not a fabricated third value
+child: SHOW LOGICAL's enumerate path lists BOTH equivalence strings for the parent's SYSTEM search list
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME DEFECT, OBSERVED AT EVERY READER OF THE SAME COUNT. num_equiv is the
+single field every consumer of a multi-value logical trusts to know how many
+equivalence strings exist: lnm_translate_values() (what SHOW LOGICAL and
+F$TRNLNM sit on top of), the raw vms_kif_lnm_translate() index walk, and
+lnm_enumerate()'s listing path all read it, and all three stop believing a
+second value exists once it is pinned to 1 -- one corrupted count, observed
+at every place this suite reads it back, not several independent defects.
+That is why they are named here as knock-on rather than split into
+per-reader entries.
+
+WHAT STAYS GREEN, AND WHY. The negative control ("a never-defined name is
+absent") never touches the mutated branch. "parent: lnm_create_multi ...
+reported success" stays green too: the ioctl still returns SS$_NORMAL --
+only the stored count is wrong, not the status the caller sees.
+EOF
+                      ;;
+        esac;;
+
+    rightslist-general-hex-as-decimal)
+        case "$_f" in
+        facility)     echo "the rights database's GENERAL identifiers (RIGHTSLIST.DAT's %Xnnnnnnnn value notation, parse_value() in src/libvms/rtl/rightslist.c), vms-2f8";;
+        targets)      echo "libvms/rtl/rightslist.c";;
+        # test_syssvc_ident.c's own LOCAL assertion (a GENERAL identifier,
+        # same reader, same %X notation) is a genuine, measured knock-on --
+        # see knock_on_why. Nothing else in this manifest's known suites
+        # reads a general (non-UIC) rights-database identifier: rightslist
+        # UIC checks (DEFAULT/SYSTEM/GUEST) and test_syssvc_sysuaf_uic_base
+        # go through sysuaf_lookup()'s OCTAL branch of the SAME parse_value(),
+        # a completely separate code path this mutation does not touch (see
+        # sysuaf-uic-radix-decimal, which targets that branch instead).
+        suites_red)   echo "test_syssvc_rightslist test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "parse_value()'s %Xnnnnnnnn branch -- the notation every GENERAL identifier in RIGHTSLIST.DAT (BATCH, DIALUP, INTERACTIVE, LOCAL, NETWORK, REMOTE) is written in -- stops reading the digits after %X as hexadecimal and reads them as decimal instead. The row is still FOUND (the colon-delimited scan, the name match and the case-insensitive compare are all untouched); only the value column is misread, so rightslist_name_to_value()/rightslist_value_to_name() answer a wrong number for every general identifier while the UIC branch ([g,m], a few lines below, OCTAL) is a completely different code path and is not reached by this edit at all.";;
+        require_fail) cat <<'EOF'
+oracle: DCL prints -2147483644
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+oracle: DCL prints -2147483647
+oracle: absent from OVMX entirely before vms-2f8
+oracle: DCL prints -2147483645
+oracle: DCL prints -2147483643
+oracle: DCL prints -2147483642
+reverse resolves (oracle round-trips it)
+lookup is case-insensitive ("local" resolves like "LOCAL")
+holdable by no hardcode and derivable from no account's UIC
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME PARSE, OBSERVED AT EVERY GENERAL-IDENTIFIER READER. All six general
+identifiers RIGHTSLIST.DAT carries (BATCH, DIALUP, INTERACTIVE, LOCAL,
+NETWORK, REMOTE) are written in the same %Xnnnnnnnn notation, so every one
+of test_syssvc_rightslist.c's six check_roundtrip() calls exercises the
+mutated branch -- both directions (name->value, then the now-orphaned
+value's reverse lookup) -- not LOCAL alone. require_fail names LOCAL's own
+value-mismatch text (the anchor's statement); knock_on_fail's first five
+lines are the other five identifiers' own oracle notes (each fires the same
+value-mismatch shape LOCAL's does), the sixth is the shared reverse-lookup
+failure text every one of the six hits once its mutated value stops
+matching any row, and the seventh is the case-insensitive "local" lookup,
+which resolves through the identical mutated branch. test_syssvc_ident.c's
+own F$IDENTIFIER("LOCAL", ...) assertion (eighth line, a substring of its
+message) reddens too -- LOCAL is the one general identifier that suite
+drives through the real DCL.EXE (see that suite's own comment: "the one
+that cannot be faked by the old shape") -- a second suite reached through
+the exact same reader, not a second defect. A full run of
+run_facility_negctl.sh is what confirms the complete red set, exactly as
+vms-6bdf's resdir control was verified.
+
+WHAT STAYS GREEN, AND WHY. rightslist.c's UIC checks (DEFAULT/SYSTEM/GUEST)
+and every check_miss_value() call are untouched: they never pass through
+the %X branch this edit mutates (misses 1..5, 1000, 0, 77777, 196609 are
+not valid %Xnnnnnnnn rows to begin with, and 0x80010004 is asserted absent
+either way). test_syssvc_sysuaf_uic_base.c does not call
+rightslist_name_to_value()/rightslist_value_to_name() at all.
+EOF
+                      ;;
+        esac;;
+
+    sysuaf-uic-radix-decimal)
+        case "$_f" in
+        facility)     echo "SYSUAF.DAT's UIC fields -- the shared read radix (SYSUAF_UIC_RADIX, src/libvms/include/sysuaf.h, consulted only by sysuaf_lookup()'s field parse in src/libvms/rtl/sysuaf.c), vms-e60";;
+        targets)      echo "libvms/include/sysuaf.h";;
+        # test_syssvc_rightslist.c's OWN UIC checks (DEFAULT/GUEST, via
+        # sysuaf_lookup()), test_syssvc_ident.c's DEFAULT checks (via the
+        # same reader, one layer up through F$IDENTIFIER) and
+        # test_syssvc_setuai.c's UIC-write-back readback (scenario 4) are
+        # genuine, MEASURED knock-on -- see knock_on_why. This suites_red set
+        # was corrected after running run_facility_negctl.sh for real: an
+        # earlier draft predicted setuai would be untouched (sysuaf_format_
+        # record(), the WRITER, uses a literal %o and does not consult this
+        # constant) -- true for the WRITE, but scenario 4 also READS the row
+        # back afterward through the same mutated sysuaf_lookup(), and the
+        # real run reddened it. Declared here rather than left as an
+        # unattributed stray, per this manifest's own method rule.
+        suites_red)   echo "test_syssvc_sysuaf_uic_base test_syssvc_rightslist test_syssvc_ident test_syssvc_setuai";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "SYSUAF_UIC_RADIX -- the ONE constant sysuaf_lookup()'s field parse applies to SYSUAF.DAT's UIC_GROUP/UIC_MEMBER columns (vms-e60: every VMS UIC is written in octal) -- is changed from 8 to 10, so a shipped record like DEFAULT's '200|200' is read as decimal 200/200 instead of octal 128/128. SYSTEM's '1|4' is unaffected (identical in both bases, the LIVENESS ANCHOR every one of these suites' own comments name it as); DEFAULT and GUEST, whose fields actually discriminate the base, are not. sysuaf_format_record() (the writer) uses a literal %o unconnected to this constant, so a WRITE alone is not reached -- but any suite that reads a record back afterward through sysuaf_lookup() (test_syssvc_setuai's scenario 4) is.";;
+        require_fail) cat <<'EOF'
+member field is octal as well as group
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the oracle's 8388736; decimal parsing gives 13107400
+DEFAULT is NOT 13107400 (the decimal misreading vms-e60 filed)
+oracle %X00800080 = [200,200] OCTAL; decimal gives 13107400
+a shipped account that was never in any hardcoded table
+reverse resolves (oracle round-trips it)
+OVMX answered 13107201, having read VMS's octal UIC as decimal group 200 member 1
+the direction an earlier round deliberately left unmapped rather than add on the strength of symmetry
+the rewritten UIC GROUP field still reads 200 (octal, vms-e60)
+the rewritten UIC MEMBER field still reads 202 (octal, vms-e60)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME CONSTANT, OBSERVED AT EVERY UIC READER -- FOUR OF THEM, ONE FOUND BY
+RUNNING IT. test_syssvc_sysuaf_uic_base.c drives sysuaf_lookup() directly
+for DEFAULT and GUEST (require_fail names GUEST's own check; knock_on_fail's
+first two lines are DEFAULT's check and its own regression-naming assertion,
+which now reads exactly the decimal value it exists to rule out).
+test_syssvc_rightslist.c reaches the SAME sysuaf_lookup() one layer up,
+through rightslist_name_to_value()'s UIC branch, for the SAME two accounts --
+both directions of its check_roundtrip("DEFAULT", ...) and
+check_roundtrip("GUEST", ...): each account still RESOLVES (sysuaf_lookup
+still finds the record; only the value is wrong), so it is the value-match
+and reverse-lookup halves of check_roundtrip that redden, not the "resolved
+at all" branch (that one requires resolution to fail outright, which this
+mutation does not cause). test_syssvc_ident.c reaches it a THIRD time,
+through F$IDENTIFIER's live DCL.EXE path, for DEFAULT only (ident.c never
+probes GUEST).
+
+test_syssvc_setuai.c's scenario 4 is the FOURTH, and it was NOT predicted --
+an earlier draft of this entry reasoned "the writer uses a literal %o, so
+nothing that only writes SYSUAF.DAT is reached" and left setuai out of
+suites_red entirely. Running run_facility_negctl.sh for real reddened it
+anyway: scenario 4 does not just $SETUAI a new UIC, it reads USER1's rewritten
+row BACK afterward (row_field() against the same sysuaf_lookup()-backed
+record the read side of this mutation touches) to prove the write landed --
+so its readback, not its write, hits the mutated radix. Two assertions
+redden ("4: the rewritten UIC GROUP field still reads 200" and its MEMBER
+sibling), because USER1 ships 200|202, and decimal-reading those digits
+produces a different string than octal does. This is exactly the discipline
+this manifest's own header describes: an unpredicted red is declared here,
+not narrowed away or left as an unattributed stray.
+
+WHAT STAYS GREEN, AND WHY. SYSTEM's UIC ([1,4]) is identical in both bases
+in every suite that checks it -- explicitly labelled LIVENESS ONLY in each
+of their own comments, for exactly this reason. rightslist.c's GENERAL
+identifiers (BATCH/DIALUP/INTERACTIVE/LOCAL/NETWORK/REMOTE) and its
+check_miss_value() calls never reach sysuaf_lookup() at all.
+test_syssvc_ident.c's LOCAL checks are the general-identifier path,
+untouched here (see rightslist-general-hex-as-decimal, the sibling defect
+for that branch). test_syssvc_setuai's OTHER scenarios (1-3, the SYSPRV
+refusal/grant checks) never read a UIC field back and stay green.
+EOF
+                      ;;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -5381,6 +5585,31 @@ apply_edit() {
         # `if (info->allocated) ...` no longer matches -- a second apply is a
         # BROKEN FIXTURE, as selftest requires.
         sed -i 's@if (info->allocated) chars |= DEV$M_ALL;@if (0 \&\& info->allocated) chars |= DEV$M_ALL; /* NEGCTL devtab-getdvi-userspace-alloc-dropped */@' "$_file";;
+
+    lnm-searchlist-equiv-truncated)
+        # RANGE-ANCHORED: `e->num_equiv = a->num_equiv;` appears twice in
+        # vms_ioctl_lnm_define -- once in the SUPERSEDE branch, once in the
+        # NEW-ENTRY branch this defect targets. `e->scope_key = scope_key;`
+        # is written only in the NEW-ENTRY branch (SUPERSEDE never re-derives
+        # it), so it is the unambiguous start of the range; `e->name_length`
+        # (also NEW-ENTRY-only) closes it. Idempotent: after the edit the
+        # range no longer contains the literal `a->num_equiv` text, so a
+        # second apply is a no-op -- BROKEN FIXTURE, as selftest requires.
+        sed -i '/^    e->scope_key = scope_key;$/,/^    e->name_length/ s|^    e->num_equiv = a->num_equiv;$|    e->num_equiv = 1; /* NEGCTL lnm-searchlist-equiv-truncated */|' "$_file";;
+
+    rightslist-general-hex-as-decimal)
+        # UNIQUE TEXT: this is the only strtoul(..., 16) call in the file --
+        # parse_value()'s %Xnnnnnnnn branch. The UIC branch a few lines below
+        # uses base 8 twice and is untouched. Idempotent: the edit removes
+        # the literal `16)` this pattern matches.
+        sed -i 's|strtoul(s + 2, \&end, 16);|strtoul(s + 2, \&end, 10); /* NEGCTL rightslist-general-hex-as-decimal */|' "$_file";;
+
+    sysuaf-uic-radix-decimal)
+        # UNIQUE TEXT: the sole #define. Both strtoul() call sites in
+        # sysuaf.c reference the symbol, not a literal, so this one edit
+        # reaches both. Idempotent: the edit removes the literal `8` this
+        # pattern matches.
+        sed -i 's|^#define SYSUAF_UIC_RADIX     8$|#define SYSUAF_UIC_RADIX     10  /* NEGCTL sysuaf-uic-radix-decimal */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

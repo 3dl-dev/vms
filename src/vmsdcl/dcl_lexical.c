@@ -34,6 +34,9 @@
 #include "dcl/dcl_cmd.h"
 #include "dcl/symbol.h"
 #include "ssdef.h"
+/* sys$setprv routes the F$SETPRV privilege mutation through the executive
+ * (/dev/vms); its declaration and the PRV$M_* masks live here. */
+#include "starlet.h"
 /* Kernel-interface client: F$DEVICE enumerates the executive's device
  * table through it (vms-fb9). See the note above populate_device_list. */
 #include "vms_kif.h"
@@ -46,6 +49,8 @@
 #include "rightslist.h"
 
 /* External functions */
+extern void dcl_error(const char *facility, int severity, const char *ident,
+                      const char *fmt, ...);
 extern int dcl_translate_logical(const char *name, char *result, size_t result_size);
 extern int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
                             char *linux_path, size_t path_size);
@@ -2935,6 +2940,335 @@ static int lex_cvui(struct dcl_context *ctx, const char *args,
     return 0;
 }
 
+/* ----------------------------------------------------------------------
+ * Small shared arg helpers for the completeness lexicals below.
+ * ---------------------------------------------------------------------- */
+
+/* Copy args[from..to-comma] into out, trimming blanks and one quote pair.
+ * Returns a pointer past the comma consumed (or NULL at end of string). */
+static const char *lex_next_arg(const char *p, char *out, size_t outsz)
+{
+    out[0] = '\0';
+    if (!p) return NULL;
+    while (*p == ' ' || *p == '\t') p++;
+    const char *comma = strchr(p, ',');
+    size_t n = comma ? (size_t)(comma - p) : strlen(p);
+    if (n >= outsz) n = outsz - 1;
+    memcpy(out, p, n);
+    out[n] = '\0';
+    /* right-trim */
+    size_t l = strlen(out);
+    while (l > 0 && (out[l - 1] == ' ' || out[l - 1] == '\t')) out[--l] = '\0';
+    /* unquote one pair */
+    if (l >= 2 && out[0] == '"' && out[l - 1] == '"') {
+        out[l - 1] = '\0';
+        memmove(out, out + 1, l - 1);
+    }
+    return comma ? comma + 1 : NULL;
+}
+
+static void lex_upcase(char *s)
+{
+    for (; *s; s++) *s = (char)toupper((unsigned char)*s);
+}
+
+/*
+ * F$DELTA_TIME(start-time, end-time [,format]) - elapsed time between two
+ * absolute times, as a delta-time string.
+ *
+ * GROUNDING (Rule 8): the public VSI OpenVMS DCL Dictionary "F$DELTA_TIME"
+ * entry (docs.vmssoftware.com) and the VSI OpenVMS Wiki F$DELTA_TIME page.
+ * Both arguments are absolute time strings; the end time must be the same as
+ * or later than the start time; the result is a delta-time string of the form
+ * "DDD HH:MM:SS.CC" (the "DCL" format variant uses a hyphen: "DDD-HH:MM:SS.CC").
+ * This is a modern (Alpha/I64) lexical -- the lab-2 VAX V7.3 oracle answers
+ * %DCL-W-IVFNAM for it (11-AUG-2026) -- so it is implemented for OVMX's
+ * platform target, purely computationally, like F$LICENSE. No substrate is
+ * needed beyond the two strings, so there is no honest-error path other than
+ * a malformed time (SS$_IVTIME) or end < start.
+ */
+static int lex_delta_time(struct dcl_context *ctx, const char *args,
+                          char *result, size_t result_size)
+{
+    result[0] = '\0';
+    char a_start[64], a_end[64], a_fmt[32];
+    const char *p = lex_next_arg(args, a_start, sizeof(a_start));
+    p = lex_next_arg(p, a_end, sizeof(a_end));
+    (void)lex_next_arg(p, a_fmt, sizeof(a_fmt));
+
+    if (a_start[0] == '\0' || a_end[0] == '\0') {
+        /* Both times are required (%DCL-W-ARGREQ on the VMS oracle). */
+        dcl_error("DCL", 0, "ARGREQ",
+                  "missing argument - supply all required arguments");
+        return -1;
+    }
+
+    struct tm tm_s, tm_e;
+    int cs_s = 0, cs_e = 0;
+    if (!parse_vms_time(a_start, &tm_s, &cs_s) ||
+        !parse_vms_time(a_end, &tm_e, &cs_e)) {
+        if (ctx) ctx->last_status = SS$_IVTIME;
+        return -1;
+    }
+    time_t es = mktime(&tm_s);
+    time_t ee = mktime(&tm_e);
+    if (es == (time_t)-1 || ee == (time_t)-1) {
+        if (ctx) ctx->last_status = SS$_IVTIME;
+        return -1;
+    }
+
+    /* Total elapsed in centiseconds; end must be >= start. */
+    long long total_cs = ((long long)ee - (long long)es) * 100 +
+                         (long long)(cs_e - cs_s);
+    if (total_cs < 0) {
+        /* end earlier than start -- the documented constraint is violated. */
+        if (ctx) ctx->last_status = SS$_IVTIME;
+        return -1;
+    }
+
+    long long cc   = total_cs % 100;               total_cs /= 100;   /* -> s  */
+    long long ss   = total_cs % 60;                total_cs /= 60;    /* -> min */
+    long long mm   = total_cs % 60;                total_cs /= 60;    /* -> hr  */
+    long long hh   = total_cs % 24;                total_cs /= 24;    /* -> day */
+    long long days = total_cs;
+
+    lex_upcase(a_fmt);
+    char sep = (strcmp(a_fmt, "DCL") == 0) ? '-' : ' ';
+    snprintf(result, result_size, "%lld%c%02lld:%02lld:%02lld.%02lld",
+             days, sep, hh, mm, ss, cc);
+    return 0;
+}
+
+/*
+ * F$CUNITS(number [,from-units [,to-units]]) - convert a storage quantity
+ * between BLOCKS/BYTES/KB/MB/GB/TB.
+ *
+ * GROUNDING (Rule 8): the public VSI OpenVMS DCL Dictionary "F$CUNITS" entry
+ * and the VSI OpenVMS Wiki F$CUNITS page. A disk block is 512 bytes; KB/MB/
+ * GB/TB are binary (1024-based). from-units defaults to BLOCKS; the single
+ * documented no-to-units example -- F$CUNITS(1024) -> "512KB" (1024 blocks =
+ * 524288 bytes = 512 KB) -- fixes the omitted-to-units default at KB, which
+ * is the reading this implements. The result is the truncated integer count
+ * followed by the destination unit label (e.g. "512KB", "1BLOCKS", "0GB").
+ * BYTES is a destination unit only, and only from BLOCKS. A modern lexical
+ * (VAX V7.3 oracle answers %DCL-W-IVFNAM); purely computational.
+ */
+static int lex_cunits(struct dcl_context *ctx, const char *args,
+                      char *result, size_t result_size)
+{
+    result[0] = '\0';
+    char a_num[64], a_from[16], a_to[16];
+    const char *p = lex_next_arg(args, a_num, sizeof(a_num));
+    p = lex_next_arg(p, a_from, sizeof(a_from));
+    (void)lex_next_arg(p, a_to, sizeof(a_to));
+
+    if (a_num[0] == '\0') {
+        dcl_error("DCL", 0, "ARGREQ",
+                  "missing argument - supply all required arguments");
+        return -1;
+    }
+    if (a_from[0] == '\0') strcpy(a_from, "BLOCKS");
+    if (a_to[0]   == '\0') strcpy(a_to,   "KB");
+    lex_upcase(a_from);
+    lex_upcase(a_to);
+
+    /* Multiplier to bytes for each keyword. A negative marker means the
+     * keyword is not legal in that position. */
+    struct { const char *name; long long mult; int from_ok; int to_ok; }
+    units[] = {
+        { "B",      1LL,                        1, 1 },
+        { "BYTES",  1LL,                        0, 1 },  /* dest only */
+        { "BLOCKS", 512LL,                      1, 1 },
+        { "KB",     1024LL,                     1, 1 },
+        { "MB",     1024LL*1024,                1, 1 },
+        { "GB",     1024LL*1024*1024,           1, 1 },
+        { "TB",     1024LL*1024*1024*1024,      1, 1 },
+        { NULL, 0, 0, 0 }
+    };
+    long long from_mult = -1, to_mult = -1;
+    int from_ok = 0, to_ok = 0, to_is_bytes = 0;
+    for (int i = 0; units[i].name; i++) {
+        if (strcmp(a_from, units[i].name) == 0) { from_mult = units[i].mult; from_ok = units[i].from_ok; }
+        if (strcmp(a_to,   units[i].name) == 0) { to_mult = units[i].mult; to_ok = units[i].to_ok;
+                                                  to_is_bytes = (strcmp(units[i].name, "BYTES") == 0); }
+    }
+    /* Illegal combinations: unknown keyword, a from-only used as to, or
+     * BYTES as a destination from anything but BLOCKS. */
+    if (from_mult < 0 || to_mult < 0 || !from_ok || !to_ok ||
+        (to_is_bytes && strcmp(a_from, "BLOCKS") != 0)) {
+        if (ctx) ctx->last_status = SS$_BADPARAM;
+        return -1;
+    }
+
+    char *endp = NULL;
+    long long number = strtoll(a_num, &endp, 10);
+    if (endp == a_num) { if (ctx) ctx->last_status = SS$_BADPARAM; return -1; }
+
+    long long bytes = number * from_mult;
+    long long out   = bytes / to_mult;   /* integer truncation, per the doc */
+    snprintf(result, result_size, "%lld%s", out, a_to);
+    return 0;
+}
+
+/*
+ * F$SETPRV(priv-states) - enable or disable process privileges, returning the
+ * PRIOR state of each named privilege.
+ *
+ * GROUNDING (Rule 8): the public VSI OpenVMS DCL Dictionary "F$SETPRV" entry.
+ * priv-states is a comma-separated list of privilege keywords, each optionally
+ * prefixed NO to disable. The return value is a comma-separated list, in the
+ * SAME order, giving each named privilege's state BEFORE the call: the keyword
+ * if it was enabled, NOkeyword if it was disabled. Confirmed against the lab-2
+ * VAX V7.3 oracle (11-AUG-2026): F$SETPRV("NOOPER,GROUP") -> "OPER,GROUP" for
+ * a process holding both.
+ *
+ * INV-6 / EXECUTIVE: the privilege mutation is the executive's, not a
+ * userspace fake. The prior mask is read with vms_kif_getjpi_self() and the
+ * change is applied with sys$setprv (which routes to vms_kif_setprv ->
+ * VMS_IOCTL_SETPRV and authorizes the grant against this process's AUTHORIZED
+ * mask). With no /dev/vms the getjpi read fails and F$SETPRV returns the honest
+ * VMS error via $STATUS -- never a fabricated privilege string.
+ */
+static int lex_setprv(struct dcl_context *ctx, const char *args,
+                      char *result, size_t result_size)
+{
+    result[0] = '\0';
+    char list[512];
+    (void)lex_next_arg(args, list, sizeof(list));
+    if (list[0] == '\0') {
+        dcl_error("DCL", 0, "ARGREQ",
+                  "missing argument - supply all required arguments");
+        return -1;
+    }
+
+    /* Read the PRIOR privilege mask from the executive (INV-6). */
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    uint32_t st = vms_kif_getjpi_self(&info);
+    if (!(st & 1)) {
+        if (ctx) ctx->last_status = st;   /* honest VMS error, no fake string */
+        return -1;
+    }
+    uint64_t prior = info.cur_privs;
+
+    uint64_t enable_mask = 0, disable_mask = 0;
+    size_t rl = 0;
+    result[0] = '\0';
+
+    /* Walk the comma-separated tokens in order. */
+    char *save = NULL;
+    for (char *tok = strtok_r(list, ",", &save); tok;
+         tok = strtok_r(NULL, ",", &save)) {
+        while (*tok == ' ' || *tok == '\t') tok++;
+        size_t tl = strlen(tok);
+        while (tl > 0 && (tok[tl - 1] == ' ' || tok[tl - 1] == '\t')) tok[--tl] = '\0';
+        if (tl == 0) continue;
+        lex_upcase(tok);
+
+        int disable = 0;
+        const char *pname = tok;
+        /* NO-prefix means disable, but only if the remainder is a real priv. */
+        if (tl > 2 && strncmp(tok, "NO", 2) == 0) {
+            const char *rest = tok + 2;
+            for (int i = 0; vms_priv_names[i].name; i++)
+                if (strcmp(rest, vms_priv_names[i].name) == 0) { disable = 1; pname = rest; break; }
+        }
+
+        uint64_t mask = 0;
+        for (int i = 0; vms_priv_names[i].name; i++)
+            if (strcmp(pname, vms_priv_names[i].name) == 0) { mask = vms_priv_names[i].bit; break; }
+        if (mask == 0) continue;   /* unknown keyword: VMS ignores in the list */
+
+        if (disable) disable_mask |= mask; else enable_mask |= mask;
+
+        /* Prior state of this privilege, in the argument's order. */
+        int was_on = (prior & mask) != 0;
+        int n = snprintf(result + rl, result_size - rl, "%s%s%s",
+                         rl ? "," : "", was_on ? "" : "NO", pname);
+        if (n > 0 && (size_t)n < result_size - rl) rl += (size_t)n;
+    }
+
+    /* Apply the change through the executive. Authorization failures
+     * (SS$_NOTALLPRIV for an unauthorized enable) are NOT fatal to F$SETPRV --
+     * VMS still returns the prior-state string; the privilege simply does not
+     * take. */
+    if (enable_mask)  sys$setprv(1, &enable_mask, 0, NULL);
+    if (disable_mask) sys$setprv(0, &disable_mask, 0, NULL);
+    return 0;
+}
+
+/*
+ * F$CSID(context-symbol) - return the cluster system id (CSID) of each
+ * VMScluster member in turn, updating the context symbol.
+ *
+ * GROUNDING (Rule 8): the public VSI OpenVMS DCL Dictionary "F$CSID" entry.
+ * The argument is required (the lab-2 VAX V7.3 oracle answers %DCL-W-ARGREQ
+ * for F$CSID() with none). On a cluster the function walks members, returning
+ * each CSID as an 8-hex-digit string and "" when the list is exhausted.
+ *
+ * OVMX SCOPE (honest, not fabricated): the SCS membership table lives in the
+ * cluster daemon (src/vmsscs), which the DCL layer does not read -- and there
+ * is no other DCL-reachable cluster-id interface. From the DCL layer OVMX
+ * therefore presents as a NON-clustered node, whose defined F$CSID answer is
+ * an empty list: the first call returns "". This is the true non-cluster state,
+ * NOT an invented CSID. Reading real member CSIDs (the clustered case) needs
+ * an executive/SCS membership query that does not exist here yet -- tracked as
+ * a follow-up (see PR).
+ */
+static int lex_csid(struct dcl_context *ctx, const char *args,
+                    char *result, size_t result_size)
+{
+    (void)ctx;
+    (void)result_size;
+    result[0] = '\0';
+    char ctxsym[64];
+    (void)lex_next_arg(args, ctxsym, sizeof(ctxsym));
+    if (ctxsym[0] == '\0') {
+        dcl_error("DCL", 0, "ARGREQ",
+                  "missing argument - supply all required arguments");
+        return -1;
+    }
+    /* Non-clustered node: no members visible -> empty list (end-of-scan). */
+    result[0] = '\0';
+    return 0;
+}
+
+/*
+ * F$MULTIPATH(device-name, item, context-symbol) - return an item of multipath
+ * information for a multipath-capable device.
+ *
+ * GROUNDING (Rule 8): the public VSI OpenVMS DCL Dictionary "F$MULTIPATH"
+ * entry and the VSI OpenVMS Wiki. Valid on Alpha/Integrity only; item
+ * MP_PATHNAME returns a path name string, the context symbol is initialized to
+ * 0 before the first call, and the end of the path list is signaled by the
+ * return of a BLANK path name. A modern lexical (VAX V7.3 oracle answers
+ * %DCL-W-IVFNAM).
+ *
+ * OVMX SCOPE (honest): OVMX has no multipath-capable devices, so every device
+ * has an empty path list. The authentic VMS response for a device with no
+ * further paths is a blank return, which is exactly what OVMX returns here --
+ * the true "no multipath" state, not a fabricated path.
+ */
+static int lex_multipath(struct dcl_context *ctx, const char *args,
+                         char *result, size_t result_size)
+{
+    (void)ctx;
+    (void)result_size;
+    result[0] = '\0';
+    char dev[64], item[32], ctxsym[64];
+    const char *p = lex_next_arg(args, dev, sizeof(dev));
+    p = lex_next_arg(p, item, sizeof(item));
+    (void)lex_next_arg(p, ctxsym, sizeof(ctxsym));
+    if (dev[0] == '\0' || item[0] == '\0') {
+        dcl_error("DCL", 0, "ARGREQ",
+                  "missing argument - supply all required arguments");
+        return -1;
+    }
+    /* No multipath devices on OVMX -> blank path name (end of list). */
+    result[0] = '\0';
+    return 0;
+}
+
 /*
  * Dispatch table for lexical functions.
  */
@@ -2981,6 +3315,11 @@ static const struct {
     { "F$CVSI",             lex_cvsi },
     { "F$CVUI",             lex_cvui },
     { "F$LICENSE",          lex_license },
+    { "F$SETPRV",           lex_setprv },
+    { "F$CSID",             lex_csid },
+    { "F$DELTA_TIME",       lex_delta_time },
+    { "F$MULTIPATH",        lex_multipath },
+    { "F$CUNITS",           lex_cunits },
     { NULL, NULL }
 };
 
@@ -3033,7 +3372,24 @@ int dcl_eval_lexical(struct dcl_context *ctx, const char *expr,
         }
     }
 
-    /* Unknown function */
-    snprintf(result, result_size, "");
+    /*
+     * Unknown lexical function -- the authentic VMS diagnostic, not a silent
+     * empty string (INV-DCL: never fake success/emptiness). Grounded to the
+     * lab-2 VAX V7.3 oracle (vaxlab-1, 11-AUG-2026): typing an undefined
+     * lexical answers, verbatim,
+     *
+     *   %DCL-W-IVFNAM, invalid lexical function name - check validity and spelling
+     *    \F$BOGUS(\
+     *
+     * i.e. a two-line message whose continuation echoes the offending token
+     * (the function name up to and including the opening paren) between
+     * backslashes. dcl_error emits line 1 (%DCL-W-IVFNAM); the fprintf below
+     * reproduces the continuation line. The value stays empty and the call
+     * fails.
+     */
+    dcl_error("DCL", 0, "IVFNAM",
+              "invalid lexical function name - check validity and spelling");
+    fprintf(stderr, " \\%s(\\\n", func_name);
+    result[0] = '\0';
     return -1;
 }

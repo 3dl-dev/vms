@@ -13,7 +13,10 @@
 
 #include "dcl/lexer.h"
 #include "dcl/parser.h"
+#include "dcl/cdu.h"
+#include "dcl/dcl_cmd.h"
 #include "str_util.h"
+#include "ssdef.h"
 
 /*
  * Match a (possibly abbreviated) command name against a full command name.
@@ -367,6 +370,137 @@ int dcl_has_qualifier(const struct dcl_command *cmd, const char *name)
         }
     }
     return 0;
+}
+
+/*
+ * Resolve a parsed qualifier name against a verb's declared qualifier table.
+ * Supports VMS-style qualifier abbreviation: an exact (case-insensitive) match
+ * wins; otherwise a unique case-insensitive prefix match resolves. An ambiguous
+ * prefix (two or more table entries share it) does NOT resolve -- the caller
+ * treats that as unknown (%DCL-W-IVQUAL), never silently picking one. Returns
+ * the matching def, or NULL.
+ */
+static const struct dcl_qual_def *dcl_qual_lookup(
+        const struct dcl_qual_def *table, const char *name)
+{
+    if (!table || !name || !name[0]) return NULL;
+
+    const struct dcl_qual_def *prefix_hit = NULL;
+    int prefix_count = 0;
+    size_t nlen = strlen(name);
+
+    for (const struct dcl_qual_def *d = table; d->name; d++) {
+        if (strcasecmp(d->name, name) == 0)
+            return d;                    /* exact match wins outright */
+        if (strncasecmp(d->name, name, nlen) == 0) {
+            prefix_hit = d;
+            prefix_count++;
+        }
+    }
+    return (prefix_count == 1) ? prefix_hit : NULL;
+}
+
+/*
+ * Case-insensitive keyword-set membership with the same abbreviation rule as
+ * qualifier names (exact, else unique prefix). Returns 1 if 'value' names a
+ * legal keyword in the NULL-terminated set, 0 otherwise.
+ */
+static int dcl_keyword_ok(const char *const *keywords, const char *value)
+{
+    if (!keywords || !value) return 0;
+    const char *prefix_hit = NULL;
+    int prefix_count = 0;
+    size_t vlen = strlen(value);
+
+    for (const char *const *k = keywords; *k; k++) {
+        if (strcasecmp(*k, value) == 0) return 1;
+        if (strncasecmp(*k, value, vlen) == 0) {
+            prefix_hit = *k;
+            prefix_count++;
+        }
+    }
+    (void)prefix_hit;
+    return (prefix_count == 1) ? 1 : 0;
+}
+
+/*
+ * Validate a parsed command's qualifiers against the verb's declared table.
+ * See dcl/cdu.h for the contract. This is the Phase 1 keystone
+ * (docs/design-dcl-fidelity.md sec 4): once a verb declares a qualifier table,
+ * %DCL-W-IVQUAL (unknown qualifier) and %DCL-W-IVKEYW (bad keyword value)
+ * become structurally reachable for it, and abbreviated qualifier names are
+ * canonicalised so the existing dcl_has_qualifier()/dcl_qualifier_value()
+ * handler reads keep matching.
+ *
+ * Error text is grounded to the reference lab / DCL Dictionary, matching the
+ * Phase 0 canary in cmd_set_terminal() (dcl_cmd_set.c): VAX1 capture,
+ * "unrecognized qualifier - check validity, spelling, and placement".
+ */
+int dcl_validate_qualifiers(const struct dcl_verb *verb,
+                            struct dcl_command *cmd)
+{
+    if (!verb || !verb->quals || !cmd) return SS$_NORMAL; /* not retrofit */
+
+    for (int i = 0; i < cmd->qualifier_count; i++) {
+        struct dcl_qualifier *q = &cmd->qualifiers[i];
+        int negated = q->negated;
+
+        const struct dcl_qual_def *def = dcl_qual_lookup(verb->quals, q->name);
+
+        /* The parser's /NOxxx split is a heuristic: for a qualifier whose real
+         * name begins with "NO", the "NO" was wrongly stripped. If the stripped
+         * name did not resolve but "NO"+name does, it is a literal qualifier,
+         * not a negation -- undo the split. */
+        if (!def && negated) {
+            char full[80];
+            snprintf(full, sizeof(full), "NO%s", q->name);
+            const struct dcl_qual_def *d2 = dcl_qual_lookup(verb->quals, full);
+            if (d2) {
+                def = d2;
+                negated = 0;
+                q->negated = 0;
+                str_upcase_copy(q->name, full, sizeof(q->name));
+            }
+        }
+
+        if (!def) {
+            /* Unknown qualifier -> authentic %DCL-W-IVQUAL. Show the name as
+             * the user typed it (restore the NO prefix if it was stripped). */
+            char shown[80];
+            if (negated)
+                snprintf(shown, sizeof(shown), "NO%s", q->name);
+            else
+                snprintf(shown, sizeof(shown), "%s", q->name);
+            dcl_error("DCL", 0, "IVQUAL",
+                      "unrecognized qualifier - check validity, spelling, "
+                      "and placement - \\%s\\", shown);
+            return SS$_IVQUAL;
+        }
+
+        /* /NO form on a qualifier that is not negatable -> IVQUAL. */
+        if (negated && !(def->qflags & CDU_Q_NEGATABLE)) {
+            dcl_error("DCL", 0, "IVQUAL",
+                      "unrecognized qualifier - check validity, spelling, "
+                      "and placement - \\NO%s\\", def->name);
+            return SS$_IVQUAL;
+        }
+
+        /* Canonicalise an abbreviated name to the declared full name so
+         * handler reads by full name still match. */
+        str_upcase_copy(q->name, def->name, sizeof(q->name));
+
+        /* Keyword value-type: a supplied value must be a legal keyword. The
+         * negated form never carries a value, so only check when present. */
+        if (!negated && def->vtype == CDU_VT_KEYWORD && q->value[0] != '\0') {
+            if (!dcl_keyword_ok(def->keywords, q->value)) {
+                dcl_error("DCL", 0, "IVKEYW",
+                          "unrecognized keyword - check validity and "
+                          "spelling - \\%s\\", q->value);
+                return SS$_IVKEYW;
+            }
+        }
+    }
+    return SS$_NORMAL;
 }
 
 /*

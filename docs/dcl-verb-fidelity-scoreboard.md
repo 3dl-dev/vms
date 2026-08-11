@@ -142,3 +142,44 @@ worth recording so the board stays accurate):**
   2's fake-success sweep).
 - HELP as a real hierarchical library, terminal-characteristic presentation
   fidelity (Phases 3-4).
+
+## Phase 1 (vms-097) — the qualifier-grammar hole is now STRUCTURAL
+
+Phase 1 landed the CDU/CLD-style machinery the Phase 0 canary stood in for
+(`docs/design-dcl-fidelity.md` §4). `struct dcl_verb` now carries a per-verb
+qualifier table (`struct dcl_qual_def *quals`, `src/vmsdcl/include/dcl/cdu.h`);
+`dcl_validate_qualifiers()` (`src/vmsdcl/dcl_parser.c`) validates the parsed
+line against it and dispatch (`src/vmsdcl/dcl_exec.c`) rejects a bad qualifier
+with the authentic `%DCL-W-IVQUAL` / `%DCL-W-IVKEYW` **before the handler
+runs**. Gate: `tests/dcl/test_ivqual_gate_structural.sh` (revert the `.quals`
+wiring or the dispatch call and it goes red).
+
+**14 verbs retrofit with qualifier tables this pass** (the ones whose handlers
+read a bounded, enumerable qualifier set): TYPE, COPY, DELETE, RENAME, CREATE,
+SEARCH, PURGE, DIRECTORY, PRINT, SUBMIT, SORT, DUMP, plus APPEND and
+DIFFERENCES (which read no qualifiers, so their tables are empty and any
+qualifier is now honestly rejected).
+
+**Bucket effect.** None of the 14 changed fidelity *bucket* — all were already
+REAL on core function; the qualifier hole was tracked architecturally (a
+per-verb dimension the board did not down-grade for), not as a per-verb facade.
+What changed is that `%DCL-W-IVQUAL`/`IVKEYW` went from **structurally
+unreachable** (only the hand-rolled SET TERMINAL canary and RUN could reject a
+qualifier) to **structurally reachable for these 14 verbs**. Each table lists
+ONLY the qualifiers its handler actually implements (INV-DCL §3): a qualifier
+real VMS accepts but OVMX does not yet implement is now honestly rejected with
+IVQUAL (an over-restriction, not a lie) rather than silently swallowed.
+DIRECTORY/DATE is declared a keyword qualifier honouring only `MODIFIED` (the
+one timestamp OVMX surfaces from `stat(2)`); other DCL Dictionary keywords
+(CREATED/EXPIRED/BACKUP/ALL) draw `%DCL-W-IVKEYW` rather than a faked mtime.
+
+**Deferred to the Phase 1 follow-up** (verb-table population, `vms-097`
+follow-on): the remaining ~38 verbs still have `quals == NULL` (legacy
+accept-all) — notably the SET and SHOW **dispatchers**, whose qualifier space
+is subcommand-dependent and needs a nested table design, and the
+foreign/utility verbs (ANALYZE, BACKUP, MAIL, MONITOR, SYSGEN, SYSMAN, TCPIP,
+LINK, INSTALL, PRODUCT, CONVERT, RUN, SPAWN, OPEN/READ/WRITE/CLOSE, the
+logical-name verbs, etc.). VALREQ/NOVAL value-required enforcement is also
+deferred (no grounded `SS$_` status constant yet); Phase 1 enforces the two
+authentic errors with grounded codes: IVQUAL (`SS$_IVQUAL` 2288) and IVKEYW
+(`SS$_IVKEYW` 2292).

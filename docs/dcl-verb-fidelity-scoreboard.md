@@ -198,6 +198,71 @@ deferred (no grounded `SS$_` status constant yet); Phase 1 enforces the two
 authentic errors with grounded codes: IVQUAL (`SS$_IVQUAL` 2288) and IVKEYW
 (`SS$_IVKEYW` 2292).
 
+## Engine A rollout tranche 2 (vms-7543) — 15/54 → 33/54 carry qualifier tables
+
+Continues the Phase 1 keystone (`docs/design-vms-parity-map.md` §3). This pass
+adds CDU/CLD qualifier tables to the **in-process, self-parsing** verbs Phase 1
+left as legacy accept-all, so `%DCL-W-IVQUAL`/`IVKEYW` is now structural for
+them too, and deepens per-verb coverage on the highest-value file/queue verbs.
+
+**18 verbs newly retrofit with tables** (were `quals == NULL`):
+- Populated (list exactly the qualifiers the handler reads):
+  ASSIGN `{PROCESS,SYSTEM,GROUP,JOB,TABLE=}`, DEFINE `{PROCESS,SYSTEM,GROUP,JOB}`,
+  DEASSIGN `{PROCESS,SYSTEM,GROUP,JOB,ALL}`, OPEN `{READ,WRITE,APPEND}`,
+  SPAWN `{NOWAIT,OUTPUT=}`, INQUIRE `{NOPUNCTUATION}`, ATTACH `{IDENTIFICATION=}`,
+  CONVERT `{FDL=}`, REPLY `{ENABLE=,DISABLE,TO=}`, RECALL `{ALL}`.
+- Empty (read no qualifiers → any qualifier now draws IVQUAL):
+  CLOSE, CONTINUE, EXIT, HELP, LOGOUT, PHONE, PIPE, WAIT.
+
+Two of the populated tables also **repair latent bugs**: the parser splits
+`/NOWAIT`→name=`WAIT`,negated and `/NOPUNCTUATION`→name=`PUNCTUATION`,negated,
+so the handlers' literal `dcl_has_qualifier(cmd,"NOWAIT"/"NOPUNCTUATION")` reads
+never matched (the qualifier silently did nothing). Declaring the literal name
+in the table drives `dcl_validate_qualifiers()`'s NO-undo path, which
+reconstructs the name so the read resolves. ATTACH's handler was moved from the
+`/ID` abbreviation to the canonical `/IDENTIFICATION` (the validator
+canonicalises `/ID` to it).
+
+**Per-verb coverage deepened** (each qualifier does real work or is honestly
+rejected — INV-DCL §3):
+- **DIRECTORY 10 → 13**: `+/PROTECTION` (renders the VMS protection column),
+  `+/VERSIONS=n` (limits versions listed per name group), `+/EXCLUDE=(spec)`
+  (omits files matching, via the same wildcard engine as the positional pattern).
+- **COPY 1 → 2**: `+/CONFIRM` (real Y/N prompt read from SYS$INPUT, mirrors
+  DELETE/CONFIRM). `/CONTIGUOUS` and the other ~18 draw honest IVQUAL.
+- **PRINT 1 → 3 / SUBMIT 1 → 3**: `+/NAME=job-name` (overrides the real
+  `vms_queue_entry.job_name`), `+/HOLD` (submits then `vmsq_hold_entry()` → the
+  entry is really HOLDING, visible in SHOW QUEUE). `/COPIES` etc. (no backing
+  queue-entry field) draw honest IVQUAL; the stale `/COPIES` mention in
+  cmd_print's header comment was corrected.
+
+All error text/format is VMS-authentic (`%DCL-W-IVQUAL`/`IVKEYW`, DCL Dictionary
+wording); no `OVMX$_` code is emitted on any of these standard-operation paths
+(parity principle: indistinguishable in operation).
+
+**Bucket effect: none** — every one of these verbs was already REAL on core
+function; what changed is qualifier reachability and depth, the same
+architectural (not per-verb-bucket) dimension Phase 1 tracked.
+
+**Deferred, with the reason (kept `quals == NULL` on purpose)** — filed as
+Engine A follow-ups under `vms-b9a`:
+- **External-image delegators** (the child `SYS$SYSTEM:*.EXE` validates its own
+  qualifiers authentically; a DCL-side table would wrongly reject valid ones):
+  ANALYZE, INSTALL, LINK, MAIL, MONITOR, PRODUCT, SYSGEN, SYSMAN.
+- **SET / SHOW / TCPIP umbrellas**: qualifier space is subcommand-dependent
+  (`param[0]`); needs nested per-subcommand tables (Tier-2), not a flat one.
+- **RUN**: self-validates through its own `run_process_qualifiers[]` layer.
+- **MOUNT / DISMOUNT** and **BACKUP / LIBRARY**: full utility qualifier
+  grammars, each a sized retrofit like SET VOLUME's 23-qualifier pass.
+- **READ / WRITE / REQUEST / EDIT / ACCOUNTING**: carry script- or
+  interactive-critical qualifiers (`/END_OF_FILE`, `/ERROR`, `/SYMBOL`, `/TO`,
+  `/TPU`, …) that want real coverage, not just restriction.
+
+**Gates** (fail on the pre-rollout state): `tests/dcl/test_ivqual_rollout_tranche2.sh`
+(IVQUAL structural on the new verbs + positive controls),
+`tests/dcl/test_directory_coverage.sh`, `tests/dcl/test_copy_confirm.sh`,
+`tests/dcl/test_print_submit_coverage.sh`.
+
 ## Phase 2, TOP LIE #1 (vms-263) — ASSIGN moves PARTIAL to REAL
 
 `cmd_assign()` (`src/vmsdcl/dcl_cmd_io.c`) used to write its equivalence

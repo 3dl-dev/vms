@@ -2050,8 +2050,11 @@ int cmd_attach(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
-    /* Check /ID=hex-pid qualifier */
-    const char *id_val = dcl_qualifier_value(cmd, "ID");
+    /* Check /IDENTIFICATION=hex-pid qualifier. The CLD table (q_attach,
+     * dcl_builtin.c) declares the canonical DCL Dictionary name
+     * /IDENTIFICATION; dcl_validate_qualifiers() canonicalises the /ID
+     * abbreviation to it before this read, so we read the full name. */
+    const char *id_val = dcl_qualifier_value(cmd, "IDENTIFICATION");
     if (id_val && id_val[0]) {
         pid_t target = (pid_t)strtol(id_val, NULL, 16);
         if (target <= 0) {

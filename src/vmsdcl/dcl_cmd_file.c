@@ -158,6 +158,7 @@ int cmd_directory(struct dcl_command *cmd)
         }
     }
     int show_trailing = dcl_has_qualifier(cmd, "TRAILING");
+    int show_protection = dcl_has_qualifier(cmd, "PROTECTION");
     int columns = 4;
     const char *col_val = dcl_qualifier_value(cmd, "COLUMNS");
     if (col_val && col_val[0]) {
@@ -168,10 +169,51 @@ int cmd_directory(struct dcl_command *cmd)
     if (columns < 1) columns = 1;
     if (columns > 8) columns = 8;
 
+    /* /VERSIONS=n: list at most n versions of each file (0/absent = all).
+     * Grounded: DCL Dictionary DIRECTORY /VERSIONS=n. */
+    int versions_limit = 0;
+    const char *ver_val = dcl_qualifier_value(cmd, "VERSIONS");
+    if (ver_val && ver_val[0]) {
+        char *endp;
+        long v = strtol(ver_val, &endp, 10);
+        if (endp != ver_val && *endp == '\0' && v >= 1) versions_limit = (int)v;
+    }
+
+    /* /EXCLUDE=(spec[,...]): omit files matching any spec, using the same VMS
+     * wildcard engine as the positional pattern. The parser stores a list as
+     * "(a,b,c)"; strip the parens and split on commas. Grounded: DCL
+     * Dictionary DIRECTORY /EXCLUDE=(file-spec[,...]). */
+    #define DIR_MAX_EXCLUDE 16
+    char *excl_pats[DIR_MAX_EXCLUDE];
+    int excl_count = 0;
+    char excl_buf[512];
+    const char *excl_val = dcl_qualifier_value(cmd, "EXCLUDE");
+    if (excl_val && excl_val[0]) {
+        const char *s = excl_val;
+        size_t bl = strlen(s);
+        /* Strip a single surrounding (...) if present. */
+        if (s[0] == '(' && bl >= 2 && s[bl - 1] == ')') {
+            strncpy(excl_buf, s + 1, sizeof(excl_buf) - 1);
+            excl_buf[sizeof(excl_buf) - 1] = '\0';
+            size_t el = strlen(excl_buf);
+            if (el > 0 && excl_buf[el - 1] == ')') excl_buf[el - 1] = '\0';
+        } else {
+            strncpy(excl_buf, s, sizeof(excl_buf) - 1);
+            excl_buf[sizeof(excl_buf) - 1] = '\0';
+        }
+        char *tok = strtok(excl_buf, ",");
+        while (tok && excl_count < DIR_MAX_EXCLUDE) {
+            while (*tok == ' ') tok++;
+            if (*tok) excl_pats[excl_count++] = tok;
+            tok = strtok(NULL, ",");
+        }
+    }
+
     if (show_full) {
         show_size = 1;
         show_date = 1;
         show_owner = 1;
+        show_protection = 1;
     }
 
     /* If /TOTAL or /GRAND_TOTAL, suppress individual file listing */
@@ -222,6 +264,18 @@ int cmd_directory(struct dcl_command *cmd)
          * Use vmsfs_wildcard_match() which handles VMS % (single-char) and * */
         if (pattern) {
             if (!vmsfs_wildcard_match(pattern, de->d_name)) continue;
+        }
+
+        /* /EXCLUDE: skip entries matching any exclusion spec. */
+        if (excl_count > 0) {
+            int excluded = 0;
+            for (int xi = 0; xi < excl_count; xi++) {
+                if (vmsfs_wildcard_match(excl_pats[xi], de->d_name)) {
+                    excluded = 1;
+                    break;
+                }
+            }
+            if (excluded) continue;
         }
 
         /* Stat the file */
@@ -302,11 +356,33 @@ int cmd_directory(struct dcl_command *cmd)
     int col = 0;
     int col_width = (show_size || show_date) ? 0 : (80 / columns);
 
+    /* /VERSIONS=n version-limit state: entries are sorted name-asc,
+     * version-desc, so same-name versions are consecutive newest-first; keep
+     * the first n of each name group and drop the rest. */
+    char ver_prev_base[288] = "";
+    int  ver_group_seen = 0;
+
     for (int idx = 0; idx < entry_count; idx++) {
         struct dir_entry *e = &entries[idx];
         const char *vms_name = e->vms_name;
         long blocks = e->blocks;
         struct stat *st = &e->st;
+
+        /* /VERSIONS=n: count versions per name group; drop the oldest. */
+        if (versions_limit > 0) {
+            char base[288];
+            strncpy(base, vms_name, sizeof(base) - 1);
+            base[sizeof(base) - 1] = '\0';
+            char *semi = strrchr(base, ';');
+            if (semi) *semi = '\0';
+            if (strcasecmp(base, ver_prev_base) != 0) {
+                strncpy(ver_prev_base, base, sizeof(ver_prev_base) - 1);
+                ver_prev_base[sizeof(ver_prev_base) - 1] = '\0';
+                ver_group_seen = 0;
+            }
+            ver_group_seen++;
+            if (ver_group_seen > versions_limit) continue; /* not listed */
+        }
 
         total_blocks += blocks;
         file_count++;
@@ -338,8 +414,8 @@ int cmd_directory(struct dcl_command *cmd)
                        (unsigned)(st->st_uid & 0377));
             }
             printf("\n");
-        } else if (show_size || show_date || show_owner) {
-            /* Size and/or date and/or owner */
+        } else if (show_size || show_date || show_owner || show_protection) {
+            /* Size and/or date and/or owner and/or protection */
             printf("%-39s", vms_name);
             if (show_size) {
                 printf(" %6ld", blocks);
@@ -355,6 +431,13 @@ int cmd_directory(struct dcl_command *cmd)
                 printf(" [%03o,%03o]",
                        (unsigned)(st->st_gid & 0377),
                        (unsigned)(st->st_uid & 0377));
+            }
+            /* /PROTECTION: file protection column (same VMS format as /FULL). */
+            if (show_protection) {
+                uint16_t vprot = vmsfs_mode_to_protection(st->st_mode);
+                char prot_buf[64];
+                vmsfs_format_protection(vprot, prot_buf, sizeof(prot_buf));
+                printf(" %s", prot_buf);
             }
             printf("\n");
         } else if (show_brief) {
@@ -376,7 +459,7 @@ int cmd_directory(struct dcl_command *cmd)
 
     /* Finish last line of columnar output */
     if (col > 0 && !show_size && !show_date && !show_full && !show_brief &&
-        !show_owner && !suppress_files) {
+        !show_owner && !show_protection && !suppress_files) {
         printf("\n");
     }
 
@@ -475,6 +558,23 @@ int cmd_copy(struct dcl_command *cmd)
             strncat(dst_path, "/", sizeof(dst_path) - dlen - 1);
         }
         strncat(dst_path, basename, sizeof(dst_path) - strlen(dst_path) - 1);
+    }
+
+    /* /CONFIRM prompts before the copy; /NOCONFIRM (the default) suppresses.
+     * The parser stores /NOCONFIRM as name="CONFIRM" negated=1, so
+     * dcl_has_qualifier(cmd,"CONFIRM") returns 0 for /NOCONFIRM. Mirrors the
+     * DELETE /CONFIRM prompt convention above. */
+    if (dcl_has_qualifier(cmd, "CONFIRM")) {
+        char vms_src[256], vms_dst[256];
+        dcl_format_filespec(src_path, vms_src, sizeof(vms_src));
+        dcl_format_filespec(dst_path, vms_dst, sizeof(vms_dst));
+        printf("COPY %s to %s ? [N]: ", vms_src, vms_dst);
+        fflush(stdout);
+        char resp[64];
+        if (!fgets(resp, sizeof(resp), stdin) ||
+            toupper((unsigned char)resp[0]) != 'Y') {
+            return SS$_NORMAL;
+        }
     }
 
     FILE *src = fopen(src_path, "rb");

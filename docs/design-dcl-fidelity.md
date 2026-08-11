@@ -93,16 +93,29 @@ Qualifier **names** and error text are grounded to the oracle/docs and cited —
   becomes reachable; the universal silent-accept dies across all verbs. Design-cascade-sized
   (touches `dcl_parser.c`, dispatch in `dcl_exec.c`, the verb struct, and every handler's
   qualifier reads). Highest leverage on the board.
-- **Phase 2 — Eliminate the fake-success commands** *(each an outcome, ranked by the audit's
-  TOP LIES):* ASSIGN → real LNM + `/TABLE`; MOUNT → real volume; SET AUDIT/ACCOUNTING/PASSWORD;
+- **Phase 2 — Eliminate the fake-success commands** (`vms-6ad`) *(each an outcome, ranked by the
+  audit's TOP LIES):* ASSIGN → real LNM + `/TABLE`; MOUNT → real volume; SET AUDIT/ACCOUNTING/PASSWORD;
   PRODUCT history; SHOW LICENSE; STOP target semantics; PHONE / SET HOST / SET VOLUME;
-  INQUIRE `/NOPUNCTUATION`.
+  INQUIRE `/NOPUNCTUATION`. Also folds the **surface-identity facades** adopted into this pillar
+  from the Draper audit: F$GETJPI lexical answers about the caller (`vms-9e2`, dup `vms-b5e`),
+  SHOW PROCESS hardcoded `LEF` state (`vms-70eb`), SET UIC cosmetic write (`vms-012`).
+- **Phase 2b — Re-arm the vacuous DCL test suite** (`vms-fe21`). The meta-facade: `test_no_unix_leaks.sh`
+  cannot fail (asserts only a token it always prints; downgrades real leaks to warnings) — priority,
+  it guards the no-Unix-leaks headline; plus the tautology family that greps the product's own
+  hardcoded banners; folds `vms-3bb` (`test_mount` vacuous). Every `*_OK`/`*_COMPLETE` self-token
+  test re-authored to assert product-independent behaviour.
 - **Phase 3 — HELP is a real hierarchical library** (HLB / `Information available:` / `Topic?`
   navigation). Folds `vms-1c5` (A2).
 - **Phase 4 — Presentation fidelity.** Login/logout sequence (`vms-46b`, A4 — gated on shared
   logical names `vms-d37`), terminal-characteristic V7.3 names (`vms-2cb`).
 - **Cross-cut veracity.** Every replaced facade ships with a test that would **fail on the
   facade** (the INV-DCL gate), so the scoreboard cannot be re-faked.
+
+> **Provenance.** Phases 2/2b and the folded items above come from the product-wide Draper
+> faithfulness audit (2026-08-11), recorded in `docs/draper-faithfulness-register.md`. That
+> register also routes the non-DCL findings: executive process-control-by-PID → `vms-6b8`
+> (`vms-904`), RMS `sys$close` data-loss (`vms-5c6d`) + XAB Unix-epoch dates (`vms-3dd`), and the
+> SECURITY-CRITICAL SSH-as-root credential gap (`vms-49e`).
 
 ## 6. Relationship to the existing board
 

@@ -98,7 +98,8 @@ lnm_translate=PROCEDURE,lnm_translate_iterative=PROCEDURE,\
 lnm_enumerate=PROCEDURE,lnm_setup_defaults=PROCEDURE,\
 lnm_table_create=PROCEDURE,lnm_table_destroy=PROCEDURE,lnm_table_insert=PROCEDURE,\
 lnm_table_lookup=PROCEDURE,lnm_table_remove=PROCEDURE,lnm_table_enumerate=PROCEDURE,\
-lnm_translate_values=PROCEDURE"
+lnm_translate_values=PROCEDURE,\
+lnm_translate_searchlist=PROCEDURE"
 
 echo "mk_vmslnm_shr: LINK.EXE --shareable --use {DECC\$SHR,LIBVMSSYS\$SHR} -> $OUT"
 # STRICT (no --allow-undefined): every libc/pthread import MUST bind to DECC$SHR,

@@ -77,7 +77,7 @@ say 'EXIT' 4
 
 log "waitnodes:"
 bash "$CL/tools/waitnodes.sh" 4 3 2>&1 | tee -a "$S"
-log "XITDONE=$(grep -ac XITDONE "$W/scsd-$TAG.log")  XITABORT=$(grep -ac SCSD-E-XITABORT "$W/scsd-$TAG.log")  RETX=$(grep -ac 'RETRANSMIT 0x7b' "$W/scsd-$TAG.log")"
+log "XITDONE=$(grep -ac XITDONE "$W/scsd-$TAG.log")  XITABORT=$(grep -ac SCSD-I-CMOP04 "$W/scsd-$TAG.log")  RETX=$(grep -ac 'RETRANSMIT 0x7b' "$W/scsd-$TAG.log")"
 sudo pkill -f 'SCSD.EXE' 2>/dev/null; wait $P 2>/dev/null
 
 tail -c +$START_BYTE "$T/vax$NODE.log" | tr -d '\000' \

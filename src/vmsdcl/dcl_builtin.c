@@ -76,7 +76,10 @@ static const struct dcl_qual_def q_type[] = {
     QUAL_END
 };
 static const struct dcl_qual_def q_copy[] = {
-    { "LOG", CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "LOG",     CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
+    /* vms-7543: /CONFIRM prompts for Y/N before the copy (DCL Dictionary COPY
+     * /CONFIRM). Honoured by cmd_copy(); /NOCONFIRM is the default. */
+    { "CONFIRM", CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
     QUAL_END
 };
 static const struct dcl_qual_def q_delete[] = {
@@ -120,14 +123,43 @@ static const struct dcl_qual_def q_directory[] = {
                                                       NULL, NULL },
     { "TRAILING",    CDU_VT_NONE,    CDU_Q_NEGATABLE, NULL, NULL },
     { "COLUMNS",     CDU_VT_VALUE,   0,               NULL, NULL },
+    /* vms-7543 coverage additions -- each honoured by cmd_directory():
+     *   /PROTECTION  display the file protection column (VMS DCL Dictionary:
+     *                DIRECTORY /PROTECTION). Already rendered under /FULL; now
+     *                selectable on its own.
+     *   /VERSIONS=n  limit the number of versions listed per file (real
+     *                selection; n<=0 rejected). DCL Dictionary /VERSIONS=n.
+     *   /EXCLUDE=(spec[,...])  omit files whose name matches any spec, via the
+     *                same VMS wildcard engine used for the positional pattern.
+     * All three do real work in the handler -- not declared-and-ignored
+     * (INV-DCL sec 3). */
+    { "PROTECTION",  CDU_VT_NONE,    CDU_Q_NEGATABLE, NULL, NULL },
+    { "VERSIONS",    CDU_VT_VALUE,   CDU_Q_VALREQ,    NULL, NULL },
+    { "EXCLUDE",     CDU_VT_VALUE,   CDU_Q_VALREQ,    NULL, NULL },
     QUAL_END
 };
+/* PRINT/SUBMIT (vms-7543). Both submit into the real queue manager
+ * (vmsq_submit), so the qualifiers that map onto a queue-entry field or a
+ * queue-manager call are honoured for real:
+ *   /QUEUE=name  target queue (already implemented).
+ *   /NAME=string overrides the job name written to the entry
+ *                (vms_queue_entry.job_name) -- DCL Dictionary /NAME=job-name.
+ *   /HOLD        submit then place the entry in HOLDING state via
+ *                vmsq_hold_entry() -- DCL Dictionary /HOLD (default /NOHOLD).
+ * Qualifiers with no backing field in the queue entry today (/COPIES,
+ * /PRIORITY, /AFTER, /PARAMETERS, ...) are deliberately NOT listed: they draw
+ * the authentic %DCL-W-IVQUAL (honest over-restriction) rather than being
+ * silently accepted and dropped (INV-DCL sec 3). */
 static const struct dcl_qual_def q_print[] = {
-    { "QUEUE", CDU_VT_VALUE, 0, NULL, NULL },
+    { "QUEUE", CDU_VT_VALUE, 0,               NULL, NULL },
+    { "NAME",  CDU_VT_VALUE, CDU_Q_VALREQ,    NULL, NULL },
+    { "HOLD",  CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
     QUAL_END
 };
 static const struct dcl_qual_def q_submit[] = {
-    { "QUEUE", CDU_VT_VALUE, 0, NULL, NULL },
+    { "QUEUE", CDU_VT_VALUE, 0,               NULL, NULL },
+    { "NAME",  CDU_VT_VALUE, CDU_Q_VALREQ,    NULL, NULL },
+    { "HOLD",  CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
     QUAL_END
 };
 static const struct dcl_qual_def q_sort[] = {
@@ -155,6 +187,100 @@ static const struct dcl_qual_def q_none[] = {
 };
 
 /* ================================================================== */
+/*          Engine A rollout, tranche 2 (vms-7543, vms-b9a)            */
+/* ================================================================== */
+/*
+ * Retrofit tables for the in-process, self-parsing verbs that Phase 1 left as
+ * legacy accept-all. Each lists EXACTLY the qualifiers its handler reads via
+ * dcl_has_qualifier()/dcl_qualifier_value() (verified against the handler
+ * bodies) so %DCL-W-IVQUAL is now structurally reachable for them too; every
+ * other qualifier real VMS accepts but OVMX does not yet implement is honestly
+ * rejected (over-restriction, not a lie -- INV-DCL sec 3). Names/value-types
+ * are grounded in the public VSI DCL Dictionary per-command entries.
+ *
+ * NOT retrofit here, with the reason (kept accept-all / NULL on purpose):
+ *   - External-image delegators (the child SYS$SYSTEM:*.EXE validates its own
+ *     qualifiers authentically; a DCL-side table would wrongly reject valid
+ *     ones): ANALYZE, INSTALL, LINK, MAIL, MONITOR, PRODUCT, SYSGEN, SYSMAN.
+ *   - SET/SHOW/TCPIP umbrellas: qualifiers depend on the sub-verb (param[0]);
+ *     a single flat table is wrong -- they need per-sub-verb CLD tables
+ *     (Tier-2 follow-up; SET already validates several sub-verbs by hand).
+ *   - RUN: self-validates through its own run_process_qualifiers[] layer.
+ *   - MOUNT/DISMOUNT and BACKUP/LIBRARY: full utility qualifier grammars, each
+ *     a sized follow-up like SET VOLUME's 23-qualifier retrofit was.
+ *   - READ/WRITE/REQUEST/EDIT/ACCOUNTING: carry script- or interactive-
+ *     critical qualifiers (/END_OF_FILE, /ERROR, /SYMBOL, /TO, /TPU, ...) that
+ *     want real coverage, not just restriction -- filed as follow-ups.
+ */
+
+/* Logical-name placement qualifiers, shared by ASSIGN/DEFINE/DEASSIGN. The
+ * handlers read SYSTEM/GROUP/JOB (and treat their absence as /PROCESS, the
+ * VMS default), so /PROCESS is listed as the explicit form of that default. */
+static const struct dcl_qual_def q_assign[] = {
+    { "PROCESS", CDU_VT_NONE,  0,            NULL, NULL },
+    { "SYSTEM",  CDU_VT_NONE,  0,            NULL, NULL },
+    { "GROUP",   CDU_VT_NONE,  0,            NULL, NULL },
+    { "JOB",     CDU_VT_NONE,  0,            NULL, NULL },
+    { "TABLE",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
+static const struct dcl_qual_def q_define[] = {
+    { "PROCESS", CDU_VT_NONE, 0, NULL, NULL },
+    { "SYSTEM",  CDU_VT_NONE, 0, NULL, NULL },
+    { "GROUP",   CDU_VT_NONE, 0, NULL, NULL },
+    { "JOB",     CDU_VT_NONE, 0, NULL, NULL },
+    QUAL_END
+};
+static const struct dcl_qual_def q_deassign[] = {
+    { "PROCESS", CDU_VT_NONE, 0, NULL, NULL },
+    { "SYSTEM",  CDU_VT_NONE, 0, NULL, NULL },
+    { "GROUP",   CDU_VT_NONE, 0, NULL, NULL },
+    { "JOB",     CDU_VT_NONE, 0, NULL, NULL },
+    { "ALL",     CDU_VT_NONE, 0, NULL, NULL },
+    QUAL_END
+};
+static const struct dcl_qual_def q_open[] = {
+    { "READ",   CDU_VT_NONE, 0, NULL, NULL },
+    { "WRITE",  CDU_VT_NONE, 0, NULL, NULL },
+    { "APPEND", CDU_VT_NONE, 0, NULL, NULL },
+    QUAL_END
+};
+/* SPAWN reads /NOWAIT and /OUTPUT. Declaring "NOWAIT" (not "WAIT" negatable)
+ * matches the handler's literal dcl_has_qualifier(cmd,"NOWAIT") read: the
+ * parser splits /NOWAIT into name="WAIT" negated, and the validator's
+ * NO-undo path reconstructs it to name="NOWAIT" so the read matches -- which
+ * ALSO repairs a latent bug where /NOWAIT never took effect pre-rollout. */
+static const struct dcl_qual_def q_spawn[] = {
+    { "NOWAIT", CDU_VT_NONE,  0,            NULL, NULL },
+    { "OUTPUT", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
+/* INQUIRE reads /NOPUNCTUATION literally (same NO-undo case as SPAWN's
+ * /NOWAIT; the table makes the read actually resolve). */
+static const struct dcl_qual_def q_inquire[] = {
+    { "NOPUNCTUATION", CDU_VT_NONE, 0, NULL, NULL },
+    QUAL_END
+};
+static const struct dcl_qual_def q_attach[] = {
+    { "IDENTIFICATION", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
+static const struct dcl_qual_def q_convert[] = {
+    { "FDL", CDU_VT_VALUE, 0, NULL, NULL },
+    QUAL_END
+};
+static const struct dcl_qual_def q_reply[] = {
+    { "ENABLE",  CDU_VT_VALUE, 0, NULL, NULL },
+    { "DISABLE", CDU_VT_NONE,  0, NULL, NULL },
+    { "TO",      CDU_VT_VALUE, 0, NULL, NULL },
+    QUAL_END
+};
+static const struct dcl_qual_def q_recall[] = {
+    { "ALL", CDU_VT_NONE, 0, NULL, NULL },
+    QUAL_END
+};
+
+/* ================================================================== */
 /*                     Command Table                                   */
 /* ================================================================== */
 
@@ -166,25 +292,25 @@ static struct dcl_verb builtin_verbs[] = {
     { "APPEND",      cmd_append,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Append source file to destination file", q_none },
     { "ASSIGN",      cmd_assign,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "Assign a logical name (equivalence name to logical name)" },
+      "Assign a logical name (equivalence name to logical name)", q_assign },
     { "ATTACH",      cmd_attach,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "Transfer terminal control to another process" },
+      "Transfer terminal control to another process", q_attach },
     { "BACKUP",      cmd_backup,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Create, restore, or list a saveset file" },
     { "CLOSE",       cmd_close,       CDU_F_ABBREV | CDU_F_PARAM, 2,
-      "Close a file that was opened for I/O" },
+      "Close a file that was opened for I/O", q_none },
     { "CONTINUE",    cmd_continue,    CDU_F_ABBREV, 4,
-      "Resume execution of an interrupted image" },
+      "Resume execution of an interrupted image", q_none },
     { "CONVERT",     cmd_convert,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
-      "Convert file format" },
+      "Convert file format", q_convert },
     { "COPY",        cmd_copy,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Copy a file", q_copy },
     { "CREATE",      cmd_create,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Create a new file (or directory with /DIRECTORY)", q_create },
     { "DEASSIGN",    cmd_deassign,    CDU_F_ABBREV | CDU_F_PARAM, 4,
-      "Deassign (remove) a logical name" },
+      "Deassign (remove) a logical name", q_deassign },
     { "DEFINE",      cmd_define,      CDU_F_ABBREV | CDU_F_PARAM, 4,
-      "Create a logical name definition" },
+      "Create a logical name definition", q_define },
     { "DELETE",      cmd_delete,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Delete a file (or symbol with /SYMBOL)", q_delete },
     { "DIFFERENCES", cmd_differences, CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
@@ -198,11 +324,11 @@ static struct dcl_verb builtin_verbs[] = {
     { "EDIT",        cmd_edit,        CDU_F_ABBREV | CDU_F_PARAM, 2,
       "Invoke the EDT text editor" },
     { "EXIT",        cmd_exit,        CDU_F_ABBREV, 2,
-      "Terminate a command procedure or session" },
+      "Terminate a command procedure or session", q_none },
     { "HELP",        cmd_help,        CDU_F_ABBREV | CDU_F_PARAM, 2,
-      "Obtain information about DCL commands" },
+      "Obtain information about DCL commands", q_none },
     { "INQUIRE",     cmd_inquire,     CDU_F_ABBREV | CDU_F_PARAM, 3,
-      "Read input from SYS$INPUT and assign to a symbol" },
+      "Read input from SYS$INPUT and assign to a symbol", q_inquire },
     { "INSTALL",     cmd_install,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
       "Manage known images" },
     { "LIBRARY",     cmd_library,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
@@ -210,7 +336,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "LINK",        cmd_link,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Link object modules into executable image" },
     { "LOGOUT",      cmd_logout,      CDU_F_ABBREV, 2,
-      "Terminate an interactive session" },
+      "Terminate an interactive session", q_none },
     { "MAIL",      cmd_mail,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Send and receive electronic mail messages" },
     { "MONITOR",   cmd_monitor,   CDU_F_ABBREV | CDU_F_PARAM, 3,
@@ -218,11 +344,11 @@ static struct dcl_verb builtin_verbs[] = {
     { "MOUNT",       cmd_mount,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Mount a volume on a device" },
     { "OPEN",        cmd_open,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
-      "Open a file for reading or writing" },
+      "Open a file for reading or writing", q_open },
     { "PHONE",       cmd_phone,       CDU_F_ABBREV | CDU_F_PARAM, 3,
-      "Phone utility for interactive conversation" },
+      "Phone utility for interactive conversation", q_none },
     { "PIPE",        cmd_pipe,        CDU_F_ABBREV | CDU_F_PARAM, 3,
-      "Execute a DCL pipeline (cmd1 | cmd2 | ...)" },
+      "Execute a DCL pipeline (cmd1 | cmd2 | ...)", q_none },
     { "PRINT",       cmd_print,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Queue a file for printing", q_print },
     { "PRODUCT",     cmd_product,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
@@ -230,13 +356,13 @@ static struct dcl_verb builtin_verbs[] = {
     { "PURGE",       cmd_purge,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Delete old versions of a file", q_purge },
     { "RECALL",    cmd_recall,    CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "Show or re-execute commands from command history" },
+      "Show or re-execute commands from command history", q_recall },
     { "READ",        cmd_read,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Read a record from a file into a symbol" },
     { "RENAME",      cmd_rename,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Change the name and/or location of a file", q_rename },
     { "REPLY",       cmd_reply,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "Send an operator reply or enable/disable operator terminal" },
+      "Send an operator reply or enable/disable operator terminal", q_reply },
     { "REQUEST",     cmd_request,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Send a request message to the operator" },
     { "RUN",         cmd_run,         CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
@@ -250,7 +376,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "SORT",        cmd_sort,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Sort records in a file", q_sort },
     { "SPAWN",       cmd_spawn,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
-      "Create a subprocess" },
+      "Create a subprocess", q_spawn },
     { "STOP",        cmd_stop,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Terminate the current image or command, or delete a named process", q_stop },
     { "SUBMIT",      cmd_submit,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
@@ -264,7 +390,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "TYPE",        cmd_type,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Display the contents of a file", q_type },
     { "WAIT",        cmd_wait,        CDU_F_ABBREV | CDU_F_PARAM, 2,
-      "Wait for a specified time interval" },
+      "Wait for a specified time interval", q_none },
     { "WRITE",       cmd_write,       CDU_F_ABBREV | CDU_F_PARAM, 2,
       "Write a record to a file" },
 };

@@ -175,6 +175,15 @@ int cmd_submit(struct dcl_command *cmd)
         upper_name[i] = (char)toupper((unsigned char)bn[i]);
     upper_name[i] = '\0';
 
+    /* /NAME=job-name overrides the derived job name (DCL Dictionary
+     * SUBMIT /NAME). Uppercased into the real queue entry. */
+    const char *name_q = dcl_qualifier_value(cmd, "NAME");
+    if (name_q && name_q[0]) {
+        for (i = 0; name_q[i] && i < sizeof(upper_name) - 1; i++)
+            upper_name[i] = (char)toupper((unsigned char)name_q[i]);
+        upper_name[i] = '\0';
+    }
+
     /*
      * NO FABRICATED OWNER (vms-f42d, CLAUDE.md Rule 10). This read
      * ": \"SYSTEM\"" -- so a process the executive holds no name for
@@ -197,16 +206,27 @@ int cmd_submit(struct dcl_command *cmd)
         return sts;
     }
 
-    printf("%%SUBMIT-S-SUBMITTED, job %s (queue %s, entry %u) queued\n",
-           upper_name, queue_name, entry_id);
+    /* /HOLD places the entry in HOLDING state immediately after submission
+     * (DCL Dictionary SUBMIT /HOLD); /NOHOLD is the default. Real state change
+     * in the queue manager, observable via SHOW QUEUE. */
+    int held = 0;
+    if (dcl_has_qualifier(cmd, "HOLD")) {
+        int hsts = vmsq_hold_entry(entry_id);
+        if (hsts & 1) held = 1;
+    }
+
+    printf("%%SUBMIT-S-SUBMITTED, job %s (queue %s, entry %u) %s\n",
+           upper_name, queue_name, entry_id, held ? "holding" : "queued");
 
     return SS$_NORMAL;
 }
 
 /*
  * PRINT - Queue a file for printing.
- * Format: PRINT filespec[,...] [/QUEUE=queue-name] [/COPIES=n]
- * Sends files to the print queue via vmsqueue.
+ * Format: PRINT filespec [/QUEUE=queue-name] [/NAME=job-name] [/HOLD]
+ * Sends files to the print queue via vmsqueue. Qualifiers with no backing
+ * queue-entry field (e.g. /COPIES) are rejected with %DCL-W-IVQUAL by the
+ * CLD table (q_print, dcl_builtin.c) rather than silently accepted.
  */
 int cmd_print(struct dcl_command *cmd)
 {
@@ -247,6 +267,15 @@ int cmd_print(struct dcl_command *cmd)
         upper_name[i] = (char)toupper((unsigned char)bn[i]);
     upper_name[i] = '\0';
 
+    /* /NAME=job-name overrides the derived job name (DCL Dictionary
+     * PRINT /NAME). */
+    const char *name_q = dcl_qualifier_value(cmd, "NAME");
+    if (name_q && name_q[0]) {
+        for (i = 0; name_q[i] && i < sizeof(upper_name) - 1; i++)
+            upper_name[i] = (char)toupper((unsigned char)name_q[i]);
+        upper_name[i] = '\0';
+    }
+
     /* No fabricated owner -- same defect, same deletion, as SUBMIT above
      * (vms-f42d). */
     const char *user = ctx->username;
@@ -259,8 +288,16 @@ int cmd_print(struct dcl_command *cmd)
         return sts;
     }
 
-    printf("%%PRINT-S-QUEUED, job %s (queue %s, entry %u) queued\n",
-           upper_name, queue_name, entry_id);
+    /* /HOLD holds the entry immediately (DCL Dictionary PRINT /HOLD);
+     * /NOHOLD is the default. */
+    int held = 0;
+    if (dcl_has_qualifier(cmd, "HOLD")) {
+        int hsts = vmsq_hold_entry(entry_id);
+        if (hsts & 1) held = 1;
+    }
+
+    printf("%%PRINT-S-QUEUED, job %s (queue %s, entry %u) %s\n",
+           upper_name, queue_name, entry_id, held ? "holding" : "queued");
 
     return SS$_NORMAL;
 }

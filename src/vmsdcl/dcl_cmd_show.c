@@ -763,62 +763,41 @@ static int cmd_show_process(struct dcl_command *cmd)
         return cmd_show_process_quotas(ctx);
 
     /*
-     * /ALL: STILL WRONG ABOUT "ALL" (vms-70eb), FIXED ABOUT IDENTITY
-     * (vms-2b8).
+     * /ALL: "ALL INFORMATION ABOUT *THIS* PROCESS", not "all processes"
+     * (vms-70eb -- the item vms-6a7/vms-2b8 flagged and left).
      *
-     * On VMS /ALL means "all information about THIS process" -- the plain
-     * display plus Process Quotas, Accounting information, both privilege
-     * blocks, rights, and the job's process list. It does NOT mean "all
-     * processes". The block below still prints a Process Name/PID/UIC/State
-     * table containing only ONE row -- that half of the defect belongs to
-     * a different outcome with its own item (vms-70eb) and its own test
-     * surface (tests/dcl/test_parser_qualifiers.sh drives SHOW PROCESS/ALL
-     * to exercise the PARSER, not this display). The verbatim VMS /ALL
-     * output is captured in docs/oracle/vax73-show-system-process.md
-     * Section 4 so vms-70eb starts from a measurement rather than a guess.
+     * WHAT STOOD HERE, AND WHY IT WAS DELETED WHOLE. The /ALL branch
+     * printed a "      Processes at <date>" line and a
+     * "Process Name / PID / UIC / State" table, then ONE row built from
+     * ctx->process_name (the DCL context's self-declared name, NOT the
+     * executive's prcnam) and a HARDCODED "LEF" state -- with the pid/UIC
+     * read from vms_kif_getjpi_self but the identity column and the state
+     * fabricated. The oracle capture in
+     * docs/oracle/vax73-show-system-process.md Section 4 is decisive on
+     * BOTH counts: VMS `SHOW PROCESS/ALL` prints "all information about
+     * *this* process" -- the plain display, then Process Quotas,
+     * Accounting, both privilege blocks, rights, dynamic-memory and the
+     * job's process list -- and NOT a process table. Section 4 names the
+     * table "the wrong shape AND a fabrication". A re-sourced table would
+     * still be the wrong shape, so the table is removed WHOLE (the
+     * vms-8019 SHOW SYSTEM ruling -- "remove the unsourceable thing whole,
+     * do not invent content for it" -- applied to a whole display rather
+     * than a column), and `LEF` goes with it: OVMX holds no VMS scheduler
+     * state, exactly as the SHOW SYSTEM State column is absent for the
+     * same reason (Section 5.1).
      *
-     * WHAT IS THIS ITEM'S: the one row printed no longer comes from
-     * getpid() and the literals "SYSTEM" / a caller-claimed UIC -- the
-     * exact defect this item deleted from plain SHOW PROCESS and SHOW
-     * SYSTEM, in the same file (CLAUDE.md Rule 11 corollary: a VMS command
-     * is a reader of an executive facility, never a thing that fabricates
-     * its own answer). It is read HERE, at display time, not out of a
-     * copy taken when DCL started, for the same reason cmd_show_process
-     * gives below: a cached mask is a mask this process could have
-     * overwritten in the meantime.
-     *
-     * NO FALLBACK ON FAILURE, deliberately: the first vms_kif_* call
-     * registers this process with the executive (kif_bind), and OVMX does
-     * not run without an executive (Rule 9), so a failure here is a state
-     * the one OVMX runtime cannot be in. The command returns the
-     * executive's own status and prints no row (Rule 10: no
-     * plausible-looking identity for a process whose identity could not
-     * be read).
+     * WHAT /ALL IS NOW. It falls through to the same target-selection and
+     * plain display every other SHOW PROCESS form uses -- every field read
+     * from the target's executive row through $GETJPI, no getpid(), no
+     * ctx->process_name, no literal. Then, for the CALLER'S OWN process,
+     * it appends the one VMS /ALL section OVMX can source faithfully: the
+     * two privilege blocks, from the executive-held perm_privs/cur_privs
+     * masks (cmd_show_process_privileges, vms-2b8). Every OTHER VMS /ALL
+     * section is OMITTED, not invented -- see the end of this function for
+     * the per-section list and why each is unsourceable. That leaves a
+     * /ALL that is a strict, honest subset of VMS's, in VMS's own order,
+     * rather than a VMS-shaped fabrication (CLAUDE.md Rules 10/11).
      */
-    if (dcl_has_qualifier(cmd, "ALL")) {
-        struct timespec ats;
-        clock_gettime(CLOCK_REALTIME, &ats);
-        struct tm atm;
-        localtime_r(&ats.tv_sec, &atm);
-        printf("      Processes at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
-               atm.tm_mday, vms_months[atm.tm_mon], 1900 + atm.tm_year,
-               atm.tm_hour, atm.tm_min, atm.tm_sec,
-               (int)(ats.tv_nsec / 10000000));
-        printf("    %-20s %-10s %-8s %s\n", "Process Name", "PID", "UIC", "State");
-        struct vms_procinfo info;
-        memset(&info, 0, sizeof(info));
-        uint32_t jst = vms_kif_getjpi_self(&info);
-        if (!(jst & 1))
-            return (int)jst;        /* headings, and no invented row */
-        /* No "_FTA0:" fallback (vms-fb9): an empty process name is
-         * reported empty, not filled in with an invented VMS device name. */
-        printf("    %-20s %08X   [%03o,%03o] LEF\n",
-               ctx->process_name,
-               info.vms_pid,
-               (unsigned)((info.uic >> 16) & 0xFFFFu),
-               (unsigned)(info.uic & 0xFFFFu));
-        return SS$_NORMAL;
-    }
 
     /*
      * ---- SELECT THE TARGET ----
@@ -1022,6 +1001,50 @@ static int cmd_show_process(struct dcl_command *cmd)
      */
     printf("%-20s%s\n", "Default file spec:",
            is_self ? ctx->default_dir : "Not available");
+
+    /*
+     * ---- /ALL: THE SOURCEABLE EXTRA SECTIONS, AND ONLY THOSE ----
+     *
+     * VMS `SHOW PROCESS/ALL` follows the plain display with, in order
+     * (docs/oracle/vax73-show-system-process.md Section 4): Devices
+     * allocated, Process Quotas, Accounting information, Authorized
+     * privileges, Process privileges, Process rights, System rights,
+     * Auto-unshelve, Image Dump, Scheduling class name, the Process
+     * Dynamic Memory Area, and the job's process list.
+     *
+     * OVMX can faithfully source exactly ONE of those from the executive:
+     * the two privilege blocks, from the perm_privs/cur_privs masks the
+     * executive holds (vms-2b8) -- so those are printed, in VMS's own
+     * order and format, by the SAME reader `SHOW PROCESS/PRIVILEGES` uses.
+     * Every other section is OMITTED, never invented, because none of them
+     * is sourceable and inventing a plausible one is the exact facade this
+     * item exists to remove (Rule 10 -- match VMS, or do not expose it):
+     *
+     *   Devices allocated:  the executive allocates no devices to a
+     *                       process (already absent from the plain body).
+     *   Process Quotas:     OVMX's /QUOTAS block is a hardcoded, invented
+     *                       set of numbers identical on every system
+     *                       (its own pre-existing defect, tracked with
+     *                       /QUOTAS, NOT reintroduced here under /ALL).
+     *   Accounting info:    the executive holds CPU time / page faults /
+     *                       resident pages (SHOW SYSTEM reads them) but
+     *                       not the wider accounting set VMS prints here;
+     *                       a partial block dressed as the whole would be
+     *                       an invention.
+     *   Process/System rights: OVMX has no RIGHTSLIST (the same reason
+     *                       User Identifier prints octal, not [SYSTEM]).
+     *   Auto-unshelve / Image Dump / Scheduling class / Dynamic Memory /
+     *   job process list:   no executive facility backs any of these.
+     *
+     * Gated on is_self: privileges are IDENTITY, and OVMX does not
+     * disclose another process's identity across UIC groups (the redaction
+     * rule, vax73-privileges.md Section 5). For a non-self /ALL target the
+     * plain display above is the whole honest answer.
+     */
+    if (dcl_has_qualifier(cmd, "ALL") && is_self) {
+        printf("\n");
+        cmd_show_process_privileges(ctx);
+    }
 
     return SS$_NORMAL;
 }

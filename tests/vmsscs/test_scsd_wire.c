@@ -10243,12 +10243,48 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
           "RECLAIMED-NOJOIN must never read ADMITTED (INV-6: no success from a"
           " member that ran 0 CM JOIN handshakes)");
 
-    /* And the genuine never-re-opened non-admission stays NO-ENGAGE. */
+    /* vms-0425 (spec §4(O.24)): the SHARPEST non-admission verdict -- OVMX DROVE
+     * its op 0x02 join request to THIS peer (joiner_cfg2_sent=1) and got ZERO CM
+     * responses back. The same-pod first-join(Rf)-vs-return(Rr) wire diff for one
+     * identity (OVXR40, vaxlab-1) showed the coordinator RELAYS (op 0x12) + COMMITS
+     * (op 0x03) the FIRST join but, for the RETURNING identity whose CSB it just
+     * reclaimed, receives the SAME op 0x02 and starts NO ADD transition -- no relay,
+     * no commit (Davis p.7-38: the coordinator IGNORES the join request when its
+     * admission tests are not satisfied). This is the member OVMX actually sent the
+     * join request to (the coordinator); JOIN-ABANDONED names that the frontier is
+     * the coordinator abandoning an op02-DRIVEN join -- NOT an OVMX op02 omission.
+     *
+     * Checked BEFORE the open latch on purpose: on the return OVMX's own
+     * VMS$VAXcluster VC often ends CONNSTUCK (DISC SENT) so vaxcluster_open_reached
+     * under-reports, but the op02-was-driven fact does not. Fail-pre/pass-post gate:
+     * before vms-0425 this shape read RECLAIMED-NOJOIN (open latched) or NO-ENGAGE
+     * (latch missed, the actual Rr shape). */
     ps->cm_responses = 0;
+    ps->joiner_cfg2_sent = 1;
+    ps->vaxcluster_open_reached = 1;
+    CHECK(readmit_verdict_of(ps) == READMIT_JOIN_ABANDONED,
+          "OVMX drove op 0x02 to the coordinator (joiner_cfg2_sent) with 0 CM"
+          " responses back must read JOIN-ABANDONED (spec 4(O.24)), got %s",
+          readmit_verdict_name(readmit_verdict_of(ps)));
+    /* The real Rr shape: op02 driven, but OVMX's VC ended CONNSTUCK so the open
+     * latch never fired. Still JOIN-ABANDONED -- the driven-op02 fact governs. */
+    ps->vaxcluster_open_reached = 0;
+    CHECK(readmit_verdict_of(ps) == READMIT_JOIN_ABANDONED,
+          "op 0x02 driven + 0 CM responses must read JOIN-ABANDONED even when the"
+          " open latch missed (VC CONNSTUCK), got %s",
+          readmit_verdict_name(readmit_verdict_of(ps)));
+    CHECK(readmit_verdict_of(ps) != READMIT_ADMITTED,
+          "JOIN-ABANDONED must never read ADMITTED (INV-6)");
+
+    /* And the genuine never-re-opened, op02-never-driven non-admission stays
+     * NO-ENGAGE (reset joiner_cfg2_sent: a member we only REACHED, never drove the
+     * join request to -- e.g. the non-coordinator). */
+    ps->cm_responses = 0;
+    ps->joiner_cfg2_sent = 0;
     ps->vaxcluster_open_reached = 0;
     CHECK(readmit_verdict_of(ps) == READMIT_NO_ENGAGE,
-          "transport up but SYSAP never re-opened and 0 CM responses must read"
-          " NO-ENGAGE (spec 4(O.21)), got %s",
+          "transport up but SYSAP never re-opened, 0 CM responses, op02 never driven"
+          " must read NO-ENGAGE (spec 4(O.21)), got %s",
           readmit_verdict_name(readmit_verdict_of(ps)));
 }
 

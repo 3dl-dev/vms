@@ -11403,6 +11403,20 @@ enum readmit_verdict {
                            * the CM JOIN transition. It is a non-admission, but a
                            * DIFFERENT one from NO-ENGAGE: the reclaim + incarnation path
                            * worked; the failure is downstream at the CM JOIN. */
+    READMIT_JOIN_ABANDONED, /* vms-0425 (§4(O.24)): OVMX DROVE its op 0x02 join request to
+                           * THIS peer (joiner_cfg2_sent) and the peer returned ZERO CM
+                           * responses -- no op 0x03 COMMIT. The wire diff of a same-pod
+                           * first-join (Rf) vs return (Rr) for one identity showed the
+                           * coordinator RELAYS (op 0x12) + COMMITS (op 0x03) a FIRST join
+                           * but, for a RETURNING identity whose CSB it has just reclaimed,
+                           * receives the identical op 0x02 and starts NO ADD transition --
+                           * no op 0x12 relay to the other member, no op 0x03 to OVMX (Davis
+                           * p. 7-38: the coordinator IGNORES the join request when its
+                           * admission tests are not satisfied, and "no state transition
+                           * occurs"). This is SHARPER than RECLAIMED_NOJOIN: it is the
+                           * verdict for the member OVMX actually SENT the join request to
+                           * (the coordinator), naming that the frontier is the coordinator
+                           * abandoning an op02-DRIVEN join -- not an OVMX op02 omission. */
     READMIT_ENGAGED_NC,   /* member sent CM responses but membership not latched */
     READMIT_ADMITTED,     /* member ran the JOIN handshake and OVMX latched membership */
 };
@@ -11430,6 +11444,20 @@ static enum readmit_verdict readmit_verdict_of(const struct peer_state *ps)
     if (ps->cm_responses > 0) {
         return READMIT_ENGAGED_NC;
     }
+    /* vms-0425 (spec §4(O.24)): OVMX drove its op 0x02 join request to THIS peer
+     * (the deferred config/topology went out -- joiner_cfg2_sent) and got ZERO CM
+     * responses back. OVMX sends op 0x02 only to the coordinator it selects
+     * (Davis p. 7-37/38 "highest protocol level"), so this is the coordinator, and
+     * the wire diff (Rf op 0x02 -> op 0x12 relay + op 0x03 commit; Rr the SAME op
+     * 0x02 -> no relay, no commit) proves the coordinator ABANDONS the driven join
+     * for a returning identity. Name it distinctly from RECLAIMED_NOJOIN (a member
+     * we only REACHED) and NO_ENGAGE: here OVMX did its part -- it drove the join
+     * request -- and the coordinator did not commit. Checked before the open latch
+     * because OVMX's own VMS$VAXcluster VC often ends CONNSTUCK (DISC SENT) on the
+     * return, so the latch under-reports; the op02-was-driven fact does not. */
+    if (ps->joiner_cfg2_sent) {
+        return READMIT_JOIN_ABANDONED;
+    }
     /* vms-944 (spec §4(O.23)): SYSAP re-opened (latch set) but ZERO CM responses.
      * §4(O.22) read this exact shape (bracket `4dBr`) as a "residual/stale
      * reached-OPEN" and folded it into NO-ENGAGE. The `944B2r` SDA bracket
@@ -11451,6 +11479,7 @@ static const char *readmit_verdict_name(enum readmit_verdict v)
     case READMIT_NO_CHANNEL: return "NO-CHANNEL(never reached transport)";
     case READMIT_NO_ENGAGE:  return "NO-ENGAGE(member sent 0 CM responses, SYSAP never re-opened -- returning-id non-admission, spec 4(O.21))";
     case READMIT_RECLAIMED_NOJOIN: return "RECLAIMED-NOJOIN(SYSAP re-opened + member reclaimed the CSB & read our incarnation, but ran 0 CM JOIN -- relocated frontier, spec 4(O.23))";
+    case READMIT_JOIN_ABANDONED: return "JOIN-ABANDONED(OVMX drove op 0x02 to the coordinator, coordinator ran 0 CM JOIN -- no op 0x12 relay, no op 0x03 commit; it IGNORES the returning-id join request, Davis p.7-38 -- relocated frontier, spec 4(O.24))";
     case READMIT_ENGAGED_NC: return "ENGAGED-NOT-LATCHED(CM responses seen, membership not OPEN)";
     case READMIT_ADMITTED:   return "ADMITTED(member ran JOIN handshake, membership OPEN)";
     default:                 return "?";
@@ -11718,6 +11747,7 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
         if (getenv("OVMX_NO_READMITMAP") == NULL) {
             unsigned long long incn = (unsigned long long)ovmx_incarnation_time();
             int reached = 0, admitted = 0, engaged = 0, no_engage = 0, reclaimed_nojoin = 0;
+            int join_abandoned = 0;
             for (int i = 0; i < OVMX_MAX_PEERS; i++) {
                 if (rx->peers[i].pb == NULL) {
                     continue;
@@ -11733,6 +11763,8 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                     engaged++;
                 } else if (v == READMIT_RECLAIMED_NOJOIN) {
                     reclaimed_nojoin++;
+                } else if (v == READMIT_JOIN_ABANDONED) {
+                    join_abandoned++;
                 } else if (v == READMIT_NO_ENGAGE) {
                     no_engage++;
                 }
@@ -11749,13 +11781,22 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
             fprintf(out,
                     "  READMITMAP-SUMMARY incarnation_presented=0x%016llx%s"
                     " members_reached=%d admitted=%d engaged=%d"
-                    " reclaimed_nojoin=%d no_engage=%d --"
-                    " %s (spec 4(O.21)/4(O.23), docs/design-rejoin-cm-state-map.md)\n",
+                    " reclaimed_nojoin=%d join_abandoned=%d no_engage=%d --"
+                    " %s (spec 4(O.21)/4(O.23)/4(O.24), docs/design-rejoin-cm-state-map.md)\n",
                     incn, incn ? "(live)" : "(frozen/template)",
-                    reached, admitted, engaged, reclaimed_nojoin, no_engage,
+                    reached, admitted, engaged, reclaimed_nojoin, join_abandoned, no_engage,
                     (reached > 0 && admitted == 0
-                     && (no_engage + reclaimed_nojoin) == reached)
-                        ? (reclaimed_nojoin > 0
+                     && (no_engage + reclaimed_nojoin + join_abandoned) == reached)
+                        ? (join_abandoned > 0
+                            ? "RETURNING-IDENTITY NON-ADMISSION (RELOCATED FRONTIER, spec"
+                              " 4(O.24)): OVMX DROVE its op 0x02 join request to the"
+                              " coordinator and the coordinator ran ZERO CM JOIN -- no op"
+                              " 0x12 relay, no op 0x03 commit. It is NOT an op02 omission"
+                              " (OVMX did its part); the coordinator IGNORES/ABANDONS the"
+                              " returning identity's join request (Davis p.7-38). Next"
+                              " isolation: SDA on the COORDINATOR's CLUB/nodemap to see why"
+                              " it declines an op02-driven ADD for a reclaimed identity"
+                          : reclaimed_nojoin > 0
                             ? "RETURNING-IDENTITY NON-ADMISSION (RELOCATED FRONTIER, spec"
                               " 4(O.23)): member(s) RECLAIMED the residual CSB and re-opened"
                               " SCS -- the reclaim + incarnation-read path works -- but ran"

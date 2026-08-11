@@ -274,6 +274,15 @@ target_link_libraries(test_libvms_accounting_veracity PRIVATE
 add_test(NAME test_libvms_accounting_veracity
          COMMAND test_libvms_accounting_veracity)
 
+# vms-f89 -- date/time formatting reads SYS$TIMEZONE_DIFFERENTIAL at point of
+# use (config from logicals dogfood, parent vms-704). lib$format_date_time now
+# honours the TDF logical live, so redefining it shifts displayed time without a
+# rebuild; on origin/main it hardcoded localtime and the redefinition was inert.
+# Drives the libvms logical store directly (sys$crelnm/sys$trnlnm) -- host-
+# buildable, no executive needed.
+libvms_add_test(test_libvms_config_logical_timezone
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_config_logical_timezone.c)
+
 # vms-e48 -- per-user identity logicals (SYS$LOGIN / SYS$LOGIN_DEVICE /
 # SYS$SCRATCH) are REAL LNM$PROCESS logicals sourced from the SYSUAF record,
 # not Linux env vars, so F$TRNLNM returns the user's home instead of the

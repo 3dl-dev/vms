@@ -150,6 +150,34 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
     lnm_seed_system_locating(mgr, "SYS$SCRATCH", "SYS$SYSDEVICE:[SYSTMP]", 0);
 
     /*
+     * Default queue logicals (vms-f89). On OpenVMS SYS$PRINT and SYS$BATCH are
+     * LOGICAL NAMES for the default print/batch queues, not literal queue
+     * names baked into PRINT/SUBMIT: a site does DEFINE/SYSTEM SYS$PRINT
+     * <queue> to redirect where a bare PRINT (or SUBMIT) sends its job. Seeded
+     * to the same-named default queue ensure_queue_init() creates
+     * (src/vmsdcl/dcl_cmd_process.c); PRINT/SUBMIT translate the logical at
+     * point of use, so a later DEFINE takes effect live.
+     *
+     * Doc: VSI OpenVMS DCL Dictionary, PRINT (/QUEUE default SYS$PRINT) and
+     * SUBMIT (/QUEUE default SYS$BATCH); VSI OpenVMS System Manager's Manual,
+     * Vol. 1, "Managing Queues" (SYS$PRINT / SYS$BATCH as the default queue
+     * logical names). These are non-terminal so an equivalence that is itself
+     * another logical still translates further, matching VMS.
+     */
+    lnm_seed_system_locating(mgr, "SYS$PRINT", "SYS$PRINT", 0);
+    lnm_seed_system_locating(mgr, "SYS$BATCH", "SYS$BATCH", 0);
+
+    /*
+     * SYS$TIMEZONE_NAME / SYS$TIMEZONE_RULE / SYS$TIMEZONE_DIFFERENTIAL are
+     * ALSO seeded from the live system TZ (vms-f89), but in the DCL session
+     * setup (src/vmsdcl/dcl_main.c) rather than here: they need <time.h> (TDF
+     * from the current zone), and this file is built by the native-link path
+     * (src/vmslink/mk_vmslnm_shr.sh) with a freestanding CFLAGS set that does
+     * not guarantee the libc time extensions. lib_datetime.c reads
+     * SYS$TIMEZONE_DIFFERENTIAL at point of use.
+     */
+
+    /*
      * Per-user logicals — defaults in SYSTEM table,
      * overridden per-process by login.
      */

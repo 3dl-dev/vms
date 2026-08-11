@@ -395,6 +395,89 @@ static void setup_session(struct dcl_context *ctx)
         lnm_setup_defaults(mgr, vms_root);
 
         /*
+         * SYS$NODE -- the local node name as a system logical (vms-f89).
+         * On OpenVMS F$TRNLNM("SYS$NODE") returns the node name in DECnet
+         * full-name form, i.e. with the "::" node delimiter appended (the
+         * common idiom NODE = F$TRNLNM("SYS$NODE") - "::" relies on it);
+         * VSI OpenVMS DCL Dictionary, F$GETSYI / SYS$NODE. Sourced from the
+         * identity SSOT (ovmx_node_name -> SYSGEN SCSNODE), so it tracks the
+         * configured cluster identity rather than a literal, and a later
+         * DEFINE/SYSTEM SYS$NODE overrides it live. Seeded into LNM$SYSTEM at
+         * runtime (node-wide, via the executive); absent /dev/vms the executive
+         * refuses with SS$_NOSUCHDEV and we fall back to LNM$PROCESS_TABLE --
+         * the same disclosed process-scope fallback lnm_seed_system_locating()
+         * uses -- so F$TRNLNM still resolves it in a host DCL session. Marked
+         * terminal: the node name is a literal, not subject to further
+         * translation.
+         */
+        char node[OVMX_IDENTITY_MAXLEN];
+        ovmx_node_name(node, sizeof(node));
+        char nodeval[OVMX_IDENTITY_MAXLEN + 3];
+        snprintf(nodeval, sizeof(nodeval), "%s::", node);
+        uint32_t node_st = lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$NODE",
+                                      nodeval, LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+        if (node_st == SS$_NOSUCHDEV)
+            lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$NODE", nodeval,
+                       LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+
+        /*
+         * SYS$TIMEZONE_* from the live system TZ config (vms-f89). On OpenVMS
+         * these are system logicals a boot procedure defines from the chosen
+         * zone; date/time formatting reads SYS$TIMEZONE_DIFFERENTIAL at point
+         * of use (lib_datetime.c), so a later DEFINE takes effect live.
+         *
+         * Doc: VSI OpenVMS System Manager's Manual, Vol. 1, "Managing the
+         * System Time" -- SYS$TIMEZONE_NAME (the local zone name),
+         * SYS$TIMEZONE_RULE (the standard/daylight changeover rule),
+         * SYS$TIMEZONE_DIFFERENTIAL (the time differential factor, seconds from
+         * UTC). tm_gmtoff is that differential (seconds east of UTC), the
+         * current TDF including any daylight offset in effect -- exactly what
+         * VMS keeps as a single fixed differential. Same SYSTEM-then-PROCESS
+         * seeding as SYS$NODE. Identity stays OVMX; only the clock's zone is
+         * described.
+         */
+        tzset();
+        {
+            time_t tznow = time(NULL);
+            struct tm lt;
+            localtime_r(&tznow, &lt);
+
+            char tzval[128];
+
+            snprintf(tzval, sizeof(tzval), "%ld", (long)lt.tm_gmtoff);
+            if (lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$TIMEZONE_DIFFERENTIAL",
+                           tzval, LNM_ATTR_TERMINAL, LNM_MODE_EXEC)
+                    == SS$_NOSUCHDEV)
+                lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$TIMEZONE_DIFFERENTIAL",
+                           tzval, LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+
+            const char *tz_env = getenv("TZ");
+            const char *zname = (lt.tm_zone && lt.tm_zone[0]) ? lt.tm_zone
+                                : (tz_env && tz_env[0]) ? tz_env : "UTC";
+            if (lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$TIMEZONE_NAME",
+                           zname, LNM_ATTR_TERMINAL, LNM_MODE_EXEC)
+                    == SS$_NOSUCHDEV)
+                lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$TIMEZONE_NAME",
+                           zname, LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+
+            /* The rule is the POSIX TZ changeover string; getenv("TZ") IS that
+             * string when the site set it, else a fixed-offset standard-only
+             * rule from the zone name (honest: no daylight rule is fabricated
+             * where the system config supplies none). */
+            if (tz_env && tz_env[0]) {
+                strncpy(tzval, tz_env, sizeof(tzval) - 1);
+                tzval[sizeof(tzval) - 1] = '\0';
+            } else {
+                snprintf(tzval, sizeof(tzval), "%s0", zname);
+            }
+            if (lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$TIMEZONE_RULE",
+                           tzval, LNM_ATTR_TERMINAL, LNM_MODE_EXEC)
+                    == SS$_NOSUCHDEV)
+                lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$TIMEZONE_RULE",
+                           tzval, LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+        }
+
+        /*
          * Override SYS$DISK with the process default device.
          * On a VMS system this would be set from the process PCB;
          * here we default to the system device.

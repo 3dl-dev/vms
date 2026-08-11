@@ -38,6 +38,92 @@ extern uint32_t sys$asctim(
 /* Days from November 17 1858 to January 1 1970 */
 #define VMS_DAYS_TO_UNIX_EPOCH 40587
 
+/* ================================================================
+ * SYS$TIMEZONE_DIFFERENTIAL point-of-use read (vms-f89).
+ *
+ * Date/time FORMATTING reads the time-zone differential logical live rather
+ * than calling localtime() directly, so a DEFINE SYS$TIMEZONE_DIFFERENTIAL
+ * takes effect without a rebuild. SYS$TIMEZONE_DIFFERENTIAL holds the time
+ * differential factor (TDF) -- the number of seconds from UTC -- exactly as
+ * VMS keeps it (VSI OpenVMS System Manager's Manual, Vol. 1, "Managing the
+ * System Time"). The seeded default equals the host's current tm_gmtoff
+ * (lnm_setup_defaults), so with the default in force gmtime(t + TDF) reproduces
+ * localtime(t) and formatting is unchanged; a redefinition shifts it live.
+ *
+ * When the logical is UNDEFINED (no boot procedure / host tooling seeded it,
+ * and no /dev/vms LNM$SYSTEM entry) the read falls back to localtime_r, which
+ * is byte-for-byte the pre-vms-f89 behavior.
+ * ================================================================ */
+struct item_list_3;
+extern uint32_t sys$trnlnm(const uint32_t *attr,
+                           const struct dsc$descriptor_s *tabnam,
+                           const struct dsc$descriptor_s *lognam,
+                           const uint8_t *acmode,
+                           const struct item_list_3 *itmlst);
+
+/* Local item-list shape (matches lnmdef.h struct item_list_3); named distinctly
+ * so this top-of-file block does not collide with the LIB$DT block's own copy
+ * lower down. */
+struct tz_item_list_3 {
+    uint16_t  buflen;
+    uint16_t  item_code;
+    void     *bufaddr;
+    uint16_t *retlen;
+};
+#define TZ_LNM_STRING 2   /* LNM$_STRING */
+
+/*
+ * ovmx_tz_differential - translate SYS$TIMEZONE_DIFFERENTIAL at point of use.
+ * Returns 1 and sets *diff (seconds from UTC) if the logical is defined and
+ * numeric; 0 if undefined or non-numeric (caller uses localtime).
+ */
+static int ovmx_tz_differential(long *diff)
+{
+    char value[64];
+    uint16_t retlen = 0;
+    struct tz_item_list_3 itm[2];
+    memset(itm, 0, sizeof(itm));
+    itm[0].buflen = sizeof(value) - 1;
+    itm[0].item_code = TZ_LNM_STRING;
+    itm[0].bufaddr = value;
+    itm[0].retlen = &retlen;
+
+    struct dsc$descriptor_s lognam;
+    lognam.dsc$w_length  = (uint16_t)strlen("SYS$TIMEZONE_DIFFERENTIAL");
+    lognam.dsc$b_dtype   = DSC$K_DTYPE_T;
+    lognam.dsc$b_class   = DSC$K_CLASS_S;
+    lognam.dsc$a_pointer = (char *)"SYS$TIMEZONE_DIFFERENTIAL";
+
+    uint32_t st = sys$trnlnm(NULL, NULL, &lognam, NULL,
+                             (const struct item_list_3 *)itm);
+    if (st != SS$_NORMAL || retlen == 0)
+        return 0;
+    value[retlen] = '\0';
+
+    char *end = NULL;
+    long v = strtol(value, &end, 10);
+    if (end == value)
+        return 0;                       /* non-numeric: honest undefined */
+    *diff = v;
+    return 1;
+}
+
+/*
+ * ovmx_tz_localtime - localtime_r, but honoring SYS$TIMEZONE_DIFFERENTIAL when
+ * it is defined (gmtime of the UTC instant shifted by the TDF); otherwise the
+ * platform localtime_r. Used by the date/time FORMATTERS below.
+ */
+static void ovmx_tz_localtime(time_t t, struct tm *out)
+{
+    long diff;
+    if (ovmx_tz_differential(&diff)) {
+        time_t adj = t + diff;
+        gmtime_r(&adj, out);
+    } else {
+        localtime_r(&t, out);
+    }
+}
+
 /*
  * lib$date_time - Get current date/time as a formatted ASCII string.
  *
@@ -49,7 +135,7 @@ uint32_t lib$date_time(struct dsc$descriptor_s *date_time_str) {
 
     time_t now = time(NULL);
     struct tm tm_result;
-    localtime_r(&now, &tm_result);
+    ovmx_tz_localtime(now, &tm_result);   /* reads SYS$TIMEZONE_DIFFERENTIAL */
 
     static const char *months[] = {
         "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -588,7 +674,7 @@ uint32_t lib$format_date_time(struct dsc$descriptor_s *out,
     }
 
     struct tm tmv;
-    localtime_r(&t, &tmv);
+    ovmx_tz_localtime(t, &tmv);           /* reads SYS$TIMEZONE_DIFFERENTIAL */
 
     uint32_t f = flags ? *flags : (LIB$M_DATE_FIELDS | LIB$M_TIME_FIELDS);
     if ((f & (LIB$M_DATE_FIELDS | LIB$M_TIME_FIELDS)) == 0)

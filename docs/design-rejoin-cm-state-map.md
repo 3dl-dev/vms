@@ -470,3 +470,103 @@ timelines above), `944B1f.status` (`XITDONE=1`) / `944B2r.status` (`XITDONE=0`),
 `/lab/k8s-labs/vaxlab-1/logs/scsd-944B1f.log`/`scsd-944B2r.log` + `d94-944B1f/944B2r.pcap`. Wire
 `[66:74]` incarnation distinct per run (arm A `0x00bc0cd311bc6c62`, arm B′ `0x00bc0cd380815b38`).
 *VAXcluster Principles* pp. 7-23/7-24/7-25/7-29/7-30/7-37/7-39.
+
+
+## 8. Sub-question settled, and the CM JOIN gate bisected on the wire — OVMX DRIVES op 0x02, the coordinator ABANDONS it (`vms-0425`, spec §4(O.24))
+
+§7 relocated the frontier to "reclaim succeeds, CM JOIN does not run" and left ONE open
+sub-question: §7's reclaim was demonstrated with a **blatantly future** incarnation pin
+(1-OCT-2026, chosen for SDA day-resolution visibility). Does a **realistic near-now**
+incarnation — what OVMX presents in normal operation — ALSO trigger the reclaim, or is the
+reclaim an artifact of a coarse incarnation delta (in which case the true frontier would be
+"make the member see a new incarnation", not the JOIN transition)? `vms-0425` settles it with a
+same-boot single-factor bracket, then bisects the JOIN gate itself on the wire.
+
+### 8.1 Sub-question SETTLED — a realistic incarnation reclaims identically to the future pin (GROUNDED, `vaxlab-1`, clean CN_2, 2026-08-11)
+
+Two first-join→return pairs on ONE freshly-booted pod, two brand-new identities, first-join op02
+form held constant, `OVMX_JOIN_SEQ=1`, hard `timeout` per op, VAX1 parked in SDA sampling each
+identity's CSB (`csbwatch.sh`). The two pairs differ in **exactly one factor**: the incarnation
+the RETURN presents.
+
+| pair | arm | identity | return incarnation | member's CSB for the identity (SDA) | `XITDONE` |
+|---|---|---|---|---|---|
+| R (realistic) | `0425Rf` | `OVXR40`/1975 | — (first join) | CSB built `8796AE80`, advances to `member,selected` (02060002) | **1** |
+| | `0425Rr` | `OVXR40` | **default live (near-now)** | old CSB `8796AE80` DEALLOCATED → **NEW CSB `879DF540`**, `1-JAN-2001` ref-time (a fresh CSB), Flags `02040000 status_rcvd` (**non-member**) | **0** |
+| F (future) | `0425Ff` | `OVXF40`/1976 | — (first join) | CSB built `879DEF00`, advances to `member,selected` | **1** |
+| | `0425Fr` | `OVXF40` | **`1-OCT-2026`** (`OVMX_INCARNATION_TIME=52975296000000000`) | old CSB `879DEF00` DEALLOCATED → **NEW CSB `879DF2C0`**, Incarnation visibly `11-AUG-2026 → 1-OCT-2026`, Flags `02040000 status_rcvd` (**non-member**) | **0** |
+
+**The flip that is NOT there.** The realistic return (`0425Rr`) and the future-pinned return
+(`0425Fr`) produce **byte-identical CSB outcomes**: the member DEALLOCATES the residual CSB and
+REBUILDS a fresh one at a new address (a genuine reclaim, Davis pp. 7-24/7-25), which reaches
+`02040000 status_rcvd` — the **exact** intermediate state a SUCCESSFUL first join passes through —
+and then **stalls there, never advancing to `member,selected`**. The only observable difference is
+the SDA-displayed Incarnation *date* (`11-AUG` vs `1-OCT`); the reclaim, the stall, and `XITDONE=0`
+are the same. **A realistic incarnation reclaims exactly as the future pin does — the reclaim needs
+no coarse delta.** §6.4's "never reclaims" was a `SHOW CLUSTER`-string artifact (SDA sees the
+address change the console strings could not). The sub-question is closed: **the frontier does NOT
+relocate; it stays at the CM JOIN transition.**
+
+### 8.2 The CM JOIN gate bisected — OVMX DRIVES op 0x02; the coordinator does not START the ADD
+
+Both the SUCCESS first-join (`0425Rf`) and the return (`0425Rr`) were captured (pcap, in-pod
+`br0`). Decoding the CM (config/membership) frames on the `VMS$VAXcluster` connection — category
+`body[8]`, opcode `body[9]`, per `scs_member_parse` — with the SAME identity on the SAME pod
+(OVMX `b2df5fa41233`, VAX1 `aa0004000104`, VAX2 `08002b45161a`, VAX2 = the coordinator OVMX
+selects) gives the discriminating diff:
+
+| step | first join `0425Rf` (`XITDONE=1`) | return `0425Rr` (`XITDONE=0`) |
+|---|---|---|
+| OVMX → coordinator op 0x02 (join request) | **sent** (t≈29.57s) | **sent** (t≈31.47s) — *OVMX drives op 0x02 on the return too* |
+| coordinator → other member op 0x12 RELAY | **sent** (relays the new member) | **absent** |
+| coordinator → OVMX op 0x03 COMMIT | **sent** → OVMX 0x81-responds (`cm_responses++`) | **absent** (`cm_responses=0`) |
+| what the coordinator does instead | op 0x05 lock-rebuild, op 0x06 membership burst → OVMX joins | a member↔member **cat-0x06 MEMBERSHIP** reconcile with the OTHER member that EXCLUDES OVMX, then a transition **ABORT** (op 0x04) |
+| OVMX's own `VMS$VAXcluster` VCs at exit | OPEN | **CONNSTUCK in DISC SENT** (`still-open-at-exit=2`) |
+
+**This bisects the either/or the frontier posed.** It is **not** that OVMX omits op 0x02 — OVMX's
+own log confirms it drives the deferred op 0x02 in REJOIN form to the coordinator
+(`SCSD-I-CMCONFIG2 … sent DEFERRED op 0x02 … to node 2 … expect its 0x04 ack then its op 0x03
+COMMIT`) and correctly addresses it. And the member is **not** merely "waiting silently" — the
+coordinator RECEIVES op 0x02 and actively runs a *different* transition (member↔member reconcile +
+abort), starting **no** ADD for OVMX. Per Davis p. 7-38 the coordinator, on receiving a join
+request, runs admission/quorum tests and **"ignores the request … and no state transition occurs"**
+when they are not satisfied; the FIRST join satisfies them, the RETURN (against a member that has
+just reclaimed OVMX's CSB) does not. The gate is the **coordinator's decision to ignore an
+op02-driven ADD for a returning identity** — one step further in than §7's "CM JOIN does not run".
+
+Note also an OVMX-side connection-hygiene defect surfaced by the same capture (not the gate, but
+real): on the return OVMX's `VMS$VAXcluster` VCs end **CONNSTUCK** in `DISC SENT` and OVMX re-drives
+its add-member burst with `remote_conid=0x00000000` (`SCSD-I-CMREADMIT … remote=0x00000000`). The
+correctly-addressed op 0x02 (with the member's live conid) still drew no commit, so this is not the
+gate — but it is a distinct bug worth its own item.
+
+### 8.3 The relocated frontier, and what `vms-0425` ships (no wire change)
+
+**Relocated frontier.** The next isolation is **SDA on the COORDINATOR** (the member OVMX sends
+op 0x02 to — VAX2 here), across the departure and the return, to see WHY it declines to start an
+ADD for a reclaimed identity that it admits when fresh: does its CLUB nodemap / quorum-vote
+accounting still carry residual state for the departed OVMX (so its p. 7-38 admission tests fail),
+even though the per-identity CSB was reclaimed? That is the named, testable next step — and it is a
+COORDINATOR-side observation, a different oracle vantage than §4–§7's member-CSB SDA.
+
+**What `vms-0425` ships (no wire change, guard 8 — the working first-join path is byte-unchanged).**
+(1) This record (§8) and the spec §4(O.24) note. (2) The sub-question bracket above (realistic vs
+future incarnation, same boot, single factor) closing §7's open sub-question. (3) A READMITMAP
+**verdict refinement**: `JOIN-ABANDONED` (`joiner_cfg2_sent` && `cm_responses==0`) split out of
+`RECLAIMED-NOJOIN`/`NO-ENGAGE`, so the member OVMX actually DROVE the join request to (the
+coordinator) is named distinctly from a member it only reached — surfacing "OVMX did its part, the
+coordinator abandoned" as one log line for the next isolation. It is checked BEFORE the open latch
+because OVMX's own VC ends CONNSTUCK on the return (so `vaxcluster_open_reached` under-reports, but
+the op02-was-driven fact does not — the live `0425Rr` READMITMAP read `NO-ENGAGE` under the old
+latch-first classifier, masking that OVMX had driven op 0x02). Log-only, kill-switch
+`OVMX_NO_READMITMAP` unchanged, with a fail-pre/pass-post case in `tests/vmsscs/test_scsd_wire.c`.
+Still a non-admission (never `ADMITTED`; INV-6).
+
+Evidence (host, tank volume): CSB timelines `/data/training/vax/cluster/work/0425{Rf,Rr,Ff,Fr}.csb`
+with `.status` (`0425Rf`/`0425Ff` `XITDONE=1`; `0425Rr`/`0425Fr` `XITDONE=0`); daemon logs
+`/lab/k8s-labs/vaxlab-1/logs/scsd-0425{Rf,Rr,Ff,Fr}.log` and pcaps `d94-0425{Rf,Rr,Ff,Fr}.pcap`
+(identities `OVXR40`/1975, `OVXF40`/1976 on the wire); CM-frame decoder `docs/clean-room/tools/cmdiff.py`; code
+`src/vmsscs/scsd.c` (`readmit_verdict_of`, `READMIT_JOIN_ABANDONED`); unit
+`tests/vmsscs/test_scsd_wire.c`. Live pass-post with the refined daemon: `scsd-0425Rr2.log` reads
+coordinator `verdict=JOIN-ABANDONED`, non-coordinator `NO-ENGAGE`, SUMMARY `join_abandoned=1
+no_engage=1` (the old classifier read both `NO-ENGAGE`). *VAXcluster Principles* pp. 7-24/7-25/7-37/7-38/7-39.

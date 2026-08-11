@@ -104,9 +104,16 @@ static int fail = 0;
 
 /* The heading OVMX prints, byte for byte. VMS's is
  * "  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages";
- * OVMX drops the five columns its executive cannot source, WHOLE, which
- * moves the centred CPU heading from column 51 to column 32 (Section 5.1). */
-#define SYS_HEADING "  Pid    Process Name           CPU"
+ * (Section 1.1). vms-a7e made the executive hold CPU time, PAGE FAULTS and
+ * RESIDENT PAGES (sourced in-kernel from the task the process table pins,
+ * struct vms_procinfo.cputim/pageflts/pages), so OVMX now sources and prints
+ * the CPU, Page flts and Pages columns at VMS's own widths. It still cannot
+ * source State, Pri or the I/O split (no VMS scheduler, no VMS priority, no
+ * direct/buffered I/O split), so those three columns are removed WHOLE and
+ * the survivors close up (Section 5.1's rule, now with more survivors):
+ *   Pid 0-7, Name 9-23, CPU 25-40, Page flts 42-51, Pages 53-59. */
+#define SYS_HEADING \
+    "  Pid    Process Name          CPU         Page flts   Pages"
 
 /* Oracle-pinned messages (Sections 3.2, 3.3). */
 #define MSG_NONEXPR "%SYSTEM-W-NONEXPR, nonexistent process"
@@ -611,15 +618,24 @@ int main(void)
      *     records which columns OVMX can source and the rule that the
      *     survivors keep VMS's own widths while the rest are removed
      *     whole. A heading that gains a column, loses one, or drifts by a
-     *     single space fails here.
+     *     single space fails here. vms-a7e added the CPU/Page-flts/Pages
+     *     survivors; State/Pri/I/O stay removed.
      * --------------------------------------------------------------- */
     CHECK(run_dcl("SHOW SYSTEM\nLOGOUT\n", -1, NULL, out, sizeof(out)) == 0,
           "SHOW SYSTEM ran under the real DCL.EXE");
     CHECK(has_line(out, SYS_HEADING),
           "SHOW SYSTEM printed the oracle-pinned column heading exactly");
-    CHECK(strstr(out, "State") == NULL && strstr(out, "Page flts") == NULL &&
-          strstr(out, "---") == NULL,
-          "SHOW SYSTEM printed no unsourceable column and no placeholder");
+    /* The three columns OVMX still cannot source stay ABSENT -- no heading,
+     * no placeholder. "State"/"Pri"/"I/O" must not appear; "---" must not
+     * appear. Page flts and Pages ARE present now (sourced in the executive,
+     * vms-a7e), so their absence is no longer required -- their presence is
+     * pinned by SYS_HEADING above and the row geometry below. */
+    CHECK(strstr(out, "State") == NULL && strstr(out, "Pri") == NULL &&
+          strstr(out, "I/O") == NULL && strstr(out, "---") == NULL,
+          "SHOW SYSTEM printed no still-unsourceable column (State/Pri/I/O) "
+          "and no placeholder");
+    CHECK(strstr(out, "Page flts") != NULL && strstr(out, "Pages") != NULL,
+          "SHOW SYSTEM printed the now-sourced Page flts and Pages columns");
 
     /* ---------------------------------------------------------------
      * P2. THE ROW GEOMETRY, on a process THIS process did not create the
@@ -660,6 +676,20 @@ int main(void)
               row[35] == ':' && row[38] == '.',
               "the CPU field starts at column 25, so the Process Name "
               "field is 15 columns wide");
+        /*
+         * THE NOW-SOURCED ACCOUNTING COLUMNS CARRY REAL DATA (vms-a7e).
+         * Page flts is a 10-column right-justified field at 42-51 and Pages
+         * a 7-column right-justified field at 53-59 (SYS_HEADING's geometry).
+         * The subject is a live /bin/sh: it has faulted its image in and has
+         * a resident set, so both fields end in a digit at their rightmost
+         * column -- proof SHOW SYSTEM reads a real figure from the executive
+         * row, not a blank or a fabricated placeholder. Column 41 (before
+         * Page flts) and 52 (before Pages) are the single separators.
+         */
+        CHECK(row[41] == ' ' && isdigit((unsigned char)row[51]) &&
+              row[52] == ' ' && isdigit((unsigned char)row[59]),
+              "the subject's Page flts (42-51) and Pages (53-59) fields carry "
+              "real digits at VMS geometry -- the executive sourced them");
     }
 
     /* ---------------------------------------------------------------

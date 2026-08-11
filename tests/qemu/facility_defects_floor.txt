@@ -277,4 +277,11 @@
 # and why, and for the genuine knock-on suites each mutation was measured to
 # also reach (test_syssvc_ident for two of the three; test_syssvc_setuai for
 # sysuaf-uic-radix-decimal, found by running it, not predicted).
-89
+#
+# Raised 89 -> 90 (vms-a7e): added proc-acct-not-sourced, the negative control
+# for the executive per-process accounting facility (fill_proc_acct in
+# kernel/vms_proctab.c). Mutation-verified via inject_and_run.sh -- removing
+# both fill_proc_acct() call sites reddens test_kmod_procacct, and the two
+# knock-on suites test_syssvc_showproc and test_syssvc_procnam, with nothing
+# outside the declared set failing.
+90

@@ -445,6 +445,7 @@ showterm-width-page-fabricated
 showterm-width-page-oracle-shaped
 proctab-duplicate-name
 proctab-crossgroup-identity
+proc-acct-not-sourced
 proctab-terminal-redaction-bypassed
 proctab-getjpi-nonexpr-status-wrong
 proctab-procscan-nonexpr-status-wrong
@@ -2009,15 +2010,24 @@ EOF
         case "$_f" in
         facility)     echo "process table, cross-UIC-group identity read (VMS_IOCTL_GETJPI/PROCSCAN authorisation)";;
         targets)      echo "kernel/vms_proctab.c";;
-        # All three layers of the same clause, MEASURED not guessed:
+        # Two layers of the same clause, MEASURED not guessed:
         # test_syssvc_showproc names the property through the user-visible
         # command (SHOW PROCESS/ID on an out-of-group process must be
-        # refused), test_syssvc_procnam sees it as a row that stops being
-        # redacted, and test_kmod_ident sees it at the raw ioctl. The first
-        # run of this control listed only the two syssvc suites and the
-        # driver's equality check rejected it, naming test_kmod_ident's five
-        # assertions -- which is the check doing exactly its job.
-        suites_red)   echo "test_syssvc_showproc test_syssvc_procnam test_kmod_ident";;
+        # refused), and test_kmod_ident sees it at the raw ioctl. The first
+        # run of this control listed only the syssvc suite and the driver's
+        # equality check rejected it, naming test_kmod_ident's assertions --
+        # which is the check doing exactly its job.
+        #
+        # test_syssvc_procnam WAS a third detector here (its SHOW SYSTEM P12
+        # block): before vms-a7e a row that stopped being redacted kept its
+        # linux_pid and the DCL layer could then source a CPU figure for it,
+        # so this clause governed the row's accounting too. vms-a7e decoupled
+        # them -- the executive sources accounting from the task's pid_ref
+        # (fill_proc_acct), independent of vms_proc_may_read()'s outcome and
+        # of the zeroed linux_pid -- so mutating this clause no longer changes
+        # any SHOW SYSTEM accounting. P12 now detects proc-acct-not-sourced
+        # instead, and is no longer red for THIS defect.
+        suites_red)   echo "test_syssvc_showproc test_kmod_ident";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -2028,7 +2038,6 @@ EOF
                       ;;
         knock_on_fail) cat <<'EOF'
 the by-PID refusal printed no process header
-the UNREADABLE row fabricates NO CPU figure at all
 WORLD CLAUSE ISOLATED: the same cross-group read, now without WORLD -> SS$_NOPRIV
 an unprivileged process is REFUSED a process in another UIC group
 ... and gets no part of that process's identity
@@ -2039,9 +2048,9 @@ EOF
                       ;;
         knock_on_why) cat <<'EOF'
 EVERY EXTRA IS THE SAME REFUSAL SEEN FROM A DIFFERENT SIDE, not a second
-property. All eight were MEASURED by running this control, not predicted:
+property. All seven were MEASURED by running this control, not predicted:
 the first run named only the two SHOW-PROCESS assertions and the driver's
-equality check rejected it and printed the rest. The eighth (the terminal
+equality check rejected it and printed the rest. The seventh (the terminal
 one) arrived on a LATER run, the same way -- not predicted, READ OFF A RUN --
 after vms-d0b added a terminal field to the same redacted row this control
 already opens up (see below).
@@ -2060,15 +2069,19 @@ answering %SYSTEM-W-NONEXPR. Before vms-6a7 round 2 the two selectors shared
 one DCL session and one combined capture, so this distinction was invisible
 here -- the block could only say that both messages appeared somewhere.
 
+THE ENUMERATION SIDE USED TO BE HERE TOO, and vms-a7e moved it. Before that,
 "the UNREADABLE row fabricates NO CPU figure at all" (test_syssvc_procnam
-block P12) is the enumeration side of the identical decision:
-vms_ioctl_procscan() calls proc_fill_info() with vms_proc_may_read()'s
-outcome as its `full` argument (src/kernel/vms_proctab.c:609), so a row that
-becomes readable stops being redacted, keeps its linux_pid, and SHOW SYSTEM
-can then source a CPU figure for it. One clause governs both the item read
-and the row redaction -- which is the design, not a coincidence: identity is
-privileged and enumeration is not (docs/oracle/vax73-privileges.md Section
-5.5), and this clause is where that split is decided.
+block P12) reddened for this defect: vms_ioctl_procscan() called
+proc_fill_info() with vms_proc_may_read()'s outcome as its `full` argument,
+so a row that became readable kept its linux_pid and the DCL layer could then
+source a CPU figure for it -- one clause governed both the item read and the
+row's accounting. vms-a7e sources accounting in the executive from the task's
+pid_ref, independent of `full` and of the zeroed linux_pid, so this clause no
+longer changes any SHOW SYSTEM accounting; that assertion is now a detector of
+proc-acct-not-sourced, not of this defect, and is gone from both lists above.
+Identity is still privileged and enumeration still is not (docs/oracle/
+vax73-privileges.md Section 5.5); what changed is that accounting is not
+identity, so it no longer rides this clause.
 
 THE SIX test_kmod_ident REDS are the SAME clause one layer down, at the raw
 ioctl rather than through the public sys$ API and DCL. That suite's own
@@ -2085,9 +2098,9 @@ THE SIXTH, the terminal one, is the SAME clause reaching a field that did
 not exist when the other five were written. vms_ioctl_procscan() (src/
 kernel/vms_proctab.c) calls proc_fill_info() with vms_proc_may_read()'s
 outcome as `full`, and proc_fill_info() withholds proc->terminal on exactly
-that condition (vms-d0b) -- the identical decision "the UNREADABLE row
-fabricates NO CPU figure at all" names two paragraphs up, for a field
-added later. With the WORLD clause deleted, D's row stops being redacted
+that condition (vms-d0b) -- the identical `full`-gated redaction the
+enumeration-side paragraph above describes, reaching a field added later.
+With the WORLD clause deleted, D's row stops being redacted
 altogether, so test_kmod_ident's D genuinely has a terminal to leak (it
 binds one, see process_d() in that file) and this control makes it leak.
 The check is proctab-terminal-redaction-bypassed's OWN concern from the
@@ -2103,6 +2116,73 @@ find_by_name() is group-scoped independently of this clause, which is why
 "SHOW PROCESS <name> on an out-of-group process reports %SYSTEM-W-NONEXPR"
 survives the mutation. That is the measured evidence that this control names
 the cross-group AUTHORISATION and nothing else.
+EOF
+                      ;;
+        esac;;
+
+    proc-acct-not-sourced)
+        case "$_f" in
+        facility)     echo "process table, per-process accounting sourced from the Linux task (fill_proc_acct(), vms-a7e)";;
+        targets)      echo "kernel/vms_proctab.c";;
+        # The executive sources CPU time / page faults / resident pages /
+        # login time from the task it pins by pid_ref, in fill_proc_acct(),
+        # and vms_ioctl_getjpi()/vms_ioctl_procscan() call it after dropping
+        # the hash lock. This mutation removes BOTH calls, so no row carries
+        # accounting (every VMS_PI_V_* accounting bit stays clear and every
+        # field stays 0) -- the pre-vms-a7e state. Three suites read that
+        # accounting: test_kmod_procacct at the raw ioctl (its whole point),
+        # test_syssvc_showproc as SHOW SYSTEM's Page-flts/Pages columns, and
+        # test_syssvc_procnam block P12 as the CPU figure on a redacted row.
+        suites_red)   echo "test_kmod_procacct test_syssvc_showproc test_syssvc_procnam";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "fill_proc_acct() is where the executive reads the real Linux task's CPU time, page faults, resident pages and creation time into the process row (struct vms_procinfo.cputim/pageflts/pages/logintim + the VMS_PI_V_* validity bits). Removing its two call sites is the whole facility gone: rows come back with the accounting bits clear and the fields zero, exactly as they did before vms-a7e. Identity, redaction, naming, scanning and the P0/P1 extents are untouched.";;
+        require_fail) cat <<'EOF'
+PROCSCAN rows carry the same executive accounting GETJPI does -- this is the exact path SHOW SYSTEM's columns read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+page faults are sourced and non-zero (a live process has faulted its image in) -- JPI$_PAGEFLTS from the executive
+resident pages are sourced and non-zero (a live user process has an address space) -- JPI$_PPGCNT from the executive
+CPU time is sourced (valid bit set) -- JPI$_CPUTIM from the executive
+login time is sourced (valid bit set) -- JPI$_LOGINTIM from the executive
+after burning CPU, JPI$_CPUTIM reports a non-zero figure -- the executive is measuring real consumed CPU, not reporting a stuck 0
+A-BURNS/B-READS: B reads A's real page-fault and resident-page counts out of A's executive row -- accounting a per-process fake could not show for another process
+B reads A's non-zero CPU time out of A's row (A had burned CPU) -- sourced from the task the executive pins, not from B's own state
+the subject's Page flts (42-51) and Pages (53-59) fields carry real digits at VMS geometry -- the executive sourced them
+the CPU field starts at column 25, so the Process Name field is 15 columns wide
+the readable row carries a CPU figure
+the UNREADABLE row carries XGRP's own REAL (non-zero) CPU figure -- accounting rides through identity redaction, matching the oracle, not a fabricated zero
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+EVERY RED IS THE SAME FACILITY SEEN FROM A DIFFERENT READER, not a second
+property, and the set was MEASURED by injecting this mutation and reading the
+harness, not predicted. fill_proc_acct() is the single source of all four
+accounting fields, so removing it clears them for every reader at once:
+
+  - test_kmod_procacct is the dedicated raw-ioctl suite; its page-fault,
+    resident-page, CPU-time, login-time, burn-registers-CPU, A-BURNS/B-READS
+    and PROCSCAN-parity assertions all read the fields this mutation stops
+    the executive from setting. (Its "honestly absent" assertions for state/
+    priority/I-O/quota STAY GREEN -- those bits are supposed to be clear, and
+    this mutation does not touch them; and "the figures B reports for A are
+    A's magnitude" stays green because both sides read zero, 0 >= 0.)
+  - test_syssvc_showproc reads the same fields as SHOW SYSTEM's CPU, Page
+    flts and Pages columns; with nothing sourced they all render blank, so
+    BOTH the Page-flts/Pages digit assertion AND the CPU-field-at-column-25
+    geometry assertion (which expects digits in the CPU field) fail.
+  - test_syssvc_procnam reads the CPU figure on TWO rows: its own readable
+    row and a cross-group (redacted) one. The whole point of vms-a7e is that
+    accounting rides through identity redaction, so with the source gone
+    BOTH rows' CPU fields are blank -- "the readable row carries a CPU
+    figure" and the redacted-row assertion (P12) both fail.
+
+The by-name and identity paths are untouched: this mutation is under the
+ACCOUNTING source, not the authorisation clause proctab-crossgroup-identity
+mutates, so SHOW SYSTEM still lists every process and $GETJPI identity is
+still refused/allowed exactly as before.
 EOF
                       ;;
         esac;;
@@ -5158,6 +5238,19 @@ apply_edit() {
         # exactly as they are, so the mutation cannot be mistaken for
         # "authorisation removed".
         sed -i 's|return (caller->cur_privs \& VMS_PRV_M_WORLD) != 0;|return true; /* NEGCTL proctab-crossgroup-identity */|' "$_file";;
+    proc-acct-not-sourced)
+        # Both call sites are the identical text "fill_proc_acct(acct_task,
+        # &args.info);" (vms_ioctl_getjpi and vms_ioctl_procscan), each on
+        # its own line, so this single substitution removes BOTH -- sed
+        # applies to every line. The replacement is a bare `;` plus the
+        # marker, which leaves the surrounding `if (acct_task) { ...
+        # put_task_struct(acct_task); }` valid and makes the anchor vanish
+        # after one apply (a second apply finds no match: the idempotence the
+        # selftest requires). fill_proc_acct() then goes uncalled -- only a
+        # -Wunused-function warning, not an error, for an external module
+        # build (verified: vms.ko still links), which is the point: the
+        # accounting facility is gone and every reader sees the fields clear.
+        sed -i 's|fill_proc_acct(acct_task, &args.info);|/* NEGCTL proc-acct-not-sourced */;|' "$_file";;
     proctab-terminal-redaction-bypassed)
         # `info->redacted = 1;` is the only such statement in the file (the
         # sole write to that field), so anchoring on it directly is

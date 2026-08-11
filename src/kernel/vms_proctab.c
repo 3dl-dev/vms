@@ -26,6 +26,10 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
+#include <linux/sched/cputime.h>
+#include <linux/sched/mm.h>
+#include <linux/mm.h>
+#include <linux/timekeeping.h>
 #include <linux/mutex.h>
 #include <linux/string.h>
 #include <linux/pid.h>
@@ -234,6 +238,121 @@ static void proc_fill_info(const struct vms_proc *proc,
 }
 
 /*
+ * Seconds between the VMS system-time base (17-NOV-1858 00:00:00, the
+ * Smithsonian Modified Julian Date epoch) and the Unix epoch
+ * (01-JAN-1970 00:00:00): 40587 days * 86400. JPI$_LOGINTIM is a VMS
+ * quadword of 100-nanosecond units counted from that base. Public
+ * arithmetic (the epoch is documented, not reverse-engineered) --
+ * CLAUDE.md Rule 8.
+ */
+#define VMS_EPOCH_OFFSET_SEC   3506716800ULL
+#define VMS_TIME_UNITS_PER_SEC 10000000ULL   /* 100ns units */
+
+/*
+ * vms_proc_pin_task - the Linux task backing this PCB, with a reference
+ * taken so the caller can use it after dropping vms_proc_hash_lock.
+ *
+ * Caller MUST hold vms_proc_hash_lock. get_task_struct() does not sleep,
+ * so it is safe under the spinlock; the heavy, possibly-sleeping accounting
+ * read (fill_proc_acct's get_task_mm/mmput) is then done by the caller
+ * AFTER the lock is dropped, on the pinned task. Returns NULL if the
+ * backing task has already exited (put nothing).
+ */
+static struct task_struct *vms_proc_pin_task(const struct vms_proc *proc)
+{
+    struct task_struct *task;
+
+    if (!proc->pid_ref)
+        return NULL;
+
+    rcu_read_lock();
+    task = pid_task(proc->pid_ref, PIDTYPE_PID);
+    if (task)
+        get_task_struct(task);
+    rcu_read_unlock();
+
+    return task;
+}
+
+/*
+ * fill_proc_acct - source the accounting fields of one row from the real
+ * Linux task the executive owns (vms-a7e).
+ *
+ * CALLED AFTER vms_proc_hash_lock IS DROPPED, on a task pinned by
+ * vms_proc_pin_task(): get_task_mm()/mmput() below may sleep and must not
+ * run under the spinlock.
+ *
+ * WHY THIS IS NOT A FABRICATION, and where the line is (CLAUDE.md Rule 11,
+ * INV-6). CPU time, page faults and resident pages are REAL properties of
+ * a real process, measured by the kernel that ran it -- the identical
+ * argument the /proc-derived JPI$_CPUTIM already stood on (see jpi_cputim's
+ * header in src/libvms/syssvc/sys_process.c). What changes here is WHO
+ * reads them: the EXECUTIVE now holds them, sourced from the task its own
+ * process table pins by pid_ref, so a VMS command (SHOW SYSTEM) READS an
+ * executive facility instead of opening /proc itself as a second source.
+ * That is the specific defect docs/oracle/vax73-show-system-process.md §5.1
+ * left standing for Page flts/Pages ("/proc has a figure, but a VMS command
+ * is a reader of an executive facility, not a second source").
+ *
+ * CARRIED ON REDACTED ROWS TOO. This is called for every row the scan
+ * returns, redacted or not, because nothing in a SHOW SYSTEM row is
+ * privileged on VMS -- the oracle printed the whole accounting row for a
+ * cross-group process the caller could not $GETJPI (ibid. §1.2) -- and it
+ * sources from the pinned task, never from info->linux_pid (which
+ * redaction zeroes). That is what closes the divergence §1.2 recorded.
+ */
+static void fill_proc_acct(struct task_struct *task, struct vms_procinfo *info)
+{
+    u64 utime, stime;
+    unsigned long flts;
+    struct mm_struct *mm;
+    u64 created_boot_ns, now_boot_ns, wall_now_ns, created_wall_ns;
+    struct timespec64 now_wall;
+
+    /* JPI$_CPUTIM -- utime+stime in 10ms units, the quantity JPI$_CPUTIM
+     * counts. Read straight from the task's cputime fields (nanoseconds);
+     * no exported helper is used, so nothing here depends on a kernel
+     * symbol a module may not link against. For a single-threaded process
+     * (the DCL case) this is the whole-process figure; a multithreaded
+     * image under-counts its sibling threads' time, an honest approximation
+     * this comment states rather than hides. */
+    utime = task->utime;
+    stime = task->stime;
+    info->cputim = (uint32_t)((utime + stime) / 10000000ULL);   /* ns -> 10ms */
+    info->fields_valid |= VMS_PI_V_CPUTIM;
+
+    /* JPI$_PAGEFLTS -- soft + hard faults taken by this process. */
+    flts = task->min_flt + task->maj_flt;
+    info->pageflts = (uint32_t)flts;
+    info->fields_valid |= VMS_PI_V_PAGEFLTS;
+
+    /* JPI$_LOGINTIM -- process creation time as a VMS quadword. start_boottime
+     * is nanoseconds on the boot clock; convert to wall clock via the current
+     * boot/real pair, then to the VMS 100ns-since-1858 base. */
+    created_boot_ns = task->start_boottime;
+    now_boot_ns = ktime_get_boottime_ns();
+    ktime_get_real_ts64(&now_wall);
+    wall_now_ns = (u64)now_wall.tv_sec * NSEC_PER_SEC + now_wall.tv_nsec;
+    created_wall_ns = (now_boot_ns >= created_boot_ns)
+                        ? wall_now_ns - (now_boot_ns - created_boot_ns)
+                        : wall_now_ns;
+    info->logintim = created_wall_ns / 100ULL
+                   + VMS_EPOCH_OFFSET_SEC * VMS_TIME_UNITS_PER_SEC;
+    info->fields_valid |= VMS_PI_V_LOGINTIM;
+
+    /* JPI$_PPGCNT -- resident set size in pages. get_task_mm may sleep and
+     * returns NULL for a kernel thread (no user address space); a process
+     * with no mm reports no page count rather than a zero the reader could
+     * not tell from a measured one. */
+    mm = get_task_mm(task);
+    if (mm) {
+        info->pages = (uint32_t)get_mm_rss(mm);
+        info->fields_valid |= VMS_PI_V_PAGES;
+        mmput(mm);
+    }
+}
+
+/*
  * name_is_valid - reject malformed name strings from userspace.
  *
  * This is a trust-boundary check on an untrusted buffer AND the length
@@ -372,6 +491,7 @@ long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_getjpi_args args;
     struct vms_proc *target;
+    struct task_struct *acct_task;
 
     memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
@@ -419,7 +539,15 @@ long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg)
     }
 
     proc_fill_info(target, &args.info, true);
+    acct_task = vms_proc_pin_task(target);
     spin_unlock(&vms_proc_hash_lock);
+
+    /* Accounting is sourced from the pinned task AFTER the lock is dropped
+     * (fill_proc_acct may sleep). See its header. */
+    if (acct_task) {
+        fill_proc_acct(acct_task, &args.info);
+        put_task_struct(acct_task);
+    }
 
     args.status = SS__NORMAL;
 
@@ -699,6 +827,7 @@ long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_procscan_args args;
     struct vms_proc *cur, *target = NULL;
+    struct task_struct *acct_task;
     uint32_t ordinal = 0;
     int bkt;
 
@@ -725,7 +854,17 @@ long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg)
     }
 
     proc_fill_info(target, &args.info, vms_proc_may_read(proc, target));
+    acct_task = vms_proc_pin_task(target);
     spin_unlock(&vms_proc_hash_lock);
+
+    /* Accounting is carried on EVERY row -- redacted or not -- and sourced
+     * from the pinned task after the lock is dropped (fill_proc_acct may
+     * sleep). A SHOW SYSTEM row is not privileged on VMS; see fill_proc_acct
+     * and docs/oracle/vax73-show-system-process.md §1.2. */
+    if (acct_task) {
+        fill_proc_acct(acct_task, &args.info);
+        put_task_struct(acct_task);
+    }
 
     args.index++;
     args.status = SS__NORMAL;

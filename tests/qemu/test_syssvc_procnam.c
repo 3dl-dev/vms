@@ -1257,11 +1257,14 @@ static const char *row_for(const char *text, const char *name)
  * row_has_value_after_name - does anything but padding follow the process
  * name on this row?
  *
- * This is the redaction detector. SHOW SYSTEM prints a CPU figure after
- * the name column for a row it can source one for, and NOTHING for a row
- * the executive redacted -- no zero, no marker. So "is there a non-space
- * character after the name" is exactly the question, and it does not
- * depend on the column widths this item deliberately did not pin.
+ * SHOW SYSTEM prints accounting (CPU, Page flts, Pages) after the name
+ * column for EVERY row since vms-a7e -- the executive sources it from the
+ * task it pins and carries it on redacted rows too, because a SHOW SYSTEM
+ * row is not privileged on VMS (docs/oracle/vax73-show-system-process.md
+ * §1.2). So "is there a non-space character after the name" now confirms a
+ * row carries a value, for readable and unreadable rows alike; the
+ * discriminator for a REAL figure versus a fabricated zero is
+ * row_cpu_is_nonzero() below.
  */
 static int row_has_value_after_name(const char *row, const char *name)
 {
@@ -1270,6 +1273,28 @@ static int row_has_value_after_name(const char *row, const char *name)
     for (; *p && *p != '\n'; p++)
         if (*p != ' ' && *p != '\r')
             return 1;
+    return 0;
+}
+
+/*
+ * row_cpu_is_nonzero - is the CPU field of this row a non-zero figure?
+ *
+ * The CPU field is the 16 columns 25-40 ("%4d %02d:%02d:%02d.%02d"). A
+ * process that has burned CPU shows a digit 1-9 somewhere in it; the zero
+ * rendering "   0 00:00:00.00" has only '0' digits. This is what separates
+ * a REAL executive-sourced figure from the fabricated "0 00:00:00.00" the
+ * pre-vms-a7e display printed for a row it could not source -- a fabricated
+ * zero would pass row_has_value_after_name but fails here.
+ */
+static int row_cpu_is_nonzero(const char *row)
+{
+    for (int c = 25; c <= 40; c++) {
+        char ch = row[c];
+        if (ch == '\0' || ch == '\n')
+            break;
+        if (ch >= '1' && ch <= '9')
+            return 1;
+    }
     return 0;
 }
 
@@ -1768,30 +1793,35 @@ int main(void)
     /* ---------------------------------------------------------------
      * P12. SHOW SYSTEM RUN BY A CALLER THAT MAY NOT READ EVERY ROW.
      *
-     * WHY THIS BLOCK EXISTS. src/kernel/vms_proctab.c redacts any row
-     * the caller may not $GETJPI -- a process in another UIC group when
-     * the caller has no WORLD privilege -- zeroing linux_pid, uic, the
-     * privilege masks and the user name while KEEPING the process ID and
-     * the process name, because on the oracle enumeration is unprivileged
-     * and identity is not. Nothing had ever executed that path: every
-     * process in this rig is uid 0 / gid 0 with CAP_SYS_ADMIN, so
-     * vms_proc_may_read() always returned true.
+     * WHY THIS BLOCK EXISTS. src/kernel/vms_proctab.c redacts the IDENTITY
+     * of any row the caller may not $GETJPI -- a process in another UIC
+     * group when the caller has no WORLD privilege -- zeroing linux_pid,
+     * uic, the privilege masks and the user name while KEEPING the process
+     * ID and the process name, because on the oracle enumeration is
+     * unprivileged and identity is not.
      *
-     * That gap shipped a defect. src/vmsdcl/dcl_cmd_show.c fed the
-     * redacted (zero) linux_pid to /proc, ignored the failure, and
-     * printed the caller's own buffer initialiser -- so a process whose
-     * accounting the caller is FORBIDDEN to read displayed a concrete
-     * "0 00:00:00.00". A fabricated accounting value, inside the very
-     * function this item converted.
+     * ACCOUNTING IS NOT IDENTITY, AND THIS IS WHAT vms-a7e FIXED. The oracle
+     * printed the WHOLE accounting row -- State, Pri, I/O, CPU, Page flts,
+     * Pages -- for a cross-group process the same caller could not $GETJPI a
+     * single item from (docs/oracle/vax73-show-system-process.md §1.2):
+     * NOTHING in a SHOW SYSTEM row is privileged on VMS. OVMX used to
+     * diverge -- the executive zeroed linux_pid on a redacted row and the
+     * DCL layer, having no pid to source CPU from, printed the caller's own
+     * buffer initialiser "0 00:00:00.00" (a fabricated value). vms-a7e
+     * closes it in the executive: vms_ioctl_procscan sources CPU/Page-flts/
+     * Pages from the task it pins by pid_ref (fill_proc_acct), independent
+     * of the redacted linux_pid, so a cross-group row now carries its OWN
+     * REAL accounting -- exactly what §1.2 measured.
      *
      * THE ARRANGEMENT, and why each piece is load-bearing:
      *   XGRP  -- named, in UIC group 302, has burned REAL CPU.
      *   SHOW  -- runs the real DCL.EXE, in UIC group 301, with WORLD
      *            DROPPED, so the executive refuses it XGRP's identity.
-     * The two rows in one output are the discriminator: SHOW's OWN row
-     * must carry a CPU figure (it may read itself), and XGRP's must
-     * carry NOTHING. A test that looked only at the redacted row could
-     * be satisfied by SHOW SYSTEM never printing CPU at all.
+     * The discriminator is now that XGRP's row carries a NON-ZERO CPU figure
+     * (its own burned CPU, sourced by the executive) even though its
+     * identity is redacted -- proving accounting rides through redaction and
+     * is real, not the fabricated zero the old path printed. SHOW's own row
+     * is the control: a row the caller may fully read also carries CPU.
      * --------------------------------------------------------------- */
     int xcmd[2] = { -1, -1 }, xrep[2] = { -1, -1 };
     pid_t xproc = -1;
@@ -1840,11 +1870,18 @@ int main(void)
                 CHECK(srow != NULL &&
                       row_has_value_after_name(srow, SHOW_NAME),
                       "the readable row carries a CPU figure");
-                /* The detector: a row it may NOT read carries none. */
-                /* negctl-knockon: proctab-crossgroup-identity */
+                /* The detector, FLIPPED by vms-a7e: a row whose IDENTITY the
+                 * caller may not read STILL carries its own real accounting,
+                 * because accounting is not privileged on VMS (oracle §1.2).
+                 * XGRP burned real CPU, so its executive-sourced figure is
+                 * NON-ZERO -- which a fabricated "0 00:00:00.00" is not. */
+                /* negctl-knockon: proc-acct-not-sourced */
                 CHECK(xrow != NULL &&
-                      !row_has_value_after_name(xrow, XGRP_NAME),
-                      "the UNREADABLE row fabricates NO CPU figure at all");
+                      row_has_value_after_name(xrow, XGRP_NAME) &&
+                      row_cpu_is_nonzero(xrow),
+                      "the UNREADABLE row carries XGRP's own REAL (non-zero) "
+                      "CPU figure -- accounting rides through identity "
+                      "redaction, matching the oracle, not a fabricated zero");
             }
         }
 

@@ -908,6 +908,72 @@ _Static_assert(VMS_IOCTL_DISK_RESOLVE == 0xC0305657u,
  */
 #define VMS_USERNAME_SIZE 32
 
+/*
+ * The per-process QUOTA BLOCK (vms-a7e) -- the VMS Job Information Block
+ * (JIB) limits SHOW PROCESS/QUOTAS, SHOW QUOTA and F$GETJPI report. The
+ * field set and its F$GETJPI item codes are from the PUBLIC OpenVMS System
+ * Services Reference ($GETJPI item-code table) and the DCL Dictionary
+ * (SHOW PROCESS/QUOTAS), CLAUDE.md Rule 8 -- never disassembled. Each
+ * longword is named for the item that reports it:
+ *
+ *   astlm     JPI$_ASTLM       AST limit
+ *   biolm     JPI$_BIOLM       buffered I/O limit
+ *   bytlm     JPI$_BYTLM       buffered I/O byte-count quota (BYTLM)
+ *   diolm     JPI$_DIOLM       direct I/O limit
+ *   enqlm     JPI$_ENQLM       enqueue (lock) quota
+ *   fillm     JPI$_FILLM       open file limit
+ *   pgflquota JPI$_PGFLQUOTA   paging file quota
+ *   prclm     JPI$_PRCLM       subprocess quota
+ *   tqelm     JPI$_TQLM        timer queue entry quota
+ *   wsdefault JPI$_WSDEFAULT   default working set size
+ *   wsquota   JPI$_WSQUOTA     working set quota
+ *   wsextent  JPI$_WSEXTENT    working set extent
+ *
+ * SOURCE STATUS, STATED NOT IMPLIED (CLAUDE.md Rule 10, INV-6): OVMX has
+ * no quota/JIB facility yet -- SYSUAF (src/libvms/include/sysuaf.h) carries
+ * username/uic/flags/priv and NOTHING quota-shaped, and the executive
+ * charges nothing against a limit. So every field here is STRUCTURAL: the
+ * data model the follow-ups (SHOW QUOTA vms-9d4, SHOW PROCESS/QUOTAS) need
+ * a slot in, carried with VMS_PI_V_QUOTA CLEAR so a reader never mistakes a
+ * zero for a measured limit. Filling it faithfully is a quota-system build
+ * (a SYSUAF quota extension + executive charging), tracked separately --
+ * NOT fabricated here, exactly as SHOW SYSTEM's absent columns were left
+ * absent rather than invented (docs/oracle/vax73-show-system-process.md §5).
+ */
+struct vms_jib_quota {
+    uint32_t astlm;
+    uint32_t biolm;
+    uint32_t bytlm;
+    uint32_t diolm;
+    uint32_t enqlm;
+    uint32_t fillm;
+    uint32_t pgflquota;
+    uint32_t prclm;
+    uint32_t tqelm;
+    uint32_t wsdefault;
+    uint32_t wsquota;
+    uint32_t wsextent;
+};
+
+/*
+ * fields_valid bits (vms-a7e). A reader MUST test the bit before using the
+ * matching field, the same discipline as `redacted` and $GETJPI's return
+ * length: an unsourced accounting/quota field is not distinguishable from a
+ * genuine zero by its value, so the executive says which it is. A field
+ * whose bit is CLEAR carries no measured value and must be displayed as
+ * absent, never as zero (the fabrication class vms-8019/vms-6a7 deleted).
+ */
+#define VMS_PI_V_CPUTIM     0x00000001u  /* cputim is sourced */
+#define VMS_PI_V_PAGEFLTS   0x00000002u  /* pageflts is sourced */
+#define VMS_PI_V_PAGES      0x00000004u  /* pages (resident) is sourced */
+#define VMS_PI_V_LOGINTIM   0x00000008u  /* logintim is sourced */
+#define VMS_PI_V_STATE      0x00000010u  /* sched_state is sourced */
+#define VMS_PI_V_PRI        0x00000020u  /* cur_pri is sourced */
+#define VMS_PI_V_PRIB       0x00000040u  /* base_pri is sourced */
+#define VMS_PI_V_DIRIO      0x00000080u  /* dirio is sourced */
+#define VMS_PI_V_BUFIO      0x00000100u  /* bufio is sourced */
+#define VMS_PI_V_QUOTA      0x00000200u  /* quota block is sourced */
+
 struct vms_procinfo {
     uint32_t vms_pid;                   /* VMS-style process ID */
     uint32_t linux_pid;                 /* Linux pid backing the process */
@@ -1029,6 +1095,61 @@ struct vms_procinfo {
      */
     uint64_t p1_base;
     uint64_t p1_limit;
+
+    /*
+     * SCHEDULING, ACCOUNTING, QUOTA (vms-a7e) -- the executive row the
+     * SHOW/SET parity tree (vms-8ad) reads. Field names carry their
+     * F$GETJPI item codes from the PUBLIC OpenVMS System Services Reference
+     * ($GETJPI item-code table), CLAUDE.md Rule 8. Two source classes,
+     * and the split is the whole point of fields_valid:
+     *
+     *  SOURCED, a REAL property of the real Linux task the executive owns,
+     *  measured in-kernel from proc->pid_ref (vms_proctab.c) -- the SAME
+     *  justification the /proc-derived JPI$_CPUTIM already carried
+     *  (src/libvms/syssvc/sys_process.c jpi_cputim's header), now moved
+     *  INTO the executive so a VMS command READS a facility instead of
+     *  being a second source (CLAUDE.md Rule 11):
+     *     cputim   JPI$_CPUTIM    utime+stime, 10ms units
+     *     pageflts JPI$_PAGEFLTS  min_flt + maj_flt
+     *     pages    JPI$_PPGCNT    resident set size, in pages
+     *     logintim JPI$_LOGINTIM  process creation time, VMS quadword
+     *  These are carried on EVERY row including a redacted one, because a
+     *  SHOW SYSTEM row is NOT privileged on VMS -- the oracle printed
+     *  State/Pri/I/O/CPU/Page-flts/Pages for a cross-group process the same
+     *  caller could not $GETJPI a single item from (docs/oracle/
+     *  vax73-show-system-process.md §1.2). They are read from the
+     *  executive's OWN pid_ref, not from linux_pid (which redaction
+     *  zeroes), which is what lets a redacted row still show real
+     *  accounting and closes the divergence §1.2 recorded.
+     *
+     *  STRUCTURAL, no faithful OVMX source yet, carried with the valid bit
+     *  CLEAR so a reader shows them absent rather than as a fabricated
+     *  value:
+     *     sched_state JPI$_STATE  -- OVMX has no VMS scheduler; mapping a
+     *                    Linux task state onto CUR/COM/LEF/HIB is the
+     *                    "unpinned invention" §5.1 refused.
+     *     base_pri    JPI$_PRIB   } OVMX has no VMS priority. Base priority
+     *     cur_pri     JPI$_PRI    } is a SYSUAF attribute VMS's UAF carries
+     *                    and OVMX's does not (yet); current priority is a
+     *                    scheduler-derived value with no OVMX scheduler.
+     *     dirio       JPI$_DIRIO  } Linux has no VMS direct/buffered I/O
+     *     bufio       JPI$_BUFIO  } split; a syscall count wearing this
+     *                    heading would be a mislabel (the fabrication class).
+     *     quota       (see struct vms_jib_quota) -- no quota facility.
+     */
+    uint32_t fields_valid;   /* VMS_PI_V_* bitmask over the fields below */
+    uint8_t  sched_state;    /* JPI$_STATE  (structural) */
+    uint8_t  base_pri;       /* JPI$_PRIB   (structural) */
+    uint8_t  cur_pri;        /* JPI$_PRI    (structural) */
+    uint8_t  acct_pad;       /* keep the longwords below 4-aligned */
+    uint32_t dirio;          /* JPI$_DIRIO  (structural) */
+    uint32_t bufio;          /* JPI$_BUFIO  (structural) */
+    uint32_t pageflts;       /* JPI$_PAGEFLTS (sourced) */
+    uint32_t pages;          /* JPI$_PPGCNT   (sourced) */
+    uint32_t cputim;         /* JPI$_CPUTIM, 10ms units (sourced) */
+    uint32_t quad_pad;       /* keep logintim 8-aligned */
+    uint64_t logintim;       /* JPI$_LOGINTIM, VMS quadword (sourced) */
+    struct vms_jib_quota quota;  /* (structural) */
 };
 
 /*
@@ -1291,13 +1412,13 @@ struct vms_setterm_args {
  * and with them the GETJPI and PROCSCAN request numbers a third time.
  * Same discipline, same reason.
  */
-_Static_assert(sizeof(struct vms_procinfo) == 128,
+_Static_assert(sizeof(struct vms_procinfo) == 216,
                "vms_procinfo layout changed: process-table ioctl ABI break");
 _Static_assert(sizeof(struct vms_setprn_args) == 72,
                "vms_setprn_args layout changed: VMS_IOCTL_SETPRN ABI break");
-_Static_assert(sizeof(struct vms_getjpi_args) == 200,
+_Static_assert(sizeof(struct vms_getjpi_args) == 288,
                "vms_getjpi_args layout changed: VMS_IOCTL_GETJPI ABI break");
-_Static_assert(sizeof(struct vms_procscan_args) == 136,
+_Static_assert(sizeof(struct vms_procscan_args) == 224,
                "vms_procscan_args layout changed: VMS_IOCTL_PROCSCAN ABI break");
 _Static_assert(sizeof(struct vms_setterm_args) == 8,
                "vms_setterm_args layout changed: VMS_IOCTL_SETTERM ABI break");
@@ -1317,9 +1438,9 @@ _Static_assert(VMS_PRCNAM_XFER > VMS_PRCNAM_SIZE,
                "VMS_PRCNAM_XFER must exceed VMS_PRCNAM_SIZE or oversized names get truncated into valid ones");
 _Static_assert(VMS_IOCTL_SETPRN == 0xC0485641u,
                "VMS_IOCTL_SETPRN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_GETJPI == 0xC0C85642u,
+_Static_assert(VMS_IOCTL_GETJPI == 0xC1205642u,
                "VMS_IOCTL_GETJPI encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_PROCSCAN == 0xC0885643u,
+_Static_assert(VMS_IOCTL_PROCSCAN == 0xC0E05643u,
                "VMS_IOCTL_PROCSCAN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_SETIDENT == 0xC0305644u,
                "VMS_IOCTL_SETIDENT encodes differently here than on the reference build");

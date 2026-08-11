@@ -727,3 +727,34 @@ then breaks when op 0x02 rides past the `recv_ack` ceiling. Classifier logic UNC
 (`joiner_cfg2_sent && cm_responses==0`), kill-switch `OVMX_NO_READMITMAP` unchanged, fail-pre/pass-post
 case in `tests/vmsscs/test_scsd_wire.c`, byte-unchanged on the wire. Still a non-admission (never
 `ADMITTED`; INV-6). *VAXcluster Principles* pp. 2-43/2-44/2-45/7-37/7-40/7-46.
+
+
+## 11. The §10 fix IMPLEMENTED — op 0x02 now rides ≤18 and is DELIVERED, but the frontier relocates to returning-identity non-admission (`vms-3aba`, spec §4(O.27))
+
+§10 (`vms-c40`) named the next increment: make lean-VC / credit-first engage BEFORE op 0x02 on
+the member-initiated connection so op 0x02 rides UNDER the coordinator's `recv_ack` ceiling of 18.
+`vms-3aba` ships it and brackets it live. Full record: `docs/cluster-protocol-spec.md` §4(O.27).
+
+**The fix.** `cm_peer_is_coordinator()`'s `lower_peer_seen` guard could not identify an
+appears-first coordinator (higher node, START completes before the non-coordinator's), so the
+`vms-9af` suppression fired ~1.3 s too late and OVMX's own dir/MSCP client half bloated the
+coordinator's VC. `cm_rejoin_lean_early_hold()` now HOLDS own-dir on a coordinator CANDIDATE
+(`cm_peer_coord_pending()` — top node, no lower peer yet) for a bounded settle window
+(`LEAN_COORD_SETTLE_MS`), so the non-coordinator appears and suppression engages BEFORE op 0x02.
+Kill-switch `OVMX_REJOIN_LEAN_EARLY=0`; added at both own-dir initiation sites.
+
+**Live result (virgin `vaxlab-0`, identity `OVX3A0`, no `OVMX_CFG2_PEER`).** The daemon emits
+`LEANHOLD → CREDITFIRST → CMCONFIG2 (MEMBER-initiated, send_msg=3) → LEANVC` in order; op 0x02
+rides `send_seq` 2/8/17 (all ≤18, vs §10's 21/22) and the coordinator's `recv_ack` advances to 13
+PAST it — op 0x02 is DELIVERED, and the op6/op7/op8/op9 credit exchange completes. **The §10
+send_seq-ceiling gate is CLOSED.** Yet `XITDONE=0`: `cm_responses=0`, and the coordinator console
+prints only `lost connection` for the return, never `received membership request` / `proposing
+addition` (it prints both for the SAME identity's first join).
+
+**The frontier relocates BACK to §2.2 / §6 / §7.4 / §8 — returning-identity non-admission.** §10's
+ceiling was a real intervening gate stacked on the deeper one; closing it returns the frontier to
+where §7.4 and §8 left it: the coordinator receives a clean, delivered, credited op 0x02 for an
+identity it has held before and runs ZERO CM JOIN handshakes / never proposes the addition, though
+it admits a FRESH identity through the identical path. The next isolation is that CM-layer gate,
+now with the wire delivery PROVABLY clean (op 0x02 delivered, `recv_ack` past it, credit flowing) —
+a confound §4 through §10 could never fully remove.

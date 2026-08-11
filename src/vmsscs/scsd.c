@@ -11373,6 +11373,55 @@ static void scsd_shutdown_teardown(struct scsd_rx *rx, uint8_t *buf, size_t bufs
 }
 
 /*
+ * vms-f61 (spec §4(O.21)): the READMISSION MAP verdict.
+ *
+ * Grounded against the SUCCESS oracle's per-member JOIN handshake
+ * (docs/design-rejoin-cm-state-map.md §4.1, Davis pp. 7-37/7-39/7-41/7-42): a
+ * member ADMITS a (re)joining node by opening its OWN VMS$VAXcluster connection
+ * toward the joiner and driving op00 -> (joiner op02) -> op03 COMMIT on it, after
+ * which the members reconcile membership among themselves (op0c). To OVMX this is
+ * visible as cm_responses>0 on that member and the membership latch reaching OPEN.
+ *
+ * The rejoin frontier (§4(O.20), re-grounded by vms-f61) is that on a RETURNING
+ * identity the members run ZERO of these per-member handshakes: cm_responses==0
+ * with the VC/channel/directory all up. This verdict names that state per member
+ * so the next isolation is one log line, not a pcap dig. It is a PURE READ of
+ * already-tracked per-peer fields -- it changes nothing on the wire (guard 8).
+ */
+enum readmit_verdict {
+    READMIT_NO_CHANNEL,   /* never reached transport with this peer */
+    READMIT_NO_ENGAGE,    /* VC/channel/dir up, but member sent ZERO CM responses:
+                           * the returning-identity non-admission (§4(O.21)) */
+    READMIT_ENGAGED_NC,   /* member sent CM responses but membership not latched */
+    READMIT_ADMITTED,     /* member ran the JOIN handshake and OVMX latched membership */
+};
+
+static enum readmit_verdict readmit_verdict_of(const struct peer_state *ps)
+{
+    if (ps == NULL || ps->pb == NULL || !ps->channel_up) {
+        return READMIT_NO_CHANNEL;
+    }
+    if (ps->vaxcluster_open_reached) {
+        return READMIT_ADMITTED;
+    }
+    if (ps->cm_responses > 0) {
+        return READMIT_ENGAGED_NC;
+    }
+    return READMIT_NO_ENGAGE;
+}
+
+static const char *readmit_verdict_name(enum readmit_verdict v)
+{
+    switch (v) {
+    case READMIT_NO_CHANNEL: return "NO-CHANNEL(never reached transport)";
+    case READMIT_NO_ENGAGE:  return "NO-ENGAGE(member sent 0 CM responses -- returning-id non-admission, spec 4(O.21))";
+    case READMIT_ENGAGED_NC: return "ENGAGED-NOT-LATCHED(CM responses seen, membership not OPEN)";
+    case READMIT_ADMITTED:   return "ADMITTED(member ran JOIN handshake, membership OPEN)";
+    default:                 return "?";
+    }
+}
+
+/*
  * scsd_exit_summary - the end-of-run report, including the vms-dd5 connection
  * state-machine accounting and the stuck-connection scan.
  */
@@ -11621,6 +11670,57 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                     rx->peers[i].cdt_joiner
                         ? scs_conn_state_name(scs_conn_state_of(rx->peers[i].cdt_joiner))
                         : "untracked");
+        }
+
+        /* vms-f61 (spec §4(O.21)): the READMISSION MAP. Log-only; silence with
+         * OVMX_NO_READMITMAP=1. Grounded verdict per member (readmit_verdict_of),
+         * plus the incarnation OVMX presented this run -- the fresh-per-boot
+         * [66:74] quadword (ovmx_incarnation_time(), scs_start.c) that should make
+         * a returning identity look NEW to each member (Davis p. 7-24 DEAD ->
+         * p. 7-25 fresh CSB). A run where every reached member reads NO-ENGAGE is
+         * the returning-identity non-admission frontier. */
+        if (getenv("OVMX_NO_READMITMAP") == NULL) {
+            unsigned long long incn = (unsigned long long)ovmx_incarnation_time();
+            int reached = 0, admitted = 0, engaged = 0, no_engage = 0;
+            for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+                if (rx->peers[i].pb == NULL) {
+                    continue;
+                }
+                const uint8_t *pa = rx->peers[i].pb->remote_port_addr;
+                enum readmit_verdict v = readmit_verdict_of(&rx->peers[i]);
+                if (v != READMIT_NO_CHANNEL) {
+                    reached++;
+                }
+                if (v == READMIT_ADMITTED) {
+                    admitted++;
+                } else if (v == READMIT_ENGAGED_NC) {
+                    engaged++;
+                } else if (v == READMIT_NO_ENGAGE) {
+                    no_engage++;
+                }
+                fprintf(out,
+                        "  READMITMAP peer %02x:%02x:%02x:%02x:%02x:%02x"
+                        " cm_responses=%ld member_vc=%s verdict=%s\n",
+                        pa[0], pa[1], pa[2], pa[3], pa[4], pa[5],
+                        rx->peers[i].cm_responses,
+                        rx->peers[i].cdt_member
+                            ? scs_conn_state_name(scs_conn_state_of(rx->peers[i].cdt_member))
+                            : "untracked",
+                        readmit_verdict_name(v));
+            }
+            fprintf(out,
+                    "  READMITMAP-SUMMARY incarnation_presented=0x%016llx%s"
+                    " members_reached=%d admitted=%d engaged=%d no_engage=%d --"
+                    " %s (spec 4(O.21), docs/design-rejoin-cm-state-map.md)\n",
+                    incn, incn ? "(live)" : "(frozen/template)",
+                    reached, admitted, engaged, no_engage,
+                    (reached > 0 && admitted == 0 && no_engage == reached)
+                        ? "RETURNING-IDENTITY NON-ADMISSION: every reached member ran"
+                          " ZERO per-member JOIN handshakes -- the members do not"
+                          " engage the CM JOIN for this returning identity"
+                        : (admitted == reached && reached > 0)
+                          ? "all reached members admitted"
+                          : "mixed/partial -- see per-peer verdicts");
         }
     }
 }

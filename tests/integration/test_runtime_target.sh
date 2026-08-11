@@ -667,13 +667,15 @@ else
     status=1
 fi
 
-# --- 4. Rule 9 must still be in CLAUDE.md ------------------------------
-# The gate enforces the mechanics; CLAUDE.md carries the reasoning. If the
-# rule is deleted, the gate is cargo cult -- fail loudly rather than drift.
-if grep -q "One runtime target: the kernel/QEMU path" "$SRC_ROOT/CLAUDE.md" 2>/dev/null; then
-    echo "  OK: CLAUDE.md still carries Rule 9"
+# --- 4. Rule 9 must still be written down ------------------------------
+# The gate enforces the mechanics; docs/runtime-target.md carries the
+# reasoning. (It used to live in CLAUDE.md; that internal ops file was removed
+# from the public repo, so the canonical statement moved to docs/.) If the rule
+# is deleted, the gate is cargo cult -- fail loudly rather than drift.
+if grep -q "One runtime target: the kernel/QEMU path" "$SRC_ROOT/docs/runtime-target.md" 2>/dev/null; then
+    echo "  OK: docs/runtime-target.md still carries Rule 9"
 else
-    echo "FAIL: CLAUDE.md no longer carries Rule 9 (one runtime target)"
+    echo "FAIL: docs/runtime-target.md no longer carries Rule 9 (one runtime target)"
     echo "  -> this gate enforces a rule that must stay written down."
     status=1
 fi

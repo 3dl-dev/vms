@@ -429,3 +429,51 @@ uint32_t lnm_translate_values(lnm_manager_t *mgr, const char *table_name,
         *attributes = entry->attributes;
     return SS$_NORMAL;
 }
+
+/*
+ * lnm_translate_searchlist - all equivalence strings for a name, resolved in
+ * the LNM$FILE_DEV table search order. See the header for the contract.
+ *
+ * This is lnm_translate()'s search-list branch generalised to return every
+ * value of the first matching table, reusing lnm_translate_values() per
+ * table so both share one arena-read implementation. The first table that
+ * has the name wins outright -- VMS does not merge equivalence lists across
+ * tables, so neither do we (a PROCESS-table definition SHADOWS a SYSTEM one
+ * of the same name completely, not element-wise).
+ */
+uint32_t lnm_translate_searchlist(lnm_manager_t *mgr, const char *logical_name,
+                                  char values[][LNM_MAX_VALUE + 1],
+                                  uint8_t max_values, uint8_t *num_values,
+                                  uint32_t *attributes)
+{
+    if (num_values)
+        *num_values = 0;
+
+    if (!mgr || !logical_name || !values || max_values == 0)
+        return SS$_BADPARAM;
+
+    static const char *order[] = {
+        LNM_PROCESS_TABLE, LNM_JOB_TABLE, LNM_GROUP_TABLE, LNM_SYSTEM_TABLE
+    };
+
+    for (size_t i = 0; i < sizeof(order) / sizeof(order[0]); i++) {
+        uint8_t n = 0;
+        uint32_t st = lnm_translate_values(mgr, order[i], logical_name,
+                                           values, max_values, &n, attributes);
+        if (st == SS$_NORMAL) {
+            if (num_values)
+                *num_values = n;
+            return SS$_NORMAL;
+        }
+        /*
+         * SS$_NOSUCHDEV means an executive table had to be read but /dev/vms
+         * is unreachable -- report it honestly rather than silently skipping
+         * to a table that would fail identically (INV-6). SS$_NOLOGNAM /
+         * SS$_NOLOGTAB just mean "not here": fall through to the next table.
+         */
+        if (st == SS$_NOSUCHDEV)
+            return SS$_NOSUCHDEV;
+    }
+
+    return SS$_NOLOGNAM;
+}

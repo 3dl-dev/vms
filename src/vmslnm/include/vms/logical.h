@@ -130,6 +130,33 @@ uint32_t lnm_translate_values(lnm_manager_t *mgr, const char *table_name,
                                uint8_t max_values, uint8_t *num_values,
                                uint32_t *attributes);
 
+/*
+ * lnm_translate_searchlist - fetch ALL equivalence strings for `logical_name`
+ * using the LNM$FILE_DEV search order (LNM$PROCESS_TABLE, then the
+ * executive-resident LNM$JOB, LNM$GROUP, LNM$SYSTEM). The FIRST table that
+ * contains the name supplies EVERY one of its equivalence strings, in order
+ * -- this is the multi-value counterpart of lnm_translate()'s search-list
+ * branch (which returns only that first table's index-0 value). It is what a
+ * filespec's device-position search list resolves through: RMS $OPEN/$SEARCH
+ * try each returned equivalence in turn until one names an existing file
+ * (VMS I/O User's Reference Manual, "Logical Name Search Lists"; DCL
+ * Dictionary, DEFINE).
+ *
+ * Fills up to `max_values` entries into `values[]` (each NUL-terminated) and
+ * sets *num_values to the winning table's count, capped at `max_values`.
+ * *attributes, if non-NULL, receives that entry's attributes.
+ *
+ * Returns SS$_NORMAL if the name resolves in some table, SS$_NOLOGNAM if it is
+ * absent from all of them, or SS$_NOSUCHDEV if an executive table must be read
+ * but /dev/vms is unavailable (CLAUDE.md Rule 9 / INV-6 -- no per-process
+ * fallback). Unlike lnm_translate_values(), this accepts NO table argument:
+ * the search order is the whole point.
+ */
+uint32_t lnm_translate_searchlist(lnm_manager_t *mgr, const char *logical_name,
+                                  char values[][LNM_MAX_VALUE + 1],
+                                  uint8_t max_values, uint8_t *num_values,
+                                  uint32_t *attributes);
+
 /* Enumeration callback */
 typedef int (*lnm_enum_callback_t)(const char *name, const lnm_entry_t *entry, void *ctx);
 uint32_t lnm_enumerate(lnm_manager_t *mgr, const char *table_name,

@@ -49,6 +49,9 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "vms/logical.h"
+#include "starlet.h"
+#include "descrip.h"
+#include "lnmdef.h"
 
 #define EXIT_SKIP 77
 #define PEER_TIMEOUT_MS 20000
@@ -163,6 +166,54 @@ static int run_child(int c2p_write, int p2c_read)
                est, ep.found, ep.values_ok);
         CHECK(est == SS$_NORMAL && ep.found && ep.values_ok,
               "child: SHOW LOGICAL's enumerate path lists BOTH equivalence strings for the parent's SYSTEM search list");
+
+        /*
+         * sys$trnlnm -- the PROGRAM-VISIBLE service (what VMS software calls
+         * to walk a search list, e.g. the C RTL over DECC$LIBRARY_INCLUDE).
+         * vms-b12: it must report the REAL LNM$_MAX_INDEX and honor an input
+         * LNM$_INDEX. Before the fix it hardwired LNM$_MAX_INDEX=0 and read
+         * only index 0, so every search list looked single-valued to a
+         * program even though the executive stored both values.
+         */
+        {
+            $DESCRIPTOR(tab, LNM_SYSTEM_TABLE);
+            $DESCRIPTOR(log, TEST_NAME);
+            char sbuf[LNM_MAX_VALUE + 1];
+            uint16_t slen;
+
+            uint32_t maxidx = 0xFFFFFFFFu;
+            struct item_list_3 ml[] = {
+                { (uint16_t)sizeof(maxidx), LNM$_MAX_INDEX, &maxidx, NULL },
+                { 0, 0, NULL, NULL }
+            };
+            uint32_t mst = sys$trnlnm(NULL, &tab, &log, NULL, ml);
+            CHECK(mst == SS$_NORMAL && maxidx == 1,
+                  "child: sys$trnlnm reports the REAL LNM$_MAX_INDEX=1 for a 2-member SYSTEM search list (was hardwired 0, vms-b12)");
+
+            uint32_t idx = 0;
+            slen = 0; sbuf[0] = '\0';
+            struct item_list_3 il0[] = {
+                { (uint16_t)sizeof(idx), LNM$_INDEX, &idx, NULL },
+                { (uint16_t)(sizeof(sbuf) - 1), LNM$_STRING, sbuf, &slen },
+                { 0, 0, NULL, NULL }
+            };
+            uint32_t s0 = sys$trnlnm(NULL, &tab, &log, NULL, il0);
+            sbuf[slen < sizeof(sbuf) ? slen : sizeof(sbuf) - 1] = '\0';
+            CHECK(s0 == SS$_NORMAL && strcmp(sbuf, TEST_VAL0) == 0,
+                  "child: sys$trnlnm LNM$_INDEX=0 returns the FIRST equivalence");
+
+            idx = 1;
+            slen = 0; sbuf[0] = '\0';
+            struct item_list_3 il1[] = {
+                { (uint16_t)sizeof(idx), LNM$_INDEX, &idx, NULL },
+                { (uint16_t)(sizeof(sbuf) - 1), LNM$_STRING, sbuf, &slen },
+                { 0, 0, NULL, NULL }
+            };
+            uint32_t s1 = sys$trnlnm(NULL, &tab, &log, NULL, il1);
+            sbuf[slen < sizeof(sbuf) ? slen : sizeof(sbuf) - 1] = '\0';
+            CHECK(s1 == SS$_NORMAL && strcmp(sbuf, TEST_VAL1) == 0,
+                  "child: sys$trnlnm LNM$_INDEX=1 returns the SECOND equivalence (previously unreachable, vms-b12)");
+        }
     }
 
     struct child_msg msg;

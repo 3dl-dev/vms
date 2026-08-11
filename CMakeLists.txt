@@ -338,6 +338,19 @@ if(BUILD_TESTS)
     set_tests_properties(publish_release_gate PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
+    # vms-644b: gate for tools/gen_release_notes.py's previous-release-tag
+    # detection. Builds a throwaway git repo with two release tags and proves
+    # that cutting the NEWER tag by name (--ref <tag>, the release.yml tag-push
+    # publish path) spans <prev-tag>..<tag> and lists the commits between them
+    # -- NOT the empty <tag>..<tag> range that shipped zero-commit notes. Its
+    # negative control asserts the empty-range regression cannot reappear. Pure
+    # shell + git; no docker, no QEMU, no network.
+    add_test(NAME gen_release_notes_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_gen_release_notes.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(gen_release_notes_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
     # vms-791 (0.4 installer Tier-0): the VMSFS media-mastering tool must
     # produce an image that reads back byte-exact. Masters a synthetic tree
     # (subdirs, a >5-entry directory, a multi-block file, a binary file, an

@@ -1400,7 +1400,49 @@ static int lex_getsyi(struct dcl_context *ctx, const char *args,
 }
 
 /*
- * F$GETJPI(pid, item) - Get process information.
+ * F$GETJPI(pid, item) - Get process information from the executive.
+ *
+ * HONORS ITS pid ARGUMENT (vms-9e2). Until this change the pid argument
+ * was parsed and DISCARDED: USERNAME came from ctx->username, PRCNAM from
+ * ctx->process_name, PID from getpid(). So F$GETJPI("OTHERPROC","PID")
+ * confidently returned the CALLER's PID -- a fabricated answer about a
+ * different process (CLAUDE.md Rule 11), which also left F$GETJPI
+ * disagreeing with SHOW SYSTEM / SHOW PROCESS, both of which already read
+ * the executive (vms-8019 / vms-70eb). Two identity surfaces, one process,
+ * different answers -- the exact drift the parity program exists to kill.
+ *
+ * The target is now resolved in the executive -- the SAME source
+ * sys$getjpi (src/libvms/syssvc/sys_process.c) and SHOW PROCESS
+ * (src/vmsdcl/dcl_cmd_show.c) read -- and every item is answered FROM that
+ * row:
+ *   - a null pid ("", the DCL Dictionary's documented "current process"
+ *     form) -> vms_kif_getjpi_self(): the caller's OWN executive row, not
+ *     ctx. This is the same live read SHOW PROCESS uses, so the two agree
+ *     by construction rather than by a cached copy that can desynchronise.
+ *   - otherwise the pid is a HEXADECIMAL string (the format the DCL
+ *     Dictionary documents and F$PID / SHOW SYSTEM print) ->
+ *     vms_kif_getjpi_pid(): the executive resolves it and APPLIES the
+ *     oracle-measured authorization (docs/oracle/vax73-privileges.md §5):
+ *     a same-group read needs no privilege; a cross-group read needs
+ *     WORLD; GROUP does NOT lift it; and a refused read comes back
+ *     SS$_NOPRIV with NO row (not a redacted subset -- §5.3). A pid the
+ *     executive does not carry is SS$_NONEXPR (§5.1).
+ *
+ * FAILS HONESTLY. When the executive cannot resolve or authorize the
+ * target -- or /dev/vms is absent (INV-6: Docker/CI) -- the VMS status is
+ * recorded in $STATUS (ctx->last_status) and an EMPTY value is returned.
+ * NOTHING is answered from getpid()/ctx: a confident wrong answer about
+ * the caller is worse than an honest failure, and reintroducing the ctx
+ * fallback reintroduces the facade.
+ *
+ * F$GETJPI takes only a PID (or null). It does NOT resolve process NAMES
+ * -- the classic DCL idiom loops F$PID and reads each PRCNAM; adding name
+ * resolution here would invent a capability VMS's F$GETJPI does not have
+ * (Rule 10), so a non-hex pid is SS$_NONEXPR rather than a name lookup.
+ *
+ * Grounding (Rule 8): F$GETJPI format + item semantics from the public
+ * VSI OpenVMS DCL Dictionary (F$GETJPI) and the $GETJPI item codes; the
+ * authorization/redaction facts from docs/oracle/vax73-privileges.md §5.
  */
 static int lex_getjpi(struct dcl_context *ctx, const char *args,
                       char *result, size_t result_size)
@@ -1408,17 +1450,29 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
     result[0] = '\0';
     if (!args) return 0;
 
-    /* Parse: pid, item */
-    const char *p = args;
-    while (*p == ' ') p++;
+    /* Split "<pid>,<item>" at the top-level comma. */
+    const char *comma = strchr(args, ',');
+    if (!comma) return 0;
 
-    /* Skip pid argument */
-    p = strchr(p, ',');
-    if (!p) return 0;
-    p++;
-    while (*p == ' ') p++;
+    /* --- target (pid) --- trim surrounding whitespace and one quote pair */
+    char target[64];
+    size_t tl = (size_t)(comma - args);
+    if (tl >= sizeof(target)) tl = sizeof(target) - 1;
+    memcpy(target, args, tl);
+    target[tl] = '\0';
+    {
+        char *t = target;
+        while (*t == ' ' || *t == '\t') t++;
+        size_t l = strlen(t);
+        while (l > 0 && (t[l - 1] == ' ' || t[l - 1] == '\t')) t[--l] = '\0';
+        if (l >= 2 && t[0] == '"' && t[l - 1] == '"') { t[l - 1] = '\0'; t++; l -= 2; }
+        memmove(target, t, l + 1);
+    }
 
+    /* --- item --- */
     char item[64];
+    const char *p = comma + 1;
+    while (*p == ' ') p++;
     strncpy(item, p, sizeof(item) - 1);
     item[sizeof(item) - 1] = '\0';
     char *s = item;
@@ -1427,14 +1481,49 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
     if (len >= 2 && s[0] == '"' && s[len - 1] == '"') { s[len - 1] = '\0'; s++; len -= 2; }
     for (size_t i = 0; s[i]; i++) s[i] = (char)toupper((unsigned char)s[i]);
 
+    /*
+     * Resolve the executive row for the TARGET, once, up front. Every item
+     * below reads this row -- no PCB, no ctx, no getpid(). A failed resolve
+     * or authorization is the honest end of the call (INV-6 / §5).
+     */
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    uint32_t st;
+    if (target[0] == '\0') {
+        st = vms_kif_getjpi_self(&info);
+    } else {
+        char *endp = NULL;
+        unsigned long pid = strtoul(target, &endp, 16);
+        if (endp == target || *endp != '\0') {
+            /* Not a hex PID -- F$GETJPI does not resolve names (see header). */
+            if (ctx) ctx->last_status = SS$_NONEXPR;
+            return -1;
+        }
+        st = vms_kif_getjpi_pid((uint32_t)pid, &info);
+    }
+    if (!(st & 1)) {
+        /* Honest failure: $STATUS carries it, the value stays empty. */
+        if (ctx) ctx->last_status = st;
+        return -1;
+    }
+
     if (strcmp(s, "USERNAME") == 0) {
-        return lex_user(ctx, NULL, result, result_size);
+        strncpy(result, info.username, result_size - 1);
     } else if (strcmp(s, "PRCNAM") == 0) {
-        return lex_process(ctx, NULL, result, result_size);
+        strncpy(result, info.prcnam, result_size - 1);
     } else if (strcmp(s, "PID") == 0) {
-        snprintf(result, result_size, "%08X", (unsigned)getpid());
+        snprintf(result, result_size, "%08X", (unsigned)info.vms_pid);
     } else if (strcmp(s, "MODE") == 0) {
-        return lex_mode(ctx, NULL, result, result_size);
+        /*
+         * JPI$_MODE (INTERACTIVE/BATCH/NETWORK/OTHER) is not carried in the
+         * executive process row; OVMX can only answer it for the caller's
+         * own DCL session (F$MODE semantics). For another process it is
+         * UNSOURCED -- report nothing rather than the caller's mode, which
+         * would be the same cross-process fabrication this item removes.
+         */
+        if (target[0] == '\0')
+            return lex_mode(ctx, NULL, result, result_size);
+        result[0] = '\0';
     } else if (strcmp(s, "CURPRIV") == 0 || strcmp(s, "AUTHPRIV") == 0) {
         /*
          * ADDED vms-2b8 round 4 (CURPRIV only, and as a DECIMAL INTEGER);
@@ -1463,8 +1552,9 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
          * neither derived from the other or from this tree.
          *
          * Reads the same live executive source as SHOW PROCESS/
-         * PRIVILEGES and F$PRIVILEGE (vms_kif_getjpi_self(), masked to
-         * VMS_PRV_M_ENFORCED). The NAMES themselves are not a second,
+         * PRIVILEGES and F$PRIVILEGE (the resolved row above -- the
+         * caller's own for a null pid, the named process's otherwise --
+         * masked to VMS_PRV_M_ENFORCED). The NAMES themselves are not a second,
          * hand-maintained list: the loop below walks bit positions 0..63
          * in ascending order and looks each SET, enforced bit up in
          * vms_priv_names[] (dcl_cmd_show.c, declared in dcl/dcl_cmd.h) --
@@ -1507,10 +1597,11 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
          * is a consequence of the code this comment does not need to
          * re-derive by mutation to state honestly.
          *
-         * Like the other items in this function (USERNAME, PRCNAM, PID,
-         * MODE), the pid argument is parsed but not honored -- this
-         * answers only for the calling process, consistent with every
-         * existing item here, not a new restriction.
+         * Like every other item in this function since vms-9e2, CURPRIV/
+         * AUTHPRIV now HONOR the pid argument: the mask is read from the
+         * resolved row above, so F$GETJPI(<other pid>,"CURPRIV") reports
+         * that process's enforced privileges (subject to §5 authorization),
+         * not the caller's -- it no longer answers only for the caller.
          *
          * VERIFIED BY MUTATION (vms-2b8 round 6), not by inspection:
          * adding VMS_PRV_M_TMPMBX to VMS_PRV_M_ENFORCED
@@ -1522,11 +1613,16 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
          * bit 14 and WORLD bit 16) with no second table to update.
          * Reverted after confirming.
          */
-        struct vms_procinfo info;
-        memset(&info, 0, sizeof(info));
-        uint32_t jst = vms_kif_getjpi_self(&info);
+        /*
+         * The privilege masks come from the SAME resolved row every other
+         * item above reads (vms-9e2). CURPRIV/AUTHPRIV of another process
+         * therefore honor the pid argument and inherit the executive's §5
+         * authorization for free: a cross-group read without WORLD already
+         * failed as SS$_NOPRIV before reaching here, so a rendered mask can
+         * only ever belong to a process the caller was allowed to read.
+         */
         result[0] = '\0';
-        if (jst & 1) {
+        {
             uint64_t raw = (strcmp(s, "CURPRIV") == 0) ? info.cur_privs
                                                          : info.perm_privs;
             uint64_t enforced = raw & VMS_PRV_M_ENFORCED;

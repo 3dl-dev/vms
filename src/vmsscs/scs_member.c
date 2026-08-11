@@ -539,6 +539,34 @@ int scs_member_build_barrier(const struct scs_member_params *p,
     return 0;
 }
 
+int scs_member_build_depart(const struct scs_member_params *p,
+                            uint32_t epoch,
+                            uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    /* vms-ab1 (spec 4(O.29)): the class-0x04 SELF-DEPARTURE transition-open. See
+     * scs_member.h for the full provenance. Header + epoch + role + class only;
+     * everything else ZERO (the ack/barrier minimal-body form, PROVEN acceptable
+     * -- never a node-parameter template: that is the vms-760 crash class). */
+    build_common(p, member_config_tmpl, SCS_MEMBER_ENV_CREDIT_CONFIG, out);
+
+    uint8_t *body = out + 72;
+    memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
+    put_le16(body + 0, p->sysap_send_msg);
+    put_le16(body + 2, p->sysap_ack_msg);
+    put_le16(body + 4, p->txn);
+    put_le16(body + 6, p->checksum);
+    body[8] = SCS_MEMBER_CAT_CONFIG;                     /* 0x01 */
+    body[9] = SCS_MEMBER_OP_DEPART;                      /* 0x0d */
+    /* body[10:12] left zero -- residue, as the barrier. */
+    put_le32(body + SCS_MEMBER_EPOCH_BODYOFF, epoch);    /* body[12:16] */
+    body[SCS_MEMBER_ROLE_BODYOFF]  = SCS_MEMBER_ROLE_XITION;  /* body[16]=0x40 */
+    body[SCS_MEMBER_CLASS_BODYOFF] = SCS_MEMBER_CLASS_DEPART; /* body[17]=0x04 */
+    return 0;
+}
+
 int scs_member_build_token_response(const struct scs_member_params *p,
                                     const uint8_t *req_frame, size_t req_len,
                                     uint8_t out[SCS_MEMBER_FRAME_LEN])

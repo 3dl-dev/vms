@@ -816,3 +816,67 @@ Evidence (host, tank volume): `/data/training/vax/k8s-labs/vaxlab-0/logs/scsd-{3
 `/data/training/vax/cluster/work/{358flip,cq358,sameid358}.csb` (coordinator SDA timelines),
 `d94-{358flip,cq358,sameid}.pcap`; runners `tests/lab/tools/{coord358,cq358,sameid358}.sh`.
 *VAXcluster Principles* pp. 7-24/7-25/7-29/7-30/7-37/7-38/7-39/7-40/7-41.
+
+## 13. The fix SHIPPED — fresh-first-join return (safe, default) advances the coordinator to PROPOSE+SELECT the return; the CM-layer op-0x0d last-gasp CRASHES the VAX and is defaulted OFF (`vms-ab1`, spec §4(O.29))
+
+§12 named the OVMX-side frontier and the two-part fix. `vms-ab1` implements both,
+kill-switched, and the LIVE lab arbitrates each:
+
+**Part 2 — RETURN AS A PLAIN FRESH FIRST-JOIN (SAFE, DEFAULT ON).** `ovmx_rejoin_cleanleave()`
+(default on; `OVMX_REJOIN_CLEANLEAVE=0` restores the legacy apparatus) neutralises the
+whole reconnect/readmit apparatus at ONE point each: `cm_rejoin_target_mode()` returns 0
+(own-outbound first-join topology) and `cm_apply_rejoin_form()` is a no-op (plain first-timer
+op 0x02). Every sub-lever (lean-VC, credit-first, lean-early-hold, ackhold, the proactive
+CMREADMIT burst) chains through those two, so both are neutralised together. Fail-pre/pass-post
+unit test in `tests/vmsscs/test_scsd_wire.c`
+(`test_rejoin_cleanleave_default_is_a_fresh_first_join`).
+
+**Live result (GROUNDED, fresh `vaxlab-2`, current-source daemon `md5=d5a8946f`, 45 s settle).**
+F1 joins (`admitted=2`, coordinator CSB `02060002 member,selected`, `SCSD-I-XITDONE`), departs
+cleanly (graceful `--duration` expiry → `scsd_shutdown_teardown` → SCS DISCONNECT), and the
+coordinator SDA shows the F1 incarnation move `02060002 member,selected` → `06040005
+long_break,removed` across the settle — **the prior incarnation IS REMOVED** by the coordinator's
+own RECNXINTERVAL, with no rejoin-form return keeping it alive. That is the load-bearing win over
+§4(O.28): the wedge that outlived every settle is gone. **The return, however, is STILL not
+admitted.** Rejoining as a plain fresh first-join it builds a NEW CSB (`879D7880`) that reaches
+only `01 open` non-member; the authoritative per-run daemon verdict is `READMITMAP-SUMMARY
+admitted=0` (`JOIN-ABANDONED` on the peer OVMX drove op 0x02 to, `NO-ENGAGE` on the other), and the
+coordinator console prints NO `proposing addition` for the returning identity. (One earlier arm on
+a *contaminated* `vaxlab-0` did once reach `02060000 selected` with a `proposing addition`; it did
+NOT reproduce on a clean pod and is not relied on.) So fresh-first-join removes the harmful
+apparatus and the prior CSB, but a further gate on the RETURN path — the §4(O.26)-class op 0x02
+delivery / member CM-JOIN engagement — persists.
+
+**Part 1 — CLEAN CM LAST-GASP (op-0x0d) CRASHES THE VAX; DEFAULT OFF.** OVMX also gained an
+emit of the class-0x04 op-0x0d SELF-DEPARTURE open (`scs_member_build_depart` /
+`scsd_emit_clean_departure`), header-only, on the OPEN VC at shutdown, to drive IMMEDIATE
+removal. The LIVE bracket on a **fresh** `vaxlab-1` (daemon `md5=73c18ef6`) proved this
+**CRASHES the real VAX coordinator**: VAX2 bugchecked and rebooted (SDA/console `%SYSBOOT` →
+`OpenVMS VAX V7.3` → `%SYSINIT, waiting to form or join`) immediately after F1's
+depart-with-last-gasp, and the return then could not admit (`admitted=0`) because the coordinator
+was reforming. The Part-2-only clean shutdown (SCS DISCONNECT, no last-gasp) never crashed any
+VAX. This is the clean-room-warned crash class (`scs_member.h`): a class-0x04 transition-OPEN
+emitted OUT of its grounded `0x12→0x03→0x0d→0x0a` departure choreography drives CNXMAN into an
+inconsistent-state bugcheck. **`scsd_emit_clean_departure` is therefore DEFAULT OFF (opt-in
+`OVMX_LASTGASP=1`), kept only as an RE probe.** The AUTHENTIC immediate-removal signal is the
+PORT-LEVEL last-gasp datagram (p. 7-29), whose byte form is NOT grounded in OVMX and is deferred
+to a wire-RE increment.
+
+**Relocated frontier.** Fresh-first-join (safe, default) moves the return from
+TOTAL-NON-ADMISSION (§4(O.28): coordinator proposed nothing) to PROPOSED+SELECTED, with removal
+of the prior incarnation confirmed on coordinator SDA. What still blocks full `member` commit:
+the second member NO-ENGAGEs the returning identity's JOIN barrier (its residual is not cleared
+as promptly as the coordinator's), and the only safe way to force IMMEDIATE per-member removal —
+the port-level last-gasp datagram — is not yet RE'd (the CM-layer op-0x0d substitute crashes the
+VAX). Next increment: ground the port-level last-gasp datagram, OR bracket a longer settle so
+BOTH members remove via their own RECNXINTERVAL before the return.
+
+Evidence (host, tank volume): `/data/training/vax/k8s-labs/vaxlab-2/logs/scsd-ab-J.log`
+(`READMITMAP-SUMMARY admitted=0`, `JOIN-ABANDONED`/`NO-ENGAGE`),
+`/data/training/vax/cluster/work/abrun-p2.csb` (coordinator SDA: F1 `member,selected` → settle
+`long_break,removed` → return fresh CSB `879D7880 01 open` non-member);
+`/data/training/vax/k8s-labs/vaxlab-1/logs/vax2.log` + `abrun-clean.csb` (the op-0x0d last-gasp
+CRASH: VAX2 `%SYSBOOT`/`%SYSINIT` reboot). Code `src/vmsscs/scsd.c`
+(`ovmx_rejoin_cleanleave`, `cm_rejoin_target_mode`, `cm_apply_rejoin_form`,
+`scsd_emit_clean_departure`), `src/vmsscs/scs_member.c` (`scs_member_build_depart`). Runner
+`tests/lab/tools/abrun.sh`. *VAXcluster Principles* pp. 7-24/7-25/7-29.

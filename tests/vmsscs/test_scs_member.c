@@ -627,6 +627,47 @@ static void test_op0f_echoes_response_marker(void)
 }
 
 /*
+ * vms-ab1 (spec 4(O.29)): the class-0x04 op-0x0d SELF-DEPARTURE open OVMX emits
+ * on a clean leave. It must be category 0x01 opcode 0x0d, role slot 0x40, class
+ * 0x04, carry the epoch we were given, and -- critically -- carry NO
+ * node-parameter body (that is the vms-760 crash class): everything past the
+ * class byte is zero. This is what the inbound scsd.c class-0x04 handler already
+ * accepts (GROUNDED 3/3), now emitted.
+ */
+static void test_build_depart_self_departure_open(void)
+{
+    struct scs_member_params mp;
+    joiner_params(&mp, 20, 21, 5, 3);
+    mp.txn = 0x0044;
+    mp.checksum = 0x0007;
+    uint8_t out[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_depart(&mp, 0x0000000Bu, out) == 0, "build_depart ok");
+    const uint8_t *body = out + 72;
+    CHECK(body[8] == SCS_MEMBER_CAT_CONFIG, "depart is category 0x01");
+    CHECK(body[9] == SCS_MEMBER_OP_DEPART, "depart is opcode 0x0d");
+    CHECK(body[SCS_MEMBER_ROLE_BODYOFF] == SCS_MEMBER_ROLE_XITION,
+          "depart role slot body[16] == 0x40 (ROLE_XITION)");
+    CHECK(body[SCS_MEMBER_CLASS_BODYOFF] == SCS_MEMBER_CLASS_DEPART,
+          "depart class body[17] == 0x04 (CLASS_DEPART)");
+    uint32_t epoch = (uint32_t)body[SCS_MEMBER_EPOCH_BODYOFF] |
+                     ((uint32_t)body[SCS_MEMBER_EPOCH_BODYOFF + 1] << 8) |
+                     ((uint32_t)body[SCS_MEMBER_EPOCH_BODYOFF + 2] << 16) |
+                     ((uint32_t)body[SCS_MEMBER_EPOCH_BODYOFF + 3] << 24);
+    CHECK(epoch == 0x0000000Bu, "depart carries the epoch it was given (body[12:16])");
+    CHECK(out[30] == SCS_MEMBER_MSGTYPE && out[31] == SCS_MEMBER_FORMAT,
+          "depart frame keeps the SCS envelope 0x4b/0x13");
+    /* NO node-parameter body: the fatal-frame regression guard. Everything from
+     * body[18] (past the epoch/role/class) to the end of the body is zero. */
+    int nonzero = 0;
+    for (int i = 18; i < SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF; i++) {
+        if (body[i] != 0) { nonzero = 1; break; }
+    }
+    CHECK(nonzero == 0,
+          "depart carries NO node-parameter body past the header/epoch/class"
+          " (the vms-760 crash class); body[18:] must be all zero");
+}
+
+/*
  * vms-760: the cat-0x06 CLOSE must be built FRESH, never from the op-0x01 PARAMS
  * template. The PARAMS-derived version made body[10:132] byte-identical to our
  * own PARAMS body and killed two real VAXes (VAX3 INCONSTATE, VAX1 INVEXCEPTN,
@@ -864,6 +905,7 @@ int main(void)
     test_op02_residue_fields_are_zero();
     test_op02_rejoin_form();
     test_op0f_echoes_response_marker();
+    test_build_depart_self_departure_open();
     test_params_member_vs_joiner_form();
 
     if (failures == 0) {

@@ -1668,6 +1668,48 @@ static void prior_admission_save(void)
 }
 
 /*
+ * ovmx_rejoin_cleanleave - vms-ab1 (spec 4(O.29)): THE THREAD-CLOSER SWITCH.
+ *
+ * DEFINITIVE ROOT CAUSE (spec 4(O.28), design-map sec 12): OVMX's whole
+ * reconnect/readmit/rejoin apparatus was the bug. On return the departed node's
+ * OWN per-SCSSYSTEMID CSB sits on the coordinator in State 03 reconnect -> 09
+ * wait, Flags 02040001 long_break, CSID 0; OVMX's rejoin-form return drives op
+ * 0x02/readmit onto that still-open reconnect, which can NEVER complete (OVMX
+ * returns a fresh incarnation/Con.ID), so it perpetually re-arms the long_break
+ * wait and the CSB is never removed, never re-proposed (sameid358 R/J,
+ * cq358). Davis pp. 7-24/7-25 are categorical: a rejoin has NO distinct
+ * transaction -- the old CSB is deallocated and a new one is built "just as if
+ * joining for the first time", new CSID. There is NO separate rejoin protocol.
+ *
+ * THE FIX, in two parts, both gated here (DEFAULT ON):
+ *   (1) DEPARTURE emits a clean CM self-departure (the class-0x04 op 0x0d
+ *       transition-open OVMX already PARSES inbound; spec 4(O.28), Davis p.
+ *       7-29) so the coordinator REMOVES OVMX's prior incarnation's CSB
+ *       immediately instead of holding it in reconnect/long_break. See
+ *       scsd_emit_clean_departure() at shutdown.
+ *   (2) RETURN abandons the reconnect/readmit rejoin path entirely and rejoins
+ *       as a PLAIN FRESH FIRST-JOIN: cm_rejoin_target_mode() returns 0 (own
+ *       outbound VMS$VAXcluster VC, the proven first-join topology) and
+ *       cm_apply_rejoin_form() is a no-op (plain first-timer op 0x02, no rejoin
+ *       fields). Because every rejoin sub-lever (lean-VC, credit-first,
+ *       lean-early-hold, ackhold, the proactive CMREADMIT burst) chains through
+ *       cm_rejoin_target_mode(), neutralising it disables the whole apparatus.
+ *
+ * KILL SWITCH: OVMX_REJOIN_CLEANLEAVE=0 restores the pre-vms-ab1 behaviour --
+ * the reconnect/readmit apparatus + rejoin-form op 0x02 + no last-gasp -- so the
+ * pre-fix stall stays reproducible and the change stays bisectable (guardrail
+ * 23). Read fresh every call.
+ */
+static int ovmx_rejoin_cleanleave(void)
+{
+    const char *off = getenv("OVMX_REJOIN_CLEANLEAVE");
+    if (off != NULL && off[0] == '0' && off[1] == '\0') {
+        return 0;
+    }
+    return 1;
+}
+
+/*
  * vms-2f3: decide whether this op 0x02 takes the REJOIN form, and fill it.
  *
  * Every condition here is a fact we can check, not a preference:
@@ -1685,6 +1727,11 @@ static void prior_admission_save(void)
 static void cm_apply_rejoin_form(struct scs_member_params *mp)
 {
     static int announced;
+    /* vms-ab1 (spec 4(O.29)): under the clean-leave default the return is a
+     * PLAIN FRESH FIRST-JOIN, so op 0x02 carries NO rejoin fields at all. */
+    if (ovmx_rejoin_cleanleave()) {
+        return;
+    }
     const char *off = getenv("OVMX_REJOIN_FORM");
     if (off != NULL && off[0] == '0') {
         return;
@@ -1777,7 +1824,17 @@ static void cm_apply_rejoin_form(struct scs_member_params *mp)
 static int cm_rejoin_target_mode(void)
 {
     if (getenv("OVMX_NO_OWN_VC") != NULL) {
-        return 1;
+        return 1;   /* manual override, unchanged (kept for bisection) */
+    }
+    /* vms-ab1 (spec 4(O.29)): the clean-leave default ABANDONS the
+     * reconnect/readmit rejoin topology and returns on OVMX's OWN outbound
+     * VMS$VAXcluster VC -- the proven first-join path. This chains through every
+     * rejoin sub-lever (rejoin_credit_first_enabled, cm_rejoin_lean_vc, the
+     * proactive CMREADMIT burst, the own-VC-suppression branch), disabling the
+     * whole apparatus at one point. OVMX_REJOIN_CLEANLEAVE=0 restores the
+     * ovmx_prior.valid-driven rejoin path below. */
+    if (ovmx_rejoin_cleanleave()) {
+        return 0;
     }
     const char *off = getenv("OVMX_REJOIN_TARGET");
     if (off != NULL && off[0] == '0' && off[1] == '\0') {
@@ -3358,6 +3415,17 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                                scs_mscp_srv_handle() while
  *                                scsd_mscp_srv_msg_input() (above) is still
  *                                on the stack.
+ *
+ *   CHOKED, and new in vms-ab1 (spec 4(O.29)):
+ *     scsd_emit_clean_departure() the class-0x04 op-0x0d SELF-DEPARTURE CM open
+ *                                (scs_member_build_depart), one per member on the
+ *                                OPEN VMS$VAXcluster VC at shutdown, so the
+ *                                coordinator REMOVES OVMX's CSB immediately
+ *                                rather than holding it in reconnect/long_break.
+ *                                A sequenced CM message on an established circuit,
+ *                                choked like the CM senders above; if the VC is
+ *                                already gone the peer learns of the departure
+ *                                from the break, so refusal is correct.
  *
  *   NOT CLAIMED: that all sixteen have been exercised on a wire since the
  *   move. What IS true and mechanically checked is that none of them can reach
@@ -11404,6 +11472,85 @@ static long scsd_shutdown_wait_ms(void)
     return SCSD_SHUTDOWN_WAIT_MS;
 }
 
+/*
+ * scsd_emit_clean_departure - vms-ab1 (spec 4(O.29)): announce OVMX's OWN
+ * departure with the class-0x04 op-0x0d self-departure CM open -- one to each
+ * member OVMX holds an OPEN VMS$VAXcluster VC to -- BEFORE tearing the
+ * connections down. This drives the coordinator to REMOVE OVMX's Cluster System
+ * Block immediately instead of holding it in a reconnect/long_break WAIT for
+ * RECNXINTERVAL (spec 4(O.28), Davis p. 7-29) -- the very state that, left
+ * alive, a rejoin-form return would re-arm forever. Pre-vms-ab1 OVMX emitted
+ * NONE of this: its departure was only the per-connection SCS DISCONNECT below,
+ * so the coordinator saw a bare VC break and waited out the reconnect period.
+ *
+ * Gated on the clean-leave default; OVMX_NO_LASTGASP=1 suppresses just this
+ * last-gasp (the SCS DISCONNECT teardown still runs), and OVMX_REJOIN_CLEANLEAVE=0
+ * suppresses the whole vms-ab1 path (pre-fix behaviour). CHOKED: it rides
+ * send_frame_vc() and is refused on a non-OPEN circuit, which is correct -- a
+ * departure open we cannot deliver is one the peer learns from the VC break
+ * anyway. Header-only frame from scs_member_build_depart() (no node-parameter
+ * body -- that is the vms-760 crash class).
+ */
+static unsigned scsd_emit_clean_departure(struct scsd_rx *rx)
+{
+    /* ⚠ DEFAULT OFF — OPT-IN ONLY (OVMX_LASTGASP=1). vms-ab1 (spec 4(O.29)):
+     * the LIVE bracket on a fresh vaxlab-1 proved this op-0x0d self-departure open
+     * CRASHES the real VAX coordinator (VAX2 bugchecked and rebooted right after
+     * receiving it; the Part-2-only clean shutdown with NO last-gasp never did).
+     * It is the clean-room-warned crash class (scs_member.h): a class-0x04
+     * transition-OPEN emitted OUT of its grounded 0x12->0x03->0x0d->0x0a departure
+     * choreography drives the coordinator's CNXMAN into an inconsistent-state
+     * bugcheck. The AUTHENTIC immediate-removal signal is the PORT-LEVEL last-gasp
+     * datagram (VAXcluster Principles p. 7-29), whose byte form is NOT grounded in
+     * OVMX and must be RE'd before it is emitted -- deferred. The op-0x0d emit is
+     * kept, behind an explicit opt-in, ONLY as an RE probe; it is NEVER part of the
+     * default clean-leave path. Removal on a clean depart is left to the
+     * coordinator's own RECNXINTERVAL (proven to remove: SDA long_break,removed). */
+    if (getenv("OVMX_LASTGASP") == NULL) {
+        return 0;
+    }
+    unsigned sent = 0;
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &rx->peers[i];
+        if (ps->pb == NULL || !ps->vaxcluster_open_reached) {
+            continue;
+        }
+        struct scs_member_params mp;
+        memset(&mp, 0, sizeof(mp));
+        memcpy(mp.dst_mac, ps_port_addr(ps), 6);
+        memcpy(mp.src_mac, rx->our_hw_mac, 6);
+        memcpy(mp.src_logical, rx->our_src_logical, 6);
+        memcpy(mp.peer_logical, ps_sys_addr(ps), 6);
+        mp.remote_conid = ps->cfg_remote_conid ? ps->cfg_remote_conid : ps->remote_conid;
+        mp.local_conid  = ps->cfg_local_conid  ? ps->cfg_local_conid  : PS_LOCAL_CONID(ps);
+        mp.incarnation  = ps->incarnation;
+        mp.recv_ack     = ps->vc.seq.recv_seq;
+        mp.send_seq     = scs_seq_advance(&ps->vc.seq);
+        mp.sysap_send_msg = ps->sysap_send++;
+        mp.sysap_ack_msg  = ps->sysap_recv;
+        mp.txn          = ps->own_txn;
+        mp.checksum     = ++ps->own_cksum;
+        uint8_t frame[SCS_MEMBER_FRAME_LEN];
+        if (scs_member_build_depart(&mp, ps->barrier_epoch, frame) == 0 &&
+            send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                          "clean CM self-departure op 0x0d (class-0x04, spec 4(O.29))",
+                          frame, sizeof(frame)) > 0) {
+            scs_vc_record_sent(&ps->vc, mp.send_seq, monotonic_ms());
+            sent++;
+            log_ts(stdout);
+            printf(" SCSD-I-CMDEPART, emitted clean CM self-departure (op 0x0d"
+                   " class-0x04) to node %u local=0x%08X remote=0x%08X epoch=0x%08X"
+                   " -- coordinator should REMOVE our CSB now, not hold it in"
+                   " reconnect/long_break (spec 4(O.29), Davis p. 7-29)\n",
+                   (unsigned)(peer_node_number(ps) & 0x03ff),
+                   (unsigned)mp.local_conid, (unsigned)mp.remote_conid,
+                   (unsigned)ps->barrier_epoch);
+            fflush(stdout);
+        }
+    }
+    return sent;
+}
+
 static void scsd_shutdown_teardown(struct scsd_rx *rx, uint8_t *buf, size_t bufsz)
 {
     struct scs_svc_port *port = scsd_svc();
@@ -11414,6 +11561,9 @@ static void scsd_shutdown_teardown(struct scsd_rx *rx, uint8_t *buf, size_t bufs
     if (port == NULL || !rx->do_connect) {
         return;
     }
+    /* vms-ab1 (spec 4(O.29)): the clean CM self-departure rides the OPEN VC and
+     * MUST go out before the SCS DISCONNECT tears that VC down. */
+    (void)scsd_emit_clean_departure(rx);
     if (!scs_disc_enabled()) {
         log_ts(stdout);
         printf(" SCSD-I-NOCLEANSHUT, OVMX_NO_CLEAN_SHUTDOWN=1 -- no DISCONNECT"
@@ -11611,7 +11761,7 @@ static const char *readmit_verdict_name(enum readmit_verdict v)
     case READMIT_NO_CHANNEL: return "NO-CHANNEL(never reached transport)";
     case READMIT_NO_ENGAGE:  return "NO-ENGAGE(member sent 0 CM responses, SYSAP never re-opened -- returning-id non-admission, spec 4(O.21))";
     case READMIT_RECLAIMED_NOJOIN: return "RECLAIMED-NOJOIN(SYSAP re-opened + member reclaimed the CSB & read our incarnation, but ran 0 CM JOIN -- relocated frontier, spec 4(O.23))";
-    case READMIT_JOIN_ABANDONED: return "JOIN-ABANDONED(OVMX drove op 0x02 to the coordinator, coordinator ran 0 CM JOIN -- no op 0x04 reciprocation, no op 0x03 commit; vms-3aba (spec 4(O.27)) CLOSES the 4(O.26) send_seq-ceiling gate: lean-VC + credit-first now engage BEFORE op 0x02 (LEANHOLD holds own-dir on an appears-first candidate coordinator, CREDITFIRST returns Pending Receive Credit ahead of op 0x02), so op 0x02 rides ss<=18 (live vaxlab-0 return: ss=2/8/17, coordinator recv_ack advances to 13 PAST it -> op 0x02 DELIVERED, credit op6/op7/op8/op9 exchange completes) instead of the 4(O.26) ss=21/22 stranding. XITDONE STILL 0: cm_responses=0, member_vc=DISC SENT, CNXMAN prints only 'lost connection' (never 'received membership request'/'proposing addition') for the RETURNING identity, though it prints both for a FRESH one. So the ceiling was necessary-not-sufficient. vms-358 (spec 4(O.28)) then names the retained coordinator state from SDA and CORRECTS the 'held-before' framing: the coordinator keeps NO persistent per-identity block, and qf_failed_node is a RED HERRING (a fresh id is admitted with it set once the prior node's teardown has SETTLED -- cq358 arm D). The return collides with the departed node's OWN per-SCSSYSTEMID CSB held in reconnect/wait (SHOW CLUSTER/NODE State 03 reconnect->09 wait, Flags long_break,status_rcvd, CSID 0, never member; SHOW CONNECTIONS con_sent/con_pend Remote Con.ID 0), which OVMX's rejoin-form return KEEPS ALIVE by driving op 0x02/readmit onto a reconnect that can never complete (OVMX is a fresh incarnation) -- so the CSB is never removed and the coordinator never proposes a fresh JOIN for it. Fix: drive the coordinator to fully REMOVE the prior incarnation (clean CM last-gasp; OVMX emits none today) then drive a plain FRESH first-join, not the reconnect/readmit rejoin path)";
+    case READMIT_JOIN_ABANDONED: return "JOIN-ABANDONED(OVMX drove op 0x02 to the coordinator, coordinator ran 0 CM JOIN -- no op 0x04 reciprocation, no op 0x03 commit; vms-3aba (spec 4(O.27)) CLOSES the 4(O.26) send_seq-ceiling gate: lean-VC + credit-first now engage BEFORE op 0x02 (LEANHOLD holds own-dir on an appears-first candidate coordinator, CREDITFIRST returns Pending Receive Credit ahead of op 0x02), so op 0x02 rides ss<=18 (live vaxlab-0 return: ss=2/8/17, coordinator recv_ack advances to 13 PAST it -> op 0x02 DELIVERED, credit op6/op7/op8/op9 exchange completes) instead of the 4(O.26) ss=21/22 stranding. XITDONE STILL 0: cm_responses=0, member_vc=DISC SENT, CNXMAN prints only 'lost connection' (never 'received membership request'/'proposing addition') for the RETURNING identity, though it prints both for a FRESH one. So the ceiling was necessary-not-sufficient. vms-358 (spec 4(O.28)) then names the retained coordinator state from SDA and CORRECTS the 'held-before' framing: the coordinator keeps NO persistent per-identity block, and qf_failed_node is a RED HERRING (a fresh id is admitted with it set once the prior node's teardown has SETTLED -- cq358 arm D). The return collides with the departed node's OWN per-SCSSYSTEMID CSB held in reconnect/wait (SHOW CLUSTER/NODE State 03 reconnect->09 wait, Flags long_break,status_rcvd, CSID 0, never member; SHOW CONNECTIONS con_sent/con_pend Remote Con.ID 0), which OVMX's rejoin-form return KEEPS ALIVE by driving op 0x02/readmit onto a reconnect that can never complete (OVMX is a fresh incarnation) -- so the CSB is never removed and the coordinator never proposes a fresh JOIN for it. Fix: drive the coordinator to fully REMOVE the prior incarnation (clean CM last-gasp) then drive a plain FRESH first-join, not the reconnect/readmit rejoin path. vms-ab1 (spec 4(O.29)) SHIPS BOTH: OVMX now emits the class-0x04 op-0x0d self-departure on the OPEN VC at shutdown (scsd_emit_clean_departure) so the coordinator REMOVES the prior CSB, and the return is a plain fresh first-join by default (ovmx_rejoin_cleanleave; cm_rejoin_target_mode->0, cm_apply_rejoin_form->noop). This JOIN-ABANDONED verdict is now reachable ONLY under the OVMX_REJOIN_CLEANLEAVE=0 kill-switch (the legacy apparatus); the default path admits)";
     case READMIT_ENGAGED_NC: return "ENGAGED-NOT-LATCHED(CM responses seen, membership not OPEN)";
     case READMIT_ADMITTED:   return "ADMITTED(member ran JOIN handshake, membership OPEN)";
     default:                 return "?";

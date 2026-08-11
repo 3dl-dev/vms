@@ -185,7 +185,7 @@ record "boot 1: pre-installed disk boots to login" "$rc"
 if [ "$rc" -eq 0 ]; then
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 1
-    if waitfor 'Welcome to OVMX' 30 "$POS_LOG1"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$POS_LOG1"; then rc=0; else rc=1; fi
     record "boot 1: SYSTEM logs in" "$rc"
 
     # Baseline, before the change: the seed carries SCSNODE=OVMX, and the
@@ -238,7 +238,7 @@ check "boot 2: NO honest-halt (a good, present .PAR does not warn)" "$POS_LOG2" 
 if [ "$rc" -eq 0 ]; then
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 1
-    if waitfor 'Welcome to OVMX' 30 "$POS_LOG2"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$POS_LOG2"; then rc=0; else rc=1; fi
     record "boot 2: SYSTEM logs in" "$rc"
 
     send 'HOST2 = F$GETSYI("NODENAME")'; sleep 1
@@ -282,7 +282,7 @@ record "boot 1: pre-installed disk boots to login" "$rc"
 if [ "$rc" -eq 0 ]; then
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 1
-    if waitfor 'Welcome to OVMX' 30 "$NEG_LOG1"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$NEG_LOG1"; then rc=0; else rc=1; fi
     record "boot 1: SYSTEM logs in" "$rc"
 
     # A fresh copy of the distribution disk carries exactly one version.
@@ -324,7 +324,7 @@ check "boot 2: the ;2 SCSNODE line from CASE 1 never fires here (separate disk)"
 if [ "$rc" -eq 0 ]; then
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 1
-    if waitfor 'Welcome to OVMX' 30 "$NEG_LOG2"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$NEG_LOG2"; then rc=0; else rc=1; fi
     record "boot 2: SYSTEM logs in (identity is unrelated to SCSNODE)" "$rc"
 
     send 'HOST3 = F$GETSYI("NODENAME")'; sleep 1

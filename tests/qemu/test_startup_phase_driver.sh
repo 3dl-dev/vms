@@ -165,7 +165,7 @@ fi
 
 if [ "$OK" -eq 1 ]; then
     send 'MANAGER'
-    if wait_for 'Welcome to OVMX' 30 "$LOGIN_OFFSET"; then rc=0; else rc=1; OK=0; fi
+    if wait_for 'Welcome to OpenVMX' 30 "$LOGIN_OFFSET"; then rc=0; else rc=1; OK=0; fi
     record "SYSTEM login succeeds" "$rc"
 fi
 

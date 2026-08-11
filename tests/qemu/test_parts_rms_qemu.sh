@@ -150,7 +150,7 @@ if wait_for '%OVMX-I-EXEC' 60; then ok "executive attached (real vms.ko)"; else 
 if wait_for 'Username:' 60; then ok "login prompt"; else bad "no login prompt"; fi
 send 'SYSTEM'
 wait_for 'Password:' 30 && send 'MANAGER'
-if wait_for 'Welcome to OVMX' 30; then ok "SYSTEM login (LOGINOUT.EXE activated)"; else bad "SYSTEM login failed"; fi
+if wait_for 'Welcome to OpenVMX' 30; then ok "SYSTEM login (LOGINOUT.EXE activated)"; else bad "SYSTEM login failed"; fi
 wait_for '$' 20
 
 RUN_OFF=$(wc -c <"$LOG")

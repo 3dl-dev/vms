@@ -177,7 +177,7 @@ fi
 LOGIN_OFF=$(wc -c <"$LOG")
 send 'SYSTEM'
 wait_for 'Password:' 30 "$LOGIN_OFF" && send 'MANAGER'
-if wait_for 'Welcome to OVMX' 30 "$LOGIN_OFF"; then
+if wait_for 'Welcome to OpenVMX' 30 "$LOGIN_OFF"; then
     ok "SYSTEM logs in (LOGINOUT.EXE activated, cut artifact)"
 else
     dump_and_die "SYSTEM login failed"

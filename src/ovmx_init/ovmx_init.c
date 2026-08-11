@@ -654,7 +654,8 @@ static void print_stdrv_begun(void)
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
-    printf("%%STDRV-I-STARTUP, OVMX startup begun at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+    printf("%%STDRV-I-STARTUP, " OVMX_PRODUCT_NAME " startup begun at "
+           "%2d-%s-%04d %02d:%02d:%02d.%02d\n",
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
@@ -682,6 +683,20 @@ static void display_boot_banner(void)
  */
 int main(void)
 {
+    /*
+     * Substrate identity line -- printed FIRST, before any mount, module
+     * load, or VMS-flavored boot message. GNU/Linux-style dual identity
+     * (operator ruling, rd vms-700/vms-296/vms-3de): "OVMX/Linux" names
+     * the Linux-kernel substrate this boots on, distinct from and prior to
+     * the "OpenVMX" product identity STARTUP.EXE hands off to later
+     * (display_boot_banner(), below) -- the boot reads "OVMX/Linux"
+     * substrate coming up, THEN "OpenVMX" product. Unconditional (not
+     * gated on getpid() == 1): cheap, and every invocation of this binary
+     * is still OVMX/Linux underneath regardless of PID.
+     */
+    printf("%s\n", ovmx_substrate_banner());
+    fflush(stdout);
+
     /* If we are PID 1 on bare metal, set up Linux plumbing */
     struct stat bm_st;
     if (getpid() == 1 && stat("/proc/version", &bm_st) != 0) {

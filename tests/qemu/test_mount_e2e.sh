@@ -148,7 +148,7 @@ login() {  # login <log-file>  -- logs in as SYSTEM, returns once at the $ promp
     local off; off=$(wc -c <"$log")
     send 'SYSTEM'
     wait_for 'Password:' 20 "$off" "$log" && send 'MANAGER'
-    if wait_for 'Welcome to OVMX' 20 "$off" "$log"; then
+    if wait_for 'Welcome to OpenVMX' 20 "$off" "$log"; then
         ok "SYSTEM logs in"
     else
         dump_and_die "SYSTEM login failed"

@@ -134,7 +134,7 @@ echo ""
 
 check "positive: executive attached"          "$OUT_POS" "%OVMX-I-EXEC"
 check "positive: system disk DKA0: mounted"    "$OUT_POS" "%STARTUP-I-MOUNTED"
-check "positive: STDRV begun printed"          "$OUT_POS" "%STDRV-I-STARTUP, OVMX startup begun"
+check "positive: STDRV begun printed"          "$OUT_POS" "%STDRV-I-STARTUP, OpenVMX startup begun"
 check "positive: reaches the login prompt"     "$OUT_POS" "Username:"
 # The strip: none of the install/initialize/overlay lines may appear.
 check "positive: NO install ran"               "$OUT_POS" "%STARTUP-I-INSTALL"    absent
@@ -143,12 +143,12 @@ check "positive: NO overlay mount-fail warning" "$OUT_POS" "%STARTUP-W-MOUNTFAIL
 check "positive: NO honest halt on a good disk" "$OUT_POS" "%OVMX-F-SYSINIT"      absent
 # F1: there is exactly ONE STDRV line and it is the "begun" one — the invented
 # "completed" line is deleted, not repositioned.
-check "positive: NO invented STDRV completed line" "$OUT_POS" "%STDRV-I-STARTUP, OVMX startup completed" absent
+check "positive: NO invented STDRV completed line" "$OUT_POS" "%STDRV-I-STARTUP, OpenVMX startup completed" absent
 
 # F1 ordering: the STDRV "begun" bracket precedes the login prompt. On the
 # collapsed pre-fix code they printed together, after startup; here "begun"
 # comes first. Compare the byte offsets in the console stream.
-BEGUN_POS=$(printf '%s' "$OUT_POS" | grep -aboF "%STDRV-I-STARTUP, OVMX startup begun" | head -1 | cut -d: -f1)
+BEGUN_POS=$(printf '%s' "$OUT_POS" | grep -aboF "%STDRV-I-STARTUP, OpenVMX startup begun" | head -1 | cut -d: -f1)
 USER_POS=$(printf '%s' "$OUT_POS" | grep -aboF "Username:" | head -1 | cut -d: -f1)
 if [ -n "$BEGUN_POS" ] && [ -n "$USER_POS" ] && [ "$BEGUN_POS" -lt "$USER_POS" ]; then rc=0; else rc=1; fi
 record "positive: %STDRV-I-STARTUP begun precedes the login prompt (F1 bracket)" "$rc"

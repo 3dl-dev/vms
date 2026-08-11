@@ -197,6 +197,7 @@ RUN cmake -B build-static \
 RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
              /initramfs-fat/tmp /initramfs-fat/var /initramfs-fat/mnt \
              /initramfs-fat/sbin \
+             /initramfs-fat/etc \
              /initramfs-fat/lib/modules \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSLIB \
@@ -261,6 +262,11 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     # Kernel modules
     cp src/kernel/vms.ko /initramfs-fat/lib/modules/ && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-fat/lib/modules/ && \
+    # Substrate distro metadata (rd vms-700/vms-296/vms-3de, GNU/Linux-style
+    # dual identity) -- standard /etc/os-release naming the "OVMX/Linux"
+    # substrate, distinct from the "OpenVMX" VMS-facing product identity
+    # (ovmx_identity.h). See distro/rootfs/etc/os-release's own header.
+    cp distro/rootfs/etc/os-release /initramfs-fat/etc/os-release && \
     # System disk config files → VMS-standard locations
     cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR/ && \
     # SYS$STARTUP: (vms-21a) -- STDRV's phase/component data files
@@ -494,6 +500,7 @@ RUN /src/build-static/bin/vmsfs_master master \
 RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
              /initramfs-slim/tmp /initramfs-slim/var /initramfs-slim/mnt \
              /initramfs-slim/sbin \
+             /initramfs-slim/etc \
              /initramfs-slim/lib/modules \
              /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE \
              /initramfs-slim/vms/SYS0/SYSCOMMON/SYSMGR && \
@@ -509,6 +516,9 @@ RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
     # Kernel modules
     cp src/kernel/vms.ko /initramfs-slim/lib/modules/ && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-slim/lib/modules/ && \
+    # Substrate distro metadata (rd vms-700/vms-296/vms-3de) -- same
+    # os-release as the fat initramfs, see its comment there.
+    cp distro/rootfs/etc/os-release /initramfs-slim/etc/os-release && \
     # Minimal config — SYSUAF + manager files (STARTUP.EXE reads these at boot)
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-slim/vms/SYS0/SYSCOMMON/SYSMGR/ && \
@@ -559,6 +569,19 @@ RUN KVER=$(cat /tmp/kver) && \
 # -- Runner stage --------------------------------------------------------------
 # Minimal image with just QEMU and boot artifacts.
 FROM ubuntu:24.04 AS runner
+
+# Distro metadata (rd vms-700/vms-296/vms-3de, GNU/Linux-style dual
+# identity): this container image builds and boots the "OVMX/Linux"
+# substrate (Linux kernel + initramfs) -- distinct from the "OpenVMX"
+# VMS-compatible PRODUCT identity a booted guest shows at its own login
+# banner/SHOW SYSTEM/MONITOR (ovmx_identity.h OVMX_PRODUCT_BANNER). This
+# image label is build/test-tooling metadata (Docker as BUILD tooling,
+# CLAUDE.md Rule 9), not the OVMX runtime itself.
+LABEL org.opencontainers.image.title="OVMX/Linux" \
+      org.opencontainers.image.description="OVMX/Linux -- Linux kernel substrate that boots the OpenVMX VMS-compatible product" \
+      org.opencontainers.image.vendor="OVMX" \
+      ovmx.substrate.name="OVMX/Linux" \
+      ovmx.product.name="OpenVMX"
 
 ENV DEBIAN_FRONTEND=noninteractive
 

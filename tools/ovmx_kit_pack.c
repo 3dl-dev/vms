@@ -17,9 +17,14 @@
  *       directories, e.g. SYSEXE/SYSLIB/SYSMGR/SYSHLP under SYS$COMMON:)
  *       and emit <kit-file>. <product-name> is a literal like "X86VMS VMS"
  *       -- the caller (build script) composes the full name from
- *       OVMX_PRODUCT_NAME + this, so the "OVMX" vendor token and the
+ *       OVMX_VENDOR_TOKEN + this, so the "OVMX" vendor token and the
  *       version both come from ovmx_identity.h, never a second literal.
- *       Producer defaults to OVMX_PRODUCT_NAME.
+ *       Producer defaults to OVMX_VENDOR_TOKEN. Deliberately NOT
+ *       OVMX_PRODUCT_NAME (the "OpenVMX" human brand, rd vms-700): the
+ *       kit/product-db producer field is a stable machine-read vendor
+ *       token, not the human-facing product name, and must not reflow
+ *       every time the brand changes (ovmx_identity.h's DUAL-IDENTITY
+ *       REBRAND note).
  *
  *   ovmx_kit_pack list <kit-file>
  *       Print the kit's identification and its file manifest (filespec,
@@ -267,10 +272,12 @@ static int do_pack(const char *kitfile, const char *stagedir,
 
     /* Product name: OVMX vendor token (ovmx_identity.h) + the caller's
      * arch/product suffix, e.g. "OVMX" + " X86VMS VMS" -- never a second
-     * hardcoded version literal (that comes from OVMX_PRODUCT_VERSION). */
+     * hardcoded version literal (that comes from OVMX_PRODUCT_VERSION).
+     * OVMX_VENDOR_TOKEN, not OVMX_PRODUCT_NAME -- see the header comment
+     * above. */
     char product_name[OVMX_KIT_NAME_MAX];
     int pn = snprintf(product_name, sizeof(product_name), "%s %s",
-                      OVMX_PRODUCT_NAME, product_suffix);
+                      OVMX_VENDOR_TOKEN, product_suffix);
     if (pn < 0 || pn >= (int)sizeof(product_name)) {
         fprintf(stderr, "%%KITPACK-F-NAMELONG, product name too long\n");
         free(l.items);
@@ -278,7 +285,7 @@ static int do_pack(const char *kitfile, const char *stagedir,
     }
 
     if (!producer || producer[0] == '\0')
-        producer = OVMX_PRODUCT_NAME;
+        producer = OVMX_VENDOR_TOKEN;
 
     struct ovmx_kit_header hdr;
     memset(&hdr, 0, sizeof(hdr));

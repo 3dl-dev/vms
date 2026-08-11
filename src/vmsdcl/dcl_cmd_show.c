@@ -352,47 +352,30 @@ static int cmd_show_logical(struct dcl_command *cmd)
 }
 
 /*
- * cpu_time_of - the CPU time SHOW SYSTEM displays for one process row,
- * formatted as VMS "d hh:mm:ss.cc".
+ * format_cputim_field - render a JPI$_CPUTIM figure (10ms units) into VMS's
+ * own 16-column CPU field, "d hh:mm:ss.cc".
  *
- * THE FIGURE IS READ FROM THE SYSTEM SERVICE, NOT FROM /proc
- * (vms-8019 round 7). What stood here was a SECOND, independent
- * /proc/<pid>/stat parser living in the DCL layer -- a user-visible VMS
- * command sourcing its own answer for an item $GETJPI already answers
- * (JPI$_CPUTIM), which is the Rule 11 corollary inverted: a command is a
- * READER of an executive facility, never a thing that fabricates its own
- * answer. Two parsers of one quantity is also how the two layers came to
- * DISAGREE about one condition -- this one blanked the column when the
- * read failed while sys$getjpi invented a zero for the identical failure.
- * There is now one implementation and therefore one answer.
+ * THE FIGURE COMES FROM THE EXECUTIVE ROW (vms-a7e). vms-8019 round 7
+ * deleted the DCL-layer /proc parser that used to live here and routed
+ * SHOW SYSTEM's CPU through sys$getjpi(JPI$_CPUTIM) -- a command is a
+ * READER of an executive facility, never a second source (Rule 11). This
+ * goes one step further now that vms_ioctl_procscan carries the figure in
+ * the row it already returns (struct vms_procinfo.cputim, sourced in the
+ * executive by fill_proc_acct from the task the process table pins). The
+ * scan row IS that facility, so the caller reads info.cputim directly --
+ * one ioctl per table instead of an extra $GETJPI per row -- and, because
+ * the executive now carries the accounting on redacted rows too, a CPU
+ * figure is rendered for a cross-group process exactly as the oracle
+ * showed VMS does (docs/oracle/vax73-show-system-process.md §1.2), closing
+ * the divergence §1.2 recorded.
  *
- * Returns 1 with cpu_str filled, or 0 when the service will not report
- * the item -- which, for a row the scan has already established this
- * caller may read, means the process no longer exists (SS$_NONEXPR).
- * The caller then prints no figure and displays the row anyway -- the
- * same treatment as a redacted row; see cmd_show_system(), whose comment
- * records why dropping the row was written and backed out.
+ * VMS's field is byte-for-byte a 4-column right-justified day count, one
+ * space, then hh:mm:ss.cc -- 16 columns ("   0 00:00:00.05"), counted
+ * through `cat -A` on VAX1 (ibid. §1.1).
  */
-static int cpu_time_of(uint32_t vms_pid, char *cpu_str, size_t cpu_len)
+static void format_cputim_field(uint32_t centisec_total, char *cpu_str,
+                                size_t cpu_len)
 {
-    struct item_list_3 items[2];
-    uint32_t centisec_total = 0;
-    uint16_t retlen = 0;
-
-    memset(items, 0, sizeof(items));
-    items[0].buflen    = sizeof(uint32_t);
-    items[0].item_code = JPI$_CPUTIM;
-    items[0].bufaddr   = &centisec_total;
-    items[0].retlen    = &retlen;
-
-    uint32_t st = sys$getjpi(0, &vms_pid, NULL, items, NULL, NULL, 0);
-
-    /* An unset item is as much a refusal as a failure status, and for the
-     * same reason: the service reports JPI$_CPUTIM or it reports nothing,
-     * never a zero standing in for a figure it could not obtain. */
-    if (!(st & 1) || retlen != sizeof(uint32_t))
-        return 0;
-
     /* JPI$_CPUTIM counts 10-millisecond units, i.e. centiseconds. */
     unsigned long total_sec = centisec_total / 100UL;
     unsigned long centisec  = centisec_total % 100UL;
@@ -400,19 +383,9 @@ static int cpu_time_of(uint32_t vms_pid, char *cpu_str, size_t cpu_len)
     unsigned long mm = (total_sec % 3600) / 60;
     unsigned long ss = total_sec % 60;
 
-    /*
-     * VMS's OWN CPU field, byte for byte: a 4-column right-justified day
-     * count, one space, then hh:mm:ss.cc -- 16 columns in all
-     * ("   0 00:00:00.05"). Counted through `cat -A` on VAX1, OpenVMS VAX
-     * V7.3; docs/oracle/vax73-show-system-process.md Section 1.1. The
-     * "%lu " that stood here produced a 13-column field, which put every
-     * digit of the CPU column three places left of where VMS puts it.
-     */
     snprintf(cpu_str, cpu_len, "%4lu %02lu:%02lu:%02lu.%02lu",
              hh / 24,          /* days (usually 0) */
              hh % 24, mm, ss, centisec);
-
-    return 1;
 }
 
 /*
@@ -498,27 +471,47 @@ static int cmd_show_system(struct dcl_command *cmd)
      *
      *   "  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages"
      *
-     * OVMX's executive row (struct vms_procinfo) holds vms_pid, prcnam
-     * and -- through JPI$_CPUTIM -- CPU time. It holds NO VMS scheduler
-     * state, NO VMS priority, no I/O count and no page accounting, and
-     * a VMS command is a READER of an executive facility rather than a
-     * second source (Rule 11), so a /proc-derived page-fault figure
-     * would be a fabrication wearing a VMS column heading.
+     * OVMX's executive row (struct vms_procinfo) holds vms_pid and prcnam,
+     * and -- since vms-a7e -- CPU time, PAGE FAULTS and RESIDENT PAGES,
+     * sourced IN THE EXECUTIVE by fill_proc_acct (src/kernel/vms_proctab.c)
+     * from the Linux task the process table pins. It still holds NO VMS
+     * scheduler state, NO VMS priority and no VMS direct/buffered I/O split.
      *
      * THE RULE APPLIED HERE, which is the answer the "---" markers were
      * not: a column OVMX can source keeps VMS's OWN width, justification
      * and spelling; a column it cannot source is removed WHOLE -- heading
-     * text and field together -- and the survivors close up. Removing
-     * State..I/O deletes columns 25-43, so the CPU field moves 44-59 ->
-     * 25-40 and the centred "CPU" heading moves 51 -> 32. The result is a
-     * table that is VISIBLY narrower than VMS's rather than a VMS-shaped
-     * table with invented content in it.
+     * text and field together -- and the survivors close up.
      *
-     * DO NOT "RESTORE" THE MISSING COLUMNS by deriving them from Linux.
-     * The way to widen this header is to make the executive hold the
-     * quantity, and then read it.
+     * WHAT vms-a7e CHANGED. Page flts and Pages were absent because the
+     * executive did not hold them and a /proc read in THIS command would be
+     * a Rule-11 second source. That objection is gone: the executive now
+     * holds both (read by the executive from the task it owns, so the
+     * command is a reader of a facility, not a second source), so both
+     * columns are RESTORED at VMS's own widths. State, Pri and the I/O
+     * split remain removed -- OVMX has no VMS scheduler state, no VMS
+     * priority and no direct/buffered I/O split, and mapping a Linux value
+     * onto any of them would be the "unpinned invention" the oracle refused
+     * (docs/oracle/vax73-show-system-process.md §5.1).
+     *
+     * THE SURVIVORS' CLOSED-UP GEOMETRY (OVMX's own, extending vms-6a7's
+     * precedent of removing 25-43 and closing up). 0-based row columns:
+     *   Pid        0-7    %08X            (VMS width, no leading space)
+     *   (sep)      8
+     *   Process Name 9-23 %-15s           (VMS width)
+     *   (sep)      24
+     *   CPU       25-40   16-col field    (VMS's own "%4d %02d:%02d:%02d.%02d")
+     *   (sep)      41
+     *   Page flts 42-51   %10u            (VMS width)
+     *   (sep)      52
+     *   Pages     53-59   %7u             (VMS width)
+     * State/Pri/I/O (VMS 25-43) stay removed, so the table is VISIBLY
+     * narrower than VMS's rather than VMS-shaped with invented content.
+     *
+     * DO NOT "RESTORE" State/Pri/I/O by deriving them from Linux. The way
+     * to widen this header further is to make the executive hold the
+     * quantity faithfully, and then read it.
      */
-    printf("  Pid    Process Name           CPU\n");
+    printf("  Pid    Process Name          CPU         Page flts   Pages\n");
 
     /*
      * ENUMERATE THE EXECUTIVE'S PROCESS TABLE (vms-8019).
@@ -548,60 +541,56 @@ static int cmd_show_system(struct dcl_command *cmd)
 
     while (vms_kif_procscan(&index, &info) & 1) {
         /*
-         * A REDACTED ROW GETS NO CPU FIGURE -- NOT A ZERO, NOT A MARKER.
+         * ACCOUNTING IS CARRIED ON EVERY ROW, redacted or not (vms-a7e) --
+         * and this CLOSES a divergence vms-6a7 measured but could not fix.
          *
-         * The executive returns rows the caller may not $GETJPI with
-         * every identity field withheld and info.redacted set (see
-         * src/kernel/vms_ioctl.h), so $GETJPI on such a row would be
-         * refused SS$_NOPRIV -- there is no accounting to source.
+         * THE DIVERGENCE, AS IT STOOD. VAX1 (OpenVMS VAX V7.3) was booted
+         * with the caller holding NO privileges at all
+         * (docs/oracle/vax73-show-system-process.md §1.2): VMS printed the
+         * COMPLETE accounting row -- State, Pri, I/O, CPU, Page flts,
+         * Pages -- for a process in another UIC group, one command after
+         * $GETJPI on that same process was refused every item. NOTHING in a
+         * SHOW SYSTEM row is privileged on VMS. OVMX diverged because the
+         * executive zeroed linux_pid on a redacted row, so the DCL layer's
+         * per-row $GETJPI/proc read had nothing to source and blanked the
+         * CPU figure -- §1.2 named the fix as "carry the accounting datum
+         * on a redacted row" and placed it in the executive, not here.
          *
-         * What stood here read /proc/0/stat, ignored the failure, and
-         * printed the buffer's initialiser -- so a process whose
-         * accounting this caller is FORBIDDEN to read displayed a
-         * concrete, plausible "0 00:00:00.00". A fabricated accounting
-         * value is exactly what this item exists to delete, and it had
-         * survived inside the very function that was converted.
+         * THAT FIX IS NOW DONE, in the executive where §1.2 put it.
+         * vms_ioctl_procscan() sources CPU time, page faults and resident
+         * pages from the task it pins by pid_ref (fill_proc_acct,
+         * src/kernel/vms_proctab.c), independent of the zeroed linux_pid,
+         * and sets a VMS_PI_V_* bit per field. Accounting is not identity,
+         * so it rides through the redaction the identity fields still get.
+         * A redacted row therefore arrives with real CPU/Page-flts/Pages
+         * and this loop renders them, exactly as the oracle showed VMS
+         * does -- no per-row $GETJPI, no /proc read, no fabricated zero.
          *
-         * OVMX cannot source the figure, so it prints no figure. Same
-         * Rule 10 answer as the absent columns above, applied per row
-         * instead of per table.
-         *
-         * NOW PINNED, AND OVMX DIVERGES -- READ THIS BEFORE "FIXING" IT
-         * HERE (vms-6a7). VAX1 was booted and SHOW SYSTEM captured with
-         * the caller holding NO privileges at all
-         * (docs/oracle/vax73-show-system-process.md Section 1.2). VMS
-         * printed the COMPLETE row for a process in another UIC group --
-         * State, Pri, I/O, CPU, Page flts, Pages -- one command after
-         * $GETJPI on that same process was refused every item. NOTHING
-         * in a SHOW SYSTEM row is privileged on VMS.
-         *
-         * That is a divergence OVMX cannot close at the display: the
-         * executive zeroes linux_pid on a redacted row, so there is no
-         * accounting datum to read. The fix belongs in
-         * vms_ioctl_procscan() -- carry the accounting on a redacted row
-         * -- which changes the redaction policy vms-8019 landed, so it is
-         * NOT this item's to make. Until then, printing nothing remains
-         * the only honest width; printing a zero would fabricate exactly
-         * the value this comment records the deletion of.
-         *
-         * THE FIGURE IS THE SERVICE'S OR IT IS ABSENT (vms-8019 round 7).
-         * The scan is a snapshot walked one row at a time, so a process
-         * can also exit between being scanned and being read; the service
-         * then answers SS$_NONEXPR and, exactly as for a redacted row,
-         * this prints no figure. One rule covers both, because from the
-         * display's side they are one condition -- OVMX cannot source the
-         * figure -- and the alternative was to invent a second display
-         * rule (dropping the row) for a condition VMS's own SHOW SYSTEM
-         * never faces, which is the illegal third answer in the shape it
-         * always takes: reasonable-looking, and unpinned. What a VMS
-         * SHOW SYSTEM does with a process deleted mid-walk is STILL not
-         * pinned -- vms-6a7 could not stage the race on the oracle, and
-         * did not invent an answer for it.
+         * ABSENT IS STILL NOT ZERO. A field whose valid bit is CLEAR is
+         * rendered as blanks of the column's width, never as a zero -- the
+         * same discipline the `redacted` flag carries. For a live task
+         * cputim/pageflts are always set; pages is set unless the task has
+         * no address space (a kernel thread, never a VMS process). The scan
+         * reaps dead entries first, so a returned row backs a live task.
          */
-        char cpu_str[32] = "";
-        if (!info.redacted &&
-            !cpu_time_of(info.vms_pid, cpu_str, sizeof(cpu_str)))
-            cpu_str[0] = '\0';
+        char cpu_str[24];
+        char pf_str[16];
+        char pg_str[16];
+
+        if (info.fields_valid & VMS_PI_V_CPUTIM)
+            format_cputim_field(info.cputim, cpu_str, sizeof(cpu_str));
+        else
+            snprintf(cpu_str, sizeof(cpu_str), "%16s", "");
+
+        if (info.fields_valid & VMS_PI_V_PAGEFLTS)
+            snprintf(pf_str, sizeof(pf_str), "%10u", info.pageflts);
+        else
+            snprintf(pf_str, sizeof(pf_str), "%10s", "");
+
+        if (info.fields_valid & VMS_PI_V_PAGES)
+            snprintf(pg_str, sizeof(pg_str), "%7u", info.pages);
+        else
+            snprintf(pg_str, sizeof(pg_str), "%7s", "");
 
         /*
          * The empty Process Name column for an unnamed row is a KNOWN
@@ -635,10 +624,10 @@ static int cmd_show_system(struct dcl_command *cmd)
          * column right of VMS and put the CPU figure two columns further
          * out again.
          */
-        printf("%08X %-15s %s\n",
+        printf("%08X %-15s %s %s %s\n",
                info.vms_pid,
                info.prcnam[0] ? info.prcnam : "",
-               cpu_str);
+               cpu_str, pf_str, pg_str);
     }
 
     return SS$_NORMAL;

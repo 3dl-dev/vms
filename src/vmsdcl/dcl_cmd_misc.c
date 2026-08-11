@@ -339,8 +339,25 @@ int cmd_dump(struct dcl_command *cmd)
 /*
  * dcl_exec_utility - Fork/exec a VMS utility and wait for completion.
  *
- * Searches for the binary in SYS$SYSTEM first, then standard paths.
- * Handles Ctrl-Y interruption and child process management.
+ * Activates the utility image out of SYS$SYSTEM by TRANSLATING the SYS$SYSTEM
+ * logical -- the same path RUN and foreign-command activation take (see
+ * dcl_exec_foreign_command()/dcl_activate_image() -> dcl_resolve_path() ->
+ * vmsfs_to_linux_path() -> lnm_translate()). On OpenVMS every SYS$SYSTEM: image
+ * is located this way: `$ RUN SYS$SYSTEM:image` and DCL's own dispatch of
+ * SYS$SYSTEM:*.EXE utilities both resolve the SYS$SYSTEM logical, which is why a
+ * `DEFINE/SYSTEM SYS$SYSTEM ...` (or a rooted/relocated system disk) relocates
+ * where utilities activate from (VSI OpenVMS DCL Dictionary, RUN entry, "the
+ * command interpreter uses SYS$SYSTEM as the default device and directory";
+ * VSI OpenVMS System Manager's Manual, the SYS$SYSTEM system logical name).
+ *
+ * This USED TO build VMS_SYSTEM_DIR/exe directly -- a compile-time Linux path
+ * (SYSDISK_MOUNT/SYS0/SYSCOMMON/SYSEXE, ovmx_layout.h) that BYPASSED the
+ * logical. That made DEFINE/SYSTEM SYS$SYSTEM relocate RUN but NOT utility
+ * activation (SYSGEN/MAIL/AUTHORIZE/...) -- a split-brain and exactly the first
+ * thing a VMS admin tests. Now both paths honour the one logical (vms-7d8,
+ * governing principle vms-8ad: operation VMS-exact, identity OVMX). The
+ * translation machinery is vms-240's unified translator, reused, not a second
+ * copy.
  *
  * @exe_name:  Binary name (e.g. "SYSGEN.EXE", "MAIL.EXE")
  * @facility:  Error message facility (e.g. "SYSGEN", "MAIL")
@@ -354,14 +371,38 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
 {
     (void)argc;
 
-    /* Search order: SYS$SYSTEM, then PATH via execvp */
+    /*
+     * Resolve SYS$SYSTEM:<exe_name> through the SAME translator RUN uses. The
+     * ':' makes dcl_resolve_path() hand the whole spec to vmsfs, which
+     * translates the SYS$SYSTEM logical (relocated by DEFINE/SYSTEM or a rooted
+     * disk) before producing the Linux path.
+     */
     char sys_path[PATH_MAX];
-    snprintf(sys_path, sizeof(sys_path),
-             "%s/%s", VMS_SYSTEM_DIR, exe_name);
+    char vms_spec[PATH_MAX];
+    snprintf(vms_spec, sizeof(vms_spec), "SYS$SYSTEM:%s", exe_name);
+
+    struct dcl_context *ctx = dcl_get_context();
 
     const char *bin = NULL;
-    if (access(sys_path, X_OK) == 0)
+    if (ctx &&
+        dcl_resolve_path(ctx, vms_spec, sys_path, sizeof(sys_path)) == 0 &&
+        access(sys_path, X_OK) == 0)
         bin = sys_path;
+
+    /*
+     * Ultimate fallback default (INV-6 honest, never a silent fake): only if
+     * SYS$SYSTEM was untranslatable in this process (no LNM manager / no ctx),
+     * fall back to the compile-time SYS$SYSTEM location so a minimal host-tooling
+     * invocation still works -- mirroring how RUN degrades. This is the DEFAULT
+     * equivalence of SYS$SYSTEM, not a bypass of a redefinition: when SYS$SYSTEM
+     * IS defined, the translation above wins and this is never consulted.
+     */
+    char def_path[PATH_MAX];
+    if (!bin) {
+        snprintf(def_path, sizeof(def_path), "%s/%s", VMS_SYSTEM_DIR, exe_name);
+        if (access(def_path, X_OK) == 0)
+            bin = def_path;
+    }
 
     /* Set argv[0] to resolved path or exe_name for PATH search */
     argv[0] = (char *)(bin ? bin : exe_name);
@@ -375,7 +416,6 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
         _exit(1);
     } else if (pid > 0) {
         extern volatile sig_atomic_t dcl_running_child;
-        struct dcl_context *ctx = dcl_get_context();
         dcl_running_child = (sig_atomic_t)pid;
         int wstatus;
         waitpid(pid, &wstatus, WUNTRACED);

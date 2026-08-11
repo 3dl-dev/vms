@@ -171,7 +171,7 @@ Everything else moves to where VMS keeps it:
 | `INITIALIZE.EXE` on a blank disk | operator command, out of band | once |
 | home directories + their ownership (`provision_sysuaf_users`) | `AUTHORIZE` (`tools/vms_authorize.c`) at `ADD` time | once per account |
 | system-tree ownership (`provision_ownership`) | the kit that writes the tree | once |
-| console login loop | a **JOB_CONTROL**-equivalent detached process, created by `SYSTARTUP_VMS.COM` like every other service | at startup, as a service |
+| console login loop | a **JOB_CONTROL**-equivalent detached process, created by `SYSTARTUP_VMS.COM` like every other service | at startup, as a service — **DONE, `vms-8d2`**: `src/ovmx_job_control/ovmx_job_control.c` (`JOB_CONTROL.EXE`), created by `SYS$STARTUP:JOB_CONTROL_STARTUP.COM` via `RUN/DETACHED/PROCESS_NAME=JOB_CONTROL` |
 
 Note the last row is the same argument the file already makes for itself in its
 own `NOTE ON SERVICES` block (:877–900): *services start where VMS starts them,

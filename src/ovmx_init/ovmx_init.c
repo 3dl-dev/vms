@@ -5,8 +5,7 @@
  * QEMU path (CLAUDE.md Rule 9). This is SYSBOOT + EXEC_INIT + SYSINIT and
  * NOTHING ELSE (docs/design-init-scope.md, operator ruling 2026-08-10 "STRIP
  * ALL OF IT"): mount the Linux substrate, attach the executive, load vmsfs.ko,
- * mount the system disk -- or halt -- hand off to STARTUP.COM, run the console
- * login loop.
+ * mount the system disk -- or halt -- hand off to STARTUP.COM, then wait.
  *
  * IT DOES NOT INSTALL, INITIALIZE OR PROVISION ANYTHING. A booting VMS system
  * FINDS its system disk already installed or does not boot (design-init-scope.md
@@ -22,6 +21,18 @@
  * system-tree ownership and the SYSTEM identity are system management, and
  * run from SYS$MANAGER:STARTUP.COM in PROVISION.EXE -- see the Step 1 note
  * in main(). No shell scripts, no busybox, no /etc/passwd.
+ *
+ * IT DOES NOT RUN THE CONSOLE LOGIN LOOP (vms-8d2, design-init-scope.md §2
+ * row "login loop"). On VMS the interactive console session is owned by
+ * JOB_CONTROL, a DETACHED process STARTUP.COM's site startup creates --
+ * never by the SYSINIT-equivalent bootstrap process. That loop now lives in
+ * src/ovmx_job_control/ovmx_job_control.c (JOB_CONTROL.EXE), created by
+ * SYS$STARTUP:JOB_CONTROL_STARTUP.COM (invoked from SYS$MANAGER:
+ * SYSTARTUP_VMS.COM, run_startup() below) with RUN/DETACHED/PROCESS_NAME=
+ * JOB_CONTROL -- the same vms-47b mechanism every other OVMX service uses.
+ * PID 1's job ends when STARTUP.COM returns; it then just waits, because
+ * Linux's PID 1 cannot exit without panicking the kernel, and there is no
+ * VMS analogue of that requirement to satisfy instead.
  */
 
 #include <stdio.h>
@@ -666,7 +677,8 @@ static void display_boot_banner(void)
 }
 
 /*
- * Main: boot sequence then login loop.
+ * Main: the boot sequence, then wait. See the "IT DOES NOT RUN THE CONSOLE
+ * LOGIN LOOP" note in this file's header (vms-8d2) for where that moved.
  */
 int main(void)
 {
@@ -799,198 +811,32 @@ int main(void)
     fflush(stdout);
     fflush(stderr);
 
-    /* Step 5: Login loop (only if stdin is a terminal) */
-    char loginout_path[512], dcl_path[512];
-    vms_to_linux(VMS_LOGINOUT_PATH, loginout_path, sizeof(loginout_path));
-    vms_to_linux(VMS_DCL_PATH, dcl_path, sizeof(dcl_path));
-
-    int console_interactive = isatty(STDIN_FILENO);
-    int consecutive_failures = 0;
-
-    /* There is no "wait forever because a service is serving sessions"
-     * branch here any more. It existed for the SSH daemon STARTUP.EXE
-     * used to fork, and it could only ever be entered on the dead Docker
-     * runtime (CLAUDE.md Rule 9). With no console, the loop below exits
-     * on EOF exactly as it always did when no daemon was running. */
-
+    /* Step 5: PID 1's job ends here.
+     *
+     * The console login loop used to run inline below, forking LOGINOUT.EXE
+     * on the console forever -- the exact "wrong component" defect
+     * design-init-scope.md §2 named it (JOB_CONTROL's job, run from
+     * STARTUP.EXE). run_startup() above already ran STARTUP.COM to
+     * completion, which -- through SYSTARTUP_VMS.COM and SYS$STARTUP:
+     * JOB_CONTROL_STARTUP.COM -- has already created JOB_CONTROL as a
+     * DETACHED process holding the console (vms-8d2, vms-47b's RUN/DETACHED
+     * mechanism); by the time control reaches this line, the console session
+     * is JOB_CONTROL's, not PID 1's, and grep for a login loop here finds
+     * none.
+     *
+     * PID 1 is Linux's process 1: it cannot exit without panicking the
+     * kernel, and there is no VMS analogue of that requirement to satisfy
+     * instead (VMS's SYSINIT/STARTUP process has no such constraint --
+     * docs/design-boot-faithful.md §3.6's fresh-boot process population
+     * does not even list it as still running). So it waits, doing the one
+     * thing Linux still requires of PID 1: answer a shutdown signal and
+     * reap anything reparented to it (the SIGCHLD handler installed above
+     * already does the reaping; JOB_CONTROL and everything it creates are
+     * not PID 1's children and are never waited on here -- see the comment
+     * this replaced, and the NOTE ON SERVICES above). */
     while (!shutdown_requested) {
-        /* Check if stdin is still open (avoid tight loop on EOF) */
-        if (!console_interactive && feof(stdin)) {
-            break;
-        }
-
-        struct timespec t_before;
-        clock_gettime(CLOCK_MONOTONIC, &t_before);
-
-        pid_t child = fork();
-        if (child == 0) {
-            /*
-             * DELETED, NOT REPLACED (vms-fb9): setenv("VMS_TERMINAL",
-             * "_OPA0:", 1) stood here. PID 1 told its login child what
-             * terminal it was on through the environment -- the rejected
-             * VMS_PRCNAM shape (CLAUDE.md rule 10, worked example 2). It
-             * was not even a claim anything could check: the child had no
-             * way to verify it and no other process could see it.
-             *
-             * OPA0: IS real -- the executive creates it at module init
-             * (src/kernel/vms_devtab.c) and every process on the node can
-             * read it. So the console terminal does not need to be
-             * announced; it needs to be LOOKED UP, with $ASSIGN and
-             * $GETDVI on the resulting channel. PID 1 has no business
-             * asserting it, and nothing downstream may be built on this
-             * line being here.
-             *
-             * WHAT STANDS HERE INSTEAD (vms-d0b). The login session takes
-             * a real channel to the console and asks the executive to
-             * record that channel's device as this job's terminal. Three
-             * properties, and each is the reason the environment variable
-             * was not simply reinstated behind a function call:
-             *
-             *   - The name is not transmitted. $ASSIGN names the console
-             *     because PID 1 is CREATING A SESSION ON IT -- that is
-             *     system configuration, the same way DKA0: is named at
-             *     step 1b -- but VMS_IOCTL_SETTERM takes only the
-             *     CHANNEL. The executive reads the device off the channel
-             *     it issued and copies its own name. Nothing downstream
-             *     receives a string it must trust.
-             *   - The binding is in the executive, so a DIFFERENT process
-             *     can read which terminal this job is on ($GETJPI), which
-             *     is what makes it a fact rather than a self-description
-             *     (CLAUDE.md Rule 11).
-             *   - It survives the execl() below. The executive keys the
-             *     process table on the thread-group id, which execve()
-             *     does not change, so LOGINOUT.EXE and then DCL.EXE run
-             *     with the binding their process already has, carrying
-             *     nothing.
-             *
-             * Neither status is examined, deliberately, and this is the
-             * same reasoning as cmd_show_device()'s untested
-             * vms_kif_open(): the conditions they could report are ones
-             * OVMX is not in. The executive is pinned open for the life
-             * of the system (executive_attach, above, which halts if it
-             * is absent), OPA0: is created at module init and vms.ko
-             * implements no operation that removes a device, and the
-             * channel handed to SETTERM is the one $ASSIGN just returned.
-             * A branch here would be a handler for a state VMS is not in
-             * (Rule 10), and the only thing it could usefully do is
-             * fabricate a binding.
-             * If a call did fail, the executive records no terminal --
-             * and SHOW TERMINAL then names none, which is the honest
-             * outcome and the one the reader already renders.
-             */
-            uint32_t console_chan = 0;
-            (void)vms_kif_assign(OVMX_CONSOLE_DEVICE, &console_chan);
-            (void)vms_kif_setterm(console_chan);
-
-            /* Child: exec vms_login (SYS$SYSTEM:LOGINOUT.EXE). */
-            execl(loginout_path, "vms_login", (char *)NULL);
-
-            /*
-             * NO DCL FALLBACK (vms-72c). "exec vmsdcl directly" used to
-             * stand here if the LOGINOUT.EXE exec above failed -- an
-             * unauthenticated shell handed to whoever is at the console,
-             * reached by nothing more than a missing or unexecutable
-             * file. That is CLAUDE.md Rule 10's illegal third answer,
-             * named for exactly this shape in this item's own dispatch
-             * text: VMS has no state in which the console driver cannot
-             * run LOGINOUT and responds by starting an interactive
-             * session anyway with no username, no password and no
-             * SYSUAF check. It is also the same defect this item closes
-             * one line earlier for the empty-password-hash SYSUAF
-             * shipped by default (distro/rootfs/.../SYSUAF.DAT) --
-             * a second path to the identical outcome, "session reached
-             * with no real authentication", would have made that fix
-             * partial.
-             *
-             * MADE UNREACHABLE, NOT HANDLED, per Rule 10's other answer:
-             * LOGINOUT.EXE is a required system file, present on every
-             * installed system disk (the installer spine writes the whole
-             * system tree; require_installed_system() above has already
-             * halted the boot if the mounted volume is not installed at all)
-             * before the login loop below can ever run, so failing to
-             * exec it here is the same class of condition as vms.ko or
-             * /dev/vms being absent (executive_attach(), above) --
-             * OVMX's one runtime does not come up in that state. Unlike
-             * the executive gate, the response here is not to halt the
-             * whole boot: this is a per-login-attempt failure, not a
-             * per-system one, and the outer loop already retries with
-             * backoff (see "consecutive_failures" below) instead of
-             * surrendering the console -- NOT independently oracle-pinned
-             * here as "what VMS's console driver does on an image
-             * activation failure" (the ~/vax lab was unavailable for this
-             * item, mid-use for an unrelated experiment); it is the
-             * behavior this loop already had for every other login
-             * failure before this item touched it, kept unchanged. So the
-             * child reports why (OVMX facility, not a
-             * VMS one -- a Linux exec(2) failure has no VMS analogue,
-             * same reasoning as ovmx_exec_halt above) and exits, and the
-             * loop tries again; what it may not do is substitute an
-             * unauthenticated shell for the login it could not run.
-             */
-            fprintf(stderr, "%%OVMX-E-NOLOGIN, cannot exec %s: %s\n",
-                    VMS_LOGINOUT_PATH, strerror(errno));
-            _exit(1);
-        } else if (child > 0) {
-            /* Parent: wait for login session to end */
-            int wstatus;
-            waitpid(child, &wstatus, 0);
-
-            struct timespec t_after;
-            clock_gettime(CLOCK_MONOTONIC, &t_after);
-            long elapsed_ms = (t_after.tv_sec - t_before.tv_sec) * 1000
-                            + (t_after.tv_nsec - t_before.tv_nsec) / 1000000;
-
-            /* Track consecutive fast failures (< 1 second) */
-            if (elapsed_ms < 1000) {
-                consecutive_failures++;
-                if (consecutive_failures >= 5) {
-                    fprintf(stderr,
-                        "%%STARTUP-F-LOGINFAIL, login process failing repeatedly\n");
-                    if (WIFEXITED(wstatus))
-                        fprintf(stderr,
-                            "%%STARTUP-F-LOGINFAIL, exit status %d\n",
-                            WEXITSTATUS(wstatus));
-                    else if (WIFSIGNALED(wstatus))
-                        fprintf(stderr,
-                            "%%STARTUP-F-LOGINFAIL, killed by signal %d\n",
-                            WTERMSIG(wstatus));
-
-                    /* Check if the binaries actually exist (VMS specs in messages) */
-                    struct stat chk;
-                    fprintf(stderr, "%%STARTUP-I-DIAG, %s: %s\n",
-                            VMS_LOGINOUT_PATH,
-                            stat(loginout_path, &chk) == 0 ?
-                                "exists" : strerror(errno));
-                    fprintf(stderr, "%%STARTUP-I-DIAG, %s: %s\n",
-                            VMS_DCL_PATH,
-                            stat(dcl_path, &chk) == 0 ?
-                                "exists" : strerror(errno));
-
-                    /* Back off instead of spinning */
-                    sleep(5);
-                    consecutive_failures = 0;
-                }
-            } else {
-                consecutive_failures = 0;
-            }
-
-            if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) != 0) {
-                usleep(100000);
-            }
-
-            /* Print blank line between sessions (like real VMS console) */
-            printf("\n");
-            fflush(stdout);
-        } else {
-            /* fork failed */
-            perror("fork");
-            sleep(1);
-        }
+        pause();
     }
 
-    /* No daemons to clean up: STARTUP.EXE started none. A detached
-     * process created by a startup procedure is NOT STARTUP.EXE's child
-     * and cannot be waited on by it -- shutting one down is $DELPRC by
-     * process name, which belongs to a shutdown procedure, not here. */
     return 0;
 }

@@ -526,6 +526,33 @@ set_tests_properties(boot_scsnode_hostname_e2e PROPERTIES
     TIMEOUT 900)
 
 # ---------------------------------------------------------------------------
+# JOB_CONTROL OWNS THE CONSOLE SESSION, END TO END (vms-8d2).
+#
+# Boots the ACTUAL mastered bootable image (same distro/Dockerfile.bootable
+# as parts_demo_e2e/boot_scsnode_hostname_e2e above), logs in as SYSTEM
+# through the login prompt JOB_CONTROL created, and proves via the REAL
+# executive process table (`SHOW SYSTEM`, read from a DIFFERENT process than
+# the one that created JOB_CONTROL -- CLAUDE.md Rule 11) that JOB_CONTROL is
+# a real, named, DETACHED process -- not PID 1 running an inline login loop.
+# The cheap, always-on half of this item's proof (PID 1's source carries no
+# login loop) is tests/integration/test_job_control_ownership.sh, a source
+# scan that runs under a bare `ctest`; this is the expensive runtime half.
+# See tests/qemu/test_job_control_console.sh's header for the full
+# A-writes/B-reads shape.
+#
+# Same opt-in/SKIP convention as the other qemu-full-boot gates: real
+# docker + QEMU boot, gated behind OVMX_QEMU_FULL_E2E=1 so it does not run
+# under a bare `ctest`.
+add_test(
+    NAME job_control_console_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_job_control_console_e2e.sh
+)
+set_tests_properties(job_control_console_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 600)
+
+# ---------------------------------------------------------------------------
 # GENERALIZED RELEASE-ACCEPTANCE GATE (vms-a86f, epic vms-a84 RELEASE
 # ENGINEERING).
 #

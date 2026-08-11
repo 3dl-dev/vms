@@ -40,11 +40,16 @@
  * image does not run behind it -- and, as the control that keeps the
  * refusal honest, plain RUN still runs the image.
  *
- * WHAT IS NOT ASSERTED HERE: that OVMX ships a service. It does not, and
- * SYS$MANAGER:SYSTARTUP_VMS.COM deliberately starts none (shipping a
- * procedure for an image that is never built would be its own facade). The
- * procedures below are this test's own fixtures, in exactly the shape the
- * shipped SYSTARTUP_VMS.COM documents.
+ * WHAT IS NOT ASSERTED HERE: the real shipped service. As of vms-8d2,
+ * SYS$MANAGER:SYSTARTUP_VMS.COM DOES start one -- JOB_CONTROL, via
+ * SYS$STARTUP:JOB_CONTROL_STARTUP.COM -- and that real detached process is
+ * proven end to end (created, owns the console, outlives its creator, SHOW
+ * SYSTEM lists it) by the full-boot gate tests/qemu/test_job_control_
+ * console.sh, against the real mastered image, not a fixture. This suite
+ * predates that: it proves the underlying $CREPRC/RUN-DETACHED mechanism in
+ * isolation, against its OWN fixture procedures (below), in exactly the
+ * shape the shipped SYSTARTUP_VMS.COM documents -- kept because it is
+ * cheaper to run and isolates the mechanism from the boot sequence.
  *
  * Requires a real, insmod'd vms.ko at /dev/vms, and DCL.EXE staged at
  * /bin/DCL.EXE by tests/qemu/Dockerfile. With no /dev/vms -- which happens

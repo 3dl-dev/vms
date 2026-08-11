@@ -17,6 +17,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <unistd.h>
 
 #include "sha256.h"
 #include "str_util.h"
@@ -457,6 +458,92 @@ int sysuaf_authenticate(const sysuaf_record_t *rec, const char *password)
 
     /* Compare against stored hex hash (case-insensitive) */
     return (strcasecmp(hex, rec->password_hash) == 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* sysuaf_write_record                                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Rewrite ONE existing row of SYSUAF_PATH in place. See the doc comment on
+ * this declaration in sysuaf.h for the contract; this is the SAME targeted-
+ * rewrite shape as sys$setuai's (src/libvms/syssvc/sys_uai.c) -- read every
+ * row, replace the one whose username matches, copy every other row
+ * verbatim, then atomically rename the result over the original. Added so a
+ * second caller (DCL's SET PASSWORD, vms-e9e) does not have to hand-roll a
+ * THIRD copy of this loop to reach the one shared format
+ * (sysuaf_format_record()) -- it now reaches the loop too.
+ */
+int sysuaf_write_record(const sysuaf_record_t *rec)
+{
+    if (!rec || rec->username[0] == '\0')
+        return -1;
+
+    char sysuaf_linux[1024];
+    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
+
+    char tmp_path[1040];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.TMP", sysuaf_linux);
+
+    FILE *in = fopen(sysuaf_linux, "r");
+    if (!in)
+        return -1;
+
+    FILE *out = fopen(tmp_path, "w");
+    if (!out) {
+        fclose(in);
+        return -1;
+    }
+
+    int found = 0;
+    int failed = 0;
+    char line[SYSUAF_LINE_MAX];
+    int too_long = 0;
+
+    while (sysuaf_read_line(in, line, sizeof(line), &too_long)) {
+        if (too_long) {
+            /* Cannot copy a prefix (corrupts the account) or drop the row
+             * (deletes it). The only answer that loses nothing is to
+             * abandon the whole rewrite and leave the original untouched. */
+            failed = 1;
+            break;
+        }
+
+        /* sysuaf_parse_line() modifies its argument, so the verbatim copy
+         * has to be taken BEFORE the parse. */
+        char verbatim[SYSUAF_LINE_MAX];
+        strncpy(verbatim, line, sizeof(verbatim) - 1);
+        verbatim[sizeof(verbatim) - 1] = '\0';
+
+        sysuaf_record_t row;
+        int rc = sysuaf_parse_line(line, &row);
+        if (rc == 1 && strcasecmp(row.username, rec->username) == 0) {
+            char out_line[SYSUAF_LINE_MAX];
+            if (sysuaf_format_record(rec, out_line, sizeof(out_line)) < 0) {
+                failed = 1;
+                break;
+            }
+            fprintf(out, "%s\n", out_line);
+            found = 1;
+        } else {
+            fputs(verbatim, out);
+        }
+    }
+
+    fclose(in);
+    fclose(out);
+
+    if (failed || !found) {
+        unlink(tmp_path);
+        return -1;
+    }
+
+    if (rename(tmp_path, sysuaf_linux) != 0) {
+        unlink(tmp_path);
+        return -1;
+    }
+
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */

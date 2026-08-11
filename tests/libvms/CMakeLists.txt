@@ -222,3 +222,28 @@ libvms_add_test(test_libvms_sysuaf_line_limit
 # fails the build.
 libvms_add_test(test_libvms_lock_flag_bits
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lock_flag_bits.c)
+
+# vms-e9e — INV-DCL veracity gate for SET PASSWORD (docs/design-dcl-fidelity.md
+# sec 3): sysuaf_write_record() persists a real hash change to SYSUAF, so
+# authenticate() flips (new password succeeds, old fails) and a bystander
+# row survives untouched. Needs vmsfs (vmsfs_to_linux_path/device table) and
+# vmslnm (lnm_setup_defaults) to resolve SYS$SYSTEM: the same way AUTHORIZE
+# and LOGIN do -- not via libvms_add_test(), same reason
+# test_libvms_identity above isn't. Bootstraps its own throwaway temp root
+# as DKA0: (never the real /vms mount), so it cannot race any other test.
+add_executable(test_libvms_sysuaf_write_veracity
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_write_veracity.c)
+target_include_directories(test_libvms_sysuaf_write_veracity PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+)
+target_link_libraries(test_libvms_sysuaf_write_veracity PRIVATE
+    vms
+    vmsfs
+    vmslnm
+    pthread
+    m
+)
+add_test(NAME test_libvms_sysuaf_write_veracity
+         COMMAND test_libvms_sysuaf_write_veracity)

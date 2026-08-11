@@ -22,6 +22,7 @@
 #include "dcl/terminal.h"
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
+#include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
 #include "ssdef.h"
 #include "vms/logical.h"
@@ -32,6 +33,8 @@
 #include "starlet.h"
 #include "vmsfs/filespec.h"
 #include "vms_kif.h"
+#include "sysuaf.h"
+#include "sha256.h"
 
 /* Forward declarations for queue subcommands (dcl_cmd_process.c) */
 extern int cmd_set_entry(struct dcl_command *cmd);
@@ -426,17 +429,242 @@ static int cmd_set_protection(struct dcl_command *cmd)
 }
 
 /*
- * SET PASSWORD - Change user password (interactive prompts).
+ * dcl_read_noecho_line - read one line from the controlling terminal with
+ * echo suppressed, for the SET PASSWORD prompts below.
+ *
+ * Same termios technique tools/vms_login.c's read_password() uses at the
+ * LOGIN Password: prompt -- a small, UI-only duplicate (terminal echo
+ * control, not a SYSUAF format) rather than a shared library function,
+ * since nothing about it is part of the SYSUAF format INV-1 guards.
+ * Returns 0 on success (buf holds the trimmed line), -1 on EOF/read error.
+ */
+static int dcl_read_noecho_line(char *buf, size_t bufsz)
+{
+    struct termios old_term, new_term;
+    int have_term = 0;
+
+    if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &old_term) == 0) {
+        new_term = old_term;
+        new_term.c_lflag &= ~(tcflag_t)ECHO;
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &new_term);
+        have_term = 1;
+    }
+
+    int rc = 0;
+    if (fgets(buf, (int)bufsz, stdin) == NULL)
+        rc = -1;
+
+    if (have_term) {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &old_term);
+        putchar('\n');
+        fflush(stdout);
+    }
+
+    if (rc == 0) {
+        size_t len = strlen(buf);
+        while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
+            buf[--len] = '\0';
+    }
+    return rc;
+}
+
+/*
+ * SET PASSWORD [/GENERATE[=n]] [/SECONDARY] [/SYSTEM]
+ *
+ * Public OpenVMS DCL Dictionary "SET PASSWORD" entry (Rule 8 clean-room
+ * citation): format is "SET PASSWORD" -- NO parameters -- with exactly
+ * three qualifiers, /GENERATE, /SECONDARY, /SYSTEM:
+ *   https://www.digiater.nl/openvms/doc/ia64-v8.3/opsys/vmsos83/9996/9996pro_205.html
+ *   https://wiki.vmssoftware.com/SET_PASSWORD
+ * There is NO /USER= qualifier and no parameter that names another
+ * account -- a DCL user can only ever change their OWN password this way.
+ * Changing someone ELSE's password is AUTHORIZE's job (tools/vms_authorize.c
+ * cmd_modify(), already gated on SYSPRV via check_privilege()).
+ *
+ * The interactive sequence and its no-echo behaviour are pinned from an
+ * indexed public transcript of the OpenVMS User's Manual "Changing Your
+ * Password" walkthrough (search-cached copy, session 2026-08-11):
+ *     Old password:
+ *     New password:
+ *     Verification:
+ *   "While answering these prompts, your keystrokes will not be displayed."
+ *   "If you fail to enter the same new password twice, the password is not
+ *   changed" -- and a correct old-password check gates the whole exchange.
+ * /GENERATE's default length range (6-8 chars, n to n+2 for /GENERATE=n) and
+ * the classic PWDMINIMUM default of 6 characters -- "enforced only by the
+ * DCL command SET PASSWORD" -- are the same Dictionary entry and the
+ * OpenVMS Password wiki page. OVMX's sysuaf_record_t carries no per-account
+ * PWDMINIMUM/PWDLIFETIME field (vms-846's compact SYSUAF), so the Dictionary
+ * DEFAULT is what is enforced here, not a per-account SYSGEN value.
+ *
+ * INV-DCL (docs/design-dcl-fidelity.md sec 3): this used to print
+ * "%SET-I-PASSWORD, password change not fully implemented" and return
+ * SS$_NORMAL without touching SYSUAF -- a success-toned lie for a no-op.
+ * It now verifies the old password against the real SYSUAF hash
+ * (sysuaf_authenticate()) and, on match, writes a real new hash back through
+ * the ONE shared writer (sysuaf_write_record() -> sysuaf_format_record(),
+ * vms-9b7/INV-1) -- the same record format AUTHORIZE and $SETUAI use.
+ *
+ * /SECONDARY and /SYSTEM are real VMS features OVMX does not implement
+ * (no secondary-password field in sysuaf_record_t; no per-node system-
+ * password subsystem at all) -- both honestly refuse rather than fake
+ * success. /SYSTEM still gates on SECURITY privilege FIRST, matching the
+ * Dictionary ("/SYSTEM ... Requires SECURITY privilege"), so an
+ * unprivileged caller gets the authentic privilege error rather than an
+ * NOTIMPL that leaks whether the (nonexistent) feature would otherwise
+ * have worked. /GENERATE is likewise an honest refusal: OVMX has no
+ * password-strength generator to produce the five candidates VMS offers.
  */
 static int cmd_set_password(struct dcl_command *cmd)
 {
-    (void)cmd;
     struct dcl_context *ctx = dcl_get_context();
 
-    printf("%%SET-I-PASSWORD, password change not fully implemented\n");
-    printf("  User: %s\n", ctx->username);
-    printf("  Full SYSUAF.DAT rewrite is planned for a future release.\n");
+    /* SET's dispatcher (cmd_set() below) is not yet retrofit with a nested
+     * per-subcommand qualifier table (docs/dcl-verb-fidelity-scoreboard.md,
+     * Phase 1 "Deferred" note: SET/SHOW need a nested table design). Until
+     * that lands, PASSWORD validates its own qualifiers with the SAME
+     * Phase 1 validator (dcl_validate_qualifiers(), src/vmsdcl/dcl_parser.c)
+     * against a local table, rather than re-deriving the check by hand the
+     * way the pre-Phase-1 SET TERMINAL canary had to. */
+    static const struct dcl_qual_def password_quals[] = {
+        { "GENERATE",  CDU_VT_VALUE, 0, NULL, NULL },
+        { "SECONDARY", CDU_VT_NONE,  0, NULL, NULL },
+        { "SYSTEM",    CDU_VT_NONE,  0, NULL, NULL },
+        { NULL, 0, 0, NULL, NULL },
+    };
+    struct dcl_verb password_verb_shim = { .quals = password_quals };
+    uint32_t qstatus = dcl_validate_qualifiers(&password_verb_shim, cmd);
+    if (qstatus != SS$_NORMAL)
+        return (int)qstatus;
 
+    /* SET PASSWORD takes no parameters. cmd->params[0] is "PASSWORD" (the
+     * subcommand keyword) itself; anything past it is an extra parameter
+     * real DCL rejects (MSG_DCL_MAXPARM, dcl_messages.c). */
+    if (cmd->param_count > 1) {
+        dcl_error("DCL", 2, "MAXPARM", "too many parameters");
+        return SS$_BADPARAM;
+    }
+
+    if (dcl_has_qualifier(cmd, "SECONDARY")) {
+        dcl_error("DCL", 0, "NOTIMPL",
+                  "secondary passwords are not implemented in OVMX - "
+                  "no state changed");
+        return SS$_UNSUPPORTED;
+    }
+
+    if (dcl_has_qualifier(cmd, "SYSTEM")) {
+        /* enforced_privs_held(), not ctx->privileges -- see that function's
+         * comment at the top of this file (vms-2b8 round 5). */
+        uint64_t held = enforced_privs_held();
+        if (!(held & PRV$M_SECURITY)) {
+            dcl_error("SET", 2, "NOPRIV", "no privilege for attempted operation");
+            return SS$_NOPRIV;
+        }
+        dcl_error("DCL", 0, "NOTIMPL",
+                  "OVMX has no per-node system-password subsystem - "
+                  "no state changed");
+        return SS$_UNSUPPORTED;
+    }
+
+    if (dcl_has_qualifier(cmd, "GENERATE")) {
+        dcl_error("DCL", 0, "NOTIMPL",
+                  "/GENERATE password generation is not implemented in "
+                  "OVMX - no state changed");
+        return SS$_UNSUPPORTED;
+    }
+
+    /* Self-service change only (see the citation above): look up the
+     * CALLER's own SYSUAF record. No privilege is required to change your
+     * own password. */
+    sysuaf_record_t rec;
+    if (sysuaf_lookup(ctx->username, &rec) != 0) {
+        dcl_error("UAF", 2, "NOSUCHUSER", "no such user %s in SYSUAF",
+                  ctx->username);
+        return SS$_NOSUCHID;
+    }
+
+    char old_pw[128], new_pw[128], verify_pw[128];
+
+    printf("Old password: ");
+    fflush(stdout);
+    if (dcl_read_noecho_line(old_pw, sizeof(old_pw)) != 0) {
+        printf("\n");
+        return SS$_ABORT;
+    }
+
+    /* "User authorization failure" is the SAME text, and the SAME
+     * grounding (a verbatim public OpenVMS Alpha V6.2 console transcript),
+     * that tools/vms_login.c already prints for a failed sysuaf_authenticate()
+     * check -- reused here rather than invented, because this is the same
+     * check against the same SYSUAF hash, not a different condition. */
+    if (!sysuaf_authenticate(&rec, old_pw)) {
+        printf("\nUser authorization failure\n");
+        return SS$_INVLOGIN;
+    }
+
+    printf("New password: ");
+    fflush(stdout);
+    if (dcl_read_noecho_line(new_pw, sizeof(new_pw)) != 0) {
+        printf("\n");
+        return SS$_ABORT;
+    }
+
+    printf("Verification: ");
+    fflush(stdout);
+    if (dcl_read_noecho_line(verify_pw, sizeof(verify_pw)) != 0) {
+        printf("\n");
+        return SS$_ABORT;
+    }
+
+    if (strcmp(new_pw, verify_pw) != 0) {
+        /* Dictionary: "If you fail to enter the same new password twice,
+         * the password is not changed." No exact %SET-facility message
+         * text for this case was found in the public mirrors checked
+         * (Rule 8 -- do not invent one); DCL/INCOMPAT is the existing
+         * generic-mismatch identifier already used elsewhere in this
+         * codebase (SS$_INCOMPAT, src/libvms/include/ssdef.h) rather than
+         * a fabricated SET-specific code. */
+        dcl_error("DCL", 2, "INCOMPAT",
+                  "new password and verification do not match - "
+                  "password not changed");
+        return SS$_INCOMPAT;
+    }
+
+    /* Reject empty (consistent with sysuaf_authenticate()'s own rule that
+     * an unset/empty hash never authenticates -- vms-08f) and enforce the
+     * Dictionary's classic PWDMINIMUM default of 6, the only floor OVMX can
+     * honour without a per-account SYSGEN field. */
+    size_t new_len = strlen(new_pw);
+    if (new_len == 0) {
+        dcl_error("DCL", 2, "NOPSWD", "password may not be blank - "
+                  "password not changed");
+        return SS$_BADPARAM;
+    }
+#define OVMX_PWDMINIMUM_DEFAULT 6
+    if (new_len < OVMX_PWDMINIMUM_DEFAULT) {
+        dcl_error("DCL", 2, "PWDTOOSHORT",
+                  "password must be at least %d characters - "
+                  "password not changed", OVMX_PWDMINIMUM_DEFAULT);
+        return SS$_BADPARAM;
+    }
+#undef OVMX_PWDMINIMUM_DEFAULT
+
+    /* Real hash, real rewrite -- the same SHA256 scheme sysuaf_authenticate()
+     * checks against and the same shared writer AUTHORIZE/$SETUAI use
+     * (sysuaf_write_record() -> sysuaf_format_record(), INV-1: one format,
+     * one writer). */
+    char new_hash[65];
+    sha256_hex((const uint8_t *)new_pw, new_len, new_hash);
+    strncpy(rec.password_hash, new_hash, sizeof(rec.password_hash) - 1);
+    rec.password_hash[sizeof(rec.password_hash) - 1] = '\0';
+
+    if (sysuaf_write_record(&rec) != 0) {
+        dcl_error("UAF", 2, "WRITEFAIL",
+                  "unable to update SYSUAF.DAT - password not changed");
+        return SS$_FILACCERR;
+    }
+
+    printf("%%SET-S-PASSWORD, password for user %s changed\n", ctx->username);
     return SS$_NORMAL;
 }
 

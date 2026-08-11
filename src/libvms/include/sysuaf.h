@@ -236,4 +236,28 @@ int sysuaf_authenticate(const sysuaf_record_t *rec, const char *password);
 /* Parse VMS privilege string (e.g. "TMPMBX,NETMBX,OPER") into bitmask */
 uint64_t sysuaf_parse_privileges(const char *priv_string);
 
+/*
+ * Rewrite ONE existing row of SYSUAF_PATH in place with the record given
+ * (the row matched is the one whose username equals rec->username,
+ * case-insensitive). Every OTHER row -- parsed or not -- is copied through
+ * VERBATIM, mirroring sys$setuai's targeted rewrite (src/libvms/syssvc/
+ * sys_uai.c): a caller updating one account has no business touching, or
+ * being defeated by, a row it does not understand.
+ *
+ * ONE WRITER (vms-9b7): the replaced line comes from sysuaf_format_record(),
+ * the SAME function AUTHORIZE (tools/vms_authorize.c) and $SETUAI call --
+ * this is a second CALLER of the one writer, never a second format.
+ *
+ * Returns 0 on success. Returns -1, leaving the file on disk UNCHANGED, if:
+ *   - SYSUAF_PATH cannot be opened for read or the temp file cannot be
+ *     created,
+ *   - an existing row is longer than SYSUAF_LINE_MAX and cannot be safely
+ *     carried forward (copying its prefix would corrupt that account,
+ *     dropping it would delete it -- the same case sysuaf_read_line()
+ *     reports at read time everywhere else in this file),
+ *   - rec does not fit in SYSUAF_LINE_MAX (sysuaf_format_record() refuses),
+ *   - or rec->username matches no row in the file.
+ */
+int sysuaf_write_record(const sysuaf_record_t *rec);
+
 #endif /* SYSUAF_H */

@@ -273,3 +273,117 @@ wire change (guard 8: the working first-join path is byte-unchanged), with a fai
 unit test, and a live lab bracket re-grounding the relocated frontier (below). It exists so
 the next isolation is one log line, not another pcap dig.
 
+---
+
+## 6. The suppressing state ISOLATED — the member's residual per-identity CSB (`vms-4dd`, spec §4(O.22))
+
+§5 named the frontier ("a member NO-ENGAGEs a RETURNING identity that a FRESH one is ADMITTED")
+and left the *cause* as the open question. `vms-4dd` isolates it with a single-factor lab
+bracket and grounds it to the book, shipping no wire change.
+
+### 6.1 The controlled bracket (GROUNDED, `vaxlab-1`, 2026-08-11)
+
+A **freshly-booted** lab-2 pod (deleted + recreated so VAX1/VAX2 hold a CLEAN member state —
+`SHOW CLUSTER` = VAX1/VAX2 only, no residual OVMX entries), the `vms-4dd` READMITMAP daemon
+(`md5=e824f3c1…`, staged+verified in-pod), **`OVMX_JOIN_SEQ=1`**, a hard `timeout` on every op,
+three consecutive arms — **all in first-join op02 form (no sidecar)** so the op02 wire shape is
+held CONSTANT across arms — with two brand-new identities minted for the run
+(`OVX40`/1973, `OVX50`/1974, never used on any pod):
+
+| arm | identity | member holds a residual CSB for it? | `cm_responses` (VAX1/VAX2) | READMITMAP | `XITDONE` |
+|---|---|---|---|---|---|
+| A `4dAf` | `OVX40` (FRESH) | **no** | **196 / 39** | admitted=2 | **1** (CN_3) |
+| B′ `4dBr` | `OVX40` (RETURN) | **yes** (created by arm A) | **0 / 0** | non-admission | **0** |
+| C `4dCf` | `OVX50` (FRESH) | **no** | **196 / 40** | admitted=2 | **1** (CN_3) |
+
+**The flip.** Same pod, same daemon, same op02 form, `OVMX_JOIN_SEQ=1`, run back-to-back. The
+ONLY factor that differs between B′ (fails) and C (succeeds) is **whether the member already
+holds a CSB for the presented SCSSYSTEMID**. Flipping just that factor flips the member from
+NO-ENGAGE to ADMITTED. The member-side suppressing state is therefore the **residual
+per-identity CSB the member retains for a node it saw before** — not the op02 body, not the
+incarnation freshness, not quorum, not "only-coordinator" (all held constant or already
+refuted).
+
+### 6.2 The suppressing state is DIRECTLY OBSERVABLE in real VMS `SHOW CLUSTER`
+
+The bracket makes the residual CSB visible on the oracle's own console:
+
+- **Before arm A:** `SHOW CLUSTER` on VAX1 lists VAX1/VAX2 only.
+- **After arm A** (`OVX40` joined to CN_3, then the daemon exited): VAX1 logs
+  `%PEA0, Port has Closed Virtual Circuit - REMOTE NODE OVX40` and `SHOW CLUSTER` now lists
+  **`OVX40 | VMX V0.1 | BRK_NON`** — a retained, broken, non-member CSB. The member does NOT
+  free it on VC loss.
+- **After arm B′** (the RETURN attempt): the same entry advances to **`OVX40 | … | BRK_NEW`**
+  and the VC closes again — the member re-`NEW`s the *residual* CSB instead of building a fresh
+  one and running JOIN.
+- On a **hammered** pod (`vaxlab-0`), prior identities `OVXF61` and `OVX460` were observed stuck
+  in `BRK_NEW` for **hours**, and on that pod even a FRESH identity (`OVX40` arm, `4ddA`) drew
+  `NO-ENGAGE` (0/0) — the accumulation of un-reclaimed residual CSBs degrades admission for
+  everyone. This is why the clean bracket required a freshly-booted pod, and it shows the
+  residual CSB is effectively **permanent** for OVMX identities: the member does not age it out.
+
+`BRK_NON` (broken, non-member) and `BRK_NEW` (broken, new) are the real VMS `SHOW CLUSTER`
+connection-state strings for that node's CSB — the oracle naming its own retained state.
+
+### 6.3 Book grounding (Davis, page cites only — clean-room Rule 8)
+
+- **p. 7-24 (DEAD) + p. 7-25 (CSV).** A member keeps a CSB for every node it "has had"
+  connectivity with; on departure the CSB is **retained** (only the CSV entry is released), and
+  **on rejoin the old CSB is deallocated and a fresh one built "just as if it were joining for
+  the first time," with a new CSID.** The trigger to move the old CSB to **DEAD** is the member
+  observing a **new incarnation** of that SCSSYSTEMID. A FRESH identity has no residual CSB to
+  collide with, so a NEW-state CSB is built and JOIN proceeds; a RETURNING identity collides
+  with the retained CSB and is admitted only once the member has moved it DEAD → deallocated →
+  rebuilt. `BRK_NON`/`BRK_NEW` are exactly this retained-but-not-reclaimed CSB.
+- **pp. 7-33 / 7-39.** A member matches an arrival to a CSB by **both SCSSYSTEMID and software
+  incarnation time**; a return presents the same SCSSYSTEMID with a *changed* incarnation time,
+  and that mismatch against the stale CSB is what constitutes "a new incarnation has been seen."
+- **pp. 7-40 / 7-41.** A join is **abandoned** if a more extensive rebuild (e.g. the prior
+  membership's removal) is still pending, or if a member still carries the departing node as a
+  member — a concrete "the leave must finish before the return is admitted."
+
+### 6.4 The OVMX-side gap, and the fix design (relocated frontier)
+
+OVMX already presents a **fresh incarnation on every run** (`incarnation_presented` is distinct
+each arm — `0x…6c62`, `0x…5b38`, `0x…7d9b`), so §4.3's "stale incarnation" is not the gap. Yet
+the member never reclaims `OVX40`'s residual CSB: it holds it `BRK_NON` after departure and
+re-`NEW`s it to `BRK_NEW` on return rather than running the DEAD → deallocate → fresh-JOIN path
+(pp. 7-24/7-25). So the OVMX gap is one of **two** candidates, and separating them is the next
+single-factor isolation (both are wire-region changes and neither ships speculatively — the
+`vms-760` runt precedent):
+
+- **(F1) Unclean leave.** OVMX's departure is a bare VC break (`Port has Closed Virtual
+  Circuit`), not a CM leave, so the member never runs the removal reconfiguration (evict →
+  `REMOVED` → break connectivity, p. 7-46) and the CSB is retained. *Fix:* on daemon exit, drive
+  the CM leave so the member reclaims the CSB; *test:* a clean leave drops `OVX40` from
+  `SHOW CLUSTER` (no `BRK_NON`), and a subsequent return then admits.
+- **(F2) Incarnation not read on the return path.** The member may not be reading OVMX's fresh
+  incarnation in the config/START field it matches against the stale CSB (pp. 7-33/7-39), so it
+  never sees "new incarnation" and never moves the CSB to DEAD. *Fix:* present the incarnation in
+  that exact field on the return; *test:* the member moves the residual CSB DEAD → deallocates →
+  runs JOIN (`cm_responses>0`, `XITDONE` 0→1).
+
+**Relocated frontier (for the next increment):** instrument, on a RETURN against a member that
+holds a `BRK_NON`/`BRK_NEW` CSB for the identity, (a) whether a clean CM leave at prior-departure
+makes the member reclaim the CSB (F1), and (b) whether the member's config/START dialogue on the
+return carries OVMX's incarnation to the CSB match (F2). One of those two flips `BRK_NEW` →
+reclaimed → JOIN; the bracket that names which is the fix.
+
+### 6.5 What `vms-4dd` ships (no wire change)
+
+1. This isolation record (§6) and the spec §4(O.22) note.
+2. A **verdict refinement** to the READMITMAP diagnostic: `ADMITTED` now requires the membership
+   latch **AND** `cm_responses > 0`. Arm B′ exposed a per-member false positive — VAX1's CDT
+   reached OPEN off a residual/partial reconnect (`vaxcluster_open_reached` latched) while it ran
+   ZERO CM handshakes (`cm_responses=0`, `XITDONE=0`), and the latch-only classifier reported
+   that member `ADMITTED`, masking the RETURNING-IDENTITY NON-ADMISSION. A member that sent 0 CM
+   responses did not run the per-member JOIN handshake this run; it now reads `NO-ENGAGE`
+   (INV-6: never report success from residual state). Log-only, kill-switch `OVMX_NO_READMITMAP`
+   unchanged, byte-unchanged on the wire (guard 8), with a fail-pre/pass-post unit case in
+   `tests/vmsscs/test_scsd_wire.c`.
+
+Evidence (host, tank volume): `/data/training/vax/k8s-labs/vaxlab-1/logs/scsd-4dAf.log`
+(`XITDONE=1`, admitted=2), `scsd-4dBr.log` (`XITDONE=0`, returning-identity non-admission),
+`scsd-4dCf.log` (`XITDONE=1`, admitted=2), with the matching `d94-4dAf/4dBr/4dCf.pcap`
+(`OVX40`/`OVX50` on the wire) and the console `SHOW CLUSTER` transitions in `vax1.log`.
+

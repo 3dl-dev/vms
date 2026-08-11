@@ -11401,7 +11401,19 @@ static enum readmit_verdict readmit_verdict_of(const struct peer_state *ps)
     if (ps == NULL || ps->pb == NULL || !ps->channel_up) {
         return READMIT_NO_CHANNEL;
     }
-    if (ps->vaxcluster_open_reached) {
+    /* vms-4dd (spec §4(O.22)): ADMITTED requires BOTH the membership latch AND
+     * a nonzero per-member CM response count. The latch (vaxcluster_open_reached)
+     * fires when the joiner/member CDT reaches OPEN, but the live lab bracket
+     * `4dBr` (a RETURNING identity on vaxlab-1) proved that a member's CDT can
+     * reach OPEN off a RESIDUAL/partial reconnect while the member runs ZERO CM
+     * JOIN handshakes (cm_responses==0, XITDONE=0, no CN_3). Reading the latch
+     * alone then over-reports that member as ADMITTED when the readmission never
+     * happened -- a per-member false positive that masks a RETURNING-IDENTITY
+     * NON-ADMISSION. A member that reached OPEN but sent 0 CM responses did not
+     * run the per-member JOIN handshake this run; classify it as NO-ENGAGE, the
+     * honest returning-identity verdict (INV-6: never report success from
+     * residual state). */
+    if (ps->vaxcluster_open_reached && ps->cm_responses > 0) {
         return READMIT_ADMITTED;
     }
     if (ps->cm_responses > 0) {

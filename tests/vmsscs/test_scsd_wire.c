@@ -10216,6 +10216,22 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
     CHECK(readmit_verdict_of(ps) == READMIT_ADMITTED,
           "the membership latch must read ADMITTED, got %s",
           readmit_verdict_name(readmit_verdict_of(ps)));
+
+    /* vms-4dd (spec §4(O.22)): the RESIDUAL-CSB false positive. The live bracket
+     * `4dBr` (a RETURNING identity, vaxlab-1) showed a member whose CDT reached
+     * OPEN off a residual/partial reconnect while it ran ZERO CM JOIN handshakes
+     * (cm_responses==0, XITDONE=0). The membership latch alone must NOT read
+     * ADMITTED in that case -- a member that sent 0 CM responses did not run the
+     * per-member JOIN handshake and is a returning-identity non-admission. This
+     * is the fail-pre/pass-post gate for the verdict refinement: before it, this
+     * shape read ADMITTED (a false positive that masks the NON-ADMISSION). */
+    ps->cm_responses = 0;
+    ps->vaxcluster_open_reached = 1;
+    CHECK(readmit_verdict_of(ps) == READMIT_NO_ENGAGE,
+          "membership latch WITHOUT any CM response (residual/stale reached-OPEN"
+          " of a returning identity) must read NO-ENGAGE, not ADMITTED"
+          " (spec 4(O.22)), got %s",
+          readmit_verdict_name(readmit_verdict_of(ps)));
 }
 
 int main(void)

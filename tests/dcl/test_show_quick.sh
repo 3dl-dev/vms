@@ -1,7 +1,7 @@
 #!/bin/bash
 # TEST: SHOW quick-win subcommands produce correct VMS-format output
 # EXPECT: contains:OVMX
-# EXPECT: contains:OVMX-TCP/IP
+# EXPECT: contains:OVMX-TCPIP
 # EXPECT: contains:%SYSTEM-I-NOTMEMBER
 # EXPECT: regex:OVMX TCP/IP Services V[0-9]+\.[0-9]+
 # EXPECT: contains:Node: OVMX

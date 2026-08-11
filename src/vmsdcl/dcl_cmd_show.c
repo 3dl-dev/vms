@@ -2139,18 +2139,64 @@ static int cmd_show_translation(struct dcl_command *cmd)
 }
 
 /*
- * SHOW LICENSE - Display active product licenses.
+ * SHOW LICENSE - Display active product licenses (LMF grant-all surface).
+ *
+ * FORMAT (operation) is VMS-exact; the CONTENT (identity + policy) is OVMX's.
+ *
+ * The header and per-license row geometry below are pinned to a real
+ * OpenVMS VAX V7.3 `SHOW LICENSE` transcript captured off the reference lab
+ * (lab-2 node VAX1, 11-AUG-2026), Rule 8 clean-room: format RE'd only from
+ * observed oracle output + the public LMF / DCL-Dictionary layout, never from
+ * any VSI/HPE binary. The exact columns (Product 0, Producer 19, Units
+ * right-justified to col 35, Avail 38, Activ 44, Version 51, Release 56,
+ * Termination 68; the "Active licenses on node <n>:" banner and its blank
+ * line) reproduce that transcript byte-for-byte, so software that scrapes
+ * SHOW LICENSE sees VMS-shaped output.
+ *
+ * THE ALWAYS-GRANTED POLICY IS AN OVMX DESIGN CHOICE, not VMS-authentic
+ * (operator ruling 2026-08-11, licensing-stance-grant-all): OVMX has no
+ * reason to gate, meter, or expire anything -- the license facility exists
+ * ONLY so software that queries a license and refuses to run without one
+ * passes. So there is no PAK database, no unit accounting, no expiry; the
+ * programmatic query path grants any product by query. This display lists
+ * OVMX's own always-loaded core products under producer OVMX (identity stays
+ * honestly OVMX per INV-0, never "OpenVMS"/"DEC"): a coherent, permanently
+ * active, non-expiring grant-all state. Units 0 / Avail 0 = an unlimited,
+ * unmetered grant (matches how a real unrestricted PAK renders); Activ 100 =
+ * the standard availability rating; Termination "(none)" = no expiry.
  */
 static int cmd_show_license(struct dcl_command *cmd)
 {
     (void)cmd;
-    printf("Active licenses on this node:\n\n");
-    printf("------- Product ID --------    ---- Rating -----   -- Version --\n");
-    printf("Product Name          Producer  Units  Avail  Actv  Version  Termination\n");
-    printf("OVMX                  OVMX      0      0      100   %-8s (none)\n",
-           ovmx_product_version());
-    printf("OVMX-TCP/IP           OVMX      0      0      100   %-8s (none)\n",
-           ovmx_product_version());
+
+    char node[OVMX_IDENTITY_MAXLEN];
+    ovmx_node_name(node, sizeof(node));
+
+    /* Banner + column headings -- byte-exact to the VAX V7.3 oracle. */
+    printf("Active licenses on node %s:\n\n", node);
+    printf("------- Product ID --------    ---- Rating ----- -- Version --\n");
+    printf("Product            Producer    Units Avail Activ Version Release"
+           "    Termination\n");
+
+    /*
+     * OVMX's always-loaded core products (identity ours; grant-all policy
+     * ours). Field order: product, producer, units, avail, activ, version,
+     * release, termination. Row format string is the oracle geometry.
+     */
+    static const char *const rows[][8] = {
+        /* product            prod   units avail activ ver    rel      term   */
+        { "OVMX",             "OVMX", "0",  "0",  "100", "0.0", "(none)", "(none)" },
+        { "OVMX-USER",        "OVMX", "0",  "0",  "100", "0.0", "(none)", "(none)" },
+        { "OVMX-VMSCLUSTER",  "OVMX", "0",  "0",  "100", "0.0", "(none)", "(none)" },
+        { "OVMX-TCPIP",       "OVMX", "0",  "0",  "100", "0.0", "(none)", "(none)" },
+    };
+
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        printf("%-18.18s %-11s%6s%3s     %-7s%-5s%-12s%-11s \n",
+               rows[i][0], rows[i][1], rows[i][2], rows[i][3],
+               rows[i][4], rows[i][5], rows[i][6], rows[i][7]);
+    }
+
     return SS$_NORMAL;
 }
 

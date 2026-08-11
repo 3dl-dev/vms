@@ -2,6 +2,7 @@
 #define __VMSFS_DEVICE_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /*
  * VMS Device Table
@@ -29,5 +30,28 @@ int vmsfs_device_remove(const char *devname);
 
 /* Get number of registered devices */
 int vmsfs_device_count(void);
+
+/*
+ * vms-d8e: Query a filespec device's concealed / rooted-directory attributes.
+ *
+ * Translates `device` (a bare device name, with or without a trailing ':')
+ * as a logical name through LNM$FILE_DEV and inspects the logical's
+ * translation attributes. A logical defined
+ * /TRANSLATION_ATTRIBUTES=CONCEALED (LNM$M_CONCEALED, e.g.
+ * DEFINE/TRANS=CONCEALED DISK$USER DKA100:[USERS.]) is a concealed device;
+ * when its equivalence names a rooted directory (a '.' immediately before
+ * the closing ']', "dev:[root.]") it is also a rooted-directory logical.
+ * These are the LNM$M_CONCEALED / rooted properties RMS $PARSE reports as
+ * NAM$M_CNCL_DEV / NAM$M_ROOT_DIR (VSI OpenVMS RMS Reference, NAM block
+ * nam$l_fnb; VSI OpenVMS DCL Dictionary, DEFINE /TRANSLATION_ATTRIBUTES;
+ * VSI OpenVMS User's Manual, "Rooted Directories").
+ *
+ * On return *is_concealed / *is_rooted (either may be NULL) are 0/1. Returns
+ * SS$_NORMAL if `device` translated as a logical name (concealed or not),
+ * SS$_NOLOGNAM if it is not a logical name at all (both outputs 0), or
+ * SS$_BADPARAM for a bad argument.
+ */
+uint32_t vmsfs_device_concealed_rooted(const char *device,
+                                       int *is_concealed, int *is_rooted);
 
 #endif /* __VMSFS_DEVICE_H */

@@ -447,6 +447,171 @@ int vmsfs_resolve_device(const char *device, char *linux_dir, size_t dir_size)
 }
 
 /*
+ * equiv_is_rooted - Does an equivalence string name a rooted directory?
+ *
+ * A rooted-directory equivalence ends in "dev:[root.]" -- a '.' immediately
+ * before the closing ']' (VSI OpenVMS User's Manual, "Rooted Directories":
+ * the trailing dot marks the directory as a root onto which a subdirectory
+ * is concatenated). "DKA100:[USERS.]" is rooted; "DKA100:[USERS]" is not.
+ */
+static int equiv_is_rooted(const char *equiv)
+{
+    const char *rb = strrchr(equiv, ']');
+    if (!rb || rb == equiv)
+        return 0;
+    return rb[-1] == '.';
+}
+
+/*
+ * vmsfs_device_concealed_rooted - see vmsfs/device.h.
+ *
+ * Reads the logical's LNM$M_CONCEALED translation attribute (returned by
+ * lnm_translate as LNM_ATTR_CONCEALED) rather than inferring "concealed"
+ * from the equivalence string's shape -- an ordinary logical that happens to
+ * translate to "dev:[x.]" is NOT a concealed/rooted device, so the rooted
+ * property is reported only when the CONCEALED attribute is actually set.
+ */
+uint32_t vmsfs_device_concealed_rooted(const char *device,
+                                       int *is_concealed, int *is_rooted)
+{
+    if (is_concealed)
+        *is_concealed = 0;
+    if (is_rooted)
+        *is_rooted = 0;
+
+    if (!device || !device[0])
+        return SS$_BADPARAM;
+
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (!mgr)
+        return SS$_NOLOGNAM;
+
+    /* Upcase the device name and strip a trailing colon for the lookup. */
+    char dev_up[VMSFS_MAX_DEVICE + 1];
+    strncpy(dev_up, device, sizeof(dev_up) - 1);
+    dev_up[sizeof(dev_up) - 1] = '\0';
+    size_t dl = strlen(dev_up);
+    if (dl > 0 && dev_up[dl - 1] == ':')
+        dev_up[dl - 1] = '\0';
+    str_upcase(dev_up);
+
+    char equiv[256];
+    uint16_t equiv_len = 0;
+    uint32_t attrs = 0;
+    uint32_t status = lnm_translate(mgr, LNM_FILE_DEV, dev_up, equiv,
+                                    sizeof(equiv), &equiv_len, &attrs);
+    if (!$VMS_STATUS_SUCCESS(status))
+        return SS$_NOLOGNAM;
+    if (equiv_len >= sizeof(equiv))
+        equiv_len = sizeof(equiv) - 1;
+    equiv[equiv_len] = '\0';
+
+    int concealed = (attrs & LNM_ATTR_CONCEALED) != 0;
+    if (is_concealed)
+        *is_concealed = concealed;
+    /* A rooted directory is a concealed device whose equivalence is a rooted
+     * directory spec. Honor the CONCEALED attribute (flag), not the string. */
+    if (is_rooted)
+        *is_rooted = (concealed && equiv_is_rooted(equiv)) ? 1 : 0;
+    return SS$_NORMAL;
+}
+
+/*
+ * expand_rooted_concealed - structurally expand a concealed rooted-directory
+ * device logical, in place, before device/directory resolution.
+ *
+ * VMS composes a rooted-directory logical by CONCATENATING the logical's root
+ * directory with the caller-supplied subdirectory per the rooted rule, not by
+ * a trailing-dot string coincidence (VSI OpenVMS User's Manual, "Rooted
+ * Directories"; DCL Dictionary, DEFINE /TRANSLATION_ATTRIBUTES=CONCEALED):
+ *
+ *   WORK -> DKA100:[USERS.]  (concealed, rooted)
+ *     WORK:[SMITH]FOO.DAT   ->  DKA100:[USERS.SMITH]FOO.DAT
+ *     WORK:[SMITH.PROJ]     ->  DKA100:[USERS.SMITH.PROJ]
+ *     WORK:FOO.DAT          ->  DKA100:[USERS]FOO.DAT
+ *     WORK:[000000]         ->  DKA100:[USERS]
+ *
+ * If parsed->device is a concealed rooted logical, this rewrites parsed so
+ * device = the root's physical device and directory = the merged directory,
+ * then the normal single-path pipeline translates the fully-expanded spec.
+ * Only a device carrying the CONCEALED attribute AND a rooted equivalence is
+ * expanded (honor the flag); a plain logical translating to "dev:[x.]" is
+ * left untouched. Returns 1 if an expansion happened, 0 otherwise.
+ */
+static int expand_rooted_concealed(vmsfs_filespec_t *parsed)
+{
+    if (!parsed->has_device || !parsed->device[0])
+        return 0;
+
+    int concealed = 0, rooted = 0;
+    if (!$VMS_STATUS_SUCCESS(vmsfs_device_concealed_rooted(parsed->device,
+                                                           &concealed, &rooted)))
+        return 0;
+    if (!rooted)
+        return 0;   /* not a rooted concealed device -- nothing to merge */
+
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (!mgr)
+        return 0;
+
+    char dev_up[VMSFS_MAX_DEVICE + 1];
+    strncpy(dev_up, parsed->device, sizeof(dev_up) - 1);
+    dev_up[sizeof(dev_up) - 1] = '\0';
+    str_upcase(dev_up);
+
+    char equiv[256];
+    uint16_t equiv_len = 0;
+    uint32_t attrs = 0;
+    if (!$VMS_STATUS_SUCCESS(lnm_translate(mgr, LNM_FILE_DEV, dev_up, equiv,
+                                           sizeof(equiv), &equiv_len, &attrs)))
+        return 0;
+    if (equiv_len >= sizeof(equiv))
+        equiv_len = sizeof(equiv) - 1;
+    equiv[equiv_len] = '\0';
+
+    vmsfs_filespec_t root;
+    if (!$VMS_STATUS_SUCCESS(vmsfs_parse_filespec(equiv, &root)) ||
+        !root.has_directory)
+        return 0;
+
+    /* Root directory content ends in '.' (rooted): strip it to the base. */
+    char root_base[VMSFS_MAX_PATH];
+    strncpy(root_base, root.directory, sizeof(root_base) - 1);
+    root_base[sizeof(root_base) - 1] = '\0';
+    size_t rl = strlen(root_base);
+    if (rl > 0 && root_base[rl - 1] == '.')
+        root_base[rl - 1] = '\0';        /* "USERS." -> "USERS" */
+
+    /* Merge with the caller's directory per the rooted rule. */
+    char merged[VMSFS_MAX_PATH];
+    const char *sub = parsed->has_directory ? parsed->directory : NULL;
+    if (sub && sub[0] && strcmp(sub, "000000") != 0) {
+        if (sub[0] == '.')
+            sub++;                        /* [.SMITH] relative form */
+        if (root_base[0])
+            snprintf(merged, sizeof(merged), "%s.%s", root_base, sub);
+        else
+            snprintf(merged, sizeof(merged), "%s", sub);
+    } else {
+        /* WORK:FOO.DAT or WORK:[000000] -> the root itself. */
+        snprintf(merged, sizeof(merged), "%s", root_base);
+    }
+
+    /* Rewrite parsed: device <- root device, directory <- merged. */
+    parsed->device[0] = '\0';
+    parsed->has_device = 0;
+    if (root.has_device && root.device[0]) {
+        strncpy(parsed->device, root.device, sizeof(parsed->device) - 1);
+        parsed->device[sizeof(parsed->device) - 1] = '\0';
+        parsed->has_device = 1;
+    }
+    strncpy(parsed->directory, merged, sizeof(parsed->directory) - 1);
+    parsed->directory[sizeof(parsed->directory) - 1] = '\0';
+    parsed->has_directory = (merged[0] != '\0');
+    return 1;
+}
+
+/*
  * vmsfs_translate_directory - Convert VMS directory spec to Linux path.
  *
  * Translations:
@@ -546,6 +711,16 @@ static int vmsfs_to_linux_path_one(const char *vms_spec, char *linux_path,
     if (!$VMS_STATUS_SUCCESS(status)) {
         return status;
     }
+
+    /*
+     * vms-d8e: structurally expand a concealed rooted-directory device logical
+     * BEFORE resolving device/directory, so the logical's root and the
+     * caller's subdirectory concatenate per the VMS rooted rule
+     * ([USERS.] + [SMITH] -> [USERS.SMITH]) rather than colliding by trailing-
+     * dot string luck. Only a device carrying the CONCEALED attribute AND a
+     * rooted equivalence is touched; everything else falls straight through.
+     */
+    (void)expand_rooted_concealed(&parsed);
 
     char dir_prefix[VMSFS_MAX_PATH] = "";
     char dir_part[VMSFS_MAX_PATH] = "";

@@ -15,16 +15,34 @@
  * siblings to vms-407: what it lacks is not record arbitration but a device and
  * volume database to resolve against, which is vms-dv1's outcome.
  *
- * OVMX-USERSPACE: sys$parse (vms-dv1) -- expands the caller's filespec into
- *     the caller's NAM block using vmsfs_parse_filespec(). The device and
- *     directory it resolves come from the vmsfs translation tables in this
- *     process, not from an executive device or volume database.
+ * Was OVMX-USERSPACE until vms-d8e: $PARSE now reads a device logical's
+ * CONCEALED / rooted-directory translation attribute (NAM$M_CNCL_DEV /
+ * NAM$M_ROOT_DIR) via lnm_translate through LNM$FILE_DEV, so for an
+ * executive-resident device logical it reaches the executive exactly as
+ * sys$trnlnm's LNM$SYSTEM step does. It is therefore a mixture now.
+ *
+ * OVMX-PARTIAL: sys$parse (vms-d8e) -- exec: the CONCEALED / rooted-directory
+ *     translation attribute of a device logical (set as NAM$M_CNCL_DEV /
+ *     NAM$M_ROOT_DIR) is read from the logical's translation via
+ *     vmsfs_device_concealed_rooted() -> lnm_translate() through LNM$FILE_DEV;
+ *     when that device logical lives in an executive-resident table
+ *     (LNM$JOB / LNM$GROUP / LNM$SYSTEM) the read is the executive's
+ *     (vms_kif_lnm_translate), the same half sys$trnlnm's LNM$SYSTEM step is.
+ * OVMX-LOCAL: sys$parse -- the filespec syntax expansion itself (component
+ *     split, fab$l_dna defaults, NAM component pointers and lengths) is done
+ *     in-process by vmsfs_parse_filespec(); a device logical defined in
+ *     LNM$PROCESS_TABLE resolves locally too. There is still no executive
+ *     device or volume database to resolve against (that is vms-dv1's deferred
+ *     outcome) -- only the logical's concealed/rooted attribute crosses to the
+ *     executive, and only when the logical is executive-resident.
  */
 
 #include <stdio.h>
 #include <string.h>
 #include "rms/rms.h"
 #include "vmsfs/filespec.h"
+#include "vmsfs/device.h"
+#include "ssdef.h"
 
 /*
  * Apply defaults from default_spec to spec using vmsfs parse/compose.
@@ -209,6 +227,33 @@ uint32_t sys$parse(void *fab_ptr)
         }
         nam->nam$b_dev = (uint8_t)dev_len;
         nam->nam$l_fnb |= NAM$M_EXP_DEV;
+
+        /*
+         * vms-d8e: a concealed / rooted-directory device logical (defined
+         * /TRANSLATION_ATTRIBUTES=CONCEALED, e.g. DISK$USER -> DKA100:[USERS.])
+         * sets NAM$M_CNCL_DEV, and NAM$M_ROOT_DIR when the concealed
+         * equivalence is a rooted directory. $PARSE reads the LNM$M_CONCEALED
+         * translation attribute from the logical (via vmsfs_device_concealed_
+         * rooted -> lnm_translate) -- it does not infer concealment from the
+         * device string (VSI OpenVMS RMS Reference, NAM block nam$l_fnb;
+         * VSI OpenVMS DCL Dictionary, DEFINE /TRANSLATION_ATTRIBUTES).
+         */
+        char devname[64];
+        size_t dn = (size_t)(colon - nam->nam$l_dev);   /* excludes the ':' */
+        if (dn >= sizeof(devname))
+            dn = sizeof(devname) - 1;
+        memcpy(devname, nam->nam$l_dev, dn);
+        devname[dn] = '\0';
+
+        int cncl = 0, root = 0;
+        if ($VMS_STATUS_SUCCESS(
+                vmsfs_device_concealed_rooted(devname, &cncl, &root))) {
+            if (cncl)
+                nam->nam$l_fnb |= NAM$M_CNCL_DEV;
+            if (root)
+                nam->nam$l_fnb |= NAM$M_ROOT_DIR;
+        }
+
         p = colon + 1;
     }
 

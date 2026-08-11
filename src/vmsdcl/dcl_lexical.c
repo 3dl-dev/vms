@@ -700,6 +700,36 @@ static int lex_verify(struct dcl_context *ctx, const char *args,
 }
 
 /*
+ * F$LICENSE(license-name) - Report whether a product license is loaded.
+ *
+ * VMS SEMANTICS (operation), grounded to the public VSI OpenVMS DCL
+ * Dictionary (docs.vmssoftware.com, "F$LICENSE Lexical Function") and the
+ * VSI OpenVMS Wiki lexical-function list: F$LICENSE(name) returns the
+ * integer 1 when the named license is active/loaded and 0 when it is not.
+ * (It is a modern-VMS lexical: absent on OpenVMS VAX V7.3 -- the lab-2 VAX1
+ * oracle answers %DCL-W-IVFNAM for it, 11-AUG-2026 -- and present from the
+ * Alpha/I64 line onward, which is OVMX's platform target.)
+ *
+ * OVMX POLICY (ours, an OVMX design choice -- operator ruling 2026-08-11,
+ * licensing-stance-grant-all): grant-all. OVMX does not gate, meter, or
+ * enforce licenses; the facility exists ONLY so software that queries a
+ * license and refuses to run without one passes. So this returns 1 for ANY
+ * product name -- grant-by-query, not a fixed PAK list -- which is the whole
+ * point: a checker asking F$LICENSE("<anything>") is told the license is
+ * loaded. This is NOT VMS-authentic behavior (real VMS returns 0 for an
+ * unloaded product); it is OVMX's deliberate always-grant compatibility
+ * stance, and it is labeled as ours here rather than presented as VMS.
+ */
+static int lex_license(struct dcl_context *ctx, const char *args,
+                       char *result, size_t result_size)
+{
+    (void)ctx;
+    (void)args;  /* grant-by-query: any named product reports loaded */
+    snprintf(result, result_size, "1");
+    return 0;
+}
+
+/*
  * F$SEARCH wildcard context — tracks iterative directory scans.
  * One slot per unique filespec (up to 8 concurrent searches).
  */
@@ -2854,6 +2884,7 @@ static const struct {
     { "F$GETQUI",           lex_getqui },
     { "F$CVSI",             lex_cvsi },
     { "F$CVUI",             lex_cvui },
+    { "F$LICENSE",          lex_license },
     { NULL, NULL }
 };
 

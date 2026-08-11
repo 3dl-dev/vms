@@ -188,8 +188,8 @@ the "log in and be fooled" test, which lives in three surfaces audited 2026-08-1
 These are where a VMS user's muscle memory pokes, and each is now a filed epic under `vms-8ad`.
 
 ### 9.1 Interactive session mechanics — `vms-21a7` (folds `vms-46b`)
-Tells in the first 30 seconds: welcome banner says **OVMX not OpenVMS** (badged fallback — INV-0
-tension, operator call); `No previous interactive login recorded.` and `Maximum login attempts
+Tells in the first 30 seconds: welcome banner correctly says **OVMX** (identity — RESOLVED, see §10: not a fidelity
+target). The tells to fix are operation:; `No previous interactive login recorded.` and `Maximum login attempts
 exceeded.` are **invented strings**; **Ctrl-T does nothing** (reflexive on VMS); missing `Last
 non-interactive login`/`N failures`/new-Mail-count lines (the mail helper exists but is never
 called); **DISUSER/captive/expired-password flags ignored — a disabled account logs straight in**
@@ -217,3 +217,21 @@ the datetime RTL are genuinely real — just not wired to the DCL surface.
 
 **Bottom line:** the "totally fooled" bar is gated by 9.2 (`$STATUS`) and 9.3 (`DIRECTORY`/versions)
 more than by any missing verb. Sequence these into Tier 1 alongside Engine B.
+
+## 10. Governing principle — indistinguishable in operation, honest in identity
+
+**Operator ruling (2026-08-11):** *"we're transparent about being a clone. a clone is virtually
+indistinguishable in OPERATION, not IDENTITY."*
+
+- **Identity → honestly OVMX.** Product name, welcome banner, `%OVMX-*` messages, version string
+  stay OVMX. We never present OVMX *as* OpenVMS (INV-0 holds). **The banner is not a fidelity
+  target — it should say OVMX.** This resolves the only open call in this map.
+- **Operation → indistinguishable from VMS.** Every behavior a user or program *observes* must
+  match VMS exactly: the login-line sequence and format, `.cc` timestamps, `$STATUS`
+  representation/refresh, `DIRECTORY` format, error **facility codes** (`%RMS-`/`%DCL-`/`%SYSTEM-`
+  for standard operations — not `OVMX$_`), command semantics, message text, version-number and
+  protection display.
+
+The test is operational, not cosmetic-identity. An invented string like `No previous interactive
+login recorded.` fails it (VMS doesn't emit it) even though it names nothing; a banner that says
+`OVMX` passes it (it's identity, and it's honest). Every item under `vms-8ad` is judged by this line.

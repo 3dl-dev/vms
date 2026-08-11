@@ -241,25 +241,28 @@ static void start_session(const sysuaf_record_t *rec)
     setenv("VMS_DEFAULT_DIR", rec->default_dir, 1);
 
     /*
-     * SYS$LOGIN / SYS$LOGIN_DEVICE / SYS$SCRATCH ARE NO LONGER ENV VARS
-     * (vms-e48). They used to be setenv'd here and getenv'd by DCL -- a
-     * facade, because F$TRNLNM("SYS$LOGIN") never consulted the environment
-     * and so returned the generic SYS$SYSDEVICE:[USERS] default while the
-     * user's real home hid in an env var only the login-script code read
-     * (two answers for one logical). SYS$SCRATCH was worse still: it was
-     * hardcoded to SYS$SYSDEVICE:[SYSTMP] for every user, ignoring the
-     * account entirely.
+     * SYS$LOGIN / SYS$LOGIN_DEVICE ARE NO LONGER ENV VARS (vms-e48). SYS$LOGIN
+     * used to be setenv'd here and getenv'd by DCL -- a facade, because
+     * F$TRNLNM("SYS$LOGIN") never consulted the environment and so returned the
+     * generic SYS$SYSDEVICE:[USERS] default while the user's real home hid in
+     * an env var only the login-script code read (two answers for one logical).
      *
-     * They are now established as REAL LNM$PROCESS logicals, sourced from
-     * this SYSUAF record's default device/directory, by
-     * lnm_define_login_logicals() in the DCL --login process (dcl_main.c).
-     * The establishment MUST run there, not here: LNM$PROCESS is per-process
-     * state and does not survive the execl() below, and -- unlike LOGINOUT --
-     * that process runs as the unprivileged user and cannot re-read the
-     * protected SYSUAF.DAT, so LOGINOUT (running privileged, pre-setuid) reads
-     * the record and hands the default device/directory over through
-     * VMS_DEFAULT_DIR (above) and the login command file through --lgicmd
-     * (below). DCL then defines the logicals and translates them via F$TRNLNM.
+     * They are now established as REAL LNM$JOB logicals (job-wide, so the whole
+     * login job -- DCL and every image it activates -- agrees on them, as on
+     * OpenVMS), sourced from this SYSUAF record's default device/directory, by
+     * lnm_define_login_logicals() in the DCL --login process (dcl_main.c). The
+     * establishment runs there, not here: LNM$PROCESS state would not survive
+     * the execl() below anyway, and -- unlike LOGINOUT -- that process runs as
+     * the unprivileged user and cannot re-read the protected SYSUAF.DAT, so
+     * LOGINOUT (running privileged, pre-setuid) reads the record and hands the
+     * default device/directory over through VMS_DEFAULT_DIR (above) and the
+     * login command file through --lgicmd (below). DCL then defines the
+     * logicals and translates them via F$TRNLNM.
+     *
+     * SYS$SCRATCH is NOT touched: OVMX defines it system-wide to its
+     * mastered-writable [SYSTMP] scratch (see lnm_define_login_logicals()).
+     * The old setenv("SYS$SCRATCH", "SYS$SYSDEVICE:[SYSTMP]") here was dead
+     * anyway -- F$TRNLNM never read it.
      */
 
     /*

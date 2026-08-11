@@ -179,27 +179,53 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root);
 /*
  * lnm_define_login_logicals - establish the per-user identity logicals at
  * login (vms-e48). Given the account's SYSUAF default device+directory
- * (e.g. "DKA100:[SMITH]" or "SYS$SYSDEVICE:[SYSMGR]"), defines, as REAL
- * LNM$PROCESS logicals through the same lnm_create() path DEFINE uses:
+ * (e.g. "DKA100:[SMITH]" or "SYS$SYSDEVICE:[SYSMGR]"), defines, through the
+ * same lnm_create() path DEFINE uses, into `table_name`:
  *
  *   SYS$LOGIN         -> default_dir          (default device + directory)
  *   SYS$LOGIN_DEVICE  -> the device field of default_dir (up to and
  *                        including the first ':')
- *   SYS$SCRATCH       -> default_dir          (VMS default: = SYS$LOGIN)
  *
- * These are process-scope on purpose (LNM$PROCESS_TABLE): they need no
- * executive, so they work under host BUILD/TEST tooling exactly as at
- * runtime, and each login process gets its own. A process-table entry
- * shadows the generic SYS$LOGIN -> SYS$SYSDEVICE:[USERS] default that
- * lnm_setup_defaults() seeds (LNM$FILE_DEV searches PROCESS first), so
- * F$TRNLNM("SYS$LOGIN") returns THIS user's home, not the generic default.
+ * SYS$SCRATCH is intentionally NOT set here -- see the block comment in
+ * lnm_defaults.c: OVMX ships SYS$SCRATCH as a system-wide DEFINE to the
+ * mastered-writable [SYSTMP] scratch area (a valid VMS "dedicated scratch"
+ * configuration), and pointing it at each account's not-necessarily-writable
+ * home broke the PARTS 0.2 demo. Making per-account homes RMS-writable is a
+ * separate vmsfs/provision concern.
  *
- * Semantics pinned to public docs (VSI OpenVMS DCL Dictionary, "SYS$LOGIN /
- * SYS$LOGIN_DEVICE / SYS$SCRATCH"; System Manager's Manual, SYSUAF default
- * device/directory): LOGINOUT establishes these from the SYSUAF record at
- * login. Returns SS$_NORMAL/SS$_SUPERSEDE on success, or the first failing
- * lnm_create() status; SS$_BADPARAM if mgr or default_dir is missing.
+ * TABLE SCOPE, AND WHY IT IS LNM$JOB IN PRODUCTION (vms-e48 round 2). On
+ * OpenVMS SYS$LOGIN / SYS$LOGIN_DEVICE are JOB-wide logical names -- LOGINOUT
+ * creates them in LNM$JOB so that EVERY process in the login's job tree (the
+ * interactive DCL plus every image it activates or subprocess it SPAWNs)
+ * resolves them identically (VSI OpenVMS DCL Dictionary, "SYS$LOGIN /
+ * SYS$LOGIN_DEVICE"; System Services Reference, $CREPRC JOBCTL / job logical
+ * name table). LNM$PROCESS is WRONG here and was measured wrong: a
+ * process-scope value set in the interactive DCL is invisible to the
+ * foreign-command image DCL forks (PARTS.EXE, the PARTS 0.2 demo e2e). LNM$JOB
+ * is keyed by the executive on the job tree (src/kernel/vms_lnm.c
+ * derive_scope_key, proc->job_id), which a forked child inherits from its
+ * parent's PCB, so the whole job agrees.
+ *
+ * A JOB (or GROUP/SYSTEM) create is executive-resident and needs /dev/vms; at
+ * OVMX runtime PID 1 pins it, so this succeeds. `table_name` is a parameter
+ * rather than hardcoded ONLY so host BUILD/TEST tooling, which has no
+ * executive, can exercise the identical establishment + search-list
+ * resolution against LNM$PROCESS_TABLE (see tests/libvms/test_login_logicals.c);
+ * the executive-resident LNM$JOB path is proven by the PARTS demo e2e.
+ *
+ * A table-scope entry shadows the generic SYS$LOGIN -> SYS$SYSDEVICE:[USERS]
+ * default that lnm_setup_defaults() seeds (LNM$FILE_DEV searches
+ * PROCESS -> JOB -> GROUP -> SYSTEM), so F$TRNLNM("SYS$LOGIN") returns THIS
+ * user's home, not the generic default.
+ *
+ * Semantics pinned to public docs (VSI OpenVMS DCL Dictionary; System
+ * Manager's Manual, SYSUAF default device/directory). Returns SS$_NORMAL/
+ * SS$_SUPERSEDE on success, or the first failing lnm_create() status
+ * (SS$_NOSUCHDEV when a JOB/GROUP/SYSTEM table is asked for with no executive
+ * -- CLAUDE.md Rule 9 / INV-6, no per-process fallback); SS$_BADPARAM if mgr,
+ * table_name or default_dir is missing.
  */
-uint32_t lnm_define_login_logicals(lnm_manager_t *mgr, const char *default_dir);
+uint32_t lnm_define_login_logicals(lnm_manager_t *mgr, const char *table_name,
+                                   const char *default_dir);
 
 #endif /* __VMS_LOGICAL_H */

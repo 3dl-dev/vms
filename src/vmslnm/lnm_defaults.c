@@ -221,15 +221,17 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
  * dcl_translate_logical() accepts). */
 #define LNM_LOGIN_OK(st)  ((st) == SS$_NORMAL || (st) == SS$_SUPERSEDE)
 
-uint32_t lnm_define_login_logicals(lnm_manager_t *mgr, const char *default_dir)
+uint32_t lnm_define_login_logicals(lnm_manager_t *mgr, const char *table_name,
+                                   const char *default_dir)
 {
-    if (!mgr || !default_dir || !default_dir[0])
+    if (!mgr || !table_name || !table_name[0] || !default_dir || !default_dir[0])
         return SS$_BADPARAM;
 
     /* SYS$LOGIN: the account's full default device + directory. Supersedes the
-     * generic [USERS] default seeded in this same table (or in SYSTEM at
-     * runtime); the LNM$FILE_DEV search order checks PROCESS first. */
-    uint32_t st = lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$LOGIN",
+     * generic [USERS] default seeded elsewhere; the LNM$FILE_DEV search order
+     * (PROCESS -> JOB -> GROUP -> SYSTEM) reaches this table before the SYSTEM
+     * default. */
+    uint32_t st = lnm_create(mgr, table_name, "SYS$LOGIN",
                              default_dir, 0, LNM_MODE_SUPER);
     if (!LNM_LOGIN_OK(st))
         return st;
@@ -245,15 +247,36 @@ uint32_t lnm_define_login_logicals(lnm_manager_t *mgr, const char *default_dir)
             devlen = LNM_MAX_VALUE;
         memcpy(device, default_dir, devlen);
         device[devlen] = '\0';
-        st = lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$LOGIN_DEVICE",
+        st = lnm_create(mgr, table_name, "SYS$LOGIN_DEVICE",
                         device, 0, LNM_MODE_SUPER);
         if (!LNM_LOGIN_OK(st))
             return st;
     }
 
-    /* SYS$SCRATCH: VMS default is the same as SYS$LOGIN (the login directory
-     * doubles as the default scratch area). VSI OpenVMS DCL Dictionary. */
-    st = lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SCRATCH",
-                    default_dir, 0, LNM_MODE_SUPER);
+    /*
+     * SYS$SCRATCH IS DELIBERATELY NOT REDEFINED HERE (vms-e48 round 3).
+     *
+     * On OpenVMS SYS$SCRATCH defaults to the login directory (= SYS$LOGIN),
+     * but a site may DEFINE it to a dedicated scratch area, and OVMX ships
+     * exactly that: lnm_setup_defaults() defines SYS$SCRATCH system-wide to
+     * SYS$SYSDEVICE:[SYSTMP] -- a directory the boot image masters
+     * SYSTEM-writable (distro/Dockerfile.bootable; the vms-e5c/vms-221
+     * executive fix that made SYS$SCRATCH: genuinely sys$create-able). Every
+     * process on the node -- an interactive DCL and the images it activates
+     * alike -- resolves that one system-wide value, so scratch files land in
+     * one writable, consistent place.
+     *
+     * Overriding it per-login to = SYS$LOGIN would point it at each account's
+     * home, which is NOT guaranteed to be an RMS-writable directory in the
+     * booted image: measured against the PARTS 0.2 demo, a SYSTEM session's
+     * sys$create in its own [SYSMGR] home returns RMS/EACCES (only [SYSTMP]/
+     * [USERS] are mastered writable), so PARTS fell through to a fallback
+     * candidate and DIRECTORY SYS$SCRATCH:PARTS.DAT then looked elsewhere.
+     * Making per-account login directories RMS-writable is a vmsfs/provision
+     * concern outside this login-logicals item (tracked separately). SYS$LOGIN
+     * and SYS$LOGIN_DEVICE -- the identity this item is about -- are sourced
+     * from SYSUAF above regardless; SYS$SCRATCH stays the system scratch.
+     */
+    (void)0;
     return st;
 }

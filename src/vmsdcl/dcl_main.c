@@ -555,20 +555,27 @@ int main(int argc, char *argv[])
         /*
          * ESTABLISH THE PER-USER IDENTITY LOGICALS (vms-e48).
          *
-         * SYS$LOGIN / SYS$LOGIN_DEVICE / SYS$SCRATCH become REAL LNM$PROCESS
-         * logicals, sourced from the SYSUAF default device/directory that
-         * LOGINOUT read and conveyed through VMS_DEFAULT_DIR (which
-         * dcl_context_init already copied into ctx->default_dir). This is what
-         * makes F$TRNLNM("SYS$LOGIN") return this user's real home instead of
-         * the generic SYS$SYSDEVICE:[USERS] default -- and it runs here, in the
-         * surviving CLI process, because LNM$PROCESS is per-process state that
-         * does not cross the execl() from vms_login. It must happen BEFORE the
-         * login command procedures run, so their F$TRNLNM / SYS$LOGIN:-relative
-         * filespecs resolve against the real home.
+         * SYS$LOGIN and SYS$LOGIN_DEVICE become REAL LNM$JOB logicals, sourced
+         * from the SYSUAF default device/directory that LOGINOUT read and
+         * conveyed through VMS_DEFAULT_DIR (which dcl_context_init already
+         * copied into ctx->default_dir). This is what makes F$TRNLNM("SYS$LOGIN")
+         * return this user's real home instead of the generic
+         * SYS$SYSDEVICE:[USERS] default. (SYS$SCRATCH is left at OVMX's
+         * system-wide [SYSTMP] scratch -- see lnm_define_login_logicals().)
+         *
+         * LNM$JOB, NOT LNM$PROCESS (round 2). These are JOB-wide names on VMS
+         * so the WHOLE login job agrees on them -- including the images DCL
+         * activates (a foreign command like `$ PARTS`, which DCL fork+execs).
+         * A process-scope value here would be invisible to that child. The
+         * executive keys LNM$JOB on the job tree and a forked child inherits
+         * the parent's job_id, so the child resolves it identically. It must
+         * happen BEFORE the login command procedures run, so their F$TRNLNM /
+         * SYS$LOGIN:-relative filespecs resolve against the real home.
          */
         lnm_manager_t *login_mgr = lnm_get_manager();
         if (login_mgr && dcl_ctx.default_dir[0])
-            lnm_define_login_logicals(login_mgr, dcl_ctx.default_dir);
+            lnm_define_login_logicals(login_mgr, LNM_JOB_TABLE,
+                                      dcl_ctx.default_dir);
 
         /* System-wide login script */
         char sylogin_linux[1024];

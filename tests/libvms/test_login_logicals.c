@@ -18,8 +18,16 @@
  * the documented default (SYS$LOGIN:LOGIN.COM), not "/LOGIN.COM", is the
  * fallback -- both of which origin/main gets wrong.
  *
- * Runs as a plain host ctest: SYS$LOGIN et al. are LNM$PROCESS logicals, which
- * need no /dev/vms.
+ * TABLE SCOPE. In production (dcl_main.c) lnm_define_login_logicals() targets
+ * LNM$JOB, so the whole login job -- DCL plus every image it activates -- sees
+ * the same SYS$LOGIN/SYS$SCRATCH (this is what OpenVMS does, and a process-
+ * scope version broke the PARTS 0.2 demo: the forked PARTS.EXE could not see a
+ * process-scope SYS$SCRATCH). LNM$JOB is executive-resident and needs
+ * /dev/vms, which a host ctest does not have; that path is proven by the PARTS
+ * demo e2e (tests/qemu). This host test drives the SAME helper against
+ * LNM$PROCESS_TABLE -- identical establishment, supersede and LNM$FILE_DEV
+ * search-list resolution, minus the executive routing -- so the value/LGICMD
+ * logic is covered here and the JOB residency is covered by the e2e.
  *
  * Doc pins (VSI OpenVMS): DCL Dictionary, SYS$LOGIN / SYS$LOGIN_DEVICE /
  * SYS$SCRATCH; System Manager's Manual, SYSUAF default device/directory and
@@ -80,7 +88,10 @@ int main(void)
     /* --- Establish this user's identity logicals from a SYSUAF default
      *     device/directory (as LOGINOUT does at login). --- */
     const char *home = "DKA100:[SMITH]";
-    uint32_t est = lnm_define_login_logicals(mgr, home);
+    /* Host ctest: exercise the establishment against LNM$PROCESS_TABLE (no
+     * executive needed). Production passes LNM_JOB_TABLE -- see the file header
+     * and the PARTS demo e2e. */
+    uint32_t est = lnm_define_login_logicals(mgr, LNM_PROCESS_TABLE, home);
     /* Success is SS$_NORMAL or SS$_SUPERSEDE (the establishment supersedes the
      * generic defaults lnm_setup_defaults() seeded; SS$_SUPERSEDE is an even
      * success code). */
@@ -101,11 +112,17 @@ int main(void)
     check(strcmp(val, "DKA100:") == 0,
           "F$TRNLNM(SYS$LOGIN_DEVICE) == device of SYSUAF home");
 
-    /* SYS$SCRATCH == SYS$LOGIN (VMS default). */
+    /* SYS$SCRATCH is DELIBERATELY left at OVMX's system-wide scratch
+     * ([SYSTMP]) -- lnm_define_login_logicals() does not redefine it (see its
+     * doc: pointing SYS$SCRATCH at each account's not-necessarily-writable home
+     * broke the PARTS demo; OVMX ships a dedicated writable scratch instead).
+     * So it must NOT have become the login home. */
     check(trnlnm(mgr, "SYS$SCRATCH", val, sizeof(val)) == 0,
           "SYS$SCRATCH resolves");
-    check(strcmp(val, home) == 0,
-          "F$TRNLNM(SYS$SCRATCH) == SYS$LOGIN home");
+    check(strcmp(val, home) != 0,
+          "SYS$SCRATCH is NOT overridden to the login home");
+    check(strcmp(val, "SYS$SYSDEVICE:[SYSTMP]") == 0,
+          "SYS$SCRATCH stays the system-wide [SYSTMP] scratch");
 
     /* --- LGICMD is a real, sourced-from-SYSUAF field, honoured over the
      *     hardcoded default. --- */

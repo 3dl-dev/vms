@@ -503,9 +503,10 @@ static void handle_connection(ssh_session session)
          * to be setenv'd here (and SYS$SCRATCH was hardcoded to the Linux path
          * "/tmp", a Linux path wearing a VMS logical's name) -- a facade, since
          * F$TRNLNM never read the environment. DCL's --login path now
-         * establishes SYS$LOGIN / SYS$LOGIN_DEVICE / SYS$SCRATCH as REAL
-         * LNM$PROCESS logicals from VMS_DEFAULT_DIR (above), so an SSH session
-         * gets the same truthful per-user logicals a console login does.
+         * establishes SYS$LOGIN / SYS$LOGIN_DEVICE as REAL LNM$JOB logicals
+         * from VMS_DEFAULT_DIR (above), so an SSH session gets the same truthful
+         * job-wide logicals a console login does; SYS$SCRATCH stays OVMX's
+         * system-wide [SYSTMP] scratch (lnm_define_login_logicals()).
          */
 
         /* ---- Step 3: Display VMS login banner ---- */

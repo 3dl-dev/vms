@@ -201,3 +201,82 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
     lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$COMMAND", "TT:",
                0, LNM_MODE_EXEC);
 }
+
+/*
+ * lnm_define_login_logicals - per-user identity logicals from SYSUAF (vms-e48).
+ *
+ * WHAT THIS REPLACES: SYS$LOGIN/SYS$SCRATCH used to be Linux environment
+ * variables -- vms_login setenv'd them and DCL getenv'd them -- so
+ * F$TRNLNM("SYS$LOGIN") never saw the user's real home and returned the
+ * generic SYS$SYSDEVICE:[USERS] default lnm_setup_defaults() seeds. These are
+ * now REAL LNM$PROCESS logicals created through the same lnm_create() path
+ * DEFINE uses, so translation is truthful.
+ *
+ * Contract and doc citations are on the declaration in vms/logical.h.
+ */
+/* lnm_create() reports a replaced name with SS$_SUPERSEDE (844), which is an
+ * EVEN success code -- so plain (status & 1) would read a supersede as a
+ * failure. SYS$LOGIN et al. deliberately supersede the generic defaults
+ * lnm_setup_defaults() seeded, so both codes are success here (the same pair
+ * dcl_translate_logical() accepts). */
+#define LNM_LOGIN_OK(st)  ((st) == SS$_NORMAL || (st) == SS$_SUPERSEDE)
+
+uint32_t lnm_define_login_logicals(lnm_manager_t *mgr, const char *table_name,
+                                   const char *default_dir)
+{
+    if (!mgr || !table_name || !table_name[0] || !default_dir || !default_dir[0])
+        return SS$_BADPARAM;
+
+    /* SYS$LOGIN: the account's full default device + directory. Supersedes the
+     * generic [USERS] default seeded elsewhere; the LNM$FILE_DEV search order
+     * (PROCESS -> JOB -> GROUP -> SYSTEM) reaches this table before the SYSTEM
+     * default. */
+    uint32_t st = lnm_create(mgr, table_name, "SYS$LOGIN",
+                             default_dir, 0, LNM_MODE_SUPER);
+    if (!LNM_LOGIN_OK(st))
+        return st;
+
+    /* SYS$LOGIN_DEVICE: the device field of default_dir -- everything up to
+     * and including the first ':'. Only defined when default_dir names a
+     * device (it always does when it comes from a SYSUAF record). */
+    const char *colon = strchr(default_dir, ':');
+    if (colon) {
+        size_t devlen = (size_t)(colon - default_dir) + 1;   /* keep the ':' */
+        char device[LNM_MAX_VALUE + 1];
+        if (devlen > LNM_MAX_VALUE)
+            devlen = LNM_MAX_VALUE;
+        memcpy(device, default_dir, devlen);
+        device[devlen] = '\0';
+        st = lnm_create(mgr, table_name, "SYS$LOGIN_DEVICE",
+                        device, 0, LNM_MODE_SUPER);
+        if (!LNM_LOGIN_OK(st))
+            return st;
+    }
+
+    /*
+     * SYS$SCRATCH IS DELIBERATELY NOT REDEFINED HERE (vms-e48 round 3).
+     *
+     * On OpenVMS SYS$SCRATCH defaults to the login directory (= SYS$LOGIN),
+     * but a site may DEFINE it to a dedicated scratch area, and OVMX ships
+     * exactly that: lnm_setup_defaults() defines SYS$SCRATCH system-wide to
+     * SYS$SYSDEVICE:[SYSTMP] -- a directory the boot image masters
+     * SYSTEM-writable (distro/Dockerfile.bootable; the vms-e5c/vms-221
+     * executive fix that made SYS$SCRATCH: genuinely sys$create-able). Every
+     * process on the node -- an interactive DCL and the images it activates
+     * alike -- resolves that one system-wide value, so scratch files land in
+     * one writable, consistent place.
+     *
+     * Overriding it per-login to = SYS$LOGIN would point it at each account's
+     * home, which is NOT guaranteed to be an RMS-writable directory in the
+     * booted image: measured against the PARTS 0.2 demo, a SYSTEM session's
+     * sys$create in its own [SYSMGR] home returns RMS/EACCES (only [SYSTMP]/
+     * [USERS] are mastered writable), so PARTS fell through to a fallback
+     * candidate and DIRECTORY SYS$SCRATCH:PARTS.DAT then looked elsewhere.
+     * Making per-account login directories RMS-writable is a vmsfs/provision
+     * concern outside this login-logicals item (tracked separately). SYS$LOGIN
+     * and SYS$LOGIN_DEVICE -- the identity this item is about -- are sourced
+     * from SYSUAF above regardless; SYS$SCRATCH stays the system scratch.
+     */
+    (void)0;
+    return st;
+}

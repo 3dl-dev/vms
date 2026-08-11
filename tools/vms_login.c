@@ -240,9 +240,30 @@ static void start_session(const sysuaf_record_t *rec)
     setenv("VMS_USERNAME",    rec->username,    1);
     setenv("VMS_DEFAULT_DIR", rec->default_dir, 1);
 
-    /* Build logical name equivalences — VMS directory specs */
-    setenv("SYS$LOGIN",   rec->default_dir, 1);
-    setenv("SYS$SCRATCH", "SYS$SYSDEVICE:[SYSTMP]", 1);
+    /*
+     * SYS$LOGIN / SYS$LOGIN_DEVICE ARE NO LONGER ENV VARS (vms-e48). SYS$LOGIN
+     * used to be setenv'd here and getenv'd by DCL -- a facade, because
+     * F$TRNLNM("SYS$LOGIN") never consulted the environment and so returned the
+     * generic SYS$SYSDEVICE:[USERS] default while the user's real home hid in
+     * an env var only the login-script code read (two answers for one logical).
+     *
+     * They are now established as REAL LNM$JOB logicals (job-wide, so the whole
+     * login job -- DCL and every image it activates -- agrees on them, as on
+     * OpenVMS), sourced from this SYSUAF record's default device/directory, by
+     * lnm_define_login_logicals() in the DCL --login process (dcl_main.c). The
+     * establishment runs there, not here: LNM$PROCESS state would not survive
+     * the execl() below anyway, and -- unlike LOGINOUT -- that process runs as
+     * the unprivileged user and cannot re-read the protected SYSUAF.DAT, so
+     * LOGINOUT (running privileged, pre-setuid) reads the record and hands the
+     * default device/directory over through VMS_DEFAULT_DIR (above) and the
+     * login command file through --lgicmd (below). DCL then defines the
+     * logicals and translates them via F$TRNLNM.
+     *
+     * SYS$SCRATCH is NOT touched: OVMX defines it system-wide to its
+     * mastered-writable [SYSTMP] scratch (see lnm_define_login_logicals()).
+     * The old setenv("SYS$SCRATCH", "SYS$SYSDEVICE:[SYSTMP]") here was dead
+     * anyway -- F$TRNLNM never read it.
+     */
 
     /*
      * chdir into the VMS tree so DCL inherits a VMS-rooted cwd.
@@ -351,10 +372,22 @@ static void start_session(const sysuaf_record_t *rec)
         }
     }
 
+    /*
+     * The login command file to run: the SYSUAF LGICMD field, or the
+     * documented SYS$LOGIN:LOGIN.COM default when that field is empty
+     * (vms-e48). LOGINOUT resolves it here (it is the process that read the
+     * SYSUAF record) and hands the resulting VMS filespec to DCL through
+     * --lgicmd; DCL translates it through the SYS$LOGIN logical it is about to
+     * define. This replaces DCL's old hardcoded "<home>/LOGIN.COM".
+     */
+    char login_lgicmd[256];
+    sysuaf_login_command_file(rec, login_lgicmd, sizeof(login_lgicmd));
+
     /* Exec the DCL shell with --login flag */
     char dcl_linux[1024];
     vmsfs_to_linux_path(DCL_SHELL_PATH, dcl_linux, sizeof(dcl_linux));
-    execl(dcl_linux, "vmsdcl", "--login", (char *)NULL);
+    execl(dcl_linux, "vmsdcl", "--login", "--lgicmd", login_lgicmd,
+          (char *)NULL);
 
     /* If exec fails, fall back to sh */
     perror("vmsdcl");

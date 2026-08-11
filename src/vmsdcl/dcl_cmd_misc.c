@@ -1600,7 +1600,7 @@ int cmd_tcpip(struct dcl_command *cmd)
  * "/mnt/<devnam>" matches the vmsfs mount-point convention the QEMU kernel
  * tests already use (tests/qemu/test_kmod_vmsfs*.c).
  */
-static void mount_point_for_device(const char *log_name, char *buf, size_t sz)
+void mount_point_for_device(const char *log_name, char *buf, size_t sz)
 {
     char lower[16];
     size_t i;
@@ -1623,7 +1623,7 @@ static void mount_point_for_device(const char *log_name, char *buf, size_t sz)
  * VMS-native LINK.EXE build of DCL.EXE (%LINK-F-ERROR, unresolved external
  * symbol 'setmntent'; measured building distro/Dockerfile.bootable).
  */
-static int mount_point_is_mounted(const char *mount_point)
+int mount_point_is_mounted(const char *mount_point)
 {
     FILE *fp = fopen("/proc/mounts", "r");
     if (!fp)

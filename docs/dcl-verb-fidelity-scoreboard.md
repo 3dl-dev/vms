@@ -29,8 +29,8 @@
 | **FACADE** | Prints a plausible VMS success message and/or returns a success status while doing little or nothing that persists or that any other process could observe. The banned class INV-DCL exists to kill. |
 | **STUB** | Near-total placeholder — typically an immediate, honest refusal with no logic behind it. |
 
-**Totals (re-derived after vms-263 + vms-1a8): 50 REAL · 3 PARTIAL · 0 top-level FACADE · 1 STUB (54 verbs).** ASSIGN (vms-263) moved PARTIAL→REAL and STOP (vms-1a8) moved FACADE→REAL; see their rows under REAL below.
-Of the 4 named SET/SHOW sub-facades (ACCOUNTING/PASSWORD/VOLUME/LICENSE), PASSWORD (vms-e9e) and now ACCOUNTING (vms-17d) have moved to REAL -- VOLUME/LICENSE are still open -- see the FACADE section below.
+**Totals (re-derived after vms-263 + vms-1a8 + vms-309): 50 REAL · 4 PARTIAL · 0 top-level FACADE · 1 STUB (54 verbs).** ASSIGN (vms-263) moved PARTIAL→REAL and STOP (vms-1a8) moved FACADE→REAL; see their rows under REAL below.
+Of the 4 named SET/SHOW sub-facades (ACCOUNTING/PASSWORD/VOLUME/LICENSE), PASSWORD (vms-e9e) and ACCOUNTING (vms-17d) moved to REAL, and **SET VOLUME (vms-309) moved FACADE→PARTIAL** (real mount-state verification + real qualifier grammar, honest per-qualifier refusal including /LABEL — no characteristic actually persists; see its section below) — SHOW LICENSE is still open, see the FACADE section below.
 
 ## REAL (49)
 
@@ -74,7 +74,7 @@ Of the 4 named SET/SHOW sub-facades (ACCOUNTING/PASSWORD/VOLUME/LICENSE), PASSWO
 | REQUEST | Real `sys$sndopr()` OPC request. |
 | RUN | Real image activation (`dcl_activate_image()`/`run_detached()`) with its own honour/refuse qualifier layer. |
 | SEARCH | Real line-by-line string search over a real file. |
-| **SET** | Dispatcher — DEFAULT/PROMPT/VERIFY/TERMINAL/PROTECTION/PROCESS/FILE/UIC/WORKING_SET/TIME/ENTRY/QUEUE do genuine executive-backed work. **vms-e9e:** PASSWORD moved REAL. **vms-17d:** ACCOUNTING moved REAL (see below). **Named FACADE subcommand still open: VOLUME** — see below. |
+| **SET** | Dispatcher — DEFAULT/PROMPT/VERIFY/TERMINAL/PROTECTION/PROCESS/FILE/UIC/WORKING_SET/TIME/ENTRY/QUEUE do genuine executive-backed work. **vms-e9e:** PASSWORD moved REAL. **vms-17d:** ACCOUNTING moved REAL. **vms-309:** VOLUME moved FACADE→PARTIAL (see PARTIAL bucket above and its own section below). No named top-level-bucket-affecting FACADE subcommand remains under SET. |
 | **SHOW** | Dispatcher — PROCESS/SYSTEM/DEVICE/MEMORY/LOGICAL/STATUS read real executive state, deliberately blank rather than fabricate on failure. **Named FACADE subcommand still open: LICENSE** — see below. |
 | SORT | Real line-read/`qsort`/write. |
 | SPAWN | Real `fork`/`execl` subprocess with real `/NOWAIT`, `/OUTPUT` redirection. |
@@ -87,15 +87,16 @@ Of the 4 named SET/SHOW sub-facades (ACCOUNTING/PASSWORD/VOLUME/LICENSE), PASSWO
 | WAIT | Real `sleep()` for the parsed delta-time. |
 | WRITE | Real `fprintf` to SYS$OUTPUT/SYS$ERROR or an open channel. |
 
-## PARTIAL (3)
+## PARTIAL (4)
 
 | Verb | Evidence |
 |---|---|
 | ATTACH | Real `kill(SIGCONT)`/`waitpid()` process control, but only for the Ctrl-Y-interrupted process or a raw `/ID=pid`, not general job-tree terminal reassignment. |
 | HELP | Really lists all 54 verbs with interactive "Topic?" recursion, but flat printf text (no HLB), with hardcoded sub-help for only SHOW/SET/DIRECTORY. |
 | INQUIRE | Genuinely prompts/reads/sets a symbol, but `/NOPUNCTUATION` maps to "don't upcase input" instead of its real meaning (suppress trailing prompt punctuation) — right name, wrong semantics. |
+| **SET** (VOLUME subcommand) | **vms-309:** real "is this a mounted volume" check (`/proc/mounts`, shared with MOUNT/DISMOUNT) and a real, structural qualifier grammar (all 23 Dictionary qualifiers, `%DCL-W-IVQUAL`/`IVKEYW` now reachable) — no characteristic, including `/LABEL`, actually persists (vmsfs has no write-back path for a live-mounted volume). Disclosed gap, not a lie: every qualifier draws a specific, honest `SS$_UNSUPPORTED` refusal instead of the old blanket `SS$_NORMAL`. See "vms-309 — SET VOLUME" below. |
 
-## FACADE (0 top-level; 2 open named sub-facades under SET/SHOW, 3 fixed)
+## FACADE (0 top-level; 1 open named sub-facade under SHOW, 4 fixed)
 
 No top-level verb is FACADE as of vms-1a8 (STOP moved to REAL above).
 
@@ -107,7 +108,7 @@ the same convention `docs/design-dcl-fidelity.md` §1 used):
 | SET AUDIT | **Fixed** (vms-6f4 Phase 0): now honestly refuses (`SS$_UNSUPPORTED`) instead of toggling `ctx->audit_enabled`, a per-process bool nothing else could observe. |
 | SET ACCOUNTING | **Fixed (vms-17d): moved to REAL** — see §"vms-17d — SET ACCOUNTING moves FACADE to REAL" below. Was: `cmd_set_accounting()` toggled `ctx->accounting_enabled` (same dead-bool shape as the old SET AUDIT) and printed `%SET-I-INTSET` as if it controlled the real accounting writer, `ovmx_accounting_record_login()`, which recorded unconditionally regardless. |
 | SET PASSWORD | **Fixed (vms-e9e): moved to REAL** — see §"vms-e9e — SET PASSWORD moves FACADE to REAL" below. Was: `cmd_set_password()` printed `%SET-I-PASSWORD, password change not fully implemented` (admits it) but returned `SS$_NORMAL` (fake success) and never touched SYSUAF. |
-| SET VOLUME | Still open — prints `%SET-I-NOTIMPL` but returns `SS$_NORMAL` for an operation that does nothing. |
+| SET VOLUME | **Fixed (vms-309): moved to PARTIAL** (a subcommand move does not change SET's own top-level bucket) — see §"vms-309 — SET VOLUME" below. Was: `cmd_set_volume()` printed `%SET-I-NOTIMPL` but returned `SS$_NORMAL` unconditionally — mounted device or not, real qualifier or garbage, every invocation. |
 | SHOW LICENSE | Still open — `cmd_show_license()` prints two invented, unconditional LMF-style rows (fixed 0/0/100 Avail/Actv) with no disclosure at all — the least-honest of the four. |
 
 ## STUB (1)
@@ -138,10 +139,21 @@ worth recording so the board stays accurate):**
 `docs/design-dcl-fidelity.md` §5):**
 - The qualifier-grammar hole itself, for the other 53 verbs (Phase 1,
   `vms-097`).
-- SET VOLUME, SHOW LICENSE (Phase 2's fake-success sweep). SET PASSWORD is
-  DONE (vms-e9e) and SET ACCOUNTING is DONE (vms-17d) — see their sections
-  below. STOP's ignored target is DONE (vms-1a8, see the STOP row under REAL
-  above).
+- SHOW LICENSE (Phase 2's fake-success sweep). SET PASSWORD is DONE
+  (vms-e9e), SET ACCOUNTING is DONE (vms-17d), and SET VOLUME is DONE
+  (vms-309, honest-errors scope — see its section below) — see their
+  sections below. STOP's ignored target is DONE (vms-1a8, see the STOP row
+  under REAL above).
+- **Follow-up filed by vms-309, not yet an rd item (file from repo root,
+  not a worktree — CLAUDE.md/MEMORY):** a real `SET VOLUME/LABEL` write-back
+  needs a new `vmsfs.ko` ioctl (ioctl name TBD, e.g. `VMSFS_IOC_SETLABEL`)
+  that updates `hb_volname` on a volume that is CURRENTLY mounted —
+  recomputes `hb_checksum`, writes through the mount's own buffer head
+  (`mark_buffer_dirty`, `src/kernel/vmsfs/vmsfs_blkdev.c`), and refreshes
+  the cached `sbi->home` (`src/kernel/vmsfs/vmsfs_super.c`). `vmsfs.ko`
+  currently declares no ioctl at all. Kernel module interface work —
+  CLAUDE.md's Design Change Cascade applies (API compatibility check →
+  test coverage check → doc update).
 - HELP as a real hierarchical library, terminal-characteristic presentation
   fidelity (Phases 3-4).
 
@@ -343,3 +355,95 @@ mount, see `run_dcl_tests.sh`'s own non-hermetic-ordering note), the old
 assumption — "a fresh per-process bool defaults to disabled" — no longer
 holds, so the assertion now pins its own precondition instead of relying on
 another script's incidental last write.
+
+## vms-309 — SET VOLUME moves FACADE to PARTIAL
+
+`cmd_set_volume()` (`src/vmsdcl/dcl_cmd_set.c`) used to print
+`%SET-I-NOTIMPL, SET VOLUME requires a mounted VMSFS volume` and return
+`SS$_NORMAL` **unconditionally** — for every invocation, mounted device or
+not, real qualifier or garbage, even bare `SET VOLUME` with no device at
+all. An `-I-` (success-toned) message for a total no-op is INV-DCL's
+banned class.
+
+**Scope decision (flagged per CLAUDE.md Rule 5 — the item anticipated a
+REAL outcome for `/LABEL`, or PARTIAL "if only `/LABEL`"; this PR lands
+neither, and says why here).** The item's own fallback authorized scoping
+to honest errors if "`/LABEL` needs vmsfs plumbing that doesn't exist."
+It doesn't exist. Two independent findings converge on the same
+conclusion:
+
+1. `cmd_mount()`'s own `/LABEL`-equivalent parameter, in the same source
+   file, already carries the comment "Volume label -- informational only;
+   vmsfs does not read it back."
+2. `src/kernel/vmsfs/` — the kernel module MOUNT actually `mount(2)`s, and
+   the thing "a mounted vmsfs volume" in the item's own wording refers to
+   — declares **no ioctl at all** (`grep -rn ioctl src/kernel/vmsfs/*.c`
+   is empty). It reads the home block (`hb_volname`, `vmsfs_ondisk.h`)
+   into `sbi->home` exactly once, at mount (`vmsfs_super.c`), and never
+   re-reads it. There is no in-kernel path to rewrite a label on a volume
+   that is currently mounted, and patching the raw block device
+   underneath a live mount from userspace would not be an honest
+   substitute for one — it would race the kernel's own buffer cache for
+   that block (invisible to the live mount, or silently clobbered on the
+   kernel's next write-back), which is the exact silent-corruption failure
+   mode INV-6/INV-DCL exist to prevent, not an honest refusal.
+
+A real `/LABEL` therefore needs a new `vmsfs.ko` ioctl (recompute
+`hb_checksum`, write through the mount's own buffer head, refresh
+`sbi->home`) — kernel module interface work, CLAUDE.md's Design Change
+Cascade-sized, not a facade-kill patch. Filed as a follow-up (see the
+"Still open" list above; not yet an rd item — file from repo root per
+CLAUDE.md/MEMORY, not from a worktree).
+
+**What actually shipped.** `cmd_set_volume()` now:
+- Validates the full 23-qualifier Dictionary grammar structurally
+  (`dcl_validate_qualifiers()`, the Phase 1 machinery SET PASSWORD/SET
+  ACCOUNTING already use) — an unknown qualifier draws the authentic
+  `%DCL-W-IVQUAL`/`SS$_IVQUAL`, not silent acceptance.
+- Checks the device is a genuinely **mounted** volume the same way
+  MOUNT/DISMOUNT do — `mount_point_is_mounted()` against `/proc/mounts`,
+  the kernel's own real, cross-process mount table (promoted from
+  `static` in `dcl_cmd_misc.c` to a shared declaration in
+  `src/vmsdcl/include/dcl/dcl_cmd.h` so SET VOLUME can call the exact same
+  function, not a re-derived copy). Not mounted → the authentic
+  `SS$_DEVNOTMOUNT`, matching the Dictionary's own parameter description
+  ("the name of one or more MOUNTED Files-11 volumes"), not the old
+  success-toned NOTIMPL.
+- For a genuinely mounted volume, every qualifier — `/LABEL` included —
+  draws a specific, honest `%SET-W-NOTIMPL`/`SS$_UNSUPPORTED` refusal
+  naming exactly what didn't happen, instead of a blanket fake success.
+  A bare `SET VOLUME device:` with no qualifier on a mounted device is a
+  real (if pointless) no-op — the Dictionary doesn't forbid it, and OVMX
+  genuinely verified the device names a mounted volume and changed
+  nothing else, claiming nothing more.
+
+Clean-room (Rule 8): syntax, access requirement, and the 23-qualifier list
+from the public OpenVMS DCL Dictionary SET VOLUME entry
+(<https://wiki.vmssoftware.com/SET_VOLUME>,
+<https://www.digiater.nl/openvms/doc/ia64-v8.3/opsys/vmsos83/9996/9996pro_225.html>,
+both fetched for this fix). `/LABEL=volume-label`: "Assigns a 1-12
+character ANSI name to the volume ... remains in effect until it is
+changed explicitly; dismounting the volume does not affect the label."
+
+**Bucket: PARTIAL, not REAL.** Real, substantial work — genuine mount-state
+verification and a genuine structural qualifier grammar, both new — with a
+disclosed gap: no SET VOLUME qualifier persists any characteristic,
+`/LABEL` included. Not STUB (`docs/design-dcl-fidelity.md`'s STUB bucket is
+"an immediate, honest refusal with no logic behind it" — PHONE's shape;
+SET VOLUME's mount-check + per-qualifier structural validation is real
+logic, not an immediate blanket refusal).
+
+Veracity gates: `tests/dcl/test_set_volume_veracity.sh` (ctest, no
+`/dev/vms`) proves the two branches reachable without a real mount — a
+bogus qualifier draws `%DCL-W-IVQUAL`/2288 regardless of mount state, and
+`SET VOLUME` against a device nothing in this environment ever mounts
+draws the authentic `SS$_DEVNOTMOUNT`/2688, never `SS$_NORMAL`/1. The
+mounted-volume branch below that check — including `/LABEL`'s honest
+refusal, which needs a real mount to reach at all — is the paired
+POSITIVE in `tests/qemu/test_mount_e2e.sh` (extended, not a new script):
+against a genuinely-mounted `DKA100:`, a bogus qualifier still draws
+IVQUAL, `/LABEL=` draws `%SET-W-NOTIMPL` (never the old `%SET-I-NOTIMPL`),
+and a bare `SET VOLUME DKA100:` with no qualifier reports no error.
+`tests/dcl/test_set_quick.sh`'s trailing bare `SET VOLUME` (no device)
+assertion moved from the old facade text to the real
+`%DCL-E-NODEVICE`/`SS$_BADPARAM` refusal.

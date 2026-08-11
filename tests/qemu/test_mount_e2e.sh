@@ -37,6 +37,12 @@
 #   4. NEGATIVE CONTROL: MOUNT of a unit that does not exist (only two
 #      virtio disks are attached, so DKA200: names no unit) fails with a
 #      real error and never prints %MOUNT-I-MOUNTED.
+#   5. SET VOLUME (vms-309) against DKA100: while it is genuinely mounted:
+#      a bogus qualifier draws %DCL-W-IVQUAL, and /LABEL= draws the honest
+#      %SET-W-NOTIMPL refusal (vmsfs has no volume-label write-back path)
+#      instead of the old unconditional success -- this is the one branch
+#      of cmd_set_volume() that needs a REAL mount to reach at all;
+#      tests/dcl/test_set_volume_veracity.sh covers the rest on host ctest.
 #
 # Usage (run INSIDE the bootable image, like test_parts_demo_e2e.sh):
 #   docker build -f distro/Dockerfile.bootable -t ovmx-boot .
@@ -175,6 +181,49 @@ if wait_for '%MOUNT-I-MOUNTED' "$RUN_TIMEOUT" "$OFF"; then
     fi
 else
     dump_and_die "MOUNT DKA100: did not reach %MOUNT-I-MOUNTED within ${RUN_TIMEOUT}s"
+fi
+
+# --- 1b. SET VOLUME (vms-309) against a GENUINELY mounted volume --------
+# tests/dcl/test_set_volume_veracity.sh (ctest, no /dev/vms) can only
+# prove SET VOLUME's "device not mounted" branch, because nothing is ever
+# mounted in that environment. This is the paired POSITIVE: DKA100: really
+# is mounted right now, so the per-qualifier honest-refusal branch below
+# the mount check (see cmd_set_volume()'s header comment,
+# src/vmsdcl/dcl_cmd_set.c) is what actually runs -- including /LABEL,
+# which needs a real mounted volume to reach at all.
+OFF=$(wc -c <"$LOG")
+send 'SET VOLUME DKA100:/BOGUS'
+wait_for '$' "$RUN_TIMEOUT" "$OFF"
+SEG=$(segment_since "$OFF")
+if printf '%s\n' "$SEG" | grep -qF '%DCL-W-IVQUAL'; then
+    ok "SET VOLUME DKA100:/BOGUS rejects an unknown qualifier with IVQUAL, mounted or not"
+else
+    bad "SET VOLUME DKA100:/BOGUS did not report IVQUAL: $SEG"
+fi
+
+OFF=$(wc -c <"$LOG")
+send 'SET VOLUME DKA100:/LABEL=NEWLABEL'
+wait_for '$' "$RUN_TIMEOUT" "$OFF"
+SEG=$(segment_since "$OFF")
+if printf '%s\n' "$SEG" | grep -qF '%SET-W-NOTIMPL, SET VOLUME/LABEL is not implemented in OVMX'; then
+    ok "SET VOLUME DKA100:/LABEL= on a genuinely mounted volume honestly refuses (no vmsfs write-back path) instead of faking success"
+else
+    bad "SET VOLUME DKA100:/LABEL= did not honestly refuse: $SEG"
+fi
+if printf '%s\n' "$SEG" | grep -qF '%SET-I-NOTIMPL'; then
+    bad "SET VOLUME DKA100:/LABEL= printed the OLD facade's success-toned NOTIMPL"
+else
+    ok "SET VOLUME DKA100:/LABEL= prints no success-toned message"
+fi
+
+OFF=$(wc -c <"$LOG")
+send 'SET VOLUME DKA100:'
+wait_for '$' "$RUN_TIMEOUT" "$OFF"
+SEG=$(segment_since "$OFF")
+if printf '%s\n' "$SEG" | grep -qiE '%SET-[EWF]-|%DCL-[EWF]-'; then
+    bad "bare SET VOLUME DKA100: (mounted, no qualifier) reported an unexpected error: $SEG"
+else
+    ok "bare SET VOLUME DKA100: (mounted, no qualifier) is a real no-op: verified mounted, changed nothing, no error"
 fi
 
 # --- 2. /proc/mounts shows the vmsfs mount while mounted ---------------

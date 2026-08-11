@@ -29,15 +29,16 @@
 | **FACADE** | Prints a plausible VMS success message and/or returns a success status while doing little or nothing that persists or that any other process could observe. The banned class INV-DCL exists to kill. |
 | **STUB** | Near-total placeholder — typically an immediate, honest refusal with no logic behind it. |
 
-**Totals: 48 REAL · 4 PARTIAL · 1 FACADE · 1 STUB (54 verbs).**
+**Totals (re-derived post-vms-263): 49 REAL · 3 PARTIAL · 1 FACADE · 1 STUB (54 verbs).**
 
-## REAL (48)
+## REAL (49)
 
 | Verb | Evidence |
 |---|---|
 | ACCOUNTING | `cmd_accounting()` reads the real per-user last-login record (`ovmx_accounting_get_lastlogin()`); no fabricated fallback. |
 | ANALYZE | Forks/execs real `ANALYZE.EXE`; honest `%ANALYZE-F-NOIMG` if missing. |
 | APPEND | Real `fopen`/append `fwrite` I/O. |
+| **ASSIGN** | **vms-263 (Phase 2):** now calls the real `lnm_create()` against the logical-name manager for `/PROCESS` (the default) and `/SYSTEM /GROUP /JOB` (routed to the same executive-resident LNM$SYSTEM/GROUP/JOB tables `DEFINE` already uses) -- no longer writes into the DCL SYMBOL table. `/TABLE=name` (an arbitrary caller-named table) stays an honest `%DCL-W-NOTIMPL`/`SS$_UNSUPPORTED` refusal -- no table-by-name registry exists anywhere in `src/vmslnm`, for ASSIGN or DEFINE. Veracity gate: `tests/dcl/test_assign_real_lnm_veracity.sh` (fails on the old symbol-facade). |
 | BACKUP | Genuine archive/restore/list I/O (OVMX-specific saveset format, not VMS-binary-compatible, but real). |
 | CLOSE | Closes a real per-process file channel OPEN created. |
 | CONTINUE | Real `SIGCONT`/`waitpid` on the Ctrl-Y-interrupted child. |
@@ -84,11 +85,10 @@
 | WAIT | Real `sleep()` for the parsed delta-time. |
 | WRITE | Real `fprintf` to SYS$OUTPUT/SYS$ERROR or an open channel. |
 
-## PARTIAL (4)
+## PARTIAL (3)
 
 | Verb | Evidence |
 |---|---|
-| **ASSIGN** | Writes into the DCL symbol table (`dcl_sym_set`), not the LNM manager DEFINE uses — real work, wrong table. **Fixed this session (vms-6f4 Phase 0):** now honestly refuses `/SYSTEM /JOB /GROUP /TABLE` with `SS$_UNSUPPORTED` instead of silently discarding them (was FACADE before). Wiring the real LNM path is Phase 2. |
 | ATTACH | Real `kill(SIGCONT)`/`waitpid()` process control, but only for the Ctrl-Y-interrupted process or a raw `/ID=pid`, not general job-tree terminal reassignment. |
 | HELP | Really lists all 54 verbs with interactive "Topic?" recursion, but flat printf text (no HLB), with hardcoded sub-help for only SHOW/SET/DIRECTORY. |
 | INQUIRE | Genuinely prompts/reads/sets a symbol, but `/NOPUNCTUATION` maps to "don't upcase input" instead of its real meaning (suppress trailing prompt punctuation) — right name, wrong semantics. |
@@ -183,3 +183,45 @@ logical-name verbs, etc.). VALREQ/NOVAL value-required enforcement is also
 deferred (no grounded `SS$_` status constant yet); Phase 1 enforces the two
 authentic errors with grounded codes: IVQUAL (`SS$_IVQUAL` 2288) and IVKEYW
 (`SS$_IVKEYW` 2292).
+
+## Phase 2, TOP LIE #1 (vms-263) — ASSIGN moves PARTIAL to REAL
+
+`cmd_assign()` (`src/vmsdcl/dcl_cmd_io.c`) used to write its equivalence
+string into the DCL SYMBOL table via `dcl_sym_set()` for every invocation,
+including the `/PROCESS` default — real work, wrong subsystem: an
+`F$TRNLNM()`/`SHOW LOGICAL` lookup never saw what `ASSIGN` had just
+"assigned." It now calls the real `lnm_create()` against the logical-name
+manager, mirroring `cmd_define()`'s existing LNM path in the same file:
+
+- `/PROCESS` (default) and `/SYSTEM /GROUP /JOB` all route to the four
+  well-known tables — `LNM$SYSTEM`/`GROUP`/`JOB` are executive-resident
+  (`lnm_create()` → `vms_kif` → `/dev/vms`, `src/vmslnm/lnm_client.c`) and
+  already load-bearing for `DEFINE`, so ASSIGN now wires to them instead of
+  refusing them (no per-process fallback, INV-6 — an unreachable executive
+  fails honestly with `SS$_NOSUCHDEV`/`LNMFAIL`, never a fake success).
+- `/TABLE=name` (an arbitrary caller-named table) is **still** an honest
+  `%DCL-W-NOTIMPL`/`SS$_UNSUPPORTED` refusal — neither ASSIGN nor DEFINE has
+  a generic table-by-name registry anywhere in `src/vmslnm` to resolve it
+  against.
+- `DEASSIGN` (`cmd_deassign()`) already called the real `lnm_delete()`
+  before this pass (it was independently REAL, not part of the ASSIGN
+  facade) and needed no change; it now removes exactly what the fixed
+  `ASSIGN` creates.
+
+Clean-room (Rule 8): ASSIGN's parameter order (equivalence-name THEN
+logical-name, the opposite of DEFINE's logical-name THEN
+equivalence-string), its default table (`LNM$PROCESS`), and its scope
+qualifiers (`/PROCESS /JOB /GROUP /SYSTEM /TABLE`) are the public OpenVMS
+DCL Dictionary's ASSIGN entry ("This command performs a subset of the
+function of the DEFINE command").
+
+Veracity gate (fails on the old symbol-facade, passes on the fix):
+`tests/dcl/test_assign_real_lnm_veracity.sh` — `ASSIGN BAR FOO` then
+`F$TRNLNM("FOO")` and `SHOW LOGICAL FOO` both show the real translation
+`BAR`, `SHOW SYMBOL FOO` finds nothing (`%DCL-W-NOLCL`, proving the DCL
+symbol table was never touched), and `DEASSIGN FOO` removes the logical
+name (`SHOW LOGICAL FOO` afterward reports `%DCL-W-NOLOG`). The Phase 0
+facade canary (`tests/dcl/test_facade_gate_phase0.sh`) moved from
+`ASSIGN .../SYSTEM` (now wired, no longer a facade) to `ASSIGN .../TABLE`
+(still honestly refused) so it keeps testing a real refusal rather than a
+now-fixed path.

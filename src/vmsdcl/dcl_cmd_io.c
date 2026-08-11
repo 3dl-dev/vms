@@ -22,9 +22,15 @@
 
 /*
  * ASSIGN - Assign a logical name.
- * Format: ASSIGN equivalence-name logical-name [/TABLE=table-name]
- * Unlike DEFINE, ASSIGN uses a different default table (LNM$PROCESS) and
- * has slightly different semantics for table placement.
+ * Format: ASSIGN equivalence-name logical-name
+ *                 [/PROCESS | /JOB | /GROUP | /SYSTEM] [/TABLE=table-name]
+ * (OpenVMS DCL Dictionary, ASSIGN.) Unlike DEFINE (which takes
+ * logical-name THEN equivalence-string[,...] and supports multi-valued
+ * search lists), ASSIGN's parameter order is equivalence-name THEN
+ * logical-name and is single-valued -- "This command performs a subset
+ * of the function of the DEFINE command" (DCL Dictionary, ASSIGN). Both
+ * commands share the same default target table, LNM$PROCESS, and the
+ * same /SYSTEM /GROUP /JOB /PROCESS scope qualifiers.
  */
 int cmd_assign(struct dcl_command *cmd)
 {
@@ -38,24 +44,19 @@ int cmd_assign(struct dcl_command *cmd)
     const char *logname = cmd->params[1];
 
     /*
-     * vms-6f4 Phase 0 (docs/design-dcl-fidelity.md sec 5): ASSIGN/SYSTEM
-     * is a named facade. /SYSTEM, /JOB, /GROUP, and /TABLE select a
-     * target logical-name table (DCL Dictionary, ASSIGN) -- real,
-     * privileged VMS syntax. ASSIGN does not yet reach the logical-name
-     * manager at all (it writes upper_name into the DCL SYMBOL table,
-     * dcl_sym_set(), below -- see cmd_define() for the real LNM path
-     * DEFINE already uses); wiring ASSIGN the same way is Phase 2's job.
-     * Until then, silently discarding these qualifiers and claiming
-     * SS$_NORMAL -- the previous behavior -- is exactly INV-DCL's banned
-     * "silent qualifier acceptance": the caller asked for a specific
-     * table placement and got a same-named DCL symbol instead, with no
-     * indication anything different happened. Refuse honestly instead.
+     * vms-263 (Phase 2, docs/design-dcl-fidelity.md sec 5): /TABLE=name
+     * selects an arbitrary, caller-named logical-name table (DCL
+     * Dictionary, ASSIGN /TABLE) -- real syntax, but there is no
+     * generic "create/look up a table by name" registry anywhere in
+     * src/vmslnm, only the four well-known tables (LNM$PROCESS/JOB/
+     * GROUP/SYSTEM) that DEFINE and ASSIGN both route to below. Neither
+     * command implements it. Refuse honestly rather than silently
+     * ignoring it or guessing a table (INV-DCL).
      */
-    if (dcl_has_qualifier(cmd, "SYSTEM") || dcl_has_qualifier(cmd, "JOB") ||
-        dcl_has_qualifier(cmd, "GROUP") || dcl_has_qualifier(cmd, "TABLE")) {
+    if (dcl_has_qualifier(cmd, "TABLE")) {
         dcl_error("DCL", 0, "NOTIMPL",
-                  "ASSIGN /SYSTEM, /JOB, /GROUP, and /TABLE are not yet "
-                  "implemented - no logical name was created");
+                  "ASSIGN /TABLE is not yet implemented - no logical name "
+                  "was created");
         return SS$_UNSUPPORTED;
     }
 
@@ -66,13 +67,44 @@ int cmd_assign(struct dcl_command *cmd)
         upper_name[i] = (char)toupper((unsigned char)logname[i]);
     upper_name[i] = '\0';
 
-    /* /PROCESS (default) maps to the DCL global symbol table for now;
-     * see the comment above for why the other table-selecting qualifiers
-     * are refused rather than silently mapped here too. */
-    int scope = DCL_SYM_GLOBAL;
-    if (dcl_has_qualifier(cmd, "PROCESS")) scope = DCL_SYM_GLOBAL;
+    /*
+     * Target table from the scope qualifiers (/PROCESS is the default) --
+     * the same precedence and the same three executive-resident tables
+     * cmd_define() below already routes to. LNM$SYSTEM/GROUP/JOB are wired
+     * through lnm_create() -> vms_kif -> /dev/vms (src/vmslnm/lnm_client.c's
+     * is_system_table()/is_group_table()/is_job_table()): real, shared with
+     * every other process on the node/group/job tree, and honestly fail
+     * SS$_NOSUCHDEV with no executive present -- no per-process fallback
+     * (INV-6). Reachable and already load-bearing for DEFINE, so ASSIGN
+     * wires to them too rather than refusing.
+     */
+    const char *table = LNM_PROCESS_TABLE;
+    if (dcl_has_qualifier(cmd, "SYSTEM"))
+        table = LNM_SYSTEM_TABLE;
+    else if (dcl_has_qualifier(cmd, "GROUP"))
+        table = LNM_GROUP_TABLE;
+    else if (dcl_has_qualifier(cmd, "JOB"))
+        table = LNM_JOB_TABLE;
 
-    dcl_sym_set(upper_name, equiv, scope);
+    /*
+     * vms-263: reach the REAL logical-name manager, mirroring cmd_define()'s
+     * LNM path below. Previously ASSIGN wrote upper_name into the DCL
+     * SYMBOL table (dcl_sym_set()) regardless of qualifier -- the wrong
+     * subsystem: F$TRNLNM()/SHOW LOGICAL never saw it (INV-DCL facade).
+     */
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (mgr) {
+        uint32_t status = lnm_create(mgr, table, upper_name, equiv,
+                                     LNM_ATTR_TERMINAL, LNM_MODE_USER);
+        if (status != SS$_NORMAL && status != SS$_SUPERSEDE) {
+            dcl_error("DCL", 2, "LNMFAIL",
+                      "failed to create logical name \\%s\\", upper_name);
+            return (int)status;
+        }
+    } else {
+        /* Graceful fallback: store as global symbol, same as DEFINE's. */
+        dcl_sym_set(upper_name, equiv, DCL_SYM_GLOBAL);
+    }
 
     return SS$_NORMAL;
 }

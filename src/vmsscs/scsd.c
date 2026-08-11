@@ -11454,7 +11454,22 @@ static enum readmit_verdict readmit_verdict_of(const struct peer_state *ps)
      * we only REACHED) and NO_ENGAGE: here OVMX did its part -- it drove the join
      * request -- and the coordinator did not commit. Checked before the open latch
      * because OVMX's own VMS$VAXcluster VC often ends CONNSTUCK (DISC SENT) on the
-     * return, so the latch under-reports; the op02-was-driven fact does not. */
+     * return, so the latch under-reports; the op02-was-driven fact does not.
+     *
+     * vms-9a7 (spec §4(O.25)) REFINES the "why", grounded on SDA parked on the
+     * coordinator across a same-boot fresh->crash->op02-driven-return bracket: the
+     * coordinator does NOT "ignore" a received request (Davis p. 7-38). Its CNXMAN
+     * never PROPOSES the addition -- on the FRESH join its console prints
+     * "received VAXcluster membership request" -> "proposing addition" -> "completing
+     * ... state transition"; on the RETURN (op 0x02 provably on the wire) it prints
+     * ONLY "lost connection" / "timed-out lost connection", never "received request",
+     * never "proposing addition". Its per-node CSB for the returner reaches
+     * 02040000 status_rcvd but stalls in State 03 reconnect, never selected/member,
+     * while SHOW CONNECTIONS shows its VMS$VAXcluster reconnect to the returner
+     * parked in con_sent (Remote Con.ID 0) -- the readmission connection never
+     * settles OPEN. The frontier relocates one layer DOWN, from CM admission to the
+     * SCS connection layer; the §4(O.24) remote_conid=0 is the fingerprint of that
+     * never-opening reconnect, not a separate defect. Classifier unchanged. */
     if (ps->joiner_cfg2_sent) {
         return READMIT_JOIN_ABANDONED;
     }
@@ -11479,7 +11494,7 @@ static const char *readmit_verdict_name(enum readmit_verdict v)
     case READMIT_NO_CHANNEL: return "NO-CHANNEL(never reached transport)";
     case READMIT_NO_ENGAGE:  return "NO-ENGAGE(member sent 0 CM responses, SYSAP never re-opened -- returning-id non-admission, spec 4(O.21))";
     case READMIT_RECLAIMED_NOJOIN: return "RECLAIMED-NOJOIN(SYSAP re-opened + member reclaimed the CSB & read our incarnation, but ran 0 CM JOIN -- relocated frontier, spec 4(O.23))";
-    case READMIT_JOIN_ABANDONED: return "JOIN-ABANDONED(OVMX drove op 0x02 to the coordinator, coordinator ran 0 CM JOIN -- no op 0x12 relay, no op 0x03 commit; it IGNORES the returning-id join request, Davis p.7-38 -- relocated frontier, spec 4(O.24))";
+    case READMIT_JOIN_ABANDONED: return "JOIN-ABANDONED(OVMX drove op 0x02 to the coordinator, coordinator ran 0 CM JOIN -- no op 0x12 relay, no op 0x03 commit; coordinator SDA (vms-9a7): CNXMAN never PROPOSES the addition -- its VMS$VAXcluster reconnect to the returning id never settles OPEN (con_sent/reconnect, timed-out lost connection), so CNXMAN receives no membership request to propose -- NOT an ignored request; Davis p.7-38/7-40/7-46 -- relocated frontier to the SCS connection layer, spec 4(O.25))";
     case READMIT_ENGAGED_NC: return "ENGAGED-NOT-LATCHED(CM responses seen, membership not OPEN)";
     case READMIT_ADMITTED:   return "ADMITTED(member ran JOIN handshake, membership OPEN)";
     default:                 return "?";

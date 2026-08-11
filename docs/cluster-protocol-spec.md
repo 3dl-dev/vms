@@ -5702,6 +5702,94 @@ timelines) with `.status` (`Rf`/`Ff` `XITDONE=1`; `Rr`/`Fr` `XITDONE=0`);
 (the old latch-first classifier read both `NO-ENGAGE`, masking the op02-driven fact).
 *VAXcluster Principles* pp. 7-24/7-25/7-37/7-38/7-39.
 
+#### 4(O.25) SDA ON THE COORDINATOR settles WHY the op02-driven ADD does not run, and it is NOT the coordinator "ignoring" a received request (Davis p. 7-38): on the return the coordinator's connection manager **never PROPOSES the addition** — its console (`ANALYZE/SYSTEM` on the coordinator) prints `%CNXMAN, received VAXcluster membership request` → `proposing addition` → `completing … state transition` for the FRESH join, but for the op02-driven RETURN it prints ONLY `%CNXMAN, lost connection` / `timed-out lost connection`, never `received … request`, never `proposing addition`; the coordinator's per-node CSB for the returning identity reaches `02040000 status_rcvd` but stalls in connectivity State `03 reconnect`, **never `selected`, never `member`**, while the coordinator sits the whole return in `con_sent`/`con_pend` (`Remote Con. ID 00000000`) reconnect retries to the returning node — so the §4(O.24) `remote_conid=0x00000000` is the FINGERPRINT of a member-initiated readmission connection that never reaches a stable OPEN, NOT a separate defect; the gate RELOCATES one layer below §4(O.24) from "coordinator ignores an op02-driven ADD (CM-admission)" to "the coordinator's `VMS$VAXcluster` reconnect to the returning identity never settles OPEN, so CNXMAN never receives a membership request to propose" (GROUNDED, `vms-9a7`, coordinator-side SDA — `SHOW CLUSTER`/`SHOW CLUSTER/NODE`/`SHOW CONNECTIONS/NODE` parked on VAX2 across a same-boot fresh→crash→op02-driven-return single-factor bracket on virgin `vaxlab-2` + Rf/Rr CM-frame wire diff (`cmdiff.py`) + *VAXcluster Principles* pp. 7-24/7-25/7-37/7-38/7-39/7-40/7-46, 2026-08-11)
+
+**Frame.** §4(O.24) relocated the frontier to **SDA on the coordinator** — the VAX OVMX drives op
+0x02 to (VAX2 in this lab) — and left the open question: does the coordinator carry residual CLUB /
+quorum state for the departed OVMX so its p. 7-38 admission tests fail? `vms-9a7` puts SDA on the
+coordinator across the return and answers it: the p. 7-38 admission tests are **never reached**,
+because the coordinator's connection manager (CNXMAN) never gets far enough to treat the return as a
+join at all.
+
+**Method (coordinator SDA + wire, single factor, same boot).** One virgin `vaxlab-2` (CN_2), one
+minted identity (`OVX4`/1980), `ANALYZE/SYSTEM` parked on the COORDINATOR VAX2 the whole run,
+sampling `SHOW CLUSTER` / `SHOW CLUSTER/NODE=OVX4` / `SHOW CONNECTIONS/NODE=OVX4`. The daemon runs
+FRESH (no sidecar → admitted, `XITDONE=1`), is SIGKILLed (crash), and returns after a ~22 s gap
+(past the member's reconnect detection but with the identity's prior-admission sidecar present, so op
+0x02 takes the REJOIN form) — the ONLY factor that differs between the two op02 drives the coordinator
+sees is fresh-vs-return. Current post-0425 daemon (`build-9a7`); `build-d94` predates seven rejoin
+fixes and must not be used for a return arm.
+
+**What the coordinator's CSB shows (single factor).**
+
+| moment | coordinator CSB for the identity (SDA) | `XITDONE` |
+|---|---|---|
+| FRESH join | `879C05C0` → `02040000 status_rcvd` → `02060002 member,selected,status_rcvd`, State `01 open` | **1** |
+| after crash | `879C05C0` State `09 wait`, still `member,selected,status_rcvd` (reconnect-wait) |
+| after removal | `879C05C0` → `06040005 long_break,removed,status_rcvd` (departure reconfiguration removes the old incarnation) |
+| op02-driven RETURN | **NEW** CSB `879CEA40` → `02040000 status_rcvd`, State `03 reconnect` — **never `selected`, never `member`** | **0** |
+
+The fresh CSB reaches `member,selected`/`open`; the return's fresh-built CSB reaches `status_rcvd`
+(op 0x02 was received) but **stalls in State `reconnect` and is never `selected`** — the coordinator
+never runs the JOIN CLUSTER SELECT (p. 7-38) that would start the ADD.
+
+**What CNXMAN prints (the decisive datum).** On the FRESH join the coordinator console prints, in
+order, `%CNXMAN, received VAXcluster membership request from system OVX4` → `proposing addition of
+system OVX4` → `completing VAXcluster state transition`. On the RETURN — with op 0x02 provably on the
+wire (`OVMX>VAX2 op02-CONFIG`, `cmdiff.py`) — the coordinator console prints, for the entire return,
+ONLY `%CNXMAN, lost connection to system OVX4` and finally `%CNXMAN, timed-out lost connection to
+system OVX4`. It **never** prints `received … request` or `proposing addition`. The coordinator does
+not *ignore* a received join request; its CNXMAN never *receives* one.
+
+**Why: the readmission connection never settles OPEN (`SHOW CONNECTIONS`).** Across the return the
+coordinator's `SHOW CONNECTIONS/NODE=OVX4` shows its `VMS$VAXcluster` (and `SCS$DIRECTORY`,
+`VMS$DISK_CL_DRVR`) connections to the returning node parked in `State: 0007 con_sent` /
+`Blocked State: 0001 con_pend` with `Remote Con. ID 00000000` — the coordinator is re-opening its
+member-initiated connections to the returner (the Figure-2-14 pattern, Davis pp. 7-37/7-40/7-46) but
+they **never reach OPEN**. The coordinator sent five `VMS$VAXcluster CONNECT_REQ`s over the return;
+OVMX accepted exactly two to OPEN (one per member) and drove op 0x02 on the coordinator's, but the
+coordinator's CNXMAN keys membership on a reconnect connection that stays `con_sent` and repeatedly
+`timed-out lost connection`. Because that connection never settles OPEN, CNXMAN never sees a
+membership request to propose, the CSB stays `reconnect`/`status_rcvd`, and no relay/commit/MEMB
+follows the driven op 0x02 (`cmdiff.py`: after the return `OVMX>VAX2 op02-CONFIG` there is **no**
+`op12-RELAY`, **no** `op03-COMMIT`, **no** `op06-MEMB` — only the pre-op02 member↔member `op0d-DEPART`
+that removed the old incarnation). The `remote_conid=0x00000000` §4(O.24) flagged as "a separate
+OVMX-side defect" is the SAME connection observed from OVMX's side — the readmission connection whose
+non-settling IS the gate — so it is **reframed from "separate defect" to "fingerprint of the gate."**
+
+**Relocated frontier.** The gate is NOT the coordinator's p. 7-38 quorum/connectivity ADMISSION
+tests (never reached) and NOT residual CLUB/quorum accounting for the departed node (the coordinator
+DEALLOCATEs the old CSB and builds a new one, exactly as §4(O.23)/§4(O.24) found on the member). It
+is one layer below: **the coordinator's member-initiated `VMS$VAXcluster` reconnect to the returning
+identity never reaches a stable OPEN (`con_sent`/`reconnect`, `Remote Con. ID 0`, `timed-out lost
+connection`), so CNXMAN never proposes the addition.** The next isolation is WHY that reconnect never
+completes: the coordinator opens (at least) two `VMS$VAXcluster` connects to the returner — one OVMX
+accepts and drives op 0x02 on, and one that stays `con_sent` — and CNXMAN waits on the one that never
+opens; determine whether OVMX must complete/accept the coordinator's expected reconnect (an
+incarnation/connection-identity handling gap on the return) rather than presenting a separate fresh
+VC. This is a CONNECTION-layer gate, upstream of CM admission.
+
+**Non-claims / what ships (no wire change, guard 8/23).** (1) rejoin is NOT closed; this ISOLATES the
+gate on the coordinator and RELOCATES the frontier to the SCS connection layer. (2) `vms-9a7`
+confirms §4(O.24)'s wire fact (no relay/commit for the return op 0x02) and CORRECTS its explanation:
+the coordinator does not "ignore" a received request (its CNXMAN never receives one). (3) The
+READMITMAP `JOIN-ABANDONED` verdict TEXT is corrected to the grounded coordinator-SDA finding
+(CNXMAN never proposes; the `VMS$VAXcluster` reconnect stays `con_sent`/`reconnect` and times out) —
+log-only, classifier UNCHANGED (`joiner_cfg2_sent && cm_responses==0`), kill-switch
+`OVMX_NO_READMITMAP` unchanged, fail-pre/pass-post case in `tests/vmsscs/test_scsd_wire.c`,
+byte-unchanged on the wire.
+
+**Evidence** (host, tank volume): coordinator CSB/CONN timelines
+`/data/training/vax/cluster/work/9a7v2g22.csb` (fresh→crash→return, one boot) with `.status`
+(`XITDONE`: fresh #1 =1, return #2 =0; op 0x02 to node 2 driven on the return); daemon logs
+`/lab/k8s-labs/vaxlab-2/logs/scsd-9a7v2g22-{1,2}.log` (`#2` shows both `VMS$VAXcluster` VCs reach
+OPEN then the SHUTDOWN-only `DISC SENT`, and `READMITMAP … verdict=JOIN-ABANDONED`); pcap
+`d94-9a7v2g22.pcap` decoded with `docs/clean-room/tools/cmdiff.py` (fresh op02→relay→commit→MEMB at
+t≈24 s; return op02 at t≈87 s with no relay/commit); harness
+`/data/training/vax/cluster/tools/coordfast.sh` (coordinator SDA parked across a same-boot
+fresh→crash→return). Fresh baseline cross-check on virgin `vaxlab-1`
+(`9a7v-f.csb`/`d94-9a7v-f.pcap`). *VAXcluster Principles* pp. 7-24/7-25/7-37/7-38/7-39/7-40/7-46.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

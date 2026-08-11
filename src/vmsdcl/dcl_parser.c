@@ -14,9 +14,18 @@
 #include "dcl/lexer.h"
 #include "dcl/parser.h"
 #include "dcl/cdu.h"
-#include "dcl/dcl_cmd.h"
 #include "str_util.h"
 #include "ssdef.h"
+
+/*
+ * Declared locally rather than via "dcl/dcl_cmd.h": that header also declares
+ * prototypes using mode_t / struct dcl_context, which are not in scope in this
+ * TU under the VMS-native freestanding+musl compile (no <sys/types.h>), and
+ * pulling it in broke the DCL.EXE self-host/link graph. We need only the error
+ * emitter here. Signature matches dcl_cmd.h and dcl_io.c's definition.
+ */
+extern void dcl_error(const char *facility, int severity, const char *ident,
+                      const char *fmt, ...);
 
 /*
  * Match a (possibly abbreviated) command name against a full command name.

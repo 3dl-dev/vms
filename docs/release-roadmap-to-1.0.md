@@ -1,0 +1,283 @@
+# OVMX — release roadmap to 1.0
+
+> Written 2026-08-11 against the live board (`rd show`/`rd list`), `docs/roadmap-v1.md`
+> (the R1–R6 gate framing on `origin/main`), `docs/product-vision.md`, the four
+> operator-declared 1.0-blocker epics filed 2026-08-09..11, and the in-flight lanes.
+> This is an **execution pointer, not stored truth** — re-derive any status line from
+> `rd show <id>` before acting on it.
+>
+> **This document supersedes `docs/release-plan-0.2-to-0.5.md`** (a local, untracked
+> Aug-8 predecessor). That plan's *cadence* (weekly Fridays, 0.2 = Aug 14) and its
+> *0.2→0.5 framing* are obsolete — we have already shipped through **0.3-4**. What it
+> got right and this document keeps: the merge-safety / file-ownership-lane model and
+> the epic-status structure (§4–§5 below).
+>
+> **Owed correction (Rule 10 — downstream artifact contradicts operator source):**
+> `docs/roadmap-v1.md §4` still declares self-hosting "a north star, **not** a release
+> gate." Operator ruling 2026-08-09 (`vms-678`) makes **Build-native self-hosting an
+> explicit 1.0 gate**. roadmap-v1 must be rewritten to match; this document treats
+> self-hosting as a gate. Do not rewrite roadmap-v1 from here — file/route that edit.
+
+---
+
+## 1. Where we actually are
+
+**Shipped point releases** (tags, marching toward 1.0): `0.3`, `0.3-1` (rebrand +
+Rule-9 runtime consolidation), `0.3-2` (DCL fidelity Phase 0+1), `0.3-3` (conversational
+boot + DCL Phase 2 + rejoin diagnostics), **`0.3-4`** (SET ACCOUNTING/VOLUME + cluster
+clean-leave; main `f070b733`). Release authority is standing: point releases (0.3-x) cut
+autonomously as maintenance/fixes land through the machinery; feature milestones (0.4+)
+gate on features.
+
+**What each milestone means** (re-derived from rd + memory, not invented):
+
+| Milestone | One-line meaning | State |
+|---|---|---|
+| **0.3** | "a real VMS system" — executive R3 substrate, honest DCL surface | shipped, accreting 0.3-x |
+| **0.4** | "installs and boots faithfully" + cluster rejoin/DLM | in flight (long pole) |
+| **0.5** | "functionally complete for 1.0 except the app-compat slog" | planned |
+| **1.0** | "join the cluster, run the software, evacuate the node" — *and now* self-hosts its own build, speaks TCP/IP + DECnet, owns its kernel | gated (see §3) |
+
+**The 1.0 bar, operator-verbatim (roadmap-v1 §1, re-affirmed 2026-08-05):** *"1.0 means
+fully compat and clustering, and slides into a real VMS cluster and takes over."*
+Pre-1.0 releases are **unlimited and expected** — cut freely; what is forbidden is
+calling anything short of that bar 1.0.
+
+---
+
+## 2. The 1.0 objective and its pillars
+
+`docs/product-vision.md` read literally: OVMX commoditizes the two scarcities VSI sells
+(licensing + portability). The four tier-1 objective pillars are unchanged and nothing
+is deferred — focus-order only:
+
+- **Native toolchain** — `vms-ade` (self-hosting north star)
+- **Cluster interop** — `vms-ci` (the migration path *in*)
+- **Source compatibility** — `vms-801` (run their software, measured by the corpus scoreboard)
+- **Authenticity** — `vms-898` (no Unix leaks; the executive gap `vms-6b8` sits under this)
+
+The 2026-08-09..11 rulings add three new **1.0-blocking** commitments that this roadmap
+folds into the gate set: Build-native self-hosting, networking as a layered product
+(TCP/IP + DECnet Phase IV), and owning the kernel build.
+
+---
+
+## 3. The 1.0 gate set
+
+roadmap-v1 framed six gates (R1–R6). This document keeps them and folds the four new
+epics in as **R7** plus explicit dependency edges into R1–R6. Each gate is a verifiable
+end state, not a work phase.
+
+| Gate | End state | Primary epic(s) | Milestone it lands by |
+|---|---|---|---|
+| **R1 — Product boots + installs** | Clean host: boot published image under QEMU, install to disk, reboot from it, log in to DCL | Boot `vms-46c` (faithful bootstrap), Install `vms-718` (PCSI-kit install) | 0.4 |
+| **R2 — Builds + runs every VMS app** | Open-ended corpus program with a *committed, floored* scoreboard (baseline `vms-343`); run-pass climbs | Source compat `vms-801` (RTL gap-closure) | continuous → 1.0 |
+| **R3 — Executive: real shared system state** | `DEFINE/SYSTEM` survives the process; `SHOW SYSTEM`/`SHOW USERS` cross process boundaries; `$CREMBX` IPC works | Executive gap `vms-6b8` (keystone) | 0.3→0.5 |
+| **R4 — Security truth** | priv-from-env killed, protection nibbles consistent, memory-safety, SCS listener hardened | security-truth items (see §6 appendix) | continuous; blocks publication |
+| **R5 — Cluster: join, serve, lock, evacuate** | Voting member; serves+consumes MSCP; participates in DLM; **rejoin under same SCSSYSTEMID**; live workload evacuated off a VMS node, cluster stays up | Cluster rejoin `vms-694` → `vms-600`; `vms-ci` | 0.4 (rejoin/DLM) → 1.0 (evacuation) |
+| **R6 — Release engineering** | Every release BUILT, PROVEN, DOCUMENTED, UPGRADABLE by machinery, not hand-rolled | Release engineering `vms-a84` (machinery complete; standing pillar) | standing; each milestone ships THROUGH it |
+| **R7 — Build-native self-hosting** *(NEW gate, operator 2026-08-09)* | The entire 1.0 build runs through OVMX: every toolchain step is an OVMX-native image driven from a DCL session; **no bash/host tool in the build path** | Self-host `vms-678` (parent of tree `vms-59a` / MMK spine) | 0.5→1.0 |
+
+**Networking is a 1.0 commitment layered onto R2/R5** (it is a *layered product*, not
+base executive):
+
+| Lane | End state | Epic | Milestone |
+|---|---|---|---|
+| **TCP/IP Services** | VMS-faithful IP layered product; resolver + TELNET + FTP + SSH; NIC surfaces as VMS device `EWA0:` | `vms-67f` | 0.5→1.0 |
+| **DECnet Phase IV** | Clean-room DNA Phase IV; `SET HOST` + `NODE::` COPY both directions with a lab node | `vms-30e` | 1.0 |
+| **Owns-its-kernel** | Kernel built from pinned source; VMS modules in-tree (`drivers/ovmx/`, `intree=Y` clears out-of-tree taint) + signed; curated config | `vms-19e` | 0.5 (prereq for DECnet + AXP) |
+
+**Platform target set** (operator 2026-08-10, `vms-8ce`): **aarch64 + x86_64 + axp**;
+VAX aspirational; ia64 excluded. AXP/Alpha is now first-class (supersedes CLAUDE.md
+Rule 5's x86_64-primary framing — Rule 5 update owed). Design-cascade-sized; do not
+pivot off 0.4 — decompose when platform-support becomes the active focus. AXP's
+per-arch kernel config is a **dependency of `vms-19e`** (curated config must be per-arch).
+
+---
+
+## 4. Epic placement + dependency edges
+
+The non-obvious dependencies that drive sequencing:
+
+```
+R3 Executive gap (vms-6b8)  ── keystone; a NON-OBVIOUS dep of THREE things ──
+   ├─▶ VMS parity program (vms-8ad)   SHOW/SET fidelity ceiling: SHOW/SET items
+   │                                   blocked-by vms-a7e (exec data model) can't
+   │                                   start until the executive row carries data
+   ├─▶ R7 Self-hosting (vms-678)       needs executive R3 + lib$ RTL (vms-801) + RMS + DCL
+   └─▶ INV-6 touch-points for BOTH networking lanes (device registration, system
+        logical names, cross-process socket visibility) must be honest via /dev/vms
+        or fail with SS$_ — they land against the executive substrate, not around it
+
+R1 Boot (vms-46c) + Install (vms-718)  ── entangled: both rewrite ovmx_init.c ──
+   └─ boot P1 items gated behind installer spine (vms-2f0 serializes ovmx_init.c)
+   └─ executive device table (dv1/3e8) is a PRODUCER for the installer's MOUNT consumers
+
+Owns-kernel (vms-19e)  ── runtime-provenance root ──
+   ├─▶ feeds vms-46c (faithful boot), vms-718 (install)
+   ├─▶ feeds vms-8ce (AXP first-class needs per-arch curated config)
+   └─▶ UNBLOCKS the kernel half of DECnet (vms-30e): AF_PACKET SOCK_RAW datalink
+        needs an in-tree module home; Linux dropped AF_DECnet at kernel 6.1
+
+Networking:
+   vms-67f TCP/IP ── Linux AF_INET engine; Rule 8 does NOT bind (IETF wire) ── absorbs the read-only DCL TCPIP facade
+   vms-30e DECnet ── forks the proven src/vmsscs datalink; Rule 8 BINDS HARD ── depends on vms-19e kernel half
+
+R5 Cluster (vms-694 → vms-600)  ── src/vmsscs; collides with nothing ── universal safe seat
+```
+
+**Self-hosting current state** (`vms-678`, don't re-freeze — re-derive): S2 (tcc
+self-hosts, `vms-4ba`) + S3.1 (native LINK.EXE, #247) + S3.2 (BUILD.COM single-TU, #251)
++ S4 (multi-TU BUILD.COM self-links LINK.EXE, byte-stable gen2==gen3, #255) all proven.
+Remaining toward the full gate: extend `@BUILD` beyond LINK.EXE to more of the OVMX tree;
+route DCL LINK builtin to native; the 1.0 build uses a real ported **make** (MMS/MMK,
+spine `vms-59a`), not bespoke BUILD.COM.
+
+---
+
+## 5. Merge-safety / file-ownership lanes
+
+Two structural facts (preserved from the predecessor plan, still true) drive the whole
+orchestration model:
+
+- **Clustering (`src/vmsscs/**`) collides with nothing** → it is the universal safe
+  seat, every week.
+- **Executive, Boot, and Installer all fight over the same files** (`ovmx_init.c`,
+  `vms_kif.{c,h}`/`vms_ioctl.h`, `dcl_cmd_misc.c`/verb table). **Never run two of these
+  three concurrently.** Boot+Installer are one entangled unit.
+
+### File-ownership lane table (updated for the two new lanes)
+
+| Surface | Sole owner | Rule |
+|---|---|---|
+| `src/kernel/**`, `src/libvmssys/vms_kif.{c,h}`, `vms_ioctl.h` | **Executive** | ioctl numbers appended in reserved ranges (0x40 dev, 0x50 proc) |
+| `src/vmsscs/**` | **Clustering** | others may *read* `scsd.c` config, never edit |
+| `src/ovmx_init/ovmx_init.c` | **single owner per cycle** (`vms-2f0` serializes) | never split across two live seats |
+| `dcl_builtin.c` verb table | the cycle's DCL-owning seat | append-only, one alpha-ordered line per commit |
+| public headers (`ssdef.h`/`starlet.h`/`descrip.h`/`ovmx_layout.h`) | **frozen** | any edit = design-cascade via one owner |
+| `.github/workflows/ci.yml` | the cycle's owner | append a new job as a distinct EOF key; never edit an existing job body |
+| `distro/rootfs`, `distro/boot` | boot owns `rootfs/vms/sys$startup/*`; installer owns mastering | prefer sequencing |
+| `src/vmsdcl` + `src/vmslnm` + `src/vmsrms` + `tools/**` | **Parity program (`vms-8ad`)** | zero `src/vmsscs` contention; append-only verb/qualifier tables; ships as 0.3-x accretion |
+| **`drivers/ovmx/**`, kernel `.config`, kernel build in `distro/Dockerfile.bootable`** | **Kernel-provenance (`vms-19e`)** | serializes with Executive on `src/kernel/**` (both touch modules); per-arch config keys for AXP |
+| **TCP/IP userspace (new `src/vmstcpip` or equivalent), `TCPIP$` logicals** | **TCP/IP (`vms-67f`)** | userspace-only; INV-6 device/lnm surfaces go through the executive owner, coordinate |
+| **DECnet userspace (NSP/routing over AF_PACKET), `drivers/ovmx/` DECnet module** | **DECnet (`vms-30e`)** | forks the `src/vmsscs` datalink → **coordinate the fork with Clustering**; kernel module lands under `vms-19e`'s `drivers/ovmx/` home |
+
+---
+
+## 6. Lane-parallelism view
+
+**Concurrent (no shared files, run in parallel):**
+
+- **Clustering** (`src/vmsscs`) — universal safe seat, always runnable
+- **Parity program** (`src/vmsdcl`+`vmslnm`+`vmsrms`+`tools`) — 0.3-x accretion, zero vmsscs contention
+- **Self-hosting toolchain** (`vms-678`) — toolchain images, mostly disjoint
+- **TCP/IP userspace** (`vms-67f`) — new userspace surface (its INV-6 touch-points serialize with Executive)
+- **exactly one of** {Executive, Boot, Installer}
+
+**Serialized (shared files or hard deps):**
+
+- **Executive → (Boot + Installer)** — Executive goes first: it is the keystone and its
+  device table turns the installer's biggest landmine into a producer→consumer handoff.
+- **Kernel-provenance (`vms-19e`) serializes with Executive** on `src/kernel/**` — both
+  edit modules. Sequence, don't run concurrently on the kernel tree.
+- **DECnet kernel half depends on `vms-19e`** landing the `drivers/ovmx/` in-tree home.
+- **DECnet userspace forks the `src/vmsscs` datalink** — coordinate that fork with the
+  Clustering seat (the one place networking touches the otherwise-isolated cluster tree).
+
+**Practical concurrency ceiling given the four new epics:** the safe wide fan-out is
+Clustering ∥ Parity ∥ Self-host ∥ TCP/IP-userspace ∥ (one of Exec/Boot/Install).
+Kernel-provenance and DECnet-kernel are a *serial spine* through `src/kernel` that the
+Executive seat already occupies — treat kernel edits as a single lane.
+
+---
+
+## 7. Risks (explicit)
+
+1. **Cluster rejoin may not be OVMX-forceable** *(R5, the long pole).* The frontier
+   (`vms-694`, §4(O.32)) is member-side re-admission: on a returning SCSSYSTEMID the
+   admitting member never re-opens its config connection to the returner, so no relay /
+   commit. If the member never issues its CONNECT-REQ (residual member state), rejoin
+   may not be closable from the OVMX side in this topology — that outcome is an
+   **operator escalation**, not a bug to grind. "Slides in and takes over" is not
+   claimable while this stands, and it reproduces on a *virgin* cluster.
+2. **DECnet clean-room RE is heavy and slow** *(`vms-30e`).* Rule 8 binds hard — every
+   wire field must come from public DNA Phase IV specs + lab VAX/Alpha observation only.
+   Rigor is flagged `heavy`; this is lab-bound and cannot be parallelized cheaply like
+   the corpus work.
+3. **Kernel self-build is design-cascade-sized** *(`vms-19e`).* It feeds three epics
+   (boot, install, AXP) and unblocks DECnet's kernel half; curating the config without
+   abandoning real hardware, plus signing + per-arch, is a multi-surface change.
+4. **R2 corpus is open-ended** — no natural finish line; run-pass climbs indefinitely.
+   Land the honest baseline+floor first (`vms-343`) so the gate can actually fail.
+5. **Executive R3 is a shared keystone** — it gates parity SHOW/SET, self-hosting, and
+   both networking lanes' INV-6 surfaces. Slippage stalls multiple lanes at once.
+
+---
+
+## Appendix — dangling-items sweep (2026-08-11)
+
+Items relevant to 1.0 that are not cleanly on a milestone, with suggested disposition.
+**Dispositions are recommendations for the conductor to action (file/close/gate/wire) —
+this sweep mutates no rd state.**
+
+### A. Bugs / defects not on any milestone
+
+| ID | Title (short) | Why it matters for 1.0 | Disposition |
+|---|---|---|---|
+| `vms-aed` | Invented `%STDRV-I-STARTUP …completed` line (`ovmx_init.c:757`) | Boot-console fidelity tell (R1) | **Wire under Boot `vms-46c`** (sibling of `vms-1fb`); already filed, just parent it |
+| `vms-962` | login/username case-sensitive (VMS folds to upper) | Multi-user login correctness; operator bug report | **Needs repro interface** — waiting; likely a username→Linux-FS-path leak. Keep P1, fold under authenticity |
+| `vms-5c6d` | `sys$close` on RMS indexed files frees B-tree without saving (`rms_core.c:795`) — data loss | Data-integrity bug in RMS (R2 substrate) | **File onto R2/RMS** as P1; corpus apps using indexed files hit this |
+| `vms-58e` | `$ CREATE/DIRECTORY SYS$SCRATCH:[x]` crashes DCL | A crash on a common DCL verb (parity) | **Fold under parity `vms-8ad`** or DCL fidelity |
+| `vms-d18` | `VMS_MAX_DEVICES` redefined (64 vs 16 across headers) | Latent device-table corruption | Fold under Executive `vms-6b8` (device table) |
+| `vms-e6c` | `scsd: ovmx_cluster.admitted` never resets | Long-lived daemon advertises stale member-form | Fold under Clustering `vms-694` |
+| `vms-298` | OVMX replays stale send_seq / reuses Con.ID on 2nd MSCP$DISK connect | MSCP correctness (R5) | Fold under Clustering `vms-694`/`vms-600` |
+| `vms-3f9` | `env_identity_census_negctl` dev-host-flaky (180s timeout) | Flaky test = broken test (Rule 8, OS-level) | **test-flaky**: fix root cause or label + raise |
+| `vms-5bb` | `scenario_deadlock` cross-process cycle timing-dependent | Flaky lock test | test-flaky: root-cause |
+| `vms-d3c` | `userspace_service_register_negctl` fails under `-j` parallel | Flaky test | test-flaky: root-cause |
+| `vms-677` | `test_kmod_lock_mproc` CVTUNGRANT ordering race | Flaky kernel lock test (R3/R5 substrate) | test-flaky: root-cause |
+
+### B. Open operator-reserved calls (decisions only Baron makes)
+
+| ID | Title (short) | Why it matters for 1.0 | Disposition |
+|---|---|---|---|
+| `vms-8d4` | SHOW CLUSTER hardcodes NOTMEMBER — wire to real scsd | A genuinely-clustered node reports NOTMEMBER (top authenticity lie, R5) | **Not really operator-reserved — it's a facade-kill.** Fold under parity/clustering and fix; only the licensing sibling below is a true gate |
+| `vms-79b3` | honest SHOW LICENSE (+ SHOW/SET RMS_DEFAULT, SHOW KEY) | Licensing *stance* is an operator call | **Raise as operator gate**: what does OVMX report for licensing? (product-vision: free/no-license) |
+| `vms-8ce` | AXP first-class platform direction | Supersedes Rule 5; platform scope | **Operator decision already made (typed `decision`)** — action: update CLAUDE.md Rule 5 when AXP becomes active |
+| `vms-b8f` | Pin 4 deferred logical-name values to the oracle (`vms-ln0 §4`) | Constant fidelity (authenticity) | Needs oracle pin; blocked — keep under authenticity |
+
+*Note:* memory listed `vms-c90` (placeholder constants) and `vms-f81` (protection
+nibbles) as open operator calls — **both are now `done`** (merged into `vms-1f9` and
+fixed respectively). Stale memory pointer; no action beyond noting the drift (Rule 10:
+memory is downstream of rd).
+
+### C. Deferred / descoped work that is a 1.0 blocker
+
+| ID | Title (short) | Why it matters for 1.0 | Disposition |
+|---|---|---|---|
+| `vms-f812` | INITIALIZE as a DCL verb → `INITIALIZE.EXE` | `$ INITIALIZE DKA100:` — install/volume path (R1) | **Fold under Install `vms-718`**; independent, no blockers — ready |
+| `vms-a3a` | SET VOLUME/LABEL real write-back — needs new `vmsfs.ko` ioctl | Volume-label fidelity; Design-Change-Cascade | **Fold under Install/Boot**; kernel-interface change → triggers cascade. Lower priority (honest refusal is INV-DCL-correct now) |
+| `vms-ci.5` / `vms-7fa` | DLM cluster-wide `$ENQ`/`$DEQ` participation | R5 data-integrity rung — "mostly working" is worse than absent | **Decompose** (like MSCP A–D wave); land in 0.4. `vms-7fa` is the P1 restatement |
+| `vms-343` | Honest corpus baseline + scoreboard floor | Makes R2 a real gate (currently vacuous, `total:0`) | **Do first** under R2/source-compat — small, everything downstream depends on it |
+| `vms-332` | Engine A rollout tail: remaining 21 verbs (deferred from #330) | Parity breadth (R2 tools) | Fold under parity `vms-8ad` |
+| `vms-212` | `emit_shareable` deferred edge cases (ABS64 cross-image) | Toolchain completeness (R7 self-host) | Fold under native toolchain `vms-ade`/self-host |
+
+### D. Orphans / stale-tree items
+
+| ID | Title (short) | Issue | Disposition |
+|---|---|---|---|
+| `vms-875` | Stale second agent-profile system (`.claude/profiles/` says docker build+test) | Points implementers at the dead Docker runtime (Rule 9) | **Close/fix** — align profiles to QEMU runtime |
+| `vms-15c` | Agent specs stale: `implementer.md` says pytest/bd close/docker | Same class — stale process docs | Fold with `vms-875`; one cleanup |
+| `vms-23f` | `inject_and_run.sh` re-staged DCL.EXE at one of two initramfs paths | Test-harness path drift | Fold under QA/boot harness |
+| `vms-ad7` | `lab2run.sh` sidecar reads path daemon no longer writes | Lab harness drift (clustering test) | Fold under Clustering lab tooling |
+| `vms-b1c` / `vms-85e` | dead-code comments / stale golden-capture calibration | Doc/comment drift, low-risk | Batch into a cleanup sweep |
+| `vms-01b` | HELP facility overhaul + retire orphaned doc-set | Parity depth + removes orphaned artifact | Fold under parity `vms-8ad` |
+
+### Contradictions flagged (Rule 10)
+
+1. **`roadmap-v1.md §4` vs operator `vms-678`** — roadmap-v1 says self-hosting is *not*
+   a gate; the operator made it a 1.0 gate. This doc treats it as gate **R7**;
+   roadmap-v1 owes the rewrite. *(Downstream artifact contradicts operator source.)*
+2. **`release-plan-0.2-to-0.5.md` cadence vs reality** — that plan's 0.2=Aug-14 weekly
+   cadence is obsolete; we shipped through 0.3-4. This doc supersedes it.
+3. **MEMORY.md "open operator decisions" vs rd** — `vms-c90` and `vms-f81` are listed as
+   open but are `done`. Memory is stale; rd is authoritative.

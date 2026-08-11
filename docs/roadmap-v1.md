@@ -413,7 +413,11 @@ test cluster, and runs one of their own VMS programs using only published docume
 Not cancelled, not deprioritized as work — just not gating the release:
 
 - **Self-hosting S3–S5** — assembler/LIBRARIAN/MMS/editor as OVMX images,
-  OVMX-builds-OVMX, agent-in-OVMX. `vms-116` is a north star, not a release gate.
+  OVMX-builds-OVMX, agent-in-OVMX. **Corrected (operator ruling 2026-08-09, `vms-678`):
+  Build-native self-hosting is now an explicit 1.0 gate, not the "north star, not a
+  release gate" this section originally called it.** See `docs/release-roadmap-to-1.0.md`
+  (gate R7) for the folded gate set. The further-out S5 aspiration (agent-in-OVMX)
+  remains out of V1.0.
 - **Authenticity meta-apparatus beyond current capability** — see §5.
 - **Diskless satellite boot** (`vms-ce7`) — real cluster capability, not needed to
   demonstrate evacuation. Reassess if a design dependency surfaces from `vms-187`.

@@ -90,16 +90,28 @@ done
 # 0), so a native LINK of DCL.EXE/LOGINOUT.EXE/etc. resolves it here or fails loudly
 # with an unresolved external -- exactly the failure this comment exists to prevent
 # a repeat of.
+#
+# lnm_translate_iterative is RETIRED IN PLACE (vms-240), NOT deleted: its slot keeps
+# its position and becomes PRIVATE_PROCEDURE (OVMX_SV_RETIRED) so every later index
+# (lnm_enumerate onward) stays put and GSMATCH LEQUAL,1,0 remains upward-compatible
+# (VSI OpenVMS Linker Utility Manual; docs/design-link-native-toolchain.md
+# §5.1/§5.3; same rule as mk_vmsprocess_shr.sh's eflag_* retirement). The C function
+# is gone from lnm_translate.c, so the slot's value is left 0 and it is refused to
+# any consumer (LINK.EXE find_universal / IMGACT sv_find_named skip retired slots).
+# Its filespec-aware successor, lnm_translate_filespec (vms-240), is APPENDED at the
+# tail -- $PARSE (LIBVMSRMS$SHR) binds it cross-image, so a native LINK resolves it
+# here or fails loudly.
 VEC="\
 lnm_init=PROCEDURE,lnm_shutdown=PROCEDURE,lnm_get_manager=PROCEDURE,\
 lnm_find_table=PROCEDURE,\
 lnm_create=PROCEDURE,lnm_create_multi=PROCEDURE,lnm_delete=PROCEDURE,\
-lnm_translate=PROCEDURE,lnm_translate_iterative=PROCEDURE,\
+lnm_translate=PROCEDURE,lnm_translate_iterative=PRIVATE_PROCEDURE,\
 lnm_enumerate=PROCEDURE,lnm_setup_defaults=PROCEDURE,\
 lnm_table_create=PROCEDURE,lnm_table_destroy=PROCEDURE,lnm_table_insert=PROCEDURE,\
 lnm_table_lookup=PROCEDURE,lnm_table_remove=PROCEDURE,lnm_table_enumerate=PROCEDURE,\
 lnm_translate_values=PROCEDURE,\
-lnm_translate_searchlist=PROCEDURE"
+lnm_translate_searchlist=PROCEDURE,\
+lnm_translate_filespec=PROCEDURE"
 
 echo "mk_vmslnm_shr: LINK.EXE --shareable --use {DECC\$SHR,LIBVMSSYS\$SHR} -> $OUT"
 # STRICT (no --allow-undefined): every libc/pthread import MUST bind to DECC$SHR,

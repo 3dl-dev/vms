@@ -407,7 +407,7 @@ static int vmsfs_resolve_device_r(const char *device, char *linux_dir,
                 return vmsfs_to_linux_path_one(equiv, linux_dir, dir_size);
             }
 
-            /* Equivalence is another logical or device name — recurse.
+            /* Equivalence is another logical or device name.
              * Uses the same single-value lnm_translate() above, so a
              * search-list device's OWN equivalences are already the
              * per-member specs the fan-out substituted; there is no second
@@ -416,6 +416,35 @@ static int vmsfs_resolve_device_r(const char *device, char *linux_dir,
             if (elen > 0 && equiv[elen - 1] == ':') {
                 equiv[elen - 1] = '\0';  /* Strip trailing colon */
             }
+
+            /*
+             * vms-240: honor LNM$M_TERMINAL. A terminal translation is the
+             * FINAL equivalence -- it must NOT be re-translated as a further
+             * logical name (VSI OpenVMS System Services Reference, $TRNLNM
+             * item LNM$_ATTRIBUTES / LNM$M_TERMINAL; VSI OpenVMS User's
+             * Manual, iterative translation stops at a terminal name). It may
+             * still name a PHYSICAL device (e.g. SYS$SYSDEVICE -> DKA0:,
+             * seeded terminal), so resolve it once against the device table --
+             * that is device resolution, not logical-name translation -- but
+             * never recurse back into logical-name chaining. Before vms-240
+             * this flag was ignored on the file path, which is the only reason
+             * the always-TERMINAL DEFINE default (now fixed) did not already
+             * break device-logical chains.
+             */
+            if (attrs & LNM_ATTR_TERMINAL) {
+                char term_dev[VMSFS_MAX_DEVICE + 1];
+                strncpy(term_dev, equiv, sizeof(term_dev) - 1);
+                term_dev[sizeof(term_dev) - 1] = '\0';
+                str_upcase(term_dev);
+                if (vmsfs_device_resolve(term_dev, linux_dir, dir_size) == SS$_NORMAL)
+                    return SS$_NORMAL;
+                /* Terminal name that is not a known device: honest fallback,
+                 * no logical-name chaining past the terminal translation. */
+                strncpy(linux_dir, vms_default_root, dir_size - 1);
+                linux_dir[dir_size - 1] = '\0';
+                return SS$_NORMAL;
+            }
+
             return vmsfs_resolve_device_r(equiv, linux_dir, dir_size, depth + 1);
         }
     }
@@ -444,6 +473,46 @@ static int vmsfs_resolve_device_r(const char *device, char *linux_dir,
 int vmsfs_resolve_device(const char *device, char *linux_dir, size_t dir_size)
 {
     return vmsfs_resolve_device_r(device, linux_dir, dir_size, 0);
+}
+
+/*
+ * vmsfs_resolve_filespec_device - see vmsfs/device.h.
+ *
+ * vms-240: the vmsfs entry point that $PARSE (src/vmsrms) uses for REAL
+ * iterative logical-name resolution of a filespec's device field. It wraps the
+ * one filespec-aware, LNM$M_TERMINAL-honoring driver, lnm_translate_filespec()
+ * (src/vmslnm), through LNM$FILE_DEV.
+ *
+ * It lives in vmsfs, NOT in vmsrms, on purpose: vmsfs already depends on
+ * vmslnm (LIBVMSFS$SHR --use's LIBVMSLNM$SHR) and vmsrms already depends on
+ * vmsfs, whereas LIBVMSRMS$SHR deliberately does NOT --use LIBVMSLNM$SHR
+ * (mk_vmsrms_shr.sh). Calling lnm_translate_filespec() directly from vmsrms
+ * would create a new, forbidden rms -> lnm cross-image import that fails the
+ * STRICT native LINK.EXE link; routing through this vmsfs universal keeps
+ * $PARSE's only new dependency the already-wired rms -> vmsfs edge.
+ *
+ * On no LNM manager (host build/test tooling with no tables) or a translation
+ * that changes nothing, the spec is passed through unchanged.
+ */
+uint32_t vmsfs_resolve_filespec_device(const char *filespec, char *result,
+                                       size_t result_size)
+{
+    if (!filespec || !result || result_size == 0)
+        return SS$_BADPARAM;
+
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (mgr) {
+        uint16_t rlen = 0;
+        uint32_t st = lnm_translate_filespec(mgr, LNM_FILE_DEV, filespec,
+                                             result, result_size, &rlen, NULL);
+        if ($VMS_STATUS_SUCCESS(st) && result[0] != '\0')
+            return SS$_NORMAL;
+    }
+
+    /* Pass-through: no manager, or nothing resolved. */
+    strncpy(result, filespec, result_size - 1);
+    result[result_size - 1] = '\0';
+    return SS$_NORMAL;
 }
 
 /*

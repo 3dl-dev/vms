@@ -105,9 +105,20 @@ uint32_t lnm_delete(lnm_manager_t *mgr, const char *table_name,
 uint32_t lnm_translate(lnm_manager_t *mgr, const char *table_name,
                         const char *logical_name, char *result, size_t result_size,
                         uint16_t *result_length, uint32_t *attributes);
-uint32_t lnm_translate_iterative(lnm_manager_t *mgr, const char *table_name,
-                                  const char *logical_name, char *result,
-                                  size_t result_size, uint16_t *result_length);
+/*
+ * lnm_translate_filespec - the ONE filespec-aware iterative translation driver
+ * (vms-240). Translates the DEVICE field of `filespec` through `table_name`
+ * (normally LNM$FILE_DEV), honoring LNM_ATTR_TERMINAL (stop at a terminal
+ * translation) and LNM_ATTR_CONCEALED (keep the concealed device name), and
+ * re-attaches the preserved directory/name/type tail. `attributes`, if
+ * non-NULL, receives the chain-ending translation's attributes. Supersedes the
+ * removed, filespec-blind iterative translator. See lnm_translate.c for the
+ * full contract and the VSI OpenVMS doc citations.
+ */
+uint32_t lnm_translate_filespec(lnm_manager_t *mgr, const char *table_name,
+                                const char *filespec, char *result,
+                                size_t result_size, uint16_t *result_length,
+                                uint32_t *attributes);
 
 /*
  * lnm_translate_values - fetch ALL equivalence strings (search-list order)

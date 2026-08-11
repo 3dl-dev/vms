@@ -2102,10 +2102,36 @@ static int cmd_show_translation(struct dcl_command *cmd)
         upper_name[i] = (char)toupper((unsigned char)logname[i]);
     upper_name[i] = '\0';
 
+    /*
+     * vms-240: walk the chain attribute-aware so LNM$M_TERMINAL is honored --
+     * iterative translation stops at a terminal translation instead of
+     * re-translating its equivalence (VSI OpenVMS User's Manual, "Logical Name
+     * Translation"). This is what makes the create-side default observable: a
+     * plain DEFINE is non-terminal (its chain composes here), whereas
+     * DEFINE/TRANSLATION_ATTRIBUTES=TERMINAL stops the chain at the terminal
+     * name. lnm_translate() carries the attributes; dcl_translate_logical()
+     * remains the first-level fallback for the process-context logicals
+     * (SYS$DISK/SYS$LOGIN) it seeds, which carry no translation attributes.
+     */
+    lnm_manager_t *mgr = lnm_get_manager();
     char value[256];
-    if (dcl_translate_logical(logname, value, sizeof(value)) != 0) {
-        dcl_error("DCL", 0, "NOLOG", "no logical name match");
-        return SS$_NOLOGNAM;
+    uint32_t attr = 0;
+    int terminal = 0;
+    {
+        uint16_t vlen = 0;
+        uint32_t st = mgr
+            ? lnm_translate(mgr, LNM_FILE_DEV, upper_name, value,
+                            sizeof(value), &vlen, &attr)
+            : SS$_NOLOGNAM;
+        if (st == SS$_NORMAL || st == SS$_SUPERSEDE) {
+            value[vlen < sizeof(value) ? vlen : sizeof(value) - 1] = '\0';
+            terminal = (attr & LNM_ATTR_TERMINAL) != 0;
+        } else if (dcl_translate_logical(logname, value, sizeof(value)) == 0) {
+            terminal = 0;
+        } else {
+            dcl_error("DCL", 0, "NOLOG", "no logical name match");
+            return SS$_NOLOGNAM;
+        }
     }
 
     /* Print translation chain (resolve iteratively up to 8 levels) */
@@ -2116,10 +2142,15 @@ static int cmd_show_translation(struct dcl_command *cmd)
     current[sizeof(current) - 1] = '\0';
 
     int depth = 0;
-    while (depth < 8) {
+    while (!terminal && mgr && depth < 8) {
         char next[256];
-        if (dcl_translate_logical(current, next, sizeof(next)) != 0)
+        uint16_t nlen = 0;
+        uint32_t nattr = 0;
+        uint32_t st = lnm_translate(mgr, LNM_FILE_DEV, current, next,
+                                    sizeof(next), &nlen, &nattr);
+        if (st != SS$_NORMAL && st != SS$_SUPERSEDE)
             break;
+        next[nlen < sizeof(next) ? nlen : sizeof(next) - 1] = '\0';
         /* Avoid cycles */
         if (strcmp(next, current) == 0) break;
 
@@ -2133,6 +2164,8 @@ static int cmd_show_translation(struct dcl_command *cmd)
         strncpy(current, next, sizeof(current) - 1);
         current[sizeof(current) - 1] = '\0';
         depth++;
+        if (nattr & LNM_ATTR_TERMINAL)
+            break;   /* terminal: stop the chain */
     }
 
     return SS$_NORMAL;

@@ -99,7 +99,7 @@ kx pkill -9 -f SCSD.EXE >/dev/null 2>&1 || true
 wait $TCPD 2>/dev/null || true
 
 X2=$(kx grep -ac XITDONE $L/scsd-o32-J.log 2>/dev/null | tr -d '\r')
-ADM2=$(kx grep -aoE 'admitted=[0-9]+|NO-ENGAGE|JOIN-ABANDONED|SYSAP.never.re-opened|READMITMAP-SUMMARY.*' $L/scsd-o32-J.log 2>/dev/null | tr -d '\r' | tr '\n' '|')
+ADM2=$(kx grep -aoE 'admitted=[0-9]+|OBS-0-CM-RESP|OBS-OP02-DRIVEN-0-CM-RESP|OBS-LATCH-0-CM-RESP|READMITMAP-SUMMARY.*' $L/scsd-o32-J.log 2>/dev/null | tr -d '\r' | tr '\n' '|')
 log "J done: XITDONE_count=$X2  verdict=[$ADM2]"
 log "wire identities: $(strings -a "$HOSTL/o32.pcap" 2>/dev/null | grep -oE 'OVX[A-Z0-9]{3}' | sort -u | tr '\n' ' ')"
 echo "===o32-DONE===" >> "$S"

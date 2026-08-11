@@ -5118,7 +5118,10 @@ struct scsd_rx {
     long padded_sent;        /* vms-9f3: padded directed HELLOs sent (sec 4k) */
     /* vms-578: hoisted out of main()'s locals on worktree-760 so the
      * SCSD_UNIT_TEST seam (which renames main() away) can reach them. */
-    long cm_abort_seen;      /* vms-2f3: cat-0x01 op-0x04 role-0x50 aborts received */
+    long cm_abort_seen;      /* vms-2f3/vms-c21: cat-0x01 op-0x04 role-0x50 CM
+                              * barrier messages seen -- NOT "aborts": this
+                              * message occurs on successful joins too and does
+                              * not signal refusal (spec 4(O.33)). */
     long credit_retx_seen;   /* vms-2f3 sec 4M.14: RETRANSMITTED (0x7b) op6/op8 credit
                               * handshakes answered. 0 in every join, 2 in every
                               * refused rejoin measured. */
@@ -6725,32 +6728,39 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                     fflush(stdout);
                 }
 
-                /* vms-2f3: THE TRANSITION ABORT. Until this existed, a
-                 * refused rejoin was indistinguishable from a hang: the
-                 * coordinator broadcast `aborted VAXcluster state
-                 * transition` to its console and to every participant --
-                 * including us -- and OVMX logged nothing at all, so every
-                 * failed run "just looked stuck" and we measured timeouts
-                 * that were never timeouts.
+                /* vms-c21 (spec §4(O.33)): the cat 0x01 op 0x04 role 0x50 CM
+                 * message. HISTORY: vms-2f3 read this as "THE TRANSITION ABORT
+                 * -- a DECISION, we are being refused". §4(O.33) REFUTES that
+                 * reading against the authoritative membership oracle (each
+                 * member's F$GETSYI("CLUSTER_NODES")): this exact message is
+                 * present in the SUCCESSFUL fresh first-join too (with the VAX
+                 * reaching CLUSTER_NODES=3) and ABSENT from the reproducible
+                 * failure, so it does NOT separate admit from non-admit and is
+                 * NOT a returning-identity refusal -- it is a normal per-member
+                 * CM barrier/transition message. OVMX cannot classify the
+                 * coordinator's decision from its own side (§4(O.32)); log it as
+                 * an OBSERVATION only and assert no membership conclusion.
                  *
-                 * It is not answered (txn=0, spec sec 4(r)) and it must not
-                 * be: real participants send nothing back. What it buys is
-                 * a run that fails HONESTLY and legibly. Matched on the
-                 * ROLE SLOT, never the opcode alone -- op 0x04 role 0x00 is
-                 * a different SYSAP's opcode 4 and appears in SUCCESSFUL
-                 * joins (handoff sec 3.4). */
+                 * Detection UNCHANGED (byte-for-byte); only the logged text is
+                 * made honest. Matched on the ROLE SLOT, never the opcode alone
+                 * -- op 0x04 role 0x00 is a different SYSAP's opcode 4 and
+                 * appears in SUCCESSFUL joins (handoff sec 3.4). Not answered
+                 * (txn=0, spec sec 4(r)); real participants send nothing back. */
                 if (cm_req && mv.category == SCS_MEMBER_CAT_CONFIG &&
                     mv.opcode == SCS_MEMBER_OP_ABORT && (size_t)n >= 92 &&
                     buf[72 + SCS_MEMBER_ROLE_BODYOFF] == SCS_MEMBER_ROLE_ABORT) {
                     uint8_t cls = buf[72 + SCS_MEMBER_CLASS_BODYOFF];
                     rx->cm_abort_seen++;
                     log_ts(stdout);
-                    printf(" SCSD-E-XITABORT, node %u ABORTED the class-0x%02x"
-                           " state transition (cat 0x01 op 0x04 role 0x50)."
-                           " This is a DECISION, not a timeout -- the"
-                           " coordinator sends it instead of the op 0x09"
-                           " transition-open, on state it already holds."
-                           " We are not being ignored; we are being refused\n",
+                    printf(" SCSD-I-CMOP04, node %u sent cat 0x01 op 0x04 role"
+                           " 0x50 (class 0x%02x) -- a per-member CM barrier/"
+                           "transition message. OBSERVED ONLY: this message"
+                           " occurs on BOTH successful and failed joins (spec"
+                           " 4(O.33)); it is NOT an abort/refusal DECISION and"
+                           " does NOT mean the coordinator declined this node."
+                           " NON-AUTHORITATIVE -- the authoritative membership"
+                           " signal is each MEMBER's F$GETSYI(\"CLUSTER_NODES\")"
+                           " / CDT layer, not this frame (spec 4(O.32)/4(O.33))\n",
                            (unsigned)(peer_node_number(ps) & 0x03ff),
                            (unsigned)cls);
                     fflush(stdout);
@@ -11722,6 +11732,30 @@ static void scsd_shutdown_teardown(struct scsd_rx *rx, uint8_t *buf, size_t bufs
  * with the VC/channel/directory all up. This verdict names that state per member
  * so the next isolation is one log line, not a pcap dig. It is a PURE READ of
  * already-tracked per-peer fields -- it changes nothing on the wire (guard 8).
+ *
+ * ============================ HONESTY CAVEAT (vms-c21) ============================
+ * THESE VERDICTS ARE OVMX-SIDE OBSERVATIONS, NOT AUTHORITATIVE MEMBERSHIP VERDICTS.
+ * OVMX CANNOT classify the coordinator's membership decision from its own side.
+ * The AUTHORITATIVE membership signal is each MEMBER's F$GETSYI("CLUSTER_NODES")
+ * / the member's CDT layer -- NOT any OVMX-derived verdict here.
+ *
+ * Three consecutive RE sessions were MISLED by the old, conclusion-laden verdict
+ * text of this classifier, each refuted by the member-side / oracle read:
+ *   - §4(O.25) "the coordinator never proposes"        -> FALSE (it DOES; §4(O.32)).
+ *   - §4(O.31) "SYSAP never re-opened / NO-ENGAGE"      -> FALSE (the member connects
+ *                                                          and OVMX answers to OPEN; §4(O.32)).
+ *   - §4(O.32) "cat 0x01 op 0x04 role 0x50 = a refusal DECISION"
+ *                                                       -> FALSE (§4(O.33): op 0x04 fires
+ *                                                          in the SUCCESSFUL join too; it is a
+ *                                                          normal per-member barrier message.
+ *                                                          The real outcome is a residual-CSB
+ *                                                          reclaim RACE, not a refusal).
+ * The verdict enum values below are kept as OVMX-side field-pattern buckets, and
+ * the readmit_verdict_name() strings now report ONLY the observed field pattern,
+ * each explicitly marked NON-AUTHORITATIVE. The per-verdict §4(O.x) narratives in
+ * the comments below are the historical RE trail: read them as SUPERSEDED by this
+ * caveat and by §4(O.32)/(O.33), never as current membership conclusions.
+ * =================================================================================
  */
 enum readmit_verdict {
     READMIT_NO_CHANNEL,   /* never reached transport with this peer */
@@ -11756,6 +11790,12 @@ enum readmit_verdict {
     READMIT_ADMITTED,     /* member ran the JOIN handshake and OVMX latched membership */
 };
 
+/* vms-c21: this returns an OVMX-SIDE FIELD-PATTERN bucket, NOT an authoritative
+ * membership verdict. The §4(O.x) narratives in the enum doc-comments above
+ * (e.g. "the coordinator abandons/ignores the join") are the SUPERSEDED RE
+ * trail -- refuted by §4(O.32)/(O.33); see the HONESTY CAVEAT above the enum.
+ * The classification logic below is a pure read of already-tracked fields and
+ * is UNCHANGED by vms-c21 (only the human-readable strings were made honest). */
 static enum readmit_verdict readmit_verdict_of(const struct peer_state *ps)
 {
     if (ps == NULL || ps->pb == NULL || !ps->channel_up) {
@@ -11825,13 +11865,19 @@ static enum readmit_verdict readmit_verdict_of(const struct peer_state *ps)
 
 static const char *readmit_verdict_name(enum readmit_verdict v)
 {
+    /* vms-c21: OBSERVATIONS ONLY. Each string reports the OVMX-side field
+     * pattern and is explicitly NON-AUTHORITATIVE. The authoritative membership
+     * signal is the member's F$GETSYI("CLUSTER_NODES") / CDT layer -- see the
+     * HONESTY CAVEAT above the enum. No string here asserts a coordinator
+     * decision (refusal, abandonment, "never proposes"): those were the false
+     * conclusions §4(O.32)/(O.33) refuted. */
     switch (v) {
-    case READMIT_NO_CHANNEL: return "NO-CHANNEL(never reached transport)";
-    case READMIT_NO_ENGAGE:  return "NO-ENGAGE(member sent 0 CM responses, SYSAP never re-opened -- returning-id non-admission, spec 4(O.21))";
-    case READMIT_RECLAIMED_NOJOIN: return "RECLAIMED-NOJOIN(SYSAP re-opened + member reclaimed the CSB & read our incarnation, but ran 0 CM JOIN -- relocated frontier, spec 4(O.23))";
-    case READMIT_JOIN_ABANDONED: return "JOIN-ABANDONED(OVMX drove op 0x02 to the coordinator, coordinator ran 0 CM JOIN -- no op 0x04 reciprocation, no op 0x03 commit; vms-3aba (spec 4(O.27)) CLOSES the 4(O.26) send_seq-ceiling gate: lean-VC + credit-first now engage BEFORE op 0x02 (LEANHOLD holds own-dir on an appears-first candidate coordinator, CREDITFIRST returns Pending Receive Credit ahead of op 0x02), so op 0x02 rides ss<=18 (live vaxlab-0 return: ss=2/8/17, coordinator recv_ack advances to 13 PAST it -> op 0x02 DELIVERED, credit op6/op7/op8/op9 exchange completes) instead of the 4(O.26) ss=21/22 stranding. XITDONE STILL 0: cm_responses=0, member_vc=DISC SENT, CNXMAN prints only 'lost connection' (never 'received membership request'/'proposing addition') for the RETURNING identity, though it prints both for a FRESH one. So the ceiling was necessary-not-sufficient. vms-358 (spec 4(O.28)) then names the retained coordinator state from SDA and CORRECTS the 'held-before' framing: the coordinator keeps NO persistent per-identity block, and qf_failed_node is a RED HERRING (a fresh id is admitted with it set once the prior node's teardown has SETTLED -- cq358 arm D). The return collides with the departed node's OWN per-SCSSYSTEMID CSB held in reconnect/wait (SHOW CLUSTER/NODE State 03 reconnect->09 wait, Flags long_break,status_rcvd, CSID 0, never member; SHOW CONNECTIONS con_sent/con_pend Remote Con.ID 0), which OVMX's rejoin-form return KEEPS ALIVE by driving op 0x02/readmit onto a reconnect that can never complete (OVMX is a fresh incarnation) -- so the CSB is never removed and the coordinator never proposes a fresh JOIN for it. Fix: drive the coordinator to fully REMOVE the prior incarnation (clean CM last-gasp) then drive a plain FRESH first-join, not the reconnect/readmit rejoin path. vms-ab1 (spec 4(O.29)) then shipped the fresh-first-join return (default) and proved the CM-layer op-0x0d self-departure CRASHES the VAX (default OFF); vms-708 (spec 4(O.30)) RE'd the AUTHENTIC port-level last-gasp (multicast HELLO, abs-30 0xb1 + cluster nonce) that removes the prior incarnation SAFELY. vms-942 (spec 4(O.31)) RE's the member-side ENGAGEMENT from a real-VAX returning-node capture: each member OPENS its OWN VMS$VAXcluster config connection TO the returner, the returner sends op 0x02 on it, and that member drives op 0x12 RELAY to the other member (three-party Rule of Total Connectivity, Davis p.7-39) THEN op 0x03 COMMIT -> op 0x05 lock-rebuild -> op 0x06 membership. On a fresh virgin-pod current-HEAD F1-vs-J bracket the DEFAULT cleanleave return does NOT admit (admitted=0): op 0x02 reaches only a NON-coordinating member (this JOIN-ABANDONED peer), while the member that admitted the identical first-join minutes earlier (the op 0x12 RELAY driver) NEVER re-opens its member-driven connection to the returner (that peer's own verdict = NO-ENGAGE 'SYSAP never re-opened'), so no op 0x12 RELAY / op 0x03 COMMIT follows. The wire discriminator is the op 0x12 RELAY: present between op 0x02 and op 0x03 on the first-join, ABSENT on the return. The gate is member-side (the coordinating member opening its CM connect to the returner) and is NOT OVMX-forceable by routing or op02-body (vms-2f3 s3C: forcing op 0x02 to the SDA coordinator was refused identically); the next isolation instruments, per member on the return, whether it issues the VMS$VAXcluster CONNECT-REQ to the returner and what OVMX answers that fails to reach OPEN)";
-    case READMIT_ENGAGED_NC: return "ENGAGED-NOT-LATCHED(CM responses seen, membership not OPEN)";
-    case READMIT_ADMITTED:   return "ADMITTED(member ran JOIN handshake, membership OPEN)";
+    case READMIT_NO_CHANNEL: return "NO-CHANNEL(OVMX-observed: channel never reached transport with this peer)";
+    case READMIT_NO_ENGAGE:  return "OBS-0-CM-RESP(OVMX-observed only: cm_responses=0, membership latch not set, OVMX did not drive op 0x02 to this peer. NON-AUTHORITATIVE -- 0 CM responses on OVMX's side does NOT mean the member did not engage: on the authoritative oracle the member DOES open its connection and propose the addition (spec 4(O.32)). Authoritative signal: the member's F$GETSYI(\"CLUSTER_NODES\") / CDT layer.)";
+    case READMIT_RECLAIMED_NOJOIN: return "OBS-LATCH-0-CM-RESP(OVMX-observed only: membership latch reached OPEN, cm_responses=0. NON-AUTHORITATIVE -- an OVMX-side field pattern, not a membership verdict (spec 4(O.33)). Authoritative signal: the member's F$GETSYI(\"CLUSTER_NODES\").)";
+    case READMIT_JOIN_ABANDONED: return "OBS-OP02-DRIVEN-0-CM-RESP(OVMX-observed only: OVMX drove op 0x02 to this peer and counted cm_responses=0. NON-AUTHORITATIVE -- OVMX cannot classify the coordinator's membership decision from its own side. op 0x02 IS delivered under the recv_ack ceiling (spec 4(O.27), DELIVERED); the real outcome is a residual-CSB reclaim RACE (spec 4(O.33)), not a coordinator verdict readable here. Authoritative signal: the member's F$GETSYI(\"CLUSTER_NODES\") / CDT layer.)";
+    case READMIT_ENGAGED_NC: return "OBS-CM-RESP-NO-LATCH(OVMX-observed only: cm_responses>0, membership latch not OPEN. NON-AUTHORITATIVE -- confirm via the member's F$GETSYI(\"CLUSTER_NODES\"), spec 4(O.33).)";
+    case READMIT_ADMITTED:   return "ADMITTED(OVMX-observed positive: cm_responses>0 AND membership latch OPEN. NON-AUTHORITATIVE -- confirm via the member's F$GETSYI(\"CLUSTER_NODES\"), which is the oracle, spec 4(O.33).)";
     default:                 return "?";
     }
 }
@@ -11980,10 +12026,15 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
         /* vms-578: the three counters worktree-760 printed from main(). They
          * moved into struct scsd_rx with the rest, so a test that drives
          * scsd_handle_frame() can read them.
-         * vms-2f3: a run that was REFUSED must SAY so in its summary, not just
-         * fail to say XITDONE. XITABORT>0 is the difference between "the
-         * coordinator declined us" and "nothing happened". */
-        fprintf(out, "  CM-XITABORT-RECEIVED=%ld\n", rx->cm_abort_seen);
+         * vms-c21 (spec 4(O.33)): CORRECTED. vms-2f3 framed this count as "the
+         * coordinator declined us". It is NOT: the cat 0x01 op 0x04 role 0x50
+         * message it counts occurs on SUCCESSFUL joins too and is ABSENT from
+         * the reproducible failure, so it is a per-member CM barrier count, not
+         * a refusal signal. Report it as an observation; draw no membership
+         * conclusion from it -- the member's CLUSTER_NODES is the oracle. */
+        fprintf(out, "  CM-OP04-BARRIER-SEEN=%ld (cat 0x01 op 0x04 role 0x50;"
+                     " NON-AUTHORITATIVE, occurs on successful joins too -- spec"
+                     " 4(O.33))\n", rx->cm_abort_seen);
         fprintf(out, "  CREDIT-RETX-ANSWERED=%ld\n", rx->credit_retx_seen);
         fprintf(out, "  MSCP-SERVER-ACCEPTS-SENT=%ld\n", rx->mscp_srv_accepts);
         fprintf(out, "  PSC-UNGATED=%ld\n", rx->psc_ungated);
@@ -12092,12 +12143,24 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
          * plus the incarnation OVMX presented this run -- the fresh-per-boot
          * [66:74] quadword (ovmx_incarnation_time(), scs_start.c) that should make
          * a returning identity look NEW to each member (Davis p. 7-24 DEAD ->
-         * p. 7-25 fresh CSB). A run where every reached member reads NO-ENGAGE is
-         * the returning-identity non-admission frontier. */
+         * p. 7-25 fresh CSB).
+         *
+         * vms-c21 (spec §4(O.32)/(O.33)): these per-peer buckets are OVMX-SIDE
+         * OBSERVATIONS, NOT authoritative membership verdicts -- see the HONESTY
+         * CAVEAT above the readmit_verdict enum. A run with admitted=0 here is
+         * NOT proof of a coordinator refusal: the members DO connect and propose
+         * (§4(O.32)) and the true outcome is a residual-CSB reclaim RACE, not a
+         * refusal (§4(O.33)). The authoritative signal is each MEMBER's
+         * F$GETSYI("CLUSTER_NODES") / CDT layer, not anything printed here. */
         if (getenv("OVMX_NO_READMITMAP") == NULL) {
             unsigned long long incn = (unsigned long long)ovmx_incarnation_time();
             int reached = 0, admitted = 0, engaged = 0, no_engage = 0, reclaimed_nojoin = 0;
             int join_abandoned = 0;
+            fprintf(out,
+                    "  READMITMAP-CAVEAT: verdicts below are OVMX-SIDE OBSERVATIONS"
+                    " (NON-AUTHORITATIVE). The authoritative membership signal is"
+                    " each MEMBER's F$GETSYI(\"CLUSTER_NODES\") / CDT layer, not any"
+                    " OVMX-derived verdict (spec 4(O.32)/4(O.33)).\n");
             for (int i = 0; i < OVMX_MAX_PEERS; i++) {
                 if (rx->peers[i].pb == NULL) {
                     continue;
@@ -12132,36 +12195,33 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                     "  READMITMAP-SUMMARY incarnation_presented=0x%016llx%s"
                     " members_reached=%d admitted=%d engaged=%d"
                     " reclaimed_nojoin=%d join_abandoned=%d no_engage=%d --"
-                    " %s (spec 4(O.21)/4(O.23)/4(O.24), docs/design-rejoin-cm-state-map.md)\n",
+                    " %s (spec 4(O.32)/4(O.33), docs/design-rejoin-cm-state-map.md)\n",
                     incn, incn ? "(live)" : "(frozen/template)",
                     reached, admitted, engaged, reclaimed_nojoin, join_abandoned, no_engage,
+                    /* vms-c21: OBSERVATION ONLY. The counts above are OVMX-side
+                     * field-pattern buckets; the line below states what OVMX saw,
+                     * never a coordinator membership decision (it cannot know one
+                     * from its own side, §4(O.32)/(O.33)). */
                     (reached > 0 && admitted == 0
                      && (no_engage + reclaimed_nojoin + join_abandoned) == reached)
-                        ? (join_abandoned > 0
-                            ? "RETURNING-IDENTITY NON-ADMISSION (RELOCATED FRONTIER, spec"
-                              " 4(O.26), CORRECTS 4(O.25)): the member-initiated"
-                              " VMS$VAXcluster connection DOES reach a stable OPEN on the"
-                              " return (coordinator SDA, vms-c40), then BREAKS ~10 ms after"
-                              " OVMX drives op 0x02 on it -- OVMX's own dir/MSCP discovery"
-                              " bloats send_seq so op 0x01/op 0x02 ride ss=21/22, past the"
-                              " coordinator's recv_ack ceiling (18) on that VC, and lean-VC"
-                              " (4(O.15)) engages too late; the coordinator never delivers op"
-                              " 0x02, CNXMAN never proposes, the VC reverts to reconnect."
-                              " Next isolation: make lean-VC/credit-first engage BEFORE op"
-                              " 0x02 so it rides under the ceiling on the member connection"
-                          : reclaimed_nojoin > 0
-                            ? "RETURNING-IDENTITY NON-ADMISSION (RELOCATED FRONTIER, spec"
-                              " 4(O.23)): member(s) RECLAIMED the residual CSB and re-opened"
-                              " SCS -- the reclaim + incarnation-read path works -- but ran"
-                              " ZERO CM JOIN handshakes; the CM JOIN transition does not run"
-                              " for this returning identity"
-                            : "RETURNING-IDENTITY NON-ADMISSION: every reached member ran"
-                              " ZERO per-member JOIN handshakes and never re-opened SCS --"
-                              " the members do not engage the CM JOIN for this returning"
-                              " identity")
+                        ? "OVMX-SIDE OBSERVATION (NON-AUTHORITATIVE): every reached"
+                          " member shows cm_responses=0 with no OVMX membership latch."
+                          " This is NOT proof of a coordinator refusal or non-admission:"
+                          " on the authoritative oracle the members DO open their"
+                          " connections and propose the addition (spec 4(O.32)), and"
+                          " where op 0x02 was driven it is delivered under the recv_ack"
+                          " ceiling (spec 4(O.27)); the true outcome for a returning"
+                          " identity is a residual-CSB reclaim RACE, not a refusal (spec"
+                          " 4(O.33)). Read the member's F$GETSYI(\"CLUSTER_NODES\") to"
+                          " know the actual membership."
                         : (admitted == reached && reached > 0)
-                          ? "all reached members admitted"
-                          : "mixed/partial -- see per-peer verdicts");
+                          ? "OVMX-SIDE OBSERVATION (NON-AUTHORITATIVE): all reached members"
+                            " show cm_responses>0 and the OVMX membership latch OPEN --"
+                            " an OVMX-side positive signal. Confirm via the member's"
+                            " F$GETSYI(\"CLUSTER_NODES\"), spec 4(O.33)."
+                          : "OVMX-SIDE OBSERVATION (NON-AUTHORITATIVE): mixed/partial --"
+                            " see the per-peer OBSERVED buckets. Confirm actual membership"
+                            " via the member's F$GETSYI(\"CLUSTER_NODES\"), spec 4(O.33).");
         }
     }
 }
@@ -12575,7 +12635,7 @@ int main(int argc, char **argv)
          * because anything in it was dropped.
          *
          * The exit summary that trailed it is likewise scsd_exit_summary()`s;
-         * the three counters worktree-760 added to it (CM-XITABORT-RECEIVED,
+         * the three counters worktree-760 added to it (CM-OP04-BARRIER-SEEN,
          * CREDIT-RETX-ANSWERED, MSCP-SERVER-ACCEPTS-SENT) moved into
          * struct scsd_rx and are printed from there. */
         scsd_handle_frame(&rx, buf, n);

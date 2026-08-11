@@ -10462,11 +10462,17 @@ static void test_rejoin_op9_stamps_our_own_incarnation(void)
 }
 
 /*
- * vms-f61 (spec §4(O.21)): the READMISSION-MAP verdict names, per member, whether
- * that member ran the per-member JOIN handshake for a (re)joining node. The
- * frontier state is NO-ENGAGE: transport up, but cm_responses==0 -- the members
- * do not engage the CM JOIN for a returning identity. This is the fail-pre/pass-post
- * gate on the verdict classifier readmit_verdict_of() (a pure read; no wire change).
+ * vms-f61 (spec §4(O.21)): the READMISSION-MAP verdict buckets the per-member,
+ * OVMX-side field pattern (cm_responses, membership latch, whether OVMX drove
+ * op 0x02) for a (re)joining node. readmit_verdict_of() is a pure read of
+ * already-tracked fields; no wire change.
+ *
+ * vms-c21 (spec §4(O.32)/(O.33)): these verdicts are OVMX-SIDE OBSERVATIONS, NOT
+ * authoritative membership verdicts -- OVMX cannot classify the coordinator's
+ * decision from its own side. The classification LOGIC (enum values) is unchanged;
+ * this test also pins that the human-readable strings are HONEST: they report the
+ * observed field pattern, are marked NON-AUTHORITATIVE, and carry NO refuted
+ * conclusion ("refused" / "abandon" / "SYSAP never re-opened" / "non-admission").
  */
 static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
 {
@@ -10492,9 +10498,25 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
     ps->cm_responses = 0;
     ps->vaxcluster_open_reached = 0;
     CHECK(readmit_verdict_of(ps) == READMIT_NO_ENGAGE,
-          "transport up + cm_responses=0 must read NO-ENGAGE (returning-identity"
-          " non-admission, spec 4(O.21)), got %s",
+          "transport up + cm_responses=0 must bucket as READMIT_NO_ENGAGE"
+          " (OVMX-side observation, spec 4(O.21)), got %s",
           readmit_verdict_name(readmit_verdict_of(ps)));
+    /* vms-c21: the NO_ENGAGE string is HONEST -- observation only, no refuted
+     * conclusion. §4(O.32) refuted "SYSAP never re-opened"; the member DOES
+     * engage. It must be marked NON-AUTHORITATIVE and cite §4(O.32). */
+    CHECK(strstr(readmit_verdict_name(READMIT_NO_ENGAGE), "SYSAP never re-opened") == NULL,
+          "NO_ENGAGE text must NOT claim 'SYSAP never re-opened' (refuted §4(O.32)), got %s",
+          readmit_verdict_name(READMIT_NO_ENGAGE));
+    CHECK(strstr(readmit_verdict_name(READMIT_NO_ENGAGE), "non-admission") == NULL,
+          "NO_ENGAGE text must NOT assert 'non-admission' (a membership conclusion"
+          " OVMX cannot make, §4(O.32)/(O.33)), got %s",
+          readmit_verdict_name(READMIT_NO_ENGAGE));
+    CHECK(strstr(readmit_verdict_name(READMIT_NO_ENGAGE), "NON-AUTHORITATIVE") != NULL,
+          "NO_ENGAGE text must be marked NON-AUTHORITATIVE, got %s",
+          readmit_verdict_name(READMIT_NO_ENGAGE));
+    CHECK(strstr(readmit_verdict_name(READMIT_NO_ENGAGE), "4(O.32)") != NULL,
+          "NO_ENGAGE text must cite §4(O.32) (member DOES engage), got %s",
+          readmit_verdict_name(READMIT_NO_ENGAGE));
 
     /* A member that sent CM responses but did not latch membership. */
     ps->cm_responses = 76;
@@ -10535,6 +10557,10 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
     CHECK(readmit_verdict_of(ps) != READMIT_ADMITTED,
           "RECLAIMED-NOJOIN must never read ADMITTED (INV-6: no success from a"
           " member that ran 0 CM JOIN handshakes)");
+    /* vms-c21: the RECLAIMED_NOJOIN string is an observation, not a verdict. */
+    CHECK(strstr(readmit_verdict_name(READMIT_RECLAIMED_NOJOIN), "NON-AUTHORITATIVE") != NULL,
+          "RECLAIMED-NOJOIN text must be marked NON-AUTHORITATIVE, got %s",
+          readmit_verdict_name(READMIT_RECLAIMED_NOJOIN));
 
     /* vms-0425 (spec §4(O.24)): the SHARPEST non-admission verdict -- OVMX DROVE
      * its op 0x02 join request to THIS peer (joiner_cfg2_sent=1) and got ZERO CM
@@ -10559,67 +10585,43 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
           "OVMX drove op 0x02 to the coordinator (joiner_cfg2_sent) with 0 CM"
           " responses back must read JOIN-ABANDONED (spec 4(O.24)), got %s",
           readmit_verdict_name(readmit_verdict_of(ps)));
-    /* vms-3aba (spec §4(O.27)) fail-pre/pass-post: the fix CLOSES the §4(O.26)
-     * send_seq-ceiling gate -- lean-VC + credit-first now engage BEFORE op 0x02, so on
-     * a live return op 0x02 rides send_seq <=18 (ss=2/8/17) and the coordinator's
-     * recv_ack advances PAST it (op 0x02 DELIVERED, credit op6..op9 exchange completes)
-     * instead of the §4(O.26) 21/22 stranding. XITDONE STILL 0 (cm_responses=0, CNXMAN
-     * proposes nothing for the returning identity), so the ceiling was necessary-not-
-     * sufficient and the frontier relocates back to returning-identity non-admission.
-     * The JOIN-ABANDONED verdict text must carry that corrected, grounded finding and
-     * cite §4(O.27); before vms-3aba it said "ride ss=21/22 ... spec 4(O.26)". */
+    /* vms-c21 (spec §4(O.32)/(O.33)) fail-pre/pass-post: the JOIN_ABANDONED
+     * string must be HONEST -- an OVMX-side observation, NOT a coordinator
+     * decision. §4(O.33) refuted the prior "coordinator abandons/ignores the
+     * join / no op 0x03 commit" narrative: op 0x02 IS delivered under the
+     * recv_ack ceiling (§4(O.27), DELIVERED) and the real outcome is a
+     * residual-CSB reclaim RACE, not a refusal/abandonment OVMX can read. The
+     * text must be marked NON-AUTHORITATIVE, cite §4(O.33), keep the §4(O.27)
+     * "DELIVERED" fact, and carry NO refuted conclusion ("refus"/"abandon"). */
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "NON-AUTHORITATIVE") != NULL,
+          "JOIN-ABANDONED text must be marked NON-AUTHORITATIVE, got %s",
+          readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "4(O.33)") != NULL,
+          "JOIN-ABANDONED text must cite the corrective finding spec 4(O.33)"
+          " (op 0x04 fires on success too; the outcome is a reclaim RACE), got %s",
+          readmit_verdict_name(READMIT_JOIN_ABANDONED));
     CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "4(O.27)") != NULL,
-          "JOIN-ABANDONED text must cite the live-bracket correction spec 4(O.27),"
-          " got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
+          "JOIN-ABANDONED text must keep the spec 4(O.27) delivery fact, got %s",
+          readmit_verdict_name(READMIT_JOIN_ABANDONED));
     CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "DELIVERED") != NULL,
-          "JOIN-ABANDONED text must state op 0x02 now rides <=18 and is DELIVERED"
-          " (the §4(O.26) ceiling gate is closed), got %s",
-          readmit_verdict_name(READMIT_JOIN_ABANDONED));
-    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "never settles OPEN") == NULL,
-          "JOIN-ABANDONED text must NO LONGER claim the reconnect never settles OPEN"
-          " (§4(O.25) sampling artifact, corrected by vms-c40/§4(O.26)), got %s",
-          readmit_verdict_name(READMIT_JOIN_ABANDONED));
-    /* vms-358 (spec §4(O.28)) fail-pre/pass-post: three coordinator-SDA brackets
-     * name the retained state and CORRECT the 'returning-identity non-admission /
-     * held-before' framing this text carried since §4(O.20). The coordinator keeps
-     * NO persistent per-identity block; qf_failed_node is a RED HERRING (a fresh id
-     * admits with it set once the prior node's teardown SETTLES -- cq358 arm D); the
-     * return collides with the departed node's OWN per-SCSSYSTEMID CSB held in
-     * reconnect/wait (long_break) that OVMX's rejoin-form return keeps alive. The
-     * text must now cite §4(O.28) and NOT claim a persistent "held before" block. */
-    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "4(O.28)") != NULL,
-          "JOIN-ABANDONED text must cite the coordinator-SDA isolation spec 4(O.28),"
+          "JOIN-ABANDONED text must state op 0x02 is DELIVERED under the ceiling"
+          " (§4(O.27)), got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "refus") == NULL,
+          "JOIN-ABANDONED text must assert NO refusal conclusion (refuted §4(O.33)),"
           " got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
-    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "RED HERRING") != NULL,
-          "JOIN-ABANDONED text must state qf_failed_node is a RED HERRING (not the"
-          " gate; a settled fresh id admits with it set -- §4(O.28)), got %s",
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "abandon") == NULL,
+          "JOIN-ABANDONED text must assert NO 'abandon' conclusion (refuted §4(O.33)),"
+          " got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "never settles OPEN") == NULL,
+          "JOIN-ABANDONED text must NOT claim the reconnect never settles OPEN"
+          " (§4(O.25) sampling artifact), got %s",
           readmit_verdict_name(READMIT_JOIN_ABANDONED));
     CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "held before") == NULL,
-          "JOIN-ABANDONED text must NO LONGER claim a persistent 'held before' block"
-          " (refuted by the §4(O.28) brackets), got %s",
-          readmit_verdict_name(READMIT_JOIN_ABANDONED));
-    /* vms-942 (spec §4(O.31)) fail-pre/pass-post: the AUTHENTIC member-side
-     * engagement RE'd from a real-VAX returning-node capture is member-DRIVEN and
-     * three-party -- the member OPENS a VMS$VAXcluster config connection to the
-     * returner, the returner sends op 0x02 on it, and the member drives op 0x12
-     * RELAY to the other member (Davis p.7-39) THEN op 0x03 COMMIT. A fresh
-     * virgin-pod current-HEAD F1-vs-J bracket proved the DEFAULT cleanleave return
-     * does NOT admit: op 0x02 lands on a NON-coordinating member and the op 0x12
-     * RELAY (present first-join, ABSENT return) never fires. The text must cite
-     * §4(O.31), name the op 0x12 RELAY discriminator, and NO LONGER carry §4(O.29)'s
-     * stale "the default path admits" claim (refuted by the current-HEAD bracket:
-     * admitted=0). Before vms-942 it said "the default path admits". */
-    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "4(O.31)") != NULL,
-          "JOIN-ABANDONED text must cite the authentic member-side engagement RE"
-          " spec 4(O.31), got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
-    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "op 0x12 RELAY") != NULL,
-          "JOIN-ABANDONED text must name the op 0x12 RELAY wire discriminator"
-          " (present first-join, absent return -- §4(O.31)), got %s",
-          readmit_verdict_name(READMIT_JOIN_ABANDONED));
-    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "the default path admits") == NULL,
-          "JOIN-ABANDONED text must NO LONGER claim 'the default path admits'"
-          " (refuted by the current-HEAD F1-vs-J bracket: admitted=0 -- §4(O.31)),"
+          "JOIN-ABANDONED text must NOT claim a persistent 'held before' block,"
           " got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "the default path admits") == NULL,
+          "JOIN-ABANDONED text must NOT claim 'the default path admits', got %s",
+          readmit_verdict_name(READMIT_JOIN_ABANDONED));
     /* The real Rr shape: op02 driven, but OVMX's VC ended CONNSTUCK so the open
      * latch never fired. Still JOIN-ABANDONED -- the driven-op02 fact governs. */
     ps->vaxcluster_open_reached = 0;
@@ -10637,8 +10639,8 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
     ps->joiner_cfg2_sent = 0;
     ps->vaxcluster_open_reached = 0;
     CHECK(readmit_verdict_of(ps) == READMIT_NO_ENGAGE,
-          "transport up but SYSAP never re-opened, 0 CM responses, op02 never driven"
-          " must read NO-ENGAGE (spec 4(O.21)), got %s",
+          "transport up, 0 CM responses, latch unset, op02 never driven"
+          " must bucket as READMIT_NO_ENGAGE (OVMX-side observation, spec 4(O.21)), got %s",
           readmit_verdict_name(readmit_verdict_of(ps)));
 }
 

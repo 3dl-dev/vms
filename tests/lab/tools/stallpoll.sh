@@ -73,7 +73,7 @@ done
 
 log "waitnodes:"
 bash "$CL/tools/waitnodes.sh" 4 3 2>&1 | tee -a "$S"
-log "XITDONE=$(grep -ac XITDONE "$W/scsd-$TAG.log")  XITABORT=$(grep -ac "SCSD-E-XITABORT" "$W/scsd-$TAG.log")"
+log "XITDONE=$(grep -ac XITDONE "$W/scsd-$TAG.log")  XITABORT=$(grep -ac "SCSD-I-CMOP04" "$W/scsd-$TAG.log")"
 snap "FINAL"
 sudo pkill -f 'SCSD.EXE' 2>/dev/null; wait $P 2>/dev/null
 log "CM census:"

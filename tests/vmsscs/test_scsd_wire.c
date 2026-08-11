@@ -10266,18 +10266,26 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
           "OVMX drove op 0x02 to the coordinator (joiner_cfg2_sent) with 0 CM"
           " responses back must read JOIN-ABANDONED (spec 4(O.24)), got %s",
           readmit_verdict_name(readmit_verdict_of(ps)));
-    /* vms-9a7 (spec §4(O.25)) fail-pre/pass-post: coordinator-side SDA proved the
-     * coordinator's CNXMAN never PROPOSES the addition (its VMS$VAXcluster reconnect
-     * to the returning id never settles OPEN) -- it does NOT "ignore" a received
-     * request. The JOIN-ABANDONED verdict text must carry that corrected, grounded
-     * explanation and cite §4(O.25); before vms-9a7 it said only "IGNORES ... Davis
-     * p.7-38 ... spec 4(O.24)". */
-    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "4(O.25)") != NULL,
-          "JOIN-ABANDONED text must cite the coordinator-SDA refinement spec 4(O.25),"
+    /* vms-c40 (spec §4(O.26)) fail-pre/pass-post, CORRECTING vms-9a7/§4(O.25):
+     * denser-sampled coordinator SDA on the CURRENT build proved the member-initiated
+     * VMS$VAXcluster reconnect DOES reach a stable OPEN on the return (SHOW CONNECTIONS
+     * State 0002 open, Remote Con.ID = our handle), then BREAKS ~10 ms after OVMX drives
+     * op 0x02 -- op 0x01/op 0x02 ride send_seq 21/22 past the coordinator's recv_ack
+     * ceiling of 18 because OVMX's own dir/MSCP discovery bloats the VC and lean-VC
+     * engages too late. So §4(O.25)'s "never settles OPEN" was a SAMPLING ARTIFACT. The
+     * JOIN-ABANDONED verdict text must carry the corrected, grounded finding and cite
+     * §4(O.26); before vms-c40 it said "never settles OPEN ... spec 4(O.25)". */
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "4(O.26)") != NULL,
+          "JOIN-ABANDONED text must cite the coordinator-SDA correction spec 4(O.26),"
           " got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
-    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "CNXMAN never PROPOSES") != NULL,
-          "JOIN-ABANDONED text must state the grounded finding (CNXMAN never proposes"
-          " the addition), got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "reach a stable OPEN") != NULL,
+          "JOIN-ABANDONED text must state the grounded correction (the reconnect DOES"
+          " reach a stable OPEN, then breaks on op 0x02), got %s",
+          readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "never settles OPEN") == NULL,
+          "JOIN-ABANDONED text must NO LONGER claim the reconnect never settles OPEN"
+          " (§4(O.25) sampling artifact, corrected by vms-c40/§4(O.26)), got %s",
+          readmit_verdict_name(READMIT_JOIN_ABANDONED));
     /* The real Rr shape: op02 driven, but OVMX's VC ended CONNSTUCK so the open
      * latch never fired. Still JOIN-ABANDONED -- the driven-op02 fact governs. */
     ps->vaxcluster_open_reached = 0;

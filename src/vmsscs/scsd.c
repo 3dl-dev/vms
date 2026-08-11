@@ -11390,8 +11390,19 @@ static void scsd_shutdown_teardown(struct scsd_rx *rx, uint8_t *buf, size_t bufs
  */
 enum readmit_verdict {
     READMIT_NO_CHANNEL,   /* never reached transport with this peer */
-    READMIT_NO_ENGAGE,    /* VC/channel/dir up, but member sent ZERO CM responses:
-                           * the returning-identity non-admission (§4(O.21)) */
+    READMIT_NO_ENGAGE,    /* VC/channel/dir up, but member sent ZERO CM responses AND
+                           * the SYSAP connection never re-opened: the returning-identity
+                           * non-admission (§4(O.21)) */
+    READMIT_RECLAIMED_NOJOIN, /* vms-944 (§4(O.23)): the SYSAP connection re-opened
+                           * (open latched) but the member ran ZERO CM JOIN handshakes.
+                           * SDA on the member (bracket 944B2r, vaxlab-1) showed this
+                           * shape is the member RECLAIMING the residual CSB -- old CSB
+                           * deallocated, a NEW CSB built at a new address with OVMX's
+                           * fresh incarnation READ into it (Davis p. 7-24 DEAD ->
+                           * p. 7-25 fresh CSB) -- and re-opening SCS, yet NEVER running
+                           * the CM JOIN transition. It is a non-admission, but a
+                           * DIFFERENT one from NO-ENGAGE: the reclaim + incarnation path
+                           * worked; the failure is downstream at the CM JOIN. */
     READMIT_ENGAGED_NC,   /* member sent CM responses but membership not latched */
     READMIT_ADMITTED,     /* member ran the JOIN handshake and OVMX latched membership */
 };
@@ -11419,6 +11430,18 @@ static enum readmit_verdict readmit_verdict_of(const struct peer_state *ps)
     if (ps->cm_responses > 0) {
         return READMIT_ENGAGED_NC;
     }
+    /* vms-944 (spec §4(O.23)): SYSAP re-opened (latch set) but ZERO CM responses.
+     * §4(O.22) read this exact shape (bracket `4dBr`) as a "residual/stale
+     * reached-OPEN" and folded it into NO-ENGAGE. The `944B2r` SDA bracket
+     * (vaxlab-1, OVMX_INCARNATION_TIME pinned to 1-OCT-2026) refuted that reading:
+     * the member DEALLOCATED the residual CSB and built a NEW one at a new address
+     * with OVMX's fresh incarnation read into it, and re-opened SCS -- a genuine
+     * reclaim, not a stale reconnect -- yet ran no CM JOIN. Name it honestly so the
+     * relocated frontier (reclaim works, CM JOIN does not run) is not masked as a
+     * plain NO-ENGAGE. Still a non-admission (never ADMITTED). */
+    if (ps->vaxcluster_open_reached) {
+        return READMIT_RECLAIMED_NOJOIN;
+    }
     return READMIT_NO_ENGAGE;
 }
 
@@ -11426,7 +11449,8 @@ static const char *readmit_verdict_name(enum readmit_verdict v)
 {
     switch (v) {
     case READMIT_NO_CHANNEL: return "NO-CHANNEL(never reached transport)";
-    case READMIT_NO_ENGAGE:  return "NO-ENGAGE(member sent 0 CM responses -- returning-id non-admission, spec 4(O.21))";
+    case READMIT_NO_ENGAGE:  return "NO-ENGAGE(member sent 0 CM responses, SYSAP never re-opened -- returning-id non-admission, spec 4(O.21))";
+    case READMIT_RECLAIMED_NOJOIN: return "RECLAIMED-NOJOIN(SYSAP re-opened + member reclaimed the CSB & read our incarnation, but ran 0 CM JOIN -- relocated frontier, spec 4(O.23))";
     case READMIT_ENGAGED_NC: return "ENGAGED-NOT-LATCHED(CM responses seen, membership not OPEN)";
     case READMIT_ADMITTED:   return "ADMITTED(member ran JOIN handshake, membership OPEN)";
     default:                 return "?";
@@ -11693,7 +11717,7 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
          * the returning-identity non-admission frontier. */
         if (getenv("OVMX_NO_READMITMAP") == NULL) {
             unsigned long long incn = (unsigned long long)ovmx_incarnation_time();
-            int reached = 0, admitted = 0, engaged = 0, no_engage = 0;
+            int reached = 0, admitted = 0, engaged = 0, no_engage = 0, reclaimed_nojoin = 0;
             for (int i = 0; i < OVMX_MAX_PEERS; i++) {
                 if (rx->peers[i].pb == NULL) {
                     continue;
@@ -11707,6 +11731,8 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                     admitted++;
                 } else if (v == READMIT_ENGAGED_NC) {
                     engaged++;
+                } else if (v == READMIT_RECLAIMED_NOJOIN) {
+                    reclaimed_nojoin++;
                 } else if (v == READMIT_NO_ENGAGE) {
                     no_engage++;
                 }
@@ -11722,14 +11748,23 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
             }
             fprintf(out,
                     "  READMITMAP-SUMMARY incarnation_presented=0x%016llx%s"
-                    " members_reached=%d admitted=%d engaged=%d no_engage=%d --"
-                    " %s (spec 4(O.21), docs/design-rejoin-cm-state-map.md)\n",
+                    " members_reached=%d admitted=%d engaged=%d"
+                    " reclaimed_nojoin=%d no_engage=%d --"
+                    " %s (spec 4(O.21)/4(O.23), docs/design-rejoin-cm-state-map.md)\n",
                     incn, incn ? "(live)" : "(frozen/template)",
-                    reached, admitted, engaged, no_engage,
-                    (reached > 0 && admitted == 0 && no_engage == reached)
-                        ? "RETURNING-IDENTITY NON-ADMISSION: every reached member ran"
-                          " ZERO per-member JOIN handshakes -- the members do not"
-                          " engage the CM JOIN for this returning identity"
+                    reached, admitted, engaged, reclaimed_nojoin, no_engage,
+                    (reached > 0 && admitted == 0
+                     && (no_engage + reclaimed_nojoin) == reached)
+                        ? (reclaimed_nojoin > 0
+                            ? "RETURNING-IDENTITY NON-ADMISSION (RELOCATED FRONTIER, spec"
+                              " 4(O.23)): member(s) RECLAIMED the residual CSB and re-opened"
+                              " SCS -- the reclaim + incarnation-read path works -- but ran"
+                              " ZERO CM JOIN handshakes; the CM JOIN transition does not run"
+                              " for this returning identity"
+                            : "RETURNING-IDENTITY NON-ADMISSION: every reached member ran"
+                              " ZERO per-member JOIN handshakes and never re-opened SCS --"
+                              " the members do not engage the CM JOIN for this returning"
+                              " identity")
                         : (admitted == reached && reached > 0)
                           ? "all reached members admitted"
                           : "mixed/partial -- see per-peer verdicts");

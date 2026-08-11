@@ -52,7 +52,8 @@ echo "Rule 9 gate negative controls: every property must have an evasion that tr
 ROOT="$WORK/tree"
 mkdir -p "$ROOT/tests/integration"
 cp -a "$SRC_ROOT/src" "$ROOT/src"
-cp -a "$SRC_ROOT/CLAUDE.md" "$ROOT/CLAUDE.md"
+mkdir -p "$ROOT/docs"
+cp -a "$SRC_ROOT/docs/runtime-target.md" "$ROOT/docs/runtime-target.md"
 [ -f "$SRC_ROOT/Dockerfile" ] && cp -a "$SRC_ROOT/Dockerfile" "$ROOT/Dockerfile"
 [ -f "$SRC_ROOT/docker-compose.yml" ] && cp -a "$SRC_ROOT/docker-compose.yml" "$ROOT/docker-compose.yml"
 

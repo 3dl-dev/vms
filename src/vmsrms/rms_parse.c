@@ -23,11 +23,13 @@
  *
  * vms-240 completes the device-field logical-name resolution: $PARSE now
  * iteratively translates the DEVICE field of the expanded spec through
- * LNM$FILE_DEV with lnm_translate_filespec() (the one filespec-aware,
- * LNM$M_TERMINAL-honoring driver), so a non-concealed device logical is
- * substituted, an A -> B -> C chain composes, and a terminal translation
- * stops the chain. A concealed device is still kept in the spec (concealment),
- * which is why the CNCL_DEV/ROOT_DIR reads below continue to see it.
+ * LNM$FILE_DEV via vmsfs_resolve_filespec_device() (the vmsfs wrapper over the
+ * one filespec-aware, LNM$M_TERMINAL-honoring driver lnm_translate_filespec),
+ * so a non-concealed device logical is substituted, an A -> B -> C chain
+ * composes, and a terminal translation stops the chain. A concealed device is
+ * still kept in the spec (concealment), which is why the CNCL_DEV/ROOT_DIR
+ * reads below continue to see it. Resolution goes through vmsfs (not lnm
+ * directly) so LIBVMSRMS$SHR keeps no rms -> lnm cross-image import.
  *
  * OVMX-PARTIAL: sys$parse (vms-d8e) -- exec: the CONCEALED / rooted-directory
  *     translation attribute of a device logical (set as NAM$M_CNCL_DEV /
@@ -50,7 +52,6 @@
 #include "rms/rms.h"
 #include "vmsfs/filespec.h"
 #include "vmsfs/device.h"
-#include "vms/logical.h"
 #include "ssdef.h"
 
 /*
@@ -164,29 +165,29 @@ uint32_t sys$parse(void *fab_ptr)
     /*
      * vms-240: REAL iterative logical-name resolution of the device field.
      * $PARSE used to leave the device logical untranslated in the expanded
-     * string; it now resolves it through LNM$FILE_DEV with the one
-     * filespec-aware, LNM$M_TERMINAL-honoring driver (lnm_translate_filespec).
-     * A non-concealed device logical is substituted by its equivalence, an
-     * iterative chain (A -> B -> C) composes through every hop, iteration
-     * stops at a terminal translation, and a CONCEALED device logical is kept
-     * in the file specification (its NAME, not its equivalence) exactly as VMS
-     * conceals a device -- so the NAM$M_CNCL_DEV / NAM$M_ROOT_DIR reads below
-     * (vms-d8e) still see the concealed logical name. (VSI OpenVMS User's
-     * Manual, "Logical Name Translation" / "Concealed-Device Logical Names";
-     * VSI OpenVMS System Services Reference, $TRNLNM LNM$M_TERMINAL.)
+     * string; it now resolves it through LNM$FILE_DEV via the vmsfs entry
+     * point vmsfs_resolve_filespec_device(), which wraps the one filespec-aware,
+     * LNM$M_TERMINAL-honoring driver (lnm_translate_filespec). A non-concealed
+     * device logical is substituted by its equivalence, an iterative chain
+     * (A -> B -> C) composes through every hop, iteration stops at a terminal
+     * translation, and a CONCEALED device logical is kept in the file
+     * specification (its NAME, not its equivalence) exactly as VMS conceals a
+     * device -- so the NAM$M_CNCL_DEV / NAM$M_ROOT_DIR reads below (vms-d8e)
+     * still see the concealed logical name. (VSI OpenVMS User's Manual,
+     * "Logical Name Translation" / "Concealed-Device Logical Names"; VSI
+     * OpenVMS System Services Reference, $TRNLNM LNM$M_TERMINAL.)
+     *
+     * The resolution goes through vmsfs, NOT lnm directly: vmsrms reaches
+     * logical-name translation through its existing vmsfs dependency, so
+     * LIBVMSRMS$SHR gains no forbidden rms -> lnm cross-image import (it does
+     * not --use LIBVMSLNM$SHR; the STRICT native LINK.EXE link would fail).
      */
     {
-        lnm_manager_t *mgr = lnm_get_manager();
-        if (mgr) {
-            char resolved[1024];
-            uint16_t rlen = 0;
-            uint32_t rst = lnm_translate_filespec(mgr, LNM_FILE_DEV, combined,
-                                                  resolved, sizeof(resolved),
-                                                  &rlen, NULL);
-            if ($VMS_STATUS_SUCCESS(rst) && resolved[0]) {
-                strncpy(combined, resolved, sizeof(combined) - 1);
-                combined[sizeof(combined) - 1] = '\0';
-            }
+        char resolved[1024];
+        if ($VMS_STATUS_SUCCESS(vmsfs_resolve_filespec_device(
+                combined, resolved, sizeof(resolved))) && resolved[0]) {
+            strncpy(combined, resolved, sizeof(combined) - 1);
+            combined[sizeof(combined) - 1] = '\0';
         }
     }
 

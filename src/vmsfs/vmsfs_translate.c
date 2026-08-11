@@ -476,6 +476,46 @@ int vmsfs_resolve_device(const char *device, char *linux_dir, size_t dir_size)
 }
 
 /*
+ * vmsfs_resolve_filespec_device - see vmsfs/device.h.
+ *
+ * vms-240: the vmsfs entry point that $PARSE (src/vmsrms) uses for REAL
+ * iterative logical-name resolution of a filespec's device field. It wraps the
+ * one filespec-aware, LNM$M_TERMINAL-honoring driver, lnm_translate_filespec()
+ * (src/vmslnm), through LNM$FILE_DEV.
+ *
+ * It lives in vmsfs, NOT in vmsrms, on purpose: vmsfs already depends on
+ * vmslnm (LIBVMSFS$SHR --use's LIBVMSLNM$SHR) and vmsrms already depends on
+ * vmsfs, whereas LIBVMSRMS$SHR deliberately does NOT --use LIBVMSLNM$SHR
+ * (mk_vmsrms_shr.sh). Calling lnm_translate_filespec() directly from vmsrms
+ * would create a new, forbidden rms -> lnm cross-image import that fails the
+ * STRICT native LINK.EXE link; routing through this vmsfs universal keeps
+ * $PARSE's only new dependency the already-wired rms -> vmsfs edge.
+ *
+ * On no LNM manager (host build/test tooling with no tables) or a translation
+ * that changes nothing, the spec is passed through unchanged.
+ */
+uint32_t vmsfs_resolve_filespec_device(const char *filespec, char *result,
+                                       size_t result_size)
+{
+    if (!filespec || !result || result_size == 0)
+        return SS$_BADPARAM;
+
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (mgr) {
+        uint16_t rlen = 0;
+        uint32_t st = lnm_translate_filespec(mgr, LNM_FILE_DEV, filespec,
+                                             result, result_size, &rlen, NULL);
+        if ($VMS_STATUS_SUCCESS(st) && result[0] != '\0')
+            return SS$_NORMAL;
+    }
+
+    /* Pass-through: no manager, or nothing resolved. */
+    strncpy(result, filespec, result_size - 1);
+    result[result_size - 1] = '\0';
+    return SS$_NORMAL;
+}
+
+/*
  * equiv_is_rooted - Does an equivalence string name a rooted directory?
  *
  * A rooted-directory equivalence ends in "dev:[root.]" -- a '.' immediately

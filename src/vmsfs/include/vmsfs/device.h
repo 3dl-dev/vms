@@ -54,4 +54,22 @@ int vmsfs_device_count(void);
 uint32_t vmsfs_device_concealed_rooted(const char *device,
                                        int *is_concealed, int *is_rooted);
 
+/*
+ * vmsfs_resolve_filespec_device - resolve the DEVICE field of `filespec` by
+ * iterative logical-name translation through LNM$FILE_DEV, writing the
+ * substituted spec to `result`. Wraps the one filespec-aware,
+ * LNM$M_TERMINAL-honoring driver (lnm_translate_filespec, src/vmslnm): a
+ * non-concealed device logical is substituted, an A -> B -> C chain composes,
+ * iteration stops at a terminal translation, and a concealed device logical is
+ * kept in the spec. The directory/name/type/version tail is preserved.
+ *
+ * This is the entry point $PARSE (src/vmsrms) uses so that vmsrms reaches
+ * logical-name translation through its existing vmsfs dependency rather than
+ * importing lnm_* directly (LIBVMSRMS$SHR does not --use LIBVMSLNM$SHR). On no
+ * LNM manager or a no-op translation the spec is passed through unchanged.
+ * Returns SS$_NORMAL, or SS$_BADPARAM for a bad argument.
+ */
+uint32_t vmsfs_resolve_filespec_device(const char *filespec, char *result,
+                                       size_t result_size);
+
 #endif /* __VMSFS_DEVICE_H */

@@ -100,7 +100,8 @@ vmsfs_format_protection=PROCEDURE,vmsfs_parse_protection=PROCEDURE,\
 vmsfs_mode_to_protection=PROCEDURE,vmsfs_protection_to_mode=PROCEDURE,\
 vmsfs_find_case_insensitive=PROCEDURE,vmsfs_resolve_path_case=PROCEDURE,\
 vmsfs_is_valid_ods2_name=PROCEDURE,\
-vmsfs_device_concealed_rooted=PROCEDURE"
+vmsfs_device_concealed_rooted=PROCEDURE,\
+vmsfs_resolve_filespec_device=PROCEDURE"
 
 echo "mk_vmsfs_shr: LINK.EXE --shareable --use DECC\$SHR --use LIBVMSLNM\$SHR -> $OUT"
 # STRICT (no --allow-undefined): every libc import MUST bind to DECC$SHR and every

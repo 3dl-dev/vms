@@ -512,3 +512,61 @@ and a bare `SET VOLUME DKA100:` with no qualifier reports no error.
 `tests/dcl/test_set_quick.sh`'s trailing bare `SET VOLUME` (no device)
 assertion moved from the old facade text to the real
 `%DCL-E-NODEVICE`/`SS$_BADPARAM` refusal.
+
+## Engine A rollout tail (vms-332) — 33/54 → 45/54 carry qualifier tables
+
+Completes the discrete, non-umbrella verbs left after tranche 2
+(`docs/design-vms-parity-map.md` §3, pillar vms-b9a). Same rule: each table
+lists exactly the qualifiers its handler HONOURS, grounded in the public VSI
+OpenVMS DCL Dictionary per verb (Rule 8); every other token draws the
+authentic `%DCL-W-IVQUAL` (`SS$_IVQUAL` 2288) — honest over-restriction, never
+a fake accept (INV-DCL §3). No bucket assignment changes: these verbs were
+already REAL (or STUB); the rollout makes `%DCL-W-IVQUAL` structural for them.
+
+**12 verbs newly retrofit with tables** (were `quals == NULL`):
+- Populated (DCL Dictionary entry cited):
+  ANALYZE `{DISK_STRUCTURE,IMAGE,OBJECT,SYSTEM}` (mode selectors it re-execs
+  ANALYZE.EXE with), LINK `{EXECUTABLE=,MAP}`, PRODUCT `{SOURCE=,DESTINATION=}`,
+  MOUNT `{SYSTEM}`, BACKUP `{SAVE_SET,LIST}`.
+- Empty — reuse `q_none[]` (handler honours no qualifier, so any qualifier
+  draws IVQUAL): DISMOUNT, EDIT, REQUEST, ACCOUNTING, MONITOR, SYSGEN, SYSMAN.
+
+**Depth is honestly disclosed, not implied.** The populated tables list only
+what the handler implements today; the wider real grammar of each utility is a
+sized follow-up (SET VOLUME's per-qualifier honest-refusal mould), and until
+then its other qualifiers draw IVQUAL rather than being silently accepted:
+- MOUNT: `/OVERRIDE`, `/FOREIGN`, `/NOWRITE`, `/CLUSTER`, … → follow-up.
+- BACKUP: `/IMAGE`, `/VERIFY`, `/LOG`, `/REWIND`, `/IGNORE`, … → follow-up.
+- ANALYZE: sub-mode qualifiers (`/HEADER` under `/IMAGE`, `/RMS_FILE`, …) → follow-up.
+- LINK: `/SHAREABLE`, `/DEBUG`, `/SYSLIB`, … → follow-up.
+- EDIT: OVMX EDIT is line-mode EDT only, so `/TPU`, `/EDT`, `/READ_ONLY`,
+  `/COMMAND=`, `/OUTPUT=`, … draw honest IVQUAL instead of being silently
+  ignored (the current facade). Full editor-mode grammar → follow-up.
+
+**5 verbs still kept `quals == NULL` on purpose** (not counted, reason each):
+- **MAIL, INSTALL** — true pass-through delegators: forward EVERY qualifier
+  verbatim to the child SYS$SYSTEM:*.EXE, which validates authentically. A
+  DCL-side table would wrongly reject valid child qualifiers.
+- **RUN** — self-validates through its oracle-pinned `run_process_qualifiers[]`
+  layer (shortest-unique-prefix abbreviation over two HELP topics); a flat CDU
+  table would fight that logic.
+- **LIBRARY** — full LIBRARIAN grammar; the self-hosting MMK corpus
+  (`tests/corpus/tier3-mmk`) drives `/REPLACE`, `/COMPRESS`, `/DELETE`, `/VAX`
+  that the handler routes by param-count rather than reading, so a "what it
+  reads" table would break those builds. Needs the full grammar → follow-up.
+- **READ, WRITE** — control-flow qualifiers (READ `/END_OF_FILE=label`,
+  `/ERROR=label`; WRITE `/SYMBOL`, `/ERROR=label`) want REAL branch/symbol
+  semantics, not restriction. `WRITE/SYMBOL` is used by the MMK corpus and
+  `READ/END=/ERR=` throughout the MX corpus; a thin table would IVQUAL them.
+  → follow-up.
+
+**Umbrellas out of scope** (own items): SET, SHOW, TCPIP — per-sub-verb nested
+CLD tables, not a single flat table.
+
+Table coverage after this pass: **45 of 54 verbs carry qualifier tables**
+(remaining 9: INSTALL, LIBRARY, MAIL, READ, RUN, SET, SHOW, TCPIP, WRITE).
+
+Tests (fail on the pre-rollout accept-all state): `test_ivqual_rollout_tail.sh`
+(bogus qualifier → IVQUAL/2288 on each newly-tabled verb, plus positive
+controls proving real qualifiers — ANALYZE/IMAGE, LINK/MAP, PRODUCT/SOURCE,
+MOUNT/SYSTEM, BACKUP/SAVE_SET — still parse).

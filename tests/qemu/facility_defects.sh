@@ -455,6 +455,7 @@ pcb-per-thread
 bind-client-no-register
 creprc-handshake-eintr
 run-detached-name-dropped
+delprc-privcheck-bypassed
 creprc-detach-intermediate-reaped
 run-detached-not-detached
 run-image-qualifier-refused
@@ -3430,6 +3431,44 @@ EOF
                       ;;
         esac;;
 
+    delprc-privcheck-bypassed)
+        case "$_f" in
+        facility)     echo "process deletion -- sys\$delprc's own GROUP/WORLD privilege gate for a process target (the DCL STOP command's process-target forms, src/libvms/syssvc/sys_process.c)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        # PRODUCT-half defect, the same class as run-detached-name-dropped and
+        # creprc-handshake-eintr above: the property lives in sys$delprc
+        # (libvms), NOT in vms.ko, so no kernel mutation can reach it.
+        # sys$delprc RESOLVES and AUTHORISES the target THROUGH the executive
+        # (vms_kif_getjpi_prcnam/_pid), then applies the DCL Dictionary's
+        # GROUP/WORLD rule ITSELF before the terminating kill(). This mutation
+        # makes that refusal structurally unreachable -- the always-false
+        # `if (0 ...)` idiom access-mode-escalation and dclast-super-mode-
+        # escalation also use -- so a caller holding NEITHER GROUP nor WORLD is
+        # no longer refused a same-group target: sys$delprc falls through to the
+        # kill and returns SS$_NORMAL.
+        #
+        # MEASURED as isolated to the ONE SS$_NOPRIV assertion (P3), NOT the
+        # sibling "still ALIVE" check in the same block: the target is the
+        # suite's OWN $CREPRC child, so a helper that wrongly kills it only
+        # turns it into a ZOMBIE of the main test process, and kill(zombie, 0)
+        # still returns 0 -- the suite documents exactly this footgun in
+        # wait_and_reap()'s comment. The "still ALIVE" assertion therefore
+        # cannot observe the kill and stays green; only the SS$_NOPRIV status
+        # the privilege-stripped helper reads back changes. P1/P2 (whose caller
+        # holds WORLD, so `authorized` was already true) are untouched.
+        suites_red)   echo "test_syssvc_delprc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$delprc stops enforcing the DCL Dictionary's GROUP/WORLD rule for a process target: a caller holding NEITHER GROUP nor WORLD is allowed to delete a process in its own UIC group. Resolution, naming, the cross-process kill and the caller==target self-delete path are all untouched -- only the privilege refusal is made unreachable, so a same-group STOP that must be refused SS\$_NOPRIV is reported SS\$_NORMAL instead.";;
+        require_fail) cat <<'EOF'
+P3: sys$delprc refuses a same-group target without GROUP privilege (SS$_NOPRIV, DCL Dictionary STOP)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     creprc-detach-intermediate-reaped)
         case "$_f" in
         facility)     echo "detachment in \$CREPRC's PRC\$M_DETACH path (src/libvms/syssvc/sys_process.c)";;
@@ -5299,6 +5338,18 @@ apply_edit() {
         # The ONE edit: RUN/DETACHED hands $CREPRC no process name. Every
         # other argument, and every other line of the command, is untouched.
         sed -i 's|                                 prc_d.dsc\$a_pointer ? \&prc_d : NULL,|                                 NULL, /* NEGCTL run-detached-name-dropped */|' "$_file";;
+
+    delprc-privcheck-bypassed)
+        # The ONE edit, in libvms/syssvc/sys_process.c. `if (!authorized)` is
+        # UNIQUE in the file -- it is sys$delprc's own GROUP/WORLD privilege
+        # gate, guarding the `return SS$_NOPRIV;` on the next line. Prefixing
+        # it into the always-false `if (0 ...)` makes the refusal structurally
+        # unreachable, so a privilege-stripped same-group STOP falls through to
+        # sys$delprc's terminating kill() and is reported SS$_NORMAL. After
+        # substitution the line reads `if (0 /* ... */)`, so a second apply
+        # finds no `if (!authorized)` left to match -- the idempotent no-op
+        # cmd_selftest requires. Resolution, naming and the kill are untouched.
+        sed -i 's|        if (!authorized)|        if (0 /* NEGCTL delprc-privcheck-bypassed */)|' "$_file";;
 
     creprc-detach-intermediate-reaped)
         # The ONE edit: the parent-side reap of the detach intermediate is

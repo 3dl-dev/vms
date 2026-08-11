@@ -346,6 +346,7 @@ int main(void)
                 ;
 
             CHECK(r == 4, "P3: the privilege-stripped helper reported a status");
+            /* negctl: delprc-privcheck-bypassed */
             CHECK(helper_status == SS$_NOPRIV,
                   "P3: sys$delprc refuses a same-group target without "
                   "GROUP privilege (SS$_NOPRIV, DCL Dictionary STOP)");

@@ -198,19 +198,35 @@ static const struct dcl_qual_def q_none[] = {
  * rejected (over-restriction, not a lie -- INV-DCL sec 3). Names/value-types
  * are grounded in the public VSI DCL Dictionary per-command entries.
  *
- * NOT retrofit here, with the reason (kept accept-all / NULL on purpose):
- *   - External-image delegators (the child SYS$SYSTEM:*.EXE validates its own
- *     qualifiers authentically; a DCL-side table would wrongly reject valid
- *     ones): ANALYZE, INSTALL, LINK, MAIL, MONITOR, PRODUCT, SYSGEN, SYSMAN.
+ * The tail (ANALYZE, LINK, PRODUCT, MOUNT, DISMOUNT, BACKUP, REQUEST, EDIT,
+ * ACCOUNTING, MONITOR, SYSGEN, SYSMAN) is retrofit by vms-332 -- see the
+ * "Engine A rollout, tail" tables further down; the empty-table verbs reuse
+ * q_none[] (they honour no qualifier, so any qualifier is IVQUAL).
+ *
+ * STILL NOT retrofit here, with the reason (kept accept-all / NULL on purpose):
+ *   - True pass-through delegators: MAIL and INSTALL forward EVERY qualifier
+ *     verbatim to the child SYS$SYSTEM:*.EXE, which validates them
+ *     authentically; a DCL-side table would wrongly reject valid ones. (This
+ *     is the ONLY delegator shape that keeps NULL -- ANALYZE/LINK/PRODUCT/
+ *     MONITOR read specific qualifiers and drop the rest, so they DO get a
+ *     table above.)
  *   - SET/SHOW/TCPIP umbrellas: qualifiers depend on the sub-verb (param[0]);
  *     a single flat table is wrong -- they need per-sub-verb CLD tables
  *     (Tier-2 follow-up; SET already validates several sub-verbs by hand).
- *   - RUN: self-validates through its own run_process_qualifiers[] layer.
- *   - MOUNT/DISMOUNT and BACKUP/LIBRARY: full utility qualifier grammars, each
- *     a sized follow-up like SET VOLUME's 23-qualifier retrofit was.
- *   - READ/WRITE/REQUEST/EDIT/ACCOUNTING: carry script- or interactive-
- *     critical qualifiers (/END_OF_FILE, /ERROR, /SYMBOL, /TO, /TPU, ...) that
- *     want real coverage, not just restriction -- filed as follow-ups.
+ *   - RUN: self-validates through its own run_process_qualifiers[] layer
+ *     (oracle-pinned shortest-unique-prefix + two HELP topics); a flat CDU
+ *     table would fight that abbreviation logic. Left to that layer.
+ *   - LIBRARY: full LIBRARIAN grammar (/CREATE,/REPLACE,/INSERT,/EXTRACT,
+ *     /LIST,/DELETE,/COMPRESS,/HELP,/OBJECT,/TEXT,/VAX,/OUTPUT). The
+ *     self-hosting MMK corpus (tests/corpus/tier3-mmk) uses /REPLACE,
+ *     /COMPRESS et al. that the handler routes by param-count rather than
+ *     reading, so a "what it reads" table would break those builds -- needs
+ *     the full grammar, a sized follow-up.
+ *   - READ/WRITE: control-flow qualifiers -- READ /END_OF_FILE=label and
+ *     /ERROR=label, WRITE /SYMBOL and /ERROR=label -- want REAL branch/symbol
+ *     semantics, not restriction. WRITE/SYMBOL is used by the MMK corpus and
+ *     READ/END=/ERR= throughout the MX corpus; a thin table would IVQUAL them.
+ *     Filed as follow-ups.
  */
 
 /* Logical-name placement qualifiers, shared by ASSIGN/DEFINE/DEASSIGN. The
@@ -281,14 +297,75 @@ static const struct dcl_qual_def q_recall[] = {
 };
 
 /* ================================================================== */
+/*          Engine A rollout, tail (vms-332, vms-8ad/vms-b9a)          */
+/* ================================================================== */
+/*
+ * Continues the tranche-2 rollout (vms-7543) across the remaining discrete,
+ * non-umbrella verbs. Same rule as above: each table lists EXACTLY the
+ * qualifiers its handler HONOURS (verified against the handler body), so a
+ * real qualifier parses and every other token draws the authentic
+ * %DCL-W-IVQUAL -- honest over-restriction, never a fake accept (INV-DCL sec
+ * 3). Names/value-types grounded in the public VSI OpenVMS DCL Dictionary
+ * per-command entries (project Rule 8), cited per verb below.
+ *
+ * ANALYZE (DCL Dictionary: ANALYZE) is a mode dispatcher: cmd_analyze() reads
+ * exactly the four mode selectors and re-execs ANALYZE.EXE with the chosen
+ * mode; a token that is not one of the four never reaches a mode, so it is a
+ * genuine %DCL-W-IVQUAL. (Sub-mode qualifiers -- /HEADER under /IMAGE, etc. --
+ * are a follow-up; the handler does not forward them today.) */
+static const struct dcl_qual_def q_analyze[] = {
+    { "DISK_STRUCTURE", CDU_VT_NONE, 0, NULL, NULL },
+    { "IMAGE",          CDU_VT_NONE, 0, NULL, NULL },
+    { "OBJECT",         CDU_VT_NONE, 0, NULL, NULL },
+    { "SYSTEM",         CDU_VT_NONE, 0, NULL, NULL },
+    QUAL_END
+};
+/* LINK (DCL Dictionary: LINK). cmd_link() honours /EXECUTABLE=name (output
+ * image name) and /MAP (produce a link map, /NOMAP the default); it forks the
+ * system linker for both. The wider LINK grammar (/SHAREABLE, /DEBUG,
+ * /SYSLIB, ...) is a follow-up -- not forwarded today, so honestly rejected. */
+static const struct dcl_qual_def q_link[] = {
+    { "EXECUTABLE", CDU_VT_VALUE, CDU_Q_VALREQ,    NULL, NULL },
+    { "MAP",        CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    QUAL_END
+};
+/* PRODUCT (DCL Dictionary: PRODUCT). cmd_product() honours /SOURCE=kit and
+ * /DESTINATION=device for the INSTALL/SHOW sub-verbs and re-execs PRODUCT.EXE.
+ * Both take a required value. Other PCSI qualifiers (/OPTIONS, /REMOTE, ...)
+ * are a follow-up. */
+static const struct dcl_qual_def q_product[] = {
+    { "SOURCE",      CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "DESTINATION", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
+/* MOUNT (DCL Dictionary: MOUNT). cmd_mount() honours /SYSTEM (place the
+ * device logical in LNM$SYSTEM instead of the process table); absence is the
+ * process-table default. The full MOUNT utility grammar (/OVERRIDE, /FOREIGN,
+ * /NOWRITE, /CLUSTER, ...) is a sized follow-up in the SET VOLUME mould
+ * (per-qualifier honest refusal); until then those draw %DCL-W-IVQUAL. */
+static const struct dcl_qual_def q_mount[] = {
+    { "SYSTEM", CDU_VT_NONE, 0, NULL, NULL },
+    QUAL_END
+};
+/* BACKUP (DCL Dictionary: BACKUP). cmd_backup() honours /SAVE_SET (name the
+ * output as a saveset) and /LIST (list a saveset's contents); it does real
+ * archive/restore/list I/O. The wider BACKUP grammar (/IMAGE, /VERIFY, /LOG,
+ * /REWIND, /IGNORE, ...) is a sized follow-up; until then honestly rejected. */
+static const struct dcl_qual_def q_backup[] = {
+    { "SAVE_SET", CDU_VT_NONE, 0, NULL, NULL },
+    { "LIST",     CDU_VT_NONE, 0, NULL, NULL },
+    QUAL_END
+};
+
+/* ================================================================== */
 /*                     Command Table                                   */
 /* ================================================================== */
 
 static struct dcl_verb builtin_verbs[] = {
     { "ACCOUNTING",  cmd_accounting,  CDU_F_ABBREV | CDU_F_QUALIFIER, 4,
-      "Display login accounting information for the current user" },
+      "Display login accounting information for the current user", q_none },
     { "ANALYZE",     cmd_analyze,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
-      "Analyze system components" },
+      "Analyze system components", q_analyze },
     { "APPEND",      cmd_append,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Append source file to destination file", q_none },
     { "ASSIGN",      cmd_assign,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
@@ -296,7 +373,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "ATTACH",      cmd_attach,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Transfer terminal control to another process", q_attach },
     { "BACKUP",      cmd_backup,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "Create, restore, or list a saveset file" },
+      "Create, restore, or list a saveset file", q_backup },
     { "CLOSE",       cmd_close,       CDU_F_ABBREV | CDU_F_PARAM, 2,
       "Close a file that was opened for I/O", q_none },
     { "CONTINUE",    cmd_continue,    CDU_F_ABBREV, 4,
@@ -318,11 +395,11 @@ static struct dcl_verb builtin_verbs[] = {
     { "DIRECTORY",   cmd_directory,   CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "List files in a directory", q_directory },
     { "DISMOUNT",    cmd_dismount,    CDU_F_ABBREV | CDU_F_PARAM, 4,
-      "Dismount a volume from a device" },
+      "Dismount a volume from a device", q_none },
     { "DUMP",        cmd_dump,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Display contents of a file in hexadecimal and ASCII", q_dump },
     { "EDIT",        cmd_edit,        CDU_F_ABBREV | CDU_F_PARAM, 2,
-      "Invoke the EDT text editor" },
+      "Invoke the EDT text editor", q_none },
     { "EXIT",        cmd_exit,        CDU_F_ABBREV, 2,
       "Terminate a command procedure or session", q_none },
     { "HELP",        cmd_help,        CDU_F_ABBREV | CDU_F_PARAM, 2,
@@ -334,15 +411,15 @@ static struct dcl_verb builtin_verbs[] = {
     { "LIBRARY",     cmd_library,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Manage text, help, and object libraries" },
     { "LINK",        cmd_link,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "Link object modules into executable image" },
+      "Link object modules into executable image", q_link },
     { "LOGOUT",      cmd_logout,      CDU_F_ABBREV, 2,
       "Terminate an interactive session", q_none },
     { "MAIL",      cmd_mail,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Send and receive electronic mail messages" },
     { "MONITOR",   cmd_monitor,   CDU_F_ABBREV | CDU_F_PARAM, 3,
-      "Display real-time system activity statistics" },
+      "Display real-time system activity statistics", q_none },
     { "MOUNT",       cmd_mount,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "Mount a volume on a device" },
+      "Mount a volume on a device", q_mount },
     { "OPEN",        cmd_open,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Open a file for reading or writing", q_open },
     { "PHONE",       cmd_phone,       CDU_F_ABBREV | CDU_F_PARAM, 3,
@@ -352,7 +429,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "PRINT",       cmd_print,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Queue a file for printing", q_print },
     { "PRODUCT",     cmd_product,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
-      "Software product management" },
+      "Software product management", q_product },
     { "PURGE",       cmd_purge,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Delete old versions of a file", q_purge },
     { "RECALL",    cmd_recall,    CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
@@ -364,7 +441,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "REPLY",       cmd_reply,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Send an operator reply or enable/disable operator terminal", q_reply },
     { "REQUEST",     cmd_request,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "Send a request message to the operator" },
+      "Send a request message to the operator", q_none },
     { "RUN",         cmd_run,         CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Execute a program image" },
     { "SEARCH",      cmd_search,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
@@ -382,9 +459,9 @@ static struct dcl_verb builtin_verbs[] = {
     { "SUBMIT",      cmd_submit,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Submit a command procedure to a batch queue", q_submit },
     { "SYSGEN",      cmd_sysgen,      CDU_F_ABBREV | CDU_F_PARAM, 4,
-      "Invoke SYSGEN system parameter utility" },
+      "Invoke SYSGEN system parameter utility", q_none },
     { "SYSMAN",      cmd_sysman,      CDU_F_ABBREV | CDU_F_PARAM, 4,
-      "Invoke SYSMAN system management utility" },
+      "Invoke SYSMAN system management utility", q_none },
     { "TCPIP",       cmd_tcpip,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "TCP/IP Services network management commands" },
     { "TYPE",        cmd_type,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,

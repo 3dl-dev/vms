@@ -43,9 +43,23 @@
 
 set -uo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 IMAGE="${1:-ovmx-boot:latest}"
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
+
+# Runs on the HOST (see header), so -- unlike the container-internal QEMU
+# tests -- it can read the identity SSOT (INV-1) directly instead of
+# pinning the boot banner as a literal (vms-1d28: the V0.3-1 point release
+# found this file pinning "OpenVMX V0.3"). Same sed idiom tools/cut-
+# release.sh uses.
+IDENTITY_HEADER="$REPO_ROOT/src/libvms/include/ovmx_identity.h"
+PRODUCT_NAME="$(sed -n 's/^#define[[:space:]]\+OVMX_PRODUCT_NAME[[:space:]]\+"\([^"]*\)".*/\1/p' "$IDENTITY_HEADER" | head -1)"
+PRODUCT_VERSION="$(sed -n 's/^#define[[:space:]]\+OVMX_PRODUCT_VERSION[[:space:]]\+"\([^"]*\)".*/\1/p' "$IDENTITY_HEADER" | head -1)"
+[ -n "$PRODUCT_NAME" ] || { echo "FATAL: could not read OVMX_PRODUCT_NAME from $IDENTITY_HEADER"; exit 1; }
+[ -n "$PRODUCT_VERSION" ] || { echo "FATAL: could not read OVMX_PRODUCT_VERSION from $IDENTITY_HEADER"; exit 1; }
+EXPECTED_BOOT_BANNER="$PRODUCT_NAME $PRODUCT_VERSION"
 
 BOOT1_LOG="$WORKDIR/boot1.log"
 BOOT2_LOG="$WORKDIR/boot2.log"
@@ -118,7 +132,7 @@ echo ""
 
 check "Container 1: install started" "$BOOT1_OUTPUT" "%STARTUP-I-INSTALL"
 check "Container 1: install completed" "$BOOT1_OUTPUT" "%STARTUP-I-INSTALLED"
-check "Container 1: boot banner" "$BOOT1_OUTPUT" "OpenVMX V0.3"
+check "Container 1: boot banner" "$BOOT1_OUTPUT" "$EXPECTED_BOOT_BANNER"
 check "Container 1: reached login prompt" "$BOOT1_OUTPUT" "Username:"
 
 if [ ! -f "$WORKDIR/sysdisk.img" ]; then

@@ -10086,6 +10086,88 @@ static void test_poll_refresh_tick_drives_the_daemon_loop(void)
     (void)unsetenv("OVMX_PROCESS_POLLER");
 }
 
+/*
+ * vms-a63 (spec sec 4(i).B / 4(O.19)/4(O.20)) -- THE REJOIN FREEZE, at the frame.
+ *
+ * content[22:24] (abs 36) is the node-incarnation counter (sec 4(i).B, GROUNDED
+ * 1->2->3 across the af2 first-timer specimens; a per-source-node constant in
+ * every capture). scs_reflect_credit() builds OVMX's op-9 by memcpy-ing the
+ * received op-8 and rewriting seq/op/conids/length -- but it used to leave
+ * [36:38] inherited, so an op-8 FROM the coordinator (incarnation 1) made OVMX's
+ * op-9 carry 1 while OVMX advertised 2 on every envelope frame. That inconsistent
+ * incarnation is the frame the coordinator freezes recv_seq on (op-9 ss=11,
+ * sec 4(O.19)).
+ *
+ * FAIL-PRE / PASS-POST at the frame level: with the fix OVMX's op-9 carries its
+ * OWN incarnation (2); under the OVMX_CREDIT_NO_INCARN_ECHO kill-switch it
+ * reverts to the inherited coordinator value (1) -- the control arm that
+ * re-freezes recv_seq. A receiver that only advances recv_seq past ss=10 when
+ * ss=11 is a well-formed same-incarnation frame therefore climbs past 10 with the
+ * fix and stays frozen at 10 without it.
+ */
+static void test_rejoin_op9_stamps_our_own_incarnation(void)
+{
+    struct world w;
+    world_init(&w);
+    uint8_t peer_mac[6];
+    mac_of(0x73, peer_mac);
+    uint8_t sysid[6];
+    sysid_of(1025, sysid);
+    struct peer_state *ps = peer_find_or_add(&w.cfg, &w.pdt, w.peers, peer_mac);
+    CHECK(ps != NULL, "no peer slot for the op-9 incarnation test");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&w.cfg, ps, sysid);
+    scs_vc_init(&ps->vc);
+    /* An op-9 is a sequenced message; send_frame_vc refuses it on a circuit
+     * that is not OPEN. Bring the Path Block to OPEN (the happy-path dialogue
+     * reaches the same state via START/STACK/ACK). */
+    ps->pb->vc_state = SCS_VC_OPEN;
+    /* The member advertised incarnation 2 to a rejoining OVMX (sec 4i.B); the
+     * HELLO path stored it here. Every envelope builder already stamps it. */
+    ps->incarnation = 2;
+
+    /* A received op-8 special-credit message FROM the coordinator: built from
+     * the grounded 76-byte directory template, op set to 8, and [36:38] set to
+     * the COORDINATOR's own incarnation 1 -- exactly what the coordinator puts
+     * on the wire (per-source constant, sec 4(O.19)). scs_reflect_credit reads
+     * their send_seq at buf[34:35] and the Con.ID pair at buf[64:72]. */
+    uint8_t op8[76];
+    memcpy(op8, scs_dir_disc_tmpl, sizeof(op8));
+    op8[60] = 8; op8[61] = 0;             /* op = 8 (special-credit message) */
+    op8[34] = 10; op8[35] = 0;            /* their send_seq = 10 */
+    op8[36] = 1;  op8[37] = 0;            /* coordinator incarnation = 1 */
+
+    (void)unsetenv("OVMX_CREDIT_NO_INCARN_ECHO");
+    scsd_test_frames = 0;
+    int sent = scs_reflect_credit(7, 1, ps, our_hw_mac, our_logical, op8, sizeof(op8));
+    CHECK(sent == 1, "scs_reflect_credit did not emit an op-9");
+    CHECK(scsd_test_last_frame[60] == 9, "reflected frame is op %u, expected op-9",
+          scsd_test_last_frame[60]);
+    CHECK(le16_at(scsd_test_last_frame + 36) == 2,
+          "PASS-POST: OVMX's op-9 carries incarnation %u at [22:24], expected its OWN"
+          " incarnation 2 (not the coordinator's 1) -- this is the frame the"
+          " coordinator freezes recv_seq on (sec 4(O.19))",
+          le16_at(scsd_test_last_frame + 36));
+
+    /* Control arm: the kill-switch restores the inherited (wrong) value, which is
+     * exactly the pre-fix behaviour that froze recv_seq at 10. */
+    (void)setenv("OVMX_CREDIT_NO_INCARN_ECHO", "1", 1);
+    scs_vc_init(&ps->vc);
+    ps->pb->vc_state = SCS_VC_OPEN;
+    ps->novc_logged = 0;
+    ps->incarnation = 2;
+    scsd_test_frames = 0;
+    sent = scs_reflect_credit(7, 1, ps, our_hw_mac, our_logical, op8, sizeof(op8));
+    CHECK(sent == 1, "scs_reflect_credit did not emit an op-9 under the kill-switch");
+    CHECK(le16_at(scsd_test_last_frame + 36) == 1,
+          "FAIL-PRE (control): with OVMX_CREDIT_NO_INCARN_ECHO the op-9 inherits the"
+          " coordinator's incarnation %u at [22:24], expected 1 -- the frozen frame",
+          le16_at(scsd_test_last_frame + 36));
+    (void)unsetenv("OVMX_CREDIT_NO_INCARN_ECHO");
+}
+
 int main(void)
 {
     /* THE FAILURE STREAM, taken before anything can dup2() over fd 2. See
@@ -10113,6 +10195,8 @@ int main(void)
     /* vms-2f3 / vms-096: the DAEMON's [66:74] and [98:106], not the builder's. */
     test_vc_start_carries_a_live_per_boot_incarnation();
     test_vc_happy_path_frame_sequence();
+    /* vms-a63: op-9 [22:24] carries OVMX's OWN incarnation (the rejoin freeze). */
+    test_rejoin_op9_stamps_our_own_incarnation();
     test_vc_early_ack_is_opt_in();
     test_vc_open_on_bare_ack_still_sends_round_2();
     test_vc_implied_ack_through_the_daemon();

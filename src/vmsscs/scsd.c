@@ -5971,6 +5971,37 @@ static int scs_reflect_credit(int sock, int ifindex, struct peer_state *ps,
     r[48] = (uint8_t)rseq; r[49] = (uint8_t)(rseq >> 8);
     r[34] = (uint8_t)sseq; r[35] = (uint8_t)(sseq >> 8);
     r[44] = (uint8_t)sseq; r[45] = (uint8_t)(sseq >> 8);
+    /* vms-a63 (spec sec 4(i).B / 4(O.19)/4(O.20)) -- THE REJOIN FREEZE. Stamp
+     * OVMX's OWN node-incarnation at [22:24] (abs 36). content[22:24] is the
+     * node-incarnation counter, GROUNDED byte-exact in sec 4(i).B across the
+     * af2 first-timer specimens (1->2->3), and it is a per-SOURCE-NODE constant
+     * over every capture we hold: in the SUCCESS rejoin oracle
+     * (vax3-class03-crash-REJOIN-SUCCESS) the rejoiner stamps 2 on 10495/10495
+     * of its frames -- op-6/7/8/9 and application MTYPE-10 alike -- and the two
+     * established members stamp 1 on 8216/8216 of theirs; it never varies by
+     * peer, op, or seq. It is the SAME [22:24] echo the vms-691 fix already
+     * stamps on the 0x41 START via every envelope builder (ps_fill_mscp,
+     * scs_member/scs_connect/scs_dir all write put_le16(out+14+22,
+     * ps->incarnation)).
+     *
+     * The memcpy above inherits the op-8 REQUEST's [36:38]. An op-8 FROM the
+     * coordinator carries the COORDINATOR's incarnation (1), so OVMX's op-9
+     * reply -- which must carry OVMX's incarnation (2 on a rejoin, advertised
+     * back to OVMX in the member's directed-HELLO [78:80] and read into
+     * ps->incarnation) -- went out stamped 1. A rejoining node that advertises
+     * incarnation 2 on every envelope frame but 1 on its op-9 (ss=11) presents
+     * an inconsistent incarnation; the coordinator FREEZES its per-VC recv_seq
+     * at ss=10 and never advances past that one frame (sec 4(O.19): op-9 ss=11,
+     * op-6 ss=12 and the deferred op 0x02 ss=13 all ride behind the freeze ->
+     * cm_responses=0, XITDONE=0). Derive, never inherit -- the identical vms-760
+     * rule the length words below already follow. Measured live at vaxlab-0:
+     * OVMX stamps 2 on its op-0/1/2/3/10 but 1 on op-9 (the frozen frame).
+     * OVMX_CREDIT_NO_INCARN_ECHO=1 restores the inherited value (the control
+     * arm: recv_seq stays frozen at 10). */
+    if (getenv("OVMX_CREDIT_NO_INCARN_ECHO") == NULL) {
+        uint16_t inc = ps->incarnation ? ps->incarnation : 1u;
+        r[36] = (uint8_t)inc; r[37] = (uint8_t)(inc >> 8);
+    }
     r[60] = (uint8_t)(buf[60] + 1);            /* op 6->7 / 8->9 */
     r[61] = 0;
     /* vms-2f3 sec 4M.18: the memcpy above inherits the REQUEST's msgtype at
@@ -6100,6 +6131,15 @@ static int scs_send_disconnect_self(int sock, int ifindex, struct peer_state *ps
     d[34] = (uint8_t)sseq; d[35] = (uint8_t)(sseq >> 8);
     d[44] = (uint8_t)sseq; d[45] = (uint8_t)(sseq >> 8);
 
+    /* vms-a63: stamp OVMX's node-incarnation at [22:24] (abs 36), same rule as
+     * scs_reflect_credit -- scs_dir_disc_tmpl hard-codes [36:38]=0x0100 (=1),
+     * but a rejoining OVMX must present its own incarnation (2). Derive, never
+     * inherit. OVMX_CREDIT_NO_INCARN_ECHO=1 restores the template value. */
+    if (getenv("OVMX_CREDIT_NO_INCARN_ECHO") == NULL) {
+        uint16_t inc = ps->incarnation ? ps->incarnation : 1u;
+        d[36] = (uint8_t)inc; d[37] = (uint8_t)(inc >> 8);
+    }
+
     /* Con.ID pair: remote = the peer's handle on OUR server dir connection,
      * local = ours. */
     uint32_t rc = ps->dir_remote_conid;
@@ -6156,6 +6196,16 @@ static int scs_send_rejoin_credit_op6(int sock, int ifindex, struct peer_state *
     d[48] = (uint8_t)rseq; d[49] = (uint8_t)(rseq >> 8);
     d[34] = (uint8_t)sseq; d[35] = (uint8_t)(sseq >> 8);
     d[44] = (uint8_t)sseq; d[45] = (uint8_t)(sseq >> 8);
+
+    /* vms-a63: stamp OVMX's node-incarnation at [22:24] (abs 36) -- this op-6
+     * rides the coordinator VC at ss=12, right behind the op-9 ss=11 freeze
+     * frame (sec 4(O.19)); once the op-9 fix unfreezes recv_seq to 11, this op-6
+     * must ALSO carry the correct incarnation or it re-freezes at 11. Derive,
+     * never inherit; OVMX_CREDIT_NO_INCARN_ECHO=1 restores the template value. */
+    if (getenv("OVMX_CREDIT_NO_INCARN_ECHO") == NULL) {
+        uint16_t inc = ps->incarnation ? ps->incarnation : 1u;
+        d[36] = (uint8_t)inc; d[37] = (uint8_t)(inc >> 8);
+    }
 
     /* Con.ID pair: remote = the coordinator's handle on OUR server dir
      * connection, local = ours (the same 0x0C640007/0x8DE4000D pair the freeze

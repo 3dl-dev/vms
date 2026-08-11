@@ -85,6 +85,14 @@ set -uo pipefail
 
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-90}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-90}"
+
+# Threaded from run_upgrade_e2e.sh, which reads each cut's OWN
+# release-manifest.json (never a literal here) -- see that script's
+# manifest_version(). REQUIRED: an unset value would silently make the
+# post-upgrade version check compare against the empty string.
+: "${EXPECTED_BASELINE_VERSION:?EXPECTED_BASELINE_VERSION not set (run via run_upgrade_e2e.sh)}"
+: "${EXPECTED_UPGRADE_VERSION:?EXPECTED_UPGRADE_VERSION not set (run via run_upgrade_e2e.sh)}"
+
 KERNEL=/upgrade-release/vmlinuz
 INITRD=/upgrade-release/initramfs-ovmx-slim.cpio.gz
 DISTRIB_IMG=/upgrade-release/ovmx-distrib.img
@@ -329,8 +337,8 @@ send 'PRODUCT SHOW PRODUCT /DESTINATION=DKA100:'  # GUIDE-STEP (docs/upgrade-gui
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 UPG_SHOW=$(segment_since "$OFF")
 echo "$UPG_SHOW"
-if printf '%s\n' "$UPG_SHOW" | grep -qF 'V0.2' && ! printf '%s\n' "$UPG_SHOW" | grep -qF 'V0.1'; then
-    ok "(c) PRODUCT SHOW PRODUCT reports the UPGRADE version (V0.2), not the baseline"
+if printf '%s\n' "$UPG_SHOW" | grep -qF "$EXPECTED_UPGRADE_VERSION" && ! printf '%s\n' "$UPG_SHOW" | grep -qF "$EXPECTED_BASELINE_VERSION"; then
+    ok "(c) PRODUCT SHOW PRODUCT reports the UPGRADE version ($EXPECTED_UPGRADE_VERSION), not the baseline ($EXPECTED_BASELINE_VERSION)"
 else
     dump_and_die "(c) PRODUCT SHOW PRODUCT does not show the advanced version after the upgrade: $UPG_SHOW"
 fi
@@ -377,7 +385,7 @@ OFF=$(wc -c <"$LOG")
 send 'PRODUCT SHOW PRODUCT /DESTINATION=DKA100:'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qF 'V0.2'; then
+if printf '%s\n' "$SEG" | grep -qF "$EXPECTED_UPGRADE_VERSION"; then
     ok "(c) the advanced version persists across a full QEMU restart (disk, not tmpfs)"
 else
     dump_and_die "(c) the advanced version did not persist across the QEMU restart: $SEG"

@@ -68,6 +68,26 @@ for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img ovmx-os.kit; do
     [ -f "$UPGRADE_DIR/$f" ]  || { echo "FATAL: $UPGRADE_DIR/$f missing"; exit 1; }
 done
 
+# The versions the test asserts against come from each cut's OWN
+# release-manifest.json (written by tools/cut-release.sh from the
+# archived commit's ovmx_identity.h, INV-1) -- never a literal in this
+# script or in test_upgrade_e2e.sh. This is what lets the PINNED baseline
+# commit (28a929b2, see test_upgrade_e2e.sh's header) keep working
+# unmodified across every future OVMX_PRODUCT_VERSION bump: the UPGRADE
+# side is "this workflow's own commit (HEAD)", whatever version that is.
+manifest_version() {
+    grep '"product_version"' "$1/release-manifest.json" | head -1 \
+        | sed -n 's/.*"product_version": "\([^"]*\)".*/\1/p'
+}
+EXPECTED_BASELINE_VERSION="$(manifest_version "$BASELINE_DIR")"
+EXPECTED_UPGRADE_VERSION="$(manifest_version "$UPGRADE_DIR")"
+[ -n "$EXPECTED_BASELINE_VERSION" ] || { echo "FATAL: could not read product_version from $BASELINE_DIR/release-manifest.json"; exit 1; }
+[ -n "$EXPECTED_UPGRADE_VERSION" ]  || { echo "FATAL: could not read product_version from $UPGRADE_DIR/release-manifest.json"; exit 1; }
+if [ "$EXPECTED_BASELINE_VERSION" = "$EXPECTED_UPGRADE_VERSION" ]; then
+    echo "FATAL: baseline and upgrade cuts report the SAME product_version ($EXPECTED_BASELINE_VERSION) -- the upgrade assertion would be vacuous."
+    exit 1
+fi
+
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     if [ "${OVMX_BUILD_BOOT_IMAGE:-0}" = "1" ]; then
         echo "--- building bootable image ($IMAGE) ---"
@@ -124,6 +144,8 @@ cp "$UPGRADE_DIR/ovmx-os.kit"  "$KITSTAGE/OVMX-OS-UPGRADE.KIT"
 exec docker run --rm \
     -e "BOOT_TIMEOUT=${BOOT_TIMEOUT:-90}" \
     -e "RUN_TIMEOUT=${RUN_TIMEOUT:-90}" \
+    -e "EXPECTED_BASELINE_VERSION=${EXPECTED_BASELINE_VERSION}" \
+    -e "EXPECTED_UPGRADE_VERSION=${EXPECTED_UPGRADE_VERSION}" \
     -v "$REPO_ROOT/tests/qemu/test_upgrade_e2e.sh:/test.sh:ro" \
     -v "$UPGRADE_DIR:/upgrade-release:ro" \
     -v "$WORKDIR:/work" \

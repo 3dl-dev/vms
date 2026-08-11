@@ -10598,6 +10598,28 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
           "JOIN-ABANDONED text must NO LONGER claim a persistent 'held before' block"
           " (refuted by the §4(O.28) brackets), got %s",
           readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    /* vms-942 (spec §4(O.31)) fail-pre/pass-post: the AUTHENTIC member-side
+     * engagement RE'd from a real-VAX returning-node capture is member-DRIVEN and
+     * three-party -- the member OPENS a VMS$VAXcluster config connection to the
+     * returner, the returner sends op 0x02 on it, and the member drives op 0x12
+     * RELAY to the other member (Davis p.7-39) THEN op 0x03 COMMIT. A fresh
+     * virgin-pod current-HEAD F1-vs-J bracket proved the DEFAULT cleanleave return
+     * does NOT admit: op 0x02 lands on a NON-coordinating member and the op 0x12
+     * RELAY (present first-join, ABSENT return) never fires. The text must cite
+     * §4(O.31), name the op 0x12 RELAY discriminator, and NO LONGER carry §4(O.29)'s
+     * stale "the default path admits" claim (refuted by the current-HEAD bracket:
+     * admitted=0). Before vms-942 it said "the default path admits". */
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "4(O.31)") != NULL,
+          "JOIN-ABANDONED text must cite the authentic member-side engagement RE"
+          " spec 4(O.31), got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "op 0x12 RELAY") != NULL,
+          "JOIN-ABANDONED text must name the op 0x12 RELAY wire discriminator"
+          " (present first-join, absent return -- §4(O.31)), got %s",
+          readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "the default path admits") == NULL,
+          "JOIN-ABANDONED text must NO LONGER claim 'the default path admits'"
+          " (refuted by the current-HEAD F1-vs-J bracket: admitted=0 -- §4(O.31)),"
+          " got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
     /* The real Rr shape: op02 driven, but OVMX's VC ended CONNSTUCK so the open
      * latch never fired. Still JOIN-ABANDONED -- the driven-op02 fact governs. */
     ps->vaxcluster_open_reached = 0;

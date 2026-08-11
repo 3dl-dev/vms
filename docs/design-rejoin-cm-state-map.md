@@ -922,3 +922,100 @@ Evidence (host, tank volume): RE captures `/data/training/vax/k8s-labs/vaxlab-0/
 `src/vmsscs/scs_hello.c` (`scs_hello_build_lastgasp_frame`), `src/vmsscs/include/scs_hello.h`
 (`SCS_HELLO_PFW_LASTGASP`), `src/vmsscs/scsd.c` (`scsd_emit_port_lastgasp`). Runner
 `tests/lab/tools/abrun.sh`. *VAXcluster Principles* p. 7-29.
+
+## 15. The AUTHENTIC member-side engagement RE'd from a real-VAX return; OVMX's op 0x12 RELAY is absent because the coordinating member never re-opens to the returner (`vms-942`, spec §4(O.31))
+
+§14 (`vms-708`) shipped the authentic clean-leave removal (safe) and left the frontier at
+"after a clean departure the members still run ZERO CM responses for a returning SCSSYSTEMID"
+— a member-side ENGAGEMENT question independent of the removal signal. Every prior increment
+observed the return only from OVMX's side; NONE had decoded, at the CM-op level, how a REAL
+VAX member ENGAGES a returning REAL node. `vms-942` RE's that authentic reference and diffs
+OVMX's return against it on a fresh virgin pod with the current-HEAD daemon. It ships no wire
+change (guard 8; the working first-join path is byte-unchanged).
+
+### 15.1 The authentic reference — member-DRIVEN, three-party, op 0x12 RELAY gates the commit
+
+`cluster/captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap` — real VAX3
+(`08:00:2b:11:22:33`) returns to VAX1 (`aa:00:04:00:01:04`) + VAX2 (`08:00:2b:78:56:b9`) and
+IS re-admitted. Decoded per member with `docs/clean-room/tools/cmdiff.py`, the readmission a
+real member runs for the returner (VAX2m↔VAX3r window, t≈111.18–111.60 s):
+
+1. **VAX2m OPENS** its own `VMS$VAXcluster` config connection TO VAX3r (MODEL+PARAMS, mt 0x5b)
+   — the MEMBER opens; VAX3r answers as TARGET and originates no outbound connect.
+2. **VAX3r → VAX2m op 0x02-CONFIG** (t=111.595) — the returner's join request, on the
+   member-opened connection.
+3. **VAX2m → VAX1 op 0x12-RELAY** (t=111.596), **VAX1 → VAX2m op 0x12-RELAY.r** (t=111.597) —
+   the member relays the join to the OTHER member and gets connectivity confirmation. This is
+   the three-party Rule of Total Connectivity (Davis p.7-39).
+4. **VAX2m → VAX3r op 0x03-COMMIT** (t=111.598) — ONLY NOW does the member commit the returner
+   (Phase 2, pp.7-41/7-42).
+5. op 0x05-LOCKRB burst → op 0x06-MEMB burst → VAX3 is `member`.
+
+VAX1 runs the symmetric sequence toward VAX3 in the same window (§4.1, f1200–1263); the two
+established members then reconcile the membership between themselves (op 0x0c) INCLUDING VAX3.
+Per Davis pp.7-24/7-25 a rejoin has NO distinct CM transaction — the old CSB is deallocated
+and a fresh one built "just as if it were joining for the first time" — so this IS the
+first-join engagement, and it is the authentic reference regardless of whether the prior
+incarnation left by crash or by clean last-gasp (§14/§4(O.30)). **The op 0x12 RELAY sits
+between op 0x02 and op 0x03 and is the commit gate.**
+
+### 15.2 OVMX's return diverges at step 1 — same-capture F1-vs-J bracket (GROUNDED)
+
+Fresh virgin `vaxlab-0`, current-HEAD daemon (`md5=d782c6943123f3a34d2d0270090c10d3`, built
+from `origin/main` HEAD), `abrun.sh` identity `OVXAB0`: F1 fresh first-join → clean last-gasp
+depart → 32 s settle → J return the SAME identity, tcpdump on `br0` + coordinator SDA.
+
+| step | F1 first-join (`XITDONE=1`, `admitted=2`) | J return (`XITDONE=0`, `admitted=0`) |
+|---|---|---|
+| OVMX op 0x02 target | **node 2** (`08:00:2b:8e:b7:85`), t=26.005 | **node 1** (`aa:00:04:00:01:04`), t=117.861 |
+| receiving member → other member op 0x12-RELAY | **present** (node2→VAX1, t=26.005) | **ABSENT** |
+| receiving member → OVMX op 0x03-COMMIT | **present** (node2→OVMX, t=26.006) | **ABSENT** |
+| that member's verdict | admitted | node1 = `JOIN-ABANDONED` |
+| the F1-admitting member on the return | — | node2 = `NO-ENGAGE`, `SYSAP never re-opened`, `member_vc=DISC ACK` |
+| coordinator console | `proposing addition of system OVXAB0` | `proposing_delta=0` |
+
+OVMX's op 0x02 body is byte-identical across F1 and J (all-zeros after the `01 02 … 00 02`
+header), so op 0x02 CONTENT is not the discriminator — the member accepts OVMX's lean op 0x02
+on the first join. The discriminator is **which member receives op 0x02, and whether that
+member re-opened its member-driven connection to the returner.** On F1, op 0x02 reaches node 2,
+which had opened a `VMS$VAXcluster` config connection to OVMX, so it relays (op 0x12) and
+commits (op 0x03) — exactly the authentic sequence. On the return, the F1-admitting member
+(node 2, the op 0x12-RELAY driver) does **NOT** re-open its member-driven connection to the
+returning OVMX, so `cm_pick_coordinator` sees only node 1, op 0x02 lands on node 1 (not driving
+the transition), and no relay/commit follows. **The wire discriminator is the op 0x12 RELAY:
+present between op 0x02 and op 0x03 on the first-join, absent on the return.**
+
+### 15.3 Relocated frontier + fix design (member-side; no wire change ships)
+
+The gate is now pinned to a SPECIFIC missing step: **the coordinating member does not (re)open
+its member-driven `VMS$VAXcluster` connection to the returner, so the returner's op 0x02 never
+reaches a member that will RELAY it.** This is a MEMBER decision OVMX cannot force by a routing
+or op 0x02-body change: `cm_pick_coordinator`'s own grounding (vms-2f3 run s3C) already forced
+op 0x02 to the SDA-named coordinator on a refused identity and it was refused identically, and
+forcing op 0x02 to a peer whose config never completed sends nothing. A speculative control
+frame toward a live VAX in this region is the RE'd crash class (§4(O.29) op-0x0d bugcheck;
+`cm_response_shape`'s two-VAX-crash precedent). The next isolation instruments, PER MEMBER on
+the return: (a) whether that member issues a `VMS$VAXcluster` CONNECT-REQ to the returner at
+all, and if so what OVMX answers that fails to reach OPEN (vs the first-join answer that
+succeeds); (b) whether a longer/quieter settle lets the member fully deallocate+rebuild the
+returner's CSB before the return; (c) whether OVMX must present, on the SURVIVING member
+connection, the signal that makes the coordinating member re-discover the returner as fresh.
+
+### 15.4 What `vms-942` ships (no wire change)
+
+1. This record (§15), spec §4(O.31), and the authentic-reference decode.
+2. A `READMITMAP` verdict-text CORRECTION: the `JOIN-ABANDONED` string dropped §4(O.29)'s
+   stale "the default path admits" claim (refuted by the current-HEAD F1-vs-J bracket:
+   `admitted=0`) and now names the op 0x12 RELAY discriminator and the member-side gate, citing
+   §4(O.30)/§4(O.31). Classifier logic UNCHANGED, kill-switch `OVMX_NO_READMITMAP` unchanged,
+   byte-unchanged on the wire (guard 8), with fail-pre/pass-post assertions in
+   `tests/vmsscs/test_scsd_wire.c` (text must cite `4(O.31)`, name `op 0x12 RELAY`, and NOT
+   claim `the default path admits`).
+
+Evidence (host, tank volume): authentic reference
+`/data/training/vax/cluster/captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`; OVMX
+bracket `/data/training/vax/cluster/work/942-return-vs-firstjoin.pcap`, `942-F1.log`
+(`admitted=2 XITDONE`), `942-J.log` (`admitted=0`; node1 `JOIN-ABANDONED`, node2 `NO-ENGAGE
+SYSAP-never-re-opened`), `942-abrun.status`; decoder `docs/clean-room/tools/cmdiff.py`. Code
+`src/vmsscs/scsd.c` (`readmit_verdict_name`); unit `tests/vmsscs/test_scsd_wire.c`.
+*VAXcluster Principles* pp.7-24/7-25/7-29/7-33/7-34/7-37/7-38/7-39/7-41/7-42.

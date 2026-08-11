@@ -802,6 +802,21 @@ enum join_step {
  * after START, on a per-node ~1 s scan phase -- so this is a timer, not an
  * event hook. 1000 ms sits inside the observed band. */
 #define JOIN_MEMBER_GREET_MS 1000u
+/* vms-3aba (spec 4(O.27)): on a rejoin, how long to HOLD OVMX's own dir/MSCP
+ * client half to a coordinator CANDIDATE (the highest node number known so far,
+ * with no strictly-lower peer yet seen) before giving up and initiating anyway.
+ * The two members complete their 0x41 START in a non-deterministic order; when
+ * the coordinator (higher node) appears FIRST, cm_peer_is_coordinator() cannot
+ * yet say it is the coordinator (its lower-peer guard is unsatisfied), so the
+ * vms-9af lean-VC suppression fired ~1.3 s too LATE -- after own-dir had already
+ * bloated the coordinator's VC and op 0x02 rode at send_seq 21/22, PAST the
+ * coordinator's recv_ack ceiling of 18 (spec 4(O.26)). Holding the client half
+ * for this settle window lets the lower (non-coordinator) member appear, so the
+ * suppression engages BEFORE own-dir ever rides -- and op 0x02 lands under the
+ * ceiling. The cap keeps a genuinely-lone existing member from being starved of
+ * discovery forever: the observed inter-member START skew is ~1.3 s, so 6 s is a
+ * wide margin while staying bounded. Kill-switch OVMX_REJOIN_LEAN_EARLY=0. */
+#define LEAN_COORD_SETTLE_MS 6000u
 /* vms-e81: minimum quiet gap before a non-ack START counts as a RE-START rather
  * than the ordinary round-1 of a handshake in progress. VAX3's re-STARTs were
  * ~5 s apart; the normal round-0/round-1 pair is back-to-back (sub-millisecond). */
@@ -992,6 +1007,11 @@ struct peer_state {
                                     * VC is kept LEAN -- OVMX's OWN dir/MSCP client half is
                                     * suppressed here so op 0x02 rides at a low send_seq.
                                     * Latched once, to log SCSD-I-LEANVC exactly once. */
+    long     lean_hold_start_ms;   /* vms-3aba (spec 4(O.27)): monotonic_ms() when we FIRST
+                                    * held this coordinator CANDIDATE's own-dir client half
+                                    * waiting for the topology to settle (a lower peer to
+                                    * appear) so lean-VC engages BEFORE op 0x02. 0 = not held
+                                    * yet. Bounded by LEAN_COORD_SETTLE_MS. */
     /* --- vms-760: OVMX's OWN MSCP$DISK client connection to the member
      * (VMS$DISK_CL_DRVR -> MSCP$DISK, clean-ref formation-clean-2node.pcap SCA
      * idx35 connect -> idx39 member accept). This is the connection OVMX has
@@ -1922,6 +1942,97 @@ static int cm_lean_vc_suppress_peer(struct peer_state *tbl, struct peer_state *p
         fflush(stdout);
     }
     return 1;
+}
+
+/*
+ * cm_peer_coord_pending - vms-3aba (spec 4(O.27)): is this peer a coordinator
+ * CANDIDATE whose coordinator status is NOT YET DECIDABLE? True iff it is the
+ * highest node number known so far AND no strictly-lower peer has appeared yet,
+ * so cm_peer_is_coordinator() returns 0 ONLY for want of a lower peer (not
+ * because someone higher exists). A lower peer appearing would flip it to the
+ * coordinator (suppress); the topology has simply not settled.
+ *
+ * This is the exact race the vms-9af TIMING CAVEAT (cm_peer_is_coordinator's
+ * header) names: when the coordinator's 0x41 START arrives before the
+ * non-coordinator's, own-dir initiation runs while this predicate is true, the
+ * lean-VC suppression does NOT fire, and the coordinator's VC is bloated before
+ * op 0x02 (spec 4(O.26)). When OVMX_CFG2_PEER names the coordinator up front the
+ * status is already decided, so there is nothing pending.
+ */
+static int cm_peer_coord_pending(struct peer_state *tbl, struct peer_state *ps)
+{
+    if (ps == NULL || ps->pb == NULL) {
+        return 0;
+    }
+    if (getenv("OVMX_CFG2_PEER") != NULL) {
+        return 0;              /* coordinator is named deterministically -> decided */
+    }
+    uint16_t nn = peer_node_number(ps);
+    int lower_peer_seen = 0;
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        if (&tbl[i] == ps || tbl[i].pb == NULL) {
+            continue;
+        }
+        uint16_t n2 = peer_node_number(&tbl[i]);
+        if (n2 > nn) {
+            return 0;          /* someone higher -> ps is decidedly NOT the coordinator */
+        }
+        if (n2 < nn) {
+            lower_peer_seen = 1;
+        }
+    }
+    return lower_peer_seen ? 0 : 1;   /* top node, no lower peer yet -> PENDING */
+}
+
+/*
+ * cm_rejoin_lean_early_hold - vms-3aba (spec 4(O.27)): should OVMX HOLD its own
+ * dir/MSCP client half to THIS peer this tick, because it is a coordinator
+ * candidate whose lean-VC decision cannot yet be made (a lower peer has not yet
+ * appeared)?  This is what makes lean-VC / credit-first engage BEFORE op 0x02 on
+ * the member-initiated connection (spec 4(O.26) fix): rather than initiate
+ * own-dir on the highest-known node the instant it completes START -- and then
+ * discover ~1.3 s later that it was the coordinator whose VC we just bloated --
+ * we WAIT out a bounded settle window for the non-coordinator to appear, at
+ * which point cm_lean_vc_suppress_peer() suppresses the coordinator permanently
+ * and own-dir never rides its VC. op 0x02 then lands at a low send_seq, under
+ * the coordinator's recv_ack ceiling of 18.
+ *
+ * Bounded by LEAN_COORD_SETTLE_MS so a genuinely lone existing member (no lower
+ * peer will ever appear) is not starved of discovery forever -- past the window
+ * we give up holding and initiate. Kill-switch OVMX_REJOIN_LEAN_EARLY=0 restores
+ * the pre-fix behaviour (own-dir initiates the instant START completes, and
+ * lean-VC engages too late on an appears-first coordinator). Gated on
+ * cm_rejoin_lean_vc() so it fires only on a detected rejoin with lean-VC on; the
+ * first-join path and the non-coordinator peer are untouched.
+ */
+static int cm_rejoin_lean_early_hold(struct peer_state *tbl, struct peer_state *ps,
+                                     long now_ms)
+{
+    if (!cm_rejoin_lean_vc()) {
+        return 0;
+    }
+    const char *off = getenv("OVMX_REJOIN_LEAN_EARLY");
+    if (off != NULL && off[0] == '0' && off[1] == '\0') {
+        return 0;             /* kill-switch = pre-fix late-firing behaviour */
+    }
+    if (!cm_peer_coord_pending(tbl, ps)) {
+        return 0;             /* coordinator status already decidable -> nothing to hold */
+    }
+    if (ps->lean_hold_start_ms == 0) {
+        ps->lean_hold_start_ms = now_ms;
+        log_ts(stdout);
+        printf(" SCSD-I-LEANHOLD, REJOIN: HOLD OUR OWN dir/MSCP client half to"
+               " candidate coordinator node %u until the topology settles (a"
+               " lower non-coordinator member appears) -- so lean-VC engages"
+               " BEFORE op 0x02 and op 0x02 rides under the recv_ack ceiling"
+               " (spec 4(O.26)/4(O.27))\n",
+               (unsigned)(peer_node_number(ps) & 0x03ff));
+        fflush(stdout);
+    }
+    if ((now_ms - ps->lean_hold_start_ms) >= (long)LEAN_COORD_SETTLE_MS) {
+        return 0;             /* settle window elapsed -> liveness: initiate anyway */
+    }
+    return 1;                 /* HOLD: keep the candidate coordinator's VC lean */
 }
 
 /*
@@ -8352,7 +8463,10 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         if (rx->do_connect && ps->greet_due_ms != 0 &&
             (long)monotonic_ms() >= ps->greet_due_ms &&
             ps->join_step == JS_IDLE && !ps->own_dir_sent &&
-            !cm_lean_vc_suppress_peer(rx->peers, ps)) { /* vms-9af: lean coordinator VC */
+            !cm_lean_vc_suppress_peer(rx->peers, ps) && /* vms-9af: lean coordinator VC */
+            !cm_rejoin_lean_early_hold(rx->peers, ps, (long)monotonic_ms())) {
+            /* vms-3aba: hold own-dir on an appears-first candidate coordinator
+             * until the topology settles, so lean-VC engages BEFORE op 0x02 */
             ps->greet_due_ms = 0;
             if (send_own_dir_connect_request(rx->sock, (int)rx->ifindex, ps,
                                              rx->our_hw_mac, rx->our_src_logical)) {
@@ -8667,6 +8781,8 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             ps->dir_connected = 0; ps->dir_remote_conid = 0; ps->dir_seen = 0;
             ps->own_dir_sent = 0; ps->own_dir_connected = 0;
             ps->own_dir_lookup_sent = 0;
+            ps->lean_vc_suppressed = 0;   /* vms-9af/3aba: re-decide lean-VC on the */
+            ps->lean_hold_start_ms = 0;   /* re-formed VC; restart the settle window */
             ps->mscp_connect_sent = 0; ps->mscp_connected = 0;
             ps->connected = 0; ps->connect_sent = 0; ps->remote_conid = 0;
             ps->joiner_connect_sent = 0; ps->joiner_connected = 0;
@@ -8913,6 +9029,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         if (rx->join_seq_enabled && !ps->appeared_after_join &&
             ps->join_step == JS_IDLE && !ps->own_dir_sent &&
             !cm_lean_vc_suppress_peer(rx->peers, ps) && /* vms-9af: lean coordinator VC */
+            !cm_rejoin_lean_early_hold(rx->peers, ps, (long)monotonic_ms()) && /* vms-3aba */
             send_own_dir_connect_request(rx->sock, (int)rx->ifindex, ps,
                                          rx->our_hw_mac, rx->our_src_logical)) {
             ps->join_step = JS_DIR_CONNECT;

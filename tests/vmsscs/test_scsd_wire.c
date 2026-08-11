@@ -3693,6 +3693,210 @@ static void test_rejoin_keeps_coordinator_vc_lean_so_op02_rides_low(void)
 }
 
 /* ==========================================================================
+ * vms-3aba (spec 4(O.27)) -- LEAN-VC ENGAGES *BEFORE* op 0x02 EVEN WHEN THE
+ * COORDINATOR'S 0x41 START ARRIVES FIRST: op 0x02 RIDES UNDER THE recv_ack
+ * CEILING (<=18) INSTEAD OF PAST IT (>18).
+ *
+ * GROUNDED, spec sec 4(O.26) (vms-c40, coordinator-side SDA): the member-
+ * initiated VMS$VAXcluster reconnect DID reach OPEN, then was LOST ~10 ms after
+ * OVMX drove op 0x02 on it -- because OVMX's OWN dir/MSCP client discovery had
+ * bloated the shared per-VC send_seq, so op 0x01 params rode ss=21 and op 0x02
+ * config rode ss=22, PAST the coordinator's recv_ack ceiling of 18. The vms-9af
+ * lean-VC suppression DID fire but ~1.3 s too LATE (after op 0x02 and the break),
+ * because when the coordinator (higher node number) completes START before the
+ * non-coordinator, cm_peer_is_coordinator() cannot yet identify it (its
+ * lower-peer guard is unsatisfied) and the client half has already ridden.
+ *
+ * THE FIX (cm_rejoin_lean_early_hold): on a rejoin, HOLD the own-dir/MSCP client
+ * half to a coordinator CANDIDATE (top node known, no lower peer yet) for a
+ * bounded settle window, so the non-coordinator appears and lean-VC suppresses
+ * the coordinator BEFORE op 0x02 ever rides -- op 0x02 then lands under the
+ * ceiling. Bounded by LEAN_COORD_SETTLE_MS (liveness); kill-switch
+ * OVMX_REJOIN_LEAN_EARLY=0 restores the pre-fix late-firing behaviour.
+ *
+ * WHAT IS DRIVEN, AND BY WHOM. The peer_state is built by the production receive
+ * path (open_circuit_to). The HOLD decision is the production gate
+ * cm_rejoin_lean_early_hold(); the suppress decision is cm_lean_vc_suppress_peer()
+ * and the coordinator identity cm_peer_is_coordinator() -- all production. When
+ * NOT held/suppressed, the client half is the daemon's OWN senders
+ * (send_own_dir_connect_request / _confirm / send_own_dir_lookup /
+ * send_mscp_connect_request), each advancing the coordinator's ps->vc.seq exactly
+ * as it does live. op 0x02's send_seq is read from scs_seq_advance(&coord->vc.seq).
+ *
+ * The coordinator's VC is SEEDED to VMS3ABA_PRE_OP02_SEQ = 16 -- the send_seq the
+ * pre-op 0x02 readmission stream (member connect/accept + model + params +
+ * directory) consumes on the member-initiated VC before op 0x02. The 6-frame own
+ * dir/MSCP client half is what pushes op 0x02 from 16 (UNDER the 18 ceiling) to
+ * 22 (the spec 4(O.26) BLOATED value, OVER it).
+ *
+ * ARM A (fix on)  -> client half HELD on the appears-first candidate -> op 0x02
+ *                    rides ss=16 (<=18, under the ceiling).
+ * ARM B (OVMX_REJOIN_LEAN_EARLY=0, matched kill-switch = pre-fix) -> the client
+ *                    half rides the coordinator's VC -> op 0x02 rides ss=22 (>18).
+ * That is what makes ARM A a fail-pre/pass-post result, not an unfalsifiable
+ * assertion.
+ * ========================================================================== */
+#define VMS3ABA_PRE_OP02_SEQ   16u  /* pre-op 0x02 readmission stream (spec 4(O.26)) */
+#define COORD_RECV_ACK_CEILING 18u  /* coordinator recv_ack ceiling (spec 4(O.26)) */
+
+/* Drive a rejoin in the APPEARS-FIRST state (ONLY the coordinator peer known, no
+ * OVMX_CFG2_PEER, no lower peer yet) and return the send_seq op 0x02 would ride.
+ * early_off flips the OVMX_REJOIN_LEAN_EARLY kill-switch. *held_out receives
+ * whether the client half was held; *suppressed_out receives what the vms-9af
+ * suppression ALONE would have decided (0 in the appears-first state -- proving
+ * it is the vms-3aba hold, not the old suppression, that keeps the VC lean). */
+static uint16_t rejoin_coord_first_op02_send_seq(int early_off, int *held_out,
+                                                 int *suppressed_out)
+{
+    struct rxworld r;
+    rxworld_init(&r, our_hw_mac, our_logical);
+    /* ONLY the coordinator appears -- the non-coordinator's START has not yet
+     * arrived, so no strictly-lower peer is known (the vms-9af timing race). */
+    struct peer_state *coord = open_circuit_to(&r, coord_hw, coord_logical);
+    if (coord == NULL) {
+        return 0;
+    }
+
+    setenv("OVMX_JOIN_SEQ", "1", 1);
+    ovmx_prior.valid = 1;              /* PRIORCLU: this is a rejoin */
+    unsetenv("OVMX_REJOIN_TARGET");    /* rejoin-target topology on */
+    unsetenv("OVMX_CFG2_PEER");        /* order-dependent coordinator rule (the race) */
+    unsetenv("OVMX_REJOIN_LEAN_VC");   /* lean-VC on */
+    if (early_off) {
+        setenv("OVMX_REJOIN_LEAN_EARLY", "0", 1); /* kill-switch = pre-fix late firing */
+    } else {
+        unsetenv("OVMX_REJOIN_LEAN_EARLY");
+    }
+
+    /* Seed the coordinator's VC to the pre-op 0x02 readmission-stream position. */
+    coord->vc.seq.send_seq = (uint16_t)VMS3ABA_PRE_OP02_SEQ;
+    coord->lean_hold_start_ms = 0;
+
+    /* The vms-9af suppression ALONE, in the appears-first state, misses it. */
+    int suppressed = cm_lean_vc_suppress_peer(r.rx.peers, coord);
+    /* The vms-3aba hold catches it (fix on) or lets it ride (kill-switch off). */
+    int held = cm_rejoin_lean_early_hold(r.rx.peers, coord, (long)monotonic_ms());
+
+    /* The production initiation-site condition: drive the client half only when
+     * NEITHER the suppression NOR the hold blocks it. */
+    if (!suppressed && !held) {
+        send_own_dir_connect_request(r.rx.sock, (int)r.rx.ifindex, coord,
+                                     r.rx.our_hw_mac, r.rx.our_src_logical);
+        send_own_dir_confirm(r.rx.sock, (int)r.rx.ifindex, coord,
+                             r.rx.our_hw_mac, r.rx.our_src_logical);
+        send_own_dir_lookup(r.rx.sock, (int)r.rx.ifindex, coord, r.rx.our_hw_mac,
+                            r.rx.our_src_logical, "MSCP$TAPE", 0);
+        send_own_dir_lookup(r.rx.sock, (int)r.rx.ifindex, coord, r.rx.our_hw_mac,
+                            r.rx.our_src_logical, "MSCP$DISK", 0);
+        send_own_dir_lookup(r.rx.sock, (int)r.rx.ifindex, coord, r.rx.our_hw_mac,
+                            r.rx.our_src_logical, "MSCP$DISK", 0);
+        send_mscp_connect_request(r.rx.sock, (int)r.rx.ifindex, coord,
+                                  r.rx.our_hw_mac, r.rx.our_src_logical);
+    }
+
+    uint16_t op02 = scs_seq_advance(&coord->vc.seq);
+
+    if (held_out != NULL) *held_out = held;
+    if (suppressed_out != NULL) *suppressed_out = suppressed;
+
+    ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_LEAN_EARLY");
+    unsetenv("OVMX_JOIN_SEQ");
+    return op02;
+}
+
+static void test_rejoin_lean_engages_before_op02_when_coordinator_appears_first(void)
+{
+    /* ARM A -- the fix active: the client half is HELD on the appears-first
+     * candidate, so op 0x02 rides UNDER the coordinator's recv_ack ceiling. */
+    int held_fix = -1, suppressed_fix = -1;
+    uint16_t op02_fix = rejoin_coord_first_op02_send_seq(0, &held_fix, &suppressed_fix);
+    CHECK(suppressed_fix == 0,
+          "PRECONDITION: the vms-9af suppression fired in the appears-first state"
+          " (returned %d) -- this case must exercise the gap it LEAVES (no lower"
+          " peer known), which is what vms-3aba closes", suppressed_fix);
+    CHECK(held_fix == 1,
+          "FIX: cm_rejoin_lean_early_hold did NOT hold the appears-first candidate"
+          " coordinator (returned %d) -- the client half would bloat its VC before"
+          " op 0x02 (spec 4(O.26))", held_fix);
+    CHECK(op02_fix <= COORD_RECV_ACK_CEILING,
+          "FIX: op 0x02 rode the coordinator's VC at send_seq %u, expected <= the"
+          " recv_ack ceiling %u -- lean-VC must engage BEFORE op 0x02 so it lands"
+          " under the ceiling (spec 4(O.26)/4(O.27))",
+          op02_fix, COORD_RECV_ACK_CEILING);
+
+    /* ARM B -- the matched kill-switch (OVMX_REJOIN_LEAN_EARLY=0) = pre-fix late
+     * firing: the client half rides the coordinator's VC, so op 0x02 is pushed
+     * PAST the ceiling -- the spec 4(O.26) stranding shape. */
+    int held_off = -1, suppressed_off = -1;
+    uint16_t op02_off = rejoin_coord_first_op02_send_seq(1, &held_off, &suppressed_off);
+    CHECK(held_off == 0,
+          "KILL-SWITCH (OVMX_REJOIN_LEAN_EARLY=0): the hold still engaged (returned"
+          " %d) -- the change does not gate on its switch", held_off);
+    CHECK(op02_off > COORD_RECV_ACK_CEILING,
+          "KILL-SWITCH: op 0x02 rode send_seq %u, expected the pre-fix bloated"
+          " value ABOVE the ceiling %u (the spec 4(O.26) 21/22 stranding) -- the"
+          " client half must ride the coordinator's VC with the fix suppressed",
+          op02_off, COORD_RECV_ACK_CEILING);
+    CHECK(op02_off == (uint16_t)(VMS3ABA_PRE_OP02_SEQ + VMS9AF_CLIENT_HALF_FRAMES),
+          "KILL-SWITCH: op 0x02 rode send_seq %u, expected %u (seed %u + %u"
+          " client-half frames = the spec 4(O.26) bloated ss=22)",
+          op02_off, (uint16_t)(VMS3ABA_PRE_OP02_SEQ + VMS9AF_CLIENT_HALF_FRAMES),
+          VMS3ABA_PRE_OP02_SEQ, VMS9AF_CLIENT_HALF_FRAMES);
+
+    CHECK(op02_off > op02_fix,
+          "REJOIN: the fix did not move op 0x02 to a LOWER send_seq (pre-fix %u vs"
+          " fixed %u) -- the point is op 0x02 under the ceiling", op02_off, op02_fix);
+
+    /* LIVENESS: past the settle window the hold RELEASES (a genuinely lone member
+     * is not starved of discovery forever). */
+    struct rxworld r;
+    rxworld_init(&r, our_hw_mac, our_logical);
+    struct peer_state *coord = open_circuit_to(&r, coord_hw, coord_logical);
+    if (coord != NULL) {
+        setenv("OVMX_JOIN_SEQ", "1", 1);
+        ovmx_prior.valid = 1;
+        unsetenv("OVMX_REJOIN_TARGET");
+        unsetenv("OVMX_CFG2_PEER");
+        unsetenv("OVMX_REJOIN_LEAN_EARLY");
+        long now = (long)monotonic_ms();
+        coord->lean_hold_start_ms = now - (long)LEAN_COORD_SETTLE_MS - 1; /* window elapsed */
+        CHECK(cm_rejoin_lean_early_hold(r.rx.peers, coord, now) == 0,
+              "LIVENESS: the hold did not RELEASE after LEAN_COORD_SETTLE_MS -- a"
+              " lone existing member would be starved of discovery forever");
+
+        /* SETTLE -> SUPPRESS HANDOFF: once the non-coordinator (lower node)
+         * appears, the candidate is decidable: the hold stops and the vms-9af
+         * suppression takes over permanently. */
+        struct peer_state *noncoord = open_circuit_to(&r, noncoord_hw, noncoord_logical);
+        if (noncoord != NULL) {
+            coord->lean_hold_start_ms = now; /* fresh window */
+            coord->lean_vc_suppressed = 0;
+            CHECK(cm_peer_coord_pending(r.rx.peers, coord) == 0,
+                  "HANDOFF: coord still 'pending' after a lower peer appeared -- the"
+                  " topology is settled and the hold must stop");
+            CHECK(cm_rejoin_lean_early_hold(r.rx.peers, coord, now) == 0,
+                  "HANDOFF: the hold still engaged after the lower peer appeared --"
+                  " the vms-9af suppression must take over here");
+            CHECK(cm_lean_vc_suppress_peer(r.rx.peers, coord) == 1,
+                  "HANDOFF: the vms-9af suppression did not engage on the settled"
+                  " coordinator -- op 0x02 would still bloat its VC");
+            CHECK(cm_rejoin_lean_early_hold(r.rx.peers, noncoord, now) == 0,
+                  "the NON-coordinator must NEVER be held -- disk discovery runs"
+                  " against it (spec 4(O.11))");
+        }
+
+        /* FIRST JOIN (no PRIORCLU) must be untouched: the hold never engages. */
+        ovmx_prior.valid = 0;
+        coord->lean_hold_start_ms = 0;
+        CHECK(cm_rejoin_lean_early_hold(r.rx.peers, coord, (long)monotonic_ms()) == 0,
+              "FIRST JOIN: the vms-3aba hold engaged on a non-rejoin -- the working"
+              " first-join client half must be untouched (guard 8)");
+        unsetenv("OVMX_JOIN_SEQ");
+    }
+}
+
+/* ==========================================================================
  * vms-aa1 -- FLOW CONTROL ACCOUNTS FOR TRAFFIC THAT ACTUALLY FLOWS.
  *
  * vms-76e/vms-1d2 built the pp. 2-43..2-45 account and vms-b1d the DFREEQ, all
@@ -10372,6 +10576,7 @@ int main(void)
      * op 0x02 rides at a low send_seq, not behind the recv_ack ceiling (4(O.15));
      * gated by OVMX_REJOIN_LEAN_VC. */
     test_rejoin_keeps_coordinator_vc_lean_so_op02_rides_low();
+    test_rejoin_lean_engages_before_op02_when_coordinator_appears_first();
     test_joiner_vc_op3_confirm_is_recorded_not_reported_unbuilt();
     /* vms-770 (vms-a61 audit): has_conid no longer implies the 110-/190-byte
      * connect classes, so branch (c) must not treat a short SEQAPP data frame

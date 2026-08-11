@@ -98,6 +98,34 @@ non-terminal default and would break iterative translation the moment TERMINAL i
 DEFINE create-side, `vms-240` TERMINAL/iterative, `vms-69e7` proof = real `SYS$SYSROOT`. **Add:
 `DISK$label` on MOUNT, and the LD driver, as disk-transparency items under it.***
 
+### 4.2 The system must RUN on the namespace — dogfood + config-from-logicals (`vms-704`)
+
+Operator requirement (2026-08-11): "not only do we need the logicals, we need to **utilize** them
+in the running system to parallel VMS — not just we *can* but we *do*, and users can see it. Any
+config that comes from logicals should be plumbed (login banner, post-login, and a bunch of
+others)." Capability ≠ system: VMS *is* logicals — it resolves itself through them at every point
+of use, so `DEFINE/SYSTEM` changes the live system, visibly.
+
+**Already dogfooded (verified on `origin/main`):** `SYS$ANNOUNCE` (pre-login banner) and
+`SYS$WELCOME` (post-login) are read from executive-shared `LNM$SYSTEM` at each login — `DEFINE/SYSTEM`
+takes effect on the next login, end-to-end (`ovmx_banner.h`, `vms_login.c:382/94`). Also plumbed:
+`SYLOGIN` (via `SYS$MANAGER`), `RUN`/foreign-command activation (`vmsfs_translate.c:376`),
+`SYS$LIBRARY`/`HELP`, `SYS$LANGUAGE`, `TT`.
+
+**Bypasses logicals where a VMS admin tests first (the gaps, `vms-704`):**
+
+| Gap | `origin/main` | Item |
+|---|---|---|
+| DCL **utility** activation ignores `SYS$SYSTEM` — compile-time `VMS_SYSTEM_DIR` path | `dcl_cmd_misc.c:359` (split-brain vs `RUN`) | `vms-7d8` |
+| Per-user `SYS$LOGIN`/`SYS$SCRATCH` are `setenv`/`getenv`, not logicals; LGICMD hardcoded | `vms_login.c:244`, `dcl_main.c:555` | `vms-e48` |
+| `SYS$NODE` absent; `SYS$PRINT`/`SYS$BATCH` literal; `SYS$TIMEZONE_*` absent; `SYS$OUTPUT`/`INPUT` string-matched not translated; `DCL$PATH` absent | various | `vms-f89` (+`vms-96e`) |
+
+**Verdict: dogfood is mixed.** The namespace is real for banner/filespec/RMS-routed lookups, but the
+running system does not *uniformly* resolve itself through it — the utility dispatcher, per-user
+state, node name, queues, timezone, and editor are compile-time constants. A sysadmin who
+`DEFINE/SYSTEM`s `SYS$WELCOME` sees it work, then `DEFINE/SYSTEM`s `SYS$SYSTEM` or `SYS$LOGIN` and
+finds the live system unmoved. Parity requires the compile-time paths to *lose* to the logical.
+
 ## 5. F$ lexical functions
 
 **35 present, ~8 absent** vs the DCL Dictionary: `F$SETPRV`, `F$CSID`, `F$DELTA_TIME`,

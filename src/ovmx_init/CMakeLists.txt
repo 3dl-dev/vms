@@ -4,6 +4,7 @@
 
 add_executable(ovmx_init
     ovmx_init.c
+    sysboot.c
 )
 
 target_include_directories(ovmx_init PRIVATE

@@ -141,6 +141,13 @@ check "Boot A: executive attached" "$OUT_A" '%OVMX-I-EXEC'
 check "Boot A: system came up (boot banner)" "$OUT_A" "$EXPECTED_BOOT_BANNER"
 check "Boot A: no executive-image load error" "$OUT_A" '%EXECINIT, error loading system file' absent
 check "Boot A: no OVMX-facility exec halt" "$OUT_A" '%OVMX-F-EXECINIT' absent
+# vms-b81 (early-boot output ordering): a FLAGLESS boot -- this one, no
+# ovmx.flags on the kernel cmdline -- must NEVER halt at the SYSBOOT>
+# conversational prompt. The positive proof (a conversational boot DOES
+# show it, with nothing preceding it) is
+# tests/qemu/test_sysboot_conversational.sh; this is the negative half,
+# riding the executive-integral boot that already runs on every CI pass.
+check "Boot A: no SYSBOOT prompt on a flagless boot" "$OUT_A" 'SYSBOOT>' absent
 echo ""
 
 # --- Boot B (NEGATIVE CONTROL): no executive → the system must NOT come up ---

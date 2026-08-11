@@ -1,8 +1,15 @@
-# OVMX
+# OpenVMX
 
-OpenVMS-compatible environment for Linux. OVMX implements VMS system services,
+OpenVMS-compatible environment for Linux. OpenVMX implements VMS system services,
 the DCL command language, Record Management Services, and VMS-style kernel
 extensions — packaged as a bootable Linux distribution.
+
+OpenVMX is two named layers, GNU/Linux-style: **OpenVMX** is the VMS-compatible
+product (login banner, `SHOW SYSTEM`, DCL — what a user touches), running on
+**OVMX/Linux**, the Linux base layer underneath (kernel, boot, distro
+tooling) — the rough equivalent of the VAX/Alpha hardware OpenVMS itself ran
+on. See [Architecture](docs/architecture.md#product--substrate-layering) for
+where the split falls.
 
 ## Features
 
@@ -24,10 +31,11 @@ extensions — packaged as a bootable Linux distribution.
 
 ## Quick Start
 
-### Bootable QEMU VM — the OVMX runtime
+### Bootable QEMU VM — the OpenVMX runtime
 
-This is OVMX proper: it boots the kernel modules and runs the VMS-native
-toolchain (the `IMGACT.EXE` image activator and `LINK.EXE`, on a musl userland).
+This is OpenVMX proper: it boots OVMX/Linux (kernel modules, init), which
+hands off to the VMS-native toolchain (the `IMGACT.EXE` image activator and
+`LINK.EXE`, on a musl userland).
 
 ```bash
 # Build the kernel + initramfs
@@ -61,10 +69,10 @@ cd build && ctest --output-on-failure
 ## Project Status
 
 See [tracking/roadmap.md](tracking/roadmap.md) for the full phase plan.
-Phases 1-7 are complete. OVMX runs as a bootable QEMU VM — the VMS-native
+Phases 1-7 are complete. OpenVMX runs as a bootable QEMU VM — the VMS-native
 runtime (image activation via `IMGACT.EXE`, linking via `LINK.EXE`, musl
-userland) — with multi-user SSH access. The QEMU VM is the only OVMX runtime;
-there is no Docker-based way to run OVMX (Rule 9).
+userland) — with multi-user SSH access. The QEMU VM is the only OpenVMX
+runtime; there is no Docker-based way to run OpenVMX (Rule 9).
 
 ## License
 

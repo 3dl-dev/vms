@@ -1,4 +1,4 @@
-# Dockerfile.bootable - Build and boot a minimal OVMX Linux system
+# Dockerfile.bootable - Build and boot a minimal OVMX/Linux system
 #
 # Produces a Docker image that boots OVMX in QEMU. All dependencies
 # (compiler, QEMU, kernel, initramfs) are contained — no host tools needed.

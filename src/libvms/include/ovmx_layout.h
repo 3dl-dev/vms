@@ -87,6 +87,17 @@
 
 #define VMS_SYSUAF_PATH      "SYS$SYSTEM:SYSUAF.DAT"
 #define VMS_LASTLOGIN_DIR    "SYS$MANAGER:LASTLOGIN"
+/*
+ * SET ACCOUNTING's enabled/disabled state (vms-17d, INV-DCL). Real OpenVMS
+ * accounting on/off state is runtime, held by the accounting subsystem
+ * itself (opening/closing SYS$MANAGER:ACCOUNTNG.DAT per class), not a
+ * documented separate byte-format file -- so this flag FILE and its content
+ * ("0"/"1", one line) are an OVMX invention (Rule 8), never presented as
+ * VMS-authentic, that give OVMX's own accounting subsystem the same
+ * property: system-wide, persisted, observable by any process, not the
+ * per-DCL-context bool it replaces. See ovmx_accounting.h.
+ */
+#define VMS_ACCOUNTING_STATE_PATH "SYS$MANAGER:ACCOUNTNG.ENB"
 #define VMS_OPERATOR_LOG     "SYS$MANAGER:OPERATOR.LOG"
 #define VMS_SYLOGIN_PATH     "SYS$MANAGER:SYLOGIN.COM"
 #define VMS_STARTUP_PATH     "SYS$MANAGER:STARTUP.COM"

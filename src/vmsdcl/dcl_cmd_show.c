@@ -36,6 +36,7 @@
 #include "vmsfs/filespec.h"
 #include "vms/pcb.h"
 #include "ovmx_identity.h"
+#include "ovmx_accounting.h"
 #include "vmsqueue.h"
 #include "descrip.h"
 #include "jpidef.h"
@@ -2218,12 +2219,17 @@ static int cmd_show_working_set(struct dcl_command *cmd)
 
 /*
  * SHOW ACCOUNTING - Display accounting status.
+ *
+ * vms-17d (INV-DCL): reads the SAME real, system-wide flag SET ACCOUNTING
+ * now writes (ovmx_accounting_is_enabled(), src/libvms/rtl/ovmx_accounting.c)
+ * -- not the per-DCL-context bool this used to read, which only ever
+ * reflected the CURRENT session's own SET ACCOUNTING, never a change made
+ * anywhere else.
  */
 static int cmd_show_accounting(struct dcl_command *cmd)
 {
     (void)cmd;
-    struct dcl_context *ctx = dcl_get_context();
-    if (ctx->accounting_enabled) {
+    if (ovmx_accounting_is_enabled()) {
         printf("Accounting is currently enabled.\n");
     } else {
         printf("Accounting is currently disabled.\n");

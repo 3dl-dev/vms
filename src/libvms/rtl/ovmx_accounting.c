@@ -51,6 +51,82 @@ static void ensure_dir(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Build the path to the system-wide accounting-enabled flag file.    */
+/* ------------------------------------------------------------------ */
+static void accounting_state_path(char *buf, size_t bufsiz)
+{
+    vmsfs_to_linux_path(VMS_ACCOUNTING_STATE_PATH, buf, bufsiz);
+}
+
+/* ------------------------------------------------------------------ */
+/* Ensure SYS$MANAGER exists on the system disk before writing into   */
+/* it. On a real boot it always does (STARTUP.COM etc. already live   */
+/* there); on host ctest -- no boot, no seeded system disk -- nothing */
+/* has created it yet, so this recurses like the mkdir_p() every test */
+/* fixture in this tree that bootstraps its own throwaway root uses.  */
+/* ------------------------------------------------------------------ */
+static void ensure_sysmgr_dir(const char *path)
+{
+    char tmp[1024];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+
+    /* Trim the trailing filename, leaving just the directory portion. */
+    char *slash = strrchr(tmp, '/');
+    if (!slash) return;
+    *slash = '\0';
+
+    size_t len = strlen(tmp);
+    for (size_t i = 1; i < len; i++) {
+        if (tmp[i] == '/') {
+            tmp[i] = '\0';
+            mkdir(tmp, 0755);
+            tmp[i] = '/';
+        }
+    }
+    mkdir(tmp, 0755);
+}
+
+/* ------------------------------------------------------------------ */
+/* Query the real, system-wide accounting-enabled flag.               */
+/* No file yet == enabled (matches OpenVMS ACC$START at boot).        */
+/* ------------------------------------------------------------------ */
+int ovmx_accounting_is_enabled(void)
+{
+    char path[1024];
+    accounting_state_path(path, sizeof(path));
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 1;
+
+    int c = fgetc(fp);
+    fclose(fp);
+
+    /* Any content other than a leading '0' means enabled; this also
+     * covers a truncated/corrupt file the same way a fresh boot's
+     * missing file does -- fail toward the VMS default (enabled), never
+     * toward a silent, unobservable disable. */
+    return (c != '0');
+}
+
+/* ------------------------------------------------------------------ */
+/* Flip the real, system-wide accounting-enabled flag. Persisted, so   */
+/* every process -- not just the caller -- observes it.               */
+/* ------------------------------------------------------------------ */
+int ovmx_accounting_set_enabled(int enabled)
+{
+    char path[1024];
+    accounting_state_path(path, sizeof(path));
+
+    ensure_sysmgr_dir(path);
+
+    FILE *fp = fopen(path, "w");
+    if (!fp) return -1;
+    fprintf(fp, "%d\n", enabled ? 1 : 0);
+    fclose(fp);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Read the last-login timestamp for a user.                          */
 /* Returns 0 on success, -1 if no record or parse error.             */
 /* ------------------------------------------------------------------ */
@@ -82,6 +158,13 @@ int ovmx_accounting_get_lastlogin(const char *username, time_t *t)
 int ovmx_accounting_record_login(const char *username)
 {
     if (!username) return -1;
+
+    /* vms-17d (INV-DCL): SET ACCOUNTING/DISABLE must actually stop
+     * recording, not just flip a bool nothing reads. This is the check
+     * that used to be missing -- record_login() ran unconditionally
+     * regardless of what SET ACCOUNTING said. */
+    if (!ovmx_accounting_is_enabled())
+        return 0;
 
     ensure_dir();
 

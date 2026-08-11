@@ -30,7 +30,7 @@
 | **STUB** | Near-total placeholder — typically an immediate, honest refusal with no logic behind it. |
 
 **Totals (re-derived after vms-263 + vms-1a8): 50 REAL · 3 PARTIAL · 0 top-level FACADE · 1 STUB (54 verbs).** ASSIGN (vms-263) moved PARTIAL→REAL and STOP (vms-1a8) moved FACADE→REAL; see their rows under REAL below.
-The 4 named SET/SHOW sub-facades (ACCOUNTING/PASSWORD/VOLUME/LICENSE) are still open -- see the FACADE section below.
+Of the 4 named SET/SHOW sub-facades (ACCOUNTING/PASSWORD/VOLUME/LICENSE), PASSWORD (vms-e9e) and now ACCOUNTING (vms-17d) have moved to REAL -- VOLUME/LICENSE are still open -- see the FACADE section below.
 
 ## REAL (49)
 
@@ -74,7 +74,7 @@ The 4 named SET/SHOW sub-facades (ACCOUNTING/PASSWORD/VOLUME/LICENSE) are still 
 | REQUEST | Real `sys$sndopr()` OPC request. |
 | RUN | Real image activation (`dcl_activate_image()`/`run_detached()`) with its own honour/refuse qualifier layer. |
 | SEARCH | Real line-by-line string search over a real file. |
-| **SET** | Dispatcher — DEFAULT/PROMPT/VERIFY/TERMINAL/PROTECTION/PROCESS/FILE/UIC/WORKING_SET/TIME/ENTRY/QUEUE do genuine executive-backed work. **vms-e9e:** PASSWORD moved REAL (see below). **Named FACADE subcommands still open: ACCOUNTING, VOLUME** — see below. |
+| **SET** | Dispatcher — DEFAULT/PROMPT/VERIFY/TERMINAL/PROTECTION/PROCESS/FILE/UIC/WORKING_SET/TIME/ENTRY/QUEUE do genuine executive-backed work. **vms-e9e:** PASSWORD moved REAL. **vms-17d:** ACCOUNTING moved REAL (see below). **Named FACADE subcommand still open: VOLUME** — see below. |
 | **SHOW** | Dispatcher — PROCESS/SYSTEM/DEVICE/MEMORY/LOGICAL/STATUS read real executive state, deliberately blank rather than fabricate on failure. **Named FACADE subcommand still open: LICENSE** — see below. |
 | SORT | Real line-read/`qsort`/write. |
 | SPAWN | Real `fork`/`execl` subprocess with real `/NOWAIT`, `/OUTPUT` redirection. |
@@ -95,7 +95,7 @@ The 4 named SET/SHOW sub-facades (ACCOUNTING/PASSWORD/VOLUME/LICENSE) are still 
 | HELP | Really lists all 54 verbs with interactive "Topic?" recursion, but flat printf text (no HLB), with hardcoded sub-help for only SHOW/SET/DIRECTORY. |
 | INQUIRE | Genuinely prompts/reads/sets a symbol, but `/NOPUNCTUATION` maps to "don't upcase input" instead of its real meaning (suppress trailing prompt punctuation) — right name, wrong semantics. |
 
-## FACADE (0 top-level; 4 named sub-facades under SET/SHOW)
+## FACADE (0 top-level; 2 open named sub-facades under SET/SHOW, 3 fixed)
 
 No top-level verb is FACADE as of vms-1a8 (STOP moved to REAL above).
 
@@ -104,8 +104,8 @@ the same convention `docs/design-dcl-fidelity.md` §1 used):
 
 | Subcommand | Evidence |
 |---|---|
-| SET AUDIT | **Fixed this session** (vms-6f4 Phase 0): now honestly refuses (`SS$_UNSUPPORTED`) instead of toggling `ctx->audit_enabled`, a per-process bool nothing else could observe. |
-| SET ACCOUNTING | Still open — toggles `ctx->accounting_enabled` (same dead-bool shape as the old SET AUDIT) and prints `%SET-I-INTSET` as if it succeeded. |
+| SET AUDIT | **Fixed** (vms-6f4 Phase 0): now honestly refuses (`SS$_UNSUPPORTED`) instead of toggling `ctx->audit_enabled`, a per-process bool nothing else could observe. |
+| SET ACCOUNTING | **Fixed (vms-17d): moved to REAL** — see §"vms-17d — SET ACCOUNTING moves FACADE to REAL" below. Was: `cmd_set_accounting()` toggled `ctx->accounting_enabled` (same dead-bool shape as the old SET AUDIT) and printed `%SET-I-INTSET` as if it controlled the real accounting writer, `ovmx_accounting_record_login()`, which recorded unconditionally regardless. |
 | SET PASSWORD | **Fixed (vms-e9e): moved to REAL** — see §"vms-e9e — SET PASSWORD moves FACADE to REAL" below. Was: `cmd_set_password()` printed `%SET-I-PASSWORD, password change not fully implemented` (admits it) but returned `SS$_NORMAL` (fake success) and never touched SYSUAF. |
 | SET VOLUME | Still open — prints `%SET-I-NOTIMPL` but returns `SS$_NORMAL` for an operation that does nothing. |
 | SHOW LICENSE | Still open — `cmd_show_license()` prints two invented, unconditional LMF-style rows (fixed 0/0/100 Avail/Actv) with no disclosure at all — the least-honest of the four. |
@@ -138,8 +138,10 @@ worth recording so the board stays accurate):**
 `docs/design-dcl-fidelity.md` §5):**
 - The qualifier-grammar hole itself, for the other 53 verbs (Phase 1,
   `vms-097`).
-- SET ACCOUNTING/PASSWORD/VOLUME, SHOW LICENSE (Phase 2's fake-success sweep).
-  STOP's ignored target is DONE (vms-1a8, see the STOP row under REAL above).
+- SET VOLUME, SHOW LICENSE (Phase 2's fake-success sweep). SET PASSWORD is
+  DONE (vms-e9e) and SET ACCOUNTING is DONE (vms-17d) — see their sections
+  below. STOP's ignored target is DONE (vms-1a8, see the STOP row under REAL
+  above).
 - HELP as a real hierarchical library, terminal-characteristic presentation
   fidelity (Phases 3-4).
 
@@ -278,3 +280,66 @@ proves the facade text/status is gone (`SET PASSWORD/BOGUS` →
 extra parameter → `%DCL-E-MAXPARM`) without needing a real identity, which
 bare host ctest does not have (Rule 9/INV-6: no per-process identity
 fake).
+
+## vms-17d — SET ACCOUNTING moves FACADE to REAL
+
+`cmd_set_accounting()` (`src/vmsdcl/dcl_cmd_set.c`) used to set
+`ctx->accounting_enabled` — a **per-DCL-context** bool, freshly zero at the
+start of every `vmsdcl` process and invisible to every other process — and
+print `%SET-I-INTSET, accounting enabled/disabled` as though that had taken
+effect. `SHOW ACCOUNTING` read the same per-process bool. Meanwhile the real
+accounting writer, `ovmx_accounting_record_login()`
+(`src/libvms/rtl/ovmx_accounting.c`, called from login/SSH), recorded
+**unconditionally** — SET ACCOUNTING controlled nothing. INV-DCL's banned
+fake-success class, same dead-bool shape as the old SET AUDIT facade
+(vms-6f4 Phase 0) but for a command OpenVMS treats as real, no-privilege-gap
+work rather than an unimplemented subsystem.
+
+It now flips a **real, persisted, system-wide** flag:
+`ovmx_accounting_set_enabled()`/`ovmx_accounting_is_enabled()`
+(`src/libvms/rtl/ovmx_accounting.c`), backed by a one-line `"0"`/`"1"` state
+file at `VMS_ACCOUNTING_STATE_PATH` (`SYS$MANAGER:ACCOUNTNG.ENB`,
+`ovmx_layout.h`). `ovmx_accounting_record_login()` checks it before writing
+a lastlogin record; `cmd_show_accounting()` (`src/vmsdcl/dcl_cmd_show.c`)
+reads the identical flag — the dead `ctx->accounting_enabled` field has been
+removed from `struct dcl_context` entirely, not just stopped-being-read.
+Default with no state file yet is **enabled**, matching real OpenVMS (where
+accounting runs from system startup via `ACC$START` unless a manager
+explicitly disables it) — not the old per-process bool's implicit
+"disabled," which was never a considered default, only an unwritten zero.
+
+Qualifiers per the public OpenVMS DCL Dictionary SET ACCOUNTING entry (Rule
+8 citation: <https://wiki.vmssoftware.com/SET_ACCOUNTING>, fetched for this
+fix): `/ENABLE[=(class[,...])]` and `/DISABLE[=(class[,...])]`, each keyword
+naming a resource class (`IMAGE`, `LOGIN_FAILURE`, `MESSAGE`, `PRINT`,
+`PROCESS`) to start/stop tracking independently. OVMX has no per-class
+accounting — only the single system-wide login record `ovmx_accounting.c`
+already writes — so bare `/ENABLE` and `/DISABLE` flip that one real flag,
+and a class list on either qualifier draws the authentic `%SET-W-NOTIMPL` /
+`SS$_UNSUPPORTED` refusal instead of silently accepting granularity nothing
+honours. `/ENABLE` and `/DISABLE` given together (both bare) resolves
+`/ENABLE`-wins, the same precedence the pre-existing facade's `if`/`else if`
+already had — OVMX has no basis to invent a "conflict" VMS message class
+that isn't grounded in the Dictionary text.
+
+Veracity: `tests/libvms/test_accounting_veracity.c` drives the exact
+mechanism `cmd_set_accounting()` calls (`ovmx_accounting_set_enabled()`) and
+the exact mechanism every login path calls
+(`ovmx_accounting_record_login()`) against a real `SYS$MANAGER:` resolved
+through the same path translation AUTHORIZE/LOGIN/DCL use, in an isolated
+temp DKA0: root — proves a login while disabled writes no lastlogin record
+and the identical call while enabled does, both confirmed by a fresh read
+(`ovmx_accounting_get_lastlogin()`), not cached state (INV-6: a real,
+system-wide gate, not a per-process fake). `tests/dcl/test_set_accounting_veracity.sh`
+is the DCL-surface companion — proves the facade text/status is gone
+(`SET ACCOUNTING/BOGUS` → `%DCL-W-IVQUAL`, `/ENABLE=(IMAGE)` → honest
+`%SET-W-NOTIMPL`/`SS$_UNSUPPORTED`) and that `SHOW ACCOUNTING` agrees with
+`SET ACCOUNTING` within one session, without needing a real identity (bare
+host ctest has none, Rule 9/INV-6).
+`tests/dcl/test_show_quick.sh` was updated to `SET ACCOUNTING/DISABLE` before
+asserting `SHOW ACCOUNTING`'s text: with a real, persisted flag shared by
+every script in the same `dcl-integration` ctest run (one real `/vms`
+mount, see `run_dcl_tests.sh`'s own non-hermetic-ordering note), the old
+assumption — "a fresh per-process bool defaults to disabled" — no longer
+holds, so the assertion now pins its own precondition instead of relying on
+another script's incidental last write.

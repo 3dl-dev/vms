@@ -247,3 +247,29 @@ target_link_libraries(test_libvms_sysuaf_write_veracity PRIVATE
 )
 add_test(NAME test_libvms_sysuaf_write_veracity
          COMMAND test_libvms_sysuaf_write_veracity)
+
+# vms-17d -- INV-DCL veracity gate for SET ACCOUNTING (docs/design-dcl-fidelity.md
+# sec 5): ovmx_accounting_set_enabled()/_is_enabled() persist a real,
+# system-wide flag, and ovmx_accounting_record_login() (login/SSH's writer)
+# now honours it -- disabled means no lastlogin record, enabled means one
+# appears. Needs vmsfs (vmsfs_to_linux_path/device table) and vmslnm
+# (lnm_setup_defaults) to resolve SYS$MANAGER: the same way AUTHORIZE and
+# LOGIN do -- same reason test_libvms_sysuaf_write_veracity above isn't via
+# libvms_add_test(). Bootstraps its own throwaway temp root as DKA0: (never
+# the real /vms mount), so it cannot race any other test.
+add_executable(test_libvms_accounting_veracity
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_accounting_veracity.c)
+target_include_directories(test_libvms_accounting_veracity PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+)
+target_link_libraries(test_libvms_accounting_veracity PRIVATE
+    vms
+    vmsfs
+    vmslnm
+    pthread
+    m
+)
+add_test(NAME test_libvms_accounting_veracity
+         COMMAND test_libvms_accounting_veracity)

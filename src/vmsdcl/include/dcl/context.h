@@ -109,8 +109,10 @@ struct dcl_context {
     /* SET WORKING_SET settings */
     int ws_quota;
 
-    /* SET ACCOUNTING / SET AUDIT flags */
-    int accounting_enabled;
+    /* SET AUDIT flag. SET ACCOUNTING's flag is NOT here (vms-17d,
+     * INV-DCL): accounting-enabled is a real, persisted, system-wide
+     * state (ovmx_accounting_is_enabled()/_set_enabled(),
+     * src/libvms/rtl/ovmx_accounting.c), not per-DCL-context. */
     int audit_enabled;
 };
 

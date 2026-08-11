@@ -245,10 +245,11 @@ uint32_t sys$dellnm(const struct dsc$descriptor_s *tabnam,
  * the standard VMS table order: PROCESS, JOB, GROUP, SYSTEM.
  *
  * Supported item codes:
- *   LNM$_STRING     - Equivalence string
+ *   LNM$_INDEX      - (input) which equivalence string to return (default 0)
+ *   LNM$_STRING     - Equivalence string at the selected index
  *   LNM$_LENGTH     - Length of equivalence string
  *   LNM$_ATTRIBUTES - Logical name attributes
- *   LNM$_MAX_INDEX  - Maximum translation index (always 0 for single-valued)
+ *   LNM$_MAX_INDEX  - Highest valid index (list length - 1; 0 if single-valued)
  */
 uint32_t sys$trnlnm(const uint32_t *attr,
                     const struct dsc$descriptor_s *tabnam,
@@ -260,6 +261,26 @@ uint32_t sys$trnlnm(const uint32_t *attr,
 
     char name[LNM$C_NAMLENGTH + 1];
     dsc$strncpy(name, lognam, sizeof(name));
+
+    /*
+     * LNM$_INDEX (input item, default 0) selects which equivalence string of a
+     * search list to return; LNM$_MAX_INDEX (output) reports the highest valid
+     * index. Together they are how a program walks a multi-valued logical via
+     * $TRNLNM (VMS System Services Reference, SYS$TRNLNM) -- e.g. the C RTL
+     * walking DECC$LIBRARY_INCLUDE. Previously LNM$_MAX_INDEX was hardwired to
+     * 0 ("single-valued") and only index 0 was ever read, so every search list
+     * looked single-valued to a program (vms-b12).
+     */
+    uint32_t req_index = 0;
+    if (itmlst) {
+        for (const struct item_list_3 *it = itmlst;
+             it->buflen != 0 || it->item_code != 0; it++) {
+            if (it->item_code == LNM$_INDEX && it->bufaddr &&
+                it->buflen >= sizeof(uint32_t)) {
+                req_index = *(const uint32_t *)it->bufaddr;
+            }
+        }
+    }
 
     /*
      * Standard table search order when no table is specified. LNM$SYSTEM is
@@ -280,7 +301,8 @@ uint32_t sys$trnlnm(const uint32_t *attr,
     char equiv[MAX_EQUIV_LEN];
     equiv[0] = '\0';
     uint32_t found_attr = 0;
-    int have = 0;   /* 1 = found */
+    int have = 0;         /* 1 = found */
+    uint8_t nequiv = 0;   /* number of equivalence strings (search-list length) */
 
     /*
      * Use the standard table search order when no table is named OR the named
@@ -299,16 +321,17 @@ uint32_t sys$trnlnm(const uint32_t *attr,
     if (!use_search) {
         uint32_t exec_tbl = lnm_exec_table_id(table);
         if (exec_tbl) {
-            /* LNM$SYSTEM: read the executive arena. No fallback (INV-6).
-             * Index 0 -- sys$trnlnm's own multi-value (LNM$_STRING item
-             * list repetition) support is a separate, not-yet-wired gap;
-             * this call site still returns the search list's first value,
-             * matching its pre-existing single-value item-list handling. */
-            int r = vms_kif_lnm_translate(exec_tbl, name, 0, equiv,
-                                          sizeof(equiv), NULL, &found_attr,
-                                          NULL);
-            if (r < 0) return SS$_NOSUCHDEV;   /* executive absent */
-            if (r == 0) return SS$_NOLOGNAM;
+            /* LNM$SYSTEM/GROUP/JOB: read the executive arena at the requested
+             * index and learn the search-list length. No fallback (INV-6). */
+            int r = vms_kif_lnm_translate(exec_tbl, name, (uint8_t)req_index,
+                                          equiv, sizeof(equiv), NULL,
+                                          &found_attr, &nequiv);
+            if (r < 0) return SS$_NOSUCHDEV;             /* executive absent */
+            if (r == 0 && nequiv == 0) return SS$_NOLOGNAM; /* name absent */
+            /* r==0 with nequiv>0: the name exists but req_index is past the
+             * end of its list -- report the real max index with an empty
+             * string rather than fabricating a value. */
+            if (r == 0) equiv[0] = '\0';
             have = 1;
         } else {
             pthread_mutex_lock(&lnm_mutex);
@@ -317,6 +340,7 @@ uint32_t sys$trnlnm(const uint32_t *attr,
                 strncpy(equiv, e->equiv, sizeof(equiv) - 1);
                 equiv[sizeof(equiv) - 1] = '\0';
                 found_attr = e->attr;
+                nequiv = 1;   /* this process-private store is single-valued */
                 have = 1;
             }
             pthread_mutex_unlock(&lnm_mutex);
@@ -331,19 +355,22 @@ uint32_t sys$trnlnm(const uint32_t *attr,
                 strncpy(equiv, e->equiv, sizeof(equiv) - 1);
                 equiv[sizeof(equiv) - 1] = '\0';
                 found_attr = e->attr;
+                nequiv = 1;   /* this process-private store is single-valued */
                 have = 1;
                 break;
             }
         }
         pthread_mutex_unlock(&lnm_mutex);
 
-        /* Then LNM$SYSTEM, from the executive arena. */
+        /* Then LNM$SYSTEM, from the executive arena, at the requested index. */
         if (!have) {
-            int r = vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, name, 0, equiv,
+            int r = vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, name,
+                                          (uint8_t)req_index, equiv,
                                           sizeof(equiv), NULL, &found_attr,
-                                          NULL);
-            if (r < 0) return SS$_NOSUCHDEV;   /* executive absent */
-            if (r == 0) return SS$_NOLOGNAM;
+                                          &nequiv);
+            if (r < 0) return SS$_NOSUCHDEV;             /* executive absent */
+            if (r == 0 && nequiv == 0) return SS$_NOLOGNAM; /* name absent */
+            if (r == 0) equiv[0] = '\0';
             have = 1;
         }
     }
@@ -381,7 +408,10 @@ uint32_t sys$trnlnm(const uint32_t *attr,
 
                 case LNM$_MAX_INDEX:
                     if (item->bufaddr && item->buflen >= sizeof(uint32_t)) {
-                        *(uint32_t *)item->bufaddr = 0;  /* Single-valued */
+                        /* Highest valid index = (list length - 1); 0 for a
+                         * single-valued name, as VMS reports. */
+                        *(uint32_t *)item->bufaddr =
+                            (nequiv > 0) ? (uint32_t)(nequiv - 1) : 0;
                     }
                     if (item->retlen) *item->retlen = sizeof(uint32_t);
                     break;

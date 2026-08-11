@@ -334,6 +334,14 @@ int vmsfs_compose_filespec(const vmsfs_filespec_t *parts, char *result, size_t r
 /* Maximum recursion depth for device/logical name resolution */
 #define VMSFS_RESOLVE_MAX_DEPTH 10
 
+/* Single-path translation (no search-list device fan-out) -- the classic
+ * one-spec-in, one-path-out pipeline. vmsfs_to_linux_path() (below) wraps it
+ * with the search-list fan-out; device-equivalence recursion inside the
+ * resolver uses this directly so a single device equivalence never re-enters
+ * the fan-out. */
+static int vmsfs_to_linux_path_one(const char *vms_spec, char *linux_path,
+                                   size_t path_size);
+
 /*
  * Internal recursive device resolver with depth tracking.
  */
@@ -396,10 +404,14 @@ static int vmsfs_resolve_device_r(const char *device, char *linux_dir,
              * Translate the entire VMS spec to a Linux path.
              */
             if (strchr(equiv, '[')) {
-                return vmsfs_to_linux_path(equiv, linux_dir, dir_size);
+                return vmsfs_to_linux_path_one(equiv, linux_dir, dir_size);
             }
 
-            /* Equivalence is another logical or device name — recurse */
+            /* Equivalence is another logical or device name — recurse.
+             * Uses the same single-value lnm_translate() above, so a
+             * search-list device's OWN equivalences are already the
+             * per-member specs the fan-out substituted; there is no second
+             * fan-out here. */
             size_t elen = strlen(equiv);
             if (elen > 0 && equiv[elen - 1] == ':') {
                 equiv[elen - 1] = '\0';  /* Strip trailing colon */
@@ -522,7 +534,8 @@ int vmsfs_translate_directory(const char *vms_dir, char *linux_dir, size_t dir_s
  *
  * Returns SS$_NORMAL on success.
  */
-int vmsfs_to_linux_path(const char *vms_spec, char *linux_path, size_t path_size)
+static int vmsfs_to_linux_path_one(const char *vms_spec, char *linux_path,
+                                   size_t path_size)
 {
     if (!vms_spec || !linux_path || path_size == 0) {
         return SS$_BADPARAM;
@@ -649,6 +662,120 @@ int vmsfs_to_linux_path(const char *vms_spec, char *linux_path, size_t path_size
     }
 
     return SS$_NORMAL;
+}
+
+/*
+ * vmsfs_to_linux_path - Full VMS filespec to Linux path, WITH search-list
+ * device fan-out.
+ *
+ * When the device position of the filespec names a multi-valued (search-list)
+ * logical -- e.g. DEFINE FOO DKA0:[X],DKA1:[Y] -- VMS RMS tries each
+ * equivalence IN ORDER on $OPEN/$SEARCH until one names an existing file, and
+ * $CREATE uses the first (VMS I/O User's Reference Manual, "Logical Name
+ * Search Lists"; DCL Dictionary, DEFINE). This wrapper implements exactly
+ * that: it substitutes each equivalence for the device, translates the
+ * resulting per-member spec, and returns the FIRST member whose file exists;
+ * if none exists it returns the first member's path, so $OPEN reports an
+ * honest file-not-found and $CREATE lands in the primary member. A
+ * single-valued device (n<=1), a physical device, or a name that is not a
+ * logical at all all fall straight through to the classic single-path
+ * pipeline unchanged.
+ *
+ * Wildcards are NOT fanned out here -- $SEARCH walks a directory itself, and
+ * search-list-wide wildcard enumeration is a separate concern (vms-ed7's
+ * $SEARCH fan-out item); the primary member is used, preserving today's
+ * behavior. Returns a VMS status (SS$_NORMAL on success).
+ */
+int vmsfs_to_linux_path(const char *vms_spec, char *linux_path, size_t path_size)
+{
+    if (!vms_spec || !linux_path || path_size == 0) {
+        return SS$_BADPARAM;
+    }
+
+    /*
+     * Peek at the device: only a genuine multi-valued (>=2) search-list
+     * logical triggers the fan-out. One lnm probe per translate; a miss (not
+     * a logical) or a single value costs only that probe, then the classic
+     * path runs exactly as before.
+     */
+    vmsfs_filespec_t parsed;
+    int pst = vmsfs_parse_filespec(vms_spec, &parsed);
+    if ($VMS_STATUS_SUCCESS(pst) && parsed.has_device && parsed.device[0] &&
+        !parsed.is_wildcard && !parsed.has_node) {
+        lnm_manager_t *mgr = lnm_get_manager();
+        if (mgr) {
+            char dev_up[VMSFS_MAX_DEVICE + 1];
+            strncpy(dev_up, parsed.device, sizeof(dev_up) - 1);
+            dev_up[sizeof(dev_up) - 1] = '\0';
+            str_upcase(dev_up);
+
+            char values[LNM_MAX_SEARCHLIST][LNM_MAX_VALUE + 1];
+            uint8_t n = 0;
+            uint32_t lst = lnm_translate_searchlist(mgr, dev_up, values,
+                                                    LNM_MAX_SEARCHLIST, &n, NULL);
+            if (lst == SS$_NORMAL && n >= 2) {
+                /* rest = the original spec text after the device's colon (the
+                 * directory/name/type/version the caller supplied). No node
+                 * prefix is present here (guarded above), so the first colon
+                 * is the device terminator. */
+                const char *colon = strchr(vms_spec, ':');
+                const char *rest = colon ? colon + 1 : "";
+
+                char primary[VMSFS_MAX_PATH] = "";
+                int have_primary = 0;
+
+                for (uint8_t i = 0; i < n; i++) {
+                    char cand_spec[VMSFS_MAX_PATH];
+                    /* Substitute the equivalence for the device. An
+                     * equivalence that already carries a device/directory
+                     * (':' or '[') is spliced directly; a bare device name
+                     * gets its colon restored so "DEVA" + "BAR.TXT" becomes
+                     * "DEVA:BAR.TXT", not "DEVABAR.TXT". */
+                    if (strchr(values[i], ':') || strchr(values[i], '[')) {
+                        snprintf(cand_spec, sizeof(cand_spec), "%s%s",
+                                 values[i], rest);
+                    } else {
+                        snprintf(cand_spec, sizeof(cand_spec), "%s:%s",
+                                 values[i], rest);
+                    }
+
+                    char cand_path[VMSFS_MAX_PATH];
+                    int cst = vmsfs_to_linux_path_one(cand_spec, cand_path,
+                                                      sizeof(cand_path));
+                    if (!$VMS_STATUS_SUCCESS(cst)) {
+                        continue;   /* this member does not translate; try next */
+                    }
+
+                    if (!have_primary) {
+                        strncpy(primary, cand_path, sizeof(primary) - 1);
+                        primary[sizeof(primary) - 1] = '\0';
+                        have_primary = 1;
+                    }
+
+                    struct stat sb;
+                    if (stat(cand_path, &sb) == 0) {
+                        /* First member whose file exists wins -- this IS the
+                         * "try each in order" behavior. */
+                        strncpy(linux_path, cand_path, path_size - 1);
+                        linux_path[path_size - 1] = '\0';
+                        return SS$_NORMAL;
+                    }
+                }
+
+                if (have_primary) {
+                    /* No member has the file: hand back the primary member's
+                     * path (honest FNF on open, create-in-first on create). */
+                    strncpy(linux_path, primary, path_size - 1);
+                    linux_path[path_size - 1] = '\0';
+                    return SS$_NORMAL;
+                }
+                /* Not a single member translated -- fall through to the
+                 * classic path on the original spec for a consistent error. */
+            }
+        }
+    }
+
+    return vmsfs_to_linux_path_one(vms_spec, linux_path, path_size);
 }
 
 /*

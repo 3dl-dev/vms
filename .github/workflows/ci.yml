@@ -358,8 +358,12 @@ jobs:
       # which is the only thing that distinguishes a gate from decoration.
       - name: The executive is integral — OVMX must not boot without it
         run: |
+          IDENTITY=${{ github.workspace }}/src/libvms/include/ovmx_identity.h
+          PRODUCT_NAME=$(sed -n 's/^#define[[:space:]]\+OVMX_PRODUCT_NAME[[:space:]]\+"\([^"]*\)".*/\1/p' "$IDENTITY" | head -1)
+          PRODUCT_VERSION=$(sed -n 's/^#define[[:space:]]\+OVMX_PRODUCT_VERSION[[:space:]]\+"\([^"]*\)".*/\1/p' "$IDENTITY" | head -1)
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_executive_integral.sh:/test.sh:ro \
+            -e "EXPECTED_BOOT_BANNER=$PRODUCT_NAME $PRODUCT_VERSION" \
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh

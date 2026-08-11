@@ -2,9 +2,17 @@
 # test_executive_integral.sh - OVMX does not come up without its executive
 #
 # Runs inside the ovmx-boot image (has QEMU + kernel + initramfs variants).
+# The runner stage carries no source tree (distro/Dockerfile.bootable's
+# final COPY list is boot artifacts only), so the expected boot-banner
+# string cannot be read from ovmx_identity.h inside the container -- it is
+# passed in as EXPECTED_BOOT_BANNER, derived on the HOST from the identity
+# SSOT (INV-1), the same sed idiom tools/cut-release.sh uses. This keeps the
+# version out of this script as a literal (vms-1d28: the V0.3-1 point
+# release found this file pinning "OpenVMX V0.3" verbatim).
 #
 #   docker build -f distro/Dockerfile.bootable -t ovmx-boot .
 #   docker run --rm -v $PWD/tests/qemu/test_executive_integral.sh:/test.sh:ro \
+#       -e EXPECTED_BOOT_BANNER="$(sed -n 's/^#define[[:space:]]\+OVMX_PRODUCT_NAME[[:space:]]\+"\([^"]*\)".*/\1/p' src/libvms/include/ovmx_identity.h) $(sed -n 's/^#define[[:space:]]\+OVMX_PRODUCT_VERSION[[:space:]]\+"\([^"]*\)".*/\1/p' src/libvms/include/ovmx_identity.h)" \
 #       --entrypoint bash ovmx-boot /test.sh
 #
 # WHAT THIS PROVES (epic vms-6b8 / item vms-0ff)
@@ -45,6 +53,15 @@ INITRD_NODEV=/boot/initramfs-ovmx-nodev.cpio.gz
 # keep an empty disk — the point of those controls is the executive, not the disk.
 DISTRIB_IMG=/boot/ovmx-distrib.img
 ARCH=$(uname -m)
+
+# Required, not defaulted: a hardcoded fallback here would be exactly the
+# literal-pin bug this de-hardcoding fixes (vms-1d28). See header for how
+# the caller derives it from ovmx_identity.h.
+EXPECTED_BOOT_BANNER="${EXPECTED_BOOT_BANNER:-}"
+if [ -z "$EXPECTED_BOOT_BANNER" ]; then
+    echo "FATAL: EXPECTED_BOOT_BANNER is required (product name + version, e.g. \"OpenVMX V0.3-1\") -- see this script's header" >&2
+    exit 1
+fi
 
 PASS=0
 FAIL=0
@@ -121,7 +138,7 @@ cp "$DISTRIB_IMG" "$DISK_A"
 OUT_A=$(run_qemu "$INITRD_OK" "$DISK_A")
 
 check "Boot A: executive attached" "$OUT_A" '%OVMX-I-EXEC'
-check "Boot A: system came up (boot banner)" "$OUT_A" 'OpenVMX V0.3'
+check "Boot A: system came up (boot banner)" "$OUT_A" "$EXPECTED_BOOT_BANNER"
 check "Boot A: no executive-image load error" "$OUT_A" '%EXECINIT, error loading system file' absent
 check "Boot A: no OVMX-facility exec halt" "$OUT_A" '%OVMX-F-EXECINIT' absent
 echo ""
@@ -145,7 +162,7 @@ check "Boot B: carries the oracle's status for a missing file" "$OUT_B" 'R0 = 00
 # The load-bearing assertions: the system genuinely did NOT come up. Before
 # vms-0ff, this boot printed a severity-W warning and proceeded to a full DCL
 # session with no executive at all.
-check "Boot B: NO boot banner (system did not come up)" "$OUT_B" 'OpenVMX V0.3'  absent
+check "Boot B: NO boot banner (system did not come up)" "$OUT_B" "$EXPECTED_BOOT_BANNER"  absent
 check "Boot B: NO login prompt"                         "$OUT_B" 'Username:'  absent
 check "Boot B: startup did not complete"                "$OUT_B" '%STDRV-I-STARTUP, OpenVMX startup completed' absent
 echo ""
@@ -167,7 +184,7 @@ OUT_C=$(run_qemu "$INITRD_NODEV" "$DISK_C")
 
 check "Boot C: reports the OVMX-facility exec halt" "$OUT_C" '%OVMX-F-EXECINIT, VMS executive device /dev/vms did not open'
 check "Boot C: NO fabricated bare EXECINIT (no R0)" "$OUT_C" '%EXECINIT, error loading system file' absent
-check "Boot C: NO boot banner (system did not come up)" "$OUT_C" 'OpenVMX V0.3' absent
+check "Boot C: NO boot banner (system did not come up)" "$OUT_C" "$EXPECTED_BOOT_BANNER" absent
 check "Boot C: NO login prompt"                          "$OUT_C" 'Username:' absent
 check "Boot C: startup did not complete"                 "$OUT_C" '%STDRV-I-STARTUP, OpenVMX startup completed' absent
 echo ""

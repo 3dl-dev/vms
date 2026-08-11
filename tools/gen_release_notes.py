@@ -18,7 +18,9 @@ WHAT THIS DOES, ground-sourced against git itself (no hand-fed data):
      in the notes is therefore whatever the CUT commit actually says, never
      a literal typed into this script.
   2. Finds the previous release tag: the highest-version tag matching
-     ^v?[0-9]+(\\.[0-9]+)+$ that is an ancestor of --ref. This deliberately
+     ^v?[0-9]+(\\.[0-9]+)+(-[0-9]+)?$ that is an ancestor of --ref (the
+     optional -N suffix is a VMS-style point/maintenance release off an
+     existing tag, e.g. 0.3-1 off 0.3 -- vms-1d28). This deliberately
      excludes non-release tags this repo also carries (e.g.
      wip/migration-*) -- those were never a shipped cut.
   3. Walks `git log <prev-tag>..<ref> --no-merges`, drops this repo's
@@ -58,7 +60,14 @@ import subprocess
 import sys
 
 VERSION_RE = re.compile(r'^#define\s+OVMX_PRODUCT_VERSION\s+"([^"]*)"', re.M)
-RELEASE_TAG_RE = re.compile(r'^v?[0-9]+(\.[0-9]+)+$')
+# Release tags are dotted-numeric (0.3, v1.0) with an OPTIONAL VMS-style
+# point/maintenance suffix (-N, e.g. 0.3-1 -- vms-1d28, the first point
+# release cut through this machinery). Without the optional group here, a
+# point-release tag would never be recognized as a candidate "previous
+# release" by previous_release_tag() below, so the NEXT release's notes
+# would silently skip straight back to the last non-suffixed tag and
+# re-list commits the point release already shipped.
+RELEASE_TAG_RE = re.compile(r'^v?[0-9]+(\.[0-9]+)+(-[0-9]+)?$')
 ATTEST_RE = re.compile(r'^Attest [0-9a-f]{40}$')
 
 # Reverse-engineering / cluster-wire-protocol work: this project's commit
@@ -112,7 +121,16 @@ def previous_release_tag(repo_root, ref):
         return None
 
     def sort_key(tag):
-        return [int(p) for p in re.sub(r'^v', '', tag).split('.')]
+        # Split off the optional -N point-release suffix BEFORE splitting on
+        # '.' -- a naive tag.split('.') on "0.3-1" yields ['0', '3-1'], and
+        # int('3-1') raises. A tag with no suffix sorts as suffix 0, so
+        # "0.3" < "0.3-1" < "0.4" -- point releases of an existing tag rank
+        # ahead of it but behind the next dotted release, matching how
+        # cut-release.sh names them (vms-1d28).
+        main, _, suffix = tag.partition('-')
+        key = [int(p) for p in re.sub(r'^v', '', main).split('.')]
+        key.append(int(suffix) if suffix else 0)
+        return key
 
     return sorted(ancestors, key=sort_key)[-1]
 

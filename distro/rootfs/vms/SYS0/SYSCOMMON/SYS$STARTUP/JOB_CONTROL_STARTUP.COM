@@ -35,9 +35,21 @@ $! scope. JOB_CONTROL's own login children still take a channel to OPA0: the
 $! VMS way ($ASSIGN + $GETDVI, vms-d0b) once they are running; only THIS
 $! procedure's creation-time redirection is spelled as a Linux path.
 $!
+$! WHY THE PATH IS QUOTED. DCL's lexer (src/vmsdcl/dcl_lexer.c) treats
+$! EVERY '/' as the start of a new qualifier, unconditionally -- including
+$! one that appears inside a qualifier's own unquoted value. An unquoted
+$! /INPUT=/dev/console therefore does not tokenize as "qualifier INPUT,
+$! value /dev/console" at all: it tokenizes as three separate qualifiers
+$! (INPUT with no value, then bogus DEV and CONSOLE), which the parser
+$! neither refuses nor honours as intended. Quoting forces the lexer's
+$! quoted-string branch (checked before the qualifier branch), which reads
+$! the whole value, slashes included, as one token -- the DCL parser
+$! explicitly accepts TOK_STRING for a qualifier value
+$! (src/vmsdcl/dcl_parser.c parse_qualifier).
+$!
 $ SET NOON
 $ RUN /DETACHED -
       /PROCESS_NAME=JOB_CONTROL -
-      /INPUT=/dev/console /OUTPUT=/dev/console /ERROR=/dev/console -
+      /INPUT="/dev/console" /OUTPUT="/dev/console" /ERROR="/dev/console" -
       SYS$SYSTEM:JOB_CONTROL.EXE
 $ EXIT

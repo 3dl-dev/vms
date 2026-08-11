@@ -10217,20 +10217,38 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
           "the membership latch must read ADMITTED, got %s",
           readmit_verdict_name(readmit_verdict_of(ps)));
 
-    /* vms-4dd (spec §4(O.22)): the RESIDUAL-CSB false positive. The live bracket
-     * `4dBr` (a RETURNING identity, vaxlab-1) showed a member whose CDT reached
-     * OPEN off a residual/partial reconnect while it ran ZERO CM JOIN handshakes
-     * (cm_responses==0, XITDONE=0). The membership latch alone must NOT read
-     * ADMITTED in that case -- a member that sent 0 CM responses did not run the
-     * per-member JOIN handshake and is a returning-identity non-admission. This
-     * is the fail-pre/pass-post gate for the verdict refinement: before it, this
-     * shape read ADMITTED (a false positive that masks the NON-ADMISSION). */
+    /* vms-4dd (spec §4(O.22)): the membership latch alone must NOT read ADMITTED
+     * without a CM response -- preserved here. But vms-944 (spec §4(O.23)) refines
+     * WHAT that shape is. The `944B2r` SDA bracket (vaxlab-1, a RETURNING identity
+     * with OVMX_INCARNATION_TIME pinned to 1-OCT-2026, blatantly later than the
+     * join) parked the member in SDA and watched its CSB: the residual CSB
+     * (879EBA40, Flags long_break,removed) was DEALLOCATED and a NEW CSB
+     * (879EBE00) was built with the Incarnation updated 11-AUG-2026 -> 1-OCT-2026
+     * and the SCS connection re-OPENED -- a genuine reclaim, NOT the "residual/
+     * stale reached-OPEN" §4(O.22) assumed -- yet cm_responses stayed 0 and no CM
+     * JOIN ran (XITDONE=0). So (vaxcluster_open_reached && cm_responses==0) is its
+     * OWN verdict, RECLAIMED-NOJOIN: still a non-admission (never ADMITTED), but
+     * the reclaim + incarnation-read path WORKED and the failure is downstream at
+     * the CM JOIN transition (the relocated frontier). This is the fail-pre/
+     * pass-post gate: before vms-944 this shape read NO-ENGAGE. */
     ps->cm_responses = 0;
     ps->vaxcluster_open_reached = 1;
+    CHECK(readmit_verdict_of(ps) == READMIT_RECLAIMED_NOJOIN,
+          "SYSAP re-opened (latch set) WITHOUT any CM response -- the member"
+          " reclaimed the CSB and read our incarnation but ran no CM JOIN -- must"
+          " read RECLAIMED-NOJOIN (spec 4(O.23)), not NO-ENGAGE and not ADMITTED,"
+          " got %s",
+          readmit_verdict_name(readmit_verdict_of(ps)));
+    CHECK(readmit_verdict_of(ps) != READMIT_ADMITTED,
+          "RECLAIMED-NOJOIN must never read ADMITTED (INV-6: no success from a"
+          " member that ran 0 CM JOIN handshakes)");
+
+    /* And the genuine never-re-opened non-admission stays NO-ENGAGE. */
+    ps->cm_responses = 0;
+    ps->vaxcluster_open_reached = 0;
     CHECK(readmit_verdict_of(ps) == READMIT_NO_ENGAGE,
-          "membership latch WITHOUT any CM response (residual/stale reached-OPEN"
-          " of a returning identity) must read NO-ENGAGE, not ADMITTED"
-          " (spec 4(O.22)), got %s",
+          "transport up but SYSAP never re-opened and 0 CM responses must read"
+          " NO-ENGAGE (spec 4(O.21)), got %s",
           readmit_verdict_name(readmit_verdict_of(ps)));
 }
 

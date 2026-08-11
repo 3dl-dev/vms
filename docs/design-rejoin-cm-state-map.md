@@ -387,3 +387,86 @@ Evidence (host, tank volume): `/data/training/vax/k8s-labs/vaxlab-1/logs/scsd-4d
 `scsd-4dCf.log` (`XITDONE=1`, admitted=2), with the matching `d94-4dAf/4dBr/4dCf.pcap`
 (`OVX40`/`OVX50` on the wire) and the console `SHOW CLUSTER` transitions in `vax1.log`.
 
+
+## 7. F1 vs F2 bracketed — both refuted; the frontier relocates to the CM JOIN transition (`vms-944`, spec §4(O.23))
+
+§6.4 left two candidate causes for why the member does not readmit a returning OVMX identity —
+**(F1)** unclean leave (the member never runs removal reconfiguration, so the CSB is retained) and
+**(F2)** the member does not read OVMX's fresh incarnation in the field it matches against the stale
+CSB. `vms-944` brackets them one factor at a time on a freshly-booted `vaxlab-1`, observed through
+**SDA** (VAX1 parked in `ANALYZE/SYSTEM`, `SHOW CLUSTER` per arm) rather than the coarser console
+`BRK_NON`/`BRK_NEW` strings §6 relied on. Both hypotheses are refuted, and the SDA view overturns
+§6.4's reading of the console strings.
+
+### 7.1 The bracket (GROUNDED, `vaxlab-1`, clean CN_2, 2026-08-11)
+
+One identity `OVX940`/1973, first-join op02 form held constant, `OVMX_JOIN_SEQ=1`, hard `timeout`
+per op, `csbwatch.sh` (VAX1 in SDA sampling the CSB for `OVX940`):
+
+| arm | what | member's CSB for `OVX940` (SDA) | `XITDONE` |
+|---|---|---|---|
+| B1 `944B1f` | FRESH join, live incarnation | CSB built at **`879EBA40`**, Incarnation **11-AUG-2026 05:18:23**, Flags `02060002 member,selected,status_rcvd`; console logs `received VAXcluster membership request from node OVX940` | **1** |
+| (departure) | daemon exits — bare VC break, no CM leave | CSB `879EBA40` → State `09 wait`, Flags `06040005 long_break,**removed**,status_rcvd,send_status` | — |
+| B2 `944B2r` | RETURN, `OVMX_INCARNATION_TIME=52975296000000000` = **1-OCT-2026** | old CSB `879EBA40` **DEALLOCATED**; **NEW CSB `879EBE00`**, State `01 open`, Incarnation **11-AUG-2026 → 1-OCT-2026**, Flags **`00000000` (non-member)**; NO membership request through T+42s+ | **0** |
+
+### 7.2 F1 is refuted — the member DOES run removal reconfiguration
+
+The B2 **T-PRE** sample (before B2's daemon starts, i.e. purely the state B1's ordinary departure
+left) shows CSB `879EBA40` already carrying **`removed`**. Only the removal reconfiguration clears
+the MEMBER flag and sets REMOVED (§3 / ch7-part03 p. 7-30). OVMX sent no CM leave — a bare VC break —
+and the member ran removal anyway, exactly as the book says it must after a non-last-gasp VC loss:
+reconnect for RECNXINTERVAL, then reconfigure regardless (p. 7-29/7-30). And p. 7-25 makes CSB
+retention the NORMAL post-departure state for **any** leave (a clean `SHUTDOWN` retains the CSB too;
+only the CSV entry is released). So "unclean leave → CSB retained" never separated the failing arm
+from the passing one. **F1 dead.**
+
+### 7.3 F2 is refuted — the member DOES read our incarnation and reclaims the CSB
+
+Pinning the return's incarnation to **1-OCT-2026** — ~7 weeks after the 11-AUG join, impossible to
+confuse — makes any member read of `[66:74]` unmissable. The SDA oracle showed it plainly: the CSB's
+stored **Incarnation advanced 11-AUG-2026 → 1-OCT-2026**, and the CSB was **deallocated and rebuilt at
+a new address** (`879EBA40` → `879EBE00`). That is Davis's rejoin reclaim verbatim: p. 7-24 (**DEAD**:
+"a new incarnation of a VAX system has been seen") → p. 7-25 ("the old CSB is deallocated, and a new
+CSB is created for it just as if it were joining for the first time"). **The member reads OVMX's
+incarnation and reclaims. F2 dead — the read is directly observable.**
+
+This overturns §6.4's reading: the console `BRK_NON → BRK_NEW` §6 interpreted as "the member re-`NEW`s
+the *residual* CSB rather than building a fresh one" is, under SDA, a **freshly-allocated NEW-state
+CSB at a new address** — the reclaim, not a re-NEW. `NEW` is exactly the state a just-allocated CSB
+takes (p. 7-23), and it represents "a system that left and is returning" as well as a newly discovered
+one — the same state either way. §6's console-only view could not see the address change; SDA can.
+
+### 7.4 The relocated frontier — reclaim succeeds, the CM JOIN transition does not run
+
+With the CSB reclaimed (new address), OVMX's fresh incarnation read into it, and the SCS connection
+re-`open`, the rebuilt CSB **stayed non-member (`Flags 00000000`) for the whole arm** and **no
+`received VAXcluster membership request` was logged** — the **CM JOIN state transition never ran**
+(`XITDONE=0`). The gate is neither the CSB nor the incarnation; it is the JOIN transition itself, the
+three-party Rule of Total Connectivity (pp. 7-37/7-39) that §2.2 already named as the completion gate.
+This converges the two readings: §2.2 (the JOIN completion gate) and §6 (the residual CSB) resolve to
+one frontier — **the member rebuilds a fresh CSB for the returning node exactly as the book says, then
+does not run JOIN for it.** The next isolation instruments the three-party connectivity dialogue on the
+return: which of the describe/acknowledge steps (coordinator↔joiner, coordinator↔other-member) the
+returning identity fails, that a fresh identity passes.
+
+### 7.5 The one open sub-question, and what `vms-944` ships
+
+**Open sub-question.** B2 pinned a *future* incarnation to make the read visible. Whether a REALISTIC
+(near-now, slightly-later) incarnation ALSO triggers the reclaim — settling whether §6.4's "never
+reclaims" was purely a console-string artifact or whether the reclaim needs a coarse incarnation
+delta — is the one remaining single-factor arm: a realistic-incarnation return under the same SDA
+observation. It does not move the frontier (§6's `4dBr`, realistic incarnation, already gave
+`XITDONE=0`); it only settles the mechanism label on the console strings.
+
+**What `vms-944` ships (no wire change).** (1) This record (§7) and the spec §4(O.23) note. (2) A
+verdict refinement splitting **`RECLAIMED-NOJOIN`** (SYSAP re-opened but `cm_responses==0`) out of
+`NO-ENGAGE`, so the reclaim-succeeded / JOIN-did-not-run case is named honestly instead of masked as a
+"residual/stale reached-OPEN" (which §6's verdict comment assumed and B2 refuted). Still a non-admission
+(never `ADMITTED`; INV-6). Log-only, byte-unchanged on the wire (guard 8), kill-switch
+`OVMX_NO_READMITMAP` unchanged, with a fail-pre/pass-post case in `tests/vmsscs/test_scsd_wire.c`.
+
+Evidence (host, tank volume): `/data/training/vax/cluster/work/944B1f.csb` / `944B2r.csb` (the SDA CSB
+timelines above), `944B1f.status` (`XITDONE=1`) / `944B2r.status` (`XITDONE=0`), and
+`/lab/k8s-labs/vaxlab-1/logs/scsd-944B1f.log`/`scsd-944B2r.log` + `d94-944B1f/944B2r.pcap`. Wire
+`[66:74]` incarnation distinct per run (arm A `0x00bc0cd311bc6c62`, arm B′ `0x00bc0cd380815b38`).
+*VAXcluster Principles* pp. 7-23/7-24/7-25/7-29/7-30/7-37/7-39.

@@ -5568,6 +5568,70 @@ on the wire), and the `SHOW CLUSTER` `BRK_NON`→`BRK_NEW` transitions in `vax1.
 `src/vmsscs/scsd.c` (`readmit_verdict_of`); unit `tests/vmsscs/test_scsd_wire.c`; design record
 `docs/design-rejoin-cm-state-map.md` §6; *VAXcluster Principles* pp. 7-24/7-25/7-33/7-39/7-40/7-41/7-46.
 
+#### 4(O.23) F1-vs-F2 bracketed — BOTH the unclean-leave (F1) and the incarnation-not-read (F2) hypotheses are REFUTED: the member DOES run removal reconfiguration for a returning OVMX identity, and DOES read OVMX's fresh incarnation and DEALLOCATE+REBUILD the CSB (a genuine reclaim), yet the CM JOIN transition still never runs — so the frontier relocates from "residual CSB retained" to "reclaim succeeds, CM JOIN does not run" (GROUNDED, `vms-944`, live SDA bracket on freshly-booted `vaxlab-1` A/B1/B2 + *VAXcluster Principles* pp. 7-23/7-24/7-25/7-29/7-30/7-37/7-39, 2026-08-11)
+
+**Frame.** §4(O.22) isolated the suppressing state to the member's residual per-identity CSB and
+left TWO candidate causes for the next single-factor bracket: **(F1)** OVMX's departure is a bare
+VC break, not a CM leave, so the member never runs removal reconfiguration and the CSB is retained;
+**(F2)** the member does not read OVMX's fresh incarnation in the field it matches against the
+stale CSB, so it never sees "a new incarnation" (pp. 7-33/7-39). `vms-944` runs the bracket, and
+the **SDA oracle** (VAX1 parked in `ANALYZE/SYSTEM`, sampling the CSB per arm — far finer than the
+`SHOW CLUSTER` `BRK_NON`/`BRK_NEW` strings §4(O.22) had) refutes **both**.
+
+**The bracket (GROUNDED, freshly-booted `vaxlab-1`, clean CN_2, one identity `OVX940`/1973).**
+Three consecutive arms, first-join op02 form held constant, `OVMX_JOIN_SEQ=1`, hard `timeout` per op:
+
+| arm | what | member's CSB for `OVX940` (SDA) | `XITDONE` |
+|---|---|---|---|
+| A/B1 `944B1f` | FRESH join, live incarnation | CSB **built at `879EBA40`**, Incarnation **11-AUG-2026 05:18:23**, Flags `member,selected`; `received VAXcluster membership request` | **1** |
+| (departure) | daemon exits (bare VC break) | CSB `879EBA40` → State `09 wait`, Flags `06040005 long_break,**removed**`, Incarnation still 11-AUG | — |
+| B2 `944B2r` | RETURN, `OVMX_INCARNATION_TIME=52975296000000000` (**1-OCT-2026**, blatantly later) | old CSB `879EBA40` **DEALLOCATED**; **NEW CSB `879EBE00`**, State `01 open`, Incarnation **updated 11-AUG-2026 → 1-OCT-2026**, Flags `00000000` (**non-member**); NO membership request | **0** |
+
+**Why the OCT-2026 pin isolates F2.** F2 says the member cannot see a new incarnation. Presenting
+an incarnation ~7 weeks in the future — impossible to confuse with the AUG join — makes any member
+read of it unmissable in SDA. The oracle answered directly: the CSB's stored **Incarnation changed
+11-AUG → 1-OCT** and the CSB itself was **deallocated and rebuilt at a new address** (`879EBA40` →
+`879EBE00`). That is precisely Davis's rejoin path — p. 7-24 (**DEAD**: "a new incarnation of a VAX
+system has been seen") → p. 7-25 ("the old CSB is deallocated, and a new CSB is created for it just
+as if it were joining for the first time"). **The member reads our incarnation and reclaims the
+CSB. F2 is refuted — you can watch the read happen.**
+
+**Why F1 is refuted.** The B2 **T-PRE** sample (before the return daemon starts) shows the residual
+CSB already carrying the **`removed`** flag — the MEMBER flag is cleared and REMOVED set only by the
+removal reconfiguration (p. 7-30: after a non-last-gasp VC loss the CM reconnects for RECNXINTERVAL,
+then reconfigures regardless). So the member **DID run removal** after OVMX's ordinary departure,
+with no CM leave from OVMX. Independently, p. 7-25 makes CSB retention the NORMAL post-departure
+state for **any** leave (clean shutdown included — only the CSV entry is released), so "unclean leave
+→ CSB retained" never distinguished success from failure. **F1 is refuted.**
+
+**The relocated frontier.** With the CSB reclaimed (new address), OVMX's fresh incarnation read into
+it, and the SCS connection re-`open`, the rebuilt CSB **stayed `Flags 00000000` (non-member) for the
+whole 90 s arm and no `received VAXcluster membership request` was logged** — the **CM JOIN state
+transition never ran** (`XITDONE=0`). The gate is neither the CSB nor the incarnation (both demonstrably
+work); it is the JOIN transition itself — the three-party Rule of Total Connectivity (pp. 7-37/7-39),
+exactly where §2.2 of `docs/design-rejoin-cm-state-map.md` already placed the completion gate. The
+`vms-944` daemon refinement names this: `RECLAIMED-NOJOIN` (SYSAP re-opened + `cm_responses==0`) is
+split out of `NO-ENGAGE` so the reclaim-succeeded-JOIN-did-not case is visible, not masked.
+
+**Non-claims / open sub-question.** (1) NO wire change ships; rejoin is NOT closed — this REFUTES F1
+and F2 and relocates the frontier. (2) B2 pinned a FUTURE incarnation to make the read visible; whether
+a REALISTIC (near-now, slightly-later) incarnation ALSO triggers the reclaim — i.e. whether §4(O.22)'s
+"never reclaims" was a `SHOW CLUSTER`-string artifact (`BRK_NEW` being the freshly-allocated NEW-state
+CSB, not a re-NEW of the old one) or whether the reclaim needs a coarse incarnation delta — is the ONE
+open sub-question, resolved by a realistic-incarnation return under the SAME SDA observation. Either way
+the CM JOIN transition is the frontier: §4(O.22)'s arm `4dBr` (realistic live incarnation) already gave
+`XITDONE=0`. (3) The `RECLAIMED-NOJOIN` split is a diagnostic-honesty refinement, not the rejoin fix.
+
+**Evidence** (host, tank volume): `/data/training/vax/cluster/work/944B1f.csb` (fresh join, CSB
+`879EBA40` member, Incarnation 11-AUG-2026 05:18:23) and `944B2r.csb` (return: T-PRE `879EBA40`
+`long_break,removed`; T+5s new CSB `879EBE00` open, Incarnation 1-OCT-2026, non-member), with
+`944B1f.status` (`XITDONE=1`) / `944B2r.status` (`XITDONE=0`) and `/lab/k8s-labs/vaxlab-1/logs/
+scsd-944B1f.log`/`scsd-944B2r.log` + `d94-944B1f/944B2r.pcap`; the wire incarnation `[66:74]`
+(`docs/clean-room/tools/af2start.py` region) distinct per run — arm A `0x00bc0cd311bc6c62`
+(11-AUG 04:33:49), arm B′ `0x00bc0cd380815b38` (11-AUG 04:36:55); code `src/vmsscs/scsd.c`
+(`readmit_verdict_of`, `READMIT_RECLAIMED_NOJOIN`); unit `tests/vmsscs/test_scsd_wire.c`; design
+record `docs/design-rejoin-cm-state-map.md` §7; *VAXcluster Principles* pp. 7-23/7-24/7-25/7-29/7-30/7-37/7-39.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

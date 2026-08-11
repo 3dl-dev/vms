@@ -27,7 +27,7 @@ From `docs/design-init-scope.md` §1, updated with the vms-718 outcome:
 | EXEC_INIT | init executive, construct system process | `establish_system_identity()` (PID 1 reads SYSUAF — `vms-a17e` moves this into the executive) | same gap, tracked |
 | SYSINIT | mount system disk, open page/swap, create STARTUP process | mount `DKA0:` in PID 1 | mount-or-halt (`vms-2f0`) |
 | **STARTUP process** | DCL runs SYS$SYSTEM:STARTUP.COM = **STDRV, a phased startup driver** reading component data files; runs the documented site files; creates the detached system processes; **terminates like a job, with accounting** | flat `STARTUP.COM` defining two logicals and calling SYSTARTUP_VMS.COM | same gap |
-| JOB_CONTROL | create login processes on terminals | login loop in PID 1 (`vms-8d2` moves it) | same gap, tracked |
+| JOB_CONTROL | create login processes on terminals | **DONE (`vms-8d2`)**: `JOB_CONTROL.EXE`, a real DETACHED process created by `SYSTARTUP_VMS.COM` via `RUN/DETACHED`, owns the login loop | closed |
 | LOGINOUT | authenticate | `vms_login` | works |
 
 ## 2. Measured gaps (desk research, 2026-08-07)
@@ -270,8 +270,10 @@ the startup *actually started*, not from a fixed roster).
    `OVMX.CONF` and `SYLOGICALS.CONF` eliminated into parameters and
    procedures.
 5. **System processes.** The startup phases create the detached processes OVMX
-   *legitimately has* — JOB_CONTROL first (`vms-8d2`) — under real VMS process
-   names, visible in SHOW SYSTEM because they exist. Nothing is faked into the
+   *legitimately has* — JOB_CONTROL first (`vms-8d2`, **done**: created by
+   `SYSTARTUP_VMS.COM` via `SYS$STARTUP:JOB_CONTROL_STARTUP.COM` and
+   `RUN/DETACHED/PROCESS_NAME=JOB_CONTROL`) — under real VMS process names,
+   visible in SHOW SYSTEM because they exist. Nothing is faked into the
    roster (Rule 10); §3.6 shows the population is whatever startup actually
    started. The SWAPPER-row question stays with the authenticity board
    (`vms-898` / executive-gap).

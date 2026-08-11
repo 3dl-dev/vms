@@ -5,14 +5,6 @@ $! the system-wide logical names are defined. This is where a system
 $! manager starts the services this node should run. Edits on the system
 $! disk persist across reboots.
 $!
-$! THIS PROCEDURE STARTS NO SERVICE, AND THAT IS DELIBERATE.
-$!
-$! OVMX ships no service image yet. A worked example here would have to
-$! name an image that is never built, which would fail on every boot and
-$! teach the reader that the failure is normal. So the mechanism is
-$! documented and left unused rather than demonstrated against a service
-$! that does not exist.
-$!
 $! HOW TO START ONE. A service is a DETACHED process with a VMS process
 $! name, created by its own startup procedure:
 $!
@@ -65,6 +57,15 @@ $ INSTALL ADD SYS$SHARE:LIBVMSPROCESS$SHR.EXE /OPEN /SHARED /HEADER_RESIDENT
 $ INSTALL ADD SYS$SHARE:LIBVMSLNM$SHR.EXE     /OPEN /SHARED /HEADER_RESIDENT
 $ INSTALL ADD SYS$SHARE:LIBVMSFS$SHR.EXE      /OPEN /SHARED /HEADER_RESIDENT
 $ INSTALL ADD SYS$SHARE:LIBVMSRMS$SHR.EXE     /OPEN /SHARED /HEADER_RESIDENT
+$!
+$! START JOB_CONTROL (vms-8d2) -- the console-session process, and the first
+$! real worked example of the mechanism documented above. Started AFTER the
+$! shareable-image registration so its own dynamic activation finds every
+$! dependency at Priority 1 rather than falling through to the Priority 2
+$! directory scan. See SYS$STARTUP:JOB_CONTROL_STARTUP.COM for why it is
+$! started with explicit /INPUT /OUTPUT /ERROR pointed at the console.
+$!
+$ @SYS$STARTUP:JOB_CONTROL_STARTUP.COM
 $!
 $! ANNOUNCE THAT THIS PROCEDURE RAN, so that "the boot reached site
 $! startup" is an ASSERTION and not an inference from the absence of an

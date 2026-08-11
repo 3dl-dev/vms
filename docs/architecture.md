@@ -119,10 +119,29 @@ docker build -f Dockerfile.bootable -o dist .
                     └── exec DCL.EXE on SYS$MANAGER:STARTUP.COM — SAME PROCESS.
                           exec(2) preserves the executive's SYSTEM identity, so
                           STARTUP.COM / SYSTARTUP_VMS.COM run under SYSTEM, exactly
-                          as OpenVMS (STARTUP runs as SYSTEM). Login shells (vmsdcl)
-                          launch afterward. LOGINOUT (tools/vms_login.c) — not this
-                          image — is SYSUAF's FIRST reader for an authenticated
-                          identity, matching OpenVMS.
+                          as OpenVMS (STARTUP runs as SYSTEM).
+                          │
+                          └── SYSTARTUP_VMS.COM → @SYS$STARTUP:JOB_CONTROL_STARTUP.COM
+                                RUN/DETACHED/PROCESS_NAME=JOB_CONTROL (vms-47b's
+                                mechanism) creates JOB_CONTROL.EXE
+                                (src/ovmx_job_control/ovmx_job_control.c) as a
+                                DETACHED process — NOT PID 1's child — with
+                                /INPUT /OUTPUT /ERROR pointed at the physical
+                                console (/dev/console). JOB_CONTROL owns the
+                                console session from here on (vms-8d2):
+                                  └── fork/exec SYS$SYSTEM:LOGINOUT.EXE
+                                        (tools/vms_login.c) on the console,
+                                        forever, with retry/backoff on repeated
+                                        failure. LOGINOUT is SYSUAF's FIRST
+                                        reader for an authenticated identity,
+                                        matching OpenVMS. Login shells (vmsdcl)
+                                        launch under the authenticated session.
+
+STARTUP.EXE (PID 1) returns from run_startup() once STARTUP.COM has finished —
+by which point JOB_CONTROL already owns the console — and then waits
+(reaping anything reparented to it, answering SIGTERM) rather than exiting,
+because Linux's PID 1 cannot exit without panicking the kernel. It contains
+no login loop of its own; grep src/ovmx_init/ovmx_init.c finds none.
 ```
 
 ### SYSUAF.DAT — one format, one reader, one writer (vms-9b7)

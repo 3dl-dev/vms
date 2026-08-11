@@ -246,6 +246,18 @@ if(BUILD_TESTS)
     set_tests_properties(runtime_target_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # vms-8d2 standing gate: PID 1 does not run the console login loop --
+    # JOB_CONTROL, a DETACHED process, does. Source scan — no build
+    # artifacts needed. The end-to-end proof (real boot, real detached
+    # process, SHOW SYSTEM lists it, SYSTEM logs in through it) is
+    # tests/qemu/test_job_control_console.sh, opt-in like the other real-
+    # boot gates.
+    add_test(NAME job_control_ownership_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_job_control_ownership.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(job_control_ownership_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
     # The Rule 9 gate is a lint, and twice it certified the very regression it
     # exists to catch (see the file header). This runs the recorded evasions
     # against it on a sandbox copy of the tree and requires each one to drive
@@ -668,6 +680,7 @@ if(BUILD_TOOLS)
     add_subdirectory(tools)
     add_subdirectory(src/ovmx_init)
     add_subdirectory(src/ovmx_provision)  # PROVISION.EXE (startup process, vms-9b7)
+    add_subdirectory(src/ovmx_job_control) # JOB_CONTROL.EXE (console-session process, vms-8d2)
     add_subdirectory(src/vmslink)   # LINK.EXE + OVMXDUMP (VMS-native linker)
     add_subdirectory(src/install)   # INSTALL.EXE (known image database, vms-913.5)
     add_subdirectory(src/product)   # PRODUCT.EXE (PCSI-equivalent installer, vms-df9)

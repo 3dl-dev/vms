@@ -227,6 +227,14 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     # boot without it halts (src/ovmx_init/ovmx_init.c run_startup), so this
     # copy is NOT best-effort -- no "2>/dev/null ;" here.
     cp build-static/bin/PROVISION.EXE  /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    # JOB_CONTROL.EXE (vms-8d2) -- the console-session process. It is
+    # created DETACHED by SYS$STARTUP:JOB_CONTROL_STARTUP.COM (invoked
+    # from SYSTARTUP_VMS.COM during STARTUP.COM), and PID 1's own login
+    # loop is deleted, so a boot without this image on the disk reaches
+    # STARTUP.COM but never a login prompt (%DCL-E-IVIMAGE, not a halt --
+    # this copy is NOT best-effort, no "2>/dev/null ;" here, matching
+    # PROVISION.EXE's treatment above).
+    cp build-static/bin/JOB_CONTROL.EXE /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/HELP.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/AUTHORIZE.EXE  /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/MAIL.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \

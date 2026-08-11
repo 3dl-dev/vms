@@ -5110,6 +5110,135 @@ and `src/vmsscs/scsd.c` (`scs_reflect_credit` "initiate … NOT implemented", th
 accounting counters, `SCSD-W-STRAYACK`); measurement `tools/cluster/dissect_sca.py`
 (op field abs `[60:62]`, `recv_ack` abs `[32:34]`, `send_seq` abs `[34:36]`).
 
+#### 4(O.18) The op-6 credit-first fix (#291) is CONFIRMED LIVE — op-6 provably precedes op 0x02 on the rejoin wire and SCS Send Credit now FLOWS to the coordinator — but it is NECESSARY-NOT-SUFFICIENT: rejoin still does NOT re-admit (`XITDONE=0`), because the coordinator's special-credit handshake never reaches a satisfied state (it loops RETRANSMITTING op-8 and NEVER sends op-7 to OVMX's op-6), so it never proceeds to the CM readmission — no op 0x04, no `membership request` on VAX2. The frontier relocates from "OVMX never initiates op-6" (§4(O.17), now DONE) to "the op-6/op-8 credit handshake does not COMPLETE" (GROUNDED, clean same-pod fix-vs-control bracket on the just-wiped `vaxlab-0` + freeze-point + credit-op forensic + *VAXcluster Principles* pp. 2-44/2-45 & 7-37/7-39, `vms-5bc`, 2026-08-11)
+
+**Frame.** §4(O.17) identified the rejoin blocker as SCS Send Credit starvation (OVMX
+never returns Pending Receive Credit, so the coordinator cannot transmit its op 0x04),
+and shipped the fix increment (#291, `vms-46f`): on a rejoin OVMX INITIATES its own op-6
+special-credit request on the coordinator's `SCS$DIRECTORY` connection BEFORE op 0x02,
+behind kill-switch `OVMX_REJOIN_CREDIT_FIRST` (default ON). §4(O.17) deferred the LIVE
+`XITDONE` bracket to this subsection. It is now run — three arms, one clean pod, the
+static (`-DOVMX_STATIC=ON`) daemon `md5=e909cbda…` byte-identical across all three
+(staged+post-run verified in-pod).
+
+**The bracket (GROUNDED live, `vaxlab-0`, re-verified `CLUSTER_NODES=2` before each arm;
+identity `OVX460`, `SCSSYSTEMID` founding 1025, sidecar `generation=1`;
+`OVMX_CFG2_PEER=2` deterministic coordinator on every arm).**
+
+| arm | `OVMX_REJOIN_CREDIT_FIRST` | wire order | `CREDIT` (grants / starved) | `cm_responses` | op 0x04? | VAX2 console | `XITDONE` |
+|---|---|---|---|---|---|---|---|
+| **1 first-join** | ON (default) | — | — | — | — | `membership request` + `proposed addition` (admitted) | **1** (`CN_3`, sidecar written) |
+| **2 REJOIN FIX** | ON (default) | op-6 `ss=12` **BEFORE** op02 `ss=13` | `grants=2 grant-units=20 starved=4 banked=12` | **0** | **no** | only `lost connection` / `timed-out` | **0** |
+| **3 REJOIN CONTROL** | OFF (`=0`) | op02 `ss=8` **BEFORE** op-6 `ss=20` | `grants=2 grant-units=20 starved=4 banked=19` | **0** | **no** | only `lost connection` / `timed-out` | **0** |
+
+**HEADLINE — rejoin is NOT closed. `XITDONE=0` on the FIX arm (and the control).** The
+reused identity does NOT re-admit. The first-join arm (arm 1) admits cleanly on the same
+pod and identity (`CN_3`, `XITDONE=1`, VAX2 logs `received VAXcluster membership request`
++ `proposed addition of node OVX460`), so the defect is specifically the REJOIN, exactly
+where §4(O.2)/§4(O.9) placed it — not a broken lab or a bad identity.
+
+**The fix FIRES CORRECTLY (GROUNDED, `scsd-v46f-Rfix.log` + `d94-v46f-Rfix.pcap`, OVMX
+`d6:1c:18:40:c0:ff`).** `SCSD-I-CREDITFIRST` logs *"REJOIN: initiated op-6 special-credit
+request on the coordinator's `SCS$DIRECTORY` connection (local=0x2B2C0017
+remote=0x3097000D) BEFORE op 0x02"*, and the capture confirms it on the wire: on the
+member-initiated CM VC the op-6 (76-byte, op field abs `[60]=6`) rides `ss=12`, one ahead
+of op 0x02 (`cat 0x01 op 0x02`) at `ss=13`. The control arm inverts it (op 0x02 at `ss=8`,
+op-6 not until `ss=20/21`), so the kill-switch's isolated effect — the op-6/op-02
+ORDER — is exactly as designed.
+
+**Send Credit now FLOWS — the §4(O.17) hard freeze-at-8 is GONE.** In §4(O.17) the
+coordinator's cumulative `recv_ack` toward OVMX FROZE at 8 and op 0x02 was never
+delivered. On this build it advances PAST 8 (fix arm → 10; control arm → 12;
+`v46f_freeze.py`, `recv_ack` abs `[32:34]`), and the exit summary banks real grants:
+`grants=2 grant-units=20`, `starved` down to 4. So credit starvation as §4(O.17) framed
+it is RELIEVED. **Caveat (honest, or the reader over-reads the win):** on current `main`
+(with #291 merged) the CONTROL arm ALSO banks `grants=2` and advances past 8 — because
+#291's `SCSD-I-CREDITRETX` handling (answering the coordinator's RETRANSMITTED `0x7b`
+op-8) is UNCONDITIONAL, not gated behind `OVMX_REJOIN_CREDIT_FIRST`. So the §4(O.17)
+prediction "`grants` 0→>0 discriminates the fix" is CONFOUNDED: `grants>0` is a property
+of the #291 build, not specifically of the op-6-first ordering. The pre-fix
+`starved=10 grants=0` baseline (§4(O.17)) is the thing that no longer reproduces; the flag
+itself moves only the op-6 position.
+
+**Why rejoin STILL stalls — the credit handshake never COMPLETES (GROUNDED, credit-op
+census + `SCSD-I-CREDITRETX` loop).** On the coordinator's `SCS$DIRECTORY` connection
+(conid `0x2B2C0007`/`0x2B2C0017`) the credit exchange never terminates:
+
+| direction | op | meaning | fix arm | control arm |
+|---|---|---|---|---|
+| coord→OVMX | op-8 | special-credit / ready handshake (p. 2-44) | **34** | 32 |
+| OVMX→coord | op-9 | OVMX's RESPONSE to op-8 | 34 | 32 |
+| OVMX→coord | op-6 | OVMX's OWN special-credit REQUEST (the fix) | 6 | 4 |
+| coord→OVMX | **op-7** | coordinator's RESPONSE to OVMX's op-6 | **0** | **0** |
+
+The coordinator RETRANSMITS its op-8 credit/ready handshake ~every 3 s for the whole run
+(`SCSD-I-CREDITRETX, answered a RETRANSMITTED (0x7b) op8 … conid=0x2B2C0007` repeating
+`00:53:15`→teardown), OVMX answers each with op-9, but the coordinator NEVER answers
+OVMX's op-6 with an op-7 and never stops retransmitting op-8 — i.e. the special-credit
+handshake never reaches a satisfied/terminal state on either half. The coordinator
+therefore never advances to the connection-manager readmission: `cm_responses=0`, no op
+0x04, and VAX2 logs only `timed-out lost connection to node OVX460`, never `received
+VAXcluster membership request`. So op-6 INITIATION (the #291 fix) was necessary and is now
+proven live, but it is NOT SUFFICIENT — the same necessary-vs-sufficient result
+§4(O.12)/§4(O.16) reached for their fixes.
+
+**The relocated frontier (grounded, NOT yet resolved — two candidates, do not design
+against one).** The coordinator's op-8 retransmit loop + its silence to OVMX's op-6 says
+the credit handshake does not COMPLETE. Two documented mechanisms remain, and this
+bracket does not separate them:
+1. **The op-8/op-9 exchange is not being ACCEPTED as complete (Davis ch. 2, pp.
+   2-44/2-45).** OVMX emits an op-9 for every op-8, but the coordinator keeps
+   retransmitting the same op-8 — consistent with OVMX's op-9 not satisfying the
+   coordinator's Pending-Receive-Credit accounting (a field/count in the op-9 the
+   coordinator does not accept), leaving it in Credit Wait and unable to advance. (§4(O.17)
+   byte-diffed OVMX's op-9 as *content*-faithful to an oracle op-9, but did not verify the
+   credit COUNT the coordinator needs to see to CLOSE the loop.)
+2. **The CM JOIN Phase-1 connectivity dialogue is never entered (Davis ch. 7, pp.
+   7-37/7-39, the Rule of Total Connectivity).** Even were credit fully satisfied, the
+   coordinator's readmission may gate on the JOIN request + quorum/connectivity tests that
+   the wire never reaches here.
+
+The next increment must instrument WHICH: read the op-8 the coordinator retransmits and
+the op-9 OVMX returns for the exact Pending-Receive-Credit count the coordinator is
+waiting on (candidate 1), and confirm whether any Phase-1 JOIN frame (pp. 7-38/7-39) ever
+appears (candidate 2). Contrast against the SUCCESS-oracle rejoin, whose op-6 DID draw an
+op-7 and whose op-8 loop terminated.
+
+**Non-claims.** (1) This subsection ships NO wire change — it is the deferred live bracket
+for #291 plus a freeze/credit forensic, so (like §4(O.14)–§4(O.17)) it carries no
+kill-switch or frame test. (2) `XITDONE=0` is the FIX arm's verdict — stated flatly; the
+op-6-first fix does NOT close rejoin. (3) The `recv_ack` high-water marks (fix 10, control
+12) are read across VC incarnations that RESTART mid-run (the control VC cycled
+incarnations, `vms-694` note) — they establish "the §4(O.17) freeze-at-8 no longer holds",
+NOT a new single fixed freeze frame; do not design against "the freeze is now at 10".
+(4) The special-credit op-numbering (6 req / 7 resp / 8 msg / 9 resp) is the §4(O.17)
+observation-grounded reading of the shared MTYPE namespace, unchanged here.
+
+**Evidence** (host, tank volume, `vaxlab-0`): fix arm
+`/data/training/vax/k8s-labs/vaxlab-0/logs/{scsd,d94}-v46f-Rfix.{log,pcap}` (`XITDONE=0`,
+`SCSD-I-CREDITFIRST` op-6 before op 0x02, `CREDIT: … grants=2 grant-units=20 starved=4`,
+op-8×34/op-9×34/op-6×6/op-7×0, coordinator `recv_ack` 8→10); control arm
+`…-v46f-Rctl.{log,pcap}` (`XITDONE=0`, op 0x02 `ss=8` before op-6 `ss=20`, `grants=2`,
+op-7×0); first-join `…-v46f-A1.{log,pcap}` (`XITDONE=1`, sidecar written); VAX2 console
+`/data/training/vax/k8s-labs/vaxlab-0/logs/vax2.log` (`membership request`+`proposed
+addition` on the first-join, only `timed-out lost connection` on both rejoins); prior
+admission `/data/training/vax/cluster/work/vms46f.sysgen.cluster`
+(`formed=… founding_sysid=1025 generation=1`); *VAXcluster Principles* (Davis 1993,
+HOST-ONLY, cited by page) pp. 2-44/2-45 (special credit message, Credit Wait), 7-37/7-39
+(JOIN request, Rule of Total Connectivity); code `src/vmsscs/scsd.c`
+(`rejoin_credit_first_enabled`, `SCSD-I-CREDITFIRST`, `SCSD-I-CREDITRETX`,
+`scs_reflect_credit`) and `src/vmsscs/scs_credit.c`; runner `tests/lab/tools/lab2run.sh`;
+measurement `tools/cluster/dissect_sca.py`.
+
+> **Lab-harness note (`vms-694`, `vms-5bc`).** `lab2run.sh`'s prior-admission-sidecar
+> PULL-BACK reads `/lab/$TAG.sysgen.cluster`, but the daemon writes it under the per-run
+> dir `/lab/run-$TAG/$TAG.sysgen.cluster` (the `vms-1da` per-run staging change moved the
+> daemon's cwd but not this pull-back path). So a first-join's sidecar is silently not
+> carried back to the host store, and a scripted bracket sees "NO SIDECAR" and aborts. This
+> bracket pulled the sidecar by hand from the per-run dir. Fixing the pull-back path is
+> tracked separately; it does not affect any datum above (the sidecar WAS carried IN to
+> both rejoin arms, verified `carried prior-admission sidecar (57 bytes)`).
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

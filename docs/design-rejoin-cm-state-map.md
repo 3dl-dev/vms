@@ -758,3 +758,61 @@ identity it has held before and runs ZERO CM JOIN handshakes / never proposes th
 it admits a FRESH identity through the identical path. The next isolation is that CM-layer gate,
 now with the wire delivery PROVABLY clean (op 0x02 delivered, `recv_ack` past it, credit flowing) —
 a confound §4 through §10 could never fully remove.
+
+
+## 12. The coordinator retains NO persistent per-identity block — the gate is the departed node's own reconnect/wait CSB, kept alive by OVMX's rejoin-form return (`vms-358`, spec §4(O.28))
+
+§11 (`vms-3aba`) left the frontier at "the coordinator receives a clean, delivered, credited
+op 0x02 for an identity it has held before and proposes nothing." `vms-358` puts `ANALYZE/SYSTEM`
+on the **coordinator** across three same-boot single-factor brackets on freshly-booted virgin
+`vaxlab-0` (current-source daemon `md5=2518a52a`, `scsd.c` == `origin/main` HEAD), and the answer
+CORRECTS the "returning-identity non-admission" framing this document has carried since §5.
+
+**Bracket 1 (`358flip`) — the fresh-SCSSYSTEMID flip does NOT flip.** `A` FRESH join `OVX3S0` →
+ADMITTED; `B` fast return SAME `OVX3S0` → REFUSED; `C` fast return presenting a FRESH `OVX3F0` the
+coordinator never held → **REFUSED** (`scsd-358flip-C.log` `READMITMAP-SUMMARY admitted=0`). A fresh
+id is refused too, so the block is **not** keyed on the exact held SCSSYSTEMID. (The tag's
+`358flip.status` SUMMARY says `C=1` — a `grep -ac XITDONE` false positive counting the literal
+"XITDONE STILL 0" in the verdict text; the per-run daemon `admitted=` count is authoritative.)
+
+**Bracket 2 (`cq358`) — `qf_failed_node` is a red herring.** Four fresh first-joins on one pristine
+boot; `qf_failed_node` latches after the first departure and PERSISTS, yet a fresh join after a
+graceful departure (`B`, `admitted=2`) AND a fresh join after an **unclean SIGKILL crash + 26 s
+settle** (`D`, `admitted=2`) both ADMIT with it set. A fresh join admits once the prior node's
+teardown has **settled**. `358flip` arm C is thus re-read: refused because it arrived ~3 s after
+arm B's 70 s SAME-id reconnect-hammer was killed — mid-churn, Davis "abandon if a rebuild is
+pending" (pp. 7-40/7-41) — not because it was fresh-during-`qf_failed_node`.
+
+**Bracket 3 (`sameid358`) — the same id is self-perpetuating.** One id `OVX3X0`: `F1` first-join →
+ADMITTED → crash (cleanly `removed`); `R` fast return in REJOIN form → REFUSED, and R's op 0x02
+drive re-creates the coordinator's CSB for `OVX3X0` in State `03 reconnect`→`09 wait`,
+`Flags 02040001 long_break,status_rcvd`, CSID `0`, which OUTLIVES a 35 s no-daemon settle; `J`
+return as a FRESH FIRST-JOIN onto that residual → REFUSED (`verdict=JOIN-ABANDONED`, request
+received on VAX1, never proposed). **No arm achieved `XITDONE 0→1` for a same-id return.**
+
+**The retained record, named from SDA.** Not a "known-system" cluster-DB marker, not the
+`qf_failed_node` quorum flag — the departed node's **own per-SCSSYSTEMID CSB held in a reconnect/wait
+connectivity state** (`SHOW CLUSTER/NODE` State `03 reconnect`→`09 wait`, `long_break`, CSID 0, never
+`member`; `SHOW CONNECTIONS/NODE` the coordinator's member-initiated VCs to it `con_sent`/`con_pend`,
+`Remote Con. ID 0`). The coordinator holds it because it believes the node is *reconnecting*
+(RECNXINTERVAL/`long_break`, pp. 7-29/7-30) and will not PROPOSE a fresh JOIN for a SCSSYSTEMID whose
+CSB it is still reconnecting. OVMX's rejoin apparatus (`cm_rejoin_target_mode`, deferred op 0x02, the
+reconnect/readmit path) KEEPS this CSB alive: by fast-returning as the same id and driving op 0x02
+onto the coordinator's still-open reconnect — which can never complete (OVMX returns a fresh
+incarnation/Con.ID) — OVMX perpetually re-arms the `long_break` wait so the CSB is never removed.
+
+**Relocated frontier — OVMX-side, the reconnect/readmit apparatus itself.** Davis grants a rejoin no
+distinct transaction: the old CSB is deallocated and a new one built "just as if joining for the
+first time," new CSID (pp. 7-24/7-25). **Fix:** abandon the reconnect/readmit rejoin path; make
+OVMX's departure DRIVE the coordinator to fully REMOVE the prior incarnation's CSB (a clean CM
+self-departure / last-gasp — which OVMX does NOT emit today, only a per-connection SCS DISCONNECT —
+forces immediate removal, p. 7-29), THEN drive a plain FRESH first-join exactly as `cq358` arm D
+does. The one arm that proves this for the SAME id — clean unhammered removal then a same-id
+first-join — is the next increment; it is a wire-visible change in the crash-prone op02/START region
+(guard 8) and awaits the last-gasp emit, so `vms-358` ships the isolation, the corrected verdict
+text, and this record, not a speculative wire change.
+
+Evidence (host, tank volume): `/data/training/vax/k8s-labs/vaxlab-0/logs/scsd-{358flip-*,cq*,sid*}.log`,
+`/data/training/vax/cluster/work/{358flip,cq358,sameid358}.csb` (coordinator SDA timelines),
+`d94-{358flip,cq358,sameid}.pcap`; runners `tests/lab/tools/{coord358,cq358,sameid358}.sh`.
+*VAXcluster Principles* pp. 7-24/7-25/7-29/7-30/7-37/7-38/7-39/7-40/7-41.

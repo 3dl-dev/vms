@@ -68,12 +68,13 @@
  *     pid (any group, gated by WORLD -- see sys$delprc's own comment), the
  *     same way sys$getjpi resolves above; a caller without GROUP/WORLD for
  *     an other-process target is refused SS$_NOPRIV, and a target the
- *     executive does not carry is SS$_NONEXPR. OVMX-LOCAL: the actual
- *     termination is still kill(SIGTERM) against the resolved Linux pid --
- *     OVMX has no executive-side "delete this PCB" primitive of its own,
- *     so the signal is the mechanism, same as sys$exit's _exit(). What
- *     changed is that this now signals the process the EXECUTIVE named,
- *     not whatever Linux pid number a caller's argument happened to be.
+ *     executive does not carry is SS$_NONEXPR.
+ * OVMX-LOCAL: sys$delprc -- the actual termination is still kill(SIGTERM)
+ *     against the resolved Linux pid: OVMX has no executive-side "delete
+ *     this PCB" primitive of its own, so the signal is the mechanism, same
+ *     as sys$exit's _exit(). What changed is that this now signals the
+ *     process the EXECUTIVE named, not whatever Linux pid number a
+ *     caller's argument happened to be.
  * OVMX-USERSPACE: sys$hiber (vms-pt1) -- pause() on the calling thread; the
  *     executive has no record that this process is hibernating.
  * OVMX-USERSPACE: sys$wake (vms-pt1) -- kill(SIGCONT) by Linux pid, or the

@@ -3062,6 +3062,7 @@ static int rejoin_drive_member_readmission(int rejoin_target_on,
     /* This identity has been admitted before: the PRIORCLU fact that makes this
      * a rejoin. The daemon reads it through cm_rejoin_target_mode(). */
     ovmx_prior.valid = 1;
+    setenv("OVMX_REJOIN_CLEANLEAVE", "0", 1); /* vms-ab1: legacy rejoin apparatus */
 
     /* The member opens its VMS$VAXcluster connection to us; scsd.c answers it and
      * binds cdt_member (Figure-2-14 TARGET). */
@@ -3070,6 +3071,7 @@ static int rejoin_drive_member_readmission(int rejoin_target_on,
         CHECK(0, "PRECONDITION: the member's CONNECT-REQUEST did not bind"
                  " cdt_member/ps->connected");
         ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_CLEANLEAVE"); /* vms-ab1: restore fresh-first-join default */
         unsetenv("OVMX_REJOIN_TARGET");
         return 0;
     }
@@ -3133,6 +3135,7 @@ static int rejoin_drive_member_readmission(int rejoin_target_on,
 
     unsetenv("OVMX_REJOIN_TARGET");
     ovmx_prior.valid = 0; /* leave the global as the other cases expect it */
+    unsetenv("OVMX_REJOIN_CLEANLEAVE"); /* vms-ab1: restore fresh-first-join default */
 
     if (member_local_out) *member_local_out = member_local;
     if (member_remote_out) *member_remote_out = member_remote;
@@ -3257,6 +3260,7 @@ static int rejoin_credit_first_drive(int credit_first_on,
 
     /* This identity has been admitted before -> cm_rejoin_target_mode(). */
     ovmx_prior.valid = 1;
+    setenv("OVMX_REJOIN_CLEANLEAVE", "0", 1); /* vms-ab1: legacy rejoin apparatus */
     unsetenv("OVMX_REJOIN_TARGET");
     if (credit_first_on) {
         unsetenv("OVMX_REJOIN_CREDIT_FIRST");
@@ -3342,6 +3346,7 @@ static int rejoin_credit_first_drive(int credit_first_on,
     if (frames_out) *frames_out = scsd_test_frames;
 
     ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_CLEANLEAVE"); /* vms-ab1: restore fresh-first-join default */
     unsetenv("OVMX_REJOIN_TARGET");
     unsetenv("OVMX_REJOIN_CREDIT_FIRST");
     unsetenv("OVMX_CFG2_ALL");
@@ -3349,6 +3354,7 @@ static int rejoin_credit_first_drive(int credit_first_on,
 
 cleanup_fail:
     ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_CLEANLEAVE"); /* vms-ab1: restore fresh-first-join default */
     unsetenv("OVMX_REJOIN_TARGET");
     unsetenv("OVMX_REJOIN_CREDIT_FIRST");
     unsetenv("OVMX_CFG2_ALL");
@@ -3455,6 +3461,7 @@ static uint16_t rejoin_op02_sysap_after_burst_and_flush(int ackhold_off)
      * 0x02 is the frame whose SYSAP number the flush ack shifts. */
     setenv("OVMX_JOIN_SEQ", "1", 1);
     ovmx_prior.valid = 1;              /* PRIORCLU: this is a rejoin */
+    setenv("OVMX_REJOIN_CLEANLEAVE", "0", 1); /* vms-ab1: legacy rejoin apparatus */
     unsetenv("OVMX_REJOIN_TARGET");    /* fix path on */
 
     /* The member opened its VMS$VAXcluster connection; scsd.c answers it and binds
@@ -3462,6 +3469,7 @@ static uint16_t rejoin_op02_sysap_after_burst_and_flush(int ackhold_off)
     rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
     if (ps->cdt_member == NULL) {
         ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_CLEANLEAVE"); /* vms-ab1: restore fresh-first-join default */
         unsetenv("OVMX_REJOIN_ACKHOLD");
         CHECK(0, "PRECONDITION: the member CONNECT-REQUEST did not bind cdt_member");
         return 0;
@@ -3499,6 +3507,7 @@ static uint16_t rejoin_op02_sysap_after_burst_and_flush(int ackhold_off)
     uint16_t op02_sysap = ps->sysap_send; /* the number the deferred op 0x02 consumes */
 
     ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_CLEANLEAVE"); /* vms-ab1: restore fresh-first-join default */
     unsetenv("OVMX_REJOIN_ACKHOLD");
     unsetenv("OVMX_JOIN_SEQ");
     return op02_sysap;
@@ -3595,6 +3604,7 @@ static uint16_t rejoin_coord_op02_send_seq(int lean_off, uint16_t *base_out)
 
     setenv("OVMX_JOIN_SEQ", "1", 1);
     ovmx_prior.valid = 1;              /* PRIORCLU: this is a rejoin */
+    setenv("OVMX_REJOIN_CLEANLEAVE", "0", 1); /* vms-ab1: legacy rejoin apparatus */
     unsetenv("OVMX_REJOIN_TARGET");    /* rejoin-target topology on */
     unsetenv("OVMX_CFG2_PEER");        /* use the highest-node-number coordinator rule */
     if (lean_off) {
@@ -3628,6 +3638,7 @@ static uint16_t rejoin_coord_op02_send_seq(int lean_off, uint16_t *base_out)
     uint16_t op02 = scs_seq_advance(&coord->vc.seq); /* the send_seq op 0x02 rides */
 
     ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_CLEANLEAVE"); /* vms-ab1: restore fresh-first-join default */
     unsetenv("OVMX_REJOIN_LEAN_VC");
     unsetenv("OVMX_JOIN_SEQ");
     return op02;
@@ -3672,6 +3683,7 @@ static void test_rejoin_keeps_coordinator_vc_lean_so_op02_rides_low(void)
     if (noncoord != NULL && coord != NULL) {
         setenv("OVMX_JOIN_SEQ", "1", 1);
         ovmx_prior.valid = 1;
+        setenv("OVMX_REJOIN_CLEANLEAVE", "0", 1); /* vms-ab1: legacy rejoin apparatus */
         unsetenv("OVMX_REJOIN_TARGET");
         unsetenv("OVMX_CFG2_PEER");
         unsetenv("OVMX_REJOIN_LEAN_VC");
@@ -3684,6 +3696,7 @@ static void test_rejoin_keeps_coordinator_vc_lean_so_op02_rides_low(void)
 
         /* FIRST JOIN (no PRIORCLU) must be untouched: nobody is suppressed. */
         ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_CLEANLEAVE"); /* vms-ab1: restore fresh-first-join default */
         coord->lean_vc_suppressed = 0;
         CHECK(cm_lean_vc_suppress_peer(r.rx.peers, coord) == 0,
               "FIRST JOIN: lean-VC suppression engaged on a non-rejoin -- the"
@@ -3759,6 +3772,7 @@ static uint16_t rejoin_coord_first_op02_send_seq(int early_off, int *held_out,
 
     setenv("OVMX_JOIN_SEQ", "1", 1);
     ovmx_prior.valid = 1;              /* PRIORCLU: this is a rejoin */
+    setenv("OVMX_REJOIN_CLEANLEAVE", "0", 1); /* vms-ab1: legacy rejoin apparatus */
     unsetenv("OVMX_REJOIN_TARGET");    /* rejoin-target topology on */
     unsetenv("OVMX_CFG2_PEER");        /* order-dependent coordinator rule (the race) */
     unsetenv("OVMX_REJOIN_LEAN_VC");   /* lean-VC on */
@@ -3800,6 +3814,7 @@ static uint16_t rejoin_coord_first_op02_send_seq(int early_off, int *held_out,
     if (suppressed_out != NULL) *suppressed_out = suppressed;
 
     ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_CLEANLEAVE"); /* vms-ab1: restore fresh-first-join default */
     unsetenv("OVMX_REJOIN_LEAN_EARLY");
     unsetenv("OVMX_JOIN_SEQ");
     return op02;
@@ -3856,6 +3871,7 @@ static void test_rejoin_lean_engages_before_op02_when_coordinator_appears_first(
     if (coord != NULL) {
         setenv("OVMX_JOIN_SEQ", "1", 1);
         ovmx_prior.valid = 1;
+        setenv("OVMX_REJOIN_CLEANLEAVE", "0", 1); /* vms-ab1: legacy rejoin apparatus */
         unsetenv("OVMX_REJOIN_TARGET");
         unsetenv("OVMX_CFG2_PEER");
         unsetenv("OVMX_REJOIN_LEAN_EARLY");
@@ -3888,12 +3904,85 @@ static void test_rejoin_lean_engages_before_op02_when_coordinator_appears_first(
 
         /* FIRST JOIN (no PRIORCLU) must be untouched: the hold never engages. */
         ovmx_prior.valid = 0;
+    unsetenv("OVMX_REJOIN_CLEANLEAVE"); /* vms-ab1: restore fresh-first-join default */
         coord->lean_hold_start_ms = 0;
         CHECK(cm_rejoin_lean_early_hold(r.rx.peers, coord, (long)monotonic_ms()) == 0,
               "FIRST JOIN: the vms-3aba hold engaged on a non-rejoin -- the working"
               " first-join client half must be untouched (guard 8)");
         unsetenv("OVMX_JOIN_SEQ");
     }
+}
+
+/* ==========================================================================
+ * vms-ab1 (spec 4(O.29)) -- THE THREAD-CLOSER: the clean-leave DEFAULT rejoins
+ * as a PLAIN FRESH FIRST-JOIN, abandoning the reconnect/readmit rejoin apparatus.
+ *
+ * §4(O.28) proved (coordinator SDA) that the rejoin refusal was OVMX's OWN
+ * rejoin-form return driving op 0x02/readmit onto the coordinator's still-open
+ * reconnect -- which can never complete (fresh incarnation) -- so the departed
+ * node's per-SCSSYSTEMID CSB is wedged in reconnect/long_break, never removed,
+ * never re-proposed. Davis pp. 7-24/7-25: a rejoin has NO distinct transaction;
+ * the old CSB is deallocated and a new one built "just as if joining for the
+ * first time". The fix returns as a first-timer so nothing is ever wedged.
+ *
+ * The whole apparatus (lean-VC, credit-first, lean-early-hold, ackhold, the
+ * proactive CMREADMIT burst) chains through cm_rejoin_target_mode(), and the
+ * op-0x02 REJOIN form through cm_apply_rejoin_form(). This asserts BOTH levers
+ * are neutralised under the default EVEN with the PRIORCLU rejoin fact set, and
+ * FAILS-PRE via the kill switch (guardrail 23): OVMX_REJOIN_CLEANLEAVE=0 brings
+ * the legacy apparatus back, so the assertions are falsifiable, not vacuous.
+ */
+static void test_rejoin_cleanleave_default_is_a_fresh_first_join(void)
+{
+    /* The PRIORCLU rejoin fact: pre-vms-ab1 this ALONE forced the
+     * reconnect/readmit rejoin path (cm_rejoin_target_mode -> ovmx_prior.valid). */
+    ovmx_prior.valid = 1;
+    ovmx_prior.formed = 0x004af82e3605bc00ull;
+    ovmx_prior.founding_sysid = 1025;
+    ovmx_prior.generation = 3;
+    ovmx_cluster.known = 1;
+    ovmx_cluster.formed = ovmx_prior.formed;   /* same cluster we were admitted to */
+    ovmx_cluster.founding_sysid = 1025;
+
+    /* --- POST-FIX (default, kill switch OFF): fresh first-join. --- */
+    unsetenv("OVMX_REJOIN_CLEANLEAVE");
+    unsetenv("OVMX_NO_OWN_VC");
+    unsetenv("OVMX_REJOIN_TARGET");
+    unsetenv("OVMX_REJOIN_FORM");
+
+    CHECK(cm_rejoin_target_mode() == 0,
+          "CLEANLEAVE default: cm_rejoin_target_mode()==%d with ovmx_prior.valid"
+          " set -- expected 0, the OWN-outbound first-join topology, NOT the"
+          " reconnect/readmit rejoin path (spec 4(O.29))",
+          cm_rejoin_target_mode());
+
+    struct scs_member_params mp;
+    memset(&mp, 0, sizeof(mp));
+    cm_apply_rejoin_form(&mp);
+    CHECK(mp.rejoin == 0 && mp.founding_sysid == 0 && mp.rejoin_generation == 0,
+          "CLEANLEAVE default: op 0x02 carries the REJOIN form (rejoin=%d fs=%u"
+          " gen=%u) -- expected a PLAIN first-timer frame, all zero (spec 4(O.29))",
+          mp.rejoin, (unsigned)mp.founding_sysid, mp.rejoin_generation);
+
+    /* --- FAIL-PRE (kill switch ON = the legacy apparatus is reachable). --- */
+    setenv("OVMX_REJOIN_CLEANLEAVE", "0", 1);
+    CHECK(cm_rejoin_target_mode() == 1,
+          "KILL-SWITCH (OVMX_REJOIN_CLEANLEAVE=0): cm_rejoin_target_mode()==%d,"
+          " expected 1 -- the legacy reconnect/readmit path must stay reachable"
+          " for bisection (guardrail 23)", cm_rejoin_target_mode());
+
+    struct scs_member_params mp2;
+    memset(&mp2, 0, sizeof(mp2));
+    cm_apply_rejoin_form(&mp2);
+    CHECK(mp2.rejoin == 1 && mp2.founding_sysid == 1025,
+          "KILL-SWITCH: legacy cm_apply_rejoin_form did not set the REJOIN form"
+          " (rejoin=%d fs=%u), expected rejoin=1 fs=1025 -- the fail-pre control"
+          " is not measuring the fix", mp2.rejoin, (unsigned)mp2.founding_sysid);
+
+    /* Restore the default and the globals for the cases that follow. */
+    unsetenv("OVMX_REJOIN_CLEANLEAVE");
+    ovmx_prior.valid = 0;
+    memset(&ovmx_cluster, 0, sizeof(ovmx_cluster));
 }
 
 /* ==========================================================================
@@ -10596,6 +10685,7 @@ int main(void)
      * gated by OVMX_REJOIN_LEAN_VC. */
     test_rejoin_keeps_coordinator_vc_lean_so_op02_rides_low();
     test_rejoin_lean_engages_before_op02_when_coordinator_appears_first();
+    test_rejoin_cleanleave_default_is_a_fresh_first_join();
     test_joiner_vc_op3_confirm_is_recorded_not_reported_unbuilt();
     /* vms-770 (vms-a61 audit): has_conid no longer implies the 110-/190-byte
      * connect classes, so branch (c) must not treat a short SEQAPP data frame

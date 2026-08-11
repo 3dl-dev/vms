@@ -488,6 +488,36 @@ int scs_member_build_barrier(const struct scs_member_params *p,
                              uint32_t epoch, uint32_t step,
                              uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
+/*
+ * scs_member_build_depart - vms-ab1 (spec 4(O.29)): the class-0x04 SELF-DEPARTURE
+ * transition-open, category 0x01 opcode 0x0d (OP_DEPART), role slot body[16]=0x40
+ * (ROLE_XITION), transition class body[17]=0x04 (CLASS_DEPART). This is the CM
+ * message a LEAVING node emits to announce its OWN departure so the coordinator
+ * REMOVES its Cluster System Block immediately rather than holding it in a
+ * reconnect/long_break WAIT for RECNXINTERVAL (VAXcluster Principles p. 7-29;
+ * spec 4(O.28)). OVMX has always PARSED this inbound (scsd.c class-0x04 handler,
+ * GROUNDED 3/3 request/response pairs) but never EMITTED its own; before vms-ab1
+ * OVMX's departure was only a per-connection SCS DISCONNECT.
+ *
+ * MINIMAL BODY BY DESIGN, and the minimal form is what the ack/barrier builders
+ * already prove acceptable: everything past the class byte is ZERO. This is a
+ * transition-OPEN and the post-transition facts (new member bitmap, transition
+ * time) are the COORDINATOR's to compute when it runs the removal, NEVER the
+ * leaver's to assert (Rule 10). Do NOT reintroduce a node-parameter template
+ * here -- the vms-760 token_response crash bugchecked two real VAXes precisely
+ * because it carried a PARAMS-derived live-node-parameter body.
+ *
+ *   body[4:6]   our own per-VC transaction-context id
+ *   body[6:8]   our own per-VC counter, +1 per transaction we initiate
+ *   body[12:16] the transition EPOCH, echoed from the coordinator (held, not
+ *               computed); 0 if none was ever learned (residue, as the barrier)
+ *   body[16]    role slot 0x40 (ROLE_XITION)
+ *   body[17]    transition class 0x04 (CLASS_DEPART)
+ */
+int scs_member_build_depart(const struct scs_member_params *p,
+                            uint32_t epoch,
+                            uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
 #ifdef __cplusplus
 }
 #endif

@@ -10470,22 +10470,26 @@ static void test_readmit_verdict_classifies_the_rejoin_frontier(void)
           "OVMX drove op 0x02 to the coordinator (joiner_cfg2_sent) with 0 CM"
           " responses back must read JOIN-ABANDONED (spec 4(O.24)), got %s",
           readmit_verdict_name(readmit_verdict_of(ps)));
-    /* vms-c40 (spec §4(O.26)) fail-pre/pass-post, CORRECTING vms-9a7/§4(O.25):
-     * denser-sampled coordinator SDA on the CURRENT build proved the member-initiated
-     * VMS$VAXcluster reconnect DOES reach a stable OPEN on the return (SHOW CONNECTIONS
-     * State 0002 open, Remote Con.ID = our handle), then BREAKS ~10 ms after OVMX drives
-     * op 0x02 -- op 0x01/op 0x02 ride send_seq 21/22 past the coordinator's recv_ack
-     * ceiling of 18 because OVMX's own dir/MSCP discovery bloats the VC and lean-VC
-     * engages too late. So §4(O.25)'s "never settles OPEN" was a SAMPLING ARTIFACT. The
-     * JOIN-ABANDONED verdict text must carry the corrected, grounded finding and cite
-     * §4(O.26); before vms-c40 it said "never settles OPEN ... spec 4(O.25)". */
-    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "4(O.26)") != NULL,
-          "JOIN-ABANDONED text must cite the coordinator-SDA correction spec 4(O.26),"
+    /* vms-3aba (spec §4(O.27)) fail-pre/pass-post: the fix CLOSES the §4(O.26)
+     * send_seq-ceiling gate -- lean-VC + credit-first now engage BEFORE op 0x02, so on
+     * a live return op 0x02 rides send_seq <=18 (ss=2/8/17) and the coordinator's
+     * recv_ack advances PAST it (op 0x02 DELIVERED, credit op6..op9 exchange completes)
+     * instead of the §4(O.26) 21/22 stranding. XITDONE STILL 0 (cm_responses=0, CNXMAN
+     * proposes nothing for the returning identity), so the ceiling was necessary-not-
+     * sufficient and the frontier relocates back to returning-identity non-admission.
+     * The JOIN-ABANDONED verdict text must carry that corrected, grounded finding and
+     * cite §4(O.27); before vms-3aba it said "ride ss=21/22 ... spec 4(O.26)". */
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "4(O.27)") != NULL,
+          "JOIN-ABANDONED text must cite the live-bracket correction spec 4(O.27),"
           " got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
-    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "reach a stable OPEN") != NULL,
-          "JOIN-ABANDONED text must state the grounded correction (the reconnect DOES"
-          " reach a stable OPEN, then breaks on op 0x02), got %s",
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "DELIVERED") != NULL,
+          "JOIN-ABANDONED text must state op 0x02 now rides <=18 and is DELIVERED"
+          " (the §4(O.26) ceiling gate is closed), got %s",
           readmit_verdict_name(READMIT_JOIN_ABANDONED));
+    CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "returning-identity non-admission") != NULL,
+          "JOIN-ABANDONED text must state the relocated frontier -- the coordinator"
+          " proposes nothing for a returning identity even with op 0x02 delivered,"
+          " got %s", readmit_verdict_name(READMIT_JOIN_ABANDONED));
     CHECK(strstr(readmit_verdict_name(READMIT_JOIN_ABANDONED), "never settles OPEN") == NULL,
           "JOIN-ABANDONED text must NO LONGER claim the reconnect never settles OPEN"
           " (§4(O.25) sampling artifact, corrected by vms-c40/§4(O.26)), got %s",

@@ -5792,6 +5792,102 @@ fresh→crash→return). Fresh baseline cross-check on virgin `vaxlab-1`
 
 #### 4(O.26) THE MEMBER-INITIATED RECONNECT DOES REACH A STABLE OPEN — §4(O.25)'s "never settles OPEN" was a SAMPLING ARTIFACT, and the gate is one layer back UP: coordinator SDA across a fresh→crash→return single-factor bracket (virgin `vaxlab-1`, CURRENT post-9a7 build re-proven to drive op 0x02 on the return, GAP=22) shows the coordinator's member-initiated `VMS$VAXcluster` connection to the returning identity reach **`State 0002 open`, `Remote Con. ID = OUR handle`** at R+4 s (together with its `SCS$DIRECTORY` and `MSCP$DISK` connections), and OVMX's op 0x02 join IS driven on that OPEN connection — so it is NOT "never reaches a stable OPEN" (§4(O.25) sampled only the post-break `con_sent`/`03 reconnect` phase and mistook it for never-opened). The connection is then **LOST ~10 ms after OVMX drives its op 0x02 readmission config on it** (coordinator console `%CNXMAN, lost connection to system <id>` at the SAME 10 ms as OVMX's `CMCONFIG2` op 0x02): OVMX's OWN `SCS$DIRECTORY`+`MSCP$DISK` client discovery to the coordinator bloats the shared per-VC `send_seq`, so op 0x01 (params) and op 0x02 (config) ride at **`send_seq` 21/22 — PAST the coordinator's `recv_ack` ceiling of 18** on that VC; the coordinator never delivers them, `CNXMAN` never proposes the addition (no second `received VAXcluster membership request`), the VC reverts to `03 reconnect`/`Remote Con. ID 0` and times out. The `vms-9af` lean-VC suppression (§4(O.15)) DID fire but ~1.3 s TOO LATE (after the op 0x02 and the break), and the post-break reconnect's op 0x05/op 0x06 are then addressed to `Remote Con. ID 0x00000000`. So the gate **relocates from the SCS connection layer BACK to op 0x02 readmission DELIVERY on an already-OPEN member connection** — the `send_seq`-ceiling / lean-VC-timing family (§4(O.15) `vms-9af`, §4(O.17) `vms-46f`, §4(O.10) `vms-e15`), now PROVEN open-then-break with coordinator SDA rather than inferred. The next increment is to make lean-VC / credit-first engage BEFORE op 0x02 is driven on the member-initiated connection (deterministically via `OVMX_CFG2_PEER`, or by deferring op 0x02 until the coordinator's VC is lean) so op 0x02 rides UNDER the `recv_ack` ceiling; this is NOT a byte-unchanged log fix and is deferred to `vms-694`'s SCA-state build (GROUNDED, `vms-c40`, coordinator-side SDA `SHOW CLUSTER`/`SHOW CLUSTER/NODE`/`SHOW CONNECTIONS/NODE` parked on VAX2 across a same-boot fresh→crash→return on virgin `vaxlab-1` + `d94-c40repB.pcap` per-`send_seq` decode + *VAXcluster Principles* pp. 2-43/2-44/2-45/7-37/7-40/7-46, 2026-08-11). Evidence (host, tank volume): coordinator CSB/CONN timeline `/data/training/vax/cluster/work/c40repB.csb` (fresh admits `CNXMAN proposing addition`; return connection `open` at R+4 s then `lost` at the op 0x02); daemon log `/data/training/vax/k8s-labs/vaxlab-1/logs/scsd-c40repB-2.log` (`CONNRESP` answers the member VMS$VAXcluster CONNECT-REQUEST, `CMCONFIG2` drives op 0x02, `LEANVC` fires afterwards); pcap `d94-c40repB.pcap`. This section ships only the isolation, the corrected frontier and the corrected `READMITMAP` verdict text (log-only, classifier UNCHANGED, kill-switch `OVMX_NO_READMITMAP` unchanged, byte-unchanged on the wire); it is a non-admission (never `ADMITTED`; INV-6).
 
+#### 4(O.27) THE §4(O.26) send_seq-CEILING GATE IS CLOSED — lean-VC + credit-first now engage BEFORE op 0x02, so on a live return op 0x02 rides `send_seq` 2/8/17 (≤18) and the coordinator's `recv_ack` advances to 13 PAST it (op 0x02 DELIVERED, credit op6/op7/op8/op9 exchange completes) instead of the §4(O.26) 21/22 stranding — but rejoin STILL does not re-admit (`XITDONE=0`): with op 0x02 delivered in-order under the ceiling and credit returned, `cm_responses=0` and CNXMAN prints only `lost connection` (never `received membership request`/`proposing addition`) for the RETURNING identity, so the ceiling was NECESSARY-NOT-SUFFICIENT and the frontier RELOCATES back to the §4(O.20)/§4(O.24)/§4(O.25) returning-identity non-admission — the coordinator receives a clean, delivered, credited op 0x02 and proposes NOTHING for an identity it has held before (GROUNDED, live first-join→return bracket on a freshly-booted virgin `vaxlab-0` + coordinator console + `send_seq` decode, `vms-3aba`, 2026-08-11)
+
+**Frame.** §4(O.26) (`vms-c40`) proved the return's member-initiated `VMS$VAXcluster`
+connection reaches OPEN and is then LOST ~10 ms after OVMX drives op 0x02, because
+OVMX's own `SCS$DIRECTORY`+`MSCP$DISK` client discovery bloats the shared per-VC
+`send_seq` so op 0x01/op 0x02 ride at `send_seq` 21/22 — PAST the coordinator's
+`recv_ack` ceiling of 18 — and the `vms-9af` lean-VC suppression (§4(O.15)) engaged
+~1.3 s too LATE. It named the next increment: make lean-VC / credit-first engage BEFORE
+op 0x02. `vms-3aba` ships that increment and BRACKETS it live.
+
+**Root cause of the late firing (GROUNDED, code).** `cm_peer_is_coordinator()` requires a
+strictly-lower peer to already be known (its `lower_peer_seen` guard, §4(O.16) header). The
+two members complete their 0x41 START in a non-deterministic order; when the coordinator
+(higher node number) completes START FIRST, the predicate returns 0 — no lower peer yet — so
+`cm_lean_vc_suppress_peer()` does not fire and OVMX's own-dir/MSCP client half rides the
+coordinator's VC before the non-coordinator ever appears, exactly the §4(O.26) bloat.
+
+**The fix (`src/vmsscs/scsd.c`, wire-visible, kill-switched).** On a rejoin, HOLD OVMX's
+own-dir/MSCP client half to a coordinator CANDIDATE (`cm_peer_coord_pending()` — the top node
+known with no lower peer yet) for a bounded settle window (`LEAN_COORD_SETTLE_MS`,
+liveness-capped) via `cm_rejoin_lean_early_hold()`, added at both own-dir initiation sites
+(greet timer + join_seq). The non-coordinator then appears, `cm_lean_vc_suppress_peer()`
+suppresses the coordinator BEFORE op 0x02 rides, and op 0x02 lands under the ceiling. This is
+the "defer until the coordinator's VC is lean" path §4(O.26)/§10.3 named, and it needs NO
+`OVMX_CFG2_PEER`. Kill-switch `OVMX_REJOIN_LEAN_EARLY=0` restores the pre-fix late firing.
+
+**The live bracket (GROUNDED, `vaxlab-0` deleted+re-cloned to a virgin CN_2 — `SHOW CLUSTER` =
+VAX1/VAX2 only; one identity `OVX3A0`/1973; current-source daemon `md5=60e44b04…`,
+staged+md5-verified in-pod; `OVMX_JOIN_SEQ=1`, NO `OVMX_CFG2_PEER`; first join → ~25 s
+departure gap → return, hard `timeout` per op, 2026-08-11).**
+
+| arm | scenario | LEANHOLD/CREDITFIRST fire? | op 0x02 `send_seq` (coordinator VC) | coordinator `recv_ack` reached | CNXMAN on coordinator (VAX2) | `XITDONE` |
+|---|---|---|---|---|---|---|
+| A | first join (no sidecar) | n/a (first join) | op 0x02 on OUR joiner VC | — | **`received … membership request` → `proposing addition` → `completing … transition`** | **1** (CN_3) |
+| B | return, same id | **YES** — `LEANHOLD` (node 2) then `CREDITFIRST` op-6 then `CMCONFIG2` op 0x02 `send_msg=3`, then `LEANVC` | **ss=2, ss=8, ss=17 — all ≤18** (§4(O.26): 21/22) | **13 — PAST op 0x02 → DELIVERED** | **`lost connection` only** — never `received … request`, never `proposing addition` | **0** |
+
+Three independent readings confirm the wire mechanism is fixed: (1) the daemon log emits
+`SCSD-I-LEANHOLD` → `SCSD-I-CREDITFIRST` → `SCSD-I-CMCONFIG2 … MEMBER-initiated (rejoin) VC …
+send_msg=3` → `SCSD-I-LEANVC` IN THAT ORDER (lean/credit engage before op 0x02); (2) the
+`send_seq` decode of `d94-3abaB.pcap` puts op 0x02 at ss=2/8/17 and the coordinator's
+cumulative `recv_ack` at 13 — so op 0x02 is DELIVERED, and the op6/op7/op8/op9 special-credit
+exchange (Davis pp. 2-43/2-44/2-45) completes on the wire; (3) NONE of this happened in
+§4(O.26), where op 0x02 rode 21/22 and was never delivered.
+
+**And it is STILL not enough (GROUNDED, same bracket).** With op 0x02 delivered in-order under
+the ceiling and credit returned, the coordinator returns `cm_responses=0` (both members), the
+member VC ends `DISC SENT`, `vaxcluster_member=no`, and — the decisive datum — the
+coordinator's own console prints, for the RETURN, ONLY `%CNXMAN, lost connection to system
+OVX3A0` / `timed-out lost connection`, and NEVER `received VAXcluster membership request` or
+`proposing addition of system OVX3A0` — the two lines it DID print for the FIRST join of the
+SAME identity ~3 minutes earlier. So delivering op 0x02 lean, in-order, credited, and under
+the ceiling does NOT by itself make the coordinator register a membership request for a
+returning identity.
+
+**The frontier relocates BACK to returning-identity non-admission.** §4(O.26)'s send_seq-ceiling
+was a real intervening gate that had crept on top of the deeper one; closing it returns the
+frontier to exactly where §4(O.20) (`vms-a63`) left it — "with the freeze gone and op 0x02
+delivered in REJOIN form in-order to the coordinator, the member STILL declines to reciprocate
+(`cm_responses=0`, no op 0x04)" — and where §4(O.24)/§4(O.25) mapped it: **the coordinator
+receives a clean, delivered, credited op 0x02 readmission for an identity it has held before and
+runs ZERO CM JOIN handshakes / never proposes the addition, though it admits a FRESH identity
+through the identical path.** The next isolation is that CM-layer returning-identity gate, now
+with the wire delivery PROVABLY clean (op 0x02 delivered under the ceiling, `recv_ack` advancing
+past it, credit flowing) — a confound §4(O.20)–§4(O.26) could never fully remove.
+
+**What `vms-3aba` ships.** (1) The `cm_rejoin_lean_early_hold` change (kill-switch
+`OVMX_REJOIN_LEAN_EARLY`, helper `cm_peer_coord_pending`, `LEAN_COORD_SETTLE_MS`), at both
+own-dir initiation sites, with `lean_hold_start_ms`/`lean_vc_suppressed` reset on re-START. (2) A
+fail-pre/pass-post unit test (`tests/vmsscs/test_scsd_wire.c:`
+`test_rejoin_lean_engages_before_op02_when_coordinator_appears_first`): in the appears-first
+state (only the coordinator peer known, no `OVMX_CFG2_PEER`) op 0x02 rides `send_seq` 16 (≤18)
+with the fix and 22 (>18, the grounded §4(O.26) bloated value) with `OVMX_REJOIN_LEAN_EARLY=0`;
+plus liveness-release, settle→suppress handoff, and first-join-untouched cases. (3) This §4(O.27)
+and the corrected `READMITMAP` `JOIN-ABANDONED` verdict text (log-only, classifier UNCHANGED —
+`joiner_cfg2_sent && cm_responses==0`; kill-switch `OVMX_NO_READMITMAP` unchanged). Still a
+non-admission (never `ADMITTED`; INV-6). `scs`/`vmsscs` ctest stays green (55/55).
+
+**Non-claims.** (1) This does not claim WHY the coordinator declines to propose for a returning
+identity — only that the send_seq-ceiling is no longer the reason (op 0x02 is delivered). (2) The
+op-6 special-credit exchange completing on the wire is banked as progress over §4(O.26)/§4(O.18),
+but whether the credit return is itself sufficient is refuted here (it completes and `XITDONE`
+stays 0). (3) The op 0x02 body is unchanged (§4(O.10)); this is a connection-population / timing
+change, not a payload change.
+
+**Evidence** (host, tank volume): live bracket
+`/data/training/vax/k8s-labs/vaxlab-0/logs/scsd-3abaA.log` (first join `XITDONE=1`),
+`scsd-3abaB.log` (return `XITDONE=0`, `SCSD-I-LEANHOLD` node 2, `SCSD-I-CREDITFIRST` op-6 BEFORE
+op 0x02, `SCSD-I-CMCONFIG2 … MEMBER-initiated (rejoin) … send_msg=3`, `cm_responses=0`,
+`member_vc=DISC SENT`, `READMITMAP … JOIN-ABANDONED`), `d94-3abaA.pcap`/`d94-3abaB.pcap`
+(identity `OVX3A0` on the wire; return op 0x02 at `send_seq` 2/8/17, coordinator `recv_ack`→13),
+coordinator console `vax2.log` (FRESH: `received VAXcluster membership request` + `proposing
+addition`; RETURN: `lost connection` only); code `src/vmsscs/scsd.c` (`cm_peer_coord_pending`,
+`cm_rejoin_lean_early_hold`, `LEAN_COORD_SETTLE_MS`, `OVMX_REJOIN_LEAN_EARLY`); unit
+`tests/vmsscs/test_scsd_wire.c`; decoder `tools/cluster` + `send_seq`/`recv_ack` at abs
+`[34:36]`/`[32:34]`. *VAXcluster Principles* pp. 2-43/2-44/2-45/7-37/7-38/7-39/7-40.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

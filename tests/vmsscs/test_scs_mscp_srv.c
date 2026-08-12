@@ -429,6 +429,43 @@ static long recording_xfer(void *ctx, const uint8_t buffer_desc[12],
     return (long)len;
 }
 
+/* vms-6e1: the WRITE-side twin of recording_xfer. A write-source hook supplies
+ * deterministic per-LBN content, so a WRITE driven through scs_mscp_srv_handle()
+ * has real bytes to pull and persist. wsrc_pattern() is also used to compute the
+ * expected read-back, so the round-trip assertion pins persistence, not luck. */
+static void wsrc_pattern(uint32_t lbn, uint8_t *out, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        out[i] = (uint8_t)(0xC0u ^ (lbn * 7u + (uint32_t)i));
+    }
+    /* a marker so a wrong LBN's bytes cannot accidentally look right */
+    if (len >= 3) {
+        out[0] = 'W';
+        out[1] = (uint8_t)(lbn & 0xff);
+        out[2] = (uint8_t)((lbn >> 8) & 0xff);
+    }
+}
+
+struct wsrc_record {
+    unsigned long calls;
+    uint32_t      last_lbn;
+    int           fail;
+};
+
+static long supplying_wxfer(void *ctx, const uint8_t buffer_desc[12],
+                            uint32_t lbn, uint8_t *data_out, size_t len)
+{
+    struct wsrc_record *r = (struct wsrc_record *)ctx;
+    (void)buffer_desc;
+    r->calls++;
+    r->last_lbn = lbn;
+    if (r->fail) {
+        return -1;
+    }
+    wsrc_pattern(lbn, data_out, len);
+    return (long)len;
+}
+
 /* Build a temporary raw block image with recognisable per-block content. */
 static int make_image(unsigned nblocks, char *path, size_t path_len)
 {
@@ -1513,6 +1550,265 @@ static void test_write_block_transfer_end_to_end(void)
     unlink(path);
 }
 
+/*
+ * vms-6e1: THE READ-WRITE ROUND TRIP THROUGH THE RESPONDER. A unit attached
+ * read-WRITE and driven with real MSCP WRITE then READ commands persists to and
+ * reads back from its backing store, byte for byte -- the "MSCP READ/WRITE
+ * commands hit real storage" the item is about. It also pins the write-side
+ * honesty boundaries (no hook / failed pull / out of range) and confirms the
+ * read-only default is intact, so the opt-in did not weaken it.
+ */
+static void test_write_read_round_trip_through_handle(void)
+{
+    struct scs_mscp_srv srv;
+    uint8_t body[SCS_MSCP_BODY_LEN];
+    uint8_t end[SCS_MSCP_SRV_END_MAX];
+    struct scs_mscp_view v;
+    struct scs_mscp_srv_unit *u;
+    struct wsrc_record wsrc;
+    struct xfer_record rdrec;
+    char path[128];
+    const unsigned NBLK = 32;
+    const uint32_t LBN = 5;
+    const uint32_t NW = 3; /* blocks written then read back */
+    uint32_t i;
+    long n;
+    int fd = make_image(NBLK, path, sizeof(path));
+
+    check(fd >= 0, "test fixture: the raw block image is created");
+    if (fd < 0) {
+        return;
+    }
+
+    scs_mscp_srv_init(&srv, GOLDEN_CTLR_ID, GOLDEN_CTLR_TIMEOUT);
+    bring_controller_online(&srv, 21u);
+    /* make_image opened the fd O_RDWR, which attach_fd_rw requires. */
+    check(scs_mscp_srv_attach_fd_rw(&srv, 0, fd, NBLK, 0x6e10ULL, 0x2452, 0x1)
+              == 0,
+          "a read-WRITE unit attaches (vms-6e1)");
+    u = scs_mscp_srv_find_unit(&srv, 0);
+    check(u != NULL && u->read_only == 0,
+          "the served unit is writable, not read-only");
+
+    /* --- ADVERTISED (bead #4): GET UNIT STATUS enumerates it, and a writable
+     * unit does NOT advertise UF.WPS -- the flag and the behaviour agree the
+     * other way now. This is the advertised-units path a class driver (and a
+     * mounting VAX) actually discovers a served unit through. --- */
+    {
+        struct scs_mscp_view gv;
+        uint8_t gb[SCS_MSCP_BODY_LEN], ge[SCS_MSCP_SRV_END_MAX];
+        make_command(gb, sizeof(gb), &gv, 0x610u, 0, SCS_MSCP_OP_GET_UNIT_STATUS,
+                     0);
+        long gn = scs_mscp_srv_handle(&srv, 21u, &gv, gb, sizeof(gb), ge,
+                                      sizeof(ge));
+        check(gn == SCS_MSCP_GUS_END_LEN,
+              "GET UNIT STATUS enumerates the served unit (it is advertised)");
+        check((u16(ge, SCS_MSCP_E_UNFL) & SCS_MSCP_UF_WRITE_PROT_SW) == 0,
+              "...and the writable unit does NOT advertise UF.WPS");
+    }
+
+    /* --- WRITE BEFORE ONLINE: a unit no ONLINE has claimed is Unit-Available,
+     * not writable -- WRITE shares READ's transfer preconditions (sec 5.3).
+     * Driven here with a valid whole-block WRITE so ONLY the online gate can
+     * produce the Available answer. --- */
+    {
+        struct scs_mscp_view wv;
+        uint8_t wb[SCS_MSCP_BODY_LEN], we[SCS_MSCP_SRV_END_MAX];
+        make_command(wb, sizeof(wb), &wv, 0x60fu, 0, SCS_MSCP_OP_WRITE, 0);
+        wle32(wb, SCS_MSCP_P_BCNT, SCS_MSCP_BLOCK_SIZE);
+        wle32(wb, SCS_MSCP_P_LBN, LBN);
+        n = scs_mscp_srv_handle(&srv, 21u, &wv, wb, sizeof(wb), we, sizeof(we));
+        check(n > 0 && scs_mscp_status_major(u16(we, SCS_MSCP_P_STS))
+                           == SCS_MSCP_ST_AVAILABLE,
+              "a WRITE to a served unit no ONLINE has claimed is Unit-Available, "
+              "NOT a transfer (sec 5.3)");
+        check(srv.blocks_written == 0,
+              "...and a WRITE before ONLINE reaches no backing store");
+    }
+
+    /* Bring it Online -- a transfer before ONLINE is illegal for WRITE just as
+     * for READ. */
+    {
+        struct scs_mscp_view ov;
+        uint8_t ob[SCS_MSCP_BODY_LEN], oe[SCS_MSCP_SRV_END_MAX];
+        make_command(ob, sizeof(ob), &ov, 0x611u, 0, SCS_MSCP_OP_ONLINE, 0);
+        scs_mscp_srv_handle(&srv, 21u, &ov, ob, sizeof(ob), oe, sizeof(oe));
+    }
+
+    /* The WRITE command: NW whole blocks at LBN, with a host buffer descriptor. */
+    make_command(body, sizeof(body), &v, 0x612u, 0, SCS_MSCP_OP_WRITE, 0);
+    wle32(body, SCS_MSCP_P_BCNT, NW * SCS_MSCP_BLOCK_SIZE);
+    wle32(body, SCS_MSCP_P_LBN, LBN);
+    wle32(body, SCS_MSCP_P_BUFF + 0, 0x2000u);
+    wle32(body, SCS_MSCP_P_BUFF + 4, 0x4444u);
+    wle32(body, SCS_MSCP_P_BUFF + 8, 0x12340000u);
+
+    /* --- WRITE WITH NO WRITE HOOK: the write-side INV-6 boundary. A WRITE that
+     * cannot pull its data MUST NOT report success. --- */
+    n = scs_mscp_srv_handle(&srv, 21u, &v, body, sizeof(body), end, sizeof(end));
+    check(n == SCS_MSCP_WRITE_END_LEN,
+          "a WRITE with no write hook still answers (a 36-byte WRITE end)");
+    check(scs_mscp_status_major(u16(end, SCS_MSCP_P_STS)) == SCS_MSCP_ST_CTLR_ERR,
+          "A WRITE THAT CANNOT PULL ITS DATA MUST NOT REPORT SUCCESS -- it "
+          "reports Controller Error, the write-side of the INV-6 boundary");
+    check(u32(end, SCS_MSCP_E_BCNT) == 0, "...and reports zero bytes transferred");
+    check(srv.blocks_written == 0, "...and nothing reached the backing store");
+
+    /* --- INSTALL THE WRITE SOURCE AND WRITE FOR REAL. --- */
+    memset(&wsrc, 0, sizeof(wsrc));
+    scs_mscp_srv_set_wxfer(&srv, supplying_wxfer, &wsrc);
+    n = scs_mscp_srv_handle(&srv, 21u, &v, body, sizeof(body), end, sizeof(end));
+    check(scs_mscp_status_major(u16(end, SCS_MSCP_P_STS)) == SCS_MSCP_ST_SUCCESS,
+          "with a write hook installed the WRITE SUCCEEDS -- an MSCP WRITE "
+          "command now persists to the backing store (vms-6e1)");
+    check(u32(end, SCS_MSCP_E_BCNT) == NW * SCS_MSCP_BLOCK_SIZE,
+          "...reporting every byte it wrote");
+    check(wsrc.calls == NW, "the write source was pulled once per block");
+    check(srv.blocks_written == NW, "...and every block was persisted");
+
+    /* --- READ THEM BACK THROUGH THE RESPONDER and assert equality, block for
+     * block. Using the recording sink makes this a full command-path round trip,
+     * not a direct backing-store peek. --- */
+    memset(&rdrec, 0, sizeof(rdrec));
+    scs_mscp_srv_set_xfer(&srv, recording_xfer, &rdrec);
+    for (i = 0; i < NW; i++) {
+        struct scs_mscp_view rv;
+        uint8_t rb[SCS_MSCP_BODY_LEN], re[SCS_MSCP_SRV_END_MAX];
+        uint8_t expect[SCS_MSCP_BLOCK_SIZE];
+        make_command(rb, sizeof(rb), &rv, 0x620u + i, 0, SCS_MSCP_OP_READ, 0);
+        wle32(rb, SCS_MSCP_P_BCNT, SCS_MSCP_BLOCK_SIZE);
+        wle32(rb, SCS_MSCP_P_LBN, LBN + i);
+        n = scs_mscp_srv_handle(&srv, 21u, &rv, rb, sizeof(rb), re, sizeof(re));
+        check(n > 0 && scs_mscp_status_major(u16(re, SCS_MSCP_P_STS))
+                           == SCS_MSCP_ST_SUCCESS,
+              "reading a just-written block back through the responder SUCCEEDS");
+        wsrc_pattern(LBN + i, expect, sizeof(expect));
+        check(rdrec.last_lbn == LBN + i
+                  && memcmp(rdrec.last, expect, SCS_MSCP_BLOCK_SIZE) == 0,
+              "...and the bytes read back EQUAL the bytes written -- the R/W "
+              "round trip really hit real storage");
+    }
+
+    /* Direct backing-store confirmation: the file itself changed. */
+    {
+        uint8_t peek[SCS_MSCP_BLOCK_SIZE], expect[SCS_MSCP_BLOCK_SIZE];
+        check(scs_mscp_srv_read_blocks(u, LBN, 1, peek, sizeof(peek))
+                  == (long)SCS_MSCP_BLOCK_SIZE,
+              "the backing store reads the written block back");
+        wsrc_pattern(LBN, expect, sizeof(expect));
+        check(memcmp(peek, expect, SCS_MSCP_BLOCK_SIZE) == 0,
+              "...and the backing FILE holds exactly the written bytes");
+    }
+
+    /* --- HONEST ERRORS on the write path. --- */
+    /* (1) A FAILED PULL is Host Buffer Access Error and persists nothing. */
+    {
+        unsigned long before = srv.blocks_written;
+        wsrc.fail = 1;
+        n = scs_mscp_srv_handle(&srv, 21u, &v, body, sizeof(body), end,
+                                sizeof(end));
+        check(scs_mscp_status_major(u16(end, SCS_MSCP_P_STS))
+                  == SCS_MSCP_ST_HOST_BUF_ERR,
+              "a WRITE whose data pull FAILS is Host Buffer Access Error, not a "
+              "fake success");
+        check(srv.blocks_written == before,
+              "...and a failed pull persisted nothing");
+        wsrc.fail = 0;
+    }
+    /* (2) A WRITE running past the end of the volume is Invalid Command and
+     * persists nothing (sec 5.3, same bound as READ). */
+    {
+        unsigned long before = srv.blocks_written;
+        struct scs_mscp_view ev;
+        uint8_t eb[SCS_MSCP_BODY_LEN], ee[SCS_MSCP_SRV_END_MAX];
+        make_command(eb, sizeof(eb), &ev, 0x630u, 0, SCS_MSCP_OP_WRITE, 0);
+        wle32(eb, SCS_MSCP_P_BCNT, 2u * SCS_MSCP_BLOCK_SIZE);
+        wle32(eb, SCS_MSCP_P_LBN, NBLK - 1); /* one block runs off the end */
+        n = scs_mscp_srv_handle(&srv, 21u, &ev, eb, sizeof(eb), ee, sizeof(ee));
+        check(n > 0 && scs_mscp_status_major(u16(ee, SCS_MSCP_P_STS))
+                           == SCS_MSCP_ST_INVALID_CMD,
+              "a WRITE past the end of the volume is refused Invalid Command");
+        check(srv.blocks_written == before,
+              "...and the out-of-range WRITE persisted nothing");
+    }
+    /* (3) A WRITE to a unit we do not serve is Unit-Offline, not a crash. */
+    {
+        struct scs_mscp_view ev;
+        uint8_t eb[SCS_MSCP_BODY_LEN], ee[SCS_MSCP_SRV_END_MAX];
+        make_command(eb, sizeof(eb), &ev, 0x631u, 9, SCS_MSCP_OP_WRITE, 0);
+        wle32(eb, SCS_MSCP_P_BCNT, SCS_MSCP_BLOCK_SIZE);
+        n = scs_mscp_srv_handle(&srv, 21u, &ev, eb, sizeof(eb), ee, sizeof(ee));
+        check(n > 0 && scs_mscp_status_major(u16(ee, SCS_MSCP_P_STS))
+                           == SCS_MSCP_ST_OFFLINE,
+              "a WRITE to an unbacked/unknown unit is Unit-Offline");
+    }
+    /* (4) A READ of an unbacked unit is a HONEST MSCP error (bead acceptance). */
+    {
+        struct scs_mscp_view ev;
+        uint8_t eb[SCS_MSCP_BODY_LEN], ee[SCS_MSCP_SRV_END_MAX];
+        make_command(eb, sizeof(eb), &ev, 0x632u, 9, SCS_MSCP_OP_READ, 0);
+        wle32(eb, SCS_MSCP_P_BCNT, SCS_MSCP_BLOCK_SIZE);
+        n = scs_mscp_srv_handle(&srv, 21u, &ev, eb, sizeof(eb), ee, sizeof(ee));
+        check(n > 0 && scs_mscp_status_major(u16(ee, SCS_MSCP_P_STS))
+                           == SCS_MSCP_ST_OFFLINE,
+              "a READ of an unbacked/unknown unit is Unit-Offline -- an honest "
+              "MSCP error, not a fabricated transfer");
+    }
+
+    /* --- THE READ-ONLY DEFAULT IS INTACT: a unit attached read-only still
+     * refuses WRITE Write Protected EVEN WITH a write hook installed, so the
+     * opt-in did not weaken it. Its own backing file, distinct from the
+     * writable unit's still-open fd above. --- */
+    {
+        char rpath[128];
+        struct scs_mscp_srv ro;
+        struct scs_mscp_view ev;
+        uint8_t eb[SCS_MSCP_BODY_LEN], ee[SCS_MSCP_SRV_END_MAX];
+        uint8_t blk[SCS_MSCP_BLOCK_SIZE];
+        int rfd, k;
+        snprintf(rpath, sizeof(rpath), "/tmp/vms6e1-ro-%d.raw", (int)getpid());
+        rfd = open(rpath, O_RDWR | O_CREAT | O_TRUNC, 0600);
+        check(rfd >= 0, "test fixture: the read-only image is created");
+        if (rfd >= 0) {
+            memset(blk, 0, sizeof(blk));
+            for (k = 0; k < 4; k++) {
+                (void)!write(rfd, blk, sizeof(blk));
+            }
+            scs_mscp_srv_init(&ro, GOLDEN_CTLR_ID, GOLDEN_CTLR_TIMEOUT);
+            bring_controller_online(&ro, 22u);
+            check(scs_mscp_srv_attach_fd(&ro, 0, rfd, 4, 0x6e11ULL, 0x2452, 0x1)
+                      == 0,
+                  "the read-only unit attaches");
+            /* a write hook IS installed -- to prove the read-only refusal does
+             * not depend on the hook being absent */
+            scs_mscp_srv_set_wxfer(&ro, supplying_wxfer, &wsrc);
+            {
+                struct scs_mscp_view ov2;
+                uint8_t ob2[SCS_MSCP_BODY_LEN], oe2[SCS_MSCP_SRV_END_MAX];
+                make_command(ob2, sizeof(ob2), &ov2, 0x640u, 0,
+                             SCS_MSCP_OP_ONLINE, 0);
+                scs_mscp_srv_handle(&ro, 22u, &ov2, ob2, sizeof(ob2), oe2,
+                                    sizeof(oe2));
+            }
+            make_command(eb, sizeof(eb), &ev, 0x641u, 0, SCS_MSCP_OP_WRITE, 0);
+            wle32(eb, SCS_MSCP_P_BCNT, SCS_MSCP_BLOCK_SIZE);
+            n = scs_mscp_srv_handle(&ro, 22u, &ev, eb, sizeof(eb), ee,
+                                    sizeof(ee));
+            check(n == SCS_MSCP_WRITE_END_LEN
+                      && scs_mscp_status_major(u16(ee, SCS_MSCP_P_STS))
+                             == SCS_MSCP_ST_WRITE_PROT,
+                  "a read-only unit STILL refuses WRITE Write Protected even "
+                  "with a write hook installed -- the default is intact");
+            check(ro.blocks_written == 0, "...and persisted nothing");
+            close(rfd);
+            unlink(rpath);
+        }
+    }
+
+    close(fd);
+    unlink(path);
+}
+
 int main(void)
 {
     test_scc_end_byte_exact();
@@ -1532,6 +1828,7 @@ int main(void)
     test_trap1_read_end_piggyback();
     test_blk_sink_read_end_to_end();
     test_write_block_transfer_end_to_end();
+    test_write_read_round_trip_through_handle();
 
     printf("test_scs_mscp_srv: %d checks, %d failure(s)\n", checks, failures);
     return failures ? 1 : 0;

@@ -84,9 +84,14 @@ int scs_mscp_srv_set_ctlr_profile(struct scs_mscp_srv *srv,
     return 0;
 }
 
-int scs_mscp_srv_attach_fd(struct scs_mscp_srv *srv, uint16_t unit, int fd,
-                           uint32_t unit_size, uint64_t unit_id,
-                           uint32_t media_id, uint32_t volume_ser)
+/* The body shared by the read-only and read-write attach entry points. The
+ * ONLY difference between them is `writable`, which decides both read_only and
+ * whether UF.WPS is advertised -- keeping the two in one place so a change to
+ * the slot-allocation logic cannot drift between them. */
+static int srv_attach_common(struct scs_mscp_srv *srv, uint16_t unit, int fd,
+                             uint32_t unit_size, uint64_t unit_id,
+                             uint32_t media_id, uint32_t volume_ser,
+                             int writable)
 {
     if (srv == NULL || fd < 0 || unit_size == 0) {
         return -1;
@@ -113,14 +118,32 @@ int scs_mscp_srv_attach_fd(struct scs_mscp_srv *srv, uint16_t unit, int fd,
         u->media_id = media_id;
         u->volume_ser = volume_ser;
         u->online = 0;
-        /* Design decision (2): v1 serves read-only and SAYS SO. UF.WPS is not
-         * advisory here -- scs_mscp_srv_handle() refuses WRITE with the
-         * matching Table B-2 status, so the flag and the behaviour agree. */
-        u->read_only = 1;
-        u->unit_flags = SCS_MSCP_UF_WRITE_PROT_SW;
+        /* Design decision (2): a read-only unit serves read-only and SAYS SO.
+         * UF.WPS is not advisory -- scs_mscp_srv_handle() refuses WRITE with the
+         * matching Table B-2 status, so the flag and the behaviour agree. vms-6e1:
+         * a writable unit clears read_only and UF.WPS, and its WRITE dispatch
+         * persists to the backing store instead of refusing. */
+        u->read_only = writable ? 0 : 1;
+        u->unit_flags = writable ? 0u : SCS_MSCP_UF_WRITE_PROT_SW;
         return 0;
     }
     return -1;
+}
+
+int scs_mscp_srv_attach_fd(struct scs_mscp_srv *srv, uint16_t unit, int fd,
+                           uint32_t unit_size, uint64_t unit_id,
+                           uint32_t media_id, uint32_t volume_ser)
+{
+    return srv_attach_common(srv, unit, fd, unit_size, unit_id, media_id,
+                             volume_ser, 0 /* read-only */);
+}
+
+int scs_mscp_srv_attach_fd_rw(struct scs_mscp_srv *srv, uint16_t unit, int fd,
+                              uint32_t unit_size, uint64_t unit_id,
+                              uint32_t media_id, uint32_t volume_ser)
+{
+    return srv_attach_common(srv, unit, fd, unit_size, unit_id, media_id,
+                             volume_ser, 1 /* read-write (vms-6e1) */);
 }
 
 int scs_mscp_srv_set_xfer(struct scs_mscp_srv *srv, scs_mscp_srv_xfer_fn fn,
@@ -131,6 +154,17 @@ int scs_mscp_srv_set_xfer(struct scs_mscp_srv *srv, scs_mscp_srv_xfer_fn fn,
     }
     srv->xfer = fn;
     srv->xfer_ctx = ctx;
+    return 0;
+}
+
+int scs_mscp_srv_set_wxfer(struct scs_mscp_srv *srv, scs_mscp_srv_wxfer_fn fn,
+                           void *ctx)
+{
+    if (srv == NULL) {
+        return -1;
+    }
+    srv->wxfer = fn;
+    srv->wxfer_ctx = ctx;
     return 0;
 }
 
@@ -473,7 +507,7 @@ static long build_online_end(struct scs_mscp_srv *srv,
     return (long)SCS_MSCP_ONLINE_END_LEN;
 }
 
-/* --------------------- READ / WRITE (sec 5.3, 6.14, 6.18) --------------- */
+/* --------------------- READ / WRITE (sec 5.3, 6.14) --------------------- */
 
 static long build_transfer_end(uint8_t *end, size_t end_len, uint32_t cmd_ref,
                                uint16_t unit, uint8_t base_opcode,
@@ -589,8 +623,8 @@ static long handle_read(struct scs_mscp_srv *srv,
 }
 
 static long handle_write(struct scs_mscp_srv *srv,
-                         const struct scs_mscp_view *cmd, uint8_t *end,
-                         size_t end_len)
+                         const struct scs_mscp_view *cmd, const uint8_t *body,
+                         size_t body_len, uint8_t *end, size_t end_len)
 {
     struct scs_mscp_srv_unit *u = scs_mscp_srv_find_unit(srv, cmd->unit);
     if (u == NULL) {
@@ -600,17 +634,103 @@ static long handle_write(struct scs_mscp_srv *srv,
                                                   SCS_MSCP_SUB_OFL_UNKNOWN),
                                   0u);
     }
-    /* DESIGN DECISION (2). v1 is read-only, the unit ADVERTISED UF.WPS in every
-     * ONLINE and GET UNIT STATUS end message, and a WRITE that arrives anyway
-     * gets the published status for that situation -- Write Protected,
-     * sub-code "Unit is Software Write Protected" (Table B-2, 0x1006). Never
-     * dropped, never falsely acknowledged. */
-    srv->writes_refused++;
+    /* DESIGN DECISION (2), now an EXPLICIT OPT-IN (vms-6e1). A unit attached
+     * read-only (scs_mscp_srv_attach_fd -- the default and the live daemon's
+     * posture) ADVERTISED UF.WPS in every ONLINE and GET UNIT STATUS end
+     * message, and a WRITE that arrives anyway gets the published status for
+     * that situation -- Write Protected, sub-code "Unit is Software Write
+     * Protected" (Table B-2, 0x1006). Never dropped, never falsely
+     * acknowledged. A unit attached read-WRITE (scs_mscp_srv_attach_fd_rw)
+     * falls through to the transfer path below. */
+    if (u->read_only) {
+        srv->writes_refused++;
+        return build_transfer_end(end, end_len, cmd->cmd_ref, u->unit,
+                                  SCS_MSCP_OP_WRITE,
+                                  SCS_MSCP_STATUS(SCS_MSCP_ST_WRITE_PROT,
+                                                  SCS_MSCP_SUB_WP_SOFTWARE),
+                                  0u);
+    }
+
+    /* From here the WRITE mirrors handle_read (sec 5.3): same command layout,
+     * same online precondition, same byte-count and range validation. */
+    if (body_len < SCS_MSCP_P_LBN + 4) {
+        return build_invalid_command(
+            end, end_len, cmd->cmd_ref, cmd->unit,
+            SCS_MSCP_STATUS(SCS_MSCP_ST_INVALID_CMD, 0u));
+    }
+    uint32_t byte_count = get_le32(body + SCS_MSCP_P_BCNT);
+    uint32_t lbn = get_le32(body + SCS_MSCP_P_LBN);
+
+    /* WRITE shares READ's transfer preconditions (sec 5.3): a unit no ONLINE has
+     * claimed cannot transfer -- the same Unit-Available answer READ gives
+     * (sec 6.14). */
+    if (!u->online) {
+        return build_transfer_end(end, end_len, cmd->cmd_ref, u->unit,
+                                  SCS_MSCP_OP_WRITE,
+                                  SCS_MSCP_STATUS(SCS_MSCP_ST_AVAILABLE, 0u),
+                                  0u);
+    }
+    /* sec 5.3: whole blocks only, and the transfer must fit inside the volume. */
+    if (byte_count == 0 || (byte_count % SCS_MSCP_BLOCK_SIZE) != 0) {
+        return build_transfer_end(
+            end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_WRITE,
+            SCS_MSCP_STATUS(SCS_MSCP_ST_INVALID_CMD, SCS_MSCP_P_BCNT * 256u), 0u);
+    }
+    uint32_t nblocks = byte_count / SCS_MSCP_BLOCK_SIZE;
+    if ((uint64_t)lbn + (uint64_t)nblocks > (uint64_t)u->unit_size) {
+        return build_transfer_end(
+            end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_WRITE,
+            SCS_MSCP_STATUS(SCS_MSCP_ST_INVALID_CMD, SCS_MSCP_P_LBN * 256u), 0u);
+    }
+
+    /* DESIGN DECISION (4), WRITE side. The data has to CROSS first -- the server
+     * REQDATs it out of the named host buffer -- before anything can be
+     * persisted. With no write hook installed the honest answer is a Controller
+     * Error, NOT a Success for a block that never arrived. A unit test asserts
+     * this so it cannot quietly become a fake success (the write-side INV-6
+     * boundary, mirroring handle_read's). */
+    if (srv->wxfer == NULL) {
+        srv->wxfer_refusals++;
+        return build_transfer_end(
+            end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_WRITE,
+            SCS_MSCP_STATUS(SCS_MSCP_ST_CTLR_ERR,
+                            SCS_MSCP_SUB_CNT_INCONSISTENT),
+            0u);
+    }
+
+    /* One block at a time, the mirror of handle_read: pull the block from the
+     * host buffer, then persist it to the backing store. A mid-transfer failure
+     * reports exactly the bytes that DID cross (sec 5.5), and a block whose pull
+     * failed persists NOTHING. */
+    uint8_t block[SCS_MSCP_BLOCK_SIZE];
+    uint32_t moved = 0;
+    for (uint32_t i = 0; i < nblocks; i++) {
+        long n = srv->wxfer(srv->wxfer_ctx, body + SCS_MSCP_P_BUFF, lbn + i,
+                            block, sizeof(block));
+        if (n < 0 || (size_t)n != sizeof(block)) {
+            /* Host Buffer Access Error (Table B-2) is the transfer-service
+             * failure status, the same one READ's data path uses. Report the
+             * bytes that did cross; persist nothing here. */
+            return build_transfer_end(
+                end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_WRITE,
+                SCS_MSCP_STATUS(SCS_MSCP_ST_HOST_BUF_ERR, 0u), moved);
+        }
+        if (scs_mscp_srv_write_blocks(u, lbn + i, block, 1)
+                != (long)SCS_MSCP_BLOCK_SIZE) {
+            /* The backing store rejected the write -- Drive Error (Table B-2);
+             * report the bytes that crossed before it. */
+            return build_transfer_end(
+                end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_WRITE,
+                SCS_MSCP_STATUS(SCS_MSCP_ST_DRIVE_ERR, 0u), moved);
+        }
+        srv->blocks_written++;
+        moved += (uint32_t)sizeof(block);
+    }
     return build_transfer_end(end, end_len, cmd->cmd_ref, u->unit,
                               SCS_MSCP_OP_WRITE,
-                              SCS_MSCP_STATUS(SCS_MSCP_ST_WRITE_PROT,
-                                              SCS_MSCP_SUB_WP_SOFTWARE),
-                              0u);
+                              SCS_MSCP_STATUS(SCS_MSCP_ST_SUCCESS,
+                                              SCS_MSCP_SUB_NORMAL),
+                              moved);
 }
 
 /* ================================ dispatch =============================== */
@@ -669,7 +789,7 @@ long scs_mscp_srv_handle(struct scs_mscp_srv *srv, uint32_t conid,
         } else if (cmd->base_opcode == SCS_MSCP_OP_READ) {
             n = handle_read(srv, cmd, body, body_len, end, end_len);
         } else {
-            n = handle_write(srv, cmd, end, end_len);
+            n = handle_write(srv, cmd, body, body_len, end, end_len);
         }
         break;
 

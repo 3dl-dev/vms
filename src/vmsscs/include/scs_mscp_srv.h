@@ -196,13 +196,27 @@
  * scs_mscp_srv_attach_fd()/scs_mscp_srv_set_xfer() to a real one -- that
  * remains follow-up work, not done here.
  *
- * v1's WRITE REFUSAL (design decision (2)) IS UNCHANGED BY THIS ITEM. This
- * item grounds and implements the block-transfer WIRE MECHANISM for both
- * directions (a real WRITE needs the REQDAT half just as much as READ needs
- * SNDDAT), and tests it end-to-end against the backing store with
- * scs_mscp_srv_write_blocks() -- but scs_mscp_srv_handle()'s WRITE opcode
- * dispatch still answers Write Protected. Flipping v1 read-only to read-write
- * is a policy decision this item does not make.
+ * v1's WRITE REFUSAL (design decision (2)) IS UNCHANGED BY vms-4e31. That item
+ * grounds and implements the block-transfer WIRE MECHANISM for both directions
+ * (a real WRITE needs the REQDAT half just as much as READ needs SNDDAT), and
+ * tests it end-to-end against the backing store with scs_mscp_srv_write_blocks()
+ * -- but left scs_mscp_srv_handle()'s WRITE opcode dispatch answering Write
+ * Protected, calling the read-only-to-read-write flip a policy decision it did
+ * not make.
+ *
+ * vms-6e1 MAKES THAT POLICY DECISION -- AS AN OPT-IN, NOT A REVERSAL. A unit
+ * attached read-only (scs_mscp_srv_attach_fd, the default and the live daemon's
+ * posture) still advertises UF.WPS and still refuses WRITE Write Protected,
+ * byte-for-byte as before. A unit attached read-WRITE
+ * (scs_mscp_srv_attach_fd_rw) clears UF.WPS and its WRITE dispatch PULLS the
+ * data through a caller-installed write hook (scs_mscp_srv_set_wxfer, the
+ * REQDAT-pull twin of the read sink) and PERSISTS it via
+ * scs_mscp_srv_write_blocks() -- so an MSCP WRITE command now reaches real
+ * storage. With no write hook installed the writable unit refuses WRITE
+ * Controller Error, never a fake success (the write-side of design decision
+ * (4)). scsd.c's LIVE daemon stays read-only: a writable live unit additionally
+ * needs the inbound block-transfer RECEIVE path (a host pushes the data to the
+ * server), which is follow-up wire work outside this module.
  */
 #ifndef SCS_MSCP_SRV_H
 #define SCS_MSCP_SRV_H
@@ -388,6 +402,32 @@ typedef long (*scs_mscp_srv_xfer_fn)(void *ctx, const uint8_t buffer_desc[12],
                                      size_t len);
 
 /*
+ * scs_mscp_srv_wxfer_fn - THE WRITE-SIDE BLOCK DATA TRANSFER HOOK (vms-6e1).
+ *
+ * The mirror of scs_mscp_srv_xfer_fn for the WRITE direction. Where the read
+ * hook PUSHES a block the server read from its backing store OUT to the host,
+ * this hook PULLS the block the host is writing IN: it fills `data_out` with the
+ * `len` bytes destined for `lbn`, taken from the named host buffer, and returns
+ * the number of bytes actually pulled (== len on success) or -1 on failure.
+ *
+ * A real MSCP WRITE is a REQDAT -- the server, holding the command, fetches the
+ * data out of the buffer descriptor's named host buffer (AA-L619A-TK sec 5.3;
+ * the named-buffer machinery of VAXcluster Principles pp. 2-32..2-41). The wire
+ * mechanism for BOTH directions was grounded by the vms-4e31 lab-2 serving
+ * capture (see "SCA BLOCK DATA TRANSFER" below), so this hook is the write-side
+ * twin of the read sink, not a fresh wire guess.
+ *
+ * THERE IS NO DEFAULT IMPLEMENTATION, for the same reason the read hook has
+ * none (design decision (4)): a stub that returned `len` without moving anything
+ * would make every WRITE report a success for data that never crossed. With no
+ * hook installed a WRITE to a writable unit is answered Controller Error, never
+ * faked (INV-6).
+ */
+typedef long (*scs_mscp_srv_wxfer_fn)(void *ctx, const uint8_t buffer_desc[12],
+                                      uint32_t lbn, uint8_t *data_out,
+                                      size_t len);
+
+/*
  * scs_mscp_srv_host - ONE REMOTE CLASS DRIVER. The HQB analogue.
  * Per-connection MSCP state: sec 6.16 makes controller flags and host timeout
  * per-class-driver, and sec 3.4 makes "Controller-Online" a per-class-driver
@@ -449,13 +489,22 @@ struct scs_mscp_srv {
     scs_mscp_srv_xfer_fn xfer;
     void                *xfer_ctx;
 
+    /* vms-6e1: the write-side hook -- the REQDAT-pull twin of xfer. NULL until
+     * an operator installs one with scs_mscp_srv_set_wxfer(); a WRITABLE unit
+     * whose server has none answers WRITE with Controller Error, never a fake
+     * success. A read-only unit refuses WRITE before this is ever consulted. */
+    scs_mscp_srv_wxfer_fn wxfer;
+    void                 *wxfer_ctx;
+
     /* Counters. These are the kill-switch instruments: a behaviour that claims
      * to have happened must have moved one of these. */
     unsigned long cmds_received;
     unsigned long ends_sent;
     unsigned long blocks_read;
-    unsigned long writes_refused;
-    unsigned long xfer_refusals; /* READs failed for want of a transfer hook */
+    unsigned long blocks_written; /* blocks a WRITE actually persisted (vms-6e1) */
+    unsigned long writes_refused; /* WRITEs refused Write Protected (read-only) */
+    unsigned long xfer_refusals;  /* READs failed for want of a transfer hook */
+    unsigned long wxfer_refusals; /* WRITEs failed for want of a write hook (vms-6e1) */
 };
 
 /*
@@ -496,12 +545,44 @@ int scs_mscp_srv_attach_fd(struct scs_mscp_srv *srv, uint16_t unit, int fd,
                            uint32_t media_id, uint32_t volume_ser);
 
 /*
+ * scs_mscp_srv_attach_fd_rw - vms-6e1: the READ-WRITE mirror of
+ * scs_mscp_srv_attach_fd. Serves `unit` read-WRITE from `fd`, which the CALLER
+ * MUST have opened O_RDWR (this module pwrite()s it and never opens or closes
+ * it). Unlike attach_fd it does NOT force UF.WPS into the unit flags and leaves
+ * read_only == 0, so GET UNIT STATUS / ONLINE advertise a writable volume and
+ * scs_mscp_srv_handle()'s WRITE dispatch persists to the backing store instead
+ * of refusing Write Protected.
+ *
+ * This makes v1's design-decision-(2) read-only default an EXPLICIT OPT-IN, not
+ * a reversal: every existing attach_fd() caller (and the live daemon's default
+ * posture) is unchanged and still read-only. A writable unit still needs a write
+ * transfer hook (scs_mscp_srv_set_wxfer) before a WRITE can move data; without
+ * one the WRITE is refused Controller Error, never faked (INV-6).
+ *
+ * Same argument rules as attach_fd: unit_id (P.UNTI) must be non-zero, the slot
+ * must be free. Returns 0, or -1 on a bad argument or a full table.
+ */
+int scs_mscp_srv_attach_fd_rw(struct scs_mscp_srv *srv, uint16_t unit, int fd,
+                              uint32_t unit_size, uint64_t unit_id,
+                              uint32_t media_id, uint32_t volume_ser);
+
+/*
  * scs_mscp_srv_set_xfer - install the block data transfer hook. Until one is
  * installed every READ is answered with a Controller Error end message rather
  * than a Success it cannot back up; see design decision (4).
  */
 int scs_mscp_srv_set_xfer(struct scs_mscp_srv *srv, scs_mscp_srv_xfer_fn fn,
                           void *ctx);
+
+/*
+ * scs_mscp_srv_set_wxfer - install the WRITE-side block data transfer hook
+ * (vms-6e1). Until one is installed every WRITE to a WRITABLE unit is answered
+ * with a Controller Error end message rather than a Success it cannot back up --
+ * the exact mirror of scs_mscp_srv_set_xfer / design decision (4). Read-only
+ * units refuse WRITE Write Protected regardless of whether this is installed.
+ */
+int scs_mscp_srv_set_wxfer(struct scs_mscp_srv *srv, scs_mscp_srv_wxfer_fn fn,
+                           void *ctx);
 
 /*
  * scs_mscp_srv_find_unit - the served unit with this number, or NULL.

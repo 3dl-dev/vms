@@ -54,6 +54,7 @@ jobs:
       release: ${{ steps.decide.outputs.release }}
       netbsd: ${{ steps.decide.outputs.netbsd }}
       netbsd_vax: ${{ steps.decide.outputs.netbsd_vax }}
+      aarch64_boot: ${{ steps.decide.outputs.aarch64_boot }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -142,6 +143,10 @@ jobs:
             netbsd_vax:
               - '.github/workflows/**'
               - 'tests/lab-vax/**'
+            aarch64_boot:
+              - '.github/workflows/**'
+              - 'tests/qemu-aarch64/**'
+              - 'src/libvmssys/**'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -155,6 +160,7 @@ jobs:
               echo "release=${{ steps.filter.outputs.release }}"
               echo "netbsd=${{ steps.filter.outputs.netbsd }}"
               echo "netbsd_vax=${{ steps.filter.outputs.netbsd_vax }}"
+              echo "aarch64_boot=${{ steps.filter.outputs.aarch64_boot }}"
             } >> "$GITHUB_OUTPUT"
           else
             {
@@ -165,8 +171,93 @@ jobs:
               echo "release=true"
               echo "netbsd=true"
               echo "netbsd_vax=true"
+              echo "aarch64_boot=true"
             } >> "$GITHUB_OUTPUT"
           fi
+  # -----------------------------------------------------------------------
+  # Job: aarch64 system-emulation boot proof (rd vms-f66)
+  #
+  # The aarch64 positioning lane. Every other positioning arch has a
+  # system-emulation boot proof -- x86_64 (tests/qemu/, the vms.ko executive),
+  # NetBSD/amd64 (tests/netbsd/, qemu-system-x86_64), NetBSD/vax (SIMH). aarch64
+  # had NONE: it was only ever exercised under *user-mode* QEMU binfmt (the ~25
+  # link-native/imgact arm64 jobs) and its branches in run-qemu.sh /
+  # tests/qemu/run_tests.sh were dead code with no aarch64 QEMU host to run them
+  # (rd vms-c83). This job boots a REAL arm64 Linux kernel under *system-mode*
+  # qemu-system-aarch64 -machine virt and runs a genuine OVMX freestanding
+  # EM_AARCH64 artifact as PID 1 -- the aarch64 analogue of the Alpha
+  # syscall/crt0 proof (commit c0a663dc), one rung higher (system emulation, not
+  # user-mode qemu-alpha).
+  #
+  # BLOCKING. The harness itself carries the negative control (an EM_X86_64
+  # /init the arm64 kernel must refuse to exec), so a green here means the
+  # positive boot really was aarch64. This step adds an OUTER negative control:
+  # a deliberately-broken PASS marker must redden the job, proving the grep has
+  # teeth. TOOLING, NOT A RUNTIME (Rule 9): booting a kernel in QEMU to test the
+  # freestanding layer is exactly what tests/qemu and tests/netbsd already do;
+  # the Rule-9 gate inspects only src/** C/H, so nothing here trips it.
+  # -----------------------------------------------------------------------
+  aarch64-system-boot:
+    name: aarch64 System-Emulation Boot Proof (QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.aarch64_boot == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the aarch64 boot-proof image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu-aarch64/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-aarch64-boot:latest
+          cache-from: type=gha,scope=aarch64-boot
+          cache-to: type=gha,mode=max,scope=aarch64-boot
+
+      - name: Boot arm64 kernel under qemu-system-aarch64, run OVMX EM_AARCH64 init as PID 1
+        run: |
+          set +e
+          RAW=$(docker run --rm ovmx-aarch64-boot:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: aarch64 boot proof exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF 'OVMX_AARCH64_SYSMODE_PASS' \
+            || { echo "FAIL: did not see the OVMX aarch64 PASS marker on the guest console"; exit 1; }
+          echo "$OUTPUT" | grep -qF 'uname machine == aarch64' \
+            || { echo "FAIL: guest never asserted uname machine == aarch64 -- the arch check has no teeth"; exit 1; }
+          echo "$OUTPUT" | grep -qF 'aarch64 SYSTEM-EMULATION BOOT PROOF: PASSED' \
+            || { echo "FAIL: harness did not report its own PASSED banner (negative control may not have run)"; exit 1; }
+          echo "PASS: OVMX freestanding EM_AARCH64 layer booted as PID 1 on a real arm64 kernel under qemu-system-aarch64"
+
+      - name: NEGATIVE CONTROL — a wrong PASS marker must redden the harness
+        run: |
+          set +e
+          # Point the harness at a marker the guest will never print. A correct
+          # harness then fails the positive proof (marker absent) and exits 1.
+          RAW=$(docker run --rm -e PASS=NEVER_EMITTED_MARKER ovmx-aarch64-boot:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT" | tail -20
+          if [ "$RC" -eq 0 ]; then
+            echo "FAIL: harness exited 0 while keyed on a marker that is never printed -- the grep has no teeth."
+            exit 1
+          fi
+          echo "PASS: harness correctly went RED when keyed on an absent marker -- the assertion has teeth"
+
   # -----------------------------------------------------------------------
   # Job 1: Build and unit test (host, shared libs, readline)
   # -----------------------------------------------------------------------

@@ -146,6 +146,7 @@ dump_and_die() {
 
 login() {  # login <log-file>  -- logs in as SYSTEM, returns once at the $ prompt
     local log="$1"
+    send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
     if wait_for 'Username:' "$BOOT_TIMEOUT" 0 "$log"; then
         ok "boot reaches the login prompt ($log)"
     else

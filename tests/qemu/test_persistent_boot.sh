@@ -86,9 +86,13 @@ record() {
     else echo "  FAIL: $desc"; FAIL=$((FAIL + 1)); fi
 }
 
-# Boot to a captured console log, up to TIMEOUT. No interactive input is needed:
-# both the login prompt (positive) and the halt diagnostic (negative) are
-# printed by the boot itself before any prompt exists.
+# Boot to a captured console log, up to TIMEOUT. One RETURN is fed on stdin:
+# on OPA0: LOGINOUT now waits for the operator's RETURN before presenting the
+# "Username:" prompt (vms-2213, the "press RETURN to log in" console
+# behaviour), so the positive boot needs a keystroke to reach the prompt. The
+# CR is delivered once and stdin is then held open (sleep) so the guest serial
+# does not see a hangup. The negative (blank disk) halts before any login
+# exists, so the CR is simply never read there -- "Username:" stays absent.
 run_qemu() {
     local initrd="$1" disk="$2"
     # shellcheck disable=SC2086
@@ -104,7 +108,7 @@ run_qemu() {
         -serial stdio \
         -drive file="$disk",format=raw,if=virtio \
         -no-reboot \
-        </dev/null 2>&1 || true
+        < <(printf '\r'; sleep "$TIMEOUT") 2>&1 || true
 }
 
 echo "=== OVMX mount-or-halt gate (vms-2f0) ==="

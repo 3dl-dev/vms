@@ -188,6 +188,7 @@ if [ "$OK" -eq 1 ]; then
 fi
 
 if [ "$OK" -eq 1 ]; then
+    send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
     if wait_for 'Username:' 60; then rc=0; else rc=1; OK=0; fi
     record "login prompt appears (from the mastered disk)" "$rc"
 fi
@@ -245,6 +246,7 @@ echo "--- Second boot: same disk, prove it re-boots to login ---"
 boot_distrib "$CONSOLE_LOG" "$FIFO"
 trap cleanup EXIT
 
+send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
 if wait_for 'Username:' 90; then rc=0; else rc=1; fi
 record "second boot reaches the login prompt (image survives a re-boot)" "$rc"
 

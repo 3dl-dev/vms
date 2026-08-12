@@ -143,6 +143,7 @@ if wait_for '%OVMX-I-EXEC' 60; then rc=0; else rc=1; OK=0; fi
 record "executive attached" "$rc"
 
 if [ "$OK" -eq 1 ]; then
+    send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
     if wait_for 'Username:' 60; then rc=0; else rc=1; OK=0; fi
     record "reaches the login prompt (phase driver ran to completion)" "$rc"
 fi

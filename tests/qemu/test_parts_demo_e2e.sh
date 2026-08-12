@@ -156,6 +156,10 @@ dump_and_die() {
 
 # --- 1. Boot: blank disk -> STARTUP.EXE installs -> login prompt ------------
 if wait_for '%OVMX-I-EXEC' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
+# vms-2213: OPA0: LOGINOUT now waits for RETURN before presenting Username:
+# (the "press RETURN to log in" console behaviour). Wake it with a CR -- a
+# real operator's keystroke -- so the login prompt appears.
+send ''
 if wait_for 'Username:' "$BOOT_TIMEOUT"; then
     ok "install completes and reaches the login prompt"
 else
@@ -172,6 +176,42 @@ else
     dump_and_die "SYSTEM login failed"
 fi
 wait_for '$' 20 "$LOGIN_OFF"
+
+# --- 2b. BOOT/LOGIN OUTPUT FIDELITY (vms-2213) ------------------------------
+# Four VMS-fidelity properties of the boot->login console transcript, asserted
+# against the real mastered image. Grounding: VSI OpenVMS System Manager's
+# Manual, Vol I, "Logging In to the System" (announce banner, then Username:,
+# then Password:, then a single SYS$WELCOME).
+FID_SEG=$(tail -c "+$((LOGIN_OFF + 1))" "$LOG" 2>/dev/null | tr -d '\r')
+FULL=$(tr -d '\r' <"$LOG")
+# (1) Exactly ONE post-login welcome (SYS$WELCOME), not two. SYLOGIN.COM no
+#     longer WRITEs a second "Welcome ..." line of its own.
+WELCOME_N=$(printf '%s\n' "$FID_SEG" | grep -c 'Welcome to OpenVMX')
+if [ "$WELCOME_N" -eq 1 ]; then
+    ok "exactly ONE welcome message after login (single SYS\$WELCOME)"
+else
+    bad "expected exactly 1 welcome after login, saw $WELCOME_N"
+fi
+# (2) The boot identification banner prints BEFORE the first Username:.
+BANNER_POS=$(printf '%s' "$FULL" | grep -aboE 'OpenVMX V[0-9]' | head -1 | cut -d: -f1)
+UNAME_POS=$(printf '%s' "$FULL" | grep -aboF 'Username:' | head -1 | cut -d: -f1)
+if [ -n "$BANNER_POS" ] && [ -n "$UNAME_POS" ] && [ "$BANNER_POS" -lt "$UNAME_POS" ]; then
+    ok "boot banner prints before the first Username: prompt (banner@$BANNER_POS < prompt@$UNAME_POS)"
+else
+    bad "banner-before-prompt ordering wrong (banner@${BANNER_POS:-none} prompt@${UNAME_POS:-none})"
+fi
+# (3) The rigorous "waited for RETURN" proof (Username: absent until the CR is
+#     sent, at a point past the boot banner) lives in the dedicated
+#     tests/qemu/test_job_control_console.sh, which drives the clean login path
+#     without an install racing in between. Here, assertion (2) already shows
+#     the observable outcome: before this fix the prompt raced AHEAD of the
+#     boot banner; after it, the banner is strictly first.
+# (4) No routine kernel-driver printk leaked onto the user console.
+if printf '%s\n' "$FULL" | grep -q 'vms: registered process'; then
+    bad "kernel printk 'vms: registered process ...' leaked onto the console"
+else
+    ok "no 'vms: registered process' kernel chatter on the user console"
+fi
 
 # --- 3. The install step: @SYS$UPDATE:PARTS_SETUP.COM -----------------------
 SETUP_OFF=$(wc -c <"$LOG")

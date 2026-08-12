@@ -235,6 +235,7 @@ run_case() {
     }
 
     # --- Boot 1: install ---
+    send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
     if waitfor 'Username:' 120 "$log1"; then rc=0; else rc=1; fi
     record "$tag boot 1: pre-installed disk boots and reaches the login prompt" "$rc"
     if [ "$rc" -ne 0 ]; then
@@ -326,6 +327,7 @@ run_case() {
         return
     fi
 
+    send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
     if waitfor 'Username:' 120 "$log2"; then rc=0; else rc=1; fi
     record "$tag boot 2: reaches the login prompt" "$rc"
 
@@ -414,6 +416,7 @@ run_provision_missing_case() {
     }
 
     # --- Boot 1: install, then delete the startup image off the disk ---
+    send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
     if waitfor 'Username:' 120 "$log1"; then rc=0; else rc=1; fi
     record "$tag boot 1: pre-installed disk boots and reaches the login prompt" "$rc"
     if [ "$rc" -ne 0 ]; then

@@ -410,6 +410,42 @@ static int console_login(void)
      * in the kernel pipe/tty buffer and is available after exec(). */
     setvbuf(stdin, NULL, _IONBF, 0);
 
+    /*
+     * OPA0: OPERATOR-CONSOLE WAKE (vms-2213). On the operator console, VMS
+     * LOGINOUT does not present the login prompt the instant it starts: the
+     * console carries the boot output, and the login session waits for the
+     * operator to strike RETURN before it displays the announcement and
+     * "Username:" -- the classic "press RETURN to log in" console behaviour
+     * (VSI OpenVMS System Manager's Manual, Vol I, "Logging In to the System"
+     * / the interactive login sequence on the operator console).
+     *
+     * This wait also fixes the ordering the boot exposes: JOB_CONTROL forks
+     * this LOGINOUT while STARTUP.COM is still running, BEFORE STARTUP.EXE
+     * prints its boot identification banner (display_boot_banner() in
+     * src/ovmx_init/ovmx_init.c, emitted after run_startup() returns). Without
+     * this wait the very first "Username:" raced ahead of that banner and the
+     * console showed "Username:" before the banner. Blocking here until the
+     * operator's RETURN guarantees the boot banner has finished printing
+     * before the prompt appears -- banner first, then Username:, as on VMS.
+     *
+     * CONSOLE ONLY. The wait is gated on an interactive terminal: JOB_CONTROL
+     * execs this image with stdin bound to the physical console (OPA0: ->
+     * /dev/console, SYS$STARTUP:JOB_CONTROL_STARTUP.COM), so isatty() is true
+     * exactly on the operator-console login path. A scripted/piped LOGINOUT
+     * (e.g. the VMS-native login image test, src/imgact/test/run_login_native.
+     * sh, which feeds a session file on stdin) has no operator to wait for and
+     * must NOT consume its first input line as the wake keystroke -- so it is
+     * skipped there. A CR/RETURN (or any first line) wakes the session; EOF
+     * before that means the connection closed with nobody there, so give up.
+     */
+    if (isatty(STDIN_FILENO)) {
+        int c;
+        while ((c = getchar()) != EOF && c != '\n')
+            ;
+        if (c == EOF)
+            return 1;
+    }
+
     /* SYS$ANNOUNCE -- displayed once before the first Username: prompt.
      * Undefined by default, in which case nothing is printed (VMS). */
     ovmx_banner_announce(stdout);

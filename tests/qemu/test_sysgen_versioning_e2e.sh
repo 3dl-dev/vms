@@ -133,6 +133,7 @@ dump_and_die() {
 
 # --- 1. Boot: pre-installed disk -> login prompt -----------------------------
 if wait_for '%OVMX-I-EXEC' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
+send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
 if wait_for 'Username:' "$BOOT_TIMEOUT"; then
     ok "boot completes and reaches the login prompt"
 else

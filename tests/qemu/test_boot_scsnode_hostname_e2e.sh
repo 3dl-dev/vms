@@ -180,6 +180,7 @@ qp=$!
 exec 4>"$POS_FIFO"
 send() { printf '%s\r' "$1" >&4; }
 
+send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
 if waitfor 'Username:' 120 "$POS_LOG1"; then rc=0; else rc=1; fi
 record "boot 1: pre-installed disk boots to login" "$rc"
 if [ "$rc" -eq 0 ]; then
@@ -227,6 +228,7 @@ timeout -k 15 "$BOOT_TIMEOUT" $QEMU $MACHINE \
 qp=$!
 exec 4>"$POS_FIFO"
 
+send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
 if waitfor 'Username:' 120 "$POS_LOG2"; then rc=0; else rc=1; fi
 record "boot 2 (reboot): still reaches the login prompt (mount-or-halt gate unaffected)" "$rc"
 
@@ -277,6 +279,7 @@ timeout -k 15 "$BOOT_TIMEOUT" $QEMU $MACHINE \
 qp=$!
 exec 4>"$NEG_FIFO"
 
+send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
 if waitfor 'Username:' 120 "$NEG_LOG1"; then rc=0; else rc=1; fi
 record "boot 1: pre-installed disk boots to login" "$rc"
 if [ "$rc" -eq 0 ]; then
@@ -311,6 +314,7 @@ timeout -k 15 "$BOOT_TIMEOUT" $QEMU $MACHINE \
 qp=$!
 exec 4>"$NEG_FIFO"
 
+send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
 if waitfor 'Username:' 120 "$NEG_LOG2"; then rc=0; else rc=1; fi
 record "boot 2: missing .PAR is NOT the mount-or-halt condition - still reaches login" "$rc"
 

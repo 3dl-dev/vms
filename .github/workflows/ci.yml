@@ -2510,9 +2510,9 @@ jobs:
 
   # -----------------------------------------------------------------------
   # DCL-native ENDPOINT (pillar vms-ade / bead vms-b65.6) — S1 of self-hosting
-  # (vms-116). The REAL src/vmsdcl shell (21 TUs) + src/vmsqueue links as a
+  # (vms-116). The REAL src/vmsdcl shell (22 TUs) + src/vmsqueue links as a
   # VMS-native ET_DYN executable via LINK.EXE --executable --use {DECC$SHR + the
-  # five OVMX shareables}: a 22-object main() program with the full intra-image
+  # five OVMX shareables}: a 23-object main() program with the full intra-image
   # reloc set, 140 cross-image imports all bound, and its own single-object TLS.
   # IMGACT.EXE activates it (crt0 recovers argc/argv off the kernel stack) and
   # DCL runs a scripted session (SHOW TIME + A = 2+3 / SHOW SYMBOL A) to VMS-

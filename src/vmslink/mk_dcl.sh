@@ -7,7 +7,7 @@
 # whole graph and is activated by IMGACT.EXE — the operator's canonical "all VMS"
 # path (NO ld / NO ld.so), S1 of the self-hosting milestone (vms-116).
 #
-# DCL.EXE is the src/vmsdcl shell (21 TUs) + src/vmsqueue (1 TU, the queue helper
+# DCL.EXE is the src/vmsdcl shell (22 TUs) + src/vmsqueue (1 TU, the queue helper
 # it statically absorbs). It is an ET_DYN EXECUTABLE (PT_INTERP=IMGACT.EXE, entry
 # via the C runtime) that:
 #   (a) has NO symbol vector (it exports nothing — it is the program, not a library);
@@ -36,7 +36,7 @@
 #       message buffer (10 TLSDESC relocs) — within emit_shareable's supported
 #       "one TLS object per image" limit; DCL.EXE therefore carries its own PT_TLS.
 #
-# Composition: the 21 vmsdcl translation units (== src/vmsdcl/CMakeLists.txt, minus
+# Composition: the 22 vmsdcl translation units (== src/vmsdcl/CMakeLists.txt, minus
 # readline which is a Docker-only convenience) + src/vmsqueue/vmsqueue.c. Compiled
 # -fPIC musl with the proven lib-shareable flags PLUS the DCL POSIX feature macros:
 #   -fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics
@@ -47,7 +47,7 @@
 # ===================== TOOLCHAIN (vms-b65.6 — NOW GREEN) =====================
 # DCL.EXE links with the production LINK.EXE. `emit_executable` (link.c) was rebuilt
 # on the emit_shareable multi-object machinery (vms-ba1) + executable-own TLS
-# (vms-c86): it links a 22-object program entered at main() whose relocs are
+# (vms-c86): it links a 23-object program entered at main() whose relocs are
 # dominated by INTRA-image references (2111 ADRP + 2120 ADD_ABS_LO12 + 981 ABS64 +
 # 235 PREL32 + LDST* + 40 TLSDESC), synthesizes a crt0 (_start -> musl init -> main
 # -> exit), binds 140 cross-image imports across the seven --use producers, and carries

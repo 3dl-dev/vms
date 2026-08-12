@@ -480,6 +480,28 @@ set_tests_properties(product_install_e2e PROPERTIES
     TIMEOUT 900)
 
 # ---------------------------------------------------------------------------
+# The faithful install menu, OVMX$INSTALL.COM (vms-dcf).
+#
+# Boots the DISTRIBUTION image straight into the install menu (no login),
+# drives it live over the console exactly as an operator would (oracle sec3a:
+# INITIALIZE-or-PRESERVE, target device, volume label, the confirmation
+# gate), MOUNTs and PRODUCT INSTALLs a real kit onto a real second disk, and
+# proves the two-variant SYSTARTUP_VMS.COM staging (the installed target's
+# own copy does not re-run the menu). See tests/qemu/test_install_menu.sh's
+# header for exactly what is scored vs. captured-but-not-scored (writing the
+# password via AUTHORIZE against the target is blocked by prerequisite gaps
+# this item found and reported, not fixed here). Same opt-in convention as
+# product_install_e2e above, for the same reason.
+add_test(
+    NAME install_menu_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_install_menu.sh
+)
+set_tests_properties(install_menu_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 900)
+
+# ---------------------------------------------------------------------------
 # install -> UPGRADE -> boot (vms-f05, epic vms-a84 RELEASE ENGINEERING).
 #
 # Cuts two real tools/cut-release.sh bundles (a BASELINE and an UPGRADE,

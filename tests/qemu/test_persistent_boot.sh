@@ -86,15 +86,18 @@ record() {
     else echo "  FAIL: $desc"; FAIL=$((FAIL + 1)); fi
 }
 
-# Boot to a captured console log, up to TIMEOUT. One RETURN is fed on stdin:
-# on OPA0: LOGINOUT now waits for the operator's RETURN before presenting the
-# "Username:" prompt (vms-2213, the "press RETURN to log in" console
-# behaviour), so the positive boot needs a keystroke to reach the prompt. The
-# CR is delivered once and stdin is then held open (sleep) so the guest serial
-# does not see a hangup. The negative (blank disk) halts before any login
-# exists, so the CR is simply never read there -- "Username:" stays absent.
+# Boot to a captured console log, up to TIMEOUT.
+#
+# vms-2213: on OPA0: LOGINOUT waits for the operator's RETURN before it presents
+# "Username:" (the "press RETURN to log in" console behaviour). A single CR sent
+# at t=0 is lost (the guest serial driver is not up yet), so QEMU is backgrounded
+# on a FIFO and a CR is fed every second -- as a real operator would -- until the
+# prompt appears in the log or the guest exits. The negative (blank disk) HALTS
+# before any login exists, so QEMU exits quickly, the loop stops, and "Username:"
+# stays absent. The full console log is printed on stdout, exactly as before.
 run_qemu() {
-    local initrd="$1" disk="$2"
+    local initrd="$1" disk="$2" log fifo qp w=0
+    log=$(mktemp); fifo=$(mktemp -u); mkfifo "$fifo"
     # shellcheck disable=SC2086
     timeout "$TIMEOUT" $QEMU $MACHINE \
         -kernel "$KERNEL" \
@@ -108,7 +111,21 @@ run_qemu() {
         -serial stdio \
         -drive file="$disk",format=raw,if=virtio \
         -no-reboot \
-        < <(printf '\r'; sleep "$TIMEOUT") 2>&1 || true
+        <"$fifo" >"$log" 2>&1 &
+    qp=$!
+    exec 6>"$fifo"
+    trap '' PIPE   # a CR fed just as the guest exits must not kill this subshell
+    while kill -0 "$qp" 2>/dev/null; do
+        grep -qaF 'Username:' "$log" 2>/dev/null && break
+        printf '\r' >&6 2>/dev/null
+        sleep 1; w=$((w + 1))
+        [ "$w" -ge "$TIMEOUT" ] && break
+    done
+    exec 6>&-
+    kill "$qp" 2>/dev/null
+    wait "$qp" 2>/dev/null
+    cat "$log"
+    rm -f "$log" "$fifo"
 }
 
 echo "=== OVMX mount-or-halt gate (vms-2f0) ==="

@@ -224,6 +224,15 @@ run_case() {
     exec 4>"$fifo"
 
     send() { printf '%s\r' "$1" >&4; }
+    # vms-2213: OPA0: LOGINOUT waits for the operator RETURN before Username:; a
+    # lone CR at t=0 is lost (serial not up yet), so feed one per second until
+    # the prompt appears. Bounded.
+    wake_login() {
+        local logf="$1" w=0
+        until grep -qaF 'Username:' "$logf" 2>/dev/null || [ "$w" -ge 120 ]; do
+            send ''; sleep 1; w=$((w + 1))
+        done
+    }
     waitfor() {
         local pat="$1" lim="${2:-60}" log="$3" w=0
         while [ $w -lt $((lim * 4)) ]; do
@@ -235,7 +244,7 @@ run_case() {
     }
 
     # --- Boot 1: install ---
-    send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
+    wake_login "$log1"
     if waitfor 'Username:' 120 "$log1"; then rc=0; else rc=1; fi
     record "$tag boot 1: pre-installed disk boots and reaches the login prompt" "$rc"
     if [ "$rc" -ne 0 ]; then
@@ -327,7 +336,7 @@ run_case() {
         return
     fi
 
-    send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
+    wake_login "$log2"
     if waitfor 'Username:' 120 "$log2"; then rc=0; else rc=1; fi
     record "$tag boot 2: reaches the login prompt" "$rc"
 
@@ -405,6 +414,15 @@ run_provision_missing_case() {
     exec 4>"$fifo"
 
     send() { printf '%s\r' "$1" >&4; }
+    # vms-2213: OPA0: LOGINOUT waits for the operator RETURN before Username:; a
+    # lone CR at t=0 is lost (serial not up yet), so feed one per second until
+    # the prompt appears. Bounded.
+    wake_login() {
+        local logf="$1" w=0
+        until grep -qaF 'Username:' "$logf" 2>/dev/null || [ "$w" -ge 120 ]; do
+            send ''; sleep 1; w=$((w + 1))
+        done
+    }
     waitfor() {
         local pat="$1" lim="${2:-60}" log="$3" w=0
         while [ $w -lt $((lim * 4)) ]; do
@@ -416,7 +434,7 @@ run_provision_missing_case() {
     }
 
     # --- Boot 1: install, then delete the startup image off the disk ---
-    send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
+    wake_login "$log1"
     if waitfor 'Username:' 120 "$log1"; then rc=0; else rc=1; fi
     record "$tag boot 1: pre-installed disk boots and reaches the login prompt" "$rc"
     if [ "$rc" -ne 0 ]; then

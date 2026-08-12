@@ -153,6 +153,18 @@ cleanup() {
 
 send() { printf '%s\r' "$1" >&4; }
 
+# vms-2213: on OPA0: LOGINOUT waits for the operator's RETURN before it presents
+# "Username:". A single CR sent at t=0 is lost (the guest serial driver is not up
+# yet), so feed a CR each second -- as a real operator would -- until the prompt
+# actually appears in the log. Bounded; checks before each send so it stops as
+# soon as the prompt is up.
+wake_login() {
+    local logf="$1" w=0
+    until grep -qaF 'Username:' "$logf" 2>/dev/null || [ "$w" -ge 120 ]; do
+        send ''; sleep 1; w=$((w + 1))
+    done
+}
+
 # Non-fatal wait: returns 1 on timeout / guest death so each step reports its
 # own PASS/FAIL and the script still reaches the results tally.
 wait_for() {
@@ -188,7 +200,7 @@ if [ "$OK" -eq 1 ]; then
 fi
 
 if [ "$OK" -eq 1 ]; then
-    send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
+    wake_login "$CONSOLE_LOG"
     if wait_for 'Username:' 60; then rc=0; else rc=1; OK=0; fi
     record "login prompt appears (from the mastered disk)" "$rc"
 fi
@@ -246,7 +258,7 @@ echo "--- Second boot: same disk, prove it re-boots to login ---"
 boot_distrib "$CONSOLE_LOG" "$FIFO"
 trap cleanup EXIT
 
-send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
+wake_login "$CONSOLE_LOG"
 if wait_for 'Username:' 90; then rc=0; else rc=1; fi
 record "second boot reaches the login prompt (image survives a re-boot)" "$rc"
 

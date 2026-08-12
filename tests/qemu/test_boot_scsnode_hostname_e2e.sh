@@ -179,8 +179,19 @@ timeout -k 15 "$BOOT_TIMEOUT" $QEMU $MACHINE \
 qp=$!
 exec 4>"$POS_FIFO"
 send() { printf '%s\r' "$1" >&4; }
+# vms-2213: on OPA0: LOGINOUT waits for the operator's RETURN before it
+# presents "Username:". A single CR sent at t=0 is lost (the guest serial
+# driver is not up yet), so feed a CR each second -- as a real operator
+# would -- until the prompt actually appears in the log. Bounded; checks
+# before each send so it stops as soon as the prompt is up.
+wake_login() {
+    local logf="$1" w=0
+    until grep -qaF 'Username:' "$logf" 2>/dev/null || [ "$w" -ge 120 ]; do
+        send ''; sleep 1; w=$((w + 1))
+    done
+}
 
-send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
+wake_login "$POS_LOG1"
 if waitfor 'Username:' 120 "$POS_LOG1"; then rc=0; else rc=1; fi
 record "boot 1: pre-installed disk boots to login" "$rc"
 if [ "$rc" -eq 0 ]; then
@@ -228,7 +239,7 @@ timeout -k 15 "$BOOT_TIMEOUT" $QEMU $MACHINE \
 qp=$!
 exec 4>"$POS_FIFO"
 
-send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
+wake_login "$POS_LOG2"
 if waitfor 'Username:' 120 "$POS_LOG2"; then rc=0; else rc=1; fi
 record "boot 2 (reboot): still reaches the login prompt (mount-or-halt gate unaffected)" "$rc"
 
@@ -279,7 +290,7 @@ timeout -k 15 "$BOOT_TIMEOUT" $QEMU $MACHINE \
 qp=$!
 exec 4>"$NEG_FIFO"
 
-send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
+wake_login "$NEG_LOG1"
 if waitfor 'Username:' 120 "$NEG_LOG1"; then rc=0; else rc=1; fi
 record "boot 1: pre-installed disk boots to login" "$rc"
 if [ "$rc" -eq 0 ]; then
@@ -314,7 +325,7 @@ timeout -k 15 "$BOOT_TIMEOUT" $QEMU $MACHINE \
 qp=$!
 exec 4>"$NEG_FIFO"
 
-send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
+wake_login "$NEG_LOG2"
 if waitfor 'Username:' 120 "$NEG_LOG2"; then rc=0; else rc=1; fi
 record "boot 2: missing .PAR is NOT the mount-or-halt condition - still reaches login" "$rc"
 

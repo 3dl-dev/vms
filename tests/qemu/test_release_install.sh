@@ -52,15 +52,20 @@
 #      never reaches a SYSTEM login. (Not reproducible locally under the disk
 #      budget -- CI on a fresh runner is the authoritative full-boot proof.)
 #
-# THE SYSTEM PASSWORD, HONESTLY. The menu prompts for a new SYSTEM password and
-# drives AUTHORIZE against the target; writing it to the target SYSUAF is BLOCKED
-# on the current tree by two prerequisite gaps vms-dcf filed (not fixed):
-# AUTHORIZE forked via dcl_exec_utility() cannot open the MOUNTed target, and RMS
-# CREATE on a real vmsfs.ko volume fails outright. So the target keeps the kit's
-# default SYSTEM password and container 2 logs in with THAT -- this gate never
-# claims the install-set password took. Closing that loop is filed as a vms-37f
-# follow-up; see release_install_inner.sh's header and OVMX$INSTALL.COM's gaps
-# (c)/(d).
+# THE SYSTEM PASSWORD -- THE REAL ACCEPTANCE LOOP IS CLOSED. The menu prompts for
+# a new SYSTEM password; container 1 sets a KNOWN, non-default password and
+# asserts AUTHORIZE persisted it to the TARGET's own SYSUAF (%UAF-I-SAVED, no
+# %UAF-E-), and container 2 -- a separate container booting the target alone --
+# logs in as SYSTEM with THAT install-set password. Because the install
+# overwrites the kit's default SYSTEM password, a successful login with the
+# install-set password is positive proof it persisted (the default would no
+# longer work). This is possible because the two prerequisite gaps vms-dcf
+# originally reported are now FIXED and present in this base: cross-process
+# visibility of a parent-MOUNTed device (vms-8b6, #385) and RMS CREATE on a
+# mounted vmsfs volume (vms-581, #378). One separate DISPLAY gap remains -- the
+# menu's SET TERMINAL/NOECHO does not suppress the password echo -- which does
+# not affect the write or the login and is captured as an informational NOTE,
+# not scored (see release_install_inner.sh's header).
 #
 # Runs on the HOST / CI runner (like test_docker_persistent_disk.sh) -- crossing
 # the container boundary is the whole point, so it CANNOT run inside a single
@@ -141,6 +146,7 @@ scored "$C1_RC" "container 1 (menu install) exited 0"
 grep -qF 'OVMX$INSTALL menu' "$C1_LOG"; scored $? "container 1 booted the media straight into the install menu"
 grep -qF '%PCSI-I-DONE' "$C1_LOG";     scored $? "container 1 ran a real PRODUCT INSTALL to %PCSI-I-DONE"
 grep -qF 'DISMOUNTs the target' "$C1_LOG"; scored $? "container 1 DISMOUNTed the target (guest flush)"
+grep -qF 'persisted the new SYSTEM password to the TARGET' "$C1_LOG"; scored $? "container 1: AUTHORIZE persisted the install-set SYSTEM password to the target SYSUAF (%UAF-I-SAVED)"
 echo ""
 
 # ---------------------------------------------------------------------
@@ -153,7 +159,7 @@ run_container "$C2" verify "$TARGET" >"$C2_LOG" 2>&1; C2_RC=$?
 sed 's/^/    c2| /' "$C2_LOG"
 scored "$C2_RC" "container 2 (boot installed target + verify) exited 0"
 grep -qF 'reaches login' "$C2_LOG";        scored $? "container 2: the installed target booted ALONE and reached login across the boundary"
-grep -qF 'SYSTEM logs in' "$C2_LOG";       scored $? "container 2: SYSTEM logged in from the installed target"
+grep -qF 'SYSTEM logs in with the INSTALL-SET password' "$C2_LOG"; scored $? "container 2: SYSTEM logged in with the INSTALL-SET password (not the kit default) across the boundary"
 grep -qF 'lists the OS kit as Installed' "$C2_LOG"; scored $? "container 2: PRODUCT SHOW PRODUCT lists the OS kit"
 grep -qF 'lists DCL.EXE' "$C2_LOG";        scored $? "container 2: DIRECTORY SYS\$SYSTEM: shows DCL.EXE from the target"
 echo ""

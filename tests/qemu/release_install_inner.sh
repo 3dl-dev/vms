@@ -49,18 +49,32 @@
 #   the boundary property under test, proven deterministically (no dependence on
 #   guest writeback timing).
 #
-# THE SYSTEM PASSWORD, HONESTLY (vms-dcf gaps c+d, filed not fixed):
+# THE SYSTEM PASSWORD -- THE REAL ACCEPTANCE LOOP IS CLOSED:
 #   The install menu prompts for a new SYSTEM password and drives AUTHORIZE
-#   against the target, faithfully, over the console here. But writing that
-#   password to the TARGET's SYSUAF is BLOCKED on the current tree by two
-#   prerequisite gaps vms-dcf found and reported (AUTHORIZE forked via
-#   dcl_exec_utility() cannot open a device its DCL parent MOUNTed; and RMS
-#   CREATE on a real vmsfs.ko volume fails outright -- see
-#   distro/rootfs/.../OVMX$INSTALL.COM's own header, gaps (c)/(d)). So the
-#   target keeps the kit's default SYSTEM password (MANAGER), and `verify`
-#   logs in with THAT, never claiming the install-set password took. Wiring the
-#   verify login to the install-set password is future work gated on those two
-#   fixes (filed as vms-37f follow-up); this gate does not fake it.
+#   against the MOUNTed target over the console here. `install` sets a KNOWN,
+#   non-default password ($INSTALL_PW) and asserts AUTHORIZE reports
+#   %UAF-I-SAVED with no %UAF-E- error -- i.e. the write to the TARGET's own
+#   SYSUAF persisted -- and then `verify`, in a SEPARATE container booting the
+#   target alone, logs in as SYSTEM with THAT install-set password. Since the
+#   kit's default SYSTEM password (MANAGER) is OVERWRITTEN by the install, a
+#   successful login with $INSTALL_PW is positive proof the install-set password
+#   took (MANAGER would no longer work).
+#
+#   This is only possible because the two prerequisite gaps vms-dcf originally
+#   reported are now FIXED and present in this base: cross-process visibility of
+#   a parent-MOUNTed device (vms-8b6, #385 fb5a47e5 -- vmsfs_device_resolve reads
+#   the kernel mount table so the exec'd AUTHORIZE sees the DCL parent's mount)
+#   and RMS CREATE on a mounted vmsfs volume (vms-581, #378 f09d5812 -- SYSTEM is
+#   group<=MAXSYSGROUP). With both in place AUTHORIZE, run against the
+#   DEFINE/JOB SYS$SYSTEM-redirected target, opens and rewrites the target's
+#   SYSUAF.DAT for real.
+#
+#   ONE separate, still-open display gap, kept as an informational NOTE (not
+#   scored, not owned by vms-37f): OVMX$INSTALL.COM's SET TERMINAL/NOECHO does
+#   not suppress the echo of the password typed at the READ prompt (a vms-dcf
+#   display gap, distinct from the now-fixed write gaps). It does not affect the
+#   write or the login, so this gate captures it for the record rather than
+#   scoring it -- see the NOTE below.
 #
 # Env knobs: BOOT_TIMEOUT (default 90), RUN_TIMEOUT (default 90),
 #            OVMX_NEGCTL_LOCAL_TARGET (unset|1). Exit 0 = every assertion passed.
@@ -80,8 +94,8 @@ KERNEL=/boot/vmlinuz
 INITRD=/boot/initramfs-ovmx.cpio.gz
 INSTALL_MEDIA=/boot/ovmx-install-media.img
 TARGET=/work/target.img
-NEW_PASSWORD="NEWSYSPW1"    # driven at AUTHORIZE; write is the filed gap (see header)
-KIT_PASSWORD="MANAGER"      # the kit default the target actually keeps today
+INSTALL_PW="INSTALLPW1"     # the SYSTEM password SET during install; verify logs in with THIS
+                           # (all-caps so AUTHORIZE-hash and login-hash agree regardless of case folding)
 ARCH=$(uname -m)
 
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
@@ -246,43 +260,60 @@ if [ "$MODE" = "install" ]; then
         ok "install transcript carries no MOUNT/PCSI error"
     fi
 
-    # SYSTEM password: driven faithfully; the write to the target SYSUAF is the
-    # filed vms-dcf gap (c)+(d) -- captured, not scored (see header).
+    # SYSTEM password: set a KNOWN, non-default password ($INSTALL_PW) during
+    # install and PROVE it persisted to the TARGET's own SYSUAF (%UAF-I-SAVED,
+    # no %UAF-E-). container 2/3 then log in with $INSTALL_PW -- the real
+    # acceptance loop (vms-8b6 #385 + vms-581 #378 make the write work; see
+    # header).
     if wait_for 'Password for SYSTEM account' "$RUN_TIMEOUT" "$OFF"; then
         ok "install asks for the SYSTEM password"
     else
         dump_and_die "install never asked for the SYSTEM password"
     fi
-    send "$NEW_PASSWORD"
+    send "$INSTALL_PW"
     wait_for 'Reenter password for verification' "$RUN_TIMEOUT" "$OFF" \
         || dump_and_die "did not ask to reenter the password"
     ok "asks for password verification"
-    send "$NEW_PASSWORD"
+    send "$INSTALL_PW"
     if wait_for 'UAF>' "$RUN_TIMEOUT" "$OFF"; then
-        ok "drops into AUTHORIZE against the target"
-        send "MODIFY SYSTEM/PASSWORD=$NEW_PASSWORD"
-        send "EXIT"
+        ok "drops into AUTHORIZE against the target (SYS\$SYSTEM redirected via DEFINE/JOB)"
+    else
+        dump_and_die "AUTHORIZE never reached UAF> against the target"
+    fi
+    send "MODIFY SYSTEM/PASSWORD=$INSTALL_PW"
+    send "EXIT"
+    # The write to the TARGET's SYSUAF must PERSIST -- AUTHORIZE saves on EXIT
+    # when dirty and prints %UAF-I-SAVED on success, %UAF-E-SAVEFAIL on failure.
+    # This is the in-container proof that the install-set password landed on the
+    # target (the cross-container login in `verify` is the second, independent
+    # proof).
+    if wait_for '%UAF-I-SAVED' "$RUN_TIMEOUT" "$OFF"; then
+        ok "AUTHORIZE persisted the new SYSTEM password to the TARGET's SYSUAF (%UAF-I-SAVED)"
+    else
+        dump_and_die "AUTHORIZE did not report %UAF-I-SAVED -- the install-set password did not persist to the target SYSUAF"
+    fi
+    AUTHSEG=$(segment_since "$OFF")
+    if printf '%s\n' "$AUTHSEG" | grep -qiE '%UAF-E-NOSUCHUSER|%UAF-E-WRITEFAIL|%UAF-E-SAVEFAIL'; then
+        bad "AUTHORIZE reported a UAF error writing the target SYSUAF"
+        printf '%s\n' "$AUTHSEG" | grep -iE '%UAF-E-'
+    else
+        ok "AUTHORIZE wrote the target SYSUAF with no %UAF-E- error"
     fi
     if wait_for 'Enter SCSNODE' "$RUN_TIMEOUT" "$OFF"; then
         ok "returns from AUTHORIZE and continues (asks for SCSNODE)"
     else
         dump_and_die "did not return from AUTHORIZE / never asked for SCSNODE"
     fi
-    # NOT SCORED: whether SET TERMINAL/NOECHO suppresses the echo of the password
-    # typed at the "Password for SYSTEM account:" READ prompt. On the current
-    # tree it does NOT (the password appears on the console) -- a pre-existing
-    # gap vms-dcf found and filed (see OVMX$INSTALL.COM's header and
-    # test_install_menu.sh's own "password ... echoed" note). It is OUTSIDE
-    # vms-37f's outcome (media->install->target->login->PRODUCT SHOW) and owned
-    # by that filed gap, not by this item, so this gate CAPTURES it for the
-    # record rather than scoring it -- exactly as test_install_menu.sh captures
-    # (does not score) the sibling AUTHORIZE-write gap. Scoring a filed,
-    # out-of-scope gap here would redden the R1 gate on a defect it neither owns
-    # nor can fix, which is not what this gate exists to prove.
-    if printf '%s\n' "$(segment_since "$OFF")" | grep -qF "$NEW_PASSWORD"; then
-        echo "  NOTE (not scored): the SYSTEM password was echoed -- known vms-dcf SET TERMINAL/NOECHO gap, not owned/fixed by vms-37f"
+    # NOT SCORED (a separate, still-open DISPLAY gap): OVMX$INSTALL.COM's
+    # SET TERMINAL/NOECHO does not suppress the echo of the password typed at the
+    # READ prompt (a vms-dcf display gap, distinct from the now-fixed write
+    # gaps). It affects neither the write above nor the login in `verify`, and is
+    # outside vms-37f's outcome, so this gate CAPTURES it for the record rather
+    # than scoring it.
+    if printf '%s\n' "$AUTHSEG" | grep -qF "$INSTALL_PW"; then
+        echo "  NOTE (not scored): the SYSTEM password was echoed on the console -- known vms-dcf SET TERMINAL/NOECHO display gap, not owned/fixed by vms-37f"
     else
-        echo "  NOTE (not scored): the SYSTEM password was not echoed on this tree (vms-dcf NOECHO gap appears resolved)"
+        echo "  NOTE (not scored): the SYSTEM password was not echoed (vms-dcf NOECHO display gap appears resolved)"
     fi
     send ''    # SCSNODE blank -> skip
     wait_for 'Enter SCSSYSTEMID' "$RUN_TIMEOUT" "$OFF" \
@@ -336,13 +367,18 @@ else
     ok "the booted target ran no self-install phase (mount-or-halt, vms-2f0/vms-649)"
 fi
 
+# Log in with the INSTALL-SET password ($INSTALL_PW), NOT the kit default: the
+# install overwrote SYSTEM's password on the target, so a successful login here
+# is positive proof the install-set password persisted across the container
+# boundary (MANAGER would no longer work). This is the real vms-37f acceptance
+# criterion ("login as SYSTEM with the password set during install").
 OFF=$(wc -c <"$LOG")
 send 'SYSTEM'
-wait_for 'Password:' 20 "$OFF" && send "$KIT_PASSWORD"
+wait_for 'Password:' 20 "$OFF" && send "$INSTALL_PW"
 if wait_for 'Welcome to OpenVMX' 30 "$OFF"; then
-    ok "SYSTEM logs in from the installed target (LOGINOUT.EXE off the target)"
+    ok "SYSTEM logs in with the INSTALL-SET password from the booted target (not the kit default)"
 else
-    dump_and_die "SYSTEM login failed on the installed target"
+    dump_and_die "SYSTEM login with the install-set password failed -- the install-set password did not persist to the target"
 fi
 wait_for '$' 20 "$OFF"
 

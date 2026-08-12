@@ -95,6 +95,15 @@ static const char *vms_months[] = {
 static volatile sig_atomic_t shutdown_requested = 0;
 
 /*
+ * Forward declarations (vms-1fb): print_banner_once() -- defined near
+ * main(), below, next to display_boot_banner() -- is called from
+ * bare_metal_init(), which is defined earlier in this file. See
+ * display_boot_banner()'s own header comment for why the banner call moved
+ * this early in the boot.
+ */
+static void print_banner_once(void);
+
+/*
  * A SYSBOOT> conversational session's result (vms-b81), stashed by
  * bare_metal_init() so read_boot_parameters() -- which runs later, in
  * main(), once the device table exists -- uses THIS in-memory parameter
@@ -457,6 +466,14 @@ static void bare_metal_init(void)
          * The executive comes up before anything else runs. */
         executive_attach();
 
+        /* BANNER-FIRST (vms-1fb): SYSBOOT has now handed over -- the
+         * executive is attached, and this is the earliest point in the
+         * flagless path that guarantees the boot is really coming up (see
+         * display_boot_banner()'s header). Everything below this line is
+         * system-disk-mount narration and STDRV/STARTUP.COM output, which
+         * the oracle (§3.5) shows strictly AFTER the banner. */
+        print_banner_once();
+
         /* MOUNT (vms-651) needs every disk unit's mount point to already
          * exist before any de-privileged VMS session tries to use one --
          * see the function's own comment for why this can only happen
@@ -465,9 +482,12 @@ static void bare_metal_init(void)
 
         /* vmsfs.ko is the filesystem, not the executive; a failure here
          * surfaces as the mount failure below, which halts honestly. The
-         * executive itself is loaded and pinned by executive_attach(). */
+         * executive itself is loaded and pinned by executive_attach().
+         * OVMX-facility, not STARTUP: VMS never narrates a Linux kernel
+         * module load, so this is not dressed as a borrowed VMS message
+         * (vms-1fb facility audit, docs/design-boot-faithful.md). */
         if (load_kernel_module("/lib/modules/vmsfs.ko") != 0 && errno != EEXIST) {
-            fprintf(stderr, "%%STARTUP-W-MODFAIL, failed to load vmsfs.ko: %s\n",
+            fprintf(stderr, "%%OVMX-W-MODFAIL, failed to load vmsfs.ko: %s\n",
                     strerror(errno));
         }
 
@@ -485,7 +505,7 @@ static void bare_metal_init(void)
                 "the system disk is not present; OVMX does not install one at boot");
         }
 
-        printf("%%STARTUP-I-SYSDISK, mounting system disk DKA0:\n");
+        printf("%%OVMX-I-SYSDISK, mounting system disk DKA0:\n");
 
         /* Mount the pre-installed disk, or halt. A blank or unformatted disk
          * fails to mount as vmsfs -- and PID 1 does NOT initialize it (that
@@ -497,7 +517,7 @@ static void bare_metal_init(void)
                 "OVMX does not initialize or install it at boot");
         }
 
-        printf("%%STARTUP-I-MOUNTED, system disk DKA0: mounted\n");
+        printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
         return;
     }
 
@@ -515,7 +535,9 @@ static void bare_metal_init(void)
      * happens, are DEFERRED here to after the (optional) prompt instead:
      * same text, same order relative to each other, just moved as a whole
      * block -- because on this path they would otherwise print before
-     * SYSBOOT>, which the oracle capture (§3.1) shows nothing does.
+     * SYSBOOT>, which the oracle capture (§3.1) shows nothing does. The
+     * banner (vms-1fb) is deferred the same way and for the same reason:
+     * §3.1 shows NOTHING preceding "SYSBOOT> ", not even the banner.
      */
     int vmsfs_load_failed =
         (load_kernel_module("/lib/modules/vmsfs.ko") != 0 && errno != EEXIST);
@@ -546,15 +568,27 @@ static void bare_metal_init(void)
                             "OVMXVMSSYS", "PAR", VMS_STARTUP_PATH);
         conversational_boot_result_valid = 1;
 
-        printf("%%STARTUP-I-SYSDISK, mounting system disk DKA0:\n");
-        printf("%%STARTUP-I-MOUNTED, system disk DKA0: mounted\n");
+        /* SYSBOOT (the prompt) has now handed over -- attach the executive
+         * and show the banner BEFORE the mount-narration messages below,
+         * mirroring the flagless branch's ordering (vms-1fb). */
+        executive_attach();
+        print_banner_once();
+
+        printf("%%OVMX-I-SYSDISK, mounting system disk DKA0:\n");
+        printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
     }
 
     if (vmsfs_load_failed)
-        fprintf(stderr, "%%STARTUP-W-MODFAIL, failed to load vmsfs.ko: %s\n",
+        fprintf(stderr, "%%OVMX-W-MODFAIL, failed to load vmsfs.ko: %s\n",
                 strerror(vmsfs_errno));
 
+    /* Idempotent fallbacks for the degenerate case where SYSDISK_MOUNT did
+     * not even exist above (the if-block never ran, so neither call site
+     * inside it did either): both functions no-op harmlessly if already
+     * done, so this is not a second attach or a second banner on the
+     * normal path. */
     executive_attach();
+    print_banner_once();
     provision_disk_mount_points();
 }
 
@@ -782,6 +816,40 @@ static void print_stdrv_begun(void)
     fflush(stdout);
 }
 
+/*
+ * The OS identification banner (product name/version + copyright block).
+ *
+ * BANNER-FIRST (vms-1fb, docs/design-boot-faithful.md §2.5/§3.5/§4 item 3).
+ * The Alpha oracle capture (§3.5) shows this banner printing IMMEDIATELY
+ * after SYSBOOT hands over -- before %STDRV-I-STARTUP, before the
+ * site-specific-startup announcement, before anything STARTUP.COM prints.
+ * It used to print from here at the very end of main(), after run_startup()
+ * had already run STARTUP.COM to completion -- last, not first, exactly
+ * backwards from the oracle. It is now called through print_banner_once()
+ * (below) from the point in the boot that corresponds to SYSBOOT's handoff:
+ * right after executive_attach() succeeds, in bare_metal_init(), BEFORE the
+ * system-disk mount messages, the SCSNODE identity line, %STDRV-I-STARTUP,
+ * or any STARTUP.COM output.
+ *
+ * WHY "right after executive_attach() succeeds" and not literally first:
+ * OVMX's executive-is-integral guarantee (executive_attach()'s own header
+ * comment; tests/qemu/test_executive_integral.sh) requires that the banner
+ * NEVER appear on a boot that does not come up because the executive itself
+ * would not attach -- a banner is an implicit "the system is here" signal,
+ * and printing one ahead of a guaranteed-fatal executive failure would be
+ * exactly the false-success LARP the authenticity rules forbid. Gating the
+ * banner on a successful executive_attach() preserves that guarantee while
+ * still satisfying "before any mount message or STARTUP output": SYSBOOT's
+ * own job (load the executive) has already completed by the time CONTINUE
+ * is issued in the oracle capture too, so this ordering is not a compromise
+ * of the oracle shape, it is what makes OVMX's EXEC_INIT-equivalent visible
+ * at the same point VMS's own boot narrative implies it already happened.
+ *
+ * A boot can still halt AFTER this (system-disk mount failure, SYSINIT-
+ * equivalent) with the banner already shown -- see
+ * tests/qemu/test_persistent_boot.sh's negative control, which documents
+ * why that is honest rather than a regression.
+ */
 static void display_boot_banner(void)
 {
     struct timespec ts;
@@ -795,6 +863,24 @@ static void display_boot_banner(void)
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
+}
+
+/*
+ * print_banner_once - display_boot_banner(), exactly once, no matter how
+ * many of the call sites below actually run for a given boot path (the
+ * flagless and conversational branches of bare_metal_init(), and the
+ * non-bare-metal fallback in main()). Idempotent so every call site can
+ * call it unconditionally at "SYSBOOT just handed over" without each one
+ * having to know whether an earlier call site already fired.
+ */
+static int banner_printed = 0;
+
+static void print_banner_once(void)
+{
+    if (banner_printed)
+        return;
+    banner_printed = 1;
+    display_boot_banner();
 }
 
 /*
@@ -830,6 +916,14 @@ int main(void)
      * it here, unconditionally, is deliberate: a boot path that skips the
      * Linux plumbing must not thereby skip the executive. */
     executive_attach();
+
+    /* Same idempotent fallback as bare_metal_init()'s own trailing call
+     * (vms-1fb): on a substrate that skipped bare_metal_init() entirely
+     * (getpid() != 1, or /proc already mounted) the banner has not printed
+     * yet, and this is the earliest point that still guarantees the
+     * executive is really up. A no-op on the normal PID 1 bare-metal boot,
+     * where bare_metal_init() already showed it. */
+    print_banner_once();
 
     /* Set up signal handling */
     struct sigaction sa;
@@ -928,8 +1022,9 @@ int main(void)
     read_boot_parameters();
 
     /* Step 3: %STDRV-I-STARTUP begun, then run STARTUP.COM.
-     * The STDRV "begun" bracket precedes the startup procedure (F1) -- it used
-     * to print AFTER run_startup() from display_boot_banner().
+     * The STDRV "begun" bracket precedes the startup procedure (F1). There is
+     * NO "completed" counterpart anywhere in the boot (§3.5 oracle; the old
+     * invented completed line stays deleted, vms-2f0/vms-1fb).
      *
      * There is no logical name daemon to start first: on VMS the logical name
      * tables are executive-resident, not a service (vms-a4b).
@@ -942,8 +1037,15 @@ int main(void)
     print_stdrv_begun();
     run_startup();
 
-    /* Step 4: Boot banner */
-    display_boot_banner();
+    /* Step 4: the boot banner already printed (vms-1fb) -- back in
+     * bare_metal_init()/the executive gate above, right after SYSBOOT handed
+     * over, well before this point. This call is the same idempotent
+     * fallback as those: a no-op on every real boot path, and the only thing
+     * that would ever make it fire here is a substrate this file does not
+     * otherwise anticipate. Kept for the same reason the other two fallback
+     * call sites are: never reach STDRV/STARTUP.COM output without the
+     * banner already shown, on ANY path. */
+    print_banner_once();
     fflush(stdout);
     fflush(stderr);
 

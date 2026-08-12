@@ -20,11 +20,17 @@
 #             login (the F1 STDRV-bracket fix), with NO "completed" counterpart.
 #
 #   NEGATIVE (halt control): a BLANK, uninitialized disk -> PID 1 HALTS honestly
-#             with the OVMX-facility SYSINIT mount failure. NO boot banner, NO
-#             login prompt, NO install message, NO %STARTUP-W-MOUNTFAIL, NO
-#             overlay. The disk is NOT initialized and NOT installed. This is run
-#             with the FAT initramfs on purpose: the initramfs that used to carry
-#             the self-install path now halts instead, proving the path is gone.
+#             with the OVMX-facility SYSINIT mount failure. NO login prompt, NO
+#             install message, NO %STARTUP-W-MOUNTFAIL, NO overlay, NO STDRV
+#             begun (STARTUP.COM never runs). The disk is NOT initialized and NOT
+#             installed. This is run with the FAT initramfs on purpose: the
+#             initramfs that used to carry the self-install path now halts
+#             instead, proving the path is gone. (vms-1fb: the boot
+#             identification banner DOES appear on this halt now -- it prints at
+#             the SYSBOOT/EXEC_INIT handoff, before SYSINIT's disk mount is even
+#             attempted, matching the oracle §3.5 ordering; banner presence alone
+#             no longer distinguishes "came up" from "halted" -- see the checks
+#             below for what still does.)
 #
 # A gate that cannot go red is decoration; the negative control is what proves
 # the halt discriminates (same reasoning as test_executive_integral.sh Boot
@@ -154,7 +160,7 @@ echo "[... truncated ...]"
 echo ""
 
 check "positive: executive attached"          "$OUT_POS" "%OVMX-I-EXEC"
-check "positive: system disk DKA0: mounted"    "$OUT_POS" "%STARTUP-I-MOUNTED"
+check "positive: system disk DKA0: mounted"    "$OUT_POS" "%OVMX-I-MOUNTED"
 check "positive: STDRV begun printed"          "$OUT_POS" "%STDRV-I-STARTUP, OpenVMX startup begun"
 check "positive: reaches the login prompt"     "$OUT_POS" "Username:"
 # The strip: none of the install/initialize/overlay lines may appear.
@@ -173,6 +179,13 @@ BEGUN_POS=$(printf '%s' "$OUT_POS" | grep -aboF "%STDRV-I-STARTUP, OpenVMX start
 USER_POS=$(printf '%s' "$OUT_POS" | grep -aboF "Username:" | head -1 | cut -d: -f1)
 if [ -n "$BEGUN_POS" ] && [ -n "$USER_POS" ] && [ "$BEGUN_POS" -lt "$USER_POS" ]; then rc=0; else rc=1; fi
 record "positive: %STDRV-I-STARTUP begun precedes the login prompt (F1 bracket)" "$rc"
+
+# vms-1fb ordering: the OS banner precedes %STDRV-I-STARTUP begun -- the
+# banner-first fix (docs/design-boot-faithful.md §2.5/§3.5/§3.7). Before
+# vms-1fb the banner printed LAST, after STARTUP.COM had already run.
+BANNER_POS=$(printf '%s' "$OUT_POS" | grep -aboE 'OpenVMX V[0-9]' | head -1 | cut -d: -f1)
+if [ -n "$BANNER_POS" ] && [ -n "$BEGUN_POS" ] && [ "$BANNER_POS" -lt "$BEGUN_POS" ]; then rc=0; else rc=1; fi
+record "positive: OS banner precedes %STDRV-I-STARTUP begun (vms-1fb banner-first)" "$rc"
 echo ""
 
 # --- NEGATIVE (halt control): blank disk -> honest halt --------------------
@@ -192,11 +205,19 @@ check "negative: honest OVMX-facility SYSINIT halt"                 "$OUT_NEG" "
 # the system disk DKA0: and both are ovmx_sysinit_halt — neither installs it.
 check "negative: halt names the system disk DKA0:"                 "$OUT_NEG" "system disk DKA0:"
 # The strip: the blank disk must NOT be initialized, installed, or overlaid,
-# and the boot must NOT reach a banner or a login prompt.
+# and the boot must NOT reach a login prompt.
 check "negative: NO blank-disk initialize"       "$OUT_NEG" "%STARTUP-I-INIT"       absent
 check "negative: NO install ran"                 "$OUT_NEG" "%STARTUP-I-INSTALL"    absent
 check "negative: NO overlay mount-fail warning"  "$OUT_NEG" "%STARTUP-W-MOUNTFAIL"  absent
-check "negative: NO boot banner (system did not come up)" "$OUT_NEG" "OpenVMS-compatible" absent
+# vms-1fb: the OS banner now prints right after the executive attaches
+# (§3.5 oracle ordering: banner immediately after SYSBOOT hands over, BEFORE
+# the system-disk mount) -- so on THIS halt (SYSBOOT/EXEC_INIT already
+# succeeded; only SYSINIT's disk mount fails) the banner legitimately DOES
+# appear now, unlike before vms-1fb. That is more oracle-faithful, not a
+# regression: real VMS shows its identification banner at the same handoff
+# point, before SYSINIT even attempts to mount the system disk. "The system
+# did not come up" is proven by the checks that still matter -- no login
+# prompt, no STDRV begun (STARTUP.COM never runs) -- not by banner absence.
 check "negative: NO login prompt on an uninstalled disk"  "$OUT_NEG" "Username:"          absent
 check "negative: NO STDRV begun (startup never ran)"      "$OUT_NEG" "%STDRV-I-STARTUP"   absent
 echo ""

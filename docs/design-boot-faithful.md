@@ -242,6 +242,107 @@ Twelve processes on a bare Alpha 8.4 (vs. twenty on the VAX 7.3 capture in
 config-dependent, which is itself the finding: the population comes from what
 the startup *actually started*, not from a fixed roster).
 
+### 3.7 vms-1fb: banner-first fix + per-message facility audit (2026-08-12)
+
+Implements target-shape item 3 (§4) against §2.5/§3.5. Two code changes in
+`src/ovmx_init/ovmx_init.c`, plus a per-message audit of every boot line that
+file prints.
+
+**Banner-first.** `display_boot_banner()` used to be called once, at the very
+end of `main()`, after `run_startup()` had already run STARTUP.COM to
+completion — last, not first, the exact inversion of §3.5. It is now called
+(through a new idempotent `print_banner_once()`) from the point in
+`bare_metal_init()`'s flagless AND conversational branches that corresponds to
+"SYSBOOT just handed over": immediately after `executive_attach()` succeeds,
+before the system-disk-mount messages, before the SCSNODE identity line,
+before `%STDRV-I-STARTUP`, before any STARTUP.COM output. `print_banner_once()`
+is also called as an idempotent fallback right after `main()`'s own
+`executive_attach()` gate call, so a substrate that skips `bare_metal_init()`
+entirely still shows the banner before STDRV/STARTUP output.
+
+Gating the banner on a *successful* `executive_attach()` — rather than on
+literally nothing, which would put it ahead of even a fatal executive-attach
+failure — is a deliberate, disclosed divergence from "banner is the literal
+first thing, full stop": it is what preserves the executive-is-integral
+guarantee (`tests/qemu/test_executive_integral.sh`) that OVMX never shows an
+identification banner on a boot that provably never comes up because the
+executive itself would not attach. A boot can still halt *after* the banner
+if the system-disk mount subsequently fails (SYSINIT-equivalent) —
+`tests/qemu/test_persistent_boot.sh`'s negative control was updated to assert
+on that honestly (no login prompt, no STDRV begun) rather than on banner
+absence, which is no longer the discriminator once the banner moves this
+early. This ordering is not a compromise of the oracle shape: SYSBOOT's own
+job (load the executive) has already completed by the time `CONTINUE` is
+issued in the §3.1/§3.5 captures, so showing OVMX's EXEC_INIT-equivalent
+succeed immediately before the banner is consistent with, not a departure
+from, the oracle's implied staging.
+
+**STDRV-begun-only.** Re-confirmed, not re-fixed: `%STDRV-I-STARTUP ... begun`
+still prints exactly once, before `run_startup()`, and no "completed" line
+exists anywhere in `ovmx_init.c` (`grep -i "startup completed"` is empty) —
+vms-2f0's deletion holds.
+
+**Timestamp format.** Re-confirmed, not re-fixed: both `print_stdrv_begun()`
+and `display_boot_banner()` already used `%2d` for the day field (space-padded
+— ` 7`, not zero-padded `07`) and `(int)(ts.tv_nsec / 10000000)` with `%02d`
+for the fractional-seconds field (hundredths — `.24`, not milliseconds).
+`grep -n "vms_months\|tm_mday\|tv_nsec"` finds no other boot-timestamp call
+site in the file. `tests/qemu/test_boot_conformance.sh` asserts the shape
+directly (positively, and negatively against the zero-padded form) so a future
+regression is caught.
+
+**Per-message facility audit.** Every `printf`/`fprintf` in `ovmx_init.c` that
+emits a `%FACILITY-...`-shaped boot message, dispositioned against §3.5:
+
+| Message (facility-severity-ident) | Oracle match? | Disposition | Reasoning |
+|---|---|---|---|
+| `%STDRV-I-STARTUP, ... startup begun at <t>` | Y (shape; text is brand-substituted `OpenVMX` for `OpenVMS`, INV-0) | pinned | §3.5 verbatim shape; brand substitution is the standing INV-0 policy, not a new deviation |
+| `%OVMX-I-EXEC, VMS executive attached on /dev/vms` | N — no VMS analogue | OVMX-labeled | already correctly `%OVMX-`; VMS's EXEC_INIT never narrates itself on the console, OVMX's does (module load + `/dev/vms` open, both Linux-substrate concepts VMS has no counterpart for) |
+| `%OVMX-I-SYSDISK, mounting system disk DKA0:` | N | **fixed: was `%STARTUP-I-SYSDISK`** | §3.5 shows no system-disk-mount narration at all (VMS's SYSINIT mounts silently); borrowing the real `%STARTUP-` facility for content the oracle never shows dressed an OVMX-only event as VMS output — the exact defect class this audit was asked to catch. Relabeled `%OVMX-` |
+| `%OVMX-I-MOUNTED, system disk DKA0: mounted` | N | **fixed: was `%STARTUP-I-MOUNTED`** | same reasoning as SYSDISK, immediately above |
+| `%OVMX-W-MODFAIL, failed to load vmsfs.ko: <errno>` | N | **fixed: was `%STARTUP-W-MODFAIL`** | a Linux kernel-module load failure has no VMS analogue at all (VMS loads no such thing); same borrowed-facility defect, relabeled `%OVMX-` |
+| `%OVMX-I-SCSNODE, node name <n> set from SYS$SYSTEM:OVMXVMSSYS.PAR` | N | OVMX-labeled | already correctly `%OVMX-`; no oracle line for this exact SYSBOOT-parameter-applied announcement |
+| `%OVMX-W-NOPARAMS` / `-OVMX-I-NOPARAMS` (missing/corrupt parameter file) | N | OVMX-labeled | already correct; no oracle capture of a missing/corrupt `ALPHAVMSSYS.PAR`, so no VMS message is invented for it (Rule 10) |
+| `%EXECINIT, error loading system file - <FILE> R0 = <status>` | Y — pinned to a *different*, cited oracle (OpenVMS VAX 7.3, `execinit_halt()`'s own header) | pinned | reproduces the VAX capture byte-exact; not part of the Alpha §3.5 happy path, but its own oracle citation stands |
+| `%OVMX-F-EXECINIT` / `%OVMX-I-EXECINIT` (non-ENOENT exec-attach failure) | N | OVMX-labeled | already correct; Rule 10 — a condition VMS is never in gets no VMS-shaped message |
+| `%OVMX-F-SYSINIT` / `%OVMX-I-SYSINIT` (system-disk mount-or-halt failure) | N | OVMX-labeled | already correct; same Rule 10 reasoning, and named for the correct VMS *stage* (SYSINIT) without claiming to be a VMS *message* |
+| `%OVMX-E-NOIMG, cannot activate SYS$SYSTEM:PROVISION.EXE: <errno>` | N | OVMX-labeled | already correct; an `execve()` failure reported has no VMS analogue |
+
+No message in `ovmx_init.c` was dispositioned **deleted** — the one invented
+message this file ever carried (`%STDRV-I-STARTUP ... completed`) was already
+removed by vms-2f0; this audit found no second one. Two messages that ARE a
+console-visible boot artifact but are emitted by `STARTUP.COM`/
+`SYSTARTUP_VMS.COM`, not `ovmx_init.c`, are out of this file's audit scope by
+the item's own definition and were left untouched: the free-text (no
+`%FACILITY-` shape) line `The OVMX system is now executing the site-specific
+startup commands.` currently prints **twice** — once from `STARTUP.COM`'s
+`RUN_SITE_STARTUP` before it invokes `SYSTARTUP_VMS.COM`, once more from
+`SYSTARTUP_VMS.COM`'s own trailing `WRITE` (added later, for a test grep, per
+its header comment) — the oracle (§3.5) shows it once. Flagged here, not
+fixed here (out of `ovmx_init.c`), and not load-bearing for
+`test_boot_conformance.sh` (its sequence extraction keys on `%FACILITY-`
+tokens, which this free-text line has none of).
+
+The full pinned boot-facility sequence `test_boot_conformance.sh` diffs
+against (flagless boot, mastered disk, up to the login prompt), measured
+against a real QEMU boot rather than assumed, is, in order: `%OVMX-I-EXEC`
+(executive attach, `ovmx_init.c`) → banner → `%OVMX-I-SYSDISK` →
+`%OVMX-I-MOUNTED` → `%OVMX-I-SCSNODE` → `%STDRV-I-STARTUP` → a *second*
+`%OVMX-I-EXEC` (PROVISION.EXE's "system identity ... established by the
+executive", `src/ovmx_provision/ovmx_provision.c` — a different message under
+the same ident, not a repeat) → seven `%INSTALL-I-ADDED` lines
+(`SYSTARTUP_VMS.COM`'s `INSTALL ADD` of every OVMX shareable) →
+`%RUN-S-PROC_ID` (JOB_CONTROL's creation) → `Username:`. The PROVISION.EXE and
+INSTALL ADD messages are outside `ovmx_init.c`'s own audit table above (they
+are not `ovmx_init.c` boot messages), but they are real console output this
+test's sequence extraction — which keys on the `%FACILITY-SEVERITY-IDENT`
+shape everywhere in the transcript, not just this file's own prints — legitimately
+captures. This is still deliberately sparser than the §3.5 oracle (no OPCOM,
+no `%SET-I-NEWAUDSRV`/audit server, no `%SET-I-INTSET`, no job
+termination/accounting block) — OVMX has none of those facilities yet (§5,
+out of scope), and faking their messages to look busier would be the §2.5
+defect in reverse (Rule 10).
+
 ## 4. Target shape
 
 1. **Parameters live on the system disk and the boot reads them.**

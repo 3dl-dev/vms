@@ -16,9 +16,39 @@
 ! (with @) when its phase comes up in the driver loop. Lines beginning with
 ! "!" and blank lines are comments/ignored.
 !
-! OVMX registers no components here yet -- there is no OVMX-authored
-! per-phase driver procedure to name. An empty phase runs empty: STARTUP.COM
-! prints nothing for a phase with no registered component, which is honest
-! (docs/design-boot-faithful.md sec4 target #4) rather than inventing a
-! component to demonstrate the mechanism against.
+! JOB_CONTROL (vms-2a9, docs/design-boot-faithful.md sec3.8/sec4.5) is
+! OVMX's first real component registration: SYS$STARTUP:JOB_CONTROL_
+! STARTUP.COM, which RUN/DETACHED's JOB_CONTROL.EXE, the process that owns
+! the console login loop (vms-8d2). It runs at END, the LAST of the nine
+! phases -- an OVMX DESIGN CHOICE (Rule 8), not an oracle capture, and NOT
+! the choice this project started with. VSI never publishes which phase
+! internally starts the job controller, so CONFIG (an early phase, on the
+! reasoning that JOB_CONTROL is a core OS service rather than a layered
+! product or a site choice) was tried FIRST. MEASURED, against a real QEMU
+! boot (tests/qemu/test_boot_conformance.sh): starting JOB_CONTROL that
+! early creates a real defect, not just a documentation mismatch -- its
+! child LOGINOUT session begins prompting "Username:" on the shared
+! console WHILE STARTUP.COM's own phase driver is still writing to that
+! same console (SYCONFIG.COM, SYLOGICALS.COM, SYSTARTUP_VMS.COM's
+! INSTALL ADD lines and site announcement), and the two interleave into
+! garbled output. END avoids this by construction: STARTUP.COM's OWN last
+! console output finishes at LPMAIN (SYSTARTUP_VMS.COM's trailing WRITE)
+! before RUN_PHASES even reaches LPBETA/END, so JOB_CONTROL is created
+! only after nothing else will ever write to the console again -- the
+! EXACT ordering this project's boot already had, and had already tested
+! clean, before this item existed (JOB_CONTROL was the last call inside
+! SYSTARTUP_VMS.COM, itself the last real action of the LPMAIN phase).
+! This item's job was to make that ordering REACHED THROUGH the
+! declarative component mechanism instead of a hardcoded call, not to
+! change when JOB_CONTROL starts -- END is what "unchanged" means once
+! independently expressed as a registration.
 !
+! Before this item JOB_CONTROL was created by a hardcoded `@SYS$STARTUP:
+! JOB_CONTROL_STARTUP.COM` line inside SYS$MANAGER:SYSTARTUP_VMS.COM (the
+! LPMAIN site file) -- functionally identical to the line below, but
+! invisible to the phase-driven mechanism this file exists to drive;
+! removing the line below (and nothing else) now stops JOB_CONTROL from
+! ever being created (tests/qemu/test_job_control_negctl.sh proves exactly
+! that against a real boot).
+!
+END SYS$STARTUP:JOB_CONTROL_STARTUP.COM

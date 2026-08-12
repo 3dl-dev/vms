@@ -269,6 +269,18 @@ if(BUILD_TESTS)
     set_tests_properties(job_control_ownership_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # vms-2a9 standing gate: JOB_CONTROL is created by a registered STDRV
+    # component (SYS$STARTUP:VMS$VMS.DAT, CONFIG phase), not a hardcoded
+    # call from a site file. Source scan — no build artifacts needed. The
+    # end-to-end proofs are tests/qemu/test_job_control_console.sh (vms-8d2,
+    # positive) and tests/qemu/test_job_control_negctl.sh (vms-2a9,
+    # negative), both opt-in like the other real-boot gates.
+    add_test(NAME job_control_component_registration_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_job_control_component_registration.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(job_control_component_registration_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
     # The Rule 9 gate is a lint, and twice it certified the very regression it
     # exists to catch (see the file header). This runs the recorded evasions
     # against it on a sandbox copy of the tree and requires each one to drive

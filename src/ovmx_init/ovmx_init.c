@@ -24,11 +24,13 @@
  *
  * IT DOES NOT RUN THE CONSOLE LOGIN LOOP (vms-8d2, design-init-scope.md §2
  * row "login loop"). On VMS the interactive console session is owned by
- * JOB_CONTROL, a DETACHED process STARTUP.COM's site startup creates --
+ * JOB_CONTROL, a DETACHED process STARTUP.COM's phase driver creates --
  * never by the SYSINIT-equivalent bootstrap process. That loop now lives in
  * src/ovmx_job_control/ovmx_job_control.c (JOB_CONTROL.EXE), created by
- * SYS$STARTUP:JOB_CONTROL_STARTUP.COM (invoked from SYS$MANAGER:
- * SYSTARTUP_VMS.COM, run_startup() below) with RUN/DETACHED/PROCESS_NAME=
+ * SYS$STARTUP:JOB_CONTROL_STARTUP.COM (registered as an END-phase STDRV
+ * component in SYS$STARTUP:VMS$VMS.DAT and run from STARTUP.COM's own
+ * RUN_COMPONENTS subroutine, vms-2a9 -- run_startup() below just runs
+ * STARTUP.COM, which runs the phase driver) with RUN/DETACHED/PROCESS_NAME=
  * JOB_CONTROL -- the same vms-47b mechanism every other OVMX service uses.
  * PID 1's job ends when STARTUP.COM returns; it then just waits, because
  * Linux's PID 1 cannot exit without panicking the kernel, and there is no
@@ -1030,10 +1032,13 @@ int main(void)
      * tables are executive-resident, not a service (vms-a4b).
      *
      * run_startup() is ALSO where the system's services start, and the only
-     * place they do: STARTUP.COM invokes SYSTARTUP_VMS.COM, which invokes each
-     * service's own startup procedure, which creates it with RUN/DETACHED under
-     * a VMS process name (vms-47b). STARTUP.EXE deliberately starts none of its
-     * own -- see the NOTE ON SERVICES above. */
+     * place they do: STARTUP.COM's phase driver either runs a registered
+     * STDRV component directly (JOB_CONTROL at CONFIG, vms-2a9) or reaches
+     * SYSTARTUP_VMS.COM at LPMAIN, which invokes each remaining service's
+     * own startup procedure -- either way, each service is created with
+     * RUN/DETACHED under a VMS process name (vms-47b). STARTUP.EXE
+     * deliberately starts none of its own -- see the NOTE ON SERVICES
+     * above. */
     print_stdrv_begun();
     run_startup();
 
@@ -1055,12 +1060,13 @@ int main(void)
      * on the console forever -- the exact "wrong component" defect
      * design-init-scope.md §2 named it (JOB_CONTROL's job, run from
      * STARTUP.EXE). run_startup() above already ran STARTUP.COM to
-     * completion, which -- through SYSTARTUP_VMS.COM and SYS$STARTUP:
-     * JOB_CONTROL_STARTUP.COM -- has already created JOB_CONTROL as a
-     * DETACHED process holding the console (vms-8d2, vms-47b's RUN/DETACHED
-     * mechanism); by the time control reaches this line, the console session
-     * is JOB_CONTROL's, not PID 1's, and grep for a login loop here finds
-     * none.
+     * completion, which -- through its END-phase RUN_COMPONENTS step and
+     * SYS$STARTUP:JOB_CONTROL_STARTUP.COM (vms-2a9: a registered STDRV
+     * component, not a hardcoded call) -- has already created JOB_CONTROL as
+     * a DETACHED process holding the console (vms-8d2, vms-47b's
+     * RUN/DETACHED mechanism); by the time control reaches this line, the
+     * console session is JOB_CONTROL's, not PID 1's, and grep for a login
+     * loop here finds none.
      *
      * PID 1 is Linux's process 1: it cannot exit without panicking the
      * kernel, and there is no VMS analogue of that requirement to satisfy

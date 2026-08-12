@@ -98,8 +98,8 @@ static void test_brand_identity(void)
 
     /* Dual-identity rebrand (rd vms-700/vms-296/vms-3de): the PRODUCT
      * humans see is "OpenVMX", not the bare "OVMX" token -- that token now
-     * names the Linux substrate instead (OVMX_SUBSTRATE_NAME, "OVMX/Linux",
-     * see test_substrate_identity()). */
+     * names the SYSKRNL layer instead (OVMX_SYSKRNL_NAME, "OVMX/Linux",
+     * see test_syskrnl_identity()). */
     check(strcmp(ovmx_product_version(), OVMX_PRODUCT_VERSION) == 0
           && strcmp(OVMX_PRODUCT_NAME, "OpenVMX") == 0,
           "product name is OpenVMX (rd vms-700)");
@@ -108,7 +108,7 @@ static void test_brand_identity(void)
     check(strstr(banner, "OpenVMS-compatible") != NULL,
           "human banner carries the INV-0 'OpenVMS-compatible' badge");
     check(strstr(banner, "OVMX/Linux") == NULL,
-          "human product banner does not carry the OVMX/Linux substrate name");
+          "human product banner does not carry the OVMX/Linux SYSKRNL name");
 
     /*
      * INV-0's hard line: a human surface may say it is OpenVMS-COMPATIBLE,
@@ -122,25 +122,25 @@ static void test_brand_identity(void)
 }
 
 /*
- * test_substrate_identity - GNU/Linux-style dual identity (rd vms-700/
+ * test_syskrnl_identity - GNU/Linux-style dual identity (rd vms-700/
  * vms-296/vms-3de). "OVMX/Linux" (WITH the slash, like "GNU/Linux") names
- * the Linux-kernel substrate, distinct from and printed before the
- * "OpenVMX" product identity at early boot (src/ovmx_init/ovmx_init.c).
+ * the SYSKRNL layer (the Linux kernel underneath), distinct from and printed
+ * before the "OpenVMX" product identity at early boot (src/ovmx_init/ovmx_init.c).
  */
-static void test_substrate_identity(void)
+static void test_syskrnl_identity(void)
 {
-    printf("Substrate identity (OVMX/Linux, GNU/Linux-style):\n");
+    printf("SYSKRNL identity (OVMX/Linux, GNU/Linux-style):\n");
 
-    check(strcmp(OVMX_SUBSTRATE_NAME, "OVMX/Linux") == 0,
-          "substrate name is OVMX/Linux, with the slash");
+    check(strcmp(OVMX_SYSKRNL_NAME, "OVMX/Linux") == 0,
+          "SYSKRNL name is OVMX/Linux, with the slash");
 
-    const char *substrate = ovmx_substrate_banner();
-    check(strstr(substrate, "OVMX/Linux") != NULL,
-          "substrate banner names OVMX/Linux");
-    check(strcmp(substrate, ovmx_product_banner()) != 0,
-          "substrate banner is distinct from the product banner");
-    check(strstr(substrate, "OpenVMX") == NULL,
-          "substrate banner does not carry the OpenVMX product brand");
+    const char *syskrnl = ovmx_syskrnl_banner();
+    check(strstr(syskrnl, "OVMX/Linux") != NULL,
+          "SYSKRNL banner names OVMX/Linux");
+    check(strcmp(syskrnl, ovmx_product_banner()) != 0,
+          "SYSKRNL banner is distinct from the product banner");
+    check(strstr(syskrnl, "OpenVMX") == NULL,
+          "SYSKRNL banner does not carry the OpenVMX product brand");
 }
 
 static void test_compat_identity(void)
@@ -350,7 +350,7 @@ int main(void)
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
 
     test_brand_identity();
-    test_substrate_identity();
+    test_syskrnl_identity();
     test_compat_identity();
     test_node_identity(path);
     test_node_name_buffer_safety();

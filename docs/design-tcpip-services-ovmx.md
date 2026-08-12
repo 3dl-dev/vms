@@ -32,11 +32,11 @@ Consequences under the standing rulings:
   around; the target is the QEMU/kernel runtime.
 - **INV-6 (no silent userspace fallback for an executive facility).** Three touch-points cross
   into **shared/executive state** and MUST be honest — route through `/dev/vms` where the
-  substrate exists, else **fail honestly** (`SS$_NOSUCHDEV`/`SS$_IVDEVNAM`), never a per-process
+  plumbing exists, else **fail honestly** (`SS$_NOSUCHDEV`/`SS$_IVDEVNAM`), never a per-process
   fake that reports success while sharing nothing:
   1. **`BGn:` device registration** in the executive device namespace (so `$ASSIGN`, `SHOW
      DEVICE BG`, and cross-process channel visibility are real).
-  2. **`TCPIP$*` system logical-name tables** (system table = shared state, same substrate the
+  2. **`TCPIP$*` system logical-name tables** (system table = shared state, same foundation the
      executive gap `vms-6b8`/`vms-ln0` is closing).
   3. **Cross-process visibility** of sockets/connections for `TCPIP SHOW DEVICE_SOCKET`.
 
@@ -87,7 +87,7 @@ Consequences under the standing rulings:
 > program ever sees a Linux `/dev/` path.
 
 - **L0 NIC as VMS device.** The virtio NIC is registered as `EWA0:` in the executive device table
-  (needs the `vms-6b8` device-table substrate; absent it, `SHOW DEVICE` has no `EWA0:` and
+  (needs the `vms-6b8` device-table layer; absent it, `SHOW DEVICE` has no `EWA0:` and
   `$ASSIGN` → `SS$_NOSUCHDEV`). This is the honest device face DECnet's circuit also layers over.
 - **L1 engine = Linux sockets.** On that NIC's backing netdev, OVMX opens ordinary Linux sockets;
   the kernel does TCP/UDP/IP. Config (interfaces, routes, ARP, DNS) via netlink/`ioctl`.

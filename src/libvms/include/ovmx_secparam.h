@@ -3,7 +3,7 @@
  * parameters on real OpenVMS but have no parameter store on OVMX yet.
  *
  * This is NOT a VMS definitions header (unlike ssdef.h, prvdef.h, etc. in
- * this same directory) -- it is an OVMX-substrate stand-in, and its
+ * this same directory) -- it is an OVMX stand-in, and its
  * contents are OVMX compile-time constants, not VMS structure/bit-mask
  * definitions transcribed from a manual. It exists so that a value pinned
  * to the oracle has exactly ONE place to be hand-maintained instead of

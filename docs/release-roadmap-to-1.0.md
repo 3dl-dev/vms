@@ -33,7 +33,7 @@ gate on features.
 
 | Milestone | One-line meaning | State |
 |---|---|---|
-| **0.3** | "a real VMS system" — executive R3 substrate, honest DCL surface | shipped, accreting 0.3-x |
+| **0.3** | "a real VMS system" — executive R3 foundation, honest DCL surface | shipped, accreting 0.3-x |
 | **0.4** | "installs and boots faithfully" + cluster rejoin/DLM | in flight (long pole) |
 | **0.5** | "functionally complete for 1.0 except the app-compat slog" | planned |
 | **1.0** | "join the cluster, run the software, evacuate the node" — *and now* self-hosts its own build, speaks TCP/IP + DECnet, owns its kernel | gated (see §3) |
@@ -107,7 +107,7 @@ R3 Executive gap (vms-6b8)  ── keystone; a NON-OBVIOUS dep of THREE things �
    ├─▶ R7 Self-hosting (vms-678)       needs executive R3 + lib$ RTL (vms-801) + RMS + DCL
    └─▶ INV-6 touch-points for BOTH networking lanes (device registration, system
         logical names, cross-process socket visibility) must be honest via /dev/vms
-        or fail with SS$_ — they land against the executive substrate, not around it
+        or fail with SS$_ — they land against the executive itself, not around it
 
 R1 Boot (vms-46c) + Install (vms-718)  ── entangled: both rewrite ovmx_init.c ──
    └─ boot P1 items gated behind installer spine (vms-2f0 serializes ovmx_init.c)
@@ -226,7 +226,7 @@ this sweep mutates no rd state.**
 |---|---|---|---|
 | `vms-aed` | Invented `%STDRV-I-STARTUP …completed` line (`ovmx_init.c:757`) | Boot-console fidelity tell (R1) | **Wire under Boot `vms-46c`** (sibling of `vms-1fb`); already filed, just parent it |
 | `vms-962` | login/username case-sensitive (VMS folds to upper) | Multi-user login correctness; operator bug report | **Needs repro interface** — waiting; likely a username→Linux-FS-path leak. Keep P1, fold under authenticity |
-| `vms-5c6d` | `sys$close` on RMS indexed files frees B-tree without saving (`rms_core.c:795`) — data loss | Data-integrity bug in RMS (R2 substrate) | **File onto R2/RMS** as P1; corpus apps using indexed files hit this |
+| `vms-5c6d` | `sys$close` on RMS indexed files frees B-tree without saving (`rms_core.c:795`) — data loss | Data-integrity bug in RMS (R2 layer) | **File onto R2/RMS** as P1; corpus apps using indexed files hit this |
 | `vms-58e` | `$ CREATE/DIRECTORY SYS$SCRATCH:[x]` crashes DCL | A crash on a common DCL verb (parity) | **Fold under parity `vms-8ad`** or DCL fidelity |
 | `vms-d18` | `VMS_MAX_DEVICES` redefined (64 vs 16 across headers) | Latent device-table corruption | Fold under Executive `vms-6b8` (device table) |
 | `vms-e6c` | `scsd: ovmx_cluster.admitted` never resets | Long-lived daemon advertises stale member-form | Fold under Clustering `vms-694` |
@@ -234,7 +234,7 @@ this sweep mutates no rd state.**
 | `vms-3f9` | `env_identity_census_negctl` dev-host-flaky (180s timeout) | Flaky test = broken test (Rule 8, OS-level) | **test-flaky**: fix root cause or label + raise |
 | `vms-5bb` | `scenario_deadlock` cross-process cycle timing-dependent | Flaky lock test | test-flaky: root-cause |
 | `vms-d3c` | `userspace_service_register_negctl` fails under `-j` parallel | Flaky test | test-flaky: root-cause |
-| `vms-677` | `test_kmod_lock_mproc` CVTUNGRANT ordering race | Flaky kernel lock test (R3/R5 substrate) | test-flaky: root-cause |
+| `vms-677` | `test_kmod_lock_mproc` CVTUNGRANT ordering race | Flaky kernel lock test (R3/R5 layer) | test-flaky: root-cause |
 
 ### B. Open operator-reserved calls (decisions only Baron makes)
 

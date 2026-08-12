@@ -238,7 +238,7 @@ static void own_tree(const char *path, uint32_t uic_group, uint32_t uic_member)
  * skipped, and a file seeded by root that SYSTEM cannot write is the same
  * regression in a smaller box.
  *
- * DISCLOSED DIVERGENCE (not a handler, a substrate limit): VMS grants the
+ * DISCLOSED DIVERGENCE (not a handler, a platform limit): VMS grants the
  * SYSTEM protection category to every UIC whose group is <= MAXSYSGROUP
  * (measured 8, see S7). A Linux inode carries exactly one owning group, so
  * OVMX can express "UIC group 1 is the owner's group" but not "UIC groups 1

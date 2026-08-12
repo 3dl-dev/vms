@@ -762,7 +762,7 @@ jobs:
   # STARTUP.EXE's SYSBOOT role reads SYS$SYSTEM:OVMXVMSSYS.PAR and sets the
   # actual Linux hostname from SCSNODE (the hardcoded sethostname("OVMX", 4)
   # is gone). Boots the ACTUAL mastered bootable image TWICE per case (the
-  # closest thing OVMX's substrate has to "reboot" — see the gate's own
+  # closest thing OVMX's platform has to "reboot" — see the gate's own
   # header): once to SYSGEN SET SCSNODE / WRITE CURRENT (or, in the negative
   # case, DELETE the seeded parameter file), once to prove what the next
   # boot does with it. See tests/qemu/test_boot_scsnode_hostname_e2e.sh for

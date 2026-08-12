@@ -54,7 +54,7 @@
 # the whole console log, because the whole log also contains the guest tty's
 # echo of every command this script sends -- a naive `grep` for e.g. 'SYSTEM'
 # would be satisfied by the echo of `send 'SYSTEM'` at the login prompt
-# regardless of what any real command printed. Where the two substrates
+# regardless of what any real command printed. Where the two runtimes
 # genuinely differ, the real runtime is the authority.
 #
 # Sequencing waits on the actual DCL prompt rather than sleeping a guessed
@@ -1180,7 +1180,7 @@ check_response 'SPAWN SHOW TIME' '[0-9]{1,2}-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SE
 # %RMS-E-CRE where VMS prints %COPY-E-OPENOUT with -RMS- and -SYSTEM-
 # secondaries; asserting the OVMX text would be certifying a message this
 # item never measured (CLAUDE.md Rule 10). Whether the bytes are THERE is
-# substrate-independent and is the thing that actually matters.
+# platform-independent and is the thing that actually matters.
 check_not_response 'COPY LOGIN.COM UATWRITE.TXT' 'RMS-E'
 check_response 'TYPE UATWRITE.TXT' 'Per-user login command procedure'
 

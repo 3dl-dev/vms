@@ -4,7 +4,7 @@
  * PID 1 / ENTRYPOINT for OVMX on its one runtime target: the real-kernel /
  * QEMU path (CLAUDE.md Rule 9). This is SYSBOOT + EXEC_INIT + SYSINIT and
  * NOTHING ELSE (docs/design-init-scope.md, operator ruling 2026-08-10 "STRIP
- * ALL OF IT"): mount the Linux substrate, attach the executive, load vmsfs.ko,
+ * ALL OF IT"): mount the Linux base layer, attach the executive, load vmsfs.ko,
  * mount the system disk -- or halt -- hand off to STARTUP.COM, then wait.
  *
  * IT DOES NOT INSTALL, INITIALIZE OR PROVISION ANYTHING. A booting VMS system
@@ -409,7 +409,7 @@ static void executive_attach(void)
 }
 
 /*
- * Bare-metal bootstrap: mount the Linux substrate, set hostname, attach the
+ * Bare-metal bootstrap: mount the Linux base layer, set hostname, attach the
  * executive, load vmsfs.ko, and MOUNT THE SYSTEM DISK OR HALT. Called when
  * running as PID 1 on bare metal or QEMU.
  *
@@ -433,7 +433,7 @@ static void bare_metal_init(void)
     mount("tmpfs", "/dev/shm", "tmpfs", 0, NULL);
 
     /*
-     * Conversational boot (vms-b81): the substrate's boot-flag register is
+     * Conversational boot (vms-b81): the platform's boot-flag register is
      * the kernel cmdline (sysboot.h). Reading it needs only the /proc mount
      * just above and produces no output -- checking it here, before
      * anything else in this function runs, is what lets the branch below
@@ -600,10 +600,10 @@ static void require_installed_system(void)
  * ORDERING DIVERGENCE, DISCLOSED (docs/design-boot-faithful.md, "ORDERING
  * NOTE"): real VMS's SYSBOOT reads the parameter file BEFORE the executive
  * attaches, through boot-driver I/O that never mounts a filesystem in the
- * Unix sense. OVMX's substrate has no analogue of boot-driver I/O -- the
+ * Unix sense. OVMX's underlying layer has no analogue of boot-driver I/O -- the
  * parameter file is an ordinary file ON the system disk, unreadable until
  * vmsfs has mounted it -- so this necessarily runs AFTER the mount and
- * AFTER the executive attaches. Named here as a substrate limit, not hidden
+ * AFTER the executive attaches. Named here as a platform limit, not hidden
  * as if OVMX read it VMS's way (the same discipline provision_ownership()'s
  * MAXSYSGROUP note already carries).
  *
@@ -804,17 +804,18 @@ static void display_boot_banner(void)
 int main(void)
 {
     /*
-     * Substrate identity line -- printed FIRST, before any mount, module
+     * SYSKRNL identity line -- printed FIRST, before any mount, module
      * load, or VMS-flavored boot message. GNU/Linux-style dual identity
      * (operator ruling, rd vms-700/vms-296/vms-3de): "OVMX/Linux" names
-     * the Linux-kernel substrate this boots on, distinct from and prior to
-     * the "OpenVMX" product identity STARTUP.EXE hands off to later
-     * (display_boot_banner(), below) -- the boot reads "OVMX/Linux"
-     * substrate coming up, THEN "OpenVMX" product. Unconditional (not
-     * gated on getpid() == 1): cheap, and every invocation of this binary
-     * is still OVMX/Linux underneath regardless of PID.
+     * the SYSKRNL layer (the Linux kernel underneath) this boots on,
+     * distinct from and prior to the "OpenVMX" product identity STARTUP.EXE
+     * hands off to later (display_boot_banner(), below) -- the boot reads
+     * the "OVMX/Linux" SYSKRNL layer coming up, THEN "OpenVMX" product.
+     * Unconditional (not gated on getpid() == 1): cheap, and every
+     * invocation of this binary is still OVMX/Linux underneath regardless
+     * of PID.
      */
-    printf("%s\n", ovmx_substrate_banner());
+    printf("%s\n", ovmx_syskrnl_banner());
     fflush(stdout);
 
     /* If we are PID 1 on bare metal, set up Linux plumbing */
@@ -825,7 +826,7 @@ int main(void)
 
     /* No image runs without the executive. On bare metal this is already
      * satisfied (bare_metal_init attached it before INITIALIZE.EXE ran) and
-     * this call is a no-op; on any other substrate it is the gate. Placing
+     * this call is a no-op; on any other base it is the gate. Placing
      * it here, unconditionally, is deliberate: a boot path that skips the
      * Linux plumbing must not thereby skip the executive. */
     executive_attach();

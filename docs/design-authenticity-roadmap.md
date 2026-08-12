@@ -127,12 +127,12 @@ format work but are actually *blocked on shared state* and cannot honestly close
 | `vms-905` broadcast / `REPLY` | messaging | cross-process IPC (mailboxes) |
 
 Fixing these one surface at a time produces *better-looking* LARP: a `SHOW SYSTEM` that formats one
-fabricated row beautifully is still one fabricated row. **The substrate is the work.**
+fabricated row beautifully is still one fabricated row. **The foundation is the work.**
 
 ### 2.1.1 The executive is half-built, not absent — and the gap is three different things
 
 `vms.ko` is already a real VMS executive. Correcting the framing above: the work is far less
-greenfield than "build a substrate" implies.
+greenfield than "build a foundation" implies.
 
 | Facility | Kernel ioctls in `vms_ioctl.h` | Userspace calls it? |
 |---|---|---|
@@ -590,7 +590,7 @@ M3+ (Tier 3)   C1..C10  (independent sub-epics, demand-ordered)
 
 ## 9. How `vms-846` (SYSUAF→RMS) fits
 
-`vms-846` is **not** a standalone authenticity play — it is the substrate for **B8**.
+`vms-846` is **not** a standalone authenticity play — it is the foundation for **B8**.
 Real VMS keeps users in an RMS-indexed `SYSUAF.DAT`; a text file is a tell only AUTHORIZE
 and `SHOW USERS` expose. So 846 stays its own epic (record → seed → readers → AUTHORIZE →
 provision → cutover) and **B8 is its authenticity payoff**. `vms-846.1` (binary record)

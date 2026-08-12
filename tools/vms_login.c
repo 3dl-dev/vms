@@ -338,8 +338,8 @@ static void start_session(const sysuaf_record_t *rec)
      *
      * THIS IS NOT A NEW VMS BEHAVIOUR AND IS NOT PRESENTED AS ONE
      * (CLAUDE.md Rule 8/10). OpenVMS has no Linux credentials; the
-     * uid/gid pair is OVMX's substrate for the UIC. What changes here
-     * is only that the substrate is made to agree with the identity the
+     * uid/gid pair is OVMX's stand-in for the UIC. What changes here
+     * is only that the stand-in is made to agree with the identity the
      * executive was already enforcing, so the enforcement is not
      * layered over a process that could sidestep it by forking.
      *

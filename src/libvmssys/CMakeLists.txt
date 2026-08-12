@@ -40,6 +40,7 @@ set(VMSSYS_C_SOURCES
     vms_math.c
     vms_runtime_init.c
     vms_kif.c
+    kif_transport_linux.c
 )
 
 # ================================================================

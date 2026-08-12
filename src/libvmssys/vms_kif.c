@@ -1,11 +1,21 @@
 /*
  * vms_kif.c - Kernel Interface userspace implementation
  *
- * Wraps /dev/vms ioctl calls behind VMS-style function APIs.
- * Uses the libvmssys syscall wrappers (no glibc).
+ * Holds the SUBSTRATE-AGNOSTIC POLICY of the executive interface: the
+ * open->register binding, the caller-census / INV-6 honest-fail behaviour, and
+ * the errno->SS$ status mapping. It reaches the executive only through the
+ * transport seam (kif_transport.h): device open, request issue and arena mmap
+ * are the substrate's job (kif_transport_linux.c on OVMX/Linux), so a future
+ * OVMX/NetBSD transport can plug in without touching this policy layer
+ * (vms-a3b, docs/design-ovmx-netbsd-syskrnl.md §3).
+ *
+ * Uses the libvmssys syscall wrappers (no glibc) for the non-device syscalls
+ * that remain policy's own: getpid() (identity) and mprotect() (the P1
+ * critical-page primitive, which has no /dev/vms dependency at all).
  */
 
 #include "vms_kif.h"
+#include "kif_transport.h"
 #include "vms_syscall.h"
 #include "vms_string.h"
 #include "vms_errno.h"
@@ -98,14 +108,14 @@ int vms_kif_open(void)
     if (vms_dev_fd >= 0)
         return vms_dev_fd;
 
-    vms_dev_fd = vms_sys_openat(-100 /* AT_FDCWD */, "/dev/vms", 2 /* O_RDWR */, 0);
+    vms_dev_fd = kif_xport_dev_open();
     return vms_dev_fd;
 }
 
 void vms_kif_close(void)
 {
     if (vms_dev_fd >= 0) {
-        vms_sys_close(vms_dev_fd);
+        kif_xport_dev_close(vms_dev_fd);
         vms_dev_fd = -1;
     }
     vms_bound_pid = 0;
@@ -132,7 +142,7 @@ static uint32_t kif_register_req(unsigned long req, uint32_t *vms_pid)
 
     vms_memset(&args, 0, sizeof(args));
 
-    rc = vms_sys_ioctl(vms_dev_fd, req, (unsigned long)&args);
+    rc = kif_xport_ioctl(vms_dev_fd, req, &args);
     if (rc < 0)
         return vms_kif_kerr_to_ss(rc);
 
@@ -177,7 +187,7 @@ uint32_t vms_kif_register(uint32_t *vms_pid)
 uint32_t vms_kif_register_continue(void)
 {
     if (vms_dev_fd >= 0) {
-        vms_sys_close(vms_dev_fd);
+        kif_xport_dev_close(vms_dev_fd);
         vms_dev_fd = -1;
     }
     vms_bound_pid = 0;
@@ -228,7 +238,7 @@ static void kif_bind(void)
      * adopted onto the process's existing PCB.)
      */
     if (vms_dev_fd >= 0) {
-        vms_sys_close(vms_dev_fd);
+        kif_xport_dev_close(vms_dev_fd);
         vms_dev_fd = -1;
     }
 
@@ -272,7 +282,7 @@ static uint32_t kif_call(unsigned long req, void *args)
 
     kif_bind();
 
-    rc = vms_sys_ioctl(vms_dev_fd, req, (unsigned long)args);
+    rc = kif_xport_ioctl(vms_dev_fd, req, args);
     return (rc < 0) ? vms_kif_kerr_to_ss(rc) : 0;
 }
 
@@ -318,7 +328,7 @@ static uint32_t kif_wait_call(unsigned long req, void *args)
     kif_bind();
 
     do {
-        rc = vms_sys_ioctl(vms_dev_fd, req, (unsigned long)args);
+        rc = kif_xport_ioctl(vms_dev_fd, req, args);
     } while (rc == -VMS_EINTR);
 
     return (rc < 0) ? vms_kif_kerr_to_ss(rc) : 0;
@@ -433,7 +443,7 @@ int vms_kif_deliverast(uint64_t *astadr, uint64_t *astprm, uint8_t *acmode)
      * so there is no status for kif_call() to return. It still binds. */
     kif_bind();
 
-    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_DELIVERAST, (unsigned long)&args) < 0)
+    if (kif_xport_ioctl(vms_dev_fd, VMS_IOCTL_DELIVERAST, &args) < 0)
         return -1;
 
     if (astadr) *astadr = args.astadr;
@@ -1244,7 +1254,7 @@ static struct vms_lnm_arena *vms_kif_lnm_arena(void)
 
     /* Stale inherited mapping from a fork()'d parent: drop it. */
     if (vms_lnm_map) {
-        vms_sys_munmap(vms_lnm_map, sizeof(struct vms_lnm_arena));
+        kif_xport_munmap(vms_lnm_map, sizeof(struct vms_lnm_arena));
         vms_lnm_map = 0;
         vms_lnm_map_pid = 0;
     }
@@ -1253,10 +1263,9 @@ static struct vms_lnm_arena *vms_kif_lnm_arena(void)
     if (vms_dev_fd < 0)
         return 0;
 
-    p = vms_sys_mmap(0, sizeof(struct vms_lnm_arena),
-                     VMS_PROT_READ, VMS_MAP_SHARED,
-                     vms_dev_fd, VMS_LNM_MMAP_OFFSET);
-    if (p == VMS_MAP_FAILED || !p)
+    p = kif_xport_mmap(vms_dev_fd, sizeof(struct vms_lnm_arena),
+                       VMS_LNM_MMAP_OFFSET);
+    if (!p)
         return 0;
 
     /* Trust the mapping only if the executive's header validates. */
@@ -1264,7 +1273,7 @@ static struct vms_lnm_arena *vms_kif_lnm_arena(void)
         struct vms_lnm_arena *a = (struct vms_lnm_arena *)p;
         if (a->magic != VMS_LNM_ARENA_MAGIC ||
             a->version != VMS_LNM_ARENA_VERSION) {
-            vms_sys_munmap(p, sizeof(struct vms_lnm_arena));
+            kif_xport_munmap(p, sizeof(struct vms_lnm_arena));
             return 0;
         }
     }

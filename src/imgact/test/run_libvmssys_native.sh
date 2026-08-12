@@ -38,7 +38,7 @@ $CC -std=gnu11 -O2 -Wall -Wextra -I"$LINK_DIR/include" -o "$WORK/LINK.EXE" "$LIN
 
 echo "== compile REAL src/libvmssys (7 C objects + syscall.S) =="
 OBJS=""
-for c in vms_string vms_snprintf vms_futex vms_stdio vms_math vms_runtime_init vms_kif; do
+for c in vms_string vms_snprintf vms_futex vms_stdio vms_math vms_runtime_init vms_kif kif_transport_linux; do
     $CC $CFLAGS -c -o "$WORK/$c.o" "$SYSLIB_SRC/$c.c"
     OBJS="$OBJS $WORK/$c.o"
 done

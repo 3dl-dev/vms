@@ -176,6 +176,7 @@ RUN ARCH=$(uname -m) && n_kif=0 && \
         gcc -static -O2 -Wall -pthread -o /src/tests/qemu/$t \
             "$f" \
             /src/libvmssys/vms_kif.c \
+            /src/libvmssys/kif_transport_linux.c \
             /src/libvmssys/vms_string.c \
             /src/libvmssys/arch/${ARCH}/syscall.S \
             -I/src/kernel -I/src/libvmssys || exit 1; \

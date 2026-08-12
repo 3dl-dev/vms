@@ -78,19 +78,26 @@ MUTANTS = [
             end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_READ,
             SCS_MSCP_STATUS(SCS_MSCP_ST_SUCCESS, SCS_MSCP_SUB_NORMAL),
             byte_count);"""),
+    # NB: the CTLR_ERR refusal block and the HOST_BUF_ERR line below now appear
+    # in BOTH handle_read and handle_write (vms-6e1), so these READ mutants key on
+    # the preceding SCS_MSCP_OP_READ line to stay a single exact match.
     ("INV6-READ-refusal-reports-bytes-that-never-crossed", "srv.c",
-     """            SCS_MSCP_STATUS(SCS_MSCP_ST_CTLR_ERR,
+     """            end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_READ,
+            SCS_MSCP_STATUS(SCS_MSCP_ST_CTLR_ERR,
                             SCS_MSCP_SUB_CNT_INCONSISTENT),
             0u);""",
-     """            SCS_MSCP_STATUS(SCS_MSCP_ST_CTLR_ERR,
+     """            end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_READ,
+            SCS_MSCP_STATUS(SCS_MSCP_ST_CTLR_ERR,
                             SCS_MSCP_SUB_CNT_INCONSISTENT),
             byte_count);"""),
     ("INV6-READ-refusal-is-not-counted", "srv.c",
      "        srv->xfer_refusals++;",
      "        (void)0;"),
     ("INV6-a-FAILED-block-transfer-is-reported-as-Success", "srv.c",
-     "                SCS_MSCP_STATUS(SCS_MSCP_ST_HOST_BUF_ERR, 0u), moved);",
-     "                SCS_MSCP_STATUS(SCS_MSCP_ST_SUCCESS, 0u), moved);"),
+     """                end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_READ,
+                SCS_MSCP_STATUS(SCS_MSCP_ST_HOST_BUF_ERR, 0u), moved);""",
+     """                end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_READ,
+                SCS_MSCP_STATUS(SCS_MSCP_ST_SUCCESS, 0u), moved);"""),
 
     # ---- (b) THE sec 3.4 CONTROLLER-ONLINE GATE ----------------------------
     ("GATE-Controller-Online-check-deleted", "srv.c",
@@ -131,10 +138,10 @@ MUTANTS = [
 
     # ---- the other refusals that must stay honest ---------------------------
     ("WRITE-is-falsely-acknowledged-instead-of-Write-Protected", "srv.c",
-     """                              SCS_MSCP_STATUS(SCS_MSCP_ST_WRITE_PROT,
-                                              SCS_MSCP_SUB_WP_SOFTWARE),""",
-     """                              SCS_MSCP_STATUS(SCS_MSCP_ST_SUCCESS,
-                                              SCS_MSCP_SUB_NORMAL),"""),
+     """                                  SCS_MSCP_STATUS(SCS_MSCP_ST_WRITE_PROT,
+                                                  SCS_MSCP_SUB_WP_SOFTWARE),""",
+     """                                  SCS_MSCP_STATUS(SCS_MSCP_ST_SUCCESS,
+                                                  SCS_MSCP_SUB_NORMAL),"""),
     ("READ-past-the-end-of-the-volume-is-serviced-not-refused", "srv.c",
      """    if ((uint64_t)lbn + (uint64_t)nblocks > (uint64_t)u->unit_size) {
         return build_transfer_end(
@@ -142,9 +149,57 @@ MUTANTS = [
             SCS_MSCP_STATUS(SCS_MSCP_ST_INVALID_CMD, SCS_MSCP_P_LBN * 256u), 0u);
     }""",
      "    (void)lbn;"),
+    # NB: `if (!u->online) {` now appears in BOTH handle_read and handle_write
+    # (vms-6e1), so each online-gate mutant keys on its own preceding comment to
+    # stay a single exact match.
     ("READ-on-a-unit-that-was-never-brought-Online-transfers-anyway", "srv.c",
-     "    if (!u->online) {",
-     "    if (0) {"),
+     """    /* sec 6.14 lists Unit-Available among READ's statuses: a unit that has not
+     * been brought Unit-Online cannot transfer. */
+    if (!u->online) {""",
+     """    /* sec 6.14 lists Unit-Available among READ's statuses: a unit that has not
+     * been brought Unit-Online cannot transfer. */
+    if (0) {"""),
+
+    # ---- vms-6e1: the WRITE path now hits real storage; the same honesty
+    #      boundaries the READ path has must hold on the write side too. --------
+    ("WRITE-on-a-unit-that-was-never-brought-Online-transfers-anyway", "srv.c",
+     """    /* WRITE shares READ's transfer preconditions (sec 5.3): a unit no ONLINE has
+     * claimed cannot transfer -- the same Unit-Available answer READ gives
+     * (sec 6.14). */
+    if (!u->online) {""",
+     """    /* WRITE shares READ's transfer preconditions (sec 5.3): a unit no ONLINE has
+     * claimed cannot transfer -- the same Unit-Available answer READ gives
+     * (sec 6.14). */
+    if (0) {"""),
+    ("INV6-WRITE-fakes-success-when-no-write-hook-exists", "srv.c",
+     """        srv->wxfer_refusals++;
+        return build_transfer_end(
+            end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_WRITE,
+            SCS_MSCP_STATUS(SCS_MSCP_ST_CTLR_ERR,
+                            SCS_MSCP_SUB_CNT_INCONSISTENT),
+            0u);""",
+     """        srv->wxfer_refusals++;
+        return build_transfer_end(
+            end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_WRITE,
+            SCS_MSCP_STATUS(SCS_MSCP_ST_SUCCESS, SCS_MSCP_SUB_NORMAL),
+            byte_count);"""),
+    ("INV6-WRITE-a-FAILED-data-pull-is-reported-as-Success", "srv.c",
+     """        if (n < 0 || (size_t)n != sizeof(block)) {
+            /* Host Buffer Access Error (Table B-2) is the transfer-service
+             * failure status, the same one READ's data path uses. Report the
+             * bytes that did cross; persist nothing here. */
+            return build_transfer_end(
+                end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_WRITE,
+                SCS_MSCP_STATUS(SCS_MSCP_ST_HOST_BUF_ERR, 0u), moved);
+        }""",
+     "        if (n < 0 || (size_t)n != sizeof(block)) { (void)n; }"),
+    ("WRITE-past-the-end-of-the-volume-is-serviced-not-refused", "srv.c",
+     """    if ((uint64_t)lbn + (uint64_t)nblocks > (uint64_t)u->unit_size) {
+        return build_transfer_end(
+            end, end_len, cmd->cmd_ref, u->unit, SCS_MSCP_OP_WRITE,
+            SCS_MSCP_STATUS(SCS_MSCP_ST_INVALID_CMD, SCS_MSCP_P_LBN * 256u), 0u);
+    }""",
+     "    (void)lbn;"),
 
     # ---- the GET UNIT STATUS walk a class driver enumerates with ------------
     ("GUS-MD.NXU-degrades-to-an-exact-match-so-the-walk-never-advances", "srv.c",

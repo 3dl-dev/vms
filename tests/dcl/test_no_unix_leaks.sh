@@ -1,12 +1,22 @@
 #!/bin/bash
 # TEST: Error messages and output must not leak Unix paths or terminology
 # EXPECT: contains:LEAK_CHECK_COMPLETE
+# EXPECT_NOT: contains:UNIX_LEAK_DETECTED
 #
-# NOTE: This test detects Unix leaks but currently reports them as findings
-# rather than failures. Each leak found creates backlog for authenticity beads.
-# When all leaks are fixed, the EXPECT_NOT below can be uncommented to make
-# this a hard gate.
-# FUTURE_EXPECT_NOT: contains:UNIX_LEAK_DETECTED
+# vms-fe21: re-armed. This test's only assertion used to be
+# LEAK_CHECK_COMPLETE, a token the script printed unconditionally on every
+# run -- so it passed whether or not any leak was found. The real guard
+# (this EXPECT_NOT) was written but commented out as FUTURE_EXPECT_NOT, and
+# a detected leak was downgraded to a printed WARNING instead of a failure.
+# That is the no-lies defect this test suite exists to catch, in the test
+# suite itself: a test that cannot fail is not testing anything.
+#
+# The guard is real now: any leak sets UNIX_LEAK_DETECTED in the output (the
+# harness's EXPECT_NOT gates on it directly) and the script exits non-zero.
+# Proof this can actually go red: pointing VMSDCL at a stub that echoes a
+# Unix leak for one of the probed commands makes this script exit 1 with
+# UNIX_LEAK_DETECTED in its output; pointing it at the real, clean vmsdcl
+# exits 0 with no such token. See the PR description for the transcript.
 VMSDCL="${VMSDCL:-vmsdcl}"
 
 # Patterns that indicate Unix leakage in VMS output
@@ -68,6 +78,8 @@ output=$(echo "RENAME NONEXISTENT_FILE.TXT NEWNAME.TXT" | $VMSDCL 2>&1)
 check_output "RENAME nonexistent" "$output"
 
 if [ $LEAKS_FOUND -gt 0 ]; then
-    echo "WARNING: $LEAKS_FOUND commands leaked Unix paths/errors (backlog for authenticity beads)"
+    echo "UNIX_LEAK_DETECTED: $LEAKS_FOUND command(s) leaked Unix paths/errors"
+    echo "LEAK_CHECK_COMPLETE ($LEAKS_FOUND leaks found)"
+    exit 1
 fi
-echo "LEAK_CHECK_COMPLETE ($LEAKS_FOUND leaks found)"
+echo "LEAK_CHECK_COMPLETE (0 leaks found)"

@@ -527,6 +527,13 @@ sysuaf-uic-radix-decimal"
 # absent), never an executive one -- it opens no /dev/vms and reaches no
 # vms_kif entry point.
 #
+# test_kmod_vmsfs_readdir (rd vms-93a) joins them for the same reason: it
+# mounts a BACKING-DIRECTORY (overlay) vmsfs volume and, from a separate
+# process, iterates the directory and opens a child by name. Its own
+# red/green control is a vmsfs.ko mutation (vmsfs_iterate_shared honouring
+# ctx->pos vs. re-scanning the backing dir from 0 every getdents()), never an
+# executive one -- it opens no /dev/vms and reaches no vms_kif entry point.
+#
 # SCOPE_OUT_UNIT_DIRS   directories under src/ whose .c files are NOT executive
 #                       translation units. Files there must NOT be named by any
 #                       defect (a control there would mean the scope statement
@@ -534,7 +541,7 @@ sysuaf-uic-radix-decimal"
 # SCOPE_OUT_SUITES      derived tests/qemu suites with no facility control.
 # ---------------------------------------------------------------------------
 SCOPE_OUT_UNIT_DIRS="kernel/vmsfs"
-SCOPE_OUT_SUITES="test_kmod_vmsfs test_kmod_vmsfs_blkdev test_kmod_vmsfs_exepath test_kmod_vmsfs_rename"
+SCOPE_OUT_SUITES="test_kmod_vmsfs test_kmod_vmsfs_blkdev test_kmod_vmsfs_exepath test_kmod_vmsfs_rename test_kmod_vmsfs_readdir"
 
 scope_out_why() {
     cat <<'EOF'

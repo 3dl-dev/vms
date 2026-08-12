@@ -3,20 +3,27 @@
 # Produces a Docker image that boots OVMX in QEMU. All dependencies
 # (compiler, QEMU, kernel, initramfs) are contained — no host tools needed.
 #
-# TWO initramfs images are produced:
+# ONE initramfs image is produced (vms-1ab, docs/design-vms-faithful-install.md
+# §3.1 "Fat initramfs" KILL row): the initramfs is VMB/SYSBOOT — it loads the
+# executive and mounts the (already-installed) system disk. It is never
+# installation media; PID 1 no longer has any install path to smuggle onto it
+# (vms-2f0, docs/design-init-scope.md §6).
 #
-#   initramfs-ovmx.cpio.gz       — FAT initramfs (all binaries)
-#                                   Use for: first boot / install / recovery
-#                                   Contains all OVMX binaries; STARTUP.EXE
-#                                   detects a blank system disk and installs.
+#   initramfs-ovmx.cpio.gz — bootstrap only. Contains: STARTUP.EXE (/init),
+#                            kernel modules (vms.ko, vmsfs.ko), minimal config
+#                            (SYSUAF, SYS$MANAGER files). NOT INITIALIZE.EXE
+#                            (mkfs belongs to the installed system + the
+#                            distribution disk, not the bootstrap) and none of
+#                            DCL.EXE/LOGINOUT.EXE/IMGACT.EXE/the SYSLIB
+#                            shareables — those come off the system disk
+#                            (/vms), which arrives pre-installed
+#                            (/boot/ovmx-distrib.img, vms-8ab).
 #
-#   initramfs-ovmx-slim.cpio.gz  — SLIM initramfs (bootstrap only)
-#                                   Use for: subsequent boots after install
-#                                   Contains only: STARTUP.EXE (/init),
-#                                   INITIALIZE.EXE, kernel modules, config,
-#                                   and SYS$MANAGER files. All other binaries
-#                                   (DCL, LOGIN, HELP) must be on the
-#                                   system disk (/vms).
+# Also shipped under the alias initramfs-ovmx-slim.cpio.gz — byte-identical
+# content, kept only so other build/test consumers that still name the "slim"
+# initramfs (tests/qemu/test_distrib_boot.sh and friends, out of this item's
+# scope) keep working unmodified. There is exactly one initramfs; "slim" is a
+# filename alias, not a second build.
 #
 # STARTUP.EXE (ovmx_init) is /init — no busybox, no shell scripts.
 # It handles all boot setup: filesystem mounts, kernel modules, VMS
@@ -24,8 +31,7 @@
 #
 # Usage:
 #   docker build -f distro/Dockerfile.bootable -t ovmx-boot .
-#   docker run --rm -it ovmx-boot                           # fat initramfs
-#   docker run --rm -it -e INITRD=slim ovmx-boot            # slim initramfs
+#   docker run --rm -it ovmx-boot
 
 # -- link-native stage -----------------------------------------------------
 # Builds the VMS-native LINK.EXE shareable-image graph (DECC$SHR.EXE,
@@ -169,11 +175,14 @@ RUN cmake -B build-static \
     -DBUILD_TOOLS=ON \
     && cmake --build build-static --parallel $(nproc) 2>&1
 
-# -- FAT initramfs -------------------------------------------------------------
-# All OVMX binaries included. This tree is the source the mastering step below
-# bakes into the pre-installed ovmx-distrib.img; PID 1 no longer installs onto a
-# blank disk (vms-2f0, docs/design-init-scope.md §6 — it mounts an installed
-# disk or halts). The fat initramfs itself is retained for build/test use.
+# -- System tree staging (OS kit + distribution image source) -----------------
+# All OVMX binaries assembled into a /vms tree. This is BUILD staging only --
+# it is never packed into an initramfs (vms-1ab: the fat initramfs that used
+# to ship this tree as installation media is DELETED, docs/
+# design-vms-faithful-install.md §3.1). It is the source the OS-kit stage and
+# the mastering step below bake into ovmx-os.kit and the pre-installed
+# ovmx-distrib.img; PID 1 no longer installs onto a blank disk (vms-2f0,
+# docs/design-init-scope.md §6 — it mounts an installed disk or halts).
 #
 # ODS-2 directory layout:
 #   /vms/SYS0/SYSCOMMON/SYSEXE/  — executables
@@ -194,19 +203,19 @@ RUN cmake -B build-static \
 # VMSFS_PROT_DEFAULT (tools/vmsfs_master.c: MASTER_UIC_*, write_header) -- the
 # exact ownership + protection provision_writable_dir() set, so SYSTEM (the
 # OWNER category) can sys$create scratch/user files in them.
-RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
-             /initramfs-fat/tmp /initramfs-fat/var /initramfs-fat/mnt \
-             /initramfs-fat/sbin \
-             /initramfs-fat/etc \
-             /initramfs-fat/lib/modules \
-             /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE \
-             /initramfs-fat/vms/SYS0/SYSCOMMON/SYSLIB \
-             /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR \
-             /initramfs-fat/vms/SYS0/SYSCOMMON/SYSHLP \
-             /initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD \
-             "/initramfs-fat/vms/SYS0/SYSCOMMON/SYS\$STARTUP" \
-             /initramfs-fat/vms/USERS \
-             /initramfs-fat/vms/SYSTMP && \
+RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
+             /system-stage/tmp /system-stage/var /system-stage/mnt \
+             /system-stage/sbin \
+             /system-stage/etc \
+             /system-stage/lib/modules \
+             /system-stage/vms/SYS0/SYSCOMMON/SYSEXE \
+             /system-stage/vms/SYS0/SYSCOMMON/SYSLIB \
+             /system-stage/vms/SYS0/SYSCOMMON/SYSMGR \
+             /system-stage/vms/SYS0/SYSCOMMON/SYSHLP \
+             /system-stage/vms/SYS0/SYSCOMMON/SYSUPD \
+             "/system-stage/vms/SYS0/SYSCOMMON/SYS\$STARTUP" \
+             /system-stage/vms/USERS \
+             /system-stage/vms/SYSTMP && \
     # OVMX binaries → SYSEXE (STARTUP.EXE is also /init).
     # DCL.EXE + LOGINOUT.EXE + the 7 shareables are the VMS-native LINK.EXE
     # graph (link-native stage above, beads vms-b6a/vms-6da/vms-d0f5e) — ET_DYN
@@ -217,17 +226,17 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     # AUTHORIZE, MAIL, MONITOR, INITIALIZE) have no mk_*.sh VMS-native recipe
     # yet, so they ship static for 0.1 (scope decision, vms-d0f5e) — mixed
     # static+dynamic initramfs, DCL as the flagship dynamic proof.
-    cp build-static/bin/STARTUP.EXE    /initramfs-fat/init && \
-    cp /link-native/IMGACT.EXE         /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-    cp "/link-native/SYSEXE/DCL.EXE"      /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-    cp "/link-native/SYSEXE/LOGINOUT.EXE" /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-    cp /link-native/SYSLIB/*.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSLIB/ && \
+    cp build-static/bin/STARTUP.EXE    /system-stage/init && \
+    cp /link-native/IMGACT.EXE         /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp "/link-native/SYSEXE/DCL.EXE"      /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp "/link-native/SYSEXE/LOGINOUT.EXE" /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp /link-native/SYSLIB/*.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSLIB/ && \
     # PROVISION.EXE -- the startup process (vms-9b7). PID 1 execs THIS, not
     # DCL.EXE: it establishes the SYSTEM identity from SYSUAF through the
     # executive and then execs DCL.EXE on STARTUP.COM in the same process. A
     # boot without it halts (src/ovmx_init/ovmx_init.c run_startup), so this
     # copy is NOT best-effort -- no "2>/dev/null ;" here.
-    cp build-static/bin/PROVISION.EXE  /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp build-static/bin/PROVISION.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     # JOB_CONTROL.EXE (vms-8d2) -- the console-session process. It is
     # created DETACHED by SYS$STARTUP:JOB_CONTROL_STARTUP.COM (invoked
     # from SYSTARTUP_VMS.COM during STARTUP.COM), and PID 1's own login
@@ -235,47 +244,47 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     # STARTUP.COM but never a login prompt (%DCL-E-IVIMAGE, not a halt --
     # this copy is NOT best-effort, no "2>/dev/null ;" here, matching
     # PROVISION.EXE's treatment above).
-    cp build-static/bin/JOB_CONTROL.EXE /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-    cp build-static/bin/HELP.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-    cp build-static/bin/AUTHORIZE.EXE  /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
-    cp build-static/bin/MAIL.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
-    cp build-static/bin/MONITOR.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
-    cp build-static/bin/INITIALIZE.EXE /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
-    cp build-static/bin/INSTALL.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/JOB_CONTROL.EXE /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp build-static/bin/HELP.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp build-static/bin/AUTHORIZE.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/MAIL.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/MONITOR.EXE    /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/INITIALIZE.EXE /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/INSTALL.EXE    /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # SYSGEN.EXE (vms-d34): `$ SYSGEN` (src/vmsdcl/dcl_cmd_misc.c cmd_sysgen)
     # dcl_exec_utility()'s for it at SYS$SYSTEM: -- without this copy the
     # command fails %SYSGEN-F-NOIMG and SYS$SYSTEM:OVMXVMSSYS.PAR can never
     # be read or written on the real runtime.
-    cp build-static/bin/SYSGEN.EXE     /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/SYSGEN.EXE     /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # PRODUCT.EXE (vms-df9): `$ PRODUCT INSTALL`/`SHOW PRODUCT`
     # dcl_exec_utility()'s for it at SYS$SYSTEM: -- without this copy every
     # PRODUCT operation fails %PCSI-F-NOIMG on the real runtime.
-    cp build-static/bin/PRODUCT.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/PRODUCT.EXE    /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # The setuid-root mount(2)/umount(2) helper (vms-651, tools/
     # vms_mount_helper.c) -- NOT a VMS image, lives outside SYS$SYSTEM: at a
     # fixed Linux path (ovmx_layout.h VMS_MOUNT_HELPER_PATH). Owned by root
     # with the setuid bit set HERE, at build time, so no boot-time step ever
     # has to (a de-privileged session couldn't set it on itself anyway).
-    cp build-static/bin/vms_mount_helper /initramfs-fat/sbin/vms_mount_helper && \
-    chown root:root /initramfs-fat/sbin/vms_mount_helper && \
-    chmod 4755 /initramfs-fat/sbin/vms_mount_helper && \
+    cp build-static/bin/vms_mount_helper /system-stage/sbin/vms_mount_helper && \
+    chown root:root /system-stage/sbin/vms_mount_helper && \
+    chmod 4755 /system-stage/sbin/vms_mount_helper && \
     # Kernel modules
-    cp src/kernel/vms.ko /initramfs-fat/lib/modules/ && \
-    cp src/kernel/vmsfs/vmsfs.ko /initramfs-fat/lib/modules/ && \
+    cp src/kernel/vms.ko /system-stage/lib/modules/ && \
+    cp src/kernel/vmsfs/vmsfs.ko /system-stage/lib/modules/ && \
     # SYSKRNL distro metadata (rd vms-700/vms-296/vms-3de, GNU/Linux-style
     # dual identity) -- standard /etc/os-release naming the "OVMX/Linux"
     # SYSKRNL layer, distinct from the "OpenVMX" VMS-facing product identity
     # (ovmx_identity.h). See distro/rootfs/etc/os-release's own header.
-    cp distro/rootfs/etc/os-release /initramfs-fat/etc/os-release && \
+    cp distro/rootfs/etc/os-release /system-stage/etc/os-release && \
     # System disk config files → VMS-standard locations
-    cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR/ && \
+    cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/ && \
     # SYS$STARTUP: (vms-21a) -- STDRV's phase/component data files
     # (VMS$PHASES.DAT, VMS$VMS.DAT). STARTUP.COM's phase driver opens these
     # by filespec at boot; without this copy every OPEN fails %RMS-E-FNF and
     # every phase (and every site file the driver invokes) silently never runs.
-    cp -r "distro/rootfs/vms/SYS0/SYSCOMMON/SYS\$STARTUP/"* "/initramfs-fat/vms/SYS0/SYSCOMMON/SYS\$STARTUP/" && \
-    cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-    cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp -r "distro/rootfs/vms/SYS0/SYSCOMMON/SYS\$STARTUP/"* "/system-stage/vms/SYS0/SYSCOMMON/SYS\$STARTUP/" && \
+    cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # OVMXVMSSYS.PAR (vms-d34): the initial SYSGEN parameter file, seeded
     # with factory defaults (SCSNODE=OVMX). Staged UNVERSIONED, same
     # convention as SYSUAF.DAT/RIGHTSLIST.DAT above -- vmsfs_master (below)
@@ -285,7 +294,7 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     # result is the real, already-versioned OVMXVMSSYS.PAR;1 and WRITE
     # CURRENT's very first run on a fresh install lands on ;2 -- exactly
     # like the oracle's ALPHAVMSSYS.PAR (docs/design-boot-faithful.md sec 3.4).
-    cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/OVMXVMSSYS.PAR /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/OVMXVMSSYS.PAR /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # SYS$UPDATE: -- the standard VMS home for pre-PCSI layered-product
     # install kits (vms-cde, parent vms-2579, docs/release-plan-0.2-to-0.5.md
     # §4). SYS$UPDATE itself is DEFINEd in SYS$MANAGER:STARTUP.COM (copied
@@ -297,8 +306,8 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     # describes ("the PARTS kit ... is staged in SYS$UPDATE:"). PARTS creates
     # its own indexed data file at runtime (src/apps/parts/parts.c generates
     # records programmatically) -- no seed data file is needed or shipped.
-    cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSUPD/* /initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD/ && \
-    cp /link-native/PARTS.EXE /initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD/ && \
+    cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSUPD/* /system-stage/vms/SYS0/SYSCOMMON/SYSUPD/ && \
+    cp /link-native/PARTS.EXE /system-stage/vms/SYS0/SYSCOMMON/SYSUPD/ && \
     # Ground-source gate: the SHIPPED DCL.EXE AND LOGINOUT.EXE (the files
     # that actually go into the initramfs STARTUP execs at boot, not a copy
     # elsewhere) must both be the VMS-native ET_DYN LINK.EXE output — no
@@ -314,7 +323,7 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     # a gate that only proves properties of a source file two directories
     # away from the one that boots is not proof of what boots.
     for name in "DCL.EXE" "LOGINOUT.EXE"; do \
-        IMG="/initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/$name" && \
+        IMG="/system-stage/vms/SYS0/SYSCOMMON/SYSEXE/$name" && \
         readelf -h "$IMG" | grep -q "Machine:.*X86-64" || { echo "FAIL: shipped $name not EM_X86_64"; exit 1; } && \
         N=$(readelf -d "$IMG" 2>/dev/null | grep -c NEEDED || true) && \
         [ "$N" -eq 0 ] || { echo "FAIL: shipped $name has $N DT_NEEDED entries"; exit 1; } && \
@@ -325,31 +334,21 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     # Same shipped-bytes re-check for PARTS.EXE (vms-cde) -- the SYSUPD copy
     # is what a booted system actually gets, not the /link-native/ build
     # copy the link-native stage already checked.
-    PIMG="/initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD/PARTS.EXE" && \
+    PIMG="/system-stage/vms/SYS0/SYSCOMMON/SYSUPD/PARTS.EXE" && \
     readelf -h "$PIMG" | grep -q "Machine:.*X86-64" || { echo "FAIL: shipped PARTS.EXE not EM_X86_64"; exit 1; } && \
     PN=$(readelf -d "$PIMG" 2>/dev/null | grep -c NEEDED || true) && \
     [ "$PN" -eq 0 ] || { echo "FAIL: shipped PARTS.EXE has $PN DT_NEEDED entries"; exit 1; } && \
     PH=$(readelf -d "$PIMG" 2>/dev/null | grep -c HASH || true) && \
     [ "$PH" -eq 0 ] || { echo "FAIL: shipped PARTS.EXE has $PH DT_HASH entries"; exit 1; } && \
     echo "OK: shipped PARTS.EXE is VMS-native (EM_X86_64, zero DT_NEEDED/DT_HASH)" && \
-    [ -f "/initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD/PARTS_SETUP.COM" ] || { echo "FAIL: PARTS_SETUP.COM missing from SYS\$UPDATE: (SYSUPD)"; exit 1; } && \
-    echo "OK: PARTS_SETUP.COM present under SYS\$UPDATE: (SYSUPD)" && \
-    # Pack the fat initramfs. Reproducibility (vms-d73): normalize every file's
-    # mtime to SOURCE_DATE_EPOCH (cp resets mtime to build wall-clock, which
-    # the cpio "newc" format embeds per entry); sort the cpio member order --
-    # find(1)'s raw readdir order is not a byte-reproducibility guarantee even
-    # when the create sequence is identical; drop gzip's embedded mtime (-n);
-    # and --reproducible (measured necessary, not theoretical -- vms-d73 CI
-    # caught a real diff without it), which is GNU cpio's own name for
-    # --ignore-devno --ignore-dirnlink --renumber-inodes. Without it, cpio's
-    # "newc" format embeds the REAL filesystem inode number of every entry
-    # (verified directly: two byte-identical directory trees, created
-    # independently with identical mtimes, still produced different cpio
-    # archives purely from inode allocation differing across builds) -- file
-    # CONTENT and mtimes being reproducible is not sufficient on its own.
-    find /initramfs-fat -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
-    cd /initramfs-fat && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx.cpio.gz && \
-    echo "FAT initramfs: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"
+    [ -f "/system-stage/vms/SYS0/SYSCOMMON/SYSUPD/PARTS_SETUP.COM" ] || { echo "FAIL: PARTS_SETUP.COM missing from SYS\$UPDATE: (SYSUPD)"; exit 1; } && \
+    echo "OK: PARTS_SETUP.COM present under SYS\$UPDATE: (SYSUPD)"
+# This tree is NOT packed into an initramfs (vms-1ab) -- it flows only into
+# the OS-kit stage and the distribution-image mastering step below, both of
+# which stamp their own SOURCE_DATE_EPOCH-derived timestamps into their
+# output (ovmx_kit_pack.c kh_build_time, vmsfs_master.c fh_created/
+# fh_modified/fh_accessed), so no cpio-specific mtime normalization is
+# needed here.
 
 # -- OVMX OS kit (vms-0b6) ------------------------------------------------------
 # Package the just-staged SYSEXE/SYSLIB/SYSMGR/SYSHLP payload into an OVMX
@@ -369,11 +368,11 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
 # upgrade carries STDRV's phase/component data files, same as any other
 # system directory.
 RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SYSHLP "/kit-stage/SYS\$STARTUP" && \
-    cp -r /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/. /kit-stage/SYSEXE/ && \
-    cp -r /initramfs-fat/vms/SYS0/SYSCOMMON/SYSLIB/. /kit-stage/SYSLIB/ && \
-    cp -r /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR/. /kit-stage/SYSMGR/ && \
-    cp -r /initramfs-fat/vms/SYS0/SYSCOMMON/SYSHLP/. /kit-stage/SYSHLP/ 2>/dev/null ; \
-    cp -r "/initramfs-fat/vms/SYS0/SYSCOMMON/SYS\$STARTUP/." "/kit-stage/SYS\$STARTUP/" && \
+    cp -r /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/. /kit-stage/SYSEXE/ && \
+    cp -r /system-stage/vms/SYS0/SYSCOMMON/SYSLIB/. /kit-stage/SYSLIB/ && \
+    cp -r /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/. /kit-stage/SYSMGR/ && \
+    cp -r /system-stage/vms/SYS0/SYSCOMMON/SYSHLP/. /kit-stage/SYSHLP/ 2>/dev/null ; \
+    cp -r "/system-stage/vms/SYS0/SYSCOMMON/SYS\$STARTUP/." "/kit-stage/SYS\$STARTUP/" && \
     /src/build-static/bin/ovmx_kit_pack pack /boot/ovmx-os.kit /kit-stage "X86VMS VMS" && \
     /src/build-static/bin/ovmx_kit_pack list /boot/ovmx-os.kit && \
     # Ground-source gate: the kit manifest must actually name the images the
@@ -419,21 +418,22 @@ RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SY
     # the ALREADY-MOUNTED system disk (the same path SYSEXE/SYSLIB/SYSUPD
     # content already reaches SYSTEM through) sidesteps the whole problem
     # instead of working around it.
-    cp /boot/ovmx-os.kit /initramfs-fat/vms/SYS0/SYSCOMMON/SYSUPD/OVMX-OS.KIT && \
+    cp /boot/ovmx-os.kit /system-stage/vms/SYS0/SYSCOMMON/SYSUPD/OVMX-OS.KIT && \
     echo "OK: ovmx-os.kit staged at SYS\$UPDATE:OVMX-OS.KIT for the distrib image"
 
 # -- Distribution system-disk image (vms-8ab) ----------------------------------
 # Master a PRE-INSTALLED, bootable VMSFS system disk from the SAME populated
-# /vms system tree the fat initramfs just assembled above (/initramfs-fat/vms:
+# /vms system tree the system-tree staging stage just assembled above (/system-stage/vms:
 # the [SYS0][SYSCOMMON][SYSEXE][SYSLIB][SYSMGR][SYSHLP][SYSUPD][USERS] tree with
 # DCL.EXE/LOGINOUT.EXE/IMGACT.EXE/PROVISION.EXE, the SYSLIB shareables, SYSUAF,
 # STARTUP.COM, PARTS). Kernel modules are deliberately NOT on the disk — they are
-# initramfs cargo (/initramfs-fat/lib/modules), loaded before any disk exists.
+# initramfs cargo (/system-stage/lib/modules), loaded before any disk exists.
 #
 # This is the artifact a §6-stripped PID 1 boots (mount-or-halt,
 # docs/design-init-scope.md §6): the disk arrives ALREADY installed, so no
-# self-install runs. The SLIM initramfs below (STARTUP.EXE + vms.ko + vmsfs.ko +
-# minimal config) mounts this image at /vms and finds the full system on it.
+# self-install runs. The boot initramfs below (STARTUP.EXE + vms.ko + vmsfs.ko +
+# minimal config -- the ONLY initramfs, vms-1ab) mounts this image at /vms and
+# finds the full system on it.
 #
 # Clean-room Rule 8: vmsfs_master (tools/vmsfs_master.c) is factory BUILD
 # tooling — it is never shipped on the media, never given a VMS name, never run
@@ -449,18 +449,19 @@ RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SY
 # leaves free space for runtime writes (e.g. PARTS creating its indexed data
 # file), while staying well above the tree's own footprint.
 RUN /src/build-static/bin/vmsfs_master master \
-        /boot/ovmx-distrib.img OVMXSYS /initramfs-fat/vms 64 && \
+        /boot/ovmx-distrib.img OVMXSYS /system-stage/vms 64 && \
     /src/build-static/bin/vmsfs_master list /boot/ovmx-distrib.img && \
     # Ground-source gate, baked into the build: extract the mastered image back
-    # out with the tool's round-trip reader and prove the login chain the SLIM
-    # boot depends on (LOGINOUT -> DCL, via IMGACT, established by PROVISION) is
-    # actually PRESENT on the disk and byte-identical to what the fat initramfs
-    # staged. A mastered image that does not carry these cannot reach a login
-    # prompt, so this is checked here, not merely asserted downstream.
+    # out with the tool's round-trip reader and prove the login chain the boot
+    # depends on (LOGINOUT -> DCL, via IMGACT, established by PROVISION) is
+    # actually PRESENT on the disk and byte-identical to what the system-tree
+    # staging stage staged. A mastered image that does not carry these cannot
+    # reach a login prompt, so this is checked here, not merely asserted
+    # downstream.
     rm -rf /tmp/distrib-verify && \
     /src/build-static/bin/vmsfs_master extract /boot/ovmx-distrib.img /tmp/distrib-verify && \
     for name in DCL.EXE LOGINOUT.EXE IMGACT.EXE PROVISION.EXE SYSUAF.DAT; do \
-        SRC="/initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/$name" && \
+        SRC="/system-stage/vms/SYS0/SYSCOMMON/SYSEXE/$name" && \
         OUT="/tmp/distrib-verify/SYS0/SYSCOMMON/SYSEXE/$name" && \
         [ -f "$OUT" ] || { echo "FAIL: mastered ovmx-distrib.img missing SYS\$SYSTEM:$name"; exit 1; } && \
         cmp -s "$SRC" "$OUT" || { echo "FAIL: mastered SYS\$SYSTEM:$name differs from staged bytes"; exit 1; } && \
@@ -493,10 +494,13 @@ RUN /src/build-static/bin/vmsfs_master master \
     rm -rf /tmp/distrib-verify && \
     echo "DISTRIB image: $(ls -lh /boot/ovmx-distrib.img | awk '{print $5}')"
 
-# -- SLIM initramfs ------------------------------------------------------------
-# Bootstrap-only: STARTUP.EXE + INITIALIZE.EXE + kernel modules + config.
-# All other binaries (DCL, LOGIN, HELP) must be on the system disk.
-# Use this after the system disk has been installed via the fat initramfs.
+# -- Boot initramfs (vms-1ab: THE initramfs — no fat variant exists anymore) ---
+# Bootstrap-only: STARTUP.EXE + kernel modules + config. NOT INITIALIZE.EXE
+# (mkfs belongs to the installed system + the distribution disk, not the
+# bootstrap — it ships instead in the system-tree staging above, so it lands
+# on ovmx-os.kit and ovmx-distrib.img). All other binaries (DCL, LOGIN, HELP,
+# IMGACT, the SYSLIB shareables) must be on the system disk, which arrives
+# pre-installed (docs/design-vms-faithful-install.md §3.1).
 RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
              /initramfs-slim/tmp /initramfs-slim/var /initramfs-slim/mnt \
              /initramfs-slim/sbin \
@@ -504,12 +508,13 @@ RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
              /initramfs-slim/lib/modules \
              /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE \
              /initramfs-slim/vms/SYS0/SYSCOMMON/SYSMGR && \
-    # Bootstrap binaries only
+    # Bootstrap binary only -- STARTUP.EXE (/init). INITIALIZE.EXE stays off
+    # the bootstrap (see header above); it is already staged onto the
+    # distribution disk by the system-tree stage.
     cp build-static/bin/STARTUP.EXE    /initramfs-slim/init && \
-    cp build-static/bin/INITIALIZE.EXE /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
-    # MOUNT/DISMOUNT (vms-651) need this on a slim boot too -- DCL comes off
-    # the system disk there, but the helper still lives at the same fixed
-    # Linux path outside the VMS tree.
+    # MOUNT/DISMOUNT (vms-651) need this on every boot -- DCL comes off the
+    # system disk, but the helper still lives at the same fixed Linux path
+    # outside the VMS tree.
     cp build-static/bin/vms_mount_helper /initramfs-slim/sbin/vms_mount_helper && \
     chown root:root /initramfs-slim/sbin/vms_mount_helper && \
     chmod 4755 /initramfs-slim/sbin/vms_mount_helper && \
@@ -517,44 +522,66 @@ RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
     cp src/kernel/vms.ko /initramfs-slim/lib/modules/ && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-slim/lib/modules/ && \
     # SYSKRNL distro metadata (rd vms-700/vms-296/vms-3de) -- same
-    # os-release as the fat initramfs, see its comment there.
+    # os-release as the system-tree stage, see its comment there.
     cp distro/rootfs/etc/os-release /initramfs-slim/etc/os-release && \
     # Minimal config — SYSUAF + manager files (STARTUP.EXE reads these at boot)
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-slim/vms/SYS0/SYSCOMMON/SYSMGR/ && \
-    # Pack the slim initramfs (reproducibility normalization, see FAT step above)
+    # Pack the (only) boot initramfs. Reproducibility (vms-d73): normalize
+    # every file's mtime to SOURCE_DATE_EPOCH (cp resets mtime to build
+    # wall-clock, which the cpio "newc" format embeds per entry); sort the
+    # cpio member order -- find(1)'s raw readdir order is not a
+    # byte-reproducibility guarantee even when the create sequence is
+    # identical; drop gzip's embedded mtime (-n); and --reproducible
+    # (measured necessary, not theoretical -- vms-d73 CI caught a real diff
+    # without it), GNU cpio's own name for --ignore-devno --ignore-dirnlink
+    # --renumber-inodes -- without it, cpio's "newc" format embeds the REAL
+    # filesystem inode number of every entry, which differs across builds
+    # even for byte-identical, identically-timestamped trees.
+    #
+    # Written to the plain initramfs-ovmx.cpio.gz name (the fat pack used to
+    # own this name; now the single initramfs takes it over) plus the
+    # initramfs-ovmx-slim.cpio.gz alias, so out-of-scope consumers that still
+    # name "slim" explicitly (tests/qemu/test_distrib_boot.sh and friends)
+    # keep working -- both names carry byte-identical content, produced by
+    # this one pack step, not a second build.
     find /initramfs-slim -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
-    cd /initramfs-slim && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx-slim.cpio.gz && \
-    echo "SLIM initramfs: $(ls -lh /boot/initramfs-ovmx-slim.cpio.gz | awk '{print $5}')"
+    cd /initramfs-slim && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx.cpio.gz && \
+    cp /boot/initramfs-ovmx.cpio.gz /boot/initramfs-ovmx-slim.cpio.gz && \
+    echo "Boot initramfs: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"
 
 # -- NOEXEC initramfs (negative control) ---------------------------------------
-# The FAT initramfs with vms.ko REMOVED -- i.e. a system whose executive cannot
-# be loaded. It exists so tests/qemu/test_executive_integral.sh can prove that
-# OVMX REFUSES TO BOOT without an executive, rather than coming up degraded.
+# The (only) boot initramfs with vms.ko REMOVED -- i.e. a system whose
+# executive cannot be loaded. It exists so
+# tests/qemu/test_executive_integral.sh can prove that OVMX REFUSES TO BOOT
+# without an executive, rather than coming up degraded. Rebuilt from the same
+# bootstrap baseline (/initramfs-slim) the real boot initramfs ships (vms-1ab
+# -- there is no longer a separate fat baseline to fork from).
 #
 # This is a test artifact, not a runtime: it is the only way to exercise the
 # fatal path, and building it here (where cpio lives) keeps the runner stage
 # minimal. Nothing boots it except that test. If you are tempted to ship it or
 # to "fix" a boot failure by using it -- don't; a system with no executive is
 # precisely the state OVMX exists to make unreachable (CLAUDE.md Rule 9).
-RUN cp -a /initramfs-fat /initramfs-noexec && \
+RUN cp -a /initramfs-slim /initramfs-noexec && \
     rm -f /initramfs-noexec/lib/modules/vms.ko && \
     find /initramfs-noexec -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
     cd /initramfs-noexec && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx-noexec.cpio.gz && \
     echo "NOEXEC initramfs: $(ls -lh /boot/initramfs-ovmx-noexec.cpio.gz | awk '{print $5}')"
 
 # -- NODEV initramfs (negative control) -----------------------------------------
-# The FAT initramfs with /lib/modules/vms.ko REPLACED by a different, real,
-# loadable kernel module (vmsfs.ko's own binary) that registers no misc
+# The (only) boot initramfs with /lib/modules/vms.ko REPLACED by a different,
+# real, loadable kernel module (vmsfs.ko's own binary) that registers no misc
 # device. finit_module() on it succeeds, but /dev/vms never appears in
 # devtmpfs -- the second reachable half of executive_attach()'s fatal path
 # (vms.ko itself is untouched; NOEXEC above already covers "module missing"
 # entirely). Exists so tests/qemu/test_executive_integral.sh Boot C can prove
 # that path is fatal too, and diagnosed honestly, rather than merely asserted
-# (vms-a35 round 2 / Rule 10).
+# (vms-a35 round 2 / Rule 10). Rebuilt from the same bootstrap baseline as
+# NOEXEC above (vms-1ab).
 #
 # Test artifact, not a runtime -- same rule as NOEXEC above.
-RUN cp -a /initramfs-fat /initramfs-nodev && \
+RUN cp -a /initramfs-slim /initramfs-nodev && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-nodev/lib/modules/vms.ko && \
     find /initramfs-nodev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
     cd /initramfs-nodev && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx-nodev.cpio.gz && \
@@ -595,8 +622,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /boot/vmlinuz /boot/vmlinuz
 COPY --from=builder /boot/initramfs-ovmx.cpio.gz /boot/initramfs-ovmx.cpio.gz
+# Byte-identical alias (vms-1ab: the builder stage `cp`s the same pack output
+# under both names): out-of-scope consumers that still name the "slim"
+# initramfs explicitly (tests/qemu/test_distrib_boot.sh and friends) keep
+# working without a second build.
 COPY --from=builder /boot/initramfs-ovmx-slim.cpio.gz /boot/initramfs-ovmx-slim.cpio.gz
-# Pre-installed distribution system disk (vms-8ab). The SLIM initramfs boots
+# Pre-installed distribution system disk (vms-8ab). The boot initramfs boots
 # this; a §6-stripped PID 1 mounts it or halts (docs/design-init-scope.md §6).
 COPY --from=builder /boot/ovmx-distrib.img /boot/ovmx-distrib.img
 # OVMX OS kit (vms-0b6, docs/design-ovmx-kit-format.md). Not consumed by
@@ -616,13 +647,12 @@ COPY --from=builder /boot/initramfs-ovmx-nodev.cpio.gz /boot/initramfs-ovmx-node
 
 ENV MEMORY=512M
 
-# INITRD=fat (default) — use fat initramfs for first boot / install
-# INITRD=slim          — use slim initramfs for subsequent boots (system disk required)
 # DISTRIB=1             — boot the PRE-INSTALLED distribution disk (vms-8ab): seed
 #                         the disk from /boot/ovmx-distrib.img when it does not yet
-#                         exist (instead of a blank disk PID 1 would self-install),
-#                         and force the SLIM initramfs. This is the §6 mount-or-halt
-#                         shape: an already-installed disk, no self-install.
+#                         exist (instead of a blank disk PID 1 would self-install).
+#                         This is the §6 mount-or-halt shape: an already-installed
+#                         disk, no self-install. There is exactly ONE initramfs
+#                         (vms-1ab) -- no INITRD switch to select between variants.
 # BOOT_FLAGS            — Conversational boot (vms-b81): "R5,R6" appended to the
 #                         kernel cmdline as ovmx.flags=R5,R6. Bit 0 of R6 is the
 #                         conversational bit -- BOOT_FLAGS=0,1 halts STARTUP.EXE
@@ -644,12 +674,7 @@ CMD ARCH=$(uname -m) && \
         MACHINE=""; \
         CONSOLE="console=ttyS0"; \
     fi && \
-    if [ -n "${DISTRIB:-}" ]; then INITRD=slim; fi && \
-    if [ "${INITRD:-fat}" = "slim" ]; then \
-        INITRAMFS=/boot/initramfs-ovmx-slim.cpio.gz; \
-    else \
-        INITRAMFS=/boot/initramfs-ovmx.cpio.gz; \
-    fi && \
+    INITRAMFS=/boot/initramfs-ovmx.cpio.gz && \
     if [ -d /data ]; then \
         DISK="/data/${SYSDISK_NAME:-sysdisk.img}"; \
     else \

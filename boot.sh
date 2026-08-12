@@ -7,10 +7,9 @@
 #   ./boot.sh --clean                  # Force a fresh disk (delete and reinstall)
 #   ./boot.sh --disk path/to/disk.img  # Boot with specified disk image
 #   ./boot.sh --rebuild                # Force Docker image rebuild, then boot
-#   ./boot.sh --slim                   # Use slim initramfs (needs installed disk)
 #   ./boot.sh --distrib                # Boot the PRE-INSTALLED distribution disk
 #                                      #   (dist/ovmx-distrib.img, mastered at build;
-#                                      #    slim initramfs, no self-install — vms-8ab)
+#                                      #    no self-install — vms-8ab)
 #   ./boot.sh --flags R5,R6            # Conversational boot (vms-b81): halt at
 #                                      #   SYSBOOT> before the executive attaches.
 #                                      #   Bit 0 of R6 is the conversational bit --
@@ -49,7 +48,6 @@ MEMORY="${MEMORY:-512M}"
 
 FORCE_REBUILD=0
 FORCE_FRESH=0
-USE_SLIM=0
 USE_DISTRIB=0
 DISK_PATH=""
 BOOT_FLAGS=""
@@ -63,10 +61,6 @@ while [ $# -gt 0 ]; do
             ;;
         --clean|--fresh|-f)
             FORCE_FRESH=1
-            shift
-            ;;
-        --slim|-s)
-            USE_SLIM=1
             shift
             ;;
         --distrib)
@@ -103,7 +97,7 @@ while [ $# -gt 0 ]; do
             ;;
         *)
             echo "Unknown option: $1" >&2
-            echo "Usage: $0 [--clean] [--rebuild] [--slim] [--distrib] [--disk path] [--flags R5,R6]" >&2
+            echo "Usage: $0 [--clean] [--rebuild] [--distrib] [--disk path] [--flags R5,R6]" >&2
             exit 1
             ;;
     esac
@@ -182,22 +176,19 @@ elif [ ! -f "$DISK" ]; then
 fi
 
 # --- Step 3: Boot via Docker ---
-
-INITRD_ENV="fat"
-[ "$USE_SLIM" -eq 1 ] && INITRD_ENV="slim"
-# --distrib forces the slim initramfs and a pre-installed disk (see below).
-[ "$USE_DISTRIB" -eq 1 ] && INITRD_ENV="slim"
+#
+# There is exactly ONE initramfs (vms-1ab) -- no fat/slim variant to select.
 
 if [ "$USE_DISTRIB" -eq 1 ]; then
     if [ "$CLEAN_INSTALL" -eq 1 ]; then
-        echo "=== Booting — seeding disk from the PRE-INSTALLED distribution image (dist/ovmx-distrib.img), then logging in (${MEMORY} RAM, initrd: slim) ==="
+        echo "=== Booting — seeding disk from the PRE-INSTALLED distribution image (dist/ovmx-distrib.img), then logging in (${MEMORY} RAM) ==="
     else
-        echo "=== Booting — log in as SYSTEM (${MEMORY} RAM, disk: $DISK_NAME, initrd: slim, pre-installed distribution disk) ==="
+        echo "=== Booting — log in as SYSTEM (${MEMORY} RAM, disk: $DISK_NAME, pre-installed distribution disk) ==="
     fi
 elif [ "$CLEAN_INSTALL" -eq 1 ]; then
-    echo "=== Booting — first boot installs OVMX (INITIALIZE + system seed), then logs in (${MEMORY} RAM, initrd: $INITRD_ENV) ==="
+    echo "=== Booting — first boot installs OVMX (INITIALIZE + system seed), then logs in (${MEMORY} RAM) ==="
 else
-    echo "=== Booting — log in as SYSTEM (${MEMORY} RAM, disk: $DISK_NAME, initrd: $INITRD_ENV) ==="
+    echo "=== Booting — log in as SYSTEM (${MEMORY} RAM, disk: $DISK_NAME) ==="
 fi
 echo "=== Username: SYSTEM   Password: MANAGER   (or GUEST / GUEST for a restricted session) ==="
 echo "=== To exit QEMU: Ctrl-A then X ==="
@@ -205,7 +196,6 @@ echo ""
 
 exec docker run --rm -it \
     -e MEMORY="$MEMORY" \
-    -e INITRD="$INITRD_ENV" \
     -e DISTRIB="$([ "$USE_DISTRIB" -eq 1 ] && echo 1)" \
     -e BOOT_FLAGS="$BOOT_FLAGS" \
     -e SYSDISK_NAME="$DISK_NAME" \

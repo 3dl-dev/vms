@@ -565,6 +565,33 @@ int cmd_sysman(struct dcl_command *cmd)
     return dcl_exec_utility("SYSMAN.EXE", "SYSMAN", argv, 1);
 }
 
+/* INITIALIZE — format a volume with VMSFS */
+int cmd_initialize(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
+        dcl_error("INIT", 2, "NODEV", "missing device specification");
+        return SS$_BADPARAM;
+    }
+    if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
+        dcl_error("INIT", 2, "NOLABEL", "missing volume label");
+        return SS$_BADPARAM;
+    }
+
+    /* Build argv: [placeholder, device, label, size?]
+     * INITIALIZE.EXE expects: argv[1]=device, argv[2]=label, argv[3]=size-in-MB (optional)
+     */
+    char *argv[5] = {NULL};
+    int argc = 0;
+    argv[argc++] = NULL; /* placeholder for resolved binary path */
+    argv[argc++] = cmd->params[0];  /* device */
+    argv[argc++] = cmd->params[1];  /* label */
+    if (cmd->param_count >= 3 && cmd->params[2][0] != '\0')
+        argv[argc++] = cmd->params[2];  /* optional size in MB */
+    argv[argc] = NULL;
+
+    return dcl_exec_utility("INITIALIZE.EXE", "INIT", argv, argc);
+}
+
 /* ================================================================== */
 /*           OPCOM Commands: REPLY and REQUEST                         */
 /* ================================================================== */

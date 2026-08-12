@@ -98,6 +98,7 @@ int cmd_edit(struct dcl_command *cmd);
 int cmd_attach(struct dcl_command *cmd);
 int cmd_convert(struct dcl_command *cmd);
 int cmd_install(struct dcl_command *cmd);
+int cmd_initialize(struct dcl_command *cmd);
 int cmd_link(struct dcl_command *cmd);
 int cmd_phone(struct dcl_command *cmd);
 int cmd_product(struct dcl_command *cmd);

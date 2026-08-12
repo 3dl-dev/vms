@@ -415,6 +415,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Read input from SYS$INPUT and assign to a symbol", q_inquire },
     { "INSTALL",     cmd_install,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
       "Manage known images" },
+    { "INITIALIZE",  cmd_initialize,  CDU_F_ABBREV | CDU_F_PARAM, 4,
+      "Format a volume with VMSFS structure", q_none },
     { "LIBRARY",     cmd_library,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Manage text, help, and object libraries" },
     { "LINK",        cmd_link,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,

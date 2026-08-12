@@ -1199,7 +1199,7 @@ static int vmsfs_blkdev_getattr(struct mnt_idmap *idmap,
  * decisions are made using the VMS SOGW model rather than Unix rwx bits.
  *
  * Category assignment (in priority order):
- *   System: process is root (CAP_SYS_ADMIN) OR process UIC group == 0
+ *   System: process is root OR process UIC group <= MAXSYSGROUP (vms-581)
  *   Owner:  process euid matches inode uid AND egid matches inode gid
  *   Group:  process egid matches inode gid
  *   World:  all other processes
@@ -1268,12 +1268,21 @@ static int vmsfs_blkdev_permission(struct mnt_idmap *idmap,
     egid = current_egid();
 
     /*
-     * System category: root (uid 0) or UIC group 0.
-     * In our UIC mapping, inode->i_gid holds the UIC group.
-     * Process UIC group == 0 means the SYSTEM group.
-     * Root always gets System-category access regardless of UIC.
+     * System category: root (uid 0) or UIC group <= MAXSYSGROUP (vms-581).
+     * In our UIC mapping, egid holds the process UIC group. The documented
+     * VMS rule is a group COMPARISON, not equality with 0: every UIC whose
+     * group number is <= MAXSYSGROUP (default 8) is in the System category
+     * (OpenVMS Guide to System Security, "System" access category) — the same
+     * rule the userspace executive uses (uic_is_system(),
+     * src/libvms/syssvc/sys_security.c). A `group == 0` test denied the SYSTEM
+     * account (real UIC [1,4], Linux gid=1 after LOGINOUT's credential drop)
+     * the System category on every real vmsfs.ko mount, so it fell to the
+     * Group/World nibble and RMS CREATE failed %RMS-E-CRE/EACCES. Group 0 is
+     * not a valid VMS UIC group; root's [0,0] is covered incidentally by
+     * 0 <= MAXSYSGROUP as well as by the explicit root check below.
      */
-    if (uid_eq(euid, GLOBAL_ROOT_UID) || __kgid_val(egid) == 0) {
+    if (uid_eq(euid, GLOBAL_ROOT_UID) ||
+        __kgid_val(egid) <= VMSFS_MAXSYSGROUP) {
         /* System category — full access regardless of protection bits */
         deny = (prot >> VMSFS_PROT_SYS_SHIFT) & 0xF;
         /* System gets full access: even if someone set denial bits,

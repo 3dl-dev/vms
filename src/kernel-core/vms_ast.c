@@ -25,12 +25,31 @@
  *   signal (SIGRTMIN+mode) to wake the process if it's blocked.
  */
 
-#include <linux/kernel.h>
-#include <linux/uaccess.h>
-#include <linux/slab.h>
-#include <linux/sched/signal.h>
+/*
+ * AST delivery is promoted onto the kernel-backend shim (rd vms-5b2, Exec-core
+ * Phase D; epic vms-8e8; design docs/design-netbsd-executive-core.md) and, like
+ * event flags before it (vms_eflag.c, Phase B), now LIVES in src/kernel-core/.
+ * Every host primitive this file touches -- locking (proc->mode_lock,
+ * ast_state->lock), user<->kernel copy, and kernel alloc/free -- goes through
+ * exec_* (exec_kbackend.h), and every intrusive-list operation goes through
+ * exec_list_* (exec_list.h). On Linux each op expands to the EXACT primitive
+ * this file used before (spin_lock/spin_unlock, copy_*_user, kmalloc/kfree, the
+ * <linux/list.h> list_* macros), so the module is behaviour-identical -- proven
+ * byte-for-byte by the disassembly-identical vms_ast.o and by the unchanged
+ * Kernel Executive QEMU suite counts. The SAME source compiles against the
+ * NetBSD backend without a single `#if` in this file; no NetBSD backend for AST
+ * is added in this phase (Phase D is the Linux-side extraction only).
+ *
+ * AST is a "low-coupling" facility: it uses locking + intrusive lists + copy +
+ * alloc and NOTHING ELSE -- no wait/wake (so no cv contract to reason about,
+ * unlike event flags), no memory-mapping, no barriers. This file therefore
+ * includes ONLY the shim contracts and the shared OVMX structs (vms_internal.h)
+ * -- no `<linux/…>` header of its own.
+ */
 
 #include "vms_internal.h"
+#include "exec_kbackend.h"
+#include "exec_list.h"
 
 /* Privilege bits */
 /* Bits come from vms_ioctl.h's single oracle-pinned table (vms-2b8);
@@ -57,7 +76,7 @@ long vms_ioctl_dclast(struct vms_proc *proc, unsigned long arg)
     struct vms_ast_state *ast_state;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     if (args.acmode > PSL_C_USER) {
@@ -71,16 +90,16 @@ long vms_ioctl_dclast(struct vms_proc *proc, unsigned long arg)
     }
 
     /* Check access mode privilege */
-    spin_lock(&proc->mode_lock);
+    exec_lock(&proc->mode_lock);
     if (args.acmode < proc->current_mode) {
         /* Declaring at more privileged mode */
         if (args.acmode == PSL_C_KERNEL && !(proc->cur_privs & PRV_M_CMKRNL)) {
-            spin_unlock(&proc->mode_lock);
+            exec_unlock(&proc->mode_lock);
             args.status = SS__NOPRIV;
             goto out;
         }
         if (args.acmode == PSL_C_EXEC && !(proc->cur_privs & (PRV_M_CMEXEC | PRV_M_CMKRNL))) {
-            spin_unlock(&proc->mode_lock);
+            exec_unlock(&proc->mode_lock);
             args.status = SS__NOPRIV;
             goto out;
         }
@@ -97,27 +116,28 @@ long vms_ioctl_dclast(struct vms_proc *proc, unsigned long arg)
          */
         if (args.acmode == PSL_C_SUPER &&
             !(proc->cur_privs & (PRV_M_CMEXEC | PRV_M_CMKRNL))) {
-            spin_unlock(&proc->mode_lock);
+            exec_unlock(&proc->mode_lock);
             args.status = SS__NOPRIV;
             goto out;
         }
     }
-    spin_unlock(&proc->mode_lock);
+    exec_unlock(&proc->mode_lock);
 
     ast_state = &proc->ast[args.acmode];
 
-    /* Allocate before taking spinlock to avoid GFP_KERNEL in atomic context */
-    entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+    /* exec_alloc() may sleep (Linux GFP_KERNEL), so allocate BEFORE taking the
+     * lock -- never allocate in atomic context under a held exec_lock. */
+    entry = exec_alloc(sizeof(*entry));
     if (!entry) {
         args.status = SS__INSFMEM;
         goto out;
     }
 
     /* Check quota */
-    spin_lock(&ast_state->lock);
+    exec_lock(&ast_state->lock);
     if (ast_state->count >= VMS_AST_MAX_PER_MODE) {
-        spin_unlock(&ast_state->lock);
-        kfree(entry);
+        exec_unlock(&ast_state->lock);
+        exec_free(entry);
         args.status = SS__EXASTLM;
         goto out;
     }
@@ -125,14 +145,14 @@ long vms_ioctl_dclast(struct vms_proc *proc, unsigned long arg)
     entry->astadr = args.astadr;
     entry->astprm = args.astprm;
     entry->acmode = args.acmode;
-    list_add_tail(&entry->list, &ast_state->pending);
+    exec_list_add_tail(&entry->list, &ast_state->pending);
     ast_state->count++;
-    spin_unlock(&ast_state->lock);
+    exec_unlock(&ast_state->lock);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -151,23 +171,23 @@ long vms_ioctl_setast(struct vms_proc *proc, unsigned long arg)
     uint8_t mode;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&proc->mode_lock);
+    exec_lock(&proc->mode_lock);
     mode = proc->current_mode;
-    spin_unlock(&proc->mode_lock);
+    exec_unlock(&proc->mode_lock);
 
     ast_state = &proc->ast[mode];
 
-    spin_lock(&ast_state->lock);
+    exec_lock(&ast_state->lock);
     args.prev_state = ast_state->enabled;
     ast_state->enabled = args.enable ? 1 : 0;
-    spin_unlock(&ast_state->lock);
+    exec_unlock(&ast_state->lock);
 
     args.status = args.prev_state ? SS__WASSET : SS__WASCLR;
 
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -221,9 +241,9 @@ long vms_ioctl_deliverast(struct vms_proc *proc, unsigned long arg)
 
     memset(&args, 0, sizeof(args));
 
-    spin_lock(&proc->mode_lock);
+    exec_lock(&proc->mode_lock);
     cur_mode = proc->current_mode;
-    spin_unlock(&proc->mode_lock);
+    exec_unlock(&proc->mode_lock);
 
     /* Scan from the caller's current mode toward least privileged. Never
      * below cur_mode: an inner (more privileged) AST is not the caller's to
@@ -231,31 +251,31 @@ long vms_ioctl_deliverast(struct vms_proc *proc, unsigned long arg)
     for (mode = cur_mode; mode <= PSL_C_USER; mode++) {
         struct vms_ast_state *ast_state = &proc->ast[mode];
 
-        spin_lock(&ast_state->lock);
-        if (!ast_state->enabled || list_empty(&ast_state->pending)) {
-            spin_unlock(&ast_state->lock);
+        exec_lock(&ast_state->lock);
+        if (!ast_state->enabled || exec_list_empty(&ast_state->pending)) {
+            exec_unlock(&ast_state->lock);
             continue;
         }
 
         /* Dequeue first entry */
-        entry = list_first_entry(&ast_state->pending,
+        entry = exec_list_first_entry(&ast_state->pending,
                                  struct vms_ast_entry, list);
-        list_del(&entry->list);
+        exec_list_del(&entry->list);
         ast_state->count--;
-        spin_unlock(&ast_state->lock);
+        exec_unlock(&ast_state->lock);
 
         /* Return to userspace */
         args.astadr = entry->astadr;
         args.astprm = entry->astprm;
         args.acmode = entry->acmode;
         args.status = SS__NORMAL;
-        kfree(entry);
+        exec_free(entry);
 
         /* VMS_IOCTL_DELIVERAST is _IOR: `arg` is a userspace pointer to a
          * struct vms_ast_args that receives the delivered AST entry. Return
          * 0 to signal "an AST was delivered"; the caller reads astadr/astprm/
          * acmode from the buffer. */
-        if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        if (exec_copyout((void *)arg, &args, sizeof(args)))
             return -EFAULT;
         return 0;
     }
@@ -286,12 +306,12 @@ void vms_proc_rundown_asts(struct vms_proc *proc, uint8_t min_acmode)
     for (m = min_acmode; m <= PSL_C_USER; m++) {
         struct vms_ast_state *st = &proc->ast[m];
 
-        spin_lock(&st->lock);
-        list_for_each_entry_safe(ast, tmp, &st->pending, list) {
-            list_del(&ast->list);
-            kfree(ast);
+        exec_lock(&st->lock);
+        exec_list_for_each_entry_safe(ast, tmp, &st->pending, list) {
+            exec_list_del(&ast->list);
+            exec_free(ast);
         }
         st->count = 0;
-        spin_unlock(&st->lock);
+        exec_unlock(&st->lock);
     }
 }

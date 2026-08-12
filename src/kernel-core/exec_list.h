@@ -63,6 +63,13 @@
  * Query:
  *   int  exec_list_empty(const exec_list_head_t *h)   nonzero iff h has no nodes
  *
+ * First element (typed; `member` is the exec_list_node_t field name):
+ *   exec_list_first_entry(head, type, member)
+ *       the first element of a NON-EMPTY list, as a typed `type *`. UNDEFINED on
+ *       an empty list -- the caller MUST establish non-emptiness first (a prior
+ *       exec_list_empty() test, as vms_ast's deliver path does). A macro for the
+ *       same container_of reason the iterators are. Linux: list_first_entry.
+ *
  * Iteration (typed; `member` is the exec_list_node_t field name in the element):
  *   exec_list_for_each_entry(pos, head, member)
  *       walk each element; pos is a typed element pointer. Do NOT delete `pos`.

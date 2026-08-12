@@ -368,8 +368,14 @@ demonstrated on the smallest real facility.**
 
 **Steps 3…N — Extract the rest in ascending coupling order** (each step: same
 Linux triple-gate green + compiles into NetBSD):
-1. `vms_ast.c`, `vms_lnm.c`, `vms_access.c` — lists/copy/alloc only; near-pure
-   `sed` (access adds `exec_current_is_privileged` for the `capable()` sites).
+1. `vms_ast.c`, `vms_access.c` — lists/copy/alloc only; near-pure `sed`. (access
+   turned out to need **no** privilege shim — it gates on the executive's own
+   `proc->cur_privs`, never `capable()`.) **`vms_lnm.c` was reclassified OUT of
+   this batch during Phase D (rd vms-5b2):** it is mm-coupled, not lists/copy —
+   `vmalloc_user`/`remap_vmalloc_range`/`vm_flags_clear`/`struct vm_area_struct`
+   share its arena to userspace and `smp_wmb()` orders its seqlock, a
+   memory-mapping + barrier seam the `exec_*` shim does not cover. It waits on
+   that seam (a later phase), not this near-pure batch.
 2. `vms_mbx.c`, `vms_devtab.c` — lists + more wait/wake (mbx) and the device
    table; still no proc binding.
 3. `vms_proctab.c` — **first proc-model + RCU-lite consumer.** Introduce
@@ -443,7 +449,7 @@ Re-scope the existing epic items and insert the shared-core spine. Wire
 | **A** | Kernel-backend shim landed on Linux with zero behaviour change | `exec_kbackend.h` + Linux forwarders + `exec_list/hash/rbtree.h` added; `vms_internal.h` primitive types shim-typed; `vms.ko` behaviour-identical; full CI + Kernel-Executive QEMU gate + `test_runtime_target.sh` green. | Systems | new |
 | **B** | Event flags extracted to `src/kernel-core/`, Linux green | `vms_eflag.c` uses only `exec_*` (renames + wait→cv-idiom); moved to `src/kernel-core/`; Linux Debug ctest + QEMU exec gate + runtime-target gate green — proves behaviour-preserving extraction. | Systems | new |
 | **C** | *(re-scope `vms-4b4`)* Event flags proven on the shared-core pattern — one source, both kernels | The **same** `vms_eflag.c` compiles into Linux `vms.ko` **and** the NetBSD `vms` module; two-process shared-state (common EF cluster) proof green on NetBSD/amd64 under QEMU; INV-6 honest-fail when `/dev/vms` absent; Linux gate stays green. | Systems + QA | `vms-4b4` |
-| **D** | Low-coupling facilities extracted to shared core (ast, lnm, access) | `vms_ast.c`/`vms_lnm.c`/`vms_access.c` on `exec_*` (access via `exec_current_is_privileged`); compile into both kernels; Linux triple-gate green. | Systems | new |
+| **D** | Low-coupling facilities extracted to shared core (ast + access done; **lnm deferred**) | `vms_ast.c` + `vms_access.c` on `exec_*`, moved to `src/kernel-core/`, Linux gate green + `.o` behaviour-identical (only the shim's `exec_copyin/out` 0/EXEC_EFAULT normalization differs from the raw `copy_*_user` test). `vms_access.c` needed **no** privilege shim after all — it gates on the executive's own `proc->cur_privs` mask, never `capable()`. **`vms_lnm.c` NOT extracted (rd vms-5b2):** it is not low-coupling — its arena is shared to userspace by `vmalloc_user`/`remap_vmalloc_range`/`vm_flags_clear`/`struct vm_area_struct` (a memory-mapping seam) and its seqlock uses `smp_wmb()` barriers, none of which the `exec_*` shim covers. Extracting it would drag a whole mm/mmap + barrier seam forward; deferred to a later mm-seam phase. `exec_list_first_entry` added to the shim (ast's DELIVERAST needed it). | Systems | new |
 | **E** | Mailbox + device table extracted to shared core | `vms_mbx.c`/`vms_devtab.c` on `exec_*`; both kernels; Linux gate green; mbx wait/wake proven on NetBSD. | Systems | new |
 | **F** | Process table + dispatch extracted; proc-model + RCU-lite shim landed | `exec_current_*`/`exec_task_*`/`exec_free_deferred` defined both backends; `vms_proctab.c` + `vms_dispatch.c` (split from `vms_module.c`) shared; NetBSD `cdevsw` rind calls `vms_dispatch`; PCB identity + liveness green on both. | Systems | new |
 | **G** | Lock manager extracted to shared core (the 44 KB payoff) | `vms_lock.c` on `exec_*` incl. `exec_rbtree`/`exec_hash`; NetBSD container impls landed; ENQ/DEQ + deadlock detect green on both kernels; Linux authenticity gate unchanged. | Systems | new |

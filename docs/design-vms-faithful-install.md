@@ -112,7 +112,7 @@ OVMX *look* installed instead of *being* installed.
 | **The installation procedure** | DCL. Menu text and question flow pinned to the Alpha capture (INITIALIZE/PRESERVE, target device, label, confirmation gate, SYSTEM password, SCSNODE/SCSSYSTEMID, TZ/TDF). Where OVMX lacks a facility (PAKs, Galaxy), the honest move is omission, not a fake question. |
 | **Media mastering build tool** | The build must produce a populated vmsfs volume image on a Linux host. **Decision (mine, build tooling): a userspace mastering tool** — the `xorriso`/`mkfs -d` of vmsfs — extending the same `vmsfs_ondisk.h` that `INITIALIZE.EXE` (userspace mkfs) and `vmsfs.ko` already share, so the format keeps exactly one description. Reasons over a QEMU-populate stage: the build stays plain deterministic tooling; no nested-KVM dependency in CI; and QEMU-populate has a chicken-and-egg of its own (the guest needs the files delivered somehow, which is how the fat initramfs happened). It is factory tooling: never shipped on the media, never given a VMS name, never run at boot. |
 | **Kit packaging at build** | Package `SYSEXE`/`SYSLIB`/`SYSMGR`/`SYSHLP` payloads into the OS kit file; master the distribution image = normal system tree + kit + install procedure. |
-| **First-boot completion** | **Not yet measured** — the Alpha run was stopped at the PCSI configuration phase, so what the target's first boot does (the AUTOGEN-shaped half) is unestablished. Oracle follow-up: finish the Alpha install on the scratch node, capture the first boot of `DQA0:`, then design OVMX's first-boot step against it. Until then, first-boot behavior is explicitly provisional. |
+| **First-boot completion** | **MEASURED (vms-490) → justified no-op for OVMX (vms-649).** The Alpha 8.4 first boot was captured end to end (`docs/oracle/installation-media-vax73-alpha84.md` §5). Every one-time step it performs names a facility OVMX does not implement — AUTOGEN parameter feedback + page/swap sizing (§5b), the boot-1-defers / boot-2-starts gating of the **security server, ACME server and audit server** (§5b/§5c/§5d), and the four rights identifiers `AUTHORIZE.EXE` adds on boot 2 (§5c: `SYS$NODE_OVMXOR`, `DECW$WS_QUOTA`, `IMGDMP$READALL`, `IMGDMP$PROTECT` — DECnet, DECwindows, image-dump). OVMX has none of these, so there is no honest first-boot work to reproduce and no VMS status to pin; faking any of it is the exact INV-6 / Rule-10 LARP the authenticity invariants forbid. Full analysis and citations: **§3.5** below. Ground-source proof: `tests/qemu/test_persistent_boot.sh` (a CI gate) boots the pre-installed system disk **twice** and asserts both boots reach login and are identical with no AUTOGEN/first-boot phase on either. |
 | **Release e2e test** | The ground-source gate: master media → boot media → drive the menu over the console → boot the target → log in → `PRODUCT SHOW PRODUCT` lists the OS. Must be shown failing on the unfixed tree first (the vms-9b7 standing rule). |
 
 ### 3.4 KEEP
@@ -122,6 +122,77 @@ OVMX *look* installed instead of *being* installed.
 `dcl_backup.c`'s saveset create/restore/list (not on the install path;
 `BACKUP/IMAGE` and an option-8/standalone analogue are future work, filed but
 not in this epic's critical path).
+
+### 3.5 First-boot completion, measured — why OVMX's is a justified no-op (vms-649)
+
+The `vms-490` oracle run finished the Alpha install that §3a had stopped at the
+PCSI configuration phase and captured the installed target's first boot end to
+end (`docs/oracle/installation-media-vax73-alpha84.md` §5). This section maps
+what that capture shows first boot *doing* onto OVMX's facilities, one step at a
+time, and records the disposition of each. The scope of `vms-649` was
+explicitly provisional by the oracle: implement whatever OVMX needs to match it,
+**or** close as a justified no-op with the citation if the oracle shows first
+boot doing nothing OVMX has. The oracle shows the latter.
+
+**What the oracle measured (§5e, verbatim conclusion): "first boot is not one
+event, it is two", gated by AUTOGEN, and the gate is *what subsystems are
+allowed to start*.** Boot 1 (post-install, pre-AUTOGEN) is a structurally
+reduced startup that explicitly *defers* the security subsystem; it runs AUTOGEN
+(GETDATA, GENPARAMS, GENFILES, SETPARAMS, REBOOT) and drives its own automatic
+reboot. Boot 2 (post-AUTOGEN) is where the security server, ACME server and
+audit-server database actually come up and where `AUTHORIZE.EXE` first populates
+the rights database.
+
+Mapping each first-boot action to OVMX (oracle line references in parentheses):
+
+| Oracle first-boot action | OVMX facility | Disposition |
+|---|---|---|
+| AUTOGEN GETDATA/GENPARAMS: compute parameters, write `PARAMS.DAT` / `VMSIMAGES.DAT` (§5b) | OVMX SYSGEN is a static ~1-parameter model (SCSNODE); no feedback-driven computation, no `VMSIMAGES.DAT`. `SYS$SYSTEM:OVMXVMSSYS.PAR` ships **in the kit** (`distro/rootfs/…/SYSEXE/OVMXVMSSYS.PAR`) and SCSNODE is set during install by the menu's `SYSGEN` step. | **No analogue.** Nothing to compute; the parameter file already exists and is set at install time. |
+| AUTOGEN GENFILES: create `SYS$ERRLOG.DMP`, extend `PAGEFILE.SYS` (§5b) | OVMX has no pagefile / swapfile / error-log-dump facility (`grep` finds only PCB struct fields, no page/swap sizing). | **No facility.** Creating those files at first boot would fake a facility that does not exist. |
+| AUTOGEN SETPARAMS + REBOOT: activate computed parameters, auto-reboot (§5b/§5d) | Nothing changes OVMX's parameters between install and boot, so nothing needs activating and there is no reason to reboot. The one parameter that *is* set (SCSNODE) is read by `read_boot_parameters()` on the target's ordinary boot. | **No analogue.** An automatic reboot with nothing changed is theater. |
+| Boot 1 defers, boot 2 starts: **security server** (`SECSRV-I-SERVERSTARTINGU`), **ACME server** (`ACME-I-SERVERSTART`) (§5c/§5d) | OVMX runs neither. The only STDRV component registered at boot is JOB_CONTROL (`SYS$STARTUP:VMS$VMS.DAT`). `secsrvmsgdef.h` / `ciadef.h` are message/constant headers, not a running server. | **No facility.** Printing "server not started" then "server starting" for servers OVMX does not have is INV-6 LARP. |
+| Boot 2 creates the **audit-server database** (`AUDSRV-I-NEWSERVERDB`) (§5c/§5d) | No audit server process. `SHOW AUDIT` reports a per-process status flag; the `AUDIT_SERVER` name is only a `SHOW PROCESS` gap fixture. | **No facility.** |
+| Boot 2 `AUTHORIZE.EXE` adds four rights identifiers — `SYS$NODE_OVMXOR`, `DECW$WS_QUOTA`, `IMGDMP$READALL`, `IMGDMP$PROTECT` (§5c) | OVMX's rights database is real (`RIGHTSLIST.DAT`, `src/libvms/rtl/rightslist.c`), but all four name facilities OVMX lacks: DECnet node proxy, DECwindows, image-dump. `RIGHTSLIST.DAT`'s own header **already** excludes `SYS$NODE_*` (§3 "NO SITE ROWS") and forbids shipping identifiers for facilities OVMX "cannot grant or check" (§2, citing Rule 10). | **Deliberately excluded by existing design.** Adding them at first boot is the precise Rule-10 "invent the plausible-looking middle" that file already rules out. |
+
+**Conclusion.** Every one-time action the Alpha first boot performs is the
+first-time bring-up of a facility OVMX does not implement. OVMX's own install
+already produces a **fully configured, directly bootable** target — the system
+tree, the product database (`VMS$PRODUCT_DATABASE.DAT`, written to the target by
+`PRODUCT INSTALL /DESTINATION`), `OVMXVMSSYS.PAR` and the configured SCSNODE are
+all in place when `PRODUCT INSTALL` finishes — and that target boots straight to
+an ordinary login (already proven by `test_install_menu.sh`'s target boot and
+`test_distrib_boot.sh`). There is therefore **no first-boot completion phase,
+and no first-boot-vs-subsequent-boot distinction, for OVMX to build**: the
+target's first boot is identical to every later boot, which is the honest state
+for a system with no deferred one-time configuration. When OVMX later grows a
+facility whose bring-up must be gated to a first boot (an AUTOGEN, a security
+server), *that* facility's bead builds the mechanism it needs; adding an empty
+self-disabling first-boot procedure now would be a speculative abstraction
+(Rule 2) doing nothing.
+
+**Scope note / constraint honored:** `vms-649` also ruled that first-boot work,
+if any, must be a **command procedure**, never C in `src/ovmx_init/ovmx_init.c`
+(PID 1 stays bootstrap-only). The no-op honors this trivially — nothing enters
+PID 1, and nothing enters a first-boot `.COM` either, because there is nothing
+to run. If a future first-boot facility appears, the mechanism it stages must
+still be a `.COM`, not PID 1 C.
+
+**Ground-source proof (vms-649).** `tests/qemu/test_persistent_boot.sh` (a CI
+gate — `.github/workflows/ci.yml` "Run persistent boot smoke test") gains a
+second boot of the pre-installed system disk and asserts the two boots are
+materially identical: both reach `%STDRV-I-STARTUP` begun and a login prompt,
+and **neither** runs any AUTOGEN / first-boot / one-time-completion phase, so
+there is no boot-1-only phase a later boot skips. That is the measurable form
+of "the installed system's first boot completes configuration": it is already
+complete, and a second boot changes nothing. (The proof rides
+`test_persistent_boot.sh`'s already-bootable mastered `ovmx-distrib.img` rather
+than a menu-installed target because `PRODUCT INSTALL /DESTINATION=<dev>`
+currently extracts the kit into a **flat** `<dev>:[SYSEXE]` layout instead of
+the rooted `[SYS0.SYSCOMMON.SYSEXE]` a booted system disk requires — so a
+`/DESTINATION`-installed target is not yet bootable as a system disk. That is a
+separate install-path gap in `src/product/product.c pd_kit_target_path()`,
+owned by the PRODUCT-INSTALL/menu work (vms-df9/vms-dcf) and gating the vms-37f
+release e2e, **not** a first-boot-completion issue — filed accordingly.)
 
 ## 4. Decisions taken vs. reserved
 

@@ -57,9 +57,14 @@ echo "=== proof 1: CMake netbsd-vax build of libvmssys ==="
 # ("unable to find a build program corresponding to Ninja"), so we pin the make
 # path directly and depend on nothing being auto-discovered.
 MAKE_PROG="$(command -v make)"
+TOOLCHAIN_FILE="$SRC/tools/cross-vax/toolchain-vax-netbsd.cmake"
+# Fail loudly if the toolchain file is absent (e.g. an ignore rule dropped it
+# from the checkout) rather than letting CMake fall through to a cryptic
+# "CMAKE_C_COMPILER not set".
+test -f "$TOOLCHAIN_FILE" || { echo "FAIL: toolchain file missing: $TOOLCHAIN_FILE"; exit 1; }
 cmake -S "$LIBVMSSYS" -B "$OUT/cmake" -G "Unix Makefiles" \
     -DCMAKE_MAKE_PROGRAM="$MAKE_PROG" \
-    -DCMAKE_TOOLCHAIN_FILE="$SRC/tools/cross-vax/toolchain-vax-netbsd.cmake" \
+    -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
     -DCMAKE_BUILD_TYPE=Release
 cmake --build "$OUT/cmake" --target vmssys -- -j"$(nproc)"
 LIB="$(find "$OUT/cmake" -name 'libvmssys.a' | head -1)"

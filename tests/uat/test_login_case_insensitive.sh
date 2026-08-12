@@ -141,6 +141,7 @@ ERRORS=""
 
 wait_for '%OVMX-I-EXEC' "$BOOT_TIMEOUT" \
     || fail_with_console "ERROR: the executive never attached — the system did not come up"
+send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
 wait_for 'Username:' "$BOOT_TIMEOUT" || fail_with_console "ERROR: no login prompt"
 
 # run_cmd(): send a DCL command, wait for the next prompt, capture ONLY the
@@ -201,6 +202,7 @@ if attempt_login 'guest' 'GUEST' 'lowercase'; then
 fi
 off=$(wc -c <"$CONSOLE_LOG")
 send 'LOGOUT'
+send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
 wait_for 'Username:' "$STEP_TIMEOUT" "$off" || echo "WARN: no reprompt after lowercase session LOGOUT"
 
 # --- Round 2: 'Guest' (title case) logs in, sees the SAME home directory --
@@ -215,6 +217,7 @@ if attempt_login 'Guest' 'GUEST' 'titlecase'; then
 fi
 off=$(wc -c <"$CONSOLE_LOG")
 send 'LOGOUT'
+send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
 wait_for 'Username:' "$STEP_TIMEOUT" "$off" || echo "WARN: no reprompt after titlecase session LOGOUT"
 
 # --- Round 3: 'GUEST' (canonical) logs in, cleans up ------------------------
@@ -223,6 +226,7 @@ if attempt_login 'GUEST' 'GUEST' 'canonical'; then
 fi
 off=$(wc -c <"$CONSOLE_LOG")
 send 'LOGOUT'
+send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
 wait_for 'Username:' "$STEP_TIMEOUT" "$off" || echo "WARN: no reprompt after canonical session LOGOUT"
 
 echo ""

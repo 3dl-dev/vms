@@ -139,10 +139,50 @@ if wait_for 'The OVMX system is now executing the site-specific startup commands
 else
     dump_and_die "site-specific startup line never printed within ${BOOT_TIMEOUT}s"
 fi
-if wait_for 'Username:' "$BOOT_TIMEOUT"; then
-    ok "boot reaches the login prompt"
+# --- 1b. BOOT/LOGIN OUTPUT FIDELITY (vms-2213) ------------------------------
+# Four VMS-fidelity properties of the boot->login console transcript. Oracle:
+# VSI OpenVMS System Manager's Manual, Vol I, "Logging In to the System" --
+# the operator-console login sequence is: banner, then the operator strikes
+# RETURN, then Username:, then Password:, then a single SYS$WELCOME.
+#
+# DEFECTS 2 & 3 (banner-before-prompt; OPA0: waits for RETURN). JOB_CONTROL
+# has by now created the console login session. On OPA0: LOGINOUT waits for
+# the operator's RETURN before presenting Username:. Prove it: the boot
+# identification banner (STARTUP.EXE's display_boot_banner, printed after
+# STARTUP.COM returns) appears, and Username: is STILL absent -- the prompt is
+# waiting behind the CR. Before this fix the prompt raced out DURING site
+# startup, ahead of that banner.
+if wait_for 'OpenVMX V' "$BOOT_TIMEOUT" "$STARTUP_OFF"; then
+    ok "boot identification banner printed (STARTUP.EXE handoff)"
 else
-    dump_and_die "boot never reached Username: within ${BOOT_TIMEOUT}s"
+    dump_and_die "boot identification banner never printed within ${BOOT_TIMEOUT}s"
+fi
+if tr -d '\r' <"$LOG" | grep -qF 'Username:'; then
+    bad "Username: appeared BEFORE the operator pressed RETURN -- OPA0: did not wait (defect 3)"
+else
+    ok "OPA0: waited: boot banner is out but Username: is not shown before RETURN (defect 3)"
+fi
+# The operator strikes RETURN; only now does the login prompt appear.
+send ''
+if wait_for 'Username:' "$BOOT_TIMEOUT"; then
+    ok "after RETURN the login prompt appears (defect 3: wait-for-CR honoured)"
+else
+    dump_and_die "boot never reached Username: after the wake RETURN within ${BOOT_TIMEOUT}s"
+fi
+# Ordering (defect 2): the banner's byte-offset precedes Username:'s.
+FID_FULL=$(tr -d '\r' <"$LOG")
+BPOS=$(printf '%s' "$FID_FULL" | grep -aboE 'OpenVMX V[0-9]' | head -1 | cut -d: -f1)
+UPOS=$(printf '%s' "$FID_FULL" | grep -aboF 'Username:' | head -1 | cut -d: -f1)
+if [ -n "$BPOS" ] && [ -n "$UPOS" ] && [ "$BPOS" -lt "$UPOS" ]; then
+    ok "banner precedes prompt in the transcript (banner@$BPOS < prompt@$UPOS) (defect 2)"
+else
+    bad "banner-before-prompt ordering wrong (banner@${BPOS:-none} prompt@${UPOS:-none}) (defect 2)"
+fi
+# DEFECT 4: no routine kernel-driver printk on the user console.
+if printf '%s\n' "$FID_FULL" | grep -q 'vms: registered process'; then
+    bad "kernel printk 'vms: registered process ...' leaked onto the console (defect 4)"
+else
+    ok "no 'vms: registered process' kernel chatter on the user console (defect 4)"
 fi
 
 # --- 2. Log in as SYSTEM -----------------------------------------------------
@@ -156,6 +196,16 @@ else
 fi
 wait_for '$' "$CMD_TIMEOUT" "$LOGIN_OFF"
 ok "session reaches a DCL prompt"
+
+# DEFECT 1: exactly ONE post-login welcome (single SYS$WELCOME). SYLOGIN.COM
+# no longer WRITEs a second "Welcome ..." line of its own.
+WELCOME_SEG=$(tail -c "+$((LOGIN_OFF + 1))" "$LOG" 2>/dev/null | tr -d '\r')
+WELCOME_N=$(printf '%s\n' "$WELCOME_SEG" | grep -c 'Welcome to OpenVMX')
+if [ "$WELCOME_N" -eq 1 ]; then
+    ok "exactly ONE welcome message after login -- single SYS\$WELCOME (defect 1)"
+else
+    bad "expected exactly 1 welcome after login, saw $WELCOME_N (defect 1)"
+fi
 
 # --- 3. SHOW SYSTEM: a DIFFERENT process (this DCL session) sees JOB_CONTROL,
 #        proving it is a real, named, detached process the executive tracks --

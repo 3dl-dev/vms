@@ -495,9 +495,20 @@ struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
     hash_add_rcu(vms_proc_hash, &proc->hash_node, pid);
     spin_unlock(&vms_proc_hash_lock);
 
-    pr_info("vms: registered process pid=%d vms_pid=0x%08x uic=[%o,%o] job=0x%08x privs=0x%llx (%s)\n",
-            pid, proc->vms_pid, proc->uic >> 16, proc->uic & 0xFFFFu,
-            proc->job_id, proc->perm_privs, shared_vms_pid ? "continued" : "derived");
+    /*
+     * ROUTINE PER-PROCESS TRACE -- pr_debug, NOT pr_info (vms-2213). Every
+     * process registration emitted this at pr_info, so a single interactive
+     * login (LOGINOUT -> DCL -> each spawned image) sprayed several
+     * "vms: registered process ..." lines onto the operator console during
+     * the login flow -- kernel-driver chatter real VMS never shows there.
+     * This line is routine per-object diagnostic trace, so it belongs at
+     * debug level: it stays available through the kernel log (dmesg with
+     * dynamic-debug enabled for this module) but does not reach the console.
+     * Genuine warnings/errors elsewhere in this module keep pr_warn/pr_err.
+     */
+    pr_debug("vms: registered process pid=%d vms_pid=0x%08x uic=[%o,%o] job=0x%08x privs=0x%llx (%s)\n",
+             pid, proc->vms_pid, proc->uic >> 16, proc->uic & 0xFFFFu,
+             proc->job_id, proc->perm_privs, shared_vms_pid ? "continued" : "derived");
 
     return proc;
 }

@@ -147,6 +147,7 @@ ok()  { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 if wait_for '%OVMX-I-EXEC' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
+send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
 if wait_for 'Username:' 60; then ok "login prompt"; else bad "no login prompt"; fi
 send 'SYSTEM'
 wait_for 'Password:' 30 && send 'MANAGER'

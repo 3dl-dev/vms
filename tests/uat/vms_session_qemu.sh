@@ -395,6 +395,7 @@ ERRORS=""
 wait_for '%OVMX-I-EXEC' "$BOOT_TIMEOUT" \
     || fail_with_console "ERROR: the executive never attached — the system did not come up"
 
+send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
 wait_for 'Username:' "$BOOT_TIMEOUT" || fail_with_console "ERROR: no login prompt"
 
 # --- NEGATIVE LOGIN: a wrong password is refused (vms-72c) -----------------
@@ -538,6 +539,12 @@ wait_for 'logged out' "$STEP_TIMEOUT" "$LOGIN_OFFSET" || fail_with_console "ERRO
 # already skipped past the prompt being waited for, and the wait times out
 # with the prompt sitting in plain sight on the console. Measured, not
 # reasoned: that is exactly how this failed the first time it ran.
+# vms-2213: LOGOUT caused PID 1/JOB_CONTROL to spawn a BRAND NEW LOGINOUT on
+# the console, which waits for RETURN before presenting Username: (the
+# "press RETURN to log in" behaviour). Wake it -- as a real operator would --
+# so the second login prompt appears and the OPERATOR probe below is not
+# swallowed as the wake keystroke.
+send ''
 wait_for 'Username:' "$STEP_TIMEOUT" "$LOGIN_OFFSET" \
     || fail_with_console "ERROR: no second login prompt after LOGOUT"
 

@@ -125,6 +125,16 @@ boot_qemu() {  # boot_qemu <log-file> <fifo-path>
 }
 
 send() { printf '%s\r' "$1" >&4; }
+
+# vms-2213: on OPA0: LOGINOUT waits for the operator's RETURN before it presents
+# "Username:". A single CR sent at t=0 is lost (guest serial not up yet), so feed
+# a CR each second until the prompt actually appears in the log. Bounded.
+wake_login() {
+    local logf="$1" w=0
+    until grep -qaF 'Username:' "$logf" 2>/dev/null || [ "$w" -ge 120 ]; do
+        send ''; sleep 1; w=$((w + 1))
+    done
+}
 wait_for() {  # pattern  limit-seconds  since-byte  log-file
     local pat="$1" limit="${2:-30}" since="${3:-0}" log="${4:-$LOG}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
@@ -146,6 +156,7 @@ dump_and_die() {
 
 login() {  # login <log-file>  -- logs in as SYSTEM, returns once at the $ prompt
     local log="$1"
+    wake_login "$log"
     if wait_for 'Username:' "$BOOT_TIMEOUT" 0 "$log"; then
         ok "boot reaches the login prompt ($log)"
     else

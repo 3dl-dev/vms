@@ -39,6 +39,16 @@
 #     tests/qemu/test_parts_demo_e2e.sh) stops working -- run it alongside
 #     this one, not instead of it, per this item's own DONE criteria
 #
+# ALSO PROVES (vms-32a, docs/design-opcom-executive-logging.md): the real
+# vms.ko/vmsfs.ko kernel-module events reach the operator console as
+# %OVMX-<S>-<IDENT> lines, real SYSKRNL (Linux-kernel-layer) lines (the kernel's own
+# module-taint warning, deterministic on every boot since vms.ko/vmsfs.ko
+# are unsigned) are RE-STYLED and ROUTED rather than suppressed -- never
+# reaching the console as a raw/bare Linux dmesg line -- and OPERATOR.LOG's
+# OPCOM record is oracle-exact (the eleven-'%' banner, the real SCSNODE) --
+# against the same real boot and the same real OPERATOR.LOG file the rest
+# of this test already drives.
+#
 # Usage (run INSIDE the bootable image, like test_persistent_boot.sh /
 # test_parts_demo_e2e.sh):
 #   docker build -f distro/Dockerfile.bootable -t ovmx-boot .
@@ -202,6 +212,70 @@ else
     ok "no 'vms: registered process' kernel chatter on the user console (defect 4)"
 fi
 
+# --- 1c. EXECUTIVE KERNEL MESSAGES -> OPERATOR SURFACE (vms-32a) -----------
+# docs/design-opcom-executive-logging.md. The /dev/kmsg -> console bridge
+# (src/ovmx_init/opcom_kmsg.c) starts early in bare_metal_init(), ahead of
+# vms.ko/vmsfs.ko loading, and reformats their pr_info/warn/err records as
+# bare "%OVMX-<S>-<IDENT>, text" console lines (vocabulary (A) -- no OPCOM
+# banner; OPCOM is not running at boot time). BEFORE this item these records
+# never reached the console AT ALL: pr_info is below the "loglevel=3 quiet"
+# console threshold this harness boots with, so a positive hit here is proof
+# the bridge is running, not just that the kernel happened to be verbose.
+if printf '%s\n' "$FID_FULL" | grep -qE '^%OVMX-I-DEVTAB, disk unit '; then
+    ok "vms.ko's disk-unit event reached the operator console as %OVMX-I-DEVTAB (vms-32a)"
+else
+    bad "no %OVMX-I-DEVTAB disk-unit line on the console -- the /dev/kmsg bridge did not route it"
+fi
+if printf '%s\n' "$FID_FULL" | grep -qE '^%OVMX-I-DEVTAB, device table initialized, console terminal '; then
+    ok "vms.ko's console-terminal-created event reached the operator console as %OVMX-I-DEVTAB (vms-32a)"
+else
+    bad "no %OVMX-I-DEVTAB console-terminal line on the console -- the /dev/kmsg bridge did not route it"
+fi
+if printf '%s\n' "$FID_FULL" | grep -qE '^%OVMX-I-VMSFS, '; then
+    ok "vmsfs.ko's own event reached the operator console as %OVMX-I-VMSFS (vms-32a)"
+else
+    bad "no %OVMX-I-VMSFS line on the console -- the /dev/kmsg bridge did not route vmsfs.ko"
+fi
+# SYSKRNL (Linux-kernel-layer) lines are RE-STYLED and ROUTED, not suppressed (operator-
+# ruling correction, 2026-08-12 -- docs/design-opcom-executive-logging.md
+# sec3): they carry real operator-relevant information (a module-taint
+# warning means an unverified executive image loaded), so the standing
+# requirement is that they reach the console WRAPPED in a VMS-form facility
+# line, never as a bare/raw Linux dmesg line. Every real boot triggers this
+# deterministically: vms.ko/vmsfs.ko are unsigned out-of-tree modules, so
+# the KERNEL ITSELF (not vms.ko) prints its own generic taint warning on
+# every load -- and, because that warning is printed as "%s: <text>" with
+# the LOADING MODULE'S OWN NAME substituted, it carries the SAME "vms: "
+# prefix vms.ko's own lines do and is classified alongside them (design doc
+# sec4 -- a disclosed simplification, not a defect: content and severity
+# both stay the kernel's real ones, only the facility label is OVMX's
+# rather than SYSKRNL's for this one measured collision).
+if printf '%s\n' "$FID_FULL" | grep -qE '^%OVMX-[EWIF]-KMOD, .*taint'; then
+    ok "the kernel's own module-taint warning reached the operator console, RE-STYLED (not suppressed) as %OVMX-*-KMOD (vms-32a)"
+else
+    bad "the kernel's own module-taint warning did not reach the console in VMS-form -- re-styling regressed to suppression, or never routed at all"
+fi
+# ...and it never reaches the console as a BARE/RAW Linux dmesg line (every
+# occurrence of the SYSKRNL wording is wrapped in a %FACILITY- line).
+RAW_TAINT_LEAK=$(printf '%s\n' "$FID_FULL" | grep -E 'taint' | grep -vE '^%(OVMX|SYSKRNL)-')
+if [ -n "$RAW_TAINT_LEAK" ]; then
+    bad "a SYSKRNL (Linux-kernel-layer) taint line reached the console UNWRAPPED (raw dmesg form): $RAW_TAINT_LEAK"
+else
+    ok "every taint-related console line is wrapped in a %OVMX-/%SYSKRNL- facility -- none reached the console as a raw Linux dmesg line (vms-32a)"
+fi
+# hrtimer's scheduling-latency warning is not deterministically triggerable
+# in a clean boot (it only fires under real host scheduling pressure), so
+# it is not asserted present here -- tests/ovmx_init/test_opcom_kmsg.c
+# proves the %SYSKRNL-W-KERNEL re-styling for it directly. What IS
+# asserted, for any run where the host happens to be loaded enough to
+# trigger it: if it appears at all, it is wrapped, never raw.
+RAW_HRTIMER_LEAK=$(printf '%s\n' "$FID_FULL" | grep -E 'hrtimer: interrupt took' | grep -vE '^%SYSKRNL-')
+if [ -n "$RAW_HRTIMER_LEAK" ]; then
+    bad "an hrtimer scheduling-latency line reached the console UNWRAPPED (raw dmesg form): $RAW_HRTIMER_LEAK"
+else
+    ok "no hrtimer line reached the console unwrapped (either absent this run, or wrapped as %SYSKRNL-) (vms-32a)"
+fi
+
 # --- 2. Log in as SYSTEM -----------------------------------------------------
 LOGIN_OFF=$(wc -c <"$LOG")
 send 'SYSTEM'
@@ -261,6 +335,48 @@ if [ "$ROW_COUNT" -ge 2 ]; then
     ok "SHOW SYSTEM lists $ROW_COUNT process rows -- JOB_CONTROL is a separate table entry, not this session relabelled"
 else
     bad "SHOW SYSTEM lists only $ROW_COUNT row(s) -- JOB_CONTROL is not a separate process"
+fi
+
+# --- 5. THE OPCOM RECORD FORMAT, oracle-exact (vms-32a) --------------------
+# docs/design-opcom-executive-logging.md sec6. REQUEST is the cheapest DCL
+# command that calls sys$sndopr (src/vmsdcl/dcl_cmd_misc.c cmd_request), so
+# it is used here to make a real record land in OPERATOR.LOG, then TYPE
+# reads that file back over the SAME console session this test already
+# drives -- proving the format against the actual file on the actual mastered
+# image, not a unit-test fixture.
+REQ_OFF=$(wc -c <"$LOG")
+send 'REQUEST "vms-32a opcom format probe"'
+if wait_for '%OPCOM-I-RQSTPEND' "$CMD_TIMEOUT" "$REQ_OFF"; then
+    ok "REQUEST accepted (a real sys\$sndopr record was written)"
+else
+    dump_and_die "REQUEST never confirmed (%OPCOM-I-RQSTPEND missing)"
+fi
+TYPE_OFF=$(wc -c <"$LOG")
+send 'TYPE SYS$MANAGER:OPERATOR.LOG'
+if wait_for 'vms-32a opcom format probe' "$CMD_TIMEOUT" "$TYPE_OFF"; then
+    ok "OPERATOR.LOG contains this run's REQUEST text"
+else
+    dump_and_die "TYPE SYS\$MANAGER:OPERATOR.LOG never showed the REQUEST text"
+fi
+OPLOG_SEG=$(segment_since "$TYPE_OFF")
+# Banner: exactly eleven '%', two spaces, OPCOM, two spaces, the timestamp
+# (DD-MMM-YYYY HH:MM:SS.ss, month upper-case 3-letter), two spaces, eleven
+# '%' -- oracle-exact per the lab-Alpha capture in the design doc.
+if printf '%s\n' "$OPLOG_SEG" | grep -qE '^%%%%%%%%%%%  OPCOM  [0-9]{2}-[A-Z]{3}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{2}  %%%%%%%%%%%$'; then
+    ok "OPERATOR.LOG's OPCOM banner is oracle-exact (eleven '%', boxed timestamp)"
+else
+    bad "OPERATOR.LOG's OPCOM banner did not match the oracle-exact shape"
+fi
+# Body line 2: "Request N, from user SYSTEM on <the real node>" -- not the
+# old hardcoded "on node OVMX" literal. This image's SCSNODE is unconfigured
+# (factory default), so the real node name IS still "OVMX" here -- but
+# reached through ovmx_node_name()/SCSNODE, not a string constant baked into
+# sys_operator.c (see the design doc sec6 for why that distinction matters
+# on a clustered node with a real configured name).
+if printf '%s\n' "$OPLOG_SEG" | grep -qE '^Request [0-9]+, from user SYSTEM on OVMX$'; then
+    ok "OPERATOR.LOG's Request line names the real SCSNODE (SYSTEM on OVMX), not a hardcoded literal"
+else
+    bad "OPERATOR.LOG's Request line did not match 'Request N, from user SYSTEM on OVMX'"
 fi
 
 # --- Results ---

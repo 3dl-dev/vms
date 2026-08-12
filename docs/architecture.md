@@ -119,6 +119,18 @@ docker build -f Dockerfile.bootable -o dist .
   ├── QEMU boots Linux kernel
   └── Kernel unpacks initramfs, runs /init (init-wrapper.sh)
         ├── Mount: proc, sysfs, devtmpfs, devpts, tmpfs
+        ├── opcom_kmsg_start() -- /dev/kmsg -> operator-console bridge
+        │     (vms-32a, docs/design-opcom-executive-logging.md): reformats
+        │     vms.ko/vmsfs.ko's own printk records as bare "%OVMX-<S>-
+        │     <IDENT>, text" console lines, ahead of the module loads below
+        │     so their init-time records are replayed, not missed. SYSKRNL
+        │     (Linux-kernel-layer) lines (module-taint warnings, hrtimer, ...) are
+        │     RE-STYLED and routed too, as "%SYSKRNL-<S>-KERNEL, text" --
+        │     not suppressed, since they carry real operator-relevant
+        │     information -- except routine INFO-level device/bus-probe
+        │     chatter, dropped as genuinely operator-worthless. See the
+        │     design doc for the route-by-default filter and the one
+        │     measured vms:/vmsfs: prefix collision.
         ├── Load: vms.ko, vmsfs.ko
         ├── Generate /etc/passwd, /etc/group from sysuaf.dat
         └── exec /sbin/init (ovmx_init) — PID 1, BOOTSTRAP ONLY (vms-9b7)
@@ -170,6 +182,40 @@ by which point JOB_CONTROL already owns the console — and then waits
 because Linux's PID 1 cannot exit without panicking the kernel. It contains
 no login loop of its own; grep src/ovmx_init/ovmx_init.c finds none.
 ```
+
+### Executive kernel messages → the operator surface (vms-32a)
+
+Full design: `docs/design-opcom-executive-logging.md` (two-vocabulary model,
+lab-Alpha oracle citations, the OVMX/SYSKRNL facility+ident choices under
+Rule 8, and the route-by-default operator-ruling correction of 2026-08-12).
+
+`vms.ko`/`vmsfs.ko` speak only through `printk` (`pr_info`/`pr_warn`/
+`pr_err`) — there is no kernel-to-user push channel and this item adds none
+(`/dev/vms`'s `file_operations` stay ioctl + mmap only). Two independent
+pieces close the gap between "the kernel module said something" and "a VMS
+operator can see it":
+
+- **`src/ovmx_init/opcom_kmsg.c`** — a detached pthread, started early in
+  `bare_metal_init()`, that reads the standard `/dev/kmsg` device (seek to
+  start, then poll + follow) and reformats each record as a bare
+  `%FACILITY-<S>-<IDENT>, text` console line (boot-time vocabulary — no
+  OPCOM banner; OPCOM is not running yet), written to `/dev/console`.
+  `vms:`/`vmsfs:`-prefixed records (vms.ko/vmsfs.ko's own) wear the `OVMX`
+  facility. Everything else — SYSKRNL (Linux-kernel-layer) lines, including the
+  kernel's own generic module-taint warning — is RE-STYLED and routed too,
+  wearing `SYSKRNL`, when its severity is NOTICE or more severe; only
+  routine INFO-level device/bus-probe chatter is dropped as genuinely
+  operator-worthless. (The taint warning happens to also start with
+  `vms: `, because Linux substitutes the loading module's own name into
+  it, so it is classified alongside vms.ko's own lines under `OVMX` rather
+  than `SYSKRNL` — a disclosed simplification, not a defect: content and
+  severity both stay the kernel's real ones.)
+- **`src/libvms/syssvc/sys_operator.c`** (`sys$sndopr`) — writes the actual
+  OPCOM records to `SYS$MANAGER:OPERATOR.LOG`, now in the oracle-exact
+  shape: an eleven-`%` boxed banner (`%%%%%%%%%%%  OPCOM  DD-MMM-YYYY
+  HH:MM:SS.ss  %%%%%%%%%%%`) followed by `Request N, from user U on N`,
+  where `N` (the node) is `ovmx_node_name()` — the real configured SCSNODE
+  — not a hardcoded literal.
 
 ### SYSUAF.DAT — one format, one reader, one writer (vms-9b7)
 

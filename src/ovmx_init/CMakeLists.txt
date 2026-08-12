@@ -5,6 +5,7 @@
 add_executable(ovmx_init
     ovmx_init.c
     sysboot.c
+    opcom_kmsg.c
 )
 
 target_include_directories(ovmx_init PRIVATE

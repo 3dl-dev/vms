@@ -774,19 +774,27 @@ static void g_truncate_operator_logs(void)
  * exactly `want` in the header's USER FIELD.
  *
  * THE FIELD IS CUT OUT, NOT MATCHED AS A LITERAL, and that is the point.
- * src/libvms/syssvc/sys_operator.c formats the header with
+ * src/libvms/syssvc/sys_operator.c formats the record (rd vms-32a,
+ * oracle-exact per docs/design-opcom-executive-logging.md) as TWO lines:
  *
- *     "... request %u from user %s on node OVMX"
+ *     %%%%%%%%%%%  OPCOM  <ts>  %%%%%%%%%%%
+ *     Request %u, from user %s on %s
  *
- * so an EMPTY user name renders as a doubled space -- "from user  on node".
- * That doubling is a plain %s artefact, not a rendering anyone chose, and the
- * header's authenticity is separately unpinned (vms-2d37: the record BODY is
- * written as text when it is a binary opcdef block, so this whole line is not
- * yet oracle-matched). An earlier wording of these checks matched the two
- * spaces as a string literal, which pins the accident as though it were the
- * decision. What is under test is WHICH NAME THE FIELD CARRIES, so the field
- * is extracted between "from user " and " on node" and compared as a value;
+ * so an EMPTY user name renders as a doubled space -- "from user  on
+ * <node>". That doubling is a plain %s artefact, not a rendering anyone
+ * chose, and the header's authenticity is separately unpinned (vms-2d37:
+ * the record BODY is written as text when it is a binary opcdef block, so
+ * this whole line is not yet oracle-matched). An earlier wording of these
+ * checks matched the two spaces as a string literal, which pins the
+ * accident as though it were the decision. What is under test is WHICH
+ * NAME THE FIELD CARRIES, so the field is extracted between "from user "
+ * and " on " (the node name has no spaces of its own, so the first " on "
+ * after "from user " always ends the field) and compared as a value;
  * whitespace between them is not asserted either way.
+ *
+ * The banner line (not this function's concern -- it carries no user
+ * field) is the record delimiter: it is what makes *total* count records,
+ * not lines.
  */
 static int g_opcom_headers_naming(const char *log, const char *want, int *total)
 {
@@ -795,23 +803,29 @@ static int g_opcom_headers_naming(const char *log, const char *want, int *total)
 
     *total = 0;
     for (;;) {
-        const char *h = strstr(p, "%%OPCOM, ");
-        const char *u, *e, *eol;
+        const char *h = strstr(p, "%%%%%%%%%%%  OPCOM  ");
+        const char *line2, *eol2, *u, *e;
         char field[128];
         size_t n;
 
         if (!h) break;
-        p = h + 9;
+        p = h + 20;
         (*total)++;
 
-        /* Both delimiters must lie on THIS header's own line, or a header
-         * missing the field would silently borrow the next record's. */
-        eol = strchr(h, '\n');
-        u = strstr(h, "from user ");
-        if (!u || (eol && u > eol)) continue;
+        /* The "Request N, from user U on N" body line is immediately after
+         * the banner's own line. Both delimiters below must lie on THAT
+         * line, or a record missing the field would silently borrow a
+         * later record's. */
+        line2 = strchr(h, '\n');
+        if (!line2) continue;
+        line2++;
+        eol2 = strchr(line2, '\n');
+
+        u = strstr(line2, "from user ");
+        if (!u || (eol2 && u > eol2)) continue;
         u += strlen("from user ");
-        e = strstr(u, " on node");
-        if (!e || (eol && e > eol)) continue;
+        e = strstr(u, " on ");
+        if (!e || (eol2 && e > eol2)) continue;
 
         n = (size_t)(e - u);
         if (n >= sizeof(field)) n = sizeof(field) - 1;
@@ -1286,7 +1300,14 @@ static void scenario_g_unnamed_row_reports_nothing(void)
               "G/OPCOM: the subprocess's REPLY and LOGOUT records reached an "
               "operator log at all (without this the name checks below would "
               "pass by reading an empty file)");
-        CHECK(total > 0 && strstr(oplog, " on node OVMX") != NULL,
+        /* The banner + "Request N, from user ... on ..." shape (rd
+         * vms-32a) -- not the node VALUE, which is whatever SCSNODE this
+         * harness is configured with (or its OVMX-default fallback) and is
+         * not this check's concern; g_opcom_headers_naming() above already
+         * asserts the field's VALUE. */
+        CHECK(total > 0 && strstr(oplog, "%%%%%%%%%%%  OPCOM  ") != NULL &&
+              strstr(oplog, "Request ") != NULL &&
+              strstr(oplog, "from user ") != NULL,
               "G/OPCOM: what landed is sys$sndopr's OPCOM header, in its own "
               "format");
         /* negctl: opcom-header-host-login-name */

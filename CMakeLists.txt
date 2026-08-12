@@ -186,6 +186,7 @@ if(BUILD_TESTS)
     add_subdirectory(tests/vmsqueue)
     add_subdirectory(tests/dcl)
     add_subdirectory(tests/vmsscs)
+    add_subdirectory(tests/ovmx_init)
 
     # tests/vmsssh: term_mapping unit test only (vms-97d). No libssh
     # dependency — unlike src/vmsssh (the daemon), this must build and run

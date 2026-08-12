@@ -78,6 +78,9 @@
  * to run before the device table exists -- see sysboot.h and
  * bare_metal_init() below. */
 #include "sysboot.h"
+/* /dev/kmsg -> operator-console bridge for vms.ko/vmsfs.ko's own printk
+ * records (vms-32a) -- see docs/design-opcom-executive-logging.md. */
+#include "opcom_kmsg.h"
 
 #define SYSDISK_DEV      "/dev/vda"
 
@@ -442,6 +445,16 @@ static void bare_metal_init(void)
     mount("devpts", "/dev/pts", "devpts", 0, NULL);
     mkdir("/dev/shm", 0755);
     mount("tmpfs", "/dev/shm", "tmpfs", 0, NULL);
+
+    /*
+     * The /dev/kmsg -> operator-console bridge (vms-32a) starts as early as
+     * /dev exists, ahead of BOTH boot branches below, so it is running
+     * before vms.ko/vmsfs.ko load in either one and replays their init-time
+     * records rather than missing them. See docs/design-opcom-executive-
+     * logging.md. Best-effort: opcom_kmsg_start() never blocks or fails
+     * boot even if /dev/kmsg is unavailable.
+     */
+    opcom_kmsg_start();
 
     /*
      * Conversational boot (vms-b81): the platform's boot-flag register is

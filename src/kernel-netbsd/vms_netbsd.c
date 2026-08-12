@@ -12,7 +12,7 @@
  *   - P2c (vms-4b4): ONE real VMS EXECUTIVE FACILITY -- EVENT FLAGS -- run from
  *     the SAME source that the Linux vms.ko runs: src/kernel-core/vms_eflag.c.
  *     Nothing here re-implements event-flag semantics. This file is PURELY the
- *     NetBSD backend glue: it provides the exec_*/exec_list_* primitives (via
+ *     NetBSD backend glue: it provides the exec_* and exec_list_* primitives (via
  *     exec_kbackend_netbsd.h / exec_list_netbsd.{h,c}), a per-pid process table,
  *     and the cdevsw d_ioctl dispatch that hands each request to the shared
  *     facility. The facility holds COMMON event flag clusters in module-global
@@ -23,14 +23,14 @@
  *     because there is exactly one copy of the cluster and it lives in the
  *     kernel.
  *
- * THE COPY SEAM. The event-flag ioctls are encoded IOC_VOID (the _IO() form,
- * see vms_eflag_nb.h), so NetBSD's generic ioctl path does NOT pre-copy the
- * argument: it hands us the RAW USER POINTER. We pass that straight to the
- * shared facility, whose exec_copyin/exec_copyout (NetBSD copyin/copyout) do the
- * single real user boundary crossing -- exactly as the same facility does on
- * Linux. PING stays _IOWR (the P2b contract), so for PING the framework
- * pre-copies and `data' is a kernel buffer; the two encodings coexist in one
- * dispatch.
+ * THE COPY SEAM. The event-flag ioctls are _IOWR (like PING), so NetBSD's
+ * generic cdevsw path copies the caller's argument into a kernel buffer BEFORE
+ * calling us and copies our answer back out AFTER we return. We hand that kernel
+ * buffer straight to the shared facility; its exec_copyin/exec_copyout are, on
+ * the NetBSD backend, in-kernel copies between that buffer and the facility's
+ * locals (the one real user boundary crossing is the framework's). This is the
+ * honest, idiomatic NetBSD integration and leaves the shared facility source
+ * unchanged -- see exec_kbackend_netbsd.h's COPY MODEL note.
  *
  * PROCESS MODEL. The Linux executive keeps a global, module-lifetime process
  * table keyed by pid; so does this one (vms_proctab), because the shared
@@ -67,7 +67,7 @@
 /*
  * vms_internal.h is the NetBSD struct twin: it pulls exec_kbackend.h /
  * exec_list.h (selected to their NetBSD backends by OVMX_KBACKEND_NETBSD) and
- * vms_eflag_nb.h (the arg structs + the IOC_VOID request numbers), and declares
+ * vms_eflag_nb.h (the arg structs + the _IOWR request numbers), and declares
  * the shared facility's entry points. Including it here gives this glue the
  * exec_* primitives, `struct vms_proc', and the vms_ioctl_* prototypes.
  */
@@ -252,10 +252,11 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		return 0;
 
 	/*
-	 * Event-flag facility. These are IOC_VOID: NetBSD did NOT pre-copy, and
-	 * `data' points at a cell holding the RAW USER argument pointer. We hand
-	 * that user pointer straight to the shared facility, which owns the
-	 * copyin/copyout. Nothing here interprets the argument -- the facility
+	 * Event-flag facility. These are _IOWR: NetBSD has already copied the
+	 * caller's argument into the kernel buffer `data' and will copy our answer
+	 * back out after we return. We hand `data' straight to the shared facility,
+	 * whose exec_copyin/exec_copyout are in-kernel copies on this backend.
+	 * Nothing here interprets the argument -- the facility
 	 * (src/kernel-core/vms_eflag.c), identical to the Linux one, does.
 	 */
 	case VMS_IOCTL_SETEF:
@@ -267,7 +268,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_ASCEFC:
 	case VMS_IOCTL_DACEFC:
 	case VMS_IOCTL_DLCEFC:
-		uarg = *(void **)data;
+		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
 			return ENOMEM;

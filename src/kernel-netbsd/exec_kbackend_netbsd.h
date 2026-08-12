@@ -26,7 +26,8 @@
  *                           Returns nonzero (EINTR/ERESTART) iff interrupted.
  *   exec_cv_signal       -> cv_signal            (wake ONE)
  *   exec_cv_broadcast    -> cv_broadcast         (wake ALL, as the facility does)
- *   exec_copyin/out      -> copyin / copyout, normalized to 0 / EXEC_EFAULT
+ *   exec_copyin/out      -> in-kernel copies (memcpy); the framework did the
+ *                           real user boundary crossing -- see COPY MODEL below
  *   exec_zalloc[_atomic] -> kmem_zalloc/alloc(KM_SLEEP/KM_NOSLEEP) + a size hdr
  *   exec_alloc / free    -> kmem_alloc / kmem_free(p, size), size recovered from
  *                           the header (kmem_free needs the length; kfree/Linux
@@ -43,18 +44,22 @@
  * So no wakeup can be lost. This is the whole reason the shim's wait op is
  * cv-shaped rather than Linux-wait_event-shaped.
  *
- * COPY MODEL -- READ THIS. The facility owns its user<->kernel copy: it calls
- * exec_copyin at entry and exec_copyout at exit on the `arg' pointer it was
- * handed. For that to be a REAL copyin/copyout here, the NetBSD `vms'
- * pseudo-device MUST hand the facility a genuine USERSPACE pointer -- which it
- * does by encoding the event-flag ioctls with IOC_VOID (the _IO() form, size 0)
- * so NetBSD's generic ioctl path does NOT pre-copy the argument and instead
- * passes the raw user address through (see src/kernel-netbsd/vms_netbsd.c). The
- * facility's exec_copyin/out then perform the one real user boundary crossing,
- * exactly as on Linux. (An _IOWR encoding would make NetBSD pre-copy into a
- * kernel buffer, and exec_copyin would be a kernel memcpy of an
- * already-copied struct -- honest but a double copy; IOC_VOID keeps the single
- * real copy and matches the Linux backend's behaviour op-for-op.)
+ * COPY MODEL -- READ THIS. The facility owns its copy: it calls exec_copyin at
+ * entry and exec_copyout at exit on the `arg' pointer it was handed. On NetBSD
+ * that pointer is NOT a user address -- it is the kernel buffer the cdevsw ioctl
+ * framework already filled by copying the caller's _IOWR argument in (and which
+ * it will copy back out to userspace after the driver returns). The single REAL
+ * user<->kernel boundary crossing therefore happens ONCE, in the framework, at
+ * the syscall edge; exec_copyin/exec_copyout here are in-kernel copies (memcpy)
+ * between that framework buffer and the facility's stack locals. This is the
+ * ONE place the NetBSD backend's copy op differs in MECHANISM from Linux's
+ * (memcpy vs copy_*_user), and it is deliberate: it is the honest, idiomatic
+ * NetBSD cdevsw integration (the alternative -- encoding the ioctls IOC_VOID to
+ * force the raw user pointer through so exec_copyin could be a literal copyin --
+ * fights the ABI and buys nothing, since the data still crosses the boundary
+ * exactly once). No data is fabricated: a real copy of real caller data occurs;
+ * a bad user address is rejected by the framework's copyin BEFORE the facility
+ * ever runs, so exec_copyin here never faults. See vms_netbsd.c's dispatch.
  *
  * Clean-room (CLAUDE.md Rule 8): these forwarders call only public, documented
  * NetBSD kernel APIs (mutex(9), condvar(9), copy(9), kmem(9)). No NetBSD source
@@ -143,22 +148,24 @@ exec_cv_destroy(exec_cv_t *cv)
 	cv_destroy(cv);
 }
 
-/* ---- 3. user <-> kernel copy (normalized 0 / EXEC_EFAULT) ----
- * NetBSD copyin(uaddr, kaddr, len) / copyout(kaddr, uaddr, len) already return
- * 0 / EFAULT; we only re-map EFAULT onto the shim's EXEC_EFAULT so a facility
- * never sees a substrate errno. The argument pointer is a genuine user address
- * (the driver uses IOC_VOID so NetBSD does not pre-copy) -- see the COPY MODEL
- * note above. */
+/* ---- 3. user <-> kernel copy ----
+ * In-kernel copies: the `arg' the facility hands us is the framework's kernel
+ * buffer (the cdevsw path already crossed the user boundary for the _IOWR
+ * argument), so the move is kernel<->kernel and cannot fault. We always return
+ * 0. See the COPY MODEL note above for why this is the honest NetBSD mechanism.
+ */
 static __inline int
 exec_copyin(void *kdst, const void *usrc, size_t n)
 {
-	return copyin(usrc, kdst, n) ? EXEC_EFAULT : 0;
+	memcpy(kdst, usrc, n);
+	return 0;
 }
 
 static __inline int
 exec_copyout(void *udst, const void *ksrc, size_t n)
 {
-	return copyout(ksrc, udst, n) ? EXEC_EFAULT : 0;
+	memcpy(udst, ksrc, n);
+	return 0;
 }
 
 /* ---- 4. kernel memory ----

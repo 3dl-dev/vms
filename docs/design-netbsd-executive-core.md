@@ -489,20 +489,28 @@ is unchanged in substance; the new code is entirely per-substrate glue in
 `exec_list_netbsd.{h,c}`), the NetBSD struct twin (`vms_internal.h`), and the
 `cdevsw`/`d_ioctl` dispatch. Four decisions worth recording:
 
-1. **The copy seam = IOC_VOID, not `_IOWR` (matches §3's `exec_copyin`→`copyin`).**
-   The facility owns its user↔kernel copy (it calls `exec_copyin` at entry and
-   `exec_copyout` at exit on the `arg` it is handed). On Linux the module passes
-   the raw user pointer and those are `copy_*_user`. On NetBSD the generic ioctl
-   path would, for an `_IOWR`, PRE-COPY the argument into a kernel buffer and hand
-   the driver THAT — which would make `exec_copyin` a kernel memcpy of an
-   already-copied struct (a double copy). So the NetBSD event-flag ioctls are
-   encoded **IOC_VOID** (the `_IO()` form, size 0, no pre-copy): NetBSD hands the
-   driver the raw user pointer, the driver passes it straight through, and the
-   facility's `exec_copyin`/`exec_copyout` do the single real boundary crossing —
-   op-for-op what the Linux backend does. PING stays `_IOWR` (the P2b contract),
-   so the two encodings coexist in one `d_ioctl`. The event-flag arg structs are
-   byte-identical to `src/kernel/vms_ioctl.h`; only the request-number encoding
-   differs per substrate (documented in `vms_eflag_nb.h`).
+1. **The copy seam = `_IOWR`; the cdevsw framework owns the user boundary.**
+   The facility owns its copy (it calls `exec_copyin` at entry and `exec_copyout`
+   at exit on the `arg` it is handed). On Linux `arg` is the raw user pointer and
+   those are `copy_*_user`. On NetBSD the event-flag ioctls are **`_IOWR`** (like
+   PING and like `src/kernel/vms_ioctl.h`), so the generic cdevsw path copies the
+   caller's argument into a kernel buffer BEFORE the driver runs and copies the
+   answer back out AFTER — and the driver hands that kernel buffer straight to the
+   shared facility. On the NetBSD backend `exec_copyin`/`exec_copyout` are
+   therefore **in-kernel copies (`memcpy`)** between the framework buffer and the
+   facility's locals; the ONE real user boundary crossing is the framework's, at
+   the syscall edge. This is the honest, idiomatic NetBSD integration and is the
+   one place the NetBSD backend's copy op differs in mechanism from Linux's
+   (`memcpy` vs `copy_*_user`) — a deliberate, documented deviation from §3's
+   provisional "`exec_copyin`→`copyin`" note. The considered alternative — encode
+   the ioctls `IOC_VOID` to force the raw user pointer through so `exec_copyin`
+   could be a literal `copyin` — fights the cdevsw ABI (relying on the exact
+   IOC_VOID pointer-passing convention) and buys nothing, since the data still
+   crosses the boundary exactly once. Because the encoding is `_IOWR` with the
+   same structs and NR bytes as `vms_ioctl.h`, the request NUMBERS are now
+   **identical across substrates**. No data is fabricated (a real copy of real
+   caller data occurs; a bad user address is rejected by the framework's copyin
+   before the facility runs), so this is not the INV-6 silent-fallback class.
 
 2. **One lifecycle addition to the shared core, no-op on Linux.** The facility
    `exec_cv_init`/`exec_lock_init`s each common cluster's `waitq`/`lock` at

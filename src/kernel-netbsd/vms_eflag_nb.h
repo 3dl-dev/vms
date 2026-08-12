@@ -23,19 +23,21 @@
  * structs the Linux executive's ioctl surface uses (src/kernel/vms_ioctl.h:
  * struct vms_ef_args / vms_ef_wait_args / vms_ef_read_args / vms_ef_common_args)
  * -- byte-for-byte identical layouts -- because ONE facility source
- * (src/kernel-core/vms_eflag.c) copies them in and out on BOTH substrates. Only
- * the request-number ENCODING differs per substrate, and deliberately so.
+ * (src/kernel-core/vms_eflag.c) copies them in and out on BOTH substrates. And
+ * because the encoding below is _IOWR with those same structs and the same NR
+ * bytes as vms_ioctl.h, the request NUMBERS are identical across substrates too.
  *
- * WHY IOC_VOID (the _IO form) HERE, NOT _IOWR. On Linux the module owns its
- * copyin/copyout, so the request is an _IOWR carrying the struct size. On NetBSD
- * the generic ioctl path would, for an _IOWR, PRE-COPY the argument into a
- * kernel buffer and pass THAT to the driver -- but the shared facility wants to
- * do the copyin/copyout ITSELF (that is what makes it substrate-agnostic). So
- * the NetBSD encoding is IOC_VOID (_IO, no size, no pre-copy): NetBSD then hands
- * the driver the RAW USER POINTER, the driver passes it straight to the shared
- * facility, and the facility's exec_copyin/exec_copyout perform the single real
- * user boundary crossing -- exactly as on Linux. The command NR bytes
- * (0x20..0x28) are the SAME as src/kernel/vms_ioctl.h: one /dev/vms magic space.
+ * THE COPY MODEL: _IOWR + the framework owns the user boundary. On Linux the
+ * module owns its copyin/copyout on the raw user pointer. On NetBSD the generic
+ * cdevsw ioctl path PRE-COPIES an _IOWR argument into a kernel buffer, hands the
+ * driver that buffer, and copies the driver's answer back out. The driver passes
+ * that kernel buffer straight to the shared facility; the facility's
+ * exec_copyin/exec_copyout are, on the NetBSD backend, in-kernel copies between
+ * that framework buffer and the facility's locals (the ONE real user boundary
+ * crossing is the framework's, at the syscall edge). This is the honest,
+ * idiomatic NetBSD integration -- it does not fight the cdevsw ABI with an
+ * IOC_VOID raw-pointer trick -- and it keeps the shared facility source
+ * unchanged. See exec_kbackend_netbsd.h's COPY MODEL note for the detail.
  *
  * CLEAN ROOM (CLAUDE.md Rule 8). The event-flag SEMANTICS are the publicly
  * documented OpenVMS $SETEF/$CLREF/$WAITFR/$READEF/$ASCEFC/$DACEFC behaviour;
@@ -54,10 +56,11 @@
 #include <stdint.h>
 #endif
 
-/* Prefer the substrate's own _IO* macros (identical dance to vms_ping.h). We
- * need _IO (IOC_VOID) here, not _IOWR. On NetBSD they come from <sys/ioccom.h>
- * (kernel) or <sys/ioctl.h> (userspace). */
-#if !defined(_IO)
+/* Prefer the substrate's own _IO* macros (identical dance to vms_ping.h). On
+ * NetBSD they come from <sys/ioccom.h> (kernel) or <sys/ioctl.h> (userspace);
+ * the fallback matches vms_ioctl.h's Linux-style encoding, which for structs
+ * this small yields the identical request number. */
+#if !defined(_IOWR)
 # if defined(__NetBSD__)
 #  if defined(_KERNEL)
 #   include <sys/ioccom.h>
@@ -65,7 +68,8 @@
 #   include <sys/ioctl.h>
 #  endif
 # else
-#  define _IO(type, nr)  (((type) << 8) | (nr))
+#  define _IOWR(type, nr, size) \
+        (((3U) << 30) | ((sizeof(size)) << 16) | ((type) << 8) | (nr))
 # endif
 #endif
 
@@ -107,18 +111,20 @@ struct vms_ef_common_args {
 };
 
 /* ================================================================
- * Request numbers -- IOC_VOID (no pre-copy; the facility owns the copy). Same
- * NR bytes as src/kernel/vms_ioctl.h so the two substrates share one magic map.
+ * Request numbers -- _IOWR carrying the SAME structs and NR bytes as
+ * src/kernel/vms_ioctl.h, so the numbers are IDENTICAL across substrates. The
+ * struct each command carries is exactly the one the shared facility copies for
+ * that command (so the framework's pre-copy size matches the facility's copy).
  * ================================================================ */
-#define VMS_IOCTL_SETEF   _IO(VMS_EFLAG_IOC_MAGIC, 0x20)  /* struct vms_ef_args */
-#define VMS_IOCTL_CLREF   _IO(VMS_EFLAG_IOC_MAGIC, 0x21)  /* struct vms_ef_args */
-#define VMS_IOCTL_WAITFR  _IO(VMS_EFLAG_IOC_MAGIC, 0x22)  /* struct vms_ef_args */
-#define VMS_IOCTL_WFLOR   _IO(VMS_EFLAG_IOC_MAGIC, 0x23)  /* struct vms_ef_wait_args */
-#define VMS_IOCTL_WFLAND  _IO(VMS_EFLAG_IOC_MAGIC, 0x24)  /* struct vms_ef_wait_args */
-#define VMS_IOCTL_READEF  _IO(VMS_EFLAG_IOC_MAGIC, 0x25)  /* struct vms_ef_read_args */
-#define VMS_IOCTL_ASCEFC  _IO(VMS_EFLAG_IOC_MAGIC, 0x26)  /* struct vms_ef_common_args */
-#define VMS_IOCTL_DACEFC  _IO(VMS_EFLAG_IOC_MAGIC, 0x27)  /* struct vms_ef_args */
-#define VMS_IOCTL_DLCEFC  _IO(VMS_EFLAG_IOC_MAGIC, 0x28)  /* struct vms_ef_common_args */
+#define VMS_IOCTL_SETEF   _IOWR(VMS_EFLAG_IOC_MAGIC, 0x20, struct vms_ef_args)
+#define VMS_IOCTL_CLREF   _IOWR(VMS_EFLAG_IOC_MAGIC, 0x21, struct vms_ef_args)
+#define VMS_IOCTL_WAITFR  _IOWR(VMS_EFLAG_IOC_MAGIC, 0x22, struct vms_ef_args)
+#define VMS_IOCTL_WFLOR   _IOWR(VMS_EFLAG_IOC_MAGIC, 0x23, struct vms_ef_wait_args)
+#define VMS_IOCTL_WFLAND  _IOWR(VMS_EFLAG_IOC_MAGIC, 0x24, struct vms_ef_wait_args)
+#define VMS_IOCTL_READEF  _IOWR(VMS_EFLAG_IOC_MAGIC, 0x25, struct vms_ef_read_args)
+#define VMS_IOCTL_ASCEFC  _IOWR(VMS_EFLAG_IOC_MAGIC, 0x26, struct vms_ef_common_args)
+#define VMS_IOCTL_DACEFC  _IOWR(VMS_EFLAG_IOC_MAGIC, 0x27, struct vms_ef_args)
+#define VMS_IOCTL_DLCEFC  _IOWR(VMS_EFLAG_IOC_MAGIC, 0x28, struct vms_ef_common_args)
 
 /*
  * Common event flag cluster range (OpenVMS): cluster 2 = EFN 64..95, cluster 3

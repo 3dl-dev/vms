@@ -16,7 +16,7 @@
  * the slice the event-flag facility touches -- the event-flag structs, the SS$
  * status codes it returns, the arg structs it copies, and the few Linux-kernel
  * spellings it uses (strscpy, READ_ONCE, ERESTARTSYS) -- expressed in the
- * substrate-agnostic exec_*/exec_list_* vocabulary, so the SAME vms_eflag.c
+ * substrate-agnostic exec_* and exec_list_* vocabulary, so the SAME vms_eflag.c
  * source compiles against it without a single `#if'. This is the per-substrate
  * "glue" the design record calls out (§4): the facility is shared; the struct
  * header and the char-device/module lifecycle are backend-specific.
@@ -80,7 +80,7 @@
 
 /* ================================================================
  * Event-flag structures -- the exact fields src/kernel-core/vms_eflag.c uses,
- * in the exec_*/exec_list_* vocabulary. Compare src/kernel/vms_internal.h's
+ * in the exec_* and exec_list_* vocabulary. Compare src/kernel/vms_internal.h's
  * Linux-typed versions (spinlock_t/wait_queue_head_t/struct list_head); the
  * facility names only exec_* / exec_list_* so both compile it unchanged.
  * ================================================================ */

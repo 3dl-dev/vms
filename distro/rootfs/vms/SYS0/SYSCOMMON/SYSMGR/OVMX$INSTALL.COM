@@ -67,33 +67,31 @@ $!       driver) types the utility's own commands at its own prompt. This
 $!       is real DCL and a real utility, never faked, but it means the
 $!       install session cannot fully automate those two steps yet.
 $!
-$!   (c) AUTHORIZE.EXE, forked via dcl_exec_utility(), never learns about a
-$!       device MOUNTed by its DCL parent -- only SYSDISK is registered in
-$!       its own per-process vmsfs device table at its own startup. The
-$!       DEFINE/JOB SYS$SYSTEM redirect below DOES correctly retarget the
-$!       LOGICAL (confirmed live: SHOW LOGICAL SYS$SYSTEM shows the target
-$!       after the DEFINE), but AUTHORIZE's own file layer cannot then open
-$!       anything through it -- it reports %UAF-E-NOSUCHUSER for an
-$!       account that genuinely exists on the target.
+$!   (c) [FIXED, vms-8b6/#385] AUTHORIZE.EXE, forked via dcl_exec_utility(),
+$!       formerly never learned about a device MOUNTed by its DCL parent.
+$!       vmsfs_device_resolve now reads /proc/mounts, so the exec'd AUTHORIZE
+$!       sees the parent's MOUNTed target and opens files on it. The
+$!       DEFINE/JOB SYS$SYSTEM redirect below correctly retargets the LOGICAL
+$!       (LNM$JOB is executive-resident, so the RUN'd AUTHORIZE in the same
+$!       job sees it via vms_kif_lnm_translate).
 $!
-$!   (d) Independently of (c): plain RMS/POSIX file CREATE on a REAL
-$!       vmsfs.ko-mounted volume fails outright -- ground-sourced with
-$!       `CREATE DKA0:[SYSEXE]PROBE.TXT` on the DISTRIBUTION disk itself
-$!       (no target, no redirection at all), which returns %RMS-E-CRE.
-$!       SET PASSWORD (an in-process DCL builtin, so it does not hit gap
-$!       (c)) fails the SAME way, via sysuaf_write_record()'s own
-$!       fopen()+rename(), reporting %UAF-E-WRITEFAIL even for the
-$!       caller's own account on its own disk.
-$!       tests/libvms/test_sysuaf_write_veracity.c's own header explains
-$!       why this was never caught: "WHY THIS IS A HOST TEST, NOT A
-$!       tests/qemu ONE" -- the real vmsfs.ko create path had never been
-$!       ground-source tested before this item.
+$!   (d) [FIXED, vms-581/#378] plain RMS/POSIX file CREATE on a REAL
+$!       vmsfs.ko-mounted volume formerly failed outright (%RMS-E-CRE); the
+$!       write path (sysuaf_write_record()'s fopen()+rename(), also SET
+$!       PASSWORD) now works for the caller's own account on a real volume.
+$!       tests/libvms/test_sysuaf_write_veracity.c guards this.
 $!
-$!   Net effect of (c)+(d): NEITHER of OVMX's two password-write
-$!   mechanisms can currently write a password to ANY SYSUAF.DAT on a real
-$!   mounted vmsfs volume -- not just the cross-device target case this
-$!   procedure needs. The AUTHORIZE-against-target design below is correct
-$!   or forward-compatible; it will work once (c) and (d) are fixed.
+$!   With (c) and (d) fixed, the remaining reason the install-set SYSTEM
+$!   password did not persist to the booted target was a ROOTED-PATH MISMATCH
+$!   (vms-963): PRODUCT INSTALL now lays the target as a rooted concealed
+$!   volume (vms-96ec/#392), so the target's real SYSUAF.DAT lives at
+$!   <target>:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT, but this procedure's
+$!   DEFINE/JOB SYS$SYSTEM still pointed at the pre-rooted flat
+$!   <target>:[SYSEXE]. AUTHORIZE therefore resolved SYS$SYSTEM:SYSUAF.DAT to
+$!   a directory the target does not have, so the MODIFY never reached the
+$!   file the booted target authenticates against. The DEFINE/JOB below now
+$!   targets the rooted [SYS0.SYSCOMMON.SYSEXE], matching where both PRODUCT
+$!   INSTALL writes and the booted system's SYS$SYSTEM composes.
 $!
 $ SET NOON
 $!
@@ -206,7 +204,18 @@ $ WRITE SYS$OUTPUT "Configuring the SYSTEM account on the target. At the UAF> pr
 $ WRITE SYS$OUTPUT "is not echoed), type exactly:"
 $ WRITE SYS$OUTPUT "    MODIFY SYSTEM/PASSWORD=<the password just entered above>"
 $ WRITE SYS$OUTPUT "    EXIT"
-$ DEFINE/JOB SYS$SYSTEM 'OVMX_TARGET'[SYSEXE]
+$! Redirect SYS$SYSTEM at the TARGET's ROOTED system directory
+$! 'OVMX_TARGET'[SYS0.SYSCOMMON.SYSEXE], NOT the flat 'OVMX_TARGET'[SYSEXE]
+$! (vms-963): PRODUCT INSTALL lays the target as a rooted concealed volume
+$! (vms-96ec/#392), so the target's real SYSUAF.DAT is
+$! <target>:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT -- exactly where the booted
+$! target composes SYS$SYSTEM (SYS$SYSROOT:[SYSEXE] over the concealed
+$! SYS$SYSDEVICE:[SYS0.SYSCOMMON.], lnm_defaults.c). AUTHORIZE resolves
+$! SYS$SYSTEM:SYSUAF.DAT through this JOB logical, so the MODIFY lands on the
+$! SAME file the booted system authenticates against. The old flat [SYSEXE]
+$! matched the pre-rooted layout and pointed at a directory the target does
+$! not have, so the install-set password never reached the booted target.
+$ DEFINE/JOB SYS$SYSTEM 'OVMX_TARGET'[SYS0.SYSCOMMON.SYSEXE]
 $ SET TERMINAL/NOECHO
 $ RUN SYS$SYSTEM:AUTHORIZE.EXE
 $ SET TERMINAL/ECHO

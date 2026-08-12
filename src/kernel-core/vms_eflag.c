@@ -117,6 +117,28 @@ void vms_eflag_init(void)
     exec_lock_init(&vms_common_ef_lock);
 }
 
+/*
+ * vms_common_ef_free - tear down and free one common cluster.
+ *
+ * A common cluster owns two backend sync objects it was given at creation
+ * (exec_cv_init(&waitq) and exec_lock_init(&lock) in vms_ioctl_ascefc); the
+ * portable lifecycle is to DESTROY them before the memory is freed. On Linux
+ * exec_cv_destroy/exec_lock_destroy are no-ops (a wait_queue/spinlock owns no
+ * external resource), so this is behaviour-identical to the bare exec_free()
+ * these sites used before; on NetBSD they are the required cv_destroy(9)/
+ * mutex_destroy(9), without which freeing a live kcondvar/kmutex leaks its
+ * kernel resources (and trips a DIAGNOSTIC/LOCKDEBUG kernel). Centralized here
+ * so every cluster-free path -- cleanup, per-process release, re-association,
+ * DACEFC and DLCEFC -- tears the object down the same way. The caller must have
+ * already exec_list_del()'d the node.
+ */
+static void vms_common_ef_free(struct vms_common_ef_cluster *cluster)
+{
+    exec_cv_destroy(&cluster->waitq);
+    exec_lock_destroy(&cluster->lock);
+    exec_free(cluster);
+}
+
 void vms_eflag_cleanup(void)
 {
     struct vms_common_ef_cluster *cluster, *tmp;
@@ -124,9 +146,13 @@ void vms_eflag_cleanup(void)
     exec_lock(&vms_common_ef_lock);
     exec_list_for_each_entry_safe(cluster, tmp, &vms_common_ef_list, list) {
         exec_list_del(&cluster->list);
-        exec_free(cluster);
+        vms_common_ef_free(cluster);
     }
     exec_unlock(&vms_common_ef_lock);
+
+    /* Tear down the list's own guard lock (no-op on Linux; mutex_destroy on
+     * NetBSD). Paired with the exec_lock_init in vms_eflag_init. */
+    exec_lock_destroy(&vms_common_ef_lock);
 }
 
 /*
@@ -144,7 +170,7 @@ void vms_proc_release_common_ef(struct vms_proc *proc)
             cluster->refcount--;
             if (cluster->refcount <= 0 && !cluster->perm) {
                 exec_list_del(&cluster->list);
-                exec_free(cluster);
+                vms_common_ef_free(cluster);
             }
             exec_unlock(&vms_common_ef_lock);
             proc->ef.common[i] = NULL;
@@ -603,7 +629,7 @@ long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg)
                 old->refcount--;
                 if (old->refcount <= 0 && !old->perm) {
                     exec_list_del(&old->list);
-                    exec_free(old);
+                    vms_common_ef_free(old);
                 }
                 exec_unlock(&vms_common_ef_lock);
             }
@@ -680,7 +706,7 @@ long vms_ioctl_dacefc(struct vms_proc *proc, unsigned long arg)
     cluster->refcount--;
     if (cluster->refcount <= 0 && !cluster->perm) {
         exec_list_del(&cluster->list);
-        exec_free(cluster);
+        vms_common_ef_free(cluster);
     }
     exec_unlock(&vms_common_ef_lock);
 
@@ -739,7 +765,7 @@ long vms_ioctl_dlcefc(struct vms_proc *proc, unsigned long arg)
         cluster->perm = 0;
         if (cluster->refcount <= 0) {
             exec_list_del(&cluster->list);
-            exec_free(cluster);
+            vms_common_ef_free(cluster);
         }
         args.status = SS__NORMAL;
         break;

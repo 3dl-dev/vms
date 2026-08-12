@@ -96,3 +96,7 @@ tests/netbsd/.netbsd-cache/
 # emulator disk images and downloaded install media are regenerated from a
 # pinned recipe, NEVER committed.
 .boot-cache/
+
+# NetBSD harness local caches (never committed)
+.netbsd-cache/
+.netbsd-cache-p2c/

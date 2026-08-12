@@ -245,7 +245,7 @@ def main():
                     "{ mount_cd9660 /dev/cd0a /mnt || "
                     "  mount_cd9660 /dev/cd1a /mnt || "
                     "  mount_cd9660 /dev/cd0d /mnt ; } && "
-                    "cp -R /mnt/kmod /mnt/probe /root/ovmx/ && "
+                    "cp -R /mnt/kmod /mnt/probe /mnt/kernel-core /root/ovmx/ && "
                     "umount /mnt && chmod -R u+w /root/ovmx && "
                     "ls -R /root/ovmx",
                     cmd_timeout)

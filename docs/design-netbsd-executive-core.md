@@ -478,3 +478,69 @@ the libvmssys VAX syscall backend. That is the entire point of this record.
   proof) → D ast/lnm/access → E mbx/devtab → F proctab+dispatch (proc-model+RCU
   shim) → **G locks last (44 KB payoff)** → **H = `vms-9dc`** VAX inherits the
   pattern for free.
+
+## 10. Phase C landing (`vms-4b4`) — what shipped, and four glue decisions
+
+Phase C compiles the SAME `src/kernel-core/vms_eflag.c` into the NetBSD `vms`
+pseudo-device that the Linux `vms.ko` builds, and proves it holds real
+cross-process state on NetBSD 10.1/amd64 (tests/netbsd P2c). The facility source
+is unchanged in substance; the new code is entirely per-substrate glue in
+`src/kernel-netbsd/`: the NetBSD backends (`exec_kbackend_netbsd.h`,
+`exec_list_netbsd.{h,c}`), the NetBSD struct twin (`vms_internal.h`), and the
+`cdevsw`/`d_ioctl` dispatch. Four decisions worth recording:
+
+1. **The copy seam = `_IOWR`; the cdevsw framework owns the user boundary.**
+   The facility owns its copy (it calls `exec_copyin` at entry and `exec_copyout`
+   at exit on the `arg` it is handed). On Linux `arg` is the raw user pointer and
+   those are `copy_*_user`. On NetBSD the event-flag ioctls are **`_IOWR`** (like
+   PING and like `src/kernel/vms_ioctl.h`), so the generic cdevsw path copies the
+   caller's argument into a kernel buffer BEFORE the driver runs and copies the
+   answer back out AFTER — and the driver hands that kernel buffer straight to the
+   shared facility. On the NetBSD backend `exec_copyin`/`exec_copyout` are
+   therefore **in-kernel copies (`memcpy`)** between the framework buffer and the
+   facility's locals; the ONE real user boundary crossing is the framework's, at
+   the syscall edge. This is the honest, idiomatic NetBSD integration and is the
+   one place the NetBSD backend's copy op differs in mechanism from Linux's
+   (`memcpy` vs `copy_*_user`) — a deliberate, documented deviation from §3's
+   provisional "`exec_copyin`→`copyin`" note. The considered alternative — encode
+   the ioctls `IOC_VOID` to force the raw user pointer through so `exec_copyin`
+   could be a literal `copyin` — fights the cdevsw ABI (relying on the exact
+   IOC_VOID pointer-passing convention) and buys nothing, since the data still
+   crosses the boundary exactly once. Because the encoding is `_IOWR` with the
+   same structs and NR bytes as `vms_ioctl.h`, the request NUMBERS are now
+   **identical across substrates**. No data is fabricated (a real copy of real
+   caller data occurs; a bad user address is rejected by the framework's copyin
+   before the facility runs), so this is not the INV-6 silent-fallback class.
+
+2. **One lifecycle addition to the shared core, no-op on Linux.** The facility
+   `exec_cv_init`/`exec_lock_init`s each common cluster's `waitq`/`lock` at
+   creation but the cluster-free sites called bare `exec_free()` — fine on Linux
+   (a wait_queue/spinlock owns no external resource, so `exec_*_destroy` are
+   no-ops) but a resource leak / DIAGNOSTIC trip on NetBSD (a live
+   `kcondvar`/`kmutex` must be `cv_destroy`/`mutex_destroy`d before free). Phase C
+   routes all five cluster-free paths through one `vms_common_ef_free()` helper
+   that destroys then frees, and adds the paired `exec_lock_destroy` for the
+   list-guard lock in `vms_eflag_cleanup`. This is the intended use of the shim's
+   `exec_*_destroy` ops (§3 declares them). **Verified inert on Linux:** the
+   compiled `vms_eflag.o` is disassembly-identical (0 instruction diff) to
+   origin/main — the helper inlines and the no-op destroys vanish.
+
+3. **Per-pid proc table as glue (a stand-in for Phase F's `vms_proctab`).** The
+   facility needs a stable `struct vms_proc` (for the per-process ASCEFC
+   associations that point at the shared clusters). A NetBSD `cdevsw` has no
+   per-open private data and its `d_close` fires only on the LAST system-wide
+   close, so the glue keeps a small module-lifetime table keyed by the calling
+   lwp's pid (find-or-create in `d_ioctl`, freed en masse at unload). The shared
+   COMMON-cluster state a PERMANENT cluster holds outlives any one proc — which is
+   exactly what makes a flag set by an already-exited process visible to a later
+   one. Phase F replaces this with the real shared `vms_proctab` + host-task
+   binding.
+
+4. **The proof exercises association AND the cv wait/wake, not just a word.** The
+   P2c test is VMS-faithful: each op `$ASCEFC`s the well-known PERMANENT common
+   cluster first (the facility rejects an unassociated common EFN with
+   `SS$_UNASEFC`, never a per-process fake — INV-6). Beyond the A-sets/B-reads
+   visibility proof, a waiter BLOCKS in-kernel in `exec_cv_wait` on flag 66 and is
+   WOKEN by a DIFFERENT process's `$SETEF` (`exec_cv_broadcast`) — the
+   lost-wakeup-free cv contract, held across a process boundary on NetBSD `cv(9)`,
+   on the cluster's shared kernel `kcondvar`+`kmutex`.

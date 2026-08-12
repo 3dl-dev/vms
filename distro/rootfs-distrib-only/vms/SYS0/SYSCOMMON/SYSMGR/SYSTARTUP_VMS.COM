@@ -4,10 +4,17 @@ $! sec3.3 "the distribution disk differs from an installed system disk
 $! ONLY IN ITS PAYLOAD"): identical to the installed-target's
 $! distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM except for the
 $! one block marked below that runs the install menu. distro/Dockerfile.
-$! bootable stages THIS file onto ovmx-distrib.img only, AFTER the kit-stage
-$! step has already captured the plain (non-install-invoking) version above
-$! into ovmx-os.kit -- so a PRODUCT INSTALL'd target inherits the plain one,
-$! never this one (sec3.3's "two variants staged at mastering").
+$! bootable stages THIS file onto its OWN separate image,
+$! /boot/ovmx-install-media.img -- NOT onto ovmx-distrib.img, which CI's
+$! Persistent Boot Smoke Test, test_distrib_boot.sh, and the UAT job all
+$! boot expecting an ordinary pre-installed system disk with no menu (a
+$! contract that predates this item and must not change; see the CI
+$! regression note in distro/Dockerfile.bootable's "Install-media
+$! distribution disk" stage). The kit-stage step captures the plain
+$! (non-install-invoking) version above into ovmx-os.kit -- so a PRODUCT
+$! INSTALL'd target inherits the plain one, never this one (sec3.3's "two
+$! variants staged at mastering" -- now three images: target/kit, plain
+$! ovmx-distrib.img, and this one).
 $!
 $! Invoked by SYS$MANAGER:STARTUP.COM at the end of system startup, after
 $! the system-wide logical names are defined. This is where a system

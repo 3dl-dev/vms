@@ -421,25 +421,6 @@ RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SY
     cp /boot/ovmx-os.kit /system-stage/vms/SYS0/SYSCOMMON/SYSUPD/OVMX-OS.KIT && \
     echo "OK: ovmx-os.kit staged at SYS\$UPDATE:OVMX-OS.KIT for the distrib image"
 
-# -- Distribution-only SYSTARTUP_VMS.COM (vms-dcf) -----------------------------
-# The kit-stage step above already copied /system-stage's SYSMGR (the plain,
-# non-install-invoking SYSTARTUP_VMS.COM) into /kit-stage and packed it into
-# ovmx-os.kit -- so a PRODUCT INSTALL'd target gets the plain one. NOW, after
-# that capture and before the distribution image is mastered below, overwrite
-# /system-stage's copy with the distribution-only variant that runs the
-# install menu (docs/design-vms-faithful-install.md sec3.3: "the distribution
-# disk differs from an installed system disk only in its payload... a site
-# startup that runs the menu"). OVMX$INSTALL.COM itself (from the regular
-# distro/rootfs/ tree, copied into /system-stage by the system-tree staging
-# step above) is unaffected -- it ships on BOTH disks; only which
-# SYSTARTUP_VMS.COM invokes it differs.
-RUN cp distro/rootfs-distrib-only/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM \
-       /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
-    grep -q 'OVMX\$INSTALL' /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
-    echo "OK: distribution image's SYSTARTUP_VMS.COM invokes OVMX\$INSTALL.COM" && \
-    ! grep -q 'OVMX\$INSTALL' /kit-stage/SYSMGR/SYSTARTUP_VMS.COM && \
-    echo "OK: the OS kit's (installed target's) SYSTARTUP_VMS.COM does NOT invoke OVMX\$INSTALL.COM"
-
 # -- Distribution system-disk image (vms-8ab) ----------------------------------
 # Master a PRE-INSTALLED, bootable VMSFS system disk from the SAME populated
 # /vms system tree the system-tree staging stage just assembled above (/system-stage/vms:
@@ -540,6 +521,43 @@ RUN cp -r /system-stage/vms /system-stage-negctl-vms && \
     /src/build-static/bin/vmsfs_master list /boot/ovmx-distrib-negctl.img && \
     rm -rf /system-stage-negctl-vms && \
     echo "NEGCTL DISTRIB image: $(ls -lh /boot/ovmx-distrib-negctl.img | awk '{print $5}')"
+
+# -- Install-media distribution disk (vms-dcf) ----------------------------------
+# A SEPARATE THIRD mastered disk, built from the SAME staged system tree
+# (/system-stage/vms) as ovmx-distrib.img above, with exactly one file
+# replaced: SYS$MANAGER:SYSTARTUP_VMS.COM, swapped for the distribution-only
+# variant (distro/rootfs-distrib-only/) that runs the install menu
+# (OVMX$INSTALL.COM) before JOB_CONTROL/login -- matching the oracle
+# (docs/oracle/installation-media-vax73-alpha84.md sec3a: the media boots
+# straight into the menu, no login) and docs/design-vms-faithful-install.md
+# sec3.3 ("the distribution disk differs from an installed system disk only
+# in its payload... a site startup that runs the menu").
+#
+# THIS MUST BE A SEPARATE IMAGE, NOT A MUTATION OF /system-stage ITSELF OR
+# OF ovmx-distrib.img (vms-dcf CI regression, PR #374 round 1): CI's
+# Persistent Boot Smoke Test, test_distrib_boot.sh (consumed by the
+# cut-release job), and the UAT job ALL boot ovmx-distrib.img expecting an
+# ORDINARY pre-installed system disk that reaches Username: directly, with
+# NO menu -- that contract predates this item (vms-8ab) and stays exactly
+# as it was. Same negative-control-style pattern as vms-2a9 immediately
+# above: copy the staged tree, mutate ONLY the copy, master a
+# separately-named image, never touch /system-stage/vms or
+# ovmx-distrib.img itself. OVMX$INSTALL.COM (the procedure file) still
+# ships on every disk via the ordinary SYSMGR copy in the system-tree
+# staging stage -- only which SYSTARTUP_VMS.COM invokes it differs, and
+# now that difference lives entirely in this one disk.
+RUN cp -r /system-stage/vms /system-stage-install-media-vms && \
+    cp distro/rootfs-distrib-only/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM \
+       /system-stage-install-media-vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
+    grep -q 'OVMX\$INSTALL' /system-stage-install-media-vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
+    echo "OK: install-media image's SYSTARTUP_VMS.COM invokes OVMX\$INSTALL.COM" && \
+    ! grep -q 'OVMX\$INSTALL' /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
+    echo "OK: ovmx-distrib.img's own SYSTARTUP_VMS.COM (unmodified /system-stage) does NOT invoke OVMX\$INSTALL.COM" && \
+    /src/build-static/bin/vmsfs_master master \
+        /boot/ovmx-install-media.img OVMXSYS /system-stage-install-media-vms 64 && \
+    /src/build-static/bin/vmsfs_master list /boot/ovmx-install-media.img && \
+    rm -rf /system-stage-install-media-vms && \
+    echo "INSTALL-MEDIA image: $(ls -lh /boot/ovmx-install-media.img | awk '{print $5}')"
 
 # -- Boot initramfs (vms-1ab: THE initramfs — no fat variant exists anymore) ---
 # Bootstrap-only: STARTUP.EXE + kernel modules + config. NOT INITIALIZE.EXE
@@ -681,6 +699,11 @@ COPY --from=builder /boot/ovmx-distrib.img /boot/ovmx-distrib.img
 # STDRV component registration removed. Consumed only by
 # tests/qemu/test_job_control_negctl.sh -- never booted by anything else.
 COPY --from=builder /boot/ovmx-distrib-negctl.img /boot/ovmx-distrib-negctl.img
+# Install-media distribution disk (vms-dcf): same tree as ovmx-distrib.img,
+# SYSTARTUP_VMS.COM swapped for the variant that runs the install menu.
+# Consumed only by tests/qemu/test_install_menu.sh -- ovmx-distrib.img
+# itself is untouched and keeps booting straight to login as before.
+COPY --from=builder /boot/ovmx-install-media.img /boot/ovmx-install-media.img
 # OVMX OS kit (vms-0b6, docs/design-ovmx-kit-format.md). Not consumed by
 # anything that boots today -- vms-df9's PRODUCT INSTALL is the consumer --
 # carried here so the build's kit artifact is retrievable like the other

@@ -877,6 +877,33 @@ RUN image-name
 
 Forks a child process and waits for completion. Supports Ctrl-Y interruption (child is stopped, resumable with CONTINUE).
 
+**SYS$INPUT from the procedure (vms-1a9).** When RUN is invoked from a command
+procedure, the image's SYS$INPUT is the procedure's following data lines -- the
+lines that do NOT begin with `$`, up to the next `$`-command or end-of-file
+(VSI OpenVMS User's Manual, "Data Lines in a Command Procedure"). This is the
+mechanism DEC install/config procedures use to drive a utility's REPL
+(AUTHORIZE, SYSGEN) non-interactively.
+
+**Apostrophe substitution on those data lines (vms-963).** DCL performs forced
+apostrophe (`'symbol'`) substitution on the SYS$INPUT data lines exactly as on
+command lines (VSI OpenVMS User's Manual / DCL Concepts, "Symbol
+Substitution") -- the same `dcl_sym_substitute()` used for command lines,
+applied in `dcl_sysinput_setup()`. So a run-time value can be passed into a
+utility's input:
+
+```
+$ RUN SYS$SYSTEM:AUTHORIZE
+MODIFY SYSTEM/PASSWORD='OVMX_PW1'
+EXIT
+```
+
+Here `'OVMX_PW1'` interpolates the value of the DCL symbol `OVMX_PW1` before
+AUTHORIZE reads the line. A data line with no apostrophe/ampersand marker is
+passed byte-for-byte; a lone apostrophe not introducing a symbol is kept
+(VMS literal-apostrophe behaviour). Covered by
+`tests/dcl/test_run_sysinput_apostrophe.sh` and
+`tests/dcl/test_run_sysinput_procedure.sh`.
+
 **VMS Compatibility:** Fully compatible for basic image execution.
 
 ### SPAWN

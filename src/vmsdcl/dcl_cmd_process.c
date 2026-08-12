@@ -1347,9 +1347,23 @@ void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
             fseek(fp, pos, SEEK_SET);
             break;
         }
-        /* Data line: hand it to the image's SYS$INPUT verbatim (no '$', no DCL
-         * symbol substitution -- it is data, not a command). */
-        fputs(line, tf);
+        /* Data line fed to the image's SYS$INPUT. VMS DCL performs apostrophe
+         * ('symbol') substitution on command-procedure data lines exactly as it
+         * does on command lines (VMS DCL Concepts / User's Manual, "Symbol
+         * Substitution"): this is what lets the classic
+         *     $ RUN SYS$SYSTEM:AUTHORIZE
+         *     MODIFY SYSTEM/PASSWORD='NEWPW'
+         * idiom pass a run-time symbol into a utility's SYS$INPUT (vms-963).
+         * Reuse the SAME dcl_sym_substitute() DCL applies to command lines so
+         * the two agree on every edge -- a lone apostrophe is kept, ''sym' is
+         * iterative, &sym and "..." string rules match. A data line that
+         * contains no apostrophe/ampersand passes through byte-for-byte
+         * (dcl_sym_substitute copies non-marker text verbatim, including the
+         * trailing newline), so the pre-existing vms-1a9 behavior for
+         * substitution-free blocks is unchanged. */
+        char subst[DCL_MAX_LINE];
+        dcl_sym_substitute(line, subst, sizeof(subst));
+        fputs(subst, tf);
         ctx->proc_stack[ctx->proc_depth].line_number++;
         pos = ftell(fp);
     }

@@ -54,18 +54,19 @@ $!       proven end-to-end (see tests/qemu/test_install_menu.sh, which
 $!       proves the PRESERVE branch instead -- PRESERVE is the oracle's
 $!       own bracketed default).
 $!
-$!   (b) There is no SYS$INPUT-as-procedure-file mechanism for a RUN'd
-$!       image (dcl_activate_image/cmd_run does not dup2 the child's stdin
-$!       from a DEFINE'd SYS$INPUT or from the .COM file's own read
-$!       position) -- the classic VMS idiom of feeding a utility's REPL
-$!       (AUTHORIZE, SYSGEN) from lines inside the calling procedure does
-$!       not work in OVMX. AUTHORIZE.EXE and SYSGEN.EXE are also pure
-$!       REPLs (argc/argv ignored). Below, this procedure sets up the
-$!       target and terminal state and then RUNs the utility interactively
-$!       -- the operator (or, in the ground-source test, the console
-$!       driver) types the utility's own commands at its own prompt. This
-$!       is real DCL and a real utility, never faked, but it means the
-$!       install session cannot fully automate those two steps yet.
+$!   (b) [RESOLVED for AUTHORIZE, vms-963] The classic VMS idiom of feeding
+$!       a utility's REPL from data lines inside the calling procedure DOES
+$!       work: a RUN'd image's SYS$INPUT is the procedure's following non-$
+$!       data lines (vms-1a9, dcl_sysinput_setup), and DCL now performs
+$!       apostrophe substitution on those data lines (vms-963,
+$!       dcl_cmd_process.c) exactly as on command lines, so 'symbol' in a
+$!       data line interpolates a run-time value (the entered password)
+$!       before the utility reads it. The AUTHORIZE step below uses this --
+$!       MODIFY SYSTEM/PASSWORD='OVMX_PW1' as a data line, no operator typing
+$!       and no terminal round-trip. NOTE the SCS step still RUNs SYSGEN the
+$!       old interactive way and additionally SYSGEN.EXE is not yet resolvable
+$!       on the target (%DCL-E-IVIMAGE) -- that gap is vms-597, not this item;
+$!       the password write does not depend on it.
 $!
 $!   (c) [FIXED, vms-8b6/#385] AUTHORIZE.EXE, forked via dcl_exec_utility(),
 $!       formerly never learned about a device MOUNTed by its DCL parent.
@@ -200,10 +201,7 @@ $ GOTO PASSWORD_RETRY
 $PASSWORD_OK:
 $!
 $ WRITE SYS$OUTPUT ""
-$ WRITE SYS$OUTPUT "Configuring the SYSTEM account on the target. At the UAF> prompt (input"
-$ WRITE SYS$OUTPUT "is not echoed), type exactly:"
-$ WRITE SYS$OUTPUT "    MODIFY SYSTEM/PASSWORD=<the password just entered above>"
-$ WRITE SYS$OUTPUT "    EXIT"
+$ WRITE SYS$OUTPUT "    Configuring the SYSTEM account on the target...."
 $! Redirect SYS$SYSTEM at the TARGET's ROOTED system directory
 $! 'OVMX_TARGET'[SYS0.SYSCOMMON.SYSEXE], NOT the flat 'OVMX_TARGET'[SYSEXE]
 $! (vms-963): PRODUCT INSTALL lays the target as a rooted concealed volume
@@ -216,9 +214,18 @@ $! SAME file the booted system authenticates against. The old flat [SYSEXE]
 $! matched the pre-rooted layout and pointed at a directory the target does
 $! not have, so the install-set password never reached the booted target.
 $ DEFINE/JOB SYS$SYSTEM 'OVMX_TARGET'[SYS0.SYSCOMMON.SYSEXE]
-$ SET TERMINAL/NOECHO
+$! Drive AUTHORIZE non-interactively via inline SYS$INPUT -- the classic VMS
+$! command-procedure idiom (vms-963/vms-1a9): the non-$ data lines that follow
+$! the RUN become AUTHORIZE.EXE's SYS$INPUT, and DCL performs apostrophe
+$! substitution on those lines exactly as on command lines, so 'OVMX_PW1'
+$! expands to the password entered above BEFORE AUTHORIZE reads the line. This
+$! replaces the earlier "RUN then have the operator type at UAF>" shape, which
+$! could never work inside a procedure: a RUN'd image's SYS$INPUT is the
+$! procedure's data block, not the terminal, so the interactive form fed
+$! AUTHORIZE an empty stream (immediate EOF) and the MODIFY never executed.
 $ RUN SYS$SYSTEM:AUTHORIZE.EXE
-$ SET TERMINAL/ECHO
+MODIFY SYSTEM/PASSWORD='OVMX_PW1'
+EXIT
 $ DEFINE/JOB SYS$SYSTEM SYS$SYSROOT:[SYSEXE]
 $!
 $ OVMX_SCSNODE = ""

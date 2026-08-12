@@ -326,47 +326,45 @@ else
 fi
 send "$NEW_PASSWORD"
 
+# The procedure drives AUTHORIZE NON-INTERACTIVELY via inline SYS$INPUT
+# (vms-963): OVMX$INSTALL.COM feeds "MODIFY SYSTEM/PASSWORD='OVMX_PW1'" + EXIT
+# as data lines after the RUN, and DCL apostrophe-substitutes the entered
+# password into that line before AUTHORIZE reads it. There is no operator
+# typing at UAF> -- so this test does NOT send MODIFY/EXIT; it asserts the
+# write instead. AUTHORIZE opens the TARGET's SYSUAF (SYS$SYSTEM redirected via
+# DEFINE/JOB to the rooted [SYS0.SYSCOMMON.SYSEXE]) and reports %UAF-I-SAVED on
+# EXIT when the record was modified.
 if wait_for 'UAF>' "$RUN_TIMEOUT" "$OFF"; then
-    ok "drops into the nested AUTHORIZE session against the target (SYS\$SYSTEM redirected via DEFINE/JOB)"
+    ok "AUTHORIZE starts against the target (SYS\$SYSTEM redirected via DEFINE/JOB)"
 else
     dump_and_die "AUTHORIZE never started"
 fi
-send "MODIFY SYSTEM/PASSWORD=$NEW_PASSWORD"
-send "EXIT"
-# NOTE: no "$ " DCL prompt to wait for here -- this whole exchange is
-# running INSIDE the .COM procedure (script mode), which does not print an
-# interactive "$ " prompt between lines the way a live session does. The
-# next real signal is the SCSNODE prompt below, which the procedure reaches
-# automatically once AUTHORIZE exits.
+if wait_for '%UAF-I-SAVED' "$RUN_TIMEOUT" "$OFF"; then
+    ok "AUTHORIZE persisted the install-set SYSTEM password to the TARGET SYSUAF (%UAF-I-SAVED)"
+else
+    dump_and_die "AUTHORIZE did not report %UAF-I-SAVED -- the install-set password did not persist to the target SYSUAF"
+fi
+UAF_SEG=$(segment_since "$OFF")
+if printf '%s\n' "$UAF_SEG" | grep -qE '%UAF-E-'; then
+    bad "AUTHORIZE reported a UAF error writing the target SYSUAF"
+    echo "$UAF_SEG"
+else
+    ok "AUTHORIZE wrote the target SYSUAF with no %UAF-E- error"
+fi
 if wait_for 'Enter SCSNODE' "$RUN_TIMEOUT" "$OFF"; then
-    ok "returns from the AUTHORIZE session and continues the procedure (asks for SCSNODE)"
+    ok "returns from AUTHORIZE and continues the procedure (asks for SCSNODE)"
 else
     dump_and_die "did not return from AUTHORIZE / never asked for SCSNODE"
 fi
 
-# NOT ASSERTED PASS/FAIL: writing the password to the TARGET's SYSUAF via
-# AUTHORIZE is BLOCKED TODAY by two separately-filed prerequisite gaps
-# (ground-sourced by this item, reported not fixed -- see PR body):
-#   - AUTHORIZE.EXE, forked via dcl_exec_utility(), never learns about a
-#     device mounted by its DCL parent (only SYSDISK is registered at its
-#     own startup) -- SYS$SYSTEM correctly resolves to the target via LNM
-#     (confirmed: SHOW LOGICAL SYS$SYSTEM correctly shows the redirected
-#     value), but AUTHORIZE's own file layer cannot open anything on that
-#     device, so it reports %UAF-E-NOSUCHUSER even for an account that is
-#     really there.
-#   - Independently, plain RMS/POSIX file CREATE on a REAL vmsfs.ko-mounted
-#     volume was found to fail entirely in this run (`CREATE
-#     DKA0:[SYSEXE]PROBE.TXT` -> %RMS-E-CRE, on the DISTRIBUTION disk
-#     itself, no target involved) -- so even SET PASSWORD (which does not
-#     fork) hits the same wall via sysuaf_write_record()'s own
-#     fopen()+rename(). tests/libvms/test_sysuaf_write_veracity.c's own
-#     header says outright why this was never caught: "WHY THIS IS A HOST
-#     TEST, NOT A tests/qemu ONE" -- the real vmsfs.ko create path has
-#     never been ground-source tested until this run.
-# This segment is captured for the record, not scored, so a future fix to
-# either gap can be verified against this SAME log shape without rewriting
-# the test.
-echo "--- AUTHORIZE-against-target segment (informational; blocked by filed gaps, see PR) ---"
+# The AUTHORIZE-against-target write is now ASSERTED above (%UAF-I-SAVED, no
+# %UAF-E-). The two prerequisite gaps that formerly blocked it are fixed on
+# base -- AUTHORIZE seeing the parent MOUNT (vms-8b6/#385) and RMS CREATE on a
+# real vmsfs volume (vms-581/#378) -- and the last piece, the install-set
+# password reaching the TARGET's rooted SYSUAF and being fed to AUTHORIZE
+# non-interactively, is vms-963. BOOT 2 below closes the loop by logging in
+# with that install-set password.
+echo "--- AUTHORIZE-against-target segment (write asserted above) ---"
 segment_since "$OFF"
 
 # --- SYSTEM password prompts: never echoed --------------------------------
@@ -439,9 +437,10 @@ kill_boot "$QPID"; QPID=""
 # BOOT 2 -- the installed target boots as an ORDINARY system disk (no
 # distribution disk, no menu). Proves the two-variant SYSTARTUP_VMS.COM
 # staging: the target's own copy does NOT invoke the install menu, unlike
-# the distribution disk's (Boot 1 above). Login-with-the-installed-
-# password is NOT asserted here (see the AUTHORIZE segment above) --
-# retrying it is future work once the two filed gaps are fixed.
+# the distribution disk's (Boot 1 above). It then LOGS IN as SYSTEM with the
+# INSTALL-SET password (vms-963): a successful login is positive proof the
+# password reached the target's own SYSUAF and persisted the DISMOUNT/flush,
+# since the kit default (MANAGER) would no longer authenticate.
 # =====================================================================
 LOG="$WORKDIR/boot2.log"
 boot_qemu "$DISK1" "" "$LOG" "$WORKDIR/boot2.in"
@@ -469,6 +468,23 @@ if printf '%s\n' "$TB" | grep -qF "node name $SCS_NODE"; then
     ok "the install-set SCSNODE ($SCS_NODE) persisted to the target and the booted target reads it from OVMXVMSSYS.PAR (end-to-end vms-597)"
 else
     bad "the install-set SCSNODE ($SCS_NODE) did NOT appear on the target's own boot -- SYSGEN WRITE CURRENT did not persist to the target's OVMXVMSSYS.PAR"
+fi
+
+# Close the loop: log in as SYSTEM with the INSTALL-SET password (NOT the kit
+# default). A successful login is positive proof the install-set password
+# persisted to the target's own SYSUAF across the DISMOUNT/flush (vms-963).
+OFF2=$(wc -c <"$LOG")
+send 'SYSTEM'
+if wait_for 'Password:' "$BOOT_TIMEOUT" "$OFF2"; then
+    :
+else
+    dump_and_die "the booted target gave no Password: prompt after Username SYSTEM"
+fi
+send "$NEW_PASSWORD"
+if wait_for 'Welcome to OpenVMX' "$BOOT_TIMEOUT" "$OFF2"; then
+    ok "SYSTEM logs in on the booted target with the INSTALL-SET password, not the kit default (vms-963 end-to-end)"
+else
+    dump_and_die "SYSTEM could not log in with the install-set password -- it did not persist to the booted target"
 fi
 
 kill_boot "$QPID"; QPID=""

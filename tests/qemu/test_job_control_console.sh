@@ -139,24 +139,41 @@ if wait_for 'The OVMX system is now executing the site-specific startup commands
 else
     dump_and_die "site-specific startup line never printed within ${BOOT_TIMEOUT}s"
 fi
-# --- 1b. BOOT/LOGIN OUTPUT FIDELITY (vms-2213) ------------------------------
+# --- 1b. BOOT/LOGIN OUTPUT FIDELITY (vms-2213) + BANNER-FIRST (vms-1fb) -----
 # Four VMS-fidelity properties of the boot->login console transcript. Oracle:
 # VSI OpenVMS System Manager's Manual, Vol I, "Logging In to the System" --
 # the operator-console login sequence is: banner, then the operator strikes
 # RETURN, then Username:, then Password:, then a single SYS$WELCOME.
 #
-# DEFECTS 2 & 3 (banner-before-prompt; OPA0: waits for RETURN). JOB_CONTROL
-# has by now created the console login session. On OPA0: LOGINOUT waits for
-# the operator's RETURN before presenting Username:. Prove it: the boot
-# identification banner (STARTUP.EXE's display_boot_banner, printed after
-# STARTUP.COM returns) appears, and Username: is STILL absent -- the prompt is
-# waiting behind the CR. Before this fix the prompt raced out DURING site
-# startup, ahead of that banner.
-if wait_for 'OpenVMX V' "$BOOT_TIMEOUT" "$STARTUP_OFF"; then
-    ok "boot identification banner printed (STARTUP.EXE handoff)"
+# BANNER-FIRST (vms-1fb, docs/design-boot-faithful.md §2.5/§3.5/§3.7): the OS
+# banner (STARTUP.EXE's display_boot_banner) now prints immediately once the
+# executive attaches -- BEFORE %STDRV-I-STARTUP and before STARTUP.COM's own
+# output -- matching the Alpha oracle (banner right after SYSBOOT hands over,
+# before any startup narration). It is already in the log by now (both
+# %OVMX-I-EXEC and %STDRV-I-STARTUP have already been observed above), so
+# this checks presence and its position relative to STDRV, not a fresh wait
+# with STARTUP_OFF as a floor -- that floor is now on the WRONG side of the
+# banner (before vms-1fb the banner printed after STARTUP_OFF; now it prints
+# well before it).
+PRE_STDRV_LOG=$(tr -d '\r' <"$LOG")
+if printf '%s' "$PRE_STDRV_LOG" | grep -qE 'OpenVMX V[0-9]'; then
+    ok "boot identification banner printed"
 else
-    dump_and_die "boot identification banner never printed within ${BOOT_TIMEOUT}s"
+    dump_and_die "boot identification banner never printed"
 fi
+BANNER_POS=$(printf '%s' "$PRE_STDRV_LOG" | grep -aboE 'OpenVMX V[0-9]' | head -1 | cut -d: -f1)
+STDRV_POS=$(printf '%s' "$PRE_STDRV_LOG" | grep -aboF '%STDRV-I-STARTUP' | head -1 | cut -d: -f1)
+if [ -n "$BANNER_POS" ] && [ -n "$STDRV_POS" ] && [ "$BANNER_POS" -lt "$STDRV_POS" ]; then
+    ok "banner precedes %STDRV-I-STARTUP (banner@$BANNER_POS < STDRV@$STDRV_POS) (vms-1fb banner-first)"
+else
+    bad "banner-before-STDRV ordering wrong (banner@${BANNER_POS:-none} STDRV@${STDRV_POS:-none}) (vms-1fb)"
+fi
+#
+# DEFECT 3 (OPA0: waits for RETURN). JOB_CONTROL has by now created the
+# console login session. On OPA0: LOGINOUT waits for the operator's RETURN
+# before presenting Username:. Prove it: Username: is STILL absent even
+# though the banner (and everything else in the boot) has already printed --
+# the prompt is waiting behind the CR.
 if tr -d '\r' <"$LOG" | grep -qF 'Username:'; then
     bad "Username: appeared BEFORE the operator pressed RETURN -- OPA0: did not wait (defect 3)"
 else

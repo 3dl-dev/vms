@@ -103,6 +103,7 @@ jobs:
               - 'tests/qemu/test_executive_integral.sh'
               - 'tests/qemu/test_distrib_boot.sh'
               - 'tests/qemu/test_startup_phase_driver.sh'
+              - 'tests/qemu/test_boot_conformance.sh'
               - 'tests/qemu/test_boot_scsnode_hostname_e2e.sh'
               - 'tests/qemu/run_boot_scsnode_hostname_e2e.sh'
               - 'tests/uat/**'
@@ -397,6 +398,23 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_startup_phase_driver.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-1fb. Reuses the image built above (no extra build). Boots the
+      # pre-installed distribution disk and asserts the boot console's
+      # FACILITY+IDENT SEQUENCE against a sequence pinned from the OpenVMS
+      # Alpha 8.4 oracle capture (docs/design-boot-faithful.md §3.5/§3.7):
+      # banner-first ordering, %STDRV-I-STARTUP begun exactly once with no
+      # invented "completed" line, oracle-shaped timestamp (space-padded
+      # day, hundredths not milliseconds), and the borrowed-VMS-facility
+      # fixes the §3.7 audit made (%STARTUP-I-SYSDISK/MOUNTED/MODFAIL ->
+      # %OVMX-).
+      - name: Boot console sequence conformance vs. the OpenVMS oracle
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_boot_conformance.sh:/test.sh:ro \
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh

@@ -13,8 +13,10 @@
 #   run-fail      - linked and exited non-zero
 #   run-crash     - linked and terminated by signal (exit code > 128)
 #
-# Regression detection: if BASELINE_FILE exists, any program that previously
-# passed (compile-pass, run-pass, run-fail) but now fails compile is flagged.
+# Regression detection: if BASELINE_FILE exists, any baseline run-pass program
+# that no longer runs clean (run-pass -> anything else), and any baseline
+# compile-pass/run-fail program that no longer builds, is flagged and the script
+# exits non-zero. See the "Regression detection" block below for the full rule.
 #
 # Usage:
 #   run_corpus.sh [BASELINE_FILE]
@@ -232,31 +234,44 @@ for src_file in "${CORPUS_DIR}"/*.c; do
 done
 
 # ---------------------------------------------------------------------------
-# Regression detection
+# Regression detection (per-entry — complements the aggregate run-pass floor
+# enforced in ci.yml). Two tiers, both honest, neither weakenable by an
+# offsetting improvement elsewhere:
+#
+#   run-pass  is the strongest conformance signal: the program linked the real
+#             OVMX runtime AND ran to a clean exit 0. A baseline run-pass entry
+#             MUST stay run-pass. Any slide — to run-fail, run-crash, link-fail,
+#             compile-fail, or unknown — is a regression. This is what catches
+#             "a baseline-passing entry starts failing" even when the aggregate
+#             run-pass COUNT is held flat by some other program improving in the
+#             same change (the exact hole the count-only floor cannot see).
+#
+#   compile-pass / run-fail  compiled and linked (run-fail also ran, just exited
+#             non-zero). These must not regress all the way back to a compile or
+#             link failure.
+#
+# NOTE: run-fail is deliberately NOT treated as a "pass" for the run-pass tier —
+# it is not a conformance pass, so a baseline run-fail is only guarded against
+# losing its compile/link, not against staying run-fail.
 # ---------------------------------------------------------------------------
 declare -a regressions
-
-passing_statuses=("compile-pass" "run-pass" "run-fail")
 
 for name in "${!baseline_status[@]}"; do
     bl="${baseline_status[${name}]}"
     cur="${prog_status[${name}]:-unknown}"
 
-    # Was passing before?
-    was_passing=false
-    for ps in "${passing_statuses[@]}"; do
-        [ "${bl}" = "${ps}" ] && was_passing=true && break
-    done
-
-    # Is now failing compile or link?
-    now_failing=false
-    case "${cur}" in
-        compile-fail|link-fail|unknown) now_failing=true ;;
+    case "${bl}" in
+        run-pass)
+            # Strict: a real conformance pass must not regress to anything else.
+            [ "${cur}" != "run-pass" ] && regressions+=("${name}")
+            ;;
+        compile-pass|run-fail)
+            # Compiled/linked before; regression only if it now fails to build.
+            case "${cur}" in
+                compile-fail|link-fail|unknown) regressions+=("${name}") ;;
+            esac
+            ;;
     esac
-
-    if ${was_passing} && ${now_failing}; then
-        regressions+=("${name}")
-    fi
 done
 
 # ---------------------------------------------------------------------------

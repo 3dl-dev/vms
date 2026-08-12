@@ -273,6 +273,17 @@ the scoreboard starts at 43/229 = 19%.
 
 **R2.0 — Make the instrument honest (do this first; it is small and everything
 downstream depends on it).**
+
+> **STATUS (vms-343, landed): DONE.** The measurements above (`total: 0`, "vacuous
+> gate", 43/229) are the *historical* state that motivated this item — left intact as
+> the record of why. Current ground truth, independently re-measured: `corpus_baseline.json`
+> carries **total 229, run-pass 89**, a full per-program status list and a timestamp;
+> the `corpus-conformance` CI job is a real gate with a **falsifiable run-pass floor**
+> (no `continue-on-error`, no `|| true`) *plus* a strict per-entry regression check
+> (a baseline run-pass entry that stops running clean fails the build even if the
+> aggregate count is held flat). Re-derive the live number with `run_corpus.sh`; do not
+> trust any single snapshot in this doc.
+
 - Commit a **real** `corpus_baseline.json` from an actual run, with timestamp and
   per-program status. The current file is `total: 0` and makes the CI gate vacuous.
 - Give the CI job a **floor**, not just a regression check: fail if run-pass drops

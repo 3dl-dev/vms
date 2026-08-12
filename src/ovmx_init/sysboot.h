@@ -38,7 +38,7 @@
  *
  * OVMX DESIGN CHOICE (Rule 8), not oracle-pinned: real VMS's R5 boot-flags
  * bit layout is console-firmware-internal and was not read from VSI source.
- * The substrate analogue chosen here is a kernel-cmdline pair,
+ * The platform analogue chosen here is a kernel-cmdline pair,
  * "ovmx.flags=<r5>,<r6>", with bit 0 of the SECOND value meaning
  * conversational -- chosen to match the oracle's own example command line
  * verbatim (`boot -flags 0,1`; docs/design-boot-faithful.md §2.2/§3.1).

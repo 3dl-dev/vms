@@ -8,7 +8,7 @@ OpenVMX is two named layers, GNU/Linux-style: **OpenVMX** is the VMS-compatible
 product (login banner, `SHOW SYSTEM`, DCL — what a user touches), running on
 **OVMX/Linux**, the Linux base layer underneath (kernel, boot, distro
 tooling) — the rough equivalent of the VAX/Alpha hardware OpenVMS itself ran
-on. See [Architecture](docs/architecture.md#product--substrate-layering) for
+on. See [Architecture](docs/architecture.md#product-and-kernel-layering) for
 where the split falls.
 
 ## Features

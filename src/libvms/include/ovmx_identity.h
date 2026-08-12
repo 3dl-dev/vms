@@ -50,8 +50,8 @@
  * vms-296 / vms-3de, 2026-08-11)
  * ---------------------------------------------------------------------
  * The single word "OVMX" used to name two different things at once: the
- * VMS-compatible PRODUCT a human logs into, and the Linux-kernel SUBSTRATE
- * it runs on. This split follows the GNU/Linux convention -- "GNU/Linux"
+ * VMS-compatible PRODUCT a human logs into, and the SYSKRNL layer (the Linux
+ * kernel underneath) it runs on. This split follows the GNU/Linux convention -- "GNU/Linux"
  * names the base (kernel + userland underneath), while a distribution built
  * on it carries its own separate brand:
  *
@@ -59,7 +59,7 @@
  *   environment a human touches: login banner, SHOW SYSTEM, MONITOR, DCL
  *   identity. This is what changed here.
  *
- *   SUBSTRATE (OVMX_SUBSTRATE_NAME) = "OVMX/Linux" -- the Linux base layer
+ *   SYSKRNL (OVMX_SYSKRNL_NAME) = "OVMX/Linux" -- the Linux base layer
  *   underneath, WITH THE SLASH, exactly like "GNU/Linux": an operating
  *   ENVIRONMENT layered on a KERNEL, not the environment itself. Surfaced
  *   at early boot (before STARTUP.EXE hands off to the OpenVMX/VMS
@@ -119,26 +119,26 @@
  */
 #define OVMX_VENDOR_TOKEN        "OVMX"
 
-/* ---- Substrate identity (GNU/Linux-style dual identity) ----------
+/* ---- SYSKRNL identity (GNU/Linux-style dual identity) ----------
  *
  * "OVMX/Linux" -- WITH THE SLASH, exactly like "GNU/Linux" -- names the
- * Linux-kernel substrate OVMX_PRODUCT_NAME ("OpenVMX") runs on top of. See
- * the DUAL-IDENTITY REBRAND note above for the full rationale and the two
- * surfaces this is shown on (early boot, distro metadata). Distinct from,
- * and always printed BEFORE, the product banner.
+ * SYSKRNL layer (the Linux kernel underneath) OVMX_PRODUCT_NAME ("OpenVMX")
+ * runs on top of. See the DUAL-IDENTITY REBRAND note above for the full
+ * rationale and the two surfaces this is shown on (early boot, distro
+ * metadata). Distinct from, and always printed BEFORE, the product banner.
  */
-#define OVMX_SUBSTRATE_NAME     "OVMX/Linux"
-#define OVMX_SUBSTRATE_BANNER   OVMX_SUBSTRATE_NAME " -- Linux kernel substrate"
+#define OVMX_SYSKRNL_NAME     "OVMX/Linux"
+#define OVMX_SYSKRNL_BANNER   OVMX_SYSKRNL_NAME " -- SYSKRNL (Linux kernel)"
 
 /*
- * ovmx_substrate_banner - The early-boot substrate identity line. Printed
- * BEFORE ovmx_product_banner() so a boot reads "OVMX/Linux" substrate
- * coming up, THEN "OpenVMX" product -- see src/ovmx_init/ovmx_init.c
+ * ovmx_syskrnl_banner - The early-boot SYSKRNL identity line. Printed
+ * BEFORE ovmx_product_banner() so a boot reads the "OVMX/Linux" SYSKRNL
+ * layer coming up, THEN "OpenVMX" product -- see src/ovmx_init/ovmx_init.c
  * main(), which prints this literally first.
  */
-static inline const char *ovmx_substrate_banner(void)
+static inline const char *ovmx_syskrnl_banner(void)
 {
-    return OVMX_SUBSTRATE_BANNER;
+    return OVMX_SYSKRNL_BANNER;
 }
 
 /* ---- VMS-compat identity (machine surfaces, true-to-arch) -------- */

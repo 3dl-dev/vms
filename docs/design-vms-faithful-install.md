@@ -97,7 +97,7 @@ OVMX *look* installed instead of *being* installed.
 
 | Artifact | Change |
 |---|---|
-| `STARTUP.EXE` | Reduce to: substrate mounts → `executive_attach` → `vmsfs.ko` → mount `DKA0:` **or halt honestly** (OVMX facility; no oracle-pinned VMS status exists for it) → identity → `%STDRV-I-STARTUP` begun → `run_startup()` → completed → wait. The STDRV pair brackets the procedure (today both lines print back-to-back *after* it — `main():1214/1217`). Login loop leaves for JOB_CONTROL (`vms-8d2`). |
+| `STARTUP.EXE` | Reduce to: base-layer mounts → `executive_attach` → `vmsfs.ko` → mount `DKA0:` **or halt honestly** (OVMX facility; no oracle-pinned VMS status exists for it) → identity → `%STDRV-I-STARTUP` begun → `run_startup()` → completed → wait. The STDRV pair brackets the procedure (today both lines print back-to-back *after* it — `main():1214/1217`). Login loop leaves for JOB_CONTROL (`vms-8d2`). |
 | `boot.sh`, `distro/boot/run-qemu.sh`, `docs/install-0.1.md` | New flow: build → distribution image; install = boot distrib + blank target; run = boot target with bootstrap initramfs. `run-qemu.sh` already grew `cache=writethrough` (other session, vms-9b7) — keep. |
 | `tests/qemu/test_persistent_boot.sh`, `test_executive_integral.sh` | Rewritten against the new flow. `test_docker_persistent_disk.sh` is another session's live work (vms-9b7) — coordinate, don't clobber. |
 | `distro/rootfs/.../SYSTARTUP_VMS.COM` | On the *distribution* disk only, it invokes the install menu procedure. The installed target gets the normal one. |

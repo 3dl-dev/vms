@@ -22,7 +22,7 @@ From `docs/design-init-scope.md` §1, updated with the vms-718 outcome:
 
 | VMS stage | Job | OVMX analogue today | After vms-718 |
 |---|---|---|---|
-| Console firmware / VMB(APB) | load the secondary bootstrap | QEMU + Linux kernel + initramfs | unchanged (substrate) |
+| Console firmware / VMB(APB) | load the secondary bootstrap | QEMU + Linux kernel + initramfs | unchanged (base layer) |
 | **SYSBOOT** | read the **parameter file**, size the executive, load it; **conversational boot** at `SYSBOOT>` | `executive_attach()` loads vms.ko — but **no parameter file is read, ever**; no conversational boot | same gap |
 | EXEC_INIT | init executive, construct system process | `establish_system_identity()` (PID 1 reads SYSUAF — `vms-a17e` moves this into the executive) | same gap, tracked |
 | SYSINIT | mount system disk, open page/swap, create STARTUP process | mount `DKA0:` in PID 1 | mount-or-halt (`vms-2f0`) |
@@ -54,7 +54,7 @@ Measured: `boot -flags 0,1` halts SYSBOOT **before any banner** at a
 See §3.1 for the verbatim capture including the parameter-table column format.
 Two loud facts: **the startup procedure is itself a parameter**
 (`SHOW /STARTUP` → `Startup command file = SYS$SYSTEM:STARTUP.COM`), and OVMX's
-substrate equivalent of the boot-flag register is the kernel command line.
+platform equivalent of the boot-flag register is the kernel command line.
 
 ### 2.3 The startup is a flat script, not a startup driver
 
@@ -250,7 +250,7 @@ the startup *actually started*, not from a fixed roster).
    filespec; STARTUP.EXE's SYSBOOT role loads it before the executive attaches;
    `sethostname` comes from `SCSNODE`; `scsd` reads the same file. The Linux
    path `/etc/ovmx/sysparams.dat` dies.
-2. **Conversational boot.** A kernel-cmdline boot flag (the substrate's R5)
+2. **Conversational boot.** A kernel-cmdline boot flag (the platform's R5)
    halts STARTUP.EXE at `SYSBOOT>` before the executive attaches:
    SHOW/SET/USE/CONTINUE against the parameter file, `SHOW /STARTUP`
    included, table format byte-shaped to §3.1.

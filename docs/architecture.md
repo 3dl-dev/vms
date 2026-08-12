@@ -1,6 +1,6 @@
 # OpenVMX Architecture
 
-## Product / Substrate Layering
+## Product and Kernel Layering
 
 Following the GNU/Linux naming convention, this repo builds two named
 layers, not one:
@@ -9,17 +9,17 @@ layers, not one:
   human logs into and what identifies itself on VMS-facing surfaces (login
   banner, `SHOW SYSTEM`, `MONITOR`, DCL). This is Layer 4 and above in the
   component-layer diagram below.
-- **OVMX/Linux** (`OVMX_SUBSTRATE_NAME`, with the slash — exactly like
-  "GNU/Linux") — the Linux **substrate** underneath: kernel, boot sequence,
-  and distro build tooling. Roughly the equivalent of the VAX/Alpha hardware
+- **OVMX/Linux** (`OVMX_SYSKRNL_NAME`, with the slash — exactly like
+  "GNU/Linux") — the **SYSKRNL** layer (the Linux kernel underneath): kernel,
+  boot sequence, and distro build tooling. Roughly the equivalent of the VAX/Alpha hardware
   OpenVMS itself ran on, except here the "hardware" is a Linux distribution.
   This is Layers 0-3 and the boot path (Layer 6).
 
 The two identities are printed in that order at boot: `src/ovmx_init/ovmx_init.c`
-prints the OVMX/Linux substrate banner first, then hands off through
+prints the OVMX/Linux SYSKRNL banner first, then hands off through
 STARTUP.EXE to the OpenVMX product identity a user actually sees. Single
 source of truth for both: `src/libvms/include/ovmx_identity.h`
-(`OVMX_PRODUCT_NAME`, `OVMX_SUBSTRATE_NAME`).
+(`OVMX_PRODUCT_NAME`, `OVMX_SYSKRNL_NAME`).
 
 The bare, un-slashed token `OVMX` survives in a handful of places this
 layering deliberately does **not** touch — the `OVMX$_` VMS facility-code

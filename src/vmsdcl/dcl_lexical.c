@@ -2984,7 +2984,7 @@ static void lex_upcase(char *s)
  * "DDD HH:MM:SS.CC" (the "DCL" format variant uses a hyphen: "DDD-HH:MM:SS.CC").
  * This is a modern (Alpha/I64) lexical -- the lab-2 VAX V7.3 oracle answers
  * %DCL-W-IVFNAM for it (11-AUG-2026) -- so it is implemented for OVMX's
- * platform target, purely computationally, like F$LICENSE. No substrate is
+ * platform target, purely computationally, like F$LICENSE. No plumbing is
  * needed beyond the two strings, so there is no honest-error path other than
  * a malformed time (SS$_IVTIME) or end < start.
  */

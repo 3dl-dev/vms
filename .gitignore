@@ -77,7 +77,7 @@ __pycache__/
 # rd local nostr sync cache
 .ready/nostr-log.jsonl
 
-# Retired coordination substrate (campfire, fully retired 2026-07 — see CLAUDE.md)
+# Retired coordination layer (campfire, fully retired 2026-07 — see CLAUDE.md)
 .campfire/
 
 # Session/agent scratch — never source

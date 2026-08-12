@@ -31,7 +31,7 @@
 # persistent system disk: kill the first QEMU process (a power-cycle, since
 # -no-reboot means a guest reboot(2) call would exit QEMU rather than
 # restart it) and start a second one against the identical disk image file --
-# the closest thing to a genuine reboot OVMX's substrate has, and the same
+# the closest thing to a genuine reboot OVMX's platform has, and the same
 # technique test_release_e2e.sh's "boot -> provision -> boot" already uses
 # for an analogous problem (SYSUAF edits that only a fresh boot re-reads).
 #

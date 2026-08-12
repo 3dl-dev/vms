@@ -4,7 +4,7 @@
 
 Make OpenVMS free. OpenVMX is a **clean-room, open-source OpenVMS-compatible environment on Linux** that runs real VMS applications and **joins real VMSclusters** — so organizations can migrate off VMS Software Inc (VSI) node-by-node, at zero downtime and zero license cost.
 
-### Naming: product and substrate
+### Naming: product and kernel
 
 Following the GNU/Linux convention, the project is two named layers, not one. **OpenVMX** is the VMS-compatible product — what a user logs into, and what the login banner, `SHOW SYSTEM`, `MONITOR`, and DCL report. **OVMX/Linux** (with the slash, like "GNU/Linux") is the Linux base layer it runs on: kernel, boot sequence, and distro tooling — the rough equivalent of the VAX/Alpha hardware OpenVMS itself ran on, except here the "hardware" is a Linux distribution. The split is never cosmetic: OVMX/Linux is what appears at early boot and in distro build metadata, before OpenVMX ever takes over the console. Single source of truth: `src/libvms/include/ovmx_identity.h`; layer mapping: `docs/architecture.md`.
 

@@ -176,7 +176,7 @@ lane** in parallel to 0.4 clustering, exactly as DCL fidelity already does. Ship
 ## 8. Roadmap position
 
 This is the concrete build-out of "0.3 = a real VMS system" past honesty into depth, and it is the
-substrate R2 ("run every VMS app we can find") stands on — an app that calls `F$SEARCH` over a
+foundation R2 ("run every VMS app we can find") stands on — an app that calls `F$SEARCH` over a
 search-list logical, or installs under a concealed root, needs Engines A+B real. Recommend adopting
 it as a named program that parents `vms-b9a` (Engine A) and `vms-ed7` (Engine B), with new Tier-2/3
 epics filed as they're funded.

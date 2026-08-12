@@ -54,7 +54,7 @@ Everything in that list is something OVMX's PID 1 currently does.
 
 | `ovmx_init.c` | VMS stage | Verdict |
 |---|---|---|
-| mount proc/sys/dev/tmp/pts/shm, `sethostname` (`bare_metal_init`:376–386) | VMB/SYSBOOT substrate | **Bootstrap.** Keep. Linux plumbing with no VMS analogue is honest here. |
+| mount proc/sys/dev/tmp/pts/shm, `sethostname` (`bare_metal_init`:376–386) | VMB/SYSBOOT groundwork | **Bootstrap.** Keep. Linux plumbing with no VMS analogue is honest here. |
 | `executive_attach()` — load `vms.ko`, open `/dev/vms`, pin it (:262) | SYSBOOT loading the executive | **Bootstrap.** Keep. The strongest-written code in the file. |
 | load `vmsfs.ko` (:397) | SYSBOOT loadable image | **Bootstrap.** Keep. |
 | mount `/dev/vda` as vmsfs (:415) | SYSINIT mounts the system disk | **Bootstrap.** Keep. |
@@ -152,7 +152,7 @@ the Rule-4 cascade. It is proposed, not assumed.
 
 ```
 STARTUP.EXE (PID 1)
-  1. Linux substrate: mount proc/sys/dev/tmp/pts/shm, hostname
+  1. Linux plumbing: mount proc/sys/dev/tmp/pts/shm, hostname
   2. executive_attach()          — load vms.ko, open /dev/vms, pin, or halt
   3. load vmsfs.ko
   4. mount the system disk       — or halt (no overlay, no auto-INITIALIZE)

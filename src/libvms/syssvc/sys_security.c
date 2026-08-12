@@ -86,7 +86,7 @@
  * WHAT THIS REPLACES, so it does not come back: both checks below used to
  * say `if (uic == 0) -> SYSTEM category`, commented "UID 0 (root) is
  * treated as SYSTEM". OpenVMS has no root and no UIC [0,0]; that rule was
- * invented for the OVMX substrate and, while every VMS session on OVMX ran
+ * invented for the OVMX platform and, while every VMS session on OVMX ran
  * as Linux root, it was also inert -- caller_uic 0 equalled the owner_uic 0
  * of every root-created file, so the owner branch would have answered the
  * same. The moment LOGINOUT started dropping to the authenticated user's

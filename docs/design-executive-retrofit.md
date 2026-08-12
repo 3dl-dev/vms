@@ -182,7 +182,7 @@ vms-6b8  EPIC: executive retrofit                                    rigor: heav
         └── vms-sw1..sw5  sweeps: security / bugs / dead-code / antipatterns / test-coverage
 ```
 
-Consumers unblocked downstream (wired in rd, and each annotated "SUBSTRATE-BLOCKED" so a cold agent
+Consumers unblocked downstream (wired in rd, and each annotated "FOUNDATION-BLOCKED" so a cold agent
 does not mistake them for display work): `vms-853` (A1 SHOW SYSTEM), `vms-46b` (A4 login, via
 `vms-d37`), `vms-c17` (SPAWN), `vms-905` (broadcast).
 

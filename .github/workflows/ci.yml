@@ -52,6 +52,7 @@ jobs:
       kernel: ${{ steps.decide.outputs.kernel }}
       boot: ${{ steps.decide.outputs.boot }}
       release: ${{ steps.decide.outputs.release }}
+      netbsd: ${{ steps.decide.outputs.netbsd }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -131,6 +132,9 @@ jobs:
               - 'tests/integration/test_guide_drift.sh'
               - 'tests/integration/test_guide_drift_negctl.sh'
               - 'tests/integration/test_publish_release.sh'
+            netbsd:
+              - '.github/workflows/**'
+              - 'tests/netbsd/**'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -142,6 +146,7 @@ jobs:
               echo "kernel=${{ steps.filter.outputs.kernel }}"
               echo "boot=${{ steps.filter.outputs.boot }}"
               echo "release=${{ steps.filter.outputs.release }}"
+              echo "netbsd=${{ steps.filter.outputs.netbsd }}"
             } >> "$GITHUB_OUTPUT"
           else
             {
@@ -150,6 +155,7 @@ jobs:
               echo "kernel=true"
               echo "boot=true"
               echo "release=true"
+              echo "netbsd=true"
             } >> "$GITHUB_OUTPUT"
           fi
   # -----------------------------------------------------------------------
@@ -1250,6 +1256,123 @@ jobs:
             || { echo "FAIL: the harness never reached its own FINAL RESULTS accounting -- boot panic, QEMU missing, or run_tests.sh timeout, not an executive-absent failure"; exit 1; }
 
           echo "PASS: harness went red for the RIGHT REASON -- executive absent, all $N_SYSSVC public-sys\$ suite(s) returned the honest-skip code 77 (so no sys\$ entry point fabricated a success), every executive-dependent raw-ioctl suite failed, and vmsfs's independent facility still passed"
+
+  # -----------------------------------------------------------------------
+  # Job 3b-netbsd: OVMX/NetBSD amd64 harness (vms-7f7, epic vms-8e8 Phase 2a)
+  #
+  # De-risks the OVMX/NetBSD SYSKRNL (epic vms-8e8) on a KNOWN architecture
+  # before the VAX arch port: there is NO qemu-system-vax, so the whole NetBSD
+  # executive is first proven on NetBSD/amd64 under qemu-system-x86_64 (see
+  # docs/design-ovmx-netbsd-syskrnl.md §6). This job boots a real NetBSD/amd64
+  # guest (installed from the pinned official release via anita), drives its
+  # serial console, and asserts `uname -srm` == "NetBSD <version> amd64". It is
+  # the foundation P2b (a `vms` pseudo-device on NetBSD) and P2c (an executive
+  # facility test against a real /dev/vms on NetBSD) build on.
+  #
+  # Docker here is BUILD/TEST TOOLING (CLAUDE.md Rule 9 / docs/runtime-target.md),
+  # exactly like the Linux kernel-executive job above: it boots an independent
+  # NetBSD guest in QEMU to TEST it. NetBSD-as-a-real-runtime is the product goal
+  # of epic vms-8e8; a QEMU harness that boots it for testing is not a runtime.
+  #
+  # GATING mirrors the expensive executive jobs: it never runs on an unrelated
+  # PR (only when tests/netbsd/** or the workflow changes), and always on
+  # push/merge_group/schedule.
+  #
+  # RUNNER-CAPABILITY CAVEAT (honest, per the anti-fake rule): GitHub-hosted
+  # runners have no /dev/kvm, so the guest runs under TCG. drive_netbsd.py
+  # detects this and still boots for real -- it is slower, not faked. The
+  # NetBSD install is done ONCE and the resulting disk image + download mirror
+  # are cached (actions/cache, keyed on the pinned release), so only a COLD
+  # cache pays the full TCG install cost; warm runs just boot the cached image.
+  # The first cold run on a fresh cache is the one at risk of the 120-minute
+  # cap under TCG; if that proves too tight on GitHub's runners, this job wants
+  # a KVM-capable (self-hosted or larger) runner -- it is wired and real, the
+  # only open question is the cold-install budget on the stock runner.
+  #
+  # The NEGATIVE CONTROL is a step in THIS job, not a separate one, because it
+  # reuses the warm cache the positive step just populated: it re-boots the same
+  # image asserting a deliberately WRONG arch (sparc64) and requires the harness
+  # to go RED -- proving the assertion has teeth for a couple of minutes of boot,
+  # not a second full install.
+  # -----------------------------------------------------------------------
+  netbsd-amd64-harness:
+    name: NetBSD/amd64 Executive Harness (QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Cache the installed NetBSD disk image + anita download mirror. Keyed on
+      # the pinned release/harness sources (netbsd_version.env lives under
+      # tests/netbsd/**), so a version bump or a harness change invalidates it
+      # and forces a fresh install; otherwise a warm cache skips the slow
+      # TCG install entirely.
+      - name: Cache installed NetBSD image
+        uses: actions/cache@v4
+        with:
+          path: .netbsd-cache
+          key: netbsd-amd64-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/netbsd/drive_netbsd.py', 'tests/netbsd/Dockerfile') }}
+          restore-keys: |
+            netbsd-amd64-
+
+      - name: Build NetBSD harness image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/netbsd/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-netbsd-ktest:latest
+          cache-from: type=gha,scope=netbsd-harness
+          cache-to: type=gha,mode=max,scope=netbsd-harness
+
+      - name: Boot NetBSD/amd64, drive the console, assert uname -srm
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache"
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: NetBSD/amd64 harness exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "PASS: uname -srm printed 'NetBSD 10.1 amd64'" \
+            || { echo "FAIL: did not see the asserted uname line -- job may have gone green without the real assertion"; exit 1; }
+          echo "$OUTPUT" | grep -qF 'NetBSD/amd64 HARNESS PASSED' \
+            || { echo "FAIL: harness did not report its own PASSED banner"; exit 1; }
+          echo "PASS: NetBSD/amd64 booted under QEMU and uname -srm asserted as 'NetBSD 10.1 amd64'"
+
+      - name: NEGATIVE CONTROL — a wrong expected arch must redden the harness
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  -e EXPECT_ARCH=sparc64 \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -eq 0 ]; then
+            echo "FAIL: harness exited 0 while asserting the WRONG arch (sparc64) -- the uname assertion has no teeth."
+            exit 1
+          fi
+          # Went red for the RIGHT reason: the assertion, not a build/boot break.
+          echo "$OUTPUT" | grep -qF "FAIL: uname -srm did not print 'NetBSD 10.1 sparc64'" \
+            || { echo "FAIL: nonzero exit but not the expected assertion-mismatch reason -- the negative control may have failed for an unrelated cause (build/boot/timeout)"; exit 1; }
+          echo "PASS: harness correctly went RED when asserting the wrong arch -- the assertion has teeth"
 
   # -----------------------------------------------------------------------
   # Job 3d: Kernel Executive — per-facility negative controls (vms-e7d)

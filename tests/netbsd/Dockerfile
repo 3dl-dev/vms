@@ -59,7 +59,24 @@ RUN curl -sSL -o /tmp/anita.tar.gz \
 COPY tests/netbsd/netbsd_version.env /netbsd/netbsd_version.env
 COPY tests/netbsd/drive_netbsd.py    /netbsd/drive_netbsd.py
 COPY tests/netbsd/run_tests.sh       /netbsd/run_tests.sh
-RUN chmod +x /netbsd/run_tests.sh /netbsd/drive_netbsd.py
+
+# P2b (rd vms-bfe): the OVMX/NetBSD `vms' pseudo-device driver, the transport
+# seam leaf, and the userspace probe -- staged for the in-guest build. The P2b
+# driver (drive_netbsd_p2b.py) bundles /netbsd/guest-src into an ISO, attaches
+# it to the boot, and builds it inside the NetBSD guest. Selected at run time by
+# overriding the entrypoint with /netbsd/run_p2b.sh (same image as P2a).
+COPY src/kernel-netbsd/vms_netbsd.c        /netbsd/guest-src/kmod/vms_netbsd.c
+COPY src/kernel-netbsd/vms_ping.h          /netbsd/guest-src/kmod/vms_ping.h
+COPY src/kernel-netbsd/Makefile            /netbsd/guest-src/kmod/Makefile
+COPY tests/netbsd/guest/vmsprobe.c         /netbsd/guest-src/probe/vmsprobe.c
+COPY src/libvmssys/kif_transport_netbsd.c  /netbsd/guest-src/probe/kif_transport_netbsd.c
+COPY src/libvmssys/kif_transport.h         /netbsd/guest-src/probe/kif_transport.h
+COPY src/kernel-netbsd/vms_ping.h          /netbsd/guest-src/probe/vms_ping.h
+COPY tests/netbsd/drive_netbsd_p2b.py      /netbsd/drive_netbsd_p2b.py
+COPY tests/netbsd/run_p2b.sh               /netbsd/run_p2b.sh
+
+RUN chmod +x /netbsd/run_tests.sh /netbsd/drive_netbsd.py \
+             /netbsd/run_p2b.sh /netbsd/drive_netbsd_p2b.py
 
 # The installed NetBSD image + download mirror live under /cache so they persist
 # across runs when a cache volume is mounted there (the cold-install cost is

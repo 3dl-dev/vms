@@ -212,12 +212,16 @@
 #     go quiet for it. That is a real residual, tracked rather than papered
 #     over; it is not a REGRESSION, because before this scan the service was
 #     not in the universe at all.
-#   - src/kernel/ is EXCLUDED from the object scan and the exclusion is
-#     declared below, not glob-shaped: those files are a separate binary built
-#     against kernel headers and cannot be compiled here. They are still read
-#     by the SOURCE scan, so a sys$ definition there is still in the universe;
-#     what the exclusion costs is alias detection inside the kernel module,
-#     which links nothing into libvms and exports no sys$ symbol today.
+#   - src/kernel/ AND src/kernel-netbsd/ are EXCLUDED from the object scan and
+#     the exclusion is declared below, not glob-shaped: those files are separate
+#     binaries built against kernel headers and cannot be compiled here.
+#     src/kernel is the Linux executive (vms.ko); src/kernel-netbsd is the
+#     NetBSD executive (the `vms' pseudo-device, epic vms-8e8 P2b), which
+#     includes sys/systm.h and other NetBSD kernel headers absent from a host
+#     userland build. Both are still read by the SOURCE scan, so a sys$
+#     definition in either is still in the universe; what the exclusion costs is
+#     alias detection inside a kernel module, which links nothing into libvms
+#     and exports no sys$ symbol today.
 #   - IT MAKES THIS GATE'S DEPENDENCIES THE WHOLE PRODUCT'S DEPENDENCIES, and
 #     that is a real cost, paid on purpose. Every product .c file is compiled
 #     here whether or not CMake would configure it -- which is precisely why
@@ -805,7 +809,12 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 #
 # Emits into the fact stream:
 #   S <file> <symbol>   a sys$ symbol the compiled product exports
-SYMSCAN_EXCLUDE_DIR="src/kernel"
+# Excluded from the OBJECT scan: kernel executives that cannot compile in a host
+# userland build (see the header). src/kernel = Linux vms.ko; src/kernel-netbsd =
+# the NetBSD `vms' pseudo-device (epic vms-8e8 P2b, sys/systm.h et al.). Anchored
+# with ^ so only these exact directories match -- "src/kernel-netbsd/" is NOT a
+# prefix of "src/kernel/" nor vice versa.
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/"
 
 SYMCC=""
 for _c in cc gcc; do
@@ -882,7 +891,7 @@ chmod +x "$WORK/cc1.sh"
 # -path/-prune, not a grep on the path: SRC_ROOT is an arbitrary directory and
 # a regexp match on it would be at the mercy of whatever punctuation it holds.
 { cat "$WORK/prodc"; cat "$WORK/prodasm"; } | sort -u \
-    | grep -v "^$SYMSCAN_EXCLUDE_DIR/" \
+    | grep -vE "$SYMSCAN_EXCLUDE_RE" \
     | sed "s|^|$SRC_ROOT/|" | sort > "$WORK/csrc"
 
 njobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)

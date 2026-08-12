@@ -11,16 +11,21 @@
 
 obj-m := vms.o
 
-# vms_eflag.o is built from ../kernel-core/vms_eflag.c: the event-flag facility
-# is substrate-agnostic and LIVES in src/kernel-core/ (rd vms-ec4, Phase B). The
-# Linux vms.ko is the Linux BACKEND for that shared source -- it provides the
-# exec_*/exec_list_* primitives (exec_kbackend_linux.h / exec_list_linux.h here
-# in src/kernel) that the core file compiles against. Kbuild builds the object
-# in place under src/kernel-core; the header search paths below let the core
-# file find both the shared contracts and this dir's shared struct header.
+# vms_eflag.o / vms_ast.o / vms_access.o are built from ../kernel-core/: these
+# substrate-agnostic executive facilities LIVE in src/kernel-core/ -- event flags
+# (rd vms-ec4, Phase B) and, now, AST delivery and access-mode enforcement (rd
+# vms-5b2, Phase D). The Linux vms.ko is the Linux BACKEND for that shared source
+# -- it provides the exec_*/exec_list_* primitives (exec_kbackend_linux.h /
+# exec_list_linux.h here in src/kernel) that the core files compile against.
+# Kbuild builds each object in place under src/kernel-core; the header search
+# paths below let the core files find both the shared contracts and this dir's
+# shared struct header. (vms_lnm.c stays here in src/kernel for now: it is
+# coupled to the Linux mm layer -- vmalloc_user/remap_vmalloc_range/vm_flags and
+# smp_wmb barriers -- which the exec_* shim does not yet cover; its extraction
+# waits on a memory-mapping seam, a later phase.)
 vms-y := vms_module.o \
-         vms_access.o \
-         vms_ast.o \
+         ../kernel-core/vms_access.o \
+         ../kernel-core/vms_ast.o \
          ../kernel-core/vms_eflag.o \
          vms_lock.o \
          vms_devtab.o \

@@ -11,11 +11,30 @@
  *   - Privilege state is stored in kernel memory, not userspace
  */
 
-#include <linux/kernel.h>
-#include <linux/uaccess.h>
-#include <linux/slab.h>
+/*
+ * Access-mode enforcement is promoted onto the kernel-backend shim (rd vms-5b2,
+ * Exec-core Phase D; epic vms-8e8; design docs/design-netbsd-executive-core.md)
+ * and, like event flags (vms_eflag.c, Phase B) and ASTs (vms_ast.c, this phase),
+ * now LIVES in src/kernel-core/. The ONLY host primitives this file touches are
+ * locking (proc->mode_lock) and user<->kernel copy; both go through exec_*
+ * (exec_kbackend.h). On Linux each op expands to the EXACT primitive this file
+ * used before (spin_lock/spin_unlock, copy_*_user), so the module is
+ * behaviour-identical -- proven byte-for-byte by the disassembly-identical
+ * vms_access.o and by the unchanged Kernel Executive QEMU suite counts. The SAME
+ * source compiles against the NetBSD backend without a single `#if`; no NetBSD
+ * backend for access modes is added in this phase (Phase D is the Linux-side
+ * extraction only).
+ *
+ * This is the LEAST-coupled of the extracted facilities: no intrusive lists, no
+ * alloc, no wait/wake -- just mode_lock and copy. It calls the other facilities'
+ * image-rundown release helpers (vms_proc_rundown_locks/channels/asts, declared
+ * in vms_internal.h), which is a plain cross-facility function call, not a host
+ * primitive. This file therefore includes ONLY the shim contract and the shared
+ * OVMX structs (vms_internal.h) -- no `<linux/…>` header of its own.
+ */
 
 #include "vms_internal.h"
+#include "exec_kbackend.h"
 
 /*
  * Privilege bits and status codes come from vms_internal.h /
@@ -76,7 +95,7 @@ long vms_ioctl_setmode(struct vms_proc *proc, unsigned long arg)
     struct vms_mode_args args;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     if (args.mode > PSL_C_USER) {
@@ -84,20 +103,20 @@ long vms_ioctl_setmode(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    spin_lock(&proc->mode_lock);
+    exec_lock(&proc->mode_lock);
 
     /* Check if we're going to a more privileged mode */
     if (args.mode < proc->current_mode) {
         /* More privileged = lower number */
         if (args.mode == PSL_C_KERNEL) {
             if (!(proc->cur_privs & PRV_M_CMKRNL)) {
-                spin_unlock(&proc->mode_lock);
+                exec_unlock(&proc->mode_lock);
                 args.status = SS__NOPRIV;
                 goto out;
             }
         } else if (args.mode == PSL_C_EXEC || args.mode == PSL_C_SUPER) {
             if (!(proc->cur_privs & (PRV_M_CMEXEC | PRV_M_CMKRNL))) {
-                spin_unlock(&proc->mode_lock);
+                exec_unlock(&proc->mode_lock);
                 args.status = SS__NOPRIV;
                 goto out;
             }
@@ -105,12 +124,12 @@ long vms_ioctl_setmode(struct vms_proc *proc, unsigned long arg)
     }
 
     proc->current_mode = args.mode;
-    spin_unlock(&proc->mode_lock);
+    exec_unlock(&proc->mode_lock);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -139,15 +158,15 @@ long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg)
     struct vms_modexfer_args args;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&proc->mode_lock);
+    exec_lock(&proc->mode_lock);
 
     if (proc->current_mode != PSL_C_SUPER) {
         args.prev_mode = proc->current_mode;
         args.new_mode = proc->current_mode;
-        spin_unlock(&proc->mode_lock);
+        exec_unlock(&proc->mode_lock);
         args.status = SS__NOPRIV;
         goto out;
     }
@@ -158,12 +177,12 @@ long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg)
     proc->image_active = 1;
     args.new_mode = proc->current_mode;
 
-    spin_unlock(&proc->mode_lock);
+    exec_unlock(&proc->mode_lock);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -211,15 +230,15 @@ long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg)
     uint8_t rundown_mode;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&proc->mode_lock);
+    exec_lock(&proc->mode_lock);
 
     if (!proc->image_active) {
         args.prev_mode = proc->current_mode;
         args.new_mode = proc->current_mode;
-        spin_unlock(&proc->mode_lock);
+        exec_unlock(&proc->mode_lock);
         args.status = SS__NOPRIV;
         goto out;
     }
@@ -230,7 +249,7 @@ long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg)
     proc->image_active = 0;
     args.new_mode = proc->current_mode;
 
-    spin_unlock(&proc->mode_lock);
+    exec_unlock(&proc->mode_lock);
 
     /* Release the image's resources; process-permanent state is left alone. */
     vms_proc_rundown_locks(proc, rundown_mode);
@@ -240,7 +259,7 @@ long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg)
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -253,16 +272,16 @@ long vms_ioctl_getmode(struct vms_proc *proc, unsigned long arg)
     struct vms_getmode_args args;
 
     memset(&args, 0, sizeof(args));
-    spin_lock(&proc->mode_lock);
+    exec_lock(&proc->mode_lock);
     args.mode = proc->current_mode;
     args.cur_privs = proc->cur_privs;
     args.perm_privs = proc->perm_privs;
-    spin_unlock(&proc->mode_lock);
+    exec_unlock(&proc->mode_lock);
 
     /* Zero padding */
     args.pad[0] = args.pad[1] = args.pad[2] = 0;
 
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -304,10 +323,10 @@ long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg)
     bool may_exceed;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&proc->mode_lock);
+    exec_lock(&proc->mode_lock);
 
     /* Save previous state */
     args.prev = proc->cur_privs;
@@ -326,7 +345,7 @@ long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg)
          */
         if (args.permanent && !may_exceed &&
             (args.mask & ~proc->perm_privs) != 0) {
-            spin_unlock(&proc->mode_lock);
+            exec_unlock(&proc->mode_lock);
             args.status = SS__NOPRIV;
             goto out;
         }
@@ -337,7 +356,7 @@ long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg)
 
             proc->cur_privs |= allowed;
             if (allowed != args.mask) {
-                spin_unlock(&proc->mode_lock);
+                exec_unlock(&proc->mode_lock);
                 args.status = SS__NOTALLPRIV;
                 goto out;
             }
@@ -354,11 +373,11 @@ long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg)
             proc->perm_privs &= ~args.mask;
     }
 
-    spin_unlock(&proc->mode_lock);
+    exec_unlock(&proc->mode_lock);
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -374,10 +393,10 @@ long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg)
     struct vms_priv_args args;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&proc->mode_lock);
+    exec_lock(&proc->mode_lock);
     args.prev = proc->cur_privs;
 
     if ((proc->cur_privs & args.mask) == args.mask)
@@ -385,9 +404,9 @@ long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg)
     else
         args.status = SS__NOPRIV;
 
-    spin_unlock(&proc->mode_lock);
+    exec_unlock(&proc->mode_lock);
 
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }

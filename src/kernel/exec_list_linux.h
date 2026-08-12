@@ -17,6 +17,7 @@
  *   exec_list_add / exec_list_add_tail     -> list_add / list_add_tail
  *   exec_list_del                          -> list_del
  *   exec_list_empty                        -> list_empty
+ *   exec_list_first_entry                  -> list_first_entry
  *   exec_list_for_each_entry[_safe]        -> list_for_each_entry[_safe]
  *
  * The for_each_entry forms MUST stay macros: they resolve the element from its
@@ -50,6 +51,10 @@ static inline void exec_list_del(exec_list_node_t *n)                           
 
 /* ---- query ---- */
 static inline int exec_list_empty(const exec_list_head_t *h) { return list_empty(h); }
+
+/* ---- first element (typed; UNDEFINED on an empty list -- see exec_list.h) ---- */
+#define exec_list_first_entry(head, type, member) \
+	list_first_entry(head, type, member)
 
 /* ---- iteration (typed; `member` is the exec_list_node_t field name) ---- */
 #define exec_list_for_each_entry(pos, head, member) \

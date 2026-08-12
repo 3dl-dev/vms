@@ -85,6 +85,12 @@ void exec_list_del(exec_list_node_t *n);
 #define EXEC_CONTAINER_OF(ptr, type, member) \
 	((type *)(void *)((char *)(ptr) - offsetof(type, member)))
 
+/* ---- first element (typed; UNDEFINED on an empty list -- see exec_list.h) ----
+ * Same container-recovery idiom as the iterators; the caller must have
+ * established non-emptiness (exec_list_empty()) first. */
+#define exec_list_first_entry(head, type, member) \
+	EXEC_CONTAINER_OF((head)->next, type, member)
+
 /* ---- iteration (typed; `member' is the exec_list_node_t field name) ----
  * These MUST be macros: they recover the element from its embedded node using
  * the caller's element type + member name (EXEC_CONTAINER_OF), which a function

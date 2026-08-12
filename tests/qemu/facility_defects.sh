@@ -607,7 +607,7 @@ defect_field() {
     access-mode-escalation)
         case "$_f" in
         facility)     echo "access modes and privileges (VMS_IOCTL_SETMODE/GETMODE/SETPRV/CHKPRIV)";;
-        targets)      echo "kernel/vms_access.c";;
+        targets)      echo "kernel-core/vms_access.c";;
         suites_red)   echo "test_kmod_access";;
         blind_suites) echo "";;
         blind_why)    echo "";;
@@ -647,7 +647,7 @@ EOF
     setprv-grants-unauthorized)
         case "$_f" in
         facility)     echo "access modes and privileges (\$SETPRV authorization against the AUTHORIZED mask, VMS_IOCTL_SETPRV)";;
-        targets)      echo "kernel/vms_access.c";;
+        targets)      echo "kernel-core/vms_access.c";;
         # test_syssvc_setprv drives the PUBLIC sys$setprv (vms-pv1 wired it to
         # vms_kif_setprv -> VMS_IOCTL_SETPRV), and test_kmod_access drives the
         # raw ioctl -- both reach vms_ioctl_setprv's !may_exceed authorization,
@@ -738,7 +738,7 @@ EOF
     getmode-buffer-not-written)
         case "$_f" in
         facility)     echo "access modes and privileges (VMS_IOCTL_SETMODE/GETMODE/SETPRV/CHKPRIV)";;
-        targets)      echo "kernel/vms_access.c";;
+        targets)      echo "kernel-core/vms_access.c";;
         suites_red)   echo "test_kmod_access test_kmod_bind";;
         blind_suites) echo "";;
         blind_why)    echo "";;
@@ -782,7 +782,7 @@ EOF
     ast-setast-disable)
         case "$_f" in
         facility)     echo "AST delivery (VMS_IOCTL_DCLAST/SETAST/DELIVERAST)";;
-        targets)      echo "kernel/vms_ast.c";;
+        targets)      echo "kernel-core/vms_ast.c";;
         # test_syssvc_ast JOINS suites_red WITH vms-as1, which wired
         # src/libvms/syssvc/sys_ast.c to the executive: sys$setast is now a
         # translation layer over VMS_IOCTL_SETAST, so a defect injected into
@@ -807,7 +807,7 @@ EOF
     ast-deliver-crossmode-escalation)
         case "$_f" in
         facility)     echo "AST delivery (VMS_IOCTL_DCLAST/SETAST/DELIVERAST), cross-mode delivery scope";;
-        targets)      echo "kernel/vms_ast.c";;
+        targets)      echo "kernel-core/vms_ast.c";;
         # test_syssvc_ast_secmode is the ONLY suite that exercises cross-mode
         # delivery (vms-as1): it declares a KERNEL-mode AST and a USER-mode AST
         # and, at USER mode, drains through the PUBLIC sys$setast. Every other
@@ -831,7 +831,7 @@ EOF
     dclast-super-mode-escalation)
         case "$_f" in
         facility)     echo "AST declaration access-mode gate (\$DCLAST / VMS_IOCTL_DCLAST, vms-95a)";;
-        targets)      echo "kernel/vms_ast.c";;
+        targets)      echo "kernel-core/vms_ast.c";;
         # test_syssvc_ast_secmode is the only suite that declares an AST at a
         # more-privileged mode from a genuinely unprivileged caller: PART B
         # forks a child that drops its Linux credentials (so the executive
@@ -4659,7 +4659,7 @@ EOF
     super-mode-escalation)
         case "$_f" in
         facility)     echo "access-mode transition + boundary enforcement (VMS_IOCTL_SETMODE/ENTER_IMAGE/IMAGE_RUNDOWN, vms-68f.iii -- increment (iii) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.3)";;
-        targets)      echo "kernel/vms_access.c";;
+        targets)      echo "kernel-core/vms_access.c";;
         suites_red)   echo "test_kmod_modeswitch";;
         blind_suites) echo "";;
         blind_why)    echo "";;
@@ -4677,7 +4677,7 @@ EOF
     image-rundown-without-entry)
         case "$_f" in
         facility)     echo "access-mode transition + boundary enforcement (VMS_IOCTL_ENTER_IMAGE/IMAGE_RUNDOWN, vms-68f.iii -- increment (iii) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.3)";;
-        targets)      echo "kernel/vms_access.c";;
+        targets)      echo "kernel-core/vms_access.c";;
         suites_red)   echo "test_kmod_modeswitch";;
         blind_suites) echo "";;
         blind_why)    echo "";;
@@ -4695,7 +4695,7 @@ EOF
     image-rundown-leaks-user-lock)
         case "$_f" in
         facility)     echo "SYS\$RUNDWN image-scoped resource release (VMS_IOCTL_IMAGE_RUNDOWN, vms-68f.v -- increment (v) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.1 step 2 / §A.6.1; class grounding docs/design-image-rundown-resource-classes.md)";;
-        targets)      echo "kernel/vms_access.c";;
+        targets)      echo "kernel-core/vms_access.c";;
         suites_red)   echo "test_kmod_rundown";;
         blind_suites) echo "";;
         blind_why)    echo "";;
@@ -5124,7 +5124,7 @@ apply_edit() {
     kif-setmode-always-kernel)
         sed -i 's|    args.mode = mode;|    args.mode = 0; /* NEGCTL kif-setmode-always-kernel */|' "$_file";;
     getmode-buffer-not-written)
-        sed -i '/^long vms_ioctl_getmode/,/^}$/ s|if (copy_to_user(|if (1 \|\| copy_to_user(|' "$_file";;
+        sed -i '/^long vms_ioctl_getmode/,/^}$/ s|if (exec_copyout(|if (1 \|\| exec_copyout(|' "$_file";;
     ast-setast-disable)
         sed -i 's|ast_state->enabled = args.enable ? 1 : 0;|ast_state->enabled = 1; /* NEGCTL ast-setast-disable */|' "$_file";;
     ast-deliver-crossmode-escalation)

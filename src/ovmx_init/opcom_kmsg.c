@@ -1,13 +1,19 @@
 /*
- * opcom_kmsg.c - /dev/kmsg -> operator-console bridge (rd vms-32a)
+ * opcom_kmsg.c - /dev/kmsg -> operator surface bridge (rd vms-32a)
  *
  * See opcom_kmsg.h and docs/design-opcom-executive-logging.md for the full
  * design. Summary of what lives here:
  *
- *   opcom_kmsg_classify()  - pure suppress-vs-route + reformat decision,
- *                             unit-tested directly (tests/ovmx_init/).
- *   opcom_kmsg_start()     - the /dev/kmsg reader thread that calls it
- *                             against the real kernel log.
+ *   opcom_kmsg_classify()            - pure suppress/route/destination +
+ *                                       reformat decision, unit-tested
+ *                                       directly (tests/ovmx_init/).
+ *   opcom_kmsg_append_operator_log() - the OPERATOR.LOG writer for
+ *                                       OPCOM_KMSG_OPERATOR_LOG records.
+ *   opcom_kmsg_start()               - the /dev/kmsg reader thread that
+ *                                       calls classify() against the real
+ *                                       kernel log and dispatches each
+ *                                       routed line to /dev/console or
+ *                                       OPERATOR.LOG per its destination.
  */
 
 /* _POSIX_C_SOURCE / _DEFAULT_SOURCE come from the ovmx_init target's own
@@ -22,6 +28,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+/* SYS$MANAGER:OPERATOR.LOG path resolution -- the SAME accessor and the
+ * SAME /tmp fallback src/libvms/syssvc/sys_operator.c's sys$sndopr uses
+ * (see opcom_kmsg_append_operator_log() below), so both writers agree on
+ * which physical file "OPERATOR.LOG" means at any point in boot. ovmx_init
+ * already links vmsfs (CMakeLists.txt) for VMS-filespec translation
+ * elsewhere in this executable; no new library dependency. */
+#include "ovmx_layout.h"
+#include "vmsfs/filespec.h"
 
 /*
  * TWO FACILITIES (Rule 8 -- both OVMX design choices, neither VMS-authentic).
@@ -78,10 +93,31 @@ static const char *opcom_kmsg_ident(const char *body)
 /*
  * The OPCOM-record banner (docs/design-opcom-executive-logging.md sec6) is
  * NOT built here -- that vocabulary belongs to sys$sndopr
- * (src/libvms/syssvc/sys_operator.c). This file only ever emits vocabulary
- * (A): a bare "%FACILITY-S-IDENT, text" line, because vms.ko/vmsfs.ko's
- * events (and the re-styled SYSKRNL lines alongside them) are all
- * pre-OPCOM boot-console events (sec2).
+ * (src/libvms/syssvc/sys_operator.c). Everything this file emits is a bare
+ * "%FACILITY-S-IDENT, text" line, because vms.ko/vmsfs.ko's events (and the
+ * re-styled SYSKRNL lines alongside them) are all pre-OPCOM boot-time
+ * events (sec2) -- SYSKRNL lines landing in OPERATOR.LOG (below) is a
+ * DESTINATION choice, not a vocabulary-B rewrite; they keep their bare
+ * shape there too.
+ *
+ * CONSOLE-VS-LOG SPLIT (operator correction, 2026-08-12, round 2): PR #358
+ * (vms-2213) deliberately keeps routine kernel printk off OPA0: so the boot
+ * console matches the OpenVMS oracle (docs/design-boot-faithful.md). The
+ * first cut of the SYSKRNL re-style (above) wrote every routed SYSKRNL line
+ * straight to the console, which measurably reopened that leak: a CI
+ * runner's real hardware/kernel emits far more NOTICE/WARNING-level
+ * SYSKRNL chatter (X.509 cert loads, cpufreq driver probing, ...) than
+ * this repo's minimal dev QEMU guest ever showed locally, flooding the
+ * console and stalling the boot before Username: -- measured on PR #365.
+ * The fix is a DESTINATION split, not a narrower filter: OVMX-facility
+ * lines (genuinely vms.ko/vmsfs.ko's own, plus the vms:/vmsfs: prefix
+ * collision, sec below) still go to the console -- that is what PR #358's
+ * oracle-conformance baseline already expects and it has never been the
+ * complaint. SYSKRNL-facility lines go to OPERATOR.LOG ONLY: the
+ * information survives (an operator can TYPE/SEARCH it) but the LIVE boot
+ * console stays exactly as VMS-shaped as #358 left it. The three
+ * OPCOM_KMSG_* return values are defined in opcom_kmsg.h, alongside their
+ * full contract.
  */
 int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz)
 {
@@ -90,11 +126,12 @@ int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz)
     const char *facility;
     const char *ident;
     char sev;
+    int dest;
 
     if (!text || !out || outsz == 0)
-        return 0;
+        return OPCOM_KMSG_DROP;
     if (text[0] == '\0')
-        return 0;
+        return OPCOM_KMSG_DROP;
 
     level = pri & 7;
 
@@ -104,30 +141,32 @@ int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz)
      * path. Applies to BOTH facilities: OVMX's own debug chatter and
      * SYSKRNL's. */
     if (level >= 7)
-        return 0;
+        return OPCOM_KMSG_DROP;
 
     if (strncmp(text, "vms: ", 5) == 0) {
         body = text + 5;
         if (body[0] == '\0')
-            return 0;
+            return OPCOM_KMSG_DROP;
         facility = OPCOM_KMSG_FACILITY;
         ident = opcom_kmsg_ident(body);
+        dest = OPCOM_KMSG_CONSOLE;
     } else if (strncmp(text, "vmsfs: ", 7) == 0) {
         body = text + 7;
         if (body[0] == '\0')
-            return 0;
+            return OPCOM_KMSG_DROP;
         facility = OPCOM_KMSG_FACILITY;
         ident = "VMSFS";
+        dest = OPCOM_KMSG_CONSOLE;
     } else {
         /*
-         * A SYSKRNL (Linux-kernel-layer) LINE: re-styled and routed by
-         * default (operator correction), except routine INFO-level (and
-         * DEBUG-level, already excluded above) device/bus-enumeration
-         * chatter -- ACPI, PCI, virtio, block-layer probe noise -- which is
-         * the "genuinely zero operator value" bucket: real VMS's own boot
-         * console does not surface internal driver-probe minutiae either,
-         * and a fresh boot's kernel ring buffer holds hundreds of such
-         * lines.
+         * A SYSKRNL (Linux-kernel-layer) LINE: re-styled and routed to
+         * OPERATOR.LOG by default (operator correction), except routine
+         * INFO-level (and DEBUG-level, already excluded above) device/bus-
+         * enumeration chatter -- ACPI, PCI, virtio, block-layer probe noise
+         * -- which is the "genuinely zero operator value" bucket: real
+         * VMS's own boot console does not surface internal driver-probe
+         * minutiae either, and a fresh boot's kernel ring buffer holds
+         * hundreds of such lines.
          *
          * THE THRESHOLD IS MEASURED, NOT GUESSED, against the two examples
          * the correction named explicitly: loading an unsigned out-of-tree
@@ -147,10 +186,11 @@ int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz)
          * mistaking it for OVMX's own record either.
          */
         if (level >= 6)
-            return 0;
+            return OPCOM_KMSG_DROP;
         body = text;
         facility = OPCOM_KMSG_SYSKRNL_FACILITY;
         ident = "KERNEL";
+        dest = OPCOM_KMSG_OPERATOR_LOG;
     }
 
     /* A mechanical, honest translation of the severity the kernel already
@@ -163,7 +203,7 @@ int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz)
     }
 
     snprintf(out, outsz, "%%%s-%c-%s, %s\n", facility, sev, ident, body);
-    return 1;
+    return dest;
 }
 
 /*
@@ -202,6 +242,46 @@ static int parse_kmsg_record(const char *raw, size_t rawlen,
     memcpy(msgbuf, p, mlen);
     msgbuf[mlen] = '\0';
     return 0;
+}
+
+/*
+ * SYS$MANAGER:OPERATOR.LOG fallback path, when the vmsfs translation
+ * cannot resolve (no system disk mounted yet -- the SAME condition
+ * sys_operator.c's open_operator_log() falls back for). Same literal path
+ * as OPERATOR_LOG_FALLBACK in src/libvms/syssvc/sys_operator.c, so a
+ * SYSKRNL line written before the system disk mounts and a sys$sndopr
+ * record written in the same window land in the SAME file.
+ */
+#define OPCOM_KMSG_OPLOG_FALLBACK "/tmp/OPERATOR.LOG"
+
+/*
+ * opcom_kmsg_append_operator_log - append one already-formatted line to
+ * OPERATOR.LOG. Resolves SYS$MANAGER:OPERATOR.LOG through vmsfs (the same
+ * accessor sys$sndopr uses), falling back to /tmp when that path is not
+ * yet writable (no system disk mounted -- OVMX's own established
+ * convention for this exact condition, not a new invention here). Opens,
+ * appends, and closes per call rather than holding a long-lived fd: the
+ * resolvable path can CHANGE mid-boot (before vs. after the system disk
+ * mounts), and re-resolving on every write is how a later call finds the
+ * real file once it exists, without this thread needing to know when that
+ * happens.
+ */
+static void opcom_kmsg_append_operator_log(const char *line)
+{
+    char oplog_linux[1024];
+    FILE *f;
+
+    if (vmsfs_to_linux_path(VMS_OPERATOR_LOG, oplog_linux, sizeof(oplog_linux)) == 1)
+        f = fopen(oplog_linux, "a");
+    else
+        f = NULL;
+    if (!f)
+        f = fopen(OPCOM_KMSG_OPLOG_FALLBACK, "a");
+    if (!f)
+        return;  /* best-effort -- see opcom_kmsg_start()'s comment */
+
+    fputs(line, f);
+    fclose(f);
 }
 
 static void *opcom_kmsg_thread_main(void *arg)
@@ -259,9 +339,20 @@ static void *opcom_kmsg_thread_main(void *arg)
 
         if (parse_kmsg_record(raw, (size_t)n, &pri, msg, sizeof(msg)) != 0)
             continue;
-        if (!opcom_kmsg_classify(pri, msg, line, sizeof(line)))
+
+        int dest = opcom_kmsg_classify(pri, msg, line, sizeof(line));
+        if (dest == OPCOM_KMSG_DROP)
             continue;
 
+        if (dest == OPCOM_KMSG_OPERATOR_LOG) {
+            /* SYSKRNL lines never reach the console (console-vs-log split,
+             * PR #365 / #358): logged, not broadcast. */
+            opcom_kmsg_append_operator_log(line);
+            continue;
+        }
+
+        /* OPCOM_KMSG_CONSOLE -- OVMX's own records, unchanged from before
+         * the console-vs-log split. */
         size_t len = strlen(line);
         size_t written = 0;
         while (written < len) {

@@ -213,10 +213,10 @@ else
 fi
 
 # --- 1c. EXECUTIVE KERNEL MESSAGES -> OPERATOR SURFACE (vms-32a) -----------
-# docs/design-opcom-executive-logging.md. The /dev/kmsg -> console bridge
+# docs/design-opcom-executive-logging.md. The /dev/kmsg -> operator bridge
 # (src/ovmx_init/opcom_kmsg.c) starts early in bare_metal_init(), ahead of
 # vms.ko/vmsfs.ko loading, and reformats their pr_info/warn/err records as
-# bare "%OVMX-<S>-<IDENT>, text" console lines (vocabulary (A) -- no OPCOM
+# bare "%OVMX-<S>-<IDENT>, text" CONSOLE lines (vocabulary (A) -- no OPCOM
 # banner; OPCOM is not running at boot time). BEFORE this item these records
 # never reached the console AT ALL: pr_info is below the "loglevel=3 quiet"
 # console threshold this harness boots with, so a positive hit here is proof
@@ -236,45 +236,48 @@ if printf '%s\n' "$FID_FULL" | grep -qE '^%OVMX-I-VMSFS, '; then
 else
     bad "no %OVMX-I-VMSFS line on the console -- the /dev/kmsg bridge did not route vmsfs.ko"
 fi
-# SYSKRNL (Linux-kernel-layer) lines are RE-STYLED and ROUTED, not suppressed (operator-
-# ruling correction, 2026-08-12 -- docs/design-opcom-executive-logging.md
-# sec3): they carry real operator-relevant information (a module-taint
-# warning means an unverified executive image loaded), so the standing
-# requirement is that they reach the console WRAPPED in a VMS-form facility
-# line, never as a bare/raw Linux dmesg line. Every real boot triggers this
-# deterministically: vms.ko/vmsfs.ko are unsigned out-of-tree modules, so
-# the KERNEL ITSELF (not vms.ko) prints its own generic taint warning on
-# every load -- and, because that warning is printed as "%s: <text>" with
-# the LOADING MODULE'S OWN NAME substituted, it carries the SAME "vms: "
-# prefix vms.ko's own lines do and is classified alongside them (design doc
-# sec4 -- a disclosed simplification, not a defect: content and severity
-# both stay the kernel's real ones, only the facility label is OVMX's
-# rather than SYSKRNL's for this one measured collision).
+# The kernel's OWN generic module-taint warning (not vms.ko's own printk --
+# see design doc sec4) carries the SAME "vms: " prefix vms.ko's own lines
+# do, because Linux substitutes the LOADING MODULE'S OWN NAME into it, so
+# it is classified alongside vms.ko's own lines: OVMX/KMOD, console. This
+# is unchanged by the console-vs-log split below -- OVMX-facility lines
+# were never the flooding complaint (PR #365); this is one disclosed,
+# harmless side effect of the prefix collision, not SYSKRNL content.
 if printf '%s\n' "$FID_FULL" | grep -qE '^%OVMX-[EWIF]-KMOD, .*taint'; then
     ok "the kernel's own module-taint warning reached the operator console, RE-STYLED (not suppressed) as %OVMX-*-KMOD (vms-32a)"
 else
     bad "the kernel's own module-taint warning did not reach the console in VMS-form -- re-styling regressed to suppression, or never routed at all"
 fi
-# ...and it never reaches the console as a BARE/RAW Linux dmesg line (every
-# occurrence of the SYSKRNL wording is wrapped in a %FACILITY- line).
-RAW_TAINT_LEAK=$(printf '%s\n' "$FID_FULL" | grep -E 'taint' | grep -vE '^%(OVMX|SYSKRNL)-')
-if [ -n "$RAW_TAINT_LEAK" ]; then
-    bad "a SYSKRNL (Linux-kernel-layer) taint line reached the console UNWRAPPED (raw dmesg form): $RAW_TAINT_LEAK"
+
+# --- 1d. CONSOLE-VS-LOG SPLIT (vms-32a round 2, PR #365) --------------------
+# PR #358 (vms-2213) deliberately keeps routine kernel printk off OPA0: so
+# the boot console matches the OpenVMS oracle. The FIRST cut of the SYSKRNL
+# re-style (round 1 of this item) wrote every routed SYSKRNL line straight
+# to the console, which measurably reopened that leak on a CI runner whose
+# real hardware/kernel emits far more NOTICE/WARNING-level chatter (X.509
+# cert loads, cpufreq driver probing, ...) than this repo's minimal dev QEMU
+# guest ever showed locally -- flooding the console and stalling the boot
+# before Username:. THE FIX, asserted here against the SAME real boot: no
+# %SYSKRNL- line -- and no raw/unwrapped Linux dmesg line at all -- reaches
+# the console. src/ovmx_init/opcom_kmsg.c routes SYSKRNL-facility lines to
+# OPERATOR.LOG only (opcom_kmsg_append_operator_log()); this is the
+# regression-fix assertion CI's failure named directly.
+if printf '%s\n' "$FID_FULL" | grep -qE '^%SYSKRNL-'; then
+    bad "a %SYSKRNL- line reached the console -- the console-vs-log split regressed (PR #365)"
 else
-    ok "every taint-related console line is wrapped in a %OVMX-/%SYSKRNL- facility -- none reached the console as a raw Linux dmesg line (vms-32a)"
+    ok "no %SYSKRNL- line reached the console -- SYSKRNL stays OPERATOR.LOG-only (vms-32a round 2)"
 fi
-# hrtimer's scheduling-latency warning is not deterministically triggerable
-# in a clean boot (it only fires under real host scheduling pressure), so
-# it is not asserted present here -- tests/ovmx_init/test_opcom_kmsg.c
-# proves the %SYSKRNL-W-KERNEL re-styling for it directly. What IS
-# asserted, for any run where the host happens to be loaded enough to
-# trigger it: if it appears at all, it is wrapped, never raw.
-RAW_HRTIMER_LEAK=$(printf '%s\n' "$FID_FULL" | grep -E 'hrtimer: interrupt took' | grep -vE '^%SYSKRNL-')
-if [ -n "$RAW_HRTIMER_LEAK" ]; then
-    bad "an hrtimer scheduling-latency line reached the console UNWRAPPED (raw dmesg form): $RAW_HRTIMER_LEAK"
-else
-    ok "no hrtimer line reached the console unwrapped (either absent this run, or wrapped as %SYSKRNL-) (vms-32a)"
-fi
+# ...and no bare/raw Linux dmesg-shaped noise reached the console either
+# (the specific strings CI's failure quoted, plus the general taint/hrtimer
+# family already covered above under the OVMX/KMOD collision).
+for NOISE in 'Loaded X.509 cert' 'Key type' '_CPC object is not present' \
+             'hrtimer: interrupt took'; do
+    if printf '%s\n' "$FID_FULL" | grep -qF "$NOISE"; then
+        bad "SYSKRNL (Linux-kernel-layer) noise ('$NOISE') reached the console in ANY form -- console-vs-log split regressed"
+    else
+        ok "no '$NOISE' noise on the console (absent this run, or correctly routed to OPERATOR.LOG only)"
+    fi
+done
 
 # --- 2. Log in as SYSTEM -----------------------------------------------------
 LOGIN_OFF=$(wc -c <"$LOG")

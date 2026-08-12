@@ -377,22 +377,55 @@ else
     ok "the SYSTEM password was never echoed to the console"
 fi
 
-# Answer SCSNODE/SCSSYSTEMID blank (skip that sub-step -- not separately
-# ground-sourced by this run, see OVMX$INSTALL.COM's own header) so the
-# procedure falls through SKIP_SCS to its OWN automatic DISMOUNT -- this is
-# script continuation, not a new interactive command, so no manual
-# "send 'DISMOUNT ...'" is issued here.
-send ''
+# Drive the SCS/SYSGEN sub-step FOR REAL (vms-597). Answering SCSNODE and
+# SCSSYSTEMID non-blank makes OVMX$INSTALL.COM redirect SYS$SYSTEM at the
+# target's ROOTED [SYS0.SYSCOMMON.SYSEXE] and RUN SYS$SYSTEM:SYSGEN.EXE
+# against it. Before vms-597 the redirect named the flat, pre-rooted
+# [SYSEXE] -- a directory a vms-96ec-rooted target does not have -- so the
+# RUN failed "%DCL-E-IVIMAGE, image not found - SYS$SYSTEM:SYSGEN.EXE" and
+# the whole SCS step could not run. This was previously UNCAUGHT because the
+# step was answered blank (fall through SKIP_SCS); un-skipping it is what
+# exercises the fix. NOTE: reaching here at all also needs the identical
+# rooted-path fix vms-963 applies to the AUTHORIZE step above (same bug,
+# separate block) -- both must be on the disk for the flow to get past
+# AUTHORIZE to the SCSNODE prompt.
+SCS_NODE="OVMXQA"        # <= 6 chars (SCSNODE max); distinct from the OVMX kit default
+SCS_ID="1025"
+send "$SCS_NODE"
 if wait_for 'Enter SCSSYSTEMID' "$RUN_TIMEOUT" "$OFF"; then
     ok "asks for SCSSYSTEMID"
 else
     dump_and_die "never asked for SCSSYSTEMID"
 fi
-send ''
-if wait_for '%DISMOUNT-I-DISMOUNTED' "$RUN_TIMEOUT" "$OFF"; then
-    ok "the procedure dismounts the target itself after configuration"
+OFF=$(wc -c <"$LOG")
+send "$SCS_ID"
+# Reaching the SYSGEN> prompt is the DIRECT proof of the vms-597 fix: the
+# image resolved through the rooted SYS$SYSTEM redirect, i.e. no
+# %DCL-E-IVIMAGE. A regression to the flat [SYSEXE] redirect fails here.
+if wait_for 'SYSGEN>' "$RUN_TIMEOUT" "$OFF"; then
+    ok "SYSGEN.EXE resolves and runs against the rooted target -- no %DCL-E-IVIMAGE (vms-597)"
 else
-    dump_and_die "did not dismount the target"
+    dump_and_die "SYSGEN.EXE did not start against the target (vms-597 regressed: %DCL-E-IVIMAGE / unresolved SYS\$SYSTEM redirect)"
+fi
+# Drive SYSGEN's own REPL at the console (SYS$INPUT is the terminal here,
+# exactly like the AUTHORIZE session above) to write the operator-chosen
+# node identity to the TARGET's own OVMXVMSSYS.PAR via WRITE CURRENT.
+send "USE CURRENT"
+send "SET SCSNODE \"$SCS_NODE\""
+send "SET SCSSYSTEMID $SCS_ID"
+send "WRITE CURRENT"
+send "EXIT"
+if wait_for '%DISMOUNT-I-DISMOUNTED' "$RUN_TIMEOUT" "$OFF"; then
+    ok "the procedure dismounts the target itself after configuring SCSNODE/SCSSYSTEMID"
+else
+    dump_and_die "did not dismount the target after the SYSGEN step"
+fi
+SCS_SEG=$(segment_since "$OFF")
+if printf '%s\n' "$SCS_SEG" | grep -qE '%DCL-E-IVIMAGE|%SYSGEN-[EF]-'; then
+    bad "the SCS/SYSGEN segment carries an IVIMAGE or a SYSGEN error"
+    echo "$SCS_SEG"
+else
+    ok "the SCS/SYSGEN segment carries no IVIMAGE and no SYSGEN error"
 fi
 if wait_for 'installation is complete' "$RUN_TIMEOUT" "$OFF"; then
     ok "reports the installation complete and returns to the menu"
@@ -425,16 +458,30 @@ if printf '%s\n' "$TB" | grep -qF 'OVMX$INSTALL Option'; then
 else
     ok "the installed target's own SYSTARTUP_VMS.COM does NOT run the install menu (two-variant staging, sec3.3)"
 fi
+# End-to-end proof of the vms-597 SCS step: the SCSNODE the install wrote to
+# the target's OVMXVMSSYS.PAR (via SYSGEN WRITE CURRENT through the rooted
+# SYS$SYSTEM redirect) is what the booted target now reports as its node
+# identity -- ovmx_init prints "%OVMX-I-SCSNODE, node name <X> set from
+# SYS$SYSTEM:OVMXVMSSYS.PAR". Seeing the operator-chosen $SCS_NODE (not the
+# OVMX kit default) proves the install's SCS configuration reached and
+# persisted to the target's own parameter file.
+if printf '%s\n' "$TB" | grep -qF "node name $SCS_NODE"; then
+    ok "the install-set SCSNODE ($SCS_NODE) persisted to the target and the booted target reads it from OVMXVMSSYS.PAR (end-to-end vms-597)"
+else
+    bad "the install-set SCSNODE ($SCS_NODE) did NOT appear on the target's own boot -- SYSGEN WRITE CURRENT did not persist to the target's OVMXVMSSYS.PAR"
+fi
 
 kill_boot "$QPID"; QPID=""
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
 echo "(AUTHORIZE-against-target write, and login with the installed password, are NOT"
-echo " scored above -- blocked by filed prerequisite gaps, see PR body. Everything else"
-echo " -- menu-first boot, oracle-pinned menu text/omissions, INITIALIZE-or-PRESERVE,"
-echo " target/label/confirmation gate, real MOUNT, real PRODUCT INSTALL, password"
-echo " prompts, the two-variant SYSTARTUP_VMS.COM staging -- is scored and ground-sourced.)"
+echo " scored above -- see PR body. Everything else -- menu-first boot, oracle-pinned"
+echo " menu text/omissions, INITIALIZE-or-PRESERVE, target/label/confirmation gate,"
+echo " real MOUNT, real PRODUCT INSTALL, password prompts, the SCS/SYSGEN step"
+echo " (SYSGEN.EXE resolves against the rooted target, no %DCL-E-IVIMAGE, and the"
+echo " install-set SCSNODE persists to the target -- vms-597), and the two-variant"
+echo " SYSTARTUP_VMS.COM staging -- is scored and ground-sourced.)"
 if [ "$FAIL" -eq 0 ]; then
     echo "ALL SCORED INSTALL MENU E2E CHECKS PASSED"
     exit 0

@@ -1,6 +1,8 @@
-# Runtime target — one runtime, and it is the kernel/QEMU path
+# Runtime target — one runtime model, and it is the real-host-kernel path
 
-> **HARD INVARIANT.** Operator ruling, 2026-07-28. This is the canonical,
+> **HARD INVARIANT.** Operator ruling, 2026-07-28; generalized to the
+> substrate-neutral "one runtime model" form by operator ratification,
+> 2026-08-12 (rd `vms-fff`, epic `vms-8e8`). This is the canonical,
 > public statement of the rule the standing gate
 > `tests/integration/test_runtime_target.sh` enforces. The gate checks the
 > mechanics; this document carries the reasoning. If the rule is deleted, the
@@ -8,11 +10,15 @@
 
 ## The rule
 
-**One runtime target: the kernel/QEMU path.** The Docker *runtime* layer is
-**dead**. OVMX has exactly **one** runtime: the real-kernel / QEMU path, where
-`vms.ko` provides the VMS **executive** and userspace reaches it through
-`/dev/vms` (`vms_kif`). Docker is **never** an OVMX runtime, never a supported
-way to "run OVMX", and never a target whose limitations get designed around.
+**One runtime model: the real-host-kernel path.** The Docker *runtime* layer is
+**dead**. OVMX runs on a real OS kernel that provides the VMS **executive** as an
+in-kernel facility reached through `/dev/vms` (`vms_kif`). Two SYSKRNLs are
+sanctioned, both exposing the identical `/dev/vms` contract: **OVMX/Linux**
+(executive = `vms.ko`; x86_64/aarch64) and **OVMX/NetBSD** (executive = the
+`vms` pseudo-device; initially VAX). Docker is **never** an OVMX runtime, never a supported
+way to "run OVMX", and never a target whose limitations get designed around. This
+holds on **both** SYSKRNLs. A userspace fake of any executive facility (INV-6)
+is forbidden on either.
 
 ## The distinction is load-bearing — do not collapse it
 

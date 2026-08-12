@@ -1,10 +1,18 @@
 #!/bin/sh
 #
-# test_runtime_target.sh - Rule 9 standing gate: ONE runtime target
+# test_runtime_target.sh - Rule 9 standing gate: ONE runtime MODEL
 #
 # Operator ruling 2026-07-28 (CLAUDE.md Project-Specific Rule 9): the Docker
-# RUNTIME layer is dead. OVMX has exactly one runtime -- the real-kernel/QEMU
-# path, where vms.ko provides the VMS executive via /dev/vms.
+# RUNTIME layer is dead. OVMX runs on a real host kernel that provides the VMS
+# executive as an in-kernel facility reached through /dev/vms.
+#
+# Generalized 2026-08-12 (operator ratification, rd vms-fff / epic vms-8e8): the
+# rule is substrate-neutral -- "one runtime MODEL", two sanctioned SYSKRNLs that
+# expose the identical /dev/vms contract: OVMX/Linux (executive = vms.ko) and
+# OVMX/NetBSD (executive = the vms pseudo-device, initially VAX). What the gate
+# forbids is UNCHANGED: Docker is never a runtime on either, and a userspace fake
+# of any executive facility (INV-6) is forbidden on either. Broadening WHICH
+# kernels are sanctioned does not relax any check below.
 #
 # WHY THIS GATE EXISTS. This ruling was made, recorded in prose, and then
 # forgotten -- an agent re-derived "Docker is a live dev/CI target" from the
@@ -40,7 +48,7 @@ set -u
 SRC_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 status=0
 
-echo "Rule 9 gate: one runtime target (kernel/QEMU); Docker is not a runtime"
+echo "Rule 9 gate: one runtime model (real host kernel via /dev/vms); Docker is not a runtime"
 
 # --- 1. The dead-legacy runtime files must stay marked ------------------
 # They are retained only until CI migrates off them. While they exist they
@@ -672,10 +680,10 @@ fi
 # reasoning. (It used to live in CLAUDE.md; that internal ops file was removed
 # from the public repo, so the canonical statement moved to docs/.) If the rule
 # is deleted, the gate is cargo cult -- fail loudly rather than drift.
-if grep -q "One runtime target: the kernel/QEMU path" "$SRC_ROOT/docs/runtime-target.md" 2>/dev/null; then
+if grep -q "One runtime model: the real-host-kernel path" "$SRC_ROOT/docs/runtime-target.md" 2>/dev/null; then
     echo "  OK: docs/runtime-target.md still carries Rule 9"
 else
-    echo "FAIL: docs/runtime-target.md no longer carries Rule 9 (one runtime target)"
+    echo "FAIL: docs/runtime-target.md no longer carries Rule 9 (one runtime model)"
     echo "  -> this gate enforces a rule that must stay written down."
     status=1
 fi

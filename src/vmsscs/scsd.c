@@ -954,6 +954,19 @@ struct peer_state {
     int      barrier_step;         /* current step N, 1..12; 0 = barrier not running */
     int      barrier_done;         /* our OWN admission finished (record, NOT a gate) */
     unsigned barrier_count;        /* transitions completed; #1 = our join, 2+ = bystander */
+    /* vms-197 (spec §4(O.38)): count of cat-0x01 op 0x06 MEMBERSHIP frames
+     * RECEIVED from this peer -- the coordinator's post-commit membership
+     * publication. Grounded 1:1 against the member oracle on a fresh five-return
+     * sweep (virgin vaxlab-3, §4(O.38) captures o38o-r1..r5): 254 on every
+     * member-oracle WIN (CLUSTER_NODES 2->3 on BOTH members, incl. the phantom
+     * r3 that completed only 4 of 12 barrier steps so emitted no XITDONE) and 0
+     * on the genuine LOSE (r4). This is the AUTHENTIC "OVMX is now a committed
+     * cluster member" signal -- the coordinator only publishes it once the
+     * transition commits cluster-wide (Rule of Total Connectivity, Davis p.7-39),
+     * which a LOSE never reaches. RECEIVE-ONLY: OVMX's wire behaviour is
+     * unchanged; this counter and the latch below only correct what OVMX
+     * CONCLUDES about its OWN admission (diagnostics/self-report). */
+    long     membership_bursts;
     long     last_start_ms;        /* vms-e81: monotonic_ms() of the last 0x41 START
                                     * we processed from this peer -- a genuine
                                     * re-START is separated by a QUIET GAP, not by
@@ -1476,6 +1489,16 @@ static int cm_response_shape(uint8_t category, uint8_t opcode)
 static struct {
     int      known;           /* have we copied a member's op 0x01 yet? */
     int      admitted;        /* our own barrier completed -> we are a member */
+    /* vms-197 (spec §4(O.38)): the AUTHENTIC cluster-admission latch, set when
+     * OVMX RECEIVES the coordinator's op 0x06 MEMBERSHIP burst (the post-commit
+     * membership publication). Distinct from `admitted` above, which latches off
+     * OUR OWN barrier completion (all 12 op-0x0c steps) -- a DIFFERENT event that
+     * RACES and can stay incomplete on a genuine member-oracle WIN (§4(O.38) r3:
+     * only 4/12 barrier steps, so `admitted`/XITDONE stayed 0 while both members
+     * reported CLUSTER_NODES 2->3). The membership burst is 1:1 with the oracle
+     * (present on every WIN, absent on the LOSE), so THIS is the honest
+     * self-report of admission. Receive-only: no wire change. */
+    int      membership_committed;
     uint16_t member_count;
     uint64_t formed;
     uint64_t last_transition;
@@ -6774,6 +6797,52 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                     fflush(stdout);
                 }
 
+                /* vms-197 (spec §4(O.38)): RECOGNISE OUR OWN ADMISSION from the
+                 * AUTHENTIC wire signal -- the coordinator's cat-0x01 op 0x06
+                 * MEMBERSHIP burst (its post-commit membership publication). This
+                 * is a PURE READ of a frame OVMX already receives, acks and traces
+                 * (see the ack-cadence block below): nothing here changes the
+                 * wire, the CM state machine, or any emitted frame. It only
+                 * corrects what OVMX CONCLUDES about its own admission.
+                 *
+                 * WHY THIS AND NOT THE BARRIER: the pre-vms-197 self-report
+                 * (SCSD-I-XITDONE) fired ONLY when OVMX completed all 12 op-0x0c
+                 * barrier steps. That barrier RACES the coordinator's fan-out and
+                 * can stall part-way even on a genuine admission -- §4(O.38)'s
+                 * five-return oracle sweep caught return 3 as a member-oracle WIN
+                 * (CLUSTER_NODES 2->3 on BOTH members) that completed only 4/12
+                 * barrier steps and therefore self-reported XITDONE=0: a PHANTOM
+                 * LOSE that dragged §4(O.33)-(O.37) in circles. The op 0x06
+                 * membership burst is 1:1 with the member oracle across that same
+                 * sweep (254 frames on every WIN incl. the phantom r3; 0 on the
+                 * genuine LOSE r4), because the coordinator only publishes the new
+                 * membership once the transition COMMITS cluster-wide (Rule of
+                 * Total Connectivity, Davis p.7-39) -- exactly the condition the
+                 * oracle measures. So XITDONE is emitted from THIS, latched once. */
+                if (cm_plain_req && mv.category == SCS_MEMBER_CAT_CONFIG &&
+                    mv.opcode == SCS_MEMBER_OP_MEMBERSHIP) {
+                    ps->membership_bursts++;
+                    if (!ovmx_cluster.membership_committed) {
+                        ovmx_cluster.membership_committed = 1;
+                        log_ts(stdout);
+                        printf(" SCSD-I-XITDONE, cluster membership COMMITTED --"
+                               " received the coordinator's op 0x06 MEMBERSHIP burst"
+                               " (post-commit membership publication) from"
+                               " %02x:%02x:%02x:%02x:%02x:%02x. This is the"
+                               " AUTHENTIC admission signal (1:1 with the member"
+                               " oracle F$GETSYI(\"CLUSTER_NODES\") 2->3, spec"
+                               " §4(O.38)): the coordinator publishes it only once"
+                               " the transition commits cluster-wide, so its receipt"
+                               " means OVMX is now an admitted cluster member --"
+                               " whether or not OVMX's own op-0x0c barrier"
+                               " (SCSD-I-XITBARRIER) has finished\n",
+                               ps_port_addr(ps)[0], ps_port_addr(ps)[1],
+                               ps_port_addr(ps)[2], ps_port_addr(ps)[3],
+                               ps_port_addr(ps)[4], ps_port_addr(ps)[5]);
+                        fflush(stdout);
+                    }
+                }
+
                 /* vms-c21 (spec §4(O.33)): the cat 0x01 op 0x04 role 0x50 CM
                  * message. HISTORY: vms-2f3 read this as "THE TRANSITION ABORT
                  * -- a DECISION, we are being refused". §4(O.33) REFUTES that
@@ -7225,11 +7294,25 @@ static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t ms
                                 ps->pending_state = 0;
                             }
                             log_ts(stdout);
-                            printf(" SCSD-I-XITDONE, state transition COMPLETE"
-                                   " (all %d barrier steps released; this is"
+                            /* vms-197 (spec §4(O.38)): this records OVMX completing
+                             * its OWN op-0x0c barrier participation -- a real event,
+                             * but NOT the admission verdict. It was formerly emitted
+                             * as SCSD-I-XITDONE and misread as "OVMX is admitted",
+                             * yet it RACES the coordinator's fan-out and can stall
+                             * part-way on a genuine member-oracle WIN (§4(O.38) r3:
+                             * 4/12 steps -> phantom LOSE). The authentic admission
+                             * self-report (SCSD-I-XITDONE) is now driven by the
+                             * received op 0x06 MEMBERSHIP burst above; this line is
+                             * renamed so it no longer masquerades as that verdict or
+                             * double-counts it. */
+                            printf(" SCSD-I-XITBARRIER, own barrier COMPLETE"
+                                   " (all %d op-0x0c steps released; this is"
                                    " transition #%u for this peer -- #1 is our"
                                    " own admission, later ones are transitions"
-                                   " we participate in as a MEMBER)\n",
+                                   " we participate in as a MEMBER). NOTE: barrier"
+                                   " completion is NOT the admission verdict --"
+                                   " the authentic admission self-report is the op"
+                                   " 0x06 membership-burst line (spec §4(O.38))\n",
                                    SCS_MEMBER_BARRIER_STEPS,
                                    (unsigned)ps->barrier_count);
                             fflush(stdout);
@@ -12253,20 +12336,32 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                 }
                 fprintf(out,
                         "  READMITMAP peer %02x:%02x:%02x:%02x:%02x:%02x"
-                        " cm_responses=%ld member_vc=%s verdict=%s\n",
+                        " cm_responses=%ld membership_bursts=%ld member_vc=%s verdict=%s\n",
                         pa[0], pa[1], pa[2], pa[3], pa[4], pa[5],
                         rx->peers[i].cm_responses,
+                        rx->peers[i].membership_bursts,
                         rx->peers[i].cdt_member
                             ? scs_conn_state_name(scs_conn_state_of(rx->peers[i].cdt_member))
                             : "untracked",
                         readmit_verdict_name(v));
             }
+            /* vms-197 (spec §4(O.38)): the AUTHORITATIVE-ALIGNED cluster-admission
+             * fact -- did OVMX receive the coordinator's op 0x06 MEMBERSHIP burst
+             * this run? This is the ONE self-report field grounded 1:1 against the
+             * member oracle (present on every WIN, absent on the LOSE); the per-peer
+             * admitted/engaged buckets below remain OVMX-side field patterns
+             * (§4(O.32)/(O.33) caveat). Report it explicitly so a reader does not
+             * have to re-derive admission from the racy barrier or the heuristic
+             * per-peer verdicts. */
             fprintf(out,
                     "  READMITMAP-SUMMARY incarnation_presented=0x%016llx%s"
-                    " members_reached=%d admitted=%d engaged=%d"
+                    " membership_committed=%s members_reached=%d admitted=%d engaged=%d"
                     " reclaimed_nojoin=%d join_abandoned=%d no_engage=%d --"
-                    " %s (spec 4(O.32)/4(O.33), docs/design-rejoin-cm-state-map.md)\n",
+                    " %s (spec 4(O.32)/4(O.33)/4(O.38), docs/design-rejoin-cm-state-map.md)\n",
                     incn, incn ? "(live)" : "(frozen/template)",
+                    ovmx_cluster.membership_committed
+                        ? "YES(op 0x06 membership burst received -- AUTHENTIC admission, 1:1 with the member oracle, spec 4(O.38))"
+                        : "no(no op 0x06 membership burst this run)",
                     reached, admitted, engaged, reclaimed_nojoin, join_abandoned, no_engage,
                     /* vms-c21: OBSERVATION ONLY. The counts above are OVMX-side
                      * field-pattern buckets; the line below states what OVMX saw,

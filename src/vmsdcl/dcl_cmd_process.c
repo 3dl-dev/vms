@@ -1307,6 +1307,84 @@ int dcl_resolve_activatable(const char *linux_path, char *resolved, size_t sz)
 }
 
 /*
+ * SYS$INPUT-from-procedure (vms-1a9). See dcl_cmd.h for the VMS-behaviour
+ * citation. When an image is activated inside a command procedure, its
+ * SYS$INPUT is the procedure's remaining data lines (those NOT beginning with
+ * '$'), up to the next '$'-command or EOF. We gather that block into an
+ * anonymous temp file, reposition the procedure stream to the next '$'-line so
+ * the parent DCL loop resumes there, and point fd 0 at the block. SYS$INPUT
+ * resolves to fd 0 (sys_assign.c), so both the in-process image and a
+ * fork()+execve() child read the procedure lines. Interactive DCL leaves the
+ * terminal on fd 0.
+ */
+void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
+{
+    si->saved_fd0 = -1;
+    if (!ctx || ctx->proc_depth < 0)
+        return;                     /* interactive: SYS$INPUT = terminal */
+    FILE *fp = ctx->proc_stack[ctx->proc_depth].fp;
+    if (!fp)
+        return;
+
+    /* tmpfile() is an unlinked, auto-deleted regular file: no pipe-buffer
+     * deadlock even if the image never reads, and an honest EOF when the data
+     * block is empty (the RUN line is immediately followed by a '$'-line). If
+     * it cannot be created we fail open -- leave SYS$INPUT untouched rather
+     * than fake a stream (INV-DCL). */
+    FILE *tf = tmpfile();
+    if (!tf)
+        return;
+
+    char line[DCL_MAX_LINE];
+    long pos = ftell(fp);
+    while (fgets(line, sizeof(line), fp)) {
+        const char *p = line;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p == '$') {
+            /* Next DCL command terminates the image's input. Put the stream
+             * back at the start of this line so the parent loop reads it. */
+            fseek(fp, pos, SEEK_SET);
+            break;
+        }
+        /* Data line: hand it to the image's SYS$INPUT verbatim (no '$', no DCL
+         * symbol substitution -- it is data, not a command). */
+        fputs(line, tf);
+        ctx->proc_stack[ctx->proc_depth].line_number++;
+        pos = ftell(fp);
+    }
+    fflush(tf);
+    rewind(tf);
+
+    int tfd = fileno(tf);
+    si->saved_fd0 = dup(0);
+    if (si->saved_fd0 < 0 || dup2(tfd, 0) < 0) {
+        /* Could not install the redirection: undo any partial state and leave
+         * fd 0 as it was. */
+        if (si->saved_fd0 >= 0) {
+            close(si->saved_fd0);
+            si->saved_fd0 = -1;
+        }
+        fclose(tf);
+        return;
+    }
+    /* fd 0 now shares the temp file's open description; closing tf's own fd
+     * does not disturb fd 0, and the unlinked file goes away when fd 0 is
+     * later restored. */
+    fclose(tf);
+}
+
+void dcl_sysinput_restore(struct dcl_sysinput *si)
+{
+    if (si->saved_fd0 < 0)
+        return;
+    dup2(si->saved_fd0, 0);
+    close(si->saved_fd0);
+    si->saved_fd0 = -1;
+    clearerr(stdin);
+}
+
+/*
  * dcl_activate_image - fork/exec a resolved image path and wait for it,
  * surfacing a nonzero exit or fatal signal as SS$_ABORT.
  *
@@ -1314,9 +1392,29 @@ int dcl_resolve_activatable(const char *linux_path, char *resolved, size_t sz)
  * parameters to the image) and foreign-command dispatch in dcl_exec.c
  * (argv = {linux_path, P1, ..., P8, NULL}). Extracted from cmd_run's
  * body verbatim so this behavior change is refactor-only for RUN.
+ *
+ * SYS$INPUT wiring (vms-1a9): when activated from within a command procedure,
+ * the image's SYS$INPUT is the procedure's following data lines. Set up before
+ * activation and restored after, so it covers BOTH the in-process image and the
+ * fork()+execve() fallback (both inherit fd 0).
  */
+static int dcl_activate_image_inner(struct dcl_context *ctx,
+                                    const char *display_name,
+                                    const char *linux_path, char *argv[]);
+
 int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
                        const char *linux_path, char *argv[])
+{
+    struct dcl_sysinput si;
+    dcl_sysinput_setup(ctx, &si);
+    int rc = dcl_activate_image_inner(ctx, display_name, linux_path, argv);
+    dcl_sysinput_restore(&si);
+    return rc;
+}
+
+static int dcl_activate_image_inner(struct dcl_context *ctx,
+                                    const char *display_name,
+                                    const char *linux_path, char *argv[])
 {
     /*
      * IN-PROCESS IMAGE ACTIVATION (vms-68f increment iv,

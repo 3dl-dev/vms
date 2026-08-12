@@ -30,6 +30,8 @@ echo "=== toolchain ==="
 "$CC" --version | head -1
 "$CC" -dumpmachine
 echo "sysroot: $SYSROOT"
+echo "build tools: cmake=$(command -v cmake) make=$(command -v make) ninja=$(command -v ninja || echo none)"
+cmake --version | head -1
 echo
 
 # --- sanity: the compiler agrees VAX is ILP32 little-endian ------------------
@@ -49,10 +51,17 @@ echo
 
 # --- proof 1: CMake standalone build of the vmssys library -------------------
 echo "=== proof 1: CMake netbsd-vax build of libvmssys ==="
-cmake -S "$LIBVMSSYS" -B "$OUT/cmake" -G Ninja \
+# Use the Unix Makefiles generator with an EXPLICIT CMAKE_MAKE_PROGRAM. Do not
+# rely on CMake autodetecting a build tool from PATH: in some container images
+# that detection has failed for the Ninja generator even with ninja installed
+# ("unable to find a build program corresponding to Ninja"), so we pin the make
+# path directly and depend on nothing being auto-discovered.
+MAKE_PROG="$(command -v make)"
+cmake -S "$LIBVMSSYS" -B "$OUT/cmake" -G "Unix Makefiles" \
+    -DCMAKE_MAKE_PROGRAM="$MAKE_PROG" \
     -DCMAKE_TOOLCHAIN_FILE="$SRC/tools/cross-vax/toolchain-vax-netbsd.cmake" \
     -DCMAKE_BUILD_TYPE=Release
-cmake --build "$OUT/cmake" --target vmssys
+cmake --build "$OUT/cmake" --target vmssys -- -j"$(nproc)"
 LIB="$(find "$OUT/cmake" -name 'libvmssys.a' | head -1)"
 test -n "$LIB"
 echo "built: $LIB"

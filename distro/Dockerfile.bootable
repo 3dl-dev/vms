@@ -421,6 +421,25 @@ RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SY
     cp /boot/ovmx-os.kit /system-stage/vms/SYS0/SYSCOMMON/SYSUPD/OVMX-OS.KIT && \
     echo "OK: ovmx-os.kit staged at SYS\$UPDATE:OVMX-OS.KIT for the distrib image"
 
+# -- Distribution-only SYSTARTUP_VMS.COM (vms-dcf) -----------------------------
+# The kit-stage step above already copied /system-stage's SYSMGR (the plain,
+# non-install-invoking SYSTARTUP_VMS.COM) into /kit-stage and packed it into
+# ovmx-os.kit -- so a PRODUCT INSTALL'd target gets the plain one. NOW, after
+# that capture and before the distribution image is mastered below, overwrite
+# /system-stage's copy with the distribution-only variant that runs the
+# install menu (docs/design-vms-faithful-install.md sec3.3: "the distribution
+# disk differs from an installed system disk only in its payload... a site
+# startup that runs the menu"). OVMX$INSTALL.COM itself (from the regular
+# distro/rootfs/ tree, copied into /system-stage by the system-tree staging
+# step above) is unaffected -- it ships on BOTH disks; only which
+# SYSTARTUP_VMS.COM invokes it differs.
+RUN cp distro/rootfs-distrib-only/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM \
+       /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
+    grep -q 'OVMX\$INSTALL' /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
+    echo "OK: distribution image's SYSTARTUP_VMS.COM invokes OVMX\$INSTALL.COM" && \
+    ! grep -q 'OVMX\$INSTALL' /kit-stage/SYSMGR/SYSTARTUP_VMS.COM && \
+    echo "OK: the OS kit's (installed target's) SYSTARTUP_VMS.COM does NOT invoke OVMX\$INSTALL.COM"
+
 # -- Distribution system-disk image (vms-8ab) ----------------------------------
 # Master a PRE-INSTALLED, bootable VMSFS system disk from the SAME populated
 # /vms system tree the system-tree staging stage just assembled above (/system-stage/vms:

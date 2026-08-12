@@ -131,6 +131,9 @@ jobs:
               - 'tests/qemu/run_install_boot_e2e.sh'
               - 'tests/qemu/test_release_acceptance_e2e.sh'
               - 'tests/qemu/run_release_acceptance_e2e.sh'
+              - 'tests/qemu/test_release_install.sh'
+              - 'tests/qemu/run_release_install.sh'
+              - 'tests/qemu/release_install_inner.sh'
               - 'tests/qemu/test_parts_demo_e2e.sh'
               - 'docs/install-guide.md'
               - 'docs/upgrade-guide.md'
@@ -787,6 +790,84 @@ jobs:
           rc=$?
           if [ "$rc" -eq 77 ]; then
             echo "FATAL: install_boot_e2e SKIPPED in CI — this gate must actually install and boot the target, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2c3: THE R1 RELEASE-ACCEPTANCE GATE — media -> menu install -> SEPARATE
+  # container -> login -> PRODUCT SHOW (vms-37f, parent vms-718, docs/design-
+  # vms-faithful-install.md §3.3 "Release e2e"). Blocks vms-dd1.
+  #
+  # WHAT IT UNIFIES. install_menu_e2e drives the full OVMX$INSTALL.COM menu but
+  # inside ONE container; install_boot_e2e boots a /DESTINATION-installed target
+  # but via a raw DCL command, ONE container; docker_persistent_disk crosses a
+  # real container boundary but drives PID 1's auto-install, not the menu. This
+  # job is the intersection none of them cover: the FULL MENU-DRIVEN install in
+  # container 1, the target surviving into a SEPARATE `docker run` (container 2)
+  # that boots it ALONE and logs in + PRODUCT SHOW PRODUCT + DIRECTORY, and a
+  # container 3 re-boot proving first-boot ran once.
+  #
+  # THE RED-FIRST PROOF IS BUILT IN (the vms-9b7 standing rule). The gate keeps
+  # every drive at cache=writethrough and MECHANICALLY asserts it; then its own
+  # NEGATIVE CONTROL re-runs the SAME fully-successful menu install but onto a
+  # CONTAINER-LOCAL disk (OVMX_NEGCTL_LOCAL_TARGET=1) so it never reaches the
+  # shared host file, and asserts the following verify CANNOT boot an installed
+  # system. If a successful install that never touched the shared file still
+  # verified, the "boundary" would be vacuous and the gate reddens — so a run
+  # where the cross-container property does NOT hold fails this job. Deterministic
+  # (no guest-writeback-timing dependence), so the gate is not flaky.
+  #
+  # A REAL, FULLY ENFORCING gate — OVMX_QEMU_FULL_E2E=1, and a SKIP (exit 77) is
+  # a hard failure, so the opt-in that keeps `ctest` cheap is NOT the CI cover
+  # here. Same shape as install-boot-e2e above. NOTE: the target SYSTEM password
+  # is the kit default (MANAGER), not the install-set one — writing the
+  # install-set password to the target SYSUAF is blocked by two prerequisite
+  # gaps vms-dcf filed (AUTHORIZE cross-device + vmsfs.ko RMS CREATE); the gate
+  # never claims otherwise (see test_release_install.sh's header).
+  # -----------------------------------------------------------------------
+  release-install-e2e:
+    name: R1 release e2e — media→menu install→separate container→login→PRODUCT SHOW (vms-37f)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build host tools (INITIALIZE.EXE)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TOOLS=ON -DBUILD_TESTS=OFF
+          cmake --build build -j"$(nproc)" --target vms_initialize
+
+      - name: Build bootable image (qemu tooling + install media + the OS kit)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: media -> menu install -> separate container -> login -> PRODUCT SHOW (incl. the no-flush negative control)
+        id: release_install
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+          OVMX_INITIALIZE_EXE="${{ github.workspace }}/build/bin/INITIALIZE.EXE" \
+            tests/qemu/run_release_install.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: release_install SKIPPED in CI — this gate must actually install across a container boundary, never skip silently." >&2
             exit 1
           fi
           exit "$rc"

@@ -119,22 +119,25 @@ docker build -f Dockerfile.bootable -o dist .
   ├── QEMU boots Linux kernel
   └── Kernel unpacks initramfs, runs /init (init-wrapper.sh)
         ├── Mount: proc, sysfs, devtmpfs, devpts, tmpfs
-        ├── opcom_kmsg_start() -- /dev/kmsg -> operator surface bridge
-        │     (vms-32a, docs/design-opcom-executive-logging.md): reformats
-        │     vms.ko/vmsfs.ko's own printk records as bare "%OVMX-<S>-
-        │     <IDENT>, text" CONSOLE lines, ahead of the module loads below
-        │     so their init-time records are replayed, not missed. SYSKRNL
-        │     (Linux-kernel-layer) lines (module-taint warnings, hrtimer,
-        │     ...) are RE-STYLED too, as "%SYSKRNL-<S>-KERNEL, text" -- not
-        │     suppressed, since they carry real operator-relevant
-        │     information -- but go to SYS$MANAGER:OPERATOR.LOG ONLY, never
-        │     the console (PR #358/vms-2213 keeps routine kernel chatter off
-        │     OPA0:; routing SYSKRNL to the console reopened that leak on a
-        │     CI runner with more verbose real hardware -- PR #365). Routine
-        │     INFO-level device/bus-probe chatter is dropped as genuinely
-        │     operator-worthless. See the design doc for the route-by-
-        │     default filter, the console-vs-log destination split, and the
-        │     one measured vms:/vmsfs: prefix collision.
+        ├── opcom_kmsg_start() -- /dev/kmsg -> SYS$MANAGER:OPERATOR.LOG
+        │     bridge (vms-32a, docs/design-opcom-executive-logging.md):
+        │     reformats vms.ko/vmsfs.ko's own printk records as bare
+        │     "%OVMX-<S>-<IDENT>, text" lines, ahead of the module loads
+        │     below so their init-time records are replayed, not missed.
+        │     SYSKRNL (Linux-kernel-layer) lines (module-taint warnings,
+        │     hrtimer, ...) are RE-STYLED too, as "%SYSKRNL-<S>-KERNEL,
+        │     text" -- not suppressed, since they carry real operator-
+        │     relevant information. BOTH facilities go to OPERATOR.LOG
+        │     ONLY -- this bridge never opens /dev/console at all (PR
+        │     #358/vms-2213 pins the exact console facility+ident sequence
+        │     against the OpenVMS oracle, produced entirely by the boot
+        │     orchestrator below; routing EITHER facility's kmsg lines to
+        │     the console broke that pinned sequence twice -- PR #365,
+        │     rounds 1 and 2). Routine INFO-level device/bus-probe chatter
+        │     is dropped as genuinely operator-worthless. See the design
+        │     doc for the route-by-default filter, the OPERATOR.LOG-only
+        │     destination, and the one measured vms:/vmsfs: prefix
+        │     collision.
         ├── Load: vms.ko, vmsfs.ko
         ├── Generate /etc/passwd, /etc/group from sysuaf.dat
         └── exec /sbin/init (ovmx_init) — PID 1, BOOTSTRAP ONLY (vms-9b7)
@@ -192,8 +195,7 @@ no login loop of its own; grep src/ovmx_init/ovmx_init.c finds none.
 Full design: `docs/design-opcom-executive-logging.md` (two-vocabulary model,
 lab-Alpha oracle citations, the OVMX/SYSKRNL facility+ident choices under
 Rule 8, the route-by-default operator-ruling correction of 2026-08-12, and
-the console-vs-log destination split from the round-2 correction the same
-day, PR #365).
+the three-round path to the OPERATOR.LOG-only destination, PR #365).
 
 `vms.ko`/`vmsfs.ko` speak only through `printk` (`pr_info`/`pr_warn`/
 `pr_err`) — there is no kernel-to-user push channel and this item adds none
@@ -204,25 +206,26 @@ operator can see it":
 - **`src/ovmx_init/opcom_kmsg.c`** — a detached pthread, started early in
   `bare_metal_init()`, that reads the standard `/dev/kmsg` device (seek to
   start, then poll + follow) and reformats each record as a bare
-  `%FACILITY-<S>-<IDENT>, text` line (boot-time vocabulary — no OPCOM
-  banner; OPCOM is not running yet). WHERE it goes depends on facility:
-  `vms:`/`vmsfs:`-prefixed records (vms.ko/vmsfs.ko's own) wear the `OVMX`
-  facility and go to `/dev/console`, unchanged since this item landed.
-  Everything else — SYSKRNL (Linux-kernel-layer) lines, including the
-  kernel's own generic module-taint warning — is RE-STYLED, wearing
-  `SYSKRNL`, when its severity is NOTICE or more severe, but goes to
-  `SYS$MANAGER:OPERATOR.LOG` ONLY, never the console: PR #358 (vms-2213)
-  keeps routine kernel chatter off OPA0: so the boot console matches the
-  OpenVMS oracle, and routing SYSKRNL lines to the console (this bridge's
-  first cut) reopened that leak on a CI runner whose real hardware emits
-  far more NOTICE/WARNING chatter than this repo's dev QEMU guest. Routine
-  INFO-level device/bus-probe chatter is dropped as genuinely operator-
-  worthless. (The taint warning happens to also start with `vms: `,
-  because Linux substitutes the loading module's own name into it, so it
-  is classified alongside vms.ko's own lines under `OVMX` — console,
-  unaffected by the destination split — rather than `SYSKRNL` — a
-  disclosed simplification, not a defect: content and severity both stay
-  the kernel's real ones.)
+  `%FACILITY-<S>-<IDENT>, text` line (boot-time vocabulary shape — no OPCOM
+  banner). `vms:`/`vmsfs:`-prefixed records (vms.ko/vmsfs.ko's own) wear
+  the `OVMX` facility; everything else that clears the severity bar —
+  SYSKRNL (Linux-kernel-layer) lines, including the kernel's own generic
+  module-taint warning — is RE-STYLED, wearing `SYSKRNL`. **Both
+  facilities go to `SYS$MANAGER:OPERATOR.LOG` ONLY; this bridge never
+  opens `/dev/console` at all.** `tests/qemu/test_boot_conformance.sh` pins
+  the exact ordered console facility+ident sequence against the OpenVMS
+  oracle, produced entirely by the boot orchestrator
+  (`ovmx_init`/`PROVISION.EXE`/`SYSTARTUP_VMS.COM`) — never by a kernel
+  module's printk. Two earlier cuts (console for `OVMX`-facility lines;
+  then also for `SYSKRNL` lines) each broke that pinned sequence in turn
+  (PR #365, rounds 1 and 2); the definitive fix routes everything to the
+  log. Routine INFO-level device/bus-probe chatter is dropped as genuinely
+  operator-worthless. (The taint warning happens to also start with
+  `vms: `, because Linux substitutes the loading module's own name into
+  it, so it is classified alongside vms.ko's own lines under `OVMX` rather
+  than `SYSKRNL` — a disclosed simplification, not a defect: content and
+  severity both stay the kernel's real ones, and the destination is the
+  same either way.)
 - **`src/libvms/syssvc/sys_operator.c`** (`sys$sndopr`) — writes the actual
   OPCOM records to `SYS$MANAGER:OPERATOR.LOG`, now in the oracle-exact
   shape: an eleven-`%` boxed banner (`%%%%%%%%%%%  OPCOM  DD-MMM-YYYY

@@ -1,19 +1,22 @@
 /*
- * opcom_kmsg.c - /dev/kmsg -> operator surface bridge (rd vms-32a)
+ * opcom_kmsg.c - /dev/kmsg -> SYS$MANAGER:OPERATOR.LOG bridge (rd vms-32a)
  *
  * See opcom_kmsg.h and docs/design-opcom-executive-logging.md for the full
  * design. Summary of what lives here:
  *
- *   opcom_kmsg_classify()            - pure suppress/route/destination +
- *                                       reformat decision, unit-tested
- *                                       directly (tests/ovmx_init/).
+ *   opcom_kmsg_classify()            - pure suppress/route + reformat
+ *                                       decision, unit-tested directly
+ *                                       (tests/ovmx_init/).
  *   opcom_kmsg_append_operator_log() - the OPERATOR.LOG writer for
- *                                       OPCOM_KMSG_OPERATOR_LOG records.
+ *                                       OPCOM_KMSG_OPERATOR_LOG records --
+ *                                       the ONLY destination this file
+ *                                       ever writes to. NOTHING here
+ *                                       touches /dev/console; see
+ *                                       opcom_kmsg.h's top comment for why.
  *   opcom_kmsg_start()               - the /dev/kmsg reader thread that
  *                                       calls classify() against the real
- *                                       kernel log and dispatches each
- *                                       routed line to /dev/console or
- *                                       OPERATOR.LOG per its destination.
+ *                                       kernel log and appends every
+ *                                       routed line to OPERATOR.LOG.
  */
 
 /* _POSIX_C_SOURCE / _DEFAULT_SOURCE come from the ovmx_init target's own
@@ -40,6 +43,8 @@
 
 /*
  * TWO FACILITIES (Rule 8 -- both OVMX design choices, neither VMS-authentic).
+ * Both land in OPERATOR.LOG only (see opcom_kmsg.h) -- the facility split
+ * is about ORIGIN, not destination.
  *
  * OVMX -- vms.ko/vmsfs.ko's OWN records ("vms: "/"vmsfs: "-prefixed).
  * Loading a Linux kernel module and registering /dev/vms have no real-VMS
@@ -94,30 +99,13 @@ static const char *opcom_kmsg_ident(const char *body)
  * The OPCOM-record banner (docs/design-opcom-executive-logging.md sec6) is
  * NOT built here -- that vocabulary belongs to sys$sndopr
  * (src/libvms/syssvc/sys_operator.c). Everything this file emits is a bare
- * "%FACILITY-S-IDENT, text" line, because vms.ko/vmsfs.ko's events (and the
- * re-styled SYSKRNL lines alongside them) are all pre-OPCOM boot-time
- * events (sec2) -- SYSKRNL lines landing in OPERATOR.LOG (below) is a
- * DESTINATION choice, not a vocabulary-B rewrite; they keep their bare
- * shape there too.
- *
- * CONSOLE-VS-LOG SPLIT (operator correction, 2026-08-12, round 2): PR #358
- * (vms-2213) deliberately keeps routine kernel printk off OPA0: so the boot
- * console matches the OpenVMS oracle (docs/design-boot-faithful.md). The
- * first cut of the SYSKRNL re-style (above) wrote every routed SYSKRNL line
- * straight to the console, which measurably reopened that leak: a CI
- * runner's real hardware/kernel emits far more NOTICE/WARNING-level
- * SYSKRNL chatter (X.509 cert loads, cpufreq driver probing, ...) than
- * this repo's minimal dev QEMU guest ever showed locally, flooding the
- * console and stalling the boot before Username: -- measured on PR #365.
- * The fix is a DESTINATION split, not a narrower filter: OVMX-facility
- * lines (genuinely vms.ko/vmsfs.ko's own, plus the vms:/vmsfs: prefix
- * collision, sec below) still go to the console -- that is what PR #358's
- * oracle-conformance baseline already expects and it has never been the
- * complaint. SYSKRNL-facility lines go to OPERATOR.LOG ONLY: the
- * information survives (an operator can TYPE/SEARCH it) but the LIVE boot
- * console stays exactly as VMS-shaped as #358 left it. The three
- * OPCOM_KMSG_* return values are defined in opcom_kmsg.h, alongside their
- * full contract.
+ * "%FACILITY-S-IDENT, text" line, appended to OPERATOR.LOG. NEVER the
+ * console -- see opcom_kmsg.h's top comment: tests/qemu/
+ * test_boot_conformance.sh pins the exact console facility+ident sequence
+ * against the OpenVMS oracle, and it is produced entirely by the boot
+ * orchestrator, never by a kernel module's printk. Two earlier cuts of
+ * this bridge (console for OVMX-facility lines; then also for SYSKRNL
+ * lines) both broke that pinned sequence -- this is the definitive fix.
  */
 int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz)
 {
@@ -126,7 +114,6 @@ int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz)
     const char *facility;
     const char *ident;
     char sev;
-    int dest;
 
     if (!text || !out || outsz == 0)
         return OPCOM_KMSG_DROP;
@@ -149,14 +136,12 @@ int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz)
             return OPCOM_KMSG_DROP;
         facility = OPCOM_KMSG_FACILITY;
         ident = opcom_kmsg_ident(body);
-        dest = OPCOM_KMSG_CONSOLE;
     } else if (strncmp(text, "vmsfs: ", 7) == 0) {
         body = text + 7;
         if (body[0] == '\0')
             return OPCOM_KMSG_DROP;
         facility = OPCOM_KMSG_FACILITY;
         ident = "VMSFS";
-        dest = OPCOM_KMSG_CONSOLE;
     } else {
         /*
          * A SYSKRNL (Linux-kernel-layer) LINE: re-styled and routed to
@@ -190,7 +175,6 @@ int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz)
         body = text;
         facility = OPCOM_KMSG_SYSKRNL_FACILITY;
         ident = "KERNEL";
-        dest = OPCOM_KMSG_OPERATOR_LOG;
     }
 
     /* A mechanical, honest translation of the severity the kernel already
@@ -203,7 +187,7 @@ int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz)
     }
 
     snprintf(out, outsz, "%%%s-%c-%s, %s\n", facility, sev, ident, body);
-    return dest;
+    return OPCOM_KMSG_OPERATOR_LOG;
 }
 
 /*
@@ -286,7 +270,7 @@ static void opcom_kmsg_append_operator_log(const char *line)
 
 static void *opcom_kmsg_thread_main(void *arg)
 {
-    int kfd, cfd;
+    int kfd;
     char raw[8192];
 
     (void)arg;
@@ -300,9 +284,8 @@ static void *opcom_kmsg_thread_main(void *arg)
      * load happens moments after this is called from bare_metal_init()). */
     lseek(kfd, 0, SEEK_SET);
 
-    cfd = open("/dev/console", O_WRONLY | O_NOCTTY);
-    if (cfd < 0)
-        cfd = STDOUT_FILENO;
+    /* NO /dev/console fd here -- this bridge never writes to the console
+     * (opcom_kmsg.h's top comment). */
 
     for (;;) {
         struct pollfd pfd;
@@ -340,34 +323,12 @@ static void *opcom_kmsg_thread_main(void *arg)
         if (parse_kmsg_record(raw, (size_t)n, &pri, msg, sizeof(msg)) != 0)
             continue;
 
-        int dest = opcom_kmsg_classify(pri, msg, line, sizeof(line));
-        if (dest == OPCOM_KMSG_DROP)
+        if (opcom_kmsg_classify(pri, msg, line, sizeof(line)) == OPCOM_KMSG_DROP)
             continue;
 
-        if (dest == OPCOM_KMSG_OPERATOR_LOG) {
-            /* SYSKRNL lines never reach the console (console-vs-log split,
-             * PR #365 / #358): logged, not broadcast. */
-            opcom_kmsg_append_operator_log(line);
-            continue;
-        }
-
-        /* OPCOM_KMSG_CONSOLE -- OVMX's own records, unchanged from before
-         * the console-vs-log split. */
-        size_t len = strlen(line);
-        size_t written = 0;
-        while (written < len) {
-            ssize_t w = write(cfd, line + written, len - written);
-            if (w <= 0) {
-                if (w < 0 && errno == EINTR)
-                    continue;
-                break;
-            }
-            written += (size_t)w;
-        }
+        opcom_kmsg_append_operator_log(line);
     }
 
-    if (cfd != STDOUT_FILENO)
-        close(cfd);
     close(kfd);
     return NULL;
 }
@@ -381,7 +342,7 @@ void opcom_kmsg_start(void)
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     /* Best-effort: a bridge that fails to start must never block or fail
      * boot -- Rule 9's fail-honest gate is /dev/vms (executive_attach()),
-     * not this console-visibility aid. */
+     * not this operator-visibility aid. */
     (void)pthread_create(&tid, &attr, opcom_kmsg_thread_main, NULL);
     pthread_attr_destroy(&attr);
 }

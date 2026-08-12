@@ -132,10 +132,10 @@ hrtimer's scheduling-latency warning (`kernel/time/hrtimer.c`,
 NOTICE cutoff. `level <= 5` keeps both named examples routed and excludes
 the routine-probe flood.
 
-## 3b. Console-vs-log destination split (operator correction, round 2, PR #365)
+## 3b. Console destination -- three rounds, ending at OPERATOR.LOG-only
 
-**What round 1 got wrong.** §3 above routes SYSKRNL lines "by default" --
-but round 1 wrote every routed SYSKRNL line straight to `/dev/console`,
+**Round 1 (superseded).** §3 above routes SYSKRNL lines "by default" -- but
+round 1 wrote every routed SYSKRNL line straight to `/dev/console`,
 alongside `vms.ko`/`vmsfs.ko`'s own `OVMX`-facility lines. That reopened
 the exact leak PR #358 (vms-2213) closed: PR #358 deliberately keeps
 routine kernel `printk` off OPA0: so the boot console matches the OpenVMS
@@ -153,50 +153,74 @@ locally --
 -- flooding the console and stalling the boot before `Username:` (PR #358's
 own "Persistent Boot Smoke" / boot-console-conformance CI job went red).
 
-**The fix is a DESTINATION split, not a narrower filter.** The severity
-threshold from §3 is unchanged -- SYSKRNL lines at NOTICE-or-worse still
-route, INFO/DEBUG still drop -- but WHERE a routed SYSKRNL line goes
-changes:
+**Round 2 (also superseded).** The first fix looked like a DESTINATION
+split by facility: `OVMX`-facility lines (`vms.ko`/`vmsfs.ko`'s own,
+plus the prefix collision in §4) stayed on `/dev/console` -- reasoned as
+"never the complaint, PR #358's baseline already expects these" -- while
+`SYSKRNL`-facility lines moved to `SYS$MANAGER:OPERATOR.LOG` only.
 
-| Facility | Destination | Unchanged from round 1? |
-|----------|-------------|--------------------------|
-| `OVMX` (vms.ko/vmsfs.ko's own records, plus the prefix collision above) | `/dev/console` (OPA0:) | Yes -- this was never the complaint; PR #358's baseline already expects these lines |
-| `SYSKRNL` (re-styled Linux-kernel-layer lines) | `SYS$MANAGER:OPERATOR.LOG` **only** | No -- moved off the console entirely |
+**That reasoning was wrong, and CI caught it too** (a second red run on the
+same PR): `tests/qemu/test_boot_conformance.sh` pins the EXACT ordered
+sequence of `%FACILITY-SEVERITY-IDENT` tokens the console may show, derived
+from the OpenVMS Alpha oracle, and that sequence is produced ENTIRELY by
+the boot orchestrator (`ovmx_init`/`PROVISION.EXE`/`SYSTARTUP_VMS.COM`) --
+never by a kernel module's own `printk`, regardless of which OVMX-style
+facility label it wears. Round 2's `OVMX`-facility kmsg lines (`%OVMX-I-
+DEVTAB`, `%OVMX-I-LNM`, `%OVMX-I-MBX`, `%OVMX-I-SYSID`, `%OVMX-I-KMOD`,
+`%OVMX-I-VMSFS`) are exactly the SAME kind of extra tokens the pinned
+sequence does not contain, for the SAME reason `SYSKRNL` lines were not
+supposed to be there: they come from a kernel module's printk, not from
+the orchestrator's own narration. Sharing a facility NAME with lines the
+orchestrator genuinely does print (`%OVMX-I-EXEC`, `%OVMX-I-SYSDISK`, ...)
+does not make a kernel-module printk part of that narration.
 
-`opcom_kmsg_classify()`'s return value changed from a bool to a
-tri-state destination (`OPCOM_KMSG_DROP` / `OPCOM_KMSG_CONSOLE` /
-`OPCOM_KMSG_OPERATOR_LOG`, defined in `opcom_kmsg.h`) so the reader thread
-in `opcom_kmsg.c` can dispatch each routed line correctly. A new function,
-`opcom_kmsg_append_operator_log()`, resolves `SYS$MANAGER:OPERATOR.LOG`
-through vmsfs -- the SAME accessor `sys_operator.c`'s `sys$sndopr` uses --
-falling back to `/tmp/OPERATOR.LOG` under the SAME condition (system disk
-not yet mounted) that function already falls back for. It opens, appends,
-and closes per write rather than holding one fd for the life of boot,
-because the resolvable path can change mid-boot (before vs. after the
-system disk mounts) and re-resolving each time is how a write after the
-mount finds the real file without the bridge needing to know when that
-happened.
+**Round 3 (current, definitive): the console is never a destination for
+this bridge, full stop.** Not for `OVMX`-facility kmsg lines, not for
+`SYSKRNL` lines. `opcom_kmsg_classify()` collapses from three outcomes to
+two: `OPCOM_KMSG_DROP` or `OPCOM_KMSG_OPERATOR_LOG` (`opcom_kmsg.h`). The
+severity threshold from §3 is unchanged -- SYSKRNL lines at NOTICE-or-worse
+still route, INFO/DEBUG still drop -- only the destination collapses to
+one answer. `opcom_kmsg_thread_main()` no longer opens `/dev/console` at
+all; every non-dropped record goes straight to
+`opcom_kmsg_append_operator_log()`, which resolves `SYS$MANAGER:
+OPERATOR.LOG` through vmsfs -- the SAME accessor `sys_operator.c`'s
+`sys$sndopr` uses -- falling back to `/tmp/OPERATOR.LOG` under the SAME
+condition (system disk not yet mounted) that function already falls back
+for. It opens, appends, and closes per write rather than holding one fd
+for the life of boot, because the resolvable path can change mid-boot
+(before vs. after the system disk mounts) and re-resolving each time is
+how a write after the mount finds the real file without the bridge
+needing to know when that happened.
 
-**This does not relitigate the two-vocabulary model (§2).** SYSKRNL lines
+**This does not relitigate the two-vocabulary model (§2).** These lines
 still carry NO OPCOM banner -- they are not becoming `sys$sndopr` records,
 and they do not claim to be OPCOM output. They simply now share
 OPERATOR.LOG's FILE with real OPCOM records, bare-shaped, exactly as they
-were always bare-shaped on the console. `OPERATOR.LOG` becomes, in effect,
-both "the OPCOM record log" (vocabulary B) and "the boot-console lines an
-operator would have wanted to search after the fact" (vocabulary A,
-persisted) -- a pragmatic exception the operator ruling explicitly asked
+were always bare-shaped when round 1/2 imagined them on the console.
+`OPERATOR.LOG` becomes, in effect, both "the OPCOM record log"
+(vocabulary B) and "the boot-time kernel/executive history an operator
+can search after the fact" (vocabulary A, persisted rather than
+broadcast) -- a pragmatic exception the operator ruling explicitly asked
 for ("mirrors real OPCOM log-vs-broadcast"), not a claim that VMS's real
 OPERATOR.LOG mixes the two.
 
 **Verification.** `tests/ovmx_init/test_opcom_kmsg.c` asserts the
-destination (not just presence) for every case, and adds direct coverage
-of `opcom_kmsg_append_operator_log()`'s actual file write (§7 lists the
-fallback-path ambiguity this test resolves the same way
-`tests/integration/test_opcom_record_body.sh` already does for
-`sys$sndopr`). `tests/qemu/test_job_control_console.sh` asserts, against a
-real boot: every `%OVMX-...` console line PR #358 already expected is
-still present; no `%SYSKRNL-...` line, and no raw/unwrapped SYSKRNL (Linux-kernel-layer)
-text at all (the exact strings CI's failure quoted), reaches the console.
+two-outcome destination for every case, including the (former) console
+cases from rounds 1-2, which now assert `OPCOM_KMSG_OPERATOR_LOG` instead.
+`tests/qemu/test_job_control_console.sh` asserts, against a real boot:
+NO line from either facility -- `OVMX` or `SYSKRNL` -- reaches the console
+in any form (checked by ident and by the specific noise strings CI's two
+failures quoted), the console's ordered facility+ident token sequence
+matches the pinned oracle-derived shape exactly (the same check
+`test_boot_conformance.sh` makes, corroborated inline), AND -- the positive
+half -- OPERATOR.LOG (read back via `TYPE`, over the same live session)
+actually contains the bridge's lines: MEASURED reliably present across
+repeated manual boots (`%OVMX-I-SYSID`, `%OVMX-I-LNM`, `%OVMX-I-MBX`,
+`%OVMX-I-VMSFS`, at minimum -- the very first record or two emitted before
+vmsfs's path resolution comes up can still land in the `/tmp` fallback
+instead, the same disclosed timing edge `sys$sndopr`'s own writer has
+always had). `tests/qemu/test_boot_conformance.sh` itself -- the CI gate
+that caught round 2 -- passes unmodified.
 
 ## 4. The facility code -- OVMX DESIGN CHOICE (Rule 8)
 
@@ -288,14 +312,15 @@ Instead, `src/ovmx_init/opcom_kmsg.c` opens the **standard, pollable**
    header is parsed for the syslog priority; the text after `;` up to the
    first `\n` is the message.
 3. `opcom_kmsg_classify()` (pure, unit-tested -- §3/§3b/§4 above) decides
-   the destination (drop / console / OPERATOR.LOG) and formats the
-   `%OVMX-<S>-<IDENT>, <text>` or `%SYSKRNL-<S>-KERNEL, <text>` line.
-4. An `OPCOM_KMSG_CONSOLE` line is written to `/dev/console` (OPA0:'s
-   physical device -- vocabulary (A) lines are boot-console text, not
-   OPERATOR.LOG records; see §2). An `OPCOM_KMSG_OPERATOR_LOG` line is
-   appended to `SYS$MANAGER:OPERATOR.LOG` via
-   `opcom_kmsg_append_operator_log()` instead -- never written to the
-   console (§3b).
+   drop-or-route and formats the `%OVMX-<S>-<IDENT>, <text>` or
+   `%SYSKRNL-<S>-KERNEL, <text>` line.
+4. Every routed (`OPCOM_KMSG_OPERATOR_LOG`) line is appended to
+   `SYS$MANAGER:OPERATOR.LOG` via `opcom_kmsg_append_operator_log()`.
+   `/dev/console` is never opened by this file (§3b, round 3): the boot
+   console's `%FACILITY-SEVERITY-IDENT` sequence is oracle-pinned
+   (`tests/qemu/test_boot_conformance.sh`) and produced entirely by the
+   boot orchestrator -- a kernel module's printk, reformatted or not, is
+   never part of that narration.
 
 Started from `bare_metal_init()` in `src/ovmx_init/ovmx_init.c`, right
 before `executive_attach()` loads `vms.ko` -- early enough to catch the
@@ -373,15 +398,17 @@ executive's row, never a host-Linux or fabricated name).
   SYSKRNL line -- see §4).
 - No severity-gated exception routing a critical (`level<=3`) SYSKRNL line
   to the console as a live broadcast. Round 2's operator correction offered
-  this as an optional nice-to-die ("a genuinely critical SYSKRNL condition
+  this as an optional nice-to-have ("a genuinely critical SYSKRNL condition
   MAY broadcast to console like a real OPCOM operator broadcast"),
   explicitly marked optional with "keep it simple; when unsure, OPERATOR.LOG
-  only" -- this item takes the simple branch: every SYSKRNL line, any
-  severity that clears the routing bar, goes to OPERATOR.LOG only (§3b).
-  Superseded note: an EARLIER draft of this section said SYSKRNL lines
-  would NOT be captured to OPERATOR.LOG at all (mixing vocabulary (A)
-  content into vocabulary (B)'s file was ruled out as a scope violation).
-  Round 2 reversed that: OPERATOR.LOG capture is now how SYSKRNL
-  information survives at all, once it stopped being console-routable
-  (§3b) -- the console-only posture is what got superseded, not the
-  content/severity decisions in §3.
+  only" -- this item takes the simple branch: every routed line, any
+  severity, any facility, goes to OPERATOR.LOG only (§3b round 3 made this
+  even more absolute than round 2's own wording: OVMX-facility lines are
+  included in "never the console" too, not just SYSKRNL).
+  Superseded note: an EARLIER draft of this section said nothing would be
+  captured to OPERATOR.LOG at all (mixing vocabulary (A) content into
+  vocabulary (B)'s file was ruled out as a scope violation). Round 2
+  reversed that for SYSKRNL lines, and round 3 (§3b) extended it to
+  OVMX-facility kmsg lines too, once BOTH turned out not to belong on the
+  console -- OPERATOR.LOG capture is how this bridge's information
+  survives at all, now that none of it is console-routable.

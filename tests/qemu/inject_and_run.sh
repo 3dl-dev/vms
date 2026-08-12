@@ -99,6 +99,7 @@ for s in /src/tests/qemu/test_kmod_*.c; do
     echo "    $t (calls vms_kif_*)"
     gcc -static -O2 -Wall -o "/src/tests/qemu/$t" "$s" \
         /src/libvmssys/vms_kif.c \
+        /src/libvmssys/kif_transport_linux.c \
         /src/libvmssys/vms_string.c \
         "/src/libvmssys/arch/${ARCH}/syscall.S" \
         -I/src/kernel -I/src/libvmssys || exit 4

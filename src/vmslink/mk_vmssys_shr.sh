@@ -63,7 +63,7 @@ echo "mk_vmssys_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH  ARCH=$ARCH"
 echo "mk_vmssys_shr: src=$SRC"
 
 OBJS=""
-for c in vms_string vms_snprintf vms_futex vms_stdio vms_math vms_runtime_init vms_kif; do
+for c in vms_string vms_snprintf vms_futex vms_stdio vms_math vms_runtime_init vms_kif kif_transport_linux; do
     echo "  cc $c.c"
     $CC $CFLAGS -c -o "$WORK/$c.o" "$SRC/$c.c"
     OBJS="$OBJS $WORK/$c.o"

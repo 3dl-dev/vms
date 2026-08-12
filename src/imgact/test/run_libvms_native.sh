@@ -117,7 +117,7 @@ echo "== LIBVMSSYS\$SHR.EXE: real src/libvmssys, vector extended with vms_kif_* 
 # facade" looks like from the linker's side.
 SYSCFLAGS="-fPIC -O2 -ffreestanding -fno-stack-protector -fno-builtin -mno-outline-atomics -I$LIBVMSSYS_DIR"
 SYSOBJS=""
-for c in vms_string vms_snprintf vms_futex vms_stdio vms_math vms_runtime_init vms_kif; do
+for c in vms_string vms_snprintf vms_futex vms_stdio vms_math vms_runtime_init vms_kif kif_transport_linux; do
     $CC $SYSCFLAGS -c -o "$WORK/sys_$c.o" "$LIBVMSSYS_DIR/$c.c"
     SYSOBJS="$SYSOBJS $WORK/sys_$c.o"
 done

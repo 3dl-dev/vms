@@ -56,25 +56,21 @@
  * status here -- there is not one to invent.
  */
 
-#include <linux/kernel.h>
-#include <linux/uaccess.h>
-#include <linux/slab.h>
-#include <linux/sched.h>
-#include <linux/wait.h>
-
 #include "vms_internal.h"
 /*
  * Event flags is the FIRST facility promoted onto the kernel-backend shim
- * (rd vms-adb, epic vms-8e8; design docs/design-netbsd-executive-core.md).
+ * (rd vms-adb, epic vms-8e8; design docs/design-netbsd-executive-core.md) and,
+ * as of Phase B (rd vms-ec4), the FIRST to LIVE in src/kernel-core/.
  * Every host primitive this file touches -- locking, wait/wake, copyin/out,
- * kernel alloc/free -- now goes through exec_* (defined per substrate in
- * exec_kbackend.h). On Linux each exec_* op expands to the exact primitive
- * this file used before (spin_lock, wait_event_interruptible's body,
- * copy_*_user, kzalloc/kfree), so the module is behaviour-identical; the same
- * source will compile against the NetBSD backend when it MOVES to
- * src/kernel-core/ (Phase B/C). The file does NOT move in Phase A, so its
- * intrusive-list use (list_*) stays on <linux/list.h> for now -- that is the
- * next shim seam (exec_list.h), added when the file moves.
+ * kernel alloc/free -- goes through exec_* (defined per substrate in
+ * exec_kbackend.h), and every intrusive-list operation goes through exec_list_*
+ * (exec_list.h). On Linux each exec_* / exec_list_* op expands to the exact
+ * primitive this file used before (spin_lock, wait_event_interruptible's body,
+ * copy_*_user, kzalloc/kfree, the <linux/list.h> list_* macros), so the module
+ * is behaviour-identical; the SAME source will compile against the NetBSD
+ * backend in Phase C without a single `#if` in this file. This file therefore
+ * includes ONLY the shim contracts (exec_kbackend.h, exec_list.h) and the
+ * shared OVMX structs (vms_internal.h) -- no `<linux/…>` header of its own.
  *
  * The one non-mechanical change here is the wait/wake conversion. Linux's
  * wait_event_interruptible is lock-free; the portable cv contract requires
@@ -96,6 +92,7 @@
  * common flag another sets, are the gate that proves the wake is not lost.
  */
 #include "exec_kbackend.h"
+#include "exec_list.h"
 
 
 /*
@@ -103,13 +100,21 @@
  *
  * Lock ordering: proc->ef.lock MUST be acquired before vms_common_ef_lock.
  * Never acquire proc->ef.lock while holding vms_common_ef_lock.
+ *
+ * The anchor is statically empty (EXEC_LIST_HEAD, portable). The lock is a
+ * plain exec_lock_t initialized at module load in vms_eflag_init() below,
+ * NOT via a static-initializer macro: a NetBSD kmutex(9) cannot be statically
+ * initialized, so runtime exec_lock_init() is the substrate-agnostic form. On
+ * Linux this is a zero-initialized spinlock followed by spin_lock_init(),
+ * behaviour-identical to the former DEFINE_SPINLOCK() -- vms_eflag_init() runs
+ * once at module load, before any ioctl can reach this lock.
  */
-LIST_HEAD(vms_common_ef_list);
-DEFINE_SPINLOCK(vms_common_ef_lock);
+EXEC_LIST_HEAD(vms_common_ef_list);
+exec_lock_t vms_common_ef_lock;
 
 void vms_eflag_init(void)
 {
-    /* Nothing extra needed -- list is statically initialized */
+    exec_lock_init(&vms_common_ef_lock);
 }
 
 void vms_eflag_cleanup(void)
@@ -117,8 +122,8 @@ void vms_eflag_cleanup(void)
     struct vms_common_ef_cluster *cluster, *tmp;
 
     exec_lock(&vms_common_ef_lock);
-    list_for_each_entry_safe(cluster, tmp, &vms_common_ef_list, list) {
-        list_del(&cluster->list);
+    exec_list_for_each_entry_safe(cluster, tmp, &vms_common_ef_list, list) {
+        exec_list_del(&cluster->list);
         exec_free(cluster);
     }
     exec_unlock(&vms_common_ef_lock);
@@ -138,7 +143,7 @@ void vms_proc_release_common_ef(struct vms_proc *proc)
             exec_lock(&vms_common_ef_lock);
             cluster->refcount--;
             if (cluster->refcount <= 0 && !cluster->perm) {
-                list_del(&cluster->list);
+                exec_list_del(&cluster->list);
                 exec_free(cluster);
             }
             exec_unlock(&vms_common_ef_lock);
@@ -584,7 +589,7 @@ long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg)
 
     /* Search for existing cluster */
     exec_lock(&vms_common_ef_lock);
-    list_for_each_entry(cluster, &vms_common_ef_list, list) {
+    exec_list_for_each_entry(cluster, &vms_common_ef_list, list) {
         if (strncmp(cluster->name, args.name, 32) == 0) {
             /* Found it -- associate */
             cluster->refcount++;
@@ -597,7 +602,7 @@ long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg)
                 exec_lock(&vms_common_ef_lock);
                 old->refcount--;
                 if (old->refcount <= 0 && !old->perm) {
-                    list_del(&old->list);
+                    exec_list_del(&old->list);
                     exec_free(old);
                 }
                 exec_unlock(&vms_common_ef_lock);
@@ -626,7 +631,7 @@ long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg)
     cluster->refcount = 1;
     exec_cv_init(&cluster->waitq);
     exec_lock_init(&cluster->lock);
-    list_add_tail(&cluster->list, &vms_common_ef_list);
+    exec_list_add_tail(&cluster->list, &vms_common_ef_list);
     exec_unlock(&vms_common_ef_lock);
 
     exec_lock(&proc->ef.lock);
@@ -674,7 +679,7 @@ long vms_ioctl_dacefc(struct vms_proc *proc, unsigned long arg)
     exec_lock(&vms_common_ef_lock);
     cluster->refcount--;
     if (cluster->refcount <= 0 && !cluster->perm) {
-        list_del(&cluster->list);
+        exec_list_del(&cluster->list);
         exec_free(cluster);
     }
     exec_unlock(&vms_common_ef_lock);
@@ -727,13 +732,13 @@ long vms_ioctl_dlcefc(struct vms_proc *proc, unsigned long arg)
     args.status = SS__UNASEFC;
 
     exec_lock(&vms_common_ef_lock);
-    list_for_each_entry_safe(cluster, tmp, &vms_common_ef_list, list) {
+    exec_list_for_each_entry_safe(cluster, tmp, &vms_common_ef_list, list) {
         if (strncmp(cluster->name, args.name, 32) != 0)
             continue;
 
         cluster->perm = 0;
         if (cluster->refcount <= 0) {
-            list_del(&cluster->list);
+            exec_list_del(&cluster->list);
             exec_free(cluster);
         }
         args.status = SS__NORMAL;

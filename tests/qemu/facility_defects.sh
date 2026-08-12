@@ -842,7 +842,7 @@ EOF
     eflag-clref-noop)
         case "$_f" in
         facility)     echo "event flags (VMS_IOCTL_SETEF/CLREF/READEF/WAITFR/WFLOR/WFLAND/ASCEFC/DACEFC)";;
-        targets)      echo "kernel/vms_eflag.c";;
+        targets)      echo "kernel-core/vms_eflag.c";;
         # test_syssvc_ef_mproc MOVED HERE FROM blind_suites BY vms-2a8, which
         # is the change the old blind_why entry named as the condition:
         # "Move this suite into suites_red once sys_event.c calls the
@@ -881,7 +881,7 @@ EOF
     eflag-waitfr-eintr-normal)
         case "$_f" in
         facility)     echo "event flag WAITS (VMS_IOCTL_WAITFR/WFLOR/WFLAND), interrupted-wait path";;
-        targets)      echo "kernel/vms_eflag.c";;
+        targets)      echo "kernel-core/vms_eflag.c";;
         suites_red)   echo "test_syssvc_ef_mproc";;
         blind_suites) echo "test_kmod_eflag test_kmod_eflag_mproc test_syssvc_ef_local";;
         blind_why)    cat <<'EOF'
@@ -942,7 +942,7 @@ EOF
     eflag-setef-status-inverted)
         case "$_f" in
         facility)     echo "event flags -- \$SETEF's own WASSET/WASCLR discrimination (VMS_IOCTL_SETEF)";;
-        targets)      echo "kernel/vms_eflag.c";;
+        targets)      echo "kernel-core/vms_eflag.c";;
         # vms-177 (vms-2b2 follow-up). MEASURED at the 9-of-33 audit: no
         # existing mutation hunk sits inside vms_ioctl_setef's own body --
         # eflag-clref-noop mutates \$CLREF, a different handler in the same
@@ -986,7 +986,7 @@ EOF
     eflag-readef-status-inverted)
         case "$_f" in
         facility)     echo "event flags -- \$READEF's own WASSET/WASCLR discrimination (VMS_IOCTL_READEF)";;
-        targets)      echo "kernel/vms_eflag.c";;
+        targets)      echo "kernel-core/vms_eflag.c";;
         # vms-177. MEASURED, same audit: no existing mutation hunk sits
         # inside vms_ioctl_readef's own body. The target text is unique in
         # the file (readef's cluster-state-word comparison, not shared with
@@ -1021,7 +1021,7 @@ EOF
     eflag-ascefc-reassoc-status-wrong)
         case "$_f" in
         facility)     echo "event flags -- \$ASCEFC's own success status, the found-and-reassociate path (VMS_IOCTL_ASCEFC)";;
-        targets)      echo "kernel/vms_eflag.c";;
+        targets)      echo "kernel-core/vms_eflag.c";;
         # vms-400 (vms-2b2 follow-up). A SECOND attempt at this handler:
         # eflag-ascefc-reassoc-status-wrong was written once already, this
         # session, against test_kmod_eflag_mproc.c AS IT THEN STOOD -- and
@@ -1108,7 +1108,7 @@ EOF
     eflag-dacefc-status-wrong)
         case "$_f" in
         facility)     echo "event flags -- \$DACEFC's own success status (VMS_IOCTL_DACEFC)";;
-        targets)      echo "kernel/vms_eflag.c";;
+        targets)      echo "kernel-core/vms_eflag.c";;
         # vms-177. MEASURED, same audit: no existing mutation hunk sits
         # inside vms_ioctl_dacefc's own body. RANGE-ANCHORED to
         # vms_ioctl_dacefc's own body: "args.status = SS_NORMAL;" at this
@@ -1137,7 +1137,7 @@ EOF
     eflag-dlcefc-status-wrong)
         case "$_f" in
         facility)     echo "event flags -- \$DLCEFC's own success status (VMS_IOCTL_DLCEFC)";;
-        targets)      echo "kernel/vms_eflag.c";;
+        targets)      echo "kernel-core/vms_eflag.c";;
         # vms-177. MEASURED, same audit: no existing mutation hunk sits
         # inside vms_ioctl_dlcefc's own body. The target text's 8-space
         # indentation is the only occurrence at that depth in the file, so
@@ -1158,7 +1158,7 @@ EOF
     eflag-wflor-status-wrong)
         case "$_f" in
         facility)     echo "event flags -- \$WFLOR's own success status (VMS_IOCTL_WFLOR)";;
-        targets)      echo "kernel/vms_eflag.c";;
+        targets)      echo "kernel-core/vms_eflag.c";;
         # vms-2ed. MEASURED at the 9-of-33 audit: no existing mutation hunk
         # sits inside vms_ioctl_wflor's own body -- eflag-waitfr-eintr-normal's
         # own apply_edit comment explicitly notes its range-anchor excludes
@@ -1191,7 +1191,7 @@ EOF
     eflag-wfland-status-wrong)
         case "$_f" in
         facility)     echo "event flags -- \$WFLAND's own success status (VMS_IOCTL_WFLAND)";;
-        targets)      echo "kernel/vms_eflag.c";;
+        targets)      echo "kernel-core/vms_eflag.c";;
         # vms-2ed. MEASURED, same audit: no existing mutation hunk sits
         # inside vms_ioctl_wfland's own body, for the same reason as
         # eflag-wflor-status-wrong above. Made possible by the same new
@@ -5130,15 +5130,25 @@ apply_edit() {
     eflag-clref-noop)
         sed -i 's|\*flags \&= ~(1U << bit);|/* NEGCTL eflag-clref-noop: the bit is not cleared */|' "$_file";;
     eflag-waitfr-eintr-normal)
-        # RANGE-ANCHORED and therefore IDEMPOTENT. The `if (ret) return ret;`
-        # shape appears in all three wait handlers, so the range narrows it to
-        # WAITFR's: it opens at the only wait_event_interruptible() whose
-        # predicate is a single bit, and closes at that function's own `out:`
-        # label. A second apply finds no `return ret;` left inside the range
-        # -- the first one replaced it -- so it is the no-op `selftest`
-        # requires, instead of walking on to WFLOR's like a first-match
-        # address would.
-        sed -i '/wait_event_interruptible(\*waitq, (READ_ONCE(\*flags) \& (1U << bit)))/,/^out:$/ s|^        return ret;$|        { args.status = SS__NORMAL; goto out; } /* NEGCTL eflag-waitfr-eintr-normal */|' "$_file";;
+        # RANGE-ANCHORED and therefore IDEMPOTENT. The interrupted-wait bail
+        # `return -ERESTARTSYS;` appears in all three wait handlers (WAITFR,
+        # WFLOR, WFLAND), so the range narrows it to WAITFR's: it opens at
+        # `^long vms_ioctl_waitfr` and closes at that function's own `out:`
+        # label, and the replaced line is the 12-space `return -ERESTARTSYS;`
+        # inside WAITFR's `if (exec_cv_wait(...))` interrupted branch. Injecting
+        # the defect makes an interrupted wait FABRICATE SS$_NORMAL (report the
+        # flag set) and fall through to `out:` instead of re-entering the wait
+        # -- the exact vms-2a8 fiction this facility deletes. A second apply
+        # finds no `return -ERESTARTSYS;` left inside the range -- the first
+        # replaced it -- so it is the no-op `selftest` requires, instead of
+        # walking on to WFLOR's like a first-match address would.
+        #
+        # RE-ANCHORED in Phase B (rd vms-ec4): the previous anchor still named
+        # `wait_event_interruptible(...)`/`return ret;`, which Phase A (rd
+        # vms-adb) had already replaced with the exec_cv_wait cv-idiom and
+        # `return -ERESTARTSYS;` -- so this fixture was a dead anchor (BROKEN
+        # FIXTURE) on main until now.
+        sed -i '/^long vms_ioctl_waitfr/,/^out:$/ s|^            return -ERESTARTSYS;$|            { args.status = SS__NORMAL; goto out; } /* NEGCTL eflag-waitfr-eintr-normal */|' "$_file";;
     eflag-setef-status-inverted)
         # `args.status = prev ? SS_WASSET : SS_WASCLR;` is duplicated
         # verbatim in vms_ioctl_clref immediately below. RANGE-ANCHORED to
@@ -5993,10 +6003,21 @@ cmd_coverage() {
     fi
 
     # --- 1. translation units -------------------------------------------
+    # Executive facility .c files live in BOTH src/kernel/ (the Linux glue +
+    # the not-yet-extracted facilities) AND src/kernel-core/ (the
+    # substrate-agnostic facilities being promoted onto the exec_* shim, rd
+    # vms-ec4 / epic vms-8e8 -- event flags is the first). Both dirs are
+    # scanned: a facility does not stop needing a negative control when it moves
+    # to the shared core. Headers (exec_*.h) are not translation units and are
+    # skipped by the *.c glob. The kernel-core glob may legitimately be empty on
+    # a tree before any facility has moved (`[ -f ]` guards that).
     _missing=""
-    for _cov_c in "$_cov_root"/kernel/*.c; do
+    for _cov_c in "$_cov_root"/kernel/*.c "$_cov_root"/kernel-core/*.c; do
         [ -f "$_cov_c" ] || continue
-        _rel="kernel/$(basename "$_cov_c")"
+        case "$_cov_c" in
+            "$_cov_root"/kernel-core/*) _rel="kernel-core/$(basename "$_cov_c")";;
+            *)                          _rel="kernel/$(basename "$_cov_c")";;
+        esac
         case " $_all_targets " in
             *" $_rel "*) ;;
             *) _missing="$_missing $_rel";;
@@ -6009,7 +6030,7 @@ cmd_coverage() {
         echo "  tests/qemu/facility_defects.sh -- do not delete this check."
         _cov_rc=1
     else
-        echo "PASS: every src/kernel/*.c translation unit is named by some defect's targets declaration"
+        echo "PASS: every src/{kernel,kernel-core}/*.c translation unit is named by some defect's targets declaration"
     fi
 
     # --- 3. scope consistency (checked before printing the exclusion) ----
@@ -6480,10 +6501,11 @@ cmd_selftest() {
         # DCL/vmsfs-facing manager built on top of the executive-resident
         # LNM$SYSTEM), and a target this function cannot see would be
         # reported as a dead anchor on every run.
-        if ! cp -a "$_st_root/kernel" "$_st_root/libvmssys" "$_st_root/libvms" \
+        if ! cp -a "$_st_root/kernel" "$_st_root/kernel-core" \
+                   "$_st_root/libvmssys" "$_st_root/libvms" \
                    "$_st_root/vmsdcl" "$_st_root/vmsrms" "$_st_root/vmslnm" \
                    "$_st_tmp/tree/" 2>/dev/null; then
-            echo "FAIL: cannot copy $_st_root/{kernel,libvmssys,libvms,vmsdcl,vmsrms,vmslnm} for the self-test"
+            echo "FAIL: cannot copy $_st_root/{kernel,kernel-core,libvmssys,libvms,vmsdcl,vmsrms,vmslnm} for the self-test"
             rm -rf "$_st_tmp"
             return 2
         fi

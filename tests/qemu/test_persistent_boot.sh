@@ -2,8 +2,8 @@
 # test_persistent_boot.sh - PID 1 is bootstrap-only: mount the installed disk,
 #                           or HALT (vms-2f0)
 #
-# Runs inside the ovmx-boot Docker image (has QEMU + kernel + the FAT and SLIM
-# initramfs variants + /boot/ovmx-distrib.img, the mastered distribution disk).
+# Runs inside the ovmx-boot Docker image (has QEMU + kernel + the (single)
+# boot initramfs + /boot/ovmx-distrib.img, the mastered distribution disk).
 #
 # WHAT THIS PROVES (operator ruling 2026-08-10, docs/design-init-scope.md §6
 # "STRIP ALL OF IT")
@@ -13,7 +13,7 @@
 # therefore no longer proves "blank disk -> install" (that path is deleted); it
 # proves the two halves of the mount-or-halt shape the strip leaves behind:
 #
-#   POSITIVE: the SLIM initramfs boots the PRE-INSTALLED distribution disk
+#   POSITIVE: the boot initramfs boots the PRE-INSTALLED distribution disk
 #             (/boot/ovmx-distrib.img, mastered at BUILD time by vms-8ab, NOT by
 #             PID 1) and reaches a SYSTEM login prompt. No install / initialize /
 #             overlay code path runs, and %STDRV-I-STARTUP begun PRECEDES the
@@ -23,9 +23,10 @@
 #             with the OVMX-facility SYSINIT mount failure. NO login prompt, NO
 #             install message, NO %STARTUP-W-MOUNTFAIL, NO overlay, NO STDRV
 #             begun (STARTUP.COM never runs). The disk is NOT initialized and NOT
-#             installed. This is run with the FAT initramfs on purpose: the
-#             initramfs that used to carry the self-install path now halts
-#             instead, proving the path is gone. (vms-1fb: the boot
+#             installed. This is run with the SAME boot initramfs as the positive
+#             case (vms-1ab: there is exactly one initramfs now, no separate fat
+#             variant to fork from) -- proving the halt is a property of the disk
+#             state, not of which initramfs booted. (vms-1fb: the boot
 #             identification banner DOES appear on this halt now -- it prints at
 #             the SYSBOOT/EXEC_INIT handoff, before SYSINIT's disk mount is even
 #             attempted, matching the oracle §3.5 ordering; banner presence alone
@@ -49,8 +50,8 @@ set -uo pipefail
 TIMEOUT=90
 DISTRIB_IMG=/boot/ovmx-distrib.img
 KERNEL=/boot/vmlinuz
-FAT_INITRD=/boot/initramfs-ovmx.cpio.gz
-SLIM_INITRD=/boot/initramfs-ovmx-slim.cpio.gz
+# There is exactly one initramfs (vms-1ab) -- both boots below use it.
+INITRD=/boot/initramfs-ovmx.cpio.gz
 ARCH=$(uname -m)
 
 PASS=0
@@ -149,12 +150,12 @@ else
 fi
 echo ""
 
-# --- POSITIVE: SLIM initramfs boots the pre-installed disk to login --------
-echo "--- POSITIVE: SLIM initramfs + pre-installed distribution disk ---"
+# --- POSITIVE: boot initramfs boots the pre-installed disk to login --------
+echo "--- POSITIVE: boot initramfs + pre-installed distribution disk ---"
 POS_DISK="/tmp/mount-or-halt-installed.img"
 rm -f "$POS_DISK"
 cp "$DISTRIB_IMG" "$POS_DISK"
-OUT_POS=$(run_qemu "$SLIM_INITRD" "$POS_DISK")
+OUT_POS=$(run_qemu "$INITRD" "$POS_DISK")
 echo "$OUT_POS" | head -40
 echo "[... truncated ...]"
 echo ""
@@ -189,11 +190,11 @@ record "positive: OS banner precedes %STDRV-I-STARTUP begun (vms-1fb banner-firs
 echo ""
 
 # --- NEGATIVE (halt control): blank disk -> honest halt --------------------
-echo "--- NEGATIVE: blank/uninitialized disk + FAT initramfs -> honest halt ---"
+echo "--- NEGATIVE: blank/uninitialized disk + boot initramfs -> honest halt ---"
 NEG_DISK="/tmp/mount-or-halt-blank.img"
 rm -f "$NEG_DISK"
 truncate -s 64M "$NEG_DISK"
-OUT_NEG=$(run_qemu "$FAT_INITRD" "$NEG_DISK")
+OUT_NEG=$(run_qemu "$INITRD" "$NEG_DISK")
 echo "$OUT_NEG" | head -40
 echo "[... truncated ...]"
 echo ""

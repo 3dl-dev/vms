@@ -59,6 +59,8 @@ import traceback
 
 import anita
 
+import netbsd_console
+
 
 def log(msg):
     print("[drive_netbsd_p2c] %s" % msg, flush=True)
@@ -105,16 +107,24 @@ def accel_args():
     return ["-smp", "2"]
 
 
+# ---- deterministic console (rd vms-2d9) --------------------------------------
+# All console driving goes through the shared, deterministic NetBSDConsole
+# (tests/netbsd/netbsd_console.py): unique prompt, resync-on-prompt, unique
+# per-command markers. The thin wrappers below keep every existing call site
+# (`wait_for_login(child, ...)', `login(child, ...)', `run(child, cmd, t)')
+# unchanged; the console is created lazily from the live child.
+_con = None
+
+
+def _console(child):
+    global _con
+    if _con is None or _con.child is not child:
+        _con = netbsd_console.NetBSDConsole(child, logfn=log)
+    return _con
+
+
 def wait_for_login(child, boot_deadline):
-    child.timeout = boot_deadline
-    while True:
-        r = child.expect([r"\033\[c", r"\033\[5n", r"login:"])
-        if r == 0:
-            child.send("\033[?1;2c")
-        elif r == 1:
-            child.send("\033[0n")
-        elif r == 2:
-            return
+    _console(child).wait_for_login(boot_deadline)
 
 
 def build_source_iso(guest_src_dir, out_iso):
@@ -132,41 +142,16 @@ def build_source_iso(guest_src_dir, out_iso):
     log("source ISO built: %s (%d bytes)" % (out_iso, os.path.getsize(out_iso)))
 
 
-# ---- in-guest command helper -------------------------------------------------
-
-_marker_seq = [0]
+# ---- in-guest command helper (delegates to the deterministic console) --------
 
 
 def run(child, cmd, timeout, echo=True):
     """Run one /bin/sh command in the guest; return (exit_status, output)."""
-    _marker_seq[0] += 1
-    mark = "OVMXP2C_%d" % _marker_seq[0]
-    child.sendline("%s; echo %s=$?=" % (cmd, mark))
-    child.expect(r"%s=(\d+)=" % mark, timeout=timeout)
-    rc = int(child.match.group(1))
-    out = child.before
-    if isinstance(out, bytes):
-        out = out.decode("ascii", "ignore")
-    out = out.replace("\r", "")
-    if echo:
-        log("$ %s   -> exit %d" % (cmd, rc))
-        text = out.strip()
-        if text:
-            for line in text.splitlines():
-                print("    | %s" % line, flush=True)
-    return rc, out
+    return _console(child).run(cmd, timeout, echo)
 
 
 def login(child, cmd_timeout):
-    child.timeout = cmd_timeout
-    child.send("\n")
-    child.expect(r"login:")
-    child.send("root\n")
-    child.expect(r"# ")
-    child.sendline("exec /bin/sh")
-    child.expect(r"# ")
-    child.sendline("PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH; umask 022")
-    child.expect(r"# ")
+    _console(child).login_root_sh(cmd_timeout)
 
 
 def main():

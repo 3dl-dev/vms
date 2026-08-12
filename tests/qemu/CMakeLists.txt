@@ -528,6 +528,32 @@ set_tests_properties(install_menu_e2e PROPERTIES
     TIMEOUT 900)
 
 # ---------------------------------------------------------------------------
+# THE R1 release-acceptance gate: media -> menu install -> SEPARATE container
+# -> login -> PRODUCT SHOW PRODUCT (vms-37f, parent vms-718, docs/design-
+# vms-faithful-install.md §3.3 "Release e2e").
+#
+# Unifies the three pieces already on the epic (test_install_menu.sh's menu
+# drive, test_install_boot_e2e.sh's boot-the-installed-target, and
+# test_docker_persistent_disk.sh's cross-container boundary) into the gate none
+# of them cover on its own: the FULL menu-driven install in one container, the
+# installed target surviving into a SEPARATE `docker run` that boots it ALONE
+# and logs in + PRODUCT SHOW PRODUCT + DIRECTORY, and a third boot proving
+# first-boot ran once. Keeps and mechanically ASSERTS the vms-9b7
+# writethrough-cache lesson, and its NEGATIVE CONTROL (an install torn down
+# before the guest flush, whose verify must then fail) is the red-first proof
+# that the durability is real. CI runs it for real (never opt-in cover): the
+# release-install-e2e job in .github/workflows/ci.yml treats a SKIP as a hard
+# failure. Same opt-in-in-ctest convention as install_menu_e2e above.
+add_test(
+    NAME release_install_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_release_install.sh
+)
+set_tests_properties(release_install_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 1800)
+
+# ---------------------------------------------------------------------------
 # install -> UPGRADE -> boot (vms-f05, epic vms-a84 RELEASE ENGINEERING).
 #
 # Cuts two real tools/cut-release.sh bundles (a BASELINE and an UPGRADE,

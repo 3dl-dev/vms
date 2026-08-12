@@ -369,7 +369,9 @@ setsid=PROCEDURE,\
 setvbuf=PROCEDURE,setgid=PROCEDURE,setuid=PROCEDURE,setgroups=PROCEDURE,\
 getegid=PROCEDURE,\
 \
-nanosleep=PROCEDURE"
+nanosleep=PROCEDURE,\
+\
+tmpfile=PROCEDURE,clearerr=PROCEDURE"
 
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets
@@ -414,6 +416,17 @@ nanosleep=PROCEDURE"
 # interval, which sleep() (whole seconds, already exported) cannot express.
 # nanosleep() is a plain C-RTL entry point musl's libc.a defines, so DECC$SHR is
 # the right producer.
+#
+# tmpfile/clearerr APPENDED for vms-1a9 (append-only -> prior consumers' vector
+# indices unchanged, GSMATCH LEQUAL-compatible). DCL's SYS$INPUT-from-procedure
+# wiring (dcl_sysinput_setup/_restore, dcl_cmd_process.c) buffers an image's
+# SYS$INPUT data-line block in an anonymous auto-deleted temp stream via
+# tmpfile(), and clears the residual EOF/error state on stdin with clearerr()
+# once fd 0 is restored. Both are C89 standard stdio entry points that real
+# OpenVMS DECC$SHR exports, and musl's libc.a defines them (nm: tmpfile.lo -> T
+# tmpfile, whose __randname helper is also defined and whole-archived in;
+# clearerr.lo -> T clearerr), so DECC$SHR is the right producer -- the faithful
+# fix, not avoiding the standard calls. DCL.EXE is the first consumer.
 #
 # THE GENERAL RULE, because this is the commonest way to break the VMS-native
 # toolchain jobs: EVERY libc call added to an OVMX library is a claim that

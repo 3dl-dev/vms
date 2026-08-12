@@ -408,6 +408,14 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
     /* Set argv[0] to resolved path or exe_name for PATH search */
     argv[0] = (char *)(bin ? bin : exe_name);
 
+    /* SYS$INPUT-from-procedure (vms-1a9): a utility RUN from a .COM
+     * (e.g. `$ RUN SYS$SYSTEM:AUTHORIZE` followed by ADD/MODIFY/EXIT data
+     * lines) reads SYS$INPUT from the procedure, not the terminal. Set up
+     * before the fork so the child inherits fd 0; restore on every return. */
+    struct dcl_sysinput si;
+    dcl_sysinput_setup(ctx, &si);
+
+    uint32_t status = SS$_NORMAL;
     pid_t pid = fork();
     if (pid == 0) {
         if (bin)
@@ -424,15 +432,16 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
         if (WIFSTOPPED(wstatus)) {
             printf("\nInterrupt\n");
             ctx->interrupted_pid = pid;
-            return SS$_ABORT;
+            status = SS$_ABORT;
+        } else if (WIFEXITED(wstatus)) {
+            status = (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
         }
-        if (WIFEXITED(wstatus))
-            return (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
     } else {
         dcl_error("DCL", 4, "CREPRC", "cannot create process for %s", facility);
-        return SS$_ABORT;
+        status = SS$_ABORT;
     }
-    return SS$_NORMAL;
+    dcl_sysinput_restore(&si);
+    return status;
 }
 
 /* ================================================================== */

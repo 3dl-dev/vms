@@ -115,6 +115,23 @@ int ensure_queue_init(void);
 int dcl_exec_utility(const char *exe_name, const char *facility,
                      char *argv[], int argc);
 
+/*
+ * SYS$INPUT-from-procedure (vms-1a9). When an image is activated (RUN, a
+ * foreign command, or a DCL utility such as SYSGEN/AUTHORIZE) from WITHIN a
+ * command procedure, OpenVMS makes the image's SYS$INPUT the procedure itself:
+ * the data lines following the invoking command, up to the next line beginning
+ * with '$' (a DCL command) or end-of-file. dcl_sysinput_setup() gathers that
+ * block from the innermost procedure stream, repositions the stream to the
+ * next '$'-line so the parent DCL resumes there, and redirects fd 0 (which
+ * SYS$INPUT resolves to -- sys_assign.c) to the gathered block for the duration
+ * of the activation. When DCL is interactive (proc_depth < 0) it is a no-op and
+ * SYS$INPUT stays the terminal. dcl_sysinput_restore() puts fd 0 back.
+ */
+struct dcl_context;
+struct dcl_sysinput { int saved_fd0; };
+void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si);
+void dcl_sysinput_restore(struct dcl_sysinput *si);
+
 /* P1 control-region establishment (vms-68f.v, in-process image activation).
  *
  * DCL's process-permanent state lives in P1 (the control region), which

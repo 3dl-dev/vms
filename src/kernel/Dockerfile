@@ -20,8 +20,15 @@ RUN KVER=$(ls /lib/modules/ | head -1) && \
     echo "Building against kernel: $KVER" && \
     echo "$KVER" > /tmp/kver
 
-WORKDIR /src
-COPY src/kernel/ /src/
+# src/kernel-core carries the substrate-agnostic executive core: the shim
+# contracts (exec_kbackend.h, exec_list.h) AND the relocated facility sources
+# (kernel-core/vms_eflag.c, rd vms-ec4). The Makefile references
+# ../kernel-core/vms_eflag.o and adds -I$(src)/../kernel-core, so kernel-core
+# must sit BESIDE /src/kernel as /src/kernel-core, and the build runs in
+# /src/kernel. (This mirrors tests/qemu/Dockerfile's layout.)
+COPY src/kernel-core/ /src/kernel-core/
+COPY src/kernel/ /src/kernel/
+WORKDIR /src/kernel
 
 # Build the module
 RUN KVER=$(cat /tmp/kver) && \
@@ -29,8 +36,8 @@ RUN KVER=$(cat /tmp/kver) && \
 
 # Verify
 RUN KVER=$(cat /tmp/kver) && \
-    ls -la /src/vms.ko && \
-    modinfo /src/vms.ko
+    ls -la /src/kernel/vms.ko && \
+    modinfo /src/kernel/vms.ko
 
 # Copy to a clean output location
-RUN mkdir -p /build && cp /src/vms.ko /build/
+RUN mkdir -p /build && cp /src/kernel/vms.ko /build/

@@ -59,6 +59,23 @@ set_tests_properties(vmsrms_disk_transparency PROPERTIES
     TIMEOUT 30
 )
 
+# vms-69e7: SYS$SYSROOT/SYS$SYSTEM composed live through the concealed rooted
+# search-list machinery (no pre-flattened paths). Host LNM$PROCESS + a temp
+# physical device, no /dev/vms needed.
+add_executable(test_sysroot_composed test_sysroot_composed.c)
+target_include_directories(test_sysroot_composed PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_sysroot_composed PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_sysroot_composed COMMAND test_sysroot_composed)
+set_tests_properties(vmsrms_sysroot_composed PROPERTIES
+    LABELS "unit;rms;lnm"
+    TIMEOUT 30
+)
+
 # vms-240: iterative device-field LNM resolution through $PARSE and the unified
 # TERMINAL-honoring driver (lnm_translate_filespec). Host LNM$PROCESS, no
 # /dev/vms needed.

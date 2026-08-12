@@ -586,30 +586,93 @@ uint32_t vmsfs_device_concealed_rooted(const char *device,
 }
 
 /*
- * expand_rooted_concealed - structurally expand a concealed rooted-directory
- * device logical, in place, before device/directory resolution.
+ * merge_rooted_root - merge ONE rooted-directory root equivalence (e.g.
+ * "SYS$SYSDEVICE:[SYS0.]") with the caller's subdirectory per the VMS rooted
+ * rule, producing `out` (device + merged directory; name/type/version copied
+ * from `caller`). Returns 1 on success, 0 if `root_equiv` is not a usable
+ * device:[dir] equivalence.
+ *
+ *   root [SYS0.] + caller [SYSEXE]      -> [SYS0.SYSEXE]
+ *   root [USERS.] + caller [SMITH.PROJ] -> [USERS.SMITH.PROJ]
+ *   root [USERS.] + caller <none/000000/name-only> -> [USERS]
+ *
+ * (VSI OpenVMS User's Manual, "Rooted Directories": the caller's subdirectory
+ * concatenates onto the root — a single contiguous merge, not a trailing-dot
+ * string coincidence.)
+ */
+static int merge_rooted_root(const char *root_equiv,
+                             const vmsfs_filespec_t *caller,
+                             vmsfs_filespec_t *out)
+{
+    vmsfs_filespec_t root;
+    if (!$VMS_STATUS_SUCCESS(vmsfs_parse_filespec(root_equiv, &root)) ||
+        !root.has_directory)
+        return 0;
+
+    /* Root directory content ends in '.' (rooted): strip it to the base. */
+    char root_base[VMSFS_MAX_PATH];
+    strncpy(root_base, root.directory, sizeof(root_base) - 1);
+    root_base[sizeof(root_base) - 1] = '\0';
+    size_t rl = strlen(root_base);
+    if (rl > 0 && root_base[rl - 1] == '.')
+        root_base[rl - 1] = '\0';        /* "USERS." -> "USERS" */
+
+    char merged[VMSFS_MAX_PATH];
+    const char *sub = caller->has_directory ? caller->directory : NULL;
+    if (sub && sub[0] && strcmp(sub, "000000") != 0) {
+        if (sub[0] == '.')
+            sub++;                        /* [.SMITH] relative form */
+        if (root_base[0])
+            snprintf(merged, sizeof(merged), "%s.%s", root_base, sub);
+        else
+            snprintf(merged, sizeof(merged), "%s", sub);
+    } else {
+        snprintf(merged, sizeof(merged), "%s", root_base);
+    }
+
+    *out = *caller;                       /* copy name/type/version + flags */
+    out->node[0] = '\0';
+    out->has_node = 0;
+    out->device[0] = '\0';
+    out->has_device = 0;
+    if (root.has_device && root.device[0]) {
+        strncpy(out->device, root.device, sizeof(out->device) - 1);
+        out->device[sizeof(out->device) - 1] = '\0';
+        out->has_device = 1;
+    }
+    strncpy(out->directory, merged, sizeof(out->directory) - 1);
+    out->directory[sizeof(out->directory) - 1] = '\0';
+    out->has_directory = (merged[0] != '\0');
+    return 1;
+}
+
+/*
+ * expand_rooted_concealed_multi - structurally expand a concealed rooted-
+ * directory device logical into one or more fully-merged candidate filespecs,
+ * BEFORE device/directory resolution.
  *
  * VMS composes a rooted-directory logical by CONCATENATING the logical's root
- * directory with the caller-supplied subdirectory per the rooted rule, not by
- * a trailing-dot string coincidence (VSI OpenVMS User's Manual, "Rooted
- * Directories"; DCL Dictionary, DEFINE /TRANSLATION_ATTRIBUTES=CONCEALED):
+ * directory with the caller-supplied subdirectory per the rooted rule (VSI
+ * OpenVMS User's Manual, "Rooted Directories"; DCL Dictionary, DEFINE
+ * /TRANSLATION_ATTRIBUTES=CONCEALED). A concealed rooted device may itself be a
+ * SEARCH LIST -- the canonical case is SYS$SYSROOT = dev:[SYS0.], dev:[SYSx.
+ * SYSCOMMON.] (VSI OpenVMS System Manager's Manual, "The System Disk"): a
+ * lookup composes the caller's subdirectory onto EACH member and tries them in
+ * order, so SYS$SYSTEM (= SYS$SYSROOT:[SYSEXE]) resolves to the node-specific
+ * [SYS0.SYSEXE] first and the common [SYS0.SYSCOMMON.SYSEXE] second.
  *
- *   WORK -> DKA100:[USERS.]  (concealed, rooted)
- *     WORK:[SMITH]FOO.DAT   ->  DKA100:[USERS.SMITH]FOO.DAT
- *     WORK:[SMITH.PROJ]     ->  DKA100:[USERS.SMITH.PROJ]
- *     WORK:FOO.DAT          ->  DKA100:[USERS]FOO.DAT
- *     WORK:[000000]         ->  DKA100:[USERS]
- *
- * If parsed->device is a concealed rooted logical, this rewrites parsed so
- * device = the root's physical device and directory = the merged directory,
- * then the normal single-path pipeline translates the fully-expanded spec.
  * Only a device carrying the CONCEALED attribute AND a rooted equivalence is
- * expanded (honor the flag); a plain logical translating to "dev:[x.]" is
- * left untouched. Returns 1 if an expansion happened, 0 otherwise.
+ * expanded (honor the LNM$M_CONCEALED flag, vms-d8e/#340); a plain logical that
+ * merely translates to "dev:[x.]" is left untouched. Each concealed member is
+ * merged via merge_rooted_root() and composed back to a filespec string in
+ * out_specs[]. Returns the number of candidates written (0 if the device is not
+ * a concealed rooted device -- caller then runs the classic single path).
  */
-static int expand_rooted_concealed(vmsfs_filespec_t *parsed)
+static int expand_rooted_concealed_multi(const vmsfs_filespec_t *parsed,
+                                         char out_specs[][VMSFS_MAX_FILESPEC],
+                                         int max_out)
 {
-    if (!parsed->has_device || !parsed->device[0])
+    if (!parsed->has_device || !parsed->device[0] || max_out <= 0)
         return 0;
 
     int concealed = 0, rooted = 0;
@@ -628,56 +691,27 @@ static int expand_rooted_concealed(vmsfs_filespec_t *parsed)
     dev_up[sizeof(dev_up) - 1] = '\0';
     str_upcase(dev_up);
 
-    char equiv[256];
-    uint16_t equiv_len = 0;
-    uint32_t attrs = 0;
-    if (!$VMS_STATUS_SUCCESS(lnm_translate(mgr, LNM_FILE_DEV, dev_up, equiv,
-                                           sizeof(equiv), &equiv_len, &attrs)))
-        return 0;
-    if (equiv_len >= sizeof(equiv))
-        equiv_len = sizeof(equiv) - 1;
-    equiv[equiv_len] = '\0';
-
-    vmsfs_filespec_t root;
-    if (!$VMS_STATUS_SUCCESS(vmsfs_parse_filespec(equiv, &root)) ||
-        !root.has_directory)
+    /* Fetch ALL equivalence-list members of the concealed device (search-list
+     * order). A single-valued concealed rooted device (the ordinary WORK ->
+     * DKA100:[USERS.] case) returns exactly one member here. */
+    char values[LNM_MAX_SEARCHLIST][LNM_MAX_VALUE + 1];
+    uint8_t n = 0;
+    uint32_t lst = lnm_translate_searchlist(mgr, dev_up, values,
+                                            LNM_MAX_SEARCHLIST, &n, NULL);
+    if (lst != SS$_NORMAL || n == 0)
         return 0;
 
-    /* Root directory content ends in '.' (rooted): strip it to the base. */
-    char root_base[VMSFS_MAX_PATH];
-    strncpy(root_base, root.directory, sizeof(root_base) - 1);
-    root_base[sizeof(root_base) - 1] = '\0';
-    size_t rl = strlen(root_base);
-    if (rl > 0 && root_base[rl - 1] == '.')
-        root_base[rl - 1] = '\0';        /* "USERS." -> "USERS" */
-
-    /* Merge with the caller's directory per the rooted rule. */
-    char merged[VMSFS_MAX_PATH];
-    const char *sub = parsed->has_directory ? parsed->directory : NULL;
-    if (sub && sub[0] && strcmp(sub, "000000") != 0) {
-        if (sub[0] == '.')
-            sub++;                        /* [.SMITH] relative form */
-        if (root_base[0])
-            snprintf(merged, sizeof(merged), "%s.%s", root_base, sub);
-        else
-            snprintf(merged, sizeof(merged), "%s", sub);
-    } else {
-        /* WORK:FOO.DAT or WORK:[000000] -> the root itself. */
-        snprintf(merged, sizeof(merged), "%s", root_base);
+    int count = 0;
+    for (uint8_t i = 0; i < n && count < max_out; i++) {
+        vmsfs_filespec_t cand;
+        if (!merge_rooted_root(values[i], parsed, &cand))
+            continue;
+        if (!$VMS_STATUS_SUCCESS(vmsfs_compose_filespec(&cand, out_specs[count],
+                                                        VMSFS_MAX_FILESPEC)))
+            continue;
+        count++;
     }
-
-    /* Rewrite parsed: device <- root device, directory <- merged. */
-    parsed->device[0] = '\0';
-    parsed->has_device = 0;
-    if (root.has_device && root.device[0]) {
-        strncpy(parsed->device, root.device, sizeof(parsed->device) - 1);
-        parsed->device[sizeof(parsed->device) - 1] = '\0';
-        parsed->has_device = 1;
-    }
-    strncpy(parsed->directory, merged, sizeof(parsed->directory) - 1);
-    parsed->directory[sizeof(parsed->directory) - 1] = '\0';
-    parsed->has_directory = (merged[0] != '\0');
-    return 1;
+    return count;
 }
 
 /*
@@ -782,14 +816,55 @@ static int vmsfs_to_linux_path_one(const char *vms_spec, char *linux_path,
     }
 
     /*
-     * vms-d8e: structurally expand a concealed rooted-directory device logical
-     * BEFORE resolving device/directory, so the logical's root and the
-     * caller's subdirectory concatenate per the VMS rooted rule
+     * vms-d8e/#340 + vms-69e7: structurally expand a concealed rooted-directory
+     * device logical BEFORE resolving device/directory, so the logical's root
+     * and the caller's subdirectory concatenate per the VMS rooted rule
      * ([USERS.] + [SMITH] -> [USERS.SMITH]) rather than colliding by trailing-
-     * dot string luck. Only a device carrying the CONCEALED attribute AND a
-     * rooted equivalence is touched; everything else falls straight through.
+     * dot string luck. A concealed rooted device may be a SEARCH LIST
+     * (SYS$SYSROOT = dev:[SYS0.], dev:[SYSx.SYSCOMMON.]): each member is merged
+     * with the caller's subdirectory and tried in order -- the FIRST whose
+     * physical file/directory exists wins, else the primary (member 0) is used
+     * for an honest not-found / create-in-primary, exactly as a VMS search list
+     * behaves (VSI OpenVMS I/O User's Reference, "Logical Name Search Lists").
+     * A single-member concealed rooted device (the ordinary WORK -> [USERS.]
+     * case) yields one candidate and falls through the same loop unchanged. Any
+     * device that is not a concealed rooted device leaves rc_n == 0 and runs the
+     * classic single path below.
      */
-    (void)expand_rooted_concealed(&parsed);
+    {
+        char rc_specs[LNM_MAX_SEARCHLIST][VMSFS_MAX_FILESPEC];
+        int rc_n = expand_rooted_concealed_multi(&parsed, rc_specs,
+                                                 LNM_MAX_SEARCHLIST);
+        if (rc_n >= 1) {
+            char primary[VMSFS_MAX_PATH] = "";
+            int have_primary = 0;
+            for (int i = 0; i < rc_n; i++) {
+                char cand_path[VMSFS_MAX_PATH];
+                int cst = vmsfs_to_linux_path_one(rc_specs[i], cand_path,
+                                                  sizeof(cand_path));
+                if (!$VMS_STATUS_SUCCESS(cst))
+                    continue;
+                if (!have_primary) {
+                    strncpy(primary, cand_path, sizeof(primary) - 1);
+                    primary[sizeof(primary) - 1] = '\0';
+                    have_primary = 1;
+                }
+                struct stat sb;
+                if (stat(cand_path, &sb) == 0) {
+                    strncpy(linux_path, cand_path, path_size - 1);
+                    linux_path[path_size - 1] = '\0';
+                    return SS$_NORMAL;
+                }
+            }
+            if (have_primary) {
+                strncpy(linux_path, primary, path_size - 1);
+                linux_path[path_size - 1] = '\0';
+                return SS$_NORMAL;
+            }
+            /* No member composed a path: fall through to the classic pipeline
+             * on the original spec for a consistent error. */
+        }
+    }
 
     char dir_prefix[VMSFS_MAX_PATH] = "";
     char dir_part[VMSFS_MAX_PATH] = "";
@@ -955,9 +1030,21 @@ int vmsfs_to_linux_path(const char *vms_spec, char *linux_path, size_t path_size
 
             char values[LNM_MAX_SEARCHLIST][LNM_MAX_VALUE + 1];
             uint8_t n = 0;
+            uint32_t sl_attrs = 0;
             uint32_t lst = lnm_translate_searchlist(mgr, dev_up, values,
-                                                    LNM_MAX_SEARCHLIST, &n, NULL);
-            if (lst == SS$_NORMAL && n >= 2) {
+                                                    LNM_MAX_SEARCHLIST, &n,
+                                                    &sl_attrs);
+            /*
+             * A CONCEALED search list (e.g. SYS$SYSROOT) is NOT fanned out by
+             * naive per-member device substitution here: its members are ROOTED
+             * roots that must be MERGED with the caller's subdirectory
+             * (dev:[SYS0.] + [SYSEXE] -> dev:[SYS0.SYSEXE]), not concatenated as
+             * "dev:[SYS0.][SYSEXE]". expand_rooted_concealed_multi() inside
+             * vmsfs_to_linux_path_one() does that rooted merge and its own
+             * ordered fan-out, so leave concealed devices to the classic path.
+             */
+            if (lst == SS$_NORMAL && n >= 2 &&
+                !(sl_attrs & LNM_ATTR_CONCEALED)) {
                 /* rest = the original spec text after the device's colon (the
                  * directory/name/type/version the caller supplied). No node
                  * prefix is present here (guarded above), so the first colon

@@ -62,6 +62,28 @@ static void lnm_seed_system_locating(lnm_manager_t *mgr, const char *name,
 }
 
 /*
+ * lnm_seed_system_locating_multi - the search-list (multi-value) counterpart
+ * of lnm_seed_system_locating(), for the concealed rooted SYS$SYSROOT and the
+ * DECC$LIBRARY_INCLUDE header search list. Same INV-6-preserving contract:
+ * define the name node-wide in LNM$SYSTEM through the executive, and only when
+ * that comes back SS$_NOSUCHDEV (host BUILD/TEST tooling, no /dev/vms) fall
+ * back to the SAME disclosed value in LNM$PROCESS_TABLE (a real per-process
+ * logical, never a disguise of the SYSTEM table -- see the block comment on
+ * lnm_seed_system_locating above). lnm_create_multi carries the search list
+ * AND the attributes (e.g. LNM$M_CONCEALED) to the executive (vms-420/#284).
+ */
+static void lnm_seed_system_locating_multi(lnm_manager_t *mgr, const char *name,
+                                           const char **values, int nvalues,
+                                           uint32_t attr)
+{
+    uint32_t st = lnm_create_multi(mgr, LNM_SYSTEM_TABLE, name, values,
+                                   nvalues, attr, LNM_MODE_EXEC);
+    if (st == SS$_NOSUCHDEV)
+        lnm_create_multi(mgr, LNM_PROCESS_TABLE, name, values, nvalues,
+                         attr, LNM_MODE_EXEC);
+}
+
+/*
  * lnm_setup_defaults - Set up standard VMS system logicals.
  *
  * @mgr:      Manager instance
@@ -71,11 +93,14 @@ static void lnm_seed_system_locating(lnm_manager_t *mgr, const char *name,
  * path is stored), then creates logicals with VMS equivalences:
  *
  *   SYS$SYSDEVICE -> DKA0:
- *   SYS$SYSTEM    -> SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSEXE]
- *   SYS$LIBRARY   -> SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB]
- *   SYS$SHARE     -> SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB]
- *   SYS$MANAGER   -> SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSMGR]
- *   SYS$HELP      -> SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSHLP]
+ *   SYS$SYSROOT   -> SYS$SYSDEVICE:[SYS0.], SYS$SYSDEVICE:[SYS0.SYSCOMMON.]
+ *                    (concealed rooted search list)
+ *   SYS$COMMON    -> SYS$SYSDEVICE:[SYS0.SYSCOMMON.]  (concealed rooted)
+ *   SYS$SYSTEM    -> SYS$SYSROOT:[SYSEXE]   (composed, not a spelled-out path)
+ *   SYS$LIBRARY   -> SYS$SYSROOT:[SYSLIB]
+ *   SYS$SHARE     -> SYS$SYSROOT:[SYSLIB]
+ *   SYS$MANAGER   -> SYS$SYSROOT:[SYSMGR]
+ *   SYS$HELP      -> SYS$SYSROOT:[SYSHLP]
  *   SYS$SCRATCH   -> SYS$SYSDEVICE:[SYSTMP]
  *   SYS$LOGIN     -> SYS$SYSDEVICE:[USERS]  (overridden per-process by login)
  *   SYS$DISK      -> SYS$SYSDEVICE  (process default device)
@@ -100,51 +125,91 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
     lnm_seed_system_locating(mgr, "SYS$SYSDEVICE", "DKA0:", LNM_ATTR_TERMINAL);
 
     /*
-     * SYS$SYSROOT -> the system root directory [SYS0.] on the system disk.
-     * On OpenVMS this is a rooted (concealed) device pointing at the running
-     * system root; OVMX's layout puts the running root at SYS$SYSDEVICE:[SYS0.]
-     * (VSI OpenVMS System Manager's Manual, system directory structure). The
-     * SYS$xxx directory logicals below are the per-directory equivalences under
-     * it, spelled out so a single translation resolves each in one step.
+     * SYS$SYSROOT -> the system root, as a CONCEALED ROOTED SEARCH LIST, exactly
+     * as OpenVMS defines it: the node-specific root [SYS0.] overlaid on the
+     * cluster-common root [SYS0.SYSCOMMON.]. Every SYS$xxx directory logical
+     * below composes onto this (SYS$SYSROOT:[SYSEXE] etc.), so a file is looked
+     * up first in the node-specific root and then in the common root -- the
+     * running-system search order a real VMS system disk presents (VSI OpenVMS
+     * System Manager's Manual, Vol. 1, "The System Disk" / rooted-directory
+     * structure: SYS$SYSROOT is a concealed, rooted, search-list logical whose
+     * members are the per-node root and SYS$COMMON; VSI OpenVMS User's Manual,
+     * "Rooted Directories" and DCL Dictionary, DEFINE
+     * /TRANSLATION_ATTRIBUTES=CONCEALED). LNM$M_CONCEALED marks it a concealed
+     * device so filespec composition merges [SYS0.] + [SYSEXE] structurally
+     * (vms-d8e/#340), and the two members fan out at translation time
+     * (vms-b12/#332, extended for a concealed rooted root by vms-69e7): the
+     * physical files live under [SYS0.SYSCOMMON.*], so the common member wins.
+     * Nothing here is pre-flattened -- the SYS$xxx paths are DERIVED live.
      */
-    lnm_seed_system_locating(mgr, "SYS$SYSROOT", "SYS$SYSDEVICE:[SYS0.]", 0);
+    static const char *sysroot_members[] = {
+        "SYS$SYSDEVICE:[SYS0.]",
+        "SYS$SYSDEVICE:[SYS0.SYSCOMMON.]"
+    };
+    lnm_seed_system_locating_multi(mgr, "SYS$SYSROOT", sysroot_members, 2,
+                                   LNM_ATTR_CONCEALED);
 
     /*
-     * System directory logicals — VMS-native equivalences.
-     * These map standard logical names to ODS-2 directory specs
-     * on the system device.
+     * SYS$COMMON -> the cluster-common root [SYS0.SYSCOMMON.], concealed and
+     * rooted, exactly as VMS defines it (SHOW LOGICAL SYS$COMMON on a running
+     * system: "dev:[SYS0.SYSCOMMON.]"; VSI OpenVMS System Manager's Manual,
+     * Vol. 1, "The System Disk"). It is the second member of SYS$SYSROOT and a
+     * composition base in its own right (e.g. DECC$LIBRARY_INCLUDE below).
      */
-
-    /* SYS$SYSTEM -> [SYS0.SYSCOMMON.SYSEXE] */
-    lnm_seed_system_locating(mgr, "SYS$SYSTEM",
-                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSEXE]", 0);
-
-    /* SYS$LIBRARY -> [SYS0.SYSCOMMON.SYSLIB] */
-    lnm_seed_system_locating(mgr, "SYS$LIBRARY",
-                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB]", 0);
-
-    /* SYS$SHARE -> [SYS0.SYSCOMMON.SYSLIB] (same as SYS$LIBRARY on VMS) */
-    lnm_seed_system_locating(mgr, "SYS$SHARE",
-                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB]", 0);
-
-    /* SYS$MANAGER -> [SYS0.SYSCOMMON.SYSMGR] */
-    lnm_seed_system_locating(mgr, "SYS$MANAGER",
-                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSMGR]", 0);
+    lnm_seed_system_locating(mgr, "SYS$COMMON",
+                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.]",
+                             LNM_ATTR_CONCEALED);
 
     /*
-     * SYS$UPDATE -> [SYS0.SYSCOMMON.SYSUPD], the standard VMS home for pre-PCSI
+     * System directory logicals — COMPOSED onto SYS$SYSROOT, not spelled out.
+     * SYS$SYSTEM = SYS$SYSROOT:[SYSEXE] and so on, so each resolves through the
+     * concealed rooted search list above (VSI OpenVMS System Manager's Manual,
+     * Vol. 1: SYS$SYSTEM = SYS$SYSROOT:[SYSEXE], SYS$LIBRARY = SYS$SYSROOT:
+     * [SYSLIB], SYS$MANAGER = SYS$SYSROOT:[SYSMGR], SYS$HELP = SYS$SYSROOT:
+     * [SYSHLP]). Redefining SYS$SYSROOT (or its underlying SYS$SYSDEVICE) moves
+     * all of them at once -- the proof that composition is live, not memorized.
+     */
+
+    /* SYS$SYSTEM -> SYS$SYSROOT:[SYSEXE] */
+    lnm_seed_system_locating(mgr, "SYS$SYSTEM", "SYS$SYSROOT:[SYSEXE]", 0);
+
+    /* SYS$LIBRARY -> SYS$SYSROOT:[SYSLIB] */
+    lnm_seed_system_locating(mgr, "SYS$LIBRARY", "SYS$SYSROOT:[SYSLIB]", 0);
+
+    /* SYS$SHARE -> SYS$SYSROOT:[SYSLIB] (same as SYS$LIBRARY on VMS) */
+    lnm_seed_system_locating(mgr, "SYS$SHARE", "SYS$SYSROOT:[SYSLIB]", 0);
+
+    /* SYS$MANAGER -> SYS$SYSROOT:[SYSMGR] */
+    lnm_seed_system_locating(mgr, "SYS$MANAGER", "SYS$SYSROOT:[SYSMGR]", 0);
+
+    /*
+     * SYS$UPDATE -> SYS$SYSROOT:[SYSUPD], the standard VMS home for pre-PCSI
      * layered-product install kits and their SETUP.COM procedures -- e.g.
-     * @SYS$UPDATE:PARTS_SETUP.COM (vms-977/vms-2579, the 0.2 demo). Seeded into
-     * the executive-resident SYSTEM table here so a login process sees it even
-     * before SYS$MANAGER:STARTUP.COM's DEFINE/SYSTEM runs; STARTUP.COM then
-     * (re)defines the same value, an idempotent supersede.
+     * @SYS$UPDATE:PARTS_SETUP.COM (vms-977/vms-2579, the 0.2 demo). Composed
+     * onto SYS$SYSROOT like the rest; seeded into the executive-resident SYSTEM
+     * table here so a login process sees it even before SYS$MANAGER:STARTUP.COM's
+     * DEFINE/SYSTEM runs; STARTUP.COM then (re)defines the same value, an
+     * idempotent supersede.
      */
-    lnm_seed_system_locating(mgr, "SYS$UPDATE",
-                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSUPD]", 0);
+    lnm_seed_system_locating(mgr, "SYS$UPDATE", "SYS$SYSROOT:[SYSUPD]", 0);
 
-    /* SYS$HELP -> [SYS0.SYSCOMMON.SYSHLP] */
-    lnm_seed_system_locating(mgr, "SYS$HELP",
-                             "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSHLP]", 0);
+    /* SYS$HELP -> SYS$SYSROOT:[SYSHLP] */
+    lnm_seed_system_locating(mgr, "SYS$HELP", "SYS$SYSROOT:[SYSHLP]", 0);
+
+    /*
+     * DECC$LIBRARY_INCLUDE -> the C RTL system-header search list (VSI C User's
+     * Guide, "Header-File Searching": the compiler consults DECC$LIBRARY_INCLUDE
+     * for the shipped standard headers; VSI C RTL Reference Manual). A real
+     * search list over the library directory, composed through SYS$SYSROOT and
+     * SYS$COMMON so it, too, resolves through the concealed rooted chain rather
+     * than a memorized path. Absent before vms-69e7.
+     */
+    static const char *decc_include_members[] = {
+        "SYS$SYSROOT:[SYSLIB]",
+        "SYS$COMMON:[SYSLIB]"
+    };
+    lnm_seed_system_locating_multi(mgr, "DECC$LIBRARY_INCLUDE",
+                                   decc_include_members, 2, 0);
 
     /* SYS$SCRATCH -> system temp directory */
     lnm_seed_system_locating(mgr, "SYS$SCRATCH", "SYS$SYSDEVICE:[SYSTMP]", 0);

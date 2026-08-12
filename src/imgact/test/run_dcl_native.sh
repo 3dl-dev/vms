@@ -11,13 +11,13 @@
 #   1. The full six-library producer graph links VMS-native, INCLUDING the 32 libc
 #      universals appended to DECC$SHR for DCL (access..utimes) — the graph builds
 #      STRICT-clean.
-#   2. The real src/vmsdcl shell (21 TUs) + src/vmsqueue compile cleanly with the
+#   2. The real src/vmsdcl shell (22 TUs) + src/vmsqueue compile cleanly with the
 #      proven musl VMS-native flags (-fPIC -ffreestanding -fno-builtin +
 #      the one target-specific codegen flag -mno-outline-atomics on aarch64
 #      / -mtls-dialect=gnu2 on x86_64 (vms-cb5f) + the DCL POSIX feature macros).
 #   3. DCL.EXE links as a VMS-native ET_DYN executable via
 #      `LINK.EXE --executable --use {DECC$SHR + the five OVMX shareables}` — a
-#      22-object, main()-entered program with a full intra-image reloc set
+#      23-object, main()-entered program with a full intra-image reloc set
 #      (ADRP/ADD/ABS64/PREL32/LDST), its cross-image imports all bound, and its own
 #      single-object TLS (dcl_messages.o) carried as PT_TLS.
 #   4. IMGACT.EXE activates DCL.EXE (crt0 recovers argc/argv off the kernel stack,
@@ -80,16 +80,16 @@ build_producer_graph
 echo "-- (DCL's own +32 DECC\$SHR universals were part of that graph build) --"
 
 echo
-echo "== compile the real src/vmsdcl (21 TUs) + src/vmsqueue VMS-native ($ARCH) =="
+echo "== compile the real src/vmsdcl (22 TUs) + src/vmsqueue VMS-native ($ARCH) =="
 CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -U_FORTIFY_SOURCE $DCL_ARCHFLAG"
 DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
 # -I$LIBVMSSYS_DIR (vms-8019): dcl_cmd_show.c includes "vms_kif.h" — SHOW SYSTEM
 # reads the executive's process table through vms_kif_procscan().
 INCS="-I$DCL_DIR/include -I$LIBVMS_INC -I$VMSFS_INC -I$LNM_INC -I$RMS_INC -I$VMSPROC_DIR/include -I$SRC/vmsqueue -I$LIBVMSSYS_DIR"
 TUS="dcl_main dcl_lexer dcl_parser dcl_exec dcl_backup dcl_builtin dcl_cmd_show \
-dcl_cmd_set dcl_cmd_file dcl_cmd_process dcl_cmd_io dcl_cmd_misc dcl_editor \
-dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script dcl_messages \
-dcl_library"
+dcl_cmd_set dcl_cmd_file dcl_cmd_process dcl_cmd_io dcl_cmd_misc dcl_disk_logical \
+dcl_editor dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script \
+dcl_messages dcl_library"
 DCLOBJS=""
 for t in $TUS; do
     $CC $CFLAGS $DEFS $INCS -c -o "$WORK/$t.o" "$DCL_DIR/$t.c"
@@ -99,7 +99,8 @@ $CC $CFLAGS $DEFS $INCS -c -o "$WORK/vmsqueue.o" "$SRC/vmsqueue/vmsqueue.c"
 DCLOBJS="$DCLOBJS $WORK/vmsqueue.o"
 NOBJ=$(echo $DCLOBJS | wc -w)
 echo "-- $NOBJ DCL objects compiled VMS-native-clean --"
-[ "$NOBJ" -eq 22 ] || { echo "FAIL: expected 22 DCL objects, got $NOBJ"; exit 1; }
+# 22 vmsdcl TUs + vmsqueue = 23 (dcl_disk_logical added by vms-f83).
+[ "$NOBJ" -eq 23 ] || { echo "FAIL: expected 23 DCL objects, got $NOBJ"; exit 1; }
 
 echo
 echo "== DCL.EXE reloc/TLS profile (informative) =="

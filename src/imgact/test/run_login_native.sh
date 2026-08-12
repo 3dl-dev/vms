@@ -104,7 +104,7 @@ LIBGCC=${LIBGCC:-$($CC -print-libgcc-file-name)}
 build_producer_graph
 
 echo
-echo "== compile the real src/vmsdcl (21 TUs) + src/vmsqueue, link DCL.EXE =="
+echo "== compile the real src/vmsdcl (22 TUs) + src/vmsqueue, link DCL.EXE =="
 sh "$LINK_DIR/mk_dcl.sh" "$WORK/LINK.EXE" "$SYSEXE/DCL.EXE" \
     "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" \
     "$SYSLIB/LIBVMSFS\$SHR.EXE" "$SYSLIB/LIBVMSLNM\$SHR.EXE" "$SYSLIB/LIBVMSRMS\$SHR.EXE" \

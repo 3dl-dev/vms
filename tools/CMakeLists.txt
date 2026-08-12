@@ -339,6 +339,9 @@ add_executable(vms_mount_helper
 
 target_include_directories(vms_mount_helper PRIVATE
     ${VMS_INCLUDE_DIR}
+    # readlabel (vms-f83) reads the vmsfs home block layout to pull the
+    # volume label MOUNT builds DISK$<label> from.
+    ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
 )
 
 target_compile_definitions(vms_mount_helper PRIVATE

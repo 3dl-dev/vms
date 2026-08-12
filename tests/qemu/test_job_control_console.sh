@@ -39,6 +39,19 @@
 #     tests/qemu/test_parts_demo_e2e.sh) stops working -- run it alongside
 #     this one, not instead of it, per this item's own DONE criteria
 #
+# ALSO PROVES (vms-32a, docs/design-opcom-executive-logging.md): the
+# /dev/kmsg -> OPERATOR.LOG bridge (src/ovmx_init/opcom_kmsg.c) NEVER
+# touches the console -- neither vms.ko/vmsfs.ko's own OVMX-facility
+# lifecycle records nor re-styled SYSKRNL (Linux-kernel-layer) lines (the
+# kernel's own module-taint warning, deterministic on every boot since
+# vms.ko/vmsfs.ko are unsigned) reach OPA0: in any form, so the console
+# facility+ident sequence stays byte-identical to origin/main's
+# oracle-conformant shape (tests/qemu/test_boot_conformance.sh's own pinned
+# sequence, corroborated inline here) -- and separately, that OPERATOR.LOG's
+# sys$sndopr-written OPCOM record is oracle-exact (the eleven-'%' banner,
+# the real SCSNODE) -- against the same real boot and the same real
+# OPERATOR.LOG file the rest of this test already drives.
+#
 # Usage (run INSIDE the bootable image, like test_persistent_boot.sh /
 # test_parts_demo_e2e.sh):
 #   docker build -f distro/Dockerfile.bootable -t ovmx-boot .
@@ -202,6 +215,92 @@ else
     ok "no 'vms: registered process' kernel chatter on the user console (defect 4)"
 fi
 
+# --- 1c. THE /dev/kmsg BRIDGE NEVER TOUCHES THE CONSOLE (vms-32a, round 3
+# -- the definitive fix). docs/design-opcom-executive-logging.md.
+#
+# tests/qemu/test_boot_conformance.sh pins the EXACT ordered sequence of
+# %FACILITY-SEVERITY-IDENT tokens the boot console may show, derived from
+# the OpenVMS Alpha oracle, produced entirely by the boot orchestrator
+# (ovmx_init/PROVISION.EXE/SYSTARTUP_VMS.COM) -- never by a kernel module's
+# printk. Two earlier cuts of the /dev/kmsg -> operator bridge
+# (src/ovmx_init/opcom_kmsg.c) routed vms.ko/vmsfs.ko's own OVMX-facility
+# lines, then also re-styled SYSKRNL lines, to the console; BOTH broke that
+# pinned sequence (measured on PR #365's "Persistent Boot Smoke Test" /
+# "Boot console sequence conformance" CI job). The definitive fix: the
+# bridge writes to SYS$MANAGER:OPERATOR.LOG ONLY (opcom_kmsg_classify()
+# collapses to OPCOM_KMSG_DROP vs OPCOM_KMSG_OPERATOR_LOG; there is no
+# OPCOM_KMSG_CONSOLE any more). This section proves the CONSOLE side of
+# that: none of the bridge's own idents (DEVTAB, LNM, MBX, SYSID-from-kmsg,
+# KMOD, VMSFS, SYSKRNL/KERNEL) appear anywhere in the boot console
+# transcript. (docs/design-opcom-executive-logging.md's design record and
+# the unit tests in tests/ovmx_init/test_opcom_kmsg.c cover that the SAME
+# lines DO reach OPERATOR.LOG -- this file's job is the console's silence.)
+for IDENT_PAT in '^%OVMX-[A-Z]-DEVTAB, ' '^%OVMX-[A-Z]-LNM, ' '^%OVMX-[A-Z]-MBX, ' \
+                  '^%OVMX-[A-Z]-VMSFS, ' '^%SYSKRNL-'; do
+    if printf '%s\n' "$FID_FULL" | grep -qE "$IDENT_PAT"; then
+        bad "a kmsg-bridge line matching '$IDENT_PAT' reached the console -- the bridge must be OPERATOR.LOG-only (vms-32a round 3 / PR #365)"
+    else
+        ok "no kmsg-bridge line matching '$IDENT_PAT' reached the console (vms-32a round 3)"
+    fi
+done
+# %OVMX-*-SYSID and %OVMX-*-KMOD are checked separately: SYSID has no other
+# console user, but KMOD needs the message TEXT to distinguish the bridge's
+# own idents from anything else that might legitimately share the facility
+# (nothing does today, but the check is written to survive that changing).
+if printf '%s\n' "$FID_FULL" | grep -qE '^%OVMX-[A-Z]-SYSID, '; then
+    bad "a %OVMX-*-SYSID line (kmsg bridge) reached the console -- must be OPERATOR.LOG-only"
+else
+    ok "no %OVMX-*-SYSID line on the console (vms-32a round 3)"
+fi
+if printf '%s\n' "$FID_FULL" | grep -qE '^%OVMX-[A-Z]-KMOD, '; then
+    bad "a %OVMX-*-KMOD line (kmsg bridge -- vms.ko lifecycle or the kernel's own taint-warning collision) reached the console -- must be OPERATOR.LOG-only"
+else
+    ok "no %OVMX-*-KMOD line on the console -- including the kernel's own module-taint warning, which the bridge now logs, never broadcasts (vms-32a round 3)"
+fi
+# ...and no bare/raw Linux dmesg-shaped noise reached the console either
+# (the specific strings CI's failure quoted, from either bridge facility).
+for NOISE in 'Loaded X.509 cert' 'Key type' '_CPC object is not present' \
+             'hrtimer: interrupt took' 'taints kernel' 'tainting kernel'; do
+    if printf '%s\n' "$FID_FULL" | grep -qF "$NOISE"; then
+        bad "kernel-substrate noise ('$NOISE') reached the console in ANY form -- must be OPERATOR.LOG-only (PR #365)"
+    else
+        ok "no '$NOISE' noise on the console (absent this run, or correctly routed to OPERATOR.LOG only)"
+    fi
+done
+
+# --- 1d. THE CONSOLE SEQUENCE MATCHES THE PINNED ORACLE SHAPE, INLINE ------
+# The authoritative check is tests/qemu/test_boot_conformance.sh (run
+# separately, same image); this is a lighter-weight inline corroboration on
+# THIS run's own transcript, using the same token-extraction shape, so a
+# regression here is caught by this test too, not only by the sibling.
+BOOT_TOKENS=$(printf '%s\n' "$FID_FULL" | \
+    grep -oE '%[A-Z][A-Z0-9_]*-[A-Z]-[A-Z0-9_]+|OpenVMX V[0-9]|Username:' | \
+    sed -E 's/^OpenVMX V[0-9]$/__BANNER__/; s/^Username:$/__USERNAME__/' | \
+    sed -n '1,/^__USERNAME__$/p')
+EXPECTED_TOKENS='%OVMX-I-EXEC
+__BANNER__
+%OVMX-I-SYSDISK
+%OVMX-I-MOUNTED
+%OVMX-I-SCSNODE
+%STDRV-I-STARTUP
+%OVMX-I-EXEC
+%INSTALL-I-ADDED
+%INSTALL-I-ADDED
+%INSTALL-I-ADDED
+%INSTALL-I-ADDED
+%INSTALL-I-ADDED
+%INSTALL-I-ADDED
+%INSTALL-I-ADDED
+%RUN-S-PROC_ID
+__USERNAME__'
+if [ "$BOOT_TOKENS" = "$EXPECTED_TOKENS" ]; then
+    ok "console facility+ident token sequence matches the pinned oracle-derived shape exactly (vms-1fb/vms-32a)"
+else
+    bad "console token sequence diverges from the pinned oracle-derived shape"
+    echo "  --- diff (expected vs actual) ---"
+    diff <(printf '%s\n' "$EXPECTED_TOKENS") <(printf '%s\n' "$BOOT_TOKENS") | sed 's/^/    /' || true
+fi
+
 # --- 2. Log in as SYSTEM -----------------------------------------------------
 LOGIN_OFF=$(wc -c <"$LOG")
 send 'SYSTEM'
@@ -262,6 +361,70 @@ if [ "$ROW_COUNT" -ge 2 ]; then
 else
     bad "SHOW SYSTEM lists only $ROW_COUNT row(s) -- JOB_CONTROL is not a separate process"
 fi
+
+# --- 5. THE OPCOM RECORD FORMAT, oracle-exact (vms-32a) --------------------
+# docs/design-opcom-executive-logging.md sec6. REQUEST is the cheapest DCL
+# command that calls sys$sndopr (src/vmsdcl/dcl_cmd_misc.c cmd_request), so
+# it is used here to make a real record land in OPERATOR.LOG, then TYPE
+# reads that file back over the SAME console session this test already
+# drives -- proving the format against the actual file on the actual mastered
+# image, not a unit-test fixture.
+REQ_OFF=$(wc -c <"$LOG")
+send 'REQUEST "vms-32a opcom format probe"'
+if wait_for '%OPCOM-I-RQSTPEND' "$CMD_TIMEOUT" "$REQ_OFF"; then
+    ok "REQUEST accepted (a real sys\$sndopr record was written)"
+else
+    dump_and_die "REQUEST never confirmed (%OPCOM-I-RQSTPEND missing)"
+fi
+TYPE_OFF=$(wc -c <"$LOG")
+send 'TYPE SYS$MANAGER:OPERATOR.LOG'
+if wait_for 'vms-32a opcom format probe' "$CMD_TIMEOUT" "$TYPE_OFF"; then
+    ok "OPERATOR.LOG contains this run's REQUEST text"
+else
+    dump_and_die "TYPE SYS\$MANAGER:OPERATOR.LOG never showed the REQUEST text"
+fi
+OPLOG_SEG=$(segment_since "$TYPE_OFF")
+# Banner: exactly eleven '%', two spaces, OPCOM, two spaces, the timestamp
+# (DD-MMM-YYYY HH:MM:SS.ss, month upper-case 3-letter), two spaces, eleven
+# '%' -- oracle-exact per the lab-Alpha capture in the design doc.
+if printf '%s\n' "$OPLOG_SEG" | grep -qE '^%%%%%%%%%%%  OPCOM  [0-9]{2}-[A-Z]{3}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{2}  %%%%%%%%%%%$'; then
+    ok "OPERATOR.LOG's OPCOM banner is oracle-exact (eleven '%', boxed timestamp)"
+else
+    bad "OPERATOR.LOG's OPCOM banner did not match the oracle-exact shape"
+fi
+# Body line 2: "Request N, from user SYSTEM on <the real node>" -- not the
+# old hardcoded "on node OVMX" literal. This image's SCSNODE is unconfigured
+# (factory default), so the real node name IS still "OVMX" here -- but
+# reached through ovmx_node_name()/SCSNODE, not a string constant baked into
+# sys_operator.c (see the design doc sec6 for why that distinction matters
+# on a clustered node with a real configured name).
+if printf '%s\n' "$OPLOG_SEG" | grep -qE '^Request [0-9]+, from user SYSTEM on OVMX$'; then
+    ok "OPERATOR.LOG's Request line names the real SCSNODE (SYSTEM on OVMX), not a hardcoded literal"
+else
+    bad "OPERATOR.LOG's Request line did not match 'Request N, from user SYSTEM on OVMX'"
+fi
+
+# --- 6. THE /dev/kmsg BRIDGE'S LINES ACTUALLY LAND IN OPERATOR.LOG
+# (vms-32a, round 3) -- the positive half of "console is silent, but the
+# information is not lost." OPERATOR.LOG accumulates from the start of
+# boot (opened "a"), so this same TYPE dump (OPLOG_SEG, above) also carries
+# whatever the bridge wrote minutes earlier during bare_metal_init() --
+# MEASURED reliably present across repeated manual boots, not assumed:
+# vms.ko's device-table/identity/logical-name/mailbox events and vmsfs.ko's
+# own mount events. (The very first one or two records emitted in the brief
+# window before vmsfs's path resolution comes up can land in the /tmp
+# fallback instead -- same disclosed timing edge sys$sndopr's own writer
+# has always had, see sys_operator.c -- so this checks the idents observed
+# reliably present, not literally every one of the ~10 vms.ko/vmsfs.ko
+# lines a boot emits.)
+for MUST_HAVE in '^%OVMX-I-SYSID, ' '^%OVMX-I-LNM, ' '^%OVMX-I-MBX, ' \
+                  '^%OVMX-I-VMSFS, '; do
+    if printf '%s\n' "$OPLOG_SEG" | grep -qE "$MUST_HAVE"; then
+        ok "OPERATOR.LOG contains the kmsg-bridge line matching '$MUST_HAVE' (vms-32a round 3)"
+    else
+        bad "OPERATOR.LOG is missing the kmsg-bridge line matching '$MUST_HAVE' -- the bridge did not reach the real file"
+    fi
+done
 
 # --- Results ---
 echo ""

@@ -154,7 +154,12 @@ if [ ! -s "$RECORD" ]; then
     echo "vms-2d37 OPCOM record body gate: 0 passed, 1 failed"
     exit 1
 fi
-BODY=$(grep -v '^%%OPCOM' "$RECORD" | grep -v '^[[:space:]]*$' | head -1)
+# The record now spans THREE lines (rd vms-32a, oracle-exact OPCOM format:
+# docs/design-opcom-executive-logging.md): the boxed banner
+# ("%%%%%%%%%%%  OPCOM  <ts>  %%%%%%%%%%%"), then "Request N, from user U
+# on N", then the message body. Both header lines are skipped so BODY is
+# the actual payload, not either header line.
+BODY=$(grep -v '^%%%%%%%%%%%  OPCOM  ' "$RECORD" | grep -vE '^Request [0-9]+, from user ' | grep -v '^[[:space:]]*$' | head -1)
 
 check() {
     if [ "$1" = "ok" ]; then
@@ -181,10 +186,17 @@ check "$r" "the body contains no control characters" \
       "the ^A^A corruption returning in any spelling -- the opcdef header being
                  copied as if it were text"
 
-# 3. the header line survived the change
-if grep -qE '^%%OPCOM, .*, request [0-9]+ from user .* on node ' "$LOG"; then r=ok; else r=no; fi
-check "$r" "the %%OPCOM header line is still well-formed" \
-      "a body fix that disturbed the header rd vms-cb5 round 3 fixed separately"
+# 3. the header lines survived the change -- both the boxed banner (exactly
+#    eleven '%', "OPCOM", the timestamp, eleven '%') and the "Request N,
+#    from user U on N" body-line-2 that follows it immediately.
+if grep -qE '^%%%%%%%%%%%  OPCOM  [0-9]{2}-[A-Z]{3}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{2}  %%%%%%%%%%%$' "$LOG" \
+    && grep -qE '^Request [0-9]+, from user .* on .+$' "$LOG"; then
+    r=ok
+else
+    r=no
+fi
+check "$r" "the OPCOM header (banner + Request line) is still well-formed" \
+      "a body fix that disturbed the header rd vms-cb5 round 3 fixed separately, or the oracle-exact format rd vms-32a introduced regressing"
 
 echo ""
 echo "vms-2d37 OPCOM record body gate: $passed passed, $failed failed"

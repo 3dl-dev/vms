@@ -86,6 +86,15 @@
 #include "vmsfs/filespec.h"
 #define OPERATOR_LOG_PATH VMS_OPERATOR_LOG
 
+/*
+ * ovmx_node_name() -- the real SCSNODE-configured node identity (falling
+ * back to OVMX's own default when unconfigured), the SAME accessor
+ * SYI$_SCSNODE, F$GETSYI("SCSNODE") and SHOW SYSTEM's banner already use.
+ * The OPCOM header used to hardcode the literal string "OVMX" here instead
+ * (rd vms-32a) -- see format_opcom_header() below.
+ */
+#include "ovmx_identity.h"
+
 /* Fallback operator log (writable in container environments) */
 #define OPERATOR_LOG_FALLBACK "/tmp/OPERATOR.LOG"
 
@@ -119,6 +128,32 @@ static void format_vms_timestamp(char *buf, size_t bufsz)
              tm->tm_year + 1900,
              tm->tm_hour, tm->tm_min, tm->tm_sec,
              hundredths);
+}
+
+/*
+ * THE OPCOM BANNER, ORACLE-EXACT (rd vms-32a; docs/design-opcom-executive-
+ * logging.md sec2/sec6). Observed verbatim on lab-Alpha (OpenVMS Alpha
+ * V8.4):
+ *
+ *     %%%%%%%%%%%  OPCOM  12-AUG-2026 13:21:35.77  %%%%%%%%%%%
+ *
+ * -- eleven '%', two spaces, "OPCOM", two spaces, the timestamp, two
+ * spaces, eleven '%'. This REPLACES the one-line "%%OPCOM, <ts>, request N
+ * from user X on node OVMX" shape this function used to write, which had
+ * neither the boxed banner nor a real node name (the "OVMX" was a hardcoded
+ * literal, not SCSNODE).
+ *
+ * OPCOM_BANNER_HASHES is a plain string constant -- not a printf format
+ * string being interpreted here, only ever passed through a "%s" slot --
+ * so its eleven '%' characters cannot silently become a different count
+ * under a future edit that adds or removes a level of %%-escaping.
+ */
+#define OPCOM_BANNER_HASHES "%%%%%%%%%%%"
+
+static void format_opcom_banner(char *buf, size_t bufsz, const char *timestamp)
+{
+    snprintf(buf, bufsz, "%s  OPCOM  %s  %s",
+             OPCOM_BANNER_HASHES, timestamp, OPCOM_BANNER_HASHES);
 }
 
 /*
@@ -261,6 +296,11 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
     char username[VMS_USERNAME_SIZE];
     get_current_username(username, sizeof(username));
 
+    /* The real configured node identity (SYSGEN SCSNODE, falling back to
+     * OVMX's own default) -- not a hardcoded "OVMX" literal. */
+    char node[OVMX_IDENTITY_MAXLEN];
+    ovmx_node_name(node, sizeof(node));
+
     /* Thread-safe static request counter */
     static volatile unsigned int req_count = 0;
     unsigned int this_req = __atomic_add_fetch(&req_count, 1, __ATOMIC_SEQ_CST);
@@ -270,9 +310,18 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
     if (!log)
         return SS$_FILACCERR;
 
-    /* Write OPCOM header */
-    fprintf(log, "%%%%OPCOM, %s, request %u from user %s on node OVMX\n",
-            timestamp, this_req, username);
+    /*
+     * Write the OPCOM header, oracle-exact (see format_opcom_banner()
+     * above): the boxed banner line, then "Request N, from user U on N" --
+     * the numbered-request body-line-2 variant, preserved rather than
+     * replaced with the bare "Message from user U on N" form, because
+     * every sys$sndopr call in this tree already assigns a request number
+     * (this same req_count counter, unchanged by this fix).
+     */
+    char banner[64];
+    format_opcom_banner(banner, sizeof(banner), timestamp);
+    fprintf(log, "%s\n", banner);
+    fprintf(log, "Request %u, from user %s on %s\n", this_req, username, node);
 
     /* Write message body (strip trailing whitespace) */
     size_t msglen = strlen(msgtext);
@@ -414,12 +463,32 @@ uint32_t sys$brkthruw(uint32_t efn,
                         (size_t)(blen > 0 ? blen : 0));
         }
 
-        /* Also log to OPERATOR.LOG */
+        /*
+         * Also log to OPERATOR.LOG, in the SAME oracle-exact shape
+         * sys$sndopr writes (rd vms-32a) -- one file, one OPCOM record
+         * format, not two competing ones. A broadcast carries no request
+         * number (it is not a repliable request), so this uses the plain
+         * "Message from user U on N" body-line-2 variant rather than
+         * sndopr's "Request N, ..." form -- the caller's identity comes
+         * from the same executive-row read sndopr uses, not from the
+         * target terminal (which the OLD line here wrote into the user
+         * field by mistake).
+         */
         FILE *log = open_operator_log();
         if (log) {
-            fprintf(log, "%%%%OPCOM BROADCAST to %s at %s:\n%s\n\n",
-                    target_devnam[0] ? target_devnam : "TT",
-                    timestamp, msgtext);
+            char btimestamp[32];
+            char buser[VMS_USERNAME_SIZE];
+            char bnode[OVMX_IDENTITY_MAXLEN];
+            char bbanner[64];
+
+            format_vms_timestamp(btimestamp, sizeof(btimestamp));
+            get_current_username(buser, sizeof(buser));
+            ovmx_node_name(bnode, sizeof(bnode));
+            format_opcom_banner(bbanner, sizeof(bbanner), btimestamp);
+
+            fprintf(log, "%s\n", bbanner);
+            fprintf(log, "Message from user %s on %s\n", buser, bnode);
+            fprintf(log, "%s\n\n", msgtext);
             fclose(log);
         }
     } else {

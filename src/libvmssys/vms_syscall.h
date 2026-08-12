@@ -13,6 +13,17 @@
 
 #include "vms_types.h"
 
+#if defined(__NetBSD__)
+/*
+ * OVMX/NetBSD SYSKRNL (epic vms-8e8): the vms_sys_* wrappers resolve to NetBSD
+ * libc calls rather than raw kernel traps -- the VAX backend LINKS NetBSD libc
+ * (docs/design-ovmx-netbsd-syskrnl.md §4.1). This is the whole file on NetBSD;
+ * none of the Linux syscall-number tables or asm-trampoline wrappers below are
+ * compiled.
+ */
+#include "arch/vax/vms_syscall_netbsd.h"
+#else  /* raw-freestanding Linux/Alpha path */
+
 /* ================================================================
  * Syscall numbers (architecture-specific)
  * ================================================================ */
@@ -557,5 +568,7 @@ static inline int vms_syscall_errno(long ret)
 {
     return (int)(-ret);
 }
+
+#endif /* !__NetBSD__ */
 
 #endif /* _VMS_SYSCALL_H */

@@ -224,7 +224,21 @@ $ WRITE SYS$OUTPUT "    SET SCSNODE ""''OVMX_SCSNODE'"""
 $ WRITE SYS$OUTPUT "    SET SCSSYSTEMID ''OVMX_SCSID'"
 $ WRITE SYS$OUTPUT "    WRITE CURRENT"
 $ WRITE SYS$OUTPUT "    EXIT"
-$ DEFINE/JOB SYS$SYSTEM 'OVMX_TARGET'[SYSEXE]
+$! Redirect SYS$SYSTEM at the TARGET's ROOTED system directory
+$! 'OVMX_TARGET'[SYS0.SYSCOMMON.SYSEXE], NOT the flat 'OVMX_TARGET'[SYSEXE]
+$! (vms-597): PRODUCT INSTALL lays the target as a rooted concealed volume
+$! (vms-96ec/#392), so the target's own SYSGEN.EXE and OVMXVMSSYS.PAR live
+$! under <target>:[SYS0.SYSCOMMON.SYSEXE] -- exactly where the booted target
+$! composes SYS$SYSTEM (SYS$SYSROOT:[SYSEXE] over the concealed
+$! SYS$SYSDEVICE:[SYS0.SYSCOMMON.], lnm_defaults.c). RUN resolves
+$! SYS$SYSTEM:SYSGEN.EXE through this JOB logical, so it finds the target's
+$! real image (the old flat [SYSEXE] named a directory the rooted target
+$! does not have -> %DCL-E-IVIMAGE, image not found - SYS$SYSTEM:SYSGEN.EXE).
+$! WRITE CURRENT then lands the target's own OVMXVMSSYS.PAR through the same
+$! logical -- the SAME file the booted system reads SCSNODE/SCSSYSTEMID from.
+$! (This mirrors the identical rooted-path fix vms-963 applies to the
+$! AUTHORIZE step above; the two edits are in separate blocks.)
+$ DEFINE/JOB SYS$SYSTEM 'OVMX_TARGET'[SYS0.SYSCOMMON.SYSEXE]
 $ RUN SYS$SYSTEM:SYSGEN.EXE
 $ DEFINE/JOB SYS$SYSTEM SYS$SYSROOT:[SYSEXE]
 $SKIP_SCS:

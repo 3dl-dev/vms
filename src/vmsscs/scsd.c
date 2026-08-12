@@ -1710,6 +1710,52 @@ static int ovmx_rejoin_cleanleave(void)
 }
 
 /*
+ * ovmx_join_all_members - vms-694 (spec 4(O.35)): THE TESTED-AND-REFUTED
+ * RETURN-SIDE TOTAL-CONNECTIVITY HYPOTHESIS. Default OFF. This is NOT a fix --
+ * it is the bisectable NEGATIVE CONTROL that GROUNDS the 4(O.35) verdict that a
+ * deterministic return-side reclaim-engagement fix is NOT OVMX-forceable.
+ *
+ * WHAT 4(O.35) ISOLATED (single-factor first-join-vs-return bracket on virgin
+ * lab-2, VAX F$GETSYI("CLUSTER_NODES") + DCL SHOW CLUSTER oracles):
+ *   - The member reclaims its departed CSB PROMPTLY and deterministically: SHOW
+ *     CLUSTER for the returner goes BRK_NON -> NEW within ~4 s (a fresh CSB, per
+ *     Davis pp. 7-24/7-25). The member is NOT "not engaging"; it reclaims.
+ *   - A return is admitted (CLUSTER_NODES 2->3) IFF OVMX's VMS$VAXcluster joiner
+ *     VC reaches OPEN with BOTH members -- the Rule of Total Connectivity (Davis
+ *     p. 7-39). WIN (Release): both members open their OWN SCS$DIRECTORY to OVMX
+ *     and both joiner VCs reach OPEN via the member's RCV_ACCEPT_REQ, then the
+ *     coordinator runs op 0x03 COMMIT -> op 0x05 -> op 0x06 MEMB. LOSE (Debug):
+ *     only ONE member opens SCS$DIRECTORY to OVMX and only one VC reaches OPEN;
+ *     the member's NEW CSB stalls, CLUSTER_NODES stays 2.
+ *   - THE COMPLETING STEP IS MEMBER-DRIVEN. A joiner VC reaches OPEN only when
+ *     the member sends RCV_ACCEPT_REQ (its SYSAP accepts) -- which the member
+ *     does only after IT has opened its own SCS$DIRECTORY to OVMX, i.e. once its
+ *     CM has re-engaged the returner. On a slow return only one member's CM does
+ *     this; the second's non-engagement is its residual-CSB reclaim state.
+ *
+ * WHY THIS SWITCH REFUTES THE OBVIOUS FIX. If total connectivity were merely a
+ * matter of OVMX opening a joiner CONNECT-REQ to both members, forcing it would
+ * win. It does NOT. Engaged, this opens the joiner VC to EVERY start_acked member
+ * off OVMX's own clock. Measured (o35proof, patched Debug daemon, 10 consecutive
+ * returns each from a confirmed CLUSTER_NODES=2): 0/10 wins. The pre-emptive
+ * CONNECT-REQ gets a transport CONNECT_RESPONSE (VC -> CONNECT ACK) but the
+ * member NEVER sends ACCEPT_REQUEST, because ACCEPT_REQUEST is the member CM's
+ * decision, gated on its reclaim -- so both VCs stall in CONNECT ACK and the
+ * return reliably LOSES (worse than the unpatched daemon, which at least lands
+ * the one member-prompted VC). OVMX cannot force the member's ACCEPT_REQUEST.
+ *
+ * ENGAGE: OVMX_JOIN_ALL_MEMBERS=1 (for reproducing the refutation only; never a
+ * production fix). Read fresh every call. No-op under OVMX_PURE_SERVER /
+ * OVMX_NO_OWN_VC / the join sequencer. NOT the op-0x0d crash class (spec
+ * 4(O.29)) -- it is the plain joiner CONNECT-REQ OVMX already emits.
+ */
+static int ovmx_join_all_members(void)
+{
+    const char *on = getenv("OVMX_JOIN_ALL_MEMBERS");
+    return (on != NULL && on[0] == '1' && on[1] == '\0');
+}
+
+/*
  * vms-2f3: decide whether this op 0x02 takes the REJOIN form, and fill it.
  *
  * Every condition here is a fact we can check, not a preference:
@@ -7608,6 +7654,30 @@ static void scsd_join_retx_for_peer(struct scsd_rx *rx, struct peer_state *ps, l
 {
     if (rx == NULL || ps == NULL) {
         return;
+    }
+
+    /* vms-694 (spec 4(O.35)) NEGATIVE CONTROL (default OFF; NOT a fix). Pre-emptively
+     * open OVMX's VMS$VAXcluster joiner VC to every member already at VC OPEN
+     * (start_acked -> an open circuit), off the main-loop clock, instead of waiting
+     * for the member-driven SCS$DIRECTORY prompt. This TESTS whether the win-vs-lose
+     * one-VC-vs-two-VC difference is OVMX-forceable -- and REFUTES it: the member
+     * transport-accepts (CONNECT ACK) but never sends ACCEPT_REQUEST for a connect
+     * it did not itself solicit, so the VC stalls and the return LOSES 0/10 (see
+     * ovmx_join_all_members()). Kept as the bisectable control that grounds the
+     * 4(O.35) verdict. A no-op under pure-server / no-own-VC / the join sequencer. */
+    if (ovmx_join_all_members() && rx->do_connect && !rx->join_seq_enabled &&
+        ps->start_acked && !ps->joiner_connected && !ps->joiner_connect_sent &&
+        getenv("OVMX_PURE_SERVER") == NULL && getenv("OVMX_NO_OWN_VC") == NULL) {
+        if (send_joiner_connect_request(rx->sock, rx->ifindex, rx->cfg, ps, NULL,
+                                        rx->our_hw_mac, rx->our_src_logical)) {
+            rx->connect_req_sent++;
+            log_ts(stdout);
+            printf(" SCSD-I-CONNREQ, sent OUR VMS$VAXcluster CONNECT-REQUEST"
+                   " local_conid=0x%08X seq=%u (spec 4(O.35) all-members"
+                   " total-connectivity)\n",
+                   PS_JOINER_CONID(ps), ps->joiner_req_seq);
+            fflush(stdout);
+        }
     }
 
     if (ps->join_step == JS_IDLE && scsd_joiner_retransmit_pending(rx, ps)) {

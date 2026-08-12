@@ -40,10 +40,30 @@
 #
 # EXPECT: contains:Username
 # EXPECT: contains:Total number of users
-# EXPECT_NOT: contains:Node
 # EXPECT_NOT: contains:_FTA
 # EXPECT_NOT: regex:_[A-Z]{2,3}[0-9]+:
 # EXPECT_NOT: regex:[0-9A-F]{8}
+#
+# --- history (vms-086, superseded the EXPECT_NOT:Node line below) ------
+#
+# This file used to assert EXPECT_NOT: contains:Node. That was never a
+# deliberate "SHOW USERS may not have a Node column" rule -- at the time it
+# was written the command had no Node concept anywhere (the column simply
+# did not exist yet), so the assertion happened to hold rather than proving
+# anything. vms-086 added a real Node column (VSI OpenVMS DCL Dictionary
+# SHOW USERS /FULL entry: Username, Node, Process Name, PID, Terminal --
+# https://www0.mi.infn.it/~calcolo/OpenVMS/ssb71/9996/9996p060.htm), sourced
+# from ovmx_node_name() -- the SAME fact SHOW SYSTEM/SHOW PROCESS already
+# print. The column HEADING prints unconditionally (it is a static string,
+# not a per-row read), so "Node" now legitimately appears in this test's
+# output even with no executive to read -- see the new EXPECT below. What
+# stays load-bearing, and is NOT relaxed here, is that no per-row DATA
+# appears without an executive: no PID (regex:[0-9A-F]{8}), no terminal
+# device name (regex:_[A-Z]{2,3}[0-9]+:), no fabricated node value for a row
+# that does not exist.
+#
+# EXPECT: contains:Node
+# EXPECT: contains:Type
 #
 # --- history (vms-fb9, superseded by the above) -----------------------
 # This file used to read:

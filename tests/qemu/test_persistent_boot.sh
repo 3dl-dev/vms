@@ -19,6 +19,17 @@
 #             overlay code path runs, and %STDRV-I-STARTUP begun PRECEDES the
 #             login (the F1 STDRV-bracket fix), with NO "completed" counterpart.
 #
+#   FIRST-BOOT COMPLETION (vms-649): the same pre-installed disk is booted a
+#             SECOND time and both boots are shown to be materially identical --
+#             each reaches login and %STDRV-I-STARTUP begun, and NEITHER runs any
+#             AUTOGEN / first-boot / one-time-completion phase. The Alpha 8.4
+#             first-boot oracle (docs/oracle/installation-media-vax73-alpha84.md
+#             §5) shows a real target's first boot running exactly such work, but
+#             every step of it brings up a facility OVMX does not implement
+#             (design-vms-faithful-install.md §3.5), so OVMX's first boot is a
+#             justified no-op: the install already produces a fully-configured,
+#             directly-bootable system, and nothing runs once-only.
+#
 #   NEGATIVE (halt control): a BLANK, uninitialized disk -> PID 1 HALTS honestly
 #             with the OVMX-facility SYSINIT mount failure. NO login prompt, NO
 #             install message, NO %STARTUP-W-MOUNTFAIL, NO overlay, NO STDRV
@@ -187,6 +198,44 @@ record "positive: %STDRV-I-STARTUP begun precedes the login prompt (F1 bracket)"
 BANNER_POS=$(printf '%s' "$OUT_POS" | grep -aboE 'OpenVMX V[0-9]' | head -1 | cut -d: -f1)
 if [ -n "$BANNER_POS" ] && [ -n "$BEGUN_POS" ] && [ "$BANNER_POS" -lt "$BEGUN_POS" ]; then rc=0; else rc=1; fi
 record "positive: OS banner precedes %STDRV-I-STARTUP begun (vms-1fb banner-first)" "$rc"
+echo ""
+
+# --- FIRST-BOOT COMPLETION, measured (vms-649) -----------------------------
+# The Alpha 8.4 first-boot oracle (docs/oracle/installation-media-vax73-
+# alpha84.md §5) shows a real OpenVMS target's first boot running one-time
+# completion work -- AUTOGEN's five phases (GETDATA/GENPARAMS/GENFILES/
+# SETPARAMS/REBOOT), an automatic reboot, then a second boot that first brings
+# up the security server, ACME server and audit-server database and populates
+# the rights database. EVERY one of those steps is the first-time bring-up of a
+# facility OVMX does not implement (design-vms-faithful-install.md §3.5 maps
+# each, with citations): OVMX has no AUTOGEN (its parameter file ships in the
+# kit and SCSNODE is set at install), no security/ACME/audit server, and the
+# four rights identifiers the oracle adds all name absent facilities that
+# RIGHTSLIST.DAT already excludes by Rule 10. So OVMX's install produces a
+# fully-configured, directly-bootable system and its first boot has NO honest
+# completion work to run -- faking any would be the INV-6/Rule-10 LARP the
+# authenticity invariants forbid.
+#
+# This is the ground-source proof of that justified no-op: the installed
+# system's FIRST boot (OUT_POS above) already reached a login prompt, and it
+# ran NO first-boot/AUTOGEN completion phase; booting the SAME disk AGAIN is
+# materially identical -- no boot-1-only phase a later boot skips. FBRE matches
+# any AUTOGEN / first-boot / one-time-completion marker; it must be absent on
+# BOTH boots. (If a future OVMX facility ever needs a genuine first-boot phase,
+# these become the negative-control guards that catch a fake one.)
+echo "--- FIRST-BOOT COMPLETION (vms-649): the installed system's first boot is a justified no-op ---"
+FBRE='AUTOGEN|GETDATA phase|GENPARAMS phase|GENFILES phase|SETPARAMS phase|first[ -]?boot|FIRSTBOOT|one-time completion'
+if printf '%s' "$OUT_POS" | grep -qaiE "$FBRE"; then rc=1; else rc=0; fi
+record "first-boot: the installed system's FIRST boot runs NO AUTOGEN/first-boot completion phase (vms-649 no-op)" "$rc"
+
+# Boot the SAME persistent disk a second time. First-boot completion, such as
+# it is (nothing), must not re-run, and the two boots must be structurally
+# identical -- proving there is no deferred one-time configuration.
+OUT_POS2=$(run_qemu "$INITRD" "$POS_DISK")
+check "second boot: reaches the login prompt again (first boot consumed no one-shot)" "$OUT_POS2" "Username:"
+check "second boot: %STDRV-I-STARTUP begun printed again"                             "$OUT_POS2" "%STDRV-I-STARTUP, OpenVMX startup begun"
+if printf '%s' "$OUT_POS2" | grep -qaiE "$FBRE"; then rc=1; else rc=0; fi
+record "second boot: runs NO AUTOGEN/first-boot completion phase (identical to boot 1 -- no boot-1-only phase)" "$rc"
 echo ""
 
 # --- NEGATIVE (halt control): blank disk -> honest halt --------------------

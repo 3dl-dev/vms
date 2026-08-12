@@ -123,6 +123,20 @@ output=$(echo "SHOW XYZZY_INVALID" | $VMSDCL 2>&1)
 check_vms_format "show invalid keyword" "$output"
 assert_ident "show invalid keyword" "%DCL-E-IVKEYW" "$output"
 
+# Test 12 (vms-a10): SET PROTECTION on a nonexistent file -> %RMS-E-PRV
+# (dcl_cmd_set.c cmd_set_protection: chmod() fails with ENOENT and the error
+# path formats vms_strerror(errno)). This exercises one of the three
+# vms_strerror() call sites in dcl_cmd_set.c that had NO prototype in scope
+# because the file never included dcl/vms_messages.h -- so vms_strerror() was
+# assumed to return int, its 64-bit char* was truncated to 32 bits, and the
+# %s dereference in dcl_error() SEGFAULTED (same defect class as the RENAME
+# crash fixed for dcl_cmd_file.c in vms-fe21/#375). With the include, this
+# path returns a clean %RMS-E-PRV instead of crashing. Pre-fix, $VMSDCL dies
+# on SIGSEGV, emits no %-line, and assert_ident fails -> VMS_MSG_FORMAT_FAIL.
+output=$(echo "SET PROTECTION (S:RWED,O:RW,G:R,W:) NONEXISTENT_FILE_QWERTY.TXT" | $VMSDCL 2>&1)
+check_vms_format "set protection nonexistent" "$output"
+assert_ident "set protection nonexistent" "%RMS-E-PRV" "$output"
+
 if [ $FAILURES -eq 0 ]; then
     echo "VMS_MSG_FORMAT_OK"
 else

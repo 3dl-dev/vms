@@ -187,12 +187,53 @@ of "the installed system's first boot completes configuration": it is already
 complete, and a second boot changes nothing. (The proof rides
 `test_persistent_boot.sh`'s already-bootable mastered `ovmx-distrib.img` rather
 than a menu-installed target because `PRODUCT INSTALL /DESTINATION=<dev>`
-currently extracts the kit into a **flat** `<dev>:[SYSEXE]` layout instead of
+originally extracted the kit into a **flat** `<dev>:[SYSEXE]` layout instead of
 the rooted `[SYS0.SYSCOMMON.SYSEXE]` a booted system disk requires — so a
-`/DESTINATION`-installed target is not yet bootable as a system disk. That is a
-separate install-path gap in `src/product/product.c pd_kit_target_path()`,
-owned by the PRODUCT-INSTALL/menu work (vms-df9/vms-dcf) and gating the vms-37f
-release e2e, **not** a first-boot-completion issue — filed accordingly.)
+`/DESTINATION`-installed target was not bootable as a system disk. That
+install-path gap in `src/product/product.c pd_kit_target_path()` is **fixed by
+vms-96ec** — see §3.6 below, which also adds the missing gate that boots a
+`/DESTINATION`-installed target; it was never a first-boot-completion issue.)
+### 3.6 FIXED — PRODUCT INSTALL /DESTINATION must lay the rooted concealed layout (vms-96ec)
+
+**Found by vms-649, fixed by vms-96ec.** A booted OpenVMS system disk is
+rooted and concealed: the boot root is `[SYS0.]` and shared files live under
+`[SYS0.SYSCOMMON.]`, so `SYS$SYSTEM:` is `DEV:[SYS0.SYSCOMMON.SYSEXE]`
+(`ovmx_layout.h`: `VMS_SYSEXE`, `VMS_SYSTEM_DIR = /vms/SYS0/SYSCOMMON/SYSEXE`).
+`vmsfs_master` masters `ovmx-distrib.img` in exactly this shape
+(`distro/Dockerfile.bootable`), and STARTUP resolves `SYS$SYSROOT:[SYSEXE]DCL.EXE`
+through it at boot.
+
+`PRODUCT INSTALL /DESTINATION=<dev>` (`src/product/product.c`,
+`pd_kit_target_path()`) originally wrote a **flat** `<mount>:[SYSEXE]…`
+instead — files landed on the volume, but not under the rooted root. A
+`/DESTINATION`-installed target was therefore **not bootable as its own
+system disk**: booted as `DKA0:` it halted `%OVMX-F-SYSINIT` because the
+boot path looked for `SYS$SYSROOT:[SYSEXE]DCL.EXE` under the rooted structure
+and found nothing. This went undetected because no CI e2e booted a
+`/DESTINATION`-installed target *as its own system disk* — every booting
+gate boots the pre-mastered (already-rooted) `ovmx-distrib.img`.
+
+**The fix:** `pd_kit_target_path()` and `pd_db_path()` now write
+`<mount>/SYS0/SYSCOMMON/<bracket>/…` for `/DESTINATION` just as they already
+did for the default (currently-running) system — the same rooted, concealed
+structure a mastered disk has. The `SYS0/SYSCOMMON` prefix lives on the
+volume, so it is mount-point-independent: bytes installed at
+`/mnt/dkaNNN/SYS0/SYSCOMMON/…` resolve correctly once the volume is booted as
+`DKA0: → /vms`. The OS kit already carries every directory a boot needs
+(`SYSEXE`/`SYSLIB`/`SYSMGR`/`SYSHLP`/`SYS$STARTUP`, including `SYSUAF.DAT`,
+`STARTUP.COM`, and the `SYS$STARTUP` phase data), so a rooted kit-install is
+boot-structurally identical to a mastered disk. `[SYSTMP]`/`[USERS]` are not
+in the kit but are non-fatal for boot-to-login (LOGINOUT's `chdir` and
+PROVISION's `mkdir` are non-fatal, and SYSTEM's home `[SYSMGR]` is in the
+kit); the `%RMS-E-DNF` those absences would cause surfaces only in a
+data-writing app, not at login.
+
+**The coverage that was missing** is now `tests/qemu/test_install_boot_e2e.sh`
+(runner `run_install_boot_e2e.sh`, CI job `install-boot-e2e`): it PRODUCT
+INSTALLs the OS kit onto a blank INITIALIZEd disk, then boots THAT disk as the
+sole `DKA0:` system disk with the bootstrap-only slim initramfs and reaches a
+SYSTEM login — red on the unfixed (flat) tree (`%OVMX-F-SYSINIT`), green
+after. It runs for real in CI (not opt-in cover); a SKIP is a hard failure.
 
 ## 4. Decisions taken vs. reserved
 

@@ -29,25 +29,30 @@
  *
  * WHERE FILES LAND (OVMX-invented policy, Rule 8 -- VSI has never
  * published where PCSI actually copies target-system files on disk below
- * the visible SYS$COMMON:[SYSEXE] logical, so this is OVMX's own choice,
- * not a fact about PCSI):
- *   - No /DESTINATION (installing onto the currently-running system):
- *     kit entries land under this build's fixed SYS0/SYSCOMMON layout
- *     (ovmx_layout.h's SYSDISK_MOUNT "/SYS0/SYSCOMMON/" + the entry's own
- *     [SYSEXE]/[SYSLIB]/... bracket), matching VMS_SYSTEM_DIR's own shape
- *     and the tree distro/Dockerfile.bootable already masters DKA0: from.
- *   - /DESTINATION=<dev>: the target is a bare, freshly-INITIALIZEd volume
- *     with no SYS0/SYSCOMMON hierarchy of its own (see
- *     tests/qemu/test_mount_e2e.sh -- MOUNT gives a flat root), so entries
- *     land flat at <mount-point>/<bracket-dir>/<name> -- exactly the same
- *     mapping ovmx_kit_pack's own `extract` mode already uses (this is
- *     "extract, but through a live vmsfs mount with real protection/UIC
- *     and a product-database record" rather than a bare host directory).
- * The product database follows the same split: SYS$SYSTEM: means
- * VMS_SYSTEM_DIR on the default target, or <mount-point>/SYSEXE on an
- * explicit /DESTINATION (the destination root's OWN "SYS$SYSTEM:"-shaped
- * directory, matching the kit's own convention of placing SYSEXE content
- * there).
+ * the visible SYS$COMMON:[SYSEXE] logical, so the choice of a rooted vs
+ * flat on-disk shape is OVMX's own, not a fact about PCSI):
+ *   Both the default (currently-running system) and an explicit
+ *   /DESTINATION lay the kit into the SAME rooted, concealed system-disk
+ *   structure -- SYS0/ the boot root, SYS0/SYSCOMMON/ the shared common
+ *   tree -- with the entry's own [SYSEXE]/[SYSLIB]/... bracket hanging off
+ *   SYS0/SYSCOMMON/. This mirrors ovmx_layout.h's VMS_SYSEXE ==
+ *   DEV:[SYS0.SYSCOMMON.SYSEXE] and the tree distro/Dockerfile.bootable
+ *   masters DKA0: from, so a /DESTINATION-installed volume is boot-
+ *   structurally identical to a mastered disk and boots AS ITS OWN system
+ *   disk (vms-96ec, docs/design-vms-faithful-install.md §3.5). Before this
+ *   fix, /DESTINATION wrote a FLAT <mount>/<bracket>/<name> with no
+ *   SYS0/SYSCOMMON root: files landed on the volume but the target was NOT
+ *   bootable -- STARTUP resolves SYS$SYSROOT:[SYSEXE]DCL.EXE through the
+ *   rooted structure (VMS_SYSTEM_DIR = /vms/SYS0/SYSCOMMON/SYSEXE) and
+ *   found nothing, halting %OVMX-F-SYSINIT. The SYS0/SYSCOMMON prefix
+ *   lives on the volume, so it is mount-point-independent: the same bytes
+ *   installed at /mnt/dkaNNN/SYS0/SYSCOMMON/... resolve correctly once the
+ *   volume is booted as DKA0: -> /vms.
+ * The product database follows the file layout: SYS$SYSTEM: means
+ * VMS_SYSTEM_DIR on the default target, or SYS0/SYSCOMMON/SYSEXE off the
+ * destination's own mount root on an explicit /DESTINATION (the same
+ * SYS$SYSTEM: the installed files use), so PRODUCT SHOW PRODUCT
+ * /DESTINATION reads the database back from where INSTALL wrote it.
  *
  * SECURITY (vms-df9 constraint #2): every file's protection/owner-UIC
  * comes from its `ovmx_kit_entry` (kit metadata written by
@@ -241,23 +246,55 @@ static int pd_resolve_destination(const char *destarg, struct pd_dest *dest)
     return 0;
 }
 
-/* Where a kit entry's relative path ("SYSEXE/DCL.EXE") lands. */
+/*
+ * Where a kit entry's relative path ("SYSEXE/DCL.EXE") lands.
+ *
+ * BOTH the default (currently-running system) and an explicit /DESTINATION
+ * lay the kit into the SAME rooted, concealed system-disk structure a
+ * mastered ovmx-distrib.img already has (vms-96ec, vms-649,
+ * docs/design-vms-faithful-install.md §3.5): SYS0/ is the boot root and
+ * SYS0/SYSCOMMON/ the shared common tree, so an entry's own bracket
+ * ("SYSEXE", "SYSLIB", ...) hangs off SYS0/SYSCOMMON/, exactly matching
+ * ovmx_layout.h's VMS_SYSEXE == DEV:[SYS0.SYSCOMMON.SYSEXE] and the tree
+ * distro/Dockerfile.bootable masters DKA0: from (/vms/SYS0/SYSCOMMON/...).
+ *
+ * This is what makes a /DESTINATION-installed volume BOOTABLE AS ITS OWN
+ * system disk: booting mounts the target as DKA0: -> /vms and STARTUP
+ * resolves SYS$SYSROOT:[SYSEXE]DCL.EXE through VMS_SYSTEM_DIR
+ * (/vms/SYS0/SYSCOMMON/SYSEXE) -- which is precisely where these bytes now
+ * land, because the SYS0/SYSCOMMON prefix lives ON the volume and is
+ * therefore mount-point-independent. Before this fix the /DESTINATION path
+ * wrote a FLAT <mount>/SYSEXE/... with no SYS0/SYSCOMMON root, so the
+ * installed target halted at boot with %OVMX-F-SYSINIT (DCL.EXE absent):
+ * the boot path looked under the rooted structure and found nothing.
+ * Do not reintroduce a flat branch here -- a flat target is not a system
+ * disk (Rule 1: match VMS; INV-6: really bootable, not a flag).
+ */
 static void pd_kit_target_path(const struct pd_dest *dest, const char *relpath,
                                char *out, size_t outsz)
 {
     if (dest->is_default)
         snprintf(out, outsz, "%s/SYS0/SYSCOMMON/%s", SYSDISK_MOUNT, relpath);
     else
-        snprintf(out, outsz, "%s/%s", dest->mount_root, relpath);
+        snprintf(out, outsz, "%s/SYS0/SYSCOMMON/%s", dest->mount_root, relpath);
 }
 
-/* Where SYS$SYSTEM:VMS$PRODUCT_DATABASE.DAT lives for this destination. */
+/*
+ * Where SYS$SYSTEM:VMS$PRODUCT_DATABASE.DAT lives for this destination.
+ * SYS$SYSTEM: is SYSEXE under the common root, so the database sits inside
+ * the SAME rooted structure as every installed file (vms-96ec) -- on the
+ * default target that is VMS_SYSTEM_DIR (/vms/SYS0/SYSCOMMON/SYSEXE), and
+ * on a /DESTINATION target the identical SYS0/SYSCOMMON/SYSEXE off the
+ * target's own mount root, so PRODUCT SHOW PRODUCT /DESTINATION reads it
+ * back from where INSTALL wrote it.
+ */
 static void pd_db_path(const struct pd_dest *dest, char *out, size_t outsz)
 {
     if (dest->is_default)
         snprintf(out, outsz, "%s/%s", VMS_SYSTEM_DIR, PRODUCT_DB_NAME);
     else
-        snprintf(out, outsz, "%s/SYSEXE/%s", dest->mount_root, PRODUCT_DB_NAME);
+        snprintf(out, outsz, "%s/SYS0/SYSCOMMON/SYSEXE/%s",
+                 dest->mount_root, PRODUCT_DB_NAME);
 }
 
 /* ================================================================

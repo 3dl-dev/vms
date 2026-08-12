@@ -1690,14 +1690,16 @@ jobs:
   # Job 5: Corpus conformance — compile+run tier1-examples against OVMX
   #
   # This is a GATE with a FALSIFIABLE FLOOR, not just a metric job.
-  #   - It fails on compile/link REGRESSIONS (a program that previously
-  #     passed but now fails compilation) — enforced by run_corpus.sh's
-  #     own exit code.
+  #   - It fails on per-entry REGRESSIONS — enforced by run_corpus.sh's own
+  #     exit code. A baseline run-pass entry that no longer runs clean
+  #     (run-pass -> run-fail/run-crash/link-fail/compile-fail), or a baseline
+  #     compile-pass/run-fail entry that no longer builds, fails the run. This
+  #     catches a single baseline-passing program breaking even when another
+  #     program improves in the same change and holds the aggregate count flat.
   #   - It fails if the RUN-PASS count drops BELOW the committed baseline
   #     floor in tests/conformance/corpus_baseline.json — enforced by the
-  #     "Enforce run-pass floor" step below. This catches run-pass -> run-
-  #     fail/link-fail/compile-fail slides that the compile-only regression
-  #     check does not see.
+  #     "Enforce run-pass floor" step below. Aggregate backstop to the
+  #     per-entry check above.
   #
   # The floor is exactly what run_corpus.sh measured on the committed tree
   # (see the baseline's timestamp + summary). It is honest, not inflated:

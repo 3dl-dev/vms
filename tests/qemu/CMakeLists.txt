@@ -553,6 +553,36 @@ set_tests_properties(job_control_console_e2e PROPERTIES
     TIMEOUT 600)
 
 # ---------------------------------------------------------------------------
+# JOB_CONTROL COMPONENT-REGISTRATION NEGATIVE CONTROL, END TO END (vms-2a9).
+#
+# Boots /boot/ovmx-distrib-negctl.img -- a SECOND mastered image
+# distro/Dockerfile.bootable builds from the identical staged system tree
+# as the normal ovmx-distrib.img, with JOB_CONTROL's CONFIG-phase STDRV
+# component registration (SYS$STARTUP:VMS$VMS.DAT) removed and nothing
+# else changed -- and proves the boot still runs STARTUP.COM to completion
+# but never creates JOB_CONTROL (no %RUN-S-PROC_ID) and never reaches a
+# login prompt (JOB_CONTROL is the only thing that creates the console
+# login loop, vms-8d2). This is the negative complement to
+# job_control_console_e2e above: that one proves the registration, when
+# present, produces a real detached process; this one proves the
+# registration is what GATES that creation, not just one path among
+# several. See tests/qemu/test_job_control_negctl.sh's header for the full
+# reasoning, including why this test cannot use the console's own SHOW
+# SYSTEM the way the positive test does.
+#
+# Same opt-in/SKIP convention as the other qemu-full-boot gates: real
+# docker + QEMU boot, gated behind OVMX_QEMU_FULL_E2E=1 so it does not run
+# under a bare `ctest`.
+add_test(
+    NAME job_control_negctl_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_job_control_negctl_e2e.sh
+)
+set_tests_properties(job_control_negctl_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 600)
+
+# ---------------------------------------------------------------------------
 # GENERALIZED RELEASE-ACCEPTANCE GATE (vms-a86f, epic vms-a84 RELEASE
 # ENGINEERING).
 #

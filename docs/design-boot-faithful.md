@@ -332,7 +332,9 @@ against a real QEMU boot rather than assumed, is, in order: `%OVMX-I-EXEC`
 executive", `src/ovmx_provision/ovmx_provision.c` — a different message under
 the same ident, not a repeat) → seven `%INSTALL-I-ADDED` lines
 (`SYSTARTUP_VMS.COM`'s `INSTALL ADD` of every OVMX shareable) →
-`%RUN-S-PROC_ID` (JOB_CONTROL's creation) → `Username:`. The PROVISION.EXE and
+`%RUN-S-PROC_ID` (JOB_CONTROL's creation — an END-phase STDRV component as
+of §3.8/vms-2a9, unchanged in ordering from before that item) → `Username:`.
+The PROVISION.EXE and
 INSTALL ADD messages are outside `ovmx_init.c`'s own audit table above (they
 are not `ovmx_init.c` boot messages), but they are real console output this
 test's sequence extraction — which keys on the `%FACILITY-SEVERITY-IDENT`
@@ -342,6 +344,118 @@ no `%SET-I-NEWAUDSRV`/audit server, no `%SET-I-INTSET`, no job
 termination/accounting block) — OVMX has none of those facilities yet (§5,
 out of scope), and faking their messages to look busier would be the §2.5
 defect in reverse (Rule 10).
+
+### 3.8 vms-2a9: JOB_CONTROL becomes a real STDRV component (2026-08-12)
+
+Implements target-shape item 5 (§4) against the OUTCOME `vms-2a9` states:
+JOB_CONTROL must be created *by the startup phases themselves* — the STDRV
+component-registration mechanism §3.3/§3.4 of `STARTUP.COM`'s own header
+already implements (`RUN_COMPONENTS`, driven by `SYS$STARTUP:VMS$VMS.DAT`)
+— not by a line hardcoded into a site file that happens to run inside a
+phase.
+
+**Before this item:** `SYS$MANAGER:SYSTARTUP_VMS.COM` (the LPMAIN-phase site
+file) directly ran `@SYS$STARTUP:JOB_CONTROL_STARTUP.COM`. Functionally that
+did create a real detached JOB_CONTROL process (`vms-8d2`'s own e2e proof,
+`tests/qemu/test_job_control_console.sh`, still passes unchanged) — but the
+component-registration mechanism `VMS$VMS.DAT` exists to drive had ZERO
+registered entries, so nothing in the phase driver's own data actually
+governed JOB_CONTROL's creation; a manager wanting to disable it would have
+had to edit a site `.COM` file's DCL, not a declarative registration.
+
+**After this item:** `SYS$STARTUP:VMS$VMS.DAT` carries one line —
+`END SYS$STARTUP:JOB_CONTROL_STARTUP.COM` — and `SYSTARTUP_VMS.COM` no
+longer calls it. STARTUP.COM's existing `RUN_COMPONENTS` subroutine (§3.3,
+unchanged) now does the only invoking, at the END phase — the LAST of the
+nine.
+
+**Phase choice, and a real regression this item measured and reversed
+before landing (Rule 6/7).** VSI never publishes which phase internally
+starts the job controller — no capture in this project's oracle archive
+shows it, and none was sought (Rule 8 forbids reading VSI `.COM` content to
+find out) — so any phase choice here is a labeled OVMX design choice, not
+an oracle capture. CONFIG (an early phase) was tried FIRST, on the
+reasoning that JOB_CONTROL is a core OpenVMS system service rather than a
+layered product or a site choice, and therefore belongs before the
+LPBEGIN/LPMAIN/LPBETA boundary the VSI OpenVMS System Manager's Manual's
+"Customizing Startup with Site-Specific Files" reserves for those — plus
+§3.6's Alpha 8.4 `SHOW SYSTEM` capture ordering JOB_CONTROL's PID
+(`0000010B`) well ahead of the interactive SYSTEM session's (`00000119`).
+
+That reasoning turned out to be untestable-as-stated and, worse, WRONG in
+its practical effect. Running `tests/qemu/test_boot_conformance.sh` against
+a real QEMU boot with JOB_CONTROL registered at CONFIG (baseline-before-
+changing, Rule 6) showed the actual console transcript reading `Username:
+The OVMX system is now executing the site-specific startup commands.` on
+one line — JOB_CONTROL's own LOGINOUT child had already begun prompting
+for a username on the shared console WHILE STARTUP.COM's phase driver was
+still writing to that same console (`SYCONFIG.COM`, `SYLOGICALS.COM`,
+`SYSTARTUP_VMS.COM`'s `INSTALL ADD` lines and site announcement) at later
+phases. Two processes racing on one physical console interleaved their
+output — a real defect, not a documentation mismatch, and exactly the kind
+of thing ground-source testing (CLAUDE.md Rule 7) exists to catch before it
+ships.
+
+**END is the phase actually used, and it is not a compromise — it
+reproduces this project's own already-tested-safe prior behavior.** Before
+this item, JOB_CONTROL was created by a hardcoded call that was, in
+practice, the LAST real action of the LPMAIN phase (after
+`SYSTARTUP_VMS.COM`'s own `INSTALL ADD` block, with only a duplicate
+`WRITE` and an `EXIT` after it) — so nothing else ever wrote to the console
+after JOB_CONTROL's LOGINOUT child began prompting. Registering the
+component at END, STDRV's last phase, reproduces that exact ordering: by
+construction, RUN_PHASES has already run every other phase's components
+and every site file by the time END's `RUN_COMPONENTS` runs. This item's
+OUTCOME was to route JOB_CONTROL's creation through the declarative
+component mechanism, not to change *when* it starts — END is what
+"unchanged" means once that ordering is independently expressed as a
+registration rather than left implicit in a hardcoded call's position.
+
+**Console ordering, therefore, is UNCHANGED from before this item, and
+`test_boot_conformance.sh`'s pinned sequence needed no reordering** — the
+seven `%INSTALL-I-ADDED` lines still precede `%RUN-S-PROC_ID`, exactly as
+they did on `main` before `vms-2a9`. `RUN/DETACHED`'s `%RUN-S-PROC_ID`
+announcement itself (`src/vmsdcl/dcl_cmd_process.c run_detached()`) was
+already present before this item — the OUTCOME's "pin RUN's message to the
+§3.5 capture — add it if missing" condition needed no code change, only
+verification.
+
+**Ground-source proof, both directions.** Positive: `vms-8d2`'s existing
+`tests/qemu/test_job_control_console.sh` boots the real mastered image,
+logs in, and reads `SHOW SYSTEM` from a *different* process than the one
+that created JOB_CONTROL — unchanged in behavior and in console ordering,
+now exercising the component-driven path instead of the hardcoded call
+(re-run against the END-phase registration: 15/15 checks pass). Negative
+(`tests/qemu/test_job_control_negctl.sh`, new): a second mastered disk
+image, built from the same staged system tree with the `VMS$VMS.DAT` END-
+phase line removed and nothing else changed, boots to the same `STDRV
+begun` / site-specific-startup landmarks but never prints `%RUN-S-PROC_ID`
+and never reaches `Username:` — because on OVMX JOB_CONTROL is the *only*
+thing that creates the console login loop (`vms-8d2`), so its absence is
+observable as the boot silently running out the clock rather than as a
+missing row in a `SHOW SYSTEM` nobody could ever run. This is the
+strongest available proof that the roster is driven by the component file
+and not hardcoded anywhere else in the tree.
+
+**Desk research on a second detached process, and why none was added.** The
+OUTCOME asks for JOB_CONTROL "first" and leaves the door open to more. A
+survey of every standalone executable in the tree (`add_executable` targets
+under `src/*/CMakeLists.txt`) found exactly one other real, fully
+implemented, not-yet-started facility: `VMSSSHD.EXE` (`src/vmsssh/`), a real
+SSH server with SYSUAF authentication. It is not started anywhere — deleted
+from PID 1 by name in `ovmx_init.c`'s own "NOTE ON SERVICES" (the same
+comment block this item's mechanism follows) — and a Phase 3 security review
+(`vms-cb5`, `tests/integration/test_env_identity_census.sh`) reasoned about
+four of its environment-variable writes as safe specifically *because*
+"vmssshd ... is not in the runtime image at all." Starting it now would be a
+security-posture change this item did not go looking for and is not
+authorized to make unilaterally (CLAUDE.md's reserved list: "Security and
+confidentiality posture"); it is named here, not silently skipped, so the
+choice is visible rather than assumed. Every other §3.6 oracle-roster name
+(OPCOM, ERRFMT, AUDIT_SERVER, SECURITY_SERVER, ACME_SERVER, TP_SERVER,
+SMHANDLER, FASTPATH_SERVER, IPCACP) has no OVMX implementation at all —
+registering a component for any of them would be inventing a process, the
+exact §2.5/Rule 10 defect this whole design record exists to kill.
 
 ## 4. Target shape
 
@@ -370,14 +484,27 @@ defect in reverse (Rule 10).
    only when OVMX grows the facilities they configure — honest omission);
    `OVMX.CONF` and `SYLOGICALS.CONF` eliminated into parameters and
    procedures.
-5. **System processes.** The startup phases create the detached processes OVMX
-   *legitimately has* — JOB_CONTROL first (`vms-8d2`, **done**: created by
-   `SYSTARTUP_VMS.COM` via `SYS$STARTUP:JOB_CONTROL_STARTUP.COM` and
-   `RUN/DETACHED/PROCESS_NAME=JOB_CONTROL`) — under real VMS process names,
-   visible in SHOW SYSTEM because they exist. Nothing is faked into the
-   roster (Rule 10); §3.6 shows the population is whatever startup actually
-   started. The SWAPPER-row question stays with the authenticity board
-   (`vms-898` / executive-gap).
+5. **System processes.** The startup phases *themselves* create the detached
+   processes OVMX *legitimately has* — JOB_CONTROL first (`vms-8d2` +
+   `vms-2a9`, **done**: registered as an END-phase STDRV component in
+   `SYS$STARTUP:VMS$VMS.DAT`, run by STARTUP.COM's own `RUN_COMPONENTS`
+   subroutine, via `SYS$STARTUP:JOB_CONTROL_STARTUP.COM` and
+   `RUN/DETACHED/PROCESS_NAME=JOB_CONTROL` — not a hardcoded call from a site
+   file, §3.8) — under real VMS process names, visible in SHOW SYSTEM because
+   they exist. Nothing is faked into the roster (Rule 10); §3.6 shows the
+   population is whatever startup actually started, and removing a
+   component's registration line is sufficient, and necessary, to stop it
+   from starting (§3.8's negative control). The SWAPPER-row question stays
+   with the authenticity board (`vms-898` / executive-gap). No second real
+   detached-process facility exists on OVMX today (desk research for
+   `vms-2a9`, 2026-08-12): OPCOM is a library call with no process behind it
+   (`src/libvms/syssvc/sys_operator.c`, deferred to `vms-042` Phase 3);
+   ERRFMT/AUDIT_SERVER/SECURITY_SERVER/ACME_SERVER/TP_SERVER/SMHANDLER/
+   FASTPATH_SERVER/IPCACP have no OVMX implementation at all; VMSSSHD.EXE is
+   real but was deliberately left unlaunched by a security review
+   (`vms-cb5`) that reasoned about it as unreachable — enabling it is a
+   posture change outside this item's scope, flagged for the operator rather
+   than decided here.
 6. **Boot conformance test.** A tests/qemu transcript test diffing OVMX's boot
    console against the pinned expected sequence, facility by facility, with
    the §3.5 ordering as the reference.

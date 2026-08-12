@@ -494,6 +494,34 @@ RUN /src/build-static/bin/vmsfs_master master \
     rm -rf /tmp/distrib-verify && \
     echo "DISTRIB image: $(ls -lh /boot/ovmx-distrib.img | awk '{print $5}')"
 
+# -- Negative-control distribution disk (vms-2a9) -------------------------------
+# A SECOND mastered disk, built from the SAME staged system tree
+# (/system-stage/vms) as ovmx-distrib.img above, with exactly one line
+# removed: SYS$STARTUP:VMS$VMS.DAT's CONFIG-phase JOB_CONTROL registration
+# (docs/design-boot-faithful.md §3.8). Nothing else differs. This is the
+# negative half of vms-2a9's ground-source proof
+# (tests/qemu/test_job_control_negctl.sh): boot it and JOB_CONTROL is never
+# created (no %RUN-S-PROC_ID line) and the console never reaches Username:
+# (JOB_CONTROL is the only thing that creates the console login loop,
+# vms-8d2) -- while STARTUP.COM still runs to completion (the
+# site-specific-startup line still prints), proving the boot did not simply
+# crash. Same NEGATIVE_CONTROL-style precedent as tests/qemu/Dockerfile's
+# vms.ko-absent build variant, applied here to a rootfs component instead of
+# a kernel module: a deliberately mutated, checked-in-mechanism artifact
+# baked at build time, not edited by a test script at run time.
+RUN cp -r /system-stage/vms /system-stage-negctl-vms && \
+    grep -v 'JOB_CONTROL_STARTUP\.COM' \
+        "/system-stage/vms/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$VMS.DAT" \
+        > "/system-stage-negctl-vms/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$VMS.DAT" && \
+    if grep -q 'JOB_CONTROL_STARTUP\.COM' "/system-stage-negctl-vms/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$VMS.DAT"; then \
+        echo "FAIL: negctl VMS\$VMS.DAT still names JOB_CONTROL_STARTUP.COM"; exit 1; \
+    fi && \
+    /src/build-static/bin/vmsfs_master master \
+        /boot/ovmx-distrib-negctl.img OVMXSYS /system-stage-negctl-vms 64 && \
+    /src/build-static/bin/vmsfs_master list /boot/ovmx-distrib-negctl.img && \
+    rm -rf /system-stage-negctl-vms && \
+    echo "NEGCTL DISTRIB image: $(ls -lh /boot/ovmx-distrib-negctl.img | awk '{print $5}')"
+
 # -- Boot initramfs (vms-1ab: THE initramfs — no fat variant exists anymore) ---
 # Bootstrap-only: STARTUP.EXE + kernel modules + config. NOT INITIALIZE.EXE
 # (mkfs belongs to the installed system + the distribution disk, not the
@@ -630,6 +658,10 @@ COPY --from=builder /boot/initramfs-ovmx-slim.cpio.gz /boot/initramfs-ovmx-slim.
 # Pre-installed distribution system disk (vms-8ab). The boot initramfs boots
 # this; a §6-stripped PID 1 mounts it or halts (docs/design-init-scope.md §6).
 COPY --from=builder /boot/ovmx-distrib.img /boot/ovmx-distrib.img
+# Negative-control distribution disk (vms-2a9): same tree, JOB_CONTROL's
+# STDRV component registration removed. Consumed only by
+# tests/qemu/test_job_control_negctl.sh -- never booted by anything else.
+COPY --from=builder /boot/ovmx-distrib-negctl.img /boot/ovmx-distrib-negctl.img
 # OVMX OS kit (vms-0b6, docs/design-ovmx-kit-format.md). Not consumed by
 # anything that boots today -- vms-df9's PRODUCT INSTALL is the consumer --
 # carried here so the build's kit artifact is retrievable like the other

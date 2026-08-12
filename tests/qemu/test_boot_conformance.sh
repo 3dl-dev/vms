@@ -173,7 +173,7 @@ RAW_SEQ=$(printf '%s\n' "$CLEAN" | \
 # kill/drain adds after that point is not part of the boot sequence.
 SEQ=$(printf '%s\n' "$RAW_SEQ" | sed -n '1,/^__USERNAME__$/p')
 
-# PINNED expected sequence (docs/design-boot-faithful.md §3.7): honestly
+# PINNED expected sequence (docs/design-boot-faithful.md §3.7/§3.8): honestly
 # sparser than the full §3.5 oracle capture -- OVMX has no OPCOM, audit
 # server, or security server yet (§5, out of scope), so pinning those would
 # be faking a facility OVMX does not have (Rule 10 in reverse). The SECOND
@@ -184,6 +184,17 @@ SEQ=$(printf '%s\n' "$RAW_SEQ" | sed -n '1,/^__USERNAME__$/p')
 # shareable, src/vmsdcl -- one line per shareable) are real, both outside
 # ovmx_init.c's own audit scope (§3.7) but part of the actual console
 # transcript this test pins.
+#
+# ORDERING (vms-2a9): %RUN-S-PROC_ID (JOB_CONTROL's creation) still prints
+# AFTER the %INSTALL-I-ADDED block, unchanged from before vms-2a9. JOB_
+# CONTROL is now created by a registered STDRV component (SYS$STARTUP:
+# VMS$VMS.DAT) rather than a hardcoded call inside SYSTARTUP_VMS.COM, but
+# the component runs at the END phase -- the LAST of the nine, after
+# LPMAIN and everything SYSTARTUP_VMS.COM does -- specifically so this
+# ordering would NOT change. An earlier phase (CONFIG) was tried first and
+# measurably interleaved JOB_CONTROL's own LOGINOUT "Username:" prompt with
+# STARTUP.COM's still-running console output; this test is what caught
+# that (docs/design-boot-faithful.md §3.8 records the full account).
 read -r -d '' EXPECTED <<'EOF' || true
 %OVMX-I-EXEC
 __BANNER__

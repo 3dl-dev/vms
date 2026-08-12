@@ -24,6 +24,7 @@
 #include "dcl/symbol.h"
 #include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/vms_messages.h"
 #include "ssdef.h"
 #include "vms/logical.h"
 #include "vms/privs.h"

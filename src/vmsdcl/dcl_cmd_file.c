@@ -21,6 +21,7 @@
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/vms_messages.h"
 #include "ssdef.h"
 #include "vmsfs/filespec.h"
 #include "vmsqueue.h"

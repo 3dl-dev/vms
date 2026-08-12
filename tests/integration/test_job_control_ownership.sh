@@ -33,7 +33,7 @@ status=0
 INIT_C="$SRC_ROOT/src/ovmx_init/ovmx_init.c"
 JC_C="$SRC_ROOT/src/ovmx_job_control/ovmx_job_control.c"
 JC_CMAKE="$SRC_ROOT/src/ovmx_job_control/CMakeLists.txt"
-SYSTARTUP="$SRC_ROOT/distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+VMSVMS_DAT="$SRC_ROOT/distro/rootfs/vms/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$VMS.DAT"
 JC_STARTUP="$SRC_ROOT/distro/rootfs/vms/SYS0/SYSCOMMON/SYS\$STARTUP/JOB_CONTROL_STARTUP.COM"
 
 echo "JOB_CONTROL ownership gate: scanning for the console login loop"
@@ -82,11 +82,20 @@ else
 fi
 
 # --- 3. JOB_CONTROL is created DETACHED, not forked by PID 1 -------------
-if [ ! -f "$SYSTARTUP" ] || ! grep -q "JOB_CONTROL_STARTUP" "$SYSTARTUP"; then
-    echo "FAIL: $SYSTARTUP does not invoke JOB_CONTROL_STARTUP.COM"
+# vms-2a9: JOB_CONTROL is now invoked through STARTUP.COM's declarative
+# STDRV component-registration mechanism (SYS$STARTUP:VMS$VMS.DAT), not a
+# hardcoded call inside a site file -- see tests/integration/
+# test_job_control_component_registration.sh (vms-2a9) for the fuller,
+# dedicated proof of that mechanism (the registration line's shape, and
+# that no site file hardcodes the call). This check keeps vms-8d2's
+# original intent -- something in the real startup chain names
+# JOB_CONTROL_STARTUP.COM, so JOB_CONTROL is not silently unreachable --
+# pointed at the file that is actually true of today.
+if [ ! -f "$VMSVMS_DAT" ] || ! grep -q "JOB_CONTROL_STARTUP" "$VMSVMS_DAT"; then
+    echo "FAIL: $VMSVMS_DAT does not register JOB_CONTROL_STARTUP.COM"
     status=1
 else
-    echo "PASS: $SYSTARTUP invokes JOB_CONTROL_STARTUP.COM"
+    echo "PASS: $VMSVMS_DAT registers JOB_CONTROL_STARTUP.COM"
 fi
 
 if [ ! -f "$JC_STARTUP" ]; then

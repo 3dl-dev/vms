@@ -14,6 +14,7 @@ add_executable(vmsdcl
     dcl_cmd_process.c
     dcl_cmd_io.c
     dcl_cmd_misc.c
+    dcl_disk_logical.c
     dcl_editor.c
     dcl_terminal.c
     dcl_symbol.c

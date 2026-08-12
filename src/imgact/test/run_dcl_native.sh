@@ -87,9 +87,9 @@ DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
 # reads the executive's process table through vms_kif_procscan().
 INCS="-I$DCL_DIR/include -I$LIBVMS_INC -I$VMSFS_INC -I$LNM_INC -I$RMS_INC -I$VMSPROC_DIR/include -I$SRC/vmsqueue -I$LIBVMSSYS_DIR"
 TUS="dcl_main dcl_lexer dcl_parser dcl_exec dcl_backup dcl_builtin dcl_cmd_show \
-dcl_cmd_set dcl_cmd_file dcl_cmd_process dcl_cmd_io dcl_cmd_misc dcl_editor \
-dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script dcl_messages \
-dcl_library"
+dcl_cmd_set dcl_cmd_file dcl_cmd_process dcl_cmd_io dcl_cmd_misc dcl_disk_logical \
+dcl_editor dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script \
+dcl_messages dcl_library"
 DCLOBJS=""
 for t in $TUS; do
     $CC $CFLAGS $DEFS $INCS -c -o "$WORK/$t.o" "$DCL_DIR/$t.c"

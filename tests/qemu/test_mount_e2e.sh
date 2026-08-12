@@ -183,6 +183,28 @@ else
     dump_and_die "MOUNT DKA100: did not reach %MOUNT-I-MOUNTED within ${RUN_TIMEOUT}s"
 fi
 
+# --- 1a. DISK$<volume-label> (vms-f83) ---------------------------------
+# MOUNT reads the volume's OWN label off its home block (the disk was
+# INITIALIZE'd with label WORK -- run_mount_e2e.sh) and defines DISK$WORK ->
+# DKA100:, so the volume is addressable by label independent of the unit (VSI
+# OpenVMS System Manager's Manual, "Mounting Volumes"; DCL Dictionary, MOUNT).
+# tests/vmsrms/test_disk_transparency.c proves the DISK$ naming/DEFINE/removal
+# on host ctest (LNM$PROCESS, no /dev/vms); THIS is the paired positive that
+# needs a real mount(2) + a real home block: DISK$WORK is defined from the
+# label ACTUALLY on the disk, not the command-line token (INV-DCL).
+OFF=$(wc -c <"$LOG")
+send 'DW = F$TRNLNM("DISK$WORK")'
+wait_for '$' "$RUN_TIMEOUT" "$OFF"
+OFF=$(wc -c <"$LOG")
+send 'WRITE SYS$OUTPUT "DISKWORK=[" + DW + "]"'
+wait_for '$' "$RUN_TIMEOUT" "$OFF"
+SEG=$(segment_since "$OFF")
+if printf '%s\n' "$SEG" | grep -qF 'DISKWORK=[DKA100:]'; then
+    ok "MOUNT defines DISK\$WORK -> DKA100: from the volume's own label (F\$TRNLNM resolves it)"
+else
+    bad "F\$TRNLNM(\"DISK\$WORK\") did not resolve to DKA100: after MOUNT: $SEG"
+fi
+
 # --- 1b. SET VOLUME (vms-309) against a GENUINELY mounted volume --------
 # tests/dcl/test_set_volume_veracity.sh (ctest, no /dev/vms) can only
 # prove SET VOLUME's "device not mounted" branch, because nothing is ever
@@ -273,6 +295,24 @@ else
     bad "TYPE read nothing back from DKA100: (expected SYSTARTUP_VMS.COM's content)"
 fi
 
+# --- 3a. the same file is reachable through DISK$WORK (vms-f83) ----------
+# DISK$WORK:[000000]MOUNTTST.TXT must name the SAME file DKA100:[000000]
+# MOUNTTST.TXT does -- proof DISK$<label> is usable in a filespec, resolving
+# through the device MOUNT established, not just a bare translation.
+OFF=$(wc -c <"$LOG")
+send 'TYPE DISK$WORK:[000000]MOUNTTST.TXT'
+wait_for '$' "$RUN_TIMEOUT" "$OFF"
+DW_CMD='TYPE DISK$WORK:[000000]MOUNTTST.TXT'
+CONTENT_VIA_DISK=$(segment_since "$OFF" | grep -vF "$DW_CMD")
+if printf '%s\n' "$CONTENT_VIA_DISK" | grep -qiE '%TYPE-[EF]-|%RMS-[EF]-|%DCL-[EF]-'; then
+    bad "TYPE DISK\$WORK:[000000]MOUNTTST.TXT errored (DISK\$<label> not usable in a filespec): $CONTENT_VIA_DISK"
+elif [ "$(printf '%s' "$CONTENT_VIA_DISK" | tr -d '[:space:]')" = "$(printf '%s' "$CONTENT_BEFORE" | tr -d '[:space:]')" ] \
+    && [ -n "$(printf '%s' "$CONTENT_VIA_DISK" | tr -d '[:space:]')" ]; then
+    ok "DISK\$WORK:[000000]MOUNTTST.TXT names the same file as DKA100:[000000]MOUNTTST.TXT (byte-identical)"
+else
+    bad "DISK\$WORK:[000000]MOUNTTST.TXT did not read the same content as via DKA100:"
+fi
+
 # --- 4. DISMOUNT, and /proc/mounts stops showing it ---------------------
 OFF=$(wc -c <"$LOG")
 send 'DISMOUNT DKA100:'
@@ -291,6 +331,20 @@ if printf '%s\n' "$SEG" | grep -qE '/mnt/dka100 +vmsfs'; then
     echo "$SEG"
 else
     ok "/proc/mounts no longer shows /mnt/dka100 after DISMOUNT"
+fi
+
+# --- 4a. DISMOUNT removed DISK$WORK (vms-f83) ---------------------------
+OFF=$(wc -c <"$LOG")
+send 'DW = F$TRNLNM("DISK$WORK")'
+wait_for '$' "$RUN_TIMEOUT" "$OFF"
+OFF=$(wc -c <"$LOG")
+send 'WRITE SYS$OUTPUT "DISKWORK=[" + DW + "]"'
+wait_for '$' "$RUN_TIMEOUT" "$OFF"
+SEG=$(segment_since "$OFF")
+if printf '%s\n' "$SEG" | grep -qF 'DISKWORK=[]'; then
+    ok "DISMOUNT removed DISK\$WORK (F\$TRNLNM now empty)"
+else
+    bad "DISK\$WORK still resolves after DISMOUNT (should be gone): $SEG"
 fi
 
 # --- 5. re-MOUNT: the file is still there -------------------------------

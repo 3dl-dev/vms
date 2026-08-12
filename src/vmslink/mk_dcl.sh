@@ -107,11 +107,11 @@ INCS="-I$DCL/include -I$REPO_SRC/libvms/include -I$REPO_SRC/vmsfs/include \
 -I$REPO_SRC/vmslnm/include -I$REPO_SRC/vmsrms/include \
 -I$REPO_SRC/vmsprocess/include -I$REPO_SRC/vmsqueue -I$REPO_SRC/libvmssys"
 
-# The 21 vmsdcl TUs (== src/vmsdcl/CMakeLists.txt, minus readline convenience).
+# The 22 vmsdcl TUs (== src/vmsdcl/CMakeLists.txt, minus readline convenience).
 TUS="dcl_main dcl_lexer dcl_parser dcl_exec dcl_backup dcl_builtin dcl_cmd_show \
-dcl_cmd_set dcl_cmd_file dcl_cmd_process dcl_cmd_io dcl_cmd_misc dcl_editor \
-dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script dcl_messages \
-dcl_library"
+dcl_cmd_set dcl_cmd_file dcl_cmd_process dcl_cmd_io dcl_cmd_misc dcl_disk_logical \
+dcl_editor dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script \
+dcl_messages dcl_library"
 
 echo "mk_dcl: LINK.EXE=$LINK_EXE  CC=$CC"
 echo "mk_dcl: --use DECC\$SHR LIBVMS\$SHR LIBVMSPROCESS\$SHR LIBVMSFS\$SHR LIBVMSLNM\$SHR LIBVMSRMS\$SHR LIBVMSSYS\$SHR"

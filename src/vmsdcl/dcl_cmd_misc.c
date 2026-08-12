@@ -35,6 +35,7 @@
 #include "dcl/symbol.h"
 #include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/disk_logical.h"
 #include "ssdef.h"
 #include "vms/logical.h"
 #include "vms/privs.h"
@@ -1759,6 +1760,69 @@ static int run_mount_helper(char *const argv[], int *helper_errno)
 }
 
 /*
+ * Read the volume label off `backing`'s vmsfs home block through the setuid-
+ * root helper's `readlabel` mode (vms-f83) -- the session dropped its Linux
+ * capability at LOGINOUT and cannot read the raw block device itself, exactly
+ * the reason mount(2) is delegated to the helper. Captures the helper's stdout
+ * ("LABEL <name>") the same fork/continue-identity/exec shape run_mount_helper
+ * uses, but reads STDOUT rather than STDERR. On success copies the label to
+ * `label` and returns 1; returns 0 if the label could not be read (the helper
+ * failed, was not authorized, or the device is not a vmsfs volume) -- in which
+ * case MOUNT defines no DISK$ logical rather than fabricating one (INV-DCL).
+ */
+static int mount_helper_readlabel(const char *backing, char *label,
+                                  size_t label_size)
+{
+    if (!backing || !label || label_size == 0)
+        return 0;
+    label[0] = '\0';
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0)
+        return 0;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return 0;
+    }
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        (void)vms_kif_open();
+        (void)vms_kif_register_continue();
+        char *argv[] = {
+            (char *)VMS_MOUNT_HELPER_PATH, (char *)"readlabel",
+            (char *)backing, NULL
+        };
+        execv(VMS_MOUNT_HELPER_PATH, argv);
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    char outbuf[64];
+    ssize_t n = read(pipefd[0], outbuf, sizeof(outbuf) - 1);
+    close(pipefd[0]);
+    outbuf[n > 0 ? n : 0] = '\0';
+
+    int wstatus;
+    if (waitpid(pid, &wstatus, 0) < 0 || !WIFEXITED(wstatus) ||
+        WEXITSTATUS(wstatus) != 0)
+        return 0;
+
+    /* "LABEL <name>\n" -- take the token after the first space, stop at
+     * whitespace. */
+    char parsed[32];
+    if (sscanf(outbuf, "LABEL %31s", parsed) != 1)
+        return 0;
+    strncpy(label, parsed, label_size - 1);
+    label[label_size - 1] = '\0';
+    return 1;
+}
+
+/*
  * MOUNT - mount(2) a VMS disk unit's backing block device as vmsfs (vms-651).
  *
  * Syntax: MOUNT device: label [/SYSTEM]
@@ -1950,6 +2014,26 @@ int cmd_mount(struct dcl_command *cmd)
                    LNM_ATTR_TERMINAL, LNM_MODE_USER);
     }
 
+    /*
+     * DISK$<volume-label> (vms-f83): VMS MOUNT defines a logical name from the
+     * volume's own label so the disk can be addressed by label independent of
+     * the physical unit -- DISK$MYVOL:[DIR]FILE resolves wherever MYVOL is
+     * mounted (VSI OpenVMS System Manager's Manual, Vol. 1, "Mounting
+     * Volumes"; VSI OpenVMS DCL Dictionary, MOUNT). The label is READ FROM THE
+     * VOLUME (its vmsfs home block, via the setuid helper), not the command-
+     * line token, so the DISK$ name always reflects the disk actually mounted;
+     * if it cannot be read, no DISK$ logical is defined rather than
+     * fabricating one (INV-DCL). The equivalence is the device (DKA100:), so
+     * DISK$<label>:[dir]file translates through the device the mount just
+     * established. DISMOUNT removes it. Placed in the same table as the device
+     * logical above so it is resolvable in exactly the same scope.
+     */
+    char vol_label[16] = "";
+    if (mgr && mount_helper_readlabel(backing_path, vol_label,
+                                      sizeof(vol_label))) {
+        (void)dcl_mount_define_disk(mgr, table, vol_label, dev_name);
+    }
+
     printf("%%MOUNT-I-MOUNTED, %s mounted on _%s\n", label, dev_name);
     return SS$_NORMAL;
 }
@@ -2013,6 +2097,26 @@ int cmd_dismount(struct dcl_command *cmd)
         return SS$_DEVNOTMOUNT;
     }
 
+    /*
+     * Read the volume label WHILE STILL MOUNTED (vms-f83), so the DISK$<label>
+     * logical MOUNT defined can be removed after umount. The label is read
+     * from the volume, the same source MOUNT built the DISK$ name from, rather
+     * than tracked in per-session state (there is none to trust). Best-effort:
+     * if the label cannot be read there is no DISK$ logical to remove either.
+     */
+    char vol_label[16] = "";
+    {
+        char dbacking[VMS_BACKING_SIZE];
+        memset(dbacking, 0, sizeof(dbacking));
+        if (vms_kif_disk_resolve(dev_name, dbacking, sizeof(dbacking),
+                                 NULL, NULL) == SS$_NORMAL) {
+            char dbacking_path[VMS_BACKING_SIZE + 8];
+            snprintf(dbacking_path, sizeof(dbacking_path), "/dev/%s", dbacking);
+            (void)mount_helper_readlabel(dbacking_path, vol_label,
+                                         sizeof(vol_label));
+        }
+    }
+
     /* The actual umount(2), performed by the setuid-root helper -- see the
      * matching comment on the mount(2) call in cmd_mount(). */
     char *helper_argv[] = {
@@ -2040,6 +2144,14 @@ int cmd_dismount(struct dcl_command *cmd)
     if (mgr) {
         lnm_delete(mgr, LNM_PROCESS_TABLE, log_name, LNM_MODE_USER);
         lnm_delete(mgr, LNM_SYSTEM_TABLE, log_name, LNM_MODE_USER);
+        /* Remove the DISK$<label> logical MOUNT defined (vms-f83). Both
+         * tables, mirroring the device-logical removal above -- MOUNT places
+         * DISK$ in the process table by default and the system table under
+         * /SYSTEM. */
+        if (vol_label[0]) {
+            (void)dcl_mount_remove_disk(mgr, LNM_PROCESS_TABLE, vol_label);
+            (void)dcl_mount_remove_disk(mgr, LNM_SYSTEM_TABLE, vol_label);
+        }
     }
 
     printf("%%DISMOUNT-I-DISMOUNTED, _%s dismounted\n", dev_name);

@@ -53,6 +53,7 @@ jobs:
       boot: ${{ steps.decide.outputs.boot }}
       release: ${{ steps.decide.outputs.release }}
       netbsd: ${{ steps.decide.outputs.netbsd }}
+      netbsd_vax: ${{ steps.decide.outputs.netbsd_vax }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -135,6 +136,9 @@ jobs:
             netbsd:
               - '.github/workflows/**'
               - 'tests/netbsd/**'
+            netbsd_vax:
+              - '.github/workflows/**'
+              - 'tests/lab-vax/**'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -147,6 +151,7 @@ jobs:
               echo "boot=${{ steps.filter.outputs.boot }}"
               echo "release=${{ steps.filter.outputs.release }}"
               echo "netbsd=${{ steps.filter.outputs.netbsd }}"
+              echo "netbsd_vax=${{ steps.filter.outputs.netbsd_vax }}"
             } >> "$GITHUB_OUTPUT"
           else
             {
@@ -156,6 +161,7 @@ jobs:
               echo "boot=true"
               echo "release=true"
               echo "netbsd=true"
+              echo "netbsd_vax=true"
             } >> "$GITHUB_OUTPUT"
           fi
   # -----------------------------------------------------------------------
@@ -3116,3 +3122,77 @@ jobs:
               export CC=gcc WORK=/tmp/link-selfhost-native LINK_SELFHOST_EXPECT=1
               sh /src/src/imgact/test/run_link_selfhost_native.sh
             '
+
+  # -----------------------------------------------------------------------
+  # netbsd-vax-simh (vms-0041, epic vms-8e8 "OVMX/NetBSD SYSKRNL")
+  #
+  # The NetBSD/vax analogue of the QEMU executive jobs. There is no
+  # qemu-system-vax (docs/design-ovmx-netbsd-syskrnl.md sec 6), so NetBSD/vax
+  # boots under SIMH -- the same emulator the OpenVMS VAX labs use. This job
+  # boots a REAL NetBSD/vax under SIMH and asserts `uname -srm` == the pinned
+  # "NetBSD <ver> vax"; the negctl step proves the assertion can go red. It is
+  # the proving ground P3/P4 of the epic build on. BUILD/TEST tooling, not a
+  # runtime (Rule 9 / docs/runtime-target.md) -- SIMH is emulation, nothing runs
+  # on the host.
+  #
+  # GATED like the heavy QEMU tiers: on push/merge_group/schedule the path
+  # filter forces netbsd_vax=true so the full job runs; on a PR it runs only when
+  # tests/lab-vax/** (or the workflow) changed, so ordinary PRs don't pay for it.
+  #
+  # INSTALL/BOOT SPLIT + CACHE. Installing NetBSD/vax on an emulated VAX is slow
+  # (tens of minutes -- a ~1980s CPU under emulation). The install runs ONCE and
+  # its output (the SIMH disk wd0.img + the verified ISO) is cached under
+  # .boot-cache/lab-vax, keyed on the pinned NetBSD version + SIMH ref + anita
+  # ref + the harness files. A cache hit makes the "install" step an instant
+  # no-op and only the fast boot+assert steps run; a cache miss (first nightly,
+  # or after a pin bump) pays the install once and actions/cache stores the disk
+  # for subsequent runs.
+  #
+  # SIMH is a pure software VAX interpreter (no KVM needed), so it runs on a
+  # stock ubuntu-latest runner -- only slowly. The cold-cache install is the one
+  # heavy cost; if a GitHub-hosted runner cannot complete the install within the
+  # job timeout, populate the cache on a capable/self-hosted runner (or prime it
+  # from a local `tests/lab-vax/run-local.sh install`) and let this job restore
+  # it. The steps below never stub the proof: smoke actually boots + asserts, and
+  # a failure fails the job.
+  # -----------------------------------------------------------------------
+  netbsd-vax-simh:
+    name: NetBSD/vax boots under SIMH (vms-0041)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache the installed NetBSD/vax disk + verified ISO
+        uses: actions/cache@v4
+        with:
+          path: .boot-cache/lab-vax
+          # Bump implicitly via the pinned strings + harness hash. A NetBSD/SIMH/
+          # anita pin change or an entrypoint/Dockerfile change invalidates the
+          # cache and forces a fresh, reproducible install.
+          key: lab-vax-netbsd9.4-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      - name: Build the lab-vax image
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Populate the cache (install NetBSD/vax once; no-op on a cache hit)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/.boot-cache/lab-vax:/cache" \
+            ovmx-vax-lab install
+
+      - name: Smoke — boot the cached disk and assert uname -srm is NetBSD/vax
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/.boot-cache/lab-vax:/cache" \
+            ovmx-vax-lab smoke
+
+      - name: Negative control — the uname assertion must be able to FAIL
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/.boot-cache/lab-vax:/cache" \
+            ovmx-vax-lab negctl

@@ -10,6 +10,7 @@
  * OVMX Project
  */
 
+#include <stdio.h>
 #include <string.h>
 #include <strings.h>
 #include <ctype.h>
@@ -85,6 +86,100 @@ out:
     return result;
 }
 
+/*
+ * Is `mount_point` present in the kernel's own mount table right now?
+ *
+ * This is the SAME cross-process, kernel-reported truth src/vmsdcl/
+ * dcl_cmd_misc.c's mount_point_is_mounted() and src/product/product.c's
+ * pd_mount_point_is_mounted() read: /proc/mounts, the kernel's OWN mount
+ * table, NOT a field only the mounting process can see. Reproduced here (not
+ * shared) because vmsfs is BELOW vmsdcl in the library graph and must not pull
+ * a DCL symbol; the parse is trivial and identical.
+ *
+ * Parsed by hand with fopen/fgets rather than getmntent(3): DECC$SHR's symbol
+ * vector exports the plain stdio family the VMS-native LINK.EXE build links
+ * against everywhere, but not setmntent/getmntent -- see the note on
+ * mount_point_is_mounted() in dcl_cmd_misc.c.
+ */
+static int mount_table_has(const char *mount_point)
+{
+    FILE *fp = fopen("/proc/mounts", "r");
+    if (!fp)
+        return 0;
+
+    /* /proc/mounts: "<source> <mount_point> <fstype> <opts> ...". Compare the
+     * SECOND field's exact extent, not a substring -- "/mnt/dka1" must not
+     * match "/mnt/dka100". */
+    char line[512];
+    size_t mp_len = strlen(mount_point);
+    int found = 0;
+    while (fgets(line, sizeof(line), fp)) {
+        char *field2 = strchr(line, ' ');
+        if (!field2) continue;
+        field2++;
+        char *after = strchr(field2, ' ');
+        if (!after) continue;
+        size_t flen = (size_t)(after - field2);
+        if (flen == mp_len && strncmp(field2, mount_point, flen) == 0) {
+            found = 1;
+            break;
+        }
+    }
+    fclose(fp);
+    return found;
+}
+
+/*
+ * Executive-mount-table fallback for a device the PER-PROCESS device_table
+ * does not carry (vms-8b6).
+ *
+ * THE BUG THIS CLOSES. device_table above is process-private. MOUNT (cmd_mount,
+ * src/vmsdcl/dcl_cmd_misc.c) does a real mount(2) of the unit's backing device
+ * as vmsfs at /mnt/<devnam> AND records the mapping here -- but only in the
+ * MOUNTING process's copy of this table. A forked/exec'd child (AUTHORIZE.EXE,
+ * SYSGEN.EXE, any RUN'd image) starts with a fresh table holding only the
+ * bootstrap DKA0:, so it could not resolve a device its DCL parent mounted and
+ * failed with %..-NOSUCHDEV / %UAF-E-NOSUCHUSER even though the volume was
+ * genuinely mounted and system-wide (the exact install gap vms-718 hit). VMS
+ * mounts are EXECUTIVE / system-wide state, not per-process -- so device
+ * resolution must consult that shared state, not one process's private copy
+ * (CLAUDE.md INV-6: the kernel is the source of truth for an executive
+ * facility; never a per-process view of it).
+ *
+ * WHAT MAKES THIS AUTHENTIC, NOT A NEW FAKE. The device -> mount-point mapping
+ * is a PURE FUNCTION of the name (/mnt/<lowercase devnam>), the identical
+ * convention cmd_mount / mount_point_for_device use, so any process computes it
+ * with no shared userspace state. Whether the unit is actually mounted RIGHT
+ * NOW is then answered by /proc/mounts -- the kernel's own mount table, global
+ * and cross-process. If nothing is mounted there, the unit is no more available
+ * to this process than to any other and we return NOSUCHDEV honestly (never a
+ * fabricated success). DKA0: never reaches here: every process seeds it into
+ * device_table at startup (vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT)), so
+ * the fast path above always hits for it; only dynamically MOUNTed units
+ * (/mnt/<dev>) fall through to this.
+ */
+static int vmsfs_device_resolve_executive(const char *normalized_dev,
+                                          char *mount_point, size_t size)
+{
+    /* /mnt/<lowercase devnam> -- the vmsfs mount-point convention (matches
+     * mount_point_for_device in src/vmsdcl/dcl_cmd_misc.c and
+     * pd_mount_point_for_device in src/product/product.c). */
+    char mp[VMS_MOUNT_POINT_MAX];
+    char lower[VMS_DEVNAM_MAX + 1];
+    size_t i;
+    for (i = 0; normalized_dev[i] && i < sizeof(lower) - 1; i++)
+        lower[i] = (char)tolower((unsigned char)normalized_dev[i]);
+    lower[i] = '\0';
+    snprintf(mp, sizeof(mp), "/mnt/%s", lower);
+
+    if (!mount_table_has(mp))
+        return SS$_NOSUCHDEV;
+
+    strncpy(mount_point, mp, size - 1);
+    mount_point[size - 1] = '\0';
+    return SS$_NORMAL;
+}
+
 int vmsfs_device_resolve(const char *devname, char *mount_point, size_t size)
 {
     if (!devname || !mount_point || size == 0)
@@ -107,6 +202,17 @@ int vmsfs_device_resolve(const char *devname, char *mount_point, size_t size)
     }
 
     pthread_mutex_unlock(&device_mutex);
+
+    /*
+     * Per-process table miss -- consult the EXECUTIVE (kernel) mount table so a
+     * unit mounted by ANOTHER process (e.g. the DCL parent that forked this
+     * one) still resolves (vms-8b6, INV-6). Done outside the device_mutex: it
+     * reads only /proc/mounts and the pure-function name convention, touching
+     * none of device_table.
+     */
+    if (result == SS$_NOSUCHDEV)
+        result = vmsfs_device_resolve_executive(normalized, mount_point, size);
+
     return result;
 }
 

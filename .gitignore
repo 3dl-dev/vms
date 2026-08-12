@@ -88,3 +88,7 @@ scratchpad/
 
 # short-name build dir used by the integration worktree
 b/
+
+# NetBSD harness local cache (installed image + anita download mirror, vms-7f7)
+tests/netbsd/.netbsd-cache/
+.netbsd-cache/

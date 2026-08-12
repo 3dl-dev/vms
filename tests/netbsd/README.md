@@ -137,3 +137,91 @@ install is cached, so only a **cold** cache pays the full TCG install cost, whic
 is the run at risk of the 120-minute job cap. If that proves too tight on the
 stock runner, this job wants a **KVM-capable** (self-hosted or larger) runner;
 the harness itself is complete and real either way.
+
+---
+
+# Phase 2b — a real in-kernel `/dev/vms` on NetBSD
+
+rd `vms-bfe` · parent `vms-dd8` · epic `vms-8e8`
+
+P2b builds directly on the P2a foundation above. Where P2a boots NetBSD and
+asserts `uname`, **P2b builds and loads a REAL in-kernel `/dev/vms`** and proves
+one ioctl end to end — the NetBSD-substrate analogue of what `tests/qemu/` does
+for the Linux `vms.ko` executive.
+
+## What it proves
+
+On the installed, cached NetBSD/amd64 guest (a **separate** cache from P2a — see
+below), `drive_netbsd_p2b.py`:
+
+1. builds the **OVMX/NetBSD `vms` pseudo-device** (`src/kernel-netbsd/`) in-guest
+   with the NetBSD kernel-module toolchain — a `cdevsw` character pseudo-device
+   built as a **loadable `module(9)`** (`vms.kmod`, via `bsd.kmodule.mk`);
+2. builds the userspace **probe** (`guest/vmsprobe.c`), which reaches `/dev/vms`
+   **through the transport seam** `src/libvmssys/kif_transport_netbsd.c` — the
+   NetBSD leaf of the P1 `kif_transport.h` contract;
+3. **INV-6 negative control:** runs the probe with the module **not loaded** —
+   `/dev/vms` does not exist, so the probe must **fail honestly**
+   (`SS$_NOSUCHDEV`) and NEVER fake per-process success (CLAUDE.md Rule 9 / INV-6);
+4. `modload`s the module, `mknod`s `/dev/vms` with the dynamically-assigned char
+   major (read back from `dmesg`), and runs the probe — the **version/ping ioctl**
+   (`VMS_IOCTL_PING`, the shared `/dev/vms` contract in `src/kernel-netbsd/vms_ping.h`)
+   must round-trip and the probe must print `PROBE: PING OK`;
+5. `modunload`s and halts.
+
+The ping wire contract (`vms_ping.h`) is **identical across substrates**: the same
+magic space (`'V'`) and, for a struct this small, the same `_IOWR` request number
+on BSD and Linux. It lives in its own portable header rather than in the Linux
+`src/kernel/vms_ioctl.h` (which is written for the Linux kernel and would not
+compile in a NetBSD kernel TU) — so **the Linux build is untouched** by P2b.
+
+## Why a separate cache / set list
+
+The kernel-module build needs the NetBSD toolchain **and** the kernel sources, so
+P2b installs two extra sets on top of P2a's minimal list — **`comp`** (compiler +
+`/usr/share/mk`) and **`syssrc`** (`/usr/src/sys`, required by an out-of-tree
+module's `-isystem $S`). That makes the P2b installed image different from P2a's,
+so it uses its own work/cache dir (`/cache/anita-netbsd-p2b-*`, cache path
+`.netbsd-cache-p2b`). This is exactly the widening the P2a section anticipated.
+
+## Running it locally
+
+```bash
+docker build -f tests/netbsd/Dockerfile -t ovmx-netbsd-ktest .
+
+mkdir -p .netbsd-cache-p2b
+docker run --rm -v "$PWD/.netbsd-cache-p2b:/cache" --device /dev/kvm \
+    --entrypoint /netbsd/run_p2b.sh ovmx-netbsd-ktest
+echo "exit: $?"        # 0 = module built+loaded, ping asserted, INV-6 negctl OK
+
+# NEGATIVE CONTROL: skip the modload -> the PING OK assertion must go RED
+docker run --rm -v "$PWD/.netbsd-cache-p2b:/cache" \
+    -e P2B_SKIP_LOAD=1 --entrypoint /netbsd/run_p2b.sh ovmx-netbsd-ktest
+echo "exit: $?"        # nonzero: "the version/ping ioctl did not round-trip"
+```
+
+Same hard-`timeout` discipline as P2a (`run_p2b.sh`, `HARNESS_TIMEOUT`, default
+5400s for the larger cold install), plus per-command pexpect deadlines in the
+driver.
+
+## Files (P2b)
+
+| File | Role |
+|------|------|
+| `src/kernel-netbsd/vms_netbsd.c` | The `vms` cdevsw pseudo-device (loadable `module(9)`); answers `VMS_IOCTL_PING`. |
+| `src/kernel-netbsd/vms_ping.h` | Shared `/dev/vms` version/ping wire contract; portable to NetBSD kernel + userspace. |
+| `src/kernel-netbsd/Makefile` | Out-of-tree `bsd.kmodule.mk` build → `vms.kmod`. |
+| `src/libvmssys/kif_transport_netbsd.c` | NetBSD leaf of the P1 transport seam; **not** in the Linux CMake build. |
+| `tests/netbsd/guest/vmsprobe.c` | Userspace probe; reaches `/dev/vms` through the seam, asserts the ping. |
+| `tests/netbsd/drive_netbsd_p2b.py` | P2b driver: build ISO → boot → build → INV-6 negctl → load → ping. |
+| `tests/netbsd/run_p2b.sh` | P2b container entrypoint (hard `timeout`). Select via `--entrypoint`. |
+
+## CI (P2b)
+
+Job **`NetBSD/amd64 vms Pseudo-Device (QEMU)`** in `.github/workflows/ci.yml`,
+gated like the P2a job (push/merge_group/schedule always; on PRs only when
+`tests/netbsd/**` **or** the P2b src — `src/kernel-netbsd/**`, the transport seam
+— changes). It asserts the INV-6 honest-failure line **and** `PROBE: PING OK`, and
+a second step runs with `P2B_SKIP_LOAD=1` to prove the PING assertion has teeth
+(must go red for the right reason). The same TCG/`/dev/kvm` runner caveat as P2a
+applies, more so on a cold cache (it also fetches `comp` + `syssrc`).

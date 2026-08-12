@@ -819,11 +819,13 @@ jobs:
   #
   # A REAL, FULLY ENFORCING gate — OVMX_QEMU_FULL_E2E=1, and a SKIP (exit 77) is
   # a hard failure, so the opt-in that keeps `ctest` cheap is NOT the CI cover
-  # here. Same shape as install-boot-e2e above. NOTE: the target SYSTEM password
-  # is the kit default (MANAGER), not the install-set one — writing the
-  # install-set password to the target SYSUAF is blocked by two prerequisite
-  # gaps vms-dcf filed (AUTHORIZE cross-device + vmsfs.ko RMS CREATE); the gate
-  # never claims otherwise (see test_release_install.sh's header).
+  # here. Same shape as install-boot-e2e above. The gate closes the REAL
+  # acceptance loop: container 1 sets a KNOWN non-default SYSTEM password during
+  # install and asserts AUTHORIZE persisted it to the target SYSUAF
+  # (%UAF-I-SAVED), and container 2 logs in with THAT install-set password —
+  # possible now that vms-8b6 (#385, cross-process mounted-device visibility) and
+  # vms-581 (#378, RMS CREATE on a mounted vmsfs volume) are in base. (A separate
+  # SET TERMINAL/NOECHO display gap remains, captured as a NOTE, not scored.)
   # -----------------------------------------------------------------------
   release-install-e2e:
     name: R1 release e2e — media→menu install→separate container→login→PRODUCT SHOW (vms-37f)

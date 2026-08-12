@@ -81,6 +81,88 @@ typedef struct _tpadef TPADEF;
 #define TPA$_DIGIT          0xFFFFFFFC  /* Match one or more digit chars */
 #define TPA$_UIC            0xFFFFFFFD  /* Match a UIC [g,m] */
 
+/* ================================================================
+ * OVMX C TABLE FORMAT for lib$table_parse / lib$tparse
+ *
+ * *** OVMX DESIGN CHOICE (clean-room, Rule 8) ***
+ *
+ * The public VSI OpenVMS RTL documentation specifies the SEMANTICS of
+ * LIB$TABLE_PARSE (the state/transition finite-state parser, the TPA$
+ * special token classes above, the action-routine argument block) but
+ * does NOT publish the byte-level layout of the MACRO-32 $STATE/$TRAN
+ * state and key tables produced by the STARLET table-definition macros.
+ *
+ * Per Rule 8, where the layout is not published OVMX defines its OWN
+ * representation and labels it as an OVMX design choice — it is NOT
+ * presented as the VMS-authentic on-disk table format.  The structures
+ * below are that representation.  The real engine in lib_tparse.c
+ * consumes them; the parse_tables.mar -> C port (bead vms-486) EMITS
+ * them.  The observable BEHAVIOUR (which strings parse, which fail,
+ * which action routines fire with which token/param) is what matches
+ * VMS — not the table bytes.
+ * ================================================================ */
+
+/*
+ * Action-routine callback.  VMS LIB$TABLE_PARSE passes the ADDRESS of the
+ * TPARSE argument block (not the eight fields as separate arguments — the
+ * distinction LIB$TABLE_PARSE draws from the older LIB$TPARSE call).  The
+ * caller may extend the block past the standard TPADEF (see MMK's TPABLK);
+ * the engine only touches the standard fields, so the callback gets the
+ * ORIGINAL block pointer and can see its own extension fields.
+ *
+ * Return an odd (success) VMS status to ACCEPT the transition, or an even
+ * (failure) status to REJECT it — on reject the engine backtracks the
+ * input position and tries the next transition in the state (this is how
+ * MMK's PRS_K_CHECK_GNU / PRS_K_CHECK_COND gate transitions).
+ */
+typedef uint32_t (*tpa_action_t)(void *tparse_block);
+
+/*
+ * Transition "type" markers that are neither a literal character (0..255)
+ * nor a TPA$_ special class (0xFFFFFFF0..).  OVMX design choice.
+ */
+#define TPA$K_KEYWORD       0xFFFFFF00u /* type: match keyword string (tran.keyword) */
+#define TPA$K_SUBEXPR       0xFFFFFF01u /* type: match subexpression at state tran.target */
+
+/*
+ * "next state" sentinels for TPA_TRAN.next, alongside a plain state index.
+ * TPA$_EXIT / TPA$_FAIL (above) double as next-state values: EXIT ends the
+ * parse successfully, FAIL forces LIB$_SYNTAXERR.
+ */
+#define TPA$K_NEXT_SEQ      0xFFFFFF02u /* next: fall through to the next state in the array */
+
+/* One transition (one $TRAN). */
+struct tpa_tran {
+    uint32_t      type;    /* char 0..255, TPA$_ class, TPA$K_KEYWORD, or TPA$K_SUBEXPR */
+    const char   *keyword; /* keyword string when type==TPA$K_KEYWORD (else NULL) */
+    uint32_t      target;  /* subexpression start state when type==TPA$K_SUBEXPR */
+    uint32_t      next;    /* next state index, or TPA$_EXIT/TPA$_FAIL/TPA$K_NEXT_SEQ */
+    tpa_action_t  action;  /* action routine, or NULL */
+    uint32_t      param;   /* stored into tpa$l_param and passed to the action */
+};
+typedef struct tpa_tran TPA_TRAN;
+
+/* One state (one $STATE): an ordered list of transitions tried in turn. */
+struct tpa_state {
+    const TPA_TRAN *trans;
+    uint32_t        ntrans;
+};
+typedef struct tpa_state TPA_STATE;
+
+/*
+ * The grammar passed by address as lib$table_parse's state_table argument.
+ * states[0] is the start state ($INIT_STATE's first $STATE).  The key_table
+ * argument is RESERVED in the OVMX format (may be NULL); the whole grammar
+ * travels in state_table.
+ */
+#define TPA$K_GRAMMAR_MAGIC 0x54504147u /* 'TPAG' — guards against a bad pointer */
+struct tpa_grammar {
+    uint32_t         magic;    /* must be TPA$K_GRAMMAR_MAGIC */
+    uint32_t         nstates;
+    const TPA_STATE *states;   /* states[0] == start state */
+};
+typedef struct tpa_grammar TPA_GRAMMAR;
+
 #ifdef __cplusplus
 }
 #endif

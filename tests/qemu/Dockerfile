@@ -250,7 +250,7 @@ RUN cd /src/repo && \
         -DOVMX_STATIC=ON \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=ON \
-    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize --parallel $(nproc) 2>&1 && \
+    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize vms_initialize --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
     echo "--- test_imgact_* binaries (userspace-only, no /dev/vms needed, static musl) ---" && \
@@ -470,6 +470,16 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp /src/repo/build-static/bin/AUTHORIZE.EXE /initramfs/bin/AUTHORIZE.EXE || \
       { echo "FATAL: AUTHORIZE.EXE was not built into the static tree -- the SYSPRV positive control would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/bin/AUTHORIZE.EXE && \
+    # INITIALIZE.EXE (vms-cf62), staged at /tests/INITIALIZE.EXE --
+    # tests/qemu/test_syssvc_initialize.c execs it by that default path
+    # (overridable via OVMX_INITIALIZE). It matches no test_* glob, so init.sh
+    # never runs it as a suite -- it is the subject the suite drives. Absence is
+    # FATAL, not skipped: a missing subject would turn the resolves-and-formats-
+    # the-real-device / no-fake-success assertions into no-ops with the job
+    # still green.
+    { cp /src/repo/build-static/bin/INITIALIZE.EXE /initramfs/tests/INITIALIZE.EXE || \
+      { echo "FATAL: INITIALIZE.EXE was not built into the static tree -- INITIALIZE's real-device resolution would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x /initramfs/tests/INITIALIZE.EXE && \
     # TESTIMG.EXE (vms-68f iv), staged at /tests/TESTIMG.EXE --
     # tests/qemu/test_syssvc_imgact_inproc.c activates it in-process by that
     # default path (overridable via OVMX_TESTIMG). It matches no test_* glob,

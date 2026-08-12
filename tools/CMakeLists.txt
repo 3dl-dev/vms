@@ -134,6 +134,8 @@ add_executable(vms_initialize
 
 target_include_directories(vms_initialize PRIVATE
     ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
+    ${VMS_INCLUDE_DIR}
 )
 
 target_compile_definitions(vms_initialize PRIVATE
@@ -144,6 +146,10 @@ target_compile_definitions(vms_initialize PRIVATE
 target_compile_options(vms_initialize PRIVATE
     -Wall -Wextra
 )
+
+# vms-cf62: INITIALIZE resolves a VMS device name to its real backing block
+# device through the executive (vms_kif_disk_resolve), so it links libvmssys.
+target_link_libraries(vms_initialize PRIVATE vmssys)
 
 set_target_properties(vms_initialize PROPERTIES
     OUTPUT_NAME "INITIALIZE"

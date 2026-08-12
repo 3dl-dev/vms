@@ -11,6 +11,9 @@
  *   Blocks M+1..:  Data area
  *
  * Usage: INITIALIZE <device-or-file> <volume-label> [size-in-MB]
+ *   If the target is a VMS device name (e.g. DKA100:), it is resolved through
+ *     the executive to its real backing block device and THAT is formatted;
+ *     an unresolvable unit fails honestly (never a bogus local file).
  *   If the target is a regular file and doesn't exist, size-in-MB is required.
  *   If the target is a block device, size is determined automatically.
  */
@@ -19,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
@@ -27,6 +31,8 @@
 #include <linux/fs.h>   /* BLKGETSIZE64 */
 
 #include "vmsfs_ondisk.h"
+#include "vms_kif.h"    /* vms_kif_disk_resolve -- executive device table */
+#include "ssdef.h"      /* SS$_NORMAL / SS$_NOSUCHDEV / SS$_IVDEVNAM */
 
 #define MAX_VOLNAME 12
 
@@ -333,6 +339,120 @@ static int get_device_size(int fd, uint64_t *size)
     return ioctl(fd, BLKGETSIZE64, size) == 0 ? 0 : -1;
 }
 
+/*
+ * A VMS device name (DKA100:, DKB0:, ...) is not a filesystem path: it has no
+ * '/' and ends with a colon. Anything else is treated as an image-file path so
+ * the build tooling that formats plain .dsk images keeps working.
+ */
+static int target_is_vms_device(const char *target)
+{
+    size_t n = strlen(target);
+    if (n < 2 || target[n - 1] != ':')
+        return 0;
+    if (strchr(target, '/'))
+        return 0;
+    return 1;
+}
+
+/*
+ * Resolve a VMS device name to its real backing block device through the
+ * executive (vms_kif_disk_resolve, vms-3e8 -- the same authoritative path
+ * MOUNT uses). The process never scans /sys/block itself (Rule 11); the
+ * executive owns the DKA0:/DKA100: -> backing mapping.
+ *
+ * On success, writes "/dev/<backing>" into devpath and returns SS$_NORMAL.
+ * On any failure it prints an authentic %INIT- error and returns the status.
+ * It NEVER falls back to a local file -- an unresolvable unit fails honestly
+ * rather than formatting a bogus file and reporting success (INV-6).
+ */
+static uint32_t resolve_vms_device(const char *name, char *devpath,
+                                   size_t devpath_size)
+{
+    /* Canonicalise: uppercase, trailing colon (matches cmd_mount's key). */
+    char dev_name[VMS_DEVNAM_SIZE];
+    size_t n = strlen(name);
+    if (n >= sizeof(dev_name) - 1)
+        n = sizeof(dev_name) - 2;
+    for (size_t i = 0; i < n; i++)
+        dev_name[i] = (char)toupper((unsigned char)name[i]);
+    dev_name[n] = '\0';
+    if (n == 0 || dev_name[n - 1] != ':') {
+        dev_name[n] = ':';
+        dev_name[n + 1] = '\0';
+    }
+
+    (void)vms_kif_open();
+
+    char backing[VMS_BACKING_SIZE];
+    memset(backing, 0, sizeof(backing));
+    uint32_t st = vms_kif_disk_resolve(dev_name, backing, sizeof(backing),
+                                       NULL, NULL);
+    switch (st) {
+    case SS$_NORMAL:
+        break;
+    case SS$_NOSUCHDEV:
+        fprintf(stderr, "%%INIT-F-NOSUCHDEV, no such device %s\n", dev_name);
+        return st;
+    case SS$_IVDEVNAM:
+        fprintf(stderr, "%%INIT-F-IVDEVNAM, invalid device name %s\n", dev_name);
+        return st;
+    default:
+        /* Executive-unreachable / ioctl-level failure (e.g. no /dev/vms):
+         * report honestly, never fake a format. */
+        fprintf(stderr,
+                "%%INIT-F-DEVRESOLVE, could not resolve %s through the "
+                "executive (status %u)\n", dev_name, st);
+        return st ? st : SS$_BUGCHECK;
+    }
+
+    snprintf(devpath, devpath_size, "/dev/%s", backing);
+    return SS$_NORMAL;
+}
+
+/*
+ * Format a real backing block device: open it, take its size from the block
+ * geometry (never a caller-supplied MB count -- the hardware size is
+ * authoritative), and write the vmsfs structures to the real store.
+ */
+static int initialize_device(const char *devpath, const char *volname)
+{
+    int fd = open(devpath, O_RDWR);
+    if (fd < 0) {
+        fprintf(stderr, "%%INIT-F-OPENERR, cannot open backing device %s\n",
+                devpath);
+        return 1;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISBLK(st.st_mode)) {
+        fprintf(stderr, "%%INIT-F-NOTBLOCK, %s is not a block device\n",
+                devpath);
+        close(fd);
+        return 1;
+    }
+
+    uint64_t size_bytes = 0;
+    if (get_device_size(fd, &size_bytes) < 0) {
+        fprintf(stderr, "%%INIT-F-IOCTL, cannot determine size of %s\n",
+                devpath);
+        close(fd);
+        return 1;
+    }
+
+    if (size_bytes < (uint64_t)MIN_BLOCKS * VMSFS_BLOCK_SIZE) {
+        fprintf(stderr, "%%INIT-F-TOOSMALL, %s is smaller than %u bytes\n",
+                devpath, MIN_BLOCKS * VMSFS_BLOCK_SIZE);
+        close(fd);
+        return 1;
+    }
+
+    int rc = format_volume(fd, size_bytes, volname);
+    if (fsync(fd) < 0)
+        perror("%%INIT-W-FSYNC, sync warning");
+    close(fd);
+    return rc < 0 ? 1 : 0;
+}
+
 int main(int argc, char *argv[])
 {
     if (argc < 3 || argc > 4) {
@@ -353,6 +473,23 @@ int main(int argc, char *argv[])
         fprintf(stderr, "%%INIT-F-BADLABEL, volume label must be 1-%d characters\n",
                 MAX_VOLNAME);
         return 1;
+    }
+
+    /*
+     * A VMS device name (DKA100:) is resolved through the executive to its
+     * real backing block device and THAT is formatted. This is the whole
+     * point of vms-cf62: the previous code treated "DKA100:" as a literal
+     * filesystem path, so an unresolvable name landed in the create-a-file
+     * branch below and formatted a bogus local file called "DKA100:",
+     * reporting success -- the disk the operator meant to initialize was
+     * never touched (INV-6 fake-success). A device name never gets to touch
+     * the file path now: it resolves or it fails honestly.
+     */
+    if (target_is_vms_device(target)) {
+        char devpath[VMS_BACKING_SIZE + 8];
+        if (resolve_vms_device(target, devpath, sizeof(devpath)) != SS$_NORMAL)
+            return 1;   /* honest %INIT- error already printed */
+        return initialize_device(devpath, volname);
     }
 
     struct stat st;

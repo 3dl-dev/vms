@@ -49,6 +49,9 @@ function(qemu_syssvc_add_test name source)
         ${VMS_INCLUDE_DIR}
         ${VMS_RMS_INCLUDE_DIR}
         ${CMAKE_SOURCE_DIR}/src/libvmssys
+        # vmsfs_ondisk.h -- test_syssvc_initialize.c (vms-cf62) reads the raw
+        # home block off the backing device to prove INITIALIZE wrote it there.
+        ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
         # ovmx_image.h / ovmx_symvec.h -- the OVMX symbol-vector image format the
         # in-process resident-import-binding test constructs against (vms-db2).
         # imgact_prodreg.h (a libvms public header) includes ovmx_image.h, so any

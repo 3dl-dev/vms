@@ -30,7 +30,7 @@
 #      the kit as an ordinary SYSTEM-owned file on the boot disk instead
 #      sidesteps that rather than faking a permission OVMX doesn't have.
 #   3. THE ANTI-LARP CRUX: RUN the INSTALLED HELP.EXE *from the target
-#      device* (DKA100:[SYSEXE]HELP.EXE) and see real output. A kit that
+#      device* (DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE) and see real output. A kit that
 #      only wrote a manifest, or wrote corrupted/truncated bytes, cannot
 #      pass this -- IMGACT would refuse to activate it.
 #   4. `$ SHOW SYMBOL $STATUS` / grep for %PCSI-E-/%PCSI-F- immediately
@@ -214,13 +214,19 @@ else
 fi
 
 # --- 4. DIRECTORY independently confirms real files landed on DKA100: ---
+# The kit lands in the ROOTED, concealed system-disk structure
+# [SYS0.SYSCOMMON.SYSEXE] (vms-96ec), NOT a flat [SYSEXE] -- that is what
+# makes a /DESTINATION-installed volume bootable as its own system disk
+# (see tests/qemu/test_install_boot_e2e.sh, which boots exactly this
+# target). Assert the rooted path, matching where a mastered ovmx-distrib.img
+# already places DCL.EXE/HELP.EXE.
 OFF=$(wc -c <"$LOG")
-send 'DIRECTORY DKA100:[SYSEXE]HELP.EXE'
+send 'DIRECTORY DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
 wait_for 'Total of' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
 if printf '%s\n' "$SEG" | grep -qE 'Total of [1-9][0-9]* files?, [0-9]+ blocks' \
     && printf '%s\n' "$SEG" | grep -qF 'HELP.EXE'; then
-    ok "DIRECTORY independently confirms DKA100:[SYSEXE]HELP.EXE exists"
+    ok "DIRECTORY independently confirms DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE exists"
 else
     bad "DIRECTORY does not confirm HELP.EXE landed on DKA100:"
     echo "$SEG"
@@ -235,7 +241,7 @@ fi
 # (dcl_exec_foreign_command(), src/vmsdcl/dcl_exec.c), which is what makes
 # HELP.EXE take its non-interactive "HELP topic" branch and actually exit.
 OFF=$(wc -c <"$LOG")
-send 'RUNHELP :== $DKA100:[SYSEXE]HELP.EXE'
+send 'RUNHELP :== $DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
 # NOTE: the symbol-definition command's own echo contains a literal '$'
 # (the "$DKA100:..." image-spec), so a wait_for '$' issued for the NEXT
 # command against this SAME offset would match that leftover byte
@@ -294,7 +300,7 @@ else
 fi
 
 OFF=$(wc -c <"$LOG")
-send 'DIRECTORY DKA100:[SYSEXE]HELP.EXE'
+send 'DIRECTORY DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
 wait_for 'Total of' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
 if printf '%s\n' "$SEG" | grep -qE 'Total of [1-9][0-9]* files?, [0-9]+ blocks' \
@@ -306,7 +312,7 @@ else
 fi
 
 OFF=$(wc -c <"$LOG")
-send 'RUNHELP :== $DKA100:[SYSEXE]HELP.EXE'
+send 'RUNHELP :== $DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 OFF=$(wc -c <"$LOG")
 send 'RUNHELP MOUNT'

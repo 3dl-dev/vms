@@ -36,7 +36,7 @@
 #      OPEN/WRITE/CLOSE creates DKA100:[USER]DATA.TXT with known content
 #      (not a file the kit ships -- nothing upstream of this test ever
 #      writes to [USER]), and a real DCL OPEN/APPEND/WRITE/CLOSE appends a
-#      site-customization marker line to DKA100:[SYSMGR]SYSTARTUP_VMS.COM
+#      site-customization marker line to DKA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM
 #      (a file the kit DOES ship, exactly the file a site is expected to
 #      customize on real OpenVMS).
 #   4. PRODUCT INSTALL the UPGRADE kit onto the SAME DKA100: -- the upgrade.
@@ -284,7 +284,7 @@ fi
 
 # --- 4. Write a SITE CONFIG customization onto a file the kit ships ------
 OFF=$(wc -c <"$LOG")
-send 'OPEN/APPEND SC DKA100:[SYSMGR]SYSTARTUP_VMS.COM'
+send 'OPEN/APPEND SC DKA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
 wait_for '$' 20 "$OFF"
 OFF=$(wc -c <"$LOG")
 send "WRITE SC \"$SITE_MARKER\""
@@ -294,12 +294,12 @@ send 'CLOSE SC'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 
 OFF=$(wc -c <"$LOG")
-send 'TYPE DKA100:[SYSMGR]SYSTARTUP_VMS.COM'
+send 'TYPE DKA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
-SITE_CMD='TYPE DKA100:[SYSMGR]SYSTARTUP_VMS.COM'
+SITE_CMD='TYPE DKA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
 SITE_BEFORE=$(segment_since "$OFF" | grep -vF "$SITE_CMD")
 if printf '%s' "$SITE_BEFORE" | grep -qF "$SITE_MARKER"; then
-    ok "DKA100:[SYSMGR]SYSTARTUP_VMS.COM carries the site marker before the upgrade"
+    ok "DKA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM carries the site marker before the upgrade"
 else
     dump_and_die "site marker did not land in SYSTARTUP_VMS.COM before the upgrade: $SITE_BEFORE"
 fi
@@ -333,7 +333,7 @@ fi
 
 # --- (b) site config survives (vms-2c9: seed-once preservation) ----------
 OFF=$(wc -c <"$LOG")
-send 'TYPE DKA100:[SYSMGR]SYSTARTUP_VMS.COM'
+send 'TYPE DKA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SITE_AFTER=$(segment_since "$OFF" | grep -vF "$SITE_CMD")
 if printf '%s' "$SITE_AFTER" | grep -qF "$SITE_MARKER"; then

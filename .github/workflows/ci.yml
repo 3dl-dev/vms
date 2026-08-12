@@ -125,6 +125,9 @@ jobs:
               - 'tests/qemu/test_upgrade_e2e.sh'
               - 'tests/qemu/run_upgrade_e2e.sh'
               - 'tests/qemu/test_product_install_e2e.sh'
+              - 'tests/qemu/run_product_install_e2e.sh'
+              - 'tests/qemu/test_install_boot_e2e.sh'
+              - 'tests/qemu/run_install_boot_e2e.sh'
               - 'tests/qemu/test_release_acceptance_e2e.sh'
               - 'tests/qemu/run_release_acceptance_e2e.sh'
               - 'tests/qemu/test_parts_demo_e2e.sh'
@@ -629,6 +632,71 @@ jobs:
             exit 1
           fi
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2c2: PRODUCT INSTALL /DESTINATION -> boot the INSTALLED target as its
+  # own system disk (vms-96ec, parent vms-718, gates the vms-37f R1 e2e).
+  #
+  # THE COVERAGE THAT WAS MISSING. product_install_e2e proves a /DESTINATION
+  # install lands runnable bytes on a mounted DATA volume; it never boots that
+  # target. Every booting e2e above (persistent-boot, distrib_boot, the
+  # release-acceptance gates) boots the PRE-MASTERED ovmx-distrib.img, already
+  # rooted+concealed by vmsfs_master -- never a freshly /DESTINATION-installed
+  # target. So the on-disk SHAPE a /DESTINATION install produces was never
+  # booted, which is exactly how vms-649 found PRODUCT INSTALL wrote a FLAT
+  # [SYSEXE] layout instead of the rooted, concealed [SYS0.SYSCOMMON.SYSEXE] a
+  # bootable system disk requires (a flat target halts %OVMX-F-SYSINIT --
+  # DCL.EXE absent under the rooted path STARTUP resolves). This job installs
+  # the OS kit onto a blank INITIALIZEd disk and then BOOTS that disk as the
+  # sole DKA0: system disk (slim bootstrap initramfs) to a SYSTEM login. It is
+  # a REAL, FULLY ENFORCING gate -- OVMX_QEMU_FULL_E2E=1, and a SKIP (exit 77)
+  # is a hard failure, so the opt-in that hid this class of bug is NOT the CI
+  # cover here. Same shape as upgrade-e2e above.
+  # -----------------------------------------------------------------------
+  install-boot-e2e:
+    name: install /DESTINATION -> boot the installed target -> login (vms-96ec)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build host tools (INITIALIZE.EXE)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TOOLS=ON -DBUILD_TESTS=OFF
+          cmake --build build -j"$(nproc)" --target vms_initialize
+
+      - name: Build bootable image (qemu tooling + the OS kit staged at SYS$UPDATE:)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: install /DESTINATION -> boot installed target -> login
+        id: install_boot_e2e
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_install_boot_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: install_boot_e2e SKIPPED in CI — this gate must actually install and boot the target, never skip silently." >&2
+            exit 1
+          fi
           exit "$rc"
 
   # -----------------------------------------------------------------------

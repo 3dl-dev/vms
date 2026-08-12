@@ -480,6 +480,32 @@ set_tests_properties(product_install_e2e PROPERTIES
     TIMEOUT 900)
 
 # ---------------------------------------------------------------------------
+# PRODUCT INSTALL /DESTINATION -> boot THAT target as its own system disk
+# (vms-96ec, parent vms-718, gates the vms-37f R1 release e2e).
+#
+# product_install_e2e (above) proves a /DESTINATION install lands runnable
+# bytes on a mounted DATA volume; it never boots that target. Every booting
+# CI e2e boots the PRE-MASTERED ovmx-distrib.img, never a freshly
+# /DESTINATION-installed target -- so the on-disk SHAPE a /DESTINATION install
+# produces was never booted, which is how vms-649 found it was FLAT
+# ([SYSEXE]) instead of the rooted, concealed [SYS0.SYSCOMMON.SYSEXE] a
+# bootable system disk needs (a flat target halts %OVMX-F-SYSINIT). This gate
+# closes that gap: it installs onto a blank INITIALIZEd disk, then boots THAT
+# disk as the sole DKA0: system disk with the bootstrap-only slim initramfs
+# and reaches a SYSTEM login -- red on the unfixed tree, green after vms-96ec.
+# CI runs it for real (never opt-in cover): see the install-boot-e2e job in
+# .github/workflows/ci.yml, which treats a SKIP as a hard failure. Same
+# opt-in-in-ctest convention as product_install_e2e above.
+add_test(
+    NAME install_boot_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_install_boot_e2e.sh
+)
+set_tests_properties(install_boot_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 900)
+
+# ---------------------------------------------------------------------------
 # The faithful install menu, OVMX$INSTALL.COM (vms-dcf).
 #
 # Boots the DISTRIBUTION image straight into the install menu (no login),

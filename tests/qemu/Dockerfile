@@ -88,7 +88,11 @@ RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && \
     echo "$KVER" > /tmp/kver && \
     echo "Kernel version: $KVER"
 
-# Copy kernel module source and build vms.ko
+# Copy kernel module source and build vms.ko. src/kernel-core carries the
+# substrate-agnostic executive core + the kernel-backend shim contract
+# (exec_kbackend.h, rd vms-adb); the Makefile adds -I$(src)/../kernel-core, so
+# it must sit beside /src/kernel as /src/kernel-core.
+COPY src/kernel-core/ /src/kernel-core/
 COPY src/kernel/ /src/kernel/
 RUN KVER=$(cat /tmp/kver) && \
     cd /src/kernel && \

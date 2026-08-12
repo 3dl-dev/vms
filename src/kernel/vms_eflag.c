@@ -63,6 +63,39 @@
 #include <linux/wait.h>
 
 #include "vms_internal.h"
+/*
+ * Event flags is the FIRST facility promoted onto the kernel-backend shim
+ * (rd vms-adb, epic vms-8e8; design docs/design-netbsd-executive-core.md).
+ * Every host primitive this file touches -- locking, wait/wake, copyin/out,
+ * kernel alloc/free -- now goes through exec_* (defined per substrate in
+ * exec_kbackend.h). On Linux each exec_* op expands to the exact primitive
+ * this file used before (spin_lock, wait_event_interruptible's body,
+ * copy_*_user, kzalloc/kfree), so the module is behaviour-identical; the same
+ * source will compile against the NetBSD backend when it MOVES to
+ * src/kernel-core/ (Phase B/C). The file does NOT move in Phase A, so its
+ * intrusive-list use (list_*) stays on <linux/list.h> for now -- that is the
+ * next shim seam (exec_list.h), added when the file moves.
+ *
+ * The one non-mechanical change here is the wait/wake conversion. Linux's
+ * wait_event_interruptible is lock-free; the portable cv contract requires
+ * the waiter to hold, and the waker to share, the lock that guards the flag
+ * word and the wait queue (exec_kbackend.h documents why -- it is what makes
+ * the wait lost-wakeup-free on a substrate without wait_event). For a LOCAL
+ * flag that guard is proc->ef.lock, which the setter already held. For a
+ * COMMON cluster the two sides live in DIFFERENT processes with different
+ * proc->ef.lock instances, so the shared guard MUST be the cluster's own lock
+ * (struct vms_common_ef_cluster::lock, previously initialized but unused for
+ * the flag word). setef/clref/readef and the three wait handlers therefore
+ * access a common cluster's flags+waitq under c->lock (resolving the cluster
+ * pointer under proc->ef.lock first; lock order proc->ef.lock -> c->lock,
+ * c->lock innermost and never held while taking another lock). This changes
+ * NO VMS-observable behaviour -- same flags, same statuses, same wait/wake --
+ * and removes the pre-existing cross-process data race on a common cluster's
+ * flag word as a side effect. The multi-process suites
+ * tests/qemu/test_{kmod,syssvc}_ef_mproc.c, which block one process on a
+ * common flag another sets, are the gate that proves the wake is not lost.
+ */
+#include "exec_kbackend.h"
 
 
 /*
@@ -83,12 +116,12 @@ void vms_eflag_cleanup(void)
 {
     struct vms_common_ef_cluster *cluster, *tmp;
 
-    spin_lock(&vms_common_ef_lock);
+    exec_lock(&vms_common_ef_lock);
     list_for_each_entry_safe(cluster, tmp, &vms_common_ef_list, list) {
         list_del(&cluster->list);
-        kfree(cluster);
+        exec_free(cluster);
     }
-    spin_unlock(&vms_common_ef_lock);
+    exec_unlock(&vms_common_ef_lock);
 }
 
 /*
@@ -98,21 +131,21 @@ void vms_proc_release_common_ef(struct vms_proc *proc)
 {
     int i;
 
-    spin_lock(&proc->ef.lock);
+    exec_lock(&proc->ef.lock);
     for (i = 0; i < 2; i++) {
         struct vms_common_ef_cluster *cluster = proc->ef.common[i];
         if (cluster) {
-            spin_lock(&vms_common_ef_lock);
+            exec_lock(&vms_common_ef_lock);
             cluster->refcount--;
             if (cluster->refcount <= 0 && !cluster->perm) {
                 list_del(&cluster->list);
-                kfree(cluster);
+                exec_free(cluster);
             }
-            spin_unlock(&vms_common_ef_lock);
+            exec_unlock(&vms_common_ef_lock);
             proc->ef.common[i] = NULL;
         }
     }
-    spin_unlock(&proc->ef.lock);
+    exec_unlock(&proc->ef.lock);
 }
 
 /*
@@ -140,35 +173,47 @@ static int common_idx(uint32_t efn)
 }
 
 /*
- * Helper: get pointer to flag word and wait queue for a given EFN
- * Returns 0 on success, fills *flags_ptr, *waitq, *bit
+ * Helper: get pointer to flag word, wait queue and GUARDING LOCK for a given
+ * EFN. Returns 0 on success, fills *flags_ptr, *waitcv, *bit, *guard.
+ *
+ * *guard is the lock under which *flags_ptr and *waitcv are accessed and the
+ * cv-wait/wake handshake is performed. For a LOCAL flag it is proc->ef.lock
+ * (which the caller already holds, and which also protects local[] and the
+ * association pointers). For a COMMON cluster it is the cluster's OWN lock --
+ * the only lock a setter in one process and a waiter in another can share --
+ * and the caller resolves the cluster pointer under proc->ef.lock before
+ * switching to it. Callers must hold proc->ef.lock across this call.
  */
 static int efn_resolve(struct vms_proc *proc, uint32_t efn,
-                       uint32_t **flags_ptr, wait_queue_head_t **waitq,
-                       int *bit)
+                       uint32_t **flags_ptr, exec_cv_t **waitcv,
+                       int *bit, exec_lock_t **guard)
 {
     if (efn < 32) {
         *flags_ptr = &proc->ef.local[0];
-        *waitq = &proc->ef.waitq;
+        *waitcv = &proc->ef.waitq;
+        *guard = &proc->ef.lock;
         *bit = efn;
         return 0;
     } else if (efn < 64) {
         *flags_ptr = &proc->ef.local[1];
-        *waitq = &proc->ef.waitq;
+        *waitcv = &proc->ef.waitq;
+        *guard = &proc->ef.lock;
         *bit = efn - 32;
         return 0;
     } else if (efn < 96) {
         struct vms_common_ef_cluster *c = proc->ef.common[0];
         if (!c) return -1;
         *flags_ptr = &c->flags;
-        *waitq = &c->waitq;
+        *waitcv = &c->waitq;
+        *guard = &c->lock;
         *bit = efn - 64;
         return 0;
     } else if (efn < 128) {
         struct vms_common_ef_cluster *c = proc->ef.common[1];
         if (!c) return -1;
         *flags_ptr = &c->flags;
-        *waitq = &c->waitq;
+        *waitcv = &c->waitq;
+        *guard = &c->lock;
         *bit = efn - 96;
         return 0;
     }
@@ -182,33 +227,47 @@ long vms_ioctl_setef(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_ef_args args;
     uint32_t *flags;
-    wait_queue_head_t *waitq;
+    exec_cv_t *waitcv;
+    exec_lock_t *guard;
     int bit;
     uint32_t prev;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&proc->ef.lock);
-    if (efn_resolve(proc, args.efn, &flags, &waitq, &bit) < 0) {
-        spin_unlock(&proc->ef.lock);
+    exec_lock(&proc->ef.lock);
+    if (efn_resolve(proc, args.efn, &flags, &waitcv, &bit, &guard) < 0) {
+        exec_unlock(&proc->ef.lock);
         args.status = (args.efn >= 128) ? SS__ILLEFC :
                       (args.efn >= 64)  ? SS__UNASEFC : SS__ILLEFC;
         goto out;
     }
 
+    /*
+     * Set the flag and wake waiters UNDER THE PREDICATE'S GUARD LOCK, so the
+     * wait/wake pair shares a lock and the wake cannot be lost (cv contract,
+     * exec_kbackend.h). For a local flag the guard is proc->ef.lock, already
+     * held; for a common cluster it is the cluster's own lock, nested inside
+     * proc->ef.lock (which keeps the association -- and thus the cluster --
+     * alive). exec_cv_broadcast wakes ALL waiters, preserving the historical
+     * wake_up_interruptible().
+     */
+    if (guard != &proc->ef.lock)
+        exec_lock(guard);
+
     prev = *flags & (1U << bit);
     *flags |= (1U << bit);
-    spin_unlock(&proc->ef.lock);
+    exec_cv_broadcast(waitcv);
 
-    /* Wake any waiters */
-    wake_up_interruptible(waitq);
+    if (guard != &proc->ef.lock)
+        exec_unlock(guard);
+    exec_unlock(&proc->ef.lock);
 
     args.status = prev ? SS__WASSET : SS__WASCLR;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -220,30 +279,41 @@ long vms_ioctl_clref(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_ef_args args;
     uint32_t *flags;
-    wait_queue_head_t *waitq;
+    exec_cv_t *waitcv;
+    exec_lock_t *guard;
     int bit;
     uint32_t prev;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&proc->ef.lock);
-    if (efn_resolve(proc, args.efn, &flags, &waitq, &bit) < 0) {
-        spin_unlock(&proc->ef.lock);
+    exec_lock(&proc->ef.lock);
+    if (efn_resolve(proc, args.efn, &flags, &waitcv, &bit, &guard) < 0) {
+        exec_unlock(&proc->ef.lock);
         args.status = (args.efn >= 128) ? SS__ILLEFC :
                       (args.efn >= 64)  ? SS__UNASEFC : SS__ILLEFC;
         goto out;
     }
 
+    /* Clear under the flag word's guard (proc->ef.lock for local; the
+     * cluster's own lock, nested, for a common cluster) so the word stays
+     * consistently guarded against a concurrent setef. Clearing never
+     * satisfies a wait-for-set, so there is no wake here. */
+    if (guard != &proc->ef.lock)
+        exec_lock(guard);
+
     prev = *flags & (1U << bit);
     *flags &= ~(1U << bit);
-    spin_unlock(&proc->ef.lock);
+
+    if (guard != &proc->ef.lock)
+        exec_unlock(guard);
+    exec_unlock(&proc->ef.lock);
 
     args.status = prev ? SS__WASSET : SS__WASCLR;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -255,17 +325,17 @@ long vms_ioctl_waitfr(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_ef_args args;
     uint32_t *flags;
-    wait_queue_head_t *waitq;
+    exec_cv_t *waitcv;
+    exec_lock_t *guard;
     int bit;
-    int ret;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&proc->ef.lock);
-    if (efn_resolve(proc, args.efn, &flags, &waitq, &bit) < 0) {
-        spin_unlock(&proc->ef.lock);
+    exec_lock(&proc->ef.lock);
+    if (efn_resolve(proc, args.efn, &flags, &waitcv, &bit, &guard) < 0) {
+        exec_unlock(&proc->ef.lock);
         /* An out-of-range flag number is ILLEFC, not UNASEFC: 200 is not
          * "a common cluster you have not associated with", it is not an
          * event flag at all. Matches SETEF/CLREF above. */
@@ -273,29 +343,52 @@ long vms_ioctl_waitfr(struct vms_proc *proc, unsigned long arg)
                       (args.efn >= 64)  ? SS__UNASEFC : SS__ILLEFC;
         goto out;
     }
-    spin_unlock(&proc->ef.lock);
 
     /*
-     * Wait until the flag is set.
-     *
-     * A SIGNAL DOES NOT END THE WAIT, AND IT PRODUCES NO STATUS. See the
-     * INTERRUPTED WAITS note at the top of this file. This used to be
-     *
-     *     if (ret) { args.status = SS__NORMAL;  <- interrupted, flag clear
-     *
-     * which told the caller "the flag is set" about a flag that was
-     * demonstrably still clear. -ERESTARTSYS is returned instead: no status
-     * is written back at all on this path, so there is nothing for a caller
-     * to misread, and libvmssys' vms_kif_waitfr() re-enters the wait.
+     * Move onto the predicate's guard lock for the wait. A common cluster's
+     * guard is its own lock, which the setter also holds across set+wake, so
+     * the two sides share a lock; drop proc->ef.lock first so we never sleep
+     * holding it. For a local flag the guard already IS proc->ef.lock, so we
+     * keep holding it. The resolved cluster stays alive because this process
+     * remains associated with it for the duration of the wait.
      */
-    ret = wait_event_interruptible(*waitq, (READ_ONCE(*flags) & (1U << bit)));
-    if (ret)
-        return ret;
+    if (guard != &proc->ef.lock) {
+        exec_unlock(&proc->ef.lock);
+        exec_lock(guard);
+    }
+
+    /*
+     * Wait until the flag is set. The predicate is re-tested under the guard
+     * on every wake and has PRIORITY over an interrupt (matching
+     * wait_event_interruptible, which checks the condition before the signal
+     * test): a wait that ends with its flag set returns SS$_NORMAL even if a
+     * signal is also pending.
+     *
+     * A SIGNAL WITH THE FLAG STILL CLEAR DOES NOT END THE WAIT, AND PRODUCES
+     * NO STATUS. See the INTERRUPTED WAITS note at the top of this file. This
+     * path used to write SS$_NORMAL for an interrupted wait, telling the
+     * caller "the flag is set" about a flag that was demonstrably still clear.
+     * -ERESTARTSYS is returned instead with NO status written, so there is
+     * nothing for a caller to misread, and libvmssys' vms_kif_waitfr()
+     * re-enters the wait. Semantics unchanged from the
+     * wait_event_interruptible() this replaces.
+     */
+    for (;;) {
+        if (READ_ONCE(*flags) & (1U << bit))
+            break;
+        if (exec_cv_wait(waitcv, guard)) {
+            if (READ_ONCE(*flags) & (1U << bit))
+                break;
+            exec_unlock(guard);
+            return -ERESTARTSYS;
+        }
+    }
+    exec_unlock(guard);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -311,12 +404,12 @@ long vms_ioctl_wflor(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_ef_wait_args args;
     uint32_t *flags;
-    wait_queue_head_t *waitq;
+    exec_cv_t *waitcv;
+    exec_lock_t *guard;
     int bit;
-    int ret;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     /*
@@ -330,25 +423,39 @@ long vms_ioctl_wflor(struct vms_proc *proc, unsigned long arg)
      * illegal event flag cluster. efn_resolve() already selects the
      * cluster from any flag number in it.
      */
-    spin_lock(&proc->ef.lock);
-    if (efn_resolve(proc, args.efn, &flags, &waitq, &bit) < 0) {
-        spin_unlock(&proc->ef.lock);
+    exec_lock(&proc->ef.lock);
+    if (efn_resolve(proc, args.efn, &flags, &waitcv, &bit, &guard) < 0) {
+        exec_unlock(&proc->ef.lock);
         args.status = (args.efn >= 128) ? SS__ILLEFC :
                       (args.efn >= 64)  ? SS__UNASEFC : SS__ILLEFC;
         goto out;
     }
-    spin_unlock(&proc->ef.lock);
 
-    /* No status on the interrupted path -- see vms_ioctl_waitfr above and
-     * the INTERRUPTED WAITS note at the top of this file. */
-    ret = wait_event_interruptible(*waitq, (READ_ONCE(*flags) & args.mask));
-    if (ret)
-        return ret;
+    /* Move onto the predicate's guard lock -- see vms_ioctl_waitfr above. */
+    if (guard != &proc->ef.lock) {
+        exec_unlock(&proc->ef.lock);
+        exec_lock(guard);
+    }
+
+    /* Return when ANY masked flag is set. Predicate has priority over an
+     * interrupt; no status on the interrupted path -- see vms_ioctl_waitfr
+     * above and the INTERRUPTED WAITS note at the top of this file. */
+    for (;;) {
+        if (READ_ONCE(*flags) & args.mask)
+            break;
+        if (exec_cv_wait(waitcv, guard)) {
+            if (READ_ONCE(*flags) & args.mask)
+                break;
+            exec_unlock(guard);
+            return -ERESTARTSYS;
+        }
+    }
+    exec_unlock(guard);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -360,35 +467,48 @@ long vms_ioctl_wfland(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_ef_wait_args args;
     uint32_t *flags;
-    wait_queue_head_t *waitq;
+    exec_cv_t *waitcv;
+    exec_lock_t *guard;
     int bit;
-    int ret;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     /* No cluster-base check -- see the note in vms_ioctl_wflor above. */
-    spin_lock(&proc->ef.lock);
-    if (efn_resolve(proc, args.efn, &flags, &waitq, &bit) < 0) {
-        spin_unlock(&proc->ef.lock);
+    exec_lock(&proc->ef.lock);
+    if (efn_resolve(proc, args.efn, &flags, &waitcv, &bit, &guard) < 0) {
+        exec_unlock(&proc->ef.lock);
         args.status = (args.efn >= 128) ? SS__ILLEFC :
                       (args.efn >= 64)  ? SS__UNASEFC : SS__ILLEFC;
         goto out;
     }
-    spin_unlock(&proc->ef.lock);
 
-    /* No status on the interrupted path -- see vms_ioctl_waitfr above and
-     * the INTERRUPTED WAITS note at the top of this file. */
-    ret = wait_event_interruptible(*waitq,
-                                   ((READ_ONCE(*flags) & args.mask) == args.mask));
-    if (ret)
-        return ret;
+    /* Move onto the predicate's guard lock -- see vms_ioctl_waitfr above. */
+    if (guard != &proc->ef.lock) {
+        exec_unlock(&proc->ef.lock);
+        exec_lock(guard);
+    }
+
+    /* Return when ALL masked flags are set. Predicate has priority over an
+     * interrupt; no status on the interrupted path -- see vms_ioctl_waitfr
+     * above and the INTERRUPTED WAITS note at the top of this file. */
+    for (;;) {
+        if ((READ_ONCE(*flags) & args.mask) == args.mask)
+            break;
+        if (exec_cv_wait(waitcv, guard)) {
+            if ((READ_ONCE(*flags) & args.mask) == args.mask)
+                break;
+            exec_unlock(guard);
+            return -ERESTARTSYS;
+        }
+    }
+    exec_unlock(guard);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -400,30 +520,38 @@ long vms_ioctl_readef(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_ef_read_args args;
     uint32_t *flags;
-    wait_queue_head_t *waitq;
+    exec_cv_t *waitcv;
+    exec_lock_t *guard;
     int bit;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&proc->ef.lock);
-    if (efn_resolve(proc, args.efn, &flags, &waitq, &bit) < 0) {
-        spin_unlock(&proc->ef.lock);
+    exec_lock(&proc->ef.lock);
+    if (efn_resolve(proc, args.efn, &flags, &waitcv, &bit, &guard) < 0) {
+        exec_unlock(&proc->ef.lock);
         args.state = 0;
         args.status = (args.efn >= 128) ? SS__ILLEFC :
                       (args.efn >= 64)  ? SS__UNASEFC : SS__ILLEFC;
         goto out;
     }
 
+    /* Read the flag word under its guard (proc->ef.lock for local; the
+     * cluster's own lock, nested, for a common cluster) so the read is
+     * consistent with a concurrent setef/clref on the same word. */
+    if (guard != &proc->ef.lock)
+        exec_lock(guard);
     args.state = *flags;
-    spin_unlock(&proc->ef.lock);
+    if (guard != &proc->ef.lock)
+        exec_unlock(guard);
+    exec_unlock(&proc->ef.lock);
 
     /* Return WASSET/WASCLR based on the specific flag */
     args.status = (args.state & (1U << bit)) ? SS__WASSET : SS__WASCLR;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -442,7 +570,7 @@ long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg)
     int idx;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     idx = common_idx(args.efn);
@@ -455,37 +583,38 @@ long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg)
     args.name[31] = '\0';
 
     /* Search for existing cluster */
-    spin_lock(&vms_common_ef_lock);
+    exec_lock(&vms_common_ef_lock);
     list_for_each_entry(cluster, &vms_common_ef_list, list) {
         if (strncmp(cluster->name, args.name, 32) == 0) {
             /* Found it -- associate */
             cluster->refcount++;
-            spin_unlock(&vms_common_ef_lock);
+            exec_unlock(&vms_common_ef_lock);
 
-            spin_lock(&proc->ef.lock);
+            exec_lock(&proc->ef.lock);
             /* Release old association if any */
             if (proc->ef.common[idx]) {
                 struct vms_common_ef_cluster *old = proc->ef.common[idx];
-                spin_lock(&vms_common_ef_lock);
+                exec_lock(&vms_common_ef_lock);
                 old->refcount--;
                 if (old->refcount <= 0 && !old->perm) {
                     list_del(&old->list);
-                    kfree(old);
+                    exec_free(old);
                 }
-                spin_unlock(&vms_common_ef_lock);
+                exec_unlock(&vms_common_ef_lock);
             }
             proc->ef.common[idx] = cluster;
-            spin_unlock(&proc->ef.lock);
+            exec_unlock(&proc->ef.lock);
 
             args.status = SS__NORMAL;
             goto out;
         }
     }
 
-    /* Create new cluster */
-    cluster = kzalloc(sizeof(*cluster), GFP_ATOMIC);
+    /* Create new cluster. Allocated while holding vms_common_ef_lock, so the
+     * allocation must NOT sleep -- exec_zalloc_atomic (Linux GFP_ATOMIC). */
+    cluster = exec_zalloc_atomic(sizeof(*cluster));
     if (!cluster) {
-        spin_unlock(&vms_common_ef_lock);
+        exec_unlock(&vms_common_ef_lock);
         args.status = SS__INSFMEM;
         goto out;
     }
@@ -495,19 +624,19 @@ long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg)
     cluster->prot = args.prot;
     cluster->perm = args.perm;
     cluster->refcount = 1;
-    init_waitqueue_head(&cluster->waitq);
-    spin_lock_init(&cluster->lock);
+    exec_cv_init(&cluster->waitq);
+    exec_lock_init(&cluster->lock);
     list_add_tail(&cluster->list, &vms_common_ef_list);
-    spin_unlock(&vms_common_ef_lock);
+    exec_unlock(&vms_common_ef_lock);
 
-    spin_lock(&proc->ef.lock);
+    exec_lock(&proc->ef.lock);
     proc->ef.common[idx] = cluster;
-    spin_unlock(&proc->ef.lock);
+    exec_unlock(&proc->ef.lock);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -522,7 +651,7 @@ long vms_ioctl_dacefc(struct vms_proc *proc, unsigned long arg)
     struct vms_common_ef_cluster *cluster;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     idx = common_idx(args.efn);
@@ -531,29 +660,29 @@ long vms_ioctl_dacefc(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    spin_lock(&proc->ef.lock);
+    exec_lock(&proc->ef.lock);
     cluster = proc->ef.common[idx];
     if (!cluster) {
-        spin_unlock(&proc->ef.lock);
+        exec_unlock(&proc->ef.lock);
         args.status = SS__UNASEFC;
         goto out;
     }
 
     proc->ef.common[idx] = NULL;
-    spin_unlock(&proc->ef.lock);
+    exec_unlock(&proc->ef.lock);
 
-    spin_lock(&vms_common_ef_lock);
+    exec_lock(&vms_common_ef_lock);
     cluster->refcount--;
     if (cluster->refcount <= 0 && !cluster->perm) {
         list_del(&cluster->list);
-        kfree(cluster);
+        exec_free(cluster);
     }
-    spin_unlock(&vms_common_ef_lock);
+    exec_unlock(&vms_common_ef_lock);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -590,14 +719,14 @@ long vms_ioctl_dlcefc(struct vms_proc *proc, unsigned long arg)
     (void)proc;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     args.name[31] = '\0';
 
     args.status = SS__UNASEFC;
 
-    spin_lock(&vms_common_ef_lock);
+    exec_lock(&vms_common_ef_lock);
     list_for_each_entry_safe(cluster, tmp, &vms_common_ef_list, list) {
         if (strncmp(cluster->name, args.name, 32) != 0)
             continue;
@@ -605,14 +734,14 @@ long vms_ioctl_dlcefc(struct vms_proc *proc, unsigned long arg)
         cluster->perm = 0;
         if (cluster->refcount <= 0) {
             list_del(&cluster->list);
-            kfree(cluster);
+            exec_free(cluster);
         }
         args.status = SS__NORMAL;
         break;
     }
-    spin_unlock(&vms_common_ef_lock);
+    exec_unlock(&vms_common_ef_lock);
 
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }

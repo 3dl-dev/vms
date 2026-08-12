@@ -23,7 +23,11 @@ vms-y := vms_module.o \
          vms_p0.o \
          vms_p1.o
 
-ccflags-y := -I$(src)
+# -I$(src)/../kernel-core: the substrate-agnostic executive core + the
+#   kernel-backend shim contract (exec_kbackend.h, rd vms-adb). vms_eflag.c
+#   includes it; the Linux backend impl (exec_kbackend_linux.h) lives here in
+#   src/kernel and is selected by OVMX_KBACKEND_LINUX below.
+ccflags-y := -I$(src) -I$(src)/../kernel-core -DOVMX_KBACKEND_LINUX
 
 # Default target: build against running kernel
 KDIR ?= /lib/modules/$(shell uname -r)/build

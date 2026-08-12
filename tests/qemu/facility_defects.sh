@@ -521,6 +521,12 @@ sysuaf-uic-radix-decimal"
 # executive one -- it was measured failing 3 phases against the pre-fix
 # ->d_revalidate and passing 28/28 against the fixed one.
 #
+# test_kmod_vmsfs_rename (rd vms-8b3) joins them for the same reason: it
+# mounts a block-device vmsfs volume and exercises rename(2), whose own
+# red/green control is a vmsfs.ko mutation (vmsfs_blkdev_rename present vs.
+# absent), never an executive one -- it opens no /dev/vms and reaches no
+# vms_kif entry point.
+#
 # SCOPE_OUT_UNIT_DIRS   directories under src/ whose .c files are NOT executive
 #                       translation units. Files there must NOT be named by any
 #                       defect (a control there would mean the scope statement
@@ -528,7 +534,7 @@ sysuaf-uic-radix-decimal"
 # SCOPE_OUT_SUITES      derived tests/qemu suites with no facility control.
 # ---------------------------------------------------------------------------
 SCOPE_OUT_UNIT_DIRS="kernel/vmsfs"
-SCOPE_OUT_SUITES="test_kmod_vmsfs test_kmod_vmsfs_blkdev test_kmod_vmsfs_exepath"
+SCOPE_OUT_SUITES="test_kmod_vmsfs test_kmod_vmsfs_blkdev test_kmod_vmsfs_exepath test_kmod_vmsfs_rename"
 
 scope_out_why() {
     cat <<'EOF'

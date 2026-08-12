@@ -50,6 +50,9 @@ static int vmsfs_blkdev_mkdir(struct mnt_idmap *idmap, struct inode *dir,
                               struct dentry *dentry, umode_t mode);
 static int vmsfs_blkdev_unlink(struct inode *dir, struct dentry *dentry);
 static int vmsfs_blkdev_rmdir(struct inode *dir, struct dentry *dentry);
+static int vmsfs_blkdev_rename(struct mnt_idmap *idmap, struct inode *old_dir,
+                               struct dentry *old_dentry, struct inode *new_dir,
+                               struct dentry *new_dentry, unsigned int flags);
 static int vmsfs_vbn_to_lbn(struct vmsfs_inode_info *vi, uint32_t vbn,
                             uint32_t *lbn_out);
 static int vmsfs_ensure_blocks(struct super_block *sb, struct inode *inode,
@@ -67,6 +70,7 @@ const struct inode_operations vmsfs_blkdev_dir_iops = {
     .mkdir      = vmsfs_blkdev_mkdir,
     .unlink     = vmsfs_blkdev_unlink,
     .rmdir      = vmsfs_blkdev_rmdir,
+    .rename     = vmsfs_blkdev_rename,
 };
 
 const struct file_operations vmsfs_blkdev_dir_fops = {
@@ -1642,5 +1646,240 @@ static int vmsfs_blkdev_rmdir(struct inode *dir, struct dentry *dentry)
 
     drop_nlink(dir);
     vmsfs_blkdev_flush_inode(dir->i_sb, dir);
+    return 0;
+}
+
+/* ================================================================
+ * Rename — move a directory entry from (old_dir, old name) to
+ * (new_dir, new name), replacing an existing target if present.
+ *
+ * The file keeps its FID and file header (and therefore its data
+ * blocks and retrieval map); only the directory entry that names it
+ * and the header's name/type/version/parent fields change. This is
+ * the write-tmp + rename(2) save path AUTHORIZE save_sysuaf(), SET
+ * PASSWORD, DCL RENAME, RMS $RENAME and SYSGEN .PAR WRITE all depend
+ * on. vmsfs previously had no ->rename, so the Linux VFS returned
+ * EPERM for every rename on a vmsfs.ko volume (observed as
+ * %UAF-E-RENAMEFAIL "... Operation not permitted" — rd vms-8b3).
+ *
+ * Semantics: standard POSIX rename. RENAME_NOREPLACE is honored;
+ * RENAME_EXCHANGE / RENAME_WHITEOUT are not supported and fail
+ * -EINVAL — an honest error, never a fabricated success (INV-6). A
+ * pre-existing target is replaced: its directory entry, file header,
+ * FID and data blocks are freed exactly as unlink would free them. A
+ * directory target must be empty (-ENOTEMPTY), mirroring rmdir.
+ *
+ * Directory-entry identity here is (de_fid, de_version): the file is
+ * moved by removing its old entry and adding a new one that points at
+ * the SAME FID, then rewriting the header's name/type/version and
+ * refreshing the cached in-core name/version so a later
+ * unlink/lookup (which keys on fid+version) still matches.
+ * ================================================================ */
+static int vmsfs_blkdev_rename(struct mnt_idmap *idmap, struct inode *old_dir,
+                               struct dentry *old_dentry, struct inode *new_dir,
+                               struct dentry *new_dentry, unsigned int flags)
+{
+    struct super_block *sb = old_dir->i_sb;
+    struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
+    struct inode *old_inode = d_inode(old_dentry);
+    struct inode *new_inode = d_inode(new_dentry);
+    struct vmsfs_inode_info *old_vi = VMSFS_I(old_inode);
+    bool is_dir = S_ISDIR(old_inode->i_mode);
+    bool target_was_dir = new_inode && S_ISDIR(new_inode->i_mode);
+    char base[VMSFS_MAX_FILENAME + 1];
+    char fname[VMSFS_MAX_NAME + 1];
+    char ftype[VMSFS_MAX_TYPE + 1];
+    char old_full[VMSFS_MAX_FILENAME + 1];
+    int req_version;
+    uint16_t new_version = 0;
+    struct buffer_head *bh;
+    struct vmsfs_file_header *fh;
+    uint32_t lbn;
+    int ret;
+
+    (void)idmap;
+
+    /* We honor RENAME_NOREPLACE; EXCHANGE/WHITEOUT are unsupported. */
+    if (flags & ~RENAME_NOREPLACE)
+        return -EINVAL;
+
+    /* Nothing to do if the VFS handed us the same object both ways. */
+    if (old_inode == new_inode)
+        return 0;
+
+    if (new_inode) {
+        if (flags & RENAME_NOREPLACE)
+            return -EEXIST;
+        /* POSIX source/target type compatibility. */
+        if (target_was_dir && !is_dir)
+            return -EISDIR;
+        if (!target_was_dir && is_dir)
+            return -ENOTDIR;
+    }
+
+    /* Parse and normalize the requested new name (VMS ODS-2 uppercase). */
+    ret = vmsfs_parse_version(new_dentry->d_name.name, base, sizeof(base),
+                              &req_version);
+    if (ret)
+        return ret;
+    vmsfs_strupper(base);
+
+    if (is_dir) {
+        size_t nlen = strlen(base);
+
+        /* Directories are unversioned; drop a trailing .DIR the user typed. */
+        if (nlen > 4 && strcasecmp(base + nlen - 4, ".DIR") == 0)
+            base[nlen - 4] = '\0';
+        strscpy(fname, base, sizeof(fname));
+        strscpy(ftype, "DIR", sizeof(ftype));
+        new_version = 0;
+    } else {
+        vmsfs_split_name_type(base, fname, sizeof(fname),
+                              ftype, sizeof(ftype));
+    }
+
+    /* Reconstruct the source entry's stored name, for rollback on failure. */
+    if (old_vi->extension[0] != '\0')
+        snprintf(old_full, sizeof(old_full), "%s.%s",
+                 old_vi->base_name, old_vi->extension);
+    else
+        strscpy(old_full, old_vi->base_name, sizeof(old_full));
+
+    mutex_lock(&sbi->alloc_lock);
+
+    /* A directory target must be empty, mirroring rmdir. */
+    if (target_was_dir) {
+        struct vmsfs_inode_info *tvi = VMSFS_I(new_inode);
+        uint32_t vbn;
+
+        for (vbn = 1; ; vbn++) {
+            uint32_t tlbn;
+            struct buffer_head *tbh;
+            unsigned int j;
+
+            if (vmsfs_vbn_to_lbn(tvi, vbn, &tlbn))
+                break;
+            tbh = sb_bread(sb, tlbn);
+            if (!tbh)
+                break;
+            for (j = 0; j < VMSFS_DIR_PER_BLOCK; j++) {
+                struct vmsfs_dir_entry *de =
+                    (struct vmsfs_dir_entry *)(tbh->b_data +
+                                               j * VMSFS_DIR_ENTRY_SIZE);
+                if (le32_to_cpu(de->de_fid) != 0) {
+                    brelse(tbh);
+                    mutex_unlock(&sbi->alloc_lock);
+                    return -ENOTEMPTY;
+                }
+            }
+            brelse(tbh);
+        }
+    }
+
+    /*
+     * Resolve the version for the new entry now that we hold the lock. A
+     * versioned request pins that version; replacing a target reuses the
+     * target's version (POSIX in-place replace); otherwise auto-version
+     * like create (highest existing + 1).
+     */
+    if (!is_dir) {
+        if (req_version > 0) {
+            new_version = req_version;
+        } else if (new_inode) {
+            new_version = (uint16_t)VMSFS_I(new_inode)->version;
+        } else {
+            uint16_t highest = vmsfs_blkdev_highest_version(sb, new_dir, base,
+                                                            strlen(base));
+            new_version = highest + 1;
+            if (new_version > VMSFS_VERSION_MAX) {
+                mutex_unlock(&sbi->alloc_lock);
+                return -ENOSPC;
+            }
+        }
+    }
+
+    /* (a) Replace: free the target's entry, header, FID and data blocks. */
+    if (new_inode) {
+        struct vmsfs_inode_info *tvi = VMSFS_I(new_inode);
+        unsigned int i;
+        uint32_t j;
+
+        ret = vmsfs_dir_remove_entry(sb, new_dir, tvi->fid, tvi->version);
+        if (ret) {
+            mutex_unlock(&sbi->alloc_lock);
+            return ret;
+        }
+        for (i = 0; i < tvi->map_count; i++)
+            for (j = 0; j < tvi->map[i].rp_count; j++)
+                vmsfs_free_block(sb, tvi->map[i].rp_lbn + j);
+        vmsfs_free_fid(sb, tvi->fid);
+        clear_nlink(new_inode);
+        if (target_was_dir)
+            drop_nlink(new_dir);
+    }
+
+    /* (b) Remove the source's old directory entry. */
+    ret = vmsfs_dir_remove_entry(sb, old_dir, old_vi->fid, old_vi->version);
+    if (ret) {
+        mutex_unlock(&sbi->alloc_lock);
+        return ret;
+    }
+
+    /* (c) Add the new directory entry pointing at the SAME FID. */
+    ret = vmsfs_dir_add_entry(sb, new_dir, old_vi->fid, base, strlen(base),
+                              new_version);
+    if (ret) {
+        /* Best-effort rollback so a full new_dir cannot orphan the file. */
+        vmsfs_dir_add_entry(sb, old_dir, old_vi->fid, old_full,
+                            strlen(old_full), old_vi->version);
+        mutex_unlock(&sbi->alloc_lock);
+        return ret;
+    }
+
+    /* (d) Rewrite the file header's name/type/version/parent on disk. */
+    lbn = sbi->index_lbn + old_vi->fid - 1;
+    bh = sb_bread(sb, lbn);
+    if (bh) {
+        fh = (struct vmsfs_file_header *)bh->b_data;
+        memset(fh->fh_name, 0, sizeof(fh->fh_name));
+        memset(fh->fh_type, 0, sizeof(fh->fh_type));
+        strscpy(fh->fh_name, fname, sizeof(fh->fh_name));
+        strscpy(fh->fh_type, ftype, sizeof(fh->fh_type));
+        fh->fh_version = cpu_to_le16(new_version);
+        fh->fh_parent_fid = cpu_to_le32(VMSFS_I(new_dir)->fid);
+        fh->fh_modified = cpu_to_le64(ktime_get_real_seconds());
+        fh->fh_checksum = 0;
+        fh->fh_checksum = cpu_to_le32(vmsfs_checksum(fh, sizeof(*fh)));
+        mark_buffer_dirty(bh);
+        sync_dirty_buffer(bh);
+        brelse(bh);
+    }
+
+    /* (e) A cross-directory move adjusts both directories' link counts. */
+    if (is_dir && old_dir != new_dir) {
+        drop_nlink(old_dir);
+        inc_nlink(new_dir);
+    }
+
+    /*
+     * (f) Refresh the cached in-core name/version so a later
+     * unlink/lookup keys on the NEW values (vmsfs_dir_remove_entry and
+     * vmsfs_blkdev_resolve match on fid+version / parsed name).
+     */
+    old_vi->version = new_version;
+    memset(old_vi->base_name, 0, sizeof(old_vi->base_name));
+    memset(old_vi->extension, 0, sizeof(old_vi->extension));
+    strscpy(old_vi->base_name, fname, sizeof(old_vi->base_name));
+    strscpy(old_vi->extension, ftype, sizeof(old_vi->extension));
+
+    /* Persist directory metadata that changed, then the free-count. */
+    vmsfs_blkdev_flush_inode(sb, old_dir);
+    if (new_dir != old_dir)
+        vmsfs_blkdev_flush_inode(sb, new_dir);
+    vmsfs_update_home_block(sb);
+
+    mutex_unlock(&sbi->alloc_lock);
+
+    inode_set_ctime(old_inode, ktime_get_real_seconds(), 0);
     return 0;
 }

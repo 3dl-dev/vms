@@ -67,6 +67,7 @@ COPY tests/netbsd/run_tests.sh       /netbsd/run_tests.sh
 # overriding the entrypoint with /netbsd/run_p2b.sh (same image as P2a).
 COPY src/kernel-netbsd/vms_netbsd.c        /netbsd/guest-src/kmod/vms_netbsd.c
 COPY src/kernel-netbsd/vms_ping.h          /netbsd/guest-src/kmod/vms_ping.h
+COPY src/kernel-netbsd/vms_eflag_nb.h      /netbsd/guest-src/kmod/vms_eflag_nb.h
 COPY src/kernel-netbsd/Makefile            /netbsd/guest-src/kmod/Makefile
 COPY tests/netbsd/guest/vmsprobe.c         /netbsd/guest-src/probe/vmsprobe.c
 COPY src/libvmssys/kif_transport_netbsd.c  /netbsd/guest-src/probe/kif_transport_netbsd.c
@@ -75,8 +76,20 @@ COPY src/kernel-netbsd/vms_ping.h          /netbsd/guest-src/probe/vms_ping.h
 COPY tests/netbsd/drive_netbsd_p2b.py      /netbsd/drive_netbsd_p2b.py
 COPY tests/netbsd/run_p2b.sh               /netbsd/run_p2b.sh
 
+# P2c (rd vms-4b4): the common-event-flag facility rides in the SAME `vms'
+# pseudo-device (src/kernel-netbsd/vms_netbsd.c above) via its shared wire
+# contract (vms_eflag_nb.h); the userspace event-flag tool (vmseflag.c) reaches
+# it THROUGH the same transport seam. The P2c driver (drive_netbsd_p2c.py) proves
+# cross-process shared kernel state. Selected at run time by overriding the
+# entrypoint with /netbsd/run_p2c.sh (same image as P2a/P2b).
+COPY tests/netbsd/guest/vmseflag.c         /netbsd/guest-src/probe/vmseflag.c
+COPY src/kernel-netbsd/vms_eflag_nb.h      /netbsd/guest-src/probe/vms_eflag_nb.h
+COPY tests/netbsd/drive_netbsd_p2c.py      /netbsd/drive_netbsd_p2c.py
+COPY tests/netbsd/run_p2c.sh               /netbsd/run_p2c.sh
+
 RUN chmod +x /netbsd/run_tests.sh /netbsd/drive_netbsd.py \
-             /netbsd/run_p2b.sh /netbsd/drive_netbsd_p2b.py
+             /netbsd/run_p2b.sh /netbsd/drive_netbsd_p2b.py \
+             /netbsd/run_p2c.sh /netbsd/drive_netbsd_p2c.py
 
 # The installed NetBSD image + download mirror live under /cache so they persist
 # across runs when a cache volume is mounted there (the cold-install cost is

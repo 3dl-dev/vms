@@ -225,3 +225,110 @@ gated like the P2a job (push/merge_group/schedule always; on PRs only when
 a second step runs with `P2B_SKIP_LOAD=1` to prove the PING assertion has teeth
 (must go red for the right reason). The same TCG/`/dev/kvm` runner caveat as P2a
 applies, more so on a cold cache (it also fetches `comp` + `syssrc`).
+
+---
+
+# Phase 2c — a real VMS executive facility on NetBSD (event flags)
+
+rd `vms-4b4` · parent `vms-dd8` · epic `vms-8e8`
+
+**P2c is the phase that proves the executive is REAL on the NetBSD substrate.**
+P2b proved one *ping* ioctl round-trips through a real in-kernel `/dev/vms`; a
+ping, however, keeps no state, so it cannot by itself distinguish a real
+executive from a per-process stub that always answers "ack". P2c closes that gap
+by implementing **ONE real VMS executive facility — the COMMON EVENT FLAG
+CLUSTERS — with its state held in the kernel**, and proving the
+**INV-6-decisive** property (CLAUDE.md Rule 9): a flag set by one process is seen
+by a **different** process, because the flag lives in the executive, not in
+either process. A per-process userspace fake could report ioctl success while
+sharing nothing; a kernel-resident flag cannot.
+
+## The facility
+
+The same `vms` pseudo-device (`src/kernel-netbsd/vms_netbsd.c`) now answers the
+**common event flag** ioctls of the shared `/dev/vms` contract
+(`src/kernel-netbsd/vms_eflag_nb.h`):
+
+| ioctl | VMS service | Behaviour |
+|-------|-------------|-----------|
+| `VMS_IOCTL_SETEF`  | `$SETEF`  | set common flag *efn*; return the flag's **previous** state (`SS$_WASSET`/`SS$_WASCLR`) |
+| `VMS_IOCTL_CLREF`  | `$CLREF`  | clear common flag *efn*; return the **previous** state |
+| `VMS_IOCTL_READEF` | `$READEF` | return the naming cluster's 32-bit state without waiting |
+
+**State + locking.** The two common clusters (cluster 2 = EFN 64–95, cluster 3 =
+EFN 96–127 — the OpenVMS *system-wide shared* flags) are two `uint32_t` words in
+the module's **kernel-global memory**, guarded by a `kmutex` that serialises the
+read-modify-write of set/clear against a concurrent read. There is exactly **one**
+copy and it is in the kernel, which is what makes it shared across processes.
+
+**Scope (honest).** Only the common (shared) clusters are built — they are the
+ones that *must* live in the executive and whose cross-process visibility is the
+whole point. The **local** per-process clusters (EFN 0–63) are a different
+facility not built this phase; an EFN outside the common range is rejected with an
+honest `SS$_ILLEFC`, never a faked per-process success (INV-6). Waits and locks
+are later phases. The event-flag *semantics* match the publicly documented
+OpenVMS `$SETEF`/`$CLREF`/`$READEF` and the in-tree Linux executive
+(`src/kernel/vms_eflag.c`) as the semantic reference (clean-room, Rule 8).
+
+## What it proves (the cross-process proof)
+
+`drive_netbsd_p2c.py`, on the cached NetBSD/amd64 guest, builds the module (now
+carrying the facility) and the userspace tool (`guest/vmseflag.c`, which reaches
+`/dev/vms` through `kif_transport_netbsd.c`), then:
+
+1. **INV-6 negative control** — with the module *not* loaded, `vmseflag read 64`
+   must fail honestly (`SS$_NOSUCHDEV`), never fake success;
+2. `modload`s the module and `mknod`s `/dev/vms`;
+3. **the cross-process proof**, each a *separate OS process*:
+   - process **A**: `vmseflag set 64` — sets common flag 64;
+   - process **B** (different PID): `vmseflag read 64` — must observe it **SET**;
+   - process **B2**: `vmseflag read 65` — control flag, must be **CLEAR**;
+   - process **C**: `vmseflag clear 64` — its reported previous state must be
+     **was-set** (so C, too, saw A's set);
+   - process **D**: `vmseflag read 64` — must now be **CLEAR** (the clear was
+     shared too).
+
+Because A, B, C and D are distinct processes and only the kernel is shared
+between them, B/C/D observing A's write is direct evidence the state lives in the
+executive.
+
+## Running it locally
+
+```bash
+docker build -f tests/netbsd/Dockerfile -t ovmx-netbsd-ktest .
+
+mkdir -p .netbsd-cache-p2c
+docker run --rm -v "$PWD/.netbsd-cache-p2c:/cache" --device /dev/kvm \
+    --entrypoint /netbsd/run_p2c.sh ovmx-netbsd-ktest
+echo "exit: $?"        # 0 = facility built+loaded, cross-process proof held, INV-6 negctl OK
+
+# NEGATIVE CONTROL: skip process A's SETEF -> the cross-process proof must go RED
+docker run --rm -v "$PWD/.netbsd-cache-p2c:/cache" \
+    -e P2C_SKIP_SET=1 --entrypoint /netbsd/run_p2c.sh ovmx-netbsd-ktest
+echo "exit: $?"        # nonzero: "the cross-process shared-kernel-state proof did not hold"
+```
+
+Same hard-`timeout` discipline as P2a/P2b (`run_p2c.sh`, `HARNESS_TIMEOUT`), plus
+per-command pexpect deadlines. P2c uses its own cache (`.netbsd-cache-p2c`,
+`/cache/anita-netbsd-p2c-*`) since, like P2b, its image carries `comp` + `syssrc`.
+
+## Files (P2c)
+
+| File | Role |
+|------|------|
+| `src/kernel-netbsd/vms_netbsd.c` | The `vms` pseudo-device — now also `$SETEF`/`$CLREF`/`$READEF` over the kernel-held common clusters. |
+| `src/kernel-netbsd/vms_eflag_nb.h` | Shared `/dev/vms` common-event-flag wire contract; portable to NetBSD kernel + userspace. |
+| `tests/netbsd/guest/vmseflag.c` | Userspace tool (`set`/`clear`/`read <efn>`); reaches `/dev/vms` through the seam. |
+| `tests/netbsd/drive_netbsd_p2c.py` | P2c driver: build → INV-6 negctl → load → cross-process proof (A sets, B/C/D observe). |
+| `tests/netbsd/run_p2c.sh` | P2c container entrypoint (hard `timeout`). Select via `--entrypoint`. |
+
+## CI (P2c)
+
+Job **`NetBSD/amd64 Event-Flag Facility (QEMU)`** in `.github/workflows/ci.yml`,
+gated like P2a/P2b (push/merge_group/schedule always; on PRs only when
+`tests/netbsd/**` **or** `src/kernel-netbsd/**` / the transport seam changes). It
+asserts the INV-6 honest-failure line **and** the cross-process line
+(`process B (a DIFFERENT process) observed common flag 64 SET`), and a second step
+runs with `P2C_SKIP_SET=1` to prove the cross-process assertion has teeth (must go
+red for the right reason). Same TCG/`/dev/kvm` runner caveat as P2b (own cache,
+`comp` + `syssrc`).

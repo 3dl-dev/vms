@@ -811,10 +811,13 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 #   S <file> <symbol>   a sys$ symbol the compiled product exports
 # Excluded from the OBJECT scan: kernel executives that cannot compile in a host
 # userland build (see the header). src/kernel = Linux vms.ko; src/kernel-netbsd =
-# the NetBSD `vms' pseudo-device (epic vms-8e8 P2b, sys/systm.h et al.). Anchored
-# with ^ so only these exact directories match -- "src/kernel-netbsd/" is NOT a
-# prefix of "src/kernel/" nor vice versa.
-SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/"
+# the NetBSD `vms' pseudo-device (epic vms-8e8 P2b, sys/systm.h et al.);
+# src/kernel-core = the substrate-agnostic executive core + the kernel-backend
+# shim contract (exec_kbackend.h, epic vms-8e8 rd vms-adb), which resolves to
+# <linux/*> or NetBSD kernel headers and so is equally uncompilable in a host
+# userland build -- the SAME sound reason. Anchored with ^ so only these exact
+# directories match -- none is a prefix of another.
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/"
 
 SYMCC=""
 for _c in cc gcc; do

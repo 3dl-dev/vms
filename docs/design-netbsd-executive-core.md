@@ -478,3 +478,61 @@ the libvmssys VAX syscall backend. That is the entire point of this record.
   proof) → D ast/lnm/access → E mbx/devtab → F proctab+dispatch (proc-model+RCU
   shim) → **G locks last (44 KB payoff)** → **H = `vms-9dc`** VAX inherits the
   pattern for free.
+
+## 10. Phase C landing (`vms-4b4`) — what shipped, and four glue decisions
+
+Phase C compiles the SAME `src/kernel-core/vms_eflag.c` into the NetBSD `vms`
+pseudo-device that the Linux `vms.ko` builds, and proves it holds real
+cross-process state on NetBSD 10.1/amd64 (tests/netbsd P2c). The facility source
+is unchanged in substance; the new code is entirely per-substrate glue in
+`src/kernel-netbsd/`: the NetBSD backends (`exec_kbackend_netbsd.h`,
+`exec_list_netbsd.{h,c}`), the NetBSD struct twin (`vms_internal.h`), and the
+`cdevsw`/`d_ioctl` dispatch. Four decisions worth recording:
+
+1. **The copy seam = IOC_VOID, not `_IOWR` (matches §3's `exec_copyin`→`copyin`).**
+   The facility owns its user↔kernel copy (it calls `exec_copyin` at entry and
+   `exec_copyout` at exit on the `arg` it is handed). On Linux the module passes
+   the raw user pointer and those are `copy_*_user`. On NetBSD the generic ioctl
+   path would, for an `_IOWR`, PRE-COPY the argument into a kernel buffer and hand
+   the driver THAT — which would make `exec_copyin` a kernel memcpy of an
+   already-copied struct (a double copy). So the NetBSD event-flag ioctls are
+   encoded **IOC_VOID** (the `_IO()` form, size 0, no pre-copy): NetBSD hands the
+   driver the raw user pointer, the driver passes it straight through, and the
+   facility's `exec_copyin`/`exec_copyout` do the single real boundary crossing —
+   op-for-op what the Linux backend does. PING stays `_IOWR` (the P2b contract),
+   so the two encodings coexist in one `d_ioctl`. The event-flag arg structs are
+   byte-identical to `src/kernel/vms_ioctl.h`; only the request-number encoding
+   differs per substrate (documented in `vms_eflag_nb.h`).
+
+2. **One lifecycle addition to the shared core, no-op on Linux.** The facility
+   `exec_cv_init`/`exec_lock_init`s each common cluster's `waitq`/`lock` at
+   creation but the cluster-free sites called bare `exec_free()` — fine on Linux
+   (a wait_queue/spinlock owns no external resource, so `exec_*_destroy` are
+   no-ops) but a resource leak / DIAGNOSTIC trip on NetBSD (a live
+   `kcondvar`/`kmutex` must be `cv_destroy`/`mutex_destroy`d before free). Phase C
+   routes all five cluster-free paths through one `vms_common_ef_free()` helper
+   that destroys then frees, and adds the paired `exec_lock_destroy` for the
+   list-guard lock in `vms_eflag_cleanup`. This is the intended use of the shim's
+   `exec_*_destroy` ops (§3 declares them). **Verified inert on Linux:** the
+   compiled `vms_eflag.o` is disassembly-identical (0 instruction diff) to
+   origin/main — the helper inlines and the no-op destroys vanish.
+
+3. **Per-pid proc table as glue (a stand-in for Phase F's `vms_proctab`).** The
+   facility needs a stable `struct vms_proc` (for the per-process ASCEFC
+   associations that point at the shared clusters). A NetBSD `cdevsw` has no
+   per-open private data and its `d_close` fires only on the LAST system-wide
+   close, so the glue keeps a small module-lifetime table keyed by the calling
+   lwp's pid (find-or-create in `d_ioctl`, freed en masse at unload). The shared
+   COMMON-cluster state a PERMANENT cluster holds outlives any one proc — which is
+   exactly what makes a flag set by an already-exited process visible to a later
+   one. Phase F replaces this with the real shared `vms_proctab` + host-task
+   binding.
+
+4. **The proof exercises association AND the cv wait/wake, not just a word.** The
+   P2c test is VMS-faithful: each op `$ASCEFC`s the well-known PERMANENT common
+   cluster first (the facility rejects an unassociated common EFN with
+   `SS$_UNASEFC`, never a per-process fake — INV-6). Beyond the A-sets/B-reads
+   visibility proof, a waiter BLOCKS in-kernel in `exec_cv_wait` on flag 66 and is
+   WOKEN by a DIFFERENT process's `$SETEF` (`exec_cv_broadcast`) — the
+   lost-wakeup-free cv contract, held across a process boundary on NetBSD `cv(9)`,
+   on the cluster's shared kernel `kcondvar`+`kmutex`.

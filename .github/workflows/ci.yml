@@ -141,6 +141,7 @@ jobs:
               - '.github/workflows/**'
               - 'tests/netbsd/**'
               - 'src/kernel-netbsd/**'
+              - 'src/kernel-core/**'
               - 'src/libvmssys/kif_transport.h'
               - 'src/libvmssys/kif_transport_netbsd.c'
             netbsd_vax:
@@ -1651,6 +1652,115 @@ jobs:
           echo "$OUTPUT" | grep -qF "the version/ping ioctl did not round-trip" \
             || { echo "FAIL: nonzero exit but not the expected missing-ioctl reason -- negative control may have failed for an unrelated cause"; exit 1; }
           echo "PASS: harness correctly went RED when the module was not loaded -- the PING assertion has teeth"
+
+  # Job 3b-netbsd-p2c: OVMX/NetBSD event-flag facility (vms-4b4, epic vms-8e8 P2c)
+  #
+  # THE PHASE THAT PROVES THE SHARED EXECUTIVE CORE IS REAL ON NETBSD. Builds the
+  # harness image, boots the cached NetBSD/amd64 guest (comp + syssrc), and:
+  #   - builds the OVMX/NetBSD `vms' pseudo-device, which compiles the SAME
+  #     event-flag facility source the Linux vms.ko builds --
+  #     src/kernel-core/vms_eflag.c -- with the NetBSD backend
+  #     (exec_kbackend_netbsd.h / exec_list_netbsd.{h,c}). There is NO NetBSD copy
+  #     of the facility logic; the one source runs on both substrates,
+  #   - builds the userspace event-flag tool, which reaches /dev/vms THROUGH the
+  #     transport seam (src/libvmssys/kif_transport_netbsd.c) and $ASCEFCs the
+  #     well-known PERMANENT common cluster before each op (VMS-faithful),
+  #   - INV-6 NEGATIVE CONTROL: runs the tool with the module NOT loaded and
+  #     requires an HONEST device-absent failure (SS$_NOSUCHDEV) -- never a fake,
+  #   - CROSS-PROCESS PROOF: process A sets common flag 64; a DIFFERENT process B
+  #     reads it SET (control flag 65 stays CLEAR); a third clears it and sees the
+  #     previous state was-set; then a waiter BLOCKS in-kernel on flag 66 and is
+  #     WOKEN by a DIFFERENT process's set (the shared cv/lock wait/wake across a
+  #     process boundary). That cross-process visibility + wake is the
+  #     INV-6-decisive property (CLAUDE.md Rule 9): the flag lives in the shared
+  #     executive core's kernel memory, not in any one process.
+  #
+  # Gated exactly like P2a/P2b: push/merge_group/schedule always, and on PRs only
+  # when the netbsd paths (which now include src/kernel-core/**) change, given the
+  # boot + in-guest build cost. Its OWN cache (comp + syssrc), keyed on the pinned
+  # release + the P2c driver. TOOLING, NOT A RUNTIME (Rule 9).
+  #
+  # Runner-capability caveat (honest, same as P2a/P2b): GitHub-hosted runners have
+  # no /dev/kvm, so the guest runs under TCG. A COLD cache pays a full install; a
+  # warm cache boots, builds one module + one tool, and runs the proof in minutes.
+  netbsd-amd64-eflag-facility:
+    name: NetBSD/amd64 Event-Flag Facility (QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache installed NetBSD image (P2c, comp+syssrc)
+        uses: actions/cache@v4
+        with:
+          path: .netbsd-cache-p2c
+          key: netbsd-amd64-p2c-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/netbsd/drive_netbsd_p2c.py') }}
+          restore-keys: |
+            netbsd-amd64-p2c-
+
+      - name: Build NetBSD harness image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/netbsd/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-netbsd-ktest:latest
+          cache-from: type=gha,scope=netbsd-harness
+          cache-to: type=gha,mode=max,scope=netbsd-harness
+
+      - name: Build + modload /dev/vms; prove cross-process shared event-flag state
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache-p2c"
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache-p2c:/cache" \
+                  --entrypoint /netbsd/run_p2c.sh \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: NetBSD/amd64 P2c harness exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "OK (INV-6): with no module loaded the tool FAILED HONESTLY" \
+            || { echo "FAIL: did not see the INV-6 module-absent honest-failure assertion"; exit 1; }
+          echo "$OUTPUT" | grep -qF "process B (a DIFFERENT process) observed common flag 64 SET" \
+            || { echo "FAIL: did not see the cross-process shared-kernel-state proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF "the shared exec_cv_wait/broadcast holds cross-process" \
+            || { echo "FAIL: did not see the cross-process cv wait/wake proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF 'NetBSD/amd64 P2c HARNESS PASSED' \
+            || { echo "FAIL: harness did not report its own PASSED banner"; exit 1; }
+          echo "PASS: the SAME src/kernel-core/vms_eflag.c, compiled with the NetBSD backend, shared state across processes (INV-6)"
+
+      - name: NEGATIVE CONTROL — skipping the SETEF must redden the cross-process proof
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache-p2c:/cache" \
+                  --entrypoint /netbsd/run_p2c.sh \
+                  -e P2C_SKIP_SET=1 \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -eq 0 ]; then
+            echo "FAIL: harness exited 0 with process A's SETEF skipped -- the cross-process proof has no teeth."
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "the cross-process shared-kernel-state proof did not hold" \
+            || { echo "FAIL: nonzero exit but not the expected missing-set reason -- negative control may have failed for an unrelated cause"; exit 1; }
+          echo "PASS: harness correctly went RED when the flag was never set -- the cross-process proof has teeth"
 
   # -----------------------------------------------------------------------
   # Job 3d: Kernel Executive — per-facility negative controls (vms-e7d)

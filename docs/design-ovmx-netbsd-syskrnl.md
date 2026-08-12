@@ -1,9 +1,20 @@
 # Design Record: An "OVMX/NetBSD" SYSKRNL — capturing VAX as a first-class runtime
 
 > **Status:** FEASIBILITY + DESIGN scoping (rd epic `vms-8e8`). Not an
-> implementation. The central deliverable is a **decision teed up for the
+> implementation. The central deliverable was a **decision teed up for the
 > operator**: a minimal generalization of the Rule 9 HARD INVARIANT (Phase 0
-> below). No code changes accompany this record.
+> below).
+>
+> **Phase 0 (rd `vms-fff`) — RATIFIED + LANDED.** The Rule 9 generalization to
+> "one runtime *model*: the real-host-kernel path" (§5.1) was **ratified by the
+> operator on 2026-08-12**. The P0 rule-text + gate edits landed in this same PR:
+> `docs/runtime-target.md` reworded to the substrate-neutral form naming both
+> sanctioned SYSKRNLs (OVMX/Linux = `vms.ko`, OVMX/NetBSD = the `vms`
+> pseudo-device), and `tests/integration/test_runtime_target.sh` taught the new
+> grepped anchor — every INV-6 / no-userspace-fallback / no-Docker sentence
+> preserved verbatim, gate green. (Rule 9's operative home, `CLAUDE.md`, is not
+> tracked in the public repo — it was stripped by #306, which is why the canonical
+> public statement is `docs/runtime-target.md`.) P1–P4 remain design-only below.
 >
 > **Verdict up front: GO, STAGED.** Feasible and strategically aligned, but
 > gated on operator ratification of Rule 9 (Phase 0) and staged so the OS port

@@ -92,3 +92,7 @@ b/
 # NetBSD harness local cache (installed image + anita download mirror, vms-7f7)
 tests/netbsd/.netbsd-cache/
 .netbsd-cache/
+# Boot / emulator disk caches (vms-0041 lab-vax, boot smoke tests). Multi-MB
+# emulator disk images and downloaded install media are regenerated from a
+# pinned recipe, NEVER committed.
+.boot-cache/

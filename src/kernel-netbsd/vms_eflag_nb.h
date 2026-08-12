@@ -169,7 +169,9 @@ struct vms_ef_common_args {
 #define VMS_SS_UNASEFC  564u    /* SS$_UNASEFC */
 #endif
 #ifndef VMS_SS_NOSUCHDEV
-#define VMS_SS_NOSUCHDEV 2680u  /* SS$_NOSUCHDEV -- the honest "no /dev/vms" verdict */
+/* SS$_NOSUCHDEV -- the honest device-unreachable verdict the probe reports when
+ * the executive device cannot be opened (never a fabricated success). */
+#define VMS_SS_NOSUCHDEV 2680u
 #endif
 
 #endif /* _VMS_EFLAG_NB_H */

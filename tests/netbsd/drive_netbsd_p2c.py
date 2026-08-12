@@ -186,9 +186,13 @@ def main():
     guest_src_dir = env("OVMX_GUEST_SRC", "/netbsd/guest-src")
     src_iso = env("OVMX_SRC_ISO", "/tmp/ovmx-src-p2c.iso")
 
-    boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "1200"))
-    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "180"))
-    build_timeout = int(env("NETBSD_BUILD_TIMEOUT", "900"))
+    # Deadlines are generous for the CI case: GitHub runners have no /dev/kvm,
+    # so the guest runs under TCG and every in-guest command is much slower than
+    # a local KVM run. The build is quiet (redirected to a file) so it no longer
+    # floods the console, but a slow guest can still take a while per command.
+    boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "1500"))
+    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "300"))
+    build_timeout = int(env("NETBSD_BUILD_TIMEOUT", "1800"))
 
     skip_set = bool(env("P2C_SKIP_SET"))
 
@@ -253,9 +257,27 @@ def main():
             return 10
 
         # ---- build the kernel module (now carries the eflag facility) -----
-        rc, out = run(child, "cd /root/ovmx/kmod && make 2>&1", build_timeout)
-        if rc != 0:
-            log("FAIL: in-guest kernel-module build failed")
+        # The in-guest kernel-module build is a CLEAN rebuild every run: the
+        # sources are freshly copied from the source ISO above (no build cache
+        # is carried across runs -- only the installed OS image is cached). We
+        # `make clean' first anyway, belt-and-suspenders, so a stray object can
+        # never mask a source change.
+        #
+        # CRITICAL for CI robustness: the build output is redirected to a FILE,
+        # not streamed to the serial console. Under TCG (no KVM, GitHub runners)
+        # the verbose kernel `make' -- dozens of long gcc command lines -- floods
+        # the emulated serial console and desynchronises the pexpect command/reply
+        # handshake, so the NEXT command's marker can be lost (this is what timed
+        # the CI job out at the step after the build). Keeping the console quiet
+        # on success makes the handshake crisp; on failure we cat the log so the
+        # compiler diagnostic is still visible.
+        rc, out = run(child,
+                      "cd /root/ovmx/kmod && make clean >/dev/null 2>&1; "
+                      "if make >/tmp/kmodbuild.log 2>&1; then echo KMOD_BUILD_OK; "
+                      "else echo KMOD_BUILD_FAIL; cat /tmp/kmodbuild.log; fi",
+                      build_timeout)
+        if "KMOD_BUILD_OK" not in out:
+            log("FAIL: in-guest kernel-module build failed (diagnostic above)")
             return 11
         rc, _ = run(child, "test -f /root/ovmx/kmod/vms.kmod", cmd_timeout)
         if rc != 0:
@@ -265,13 +287,16 @@ def main():
             "compiled with the NetBSD backend)")
 
         # ---- build the event-flag tool ------------------------------------
-        rc, _ = run(child,
-                    "cd /root/ovmx/probe && "
-                    "cc -O -Wall -Wextra -I. -o vmseflag "
-                    "vmseflag.c kif_transport_netbsd.c 2>&1",
-                    build_timeout)
-        if rc != 0:
-            log("FAIL: in-guest vmseflag build failed")
+        # Same quiet-console discipline as the module build above.
+        rc, out = run(child,
+                      "cd /root/ovmx/probe && "
+                      "if cc -O -Wall -Wextra -I. -o vmseflag "
+                      "vmseflag.c kif_transport_netbsd.c >/tmp/toolbuild.log 2>&1; "
+                      "then echo TOOL_BUILD_OK; "
+                      "else echo TOOL_BUILD_FAIL; cat /tmp/toolbuild.log; fi",
+                      build_timeout)
+        if "TOOL_BUILD_OK" not in out:
+            log("FAIL: in-guest vmseflag build failed (diagnostic above)")
             return 13
         log("OK: vmseflag built in-guest (through kif_transport_netbsd.c)")
 

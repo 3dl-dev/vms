@@ -91,7 +91,7 @@
 /* ---- Brand identity (human surfaces, INV-0) ---------------------- */
 
 #define OVMX_PRODUCT_NAME       "OpenVMX"
-#define OVMX_PRODUCT_VERSION    "V0.3-8"
+#define OVMX_PRODUCT_VERSION    "V0.3-9"
 
 /*
  * INV-0 badge. Attached to human-facing identity so the answer to "what is

@@ -121,6 +121,7 @@ SYSTEM_CMDS=(
     'SHOW LOGICAL UAT_TEST'
     'DEASSIGN UAT_TEST'
     'SHOW USERS'
+    'SHOW USERS/FULL'
     'SHOW TERMINAL'
     'SHOW DEVICE'
     'HELP SHOW'
@@ -1251,8 +1252,43 @@ else
     FAIL=$((FAIL + 1))
     ERRORS="${ERRORS}\n  FAIL: could not extract A's own VMS pid to check SHOW USERS against"
 fi
-check_response 'SHOW USERS' 'SYSTEM +SYSTEM'
-check_response 'SHOW USERS' 'Total number of users = 1'
+
+# vms-086: SHOW USERS gained a Node column (Username, Node, Process Name,
+# PID, Terminal, Type -- VSI OpenVMS DCL Dictionary SHOW USERS /FULL entry,
+# https://www0.mi.infn.it/~calcolo/OpenVMS/ssb71/9996/9996p060.htm). The old
+# 'SYSTEM +SYSTEM' pattern assumed username was immediately followed by
+# process name; ovmx_node_name() (the same fact SHOW PROCESS's own
+# 'Node: +OVMX' check above already proves) now sits between them, so the
+# pattern is tightened to require it rather than merely tolerate it.
+check_response 'SHOW USERS' 'SYSTEM +OVMX +SYSTEM'
+
+# vms-086: the total line used to compute "number of users" and "number of
+# processes" from the SAME loop variable, so they could never disagree even
+# though real VMS prints two DISTINCT counts (VSI DCL Dictionary SHOW USERS,
+# ibid.; independently confirmed by three captures -- see the header comment
+# above cmd_show_users(), src/vmsdcl/dcl_cmd_show.c). One SYSTEM session is
+# one distinct user and one process, so both figures read 1 here; the
+# interactive/subprocess/batch breakdown must show all three sourced counts,
+# with subprocess and batch reading their honest zero (see that same header
+# comment for why OVMX cannot source either today: VMS_IOCTL_SETTERM binds
+# only the login-root process, never a SPAWN child or a batch job).
+check_response 'SHOW USERS' 'Total number of users = 1,  number of processes = 1'
+check_response 'SHOW USERS' 'interactive = 1, subprocess = 0, batch = 0'
+
+# vms-086: the Type column must classify the real session as Interactive --
+# sourced from the terminal-binding fact above, not a guess (see the
+# cmd_show_users() header comment for the structural argument).
+check_response 'SHOW USERS' 'SYSTEM +OVMX +SYSTEM.*Interactive'
+
+# vms-086: SHOW USERS/FULL adds a Login Time column, sourced from
+# JPI$_LOGINTIM (VMS_PI_V_LOGINTIM, vms-a7e) on the SAME executive row this
+# command already reads, formatted through sys$asctim's own
+# "DD-MMM-YYYY HH:MM:SS.CC". A REAL login on a REAL /dev/vms must render a
+# REAL timestamp here -- not blanks, which is what INV-6 says OVMX must show
+# instead of a fabricated one when the valid bit is clear. This is the
+# positive proof the host-side (no /dev/vms) test cannot give: that proof
+# only shows blanks are honest when there is no executive to source from.
+check_response 'SHOW USERS/FULL' 'SYSTEM +OVMX +SYSTEM.*Interactive +[0-9]{1,2}-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{2}'
 
 # SHOW TERMINAL must name the terminal THIS LOGIN SESSION is on, read out of
 # the executive (vms-d0b).

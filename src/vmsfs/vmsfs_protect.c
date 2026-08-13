@@ -217,19 +217,30 @@ int vmsfs_format_protection(uint16_t prot, char *buf, size_t bufsize)
 }
 
 /*
- * vmsfs_parse_protection - Parse a VMS protection string.
+ * vmsfs_parse_protection - Parse a VMS protection string, MERGING onto a base.
  *
  * Accepts formats like:
  *   "(S:RWED,O:RWED,G:RE,W:)"
  *   "S:RWED,O:RWED,G:RE,W:"     (without parentheses)
  *   "(S:RWED,O:RWD,G:R,W)"      (various combinations)
+ *   "W:RE"                       (a single category, e.g. `SET PROTECTION=W:RE`)
  *
- * Each letter after the colon indicates ALLOWED access. Any access
- * type not listed is DENIED (bit is set in the protection word).
+ * Within a category that IS named, each letter after the colon indicates
+ * ALLOWED access, and any access type NOT listed is DENIED (its bit is set).
+ *
+ * A category that is NOT named is left at whatever value the caller placed
+ * in *prot on entry -- this is the VMS SET PROTECTION rule: "Unspecified
+ * categories retain their current protection." (VSI OpenVMS DCL Dictionary,
+ * SET PROTECTION: the protection-code argument is [S|O|G|W]:code and "any
+ * categories you do not specify are unchanged".) The caller therefore seeds
+ * *prot with the object's CURRENT protection word before calling; to parse a
+ * fresh, standalone spec instead (every unnamed category denied), seed *prot
+ * with 0xFFFF first.
  *
  * Parameters:
  *   str  - Protection string to parse
- *   prot - Output: 16-bit VMS protection word
+ *   prot - In/out: 16-bit VMS protection word. On entry, the base value for
+ *          categories the string omits; on return, the merged result.
  *
  * Returns SS$_NORMAL on success, SS$_BADPARAM on error.
  */
@@ -239,8 +250,10 @@ int vmsfs_parse_protection(const char *str, uint16_t *prot)
         return SS$_BADPARAM;
     }
 
-    /* Start with all access denied (all bits set) */
-    *prot = 0xFFFF;
+    /* NOTE: *prot is NOT reset here -- it carries the base value so that
+     * categories the string omits keep their current protection (VMS SET
+     * PROTECTION merge semantics; see the header comment above). Callers that
+     * want a fresh all-denied parse must set *prot = 0xFFFF before calling. */
 
     const char *p = str;
 

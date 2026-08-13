@@ -805,6 +805,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_mbx_read(proc, arg);
     case VMS_IOCTL_MBX_DELMBX:
         return vms_ioctl_mbx_delmbx(proc, arg);
+    case VMS_IOCTL_MBX_SET_WRTATTN:
+        return vms_ioctl_mbx_set_wrtattn(proc, arg);
 
     /* P0 program region (vms-68f.i, in-process image activation foundation) */
     case VMS_IOCTL_P0_MAP:

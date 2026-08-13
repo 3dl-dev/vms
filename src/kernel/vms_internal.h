@@ -874,6 +874,13 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_mbx_delmbx(struct vms_proc *proc, unsigned long arg);
 /*
+ * Register a write-attention AST on a mailbox channel (vms-9003). When another
+ * process writes to the mailbox, the executive queues the AST into THIS
+ * process's AST queue -- real cross-process delivery, the same queue $DCLAST
+ * and the lock manager use (vms_ast.c). One-shot; re-arm with another call.
+ */
+long vms_ioctl_mbx_set_wrtattn(struct vms_proc *proc, unsigned long arg);
+/*
  * Release one mailbox channel by number, for vms_ioctl_dassgn()'s fallback
  * when `chan` is not in proc->channels. Returns 0 if `chan` named a
  * mailbox channel (released), or -ENOENT if it did not (so the generic

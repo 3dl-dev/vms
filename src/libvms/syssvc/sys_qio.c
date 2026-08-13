@@ -212,6 +212,28 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
             if (st & 1) actlen = p2;
             break;
 
+        case IO$_SETMODE:
+        case IO$_SETCHAR:
+            /*
+             * IO$_SETMODE|IO$M_WRTATTN -- arm a WRITE-ATTENTION AST on this
+             * mailbox channel (vms-9003). Per the VSI I/O User's Reference
+             * (mailbox driver) the AST routine is P1 and its parameter is P2;
+             * it is delivered at the caller's access mode (PSL_C_USER for a
+             * normal image's $QIO). The executive registers it and fires it
+             * cross-process on the next write (src/kernel-core/vms_mbx.c) --
+             * the notification MMK's send_cmd_and_wait waits on. IO$M_READATTN
+             * (the read-attention counterpart) is not implemented; a SETMODE
+             * without a recognized attention modifier is refused honestly.
+             */
+            if (func & IO$M_WRTATTN) {
+                st = vms_kif_mbx_set_wrtattn(exec_chan, (uint8_t)PSL_C_USER,
+                                             (uint64_t)(uintptr_t)p1,
+                                             (uint64_t)p2);
+            } else {
+                st = SS$_ILLIOFUNC;
+            }
+            break;
+
         case IO$_NOP:
             st = SS$_NORMAL;
             break;

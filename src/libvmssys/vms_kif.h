@@ -659,4 +659,12 @@ uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len);
 uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
                           uint32_t *actlen);
 
+/* $QIO IO$_SETMODE|IO$M_WRTATTN-equivalent: arm a WRITE-ATTENTION AST on the
+ * mailbox behind `exec_chan`. When ANOTHER process writes to the mailbox, the
+ * executive queues astadr(astprm) into this process's AST queue at `acmode`
+ * (drained through $SETAST/DELIVERAST, like a $DCLAST-declared AST). One-shot,
+ * re-armed by another call. SS$_NOSUCHDEV if the executive is unreachable. */
+uint32_t vms_kif_mbx_set_wrtattn(uint32_t exec_chan, uint8_t acmode,
+                                 uint64_t astadr, uint64_t astprm);
+
 #endif /* _VMS_KIF_H */

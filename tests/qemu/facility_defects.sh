@@ -486,6 +486,7 @@ lnm-manager-delete-noop
 lnm-group-scope-collapsed
 lnm-privilege-check-bypassed
 mbx-not-shared
+mbx-wrtattn-not-fired
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -4509,6 +4510,47 @@ EOF
                       ;;
         esac;;
 
+    mbx-wrtattn-not-fired)
+        case "$_f" in
+        facility)     echo "mailbox WRITE-ATTENTION ASTs (VMS_IOCTL_MBX_SET_WRTATTN / IO\$_SETMODE|IO\$M_WRTATTN, executive-resident MBAn:), vms-9003 -- the notification MMK's send_cmd_and_wait waits on (spine #4)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_wrtattn";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_write()'s write-attention firing block allocates the AST entry it queues into the reader's executive AST queue; the mutation makes that allocation always yield NULL, so the \`if (ast)\` guard skips the enqueue and NO write-attention AST is ever delivered -- while every registration is still drained (one-shot bookkeeping intact) and the write itself still succeeds. The arm (\$QIO IO\$_SETMODE|IO\$M_WRTATTN registers fine), the cross-process rendezvous (\$CREMBX/\$ASSIGN by name) and the write are all untouched; only the CROSS-PROCESS DELIVERY of the AST -- the one thing a per-process fake could never do and the whole point of vms-9003 -- stops happening.";;
+        require_fail) cat <<'EOF'
+A's write-attention AST FIRES when the UNRELATED process B writes the mailbox (cross-process delivery through the executive)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+A's AST ran with the exact parameter A passed in P2 (astprm round-tripped through the executive)
+the RE-ARMED write-attention AST fires on the next cross-process write
+the re-armed AST ran with the NEW parameter, not round 1's stale value
+one-shot: a write with NO re-arm does NOT fire the AST again (VSI mailbox driver semantics)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME ONE ROOT (the write-attention firing never runs), OBSERVED AT EVERY
+POINT THE SUITE LOOKS FOR A DELIVERY. With no AST ever queued, A's recorder
+never runs, so g_fired stays 0 and g_param stays 0 through all three rounds:
+the round-1 parameter check, the round-2 re-armed fire and its parameter
+check, and the round-3 one-shot check (which asserts g_fired == 2 and so also
+reads 0) all go red. They are not four more properties -- they are the single
+"no AST was delivered" fact seen at each place the suite samples it. What
+STAYS GREEN pins the mutation to delivery alone and nothing else: A's own
+$CREMBX and IO$_SETMODE|IO$M_WRTATTN arm both return SS$_NORMAL (the ioctl
+still registers the AST -- only the write path's firing is broken), B's
+$ASSIGN-by-name still reaches the mailbox, and A's round-2 re-arm still
+returns SS$_NORMAL. The one-shot NON-fire property is a POSITIVE control in
+the healthy tree (round 3 writes without re-arming and g_fired must stay 2);
+under this mutation it reddens only as collateral of nothing ever firing, not
+because one-shot bookkeeping regressed -- the registrations are still drained
+exactly once per write either way.
+EOF
+                      ;;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -5635,6 +5677,16 @@ apply_edit() {
         # (it reads "if (!mbx ||" instead), so a second apply finds nothing
         # left to match -- the no-op selftest requires.
         sed -i '/^long vms_ioctl_mbx_assign/,/^}$/ s|    if (!mbx) {|    if (!mbx \|\| mbx->owner_linux_pid != proc->linux_pid) { /* NEGCTL mbx-not-shared */|' "$_file";;
+
+    mbx-wrtattn-not-fired)
+        # UNIQUE TEXT, no range anchor needed: exec_zalloc_atomic(sizeof(*ast))
+        # occurs exactly once in vms_mbx.c -- the write-attention firing block's
+        # AST allocation in vms_ioctl_mbx_write(). Forcing it to NULL makes the
+        # `if (ast)` guard skip the enqueue, so no write-attention AST is ever
+        # delivered while every registration is still drained (one-shot intact)
+        # and the write still succeeds. After substitution the text no longer
+        # matches, so a second apply is a no-op (the selftest requires).
+        sed -i 's|ast = exec_zalloc_atomic(sizeof(\*ast));|ast = (struct vms_ast_entry *)0; /* NEGCTL mbx-wrtattn-not-fired */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

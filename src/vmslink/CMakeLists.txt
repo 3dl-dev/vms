@@ -32,6 +32,19 @@ target_link_options(vmsdump PRIVATE ${OVMX_HOST_TOOL_LINK_OPTS})
 set_target_properties(vmsdump PROPERTIES OUTPUT_NAME "OVMXDUMP" SUFFIX "")
 install(TARGETS vmsdump RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
+# LIBRARIAN.EXE — the OVMX object-library utility (bead vms-ca9, self-host spine
+# #3). Produces/maintains .OLB archives (an OVMX-labeled `ar` container of .OBJ
+# members, Rule 8 — see src/vmslink/include/ovmx_olb.h) that LINK.EXE consumes.
+# Like LINK.EXE/OVMXDUMP it is a bootstrap host tool of the toolchain (reads/
+# writes .OLB and .OBJ files; not itself a VMS runtime image), installed to
+# SYS$SYSTEM:. Needs src/libvms/include for ssdef.h.
+add_executable(vmslibrarian librarian.c)
+target_include_directories(vmslibrarian PRIVATE include ${VMS_INCLUDE_DIR})
+target_compile_definitions(vmslibrarian PRIVATE _POSIX_C_SOURCE=200809L _DEFAULT_SOURCE)
+target_link_options(vmslibrarian PRIVATE ${OVMX_HOST_TOOL_LINK_OPTS})
+set_target_properties(vmslibrarian PROPERTIES OUTPUT_NAME "LIBRARIAN" SUFFIX ".EXE")
+install(TARGETS vmslibrarian RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
 # DECC$SHR.EXE — the OVMX C run-time library shareable (bead vms-61f.1) — is NOT
 # a host CMake target: it links the aarch64 musl libc.a + libgcc.a via LINK.EXE,
 # so it only builds inside the arm64 musl container (this host is glibc). The

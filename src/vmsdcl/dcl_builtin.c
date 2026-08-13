@@ -416,8 +416,13 @@ static struct dcl_verb builtin_verbs[] = {
       "Invoke the EDT text editor", q_none },
     { "EXIT",        cmd_exit,        CDU_F_ABBREV, 2,
       "Terminate a command procedure or session", q_none },
-    { "HELP",        cmd_help,        CDU_F_ABBREV | CDU_F_PARAM, 2,
-      "Obtain information about DCL commands", q_none },
+    /* HELP takes accept-all qualifiers (quals == NULL, not q_none): a slash
+     * token after HELP is a command-qualifier TOPIC to look up (e.g.
+     * HELP DIRECTORY QUALIFIERS /EXCLUDE), exactly as VMS HELP treats it, so
+     * cmd_help folds them into the topic path. A q_none table would instead
+     * draw %DCL-W-IVQUAL and make every qualifier topic unreachable (vms-01b). */
+    { "HELP",        cmd_help,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER,
+      2, "Obtain information about DCL commands", NULL },
     { "INQUIRE",     cmd_inquire,     CDU_F_ABBREV | CDU_F_PARAM, 3,
       "Read input from SYS$INPUT and assign to a symbol", q_inquire },
     { "INSTALL",     cmd_install,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,

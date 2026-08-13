@@ -408,6 +408,74 @@ help_node_t *help_find(help_lib_t *lib, const char *const path[], int n)
 }
 
 /* ------------------------------------------------------------------ */
+/* Node mutation (used by callers that inject content -- e.g. the DCL   */
+/* built-in HELP folding the Engine A CDU command tables into the       */
+/* library tree; vms-01b). Kept in the engine so it stays free of any   */
+/* DCL/libvms dependency and the hermetic unit test can exercise it.    */
+/* ------------------------------------------------------------------ */
+
+help_node_t *help_node_find_child(help_node_t *parent, const char *name)
+{
+    if (!parent || !name) return NULL;
+    return child_lookup(parent, name);
+}
+
+help_node_t *help_node_add_child(help_node_t *parent, int level,
+                                 const char *name)
+{
+    if (!parent || !name) return NULL;
+    help_node_t *node = node_new(level, name);
+    if (!node) return NULL;
+    node_add_child(parent, node);
+    return node;
+}
+
+void help_node_set_text(help_node_t *node, const char *text)
+{
+    if (!node) return;
+    free(node->text);
+    node->text = NULL;
+    if (text && text[0]) {
+        /* Stored verbatim (may contain embedded newlines); help_show_node
+         * prints it as-is, so callers include their own body indentation. */
+        node->text = help_strdup(text);
+    }
+}
+
+void help_node_clear_children(help_node_t *node)
+{
+    if (!node) return;
+    help_node_t *c = node->first_child;
+    while (c) {
+        help_node_t *next = c->next_sibling;
+        node_free(c);
+        c = next;
+    }
+    node->first_child = NULL;
+    node->last_child = NULL;
+}
+
+void help_node_remove_child(help_node_t *parent, help_node_t *child)
+{
+    if (!parent || !child) return;
+    help_node_t *prev = NULL;
+    for (help_node_t *c = parent->first_child; c; c = c->next_sibling) {
+        if (c == child) {
+            if (prev)
+                prev->next_sibling = c->next_sibling;
+            else
+                parent->first_child = c->next_sibling;
+            if (parent->last_child == c)
+                parent->last_child = prev;
+            c->next_sibling = NULL;
+            node_free(c);
+            return;
+        }
+        prev = c;
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Rendering                                                           */
 /* ------------------------------------------------------------------ */
 

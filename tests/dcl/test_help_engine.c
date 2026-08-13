@@ -151,6 +151,51 @@ int main(void)
         free(buf);
     }
 
+    /* 6b. Node-mutation API (vms-01b): the seam the DCL built-in HELP uses to
+     * fold the Engine A CDU command tables into the tree. Exercised here on the
+     * pure engine so it stays covered without the DCL binary. */
+    {
+        /* find_child: locate an existing subtopic. */
+        const char *pCopy[] = { "COPY" };
+        help_node_t *copy = help_find(lib, pCopy, 1);
+        check(copy != NULL, "mutate: COPY node found");
+        help_node_t *quals = help_node_find_child(copy, "Qualifiers");
+        check(quals != NULL, "mutate: find_child locates 'Qualifiers'");
+
+        /* clear_children then rebuild from a synthetic "CDU table". */
+        help_node_clear_children(quals);
+        check(quals->first_child == NULL && quals->last_child == NULL,
+              "mutate: clear_children empties the subtree");
+        help_node_t *nv = help_node_add_child(quals, 3, "/NEW_VERSION");
+        check(nv != NULL, "mutate: add_child appends a new key");
+        help_node_set_text(nv, " Format: /[NO]NEW_VERSION\n");
+
+        int st;
+        const char *pCQ[] = { "COPY", "Qualifiers" };
+        char *out = render_path(lib, pCQ, 2, &st);
+        check(out && strstr(out, "/NEW_VERSION") != NULL,
+              "mutate: rebuilt qualifier appears in the listing");
+        check(out && strstr(out, "/LOG") == NULL,
+              "mutate: cleared qualifier no longer listed");
+        free(out);
+
+        const char *pCQN[] = { "COPY", "Qualifiers", "/NEW_VERSION" };
+        out = render_path(lib, pCQN, 3, &st);
+        check(out && strstr(out, "Format: /[NO]NEW_VERSION") != NULL &&
+                  st == SS$_NORMAL,
+              "mutate: set_text body is reachable at the leaf");
+        free(out);
+
+        /* remove_child: DIRECTORY drops its /BRIEF subtopic entirely. */
+        const char *pDir[] = { "DIRECTORY" };
+        help_node_t *dir = help_find(lib, pDir, 1);
+        help_node_t *brief = help_node_find_child(dir, "/BRIEF");
+        check(brief != NULL, "mutate: /BRIEF present before removal");
+        help_node_remove_child(dir, brief);
+        check(help_node_find_child(dir, "/BRIEF") == NULL,
+              "mutate: remove_child detaches the subtree");
+    }
+
     help_close(lib);
 
     /* 7. Compiled .HLB reader (help_open_hlb): build an LBRO HELP container by

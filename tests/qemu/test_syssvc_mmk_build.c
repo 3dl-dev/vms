@@ -1,9 +1,19 @@
 /*
- * test_syssvc_mmk_build.c - the shipped MMK.EXE drives a REAL TCC compile of a
- * REAL OVMX runtime component TU, through its persistent mailbox-driven DCL
- * subprocess, against a real /dev/vms -- BYTE-IDENTICAL across two in-guest
- * builds, ZERO bash in the build path (self-host spine #6, vms-d1b; also closes
- * the MMK-driven-EXECUTION residual of spine #5, vms-fe4).
+ * test_syssvc_mmk_build.c - the shipped MMK.EXE drives a REAL TCC compile AND a
+ * REAL LIBRARIAN archive of the REAL OVMX runtime component TUs, through its
+ * persistent mailbox-driven DCL subprocess, against a real /dev/vms --
+ * BYTE-IDENTICAL across two in-guest builds, ZERO bash in the build path
+ * (self-host spine #7, vms-6be, extends spine #6 vms-d1b compile-only; also
+ * closes the MMK-driven-EXECUTION residual of spine #5, vms-fe4).
+ *
+ * SPINE #7 (vms-6be) adds the ARCHIVE stage: the driven MMS now compiles TWO
+ * real src/libvmssys runtime TUs (VMS_STRING.C + VMS_SNPRINTF.C, both fully
+ * tcc-compilable on x86_64 -- vms_math.c's SSE "x" inline asm is NOT, so it is
+ * deliberately excluded) and then drives the staged static LIBRARIAN.EXE to
+ * `/CREATE OVMXRT.OLB` from the two objects. The .OLB (a valid ar-format object
+ * library carrying both members + their runtime symbols) is asserted BYTE-
+ * IDENTICAL across two in-guest MMK-driven builds. The remaining LINK-to-image +
+ * IMGACT-activation rung of the chain is NOT driven here (see HONEST SCOPE).
  *
  * ============================================================
  * THE POINT. Spine #4 (test_syssvc_mmk_drive.c) proved MMK.EXE drives a
@@ -36,14 +46,17 @@
  * the mailbox drive (the compile determinism itself is proven on the host by
  * tests/toolchain/run_tcc_static_component.sh and run_tcc_selfhost.sh).
  *
- * HONEST SCOPE (Rule 9 / the design's residual). This closes the COMPILE stage
- * of the self-host chain in-guest. The full OVMXRT.MMS (four TCC compiles, a
- * LIBRARIAN archive, a LINK to a runnable image) is NOT driven here: on x86_64
- * vms_math.c's SSE inline asm is not tinycc-compilable, and the LINK step needs
- * the SYS$LIBRARY shareables staged + logical-name resolution inside LINK.EXE +
- * IMGACT activation of the result -- see
+ * HONEST SCOPE (Rule 9 / the design's residual). This closes the COMPILE and
+ * ARCHIVE stages of the self-host chain in-guest (spine #7, vms-6be). The final
+ * LINK-to-runnable-image rung is NOT driven here: `LNK --executable --use
+ * SYS$LIBRARY:DECC$SHR.EXE ...` needs the six OVMX shareables (DECC$SHR +
+ * LIBVMS*$SHR) built and staged at SYS$LIBRARY, plus IMGACT.EXE staged and the
+ * produced image ACTIVATED through the kernel PT_INTERP path in-guest -- a stack
+ * proven on the host (src/imgact/test/run_dcl_native.sh, alpine musl) but not
+ * yet reproduced inside the QEMU busybox harness. Driving LINK+activate in-guest
+ * is the remaining spine-#7 residual; see
  * docs/design-self-host-spine5-mmk-component.md for the precise remainder.
- * BUILD.COM therefore stays until that lands.
+ * BUILD.COM therefore stays until that lands (Rule 6/7 -- no red gate shipped).
  *
  * NO EXECUTIVE (honest-failure branch, Rule 9 / INV-6): $CREMBX must fail
  * SS$_NOSUCHDEV, never fabricate a private per-process mailbox. Returns
@@ -80,9 +93,14 @@
 
 #define EXIT_SKIP 77
 
-/* MMK.EXE + TCC.EXE are staged at SYS$SYSTEM (tests/qemu/Dockerfile). */
-#define MMK_PATH_DEFAULT "/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE"
-#define TCC_PATH_DEFAULT "/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE"
+/* MMK.EXE + TCC.EXE + LIBRARIAN.EXE are staged at SYS$SYSTEM (tests/qemu/Dockerfile). */
+#define MMK_PATH_DEFAULT  "/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE"
+#define TCC_PATH_DEFAULT  "/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE"
+/* LIBRARIAN.EXE (self-host spine #7, vms-6be): the OVMX object-library utility
+ * MMK drives to ARCHIVE the two driven objects into OVMXRT.OLB. Like TCC.EXE it
+ * is a plain static (musl) foreign command DCL forks (dcl_activate_image ->
+ * SS$_UNSUPPORTED -> fork+execve), so no IMGACT/shareable staging is needed. */
+#define LIBR_PATH_DEFAULT "/vms/SYS0/SYSCOMMON/SYSEXE/LIBRARIAN.EXE"
 /* tinycc's own headers (stddef.h/stdint.h/...) staged beside TCC.EXE so tcc's
  * default {tccdir}/include search AND the explicit -I both find them. */
 #define TCC_INCLUDE_DEFAULT "/vms/SYS0/SYSCOMMON/SYSEXE/include"
@@ -203,58 +221,91 @@ static int contains(const char *hay, long haylen, const char *needle)
 }
 
 /*
- * Drive ONE MMK build of VMS_STRING.OBJ in a fresh work directory. On success
- * (*reaped set), *objbuf/*objlen hold the produced object and *saw_marker says
- * whether the drive echoed the completion marker. Caller frees *objbuf.
+ * Drive ONE MMK build of OVMXRT.OLB in a fresh work directory. The driven MMS
+ * compiles TWO real runtime TUs (VMS_STRING.C + VMS_SNPRINTF.C) with TCC.EXE and
+ * archives them into OVMXRT.OLB with LIBRARIAN.EXE. On success (reaped set),
+ * objbuf/objlen hold the produced VMS_STRING.OBJ (the compile oracle) and
+ * olbbuf/olblen hold the produced OVMXRT.OLB (the archive oracle); saw_marker
+ * says whether the drive echoed the completion marker. Caller frees objbuf and
+ * olbbuf.
  */
 static void drive_build(const char *mmk, const char *comp, const char *tcc,
-                        const char *tccinc,
+                        const char *tccinc, const char *libr,
                         char **objbuf, long *objlen,
+                        char **olbbuf, long *olblen,
                         int *saw_marker, int *reaped)
 {
-    *objbuf = NULL; *objlen = -1; *saw_marker = 0; *reaped = 0;
+    *objbuf = NULL; *objlen = -1; *olbbuf = NULL; *olblen = -1;
+    *saw_marker = 0; *reaped = 0;
 
-    char workdir[] = "/tmp/mmkd1b_XXXXXX";
+    char workdir[] = "/tmp/mmk6be_XXXXXX";
     if (!mkdtemp(workdir)) return;
 
     char path[512], src[512];
 
-    /* Stage the REAL component source (VMS-style upper-case .C) + its headers. */
-    snprintf(src,  sizeof(src),  "%s/VMS_STRING.C", comp);
-    snprintf(path, sizeof(path), "%s/VMS_STRING.C", workdir);
-    if (copy_file(src, path) != 0) return;
-    /* vms_string.h + vms_types.h are the TU's only component includes; stage the
-     * whole staged header set so any future TU choice is covered. */
-    static const char *hdrs[] = { "vms_string.h", "vms_types.h", NULL };
+    /* Stage the REAL component sources (VMS-style upper-case .C) + their headers.
+     * VMS_STRING.C and VMS_SNPRINTF.C are the two src/libvmssys runtime TUs that
+     * ARE fully tcc-compilable on x86_64 (vms_math.c's SSE "x"-constraint inline
+     * asm is not, so it is excluded from the in-guest 2-TU library). */
+    static const char *srcs[] = { "VMS_STRING.C", "VMS_SNPRINTF.C", NULL };
+    for (int i = 0; srcs[i]; i++) {
+        snprintf(src,  sizeof(src),  "%s/%s", comp, srcs[i]);
+        snprintf(path, sizeof(path), "%s/%s", workdir, srcs[i]);
+        if (copy_file(src, path) != 0) return;
+    }
+    /* vms_string.h + vms_snprintf.h + vms_types.h are the two TUs' only component
+     * includes; stage the whole staged header set so any future TU choice is
+     * covered. */
+    static const char *hdrs[] = { "vms_string.h", "vms_snprintf.h",
+                                  "vms_types.h", NULL };
     for (int i = 0; hdrs[i]; i++) {
         snprintf(src,  sizeof(src),  "%s/%s", comp, hdrs[i]);
         snprintf(path, sizeof(path), "%s/%s", workdir, hdrs[i]);
         if (copy_file(src, path) != 0) return;
     }
 
-    /* The descrip.mms: define the TCC foreign command (absolute image path, so
-     * it resolves in the spawned DCL without depending on SYS$SYSTEM), compile
-     * the real TU, then echo the completion marker. Each TAB-indented line is
-     * one command record MMK streams into the spawned DCL. */
+    /* The descrip.mms: define the TCC + LIBRARIAN foreign commands (absolute
+     * image paths, so they resolve in the spawned DCL without depending on
+     * SYS$SYSTEM), compile the two real TUs, archive them into OVMXRT.OLB, then
+     * echo the completion marker. Each TAB-indented line is one command record
+     * MMK streams into the spawned DCL -- the same whole-line-raw delivery spine
+     * #6 proved for the single compile, extended to the compile->archive chain.
+     *
+     * WHY `LIBRARIAN`, NOT `LIBR` (the name OVMXRT.MMS uses). A DCL foreign-
+     * command symbol cannot shadow a built-in DCL verb: `LIBR` is a valid
+     * abbreviation of the built-in LIBRARY verb (dcl_builtin.c min_abbrev=3), so
+     * DCL would run the in-process cmd_library() (dcl_library.c) -- which resolves
+     * the object names against the VMS default directory, NOT the Linux cwd where
+     * the forked TCC wrote them, so it fails %LIBRARIAN-E-OPENIN. The full name
+     * `LIBRARIAN` (9 chars) is not a prefix of any built-in verb
+     * (dcl_match_command requires typed_len <= verb_len), so it falls through to
+     * the foreign-command symbol and forks the staged LIBRARIAN.EXE image -- which
+     * DOES open the objects in the fork's cwd. This is exactly the trap OVMXRT.MMS
+     * already documents for `LNK` vs the built-in LINK verb, here for LIBRARY.
+     *
+     * The image paths are QUOTED so DCL's :== assignment preserves their case
+     * (dcl_exec.c exec_assign: an unquoted :== value is upcased, which would turn
+     * /vms into /VMS and miss the case-sensitive Linux mount; a quoted span is
+     * kept verbatim). Each foreign-command TAIL below is delivered raw
+     * (dcl_exec_foreign_command uses cmd->raw_tail), so tcc's case-sensitive flags
+     * (-x c -c ...), the lowercase -I path, and LIBRARIAN.EXE's /CREATE qualifier
+     * + upper-case object names survive as-is -- the same whole-line-raw delivery
+     * native LINK relies on. */
     char mms[2048];
     snprintf(mms, sizeof(mms),
-        "VMS_STRING.OBJ : VMS_STRING.C\n"
-        /* The image path is QUOTED so DCL's :== assignment preserves its case
-         * (dcl_exec.c exec_assign: an unquoted :== value is upcased, which would
-         * turn /vms into /VMS and miss the case-sensitive Linux mount; a quoted
-         * span is kept verbatim). The foreign-command TAIL below is delivered
-         * raw (dcl_exec_foreign_command uses cmd->raw_tail), so tcc's
-         * case-sensitive flags (-x c -c ...) and the lowercase -I path survive
-         * as-is -- the same whole-line-raw delivery native LINK relies on. */
+        "OVMXRT.OLB : VMS_STRING.C VMS_SNPRINTF.C\n"
         "\tTCC :== \"$%s\"\n"
+        "\tLIBRARIAN :== \"$%s\"\n"
         "\tTCC -x c -c -ffreestanding -fno-builtin -I %s -I . VMS_STRING.C -o VMS_STRING.OBJ\n"
+        "\tTCC -x c -c -ffreestanding -fno-builtin -I %s -I . VMS_SNPRINTF.C -o VMS_SNPRINTF.OBJ\n"
+        "\tLIBRARIAN /CREATE OVMXRT.OLB VMS_STRING.OBJ VMS_SNPRINTF.OBJ\n"
         "\tWRITE SYS$OUTPUT \"%s\"\n",
-        tcc, tccinc, EXPECT_MARKER);
-    snprintf(path, sizeof(path), "%s/D1B.MMS", workdir);
+        tcc, libr, tccinc, tccinc, EXPECT_MARKER);
+    snprintf(path, sizeof(path), "%s/6BE.MMS", workdir);
     if (write_file(path, mms) != 0) return;
     /* /RULES defaults to MMS$RULES; an empty one keeps the run's status clean. */
     snprintf(path, sizeof(path), "%s/MMS$RULES", workdir);
-    if (write_file(path, "! empty default rules (vms-d1b build drive)\n") != 0) return;
+    if (write_file(path, "! empty default rules (vms-6be build drive)\n") != 0) return;
 
     int outpipe[2];
     if (pipe(outpipe) < 0) return;
@@ -268,33 +319,38 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
         close(outpipe[0]); close(outpipe[1]);
         int devnull = open("/dev/null", O_RDONLY);
         if (devnull >= 0) { dup2(devnull, STDIN_FILENO); close(devnull); }
-        setenv("VMS_FOREIGN_CMD", "/DESCRIPTION=D1B.MMS VMS_STRING.OBJ", 1);
+        setenv("VMS_FOREIGN_CMD", "/DESCRIPTION=6BE.MMS OVMXRT.OLB", 1);
         execl(mmk, mmk, (char *)NULL);
         _exit(127);
     }
     close(outpipe[1]);
 
-    /* The object the drive is meant to produce. */
-    char objpath[512];
+    /* The archive the drive is meant to produce (the final artifact of the
+     * compile->archive chain), plus the string object (the compile oracle). */
+    char objpath[512], olbpath[512];
     snprintf(objpath, sizeof(objpath), "%s/VMS_STRING.OBJ", workdir);
+    snprintf(olbpath, sizeof(olbpath), "%s/OVMXRT.OLB",     workdir);
 
     /* ONE bounded wait that stops as soon as THE PROOF IS CAPTURED -- the DCL has
-     * echoed the completion marker AND the object exists on disk -- rather than
-     * waiting on MMK's own process EXIT. This is deliberate and is what makes the
-     * suite robust under slow/contended TCG (CI, or a busy dev host): MMK's
-     * teardown-and-exit AFTER the build can take much longer than the build
-     * itself under load, but the veracity the suite asserts (a byte-identical
-     * real object, driven over the mailbox to the marker) is already on disk by
-     * then. Once both are present, MMK is killed as CLEANUP -- its self-exit
-     * timing is NOT a pass condition (that made the gate flaky: an earlier run
-     * compiled the object and echoed the marker but had not finished exiting
-     * within the bound). A genuine mid-drive $HIBER deadlock still fails HARD:
-     * no marker is ever echoed, so *saw_marker stays 0 and the bound elapses. */
+     * echoed the completion marker AND the final archive OVMXRT.OLB exists on disk
+     * -- rather than waiting on MMK's own process EXIT. This is deliberate and is
+     * what makes the suite robust under slow/contended TCG (CI, or a busy dev
+     * host): MMK's teardown-and-exit AFTER the build can take much longer than the
+     * build itself under load, but the veracity the suite asserts (a byte-
+     * identical real .OLB, driven over the mailbox to the marker) is already on
+     * disk by then. Keying on OVMXRT.OLB (produced LAST, by the archive step) --
+     * not on the intermediate VMS_STRING.OBJ -- guarantees the drive is not killed
+     * as cleanup until the LIBRARIAN archive has actually completed. Once both are
+     * present, MMK is killed as CLEANUP -- its self-exit timing is NOT a pass
+     * condition (that made the gate flaky: an earlier run built the artifact and
+     * echoed the marker but had not finished exiting within the bound). A genuine
+     * mid-drive $HIBER deadlock still fails HARD: no marker is ever echoed, so
+     * *saw_marker stays 0 and the bound elapses. */
     char acc[16384];
     size_t acclen = 0;
     int waited = 0;
     int wstatus = 0;
-    struct stat objst;
+    struct stat olbst;
     acc[0] = '\0';
     while (waited < DRIVE_TIMEOUT_MS) {
         struct pollfd pfd = { .fd = outpipe[0], .events = POLLIN };
@@ -308,8 +364,8 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
                 if (strstr(acc, EXPECT_MARKER) != NULL) *saw_marker = 1;
             }
         }
-        /* Proof captured: marker echoed AND the object is on disk. */
-        if (*saw_marker && stat(objpath, &objst) == 0 && objst.st_size > 0)
+        /* Proof captured: marker echoed AND the final archive is on disk. */
+        if (*saw_marker && stat(olbpath, &olbst) == 0 && olbst.st_size > 0)
             break;
         pid_t r = waitpid(pid, &wstatus, WNOHANG);
         if (r == pid) { *reaped = 1; break; }   /* MMK exited on its own */
@@ -325,20 +381,24 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
     }
     close(outpipe[0]);
 
-    /* Read the produced object (the independent oracle). */
+    /* Read the produced artifacts (the independent oracles): VMS_STRING.OBJ (the
+     * compile oracle) and OVMXRT.OLB (the archive oracle). */
     *objlen = read_file(objpath, objbuf);
+    *olblen = read_file(olbpath, olbbuf);
 
     /* On a failed drive, surface the driven-DCL transcript so a regression is
      * attributable (a cwd / path / activation error is named here rather than
-     * showing only "object never appeared"). Bounded: acc is capped above. */
-    if (*objlen <= 0) {
-        printf("  (drive did not produce VMS_STRING.OBJ; driven-DCL transcript follows)\n");
+     * showing only "artifact never appeared"). Bounded: acc is capped above. */
+    if (*olblen <= 0 || *objlen <= 0) {
+        printf("  (drive did not produce OVMXRT.OLB; driven-DCL transcript follows)\n");
         printf("----8<----\n%s\n---->8----\n", acc);
     }
 
     /* Cleanup. */
-    const char *rm[] = { "VMS_STRING.C", "VMS_STRING.OBJ", "vms_string.h",
-                         "vms_types.h", "D1B.MMS", "MMS$RULES", NULL };
+    const char *rm[] = { "VMS_STRING.C", "VMS_SNPRINTF.C", "VMS_STRING.OBJ",
+                         "VMS_SNPRINTF.OBJ", "OVMXRT.OLB", "vms_string.h",
+                         "vms_snprintf.h", "vms_types.h", "6BE.MMS", "MMS$RULES",
+                         NULL };
     for (int i = 0; rm[i]; i++) {
         snprintf(path, sizeof(path), "%s/%s", workdir, rm[i]);
         unlink(path);
@@ -352,7 +412,7 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IOLBF, 0);
     signal(SIGPIPE, SIG_IGN);
 
-    printf("=== test_syssvc_mmk_build (MMK.EXE drives a REAL TCC compile of a real OVMX runtime TU in QEMU, byte-identical twice, vms-d1b) ===\n");
+    printf("=== test_syssvc_mmk_build (MMK.EXE drives a REAL TCC compile + LIBRARIAN archive of real OVMX runtime TUs in QEMU, byte-identical twice, vms-6be) ===\n");
 
     if (!vms_pcb_init(0xFFFFFFFFFFFFFFFFULL)) {
         printf("  FAIL: vms_pcb_init() failed\n");
@@ -372,31 +432,37 @@ int main(int argc, char **argv)
 
     const char *mmk    = envdef("OVMX_MMK", MMK_PATH_DEFAULT);
     const char *tcc    = envdef("OVMX_TCC", TCC_PATH_DEFAULT);
+    const char *libr   = envdef("OVMX_LIBR", LIBR_PATH_DEFAULT);
     const char *tccinc = envdef("OVMX_TCC_INCLUDE", TCC_INCLUDE_DEFAULT);
     const char *comp   = envdef("OVMX_COMPONENT", COMPONENT_DEFAULT);
 
     struct stat sb;
-    if (stat(mmk, &sb) != 0) { printf("  FAIL: shipped MMK image not found at %s\n", mmk); return 1; }
-    if (stat(tcc, &sb) != 0) { printf("  FAIL: static TCC.EXE not found at %s\n", tcc); return 1; }
+    if (stat(mmk, &sb)  != 0) { printf("  FAIL: shipped MMK image not found at %s\n", mmk); return 1; }
+    if (stat(tcc, &sb)  != 0) { printf("  FAIL: static TCC.EXE not found at %s\n", tcc); return 1; }
+    if (stat(libr, &sb) != 0) { printf("  FAIL: static LIBRARIAN.EXE not found at %s\n", libr); return 1; }
 
     /* Build #1: an independent MMK drive in its own work dir. */
-    char *obj1 = NULL, *obj2 = NULL;
-    long  len1 = -1, len2 = -1;
+    char *obj1 = NULL, *obj2 = NULL, *olb1 = NULL, *olb2 = NULL;
+    long  objlen1 = -1, objlen2 = -1, olblen1 = -1, olblen2 = -1;
     int   mark1 = 0, mark2 = 0, reap1 = 0, reap2 = 0;
 
-    drive_build(mmk, comp, tcc, tccinc, &obj1, &len1, &mark1, &reap1);
+    drive_build(mmk, comp, tcc, tccinc, libr,
+                &obj1, &objlen1, &olb1, &olblen1, &mark1, &reap1);
 
-    int obj1_valid = (len1 > 0 && obj1 != NULL && is_elf_reloc(obj1, len1));
+    int obj1_valid = (objlen1 > 0 && obj1 != NULL && is_elf_reloc(obj1, objlen1));
+    int olb1_valid = (olblen1 > 8 && olb1 != NULL && memcmp(olb1, "!<arch>\n", 8) == 0);
 
-    /* Build #2 runs only if drive #1 produced a valid object. Keying the
-     * short-circuit on the OBJECT -- not on MMK's exit -- is robust under load
+    /* Build #2 runs only if drive #1 produced a valid archive. Keying the
+     * short-circuit on the OLB -- not on MMK's exit -- is robust under load
      * (MMK's slow self-exit does not skip a real second build) AND keeps a
      * failed drive to ONE marker bound: mmk-build-image-not-activated (the
-     * driven TCC never runs -> no object) fails FAST on drive #1 and skips #2,
-     * and a genuine mid-drive wedge (no marker, no object) likewise costs one
-     * bound, well inside run_tests.sh's 120s VM budget. */
-    if (obj1_valid)
-        drive_build(mmk, comp, tcc, tccinc, &obj2, &len2, &mark2, &reap2);
+     * driven TCC never runs -> no object -> LIBRARIAN has nothing to archive ->
+     * no .OLB) fails FAST on drive #1 and skips #2, and a genuine mid-drive wedge
+     * (no marker, no artifact) likewise costs one bound, well inside
+     * run_tests.sh's 120s VM budget. */
+    if (obj1_valid && olb1_valid)
+        drive_build(mmk, comp, tcc, tccinc, libr,
+                    &obj2, &objlen2, &olb2, &olblen2, &mark2, &reap2);
     (void)mark2; (void)reap1; (void)reap2;   /* set for diagnostics, not asserted */
 
     /* Completion: the drive reached its end and the spawned DCL echoed
@@ -407,22 +473,43 @@ int main(int argc, char **argv)
     CHECK(mark1,
           "MMK.EXE drove the build to completion: its spawned DCL received the action lines and echoed OVMXD1B:COMPILED (spawn + mailbox + write-attention AST + $HIBER + IO$M_NOW + $STATUS marker)");
 
-    /* The object the DRIVEN TCC produced -- the independent oracle. */
+    /* --- COMPILE stage (spine #6): the object the DRIVEN TCC produced. --- */
     /* negctl: mmk-build-image-not-activated */
-    CHECK(len1 > 0 && obj1 != NULL,
+    CHECK(objlen1 > 0 && obj1 != NULL,
           "the MMK-driven TCC.EXE produced VMS_STRING.OBJ in the guest (build #1)");
     CHECK(obj1_valid,
           "the driven object is a valid ELF relocatable (ET_REL) -- TCC really compiled it in QEMU");
-    CHECK(len1 > 0 && obj1 != NULL && contains(obj1, len1, "vms_strlen"),
+    CHECK(objlen1 > 0 && obj1 != NULL && contains(obj1, objlen1, "vms_strlen"),
           "the driven object carries the runtime symbol vms_strlen -- it is a compile of the REAL src/libvmssys/vms_string.c, not a stand-in");
-    CHECK(len2 > 0 && obj2 != NULL,
+    CHECK(objlen2 > 0 && obj2 != NULL,
           "the MMK-driven TCC.EXE produced VMS_STRING.OBJ in the guest (build #2)");
 
     /* byte-identical across two independent in-guest MMK-driven builds. */
-    CHECK(len1 > 0 && len1 == len2 && obj1 && obj2 && memcmp(obj1, obj2, (size_t)len1) == 0,
+    CHECK(objlen1 > 0 && objlen1 == objlen2 && obj1 && obj2 && memcmp(obj1, obj2, (size_t)objlen1) == 0,
           "VMS_STRING.OBJ is BYTE-IDENTICAL across two independent MMK-driven in-guest builds (deterministic, zero bash)");
 
-    free(obj1); free(obj2);
+    /* --- ARCHIVE stage (spine #7, vms-6be): the .OLB the DRIVEN LIBRARIAN made.
+     * These redden under the SAME mmk-build-image-not-activated root as the
+     * compile assertions above (no driven TCC -> no objects -> LIBRARIAN has
+     * nothing to archive -> no OVMXRT.OLB), so they are declared in that control's
+     * knock_on_fail. --- */
+    CHECK(olblen1 > 0 && olb1 != NULL,
+          "the MMK-driven LIBRARIAN.EXE produced OVMXRT.OLB in the guest (build #1)");
+    CHECK(olb1_valid,
+          "OVMXRT.OLB is a valid ar-format object library (!<arch> magic) -- LIBRARIAN really archived it in QEMU");
+    CHECK(olblen1 > 0 && olb1 != NULL && contains(olb1, olblen1, "VMS_STRING") && contains(olb1, olblen1, "VMS_SNPRINTF"),
+          "OVMXRT.OLB carries both archived members VMS_STRING and VMS_SNPRINTF -- a real 2-TU library, not a single object");
+    CHECK(olblen1 > 0 && olb1 != NULL && contains(olb1, olblen1, "vms_strlen") && contains(olb1, olblen1, "vms_snprintf"),
+          "OVMXRT.OLB embeds the runtime symbols vms_strlen + vms_snprintf -- its members are compiles of the REAL src/libvmssys TUs");
+    CHECK(olblen2 > 0 && olb2 != NULL,
+          "the MMK-driven LIBRARIAN.EXE produced OVMXRT.OLB in the guest (build #2)");
+
+    /* byte-identical across two independent in-guest MMK-driven builds -- the
+     * `ar`-container mtime/uid/gid reproducibility trap LIBRARIAN zeroes. */
+    CHECK(olblen1 > 0 && olblen1 == olblen2 && olb1 && olb2 && memcmp(olb1, olb2, (size_t)olblen1) == 0,
+          "OVMXRT.OLB is BYTE-IDENTICAL across two independent MMK-driven in-guest builds (deterministic archive, zero bash)");
+
+    free(obj1); free(obj2); free(olb1); free(olb2);
 
     printf("=== test_syssvc_mmk_build: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

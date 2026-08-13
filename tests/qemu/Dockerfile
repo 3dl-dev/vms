@@ -254,7 +254,7 @@ RUN cd /src/repo && \
         -DOVMX_STATIC=ON \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=ON \
-    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize vms_initialize mmk_native --parallel $(nproc) 2>&1 && \
+    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize vms_initialize mmk_native vmslibrarian --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
     # MMK.EXE (vms-b23, self-host spine #4): the shipped MadGoat MMK built as an
@@ -338,7 +338,14 @@ RUN cd /src/repo && \
     CC=musl-gcc WORK=/tmp/mk-tcc-static \
         sh tests/toolchain/mk_tcc_static.sh /src/repo/build-static/bin/TCC.EXE && \
     echo "--- TCC.EXE (static-musl tinycc; the compiler MMK drives, vms-d1b) ---" && \
-    ls -la build-static/bin/TCC.EXE
+    ls -la build-static/bin/TCC.EXE && \
+    # LIBRARIAN.EXE (vms-6be, self-host spine #7): the OVMX object-library utility
+    # MMK drives (after the two TCC compiles) to /CREATE OVMXRT.OLB. Built as a
+    # PLAIN STATIC (musl) foreign-command image by the `vmslibrarian` CMake target
+    # (built above, OVMX_STATIC=ON -> static musl), so DCL activates it by
+    # fork()+execve() exactly like TCC.EXE/MMK.EXE -- no IMGACT/shareable staging.
+    echo "--- LIBRARIAN.EXE (static-musl; the archiver MMK drives, vms-6be) ---" && \
+    ls -la build-static/bin/LIBRARIAN.EXE
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
@@ -520,6 +527,16 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp /src/repo/build-static/bin/TCC.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE || \
       { echo "FATAL: TCC.EXE was not built into the static tree -- the MMK-driven TCC compile would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE && \
+    # LIBRARIAN.EXE at SYS$SYSTEM (vms-6be, self-host spine #7) -- the archiver
+    # test_syssvc_mmk_build.c drives from MMK's persistent mailbox DCL after the
+    # two TCC compiles. Its descrip.mms defines LIBR :== $/vms/.../LIBRARIAN.EXE
+    # (an absolute image path, resolving in the spawned DCL without depending on
+    # SYS$SYSTEM). Absence is FATAL, not skipped: a missing LIBRARIAN.EXE would
+    # turn the driven-archive + .OLB byte-identity assertions into a no-op (the
+    # suite would report the archive never appeared) with the job still green.
+    { cp /src/repo/build-static/bin/LIBRARIAN.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LIBRARIAN.EXE || \
+      { echo "FATAL: LIBRARIAN.EXE was not built into the static tree -- the MMK-driven archive would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LIBRARIAN.EXE && \
     mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include && \
     cp /src/repo/third-party/tcc/src/include/*.h /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/ && \
     # tinycc ships stddef.h/stdarg.h but NOT <stdint.h> -- upstream tcc defers
@@ -534,15 +551,21 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     cp "$MUSL_INC/stdint.h" /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/ && \
     cp "$MUSL_INC/bits/alltypes.h" "$MUSL_INC/bits/stdint.h" \
        /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/bits/ && \
-    # The REAL component source + its headers the build suite stages into the
-    # MMK work directory (VMS-style upper-case .C). This is the actual
-    # src/libvmssys freestanding runtime TU vms_string.c -- the object the driven
-    # TCC produces must carry its vms_strlen symbol. Absence is FATAL: without it
-    # the driven compile would have nothing to compile.
+    # The REAL component sources + their headers the build suite stages into the
+    # MMK work directory (VMS-style upper-case .C). These are the actual
+    # src/libvmssys freestanding runtime TUs vms_string.c + vms_snprintf.c (spine
+    # #7, vms-6be: the 2-TU library MMK compiles then archives -- vms_math.c is
+    # excluded, its SSE "x"-constraint inline asm is not tcc-compilable on
+    # x86_64). The objects the driven TCC produces must carry vms_strlen /
+    # vms_snprintf, and the driven LIBRARIAN must archive both into OVMXRT.OLB.
+    # Absence is FATAL: without them the driven build would have nothing to build.
     mkdir -p /initramfs/tests/component && \
     { cp /src/repo/src/libvmssys/vms_string.c /initramfs/tests/component/VMS_STRING.C || \
-      { echo "FATAL: VMS_STRING.C (the real runtime TU MMK drives TCC to compile) not staged"; exit 1; }; } && \
-    cp /src/repo/src/libvmssys/vms_string.h /src/repo/src/libvmssys/vms_types.h \
+      { echo "FATAL: VMS_STRING.C (a real runtime TU MMK drives TCC to compile) not staged"; exit 1; }; } && \
+    { cp /src/repo/src/libvmssys/vms_snprintf.c /initramfs/tests/component/VMS_SNPRINTF.C || \
+      { echo "FATAL: VMS_SNPRINTF.C (a real runtime TU MMK drives TCC to compile) not staged"; exit 1; }; } && \
+    cp /src/repo/src/libvmssys/vms_string.h /src/repo/src/libvmssys/vms_snprintf.h \
+       /src/repo/src/libvmssys/vms_types.h \
        /initramfs/tests/component/ && \
     # AUTHORIZE.EXE (vms-4c2), staged at /bin/AUTHORIZE.EXE --
     # tests/qemu/test_syssvc_authorize.c execs it by that path. Absence is

@@ -74,38 +74,69 @@
 #include "vms_internal.h"
 
 /* ================================================================
- * Per-pid process table (NetBSD glue; the Linux side is src/kernel/vms_proctab.c)
+ * The executive process table -- ONE table, shared by every facility (rd
+ * vms-ca7). The Linux vms.ko defines vms_proc_hash + vms_proc_hash_lock in its
+ * module-lifecycle glue (src/kernel/vms_module.c); on NetBSD the module
+ * lifecycle IS this file, so the table lives here. Both are extern'd by the
+ * struct twin (vms_internal.h) so the shared facility src/kernel-core/
+ * vms_proctab.c walks the SAME table this glue populates -- $GETJPI must be able
+ * to find the very proc that $ASCEFC'd a cluster or queued an AST, so there is
+ * exactly one per-pid struct.
+ *
+ * These are NON-static (linked to by vms_proctab.c). All walks -- here and in
+ * the facility -- run under vms_proc_hash_lock; there are no lockless readers on
+ * this substrate, which is what makes the RCU-lite blessed fallback (immediate
+ * exec_free_deferred) correct (exec_kbackend_netbsd.h §6).
  * ================================================================ */
 
-static exec_lock_t      vms_proctab_lock;
-static struct vms_proc *vms_proctab;   /* singly-linked; module lifetime */
+EXEC_DEFINE_HASHTABLE(vms_proc_hash, VMS_PROC_HASH_BITS);
+exec_lock_t vms_proc_hash_lock;
 
 /*
- * vms_proc_get - find (or create) the vms_proc for `pid'. The shared facility
- * needs a stable per-process struct across a process's ioctls, so it is keyed by
- * pid and lives until module unload (the Linux executive reaps lazily; here the
- * test's procs are few and are freed en masse at FINI). Allocation happens
- * OUTSIDE the table lock -- exec_zalloc may sleep -- with a re-check after
- * re-acquiring the lock to resolve a race between two lwps of the same process.
+ * vms_proc_get - find (or create) the vms_proc for `pid'. The shared facilities
+ * need a stable per-process struct across a process's ioctls, keyed by pid; it
+ * lives until the facility reaper reclaims it (its backing task has exited) or
+ * module unload. Allocation happens OUTSIDE the table lock -- exec_zalloc may
+ * sleep -- with a re-check after re-acquiring the lock to resolve a race between
+ * two lwps of the same process.
  */
 static struct vms_proc *
 vms_proc_get(pid_t pid)
 {
 	struct vms_proc *p, *np;
+	int bkt;
 
-	exec_lock(&vms_proctab_lock);
-	for (p = vms_proctab; p != NULL; p = p->next) {
+	exec_lock(&vms_proc_hash_lock);
+	exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
 		if (p->pid == pid) {
-			exec_unlock(&vms_proctab_lock);
+			exec_unlock(&vms_proc_hash_lock);
 			return p;
 		}
 	}
-	exec_unlock(&vms_proctab_lock);
+	exec_unlock(&vms_proc_hash_lock);
 
 	np = exec_zalloc(sizeof(*np));
 	if (np == NULL)
 		return NULL;
 	np->pid = pid;
+
+	/*
+	 * Executive-resident identity (P4-A proctab, rd vms-ca7). prcnam/username/
+	 * terminal come "" from the zeroed allocation ($SETPRN / $SETIDENT stamp
+	 * them; terminal stays "" -- no device table in SRCS). uic is DERIVED from
+	 * the calling task's REAL credentials, never a value a process supplies:
+	 * exec_current_gid/uid are the kauth(9) twins of Linux from_kgid/kuid, and
+	 * [group,member] packs (gid<<16)|uid exactly as sys$getjpi's JPI$_UIC does
+	 * (mirrors vms_proc_register). pid_ref is the facility's opaque liveness
+	 * handle: it carries just the pid on this substrate, so the storage is
+	 * embedded in the PCB and pid_ref points at it (proc_find(9) takes no ref to
+	 * drop later). The p0/p1 extents and wake_pending come zeroed.
+	 */
+	np->uic = (((uint32_t)exec_current_gid() & 0xFFFFu) << 16) |
+	          ((uint32_t)exec_current_uid() & 0xFFFFu);
+	np->pid_ref_store.pid = pid;
+	np->pid_ref = &np->pid_ref_store;
+
 	/* local[]=0 and common[]=NULL come from the zeroed allocation. Bring the
 	 * per-process ef sync objects up before the proc is visible. */
 	exec_lock_init(&np->ef.lock);
@@ -161,15 +192,15 @@ vms_proc_get(pid_t pid)
 	exec_lock_init(&np->chan_lock);
 	exec_list_head_init(&np->mbx_channels);
 
-	exec_lock(&vms_proctab_lock);
-	for (p = vms_proctab; p != NULL; p = p->next) {
+	exec_lock(&vms_proc_hash_lock);
+	exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
 		if (p->pid == pid) {
 			/* Lost the race: use the existing proc, drop ours. Its AST
 			 * pending rings and mailbox channel ring are still empty (just
 			 * created), so only the sync objects need tearing down before the
 			 * free -- a live kmutex/kcondvar must be destroyed on NetBSD. */
 			int m;
-			exec_unlock(&vms_proctab_lock);
+			exec_unlock(&vms_proc_hash_lock);
 			exec_lock_destroy(&np->chan_lock);
 			exec_cv_destroy(&np->hiber_wq);
 			exec_lock_destroy(&np->hiber_lock);
@@ -182,32 +213,87 @@ vms_proc_get(pid_t pid)
 			return p;
 		}
 	}
-	np->next = vms_proctab;
-	vms_proctab = np;
-	exec_unlock(&vms_proctab_lock);
+	exec_hash_add(vms_proc_hash, &np->hash_node, (uint32_t)pid);
+	exec_unlock(&vms_proc_hash_lock);
 	return np;
 }
 
 /*
- * vms_proctab_teardown - free every proc at module unload. The COMMON clusters
- * are freed separately by vms_eflag_cleanup(); we do NOT call
+ * vms_proc_free_claimed - tear down a PCB the facility's reaper has ALREADY
+ * unlinked from vms_proc_hash under vms_proc_hash_lock (rd vms-ca7). That unlink
+ * is the ownership claim (exactly one caller reaches here per entry), so this
+ * runs unlocked and reclaims everything the process owned:
+ *
+ *   - its mailbox channels (dropping each mailbox's reference), while the
+ *     mailbox list guard is still alive;
+ *   - any ASTs still queued at all four modes (min PSL_C_KERNEL == 0);
+ *   - its COMMON event-flag associations -- UNLIKE the module-unload teardown
+ *     below, this DOES call vms_proc_release_common_ef(), because the reaped
+ *     process dies mid-life while the clusters it $ASCEFC'd are still live and
+ *     their refcounts must be decremented (a temporary cluster whose last
+ *     associate this was is then freed). The unload path must NOT do this
+ *     (vms_eflag_cleanup has already freed the clusters), which is the one
+ *     asymmetry between the two teardown paths.
+ *
+ * Then it destroys the per-process sync objects and frees the PCB through
+ * exec_free_deferred -- IMMEDIATE on NetBSD (no lockless readers; the blessed
+ * grace-period fallback), mirroring the Linux vms_proc_free_claimed's kfree_rcu.
+ * This is the glue half of the RCU-lite seam: the facility unlinks with
+ * exec_hash_del_rcu and reclaims with exec_free_deferred -- two halves of one
+ * idiom (exec_kbackend.h §6 GRACE-PERIOD CONTRACT).
+ */
+static void
+vms_proc_rcu_free(exec_rcu_head_t *h)
+{
+	struct vms_proc *proc =
+	    (struct vms_proc *)((char *)h - offsetof(struct vms_proc, rcu));
+	exec_free(proc);
+}
+
+void
+vms_proc_free_claimed(struct vms_proc *proc)
+{
+	int m;
+
+	vms_mbx_release_all(proc);
+	vms_proc_rundown_asts(proc, PSL_C_KERNEL);
+	vms_proc_release_common_ef(proc);
+
+	exec_lock_destroy(&proc->chan_lock);
+	exec_cv_destroy(&proc->hiber_wq);
+	exec_lock_destroy(&proc->hiber_lock);
+	for (m = 0; m < 4; m++)
+		exec_lock_destroy(&proc->ast[m].lock);
+	exec_lock_destroy(&proc->mode_lock);
+	exec_cv_destroy(&proc->ef.waitq);
+	exec_lock_destroy(&proc->ef.lock);
+
+	/* NetBSD: exec_free_deferred runs the callback at once -- no reader can
+	 * still reach a node the reaper unlinked under vms_proc_hash_lock. */
+	exec_free_deferred(&proc->rcu, vms_proc_rcu_free);
+}
+
+/*
+ * vms_proctab_teardown - free every proc at module unload, walking the hash. The
+ * COMMON clusters are freed separately by vms_eflag_cleanup(); we do NOT call
  * vms_proc_release_common_ef() here (it would touch clusters this teardown's
- * sibling has already freed), we only tear down each proc's own ef sync objects
- * and free it. proc->ef.common[] pointers are never dereferenced again.
+ * sibling has already freed) -- the one asymmetry with vms_proc_free_claimed
+ * above, which runs mid-life while the clusters are still owned. We only tear
+ * down each proc's own sync objects and free it. proc->ef.common[] pointers are
+ * never dereferenced again. exec_hash_for_each_safe lets the body free the entry
+ * it is standing on (the scratch `tmp' cursor captures ->next before the free).
  */
 static void
 vms_proctab_teardown(void)
 {
-	struct vms_proc *p, *np;
+	struct vms_proc *p;
+	exec_hash_node_t *tmp;
+	int bkt;
 
-	exec_lock(&vms_proctab_lock);
-	p = vms_proctab;
-	vms_proctab = NULL;
-	exec_unlock(&vms_proctab_lock);
-
-	while (p != NULL) {
+	exec_lock(&vms_proc_hash_lock);
+	exec_hash_for_each_safe(vms_proc_hash, bkt, tmp, p, hash_node) {
 		int m;
-		np = p->next;
+		exec_hash_del_rcu(&p->hash_node);
 		/* Give back this process's mailbox channels first (dropping each
 		 * mailbox's reference, freeing temporary/deleted mailboxes whose last
 		 * channel this was) -- runs while the mailbox list guard is still alive
@@ -227,8 +313,8 @@ vms_proctab_teardown(void)
 		exec_cv_destroy(&p->ef.waitq);
 		exec_lock_destroy(&p->ef.lock);
 		exec_free(p);
-		p = np;
 	}
+	exec_unlock(&vms_proc_hash_lock);
 }
 
 /* ================================================================
@@ -549,6 +635,55 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		return vms_mbx_bigio(l, data, sizeof(struct vms_mbx_read_args),
 		    vms_ioctl_mbx_read);
 
+	/*
+	 * Process-table facility (src/kernel-core/vms_proctab.c) -- P4-A, rd
+	 * vms-ca7. Same dispatch shape as event flags: find-or-create the caller's
+	 * proc, hand the framework's kernel buffer `data' straight to the shared
+	 * facility, map its Linux-style return to a NetBSD errno. All _IOWR and <=
+	 * 288 bytes (getjpi_args), so all ride the framework pre-copy path -- no
+	 * IOC_VOID big-io shape (unlike the mailbox WRITE/READ transfer ops).
+	 *
+	 * $GETJPI/$PROCSCAN read a process's identity + real host accounting out of
+	 * the ONE executive process table (vms_proc_hash) every process shares;
+	 * $SETPRN records this process's name there where another process's $GETJPI
+	 * can resolve it -- the INV-6-decisive property, the whole reason the name
+	 * lives in the kernel and not in the asking process. $HIBER/$WAKE block/
+	 * release in the executive (interruptible by deliverable ASTs); $SETIDENT/
+	 * $ESTABLISH_SYSTEM stamp an authenticated / SYSTEM identity, gated by the
+	 * caller's real host credential (exec_current_is_privileged).
+	 */
+	case VMS_IOCTL_SETPRN:
+	case VMS_IOCTL_GETJPI:
+	case VMS_IOCTL_PROCSCAN:
+	case VMS_IOCTL_SETIDENT:
+	case VMS_IOCTL_ESTABLISH_SYSTEM:
+	case VMS_IOCTL_HIBER:
+	case VMS_IOCTL_WAKE:
+		uarg = data;
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+
+		switch (cmd) {
+		case VMS_IOCTL_SETPRN:
+			r = vms_ioctl_setprn(proc, (unsigned long)uarg);            break;
+		case VMS_IOCTL_GETJPI:
+			r = vms_ioctl_getjpi(proc, (unsigned long)uarg);           break;
+		case VMS_IOCTL_PROCSCAN:
+			r = vms_ioctl_procscan(proc, (unsigned long)uarg);         break;
+		case VMS_IOCTL_SETIDENT:
+			r = vms_ioctl_setident(proc, (unsigned long)uarg);         break;
+		case VMS_IOCTL_ESTABLISH_SYSTEM:
+			r = vms_ioctl_establish_system(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_HIBER:
+			r = vms_ioctl_hiber(proc, (unsigned long)uarg);            break;
+		case VMS_IOCTL_WAKE:
+			r = vms_ioctl_wake(proc, (unsigned long)uarg);             break;
+		default:
+			return ENOTTY;   /* unreachable */
+		}
+		return vms_facility_errno(r);
+
 	default:
 		return ENOTTY;
 	}
@@ -570,10 +705,13 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * Bring the executive's locks up BEFORE the device can be opened, so
 		 * no ioctl can race an uninitialised lock. vms_eflag_init() inits the
 		 * facility's common-cluster list guard (the shared source's own
-		 * global); the proc table has its own guard.
+		 * global); the process table has its own guard and its buckets are
+		 * emptied here. (vms_proctab.c's reap serializer, vms_reap_mutex, is a
+		 * file-static exec_mutex that initializes itself on first use -- see
+		 * exec_kbackend_netbsd.h -- so it needs no init here.)
 		 */
-		exec_lock_init(&vms_proctab_lock);
-		vms_proctab = NULL;
+		exec_lock_init(&vms_proc_hash_lock);
+		exec_hash_init(vms_proc_hash);
 		vms_eflag_init();
 		/* Bring up the mailbox table's list guard too (the table starts empty
 		 * -- mailboxes are created on demand by $CREMBX). */
@@ -585,7 +723,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 			vms_eflag_cleanup();
 			vms_proctab_teardown();
 			vms_mbx_cleanup();
-			exec_lock_destroy(&vms_proctab_lock);
+			exec_lock_destroy(&vms_proc_hash_lock);
 			return error;
 		}
 		/* The harness reads this line back from dmesg to mknod /dev/vms with
@@ -609,7 +747,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		vms_eflag_cleanup();
 		vms_proctab_teardown();
 		vms_mbx_cleanup();
-		exec_lock_destroy(&vms_proctab_lock);
+		exec_lock_destroy(&vms_proc_hash_lock);
 		printf("vms: unregistered\n");
 		return 0;
 

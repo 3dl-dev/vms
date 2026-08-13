@@ -367,16 +367,65 @@ exec_free_deferred(exec_rcu_head_t *h, void (*fn)(exec_rcu_head_t *))
 
 /* ---- 7. sleepable mutex (Phase F; see exec_kbackend.h) ----
  * A process-context adaptive kmutex at IPL_NONE (same primitive class as
- * exec_lock_t here). No static initializer exists on NetBSD, so EXEC_DEFINE_MUTEX
- * declares storage that exec_mutex_init must initialize at runtime -- never
- * expanded on NetBSD today (its only user, vms_proctab.c, is Linux-built). */
-typedef kmutex_t exec_mutex_t;
+ * exec_lock_t here).
+ *
+ * THE FILE-STATIC INIT PROBLEM, and why exec_mutex_t is a struct (rd vms-ca7).
+ * Linux's DEFINE_MUTEX statically initializes; a NetBSD kmutex has NO static
+ * initializer -- it must be mutex_init'd at runtime. The one EXEC_DEFINE_MUTEX
+ * user, vms_proctab.c, declares its reap serializer as a FILE-STATIC
+ * (`static EXEC_DEFINE_MUTEX(vms_reap_mutex)'), invisible to the module glue,
+ * and the shared facility is byte-identical across substrates (INV-DRIFT) so it
+ * carries no NetBSD-only init hook. So the mutex must initialize ITSELF on first
+ * use. exec_mutex_t therefore pairs the kmutex with a small state word and
+ * exec_mutex_lock lazily mutex_init's it exactly once (atomic CAS elects the one
+ * initializer; a concurrent first-caller briefly spins until it is ready).
+ * First use is at the first reap -- process context, long after module attach --
+ * so a lock held here may sleep, exactly the sleepable-mutex contract. An
+ * explicitly exec_mutex_init'd mutex marks itself ready and skips the lazy path.
+ * This is idiomatic once-init (the RUN_ONCE(9) pattern, hand-rolled per-instance
+ * because RUN_ONCE's init callback takes no cookie); no NetBSD source is copied. */
+typedef struct exec_mutex {
+	kmutex_t              mtx;
+	volatile unsigned int st;   /* 0 = uninit, 1 = initializing, 2 = ready */
+} exec_mutex_t;
 
-#define EXEC_DEFINE_MUTEX(name) exec_mutex_t name   /* + runtime exec_mutex_init */
-static __inline void exec_mutex_init(exec_mutex_t *m)    { mutex_init(m, MUTEX_DEFAULT, IPL_NONE); }
-static __inline void exec_mutex_lock(exec_mutex_t *m)    { mutex_enter(m); }
-static __inline void exec_mutex_unlock(exec_mutex_t *m)  { mutex_exit(m); }
-static __inline void exec_mutex_destroy(exec_mutex_t *m) { mutex_destroy(m); }
+/* File-scope definition: storage zero-initialized (st == 0 => not yet mutex_init'd;
+ * the embedded kmutex is untouched until the lazy init below runs). */
+#define EXEC_DEFINE_MUTEX(name) exec_mutex_t name = { .st = 0 }
+
+static __inline void
+exec_mutex_init(exec_mutex_t *m)
+{
+	mutex_init(&m->mtx, MUTEX_DEFAULT, IPL_NONE);
+	atomic_store_release(&m->st, 2);
+}
+
+static __inline void
+exec_mutex_ensure(exec_mutex_t *m)
+{
+	if (__predict_true(atomic_load_acquire(&m->st) == 2))
+		return;
+	if (atomic_cas_uint(&m->st, 0, 1) == 0) {
+		/* Won the election: this caller performs the one-time init. */
+		mutex_init(&m->mtx, MUTEX_DEFAULT, IPL_NONE);
+		atomic_store_release(&m->st, 2);
+	} else {
+		/* Another caller is initializing; wait it out (it is runnable and the
+		 * init is a handful of instructions -- a bounded spin). */
+		while (atomic_load_acquire(&m->st) != 2)
+			continue;
+	}
+}
+
+static __inline void exec_mutex_lock(exec_mutex_t *m)    { exec_mutex_ensure(m); mutex_enter(&m->mtx); }
+static __inline void exec_mutex_unlock(exec_mutex_t *m)  { mutex_exit(&m->mtx); }
+static __inline void exec_mutex_destroy(exec_mutex_t *m)
+{
+	if (atomic_load_acquire(&m->st) == 2) {
+		mutex_destroy(&m->mtx);
+		atomic_store_release(&m->st, 0);
+	}
+}
 
 /* ---- 8. block-device resolution (vms-31b; see exec_kbackend.h) ----
  *

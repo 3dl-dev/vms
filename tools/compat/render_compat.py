@@ -199,11 +199,21 @@ def render_md(domains, facilities, uncovered, ctx):
              "Source of truth is the YAML; this file is regenerated. "
              "See `docs/design-compat-surface-register.md`.\n")
     # dashboard
+    rows_in = [r for r in rows if r["scope_1_0"] == "in"]
+    overall_in = rollup(rows_in) if rows_in else {"count": 0, "coverage_index": 0.0}
     L.append("## Coverage dashboard\n")
     L.append(f"**{overall['count']} surfaces catalogued** across "
-             f"{len(domains['domains'])} domains. "
-             f"Coverage index **{overall['coverage_index']}%** "
-             "(rough weighted index; see design doc).\n")
+             f"{len(domains['domains'])} domains; **{overall_in['count']} in 1.0 scope**. "
+             f"**1.0-scope coverage index {overall_in['coverage_index']}%** "
+             f"(all-catalogued {overall['coverage_index']}%; rough weighted index).\n")
+    L.append("> ⚠ **What this number is not.** It is coverage of the surfaces this register "
+             "*catalogues and marks in-scope* — not a percentage of all of VMS. VMS is vast; "
+             "whole areas are out of scope or awaiting a scope call — most **languages** "
+             "(Fortran/COBOL/BASIC/Pascal/… — OVMX has only C), DECwindows, and layered "
+             "products among them. A high index means \"far along on what we committed to for "
+             "1.0,\" never \"nearly all of VMS.\" See the scope line below and the per-domain "
+             "figures; `undecided`/`out` surfaces are excluded from the in-scope index but stay "
+             "catalogued so the frontier is visible, not hidden.\n")
     L.append("| Status | Count | | Authenticity | Count |")
     L.append("|---|---|---|---|---|")
     auth_rows = list(overall["by_authenticity"].items())
@@ -231,12 +241,17 @@ def render_md(domains, facilities, uncovered, ctx):
     for d in domains["domains"]:
         dfacs = fac_by_domain.get(d["id"], [])
         ditems = [r for r in rows if r["domain"] == d["id"]]
+        ditems_in = [r for r in ditems if r["scope_1_0"] == "in"]
         dr = rollup(ditems) if ditems else None
+        dr_in = rollup(ditems_in) if ditems_in else None
         L.append(f"## {d['name']}\n")
         L.append(f"_{d['blurb']}_\n")
         if dr:
-            L.append(f"`{bar(dr['by_status'])}`  —  {dr['count']} surfaces, "
-                     f"coverage {dr['coverage_index']}%"
+            in_txt = (f"1.0-scope coverage {dr_in['coverage_index']}% "
+                      f"({dr_in['count']} in-scope)" if dr_in
+                      else "nothing in 1.0 scope")
+            L.append(f"`{bar(dr['by_status'])}`  —  {dr['count']} surfaces catalogued, "
+                     f"{in_txt}"
                      + (f", ⚠ {dr['facade_risk']} facade-risk" if dr['facade_risk'] else "")
                      + "\n")
         for f in dfacs:
@@ -328,6 +343,7 @@ def build_json(domains, facilities):
         },
         "domains": domains["domains"],
         "overall": rollup(rows),
+        "overall_in_scope": rollup([r for r in rows if r["scope_1_0"] == "in"]),
         "facilities": [
             {
                 "facility": f["facility"],

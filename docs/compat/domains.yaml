@@ -78,6 +78,10 @@ domains:
     name: "H. Runtime & Architecture"
     blurb: "Architecture targets, the kernel executive (/dev/vms), image activation / runtime linking."
 
+  - id: languages
+    name: "I. Languages & Compilers"
+    blurb: "The VMS language story: compilers (Fortran/COBOL/BASIC/Pascal/MACRO/Ada/PL/I/…), their language RTLs (FOR$/COB$/BAS$/PAS$), and the OpenVMS Calling Standard that makes cross-language calls work. OVMX today has one language — C, via tcc."
+
 # Facility registry: token -> domain. The generator warns if a facilities/*.yaml
 # names a facility absent here, or if a registered facility has no file yet
 # (reported as an uncovered facility in the internal register).
@@ -154,3 +158,7 @@ facilities:
   runtime-arch:
     - arch-targets
     - kernel-executive
+  languages:
+    - compilers
+    - language-rtl
+    - calling-standard

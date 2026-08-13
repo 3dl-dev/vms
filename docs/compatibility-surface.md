@@ -5,26 +5,28 @@
 
 ## Coverage dashboard
 
-**395 surfaces catalogued** across 8 domains. Coverage index **57.8%** (rough weighted index; see design doc).
+**417 surfaces catalogued** across 9 domains; **373 in 1.0 scope**. **1.0-scope coverage index 61.6%** (all-catalogued 55.5%; rough weighted index).
+
+> ⚠ **What this number is not.** It is coverage of the surfaces this register *catalogues and marks in-scope* — not a percentage of all of VMS. VMS is vast; whole areas are out of scope or awaiting a scope call — most **languages** (Fortran/COBOL/BASIC/Pascal/… — OVMX has only C), DECwindows, and layered products among them. A high index means "far along on what we committed to for 1.0," never "nearly all of VMS." See the scope line below and the per-domain figures; `undecided`/`out` surfaces are excluded from the in-scope index but stay catalogued so the frontier is visible, not hidden.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 27 | | real | 230 |
-| 🟢 implemented | 209 | | n/a | 87 |
-| 🟡 partial | 39 | | advisory | 32 |
+| ✅ verified | 27 | | real | 234 |
+| 🟢 implemented | 210 | | n/a | 103 |
+| 🟡 partial | 44 | | advisory | 34 |
 | 🟠 stub | 19 | | facade-risk | 46 |
 | 🔵 designed | 2 | |  |  |
-| ⬜ absent | 99 | |  |  |
+| ⬜ absent | 115 | |  |  |
 
 Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 designed · ⬜ absent · ⚠ facade-risk (INV-6/Draper) · ≈ advisory.
 
-**1.0 scope:** in=367 · out=7 · stretch=21
+**1.0 scope:** in=373 · out=8 · stretch=27 · undecided=9
 
 ## A. Programming Interfaces
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜⬜`  —  204 surfaces, coverage 60.6%, ⚠ 22 facade-risk
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜⬜`  —  204 surfaces catalogued, 1.0-scope coverage 62.8% (195 in-scope), ⚠ 22 facade-risk
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND)
 <sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS RTL LIB$ Manual · reviewed 2026-08-13</sub>
@@ -465,7 +467,7 @@ VMS ships ~10 time/timer services; OVMX declares 7. SYS$GETTIM/NUMTIM/BINTIM/ AS
 
 _ODS-2 on-disk, filespec/wildcard, devices, the logical-name namespace, FDL._
 
-`✅✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠🟠⬜⬜`  —  30 surfaces, coverage 74.5%, ⚠ 1 facade-risk
+`✅✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠🟠⬜⬜`  —  30 surfaces catalogued, 1.0-scope coverage 77.1% (29 in-scope), ⚠ 1 facade-risk
 
 ### devices — Devices ($GETDVI, MOUNT/DISMOUNT/INITIALIZE, DISK$label)
 <sub>scope: in · plan: vms-651 · ref: OpenVMS I/O User's Reference Manual; OpenVMS System Manager's Manual (MOUNT) · reviewed 2026-08-13</sub>
@@ -556,7 +558,7 @@ Two distinct surfaces: the OVMX runtime filesystem (vmsfs.ko — its own honestl
 
 _DCL verbs and scripting, qualifier grammar, F$ lexicals, utilities, HELP, queues._
 
-`✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟠⬜⬜⬜⬜⬜⬜⬜`  —  64 surfaces, coverage 52.7%, ⚠ 11 facade-risk
+`✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟠⬜⬜⬜⬜⬜⬜⬜`  —  64 surfaces catalogued, 1.0-scope coverage 59.1% (57 in-scope), ⚠ 11 facade-risk
 
 ### dcl-qualifiers — DCL Qualifier Grammar (Engine A / CLD tables)
 <sub>scope: in · tier 1 · plan: vms-8ad · ref: OpenVMS Command Definition Utility (CDU) Manual; DCL Dictionary · reviewed 2026-08-13</sub>
@@ -703,7 +705,7 @@ Standalone utility images invoked as DCL verbs. Most core system-management util
 
 _SYSUAF/accounts, privileges, rights DB, protection/ACLs, auditing, SYSGEN, boot, install, accounting._
 
-`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  36 surfaces, coverage 49.4%, ⚠ 6 facade-risk
+`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  36 surfaces catalogued, 1.0-scope coverage 57.4% (31 in-scope), ⚠ 6 facade-risk
 
 ### accounting — Accounting
 <sub>scope: in · plan: vms-8ad · ref: OpenVMS Guide to System Security; DCL Dictionary (SET/SHOW ACCOUNTING) · reviewed 2026-08-13</sub>
@@ -844,7 +846,7 @@ Full UAF account record storage and SHA-256 password authentication are real. Ac
 
 _SCS, NISCA/NISCS, connection manager/quorum, cluster-wide DLM, MSCP serving, cluster-wide logicals, shadowing._
 
-`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟠🟠🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  13 surfaces, coverage 43.5%, ⚠ 1 facade-risk
+`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟠🟠🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  13 surfaces catalogued, 1.0-scope coverage 47.1% (12 in-scope), ⚠ 1 facade-risk
 
 ### cluster-dlm — Cluster-wide Distributed Lock Manager
 <sub>scope: in · plan: vms-694 · ref: OpenVMS Cluster Systems manual; $ENQ/$DEQ/$GETLKI system services · reviewed 2026-08-13</sub>
@@ -940,7 +942,7 @@ Absent. docs/compatibility-contract.md lists host-based (DSSA) volume shadowing 
 
 _Object/image format, activation, symbol vectors, LINK, LIBRARIAN, MACRO, MESSAGE, MMS/MMK, self-hosting compiler._
 
-`✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🔵🔵⬜⬜⬜⬜⬜⬜`  —  24 surfaces, coverage 57.9%
+`✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🔵🔵⬜⬜⬜⬜⬜⬜`  —  24 surfaces catalogued, 1.0-scope coverage 66.2% (21 in-scope)
 
 ### image-activation — Image Format + Activation (IMGACT, Shareable/Installed Images, TLS)
 <sub>scope: in · plan: vms-ade · ref: OpenVMS Linker Utility Manual; Programming Concepts Manual (image activation) · reviewed 2026-08-13</sub>
@@ -1069,7 +1071,7 @@ Universal symbol vectors (position-bound binding), GSMATCH (ALWAYS/EQUAL/LEQUAL,
 
 _TCP/IP Services (UCX), DECnet Phase IV, LAT, SSH._
 
-`🟢🟢🟢🟢🟡🟡🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  11 surfaces, coverage 21.8%, ⚠ 3 facade-risk
+`🟢🟢🟢🟢🟡🟡🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  11 surfaces catalogued, 1.0-scope coverage 24.0% (10 in-scope), ⚠ 3 facade-risk
 
 ### decnet — DECnet Phase IV (NSP, Task-to-Task, SET HOST)
 <sub>scope: in · plan: vms-30e · ref: DECnet for OpenVMS Networking Manual · reviewed 2026-08-13</sub>
@@ -1130,7 +1132,7 @@ Design-only, nothing built. No BG: device, no QIO network path, no usable socket
 
 _Architecture targets, the kernel executive (/dev/vms), image activation / runtime linking._
 
-`✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟡🟠🟠⬜⬜`  —  13 surfaces, coverage 67.7%, ⚠ 2 facade-risk
+`✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟡🟠🟠⬜⬜`  —  13 surfaces catalogued, 1.0-scope coverage 69.2% (12 in-scope), ⚠ 2 facade-risk
 
 ### arch-targets — Architecture Targets (x86_64, aarch64, alpha, vax)
 <sub>scope: in · plan: vms-8ce · ref: N/A — OVMX platform targets, not a single VMS surface · reviewed 2026-08-13</sub>
@@ -1166,6 +1168,67 @@ The kernel-mediated substrate SYS$ system services are built on: event flags, lo
 | 🟡⚠ | `kernel-executive$pcb` | struct | Process Control Block: identity, privilege mask, quotas | partial | facade-risk | in | `src/kernel-core/vms_proctab.c` — Legacy dead AST-queue fields orphaned. See kernel-executive$process-control for the process-create/delete facade-risk this feeds. |
 | 🟡⚠ | `kernel-executive$process-control` | feature | $CREPRC / $DELPRC process creation and deletion | partial | facade-risk | in | `src/kernel-core/vms_proctab.c` — Privileges/UIC copied PCB-to-PCB only; not visible cluster-wide (vms-afd). $WAKE/$DELPRC/$FORCEX cast the VMS pid straight into a Linux kill() (vms-pt1). |
 | 🟠≈ | `kernel-executive$scheduling` | feature | Priority scheduling (0-31), COM/COMO process states | stub | advisory | in | Honestly absent: OVMX has no VMS scheduler. Advisory, not faked — no fabricated priority effects. |
+
+## I. Languages & Compilers
+
+_The VMS language story: compilers (Fortran/COBOL/BASIC/Pascal/MACRO/Ada/PL/I/…), their language RTLs (FOR$/COB$/BAS$/PAS$), and the OpenVMS Calling Standard that makes cross-language calls work. OVMX today has one language — C, via tcc._
+
+`🟢🟡🟡🟡🟡🟡⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  22 surfaces catalogued, 1.0-scope coverage 55.8% (6 in-scope)
+
+### calling-standard — OpenVMS Calling Standard
+<sub>scope: in · plan: vms-801 · ref: VSI OpenVMS Calling Standard · reviewed 2026-08-13</sub>
+
+The convention that lets any VMS language call any other: argument-list layout, by-ref/by-value/by-descriptor passing, the standard data types, condition handling, and register/stack usage. OVMX implements enough for C on x86_64 and aarch64; the cross-language data-type surface (packed decimal, varying strings, array descriptors, VAX float) is where it thins out.
+
+
+<sub>4 items · coverage 50.0%</sub>
+
+| | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
+|---|---|---|---|---|---|---|---|
+| 🟡 | `cs$arg-passing` | feature | Argument list: by reference / value / descriptor | partial | real | in | `src/libvms/include/descrip.h` — Works for C via the native host ABI; VMS's own item-list/arg-block conventions honored for descriptor args. |
+| 🟡 | `cs$data-types` | feature | Standard data types passed across the call boundary | partial | real | in | `src/libvms/include/descrip.h` — Descriptor classes S/D real; classes A (array) and VS (varying string) absent; packed decimal absent; VAX F/D/G/H float unsupported (IEEE only). These block Fortran/COBOL/BASIC cross-calls. |
+| 🟡≈ | `cs$condition-handling` | feature | Condition-handling as part of the standard (handler search, unwind) | partial | advisory | in | `src/libvms/rtl/lib_signal.c` — In-process handler stack, not a real machine-frame unwind; SYS$UNWIND simplified. Cross-ref chf facility. |
+| 🟡≈ | `cs$register-usage` | feature | Register/stack usage conventions (VAX/Alpha/I64 calling standard) | partial | advisory | in | OVMX uses the host (x86_64/aarch64 SysV) ABI, honestly — not the VAX/Alpha VMS register convention; fine for recompiled C, wrong for binary/MACRO interop. |
+
+### compilers — Compilers (language front-ends)
+<sub>scope: undecided · plan: vms-082 · ref: VSI OpenVMS language reference manuals (Fortran/COBOL/BASIC/Pascal/MACRO/…) · reviewed 2026-08-13</sub>
+
+VMS ships a large family of DEC/VSI compilers. OVMX has exactly one language — C, via tcc (the self-hosting beachhead). Every other VMS language is absent; which of them are in 1.0 scope is an operator call (vms-082) — the "run corpus software" goal (R2) leans on Fortran/COBOL/BASIC, so this is not automatically out-of-scope.
+
+
+<sub>12 items · coverage 7.1%</sub>
+
+| | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
+|---|---|---|---|---|---|---|---|
+| 🟢 | `c` | subsystem | DEC C / VSI C compiler | implemented | real | in | `third-party/tcc` — tcc self-hosts inside OVMX (S2, gen2==gen3); independence beachhead, NOT full DEC C nor a perf compiler (rustc/Rust later). Source-compat is the C target. |
+| ⬜ | `macro32` | subsystem | MACRO-32 assembler | absent | n/a | out | Explicitly out of scope (compatibility-contract.md); tcc's integrated assembler is GAS-syntax only. |
+| ⬜ | `macro64` | subsystem | MACRO-64 (Alpha) assembler | absent | n/a | stretch | No native Alpha backend on main either. |
+| ⬜ | `fortran` | subsystem | VAX/DEC/VSI Fortran (77/90/95) | absent | n/a | undecided | Central to the scientific corpus. Needs FOR$ RTL + array descriptors + VAX-float support — all absent. Operator scope call. |
+| ⬜ | `cobol` | subsystem | VAX/DEC COBOL | absent | n/a | undecided | Central to the business corpus. Needs COB$ RTL + packed-decimal (OTS$ gap) + indexed-file multi-key (RMS gap). Operator scope call. |
+| ⬜ | `basic` | subsystem | VAX/DEC BASIC | absent | n/a | undecided | Needs BAS$ RTL + varying-string descriptors (descriptor class VS absent). Operator scope call. |
+| ⬜ | `pascal` | subsystem | VAX/DEC Pascal | absent | n/a | undecided | Needs PAS$ RTL. Operator scope call. |
+| ⬜ | `cxx` | subsystem | DEC / VSI C++ | absent | n/a | undecided | Operator scope call. |
+| ⬜ | `ada` | subsystem | DEC Ada / GNAT Pro | absent | n/a | stretch | Large; likely post-1.0. |
+| ⬜ | `pli` | subsystem | VAX PL/I | absent | n/a | stretch |  |
+| ⬜ | `bliss` | subsystem | BLISS | absent | n/a | stretch | VMS's own systems-implementation language. |
+| ⬜ | `compilers$_other` | subsystem | DIBOL, RPG II, APL, CORAL 66, SCAN, DSM/MUMPS, DECTPU-as-language, … | absent | n/a | stretch | The long tail of VMS languages; almost certainly post-1.0. |
+
+### language-rtl — Language-specific run-time libraries (FOR$/COB$/BAS$/PAS$)
+<sub>scope: undecided · plan: vms-082 · ref: VSI OpenVMS language RTL references · reviewed 2026-08-13</sub>
+
+Each VMS language ships a run-time library its compiled code links against (I/O, intrinsics, string/array support). None of the language-specific RTLs exist in OVMX (grep on origin/main: FOR$/COB$/BAS$/PAS$/PLI$ = 0 files). The language-INDEPENDENT RTLs they build on (LIB$/STR$/MTH$/OTS$) are catalogued in domain A and are the shared floor these would sit on — itself only partial.
+
+
+<sub>6 items · coverage 8.3%</sub>
+
+| | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
+|---|---|---|---|---|---|---|---|
+| ⬜ | `for$` | subsystem | Fortran RTL — formatted/list-directed I/O, intrinsics, VAX-float | absent | n/a | undecided | 0 files on origin/main. |
+| ⬜ | `cob$` | subsystem | COBOL RTL — record I/O, packed-decimal arithmetic, ACCEPT/DISPLAY | absent | n/a | undecided | 0 files. Depends on OTS$ packed-decimal (absent). |
+| ⬜ | `bas$` | subsystem | BASIC RTL — PRINT/INPUT, string dynamics, virtual arrays | absent | n/a | undecided | 0 files. Depends on varying-string descriptors (absent). |
+| ⬜ | `pas$` | subsystem | Pascal RTL | absent | n/a | undecided | 0 files. |
+| ⬜ | `pli$` | subsystem | PL/I RTL | absent | n/a | stretch |  |
+| 🟡 | `language-rtl$shared` | subsystem | Language-independent RTL floor (LIB$/STR$/MTH$/OTS$) every language links | partial | real | in | `docs/compat/facilities/ots.yaml` — Catalogued in domain A. Partial: OTS$ packed-decimal + comparison families and descriptor classes A/VS are absent — exactly the pieces COBOL/BASIC/Fortran need. |
 
 ## ⚠ Facade-risk index (INV-6 / Draper join)
 

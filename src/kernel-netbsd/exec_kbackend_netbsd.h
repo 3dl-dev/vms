@@ -290,6 +290,20 @@ exec_current_is_privileged(void)
 	    KAUTH_GENERIC_ISSUSER, NULL) == 0;
 }
 
+/* exec_current_uid/gid (vms-31b): the real uid/gid of the current LWP's
+ * credentials -- the kauth(9) twin of Linux from_kuid(current_uid()). Real
+ * mapping (not a stub); type-checked here and live once devtab joins SRCS. */
+static __inline uint32_t
+exec_current_uid(void)
+{
+	return (uint32_t)kauth_cred_getuid(kauth_cred_get());
+}
+static __inline uint32_t
+exec_current_gid(void)
+{
+	return (uint32_t)kauth_cred_getgid(kauth_cred_get());
+}
+
 static __inline int
 exec_task_alive(exec_task_ref_t *ref)
 {
@@ -362,5 +376,35 @@ static __inline void exec_mutex_init(exec_mutex_t *m)    { mutex_init(m, MUTEX_D
 static __inline void exec_mutex_lock(exec_mutex_t *m)    { mutex_enter(m); }
 static __inline void exec_mutex_unlock(exec_mutex_t *m)  { mutex_exit(m); }
 static __inline void exec_mutex_destroy(exec_mutex_t *m) { mutex_destroy(m); }
+
+/* ---- 8. block-device resolution (vms-31b; see exec_kbackend.h) ----
+ *
+ * COMPILE STATUS, and why this side is a contract-only twin (the exec_rbtree
+ * precedent). vms_devtab.c is NOT in this module's SRCS yet -- only vms_eflag.c
+ * is -- so these are TYPE-CHECKED but never called on NetBSD. The MAJOR/MINOR
+ * accessors carry their real mapping (major(9)/minor(9) are portable dev_t
+ * accessors from <sys/types.h>, already included above). The PATH -> dev_t
+ * RESOLUTION is the one piece with no cheap NetBSD one-liner: Linux lookup_bdev
+ * walks the /dev name space, whereas the NetBSD twin resolves a device path to
+ * a vnode (namei/lookup on the /dev node) and reads vp->v_rdev, or maps a device
+ * NAME to its dev_t through the block devsw (bdevsw_lookup / devsw_name2blk).
+ * Binding that -- and enumerating the node's disks the way the executive does on
+ * Linux -- is the devtab-on-NetBSD proof's concern (a later item); until then
+ * this is a compile-safe documented stub that touches NO struct internals and
+ * reports "no such device", naming its real source here. It is never on a live
+ * path (INV-6 / Rule 11: it fabricates nothing -- it resolves nothing). */
+typedef dev_t exec_dev_t;
+
+static __inline int
+exec_blockdev_lookup(const char *path, exec_dev_t *out)
+{
+	/* vms-31b: bind to namei(vp->v_rdev) or devsw_name2blk on the NetBSD
+	 * devtab proof (rd, later). Never reached today (devtab is Linux-built). */
+	(void)path;
+	(void)out;
+	return -1;   /* no such device */
+}
+static __inline unsigned int exec_blockdev_major(exec_dev_t dev) { return (unsigned int)major(dev); }
+static __inline unsigned int exec_blockdev_minor(exec_dev_t dev) { return (unsigned int)minor(dev); }
 
 #endif /* OVMX_EXEC_KBACKEND_NETBSD_H */

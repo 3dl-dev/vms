@@ -22,20 +22,28 @@
  * unit during system initialization.
  */
 
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/slab.h>
-#include <linux/uaccess.h>
-#include <linux/list.h>
-#include <linux/spinlock.h>
-#include <linux/ctype.h>
-#include <linux/string.h>
-#include <linux/cred.h>
-#include <linux/uidgid.h>
-#include <linux/blkdev.h>       /* lookup_bdev() -- resolve /dev/vdX to a dev_t */
-#include <linux/kdev_t.h>       /* MAJOR()/MINOR() */
-
-#include "vms_internal.h"
+/*
+ * SUBSTRATE-AGNOSTIC EXECUTIVE CORE (rd vms-31b, epic vms-8e8 -- the device
+ * table, the facility Phase E deferred until its two missing seams landed). This
+ * file lives in src/kernel-core/ and names NO <linux/...> symbol: every host
+ * primitive it needs goes through the kernel-backend shim. Phase E could not
+ * move it because three seams were missing -- the BLOCK LAYER (lookup_bdev /
+ * MAJOR / MINOR / dev_t, the disk-unit enumeration), HOST-TASK CREDENTIALS (the
+ * caller's uid/gid, for caller_uic), and the cross-facility vms_proc_hash_lock
+ * (setterm writes proc->terminal under it). Phase F landed the host-task seam
+ * (exec_current_*) and the process-table lock; vms-31b adds the last missing
+ * piece, the BLOCK-DEVICE seam (exec_blockdev_*, exec_kbackend.h §8), and
+ * promotes the facility. The Linux vms.ko provides the backend
+ * (exec_kbackend_linux.h / exec_list_linux.h); the NetBSD `vms' module will
+ * provide its own -- including the block-device path->dev_t mapping -- when
+ * devtab joins its SRCS (a later item; the NetBSD block seam is contract-only
+ * today, following the exec_rbtree precedent).
+ */
+#include "vms_internal.h"     /* struct vms_device/vms_channel/vms_proc, the SS$/
+                              * args/status codes, vms_proc_hash_lock (extern),
+                              * the C-string + ctype + fixed-width vocabulary */
+#include "exec_kbackend.h"    /* exec_lock/copy/alloc/current/blockdev */
+#include "exec_list.h"        /* exec_list_* (device list, channel lists) */
 
 /*
  * Device class codes. Values mirror src/libvms/include/dcdef.h so the
@@ -64,8 +72,15 @@
  * The table
  * ================================================================ */
 
-static LIST_HEAD(vms_device_list);
-static DEFINE_SPINLOCK(vms_device_list_lock);
+/*
+ * The device list anchor is statically empty (EXEC_LIST_HEAD, portable). Its
+ * guard is a plain exec_lock_t initialized at module load in vms_devtab_init()
+ * below, NOT statically: the NetBSD backend's kmutex cannot be statically
+ * initialized, so runtime exec_lock_init() is the substrate-agnostic form. On
+ * Linux it forwards to spin_lock_init, so behaviour is unchanged.
+ */
+static EXEC_LIST_HEAD(vms_device_list);
+static exec_lock_t vms_device_list_lock;
 
 /*
  * Console terminal defaults.
@@ -161,7 +176,7 @@ static struct vms_device *devtab_lookup_locked(const char *devnam)
 {
     struct vms_device *dev;
 
-    list_for_each_entry(dev, &vms_device_list, list) {
+    exec_list_for_each_entry(dev, &vms_device_list, list) {
         if (strcmp(dev->devnam, devnam) == 0)
             return dev;
     }
@@ -184,7 +199,7 @@ static struct vms_device *vms_devtab_create(const char *devnam,
 {
     struct vms_device *dev;
 
-    dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+    dev = exec_zalloc(sizeof(*dev));
     if (!dev)
         return NULL;
 
@@ -195,12 +210,12 @@ static struct vms_device *vms_devtab_create(const char *devnam,
     dev->devchar   = devchar;
     dev->width     = width;
     dev->page      = page;
-    INIT_LIST_HEAD(&dev->chanlist);
-    spin_lock_init(&dev->lock);
+    exec_list_head_init(&dev->chanlist);
+    exec_lock_init(&dev->lock);
 
-    spin_lock(&vms_device_list_lock);
-    list_add_tail(&dev->list, &vms_device_list);
-    spin_unlock(&vms_device_list_lock);
+    exec_lock(&vms_device_list_lock);
+    exec_list_add_tail(&dev->list, &vms_device_list);
+    exec_unlock(&vms_device_list_lock);
 
     return dev;
 }
@@ -242,7 +257,7 @@ static void vms_devtab_probe_disks(void)
         char devnam[VMS_DEVNAM_SIZE];
         char backing[VMS_BACKING_SIZE];
         struct vms_device *disk;
-        dev_t dev;
+        exec_dev_t dev;
         int n;
 
         n = snprintf(path, sizeof(path), "/dev/vd%c", 'a' + i);
@@ -250,11 +265,12 @@ static void vms_devtab_probe_disks(void)
             continue;
 
         /*
-         * lookup_bdev() resolves the /dev node to a dev_t without opening the
-         * device. -ENOENT here is the ordinary case (this letter has no disk);
-         * it is not an error, just the end of the contiguous run.
+         * exec_blockdev_lookup() resolves the /dev node to an exec_dev_t without
+         * opening the device (Linux: lookup_bdev). A nonzero return here is the
+         * ordinary case (this letter has no disk); it is not an error, just the
+         * end of the contiguous run.
          */
-        if (lookup_bdev(path, &dev) != 0)
+        if (exec_blockdev_lookup(path, &dev) != 0)
             continue;
 
         snprintf(devnam,  sizeof(devnam),  "DKA%u:", (unsigned)i * 100u);
@@ -282,20 +298,29 @@ static void vms_devtab_probe_disks(void)
          * so no process can be reading the table. The lock keeps the write
          * paired with vms_ioctl_disk_resolve()'s read, which does take it.
          */
-        spin_lock(&disk->lock);
+        exec_lock(&disk->lock);
         strscpy(disk->backing, backing, sizeof(disk->backing));
-        disk->backing_major = MAJOR(dev);
-        disk->backing_minor = MINOR(dev);
-        spin_unlock(&disk->lock);
+        disk->backing_major = exec_blockdev_major(dev);
+        disk->backing_minor = exec_blockdev_minor(dev);
+        exec_unlock(&disk->lock);
 
         pr_info("vms: disk unit %s -> %s (%u:%u)\n",
-                devnam, backing, MAJOR(dev), MINOR(dev));
+                devnam, backing, exec_blockdev_major(dev), exec_blockdev_minor(dev));
     }
 }
 
 int vms_devtab_init(void)
 {
     struct vms_device *console;
+
+    /*
+     * Init the device-list guard BEFORE the first vms_devtab_create() below --
+     * that helper takes vms_device_list_lock, so on NetBSD (kmutex, no static
+     * init) it must already be live. On Linux exec_lock_init forwards to
+     * spin_lock_init, which the former DEFINE_SPINLOCK did at load; behaviour is
+     * unchanged, only the init moves from static to this first line.
+     */
+    exec_lock_init(&vms_device_list_lock);
 
     /*
      * shareable = 0: the oracle's terminals are not shareable. Neither
@@ -334,12 +359,12 @@ void vms_devtab_cleanup(void)
 {
     struct vms_device *dev, *tmp;
 
-    spin_lock(&vms_device_list_lock);
-    list_for_each_entry_safe(dev, tmp, &vms_device_list, list) {
-        list_del(&dev->list);
-        kfree(dev);
+    exec_lock(&vms_device_list_lock);
+    exec_list_for_each_entry_safe(dev, tmp, &vms_device_list, list) {
+        exec_list_del(&dev->list);
+        exec_free(dev);
     }
-    spin_unlock(&vms_device_list_lock);
+    exec_unlock(&vms_device_list_lock);
 }
 
 /* ================================================================
@@ -351,7 +376,7 @@ static struct vms_channel *chan_find_locked(struct vms_proc *proc, uint32_t chan
 {
     struct vms_channel *ch;
 
-    list_for_each_entry(ch, &proc->channels, list) {
+    exec_list_for_each_entry(ch, &proc->channels, list) {
         if (ch->chan == chan)
             return ch;
     }
@@ -359,7 +384,13 @@ static struct vms_channel *chan_find_locked(struct vms_proc *proc, uint32_t chan
 }
 
 /*
- * The caller's UIC, from its Linux credentials.
+ * The caller's UIC, from its host-task credentials.
+ *
+ * The [group,member] -> UIC packing is the facility's own; only the raw
+ * uid/gid read crosses the kernel-backend seam (exec_current_gid/uid, the real
+ * not-effective id, mapped into the host's initial id namespace -- Linux
+ * from_kgid(&init_user_ns, current_gid()) / from_kuid(&init_user_ns,
+ * current_uid())).
  *
  * NOT ORACLE-PINNED, and recorded as such in vms-d0b's findings: it is
  * OVMX's own mapping and no test asserts it. It will have to agree with
@@ -367,8 +398,8 @@ static struct vms_channel *chan_find_locked(struct vms_proc *proc, uint32_t chan
  */
 static uint32_t caller_uic(void)
 {
-    return (((uint32_t)from_kgid(&init_user_ns, current_gid()) & 0xFFFFu) << 16) |
-           ((uint32_t)from_kuid(&init_user_ns, current_uid()) & 0xFFFFu);
+    return ((exec_current_gid() & 0xFFFFu) << 16) |
+            (exec_current_uid() & 0xFFFFu);
 }
 
 /* Caller holds dev->lock. Does `pid` still hold a channel to this device? */
@@ -376,7 +407,7 @@ static int device_has_channel_locked(struct vms_device *dev, pid_t pid)
 {
     struct vms_channel *ch;
 
-    list_for_each_entry(ch, &dev->chanlist, devlink) {
+    exec_list_for_each_entry(ch, &dev->chanlist, devlink) {
         if (ch->owner_linux_pid == pid)
             return 1;
     }
@@ -435,12 +466,12 @@ static void device_release_channel(struct vms_channel *ch)
     struct vms_device *dev = ch->dev;
     pid_t pid = ch->owner_linux_pid;
 
-    spin_lock(&dev->lock);
-    list_del(&ch->devlink);
+    exec_lock(&dev->lock);
+    exec_list_del(&ch->devlink);
     if (dev->refcnt > 0)
         dev->refcnt--;
     device_release_implicit_owner_locked(dev, pid);
-    spin_unlock(&dev->lock);
+    exec_unlock(&dev->lock);
 }
 
 /*
@@ -456,27 +487,27 @@ void vms_proc_release_channels(struct vms_proc *proc)
 {
     struct vms_channel *ch, *tmp;
     struct vms_device *dev;
-    LIST_HEAD(doomed);
+    EXEC_LIST_HEAD(doomed);
 
-    spin_lock(&proc->chan_lock);
-    list_for_each_entry_safe(ch, tmp, &proc->channels, list)
-        list_move(&ch->list, &doomed);
-    spin_unlock(&proc->chan_lock);
+    exec_lock(&proc->chan_lock);
+    exec_list_for_each_entry_safe(ch, tmp, &proc->channels, list)
+        exec_list_move(&ch->list, &doomed);
+    exec_unlock(&proc->chan_lock);
 
-    list_for_each_entry_safe(ch, tmp, &doomed, list) {
-        list_del(&ch->list);
+    exec_list_for_each_entry_safe(ch, tmp, &doomed, list) {
+        exec_list_del(&ch->list);
         device_release_channel(ch);
-        kfree(ch);
+        exec_free(ch);
     }
 
-    spin_lock(&vms_device_list_lock);
-    list_for_each_entry(dev, &vms_device_list, list) {
-        spin_lock(&dev->lock);
+    exec_lock(&vms_device_list_lock);
+    exec_list_for_each_entry(dev, &vms_device_list, list) {
+        exec_lock(&dev->lock);
         if (dev->allocated && dev->owner_linux_pid == proc->linux_pid)
             device_dealloc_locked(dev);
-        spin_unlock(&dev->lock);
+        exec_unlock(&dev->lock);
     }
-    spin_unlock(&vms_device_list_lock);
+    exec_unlock(&vms_device_list_lock);
 
     /*
      * Mailbox channels (vms-d44) are a separate list (see vms_mbx.h) --
@@ -514,18 +545,18 @@ void vms_proc_release_channels(struct vms_proc *proc)
 void vms_proc_rundown_channels(struct vms_proc *proc, uint8_t min_acmode)
 {
     struct vms_channel *ch, *tmp;
-    LIST_HEAD(doomed);
+    EXEC_LIST_HEAD(doomed);
 
-    spin_lock(&proc->chan_lock);
-    list_for_each_entry_safe(ch, tmp, &proc->channels, list)
+    exec_lock(&proc->chan_lock);
+    exec_list_for_each_entry_safe(ch, tmp, &proc->channels, list)
         if (ch->acmode >= min_acmode)
-            list_move(&ch->list, &doomed);
-    spin_unlock(&proc->chan_lock);
+            exec_list_move(&ch->list, &doomed);
+    exec_unlock(&proc->chan_lock);
 
-    list_for_each_entry_safe(ch, tmp, &doomed, list) {
-        list_del(&ch->list);
+    exec_list_for_each_entry_safe(ch, tmp, &doomed, list) {
+        exec_list_del(&ch->list);
         device_release_channel(ch);
-        kfree(ch);
+        exec_free(ch);
     }
 }
 
@@ -577,7 +608,7 @@ long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg)
     uint32_t status;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
     args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
 
@@ -588,15 +619,15 @@ long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    ch = kzalloc(sizeof(*ch), GFP_KERNEL);
+    ch = exec_zalloc(sizeof(*ch));
     if (!ch)
         return -ENOMEM;
 
-    spin_lock(&vms_device_list_lock);
+    exec_lock(&vms_device_list_lock);
     dev = devtab_lookup_locked(devnam);
     if (!dev) {
-        spin_unlock(&vms_device_list_lock);
-        kfree(ch);
+        exec_unlock(&vms_device_list_lock);
+        exec_free(ch);
         args.chan = 0;
         args.status = SS__NOSUCHDEV;
         goto out;
@@ -613,13 +644,13 @@ long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg)
      * every caller that does not ask for a more privileged one -- the only
      * callers OVMX has. See docs/design-image-rundown-resource-classes.md.
      */
-    spin_lock(&proc->mode_lock);
+    exec_lock(&proc->mode_lock);
     ch->acmode = proc->current_mode;
-    spin_unlock(&proc->mode_lock);
+    exec_unlock(&proc->mode_lock);
 
-    spin_lock(&dev->lock);
+    exec_lock(&dev->lock);
     dev->refcnt++;
-    list_add_tail(&ch->devlink, &dev->chanlist);
+    exec_list_add_tail(&ch->devlink, &dev->chanlist);
     /*
      * Implicit ownership. Note what is NOT here: no reference is added
      * for it (TTA0: showed one channel, one reference, and an owner),
@@ -630,10 +661,10 @@ long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg)
         dev->owner_linux_pid = proc->linux_pid;
         dev->owner_uic = caller_uic();
     }
-    spin_unlock(&dev->lock);
-    spin_unlock(&vms_device_list_lock);
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
 
-    spin_lock(&proc->chan_lock);
+    exec_lock(&proc->chan_lock);
     /*
      * Channel numbers are opaque to the caller on VMS ("the system
      * assigns the channel"), so the allocation policy below -- small
@@ -641,14 +672,14 @@ long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg)
      * an OVMX design choice and is not claimed to match VMS's.
      */
     ch->chan = ++proc->next_chan;
-    list_add_tail(&ch->list, &proc->channels);
-    spin_unlock(&proc->chan_lock);
+    exec_list_add_tail(&ch->list, &proc->channels);
+    exec_unlock(&proc->chan_lock);
 
     args.chan = ch->chan;
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -659,18 +690,18 @@ long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg)
     struct vms_channel *ch;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&proc->chan_lock);
+    exec_lock(&proc->chan_lock);
     ch = chan_find_locked(proc, args.chan);
     if (ch)
-        list_del(&ch->list);
-    spin_unlock(&proc->chan_lock);
+        exec_list_del(&ch->list);
+    exec_unlock(&proc->chan_lock);
 
     if (ch) {
         device_release_channel(ch);
-        kfree(ch);
+        exec_free(ch);
         args.status = SS__NORMAL;
     } else if (vms_mbx_dassgn(proc, args.chan) == 0) {
         /*
@@ -687,7 +718,7 @@ long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg)
         args.status = SS__IVCHAN;
     }
 
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -732,7 +763,7 @@ long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg)
     uint32_t status;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
     args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
 
@@ -742,15 +773,15 @@ long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    spin_lock(&vms_device_list_lock);
+    exec_lock(&vms_device_list_lock);
     dev = devtab_lookup_locked(devnam);
     if (!dev) {
-        spin_unlock(&vms_device_list_lock);
+        exec_unlock(&vms_device_list_lock);
         args.status = SS__NOSUCHDEV;
         goto out;
     }
 
-    spin_lock(&dev->lock);
+    exec_lock(&dev->lock);
     if (dev->owner_linux_pid != 0 && dev->owner_linux_pid != proc->linux_pid) {
         args.status = SS__DEVALLOC;
     } else if (dev->allocated) {
@@ -763,11 +794,11 @@ long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg)
         dev->refcnt++;
         args.status = SS__NORMAL;
     }
-    spin_unlock(&dev->lock);
-    spin_unlock(&vms_device_list_lock);
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -795,7 +826,7 @@ long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg)
     uint32_t status;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
     args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
 
@@ -805,26 +836,26 @@ long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    spin_lock(&vms_device_list_lock);
+    exec_lock(&vms_device_list_lock);
     dev = devtab_lookup_locked(devnam);
     if (!dev) {
-        spin_unlock(&vms_device_list_lock);
+        exec_unlock(&vms_device_list_lock);
         args.status = SS__NOSUCHDEV;
         goto out;
     }
 
-    spin_lock(&dev->lock);
+    exec_lock(&dev->lock);
     if (dev->allocated && dev->owner_linux_pid == proc->linux_pid) {
         device_dealloc_locked(dev);
         args.status = SS__NORMAL;
     } else {
         args.status = SS__DEVNOTALLOC;
     }
-    spin_unlock(&dev->lock);
-    spin_unlock(&vms_device_list_lock);
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -855,7 +886,7 @@ long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg)
     (void)proc;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
     args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
 
@@ -865,30 +896,30 @@ long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    spin_lock(&vms_device_list_lock);
+    exec_lock(&vms_device_list_lock);
     dev = devtab_lookup_locked(devnam);
     if (!dev) {
-        spin_unlock(&vms_device_list_lock);
+        exec_unlock(&vms_device_list_lock);
         args.status = SS__NOSUCHDEV;
         goto out;
     }
     if (dev->devclass != DC__DISK) {
-        spin_unlock(&vms_device_list_lock);
+        exec_unlock(&vms_device_list_lock);
         args.status = SS__IVDEVNAM;
         goto out;
     }
 
-    spin_lock(&dev->lock);
+    exec_lock(&dev->lock);
     strscpy(args.backing, dev->backing, sizeof(args.backing));
     args.backing_major = dev->backing_major;
     args.backing_minor = dev->backing_minor;
-    spin_unlock(&dev->lock);
-    spin_unlock(&vms_device_list_lock);
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -898,7 +929,7 @@ static void devinfo_fill(struct vms_device *dev, struct vms_devinfo *info)
 {
     memset(info, 0, sizeof(*info));
 
-    spin_lock(&dev->lock);
+    exec_lock(&dev->lock);
     strscpy(info->devnam, dev->devnam, sizeof(info->devnam));
     info->devclass  = dev->devclass;
     info->devtype   = dev->devtype;
@@ -911,7 +942,7 @@ static void devinfo_fill(struct vms_device *dev, struct vms_devinfo *info)
     info->devchar   = dev->devchar;
     info->width     = dev->width;
     info->page      = dev->page;
-    spin_unlock(&dev->lock);
+    exec_unlock(&dev->lock);
 }
 
 long vms_ioctl_getdvi(struct vms_proc *proc, unsigned long arg)
@@ -922,17 +953,17 @@ long vms_ioctl_getdvi(struct vms_proc *proc, unsigned long arg)
     uint32_t status;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     if (args.select == VMS_DVI_SEL_CHAN) {
         struct vms_channel *ch;
 
-        spin_lock(&proc->chan_lock);
+        exec_lock(&proc->chan_lock);
         ch = chan_find_locked(proc, args.chan);
         if (ch)
             dev = ch->dev;
-        spin_unlock(&proc->chan_lock);
+        exec_unlock(&proc->chan_lock);
 
         if (!dev) {
             memset(&args.info, 0, sizeof(args.info));
@@ -957,11 +988,11 @@ long vms_ioctl_getdvi(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    spin_lock(&vms_device_list_lock);
+    exec_lock(&vms_device_list_lock);
     dev = devtab_lookup_locked(devnam);
     if (dev)
         devinfo_fill(dev, &args.info);
-    spin_unlock(&vms_device_list_lock);
+    exec_unlock(&vms_device_list_lock);
 
     if (!dev) {
         memset(&args.info, 0, sizeof(args.info));
@@ -971,7 +1002,7 @@ long vms_ioctl_getdvi(struct vms_proc *proc, unsigned long arg)
     }
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -985,11 +1016,11 @@ long vms_ioctl_devscan(struct vms_proc *proc, unsigned long arg)
     (void)proc;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&vms_device_list_lock);
-    list_for_each_entry(dev, &vms_device_list, list) {
+    exec_lock(&vms_device_list_lock);
+    exec_list_for_each_entry(dev, &vms_device_list, list) {
         if (i == args.index) {
             found = dev;
             break;
@@ -998,7 +1029,7 @@ long vms_ioctl_devscan(struct vms_proc *proc, unsigned long arg)
     }
     if (found)
         devinfo_fill(found, &args.info);
-    spin_unlock(&vms_device_list_lock);
+    exec_unlock(&vms_device_list_lock);
 
     if (!found) {
         args.status = SS__NOMOREDEV;
@@ -1007,7 +1038,7 @@ long vms_ioctl_devscan(struct vms_proc *proc, unsigned long arg)
         args.status = SS__NORMAL;
     }
 
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -1048,14 +1079,14 @@ long vms_ioctl_setterm(struct vms_proc *proc, unsigned long arg)
     char devnam[VMS_DEVNAM_SIZE];
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&proc->chan_lock);
+    exec_lock(&proc->chan_lock);
     ch = chan_find_locked(proc, args.chan);
     if (ch)
         dev = ch->dev;
-    spin_unlock(&proc->chan_lock);
+    exec_unlock(&proc->chan_lock);
 
     if (!dev) {
         args.status = SS__IVCHAN;
@@ -1067,9 +1098,9 @@ long vms_ioctl_setterm(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    spin_lock(&dev->lock);
+    exec_lock(&dev->lock);
     strscpy(devnam, dev->devnam, sizeof(devnam));
-    spin_unlock(&dev->lock);
+    exec_unlock(&dev->lock);
 
     /*
      * Written under vms_proc_hash_lock -- the process table's lock, and
@@ -1077,14 +1108,14 @@ long vms_ioctl_setterm(struct vms_proc *proc, unsigned long arg)
      * $GETJPI or $PROCSCAN row. The name is stored under the same lock
      * every reader takes.
      */
-    spin_lock(&vms_proc_hash_lock);
+    exec_lock(&vms_proc_hash_lock);
     strscpy(proc->terminal, devnam, sizeof(proc->terminal));
-    spin_unlock(&vms_proc_hash_lock);
+    exec_unlock(&vms_proc_hash_lock);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -1096,7 +1127,7 @@ long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg)
     struct vms_device *dev = NULL;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     /*
@@ -1104,11 +1135,11 @@ long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg)
      * ($QIO IO$_SETMODE). No channel, no change -- a process cannot
      * redefine a terminal it never opened.
      */
-    spin_lock(&proc->chan_lock);
+    exec_lock(&proc->chan_lock);
     ch = chan_find_locked(proc, args.chan);
     if (ch)
         dev = ch->dev;
-    spin_unlock(&proc->chan_lock);
+    exec_unlock(&proc->chan_lock);
 
     if (!dev) {
         args.status = SS__IVCHAN;
@@ -1121,7 +1152,7 @@ long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    spin_lock(&dev->lock);
+    exec_lock(&dev->lock);
     if (args.flags & VMS_TTSET_CHAR) {
         dev->devchar |= args.setchar;
         dev->devchar &= ~args.clrchar;
@@ -1131,12 +1162,12 @@ long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg)
     if (args.flags & VMS_TTSET_PAGE)
         dev->page = args.page;
     dev->opcnt++;
-    spin_unlock(&dev->lock);
+    exec_unlock(&dev->lock);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }

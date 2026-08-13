@@ -50,6 +50,11 @@
 #include <linux/sched/mm.h>       /* get_task_mm, mmput */
 #include <linux/mm.h>             /* get_mm_rss */
 #include <linux/timekeeping.h>    /* ktime_get_boottime_ns, ktime_get_real_ts64 */
+/* vms-31b (exec_current_uid/gid + block-device resolution) backing headers. */
+#include <linux/cred.h>           /* current_uid, current_gid */
+#include <linux/uidgid.h>         /* from_kuid, from_kgid, init_user_ns */
+#include <linux/blkdev.h>         /* lookup_bdev (resolve /dev/vdX to a dev_t) */
+#include <linux/kdev_t.h>         /* MAJOR / MINOR */
 
 /* ---- primitive types ---- */
 typedef spinlock_t        exec_lock_t;
@@ -174,6 +179,18 @@ typedef struct task_struct  exec_task_pin_t;   /* a pinned (referenced) task */
 
 static inline int exec_current_is_privileged(void) { return capable(CAP_SYS_ADMIN); }
 
+/* exec_current_uid/gid (vms-31b): the REAL uid/gid of `current`, mapped into the
+ * initial user namespace -- exactly the reads the device table's caller_uic()
+ * did before this seam existed, so the module is behaviour-identical. */
+static inline uint32_t exec_current_uid(void)
+{
+	return (uint32_t)from_kuid(&init_user_ns, current_uid());
+}
+static inline uint32_t exec_current_gid(void)
+{
+	return (uint32_t)from_kgid(&init_user_ns, current_gid());
+}
+
 static inline int exec_task_alive(exec_task_ref_t *ref)
 {
 	struct task_struct *task;
@@ -259,5 +276,19 @@ static inline void exec_mutex_init(exec_mutex_t *m)    { mutex_init(m); }
 static inline void exec_mutex_lock(exec_mutex_t *m)    { mutex_lock(m); }
 static inline void exec_mutex_unlock(exec_mutex_t *m)  { mutex_unlock(m); }
 static inline void exec_mutex_destroy(exec_mutex_t *m) { mutex_destroy(m); }
+
+/* ---- 8. block-device resolution (vms-31b; see exec_kbackend.h) ----
+ * Trivial forwarders to the exact block-layer primitives the device table used
+ * before this seam existed: lookup_bdev() resolves a /dev path to a dev_t
+ * without opening the device, and MAJOR()/MINOR() split it -- so the converted
+ * vms_devtab.c compiles to byte-identical behaviour. */
+typedef dev_t exec_dev_t;
+
+static inline int exec_blockdev_lookup(const char *path, exec_dev_t *out)
+{
+	return lookup_bdev(path, out) ? -1 : 0;
+}
+static inline unsigned int exec_blockdev_major(exec_dev_t dev) { return MAJOR(dev); }
+static inline unsigned int exec_blockdev_minor(exec_dev_t dev) { return MINOR(dev); }
 
 #endif /* OVMX_EXEC_KBACKEND_LINUX_H */

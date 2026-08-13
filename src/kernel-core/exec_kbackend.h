@@ -178,6 +178,19 @@
  *        kauth "is-superuser". This is a REAL host credential, not a value a
  *        process can grant itself (vms_ioctl_establish_system's gate).
  *
+ *   uint32_t exec_current_uid(void)
+ *   uint32_t exec_current_gid(void)
+ *        the CURRENT host task's REAL user / group id, mapped into the host's
+ *        INITIAL id namespace, as a plain uint32_t (vms-31b; the device table's
+ *        caller_uic() packs [gid,uid] into a VMS UIC exactly the way sys$getjpi's
+ *        JPI$_UIC item does). Like exec_current_is_privileged these are real host
+ *        credentials read off `current`, not values a process can grant itself.
+ *        Linux: from_kuid(&init_user_ns, current_uid()) / from_kgid(&init_user_ns,
+ *        current_gid()) -- the real, not effective, id, matching what the
+ *        executive read before this seam existed. NetBSD: kauth_cred_getuid /
+ *        kauth_cred_getgid on kauth_cred_get(). The [group,member] -> UIC PACKING
+ *        stays in the portable facility; only the raw id read crosses the seam.
+ *
  *   The PCB stores an OPAQUE liveness handle, exec_task_ref_t (the executive's
  *   pid_ref: on Linux the thread group's struct pid, taken at registration).
  *   A facility never dereferences it -- it only passes it to these ops:
@@ -242,6 +255,32 @@
  *   void exec_mutex_lock(exec_mutex_t *)     acquire; MAY sleep
  *   void exec_mutex_unlock(exec_mutex_t *)
  *   void exec_mutex_destroy(exec_mutex_t *)  no-op on Linux; mutex_destroy on NetBSD
+ *
+ * 8. Block-device resolution  (vms-31b; called ONLY from the device table, whose
+ *    disk units are enumerated from the node's backing block devices). This is
+ *    the block-layer twin of the host-task seam: a small set of host PRIMITIVES
+ *    (no container), so it lands here in exec_kbackend.h rather than in a
+ *    container-style header like exec_list/hash/rbtree. The executive names a
+ *    block device by its host /dev PATH, resolves it to an opaque device id
+ *    WITHOUT opening it, and reads the id's major/minor to report to a process
+ *    that must open the backing device (MOUNT).
+ *
+ *   Type (concrete per substrate):
+ *     exec_dev_t   an opaque block-device identifier. Linux: dev_t. NetBSD: dev_t.
+ *
+ *   int exec_blockdev_lookup(const char *path, exec_dev_t *out)
+ *        resolve host device PATH (e.g. "/dev/vda") to *out WITHOUT opening the
+ *        device. Returns 0 on success, nonzero if no such device (the ordinary
+ *        end-of-run case as the executive probes vda..vdz -- not an error).
+ *        Linux: lookup_bdev(path, out), normalized to 0 / nonzero. NetBSD: the
+ *        documented contract-only twin until the devsw/dev_t mapping lands with
+ *        devtab-on-NetBSD (following the exec_rbtree precedent -- devtab is not
+ *        in the NetBSD module's SRCS yet, so this side is type-checked, never
+ *        run, and names its real source in the backend comment).
+ *   unsigned int exec_blockdev_major(exec_dev_t dev)
+ *   unsigned int exec_blockdev_minor(exec_dev_t dev)
+ *        the major / minor of a resolved exec_dev_t. Linux: MAJOR() / MINOR().
+ *        NetBSD: major() / minor() (real -- these are portable dev_t accessors).
  */
 
 #ifndef OVMX_EXEC_KBACKEND_H

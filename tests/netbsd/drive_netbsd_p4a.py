@@ -347,12 +347,18 @@ def main():
         log("OK: module loaded and /dev/vms created")
 
         # =====================================================================
-        # PROCTAB: A registers + stays alive; B resolves by name; C enumerates.
+        # PROCTAB: A registers + stays alive (INDEFINITELY, until explicitly
+        # released below -- a fixed-duration hold previously raced the slow
+        # QEMU-TCG console cadence: B's GETJPI could land inside the window
+        # but C's PROCSCAN, a command-turnaround later, could land after A
+        # had already exited, a real observed flake, not a harness bug);
+        # B resolves by name; C enumerates.
         # =====================================================================
         if not skip_proctab_bg:
             rc, _ = run(child,
-                        "rm -f /tmp/pt_a.out; "
-                        "%s bg P4APROC1 12 >/tmp/pt_a.out 2>&1 &" % PT,
+                        "rm -f /tmp/pt_a.out /tmp/pt_a.pid; "
+                        "%s bg P4APROC1 >/tmp/pt_a.out 2>&1 & "
+                        "echo $! > /tmp/pt_a.pid" % PT,
                         cmd_timeout)
             run(child, "sleep 2", cmd_timeout)
         else:
@@ -390,7 +396,9 @@ def main():
         log("OK: process C enumerated the shared process table with "
             "$PROCESS_SCAN and found A's row")
 
-        run(child, "wait", cmd_timeout)   # let A's bg job finish cleanly
+        # Release A now that both readers have observed it (A blocks
+        # indefinitely on its own -- see vmsproctab.c bg's rationale).
+        run(child, "kill `cat /tmp/pt_a.pid` 2>/dev/null; wait", cmd_timeout)
 
         # =====================================================================
         # MBX: A creates a TEMPORARY mailbox and holds it open; B writes; C

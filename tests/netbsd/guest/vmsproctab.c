@@ -13,10 +13,20 @@
  * process-table ioctls the shared facility implements.
  *
  * USAGE (one operation per invocation, so each is its own OS process):
- *   vmsproctab bg <name> <secs>
- *       $SETPRN(name), then sleep(secs) so this process's PCB stays present
- *       in the shared table (still alive, so vms_proc_reap_dead() cannot
- *       reap it) long enough for a DIFFERENT process to look it up.
+ *   vmsproctab bg <name>
+ *       $SETPRN(name), then blocks INDEFINITELY (pause() in a loop) so this
+ *       process's PCB stays present in the shared table (still alive, so
+ *       vms_proc_reap_dead() cannot reap it) until the harness explicitly
+ *       releases it -- exactly the oracle test_kmod_procnam.c's process A
+ *       uses on Linux ("for (;;) pause();", released by the parent's
+ *       "kill(child, SIGKILL)" once every reader is done looking it up). A
+ *       FIXED sleep(secs) here previously raced the slow QEMU-TCG console
+ *       cadence: B's $GETJPI could land inside the window but C's
+ *       $PROCESS_SCAN, a command-turnaround later, could land after A had
+ *       already exited and been reaped -- a real flake, not a harness bug,
+ *       fixed by matching the same indefinite-block-then-explicit-release
+ *       shape the Linux oracle already uses. Default SIGTERM disposition
+ *       ends it; the harness sends that once every reader is done.
  *   vmsproctab getjpi_name <name>
  *       $GETJPI selecting VMS_JPI_SEL_PRCNAM=<name>. Prints the resolved
  *       row's pid/uic if found.
@@ -25,7 +35,8 @@
  *       prcnam matches <name> -- the "enumerate and see it" proof.
  *
  * EXIT CODES:
- *   bg:            0 = $SETPRN succeeded and the sleep completed.
+ *   bg:            not expected to return (blocks until killed); if $SETPRN
+ *                  itself fails, exits nonzero immediately.
  *   getjpi_name:   0 = found a row whose prcnam matches <name>; 1 = not
  *                  found / status failure.
  *   procscan_find: 0 = a scanned row matched <name>; 1 = exhausted the scan
@@ -75,7 +86,7 @@ main(int argc, char **argv)
 
 	if (argc < 3) {
 		fprintf(stderr,
-		    "usage: %s bg <name> <secs> | getjpi_name <name> | "
+		    "usage: %s bg <name> | getjpi_name <name> | "
 		    "procscan_find <name> <maxrows>\n", argv[0]);
 		return 2;
 	}
@@ -93,13 +104,11 @@ main(int argc, char **argv)
 
 	if (op == OP_BG) {
 		struct vms_setprn_args sa;
-		unsigned int secs;
 
-		if (argc != 4) {
-			fprintf(stderr, "usage: %s bg <name> <secs>\n", argv[0]);
+		if (argc != 3) {
+			fprintf(stderr, "usage: %s bg <name>\n", argv[0]);
 			return 2;
 		}
-		secs = (unsigned int)strtoul(argv[3], NULL, 0);
 
 		memset(&sa, 0, sizeof(sa));
 		strncpy(sa.prcnam, argv[2], sizeof(sa.prcnam) - 1);
@@ -115,11 +124,14 @@ main(int argc, char **argv)
 			return 6;
 		}
 		/* Keep this process (and its PCB) alive so a different process's
-		 * lookup below can find it -- the cross-process rendezvous window. */
+		 * lookup below can find it -- indefinitely, until the harness
+		 * releases it (kill), the same shape as the Linux oracle
+		 * test_kmod_procnam.c's process A ("for (;;) pause();"). No fixed
+		 * sleep to race the reader's command cadence against. */
 		fflush(stdout);
-		sleep(secs);
-		kif_xport_dev_close(fd);
-		return 0;
+		for (;;)
+			pause();
+		/* unreachable */
 	}
 
 	if (op == OP_GETJPI_NAME) {

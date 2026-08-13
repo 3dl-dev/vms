@@ -873,14 +873,28 @@ int cmd_help(struct dcl_command *cmd)
     }
 
     int status;
-    if (isatty(fileno(stdin))) {
-        /* Interactive: display then drive the Topic?/Subtopic? prompt loop. */
-        help_interactive(lib, path, npath, stdin, stdout);
+    if (npath > 0) {
+        /*
+         * A topic was named: show that node (text + subtopic listing) ONCE and
+         * return to the DCL prompt. This deliberately does NOT open the
+         * "<topic> Subtopic?" prompt loop, so that (a) HELP always returns to
+         * "$" after a single command -- the contract every scripted/console
+         * session relies on -- and (b) the built-in behaves identically to the
+         * HELP.EXE image, which one-shots when given a topic and is gated on
+         * exactly that (tests/qemu/test_product_install_e2e.sh). The subtopics
+         * are listed under "Additional information available:"; the user drills
+         * in with "HELP <topic> <subtopic>". (Opening the prompt loop even for
+         * a fully-specified topic, as VMS does at a terminal, is a deferred
+         * fidelity item under epic vms-01b.)
+         */
+        status = help_render(lib, path, npath, stdout);
+    } else if (isatty(fileno(stdin))) {
+        /* Bare HELP at a terminal: the interactive Topic? browser. */
+        help_interactive(lib, NULL, 0, stdin, stdout);
         status = SS$_NORMAL;
     } else {
-        /* Non-interactive (piped/batch): show the requested node (or the
-         * top-level list) once, without consuming following SYS$INPUT lines. */
-        status = help_render(lib, path, npath, stdout);
+        /* Bare HELP, non-interactive input: list the top level once. */
+        status = help_render(lib, NULL, 0, stdout);
     }
 
     help_close(lib);

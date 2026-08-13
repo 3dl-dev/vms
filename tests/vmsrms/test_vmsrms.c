@@ -11,10 +11,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <stdint.h>
 
 #include "rms/rms.h"
+#include "rms/xab.h"
 #include "rmsdef.h"
 #include "ssdef.h"
+#include "descrip.h"
+#include "starlet.h"   /* sys$asctim */
 
 /*
  * Stub for vmsfs_resolve — referenced by rms_parse.c but has no definition
@@ -418,6 +425,115 @@ static void test_fixed_records(void)
     unlink(fixmeta);
 }
 
+/* ------------------------------------------------------------------ */
+/* Test: XAB creation/revision dates are real VMS binary time (vms-3dd) */
+/*                                                                      */
+/* Regression: rms_impl_display() used to stuff raw Unix time_t into    */
+/* xab$q_cdt/xab$q_rdt, which VMS defines as 100ns intervals since      */
+/* 17-NOV-1858. A raw time_t (~1.6e9) read as a VMS quadword decodes to */
+/* a few minutes past the 1858 base date -- ~112 years wrong and in the */
+/* wrong units. The fix converts through lib$cvt_vectim. This test sets  */
+/* a known revision time, displays the XAB, and asserts the quadword     */
+/* round-trips to the same wall-clock instant and renders via $ASCTIM.   */
+static void test_xab_dates(void)
+{
+    printf("\n--- XAB creation/revision dates (vms-3dd) ---\n");
+
+    /* Ticks between the VMS base date (17-NOV-1858) and the Unix epoch,
+     * in 100ns units. Documented VMS constant; the same value lives in
+     * src/libvms/rtl/lib_datetime.c and src/libvms/syssvc/sys_time.c. Used
+     * here only to DECODE the produced quadword for the round-trip check. */
+    const uint64_t VMS_EPOCH_OFFSET = 0x007C95674BEB4000ULL;
+
+    char datefile[256];
+    char datemeta[280];
+    snprintf(datefile, sizeof(datefile), "/tmp/test_vmsrms_dat_%d", (int)getpid());
+    snprintf(datemeta, sizeof(datemeta), "%s.rms_meta", datefile);
+
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = datefile;
+    fab.fab$b_fns = (uint8_t)strlen(datefile);
+    fab.fab$b_fac = FAB$M_PUT | FAB$M_GET;
+    fab.fab$b_rfm = FAB$C_VAR;
+    fab.fab$b_org = FAB$C_SEQ;
+
+    uint32_t st = sys$create(&fab, 0, 0);
+    check(st == RMS$_NORMAL, "create file for date test");
+    /* The on-disk path carries a version suffix (e.g. ";1"); capture it
+     * before sys$close zeros _resolved_path. utimensat must target the real
+     * file that sys$display() will stat, not the bare filespec. */
+    char resolved[1024];
+    strncpy(resolved, fab._resolved_path, sizeof(resolved) - 1);
+    resolved[sizeof(resolved) - 1] = '\0';
+    sys$close(&fab, 0, 0);
+
+    /* Pin a known revision instant: 15-JUN-2021 12:00:00 UTC. Noon keeps the
+     * calendar DAY/MONTH/YEAR stable under any reasonable timezone shift the
+     * $ASCTIM display might apply. */
+    struct tm known;
+    memset(&known, 0, sizeof(known));
+    known.tm_year = 2021 - 1900;
+    known.tm_mon  = 6 - 1;
+    known.tm_mday = 15;
+    known.tm_hour = 12;
+    known.tm_min  = 0;
+    known.tm_sec  = 0;
+    time_t known_t = timegm(&known);
+
+    struct timespec times[2];
+    times[0].tv_sec = known_t; times[0].tv_nsec = 0;   /* atime */
+    times[1].tv_sec = known_t; times[1].tv_nsec = 0;   /* mtime -> xab$q_rdt */
+    check(utimensat(AT_FDCWD, resolved, times, 0) == 0, "set known mtime on file");
+
+    /* Re-open and $DISPLAY with a XABDAT chained to the FAB. */
+    struct XABDAT dat = cc$rms_xabdat;
+    struct FAB fab2 = cc$rms_fab;
+    fab2.fab$l_fna = datefile;
+    fab2.fab$b_fns = (uint8_t)strlen(datefile);
+    fab2.fab$b_fac = FAB$M_GET;
+    fab2.fab$l_xab = (struct XABKEY *)&dat;
+
+    st = sys$open(&fab2, 0, 0);
+    check(st == RMS$_NORMAL, "open file for display");
+    st = sys$display(&fab2, 0, 0);
+    check(st == RMS$_NORMAL, "sys$display fills XABDAT");
+    sys$close(&fab2, 0, 0);
+
+    /* A raw Unix time_t (~1.6e9) is far below VMS_EPOCH_OFFSET (~3.5e16); a
+     * real post-1970 VMS binary time is above it. This alone catches the bug. */
+    check(dat.xab$q_rdt > VMS_EPOCH_OFFSET,
+          "revision date is a post-1970 VMS binary time, not raw time_t");
+    check(dat.xab$q_cdt > VMS_EPOCH_OFFSET,
+          "creation date is a post-1970 VMS binary time, not raw time_t");
+
+    /* Round-trip: decode the revision quadword back to Unix seconds. */
+    uint64_t ticks = dat.xab$q_rdt - VMS_EPOCH_OFFSET;
+    time_t decoded = (time_t)(ticks / 10000000ULL);
+    check(decoded == known_t,
+          "revision date round-trips to the exact wall-clock instant");
+
+    /* $ASCTIM must render the quadword as a real VMS date string. */
+    char abuf[64];
+    struct dsc$descriptor_s adsc;
+    adsc.dsc$w_length  = sizeof(abuf);
+    adsc.dsc$b_dtype   = DSC$K_DTYPE_T;
+    adsc.dsc$b_class   = DSC$K_CLASS_S;
+    adsc.dsc$a_pointer = abuf;
+    uint16_t alen = 0;
+    uint64_t rdt = dat.xab$q_rdt;
+    st = sys$asctim(&alen, &adsc, &rdt, 0);
+    check(st == SS$_NORMAL, "sys$asctim converts the revision date");
+    if (alen >= sizeof(abuf)) alen = sizeof(abuf) - 1;
+    abuf[alen] = '\0';
+    printf("    $ASCTIM rendered: '%s'\n", abuf);
+    check(strstr(abuf, "2021") != NULL, "sys$asctim output shows the year 2021");
+    check(strstr(abuf, "JUN") != NULL, "sys$asctim output shows the month JUN");
+
+    unlink(resolved);
+    unlink(datefile);
+    unlink(datemeta);
+}
+
 int main(void)
 {
     printf("=== vmsrms unit tests ===\n");
@@ -427,6 +543,7 @@ int main(void)
     test_open_close();
     test_record_io();
     test_fixed_records();
+    test_xab_dates();
 
     /* Clean up main temp files */
     cleanup();

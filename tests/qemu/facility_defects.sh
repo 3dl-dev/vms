@@ -489,6 +489,7 @@ mbx-not-shared
 mbx-wrtattn-not-fired
 hiber-ast-not-delivered
 dcl-sysinput-mbx-not-read
+mmk-drive-command-not-sent
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -4634,6 +4635,38 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    mmk-drive-command-not-sent)
+        case "$_f" in
+        facility)     echo "the MMK exec-drive: the shipped MMK.EXE drives a real build through its persistent mailbox-driven DCL subprocess (tests/corpus/tier3-mmk/ovmx/ovmx_mmk_sp.c sp_open/sp_send/sp_receive, vms-b23) -- composing lib\$spawn + mailbox IPC + write-attention AST + \$HIBER + IO\$M_NOW into MMK's send_cmd_and_wait, self-host spine #4";;
+        targets)      echo "../tests/corpus/tier3-mmk/ovmx/ovmx_mmk_sp.c";;
+        suites_red)   echo "test_syssvc_mmk_drive";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sp_send is the ONE step that copies each resolved command line (its action command plus the three end-of-command-marker commands) into the SYS\$INPUT mailbox the spawned DCL reads. The mutation forces the record length it writes to zero (len = 0), so sp_send drains MMK's command stream but delivers EMPTY records -- the DCL receives no `ANSWER = 6 * 7`, no WRITE, and no marker command, so it computes nothing, delivers no OVMXB23:42 over SYS\$OUTPUT, and never writes the MMK____status= marker MMK's \$HIBER waits on. MMK's own \$CREMBX of both mailboxes, the write-attention-AST arm, and the lib\$spawn of DCL all still succeed -- ONLY the command CONTENT is dropped, the A-writes-nothing / B-reads-nothing shape INV-6/Rule 11 exists to catch.";;
+        require_fail) cat <<'EOF'
+MMK.EXE drove a real build: its spawned DCL computed 6*7 and delivered OVMXB23:42 back over the mailbox drive (spawn + mailbox + write-attention AST + $HIBER + IO$M_NOW + $STATUS marker)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+MMK.EXE completed (it detected the MMK____status= end-of-command marker and exited, rather than deadlocking in $HIBER)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME ONE ROOT (no command bytes reach the DCL), seen at both halves of the
+protocol. With sp_send delivering empty records, the driven DCL never receives
+the action line (so it never computes OVMXB23:42 -- the require_fail assertion)
+AND never receives the end-of-command-marker command (so it never writes
+MMK____status=, MMK's echo_ast never sets command_complete, and MMK's
+send_cmd_and_wait deadlocks in $HIBER until the suite's bounded reap kills it --
+the knock_on_fail assertion). They are not two properties: they are the single
+"the command never arrived" fact seen as the missing result and as the missing
+completion. Nothing outside the drive is touched: with no executive the suite
+still honest-skips (its $CREMBX SS$_NOSUCHDEV branch never reaches sp_send).
+EOF
+                      ;;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -5794,6 +5827,16 @@ apply_edit() {
         # second apply is a no-op (the selftest requires).
         sed -i 's|uint32_t mlen = actlen;|uint32_t mlen = 0; /* NEGCTL dcl-sysinput-mbx-not-read */|' "$_file";;
 
+    mmk-drive-command-not-sent)
+        # UNIQUE TEXT, no range anchor needed: `uint16_t len = d->dsc$w_length;`
+        # occurs exactly once in ovmx_mmk_sp.c -- sp_send's per-record length (the
+        # count of command bytes it writes into the SYS$INPUT mailbox with
+        # IO$_WRITEVBLK). Forcing it to zero makes sp_send drain MMK's command
+        # stream but deliver EMPTY records, so the driven DCL receives no command
+        # and no end-of-command marker. After substitution the text no longer
+        # matches, so a second apply is a no-op (the selftest requires).
+        sed -i 's|    uint16_t len = d->dsc$w_length;|    uint16_t len = 0; /* NEGCTL mmk-drive-command-not-sent */|' "$_file";;
+
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =
         # args.base;` immediately followed by `proc->p0_limit = args.limit;`
@@ -6697,6 +6740,18 @@ cmd_selftest() {
             echo "FAIL: cannot copy $_st_tests for the self-test"
             rm -rf "$_st_tmp"
             return 2
+        fi
+        # tests/corpus staged as a SIBLING of tree too (same convention), so a
+        # target like mmk-drive-command-not-sent's "../tests/corpus/tier3-mmk/
+        # ovmx/ovmx_mmk_sp.c" -- the MMK exec-drive companion compiled into
+        # MMK.EXE, relative to a src/ root exactly as inject_and_run.sh's
+        # /src/repo/src resolves it -- is present for the dry-run apply.
+        if [ -d "$_st_repo/tests/corpus" ]; then
+            if ! cp -a "$_st_repo/tests/corpus" "$_st_tmp/tests/corpus" 2>/dev/null; then
+                echo "FAIL: cannot copy $_st_repo/tests/corpus for the self-test"
+                rm -rf "$_st_tmp"
+                return 2
+            fi
         fi
 
         if cmd_apply "$_st_d" "$_st_tmp/tree" >/dev/null 2>&1; then

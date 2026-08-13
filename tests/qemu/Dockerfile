@@ -254,9 +254,17 @@ RUN cd /src/repo && \
         -DOVMX_STATIC=ON \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=ON \
-    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize vms_initialize --parallel $(nproc) 2>&1 && \
+    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize vms_initialize mmk_native --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
+    # MMK.EXE (vms-b23, self-host spine #4): the shipped MadGoat MMK built as an
+    # OVMX image. test_syssvc_mmk_drive.c runs it against a real /dev/vms to
+    # prove MMK drives a real build through its persistent mailbox-driven DCL
+    # subprocess (spawn + mailbox + write-attention AST + $HIBER + IO$M_NOW) --
+    # the exec-drive is a real executive facility (ovmx_mmk_sp.c), unprovable
+    # without a real executive, so it must run where /dev/vms exists.
+    echo "--- MMK.EXE (the shipped image test_syssvc_mmk_drive drives, vms-b23) ---" && \
+    ls -la build-static/bin/MMK.EXE && \
     echo "--- test_imgact_* binaries (userspace-only, no /dev/vms needed, static musl) ---" && \
     ls -la build-static/bin/test_imgact_* && \
     # test_corpus_* + corpus_seed_lnm (vms-08c): the unmodified device-corpus
@@ -466,6 +474,21 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
       { echo "FATAL: DCL.EXE was not built into the static tree -- SHOW SYSTEM would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/bin/DCL.EXE && \
     cp /initramfs/bin/DCL.EXE /initramfs/tests/DCL.EXE && \
+    # MMK.EXE + DCL.EXE at SYS$SYSTEM (vms-b23, self-host spine #4). MMK.EXE is
+    # the subject test_syssvc_mmk_drive.c execs (OVMX_MMK default
+    # /vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE); DCL.EXE is staged at that SAME
+    # SYS$SYSTEM path because MMK's lib$spawn resolves SYS$SYSTEM:DCL.EXE
+    # (VMS_DCL_PATH) to launch the persistent DCL it drives. Neither matches a
+    # test_* glob, so init.sh never runs them as suites -- they are the drive
+    # subject and the CLI it spawns. Absence is FATAL, not skipped: a missing
+    # subject would silently turn the driven-build assertion into a no-op with
+    # the job still green.
+    mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE && \
+    { cp /src/repo/build-static/bin/MMK.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE || \
+      { echo "FATAL: MMK.EXE was not built into the static tree -- the MMK exec-drive would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE && \
+    cp /initramfs/bin/DCL.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
+    chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
     # AUTHORIZE.EXE (vms-4c2), staged at /bin/AUTHORIZE.EXE --
     # tests/qemu/test_syssvc_authorize.c execs it by that path. Absence is
     # FATAL, not skipped, for the same reason as DCL.EXE above: a missing

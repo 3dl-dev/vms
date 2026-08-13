@@ -168,6 +168,43 @@ uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
                 break;
             }
 
+            case SYI$_ARCH_NAME: {
+                /* The architecture OVMX was actually built for, as the
+                 * VMS-style uppercase token (X86_64 / AARCH64), from the
+                 * identity SSOT (INV-1) -- the same source F$GETSYI must use so
+                 * the two surfaces never disagree. Was UNHANDLED: the item fell
+                 * through to `default` while the routine still returned
+                 * SS$_NORMAL, so a caller (MMK's main(), which asks for
+                 * SYI$_ARCH_NAME to build its MMS$ARCH_NAME / MMSxxxx macros)
+                 * trusted the success status and read an UNWRITTEN buffer and
+                 * length -- uninitialized stack -- then walked it to the next
+                 * NUL, smashing its own stack (vms-95c). Answering the item is
+                 * the honest fix (Rule 9 / INV-6): report the metal truthfully,
+                 * never a success for an answer not produced. */
+                const char *arch = ovmx_hw_arch();
+                uint16_t len = (uint16_t)strlen(arch);
+                if (len > item->buflen) len = item->buflen;
+                if (item->bufaddr) memcpy(item->bufaddr, arch, len);
+                if (item->retlen) *item->retlen = len;
+                break;
+            }
+
+            case SYI$_ARCH_TYPE: {
+                /* VMS architecture-type code (longword): 1=VAX 2=Alpha 3=IA64
+                 * 4=x86_64. Kept consistent with SYI$_ARCH_NAME above. */
+#if defined(__x86_64__)
+                uint32_t archtype = 4;   /* x86-64 */
+#elif defined(__aarch64__)
+                uint32_t archtype = 0;   /* OpenVMS never shipped on ARM */
+#else
+                uint32_t archtype = 0;
+#endif
+                if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+                    *(uint32_t *)item->bufaddr = archtype;
+                if (item->retlen) *item->retlen = sizeof(uint32_t);
+                break;
+            }
+
             case SYI$_AVAILCPU_CNT:
             case SYI$_ACTIVECPU_CNT: {
                 long ncpus = sysconf(_SC_NPROCESSORS_ONLN);
@@ -246,6 +283,13 @@ uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
             }
 
             default:
+                /* An item this build does not answer must not masquerade as a
+                 * produced result: zero its return length so a caller cannot
+                 * read a stale/uninitialized length as though it were valid
+                 * (the garbage-length footgun that crashed MMK via
+                 * SYI$_ARCH_NAME, vms-95c). The buffer is left untouched, as on
+                 * VMS for an unretrieved item. */
+                if (item->retlen) *item->retlen = 0;
                 break;
         }
     }

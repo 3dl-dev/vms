@@ -29,6 +29,27 @@
 
 int sysboot_conversational_requested(void)
 {
+#if defined(__NetBSD__)
+    /*
+     * NetBSD twin of the boot-flag register read (rd vms-f2e). The Linux
+     * register is /proc/cmdline's "ovmx.flags=r5,r6"; NetBSD exposes no kernel
+     * command line to userland the way Linux's /proc/cmdline does, and the
+     * NetBSD/vax conversational-boot flag source is not yet decided (a
+     * custom-kernel boothowto bit, a sysctl, or a boot-loader hand-off --
+     * pinned when the bootable disk is assembled, vms-7b1). Default to a
+     * NON-conversational (flagless) boot: the normal path.
+     *
+     * This is fail-SAFE, not fail-fake -- it never reports a conversational
+     * request that was not made; it reports "no register to read here, so none
+     * requested." When the NetBSD/vax source is decided it is read HERE, behind
+     * this same predicate, with no change to ovmx_init.c's boot sequence
+     * (INV-DRIFT): sysboot.c owns the boot-flag register, exactly as the seam
+     * design (ovmx_boot.h) documents, and only the register READ is
+     * substrate-specific -- the SYSBOOT> prompt and all of its logic below stay
+     * shared.
+     */
+    return 0;
+#else
     FILE *fp = fopen("/proc/cmdline", "r");
     if (!fp)
         return 0;
@@ -51,6 +72,7 @@ int sysboot_conversational_requested(void)
     unsigned long r6 = strtoul(end + 1, &end, 0);
 
     return (r6 & 1UL) != 0;
+#endif /* __NetBSD__ */
 }
 
 /* ------------------------------------------------------------------ */

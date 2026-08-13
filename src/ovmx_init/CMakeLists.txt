@@ -2,14 +2,22 @@
 # Links vmsprocess (PCB), vmsfs (device table + path translation),
 # and vmslnm (logical names) for VMS-native boot sequence.
 
+# Boot-plumbing substrate seam (vms-28f): pick the ovmx_boot.h backend for the
+# substrate this build targets. ONE ovmx_init.c compiles against either backend
+# with no #ifdef fork of the boot logic (INV-DRIFT). The Linux backend carries
+# the /dev/kmsg -> OPERATOR.LOG bridge (opcom_kmsg.c); the NetBSD backend
+# (vms-f2e) carries its own /dev/klog twin, so opcom_kmsg.c is Linux-only.
+# On the host (Linux) this resolves to exactly the pre-seam file set.
+if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    set(OVMX_BOOT_BACKEND_SRC ovmx_boot_netbsd.c)
+else()
+    set(OVMX_BOOT_BACKEND_SRC ovmx_boot_linux.c opcom_kmsg.c)
+endif()
+
 add_executable(ovmx_init
     ovmx_init.c
-    # Boot-plumbing substrate seam (vms-28f): the Linux backend for the
-    # ovmx_boot.h ops. The NetBSD backend (ovmx_boot_netbsd.c) is selected in
-    # its place on a NetBSD build (vms-f2e).
-    ovmx_boot_linux.c
+    ${OVMX_BOOT_BACKEND_SRC}
     sysboot.c
-    opcom_kmsg.c
 )
 
 target_include_directories(ovmx_init PRIVATE

@@ -16,6 +16,17 @@
 void dcl_sym_init(void);
 void dcl_sym_cleanup(void);
 
+/* Per-command-level local symbol frames. Push on @ / procedure entry, pop on
+ * EXIT / end-of-procedure. Locals defined at a level vanish when it is popped;
+ * inner levels can read outer locals but writes stay at the current level.
+ * push returns 0 on success, -1 if the frame stack is full. */
+int  dcl_sym_push_frame(void);
+void dcl_sym_pop_frame(void);
+
+/* SET SYMBOL/SCOPE for the current level: hide_outer_local (NOLOCAL) hides
+ * outer levels' local symbols; hide_global (NOGLOBAL) hides global symbols. */
+void dcl_sym_scope_set(int hide_outer_local, int hide_global);
+
 /* Set a symbol value */
 int dcl_sym_set(const char *name, const char *value, int scope);
 int dcl_sym_set_int(const char *name, int32_t value, int scope);

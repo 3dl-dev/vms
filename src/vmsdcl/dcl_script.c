@@ -167,6 +167,12 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
             sizeof(ctx->proc_stack[0].filename) - 1);
     ctx->proc_stack[ctx->proc_depth].line_number = 0;
 
+    /* Push a fresh local symbol frame for this command level. VMS gives each
+     * @ level its own local symbol table: locals defined here (including P1-P8)
+     * are private to this procedure and are discarded on return, so they never
+     * leak to the caller and the caller's locals are read-only from here. */
+    dcl_sym_push_frame();
+
     /* Set P1-P8 parameters as local symbols */
     for (int i = 0; i < 8; i++) {
         char pname[4];
@@ -292,17 +298,11 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
     ctx->proc_stack[ctx->proc_depth].fp = NULL;
     ctx->proc_depth--;
 
-    /* Restore P1-P8 from parent scope (or clear them) */
-    for (int i = 0; i < 8; i++) {
-        char pname[4];
-        snprintf(pname, sizeof(pname), "P%d", i + 1);
-        if (ctx->proc_depth >= 0) {
-            dcl_sym_set(pname, ctx->proc_stack[ctx->proc_depth].params[i],
-                       DCL_SYM_LOCAL);
-        } else {
-            dcl_sym_set(pname, "", DCL_SYM_LOCAL);
-        }
-    }
+    /* Discard this level's local symbol frame. This is what restores the
+     * caller's P1-P8 and every other caller-level local: they live in the
+     * caller's frame, untouched, and this procedure's locals (including its
+     * own P1-P8) are freed here rather than persisting into the caller. */
+    dcl_sym_pop_frame();
 
     return status;
 }

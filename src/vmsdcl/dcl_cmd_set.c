@@ -1822,6 +1822,52 @@ static int cmd_set_volume(struct dcl_command *cmd)
 }
 
 /*
+ * SET SYMBOL/SCOPE — establish, for the current command level, whether
+ * outer-level local symbols and global symbols are accessible.
+ *
+ * OpenVMS DCL Dictionary, SET SYMBOL /SCOPE=([NO]LOCAL,[NO]GLOBAL):
+ *   NOLOCAL  - local symbols defined in OUTER command levels are not
+ *              accessible from the current or inner command levels.
+ *   NOGLOBAL - global symbols are not accessible.
+ *   Default  - both local and global symbols are accessible.
+ */
+static int cmd_set_symbol(struct dcl_command *cmd)
+{
+    if (dcl_has_qualifier(cmd, "SCOPE")) {
+        const char *v = dcl_qualifier_value(cmd, "SCOPE");
+        int hide_local = 0, hide_global = 0;   /* default: both accessible */
+
+        if (v && *v) {
+            char buf[256];
+            strncpy(buf, v, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = '\0';
+            for (char *t = strtok(buf, "(), \t");
+                 t; t = strtok(NULL, "(), \t")) {
+                if (strcasecmp(t, "NOLOCAL") == 0)       hide_local = 1;
+                else if (strcasecmp(t, "LOCAL") == 0)    hide_local = 0;
+                else if (strcasecmp(t, "NOGLOBAL") == 0) hide_global = 1;
+                else if (strcasecmp(t, "GLOBAL") == 0)   hide_global = 0;
+                else {
+                    dcl_error("DCL", 2, "IVKEYW",
+                        "unrecognized SET SYMBOL/SCOPE keyword - \\%s\\", t);
+                    return SS$_IVKEYW;
+                }
+            }
+        }
+
+        dcl_sym_scope_set(hide_local, hide_global);
+        return SS$_NORMAL;
+    }
+
+    /* Other SET SYMBOL qualifiers (/ALL, /GLOBAL, /LOCAL, /VERB, ...) are not
+     * yet implemented. Fail honestly rather than silently no-op (INV-DCL). */
+    dcl_error("SET", 0, "NOTIMPL",
+              "SET SYMBOL without /SCOPE is not implemented in OVMX - "
+              "no state changed");
+    return SS$_UNSUPPORTED;
+}
+
+/*
  * SET Dispatcher
  */
 int cmd_set(struct dcl_command *cmd)
@@ -1858,6 +1904,8 @@ int cmd_set(struct dcl_command *cmd)
         on_ctx->noon_active = 0;
         return SS$_NORMAL;
     }
+    if (dcl_match_command(subcmd, "SYMBOL", 3))
+        return cmd_set_symbol(cmd);
     if (dcl_match_command(subcmd, "MESSAGE", 3))
         return cmd_set_message(cmd);
     if (dcl_match_command(subcmd, "CONTROL", 4) ||

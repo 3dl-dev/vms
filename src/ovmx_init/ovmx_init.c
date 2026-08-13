@@ -43,15 +43,11 @@
 #include <string.h>
 #include <ctype.h>
 #include <unistd.h>
-#include <fcntl.h>
 #include <signal.h>
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include <sys/mount.h>
-#include <sys/syscall.h>
-#include <sys/reboot.h>
 #include <errno.h>
 
 /* vms/pcb.h and vms/privs.h are DELIBERATELY NOT INCLUDED (vms-9b7). PID 1
@@ -78,11 +74,17 @@
  * to run before the device table exists -- see sysboot.h and
  * bare_metal_init() below. */
 #include "sysboot.h"
-/* /dev/kmsg -> operator-console bridge for vms.ko/vmsfs.ko's own printk
- * records (vms-32a) -- see docs/design-opcom-executive-logging.md. */
-#include "opcom_kmsg.h"
-
-#define SYSDISK_DEV      "/dev/vda"
+/* Boot-plumbing substrate seam (vms-28f, epic vms-8e8): the ONE header PID 1
+ * includes for the host-OS boot primitives it needs -- load-executive-module,
+ * mount kernel filesystems + the system disk, resolve/name the boot block
+ * device, open the executive device, start the /dev/kmsg operator-console
+ * bridge (vms-32a), and power off. Every raw Linux boot syscall this file used
+ * to make inline now lives behind an ovmx_boot_* op, so ONE ovmx_init.c serves
+ * every substrate with no #ifdef fork (INV-DRIFT). The Linux backend
+ * (ovmx_boot_linux.c) maps each op to the exact syscall used before the seam;
+ * the NetBSD backend is vms-f2e. See ovmx_boot.h and docs/design-p4-netbsd-vax-
+ * boot.md (GAP-C). */
+#include "ovmx_boot.h"
 
 /*
  * SYS$SYSTEM as a Linux path — initialized at runtime after the device table
@@ -216,8 +218,7 @@ static void halt_now(void)
     fflush(NULL);
 
     if (getpid() == 1) {
-        sync();
-        reboot(RB_POWER_OFF);
+        ovmx_boot_power_off();
         /* Only reached without CAP_SYS_BOOT. */
     }
     _exit(1);
@@ -335,29 +336,6 @@ static void provision_disk_mount_points(void)
 }
 
 /*
- * Load a kernel module. Returns 0 on success, -1 with errno set otherwise.
- * Callers decide whether a failure is survivable -- for the executive it is
- * not (see executive_attach).
- */
-static int load_kernel_module(const char *path)
-{
-    struct stat st;
-    if (stat(path, &st) != 0)
-        return -1;
-    int fd = open(path, O_RDONLY);
-    if (fd < 0)
-        return -1;
-    long rc = syscall(SYS_finit_module, fd, "", 0);
-    int saved = errno;
-    close(fd);
-    if (rc != 0) {
-        errno = saved;
-        return -1;
-    }
-    return 0;
-}
-
-/*
  * Bind this system to its executive, permanently.
  *
  * The executive is INTEGRAL, not optional. On OpenVMS the executive IS the
@@ -399,7 +377,7 @@ static void executive_attach(void)
     if (executive_fd >= 0)
         return;                 /* already attached; idempotent by design */
 
-    if (load_kernel_module("/lib/modules/vms.ko") != 0 && errno != EEXIST) {
+    if (ovmx_boot_load_module("vms") != 0 && errno != EEXIST) {
         if (errno == ENOENT) {
             /* The oracle's exact condition -- a required executive image
              * that is not there -- so its exact status is reproduced. */
@@ -411,7 +389,7 @@ static void executive_attach(void)
         }
     }
 
-    executive_fd = open("/dev/vms", O_RDWR | O_CLOEXEC);
+    executive_fd = ovmx_boot_open_executive();
     if (executive_fd < 0) {
         /* No oracle analogue: a VMS executive has no device node to open, so
          * VMS is never in this state and prints no status for it. This is an
@@ -436,25 +414,19 @@ static void executive_attach(void)
  */
 static void bare_metal_init(void)
 {
-    /* Mount essential filesystems */
-    mount("proc", "/proc", "proc", 0, NULL);
-    mount("sysfs", "/sys", "sysfs", 0, NULL);
-    mount("devtmpfs", "/dev", "devtmpfs", 0, NULL);
-    mount("tmpfs", "/tmp", "tmpfs", 0, NULL);
-    mkdir("/dev/pts", 0755);
-    mount("devpts", "/dev/pts", "devpts", 0, NULL);
-    mkdir("/dev/shm", 0755);
-    mount("tmpfs", "/dev/shm", "tmpfs", 0, NULL);
+    /* Mount essential filesystems (proc/sys/dev/tmp/pts/shm) through the
+     * boot seam, which runs the identical mount sequence for this substrate. */
+    ovmx_boot_mount_kernel_filesystems();
 
     /*
-     * The /dev/kmsg -> operator-console bridge (vms-32a) starts as early as
+     * The kernel-log -> operator-console bridge (vms-32a) starts as early as
      * /dev exists, ahead of BOTH boot branches below, so it is running
      * before vms.ko/vmsfs.ko load in either one and replays their init-time
      * records rather than missing them. See docs/design-opcom-executive-
-     * logging.md. Best-effort: opcom_kmsg_start() never blocks or fails
-     * boot even if /dev/kmsg is unavailable.
+     * logging.md. Best-effort: the bridge never blocks or fails boot even if
+     * the substrate's kernel-log source is unavailable.
      */
-    opcom_kmsg_start();
+    ovmx_boot_start_console_log_bridge();
 
     /*
      * Conversational boot (vms-b81): the platform's boot-flag register is
@@ -501,7 +473,7 @@ static void bare_metal_init(void)
          * OVMX-facility, not STARTUP: VMS never narrates a Linux kernel
          * module load, so this is not dressed as a borrowed VMS message
          * (vms-1fb facility audit, docs/design-boot-faithful.md). */
-        if (load_kernel_module("/lib/modules/vmsfs.ko") != 0 && errno != EEXIST) {
+        if (ovmx_boot_load_module("vmsfs") != 0 && errno != EEXIST) {
             fprintf(stderr, "%%OVMX-W-MODFAIL, failed to load vmsfs.ko: %s\n",
                     strerror(errno));
         }
@@ -510,13 +482,15 @@ static void bare_metal_init(void)
         if (stat(SYSDISK_MOUNT, &vms_st) != 0)
             return;  /* No system disk mount point in initramfs */
 
-        /* The system disk must be a real virtio block device. There is no
-         * overlay and no auto-initialize fallback: if it is not here, the
-         * system does not come up (design-init-scope.md §1). */
-        struct stat vda_st;
-        if (stat(SYSDISK_DEV, &vda_st) != 0 || !S_ISBLK(vda_st.st_mode)) {
+        /* The system disk must be a real block device. There is no overlay
+         * and no auto-initialize fallback: if it is not here, the system does
+         * not come up (design-init-scope.md §1). */
+        if (!ovmx_boot_system_disk_present()) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "no system disk %s (DKA0:)",
+                     ovmx_boot_system_disk_dev());
             ovmx_sysinit_halt(
-                "no system disk " SYSDISK_DEV " (DKA0:)",
+                msg,
                 "the system disk is not present; OVMX does not install one at boot");
         }
 
@@ -525,9 +499,13 @@ static void bare_metal_init(void)
         /* Mount the pre-installed disk, or halt. A blank or unformatted disk
          * fails to mount as vmsfs -- and PID 1 does NOT initialize it (that
          * is the installer spine's INITIALIZE/PCSI job, run out of band). */
-        if (mount(SYSDISK_DEV, SYSDISK_MOUNT, "vmsfs", 0, NULL) != 0) {
+        if (ovmx_boot_mount_system_disk(SYSDISK_MOUNT) != 0) {
+            char msg[128];
+            snprintf(msg, sizeof(msg),
+                     "system disk DKA0: (%s) would not mount",
+                     ovmx_boot_system_disk_dev());
             ovmx_sysinit_halt(
-                "system disk DKA0: (" SYSDISK_DEV ") would not mount",
+                msg,
                 "the volume is not an installed VMSFS system disk; "
                 "OVMX does not initialize or install it at boot");
         }
@@ -555,20 +533,26 @@ static void bare_metal_init(void)
      * §3.1 shows NOTHING preceding "SYSBOOT> ", not even the banner.
      */
     int vmsfs_load_failed =
-        (load_kernel_module("/lib/modules/vmsfs.ko") != 0 && errno != EEXIST);
+        (ovmx_boot_load_module("vmsfs") != 0 && errno != EEXIST);
     int vmsfs_errno = errno;
 
     struct stat vms_st;
     if (stat(SYSDISK_MOUNT, &vms_st) == 0) {
-        struct stat vda_st;
-        if (stat(SYSDISK_DEV, &vda_st) != 0 || !S_ISBLK(vda_st.st_mode)) {
+        if (!ovmx_boot_system_disk_present()) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "no system disk %s (DKA0:)",
+                     ovmx_boot_system_disk_dev());
             ovmx_sysinit_halt(
-                "no system disk " SYSDISK_DEV " (DKA0:)",
+                msg,
                 "the system disk is not present; OVMX does not install one at boot");
         }
-        if (mount(SYSDISK_DEV, SYSDISK_MOUNT, "vmsfs", 0, NULL) != 0) {
+        if (ovmx_boot_mount_system_disk(SYSDISK_MOUNT) != 0) {
+            char msg[128];
+            snprintf(msg, sizeof(msg),
+                     "system disk DKA0: (%s) would not mount",
+                     ovmx_boot_system_disk_dev());
             ovmx_sysinit_halt(
-                "system disk DKA0: (" SYSDISK_DEV ") would not mount",
+                msg,
                 "the volume is not an installed VMSFS system disk; "
                 "OVMX does not initialize or install it at boot");
         }
@@ -919,9 +903,9 @@ int main(void)
     printf("%s\n", ovmx_syskrnl_banner());
     fflush(stdout);
 
-    /* If we are PID 1 on bare metal, set up Linux plumbing */
-    struct stat bm_st;
-    if (getpid() == 1 && stat("/proc/version", &bm_st) != 0) {
+    /* If we are PID 1 on bare metal (a fresh kernel whose base filesystems
+     * are not yet mounted), set up the substrate plumbing. */
+    if (getpid() == 1 && !ovmx_boot_kernel_filesystems_mounted()) {
         bare_metal_init();
     }
 

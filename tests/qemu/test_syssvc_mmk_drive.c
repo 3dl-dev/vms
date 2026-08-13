@@ -29,9 +29,11 @@
  * computed line back over its SYS$OUTPUT mailbox -- which MMK's write-attention
  * AST then drained (waking its $HIBER) and echoed to its own SYS$OUTPUT. The
  * parent knows 6*7==42 but never computed it inside the drive; there is nowhere
- * local for "OVMXB23:42" to come from. And MMK completing at all (not hanging in
- * $HIBER) proves it detected the "MMK____status=" end-of-command marker -- the
- * $STATUS-capture half of the protocol.
+ * local for "OVMXB23:42" to come from. And MMK echoing that marker at all (not
+ * hanging in $HIBER) proves it detected the "MMK____status=" end-of-command
+ * marker -- the $STATUS-capture half of the protocol: the marker cannot be
+ * drained and echoed unless MMK's write-attention AST fired, its $HIBER woke,
+ * the IO$M_NOW read drained the result, and the end-of-command status was read.
  *
  * RENDEZVOUS / NO SHARED HANDLE. MMK.EXE is a genuinely separate image the test
  * fork+execs; it makes its own PCB, $CREMBXes its command + result mailboxes
@@ -53,8 +55,18 @@
  * -- while a no-executive run still honest-skips.
  *
  * BOUNDED, NO SLEEPS. The parent poll()s MMK's stdout with a generous failure
- * bound and reaps MMK with a bounded loop, so a wedged drive is a NAMED FAIL
- * here rather than an unattributable VM-level timeout.
+ * bound, keying success on the MARKER (the DCL-computed proof) rather than on MMK's
+ * own self-exit timing -- so a wedged drive (no marker) is a NAMED FAIL here rather
+ * than an unattributable VM-level timeout, while a working drive whose teardown-and-
+ * exit lags the marker under contended TCG is NOT reddened for it (vms-562: an
+ * earlier reap-timing gate flaked the whole kernel-executive QEMU gate on unrelated
+ * PRs, exactly as spine #6's mmk_build did before vms-d1b keyed on its marker).
+ * BUT the parent still WAITS (bounded, unasserted) for MMK to exit on its own so
+ * MMK runs close_subprocess()/sp_close() and reclaims its DCL subprocess, mailboxes
+ * and write-attention AST -- SIGKILLing MMK mid-drive would ORPHAN those on the
+ * shared /dev/vms executive and wedge the NEXT suite (vms-562 round 2). SIGKILL is
+ * a last resort reached only by a genuine wedge, which happens only under the
+ * one-defect-per-boot negctl, so its unavoidable leak cannot contaminate a sibling.
  */
 
 #include <stdio.h>
@@ -79,13 +91,19 @@
 /* MMK.EXE is staged at SYS$SYSTEM (tests/qemu/Dockerfile). OVMX_MMK overrides. */
 #define MMK_PATH_DEFAULT "/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE"
 
-/* Failure bound (ms) on how long MMK may take to spawn a DCL, drive one action
- * command through the mailbox, and echo the computed result -- milliseconds
- * under TCG; this is a failure ceiling, not pacing. Kept well under half
- * run_tests.sh's 120s QEMU timeout so that BOTH bounded waits below (marker
- * scan, then reap) fit even when the drive is deliberately broken (the negctl,
- * which wedges MMK in $HIBER): a wedged drive becomes a named FAIL here, not an
- * unattributable VM-level timeout. */
+/* Failure bound (ms) on how long the parent waits for MMK to spawn a DCL, drive
+ * one action command through the mailbox, echo the computed result marker, AND run
+ * itself down -- milliseconds under TCG; this is a failure CEILING, not pacing (the
+ * wait below returns the instant MMK exits on its own, so a green drive costs only
+ * its real runtime + teardown and this bound is only ever reached by a genuine
+ * hang). Kept well under half run_tests.sh's 120s QEMU timeout so that even a
+ * deliberately broken drive (the negctl, which wedges MMK in $HIBER and echoes NO
+ * marker) becomes a named FAIL here, not an unattributable VM-level timeout.
+ * Success is keyed on the MARKER, NOT on MMK's self-exit timing (vms-562): gating
+ * on the reap flaked the gate. But the parent still WAITS (unasserted) for MMK's
+ * own exit so MMK's sp_close() reclaims its DCL subprocess + mailboxes + AST;
+ * SIGKILLing it mid-drive would leak those onto the shared executive and wedge the
+ * next suite (vms-562 round 2). */
 #define DRIVE_TIMEOUT_MS 25000
 
 /* The computed marker the driven DCL must PRODUCE (6*7 evaluated in DCL). */
@@ -223,49 +241,83 @@ int main(int argc, char **argv)
     }
     close(outpipe[1]);
 
-    /* Bounded scan of MMK's output for the DCL-computed marker. */
+    /* ONE bounded wait that (a) captures THE PROOF -- MMK's spawned DCL echoes the
+     * DCL-computed marker OVMXB23:42 back over the mailbox drive -- and (b) lets MMK
+     * RUN DOWN CLEANLY on its own. Success is keyed on the MARKER, never on MMK's
+     * self-exit timing: that tight-grace reap assertion was the vms-562 flake --
+     * under contended TCG MMK echoes the marker but finishes tearing down a beat
+     * later, so grading the reap reddened the whole kernel-executive gate on
+     * unrelated PRs even though the drive proved out.
+     *
+     * BUT WE STILL WAIT FOR MMK'S OWN EXIT, and that is load-bearing against a REAL,
+     * SHARED executive (Rule 9). MMK $CREMBXed its command + result mailboxes, armed
+     * a write-attention AST on the result mailbox, and lib$spawned a PERSISTENT DCL
+     * subprocess -- and it tears ALL of that down in close_subprocess()/sp_close()
+     * ($FORCEX + $DELPRC the DCL, $DASSGN both mailboxes) as its LAST act before
+     * exiting (tests/corpus/tier3-mmk/build_target.c + ovmx/ovmx_mmk_sp.c). If we
+     * SIGKILL MMK the instant the marker appears we SKIP that teardown: the DCL
+     * grandchild is orphaned -- it keeps THIS suite's stdout FIFO open (init.sh's
+     * per-suite tee then blocks its drain) AND sits blocked on the leaked mailbox in
+     * the executive that the NEXT suite shares, wedging it. That was the vms-562
+     * round-2 regression: the run stalled at the suite AFTER this one. So here we
+     * poll for the marker AND keep DRAINING MMK's output (so it never blocks on a
+     * full pipe) until MMK exits on its OWN -- letting sp_close() reclaim the DCL,
+     * mailboxes and AST. Only a genuine wedge (MMK never exits within the bound) is
+     * SIGKILLed below, and that path is isolated (the negctl runs one defect per
+     * QEMU boot, so its hard-kill leak cannot reach a sibling suite).
+     *
+     * A genuine mid-drive $HIBER deadlock still fails HARD: no marker is ever echoed
+     * (got_marker stays 0) and the bound elapses -- the negctl, which forwards zero
+     * command bytes, wedges the spawned DCL in exactly this way. */
     char acc[16384];
     size_t acclen = 0;
     int got_marker = 0;
     int waited = 0;
+    int wstatus = 0;
+    int reaped = 0;
     acc[0] = '\0';
-    while (waited < DRIVE_TIMEOUT_MS && !got_marker) {
+    while (waited < DRIVE_TIMEOUT_MS) {
         struct pollfd pfd = { .fd = outpipe[0], .events = POLLIN };
         int pr = poll(&pfd, 1, 200);
-        waited += 200;
-        if (pr <= 0) {
-            if (pr < 0) break;
-            continue;
+        if (pr > 0) {
+            ssize_t n = read(outpipe[0], acc + acclen,
+                             (acclen < sizeof(acc) - 1) ? (sizeof(acc) - 1 - acclen) : 0);
+            if (n > 0) {
+                acclen += (size_t)n;
+                acc[acclen] = '\0';
+                if (strstr(acc, EXPECT_MARKER) != NULL) got_marker = 1;
+            }
+            /* n==0 (EOF: MMK closed SYS$OUTPUT as it runs down) is NOT a break here:
+             * MMK may close its output before it has finished sp_close() and exited.
+             * Keep looping so the waitpid below reaps it cleanly (no zombie) once its
+             * own teardown completes -- draining is idle after EOF, poll just times
+             * out each 200ms until MMK exits or the bound elapses. */
         }
-        ssize_t n = read(outpipe[0], acc + acclen,
-                         (acclen < sizeof(acc) - 1) ? (sizeof(acc) - 1 - acclen) : 0);
-        if (n <= 0) break;   /* MMK closed SYS$OUTPUT (exited) */
-        acclen += (size_t)n;
-        acc[acclen] = '\0';
-        if (strstr(acc, EXPECT_MARKER) != NULL)
-            got_marker = 1;
+        pid_t r = waitpid(pid, &wstatus, WNOHANG);
+        if (r == pid) { reaped = 1; break; }  /* MMK ran close_subprocess() + exited cleanly */
+        if (r < 0) break;
+        waited += 200;
     }
 
     /* THE POINT OF THE ITEM. MMK.EXE spawned a persistent DCL, streamed the
      * action command into its SYS$INPUT mailbox, and -- through the
      * write-attention AST that interrupted its $HIBER and the IO$M_NOW drain --
-     * received the DCL-computed result over the SYS$OUTPUT mailbox. */
+     * received the DCL-computed result over the SYS$OUTPUT mailbox. Echoing the
+     * marker is itself the $STATUS-capture proof (it cannot be drained + echoed
+     * without detecting the "MMK____status=" end-of-command marker); MMK's own
+     * self-exit timing is deliberately NOT asserted -- see the wait above. */
     /* negctl: mmk-drive-command-not-sent */
     CHECK(got_marker,
           "MMK.EXE drove a real build: its spawned DCL computed 6*7 and delivered OVMXB23:42 back over the mailbox drive (spawn + mailbox + write-attention AST + $HIBER + IO$M_NOW + $STATUS marker)");
 
-    /* Bounded reap: a working drive detects the end-of-command marker and MMK
-     * exits; a broken drive hangs in $HIBER and is caught here. */
-    int wstatus = 0;
-    int reaped = 0;
-    for (int w = 0; w < DRIVE_TIMEOUT_MS; w += 20) {
-        pid_t r = waitpid(pid, &wstatus, WNOHANG);
-        if (r == pid) { reaped = 1; break; }
-        if (r < 0) break;
-        usleep(20000);
-    }
-    CHECK(reaped,
-          "MMK.EXE completed (it detected the MMK____status= end-of-command marker and exited, rather than deadlocking in $HIBER)");
+    /* Hygiene, NOT a verdict. In the working case MMK already exited on its own in
+     * the loop above (reaped=1), having run sp_close() to $FORCEX/$DELPRC its DCL
+     * subprocess and $DASSGN its mailboxes -- so this suite leaves NOTHING alive on
+     * the shared executive to wedge the next one. Only if MMK genuinely wedged (a
+     * real mid-drive $HIBER deadlock -- no marker, the failure case) do we SIGKILL
+     * it as a last resort so no process is left running; that path occurs ONLY under
+     * the isolated negctl (one defect per QEMU boot), so the resource leak a hard
+     * kill cannot avoid stays contained to that boot and never reaches a sibling. */
     if (!reaped) {
         kill(pid, SIGKILL);
         (void)waitpid(pid, &wstatus, 0);

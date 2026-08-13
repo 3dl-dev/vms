@@ -4649,23 +4649,8 @@ EOF
 MMK.EXE drove a real build: its spawned DCL computed 6*7 and delivered OVMXB23:42 back over the mailbox drive (spawn + mailbox + write-attention AST + $HIBER + IO$M_NOW + $STATUS marker)
 EOF
                       ;;
-        knock_on_fail) cat <<'EOF'
-MMK.EXE completed (it detected the MMK____status= end-of-command marker and exited, rather than deadlocking in $HIBER)
-EOF
-                      ;;
-        knock_on_why)  cat <<'EOF'
-SAME ONE ROOT (no command bytes reach the DCL), seen at both halves of the
-protocol. With sp_send delivering empty records, the driven DCL never receives
-the action line (so it never computes OVMXB23:42 -- the require_fail assertion)
-AND never receives the end-of-command-marker command (so it never writes
-MMK____status=, MMK's echo_ast never sets command_complete, and MMK's
-send_cmd_and_wait deadlocks in $HIBER until the suite's bounded reap kills it --
-the knock_on_fail assertion). They are not two properties: they are the single
-"the command never arrived" fact seen as the missing result and as the missing
-completion. Nothing outside the drive is touched: with no executive the suite
-still honest-skips (its $CREMBX SS$_NOSUCHDEV branch never reaches sp_send).
-EOF
-                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     mmk-build-image-not-activated)

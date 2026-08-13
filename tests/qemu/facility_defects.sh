@@ -4705,17 +4705,18 @@ EOF
         knock_on_why)  cat <<'EOF'
 SAME ONE ROOT (the foreign command reports success but activates nothing), seen
 as every downstream absence of the object. With dcl_activate_image never called,
-the driven TCC command completes instantly with a success status, so MMK's drive
-runs to the end and reaps normally -- the two completion assertions stay GREEN
-(this is a fast failure, not a $HIBER wedge, so the suite's reap-keyed
-short-circuit still runs BOTH drives). But no compiler ran, so build #1 and
-build #2 each produce no object: the "produced VMS_STRING.OBJ (build #1)"
-require_fail plus its four downstream reads -- the valid-ELF and vms_strlen
-oracles, the build-#2 object, and the byte-identity check -- all redden. Five
-observations of the single fact "the driven compiler never ran". Nothing outside
-test_syssvc_mmk_build is touched: it is the only suite whose (spawned) DCL
-activates an image through a foreign command, and with no executive it
-honest-skips before ever spawning that DCL.
+the driven TCC command completes instantly with a success status, so drive #1
+runs to the end and the spawned DCL still echoes OVMXD1B:COMPILED -- the single
+marker "completion" assertion stays GREEN (this is a fast failure, not a $HIBER
+wedge). But no compiler ran, so drive #1 produces no object; the suite's
+object-keyed short-circuit then skips drive #2. Build #1's object is absent --
+the "produced VMS_STRING.OBJ (build #1)" require_fail -- and its four downstream
+reads redden with it: the valid-ELF and vms_strlen oracles (no object to
+inspect), the build-#2 object (drive #2 skipped), and the byte-identity check
+(nothing to compare). Five observations of the single fact "the driven compiler
+never ran". Nothing outside test_syssvc_mmk_build is touched: it is the only
+suite whose (spawned) DCL activates an image through a foreign command, and with
+no executive it honest-skips before ever spawning that DCL.
 EOF
                       ;;
         esac;;

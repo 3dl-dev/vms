@@ -104,3 +104,54 @@ exec_hash_add_helper(struct exec_hash_head *tbl, unsigned int nbuckets,
 	head->first = node;
 	node->pprev = &head->first;
 }
+
+/*
+ * exec_hash_bucket_of - map `key' to its bucket head, the keyed-lookup half of
+ * the resource-hash vocabulary (exec_hash.h Phase G; vms_lock.c, rd vms-ff7).
+ * The header's exec_hash_for_each_possible(name, obj, member, key) macro walks
+ * the chain returned here. This MUST use the SAME `key % nbuckets' placement as
+ * exec_hash_add_helper above, or a keyed lookup would search a different bucket
+ * than the one an insert with the same key populated -- so a resource $ENQ'd by
+ * one process could never be found by another (the DLM's whole point). The
+ * header left this "vms-ff7 fills the helper in .c"; this is that fill (rd
+ * vms-f78bb -- required for the `vms' module to LINK with all OVMX symbols
+ * resolved so it can be modload'ed; a placeholder-only prototype leaves the
+ * whole module with unresolved externals and it cannot load on either
+ * substrate).
+ */
+struct exec_hash_head *
+exec_hash_bucket_of(struct exec_hash_head *tbl, unsigned int nbuckets,
+    uint32_t key)
+{
+	return &tbl[key % nbuckets];
+}
+
+/*
+ * exec_jhash - hash a byte range to a 32-bit bucket key (the lock manager's
+ * resource-name hash; exec_hash.h Phase G). Per that contract the VALUE is used
+ * ONLY for bucketing and a membership modulo, NEVER for a correctness decision
+ * (resource-name matches are by strncmp), so "a substrate whose exec_jhash
+ * differs is still correct" -- the NetBSD backend need not reproduce the Linux
+ * jhash bit-for-bit, only be a deterministic, well-distributed function so that
+ * an $ENQ and a later lookup of the same name land in the same bucket.
+ *
+ * This is OVMX's OWN implementation: the textbook FNV-1a 32-bit hash (a public-
+ * domain algorithm, not copied from NetBSD, Linux, or VSI/HPE source -- CLAUDE.md
+ * Rule 8). `initval' seeds the running hash so callers that pass a non-zero seed
+ * get an independent distribution, mirroring jhash's initval role.
+ */
+uint32_t
+exec_jhash(const void *key, uint32_t length, uint32_t initval)
+{
+	const unsigned char *p = (const unsigned char *)key;
+	/* FNV-1a: offset basis 2166136261, prime 16777619. Fold the caller's
+	 * seed into the starting state so initval actually perturbs the result. */
+	uint32_t h = 2166136261u ^ initval;
+	uint32_t i;
+
+	for (i = 0; i < length; i++) {
+		h ^= (uint32_t)p[i];
+		h *= 16777619u;
+	}
+	return h;
+}

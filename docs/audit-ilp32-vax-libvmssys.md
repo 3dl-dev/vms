@@ -507,3 +507,87 @@ Test` + `ctest` prove the in-tree Linux/aarch64/x86_64 build is unregressed — 
 is guarded by `CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR` so the in-tree
 image builds are untouched. This unblocks C4 (vmsdcl cross-build), which hits the
 same executive-arena libatomic wall resolved in §10.3.
+
+## 12. vmsdcl — the DCL command interpreter (rd vms-1cb2, epic vms-8e8; C-track)
+
+vmsdcl is the TOP of the userspace library graph and the LAST userspace library
+before the init+images integration (`... vmsfs -> vmsrms -> vmsdcl`, plus the
+leaf `vmsqueue`). DCL is overwhelmingly string/parse/file work over ordinary
+POSIX; the cross-build surfaced no new ILP32 *width* bug, but it did surface a
+namespace issue and a genuine Linux-only facility. Both are resolved; the in-tree
+Linux build is byte-identical.
+
+### 12.1 Integer symbols are longwords — ILP32 `long` is the exact VMS width
+
+DCL arithmetic symbols are held in `expr_val_t.ival`, typed `long` and formatted
+`%ld` throughout (`dcl_exec.c`, `dcl_lexical.c` FAO `!SL`/`!UL`). On a 64-bit host
+`long` is 64-bit — WIDER than a VMS longword, so `!SL`/`!UL` need masking to stay
+faithful. On **ILP32 VAX `long` is 32-bit == the VMS longword**, so the DCL
+integer model is *more* natural there, not less. Self-consistent (cast-to-`long`
+printed as `%ld`); no width fix needed. The `.OLB`/LBR container math
+(`dcl_library.c`) is fixed-width byte offsets with `uint64_t` decimal fields
+(`olb__dec`), ILP32-clean.
+
+### 12.2 `_POSIX_C_SOURCE` hides the BSD surface on NetBSD — FIXED (substrate-selected)
+
+The in-tree build defines `_POSIX_C_SOURCE=200809L` + `_DEFAULT_SOURCE`; on
+glibc/musl `_DEFAULT_SOURCE` re-exposes the BSD extensions DCL uses
+(`FNM_CASEFOLD`, `flock`/`LOCK_EX`/`LOCK_UN`, `struct ifreq`, `IFNAMSIZ`,
+`IFF_UP`, the `SIOC*` ioctls). On NetBSD that same surface is gated behind
+`_NETBSD_SOURCE`, and defining `_POSIX_C_SOURCE` *turns it off* — so those tokens
+vanished under the cross compiler. Fixed in `src/vmsdcl/CMakeLists.txt` by
+substrate-selecting the feature macros: `if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")`
+defines `_NETBSD_SOURCE` (the native widest namespace, a POSIX superset), else
+the Linux `_POSIX_C_SOURCE`/`_DEFAULT_SOURCE` pair — unchanged for Linux/aarch64/
+x86_64. The two vestigial `#include <mntent.h>` lines (glibc-only, absent from
+the NetBSD sysroot; the mount table is parsed by hand from `/proc/mounts`) were
+removed — no `mntent` symbol was referenced.
+
+### 12.3 TCPIP interface config is Linux-substrate — substrate-guarded (honest degrade)
+
+`ifr_hwaddr`/`ifr_netmask` (Linux `struct ifreq` union members), `SIOCGIFHWADDR`,
+and `/sys/class/net` enumeration in `dcl_cmd_misc.c`'s `TCPIP SHOW/SET INTERFACE`
+are genuinely Linux-only — NetBSD reads the link-layer address via
+`getifaddrs`/`AF_LINK` and has no `ifr_netmask` member. This is the DCL face of
+the **AF_INET networking engine** (rd vms-67f), whose engine is deliberately the
+Linux substrate. The Linux ioctl bodies are guarded `#if defined(__linux__)`; on
+netbsd-vax the netmask readout shows `*` and the `/FULL` hardware-address line is
+omitted — **honest degradation, nothing fabricated** (INV-6). Linux/musl keep the
+`__linux__` path verbatim. A future NetBSD-substrate networking backend (the
+`getifaddrs`/`AF_LINK` path) is the precise follow-up, out of scope for the
+build-only gate.
+
+### 12.4 `ovmx_tlsdesc_static` had no non-primary-arch definition — FIXED
+
+Pulling `libvms`'s `sys_imgact.o` into the full DCL link exposed that the resident
+TLSDESC resolver `ovmx_tlsdesc_static` (`src/libvms/syssvc/sys_imgact.c`) had asm
+bodies only for `__x86_64__`/`__aarch64__` — on VAX the symbol was `.globl`'d and
+its address taken but never defined (hidden-symbol link error). The own-PT_TLS
+in-process activation path is x86_64/aarch64-only (`IMGACT_EM==0` elsewhere, and
+the stack-switch jump is already a no-op `#else`); on netbsd-vax activation is
+delegated to `ld.elf_so` (gate `activation-netbsd-vax`), so the descriptor cells
+that point here are never built and the resolver is never called. Fixed by adding
+an `#else` branch: a defined, hidden C stub that `__builtin_trap()`s if ever
+reached — the same "must not happen" contract as the existing
+`__builtin_unreachable()`. Strict no-op for the two primary arches (the
+`#if defined(__x86_64__) || defined(__aarch64__)` branch is byte-identical to
+before), so no Linux/aarch64 regression; `imgact`/`libvms` ctest stays green.
+
+### 12.5 How §12 was validated
+
+`tools/cross-vax/build-vmsdcl-vax.sh` (CI job `vmsdcl-netbsd-vax`, "vmsdcl
+cross-compiles for netbsd-vax"): builds the whole elf32-vax stack (libvmssys,
+vmsprocess, libvms, vmslnm, vmsfs, vmsrms, vmsqueue), compiles every DCL TU
+through the CMake `VMSDCL_STANDALONE` path to `libvmsdcl.a` (asserted `file format
+elf32-vax`), asserts no GNU-readline symbol leaked in (readline is optional and
+absent from the sysroot → DCL's own non-readline line editor), then links a real
+`vax--netbsdelf` **DCL.EXE** with `-Wl,--whole-archive` on `libvmsdcl.a` — every
+DCL object must resolve, a complete shell — against the stack + NetBSD libc +
+libpthread + libm + libatomic (`Machine: Digital VAX`, `Class: ELF32` asserted).
+There is no cross-only smoke `.c`: the proof links the actual shell. The in-tree
+Linux `Build & Test` + DCL/imgact/libvms `ctest` confirm no regression — the
+feature-macro select, the `__linux__` guards, and the `sys_imgact.c` `#else` are
+all no-ops on Linux/aarch64/x86_64, and the `VMSDCL_STANDALONE`/`VMSQUEUE_STANDALONE`
+branches are guarded by `CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR`.
+This unblocks the init+images integration (rd vms-5d1): STARTUP.EXE/ovmx_init and
+the LOGINOUT/DCL.EXE link+activate for netbsd-vax, then the bootable-disk assembly.

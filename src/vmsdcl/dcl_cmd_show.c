@@ -17,7 +17,9 @@
 #include <pwd.h>
 #include <grp.h>
 #include <limits.h>
-#include <mntent.h>
+/* No <mntent.h>: this file reads /proc/{mounts,meminfo,swaps} by hand with
+ * fopen/fgets and references no mntent symbol. The include was vestigial and
+ * absent from the NetBSD/vax sysroot (netbsd-vax cross gate, vms-1cb2). */
 #include <errno.h>
 
 #include "prvdef.h"     /* PRV$M_* -- the single privilege bit table */

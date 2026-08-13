@@ -26,7 +26,11 @@
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <limits.h>
-#include <mntent.h>
+/* NOTE: no <mntent.h>. The mount table is parsed by hand from /proc/mounts with
+ * fopen/fgets (dcl_unit_is_mounted below) -- getmntent(3)/setmntent(3) are a
+ * glibc-only convenience with no musl-static symbol, and <mntent.h> does not
+ * exist at all in the NetBSD/vax sysroot (netbsd-vax cross gate, vms-1cb2). The
+ * include was vestigial: no mntent symbol, struct, or macro is referenced. */
 #include <sys/statvfs.h>
 
 #include "dcl/context.h"
@@ -1239,10 +1243,17 @@ static int cmd_tcpip_show_interface(struct dcl_command *cmd)
 
         /* Netmask */
         char mask_str[INET_ADDRSTRLEN] = "*";
+#if defined(__linux__)
+        /* SIOCGIFNETMASK returns the mask in the ifr_netmask union member on
+         * Linux. NetBSD's struct ifreq has no ifr_netmask; the OVMX TCP/IP
+         * engine is the Linux substrate (vms-67f, AF_INET). On netbsd-vax the
+         * netmask readout is not wired here -- shown honestly as "*" rather
+         * than fabricated. */
         if (ioctl(sock, SIOCGIFNETMASK, &ifr) == 0) {
             struct sockaddr_in *mask = (struct sockaddr_in *)&ifr.ifr_netmask;
             inet_ntop(AF_INET, &mask->sin_addr, mask_str, sizeof(mask_str));
         }
+#endif
 
         /* MTU */
         int mtu = 0;
@@ -1260,6 +1271,11 @@ static int cmd_tcpip_show_interface(struct dcl_command *cmd)
         printf("%-12s%-17s%-17s%-7d%s\n",
                ifmap[i].vms_name, ip_str, mask_str, mtu, state);
 
+#if defined(__linux__)
+        /* SIOCGIFHWADDR + ifr_hwaddr are Linux-only (NetBSD reads the link-layer
+         * address via getifaddrs/AF_LINK, not an ifreq ioctl). The Linux
+         * substrate is the OVMX TCP/IP engine (vms-67f); on netbsd-vax the
+         * /FULL hardware-address line is simply omitted -- honest, not faked. */
         if (full) {
             /* Show hardware address */
             if (ioctl(sock, SIOCGIFHWADDR, &ifr) == 0) {
@@ -1268,6 +1284,9 @@ static int cmd_tcpip_show_interface(struct dcl_command *cmd)
                        hw[0], hw[1], hw[2], hw[3], hw[4], hw[5]);
             }
         }
+#else
+        (void)full;
+#endif
     }
 
     close(sock);
@@ -1602,7 +1621,11 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
                        strerror(errno));
             }
 
-            /* Set netmask if provided */
+            /* Set netmask if provided. ifr_netmask is a Linux-only ifreq union
+             * member; the OVMX TCP/IP engine is the Linux substrate (vms-67f).
+             * On netbsd-vax the live SIOCSIFNETMASK apply is skipped -- the
+             * netmask is still persisted to TCPIP$INTERFACE.DAT below. */
+#if defined(__linux__)
             if (netmask) {
                 struct sockaddr_in *mask = (struct sockaddr_in *)&ifr.ifr_netmask;
                 mask->sin_family = AF_INET;
@@ -1612,6 +1635,7 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
                            strerror(errno));
                 }
             }
+#endif
 
             close(sock);
         }

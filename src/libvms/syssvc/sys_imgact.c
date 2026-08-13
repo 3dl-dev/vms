@@ -99,6 +99,7 @@ typedef long (*imgact_entryfn)(long, long);
  * descriptor cell, NOT a C-RTL universal -- it never enters the .vms$sv symbol
  * vector or the kif SYS_VEC, so adding it triggers no cascade. `mov`/`ldr` set
  * no flags, so the caller's condition codes survive the call too. */
+#if defined(__x86_64__) || defined(__aarch64__)
 __asm__(
     ".text\n"
     ".p2align 4\n"
@@ -119,6 +120,19 @@ __asm__(
 #endif
 );
 extern void ovmx_tlsdesc_static(void);
+#else
+/* No resident TLSDESC resolver on this architecture. The own-PT_TLS in-process
+ * activation path is x86_64/aarch64-only (IMGACT_EM==0 elsewhere, and the User-
+ * mode stack-switch jump above is a no-op); on netbsd-vax image activation is
+ * delegated to the platform loader (ld.elf_so, gate activation-netbsd-vax), so
+ * the biased .vms$tls descriptor cells that would point here are never
+ * constructed and this resolver is never called. A defined, hidden stub keeps
+ * libvms linking on every target (elf32-vax, vms-1cb2); it traps if ever
+ * reached -- the same "must not happen" contract as __builtin_unreachable()
+ * above -- rather than silently returning a bogus TP offset. */
+__attribute__((visibility("hidden")))
+void ovmx_tlsdesc_static(void) { __builtin_trap(); }
+#endif
 
 /* Read the process's ALREADY-PROGRAMMED thread pointer without reprogramming it
  * (the whole point of the own-TLS-over-DCL case). x86_64: musl stores the TCB

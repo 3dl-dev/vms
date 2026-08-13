@@ -70,6 +70,11 @@ const char *vms_months[] = {
  * are honestly rejected with %DCL-W-IVKEYW rather than silently mapped to the
  * mtime (which would be the fake-success facade INV-DCL bans). */
 static const char *const dir_date_keywords[] = { "MODIFIED", NULL };
+/* DIRECTORY/SIZE=option (VSI OpenVMS DCL Dictionary): USED (default),
+ * ALLOCATION, or ALL (used/allocated). */
+static const char *const dir_size_keywords[] = {
+    "USED", "ALLOCATION", "ALL", NULL
+};
 
 static const struct dcl_qual_def q_type[] = {
     { "PAGE", CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
@@ -117,7 +122,8 @@ static const struct dcl_qual_def q_purge[] = {
     QUAL_END
 };
 static const struct dcl_qual_def q_directory[] = {
-    { "SIZE",        CDU_VT_NONE,    CDU_Q_NEGATABLE, NULL, NULL },
+    { "SIZE",        CDU_VT_KEYWORD, CDU_Q_NEGATABLE, dir_size_keywords,
+                                                      "USED" },
     { "DATE",        CDU_VT_KEYWORD, CDU_Q_NEGATABLE, dir_date_keywords,
                                                       "MODIFIED" },
     { "FULL",        CDU_VT_NONE,    0,               NULL, NULL },

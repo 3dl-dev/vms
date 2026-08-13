@@ -75,10 +75,24 @@
  *     as sys$exit's _exit(). What changed is that this now signals the
  *     process the EXECUTIVE named, not whatever Linux pid number a
  *     caller's argument happened to be.
- * OVMX-USERSPACE: sys$hiber (vms-pt1) -- pause() on the calling thread; the
- *     executive has no record that this process is hibernating.
- * OVMX-USERSPACE: sys$wake (vms-pt1) -- kill(SIGCONT) by Linux pid, or the
- *     caller's own pid when pidadr is NULL. prcnam discarded.
+ * OVMX-PARTIAL: sys$hiber (vms-feb) -- exec: the hibernate WAIT and the wake
+ *     state are the executive's. VMS_IOCTL_HIBER blocks the process in the
+ *     executive until a $WAKE is pending for it OR an AST becomes deliverable to
+ *     it (an entry another process queued into its AST queue), and the sticky
+ *     wake bit lives in the executive -- which is what makes $HIBER interruptible
+ *     by a cross-process AST at all, proven by tests/qemu/test_syssvc_hiber_ast.c.
+ * OVMX-LOCAL: sys$hiber -- the AST DISPATCH after each executive release runs in
+ *     THIS process (vms$$deliver_pending_asts calls the routine, a code address
+ *     valid only here), and the re-hibernate loop is userspace; that half is not
+ *     the executive's.
+ * OVMX-PARTIAL: sys$wake (vms-feb) -- exec: the wake state is the executive's.
+ *     VMS_IOCTL_WAKE sets the sticky wake_pending bit on the target and wakes it
+ *     if it is hibernating; a cross-process target is resolved by VMS PID in the
+ *     executive (gated by GROUP/WORLD), not signalled by raw Linux pid.
+ * OVMX-LOCAL: sys$wake -- the pidadr-vs-NULL target selection is made in this
+ *     process before the call, and $WAKE by process NAME is not resolved (prcnam
+ *     discarded, redirecting a named target to self); those are not the
+ *     executive's.
  * OVMX-USERSPACE: sys$suspnd (vms-pt1) -- kill(SIGSTOP), same shape.
  * OVMX-USERSPACE: sys$suspend (vms-pt1) -- tail-calls sys$suspnd.
  * OVMX-USERSPACE: sys$resume (vms-pt1) -- kill(SIGCONT), same shape.
@@ -467,7 +481,14 @@ extern void vms$$deliver_pending_asts(void);
  */
 uint32_t sys$hiber(void) {
     for (;;) {
-        int woken = vms_kif_hiber();     /* blocks: $WAKE pending or AST ready */
+        int woken = 0;
+        uint32_t st = vms_kif_hiber(&woken);  /* blocks: $WAKE pending or AST ready */
+        /* Honest failure, never a busy-spin (CLAUDE.md Rule 9 / INV-6): if the
+         * executive did not answer (odd = success), return its status rather
+         * than looping forever. With no /dev/vms there is no hibernate state to
+         * wait on -- fail, do not fake a wait. */
+        if (!(st & 1))
+            return st;
         vms$$deliver_pending_asts();     /* run deliverable ASTs; one may $WAKE */
         if (woken)
             return SS$_NORMAL;

@@ -197,16 +197,19 @@ int vms_kif_deliverast(uint64_t *astadr, uint64_t *astprm, uint8_t *acmode);
  * $HIBER / $WAKE, executive-resident + AST-interruptible (vms-feb).
  *
  * vms_kif_hiber blocks in the executive until a $WAKE is pending for this
- * process OR an AST becomes deliverable to it; it returns 1 if a $WAKE released
- * it (consuming the sticky wake bit) and 0 if an AST did. A bare signal does
- * NOT end it (it re-enters past EINTR, like the blocking event-flag waits) --
- * only a $WAKE or a deliverable AST does. sys$hiber loops it, draining and
- * running the deliverable ASTs after each return.
+ * process OR an AST becomes deliverable to it. It returns the executive's VMS
+ * status (SS$_NORMAL on a normal release, or an error status when the ioctl
+ * could not be delivered -- e.g. no /dev/vms -- so sys$hiber fails honestly
+ * instead of busy-looping); *woken is set to 1 iff a $WAKE released the wait
+ * (consuming the sticky wake bit) and 0 iff an AST did. A bare signal does NOT
+ * end it (it re-enters past EINTR, like the blocking event-flag waits) -- only a
+ * $WAKE or a deliverable AST does. sys$hiber loops it, draining and running the
+ * deliverable ASTs after each successful return.
  *
  * vms_kif_wake sets the sticky wake bit on the target (vms_pid == 0 = the
  * caller) and wakes it if hibernating. Returns the executive's VMS status.
  */
-int vms_kif_hiber(void);
+uint32_t vms_kif_hiber(int *woken);
 uint32_t vms_kif_wake(uint32_t vms_pid);
 
 /* ================================================================

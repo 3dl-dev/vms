@@ -460,15 +460,24 @@ int vms_kif_deliverast(uint64_t *astadr, uint64_t *astprm, uint8_t *acmode)
  * returning (a $WAKE consumed, or an AST become deliverable) does. Returns the
  * `woken` flag the executive set: 1 = released by $WAKE, 0 = by an AST.
  */
-int vms_kif_hiber(void)
+uint32_t vms_kif_hiber(int *woken)
 {
     struct vms_hiber_args args;
+    uint32_t st;
 
     vms_memset(&args, 0, sizeof(args));
 
-    (void)kif_wait_call(VMS_IOCTL_HIBER, &args);
+    /* kif_wait_call returns 0 when the ioctl was delivered (re-entering past a
+     * bare signal), or a VMS status when it could not be delivered (no
+     * executive). Surface that status so sys$hiber fails honestly instead of
+     * busy-looping when there is no /dev/vms. */
+    st = kif_wait_call(VMS_IOCTL_HIBER, &args);
+    if (st)
+        return st;
 
-    return (int)args.woken;
+    if (woken)
+        *woken = (int)args.woken;
+    return args.status;
 }
 
 uint32_t vms_kif_wake(uint32_t vms_pid)

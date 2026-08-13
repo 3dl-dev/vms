@@ -14,7 +14,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
-#include <fnmatch.h>
 #include <limits.h>
 
 #include "dcl/context.h"
@@ -25,6 +24,7 @@
 #include "ssdef.h"
 #include "stsdef.h"
 #include "vmsfs/filespec.h"
+#include "vmsfs/version.h"
 #include "vmsqueue.h"
 
 /* Directory entry for sorting in DIRECTORY command */
@@ -834,8 +834,321 @@ int cmd_type(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/* ===================================================================
+ * COPY / DELETE / RENAME — VMS wildcard + version file operations.
+ *
+ * All three route filename matching through the single VMS wildcard
+ * matcher vmsfs_wildcard_match() (%, *, version-aware, shared with
+ * DIRECTORY/PURGE) and resolve versions against the real on-disk vmsfs
+ * version store (name.type;N files / vmsfs_get_highest_version()).
+ * INV-6: every file copied, renamed or deleted exists on disk; the
+ * per-command counts are the count of real filesystem operations, never
+ * a fabricated total.
+ *
+ * Grounded (clean-room, Rule 8) in the public VSI OpenVMS DCL Dictionary
+ * COPY, DELETE and RENAME entries — the specific rule is cited at each
+ * command.
+ * =================================================================== */
+
+/* One on-disk file matched by a wildcard/version file operation. */
+struct file_match {
+    char dname[256];   /* exact on-disk name, e.g. "FOO.TXT;3"       */
+    char base[256];    /* name.type portion, UPPERCASED for grouping */
+    int  version;      /* version number; an unversioned file => 1   */
+};
+
+/* Split "name.type;ver" (as it sits on disk) into an UPPERCASED base plus a
+ * numeric version. An unversioned entry is version 1 — VMS treats a plain file
+ * as ;1 (matches dir_collect() and vmsfs_get_highest_version()). */
+static void fm_split(const char *dname, char *base, size_t base_sz, int *ver)
+{
+    const char *semi = strrchr(dname, ';');
+    size_t blen = semi ? (size_t)(semi - dname) : strlen(dname);
+    if (blen >= base_sz) blen = base_sz - 1;
+    size_t i;
+    for (i = 0; i < blen; i++)
+        base[i] = (char)toupper((unsigned char)dname[i]);
+    base[i] = '\0';
+    if (semi && semi[1]) {
+        int alld = 1;
+        for (const char *q = semi + 1; *q; q++)
+            if (!isdigit((unsigned char)*q)) { alld = 0; break; }
+        *ver = alld ? (int)strtol(semi + 1, NULL, 10) : 1;
+    } else {
+        *ver = 1;
+    }
+}
+
+/* Split "NAME.TYPE" into name + type (type empty when there is no dot). */
+static void split_name_type(const char *base, char *name, size_t nsz,
+                            char *type, size_t tsz)
+{
+    const char *dot = strrchr(base, '.');
+    if (dot) {
+        size_t nl = (size_t)(dot - base);
+        if (nl >= nsz) nl = nsz - 1;
+        memcpy(name, base, nl);
+        name[nl] = '\0';
+        strncpy(type, dot + 1, tsz - 1);
+        type[tsz - 1] = '\0';
+    } else {
+        strncpy(name, base, nsz - 1);
+        name[nsz - 1] = '\0';
+        type[0] = '\0';
+    }
+}
+
 /*
- * COPY - Copy a file.
+ * split_file_spec - Resolve a VMS file parameter to its Linux directory (with
+ * trailing slash), its name.type portion (VMS wildcards preserved), and its
+ * version-spec text (the characters after ';'; *has_version is set if a ';'
+ * was present at all).
+ *
+ * The name+version text is taken verbatim from what the user typed
+ * (dcl_filename_component()), NOT from a version-collapsed resolved path — see
+ * dcl_filename_component()'s doc comment: a bare name must retain its "all
+ * versions" meaning, and the explicit-version guard must see the ';' the user
+ * actually typed.
+ */
+static void split_file_spec(struct dcl_context *ctx, const char *param,
+                            char *linux_dir, size_t dir_sz,
+                            char *name_pat, size_t name_sz,
+                            char *vspec, size_t vspec_sz, int *has_version)
+{
+    /* Resolve the DIRECTORY from a version-stripped copy of the spec. A version
+     * marker (;n, ;*, ;) defeats dcl_resolve_path()'s case-insensitive file
+     * lookup, which is what fixes the on-disk directory case when a VMS
+     * directory maps to a differently-cased Linux path; the bare-name form
+     * resolves the same directory the way COPY/RENAME already do successfully.
+     * The name.type + version fields are still taken verbatim from `param`
+     * below. */
+    char probe[1024];
+    strncpy(probe, param, sizeof(probe) - 1);
+    probe[sizeof(probe) - 1] = '\0';
+    {
+        const char *pc = dcl_filename_component(param);
+        if (pc && pc[0]) {
+            const char *psemi = strrchr(pc, ';');
+            if (psemi) {
+                size_t off = (size_t)(psemi - param);
+                if (off < sizeof(probe)) probe[off] = '\0';
+            }
+        }
+    }
+
+    char resolved[1024];
+    dcl_resolve_path(ctx, probe, resolved, sizeof(resolved));
+
+    char *slash = strrchr(resolved, '/');
+    if (slash) {
+        size_t dl = (size_t)(slash - resolved) + 1;
+        if (dl >= dir_sz) dl = dir_sz - 1;
+        memcpy(linux_dir, resolved, dl);
+        linux_dir[dl] = '\0';
+    } else {
+        vmsfs_to_linux_path(ctx->default_dir, linux_dir, dir_sz);
+        size_t dl = strlen(linux_dir);
+        if (dl && linux_dir[dl - 1] != '/' && dl < dir_sz - 1) {
+            linux_dir[dl] = '/';
+            linux_dir[dl + 1] = '\0';
+        }
+    }
+
+    const char *comp = dcl_filename_component(param);
+    if (!comp || !comp[0]) comp = slash ? slash + 1 : resolved;
+
+    const char *semi = strrchr(comp, ';');
+    if (semi) {
+        *has_version = 1;
+        size_t nl = (size_t)(semi - comp);
+        if (nl >= name_sz) nl = name_sz - 1;
+        memcpy(name_pat, comp, nl);
+        name_pat[nl] = '\0';
+        strncpy(vspec, semi + 1, vspec_sz - 1);
+        vspec[vspec_sz - 1] = '\0';
+    } else {
+        *has_version = 0;
+        strncpy(name_pat, comp, name_sz - 1);
+        name_pat[name_sz - 1] = '\0';
+        vspec[0] = '\0';
+    }
+}
+
+/*
+ * fm_collect - Enumerate the regular files in linux_dir whose name.type matches
+ * name_pat through the single VMS wildcard matcher (vmsfs_wildcard_match; %, *,
+ * version-agnostic when the pattern carries no ';'). Real opendir()/stat() walk
+ * (INV-6). Returns a malloc'd array (caller frees) + count.
+ */
+static int fm_collect(const char *linux_dir, const char *name_pat,
+                      struct file_match **out, int *out_count)
+{
+    *out = NULL;
+    *out_count = 0;
+
+    DIR *d = opendir(linux_dir);
+    if (!d) return SS$_NOSUCHFILE;
+
+    int cap = 32, n = 0;
+    struct file_match *arr = malloc((size_t)cap * sizeof(*arr));
+    if (!arr) { closedir(d); return SS$_INSFMEM; }
+
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+
+        char full[2048];
+        snprintf(full, sizeof(full), "%s%s", linux_dir, de->d_name);
+        struct stat st;
+        if (stat(full, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+
+        if (!vmsfs_wildcard_match(name_pat, de->d_name)) continue;
+
+        if (n >= cap) {
+            cap *= 2;
+            struct file_match *t = realloc(arr, (size_t)cap * sizeof(*arr));
+            if (!t) { free(arr); closedir(d); return SS$_INSFMEM; }
+            arr = t;
+        }
+        strncpy(arr[n].dname, de->d_name, sizeof(arr[n].dname) - 1);
+        arr[n].dname[sizeof(arr[n].dname) - 1] = '\0';
+        fm_split(de->d_name, arr[n].base, sizeof(arr[n].base), &arr[n].version);
+        n++;
+    }
+    closedir(d);
+
+    *out = arr;
+    *out_count = n;
+    return SS$_NORMAL;
+}
+
+/* Highest version among the matches that share `base` (case-insensitive). */
+static int fm_highest_for(const struct file_match *m, int count, const char *base)
+{
+    int hi = 0;
+    for (int i = 0; i < count; i++)
+        if (strcasecmp(m[i].base, base) == 0 && m[i].version > hi)
+            hi = m[i].version;
+    return hi;
+}
+
+/*
+ * version_selected - Is match `idx` in the version set the user named?
+ *
+ * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary version-number
+ * conventions in a file specification:
+ *   no version marker  -> the highest existing version (a bare name references
+ *                         the latest version);
+ *   ";*"               -> every version;
+ *   ";" or ";0"        -> the highest existing version;
+ *   ";-n"              -> the version n below the highest;
+ *   ";n"  (n>0)        -> exactly version n.
+ */
+static int version_selected(const struct file_match *m, int idx, int count,
+                            int has_version, const char *vspec)
+{
+    if (!has_version)
+        return m[idx].version == fm_highest_for(m, count, m[idx].base);
+    if (vspec[0] == '*') return 1;
+    if (vspec[0] == '\0' || strcmp(vspec, "0") == 0)
+        return m[idx].version == fm_highest_for(m, count, m[idx].base);
+    if (vspec[0] == '-') {
+        int rel = (int)strtol(vspec, NULL, 10);      /* negative */
+        return m[idx].version == fm_highest_for(m, count, m[idx].base) + rel;
+    }
+    return m[idx].version == (int)strtol(vspec, NULL, 10);
+}
+
+/* Map an output name/type field: a lone "*" (or empty) copies the input field;
+ * anything else is taken literally. This is the common VMS field-substitution
+ * case (COPY *.TXT *.LIS keeps each name, swaps the type). */
+static void map_out_field(const char *out_field, const char *in_field,
+                          char *dst, size_t sz)
+{
+    if (out_field[0] == '\0' || strcmp(out_field, "*") == 0)
+        strncpy(dst, in_field, sz - 1);
+    else
+        strncpy(dst, out_field, sz - 1);
+    dst[sz - 1] = '\0';
+}
+
+/*
+ * copy_one - Byte-copy src_full to dst_full on the backing store.
+ * Returns SS$_NORMAL, or a VMS error (message already emitted by caller path).
+ */
+static int copy_one(const char *src_full, const char *dst_full)
+{
+    FILE *src = fopen(src_full, "rb");
+    if (!src) return SS$_NOSUCHFILE;
+    FILE *dst = fopen(dst_full, "wb");
+    if (!dst) { fclose(src); return SS$_FILACCERR; }
+
+    char buf[8192];
+    size_t nr;
+    int write_err = 0;
+    while ((nr = fread(buf, 1, sizeof(buf), src)) > 0) {
+        if (fwrite(buf, 1, nr, dst) != nr) { write_err = 1; break; }
+    }
+    fclose(src);
+    fclose(dst);
+    return write_err ? SS$_ABORT : SS$_NORMAL;
+}
+
+/*
+ * resolve_out_version - Decide the destination version number for a COPY/RENAME
+ * output file, and whether the write must be refused as a collision.
+ *
+ * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, COPY / RENAME
+ * output version-number defaulting and /NEW_VERSION:
+ *   - No explicit output version: if a file of the same name and type already
+ *     exists in the target directory, the output version is one greater than
+ *     the highest existing version; otherwise the output keeps the (user-typed)
+ *     name with no synthesized version (OVMX writes it unversioned — the same
+ *     never-overwrite result VMS gives, without perturbing files that had no
+ *     version before). This is the "never silently overwrite" rule.
+ *   - Explicit output version ;n that does NOT already exist: use ;n.
+ *   - Explicit output version ;n that DOES exist: an error unless /NEW_VERSION,
+ *     which bumps to highest+1.
+ *
+ * *out_ver is set to the version to write (0 == write unversioned name.type).
+ * Returns 1 to proceed, 0 to refuse (collision without /NEW_VERSION).
+ */
+static int resolve_out_version(const char *dst_dir, const char *out_name,
+                               const char *out_type, int dst_has_version,
+                               const char *dst_vspec, int new_version,
+                               int *out_ver)
+{
+    const char *type = out_type[0] ? out_type : NULL;
+    int highest = vmsfs_get_highest_version(dst_dir, out_name, type);
+
+    /* Explicit numeric output version (;n, n>0). */
+    if (dst_has_version && dst_vspec[0] && isdigit((unsigned char)dst_vspec[0])) {
+        int want = (int)strtol(dst_vspec, NULL, 10);
+        if (want > 0) {
+            int exists =
+                (vmsfs_resolve_version(dst_dir, out_name, type, want) == want);
+            if (exists && !new_version) { *out_ver = want; return 0; }
+            *out_ver = (exists && new_version) ? highest + 1 : want;
+            return 1;
+        }
+    }
+
+    /* Default / ;0 / ; / ;* : one above the highest, else unversioned. */
+    *out_ver = (highest > 0) ? highest + 1 : 0;
+    return 1;
+}
+
+/*
+ * COPY - Copy file(s), with VMS wildcard source expansion and version
+ * defaulting on the output.
+ *
+ * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, COPY —
+ *   - a wildcard input spec copies each matching file;
+ *   - the output version defaults to one greater than the highest existing
+ *     version of the same name.type (never a silent overwrite); /NEW_VERSION
+ *     forces a higher version when an explicit output version collides;
+ *   - /LOG lists each file with "%COPY-S-COPIED, in copied to out", and a
+ *     multi-file copy reports "%COPY-S-NEWFILES, n files created".
  */
 int cmd_copy(struct dcl_command *cmd)
 {
@@ -846,78 +1159,140 @@ int cmd_copy(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    char src_path[1024], dst_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], src_path, sizeof(src_path));
-    dcl_resolve_path(ctx, cmd->params[1], dst_path, sizeof(dst_path));
+    int do_log      = dcl_has_qualifier(cmd, "LOG");
+    int do_confirm  = dcl_has_qualifier(cmd, "CONFIRM");
+    int new_version = dcl_has_qualifier(cmd, "NEW_VERSION");
 
-    /* Check if destination is a directory */
-    struct stat st;
-    if (stat(dst_path, &st) == 0 && S_ISDIR(st.st_mode)) {
-        /* Append source filename to destination directory */
-        const char *basename = strrchr(src_path, '/');
-        if (basename) basename++; else basename = src_path;
-        size_t dlen = strlen(dst_path);
-        if (dlen > 0 && dst_path[dlen - 1] != '/') {
-            strncat(dst_path, "/", sizeof(dst_path) - dlen - 1);
+    /* Source: directory + name.type pattern + version spec. */
+    char src_dir[1024], src_pat[512], src_vspec[64];
+    int  src_hasver;
+    split_file_spec(ctx, cmd->params[0], src_dir, sizeof(src_dir),
+                    src_pat, sizeof(src_pat),
+                    src_vspec, sizeof(src_vspec), &src_hasver);
+
+    /* Destination: an existing directory takes name/type from each source
+     * (fields "*"); otherwise parse the destination name.type;ver fields. */
+    char dst_dir[1024];
+    char dname_pat[256] = "*", dtype_pat[256] = "*", dst_vspec[64] = "";
+    int  dst_hasver = 0;
+
+    char dst_resolved[1024];
+    dcl_resolve_path(ctx, cmd->params[1], dst_resolved, sizeof(dst_resolved));
+    struct stat dst_st;
+    int dst_is_dir = (stat(dst_resolved, &dst_st) == 0 && S_ISDIR(dst_st.st_mode));
+
+    if (dst_is_dir) {
+        size_t dl = strlen(dst_resolved);
+        strncpy(dst_dir, dst_resolved, sizeof(dst_dir) - 1);
+        dst_dir[sizeof(dst_dir) - 1] = '\0';
+        if (dl && dst_dir[dl - 1] != '/' && dl < sizeof(dst_dir) - 1) {
+            dst_dir[dl] = '/';
+            dst_dir[dl + 1] = '\0';
         }
-        strncat(dst_path, basename, sizeof(dst_path) - strlen(dst_path) - 1);
+    } else {
+        char dnamepat[256];
+        split_file_spec(ctx, cmd->params[1], dst_dir, sizeof(dst_dir),
+                        dnamepat, sizeof(dnamepat),
+                        dst_vspec, sizeof(dst_vspec), &dst_hasver);
+        split_name_type(dnamepat, dname_pat, sizeof(dname_pat),
+                        dtype_pat, sizeof(dtype_pat));
     }
 
-    /* /CONFIRM prompts before the copy; /NOCONFIRM (the default) suppresses.
-     * The parser stores /NOCONFIRM as name="CONFIRM" negated=1, so
-     * dcl_has_qualifier(cmd,"CONFIRM") returns 0 for /NOCONFIRM. Mirrors the
-     * DELETE /CONFIRM prompt convention above. */
-    if (dcl_has_qualifier(cmd, "CONFIRM")) {
-        char vms_src[256], vms_dst[256];
-        dcl_format_filespec(src_path, vms_src, sizeof(vms_src));
-        dcl_format_filespec(dst_path, vms_dst, sizeof(vms_dst));
-        printf("COPY %s to %s ? [N]: ", vms_src, vms_dst);
-        fflush(stdout);
-        char resp[64];
-        if (!fgets(resp, sizeof(resp), stdin) ||
-            toupper((unsigned char)resp[0]) != 'Y') {
-            return SS$_NORMAL;
-        }
-    }
-
-    FILE *src = fopen(src_path, "rb");
-    if (!src) {
+    struct file_match *m = NULL;
+    int count = 0;
+    int st = fm_collect(src_dir, src_pat, &m, &count);
+    if (st != SS$_NORMAL) {
+        free(m);
         dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
         return SS$_NOSUCHFILE;
     }
 
-    FILE *dst = fopen(dst_path, "wb");
-    if (!dst) {
-        fclose(src);
-        dcl_error("RMS", 2, "CRE", "cannot create - %s", cmd->params[1]);
-        return SS$_FILACCERR;
-    }
+    int copied = 0, matched = 0;
+    for (int i = 0; i < count; i++) {
+        if (!version_selected(m, i, count, src_hasver, src_vspec)) continue;
+        matched++;
 
-    char buf[8192];
-    size_t n;
-    int write_err = 0;
-    while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
-        if (fwrite(buf, 1, n, dst) != n) {
-            write_err = 1;
-            break;
+        char in_name[256], in_type[256];
+        split_name_type(m[i].base, in_name, sizeof(in_name),
+                        in_type, sizeof(in_type));
+
+        char out_name[256], out_type[256];
+        map_out_field(dname_pat, in_name, out_name, sizeof(out_name));
+        map_out_field(dtype_pat, in_type, out_type, sizeof(out_type));
+
+        int out_ver = 0;
+        if (!resolve_out_version(dst_dir, out_name, out_type,
+                                 dst_hasver, dst_vspec, new_version, &out_ver)) {
+            dcl_error("RMS", 2, "FEX",
+                      "file already exists, not superseded - %s.%s;%d",
+                      out_name, out_type, out_ver);
+            continue;
+        }
+
+        char dfile[600];
+        if (out_ver > 0) {
+            if (out_type[0])
+                snprintf(dfile, sizeof(dfile), "%s.%s;%d",
+                         out_name, out_type, out_ver);
+            else
+                snprintf(dfile, sizeof(dfile), "%s;%d", out_name, out_ver);
+        } else {
+            if (out_type[0])
+                snprintf(dfile, sizeof(dfile), "%s.%s", out_name, out_type);
+            else
+                snprintf(dfile, sizeof(dfile), "%s", out_name);
+        }
+
+        char src_full[2600], dst_full[2600];
+        snprintf(src_full, sizeof(src_full), "%s%s", src_dir, m[i].dname);
+        snprintf(dst_full, sizeof(dst_full), "%s%s", dst_dir, dfile);
+
+        if (do_confirm) {
+            char vsrc[256], vdst[256];
+            dcl_format_filespec(src_full, vsrc, sizeof(vsrc));
+            dcl_format_filespec(dst_full, vdst, sizeof(vdst));
+            printf("COPY %s to %s ? [N]: ", vsrc, vdst);
+            fflush(stdout);
+            char resp[64];
+            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (toupper((unsigned char)resp[0]) != 'Y') continue;
+        }
+
+        int cst = copy_one(src_full, dst_full);
+        if (cst == SS$_NOSUCHFILE) {
+            dcl_error("RMS", 2, "FNF", "file not found - %s", m[i].dname);
+            continue;
+        }
+        if (cst == SS$_FILACCERR) {
+            dcl_error("RMS", 2, "CRE", "cannot create - %s", dfile);
+            continue;
+        }
+        if (cst == SS$_ABORT) {
+            dcl_error("RMS", 2, "WER", "write error - %s", dfile);
+            continue;
+        }
+
+        copied++;
+        if (do_log) {
+            char vsrc[256], vdst[256];
+            dcl_format_filespec(src_full, vsrc, sizeof(vsrc));
+            dcl_format_filespec(dst_full, vdst, sizeof(vdst));
+            dcl_error("COPY", 1, "COPIED", "%s copied to %s", vsrc, vdst);
         }
     }
+    free(m);
 
-    fclose(src);
-    fclose(dst);
-
-    if (write_err) {
-        dcl_error("RMS", 2, "WER", "write error - %s", cmd->params[1]);
+    if (matched == 0) {
+        dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
+        return SS$_NOSUCHFILE;
+    }
+    if (copied == 0)
         return SS$_ABORT;
-    }
 
-    /* /LOG qualifier: report the copy */
-    if (dcl_has_qualifier(cmd, "LOG")) {
-        char vms_src[256], vms_dst[256];
-        dcl_format_filespec(src_path, vms_src, sizeof(vms_src));
-        dcl_format_filespec(dst_path, vms_dst, sizeof(vms_dst));
-        dcl_error("COPY", 1, "COPIED", "%s copied to %s", vms_src, vms_dst);
-    }
+    /* A multi-file copy reports the aggregate; a single copy is silent unless
+     * /LOG asked for the per-file COPIED line above. */
+    if (copied > 1)
+        dcl_error("COPY", 1, "NEWFILES", "%d files created", copied);
 
     return SS$_NORMAL;
 }
@@ -988,96 +1363,97 @@ int cmd_delete(struct dcl_command *cmd)
     int do_confirm = dcl_has_qualifier(cmd, "CONFIRM");
     int do_log = dcl_has_qualifier(cmd, "LOG");
 
-    char linux_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
+    /*
+     * VMS requires an explicit version field on DELETE — a bare name is
+     * refused, so that a user cannot delete the wrong version by omission.
+     * Accepted forms: ";n" (a version), ";" or ";0" (highest), ";-n"
+     * (relative), ";*" (all versions / wildcard).
+     *
+     * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, DELETE — "you
+     * must include the version number ... in each file specification"; omitting
+     * it yields %DELETE-E-DELVER, "explicit version number or wild card
+     * required". (The wild-card allowance is exactly why the guard passes on a
+     * ";" of any of the forms above, not only a literal ";n".)
+     */
+    const char *fcomp = dcl_filename_component(cmd->params[0]);
+    const char *fcheck = (fcomp && fcomp[0]) ? fcomp : cmd->params[0];
+    if (!strchr(fcheck, ';')) {
+        dcl_error("DELETE", 2, "DELVER",
+                  "explicit version number or wild card required in %s",
+                  cmd->params[0]);
+        return SS$_BADPARAM;
+    }
 
-    /* Check if the path contains wildcards */
-    if (strchr(linux_path, '*') || strchr(linux_path, '?')) {
-        /* Wildcard delete - expand and delete matching files */
-        char dir[1024];
-        strncpy(dir, linux_path, sizeof(dir) - 1);
-        dir[sizeof(dir) - 1] = '\0';
-        char *last_slash = strrchr(dir, '/');
-        const char *pat;
-        if (last_slash) {
-            pat = last_slash + 1;
-            *(last_slash + 1) = '\0';
-        } else {
-            pat = dir;
-            vmsfs_to_linux_path(ctx->default_dir, dir, sizeof(dir));
-        }
+    /* Directory + name.type pattern + version spec (the text after ';'). */
+    char linux_dir[1024], name_pat[512], vspec[64];
+    int  has_version;
+    split_file_spec(ctx, cmd->params[0], linux_dir, sizeof(linux_dir),
+                    name_pat, sizeof(name_pat), vspec, sizeof(vspec),
+                    &has_version);
 
-        DIR *dp = opendir(dir);
-        if (!dp) {
-            dcl_error("RMS", 2, "DNF", "directory not found");
-            return SS$_NOSUCHFILE;
-        }
+    struct file_match *m = NULL;
+    int count = 0;
+    int st = fm_collect(linux_dir, name_pat, &m, &count);
+    if (st == SS$_NOSUCHFILE) {
+        /* Directory could not be opened: the named file cannot exist -> FNF
+         * (the same result the old single-file path gave when unlink() failed),
+         * rather than surfacing a resolution-artifact directory path. */
+        dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
+        return SS$_NOSUCHFILE;
+    }
+    if (st != SS$_NORMAL) {
+        free(m);
+        return st;
+    }
 
-        struct dirent *entry;
-        int deleted = 0;
-        while ((entry = readdir(dp)) != NULL) {
-            if (fnmatch(pat, entry->d_name, FNM_CASEFOLD) == 0) {
-                char full[2048];
-                snprintf(full, sizeof(full), "%s%s", dir, entry->d_name);
+    int deleted = 0;
+    for (int i = 0; i < count; i++) {
+        if (!version_selected(m, i, count, has_version, vspec)) continue;
 
-                if (do_confirm) {
-                    char vms_spec[256];
-                    dcl_format_filespec(full, vms_spec, sizeof(vms_spec));
-                    printf("DELETE %s ? [N]: ", vms_spec);
-                    fflush(stdout);
-                    char resp[64];
-                    if (!fgets(resp, sizeof(resp), stdin)) break;
-                    if (toupper((unsigned char)resp[0]) != 'Y') continue;
-                }
+        char full[2600];
+        snprintf(full, sizeof(full), "%s%s", linux_dir, m[i].dname);
 
-                if (unlink(full) == 0) {
-                    deleted++;
-                    if (do_log) {
-                        char vms_spec[256];
-                        dcl_format_filespec(full, vms_spec, sizeof(vms_spec));
-                        dcl_error("DELETE", 1, "DELETED", "%s deleted", vms_spec);
-                    }
-                }
-            }
-        }
-        closedir(dp);
-
-        if (deleted == 0) {
-            dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
-            return SS$_NOSUCHFILE;
-        }
-    } else {
-        /* Single file delete */
         if (do_confirm) {
             char vms_spec[256];
-            dcl_format_filespec(linux_path, vms_spec, sizeof(vms_spec));
+            dcl_format_filespec(full, vms_spec, sizeof(vms_spec));
             printf("DELETE %s ? [N]: ", vms_spec);
             fflush(stdout);
             char resp[64];
-            if (!fgets(resp, sizeof(resp), stdin) ||
-                toupper((unsigned char)resp[0]) != 'Y') {
-                return SS$_NORMAL;
+            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (toupper((unsigned char)resp[0]) != 'Y') continue;
+        }
+
+        if (unlink(full) == 0) {
+            deleted++;
+            if (do_log) {
+                char vms_spec[256];
+                dcl_format_filespec(full, vms_spec, sizeof(vms_spec));
+                /* Authentic identifier: %DELETE-I-FILDEL, <spec> deleted. */
+                dcl_error("DELETE", 3, "FILDEL", "%s deleted", vms_spec);
             }
         }
+    }
+    free(m);
 
-        if (unlink(linux_path) != 0) {
-            dcl_error("RMS", 2, "FNF",
-                      "file not found - %s", cmd->params[0]);
-            return SS$_NOSUCHFILE;
-        }
-
-        if (do_log) {
-            char vms_spec[256];
-            dcl_format_filespec(linux_path, vms_spec, sizeof(vms_spec));
-            dcl_error("DELETE", 1, "DELETED", "%s deleted", vms_spec);
-        }
+    if (deleted == 0) {
+        dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
+        return SS$_NOSUCHFILE;
     }
 
     return SS$_NORMAL;
 }
 
 /*
- * RENAME - Rename a file.
+ * RENAME - Change the name and/or directory of file(s), with VMS wildcard
+ * source expansion, field substitution, and output version defaulting.
+ *
+ * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, RENAME —
+ *   - a wildcard input spec renames each matching file, substituting the
+ *     wildcard output fields from the corresponding input fields;
+ *   - a directory in the output spec moves the file to that directory;
+ *   - the output version defaults like COPY (one greater than the highest
+ *     existing version of the same name.type, else the name is kept);
+ *   - /LOG reports each with "%RENAME-I-RENAMED, in renamed to out".
  */
 int cmd_rename(struct dcl_command *cmd)
 {
@@ -1088,23 +1464,116 @@ int cmd_rename(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    char src_path[1024], dst_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], src_path, sizeof(src_path));
-    dcl_resolve_path(ctx, cmd->params[1], dst_path, sizeof(dst_path));
+    int do_log      = dcl_has_qualifier(cmd, "LOG");
+    int new_version = dcl_has_qualifier(cmd, "NEW_VERSION");
 
-    if (rename(src_path, dst_path) != 0) {
-        dcl_error("RMS", 2, "RNF",
-                  "rename failed - %s", vms_strerror(errno));
+    /* Source: directory + name.type pattern + version spec. */
+    char src_dir[1024], src_pat[512], src_vspec[64];
+    int  src_hasver;
+    split_file_spec(ctx, cmd->params[0], src_dir, sizeof(src_dir),
+                    src_pat, sizeof(src_pat),
+                    src_vspec, sizeof(src_vspec), &src_hasver);
+
+    /* Destination: an existing directory keeps each source name/type (fields
+     * "*"); otherwise parse the destination name.type;ver fields. */
+    char dst_dir[1024];
+    char dname_pat[256] = "*", dtype_pat[256] = "*", dst_vspec[64] = "";
+    int  dst_hasver = 0;
+
+    char dst_resolved[1024];
+    dcl_resolve_path(ctx, cmd->params[1], dst_resolved, sizeof(dst_resolved));
+    struct stat dst_st;
+    int dst_is_dir = (stat(dst_resolved, &dst_st) == 0 && S_ISDIR(dst_st.st_mode));
+
+    if (dst_is_dir) {
+        size_t dl = strlen(dst_resolved);
+        strncpy(dst_dir, dst_resolved, sizeof(dst_dir) - 1);
+        dst_dir[sizeof(dst_dir) - 1] = '\0';
+        if (dl && dst_dir[dl - 1] != '/' && dl < sizeof(dst_dir) - 1) {
+            dst_dir[dl] = '/';
+            dst_dir[dl + 1] = '\0';
+        }
+    } else {
+        char dnamepat[256];
+        split_file_spec(ctx, cmd->params[1], dst_dir, sizeof(dst_dir),
+                        dnamepat, sizeof(dnamepat),
+                        dst_vspec, sizeof(dst_vspec), &dst_hasver);
+        split_name_type(dnamepat, dname_pat, sizeof(dname_pat),
+                        dtype_pat, sizeof(dtype_pat));
+    }
+
+    struct file_match *m = NULL;
+    int count = 0;
+    int st = fm_collect(src_dir, src_pat, &m, &count);
+    if (st != SS$_NORMAL) {
+        free(m);
+        dcl_error("RMS", 2, "RNF", "file not found - %s", cmd->params[0]);
+        return SS$_NOSUCHFILE;
+    }
+
+    int renamed = 0, matched = 0;
+    for (int i = 0; i < count; i++) {
+        if (!version_selected(m, i, count, src_hasver, src_vspec)) continue;
+        matched++;
+
+        char in_name[256], in_type[256];
+        split_name_type(m[i].base, in_name, sizeof(in_name),
+                        in_type, sizeof(in_type));
+
+        char out_name[256], out_type[256];
+        map_out_field(dname_pat, in_name, out_name, sizeof(out_name));
+        map_out_field(dtype_pat, in_type, out_type, sizeof(out_type));
+
+        int out_ver = 0;
+        if (!resolve_out_version(dst_dir, out_name, out_type,
+                                 dst_hasver, dst_vspec, new_version, &out_ver)) {
+            dcl_error("RMS", 2, "FEX",
+                      "file already exists, not superseded - %s.%s;%d",
+                      out_name, out_type, out_ver);
+            continue;
+        }
+
+        char dfile[600];
+        if (out_ver > 0) {
+            if (out_type[0])
+                snprintf(dfile, sizeof(dfile), "%s.%s;%d",
+                         out_name, out_type, out_ver);
+            else
+                snprintf(dfile, sizeof(dfile), "%s;%d", out_name, out_ver);
+        } else {
+            if (out_type[0])
+                snprintf(dfile, sizeof(dfile), "%s.%s", out_name, out_type);
+            else
+                snprintf(dfile, sizeof(dfile), "%s", out_name);
+        }
+
+        char src_full[2600], dst_full[2600];
+        snprintf(src_full, sizeof(src_full), "%s%s", src_dir, m[i].dname);
+        snprintf(dst_full, sizeof(dst_full), "%s%s", dst_dir, dfile);
+
+        if (rename(src_full, dst_full) != 0) {
+            dcl_error("RMS", 2, "RNF",
+                      "rename failed - %s", vms_strerror(errno));
+            continue;
+        }
+
+        renamed++;
+        if (do_log) {
+            char vsrc[256], vdst[256];
+            dcl_format_filespec(src_full, vsrc, sizeof(vsrc));
+            dcl_format_filespec(dst_full, vdst, sizeof(vdst));
+            dcl_error("RENAME", 3, "RENAMED",
+                      "%s renamed to %s", vsrc, vdst);
+        }
+    }
+    free(m);
+
+    if (matched == 0) {
+        dcl_error("RMS", 2, "RNF", "file not found - %s", cmd->params[0]);
+        return SS$_NOSUCHFILE;
+    }
+    if (renamed == 0)
         return SS$_FILACCERR;
-    }
-
-    /* /LOG qualifier: report the rename */
-    if (dcl_has_qualifier(cmd, "LOG")) {
-        char vms_src[256], vms_dst[256];
-        dcl_format_filespec(src_path, vms_src, sizeof(vms_src));
-        dcl_format_filespec(dst_path, vms_dst, sizeof(vms_dst));
-        dcl_error("RENAME", 1, "RENAMED", "%s renamed to %s", vms_src, vms_dst);
-    }
 
     return SS$_NORMAL;
 }

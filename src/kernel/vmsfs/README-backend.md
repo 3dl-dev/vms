@@ -33,20 +33,33 @@ src/kernel-core/vmsfs/          SUBSTRATE-NEUTRAL — 0 <linux/…> includes
   vmsfs_map.c                     retrieval-map VBN<->LBN math
   vmsfs_name.c                    filename FORMAT: split name/type, uppercase,
                                   case-blind name match            (rd vms-00c)
+  vmsfs_bio.h                     the block/inode seam CONTRACT: struct
+                                  vmsfs_volume + the vmsfs_bio ops + the
+                                  vmsfs_fh_* codec + the allocator/dir-scanner
+                                  prototypes                        (rd vms-d69)
+  vmsfs_alloc.c                   storage/FID/cluster allocator + home-block
+                                  write-back + block-map growth     (rd vms-d69)
+  vmsfs_dirscan.c                 directory-block scanner: resolve / highest-
+                                  version / add / remove / empty / readdir decode
+                                  + display-name format             (rd vms-d69)
+  vmsfs_header.c                  file-header decode / encode / partial writes
+                                  (flush + rename)                  (rd vms-d69)
 
 src/kernel/vmsfs/               LINUX BACKEND — all the <linux/…> lives here
-  vmsfs_backend_linux.h           realizes vmsfs_backend.h on Linux
-  vmsfs.h                         Linux glue types (vmsfs_sb_info,
-                                  vmsfs_inode_info) + op-table externs
+  vmsfs_backend_linux.h           realizes vmsfs_backend.h AND the vmsfs_bio ops
+                                  (sb_bread / bitops / le*_to_cpu / ktime) on Linux
+  vmsfs.h                         Linux glue types (vmsfs_sb_info embeds a
+                                  vmsfs_volume, vmsfs_inode_info) + op-table externs
   vmsfs_super.c                   file_system_type, mount/kill_sb, super_ops,
                                   option parsing, home-block + bitmap load
   vmsfs_inode.c                   inode slab cache, dentry ops (case-blind
                                   hash/compare/revalidate), OVERLAY-mode iops
   vmsfs_dir.c / vmsfs_file.c      OVERLAY-mode dir/file ops (backing-dir passthru)
-  vmsfs_blkdev.c                  BLOCK-DEVICE mode: iget/flush, lookup, readdir,
-                                  create/mkdir/unlink/rmdir/rename, permission,
-                                  address_space_ops, AND the not-yet-extracted
-                                  ODS-2 storage allocator + directory scanner
+  vmsfs_blkdev.c                  BLOCK-DEVICE mode, now the THIN VFS + vmsfs_bio
+                                  backend: iget/flush (POD<->inode copy), lookup,
+                                  readdir emission, create/mkdir/unlink/rmdir/
+                                  rename, permission, address_space_ops — every
+                                  ODS-2 decision delegated to the core
 ```
 \* `vmsfs_ondisk.h` physically sits beside the Linux glue and is reached by the
 core via `-I$(src)`; it is already substrate-neutral (its only host branch,
@@ -92,15 +105,29 @@ format** — is already in the core and needs no further work for a second backe
 
 ---
 
-## 3. Seam #2 — the block/inode seam — DESIGNED HERE, NOT YET BUILT
+## 3. Seam #2 — the block/inode seam — BUILT (rd vms-d69)
 
-The ODS-2 logic still in `vmsfs_blkdev.c` is not stuck on Linux by accident: it
-is the logic that touches the **volume** (512-byte blocks by LBN, the storage
-bitmap, volume geometry) and the **in-core file object** (`struct inode` /
-`vmsfs_inode_info`: cached retrieval map, size, block count, FID). The
-vocabulary shim does not cover those, so this code cannot move until a second
-seam exists. This mirrors the executive core, which left its block-coupled
-facility (`vms_devtab`) in `src/kernel/` until its seam was built — not before.
+> **Status: this seam is now built.** The tables and code sketches below are the
+> as-designed contract; the extraction landed it in `vmsfs_bio.h` (contract),
+> `vmsfs_alloc.c` / `vmsfs_dirscan.c` / `vmsfs_header.c` (the moved algorithms),
+> and the vmsfs_bio realization in `vmsfs_backend_linux.h`. `vmsfs_blkdev.c` is
+> now the thin VFS + vmsfs_bio backend. The design matched the build with two
+> refinements, both noted inline: `vmsfs_fh_decode` returns an
+> `enum vmsfs_fh_status` (so the backend reproduces the original's three distinct
+> diagnostics/errnos — EIO magic, EIO checksum, ENOENT not-in-use) rather than a
+> bare `int`; and the flush/rename header write-backs are explicit partial-update
+> writers (`vmsfs_fh_write_meta` / `vmsfs_fh_write_rename`) rather than being
+> forced through `vmsfs_fh_encode`, so they preserve every untouched on-disk field
+> without a decode-on-write that could change the error behaviour.
+
+The ODS-2 logic that was still in `vmsfs_blkdev.c` before this landing is not
+stuck on Linux by accident: it is the logic that touches the **volume** (512-byte
+blocks by LBN, the storage bitmap, volume geometry) and the **in-core file
+object** (`struct inode` / `vmsfs_inode_info`: cached retrieval map, size, block
+count, FID). The seam-#1 vocabulary shim does not cover those, so this code could
+not move until this second seam existed. This mirrors the executive core, which
+left its block-coupled facility (`vms_devtab`) in `src/kernel/` until its seam
+was built — not before.
 
 The still-Linux ODS-2 logic, and what each piece is coupled to:
 
@@ -178,14 +205,21 @@ the `dir_emit`/`vnode` emission.
    `vmsfs_vbn_to_lbn`, `vmsfs_next_vbn`, `vmsfs_extend_map`,
    `vmsfs_split_name_type`, `vmsfs_strupper`, `vmsfs_name_match`.
 3. Seam #2 realization (section 3) — the `vmsfs_bio` buffer/geometry/bitmap ops
-   and the `vmsfs_fh_info` copy. *Blocked on the seam #2 landing; until then a
-   NetBSD read path reuses `vmsfs_ondisk.h` + the core name/map logic and
-   carries its own header decode, to be replaced by `vmsfs_fh_decode` when it
-   lands.*
+   (`vmsfs_bget` / `vmsfs_bdata` / `vmsfs_bdirty[_sync]` / `vmsfs_bput` /
+   `vmsfs_bit_*` / `vmsfs_le*_to_cpu` / `vmsfs_cpu_to_le*` / `vmsfs_now_seconds`)
+   plus the thin `vmsfs_fh_info` ↔ vnode/vattr copy. *Available now:* the NetBSD
+   backend provides `vmsfs_backend_netbsd.h` realizing those ops over its own
+   buffer cache (`bread`/`brelse`/`bwrite`), bitops and byte-order, embeds a
+   `struct vmsfs_volume` in its mount (`vol.host` = the mount/vnode), and calls
+   the shared `vmsfs_alloc.c` / `vmsfs_dirscan.c` / `vmsfs_header.c` for every
+   ODS-2 decision — `vmsfs_fh_decode` / `vmsfs_fh_encode`, `vmsfs_dir_resolve`,
+   `vmsfs_alloc_block`, etc.
 4. `VFS_MOUNT`/`VFS_ROOT` ↔ `vmsfs_super.c`'s mount + MFD-root logic;
    `VOP_LOOKUP`/`VOP_READDIR`/`VOP_READ` ↔ the block-device lookup/readdir/read
    in `vmsfs_blkdev.c`. These are the **backend's** to write; the ODS-2 decisions
-   inside them come from the core.
+   inside them come from the core. For readdir specifically, follow the Linux
+   backend's split: the backend owns the map-walk + emission and calls
+   `vmsfs_dir_entry_decode` + `vmsfs_dir_format_name` per entry.
 
 ---
 

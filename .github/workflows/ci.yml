@@ -4857,7 +4857,12 @@ jobs:
           echo "$RAW" | grep -qF 'ALL PROOFS PASSED: the full OVMX boot image set (STARTUP.EXE, PROVISION.EXE, DCL.EXE, JOB_CONTROL.EXE, LOGINOUT.EXE) builds, links, and activates via ld.elf_so for vax--netbsdelf' \
             || { echo "FAIL: did not see the boot-image-set PASS banner"; exit 1; }
           for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE; do
-            echo "$RAW" | grep -qF "-> $img: ELF32 Digital VAX, dynamically linked, interp=/usr/libexec/ld.elf_so" \
+            # NOTE: the pattern starts with "->", i.e. with a literal '-' --
+            # without `--` to end option parsing, grep reads "-> STARTUP..."
+            # as an option cluster ("invalid option -- '>'") instead of a
+            # pattern, and fails on the FIRST image checked regardless of
+            # whether that image's real properties are correct.
+            echo "$RAW" | grep -qF -- "-> $img: ELF32 Digital VAX, dynamically linked, interp=/usr/libexec/ld.elf_so" \
               || { echo "FAIL: $img did not pass the activation contract assertion"; exit 1; }
           done
           echo "PASS: all 5 OVMX boot images (STARTUP.EXE, PROVISION.EXE, DCL.EXE, JOB_CONTROL.EXE, LOGINOUT.EXE) cross-build, link, and activate via ld.elf_so for netbsd-vax"

@@ -42,7 +42,29 @@
  */
 #include "vmsfs_bio.h"
 
-#define VMSFS_MAGIC       0x564D5346  /* "VMSF" */
+#define VMSFS_MAGIC       0x564D5346  /* "VMSF" — structured (block-device) volume */
+
+/*
+ * VMSFS_OVERLAY_MAGIC — honest identity for a passthrough (overlay) mount.
+ *
+ * An overlay mount (backing=PATH) is a passthrough over a host POSIX
+ * directory: it has NO home block, NO storage bitmap, NO file headers, NO
+ * FIDs — none of the on-disk structured format exists (vms-1c9). It must not
+ * present the SAME statfs identity as a mastered structured volume, or a
+ * relabelled host directory becomes indistinguishable from a real vmsfs
+ * volume by the one field that names the filesystem.
+ *
+ * So overlay mounts report a DISTINCT magic. Both magics are OVMX-defined
+ * identifiers, not VMS ODS-2 constants (the real ODS-2 home-block signature
+ * is "DECFILE11B"; the VSI OpenVMS I/O User's Reference Manual and the
+ * "OpenVMS File System Internals" material publish no statfs-style facility
+ * identifier at all). Per Rule 8 this is OVMX's own honest representation,
+ * never presented as VMS-authentic — its whole purpose is to make the
+ * passthrough SAY it is a passthrough.
+ *
+ *   0x564D4F56 = bytes 0x56 0x4D 0x4F 0x56 = "VMOV" (VMs OVerlay)
+ */
+#define VMSFS_OVERLAY_MAGIC   0x564D4F56  /* "VMOV" — overlay passthrough */
 
 /* Mount modes */
 enum vmsfs_mode {

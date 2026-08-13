@@ -902,6 +902,146 @@ static int help_build_searchlist(struct dcl_context *ctx,
     return count;
 }
 
+/* ================================================================== */
+/*        HELP <-> Engine A CDU command tables (vms-01b)               */
+/* ================================================================== */
+/*
+ * Fold the per-command parameter/qualifier information carried by the Engine A
+ * command definitions (the CDU tables in dcl_builtin.c: struct dcl_verb with
+ * its NULL-terminated struct dcl_qual_def array) into the HELP library tree, so
+ * "HELP <verb>" surfaces EXACTLY the qualifiers the parser accepts instead of a
+ * hand-maintained -- and, as the HELPLIB drift shows, already stale -- string.
+ *
+ * Clean-room provenance (project Rule 8): the qualifier value-forms rendered
+ * below ("/QUAL", "/QUAL=value", "/QUAL=(value[,...])", "/QUAL=keyword", the
+ * "/[NO]QUAL" negatable form) are the documented DCL qualifier syntaxes from
+ * the public VSI OpenVMS DCL Dictionary per-command entries and the VSI OpenVMS
+ * Command Definition Utility Manual (the .CLD "qualifier" statement's VALUE(...)
+ * / NEGATABLE / DEFAULT attributes). The exact wording of the synthesized
+ * "Format:/Keywords:/Default:" body lines is an OVMX presentation choice,
+ * labeled as such -- no VMS byte/text layout is copied. The qualifier NAMES and
+ * value-types are not invented: they are read straight from the live command
+ * tables, which are themselves oracle-grounded (dcl_builtin.c).
+ *
+ * Only verbs that declare an explicit qualifier table are touched:
+ *   - a NON-EMPTY table  -> the verb's "Qualifiers" subtopic is (re)built from
+ *     the table, one "/NAME" key per qualifier; a verb absent from the library
+ *     gets a minimal node synthesized from its brief help so a defined command
+ *     still has authentic qualifier help.
+ *   - an EXPLICIT-EMPTY table (the verb honours no qualifier) -> any stale
+ *     "Qualifiers" listing is dropped, because listing qualifiers the parser
+ *     would reject with %DCL-W-IVQUAL is precisely the out-of-sync lie this
+ *     slice removes.
+ *   - verb->quals == NULL (legacy accept-all: SET/SHOW umbrellas, pure
+ *     delegators) -> left untouched; there is no authoritative CDU list to
+ *     derive, so the hand-authored library entry stands (INV-DCL: never fake a
+ *     definitive list we do not have).
+ */
+
+/* Render one qualifier's accepted-syntax token, e.g. "/[NO]DATE=keyword". */
+static void cdu_qual_format(const struct dcl_qual_def *q, char *out, size_t n)
+{
+    const char *valpart = "";
+    switch (q->vtype) {
+    case CDU_VT_NONE:    valpart = "";               break;
+    case CDU_VT_VALUE:   valpart = (q->qflags & CDU_Q_VALREQ) ? "=value"
+                                                              : "[=value]"; break;
+    case CDU_VT_LIST:    valpart = "=(value[,...])";  break;
+    case CDU_VT_KEYWORD: valpart = "=keyword";        break;
+    }
+    snprintf(out, n, "/%s%s%s",
+             (q->qflags & CDU_Q_NEGATABLE) ? "[NO]" : "", q->name, valpart);
+}
+
+/* Build the body text shown under "HELP <verb> QUALIFIERS /NAME". */
+static void cdu_qual_body(const struct dcl_qual_def *q, char *out, size_t n)
+{
+    char fmt[96];
+    cdu_qual_format(q, fmt, sizeof(fmt));
+
+    size_t o = 0;
+    int w;
+    w = snprintf(out + o, n - o, " Format: %s\n", fmt);
+    if (w > 0 && (size_t)w < n - o) o += (size_t)w;
+
+    if (q->vtype == CDU_VT_KEYWORD && q->keywords) {
+        w = snprintf(out + o, n - o, " Keywords:");
+        if (w > 0 && (size_t)w < n - o) o += (size_t)w;
+        for (int i = 0; q->keywords[i]; i++) {
+            w = snprintf(out + o, n - o, " %s", q->keywords[i]);
+            if (w > 0 && (size_t)w < n - o) o += (size_t)w;
+        }
+        w = snprintf(out + o, n - o, "\n");
+        if (w > 0 && (size_t)w < n - o) o += (size_t)w;
+    }
+    if (q->deflt) {
+        w = snprintf(out + o, n - o, " Default: %s\n", q->deflt);
+        if (w > 0 && (size_t)w < n - o) o += (size_t)w;
+    }
+    if (q->qflags & CDU_Q_DEFAULT) {
+        w = snprintf(out + o, n - o, " Enabled by default.\n");
+        if (w > 0 && (size_t)w < n - o) o += (size_t)w;
+    }
+}
+
+/* Graft the Engine A CDU qualifier tables onto an open HELP library. */
+static void dcl_help_apply_cdu(help_lib_t *lib)
+{
+    if (!lib) return;
+
+    int nverbs = 0;
+    const struct dcl_verb *tbl = dcl_get_verb_table(&nverbs);
+    if (!tbl) return;
+
+    for (int i = 0; i < nverbs; i++) {
+        const struct dcl_verb *v = &tbl[i];
+        if (!v->name || !v->quals)
+            continue; /* legacy accept-all: no authoritative CDU list */
+
+        int has_quals = (v->quals[0].name != NULL);
+
+        const char *p1[1] = { v->name };
+        help_node_t *vnode = help_find(lib, p1, 1);
+
+        if (!has_quals) {
+            /* Command honours no qualifier: drop any stale listing. */
+            if (vnode) {
+                help_node_t *qn = help_node_find_child(vnode, "Qualifiers");
+                if (qn) help_node_remove_child(vnode, qn);
+            }
+            continue;
+        }
+
+        if (!vnode) {
+            /* Verb not documented in the library: synthesize a minimal node
+             * from the CDU brief help so its qualifiers are still reachable. */
+            vnode = help_node_add_child(lib->root, 1, v->name);
+            if (!vnode) continue;
+            if (v->help && v->help[0]) {
+                char body[512];
+                snprintf(body, sizeof(body), " %s\n", v->help);
+                help_node_set_text(vnode, body);
+            }
+        }
+
+        help_node_t *qnode = help_node_find_child(vnode, "Qualifiers");
+        if (!qnode) qnode = help_node_add_child(vnode, 2, "Qualifiers");
+        if (!qnode) continue;
+
+        /* Authoritative rebuild: the table is the single source of truth. */
+        help_node_clear_children(qnode);
+        for (int j = 0; v->quals[j].name; j++) {
+            char key[80];
+            snprintf(key, sizeof(key), "/%s", v->quals[j].name);
+            help_node_t *qn = help_node_add_child(qnode, 3, key);
+            if (!qn) continue;
+            char body[256];
+            cdu_qual_body(&v->quals[j], body, sizeof(body));
+            help_node_set_text(qn, body);
+        }
+    }
+}
+
 /*
  * HELP - hierarchical topic help, read from the HELP library (vms-01b).
  *
@@ -909,6 +1049,8 @@ static int help_build_searchlist(struct dcl_context *ctx,
  * -- "HELP", "HELP topic", "HELP topic subtopic ...", the "Additional
  * information available:" subtopic listing, and (interactively) the
  * "Topic?" / "<path> Subtopic?" prompt loop.  No topic content is hardcoded.
+ * Before rendering, the Engine A CDU command tables are folded in
+ * (dcl_help_apply_cdu) so per-command qualifiers track the accepted syntax.
  */
 int cmd_help(struct dcl_command *cmd)
 {
@@ -934,12 +1076,36 @@ int cmd_help(struct dcl_command *cmd)
         return SS$_NOSUCHFILE;
     }
 
+    /* Fold the Engine A CDU command tables in: per-command qualifiers now
+     * track the actually-accepted syntax instead of a hand-maintained string. */
+    dcl_help_apply_cdu(lib);
+
     /* Gather the requested topic path from the positional parameters. */
     const char *path[DCL_MAX_PARAMS];
     int npath = 0;
     for (int i = 0; i < cmd->param_count && npath < DCL_MAX_PARAMS; i++) {
         if (cmd->params[i][0] != '\0')
             path[npath++] = cmd->params[i];
+    }
+
+    /*
+     * A slash token after HELP (e.g. "HELP DIRECTORY QUALIFIERS /EXCLUDE") is a
+     * command-qualifier TOPIC, not a HELP qualifier -- VMS HELP looks it up as
+     * the next topic-path component. DCL has already split those into
+     * cmd->qualifiers (HELP is accept-all, so they are not IVQUAL'd); fold them
+     * back onto the end of the topic path as "/NAME" keys, matching how the CDU
+     * tables key qualifier subtopics. DCL loses the params/qualifiers
+     * interleaving, so they land after the positional topics -- correct for the
+     * usual "HELP verb [subtopic] /qual" form. */
+    static char qual_key[32][72];
+    for (int i = 0; i < cmd->qualifier_count && npath < DCL_MAX_PARAMS &&
+                    i < 32; i++) {
+        if (cmd->qualifiers[i].name[0] == '\0')
+            continue;
+        snprintf(qual_key[i], sizeof(qual_key[i]), "/%s%s",
+                 cmd->qualifiers[i].negated ? "NO" : "",
+                 cmd->qualifiers[i].name);
+        path[npath++] = qual_key[i];
     }
 
     int status;

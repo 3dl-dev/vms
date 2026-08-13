@@ -84,6 +84,32 @@ void help_close(help_lib_t *lib);
  * any component cannot be resolved. path may be NULL when n == 0. */
 help_node_t *help_find(help_lib_t *lib, const char *const path[], int n);
 
+/* ---- Node mutation (content injection) ---------------------------------- */
+/* These let a caller graft content onto an open library tree without any
+ * DCL/libvms dependency in the engine -- the seam the DCL built-in HELP uses
+ * to fold the Engine A CDU command tables in (per-command qualifiers) so the
+ * help stays in sync with the actually-accepted syntax (vms-01b). */
+
+/* Return the immediate child of `parent` matching `name` (exact match preferred,
+ * else the first case-insensitive prefix match, exactly as topic lookup), or
+ * NULL. */
+help_node_t *help_node_find_child(help_node_t *parent, const char *name);
+
+/* Append a new child key `name` at `level` under `parent`; returns it, or NULL
+ * on bad args / OOM. */
+help_node_t *help_node_add_child(help_node_t *parent, int level,
+                                 const char *name);
+
+/* Replace a node's body text (NULL/empty clears it). Stored verbatim, so the
+ * caller supplies its own line layout (leading space, trailing newlines). */
+void help_node_set_text(help_node_t *node, const char *text);
+
+/* Free and detach all children of `node` (the node itself is kept). */
+void help_node_clear_children(help_node_t *node);
+
+/* Detach `child` from `parent`'s child list and free its subtree. */
+void help_node_remove_child(help_node_t *parent, help_node_t *child);
+
 /* Print the top-level "Information available:" topic listing. */
 void help_show_toplevel(help_lib_t *lib, FILE *out);
 

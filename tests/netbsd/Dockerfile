@@ -40,6 +40,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         gzip \
         cpio \
+        gcc \
+        libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # anita is pinned (see tests/netbsd/netbsd_version.env). It is NOT the unrelated
@@ -103,9 +105,44 @@ COPY tests/netbsd/run_p2b.sh                 /netbsd/run_p2b.sh
 COPY tests/netbsd/drive_netbsd_p2c.py        /netbsd/drive_netbsd_p2c.py
 COPY tests/netbsd/run_p2c.sh                 /netbsd/run_p2c.sh
 
+# P4-VFS V4 (rd vms-308): the OVMX/NetBSD ODS-2 vnode/VFS backend mount+read
+# proof. Staged as FOUR in-guest dirs (bundled into an ISO by the driver and
+# built in-guest) plus a HOST-side master dir (mkimage_vmsfs is compiled + run
+# on the host to master the ODS-2 volume attached as wd1).
+#   kmod/        : the NetBSD ODS-2 vnode backend (vmsfs_vfsops.c) + its headers
+#   kernel-core/ : the SHARED substrate-neutral ODS-2 core (SAME sources the
+#                  Linux vmsfs.ko builds) + the shim/seam contracts
+#   ondisk/      : vmsfs_ondisk.h (lives beside the Linux glue; -I../ondisk)
+#   tool/        : the in-guest mount(2) helper
+# --- kmod/: the NetBSD ODS-2 vnode backend glue + headers + Makefile ---
+COPY src/kernel-netbsd/vmsfs/vmsfs_vfsops.c          /netbsd/guest-vmsfs/kmod/vmsfs_vfsops.c
+COPY src/kernel-netbsd/vmsfs/vmsfs_nb.h              /netbsd/guest-vmsfs/kmod/vmsfs_nb.h
+COPY src/kernel-netbsd/vmsfs/vmsfs_backend_netbsd.h  /netbsd/guest-vmsfs/kmod/vmsfs_backend_netbsd.h
+COPY src/kernel-netbsd/vmsfs/Makefile                /netbsd/guest-vmsfs/kmod/Makefile
+# --- kernel-core/: the shared, substrate-agnostic ODS-2 core + shim contracts ---
+COPY src/kernel-core/vmsfs/vmsfs_version.c   /netbsd/guest-vmsfs/kernel-core/vmsfs_version.c
+COPY src/kernel-core/vmsfs/vmsfs_map.c       /netbsd/guest-vmsfs/kernel-core/vmsfs_map.c
+COPY src/kernel-core/vmsfs/vmsfs_name.c      /netbsd/guest-vmsfs/kernel-core/vmsfs_name.c
+COPY src/kernel-core/vmsfs/vmsfs_header.c    /netbsd/guest-vmsfs/kernel-core/vmsfs_header.c
+COPY src/kernel-core/vmsfs/vmsfs_alloc.c     /netbsd/guest-vmsfs/kernel-core/vmsfs_alloc.c
+COPY src/kernel-core/vmsfs/vmsfs_dirscan.c   /netbsd/guest-vmsfs/kernel-core/vmsfs_dirscan.c
+COPY src/kernel-core/vmsfs/vmsfs_bio.h       /netbsd/guest-vmsfs/kernel-core/vmsfs_bio.h
+COPY src/kernel-core/vmsfs/vmsfs_core.h      /netbsd/guest-vmsfs/kernel-core/vmsfs_core.h
+COPY src/kernel-core/vmsfs/vmsfs_backend.h   /netbsd/guest-vmsfs/kernel-core/vmsfs_backend.h
+# --- ondisk/: the on-disk format header (physically beside the Linux glue) ---
+COPY src/kernel/vmsfs/vmsfs_ondisk.h         /netbsd/guest-vmsfs/ondisk/vmsfs_ondisk.h
+# --- tool/: the in-guest mount(2) helper ---
+COPY tests/netbsd/guest/vmsfs_mount.c        /netbsd/guest-vmsfs/tool/vmsfs_mount.c
+# --- HOST-side ODS-2 mastering (compiled + run on the host, not in-guest) ---
+COPY tests/qemu/mkimage_vmsfs.c              /netbsd/vmsfs-master/mkimage_vmsfs.c
+COPY src/kernel/vmsfs/vmsfs_ondisk.h         /netbsd/vmsfs-master/vmsfs_ondisk.h
+COPY tests/netbsd/drive_netbsd_vmsfs.py      /netbsd/drive_netbsd_vmsfs.py
+COPY tests/netbsd/run_vmsfs.sh               /netbsd/run_vmsfs.sh
+
 RUN chmod +x /netbsd/run_tests.sh /netbsd/drive_netbsd.py \
              /netbsd/run_p2b.sh /netbsd/drive_netbsd_p2b.py \
-             /netbsd/run_p2c.sh /netbsd/drive_netbsd_p2c.py
+             /netbsd/run_p2c.sh /netbsd/drive_netbsd_p2c.py \
+             /netbsd/run_vmsfs.sh /netbsd/drive_netbsd_vmsfs.py
 
 # The installed NetBSD image + download mirror live under /cache so they persist
 # across runs when a cache volume is mounted there (the cold-install cost is

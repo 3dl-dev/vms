@@ -148,6 +148,7 @@ jobs:
               - 'tests/netbsd/**'
               - 'src/kernel-netbsd/**'
               - 'src/kernel-core/**'
+              - 'src/kernel/vmsfs/vmsfs_ondisk.h'
               - 'src/libvmssys/kif_transport.h'
               - 'src/libvmssys/kif_transport_netbsd.c'
             netbsd_vax:
@@ -1642,6 +1643,64 @@ jobs:
         run: OVMX_REPO="$PWD" NBSRC="$PWD/.netbsd-src" CC=clang CROSSCOMPILE_NEGCTL=1 bash tests/netbsd/crosscompile.sh
 
   # -----------------------------------------------------------------------
+  # Job: NetBSD/amd64 vmsfs module cross-compiles (rd vms-308, P4-VFS V4). THE
+  # PER-PR NetBSD GATE for the ODS-2 vnode/VFS backend -- BUILD ONLY, no QEMU, no
+  # console, no boot, ~1-2 min. It cross-compiles the ODS-2 vnode module
+  # (src/kernel-netbsd/vmsfs/) + the SHARED substrate-neutral ODS-2 core
+  # (src/kernel-core/vmsfs/*.c) against the pinned NetBSD/amd64 kernel headers
+  # with clang -target x86_64-unknown-netbsd, and relocatable-links them. The
+  # ODS-2 logic is byte-identical to the Linux vmsfs.ko side (it IS the same core
+  # sources), so what a PR must catch is a NetBSD-backend / header-API DRIFT that
+  # breaks the NetBSD vmsfs build -- a pure compile+link question. The full "does
+  # it mount + read on NetBSD" proof runs NIGHTLY (schedule/dispatch) under
+  # QEMU-TCG (netbsd-amd64-vmsfs-mount), never on a per-PR runner. This is the
+  # ODS-2 sibling of netbsd-amd64-vms-crosscompile (the executive module gate),
+  # and reuses the SAME cached NetBSD syssrc.
+  netbsd-amd64-vmsfs-crosscompile:
+    name: NetBSD/amd64 vmsfs module cross-compiles
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang (NetBSD cross target)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends clang
+
+      # Same cache + key as the executive cross-compile job (netbsd_version.env
+      # pins the release); a source change never re-downloads the headers.
+      - name: Cache NetBSD kernel sources (syssrc)
+        uses: actions/cache@v4
+        with:
+          path: .netbsd-src
+          key: netbsd-src-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-src-
+
+      - name: Fetch + verify + extract NetBSD syssrc (kernel headers) if not cached
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . tests/netbsd/netbsd_version.env
+          if [ ! -d .netbsd-src/usr/src/sys ]; then
+            mkdir -p .netbsd-src
+            curl -sSL -o /tmp/syssrc.tgz "$NETBSD_SYSSRC_URL"
+            echo "$NETBSD_SYSSRC_SHA512  /tmp/syssrc.tgz" | sha512sum -c -
+            tar xzf /tmp/syssrc.tgz -C .netbsd-src usr/src/sys usr/src/common
+          fi
+
+      - name: Cross-compile the vmsfs module + shared ODS-2 core (clang, NetBSD/amd64 kernel)
+        run: OVMX_REPO="$PWD" NBSRC="$PWD/.netbsd-src" CC=clang bash tests/netbsd/crosscompile-vmsfs.sh
+
+      - name: NEGATIVE CONTROL — a deliberately-broken TU must fail the cross-compile
+        run: OVMX_REPO="$PWD" NBSRC="$PWD/.netbsd-src" CC=clang CROSSCOMPILE_NEGCTL=1 bash tests/netbsd/crosscompile-vmsfs.sh
+
+  # -----------------------------------------------------------------------
   # Job: PRIME the shared NetBSD install cache (rd vms-2d9). THE KEYSTONE of
   # reliable NetBSD CI. This job runs FIRST and ALONE and is the ONLY writer of
   # the shared installed-disk cache: it restores the shared image if present, or
@@ -2055,6 +2114,111 @@ jobs:
           echo "$OUTPUT" | grep -qF "the cross-process shared-kernel-state proof did not hold" \
             || { echo "FAIL: nonzero exit but not the expected missing-set reason -- negative control may have failed for an unrelated cause"; exit 1; }
           echo "PASS: harness correctly went RED when the flag was never set -- the cross-process proof has teeth"
+
+  # -----------------------------------------------------------------------
+  # Job 3b-netbsd-vmsfs: OVMX/NetBSD ODS-2 mount+read (vms-308, epic vms-8e8
+  # P4-VFS V4)
+  #
+  # THE PHASE THAT PROVES THE SHARED ODS-2 CORE MOUNTS + READS ON NETBSD. Builds
+  # the harness image, masters an OVMX ODS-2 volume with tests/qemu/mkimage_vmsfs
+  # (the SAME tool + image the Linux vmsfs.ko block-device test uses), boots the
+  # cached NetBSD/amd64 guest (comp + syssrc) with that volume attached as wd1,
+  # and:
+  #   - builds the OVMX/NetBSD ODS-2 vnode module, which compiles the SAME
+  #     src/kernel-core/vmsfs/*.c the Linux vmsfs.ko builds -- with the NetBSD
+  #     backend (vmsfs_backend_netbsd.h). There is NO NetBSD copy of the ODS-2
+  #     logic; the one core mounts + reads on both substrates,
+  #   - NEGATIVE CONTROL: attempts the mount with the module NOT loaded -> the
+  #     mount(2) must fail (no vmsfs type), never appear to succeed,
+  #   - modloads the module, mounts /dev/wd1d READ-ONLY, lists the directory
+  #     (VOP_READDIR) asserting HELLO.TXT;1 appears, and reads HELLO.TXT
+  #     (VOP_LOOKUP -> VOP_READ) asserting its known content byte-for-byte.
+  #
+  # GATING: NIGHTLY (schedule) + manual (workflow_dispatch) ONLY -- NOT per-PR,
+  # exactly like the executive P2c cross-process proof (rd vms-2d9). Booting a
+  # NetBSD guest under TCG on a KVM-less GitHub runner is too slow/variable for a
+  # per-PR gate; the per-PR NetBSD vmsfs gate is the fast QEMU-free cross-compile
+  # (netbsd-amd64-vmsfs-crosscompile). It uses the SAME shared prime cache and
+  # deterministic console as the executive jobs.
+  netbsd-amd64-vmsfs-mount:
+    name: NetBSD/amd64 ODS-2 Mount + Read (QEMU)
+    needs: [changes, netbsd-amd64-prime-cache]
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore shared NetBSD image (version-keyed, restore-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-amd64-install-
+          fail-on-cache-miss: false
+
+      - name: Build NetBSD harness image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/netbsd/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-netbsd-ktest:latest
+          cache-from: type=gha,scope=netbsd-harness
+          cache-to: type=gha,mode=max,scope=netbsd-harness
+
+      - name: Master an ODS-2 volume; build + modload the vnode module; mount + read
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache"
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  --entrypoint /netbsd/run_vmsfs.sh \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: NetBSD/amd64 ODS-2 mount harness exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "OK (negctl): with no module loaded the ODS-2 mount FAILED" \
+            || { echo "FAIL: did not see the module-absent mount-fails negative control"; exit 1; }
+          echo "$OUTPUT" | grep -qF "OK (readdir): HELLO.TXT;1 appears" \
+            || { echo "FAIL: did not see the VOP_READDIR directory-listing proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF "OK (read): HELLO.TXT read back the expected content" \
+            || { echo "FAIL: did not see the VOP_READ content proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF 'NetBSD/amd64 ODS-2 mount HARNESS PASSED' \
+            || { echo "FAIL: harness did not report its own PASSED banner"; exit 1; }
+          echo "PASS: the SAME src/kernel-core/vmsfs core, compiled with the NetBSD backend, mounted + read an OVMX ODS-2 volume on NetBSD"
+
+      - name: NEGATIVE CONTROL — skipping modload must redden the mount+read proof
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  --entrypoint /netbsd/run_vmsfs.sh \
+                  -e VMSFS_SKIP_MODLOAD=1 \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -eq 0 ]; then
+            echo "FAIL: harness exited 0 with the module never loaded -- the mount+read proof has no teeth."
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "the mount+read assertions below must go RED" \
+            || { echo "FAIL: nonzero exit but not the expected skip-modload reason -- negative control may have failed for an unrelated cause"; exit 1; }
+          echo "PASS: harness correctly went RED when the module was not loaded -- the mount+read proof has teeth"
 
   # -----------------------------------------------------------------------
   # Job 3d: Kernel Executive — per-facility negative controls (vms-e7d)

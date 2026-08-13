@@ -111,6 +111,109 @@ RUN set -e; \
     readelf -l "$P" 2>/dev/null | grep -q INTERP || { echo "FAIL: PARTS.EXE has no PT_INTERP (not IMGACT-activated)"; exit 1; }; \
     echo "OK: PARTS.EXE is VMS-native (EM_X86_64, zero DT_NEEDED/DT_HASH, PT_INTERP present)"
 
+# -- kernel-build stage ----------------------------------------------------
+# Builds the OVMX bootable kernel FROM PINNED UPSTREAM SOURCE (vms-448, parent
+# vms-19e "owns-kernel"), replacing the old `apt install linux-image-generic +
+# copy stock vmlinuz` path. That path made the shipped kernel = whatever apt
+# happened to resolve; this one pins an exact upstream LTS tarball verified by
+# SHA-256 so the kernel is reproducible and ours.
+#
+# PINNED: linux-6.12.103 (kernel.org "longterm"/LTS; 6.12 is the LTS floor the
+# vms-448 item names). Bump KERNEL_VERSION + KERNEL_SHA256 together to move it
+# -- never float the version.
+#   Integrity: KERNEL_SHA256 is the tarball's sha256 as published in the
+#   PGP-signed https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc
+#   (cross-checked against a live download of the tarball).
+#
+#   WHY 6.12 AND NOT THE NEWEST LTS (6.18): vmsfs.ko is written against the
+#   pre-6.14 VFS mount surface -- super_block.s_d_op (replaced by
+#   set_default_d_op() in 6.14) and mount_bdev()/mount_nodev() (removed for the
+#   fs_context get_tree_* API in 6.14). vms.ko builds clean on 6.18, but vmsfs.ko
+#   does not; porting it to the modern mount API is real, separate work tracked
+#   apart from this item (see PR). 6.12 LTS keeps BOTH modules building unchanged
+#   while still giving us a pinned, from-source, reproducible kernel -- which is
+#   what vms-448 is actually about. Advancing the floor is gated on that port.
+#
+# This is BUILD tooling, not a runtime (CLAUDE.md Rule 9): the kernel-build
+# deps live only in this container stage; NOTHING is installed on the host.
+FROM ubuntu:24.04 AS kernel-build
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+ARG KERNEL_VERSION=6.12.103
+ARG KERNEL_SHA256=f143aaade8877ba5616e788b4482576db28481bcf557ef537f4fcc3938fc3176
+
+# Reproducible-build clock (vms-d73). The bootable vmlinuz produced here is one
+# of the four artifacts the cut-release-reproducible gate cmps byte-for-byte
+# across two independent --no-cache cuts. A stock kernel build embeds the
+# wall-clock build time + build user/host into the image (UTS_VERSION), so two
+# builds differ. cut-release.sh passes the commit's own timestamp as
+# SOURCE_DATE_EPOCH to every stage; we derive KBUILD_BUILD_TIMESTAMP from it and
+# fix KBUILD_BUILD_USER/HOST, so both cuts embed identical strings. Default 0
+# (Unix epoch) for ordinary builds (boot.sh) -- still deterministic.
+ARG SOURCE_DATE_EPOCH=0
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc make bc bison flex libssl-dev libelf-dev \
+    xz-utils curl ca-certificates kmod cpio \
+    && rm -rf /var/lib/apt/lists/*
+
+# Fetch + integrity-verify + unpack the pinned source. The build FAILS closed
+# if the sha256 does not match -- no unpinned/tampered source ever compiles.
+WORKDIR /usr/src
+RUN KMAJ=$(echo "$KERNEL_VERSION" | cut -d. -f1) && \
+    curl -fsSL -o linux.tar.xz \
+      "https://cdn.kernel.org/pub/linux/kernel/v${KMAJ}.x/linux-${KERNEL_VERSION}.tar.xz" && \
+    echo "${KERNEL_SHA256}  linux.tar.xz" | sha256sum -c - && \
+    tar -xf linux.tar.xz && \
+    rm linux.tar.xz && \
+    ln -s "linux-${KERNEL_VERSION}" linux
+
+WORKDIR /usr/src/linux
+
+# Curated config: x86_64 defconfig + the OVMX boot fragment, reconciled with
+# olddefconfig. The fragment (distro/kernel/ovmx-x86_64.config) is the
+# single source of the OVMX-required option set; see its header.
+COPY distro/kernel/ovmx-x86_64.config /tmp/ovmx-x86_64.config
+RUN make ARCH=x86_64 defconfig && \
+    ./scripts/kconfig/merge_config.sh -m .config /tmp/ovmx-x86_64.config && \
+    make ARCH=x86_64 olddefconfig
+
+# Hard gate: every load-bearing option MUST be enabled as expected. A future
+# defconfig drift or a fragment typo that silently drops one of these would
+# otherwise only surface as a mystery boot hang -- fail the build instead.
+RUN set -e; \
+    need_y="CONFIG_SERIAL_8250_CONSOLE CONFIG_VIRTIO_PCI CONFIG_VIRTIO_BLK \
+            CONFIG_VIRTIO_NET CONFIG_DEVTMPFS CONFIG_TMPFS CONFIG_PROC_FS \
+            CONFIG_SYSFS CONFIG_BLK_DEV_INITRD CONFIG_RD_GZIP CONFIG_MODULES \
+            CONFIG_BINFMT_ELF CONFIG_EXT4_FS"; \
+    for opt in $need_y; do \
+        grep -q "^${opt}=y$" .config || { echo "FAIL: ${opt} not =y in built kernel .config"; exit 1; }; \
+    done; \
+    if grep -q "^CONFIG_MODULE_SIG_FORCE=y$" .config; then \
+        echo "FAIL: CONFIG_MODULE_SIG_FORCE=y would reject unsigned vms.ko/vmsfs.ko"; exit 1; \
+    fi; \
+    echo "OK: OVMX kernel .config carries every load-bearing option"
+
+# Build the bzImage + in-tree modules. Record the exact kernelrelease string
+# (e.g. 6.12.103-ovmx) so downstream stages name modules/headers consistently.
+#
+# Reproducibility (vms-d73): fix the three build-identity strings the kernel
+# would otherwise stamp from the environment. KBUILD_BUILD_TIMESTAMP comes from
+# SOURCE_DATE_EPOCH (deterministic given the commit); USER/HOST are constants.
+# The build number (#1) is deterministic here because --no-cache always builds
+# from a fresh tree (.version starts at 1). Struct-layout randomization stays
+# off (the config fragment keeps CONFIG_RANDSTRUCT_NONE) so there is no
+# per-build seed; module signing is off (fragment) so there is no random key.
+RUN export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}")" && \
+    export KBUILD_BUILD_USER=ovmx KBUILD_BUILD_HOST=ovmx && \
+    make ARCH=x86_64 -j"$(nproc)" bzImage modules && \
+    mkdir -p /kernel-out && \
+    cp arch/x86/boot/bzImage /kernel-out/vmlinuz && \
+    make -s ARCH=x86_64 kernelrelease > /kernel-out/kernelrelease && \
+    echo "Built OVMX kernel: $(cat /kernel-out/kernelrelease), bzImage $(ls -lh /kernel-out/vmlinuz | awk '{print $5}'), TS=$KBUILD_BUILD_TIMESTAMP"
+
 FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -128,11 +231,26 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG SOURCE_DATE_EPOCH=0
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
+# NB: NO linux-headers-generic / linux-image-generic here anymore (vms-448).
+# The kernel + its build tree now come from the kernel-build stage above
+# (pinned upstream source), not from apt. linux-libc-dev stays -- it only
+# supplies the UAPI headers musl-gcc needs for the userspace build below.
+# libelf1: the from-source kernel's objtool (copied in the built tree below)
+# is dynamically linked against libelf.so.1 and runs during the external
+# module build -- without it the vms.ko/vmsfs.ko compile dies with
+# "libelf.so.1: cannot open shared object file". (The stock-kernel path used to
+# get libelf transitively via linux-headers-generic, now dropped.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake gcc make musl-tools linux-libc-dev \
-    linux-headers-generic linux-image-generic \
-    kmod cpio binutils \
+    kmod cpio binutils libelf1 \
     && rm -rf /var/lib/apt/lists/*
+
+# The from-source OVMX kernel (vms-448): its built tree (for external module
+# builds) + the bzImage that becomes the bootable vmlinuz + the exact
+# kernelrelease string. Replaces the stock Ubuntu vmlinuz entirely.
+COPY --from=kernel-build /usr/src/linux-*/ /usr/src/ovmx-kernel/
+COPY --from=kernel-build /kernel-out/vmlinuz /boot/vmlinuz
+COPY --from=kernel-build /kernel-out/kernelrelease /tmp/kver
 
 # VMS-native LINK.EXE shareable graph (DCL.EXE, LOGINOUT.EXE, the 7
 # shareables) + IMGACT.EXE, built by the link-native stage above.
@@ -141,13 +259,13 @@ COPY --from=link-native /tmp/build/link-native/SYSEXE /link-native/SYSEXE
 COPY --from=link-native /src/src/imgact/IMGACT.EXE /link-native/IMGACT.EXE
 COPY --from=link-native /tmp/build/link-native/PARTS.EXE /link-native/PARTS.EXE
 
-# Determine kernel version and ensure build symlink exists
-RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && echo "$KVER" > /tmp/kver && \
-    if [ ! -d "/lib/modules/${KVER}/build" ]; then \
-        echo "Build dir missing for $KVER, installing headers..." && \
-        apt-get update -qq && apt-get install -y --no-install-recommends \
-            linux-headers-${KVER} && rm -rf /var/lib/apt/lists/*; \
-    fi
+# KVER is the from-source kernel's kernelrelease (copied from kernel-build as
+# /tmp/kver above, e.g. 6.18.44-ovmx). The build tree lives at
+# /usr/src/ovmx-kernel; expose it at the conventional /lib/modules/<ver>/build
+# path so the module Makefiles' default KDIR resolves too.
+RUN KVER=$(cat /tmp/kver) && \
+    mkdir -p "/lib/modules/${KVER}" && \
+    ln -sf /usr/src/ovmx-kernel "/lib/modules/${KVER}/build"
 
 # Make kernel UAPI headers available to musl-gcc
 # musl doesn't ship linux/ or asm/ headers — symlink from linux-libc-dev
@@ -160,10 +278,18 @@ RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
 WORKDIR /src
 COPY . .
 
-# Build kernel modules against the stock Ubuntu kernel
+# Build kernel modules against the from-source OVMX kernel (vms-448). They
+# must build AND carry a vermagic that matches this kernel, or finit_module()
+# rejects them at boot -- assert that here rather than discover it in QEMU.
 RUN KVER=$(cat /tmp/kver) && \
-    cd src/kernel && make KDIR=/lib/modules/${KVER}/build 2>&1 && \
-    cd vmsfs && make KDIR=/lib/modules/${KVER}/build 2>&1
+    cd src/kernel && make KDIR=/usr/src/ovmx-kernel 2>&1 && \
+    cd vmsfs && make KDIR=/usr/src/ovmx-kernel 2>&1 && \
+    cd /src && \
+    for ko in src/kernel/vms.ko src/kernel/vmsfs/vmsfs.ko; do \
+        vm=$(modinfo -F vermagic "$ko" | awk '{print $1}'); \
+        [ "$vm" = "$KVER" ] || { echo "FAIL: $ko vermagic '$vm' != kernel '$KVER'"; exit 1; }; \
+    done && \
+    echo "OK: vms.ko + vmsfs.ko built against OVMX kernel $KVER (vermagic matches)"
 
 # Build OVMX userspace — static musl (no glibc dependency)
 RUN cmake -B build-static \
@@ -656,11 +782,14 @@ RUN cp -a /initramfs-slim /initramfs-nodev && \
     cd /initramfs-nodev && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx-nodev.cpio.gz && \
     echo "NODEV initramfs: $(ls -lh /boot/initramfs-ovmx-nodev.cpio.gz | awk '{print $5}')"
 
-# Ensure vmlinuz symlink exists
-RUN KVER=$(cat /tmp/kver) && \
-    if [ ! -e /boot/vmlinuz ]; then \
-        ln -s vmlinuz-${KVER} /boot/vmlinuz; \
-    fi
+# The bootable vmlinuz is the from-source OVMX bzImage, already copied to
+# /boot/vmlinuz from the kernel-build stage (vms-448) -- no stock-kernel
+# symlink to reconstruct anymore. Assert it is present and is a real kernel
+# image so the runner stage never COPYs a missing/empty file.
+# Every x86 bzImage carries the "HdrS" setup-header magic at offset 0x202.
+RUN test -s /boot/vmlinuz && \
+    [ "$(dd if=/boot/vmlinuz bs=1 skip=514 count=4 2>/dev/null)" = "HdrS" ] && \
+    echo "OVMX vmlinuz present: $(ls -lh /boot/vmlinuz | awk '{print $5}'), kernel $(cat /tmp/kver)"
 
 # -- Runner stage --------------------------------------------------------------
 # Minimal image with just QEMU and boot artifacts. `expect` is test tooling,

@@ -111,11 +111,57 @@ vms_proc_get(pid_t pid)
 	exec_lock_init(&np->ef.lock);
 	exec_cv_init(&np->ef.waitq);
 
+	/*
+	 * Access-mode + AST state (P4-A). The zeroed allocation gives image_active=0
+	 * and count=0; the rest must be brought up explicitly before the proc is
+	 * visible. This mirrors src/kernel/vms_module.c's proc registration:
+	 *   - current_mode starts at PSL_C_USER (a fresh process runs in user mode;
+	 *     0 == PSL_C_KERNEL would be wrong, and zalloc gives 0).
+	 *   - the authorized/current privilege masks are DERIVED, not requested:
+	 *     exec_current_is_privileged() is the NetBSD kauth(9) twin of Linux
+	 *     capable(CAP_SYS_ADMIN) (a real credential read, not an asserted word),
+	 *     and a privileged caller is seeded exactly the privileges vms_access.c/
+	 *     vms_ast.c ENFORCE (CMKRNL/CMEXEC/SETPRV) so the access-mode proofs can
+	 *     exercise both the allow and deny paths; an unprivileged caller gets
+	 *     none. Broader SYSUAF privileges arrive later via $SETIDENT (proctab,
+	 *     P4-B), never conjured here. This seed is an OVMX glue choice (Rule 8),
+	 *     not a VMS-authentic value -- /dev/vms has no VMS counterpart.
+	 *   - each per-mode AST queue is enabled by default (Linux vms_module.c) with
+	 *     an empty (self-linked) pending ring and its own guard.
+	 *   - the hibernate cv + its paired lock back async AST delivery (vms-feb).
+	 */
+	np->current_mode = PSL_C_USER;
+	np->perm_privs = exec_current_is_privileged()
+	               ? (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | VMS_PRV_M_SETPRV)
+	               : 0;
+	np->cur_privs = np->perm_privs;
+	exec_lock_init(&np->mode_lock);
+	{
+		int m;
+		for (m = 0; m < 4; m++) {
+			exec_list_head_init(&np->ast[m].pending);
+			np->ast[m].count = 0;
+			np->ast[m].enabled = 1;
+			exec_lock_init(&np->ast[m].lock);
+		}
+	}
+	exec_cv_init(&np->hiber_wq);
+	exec_lock_init(&np->hiber_lock);
+
 	exec_lock(&vms_proctab_lock);
 	for (p = vms_proctab; p != NULL; p = p->next) {
 		if (p->pid == pid) {
-			/* Lost the race: use the existing proc, drop ours. */
+			/* Lost the race: use the existing proc, drop ours. Its AST
+			 * pending rings are still empty (just created), so only the sync
+			 * objects need tearing down before the free -- a live kmutex/
+			 * kcondvar must be destroyed on NetBSD. */
+			int m;
 			exec_unlock(&vms_proctab_lock);
+			exec_cv_destroy(&np->hiber_wq);
+			exec_lock_destroy(&np->hiber_lock);
+			for (m = 0; m < 4; m++)
+				exec_lock_destroy(&np->ast[m].lock);
+			exec_lock_destroy(&np->mode_lock);
 			exec_cv_destroy(&np->ef.waitq);
 			exec_lock_destroy(&np->ef.lock);
 			exec_free(np);
@@ -146,12 +192,48 @@ vms_proctab_teardown(void)
 	exec_unlock(&vms_proctab_lock);
 
 	while (p != NULL) {
+		int m;
 		np = p->next;
+		/* Free any AST entries still queued at unload (all four modes: min
+		 * PSL_C_KERNEL == 0), then tear down each mode's guard and the
+		 * access/hibernate sync objects. In the harness every process has
+		 * closed the device and no wait is in flight, so this is unraced. */
+		vms_proc_rundown_asts(p, PSL_C_KERNEL);
+		exec_cv_destroy(&p->hiber_wq);
+		exec_lock_destroy(&p->hiber_lock);
+		for (m = 0; m < 4; m++)
+			exec_lock_destroy(&p->ast[m].lock);
+		exec_lock_destroy(&p->mode_lock);
 		exec_cv_destroy(&p->ef.waitq);
 		exec_lock_destroy(&p->ef.lock);
 		exec_free(p);
 		p = np;
 	}
+}
+
+/* ================================================================
+ * Cross-facility image-rundown stubs (P4-A).
+ *
+ * vms_ioctl_image_rundown() (src/kernel-core/vms_access.c) releases the image's
+ * locks, channels and ASTs at rundown by calling three per-facility helpers.
+ * On this NetBSD build only the AST facility is present, so vms_proc_rundown_asts
+ * is DEFINED (vms_ast.c) and linked; vms_proc_rundown_locks (vms_lock.c, rd
+ * vms-ff7) and vms_proc_rundown_channels (vms_mbx.c, rd vms-d7a) are not yet in
+ * this module's SRCS. These WEAK no-op definitions keep the module link-coherent
+ * and loadable until then, and are OVERRIDDEN by the real (strong) facility
+ * definitions the moment vms_lock.c / vms_mbx.c join the build -- no edit here
+ * needed when they land. This fabricates nothing (INV-6 / Rule 11): a substrate
+ * with no lock or channel facility genuinely has no such resources to run down,
+ * so running down nothing is the honest result, not a faked success.
+ * ================================================================ */
+__attribute__((weak)) void
+vms_proc_rundown_locks(struct vms_proc *proc __unused, uint8_t min_acmode __unused)
+{
+}
+
+__attribute__((weak)) void
+vms_proc_rundown_channels(struct vms_proc *proc __unused, uint8_t min_acmode __unused)
+{
 }
 
 /* ================================================================
@@ -218,6 +300,11 @@ vms_facility_errno(long r)
 		return EFAULT;
 	if (r == -ERESTARTSYS)
 		return ERESTART;
+	/* DELIVERAST returns -EAGAIN when no AST is deliverable at the caller's
+	 * mode; userspace's deliver loop keys on EAGAIN to stop draining, so it
+	 * must survive the mapping rather than collapse to EINVAL. */
+	if (r == -EAGAIN)
+		return EAGAIN;
 	return EINVAL;
 }
 
@@ -292,6 +379,64 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_dacefc(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_DLCEFC:
 			r = vms_ioctl_dlcefc(proc, (unsigned long)uarg); break;
+		default:
+			return ENOTTY;   /* unreachable */
+		}
+		return vms_facility_errno(r);
+
+	/*
+	 * AST facility (src/kernel-core/vms_ast.c) and access-mode facility
+	 * (src/kernel-core/vms_access.c) -- P4-A. Same dispatch shape as event
+	 * flags: find-or-create the caller's proc, hand the framework's kernel
+	 * buffer `data' straight to the shared facility, map its Linux-style
+	 * return to a NetBSD errno. Nothing here interprets the argument.
+	 *
+	 * DIRECTION / COPY (see vms_ast_nb.h): the request numbers carry the SAME
+	 * direction class as vms_ioctl.h. For _IOWR ($SETAST/$SETPRV/$CHKPRIV/
+	 * ENTER_IMAGE/IMAGE_RUNDOWN) the framework copies `data' IN before and OUT
+	 * after -- full round-trip. For _IOR ($GETMODE/DELIVERAST) it zeroes `data',
+	 * the facility fills it (neither reads input), and the framework copies OUT.
+	 * For _IOW ($SETMODE/$DCLAST) the framework copies the request IN but does
+	 * NOT copy OUT, so the facility's args.status is applied but not returned to
+	 * userspace on NetBSD (the driver never sees the user address). That is a
+	 * property of the shared _IOW request number, not a fabricated result: the
+	 * command's EFFECT is observable through the paired _IOR/_IOWR command
+	 * ($GETMODE after $SETMODE, DELIVERAST after $DCLAST). No silent success is
+	 * faked (INV-6). DELIVERAST's "no AST pending" is -EAGAIN -> EAGAIN.
+	 */
+	case VMS_IOCTL_DCLAST:
+	case VMS_IOCTL_SETAST:
+	case VMS_IOCTL_DELIVERAST:
+	case VMS_IOCTL_SETMODE:
+	case VMS_IOCTL_GETMODE:
+	case VMS_IOCTL_SETPRV:
+	case VMS_IOCTL_CHKPRIV:
+	case VMS_IOCTL_ENTER_IMAGE:
+	case VMS_IOCTL_IMAGE_RUNDOWN:
+		uarg = data;
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+
+		switch (cmd) {
+		case VMS_IOCTL_DCLAST:
+			r = vms_ioctl_dclast(proc, (unsigned long)uarg);        break;
+		case VMS_IOCTL_SETAST:
+			r = vms_ioctl_setast(proc, (unsigned long)uarg);        break;
+		case VMS_IOCTL_DELIVERAST:
+			r = vms_ioctl_deliverast(proc, (unsigned long)uarg);    break;
+		case VMS_IOCTL_SETMODE:
+			r = vms_ioctl_setmode(proc, (unsigned long)uarg);       break;
+		case VMS_IOCTL_GETMODE:
+			r = vms_ioctl_getmode(proc, (unsigned long)uarg);       break;
+		case VMS_IOCTL_SETPRV:
+			r = vms_ioctl_setprv(proc, (unsigned long)uarg);        break;
+		case VMS_IOCTL_CHKPRIV:
+			r = vms_ioctl_chkpriv(proc, (unsigned long)uarg);       break;
+		case VMS_IOCTL_ENTER_IMAGE:
+			r = vms_ioctl_enter_image(proc, (unsigned long)uarg);   break;
+		case VMS_IOCTL_IMAGE_RUNDOWN:
+			r = vms_ioctl_image_rundown(proc, (unsigned long)uarg); break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

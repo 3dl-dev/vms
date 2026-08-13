@@ -304,7 +304,7 @@ links" and "the machine boots." Each is now a first-class deliverable.
 | rd | Deliverable | State | Done-condition |
 |---|---|---|---|
 | `vms-28f` | `ovmx_init` boot-plumbing seam extracted Linux-side: an `ovmx_boot_*` substrate layer (module-load / mount / reboot / device-naming / console-log), ONE `ovmx_init` source, no `#ifdef` | **done (#440)** | Linux backend = current behaviour, Persistent Boot Smoke green, zero behaviour change. |
-| `vms-f2e` | `ovmx_init` boots on NetBSD via that seam (NetBSD backend of `ovmx_boot_*`) | blocked by `vms-28f`, `vms-42d`, `vms-5d1` | ONE `ovmx_init` source, no `#ifdef` fork; NetBSD backend drives module-load/mounts/device-naming/reboot/console-log. |
+| `vms-f2e` | `ovmx_init` cross-builds on NetBSD-vax via that seam (NetBSD backend of `ovmx_boot_*`) | `vms-28f`, `vms-42d`, `vms-5d1` foundation | **build-gate done (this PR)** — `src/ovmx_init/ovmx_boot_netbsd.c` realizes every `ovmx_boot.h` op against public NetBSD KPIs; ONE `ovmx_init.c`, no `#ifdef` fork; per-PR `ovmx-init-netbsd-vax` gate links a real elf32-vax `STARTUP.EXE` over the full stack. Booted-guest run is the SIMH follow-up (`vms-7b1`/`vms-625`). See §4.5.2. |
 | `vms-42d` | image activation **DECIDED (A) + gated** on netbsd-vax: OVMX images are ordinary NetBSD ELF32-vax dynamic exes activated by `/usr/libexec/ld.elf_so` — a labelled Rule-8 substrate divergence, NOT OVMX-native IMGACT/symbol-vector. See §4.5.1. | blocked by `vms-30a` (RTL width) | **done (this PR)** — a representative OVMX image links elf32-vax + the per-PR `activation-netbsd-vax` gate asserts it activates via ld.elf_so; `LOGINOUT.EXE`/`DCL.EXE` follow the same path once their higher layers cross-build (`vms-5d1`). |
 | `vms-945e` | every boot-required executive facility (proctab/CREPRC, lnm, mbx, ast, access) proven cross-process against the REAL `/dev/vms` on netbsd-vax | blocked by `vms-9bb/ca7/d61/d7a/f78bb` | Full facility parity on VAX (not just event flags — catches ILP32/float/ELF32 bugs amd64 can't). |
 | `vms-7b1` | a bootable OVMX/NetBSD-vax system disk + custom kernel is ASSEMBLED from the OVMX build (the `Dockerfile.bootable`/`vmsfs_master` analog) | blocked by `vms-544d`, `vms-5d1`, `vms-f2e`, `vms-f78bb` | SIMH boots the assembled disk unattended with `ovmx_init` as init. |
@@ -396,6 +396,51 @@ Digital VAX / little-endian, `PT_INTERP == /usr/libexec/ld.elf_so`, genuinely dy
 sections. The gate is build-only (no `qemu-system-vax` exists); the booted-guest
 activation round-trip is the SIMH nightly follow-up under `vms-945e`/`vms-d59`.
 `vms-5d1` (the full LOGINOUT/DCL/`ovmx_init` link) inherits this decided path.
+
+#### 4.5.2 The NetBSD boot backend (`vms-f2e`) — op → NetBSD-KPI mapping
+
+`src/ovmx_init/ovmx_boot_netbsd.c` is the NetBSD peer of `ovmx_boot_linux.c`,
+selected at build time (`src/ovmx_init/CMakeLists.txt` keys on
+`CMAKE_SYSTEM_NAME`; the cross gate compiles it directly). `ovmx_init.c` is
+byte-identical across substrates — the per-PR gate mechanically asserts it
+carries no `__NetBSD__`/`__linux__` fork (INV-DRIFT). Each op maps to a public,
+documented NetBSD interface, the twin of the Linux syscall the Linux backend
+makes:
+
+| `ovmx_boot.h` op | Linux backend | **NetBSD backend (`vms-f2e`)** |
+|---|---|---|
+| `kernel_filesystems_mounted` | `stat("/proc/version")` | `statvfs("/tmp").f_fstypename == "tmpfs"` |
+| `mount_kernel_filesystems` | proc/sys/dev/tmp/pts/shm `mount(2)` | `mount(2)` **procfs** /proc, **tmpfs** /tmp + /dev/shm, **ptyfs** /dev/pts (no sysfs, no devtmpfs — NetBSD has neither) |
+| `start_console_log_bridge` | `/dev/kmsg` reader (`opcom_kmsg.c`) | `/dev/klog` reader thread → OPERATOR.LOG (SYSKRNL facility) |
+| `load_module` | `finit_module(2)` `/lib/modules/<n>.ko` | `modctl(2)` `MODCTL_LOAD` — **module OR in-kernel**, see below |
+| `open_executive` | `open("/dev/vms", O_RDWR\|O_CLOEXEC)` | identical (literal `/dev/vms`, Rule-9 checkable) |
+| `system_disk_dev` | `/dev/vda` | `/dev/wd0` (matches `tests/lab-vax` `wd0.img`) |
+| `system_disk_present` | `stat` + `S_ISBLK` | `stat` + `S_ISBLK` |
+| `mount_system_disk` | `mount(dev,mp,"vmsfs",…)` | `mount("vmsfs",mp,0,{fspec=dev},…)` (device inside fs args, NetBSD convention) |
+| `power_off` | `sync(); reboot(RB_POWER_OFF)` | `sync(); reboot(RB_HALT\|RB_POWERDOWN, NULL)` |
+
+**Module vs. in-kernel executive (design §5 risk 2 / `vms-f78bb`).**
+`ovmx_boot_load_module()` handles both delivery paths for the executive, runtime-
+selected by `OVMX_BOOT_EXEC` (`auto` default):
+
+- `module` — always `modctl(MODCTL_LOAD)` by name; `EEXIST`/`ENOENT` map to the
+  same survivable/fatal meanings `ovmx_init.c` relies on, exactly as Linux.
+- `inkernel` — the driver is compiled into a custom NetBSD/vax kernel (the
+  fallback for a thin `modules(9)` on the VAX port). No load; the executive is
+  present by construction, and its `/dev/vms` node is **required** (fail-honest,
+  INV-6 — a missing node is the oracle's missing-system-file halt).
+- `auto` — if `/dev/vms` is already a live char device (in-kernel, or an
+  already-loaded module) the executive really is present → succeed; otherwise
+  `modctl(MODCTL_LOAD)` and report its **real** errno. This never fakes success:
+  it returns 0 only on a genuinely live `/dev/vms`.
+
+**Fail-honest (Rule 9 / INV-6).** No op no-ops to a bogus success:
+`open_executive()` opens the real device or returns `-1`; `load_module()` reports
+the host's real load result; `mount_system_disk()` returns the real `mount(2)`
+result (a blank volume fails and PID 1 halts — it does not initialize or
+install). The `Persistent Boot Smoke` and the Linux boot path are unchanged: the
+Linux backend files are untouched and `CMAKE_SYSTEM_NAME=Linux` resolves the
+seam to the identical pre-`vms-f2e` file set.
 
 ### 4.6 Capstone — boot to a DCL prompt (`vms-d59`)
 

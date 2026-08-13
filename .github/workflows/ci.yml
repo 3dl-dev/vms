@@ -164,7 +164,9 @@ jobs:
               - 'src/vmsrms/**'
               - 'src/vmsqueue/**'
               - 'src/vmsdcl/**'
+              - 'src/ovmx_init/**'
               - 'docs/design-ovmx-netbsd-syskrnl.md'
+              - 'docs/design-p4-netbsd-vax-boot.md'
               - 'docs/audit-ilp32-vax-libvmssys.md'
             vmsfs_core_vax:
               - '.github/workflows/**'
@@ -4709,3 +4711,70 @@ jobs:
           echo "$RAW" | grep -qF 'no undefined readline symbols' \
             || { echo "FAIL: readline auto-degrade assertion did not run"; exit 1; }
           echo "PASS: vmsdcl built for netbsd-vax and a real ELF32 VAX DCL.EXE linked over the full stack"
+
+  # -----------------------------------------------------------------------
+  # ovmx-init-netbsd-vax (rd vms-f2e, epic vms-8e8, P4-C boot; docs/design-p4-
+  # netbsd-vax-boot.md §4.5). The boot orchestrator (STARTUP.EXE, PID 1) cross-
+  # compiles + links for netbsd-vax against the NetBSD realization of the
+  # boot-plumbing seam (src/ovmx_init/ovmx_boot_netbsd.c, the NetBSD twin of
+  # ovmx_boot_linux.c from vms-28f). It builds the full elf32-vax userspace
+  # library stack, asserts ovmx_init.c carries NO substrate #ifdef fork of the
+  # boot logic (INV-DRIFT -- the split lives ONLY in the ovmx_boot backend),
+  # confirms the NetBSD backend defines every ovmx_boot.h op and opens the REAL
+  # /dev/vms (fail-honest, INV-6 / Rule 9), and links a real vax--netbsdelf
+  # ELF32 STARTUP.EXE (dynamic, activated by NetBSD ld.elf_so -- Decision A,
+  # vms-42d). This unblocks vms-5d1 (all images link+activate -> bootable-disk
+  # assembly). DELIBERATELY NOT emulation (no qemu-system-vax); build/test
+  # tooling, never a runtime (Rule 9). Fast once the cross toolchain image
+  # layer-caches (gha, shared scope=cross-vax). Gated on the shared netbsd_vax
+  # filter: push/merge_group/schedule always; on a PR only when the cross
+  # inputs change (src/ovmx_init/** and the lower stack/cross).
+  # -----------------------------------------------------------------------
+  ovmx-init-netbsd-vax:
+    name: ovmx_init cross-compiles for netbsd-vax (vms-f2e)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile ovmx_init for netbsd-vax + link a real ELF32 VAX STARTUP.EXE
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-ovmx-init-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax ovmx_init cross build/link exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: ovmx_init (STARTUP.EXE) builds and links for vax--netbsdelf' \
+            || { echo "FAIL: did not see the ovmx_init build+link PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: ovmx_init objects were not elf32-vax -- wrong target"; exit 1; }
+          echo "$RAW" | grep -qF 'OK: ovmx_init.c has no __NetBSD__/__linux__ boot-logic fork' \
+            || { echo "FAIL: INV-DRIFT assertion (no substrate #ifdef fork) did not run"; exit 1; }
+          echo "$RAW" | grep -qF 'OK: all 9 ovmx_boot.h ops defined by the NetBSD backend' \
+            || { echo "FAIL: NetBSD backend did not define every ovmx_boot.h op"; exit 1; }
+          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
+            || { echo "FAIL: STARTUP.EXE was not a VAX ELF"; exit 1; }
+          echo "PASS: ovmx_init built for netbsd-vax and a real ELF32 VAX STARTUP.EXE linked over the full stack"

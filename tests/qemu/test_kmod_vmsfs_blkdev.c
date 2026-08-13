@@ -37,7 +37,8 @@ static int pass = 0, fail = 0;
 
 #define LOOP_DEV    "/dev/loop0"
 #define MOUNT_POINT "/mnt/vmsfs_blkdev"
-#define VMSFS_MAGIC 0x564D5346  /* "VMSF" */
+#define VMSFS_MAGIC          0x564D5346  /* "VMSF" — structured volume   */
+#define VMSFS_OVERLAY_MAGIC  0x564D4F56  /* "VMOV" — overlay passthrough */
 
 /* Must match mkimage_vmsfs.c */
 #define EXPECTED_CONTENT "Hello from VMSFS block device!\n"
@@ -158,6 +159,10 @@ int main(void)
         if (rc == 0) {
             CHECK((uint32_t)sfs.f_type == VMSFS_MAGIC,
                   "statfs f_type is VMSFS_MAGIC");
+            /* vms-1c9: a structured volume must NOT report the overlay
+             * passthrough identity — the two modes stay distinguishable. */
+            CHECK((uint32_t)sfs.f_type != VMSFS_OVERLAY_MAGIC,
+                  "structured volume does NOT report VMSFS_OVERLAY_MAGIC");
             CHECK(sfs.f_bsize == 512, "statfs block size is 512");
             CHECK(sfs.f_blocks == 2048, "statfs reports 2048 total blocks");
         }

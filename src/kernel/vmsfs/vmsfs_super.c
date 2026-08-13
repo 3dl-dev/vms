@@ -185,8 +185,16 @@ static int vmsfs_statfs(struct dentry *dentry, struct kstatfs *buf)
         if (ret)
             return ret;
 
+        /*
+         * vms-1c9: an overlay is a passthrough — the block/file counts are
+         * the HOST filesystem's real numbers (honest, host-derived) and we
+         * pass them through unchanged. But the IDENTITY must be honest too:
+         * report the overlay magic, NOT VMSFS_MAGIC. A passthrough that
+         * stamped the structured-volume identity onto foreign numbers would
+         * be indistinguishable from a mastered ODS-2-style vmsfs volume.
+         */
         *buf = backing_stat;
-        buf->f_type = VMSFS_MAGIC;
+        buf->f_type = VMSFS_OVERLAY_MAGIC;
         return 0;
     }
 
@@ -282,7 +290,7 @@ static int vmsfs_fill_super_overlay(struct super_block *sb, void *data,
     }
 
     /* Configure superblock */
-    sb->s_magic = VMSFS_MAGIC;
+    sb->s_magic = VMSFS_OVERLAY_MAGIC;  /* vms-1c9: passthrough, not a structured volume */
     sb->s_op = &vmsfs_sops;
     sb->s_d_op = &vmsfs_dops;
     sb->s_maxbytes = MAX_LFS_FILESIZE;
@@ -309,7 +317,8 @@ static int vmsfs_fill_super_overlay(struct super_block *sb, void *data,
         goto err_put_path;
     }
 
-    pr_info("vmsfs: mounted with backing=%s version_limit=%d case_blind=%d\n",
+    pr_info("vmsfs: mounted overlay passthrough (not a structured volume) "
+            "backing=%s version_limit=%d case_blind=%d\n",
             sbi->opts.backing_path, sbi->opts.version_limit,
             sbi->opts.case_blind);
 

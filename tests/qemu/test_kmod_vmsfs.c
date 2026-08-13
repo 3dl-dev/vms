@@ -22,8 +22,14 @@
 #include <unistd.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include <dirent.h>
 #include <errno.h>
+#include <stdint.h>
+
+/* Must match src/kernel/vmsfs/vmsfs.h (vms-1c9). */
+#define VMSFS_MAGIC          0x564D5346  /* "VMSF" — structured volume    */
+#define VMSFS_OVERLAY_MAGIC  0x564D4F56  /* "VMOV" — overlay passthrough  */
 
 static int pass = 0, fail = 0;
 
@@ -112,6 +118,27 @@ int main(void)
         printf("=== test_kmod_vmsfs: %d passed, %d failed ===\n",
                pass, fail);
         return 1;
+    }
+
+    /*
+     * 3a. vms-1c9: an overlay mount is a passthrough over a host directory —
+     * it has no home block, storage bitmap, file headers or FIDs. It MUST
+     * report itself honestly, distinguishable from a mastered structured
+     * vmsfs volume, and must NOT stamp the structured-volume identity onto
+     * the host filesystem's numbers. The block-device (structured) suite
+     * asserts f_type == VMSFS_MAGIC; here we assert the overlay reports the
+     * DISTINCT overlay magic and NOT the structured magic.
+     */
+    {
+        struct statfs sfs;
+        rc = statfs(mountpt, &sfs);
+        CHECK(rc == 0, "statfs on overlay mount succeeds");
+        if (rc == 0) {
+            CHECK((uint32_t)sfs.f_type == VMSFS_OVERLAY_MAGIC,
+                  "overlay statfs f_type is VMSFS_OVERLAY_MAGIC (honest passthrough identity)");
+            CHECK((uint32_t)sfs.f_type != VMSFS_MAGIC,
+                  "overlay does NOT report the structured VMSFS_MAGIC (not LARPing as a structured volume)");
+        }
     }
 
     /* 4. Create a file - should auto-create as ;1 in backing */

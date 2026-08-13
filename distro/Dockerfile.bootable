@@ -143,6 +143,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG KERNEL_VERSION=6.12.103
 ARG KERNEL_SHA256=f143aaade8877ba5616e788b4482576db28481bcf557ef537f4fcc3938fc3176
 
+# Reproducible-build clock (vms-d73). The bootable vmlinuz produced here is one
+# of the four artifacts the cut-release-reproducible gate cmps byte-for-byte
+# across two independent --no-cache cuts. A stock kernel build embeds the
+# wall-clock build time + build user/host into the image (UTS_VERSION), so two
+# builds differ. cut-release.sh passes the commit's own timestamp as
+# SOURCE_DATE_EPOCH to every stage; we derive KBUILD_BUILD_TIMESTAMP from it and
+# fix KBUILD_BUILD_USER/HOST, so both cuts embed identical strings. Default 0
+# (Unix epoch) for ordinary builds (boot.sh) -- still deterministic.
+ARG SOURCE_DATE_EPOCH=0
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc make bc bison flex libssl-dev libelf-dev \
     xz-utils curl ca-certificates kmod cpio \
@@ -186,12 +197,22 @@ RUN set -e; \
     echo "OK: OVMX kernel .config carries every load-bearing option"
 
 # Build the bzImage + in-tree modules. Record the exact kernelrelease string
-# (e.g. 6.18.44-ovmx) so downstream stages name modules/headers consistently.
-RUN make ARCH=x86_64 -j"$(nproc)" bzImage modules && \
+# (e.g. 6.12.103-ovmx) so downstream stages name modules/headers consistently.
+#
+# Reproducibility (vms-d73): fix the three build-identity strings the kernel
+# would otherwise stamp from the environment. KBUILD_BUILD_TIMESTAMP comes from
+# SOURCE_DATE_EPOCH (deterministic given the commit); USER/HOST are constants.
+# The build number (#1) is deterministic here because --no-cache always builds
+# from a fresh tree (.version starts at 1). Struct-layout randomization stays
+# off (the config fragment keeps CONFIG_RANDSTRUCT_NONE) so there is no
+# per-build seed; module signing is off (fragment) so there is no random key.
+RUN export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}")" && \
+    export KBUILD_BUILD_USER=ovmx KBUILD_BUILD_HOST=ovmx && \
+    make ARCH=x86_64 -j"$(nproc)" bzImage modules && \
     mkdir -p /kernel-out && \
     cp arch/x86/boot/bzImage /kernel-out/vmlinuz && \
     make -s ARCH=x86_64 kernelrelease > /kernel-out/kernelrelease && \
-    echo "Built OVMX kernel: $(cat /kernel-out/kernelrelease), bzImage $(ls -lh /kernel-out/vmlinuz | awk '{print $5}')"
+    echo "Built OVMX kernel: $(cat /kernel-out/kernelrelease), bzImage $(ls -lh /kernel-out/vmlinuz | awk '{print $5}'), TS=$KBUILD_BUILD_TIMESTAMP"
 
 FROM ubuntu:24.04 AS builder
 

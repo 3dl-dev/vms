@@ -333,3 +333,19 @@ target_compile_definitions(test_libvms_lib_cli PRIVATE
 # through the service's own old-directory out-arguments. Unblocks native MMK.
 libvms_add_test(test_libvms_setddir
     ${CMAKE_CURRENT_SOURCE_DIR}/test_setddir.c)
+
+# vms-f16 -- conformance-gap constants (docs/conformance-gap-report.md §3.3):
+# TRUE/FALSE + the SS$_/RMS$_/XAB$/CHP$M/ISS$C and OVMX-private SYI$_/FAB$M_/
+# OSS$M_ constants that were defined nowhere in OVMX's headers. Compile-time
+# _Static_asserts pin every VMS-authentic value to the reference oracle (see the
+# file header) and guard the OVMX-private values against drift. Pure header
+# test -- needs both the libvms and vmsrms (rms/fab.h, rms/xab.h) include dirs,
+# so not via libvms_add_test().
+add_executable(test_libvms_conformance_constants
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_conformance_constants.c)
+target_include_directories(test_libvms_conformance_constants PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_RMS_INCLUDE_DIR}
+)
+add_test(NAME test_libvms_conformance_constants
+         COMMAND test_libvms_conformance_constants)

@@ -30,6 +30,26 @@ extern "C" {
 #endif
 
 /* ================================================================
+ * DEC C boolean convention (TRUE / FALSE)
+ *
+ * TRUE and FALSE are not ISO C keywords; the Eight-Cubed VMS C corpus
+ * (and much DEC C source) assumes them ambient.  OpenVMS does NOT
+ * publish a single authoritative header home for them -- they are the
+ * universal DEC C / K&R boolean convention TRUE == 1, FALSE == 0
+ * (documented throughout the VSI DEC C RTL Reference).  OVMX therefore
+ * defines them here (an OVMX compatibility choice, per Rule 8) in the
+ * header that every corpus consumer already includes, guarded so a
+ * translation unit that defines its own copy still wins.
+ * ================================================================ */
+
+#ifndef FALSE
+#define FALSE 0
+#endif
+#ifndef TRUE
+#define TRUE  1
+#endif
+
+/* ================================================================
  * Success status codes (severity = 1, bit 0 set)
  * ================================================================ */
 
@@ -413,6 +433,36 @@ extern "C" {
 #define SS$_DEVNOTALLOC     2136    /* Device not allocated */
 #define SS$_IVLOGTAB        2320    /* Invalid logical name table */
 #define SS$_NOLOGTAB        2324    /* No such logical name table */
+
+/* ================================================================
+ * Additional SYSTEM-facility condition values (vms-f16).
+ *
+ * ORACLE-PINNED, 2026-08-13, by assembling the public $SSDEF macro
+ * (STARLET.MLB) as a module of GLOBAL symbols and reading the exact
+ * defined longword out of the object's GSD with ANALYZE/OBJECT/GSD --
+ * documented tool output, not disassembly (Rule 8).  Anchors
+ * SS$_NORMAL=1 and SS$_ACCVIO=12 verified against the same dump.
+ *
+ * All values below except SS$_EXITFORCED and SS$_LOWPREC come from
+ * OpenVMS VAX V7.3 (lab-2 node VAX1).  SS$_EXITFORCED and SS$_LOWPREC
+ * do not exist in VAX V7.3 $SSDEF; their values come from OpenVMS
+ * Alpha V8.4 (lab-Alpha node ALPHA1) -- SYSTEM-facility condition
+ * values are architecture-invariant (SS$_ACCVIO=12 on both).
+ * ================================================================ */
+
+#define SS$_LKWSETFUL       404     /* Locked working set is full */
+#define SS$_ALIGN           1292    /* Alignment fault */
+#define SS$_DEVALRALLOC     1601    /* Device already allocated */
+#define SS$_LOWPREC         1873    /* Low precision (Alpha V8.4 oracle) */
+#define SS$_NOMOREPROC      2472    /* No more processes (end of $GETJPI wildcard) */
+#define SS$_DUPIDENT        8748    /* Duplicate identifier */
+#define SS$_NOSUCHCPU       9028    /* No such CPU */
+#define SS$_NOCALLPRIV      9284    /* No privilege for calling access mode */
+#define SS$_NOLOG           9332    /* Logging is not enabled */
+#define SS$_NOIMPERSONATE   10284   /* No impersonate privilege */
+#define SS$_NOOPER          10388   /* No operator privilege */
+#define SS$_EXITFORCED      11220   /* Forced exit occurred (Alpha V8.4 oracle) */
+#define SS$_USERDISABLED    11290   /* User account is disabled */
 
 /* ================================================================
  * Status testing macros

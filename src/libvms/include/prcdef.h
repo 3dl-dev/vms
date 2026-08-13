@@ -204,6 +204,14 @@ typedef struct _uic UIC;
 #define SYI$_CLUSTER_NODES  0x020E  /* Number of cluster nodes (longword) */
 #define SYI$_SCSNODE        0x020F  /* Node's SCS system name (string); OVMX-private code; see vms-3ab */
 #define SYI$_SCSSYSTEMID    0x0210  /* Node's cluster system ID (longword); OVMX-private code; see vms-3ab */
+/* CPU-inventory item codes (vms-f16).  OVMX-private codes continuing the
+ * scheme above: the 2026-08-13 oracle dump confirms OVMX's whole SYI$_
+ * numbering is already private (SYI$_NODENAME is 0x0200 here vs 4313 on
+ * real VMS V7.3), and SYI$_MAX_CPUS / *_CPU_BITMAP are not present in
+ * VAX V7.3 $SYIDEF at all.  Labeled OVMX design choices, Rule 8. */
+#define SYI$_MAX_CPUS           0x0211  /* Maximum configurable CPU count (longword); OVMX-private code */
+#define SYI$_ACTIVE_CPU_BITMAP  0x0212  /* Bitmap of active CPUs; OVMX-private code */
+#define SYI$_AVAIL_CPU_BITMAP   0x0213  /* Bitmap of available CPUs; OVMX-private code */
 
 #ifdef __cplusplus
 }

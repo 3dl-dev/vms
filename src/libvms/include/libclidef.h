@@ -82,6 +82,23 @@ extern "C" {
 #define CLI$M_NOCONTROL     0x20    /* Don't give subprocess control */
 #define CLI$M_TRUSTED       0x40    /* Trusted subprocess */
 
+/* ================================================================
+ * DEFERRED (vms-f16): LIB$M_CLI_CTRLT (and LIB$M_CLI_CTRLY)
+ *
+ * The Ctrl/T mask for LIB$DISABLE_CTRL / LIB$ENABLE_CTRL, used by
+ * tests/corpus/tier1-examples/lib_ctrl.c.  On OpenVMS this symbol is
+ * defined only in the DEC C header <libclidef.h> (VSI source); it is
+ * NOT present in the MACRO-32 definition libraries -- the 2026-08-13
+ * oracle confirmed STARLET.MLB has no LIB$M_CLI_CTRLT and neither
+ * $LIBCLIDEF nor $LIBDEF emits it.  The clean-room oracle path used for
+ * every other vms-f16 constant (assemble the public macro, read the GSD
+ * with ANALYZE/OBJECT) therefore cannot observe its value, and copying
+ * the #define out of the VSI C header is not permitted under Rule 8.
+ * No public byte-level value was found this pass.  Rather than invent a
+ * value (empirical-not-gate), it is left DEFINED NOWHERE and deferred to
+ * a focused pin once a permitted source is available.
+ * ================================================================ */
+
 #ifdef __cplusplus
 }
 #endif

@@ -40,6 +40,15 @@ extern "C" {
 #define CHP$M_WRITE         0x00000002  /* Check write access */
 #define CHP$M_NOPRIV        0x00000004  /* Do not consider privileges */
 
+/* Mandatory-access (classified) synonyms. ORACLE-PINNED 2026-08-13 on
+ * OpenVMS VAX V7.3 (lab-2): $CHPDEF assembled as GLOBAL symbols, values
+ * read from the object GSD via ANALYZE/OBJECT/GSD (Rule 8). On real VMS
+ * CHP$M_OBSERVE aliases CHP$M_READ (1) and CHP$M_ALTER aliases
+ * CHP$M_WRITE (2) -- OVMX's existing READ/WRITE bits already match the
+ * oracle, so these are the authentic values, not a private choice. */
+#define CHP$M_OBSERVE       0x00000001  /* Observe access (== CHP$M_READ) */
+#define CHP$M_ALTER         0x00000002  /* Alter access   (== CHP$M_WRITE) */
+
 #ifdef __cplusplus
 }
 #endif

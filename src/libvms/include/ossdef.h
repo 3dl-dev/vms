@@ -38,6 +38,13 @@ extern "C" {
 
 #define OSS$M_RELAX_ACCESS  0x00000001  /* Relax normal access restrictions */
 #define OSS$M_WLOCK         0x00000002  /* Write-lock the object */
+/* OVMX-private bit (vms-f16, Rule 8 design choice).  The 2026-08-13
+ * $OSSDEF oracle dump (OpenVMS VAX V7.3, lab-2) shows real VMS uses
+ * OSS$M_RELCTX=2 and OSS$M_WLOCK=1 -- but OVMX has already assigned
+ * bit 0x02 to OSS$M_WLOCK, so the authentic value would collide.
+ * OVMX therefore assigns OSS$M_RELCTX the next free bit and labels it
+ * as an OVMX representation, not a VMS-authentic value. */
+#define OSS$M_RELCTX        0x00000004  /* Release object security context */
 
 /* ================================================================
  * OSS$C_ — Object class codes (for the "objclass" argument)

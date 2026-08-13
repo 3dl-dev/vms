@@ -56,6 +56,15 @@
 #define FAB$M_CBT   0x00000400  /* Contiguous best try */
 #define FAB$M_CTG   0x00000800  /* Contiguous */
 #define FAB$M_SQO   0x00001000  /* Sequential only */
+/* FOP options added for vms-f16.  OVMX-private FOP bits: the 2026-08-13
+ * $FABDEF oracle dump (OpenVMS VAX V7.3, lab-2) shows OVMX's whole FOP
+ * layout is already private (e.g. FAB$M_DFW is 0x20 and FAB$M_CTG is
+ * 0x100000 on real VMS, vs 0x02 / 0x800 here), so the authentic ASY=1 /
+ * RU=2 / UFO=0x20000 values would collide with existing OVMX FOP bits.
+ * OVMX assigns the next free bits and labels them as design choices. */
+#define FAB$M_ASY   0x00002000  /* Asynchronous RMS operations; OVMX-private bit */
+#define FAB$M_RU    0x00004000  /* Recovery-unit journaling; OVMX-private bit */
+#define FAB$M_UFO   0x00008000  /* User file open (open, no RMS I/O); OVMX-private bit */
 
 /* Block ID for FAB */
 #define FAB$C_BID   3

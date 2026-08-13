@@ -16,6 +16,16 @@
 #define XAB$C_PRO   19   /* Protection attributes */
 #define XAB$C_FHC   29   /* File header characteristics */
 #define XAB$C_ALL   20   /* Allocation attributes */
+/* Item XAB (XABITM). ORACLE-PINNED 2026-08-13 on OpenVMS VAX V7.3
+ * (lab-2 node VAX1): $XABDEF/$XABITMDEF assembled as GLOBAL symbols,
+ * exact values read from the object GSD via ANALYZE/OBJECT/GSD
+ * (documented tool output, Rule 8). Anchor XAB$C_KEY=21 matched. */
+#define XAB$C_ITM   36   /* Item-list XAB (XABITM) type code */
+
+/* XABITM control (xab$b_mode) and structure size. ORACLE-PINNED as above. */
+#define XAB$K_SENSEMODE  1   /* xab$b_mode: sense (read) items */
+#define XAB$K_SETMODE    2   /* xab$b_mode: set (write) items */
+#define XAB$K_ITMLEN     32  /* Length in bytes of a XABITM structure */
 
 /* Key data types */
 #define XAB$C_STG    0   /* String */

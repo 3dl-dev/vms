@@ -302,15 +302,14 @@ if [ "$rc" -eq 0 ]; then
     # A fresh copy of the distribution disk carries exactly one version.
     send 'DELETE SYS$SYSTEM:OVMXVMSSYS.PAR;1'; sleep 1
     send 'DIRECTORY SYS$SYSTEM:OVMXVMSSYS.PAR'; sleep 2
-    # An exact (non-wildcard) filespec with zero matches reports the empty
-    # "Total of 0 files." trailer. NOTE (vms-1c6): a bare DIRECTORY trailer
-    # carries NO block count -- blocks appear only with /SIZE or /FULL (VSI
-    # OpenVMS DCL Dictionary, DIRECTORY). OVMX previously printed "Total of 0
-    # files, 0 blocks." here, which this assertion had pinned; corrected to the
-    # authentic no-blocks form. (Real VMS also emits %DIRECT-W-NOFILES for a
-    # zero-match exact spec -- that error-message fidelity is a separate
-    # vms-1c6 slice, not fixed here.)
-    check "boot 1: OVMXVMSSYS.PAR is gone (DIRECTORY finds nothing)" "$NEG_LOG1" "Total of 0 files."
+    # An exact (non-wildcard) filespec with zero matches now reports the
+    # authentic "%DIRECT-W-NOFILES, no files found" warning (VSI OpenVMS DCL
+    # Dictionary, DIRECTORY; that error-message-fidelity vms-1c6 slice landed in
+    # #461, replacing the earlier empty "Total of 0 files." trailer this
+    # assertion used to pin). A PRESENT OVMXVMSSYS.PAR would instead list the
+    # name with "Total of 1 file.", so keying on the NOFILES warning stays
+    # discriminating.
+    check "boot 1: OVMXVMSSYS.PAR is gone (DIRECTORY finds nothing)" "$NEG_LOG1" "%DIRECT-W-NOFILES"
 
     echo "  (settling ${SETTLE_SECS}s for guest writeback)"
     sleep "$SETTLE_SECS"

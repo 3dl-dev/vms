@@ -448,15 +448,23 @@ run_provision_missing_case() {
     if waitfor 'Welcome to OpenVMX' 60 "$log1"; then rc=0; else rc=1; fi
     record "$tag boot 1: SYSTEM logs in" "$rc"
 
-    send 'DELETE/LOG SYS$SYSTEM:PROVISION.EXE'; sleep 2
+    # An explicit version (here ;* = all versions) is REQUIRED on DELETE --
+    # a bare "DELETE SYS$SYSTEM:PROVISION.EXE" is refused with
+    # "%DELETE-E-DELVER, explicit version number or wild card required"
+    # (authentic VMS, VSI OpenVMS DCL Dictionary, DELETE; landed in vms-1c6
+    # #478). Without the ;* this delete never lands, PROVISION.EXE survives,
+    # and boot 2 comes up instead of halting -- the exact false-negative this
+    # case exists to catch.
+    send 'DELETE/LOG SYS$SYSTEM:PROVISION.EXE;*'; sleep 2
     send 'DIRECTORY SYS$SYSTEM:PROVISION.EXE'; sleep 3
 
     # The delete must actually have landed, or boot 2 measures nothing. DELETE
-    # /LOG prints '%DELETE-S-DELETED, <spec> deleted' on success (dcl_error
-    # severity 1 -> 'S'); a delete that found no file prints '%RMS-E-FNF'
-    # instead and this check goes red rather than silently measuring an intact
-    # disk.
-    if grep -qiE '%DELETE-S-DELETED|PROVISION\.EXE deleted' "$log1"; then rc=0; else rc=1; fi
+    # /LOG prints the authentic '%DELETE-I-FILDEL, <spec> deleted' on success
+    # (VSI OpenVMS DCL Dictionary, DELETE/LOG; vms-1c6 #478 corrected this from
+    # the earlier non-authentic '%DELETE-S-DELETED'); a delete that found no
+    # file prints '%RMS-E-FNF' / '%DELETE-W-SEARCHFAIL' instead and this check
+    # goes red rather than silently measuring an intact disk.
+    if grep -qiE '%DELETE-I-FILDEL|%DELETE-S-DELETED' "$log1"; then rc=0; else rc=1; fi
     record "$tag boot 1: PROVISION.EXE deleted off the disk" "$rc"
 
     # See THE WRITEBACK TRAP at the top of this file.

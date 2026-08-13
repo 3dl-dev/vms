@@ -1650,7 +1650,22 @@ int dcl_exec_foreign_command(struct dcl_context *ctx, struct dcl_command *cmd,
     }
     argv[argc] = NULL;
 
-    return dcl_activate_image(ctx, image_spec, linux_path, argv);
+    /* Publish the RAW foreign command tail so the activated image's
+     * LIB$GET_FOREIGN can return it (vms-54e). On OpenVMS a foreign command
+     * hands the whole untokenized tail to the image via the CLI; OVMX passes it
+     * through the VMS_FOREIGN_CMD environment variable -- the same env channel
+     * DCL already uses for VMS process context (VMS_DEFAULT_DIR, ...), which
+     * reaches BOTH the in-process activation path (same process) and the
+     * fork()+execve() fallback (inherited environment). This is set ONLY for a
+     * foreign command; RUN and DCL-driven utilities leave it unset so their
+     * LIB$GET_FOREIGN correctly falls through to SYS$INPUT. The variable is
+     * cleared after activation returns as a safety net for an image that never
+     * calls LIB$GET_FOREIGN (LIB$GET_FOREIGN itself also consumes it on first
+     * read, so a well-behaved image leaves nothing to clear). */
+    setenv("VMS_FOREIGN_CMD", cmd->raw_tail, 1);
+    int fc_status = dcl_activate_image(ctx, image_spec, linux_path, argv);
+    unsetenv("VMS_FOREIGN_CMD");
+    return fc_status;
 #undef DCL_FC_MAX_ARGV
 }
 

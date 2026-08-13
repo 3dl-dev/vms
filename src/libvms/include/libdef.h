@@ -100,6 +100,15 @@ extern "C" {
 
 /* Severe/fatal (severity = 4) */
 #define LIB$_BUGCHECK       0x00158004  /* Internal consistency failure */
+#define LIB$_INPSTRTRU      0x0015821C  /* Input string was truncated
+                                         * (LIB$GET_INPUT/LIB$GET_FOREIGN when
+                                         * the CLI line exceeds the caller's
+                                         * resultant-string descriptor). Message
+                                         * 67, severity 4. Value grounded to the
+                                         * public $LIBDEF symbol table (FreeVMS
+                                         * starlet/src/libdef.h); encoding
+                                         * cross-checks against the verified
+                                         * LIB$_INSVIRMEM = 0x00158022. */
 
 /* ================================================================
  * LIB$M_ bit-mask constants

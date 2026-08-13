@@ -228,7 +228,7 @@ LIBGCC=$(filter_tls_members "$LIBGCC")
 #
 # 32 more PROCEDURE universals (access..utimes) were APPENDED for vms-b65.6 (DCL,
 # the executable consumer): the DCL shell's 114 libc imports include these POSIX
-# calls (file access/mode, cwd/chdir, terminal ioctl/tcgetattr/tcsetattr/isatty,
+# calls (file access/mode, cwd/chdir, terminal ioctl/tcgetattr/tcsetattr/tcflush/isatty,
 # pty pipe, network inet_*/ntohl/socket for SHOW NETWORK-style probes, rlimit,
 # time gettimeofday/settimeofday/mktime/strptime/utimes, getpwnam, system/execvp,
 # strerror/rewind/fileno/flock/fstat/readlink/sleep/isxdigit) not previously pulled
@@ -349,7 +349,7 @@ isxdigit=PROCEDURE,mktime=PROCEDURE,ntohl=PROCEDURE,pipe=PROCEDURE,\
 readlink=PROCEDURE,rewind=PROCEDURE,setrlimit=PROCEDURE,settimeofday=PROCEDURE,\
 sleep=PROCEDURE,socket=PROCEDURE,strerror=PROCEDURE,strptime=PROCEDURE,\
 strftime=PROCEDURE,\
-system=PROCEDURE,tcgetattr=PROCEDURE,tcsetattr=PROCEDURE,utimes=PROCEDURE,\
+system=PROCEDURE,tcgetattr=PROCEDURE,tcsetattr=PROCEDURE,tcflush=PROCEDURE,utimes=PROCEDURE,\
 \
 __addtf3=PROCEDURE,__divtf3=PROCEDURE,__eqtf2=PROCEDURE,__extenddftf2=PROCEDURE,\
 __extendsftf2=PROCEDURE,__fixtfdi=PROCEDURE,__fixunstfdi=PROCEDURE,\

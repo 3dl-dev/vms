@@ -81,25 +81,16 @@ $! still runs after the Priority 1 INSTALL ADD table above, JOB_CONTROL's
 $! own dynamic activation still resolves its dependencies at Priority 1,
 $! unchanged from before this item.
 $!
-$! ANNOUNCE THAT THIS PROCEDURE RAN, so that "the boot reached site
-$! startup" is an ASSERTION and not an inference from the absence of an
-$! error. tests/qemu/test_persistent_boot.sh greps the boot console for
-$! the line below; without it the boot test could only observe that
-$! STARTUP.COM did not complain, which is the absence-of-evidence shape
-$! this project keeps getting burned by.
-$!
-$! NOT ORACLE-PINNED. An earlier version of this comment claimed the text
-$! below matched a reference-lab capture of a real OpenVMS boot. No such
-$! capture exists: `grep -rl "STDRV\|site-specific" ~/vax/cluster/captures/`
-$! (re-run at round 6, 2026-07-31) returns nothing, so that claim was
-$! unverifiable and was removed rather than repeated. Whether this wording
-$! matches, should match, or should differ from what a real OpenVMS boot
-$! prints is UNVERIFIED IN EITHER DIRECTION -- neither claimed nor denied
-$! here (CLAUDE.md Rule 10: an authenticity claim about VMS message text is
-$! either oracle-pinned with the capture recorded, or it does not appear).
-$! Pinning it to the oracle or to public OpenVMS documentation is open
-$! work, not done here.
-$!
-$ WRITE SYS$OUTPUT "The OVMX system is now executing the site-specific startup commands."
+$! THE SITE-STARTUP ANNOUNCEMENT MOVED (vms-3ab8). "The OVMX system is now
+$! executing the site-specific startup commands." used to be WRITTEN here AND
+$! by STARTUP.COM's RUN_SITE_STARTUP subroutine -- the LPMAIN-phase driver that
+$! invokes this file -- so a real boot printed it TWICE (the operator saw the
+$! doubled line in the 0.4 demo boot). STARTUP.COM is the single owner now: it
+$! prints the line immediately before @SYS$MANAGER:SYSTARTUP_VMS.COM, so the
+$! duplicate WRITE is removed from here. The tests that assert the line appears
+$! (tests/qemu/test_persistent_boot.sh, test_startup_phase_driver.sh,
+$! test_job_control_*.sh) still find it -- STARTUP.COM prints it, exactly once.
+$! Why the wording is not oracle-pinned is documented at STARTUP.COM's
+$! RUN_SITE_STARTUP, the announcement's single owner.
 $!
 $ EXIT

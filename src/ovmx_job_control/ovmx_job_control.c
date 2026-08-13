@@ -127,10 +127,29 @@ int main(void)
     int consecutive_failures = 0;
 
     while (!shutdown_requested) {
-        /* Check if stdin is still open (avoid tight loop on EOF) */
-        if (!console_interactive && feof(stdin)) {
+        /*
+         * DEAD / NON-INTERACTIVE CONSOLE GUARD (vms-3ab8).
+         *
+         * The old guard here was `if (!console_interactive && feof(stdin))
+         * break;` -- DEAD CODE. JOB_CONTROL never read()s stdin (its forked
+         * LOGINOUT child does, on the inherited fd), so stdin's stdio EOF
+         * indicator is never set and feof(stdin) is never true. A genuinely
+         * dead or non-tty console therefore fell straight through: every
+         * forked LOGINOUT hit EOF on the first fgets() and exited in well under
+         * a second, and this loop respawned it as fast as the OS allowed. The
+         * 5-fast-failures backoff below only throttles that spin to one burst
+         * every five seconds -- it never stops it.
+         *
+         * JOB_CONTROL's whole job is to run login sessions ON THE OPERATOR
+         * CONSOLE (OPA0:). If stdin is not an interactive terminal there is no
+         * operator console to serve, so there is nothing to do and the process
+         * exits honestly rather than respawning a login that can never read a
+         * username. In normal operation JOB_CONTROL_STARTUP.COM binds stdin to
+         * /dev/console -- a real terminal -- so console_interactive is true and
+         * the loop runs exactly as before this change.
+         */
+        if (!console_interactive)
             break;
-        }
 
         struct timespec t_before;
         clock_gettime(CLOCK_MONOTONIC, &t_before);

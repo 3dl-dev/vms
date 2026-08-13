@@ -95,25 +95,13 @@ $! started with explicit /INPUT /OUTPUT /ERROR pointed at the console.
 $!
 $ @SYS$STARTUP:JOB_CONTROL_STARTUP.COM
 $!
-$! ANNOUNCE THAT THIS PROCEDURE RAN, so that "the boot reached site
-$! startup" is an ASSERTION and not an inference from the absence of an
-$! error. tests/qemu/test_persistent_boot.sh greps the boot console for
-$! the line below; without it the boot test could only observe that
-$! STARTUP.COM did not complain, which is the absence-of-evidence shape
-$! this project keeps getting burned by.
-$!
-$! NOT ORACLE-PINNED. An earlier version of this comment claimed the text
-$! below matched a reference-lab capture of a real OpenVMS boot. No such
-$! capture exists: `grep -rl "STDRV\|site-specific" ~/vax/cluster/captures/`
-$! (re-run at round 6, 2026-07-31) returns nothing, so that claim was
-$! unverifiable and was removed rather than repeated. Whether this wording
-$! matches, should match, or should differ from what a real OpenVMS boot
-$! prints is UNVERIFIED IN EITHER DIRECTION -- neither claimed nor denied
-$! here (CLAUDE.md Rule 10: an authenticity claim about VMS message text is
-$! either oracle-pinned with the capture recorded, or it does not appear).
-$! Pinning it to the oracle or to public OpenVMS documentation is open
-$! work, not done here.
-$!
-$ WRITE SYS$OUTPUT "The OVMX system is now executing the site-specific startup commands."
+$! THE SITE-STARTUP ANNOUNCEMENT MOVED (vms-3ab8). Like the installed-target
+$! variant this file mirrors, "The OVMX system is now executing the site-
+$! specific startup commands." used to be WRITTEN here AND by STARTUP.COM's
+$! RUN_SITE_STARTUP subroutine, so the install-media boot printed it TWICE.
+$! STARTUP.COM (shared by every image, including this one) is the single owner
+$! now and prints it exactly once before invoking this file, so the duplicate
+$! WRITE is removed here too. Why the wording is not oracle-pinned is
+$! documented at STARTUP.COM's RUN_SITE_STARTUP.
 $!
 $ EXIT

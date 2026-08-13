@@ -444,6 +444,31 @@ static int console_login(void)
             ;
         if (c == EOF)
             return 1;
+        /*
+         * DISCARD TYPE-AHEAD QUEUED DURING THE (LONG) BOOT (vms-3ab8).
+         *
+         * The wake design above invites the operator to strike RETURN while
+         * the slow console boot is still running -- and an operator naturally
+         * hits it several times. Every RETURN typed before this image started
+         * reading sits in the terminal's type-ahead buffer; the wake loop
+         * consumes exactly one line (up to the first '\n'), leaving the rest.
+         * Without this flush those leftover RETURNs are read by the fgets()
+         * below as a burst of EMPTY usernames, each of which reprints
+         * "Username: " with no wait -- machine-gunning ~20 prompts onto a
+         * single line before the terminal finally blocks (the exact defect
+         * the operator hit in the 0.4 demo boot). The queued RETURNs were
+         * already echoed by the tty at type-time, during the boot output, so
+         * the reprompts have no newline of their own and pile up on one line.
+         *
+         * Flushing the input queue after the single wake keystroke is consumed
+         * makes the first real "Username:" prompt block for the operator's
+         * NEXT keystroke, as a VMS operator console does. This is OVMX
+         * console-handling behaviour (CLAUDE.md Rule 8), not a claimed
+         * byte-level VMS terminal-driver detail: stdin is unbuffered
+         * (setvbuf _IONBF above), so there is no stdio buffer to reconcile and
+         * tcflush() discards the kernel tty input queue directly.
+         */
+        tcflush(STDIN_FILENO, TCIFLUSH);
     }
 
     /* SYS$ANNOUNCE -- displayed once before the first Username: prompt.

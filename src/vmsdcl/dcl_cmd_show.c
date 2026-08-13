@@ -1656,56 +1656,162 @@ static int cmd_show_device(struct dcl_command *cmd)
 }
 
 /*
- * SHOW MEMORY - Display physical memory usage.
+ * SHOW MEMORY - report the system's memory resources, section by section.
+ *
+ * FORMAT (clean-room, Rule 8). The banner, the section headings, the
+ * four-column layout and the 512-byte page unit are taken from the public
+ * OpenVMS DCL Dictionary entry for SHOW MEMORY and the OpenVMS System
+ * Manager's Manual (SHOW MEMORY / the modified, free and page-file lists).
+ * No VMS binary or source was consulted. A real VAX/Alpha SHOW MEMORY /FULL
+ * emits, in order: Physical Memory Usage, Slot Usage, Fixed-Size Pool Areas,
+ * Dynamic Memory Usage, and Paging File Usage.
+ *
+ * WHAT THIS USED TO BE, and why most of it was a lie (vms-31a). The old
+ * body read /proc/meminfo and printed ONE section, "Physical Memory Usage",
+ * in an invented vertical layout -- and inside it printed a "Modified List
+ * Size" line whose number was Linux Buffers + Cached. Buffers+Cached is
+ * CLEAN file-cache: pages that are identical to their backing store and can
+ * be dropped without a write. The VMS modified page list is the OPPOSITE --
+ * pages that have been WRITTEN and must be flushed to the page file before
+ * the frame can be reused. Labelling clean cache as the modified list is the
+ * exact buffers+cached masquerade INV-6 exists to kill, so it is deleted.
+ *
+ * WHAT IT IS NOW. Only sections OVMX can source from the running system's
+ * REAL memory state are printed; a section with no real source is OMITTED,
+ * never fabricated (Rule 10 / INV-6):
+ *
+ *   Physical Memory Usage  -- /proc/meminfo. Total = MemTotal, Free =
+ *       MemFree, In Use = Total - Free, and Modified = Dirty. Dirty is the
+ *       correct source for the modified column: it is the kernel's count of
+ *       memory that has been modified and is waiting to be written back to
+ *       its backing store -- the same thing the VMS modified page list holds.
+ *
+ *   Paging File Usage      -- /proc/swaps, one row per REAL swap area (the
+ *       Linux swap device/file IS the system's page/swap backing store).
+ *       Total and Used come straight from the kernel's own accounting;
+ *       Free = Total - Used. If the system has no swap configured, no rows
+ *       exist and the section is honestly omitted.
+ *
+ * OMITTED, because OVMX keeps no such executive bookkeeping yet (printing
+ * Linux slab/process counts under these VMS headings would be a second
+ * buffers+cached masquerade, so they are left out rather than faked):
+ *   Slot Usage (process-entry / balance-set slots), Fixed-Size Pool Areas
+ *   (SRP/IRP/LRP lookaside lists), and Dynamic Memory Usage (paged /
+ *   nonpaged pool). When the executive grows real slot and pool counters
+ *   these sections wire in here; until then they do not appear.
+ *
+ * QUALIFIERS (OpenVMS DCL Dictionary, SHOW MEMORY): /PHYSICAL, /POOL,
+ * /FILES, /SLOTS, /FULL. With no qualifier VMS defaults to the full report,
+ * so the default and /FULL both show every SOURCEABLE section. A specific
+ * qualifier restricts the report to that section. /POOL and /SLOTS are
+ * recognised but have no real source, so they select nothing to print --
+ * an honest empty report rather than a fabricated one.
  */
+static long meminfo_kb(const char *key)
+{
+    /* Return the value (in KiB) of a /proc/meminfo key, or -1 if absent. */
+    long result = -1;
+    FILE *fp = fopen("/proc/meminfo", "r");
+    if (fp) {
+        char line[256];
+        size_t keylen = strlen(key);
+        while (fgets(line, sizeof(line), fp)) {
+            if (strncmp(line, key, keylen) == 0 && line[keylen] == ':') {
+                result = strtol(line + keylen + 1, NULL, 10);
+                break;
+            }
+        }
+        fclose(fp);
+    }
+    return result;
+}
+
 static int cmd_show_memory(struct dcl_command *cmd)
 {
-    (void)cmd;
+    /* Section selection. Default (no specific qualifier) == /FULL: every
+     * section for which OVMX has a real source. */
+    int q_phys  = dcl_has_qualifier(cmd, "PHYSICAL");
+    int q_pool  = dcl_has_qualifier(cmd, "POOL");
+    int q_files = dcl_has_qualifier(cmd, "FILES");
+    int q_slots = dcl_has_qualifier(cmd, "SLOTS");
+    int q_full  = dcl_has_qualifier(cmd, "FULL");
+    int any_specific = q_phys || q_pool || q_files || q_slots;
+    int show_phys  = q_full || q_phys  || !any_specific;
+    int show_files = q_full || q_files || !any_specific;
+    (void)q_pool; (void)q_slots;  /* recognised; no real source -> omitted */
 
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
-    /* Read /proc/meminfo */
-    long total_kb = 0, free_kb = 0, available_kb = 0;
-    long buffers_kb = 0, cached_kb = 0;
-    FILE *fp = fopen("/proc/meminfo", "r");
-    if (fp) {
-        char line[256];
-        while (fgets(line, sizeof(line), fp)) {
-            long val = 0;
-            if (sscanf(line, "MemTotal: %ld", &val) == 1)      total_kb = val;
-            else if (sscanf(line, "MemFree: %ld", &val) == 1)  free_kb = val;
-            else if (sscanf(line, "MemAvailable: %ld", &val) == 1) available_kb = val;
-            else if (sscanf(line, "Buffers: %ld", &val) == 1)  buffers_kb = val;
-            else if (sscanf(line, "Cached: %ld", &val) == 1)   cached_kb = val;
-        }
-        fclose(fp);
-    }
-
-    /* VMS uses 512-byte pages */
-    long page_size_bytes = 512;
-    long total_pages  = (total_kb  * 1024L) / page_size_bytes;
-    long free_pages   = (free_kb   * 1024L) / page_size_bytes;
-    long avail_pages  = (available_kb * 1024L) / page_size_bytes;
-    long buf_pages    = (buffers_kb * 1024L) / page_size_bytes;
-    long cached_pages = (cached_kb  * 1024L) / page_size_bytes;
-    long inuse_pages  = total_pages - free_pages;
-    double total_mb   = (double)total_kb / 1024.0;
-
     printf("\n              System Memory Resources on %2d-%s-%04d"
            " %02d:%02d:%02d.%02d\n\n",
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
-    printf("Physical Memory Usage (pages):\n");
-    printf("    Total Physical Pages   %9ld   Main Memory (MB)   %9.2f\n",
-           total_pages, total_mb);
-    printf("    Free List Size         %9ld\n", free_pages);
-    printf("    Modified List Size     %9ld\n", buf_pages + cached_pages);
-    printf("    Available              %9ld\n", avail_pages);
-    printf("    In Use                 %9ld\n", inuse_pages);
+
+    /* ---- Physical Memory Usage (pages) -------------------------------- */
+    if (show_phys) {
+        long total_kb    = meminfo_kb("MemTotal");
+        long free_kb     = meminfo_kb("MemFree");
+        long modified_kb = meminfo_kb("Dirty");
+        if (total_kb < 0) total_kb = 0;
+        if (free_kb  < 0) free_kb  = 0;
+        if (modified_kb < 0) modified_kb = 0;   /* older kernels: absent */
+
+        /* KiB -> VMS 512-byte pages (1 KiB = 2 pages). */
+        long total_pages    = total_kb    * 2L;
+        long free_pages     = free_kb      * 2L;
+        long modified_pages = modified_kb  * 2L;
+        long inuse_pages    = total_pages - free_pages;
+        double total_mb     = (double)total_kb / 1024.0;
+
+        char label[48];
+        snprintf(label, sizeof(label), "  Main Memory (%.2fMb)", total_mb);
+
+        printf("%-30s%12s%12s%12s%12s\n",
+               "Physical Memory Usage (pages):",
+               "Total", "Free", "In Use", "Modified");
+        printf("%-30s%12ld%12ld%12ld%12ld\n",
+               label, total_pages, free_pages, inuse_pages, modified_pages);
+    }
+
+    /* ---- Paging File Usage (pages) ------------------------------------ */
+    if (show_files) {
+        FILE *sf = fopen("/proc/swaps", "r");
+        if (sf) {
+            char line[512];
+            int header_shown = 0;
+            /* First line of /proc/swaps is a column header; skip it. */
+            if (fgets(line, sizeof(line), sf)) {
+                while (fgets(line, sizeof(line), sf)) {
+                    char fname[256];
+                    char type[64];
+                    long size_kb = 0, used_kb = 0;
+                    /* Filename Type Size Used Priority (Size/Used in KiB). */
+                    if (sscanf(line, "%255s %63s %ld %ld",
+                               fname, type, &size_kb, &used_kb) >= 4) {
+                        long total_pages = size_kb * 2L;
+                        long used_pages  = used_kb  * 2L;
+                        long free_pages  = total_pages - used_pages;
+                        if (!header_shown) {
+                            printf("\n%-40s%12s%12s%12s\n",
+                                   "Paging File Usage (pages):",
+                                   "Free", "Reservable", "Total");
+                            header_shown = 1;
+                        }
+                        /* Reservable == Free: OVMX does not yet track page-file
+                         * reservations, so every free block is reservable. */
+                        printf("  %-38s%12ld%12ld%12ld\n",
+                               fname, free_pages, free_pages, total_pages);
+                    }
+                }
+            }
+            fclose(sf);
+            /* No swap area configured -> nothing printed, honestly. */
+        }
+    }
 
     return SS$_NORMAL;
 }

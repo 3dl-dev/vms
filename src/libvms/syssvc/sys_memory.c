@@ -55,6 +55,23 @@
 /* VMS page size is 512 bytes (Alpha/Itanium may use larger, but 512 is the classic) */
 #define VMS_PAGE_SIZE 512
 
+/*
+ * sys$cretva maps at a requested address *non-destructively* -- it must never
+ * clobber an existing mapping (the fallback re-maps at any address instead).
+ * Linux expresses that atomically with MAP_FIXED_NOREPLACE (4.17+). NetBSD and
+ * other substrates have no such flag; there, pass the requested address as a
+ * plain hint (no MAP_FIXED), which the kernel honors when the range is free and
+ * otherwise places elsewhere -- the same non-destructive "try the requested
+ * range, else any address" contract, with the actual placement reported back in
+ * retadr[]. Keyed on the platform macro's own presence (never a transcribed
+ * number), so it is correct by construction on every substrate.
+ */
+#if defined(MAP_FIXED_NOREPLACE)
+#  define VMS_CRETVA_FIXED_FLAG  MAP_FIXED_NOREPLACE
+#else
+#  define VMS_CRETVA_FIXED_FLAG  0
+#endif
+
 /* Import from sys_assign.c for file-backed sections */
 extern int vms$$chan_to_fd(uint16_t chan);
 
@@ -112,7 +129,7 @@ uint32_t sys$cretva(const void *inadr, void *retadr, uint32_t acmode) {
 
     /* Try to map at the requested address (non-destructive) */
     void *addr = mmap((void *)start, size, PROT_READ | PROT_WRITE,
-                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
+                      MAP_PRIVATE | MAP_ANONYMOUS | VMS_CRETVA_FIXED_FLAG,
                       -1, 0);
     if (addr == MAP_FAILED) {
         /* Fall back to any address */

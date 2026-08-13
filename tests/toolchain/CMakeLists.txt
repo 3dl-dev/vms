@@ -87,3 +87,32 @@ set_tests_properties(toolchain-mmk-parse PROPERTIES
     TIMEOUT 120
     LABELS "toolchain;mmk;selfhost"
 )
+
+# spine #5 (vms-fe4): MMK plans a REAL multi-TU OVMX component (the freestanding
+# runtime -- src/libvmssys vms_string/vms_snprintf/vms_math + a driver) described
+# by tests/toolchain/component/OVMXRT.MMS: four TCC compiles, a LIBRARIAN archive
+# and a LINK, in dependency order, byte-identical across two runs.  The parse+plan
+# half on the host; execution rides QEMU (test_syssvc_mmk_build.c).
+add_test(
+    NAME toolchain-mmk-component-plan
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_mmk_component_plan.sh
+)
+set_tests_properties(toolchain-mmk-component-plan PROPERTIES
+    ENVIRONMENT "MMK_EXE=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/MMK.EXE;REPO_SRC=${CMAKE_SOURCE_DIR}/src"
+    TIMEOUT 120
+    LABELS "toolchain;mmk;selfhost"
+)
+
+# spine #5 (vms-fe4): the OVMX-native LIBRARIAN.EXE + LINK.EXE build the real
+# component's .OLB and image BYTE-IDENTICALLY across two independent builds --
+# the "byte-identical twice" bar for the build output, proven on the real
+# component objects (TCC's compile determinism is run_tcc_selfhost gen2==gen3).
+add_test(
+    NAME toolchain-mmk-component-build
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_mmk_component_build.sh
+)
+set_tests_properties(toolchain-mmk-component-build PROPERTIES
+    ENVIRONMENT "LIBRARIAN_EXE=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/LIBRARIAN.EXE;LINK_EXE=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/LINK.EXE;OVMXDUMP=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/OVMXDUMP;REPO_SRC=${CMAKE_SOURCE_DIR}/src;CC=${CMAKE_C_COMPILER}"
+    TIMEOUT 120
+    LABELS "toolchain;librarian;link;selfhost"
+)

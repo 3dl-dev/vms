@@ -95,6 +95,9 @@ static void tpa_take(tpa_ctx *ctx, char *start, uint32_t n) {
     TPADEF *t = ctx->tpa;
     t->tpa$l_tokenptr = start;
     t->tpa$l_tokencnt = n;
+    /* Expose the first matched character (VMS TPA$B_CHAR); MMK reads it after a
+     * single-character (TPA$_ANY / literal) match to accrete suffix strings. */
+    if (n >= 1) t->tpa$b_char = (uint8_t)start[0];
     t->tpa$l_stringptr = start + n;
     /* stringcnt was measured from `start`; subtract what we consumed. */
     t->tpa$l_stringcnt = t->tpa$l_stringcnt - n;

@@ -294,6 +294,12 @@ uint32_t lib$get_vm(const uint32_t *num_bytes, void **base_adr, ...)
     hdr->zone_id = zid;
 
     *base_adr = (char *)raw + sizeof(struct alloc_hdr);
+    /* Zero the returned block.  VMS callers routinely create zones with
+     * LIB$M_VM_GET_FILL0 (e.g. MMK's symbol/rule/dependency zones) and rely on
+     * fresh allocations being zeroed — a struct whose pointer fields must read
+     * as NULL until set.  Lookaside reuse returns dirty memory, so zero here to
+     * honour the FILL0 contract.  (vms-ec70) */
+    memset(*base_adr, 0, hdr->size);
     return SS$_NORMAL;
 }
 
@@ -468,6 +474,54 @@ uint32_t lib$delete_vm_zone(const uint32_t *zone_id)
     zone->active = 0;
     zone->extents = NULL;
 
+    pthread_mutex_unlock(&zone_table_lock);
+
+    return SS$_NORMAL;
+}
+
+/*
+ * lib$reset_vm_zone - Bulk-free all memory in a zone but keep the zone ALIVE.
+ *
+ * Like lib$delete_vm_zone, all extents are munmap'd in one shot; unlike delete,
+ * the zone slot stays active and is re-initialised empty so the caller can keep
+ * allocating from it.  (VMS callers use this to recycle a scratch zone between
+ * passes — e.g. MMK's pattern-substitution leaf zone.)  Added for vms-ec70.
+ */
+uint32_t lib$reset_vm_zone(const uint32_t *zone_id)
+{
+    if (!zone_id)
+        return SS$_BADPARAM;
+
+    uint32_t zid = *zone_id;
+
+    ensure_init();
+
+    pthread_mutex_lock(&zone_table_lock);
+
+    if (zid >= MAX_ZONES || !zones[zid].active) {
+        pthread_mutex_unlock(&zone_table_lock);
+        return LIB$_BADZONE;
+    }
+
+    struct vm_zone *zone = &zones[zid];
+
+    pthread_mutex_lock(&zone->lock);
+
+    struct extent *ext = zone->extents;
+    while (ext) {
+        struct extent *next = ext->next;
+        munmap((void *)ext, ext->size);
+        ext = next;
+    }
+    zone->extents     = NULL;
+    zone->bump_ptr    = NULL;
+    zone->bump_remain = 0;
+    for (int i = 0; i < LOOKASIDE_CLASSES; i++)
+        zone->lookaside[i] = NULL;
+    zone->total_alloc = 0;
+    zone->total_free  = 0;
+
+    pthread_mutex_unlock(&zone->lock);
     pthread_mutex_unlock(&zone_table_lock);
 
     return SS$_NORMAL;

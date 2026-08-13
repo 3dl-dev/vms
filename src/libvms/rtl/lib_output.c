@@ -13,6 +13,7 @@
 #include "rmsdef.h"
 #include "descrip.h"
 #include "lib$routines.h"
+#include "str$routines.h"
 
 /*
  * lib$put_output - Write descriptor contents to stdout with a newline.
@@ -175,7 +176,12 @@ uint32_t lib$get_foreign(struct dsc$descriptor_s *result,
                          const struct dsc$descriptor_s *prompt,
                          uint16_t *result_len,
                          ...) {
-    if (!result || !result->dsc$a_pointer) return SS$_BADPARAM;
+    /* A dynamic (class D) descriptor legitimately starts with a NULL pointer
+     * and zero length — str$copy_dx allocates it below.  Only a static
+     * descriptor must already point at a buffer. */
+    if (!result) return SS$_BADPARAM;
+    if (result->dsc$b_class != DSC$K_CLASS_D && !result->dsc$a_pointer)
+        return SS$_BADPARAM;
 
     /* First call with a foreign command line present: return the raw tail
      * DCL published, then consume it so a second call reads SYS$INPUT. An
@@ -183,6 +189,23 @@ uint32_t lib$get_foreign(struct dsc$descriptor_s *result,
     const char *tail = getenv("VMS_FOREIGN_CMD");
     if (tail && tail[0] != '\0') {
         size_t len = strlen(tail);
+
+        /* Dynamic (class D) result descriptor: allocate/resize to hold the whole
+         * tail via str$copy_dx, matching VMS LIB$GET_FOREIGN, which accepts a
+         * dynamic string descriptor and returns the full command line.  (Callers
+         * such as MMK pass an INIT_DYNDESC descriptor whose dsc$w_length starts
+         * at 0; the static path below would otherwise copy zero bytes.) */
+        if (result->dsc$b_class == DSC$K_CLASS_D) {
+            struct dsc$descriptor_s src;
+            src.dsc$w_length  = (uint16_t)len;
+            src.dsc$b_dtype   = DSC$K_DTYPE_T;
+            src.dsc$b_class   = DSC$K_CLASS_S;
+            src.dsc$a_pointer = (char *)tail;
+            uint32_t st = str$copy_dx(result, &src);
+            if (result_len) *result_len = (uint16_t)len;
+            unsetenv("VMS_FOREIGN_CMD");
+            return (st & 1) ? SS$_NORMAL : st;
+        }
 
         uint16_t copylen = (uint16_t)len;
         int truncated = 0;

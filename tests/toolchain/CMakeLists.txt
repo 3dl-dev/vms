@@ -15,3 +15,76 @@ set_tests_properties(toolchain-olb-roundtrip PROPERTIES
     TIMEOUT 120
     LABELS "toolchain;librarian;link"
 )
+
+# =============================================================================
+# MMK.EXE — the vendored MadGoat MMK built as an OVMX image (self-host spine #4,
+# bead vms-ec70).  The 15 vendored make-engine TUs (unmodified except for tagged
+# "OVMX (vms-ec70)" seams) + the OVMX companions + the vms-486 PARSE_TABLES C
+# grammar, linked against the OVMX RTL.  Proves MMK actually parses a descrip.mms
+# through CLI$ compiled-CLD + real lib$table_parse + MMK's own parse_store, and
+# emits the correct build plan.  See tests/corpus/tier3-mmk/ovmx/ for the
+# clean-room (Rule 8) build shim, and run_mmk_parse.sh for the end-to-end proof.
+#
+# NB: this host ctest links MMK against the OVMX RTL libraries directly; the
+# VMS-native LINK.EXE/IMGACT packaging of the SAME sources is the mk_mmk.sh
+# recipe (src/vmslink/mk_mmk.sh), exercised on the container native-link path.
+# =============================================================================
+set(MMK_CORPUS  ${CMAKE_SOURCE_DIR}/tests/corpus/tier3-mmk)
+set(MMK_OVMX    ${MMK_CORPUS}/ovmx)
+set(MMK_COMPAT  ${MMK_OVMX}/ovmx_mmk_compat.h)
+
+# Generate the embedded CLD source header from the vendored mmk_cld.cld.
+set(MMK_CLD_SRC_H ${CMAKE_CURRENT_BINARY_DIR}/mmk_cld_src.h)
+add_custom_command(
+    OUTPUT ${MMK_CLD_SRC_H}
+    COMMAND ${CMAKE_COMMAND}
+            -DIN=${MMK_CORPUS}/mmk_cld.cld -DOUT=${MMK_CLD_SRC_H}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/gen_mmk_cld_src.cmake
+    DEPENDS ${MMK_CORPUS}/mmk_cld.cld ${CMAKE_CURRENT_SOURCE_DIR}/gen_mmk_cld_src.cmake
+    COMMENT "Embedding mmk_cld.cld -> mmk_cld_src.h (vms-ec70)"
+)
+
+add_executable(mmk_native
+    ${MMK_CORPUS}/mmk.c            ${MMK_CORPUS}/parse_descrip.c
+    ${MMK_CORPUS}/parse_objects.c  ${MMK_CORPUS}/build_target.c
+    ${MMK_CORPUS}/misc.c           ${MMK_CORPUS}/mem.c
+    ${MMK_CORPUS}/fileio.c         ${MMK_CORPUS}/symbols.c
+    ${MMK_CORPUS}/objects.c        ${MMK_CORPUS}/default_rules.c
+    ${MMK_CORPUS}/get_rdt.c        ${MMK_CORPUS}/readdesc.c
+    ${MMK_CORPUS}/str.c
+    ${CMAKE_SOURCE_DIR}/tests/libvms/mmk_parse_tables.c
+    ${MMK_OVMX}/ovmx_mmk_compat.c  ${MMK_OVMX}/ovmx_mmk_cld.c
+    ${MMK_OVMX}/ovmx_mmk_sp.c      ${MMK_OVMX}/ovmx_mmk_cms.c
+    ${MMK_OVMX}/ovmx_mmk_builtins.c
+    ${MMK_CLD_SRC_H}
+)
+target_include_directories(mmk_native PRIVATE
+    ${MMK_OVMX} ${MMK_CORPUS} ${CMAKE_CURRENT_BINARY_DIR}
+    ${CMAKE_SOURCE_DIR}/tests/libvms
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/include
+    ${CMAKE_SOURCE_DIR}/src/vmsfs/include
+    ${CMAKE_SOURCE_DIR}/src/vmslnm/include
+    ${CMAKE_SOURCE_DIR}/src/vmsprocess/include
+)
+target_compile_definitions(mmk_native PRIVATE OVMX_MMK __CRTL_VER=80400000
+    _POSIX_C_SOURCE=200809L _DEFAULT_SOURCE)
+target_compile_options(mmk_native PRIVATE
+    -fno-builtin -fno-stack-protector -Wno-unused -Wno-implicit-fallthrough
+    -include ${MMK_COMPAT})
+# The vms-486 grammar is compiled in PRODUCTION mode here: its transitions fire
+# MMK's real parse_store / parse_obj_store (see mmk_parse_tables.c).
+set_source_files_properties(${CMAKE_SOURCE_DIR}/tests/libvms/mmk_parse_tables.c
+    PROPERTIES COMPILE_DEFINITIONS OVMX_MMK_PRODUCTION)
+target_link_libraries(mmk_native PRIVATE vms vmsrms vmsfs vmslnm vmsprocess vmssys pthread m)
+set_target_properties(mmk_native PROPERTIES OUTPUT_NAME "MMK" SUFFIX ".EXE")
+
+add_test(
+    NAME toolchain-mmk-parse
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_mmk_parse.sh
+)
+set_tests_properties(toolchain-mmk-parse PROPERTIES
+    ENVIRONMENT "MMK_EXE=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/MMK.EXE"
+    TIMEOUT 120
+    LABELS "toolchain;mmk;selfhost"
+)

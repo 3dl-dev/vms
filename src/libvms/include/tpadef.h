@@ -38,6 +38,9 @@ struct _tpadef {
     char    *tpa$l_tokenptr;    /* Pointer to start of most recent token */
     uint32_t tpa$l_number;      /* Numeric value of most recent numeric token */
     uint32_t tpa$l_param;       /* User parameter (passed from state table) */
+    uint8_t  tpa$b_char;        /* First character of the most recent token match
+                                 * (VMS TPARSE exposes the matched character here;
+                                 * MMK reads it to build suffix rules char-by-char). */
 };
 
 typedef struct _tpadef TPADEF;

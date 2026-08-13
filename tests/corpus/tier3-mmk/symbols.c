@@ -151,7 +151,9 @@
 */
 
     struct SYMBOL *Lookup_Symbol(char *);
+#ifndef OVMX_MMK   /* OVMX (vms-ec70): Define_Symbol is the counted form (mmk.h) */
     void Define_Symbol(SYMTYPE, char *, char *, int, ...);
+#endif
     int Resolve_Symbols(char *, int, char **, int *, int);
     void Clear_Local_Symbols(void);
     void Create_Local_Symbols(struct DEPEND *, struct OBJREF *, struct QUE *);
@@ -372,7 +374,12 @@ struct SYMBOL *Lookup_Symbol (char *name) {
 **
 **--
 */
+#ifdef OVMX_MMK   /* OVMX (vms-ec70): counted form; call-site macro (mmk.h)
+                   * supplies ovmx_ac = total arg count in place of va_count. */
+void ovmx_Define_Symbol (int ovmx_ac, SYMTYPE symtype, char *name, char *val, int vallen, ...) {
+#else
 void Define_Symbol (SYMTYPE symtype, char *name, char *val, int vallen, ...) {
+#endif
 
     struct SYMBOL *sym;
     struct QUE    *symq;
@@ -382,7 +389,11 @@ void Define_Symbol (SYMTYPE symtype, char *name, char *val, int vallen, ...) {
     int actualcount, i;
     va_list ap;
 
+#ifdef OVMX_MMK
+    actualcount = ovmx_ac;
+#else
     va_count(actualcount);
+#endif
     if (actualcount > 4) {
     	va_start(ap, vallen);
     	sep = va_arg(ap, char *);

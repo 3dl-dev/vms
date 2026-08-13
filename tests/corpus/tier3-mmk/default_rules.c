@@ -57,7 +57,12 @@
 #pragma module DEFAULT_RULES "V1.3"
 #include "mmk.h"
 #include "globals.h"
+#ifdef OVMX_MMK          /* OVMX (vms-ec70): generated at build time by
+                          * mmk_compile_rules into WORK, found via -I$WORK */
+#include "mmk_default_rules.h"
+#else
 #include "etc_dir:mmk_default_rules.h"
+#endif
 
 /*
 **++

@@ -46,6 +46,16 @@ libvms_add_test(test_libvms_str_routines
 libvms_add_test(test_libvms_lib_tparse
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_tparse.c)
 
+# Test 4c: MMK parse_tables.mar C port (vms-486, self-host spine #2) — the
+# hand-port of the 704-line MACRO-32 TPARSE table (freeware MadGoat MMK) into
+# the OVMX TPA_GRAMMAR format, driven through the real lib$table_parse engine.
+add_executable(test_libvms_mmk_parse_tables
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_mmk_parse_tables.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/mmk_parse_tables.c)
+target_include_directories(test_libvms_mmk_parse_tables PRIVATE ${VMS_INCLUDE_DIR})
+target_link_libraries(test_libvms_mmk_parse_tables PRIVATE vms pthread m)
+add_test(NAME test_libvms_mmk_parse_tables COMMAND test_libvms_mmk_parse_tables)
+
 # Test 3b: vms-801 R2.2 conformance batch — lib$addx/subx/emul/ediv (extended
 # arithmetic), lib$ffs/ffc (bit scan), lib$crc_table/crc, lib$scanc/skpc/char,
 # lib$analyze_sdesc(_64), lib$insqhi/insqti/remqhi/remqti (self-relative

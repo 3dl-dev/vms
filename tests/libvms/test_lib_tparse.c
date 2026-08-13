@@ -132,6 +132,31 @@ static const TPA_TRAN g5_s0[] = {
 static const TPA_STATE g5_states[] = { { g5_s0, 1 } };
 static const TPA_GRAMMAR g5 = { TPA$K_GRAMMAR_MAGIC, 1, g5_states };
 
+/* ================================================================
+ * Grammar 6 — keyword word-boundary (bead vms-486): a short keyword listed
+ * BEFORE a longer keyword that shares its prefix must not swallow the longer
+ * one.  This is exactly MMK's 'SUFFIXES' / 'SUFFIXES_AFTER' ordering.
+ * ================================================================ */
+static const TPA_TRAN g6_s0[] = {
+    { TPA$K_KEYWORD, "SET",   0, TPA$_EXIT, act_verb, 1 },
+    { TPA$K_KEYWORD, "SETUP", 0, TPA$_EXIT, act_verb, 2 },
+};
+static const TPA_STATE g6_states[] = { { g6_s0, 2 } };
+static const TPA_GRAMMAR g6 = { TPA$K_GRAMMAR_MAGIC, 1, g6_states };
+
+/* ================================================================
+ * Grammar 7 — blank pre-skip must be undone on a failed match (bead vms-486):
+ * MMK's CMD_PREFIXED pattern.  With TPA$M_BLANKS, the '@' transition pre-skips
+ * the blank that the BLANK->EXIT terminator needs; a failed '@' match must
+ * restore that blank so BLANK can still fire.
+ * ================================================================ */
+static const TPA_TRAN g7_s0[] = {
+    { '@',       NULL, 0, 0,         act_markb, 0 },  /* loop on self (state 0) */
+    { TPA$_BLANK,NULL, 0, TPA$_EXIT, NULL,      0 },
+};
+static const TPA_STATE g7_states[] = { { g7_s0, 2 } };
+static const TPA_GRAMMAR g7 = { TPA$K_GRAMMAR_MAGIC, 1, g7_states };
+
 int main(void) {
     my_tpa  m;
     uint32_t st;
@@ -210,6 +235,31 @@ int main(void) {
     init_block(&m, "INCLUDE", 0);
     st = lib$table_parse(&m, &g5, NULL);
     CHECK($VMS_STATUS_SUCCESS(st), "full keyword 'INCLUDE' matches");
+
+    /* --- Grammar 6: keyword word boundary --- */
+    init_block(&m, "SET", 0);
+    st = lib$table_parse(&m, &g6, NULL);
+    CHECK($VMS_STATUS_SUCCESS(st) && m.verb == 1, "'SET' matches keyword SET (verb=1)");
+
+    init_block(&m, "SETUP", 0);   /* must reach the LONGER keyword, not stop at SET */
+    st = lib$table_parse(&m, &g6, NULL);
+    CHECK($VMS_STATUS_SUCCESS(st) && m.verb == 2,
+          "'SETUP' matches keyword SETUP not SET (word boundary; verb=2)");
+
+    init_block(&m, "SETX", 0);    /* X is a symbol char -> neither keyword matches */
+    st = lib$table_parse(&m, &g6, NULL);
+    CHECK(st == LIB$_SYNTAXERR, "'SETX' matches neither SET nor SETUP (word boundary)");
+
+    /* --- Grammar 7: blank pre-skip undone on failed match --- */
+    init_block(&m, "@ ", TPA$M_BLANKS);
+    st = lib$table_parse(&m, &g7, NULL);
+    CHECK($VMS_STATUS_SUCCESS(st) && m.b_fires == 1,
+          "'@ ' with BLANKS: '@' taken, then BLANK->EXIT still sees the blank");
+
+    init_block(&m, "@@ ", TPA$M_BLANKS);
+    st = lib$table_parse(&m, &g7, NULL);
+    CHECK($VMS_STATUS_SUCCESS(st) && m.b_fires == 2,
+          "'@@ ' with BLANKS: both '@' taken, BLANK terminates");
 
     /* --- lib$tparse alias resolves to the same engine --- */
     init_block(&m, "SHOW BAZ", TPA$M_BLANKS);

@@ -113,8 +113,15 @@ static int tpa_match(tpa_ctx *ctx, const TPA_TRAN *tr) {
     char    *base;
     uint32_t avail;
 
-    /* TPA$_BLANK matches blanks explicitly, so it must NOT pre-skip them. */
-    if (tr->type != TPA$_BLANK)
+    /* Two transition types must NOT pre-skip blanks:
+     *   - TPA$_BLANK matches blanks explicitly; and
+     *   - TPA$_LAMBDA is a null (zero-width) transition — pre-skipping would
+     *     let a terminal lambda silently CONSUME trailing blanks that a later
+     *     explicit TPA$_BLANK still needs.  In MMK, a line's leading blank
+     *     (CONTINUE routes "  cmd" to COMMAND) and a symbol's trailing blank
+     *     (SYMBOL1 -> lambda -> EXIT) both depend on lambda not eating blanks.
+     *     A null transition consumes no input, blanks included.  (bead vms-486) */
+    if (tr->type != TPA$_BLANK && tr->type != TPA$_LAMBDA)
         tpa_skip_blanks(ctx);
 
     base  = t->tpa$l_stringptr;
@@ -223,7 +230,17 @@ static int tpa_match(tpa_ctx *ctx, const TPA_TRAN *tr) {
         while (kw[klen] != '\0') klen++;
         while (n < avail && n < klen && tpa_upcase(base[n]) == tpa_upcase(kw[n]))
             n++;
-        if (n == klen) {           /* full keyword present */
+        if (n == klen &&
+            (klen == avail || !tpa_is_symchar(base[klen]))) {
+            /* Full keyword present AND terminated at a word boundary.  A
+             * following symbol-constituent character means the input is a
+             * LONGER identifier, so the shorter keyword must NOT match here.
+             * This is the observable VMS LIB$TABLE_PARSE behaviour that lets a
+             * table list 'SUFFIXES' ahead of 'SUFFIXES_AFTER' / 'SUFFIXES_*'
+             * (MMK V2.8, bead vms-486) without the longer keywords becoming
+             * unreachable dead transitions.  (Clean-room: derived from the
+             * documented keyword-match semantics and the MMK table's ordering,
+             * not from any VSI source.) */
             tpa_take(ctx, base, klen);
             return 1;
         }
@@ -280,8 +297,18 @@ static uint32_t tpa_run(tpa_ctx *ctx, uint32_t state_index) {
             char    *sp_save  = t->tpa$l_stringptr;
             uint32_t cnt_save = t->tpa$l_stringcnt;
 
-            if (!tpa_match(ctx, tr))
+            if (!tpa_match(ctx, tr)) {
+                /* A failed match must consume no input.  tpa_match may have
+                 * pre-skipped blanks (TPA$M_BLANKS) before discovering the
+                 * mismatch; undo that so a LATER transition in this state — an
+                 * explicit TPA$_BLANK, in particular — still sees those blanks.
+                 * Without this, a state like MMK's CMD_PREFIXED (its '@'/'-'
+                 * transitions pre-skip the blank that its BLANK->EXIT
+                 * terminator needs) can never terminate.  (bead vms-486) */
+                t->tpa$l_stringptr = sp_save;
+                t->tpa$l_stringcnt = cnt_save;
                 continue;
+            }
 
             /* Matched: expose the parameter, then run the action (if any).
              * An even status rejects the transition and backtracks. */

@@ -13,8 +13,10 @@
 > TCC.EXE compiles the two TUs + the driver `OVMXRTRUN.C`, LIBRARIAN.EXE archives
 > `OVMXRT.OLB`, LINK.EXE `--executable --use DECC$SHR.EXE` links the runnable image
 > `OVMXRT.EXE` — and the harness **ACTIVATES** it through IMGACT (PT_INTERP) to its
-> oracle **exit 216**, every stage byte-identical across two in-guest builds, zero
-> bash (`tests/qemu/test_syssvc_mmk_build.c`, wired into the standing
+> oracle **exit 216**; the compile+archive outputs are byte-identical across two
+> in-guest drives (LINK+activate rides one drive, its output byte-identity
+> host-proven — a 120s-VM-budget choice), zero bash
+> (`tests/qemu/test_syssvc_mmk_build.c`, wired into the standing
 > `kernel-executive` CI barrier). This is self-hosting's final MMK-driven rung:
 > **MMK builds a real OVMX component to a running image entirely inside OVMX.**
 > **BUILD.COM nonetheless STAYS** — it is still load-bearing for the S4 self-host
@@ -140,8 +142,23 @@ zero bash in the build path on every run, no new job required.
 then the harness **activates** `OVMXRT.EXE` (`fork+exec` → the kernel loads its
 `PT_INTERP=/vms/.../IMGACT.EXE`, which maps `DECC$SHR.EXE` from `SYS$LIBRARY` and
 binds the one cross-image import) and asserts it **exits 216**
-(`vms_strlen("OVMXRT")·36`). Every stage is asserted **byte-identical across two
-independent in-guest MMK-driven builds**. Key choices:
+(`vms_strlen("OVMXRT")·36`).
+
+**Two drives, LINK+activate on one (a deliberate budget choice).** The suite runs
+two independent MMK drives: drive #1 is the lighter **compile+archive** drive
+(vms-6be), drive #2 is the **full compile→archive→LINK** drive whose image is
+activated. The **compile and archive** outputs are asserted **byte-identical
+across the two drives** (as vms-6be). The **LINK** runs on drive #2 only: linking
++ activating on *both* drives pushed the suite past `run_tests.sh`'s 120s
+whole-VM budget under slow/contended TCG (an early build reddened when the 40s
+per-drive bound elapsed after the archive but before the LINK). The LINK
+**output**'s determinism is instead proven byte-identical **on the host**
+(`run_mmk_component_build.sh` links the image twice, `cmp`-clean); in-guest the
+rung proves the driven LINK yields a real image that **activates and runs**, which
+is the property that could not be shown before. The per-drive bound was also
+raised 40s→60s so a slow-but-progressing full drive completes the LINK.
+
+Key choices:
 
 - **`vms_math.c` is excluded** (SSE `"x"` inline asm not tcc-compilable on
   x86_64) — the library is the two string/format TUs.

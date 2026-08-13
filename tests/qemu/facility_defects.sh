@@ -4711,12 +4711,10 @@ OVMXRT.OLB carries both archived members VMS_STRING and VMS_SNPRINTF -- a real 2
 OVMXRT.OLB embeds the runtime symbols vms_strlen + vms_snprintf -- its members are compiles of the REAL src/libvmssys TUs
 the MMK-driven LIBRARIAN.EXE produced OVMXRT.OLB in the guest (build #2)
 OVMXRT.OLB is BYTE-IDENTICAL across two independent MMK-driven in-guest builds (deterministic archive, zero bash)
-the MMK-driven LINK.EXE produced OVMXRT.EXE in the guest (build #1)
+the MMK-driven LINK.EXE produced OVMXRT.EXE in the guest
 OVMXRT.EXE is a valid OVMX image (ELF ET_DYN) -- LINK really linked it in QEMU
 OVMXRT.EXE carries PT_INTERP=IMGACT.EXE -- it is an image the kernel activates through IMGACT, not a bare ELF
 IMGACT activated the MMK-driven OVMXRT.EXE and it RAN to exit 216 (vms_strlen("OVMXRT")*36) -- the LINK pulled VMS_STRING from the .OLB and the image really runs
-the MMK-driven LINK.EXE produced OVMXRT.EXE in the guest (build #2)
-OVMXRT.EXE is BYTE-IDENTICAL across two independent MMK-driven in-guest builds (deterministic link, zero bash)
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
@@ -4727,18 +4725,18 @@ LIBRARIAN and LINK commands complete instantly with a success status, so drive #
 runs to the end and the spawned DCL still echoes OVMXD1B:COMPILED -- the single
 marker "completion" assertion stays GREEN (this is a fast failure, not a $HIBER
 wedge). But no compiler ran, so drive #1 produces no object; LIBRARIAN then has
-no input objects to archive, so no OVMXRT.OLB; LINK then has nothing to link, so
-no OVMXRT.EXE; the suite's EXE-keyed short-circuit then skips drive #2. Build #1's
-object is absent -- the "produced VMS_STRING.OBJ (build #1)" require_fail -- and
-its downstream reads redden with it: the COMPILE knock_ons (valid-ELF and
-vms_strlen oracles with no object to inspect, the build-#2 object with drive #2
-skipped, and the object byte-identity check); the ARCHIVE knock_ons (no OVMXRT.OLB
-build #1, so the ar-magic, both-members and embedded-symbols oracles have no
-archive; no build #2 archive; the archive byte-identity check); and the LINK+
-ACTIVATE knock_ons (no OVMXRT.EXE build #1, so the valid-ELF and PT_INTERP oracles
-have no image; the IMGACT activation yields no exit 216 because there is no image
-to run; no build #2 image; the image byte-identity check). Every one is an
-observation of the single fact "the driven toolchain never ran". Nothing outside
+no input objects to archive, so no OVMXRT.OLB; the suite's OLB-keyed short-circuit
+then skips drive #2 (the compile->archive->LINK drive), so no OVMXRT.EXE is ever
+produced. Build #1's object is absent -- the "produced VMS_STRING.OBJ (build #1)"
+require_fail -- and its downstream reads redden with it: the COMPILE knock_ons
+(valid-ELF and vms_strlen oracles with no object to inspect, the build-#2 object
+with drive #2 skipped, and the object byte-identity check); the ARCHIVE knock_ons
+(no OVMXRT.OLB build #1, so the ar-magic, both-members and embedded-symbols
+oracles have no archive; no build #2 archive; the archive byte-identity check);
+and the LINK+ACTIVATE knock_ons (drive #2 skipped -> no OVMXRT.EXE, so the
+valid-ELF and PT_INTERP oracles have no image and the IMGACT activation yields no
+exit 216 because there is no image to run). Every one is an observation of the
+single fact "the driven toolchain never ran". Nothing outside
 test_syssvc_mmk_build is touched: it is the only suite whose (spawned) DCL
 activates an image through a foreign command, and with no executive it
 honest-skips before ever spawning that DCL.

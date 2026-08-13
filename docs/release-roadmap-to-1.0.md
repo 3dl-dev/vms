@@ -87,6 +87,26 @@ base executive):
 | **DECnet Phase IV** | Clean-room DNA Phase IV; `SET HOST` + `NODE::` COPY both directions with a lab node | `vms-30e` | 1.0 |
 | **Owns-its-kernel** | Kernel built from pinned source; VMS modules in-tree (`drivers/ovmx/`, `intree=Y` clears out-of-tree taint) + signed; curated config | `vms-19e` | 0.5 (prereq for DECnet + AXP) |
 
+### R5 clustering train — per-release breakout (operator 2026-08-13)
+
+R5 was too coarse ("0.4→1.0") to prioritize. The clustering work is broken into a
+release train so each cut notches a concrete clustering win (per the release-dimensions
+rule). Items carry an `rel-<milestone>` label so `rd list` shows what a cut owes.
+"Full breadth + depth clustering, authentic" is make-or-break — this is its cadence.
+
+| Rel | Clustering deliverable | Items (`rel-*` labelled) |
+|---|---|---|
+| **0.5** | **Cluster shows truth + reconfigures**: real membership everywhere; quorum-loss triggers reconfiguration; stop crashing peers; authenticated join | `vms-8d4` SHOW CLUSTER real membership · `vms-2d6` quorum-loss reconfiguration · `vms-953` peer CNXMGRERR bugcheck fix · `vms-405` group#/password auth · `vms-732` CLUSTER_AUTHORIZE nonce |
+| **0.6** | **Distributed lock manager**: real cluster-wide locking behind RMS | `vms-7fa` DLM ENQ-class distributed lock state · `vms-407` RMS lock arbitrator (FAB/RAB) · `vms-551` cluster membership crosses into the executive |
+| **0.7** | **Real-VAX interop hardening**: the RE friction the lab oracle exposes | `vms-257` REJECT-read-as-ACCEPT · `vms-298` stale send_seq/Con.ID reuse · `vms-abd` VAX refuses our DISCONNECT_REQ · `vms-770`/`vms-7f4` a61 audit gaps · `vms-41d` bind vote/quorum bytes |
+| **0.8** | **Rejoin 5/5 (the white-whale) + diskless satellites** | `vms-4838`/`vms-2248` op 0x02 CM readmission on the member-initiated VC · `vms-2f3` rejoin 5/5 (ship at 4/5, never abandon 5/5 — operator 2026-08-13) · `vms-ce7` NISCS diskless satellite boot |
+| **1.0** | **Join a real cluster + evacuate** — the takeover bar | `vms-ci` (epic: OVMX joins a real VMScluster) · `vms-600` real VAX MOUNTs OVMX-served MSCP · `vms-a662` genuine ODS-2 (cluster-interop gate) · live-workload evacuation, cluster stays up |
+
+The `vms-2f3` thesis (operator 2026-08-13): building the forward features above — quorum
+reconfiguration especially — is the most likely way to **surface the real root cause** of
+the residual 1/5 rejoin loss, since reconfiguration and readmission share the
+connection-manager machinery.
+
 **Platform target set** (operator 2026-08-10, `vms-8ce`): **aarch64 + x86_64 + axp**;
 VAX aspirational; ia64 excluded. AXP/Alpha is now first-class (supersedes CLAUDE.md
 Rule 5's x86_64-primary framing — Rule 5 update owed). Design-cascade-sized; do not

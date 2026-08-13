@@ -165,6 +165,14 @@ jobs:
               - 'src/vmsqueue/**'
               - 'src/vmsdcl/**'
               - 'src/ovmx_init/**'
+              - 'src/ovmx_provision/**'
+              - 'src/ovmx_job_control/**'
+              - 'tools/vms_login.c'
+              - 'tools/loginout_display.c'
+              - 'tools/loginout_display.h'
+              - 'tools/mail_notify.c'
+              - 'tools/vms_mail_notify.h'
+              - 'tools/CMakeLists.txt'
               - 'docs/design-ovmx-netbsd-syskrnl.md'
               - 'docs/design-p4-netbsd-vax-boot.md'
               - 'docs/audit-ilp32-vax-libvmssys.md'
@@ -4778,3 +4786,83 @@ jobs:
           echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
             || { echo "FAIL: STARTUP.EXE was not a VAX ELF"; exit 1; }
           echo "PASS: ovmx_init built for netbsd-vax and a real ELF32 VAX STARTUP.EXE linked over the full stack"
+
+  # -----------------------------------------------------------------------
+  # ovmx-boot-images-netbsd-vax (rd vms-5d1, epic vms-8e8, P4-C boot; docs/
+  # design-p4-netbsd-vax-boot.md §4.5). The FULL SET of OVMX boot images --
+  # every image PID 1's boot path actually invokes, walking src/ovmx_init/
+  # ovmx_init.c: STARTUP.EXE (ovmx_init) execs PROVISION.EXE (ovmx_provision,
+  # vms-9b7), which execs DCL.EXE in-process on SYS$MANAGER:STARTUP.COM,
+  # whose END-phase RUN/DETACHED-creates JOB_CONTROL.EXE (ovmx_job_control,
+  # vms-8d2), which forks LOGINOUT.EXE (tools/vms_login.c) on the console,
+  # which execs DCL.EXE (interactive, --login) -- cross-build + link for
+  # netbsd-vax and are asserted ACTIVATABLE by the Decision-A contract
+  # (vms-42d): ordinary NetBSD ELF32-vax dynamic executables, PT_INTERP ==
+  # /usr/libexec/ld.elf_so (NOT OVMX-native IMGACT.EXE + .vms$sv symbol
+  # vectors), with a resolvable NEEDED set. The umbrella script
+  # (tools/cross-vax/build-boot-images-vax.sh) reuses the existing per-image
+  # scripts unchanged for STARTUP.EXE and DCL.EXE (build-ovmx-init-vax.sh,
+  # build-vmsdcl-vax.sh) and adds three new ones for the images that were not
+  # yet covered (build-provision-vax.sh, build-job-control-vax.sh,
+  # build-loginout-vax.sh), then runs the readelf/file activation assertion
+  # against all five linked binaries. INV-DRIFT: no image's C source forks
+  # logic on __NetBSD__/__linux__; PROVISION.EXE's one substrate difference
+  # (its fatal-halt power-off) reuses the SAME ovmx_boot.h backend-object
+  # seam (vms-28f) ovmx_init already uses, selected by CMake
+  # (src/ovmx_provision/CMakeLists.txt), not a source #ifdef -- verified by
+  # building ovmx_provision on the HOST (Linux) too, unregressed. NOT
+  # emulation (no qemu-system-vax); a static ELF proof, never executed --
+  # build/test tooling, never a runtime (Rule 9). Fast once the cross
+  # toolchain image layer-caches (gha, shared scope=cross-vax). Gated on the
+  # shared netbsd_vax filter: push/merge_group/schedule always; on a PR only
+  # when the cross inputs change (the boot images' sources + tools/cross-vax/**).
+  # -----------------------------------------------------------------------
+  ovmx-boot-images-netbsd-vax:
+    name: OVMX boot images link for netbsd-vax (vms-5d1)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile + link + activation-assert the full OVMX boot image set for netbsd-vax
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-boot-images-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax boot image set build/link/activation-assert exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: the full OVMX boot image set (STARTUP.EXE, PROVISION.EXE, DCL.EXE, JOB_CONTROL.EXE, LOGINOUT.EXE) builds, links, and activates via ld.elf_so for vax--netbsdelf' \
+            || { echo "FAIL: did not see the boot-image-set PASS banner"; exit 1; }
+          for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE; do
+            # NOTE: the pattern starts with "->", i.e. with a literal '-' --
+            # without `--` to end option parsing, grep reads "-> STARTUP..."
+            # as an option cluster ("invalid option -- '>'") instead of a
+            # pattern, and fails on the FIRST image checked regardless of
+            # whether that image's real properties are correct.
+            echo "$RAW" | grep -qF -- "-> $img: ELF32 Digital VAX, dynamically linked, interp=/usr/libexec/ld.elf_so" \
+              || { echo "FAIL: $img did not pass the activation contract assertion"; exit 1; }
+          done
+          echo "PASS: all 5 OVMX boot images (STARTUP.EXE, PROVISION.EXE, DCL.EXE, JOB_CONTROL.EXE, LOGINOUT.EXE) cross-build, link, and activate via ld.elf_so for netbsd-vax"

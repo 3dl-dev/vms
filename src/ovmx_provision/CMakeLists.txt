@@ -11,8 +11,22 @@
 # IMGACT.EXE can activate a shareable. It has no reason to be static and
 # making it so would re-create the constraint this item deleted.
 
+# Boot-plumbing substrate seam (vms-28f), same selection ovmx_init's
+# CMakeLists.txt already makes: PROVISION.EXE's fatal-halt path powers the
+# machine off through ovmx_boot_power_off(), not a second direct reboot(2)
+# call, so it needs the same per-substrate backend object ovmx_init links
+# (vms-5d1, epic vms-8e8 -- netbsd-vax's reboot(2) has a different signature/
+# flag set than Linux's, and the seam is exactly what exists to keep that
+# ONE substrate difference out of the shared .c source).
+if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    set(OVMX_PROVISION_BOOT_BACKEND_SRC ${CMAKE_SOURCE_DIR}/src/ovmx_init/ovmx_boot_netbsd.c)
+else()
+    set(OVMX_PROVISION_BOOT_BACKEND_SRC ${CMAKE_SOURCE_DIR}/src/ovmx_init/ovmx_boot_linux.c ${CMAKE_SOURCE_DIR}/src/ovmx_init/opcom_kmsg.c)
+endif()
+
 add_executable(ovmx_provision
     ovmx_provision.c
+    ${OVMX_PROVISION_BOOT_BACKEND_SRC}
 )
 
 target_include_directories(ovmx_provision PRIVATE
@@ -21,6 +35,7 @@ target_include_directories(ovmx_provision PRIVATE
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/src/libvmssys
+    ${CMAKE_SOURCE_DIR}/src/ovmx_init
 )
 
 target_compile_definitions(ovmx_provision PRIVATE

@@ -395,32 +395,89 @@ static int cmd_set_terminal(struct dcl_command *cmd)
 
 /*
  * SET PROTECTION - Set file protection.
- * Format: SET PROTECTION (S:RWED,O:RW,G:R,W:) filespec
+ *
+ * Syntax (VSI OpenVMS DCL Dictionary, SET PROTECTION):
+ *   SET PROTECTION[=(ownership[:access][,...])] filespec[,...]
+ * e.g.  SET PROTECTION=(S:RWED,O:RWED,G:RE,W:) FOO.TXT
+ *       SET PROTECTION=W:RE FOO.TXT           (a single category)
+ *       SET PROTECTION (S:RWED,O:RW) FOO.TXT  (positional, "=" omitted)
+ *
+ * The parenthesised protection list contains commas, which the generic DCL
+ * token loop splits into separate positional parameters (and, worse, leaves
+ * the filespec sitting in whatever params[] slot fell after the last comma).
+ * So we do NOT use cmd->params[] here; we reparse cmd->raw_tail -- the raw,
+ * unsplit argument tail after the verb -- which preserves the list intact.
+ *
+ * VMS merge semantics: a category the user does NOT name keeps the file's
+ * CURRENT protection (DCL Dictionary: unspecified categories are unchanged).
+ * We seed the protection word from the file's present mode and let
+ * vmsfs_parse_protection() override only the named categories.
  */
 static int cmd_set_protection(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
-    if (cmd->param_count < 3) {
+    /* cmd->raw_tail == everything after "SET", e.g.
+     * "PROTECTION=(S:RWED,O:RWED,G:RE,W:) FOO.TXT". */
+    const char *p = cmd->raw_tail;
+    while (*p == ' ' || *p == '\t') p++;
+
+    /* Skip the "PROTECTION" keyword (any legal abbreviation): it ends at the
+     * first space, '=', or '(' -- whichever comes first. */
+    while (*p && *p != ' ' && *p != '\t' && *p != '=' && *p != '(') p++;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '=') {
+        p++;
+        while (*p == ' ' || *p == '\t') p++;
+    }
+
+    /* Extract the protection spec: a parenthesised list, or a single
+     * category token up to the next whitespace. */
+    char prot_str[128];
+    size_t n = 0;
+    if (*p == '(') {
+        while (*p && *p != ')' && n < sizeof(prot_str) - 2) prot_str[n++] = *p++;
+        if (*p == ')') prot_str[n++] = *p++;      /* include the closing paren */
+    } else {
+        while (*p && *p != ' ' && *p != '\t' && n < sizeof(prot_str) - 1)
+            prot_str[n++] = *p++;
+    }
+    prot_str[n] = '\0';
+
+    /* The filespec follows. */
+    while (*p == ' ' || *p == '\t') p++;
+    char filespec[512];
+    size_t fn = 0;
+    while (*p && *p != ' ' && *p != '\t' && *p != '\n' && fn < sizeof(filespec) - 1)
+        filespec[fn++] = *p++;
+    filespec[fn] = '\0';
+
+    if (prot_str[0] == '\0' || filespec[0] == '\0') {
         dcl_error("DCL", 2, "NOKEYW",
                   "missing protection string and/or file specification");
         return SS$_BADPARAM;
     }
 
-    /* param[0] = "PROTECTION", param[1] = protection string, param[2] = filespec */
-    const char *prot_str = cmd->params[1];
-    const char *filespec = cmd->params[2];
+    char linux_path[1024];
+    dcl_resolve_path(ctx, filespec, linux_path, sizeof(linux_path));
 
-    uint16_t vprot;
+    /* Seed the protection word from the file's CURRENT protection so that
+     * categories the user does not name are preserved (VMS merge semantics).
+     * A missing file is %RMS-E-FNF, exactly as VMS reports it. */
+    struct stat st;
+    if (stat(linux_path, &st) != 0) {
+        dcl_error("RMS", 2, "PRV",
+                  "failed to set protection - %s", vms_strerror(ENOENT));
+        return SS$_NOPRIV;
+    }
+    uint16_t vprot = vmsfs_mode_to_protection(st.st_mode);
+
     if (vmsfs_parse_protection(prot_str, &vprot) != SS$_NORMAL) {
         dcl_error("DCL", 2, "BADPROT", "invalid protection string - %s", prot_str);
         return SS$_BADPARAM;
     }
 
     mode_t new_mode = vmsfs_protection_to_mode(vprot);
-
-    char linux_path[1024];
-    dcl_resolve_path(ctx, filespec, linux_path, sizeof(linux_path));
 
     if (chmod(linux_path, new_mode) != 0) {
         dcl_error("RMS", 2, "PRV", "failed to set protection - %s", vms_strerror(errno));

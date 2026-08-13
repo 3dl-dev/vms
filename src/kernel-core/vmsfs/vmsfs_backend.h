@@ -47,17 +47,22 @@
  *     the ordinary string/ctype names strrchr / memcmp / toupper / strscpy to
  *     the vocabulary below; no host-object seam.
  *
- * The block-buffer + volume-geometry + inode seam that the bitmap/cluster
- * allocator and the directory-block scanner need (the sb_bread/brelse/
- * mark_buffer_dirty equivalent, the storage-bitmap ops, and the struct-inode
- * field access, today reached through struct super_block / struct
- * vmsfs_sb_info / struct buffer_head / struct inode) is STILL deliberately NOT
- * introduced here: those algorithms remain entangled with the Linux VFS object
- * model. That block/inode seam is DESIGNED in src/kernel/vmsfs/README-backend.md
- * (the NetBSD-vnode-backend template); building it and moving those algorithms
- * onto it is the next phase, mirroring how the executive core left its
- * block-coupled facility (vms_devtab) in src/kernel until its seam existed.
- * Adding an op here before a core file needs it would be dead surface.
+ * PHASE V2b SCOPE (rd vms-d69). The block/inode seam is now BUILT — as a
+ * SEPARATE vocabulary, not on this string/ctype shim. The storage/FID/cluster
+ * allocator, the directory-block scanner and the file-header decode/encode were
+ * promoted into the core (vmsfs_alloc.c, vmsfs_dirscan.c, vmsfs_header.c)
+ * against the block-buffer + volume-geometry + bitmap + endian + wall-clock ops
+ * (the sb_bread / brelse / mark_buffer_dirty equivalent). Those ops are declared
+ * in the core header vmsfs_bio.h and realized by each backend (Linux:
+ * vmsfs_backend_linux.h's vmsfs_bget / vmsfs_bdata / vmsfs_bdirty[_sync] /
+ * vmsfs_bput / vmsfs_bit_* / vmsfs_le*_to_cpu / vmsfs_cpu_to_le* /
+ * vmsfs_now_seconds). The struct-inode field access stays in the backend: the
+ * core owns the ODS-2 header INTERPRETATION via a POD `struct vmsfs_fh_info` and
+ * the pure vmsfs_fh_decode / vmsfs_fh_encode split, while each backend keeps
+ * only the thin `POD <-> host inode` copy. This mirrors how the executive core
+ * moved its block-coupled facility onto exec_kbackend.h once its seam existed.
+ * The seam is DESIGNED in src/kernel/vmsfs/README-backend.md §3 (the
+ * NetBSD-vnode-backend template).
  *
  * Clean-room (CLAUDE.md Rule 8): this contract and the ODS-2 algorithms are
  * OVMX's own code; each backend maps it to PUBLIC, documented host kernel APIs
@@ -87,8 +92,9 @@
  * -VMSFS_EINVAL returns exactly the -EINVAL the Linux VFS caller expects):
  *   VMSFS_EINVAL        invalid argument / unparseable filespec
  *   VMSFS_ENAMETOOLONG  name does not fit the caller's buffer
- *   VMSFS_EIO           VBN not mapped by any retrieval pointer
- *   VMSFS_ENOSPC        retrieval-pointer array is full
+ *   VMSFS_EIO           VBN not mapped by any retrieval pointer / block I/O error
+ *   VMSFS_ENOSPC        retrieval-pointer array is full / no free block or FID
+ *   VMSFS_ENOENT        directory entry / file header not found (rd vms-d69)
  */
 
 #ifndef OVMX_VMSFS_BACKEND_H

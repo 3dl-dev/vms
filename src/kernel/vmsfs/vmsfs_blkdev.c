@@ -1,23 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * vmsfs_blkdev.c - Block-device mode operations for vmsfs
+ * vmsfs_blkdev.c - Block-device mode operations for vmsfs (Linux VFS backend)
  *
- * Implements filesystem operations for mounting a block device
- * formatted with the VMSFS on-disk format (vmsfs_ondisk.h).
+ * Implements the Linux VFS operations for mounting a block device formatted
+ * with the VMSFS on-disk format (vmsfs_ondisk.h). This file is now the THIN
+ * Linux backend for the ODS-2 block/inode seam (rd vms-d69, epic vms-8e8): the
+ * storage/FID allocator, the directory-block scanner and the file-header
+ * decode/encode ALGORITHMS live in the substrate-neutral core
+ * (src/kernel-core/vmsfs/vmsfs_alloc.c, vmsfs_dirscan.c, vmsfs_header.c) and are
+ * reached through struct vmsfs_volume + the vmsfs_bio ops. What remains here is
+ * VFS plumbing: inode iget/flush (the POD <-> struct inode copy around the core
+ * decode/encode), the address_space ops, dentry ops, SOGW permission, and the
+ * ->create/->mkdir/->unlink/->rmdir/->rename/->lookup/->iterate entry points,
+ * each of which calls the core for every ODS-2 decision.
  *
- * Read operations:
- *   - vmsfs_blkdev_iget():  read file header by FID -> populate VFS inode
- *   - lookup:  scan directory data blocks for entries
- *   - readdir: iterate directory data blocks, emit entries
- *   - read:    VBN->LBN translation via retrieval pointers, sb_bread()
- *
- * Write operations:
- *   - create:  allocate FID, add directory entry (auto-versioning)
- *   - mkdir:   allocate FID + data block, add directory entry
- *   - write:   VBN->LBN with block allocation, buffer_head writes
- *   - unlink:  remove directory entry, free blocks and FID
- *
- * OVMX Project - Phase 7: Block-device vmsfs
+ * OVMX Project - Phase 7: Block-device vmsfs; V2b: ODS-2 core extraction.
  */
 
 #include <linux/kernel.h>
@@ -55,6 +52,9 @@ static int vmsfs_blkdev_rename(struct mnt_idmap *idmap, struct inode *old_dir,
                                struct dentry *new_dentry, unsigned int flags);
 static int vmsfs_ensure_blocks(struct super_block *sb, struct inode *inode,
                                uint32_t target_vbn);
+static int vmsfs_blkdev_add_entry(struct super_block *sb, struct inode *dir,
+                                  uint32_t fid, const char *name,
+                                  uint8_t name_len, uint16_t version);
 
 /* ================================================================
  * Operations tables
@@ -176,13 +176,19 @@ static const struct address_space_operations vmsfs_blkdev_aops = {
 };
 
 /* ================================================================
- * File header -> VFS inode
+ * File header <-> VFS inode
+ *
+ * The ODS-2 header INTERPRETATION (validate + decode / encode a 512-byte
+ * file header, all fields little-endian + XOR-checksummed) lives in the
+ * substrate-neutral core (vmsfs_header.c: vmsfs_fh_decode / vmsfs_fh_encode /
+ * vmsfs_fh_write_meta). What stays here is the thin POD <-> struct inode copy
+ * and the buffer I/O around it (sb_bread / brelse / iget_locked).
  * ================================================================ */
 
 /*
  * Read a file header from the index area by FID and populate a VFS inode.
  *
- * The file header area starts at sbi->index_lbn. Each header occupies
+ * The file header area starts at sbi->vol.index_lbn. Each header occupies
  * one 512-byte block. FID N is at LBN (index_lbn + N - 1) since FIDs
  * are 1-based.
  */
@@ -193,11 +199,11 @@ struct inode *vmsfs_blkdev_iget(struct super_block *sb, uint32_t fid)
     struct vmsfs_file_header *fh;
     struct inode *inode;
     struct vmsfs_inode_info *vi;
+    struct vmsfs_fh_info fhi;
     uint32_t lbn;
-    uint32_t cksum;
     unsigned int i;
 
-    if (fid == 0 || fid > sbi->max_files)
+    if (fid == 0 || fid > sbi->vol.max_files)
         return ERR_PTR(-EINVAL);
 
     /* Check inode cache first */
@@ -208,7 +214,7 @@ struct inode *vmsfs_blkdev_iget(struct super_block *sb, uint32_t fid)
         return inode;  /* already cached */
 
     /* FID is 1-based, index area starts at index_lbn */
-    lbn = sbi->index_lbn + fid - 1;
+    lbn = sbi->vol.index_lbn + fid - 1;
 
     bh = sb_bread(sb, lbn);
     if (!bh) {
@@ -220,68 +226,60 @@ struct inode *vmsfs_blkdev_iget(struct super_block *sb, uint32_t fid)
 
     fh = (struct vmsfs_file_header *)bh->b_data;
 
-    /* Validate magic */
-    if (le32_to_cpu(fh->fh_magic) != VMSFS_FH_MAGIC) {
+    /* Validate + decode the ODS-2 header via the core. */
+    switch (vmsfs_fh_decode(bh->b_data, &fhi)) {
+    case VMSFS_FH_OK:
+        break;
+    case VMSFS_FH_BAD_MAGIC:
         pr_err("vmsfs: invalid file header magic for FID %u: 0x%08x\n",
                fid, le32_to_cpu(fh->fh_magic));
         brelse(bh);
         iget_failed(inode);
         return ERR_PTR(-EIO);
-    }
-
-    /* Validate checksum */
-    cksum = vmsfs_checksum(fh, sizeof(*fh));
-    if (cksum != le32_to_cpu(fh->fh_checksum)) {
+    case VMSFS_FH_BAD_CHECKSUM:
         pr_err("vmsfs: file header checksum mismatch for FID %u\n", fid);
         brelse(bh);
         iget_failed(inode);
         return ERR_PTR(-EIO);
-    }
-
-    /* Verify in-use */
-    if (!(le16_to_cpu(fh->fh_flags) & VMSFS_FH_INUSE)) {
+    case VMSFS_FH_NOT_INUSE:
         brelse(bh);
         iget_failed(inode);
         return ERR_PTR(-ENOENT);
     }
 
-    /* Populate VFS inode */
+    /* Populate VFS inode from the decoded POD (host-side copy). */
     vi = VMSFS_I(inode);
     vi->fid = fid;
-    vi->version = le16_to_cpu(fh->fh_version);
-    vi->vms_prot = le16_to_cpu(fh->fh_protection);
+    vi->version = fhi.version;
+    vi->vms_prot = fhi.protection;
 
     /* Copy name and type */
-    memcpy(vi->base_name, fh->fh_name,
-           min_t(size_t, sizeof(vi->base_name), sizeof(fh->fh_name)));
+    memcpy(vi->base_name, fhi.name,
+           min_t(size_t, sizeof(vi->base_name), sizeof(fhi.name)));
     vi->base_name[sizeof(vi->base_name) - 1] = '\0';
-    memcpy(vi->extension, fh->fh_type,
-           min_t(size_t, sizeof(vi->extension), sizeof(fh->fh_type)));
+    memcpy(vi->extension, fhi.type,
+           min_t(size_t, sizeof(vi->extension), sizeof(fhi.type)));
     vi->extension[sizeof(vi->extension) - 1] = '\0';
 
-    /* Cache retrieval pointers */
-    vi->map_count = le16_to_cpu(fh->fh_map_count);
-    if (vi->map_count > VMSFS_MAX_RETRIEVAL)
-        vi->map_count = VMSFS_MAX_RETRIEVAL;
-    for (i = 0; i < vi->map_count; i++) {
-        vi->map[i].rp_lbn = le32_to_cpu(fh->fh_map[i].rp_lbn);
-        vi->map[i].rp_count = le32_to_cpu(fh->fh_map[i].rp_count);
-    }
+    /* Cache retrieval pointers (already clamped by the decoder) */
+    vi->map_count = fhi.map_count;
+    for (i = 0; i < vi->map_count; i++)
+        vi->map[i] = fhi.map[i];
 
     /* Set VFS inode fields */
-    inode->i_size = le64_to_cpu(fh->fh_size);
-    inode->i_blocks = le32_to_cpu(fh->fh_blocks);
+    inode->i_size = fhi.size;
+    inode->i_blocks = fhi.blocks;
 
     /* Timestamps (stored as Unix epoch seconds) */
-    inode_set_ctime(inode, le64_to_cpu(fh->fh_created), 0);
-    inode_set_mtime(inode, le64_to_cpu(fh->fh_modified), 0);
-    inode_set_atime(inode, le64_to_cpu(fh->fh_accessed), 0);
+    inode_set_ctime(inode, fhi.created, 0);
+    inode_set_mtime(inode, fhi.modified, 0);
+    inode_set_atime(inode, fhi.accessed, 0);
 
     /* UIC -> uid/gid (simplified mapping) */
-    inode->i_uid = KUIDT_INIT(le16_to_cpu(fh->fh_uic_member));
-    inode->i_gid = KGIDT_INIT(le16_to_cpu(fh->fh_uic_group));
+    inode->i_uid = KUIDT_INIT(fhi.uic_member);
+    inode->i_gid = KGIDT_INIT(fhi.uic_group);
 
-    set_nlink(inode, le16_to_cpu(fh->fh_link_count));
+    set_nlink(inode, fhi.link_count);
     if (inode->i_nlink == 0)
         set_nlink(inode, 1);
 
@@ -294,7 +292,7 @@ struct inode *vmsfs_blkdev_iget(struct super_block *sb, uint32_t fid)
      * For directories we always include the sticky/execute bits so that
      * the VFS can traverse them; .permission gates the real check.
      */
-    if (le16_to_cpu(fh->fh_flags) & VMSFS_FH_DIRECTORY) {
+    if (fhi.flags & VMSFS_FH_DIRECTORY) {
         inode->i_mode = S_IFDIR | 0111 |
                         vmsfs_prot_to_mode(vi->vms_prot);
         inode->i_op = &vmsfs_blkdev_dir_iops;
@@ -314,6 +312,10 @@ struct inode *vmsfs_blkdev_iget(struct super_block *sb, uint32_t fid)
 
 /* ================================================================
  * Write inode metadata + retrieval pointers to on-disk file header
+ *
+ * The backend reads the header block; the core (vmsfs_fh_write_meta) does the
+ * ODS-2 read-modify-write of the size / blocks / link-count / protection /
+ * retrieval-map fields (with a refreshed modification time) + re-checksum.
  * ================================================================ */
 
 int vmsfs_blkdev_flush_inode(struct super_block *sb, struct inode *inode)
@@ -321,229 +323,26 @@ int vmsfs_blkdev_flush_inode(struct super_block *sb, struct inode *inode)
     struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
     struct vmsfs_inode_info *vi = VMSFS_I(inode);
     struct buffer_head *bh;
-    struct vmsfs_file_header *fh;
-    uint32_t lbn;
-    unsigned int i;
-
-    if (vi->fid == 0 || vi->fid > sbi->max_files)
-        return -EINVAL;
-
-    lbn = sbi->index_lbn + vi->fid - 1;
-
-    bh = sb_bread(sb, lbn);
-    if (!bh)
-        return -EIO;
-
-    fh = (struct vmsfs_file_header *)bh->b_data;
-
-    /* Update fields from VFS inode */
-    fh->fh_size = cpu_to_le64(inode->i_size);
-    fh->fh_blocks = cpu_to_le32(inode->i_blocks);
-    fh->fh_modified = cpu_to_le64(ktime_get_real_seconds());
-    fh->fh_link_count = cpu_to_le16(inode->i_nlink);
-    fh->fh_protection = cpu_to_le16(vi->vms_prot);
-
-    /* Update retrieval pointers */
-    fh->fh_map_count = cpu_to_le16(vi->map_count);
-    for (i = 0; i < vi->map_count && i < VMSFS_MAX_RETRIEVAL; i++) {
-        fh->fh_map[i].rp_lbn = cpu_to_le32(vi->map[i].rp_lbn);
-        fh->fh_map[i].rp_count = cpu_to_le32(vi->map[i].rp_count);
-    }
-    /* Zero remaining map slots */
-    for (; i < VMSFS_MAX_RETRIEVAL; i++) {
-        fh->fh_map[i].rp_lbn = 0;
-        fh->fh_map[i].rp_count = 0;
-    }
-
-    /* Recompute checksum */
-    fh->fh_checksum = 0;
-    fh->fh_checksum = cpu_to_le32(vmsfs_checksum(fh, sizeof(*fh)));
-
-    mark_buffer_dirty(bh);
-    sync_dirty_buffer(bh);
-    brelse(bh);
-    return 0;
-}
-
-/* ================================================================
- * VBN -> LBN translation and retrieval-map math
- *
- * The pure arithmetic over a file's retrieval-pointer array --
- * vmsfs_vbn_to_lbn(), vmsfs_next_vbn() and vmsfs_extend_map() -- was promoted
- * to the substrate-neutral ODS-2 core (src/kernel-core/vmsfs/vmsfs_map.c, rd
- * vms-544) and is declared in vmsfs_core.h. It takes the retrieval array and
- * count directly (vi->map, vi->map_count) rather than a struct
- * vmsfs_inode_info, so it names no host object.
- * ================================================================ */
-
-/* ================================================================
- * Bitmap and home block write-back helpers
- * ================================================================ */
-
-/*
- * Write a single bitmap block back to disk after modifying the in-memory
- * bitmap. bit_pos determines which bitmap block to write.
- */
-static int vmsfs_write_bitmap_block(struct super_block *sb, uint32_t bit_pos)
-{
-    struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
-    uint32_t block_idx = bit_pos / (VMSFS_BLOCK_SIZE * 8);
-    uint32_t lbn = sbi->bitmap_lbn + block_idx;
-    struct buffer_head *bh;
-
-    if (block_idx >= sbi->bitmap_blocks)
-        return -EINVAL;
-
-    bh = sb_bread(sb, lbn);
-    if (!bh)
-        return -EIO;
-
-    memcpy(bh->b_data,
-           (char *)sbi->bitmap + block_idx * VMSFS_BLOCK_SIZE,
-           VMSFS_BLOCK_SIZE);
-
-    mark_buffer_dirty(bh);
-    sync_dirty_buffer(bh);
-    brelse(bh);
-    return 0;
-}
-
-/*
- * Update the home block on disk with current free_blocks count.
- */
-static int vmsfs_update_home_block(struct super_block *sb)
-{
-    struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
-    struct buffer_head *bh;
-    struct vmsfs_home_block *hb;
-
-    bh = sb_bread(sb, VMSFS_HOME_LBN);
-    if (!bh)
-        return -EIO;
-
-    hb = (struct vmsfs_home_block *)bh->b_data;
-    hb->hb_free_blocks = cpu_to_le32(sbi->free_blocks);
-    hb->hb_modified = cpu_to_le64(ktime_get_real_seconds());
-
-    hb->hb_checksum = 0;
-    hb->hb_checksum = cpu_to_le32(vmsfs_checksum(hb, sizeof(*hb)));
-
-    mark_buffer_dirty(bh);
-    sync_dirty_buffer(bh);
-    brelse(bh);
-    return 0;
-}
-
-/* ================================================================
- * Block allocation and free
- *
- * The storage bitmap has one bit per block on the volume.
- * Bit set = allocated, bit clear = free.
- * Caller must hold sbi->alloc_lock.
- * ================================================================ */
-
-static int vmsfs_alloc_block(struct super_block *sb, uint32_t *lbn_out)
-{
-    struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
-    uint32_t bit;
-    int ret;
-
-    if (sbi->free_blocks == 0)
-        return -ENOSPC;
-
-    bit = find_next_zero_bit(sbi->bitmap, sbi->total_blocks, sbi->data_lbn);
-    if (bit >= sbi->total_blocks)
-        return -ENOSPC;
-
-    set_bit(bit, sbi->bitmap);
-    sbi->free_blocks--;
-
-    ret = vmsfs_write_bitmap_block(sb, bit);
-    if (ret) {
-        clear_bit(bit, sbi->bitmap);
-        sbi->free_blocks++;
-        return ret;
-    }
-
-    *lbn_out = bit;
-    return 0;
-}
-
-static int vmsfs_free_block(struct super_block *sb, uint32_t lbn)
-{
-    struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
-    int ret;
-
-    if (lbn >= sbi->total_blocks)
-        return -EINVAL;
-
-    if (!test_bit(lbn, sbi->bitmap))
-        return 0;  /* already free */
-
-    clear_bit(lbn, sbi->bitmap);
-    sbi->free_blocks++;
-
-    ret = vmsfs_write_bitmap_block(sb, lbn);
-    if (ret) {
-        set_bit(lbn, sbi->bitmap);
-        sbi->free_blocks--;
-        return ret;
-    }
-
-    return 0;
-}
-
-/* ================================================================
- * FID allocation and free
- *
- * Scan the file header area for a free slot (no valid INUSE header).
- * Caller must hold sbi->alloc_lock.
- * ================================================================ */
-
-static int vmsfs_alloc_fid(struct super_block *sb, uint32_t *fid_out)
-{
-    struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
-    uint32_t fid;
-
-    for (fid = VMSFS_FID_FIRST_USER; fid <= sbi->max_files; fid++) {
-        struct buffer_head *bh;
-        struct vmsfs_file_header *fh;
-        uint32_t lbn = sbi->index_lbn + fid - 1;
-
-        bh = sb_bread(sb, lbn);
-        if (!bh)
-            continue;
-
-        fh = (struct vmsfs_file_header *)bh->b_data;
-
-        if (le32_to_cpu(fh->fh_magic) != VMSFS_FH_MAGIC ||
-            !(le16_to_cpu(fh->fh_flags) & VMSFS_FH_INUSE)) {
-            brelse(bh);
-            *fid_out = fid;
-            return 0;
-        }
-
-        brelse(bh);
-    }
-
-    return -ENOSPC;
-}
-
-static int vmsfs_free_fid(struct super_block *sb, uint32_t fid)
-{
-    struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
-    struct buffer_head *bh;
+    struct vmsfs_fh_meta meta;
     uint32_t lbn;
 
-    if (fid < VMSFS_FID_FIRST_USER || fid > sbi->max_files)
+    if (vi->fid == 0 || vi->fid > sbi->vol.max_files)
         return -EINVAL;
 
-    lbn = sbi->index_lbn + fid - 1;
+    lbn = sbi->vol.index_lbn + vi->fid - 1;
+
     bh = sb_bread(sb, lbn);
     if (!bh)
         return -EIO;
 
-    memset(bh->b_data, 0, VMSFS_BLOCK_SIZE);
+    meta.size       = inode->i_size;
+    meta.blocks     = inode->i_blocks;
+    meta.link_count = inode->i_nlink;
+    meta.protection = vi->vms_prot;
+    meta.map_count  = vi->map_count;
+    meta.map        = vi->map;
+    vmsfs_fh_write_meta(bh->b_data, &meta);
+
     mark_buffer_dirty(bh);
     sync_dirty_buffer(bh);
     brelse(bh);
@@ -551,284 +350,88 @@ static int vmsfs_free_fid(struct super_block *sb, uint32_t fid)
 }
 
 /* ================================================================
- * Block allocation driver
+ * VBN -> LBN translation and retrieval-map math (substrate-neutral core:
+ * src/kernel-core/vmsfs/vmsfs_map.c, rd vms-544).
+ *
+ * Storage / FID / cluster allocation and home-block write-back (substrate-
+ * neutral core: src/kernel-core/vmsfs/vmsfs_alloc.c, rd vms-d69) -- reached
+ * through struct vmsfs_volume + the vmsfs_bio ops. This backend calls them with
+ * &sbi->vol under sbi->alloc_lock, exactly as the former file-static helpers
+ * ran under that lock.
  * ================================================================ */
 
 /*
  * Ensure the file has blocks allocated through the given VBN.
- * Allocates blocks to fill any gap between current allocation and target.
- * Caller must hold sbi->alloc_lock.
+ *
+ * The block-level growth (allocate + extend the retrieval map + zero each new
+ * block) is the core's vmsfs_grow_map(); this wrapper applies the resulting
+ * block-count delta to the host inode. Caller must hold sbi->alloc_lock.
  */
 static int vmsfs_ensure_blocks(struct super_block *sb, struct inode *inode,
                                uint32_t target_vbn)
 {
+    struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
     struct vmsfs_inode_info *vi = VMSFS_I(inode);
-    uint32_t next;
+    int blocks_added = 0;
     int ret;
 
-    next = vmsfs_next_vbn(vi->map, vi->map_count);
-
-    while (next <= target_vbn) {
-        uint32_t lbn;
-        struct buffer_head *bh;
-
-        ret = vmsfs_alloc_block(sb, &lbn);
-        if (ret)
-            return ret;
-
-        ret = vmsfs_extend_map(vi->map, &vi->map_count, lbn);
-        if (ret) {
-            vmsfs_free_block(sb, lbn);
-            return ret;
-        }
-
-        /* Zero newly allocated block */
-        bh = sb_bread(sb, lbn);
-        if (bh) {
-            memset(bh->b_data, 0, VMSFS_BLOCK_SIZE);
-            mark_buffer_dirty(bh);
-            brelse(bh);
-        }
-
-        inode->i_blocks++;
-        next++;
-    }
-
-    return 0;
+    ret = vmsfs_grow_map(&sbi->vol, vi->map, &vi->map_count, target_vbn,
+                         &blocks_added);
+    inode->i_blocks += blocks_added;
+    return ret;
 }
 
 /* ================================================================
- * Name helpers
+ * Name helpers and the directory-block scanner
  *
- * The pure ODS-2 filename FORMAT algorithms -- vmsfs_split_name_type(),
- * vmsfs_strupper() and vmsfs_name_match() (formerly the file-static
- * vmsfs_blkdev_name_match) -- were promoted to the substrate-neutral ODS-2
- * core (src/kernel-core/vmsfs/vmsfs_name.c, rd vms-00c) and are declared in
- * vmsfs_core.h. They name no host object, so the NetBSD vnode backend calls
- * the same source. This Linux glue just calls them.
- * ================================================================ */
-
-/* ================================================================
- * Directory entry management
+ * The pure ODS-2 filename FORMAT algorithms (vmsfs_split_name_type,
+ * vmsfs_strupper, vmsfs_name_match; src/kernel-core/vmsfs/vmsfs_name.c) and the
+ * directory-block SCANNER (lookup/version-resolution/add/remove/emptiness;
+ * src/kernel-core/vmsfs/vmsfs_dirscan.c, rd vms-d69) live in the core and name
+ * no host object. This backend supplies the retrieval map + case-blind flag and
+ * keeps the struct-inode mutation.
  * ================================================================ */
 
 /*
- * Add a directory entry. Scans existing blocks for a free slot (de_fid==0),
- * or allocates a new data block if all slots are full.
- * Caller must hold sbi->alloc_lock.
+ * Add a directory entry via the core scanner, then apply any directory growth
+ * to the host inode. When the core had to allocate a new directory data block
+ * (blocks_added), the directory's on-disk header (with the extended retrieval
+ * map) is flushed here. Caller must hold sbi->alloc_lock.
  */
-static int vmsfs_dir_add_entry(struct super_block *sb, struct inode *dir,
-                               uint32_t fid, const char *name,
-                               uint8_t name_len, uint16_t version)
-{
-    struct vmsfs_inode_info *dir_vi = VMSFS_I(dir);
-    uint32_t vbn;
-    int ret;
-
-    /* Scan existing blocks for a free slot */
-    for (vbn = 1; ; vbn++) {
-        uint32_t lbn;
-        struct buffer_head *bh;
-        unsigned int j;
-
-        ret = vmsfs_vbn_to_lbn(dir_vi->map, dir_vi->map_count, vbn, &lbn);
-        if (ret)
-            break;  /* no more mapped blocks */
-
-        bh = sb_bread(sb, lbn);
-        if (!bh)
-            return -EIO;
-
-        for (j = 0; j < VMSFS_DIR_PER_BLOCK; j++) {
-            struct vmsfs_dir_entry *de;
-            unsigned int off = j * VMSFS_DIR_ENTRY_SIZE;
-
-            de = (struct vmsfs_dir_entry *)(bh->b_data + off);
-
-            if (le32_to_cpu(de->de_fid) == 0) {
-                /* Found free slot */
-                memset(de, 0, VMSFS_DIR_ENTRY_SIZE);
-                de->de_fid = cpu_to_le32(fid);
-                de->de_version = cpu_to_le16(version);
-                /* Clamp name_len to avoid overflowing de_name[] */
-                if (name_len > sizeof(de->de_name) - 1)
-                    name_len = sizeof(de->de_name) - 1;
-                de->de_name_len = name_len;
-                memcpy(de->de_name, name, name_len);
-                de->de_name[name_len] = '\0';
-
-                mark_buffer_dirty(bh);
-                sync_dirty_buffer(bh);
-                brelse(bh);
-                return 0;
-            }
-        }
-
-        brelse(bh);
-    }
-
-    /* No free slot found -- extend directory with a new data block */
-    {
-        uint32_t new_lbn;
-        struct buffer_head *bh;
-        struct vmsfs_dir_entry *de;
-
-        ret = vmsfs_alloc_block(sb, &new_lbn);
-        if (ret)
-            return ret;
-
-        ret = vmsfs_extend_map(dir_vi->map, &dir_vi->map_count, new_lbn);
-        if (ret) {
-            vmsfs_free_block(sb, new_lbn);
-            return ret;
-        }
-
-        dir->i_blocks++;
-        dir->i_size += VMSFS_BLOCK_SIZE;
-
-        ret = vmsfs_blkdev_flush_inode(sb, dir);
-        if (ret)
-            return ret;
-
-        /* Zero the new block and write first entry */
-        bh = sb_bread(sb, new_lbn);
-        if (!bh)
-            return -EIO;
-
-        memset(bh->b_data, 0, VMSFS_BLOCK_SIZE);
-        de = (struct vmsfs_dir_entry *)bh->b_data;
-        de->de_fid = cpu_to_le32(fid);
-        de->de_version = cpu_to_le16(version);
-        /* Clamp name_len to avoid overflowing de_name[] */
-        if (name_len > sizeof(de->de_name) - 1)
-            name_len = sizeof(de->de_name) - 1;
-        de->de_name_len = name_len;
-        memcpy(de->de_name, name, name_len);
-        de->de_name[name_len] = '\0';
-
-        mark_buffer_dirty(bh);
-        sync_dirty_buffer(bh);
-        brelse(bh);
-        return 0;
-    }
-}
-
-/*
- * Remove a directory entry by FID and version.
- * If version == 0, removes the first entry matching the FID.
- */
-static int vmsfs_dir_remove_entry(struct super_block *sb, struct inode *dir,
-                                  uint32_t fid, uint16_t version)
-{
-    struct vmsfs_inode_info *dir_vi = VMSFS_I(dir);
-    uint32_t vbn;
-    int ret;
-
-    for (vbn = 1; ; vbn++) {
-        uint32_t lbn;
-        struct buffer_head *bh;
-        unsigned int j;
-
-        ret = vmsfs_vbn_to_lbn(dir_vi->map, dir_vi->map_count, vbn, &lbn);
-        if (ret)
-            return -ENOENT;
-
-        bh = sb_bread(sb, lbn);
-        if (!bh)
-            return -EIO;
-
-        for (j = 0; j < VMSFS_DIR_PER_BLOCK; j++) {
-            struct vmsfs_dir_entry *de;
-            unsigned int off = j * VMSFS_DIR_ENTRY_SIZE;
-
-            de = (struct vmsfs_dir_entry *)(bh->b_data + off);
-
-            if (le32_to_cpu(de->de_fid) == fid &&
-                (version == 0 ||
-                 le16_to_cpu(de->de_version) == version)) {
-                memset(de, 0, VMSFS_DIR_ENTRY_SIZE);
-                mark_buffer_dirty(bh);
-                sync_dirty_buffer(bh);
-                brelse(bh);
-                return 0;
-            }
-        }
-
-        brelse(bh);
-    }
-}
-
-/*
- * Find the highest version of a file in a directory by base name.
- * Returns 0 if no matching entry found.
- */
-static uint16_t vmsfs_blkdev_highest_version(struct super_block *sb,
-                                              struct inode *dir,
-                                              const char *base_name,
-                                              size_t base_len)
+static int vmsfs_blkdev_add_entry(struct super_block *sb, struct inode *dir,
+                                  uint32_t fid, const char *name,
+                                  uint8_t name_len, uint16_t version)
 {
     struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
     struct vmsfs_inode_info *dir_vi = VMSFS_I(dir);
-    uint16_t highest = 0;
-    uint32_t vbn;
+    int blocks_added = 0;
     int ret;
 
-    for (vbn = 1; ; vbn++) {
-        uint32_t lbn;
-        struct buffer_head *bh;
-        unsigned int j;
+    ret = vmsfs_dir_add_entry(&sbi->vol, dir_vi->map, &dir_vi->map_count,
+                              fid, name, name_len, version, &blocks_added);
+    if (blocks_added) {
+        int fret;
 
-        ret = vmsfs_vbn_to_lbn(dir_vi->map, dir_vi->map_count, vbn, &lbn);
-        if (ret)
-            break;
-
-        bh = sb_bread(sb, lbn);
-        if (!bh)
-            break;
-
-        for (j = 0; j < VMSFS_DIR_PER_BLOCK; j++) {
-            struct vmsfs_dir_entry *de;
-            unsigned int off = j * VMSFS_DIR_ENTRY_SIZE;
-            uint16_t de_ver;
-
-            de = (struct vmsfs_dir_entry *)(bh->b_data + off);
-
-            if (le32_to_cpu(de->de_fid) == 0)
-                continue;
-
-            de_ver = le16_to_cpu(de->de_version);
-
-            if (vmsfs_name_match(
-                    de->de_name, de->de_name_len,
-                    base_name, base_len,
-                    sbi->opts.case_blind)) {
-                if (de_ver > highest)
-                    highest = de_ver;
-            }
-        }
-
-        brelse(bh);
+        dir->i_blocks += blocks_added;
+        dir->i_size += (loff_t)blocks_added * VMSFS_BLOCK_SIZE;
+        fret = vmsfs_blkdev_flush_inode(sb, dir);
+        if (fret)
+            return fret;
     }
-
-    return highest;
+    return ret;
 }
 
 /* ================================================================
- * Directory lookup -- scan directory data blocks
+ * Directory lookup
  * ================================================================ */
 
 /*
  * vmsfs_blkdev_resolve - Resolve a (possibly versioned) name to a FID.
  *
- * Scans the directory's data blocks (via retrieval pointers) for an
- * entry matching @name. Handles version resolution:
- *   "FOO.TXT"    -> highest version
- *   "FOO.TXT;0"  -> highest version
- *   "FOO.TXT;3"  -> exact version 3
- *
- * Returns 0 on success and stores the FID in *fid_out; *fid_out is 0 when
- * the directory holds no entry for @name. Returns a negative errno only when
- * @name is not a parseable VMS filename.
+ * Thin wrapper over the core directory scanner (vmsfs_dir_resolve): it supplies
+ * the directory's retrieval map + the volume + the case-blind option. *fid_out
+ * is 0 when the directory holds no entry for @name; a negative errno is returned
+ * only when @name is not a parseable VMS filename.
  *
  * Factored out of vmsfs_blkdev_lookup() so that ->d_revalidate can ask the
  * SAME question a lookup would ask ("what does this name resolve to right
@@ -838,112 +441,11 @@ static uint16_t vmsfs_blkdev_highest_version(struct super_block *sb,
 int vmsfs_blkdev_resolve(struct inode *dir, const char *name,
                          uint32_t *fid_out)
 {
-    struct super_block *sb = dir->i_sb;
-    struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
+    struct vmsfs_sb_info *sbi = VMSFS_SB(dir->i_sb);
     struct vmsfs_inode_info *dir_vi = VMSFS_I(dir);
-    char base[VMSFS_MAX_FILENAME + 1];
-    int req_version;
-    int ret;
-    uint32_t vbn;
-    uint32_t best_fid = 0;
-    uint16_t best_version = 0;
 
-    *fid_out = 0;
-
-    /* Parse requested name for version */
-    ret = vmsfs_parse_version(name, base, sizeof(base), &req_version);
-    if (ret)
-        return ret;
-
-    /* Scan all data blocks of this directory */
-    for (vbn = 1; ; vbn++) {
-        uint32_t lbn;
-        struct buffer_head *bh;
-        unsigned int j;
-
-        ret = vmsfs_vbn_to_lbn(dir_vi->map, dir_vi->map_count, vbn, &lbn);
-        if (ret)
-            break;  /* no more mapped blocks */
-
-        bh = sb_bread(sb, lbn);
-        if (!bh)
-            break;
-
-        /* Scan entries in this block */
-        for (j = 0; j < VMSFS_DIR_PER_BLOCK; j++) {
-            struct vmsfs_dir_entry *de;
-            unsigned int off = j * VMSFS_DIR_ENTRY_SIZE;
-            uint32_t de_fid;
-            uint16_t de_ver;
-            char de_base[VMSFS_MAX_FILENAME + 1];
-            int de_parsed_ver;
-
-            if (off + VMSFS_DIR_ENTRY_SIZE > VMSFS_BLOCK_SIZE)
-                break;
-
-            de = (struct vmsfs_dir_entry *)(bh->b_data + off);
-            de_fid = le32_to_cpu(de->de_fid);
-
-            if (de_fid == 0)
-                continue;  /* free slot */
-
-            de_ver = le16_to_cpu(de->de_version);
-
-            /*
-             * de_name contains "NAME.TYPE". Parse out the base
-             * for comparison. For directories, de_name has no
-             * semicolon or version.
-             */
-            ret = vmsfs_parse_version(de->de_name, de_base,
-                                      sizeof(de_base), &de_parsed_ver);
-            if (ret) {
-                /* If parse fails, try direct comparison */
-                if (vmsfs_name_match(
-                        de->de_name, de->de_name_len,
-                        base, strlen(base),
-                        sbi->opts.case_blind)) {
-                    best_fid = de_fid;
-                    best_version = de_ver;
-                    if (req_version != 0) {
-                        brelse(bh);
-                        goto found;
-                    }
-                }
-                continue;
-            }
-
-            /* Compare base names */
-            if (!vmsfs_name_match(
-                    de_base, strlen(de_base),
-                    base, strlen(base),
-                    sbi->opts.case_blind))
-                continue;
-
-            /* Version matching */
-            if (req_version != 0) {
-                /* Exact version requested */
-                if (de_ver == req_version) {
-                    best_fid = de_fid;
-                    best_version = de_ver;
-                    brelse(bh);
-                    goto found;
-                }
-            } else {
-                /* Find highest version */
-                if (de_ver > best_version || best_fid == 0) {
-                    best_fid = de_fid;
-                    best_version = de_ver;
-                }
-            }
-        }
-
-        brelse(bh);
-    }
-
-found:
-    *fid_out = best_fid;
-    (void)best_version;
-    return 0;
+    return vmsfs_dir_resolve(&sbi->vol, dir_vi->map, dir_vi->map_count,
+                             sbi->opts.case_blind, name, fid_out);
 }
 
 /*
@@ -980,6 +482,10 @@ static struct dentry *vmsfs_blkdev_lookup(struct inode *dir,
 
 /* ================================================================
  * Directory iteration (readdir)
+ *
+ * The backend owns the map-walk + dir_emit emission (both inherently VFS); the
+ * core owns the ODS-2 per-entry decode (vmsfs_dir_entry_decode) and the display
+ * name format (vmsfs_dir_format_name).
  * ================================================================ */
 
 static int vmsfs_blkdev_iterate(struct file *file, struct dir_context *ctx)
@@ -1012,22 +518,18 @@ static int vmsfs_blkdev_iterate(struct file *file, struct dir_context *ctx)
             break;
 
         for (j = 0; j < VMSFS_DIR_PER_BLOCK; j++) {
-            struct vmsfs_dir_entry *de;
+            struct vmsfs_dirent_view view;
             unsigned int off = j * VMSFS_DIR_ENTRY_SIZE;
-            uint32_t de_fid;
-            uint16_t de_ver;
             char fullname[VMSFS_MAX_FILENAME + 1];
             int namelen;
+            int is_dir;
             unsigned int d_type;
 
             if (off + VMSFS_DIR_ENTRY_SIZE > VMSFS_BLOCK_SIZE)
                 break;
 
-            de = (struct vmsfs_dir_entry *)(bh->b_data + off);
-            de_fid = le32_to_cpu(de->de_fid);
-
-            /* Always count every slot for stable positioning */
-            if (de_fid == 0) {
+            /* Free slots still count, for stable positioning. */
+            if (!vmsfs_dir_entry_decode(bh->b_data, j, &view)) {
                 entry_pos++;
                 continue;
             }
@@ -1038,32 +540,21 @@ static int vmsfs_blkdev_iterate(struct file *file, struct dir_context *ctx)
                 continue;
             }
 
-            de_ver = le16_to_cpu(de->de_version);
-
             /*
-             * Build the display name. For versioned files,
-             * append ";version". For directories (version 0),
-             * show just the name.
+             * Build the display name. Versioned files get ";version"
+             * and DT_REG; unversioned entries (directories) get just
+             * the name and DT_DIR.
              */
-            if (de_ver > 0) {
-                namelen = snprintf(fullname, sizeof(fullname),
-                                   "%.*s;%u",
-                                   de->de_name_len, de->de_name,
-                                   de_ver);
-                d_type = DT_REG;
-            } else {
-                namelen = snprintf(fullname, sizeof(fullname),
-                                   "%.*s",
-                                   de->de_name_len, de->de_name);
-                d_type = DT_DIR;
-            }
+            namelen = vmsfs_dir_format_name(&view, fullname,
+                                            sizeof(fullname), &is_dir);
+            d_type = is_dir ? DT_DIR : DT_REG;
 
             if (namelen <= 0 || namelen >= (int)sizeof(fullname)) {
                 entry_pos++;
                 continue;
             }
 
-            if (!dir_emit(ctx, fullname, namelen, de_fid, d_type)) {
+            if (!dir_emit(ctx, fullname, namelen, view.fid, d_type)) {
                 brelse(bh);
                 return 0;
             }
@@ -1233,6 +724,7 @@ static int vmsfs_blkdev_create(struct mnt_idmap *idmap, struct inode *dir,
 {
     struct super_block *sb = dir->i_sb;
     struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
+    struct vmsfs_inode_info *dir_vi = VMSFS_I(dir);
     struct inode *inode;
     char base[VMSFS_MAX_FILENAME + 1];
     char fname[VMSFS_MAX_NAME + 1];
@@ -1241,7 +733,9 @@ static int vmsfs_blkdev_create(struct mnt_idmap *idmap, struct inode *dir,
     uint16_t highest, new_version;
     uint32_t fid, lbn;
     struct buffer_head *bh;
-    struct vmsfs_file_header *fh;
+    struct vmsfs_fh_info fhi;
+    uint16_t uic_member, uic_group;
+    uint64_t now;
     int ret;
 
     /* Parse version from requested name */
@@ -1262,7 +756,10 @@ static int vmsfs_blkdev_create(struct mnt_idmap *idmap, struct inode *dir,
     if (req_version > 0) {
         new_version = req_version;
     } else {
-        highest = vmsfs_blkdev_highest_version(sb, dir, base, strlen(base));
+        highest = vmsfs_dir_highest_version(&sbi->vol, dir_vi->map,
+                                            dir_vi->map_count,
+                                            sbi->opts.case_blind,
+                                            base, strlen(base));
         new_version = highest + 1;
         if (new_version > VMSFS_VERSION_MAX) {
             mutex_unlock(&sbi->alloc_lock);
@@ -1271,60 +768,55 @@ static int vmsfs_blkdev_create(struct mnt_idmap *idmap, struct inode *dir,
     }
 
     /* Allocate FID */
-    ret = vmsfs_alloc_fid(sb, &fid);
+    ret = vmsfs_alloc_fid(&sbi->vol, &fid);
     if (ret) {
         mutex_unlock(&sbi->alloc_lock);
         return ret;
     }
 
-    /* Initialize file header on disk */
-    lbn = sbi->index_lbn + fid - 1;
+    /* Initialize file header on disk (encoded by the core) */
+    lbn = sbi->vol.index_lbn + fid - 1;
     bh = sb_bread(sb, lbn);
     if (!bh) {
         mutex_unlock(&sbi->alloc_lock);
         return -EIO;
     }
 
-    fh = (struct vmsfs_file_header *)bh->b_data;
-    memset(fh, 0, sizeof(*fh));
-    fh->fh_magic = cpu_to_le32(VMSFS_FH_MAGIC);
-    fh->fh_fid = cpu_to_le32(fid);
-    fh->fh_size = 0;
-    fh->fh_created = cpu_to_le64(ktime_get_real_seconds());
-    fh->fh_modified = fh->fh_created;
-    fh->fh_accessed = fh->fh_created;
-    fh->fh_blocks = 0;
-    fh->fh_parent_fid = cpu_to_le32(VMSFS_I(dir)->fid);
-    fh->fh_flags = cpu_to_le16(VMSFS_FH_INUSE);
-    fh->fh_version = cpu_to_le16(new_version);
-    fh->fh_protection = cpu_to_le16(VMSFS_PROT_DEFAULT);
-    {
-        uint16_t uic_member, uic_group;
+    now = ktime_get_real_seconds();
+    vmsfs_current_uic(&uic_member, &uic_group);
 
-        vmsfs_current_uic(&uic_member, &uic_group);
-        fh->fh_uic_member = cpu_to_le16(uic_member);
-        fh->fh_uic_group = cpu_to_le16(uic_group);
-    }
-    fh->fh_link_count = cpu_to_le16(1);
-    strscpy(fh->fh_name, fname, sizeof(fh->fh_name));
-    strscpy(fh->fh_type, ftype, sizeof(fh->fh_type));
-
-    fh->fh_checksum = 0;
-    fh->fh_checksum = cpu_to_le32(vmsfs_checksum(fh, sizeof(*fh)));
+    memset(&fhi, 0, sizeof(fhi));
+    fhi.fid        = fid;
+    fhi.size       = 0;
+    fhi.created    = now;
+    fhi.modified   = now;
+    fhi.accessed   = now;
+    fhi.blocks     = 0;
+    fhi.parent_fid = dir_vi->fid;
+    fhi.flags      = VMSFS_FH_INUSE;
+    fhi.version    = new_version;
+    fhi.protection = VMSFS_PROT_DEFAULT;
+    fhi.uic_member = uic_member;
+    fhi.uic_group  = uic_group;
+    fhi.link_count = 1;
+    fhi.map_count  = 0;
+    strscpy(fhi.name, fname, sizeof(fhi.name));
+    strscpy(fhi.type, ftype, sizeof(fhi.type));
+    vmsfs_fh_encode(&fhi, bh->b_data);
 
     mark_buffer_dirty(bh);
     sync_dirty_buffer(bh);
     brelse(bh);
 
     /* Add directory entry */
-    ret = vmsfs_dir_add_entry(sb, dir, fid, base, strlen(base), new_version);
+    ret = vmsfs_blkdev_add_entry(sb, dir, fid, base, strlen(base), new_version);
     if (ret) {
-        vmsfs_free_fid(sb, fid);
+        vmsfs_free_fid(&sbi->vol, fid);
         mutex_unlock(&sbi->alloc_lock);
         return ret;
     }
 
-    vmsfs_update_home_block(sb);
+    vmsfs_update_home_block(&sbi->vol);
     mutex_unlock(&sbi->alloc_lock);
 
     /* Create VFS inode via iget (reads the header we just wrote) */
@@ -1345,6 +837,7 @@ static int vmsfs_blkdev_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 {
     struct super_block *sb = dir->i_sb;
     struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
+    struct vmsfs_inode_info *dir_vi = VMSFS_I(dir);
     struct inode *inode;
     const char *name = dentry->d_name.name;
     char uname[VMSFS_MAX_FILENAME + 1];
@@ -1352,7 +845,9 @@ static int vmsfs_blkdev_mkdir(struct mnt_idmap *idmap, struct inode *dir,
     char ftype[VMSFS_MAX_TYPE + 1];
     uint32_t fid, data_lbn, lbn;
     struct buffer_head *bh;
-    struct vmsfs_file_header *fh;
+    struct vmsfs_fh_info fhi;
+    uint16_t uic_member, uic_group;
+    uint64_t now;
     size_t nlen;
     int ret;
 
@@ -1369,16 +864,16 @@ static int vmsfs_blkdev_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 
     mutex_lock(&sbi->alloc_lock);
 
-    ret = vmsfs_alloc_fid(sb, &fid);
+    ret = vmsfs_alloc_fid(&sbi->vol, &fid);
     if (ret) {
         mutex_unlock(&sbi->alloc_lock);
         return ret;
     }
 
     /* Allocate initial data block for directory entries */
-    ret = vmsfs_alloc_block(sb, &data_lbn);
+    ret = vmsfs_alloc_block(&sbi->vol, &data_lbn);
     if (ret) {
-        vmsfs_free_fid(sb, fid);
+        vmsfs_free_fid(&sbi->vol, fid);
         mutex_unlock(&sbi->alloc_lock);
         return ret;
     }
@@ -1386,8 +881,8 @@ static int vmsfs_blkdev_mkdir(struct mnt_idmap *idmap, struct inode *dir,
     /* Zero the data block */
     bh = sb_bread(sb, data_lbn);
     if (!bh) {
-        vmsfs_free_block(sb, data_lbn);
-        vmsfs_free_fid(sb, fid);
+        vmsfs_free_block(&sbi->vol, data_lbn);
+        vmsfs_free_fid(&sbi->vol, fid);
         mutex_unlock(&sbi->alloc_lock);
         return -EIO;
     }
@@ -1396,62 +891,56 @@ static int vmsfs_blkdev_mkdir(struct mnt_idmap *idmap, struct inode *dir,
     sync_dirty_buffer(bh);
     brelse(bh);
 
-    /* Initialize file header on disk */
-    lbn = sbi->index_lbn + fid - 1;
+    /* Initialize file header on disk (encoded by the core) */
+    lbn = sbi->vol.index_lbn + fid - 1;
     bh = sb_bread(sb, lbn);
     if (!bh) {
-        vmsfs_free_block(sb, data_lbn);
-        vmsfs_free_fid(sb, fid);
+        vmsfs_free_block(&sbi->vol, data_lbn);
+        vmsfs_free_fid(&sbi->vol, fid);
         mutex_unlock(&sbi->alloc_lock);
         return -EIO;
     }
 
-    fh = (struct vmsfs_file_header *)bh->b_data;
-    memset(fh, 0, sizeof(*fh));
-    fh->fh_magic = cpu_to_le32(VMSFS_FH_MAGIC);
-    fh->fh_fid = cpu_to_le32(fid);
-    fh->fh_size = cpu_to_le64(VMSFS_BLOCK_SIZE);
-    fh->fh_created = cpu_to_le64(ktime_get_real_seconds());
-    fh->fh_modified = fh->fh_created;
-    fh->fh_accessed = fh->fh_created;
-    fh->fh_blocks = cpu_to_le32(1);
-    fh->fh_parent_fid = cpu_to_le32(VMSFS_I(dir)->fid);
-    fh->fh_flags = cpu_to_le16(VMSFS_FH_INUSE | VMSFS_FH_DIRECTORY);
-    fh->fh_version = 0;  /* directories are unversioned */
-    fh->fh_protection = cpu_to_le16(VMSFS_PROT_DEFAULT);
-    {
-        uint16_t uic_member, uic_group;
+    now = ktime_get_real_seconds();
+    vmsfs_current_uic(&uic_member, &uic_group);
 
-        vmsfs_current_uic(&uic_member, &uic_group);
-        fh->fh_uic_member = cpu_to_le16(uic_member);
-        fh->fh_uic_group = cpu_to_le16(uic_group);
-    }
-    fh->fh_link_count = cpu_to_le16(2);
-    fh->fh_map_count = cpu_to_le16(1);
-    strscpy(fh->fh_name, fname, sizeof(fh->fh_name));
-    strscpy(fh->fh_type, ftype, sizeof(fh->fh_type));
-    fh->fh_map[0].rp_lbn = cpu_to_le32(data_lbn);
-    fh->fh_map[0].rp_count = cpu_to_le32(1);
-
-    fh->fh_checksum = 0;
-    fh->fh_checksum = cpu_to_le32(vmsfs_checksum(fh, sizeof(*fh)));
+    memset(&fhi, 0, sizeof(fhi));
+    fhi.fid        = fid;
+    fhi.size       = VMSFS_BLOCK_SIZE;
+    fhi.created    = now;
+    fhi.modified   = now;
+    fhi.accessed   = now;
+    fhi.blocks     = 1;
+    fhi.parent_fid = dir_vi->fid;
+    fhi.flags      = VMSFS_FH_INUSE | VMSFS_FH_DIRECTORY;
+    fhi.version    = 0;  /* directories are unversioned */
+    fhi.protection = VMSFS_PROT_DEFAULT;
+    fhi.uic_member = uic_member;
+    fhi.uic_group  = uic_group;
+    fhi.link_count = 2;
+    fhi.map_count  = 1;
+    strscpy(fhi.name, fname, sizeof(fhi.name));
+    strscpy(fhi.type, ftype, sizeof(fhi.type));
+    fhi.map[0].rp_lbn = data_lbn;
+    fhi.map[0].rp_count = 1;
+    vmsfs_fh_encode(&fhi, bh->b_data);
 
     mark_buffer_dirty(bh);
     sync_dirty_buffer(bh);
     brelse(bh);
 
     /* Add entry to parent directory */
-    ret = vmsfs_dir_add_entry(sb, dir, fid, uname, strlen(uname), 0);
+    ret = vmsfs_blkdev_add_entry(sb, dir, fid, uname, strlen(uname), 0);
     if (ret) {
-        vmsfs_free_block(sb, data_lbn);
-        vmsfs_free_fid(sb, fid);
+        vmsfs_free_block(&sbi->vol, data_lbn);
+        vmsfs_free_fid(&sbi->vol, fid);
         mutex_unlock(&sbi->alloc_lock);
         return ret;
     }
 
     inc_nlink(dir);
     vmsfs_blkdev_flush_inode(sb, dir);
-    vmsfs_update_home_block(sb);
+    vmsfs_update_home_block(&sbi->vol);
     mutex_unlock(&sbi->alloc_lock);
 
     inode = vmsfs_blkdev_iget(sb, fid);
@@ -1472,30 +961,27 @@ static int vmsfs_blkdev_unlink(struct inode *dir, struct dentry *dentry)
     struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
     struct inode *inode = d_inode(dentry);
     struct vmsfs_inode_info *vi = VMSFS_I(inode);
-    unsigned int i;
-    uint32_t j;
+    struct vmsfs_inode_info *dir_vi = VMSFS_I(dir);
     int ret;
 
     mutex_lock(&sbi->alloc_lock);
 
     /* Remove directory entry from parent */
-    ret = vmsfs_dir_remove_entry(sb, dir, vi->fid, vi->version);
+    ret = vmsfs_dir_remove_entry(&sbi->vol, dir_vi->map, dir_vi->map_count,
+                                 vi->fid, vi->version);
     if (ret) {
         mutex_unlock(&sbi->alloc_lock);
         return ret;
     }
 
     /* Free all data blocks */
-    for (i = 0; i < vi->map_count; i++) {
-        for (j = 0; j < vi->map[i].rp_count; j++)
-            vmsfs_free_block(sb, vi->map[i].rp_lbn + j);
-    }
+    vmsfs_free_file_blocks(&sbi->vol, vi->map, vi->map_count);
 
     /* Free the file header */
-    vmsfs_free_fid(sb, vi->fid);
+    vmsfs_free_fid(&sbi->vol, vi->fid);
 
     drop_nlink(inode);
-    vmsfs_update_home_block(sb);
+    vmsfs_update_home_block(&sbi->vol);
     mutex_unlock(&sbi->alloc_lock);
 
     return 0;
@@ -1504,37 +990,13 @@ static int vmsfs_blkdev_unlink(struct inode *dir, struct dentry *dentry)
 static int vmsfs_blkdev_rmdir(struct inode *dir, struct dentry *dentry)
 {
     struct inode *inode = d_inode(dentry);
+    struct vmsfs_sb_info *sbi = VMSFS_SB(inode->i_sb);
     struct vmsfs_inode_info *dir_vi = VMSFS_I(inode);
-    uint32_t vbn;
     int ret;
 
     /* Check directory is empty */
-    for (vbn = 1; ; vbn++) {
-        uint32_t lbn;
-        struct buffer_head *bh;
-        unsigned int j;
-
-        ret = vmsfs_vbn_to_lbn(dir_vi->map, dir_vi->map_count, vbn, &lbn);
-        if (ret)
-            break;
-
-        bh = sb_bread(inode->i_sb, lbn);
-        if (!bh)
-            break;
-
-        for (j = 0; j < VMSFS_DIR_PER_BLOCK; j++) {
-            struct vmsfs_dir_entry *de;
-            unsigned int off = j * VMSFS_DIR_ENTRY_SIZE;
-
-            de = (struct vmsfs_dir_entry *)(bh->b_data + off);
-            if (le32_to_cpu(de->de_fid) != 0) {
-                brelse(bh);
-                return -ENOTEMPTY;
-            }
-        }
-
-        brelse(bh);
-    }
+    if (!vmsfs_dir_is_empty(&sbi->vol, dir_vi->map, dir_vi->map_count))
+        return -ENOTEMPTY;
 
     ret = vmsfs_blkdev_unlink(dir, dentry);
     if (ret)
@@ -1589,7 +1051,6 @@ static int vmsfs_blkdev_rename(struct mnt_idmap *idmap, struct inode *old_dir,
     int req_version;
     uint16_t new_version = 0;
     struct buffer_head *bh;
-    struct vmsfs_file_header *fh;
     uint32_t lbn;
     int ret;
 
@@ -1646,29 +1107,10 @@ static int vmsfs_blkdev_rename(struct mnt_idmap *idmap, struct inode *old_dir,
     /* A directory target must be empty, mirroring rmdir. */
     if (target_was_dir) {
         struct vmsfs_inode_info *tvi = VMSFS_I(new_inode);
-        uint32_t vbn;
 
-        for (vbn = 1; ; vbn++) {
-            uint32_t tlbn;
-            struct buffer_head *tbh;
-            unsigned int j;
-
-            if (vmsfs_vbn_to_lbn(tvi->map, tvi->map_count, vbn, &tlbn))
-                break;
-            tbh = sb_bread(sb, tlbn);
-            if (!tbh)
-                break;
-            for (j = 0; j < VMSFS_DIR_PER_BLOCK; j++) {
-                struct vmsfs_dir_entry *de =
-                    (struct vmsfs_dir_entry *)(tbh->b_data +
-                                               j * VMSFS_DIR_ENTRY_SIZE);
-                if (le32_to_cpu(de->de_fid) != 0) {
-                    brelse(tbh);
-                    mutex_unlock(&sbi->alloc_lock);
-                    return -ENOTEMPTY;
-                }
-            }
-            brelse(tbh);
+        if (!vmsfs_dir_is_empty(&sbi->vol, tvi->map, tvi->map_count)) {
+            mutex_unlock(&sbi->alloc_lock);
+            return -ENOTEMPTY;
         }
     }
 
@@ -1684,8 +1126,11 @@ static int vmsfs_blkdev_rename(struct mnt_idmap *idmap, struct inode *old_dir,
         } else if (new_inode) {
             new_version = (uint16_t)VMSFS_I(new_inode)->version;
         } else {
-            uint16_t highest = vmsfs_blkdev_highest_version(sb, new_dir, base,
-                                                            strlen(base));
+            uint16_t highest =
+                vmsfs_dir_highest_version(&sbi->vol, VMSFS_I(new_dir)->map,
+                                          VMSFS_I(new_dir)->map_count,
+                                          sbi->opts.case_blind,
+                                          base, strlen(base));
             new_version = highest + 1;
             if (new_version > VMSFS_VERSION_MAX) {
                 mutex_unlock(&sbi->alloc_lock);
@@ -1697,55 +1142,53 @@ static int vmsfs_blkdev_rename(struct mnt_idmap *idmap, struct inode *old_dir,
     /* (a) Replace: free the target's entry, header, FID and data blocks. */
     if (new_inode) {
         struct vmsfs_inode_info *tvi = VMSFS_I(new_inode);
-        unsigned int i;
-        uint32_t j;
 
-        ret = vmsfs_dir_remove_entry(sb, new_dir, tvi->fid, tvi->version);
+        ret = vmsfs_dir_remove_entry(&sbi->vol, VMSFS_I(new_dir)->map,
+                                     VMSFS_I(new_dir)->map_count,
+                                     tvi->fid, tvi->version);
         if (ret) {
             mutex_unlock(&sbi->alloc_lock);
             return ret;
         }
-        for (i = 0; i < tvi->map_count; i++)
-            for (j = 0; j < tvi->map[i].rp_count; j++)
-                vmsfs_free_block(sb, tvi->map[i].rp_lbn + j);
-        vmsfs_free_fid(sb, tvi->fid);
+        vmsfs_free_file_blocks(&sbi->vol, tvi->map, tvi->map_count);
+        vmsfs_free_fid(&sbi->vol, tvi->fid);
         clear_nlink(new_inode);
         if (target_was_dir)
             drop_nlink(new_dir);
     }
 
     /* (b) Remove the source's old directory entry. */
-    ret = vmsfs_dir_remove_entry(sb, old_dir, old_vi->fid, old_vi->version);
+    ret = vmsfs_dir_remove_entry(&sbi->vol, VMSFS_I(old_dir)->map,
+                                 VMSFS_I(old_dir)->map_count,
+                                 old_vi->fid, old_vi->version);
     if (ret) {
         mutex_unlock(&sbi->alloc_lock);
         return ret;
     }
 
     /* (c) Add the new directory entry pointing at the SAME FID. */
-    ret = vmsfs_dir_add_entry(sb, new_dir, old_vi->fid, base, strlen(base),
-                              new_version);
+    ret = vmsfs_blkdev_add_entry(sb, new_dir, old_vi->fid, base,
+                                 strlen(base), new_version);
     if (ret) {
         /* Best-effort rollback so a full new_dir cannot orphan the file. */
-        vmsfs_dir_add_entry(sb, old_dir, old_vi->fid, old_full,
-                            strlen(old_full), old_vi->version);
+        vmsfs_blkdev_add_entry(sb, old_dir, old_vi->fid, old_full,
+                               strlen(old_full), old_vi->version);
         mutex_unlock(&sbi->alloc_lock);
         return ret;
     }
 
     /* (d) Rewrite the file header's name/type/version/parent on disk. */
-    lbn = sbi->index_lbn + old_vi->fid - 1;
+    lbn = sbi->vol.index_lbn + old_vi->fid - 1;
     bh = sb_bread(sb, lbn);
     if (bh) {
-        fh = (struct vmsfs_file_header *)bh->b_data;
-        memset(fh->fh_name, 0, sizeof(fh->fh_name));
-        memset(fh->fh_type, 0, sizeof(fh->fh_type));
-        strscpy(fh->fh_name, fname, sizeof(fh->fh_name));
-        strscpy(fh->fh_type, ftype, sizeof(fh->fh_type));
-        fh->fh_version = cpu_to_le16(new_version);
-        fh->fh_parent_fid = cpu_to_le32(VMSFS_I(new_dir)->fid);
-        fh->fh_modified = cpu_to_le64(ktime_get_real_seconds());
-        fh->fh_checksum = 0;
-        fh->fh_checksum = cpu_to_le32(vmsfs_checksum(fh, sizeof(*fh)));
+        struct vmsfs_fh_rename rn = {
+            .name       = fname,
+            .type       = ftype,
+            .version    = new_version,
+            .parent_fid = VMSFS_I(new_dir)->fid,
+        };
+
+        vmsfs_fh_write_rename(bh->b_data, &rn);
         mark_buffer_dirty(bh);
         sync_dirty_buffer(bh);
         brelse(bh);
@@ -1760,7 +1203,7 @@ static int vmsfs_blkdev_rename(struct mnt_idmap *idmap, struct inode *old_dir,
     /*
      * (f) Refresh the cached in-core name/version so a later
      * unlink/lookup keys on the NEW values (vmsfs_dir_remove_entry and
-     * vmsfs_blkdev_resolve match on fid+version / parsed name).
+     * vmsfs_dir_resolve match on fid+version / parsed name).
      */
     old_vi->version = new_version;
     memset(old_vi->base_name, 0, sizeof(old_vi->base_name));
@@ -1772,7 +1215,7 @@ static int vmsfs_blkdev_rename(struct mnt_idmap *idmap, struct inode *old_dir,
     vmsfs_blkdev_flush_inode(sb, old_dir);
     if (new_dir != old_dir)
         vmsfs_blkdev_flush_inode(sb, new_dir);
-    vmsfs_update_home_block(sb);
+    vmsfs_update_home_block(&sbi->vol);
 
     mutex_unlock(&sbi->alloc_lock);
 

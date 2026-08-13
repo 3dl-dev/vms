@@ -32,6 +32,15 @@
  * those constants and prototypes.
  */
 #include "vmsfs_core.h"
+/*
+ * The block/inode seam (rd vms-d69, epic vms-8e8): the storage/FID allocator,
+ * the directory-block scanner and the file-header decode/encode now live in the
+ * substrate-neutral core (vmsfs_alloc.c / vmsfs_dirscan.c / vmsfs_header.c) and
+ * reach the volume through struct vmsfs_volume + the vmsfs_bio ops. This Linux
+ * VFS glue includes the seam contract so its vmsfs_sb_info can embed a
+ * vmsfs_volume and the backend can call the core algorithms.
+ */
+#include "vmsfs_bio.h"
 
 #define VMSFS_MAGIC       0x564D5346  /* "VMSF" */
 
@@ -58,15 +67,15 @@ struct vmsfs_sb_info {
 
     /* Block-device mode */
     struct vmsfs_home_block *home;  /* cached home block */
-    unsigned long *bitmap;          /* cached storage bitmap */
-    struct mutex alloc_lock;        /* protects bitmap, free_blocks, FID alloc */
-    uint32_t bitmap_lbn;
-    uint32_t bitmap_blocks;
-    uint32_t index_lbn;
-    uint32_t max_files;
-    uint32_t data_lbn;
-    uint32_t total_blocks;
-    uint32_t free_blocks;
+    struct mutex alloc_lock;        /* protects vol.bitmap/free_blocks + FID alloc */
+
+    /*
+     * Host-neutral volume descriptor (rd vms-d69): geometry + the cached
+     * storage bitmap + free-block count, reached by the substrate-neutral
+     * allocator/dir-scanner. vol.host is set to this super_block at mount so
+     * the core's vmsfs_bget() can read/write the volume.
+     */
+    struct vmsfs_volume vol;
 };
 
 /* Inode private data - embedded VFS inode for container_of */

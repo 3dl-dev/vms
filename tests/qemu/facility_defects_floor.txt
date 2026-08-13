@@ -342,13 +342,4 @@
 # delivers no result -- reddening exactly the suite's one driven-result
 # assertion while the parent's own $CREMBX and command writes stay green. See
 # its own entry in facility_defects.sh for what it covers and why.
-# Raised 95 -> 96 by vms-b23's mmk-drive-command-not-sent -- the negative control
-# that anchors the new test_syssvc_mmk_drive suite (the shipped MMK.EXE drives a
-# real build through its persistent mailbox-driven DCL subprocess, self-host
-# spine #4). PRODUCT-half mutation in tests/corpus/tier3-mmk/ovmx/ovmx_mmk_sp.c:
-# forcing sp_send's per-record length to zero delivers empty command records into
-# the SYS$INPUT mailbox, so the driven DCL receives neither the action command
-# nor the end-of-command marker -- reddening the suite's driven-result assertion
-# and (same root) its completion assertion, while a no-executive run still
-# honest-skips. See its own entry in facility_defects.sh for what it covers and why.
-96
+95

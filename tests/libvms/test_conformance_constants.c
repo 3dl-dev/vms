@@ -63,6 +63,95 @@ _Static_assert((SS$_ALIGN & 1) == 0, "SS$_ALIGN should not carry success severit
 _Static_assert(RMS$_ACC_RUJ    == 115044, "RMS$_ACC_RUJ != VAX V7.3 oracle 115044");
 _Static_assert(RMS$_JNLNOTAUTH == 115100, "RMS$_JNLNOTAUTH != VAX V7.3 oracle 115100");
 
+/* ---- RMS$_ status codes (rmsdef.h) — ORACLE-PINNED, vms-a7d ----
+ * 74 values corrected 2026-08-13 from a MACRO/OBJECT + ANALYZE/OBJECT/GSD
+ * dump of `$RMSDEF GLOBAL` on lab-2 (vaxlab-2/vax1, OpenVMS VAX V7.3,
+ * ANALYZ V07-04).  Anchors NORMAL/EOF/FNF verified in the same dump.
+ * These are architecture-invariant condition values. */
+_Static_assert(RMS$_NORMAL    ==  65537, "RMS$_NORMAL != VAX V7.3 oracle 65537");
+_Static_assert(RMS$_EOF       ==  98938, "RMS$_EOF != VAX V7.3 oracle 98938");
+_Static_assert(RMS$_FNF       ==  98962, "RMS$_FNF != VAX V7.3 oracle 98962");
+_Static_assert(RMS$_FACILITY  ==      1, "RMS$_FACILITY != VAX V7.3 oracle 1");
+_Static_assert(RMS$_OK_ALK    ==  98361, "RMS$_OK_ALK != VAX V7.3 oracle 98361");
+_Static_assert(RMS$_OK_DEL    ==  98369, "RMS$_OK_DEL != VAX V7.3 oracle 98369");
+_Static_assert(RMS$_OK_RLK    ==  98337, "RMS$_OK_RLK != VAX V7.3 oracle 98337");
+_Static_assert(RMS$_OK_RRL    ==  98345, "RMS$_OK_RRL != VAX V7.3 oracle 98345");
+_Static_assert(RMS$_OK_DUP    ==  98321, "RMS$_OK_DUP != VAX V7.3 oracle 98321");
+_Static_assert(RMS$_OK_LIM    ==  98385, "RMS$_OK_LIM != VAX V7.3 oracle 98385");
+_Static_assert(RMS$_OK_NOP    ==  98393, "RMS$_OK_NOP != VAX V7.3 oracle 98393");
+_Static_assert(RMS$_OK_WAT    ==  98401, "RMS$_OK_WAT != VAX V7.3 oracle 98401");
+_Static_assert(RMS$_ACC       == 114690, "RMS$_ACC != VAX V7.3 oracle 114690");
+_Static_assert(RMS$_CRE       == 114698, "RMS$_CRE != VAX V7.3 oracle 114698");
+_Static_assert(RMS$_BKZ       ==  99364, "RMS$_BKZ != VAX V7.3 oracle 99364");
+_Static_assert(RMS$_BLN       ==  99372, "RMS$_BLN != VAX V7.3 oracle 99372");
+_Static_assert(RMS$_CCR       ==  99476, "RMS$_CCR != VAX V7.3 oracle 99476");
+_Static_assert(RMS$_BUG       ==  99380, "RMS$_BUG != VAX V7.3 oracle 99380");
+_Static_assert(RMS$_CHG       ==  99484, "RMS$_CHG != VAX V7.3 oracle 99484");
+_Static_assert(RMS$_DUP       ==  99564, "RMS$_DUP != VAX V7.3 oracle 99564");
+_Static_assert(RMS$_DEL       ==  98914, "RMS$_DEL != VAX V7.3 oracle 98914");
+_Static_assert(RMS$_DIR       ==  99532, "RMS$_DIR != VAX V7.3 oracle 99532");
+_Static_assert(RMS$_FAC       ==  99604, "RMS$_FAC != VAX V7.3 oracle 99604");
+_Static_assert(RMS$_IMX       ==  99692, "RMS$_IMX != VAX V7.3 oracle 99692");
+_Static_assert(RMS$_IOP       ==  99700, "RMS$_IOP != VAX V7.3 oracle 99700");
+_Static_assert(RMS$_RER       == 114932, "RMS$_RER != VAX V7.3 oracle 114932");
+_Static_assert(RMS$_KEY       ==  99732, "RMS$_KEY != VAX V7.3 oracle 99732");
+_Static_assert(RMS$_MRN       ==  99788, "RMS$_MRN != VAX V7.3 oracle 99788");
+_Static_assert(RMS$_FLK       ==  98954, "RMS$_FLK != VAX V7.3 oracle 98954");
+_Static_assert(RMS$_ESS       ==  99588, "RMS$_ESS != VAX V7.3 oracle 99588");
+_Static_assert(RMS$_EXT       == 114722, "RMS$_EXT != VAX V7.3 oracle 114722");
+_Static_assert(RMS$_FAB       ==  99596, "RMS$_FAB != VAX V7.3 oracle 99596");
+_Static_assert(RMS$_DNF       == 114762, "RMS$_DNF != VAX V7.3 oracle 114762");
+_Static_assert(RMS$_RNL       ==  98720, "RMS$_RNL != VAX V7.3 oracle 98720");
+_Static_assert(RMS$_RLK       ==  98986, "RMS$_RLK != VAX V7.3 oracle 98986");
+_Static_assert(RMS$_IFI       ==  99684, "RMS$_IFI != VAX V7.3 oracle 99684");
+_Static_assert(RMS$_RNF       ==  98994, "RMS$_RNF != VAX V7.3 oracle 98994");
+_Static_assert(RMS$_ISI       ==  99716, "RMS$_ISI != VAX V7.3 oracle 99716");
+_Static_assert(RMS$_REX       ==  98978, "RMS$_REX != VAX V7.3 oracle 98978");
+_Static_assert(RMS$_PRV       ==  98970, "RMS$_PRV != VAX V7.3 oracle 98970");
+_Static_assert(RMS$_FEX       ==  98946, "RMS$_FEX != VAX V7.3 oracle 98946");
+_Static_assert(RMS$_KRF       ==  99740, "RMS$_KRF != VAX V7.3 oracle 99740");
+_Static_assert(RMS$_KSZ       ==  99748, "RMS$_KSZ != VAX V7.3 oracle 99748");
+_Static_assert(RMS$_RSZ       == 100004, "RMS$_RSZ != VAX V7.3 oracle 100004");
+_Static_assert(RMS$_FNM       ==  99628, "RMS$_FNM != VAX V7.3 oracle 99628");
+_Static_assert(RMS$_SHR       == 100020, "RMS$_SHR != VAX V7.3 oracle 100020");
+_Static_assert(RMS$_WER       == 114964, "RMS$_WER != VAX V7.3 oracle 114964");
+_Static_assert(RMS$_MKD       == 114738, "RMS$_MKD != VAX V7.3 oracle 114738");
+_Static_assert(RMS$_NEF       ==  99812, "RMS$_NEF != VAX V7.3 oracle 99812");
+_Static_assert(RMS$_ORG       ==  99852, "RMS$_ORG != VAX V7.3 oracle 99852");
+_Static_assert(RMS$_PLG       ==  99868, "RMS$_PLG != VAX V7.3 oracle 99868");
+_Static_assert(RMS$_RAB       ==  99900, "RMS$_RAB != VAX V7.3 oracle 99900");
+_Static_assert(RMS$_RAT       ==  99916, "RMS$_RAT != VAX V7.3 oracle 99916");
+_Static_assert(RMS$_RFM       ==  99940, "RMS$_RFM != VAX V7.3 oracle 99940");
+_Static_assert(RMS$_RSS       ==  99988, "RMS$_RSS != VAX V7.3 oracle 99988");
+_Static_assert(RMS$_RTB       ==  98728, "RMS$_RTB != VAX V7.3 oracle 98728");
+_Static_assert(RMS$_SEQ       == 100012, "RMS$_SEQ != VAX V7.3 oracle 100012");
+_Static_assert(RMS$_SIZ       == 100028, "RMS$_SIZ != VAX V7.3 oracle 100028");
+_Static_assert(RMS$_SYN       == 100052, "RMS$_SYN != VAX V7.3 oracle 100052");
+_Static_assert(RMS$_TNS       ==  98744, "RMS$_TNS != VAX V7.3 oracle 98744");
+_Static_assert(RMS$_TRE       == 100060, "RMS$_TRE != VAX V7.3 oracle 100060");
+_Static_assert(RMS$_TYP       == 100068, "RMS$_TYP != VAX V7.3 oracle 100068");
+_Static_assert(RMS$_WCC       ==  99050, "RMS$_WCC != VAX V7.3 oracle 99050");
+_Static_assert(RMS$_DME       ==  99540, "RMS$_DME != VAX V7.3 oracle 99540");
+_Static_assert(RMS$_NMF       ==  99018, "RMS$_NMF != VAX V7.3 oracle 99018");
+_Static_assert(RMS$_CRE_STM   ==  98409, "RMS$_CRE_STM != VAX V7.3 oracle 98409");
+_Static_assert(RMS$_CREATED   ==  67097, "RMS$_CREATED != VAX V7.3 oracle 67097");
+_Static_assert(RMS$_FILEPURGED ==  67193, "RMS$_FILEPURGED != VAX V7.3 oracle 67193");
+_Static_assert(RMS$_SUPERSEDE ==  67121, "RMS$_SUPERSEDE != VAX V7.3 oracle 67121");
+_Static_assert(RMS$_COD       ==  99500, "RMS$_COD != VAX V7.3 oracle 99500");
+_Static_assert(RMS$_CUR       ==  99508, "RMS$_CUR != VAX V7.3 oracle 99508");
+_Static_assert(RMS$_DAC       == 114706, "RMS$_DAC != VAX V7.3 oracle 114706");
+_Static_assert(RMS$_DAN       ==  99516, "RMS$_DAN != VAX V7.3 oracle 99516");
+_Static_assert(RMS$_IAN       ==  99668, "RMS$_IAN != VAX V7.3 oracle 99668");
+_Static_assert(RMS$_RAC       ==  99908, "RMS$_RAC != VAX V7.3 oracle 99908");
+_Static_assert(RMS$_RPL       == 114948, "RMS$_RPL != VAX V7.3 oracle 114948");
+_Static_assert(RMS$_WPL       == 114972, "RMS$_WPL != VAX V7.3 oracle 114972");
+_Static_assert(RMS$_NAM       ==  99804, "RMS$_NAM != VAX V7.3 oracle 99804");
+_Static_assert(RMS$_SUC == RMS$_NORMAL, "RMS$_SUC must alias RMS$_NORMAL");
+/* Two header symbols are NOT in the V7.3 $RMSDEF dump — left UNGROUNDED.
+ * Assert OVMX's current values only as a drift guard, not as VMS-authentic. */
+_Static_assert(RMS$_BSZ       ==  98858, "RMS$_BSZ drifted from OVMX-chosen 98858 (ungrounded: absent from V7.3 $RMSDEF)");
+_Static_assert(RMS$_OK_RRV    ==  98865, "RMS$_OK_RRV drifted from OVMX-chosen 98865 (ungrounded: absent from V7.3 $RMSDEF)");
+
 /* ---- XABITM item-XAB codes (rms/xab.h) — ORACLE-PINNED ---- */
 _Static_assert(XAB$C_ITM      == 36, "XAB$C_ITM != VAX V7.3 oracle 36");
 _Static_assert(XAB$K_ITMLEN   == 32, "XAB$K_ITMLEN != VAX V7.3 oracle 32");

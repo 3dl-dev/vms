@@ -156,7 +156,20 @@ class NetBSDConsole(object):
         if self.prompt_re is None:
             raise RuntimeError("login_root_sh()/set_unique_prompt() not called")
         mk = "OVMXm-%s" % _nonce(8)
-        self.child.sendline("%s; echo %s=$?=" % (cmd, mk))
+        # A command ending in a bare `&' backgrounds a job -- `&' is ALREADY a
+        # statement separator in /bin/sh, so appending `; echo ...' after it is
+        # a syntax error (empty command between `&' and `;': NetBSD's ash
+        # rejects it outright, "Syntax error: \";\" unexpected", which silently
+        # drops the whole line and starves the driver of its end marker until
+        # pexpect times out -- looks exactly like a hung guest, isn't one).
+        # `& echo ...' (no `;') is valid: it launches the background job, then
+        # runs `echo $?=' as the next statement on the same line, reporting the
+        # shell's exit status for STARTING the job (the caller wants the launch
+        # to have succeeded, not the async job's eventual completion status).
+        if cmd.rstrip().endswith("&"):
+            self.child.sendline("%s echo %s=$?=" % (cmd, mk))
+        else:
+            self.child.sendline("%s; echo %s=$?=" % (cmd, mk))
         self.child.expect(r"%s=(\d+)=" % re.escape(mk), timeout=timeout)
         rc = int(self.child.match.group(1))
         out = self.child.before

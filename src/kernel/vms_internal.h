@@ -17,6 +17,17 @@
 #include <linux/signal.h>
 #include <linux/sched.h>
 #include <linux/hashtable.h>
+/*
+ * ctype (isalnum/toupper) and the kstrtox number parsers (kstrtouint) are the
+ * C-string vocabulary a shared-core facility relies on: a src/kernel-core/*.c
+ * file compiles against exec_* + this struct header ONLY and may not include a
+ * <linux/…> header of its own, so the Linux vms_internal.h -- the Linux
+ * substrate's vocabulary header, the counterpart of the NetBSD twin's
+ * <sys/systm.h> -- supplies them here. vms_mbx.c (rd vms-a88, Phase E) is the
+ * first core facility to need them for its MBAn: device-name normalization.
+ */
+#include <linux/ctype.h>
+#include <linux/kstrtox.h>
 
 #include "vms_ioctl.h"
 

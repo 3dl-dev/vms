@@ -4434,7 +4434,7 @@ EOF
     mbx-not-shared)
         case "$_f" in
         facility)     echo "mailboxes (VMS_IOCTL_MBX_CREATE/ASSIGN/WRITE/READ/DELMBX, executive-resident MBAn:), vms-d44 + named-mailbox rendezvous by logical name, vms-mb1";;
-        targets)      echo "kernel/vms_mbx.c";;
+        targets)      echo "kernel-core/vms_mbx.c";;
         suites_red)   echo "test_kmod_mbx test_syssvc_mbx_crossproc";;
         blind_suites) echo "";;
         blind_why)    echo "";;

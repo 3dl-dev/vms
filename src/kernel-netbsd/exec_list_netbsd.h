@@ -77,6 +77,7 @@ exec_list_empty(const exec_list_head_t *h)
 void exec_list_add(exec_list_node_t *n, exec_list_head_t *h);
 void exec_list_add_tail(exec_list_node_t *n, exec_list_head_t *h);
 void exec_list_del(exec_list_node_t *n);
+void exec_list_move(exec_list_node_t *n, exec_list_head_t *h);
 
 /* ---- container recovery ----
  * EXEC_CONTAINER_OF recovers the element that embeds `ptr' as its `member'
@@ -90,6 +91,14 @@ void exec_list_del(exec_list_node_t *n);
  * established non-emptiness (exec_list_empty()) first. */
 #define exec_list_first_entry(head, type, member) \
 	EXEC_CONTAINER_OF((head)->next, type, member)
+
+/* ---- first element or NULL on empty (typed; see exec_list.h) ----
+ * The empty ring is the head linked to itself, so head->next == head; testing
+ * that before recovering the container is what makes this safe on an empty
+ * list where exec_list_first_entry is undefined. */
+#define exec_list_first_entry_or_null(head, type, member) \
+	(exec_list_empty(head) ? (type *)0 \
+	 : EXEC_CONTAINER_OF((head)->next, type, member))
 
 /* ---- iteration (typed; `member' is the exec_list_node_t field name) ----
  * These MUST be macros: they recover the element from its embedded node using

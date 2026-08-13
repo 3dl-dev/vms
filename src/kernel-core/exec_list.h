@@ -59,6 +59,12 @@
  *   void exec_list_add(exec_list_node_t *n, exec_list_head_t *h)       push front
  *   void exec_list_add_tail(exec_list_node_t *n, exec_list_head_t *h)  push back
  *   void exec_list_del(exec_list_node_t *n)   unlink n from whatever list it is on
+ *   void exec_list_move(exec_list_node_t *n, exec_list_head_t *h)
+ *       unlink n from its current list and push it onto the FRONT of `h` --
+ *       exactly exec_list_del(n) followed by exec_list_add(n, h). Used to drain a
+ *       per-process list onto a local "doomed" anchor under a lock, then free the
+ *       drained nodes after the lock is dropped (vms_mbx's release_all path).
+ *       Linux: list_move.
  *
  * Query:
  *   int  exec_list_empty(const exec_list_head_t *h)   nonzero iff h has no nodes
@@ -69,6 +75,12 @@
  *       an empty list -- the caller MUST establish non-emptiness first (a prior
  *       exec_list_empty() test, as vms_ast's deliver path does). A macro for the
  *       same container_of reason the iterators are. Linux: list_first_entry.
+ *   exec_list_first_entry_or_null(head, type, member)
+ *       the first element as a typed `type *`, or NULL if the list is EMPTY --
+ *       the safe form for a caller that dequeues under the guard lock and must
+ *       cope with an empty queue (vms_mbx's read path, which loops until a
+ *       message is present). A macro, same container_of reason. Linux:
+ *       list_first_entry_or_null.
  *
  * Iteration (typed; `member` is the exec_list_node_t field name in the element):
  *   exec_list_for_each_entry(pos, head, member)

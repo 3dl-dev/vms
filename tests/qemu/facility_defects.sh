@@ -4433,9 +4433,9 @@ EOF
 
     mbx-not-shared)
         case "$_f" in
-        facility)     echo "mailboxes (VMS_IOCTL_MBX_CREATE/ASSIGN/WRITE/READ/DELMBX, executive-resident MBAn:), vms-d44 + named-mailbox rendezvous by logical name, vms-mb1";;
+        facility)     echo "mailboxes (VMS_IOCTL_MBX_CREATE/ASSIGN/WRITE/READ/DELMBX, executive-resident MBAn:), vms-d44 + named-mailbox rendezvous by logical name, vms-mb1 + bidirectional command/response streaming to a spawned child, vms-e0b";;
         targets)      echo "kernel-core/vms_mbx.c";;
-        suites_red)   echo "test_kmod_mbx test_syssvc_mbx_crossproc";;
+        suites_red)   echo "test_kmod_mbx test_syssvc_mbx_crossproc test_syssvc_mbx_cmdresp";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -4456,6 +4456,9 @@ B: $DASSGN channel 2
 B: $DASSGN channel 3 (the last one)
 reader: $ASSIGN by LOGICAL NAME reaches the creator's mailbox cross-process (sys$assign translates the name through LNM$SYSTEM to MBAn:)
 reader: $QIO READVBLK returns the EXACT message the creator wrote (byte-exact, right length) -- named-mailbox message delivery through the executive
+child: $ASSIGN of the command mailbox BY NAME reaches the parent's mailbox cross-process
+child: $ASSIGN of the result mailbox BY NAME reaches the parent's mailbox cross-process
+parent: all 8 streamed commands come back TRANSFORMED and byte-exact from the spawned child -- NOT REACHED because the child could not assign the mailboxes cross-process
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
@@ -4505,6 +4508,23 @@ has nothing to discriminate on). Two suites, one root: a mailbox reachable
 only by its creator is the exact socketpair facade the executive replaced,
 whether the second process reaches for it by unit (test_kmod_mbx) or by
 name (test_syssvc_mbx_crossproc).
+
+THE SAME ONE ROOT, OBSERVED IN test_syssvc_mbx_cmdresp TOO (vms-e0b). That
+suite proves the MMK command/response shape: a parent $CREMBXes two named
+mailboxes and streams commands to a spawned child over one while reading the
+child's transformed results back over the other. The child -- which created
+neither mailbox -- reaches both only by sys$assign(NAME), so this same
+creator-pid check refuses BOTH of its $ASSIGNs; the child then reports two
+failed assigns and the parent's whole command/response loop cannot run, so
+the two "child: $ASSIGN ... reaches the parent's mailbox cross-process"
+assertions and the "NOT REACHED because the child could not assign the
+mailboxes cross-process" round-trip assertion all redden. The parent's own
+two $CREMBX assertions stay green (the parent is always its own mailboxes'
+creator). Three suites, one root: a mailbox reachable only by its creator is
+the exact socketpair facade the executive replaced, whether the second
+process reaches for it by unit (test_kmod_mbx), by name for a one-shot read
+(test_syssvc_mbx_crossproc), or by name for a streamed command/response
+exchange (test_syssvc_mbx_cmdresp).
 EOF
                       ;;
         esac;;

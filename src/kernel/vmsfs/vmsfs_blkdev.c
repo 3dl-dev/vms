@@ -18,6 +18,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/version.h>
 #include <linux/fs.h>
 #include <linux/buffer_head.h>
 #include <linux/mpage.h>
@@ -144,12 +145,32 @@ static int vmsfs_read_folio(struct file *file, struct folio *folio)
     return block_read_full_folio(folio, vmsfs_get_block);
 }
 
+/*
+ * ->write_begin / block_write_begin() carry the page-cache handle back to the
+ * VFS. Kernel 6.12 converted that handle from `struct page **` to
+ * `struct folio **` (the folio conversion of the buffer-head write path); the
+ * matching ->write_end handle (generic_write_end) is the kernel's own function,
+ * so it needs no shim here. OVMX builds vmsfs.ko against two kernels -- the
+ * from-source pinned kernel (>= 6.12, distro/Dockerfile.bootable, vms-448) and
+ * the stock Ubuntu module-test kernels (6.8, src/kernel/Dockerfile +
+ * tests/qemu/Dockerfile) -- so guard on the version boundary that separates the
+ * two rather than hard-switching (which would break the stock-kernel harnesses).
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+static int vmsfs_write_begin(struct file *file, struct address_space *mapping,
+                             loff_t pos, unsigned len,
+                             struct folio **foliop, void **fsdata)
+{
+    return block_write_begin(mapping, pos, len, foliop, vmsfs_get_block);
+}
+#else
 static int vmsfs_write_begin(struct file *file, struct address_space *mapping,
                              loff_t pos, unsigned len,
                              struct page **pagep, void **fsdata)
 {
     return block_write_begin(mapping, pos, len, pagep, vmsfs_get_block);
 }
+#endif
 
 /*
  * Write dirty page-cache folios back to the block device.

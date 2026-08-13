@@ -431,6 +431,12 @@ struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
         spin_lock_init(&proc->ast[i].lock);
     }
 
+    /* Hibernate/wake + async AST-delivery wakeup (vms-feb). wake_pending was
+     * zeroed by kmem_cache_zalloc() above; the wait queue and its paired lock
+     * need explicit init. */
+    init_waitqueue_head(&proc->hiber_wq);
+    spin_lock_init(&proc->hiber_lock);
+
     /* Initialize event flags */
     proc->ef.local[0] = 0;
     proc->ef.local[1] = 0;
@@ -785,6 +791,12 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_setident(proc, arg);
     case VMS_IOCTL_ESTABLISH_SYSTEM:
         return vms_ioctl_establish_system(proc, arg);
+
+    /* Hibernate / wake, executive-resident + AST-interruptible (vms-feb) */
+    case VMS_IOCTL_HIBER:
+        return vms_ioctl_hiber(proc, arg);
+    case VMS_IOCTL_WAKE:
+        return vms_ioctl_wake(proc, arg);
 
     /* Logical name tables (executive-resident LNM$SYSTEM, vms-d37) */
     case VMS_IOCTL_LNM_DEFINE:

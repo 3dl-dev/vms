@@ -524,10 +524,16 @@ static void queue_completion_ast(struct vms_lock_entry *lock)
     if (ast_state->count < VMS_AST_MAX_PER_MODE) {
         exec_list_add_tail(&ast->list, &ast_state->pending);
         ast_state->count++;
+        exec_unlock(&ast_state->lock);
+        /* Async delivery (vms-feb): wake the lock's process if it is
+         * hibernating so its $HIBER drains and runs this completion AST. After
+         * ast_state->lock is dropped (hiber_lock must nest OUTSIDE it); res->lock
+         * is still held, hiber_lock under it is a fresh edge. */
+        vms_ast_notify_arrival(lock->proc);
     } else {
         exec_free(ast);
+        exec_unlock(&ast_state->lock);
     }
-    exec_unlock(&ast_state->lock);
 }
 
 static void try_grant_waiters(struct vms_lock_resource *res)
@@ -602,10 +608,14 @@ static void notify_blocking_asts(struct vms_lock_resource *res,
             if (ast_state->count < VMS_AST_MAX_PER_MODE) {
                 exec_list_add_tail(&ast->list, &ast_state->pending);
                 ast_state->count++;
+                exec_unlock(&ast_state->lock);
+                /* Async delivery (vms-feb): wake the granted holder if it is
+                 * hibernating so its $HIBER drains and runs this blocking AST. */
+                vms_ast_notify_arrival(granted->proc);
             } else {
                 exec_free(ast);
+                exec_unlock(&ast_state->lock);
             }
-            exec_unlock(&ast_state->lock);
         }
     }
 }

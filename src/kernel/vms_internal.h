@@ -515,6 +515,29 @@ struct vms_proc {
     /* AST state (3b) - one queue per access mode */
     struct vms_ast_state ast[4];
 
+    /*
+     * Hibernate/wake + async AST-delivery wakeup (vms-feb). $HIBER blocks the
+     * process in the executive on hiber_wq; it is released when a $WAKE arrives
+     * (wake_pending set by vms_ioctl_wake) OR when an AST becomes deliverable
+     * (vms_ast_notify_arrival broadcasts hiber_wq after an entry is queued into
+     * this process's ast[] -- $DCLAST, a mailbox write-attention write, or a
+     * lock completion/blocking AST). This is what makes $HIBER interruptible by
+     * asynchronous AST delivery instead of a bare pause(): a process B action
+     * that queues an AST into process A's queue actually wakes A to run it
+     * (CLAUDE.md Rule 9 / INV-6 -- cross-process, through the executive).
+     *
+     * wake_pending is a STICKY SINGLE BIT, matching VMS's PCB$V_WAKEPEN: a
+     * $WAKE that precedes $HIBER makes the next $HIBER fall straight through,
+     * and one pending wake satisfies exactly one $HIBER (VSI System Services
+     * Reference, $WAKE/$HIBER). It is set under hiber_lock and consumed (test-
+     * and-cleared) by vms_ioctl_hiber, which is the SAME lock hiber_wq is paired
+     * with -- so a wake set under hiber_lock is never lost against a waiter that
+     * dropped hiber_lock only inside exec_cv_wait.
+     */
+    wait_queue_head_t   hiber_wq;
+    spinlock_t          hiber_lock;
+    uint8_t             wake_pending;
+
     /* Event flags (3c) */
     struct vms_ef_state ef;
 
@@ -765,6 +788,28 @@ long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dclast(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setast(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_deliverast(struct vms_proc *proc, unsigned long arg);
+
+/*
+ * Async AST-delivery wakeup (vms-feb). Called by every executive path that
+ * queues an AST entry into `proc`'s ast[] -- $DCLAST, a mailbox write-attention
+ * write (vms_mbx.c) and the lock manager's completion/blocking ASTs
+ * (vms_lock.c) -- AFTER the entry is on the queue, to wake a $HIBER waiter so
+ * it drains and runs the routine. Takes proc->hiber_lock internally; callers
+ * must NOT hold it, and must not hold an ast_state->lock across the call.
+ */
+void vms_ast_notify_arrival(struct vms_proc *proc);
+
+/*
+ * Is an AST deliverable to `proc` at or outside `cur_mode`? Same bound as
+ * vms_ioctl_deliverast (an enabled, non-empty queue at mode >= cur_mode). Used
+ * by vms_ioctl_hiber as half of its wait predicate. Takes each ast_state->lock
+ * briefly; caller holds proc->hiber_lock (order hiber_lock OUTER).
+ */
+int vms_ast_has_deliverable(struct vms_proc *proc, uint8_t cur_mode);
+
+/* Hibernate / wake ($HIBER/$WAKE, executive-resident -- vms-feb). */
+long vms_ioctl_hiber(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_wake(struct vms_proc *proc, unsigned long arg);
 
 /* Event flags (3c) */
 long vms_ioctl_setef(struct vms_proc *proc, unsigned long arg);

@@ -85,3 +85,8 @@ vms_kif_establish_system=PROCEDURE
 # the end per the append-only contract above -- a new universal never shifts an
 # existing index.
 vms_kif_mbx_set_wrtattn=PROCEDURE
+# vms-feb: $HIBER/$WAKE, executive-resident + AST-interruptible. APPENDED at the
+# end per the append-only contract -- a new universal never shifts an existing
+# index.
+vms_kif_hiber=PROCEDURE
+vms_kif_wake=PROCEDURE

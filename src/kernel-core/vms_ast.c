@@ -149,6 +149,14 @@ long vms_ioctl_dclast(struct vms_proc *proc, unsigned long arg)
     ast_state->count++;
     exec_unlock(&ast_state->lock);
 
+    /* Async delivery (vms-feb): a $DCLAST is self-directed, so `proc` is not
+     * normally in $HIBER when it declares its own AST -- but a multithreaded
+     * image can have another thread hibernating on the shared PCB, so wake it
+     * to drain, exactly as the cross-process AST paths (mailbox write-attention,
+     * lock completion) do. Done AFTER the entry is on the queue and the
+     * ast_state->lock is dropped (never hold ast_state->lock across the wake). */
+    vms_ast_notify_arrival(proc);
+
     args.status = SS__NORMAL;
 
 out:
@@ -314,4 +322,61 @@ void vms_proc_rundown_asts(struct vms_proc *proc, uint8_t min_acmode)
         st->count = 0;
         exec_unlock(&st->lock);
     }
+}
+
+/*
+ * vms_ast_has_deliverable - is there an AST `proc` could run at cur_mode? (vms-feb)
+ *
+ * Deliverable means EXACTLY what vms_ioctl_deliverast will hand back: an entry
+ * on an ENABLED queue at access mode >= cur_mode (the same containment bound,
+ * vms-as1). A disabled queue ($SETAST(0)) is not deliverable, matching VMS --
+ * ASTs disabled at a mode are held, not delivered. This is the "an AST is
+ * ready" half of vms_ioctl_hiber's wait predicate; the wake half is
+ * wake_pending. Caller holds proc->hiber_lock; this nests each ast_state->lock
+ * inside it (order hiber_lock OUTER -> ast_state->lock INNER), which never
+ * conflicts with the enqueue paths -- they drop ast_state->lock BEFORE taking
+ * hiber_lock (vms_ast_notify_arrival), so the two locks are never held in the
+ * opposite order.
+ */
+int vms_ast_has_deliverable(struct vms_proc *proc, uint8_t cur_mode)
+{
+    int mode;
+
+    for (mode = cur_mode; mode <= PSL_C_USER; mode++) {
+        struct vms_ast_state *st = &proc->ast[mode];
+        int ready;
+
+        exec_lock(&st->lock);
+        ready = st->enabled && !exec_list_empty(&st->pending);
+        exec_unlock(&st->lock);
+        if (ready)
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * vms_ast_notify_arrival - wake a $HIBER waiter after an AST was queued (vms-feb).
+ *
+ * The one piece that turns the existing AST QUEUE into async DELIVERY: every
+ * path that lands an entry in proc->ast[] ($DCLAST above; a mailbox write-
+ * attention write, vms_mbx.c; a lock completion or blocking AST, vms_lock.c)
+ * calls this AFTER the entry is on the queue, so a process hibernating in
+ * vms_ioctl_hiber wakes, re-tests vms_ast_has_deliverable, and returns to
+ * userspace to drain and RUN the routine. Without this the AST would sit in the
+ * queue until the process happened to call $SETAST(1) -- the deadlock vms-feb
+ * removes (a $HIBER waiting on a write-attention AST would never wake).
+ *
+ * The broadcast is done UNDER hiber_lock, the lock vms_ioctl_hiber pairs with
+ * hiber_wq, so it is lost-wakeup-free against a waiter that has already dropped
+ * hiber_lock inside exec_cv_wait (exec_kbackend.h's cv contract). The caller
+ * must have DROPPED any ast_state->lock first: this takes hiber_lock, and
+ * vms_ioctl_hiber takes hiber_lock then ast_state->lock, so holding ast_state->
+ * lock across this call would invert that order.
+ */
+void vms_ast_notify_arrival(struct vms_proc *proc)
+{
+    exec_lock(&proc->hiber_lock);
+    exec_cv_broadcast(&proc->hiber_wq);
+    exec_unlock(&proc->hiber_lock);
 }

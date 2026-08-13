@@ -404,6 +404,142 @@ static struct vms_proc *find_by_vms_pid(uint32_t vms_pid)
 }
 
 /*
+ * vms_ioctl_hiber - $HIBER, executive-resident and AST-interruptible (vms-feb).
+ *
+ * Blocks the caller in the executive until a $WAKE is pending for it OR an AST
+ * becomes deliverable to it (vms_ast_has_deliverable, the same containment
+ * bound vms_ioctl_deliverast uses). Returns `woken` = 1 when a $WAKE released
+ * it (consuming the sticky wake bit) and 0 when an AST did. sys$hiber drains and
+ * runs the deliverable ASTs in userspace after each return and re-enters here
+ * until woken == 1 -- so an AST that does not itself $WAKE resumes the wait,
+ * exactly as VMS re-hibernates after an AST that does not $WAKE (VSI System
+ * Services Reference, $HIBER: "the process continues to hibernate until a wake
+ * request is issued").
+ *
+ * The predicate is re-tested under hiber_lock on every wake and has PRIORITY
+ * over a signal (matching vms_ioctl_waitfr): a bare signal does NOT end $HIBER
+ * -- only a $WAKE or a deliverable AST does -- so an interrupted wait with
+ * neither condition true returns -ERESTARTSYS and libvmssys re-enters.
+ *
+ * LOCK ORDER: hiber_lock OUTER, ast_state->lock INNER (via
+ * vms_ast_has_deliverable). The enqueue+notify paths drop ast_state->lock
+ * BEFORE taking hiber_lock (vms_ast_notify_arrival), so the two are never held
+ * in the opposite order. exec_cv_wait is entered holding only hiber_lock.
+ */
+long vms_ioctl_hiber(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_hiber_args args;
+    uint8_t cur_mode;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    exec_lock(&proc->mode_lock);
+    cur_mode = proc->current_mode;
+    exec_unlock(&proc->mode_lock);
+
+    exec_lock(&proc->hiber_lock);
+    for (;;) {
+        if (proc->wake_pending) {
+            proc->wake_pending = 0;
+            args.woken = 1;
+            break;
+        }
+        if (vms_ast_has_deliverable(proc, cur_mode)) {
+            args.woken = 0;
+            break;
+        }
+        if (exec_cv_wait(&proc->hiber_wq, &proc->hiber_lock)) {
+            /* Interrupted with neither condition true. Re-test both (priority
+             * over the signal), else hand back -ERESTARTSYS. */
+            if (proc->wake_pending) {
+                proc->wake_pending = 0;
+                args.woken = 1;
+                break;
+            }
+            if (vms_ast_has_deliverable(proc, cur_mode)) {
+                args.woken = 0;
+                break;
+            }
+            exec_unlock(&proc->hiber_lock);
+            return -ERESTARTSYS;
+        }
+    }
+    exec_unlock(&proc->hiber_lock);
+
+    args.status = SS__NORMAL;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_wake - $WAKE, executive-resident (vms-feb).
+ *
+ * Sets the sticky wake bit on the target and wakes it if it is hibernating.
+ * The target is the caller itself when vms_pid == 0 (or names the caller's own
+ * VMS PID) -- the self-directed $WAKE a write-attention AST issues to end its
+ * own process's $HIBER, which is what MMK's send_cmd_and_wait needs -- and no
+ * privilege is required for that. Waking ANOTHER process is gated by
+ * vms_proc_may_read (GROUP for the same UIC group, else WORLD), the same
+ * cross-process control gate $DELPRC/$GETJPI use; OVMX pins $WAKE to that gate
+ * as a design choice (CLAUDE.md Rule 8 -- VMS gates $WAKE on GROUP/WORLD; the
+ * exact predicate is OVMX's, stated not implied).
+ *
+ * wake_pending is sticky: a $WAKE with no $HIBER outstanding is remembered and
+ * consumed by the next $HIBER (VSI System Services Reference, $WAKE).
+ */
+long vms_ioctl_wake(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_wake_args args;
+    struct vms_proc *target;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    if (args.vms_pid == 0 || args.vms_pid == proc->vms_pid) {
+        /* Self-wake: no lookup, no privilege check. */
+        exec_lock(&proc->hiber_lock);
+        proc->wake_pending = 1;
+        exec_cv_broadcast(&proc->hiber_wq);
+        exec_unlock(&proc->hiber_lock);
+        args.status = SS__NORMAL;
+        goto out;
+    }
+
+    /* Cross-process: hold hash_lock across taking the target's hiber_lock so
+     * the target cannot be reaped between the lookup and the wake. hiber_lock
+     * nests INSIDE hash_lock -- a fresh edge (nothing takes hash_lock while
+     * holding a hiber_lock). */
+    vms_proc_reap_dead();
+    exec_lock(&vms_proc_hash_lock);
+    target = find_by_vms_pid(args.vms_pid);
+    if (!target) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NONEXPR;
+        goto out;
+    }
+    if (!vms_proc_may_read(proc, target)) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+    exec_lock(&target->hiber_lock);
+    target->wake_pending = 1;
+    exec_cv_broadcast(&target->hiber_wq);
+    exec_unlock(&target->hiber_lock);
+    exec_unlock(&vms_proc_hash_lock);
+    args.status = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_setprn - set the calling process's name ($SETPRN).
  *
  * VMS returns SS$_DUPLNAM when the name is already in use within the

@@ -452,6 +452,37 @@ int vms_kif_deliverast(uint64_t *astadr, uint64_t *astprm, uint8_t *acmode)
     return 0;
 }
 
+/*
+ * vms_kif_hiber - block until a $WAKE is pending or an AST is deliverable.
+ *
+ * Blocking, like the event-flag waits: kif_wait_call re-enters past a bare
+ * signal (EINTR) so a signal does not end $HIBER -- only the executive
+ * returning (a $WAKE consumed, or an AST become deliverable) does. Returns the
+ * `woken` flag the executive set: 1 = released by $WAKE, 0 = by an AST.
+ */
+int vms_kif_hiber(void)
+{
+    struct vms_hiber_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+
+    (void)kif_wait_call(VMS_IOCTL_HIBER, &args);
+
+    return (int)args.woken;
+}
+
+uint32_t vms_kif_wake(uint32_t vms_pid)
+{
+    struct vms_wake_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.vms_pid = vms_pid;
+
+    KIF_CALL(VMS_IOCTL_WAKE, &args);
+
+    return args.status;
+}
+
 /* ================================================================
  * Event Flags (3c)
  * ================================================================ */

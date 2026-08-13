@@ -148,15 +148,29 @@ vms_proc_get(pid_t pid)
 	exec_cv_init(&np->hiber_wq);
 	exec_lock_init(&np->hiber_lock);
 
+	/*
+	 * Mailbox per-process state (P4-A, rd vms-d7a): the channel-number allocator
+	 * and this process's (initially empty, self-linked) mailbox channel ring plus
+	 * its guard. The identity fields stamp a created mailbox's owner (informational
+	 * only). No separate VMS PID is assigned on this substrate, so vms_pid tracks
+	 * the pid, exactly as the glue key does.
+	 */
+	np->linux_pid = pid;
+	np->vms_pid   = (uint32_t)pid;
+	np->next_chan = 0;
+	exec_lock_init(&np->chan_lock);
+	exec_list_head_init(&np->mbx_channels);
+
 	exec_lock(&vms_proctab_lock);
 	for (p = vms_proctab; p != NULL; p = p->next) {
 		if (p->pid == pid) {
 			/* Lost the race: use the existing proc, drop ours. Its AST
-			 * pending rings are still empty (just created), so only the sync
-			 * objects need tearing down before the free -- a live kmutex/
-			 * kcondvar must be destroyed on NetBSD. */
+			 * pending rings and mailbox channel ring are still empty (just
+			 * created), so only the sync objects need tearing down before the
+			 * free -- a live kmutex/kcondvar must be destroyed on NetBSD. */
 			int m;
 			exec_unlock(&vms_proctab_lock);
+			exec_lock_destroy(&np->chan_lock);
 			exec_cv_destroy(&np->hiber_wq);
 			exec_lock_destroy(&np->hiber_lock);
 			for (m = 0; m < 4; m++)
@@ -194,11 +208,17 @@ vms_proctab_teardown(void)
 	while (p != NULL) {
 		int m;
 		np = p->next;
-		/* Free any AST entries still queued at unload (all four modes: min
-		 * PSL_C_KERNEL == 0), then tear down each mode's guard and the
-		 * access/hibernate sync objects. In the harness every process has
-		 * closed the device and no wait is in flight, so this is unraced. */
+		/* Give back this process's mailbox channels first (dropping each
+		 * mailbox's reference, freeing temporary/deleted mailboxes whose last
+		 * channel this was) -- runs while the mailbox list guard is still alive
+		 * (vms_mbx_cleanup() runs AFTER this, in vms_modcmd's FINI). Then free
+		 * any AST entries still queued at unload (all four modes: min
+		 * PSL_C_KERNEL == 0), then tear down each mode's guard and the mailbox/
+		 * access/hibernate sync objects. In the harness every process has closed
+		 * the device and no wait is in flight, so this is unraced. */
+		vms_mbx_release_all(p);
 		vms_proc_rundown_asts(p, PSL_C_KERNEL);
+		exec_lock_destroy(&p->chan_lock);
 		exec_cv_destroy(&p->hiber_wq);
 		exec_lock_destroy(&p->hiber_lock);
 		for (m = 0; m < 4; m++)
@@ -306,6 +326,52 @@ vms_facility_errno(long r)
 	if (r == -EAGAIN)
 		return EAGAIN;
 	return EINVAL;
+}
+
+/*
+ * vms_mbx_bigio - dispatch a MESSAGE-TRANSFER mailbox ioctl (WRITE/READ) whose
+ * argument exceeds NetBSD's one-page IOCPARM_MAX (P4-A, rd vms-d7a; Option B).
+ *
+ * These two ops are encoded IOC_VOID (vms_mbx_nb.h), so the cdevsw framework did
+ * NOT pre-copy the argument -- it stored the raw USER pointer in `data'
+ * (sys_generic.c: `*(void **)data = SCARG(uap, data)'). We do the boundary
+ * crossing ourselves: copyin the caller's argument into a kernel buffer, hand
+ * that buffer to the SHARED facility (whose exec_copyin/exec_copyout are then
+ * in-kernel copies against it, exactly as on the _IOWR control path), and copyout
+ * the answer only on success. On -ERESTARTSYS (an interrupted mailbox read, the
+ * WAITFR precedent) the facility wrote no status, so we skip the copyout and let
+ * ERESTART re-enter. A bad user address is rejected here by copyin/copyout,
+ * never fabricated (INV-6). `fn' is the facility handler; `argsz' its struct size.
+ */
+static int
+vms_mbx_bigio(struct lwp *l, void *data, size_t argsz,
+    long (*fn)(struct vms_proc *, unsigned long))
+{
+	void *uaddr = *(void **)data;   /* IOC_VOID: the caller's struct address */
+	struct vms_proc *proc;
+	void *kbuf;
+	long r;
+
+	kbuf = exec_alloc(argsz);
+	if (kbuf == NULL)
+		return ENOMEM;
+	if (copyin(uaddr, kbuf, argsz)) {
+		exec_free(kbuf);
+		return EFAULT;
+	}
+
+	proc = vms_proc_get(l->l_proc->p_pid);
+	if (proc == NULL) {
+		exec_free(kbuf);
+		return ENOMEM;
+	}
+
+	r = fn(proc, (unsigned long)kbuf);
+	if (r == 0 && copyout(kbuf, uaddr, argsz))
+		r = -EFAULT;
+
+	exec_free(kbuf);
+	return vms_facility_errno(r);
 }
 
 static int
@@ -442,6 +508,47 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		}
 		return vms_facility_errno(r);
 
+	/*
+	 * Mailbox CONTROL ioctls (MBAn:, P4-A). All _IOWR and <= 40 bytes, so the
+	 * same framework pre-copy model as event flags: NetBSD copied the argument
+	 * into `data' and copies our answer back out. We hand `data' to the shared
+	 * facility (src/kernel-core/vms_mbx.c), identical to the Linux one.
+	 */
+	case VMS_IOCTL_MBX_CREATE:
+	case VMS_IOCTL_MBX_ASSIGN:
+	case VMS_IOCTL_MBX_DELMBX:
+	case VMS_IOCTL_MBX_SET_WRTATTN:
+		uarg = data;
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+
+		switch (cmd) {
+		case VMS_IOCTL_MBX_CREATE:
+			r = vms_ioctl_mbx_create(proc, (unsigned long)uarg);      break;
+		case VMS_IOCTL_MBX_ASSIGN:
+			r = vms_ioctl_mbx_assign(proc, (unsigned long)uarg);      break;
+		case VMS_IOCTL_MBX_DELMBX:
+			r = vms_ioctl_mbx_delmbx(proc, (unsigned long)uarg);      break;
+		case VMS_IOCTL_MBX_SET_WRTATTN:
+			r = vms_ioctl_mbx_set_wrtattn(proc, (unsigned long)uarg); break;
+		default:
+			return ENOTTY;   /* unreachable */
+		}
+		return vms_facility_errno(r);
+
+	/*
+	 * Mailbox MESSAGE-TRANSFER ioctls. IOC_VOID (their >page argument can't ride
+	 * the framework pre-copy path, Option B) -- the driver does the copyin/copyout
+	 * itself. See vms_mbx_bigio() and vms_mbx_nb.h's COPY MODEL note.
+	 */
+	case VMS_IOCTL_MBX_WRITE:
+		return vms_mbx_bigio(l, data, sizeof(struct vms_mbx_write_args),
+		    vms_ioctl_mbx_write);
+	case VMS_IOCTL_MBX_READ:
+		return vms_mbx_bigio(l, data, sizeof(struct vms_mbx_read_args),
+		    vms_ioctl_mbx_read);
+
 	default:
 		return ENOTTY;
 	}
@@ -468,12 +575,16 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		exec_lock_init(&vms_proctab_lock);
 		vms_proctab = NULL;
 		vms_eflag_init();
+		/* Bring up the mailbox table's list guard too (the table starts empty
+		 * -- mailboxes are created on demand by $CREMBX). */
+		vms_mbx_init();
 
 		error = devsw_attach("vms", NULL, &bmajor, &vms_cdevsw, &cmajor);
 		if (error != 0) {
 			printf("vms: devsw_attach failed: %d\n", error);
 			vms_eflag_cleanup();
 			vms_proctab_teardown();
+			vms_mbx_cleanup();
 			exec_lock_destroy(&vms_proctab_lock);
 			return error;
 		}
@@ -490,10 +601,14 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * not busy and no facility wait is in flight.
 		 */
 		devsw_detach(NULL, &vms_cdevsw);
-		/* Free the shared clusters first (they destroy their own sync
-		 * objects), then the procs, then the proc-table guard. */
+		/* Free the shared common-EF clusters, then tear down the procs (this
+		 * gives back each proc's mailbox channels and drains its ASTs while the
+		 * mailbox list guard is still alive), then free any remaining permanent
+		 * mailboxes and destroy the mailbox list guard, then the proc-table
+		 * guard. */
 		vms_eflag_cleanup();
 		vms_proctab_teardown();
+		vms_mbx_cleanup();
 		exec_lock_destroy(&vms_proctab_lock);
 		printf("vms: unregistered\n");
 		return 0;

@@ -75,14 +75,18 @@ CFLAGS=(
 OBJ="$(mktemp -d)"
 
 # The module's translation units: the NetBSD backend glue, the OVMX intrusive
-# list, and THE SHARED facility source (identical to the one the Linux vms.ko
+# list, and THE SHARED facility sources (identical to the ones the Linux vms.ko
 # builds). This is exactly src/kernel-netbsd/Makefile's SRCS.
+#   vms_eflag.c / vms_ast.c / vms_access.c - event flags, ASTs, access modes
+#   vms_mbx.c   - executive-resident mailboxes MBAn: (rd vms-d7a); links
+#                 vms_ast_notify_arrival, so vms_ast.c must be listed too
 SRCS=(
     "$KMOD/vms_netbsd.c"
     "$KMOD/exec_list_netbsd.c"
     "$CORE/vms_eflag.c"
     "$CORE/vms_ast.c"
     "$CORE/vms_access.c"
+    "$CORE/vms_mbx.c"
 )
 
 # ---- teeth check ---------------------------------------------------------

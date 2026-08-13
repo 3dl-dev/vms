@@ -100,3 +100,4 @@ tests/netbsd/.netbsd-cache/
 # NetBSD harness local caches (never committed)
 .netbsd-cache/
 .netbsd-cache-p2c/
+.netbsd-src/

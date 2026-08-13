@@ -37,6 +37,7 @@
 #include "vms/pcb.h"
 #include "ovmx_identity.h"
 #include "ovmx_accounting.h"
+#include "scs_membership.h"  /* vms-8d4: read SCSD's live cluster membership */
 #include "vmsqueue.h"
 #include "descrip.h"
 #include "jpidef.h"
@@ -2379,11 +2380,78 @@ static int cmd_show_license(struct dcl_command *cmd)
 
 /*
  * SHOW CLUSTER - Display VMScluster membership.
+ *
+ * vms-8d4 (INV-DCL facade-kill): this used to hardcode "%SYSTEM-I-NOTMEMBER"
+ * unconditionally, so a genuinely-clustered node lied about being standalone.
+ * It now reads the connection manager's LIVE member set, published by the SCS
+ * daemon (src/vmsscs/scsd.c -> scs_membership.h). When the daemon has admitted
+ * this node into a cluster it renders the real member list; when this node is
+ * not a member -- daemon not running, or not (yet) joined -- there is no
+ * published membership and NOTMEMBER is the honest answer, exactly as a real
+ * non-member VMS node reports.
+ *
+ * The display fields (the "View of Cluster from system ID N node: X" banner and
+ * the NODE / SOFTWARE / STATUS columns) are modeled on the public OpenVMS SHOW
+ * CLUSTER utility default report (Rule 8: matched to documented output, not to
+ * any VMS binary). The line art is an OVMX rendering.
  */
 static int cmd_show_cluster(struct dcl_command *cmd)
 {
     (void)cmd;
-    printf("%%SYSTEM-I-NOTMEMBER, this system is not a member of a VMScluster\n");
+
+    struct scs_cluster_view view;
+    int rc = scs_membership_read(&view);
+
+    if (rc <= 0 || view.n_members < 1) {
+        /* Not a member: no live membership published. This is the truth for a
+         * standalone node and for a node whose connection manager is not up. */
+        printf("%%SYSTEM-I-NOTMEMBER, this system is not a member of a "
+               "VMScluster\n");
+        return SS$_NORMAL;
+    }
+
+    /* members[0] is the local node, as published by SCSD. */
+    const struct scs_cluster_member *local = &view.members[0];
+    const char *local_node =
+        (local->node[0] != '\0' && strcmp(local->node, "?") != 0)
+            ? local->node : "OVMX";
+
+    char tbuf[64];
+    time_t now = time(NULL);
+    struct tm tmv;
+    localtime_r(&now, &tmv);
+    /* VMS date form: dd-MON-yyyy hh:mm:ss (month letters uppercased). */
+    strftime(tbuf, sizeof(tbuf), "%d-%b-%Y %H:%M:%S", &tmv);
+    for (char *p = tbuf; *p; p++) *p = (char)toupper((unsigned char)*p);
+
+    /* We know only THIS node's software version; the membership publication
+     * carries no per-peer software, so peer rows show the family ("VMS")
+     * without a version we cannot vouch for (Rule 8 / INV-DCL: never state a
+     * fact we did not observe). */
+    char local_software[24];
+    snprintf(local_software, sizeof(local_software), "VMS %s",
+             ovmx_compat_version());
+
+    printf("View of Cluster from system ID %u node: %-6s   %s\n\n",
+           (unsigned)local->sysid, local_node, tbuf);
+    printf("+-------------------------------------------------+\n");
+    printf("|          SYSTEMS         |       MEMBERS         |\n");
+    printf("|--------------------------+----------------------|\n");
+    printf("| NODE   | SOFTWARE        | STATUS               |\n");
+    printf("|--------+-----------------+----------------------|\n");
+    for (int i = 0; i < view.n_members; i++) {
+        const struct scs_cluster_member *m = &view.members[i];
+        char nodecol[SCS_MEMBERSHIP_NODE_LEN];
+        if (m->node[0] != '\0' && strcmp(m->node, "?") != 0) {
+            snprintf(nodecol, sizeof(nodecol), "%s", m->node);
+        } else {
+            /* Peer SCSNODE name not learned: identify it by SCSSYSTEMID. */
+            snprintf(nodecol, sizeof(nodecol), "%u", (unsigned)m->sysid);
+        }
+        const char *software = (i == 0) ? local_software : "VMS";
+        printf("| %-6s | %-15s | %-20s |\n", nodecol, software, m->state);
+    }
+    printf("+-------------------------------------------------+\n");
     return SS$_NORMAL;
 }
 

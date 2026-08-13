@@ -63,6 +63,9 @@ target_include_directories(vms PUBLIC include ${VMS_RMS_INCLUDE_DIR} ${VMS_FS_IN
 # (ovmx_image.h / ovmx_symvec.h) -- the same single-source-of-truth headers
 # LINK.EXE and IMGACT.EXE share (vms-db2). PRIVATE: only these TUs need them.
 target_include_directories(vms PRIVATE ${CMAKE_SOURCE_DIR}/src/vmslink/include)
+# F$GETSYI CLUSTER_MEMBER/CLUSTER_NODES read SCSD's live membership publication
+# (vms-8d4): src/vmsscs/include/scs_membership.h -- header-only, no link dep.
+target_include_directories(vms PRIVATE ${CMAKE_SOURCE_DIR}/src/vmsscs/include)
 # vmssys provides vms_kif_* (the /dev/vms ioctl wrappers used by sys_lock.c
 # to reach the kernel lock manager).
 target_link_libraries(vms PUBLIC vmsprocess vmsfs vmssys pthread m)

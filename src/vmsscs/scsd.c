@@ -61,6 +61,7 @@
 #include "scs_poll.h"
 #include "scs_quorum.h" /* vms-7a9: CEVOTES/QUORUM computation + quorum gate */
 #include "scs_recnx.h"  /* vms-c7d: CSB connectivity states + RECNXINTERVAL reconnect loop */
+#include "scs_membership.h"  /* vms-8d4: publish live membership for DCL SHOW CLUSTER */
 #include "scs_reason.h"
 #include "scs_env.h" /* vms-ec7: THE shared SCS message envelope (build + parse + dispatch) */
 #include "scs_rx.h"
@@ -11346,6 +11347,81 @@ static void scsd_join_retx_tick(struct scsd_rx *rx, uint64_t now_ms)
  * behaviour is suppressed). OVMX_NO_RECNX_RECONNECT=1 is the deeper switch: it
  * stops any peer ever entering WAIT, so this tick has nothing to act on.
  */
+/*
+ * scsd_publish_membership - vms-8d4: publish the connection manager's LIVE
+ * member set so DCL SHOW CLUSTER (a separate process) reads reality instead of
+ * a hardcoded NOTMEMBER. See scs_membership.h for the IPC contract and Rule 8
+ * clean-room note.
+ *
+ * WHAT COUNTS AS A MEMBER. A peer is a member iff its VMS$VAXcluster connection
+ * has reached OPEN (ps->vaxcluster_open_reached, the "honest membership fact"
+ * latch documented on the struct field) OR the coordinator has published its
+ * post-commit membership burst for us (ps->membership_bursts > 0, the AUTHENTIC
+ * "OVMX is now a committed cluster member" signal per its struct field note).
+ * Those are the two signals the code already trusts to mean "OVMX is admitted".
+ * When at least one peer qualifies we are in a cluster, so the LOCAL node is a
+ * member too and leads the list. When NONE qualify we are not (yet) a member:
+ * clear the file so SHOW CLUSTER honestly reports NOTMEMBER.
+ *
+ * Throttled to ~1 Hz off the main loop's clock -- membership changes are rare
+ * and a reader only needs current-within-a-second state.
+ */
+static void scsd_publish_membership(struct scsd_rx *rx, uint64_t now_ms)
+{
+    if (rx == NULL || rx->peers == NULL || rx->vc_ctx == NULL) {
+        return;
+    }
+    static uint64_t last_publish_ms = 0;
+    if (last_publish_ms != 0 && now_ms - last_publish_ms < 1000) {
+        return;
+    }
+    last_publish_ms = now_ms;
+
+    struct scs_cluster_view view;
+    memset(&view, 0, sizeof(view));
+
+    /* Slot 0 is reserved for the local node; filled in only if we have peers. */
+    int peer_members = 0;
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &rx->peers[i];
+        if (ps->pb == NULL) {
+            continue;
+        }
+        if (!ps->vaxcluster_open_reached && ps->membership_bursts <= 0) {
+            continue;
+        }
+        if (view.n_members + 1 >= SCS_MEMBERSHIP_MAX_NODES) {
+            break;
+        }
+        /* +1: leave members[0] for the local node, added below. */
+        struct scs_cluster_member *m = &view.members[1 + peer_members];
+        m->sysid = peer_node_number(ps);
+        /* Peer SCSNODE name is not reliably learned per-peer; the renderer
+         * falls back to the SCSSYSTEMID when node is empty. */
+        m->node[0] = '\0';
+        strncpy(m->state, "MEMBER", sizeof(m->state) - 1);
+        peer_members++;
+    }
+
+    if (peer_members == 0) {
+        /* Not a member of any cluster right now -> NOTMEMBER is the truth. */
+        scs_membership_clear();
+        return;
+    }
+
+    /* We are a member: lead with the local node, then the peers gathered above. */
+    struct scs_cluster_member *local = &view.members[0];
+    if (rx->vc_ctx->node_name != NULL) {
+        strncpy(local->node, rx->vc_ctx->node_name, sizeof(local->node) - 1);
+    }
+    local->node[sizeof(local->node) - 1] = '\0';
+    local->sysid = rx->vc_ctx->scssystemid;
+    strncpy(local->state, "MEMBER", sizeof(local->state) - 1);
+    view.n_members = 1 + peer_members;
+
+    (void)scs_membership_publish(&view);
+}
+
 static void scsd_recnx_tick(struct scsd_rx *rx, uint64_t now_ms)
 {
     if (rx == NULL || getenv("OVMX_NO_RECNX_TICK") != NULL) {
@@ -12773,6 +12849,11 @@ int main(int argc, char **argv)
          * WAIT/RECONNECT. OVMX_NO_RECNX_TICK=1 disables it. */
         scsd_recnx_tick(&rx, monotonic_ms());
 
+        /* --- vms-8d4: publish the live member set (throttled to ~1 Hz inside)
+         * so DCL SHOW CLUSTER reads real membership instead of a hardcoded
+         * NOTMEMBER. See scs_membership.h / docs/design-cluster-node.md §3.1. */
+        scsd_publish_membership(&rx, monotonic_ms());
+
         /* --- DISK DISCOVERY HAS EXACTLY ONE TRIGGER, AND THIS CALL IS IT.
          * vms-ebb moved the body into scsd_diskrun_ungate_tick() so a test can
          * reach it (SCSD_UNIT_TEST renames main() away), and ruled the single
@@ -12808,6 +12889,10 @@ int main(int argc, char **argv)
 
     /* vms-591: disconnect before vanishing. Bounded; see the function. */
     scsd_shutdown_teardown(&rx, buf, sizeof(buf));
+
+    /* vms-8d4: we are leaving the cluster -- retract our published membership so
+     * a later SHOW CLUSTER on this node honestly reports NOTMEMBER. */
+    scs_membership_clear();
 
     scsd_exit_summary(&rx, stderr);
 

@@ -18,6 +18,25 @@ for 1.0. It answers three questions from one source of truth:
    is it supported today? (Keyed by canonical symbol/command/feature id → status.)
 3. **Roadmap** — what remains for 1.0, per surface.
 
+**What belongs here — and what does not.** This matrix catalogues **VMS compatibility
+surfaces**: things a VMS program or user observes or depends on — a callable (`SYS$`/`LIB$`/…),
+a command, a file format, a wire protocol, a device, a documented behaviour. Each item's `vms:`
+field must describe *a VMS thing*, never an OVMX symbol, ioctl, or internal mechanism.
+
+The **roadmap is broader than compatibility**, and its non-compatibility parts live elsewhere,
+**not on this matrix**:
+
+- **OVMX engineering milestones** — self-hosting/bootstrap (tcc gen2==gen3, BUILD.COM),
+  reproducible builds → the self-hosting program (`vms-678`) and the release roadmap.
+- **Architecture / platform bring-up** — which CPU targets OVMX runs on (x86_64/aarch64/alpha/vax)
+  → tracked as a **release dimension** by the release machinery, not as a VMS API surface.
+- **Internal implementation & housekeeping** — init wiring, deleted hacks, dead-code residue,
+  refactor leftovers. These are notes at most; never their own "surface" row. (`ssh$pid1-wiring`
+  — "we removed our own `start_sshd()` call" — was exactly this mistake and was deleted.)
+
+If you cannot name the VMS manual, service, command, or format an item corresponds to, it is not
+a compatibility surface — it belongs on the roadmap, not in this register.
+
 It is **not** a replacement for the three existing narrower artifacts; it is their union and
 their index:
 
@@ -164,8 +183,10 @@ Grounded in the current header/source inventory on `origin/main`:
   images); symbol vectors/GSMATCH/ident; LINK.EXE; LIBRARIAN; MACRO/assembler; MESSAGE compiler;
   MMS/MMK; self-hosting compiler.
 - **G. Networking** — TCP/IP Services (UCX QIO + C sockets + EWA0:); DECnet Phase IV; LAT; SSH.
-- **H. Runtime & architecture** — architecture targets (x86_64, aarch64, alpha, vax); kernel
-  executive (`/dev/vms`); image activation / runtime linking.
+- **H. Executive** — the VMS executive itself: access modes, the process model (PCB), scheduling,
+  and the executive-backed IPC underneath the system services. (Architecture/platform support and
+  OVMX self-hosting are roadmap concerns — release dimensions and the self-hosting program — not
+  compatibility surfaces, and are deliberately absent here.)
 - **I. Languages & compilers** — compilers (Fortran/COBOL/BASIC/Pascal/MACRO/Ada/PL/I/BLISS/…),
   their language RTLs (`FOR$`/`COB$`/`BAS$`/`PAS$`), and the OpenVMS Calling Standard. OVMX has
   one language today: C, via tcc.

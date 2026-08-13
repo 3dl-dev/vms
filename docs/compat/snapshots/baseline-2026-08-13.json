@@ -1,45 +1,45 @@
 {
   "version": "baseline-2026-08-13",
   "overall": {
-    "count": 416,
+    "count": 405,
     "by_status": {
-      "verified": 27,
-      "implemented": 209,
-      "partial": 45,
+      "verified": 24,
+      "implemented": 206,
+      "partial": 43,
       "stub": 19,
       "designed": 2,
-      "absent": 114
+      "absent": 111
     },
     "by_authenticity": {
-      "real": 234,
-      "n/a": 103,
+      "real": 227,
+      "n/a": 99,
       "advisory": 34,
       "facade-risk": 45
     },
-    "met": 236,
-    "in_progress": 45,
-    "not_started": 135,
+    "met": 230,
+    "in_progress": 43,
+    "not_started": 132,
     "facade_risk": 45
   },
   "overall_in_scope": {
-    "count": 372,
+    "count": 363,
     "by_status": {
-      "verified": 27,
-      "implemented": 209,
-      "partial": 43,
+      "verified": 24,
+      "implemented": 206,
+      "partial": 42,
       "stub": 16,
       "designed": 2,
-      "absent": 75
+      "absent": 73
     },
     "by_authenticity": {
-      "real": 233,
-      "n/a": 63,
+      "real": 226,
+      "n/a": 61,
       "advisory": 33,
       "facade-risk": 43
     },
-    "met": 236,
-    "in_progress": 43,
-    "not_started": 93,
+    "met": 230,
+    "in_progress": 42,
+    "not_started": 91,
     "facade_risk": 43
   },
   "by_domain": {
@@ -149,23 +149,23 @@
       "facade_risk": 1
     },
     "toolchain": {
-      "count": 24,
+      "count": 17,
       "by_status": {
-        "verified": 3,
-        "implemented": 12,
-        "partial": 1,
+        "verified": 2,
+        "implemented": 9,
+        "partial": 0,
         "stub": 0,
         "designed": 2,
-        "absent": 6
+        "absent": 4
       },
       "by_authenticity": {
-        "real": 13,
-        "n/a": 8,
+        "real": 8,
+        "n/a": 6,
         "advisory": 3
       },
-      "met": 15,
-      "in_progress": 1,
-      "not_started": 8,
+      "met": 11,
+      "in_progress": 0,
+      "not_started": 6,
       "facade_risk": 0
     },
     "networking": {
@@ -189,24 +189,23 @@
       "facade_risk": 2
     },
     "runtime-arch": {
-      "count": 13,
+      "count": 9,
       "by_status": {
-        "verified": 2,
+        "verified": 0,
         "implemented": 6,
-        "partial": 3,
+        "partial": 2,
         "stub": 1,
         "designed": 0,
-        "absent": 1
+        "absent": 0
       },
       "by_authenticity": {
-        "real": 8,
-        "n/a": 2,
+        "real": 6,
         "facade-risk": 2,
         "advisory": 1
       },
-      "met": 8,
-      "in_progress": 3,
-      "not_started": 2,
+      "met": 6,
+      "in_progress": 2,
+      "not_started": 1,
       "facade_risk": 2
     },
     "languages": {
@@ -245,26 +244,6 @@
       "status": "absent",
       "authenticity": "n/a",
       "scope_1_0": "in"
-    },
-    "arch-targets$arch-targets$x86_64": {
-      "status": "verified",
-      "authenticity": "real",
-      "scope_1_0": "in"
-    },
-    "arch-targets$arch-targets$aarch64": {
-      "status": "verified",
-      "authenticity": "real",
-      "scope_1_0": "in"
-    },
-    "arch-targets$arch-targets$alpha": {
-      "status": "absent",
-      "authenticity": "n/a",
-      "scope_1_0": "in"
-    },
-    "arch-targets$arch-targets$vax": {
-      "status": "partial",
-      "authenticity": "n/a",
-      "scope_1_0": "stretch"
     },
     "audit$audit$security_journal": {
       "status": "absent",
@@ -1046,26 +1025,6 @@
       "authenticity": "real",
       "scope_1_0": "in"
     },
-    "link$link$target-x86_64": {
-      "status": "implemented",
-      "authenticity": "real",
-      "scope_1_0": "in"
-    },
-    "link$link$target-aarch64": {
-      "status": "implemented",
-      "authenticity": "real",
-      "scope_1_0": "in"
-    },
-    "link$link$target-alpha": {
-      "status": "absent",
-      "authenticity": "n/a",
-      "scope_1_0": "in"
-    },
-    "link$link$target-vax": {
-      "status": "absent",
-      "authenticity": "n/a",
-      "scope_1_0": "stretch"
-    },
     "logical-namespace$lnm$table_system": {
       "status": "verified",
       "authenticity": "real",
@@ -1544,21 +1503,6 @@
     "scs$scs$datagram-service": {
       "status": "stub",
       "authenticity": "facade-risk",
-      "scope_1_0": "in"
-    },
-    "self-host-compiler$self-host-compiler$tcc-selfhost": {
-      "status": "verified",
-      "authenticity": "real",
-      "scope_1_0": "in"
-    },
-    "self-host-compiler$self-host-compiler$build-com": {
-      "status": "implemented",
-      "authenticity": "real",
-      "scope_1_0": "in"
-    },
-    "self-host-compiler$self-host-compiler$s3-s5-images": {
-      "status": "partial",
-      "authenticity": "real",
       "scope_1_0": "in"
     },
     "shadowing$shadowing$host-based-shadowing": {

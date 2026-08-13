@@ -62,7 +62,7 @@ notes`, naming gaps individually.
 | DCL + utilities + queues | dcl-verbs, dcl-scripting, dcl-qualifiers, lexicals, utilities, help, queues |
 | Security + sysmgmt + boot/install | sysuaf, privileges, rights-db, protection-acl, audit, sysgen, boot, install, accounting |
 | Clustering + executive substrate | kernel-executive, scs, nisca, connection-manager, cluster-dlm, mscp-serve, cluster-logicals, shadowing |
-| Toolchain + networking + arch | object-format, image-activation, symbol-vectors, link, librarian, macro, message-compiler, mms-mmk, self-host-compiler, tcpip-services, decnet, lat, ssh, arch-targets, smg |
+| Toolchain + networking | object-format, image-activation, symbol-vectors, link, librarian, macro, message-compiler, mms-mmk, tcpip-services, decnet, lat, ssh, smg |
 | Languages & compilers | compilers, language-rtl, calling-standard |
 
 ### Steps

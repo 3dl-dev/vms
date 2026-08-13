@@ -26,7 +26,7 @@ items:
     status: implemented
     authenticity: real
     vms: "$ENQ/$DEQ/$CVT: hierarchical resource trees, value blocks, blocking AST"
-    evidence: src/kernel/vms_lock.c
+    evidence: src/kernel-core/vms_lock.c
     notes: "Single-node. ioctls 0x30-0x34. See cluster-dlm.yaml for the cross-node gap."
 
   - id: kernel-executive$ast-delivery

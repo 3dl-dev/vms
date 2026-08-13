@@ -5,18 +5,18 @@
 
 ## Inventory
 
-**416 surfaces catalogued** across 9 domains, each with a per-surface status.
+**405 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 27 | | real | 234 |
-| 🟢 implemented | 209 | | n/a | 103 |
-| 🟡 partial | 45 | | advisory | 34 |
+| ✅ verified | 24 | | real | 227 |
+| 🟢 implemented | 206 | | n/a | 99 |
+| 🟡 partial | 43 | | advisory | 34 |
 | 🟠 stub | 19 | | facade-risk | 45 |
 | 🔵 designed | 2 | |  |  |
-| ⬜ absent | 114 | |  |  |
+| ⬜ absent | 111 | |  |  |
 
 Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 designed · ⬜ absent · ⚠ facade-risk (INV-6/Draper) · ≈ advisory.
 
@@ -24,9 +24,9 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **372 committed** — **236 met** (implemented/verified), 43 in progress (partial), 93 not started (absent/stub/designed).
+- **363 committed** — **230 met** (implemented/verified), 42 in progress (partial), 91 not started (absent/stub/designed).
 - ⚠ **43 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
-- Not in the V1 commitment set: 8 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
+- Not in the V1 commitment set: 8 out · 25 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
 _These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
 
@@ -866,7 +866,7 @@ Cross-node lock forwarding and resource remastering are absent, and that absence
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
-| ⬜ | `cluster-dlm$cross-node-lock` | feature | Lock request forwarding / resource remastering to a non-local master node | absent | real | in | `src/kernel/vms_lock.c` — vms_lock.c:318-390 returns SS$_UNSUPPORTED for a non-local directory or master; membership hard-stubbed to 1 node. Single-node DLM only — no fake grants, so the gap is authentic (real), not a facade. |
+| ⬜ | `cluster-dlm$cross-node-lock` | feature | Lock request forwarding / resource remastering to a non-local master node | absent | real | in | `src/kernel-core/vms_lock.c` — vms_lock.c:318-390 returns SS$_UNSUPPORTED for a non-local directory or master; membership hard-stubbed to 1 node. Single-node DLM only — no fake grants, so the gap is authentic (real), not a facade. |
 
 ### cluster-logicals — Cluster-wide logical names / global sections
 <sub>scope: in · plan: vms-694 · ref: OpenVMS Cluster Systems manual; $CRELNM (LNM$M_CLUSTERWIDE), $MGBLSC/$CRMPSC · reviewed 2026-08-13</sub>
@@ -950,7 +950,7 @@ Absent. docs/compatibility-contract.md lists host-based (DSSA) volume shadowing 
 
 _Object/image format, activation, symbol vectors, LINK, LIBRARIAN, MACRO, MESSAGE, MMS/MMK, self-hosting compiler._
 
-`✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🔵🔵⬜⬜⬜⬜⬜⬜`  —  24 surfaces catalogued (15 met · 1 in progress · 8 not started) · V1: 21 committed, 15 met
+`✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🔵🔵🔵⬜⬜⬜⬜⬜⬜`  —  17 surfaces catalogued (11 met · 0 in progress · 6 not started) · V1: 15 committed, 11 met
 
 ### image-activation — Image Format + Activation (IMGACT, Shareable/Installed Images, TLS)
 <sub>scope: in · plan: vms-ade · ref: OpenVMS Linker Utility Manual; Programming Concepts Manual (image activation) · reviewed 2026-08-13</sub>
@@ -985,15 +985,11 @@ No LIBRARIAN.EXE binary exists yet — design-only. The plan is an `ar` whole-ar
 LINK.EXE is a real, substantial implementation (2197 lines, 11 test scripts): symbol resolution, relocation, symbol-vector binding, GSMATCH, ar whole-archive ingestion. Targets EM_X86_64 and EM_AARCH64 only — no Alpha (EM_ALPHA) or VAX backend exists on origin/main yet.
 
 
-<sub>5 items · 3 met · 0 in progress · 2 not started</sub>
+<sub>1 items · 1 met · 0 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
-| 🟢 | `link$core-linker` | utility | LINK.EXE image linker — symbol resolution, relocation, image build | implemented | real | in | `src/vmslink/link.c` — 2197 lines; 11 test scripts. Semantics real; image-container byte layout Rule-8-labeled (see image-activation/symbol-vectors). |
-| 🟢 | `link$target-x86_64` | feature | x86_64 (EM_X86_64) link target | implemented | real | in | `src/vmslink/link.c:296` |
-| 🟢 | `link$target-aarch64` | feature | aarch64 (EM_AARCH64) link target | implemented | real | in | `src/vmslink/link.c:296` |
-| ⬜ | `link$target-alpha` | feature | Alpha (EM_ALPHA) link target | absent | n/a | in | `src/vmslink/link.c:1694` — No Alpha backend on origin/main; operator made AXP first-class 2026-08-10. Freestanding Alpha syscall/crt0 exists only on unmerged local branch vms-054-alpha-port. Cross-listed to arch-targets. |
-| ⬜ | `link$target-vax` | feature | VAX link target | absent | n/a | stretch | `src/vmslink/link.c:1694` — No VAX backend as a libvmssys/LINK.EXE target; VAX exists only via the separate NetBSD substrate path (see arch-targets). libvmssys VAX backend commit vms-9dc not merged. |
+| 🟢 | `link$core-linker` | utility | LINK.EXE image linker — symbol resolution, relocation, image build | implemented | real | in | `src/vmslink/link.c` — 2197 lines; 11 test scripts. Semantics real; image-container byte layout Rule-8-labeled (see image-activation/symbol-vectors). Emits x86_64/aarch64 only — which host architectures OVMX targets is a platform/roadmap concern (release dimension), not a VMS surface. |
 
 ### macro — MACRO-32 Assembler
 <sub>scope: out · plan: vms-801 · ref: OpenVMS MACRO Compiler Porting and User's Guide · reviewed 2026-08-13</sub>
@@ -1046,20 +1042,6 @@ LINK.EXE ingests standard ELF relocatable objects and `ar` whole-archive contain
 | 🟢≈ | `object-format$elf-object-ingest` | feature | LINK.EXE ingestion of relocatable object modules for linking | implemented | advisory | in | `src/vmslink/link.c` — Consumes ELF .o objects, not VMS OBJ$ records; relocation/symbol-resolution semantics real, container format is OVMX-original (Rule 8), not VMS-authentic byte layout. |
 | 🟢 | `object-format$ar-whole-archive` | feature | Whole-archive object-library consumption | implemented | real | in | `src/vmslink/link.c:2112` — Standard `ar` archive; consumption logic real. Precursor for LIBRARIAN .OLB support (see librarian facility) — LINK.EXE already ingests ar, so .OLB consumption needs no new LINK.EXE code. |
 | ⬜ | `object-format$vms-obj-records` | struct | VAX/Alpha OBJ$ record-based object format (module header, GSD, TIR, EPM records) | absent | n/a | out | Not pursued — OVMX's self-host toolchain uses ELF internally; true VMS object-interchange byte format is out of scope. |
-
-### self-host-compiler — Self-Hosting Compiler (tcc -> rustc)
-<sub>scope: in · plan: vms-ade · ref: N/A — OVMX-original self-hosting program, not a VMS surface · reviewed 2026-08-13</sub>
-
-tcc self-hosts inside OVMX (S2): it compiles its own source, and gen2 == gen3 byte-identical. BUILD.COM is zero-bash. S3-S5 (assembler, LIBRARIAN, MMS, editor as OVMX-native images) are partial — the RTL floor is complete, the images themselves are not built (vms-678). tcc is an independence beachhead, not a performance compiler; the longer-term target is rustc/Rust, not gcc.
-
-
-<sub>3 items · 2 met · 1 in progress · 0 not started</sub>
-
-| | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
-|---|---|---|---|---|---|---|---|
-| ✅ | `self-host-compiler$tcc-selfhost` | feature | tcc compiles its own source inside OVMX (S2 self-hosting) | verified | real | in | `src/imgact/test/run_tcc_selfhost.sh` |
-| 🟢 | `self-host-compiler$build-com` | utility | BUILD.COM — zero-bash build orchestration | implemented | real | in | `src/imgact/test/run_build_com_native.sh` — Zero-bash (vms-251). |
-| 🟡 | `self-host-compiler$s3-s5-images` | feature | S3-S5: assembler / LIBRARIAN / MMS / editor as OVMX-native images | partial | real | in | RTL floor complete; the images themselves (assembler, LIBRARIAN.EXE, MMK.EXE, editor) not yet built. Tracked vms-678. |
 
 ### symbol-vectors — Symbol Vectors / GSMATCH / Ident
 <sub>scope: in · plan: vms-ade · ref: VSI OpenVMS Linker Utility Manual (shareable images, GSMATCH) · reviewed 2026-08-13</sub>
@@ -1137,26 +1119,11 @@ Design-only, nothing built. No BG: device, no QIO network path, no usable socket
 | ⬜ | `tcpip-services$nic-device` | feature | NIC exposed as VMS device EWA0:/BGn: | absent | n/a | in | `distro/boot/run-qemu.sh:70` — QEMU boots with -nic none (also distro/Dockerfile.bootable:773); no network device path into the VM at all. |
 | 🟢⚠ | `tcpip-services$dcl-tcpip-verb` | command | DCL TCPIP verb (show interface/route/host/version, set host) | implemented | facade-risk | in | `src/vmsdcl/dcl_cmd_misc.c:1093` — Opens a Linux AF_INET SOCK_DGRAM socket only for SIOCGIF* ioctls (host interface introspection); configures nothing durable and gives VMS code no stack. Cross-listed to Draper register (INV-6 facade-risk). |
 
-## H. Runtime & Architecture
+## H. Executive
 
-_Architecture targets, the kernel executive (/dev/vms), image activation / runtime linking._
+_The VMS executive itself — access modes, the process model (PCB), scheduling, and the executive-backed IPC that underpins the system services. (Architecture/platform support and OVMX self-hosting are roadmap concerns, not compatibility surfaces — see the release roadmap and release-dimensions, not this register.)_
 
-`✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟡🟠🟠⬜⬜`  —  13 surfaces catalogued (8 met · 3 in progress · 2 not started) · V1: 12 committed, 8 met · ⚠ 2 facade-risk
-
-### arch-targets — Architecture Targets (x86_64, aarch64, alpha, vax)
-<sub>scope: in · plan: vms-8ce · ref: N/A — OVMX platform targets, not a single VMS surface · reviewed 2026-08-13</sub>
-
-x86_64 is verified (full CI, vms.ko via /dev/vms). aarch64 is verified as a boot proof (freestanding EM_AARCH64 PID 1 under qemu-system-aarch64 in CI). Alpha (AXP) was made first-class by operator ruling (2026-08-10) but is absent on origin/main — the freestanding syscall/crt0 layer exists only on the unmerged local branch vms-054-alpha-port, and LINK.EXE has no EM_ALPHA backend. VAX is absent as a native libvmssys/LINK.EXE target; it exists only via a separate NetBSD-substrate path (aspirational/stretch).
-
-
-<sub>4 items · 2 met · 1 in progress · 1 not started</sub>
-
-| | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
-|---|---|---|---|---|---|---|---|
-| ✅ | `arch-targets$x86_64` | feature | x86_64 platform target | verified | real | in | `.github/workflows/ci.yml` — Primary arch (Rule 5). |
-| ✅ | `arch-targets$aarch64` | feature | aarch64 platform target | verified | real | in | `.github/workflows/ci.yml` — Boot-proof verified, not full CI parity with x86_64. |
-| ⬜ | `arch-targets$alpha` | feature | Alpha (AXP) platform target | absent | n/a | in | `src/libvmssys/arch` — Made first-class by operator ruling 2026-08-10 (vms-8ce), but absent on origin/main: src/libvmssys/arch/ has only aarch64/x86_64, LINK.EXE has no EM_ALPHA target (src/vmslink/link.c:1694). Freestanding syscall/crt0 exists only on the unmerged local branch vms-054-alpha-port. |
-| 🟡 | `arch-targets$vax` | feature | VAX platform target | partial | n/a | stretch | `src/kernel-netbsd` — Absent as a native libvmssys/LINK.EXE target; present only as a separate NetBSD-substrate path (src/kernel-netbsd, netbsd_vax CI, tests/lab-vax). libvmssys VAX backend commit vms-9dc not merged. Aspirational, not a 1.0 blocker. |
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟠🟠🟠`  —  9 surfaces catalogued (6 met · 2 in progress · 1 not started) · V1: 9 committed, 6 met · ⚠ 2 facade-risk
 
 ### kernel-executive — Kernel Executive (/dev/vms substrate: EF/locks/AST/mailbox/access-modes/PCB)
 <sub>scope: in · plan: vms-6b8 · ref: OpenVMS VAX/Alpha Internals and Data Structures (executive primitives underlying the SYS$ layer) · reviewed 2026-08-13</sub>
@@ -1169,7 +1136,7 @@ The kernel-mediated substrate SYS$ system services are built on: event flags, lo
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
 | 🟢 | `kernel-executive$event-flags` | feature | 128 event flags across 2 clusters (local + common), $SETEF/$CLREF/$WAITFOR family | implemented | real | in | `src/kernel-core/vms_eflag.c` — ioctls 0x20-0x28. Prior per-process PCB-copy facade deleted (vms-2a8). |
-| 🟢 | `kernel-executive$lock-manager` | feature | $ENQ/$DEQ/$CVT: hierarchical resource trees, value blocks, blocking AST | implemented | real | in | `src/kernel/vms_lock.c` — Single-node. ioctls 0x30-0x34. See cluster-dlm.yaml for the cross-node gap. |
+| 🟢 | `kernel-executive$lock-manager` | feature | $ENQ/$DEQ/$CVT: hierarchical resource trees, value blocks, blocking AST | implemented | real | in | `src/kernel-core/vms_lock.c` — Single-node. ioctls 0x30-0x34. See cluster-dlm.yaml for the cross-node gap. |
 | 🟢 | `kernel-executive$ast-delivery` | feature | 4-level K/E/S/U AST queue delivery | implemented | real | in | `src/kernel-core/vms_ast.c` — ioctls 0x10-0x12. Prior SIGUSR1-based facade fixed (vms-as1). |
 | 🟢 | `kernel-executive$mailboxes` | feature | Mailbox devices (MBAn:), $CREMBX/$QIO read-write | implemented | real | in | `src/kernel-core/vms_mbx.c` — Replaced an earlier AF_UNIX socketpair facade. |
 | 🟢 | `kernel-executive$logical-name-store` | feature | LNM$SYSTEM / LNM$GROUP / LNM$JOB kernel-resident logical-name arena | implemented | real | in | `src/kernel/vms_lnm.c` — mmap-backed shared arena, not a per-process fake table. |

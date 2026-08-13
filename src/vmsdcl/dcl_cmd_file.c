@@ -34,7 +34,129 @@ struct dir_entry {
     int  version;        /* Numeric version for sort (descending) */
     long blocks;
     struct stat st;
+    struct timespec btime;  /* real file-creation time (statx STATX_BTIME) */
+    int  has_btime;         /* 1 = btime is a genuine creation time; 0 = the
+                             * backing volume records none, so DIRECTORY/FULL
+                             * must NOT invent one (INV-6). */
 };
+
+/* /SIZE[=option] mode. VSI OpenVMS DCL Dictionary, DIRECTORY /SIZE: bare /SIZE
+ * (and /SIZE=USED) shows blocks USED; /SIZE=ALLOCATION shows blocks ALLOCATED;
+ * /SIZE=ALL shows "used/allocated". */
+enum dir_size_mode { DIR_SIZE_USED = 0, DIR_SIZE_ALLOC, DIR_SIZE_ALL };
+
+/*
+ * ovmx_file_btime - Fetch the REAL file-creation ("birth") time for a path.
+ *
+ * DIRECTORY/FULL's "Created:" line must show a genuine creation timestamp, not
+ * st_mtime relabelled (INV-6: never present a fabricated value as authentic).
+ * The only genuine source on Linux is statx(STATX_BTIME); when the backing
+ * filesystem does not record a birth time (the mask bit stays clear) we return
+ * 0 and the caller prints an honest "<not recorded>" rather than a made-up date.
+ *
+ * Non-Linux builds (the netbsd-vax DCL cross, build-vmsdcl-vax.sh) have no
+ * statx; this compiles to "no genuine source", which is correct for them.
+ */
+#if defined(__linux__)
+#include <stdint.h>
+#include <sys/syscall.h>
+#endif
+#if defined(__linux__) && defined(SYS_statx)
+/* Minimal statx ABI (Linux UAPI, stable since 4.11), declared LOCALLY so this
+ * depends on neither the libc statx() wrapper (absent on the musl the static /
+ * bootable-runtime DCL links against) nor <linux/stat.h> (whose struct statx
+ * redefinition clashes with newer musl's <sys/stat.h>). Names are prefixed to
+ * avoid ever colliding with a libc-provided struct statx. */
+struct ovmx_statx_ts { int64_t tv_sec; uint32_t tv_nsec; int32_t __r; };
+struct ovmx_statx {
+    uint32_t stx_mask, stx_blksize;
+    uint64_t stx_attributes;
+    uint32_t stx_nlink, stx_uid, stx_gid;
+    uint16_t stx_mode, __spare0[1];
+    uint64_t stx_ino, stx_size, stx_blocks, stx_attributes_mask;
+    struct ovmx_statx_ts stx_atime, stx_btime, stx_ctime, stx_mtime;
+    uint64_t __pad[24];   /* pad past the kernel's 256-byte statx buffer */
+};
+_Static_assert(sizeof(struct ovmx_statx) >= 256, "statx buffer too small");
+#define OVMX_STATX_BTIME 0x00000800U    /* STATX_BTIME */
+#define OVMX_AT_FDCWD    (-100)         /* AT_FDCWD */
+static int ovmx_file_btime(const char *path, struct timespec *out)
+{
+    struct ovmx_statx stx;
+    /* Raw syscall (AT_STATX_SYNC_AS_STAT == 0). Portable across every DCL build
+     * variant; the kernel (>= 4.11) always provides the call. */
+    if (syscall(SYS_statx, OVMX_AT_FDCWD, path, 0, OVMX_STATX_BTIME, &stx) != 0)
+        return 0;
+    if (!(stx.stx_mask & OVMX_STATX_BTIME)) return 0;
+    out->tv_sec  = (time_t)stx.stx_btime.tv_sec;
+    out->tv_nsec = (long)stx.stx_btime.tv_nsec;
+    return 1;
+}
+#else
+static int ovmx_file_btime(const char *path, struct timespec *out)
+{
+    (void)path; (void)out;
+    return 0;
+}
+#endif
+
+/*
+ * dir_format_vmsdate - Format a real timespec as VMS "dd-MMM-yyyy hh:mm:ss.cc".
+ *
+ * The centiseconds (.cc) are the GENUINE sub-second fraction of the timestamp
+ * (tv_nsec / 10^7), not a hardcoded ".00" — this is the DIRECTORY/FULL date
+ * fidelity gap vms-5e2 closes. Mirrors lib$format_date_time's cc derivation,
+ * formatted inline (as every other DCL date is) to avoid adding a cross-image
+ * RTL symbol to the DCL native-link graph.
+ */
+static void dir_format_vmsdate(struct timespec ts, char *buf, size_t bufsize)
+{
+    struct tm tm;
+    localtime_r(&ts.tv_sec, &tm);
+    long cc = ts.tv_nsec / 10000000L;   /* hundredths of a second */
+    if (cc < 0) cc = 0;
+    if (cc > 99) cc = 99;
+    snprintf(buf, bufsize, "%2d-%s-%04d %02d:%02d:%02d.%02ld",
+             tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+             tm.tm_hour, tm.tm_min, tm.tm_sec, cc);
+}
+
+/* Per-category access bits within a VMS protection nibble (set = DENIED) and
+ * the nibble shifts. Kept as literals (matching src/libvms/include/
+ * ovmx_fileprot.h) so no libvms header is pulled onto the DCL native-link
+ * include path. */
+#define DIR_PROT_R 0x01
+#define DIR_PROT_W 0x02
+#define DIR_PROT_E 0x04
+#define DIR_PROT_D 0x08
+
+/*
+ * dir_format_prot_full - Render a VMS protection word in the LONG form real
+ * DIRECTORY/FULL prints: "System:RWED, Owner:RWED, Group:RE, World:".
+ *
+ * Same protection word (from st_mode via vmsfs_mode_to_protection) the
+ * columnar /PROTECTION display decodes — only the presentation differs. A
+ * clear bit means the access is ALLOWED (VMS convention).
+ */
+static void dir_format_prot_full(uint16_t prot, char *buf, size_t bufsize)
+{
+    static const char *cats[]  = { "System", "Owner", "Group", "World" };
+    static const int   shift[] = { 0, 4, 8, 12 };
+    size_t off = 0;
+    for (int i = 0; i < 4; i++) {
+        uint8_t bits = (uint8_t)((prot >> shift[i]) & 0x0F);
+        char acc[5]; int a = 0;
+        if (!(bits & DIR_PROT_R)) acc[a++] = 'R';
+        if (!(bits & DIR_PROT_W)) acc[a++] = 'W';
+        if (!(bits & DIR_PROT_E)) acc[a++] = 'E';
+        if (!(bits & DIR_PROT_D)) acc[a++] = 'D';
+        acc[a] = '\0';
+        int n = snprintf(buf + off, bufsize - off, "%s%s:%s",
+                         (i > 0) ? ", " : "", cats[i], acc);
+        if (n < 0 || (size_t)n >= bufsize - off) break;
+        off += (size_t)n;
+    }
+}
 
 /*
  * dcl_filename_component - Extract the raw NAME.TYPE;VERSION text a user
@@ -91,13 +213,18 @@ static const char *dcl_filename_component(const char *spec)
  * user spots on the first listing.
  */
 static void dcl_print_dir_total(int file_count, long used_blocks,
-                                long alloc_blocks, int show_size, int show_full)
+                                long alloc_blocks, int show_size, int show_full,
+                                enum dir_size_mode size_mode)
 {
     const char *files_s = (file_count != 1) ? "s" : "";
     const char *blk_s   = (used_blocks != 1) ? "s" : "";
-    if (show_full) {
+    if (show_full || (show_size && size_mode == DIR_SIZE_ALL)) {
         printf("\nTotal of %d file%s, %ld/%ld block%s.\n",
                file_count, files_s, used_blocks, alloc_blocks, blk_s);
+    } else if (show_size && size_mode == DIR_SIZE_ALLOC) {
+        printf("\nTotal of %d file%s, %ld block%s.\n",
+               file_count, files_s, alloc_blocks,
+               (alloc_blocks != 1) ? "s" : "");
     } else if (show_size) {
         printf("\nTotal of %d file%s, %ld block%s.\n",
                file_count, files_s, used_blocks, blk_s);
@@ -134,6 +261,7 @@ static int dir_entry_cmp(const void *a, const void *b)
 struct dir_opts {
     int show_size, show_date, show_full, show_brief, show_owner,
         show_protection, suppress_files, columns, versions_limit;
+    enum dir_size_mode size_mode;
 };
 
 /*
@@ -202,6 +330,7 @@ static int dir_collect(const char *linux_dir, const char *pattern,
         struct dir_entry *e = &entries[entry_count];
         e->st = st;
         e->blocks = (st.st_size + 511) / 512;
+        e->has_btime = ovmx_file_btime(full_path, &e->btime);
         strncpy(e->raw_name, de->d_name, sizeof(e->raw_name) - 1);
         e->raw_name[sizeof(e->raw_name) - 1] = '\0';
 
@@ -293,38 +422,76 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
         if (o->suppress_files) continue;
 
         if (o->show_full) {
-            printf("%-39s", vms_name);
-            printf(" %6ld", blocks);
+            /* DIRECTORY/FULL: the authentic VMS multi-line per-file block.
+             * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary,
+             * DIRECTORY/FULL example output. Every field below is sourced from
+             * REAL file metadata; fields VMS stores in an ODS-2 file header that
+             * the live host-FS passthrough does NOT carry (File ID, file
+             * organization, record format/attributes, longest-record length)
+             * are OMITTED rather than fabricated (INV-6 / vms-5eb) -- see the
+             * vms-5e2 PR's source-and-gap table. */
+            long alloc = (long)st->st_blocks;   /* real on-disk allocation */
 
-            struct tm tm;
-            localtime_r(&st->st_mtime, &tm);
-            printf("  %2d-%s-%04d %02d:%02d:%02d.00",
-                   tm.tm_mday, vms_months[tm.tm_mon],
-                   1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
+            /* Line 1: file name. (Real VMS also prints "File ID: (n,n,n)" here;
+             * omitted -- no genuine File ID exists for a passthrough file.) */
+            printf("%s\n", vms_name);
 
-            uint16_t vprot = vmsfs_mode_to_protection(st->st_mode);
-            char prot_buf[64];
-            vmsfs_format_protection(vprot, prot_buf, sizeof(prot_buf));
-            printf(" %s", prot_buf);
+            /* Size (used/allocated) + Owner UIC [group,member]. */
+            char sizebuf[32];
+            snprintf(sizebuf, sizeof(sizebuf), "%ld/%ld", blocks, alloc);
+            printf("Size:            %-16sOwner:    [%03o,%03o]\n",
+                   sizebuf,
+                   (unsigned)(st->st_gid & 0377),
+                   (unsigned)(st->st_uid & 0377));
 
-            if (o->show_owner) {
-                printf(" [%03o,%03o]",
-                       (unsigned)(st->st_gid & 0377),
-                       (unsigned)(st->st_uid & 0377));
+            /* Created: genuine birth time, or an honest gap marker when the
+             * backing volume records none. Revised: real mtime. Both carry the
+             * real .cc fraction (the vms-5e2 fidelity fix vs the old ".00"). */
+            char datebuf[40];
+            if (e->has_btime) {
+                dir_format_vmsdate(e->btime, datebuf, sizeof(datebuf));
+                printf("Created:  %s\n", datebuf);
+            } else {
+                printf("Created:  <not recorded>\n");
             }
+            dir_format_vmsdate(st->st_mtim, datebuf, sizeof(datebuf));
+            printf("Revised:  %s\n", datebuf);
+
+            /* Expiration/backup dates are genuinely unset for a passthrough
+             * file -- VMS prints exactly these strings for a file that has
+             * none, so this is faithful, not invented. */
+            printf("Expired:  <None specified>\n");
+            printf("Backup:   <No backup recorded>\n");
+
+            /* File protection (long form) from the real st_mode. */
+            uint16_t vprot = vmsfs_mode_to_protection(st->st_mode);
+            char protbuf[80];
+            dir_format_prot_full(vprot, protbuf, sizeof(protbuf));
+            printf("File protection:    %s\n", protbuf);
+
             printf("\n");
         } else if (o->show_size || o->show_date || o->show_owner ||
                    o->show_protection) {
             printf("%-39s", vms_name);
             if (o->show_size) {
-                printf(" %6ld", blocks);
+                /* /SIZE=USED (default) blocks used; /SIZE=ALLOCATION allocated;
+                 * /SIZE=ALL "used/allocated". */
+                if (o->size_mode == DIR_SIZE_ALLOC) {
+                    printf(" %6ld", (long)st->st_blocks);
+                } else if (o->size_mode == DIR_SIZE_ALL) {
+                    char sb[32];
+                    snprintf(sb, sizeof(sb), "%ld/%ld", blocks,
+                             (long)st->st_blocks);
+                    printf(" %11s", sb);
+                } else {
+                    printf(" %6ld", blocks);
+                }
             }
             if (o->show_date) {
-                struct tm tm;
-                localtime_r(&st->st_mtime, &tm);
-                printf("  %2d-%s-%04d %02d:%02d:%02d.00",
-                       tm.tm_mday, vms_months[tm.tm_mon],
-                       1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
+                /* Real .cc fraction from the mtime, not a hardcoded ".00". */
+                char datebuf[40];
+                dir_format_vmsdate(st->st_mtim, datebuf, sizeof(datebuf));
+                printf("  %s", datebuf);
             }
             if (o->show_owner) {
                 printf(" [%03o,%03o]",
@@ -533,6 +700,13 @@ int cmd_directory(struct dcl_command *cmd)
 
     /* Check qualifiers */
     int show_size = dcl_has_qualifier(cmd, "SIZE");
+    /* /SIZE=option → block-count display mode. */
+    enum dir_size_mode size_mode = DIR_SIZE_USED;
+    const char *size_val = dcl_qualifier_value(cmd, "SIZE");
+    if (size_val && strcasecmp(size_val, "ALLOCATION") == 0)
+        size_mode = DIR_SIZE_ALLOC;
+    else if (size_val && strcasecmp(size_val, "ALL") == 0)
+        size_mode = DIR_SIZE_ALL;
     int show_date = dcl_has_qualifier(cmd, "DATE");
     int show_full = dcl_has_qualifier(cmd, "FULL");
     int show_brief = dcl_has_qualifier(cmd, "BRIEF");
@@ -628,6 +802,7 @@ int cmd_directory(struct dcl_command *cmd)
     opts.suppress_files = suppress_files;
     opts.columns = columns;
     opts.versions_limit = versions_limit;
+    opts.size_mode = size_mode;
 
     char vms_dir[512];   /* VMS display spec of the (last) directory listed */
     vms_dir[0] = '\0';
@@ -681,22 +856,25 @@ int cmd_directory(struct dcl_command *cmd)
         if (show_grand_total) {
             printf("\nGrand total of 1 directory, %d file%s",
                    file_count, file_count != 1 ? "s" : "");
-            if (show_full)
+            if (show_full || (show_size && size_mode == DIR_SIZE_ALL))
                 printf(", %ld/%ld block%s", total_blocks, total_alloc,
                        total_blocks != 1 ? "s" : "");
+            else if (show_size && size_mode == DIR_SIZE_ALLOC)
+                printf(", %ld block%s", total_alloc,
+                       total_alloc != 1 ? "s" : "");
             else if (show_size)
                 printf(", %ld block%s", total_blocks,
                        total_blocks != 1 ? "s" : "");
             printf(".\n");
         } else {
             dcl_print_dir_total(file_count, total_blocks, total_alloc,
-                                show_size, show_full);
+                                show_size, show_full, size_mode);
         }
 
         /* /TRAILING: repeat the totals with the directory spec appended. */
         if (show_trailing) {
             dcl_print_dir_total(file_count, total_blocks, total_alloc,
-                                show_size, show_full);
+                                show_size, show_full, size_mode);
             printf("%s\n", vms_dir);
         }
 
@@ -756,7 +934,8 @@ int cmd_directory(struct dcl_command *cmd)
             if (show_heading) printf("\nDirectory %s\n\n", vms_dir);
             dir_print_entries(entries, entry_count, &opts,
                               &file_count, &used, &alloc);
-            dcl_print_dir_total(file_count, used, alloc, show_size, show_full);
+            dcl_print_dir_total(file_count, used, alloc, show_size, show_full,
+                                size_mode);
         }
         free(entries);
 
@@ -778,9 +957,11 @@ int cmd_directory(struct dcl_command *cmd)
     printf("\nGrand total of %d director%s, %ld file%s",
            grand_dirs, grand_dirs == 1 ? "y" : "ies",
            grand_files, grand_files != 1 ? "s" : "");
-    if (show_full)
+    if (show_full || (show_size && size_mode == DIR_SIZE_ALL))
         printf(", %ld/%ld block%s", grand_used, grand_alloc,
                grand_used != 1 ? "s" : "");
+    else if (show_size && size_mode == DIR_SIZE_ALLOC)
+        printf(", %ld block%s", grand_alloc, grand_alloc != 1 ? "s" : "");
     else if (show_size)
         printf(", %ld block%s", grand_used, grand_used != 1 ? "s" : "");
     printf(".\n");

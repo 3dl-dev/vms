@@ -293,8 +293,8 @@ def main():
         # compiler diagnostic is still visible.
         rc, out = run(child,
                       "cd /root/ovmx/kmod && make clean >/dev/null 2>&1; "
-                      "if make >/tmp/kmodbuild.log 2>&1; then echo KMOD_BUILD_OK; "
-                      "else echo KMOD_BUILD_FAIL; cat /tmp/kmodbuild.log; fi",
+                      "make >/tmp/kmodbuild.log 2>&1 && echo KMOD_BUILD_OK "
+                      "|| cat /tmp/kmodbuild.log",
                       build_timeout)
         if "KMOD_BUILD_OK" not in out:
             log("FAIL: in-guest kernel-module build failed (diagnostic above)")
@@ -310,10 +310,9 @@ def main():
         # Same quiet-console discipline as the module build above.
         rc, out = run(child,
                       "cd /root/ovmx/probe && "
-                      "if cc -O -Wall -Wextra -I. -o vmseflag "
-                      "vmseflag.c kif_transport_netbsd.c >/tmp/toolbuild.log 2>&1; "
-                      "then echo TOOL_BUILD_OK; "
-                      "else echo TOOL_BUILD_FAIL; cat /tmp/toolbuild.log; fi",
+                      "cc -O -Wall -Wextra -I. -o vmseflag "
+                      "vmseflag.c kif_transport_netbsd.c >/tmp/toolbuild.log 2>&1 "
+                      "&& echo TOOL_BUILD_OK || cat /tmp/toolbuild.log",
                       build_timeout)
         if "TOOL_BUILD_OK" not in out:
             log("FAIL: in-guest vmseflag build failed (diagnostic above)")

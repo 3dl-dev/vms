@@ -109,6 +109,20 @@ class NetBSDConsole(object):
         self.child.sendline(
             "PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH; umask 022")
         self.child.expect(r"# ")
+        # CRITICAL for TCG reliability (rd vms-2d9): tame the serial console's
+        # line discipline before running any real command.
+        #   * `-echo': DISABLE input echo. Under loaded CI TCG the guest tty echoes
+        #     a long command line back with 80-column WRAP artifacts (a stray
+        #     space + BACKSPACE \x08 at the margin), which both confuses the
+        #     pexpect scan and, worse, can garble what the shell parses (an
+        #     unbalanced `if..fi' leaves it hung at a `> ' continuation prompt, so
+        #     the end marker never comes -> pexpect.TIMEOUT). With echo off there
+        #     is NO echoed input to wrap; only real command OUTPUT (the short end
+        #     marker + the prompt) reaches pexpect, cleanly. We still log every
+        #     command Python-side, so nothing is lost for debugging.
+        #   * wide `columns'/`rows': so any long OUTPUT line does not wrap either.
+        self.child.sendline("stty -echo columns 1000 rows 200 2>/dev/null")
+        self.child.expect(r"# ")
         self.set_unique_prompt()
 
     def set_unique_prompt(self):

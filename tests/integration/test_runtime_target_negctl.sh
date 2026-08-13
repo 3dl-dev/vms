@@ -67,10 +67,18 @@ INIT_C="$ROOT/src/ovmx_init/ovmx_init.c"
 # green, and every 3c control then reports "the evasion was CERTIFIED, not
 # caught". That is a broken control, not a broken gate.
 KIF_C="$ROOT/src/libvmssys/vms_kif.c"
+# vms-28f: the executive OPEN moved from executive_attach() (ovmx_init.c) into
+# the boot seam's Linux backend, ovmx_boot_open_executive() in ovmx_boot_linux.c
+# -- so the gate's new 3b-backend check reads THIS file, and its control mutates
+# it. Snapshot it like the others so injection_landed() proves the mutation
+# landed and restore() reverts it.
+BOOT_LINUX_C="$ROOT/src/ovmx_init/ovmx_boot_linux.c"
 INIT_ORIG="$WORK/ovmx_init.c.orig"
 KIF_ORIG="$WORK/vms_kif.c.orig"
+BOOT_LINUX_ORIG="$WORK/ovmx_boot_linux.c.orig"
 cp "$INIT_C" "$INIT_ORIG"
 cp "$KIF_C" "$KIF_ORIG"
+cp "$BOOT_LINUX_C" "$BOOT_LINUX_ORIG"
 
 # vms-fk1: the Phase-4 fake checks (gate section 5) each mutate one of these
 # facility files. Same discipline as INIT_C/KIF_C above: snapshot a pristine
@@ -96,6 +104,7 @@ cp "$MISC_C" "$MISC_ORIG"
 restore() {
     cp "$INIT_ORIG" "$INIT_C"
     cp "$KIF_ORIG" "$KIF_C"
+    cp "$BOOT_LINUX_ORIG" "$BOOT_LINUX_C"
     cp "$PCB_ORIG" "$PCB_H"
     cp "$MBX_ORIG" "$MBX_C"
     cp "$DEV_ORIG" "$DEV_C"
@@ -133,6 +142,7 @@ pristine_copy_of() {
     case "$1" in
         "$INIT_C") echo "$INIT_ORIG" ;;
         "$KIF_C")  echo "$KIF_ORIG" ;;
+        "$BOOT_LINUX_C") echo "$BOOT_LINUX_ORIG" ;;
         "$PCB_H")  echo "$PCB_ORIG" ;;
         "$MBX_C")  echo "$MBX_ORIG" ;;
         "$DEV_C")  echo "$DEV_ORIG" ;;
@@ -265,8 +275,9 @@ expect_red() {
 # Reason fragments, one per property of check 3b. Used both as the required
 # string for that property's own control and as the forbidden string for every
 # other property's control.
-R_CAPTURE='no open("/dev/vms") result is captured into a variable'
+R_CAPTURE='no ovmx_boot_open_executive() result is captured into a variable'
 R_BRANCH='has no `if (executive_fd < 0)` failure branch'
+R_BACKEND='ovmx_boot_open_executive() no longer opens /dev/vms'
 R_HALT='does not halt: no halt/exit/reboot call'
 R_ESCAPE='returns to the caller before it halts'
 R_CLOSE='is closed inside executive_attach() -- not pinned'
@@ -280,7 +291,10 @@ R_PROBE='code branches on whether the executive could be opened'
 # ===========================================================================
 
 # (a) descriptor not captured. Everything else about the function is untouched.
-sed -i 's#^    executive_fd = open("/dev/vms", O_RDWR | O_CLOEXEC);$#    (void)open("/dev/vms", O_RDWR | O_CLOEXEC);#' "$INIT_C"
+# vms-28f: executive_attach() captures from the boot seam's
+# ovmx_boot_open_executive(), not an inline open("/dev/vms"), so the anchor is
+# the seam call. Discarding its result is the "not captured" evasion.
+sed -i 's#^    executive_fd = ovmx_boot_open_executive();$#    (void)ovmx_boot_open_executive();#' "$INIT_C"
 expect_red "$INIT_C" "3b(a) open() result discarded instead of captured" \
     "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_TERMINAL" "$R_NOTERM" "$R_SHADOW"
 
@@ -370,9 +384,27 @@ expect_red "$INIT_C" "3b(g-ii) early return inside halt_now(), past which _exit(
 # (h) MACRO SHADOW. Every call to ovmx_exec_halt() now expands to an fprintf,
 # while the function the gate inspects is still there and still halts. Pinning
 # the callee BY NAME is a spelling test unless the name is reserved.
-sed -i 's#^static int load_kernel_module(const char \*path)$#\#define ovmx_exec_halt(w, d) fprintf(stderr, "%%s\\n", (w))\n\nstatic int load_kernel_module(const char *path)#' "$INIT_C"
+# vms-28f: the old anchor (load_kernel_module, now behind the boot seam) is
+# gone; anchor to executive_attach()'s definition instead -- same position,
+# after the halt-function definitions and before the ovmx_exec_halt() calls, so
+# the macro shadows the calls without touching the definition the gate inspects.
+sed -i 's#^static void executive_attach(void)$#\#define ovmx_exec_halt(w, d) fprintf(stderr, "%%s\\n", (w))\n\nstatic void executive_attach(void)#' "$INIT_C"
 expect_red "$INIT_C" "3b(h) halt entry point redefined by a macro" \
     "$R_SHADOW" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_TERMINAL" "$R_NOTERM"
+
+# ===========================================================================
+# CHECK 3b-backend (vms-28f) -- the executive-open SEAM CALL must really open
+# /dev/vms. executive_attach() (check 3b) halts PID 1 when ovmx_boot_open_
+# executive() returns a negative fd; if the backend fabricates a descriptor and
+# never touches the executive, that halt fires on nothing and PID 1 boots past a
+# missing executive -- the silent fallback Rule 9 forbids (INV-6), now one seam
+# boundary out. This control makes ovmx_boot_open_executive() return a made-up
+# descriptor instead of open("/dev/vms"), and the gate must go red. It mutates a
+# DIFFERENT file than 3b's controls, so it cannot trip a 3b(a)-(h) property --
+# exactly the minimality the forbidden list asserts.
+sed -i 's#^    return open("/dev/vms", O_RDWR | O_CLOEXEC);$#    return 3;#' "$BOOT_LINUX_C"
+expect_red "$BOOT_LINUX_C" "3b-backend ovmx_boot_open_executive() fakes a descriptor, never opens /dev/vms" \
+    "$R_BACKEND" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_TERMINAL" "$R_NOTERM" "$R_SHADOW"
 
 # ===========================================================================
 # CHECK 3c -- no per-call executive-presence test. All four shapes below are

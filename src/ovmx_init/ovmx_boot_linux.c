@@ -42,11 +42,14 @@
 #include <sys/syscall.h>
 #include <sys/reboot.h>
 
-/* The Linux host paths for the system/boot disk and the executive device.
- * These are the substrate-specific names the seam exists to hide from
- * ovmx_init.c; the NetBSD backend supplies its own (vms-f2e). */
+/* The Linux host path for the system/boot disk -- the substrate-specific name
+ * the seam exists to hide from ovmx_init.c; the NetBSD backend supplies its
+ * own (vms-f2e). The executive device path "/dev/vms" is NOT hidden behind a
+ * macro: it is written literally in ovmx_boot_open_executive() below, exactly
+ * as executive_attach() opened it before the seam, so the Rule 9 gate
+ * (tests/integration/test_runtime_target.sh, check 3b-backend) can verify the
+ * backend really opens the executive device and does not fake a descriptor. */
 #define OVMX_BOOT_SYSDISK_DEV   "/dev/vda"
-#define OVMX_BOOT_EXECUTIVE_DEV "/dev/vms"
 
 int ovmx_boot_kernel_filesystems_mounted(void)
 {
@@ -102,7 +105,7 @@ int ovmx_boot_load_module(const char *name)
 
 int ovmx_boot_open_executive(void)
 {
-    return open(OVMX_BOOT_EXECUTIVE_DEV, O_RDWR | O_CLOEXEC);
+    return open("/dev/vms", O_RDWR | O_CLOEXEC);
 }
 
 const char *ovmx_boot_system_disk_dev(void)

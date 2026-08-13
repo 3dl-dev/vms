@@ -46,6 +46,21 @@
  * size_t. The contract is chosen so each named op maps cleanly to NetBSD --
  * modctl(2), NetBSD mount(2), reboot(2), and the klog device all fit it.
  *
+ * FAIL-HONEST CONTRACT ON EVERY BACKEND (INV-6 / CLAUDE.md Rule 9). This holds
+ * on ALL substrates, not just Linux, and is part of the contract every future
+ * backend inherits: an op reports the host's REAL result and NEVER fakes
+ * success. ovmx_boot_open_executive() returns the descriptor of the REAL
+ * executive device or a negative error -- it must never return a made-up
+ * descriptor that does not name the executive (executive_attach() halts PID 1
+ * on its error branch, so a faked descriptor would boot straight past a missing
+ * executive -- the exact silent-fallback defect Rule 9 forbids). ovmx_boot_
+ * load_module()/mount_system_disk() likewise return the host's real load/mount
+ * result and never no-op to a bogus success. The Rule 9 gate
+ * (tests/integration/test_runtime_target.sh) enforces this on the Linux backend
+ * -- check 3b-backend verifies ovmx_boot_open_executive() really opens the
+ * executive device -- and each new backend must extend that gate with the same
+ * property for its own device path (vms-f2e for NetBSD).
+ *
  * Clean-room (CLAUDE.md Rule 8): this contract and ovmx_init's boot logic are
  * OVMX's own code; each backend maps it to PUBLIC, documented host-OS syscalls
  * only. No Linux, NetBSD, or VSI/HPE source or binary is copied.

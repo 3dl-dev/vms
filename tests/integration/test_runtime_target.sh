@@ -42,6 +42,16 @@
 # (src/ovmx_init/ovmx_init.c, executive_attach), so no caller can observe its
 # absence. Per-call fallbacks are DELETED, not corrected. SS$_NOSUCHDEV keeps
 # its real meaning -- a caller named a VMS device that does not exist.
+#
+# vms-28f (boot-plumbing seam). PID 1's boot syscalls moved behind
+# src/ovmx_init/ovmx_boot.h so ONE ovmx_init.c serves every substrate with no
+# #ifdef fork (INV-DRIFT). executive_attach() still lives in ovmx_init.c and
+# still holds the GUARANTEE (halt-on-failure + pin), but now captures its
+# descriptor from the seam's ovmx_boot_open_executive() instead of opening
+# /dev/vms inline. Check 3b proves the guarantee (the POLICY, in ovmx_init.c);
+# check 3b-backend proves the seam call really opens the executive device (the
+# MECHANISM, in ovmx_boot_linux.c) so the seam cannot fake it. The Rule 9
+# property is UNCHANGED; only which file each half is anchored to moved.
 
 set -u
 
@@ -290,7 +300,9 @@ terminates() {
 # tests/integration/test_runtime_target_negctl.sh that trips it AND NO OTHER --
 # a mutation that trips several properties at once proves nothing about any
 # single one of them, which is how the round-2 hole survived its own "proof".
-#   (a) it opens "/dev/vms" and captures the descriptor in a variable;
+#   (a) it captures the executive descriptor from ovmx_boot_open_executive()
+#       (the boot seam's executive-open; that the seam call really opens
+#       /dev/vms is check 3b-backend) into a variable;
 #   (b) there is an `if (<that variable> < 0)` / `== -1` failure branch;
 #   (c) a halt/exit/reboot call appears INSIDE that failure branch;
 #   (d) no return/goto precedes the halt inside that branch -- a warn-then-
@@ -346,14 +358,20 @@ else
     else
         reason=""
 
-        # (a) the descriptor is captured
+        # (a) the descriptor is captured. Since vms-28f, PID 1's boot syscalls
+        # live behind the src/ovmx_init/ovmx_boot.h seam, so executive_attach()
+        # captures the descriptor from the seam's ovmx_boot_open_executive()
+        # rather than opening /dev/vms inline. That the seam call really opens
+        # the executive device (and does not fake a descriptor) is check
+        # 3b-backend below; here we only require the POLICY function to capture
+        # it and (b)-(h) to prove its failure branch is terminal and pinned.
         openvar=$(printf '%s\n' "$body" \
-            | grep -oE '[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*open[[:space:]]*\([[:space:]]*"/dev/vms"' \
+            | grep -oE '[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*ovmx_boot_open_executive[[:space:]]*\(' \
             | head -1 | sed -E 's/[[:space:]]*=.*//')
 
         if [ -z "$openvar" ]; then
             reason="$reason
-    - no open(\"/dev/vms\") result is captured into a variable"
+    - no ovmx_boot_open_executive() result is captured into a variable"
         else
             # (b) extract the FAILURE BRANCH for that variable: everything
             # controlled by `if (<openvar> < 0)` / `== -1`, whether braced or a
@@ -465,10 +483,48 @@ $(printf '%s\n' "$shadow" | sed 's/^/          /')"
             echo "     for the life of the system (pins vms.ko: rmmod -> EBUSY)."
             status=1
         else
-            echo "  OK: executive_attach() opens /dev/vms; the open-failure branch is terminal"
-            echo "      (ends in an unconditional call to a halt that reaches $PRIMITIVE_TERMINATORS)"
-            echo "      and the descriptor is never closed"
+            echo "  OK: executive_attach() captures ovmx_boot_open_executive(); the"
+            echo "      open-failure branch is terminal (ends in an unconditional call"
+            echo "      to a halt that reaches $PRIMITIVE_TERMINATORS) and the descriptor"
+            echo "      is never closed"
         fi
+    fi
+fi
+
+# --- 3b-backend. The executive-open SEAM CALL must really open /dev/vms -
+# Since vms-28f, executive_attach() (check 3b) captures its descriptor from the
+# boot seam's ovmx_boot_open_executive() rather than opening /dev/vms inline:
+# PID 1's boot syscalls moved behind src/ovmx_init/ovmx_boot.h so ONE
+# ovmx_init.c serves every substrate with no #ifdef fork (INV-DRIFT). Check 3b
+# proves the POLICY half -- executive_attach()'s open-failure branch is terminal
+# and the fd is pinned. THIS check proves the MECHANISM half on the active
+# (Linux) backend: ovmx_boot_open_executive() in ovmx_boot_linux.c actually
+# opens the executive device "/dev/vms". Without it the seam could satisfy 3b
+# with a call that fabricates a descriptor and never touches the executive --
+# PID 1 would then halt on nothing and boot straight past a missing executive,
+# the exact silent fallback Rule 9 forbids (INV-6 holds on the backend too, not
+# only in ovmx_init.c; the seam CONTRACT states this in ovmx_boot.h). The
+# NetBSD backend gets its own device-path control here (vms-f2e).
+boot_linux_c="$SRC_ROOT/src/ovmx_init/ovmx_boot_linux.c"
+if [ ! -f "$boot_linux_c" ]; then
+    echo "FAIL: $boot_linux_c is missing -- the Linux executive-open backend lives there"
+    echo "  -> ovmx_boot_open_executive() must open /dev/vms (Rule 9 / vms-28f)."
+    status=1
+else
+    open_body=$(func_body "$boot_linux_c" ovmx_boot_open_executive)
+    if [ -z "$open_body" ]; then
+        echo "FAIL: could not locate ovmx_boot_open_executive() in ovmx_boot_linux.c"
+        echo "  -> the executive-open seam call must exist and open /dev/vms."
+        status=1
+    elif printf '%s\n' "$open_body" | grep -qE 'open[[:space:]]*\([[:space:]]*"/dev/vms"'; then
+        echo "  OK: ovmx_boot_open_executive() opens the executive device /dev/vms"
+    else
+        echo "FAIL: ovmx_boot_open_executive() no longer opens /dev/vms"
+        echo "  -> the boot seam's executive-open must open the executive device,"
+        echo "     not fabricate a descriptor. executive_attach() halts PID 1 on"
+        echo "     its failure (check 3b); a faked open would boot past a missing"
+        echo "     executive on this substrate (INV-6 / Rule 9 / vms-28f)."
+        status=1
     fi
 fi
 

@@ -873,6 +873,24 @@ uint32_t lib$tparse(
     const void *key_table
 );
 
+/**
+ * lib$table_parse - Table-driven finite-state parser (LIB$TPARSE's callable
+ * name; MMK aliases lib$tparse -> lib$table_parse).  Same engine, same OVMX
+ * table format (see <tpadef.h>).
+ *
+ * @param tparse_block  Pointer to TPARSE argument block (TPADEF or extension)
+ * @param state_table   Pointer to a TPA_GRAMMAR (OVMX table format)
+ * @param key_table     Reserved in the OVMX format; may be NULL
+ *
+ * @return  SS$_NORMAL on success, LIB$_SYNTAXERR on parse failure,
+ *          LIB$_INVARG on a malformed block/grammar
+ */
+uint32_t lib$table_parse(
+    void *tparse_block,
+    const void *state_table,
+    const void *key_table
+);
+
 /* ================================================================
  * LIB$ condition value definitions
  *

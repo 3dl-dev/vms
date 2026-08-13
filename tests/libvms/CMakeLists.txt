@@ -36,6 +36,10 @@ libvms_add_test(test_libvms_lib_bitops
 libvms_add_test(test_libvms_str_routines
     ${CMAKE_CURRENT_SOURCE_DIR}/test_str_routines.c)
 
+# Test 4b: lib$table_parse / lib$tparse — TPARSE finite-state parser (vms-9f6)
+libvms_add_test(test_libvms_lib_tparse
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_tparse.c)
+
 # Test 3b: vms-801 R2.2 conformance batch — lib$addx/subx/emul/ediv (extended
 # arithmetic), lib$ffs/ffc (bit scan), lib$crc_table/crc, lib$scanc/skpc/char,
 # lib$analyze_sdesc(_64), lib$insqhi/insqti/remqhi/remqti (self-relative

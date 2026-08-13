@@ -21,17 +21,26 @@
  *   EX [  1   0   0   0   0   0 ]
  */
 
-#include <linux/kernel.h>
-#include <linux/uaccess.h>
-#include <linux/slab.h>
-#include <linux/rbtree.h>
-#include <linux/hashtable.h>
-#include <linux/jhash.h>
-#include <linux/wait.h>
-#include <linux/jiffies.h>
-#include <linux/moduleparam.h>
-
-#include "vms_internal.h"
+/*
+ * SUBSTRATE-AGNOSTIC EXECUTIVE CORE (rd vms-84a, Phase G -- the 44 KB payoff and
+ * the LAST executive facility promoted onto the shared core). This file lives in
+ * src/kernel-core/ and names NO <linux/…> symbol: every host primitive it needs
+ * goes through the kernel-backend shim. It is the ONLY facility that uses a
+ * red-black tree (the lock-ID database) and a non-RCU intrusive hash (the
+ * resource database), so it is where the exec_rbtree seam lands and where
+ * exec_hash grows its non-RCU table vocabulary (design record
+ * docs/design-netbsd-executive-core.md §3, §8 row G). The Linux vms.ko provides
+ * the backend (exec_kbackend_linux.h / exec_list_linux.h / exec_hash_linux.h /
+ * exec_rbtree_linux.h); the NetBSD `vms' module will provide its own when locks
+ * join its SRCS (rd vms-ff7, the P4-A lock-backend proof).
+ */
+#include "vms_internal.h"     /* struct vms_lock_entry/resource/proc, the SS$/LCK$
+                               * args/status codes, the C-string + fixed-width
+                               * vocabulary, and vms_local_csid (extern) */
+#include "exec_kbackend.h"    /* exec_lock/trylock/cv/copy/alloc */
+#include "exec_list.h"        /* exec_list_* (granted/waiting/proc lists) */
+#include "exec_hash.h"        /* exec_hash_* + exec_jhash (resource database) */
+#include "exec_rbtree.h"      /* exec_rbtree_* / exec_rb_* (lock-ID database) */
 
 /*
  * Deadlock re-scan interval for a lock blocked in-kernel (sync $ENQW).
@@ -55,35 +64,28 @@ static const uint8_t compat[6][6] = {
     /* EX */ {  1,  0,  0,  0,  0,  0 },
 };
 
-/* Global lock state */
-struct rb_root vms_lock_id_tree = RB_ROOT;
-DEFINE_SPINLOCK(vms_lock_id_lock);
+/*
+ * Global lock state. The former static initializers (RB_ROOT / DEFINE_SPINLOCK /
+ * DEFINE_HASHTABLE) become the portable form: EXEC_DEFINE_HASHTABLE lays down the
+ * bucket array (statically empty, like DEFINE_HASHTABLE), and the tree root and
+ * the two locks are runtime-initialized in vms_lock_init() before any use --
+ * exactly as eflag's file-scope lock and exec_list anchors do. On Linux this is
+ * behaviour-identical to the static init (vms_lock_init runs at module load,
+ * before any ioctl).
+ */
+exec_rbtree_root_t vms_lock_id_tree;
+exec_lock_t vms_lock_id_lock;
 uint32_t vms_next_lock_id = 1;
 
-DEFINE_HASHTABLE(vms_res_hash, VMS_RES_HASH_BITS);
-DEFINE_SPINLOCK(vms_res_hash_lock);
-
-static struct kmem_cache *vms_lock_cache;
-static struct kmem_cache *vms_resource_cache;
+EXEC_DEFINE_HASHTABLE(vms_res_hash, VMS_RES_HASH_BITS);
+exec_lock_t vms_res_hash_lock;
 
 int vms_lock_init(void)
 {
-    vms_lock_cache = kmem_cache_create("vms_lock",
-                                        sizeof(struct vms_lock_entry),
-                                        0, SLAB_HWCACHE_ALIGN, NULL);
-    if (!vms_lock_cache)
-        return -ENOMEM;
-
-    vms_resource_cache = kmem_cache_create("vms_resource",
-                                            sizeof(struct vms_lock_resource),
-                                            0, SLAB_HWCACHE_ALIGN, NULL);
-    if (!vms_resource_cache) {
-        kmem_cache_destroy(vms_lock_cache);
-        vms_lock_cache = NULL;
-        return -ENOMEM;
-    }
-
-    hash_init(vms_res_hash);
+    exec_lock_init(&vms_lock_id_lock);
+    exec_lock_init(&vms_res_hash_lock);
+    exec_rbtree_init(&vms_lock_id_tree);
+    exec_hash_init(vms_res_hash);
     return 0;
 }
 
@@ -91,31 +93,32 @@ void vms_lock_cleanup(void)
 {
     struct vms_lock_resource *res;
     struct vms_lock_entry *lock, *ltmp;
-    struct hlist_node *tmp;
+    exec_hash_node_t *tmp;
     int bkt;
 
     /* Free all resources and their lock entries */
-    spin_lock(&vms_res_hash_lock);
-    hash_for_each_safe(vms_res_hash, bkt, tmp, res, hash_node) {
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each_safe(vms_res_hash, bkt, tmp, res, hash_node) {
         /* Free lock entries on granted list */
-        list_for_each_entry_safe(lock, ltmp, &res->granted, res_granted) {
-            list_del(&lock->res_granted);
-            kmem_cache_free(vms_lock_cache, lock);
+        exec_list_for_each_entry_safe(lock, ltmp, &res->granted, res_granted) {
+            exec_list_del(&lock->res_granted);
+            exec_free(lock);
         }
         /* Free lock entries on waiting list */
-        list_for_each_entry_safe(lock, ltmp, &res->waiting, res_waiting) {
-            list_del(&lock->res_waiting);
-            kmem_cache_free(vms_lock_cache, lock);
+        exec_list_for_each_entry_safe(lock, ltmp, &res->waiting, res_waiting) {
+            exec_list_del(&lock->res_waiting);
+            exec_free(lock);
         }
-        hash_del(&res->hash_node);
-        kmem_cache_free(vms_resource_cache, res);
+        exec_hash_del(&res->hash_node);
+        exec_free(res);
     }
-    spin_unlock(&vms_res_hash_lock);
+    exec_unlock(&vms_res_hash_lock);
 
-    if (vms_lock_cache)
-        kmem_cache_destroy(vms_lock_cache);
-    if (vms_resource_cache)
-        kmem_cache_destroy(vms_resource_cache);
+    /* Tear down the runtime-initialized locks (a no-op on Linux; a real
+     * mutex_destroy on NetBSD -- paired with the exec_lock_init in
+     * vms_lock_init). */
+    exec_lock_destroy(&vms_res_hash_lock);
+    exec_lock_destroy(&vms_lock_id_lock);
 }
 
 /* ================================================================
@@ -124,65 +127,65 @@ void vms_lock_cleanup(void)
 
 static struct vms_lock_entry *lock_find_by_id(uint32_t lkid)
 {
-    struct rb_node *node;
+    exec_rbtree_node_t *node;
 
-    spin_lock(&vms_lock_id_lock);
-    node = vms_lock_id_tree.rb_node;
+    exec_lock(&vms_lock_id_lock);
+    node = exec_rbtree_first(&vms_lock_id_tree);
     while (node) {
-        struct vms_lock_entry *entry = rb_entry(node, struct vms_lock_entry, rb_node);
+        struct vms_lock_entry *entry = exec_rb_entry(node, struct vms_lock_entry, rb_node);
         if (lkid < entry->lkid)
-            node = node->rb_left;
+            node = exec_rb_left(node);
         else if (lkid > entry->lkid)
-            node = node->rb_right;
+            node = exec_rb_right(node);
         else {
             entry->refcount++;
-            spin_unlock(&vms_lock_id_lock);
+            exec_unlock(&vms_lock_id_lock);
             return entry;
         }
     }
-    spin_unlock(&vms_lock_id_lock);
+    exec_unlock(&vms_lock_id_lock);
     return NULL;
 }
 
 static void lock_put(struct vms_lock_entry *entry)
 {
-    spin_lock(&vms_lock_id_lock);
+    exec_lock(&vms_lock_id_lock);
     entry->refcount--;
     if (entry->refcount <= 0) {
         /* Entry was removed from tree and last reference dropped */
-        spin_unlock(&vms_lock_id_lock);
-        kmem_cache_free(vms_lock_cache, entry);
+        exec_unlock(&vms_lock_id_lock);
+        exec_free(entry);
         return;
     }
-    spin_unlock(&vms_lock_id_lock);
+    exec_unlock(&vms_lock_id_lock);
 }
 
 static void lock_insert_id(struct vms_lock_entry *entry)
 {
-    struct rb_node **p, *parent = NULL;
+    exec_rbtree_node_t **p, *parent = NULL;
 
-    spin_lock(&vms_lock_id_lock);
+    exec_lock(&vms_lock_id_lock);
     entry->lkid = vms_next_lock_id++;
 
-    p = &vms_lock_id_tree.rb_node;
+    p = exec_rbtree_root_link(&vms_lock_id_tree);
     while (*p) {
-        struct vms_lock_entry *e = rb_entry(*p, struct vms_lock_entry, rb_node);
+        struct vms_lock_entry *e = exec_rb_entry(*p, struct vms_lock_entry, rb_node);
         parent = *p;
         if (entry->lkid < e->lkid)
-            p = &(*p)->rb_left;
+            p = exec_rb_left_link(*p);
         else
-            p = &(*p)->rb_right;
+            p = exec_rb_right_link(*p);
     }
-    rb_link_node(&entry->rb_node, parent, p);
-    rb_insert_color(&entry->rb_node, &vms_lock_id_tree);
-    spin_unlock(&vms_lock_id_lock);
+    exec_rb_link_node(&entry->rb_node, parent, p);
+    exec_rb_insert_color(&entry->rb_node, &vms_lock_id_tree);
+    exec_unlock(&vms_lock_id_lock);
 }
 
 static void lock_remove_id(struct vms_lock_entry *entry)
 {
-    spin_lock(&vms_lock_id_lock);
-    rb_erase(&entry->rb_node, &vms_lock_id_tree);
-    spin_unlock(&vms_lock_id_lock);
+    exec_lock(&vms_lock_id_lock);
+    exec_rb_erase(&entry->rb_node, &vms_lock_id_tree);
+    exec_unlock(&vms_lock_id_lock);
 }
 
 /* ================================================================
@@ -191,7 +194,7 @@ static void lock_remove_id(struct vms_lock_entry *entry)
 
 static uint32_t resource_hash_key(const char *name)
 {
-    return jhash(name, strnlen(name, 32), 0);
+    return exec_jhash(name, strnlen(name, 32), 0);
 }
 
 static struct vms_lock_resource *resource_find(const char *name)
@@ -199,7 +202,7 @@ static struct vms_lock_resource *resource_find(const char *name)
     struct vms_lock_resource *res;
     uint32_t key = resource_hash_key(name);
 
-    hash_for_each_possible(vms_res_hash, res, hash_node, key) {
+    exec_hash_for_each_possible(vms_res_hash, res, hash_node, key) {
         if (strncmp(res->name, name, 32) == 0)
             return res;
     }
@@ -211,41 +214,41 @@ static struct vms_lock_resource *resource_find_or_create(const char *name)
     struct vms_lock_resource *res, *new_res;
     uint32_t key;
 
-    spin_lock(&vms_res_hash_lock);
+    exec_lock(&vms_res_hash_lock);
     res = resource_find(name);
     if (res) {
         res->refcount++;
-        spin_unlock(&vms_res_hash_lock);
+        exec_unlock(&vms_res_hash_lock);
         return res;
     }
-    spin_unlock(&vms_res_hash_lock);
+    exec_unlock(&vms_res_hash_lock);
 
-    /* Allocate outside spinlock so we can use GFP_KERNEL */
-    new_res = kmem_cache_zalloc(vms_resource_cache, GFP_KERNEL);
+    /* Allocate outside spinlock so we can use a may-sleep allocation */
+    new_res = exec_zalloc(sizeof(struct vms_lock_resource));
     if (!new_res)
         return NULL;
 
     /* Re-check under lock — another thread may have created it */
-    spin_lock(&vms_res_hash_lock);
+    exec_lock(&vms_res_hash_lock);
     res = resource_find(name);
     if (res) {
         res->refcount++;
-        spin_unlock(&vms_res_hash_lock);
-        kmem_cache_free(vms_resource_cache, new_res);
+        exec_unlock(&vms_res_hash_lock);
+        exec_free(new_res);
         return res;
     }
 
     strscpy(new_res->name, name, sizeof(new_res->name));
-    INIT_LIST_HEAD(&new_res->granted);
-    INIT_LIST_HEAD(&new_res->waiting);
+    exec_list_head_init(&new_res->granted);
+    exec_list_head_init(&new_res->waiting);
     memset(new_res->valblk, 0, LCK_VALBLK_SIZE);
-    spin_lock_init(&new_res->lock);
+    exec_lock_init(&new_res->lock);
     new_res->refcount = 1;
     new_res->parent = NULL;
 
     key = resource_hash_key(name);
-    hash_add(vms_res_hash, &new_res->hash_node, key);
-    spin_unlock(&vms_res_hash_lock);
+    exec_hash_add(vms_res_hash, &new_res->hash_node, key);
+    exec_unlock(&vms_res_hash_lock);
 
     return new_res;
 }
@@ -254,19 +257,19 @@ static void resource_release(struct vms_lock_resource *res)
 {
     int i, has_valblk = 0;
 
-    spin_lock(&vms_res_hash_lock);
+    exec_lock(&vms_res_hash_lock);
     res->refcount--;
-    if (res->refcount <= 0 && list_empty(&res->granted) && list_empty(&res->waiting)) {
+    if (res->refcount <= 0 && exec_list_empty(&res->granted) && exec_list_empty(&res->waiting)) {
         /* Preserve resource if it has a non-zero value block */
         for (i = 0; i < LCK_VALBLK_SIZE; i++) {
             if (res->valblk[i]) { has_valblk = 1; break; }
         }
         if (!has_valblk) {
-            hash_del(&res->hash_node);
-            kmem_cache_free(vms_resource_cache, res);
+            exec_hash_del(&res->hash_node);
+            exec_free(res);
         }
     }
-    spin_unlock(&vms_res_hash_lock);
+    exec_unlock(&vms_res_hash_lock);
 }
 
 /* ================================================================
@@ -297,16 +300,17 @@ static void resource_release(struct vms_lock_resource *res)
  * ================================================================ */
 
 /*
- * This node's CSID. 0 is reserved for "unmastered" (struct vms_lock_resource
- * .master_csid), so the default is a non-zero OVMX local placeholder. It is a
- * module parameter so the connection manager (0.4) or a test can set the real
- * CSID at insmod time; it is NOT a claim of a VMS-authentic CSID value or
- * layout (CLAUDE.md Rule 8) -- real CSIDs are assigned by the CM at join.
+ * This node's CSID (vms_local_csid). 0 is reserved for "unmastered"
+ * (struct vms_lock_resource.master_csid), so the default is a non-zero OVMX
+ * local placeholder. The VARIABLE and its insmod module parameter live in the
+ * Linux module glue (src/kernel/vms_module.c) -- module parameters are a
+ * host-module-lifecycle concern, not portable executive logic, so they stay in
+ * the per-substrate rind (design record §4). This core facility reads it through
+ * the extern declaration in vms_internal.h; the connection manager (0.4) or a
+ * test sets the real CSID at insmod time. It is NOT a claim of a VMS-authentic
+ * CSID value or layout (CLAUDE.md Rule 8) -- real CSIDs are assigned by the CM
+ * at join.
  */
-uint32_t vms_local_csid = 1;
-module_param(vms_local_csid, uint, 0444);
-MODULE_PARM_DESC(vms_local_csid,
-    "OVMX DLM: this node's cluster system ID (local scaffolding; the connection manager assigns the real CSID at cluster join in 0.4)");
 
 /*
  * Number of directory-participating nodes in the membership view. A stub-of-
@@ -337,9 +341,9 @@ static uint32_t dlm_member_csid(unsigned int idx)
  * number of directory-participating nodes, an entry of the cluster directory
  * vector that names the directory node (IDSM lock-management, "directory
  * lookups", ch6-part02 pp. 6-18..6-35). The STRUCTURE -- hash(name) -> index
- * -> directory node -- is that algorithm; the SPECIFIC hash (jhash, the same
- * one resource_hash_key uses) is an OVMX design choice, because public docs do
- * not publish VMS's directory hash function (CLAUDE.md Rule 8).
+ * -> directory node -- is that algorithm; the SPECIFIC hash (exec_jhash, the
+ * same one resource_hash_key uses) is an OVMX design choice, because public docs
+ * do not publish VMS's directory hash function (CLAUDE.md Rule 8).
  *
  * Stub-of-one membership makes this resolve to the local CSID for every name;
  * the hash + modulo + vector indexing are nonetheless real so that growing the
@@ -349,7 +353,7 @@ static uint32_t dlm_member_csid(unsigned int idx)
 static uint32_t dlm_directory_csid(const char *name)
 {
     unsigned int n = dlm_membership_count();
-    unsigned int idx = n ? (jhash(name, strnlen(name, 32), 0) % n) : 0;
+    unsigned int idx = n ? (exec_jhash(name, strnlen(name, 32), 0) % n) : 0;
 
     return dlm_member_csid(idx);
 }
@@ -399,7 +403,7 @@ static int lock_compatible(struct vms_lock_resource *res,
 {
     struct vms_lock_entry *granted;
 
-    list_for_each_entry(granted, &res->granted, res_granted) {
+    exec_list_for_each_entry(granted, &res->granted, res_granted) {
         if (granted == exclude)
             continue;
         if (!compat[requested][granted->granted_mode])
@@ -419,10 +423,10 @@ static int lock_compatible(struct vms_lock_resource *res,
  *
  * Walk the wait-for graph iteratively using a fixed-size stack to
  * avoid recursive spinlock acquisition (the old recursive version
- * would spin_lock(&proc->lock_list_lock) while already holding
+ * would exec_lock(&proc->lock_list_lock) while already holding
  * another proc's lock_list_lock, risking ABBA deadlock).
  *
- * Strategy: use trylock on proc->lock_list_lock. If we can't get it,
+ * Strategy: use exec_trylock on proc->lock_list_lock. If we can't get it,
  * conservatively assume potential deadlock at that branch (safe
  * because false positives just cause SS$_DEADLOCK, which the caller
  * retries or reports).
@@ -449,7 +453,7 @@ static int check_deadlock(struct vms_lock_entry *lock,
          * resources in the chain, we only read the granted list under
          * trylock to avoid lock-order inversions.
          */
-        list_for_each_entry(granted, &res->granted, res_granted) {
+        exec_list_for_each_entry(granted, &res->granted, res_granted) {
             if (compat[cur->requested_mode][granted->granted_mode])
                 continue;  /* This one doesn't block us */
 
@@ -458,22 +462,22 @@ static int check_deadlock(struct vms_lock_entry *lock,
                 return 1;  /* Deadlock! */
 
             /* Check if the blocking process has any waiting locks */
-            if (!spin_trylock(&granted->proc->lock_list_lock))
+            if (!exec_trylock(&granted->proc->lock_list_lock))
                 continue;  /* Can't get lock — skip this branch */
 
             {
                 struct vms_lock_entry *their_lock;
-                list_for_each_entry(their_lock, &granted->proc->locks, proc_list) {
+                exec_list_for_each_entry(their_lock, &granted->proc->locks, proc_list) {
                     if (their_lock->waiting && sp < MAX_DEADLOCK_DEPTH) {
                         if (their_lock->proc == origin_proc) {
-                            spin_unlock(&granted->proc->lock_list_lock);
+                            exec_unlock(&granted->proc->lock_list_lock);
                             return 1;  /* Deadlock! */
                         }
                         stack[sp++] = their_lock;
                     }
                 }
             }
-            spin_unlock(&granted->proc->lock_list_lock);
+            exec_unlock(&granted->proc->lock_list_lock);
         }
     }
 
@@ -495,7 +499,7 @@ static int check_deadlock(struct vms_lock_entry *lock,
  * enq_wait_sync() and is woken directly, so there is nobody to drain an AST.
  * Skipped when no astadr was supplied.
  *
- * Called with res->lock held (from try_grant_waiters); allocates GFP_ATOMIC
+ * Called with res->lock held (from try_grant_waiters); allocates non-sleeping
  * and nests ast_state->lock inside res->lock (same order as
  * notify_blocking_asts, so no new lock-order inversion).
  */
@@ -507,7 +511,7 @@ static void queue_completion_ast(struct vms_lock_entry *lock)
     if (!lock->astadr || (lock->flags & LCK_M_SYNC))
         return;
 
-    ast = kmalloc(sizeof(*ast), GFP_ATOMIC);
+    ast = exec_zalloc_atomic(sizeof(*ast));
     if (!ast)
         return;
 
@@ -516,27 +520,27 @@ static void queue_completion_ast(struct vms_lock_entry *lock)
     ast->acmode = PSL_C_USER;
 
     ast_state = &lock->proc->ast[PSL_C_USER];
-    spin_lock(&ast_state->lock);
+    exec_lock(&ast_state->lock);
     if (ast_state->count < VMS_AST_MAX_PER_MODE) {
-        list_add_tail(&ast->list, &ast_state->pending);
+        exec_list_add_tail(&ast->list, &ast_state->pending);
         ast_state->count++;
     } else {
-        kfree(ast);
+        exec_free(ast);
     }
-    spin_unlock(&ast_state->lock);
+    exec_unlock(&ast_state->lock);
 }
 
 static void try_grant_waiters(struct vms_lock_resource *res)
 {
     struct vms_lock_entry *waiter, *tmp;
 
-    list_for_each_entry_safe(waiter, tmp, &res->waiting, res_waiting) {
+    exec_list_for_each_entry_safe(waiter, tmp, &res->waiting, res_waiting) {
         if (lock_compatible(res, waiter->requested_mode, NULL)) {
             /* Grant it */
-            list_del(&waiter->res_waiting);
+            exec_list_del(&waiter->res_waiting);
             waiter->granted_mode = waiter->requested_mode;
             waiter->waiting = 0;
-            list_add_tail(&waiter->res_granted, &res->granted);
+            exec_list_add_tail(&waiter->res_granted, &res->granted);
 
             /* Copy resource value block if requested */
             if (waiter->flags & LCK_M_VALBLK)
@@ -546,10 +550,16 @@ static void try_grant_waiters(struct vms_lock_resource *res)
              * Signal completion. Async waiters get a completion AST;
              * sync ($ENQW) waiters blocked in enq_wait_sync() are woken.
              * Both are cheap and safe under res->lock.
+             *
+             * The grant_state write and the wake both happen under res->lock --
+             * the SAME lock the sync waiter holds across exec_cv_wait_timeout --
+             * so the cv-idiom in enq_wait_sync is lost-wakeup-free (a waiter is
+             * already enqueued on wait_wq before it drops res->lock, and this
+             * waker cannot set grant_state or wake until it holds res->lock).
              */
             queue_completion_ast(waiter);
-            WRITE_ONCE(waiter->grant_state, SS__NORMAL);
-            wake_up(&waiter->wait_wq);
+            waiter->grant_state = SS__NORMAL;
+            exec_cv_broadcast(&waiter->wait_wq);
         } else {
             /* FIFO: stop at first non-grantable waiter
              * (VMS actually checks all waiters, but FIFO is simpler
@@ -568,7 +578,7 @@ static void notify_blocking_asts(struct vms_lock_resource *res,
 {
     struct vms_lock_entry *granted;
 
-    list_for_each_entry(granted, &res->granted, res_granted) {
+    exec_list_for_each_entry(granted, &res->granted, res_granted) {
         if (!compat[blocked->requested_mode][granted->granted_mode] &&
             granted->blkastadr) {
             /*
@@ -579,7 +589,7 @@ static void notify_blocking_asts(struct vms_lock_resource *res,
             struct vms_ast_entry *ast;
             struct vms_ast_state *ast_state;
 
-            ast = kmalloc(sizeof(*ast), GFP_ATOMIC);
+            ast = exec_zalloc_atomic(sizeof(*ast));
             if (!ast)
                 continue;
 
@@ -588,14 +598,14 @@ static void notify_blocking_asts(struct vms_lock_resource *res,
             ast->acmode = PSL_C_USER;
 
             ast_state = &granted->proc->ast[PSL_C_USER];
-            spin_lock(&ast_state->lock);
+            exec_lock(&ast_state->lock);
             if (ast_state->count < VMS_AST_MAX_PER_MODE) {
-                list_add_tail(&ast->list, &ast_state->pending);
+                exec_list_add_tail(&ast->list, &ast_state->pending);
                 ast_state->count++;
             } else {
-                kfree(ast);
+                exec_free(ast);
             }
-            spin_unlock(&ast_state->lock);
+            exec_unlock(&ast_state->lock);
         }
     }
 }
@@ -607,7 +617,7 @@ static void notify_blocking_asts(struct vms_lock_resource *res,
 /*
  * Tear down one lock and free it. Caller holds proc->lock_list_lock and has
  * already unlinked (or is about to unlink) the entry from proc->locks via the
- * list_for_each_entry_safe cursor. Shared verbatim by full process teardown
+ * exec_list_for_each_entry_safe cursor. Shared verbatim by full process teardown
  * (vms_proc_release_locks) and image rundown (vms_proc_rundown_locks) so the
  * two cannot drift.
  */
@@ -616,36 +626,36 @@ static void lock_teardown_locked(struct vms_lock_entry *lock)
     struct vms_lock_resource *res = lock->resource;
 
     /* Remove from resource lists */
-    spin_lock(&res->lock);
+    exec_lock(&res->lock);
     if (lock->waiting)
-        list_del(&lock->res_waiting);
+        exec_list_del(&lock->res_waiting);
     else
-        list_del(&lock->res_granted);
+        exec_list_del(&lock->res_granted);
 
     /* Write back value block if held */
     if ((lock->flags & LCK_M_VALBLK) && !lock->waiting)
         memcpy(res->valblk, lock->valblk, LCK_VALBLK_SIZE);
 
     try_grant_waiters(res);
-    spin_unlock(&res->lock);
+    exec_unlock(&res->lock);
 
     /* Remove from process list and ID tree */
-    list_del(&lock->proc_list);
+    exec_list_del(&lock->proc_list);
     lock_remove_id(lock);
 
     resource_release(res);
-    kmem_cache_free(vms_lock_cache, lock);
+    exec_free(lock);
 }
 
 void vms_proc_release_locks(struct vms_proc *proc)
 {
     struct vms_lock_entry *lock, *tmp;
 
-    spin_lock(&proc->lock_list_lock);
-    list_for_each_entry_safe(lock, tmp, &proc->locks, proc_list)
+    exec_lock(&proc->lock_list_lock);
+    exec_list_for_each_entry_safe(lock, tmp, &proc->locks, proc_list)
         lock_teardown_locked(lock);
     proc->lock_count = 0;
-    spin_unlock(&proc->lock_list_lock);
+    exec_unlock(&proc->lock_list_lock);
 }
 
 /*
@@ -662,15 +672,15 @@ void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode)
 {
     struct vms_lock_entry *lock, *tmp;
 
-    spin_lock(&proc->lock_list_lock);
-    list_for_each_entry_safe(lock, tmp, &proc->locks, proc_list) {
+    exec_lock(&proc->lock_list_lock);
+    exec_list_for_each_entry_safe(lock, tmp, &proc->locks, proc_list) {
         if (lock->acmode < min_acmode)
             continue;   /* inner-mode: process-permanent, survives rundown */
         lock_teardown_locked(lock);
         if (proc->lock_count > 0)
             proc->lock_count--;
     }
-    spin_unlock(&proc->lock_list_lock);
+    exec_unlock(&proc->lock_list_lock);
 }
 
 /* ================================================================
@@ -695,47 +705,69 @@ void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode)
  *                  the caller decides how to unwind (free for a fresh ENQ,
  *                  restore granted mode for a CONVERT).
  *
+ * WAIT MODEL. This is the executive's synchronous wait, expressed in the shim's
+ * cv-idiom (design record §3, the wait/wake seam): the waiter holds res->lock --
+ * the SAME lock that guards the predicate (lock->grant_state) and that every
+ * waker (try_grant_waiters) holds while it sets grant_state and wakes -- and
+ * loops re-testing the predicate. exec_cv_wait_timeout atomically drops res->lock,
+ * sleeps up to VMS_DEADLOCK_WAIT_MS, and re-acquires res->lock before returning,
+ * so the predicate is always re-tested under the lock and no wakeup is lost.
  * The wait is interruptible so a signal (e.g. an AST-delivery RT signal) can
- * wake us; on a spurious/signal wake with the request still pending we simply
- * re-arm. Only a genuine timeout (ret == 0) triggers a deadlock re-scan.
+ * wake us; the interrupt is ignored (we simply re-arm) because a VMS wait ends
+ * only when its condition is satisfied. Only a genuine timeout (timed_out)
+ * triggers a deadlock re-scan for this still-waiting request. On Linux this is
+ * behaviour-identical to the former lock-free
+ * wait_event_interruptible_timeout(wq, grant_state != 0, to) loop: the only
+ * waker sets grant_state before waking, so the held-lock predicate test and the
+ * lock-free READ_ONCE test observe the same transitions.
  */
 static int enq_wait_sync(struct vms_lock_resource *res,
                          struct vms_lock_entry *lock)
 {
-    const long to = msecs_to_jiffies(VMS_DEADLOCK_WAIT_MS);
+    int status;
+    int timed_out;
 
+    exec_lock(&res->lock);
     for (;;) {
-        long ret = wait_event_interruptible_timeout(
-                       lock->wait_wq,
-                       READ_ONCE(lock->grant_state) != 0, to);
+        /* Predicate has priority (cv contract). */
+        if (lock->grant_state == SS__NORMAL) {
+            status = SS__NORMAL;
+            break;
+        }
+        if (lock->grant_state == SS__DEADLOCK) {
+            status = SS__DEADLOCK;
+            break;
+        }
+        /* Granted between a wakeup and re-acquiring res->lock: the entry left
+         * res->waiting but grant_state was not the value tested above. */
+        if (!lock->waiting) {
+            lock->grant_state = SS__NORMAL;
+            status = SS__NORMAL;
+            break;
+        }
 
-        if (READ_ONCE(lock->grant_state) == SS__NORMAL)
-            return SS__NORMAL;
-        if (READ_ONCE(lock->grant_state) == SS__DEADLOCK)
-            return SS__DEADLOCK;
+        /* Sleep until woken (grant/signal) or the timeout elapses. res->lock is
+         * dropped across the sleep and held again on return. */
+        exec_cv_wait_timeout(&lock->wait_wq, &res->lock,
+                             VMS_DEADLOCK_WAIT_MS, &timed_out);
 
         /*
-         * Woke without a grant. Re-check under res->lock: the grant may have
-         * raced in just after our condition test, otherwise on a timeout
-         * re-run deadlock detection for this still-waiting request.
+         * Woke without a grant recorded. On a genuine timeout re-run deadlock
+         * detection for this still-waiting request; otherwise (signal wake or a
+         * grant that raced in) fall through and re-test the predicate at the top.
          */
-        spin_lock(&res->lock);
-        if (!lock->waiting) {
-            /* Granted between the wakeup and acquiring res->lock. */
-            WRITE_ONCE(lock->grant_state, SS__NORMAL);
-            spin_unlock(&res->lock);
-            return SS__NORMAL;
-        }
-        if (ret == 0 && check_deadlock(lock, 0)) {
-            list_del(&lock->res_waiting);
+        if (timed_out && lock->waiting &&
+            lock->grant_state == 0 && check_deadlock(lock, 0)) {
+            exec_list_del(&lock->res_waiting);
             lock->waiting = 0;
-            WRITE_ONCE(lock->grant_state, SS__DEADLOCK);
-            spin_unlock(&res->lock);
-            return SS__DEADLOCK;
+            lock->grant_state = SS__DEADLOCK;
+            status = SS__DEADLOCK;
+            break;
         }
-        spin_unlock(&res->lock);
         /* Signal wake or benign timeout: keep waiting. */
     }
+    exec_unlock(&res->lock);
+    return status;
 }
 
 /* ================================================================
@@ -757,7 +789,7 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
     struct vms_lock_resource *res;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     if (args.lkmode > LCK_K_EXMODE) {
@@ -795,9 +827,9 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
     {
         uint32_t dlm_st;
 
-        spin_lock(&res->lock);
+        exec_lock(&res->lock);
         dlm_st = dlm_resolve_master(res);
-        spin_unlock(&res->lock);
+        exec_unlock(&res->lock);
 
         if (dlm_st != SS__NORMAL) {
             resource_release(res);
@@ -807,7 +839,7 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
     }
 
     /* Allocate lock entry */
-    lock = kmem_cache_zalloc(vms_lock_cache, GFP_KERNEL);
+    lock = exec_zalloc(sizeof(struct vms_lock_entry));
     if (!lock) {
         resource_release(res);
         args.status = SS__INSFMEM;
@@ -824,7 +856,7 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
     lock->resource = res;
     lock->proc = proc;
     lock->waiting = 0;
-    init_waitqueue_head(&lock->wait_wq);
+    exec_cv_init(&lock->wait_wq);
     lock->grant_state = 0;
 
     /*
@@ -835,9 +867,9 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
      * (0-3), NOT the lock mode in requested_mode/granted_mode (NL..EX, 0-5).
      * See docs/design-image-rundown-resource-classes.md.
      */
-    spin_lock(&proc->mode_lock);
+    exec_lock(&proc->mode_lock);
     lock->acmode = proc->current_mode;
-    spin_unlock(&proc->mode_lock);
+    exec_unlock(&proc->mode_lock);
 
     if (args.flags & LCK_M_VALBLK)
         memcpy(lock->valblk, args.valblk, LCK_VALBLK_SIZE);
@@ -846,17 +878,17 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
     lock_insert_id(lock);
 
     /* Add to process lock list */
-    spin_lock(&proc->lock_list_lock);
-    list_add_tail(&lock->proc_list, &proc->locks);
+    exec_lock(&proc->lock_list_lock);
+    exec_list_add_tail(&lock->proc_list, &proc->locks);
     proc->lock_count++;
-    spin_unlock(&proc->lock_list_lock);
+    exec_unlock(&proc->lock_list_lock);
 
     /* Try to grant */
-    spin_lock(&res->lock);
+    exec_lock(&res->lock);
     if (lock_compatible(res, args.lkmode, NULL)) {
         /* Granted immediately */
         lock->granted_mode = args.lkmode;
-        list_add_tail(&lock->res_granted, &res->granted);
+        exec_list_add_tail(&lock->res_granted, &res->granted);
 
         if (args.flags & LCK_M_VALBLK) {
             /* If user provided a value block, write it to resource.
@@ -871,7 +903,7 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
                 memcpy(lock->valblk, res->valblk, LCK_VALBLK_SIZE);
         }
 
-        spin_unlock(&res->lock);
+        exec_unlock(&res->lock);
 
         args.lkid = lock->lkid;
         args.lk_status = lock->granted_mode;
@@ -881,16 +913,16 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
     } else {
         /* Not compatible */
         if (args.flags & LCK_M_NOQUEUE) {
-            spin_unlock(&res->lock);
+            exec_unlock(&res->lock);
 
             /* Clean up */
-            spin_lock(&proc->lock_list_lock);
-            list_del(&lock->proc_list);
+            exec_lock(&proc->lock_list_lock);
+            exec_list_del(&lock->proc_list);
             proc->lock_count--;
-            spin_unlock(&proc->lock_list_lock);
+            exec_unlock(&proc->lock_list_lock);
             lock_remove_id(lock);
             resource_release(res);
-            kmem_cache_free(vms_lock_cache, lock);
+            exec_free(lock);
 
             args.lkid = 0;
             args.status = SS__NOTQUEUED;
@@ -898,27 +930,27 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
             /* Queue the request */
             lock->waiting = 1;
             lock->grant_state = 0;
-            list_add_tail(&lock->res_waiting, &res->waiting);
+            exec_list_add_tail(&lock->res_waiting, &res->waiting);
 
             /* Check for deadlock */
             if (check_deadlock(lock, 0)) {
-                list_del(&lock->res_waiting);
-                spin_unlock(&res->lock);
+                exec_list_del(&lock->res_waiting);
+                exec_unlock(&res->lock);
 
-                spin_lock(&proc->lock_list_lock);
-                list_del(&lock->proc_list);
+                exec_lock(&proc->lock_list_lock);
+                exec_list_del(&lock->proc_list);
                 proc->lock_count--;
-                spin_unlock(&proc->lock_list_lock);
+                exec_unlock(&proc->lock_list_lock);
                 lock_remove_id(lock);
                 resource_release(res);
-                kmem_cache_free(vms_lock_cache, lock);
+                exec_free(lock);
 
                 args.lkid = 0;
                 args.status = SS__DEADLOCK;
             } else {
                 /* Notify blocking AST holders */
                 notify_blocking_asts(res, lock);
-                spin_unlock(&res->lock);
+                exec_unlock(&res->lock);
 
                 if (args.flags & LCK_M_SYNC) {
                     /*
@@ -929,13 +961,13 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
                      */
                     if (enq_wait_sync(res, lock) == SS__DEADLOCK) {
                         /* Never granted: unwind the fresh request. */
-                        spin_lock(&proc->lock_list_lock);
-                        list_del(&lock->proc_list);
+                        exec_lock(&proc->lock_list_lock);
+                        exec_list_del(&lock->proc_list);
                         proc->lock_count--;
-                        spin_unlock(&proc->lock_list_lock);
+                        exec_unlock(&proc->lock_list_lock);
                         lock_remove_id(lock);
                         resource_release(res);
-                        kmem_cache_free(vms_lock_cache, lock);
+                        exec_free(lock);
 
                         args.lkid = 0;
                         args.status = SS__DEADLOCK;
@@ -963,7 +995,7 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
     }
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -978,7 +1010,7 @@ long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg)
     struct vms_lock_resource *res;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     lock = lock_find_by_id(args.lkid);
@@ -992,26 +1024,26 @@ long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg)
     res = lock->resource;
 
     /* Remove from resource */
-    spin_lock(&res->lock);
+    exec_lock(&res->lock);
 
     /* Write back value block from lock to resource */
     if ((lock->flags & LCK_M_VALBLK) && !lock->waiting)
         memcpy(res->valblk, lock->valblk, LCK_VALBLK_SIZE);
 
     if (lock->waiting)
-        list_del(&lock->res_waiting);
+        exec_list_del(&lock->res_waiting);
     else
-        list_del(&lock->res_granted);
+        exec_list_del(&lock->res_granted);
 
     /* Try to grant waiters now that this lock is released */
     try_grant_waiters(res);
-    spin_unlock(&res->lock);
+    exec_unlock(&res->lock);
 
     /* Remove from process list */
-    spin_lock(&proc->lock_list_lock);
-    list_del(&lock->proc_list);
+    exec_lock(&proc->lock_list_lock);
+    exec_list_del(&lock->proc_list);
     proc->lock_count--;
-    spin_unlock(&proc->lock_list_lock);
+    exec_unlock(&proc->lock_list_lock);
 
     /* Remove from ID tree and free */
     lock_remove_id(lock);
@@ -1022,7 +1054,7 @@ long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg)
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -1041,7 +1073,7 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
     struct vms_lock_resource *res;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     if (args.lkmode > LCK_K_EXMODE) {
@@ -1065,7 +1097,7 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
 
     res = lock->resource;
 
-    spin_lock(&res->lock);
+    exec_lock(&res->lock);
 
     /* Update blocking AST address if provided */
     if (args.blkastadr)
@@ -1083,7 +1115,7 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
         if (args.flags & LCK_M_VALBLK)
             memcpy(lock->valblk, res->valblk, LCK_VALBLK_SIZE);
 
-        spin_unlock(&res->lock);
+        exec_unlock(&res->lock);
 
         args.lk_status = lock->granted_mode;
         if (args.flags & LCK_M_VALBLK)
@@ -1091,27 +1123,27 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
         args.status = SS__NORMAL;
     } else {
         if (args.flags & LCK_M_NOQUEUE) {
-            spin_unlock(&res->lock);
+            exec_unlock(&res->lock);
             args.status = SS__NOTQUEUED;
         } else {
             /* Move to waiting list, keep granted mode until converted */
             lock->requested_mode = args.lkmode;
             lock->waiting = 1;
             lock->grant_state = 0;
-            list_del(&lock->res_granted);
-            list_add_tail(&lock->res_waiting, &res->waiting);
+            exec_list_del(&lock->res_granted);
+            exec_list_add_tail(&lock->res_waiting, &res->waiting);
 
             /* Check deadlock */
             if (check_deadlock(lock, 0)) {
                 /* Undo: move back to granted */
-                list_del(&lock->res_waiting);
+                exec_list_del(&lock->res_waiting);
                 lock->waiting = 0;
-                list_add_tail(&lock->res_granted, &res->granted);
-                spin_unlock(&res->lock);
+                exec_list_add_tail(&lock->res_granted, &res->granted);
+                exec_unlock(&res->lock);
                 args.status = SS__DEADLOCK;
             } else {
                 notify_blocking_asts(res, lock);
-                spin_unlock(&res->lock);
+                exec_unlock(&res->lock);
 
                 if (args.flags & LCK_M_SYNC) {
                     /* Synchronous convert: block until granted at the new
@@ -1119,11 +1151,11 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
                      * retains its original granted mode (VMS semantics --
                      * a failed convert does not lose the held lock). */
                     if (enq_wait_sync(res, lock) == SS__DEADLOCK) {
-                        spin_lock(&res->lock);
+                        exec_lock(&res->lock);
                         lock->requested_mode = lock->granted_mode;
                         lock->waiting = 0;
-                        list_add_tail(&lock->res_granted, &res->granted);
-                        spin_unlock(&res->lock);
+                        exec_list_add_tail(&lock->res_granted, &res->granted);
+                        exec_unlock(&res->lock);
                         args.status = SS__DEADLOCK;
                     } else {
                         args.lk_status = lock->granted_mode;
@@ -1142,7 +1174,7 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
     lock_put(lock);  /* drop lock_find_by_id reference */
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -1156,7 +1188,7 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
     struct vms_lock_entry *lock;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     lock = lock_find_by_id(args.lkid);
@@ -1181,7 +1213,7 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
     lock_put(lock);  /* drop lock_find_by_id reference */
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -1203,7 +1235,7 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
     (void)proc;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     args.resnam[31] = '\0';
@@ -1222,28 +1254,28 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
     args.dir_csid = dlm_directory_csid(args.resnam);
 
     /* Read the resource block, if one exists, without creating it. */
-    spin_lock(&vms_res_hash_lock);
+    exec_lock(&vms_res_hash_lock);
     res = resource_find(args.resnam);
     if (res) {
         struct vms_lock_entry *granted;
         uint32_t n = 0;
 
-        spin_lock(&res->lock);
+        exec_lock(&res->lock);
         args.found = 1;
         args.master_csid = res->master_csid;
         args.is_local_master =
             (res->master_csid != 0 && res->master_csid == vms_local_csid) ? 1 : 0;
-        list_for_each_entry(granted, &res->granted, res_granted)
+        exec_list_for_each_entry(granted, &res->granted, res_granted)
             n++;
         args.n_granted = n;
-        spin_unlock(&res->lock);
+        exec_unlock(&res->lock);
     }
-    spin_unlock(&vms_res_hash_lock);
+    exec_unlock(&vms_res_hash_lock);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }

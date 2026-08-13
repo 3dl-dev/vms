@@ -43,6 +43,22 @@ DEFINE_SPINLOCK(vms_proc_hash_lock);
 
 static struct kmem_cache *vms_proc_cache;
 
+/*
+ * vms_local_csid - this node's cluster system ID, consumed by the DLM directory
+ * + mastering logic in the shared lock manager (src/kernel-core/vms_lock.c). The
+ * variable and its insmod module parameter live HERE, in the Linux module rind,
+ * not in the substrate-agnostic core: a module parameter is a host-module-
+ * lifecycle facility, and the core facility reaches this value through the extern
+ * in vms_internal.h. 0 is reserved for "unmastered", so the default is a non-zero
+ * OVMX local placeholder; it is NOT a claim of a VMS-authentic CSID value or
+ * layout (CLAUDE.md Rule 8) -- real CSIDs are assigned by the connection manager
+ * at cluster join in 0.4.
+ */
+uint32_t vms_local_csid = 1;
+module_param(vms_local_csid, uint, 0444);
+MODULE_PARM_DESC(vms_local_csid,
+    "OVMX DLM: this node's cluster system ID (local scaffolding; the connection manager assigns the real CSID at cluster join in 0.4)");
+
 /* ================================================================
  * Process management
  * ================================================================ */

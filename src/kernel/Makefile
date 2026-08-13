@@ -11,17 +11,18 @@
 
 obj-m := vms.o
 
-# vms_eflag.o / vms_ast.o / vms_access.o / vms_mbx.o / vms_proctab.o are built
-# from ../kernel-core/: these substrate-agnostic executive facilities LIVE in
-# src/kernel-core/ -- event flags (rd vms-ec4, Phase B), AST delivery and
+# vms_eflag.o / vms_ast.o / vms_access.o / vms_mbx.o / vms_proctab.o / vms_lock.o
+# are built from ../kernel-core/: these substrate-agnostic executive facilities
+# LIVE in src/kernel-core/ -- event flags (rd vms-ec4, Phase B), AST delivery and
 # access-mode enforcement (rd vms-5b2, Phase D), mailboxes (rd vms-a88, Phase E),
-# and, now, the process table (rd vms-846b, Phase F). The Linux vms.ko is the
-# Linux BACKEND for that shared source -- it provides the exec_*/exec_list_*/
-# exec_hash_* primitives (exec_kbackend_linux.h / exec_list_linux.h /
-# exec_hash_linux.h here in src/kernel) that the core files compile against.
-# Kbuild builds each object in place under src/kernel-core; the header search
-# paths below let the core files find both the shared contracts and this dir's
-# shared struct header.
+# the process table (rd vms-846b, Phase F), and, now, the LOCK MANAGER (rd
+# vms-84a, Phase G -- the 44 KB payoff and the last facility promoted). The Linux
+# vms.ko is the Linux BACKEND for that shared source -- it provides the
+# exec_*/exec_list_*/exec_hash_*/exec_rbtree_* primitives (exec_kbackend_linux.h /
+# exec_list_linux.h / exec_hash_linux.h / exec_rbtree_linux.h here in src/kernel)
+# that the core files compile against. Kbuild builds each object in place under
+# src/kernel-core; the header search paths below let the core files find both the
+# shared contracts and this dir's shared struct header.
 #
 # vms_proctab.c is the first core facility to bind the host TASK: it lands the
 # host-task (exec_current_is_privileged / exec_task_*), RCU-lite (exec_rcu_* /
@@ -42,9 +43,9 @@ vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
          ../kernel-core/vms_eflag.o \
+         ../kernel-core/vms_lock.o \
          ../kernel-core/vms_mbx.o \
          ../kernel-core/vms_proctab.o \
-         vms_lock.o \
          vms_devtab.o \
          vms_lnm.o \
          vms_p0.o \

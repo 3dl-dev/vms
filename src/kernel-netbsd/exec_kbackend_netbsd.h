@@ -77,6 +77,7 @@
 #include <sys/kmem.h>      /* kmem_alloc/zalloc/free, KM_SLEEP/KM_NOSLEEP */
 #include <sys/proc.h>      /* struct proc, curproc, proc_find, p_pid (Phase F) */
 #include <sys/kauth.h>     /* kauth_cred_get, kauth_authorize_generic (Phase F) */
+#include <sys/errno.h>     /* EWOULDBLOCK, EINTR, ERESTART (Phase G cv timeout) */
 
 /* ---- primitive types ---- */
 typedef kmutex_t   exec_lock_t;
@@ -111,6 +112,16 @@ exec_lock_destroy(exec_lock_t *l)
 	mutex_destroy(l);
 }
 
+/* exec_trylock (Phase G): non-blocking acquire, nonzero iff acquired. NetBSD
+ * mutex_tryenter returns nonzero on success, matching the contract. Type-checked
+ * by the event-flag build; called only once locks join this module's SRCS
+ * (rd vms-ff7). */
+static __inline int
+exec_trylock(exec_lock_t *l)
+{
+	return mutex_tryenter(l);
+}
+
 /* ---- 2. wait / wake (cv-shaped; see exec_kbackend.h) ---- */
 static __inline void
 exec_cv_init(exec_cv_t *cv)
@@ -130,6 +141,33 @@ static __inline int
 exec_cv_wait(exec_cv_t *cv, exec_lock_t *lk)
 {
 	return cv_wait_sig(cv, lk);
+}
+
+/*
+ * exec_cv_wait_timeout (Phase G) - exec_cv_wait with a bounded sleep. cv_timedwait_sig
+ * atomically drops `lk', sleeps up to `timo' ticks, and re-acquires `lk', returning
+ * EWOULDBLOCK on timeout, EINTR/ERESTART on a signal, or 0 on a cv wake. We map
+ * EWOULDBLOCK to *timed_out (return 0, not an interrupt) and a signal to a nonzero
+ * return, matching the Linux backend and the contract. mstohz floors at 1 tick so a
+ * sub-tick `ms' never degenerates into cv_timedwait_sig's timo==0 "wait forever".
+ * Type-checked by the event-flag build; called only once locks join this module's
+ * SRCS (rd vms-ff7).
+ */
+static __inline int
+exec_cv_wait_timeout(exec_cv_t *cv, exec_lock_t *lk, unsigned int ms, int *timed_out)
+{
+	int timo = mstohz(ms);
+	int rv;
+
+	if (timo < 1)
+		timo = 1;
+	*timed_out = 0;
+	rv = cv_timedwait_sig(cv, lk, timo);
+	if (rv == EWOULDBLOCK) {
+		*timed_out = 1;
+		return 0;
+	}
+	return (rv == EINTR || rv == ERESTART) ? 1 : 0;
 }
 
 static __inline void

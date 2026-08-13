@@ -82,4 +82,48 @@ void exec_hash_del_rcu(exec_hash_node_t *n);
 #define exec_hash_entry(ptr, type, member) \
 	((type *)((char *)(ptr) - offsetof(type, member)))
 
+/*
+ * PHASE G ADDITIONS (rd vms-84a) -- CONTRACT ONLY, NOT YET COMPILED. The lock
+ * manager's resource hash (vms_res_hash) lives wholly in the core facility and
+ * uses the non-RCU table vocabulary below. When locks join the NetBSD SRCS (rd
+ * vms-ff7) these map to OVMX bucket helpers in exec_hash_netbsd.c. A bucket is a
+ * one-word head; EXEC_DEFINE_HASHTABLE lays down the array, exec_hash_init empties
+ * it, exec_hash_add/exec_hash_del splice under the resource lock, and
+ * exec_hash_for_each_possible walks the keyed bucket. exec_jhash is OVMX's own
+ * Jenkins hash (its VALUE is used only for bucketing + a membership modulo, never
+ * for a correctness decision -- so it need not match the Linux jhash byte for
+ * byte).
+ */
+struct exec_hash_head { exec_hash_node_t *first; };
+
+#define EXEC_DECLARE_HASHTABLE(name, bits)  extern struct exec_hash_head name[1 << (bits)]
+#define EXEC_DEFINE_HASHTABLE(name, bits)   struct exec_hash_head name[1 << (bits)]
+
+void exec_hash_init_helper(struct exec_hash_head *tbl, unsigned int nbuckets);
+#define exec_hash_init(name) \
+	exec_hash_init_helper((name), (unsigned int)(sizeof(name) / sizeof((name)[0])))
+
+void exec_hash_add_helper(struct exec_hash_head *tbl, unsigned int nbuckets,
+			  exec_hash_node_t *node, uint32_t key);
+#define exec_hash_add(name, node, key) \
+	exec_hash_add_helper((name), (unsigned int)(sizeof(name) / sizeof((name)[0])), \
+			     (node), (key))
+
+void exec_hash_del(exec_hash_node_t *n);
+
+uint32_t exec_jhash(const void *key, uint32_t length, uint32_t initval);
+
+/*
+ * The keyed-bucket walk, typed. Placeholder shape (exec_hash_bucket_of maps a key
+ * to its head); vms-ff7 fills the helper in .c, same technique as the full-table
+ * iterators above.
+ */
+struct exec_hash_head *exec_hash_bucket_of(struct exec_hash_head *tbl,
+					   unsigned int nbuckets, uint32_t key);
+#define exec_hash_for_each_possible(name, obj, member, key) \
+	for (exec_hash_node_t *_ehp = exec_hash_bucket_of((name), \
+		(unsigned int)(sizeof(name) / sizeof((name)[0])), (key))->first; \
+	     _ehp && ((obj) = exec_hash_entry(_ehp, __typeof__(*(obj)), member), 1); \
+	     _ehp = _ehp->next)
+
 #endif /* OVMX_EXEC_HASH_NETBSD_H */

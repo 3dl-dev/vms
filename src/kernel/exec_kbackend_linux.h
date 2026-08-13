@@ -40,6 +40,7 @@
 #include <linux/uaccess.h>
 #include <linux/compiler.h>   /* __user */
 #include <linux/gfp.h>
+#include <linux/jiffies.h>    /* msecs_to_jiffies (exec_cv_wait_timeout) */
 /* Phase F (host-task / RCU-lite / sleepable mutex) backing headers. */
 #include <linux/pid.h>            /* struct pid, pid_task, PIDTYPE_PID */
 #include <linux/capability.h>     /* capable, CAP_SYS_ADMIN */
@@ -59,6 +60,10 @@ static inline void exec_lock_init(exec_lock_t *l)    { spin_lock_init(l); }
 static inline void exec_lock(exec_lock_t *l)         { spin_lock(l); }
 static inline void exec_unlock(exec_lock_t *l)       { spin_unlock(l); }
 static inline void exec_lock_destroy(exec_lock_t *l) { (void)l; /* no-op on Linux */ }
+/* exec_trylock: acquire without blocking. Nonzero iff acquired (Phase G; the
+ * lock manager's deadlock walker takes other processes' lock-list locks with a
+ * trylock to avoid an ABBA inversion). Linux: spin_trylock. */
+static inline int exec_trylock(exec_lock_t *l)       { return spin_trylock(l); }
 
 /* ---- 2. wait / wake (cv-shaped; see exec_kbackend.h) ----
  *
@@ -94,6 +99,39 @@ static inline int exec_cv_wait(exec_cv_t *cv, exec_lock_t *lk)
 		spin_unlock(lk);
 		schedule();
 		spin_lock(lk);
+		intr = signal_pending(current);
+	}
+	finish_wait(cv, &__w);
+	return intr;
+}
+
+/* exec_cv_wait_timeout (Phase G) -- exec_cv_wait with a bounded sleep, the
+ * faithful one-iteration expansion of wait_event_interruptible_TIMEOUT. Same cv
+ * contract (caller holds `lk`, loops re-testing the predicate); additionally,
+ * `*timed_out` is set nonzero iff the full `ms` elapsed with no wake (so the
+ * caller can run a bounded re-scan on a real timeout, as enq_wait_sync does for
+ * deadlock detection). Returns nonzero iff interrupted, exactly like
+ * exec_cv_wait. Each call re-arms the full `ms`; that matches the executive's
+ * former outer wait_event_interruptible_timeout re-arm, and is sound because the
+ * sole waker (try_grant_waiters) always mutates the predicate before signalling,
+ * so a wake with the predicate still false is not a normal event. */
+static inline int exec_cv_wait_timeout(exec_cv_t *cv, exec_lock_t *lk,
+				       unsigned int ms, int *timed_out)
+{
+	DEFINE_WAIT(__w);
+	long ret;
+	int intr;
+
+	*timed_out = 0;
+	prepare_to_wait(cv, &__w, TASK_INTERRUPTIBLE);
+	if (signal_pending(current)) {
+		intr = 1;                 /* do not sleep with a signal pending */
+	} else {
+		spin_unlock(lk);
+		ret = schedule_timeout(msecs_to_jiffies(ms));
+		spin_lock(lk);
+		if (ret == 0)
+			*timed_out = 1;   /* the full timeout elapsed, no wake */
 		intr = signal_pending(current);
 	}
 	finish_wait(cv, &__w);

@@ -1058,14 +1058,14 @@ expect_red "$EVENT $LOCKPROOF" "an EXECUTIVE claim whose proof is reddened by de
 # leans on the real manifest; this one FABRICATES the most favourable defect an
 # adversary could write and it still must not pay: it names a real assertion
 # from the named proof (so the text half is satisfied outright, exactly as the
-# round-2 price would have accepted) and it edits kernel/vms_lock.c, a genuine
-# executive file that genuinely answers that proof -- just not for THIS service,
-# whose answer comes through the event-flag path. The only thing separating the
-# two is which code the mutation touches, which is the whole point.
+# round-2 price would have accepted) and it edits kernel-core/vms_lock.c, a
+# genuine executive file that genuinely answers that proof -- just not for THIS
+# service, whose answer comes through the event-flag path. The only thing
+# separating the two is which code the mutation touches, which is the whole point.
 cat > "$WORK/negctl_branch" <<'BRANCH_EOF'
     negctl-offpath)
         case "$_f" in
-        targets)      echo "kernel/vms_lock.c";;
+        targets)      echo "kernel-core/vms_lock.c";;
         require_fail) echo 'child: sys$enq CR+NOQUEUE denied while parent holds EX (public API)';;
         *)            echo "";;
         esac;;

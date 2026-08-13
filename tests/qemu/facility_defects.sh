@@ -1236,7 +1236,7 @@ EOF
     lock-compat-ex-cr)
         case "$_f" in
         facility)     echo "distributed lock manager (VMS_IOCTL_ENQ/DEQ/CONVERT/GETLKI)";;
-        targets)      echo "kernel/vms_lock.c";;
+        targets)      echo "kernel-core/vms_lock.c";;
         # MEASURED, and deliberately narrower than "the lock suites". The
         # matrix is indexed compat[requested][granted] (vms_lock.c:288), so
         # flipping compat[EX][CR] changes exactly one direction: EX requested
@@ -1263,7 +1263,7 @@ EOF
     lock-compat-cr-ex)
         case "$_f" in
         facility)     echo "distributed lock manager, the OTHER direction of the matrix, reached through the PUBLIC sys\$ API as well as raw ioctls";;
-        targets)      echo "kernel/vms_lock.c";;
+        targets)      echo "kernel-core/vms_lock.c";;
         suites_red)   echo "test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status";;
         blind_suites) echo "";;
         blind_why)    echo "";;
@@ -1338,7 +1338,7 @@ EOF
     lock-valblk-grant-not-delivered)
         case "$_f" in
         facility)     echo "distributed lock manager -- value block delivery to a waiter that BLOCKED and was later granted (VMS_IOCTL_ENQ/DEQ/GETLKI), vms-413";;
-        targets)      echo "kernel/vms_lock.c";;
+        targets)      echo "kernel-core/vms_lock.c";;
         # MEASURED. try_grant_waiters() (vms_lock.c:412) is the SOLE call
         # site that runs the mutated copy -- it fires from vms_ioctl_deq and
         # from vms_proc_release_locks, never from the immediate-grant branch
@@ -1390,7 +1390,7 @@ EOF
     lock-enq-immediate-grant-status-wrong)
         case "$_f" in
         facility)     echo "distributed lock manager -- \$ENQ's own success status, immediate-grant path (VMS_IOCTL_ENQ)";;
-        targets)      echo "kernel/vms_lock.c";;
+        targets)      echo "kernel-core/vms_lock.c";;
         # vms-053 (vms-2b2 follow-up). MEASURED at the 9-of-33 audit: no
         # existing mutation hunk sits inside vms_ioctl_enq's own body -- the
         # three lock-* entries above all edit code OUTSIDE it (the
@@ -1482,7 +1482,7 @@ EOF
     lock-deq-status-wrong)
         case "$_f" in
         facility)     echo "distributed lock manager -- \$DEQ's own success status (VMS_IOCTL_DEQ)";;
-        targets)      echo "kernel/vms_lock.c";;
+        targets)      echo "kernel-core/vms_lock.c";;
         # vms-053 (vms-2b2 follow-up). MEASURED at the 9-of-33 audit: no
         # existing mutation hunk sits inside vms_ioctl_deq's own body.
         #
@@ -1547,7 +1547,7 @@ EOF
     lock-convert-mode-not-updated)
         case "$_f" in
         facility)     echo "distributed lock manager -- \$ENQ/CONVERT's own granted-mode update, immediate-conversion path (VMS_IOCTL_CONVERT)";;
-        targets)      echo "kernel/vms_lock.c";;
+        targets)      echo "kernel-core/vms_lock.c";;
         # MEASURED, same audit. lock->granted_mode = args.lkmode also appears
         # in vms_ioctl_enq's immediate-grant branch (line 666) -- the SAME
         # text -- so this mutation is RANGE-ANCHORED to vms_ioctl_convert's
@@ -1569,7 +1569,7 @@ EOF
     resdir-master-csid-not-reported)
         case "$_f" in
         facility)     echo "distributed lock manager -- DLM resource-directory + local-mastering readback (VMS_IOCTL_GET_RESMASTER, vms-ci.5 DB)";;
-        targets)      echo "kernel/vms_lock.c";;
+        targets)      echo "kernel-core/vms_lock.c";;
         # vms_kif_get_resmaster()/VMS_IOCTL_GET_RESMASTER is reached by no
         # suite but test_kmod_resdir (grep across tests/qemu and
         # src/libvmssys confirms it) -- the raw-ioctl diagnostic this defect

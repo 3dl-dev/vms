@@ -78,11 +78,30 @@
  *   void exec_lock(exec_lock_t *)          acquire (blocks; no sleep held)
  *   void exec_unlock(exec_lock_t *)
  *   void exec_lock_destroy(exec_lock_t *)  no-op on Linux; mutex_destroy on NetBSD
+ *   int  exec_trylock(exec_lock_t *)       (Phase G) try to acquire without
+ *                                          blocking; nonzero iff acquired. Used by
+ *                                          the lock manager's deadlock walker,
+ *                                          which must probe another process's
+ *                                          lock-list lock while holding one and
+ *                                          cannot risk an ABBA block. Linux:
+ *                                          spin_trylock. NetBSD: mutex_tryenter.
  *
  * 2. Wait / wake  --  cv(9)-SHAPED CONTRACT.  READ THIS BEFORE USING.
  *
  *   void exec_cv_init(exec_cv_t *)
  *   int  exec_cv_wait(exec_cv_t *cv, exec_lock_t *lk)
+ *   int  exec_cv_wait_timeout(exec_cv_t *cv, exec_lock_t *lk, unsigned int ms,
+ *                             int *timed_out)      (Phase G) exec_cv_wait with a
+ *        bounded sleep: identical cv contract (caller holds `lk`, loops
+ *        re-testing the predicate), but the sleep ends after `ms` milliseconds if
+ *        no wake arrives, and `*timed_out` is set nonzero on exactly that timeout
+ *        (0 on a wake or a signal). Returns nonzero iff interrupted, like
+ *        exec_cv_wait. The lock manager's synchronous $ENQW uses it so a bounded
+ *        timeout can drive a deadlock re-scan for a request that only becomes
+ *        part of a cycle after it queued. Linux: the one-iteration expansion of
+ *        wait_event_interruptible_TIMEOUT (schedule_timeout). NetBSD:
+ *        cv_timedwait_sig (EWOULDBLOCK => *timed_out, ERESTART/EINTR => return
+ *        nonzero). Each call re-arms the full `ms`.
  *   void exec_cv_signal(exec_cv_t *)     wake ONE waiter
  *   void exec_cv_broadcast(exec_cv_t *)  wake ALL waiters
  *   void exec_cv_destroy(exec_cv_t *)

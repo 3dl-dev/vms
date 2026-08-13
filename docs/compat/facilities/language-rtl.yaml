@@ -1,0 +1,28 @@
+facility: language-rtl
+name: "Language-specific run-time libraries (FOR$/COB$/BAS$/PAS$)"
+domain: languages
+vms_ref: "VSI OpenVMS language RTL references"
+scope_1_0: undecided
+plan_ref: vms-082
+summary: >
+  Each VMS language ships a run-time library its compiled code links against
+  (I/O, intrinsics, string/array support). None of the language-specific RTLs
+  exist in OVMX (grep on origin/main: FOR$/COB$/BAS$/PAS$/PLI$ = 0 files). The
+  language-INDEPENDENT RTLs they build on (LIB$/STR$/MTH$/OTS$) are catalogued in
+  domain A and are the shared floor these would sit on — itself only partial.
+last_reviewed: 2026-08-13
+items:
+  - {id: for$, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
+     vms: "Fortran RTL — formatted/list-directed I/O, intrinsics, VAX-float", notes: "0 files on origin/main."}
+  - {id: cob$, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
+     vms: "COBOL RTL — record I/O, packed-decimal arithmetic, ACCEPT/DISPLAY", notes: "0 files. Depends on OTS$ packed-decimal (absent)."}
+  - {id: bas$, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
+     vms: "BASIC RTL — PRINT/INPUT, string dynamics, virtual arrays", notes: "0 files. Depends on varying-string descriptors (absent)."}
+  - {id: pas$, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
+     vms: "Pascal RTL", notes: "0 files."}
+  - {id: pli$, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: stretch,
+     vms: "PL/I RTL"}
+  - {id: language-rtl$shared, kind: subsystem, status: partial, authenticity: real, scope_1_0: in,
+     vms: "Language-independent RTL floor (LIB$/STR$/MTH$/OTS$) every language links",
+     evidence: docs/compat/facilities/ots.yaml,
+     notes: "Catalogued in domain A. Partial: OTS$ packed-decimal + comparison families and descriptor classes A/VS are absent — exactly the pieces COBOL/BASIC/Fortran need."}

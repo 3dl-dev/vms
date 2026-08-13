@@ -21,6 +21,7 @@ const CLUSTERS = [
   { key: 'sec-sysmgmt', facilities: 'sysuaf, privileges, rights-db, protection-acl, audit, sysgen, boot, install, accounting (system-management)' },
   { key: 'clustering', facilities: 'kernel-executive (runtime-arch); scs, nisca, connection-manager, cluster-dlm, mscp-serve, cluster-logicals, shadowing (clustering)' },
   { key: 'toolchain-net', facilities: 'object-format, image-activation, symbol-vectors, link, librarian, macro, message-compiler, mms-mmk, self-host-compiler (toolchain); tcpip-services, decnet, lat, ssh (networking); arch-targets (runtime-arch); smg (programming-interfaces)' },
+  { key: 'languages', facilities: 'compilers, language-rtl, calling-standard (languages) — VMS compilers (Fortran/COBOL/BASIC/Pascal/MACRO/Ada/PL/I/…), their FOR$/COB$/BAS$/PAS$ RTLs, and the OpenVMS Calling Standard. OVMX has only C (tcc); the rest are absent and mostly undecided for 1.0 (operator scope call). Do NOT scope a real VMS language out to protect the coverage number.' },
 ]
 
 const CENSUS_SCHEMA = {

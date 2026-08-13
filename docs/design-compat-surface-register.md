@@ -53,7 +53,7 @@ Source of truth: `docs/compat/`.
 
 ```
 docs/compat/
-  domains.yaml              # the 8 domains, facility order, controlled vocabularies
+  domains.yaml              # the 9 domains, facility order, controlled vocabularies
   facilities/
     str.yaml                # one file per facility
     sys-eventflags.yaml
@@ -99,7 +99,7 @@ docs/compat/
 ```yaml
 facility: STR$                       # canonical facility / namespace token
 name: String Manipulation RTL
-domain: programming-interfaces       # one of the 8 domains in domains.yaml
+domain: programming-interfaces       # one of the 9 domains in domains.yaml
 vms_ref: "OpenVMS RTL (STR$) Manual" # public-doc citation (clean-room provenance)
 scope_1_0: in                        # facility-level default; items may override
 tier: 1                              # optional: source-compat tier (1/2/3) from the contract
@@ -142,7 +142,7 @@ The website repo (`3dl-dev/openvmx-site`, GH Pages, `openvmx.3dl.dev`) consumes
 status / scope, a search box keyed on `id` (the corpus-lookup UX), and a coverage dashboard. The
 JSON is the contract between the repos; the product repo remains the single source of truth.
 
-## 6. The 8 domains (facility taxonomy)
+## 6. The 9 domains (facility taxonomy)
 
 Grounded in the current header/source inventory on `origin/main`:
 
@@ -164,6 +164,9 @@ Grounded in the current header/source inventory on `origin/main`:
 - **G. Networking** — TCP/IP Services (UCX QIO + C sockets + EWA0:); DECnet Phase IV; LAT; SSH.
 - **H. Runtime & architecture** — architecture targets (x86_64, aarch64, alpha, vax); kernel
   executive (`/dev/vms`); image activation / runtime linking.
+- **I. Languages & compilers** — compilers (Fortran/COBOL/BASIC/Pascal/MACRO/Ada/PL/I/BLISS/…),
+  their language RTLs (`FOR$`/`COB$`/`BAS$`/`PAS$`), and the OpenVMS Calling Standard. OVMX has
+  one language today: C, via tcc.
 
 ## 7. Maintenance — keeping it a living artifact
 
@@ -176,6 +179,42 @@ Grounded in the current header/source inventory on `origin/main`:
   references those via `plan_ref` rather than duplicating their plans.
 - **Re-derive, don't recall.** `last_reviewed` dates are the trust signal. A row is only as good as
   its last measurement against `origin/main`.
+
+## 7a. Reading the coverage index (and the catalogue frontier)
+
+The coverage index is a **denominator-relative** number, and the denominator is
+*the surfaces this register catalogues*. It is therefore **not** a percentage of
+all of VMS, and must never be read as one. VMS is enormous; a register is a
+curated map, and a map's coverage number is only as honest as its edges are
+visible.
+
+Two guards keep it honest:
+
+1. **Two numbers, headline = 1.0-scope.** The dashboard leads with the
+   **1.0-scope coverage index** (weighted over `scope_1_0: in` items only) —
+   "how far along on what we committed to for 1.0" — and also prints the
+   all-catalogued index. Neither is "% of VMS."
+2. **The frontier stays catalogued, not hidden.** Surfaces that are `out` or
+   `undecided` are *excluded from the in-scope index* but *remain in the
+   register* (and count in the all-catalogued index), so omissions are visible
+   rather than silently improving the score. The scope breakdown and per-domain
+   figures make the shape of what's deferred explicit.
+
+The **Languages & Compilers** domain is the worked example of why this matters.
+The first cut omitted it entirely — inflating "programming interfaces" by leaving
+out Fortran/COBOL/BASIC/Pascal/MACRO/Ada/… OVMX has exactly one language (C, via
+tcc); the rest are `absent`. Most are `undecided` pending an operator scope call
+(`vms-082`): the "run corpus software" goal (R2) leans heavily on COBOL/Fortran,
+so they are **not** automatically out-of-scope. **Consequence to watch:** because
+those 9 language surfaces are `undecided`, they are currently outside the
+in-scope denominator; if the operator rules them **into** 1.0, they flip to `in`,
+they are all `absent`, and the 1.0-scope index drops sharply. That movement is a
+feature — the number tracking a real scope decision — not noise to smooth over.
+
+**When you catalogue a new frontier (as Languages was), the honest expectation is
+that the number gets worse, not better.** If adding real VMS surface makes
+coverage go *up*, check that you didn't scope the new surface out to protect the
+score.
 
 ## 8. Roadmap position
 

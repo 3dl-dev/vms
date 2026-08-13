@@ -1,22 +1,22 @@
 {
   "version": "baseline-2026-08-13",
   "overall": {
-    "count": 395,
+    "count": 417,
     "by_status": {
       "verified": 27,
-      "implemented": 209,
-      "partial": 39,
+      "implemented": 210,
+      "partial": 44,
       "stub": 19,
       "designed": 2,
-      "absent": 99
+      "absent": 115
     },
     "by_authenticity": {
-      "real": 230,
-      "n/a": 87,
-      "advisory": 32,
+      "real": 234,
+      "n/a": 103,
+      "advisory": 34,
       "facade-risk": 46
     },
-    "coverage_index": 57.8,
+    "coverage_index": 55.5,
     "facade_risk": 46
   },
   "by_domain": {
@@ -169,6 +169,24 @@
       },
       "coverage_index": 67.7,
       "facade_risk": 2
+    },
+    "languages": {
+      "count": 22,
+      "by_status": {
+        "verified": 0,
+        "implemented": 1,
+        "partial": 5,
+        "stub": 0,
+        "designed": 0,
+        "absent": 16
+      },
+      "by_authenticity": {
+        "real": 4,
+        "advisory": 2,
+        "n/a": 16
+      },
+      "coverage_index": 15.2,
+      "facade_risk": 0
     }
   },
   "items": {
@@ -247,6 +265,26 @@
       "authenticity": "real",
       "scope_1_0": "in"
     },
+    "calling-standard$cs$arg-passing": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "calling-standard$cs$data-types": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "calling-standard$cs$condition-handling": {
+      "status": "partial",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "calling-standard$cs$register-usage": {
+      "status": "partial",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
     "chf$lib$establish": {
       "status": "implemented",
       "authenticity": "advisory",
@@ -321,6 +359,66 @@
       "status": "absent",
       "authenticity": "n/a",
       "scope_1_0": "in"
+    },
+    "compilers$c": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "compilers$macro32": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "out"
+    },
+    "compilers$macro64": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "compilers$fortran": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "compilers$cobol": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "compilers$basic": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "compilers$pascal": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "compilers$cxx": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "compilers$ada": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "compilers$pli": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "compilers$bliss": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "compilers$compilers$_other": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
     },
     "connection-manager$connection-manager$hello-protocol": {
       "status": "verified",
@@ -705,6 +803,36 @@
     "kernel-executive$kernel-executive$scheduling": {
       "status": "stub",
       "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "language-rtl$for$": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "language-rtl$cob$": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "language-rtl$bas$": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "language-rtl$pas$": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "language-rtl$pli$": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "language-rtl$language-rtl$shared": {
+      "status": "partial",
+      "authenticity": "real",
       "scope_1_0": "in"
     },
     "lat$lat$protocol": {

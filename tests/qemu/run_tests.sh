@@ -22,11 +22,18 @@ set -euo pipefail
 # outgrew it: measured under CI contention the guest was SIGTERM'd around suite
 # ~58/76 (e.g. test_syssvc_procnam) with ZERO failing assertions -- a pure
 # capacity red, not a suite defect, and load-dependent (it passed on 2 of 3
-# recent main runs). The work-floor is ~120s * 76/58 ~= 157s; 300s gives ~2x
-# headroom for CI load while staying far under the ci.yml kernel-executive
-# job's timeout-minutes: 60 bound. A wall overrun is detected (timeout rc=124)
-# and reported legibly below, but STILL fails the gate -- see the verdict path.
-TIMEOUT=300
+# recent main runs). The work-floor is ~120s * 76/58 ~= 157s.
+#
+# 300 -> 600 (rd vms-4003, extends vms-055). 300s fixed the common case (a
+# normal GitHub runner does the full 76-suite run in ~90s), but GitHub's TCG
+# runner quality varies wildly and a pathologically slow (~5x) runner reached
+# only 60/76 in 300s -- extrapolating, the full set needs ~380s there. 600s
+# covers that observed worst case (60 suites in 300s -> 76 ~= 380s) with ~1.5x
+# margin, while the ci.yml kernel-executive job's own timeout-minutes: 60
+# remains the OUTER bound so a genuine hang (not mere slowness) still surfaces.
+# A wall overrun is detected (timeout rc=124) and reported legibly below, but
+# STILL fails the gate -- see the verdict path.
+TIMEOUT=600
 KERNEL=/boot/vmlinuz
 INITRD=/initramfs.cpio.gz
 ARCH=$(uname -m)
@@ -180,6 +187,11 @@ else
         echo "that DID run may all have passed. The gate still fails (a real overrun"
         echo "must not be swallowed). If the suite set has genuinely outgrown ${TIMEOUT}s,"
         echo "raise TIMEOUT in tests/qemu/run_tests.sh; do not drop or skip a suite."
+        echo "If ${TIMEOUT}s ever proves insufficient, the SCALABLE fix (not implemented"
+        echo "here, rd vms-4003) is to SHARD the ~76 suites across N parallel VM jobs --"
+        echo "each shard boots its own QEMU over a suite subset, so its wall trivially"
+        echo "covers that subset regardless of runner speed; raising a single whole-VM"
+        echo "wall only buys linear headroom against an unbounded-slow TCG runner."
         echo ""
     fi
     echo "=========================================="

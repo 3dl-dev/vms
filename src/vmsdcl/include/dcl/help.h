@@ -16,8 +16,15 @@
  * "Sorry, no documentation on <topic>" not-found message are all taken from
  * public OpenVMS documentation and observed HELP output -- the VSI OpenVMS
  * DCL Dictionary (HELP) and the VSI OpenVMS User's Manual ("Getting Help").
- * The unpublished ".HLB" binary byte layout is NOT reproduced; this reader
- * consumes the documented ".HLP" source form directly, an OVMX design choice.
+ * The reader consumes both the documented numbered-level ".HLP" source form
+ * (help_open_file) and the compiled ".HLB" help library (help_open_hlb): a
+ * ".HLB" is the OVMX "LBRO" container (dcl/hlb.h) LIBRARY/HELP/CREATE writes,
+ * with one module per level-1 key. Its byte layout is an OVMX design choice
+ * (Rule 8) -- the VMS ".HLB" byte layout is unpublished -- and reconstructs the
+ * exact numbered-level text, so once loaded a ".HLB" is indistinguishable from
+ * its ".HLP" source. HELP locates its library through the HLP$LIBRARY,
+ * HLP$LIBRARY_1..n search list (help_open_libraries), the documented VMS HELP
+ * library search order (VSI OpenVMS DCL Dictionary, HELP).
  *
  * This engine is deliberately free of DCL-context and libvms-runtime
  * dependencies (only <stdio.h> for the FILE* sinks and VMS status codes) so it
@@ -52,6 +59,22 @@ help_lib_t *help_open_text(const char *text);
 /* Parse a HELP library from a file (numbered-level .HLP source). Returns NULL
  * if the file cannot be opened or on OOM. */
 help_lib_t *help_open_file(const char *linux_path);
+
+/* Parse a HELP library from a compiled .HLB (the OVMX "LBRO" container written
+ * by LIBRARY/HELP/CREATE; dcl/hlb.h). Each module is a level-1 key's subtree;
+ * the modules are read in index order and reconstruct the numbered-level tree.
+ * Returns NULL if the file is not a readable HELP library or on OOM. */
+help_lib_t *help_open_hlb(const char *linux_path);
+
+/* Open one library file, auto-detecting .HLB (LBRO magic) vs .HLP source. */
+help_lib_t *help_open_any(const char *linux_path);
+
+/* Open an ordered HLP$LIBRARY search list and merge it into one library: the
+ * paths (each .HLB or .HLP) are loaded in order, so a key defined in an earlier
+ * library takes precedence (VMS HELP searches HLP$LIBRARY, HLP$LIBRARY_1..n in
+ * order and the first match wins), and the top level is the union of all keys.
+ * Returns NULL if none could be opened or on OOM. */
+help_lib_t *help_open_libraries(const char *const paths[], int n);
 
 /* Release a library and all its nodes. */
 void help_close(help_lib_t *lib);

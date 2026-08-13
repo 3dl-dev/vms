@@ -13,8 +13,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <unistd.h>
 
 #include "dcl/help.h"
+#include "dcl/hlb.h"
 #include "ssdef.h"
 
 static int failures = 0;
@@ -149,6 +152,124 @@ int main(void)
     }
 
     help_close(lib);
+
+    /* 7. Compiled .HLB reader (help_open_hlb): build an LBRO HELP container by
+     * hand -- one module per level-1 key, module body = that key's subtree --
+     * and assert HELP navigates it identically to the .HLP source. This is the
+     * indexed binary form LIBRARY/HELP/CREATE writes (dcl/hlb.h). */
+    {
+        const char *modA_name = "COPY";
+        const char *modA_body =
+            "1 COPY\n"
+            " Copies a file.\n"
+            "2 Qualifiers\n"
+            "3 /LOG\n"
+            " Displays each file as it is copied.\n";
+        const char *modB_name = "DELETE";
+        const char *modB_body = "1 DELETE\n Deletes a file.\n";
+
+        char path[] = "/tmp/ovmx_help_XXXXXX";
+        int fd = mkstemp(path);
+        check(fd >= 0, "mkstemp for .HLB");
+        FILE *fp = fdopen(fd, "wb");
+
+        struct lbr_header hdr = {0};
+        hdr.magic = LBR_MAGIC;
+        hdr.type = LBR_TYPE_HELP;
+        hdr.module_count = 2;
+
+        struct lbr_module m[2];
+        memset(m, 0, sizeof(m));
+        uint32_t base = (uint32_t)(sizeof(hdr) + 2 * sizeof(struct lbr_module));
+        strncpy(m[0].name, modA_name, LBR_NAME_LEN - 1);
+        m[0].offset = base;
+        m[0].length = (uint32_t)strlen(modA_body);
+        strncpy(m[1].name, modB_name, LBR_NAME_LEN - 1);
+        m[1].offset = base + m[0].length;
+        m[1].length = (uint32_t)strlen(modB_body);
+
+        fwrite(&hdr, sizeof(hdr), 1, fp);
+        fwrite(m, sizeof(m[0]), 2, fp);
+        fwrite(modA_body, 1, m[0].length, fp);
+        fwrite(modB_body, 1, m[1].length, fp);
+        fclose(fp);
+
+        help_lib_t *hlb = help_open_hlb(path);
+        check(hlb != NULL, "help_open_hlb parses the compiled .HLB");
+
+        int st;
+        const char *toppath[] = { "COPY" };
+        char *out = render_path(hlb, toppath, 1, &st);
+        check(out && strstr(out, "Copies a file.") != NULL,
+              ".HLB HELP COPY shows body text from the compiled library");
+        free(out);
+
+        const char *deep[] = { "COPY", "Qualifiers", "/LOG" };
+        out = render_path(hlb, deep, 3, &st);
+        check(out && strstr(out, "Displays each file as it is copied.") != NULL,
+              ".HLB deep subtopic navigates the reconstructed tree");
+        free(out);
+
+        out = render_path(hlb, NULL, 0, &st);
+        check(out && strstr(out, "COPY") && strstr(out, "DELETE"),
+              ".HLB top level lists both module keys");
+        free(out);
+
+        /* help_open_any auto-detects the LBRO magic. */
+        help_lib_t *any = help_open_any(path);
+        check(any != NULL, "help_open_any detects and opens the .HLB");
+        help_close(any);
+
+        help_close(hlb);
+        unlink(path);
+    }
+
+    /* 8. HLP$LIBRARY search-list merge (help_open_libraries): two libraries,
+     * earlier wins for a shared key, top level is the union. */
+    {
+        char pa[] = "/tmp/ovmx_helpa_XXXXXX";
+        char pb[] = "/tmp/ovmx_helpb_XXXXXX";
+        int fa = mkstemp(pa), fb = mkstemp(pb);
+        check(fa >= 0 && fb >= 0, "mkstemp for search-list .HLP files");
+        FILE *A = fdopen(fa, "wb"), *B = fdopen(fb, "wb");
+        /* Library A: ALPHA + SHARED (variant A). */
+        fputs("1 ALPHA\n Alpha from library A.\n"
+              "1 SHARED\n SHARED as defined in library A.\n", A);
+        /* Library B: BETA + SHARED (variant B). */
+        fputs("1 BETA\n Beta from library B.\n"
+              "1 SHARED\n SHARED as defined in library B.\n", B);
+        fclose(A);
+        fclose(B);
+
+        const char *paths[] = { pa, pb };
+        help_lib_t *merged = help_open_libraries(paths, 2);
+        check(merged != NULL, "help_open_libraries opens the search list");
+
+        int st;
+        const char *pAlpha[] = { "ALPHA" };
+        char *out = render_path(merged, pAlpha, 1, &st);
+        check(out && strstr(out, "Alpha from library A.") != NULL,
+              "search list finds a key present only in the first library");
+        free(out);
+
+        const char *pBeta[] = { "BETA" };
+        out = render_path(merged, pBeta, 1, &st);
+        check(out && strstr(out, "Beta from library B.") != NULL && st == SS$_NORMAL,
+              "search continues to the second library (HLP$LIBRARY_1 semantics)");
+        free(out);
+
+        const char *pShared[] = { "SHARED" };
+        out = render_path(merged, pShared, 1, &st);
+        check(out && strstr(out, "SHARED as defined in library A.") != NULL,
+              "a key in both libraries resolves to the FIRST (search order wins)");
+        check(out && strstr(out, "SHARED as defined in library B.") == NULL,
+              "the later library does NOT override an earlier key");
+        free(out);
+
+        help_close(merged);
+        unlink(pa);
+        unlink(pb);
+    }
 
     if (failures == 0) {
         printf("HELP_ENGINE_OK\n");

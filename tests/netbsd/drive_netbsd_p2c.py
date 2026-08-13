@@ -192,6 +192,15 @@ def main():
 
     skip_set = bool(env("P2C_SKIP_SET"))
 
+    # PRIME_ONLY (rd vms-2d9): the dedicated cache-priming CI job runs this driver
+    # with PRIME_ONLY=1 so it ONLY installs (or restores) the shared NetBSD disk
+    # into the shared workdir and exits 0 -- it does not boot, build, or run the
+    # proof. This is what serialises the one unavoidable cold install into a single
+    # job that then saves the cache, so the three parallel test jobs always restore
+    # a warm image and never install. The install uses the SAME workdir + sets as
+    # the test run below, so the primed image is exactly what the test jobs reuse.
+    prime_only = bool(env("PRIME_ONLY"))
+
     log("NetBSD %s/%s  (OVMX/NetBSD common event flags, P2c)" % (version, arch))
     log("release URL:   %s" % url)
     log("work/cache dir: %s" % workdir)
@@ -210,7 +219,8 @@ def main():
         vmm_args=accel_args(),
     )
 
-    build_source_iso(guest_src_dir, src_iso)
+    if not prime_only:
+        build_source_iso(guest_src_dir, src_iso)
 
     child = None
     try:
@@ -225,6 +235,15 @@ def main():
                 return 3
         else:
             log("WARNING: no NETBSD_BOOT_ISO_SHA512 provided; skipping ISO verify")
+
+        if prime_only:
+            # Cache-priming mode: the shared disk is installed (or was restored)
+            # and verified; that is all this job exists to do. Exit 0 so the CI
+            # priming job's actions/cache SAVE runs and warms the shared image for
+            # every test job. No boot, no build, no proof here.
+            log("PRIME_ONLY: shared NetBSD disk is installed and present -- "
+                "cache primed, exiting 0 (no boot/build/proof)")
+            return 0
 
         a.persist = False
         cd_args = ["-drive",

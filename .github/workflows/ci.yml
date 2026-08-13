@@ -1569,9 +1569,78 @@ jobs:
   # to go RED -- proving the assertion has teeth for a couple of minutes of boot,
   # not a second full install.
   # -----------------------------------------------------------------------
+  # Job: PRIME the shared NetBSD install cache (rd vms-2d9). THE KEYSTONE of
+  # reliable NetBSD CI. This job runs FIRST and ALONE and is the ONLY writer of
+  # the shared installed-disk cache: it restores the shared image if present, or
+  # does the single unavoidable cold TCG install (~30-40min), and lets
+  # actions/cache SAVE it. The three test jobs `needs:` this job and RESTORE the
+  # warm image (restore-only), so they never install. This serialises the one
+  # cold install into a single job with generous headroom, instead of three test
+  # jobs racing three parallel ~30min cold installs -- which timed out and, being
+  # cancelled, never saved the cache, leaving every future run cold (permanent
+  # red). It installs via the P2c driver in PRIME_ONLY mode (install + exit; no
+  # boot/build/proof), which uses the SAME shared workdir + sets the test jobs
+  # reuse.
+  netbsd-amd64-prime-cache:
+    name: NetBSD/amd64 Prime Install Cache (QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75    # a genuine cold TCG install is ~30-40min; rest is headroom
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # THE ONE WRITER of the shared cache (full actions/cache: restore + save).
+      # Same key/path as the restore-only test jobs.
+      - name: Cache installed NetBSD image (shared, version-keyed) — WRITER
+        uses: actions/cache@v4
+        with:
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-amd64-install-
+
+      - name: Build NetBSD harness image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/netbsd/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-netbsd-ktest:latest
+          cache-from: type=gha,scope=netbsd-harness
+          cache-to: type=gha,mode=max,scope=netbsd-harness
+
+      - name: Install (or restore) the shared NetBSD disk; prime the cache
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache"
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  -e PRIME_ONLY=1 -e HARNESS_TIMEOUT=4200 \
+                  --entrypoint /netbsd/run_p2c.sh \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: priming the shared NetBSD install cache failed ($RC)"
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "cache primed, exiting 0" \
+            || { echo "FAIL: prime driver did not report the shared disk installed"; exit 1; }
+          ls "$GITHUB_WORKSPACE"/.netbsd-cache/anita-netbsd-shared-*/wd0.img >/dev/null 2>&1 \
+            || { echo "FAIL: shared wd0.img not present after prime"; exit 1; }
+          echo "PASS: shared NetBSD disk installed; actions/cache will SAVE it warm for every test job"
+
   netbsd-amd64-harness:
     name: NetBSD/amd64 Executive Harness (QEMU)
-    needs: changes
+    needs: [changes, netbsd-amd64-prime-cache]
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -1593,13 +1662,19 @@ jobs:
       # netbsd_version.env, and the same path, so ONE cold install serves all
       # three and NO OVMX-source change ever invalidates it (the OVMX module is
       # built in-guest after boot, never baked into the disk).
-      - name: Cache installed NetBSD image (shared, version-keyed)
-        uses: actions/cache@v4
+      # RESTORE-ONLY (rd vms-2d9): this test job never WRITES the cache. The
+      # prime job (a `needs:' of this job) already installed and SAVED the shared
+      # image, so we only restore it and always boot a WARM disk (~8min) -- the
+      # driver finds the image present and never installs. restore-only also means
+      # a timed-out/failed test job can never save a partial/corrupt image.
+      - name: Restore shared NetBSD image (version-keyed, restore-only)
+        uses: actions/cache/restore@v4
         with:
           path: .netbsd-cache
           key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
           restore-keys: |
             netbsd-amd64-install-
+          fail-on-cache-miss: false
 
       - name: Build NetBSD harness image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1682,7 +1757,7 @@ jobs:
   # the harness itself is real either way.
   netbsd-amd64-vms-pseudodev:
     name: NetBSD/amd64 vms Pseudo-Device (QEMU)
-    needs: changes
+    needs: [changes, netbsd-amd64-prime-cache]
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -1700,13 +1775,19 @@ jobs:
       # rebuilt in-guest every run, so they do NOT need to invalidate the image.
       # SHARED installed-disk cache (rd vms-2d9) -- IDENTICAL key/path to the
       # P2a and P2c jobs, so one install serves all three; version-keyed only.
-      - name: Cache installed NetBSD image (shared, version-keyed)
-        uses: actions/cache@v4
+      # RESTORE-ONLY (rd vms-2d9): this test job never WRITES the cache. The
+      # prime job (a `needs:' of this job) already installed and SAVED the shared
+      # image, so we only restore it and always boot a WARM disk (~8min) -- the
+      # driver finds the image present and never installs. restore-only also means
+      # a timed-out/failed test job can never save a partial/corrupt image.
+      - name: Restore shared NetBSD image (version-keyed, restore-only)
+        uses: actions/cache/restore@v4
         with:
           path: .netbsd-cache
           key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
           restore-keys: |
             netbsd-amd64-install-
+          fail-on-cache-miss: false
 
       - name: Build NetBSD harness image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1797,7 +1878,7 @@ jobs:
   # warm cache boots, builds one module + one tool, and runs the proof in minutes.
   netbsd-amd64-eflag-facility:
     name: NetBSD/amd64 Event-Flag Facility (QEMU)
-    needs: changes
+    needs: [changes, netbsd-amd64-prime-cache]
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -1813,13 +1894,19 @@ jobs:
       # P2a and P2b jobs, so one install serves all three; version-keyed only.
       # This is the fix for the eflag job's cold-install timeout: its key no
       # longer changes when src/kernel-core (or any OVMX source) changes.
-      - name: Cache installed NetBSD image (shared, version-keyed)
-        uses: actions/cache@v4
+      # RESTORE-ONLY (rd vms-2d9): this test job never WRITES the cache. The
+      # prime job (a `needs:' of this job) already installed and SAVED the shared
+      # image, so we only restore it and always boot a WARM disk (~8min) -- the
+      # driver finds the image present and never installs. restore-only also means
+      # a timed-out/failed test job can never save a partial/corrupt image.
+      - name: Restore shared NetBSD image (version-keyed, restore-only)
+        uses: actions/cache/restore@v4
         with:
           path: .netbsd-cache
           key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
           restore-keys: |
             netbsd-amd64-install-
+          fail-on-cache-miss: false
 
       - name: Build NetBSD harness image (gha layer cache)
         uses: docker/build-push-action@v6

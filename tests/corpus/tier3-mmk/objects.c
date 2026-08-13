@@ -65,7 +65,18 @@
     static int      	node_compare(struct OBJECT *, struct OBJECT *, int);
     static unsigned int node_alloc(char *, struct OBJECT **, struct OBJECT *);
 
-    static unsigned int objtree = 0;
+    /* OVMX (vms-d00): the LIB$*_TREE head cell holds the ADDRESS of the root
+    ** node, so it must be pointer-width.  Stock MMK declares it "unsigned int"
+    ** because on the VAX a longword IS a pointer; on a 64-bit OVMX target that
+    ** 4-byte cell is too small, and lib$insert_tree/lib$lookup_tree (which take
+    ** the head by reference and dereference it as a full-width pointer) then
+    ** read/write 8 bytes over it -- truncating the stored root pointer and
+    ** over-reading the adjacent global -- which SIGSEGVs when the reconstructed
+    ** garbage pointer is later dereferenced (crash varies with address layout,
+    ** hence executive-dependent).  A pointer-width head matches symbols.c's
+    ** apply_sort() "void *tree" and the LIB$ manual's quadword tree head on
+    ** 64-bit architectures. */
+    static void *objtree = 0;
 
 /*
 **++

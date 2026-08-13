@@ -41,6 +41,18 @@ extern "C" {
 
 #define ISS$M_NOAUDIT       0x00000001  /* Suppress audit logging */
 
+/* ================================================================
+ * ISS$C_ — Persona-id constants
+ *
+ * ORACLE-PINNED 2026-08-13 on OpenVMS VAX V7.3 (lab-2 node VAX1):
+ * $ISSDEF assembled as GLOBAL symbols, value read from the object GSD
+ * via ANALYZE/OBJECT/GSD (documented tool output, Rule 8).  This is a
+ * standalone persona-id constant, independent of OVMX's ISS$_ item-code
+ * numbering, so the authentic value is used directly.
+ * ================================================================ */
+
+#define ISS$C_ID_NATURAL    1   /* The natural (login) persona id */
+
 #ifdef __cplusplus
 }
 #endif

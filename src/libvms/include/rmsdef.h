@@ -143,6 +143,26 @@ extern "C" {
  * RMS status testing macros
  * ================================================================ */
 
+/* ================================================================
+ * RMS journaling / recovery-unit status codes (vms-f16).
+ *
+ * ORACLE-PINNED, 2026-08-13, on OpenVMS VAX V7.3 (lab-2 node VAX1) by
+ * assembling the public $RMSDEF macro as GLOBAL symbols and reading
+ * the defined longword out of the object GSD with ANALYZE/OBJECT/GSD
+ * (documented tool output, Rule 8).  Well-known anchors verified in
+ * the same dump: RMS$_NORMAL=65537, RMS$_EOF=98938, RMS$_FNF=98962.
+ *
+ * NOTE (finding, not fixed here): the SAME oracle dump shows several
+ * EXISTING RMS$_ values in this header disagree with real VMS V7.3 --
+ * e.g. RMS$_ACC is 114690 (0x1C002) on the oracle, not 98826; RMS$_CRE
+ * is 114698, not 98834; RMS$_RNF is 98994, not 98986; RMS$_RTB is
+ * 98728, not 99108.  Correcting those has a blast radius across RMS
+ * callers and their tests; filed separately, out of scope for vms-f16.
+ * ================================================================ */
+
+#define RMS$_ACC_RUJ        115044  /* Recovery-unit journal access error */
+#define RMS$_JNLNOTAUTH     115100  /* Journaling not authorized on the file */
+
 /* Test if RMS status indicates success */
 #define RMS$SUCCESS(sts)    ((sts) & 1)
 

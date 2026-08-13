@@ -76,7 +76,7 @@ static void test_parse(void)
     fab.fab$l_fna = spec1;
     fab.fab$b_fns = (uint8_t)strlen(spec1);
 
-    uint32_t st = sys$parse(&fab);
+    uint32_t st = sys$parse(&fab, 0, 0);
     check(st == RMS$_NORMAL, "parse LOGIN.COM;1 returns NORMAL");
     check(nam.nam$b_name > 0, "name component length set");
     check(nam.nam$l_name != NULL, "name component pointer set");
@@ -104,7 +104,7 @@ static void test_parse(void)
     memset(esa, 0, sizeof(esa));
     nam.nam$b_esl = 0;
 
-    st = sys$parse(&fab);
+    st = sys$parse(&fab, 0, 0);
     check(st == RMS$_NORMAL, "parse [USERS.BARON]STARTUP.COM;2 returns NORMAL");
     check(nam.nam$b_dir > 0, "directory component present");
     check(nam.nam$l_fnb & NAM$M_EXP_DIR, "EXP_DIR flag set");
@@ -116,7 +116,7 @@ static void test_parse(void)
     memset(esa, 0, sizeof(esa));
     nam.nam$b_esl = 0;
 
-    st = sys$parse(&fab);
+    st = sys$parse(&fab, 0, 0);
     check(st == RMS$_NORMAL, "parse NOEXT (no type) returns NORMAL");
     check(nam.nam$b_name > 0, "name present for NOEXT");
 
@@ -127,12 +127,12 @@ static void test_parse(void)
     memset(esa, 0, sizeof(esa));
     nam.nam$b_esl = 0;
 
-    st = sys$parse(&fab);
+    st = sys$parse(&fab, 0, 0);
     check(st == RMS$_NORMAL, "parse *.COM;* returns NORMAL");
     check(nam.nam$l_fnb & NAM$M_WILDCARD, "wildcard flag set for *.COM;*");
 
     /* Test 5: NULL FAB returns RMS$_FAB */
-    st = sys$parse(NULL);
+    st = sys$parse(NULL, 0, 0);
     check(st == RMS$_FAB, "parse NULL FAB returns RMS$_FAB");
 
     /* Test 6: FAB with no NAM returns RMS$_NAM */
@@ -141,7 +141,7 @@ static void test_parse(void)
     fab2.fab$l_fna = spec5;
     fab2.fab$b_fns = (uint8_t)strlen(spec5);
     fab2.fab$l_nam = NULL;
-    st = sys$parse(&fab2);
+    st = sys$parse(&fab2, 0, 0);
     check(st == RMS$_NAM, "parse with no NAM block returns RMS$_NAM");
 }
 
@@ -163,7 +163,7 @@ static void test_create_close(void)
     fab.fab$b_rfm  = FAB$C_STMLF;
     fab.fab$b_org  = FAB$C_SEQ;
 
-    uint32_t st = sys$create(&fab);
+    uint32_t st = sys$create(&fab, 0, 0);
     check(st == RMS$_NORMAL, "sys$create returns NORMAL");
     check(fab.fab$l_sts == RMS$_CREATED, "fab$l_sts is RMS$_CREATED after create");
     check(fab.fab$w_ifi != 0, "IFI assigned after create");
@@ -177,7 +177,7 @@ static void test_create_close(void)
     tmp_path[sizeof(tmp_path) - 1] = '\0';
     snprintf(tmp_meta, sizeof(tmp_meta), "%.246s.rms_meta", tmp_path);
 
-    st = sys$close(&fab);
+    st = sys$close(&fab, 0, 0);
     check(st == RMS$_NORMAL, "sys$close returns NORMAL after create");
     check(fab._linux_fd == -1, "linux fd is -1 after close");
     check(fab.fab$w_ifi == 0, "IFI cleared after close");
@@ -212,7 +212,7 @@ static void test_open_close(void)
     cfab.fab$b_fns = (uint8_t)strlen(createfile);
     cfab.fab$b_fac = FAB$M_PUT | FAB$M_GET;
     cfab.fab$b_rfm = FAB$C_STMLF;
-    sys$create(&cfab);
+    sys$create(&cfab, 0, 0);
 
     /*
      * Save the resolved (versioned) path BEFORE closing.
@@ -229,7 +229,7 @@ static void test_open_close(void)
      * grants access regardless of the calling UID.
      */
     chmod(resolved_open, 0777);
-    sys$close(&cfab);
+    sys$close(&cfab, 0, 0);
 
     /* Now open using sys$open with the resolved (versioned) path */
     struct FAB fab = cc$rms_fab;
@@ -237,12 +237,12 @@ static void test_open_close(void)
     fab.fab$b_fns  = (uint8_t)strlen(resolved_open);
     fab.fab$b_fac  = FAB$M_GET;
 
-    uint32_t st = sys$open(&fab);
+    uint32_t st = sys$open(&fab, 0, 0);
     check(st == RMS$_NORMAL, "sys$open returns NORMAL for existing file");
     check(fab.fab$l_sts == RMS$_NORMAL, "fab$l_sts is NORMAL after open");
     check(fab.fab$w_ifi != 0, "IFI assigned after open");
 
-    st = sys$close(&fab);
+    st = sys$close(&fab, 0, 0);
     check(st == RMS$_NORMAL, "sys$close returns NORMAL after open");
 
     /* Clean up */
@@ -257,7 +257,7 @@ static void test_open_close(void)
     fab2.fab$b_fns = (uint8_t)strlen(nofile);
     fab2.fab$b_fac = FAB$M_GET;
 
-    st = sys$open(&fab2);
+    st = sys$open(&fab2, 0, 0);
     check(st == RMS$_FNF, "sys$open non-existent file returns RMS$_FNF");
 }
 
@@ -281,14 +281,14 @@ static void test_record_io(void)
     fab.fab$b_rfm = FAB$C_STMLF;
     fab.fab$b_org = FAB$C_SEQ;
 
-    uint32_t st = sys$create(&fab);
+    uint32_t st = sys$create(&fab, 0, 0);
     check(st == RMS$_NORMAL, "create record file");
 
     /* Connect RAB */
     struct RAB rab = cc$rms_rab;
     rab.rab$l_fab = &fab;
 
-    st = sys$connect(&rab);
+    st = sys$connect(&rab, 0, 0);
     check(st == RMS$_NORMAL, "sys$connect returns NORMAL");
     check(rab.rab$w_isi != 0, "ISI assigned after connect");
 
@@ -299,21 +299,21 @@ static void test_record_io(void)
 
     rab.rab$l_rbf = rec1;
     rab.rab$w_rsz = (uint16_t)strlen(rec1);
-    st = sys$put(&rab);
+    st = sys$put(&rab, 0, 0);
     check(st == RMS$_NORMAL, "sys$put record 1");
 
     rab.rab$l_rbf = rec2;
     rab.rab$w_rsz = (uint16_t)strlen(rec2);
-    st = sys$put(&rab);
+    st = sys$put(&rab, 0, 0);
     check(st == RMS$_NORMAL, "sys$put record 2");
 
     rab.rab$l_rbf = rec3;
     rab.rab$w_rsz = (uint16_t)strlen(rec3);
-    st = sys$put(&rab);
+    st = sys$put(&rab, 0, 0);
     check(st == RMS$_NORMAL, "sys$put record 3");
 
     /* Rewind */
-    st = sys$rewind(&rab);
+    st = sys$rewind(&rab, 0, 0);
     check(st == RMS$_NORMAL, "sys$rewind returns NORMAL");
     check(rab._current_offset == 0, "offset is 0 after rewind");
     check(rab._eof == 0, "EOF cleared after rewind");
@@ -323,31 +323,31 @@ static void test_record_io(void)
     rab.rab$l_ubf = rbuf;
     rab.rab$w_usz = sizeof(rbuf);
 
-    st = sys$get(&rab);
+    st = sys$get(&rab, 0, 0);
     check(st == RMS$_NORMAL, "sys$get record 1");
     check(rab.rab$w_rsz == (uint16_t)strlen(rec1), "record 1 size correct");
     check(strncmp(rbuf, rec1, rab.rab$w_rsz) == 0, "record 1 content correct");
 
-    st = sys$get(&rab);
+    st = sys$get(&rab, 0, 0);
     check(st == RMS$_NORMAL, "sys$get record 2");
     check(rab.rab$w_rsz == (uint16_t)strlen(rec2), "record 2 size correct");
     check(strncmp(rbuf, rec2, rab.rab$w_rsz) == 0, "record 2 content correct");
 
-    st = sys$get(&rab);
+    st = sys$get(&rab, 0, 0);
     check(st == RMS$_NORMAL, "sys$get record 3");
     check(rab.rab$w_rsz == (uint16_t)strlen(rec3), "record 3 size correct");
     check(strncmp(rbuf, rec3, rab.rab$w_rsz) == 0, "record 3 content correct");
 
     /* Next get should return EOF */
-    st = sys$get(&rab);
+    st = sys$get(&rab, 0, 0);
     check(st == RMS$_EOF, "sys$get at EOF returns RMS$_EOF");
 
     /* Disconnect */
-    st = sys$disconnect(&rab);
+    st = sys$disconnect(&rab, 0, 0);
     check(st == RMS$_NORMAL, "sys$disconnect returns NORMAL");
     check(rab.rab$w_isi == 0, "ISI cleared after disconnect");
 
-    sys$close(&fab);
+    sys$close(&fab, 0, 0);
 
     /* Clean up */
     unlink(recfile);
@@ -374,45 +374,45 @@ static void test_fixed_records(void)
     fab.fab$b_org = FAB$C_SEQ;
     fab.fab$w_mrs = 16;  /* 16-byte fixed records */
 
-    uint32_t st = sys$create(&fab);
+    uint32_t st = sys$create(&fab, 0, 0);
     check(st == RMS$_NORMAL, "create fixed-length file");
 
     struct RAB rab = cc$rms_rab;
     rab.rab$l_fab = &fab;
-    sys$connect(&rab);
+    sys$connect(&rab, 0, 0);
 
     /* Write a fixed-length record */
     char data[16] = "ABCDEFGHIJKLMNOP";
     rab.rab$l_rbf = data;
     rab.rab$w_rsz = 16;
-    st = sys$put(&rab);
+    st = sys$put(&rab, 0, 0);
     check(st == RMS$_NORMAL, "sys$put fixed-length record");
 
     /* Write another */
     char data2[16] = "0123456789ABCDEF";
     rab.rab$l_rbf = data2;
     rab.rab$w_rsz = 16;
-    st = sys$put(&rab);
+    st = sys$put(&rab, 0, 0);
     check(st == RMS$_NORMAL, "sys$put fixed-length record 2");
 
-    sys$rewind(&rab);
+    sys$rewind(&rab, 0, 0);
 
     char rbuf[32];
     rab.rab$l_ubf = rbuf;
     rab.rab$w_usz = sizeof(rbuf);
 
-    st = sys$get(&rab);
+    st = sys$get(&rab, 0, 0);
     check(st == RMS$_NORMAL, "sys$get fixed record 1");
     check(rab.rab$w_rsz == 16, "fixed record 1 size is 16");
     check(memcmp(rbuf, data, 16) == 0, "fixed record 1 content correct");
 
-    st = sys$get(&rab);
+    st = sys$get(&rab, 0, 0);
     check(st == RMS$_NORMAL, "sys$get fixed record 2");
     check(rab.rab$w_rsz == 16, "fixed record 2 size is 16");
     check(memcmp(rbuf, data2, 16) == 0, "fixed record 2 content correct");
 
-    sys$disconnect(&rab);
-    sys$close(&fab);
+    sys$disconnect(&rab, 0, 0);
+    sys$close(&fab, 0, 0);
 
     unlink(fixfile);
     unlink(fixmeta);

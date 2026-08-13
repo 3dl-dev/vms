@@ -20,7 +20,7 @@ int main(void) {
     fab.fab$b_fac = FAB$M_PUT;
     fab.fab$b_rfm = FAB$C_STMLF;
 
-    status = sys$create(&fab);
+    status = sys$create(&fab, 0, 0);
     if (!(status & 1)) {
         printf("FAIL: sys$create returned %08X\n", status);
         return 1;
@@ -28,7 +28,7 @@ int main(void) {
 
     rab = cc$rms_rab;
     rab.rab$l_fab = &fab;
-    status = sys$connect(&rab);
+    status = sys$connect(&rab, 0, 0);
     if (!(status & 1)) {
         printf("FAIL: sys$connect returned %08X\n", status);
         return 1;
@@ -39,14 +39,14 @@ int main(void) {
     for (int i = 0; i < 3; i++) {
         rab.rab$l_rbf = (char *)lines[i];
         rab.rab$w_rsz = (uint16_t)strlen(lines[i]);
-        status = sys$put(&rab);
+        status = sys$put(&rab, 0, 0);
         if (!(status & 1)) {
             printf("FAIL: sys$put returned %08X\n", status);
             return 1;
         }
     }
 
-    sys$close(&fab);
+    sys$close(&fab, 0, 0);
 
     /* Re-open and read back */
     fab = cc$rms_fab;
@@ -55,7 +55,7 @@ int main(void) {
     fab.fab$b_fac = FAB$M_GET;
     fab.fab$b_rfm = FAB$C_STMLF;
 
-    status = sys$open(&fab);
+    status = sys$open(&fab, 0, 0);
     if (!(status & 1)) {
         printf("FAIL: sys$open returned %08X\n", status);
         return 1;
@@ -65,7 +65,7 @@ int main(void) {
     rab.rab$l_fab = &fab;
     rab.rab$l_ubf = buffer;
     rab.rab$w_usz = sizeof(buffer);
-    status = sys$connect(&rab);
+    status = sys$connect(&rab, 0, 0);
     if (!(status & 1)) {
         printf("FAIL: sys$connect (read) returned %08X\n", status);
         return 1;
@@ -73,7 +73,7 @@ int main(void) {
 
     int count = 0;
     while (1) {
-        status = sys$get(&rab);
+        status = sys$get(&rab, 0, 0);
         if (status == RMS$_EOF) break;
         if (!(status & 1)) {
             printf("FAIL: sys$get returned %08X\n", status);
@@ -84,7 +84,7 @@ int main(void) {
         count++;
     }
 
-    sys$close(&fab);
+    sys$close(&fab, 0, 0);
 
     if (count != 3) {
         printf("FAIL: Expected 3 records, got %d\n", count);

@@ -59,17 +59,17 @@ int ovmx_rms_open_read(const char *filename)
     sl->fab.fab$b_rfm = FAB$C_FIX; /* raw fixed-size chunks: byte-exact, no
                                      * text delimiter munging of C source */
 
-    uint32_t st = sys$open(&sl->fab);
+    uint32_t st = sys$open(&sl->fab, 0, 0);
     fprintf(stderr, "OVMX-RMS: sys$open(\"%s\") -> %08X\n", filename, st);
     if (!(st & 1))
         return -1;
 
     sl->rab = cc$rms_rab;
     sl->rab.rab$l_fab = &sl->fab;
-    st = sys$connect(&sl->rab);
+    st = sys$connect(&sl->rab, 0, 0);
     fprintf(stderr, "OVMX-RMS: sys$connect(read \"%s\") -> %08X\n", filename, st);
     if (!(st & 1)) {
-        sys$close(&sl->fab);
+        sys$close(&sl->fab, 0, 0);
         return -1;
     }
 
@@ -88,7 +88,7 @@ static int ovmx_rms_refill(ovmx_rms_read_slot *sl)
     sl->rab.rab$l_ubf = sl->chunkbuf;
     sl->rab.rab$w_usz = OVMX_RMS_CHUNK;
 
-    uint32_t st = sys$get(&sl->rab);
+    uint32_t st = sys$get(&sl->rab, 0, 0);
     if (st == RMS$_EOF) {
         fprintf(stderr, "OVMX-RMS: sys$get(\"%s\") -> EOF\n", sl->filename);
         sl->eof = 1;
@@ -139,7 +139,7 @@ int ovmx_rms_close_read(int fd)
         return -1;
     ovmx_rms_read_slot *sl = &g_read_slots[idx];
 
-    uint32_t st = sys$close(&sl->fab);
+    uint32_t st = sys$close(&sl->fab, 0, 0);
     fprintf(stderr, "OVMX-RMS: sys$close(read \"%s\") -> %08X\n", sl->filename, st);
     sl->in_use = 0;
     return (st & 1) ? 0 : -1;
@@ -175,7 +175,7 @@ int ovmx_rms_deliver_file(const char *scratch_path, const char *dest_path)
                                  * a raw byte-exact passthrough with no
                                  * padding or delimiter (see rms_seq.c) */
 
-    uint32_t st = sys$create(&fab);
+    uint32_t st = sys$create(&fab, 0, 0);
     fprintf(stderr, "OVMX-RMS: sys$create(\"%s\") -> %08X\n", dest_path, st);
     if (!(st & 1)) {
         fclose(in);
@@ -184,10 +184,10 @@ int ovmx_rms_deliver_file(const char *scratch_path, const char *dest_path)
 
     struct RAB rab = cc$rms_rab;
     rab.rab$l_fab = &fab;
-    st = sys$connect(&rab);
+    st = sys$connect(&rab, 0, 0);
     fprintf(stderr, "OVMX-RMS: sys$connect(write \"%s\") -> %08X\n", dest_path, st);
     if (!(st & 1)) {
-        sys$close(&fab);
+        sys$close(&fab, 0, 0);
         fclose(in);
         return -1;
     }
@@ -199,10 +199,10 @@ int ovmx_rms_deliver_file(const char *scratch_path, const char *dest_path)
     while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
         rab.rab$l_rbf = buf;
         rab.rab$w_rsz = (uint16_t)n;
-        st = sys$put(&rab);
+        st = sys$put(&rab, 0, 0);
         if (!(st & 1)) {
             fprintf(stderr, "OVMX-RMS: sys$put(\"%s\") -> %08X (error)\n", dest_path, st);
-            sys$close(&fab);
+            sys$close(&fab, 0, 0);
             fclose(in);
             return -1;
         }
@@ -213,7 +213,7 @@ int ovmx_rms_deliver_file(const char *scratch_path, const char *dest_path)
             dest_path, nputs, total);
 
     fclose(in);
-    st = sys$close(&fab);
+    st = sys$close(&fab, 0, 0);
     fprintf(stderr, "OVMX-RMS: sys$close(write \"%s\") -> %08X\n", dest_path, st);
     return (st & 1) ? 0 : -1;
 }

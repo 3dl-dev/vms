@@ -29,6 +29,7 @@
  */
 
 #include <stdio.h>
+#include "rms_internal.h"
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
@@ -106,7 +107,7 @@ static void vms_to_glob(const char *vms, char *glob, size_t globlen)
  *   RMS$_DNF    - Directory not found
  *   RMS$_DME    - Memory exhausted
  */
-uint32_t sys$search(void *fab_ptr)
+static uint32_t rms_impl_search(void *fab_ptr)
 {
     struct FAB *fab = (struct FAB *)fab_ptr;
     if (!fab || fab->fab$b_bid != FAB$C_BID) {
@@ -235,4 +236,16 @@ uint32_t sys$search(void *fab_ptr)
     fab->fab$l_sts = RMS$_NMF;
     nam->nam$l_sts = RMS$_NMF;
     return RMS$_NMF;
+}
+
+
+/* ============================================================
+ * Public RMS entry points: VMS three-argument form
+ *   SYS$xxx cb ,[err] ,[suc]   (VSI OpenVMS RMS Reference, Part III)
+ * Thin wrappers over the synchronous rms_impl_* bodies above that
+ * dispatch the optional AST-level completion routine (rms_complete).
+ * ============================================================ */
+uint32_t sys$search(void *fab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_search(fab), fab, err, suc);
 }

@@ -85,6 +85,11 @@ libvms_add_test(test_libvms_lib_rtl_batch3
 libvms_add_test(test_libvms_lib_rtl_batch4
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_rtl_batch4.c)
 
+# Test 4c: sys$getjpiw with an ILE3 item list (vms-da9) — regression for the
+# starlet.h signature fix (prcnam/itmlst are void*, so ILE3 item lists compile).
+libvms_add_test(test_libvms_getjpi_ile3
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_getjpi_ile3.c)
+
 # Test 5: mth$sin / mth$cos / mth$sqrt / mth$exp / mth$alog / mth$power / etc.
 libvms_add_test(test_libvms_mth_routines
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mth_routines.c)

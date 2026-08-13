@@ -92,16 +92,16 @@ static uint32_t db_setup(struct parts_db *db, const char *filespec, int create)
     init_fab(&r->fab, &r->xab, filespec, create);
     init_rab(&r->rab, &r->fab);
 
-    uint32_t st = create ? sys$create(&r->fab) : sys$open(&r->fab);
+    uint32_t st = create ? sys$create(&r->fab, 0, 0) : sys$open(&r->fab, 0, 0);
     if (!$VMS_STATUS_SUCCESS(st)) {
         parts_db_last_stv = r->fab.fab$l_stv;   /* errno, for diagnosis */
         free(r);
         return st;
     }
 
-    st = sys$connect(&r->rab);
+    st = sys$connect(&r->rab, 0, 0);
     if (!$VMS_STATUS_SUCCESS(st)) {
-        sys$close(&r->fab);
+        sys$close(&r->fab, 0, 0);
         free(r);
         return st;
     }
@@ -133,7 +133,7 @@ uint32_t parts_db_put(struct parts_db *db, const struct part_record *rec)
     rab->rab$b_rac = RAB$C_SEQ;
     rab->rab$l_rbf = (char *)rec;
     rab->rab$w_rsz = PARTS_REC_SIZE;
-    return sys$put(rab);
+    return sys$put(rab, 0, 0);
 }
 
 uint32_t parts_db_get(struct parts_db *db, const char *part_number,
@@ -147,7 +147,7 @@ uint32_t parts_db_get(struct parts_db *db, const char *part_number,
     rab->rab$l_rop = 0;                          /* exact match             */
     rab->rab$l_ubf = (char *)rec_out;
     rab->rab$w_usz = PARTS_REC_SIZE;
-    return sys$get(rab);
+    return sys$get(rab, 0, 0);
 }
 
 void parts_db_close(struct parts_db *db)
@@ -156,8 +156,8 @@ void parts_db_close(struct parts_db *db)
         return;
     struct RAB *rab = (struct RAB *)db->rab;
     struct FAB *fab = (struct FAB *)db->fab;
-    sys$disconnect(rab);
-    sys$close(fab);
+    sys$disconnect(rab, 0, 0);
+    sys$close(fab, 0, 0);
     /* fab is the head of the single allocation made in db_setup(). */
     free(fab);
     db->fab = db->rab = db->xab = NULL;

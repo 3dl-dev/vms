@@ -189,7 +189,7 @@ void _start(void)
     nam.nam\$l_esa = esa;
     nam.nam\$b_ess = 255;
 
-    unsigned rc = sys\$parse(&fab);       /* RMS\$_NORMAL == 65537 */
+    unsigned rc = sys\$parse(&fab, 0, 0); /* RMS\$_NORMAL == 65537 */
 
     int code;
     if (rc != RMS\$_NORMAL)          code = 10;                 /* parse failed */

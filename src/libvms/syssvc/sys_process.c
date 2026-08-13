@@ -265,11 +265,19 @@ static uint32_t jpi_cputim(uint32_t linux_pid, uint32_t *out)
  * for a process that does not exist.
  */
 uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
-                    const struct dsc$descriptor_s *prcnam,
-                    const struct item_list_3 *itmlst,
+                    void *prcnam_arg,
+                    void *itmlst_arg,
                     void *iosb,
                     void (*astadr)(uint32_t), uint32_t astprm) {
     (void)efn; (void)iosb; (void)astadr; (void)astprm;
+
+    /* prcnam/itmlst are void* in the VSI prototype (see starlet.h) so callers
+     * may pass any descriptor / item-list flavour (ILE3, item_list_3, ...);
+     * ILE3 and item_list_3 share an identical layout. */
+    const struct dsc$descriptor_s *prcnam =
+        (const struct dsc$descriptor_s *)prcnam_arg;
+    const struct item_list_3 *itmlst =
+        (const struct item_list_3 *)itmlst_arg;
 
     if (!itmlst) return SS$_BADPARAM;
 
@@ -423,8 +431,8 @@ uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
  * Same as sys$getjpi since our implementation is already synchronous.
  */
 uint32_t sys$getjpiw(uint32_t efn, const uint32_t *pidadr,
-                     const struct dsc$descriptor_s *prcnam,
-                     const struct item_list_3 *itmlst,
+                     void *prcnam,
+                     void *itmlst,
                      void *iosb,
                      void (*astadr)(uint32_t), uint32_t astprm) {
     return sys$getjpi(efn, pidadr, prcnam, itmlst, iosb, astadr, astprm);

@@ -157,33 +157,39 @@ static void test_datetime(void)
     check(nt[0] == 2003 && nt[1] == 2 && nt[2] == 1 && nt[3] == 3 &&
           nt[4] == 4 && nt[5] == 5 && nt[6] == 6, "cvt_vectim round-trips via numtim");
 
-    /* Delta-time parsing was added to sys$bintim for these */
-    uint64_t abs1 = 0, delta = 0, sum = 0;
+    /* Delta-time parsing was added to sys$bintim for these.
+     * sys$bintim's timadr is a GENERIC_64* (VSI $BINTIM signature, vms-da9);
+     * the corpus passes a GENERIC_64 by address exactly like this. */
+    GENERIC_64 abs1 = {0}, delta = {0}, sum = {0};
     struct dsc$descriptor_s abs1_d = { 23, DSC$K_DTYPE_T, DSC$K_CLASS_S,
                                        (char *)"25-Sep-2003 19:00:00.00" };
     struct dsc$descriptor_s delta_d = { 13, DSC$K_DTYPE_T, DSC$K_CLASS_S,
                                         (char *)"1 01:00:00.00" };
     check(sys$bintim(&abs1_d, &abs1) == SS$_NORMAL, "bintim parses absolute time");
     check(sys$bintim(&delta_d, &delta) == SS$_NORMAL, "bintim parses delta time");
-    check((int64_t)delta < 0, "delta time stored negative");
-    check((int64_t)delta == -(int64_t)(25ULL * 3600ULL * 10000000ULL),
+    check((int64_t)delta.gen64$q_quadword < 0, "delta time stored negative");
+    check((int64_t)delta.gen64$q_quadword == -(int64_t)(25ULL * 3600ULL * 10000000ULL),
           "delta magnitude = 25 hours");
 
-    check(lib$add_times(&abs1, &delta, &sum) == SS$_NORMAL, "add_times returns SS$_NORMAL");
-    sys$numtim(nt, &sum);
+    check(lib$add_times(&abs1.gen64$q_quadword, &delta.gen64$q_quadword,
+                        &sum.gen64$q_quadword) == SS$_NORMAL,
+          "add_times returns SS$_NORMAL");
+    sys$numtim(nt, &sum.gen64$q_quadword);
     check(nt[2] == 26 && nt[1] == 9 && nt[0] == 2003 && nt[3] == 20 &&
           nt[4] == 0 && nt[5] == 0,
           "add_times abs+delta = 26-Sep-2003 20:00:00");
 
     /* absolute - absolute -> delta (negative magnitude) */
     uint64_t diff = 0;
-    check(lib$sub_times(&sum, &abs1, &diff) == SS$_NORMAL, "sub_times abs-abs OK");
+    check(lib$sub_times(&sum.gen64$q_quadword, &abs1.gen64$q_quadword, &diff) == SS$_NORMAL,
+          "sub_times abs-abs OK");
     check((int64_t)diff == -(int64_t)(25ULL * 3600ULL * 10000000ULL),
           "sub_times abs-abs = -25h delta");
 
     /* absolute - delta -> earlier absolute */
     uint64_t earlier = 0;
-    check(lib$sub_times(&sum, &delta, &earlier) == SS$_NORMAL, "sub_times abs-delta OK");
+    check(lib$sub_times(&sum.gen64$q_quadword, &delta.gen64$q_quadword, &earlier) == SS$_NORMAL,
+          "sub_times abs-delta OK");
     sys$numtim(nt, &earlier);
     check(nt[2] == 25 && nt[3] == 19, "sub_times abs-delta = 25-Sep 19:00");
 

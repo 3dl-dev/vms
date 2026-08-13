@@ -54,6 +54,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     rtl/sysuaf.c
     rtl/rightslist.c
     rtl/str_util.c
+    rtl/lib_cli.c
 )
 target_include_directories(vms PUBLIC include ${VMS_RMS_INCLUDE_DIR} ${VMS_FS_INCLUDE_DIR} ${VMS_LNM_INCLUDE_DIR} ${VMS_PROCESS_INCLUDE_DIR})
 # sys_imgact.c + imgact_prodreg.c consume the OVMX symbol-vector image format

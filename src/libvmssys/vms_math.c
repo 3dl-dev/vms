@@ -12,6 +12,43 @@
 #include <stdint.h>
 
 /* ================================================================
+ * Float format: IEEE-754 vs VAX F/D/G  (rd vms-30a, audit item 5.3)
+ * ================================================================
+ * Several routines below reach into the raw bits of a `double`: they hardcode
+ * IEEE hex words for +/-inf and NaN, and do exponent surgery (shift by 52,
+ * bias 1023) in exp()/log(). Those are valid ONLY on IEEE-754 targets. On the
+ * netbsd-vax substrate gcc emits native VAX F/D/G float, whose field layout,
+ * bias and byte order are NOT IEEE-754 -- so the bit tricks would corrupt the
+ * value there. VAX float also has no true Inf/NaN encoding.
+ *
+ * So we split by target: IEEE-754 targets keep the exact bit-trick fast path
+ * (the raw-freestanding Linux build compiles with -ffreestanding -fno-builtin
+ * and MUST NOT emit libm calls, so the bit path is load-bearing there). The
+ * non-IEEE (VAX) path uses only arithmetic + the frexp/ldexp/huge_val/nan
+ * compiler builtins, which gcc lowers to target-correct VAX-float operations
+ * (NetBSD libm backs them on the link-libc substrate). Matching native VAX
+ * float is in fact MORE VMS-authentic: VAX F/D/G IS OpenVMS's native float.
+ *
+ * Runtime round-trip validation on real VAX float needs a booted NetBSD/vax
+ * (SIMH, P4) -- there is no VAX system emulator in CI -- so it is a P4 follow-up;
+ * this change makes the code correct-in-principle and the non-IEEE branch is
+ * compile-proven by the netbsd-vax cross gate (vms_math.c is in its build set).
+ *
+ * Discriminator: key on the ARCH, not __STDC_IEC_559__. The freestanding Linux
+ * build compiles with -ffreestanding, under which gcc does NOT define
+ * __STDC_IEC_559__ even on x86_64 -- so testing that macro would wrongly route
+ * x86_64/aarch64 (both IEEE-754) down the non-IEEE path and emit libm calls that
+ * fail to link freestanding. VAX is the only non-IEEE float target in OVMX's
+ * set (x86_64/aarch64/Alpha are all IEEE-754), so default to IEEE and carve out
+ * VAX explicitly.
+ */
+#if defined(__vax__) || defined(__vax)
+#  define VMS_MATH_IEEE754 0   /* VAX F/D/G float -- not IEEE-754 */
+#else
+#  define VMS_MATH_IEEE754 1   /* x86_64 / aarch64 / Alpha */
+#endif
+
+/* ================================================================
  * Constants
  * ================================================================ */
 
@@ -48,6 +85,31 @@ static inline uint64_t dbl_to_bits(double d)
     dbl_bits_t b;
     b.d = d;
     return b.u;
+}
+
+/*
+ * Portable +inf / -inf / NaN sentinels. On IEEE-754 targets we keep the exact
+ * bit words (freestanding path must not emit libcalls). On non-IEEE targets
+ * (VAX) the compiler synthesizes the target-correct value: VAX has no true
+ * Inf/NaN, so gcc/vax lowers huge_val()/nan() to its reserved-operand / max-
+ * magnitude forms -- the VMS-authentic outcome. See the float-format note above.
+ */
+static inline double vms_math_inf(void)
+{
+#if VMS_MATH_IEEE754
+    return mk_double(0x7FF0000000000000ULL);
+#else
+    return __builtin_huge_val();
+#endif
+}
+
+static inline double vms_math_nan(void)
+{
+#if VMS_MATH_IEEE754
+    return mk_double(0x7FF8000000000000ULL);
+#else
+    return __builtin_nan("");
+#endif
 }
 
 /* ================================================================
@@ -144,8 +206,13 @@ double vms_fmod(double x, double y)
 
 double vms_exp(double x)
 {
-    /* Clamp to avoid overflow/underflow */
-    if (x > 709.0) return mk_double(0x7FF0000000000000ULL); /* +inf */
+    /* Clamp to avoid overflow/underflow. NOTE: 709/-745 are the IEEE double
+     * overflow thresholds; on VAX they are exact for G_float and merely loose
+     * for D_float (whose 8-bit exponent overflows near x~88). The loose clamp is
+     * bounded -- the ldexp reconstruction below itself signals correctly on VAX
+     * float overflow -- so only extreme-input overflow *signalling* is affected,
+     * not normal-range results. Exact VAX thresholds are a P4 runtime item. */
+    if (x > 709.0) return vms_math_inf();
     if (x < -745.0) return 0.0;
 
     /* Range reduction: x = n*ln2 + r */
@@ -160,6 +227,7 @@ double vms_exp(double x)
 
     /* Reconstruct: exp(x) = p * 2^n */
     int ni = (int)n;
+#if VMS_MATH_IEEE754
     uint64_t bits = dbl_to_bits(p);
     /* Add n to the exponent field (biased by 1023).
      * Validate that the resulting exponent stays in [1, 2046] to avoid
@@ -167,11 +235,17 @@ double vms_exp(double x)
     int cur_exp = (int)((bits >> 52) & 0x7FF);
     int new_exp = cur_exp + ni;
     if (new_exp >= 2047)
-        return mk_double(0x7FF0000000000000ULL); /* +inf */
+        return vms_math_inf();
     if (new_exp <= 0)
         return 0.0; /* underflow to zero */
     bits = (bits & 0x800FFFFFFFFFFFFFULL) | ((uint64_t)new_exp << 52);
     return mk_double(bits);
+#else
+    /* Non-IEEE (VAX): reconstruct p * 2^ni without touching the bit layout.
+     * ldexp is the exact primitive; gcc/vax lowers it to a native VAX-float
+     * scale (NetBSD libm backs it on the link-libc substrate). */
+    return __builtin_ldexp(p, ni);
+#endif
 }
 
 /* ================================================================
@@ -184,16 +258,24 @@ double vms_exp(double x)
 double vms_log(double x)
 {
     if (x <= 0.0) {
-        if (x == 0.0) return mk_double(0xFFF0000000000000ULL); /* -inf */
-        return mk_double(0x7FF8000000000000ULL); /* NaN */
+        if (x == 0.0) return -vms_math_inf(); /* -inf */
+        return vms_math_nan();                /* NaN */
     }
 
-    /* Extract exponent and mantissa */
+    /* Extract mantissa m in [1,2) and unbiased exponent e, so x = m * 2^e. */
+#if VMS_MATH_IEEE754
     uint64_t bits = dbl_to_bits(x);
     int e = (int)((bits >> 52) & 0x7FF) - 1023;
     /* Set exponent to 0 (bias 1023) to get m in [1, 2) */
     bits = (bits & 0x000FFFFFFFFFFFFFULL) | 0x3FF0000000000000ULL;
     double m = mk_double(bits);
+#else
+    /* Non-IEEE (VAX): frexp splits x = m2 * 2^e2 with m2 in [0.5,1); rescale to
+     * [1,2) to match the IEEE branch's mantissa/exponent convention exactly. */
+    int e2;
+    double m = __builtin_frexp(x, &e2) * 2.0;
+    int e = e2 - 1;
+#endif
 
     /* If m > sqrt(2), adjust */
     if (m > 1.4142135623730951) {
@@ -242,7 +324,7 @@ double vms_pow(double base, double exponent)
     /* General case: pow(b, e) = exp(e * log(b)) */
     if (base < 0.0) {
         /* Negative base with non-integer exponent -> NaN */
-        return mk_double(0x7FF8000000000000ULL);
+        return vms_math_nan();
     }
     return vms_exp(exponent * vms_log(base));
 }
@@ -321,7 +403,7 @@ double vms_tan(double x)
 {
     double s = vms_sin(x);
     double c = vms_cos(x);
-    if (c == 0.0) return mk_double(0x7FF0000000000000ULL); /* +inf */
+    if (c == 0.0) return vms_math_inf(); /* +inf */
     return s / c;
 }
 
@@ -386,7 +468,7 @@ double vms_atan2(double y, double x)
 double vms_asin(double x)
 {
     if (x < -1.0 || x > 1.0)
-        return mk_double(0x7FF8000000000000ULL); /* NaN */
+        return vms_math_nan(); /* NaN */
 
     /* asin(x) = atan(x / sqrt(1 - x^2)) */
     if (x == 1.0) return M_PI_2_VAL;

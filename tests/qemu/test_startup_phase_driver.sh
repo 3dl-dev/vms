@@ -227,7 +227,13 @@ if [ "$OK" -eq 1 ]; then
 
     if [ "$rc" -eq 0 ]; then
         SEG=$(tail -c "+$((CMD_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
-        if printf '%s' "$SEG" | grep -qF 'Total of 0 file'; then r1=0; else r1=1; fi
+        # Authentic VMS for a zero-match exact filespec is
+        # "%DIRECT-W-NOFILES, no files found" (VSI OpenVMS DCL Dictionary,
+        # DIRECTORY; landed in vms-1c6 #461) -- NOT an empty "Total of 0 files."
+        # trailer. Either is proof the file is absent; a PRESENT OVMX.CONF would
+        # instead list the name with "Total of 1 file.", so this stays
+        # discriminating.
+        if printf '%s' "$SEG" | grep -qE '%DIRECT-W-NOFILES|Total of 0 file'; then r1=0; else r1=1; fi
         record "OVMX.CONF does not exist on the booted, mounted system disk" "$r1"
     fi
 fi

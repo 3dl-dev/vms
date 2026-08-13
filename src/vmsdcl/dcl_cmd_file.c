@@ -58,20 +58,36 @@ enum dir_size_mode { DIR_SIZE_USED = 0, DIR_SIZE_ALLOC, DIR_SIZE_ALL };
  * statx; this compiles to "no genuine source", which is correct for them.
  */
 #if defined(__linux__)
+#include <stdint.h>
 #include <sys/syscall.h>
-#include <fcntl.h>
-#include <linux/stat.h>   /* struct statx, STATX_BTIME, AT_STATX_SYNC_AS_STAT */
+#endif
+#if defined(__linux__) && defined(SYS_statx)
+/* Minimal statx ABI (Linux UAPI, stable since 4.11), declared LOCALLY so this
+ * depends on neither the libc statx() wrapper (absent on the musl the static /
+ * bootable-runtime DCL links against) nor <linux/stat.h> (whose struct statx
+ * redefinition clashes with newer musl's <sys/stat.h>). Names are prefixed to
+ * avoid ever colliding with a libc-provided struct statx. */
+struct ovmx_statx_ts { int64_t tv_sec; uint32_t tv_nsec; int32_t __r; };
+struct ovmx_statx {
+    uint32_t stx_mask, stx_blksize;
+    uint64_t stx_attributes;
+    uint32_t stx_nlink, stx_uid, stx_gid;
+    uint16_t stx_mode, __spare0[1];
+    uint64_t stx_ino, stx_size, stx_blocks, stx_attributes_mask;
+    struct ovmx_statx_ts stx_atime, stx_btime, stx_ctime, stx_mtime;
+    uint64_t __pad[24];   /* pad past the kernel's 256-byte statx buffer */
+};
+_Static_assert(sizeof(struct ovmx_statx) >= 256, "statx buffer too small");
+#define OVMX_STATX_BTIME 0x00000800U    /* STATX_BTIME */
+#define OVMX_AT_FDCWD    (-100)         /* AT_FDCWD */
 static int ovmx_file_btime(const char *path, struct timespec *out)
 {
-    struct statx stx;
-    /* Raw syscall rather than the libc statx() wrapper: the musl the static /
-     * bootable-runtime DCL links against does not export that wrapper, but the
-     * kernel (>= 4.11) always provides the call. Both this and the glibc
-     * development build resolve struct statx / STATX_BTIME from <linux/stat.h>. */
-    if (syscall(SYS_statx, AT_FDCWD, path, AT_STATX_SYNC_AS_STAT,
-                STATX_BTIME, &stx) != 0)
+    struct ovmx_statx stx;
+    /* Raw syscall (AT_STATX_SYNC_AS_STAT == 0). Portable across every DCL build
+     * variant; the kernel (>= 4.11) always provides the call. */
+    if (syscall(SYS_statx, OVMX_AT_FDCWD, path, 0, OVMX_STATX_BTIME, &stx) != 0)
         return 0;
-    if (!(stx.stx_mask & STATX_BTIME)) return 0;
+    if (!(stx.stx_mask & OVMX_STATX_BTIME)) return 0;
     out->tv_sec  = (time_t)stx.stx_btime.tv_sec;
     out->tv_nsec = (long)stx.stx_btime.tv_nsec;
     return 1;

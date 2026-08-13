@@ -558,6 +558,209 @@ static void load_archive(const char *path, struct obj **objs, int *n, int *cap)
 }
 
 /* --------------------------------------------------------------------------
+ * Selective object-library (.OLB) extraction (vms-ca9, self-host spine #3).
+ *
+ * A `.a` archive is ingested WHOLE (load_archive above) — the OVMX policy for
+ * the musl C-RTL and OVMX library shareables, where every member is wanted. An
+ * OVMX object library (`.OLB`, produced by LIBRARIAN.EXE / DCL LIBRARY/OBJECT)
+ * is instead searched like a real object library: LINK.EXE pulls ONLY the
+ * members needed to resolve currently-undefined external references, iterating
+ * to a fixpoint (a pulled member may reference symbols another member defines).
+ *
+ * This is the classic archive-member selection an ELF linker performs, keyed on
+ * the member symbol tables directly (no dependence on the ar `/` symbol index —
+ * LIBRARIAN does not write one). The .OLB is an OVMX-labeled `ar` container
+ * (Rule 8; docs/design-self-host-mmk-spine.md §3, src/vmslink/include/ovmx_olb.h);
+ * the byte-level parse below is identical to load_archive's `ar` walk. STRONG
+ * (STB_GLOBAL) undefined references force extraction; a WEAK undefined reference
+ * does not (matching ld: it resolves to 0 if nothing defines it). A member is
+ * pulled if it DEFINES (st_shndx != SHN_UNDEF) a name that is currently an
+ * unresolved strong reference.
+ * -------------------------------------------------------------------------- */
+
+/* A parsed-but-not-yet-pulled candidate pool for one .OLB. Each member owns its
+ * own 8-aligned buffer (like load_archive), so the archive file buffer is freed
+ * after parse; a member's resources are transferred to objs[] when pulled. */
+struct olb_pool {
+    const char *path;
+    struct obj *mem;      /* parsed members (own buffers) */
+    int         nmem;
+    int        *pulled;   /* [nmem] 1 once moved into objs[] */
+};
+
+/* Return non-zero if `path` names an OVMX object library by extension (.OLB,
+ * case-insensitive). Selection is by extension: a `.a` stays whole-archive. */
+static int file_is_olb(const char *path)
+{
+    size_t l = strlen(path);
+    if (l < 4) return 0;
+    const char *e = path + l - 4;
+    return (e[0] == '.') &&
+           (e[1] == 'o' || e[1] == 'O') &&
+           (e[2] == 'l' || e[2] == 'L') &&
+           (e[3] == 'b' || e[3] == 'B');
+}
+
+/* Pre-parse every object member of an .OLB into a candidate pool (NOT into the
+ * link's objs[] — the resolver decides which to pull). Same `ar` walk as
+ * load_archive. */
+static void load_olb_pool(const char *path, struct olb_pool *pool)
+{
+    size_t asize;
+    uint8_t *abuf = slurp(path, &asize);
+    if (asize < AR_MAGIC_LEN || memcmp(abuf, AR_MAGIC, AR_MAGIC_LEN) != 0)
+        die("input .OLB is not an ar-container object library");
+    pool->path = path;
+    pool->mem  = NULL;
+    pool->nmem = 0;
+    int cap = 0;
+    size_t pos = AR_MAGIC_LEN;
+    while (pos + AR_HDR_SIZE <= asize) {
+        const char *h = (const char *)(abuf + pos);
+        if (h[58] != '`' || h[59] != '\n')
+            die("malformed ar member header in .OLB");
+        uint64_t msize = ar_dec(h + 48, 10);
+        size_t mdata = pos + AR_HDR_SIZE;
+        if (mdata + msize > asize) die(".OLB member extends past end of archive");
+
+        char nm[17];
+        memcpy(nm, h, 16); nm[16] = '\0';
+        int e = 16; while (e > 0 && nm[e - 1] == ' ') nm[--e] = '\0';
+        int is_special = (strcmp(nm, "/") == 0 || strcmp(nm, "//") == 0 ||
+                          strcmp(nm, "/SYM64/") == 0);
+        if (!is_special) {
+            uint8_t *mb = malloc(msize ? msize : 1);
+            if (!mb) die("oom copying .OLB member");
+            memcpy(mb, abuf + mdata, msize);
+            char label[300];
+            snprintf(label, sizeof label, "%s(%s)", path, nm);
+            struct obj *o = push_obj(&pool->mem, &pool->nmem, &cap);
+            parse_obj(o, mb, (size_t)msize, label);
+        }
+        pos = mdata + msize;
+        if (pos & 1) pos++;
+    }
+    free(abuf);
+    pool->pulled = calloc((size_t)(pool->nmem ? pool->nmem : 1), sizeof(int));
+    if (!pool->pulled) die("oom tracking .OLB members");
+}
+
+/* -------- minimal string set (open addressing, FNV-1a), keyed on names that
+ * live in the objects' string tables (kept live for the run). -------------- */
+struct symset { const char **slot; uint32_t cap; uint32_t n; };
+
+static uint64_t symset_hash(const char *s)
+{
+    uint64_t h = 1469598103934665603ULL;
+    while (*s) { h ^= (unsigned char)*s++; h *= 1099511628211ULL; }
+    return h;
+}
+static void symset_init(struct symset *S)
+{
+    S->cap = 256; S->n = 0;
+    S->slot = calloc(S->cap, sizeof(*S->slot));
+    if (!S->slot) die("oom building symbol set");
+}
+static void symset_free(struct symset *S) { free(S->slot); S->slot = NULL; S->cap = S->n = 0; }
+static int symset_has(struct symset *S, const char *name)
+{
+    uint32_t m = S->cap - 1, i = (uint32_t)symset_hash(name) & m;
+    while (S->slot[i]) { if (strcmp(S->slot[i], name) == 0) return 1; i = (i + 1) & m; }
+    return 0;
+}
+static void symset_add(struct symset *S, const char *name)
+{
+    if ((S->n + 1) * 4 >= S->cap * 3) {          /* grow at 75% load */
+        uint32_t ncap = S->cap * 2;
+        const char **ns = calloc(ncap, sizeof(*ns));
+        if (!ns) die("oom growing symbol set");
+        for (uint32_t j = 0; j < S->cap; j++) if (S->slot[j]) {
+            uint32_t m = ncap - 1, i = (uint32_t)symset_hash(S->slot[j]) & m;
+            while (ns[i]) i = (i + 1) & m;
+            ns[i] = S->slot[j];
+        }
+        free(S->slot); S->slot = ns; S->cap = ncap;
+    }
+    uint32_t m = S->cap - 1, i = (uint32_t)symset_hash(name) & m;
+    while (S->slot[i]) { if (strcmp(S->slot[i], name) == 0) return; i = (i + 1) & m; }
+    S->slot[i] = name; S->n++;
+}
+
+/* Add every global/weak DEFINED symbol of `o` to D. */
+static void collect_defined(struct obj *o, struct symset *D)
+{
+    for (int k = 0; k < o->nsym; k++) {
+        Elf64_Sym *s = &o->sym[k];
+        unsigned char b = ELF64_ST_BIND(s->st_info);
+        if ((b == STB_GLOBAL || b == STB_WEAK) && s->st_shndx != SHN_UNDEF) {
+            const char *nm = o->str + s->st_name;
+            if (nm[0]) symset_add(D, nm);
+        }
+    }
+}
+
+/* Does `o` define a symbol that is currently an unresolved strong reference? */
+static int member_satisfies(struct obj *o, struct symset *U)
+{
+    for (int k = 0; k < o->nsym; k++) {
+        Elf64_Sym *s = &o->sym[k];
+        unsigned char b = ELF64_ST_BIND(s->st_info);
+        if ((b == STB_GLOBAL || b == STB_WEAK) && s->st_shndx != SHN_UNDEF) {
+            const char *nm = o->str + s->st_name;
+            if (nm[0] && symset_has(U, nm)) return 1;
+        }
+    }
+    return 0;
+}
+
+/* Iterate the .OLB pools, pulling members that resolve currently-undefined
+ * strong references, to a fixpoint. Pulled members are moved into objs[]. */
+static void resolve_olbs(struct obj **objs, int *nobj, int *cap,
+                         struct olb_pool *pools, int npool)
+{
+    for (;;) {
+        struct symset D, U;
+        symset_init(&D);
+        symset_init(&U);
+        for (int i = 0; i < *nobj; i++) collect_defined(&(*objs)[i], &D);
+        for (int i = 0; i < *nobj; i++) {
+            struct obj *o = &(*objs)[i];
+            for (int k = 0; k < o->nsym; k++) {
+                Elf64_Sym *s = &o->sym[k];
+                if (s->st_shndx != SHN_UNDEF) continue;
+                if (ELF64_ST_BIND(s->st_info) != STB_GLOBAL) continue; /* strong only */
+                const char *nm = o->str + s->st_name;
+                if (nm[0] && !symset_has(&D, nm)) symset_add(&U, nm);
+            }
+        }
+
+        int pulled = 0;
+        if (U.n) {
+            for (int p = 0; p < npool; p++) {
+                for (int m = 0; m < pools[p].nmem; m++) {
+                    if (pools[p].pulled[m]) continue;
+                    if (member_satisfies(&pools[p].mem[m], &U)) {
+                        *push_obj(objs, nobj, cap) = pools[p].mem[m];
+                        pools[p].pulled[m] = 1;
+                        pulled++;
+                    }
+                }
+            }
+        }
+        symset_free(&D);
+        symset_free(&U);
+        if (!pulled) break;
+    }
+
+    for (int p = 0; p < npool; p++) {
+        int got = 0;
+        for (int m = 0; m < pools[p].nmem; m++) if (pools[p].pulled[m]) got++;
+        fprintf(stderr, "%%LINK-I-LIBRARY, %s: %d of %d member%s pulled (selective)\n",
+                pools[p].path, got, pools[p].nmem, pools[p].nmem == 1 ? "" : "s");
+    }
+}
+
+/* --------------------------------------------------------------------------
  * Option parsing.
  * -------------------------------------------------------------------------- */
 /*
@@ -2184,12 +2387,22 @@ int main(int argc, char **argv)
      * is_exec); an executable additionally synthesizes crt0 + PT_INTERP. (vms-004,
      * vms-ba1) */
     struct obj *objs = NULL; int nobj = 0, cap = 0;
+    struct olb_pool *pools = calloc((size_t)nin, sizeof *pools);
+    int npool = 0;
+    if (nin && !pools) die("oom tracking object libraries");
     for (int i = 0; i < nin; i++) {
-        if (file_is_archive(ins[i]))
-            load_archive(ins[i], &objs, &nobj, &cap);
+        if (file_is_olb(ins[i]))
+            load_olb_pool(ins[i], &pools[npool++]);     /* selective (.OLB) */
+        else if (file_is_archive(ins[i]))
+            load_archive(ins[i], &objs, &nobj, &cap);   /* whole-archive (.a) */
         else
             load_obj(ins[i], push_obj(&objs, &nobj, &cap));
     }
+    /* Search object libraries after the mandatory objects/archives, pulling only
+     * the members that resolve outstanding references (vms-ca9). */
+    if (npool)
+        resolve_olbs(&objs, &nobj, &cap, pools, npool);
+    free(pools);
     if (nobj == 0) die("no object members found in inputs");
     emit_shareable(objs, nobj, uv, nuniv, gk, gmaj, gmin, allow_undef,
                    producers, np, out, executable);

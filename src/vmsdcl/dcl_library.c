@@ -1,13 +1,21 @@
 /*
  * dcl_library.c - LIBRARY command implementation
  *
- * Manages VMS text libraries (.TLB) and help libraries (.HLB).
- * Supports /CREATE, /INSERT, /EXTRACT, /LIST operations.
+ * Manages VMS text libraries (.TLB), help libraries (.HLB), and OBJECT
+ * libraries (.OLB).
+ * Supports /CREATE, /INSERT, /EXTRACT, /LIST (and, for .OLB, /DELETE).
  *
- * Library file format (OVMX-specific, not VMS binary-compatible):
+ * TEXT/HELP library file format (OVMX-specific "LBRO", not VMS binary-compatible):
  *   Header:  magic(4) type(4) module_count(4) reserved(4)
  *   Modules: name(32) offset(4) length(4) per entry
  *   Data:    raw file contents concatenated
+ *
+ * OBJECT library (.OLB) format: a real object library that LINK.EXE consumes to
+ * resolve undefined symbols by pulling members. It is a standard `ar` archive of
+ * .OBJ (ELF) members — an OVMX-labeled design choice (Rule 8), NOT the
+ * unpublished VMS LBR byte layout. The reader/writer are shared with LIBRARIAN.EXE
+ * via src/vmslink/include/ovmx_olb.h. See docs/design-self-host-mmk-spine.md
+ * section 3. (vms-ca9)
  */
 
 #include <stdio.h>
@@ -19,6 +27,7 @@
 #include "dcl/context.h"
 #include "dcl/parser.h"
 #include "ssdef.h"
+#include "ovmx_olb.h"
 
 /* External functions */
 extern void dcl_error(const char *facility, int severity, const char *ident,
@@ -525,6 +534,297 @@ static int lbr_extract(struct dcl_context *ctx, struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/* ==========================================================================
+ * OBJECT library (.OLB) operations — real object-library semantics (vms-ca9).
+ *
+ * Unlike the TEXT/HELP "LBRO" format above, an OBJECT library is a standard `ar`
+ * archive of .OBJ (ELF) members (ovmx_olb.h) so that LINK.EXE resolves undefined
+ * symbols by pulling members. These share the exact byte layout LIBRARIAN.EXE
+ * writes. Module names are derived from the .OBJ basename (uppercased, extension
+ * stripped) — an OVMX choice, since an OVMX .OBJ carries no VMS module-name field.
+ * ========================================================================== */
+
+/* Derive a VMS-style module name from a VMS/Unix file spec. */
+static void olb_module_name(const char *spec, char *out, size_t out_sz)
+{
+    const char *base = spec;
+    for (const char *p = spec; *p; p++)
+        if (*p == '/' || *p == '\\' || *p == ']' || *p == ':' || *p == '>')
+            base = p + 1;
+    size_t n = 0;
+    for (const char *p = base; *p && *p != '.' && *p != ';' && n + 1 < out_sz; p++)
+        out[n++] = (char)toupper((unsigned char)*p);
+    out[n] = '\0';
+}
+
+/* Read a whole file (.OBJ) into a fresh buffer. */
+static unsigned char *olb_slurp_obj(const char *linux_path, size_t *len)
+{
+    FILE *fp = fopen(linux_path, "rb");
+    if (!fp) return NULL;
+    if (fseek(fp, 0, SEEK_END) != 0) { fclose(fp); return NULL; }
+    long sz = ftell(fp);
+    if (sz < 0) { fclose(fp); return NULL; }
+    if (fseek(fp, 0, SEEK_SET) != 0) { fclose(fp); return NULL; }
+    unsigned char *buf = malloc((size_t)sz ? (size_t)sz : 1);
+    if (!buf) { fclose(fp); return NULL; }
+    if (sz > 0 && fread(buf, 1, (size_t)sz, fp) != (size_t)sz) {
+        free(buf); fclose(fp); return NULL;
+    }
+    fclose(fp);
+    *len = (size_t)sz;
+    return buf;
+}
+
+/* Insert (or replace) the .OBJ files params[first..] into an in-memory member
+ * array. Takes ownership of allocated data. Returns a VMS status code. */
+static int olb_insert_files(struct dcl_context *ctx, struct dcl_command *cmd,
+                            int first, struct olb_member **members,
+                            uint32_t *count, uint32_t *cap)
+{
+    for (int i = first; i < cmd->param_count; i++) {
+        char src_path[1024];
+        dcl_resolve_path(ctx, cmd->params[i], src_path, sizeof(src_path));
+        size_t len = 0;
+        unsigned char *data = olb_slurp_obj(src_path, &len);
+        if (!data) {
+            dcl_error("LIBRARIAN", 2, "OPENIN",
+                      "error opening object file - %s", cmd->params[i]);
+            return SS$_NOSUCHFILE;
+        }
+        char name[OLB_NAME_MAX + 1];
+        olb_module_name(cmd->params[i], name, sizeof name);
+        if (name[0] == '\0') {
+            free(data);
+            dcl_error("LIBRARIAN", 2, "BADNAME",
+                      "cannot derive module name - %s", cmd->params[i]);
+            return SS$_BADPARAM;
+        }
+
+        int replaced = 0;
+        int idx = olb_find(*members, *count, name);
+        if (idx >= 0) {
+            free((*members)[idx].data);
+            (*members)[idx].data = data;
+            (*members)[idx].len = len;
+            replaced = 1;
+        } else {
+            if (*count >= *cap) {
+                uint32_t ncap = *cap ? *cap * 2 : 16;
+                struct olb_member *na = realloc(*members,
+                    (size_t)ncap * sizeof(**members));
+                if (!na) { free(data); return SS$_INSFMEM; }
+                *members = na; *cap = ncap;
+            }
+            memset(&(*members)[*count], 0, sizeof((*members)[0]));
+            olb_setname((*members)[*count].name, name);
+            (*members)[*count].data = data;
+            (*members)[*count].len = len;
+            (*count)++;
+        }
+        printf("%%LIBRARIAN-S-%s, module %s %s\n",
+               replaced ? "REPLACED" : "INSERTED", name,
+               replaced ? "replaced" : "inserted");
+    }
+    return SS$_NORMAL;
+}
+
+/* Load an existing .OLB into a growable member array; VMS status code. */
+static int olb_load(struct dcl_context *ctx, const char *vms_name,
+                    const char *lib_path, struct olb_member **members,
+                    uint32_t *count, uint32_t *cap)
+{
+    (void)ctx;
+    int rc = olb_read(lib_path, members, count);
+    if (rc == OLB_OK) { *cap = *count; return SS$_NORMAL; }
+    if (rc == OLB_ERR_OPEN) {
+        dcl_error("LIBRARIAN", 2, "OPENIN", "error opening library - %s", vms_name);
+        return SS$_NOSUCHFILE;
+    }
+    if (rc == OLB_ERR_FORMAT) {
+        dcl_error("LIBRARIAN", 2, "ILLFORMAT",
+                  "not a valid object library - %s", vms_name);
+        return SS$_ABORT;
+    }
+    dcl_error("LIBRARIAN", 2, "READERR", "error reading library - %s", vms_name);
+    return SS$_ABORT;
+}
+
+static int olb_create(struct dcl_context *ctx, struct dcl_command *cmd)
+{
+    char lib_path[1024];
+    dcl_resolve_path(ctx, cmd->params[0], lib_path, sizeof(lib_path));
+
+    struct olb_member *members = NULL;
+    uint32_t count = 0, cap = 0;
+    int st = olb_insert_files(ctx, cmd, 1, &members, &count, &cap);
+    if (!$VMS_STATUS_SUCCESS(st)) { olb_free(members, count); return st; }
+
+    if (olb_write(lib_path, members, count) != OLB_OK) {
+        olb_free(members, count);
+        dcl_error("LIBRARIAN", 2, "OPENOUT",
+                  "error creating library - %s", cmd->params[0]);
+        return SS$_FILACCERR;
+    }
+    olb_free(members, count);
+    printf("%%LIBRARIAN-S-CREATED, object library %s created\n", cmd->params[0]);
+    return SS$_NORMAL;
+}
+
+static int olb_insert(struct dcl_context *ctx, struct dcl_command *cmd)
+{
+    if (cmd->param_count < 2) {
+        dcl_error("LIBRARIAN", 2, "BADPARAM",
+                  "usage: LIBRARY library.OLB object-file[ ...]");
+        return SS$_BADPARAM;
+    }
+    char lib_path[1024];
+    dcl_resolve_path(ctx, cmd->params[0], lib_path, sizeof(lib_path));
+
+    struct olb_member *members = NULL;
+    uint32_t count = 0, cap = 0;
+    int st = olb_load(ctx, cmd->params[0], lib_path, &members, &count, &cap);
+    if (!$VMS_STATUS_SUCCESS(st)) return st;
+
+    st = olb_insert_files(ctx, cmd, 1, &members, &count, &cap);
+    if (!$VMS_STATUS_SUCCESS(st)) { olb_free(members, count); return st; }
+
+    if (olb_write(lib_path, members, count) != OLB_OK) {
+        olb_free(members, count);
+        dcl_error("LIBRARIAN", 2, "OPENOUT",
+                  "error writing library - %s", cmd->params[0]);
+        return SS$_FILACCERR;
+    }
+    olb_free(members, count);
+    return SS$_NORMAL;
+}
+
+static int olb_list_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
+{
+    char lib_path[1024];
+    dcl_resolve_path(ctx, cmd->params[0], lib_path, sizeof(lib_path));
+
+    struct olb_member *members = NULL;
+    uint32_t count = 0, cap = 0;
+    int st = olb_load(ctx, cmd->params[0], lib_path, &members, &count, &cap);
+    if (!$VMS_STATUS_SUCCESS(st)) return st;
+
+    printf("\nDirectory of OBJECT library %s\n\n", cmd->params[0]);
+    if (count == 0) {
+        printf("  (empty library)\n");
+    } else {
+        for (uint32_t i = 0; i < count; i++)
+            printf("  %-31s  %zu bytes\n", members[i].name, members[i].len);
+    }
+    printf("\n%u module%s in library\n", count, count == 1 ? "" : "s");
+    olb_free(members, count);
+    return SS$_NORMAL;
+}
+
+static int olb_extract_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
+{
+    const char *extract_name = dcl_qualifier_value(cmd, "EXTRACT");
+    if (!extract_name || !extract_name[0]) {
+        dcl_error("LIBRARIAN", 2, "NOMODNAM",
+                  "no module name specified with /EXTRACT");
+        return SS$_BADPARAM;
+    }
+    char lib_path[1024];
+    dcl_resolve_path(ctx, cmd->params[0], lib_path, sizeof(lib_path));
+
+    struct olb_member *members = NULL;
+    uint32_t count = 0, cap = 0;
+    int st = olb_load(ctx, cmd->params[0], lib_path, &members, &count, &cap);
+    if (!$VMS_STATUS_SUCCESS(st)) return st;
+
+    char want[OLB_NAME_MAX + 1];
+    olb_module_name(extract_name, want, sizeof want);
+    int idx = olb_find(members, count, want);
+    if (idx < 0) {
+        dcl_error("LIBRARIAN", 2, "KEYNOTFND",
+                  "module %s not found in library", extract_name);
+        olb_free(members, count);
+        return SS$_NOSUCHFILE;
+    }
+
+    const char *output_file = dcl_qualifier_value(cmd, "OUTPUT");
+    FILE *out = stdout;
+    if (output_file && output_file[0]) {
+        char out_path[1024];
+        dcl_resolve_path(ctx, output_file, out_path, sizeof(out_path));
+        out = fopen(out_path, "wb");
+        if (!out) {
+            dcl_error("LIBRARIAN", 2, "OPENOUT",
+                      "error creating output file - %s", output_file);
+            olb_free(members, count);
+            return SS$_FILACCERR;
+        }
+    }
+    if (members[idx].len)
+        fwrite(members[idx].data, 1, members[idx].len, out);
+    if (out != stdout) {
+        fclose(out);
+        printf("%%LIBRARIAN-S-EXTRACTED, module %s extracted to %s\n",
+               want, output_file);
+    }
+    olb_free(members, count);
+    return SS$_NORMAL;
+}
+
+static int olb_delete_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
+{
+    const char *del_name = dcl_qualifier_value(cmd, "DELETE");
+    if (!del_name || !del_name[0]) {
+        dcl_error("LIBRARIAN", 2, "NOMODNAM",
+                  "no module name specified with /DELETE");
+        return SS$_BADPARAM;
+    }
+    char lib_path[1024];
+    dcl_resolve_path(ctx, cmd->params[0], lib_path, sizeof(lib_path));
+
+    struct olb_member *members = NULL;
+    uint32_t count = 0, cap = 0;
+    int st = olb_load(ctx, cmd->params[0], lib_path, &members, &count, &cap);
+    if (!$VMS_STATUS_SUCCESS(st)) return st;
+
+    char want[OLB_NAME_MAX + 1];
+    olb_module_name(del_name, want, sizeof want);
+    int idx = olb_find(members, count, want);
+    if (idx < 0) {
+        dcl_error("LIBRARIAN", 2, "KEYNOTFND",
+                  "module %s not found in library", del_name);
+        olb_free(members, count);
+        return SS$_NOSUCHFILE;
+    }
+    free(members[idx].data);
+    for (uint32_t k = (uint32_t)idx; k + 1 < count; k++)
+        members[k] = members[k + 1];
+    count--;
+
+    if (olb_write(lib_path, members, count) != OLB_OK) {
+        olb_free(members, count);
+        dcl_error("LIBRARIAN", 2, "OPENOUT",
+                  "error writing library - %s", cmd->params[0]);
+        return SS$_FILACCERR;
+    }
+    olb_free(members, count);
+    printf("%%LIBRARIAN-S-DELETED, module %s deleted\n", want);
+    return SS$_NORMAL;
+}
+
+/* Route an OBJECT-library (.OLB) LIBRARY command to the ar-container handlers. */
+static int olb_dispatch(struct dcl_context *ctx, struct dcl_command *cmd)
+{
+    if (dcl_has_qualifier(cmd, "CREATE"))  return olb_create(ctx, cmd);
+    if (dcl_has_qualifier(cmd, "DELETE"))  return olb_delete_cmd(ctx, cmd);
+    if (dcl_has_qualifier(cmd, "EXTRACT")) return olb_extract_cmd(ctx, cmd);
+    if (dcl_has_qualifier(cmd, "LIST"))    return olb_list_cmd(ctx, cmd);
+    if (dcl_has_qualifier(cmd, "INSERT") || cmd->param_count >= 2)
+        return olb_insert(ctx, cmd);
+    /* Only the library named: show its directory. */
+    return olb_list_cmd(ctx, cmd);
+}
+
 /*
  * cmd_library - LIBRARY command dispatcher
  *
@@ -533,6 +833,14 @@ static int lbr_extract(struct dcl_context *ctx, struct dcl_command *cmd)
 int cmd_library(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
+
+    /* OBJECT libraries (.OLB, or /OBJECT) use the real ar-container object-
+     * library path so LINK.EXE can pull members (vms-ca9). TEXT/HELP libraries
+     * keep the LBRO format below. */
+    if (cmd->param_count >= 1 &&
+        lbr_get_type(cmd, cmd->params[0]) == LBR_TYPE_OBJECT) {
+        return olb_dispatch(ctx, cmd);
+    }
 
     if (dcl_has_qualifier(cmd, "CREATE")) {
         return lbr_create(ctx, cmd);

@@ -41,6 +41,10 @@ target_include_directories(vmsdcl PRIVATE
     # (vms-8d4): src/vmsscs/include/scs_membership.h -- a header-only IPC,
     # so no vmsscs link dependency is added.
     ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+    # LIBRARY/OBJECT (.OLB) shares the ar-container reader/writer with
+    # LIBRARIAN.EXE: src/vmslink/include/ovmx_olb.h -- a header-only format
+    # module, so no vmslink link dependency is added. (vms-ca9)
+    ${CMAKE_SOURCE_DIR}/src/vmslink/include
 )
 
 # We need POSIX APIs (fork, sigaction, strncasecmp, realpath, etc.)

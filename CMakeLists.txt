@@ -188,6 +188,13 @@ if(BUILD_TESTS)
     add_subdirectory(tests/vmsscs)
     add_subdirectory(tests/ovmx_init)
 
+    # Toolchain round-trip: LIBRARIAN.EXE + .OLB + LINK.EXE selective member
+    # extraction (vms-ca9). Needs the host-built toolchain binaries, so it is
+    # only registered when BUILD_TOOLS is on (src/vmslink is BUILD_TOOLS-gated).
+    if(BUILD_TOOLS)
+        add_subdirectory(tests/toolchain)
+    endif()
+
     # tests/vmsssh: term_mapping unit test only (vms-97d). No libssh
     # dependency — unlike src/vmsssh (the daemon), this must build and run
     # unconditionally so ctest never reports a skip here.

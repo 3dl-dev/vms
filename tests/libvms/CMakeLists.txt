@@ -150,8 +150,6 @@ target_include_directories(test_libvms_lib_spawn_dcl PRIVATE
     ${VMS_LNM_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
 )
-target_compile_definitions(test_libvms_lib_spawn_dcl PRIVATE
-    VMSDCL_PATH="$<TARGET_FILE:vmsdcl>")
 add_dependencies(test_libvms_lib_spawn_dcl vmsdcl)
 target_link_libraries(test_libvms_lib_spawn_dcl PRIVATE
     vms
@@ -161,6 +159,15 @@ target_link_libraries(test_libvms_lib_spawn_dcl PRIVATE
     m
 )
 add_test(NAME test_libvms_lib_spawn_dcl COMMAND test_libvms_lib_spawn_dcl)
+# The DCL image path is handed over at RUNTIME via the environment, NOT as a
+# quoted -D compile definition: a string compile definition puts backslash-
+# escaped quotes into compile_commands.json, which the kif_caller_census gate's
+# reader does not unescape. $<TARGET_FILE:vmsdcl> keeps it hermetic (the image
+# the build produced). SKIP_RETURN_CODE lets the test skip honestly if the
+# variable is ever absent (e.g. run standalone) rather than fake a pass.
+set_tests_properties(test_libvms_lib_spawn_dcl PROPERTIES
+    ENVIRONMENT "OVMX_TEST_DCL_IMAGE=$<TARGET_FILE:vmsdcl>"
+    SKIP_RETURN_CODE 77)
 
 # Test 12: vms-2b8 — the SYSTEM protection category is "UIC group <=
 # MAXSYSGROUP", not "UID 0". Guards the rule RMS enforces file protection

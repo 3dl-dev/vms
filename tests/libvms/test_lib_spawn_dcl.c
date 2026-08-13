@@ -56,9 +56,8 @@
 #include "vms/logical.h"
 #include "vmsfs/filespec.h"
 
-#ifndef VMSDCL_PATH
-#error "VMSDCL_PATH must be defined (path to the built vmsdcl image)"
-#endif
+/* Honest-skip exit code: matches the CTest SKIP_RETURN_CODE property. */
+#define SKIP_EXIT 77
 
 static int failures = 0;
 
@@ -78,6 +77,19 @@ static long slurp(const char *path, char *buf, size_t bufsz) {
 }
 
 int main(void) {
+    /* The DCL image the build produced, handed over by CTest (see the test's
+     * CMake ENVIRONMENT property). Absent -> honest skip, never a fake pass. */
+    const char *dcl_src = getenv("OVMX_TEST_DCL_IMAGE");
+    if (!dcl_src || !dcl_src[0]) {
+        printf("SKIP: OVMX_TEST_DCL_IMAGE not set (no DCL image to spawn)\n");
+        return SKIP_EXIT;
+    }
+    if (access(dcl_src, X_OK) != 0) {
+        printf("SKIP: DCL image %s is not executable in this environment\n",
+               dcl_src);
+        return SKIP_EXIT;
+    }
+
     /* Private, hermetic system root. */
     char tmpl[] = "/tmp/ovmx_spawn_XXXXXX";
     char *sysdir = mkdtemp(tmpl);
@@ -85,10 +97,10 @@ int main(void) {
 
     char dcl_exe[1024];
     snprintf(dcl_exe, sizeof(dcl_exe), "%s/DCL.EXE", sysdir);
-    if (symlink(VMSDCL_PATH, dcl_exe) != 0) {
+    if (symlink(dcl_src, dcl_exe) != 0) {
         /* symlink may fail across filesystems; fall through to a hard copy. */
         char cp[2200];
-        snprintf(cp, sizeof(cp), "cp -f '%s' '%s'", VMSDCL_PATH, dcl_exe);
+        snprintf(cp, sizeof(cp), "cp -f '%s' '%s'", dcl_src, dcl_exe);
         if (system(cp) != 0) { perror("stage DCL.EXE"); return 2; }
         chmod(dcl_exe, 0755);
     }

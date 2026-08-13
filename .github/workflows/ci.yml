@@ -2452,6 +2452,11 @@ jobs:
   #     floor in tests/conformance/corpus_baseline.json — enforced by the
   #     "Enforce run-pass floor" step below. Aggregate backstop to the
   #     per-entry check above.
+  #   - It HARD-FAILS on a zero-total report or baseline (vacuity guard,
+  #     vms-6a2). An empty corpus/baseline can never be undercut, so a
+  #     total=0 would make the whole gate exit 0 forever — the original
+  #     toothless-gate defect. run_corpus.sh exits 2 on total=0; the floor
+  #     step below independently rejects total=0 on either file.
   #
   # The floor is exactly what run_corpus.sh measured on the committed tree
   # (see the baseline's timestamp + summary). It is honest, not inflated:
@@ -2504,10 +2509,24 @@ jobs:
           floor=$(jq '.summary."run-pass"' tests/conformance/corpus_baseline.json)
           current=$(jq '.summary."run-pass"' corpus_report.json)
           total=$(jq '.total' corpus_report.json)
+          baseline_total=$(jq '.total' tests/conformance/corpus_baseline.json)
           echo "Corpus run-pass floor (committed baseline): ${floor}"
           echo "Corpus run-pass current (this build):       ${current} / ${total}"
           if ! [ "${floor}" -ge 0 ] 2>/dev/null || ! [ "${current}" -ge 0 ] 2>/dev/null; then
             echo "::error::Could not read run-pass counts (floor='${floor}' current='${current}') — report or baseline malformed"
+            exit 1
+          fi
+          # VACUITY GUARD (vms-6a2): a total=0 baseline OR report makes this gate
+          # vacuous — an empty floor can never be undercut, so the job would exit
+          # 0 forever. Reject a zero-total on either side as a HARD error, never
+          # a pass. This is the mechanical block against the committed baseline
+          # ever silently reverting to total=0 (the original defect).
+          if ! [ "${total}" -ge 1 ] 2>/dev/null; then
+            echo "::error::Corpus report total=${total} — no programs measured. A zero-total run can never be a conformance pass; the harness or corpus tree is broken."
+            exit 1
+          fi
+          if ! [ "${baseline_total}" -ge 1 ] 2>/dev/null; then
+            echo "::error::Committed corpus_baseline.json total=${baseline_total} — an empty baseline is a vacuous floor (vms-6a2). Commit a real measured baseline with total>0."
             exit 1
           fi
           if [ "${current}" -lt "${floor}" ]; then

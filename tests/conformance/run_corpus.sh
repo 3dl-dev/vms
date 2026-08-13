@@ -43,12 +43,23 @@ else
 fi
 unset _candidate
 
+# Resolve the repo root from this script's location (tests/conformance/ ->
+# two levels up). Inside Docker CI the repo is bind-mounted at /src, so
+# SCRIPT_DIR is /src/tests/conformance and REPO_ROOT resolves to /src — the
+# same value the old hardcoded "/src/..." paths used. Deriving it instead of
+# hardcoding lets the harness ALSO run from a plain host checkout / worktree
+# (any path), which the hardcoded "/src" form silently mis-linked against
+# (vms-6a2). The compiled OVMX libraries live under ${REPO_ROOT}/build/lib by
+# default; override with OVMX_BUILD_LIB_DIR for an out-of-tree build.
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+BUILD_LIB_DIR="${OVMX_BUILD_LIB_DIR:-${REPO_ROOT}/build/lib}"
+
 BASELINE_FILE="${1:-${SCRIPT_DIR}/corpus_baseline.json}"
 BUILD_DIR="/tmp/corpus_conformance_build"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Compilation flags — mirrors run_conformance.sh and the builder stage paths
-INCLUDE_FLAGS="-I/src/src/libvms/include -I/src/src/vmsprocess/include -I/src/src/vmsfs/include -I/src/src/vmsrms/include"
+INCLUDE_FLAGS="-I${REPO_ROOT}/src/libvms/include -I${REPO_ROOT}/src/vmsprocess/include -I${REPO_ROOT}/src/vmsfs/include -I${REPO_ROOT}/src/vmsrms/include"
 # The VMS runtime libraries are built as OpenVMS-style shareable images
 # (OUTPUT_NAME "LIBVMS$SHR", SUFFIX ".EXE" — see src/libvms/CMakeLists.txt),
 # so plain -lvms/-lvmsfs/... do NOT resolve (ld looks for libvms.so). Link
@@ -56,7 +67,7 @@ INCLUDE_FLAGS="-I/src/src/libvms/include -I/src/src/vmsprocess/include -I/src/sr
 # libvmssys keeps a conventional archive name (libvmssys.a), so -lvmssys
 # still works for it. (Harness bug found + fixed under vms-801.4 — was
 # silently producing 100% compile-fail via "cannot find -lvmsrms" etc.)
-LIB_FLAGS="-L/src/build/lib -l:LIBVMSRMS\$SHR.EXE -l:LIBVMSFS\$SHR.EXE -l:LIBVMS\$SHR.EXE -l:LIBVMSPROCESS\$SHR.EXE -lvmssys -lpthread -lm"
+LIB_FLAGS="-L${BUILD_LIB_DIR} -l:LIBVMSRMS\$SHR.EXE -l:LIBVMSFS\$SHR.EXE -l:LIBVMS\$SHR.EXE -l:LIBVMSPROCESS\$SHR.EXE -lvmssys -lpthread -lm"
 # -D__IEEE_FLOAT=1 declares the platform floating-point mode. On VMS the C
 # compiler predefines __G_FLOAT / __D_FLOAT / __IEEE_FLOAT from the /FLOAT
 # qualifier; host gcc predefines none of them, so a corpus program guarded by
@@ -214,7 +225,16 @@ for src_file in "${CORPUS_DIR}"/*.c; do
     # -- Run -----------------------------------------------------------------
     run_log="${BUILD_DIR}/${name}.run.log"
     run_rc=0
-    LD_LIBRARY_PATH=/src/build/lib timeout 10 "${bin}" >"${run_log}" 2>&1 || run_rc=$?
+    # stdin from /dev/null: several corpus programs exercise input routines
+    # (lib$get_input, lib$get_command, lib$get_foreign, lib$lookup_key). With an
+    # inherited interactive/uncontrolled stdin their exit status flaps run-pass
+    # <-> run-fail depending on whether a tty or leftover pipe data is present,
+    # which made the run-pass COUNT non-deterministic (vms-6a2: 90 vs 86 across
+    # back-to-back runs). A conformance program's verdict must not depend on the
+    # harness's tty; /dev/null gives a clean, immediate EOF — the same closed
+    # stdin the non-interactive CI container sees — so the measurement is
+    # reproducible and the committed floor is honest, not flaky.
+    LD_LIBRARY_PATH="${BUILD_LIB_DIR}" timeout 10 "${bin}" </dev/null >"${run_log}" 2>&1 || run_rc=$?
 
     if [ ${run_rc} -eq 0 ]; then
         status="run-pass"
@@ -379,6 +399,21 @@ emit_json_array regressions
 printf '\n'
 
 printf '}\n'
+
+# ---------------------------------------------------------------------------
+# Vacuity guard: a zero-total run is NEVER a pass (vms-6a2).
+# ---------------------------------------------------------------------------
+# If the corpus directory resolved but held no .c files (or the harness was
+# pointed at the wrong tree), total==0. A zero-total run makes every downstream
+# check vacuous — no program can regress below an empty floor, so the gate
+# would silently exit 0 forever. That is the exact toothless-gate class this
+# item exists to kill. A broken harness is a HARD failure, not a pass. This is
+# emitted AFTER the JSON above so the (empty) report is still captured.
+if [ "${total}" -eq 0 ]; then
+    printf '\n[FATAL] corpus total=0 — no programs measured (CORPUS_DIR=%s). A zero-total run is never a conformance pass; the harness or corpus tree is broken.\n' \
+        "${CORPUS_DIR}" >&2
+    exit 2
+fi
 
 # ---------------------------------------------------------------------------
 # Exit code: non-zero if regressions detected

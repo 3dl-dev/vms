@@ -48,3 +48,6 @@ vms_kif_chkpriv=PROCEDURE
 vms_kif_alloc=PROCEDURE
 vms_kif_dalloc=PROCEDURE
 vms_kif_establish_system=PROCEDURE
+vms_kif_mbx_set_wrtattn=PROCEDURE
+vms_kif_hiber=PROCEDURE
+vms_kif_wake=PROCEDURE

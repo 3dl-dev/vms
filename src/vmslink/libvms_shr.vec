@@ -387,3 +387,9 @@ vms_uring_process_completions=PROCEDURE
 vms_uring_submit_rw=PROCEDURE
 vms_uring_wait_completion=PROCEDURE
 lib$reset_vm_zone=PROCEDURE
+# vms-feb: intra-image AST drain shared by sys$setast and sys$hiber (the vms$$
+# internal-helper convention, like vms$$chan_to_fd above). mk_libvms_shr.sh's nm
+# discovers it as a defined universal, so it must be frozen here (and in .frozen)
+# or it lands in the "appended beyond frozen" set. APPENDED at the end per the
+# append-only contract -- a new universal never shifts an existing index.
+vms$$deliver_pending_asts=PROCEDURE

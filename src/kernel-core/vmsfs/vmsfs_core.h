@@ -98,4 +98,36 @@ uint32_t vmsfs_next_vbn(const struct vmsfs_retrieval_ptr *map,
 int vmsfs_extend_map(struct vmsfs_retrieval_ptr *map, uint16_t *map_count,
                      uint32_t lbn);
 
+/* ================================================================
+ * Filename FORMAT algorithms (vmsfs_name.c, rd vms-00c)
+ *
+ * Pure ODS-2 name-shape operations over caller-provided byte buffers. They
+ * name no host object and use only the shim's freestanding string/ctype
+ * vocabulary, so both the Linux VFS glue and (later) the NetBSD vnode backend
+ * call them identically.
+ * ================================================================ */
+
+/*
+ * Split "FOO.TXT" into name="FOO" and type="TXT". If there is no dot (or the
+ * only dot is a leading one), type is set to the empty string. Both outputs are
+ * truncated to fit their buffers.
+ */
+void vmsfs_split_name_type(const char *fullname,
+                           char *name, size_t name_size,
+                           char *type, size_t type_size);
+
+/*
+ * Uppercase a NUL-terminated string in place (VMS/ODS-2 convention).
+ */
+void vmsfs_strupper(char *s);
+
+/*
+ * Compare a directory-entry name (@de_name, @de_name_len) against a target
+ * (@target, @target_len). @case_blind selects case-insensitive comparison.
+ * Returns true on an exact (length + content) match.
+ */
+bool vmsfs_name_match(const char *de_name, uint8_t de_name_len,
+                      const char *target, unsigned int target_len,
+                      int case_blind);
+
 #endif /* OVMX_VMSFS_CORE_H */

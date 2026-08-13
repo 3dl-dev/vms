@@ -23,17 +23,24 @@ obj-m := vmsfs.o
 # as the executive core (src/kernel-core/) is backed by src/kernel here.
 # (vmsfs_ondisk.h, already substrate-neutral, stays beside this glue and is
 # resolved by -I$(src) -- the same way the executive core reaches vms_internal.h,
-# which likewise stayed in src/kernel. The remaining block-coupled ODS-2
-# algorithms -- bitmap/cluster allocation and the directory-block scanner -- stay
-# here for now: they are entangled with struct super_block / struct vmsfs_sb_info
-# / struct buffer_head, a VFS block/inode seam the vmsfs_backend shim does not
-# cover yet; their extraction waits on the next phase, V2.)
+# which likewise stayed in src/kernel.
+#
+# V2 (rd vms-00c) adds vmsfs_name.o: the pure ODS-2 filename FORMAT algorithms
+# (split name/type, uppercase, case-blind name match) that were file-static in
+# vmsfs_blkdev.c and fit the EXISTING vmsfs_backend vocabulary shim (string /
+# ctype only, no host object). The remaining block-coupled ODS-2 algorithms --
+# bitmap/cluster allocation and the directory-block scanner -- stay here: they
+# are entangled with struct super_block / struct vmsfs_sb_info / struct
+# buffer_head / struct inode, and need the block/inode seam the vmsfs_backend
+# shim does not cover yet. That seam is DESIGNED in README-backend.md; building
+# it and moving those algorithms onto it is the next phase.)
 vmsfs-y := vmsfs_super.o \
            vmsfs_inode.o \
            vmsfs_file.o \
            vmsfs_dir.o \
            ../../kernel-core/vmsfs/vmsfs_version.o \
            ../../kernel-core/vmsfs/vmsfs_map.o \
+           ../../kernel-core/vmsfs/vmsfs_name.o \
            vmsfs_blkdev.o
 
 # -I$(src)/../../kernel-core/vmsfs: the substrate-agnostic ODS-2 core + the shim

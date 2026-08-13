@@ -11,8 +11,9 @@
  * behaviour-identical code:
  *
  *   uint8/16/32/64_t, size_t, bool    <- <linux/types.h>
- *   strchr/strlen/strncasecmp/memcpy  <- <linux/string.h>
- *   isdigit                           <- <linux/ctype.h>
+ *   strchr/strrchr/strlen/strncasecmp <- <linux/string.h>
+ *     /memcpy/memcmp/strscpy
+ *   isdigit/toupper                   <- <linux/ctype.h>
  *   snprintf                          <- <linux/kernel.h>
  *   VMSFS_EINVAL / ENAMETOOLONG /     == the Linux errno values EINVAL /
  *     EIO / ENOSPC                       ENAMETOOLONG / EIO / ENOSPC
@@ -30,8 +31,8 @@
 #define OVMX_VMSFS_BACKEND_LINUX_H
 
 #include <linux/types.h>    /* uint8/16/32/64_t, size_t, bool */
-#include <linux/string.h>   /* strchr, strlen, strncasecmp, memcpy */
-#include <linux/ctype.h>    /* isdigit */
+#include <linux/string.h>   /* strchr, strrchr, strlen, strncasecmp, memcpy, memcmp, strscpy */
+#include <linux/ctype.h>    /* isdigit, toupper */
 #include <linux/kernel.h>   /* snprintf */
 #include <linux/errno.h>    /* EINVAL, ENAMETOOLONG, EIO, ENOSPC */
 

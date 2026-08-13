@@ -599,62 +599,14 @@ static int vmsfs_ensure_blocks(struct super_block *sb, struct inode *inode,
 
 /* ================================================================
  * Name helpers
+ *
+ * The pure ODS-2 filename FORMAT algorithms -- vmsfs_split_name_type(),
+ * vmsfs_strupper() and vmsfs_name_match() (formerly the file-static
+ * vmsfs_blkdev_name_match) -- were promoted to the substrate-neutral ODS-2
+ * core (src/kernel-core/vmsfs/vmsfs_name.c, rd vms-00c) and are declared in
+ * vmsfs_core.h. They name no host object, so the NetBSD vnode backend calls
+ * the same source. This Linux glue just calls them.
  * ================================================================ */
-
-/*
- * Split "FOO.TXT" into name="FOO" and type="TXT".
- * If no dot, type is empty string.
- */
-static void vmsfs_split_name_type(const char *fullname,
-                                  char *name, size_t name_size,
-                                  char *type, size_t type_size)
-{
-    const char *dot = strrchr(fullname, '.');
-
-    if (dot && dot != fullname) {
-        size_t nlen = dot - fullname;
-
-        if (nlen >= name_size)
-            nlen = name_size - 1;
-        memcpy(name, fullname, nlen);
-        name[nlen] = '\0';
-        strscpy(type, dot + 1, type_size);
-    } else {
-        strscpy(name, fullname, name_size);
-        type[0] = '\0';
-    }
-}
-
-/*
- * Uppercase a string in place. VMS/ODS-2 convention.
- */
-static void vmsfs_strupper(char *s)
-{
-    while (*s) {
-        *s = toupper(*s);
-        s++;
-    }
-}
-
-/* ================================================================
- * Name matching helper
- * ================================================================ */
-
-/*
- * Case-insensitive comparison of a directory entry name against a target.
- */
-static bool vmsfs_blkdev_name_match(const char *de_name, uint8_t de_name_len,
-                                    const char *target, unsigned int target_len,
-                                    int case_blind)
-{
-    if (de_name_len != target_len)
-        return false;
-
-    if (case_blind)
-        return strncasecmp(de_name, target, target_len) == 0;
-    else
-        return memcmp(de_name, target, target_len) == 0;
-}
 
 /* ================================================================
  * Directory entry management
@@ -846,7 +798,7 @@ static uint16_t vmsfs_blkdev_highest_version(struct super_block *sb,
 
             de_ver = le16_to_cpu(de->de_version);
 
-            if (vmsfs_blkdev_name_match(
+            if (vmsfs_name_match(
                     de->de_name, de->de_name_len,
                     base_name, base_len,
                     sbi->opts.case_blind)) {
@@ -946,7 +898,7 @@ int vmsfs_blkdev_resolve(struct inode *dir, const char *name,
                                       sizeof(de_base), &de_parsed_ver);
             if (ret) {
                 /* If parse fails, try direct comparison */
-                if (vmsfs_blkdev_name_match(
+                if (vmsfs_name_match(
                         de->de_name, de->de_name_len,
                         base, strlen(base),
                         sbi->opts.case_blind)) {
@@ -961,7 +913,7 @@ int vmsfs_blkdev_resolve(struct inode *dir, const char *name,
             }
 
             /* Compare base names */
-            if (!vmsfs_blkdev_name_match(
+            if (!vmsfs_name_match(
                     de_base, strlen(de_base),
                     base, strlen(base),
                     sbi->opts.case_blind))

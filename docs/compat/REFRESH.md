@@ -93,8 +93,8 @@ The register ships **through** the release machinery, like everything else:
 - **Snapshot at cut.** `tools/cut-release.sh` runs `tools/compat/snapshot.py
   --out-dir dist/release-<version>/`, which writes the tracked
   `docs/compat/snapshots/<version>.json` (per-item coverage, for trend) and a
-  `compat-coverage.json` into the bundle, and prints the "Compatibility coverage"
-  Markdown block (coverage index + delta vs the previous snapshot: surfaces
+  `compat-coverage.json` into the bundle, and prints the "Compatibility surface"
+  Markdown block (counts + V1 met, and the delta vs the previous snapshot: surfaces
   advanced, facades resolved, regressions).
 - **Notes.** `tools/gen_release_notes.py` embeds that block, so every release
   states its coverage and what moved since the last one — generated, never

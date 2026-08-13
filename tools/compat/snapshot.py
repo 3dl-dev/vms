@@ -74,6 +74,7 @@ def build_snapshot(version: str):
     return {
         "version": version,
         "overall": overall,
+        "overall_in_scope": rc.rollup([r for r in rows if r["scope_1_0"] == "in"]),
         "by_domain": by_domain,
         "items": items,
     }
@@ -98,19 +99,25 @@ def status_rank(s):
 
 def delta_block(snap, prev) -> str:
     o = snap["overall"]
+    inn = snap.get("overall_in_scope", {})
     L = []
-    L.append("### Compatibility coverage")
+    L.append("### Compatibility surface")
     L.append("")
-    cov = o["coverage_index"]
-    line = (f"**{o['count']} surfaces catalogued** — coverage index **{cov}%** "
-            f"({o['by_status'].get('verified',0)} verified, "
+    # Counts, never a percentage of the surface (no known denominator).
+    line = (f"**{o['count']} surfaces catalogued** — "
+            f"{o['by_status'].get('verified',0)} verified, "
             f"{o['by_status'].get('implemented',0)} implemented, "
             f"{o['by_status'].get('partial',0)} partial, "
-            f"{o['facade_risk']} facade-risk).")
+            f"{o['by_status'].get('absent',0)} absent, "
+            f"{o['facade_risk']} facade-risk.")
+    if inn:
+        line += (f" V1: {inn.get('met',0)} of {inn.get('count',0)} committed "
+                 f"surfaces met.")
     if prev:
-        d = round(cov - prev["overall"]["coverage_index"], 1)
-        arrow = "▲" if d > 0 else ("▼" if d < 0 else "▬")
-        line += f" Coverage {arrow} {d:+} pts vs {prev['version']}."
+        pm = prev.get("overall_in_scope", {}).get("met")
+        if pm is not None and inn:
+            dm = inn.get("met", 0) - pm
+            line += f" ({dm:+} V1 met vs {prev['version']}.)"
     L.append(line)
     L.append("")
     if not prev:

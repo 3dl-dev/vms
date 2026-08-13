@@ -3,11 +3,11 @@
 
 > Generated 2026-08-13 from `docs/compat/` against `origin/main`. Source of truth is the YAML; this file is regenerated. See `docs/design-compat-surface-register.md`.
 
-## Coverage dashboard
+## Inventory
 
-**417 surfaces catalogued** across 9 domains; **373 in 1.0 scope**. **1.0-scope coverage index 61.6%** (all-catalogued 55.5%; rough weighted index).
+**417 surfaces catalogued** across 9 domains, each with a per-surface status.
 
-> ⚠ **What this number is not.** It is coverage of the surfaces this register *catalogues and marks in-scope* — not a percentage of all of VMS. VMS is vast; whole areas are out of scope or awaiting a scope call — most **languages** (Fortran/COBOL/BASIC/Pascal/… — OVMX has only C), DECwindows, and layered products among them. A high index means "far along on what we committed to for 1.0," never "nearly all of VMS." See the scope line below and the per-domain figures; `undecided`/`out` surfaces are excluded from the in-scope index but stay catalogued so the frontier is visible, not hidden.
+> This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
@@ -20,13 +20,21 @@
 
 Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 designed · ⬜ absent · ⚠ facade-risk (INV-6/Draper) · ≈ advisory.
 
-**1.0 scope:** in=373 · out=8 · stretch=27 · undecided=9
+## V1 readiness
+
+Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
+
+- **373 committed** — **237 met** (implemented/verified), 42 in progress (partial), 94 not started (absent/stub/designed).
+- ⚠ **44 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
+- Not in the V1 commitment set: 8 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
+
+_These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
 
 ## A. Programming Interfaces
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜⬜`  —  204 surfaces catalogued, 1.0-scope coverage 62.8% (195 in-scope), ⚠ 22 facade-risk
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜⬜`  —  204 surfaces catalogued (134 met · 15 in progress · 55 not started) · V1: 195 committed, 134 met · ⚠ 22 facade-risk
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND)
 <sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS RTL LIB$ Manual · reviewed 2026-08-13</sub>
@@ -34,7 +42,7 @@ _The C source-compatibility surface: descriptors, status codes, system services,
 LIB$ESTABLISH/REVERT/SIGNAL/STOP/SIG_TO_RET (5 of ~8 core CHF entry points) are implemented but advisory: a thread-local handler_stack is walked LIFO in-process, not real machine-frame unwind. LIB$SIG_TO_STOP and LIB$MATCH_COND are absent. chf$mech_array's savr0/savr1/frame fields are zeroed placeholders (facade-risk for handlers that read them). SYS$UNWIND and SYS$DCLEXH are documented simplified stubs. SYS$EXIV and SYS$SETEXV are absent.
 
 
-<sub>12 items · coverage 40.4% · ⚠ 1 facade-risk</sub>
+<sub>12 items · 5 met · 0 in progress · 7 not started · ⚠ 1 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -57,7 +65,7 @@ LIB$ESTABLISH/REVERT/SIGNAL/STOP/SIG_TO_RET (5 of ~8 core CHF entry points) are 
 16 DSC$K_CLASS_* descriptor classes defined; only S and D are backed by runtime support. A/VS/P/PI are constants only, blocking Fortran array-descriptor and COBOL/BASIC varying-string corpus. ~30 DSC$K_DTYPE_* data-type codes are all defined and real; VAX F/D/G/H floating dtypes are defined but nothing consumes them arithmetically. 6 copy/alloc helpers in descrip.c are implemented and real.
 
 
-<sub>14 items · coverage 58.2%</sub>
+<sub>14 items · 9 met · 1 in progress · 4 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -82,7 +90,7 @@ LIB$ESTABLISH/REVERT/SIGNAL/STOP/SIG_TO_RET (5 of ~8 core CHF entry points) are 
 starlet.h/lib headers declare 207 LIB$ symbols with no stub markers remaining. Broad genuine coverage across arithmetic/bit ops, char-scan, CLI/spawn (incl. a real CLI$ FSM parser), date/time, queue, symbol, tree, VM, translation tables, output, event flags, logical names, and misc groups. Notable named gaps: LIB$ISHFT/ISHFTC, LIB$TRIM, LIB$DO_COMMAND, LIB$SFREE_WAIT. LIB$TPARSE/LIB$TABLE_PARSE — formerly the known gap — are now a real FSM with backtracking (vms-9f6, CLOSED).
 
 
-<sub>22 items · coverage 60.9%</sub>
+<sub>22 items · 14 met · 3 in progress · 5 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -115,7 +123,7 @@ starlet.h/lib headers declare 207 LIB$ symbols with no stub markers remaining. B
 VMS ships ~45 MTH$ routines; 42 are declared in the OVMX header and implemented, wrapping libm and broadly real. MTH$INIT_RANDOM_NUMBER_GENERATOR is absent. MTH$RANDOM uses an OVMX-invented LCG that has not been validated against VMS's actual PRNG algorithm.
 
 
-<sub>3 items · coverage 56.7%</sub>
+<sub>3 items · 2 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -129,7 +137,7 @@ VMS ships ~45 MTH$ routines; 42 are declared in the OVMX header and implemented,
 ~50 OTS$ routines header-declared; 32 of 43 are implemented, broadly real. Gaps: packed-decimal conversions (OTS$CVT_T_P/CVT_P_T, blocking COBOL/DIBOL decimal), the comparison family (OTS$CMP_GTR/GEQ/...), and string-descriptor management (OTS$SCOPY_DXDX/SCOPY_R_DX/SFREE1_DD/SFREEN_DD/SGET1_DD) — all declared in the header but with zero implementation, a pure stub gap.
 
 
-<sub>13 items · coverage 32.7%</sub>
+<sub>13 items · 5 met · 0 in progress · 8 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -153,7 +161,7 @@ VMS ships ~45 MTH$ routines; 42 are declared in the OVMX header and implemented,
 Record Management Services entry points, FAB/RAB/NAM/XAB control blocks, and the three file organizations. Sequential and Relative are real end to end. Indexed is single-key only. Cross-process record/file locking is the one gap that shadows the whole facility: sys$get/put/update/delete/find dispatch for real but nothing serializes two processes touching the same file.
 
 
-<sub>31 items · coverage 69.0% · ⚠ 9 facade-risk</sub>
+<sub>31 items · 24 met · 2 in progress · 5 not started · ⚠ 9 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -195,7 +203,7 @@ Record Management Services entry points, FAB/RAB/NAM/XAB control blocks, and the
 Stub only — constants and status codes (49 lines), no virtual-display implementation (smg$create_virtual_display, smg$paste_virtual_display, etc. all absent). SMG$ is a large VMS RTL facility; OVMX's numeric constant values are unconfirmed against a fetchable public source pending operator sign-off (vms-531). Terminal I/O at the DCL level (a termios SET TERMINAL layer) is a separate, real surface — not SMG$.
 
 
-<sub>2 items · coverage 10.0%</sub>
+<sub>2 items · 0 met · 0 in progress · 2 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -208,7 +216,7 @@ Stub only — constants and status codes (49 lines), no virtual-display implemen
 STS$V/M/S_* bitfield layout complete and oracle-pinned. SS$_ codes: 95 of VMS's ~500+ defined (common/executive subset, long tail absent). RMS$_ codes: 81 of ~200+ defined. SYS$GETMSG message text: 51 of 176 SS$+RMS$ codes have real oracle-pinned text; unknown codes fall back to a generic "%FAC-S-XXXX message number N" string, not VMS-authentic. Facility number registry: 6 of VMS's ~300+ facilities defined, so getmsg/decode for most facilities falls to generic NONAME. starlet.h declares only ~86-192 sys$ symbols vs several hundred in real VMS.
 
 
-<sub>6 items · coverage 53.3% · ⚠ 1 facade-risk</sub>
+<sub>6 items · 1 met · 4 in progress · 1 not started · ⚠ 1 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -225,7 +233,7 @@ STS$V/M/S_* bitfield layout complete and oracle-pinned. SS$_ codes: 95 of VMS's 
 Descriptor-based string routines. OVMX declares 23 of the ~85 STR$ routines VMS ships; the 23 present are all real. Remaining routines are absent (compile-time detectable — the correct failure mode for source compat).
 
 
-<sub>24 items · coverage 81.5%</sub>
+<sub>24 items · 23 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -260,7 +268,7 @@ Descriptor-based string routines. OVMX declares 23 of the ~85 STR$ routines VMS 
 VMS ships ~4 AST-related services; OVMX declares 2, both implemented and real, kernel-queued via vms.ko.
 
 
-<sub>3 items · coverage 56.7%</sub>
+<sub>3 items · 2 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -274,7 +282,7 @@ VMS ships ~4 AST-related services; OVMX declares 2, both implemented and real, k
 VMS ships ~10 event-flag services; OVMX declares 10, all implemented and real, backed by vms.ko and cross-process proven. SYS$DCLEF (declare/create a common event-flag cluster) is absent.
 
 
-<sub>11 items · coverage 77.3%</sub>
+<sub>11 items · 10 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -296,7 +304,7 @@ VMS ships ~10 event-flag services; OVMX declares 10, all implemented and real, b
 FAO (SYS$FAO/SYS$FAOL + LIB$ wrapper forms): 3/3 implemented, real. Message services: 2/4 partial. SYS$PUTMSG silently discards its facnam argument (facade-risk). SYS$SNDJBC is absent.
 
 
-<sub>6 items · coverage 65.0% · ⚠ 1 facade-risk</sub>
+<sub>6 items · 4 met · 1 in progress · 1 not started · ⚠ 1 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -313,7 +321,7 @@ FAO (SYS$FAO/SYS$FAOL + LIB$ wrapper forms): 3/3 implemented, real. Message serv
 VMS ships ~10 channel/QIO services; OVMX declares 6. Only the console channel is executive-routed and fully real; other channels are private per-process file descriptors, invisible cross-process (advisory). The 6th named routine, SYS$CANCEL (process-wide I/O cancellation), is registered under the sys-process facility to avoid a duplicate row.
 
 
-<sub>6 items · coverage 70.8%</sub>
+<sub>6 items · 5 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -330,7 +338,7 @@ VMS ships ~10 channel/QIO services; OVMX declares 6. Only the console channel is
 VMS ships ~10 lock-management services; OVMX implements a 3-routine subset (ENQ/ENQW/DEQ), real. SYS$GETLKI and SYS$GETLKIW are absent entirely.
 
 
-<sub>6 items · coverage 42.5%</sub>
+<sub>6 items · 3 met · 0 in progress · 3 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -347,7 +355,7 @@ VMS ships ~10 lock-management services; OVMX implements a 3-routine subset (ENQ/
 The 3 SYS$ logical-name entry points (CRELNM/DELLNM/TRNLNM) are all implemented. LNM$SYSTEM is executive-resident: create/delete/translate go through /dev/vms (vms_kif_lnm_define/_delete/_translate) so a name defined in LNM$SYSTEM by one process is visible to every other process on the node, with no per-process fallback if the executive is absent (fails honestly with SS$_NOSUCHDEV, per Rule 9/INV-6). LNM$PROCESS/JOB/GROUP tables remain process-private in a local logical_table[] array; JOB/GROUP executive residency (making them visible across the processes of a job/group, as on real VMS) is the deferred half of vms-d37.
 
 
-<sub>3 items · coverage 50.0%</sub>
+<sub>3 items · 0 met · 3 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -361,7 +369,7 @@ The 3 SYS$ logical-name entry points (CRELNM/DELLNM/TRNLNM) are all implemented.
 VMS ships ~2 mailbox-creation services; OVMX implements both, real, vms.ko-resident. Replaced an earlier AF_UNIX facade.
 
 
-<sub>2 items · coverage 85.0%</sub>
+<sub>2 items · 2 met · 0 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -374,7 +382,7 @@ VMS ships ~2 mailbox-creation services; OVMX implements both, real, vms.ko-resid
 VMS ships ~10 memory-management services; OVMX declares 9. SYS$CRETVA/ DELTVA/EXPREG/CRMPSC are real (mmap-backed). SYS$DGBLSC/PURGWS/LKWSET/ ULWSET validate arguments and return SS$_NORMAL with nothing done (facade-risk); LKWSET/ULWSET are kernel-mode/PFN working-set-lock services, out of scope for 1.0. SYS$ADJSTK and SYS$UPDSEC are absent. SYS$LCKPAG (lock pages in physical memory) is absent and permanently out of scope (kernel-mode/PFN).
 
 
-<sub>11 items · coverage 38.2% · ⚠ 4 facade-risk</sub>
+<sub>11 items · 4 met · 0 in progress · 7 not started · ⚠ 4 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -396,7 +404,7 @@ VMS ships ~10 memory-management services; OVMX declares 9. SYS$CRETVA/ DELTVA/EX
 VMS ships ~25 process-control services; OVMX declares 14. CREPRC/DELPRC/ HIBER/EXIT are real. WAKE/SUSPND/RESUME/SETPRI/FORCEX all silently discard their prcnam argument and act on the calling Linux PID only (facade-risk). SYS$CANCEL is a literal no-op returning SS$_NORMAL (facade-risk). SYS$SETPRN and SYS$PROCESS_SCAN are absent.
 
 
-<sub>13 items · coverage 60.4% · ⚠ 6 facade-risk</sub>
+<sub>13 items · 9 met · 0 in progress · 4 not started · ⚠ 6 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -420,7 +428,7 @@ VMS ships ~25 process-control services; OVMX declares 14. CREPRC/DELPRC/ HIBER/E
 GETJPI/GETJPIW/GETSYI/GETSYIW are all implemented and real for most JPI$_/SYI$_ item codes.
 
 
-<sub>5 items · coverage 78.0%</sub>
+<sub>5 items · 4 met · 1 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -436,7 +444,7 @@ GETJPI/GETJPIW/GETSYI/GETSYIW are all implemented and real for most JPI$_/SYI$_ 
 SYS$SETPRV is implemented but advisory: privileges are tracked in the PCB with no privileged-mode transition unless already privileged. SYS$CHKPRO is implemented with correct SOGW protection-check logic but advisory because zero OVMX callers currently invoke it. SYS$CHECK_ACCESS (a legacy second-opinion access check) was deliberately removed by design (vms-2b8) as a good anti-facade precedent, not a gap to fill. Rights-database and auditing services belong to other facilities (system-management domain).
 
 
-<sub>3 items · coverage 56.7%</sub>
+<sub>3 items · 2 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -450,7 +458,7 @@ SYS$SETPRV is implemented but advisory: privileges are tracked in the PCB with n
 VMS ships ~10 time/timer services; OVMX declares 7. SYS$GETTIM/NUMTIM/BINTIM/ ASCTIM are real conversions. SYS$SETIMR/CANTIM are process-local POSIX timers, not queued through an executive timer facility. SYS$SCHDWK and SYS$GETTIM_PREC are absent.
 
 
-<sub>8 items · coverage 63.7%</sub>
+<sub>8 items · 6 met · 0 in progress · 2 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -467,7 +475,7 @@ VMS ships ~10 time/timer services; OVMX declares 7. SYS$GETTIM/NUMTIM/BINTIM/ AS
 
 _ODS-2 on-disk, filespec/wildcard, devices, the logical-name namespace, FDL._
 
-`✅✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠🟠⬜⬜`  —  30 surfaces catalogued, 1.0-scope coverage 77.1% (29 in-scope), ⚠ 1 facade-risk
+`✅✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠🟠⬜⬜`  —  30 surfaces catalogued (23 met · 3 in progress · 4 not started) · V1: 29 committed, 23 met · ⚠ 1 facade-risk
 
 ### devices — Devices ($GETDVI, MOUNT/DISMOUNT/INITIALIZE, DISK$label)
 <sub>scope: in · plan: vms-651 · ref: OpenVMS I/O User's Reference Manual; OpenVMS System Manager's Manual (MOUNT) · reviewed 2026-08-13</sub>
@@ -475,7 +483,7 @@ _ODS-2 on-disk, filespec/wildcard, devices, the logical-name namespace, FDL._
 Device information, mount/dismount/initialize. MOUNT is real end to end since the old fake was killed (vms-651) — privilege-checked, executive-resolved, real mount(2). GETDVI is real for the 14 of 48 DVI$_ items OVMX implements; the rest honestly return zero rather than fabricating a value.
 
 
-<sub>7 items · coverage 67.9%</sub>
+<sub>7 items · 4 met · 2 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -493,7 +501,7 @@ Device information, mount/dismount/initialize. MOUNT is real end to end since th
 FDL is not implemented anywhere in OVMX. The one place it surfaces (CONVERT's /FDL qualifier) is honestly stubbed: accepted, ignored, and says so.
 
 
-<sub>2 items · coverage 10.0%</sub>
+<sub>2 items · 0 met · 0 in progress · 2 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -506,7 +514,7 @@ FDL is not implemented anywhere in OVMX. The one place it surfaces (CONVERT's /F
 VMS filespec syntax (device:[directory]name.type;version), wildcards, and search-list translation. Wildcards, concealed/rooted logicals, and search-list file lookup are real; the ellipsis wildcard is a documented advisory marker whose recursion lives in DIRECTORY, not the translator.
 
 
-<sub>5 items · coverage 78.0%</sub>
+<sub>5 items · 4 met · 1 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -522,7 +530,7 @@ VMS filespec syntax (device:[directory]name.type;version), wildcards, and search
 The four standard logical-name tables, iterative translation, concealed/rooted and search-list logicals. System/Group/Job are executive-resident (vms.ko, no host fallback per INV-6) and QEMU-verified cross-process; Process is correctly local (VMS scopes it per-process too). $CRELNT is not yet declared.
 
 
-<sub>9 items · coverage 82.2%</sub>
+<sub>9 items · 8 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -542,7 +550,7 @@ The four standard logical-name tables, iterative translation, concealed/rooted a
 Two distinct surfaces: the OVMX runtime filesystem (vmsfs.ko — its own honestly-labeled format, not byte-compatible) and a genuine Files-11 ODS-2 reader/writer for interop, byte-exact-verified against a real OpenVMS VAX volume from lab-2. File versioning is real and wired to DCL; COPY/CREATE has a versioning-semantics gap.
 
 
-<sub>7 items · coverage 87.1% · ⚠ 1 facade-risk</sub>
+<sub>7 items · 7 met · 0 in progress · 0 not started · ⚠ 1 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -558,7 +566,7 @@ Two distinct surfaces: the OVMX runtime filesystem (vmsfs.ko — its own honestl
 
 _DCL verbs and scripting, qualifier grammar, F$ lexicals, utilities, HELP, queues._
 
-`✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟠⬜⬜⬜⬜⬜⬜⬜`  —  64 surfaces catalogued, 1.0-scope coverage 59.1% (57 in-scope), ⚠ 11 facade-risk
+`✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟠⬜⬜⬜⬜⬜⬜⬜`  —  64 surfaces catalogued (29 met · 14 in progress · 21 not started) · V1: 57 committed, 29 met · ⚠ 11 facade-risk
 
 ### dcl-qualifiers — DCL Qualifier Grammar (Engine A / CLD tables)
 <sub>scope: in · tier 1 · plan: vms-8ad · ref: OpenVMS Command Definition Utility (CDU) Manual; DCL Dictionary · reviewed 2026-08-13</sub>
@@ -566,7 +574,7 @@ _DCL verbs and scripting, qualifier grammar, F$ lexicals, utilities, HELP, queue
 Engine A: per-verb qualifier validation. 28 of 55 builtin verbs carry real CLD-style qualifier tables (hand-written C, not CDU-generated); the remaining 9 accept-all legacy verbs perform zero qualifier validation. A real CLI$-callable CDU compiler exists for external images but is not yet used to generate the 55 builtin verb tables.
 
 
-<sub>4 items · coverage 50.0% · ⚠ 1 facade-risk</sub>
+<sub>4 items · 1 met · 2 in progress · 1 not started · ⚠ 1 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -581,7 +589,7 @@ Engine A: per-verb qualifier validation. 28 of 55 builtin verbs carry real CLD-s
 Command-procedure control flow: IF/THEN/GOTO/GOSUB are real; the condition model, symbol scoping, and $STATUS reporting have material honesty gaps, the worst of which ($STATUS never refreshed on command-not-found inside a procedure) silently swallows typo'd commands in any .COM.
 
 
-<sub>8 items · coverage 41.9% · ⚠ 5 facade-risk</sub>
+<sub>8 items · 2 met · 3 in progress · 3 not started · ⚠ 5 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -600,7 +608,7 @@ Command-procedure control flow: IF/THEN/GOTO/GOSUB are real; the condition model
 OVMX's static builtin_verbs[] dispatch table (dcl_builtin.c) carries 55 verbs against VMS's ~150 (SET/SHOW count as ~30-subverb umbrellas each, not single verbs). Breadth catalogued as items rather than one row per verb; each notable missing verb family and the SET/SHOW umbrella depth get their own item.
 
 
-<sub>11 items · coverage 9.1% · ⚠ 2 facade-risk</sub>
+<sub>11 items · 0 met · 2 in progress · 9 not started · ⚠ 2 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -622,7 +630,7 @@ OVMX's static builtin_verbs[] dispatch table (dcl_builtin.c) carries 55 verbs ag
 The HELP verb and its topic/library content. Real, tested.
 
 
-<sub>1 items · coverage 100.0%</sub>
+<sub>1 items · 1 met · 0 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -634,7 +642,7 @@ The HELP verb and its topic/library content. Real, tested.
 41 of VMS's ~43 F$ lexical functions are present and real. Only F$FID_TO_NAME is absent. The unknown-lexical error path returns an authentic %DCL-W-IVFNAM, oracle-grounded.
 
 
-<sub>9 items · coverage 77.2%</sub>
+<sub>9 items · 8 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -654,7 +662,7 @@ The HELP verb and its topic/library content. Real, tested.
 The queue manager itself is real (binary QMAN$MASTER.DAT, flock-serialized, VMS binary time), and SUBMIT/PRINT can enqueue real entries — but nothing ever dequeues and runs a batch job. Queue-management verb syntax deviates from VMS (SET QUEUE/START etc rather than START/QUEUE).
 
 
-<sub>7 items · coverage 76.4% · ⚠ 1 facade-risk</sub>
+<sub>7 items · 5 met · 1 in progress · 1 not started · ⚠ 1 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -672,7 +680,7 @@ The queue manager itself is real (binary QMAN$MASTER.DAT, flock-serialized, VMS 
 Standalone utility images invoked as DCL verbs. Most core system-management utilities are real; the record/data utilities (SORT, BACKUP, CONVERT) are honestly partial or facade-risk on their advanced qualifiers rather than full VMS-parity implementations.
 
 
-<sub>24 items · coverage 58.5% · ⚠ 2 facade-risk</sub>
+<sub>24 items · 12 met · 6 in progress · 6 not started · ⚠ 2 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -705,7 +713,7 @@ Standalone utility images invoked as DCL verbs. Most core system-management util
 
 _SYSUAF/accounts, privileges, rights DB, protection/ACLs, auditing, SYSGEN, boot, install, accounting._
 
-`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  36 surfaces catalogued, 1.0-scope coverage 57.4% (31 in-scope), ⚠ 6 facade-risk
+`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  36 surfaces catalogued (19 met · 2 in progress · 15 not started) · V1: 31 committed, 19 met · ⚠ 6 facade-risk
 
 ### accounting — Accounting
 <sub>scope: in · plan: vms-8ad · ref: OpenVMS Guide to System Security; DCL Dictionary (SET/SHOW ACCOUNTING) · reviewed 2026-08-13</sub>
@@ -713,7 +721,7 @@ _SYSUAF/accounts, privileges, rights DB, protection/ACLs, auditing, SYSGEN, boot
 A thin, real slice: per-user last-login timestamps and a persisted, system-wide accounting-enabled flag that SET/SHOW ACCOUNTING and the record path both honor. No ACCOUNTING.DAT journal — login/logout, process, and image accounting records are not implemented.
 
 
-<sub>3 items · coverage 56.7%</sub>
+<sub>3 items · 2 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -727,7 +735,7 @@ A thin, real slice: per-user last-login timestamps and a persisted, system-wide 
 Entire facility group is unbuilt — no security-audit journal, no break-in evasion (login-failure throttling/lockout), no OPCOM security-class alarms. Not a 1.0 blocker on current evidence; flagged for an operator scope call since it borders the DISUSER/CAPTIVE login-enforcement gap in sysuaf.
 
 
-<sub>3 items · coverage 0.0%</sub>
+<sub>3 items · 0 met · 0 in progress · 3 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -741,7 +749,7 @@ Entire facility group is unbuilt — no security-audit journal, no break-in evas
 The full VMS-faithful boot chain is real: conversational SYSBOOT>, the 9-phase STDRV phased driver startup, PID 1 sequencing through STARTUP.COM-equivalent, and an OPCOM operator-log bridge. SYSGEN parameters consumed at boot are only as complete as the sysgen facility.
 
 
-<sub>5 items · coverage 78.0%</sub>
+<sub>5 items · 4 met · 1 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -757,7 +765,7 @@ The full VMS-faithful boot chain is real: conversational SYSBOOT>, the 9-phase S
 PRODUCT INSTALL/SHOW and the [SYS0.SYSCOMMON]-rooted install target are real. The PCSI kit byte layout is an OVMX-invented format, correctly labelled as such (clean-room posture — public docs don't publish PCSI's byte-level layout). Boot-to-login is CI-gated and verified.
 
 
-<sub>5 items · coverage 88.0%</sub>
+<sub>5 items · 5 met · 0 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -773,7 +781,7 @@ PRODUCT INSTALL/SHOW and the [SYS0.SYSCOMMON]-rooted install target are real. Th
 All 39 VMS privilege bits are defined. Mode-transition and SETPRV enforcement in the kernel executive are real — including a bit-position bug (SETPRV mismapped to DETACH) caught and fixed against lab-VAX SDA. File-access privilege overrides (SYSPRV/BYPASS/READALL/GRPPRV) are never consulted by the filesystem permission hook — a distinct, unfixed gap.
 
 
-<sub>4 items · coverage 71.2% · ⚠ 1 facade-risk</sub>
+<sub>4 items · 3 met · 0 in progress · 1 not started · ⚠ 1 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -788,7 +796,7 @@ All 39 VMS privilege bits are defined. Mode-transition and SETPRV enforcement in
 SOGW/UIC protection is kernel-enforced and real for the common case. The Delete bit is advisory-only. $CHKPRO computes correctly but nothing calls it. The legacy $CHECK_ACCESS 2nd-opinion routine was deliberately removed (vms-2b8) rather than left as a facade — a precedent, not a gap. ACLs are undefined beyond constants. SYSPRV/BYPASS/READALL override is absent (cross-ref privileges).
 
 
-<sub>6 items · coverage 31.7% · ⚠ 1 facade-risk</sub>
+<sub>6 items · 2 met · 0 in progress · 4 not started · ⚠ 1 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -805,7 +813,7 @@ SOGW/UIC protection is kernel-enforced and real for the common case. The Delete 
 RIGHTSLIST.DAT identifiers are read and resolved for real. Object ACEs (the rights-DB-adjacent half of access control) are not built — see protection-acl for the fuller ACL gap; this file covers identifiers only.
 
 
-<sub>2 items · coverage 42.5%</sub>
+<sub>2 items · 1 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -818,7 +826,7 @@ RIGHTSLIST.DAT identifiers are read and resolved for real. Object ACEs (the righ
 VMS ships ~600 tunable SYSGEN parameters; OVMX has a thin, genuinely dynamic, file-backed subset. AUTOGEN (the feedback-driven parameter computation utility) has no separate implementation evidence.
 
 
-<sub>2 items · coverage 25.0%</sub>
+<sub>2 items · 0 met · 1 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -831,7 +839,7 @@ VMS ships ~600 tunable SYSGEN parameters; OVMX has a thin, genuinely dynamic, fi
 Full UAF account record storage and SHA-256 password authentication are real. Account-state enforcement (DISUSER, CAPTIVE, password expiration, login limits) is defined in the bit layout but never read at login time — an authentication gate that silently does not gate. SSH additionally drops no credentials after authenticating (cross-ref protection-acl).
 
 
-<sub>6 items · coverage 28.3% · ⚠ 4 facade-risk</sub>
+<sub>6 items · 2 met · 0 in progress · 4 not started · ⚠ 4 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -846,7 +854,7 @@ Full UAF account record storage and SHA-256 password authentication are real. Ac
 
 _SCS, NISCA/NISCS, connection manager/quorum, cluster-wide DLM, MSCP serving, cluster-wide logicals, shadowing._
 
-`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟠🟠🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  13 surfaces catalogued, 1.0-scope coverage 47.1% (12 in-scope), ⚠ 1 facade-risk
+`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟠🟠🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  13 surfaces catalogued (6 met · 0 in progress · 7 not started) · V1: 12 committed, 6 met · ⚠ 1 facade-risk
 
 ### cluster-dlm — Cluster-wide Distributed Lock Manager
 <sub>scope: in · plan: vms-694 · ref: OpenVMS Cluster Systems manual; $ENQ/$DEQ/$GETLKI system services · reviewed 2026-08-13</sub>
@@ -854,7 +862,7 @@ _SCS, NISCA/NISCS, connection manager/quorum, cluster-wide DLM, MSCP serving, cl
 Cross-node lock forwarding and resource remastering are absent, and that absence is authentic: a non-local directory or master honestly fails with SS$_UNSUPPORTED rather than fabricating a grant. See kernel-executive.yaml for the single-node lock manager this builds on.
 
 
-<sub>1 items · coverage 0.0%</sub>
+<sub>1 items · 0 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -866,7 +874,7 @@ Cross-node lock forwarding and resource remastering are absent, and that absence
 Not separately evidenced as built. Cluster-wide logical-name scope degrades to system-wide; cluster-wide global sections are absent.
 
 
-<sub>2 items · coverage 0.0%</sub>
+<sub>2 items · 0 met · 0 in progress · 2 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -879,7 +887,7 @@ Not separately evidenced as built. Cluster-wide logical-name scope degrades to s
 Full HELLO/disconnect/reconnect/depart finite-state machines, byte-exact against mined wire captures. Quorum recompute (including quorum disk) is real. Membership/rejoin is a single 3-party member-driven join FSM — VMS's own model has no distinct rejoin state either, and §4(O.38) proved OVMX's rejoin is 4/5 member-oracle reliable once its own self-verdict bug was fixed.
 
 
-<sub>3 items · coverage 90.0%</sub>
+<sub>3 items · 3 met · 0 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -893,7 +901,7 @@ Full HELLO/disconnect/reconnect/depart finite-state machines, byte-exact against
 MSCP disk serving does real pread()/pwrite() against the actual served volume, default read-only with write opt-in. ONLINE END is book-only and unproven against any capture. TMSCP tape serving is not evidenced.
 
 
-<sub>3 items · coverage 35.0%</sub>
+<sub>3 items · 1 met · 0 in progress · 2 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -907,7 +915,7 @@ MSCP disk serving does real pread()/pwrite() against the actual served volume, d
 The LAN transport under SCS: genuine raw-Ethernet frames on the LAVC/SCA ethertype, not a UDP/IP tunnel standing in for the real wire.
 
 
-<sub>1 items · coverage 85.0%</sub>
+<sub>1 items · 1 met · 0 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -919,7 +927,7 @@ The LAN transport under SCS: genuine raw-Ethernet frames on the LAVC/SCA etherty
 The SCS message/connection layer OVMX's cluster wire stack is built on. Connection Descriptor Table and message service are real and wired end-to-end into scsd.c (src/vmsscs is ~19,800 LOC across 24 .c + scsd.c). The datagram (class 2) service is real internal logic with zero production callers — unwired dead code, self-labeled as such.
 
 
-<sub>2 items · coverage 52.5% · ⚠ 1 facade-risk</sub>
+<sub>2 items · 1 met · 0 in progress · 1 not started · ⚠ 1 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -932,7 +940,7 @@ The SCS message/connection layer OVMX's cluster wire stack is built on. Connecti
 Absent. docs/compatibility-contract.md lists host-based (DSSA) volume shadowing as permanently out of scope.
 
 
-<sub>1 items · coverage 0.0%</sub>
+<sub>1 items · 0 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -942,7 +950,7 @@ Absent. docs/compatibility-contract.md lists host-based (DSSA) volume shadowing 
 
 _Object/image format, activation, symbol vectors, LINK, LIBRARIAN, MACRO, MESSAGE, MMS/MMK, self-hosting compiler._
 
-`✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🔵🔵⬜⬜⬜⬜⬜⬜`  —  24 surfaces catalogued, 1.0-scope coverage 66.2% (21 in-scope)
+`✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🔵🔵⬜⬜⬜⬜⬜⬜`  —  24 surfaces catalogued (15 met · 1 in progress · 8 not started) · V1: 21 committed, 15 met
 
 ### image-activation — Image Format + Activation (IMGACT, Shareable/Installed Images, TLS)
 <sub>scope: in · plan: vms-ade · ref: OpenVMS Linker Utility Manual; Programming Concepts Manual (image activation) · reviewed 2026-08-13</sub>
@@ -950,7 +958,7 @@ _Object/image format, activation, symbol vectors, LINK, LIBRARIAN, MACRO, MESSAG
 IMGACT.EXE activates images in-process via PT_INTERP (freestanding static-PIE); DCL, LOGINOUT, TCC and all shareable images activate natively through symbol vectors, proven by 25 activation scripts. Installed images (Known Image DB) and TLS in activated images are real. Image container byte layout (.vms$sv/.vms$imp/.vms$rel/.vms$tls) is covered separately under the symbol-vectors facility.
 
 
-<sub>4 items · coverage 92.5%</sub>
+<sub>4 items · 4 met · 0 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -965,7 +973,7 @@ IMGACT.EXE activates images in-process via PT_INTERP (freestanding static-PIE); 
 No LIBRARIAN.EXE binary exists yet — design-only. The plan is an `ar` whole-archive container as the .OLB representation (Rule-8 labeled — VMS's .OLB byte format is not reproduced); LINK.EXE already ingests `ar` archives (see object-format), so .OLB consumption needs no new LINK.EXE code — only a LIBRARIAN.EXE image and its native-link wiring (mk_librarian.sh) remain. Self-host gate (vms-59a).
 
 
-<sub>1 items · coverage 10.0%</sub>
+<sub>1 items · 0 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -977,7 +985,7 @@ No LIBRARIAN.EXE binary exists yet — design-only. The plan is an `ar` whole-ar
 LINK.EXE is a real, substantial implementation (2197 lines, 11 test scripts): symbol resolution, relocation, symbol-vector binding, GSMATCH, ar whole-archive ingestion. Targets EM_X86_64 and EM_AARCH64 only — no Alpha (EM_ALPHA) or VAX backend exists on origin/main yet.
 
 
-<sub>5 items · coverage 51.0%</sub>
+<sub>5 items · 3 met · 0 in progress · 2 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -993,7 +1001,7 @@ LINK.EXE is a real, substantial implementation (2197 lines, 11 test scripts): sy
 MACRO-32 is absent and explicitly out of scope by prior compatibility- contract decision — the self-hosting integrated assembler (tcc) is GAS-syntax only, not MACRO-32.
 
 
-<sub>1 items · coverage 0.0%</sub>
+<sub>1 items · 0 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1005,7 +1013,7 @@ MACRO-32 is absent and explicitly out of scope by prior compatibility- contract 
 The MESSAGE compiler (.MSG source -> generated facility status-code header) is entirely absent — no implementation found anywhere on origin/main.
 
 
-<sub>1 items · coverage 0.0%</sub>
+<sub>1 items · 0 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1017,7 +1025,7 @@ The MESSAGE compiler (.MSG source -> generated facility status-code header) is e
 RTL prerequisites (CLI$, LIB$TPARSE, SYS$FILESCAN, SYS$SETDDIR, LIB$GET_FOREIGN) are all complete on origin/main (P1-P5). MMK.EXE itself is not built: no mk_mmk.sh, no native-link vector entries, and the parse_tables.mar C-port (vms-486) is not built. Self-host gate — the 1.0 self-host build uses ported MMS/MMK, not bespoke BUILD.COM.
 
 
-<sub>3 items · coverage 31.7%</sub>
+<sub>3 items · 1 met · 0 in progress · 2 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1031,7 +1039,7 @@ RTL prerequisites (CLI$, LIB$TPARSE, SYS$FILESCAN, SYS$SETDDIR, LIB$GET_FOREIGN)
 LINK.EXE ingests standard ELF relocatable objects and `ar` whole-archive containers, not VAX/Alpha OBJ$ record-based object modules. Symbol resolution and relocation semantics are real; the on-disk object container is OVMX's own (ELF) where VMS's OBJ$ record format is not published at byte level (Rule 8) — not presented as VMS-authentic.
 
 
-<sub>3 items · coverage 56.7%</sub>
+<sub>3 items · 2 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1045,7 +1053,7 @@ LINK.EXE ingests standard ELF relocatable objects and `ar` whole-archive contain
 tcc self-hosts inside OVMX (S2): it compiles its own source, and gen2 == gen3 byte-identical. BUILD.COM is zero-bash. S3-S5 (assembler, LIBRARIAN, MMS, editor as OVMX-native images) are partial — the RTL floor is complete, the images themselves are not built (vms-678). tcc is an independence beachhead, not a performance compiler; the longer-term target is rustc/Rust, not gcc.
 
 
-<sub>3 items · coverage 78.3%</sub>
+<sub>3 items · 2 met · 1 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1059,7 +1067,7 @@ tcc self-hosts inside OVMX (S2): it compiles its own source, and gen2 == gen3 by
 Universal symbol vectors (position-bound binding), GSMATCH (ALWAYS/EQUAL/LEQUAL, major/minor), and image ident are all implemented. GSMATCH comparison semantics are real (public-doc derived); the symbol-vector byte layout itself is OVMX-original where VMS's is not publicly published at byte level (Rule 8).
 
 
-<sub>3 items · coverage 85.0%</sub>
+<sub>3 items · 3 met · 0 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1071,7 +1079,7 @@ Universal symbol vectors (position-bound binding), GSMATCH (ALWAYS/EQUAL/LEQUAL,
 
 _TCP/IP Services (UCX), DECnet Phase IV, LAT, SSH._
 
-`🟢🟢🟢🟢🟡🟡🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  11 surfaces catalogued, 1.0-scope coverage 24.0% (10 in-scope), ⚠ 3 facade-risk
+`🟢🟢🟢🟢🟡🟡🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  11 surfaces catalogued (2 met · 1 in progress · 8 not started) · V1: 10 committed, 2 met · ⚠ 3 facade-risk
 
 ### decnet — DECnet Phase IV (NSP, Task-to-Task, SET HOST)
 <sub>scope: in · plan: vms-30e · ref: DECnet for OpenVMS Networking Manual · reviewed 2026-08-13</sub>
@@ -1079,7 +1087,7 @@ _TCP/IP Services (UCX), DECnet Phase IV, LAT, SSH._
 Total greenfield — no implementation anywhere. SET HOST is a stub that honestly reports unavailability. NODE"acc"::dev:[dir]file filespec syntax parses and reconstructs the node prefix (real), but nothing downstream acts on it — no NSP, no task-to-task. 1.0 blocker (vms-30e), depends on vms-19e (owns-kernel).
 
 
-<sub>4 items · coverage 17.5%</sub>
+<sub>4 items · 0 met · 1 in progress · 3 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1094,7 +1102,7 @@ Total greenfield — no implementation anywhere. SET HOST is a stub that honestl
 No implementation anywhere. Not a 1.0 blocker.
 
 
-<sub>1 items · coverage 0.0%</sub>
+<sub>1 items · 0 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1106,7 +1114,7 @@ No implementation anywhere. Not a 1.0 blocker.
 vmsshd is real code (903 lines, libssh, full LOGINOUT-equivalent PCB init, execs vmsdcl --login) but is unreachable: PID 1's start_sshd() call is gone (no start_sshd under src/ovmx_init on origin/main) and there is no NIC to reach it (see tcpip-services). Every SSH session also runs euid=0 — no credential drop, a security facade-risk distinct from the reachability gap.
 
 
-<sub>3 items · coverage 28.3% · ⚠ 2 facade-risk</sub>
+<sub>3 items · 1 met · 0 in progress · 2 not started · ⚠ 2 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1120,7 +1128,7 @@ vmsshd is real code (903 lines, libssh, full LOGINOUT-equivalent PCB init, execs
 Design-only, nothing built. No BG: device, no QIO network path, no usable socket API. The current DCL TCPIP verb is a facade — it opens a Linux AF_INET SOCK_DGRAM socket only to issue SIOCGIF* ioctls (interface introspection), configures nothing durable, and gives VMS code no stack. A NIC as a VMS device (EWA0:/BGn:) is also absent — QEMU boots with `-nic none`. 1.0 blocker (vms-67f).
 
 
-<sub>3 items · coverage 28.3% · ⚠ 1 facade-risk</sub>
+<sub>3 items · 1 met · 0 in progress · 2 not started · ⚠ 1 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1132,7 +1140,7 @@ Design-only, nothing built. No BG: device, no QIO network path, no usable socket
 
 _Architecture targets, the kernel executive (/dev/vms), image activation / runtime linking._
 
-`✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟡🟠🟠⬜⬜`  —  13 surfaces catalogued, 1.0-scope coverage 69.2% (12 in-scope), ⚠ 2 facade-risk
+`✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟡🟠🟠⬜⬜`  —  13 surfaces catalogued (8 met · 3 in progress · 2 not started) · V1: 12 committed, 8 met · ⚠ 2 facade-risk
 
 ### arch-targets — Architecture Targets (x86_64, aarch64, alpha, vax)
 <sub>scope: in · plan: vms-8ce · ref: N/A — OVMX platform targets, not a single VMS surface · reviewed 2026-08-13</sub>
@@ -1140,7 +1148,7 @@ _Architecture targets, the kernel executive (/dev/vms), image activation / runti
 x86_64 is verified (full CI, vms.ko via /dev/vms). aarch64 is verified as a boot proof (freestanding EM_AARCH64 PID 1 under qemu-system-aarch64 in CI). Alpha (AXP) was made first-class by operator ruling (2026-08-10) but is absent on origin/main — the freestanding syscall/crt0 layer exists only on the unmerged local branch vms-054-alpha-port, and LINK.EXE has no EM_ALPHA backend. VAX is absent as a native libvmssys/LINK.EXE target; it exists only via a separate NetBSD-substrate path (aspirational/stretch).
 
 
-<sub>4 items · coverage 62.5%</sub>
+<sub>4 items · 2 met · 1 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1155,7 +1163,7 @@ x86_64 is verified (full CI, vms.ko via /dev/vms). aarch64 is verified as a boot
 The kernel-mediated substrate SYS$ system services are built on: event flags, lock manager, ASTs, mailboxes, and access modes are real and kernel-resident behind /dev/vms (vms_kif). Process control (PCB) is partial with a facade-risk gap on cross-process privilege visibility; scheduling is honestly stubbed — OVMX has no VMS priority scheduler.
 
 
-<sub>9 items · coverage 70.0% · ⚠ 2 facade-risk</sub>
+<sub>9 items · 6 met · 2 in progress · 1 not started · ⚠ 2 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1173,7 +1181,7 @@ The kernel-mediated substrate SYS$ system services are built on: event flags, lo
 
 _The VMS language story: compilers (Fortran/COBOL/BASIC/Pascal/MACRO/Ada/PL/I/…), their language RTLs (FOR$/COB$/BAS$/PAS$), and the OpenVMS Calling Standard that makes cross-language calls work. OVMX today has one language — C, via tcc._
 
-`🟢🟡🟡🟡🟡🟡⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  22 surfaces catalogued, 1.0-scope coverage 55.8% (6 in-scope)
+`🟢🟡🟡🟡🟡🟡⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  22 surfaces catalogued (1 met · 5 in progress · 16 not started) · V1: 6 committed, 1 met
 
 ### calling-standard — OpenVMS Calling Standard
 <sub>scope: in · plan: vms-801 · ref: VSI OpenVMS Calling Standard · reviewed 2026-08-13</sub>
@@ -1181,7 +1189,7 @@ _The VMS language story: compilers (Fortran/COBOL/BASIC/Pascal/MACRO/Ada/PL/I/�
 The convention that lets any VMS language call any other: argument-list layout, by-ref/by-value/by-descriptor passing, the standard data types, condition handling, and register/stack usage. OVMX implements enough for C on x86_64 and aarch64; the cross-language data-type surface (packed decimal, varying strings, array descriptors, VAX float) is where it thins out.
 
 
-<sub>4 items · coverage 50.0%</sub>
+<sub>4 items · 0 met · 4 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1196,7 +1204,7 @@ The convention that lets any VMS language call any other: argument-list layout, 
 VMS ships a large family of DEC/VSI compilers. OVMX has exactly one language — C, via tcc (the self-hosting beachhead). Every other VMS language is absent; which of them are in 1.0 scope is an operator call (vms-082) — the "run corpus software" goal (R2) leans on Fortran/COBOL/BASIC, so this is not automatically out-of-scope.
 
 
-<sub>12 items · coverage 7.1%</sub>
+<sub>12 items · 1 met · 0 in progress · 11 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1219,7 +1227,7 @@ VMS ships a large family of DEC/VSI compilers. OVMX has exactly one language —
 Each VMS language ships a run-time library its compiled code links against (I/O, intrinsics, string/array support). None of the language-specific RTLs exist in OVMX (grep on origin/main: FOR$/COB$/BAS$/PAS$/PLI$ = 0 files). The language-INDEPENDENT RTLs they build on (LIB$/STR$/MTH$/OTS$) are catalogued in domain A and are the shared floor these would sit on — itself only partial.
 
 
-<sub>6 items · coverage 8.3%</sub>
+<sub>6 items · 0 met · 1 in progress · 5 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|

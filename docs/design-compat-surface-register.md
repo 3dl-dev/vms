@@ -12,7 +12,8 @@ The **Compatibility Surface Register** is the single, comprehensive, machine-par
 *every VMS functional/compatibility surface* × *its status in OVMX*, filtered to what is in scope
 for 1.0. It answers three questions from one source of truth:
 
-1. **Coverage** — what fraction of each VMS facility does OVMX implement, and how faithfully?
+1. **Status** — for each catalogued VMS surface, what is its status in OVMX, and how faithfully
+   is it done (real vs facade)? (Counts, never a percentage — see §7a.)
 2. **Corpus compatibility** — given a program that calls `LIB$TPARSE`, `SYS$QIO`, `SET HOST`, …,
    is it supported today? (Keyed by canonical symbol/command/feature id → status.)
 3. **Roadmap** — what remains for 1.0, per surface.
@@ -123,7 +124,8 @@ items:
 `tools/compat/render_compat.py` reads `docs/compat/` and emits:
 
 1. **`docs/compatibility-surface.md`** — the internal comprehensive register: per-domain sections,
-   per-facility tables, rollup counts (coverage % and authenticity breakdown per facility/domain),
+   per-facility tables, rollup counts (status + authenticity breakdown, and V1
+   met/in-progress/not-started counts per facility/domain — no percentages),
    and a top-line dashboard. Regenerated, never hand-edited.
 2. **`build/compat-surface.json`** — the machine export: the flat list of every item plus rollups,
    consumed by (a) the website and (b) the corpus-compat lookup tool. This is the artifact that
@@ -180,41 +182,45 @@ Grounded in the current header/source inventory on `origin/main`:
 - **Re-derive, don't recall.** `last_reviewed` dates are the trust signal. A row is only as good as
   its last measurement against `origin/main`.
 
-## 7a. Reading the coverage index (and the catalogue frontier)
+## 7a. No percentages — an inventory, and a V1 commitment set
 
-The coverage index is a **denominator-relative** number, and the denominator is
-*the surfaces this register catalogues*. It is therefore **not** a percentage of
-all of VMS, and must never be read as one. VMS is enormous; a register is a
-curated map, and a map's coverage number is only as honest as its edges are
-visible.
+**Operator ruling (2026-08-13): we do not put a percentage on the compatibility
+surface.** A percentage needs a known denominator, and the total VMS compatibility
+surface has none — it is fixed, vast, and **not version-scoped**; picking V1
+targets does not shrink it, and it cannot be counted. Any "X% compatible" — even a
+"1.0-scope coverage index" — fabricates a denominator and conflates *what we chose
+for V1* with *the actual surface*. An earlier revision of this register did exactly
+that; it was wrong. So the register reports **two count-based views, and no
+percentage of the whole:**
 
-Two guards keep it honest:
+1. **The inventory (the actual surface).** Absolute counts of catalogued surfaces
+   by status and authenticity. It is stated as **incomplete by construction** — an
+   inventory that grows as surfaces are identified, never a census of all VMS.
+   There is deliberately no "N% done" line here, because the denominator is
+   unknown.
+2. **V1 readiness (a set we define).** Of the surfaces **committed to V1**
+   (`scope_1_0: in` — an enumerable list *we* own), counts of *met*
+   (implemented/verified), *in progress* (partial), and *not started*
+   (absent/stub/designed), plus how many committed surfaces still carry
+   facade-risk. This is honest because the denominator is a commitment list we
+   control — but it is reported as **counts against that list**, and framed so it
+   can never be read as a fraction of VMS. Surfaces that are `out`, `stretch`, or
+   `undecided` are *not* in the V1 denominator but *remain in the inventory*, so
+   deferring work never improves the numbers.
 
-1. **Two numbers, headline = 1.0-scope.** The dashboard leads with the
-   **1.0-scope coverage index** (weighted over `scope_1_0: in` items only) —
-   "how far along on what we committed to for 1.0" — and also prints the
-   all-catalogued index. Neither is "% of VMS."
-2. **The frontier stays catalogued, not hidden.** Surfaces that are `out` or
-   `undecided` are *excluded from the in-scope index* but *remain in the
-   register* (and count in the all-catalogued index), so omissions are visible
-   rather than silently improving the score. The scope breakdown and per-domain
-   figures make the shape of what's deferred explicit.
+**The Languages & Compilers frontier** is why the distinction bites. OVMX has one
+language (C, via tcc); Fortran/COBOL/BASIC/Pascal/MACRO/Ada/… are `absent`, most
+`undecided` pending an operator scope call (`vms-082`) — the "run corpus software"
+goal (R2) leans on COBOL/Fortran, so they are not automatically out. Cataloguing
+them **added 22 absent surfaces to the inventory** and did *not* flatter any V1
+count. If those `undecided` surfaces are ruled **into** V1, they join the V1
+denominator at status `absent` and the *not-started* count jumps — exactly the
+honest signal a scope decision should produce.
 
-The **Languages & Compilers** domain is the worked example of why this matters.
-The first cut omitted it entirely — inflating "programming interfaces" by leaving
-out Fortran/COBOL/BASIC/Pascal/MACRO/Ada/… OVMX has exactly one language (C, via
-tcc); the rest are `absent`. Most are `undecided` pending an operator scope call
-(`vms-082`): the "run corpus software" goal (R2) leans heavily on COBOL/Fortran,
-so they are **not** automatically out-of-scope. **Consequence to watch:** because
-those 9 language surfaces are `undecided`, they are currently outside the
-in-scope denominator; if the operator rules them **into** 1.0, they flip to `in`,
-they are all `absent`, and the 1.0-scope index drops sharply. That movement is a
-feature — the number tracking a real scope decision — not noise to smooth over.
-
-**When you catalogue a new frontier (as Languages was), the honest expectation is
-that the number gets worse, not better.** If adding real VMS surface makes
-coverage go *up*, check that you didn't scope the new surface out to protect the
-score.
+**The guard, stated plainly:** cataloguing more of the real VMS surface should make
+the picture look *less* complete, never more. If adding real surface makes a number
+improve, someone scoped the new surface out (or invented a denominator) to protect
+the score — stop and fix it.
 
 ## 8. Roadmap position
 

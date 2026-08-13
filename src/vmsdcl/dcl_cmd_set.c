@@ -764,7 +764,12 @@ static int cmd_set_control(struct dcl_command *cmd)
         if (strcasecmp(tok, "Y") == 0) {
             ctx->ctrl_y_enabled = enable;
         }
-        /* T = Ctrl-T (broadcast) — track but not implemented beyond flag */
+        /* T = Ctrl-T reflexive status line. The DCL input layer's Ctrl-T
+         * (0x14) handler (dcl_main.c) gates the reflexive one-liner on this
+         * flag; SET NOCONTROL=T disables it. Default off (VMS convention). */
+        else if (strcasecmp(tok, "T") == 0) {
+            ctx->ctrl_t_enabled = enable;
+        }
         tok = strtok_r(NULL, ",", &saveptr);
     }
 

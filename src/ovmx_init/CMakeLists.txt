@@ -4,6 +4,10 @@
 
 add_executable(ovmx_init
     ovmx_init.c
+    # Boot-plumbing substrate seam (vms-28f): the Linux backend for the
+    # ovmx_boot.h ops. The NetBSD backend (ovmx_boot_netbsd.c) is selected in
+    # its place on a NetBSD build (vms-f2e).
+    ovmx_boot_linux.c
     sysboot.c
     opcom_kmsg.c
 )

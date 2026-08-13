@@ -651,13 +651,18 @@ uint32_t vms_kif_mbx_delmbx(uint32_t exec_chan);
  * `len` exceeds the mailbox's MAXMSG or its remaining BUFQUO. */
 uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len);
 
-/* $QIO IO$_READVBLK-equivalent: blocks until a message is queued, then
- * copies up to `bufsz` bytes of it into `buf` and reports the message's
- * true length in *actlen (which may exceed bufsz if the caller's buffer
- * was smaller than the message -- the excess is discarded, as $QIO
- * truncates an oversized mailbox message into an undersized buffer). */
+/* $QIO IO$_READVBLK-equivalent. Copies up to `bufsz` bytes of the next
+ * message into `buf` and reports the message's true length in *actlen (which
+ * may exceed bufsz if the caller's buffer was smaller than the message -- the
+ * excess is discarded, as $QIO truncates an oversized mailbox message into an
+ * undersized buffer).
+ *
+ * nowait == 0: blocks until a message is queued (the default mailbox read).
+ * nowait != 0: $QIO IO$M_NOW -- completes immediately; if the mailbox is empty
+ *   returns SS$_ENDOFFILE without blocking (VSI OpenVMS I/O User's Reference
+ *   Manual, Mailbox Driver). */
 uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
-                          uint32_t *actlen);
+                          uint32_t *actlen, int nowait);
 
 /* $QIO IO$_SETMODE|IO$M_WRTATTN-equivalent: arm a WRITE-ATTENTION AST on the
  * mailbox behind `exec_chan`. When ANOTHER process writes to the mailbox, the

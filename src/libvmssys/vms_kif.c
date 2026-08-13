@@ -1731,14 +1731,22 @@ uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len)
 }
 
 /*
- * vms_kif_mbx_read - blocks until a message is queued. Uses
+ * vms_kif_mbx_read - read one message from a mailbox.
+ *
+ * BLOCKING (nowait == 0): waits until a message is queued. Uses
  * kif_wait_call(), the same EINTR-retry helper $WAITFR/$WFLOR/$WFLAND use:
  * the executive's VMS_IOCTL_MBX_READ handler returns -ERESTARTSYS with no
  * status on a signal (see vms_mbx.c), exactly like a VMS mailbox read,
  * which has no "the wait was interrupted" condition value to report.
+ *
+ * NON-BLOCKING (nowait != 0, the $QIO IO$M_NOW modifier): the executive
+ * completes the read at once (VMS_MBX_READ_NOW) -- if a message is queued it
+ * is returned, otherwise the read completes with SS$_ENDOFFILE and does not
+ * block. That path never returns -ERESTARTSYS (there is no wait to interrupt),
+ * so the kif_wait_call() retry loop degenerates to a single ioctl round trip.
  */
 uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
-                          uint32_t *actlen)
+                          uint32_t *actlen, int nowait)
 {
     struct vms_mbx_read_args args;
     uint32_t n;
@@ -1751,6 +1759,7 @@ uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
     vms_memset(&args, 0, sizeof(args));
     args.chan = exec_chan;
     args.bufsz = (bufsz > VMS_MBX_IOCTL_MAXLEN) ? VMS_MBX_IOCTL_MAXLEN : bufsz;
+    args.flags = nowait ? VMS_MBX_READ_NOW : 0u;
 
     KIF_WAIT_CALL(VMS_IOCTL_MBX_READ, &args);
 

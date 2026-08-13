@@ -711,6 +711,20 @@ long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg)
             mbx->bufquo_used -= m->len;
             break;
         }
+        /*
+         * IO$M_NOW (VMS_MBX_READ_NOW): the caller asked to complete the read
+         * immediately rather than wait for a writer. Per the public VSI
+         * OpenVMS I/O User's Reference Manual (Mailbox Driver), a read that
+         * specifies IO$M_NOW does not block; when the mailbox holds no message
+         * it completes with SS$_ENDOFFILE. We are already under mbx->lock and
+         * have just re-tested the queue empty, so this is the authentic
+         * "no data, do not wait" outcome -- no exec_cv_wait, no -ERESTARTSYS.
+         */
+        if (a->flags & VMS_MBX_READ_NOW) {
+            exec_unlock(&mbx->lock);
+            a->status = SS__ENDOFFILE;
+            goto out_copy;
+        }
         if (exec_cv_wait(&mbx->read_wq, &mbx->lock)) {
             /* Interrupted. The predicate still has priority: a message that
              * arrived is taken; otherwise the wait ends with no status and

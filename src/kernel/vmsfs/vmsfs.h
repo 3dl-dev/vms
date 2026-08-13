@@ -23,14 +23,17 @@
 #include <linux/mutex.h>
 
 #include "vmsfs_ondisk.h"
+/*
+ * The substrate-neutral ODS-2 core (rd vms-544, epic vms-8e8): the ODS-2
+ * name-shape limits (VMSFS_MAX_VERSION / _NAME / _TYPE / _FILENAME) and the
+ * version-resolution + retrieval-map algorithm prototypes now live in
+ * src/kernel-core/vmsfs/vmsfs_core.h, implemented against the vmsfs_backend
+ * shim. This Linux VFS glue includes it so the rest of vmsfs.ko still sees
+ * those constants and prototypes.
+ */
+#include "vmsfs_core.h"
 
 #define VMSFS_MAGIC       0x564D5346  /* "VMSF" */
-#define VMSFS_MAX_VERSION 32767
-#define VMSFS_MAX_NAME    39          /* ODS-2 name component limit */
-#define VMSFS_MAX_TYPE    39          /* ODS-2 type component limit */
-
-/* Maximum length of a full versioned filename: name.type;version */
-#define VMSFS_MAX_FILENAME (VMSFS_MAX_NAME + 1 + VMSFS_MAX_TYPE + 1 + 5)
 
 /* Mount modes */
 enum vmsfs_mode {
@@ -115,35 +118,13 @@ extern const struct file_operations vmsfs_file_fops;
 /* Dentry operations for case-insensitive matching (vmsfs_inode.c) */
 extern const struct dentry_operations vmsfs_dops;
 
-/* ================================================================
- * Version operations (vmsfs_version.c)
- * ================================================================ */
-
 /*
- * Parse a VMS-style versioned filename into base name and version.
- *
- * Examples:
- *   "FOO.TXT;3"  -> base="FOO.TXT", version=3
- *   "FOO.TXT;0"  -> base="FOO.TXT", version=0  (means highest)
- *   "FOO.TXT"    -> base="FOO.TXT", version=0  (means highest)
- *
- * Returns 0 on success, negative errno on error.
+ * Version-resolution operations (vmsfs_parse_version /
+ * vmsfs_build_versioned_name) are declared in kernel-core/vmsfs/vmsfs_core.h,
+ * included above. The former backing-directory scanner
+ * (vmsfs_find_highest_version) was dead code -- a stub with no callers -- and
+ * was removed with the src/kernel-core extraction (rd vms-544).
  */
-int vmsfs_parse_version(const char *name, char *base, size_t base_size,
-                        int *version);
-
-/*
- * Scan a backing directory to find the highest version ;N for a given base.
- * Returns the highest version found, or 0 if none exist.
- */
-int vmsfs_find_highest_version(struct dentry *backing_dir, const char *base);
-
-/*
- * Construct a versioned filename "BASE;N" from base name and version.
- * Returns 0 on success, negative errno on error.
- */
-int vmsfs_build_versioned_name(const char *base, int version,
-                               char *result, size_t size);
 
 /* ================================================================
  * Helpers (vmsfs_inode.c)

@@ -53,8 +53,6 @@ static int vmsfs_blkdev_rmdir(struct inode *dir, struct dentry *dentry);
 static int vmsfs_blkdev_rename(struct mnt_idmap *idmap, struct inode *old_dir,
                                struct dentry *old_dentry, struct inode *new_dir,
                                struct dentry *new_dentry, unsigned int flags);
-static int vmsfs_vbn_to_lbn(struct vmsfs_inode_info *vi, uint32_t vbn,
-                            uint32_t *lbn_out);
 static int vmsfs_ensure_blocks(struct super_block *sb, struct inode *inode,
                                uint32_t target_vbn);
 
@@ -112,7 +110,7 @@ static int vmsfs_get_block(struct inode *inode, sector_t block,
         return -EFBIG;
     vbn = (uint32_t)block + 1;  /* VBN is 1-based */
 
-    ret = vmsfs_vbn_to_lbn(vi, vbn, &lbn);
+    ret = vmsfs_vbn_to_lbn(vi->map, vi->map_count, vbn, &lbn);
     if (ret) {
         if (!create)
             return 0;  /* Hole — return unmapped (zeroes) */
@@ -130,7 +128,7 @@ static int vmsfs_get_block(struct inode *inode, sector_t block,
         /* Flush updated inode metadata (block map) to disk */
         vmsfs_blkdev_flush_inode(sb, inode);
 
-        ret = vmsfs_vbn_to_lbn(vi, vbn, &lbn);
+        ret = vmsfs_vbn_to_lbn(vi->map, vi->map_count, vbn, &lbn);
         if (ret)
             return ret;
 
@@ -368,44 +366,15 @@ int vmsfs_blkdev_flush_inode(struct super_block *sb, struct inode *inode)
 }
 
 /* ================================================================
- * VBN -> LBN translation
+ * VBN -> LBN translation and retrieval-map math
  *
- * Virtual block numbers (VBN) are 1-based. Each retrieval pointer
- * maps a run of VBNs to LBNs. We walk the map to find the LBN
- * for a given VBN.
+ * The pure arithmetic over a file's retrieval-pointer array --
+ * vmsfs_vbn_to_lbn(), vmsfs_next_vbn() and vmsfs_extend_map() -- was promoted
+ * to the substrate-neutral ODS-2 core (src/kernel-core/vmsfs/vmsfs_map.c, rd
+ * vms-544) and is declared in vmsfs_core.h. It takes the retrieval array and
+ * count directly (vi->map, vi->map_count) rather than a struct
+ * vmsfs_inode_info, so it names no host object.
  * ================================================================ */
-
-static int vmsfs_vbn_to_lbn(struct vmsfs_inode_info *vi, uint32_t vbn,
-                            uint32_t *lbn_out)
-{
-    uint32_t cur_vbn = 1;
-    unsigned int i;
-
-    for (i = 0; i < vi->map_count; i++) {
-        uint32_t count = vi->map[i].rp_count;
-
-        if (vbn >= cur_vbn && vbn < cur_vbn + count) {
-            *lbn_out = vi->map[i].rp_lbn + (vbn - cur_vbn);
-            return 0;
-        }
-        cur_vbn += count;
-    }
-
-    return -EIO;  /* VBN not mapped */
-}
-
-/*
- * Compute the next unallocated VBN for a file (sum of all mapped VBNs + 1).
- */
-static uint32_t vmsfs_next_vbn(struct vmsfs_inode_info *vi)
-{
-    uint32_t vbn = 1;
-    unsigned int i;
-
-    for (i = 0; i < vi->map_count; i++)
-        vbn += vi->map[i].rp_count;
-    return vbn;
-}
 
 /* ================================================================
  * Bitmap and home block write-back helpers
@@ -582,33 +551,8 @@ static int vmsfs_free_fid(struct super_block *sb, uint32_t fid)
 }
 
 /* ================================================================
- * Retrieval pointer map extension
- *
- * Adds a new block to a file's map. Tries contiguous extension of
- * the last pointer first; falls back to a new pointer entry.
+ * Block allocation driver
  * ================================================================ */
-
-static int vmsfs_extend_map(struct vmsfs_inode_info *vi, uint32_t lbn)
-{
-    /* Try contiguous extension of last pointer */
-    if (vi->map_count > 0) {
-        struct vmsfs_retrieval_ptr *last = &vi->map[vi->map_count - 1];
-
-        if (lbn == last->rp_lbn + last->rp_count) {
-            last->rp_count++;
-            return 0;
-        }
-    }
-
-    /* Need a new pointer slot */
-    if (vi->map_count >= VMSFS_MAX_RETRIEVAL)
-        return -ENOSPC;
-
-    vi->map[vi->map_count].rp_lbn = lbn;
-    vi->map[vi->map_count].rp_count = 1;
-    vi->map_count++;
-    return 0;
-}
 
 /*
  * Ensure the file has blocks allocated through the given VBN.
@@ -622,7 +566,7 @@ static int vmsfs_ensure_blocks(struct super_block *sb, struct inode *inode,
     uint32_t next;
     int ret;
 
-    next = vmsfs_next_vbn(vi);
+    next = vmsfs_next_vbn(vi->map, vi->map_count);
 
     while (next <= target_vbn) {
         uint32_t lbn;
@@ -632,7 +576,7 @@ static int vmsfs_ensure_blocks(struct super_block *sb, struct inode *inode,
         if (ret)
             return ret;
 
-        ret = vmsfs_extend_map(vi, lbn);
+        ret = vmsfs_extend_map(vi->map, &vi->map_count, lbn);
         if (ret) {
             vmsfs_free_block(sb, lbn);
             return ret;
@@ -735,7 +679,7 @@ static int vmsfs_dir_add_entry(struct super_block *sb, struct inode *dir,
         struct buffer_head *bh;
         unsigned int j;
 
-        ret = vmsfs_vbn_to_lbn(dir_vi, vbn, &lbn);
+        ret = vmsfs_vbn_to_lbn(dir_vi->map, dir_vi->map_count, vbn, &lbn);
         if (ret)
             break;  /* no more mapped blocks */
 
@@ -781,7 +725,7 @@ static int vmsfs_dir_add_entry(struct super_block *sb, struct inode *dir,
         if (ret)
             return ret;
 
-        ret = vmsfs_extend_map(dir_vi, new_lbn);
+        ret = vmsfs_extend_map(dir_vi->map, &dir_vi->map_count, new_lbn);
         if (ret) {
             vmsfs_free_block(sb, new_lbn);
             return ret;
@@ -833,7 +777,7 @@ static int vmsfs_dir_remove_entry(struct super_block *sb, struct inode *dir,
         struct buffer_head *bh;
         unsigned int j;
 
-        ret = vmsfs_vbn_to_lbn(dir_vi, vbn, &lbn);
+        ret = vmsfs_vbn_to_lbn(dir_vi->map, dir_vi->map_count, vbn, &lbn);
         if (ret)
             return -ENOENT;
 
@@ -882,7 +826,7 @@ static uint16_t vmsfs_blkdev_highest_version(struct super_block *sb,
         struct buffer_head *bh;
         unsigned int j;
 
-        ret = vmsfs_vbn_to_lbn(dir_vi, vbn, &lbn);
+        ret = vmsfs_vbn_to_lbn(dir_vi->map, dir_vi->map_count, vbn, &lbn);
         if (ret)
             break;
 
@@ -965,7 +909,7 @@ int vmsfs_blkdev_resolve(struct inode *dir, const char *name,
         struct buffer_head *bh;
         unsigned int j;
 
-        ret = vmsfs_vbn_to_lbn(dir_vi, vbn, &lbn);
+        ret = vmsfs_vbn_to_lbn(dir_vi->map, dir_vi->map_count, vbn, &lbn);
         if (ret)
             break;  /* no more mapped blocks */
 
@@ -1107,7 +1051,7 @@ static int vmsfs_blkdev_iterate(struct file *file, struct dir_context *ctx)
         struct buffer_head *bh;
         unsigned int j;
 
-        ret = vmsfs_vbn_to_lbn(dir_vi, vbn, &lbn);
+        ret = vmsfs_vbn_to_lbn(dir_vi->map, dir_vi->map_count, vbn, &lbn);
         if (ret)
             break;
 
@@ -1618,7 +1562,7 @@ static int vmsfs_blkdev_rmdir(struct inode *dir, struct dentry *dentry)
         struct buffer_head *bh;
         unsigned int j;
 
-        ret = vmsfs_vbn_to_lbn(dir_vi, vbn, &lbn);
+        ret = vmsfs_vbn_to_lbn(dir_vi->map, dir_vi->map_count, vbn, &lbn);
         if (ret)
             break;
 
@@ -1757,7 +1701,7 @@ static int vmsfs_blkdev_rename(struct mnt_idmap *idmap, struct inode *old_dir,
             struct buffer_head *tbh;
             unsigned int j;
 
-            if (vmsfs_vbn_to_lbn(tvi, vbn, &tlbn))
+            if (vmsfs_vbn_to_lbn(tvi->map, tvi->map_count, vbn, &tlbn))
                 break;
             tbh = sb_bread(sb, tlbn);
             if (!tbh)

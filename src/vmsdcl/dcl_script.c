@@ -161,44 +161,63 @@ static int dcl_run_proc_lines(struct dcl_context *ctx, FILE *fp)
             break;
         }
 
-        /* Check ON ERROR handling */
-        if (!(status & 1)) {
-            /* Error occurred */
-            int severity = status & 7;
-            int handle_error = 0;
+        /* DCL error control, applied after every command at this level using
+         * the REAL $STATUS of the line just run (vms-3983). Reference
+         * (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, "ON", "SET ON"/"SET
+         * NOON"; OpenVMS User's Manual, "Controlling Error Conditions". State is
+         * per command level (vms-2af frames): proc_stack[proc_depth]. */
+        {
+            int lvl = ctx->proc_depth;
 
-            /* SET NOON suppresses the ON ERROR handler */
-            if (!ctx->noon_active) {
-                if (severity >= 4 && ctx->proc_stack[ctx->proc_depth].on_severe) {
-                    handle_error = ctx->proc_stack[ctx->proc_depth].on_severe;
-                } else if (severity >= 2 && ctx->proc_stack[ctx->proc_depth].on_error) {
-                    handle_error = ctx->proc_stack[ctx->proc_depth].on_error;
-                }
-            }
-
-            if (handle_error == 1) {
-                /* ON ERROR THEN CONTINUE - just continue */
+            /* SET NOON: DCL does not test $STATUS at all -- no default exit and
+             * no ON action -- so execution continues past any error. This is the
+             * fix for the flagged bug where SET NOON suppressed only the ON
+             * handler but not the default in-procedure error-stop (vms-ada). */
+            if (lvl >= 0 && ctx->proc_stack[lvl].noon)
                 continue;
-            } else if (handle_error == 2) {
-                /* ON ERROR THEN GOTO label */
-                const char *label = (severity >= 4) ?
-                    ctx->proc_stack[ctx->proc_depth].on_severe_label :
-                    ctx->proc_stack[ctx->proc_depth].on_error_label;
-                if (label[0]) {
-                    if (dcl_find_label(fp, label) == 0) {
-                        continue; /* Jump to label */
-                    } else {
-                        dcl_error("DCL", 2, "USGOTO",
-                                  "target of GOTO not found - \\%s\\", label);
+
+            if (!(status & 1)) {
+                /* Failure: severity is even -- 0=WARNING, 2=ERROR, 4=SEVERE. */
+                int severity = status & 7;
+
+                if (lvl >= 0 && ctx->proc_stack[lvl].on_armed &&
+                    severity >= ctx->proc_stack[lvl].on_severity) {
+                    /* Armed ON action fires. ON ERROR THEN CONTINUE just resumes
+                     * and REMAINS in effect (the "ignore errors in this block"
+                     * idiom). Any other action -- GOTO a handler, EXIT, or an
+                     * arbitrary command -- is ONE-SHOT: DCL resets the level to
+                     * its default (exit on error) before performing it, so a
+                     * GOTO handler cannot infinitely re-enter itself; the
+                     * handler re-arms by issuing another ON. (VSI OpenVMS DCL
+                     * Dictionary, "ON".) */
+                    char action[256];
+                    strncpy(action, ctx->proc_stack[lvl].on_action,
+                            sizeof(action) - 1);
+                    action[sizeof(action) - 1] = '\0';
+
+                    if (strcasecmp(action, "CONTINUE") == 0 || action[0] == '\0')
+                        continue;   /* persists; keep on_armed set */
+
+                    ctx->proc_stack[lvl].on_armed = 0;   /* one-shot reset */
+                    ctx->proc_stack[lvl].on_action[0] = '\0';
+
+                    /* Run the THEN command through the normal command path:
+                     * GOTO reseeks fp, EXIT sets exit_requested, any other
+                     * command just runs and execution then continues. */
+                    dcl_execute_line(action);
+                    if (ctx->return_requested)
+                        break;
+                    if (ctx->exit_requested) {
+                        ctx->exit_requested = 0;
                         break;
                     }
+                    continue;
                 }
-            } else if (handle_error == 0) {
-                /* No handler - stop procedure on error */
-                /* Only stop on error/severe, not warning */
-                if (severity >= 2) {
+
+                /* Default action (no ON armed): exit the procedure on ERROR (2)
+                 * or SEVERE/FATAL (4); a WARNING (0) does not stop. */
+                if (severity >= 2)
                     break;
-                }
             }
         }
     }

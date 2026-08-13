@@ -139,6 +139,7 @@ uint32_t ovmx_mmk_str_position(const void *src, const void *sub, ...);
 uint32_t ovmx_mmk_lib_get_symbol(const void *sym, void *val, ...);
 uint32_t ovmx_mmk_lib_set_logical(const void *lognam, const void *eqvnam, ...);
 uint32_t ovmx_mmk_create_vm_zone(uint32_t *zone_id, ...);
+uint32_t ovmx_mmk_lib_get_foreign(void *result, ...);
 
 #define sys$parse(...)      ovmx_mmk_sys_parse(__VA_ARGS__)
 #define sys$search(...)     ovmx_mmk_sys_search(__VA_ARGS__)
@@ -149,6 +150,15 @@ uint32_t ovmx_mmk_create_vm_zone(uint32_t *zone_id, ...);
 #define lib$get_symbol(...) ovmx_mmk_lib_get_symbol(__VA_ARGS__)
 #define lib$set_logical(...) ovmx_mmk_lib_set_logical(__VA_ARGS__)
 #define lib$create_vm_zone(...) ovmx_mmk_create_vm_zone(__VA_ARGS__)
+/* LIB$GET_FOREIGN: MMK calls it with ONLY the result descriptor (mmk.c,
+ * mmk_compile_rules.c) -- and, being implicitly declared there, with no
+ * prototype. On VMS the RTL knows via the calling-standard argument count that
+ * the optional prompt / resultant-length / flags args are absent; the SysV C
+ * ABI has no such count, so the fixed-prototype OVMX routine would read
+ * register garbage for resultant-length and WRITE THROUGH IT -- a crash
+ * (vms-95c, the guest-only MMK SIGSEGV). Pin the omitted optional args to 0
+ * here, at the same OVMX/MMK arity seam the routines above use. */
+#define lib$get_foreign(...) ovmx_mmk_lib_get_foreign(__VA_ARGS__)
 
 /* --- 4. va_count() replacement.  DEC C's va_count(n) sets n to the number of
  *        arguments the current variadic function was called with, using the

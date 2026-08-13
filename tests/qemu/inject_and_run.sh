@@ -130,6 +130,17 @@ echo "--- rebuilding DCL.EXE (the user-visible command layer) ---"
 ( cd /src/repo && cmake --build build-static --target vmsdcl \
                         --parallel "$(nproc)" ) || exit 4
 
+# MMK.EXE is a SUBJECT the exec-drive suite drives, not a suite, so nothing
+# above builds it -- and test_syssvc_mmk_drive (vms-b23, self-host spine #4)
+# runs the shipped MMK.EXE, whose exec-drive companion (ovmx_mmk_sp.c, compiled
+# into MMK.EXE) a defect targets (mmk-drive-command-not-sent). Rebuilt
+# unconditionally, same reason as DCL.EXE: a conditional rebuild is one more
+# thing that can silently not happen, leaving a stale MMK.EXE asserting the gate
+# caught nothing.
+echo "--- rebuilding MMK.EXE (the exec-drive subject test_syssvc_mmk_drive drives) ---"
+( cd /src/repo && cmake --build build-static --target mmk_native \
+                        --parallel "$(nproc)" ) || exit 4
+
 echo "--- re-staging the initramfs ---"
 cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
 # Absence is FATAL, never skipped, exactly as in the image build: a missing
@@ -150,6 +161,22 @@ cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
 # output. Both copies must be the SAME freshly rebuilt binary.
 cp /src/repo/build-static/bin/DCL.EXE /initramfs/bin/DCL.EXE || exit 4
 cp /src/repo/build-static/bin/DCL.EXE /initramfs/tests/DCL.EXE || exit 4
+
+# MMK.EXE + its spawned DCL.EXE at SYS$SYSTEM (vms-b23, spine #4) -- the SAME
+# stale-binary trap the DCL.EXE two-copies note above documents. test_syssvc_
+# mmk_drive execs MMK.EXE from /vms/SYS0/SYSCOMMON/SYSEXE, and MMK's lib$spawn
+# launches SYS$SYSTEM:DCL.EXE from that SAME path (VMS_DCL_PATH), so a defect in
+# the MMK exec-drive (ovmx_mmk_sp.c -> MMK.EXE) or in the DCL it drives must
+# refresh THESE copies or the drive runs against the pristine image-build
+# binaries and the mmk-drive-command-not-sent control could never go red.
+# Absence is FATAL, exactly as in the image build (tests/qemu/Dockerfile).
+mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE || exit 4
+cp /src/repo/build-static/bin/MMK.EXE \
+   /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE || exit 4
+cp /src/repo/build-static/bin/DCL.EXE \
+   /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE || exit 4
+chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE \
+         /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE || exit 4
 for f in /src/tests/qemu/test_*; do
     [ -x "$f" ] && cp "$f" /initramfs/tests/
 done

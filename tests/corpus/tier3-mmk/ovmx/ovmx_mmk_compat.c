@@ -27,6 +27,7 @@
 #undef lib$get_symbol
 #undef lib$set_logical
 #undef lib$create_vm_zone
+#undef lib$get_foreign
 #include <descrip.h>
 #include <ssdef.h>
 #include <rms.h>
@@ -35,6 +36,16 @@
 #include <str$routines.h>
 #include <ots$routines.h>
 #include <fscndef.h>
+
+/* LIB$GET_FOREIGN: MMK passes ONLY the result descriptor (the prompt,
+ * resultant-length and flags args are optional and omitted). Supply NULL for
+ * prompt and resultant-length so the real routine fills only the result
+ * descriptor (which carries its own length -- all MMK reads) and never writes
+ * through an unpassed resultant-length pointer (vms-95c). */
+uint32_t ovmx_mmk_lib_get_foreign(void *result, ...)
+{
+    return lib$get_foreign((struct dsc$descriptor_s *)result, 0, 0);
+}
 
 /* $PARSE / $SEARCH: MMK passes (fab) or (fab,0,0); OVMX takes (fab,err,suc). */
 uint32_t ovmx_mmk_sys_parse(void *fab, ...)  { return sys$parse(fab, 0, 0); }

@@ -192,7 +192,19 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                                 void (*astadr)(uint32_t), uint32_t astprm) {
     struct _iosb *iosb = (struct _iosb *)iosb_ptr;
     uint32_t exec_chan = vms$$chan_exec_chan(chan);
-    uint32_t base_func = func & 0xFF;
+    /*
+     * The VMS I/O function code is the low SIX bits (IO$M_FCODE == 0x3F); bits
+     * 6-15 are function MODIFIERS (IO$M_FMODIFIERS). Masking with 0xFF instead
+     * left modifier bit 6 (IO$M_NOW == 0x40) IN the base function, so a
+     * $QIO IO$_READVBLK|IO$M_NOW (0x71) matched no case and returned
+     * SS$_ILLIOFUNC -- the non-blocking mailbox read MMK's echo_ast issues
+     * through sp_receive, which made send_cmd_and_wait never drain the result
+     * and deadlock in $HIBER (vms-95c). (IO$M_WRTATTN == 0x100 is bit 8, above
+     * both masks, so the SETMODE arm was unaffected -- which is why only the
+     * IO$M_NOW read broke.) Extract the function code with IO$M_FCODE; the
+     * modifiers are tested separately below (IO$M_NOW, IO$M_WRTATTN).
+     */
+    uint32_t base_func = func & IO$M_FCODE;
     uint32_t st;
     uint32_t actlen = 0;
 

@@ -5,7 +5,7 @@
 
 ## Inventory
 
-**405 surfaces catalogued** across 9 domains, each with a per-surface status.
+**404 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
@@ -13,8 +13,8 @@
 |---|---|---|---|---|
 | ✅ verified | 24 | | real | 227 |
 | 🟢 implemented | 206 | | n/a | 99 |
-| 🟡 partial | 43 | | advisory | 34 |
-| 🟠 stub | 19 | | facade-risk | 45 |
+| 🟡 partial | 42 | | advisory | 34 |
+| 🟠 stub | 19 | | facade-risk | 44 |
 | 🔵 designed | 2 | |  |  |
 | ⬜ absent | 111 | |  |  |
 
@@ -24,8 +24,8 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **363 committed** — **230 met** (implemented/verified), 42 in progress (partial), 91 not started (absent/stub/designed).
-- ⚠ **43 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
+- **362 committed** — **230 met** (implemented/verified), 41 in progress (partial), 91 not started (absent/stub/designed).
+- ⚠ **42 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 25 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
 _These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
@@ -1061,7 +1061,7 @@ Universal symbol vectors (position-bound binding), GSMATCH (ALWAYS/EQUAL/LEQUAL,
 
 _TCP/IP Services (UCX), DECnet Phase IV, LAT, SSH._
 
-`🟢🟢🟡🟡🟡🟡🟡🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  10 surfaces catalogued (1 met · 2 in progress · 7 not started) · V1: 9 committed, 1 met · ⚠ 2 facade-risk
+`🟢🟢🟢🟡🟡🟡🟠🟠🟠⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  9 surfaces catalogued (1 met · 1 in progress · 7 not started) · V1: 8 committed, 1 met · ⚠ 1 facade-risk
 
 ### decnet — DECnet Phase IV (NSP, Task-to-Task, SET HOST)
 <sub>scope: in · plan: vms-30e · ref: DECnet for OpenVMS Networking Manual · reviewed 2026-08-13</sub>
@@ -1093,16 +1093,14 @@ No implementation anywhere. Not a 1.0 blocker.
 ### ssh — SSH remote login
 <sub>scope: in · plan: vms-67f · ref: VSI OpenVMS TCP/IP Services — SSH server (OpenSSH port) · reviewed 2026-08-13</sub>
 
-SSH login to an authenticated interactive (DCL) session, as VSI OpenVMS provides through TCP/IP Services. OVMX has the daemon but not the end-to-end surface: it is blocked on the networking lane, and the authenticated session does not yet assume the user's identity.
+SSH login to an authenticated interactive (DCL) session, as VSI OpenVMS provides through TCP/IP Services. Absent because OVMX has no TCP/IP stack yet; it is entirely gated on the networking lane and arrives with it.
 
 
-<sub>2 items · 0 met · 1 in progress · 1 not started · ⚠ 1 facade-risk</sub>
+<sub>1 items · 0 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
-| 🟡 | `ssh$remote-login` | feature | SSH in and get an authenticated interactive DCL/LOGINOUT session | partial | real | in | `src/vmsssh/vmssshd.c` — Daemon is real (vmsshd, ~903 lines, libssh, LOGINOUT-equivalent PCB init, execs `vmsdcl --login`), but the end-to-end surface does not function in the shipped system: there is no NIC to listen on (see tcpip-services) and the daemon is not started at boot. Blocked on the networking lane (vms-67f) — a reachability gap, honestly stated, not a fake success.
- |
-| ⬜⚠ | `ssh$identity` | feature | Authenticated session assumes the user's UIC/privileges (LOGINOUT identity), not root | absent | facade-risk | in | `src/vmsssh/vmssshd.c` — Every SSH session runs euid=0 — no credential drop to the authenticated user's UIC. A security facade distinct from the reachability gap; cross-listed to docs/draper-faithfulness-register.md. (Console LOGINOUT drops identity correctly via vms_kif_setident; SSH does not.)
+| ⬜ | `ssh$remote-login` | feature | SSH in and get an authenticated interactive DCL/LOGINOUT session | absent | real | in | `docs/design-tcpip-services-ovmx.md` — No TCP/IP stack, no NIC → SSH does not function. Blocked entirely on TCP/IP Services (tcpip-services, vms-67f); sshd comes along when the stack lands. Not faked — it simply is not reachable. (Implementation aside for whoever lands it: vmsshd code exists but currently runs the session euid=0 with no credential drop to the user's UIC — that must be fixed then, the way console LOGINOUT already drops identity via vms_kif_setident.)
  |
 
 ### tcpip-services — TCP/IP Services (UCX QIO + Sockets + EWA0:/BGn:)
@@ -1237,8 +1235,6 @@ Surfaces that report success without doing the real work, or fake shared state p
 | `rms$org_indexed` | rms-api | partial | `src/vmsrms/rms_idx.c` — primary key only per rms_idx.c's own header comment |
 | `rms$isam_alternate_key` | rms-api | absent | `src/vmsrms/rms_idx.c` — entirely unimplemented (zero hits) — a multi-key ISAM program silently only ever sees the primary key, breaking common COBOL/DIBOL business-app patterns |
 | `scs$datagram-service` | scs | stub | `src/vmsscs/scs_dgram.c` — Self-labeled: scs_dgram.h documents it never routes a datagram and the run log prints zeros — an honest state, but flagged facade-risk because it is real logic with zero production callers, the exact unwired-dead-code shape the Draper register hunts. |
-| `ssh$identity` | ssh | absent | `src/vmsssh/vmssshd.c` — Every SSH session runs euid=0 — no credential drop to the authenticated user's UIC. A security facade distinct from the reachability gap; cross-listed to docs/draper-faithfulness-register.md. (Console LOGINOUT drops identity correctly via vms_kif_setident; SSH does not.)
- |
 | `sys$getmsg_text_table` | status-codes | partial | `src/libvms/syssvc/sys_msg.c` — 51/176 have oracle-pinned text; unknown codes fall back to generic non-authentic text |
 | `sys$putmsg` | sys-fao-msg | partial | `src/libvms/syssvc/sys_msg.c` — facnam argument silently discarded, (void)facnam |
 | `sys$dgblsc` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — validates args and returns SS$_NORMAL; nothing done |

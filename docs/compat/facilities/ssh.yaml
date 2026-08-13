@@ -1,7 +1,7 @@
 # Source of truth for the SSH row of the Compatibility Surface Register.
-# Scope note: SSH is a VMS-era surface — VSI OpenVMS ships an OpenSSH server as
-# part of TCP/IP Services. The compat surface is "SSH into the system and get an
-# authenticated DCL session," NOT OVMX's internal init plumbing.
+# SSH is a VSI OpenVMS surface (OpenSSH shipped as part of TCP/IP Services). It is
+# wholly downstream of TCP/IP Services — there is no stack, so there is no SSH.
+# sshd comes along when TCP/IP Services lands; init-wiring is not a surface.
 facility: ssh
 name: "SSH remote login"
 domain: networking
@@ -10,33 +10,21 @@ scope_1_0: in
 plan_ref: vms-67f
 summary: >
   SSH login to an authenticated interactive (DCL) session, as VSI OpenVMS
-  provides through TCP/IP Services. OVMX has the daemon but not the end-to-end
-  surface: it is blocked on the networking lane, and the authenticated session
-  does not yet assume the user's identity.
+  provides through TCP/IP Services. Absent because OVMX has no TCP/IP stack yet;
+  it is entirely gated on the networking lane and arrives with it.
 last_reviewed: 2026-08-13
 items:
   - id: ssh$remote-login
     kind: feature
-    status: partial
+    status: absent
     authenticity: real
     scope_1_0: in
     vms: "SSH in and get an authenticated interactive DCL/LOGINOUT session"
-    evidence: src/vmsssh/vmssshd.c
+    evidence: docs/design-tcpip-services-ovmx.md
     notes: >
-      Daemon is real (vmsshd, ~903 lines, libssh, LOGINOUT-equivalent PCB init,
-      execs `vmsdcl --login`), but the end-to-end surface does not function in the
-      shipped system: there is no NIC to listen on (see tcpip-services) and the
-      daemon is not started at boot. Blocked on the networking lane (vms-67f) — a
-      reachability gap, honestly stated, not a fake success.
-  - id: ssh$identity
-    kind: feature
-    status: absent
-    authenticity: facade-risk
-    scope_1_0: in
-    vms: "Authenticated session assumes the user's UIC/privileges (LOGINOUT identity), not root"
-    evidence: src/vmsssh/vmssshd.c
-    notes: >
-      Every SSH session runs euid=0 — no credential drop to the authenticated
-      user's UIC. A security facade distinct from the reachability gap;
-      cross-listed to docs/draper-faithfulness-register.md. (Console LOGINOUT drops
-      identity correctly via vms_kif_setident; SSH does not.)
+      No TCP/IP stack, no NIC → SSH does not function. Blocked entirely on TCP/IP
+      Services (tcpip-services, vms-67f); sshd comes along when the stack lands.
+      Not faked — it simply is not reachable. (Implementation aside for whoever
+      lands it: vmsshd code exists but currently runs the session euid=0 with no
+      credential drop to the user's UIC — that must be fixed then, the way console
+      LOGINOUT already drops identity via vms_kif_setident.)

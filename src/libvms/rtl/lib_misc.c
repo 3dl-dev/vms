@@ -57,8 +57,8 @@ static void find_file_release(uint32_t handle) {
 
 /* Imported from starlet.h via forward declarations */
 extern uint32_t sys$getjpiw(uint32_t efn, const uint32_t *pidadr,
-                             const struct dsc$descriptor_s *prcnam,
-                             const struct item_list_3 *itmlst,
+                             void *prcnam,
+                             void *itmlst,
                              void *iosb,
                              void (*astadr)(uint32_t), uint32_t astprm);
 extern uint32_t sys$getsyiw(uint32_t efn, const uint32_t *csidadr,
@@ -107,7 +107,7 @@ uint32_t lib$getjpi(const uint32_t *item_code, const uint32_t *pid,
     items[1].bufaddr = NULL;
     items[1].retlen = NULL;
 
-    return sys$getjpiw(0, pid, prcnam, items, NULL, NULL, 0);
+    return sys$getjpiw(0, pid, (void *)prcnam, items, NULL, NULL, 0);
 }
 
 /*

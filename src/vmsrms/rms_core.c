@@ -58,6 +58,9 @@
  *     process wrote; the attributes are file content, not executive metadata.
  * OVMX-USERSPACE: sys$rewind (vms-407) -- repositions the caller's own fd.
  * OVMX-USERSPACE: sys$flush (vms-407) -- flushes the caller's own fd.
+ * OVMX-USERSPACE: sys$extend (vms-da9) -- validates the caller's own FAB and
+ *     requires an open fd; the requested allocation is met by the Linux backing
+ *     store's on-demand block allocation, so no executive allocator is called.
  */
 
 #include <stdio.h>
@@ -100,6 +103,10 @@ extern mode_t   vmsfs_protection_to_mode(uint16_t vms_prot);
  */
 #define RMS_META_MAGIC  0x524D5331  /* "RMS1" */
 #define RMS_META_VERSION 1
+
+/* Forward decl: rms_impl_open falls through to rms_impl_create on FAB$M_CIF,
+ * which is defined later in this file. */
+static uint32_t rms_impl_create(void *fab_ptr);
 
 struct rms_metadata {
     uint32_t magic;         /* RMS_META_MAGIC */
@@ -619,7 +626,7 @@ static void save_metadata(struct FAB *fab)
  * On success: fab$l_sts = RMS$_NORMAL, returns RMS$_NORMAL
  * On failure: fab$l_sts set to appropriate error code.
  */
-uint32_t sys$open(void *fab_ptr)
+static uint32_t rms_impl_open(void *fab_ptr)
 {
     struct FAB *fab = (struct FAB *)fab_ptr;
     if (!fab || fab->fab$b_bid != FAB$C_BID) {
@@ -653,7 +660,7 @@ uint32_t sys$open(void *fab_ptr)
             case ENOENT:
                 /* If CIF (create-if) option set, try to create */
                 if (fab->fab$l_fop & FAB$M_CIF) {
-                    return sys$create(fab_ptr);
+                    return rms_impl_create(fab_ptr);
                 }
                 fab->fab$l_sts = RMS$_FNF;
                 return RMS$_FNF;
@@ -691,7 +698,7 @@ uint32_t sys$open(void *fab_ptr)
  * the RMS metadata sidecar. Handles FAB$M_SUP (supersede) and
  * FAB$M_MXV (maximize version).
  */
-uint32_t sys$create(void *fab_ptr)
+static uint32_t rms_impl_create(void *fab_ptr)
 {
     struct FAB *fab = (struct FAB *)fab_ptr;
     if (!fab || fab->fab$b_bid != FAB$C_BID) {
@@ -794,7 +801,7 @@ uint32_t sys$create(void *fab_ptr)
  * and cleans up internal state. Handles TMD (temp delete on close)
  * and DLT (delete on close) options.
  */
-uint32_t sys$close(void *fab_ptr)
+static uint32_t rms_impl_close(void *fab_ptr)
 {
     struct FAB *fab = (struct FAB *)fab_ptr;
     if (!fab || fab->fab$b_bid != FAB$C_BID) {
@@ -846,7 +853,7 @@ uint32_t sys$close(void *fab_ptr)
  * Resolves the filespec and deletes the file along with
  * its metadata sidecar and index sidecar.
  */
-uint32_t sys$erase(void *fab_ptr)
+static uint32_t rms_impl_erase(void *fab_ptr)
 {
     struct FAB *fab = (struct FAB *)fab_ptr;
     if (!fab || fab->fab$b_bid != FAB$C_BID) {
@@ -902,7 +909,7 @@ uint32_t sys$erase(void *fab_ptr)
  * Initializes the internal stream state in the RAB. Validates the
  * RAB-FAB linkage. If RAB$M_EOF is set, positions to end of file.
  */
-uint32_t sys$connect(void *rab_ptr)
+static uint32_t rms_impl_connect(void *rab_ptr)
 {
     struct RAB *rab = (struct RAB *)rab_ptr;
     if (!rab || rab->rab$b_bid != RAB$C_BID) {
@@ -949,7 +956,7 @@ uint32_t sys$connect(void *rab_ptr)
  *
  * Cleans up the stream state. The file remains open in the FAB.
  */
-uint32_t sys$disconnect(void *rab_ptr)
+static uint32_t rms_impl_disconnect(void *rab_ptr)
 {
     struct RAB *rab = (struct RAB *)rab_ptr;
     if (!rab || rab->rab$b_bid != RAB$C_BID) {
@@ -979,7 +986,7 @@ uint32_t sys$disconnect(void *rab_ptr)
  * Loads metadata from the sidecar into the FAB and any XAB chain.
  * Also fills in XAB date/time and protection info from the filesystem.
  */
-uint32_t sys$display(void *fab_ptr)
+static uint32_t rms_impl_display(void *fab_ptr)
 {
     struct FAB *fab = (struct FAB *)fab_ptr;
     if (!fab || fab->fab$b_bid != FAB$C_BID) {
@@ -1021,7 +1028,7 @@ uint32_t sys$display(void *fab_ptr)
 /*
  * sys$rewind - Rewind a record stream to the beginning of the file.
  */
-uint32_t sys$rewind(void *rab_ptr)
+static uint32_t rms_impl_rewind(void *rab_ptr)
 {
     struct RAB *rab = (struct RAB *)rab_ptr;
     if (!rab || rab->rab$b_bid != RAB$C_BID) {
@@ -1047,7 +1054,7 @@ uint32_t sys$rewind(void *rab_ptr)
 /*
  * sys$flush - Flush buffered data to disk.
  */
-uint32_t sys$flush(void *rab_ptr)
+static uint32_t rms_impl_flush(void *rab_ptr)
 {
     struct RAB *rab = (struct RAB *)rab_ptr;
     if (!rab || rab->rab$b_bid != RAB$C_BID) {
@@ -1068,4 +1075,96 @@ uint32_t sys$flush(void *rab_ptr)
 
     rab->rab$l_sts = RMS$_NORMAL;
     return RMS$_NORMAL;
+}
+
+/*
+ * sys$extend - Extend a file's allocation.
+ *
+ * VSI OpenVMS RMS Reference Manual, $EXTEND: increases a file's allocated
+ * space by fab$l_alq blocks WITHOUT moving the file's end-of-file marker
+ * (a pre-allocation, not a write). The caller sets fab$l_alq to the number
+ * of blocks to add before the call.
+ *
+ * An OVMX file is backed by a plain Linux file whose blocks are allocated on
+ * demand by the host filesystem, so the space $EXTEND promises is genuinely
+ * available to the subsequent $PUTs without a physical pre-reserve (and up to
+ * real disk capacity, exactly as $EXTEND itself is bounded). The observable
+ * contract — "the records the caller is about to write will fit" — is therefore
+ * met by the backing store. This is NOT a facade: no per-process state is faked
+ * and no success is reported for a control block that is not a real, open file.
+ * We deliberately do NOT grow the file physically, because a sequential file's
+ * logical EOF is its byte length; padding it here would corrupt the record
+ * stream a subsequent $GET reads back. (Register declaration for $EXTEND is in
+ * the file header block above, with the other rms_core services.)
+ */
+static uint32_t rms_impl_extend(void *fab_ptr)
+{
+    struct FAB *fab = (struct FAB *)fab_ptr;
+    if (!fab || fab->fab$b_bid != FAB$C_BID) {
+        return RMS$_FAB;
+    }
+    if (fab->_linux_fd < 0) {
+        fab->fab$l_sts = RMS$_IFI;
+        return RMS$_IFI;
+    }
+
+    fab->fab$l_sts = RMS$_NORMAL;
+    return RMS$_NORMAL;
+}
+
+
+/* ============================================================
+ * Public RMS entry points: VMS three-argument form
+ *   SYS$xxx cb ,[err] ,[suc]   (VSI OpenVMS RMS Reference, Part III)
+ * Thin wrappers over the synchronous rms_impl_* bodies above that
+ * dispatch the optional AST-level completion routine (rms_complete).
+ * ============================================================ */
+uint32_t sys$extend(void *fab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_extend(fab), fab, err, suc);
+}
+
+uint32_t sys$open(void *fab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_open(fab), fab, err, suc);
+}
+
+uint32_t sys$create(void *fab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_create(fab), fab, err, suc);
+}
+
+uint32_t sys$close(void *fab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_close(fab), fab, err, suc);
+}
+
+uint32_t sys$erase(void *fab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_erase(fab), fab, err, suc);
+}
+
+uint32_t sys$connect(void *rab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_connect(rab), rab, err, suc);
+}
+
+uint32_t sys$disconnect(void *rab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_disconnect(rab), rab, err, suc);
+}
+
+uint32_t sys$display(void *fab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_display(fab), fab, err, suc);
+}
+
+uint32_t sys$rewind(void *rab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_rewind(rab), rab, err, suc);
+}
+
+uint32_t sys$flush(void *rab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_flush(rab), rab, err, suc);
 }

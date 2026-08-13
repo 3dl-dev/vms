@@ -54,6 +54,7 @@
 #include <strings.h>
 #include <pthread.h>
 #include "starlet.h"
+#include "gen64def.h"   /* struct _generic_64 for sys$bintim's timadr */
 
 /* Offset between VMS epoch (Nov 17 1858) and Unix epoch (Jan 1 1970) in 100ns units */
 #define VMS_EPOCH_OFFSET 0x007C95674BEB4000ULL
@@ -195,8 +196,12 @@ uint32_t sys$asctim(uint16_t *timlen, struct dsc$descriptor_s *timbuf,
  * Parses the VMS date/time format "DD-MMM-YYYY HH:MM:SS.CC"
  * and converts it to a VMS 64-bit binary time value.
  */
-uint32_t sys$bintim(const struct dsc$descriptor_s *timbuf, uint64_t *timadr) {
+uint32_t sys$bintim(const struct dsc$descriptor_s *timbuf,
+                    struct _generic_64 *timadr) {
     if (!timbuf || !timadr || !timbuf->dsc$a_pointer) return SS$_BADPARAM;
+    /* timadr is the address of the quadword that receives the converted time
+     * (VSI System Services Reference, $BINTIM). */
+    uint64_t *q = &timadr->gen64$q_quadword;
 
     char buf[64];
     dsc$strncpy(buf, timbuf, sizeof(buf));
@@ -234,7 +239,7 @@ uint32_t sys$bintim(const struct dsc$descriptor_s *timbuf, uint64_t *timadr) {
             ((uint64_t)d_days * 86400ULL + (uint64_t)d_h * 3600ULL +
              (uint64_t)d_m * 60ULL + (uint64_t)d_s) * 10000000ULL +
             (uint64_t)d_cc * 100000ULL;
-        *timadr = (uint64_t)(-(int64_t)ticks);   /* delta: stored negative */
+        *q = (uint64_t)(-(int64_t)ticks);   /* delta: stored negative */
         return SS$_NORMAL;
     }
 
@@ -263,7 +268,7 @@ uint32_t sys$bintim(const struct dsc$descriptor_s *timbuf, uint64_t *timadr) {
 
     time_t t = timegm(&tm_val);
     struct timespec ts = { .tv_sec = t, .tv_nsec = hun * 10000000L };
-    *timadr = unix_to_vms_time(&ts);
+    *q = unix_to_vms_time(&ts);
 
     return SS$_NORMAL;
 }

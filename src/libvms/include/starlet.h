@@ -310,17 +310,32 @@ uint32_t sys$getutc(uint64_t *timadr);
  */
 uint32_t sys$numtim(uint16_t timbuf[7], const uint64_t *timadr);
 
+/* Forward declaration of the generic 64-bit union (full def in gen64def.h).
+ * sys$bintim's timadr is "the address of the quadword system time, which
+ * receives the converted time" — VSI callers pass a GENERIC_64 (struct
+ * _generic_64), not a bare uint64_t*. */
+struct _generic_64;
+
 /**
  * sys$bintim - Convert ASCII time string to binary time
  *
- * @param timbuf  Pointer to descriptor of time string
- * @param timadr  Pointer to quadword to receive binary time
+ * @param timbuf  Address of a character-string descriptor pointing to the
+ *                ASCII absolute/delta time to convert (by descriptor).
+ * @param timadr  Address of a quadword that receives the converted 64-bit
+ *                system-format time.
  *
  * @return  SS$_NORMAL on success, SS$_IVTIME on invalid format
+ *
+ * Signature per VSI OpenVMS System Services Reference Manual, $BINTIM
+ * ("timadr — the ... address of the quadword system time, which receives
+ * the converted time") and the VSI-supplied starlet.h C prototype
+ *   int sys$bintim(void *timbuf, struct _generic_64 *timadr);
+ * (VSI OpenVMS Wiki, $GETJPI/$BINTIM pages). OVMX keeps the concrete
+ * descriptor type for timbuf (a compatible refinement of VSI's void*).
  */
 uint32_t sys$bintim(
     const struct dsc$descriptor_s *timbuf,
-    uint64_t *timadr
+    struct _generic_64 *timadr
 );
 
 /**
@@ -522,11 +537,22 @@ uint32_t sys$exit(uint32_t code);
  *
  * @return  SS$_NORMAL on success (or SS$_SYNCH if completed synchronously)
  */
+/*
+ * prcnam and itmlst are passed as void* to match the VSI-supplied starlet.h
+ * C prototype (VSI OpenVMS Wiki, $GETJPI):
+ *   int sys$getjpi(unsigned int efn, unsigned int *pidadr, void *prcnam,
+ *                  void *itmlst, struct _iosb *iosb,
+ *                  void (*astadr)(__unknown_params), unsigned __int64 astprm);
+ * Real VMS uses void* here precisely so a caller may pass any flavour of
+ * process-name descriptor or item-list entry (ILE3, item_list_3, ...); the
+ * over-specified typed pointers OVMX previously declared rejected the
+ * standard ILE3 item lists the corpus (and real VMS code) build.
+ */
 uint32_t sys$getjpi(
     uint32_t efn,
     const uint32_t *pidadr,
-    const struct dsc$descriptor_s *prcnam,
-    const struct item_list_3 *itmlst,
+    void *prcnam,
+    void *itmlst,
     void *iosb,
     void (*astadr)(uint32_t),
     uint32_t astprm
@@ -534,12 +560,14 @@ uint32_t sys$getjpi(
 
 /**
  * sys$getjpiw - Get job/process information (wait for completion)
+ * Same argument list as sys$getjpi (VSI OpenVMS System Services Reference,
+ * $GETJPIW: "identical to the $GETJPI service ... completes synchronously").
  */
 uint32_t sys$getjpiw(
     uint32_t efn,
     const uint32_t *pidadr,
-    const struct dsc$descriptor_s *prcnam,
-    const struct item_list_3 *itmlst,
+    void *prcnam,
+    void *itmlst,
     void *iosb,
     void (*astadr)(uint32_t),
     uint32_t astprm
@@ -965,97 +993,71 @@ uint32_t sys$chkpro(void *objpro);
  * The FAB and RAB structures are defined in fabdef.h and rabdef.h
  * respectively (passed as void* here since those headers may not
  * be included yet).
+ *
+ * Every RMS file/record service takes the VMS three-argument form
+ *   SYS$xxx  cb ,[err] ,[suc]
+ * (VSI OpenVMS Record Management Services Reference Manual, Part III):
+ *   cb   — address of the control block (FAB for file ops, RAB for record
+ *          ops), by reference.
+ *   err  — address of the entry mask of an AST-level error completion
+ *          routine (invoked with the control-block address on failure).
+ *   suc  — address of the entry mask of an AST-level success completion
+ *          routine (invoked with the control-block address on success).
+ * Both err and suc are optional (pass 0/NULL for the common synchronous
+ * call). OVMX RMS completes synchronously; when a completion routine is
+ * supplied it is invoked before the service returns.
  * ================================================================ */
 
-/**
- * sys$open - Open existing file
- * @param fab  Pointer to FAB (File Access Block)
- */
-uint32_t sys$open(void *fab);
+/** sys$open - Open existing file (cb=FAB) */
+uint32_t sys$open(void *fab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$close - Close file
- * @param fab  Pointer to FAB
- */
-uint32_t sys$close(void *fab);
+/** sys$close - Close file (cb=FAB) */
+uint32_t sys$close(void *fab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$create - Create new file
- * @param fab  Pointer to FAB
- */
-uint32_t sys$create(void *fab);
+/** sys$create - Create new file (cb=FAB) */
+uint32_t sys$create(void *fab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$erase - Erase (delete) file
- * @param fab  Pointer to FAB
- */
-uint32_t sys$erase(void *fab);
+/** sys$erase - Erase (delete) file (cb=FAB) */
+uint32_t sys$erase(void *fab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$parse - Parse file specification
- * @param fab  Pointer to FAB (with NAM/NAML block attached)
- */
-uint32_t sys$parse(void *fab);
+/** sys$parse - Parse file specification (cb=FAB with NAM/NAML) */
+uint32_t sys$parse(void *fab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$search - Search for file (wildcard)
- * @param fab  Pointer to FAB (after sys$parse)
- */
-uint32_t sys$search(void *fab);
+/** sys$search - Search for file, wildcard (cb=FAB after sys$parse) */
+uint32_t sys$search(void *fab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$display - Display file attributes
- * @param fab  Pointer to FAB
- */
-uint32_t sys$display(void *fab);
+/** sys$display - Display file attributes (cb=FAB) */
+uint32_t sys$display(void *fab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$connect - Connect record stream
- * @param rab  Pointer to RAB (Record Access Block)
- */
-uint32_t sys$connect(void *rab);
+/** sys$extend - Extend file allocation (cb=FAB) */
+uint32_t sys$extend(void *fab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$disconnect - Disconnect record stream
- * @param rab  Pointer to RAB
- */
-uint32_t sys$disconnect(void *rab);
+/** sys$connect - Connect record stream (cb=RAB) */
+uint32_t sys$connect(void *rab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$get - Get (read) record
- * @param rab  Pointer to RAB
- */
-uint32_t sys$get(void *rab);
+/** sys$disconnect - Disconnect record stream (cb=RAB) */
+uint32_t sys$disconnect(void *rab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$put - Put (write) record
- * @param rab  Pointer to RAB
- */
-uint32_t sys$put(void *rab);
+/** sys$get - Get (read) record (cb=RAB) */
+uint32_t sys$get(void *rab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$update - Update record in place
- * @param rab  Pointer to RAB
- */
-uint32_t sys$update(void *rab);
+/** sys$put - Put (write) record (cb=RAB) */
+uint32_t sys$put(void *rab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$delete - Delete current record
- * @param rab  Pointer to RAB
- */
-uint32_t sys$delete(void *rab);
+/** sys$update - Update record in place (cb=RAB) */
+uint32_t sys$update(void *rab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$find - Find record (position without reading)
- * @param rab  Pointer to RAB
- */
-uint32_t sys$find(void *rab);
+/** sys$delete - Delete current record (cb=RAB) */
+uint32_t sys$delete(void *rab, void (*err)(void *), void (*suc)(void *));
 
-/**
- * sys$rewind - Rewind record stream to beginning
- * @param rab  Pointer to RAB
- */
-uint32_t sys$rewind(void *rab);
+/** sys$find - Find record, position without reading (cb=RAB) */
+uint32_t sys$find(void *rab, void (*err)(void *), void (*suc)(void *));
+
+/** sys$rewind - Rewind record stream to beginning (cb=RAB) */
+uint32_t sys$rewind(void *rab, void (*err)(void *), void (*suc)(void *));
+
+/** sys$flush - Flush buffers to disk (cb=RAB) */
+uint32_t sys$flush(void *rab, void (*err)(void *), void (*suc)(void *));
 
 /* ================================================================
  * Formatted ASCII Output (FAO) Services

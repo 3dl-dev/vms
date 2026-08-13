@@ -212,7 +212,7 @@ static void child_main(int wfd, const char *vms_spec)
     init_fab(&fab, &xab, vms_spec);
     init_rab(&rab, &fab);
 
-    uint32_t st = sys$create(&fab);
+    uint32_t st = sys$create(&fab, 0, 0);
     snprintf(msg, sizeof(msg), "CREATE_STATUS=%u (%s) CREATE_STV=%u (%s)\n",
              (unsigned)st, $VMS_STATUS_SUCCESS(st) ? "OK" : "FAIL",
              (unsigned)fab.fab$l_stv,
@@ -225,7 +225,7 @@ static void child_main(int wfd, const char *vms_spec)
         _exit(0);
     }
 
-    st = sys$connect(&rab);
+    st = sys$connect(&rab, 0, 0);
     snprintf(msg, sizeof(msg), "CONNECT_STATUS=%u (%s)\n", (unsigned)st,
              $VMS_STATUS_SUCCESS(st) ? "OK" : "FAIL");
     (void)!write(wfd, msg, strlen(msg));
@@ -243,7 +243,7 @@ static void child_main(int wfd, const char *vms_spec)
         rab.rab$b_rac = RAB$C_SEQ;
         rab.rab$l_rbf = record;
         rab.rab$w_rsz = REC_SIZE;
-        uint32_t pst = sys$put(&rab);
+        uint32_t pst = sys$put(&rab, 0, 0);
         if (!$VMS_STATUS_SUCCESS(pst) && failed_at == 0) {
             failed_at = k;
             last_put_status = pst;
@@ -265,8 +265,8 @@ static void child_main(int wfd, const char *vms_spec)
         (void)!write(wfd, msg, strlen(msg));
     }
 
-    sys$disconnect(&rab);
-    uint32_t cst = sys$close(&fab);
+    sys$disconnect(&rab, 0, 0);
+    uint32_t cst = sys$close(&fab, 0, 0);
     snprintf(msg, sizeof(msg), "CLOSE_STATUS=%u (%s)\n", (unsigned)cst,
              $VMS_STATUS_SUCCESS(cst) ? "OK" : "FAIL");
     (void)!write(wfd, msg, strlen(msg));

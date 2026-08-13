@@ -82,7 +82,7 @@ static uint32_t parse_expand(const char *spec, char *esa, size_t esa_size)
     fab.fab$l_fna = (char *)spec;
     fab.fab$b_fns = (uint8_t)strlen(spec);
 
-    uint32_t st = sys$parse(&fab);
+    uint32_t st = sys$parse(&fab, 0, 0);
     if (nam.nam$b_esl < esa_size)
         esa[nam.nam$b_esl] = '\0';
     return st;

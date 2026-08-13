@@ -946,7 +946,7 @@ full format) is accepted but ignored; the full format is always produced.
 ```c
 uint32_t sys$bintim(
     const struct dsc$descriptor_s *timbuf,
-    uint64_t                      *timadr
+    struct _generic_64            *timadr
 );
 ```
 
@@ -955,7 +955,7 @@ uint32_t sys$bintim(
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `timbuf` | `const struct dsc$descriptor_s *` | Yes | Input time string descriptor |
-| `timadr` | `uint64_t *` | Yes | Receives the 64-bit VMS binary time |
+| `timadr` | `struct _generic_64 *` (`GENERIC_64 *`) | Yes | Address of the quadword that receives the 64-bit VMS binary time |
 
 **Return Values:**
 
@@ -970,12 +970,18 @@ Parses the VMS date/time format `DD-MMM-YYYY HH:MM:SS.CC` and converts it
 to a VMS 64-bit binary time. The time component is optional; date-only strings
 are accepted.
 
+`timadr` is a `GENERIC_64 *` (from `<gen64def.h>`), matching the VSI OpenVMS
+System Services Reference / VSI-supplied `starlet.h` signature
+`int sys$bintim(void *timbuf, struct _generic_64 *timadr)`. The 64-bit value is
+in the union's `gen64$q_quadword` member.
+
 **Example:**
 
 ```c
-uint64_t target;
+GENERIC_64 target;
 $DESCRIPTOR(timestr, "25-DEC-2026 00:00:00.00");
 sys$bintim(&timestr, &target);
+/* binary time is in target.gen64$q_quadword */
 ```
 
 ---
@@ -1666,13 +1672,20 @@ are delivered immediately.
 uint32_t sys$getjpi(
     uint32_t                   efn,
     const uint32_t            *pidadr,
-    const struct dsc$descriptor_s *prcnam,
-    const struct item_list_3  *itmlst,
+    void                      *prcnam,
+    void                      *itmlst,
     void                      *iosb,
     void                     (*astadr)(uint32_t),
     uint32_t                   astprm
 );
 ```
+
+`prcnam` and `itmlst` are `void *`, matching the VSI-supplied `starlet.h`
+prototype (`int sys$getjpi(unsigned int efn, unsigned int *pidadr,
+void *prcnam, void *itmlst, struct _iosb *iosb, ...)`). Passing `void *` lets a
+caller supply any process-name descriptor or item-list flavour — notably the
+standard `ILE3` item list (`<iledef.h>`) that VMS code and the Eight-Cubed
+corpus build.
 
 **Parameters:**
 
@@ -1680,8 +1693,8 @@ uint32_t sys$getjpi(
 |-----------|------|----------|-------------|
 | `efn` | `uint32_t` | No | Event flag; currently ignored |
 | `pidadr` | `const uint32_t *` | No | Target PID; NULL = current process |
-| `prcnam` | `const struct dsc$descriptor_s *` | No | Process name; currently ignored |
-| `itmlst` | `const struct item_list_3 *` | Yes | Item list for results |
+| `prcnam` | `void *` (process-name descriptor) | No | Process name (resolves the target) |
+| `itmlst` | `void *` (item list: `ILE3`/`item_list_3`) | Yes | Item list for results |
 | `iosb` | `void *` | No | I/O status block; currently ignored |
 | `astadr` | `void (*)(uint32_t)` | No | AST completion routine; currently ignored |
 | `astprm` | `uint32_t` | No | AST parameter; currently ignored |
@@ -1723,8 +1736,8 @@ and `astprm` parameters (async completion) are not used.
 uint32_t sys$getjpiw(
     uint32_t                   efn,
     const uint32_t            *pidadr,
-    const struct dsc$descriptor_s *prcnam,
-    const struct item_list_3  *itmlst,
+    void                      *prcnam,
+    void                      *itmlst,
     void                      *iosb,
     void                     (*astadr)(uint32_t),
     uint32_t                   astprm

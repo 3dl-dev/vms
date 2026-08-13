@@ -80,7 +80,7 @@ static uint32_t parse_fnb(const char *spec, char *esa, size_t esa_size)
     fab.fab$l_fna = (char *)spec;
     fab.fab$b_fns = (uint8_t)strlen(spec);
 
-    uint32_t st = sys$parse(&fab);
+    uint32_t st = sys$parse(&fab, 0, 0);
     if (st != RMS$_NORMAL)
         return 0;
     return nam.nam$l_fnb;

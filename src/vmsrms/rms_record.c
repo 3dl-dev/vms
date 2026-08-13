@@ -31,6 +31,7 @@
  */
 
 #include <stdio.h>
+#include "rms_internal.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -88,7 +89,7 @@ static struct FAB *validate_rab(struct RAB *rab)
  * file organization (sequential, relative, or indexed).
  * The record is placed in rab$l_ubf and rab$w_rsz is set.
  */
-uint32_t sys$get(void *rab_ptr)
+static uint32_t rms_impl_get(void *rab_ptr)
 {
     struct RAB *rab = (struct RAB *)rab_ptr;
     if (!rab || rab->rab$b_bid != RAB$C_BID) {
@@ -125,7 +126,7 @@ uint32_t sys$get(void *rab_ptr)
  * writes to the cell specified by rab$l_bkt. For indexed files,
  * inserts by key.
  */
-uint32_t sys$put(void *rab_ptr)
+static uint32_t rms_impl_put(void *rab_ptr)
 {
     struct RAB *rab = (struct RAB *)rab_ptr;
     if (!rab || rab->rab$b_bid != RAB$C_BID) {
@@ -167,7 +168,7 @@ uint32_t sys$put(void *rab_ptr)
  * Rewrites the record most recently accessed by $GET or $FIND.
  * Not supported for sequential files (returns RMS$_IOP).
  */
-uint32_t sys$update(void *rab_ptr)
+static uint32_t rms_impl_update(void *rab_ptr)
 {
     struct RAB *rab = (struct RAB *)rab_ptr;
     if (!rab || rab->rab$b_bid != RAB$C_BID) {
@@ -210,7 +211,7 @@ uint32_t sys$update(void *rab_ptr)
  * Marks the current record as deleted. Not supported for
  * sequential files (returns RMS$_IOP).
  */
-uint32_t sys$delete(void *rab_ptr)
+static uint32_t rms_impl_delete(void *rab_ptr)
 {
     struct RAB *rab = (struct RAB *)rab_ptr;
     if (!rab || rab->rab$b_bid != RAB$C_BID) {
@@ -255,7 +256,7 @@ uint32_t sys$delete(void *rab_ptr)
  * equivalent to $GET (the data is read but discarded after
  * positioning).
  */
-uint32_t sys$find(void *rab_ptr)
+static uint32_t rms_impl_find(void *rab_ptr)
 {
     struct RAB *rab = (struct RAB *)rab_ptr;
     if (!rab || rab->rab$b_bid != RAB$C_BID) {
@@ -300,4 +301,36 @@ uint32_t sys$find(void *rab_ptr)
 
     rab->rab$l_sts = status;
     return status;
+}
+
+
+/* ============================================================
+ * Public RMS entry points: VMS three-argument form
+ *   SYS$xxx cb ,[err] ,[suc]   (VSI OpenVMS RMS Reference, Part III)
+ * Thin wrappers over the synchronous rms_impl_* bodies above that
+ * dispatch the optional AST-level completion routine (rms_complete).
+ * ============================================================ */
+uint32_t sys$get(void *rab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_get(rab), rab, err, suc);
+}
+
+uint32_t sys$put(void *rab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_put(rab), rab, err, suc);
+}
+
+uint32_t sys$update(void *rab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_update(rab), rab, err, suc);
+}
+
+uint32_t sys$delete(void *rab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_delete(rab), rab, err, suc);
+}
+
+uint32_t sys$find(void *rab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_find(rab), rab, err, suc);
 }

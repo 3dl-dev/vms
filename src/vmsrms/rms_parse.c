@@ -48,6 +48,7 @@
  */
 
 #include <stdio.h>
+#include "rms_internal.h"
 #include <string.h>
 #include "rms/rms.h"
 #include "vmsfs/filespec.h"
@@ -118,7 +119,7 @@ static int apply_filespec_defaults(const char *spec, const char *default_spec,
  *   RMS$_NAM    - No NAM block
  *   RMS$_SYN    - Syntax error in filespec
  */
-uint32_t sys$parse(void *fab_ptr)
+static uint32_t rms_impl_parse(void *fab_ptr)
 {
     struct FAB *fab = (struct FAB *)fab_ptr;
     if (!fab || fab->fab$b_bid != FAB$C_BID) {
@@ -398,4 +399,16 @@ uint32_t sys$parse(void *fab_ptr)
     fab->fab$l_sts = RMS$_NORMAL;
     nam->nam$l_sts = RMS$_NORMAL;
     return RMS$_NORMAL;
+}
+
+
+/* ============================================================
+ * Public RMS entry points: VMS three-argument form
+ *   SYS$xxx cb ,[err] ,[suc]   (VSI OpenVMS RMS Reference, Part III)
+ * Thin wrappers over the synchronous rms_impl_* bodies above that
+ * dispatch the optional AST-level completion routine (rms_complete).
+ * ============================================================ */
+uint32_t sys$parse(void *fab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_parse(fab), fab, err, suc);
 }

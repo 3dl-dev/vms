@@ -1,0 +1,30 @@
+# Condition Handling Facility. See docs/design-compat-surface-register.md.
+facility: chf
+name: "Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND)"
+domain: programming-interfaces
+vms_ref: "OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS RTL LIB$ Manual"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  LIB$ESTABLISH/REVERT/SIGNAL/STOP/SIG_TO_RET (5 of ~8 core CHF entry points)
+  are implemented but advisory: a thread-local handler_stack is walked LIFO
+  in-process, not real machine-frame unwind. LIB$SIG_TO_STOP and
+  LIB$MATCH_COND are absent. chf$mech_array's savr0/savr1/frame fields are
+  zeroed placeholders (facade-risk for handlers that read them). SYS$UNWIND
+  and SYS$DCLEXH are documented simplified stubs. SYS$EXIV and SYS$SETEXV
+  are absent.
+last_reviewed: 2026-08-13
+items:
+  - {id: lib$establish, kind: routine, status: implemented, authenticity: advisory, vms: "Establish a condition handler", evidence: src/libvms/rtl/lib_signal.c, notes: "thread-local handler_stack walked in-process, not real machine-frame unwind"}
+  - {id: lib$revert, kind: routine, status: implemented, authenticity: advisory, vms: "Revert to the previous condition handler", evidence: src/libvms/rtl/lib_signal.c}
+  - {id: lib$signal, kind: routine, status: implemented, authenticity: advisory, vms: "Signal a condition", evidence: src/libvms/rtl/lib_signal.c}
+  - {id: lib$stop, kind: routine, status: implemented, authenticity: advisory, vms: "Signal a condition and force program exit if unhandled", evidence: src/libvms/rtl/lib_signal.c}
+  - {id: lib$sig_to_ret, kind: routine, status: implemented, authenticity: advisory, vms: "Convert a signal to a return status", evidence: src/libvms/rtl/lib_signal.c}
+  - {id: lib$sig_to_stop, kind: routine, status: absent, authenticity: n/a, vms: "Convert a signal to STOP severity"}
+  - {id: lib$match_cond, kind: routine, status: absent, authenticity: n/a, vms: "Match a condition code against a list, ignoring severity"}
+  - {id: chf$mech_array, kind: struct, status: stub, authenticity: facade-risk, vms: "Condition-handler mechanism-args array (savr0/savr1/frame fields)", evidence: src/libvms/rtl/lib_signal.c, notes: "savr0/savr1/frame are zeroed placeholders; a handler reading them gets fake data"}
+  - {id: sys$unwind, kind: routine, status: stub, authenticity: advisory, vms: "Unwind the call stack to an establisher", evidence: src/libvms/syssvc/sys_condition.c, notes: "documented simplified unwind"}
+  - {id: sys$dclexh, kind: routine, status: stub, authenticity: advisory, vms: "Declare an exit handler", evidence: "src/libvms/syssvc/sys_process.c:1016"}
+  - {id: sys$exiv, kind: routine, status: absent, authenticity: n/a, vms: "Declare an exit vector"}
+  - {id: sys$setexv, kind: routine, status: absent, authenticity: n/a, vms: "Set an exception vector"}

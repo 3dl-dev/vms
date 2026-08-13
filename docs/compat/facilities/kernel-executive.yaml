@@ -1,0 +1,85 @@
+# Source of truth for the kernel-executive row of the Compatibility Surface Register.
+facility: kernel-executive
+name: "Kernel Executive (/dev/vms substrate: EF/locks/AST/mailbox/access-modes/PCB)"
+domain: runtime-arch
+vms_ref: "OpenVMS VAX/Alpha Internals and Data Structures (executive primitives underlying the SYS$ layer)"
+scope_1_0: in
+plan_ref: vms-6b8
+summary: >
+  The kernel-mediated substrate SYS$ system services are built on: event flags,
+  lock manager, ASTs, mailboxes, and access modes are real and kernel-resident
+  behind /dev/vms (vms_kif). Process control (PCB) is partial with a facade-risk
+  gap on cross-process privilege visibility; scheduling is honestly stubbed —
+  OVMX has no VMS priority scheduler.
+last_reviewed: 2026-08-13
+items:
+  - id: kernel-executive$event-flags
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "128 event flags across 2 clusters (local + common), $SETEF/$CLREF/$WAITFOR family"
+    evidence: src/kernel-core/vms_eflag.c
+    notes: "ioctls 0x20-0x28. Prior per-process PCB-copy facade deleted (vms-2a8)."
+
+  - id: kernel-executive$lock-manager
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "$ENQ/$DEQ/$CVT: hierarchical resource trees, value blocks, blocking AST"
+    evidence: src/kernel/vms_lock.c
+    notes: "Single-node. ioctls 0x30-0x34. See cluster-dlm.yaml for the cross-node gap."
+
+  - id: kernel-executive$ast-delivery
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "4-level K/E/S/U AST queue delivery"
+    evidence: src/kernel-core/vms_ast.c
+    notes: "ioctls 0x10-0x12. Prior SIGUSR1-based facade fixed (vms-as1)."
+
+  - id: kernel-executive$mailboxes
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "Mailbox devices (MBAn:), $CREMBX/$QIO read-write"
+    evidence: src/kernel-core/vms_mbx.c
+    notes: "Replaced an earlier AF_UNIX socketpair facade."
+
+  - id: kernel-executive$logical-name-store
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "LNM$SYSTEM / LNM$GROUP / LNM$JOB kernel-resident logical-name arena"
+    evidence: src/kernel/vms_lnm.c
+    notes: "mmap-backed shared arena, not a per-process fake table."
+
+  - id: kernel-executive$access-modes
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "K/E/S/U access-mode enforcement + CMKRNL/CMEXEC mode change"
+    evidence: src/kernel-core/vms_access.c
+    notes: "ioctls 0x01-0x04. SETPRV bit-position bug caught and fixed via lab-VAX SDA comparison."
+
+  - id: kernel-executive$pcb
+    kind: struct
+    status: partial
+    authenticity: facade-risk
+    vms: "Process Control Block: identity, privilege mask, quotas"
+    evidence: src/kernel-core/vms_proctab.c
+    notes: "Legacy dead AST-queue fields orphaned. See kernel-executive$process-control for the process-create/delete facade-risk this feeds."
+
+  - id: kernel-executive$process-control
+    kind: feature
+    status: partial
+    authenticity: facade-risk
+    vms: "$CREPRC / $DELPRC process creation and deletion"
+    evidence: src/kernel-core/vms_proctab.c
+    notes: "Privileges/UIC copied PCB-to-PCB only; not visible cluster-wide (vms-afd). $WAKE/$DELPRC/$FORCEX cast the VMS pid straight into a Linux kill() (vms-pt1)."
+
+  - id: kernel-executive$scheduling
+    kind: feature
+    status: stub
+    authenticity: advisory
+    vms: "Priority scheduling (0-31), COM/COMO process states"
+    notes: "Honestly absent: OVMX has no VMS scheduler. Advisory, not faked — no fabricated priority effects."

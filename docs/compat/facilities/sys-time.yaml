@@ -1,0 +1,23 @@
+# SYS$ Time & Timers. See docs/design-compat-surface-register.md.
+facility: sys-time
+name: "SYS$ Time & Timers"
+domain: programming-interfaces
+vms_ref: "OpenVMS System Services Reference Manual — Time and Timer Services"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  VMS ships ~10 time/timer services; OVMX declares 7. SYS$GETTIM/NUMTIM/BINTIM/
+  ASCTIM are real conversions. SYS$SETIMR/CANTIM are process-local POSIX
+  timers, not queued through an executive timer facility. SYS$SCHDWK and
+  SYS$GETTIM_PREC are absent.
+last_reviewed: 2026-08-13
+items:
+  - {id: sys$gettim, kind: routine, status: implemented, authenticity: real, vms: "Get current system time (64-bit quadword)", evidence: src/libvms/syssvc/sys_time.c}
+  - {id: sys$numtim, kind: routine, status: implemented, authenticity: real, vms: "Convert quadword time to a numeric time vector", evidence: src/libvms/syssvc/sys_time.c}
+  - {id: sys$bintim, kind: routine, status: implemented, authenticity: real, vms: "Convert an ASCII delta/absolute time string to binary", evidence: src/libvms/syssvc/sys_time.c}
+  - {id: sys$asctim, kind: routine, status: implemented, authenticity: real, vms: "Convert binary time to an ASCII string", evidence: src/libvms/syssvc/sys_time.c}
+  - {id: sys$setimr, kind: routine, status: implemented, authenticity: advisory, vms: "Set a timer request (AST/event-flag at expiration)", evidence: src/libvms/syssvc/sys_time.c, notes: "process-local POSIX timer, not queued through the executive"}
+  - {id: sys$cantim, kind: routine, status: implemented, authenticity: advisory, vms: "Cancel a timer request", evidence: src/libvms/syssvc/sys_time.c, notes: "process-local POSIX timer, not queued through the executive"}
+  - {id: sys$schdwk, kind: routine, status: absent, authenticity: n/a, vms: "Schedule wakeup"}
+  - {id: sys$gettim_prec, kind: routine, status: absent, authenticity: n/a, vms: "Get high-precision system time"}

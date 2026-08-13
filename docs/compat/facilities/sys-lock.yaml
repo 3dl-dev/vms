@@ -1,0 +1,19 @@
+# SYS$ Lock Manager (programmatic $ENQ/$DEQ). See docs/design-compat-surface-register.md.
+facility: sys-lock
+name: "SYS$ Lock Manager (Programmatic $ENQ/$DEQ)"
+domain: programming-interfaces
+vms_ref: "OpenVMS System Services Reference Manual — Lock Management Services"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  VMS ships ~10 lock-management services; OVMX implements a 3-routine subset
+  (ENQ/ENQW/DEQ), real. SYS$GETLKI and SYS$GETLKIW are absent entirely.
+last_reviewed: 2026-08-13
+items:
+  - {id: sys$enq, kind: routine, status: implemented, authenticity: real, vms: "Enqueue a lock request", evidence: src/libvms/syssvc/sys_lock.c}
+  - {id: sys$enqw, kind: routine, status: implemented, authenticity: real, vms: "Enqueue a lock request (waits for completion)", evidence: src/libvms/syssvc/sys_lock.c}
+  - {id: sys$deq, kind: routine, status: implemented, authenticity: real, vms: "Dequeue (release) a lock", evidence: src/libvms/syssvc/sys_lock.c}
+  - {id: sys$getlki, kind: routine, status: absent, authenticity: n/a, vms: "Get lock information (single item)"}
+  - {id: sys$getlkiw, kind: routine, status: absent, authenticity: n/a, vms: "Get lock information (waits for completion)"}
+  - {id: sys$_other, kind: routine, status: absent, authenticity: n/a, vms: "Remaining SYS$ lock-management services beyond enq/enqw/deq/getlki(w) (VMS ships ~10 total)"}

@@ -1,0 +1,21 @@
+# Source of truth for the cluster-dlm row of the Compatibility Surface Register.
+facility: cluster-dlm
+name: "Cluster-wide Distributed Lock Manager"
+domain: clustering
+vms_ref: "OpenVMS Cluster Systems manual; $ENQ/$DEQ/$GETLKI system services"
+scope_1_0: in
+plan_ref: vms-694
+summary: >
+  Cross-node lock forwarding and resource remastering are absent, and that
+  absence is authentic: a non-local directory or master honestly fails with
+  SS$_UNSUPPORTED rather than fabricating a grant. See kernel-executive.yaml
+  for the single-node lock manager this builds on.
+last_reviewed: 2026-08-13
+items:
+  - id: cluster-dlm$cross-node-lock
+    kind: feature
+    status: absent
+    authenticity: real
+    vms: "Lock request forwarding / resource remastering to a non-local master node"
+    evidence: src/kernel/vms_lock.c
+    notes: "vms_lock.c:318-390 returns SS$_UNSUPPORTED for a non-local directory or master; membership hard-stubbed to 1 node. Single-node DLM only — no fake grants, so the gap is authentic (real), not a facade."

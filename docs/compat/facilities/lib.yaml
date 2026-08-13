@@ -1,0 +1,40 @@
+# LIB$ Run-Time Library. See docs/design-compat-surface-register.md.
+facility: lib
+name: "LIB$ Run-Time Library"
+domain: programming-interfaces
+vms_ref: "OpenVMS RTL Library (LIB$) Manual"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  starlet.h/lib headers declare 207 LIB$ symbols with no stub markers
+  remaining. Broad genuine coverage across arithmetic/bit ops, char-scan,
+  CLI/spawn (incl. a real CLI$ FSM parser), date/time, queue, symbol, tree,
+  VM, translation tables, output, event flags, logical names, and misc
+  groups. Notable named gaps: LIB$ISHFT/ISHFTC, LIB$TRIM, LIB$DO_COMMAND,
+  LIB$SFREE_WAIT. LIB$TPARSE/LIB$TABLE_PARSE — formerly the known gap — are
+  now a real FSM with backtracking (vms-9f6, CLOSED).
+last_reviewed: 2026-08-13
+items:
+  - {id: lib$_arith_bitops, kind: routine, status: partial, authenticity: real, vms: "Arithmetic/bit-manipulation group (LIB$ADDX, LIB$SUBX, LIB$BBSS/BBCC, LIB$EMUL, ...; VMS ships ~16)", evidence: src/libvms/rtl/lib_arith.c, notes: "14/16 present"}
+  - {id: lib$ishft, kind: routine, status: absent, authenticity: n/a, vms: "Arithmetic/logical shift"}
+  - {id: lib$ishftc, kind: routine, status: absent, authenticity: n/a, vms: "Circular shift"}
+  - {id: lib$_charscan, kind: routine, status: partial, authenticity: real, vms: "Character-scan group (LIB$SCANC, LIB$LOCC, LIB$SKPC, ...; VMS ships ~6)", evidence: src/libvms/rtl/lib_charscan.c, notes: "5/6 present"}
+  - {id: lib$trim, kind: routine, status: absent, authenticity: n/a, vms: "Trim trailing blanks/tabs from a string"}
+  - {id: lib$_cli_spawn, kind: routine, status: implemented, authenticity: real, vms: "CLI/spawn group (LIB$SPAWN, LIB$GET_INPUT, LIB$GET_COMMAND, CLI$ FSM parser, ...; VMS ships ~10)", evidence: src/libvms/rtl/lib_common.c, notes: "~10/10 present, including a real CLI$ FSM parser"}
+  - {id: lib$do_command, kind: routine, status: absent, authenticity: n/a, vms: "Execute a DCL command string programmatically"}
+  - {id: lib$_datetime, kind: routine, status: implemented, authenticity: real, vms: "Date/time conversion group (LIB$DAY, LIB$CVT_VECTIM, LIB$CVT_FROM_INTERNAL_TIME, ...)", evidence: src/libvms/rtl/lib_datetime.c}
+  - {id: lib$_queue, kind: routine, status: implemented, authenticity: real, vms: "Self-relative/absolute queue insertion/removal group (LIB$INSQUE, LIB$REMQUE, ...)", evidence: src/libvms/rtl/lib_queue.c}
+  - {id: lib$_symbol, kind: routine, status: implemented, authenticity: real, vms: "DCL symbol-table group (LIB$GET_SYMBOL, LIB$SET_SYMBOL, LIB$DELETE_SYMBOL, ...)", evidence: src/libvms/rtl/lib_symbol.c}
+  - {id: lib$_tree, kind: routine, status: implemented, authenticity: real, vms: "Binary-tree management group (LIB$INSERT_TREE, LIB$LOOKUP_TREE, LIB$TRAVERSE_TREE, ...)", evidence: src/libvms/rtl/lib_tree.c}
+  - {id: lib$_vm, kind: routine, status: implemented, authenticity: real, vms: "Virtual-memory zone/allocation group (LIB$GET_VM, LIB$FREE_VM, LIB$CREATE_VM_ZONE, ...)", evidence: src/libvms/rtl/lib_vm.c}
+  - {id: lib$_xlate_tables, kind: routine, status: implemented, authenticity: real, vms: "Translation-table group (LIB$INIT_XLATE_TABLE, LIB$XLATE_TABLE, ...)", evidence: src/libvms/rtl/lib_xlate_tables.c}
+  - {id: lib$_output, kind: routine, status: implemented, authenticity: real, vms: "Output group (LIB$PUT_OUTPUT, LIB$PUT_SCREEN, ...)", evidence: src/libvms/rtl/lib_output.c}
+  - {id: lib$_eventflags, kind: routine, status: implemented, authenticity: real, vms: "Event-flag wrapper group (LIB$GET_EF, LIB$FREE_EF, ...)", evidence: src/libvms/rtl/lib_eventflags.c}
+  - {id: lib$_logical, kind: routine, status: implemented, authenticity: real, vms: "Logical-name wrapper group (LIB$SYS_TRNLOG, LIB$DELETE_LOGICAL, ...)", evidence: src/libvms/rtl/lib_logical.c}
+  - {id: lib$_misc, kind: routine, status: implemented, authenticity: real, vms: "Miscellaneous group (LIB$GETJPI wrapper, LIB$WAIT, ...)", evidence: src/libvms/rtl/lib_misc.c}
+  - {id: lib$_dyndesc, kind: routine, status: implemented, authenticity: real, vms: "Dynamic-descriptor helper group (LIB$SGET1_DD, LIB$SFREE1_DD, ...; VMS ships ~5)", evidence: src/libvms/rtl/lib_dyndesc.c, notes: "5/5 present"}
+  - {id: lib$sfree_wait, kind: routine, status: absent, authenticity: n/a, vms: "Wait for and free a string cell"}
+  - {id: lib$tparse, kind: routine, status: implemented, authenticity: real, vms: "Table-driven character scanner", evidence: src/libvms/rtl/lib_tparse.c, notes: "real FSM with backtracking; formerly the known gap, closed vms-9f6"}
+  - {id: lib$table_parse, kind: routine, status: implemented, authenticity: real, vms: "Table-driven parse entry point", evidence: src/libvms/rtl/lib_tparse.c}
+  - {id: lib$_other, kind: routine, status: partial, authenticity: real, vms: "Remaining LIB$ routines beyond the groups enumerated above (VMS ships ~450+ total LIB$ entry points; OVMX header declares 207, all backed by real implementations except the named gaps in this file)", evidence: src/libvms/rtl/, scope_1_0: stretch, notes: "broad genuine coverage; no stub markers remain in the 207 declared"}

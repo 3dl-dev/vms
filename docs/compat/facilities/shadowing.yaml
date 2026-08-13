@@ -1,0 +1,17 @@
+# Source of truth for the shadowing row of the Compatibility Surface Register.
+facility: shadowing
+name: "Volume shadowing"
+domain: clustering
+vms_ref: "OpenVMS Volume Shadowing for OpenVMS manual"
+scope_1_0: out
+summary: >
+  Absent. docs/compatibility-contract.md lists host-based (DSSA) volume
+  shadowing as permanently out of scope.
+last_reviewed: 2026-08-13
+items:
+  - id: shadowing$host-based-shadowing
+    kind: feature
+    status: absent
+    authenticity: n/a
+    vms: "Host-based volume shadowing (DSSA): shadow-set membership, merge, copy"
+    notes: "Permanently out of scope per docs/compatibility-contract.md."

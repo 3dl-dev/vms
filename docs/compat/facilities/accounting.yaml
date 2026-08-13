@@ -1,0 +1,17 @@
+# Source of truth for the accounting row of the Compatibility Surface Register.
+facility: accounting
+name: "Accounting"
+domain: system-management
+vms_ref: "OpenVMS Guide to System Security; DCL Dictionary (SET/SHOW ACCOUNTING)"
+scope_1_0: in
+plan_ref: vms-8ad
+summary: >
+  A thin, real slice: per-user last-login timestamps and a persisted,
+  system-wide accounting-enabled flag that SET/SHOW ACCOUNTING and the
+  record path both honor. No ACCOUNTING.DAT journal — login/logout,
+  process, and image accounting records are not implemented.
+last_reviewed: 2026-08-13
+items:
+  - {id: accounting$last_login,   kind: feature, status: implemented, authenticity: real, vms: "Per-user last-login timestamp tracking", evidence: src/libvms/rtl/ovmx_accounting.c}
+  - {id: accounting$enabled_flag, kind: feature, status: implemented, authenticity: real, vms: "SET ACCOUNTING/SHOW ACCOUNTING enabled state — real, persisted, system-wide (gates the record path, not a per-context bool)", evidence: src/libvms/include/ovmx_accounting.h, plan_ref: vms-17d}
+  - {id: accounting$journal,      kind: feature, status: absent,      authenticity: n/a,  vms: "ACCOUNTING.DAT journal — login/logout, process, image, print accounting records", evidence: "", notes: "No live accounting daemon or record journal; only last-login + enabled-flag exist"}

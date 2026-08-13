@@ -1,0 +1,25 @@
+# Status / condition codes. See docs/design-compat-surface-register.md.
+facility: status-codes
+name: "Status / Condition Codes (SS$_, RMS$_, Facility Registry)"
+domain: programming-interfaces
+vms_ref: "OpenVMS System Services Reference Manual — Condition Values; OpenVMS Programming Concepts Manual Ch. 8"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  STS$V/M/S_* bitfield layout complete and oracle-pinned. SS$_ codes: 95 of
+  VMS's ~500+ defined (common/executive subset, long tail absent). RMS$_ codes:
+  81 of ~200+ defined. SYS$GETMSG message text: 51 of 176 SS$+RMS$ codes have
+  real oracle-pinned text; unknown codes fall back to a generic
+  "%FAC-S-XXXX message number N" string, not VMS-authentic. Facility number
+  registry: 6 of VMS's ~300+ facilities defined, so getmsg/decode for most
+  facilities falls to generic NONAME. starlet.h declares only ~86-192 sys$
+  symbols vs several hundred in real VMS.
+last_reviewed: 2026-08-13
+items:
+  - {id: stsdef$_bitfield, kind: struct, status: verified, authenticity: real, vms: "STS$V/M/S_* bitfield layout + $VMS_STATUS_SUCCESS success-test macro", evidence: src/libvms/include/stsdef.h, verified_against: "OpenVMS Programming Concepts Manual Ch. 8 / System Services Reference Manual status-value bitfield layout"}
+  - {id: ssdef$_codes, kind: status-block, status: partial, authenticity: real, vms: "SS$_ condition-value constants (VMS ships ~500+)", evidence: src/libvms/include/ssdef.h, notes: "95 defined; common/executive subset, long tail absent"}
+  - {id: rmsdef$_codes, kind: status-block, status: partial, authenticity: real, vms: "RMS$_ condition-value constants (VMS ships ~200+)", evidence: src/libvms/include/rmsdef.h, notes: "81 defined"}
+  - {id: sys$getmsg_text_table, kind: routine, status: partial, authenticity: facade-risk, vms: "Message text table consumed by SYS$GETMSG (VMS ships real text for ~176 SS$+RMS$ codes)", evidence: src/libvms/syssvc/sys_msg.c, notes: "51/176 have oracle-pinned text; unknown codes fall back to generic non-authentic text"}
+  - {id: facility_registry, kind: status-block, status: stub, authenticity: real, vms: "FACILITY_* facility-number registry (VMS defines ~300+)", evidence: src/libvms/include/stsdef.h, notes: "6 defined (SYSTEM,RMS,CLI,LIB,STR,MTH); unknown facilities decode to generic NONAME, honestly"}
+  - {id: starlet$_symbol_coverage, kind: status-block, status: partial, authenticity: n/a, vms: "starlet.h SYS$ symbol declarations (real VMS: several hundred)", evidence: src/libvms/include/starlet.h, notes: "~86-192 sys$ symbols declared depending on build config, vs several hundred in real VMS"}

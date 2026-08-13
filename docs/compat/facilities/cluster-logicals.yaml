@@ -1,0 +1,26 @@
+# Source of truth for the cluster-logicals row of the Compatibility Surface Register.
+facility: cluster-logicals
+name: "Cluster-wide logical names / global sections"
+domain: clustering
+vms_ref: "OpenVMS Cluster Systems manual; $CRELNM (LNM$M_CLUSTERWIDE), $MGBLSC/$CRMPSC"
+scope_1_0: in
+plan_ref: vms-694
+summary: >
+  Not separately evidenced as built. Cluster-wide logical-name scope degrades
+  to system-wide; cluster-wide global sections are absent.
+last_reviewed: 2026-08-13
+items:
+  - id: cluster-logicals$clusterwide-logical-names
+    kind: feature
+    status: absent
+    authenticity: n/a
+    vms: "LNM$M_CLUSTERWIDE table replication across cluster members"
+    evidence: src/kernel/vms_lnm.c
+    notes: "Degrades to system-wide scope (per docs/compatibility-contract.md); no cluster-wide replication built."
+
+  - id: cluster-logicals$global-sections
+    kind: feature
+    status: absent
+    authenticity: n/a
+    vms: "Cluster-wide global sections ($MGBLSC / $CRMPSC with cluster scope)"
+    notes: "Absent; not evidenced in the current tree."

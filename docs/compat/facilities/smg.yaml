@@ -1,0 +1,18 @@
+# Source of truth for the SMG$ row of the Compatibility Surface Register.
+facility: smg
+name: "SMG$ Screen Management RTL"
+domain: programming-interfaces
+vms_ref: "OpenVMS Screen Management (SMG$) Manual"
+scope_1_0: stretch
+plan_ref: vms-531
+summary: >
+  Stub only — constants and status codes (49 lines), no virtual-display
+  implementation (smg$create_virtual_display, smg$paste_virtual_display,
+  etc. all absent). SMG$ is a large VMS RTL facility; OVMX's numeric
+  constant values are unconfirmed against a fetchable public source
+  pending operator sign-off (vms-531). Terminal I/O at the DCL level (a
+  termios SET TERMINAL layer) is a separate, real surface — not SMG$.
+last_reviewed: 2026-08-13
+items:
+  - {id: smg$status-constants, kind: status-block, status: stub, authenticity: advisory, vms: "SMG$ status codes and key constants", evidence: "src/libvms/include/smgdef.h", notes: "49 lines, constants only. Exact numeric values not confirmed against a fetchable public source (vms-531 operator sign-off pending)."}
+  - {id: smg$virtual-display-api, kind: routine, status: absent, authenticity: n/a, vms: "smg$create_virtual_display / smg$paste_virtual_display / smg$put_chars / etc. — virtual display management", scope_1_0: stretch, notes: "No implementation anywhere. SMG$ is a large RTL facility; only the constants layer exists."}

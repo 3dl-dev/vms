@@ -1,0 +1,29 @@
+# SYS$ Memory Management. See docs/design-compat-surface-register.md.
+facility: sys-memory
+name: "SYS$ Memory Management"
+domain: programming-interfaces
+vms_ref: "OpenVMS System Services Reference Manual — Memory Management Services"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  VMS ships ~10 memory-management services; OVMX declares 9. SYS$CRETVA/
+  DELTVA/EXPREG/CRMPSC are real (mmap-backed). SYS$DGBLSC/PURGWS/LKWSET/
+  ULWSET validate arguments and return SS$_NORMAL with nothing done
+  (facade-risk); LKWSET/ULWSET are kernel-mode/PFN working-set-lock services,
+  out of scope for 1.0. SYS$ADJSTK and SYS$UPDSEC are absent. SYS$LCKPAG
+  (lock pages in physical memory) is absent and permanently out of scope
+  (kernel-mode/PFN).
+last_reviewed: 2026-08-13
+items:
+  - {id: sys$cretva, kind: routine, status: implemented, authenticity: real, vms: "Create a virtual address region", evidence: src/libvms/syssvc/sys_memory.c}
+  - {id: sys$deltva, kind: routine, status: implemented, authenticity: real, vms: "Delete a virtual address region", evidence: src/libvms/syssvc/sys_memory.c}
+  - {id: sys$expreg, kind: routine, status: implemented, authenticity: real, vms: "Expand a virtual address region (P0/P1)", evidence: src/libvms/syssvc/sys_memory.c}
+  - {id: sys$crmpsc, kind: routine, status: implemented, authenticity: real, vms: "Create and map a section", evidence: src/libvms/syssvc/sys_memory.c, notes: "mmap-backed"}
+  - {id: sys$dgblsc, kind: routine, status: stub, authenticity: facade-risk, vms: "Delete a global section", evidence: src/libvms/syssvc/sys_memory.c, notes: "validates args and returns SS$_NORMAL; nothing done"}
+  - {id: sys$purgws, kind: routine, status: stub, authenticity: facade-risk, vms: "Purge the working set", evidence: src/libvms/syssvc/sys_memory.c, notes: "validates args and returns SS$_NORMAL; nothing done"}
+  - {id: sys$lkwset, kind: routine, status: stub, authenticity: facade-risk, vms: "Lock pages in the working set", evidence: src/libvms/syssvc/sys_memory.c, scope_1_0: out, notes: "kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done"}
+  - {id: sys$ulwset, kind: routine, status: stub, authenticity: facade-risk, vms: "Unlock pages from the working set", evidence: src/libvms/syssvc/sys_memory.c, scope_1_0: out, notes: "kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done"}
+  - {id: sys$adjstk, kind: routine, status: absent, authenticity: n/a, vms: "Adjust stack size"}
+  - {id: sys$updsec, kind: routine, status: absent, authenticity: n/a, vms: "Update a section from memory to disk"}
+  - {id: sys$lckpag, kind: routine, status: absent, authenticity: n/a, vms: "Lock pages in physical memory", scope_1_0: out, notes: "kernel-mode/PFN, permanently out of scope"}

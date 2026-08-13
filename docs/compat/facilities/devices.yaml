@@ -1,0 +1,22 @@
+# Source of truth for the devices row of the Compatibility Surface Register.
+# See docs/design-compat-surface-register.md.
+facility: devices
+name: "Devices ($GETDVI, MOUNT/DISMOUNT/INITIALIZE, DISK$label)"
+domain: file-system
+vms_ref: "OpenVMS I/O User's Reference Manual; OpenVMS System Manager's Manual (MOUNT)"
+scope_1_0: in
+plan_ref: vms-651
+summary: >
+  Device information, mount/dismount/initialize. MOUNT is real end to end since the old
+  fake was killed (vms-651) — privilege-checked, executive-resolved, real mount(2). GETDVI
+  is real for the 14 of 48 DVI$_ items OVMX implements; the rest honestly return zero
+  rather than fabricating a value.
+last_reviewed: 2026-08-13
+items:
+  - {id: sys$getdvi, kind: routine, status: partial, authenticity: real, vms: "Get device/volume information (synchronous)", evidence: src/libvms/syssvc/sys_device.c, notes: "14 of 48 defined DVI$_ items real: DEVNAM/UNIT/DEVTYPE/DEVCLASS/DEVCHAR/REFCNT/ERRCNT/OPCNT/PID/OWNUIC/AVAILABLE/BLOCKSIZE/FULLDEVNAM/ALLDEVNAM"}
+  - {id: sys$getdviw, kind: routine, status: partial, authenticity: real, vms: "Get device/volume information (with event flag wait)", evidence: src/libvms/syssvc/sys_device.c, notes: "same 14-of-48 DVI$_ coverage as sys$getdvi"}
+  - {id: devices$getdvi_unimplemented_items, kind: feature, status: stub, authenticity: advisory, vms: "Remaining 34 DVI$_ items (volume geometry: MAXBLOCK/FREEBLOCKS/VOLNAM/CLUSTER/MOUNTCNT, etc.)", evidence: src/libvms/syssvc/sys_device.c, notes: "honestly return longword 0 rather than fabricating a value — documented 'not known', not a facade, but real software reading e.g. free space sees 0"}
+  - {id: sys$device_scan, kind: routine, status: implemented, authenticity: real, vms: "Enumerate devices by wildcard/class", evidence: src/libvms/syssvc/sys_device.c}
+  - {id: dcl$mount, kind: command, status: verified, authenticity: real, vms: "MOUNT — mount a volume", evidence: src/vmsdcl/dcl_cmd_misc.c, verified_against: "tests/qemu/test_mount_e2e.sh (run_mount_e2e.sh)", notes: "old fake killed (vms-651); now exec-checked PRV$M_MOUNT, vms_kif_disk_resolve, real mount(2) via setuid helper, DISK$<label> logical read from the volume home block"}
+  - {id: dcl$dismount, kind: command, status: implemented, authenticity: real, vms: "DISMOUNT — dismount a volume", evidence: src/vmsdcl/dcl_cmd_misc.c}
+  - {id: dcl$initialize, kind: command, status: implemented, authenticity: real, vms: "INITIALIZE — format a device/image", evidence: tools/vms_initialize.c, notes: "real home block/bitmap/INDEXF/MFD; refuses a bogus unit rather than faking success"}

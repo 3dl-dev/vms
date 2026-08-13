@@ -1,0 +1,15 @@
+# Source of truth for the rights-db row of the Compatibility Surface Register.
+facility: rights-db
+name: "Rights Database / Identifiers"
+domain: system-management
+vms_ref: "OpenVMS Guide to System Security ch. 4 (Identifiers)"
+scope_1_0: in
+plan_ref: vms-8ad
+summary: >
+  RIGHTSLIST.DAT identifiers are read and resolved for real. Object ACEs
+  (the rights-DB-adjacent half of access control) are not built — see
+  protection-acl for the fuller ACL gap; this file covers identifiers only.
+last_reviewed: 2026-08-13
+items:
+  - {id: rightslist$identifiers, kind: feature, status: implemented, authenticity: real, vms: "RIGHTSLIST.DAT identifier storage + resolution (vms-2f8)", evidence: src/libvms/rtl/rightslist.c}
+  - {id: rightslist$aces,        kind: feature, status: absent,      authenticity: n/a,   vms: "Object ACEs (identifier-based access control entries)", evidence: src/libvms/include/acldef.h, scope_1_0: stretch, notes: "acldef.h constants only; no ACL/ACE machinery built. Full ACL gap tracked under protection-acl."}

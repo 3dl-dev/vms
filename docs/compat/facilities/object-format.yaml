@@ -1,0 +1,18 @@
+# Source of truth for the Object File Format row of the Compatibility Surface Register.
+facility: object-format
+name: "Object File Format"
+domain: toolchain
+vms_ref: "VSI OpenVMS Linker Utility Manual (object module format)"
+scope_1_0: in
+plan_ref: vms-ade
+summary: >
+  LINK.EXE ingests standard ELF relocatable objects and `ar` whole-archive
+  containers, not VAX/Alpha OBJ$ record-based object modules. Symbol
+  resolution and relocation semantics are real; the on-disk object container
+  is OVMX's own (ELF) where VMS's OBJ$ record format is not published at
+  byte level (Rule 8) — not presented as VMS-authentic.
+last_reviewed: 2026-08-13
+items:
+  - {id: object-format$elf-object-ingest, kind: feature, status: implemented, authenticity: advisory, vms: "LINK.EXE ingestion of relocatable object modules for linking", evidence: "src/vmslink/link.c", notes: "Consumes ELF .o objects, not VMS OBJ$ records; relocation/symbol-resolution semantics real, container format is OVMX-original (Rule 8), not VMS-authentic byte layout."}
+  - {id: object-format$ar-whole-archive, kind: feature, status: implemented, authenticity: real, vms: "Whole-archive object-library consumption", evidence: "src/vmslink/link.c:2112", notes: "Standard `ar` archive; consumption logic real. Precursor for LIBRARIAN .OLB support (see librarian facility) — LINK.EXE already ingests ar, so .OLB consumption needs no new LINK.EXE code."}
+  - {id: object-format$vms-obj-records, kind: struct, status: absent, authenticity: n/a, vms: "VAX/Alpha OBJ$ record-based object format (module header, GSD, TIR, EPM records)", scope_1_0: out, notes: "Not pursued — OVMX's self-host toolchain uses ELF internally; true VMS object-interchange byte format is out of scope."}

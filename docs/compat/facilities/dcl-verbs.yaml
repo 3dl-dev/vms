@@ -1,0 +1,101 @@
+# Source of truth for the DCL-verbs row of the Compatibility Surface Register.
+facility: dcl-verbs
+name: "DCL Command Verbs (breadth)"
+domain: command-language
+vms_ref: "OpenVMS DCL Dictionary"
+scope_1_0: in
+tier: 1
+plan_ref: vms-8ad
+summary: >
+  OVMX's static builtin_verbs[] dispatch table (dcl_builtin.c) carries 55 verbs
+  against VMS's ~150 (SET/SHOW count as ~30-subverb umbrellas each, not single
+  verbs). Breadth catalogued as items rather than one row per verb; each notable
+  missing verb family and the SET/SHOW umbrella depth get their own item.
+last_reviewed: 2026-08-13
+items:
+  - id: dcl-verbs$breadth
+    kind: feature
+    status: partial
+    authenticity: real
+    vms: "~150 DCL verbs (VMS DCL Dictionary), SET/SHOW as ~30-subverb umbrellas each"
+    evidence: src/vmsdcl/dcl_builtin.c
+    notes: "55 of ~150 verbs present (builtin_verbs[] dispatch table). Real breadth gap, not a facade."
+
+  - id: dcl-verbs$call-subroutine
+    kind: command
+    status: absent
+    authenticity: n/a
+    vms: "CALL / SUBROUTINE / ENDSUBROUTINE — command-procedure subroutine calls"
+    scope_1_0: in
+    notes: "No verb family; GOSUB/labels exist but VMS's SUBROUTINE construct does not."
+
+  - id: dcl-verbs$deck-eod
+    kind: command
+    status: absent
+    authenticity: facade-risk
+    vms: "DECK / $EOD — in-stream data deck delimiting"
+    scope_1_0: in
+    evidence: src/vmsdcl/dcl_exec.c
+    notes: "Facade-risk: without DECK/EOD, in-stream data lines are parsed as commands, cascading IVVERB errors rather than failing with an honest 'not supported'."
+
+  - id: dcl-verbs$queue-verbs
+    kind: command
+    status: absent
+    authenticity: facade-risk
+    vms: "START/QUEUE, STOP/QUEUE, INITIALIZE/QUEUE — real VMS queue-management verb syntax"
+    scope_1_0: in
+    evidence: src/vmsdcl/dcl_cmd_set.c
+    notes: "Function reshaped into SET QUEUE/START, /STOP, /PAUSE — syntax deviation from authentic VMS verbs; see queues.yaml for the underlying queue-manager status."
+
+  - id: dcl-verbs$allocate-deallocate
+    kind: command
+    status: absent
+    authenticity: n/a
+    vms: "ALLOCATE / DEALLOCATE — device allocation verbs"
+    scope_1_0: in
+
+  - id: dcl-verbs$set-host
+    kind: command
+    status: absent
+    authenticity: n/a
+    vms: "SET HOST — DECnet/LAT terminal connection to another node"
+    scope_1_0: in
+    notes: "Depends on DECnet/LAT (out until networking lane lands)."
+
+  - id: dcl-verbs$patch
+    kind: command
+    status: absent
+    authenticity: n/a
+    vms: "PATCH — interactive image binary patch utility"
+    scope_1_0: stretch
+
+  - id: dcl-verbs$standalone-sda
+    kind: command
+    status: absent
+    authenticity: n/a
+    vms: "Standalone SDA (crash-dump analysis boot path)"
+    scope_1_0: stretch
+    notes: "Interactive ANALYZE/SYSTEM exists (see utilities.yaml); standalone crash-dump SDA does not."
+
+  - id: dcl-verbs$debug
+    kind: command
+    status: absent
+    authenticity: n/a
+    vms: "DEBUG — symbolic debugger"
+    scope_1_0: stretch
+
+  - id: dcl-verbs$merge
+    kind: command
+    status: absent
+    authenticity: n/a
+    vms: "MERGE — merge utility for sorted files"
+    scope_1_0: stretch
+    notes: "Companion to SORT; see utilities.yaml SORT item."
+
+  - id: dcl-verbs$set-show-umbrella
+    kind: feature
+    status: partial
+    authenticity: real
+    vms: "SET (~30 sub-verbs) / SHOW (~30 sub-verbs) umbrella depth"
+    evidence: src/vmsdcl/dcl_cmd_set.c
+    notes: "SET dispatches 23 real sub-handlers, SHOW dispatches 26 real sub-handlers (dcl_cmd_set.c, dcl_cmd_show.c) — each real, not facaded, but short of VMS's ~30-each full set."

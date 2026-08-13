@@ -1,0 +1,18 @@
+# SYS$ Process/System Information. See docs/design-compat-surface-register.md.
+facility: sys-procinfo
+name: "SYS$ Process/System Information (GETJPI/GETSYI)"
+domain: programming-interfaces
+vms_ref: "OpenVMS System Services Reference Manual — SYS$GETJPI, SYS$GETJPIW, SYS$GETSYI, SYS$GETSYIW"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  GETJPI/GETJPIW/GETSYI/GETSYIW are all implemented and real for most
+  JPI$_/SYI$_ item codes.
+last_reviewed: 2026-08-13
+items:
+  - {id: sys$getjpi, kind: routine, status: implemented, authenticity: real, vms: "Get job/process information (single item)", evidence: src/libvms/syssvc/sys_misc.c}
+  - {id: sys$getjpiw, kind: routine, status: implemented, authenticity: real, vms: "Get job/process information (waits for completion)", evidence: src/libvms/syssvc/sys_misc.c}
+  - {id: sys$getsyi, kind: routine, status: implemented, authenticity: real, vms: "Get system information (single item)", evidence: src/libvms/syssvc/sys_misc.c}
+  - {id: sys$getsyiw, kind: routine, status: implemented, authenticity: real, vms: "Get system information (waits for completion)", evidence: src/libvms/syssvc/sys_misc.c}
+  - {id: jpi_syi_item_codes, kind: struct, status: partial, authenticity: real, vms: "JPI$_*/SYI$_* item-code coverage consumed by GETJPI(W)/GETSYI(W)", evidence: src/libvms/syssvc/sys_misc.c, notes: "most common item codes implemented; not exhaustive vs VMS's full set"}

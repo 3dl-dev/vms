@@ -1,0 +1,81 @@
+# Source of truth for the F$ lexicals row of the Compatibility Surface Register.
+facility: lexicals
+name: "F$ Lexical Functions"
+domain: command-language
+vms_ref: "OpenVMS DCL Dictionary — F$ Lexical Functions"
+scope_1_0: in
+tier: 1
+plan_ref: vms-8ad
+summary: >
+  41 of VMS's ~43 F$ lexical functions are present and real. Only
+  F$FID_TO_NAME is absent. The unknown-lexical error path returns an
+  authentic %DCL-W-IVFNAM, oracle-grounded.
+last_reviewed: 2026-08-13
+items:
+  - id: lexicals$breadth
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "~43 F$ lexical functions (DCL Dictionary)"
+    evidence: src/vmsdcl/dcl_lexical.c
+    notes: "41 of ~43 present and real; only F$FID_TO_NAME absent."
+
+  - id: f$fid_to_name
+    kind: lexical
+    status: absent
+    authenticity: n/a
+    vms: "F$FID_TO_NAME(file-id) — resolve an FID to a file name"
+    scope_1_0: in
+
+  - id: f$setprv
+    kind: lexical
+    status: verified
+    authenticity: real
+    vms: "F$SETPRV(priv-states) — enable/disable process privileges, returning prior state"
+    evidence: src/vmsdcl/dcl_lexical.c:3119
+    verified_against: "lab-Alpha OpenVMS Alpha V8.4 oracle, 11-AUG-2026: F$SETPRV(\"NOOPER,GROUP\") -> \"OPER,GROUP\""
+    notes: "Routes through vms_kif_setprv directly."
+
+  - id: f$csid
+    kind: lexical
+    status: implemented
+    authenticity: real
+    vms: "F$CSID — cluster system identification, iteration context"
+    evidence: src/vmsdcl/dcl_lexical.c
+
+  - id: f$delta_time
+    kind: lexical
+    status: implemented
+    authenticity: real
+    vms: "F$DELTA_TIME — difference between two absolute times as a delta-time string"
+    evidence: src/vmsdcl/dcl_lexical.c
+
+  - id: f$license
+    kind: lexical
+    status: implemented
+    authenticity: real
+    vms: "F$LICENSE — query license product/unit state"
+    evidence: src/vmsdcl/dcl_lexical.c
+    notes: "Grant-all licensing stance; see LMF policy."
+
+  - id: f$multipath
+    kind: lexical
+    status: implemented
+    authenticity: real
+    vms: "F$MULTIPATH — query multipath device set membership"
+    evidence: src/vmsdcl/dcl_lexical.c
+
+  - id: f$cunits
+    kind: lexical
+    status: implemented
+    authenticity: real
+    vms: "F$CUNITS — count of units in a device/media set"
+    evidence: src/vmsdcl/dcl_lexical.c
+
+  - id: lexicals$unknown-error-path
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "Referencing an unknown F$ lexical returns %DCL-W-IVFNAM"
+    evidence: src/vmsdcl/dcl_lexical.c
+    notes: "Previously a facade; fixed and oracle-grounded to return the authentic IVFNAM condition."

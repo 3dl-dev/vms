@@ -1,0 +1,22 @@
+# Source of truth for the protection-acl row of the Compatibility Surface Register.
+facility: protection-acl
+name: "File Protection (SOGW/UIC) + ACLs"
+domain: system-management
+vms_ref: "OpenVMS Guide to System Security ch. 5 (Protecting Data)"
+scope_1_0: in
+plan_ref: vms-8ad
+summary: >
+  SOGW/UIC protection is kernel-enforced and real for the common case. The
+  Delete bit is advisory-only. $CHKPRO computes correctly but nothing calls
+  it. The legacy $CHECK_ACCESS 2nd-opinion routine was deliberately removed
+  (vms-2b8) rather than left as a facade — a precedent, not a gap. ACLs are
+  undefined beyond constants. SYSPRV/BYPASS/READALL override is absent
+  (cross-ref privileges).
+last_reviewed: 2026-08-13
+items:
+  - {id: fileprot$sogw_uic,     kind: feature, status: implemented, authenticity: real,        vms: "SOGW protection mask, UIC-based, kernel-enforced (-EACCES on deny)", evidence: "src/kernel/vmsfs/vmsfs_blkdev.c:1252-1330"}
+  - {id: fileprot$delete_bit,   kind: feature, status: stub,        authenticity: advisory,     vms: "Delete (D) protection bit", evidence: "src/kernel/vmsfs/vmsfs_blkdev.c:1225-1226", notes: "Enforcement deferred by design comment; checking D on the file being deleted needs custom VFS hooks beyond current scope"}
+  - {id: sys$chkpro,            kind: routine, status: implemented, authenticity: advisory,     vms: "$CHKPRO — compute-only SOGW protection check helper", evidence: src/libvms/syssvc/sys_security.c, notes: "Correct logic, zero OVMX callers — computed but unused, honestly inert"}
+  - {id: sys$check_access,      kind: routine, status: absent,      authenticity: n/a,          vms: "$CHECK_ACCESS legacy 2nd-opinion access check", evidence: "", notes: "Deliberately removed (vms-2b8) rather than kept as a redundant/driftable facade — represented as absent by design, a positive anti-facade precedent, not a gap to close"}
+  - {id: acldef$acls,           kind: feature, status: absent,      authenticity: n/a,          vms: "Access Control List entries (ACEs) on files/objects", evidence: src/libvms/include/acldef.h, scope_1_0: stretch, notes: "Constants only, not built"}
+  - {id: fileprot$priv_override, kind: feature, status: absent,     authenticity: facade-risk,  vms: "SYSPRV/BYPASS/READALL/GRPPRV override of normal SOGW checks", evidence: "src/kernel/vmsfs/vmsfs_blkdev.c:1256", scope_1_0: in, notes: "Tracked vms-f15/vms-36d, unfixed. Full detail under privileges; cross-listed here as the file-access-facing half."}

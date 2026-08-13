@@ -1,0 +1,18 @@
+# Source of truth for the Symbol Vectors row of the Compatibility Surface Register.
+facility: symbol-vectors
+name: "Symbol Vectors / GSMATCH / Ident"
+domain: toolchain
+vms_ref: "VSI OpenVMS Linker Utility Manual (shareable images, GSMATCH)"
+scope_1_0: in
+plan_ref: vms-ade
+summary: >
+  Universal symbol vectors (position-bound binding), GSMATCH
+  (ALWAYS/EQUAL/LEQUAL, major/minor), and image ident are all implemented.
+  GSMATCH comparison semantics are real (public-doc derived); the
+  symbol-vector byte layout itself is OVMX-original where VMS's is not
+  publicly published at byte level (Rule 8).
+last_reviewed: 2026-08-13
+items:
+  - {id: symbol-vectors$universal-symvec, kind: struct, status: implemented, authenticity: advisory, vms: "Universal symbol vector — position-bound entry-point binding", evidence: "src/vmslink/link.c", notes: "Position-bound binding semantics real; byte layout OVMX-original (Rule 8, VMS layout not public)."}
+  - {id: symbol-vectors$gsmatch, kind: feature, status: implemented, authenticity: real, vms: "GSMATCH ALWAYS/EQUAL/LEQUAL major/minor version matching", evidence: "src/vmslink/include/ovmx_image.h", notes: "Semantics from public docs."}
+  - {id: symbol-vectors$ident, kind: struct, status: implemented, authenticity: advisory, vms: "Image ident (carried as part of GSMATCH/image header)", evidence: "src/vmslink/include/ovmx_image.h", notes: "Byte layout advisory (Rule 8)."}

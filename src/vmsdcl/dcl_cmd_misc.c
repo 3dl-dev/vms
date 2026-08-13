@@ -906,90 +906,126 @@ int cmd_help(struct dcl_command *cmd)
 /* ================================================================== */
 
 /*
- * RECALL - Show or re-execute commands from history.
+ * DCL command recall buffer (vms-7c7).
  *
- * RECALL          — show last command
- * RECALL /ALL     — numbered history list
+ * VMS keeps the most recent commands you enter at the interactive command
+ * level in a recall buffer, and RECALL replays them. The DCL Dictionary
+ * (RECALL) documents the depth as the last 20 commands. This is a property of
+ * the command interpreter, NOT of any terminal line-editing package: RECALL
+ * works on a hardcopy terminal with no cursor keys at all.
+ *
+ * OVMX previously drove RECALL from GNU readline's history ring, so a build
+ * without readline -- the static musl runtime that boots under QEMU -- reported
+ *   %DCL-W-RECALL, command recall requires readline support
+ * and RECALL did nothing. That is a build option leaking into VMS-visible
+ * behaviour (INV-DCL: a facade, not an authentic VMS response). This DCL-owned
+ * ring is the single source of truth for RECALL in every build; readline, when
+ * present, still drives cursor-key line editing but no longer gates RECALL.
+ *
+ * The ring holds up to DCL_RECALL_MAX lines, oldest at index 0. RECALL numbers
+ * them 1..N with 1 = the oldest still retained and N = the most recent, exactly
+ * as RECALL/ALL prints them (DCL Dictionary, RECALL/ALL example).
+ */
+#define DCL_RECALL_MAX 20
+static char *dcl_recall_ring[DCL_RECALL_MAX];
+static int   dcl_recall_count;   /* valid entries, 0..DCL_RECALL_MAX */
+
+void dcl_recall_push(const char *line)
+{
+    if (!line || !line[0])
+        return;                  /* VMS does not record an empty line */
+
+    char *dup = strdup(line);
+    if (!dup)
+        return;
+
+    if (dcl_recall_count == DCL_RECALL_MAX) {
+        /* Buffer full: drop the oldest, shift down, append at the end. */
+        free(dcl_recall_ring[0]);
+        memmove(&dcl_recall_ring[0], &dcl_recall_ring[1],
+                (DCL_RECALL_MAX - 1) * sizeof(dcl_recall_ring[0]));
+        dcl_recall_ring[DCL_RECALL_MAX - 1] = dup;
+    } else {
+        dcl_recall_ring[dcl_recall_count++] = dup;
+    }
+}
+
+void dcl_recall_erase(void)
+{
+    for (int i = 0; i < dcl_recall_count; i++) {
+        free(dcl_recall_ring[i]);
+        dcl_recall_ring[i] = NULL;
+    }
+    dcl_recall_count = 0;
+}
+
+/*
+ * RECALL - Show or re-execute commands from the recall buffer.
+ *
+ * RECALL          — show most recent command
+ * RECALL /ALL     — numbered list of the buffer
+ * RECALL /ERASE   — clear the buffer
  * RECALL n        — re-execute command number n
- * RECALL string   — find and re-execute most recent match
+ * RECALL string   — find and re-execute most recent command matching string
  */
 int cmd_recall(struct dcl_command *cmd)
 {
-#ifndef HAVE_READLINE
-    (void)cmd;
-    printf("%%DCL-W-RECALL, command recall requires readline support\n");
-    return SS$_NORMAL;
-#else
-    int show_all = dcl_has_qualifier(cmd, "ALL");
+    if (dcl_has_qualifier(cmd, "ERASE")) {
+        /* RECALL/ERASE — empty the recall buffer (DCL Dictionary). */
+        dcl_recall_erase();
+        return SS$_NORMAL;
+    }
 
-    if (show_all) {
-        /* RECALL /ALL — print numbered history */
-        HIST_ENTRY **hist = history_list();
-        if (!hist || !hist[0]) {
+    if (dcl_has_qualifier(cmd, "ALL")) {
+        /* RECALL/ALL — numbered list, oldest (1) to most recent (N). */
+        if (dcl_recall_count == 0) {
             printf("%%DCL-I-RECALL, no history available\n");
             return SS$_NORMAL;
         }
-        int count = 0;
-        while (hist[count]) count++;
-        for (int i = 0; i < count; i++) {
-            /* history_list() is 0-indexed; history_get() uses offset_history */
-            printf("%5d  %s\n", history_base + i, hist[i]->line);
-        }
+        for (int i = 0; i < dcl_recall_count; i++)
+            printf("%5d  %s\n", i + 1, dcl_recall_ring[i]);
         return SS$_NORMAL;
     }
 
     if (cmd->param_count == 0) {
-        /* RECALL with no args — show most recent command */
-        HIST_ENTRY *entry = current_history();
-        /* Go to the most recent history entry */
-        while (next_history() != NULL) { /* advance to end */ }
-        entry = previous_history();
-        if (!entry) {
+        /* RECALL with no args — show the most recent command. */
+        if (dcl_recall_count == 0) {
             printf("%%DCL-I-RECALL, no history available\n");
             return SS$_NORMAL;
         }
-        printf("%s\n", entry->line);
+        printf("%s\n", dcl_recall_ring[dcl_recall_count - 1]);
         return SS$_NORMAL;
     }
 
-    /* Parameter given — check if it's a number */
+    /* Parameter given — a command number, or a matching-prefix string. */
     const char *param = cmd->params[0];
-    int is_number = 1;
+    int is_number = (param[0] != '\0');
     for (size_t i = 0; param[i]; i++) {
         if (!isdigit((unsigned char)param[i])) { is_number = 0; break; }
     }
 
     if (is_number) {
-        /* RECALL n — re-execute command number n */
+        /* RECALL n — re-execute command number n (1..count). */
         int n = (int)strtol(param, NULL, 10);
-        HIST_ENTRY *entry = history_get(n);
-        if (!entry) {
+        if (n < 1 || n > dcl_recall_count) {
             printf("%%DCL-W-RECALL, no command number %d in history\n", n);
             return SS$_NORMAL;
         }
-        printf("%s\n", entry->line);
-        /* Feed the command back to the executor */
-        return dcl_execute_line(entry->line);
-    } else {
-        /* RECALL string — find most recent command starting with string */
-        HIST_ENTRY **hist = history_list();
-        if (!hist) {
-            printf("%%DCL-I-RECALL, no history available\n");
-            return SS$_NORMAL;
-        }
-        int count = 0;
-        while (hist[count]) count++;
-        size_t plen = strlen(param);
-        for (int i = count - 1; i >= 0; i--) {
-            if (strncasecmp(hist[i]->line, param, plen) == 0) {
-                printf("%s\n", hist[i]->line);
-                return dcl_execute_line(hist[i]->line);
-            }
-        }
-        printf("%%DCL-W-RECALL, no command matching \"%s\" in history\n", param);
-        return SS$_NORMAL;
+        const char *entry = dcl_recall_ring[n - 1];
+        printf("%s\n", entry);
+        return dcl_execute_line(entry);
     }
-#endif
+
+    /* RECALL string — most recent command whose start matches (case-blind). */
+    size_t plen = strlen(param);
+    for (int i = dcl_recall_count - 1; i >= 0; i--) {
+        if (strncasecmp(dcl_recall_ring[i], param, plen) == 0) {
+            printf("%s\n", dcl_recall_ring[i]);
+            return dcl_execute_line(dcl_recall_ring[i]);
+        }
+    }
+    printf("%%DCL-W-RECALL, no command matching \"%s\" in history\n", param);
+    return SS$_NORMAL;
 }
 
 /* ================================================================== */

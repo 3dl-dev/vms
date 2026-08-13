@@ -317,6 +317,76 @@ int dcl_format_directory(const char *linux_path, char *vms_dir, size_t dir_size)
 }
 
 /*
+ * dcl_directory_header_spec - VMS "DEV:[DIR]" spec for a DIRECTORY header.
+ *
+ * The DIRECTORY header must reflect the VMS directory the user is actually
+ * looking at, derived from the VMS-side inputs (the explicit DIRECTORY
+ * argument, else the process default) — NOT reverse-derived from the host
+ * path. The host round-trip cannot recover the volume root [000000] from the
+ * device-root mount (SYSDISK_MOUNT), so it rendered "SYS$DISK:[000000]" as
+ * "SYS$DISK:[VMS]" and dropped the real device (vms-272).
+ *
+ * `spec` is the (de-ellipsized) DIRECTORY argument, or NULL/"" for a bare
+ * DIRECTORY. `def` is ctx->default_dir in VMS format (e.g.
+ * "SYS$DISK:[000000]"). The device and directory of the header are taken from
+ * `spec` when it supplies them, otherwise inherited from `def`. An absent or
+ * empty directory renders as the volume root [000000], matching VMS, where
+ * [000000] is the Master File Directory.
+ *
+ * Returns 0 on success; on any parse failure the buffer is left with a safe
+ * best-effort spec so the header is never blank.
+ */
+int dcl_directory_header_spec(const char *def, const char *spec,
+                              char *vms_dir, size_t dir_size)
+{
+    if (!vms_dir || dir_size == 0) return -1;
+
+    vmsfs_filespec_t dparts;
+    memset(&dparts, 0, sizeof(dparts));
+    if (def && def[0])
+        vmsfs_parse_filespec(def, &dparts);
+
+    vmsfs_filespec_t sparts;
+    memset(&sparts, 0, sizeof(sparts));
+    int have_spec = (spec && spec[0]);
+    if (have_spec)
+        vmsfs_parse_filespec(spec, &sparts);
+
+    /* Device: from the argument if it named one, else the default's. */
+    vmsfs_filespec_t out;
+    memset(&out, 0, sizeof(out));
+    if (have_spec && sparts.has_device && sparts.device[0]) {
+        strncpy(out.device, sparts.device, sizeof(out.device) - 1);
+        out.has_device = 1;
+    } else if (dparts.has_device && dparts.device[0]) {
+        strncpy(out.device, dparts.device, sizeof(out.device) - 1);
+        out.has_device = 1;
+    }
+
+    /* Directory: from the argument if it named one, else the default's. */
+    const char *dir = NULL;
+    if (have_spec && sparts.has_directory)
+        dir = sparts.directory;
+    else if (dparts.has_directory)
+        dir = dparts.directory;
+
+    /* Volume root: absent or empty directory is the MFD, spelled [000000]. */
+    strncpy(out.directory, (dir && dir[0]) ? dir : "000000",
+            sizeof(out.directory) - 1);
+    out.has_directory = 1;
+
+    if (!$VMS_STATUS_SUCCESS(vmsfs_compose_filespec(&out, vms_dir, dir_size))) {
+        /* Compose should not fail for a device+directory-only spec, but never
+         * leave the header blank. */
+        snprintf(vms_dir, dir_size, "%s%s[%s]",
+                 out.has_device ? out.device : "",
+                 out.has_device ? ":" : "",
+                 out.directory);
+    }
+    return 0;
+}
+
+/*
  * Translate a logical name to its equivalence string.
  *
  * Queries the LNM manager first (process/job/group/system search list).

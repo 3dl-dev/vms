@@ -104,8 +104,13 @@
  * The routine address is the value $DCLAST carried into the executive, handed
  * straight back: a code address in this process. Casting it back to a function
  * pointer and calling it is the delivery.
+ *
+ * Non-static (vms$$ internal-helper convention, like vms$$chan_to_fd): sys$hiber
+ * (sys_process.c) drains the same queue when the executive releases its $HIBER
+ * because an AST became deliverable (vms-feb). Intra-image call within
+ * LIBVMS$SHR -- no symbol-vector universal.
  */
-static void deliver_pending_asts(void) {
+void vms$$deliver_pending_asts(void) {
     uint64_t astadr;
     uint64_t astprm;
     uint8_t  acmode;
@@ -155,7 +160,7 @@ uint32_t sys$setast(uint32_t enbflg) {
     uint32_t prev = vms_kif_setast(enbflg ? 1 : 0);
 
     if (enbflg)
-        deliver_pending_asts();
+        vms$$deliver_pending_asts();
 
     return prev;
 }

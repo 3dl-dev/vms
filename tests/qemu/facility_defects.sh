@@ -487,6 +487,7 @@ lnm-group-scope-collapsed
 lnm-privilege-check-bypassed
 mbx-not-shared
 mbx-wrtattn-not-fired
+hiber-ast-not-delivered
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -4578,6 +4579,43 @@ EOF
                       ;;
         esac;;
 
+    hiber-ast-not-delivered)
+        case "$_f" in
+        facility)     echo "asynchronous AST delivery interrupting \$HIBER (VMS_IOCTL_HIBER/WAKE + vms_ast_notify_arrival, executive-resident), vms-feb -- the \$HIBER/\$WAKE + write-attention-AST rendezvous MMK's send_cmd_and_wait needs (spine #4, vms-b23)";;
+        targets)      echo "kernel-core/vms_ast.c";;
+        suites_red)   echo "test_syssvc_hiber_ast";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ast_notify_arrival() is the ONE step that turns the existing AST QUEUE into async DELIVERY: after any path (a mailbox write-attention write, a \$DCLAST, a lock AST) queues an entry into a process's AST queue, it broadcasts that process's hiber_wq so a \$HIBER waiter wakes, drains and RUNS the routine. The mutation removes that broadcast (the arrival wake), so the write-attention AST still lands in the hibernating process's executive queue but the process is NEVER woken to run it -- its sys\$hiber() deadlocks. Everything the arm/rendezvous/write needs is untouched (\$CREMBX/\$ASSIGN-by-name/\$QIO all succeed, the AST is still enqueued); ONLY the wakeup that makes \$HIBER interruptible by that queued AST -- the whole point of vms-feb -- stops happening. The \$WAKE path (vms_ioctl_wake's own broadcast, in a DIFFERENT file, kernel-core/vms_proctab.c, which the sed on vms_ast.c never touches) is untouched, so the sticky-wake scenario still passes -- pinning the mutation to AST-arrival delivery alone.";;
+        require_fail) cat <<'EOF'
+A's $HIBER was INTERRUPTED by the cross-process write-attention AST: A ran the AST and returned from $HIBER
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the AST that woke A ran with the exact parameter A armed (astprm round-tripped through the executive)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME ONE ROOT (A's $HIBER is never woken by the queued AST), seen at both
+places the scenario samples the delivery. With the arrival broadcast gone, B's
+write enqueues the write-attention AST into A's executive queue but A's
+sys$hiber() is never released to drain it, so A's recorder never runs: the
+coordinator's bounded wait for A's post-$HIBER report times out, failing both
+the "$HIBER was interrupted / AST ran and returned" assertion and the paired
+astprm-round-trip check (A never reports a parameter it never recorded). They
+are not two properties -- they are the single "A stayed asleep, the AST never
+ran" fact seen twice. What STAYS GREEN pins the mutation to AST-arrival delivery
+alone: B's $ASSIGN-by-name still reaches the mailbox, and the SEPARATE
+sticky-wake scenario (a $WAKE issued BEFORE $HIBER falls straight through) still
+passes because vms_ioctl_wake's own broadcast is untouched. test_syssvc_mbx_
+wrtattn stays fully green because it drains its write-attention AST with an
+explicit sys$setast(1) and never hibernates -- it does not depend on the arrival
+wake at all.
+EOF
+                      ;;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -5714,6 +5752,19 @@ apply_edit() {
         # and the write still succeeds. After substitution the text no longer
         # matches, so a second apply is a no-op (the selftest requires).
         sed -i 's|ast = exec_zalloc_atomic(sizeof(\*ast));|ast = (struct vms_ast_entry *)0; /* NEGCTL mbx-wrtattn-not-fired */|' "$_file";;
+
+    hiber-ast-not-delivered)
+        # UNIQUE TEXT, no range anchor needed: exec_cv_broadcast(&proc->hiber_wq)
+        # occurs exactly once in vms_ast.c -- vms_ast_notify_arrival()'s wake of a
+        # $HIBER waiter after an AST is queued. Removing it leaves the AST on the
+        # queue but never wakes the hibernating process to run it, so a $HIBER
+        # waiting on a cross-process write-attention AST deadlocks. The $WAKE
+        # path (vms_ioctl_wake's own broadcasts live in a DIFFERENT file,
+        # kernel-core/vms_proctab.c, which this sed on vms_ast.c never touches)
+        # is untouched, so this isolates AST-arrival delivery from the $WAKE path
+        # -- the sticky-wake scenario still passes. After substitution the text no
+        # longer matches, so a second apply is a no-op (the selftest requires).
+        sed -i 's|    exec_cv_broadcast(&proc->hiber_wq);|    /* NEGCTL hiber-ast-not-delivered: arrival wake removed */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

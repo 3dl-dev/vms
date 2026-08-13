@@ -633,10 +633,20 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
                 if (ast_state->count < VMS_AST_MAX_PER_MODE) {
                     exec_list_add_tail(&ast->list, &ast_state->pending);
                     ast_state->count++;
+                    exec_unlock(&ast_state->lock);
+                    /* Async delivery (vms-feb): wake w->proc if it is
+                     * hibernating, so its $HIBER drains and RUNS this write-
+                     * attention AST instead of waiting for an explicit
+                     * $SETAST(1). Done after ast_state->lock is dropped --
+                     * vms_ast_notify_arrival takes proc->hiber_lock, which must
+                     * nest OUTSIDE ast_state->lock, never inside. mbx->lock is
+                     * still held; hiber_lock nesting under it is a fresh edge
+                     * (nothing takes mbx->lock under hiber_lock). */
+                    vms_ast_notify_arrival(w->proc);
                 } else {
                     exec_free(ast);
+                    exec_unlock(&ast_state->lock);
                 }
-                exec_unlock(&ast_state->lock);
             }
             exec_free(w);
         }

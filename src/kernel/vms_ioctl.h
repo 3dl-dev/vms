@@ -1364,12 +1364,44 @@ struct vms_setterm_args {
     uint32_t status;            /* return: SS$_ status */
 };
 
+/*
+ * $HIBER / $WAKE, executive-resident (vms-feb).
+ *
+ * VMS_IOCTL_HIBER blocks the calling process in the executive until either a
+ * $WAKE is pending for it (wake_pending, set by VMS_IOCTL_WAKE) OR an AST
+ * becomes deliverable to it (an entry queued into its ast[] by $DCLAST, a
+ * mailbox write-attention write, or a lock AST -- see vms_ast_notify_arrival).
+ * On return `woken` is 1 iff the release was a $WAKE (which the ioctl consumes,
+ * clearing wake_pending) and 0 iff it was an AST becoming deliverable. sys$hiber
+ * loops: it drains and runs the deliverable ASTs in userspace after each return
+ * (an AST may itself $WAKE), and returns from $HIBER only once `woken` is 1.
+ * This is what makes $HIBER interruptible by asynchronous AST delivery.
+ *
+ * VMS_IOCTL_WAKE sets the sticky wake bit on the target process (the caller
+ * when vms_pid == 0, else the process with that VMS PID, gated by GROUP/WORLD
+ * like every other cross-process control operation) and wakes it if it is
+ * hibernating. wake_pending is sticky, so a $WAKE that precedes the $HIBER
+ * makes that $HIBER fall straight through (VSI System Services Reference,
+ * $WAKE/$HIBER).
+ */
+struct vms_hiber_args {
+    uint32_t woken;             /* return: 1 = released by $WAKE, 0 = by an AST */
+    uint32_t status;            /* return: SS$_ status */
+};
+
+struct vms_wake_args {
+    uint32_t vms_pid;           /* target VMS PID; 0 = the calling process */
+    uint32_t status;            /* return: SS$_ status */
+};
+
 #define VMS_IOCTL_SETPRN    _IOWR(VMS_IOC_MAGIC, 0x41, struct vms_setprn_args)
 #define VMS_IOCTL_GETJPI    _IOWR(VMS_IOC_MAGIC, 0x42, struct vms_getjpi_args)
 #define VMS_IOCTL_PROCSCAN  _IOWR(VMS_IOC_MAGIC, 0x43, struct vms_procscan_args)
 #define VMS_IOCTL_SETIDENT  _IOWR(VMS_IOC_MAGIC, 0x44, struct vms_ident_args)
 #define VMS_IOCTL_SETTERM   _IOWR(VMS_IOC_MAGIC, 0x45, struct vms_setterm_args)
 #define VMS_IOCTL_ESTABLISH_SYSTEM  _IOWR(VMS_IOC_MAGIC, 0x46, struct vms_establish_system_args)
+#define VMS_IOCTL_HIBER     _IOWR(VMS_IOC_MAGIC, 0x47, struct vms_hiber_args)
+#define VMS_IOCTL_WAKE      _IOWR(VMS_IOC_MAGIC, 0x48, struct vms_wake_args)
 
 /*
  * ABI lock for the process-table ioctls (vms-8019).

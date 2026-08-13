@@ -75,10 +75,24 @@
  *     as sys$exit's _exit(). What changed is that this now signals the
  *     process the EXECUTIVE named, not whatever Linux pid number a
  *     caller's argument happened to be.
- * OVMX-USERSPACE: sys$hiber (vms-pt1) -- pause() on the calling thread; the
- *     executive has no record that this process is hibernating.
- * OVMX-USERSPACE: sys$wake (vms-pt1) -- kill(SIGCONT) by Linux pid, or the
- *     caller's own pid when pidadr is NULL. prcnam discarded.
+ * OVMX-PARTIAL: sys$hiber (vms-feb) -- exec: the hibernate WAIT and the wake
+ *     state are the executive's. VMS_IOCTL_HIBER blocks the process in the
+ *     executive until a $WAKE is pending for it OR an AST becomes deliverable to
+ *     it (an entry another process queued into its AST queue), and the sticky
+ *     wake bit lives in the executive -- which is what makes $HIBER interruptible
+ *     by a cross-process AST at all, proven by tests/qemu/test_syssvc_hiber_ast.c.
+ * OVMX-LOCAL: sys$hiber -- the AST DISPATCH after each executive release runs in
+ *     THIS process (vms$$deliver_pending_asts calls the routine, a code address
+ *     valid only here), and the re-hibernate loop is userspace; that half is not
+ *     the executive's.
+ * OVMX-PARTIAL: sys$wake (vms-feb) -- exec: the wake state is the executive's.
+ *     VMS_IOCTL_WAKE sets the sticky wake_pending bit on the target and wakes it
+ *     if it is hibernating; a cross-process target is resolved by VMS PID in the
+ *     executive (gated by GROUP/WORLD), not signalled by raw Linux pid.
+ * OVMX-LOCAL: sys$wake -- the pidadr-vs-NULL target selection is made in this
+ *     process before the call, and $WAKE by process NAME is not resolved (prcnam
+ *     discarded, redirecting a named target to self); those are not the
+ *     executive's.
  * OVMX-USERSPACE: sys$suspnd (vms-pt1) -- kill(SIGSTOP), same shape.
  * OVMX-USERSPACE: sys$suspend (vms-pt1) -- tail-calls sys$suspnd.
  * OVMX-USERSPACE: sys$resume (vms-pt1) -- kill(SIGCONT), same shape.
@@ -438,35 +452,69 @@ uint32_t sys$getjpiw(uint32_t efn, const uint32_t *pidadr,
     return sys$getjpi(efn, pidadr, prcnam, itmlst, iosb, astadr, astprm);
 }
 
+/* AST drain, shared with sys$setast (vms$$ internal-helper convention). */
+extern void vms$$deliver_pending_asts(void);
+
 /*
- * sys$hiber - Hibernate the current process.
+ * sys$hiber - Hibernate the current process, INTERRUPTIBLE BY AST DELIVERY
+ * (vms-feb).
  *
- * Suspends the calling process until it is awakened by sys$wake
- * or a signal. On VMS this is a clean suspension; here we use
- * pause() which blocks until a signal is delivered.
+ * The wait, the wake state and the AST-arrival notification are all the
+ * EXECUTIVE's now, not a bare pause(): vms_kif_hiber() blocks in /dev/vms until
+ * a $WAKE is pending for this process OR an AST becomes deliverable to it (an
+ * entry another process queued into this process's AST queue -- a mailbox
+ * write-attention write, a lock completion/blocking AST, or a $DCLAST). That is
+ * what makes a process B action -- writing the mailbox this process armed a
+ * write-attention AST on -- actually interrupt this process's $HIBER, run the
+ * AST, and (if the AST issues a $WAKE) return from $HIBER. It is the
+ * $HIBER/$WAKE + AST pattern MMK's send_cmd_and_wait needs (spine #4, vms-b23);
+ * without it a $HIBER waiting on such an AST would deadlock.
+ *
+ * VMS semantics (VSI System Services Reference, $HIBER): an AST that does NOT
+ * issue a $WAKE runs and the process CONTINUES to hibernate; only a $WAKE ends
+ * it (and a $WAKE that preceded the $HIBER makes it fall straight through). The
+ * loop reproduces exactly that: each executive return drains and runs the
+ * deliverable ASTs in THIS process (the routine address is a code address here
+ * -- an AST is dispatched in the process it was queued to), and $HIBER returns
+ * only when the release was a $WAKE (woken == 1), whether that $WAKE arrived on
+ * its own or was issued by one of the ASTs just run.
  */
 uint32_t sys$hiber(void) {
-    pause();
-    return SS$_NORMAL;
+    for (;;) {
+        int woken = 0;
+        uint32_t st = vms_kif_hiber(&woken);  /* blocks: $WAKE pending or AST ready */
+        /* Honest failure, never a busy-spin (CLAUDE.md Rule 9 / INV-6): if the
+         * executive did not answer (odd = success), return its status rather
+         * than looping forever. With no /dev/vms there is no hibernate state to
+         * wait on -- fail, do not fake a wait. */
+        if (!(st & 1))
+            return st;
+        vms$$deliver_pending_asts();     /* run deliverable ASTs; one may $WAKE */
+        if (woken)
+            return SS$_NORMAL;
+        /* An AST (not a $WAKE) released the wait: re-hibernate, per VMS. */
+    }
 }
 
 /*
- * sys$wake - Wake a hibernating process.
+ * sys$wake - Wake a hibernating process ($WAKE), executive-resident (vms-feb).
  *
- * Sends SIGCONT to the target process to resume it from hibernation.
- * If pidadr is NULL, wakes the current process.
+ * Sets the target's sticky wake bit in the executive and wakes it if it is
+ * hibernating in $HIBER. With no pidadr the target is the CALLING process --
+ * the self-directed $WAKE a write-attention AST issues to end its own process's
+ * $HIBER (the MMK case). A non-NULL pidadr names a VMS PID, resolved by the
+ * executive (SS$_NONEXPR if it names no process, SS$_NOPRIV without GROUP/WORLD
+ * for another process's target) -- the same VMS-PID targeting the executive
+ * does for $DELPRC/$GETJPI, not the raw Linux pid the old SIGCONT shim used.
+ *
+ * prcnam-based targeting is not resolved (the executive's $WAKE takes a VMS
+ * PID); a caller that names its target by string is redirected to itself, the
+ * same limitation the other prcnam-taking process services carry.
  */
 uint32_t sys$wake(const uint32_t *pidadr,
                   const struct dsc$descriptor_s *prcnam) {
     (void)prcnam;
-    pid_t pid;
-    if (pidadr) {
-        pid = (pid_t)*pidadr;
-    } else {
-        pid = getpid();
-    }
-    if (kill(pid, SIGCONT) < 0) return SS$_NONEXPR;
-    return SS$_NORMAL;
+    return vms_kif_wake(pidadr ? *pidadr : 0);
 }
 
 /*

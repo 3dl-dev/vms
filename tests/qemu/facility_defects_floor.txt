@@ -319,4 +319,17 @@
 # the cross-process write-attention delivery while the arm, the rendezvous and
 # the write all stay green -- reddening exactly the suite's five fire/param/
 # one-shot assertions. See its own entry in facility_defects.sh.
-93
+#
+# Raised 93 -> 94 (vms-feb): added hiber-ast-not-delivered, the negative control
+# that anchors test_syssvc_hiber_ast -- the new suite for ASYNCHRONOUS AST
+# delivery INTERRUPTING $HIBER (VMS_IOCTL_HIBER/WAKE + vms_ast_notify_arrival),
+# the $HIBER/$WAKE + write-attention-AST rendezvous MMK's send_cmd_and_wait
+# needs (spine #4, vms-b23). PRODUCT-half mutation in kernel-core/vms_ast.c:
+# removing vms_ast_notify_arrival()'s exec_cv_broadcast(&proc->hiber_wq) leaves a
+# cross-process write-attention AST queued but never wakes the hibernating
+# reader to run it, so its sys$hiber() deadlocks -- reddening exactly the suite's
+# "$HIBER was interrupted / AST ran and returned" assertion and its paired
+# astprm round-trip check, while the self-wake path (vms_ioctl_wake's own
+# broadcast) and test_syssvc_mbx_wrtattn (explicit $SETAST drain, never hibers)
+# stay green. See its own entry in facility_defects.sh.
+94

@@ -36,6 +36,8 @@
 #include "libclidef.h"
 #include "opcdef.h"
 #include "gen64def.h"
+#include "iledef.h"
+#include "fscndef.h"
 
 /* ================================================================
  * Run-time library routine headers
@@ -1091,6 +1093,44 @@ uint32_t sys$faol(
     uint16_t *outlen,
     struct dsc$descriptor_s *outbuf,
     const uint64_t *prmlst
+);
+
+/* ================================================================
+ * File Specification Scan (FILESCAN) Service
+ * ================================================================ */
+
+/**
+ * sys$filescan - Scan a file specification string into its components
+ *
+ * Lightweight, purely lexical parse of a VMS file specification
+ *
+ *     node"access"::device:[root.][directory]name.type;version
+ *
+ * into the caller-requested component fields. Unlike sys$parse, $FILESCAN
+ * performs NO RMS I/O, directory lookup, defaulting, or logical-name
+ * translation — it only locates each syntactic field within srcstr and
+ * returns its position and length.
+ *
+ * @param srcstr    Descriptor of the file specification string to scan.
+ * @param valuelst  Item list (array of ILE2) naming the FSCN$_ components
+ *                  of interest. For each requested item, $FILESCAN writes
+ *                  the component length into ile2$w_length and a pointer to
+ *                  the component (into srcstr's own storage) into
+ *                  ile2$ps_bufaddr. Absent components return length 0 and a
+ *                  NULL pointer. The list is terminated by an entry whose
+ *                  ile2$w_code is 0.
+ * @param fldflags  Optional (may be NULL). Receives a longword bit mask
+ *                  (FSCN$M_*) with one bit set per component present in
+ *                  srcstr.
+ *
+ * @return  SS$_NORMAL on a successful scan; SS$_BADPARAM if srcstr or
+ *          valuelst is invalid or an unrecognized FSCN$_ item code appears
+ *          in the list.
+ */
+uint32_t sys$filescan(
+    const struct dsc$descriptor_s *srcstr,
+    ILE2                          *valuelst,
+    uint32_t                      *fldflags
 );
 
 /* ================================================================

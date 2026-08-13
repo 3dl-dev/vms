@@ -51,6 +51,27 @@ extern "C" {
 #define FSCN$M_NAME         0x00000010
 #define FSCN$M_TYPE         0x00000020
 #define FSCN$M_VERSION      0x00000040
+/* OVMX design choice (vms-4f3): FSCN$M_ROOT extends the OVMX field-flag
+ * numbering above. The public $FILESCAN documentation lists a root-directory
+ * item code (FSCN$_ROOT) but does not publish a byte value for its field-flag
+ * bit; this sequential 0x80 assignment matches the numbering style already in
+ * use here and is flagged (like the codes above, vms-531) for operator sign-off.
+ */
+#define FSCN$M_ROOT         0x00000080
+
+/* ================================================================
+ * FSCN$V_ — bit POSITIONS corresponding to the FSCN$M_ masks above,
+ * for callers that test the returned field-flag longword by position.
+ * ================================================================ */
+
+#define FSCN$V_NODE         0
+#define FSCN$V_NODE_ACS     1
+#define FSCN$V_DEVICE       2
+#define FSCN$V_DIRECTORY    3
+#define FSCN$V_NAME         4
+#define FSCN$V_TYPE         5
+#define FSCN$V_VERSION      6
+#define FSCN$V_ROOT         7
 
 #ifdef __cplusplus
 }

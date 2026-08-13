@@ -157,6 +157,9 @@ jobs:
               - 'src/libvmssys/**'
               - 'src/vmsprocess/**'
               - 'src/libvms/**'
+              - 'src/vmslnm/**'
+              - 'src/vmsfs/**'
+              - 'src/vmsrms/**'
               - 'docs/design-ovmx-netbsd-syskrnl.md'
               - 'docs/audit-ilp32-vax-libvmssys.md'
             vmsfs_core_vax:
@@ -4233,3 +4236,114 @@ jobs:
           echo "$RAW" | grep -qF 'requested interpreter: /usr/libexec/ld.elf_so' \
             || { echo "FAIL: image did not request NetBSD's ld.elf_so as its activator"; exit 1; }
           echo "PASS: a representative elf32-vax OVMX image activates via NetBSD ld.elf_so (Decision A)"
+
+  # -----------------------------------------------------------------------
+  # vmslnm+vmsfs+vmsrms-netbsd-vax (rd vms-271, epic vms-8e8, P4-C; CLAUDE.md
+  # "Library Build Order": ... libvms -> vmslnm -> vmsfs -> vmsrms -> vmsdcl).
+  # The three userspace libraries above libvms: the logical name manager, the
+  # userspace filespec/device layer, and Record Management Services. ONE gate,
+  # three BUILD+LINK proofs over the pinned `vax--netbsdelf` toolchain -- each
+  # builds its elf32-vax dependency stack, compiles the library to elf32-vax
+  # objects through its CMake *_STANDALONE path, and links a real vax--netbsdelf
+  # ELF32 executable calling into the library against NetBSD libc/libpthread(/m):
+  #   * vmslnm  -> libvmslnm.a, links over the elf32-vax libvmssys.a (its
+  #               vms_kif LNM-arena client);
+  #   * vmsfs   -> libvmsfs.a,  links over the elf32-vax vmslnm.a + libvmssys.a
+  #               (filespec translation resolves logical names);
+  #   * vmsrms  -> libvmsrms.a, links over the WHOLE elf32-vax stack (libvms +
+  #               vmsfs + vmslnm + vmsprocess + libvmssys). RMS file I/O is
+  #               ordinary POSIX (open/lseek/off_t/fcntl/dirent/fnmatch) resolved
+  #               from the NetBSD sysroot -- no Linux syscall/constant assumption
+  #               (docs/audit-ilp32-vax-libvmssys.md §11).
+  # The link proofs exercise the executive LNM-arena path, so they require the
+  # cross toolchain's libatomic (VAX has no lock-free 8-byte atomic; the arena's
+  # uint64_t generation seqlock lowers to __atomic_load_8, linked via -latomic) --
+  # enabled in tools/cross-vax/Dockerfile (vms-271). DELIBERATELY NOT emulation.
+  # BUILD/TEST tooling, never a runtime (Rule 9). Gated on the shared netbsd_vax
+  # filter: push/merge_group/schedule always; on a PR only when the cross inputs
+  # change (src/vmslnm/**, src/vmsfs/**, src/vmsrms/**, and the lower stack/cross).
+  # -----------------------------------------------------------------------
+  vmslnm-vmsfs-vmsrms-netbsd-vax:
+    name: netbsd-vax userspace libs cross-compile (vmslnm+vmsfs+vmsrms)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile vmslnm for netbsd-vax + link an ELF32 VAX exe
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-vmslnm-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax vmslnm cross build/link exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: vmslnm builds and links for vax--netbsdelf' \
+            || { echo "FAIL: did not see the vmslnm build+link PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: vmslnm objects were not elf32-vax -- wrong target"; exit 1; }
+          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
+            || { echo "FAIL: vmslnm exe was not a VAX ELF"; exit 1; }
+          echo "PASS: vmslnm built for netbsd-vax and a real ELF32 VAX exe linked"
+
+      - name: Cross-compile vmsfs (userspace) for netbsd-vax + link an ELF32 VAX exe
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-vmsfs-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax vmsfs cross build/link exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: vmsfs builds and links for vax--netbsdelf' \
+            || { echo "FAIL: did not see the vmsfs build+link PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: vmsfs objects were not elf32-vax -- wrong target"; exit 1; }
+          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
+            || { echo "FAIL: vmsfs exe was not a VAX ELF"; exit 1; }
+          echo "PASS: vmsfs built for netbsd-vax and a real ELF32 VAX exe linked"
+
+      - name: Cross-compile vmsrms for netbsd-vax + link an ELF32 VAX exe
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-vmsrms-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax vmsrms cross build/link exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: vmsrms builds and links for vax--netbsdelf' \
+            || { echo "FAIL: did not see the vmsrms build+link PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: vmsrms objects were not elf32-vax -- wrong target"; exit 1; }
+          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
+            || { echo "FAIL: vmsrms exe was not a VAX ELF"; exit 1; }
+          echo "PASS: vmsrms built for netbsd-vax and a real ELF32 VAX exe linked over the full stack"

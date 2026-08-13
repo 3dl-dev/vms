@@ -405,3 +405,105 @@ Test` + `ctest` prove the in-tree Linux/aarch64/x86_64 build is unregressed (the
 two fixes are byte-identical on Linux: the io_uring path is unchanged inside its
 `__linux__` guard, and `VMS_CRETVA_FIXED_FLAG` resolves to `MAP_FIXED_NOREPLACE`
 there).
+
+## 10. vmslnm + vmsfs (userspace) — the logical-name and filespec layers (rd vms-271, epic vms-8e8; C-track)
+
+`vmslnm` (Logical Name Manager) and the **userspace** `vmsfs` (filespec/device/
+version/protection — NOT the kernel ODS-2 core of §/vms-bb8, and NOT the genuine
+ODS-2 volume codec `src/vmsfs/ods2`) are the two layers directly above libvms in
+the library graph:
+`... libvms -> vmslnm (+pthread) -> vmsfs -> vmsrms -> vmsdcl`.
+Both cross-compile to `elf32-vax` through new `*_STANDALONE` CMake branches
+(mirroring §8/§9's `vmsprocess`/`libvms` pattern) and link real `vax--netbsdelf`
+ELF32 executables on top of the elf32-vax stack.
+
+### 10.1 `PTHREAD_ONCE_INIT` is not a portable *assignment* — FIXED
+
+`src/vmslnm/lnm_client.c`'s `lnm_shutdown()` reset the global manager guard with
+`g_manager_once = PTHREAD_ONCE_INIT;`. This compiled on Linux only because glibc
+defines `PTHREAD_ONCE_INIT` as the scalar `0`. NetBSD (all arches, not VAX-
+specific) defines it as a **braced aggregate** `{ ... }`, which C permits only in
+a *declaration initializer*, never in an assignment — so the cross build failed
+with `expected expression before '{' token`. This was a latent
+Linux/glibc portability assumption, not a width bug.
+
+**Fix:** copy from a real const object initialized with the macro —
+`static const pthread_once_t g_manager_once_init = PTHREAD_ONCE_INIT;` and
+`g_manager_once = g_manager_once_init;`. Legal on both libcs (scalar copy on
+glibc, struct copy on NetBSD) and byte-identical behaviour on Linux.
+
+### 10.2 ILP32 / endianness / IEEE-float scan — clean
+
+No `long`-as-64-bit, no pointer-width packing, no IEEE bit-punning, no Linux-only
+header/syscall in either library. Logical-name and filespec strings are byte
+buffers; the LNM equivalence-name lengths and attributes are `uint32_t`. `vmsfs`
+version scanning uses `dirent`/`fnmatch` (POSIX, NetBSD-provided). The
+`-Wstringop-truncation` fixed-field `strncpy` noise of §8.3/§9.3 recurs
+(`lnm_translate.c`) and is non-fatal for the same reason.
+
+### 10.3 Executive LNM-arena 8-byte atomic forces libatomic — FIXED in the toolchain
+
+The link proofs exercise `vmsfs_to_linux_path -> lnm_translate ->
+vms_kif_lnm_translate`, whose seqlock read `lnm_gen_load()` in libvmssys
+`vms_kif.c` does `__atomic_load_n(&arena->generation, __ATOMIC_ACQUIRE)` on the
+`uint64_t generation` field of the shared LNM arena (`src/kernel/vms_lnm.h`).
+**VAX is 32-bit with no lock-free 8-byte atomic**, so GCC lowers that to a
+`__atomic_load_8` libatomic call. The cross toolchain built GCC with
+`--disable-libatomic`, so the symbol was an undefined reference — this had been
+latent because the §9 libvms proof never pulled the LNM-arena path. It blocks the
+link proof of **every** layer above libvmssys that touches the arena
+(vmslnm/vmsfs/vmsrms, and next vmsdcl).
+
+**Fix (tools/cross-vax/Dockerfile, vms-271):** build + install `libatomic` for
+`vax--netbsdelf` (`--enable-libatomic`, `all-target-libatomic`), and pass
+`-latomic` on the userspace-library link proofs (GCC does not auto-link it). The
+arena's `generation` is a kernel↔userspace ABI field and stays 64-bit;
+libatomic's lock-based 8-byte load is a correct atomic on VAX. Narrowing the field to 32-bit
+was rejected: it would change the arena ABI (the Linux executive writes it) and
+weaken the seqlock's atomicity — an executive-ABI decision outside this port.
+
+## 11. vmsrms — Record Management Services (rd vms-271, epic vms-8e8; C-track)
+
+`vmsrms` is the top userspace library before DCL. It cross-compiles to
+`elf32-vax` through a `VMSRMS_STANDALONE` CMake branch and links a real
+`vax--netbsdelf` ELF32 executable over the **whole** elf32-vax stack (libvms +
+vmsfs + vmslnm + vmsprocess + libvmssys; `--start-group` resolves the
+libvms↔vmsfs archive cycle).
+
+### 11.1 RMS file I/O is ordinary POSIX — no Linux syscall/constant assumption
+
+The specific concern flagged in §4 (RMS + the ioctl payloads) was checked at the
+source level: `rms_seq.c`/`rms_rel.c` reach files through `open`/`lseek`/
+`ftruncate` with `off_t` and the `O_*`/`SEEK_*` constants from the **NetBSD
+sysroot's** `<fcntl.h>`/`<unistd.h>` — never a Linux syscall number and never a
+hard-coded Linux-numeric `O_*` value (contrast the `VMS_O_*` remap the RTL needed
+in §7.2; RMS uses the platform `<fcntl.h>` directly, so it is already substrate-
+correct). `dirent`/`fnmatch` back wildcard search. All POSIX, all NetBSD-
+provided.
+
+### 11.2 On-disk record widths + the `off_t` question — clean
+
+RMS record prefixes and VBN/bucket math are byte counts and fixed-width offsets
+(`uint16_t`/`uint32_t`), ILP32-clean under the 32-bit VAX compiler (compiled
+`-Wall -Wextra`, no width warnings). The RAB's in-memory `off_t _current_offset`
+/ `_last_rec_offset` are **host file positions**, not on-disk fields, so NetBSD's
+64-bit LFS `off_t` is fine (a 64-bit file cursor on a 32-bit host is expected).
+The b-tree node's `off_t offsets[]` in `rms_idx.c` are likewise in-memory data-
+file positions. Note (not a cross-*compile* concern): an RMS index/data file
+**written by a 64-bit host and read by a 32-bit VAX** — or vice-versa — is a
+future cross-*platform file-format* portability question for the SIMH/boot phase,
+not this build-only gate; recorded here so it is not forgotten.
+
+### 11.3 How §10/§11 were validated
+
+`tools/cross-vax/build-{vmslnm,vmsfs,vmsrms}-vax.sh` (CI job
+`vmslnm-vmsfs-vmsrms-netbsd-vax`, "netbsd-vax userspace libs cross-compile"):
+each builds its elf32-vax dependency stack, builds the library through its CMake
+`*_STANDALONE` path (asserted `file format elf32-vax`), and links a real
+`vax--netbsdelf` ELF32 executable calling into the library (`Machine: Digital
+VAX` asserted) against NetBSD libc/libpthread(/libm for RMS). The Linux `Build &
+Test` + `ctest` prove the in-tree Linux/aarch64/x86_64 build is unregressed — the
+`PTHREAD_ONCE_INIT` fix is byte-identical on glibc, and every standalone branch
+is guarded by `CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR` so the in-tree
+image builds are untouched. This unblocks C4 (vmsdcl cross-build), which hits the
+same executive-arena libatomic wall resolved in §10.3.

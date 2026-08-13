@@ -2141,6 +2141,145 @@ jobs:
           echo "PASS: harness correctly went RED when the flag was never set -- the cross-process proof has teeth"
 
   # -----------------------------------------------------------------------
+  # Job 3b-netbsd-p4a: OVMX/NetBSD executive cross-process proof (vms-f8a,
+  # epic vms-8e8 P4-A)
+  #
+  # P2c (above) proved ONE facility -- event flags -- is real, shared,
+  # cross-process kernel state. The four remaining facility backends (ASTs,
+  # access modes, mailboxes, process table, locks -- vms-9bb/vms-ca7/vms-d7a/
+  # vms-ff7) had already landed in src/kernel-netbsd/ and were already
+  # cross-compiled per-PR (netbsd-amd64-vms-crosscompile), but until this job
+  # none of them had ever been BUILT, LOADED and EXERCISED CROSS-PROCESS
+  # against a real, booted /dev/vms under QEMU. This job closes that gap for
+  # every remaining facility in ONE run:
+  #   - PROCTAB: process A $SETPRNs + stays alive; process B resolves it by
+  #     name with $GETJPI; process C enumerates with $PROCESS_SCAN and finds
+  #     the same row.
+  #   - MBX: process A $CREMBXes a PERMANENT mailbox; process B writes a
+  #     message into it BY NAME; process C reads the exact same bytes back.
+  #   - LOCK (DLM): process A holds an EXCLUSIVE lock; process B's
+  #     synchronous $ENQW for the same resource BLOCKS IN THE KERNEL; A
+  #     releases; B's blocked call unblocks and is granted.
+  #   - ACCESS MODES: process A $SETPRVs a real, permanent privilege change
+  #     on itself; process B's $GETJPI reads back the same mutated mask.
+  #   - AST: process A arms a mailbox write-attention AST and $HIBERs;
+  #     process B's write to that SAME mailbox is what lands the AST in A's
+  #     executive-resident queue and wakes A's $HIBER -- $DCLAST is
+  #     self-directed by VMS design, so this write-attention integration
+  #     (src/kernel-core/vms_mbx.c -> vms_ast_notify_arrival,
+  #     src/kernel-core/vms_ast.c) is the genuinely cross-process AST proof.
+  # Every new probe tool (vmsproctab, vmsmbx, vmslock, vmsaccess) is also run
+  # once with the module NOT loaded and must fail HONESTLY (SS$_NOSUCHDEV),
+  # never fake success (INV-6, CLAUDE.md Rule 9) -- the P2c discipline,
+  # repeated for each new tool. Combined with P2c, every one of the six
+  # executive facilities is now proven cross-process against a real
+  # NetBSD/amd64 /dev/vms.
+  #
+  # This run ALSO fixed a staging gap: the guest-src ISO the P2c-era Dockerfile
+  # built only ever copied vms_eflag.c into kernel-core/ and its header into
+  # kmod/, even though src/kernel-netbsd/Makefile's SRCS (and the per-PR
+  # crosscompile.sh gate) already required all six facility sources + the
+  # NetBSD hash/rbtree backends. The in-guest kmod build could not have linked
+  # before this job's Dockerfile update added the missing COPY lines.
+  #
+  # GATING: NIGHTLY (schedule) + manual (workflow_dispatch) ONLY -- NOT per-PR,
+  # for the exact reason the eflag job above gives (QEMU-TCG on a KVM-less
+  # GitHub runner is too slow/variable for a per-PR gate driving this many
+  # console commands). The per-PR NetBSD gate remains the fast build-only
+  # cross-compile job (netbsd-amd64-vms-crosscompile), which already compiles
+  # all six facilities on every PR. It uses the SAME shared prime cache and
+  # deterministic console as the other NetBSD/amd64 jobs.
+  netbsd-amd64-p4a-facilities-crossproc:
+    name: NetBSD/amd64 Executive Cross-Process Proof (vms-f8a, QEMU)
+    needs: [changes, netbsd-amd64-prime-cache]
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # SHARED installed-disk cache (rd vms-2d9) -- IDENTICAL key/path to the
+      # P2a/P2b/P2c jobs, so one install serves all of them.
+      - name: Restore shared NetBSD image (version-keyed, restore-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-amd64-install-
+          fail-on-cache-miss: false
+
+      - name: Build NetBSD harness image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/netbsd/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-netbsd-ktest:latest
+          cache-from: type=gha,scope=netbsd-harness
+          cache-to: type=gha,mode=max,scope=netbsd-harness
+
+      - name: Build + modload /dev/vms; prove proctab, mbx, lock, access, ast cross-process
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache"
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  --entrypoint /netbsd/run_p4a.sh \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: NetBSD/amd64 P4-A harness exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "OK (INV-6): all four new probe tools FAILED HONESTLY" \
+            || { echo "FAIL: did not see the INV-6 module-absent honest-failure assertion for the new tools"; exit 1; }
+          echo "$OUTPUT" | grep -qF "process B (a DIFFERENT process) resolved A's name via \$GETJPI" \
+            || { echo "FAIL: did not see the proctab cross-process GETJPI proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF "process C enumerated the shared process table with \$PROCESS_SCAN" \
+            || { echo "FAIL: did not see the proctab cross-process PROCESS_SCAN proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF "process C (a THIRD, different process) read back the EXACT bytes B wrote" \
+            || { echo "FAIL: did not see the mailbox cross-process proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF "the lock resource database + wait queue are shared kernel state" \
+            || { echo "FAIL: did not see the lock manager cross-process block/wake proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF "process B (a DIFFERENT process) observed A's real \$SETPRV mutation via \$GETJPI" \
+            || { echo "FAIL: did not see the access-mode cross-process proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF "the AST queue + HIBER/wake path are shared kernel state reachable from a DIFFERENT process" \
+            || { echo "FAIL: did not see the AST cross-process write-attention proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF 'NetBSD/amd64 P4-A HARNESS PASSED' \
+            || { echo "FAIL: harness did not report its own PASSED banner"; exit 1; }
+          echo "PASS: proctab, mbx, lock, access and ast -- all compiled from src/kernel-core/ with the NetBSD backend -- share real kernel state across processes (INV-6)"
+
+      - name: NEGATIVE CONTROL — skipping process A's registration must redden the proctab proof
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  --entrypoint /netbsd/run_p4a.sh \
+                  -e P4A_SKIP_PROCTAB_BG=1 \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -eq 0 ]; then
+            echo "FAIL: harness exited 0 with process A never registering a name -- the cross-process proctab proof has no teeth."
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "OK (negctl): B's GETJPI-by-name correctly found nothing when A never registered" \
+            || { echo "FAIL: nonzero exit but not the expected not-found reason -- negative control may have failed for an unrelated cause"; exit 1; }
+          echo "PASS: harness correctly went RED when process A never registered -- the proctab cross-process proof has teeth"
+
+  # -----------------------------------------------------------------------
   # Job 3b-netbsd-vmsfs: OVMX/NetBSD ODS-2 mount+read (vms-308, epic vms-8e8
   # P4-VFS V4)
   #

@@ -225,3 +225,104 @@ gated like the P2a job (push/merge_group/schedule always; on PRs only when
 a second step runs with `P2B_SKIP_LOAD=1` to prove the PING assertion has teeth
 (must go red for the right reason). The same TCG/`/dev/kvm` runner caveat as P2a
 applies, more so on a cold cache (it also fetches `comp` + `syssrc`).
+
+---
+
+# Phase 2c — the event-flag facility is real, shared, cross-process kernel state
+
+rd `vms-4b4` · epic `vms-8e8`
+
+P2c proved the first shared executive **facility** (not just the device shell
+P2b proved): the `vms` module now compiles `src/kernel-core/vms_eflag.c` — the
+SAME source the Linux `vms.ko` builds — with the NetBSD backend, and
+`drive_netbsd_p2c.py`/`run_p2c.sh` run a cross-process proof (`tests/netbsd/guest/vmseflag.c`):
+a common event flag one process `$SETEF`s is observed **SET** by a *different*
+process, and a waiter blocked in-kernel on a flag is woken by a *different*
+process's set — the INV-6-decisive property (CLAUDE.md Rule 9). See
+`drive_netbsd_p2c.py`'s file header for the full step list. CI job: **`NetBSD/amd64
+Event-Flag Facility (QEMU)`**, nightly/`workflow_dispatch` only (the heavy
+two-process proof is reliable but occasionally flaky under GitHub's KVM-less TCG,
+so it does not gate PRs — the fast per-PR gate is the build-only cross-compile job
+below).
+
+---
+
+# Phase 4-A — every remaining executive facility, cross-process (vms-f8a)
+
+rd `vms-f8a` · epic `vms-8e8`
+
+By the time P4-A opened, the four remaining facility **backends** — ASTs, access
+modes (`vms-9bb`), mailboxes (`vms-d7a`), the process table (`vms-ca7`) and locks
+/ DLM (`vms-ff7`) — had already landed in `src/kernel-netbsd/` and were already
+cross-compiled *per PR* (`netbsd-amd64-vms-crosscompile`, below), but none of them
+had ever been **built, loaded and exercised cross-process** against a real, booted
+`/dev/vms` under QEMU — the runtime half of the proof P2c already gave event
+flags. P4-A closes that for all five in one driver, `drive_netbsd_p4a.py` /
+`run_p4a.sh`:
+
+| Facility | Cross-process assertion |
+|---|---|
+| **PROCTAB** | Process A `$SETPRN`s itself and stays alive; a *different* process B resolves it by name with `$GETJPI`; a *third* process C enumerates the table with `$PROCESS_SCAN` and finds the same row. |
+| **MBX** | Process A `$CREMBX`es a **permanent** mailbox (so it outlives A); a *different* process B writes a message into it **by name**; a *third* process C reads the exact same bytes back. |
+| **LOCK (DLM)** | Process A `$ENQ`s an **exclusive** lock on a named resource and holds it; a *different* process B's synchronous `$ENQW` for the same resource **blocks in the kernel** (does not even return) until A `$DEQ`s, at which point B's blocked call unblocks and is granted. |
+| **ACCESS MODES** | Process A `$SETPRV`s a real, permanent privilege change on itself and stays alive; a *different* process B's `$GETJPI` reads back the *same* mutated privilege mask. |
+| **AST** | `$DCLAST` is self-directed by VMS design (an AST is declared to the calling process), so there is no direct "A writes, B reads" case for the queue itself. The genuinely cross-process proof reuses the mailbox facility's **write-attention** integration: process A arms a write-attention AST on a mailbox and `$HIBER`s (blocks in-kernel); a *different* process B's write to that *same* mailbox is what lands the AST in A's executive-resident queue and **wakes A's `$HIBER`** — a per-process fake could never be woken by an action taken in a different process. |
+
+Every new probe tool (`vmsproctab.c`, `vmsmbx.c`, `vmslock.c`, `vmsaccess.c`,
+under `tests/netbsd/guest/`) is also run once with the module **not** loaded and
+must fail honestly (`SS$_NOSUCHDEV`), never fake success — the same INV-6
+discipline P2c established for `vmseflag.c`.
+
+**A staging gap this phase fixed.** The Dockerfile's guest-src ISO staging had
+only ever copied `vms_eflag.c` into `kernel-core/` (and its one header into
+`kmod/`) even though `src/kernel-netbsd/Makefile`'s `SRCS` (and the per-PR
+`crosscompile.sh` gate) already required all six facility sources plus the
+NetBSD hash/rbtree backends — the in-guest kmod build could not have linked
+before P4-A's Dockerfile update added the missing `COPY` lines.
+
+## Running it locally
+
+```bash
+docker build -f tests/netbsd/Dockerfile -t ovmx-netbsd-ktest .
+
+mkdir -p .netbsd-cache
+docker run --rm -v "$PWD/.netbsd-cache:/cache" --device /dev/kvm \
+    --entrypoint /netbsd/run_p4a.sh ovmx-netbsd-ktest
+echo "exit: $?"        # 0 = all five facilities proven cross-process
+
+# NEGATIVE CONTROL: process A never registers -> B's lookup must go RED
+docker run --rm -v "$PWD/.netbsd-cache:/cache" \
+    -e P4A_SKIP_PROCTAB_BG=1 --entrypoint /netbsd/run_p4a.sh ovmx-netbsd-ktest
+echo "exit: $?"        # nonzero: the proctab cross-process proof has teeth
+```
+
+Same hard-`timeout` discipline as P2b/P2c (`run_p4a.sh`, `HARNESS_TIMEOUT`,
+default 5400s), plus bounded per-command pexpect deadlines and bounded in-guest
+poll loops (`NETBSD_POLL_BUDGET`, default 30s) for every cross-process
+rendezvous point — a real failure reddens the job, it never hangs it.
+
+## Files (P4-A)
+
+| File | Role |
+|------|------|
+| `tests/netbsd/guest/vmsproctab.c` | Process-table cross-process tool: `bg`/`getjpi_name`/`procscan_find`. |
+| `tests/netbsd/guest/vmsmbx.c` | Mailbox cross-process tool: `create`/`write`/`read`. |
+| `tests/netbsd/guest/vmslock.c` | Lock-manager cross-process tool: `hold_release`/`enqw`. |
+| `tests/netbsd/guest/vmsaccess.c` | Access-mode + AST tool: `selftest`/`setpriv_bg`/`getpriv`/`wrtattn_bg`/`wrtattn_write`. |
+| `tests/netbsd/drive_netbsd_p4a.py` | P4-A driver: build ISO (all six facilities) → boot → build kmod + four tools → INV-6 negctl (×4) → load → five cross-process proofs → negative control. |
+| `tests/netbsd/run_p4a.sh` | P4-A container entrypoint (hard `timeout`). Select via `--entrypoint`. |
+
+## CI (P4-A)
+
+Job **`NetBSD/amd64 Executive Cross-Process Proof (vms-f8a, QEMU)`** in
+`.github/workflows/ci.yml`, gated **nightly (`schedule`) + manual
+(`workflow_dispatch`) only** — the same reasoning as the P2c event-flag job: this
+drives many console commands across five facilities under GitHub's KVM-less TCG,
+too slow/variable for a per-PR gate. The per-PR NetBSD gate remains
+`netbsd-amd64-vms-crosscompile` (build-only, no QEMU — already compiles all six
+facility sources on every PR). The job asserts a distinct banner per facility
+plus the harness's own `PASSED` line, and a second step runs with
+`P4A_SKIP_PROCTAB_BG=1` to prove the positive proctab assertion has teeth (must
+go red for the right reason — the harness short-circuits before touching mbx/
+lock/access/ast, exactly like P2c's `P2C_SKIP_SET` control). It uses the SAME
+shared prime cache and deterministic console as every other NetBSD/amd64 job.

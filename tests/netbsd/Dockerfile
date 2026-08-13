@@ -89,10 +89,37 @@ COPY src/kernel-netbsd/vms_internal.h        /netbsd/guest-src/kmod/vms_internal
 COPY src/kernel-netbsd/exec_kbackend_netbsd.h /netbsd/guest-src/kmod/exec_kbackend_netbsd.h
 COPY src/kernel-netbsd/exec_list_netbsd.h    /netbsd/guest-src/kmod/exec_list_netbsd.h
 COPY src/kernel-netbsd/exec_list_netbsd.c    /netbsd/guest-src/kmod/exec_list_netbsd.c
+# P4-A (rd vms-f8a): the LAST FOUR facilities' wire-contract headers + the
+# hash/rbtree backends src/kernel-netbsd/Makefile's SRCS (and
+# tests/netbsd/crosscompile.sh, the per-PR build-only gate) already require --
+# vms_internal.h #includes all four, and vms_netbsd.c dispatches their ioctls,
+# but the in-guest QEMU build never staged them, so the P2c-era harness could
+# only ever build the event-flag facility in-guest. This closes that gap: the
+# SAME set crosscompile.sh cross-compiles per PR now also builds+boots+links
+# in the QEMU harness.
+COPY src/kernel-netbsd/vms_ast_nb.h          /netbsd/guest-src/kmod/vms_ast_nb.h
+COPY src/kernel-netbsd/vms_access_nb.h       /netbsd/guest-src/kmod/vms_access_nb.h
+COPY src/kernel-netbsd/vms_mbx_nb.h          /netbsd/guest-src/kmod/vms_mbx_nb.h
+COPY src/kernel-netbsd/vms_proctab_nb.h      /netbsd/guest-src/kmod/vms_proctab_nb.h
+COPY src/kernel-netbsd/vms_lock_nb.h         /netbsd/guest-src/kmod/vms_lock_nb.h
+COPY src/kernel-netbsd/exec_hash_netbsd.h    /netbsd/guest-src/kmod/exec_hash_netbsd.h
+COPY src/kernel-netbsd/exec_hash_netbsd.c    /netbsd/guest-src/kmod/exec_hash_netbsd.c
+COPY src/kernel-netbsd/exec_rbtree_netbsd.h  /netbsd/guest-src/kmod/exec_rbtree_netbsd.h
+COPY src/kernel-netbsd/exec_rbtree_netbsd.c  /netbsd/guest-src/kmod/exec_rbtree_netbsd.c
 # --- kernel-core/: the shared, substrate-agnostic facility + shim contracts ---
 COPY src/kernel-core/vms_eflag.c             /netbsd/guest-src/kernel-core/vms_eflag.c
 COPY src/kernel-core/exec_kbackend.h         /netbsd/guest-src/kernel-core/exec_kbackend.h
 COPY src/kernel-core/exec_list.h             /netbsd/guest-src/kernel-core/exec_list.h
+# P4-A: the remaining five shared facility sources (rd vms-f8a) -- SAME sources
+# the Linux vms.ko and the per-PR crosscompile.sh gate build; no NetBSD copy of
+# any facility's logic exists.
+COPY src/kernel-core/vms_ast.c               /netbsd/guest-src/kernel-core/vms_ast.c
+COPY src/kernel-core/vms_access.c            /netbsd/guest-src/kernel-core/vms_access.c
+COPY src/kernel-core/vms_mbx.c               /netbsd/guest-src/kernel-core/vms_mbx.c
+COPY src/kernel-core/vms_proctab.c           /netbsd/guest-src/kernel-core/vms_proctab.c
+COPY src/kernel-core/vms_lock.c              /netbsd/guest-src/kernel-core/vms_lock.c
+COPY src/kernel-core/exec_hash.h             /netbsd/guest-src/kernel-core/exec_hash.h
+COPY src/kernel-core/exec_rbtree.h           /netbsd/guest-src/kernel-core/exec_rbtree.h
 # --- probe/: the userspace tools + the NetBSD transport seam ---
 COPY tests/netbsd/guest/vmsprobe.c           /netbsd/guest-src/probe/vmsprobe.c
 COPY tests/netbsd/guest/vmseflag.c           /netbsd/guest-src/probe/vmseflag.c
@@ -100,10 +127,24 @@ COPY src/libvmssys/kif_transport_netbsd.c    /netbsd/guest-src/probe/kif_transpo
 COPY src/libvmssys/kif_transport.h           /netbsd/guest-src/probe/kif_transport.h
 COPY src/kernel-netbsd/vms_ping.h            /netbsd/guest-src/probe/vms_ping.h
 COPY src/kernel-netbsd/vms_eflag_nb.h        /netbsd/guest-src/probe/vms_eflag_nb.h
+# P4-A (rd vms-f8a): the cross-process test tools for the remaining five
+# facilities (proctab, mbx, lock, access, ast) + the wire-contract headers they
+# #include.
+COPY tests/netbsd/guest/vmsproctab.c         /netbsd/guest-src/probe/vmsproctab.c
+COPY tests/netbsd/guest/vmsmbx.c             /netbsd/guest-src/probe/vmsmbx.c
+COPY tests/netbsd/guest/vmslock.c            /netbsd/guest-src/probe/vmslock.c
+COPY tests/netbsd/guest/vmsaccess.c          /netbsd/guest-src/probe/vmsaccess.c
+COPY src/kernel-netbsd/vms_proctab_nb.h      /netbsd/guest-src/probe/vms_proctab_nb.h
+COPY src/kernel-netbsd/vms_mbx_nb.h          /netbsd/guest-src/probe/vms_mbx_nb.h
+COPY src/kernel-netbsd/vms_lock_nb.h         /netbsd/guest-src/probe/vms_lock_nb.h
+COPY src/kernel-netbsd/vms_ast_nb.h          /netbsd/guest-src/probe/vms_ast_nb.h
+COPY src/kernel-netbsd/vms_access_nb.h       /netbsd/guest-src/probe/vms_access_nb.h
 COPY tests/netbsd/drive_netbsd_p2b.py        /netbsd/drive_netbsd_p2b.py
 COPY tests/netbsd/run_p2b.sh                 /netbsd/run_p2b.sh
 COPY tests/netbsd/drive_netbsd_p2c.py        /netbsd/drive_netbsd_p2c.py
 COPY tests/netbsd/run_p2c.sh                 /netbsd/run_p2c.sh
+COPY tests/netbsd/drive_netbsd_p4a.py        /netbsd/drive_netbsd_p4a.py
+COPY tests/netbsd/run_p4a.sh                 /netbsd/run_p4a.sh
 
 # P4-VFS V4 (rd vms-308): the OVMX/NetBSD ODS-2 vnode/VFS backend mount+read
 # proof. Staged as FOUR in-guest dirs (bundled into an ISO by the driver and
@@ -142,7 +183,8 @@ COPY tests/netbsd/run_vmsfs.sh               /netbsd/run_vmsfs.sh
 RUN chmod +x /netbsd/run_tests.sh /netbsd/drive_netbsd.py \
              /netbsd/run_p2b.sh /netbsd/drive_netbsd_p2b.py \
              /netbsd/run_p2c.sh /netbsd/drive_netbsd_p2c.py \
-             /netbsd/run_vmsfs.sh /netbsd/drive_netbsd_vmsfs.py
+             /netbsd/run_vmsfs.sh /netbsd/drive_netbsd_vmsfs.py \
+             /netbsd/run_p4a.sh /netbsd/drive_netbsd_p4a.py
 
 # The installed NetBSD image + download mirror live under /cache so they persist
 # across runs when a cache volume is mounted there (the cold-install cost is

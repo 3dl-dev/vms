@@ -127,8 +127,22 @@ $   RETURN
 $!
 $! RUN_SITE_STARTUP - the LPMAIN-phase site-specific commands (the role
 $! SYSTARTUP_VMS.COM already had before vms-21a; unchanged here, only its
-$! call site moved into the phase driver). See SYSTARTUP_VMS.COM's own
-$! header for why this text is not oracle-pinned.
+$! call site moved into the phase driver). This subroutine is the SINGLE
+$! owner of the "executing the site-specific startup commands" announcement:
+$! SYSTARTUP_VMS.COM (both the installed and the distribution-media variants)
+$! used to WRITE the same line too, so a real boot printed it TWICE -- vms-3ab8
+$! removed those duplicate WRITEs, leaving this one. The tests that assert the
+$! line appears (tests/qemu/test_persistent_boot.sh, test_startup_phase_
+$! driver.sh, test_job_control_*.sh) still find it: it is still printed here,
+$! exactly once.
+$!
+$! NOT ORACLE-PINNED. Whether this wording matches, should match, or should
+$! differ from what a real OpenVMS boot prints is UNVERIFIED IN EITHER
+$! DIRECTION -- no reference-lab capture of the line exists (checked at vms-21a
+$! round 6). Pinning it to the oracle or to public OpenVMS documentation is
+$! open work; it is neither claimed nor denied here (CLAUDE.md Rule 10: an
+$! authenticity claim about VMS message text is either oracle-pinned with the
+$! capture recorded, or it does not appear).
 $ RUN_SITE_STARTUP:
 $   WRITE SYS$OUTPUT "The OVMX system is now executing the site-specific startup commands."
 $   @SYS$MANAGER:SYSTARTUP_VMS.COM

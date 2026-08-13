@@ -226,6 +226,35 @@ else
     diff <(printf '%s\n' "$EXPECTED") <(printf '%s\n' "$SEQ") | sed 's/^/    /' || true
 fi
 
+# --- (e) no empty-username "Username:" prompt storm (vms-3ab8) ----------------
+# The 0.4 demo boot showed ~20 "Username:" prompts machine-gunned onto ONE
+# physical line: LOGINOUT drained the operator's boot-time type-ahead RETURNs
+# through its empty-username reprompt with no wait and no newline. A VMS-
+# faithful console prints the prompt ONCE and blocks; a reprompt (empty line at
+# a live prompt) lands on its OWN line. So the invariant is not "Username:
+# appears once" (a stray live RETURN may legitimately produce a second prompt on
+# a new line) but "no single line reprints Username: more than once".
+MAX_PROMPTS_PER_LINE=$(printf '%s\n' "$CLEAN" | grep -F 'Username:' | \
+    awk '{ n = gsub(/Username:/, "&"); if (n > m) m = n } END { print m + 0 }')
+if [ "${MAX_PROMPTS_PER_LINE:-0}" -le 1 ]; then
+    pass "no line reprints Username: more than once (no empty-username prompt storm)"
+else
+    bad "a line contains Username: ${MAX_PROMPTS_PER_LINE}x -- LOGINOUT empty-username prompt storm (vms-3ab8)"
+fi
+
+# --- (f) site-specific startup announcement printed EXACTLY ONCE (vms-3ab8) ---
+# STARTUP.COM's RUN_SITE_STARTUP is the single owner; SYSTARTUP_VMS.COM (both
+# the installed and the distribution-media variants) used to WRITE it too, so a
+# real boot printed the line twice. The message is emitted at the LPMAIN phase,
+# before the login prompt, so it is inside the transcript this test captures.
+SITE_MSG_COUNT=$(printf '%s\n' "$CLEAN" | \
+    grep -cF 'executing the site-specific startup commands')
+if [ "$SITE_MSG_COUNT" -eq 1 ]; then
+    pass "site-specific startup announcement printed exactly once"
+else
+    bad "site-specific startup announcement printed ${SITE_MSG_COUNT}x (expected exactly 1; vms-3ab8)"
+fi
+
 echo ""
 echo "=========================================="
 if [ "$FAIL" -eq 0 ]; then

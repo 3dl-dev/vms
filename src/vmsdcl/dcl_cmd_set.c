@@ -33,6 +33,7 @@
                            * PROCESS/PRIVILEGES renders from (dcl_cmd_show.c) */
 #include "starlet.h"
 #include "vmsfs/filespec.h"
+#include "vms/pcb.h"
 #include "vms_kif.h"
 #include "sysuaf.h"
 #include "sha256.h"
@@ -149,6 +150,16 @@ static int cmd_set_default(struct dcl_command *cmd)
         strncpy(ctx->default_dir, dirspec, sizeof(ctx->default_dir) - 1);
         ctx->default_dir[sizeof(ctx->default_dir) - 1] = '\0';
     }
+
+    /* Keep the executive default directory (pcb->default_dir) in step with the
+     * DCL default. It is the store $GETDDIR/SYS$DISK resolution reads and the
+     * one a spawned subprocess inherits (sys_process.c copies the parent PCB's
+     * default_dir); leaving it at the init value made SET DEFAULT invisible to
+     * the executive and to child processes (vms-272). ctx->default_dir is the
+     * fully-merged "DEV:[DIR]" spec, so store it verbatim. Fail-honest: if no
+     * PCB is reachable this is a no-op, matching the rest of the executive
+     * surface. */
+    vms_pcb_set_default_dir(ctx->default_dir);
 
     /* Change the process working directory too */
     if (chdir(check_path) != 0) {

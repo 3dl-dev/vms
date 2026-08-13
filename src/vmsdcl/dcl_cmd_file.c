@@ -660,14 +660,14 @@ int cmd_directory(struct dcl_command *cmd)
             return SS$_NOSUCHFILE;
         }
 
-        /* Header (only once we know there is at least one file to list). */
-        char display_dir[1024];
-        strncpy(display_dir, linux_dir, sizeof(display_dir) - 1);
-        display_dir[sizeof(display_dir) - 1] = '\0';
-        size_t ddlen = strlen(display_dir);
-        if (ddlen > 1 && display_dir[ddlen - 1] == '/')
-            display_dir[ddlen - 1] = '\0';
-        dcl_format_directory(display_dir, vms_dir, sizeof(vms_dir));
+        /* Header (only once we know there is at least one file to list).
+         * Derive the "DEV:[DIR]" from the VMS-side inputs (the DIRECTORY
+         * argument, else the process default) rather than reverse-deriving it
+         * from the host path — the host round-trip cannot recover the volume
+         * root [000000] from the device-root mount and dropped the real device
+         * (vms-272). */
+        dcl_directory_header_spec(ctx->default_dir, use_spec,
+                                  vms_dir, sizeof(vms_dir));
         if (show_heading) printf("\nDirectory %s\n\n", vms_dir);
 
         int file_count = 0;

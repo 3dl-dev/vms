@@ -184,6 +184,8 @@ extern int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
                             char *linux_path, size_t path_size);
 extern int dcl_format_directory(const char *linux_path, char *vms_dir,
                                 size_t dir_size);
+extern int dcl_directory_header_spec(const char *def, const char *spec,
+                                     char *vms_dir, size_t dir_size);
 extern int dcl_format_filespec(const char *linux_path, char *vms_spec,
                                size_t spec_size);
 extern int dcl_translate_logical(const char *name, char *result,

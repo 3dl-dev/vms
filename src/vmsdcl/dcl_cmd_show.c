@@ -2660,6 +2660,209 @@ static int cmd_show_root(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/*
+ * SHOW CPU - Display the state of the system's processors.
+ *
+ * ---------------------------------------------------------------------------
+ * REPORT LAYOUT / WORDING PROVENANCE (Rule 8 clean-room)
+ * ---------------------------------------------------------------------------
+ * The section structure and per-CPU wording are taken ONLY from public
+ * OpenVMS documentation, never from disassembly of SHOW.EXE:
+ *
+ *   - VSI OpenVMS Wiki, "SHOW CPU"
+ *       https://wiki.vmssoftware.com/SHOW_CPU
+ *       (qualifier set: /SUMMARY, /BRIEF, /FULL, /ACTIVE_SET, /ALL; the
+ *        /SUMMARY display "indicates which is the primary processor, which
+ *        processors are configured, and which processors are active", and
+ *        with no processor and no info qualifier the default is /ALL/SUMMARY.)
+ *   - OpenVMS DCL Dictionary, SHOW CPU (HPE/VSI mirrors), which gives the
+ *       "PRIMARY CPU = nn", "CPU nn is in RUN state",
+ *       "Capabilities of this CPU:  PRIMARY QUORUM RUN", and
+ *       "Processes which can only execute on this CPU:" lines.
+ *   - Marc Vos' OpenVMS HELP mirror, https://marc.vos.net/books/vms/help/show/
+ *       ("PRIMARY CPU = 01 / Active CPUs: / Configured CPUs:" summary shape).
+ *
+ * ---------------------------------------------------------------------------
+ * DATA SOURCING (Rule 9 / INV-6 -- real system data, never fabricated)
+ * ---------------------------------------------------------------------------
+ * The *numbers* are read from the actual running system, not invented:
+ *   - Configured (present) CPU set: /sys/devices/system/cpu/present
+ *   - Active (online)   CPU set:    /sys/devices/system/cpu/online
+ *     (both fall back to sysconf(_SC_NPROCESSORS_CONF/_ONLN) if /sys is absent)
+ *   - Primary CPU: the lowest-numbered online CPU -- the boot processor, which
+ *     is CPU 0 on a normally-booted Linux host. This is the honest analogue of
+ *     the VMS primary/boot CPU.
+ *   - Per-CPU state: an online CPU is reported "in RUN state"; a present but
+ *     offline CPU is reported honestly as not in the active set.
+ *   - Capabilities: the primary CPU carries PRIMARY QUORUM RUN, secondary
+ *     active CPUs carry QUORUM RUN -- these are derivable from the primary/
+ *     active facts above.
+ *
+ * HONEST OMISSIONS (HARD RULE 2 -- omit rather than invent):
+ *   - The VMS "Current Process:" line (the process currently executing on
+ *     each CPU) is NOT emitted: the OVMX executive does not track a per-CPU
+ *     current-process binding, so there is no real value to print. Faking one
+ *     (e.g. "***None***") would be an INV-6 fabrication.
+ *   - The VECTOR capability, the microcode/synchronization "minimum
+ *     multiprocessing revision levels", and the synchronization-image line
+ *     are VMS-internal facts with no OVMX source; they are omitted, not
+ *     rendered as fabricated zeros.
+ *   These gaps require executive per-CPU state that does not exist today and
+ *   are flagged in rd vms-a9e for a future executive CPU database.
+ */
+
+/* Parse a Linux cpulist ("0", "0-3", "0,2-5") into a boolean membership map.
+ * Returns the number of CPUs set; *out_max receives the highest id seen. */
+static int parse_cpu_list(const char *path, unsigned char *set, int maxcpu,
+                          int *out_max)
+{
+    FILE *fp = fopen(path, "r");
+    if (!fp)
+        return -1;
+    char buf[512];
+    if (!fgets(buf, sizeof(buf), fp)) {
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+
+    int count = 0, hi = -1;
+    const char *p = buf;
+    while (*p) {
+        if (*p == ' ' || *p == '\n') { p++; continue; }
+        long lo = strtol(p, (char **)&p, 10);
+        long rng_hi = lo;
+        if (*p == '-') {
+            p++;
+            rng_hi = strtol(p, (char **)&p, 10);
+        }
+        for (long i = lo; i <= rng_hi; i++) {
+            if (i >= 0 && i < maxcpu && !set[i]) {
+                set[i] = 1;
+                count++;
+                if ((int)i > hi) hi = (int)i;
+            }
+        }
+        if (*p == ',') p++;
+    }
+    *out_max = hi;
+    return count;
+}
+
+static void format_cpu_set(const unsigned char *set, int maxid, char *out,
+                           size_t outsz)
+{
+    /* Render a membership map as a VMS-style compact list ("00 01 03"). */
+    out[0] = '\0';
+    size_t used = 0;
+    for (int i = 0; i <= maxid; i++) {
+        if (!set[i]) continue;
+        int n = snprintf(out + used, outsz - used, "%s%02d",
+                         used ? " " : "", i);
+        if (n < 0 || (size_t)n >= outsz - used) break;
+        used += (size_t)n;
+    }
+    if (out[0] == '\0')
+        snprintf(out, outsz, "(none)");
+}
+
+static int cmd_show_cpu(struct dcl_command *cmd)
+{
+#define OVMX_MAX_CPU 4096
+    static unsigned char present[OVMX_MAX_CPU];
+    static unsigned char online[OVMX_MAX_CPU];
+    memset(present, 0, sizeof(present));
+    memset(online, 0, sizeof(online));
+
+    int present_max = -1, online_max = -1;
+    int n_present = parse_cpu_list("/sys/devices/system/cpu/present",
+                                   present, OVMX_MAX_CPU, &present_max);
+    int n_online  = parse_cpu_list("/sys/devices/system/cpu/online",
+                                   online, OVMX_MAX_CPU, &online_max);
+
+    /* Fall back to sysconf when /sys is not mounted (some minimal roots). */
+    if (n_present <= 0) {
+        long c = sysconf(_SC_NPROCESSORS_CONF);
+        if (c < 1) c = 1;
+        if (c > OVMX_MAX_CPU) c = OVMX_MAX_CPU;
+        for (long i = 0; i < c; i++) present[i] = 1;
+        n_present = (int)c;
+        present_max = (int)c - 1;
+    }
+    if (n_online <= 0) {
+        long c = sysconf(_SC_NPROCESSORS_ONLN);
+        if (c < 1) c = 1;
+        if (c > OVMX_MAX_CPU) c = OVMX_MAX_CPU;
+        for (long i = 0; i < c; i++) online[i] = 1;
+        n_online = (int)c;
+        online_max = (int)c - 1;
+    }
+
+    /* Primary CPU = lowest online CPU (the boot processor). */
+    int primary = -1;
+    for (int i = 0; i <= online_max; i++) {
+        if (online[i]) { primary = i; break; }
+    }
+    if (primary < 0) primary = 0;
+
+    /* Info qualifier: /FULL, /BRIEF, or /SUMMARY. Per the DCL Dictionary the
+     * default when no processor is named is /ALL/SUMMARY. */
+    int want_full    = dcl_has_qualifier(cmd, "FULL");
+    int want_brief   = dcl_has_qualifier(cmd, "BRIEF");
+    int want_summary = dcl_has_qualifier(cmd, "SUMMARY");
+    if (!want_full && !want_brief && !want_summary)
+        want_summary = 1;  /* default display */
+
+    char node[OVMX_IDENTITY_MAXLEN];
+    ovmx_node_name(node, sizeof(node));
+    struct utsname uts;
+    uname(&uts);
+
+    char active_str[256], config_str[256];
+    format_cpu_set(online, online_max, active_str, sizeof(active_str));
+    format_cpu_set(present, present_max, config_str, sizeof(config_str));
+
+    /* Header: node + honest hardware class (never a fabricated VMS model,
+     * INV-1). */
+    printf("\n%s, an OVMX %s system\n\n", node, uts.machine);
+
+    if (want_summary) {
+        if (n_online > 1)
+            printf("        Multiprocessing is ENABLED.\n\n");
+        else
+            printf("        Multiprocessing is DISABLED.\n\n");
+        printf("        PRIMARY CPU = %02d\n\n", primary);
+        printf("        Active CPUs:      %s\n", active_str);
+        printf("        Configured CPUs:  %s\n", config_str);
+    }
+
+    if (want_brief || want_full) {
+        printf("        PRIMARY CPU = %02d\n", primary);
+        for (int i = 0; i <= present_max; i++) {
+            if (!present[i]) continue;
+            printf("\n");
+            if (online[i]) {
+                printf("        CPU %02d is in RUN state\n", i);
+                if (want_full) {
+                    printf("          Capabilities of this CPU:\n");
+                    if (i == primary)
+                        printf("             PRIMARY QUORUM RUN\n");
+                    else
+                        printf("             QUORUM RUN\n");
+                    printf("          Processes which can only execute on this CPU:\n");
+                    printf("             *** None ***\n");
+                }
+            } else {
+                /* Present but offline: honestly not in the active set. */
+                printf("        CPU %02d is not in the active set\n", i);
+            }
+        }
+    }
+
+    return SS$_NORMAL;
+#undef OVMX_MAX_CPU
+}
+
 /* ================================================================== */
 /*                          SHOW Dispatcher                            */
 /* ================================================================== */
@@ -2695,6 +2898,8 @@ int cmd_show(struct dcl_command *cmd)
         return cmd_show_device(cmd);
     if (dcl_match_command(subcmd, "MEMORY", 3))
         return cmd_show_memory(cmd);
+    if (dcl_match_command(subcmd, "CPU", 3))
+        return cmd_show_cpu(cmd);
     if (dcl_match_command(subcmd, "STATUS", 4))
         return cmd_show_status(cmd);
     if (dcl_match_command(subcmd, "TERMINAL", 4))

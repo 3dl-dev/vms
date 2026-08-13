@@ -129,11 +129,35 @@ struct vms_mbx_read_args {
     char     data[VMS_MBX_IOCTL_MAXLEN];
 };
 
+/*
+ * $QIO IO$_SETMODE|IO$M_WRTATTN-equivalent: register a WRITE-ATTENTION AST on
+ * this process's channel to the mailbox (vms-9003). When ANOTHER process writes
+ * a message to the mailbox, the executive queues `astadr`(`astprm`) into THIS
+ * process's AST queue at `acmode` -- the same executive AST queue $DCLAST and
+ * the lock manager's completion/blocking ASTs use (src/kernel-core/vms_ast.c),
+ * so the notification is real cross-process delivery through /dev/vms, not a
+ * per-process fake (CLAUDE.md Rule 9 / INV-6).
+ *
+ * ONE-SHOT, RE-ARM ON SETMODE (public VSI OpenVMS I/O User's Reference, mailbox
+ * driver): the AST fires once per SETMODE and must be re-established to fire
+ * again. A fresh SETMODE|WRTATTN on the same channel REPLACES any still-armed
+ * registration for that channel rather than stacking a second one.
+ */
+struct vms_mbx_wrtattn_args {
+    uint32_t chan;      /* in: this process's channel to the mailbox */
+    uint32_t acmode;    /* in: access mode to deliver the AST at (0-3) */
+    uint64_t astadr;    /* in: write-attention AST routine (opaque address) */
+    uint64_t astprm;    /* in: parameter passed to the AST routine */
+    uint32_t status;    /* out: SS$_ status */
+    uint32_t pad;
+};
+
 #define VMS_IOCTL_MBX_CREATE  _IOWR(VMS_IOC_MAGIC, 0x70, struct vms_mbx_create_args)
 #define VMS_IOCTL_MBX_ASSIGN  _IOWR(VMS_IOC_MAGIC, 0x71, struct vms_mbx_assign_args)
 #define VMS_IOCTL_MBX_WRITE   _IOWR(VMS_IOC_MAGIC, 0x72, struct vms_mbx_write_args)
 #define VMS_IOCTL_MBX_READ    _IOWR(VMS_IOC_MAGIC, 0x73, struct vms_mbx_read_args)
 #define VMS_IOCTL_MBX_DELMBX  _IOWR(VMS_IOC_MAGIC, 0x74, struct vms_mbx_delmbx_args)
+#define VMS_IOCTL_MBX_SET_WRTATTN _IOWR(VMS_IOC_MAGIC, 0x75, struct vms_mbx_wrtattn_args)
 
 /*
  * $DASSGN for a mailbox channel reuses VMS_IOCTL_DASSGN (vms_ioctl.h,
@@ -158,5 +182,7 @@ _Static_assert(sizeof(struct vms_mbx_write_args) == 16 + VMS_MBX_IOCTL_MAXLEN,
                "vms_mbx_write_args changed size -- VMS_IOCTL_MBX_WRITE ABI break");
 _Static_assert(sizeof(struct vms_mbx_read_args) == 16 + VMS_MBX_IOCTL_MAXLEN,
                "vms_mbx_read_args changed size -- VMS_IOCTL_MBX_READ ABI break");
+_Static_assert(sizeof(struct vms_mbx_wrtattn_args) == 32,
+               "vms_mbx_wrtattn_args changed size -- VMS_IOCTL_MBX_SET_WRTATTN ABI break");
 
 #endif /* _VMS_MBX_H */

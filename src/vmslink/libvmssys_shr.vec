@@ -81,3 +81,7 @@ vms_kif_chkpriv=PROCEDURE
 vms_kif_alloc=PROCEDURE
 vms_kif_dalloc=PROCEDURE
 vms_kif_establish_system=PROCEDURE
+# vms-9003: mailbox write-attention AST (IO$_SETMODE|IO$M_WRTATTN). APPENDED at
+# the end per the append-only contract above -- a new universal never shifts an
+# existing index.
+vms_kif_mbx_set_wrtattn=PROCEDURE

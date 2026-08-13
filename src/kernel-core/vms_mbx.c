@@ -110,8 +110,30 @@ struct vms_mailbox {
     pid_t    owner_linux_pid;
     uint32_t owner_vms_pid;
     exec_list_head_t msgq;      /* struct vms_mbx_msg, FIFO */
+    exec_list_head_t wrtattn;   /* struct vms_mbx_wrtattn_reg, write-attention ASTs */
     exec_cv_t read_wq;
     exec_lock_t lock;           /* guards everything above except `list` */
+};
+
+/*
+ * One armed write-attention AST (vms-9003). A process registers this on a
+ * mailbox by IO$_SETMODE|IO$M_WRTATTN; when another process writes a message,
+ * the write path queues {astadr, astprm} into `proc`'s executive AST queue at
+ * `acmode` and removes the registration (ONE-SHOT, per the mailbox driver in
+ * the VSI I/O User's Reference). `proc` is a bare back-pointer, kept valid by
+ * the same discipline the lock manager uses for the proc pointers in its lock
+ * entries: it is only ever reachable while the owning process holds a channel
+ * to this mailbox, and both channel-release paths (vms_mbx_dassgn and
+ * vms_mbx_release_all, the latter run at process teardown) strip this
+ * process's registrations off every mailbox before the proc can be freed.
+ */
+struct vms_mbx_wrtattn_reg {
+    exec_list_node_t list;      /* in vms_mailbox->wrtattn */
+    struct vms_proc *proc;      /* the process to deliver the AST to */
+    uint32_t chan;              /* the registering process's channel number */
+    uint8_t  acmode;            /* access mode to deliver the AST at (0-3) */
+    uint64_t astadr;            /* AST routine (opaque userspace address) */
+    uint64_t astprm;            /* parameter to the AST routine */
 };
 
 /* One process's channel to a mailbox. */
@@ -156,10 +178,19 @@ void vms_mbx_init(void)
 static void mbx_free(struct vms_mailbox *mbx)
 {
     struct vms_mbx_msg *m, *tmp;
+    struct vms_mbx_wrtattn_reg *w, *wtmp;
 
     exec_list_for_each_entry_safe(m, tmp, &mbx->msgq, list) {
         exec_list_del(&m->list);
         exec_free(m);
+    }
+    /* Any write-attention AST still armed when the mailbox itself is freed:
+     * the channel-release paths strip a process's registrations before it can
+     * die, so this normally finds an empty list, but drain it defensively --
+     * the same shape as the msgq drain just above. */
+    exec_list_for_each_entry_safe(w, wtmp, &mbx->wrtattn, list) {
+        exec_list_del(&w->list);
+        exec_free(w);
     }
     exec_cv_destroy(&mbx->read_wq);
     exec_lock_destroy(&mbx->lock);
@@ -259,6 +290,28 @@ static struct vms_mbx_chan *mbxchan_find_locked(struct vms_proc *proc, uint32_t 
 }
 
 /*
+ * mbx_wrtattn_strip_locked - remove every write-attention AST `proc` armed on
+ * this mailbox through channel `chan` (vms-9003). Caller holds mbx->lock. Used
+ * both to REPLACE a registration when SETMODE|WRTATTN is issued again on the
+ * same channel (re-arm) and to release registrations when the channel is
+ * deassigned or the process dies -- so a fired-or-not registration never
+ * outlives the channel it belongs to, and its `proc` back-pointer is dropped
+ * before the process can be freed.
+ */
+static void mbx_wrtattn_strip_locked(struct vms_mailbox *mbx,
+                                     struct vms_proc *proc, uint32_t chan)
+{
+    struct vms_mbx_wrtattn_reg *w, *tmp;
+
+    exec_list_for_each_entry_safe(w, tmp, &mbx->wrtattn, list) {
+        if (w->proc == proc && w->chan == chan) {
+            exec_list_del(&w->list);
+            exec_free(w);
+        }
+    }
+}
+
+/*
  * mbx_priv_check - the privilege gate $CREMBX consults (System Services
  * Reference, $CREMBX: "you need the TMPMBX privilege ... to create a
  * permanent mailbox, you need the PRMMBX privilege" -- also documented in
@@ -329,6 +382,7 @@ long vms_ioctl_mbx_create(struct vms_proc *proc, unsigned long arg)
     }
 
     exec_list_head_init(&mbx->msgq);
+    exec_list_head_init(&mbx->wrtattn);
     exec_cv_init(&mbx->read_wq);
     exec_lock_init(&mbx->lock);
 
@@ -539,6 +593,54 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
     exec_lock(&mbx->lock);
     exec_list_add_tail(&m->list, &mbx->msgq);
     exec_cv_broadcast(&mbx->read_wq);
+
+    /*
+     * WRITE-ATTENTION ASTs (vms-9003). A write to the mailbox notifies every
+     * process that armed IO$_SETMODE|IO$M_WRTATTN on it: queue that process's
+     * AST routine into ITS OWN executive AST queue (proc->ast[acmode]) -- the
+     * same 4-level queue $DCLAST and the lock manager's completion/blocking
+     * ASTs use (src/kernel-core/vms_ast.c) -- and drain the registration
+     * (ONE-SHOT; the process re-arms with another SETMODE, per the mailbox
+     * driver in the VSI I/O User's Reference). This is real cross-process
+     * delivery: process B's write lands an AST in process A's queue through the
+     * executive, which A then drains via $SETAST/DELIVERAST -- no per-process
+     * fake could carry it across the process boundary (CLAUDE.md Rule 9).
+     *
+     * The AST entry is allocated with the ATOMIC allocator because it is done
+     * under mbx->lock (a spinlock on Linux), and proc->ast[mode].lock nests
+     * INSIDE mbx->lock -- the same "ast_state->lock innermost" ordering
+     * queue_completion_ast() (vms_lock.c) already relies on, so no new
+     * lock-order edge is introduced. A full AST queue drops the notification
+     * (the quota is the reader's, exactly as the lock manager treats it).
+     */
+    {
+        struct vms_mbx_wrtattn_reg *w, *wtmp;
+
+        exec_list_for_each_entry_safe(w, wtmp, &mbx->wrtattn, list) {
+            struct vms_ast_entry *ast;
+            struct vms_ast_state *ast_state;
+
+            exec_list_del(&w->list);
+
+            ast = exec_zalloc_atomic(sizeof(*ast));
+            if (ast) {
+                ast->astadr = w->astadr;
+                ast->astprm = w->astprm;
+                ast->acmode = w->acmode;
+
+                ast_state = &w->proc->ast[w->acmode];
+                exec_lock(&ast_state->lock);
+                if (ast_state->count < VMS_AST_MAX_PER_MODE) {
+                    exec_list_add_tail(&ast->list, &ast_state->pending);
+                    ast_state->count++;
+                } else {
+                    exec_free(ast);
+                }
+                exec_unlock(&ast_state->lock);
+            }
+            exec_free(w);
+        }
+    }
     exec_unlock(&mbx->lock);
 
     a->status = SS__NORMAL;
@@ -644,6 +746,71 @@ out_free:
     return ret;
 }
 
+/*
+ * $QIO IO$_SETMODE|IO$M_WRTATTN-equivalent: arm a write-attention AST on the
+ * caller's channel to a mailbox (vms-9003). See struct vms_mbx_wrtattn_reg and
+ * the write path's firing block above for the mechanism. The registration is
+ * ONE-SHOT and re-arming (a fresh call on the same channel) REPLACES any
+ * still-armed registration for that channel -- so repeated re-arms cannot pile
+ * up unbounded, matching the mailbox driver's "set the attention AST" being an
+ * establish, not a stack (VSI OpenVMS I/O User's Reference).
+ */
+long vms_ioctl_mbx_set_wrtattn(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_mbx_wrtattn_args args;
+    struct vms_mbx_chan *ch;
+    struct vms_mailbox *mbx;
+    struct vms_mbx_wrtattn_reg *reg;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    if (args.acmode > PSL_C_USER) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    if (args.astadr == 0) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+
+    exec_lock(&proc->chan_lock);
+    ch = mbxchan_find_locked(proc, args.chan);
+    mbx = ch ? ch->mbx : NULL;
+    exec_unlock(&proc->chan_lock);
+
+    if (!mbx) {
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+
+    /* Allocate before taking the mailbox spinlock -- exec_alloc may sleep. */
+    reg = exec_alloc(sizeof(*reg));
+    if (!reg) {
+        args.status = SS__INSFMEM;
+        goto out;
+    }
+    reg->proc = proc;
+    reg->chan = args.chan;
+    reg->acmode = (uint8_t)args.acmode;
+    reg->astadr = args.astadr;
+    reg->astprm = args.astprm;
+
+    exec_lock(&mbx->lock);
+    /* Re-arm replaces: drop any registration this channel still had armed. */
+    mbx_wrtattn_strip_locked(mbx, proc, args.chan);
+    exec_list_add_tail(&reg->list, &mbx->wrtattn);
+    exec_unlock(&mbx->lock);
+
+    args.status = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
 /* ================================================================
  * $DASSGN fallback and process teardown -- called from vms_devtab.c
  * ================================================================ */
@@ -660,6 +827,13 @@ int vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan)
 
     if (!ch)
         return -ENOENT;
+
+    /* Drop any write-attention AST this channel had armed (vms-9003) before
+     * releasing the channel's mailbox reference -- so the registration's proc
+     * back-pointer never outlives the channel it belonged to. */
+    exec_lock(&ch->mbx->lock);
+    mbx_wrtattn_strip_locked(ch->mbx, proc, chan);
+    exec_unlock(&ch->mbx->lock);
 
     mbx_put(ch->mbx);
     exec_free(ch);
@@ -678,6 +852,13 @@ void vms_mbx_release_all(struct vms_proc *proc)
 
     exec_list_for_each_entry_safe(ch, tmp, &doomed, list) {
         exec_list_del(&ch->list);
+        /* Strip this dying process's write-attention ASTs off each mailbox it
+         * held a channel to (vms-9003) -- the process is about to be freed, so
+         * its `proc` back-pointer must not survive in any mailbox's wrtattn
+         * list. Done before mbx_put(), which may free the mailbox outright. */
+        exec_lock(&ch->mbx->lock);
+        mbx_wrtattn_strip_locked(ch->mbx, proc, ch->chan);
+        exec_unlock(&ch->mbx->lock);
         mbx_put(ch->mbx);
         exec_free(ch);
     }

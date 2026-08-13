@@ -102,6 +102,27 @@ extern "C" {
 #define IO$M_ACCEPT         0x0200  /* Bit 9: accept */
 #define IO$M_ABORT          0x0400  /* Bit 10: abort */
 
+/*
+ * Mailbox modifiers (IO$_SETMODE / IO$_SETCHAR).
+ *
+ * IO$M_WRTATTN sets a WRITE-ATTENTION AST on a mailbox channel: when another
+ * process writes a message to the mailbox, the process that set the AST is
+ * notified. IO$M_READATTN is the read-attention counterpart (notify when the
+ * mailbox is read). Both are ONE-SHOT: the AST is delivered once and must be
+ * re-established by another IO$_SETMODE|IO$M_WRTATTN to be notified again.
+ * P1 carries the AST routine address, P2 the AST parameter.
+ *
+ * CLEAN-ROOM (CLAUDE.md Rule 8): these bit values and the one-shot,
+ * re-arm-on-SETMODE semantics are from the public VSI OpenVMS I/O User's
+ * Reference Manual (mailbox driver, "Setting Mailbox Attention ASTs") and the
+ * public $IODEF ($EQU IO$M_WRTATTN ^X100, IO$M_READATTN ^X200) -- never from
+ * disassembly. The same two values are used by the tier-4 VMS example source
+ * carried under tests/corpus/ (sp_mgr.b32) and the MMK compat shim
+ * (tests/corpus/tier3-mmk/ovmx/ovmx_mmk_compat.h).
+ */
+#define IO$M_WRTATTN        0x0100  /* Bit 8: enable write-attention AST */
+#define IO$M_READATTN       0x0200  /* Bit 9: enable read-attention AST */
+
 /* Miscellaneous modifiers */
 #define IO$M_INHSEEK        0x0200  /* Bit 9: inhibit seek */
 #define IO$M_ERASE          0x0100  /* Bit 8: erase */

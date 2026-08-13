@@ -1762,3 +1762,29 @@ uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
     }
     return args.status;
 }
+
+/*
+ * vms_kif_mbx_set_wrtattn - arm a write-attention AST on a mailbox channel
+ * (vms-9003, IO$_SETMODE|IO$M_WRTATTN). When another process writes a message
+ * to the mailbox, the executive queues astadr(astprm) into THIS process's AST
+ * queue at `acmode`; the process drains it through $SETAST/DELIVERAST, exactly
+ * as $DCLAST-declared ASTs are drained. One-shot -- re-arm with another call.
+ */
+uint32_t vms_kif_mbx_set_wrtattn(uint32_t exec_chan, uint8_t acmode,
+                                 uint64_t astadr, uint64_t astprm)
+{
+    struct vms_mbx_wrtattn_args args;
+
+    if (!mbx_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.acmode = acmode;
+    args.astadr = astadr;
+    args.astprm = astprm;
+
+    KIF_CALL(VMS_IOCTL_MBX_SET_WRTATTN, &args);
+
+    return args.status;
+}

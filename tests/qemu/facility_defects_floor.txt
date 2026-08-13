@@ -310,4 +310,13 @@
 # paired "did NOT report the caller's identity"); the self-form and liveness
 # assertions stay green. Mutation-verified against a real /dev/vms via
 # run_facility_negctl.sh.
-92
+#
+# Raised 92 -> 93 (vms-9003): added mbx-wrtattn-not-fired, the negative control
+# that anchors test_syssvc_mbx_wrtattn -- the new suite for mailbox
+# WRITE-ATTENTION ASTs (IO$_SETMODE|IO$M_WRTATTN), the long-pole executive
+# facility MMK's send_cmd_and_wait waits on (spine #4). PRODUCT-half mutation in
+# kernel-core/vms_mbx.c: forcing the write path's AST allocation to NULL drops
+# the cross-process write-attention delivery while the arm, the rendezvous and
+# the write all stay green -- reddening exactly the suite's five fire/param/
+# one-shot assertions. See its own entry in facility_defects.sh.
+93

@@ -37,15 +37,27 @@
  *     array. Needs only fixed-width types + two error codes (no host primitive
  *     at all -- pure arithmetic over the on-disk vmsfs_retrieval_ptr layout).
  *
- * The block-buffer + volume-geometry seam that the bitmap/cluster allocator and
- * the directory-block scanner need (the sb_bread/brelse/mark_buffer_dirty
- * equivalent and the storage-bitmap ops, today reached through struct
- * super_block / struct vmsfs_sb_info / struct buffer_head) is deliberately NOT
- * introduced here: those algorithms are still entangled with the Linux VFS
- * object model and are the subject of the next phase (V2 -- reduce the Linux
- * VFS backend to a thin inode/block shim), mirroring how the executive core
- * left its block-coupled facility (vms_devtab) in src/kernel until its seam
- * existed. Adding an op here before a core file needs it would be dead surface.
+ * PHASE V2 SCOPE (rd vms-00c). One more class of pure ODS-2 ALGORITHM was
+ * promoted onto this SAME vocabulary shim -- no new op was required:
+ *
+ *   - filename FORMAT   (src/kernel-core/vmsfs/vmsfs_name.c): split a
+ *     "NAME.TYPE" filespec into its components, uppercase in place (ODS-2
+ *     convention), and case-blind-compare a directory-entry name. These were
+ *     file-static helpers in the Linux glue (vmsfs_blkdev.c). They add only
+ *     the ordinary string/ctype names strrchr / memcmp / toupper / strscpy to
+ *     the vocabulary below; no host-object seam.
+ *
+ * The block-buffer + volume-geometry + inode seam that the bitmap/cluster
+ * allocator and the directory-block scanner need (the sb_bread/brelse/
+ * mark_buffer_dirty equivalent, the storage-bitmap ops, and the struct-inode
+ * field access, today reached through struct super_block / struct
+ * vmsfs_sb_info / struct buffer_head / struct inode) is STILL deliberately NOT
+ * introduced here: those algorithms remain entangled with the Linux VFS object
+ * model. That block/inode seam is DESIGNED in src/kernel/vmsfs/README-backend.md
+ * (the NetBSD-vnode-backend template); building it and moving those algorithms
+ * onto it is the next phase, mirroring how the executive core left its
+ * block-coupled facility (vms_devtab) in src/kernel until its seam existed.
+ * Adding an op here before a core file needs it would be dead surface.
  *
  * Clean-room (CLAUDE.md Rule 8): this contract and the ODS-2 algorithms are
  * OVMX's own code; each backend maps it to PUBLIC, documented host kernel APIs
@@ -64,7 +76,10 @@
  * String / ctype / memory (standard freestanding names; the backend guarantees
  * they are declared -- Linux via <linux/string.h>/<linux/ctype.h>, NetBSD via
  * libkern). A core ODS-2 file calls them by their ordinary names:
- *   strchr, strlen, strncasecmp, memcpy, snprintf, isdigit
+ *   strchr, strrchr, strlen, strncasecmp, memcpy, memcmp, snprintf,
+ *   isdigit, toupper, and strscpy (a bounded, always-NUL-terminating copy;
+ *   the NetBSD backend maps it to libkern strlcpy -- only its truncating
+ *   copy effect is used by the core, never its return value).
  *
  * Error codes (normalized ODS-2-core spelling; the backend defines each to the
  * host's own errno value so the returned integer is identical on that host --

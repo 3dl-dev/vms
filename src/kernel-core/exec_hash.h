@@ -30,14 +30,38 @@
  * resource hash; this header is deliberately MINIMAL -- only the ops
  * vms_proctab.c actually calls -- and Phase G extends it if it needs more.
  *
- * SCOPE (only what vms_proctab.c calls): the node type, locked full-table
- * iteration (plain + delete-safe), and RCU-safe deletion. The TABLE ITSELF is
- * declared/defined/inited in the per-substrate struct header + module glue
- * (DECLARE_HASHTABLE(vms_proc_hash,...) in the Linux vms_internal.h,
+ * SCOPE (Phase F, what vms_proctab.c calls): the node type, locked full-table
+ * iteration (plain + delete-safe), and RCU-safe deletion. The PROCESS TABLE
+ * ITSELF is declared/defined/inited in the per-substrate struct header + module
+ * glue (DECLARE_HASHTABLE(vms_proc_hash,...) in the Linux vms_internal.h,
  * DEFINE_HASHTABLE + hash_init + hash_add_rcu in vms_module.c -- all Linux glue
  * that keeps raw primitives), so the core facility only references the extern
- * table by name and never spells a table macro. hash_add / possible-key lookup
- * live in that glue, not here.
+ * table by name and never spells a table macro. That split exists because the
+ * process table has LOCKLESS RCU readers in the glue; its hash_add_rcu /
+ * possible-key lookup live in that glue, not here.
+ *
+ * SCOPE (Phase G additions, what vms_lock.c calls): the lock manager's RESOURCE
+ * hash (vms_res_hash) is the OPPOSITE case -- it has no lockless reader (every
+ * walk is under vms_res_hash_lock), no file but vms_lock.c touches it, and its
+ * add is facility logic on the enqueue path, not a module-lifecycle event. So
+ * its whole NON-RCU table vocabulary lives HERE, in the shim, and the resource
+ * hash lives wholly inside the core facility:
+ *   EXEC_DECLARE_HASHTABLE / EXEC_DEFINE_HASHTABLE   declare / define a table.
+ *   void  exec_hash_init(name)                       init an EXEC_DEFINE'd table.
+ *   void  exec_hash_add(name, node, key)             insert `node` under `key`.
+ *   exec_hash_for_each_possible(name, obj, member, key)
+ *                                                    walk the `key` bucket, typed.
+ *   void  exec_hash_del(exec_hash_node_t *n)         plain (non-RCU) unlink.
+ *   uint32_t exec_jhash(const void *key, uint32_t len, uint32_t initval)
+ *                                                    hash a byte range to a bucket
+ *                                                    key (the resource-name hash;
+ *                                                    Linux: jhash). Its VALUE is
+ *                                                    used only for bucketing and a
+ *                                                    membership modulo, never for a
+ *                                                    correctness decision (name
+ *                                                    matches are by strncmp), so a
+ *                                                    substrate whose exec_jhash
+ *                                                    differs is still correct.
  *
  * RCU PAIRING: exec_hash_del_rcu removes a node so that a read section started
  * AFTER the unlink cannot reach it while a reader ALREADY traversing walks off

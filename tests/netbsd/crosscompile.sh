@@ -75,18 +75,24 @@ CFLAGS=(
 OBJ="$(mktemp -d)"
 
 # The module's translation units: the NetBSD backend glue, the OVMX intrusive
-# list, and THE SHARED facility sources (identical to the ones the Linux vms.ko
-# builds). This is exactly src/kernel-netbsd/Makefile's SRCS.
+# list + hash, and THE SHARED facility sources (identical to the ones the Linux
+# vms.ko builds). This is exactly src/kernel-netbsd/Makefile's SRCS.
 #   vms_eflag.c / vms_ast.c / vms_access.c - event flags, ASTs, access modes
-#   vms_mbx.c   - executive-resident mailboxes MBAn: (rd vms-d7a); links
-#                 vms_ast_notify_arrival, so vms_ast.c must be listed too
+#   vms_mbx.c      - executive-resident mailboxes MBAn: (rd vms-d7a); links
+#                    vms_ast_notify_arrival, so vms_ast.c must be listed too
+#   vms_proctab.c  - the executive process table (rd vms-ca7): $GETJPI/$SETPRN/
+#                    $PROCESS_SCAN/$HIBER/$WAKE/$SETIDENT. Binds the host task and
+#                    the intrusive process hash, so exec_hash_netbsd.c (the NetBSD
+#                    hash impl -- exec_hash_del_rcu/add/init) is listed with it.
 SRCS=(
     "$KMOD/vms_netbsd.c"
     "$KMOD/exec_list_netbsd.c"
+    "$KMOD/exec_hash_netbsd.c"
     "$CORE/vms_eflag.c"
     "$CORE/vms_ast.c"
     "$CORE/vms_access.c"
     "$CORE/vms_mbx.c"
+    "$CORE/vms_proctab.c"
 )
 
 # ---- teeth check ---------------------------------------------------------
@@ -111,4 +117,4 @@ done
 echo "LD  vms.kmod.o (relocatable)"
 "$CC" -target x86_64-unknown-netbsd -nostdlib -r -o "$OBJ/vms.kmod.o" "$OBJ"/*.c.o
 
-echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"
+echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c, vms_mbx.c, vms_proctab.c) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"

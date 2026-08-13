@@ -35,12 +35,16 @@
 #include <sys/types.h>
 #include <sys/systm.h>     /* memset, strncmp, strlcpy, printf */
 #include <sys/errno.h>     /* EFAULT */
+#include <sys/stdbool.h>   /* bool -- vms_proctab.c's predicates (P4-A) */
 
 /* The shim contracts. Selected to their NetBSD backends by OVMX_KBACKEND_NETBSD
- * (set by the kmodule build). These give exec_lock_t / exec_cv_t and the
- * exec_list_* container types the structs below embed. */
+ * (set by the kmodule build). These give exec_lock_t / exec_cv_t, the
+ * exec_list_* container types the structs below embed, and (P4-A proctab, rd
+ * vms-ca7) exec_hash_node_t + the host-task/RCU-lite/sleepable-mutex ops the
+ * process table binds. */
 #include "exec_kbackend.h"
 #include "exec_list.h"
+#include "exec_hash.h"
 
 /* The facility argument structs the shared core copies in/out, plus the access
  * modes and privilege bits they gate on. Byte-identical to src/kernel/vms_ioctl.h;
@@ -52,6 +56,12 @@
  * facility copies, VMS_DEVNAM_SIZE, the VMS_MBX_* sizing and the VMS_MBX_READ_NOW
  * modifier. Byte-identical to src/kernel/vms_mbx.h. */
 #include "vms_mbx_nb.h"
+/* Process-table wire contract (P4-A, rd vms-ca7): the $GETJPI/$SETPRN/
+ * $PROCESS_SCAN/$SETIDENT/$HIBER/$WAKE arg structs the facility copies, the
+ * VMS_PRCNAM/USERNAME sizes, the VMS_JPI_SEL and VMS_PI_V codes, the SS$_DUPLNAM/
+ * NONEXPR/IVLOGNAM statuses, VMS_PRV_M_WORLD and the SYSTEM identity constants.
+ * Byte-identical to src/kernel/vms_ioctl.h. */
+#include "vms_proctab_nb.h"
 
 /* ================================================================
  * VMS status codes -- the subset the event-flag facility returns. Values match
@@ -212,17 +222,27 @@ struct vms_ef_state {
 /*
  * Per-process control block. On Linux this is a large struct with the whole
  * executive's per-process state; on the NetBSD substrate the twin carries just
- * the state the facilities built for NetBSD touch -- event flags (.ef, P2c),
- * ASTs (.ast + .hiber_*, P4-A) and access modes (.current_mode/.cur_privs/
- * .perm_privs/.mode_lock + .image_active/.pre_image_mode, P4-A) -- plus the
- * fields the NetBSD `vms' pseudo-device's own per-pid proc table needs (pid key
- * + intrusive link). The glue owns pid and next; the facilities own the rest.
- * Field names and types mirror src/kernel/vms_internal.h (exec_* in place of the
- * Linux spinlock_t/wait_queue_head_t) so the shared sources compile unchanged.
+ * the state the facilities built for NetBSD touch -- event flags (ef, P2c),
+ * ASTs (ast + hiber_*, P4-A), access modes (current_mode/cur_privs/perm_privs/
+ * mode_lock + image_active/pre_image_mode, P4-A) and the process table
+ * (hash_node/pid_ref/uic/prcnam/username/terminal/p0+p1 extents/wake_pending,
+ * P4-A rd vms-ca7) -- plus the glue's proc-table key (pid).
+ *
+ * THE PROCESS TABLE IS ONE TABLE (rd vms-ca7). Before proctab joined the NetBSD
+ * SRCS the glue kept a private singly-linked proc list (a "next" pointer); now
+ * the SHARED facility src/kernel-core/vms_proctab.c walks the SAME table the glue
+ * populates, so the two are unified onto the intrusive "hash_node" the facility
+ * expects (vms_proc_hash, below). $GETJPI must find the very proc that $ASCEFC'd
+ * a cluster or queued an AST, so there can be exactly one per-pid struct, shared
+ * by every facility. The glue owns pid, hash_node, pid_ref and rcu; the
+ * facilities own the rest. Field names and types mirror src/kernel/vms_internal.h
+ * (exec_* in place of the Linux spinlock_t/wait_queue_head_t/hlist_node/struct
+ * pid pointer) so the shared sources compile unchanged.
  */
 struct vms_proc {
 	pid_t               pid;   /* proc-table key (NetBSD glue; facility ignores) */
-	struct vms_proc    *next;  /* proc-table link  (NetBSD glue; facility ignores) */
+	exec_hash_node_t    hash_node;  /* link in vms_proc_hash (glue-owned; the
+	                                 * facility walks it via exec_hash_for_each) */
 	struct vms_ef_state ef;
 
 	/* Access-mode + privilege state (src/kernel-core/vms_access.c). */
@@ -233,15 +253,51 @@ struct vms_proc {
 	uint64_t            perm_privs;       /* permanent (authorized) privileges */
 	exec_lock_t         mode_lock;        /* guards current_mode/privs/image_* */
 
-	/* AST queues + hibernate/wake (src/kernel-core/vms_ast.c). */
+	/* AST queues + hibernate/wake (src/kernel-core/vms_ast.c + vms_proctab.c). */
 	struct vms_ast_state ast[4];          /* one queue per access mode 0..3 */
 	exec_cv_t           hiber_wq;         /* $HIBER waiter cv; broadcast on AST arrival */
 	exec_lock_t         hiber_lock;       /* paired guard for hiber_wq */
+	uint8_t             wake_pending;     /* sticky $WAKE bit (PCB$V_WAKEPEN), $HIBER/$WAKE */
 
 	/* Identity (glue-populated; the mailbox facility stamps a created mailbox's
 	 * owner from these -- informational only, not consulted by $ASSIGN's lookup). */
 	pid_t               linux_pid;
 	uint32_t            vms_pid;
+
+	/*
+	 * Executive-resident process identity (src/kernel-core/vms_proctab.c). The
+	 * NAME and UIC live here, in the one table every process shares, which is
+	 * what makes a $SETPRN name resolvable by another process's $GETJPI. uic is
+	 * DERIVED by the glue from the calling task's real credentials (never a
+	 * value a process supplies); prcnam/username/terminal start "" and are
+	 * stamped by $SETPRN / $SETIDENT (terminal only once the device table joins
+	 * SRCS -- it stays "" until then, honestly empty).
+	 */
+	uint32_t            uic;                       /* (group << 16) | member */
+	char                prcnam[VMS_PRCNAM_SIZE];   /* process name ("" if unnamed) */
+	char                username[VMS_USERNAME_SIZE]; /* "" until $SETIDENT stamps it */
+	char                terminal[VMS_DEVNAM_SIZE]; /* "" (no device table in SRCS yet) */
+
+	/* P0 program / P1 control region extents (structural; $GETJPI reports them,
+	 * VMS_IOCTL_P0_MAP/P1_MAP would record them -- not in this module's SRCS, so
+	 * both pairs stay zero). Carried so proc_fill_info compiles and reports them
+	 * absent, exactly as on Linux before an image is mapped. */
+	uint64_t            p0_base;
+	uint64_t            p0_limit;
+	uint64_t            p1_base;
+	uint64_t            p1_limit;
+
+	/*
+	 * Host-task liveness handle (P4-A, rd vms-ca7). The facility tests
+	 * proc->pid_ref for whole-process liveness (exec_task_alive) and pins it to
+	 * read accounting (exec_task_pin), never dereferencing it -- it is opaque.
+	 * On Linux this is a refcounted `struct pid *' (get_pid/put_pid); on NetBSD
+	 * exec_task_ref_t just carries the pid, so the glue embeds the storage in the
+	 * PCB (pid_ref_store) and points pid_ref at it, set once at creation. No ref
+	 * to drop at teardown (proc_find(9) takes none), so freeing the PCB frees it.
+	 */
+	exec_task_ref_t     pid_ref_store;    /* backing storage (NetBSD glue) */
+	exec_task_ref_t    *pid_ref;          /* -> pid_ref_store; the facility's handle */
 
 	/* Mailbox channels + the channel-number allocator (src/kernel-core/vms_mbx.c,
 	 * P4-A). On real VMS a process's channels are one number space regardless of
@@ -250,6 +306,12 @@ struct vms_proc {
 	uint32_t            next_chan;
 	exec_lock_t         chan_lock;
 	exec_list_head_t    mbx_channels;     /* struct vms_mbx_chan (defined in vms_mbx.c) */
+
+	/* Deferred-free head (P4-A, rd vms-ca7). The reaper unlinks a dead PCB under
+	 * vms_proc_hash_lock (exec_hash_del_rcu) and reclaims it through
+	 * exec_free_deferred(&proc->rcu, ...) -- immediate on NetBSD (no lockless
+	 * readers), the blessed grace-period fallback. Mirrors Linux's kfree_rcu. */
+	exec_rcu_head_t     rcu;
 };
 
 /* ================================================================
@@ -320,5 +382,42 @@ void vms_mbx_release_all(struct vms_proc *proc);
  * ---------------------------------------------------------------- */
 void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode);
 void vms_proc_rundown_channels(struct vms_proc *proc, uint8_t min_acmode);
+
+/* ================================================================
+ * PROCESS TABLE (P4-A, rd vms-ca7) -- the executive process database
+ * (src/kernel-core/vms_proctab.c). The TABLE and its lock are DEFINED by the
+ * module glue (src/kernel-netbsd/vms_netbsd.c), exactly as the Linux vms.ko
+ * defines them in vms_module.c -- the process table has its lifecycle bound to
+ * the module, and on NetBSD the module lifecycle is vms_netbsd.c. The core
+ * facility only references the extern table by name (exec_hash_for_each) and
+ * calls the glue-provided vms_proc_free_claimed() to reclaim a dead entry.
+ *
+ * VMS_PROC_HASH_BITS matches src/kernel/vms_internal.h (1024 buckets). The table
+ * is a fixed bucket array (EXEC_DEFINE/DECLARE_HASHTABLE), keyed by host pid; all
+ * walks run under vms_proc_hash_lock (there are NO lockless readers on this
+ * substrate -- the RCU-lite blessed fallback, exec_kbackend_netbsd.h §6).
+ * ================================================================ */
+#define VMS_PROC_HASH_BITS  10
+EXEC_DECLARE_HASHTABLE(vms_proc_hash, VMS_PROC_HASH_BITS);
+extern exec_lock_t vms_proc_hash_lock;
+
+/* Glue-provided: tear down a PCB already unlinked from the hash under
+ * vms_proc_hash_lock (the unlink is the ownership claim). DEFINED in
+ * vms_netbsd.c; CALLED by the facility's reaper (vms_proc_reap_dead). */
+void vms_proc_free_claimed(struct vms_proc *proc);
+
+/* Facility-provided (src/kernel-core/vms_proctab.c). vms_proc_reap_dead and
+ * vms_proc_may_read are used cross-file on Linux; here they are simply part of
+ * the compiled facility. The ioctl entry points are dispatched by vms_netbsd.c. */
+void vms_proc_reap_dead(void);
+bool vms_proc_may_read(const struct vms_proc *caller, const struct vms_proc *target);
+
+long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_establish_system(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_hiber(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_wake(struct vms_proc *proc, unsigned long arg);
 
 #endif /* _VMS_INTERNAL_H */

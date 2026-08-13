@@ -1483,13 +1483,18 @@ jobs:
       # tests/netbsd/**), so a version bump or a harness change invalidates it
       # and forces a fresh install; otherwise a warm cache skips the slow
       # TCG install entirely.
-      - name: Cache installed NetBSD image
+      # SHARED installed-disk cache (rd vms-2d9). All three NetBSD/amd64 jobs use
+      # the IDENTICAL key = f(NetBSD version + ISO sha + anita version) via
+      # netbsd_version.env, and the same path, so ONE cold install serves all
+      # three and NO OVMX-source change ever invalidates it (the OVMX module is
+      # built in-guest after boot, never baked into the disk).
+      - name: Cache installed NetBSD image (shared, version-keyed)
         uses: actions/cache@v4
         with:
           path: .netbsd-cache
-          key: netbsd-amd64-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/netbsd/drive_netbsd.py', 'tests/netbsd/Dockerfile') }}
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
           restore-keys: |
-            netbsd-amd64-
+            netbsd-amd64-install-
 
       - name: Build NetBSD harness image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1588,13 +1593,15 @@ jobs:
       # wd0.img is a different, larger image. Keyed on the pinned release + the
       # P2b driver (which owns the set list); the driver/probe/kmod sources are
       # rebuilt in-guest every run, so they do NOT need to invalidate the image.
-      - name: Cache installed NetBSD image (P2b, comp+syssrc)
+      # SHARED installed-disk cache (rd vms-2d9) -- IDENTICAL key/path to the
+      # P2a and P2c jobs, so one install serves all three; version-keyed only.
+      - name: Cache installed NetBSD image (shared, version-keyed)
         uses: actions/cache@v4
         with:
-          path: .netbsd-cache-p2b
-          key: netbsd-amd64-p2b-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/netbsd/drive_netbsd_p2b.py') }}
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
           restore-keys: |
-            netbsd-amd64-p2b-
+            netbsd-amd64-install-
 
       - name: Build NetBSD harness image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1610,8 +1617,8 @@ jobs:
       - name: Build + modload /dev/vms; assert one ping ioctl through the seam
         run: |
           set +e
-          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache-p2b"
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache-p2b:/cache" \
+          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache"
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
                   --entrypoint /netbsd/run_p2b.sh \
                   ovmx-netbsd-ktest:latest 2>&1)
           RC=$?
@@ -1634,7 +1641,7 @@ jobs:
       - name: NEGATIVE CONTROL — skipping modload must redden the PING assertion
         run: |
           set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache-p2b:/cache" \
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
                   --entrypoint /netbsd/run_p2b.sh \
                   -e P2B_SKIP_LOAD=1 \
                   ovmx-netbsd-ktest:latest 2>&1)
@@ -1697,13 +1704,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Cache installed NetBSD image (P2c, comp+syssrc)
+      # SHARED installed-disk cache (rd vms-2d9) -- IDENTICAL key/path to the
+      # P2a and P2b jobs, so one install serves all three; version-keyed only.
+      # This is the fix for the eflag job's cold-install timeout: its key no
+      # longer changes when src/kernel-core (or any OVMX source) changes.
+      - name: Cache installed NetBSD image (shared, version-keyed)
         uses: actions/cache@v4
         with:
-          path: .netbsd-cache-p2c
-          key: netbsd-amd64-p2c-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/netbsd/drive_netbsd_p2c.py') }}
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
           restore-keys: |
-            netbsd-amd64-p2c-
+            netbsd-amd64-install-
 
       - name: Build NetBSD harness image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1719,8 +1730,8 @@ jobs:
       - name: Build + modload /dev/vms; prove cross-process shared event-flag state
         run: |
           set +e
-          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache-p2c"
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache-p2c:/cache" \
+          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache"
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
                   --entrypoint /netbsd/run_p2c.sh \
                   ovmx-netbsd-ktest:latest 2>&1)
           RC=$?
@@ -1745,7 +1756,7 @@ jobs:
       - name: NEGATIVE CONTROL — skipping the SETEF must redden the cross-process proof
         run: |
           set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache-p2c:/cache" \
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
                   --entrypoint /netbsd/run_p2c.sh \
                   -e P2C_SKIP_SET=1 \
                   ovmx-netbsd-ktest:latest 2>&1)

@@ -145,15 +145,24 @@ def main():
     # P2b uses its OWN cache/workdir: its installed image carries the `comp` +
     # `syssrc` sets (needed to build a kernel module in-guest) that the P2a
     # image does not, so it must not collide with the P2a cache.
+    # SHARED installed-disk cache (rd vms-2d9): all three NetBSD/amd64 harnesses
+    # (P2a smoke, P2b, P2c) install the SAME sets into the SAME workdir, so ONE
+    # cached wd0.img -- keyed on the NetBSD version only (see ci.yml) -- serves
+    # every job. The OVMX module is built IN-GUEST after boot and is never baked
+    # into the disk, so nothing OVMX-source-dependent belongs in this workdir or
+    # its cache key. Keep this name/sets IDENTICAL across the three drivers.
     workdir = env("NETBSD_WORKDIR",
-                  "/cache/anita-netbsd-p2b-%s-%s" % (version, arch))
+                  "/cache/anita-netbsd-shared-%s-%s" % (version, arch))
 
     guest_src_dir = env("OVMX_GUEST_SRC", "/netbsd/guest-src")
     src_iso = env("OVMX_SRC_ISO", "/tmp/ovmx-src.iso")
 
-    boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "1200"))
-    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "180"))
-    build_timeout = int(env("NETBSD_BUILD_TIMEOUT", "900"))
+    # Backstop headroom for a genuine cold install/boot (rd vms-2d9); routine
+    # runs restore the shared warm image. Not a substitute for the deterministic
+    # console -- just room for a slow cold boot on a loaded runner.
+    boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "2400"))
+    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "600"))
+    build_timeout = int(env("NETBSD_BUILD_TIMEOUT", "1800"))
 
     skip_load = bool(env("P2B_SKIP_LOAD"))
 

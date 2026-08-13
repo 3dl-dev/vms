@@ -162,6 +162,8 @@ jobs:
               - 'src/vmslnm/**'
               - 'src/vmsfs/**'
               - 'src/vmsrms/**'
+              - 'src/vmsqueue/**'
+              - 'src/vmsdcl/**'
               - 'docs/design-ovmx-netbsd-syskrnl.md'
               - 'docs/audit-ilp32-vax-libvmssys.md'
             vmsfs_core_vax:
@@ -4633,3 +4635,77 @@ jobs:
           [ "$RC" -eq 0 ] || { echo "FAIL: negctl run exited nonzero ($RC)"; exit 1; }
           echo "$RAW" | grep -qF 'PASS (negctl)' \
             || { echo "FAIL: negctl did not confirm the broken TU was rejected"; exit 1; }
+
+  # -----------------------------------------------------------------------
+  # vmsdcl-netbsd-vax (rd vms-1cb2, epic vms-8e8, P4-C; CLAUDE.md "Library Build
+  # Order": ... vmsfs -> vmsrms -> vmsdcl). The TOP of the userspace library
+  # graph and the LAST userspace library before the init+images integration:
+  # the DCL command-language interpreter. BUILD-ONLY, over the pinned
+  # `vax--netbsdelf` toolchain. It (0..0f) builds the whole elf32-vax dependency
+  # stack (libvmssys, vmsprocess, libvms, vmslnm, vmsfs, vmsrms, vmsqueue),
+  # (1) compiles every DCL translation unit through the CMake VMSDCL_STANDALONE
+  # path -> libvmsdcl.a of elf32-vax objects, and (2) links a REAL vax--netbsdelf
+  # DCL.EXE with --whole-archive (every DCL object must resolve -- a complete
+  # shell, not just what crt0 reaches) against that stack + NetBSD libc +
+  # libpthread + libm + libatomic. readline is OPTIONAL and absent from the
+  # NetBSD/vax sysroot, so HAVE_READLINE stays undefined and DCL's own
+  # non-readline line editor is used (the same degrade path the static musl QEMU
+  # build takes); the gate asserts no readline symbol leaked in. DCL is
+  # overwhelmingly string/parse work over ordinary POSIX; its integer symbols are
+  # longwords (expr_val_t.ival is `long`, `%ld`), which on ILP32 VAX is the exact
+  # VMS width -- self-consistent, no width fix. The genuinely Linux-only surface
+  # (TCPIP SHOW/SET INTERFACE ifr_hwaddr/ifr_netmask/SIOCGIFHWADDR + /sys/class/net
+  # -- the AF_INET networking engine, vms-67f) is substrate-guarded #if __linux__
+  # and honestly degrades on netbsd-vax (no fabrication). DELIBERATELY NOT
+  # emulation; BUILD/TEST tooling, never a runtime (Rule 9). Fast once the cross
+  # toolchain image layer-caches (gha, shared scope=cross-vax). Gated on the
+  # shared netbsd_vax filter: push/merge_group/schedule always; on a PR only when
+  # the cross inputs change (src/vmsdcl/**, src/vmsqueue/**, and the lower
+  # stack/cross).
+  # -----------------------------------------------------------------------
+  vmsdcl-netbsd-vax:
+    name: vmsdcl cross-compiles for netbsd-vax (vms-1cb2)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile vmsdcl for netbsd-vax + link a real ELF32 VAX DCL.EXE
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-vmsdcl-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax vmsdcl cross build/link exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: vmsdcl builds and links a DCL.EXE for vax--netbsdelf' \
+            || { echo "FAIL: did not see the vmsdcl build+link PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: vmsdcl objects were not elf32-vax -- wrong target"; exit 1; }
+          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
+            || { echo "FAIL: DCL.EXE was not a VAX ELF"; exit 1; }
+          echo "$RAW" | grep -qF 'no undefined readline symbols' \
+            || { echo "FAIL: readline auto-degrade assertion did not run"; exit 1; }
+          echo "PASS: vmsdcl built for netbsd-vax and a real ELF32 VAX DCL.EXE linked over the full stack"

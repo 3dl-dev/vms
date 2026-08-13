@@ -40,6 +40,8 @@ import traceback
 
 import anita
 
+import netbsd_console
+
 
 def log(msg):
     print("[drive_netbsd_p2b] %s" % msg, flush=True)
@@ -86,17 +88,22 @@ def accel_args():
     return ["-smp", "2"]
 
 
+# ---- deterministic console (rd vms-2d9) --------------------------------------
+# All console driving goes through the shared, deterministic NetBSDConsole
+# (tests/netbsd/netbsd_console.py). The thin wrappers below keep every existing
+# call site unchanged; the console is created lazily from the live child.
+_con = None
+
+
+def _console(child):
+    global _con
+    if _con is None or _con.child is not child:
+        _con = netbsd_console.NetBSDConsole(child, logfn=log)
+    return _con
+
+
 def wait_for_login(child, boot_deadline):
-    import pexpect
-    child.timeout = boot_deadline
-    while True:
-        r = child.expect([r"\033\[c", r"\033\[5n", r"login:"])
-        if r == 0:
-            child.send("\033[?1;2c")
-        elif r == 1:
-            child.send("\033[0n")
-        elif r == 2:
-            return
+    _console(child).wait_for_login(boot_deadline)
 
 
 def build_source_iso(guest_src_dir, out_iso):
@@ -115,50 +122,16 @@ def build_source_iso(guest_src_dir, out_iso):
     log("source ISO built: %s (%d bytes)" % (out_iso, os.path.getsize(out_iso)))
 
 
-# ---- in-guest command helper -------------------------------------------------
-
-_marker_seq = [0]
+# ---- in-guest command helper (delegates to the deterministic console) --------
 
 
 def run(child, cmd, timeout, echo=True):
-    """Run one /bin/sh command in the guest; return (exit_status, output).
-
-    Uses a unique end-of-command marker so we key on the command's real exit
-    status, never on a bare shell prompt that could appear inside output. The
-    echoed command line contains "MARK=$?=" literally (with `$?`), which cannot
-    match MARK=<digits>=, so the first digit-match is always the real result.
-    """
-    import pexpect
-    _marker_seq[0] += 1
-    mark = "OVMXP2B_%d" % _marker_seq[0]
-    child.sendline("%s; echo %s=$?=" % (cmd, mark))
-    child.expect(r"%s=(\d+)=" % mark, timeout=timeout)
-    rc = int(child.match.group(1))
-    out = child.before
-    if isinstance(out, bytes):
-        out = out.decode("ascii", "ignore")
-    out = out.replace("\r", "")
-    if echo:
-        log("$ %s   -> exit %d" % (cmd, rc))
-        text = out.strip()
-        if text:
-            for line in text.splitlines():
-                print("    | %s" % line, flush=True)
-    return rc, out
+    """Run one /bin/sh command in the guest; return (exit_status, output)."""
+    return _console(child).run(cmd, timeout, echo)
 
 
 def login(child, cmd_timeout):
-    import pexpect
-    child.timeout = cmd_timeout
-    child.send("\n")
-    child.expect(r"login:")
-    child.send("root\n")
-    child.expect(r"# ")
-    # A clean, quiet POSIX shell for the marker protocol.
-    child.sendline("exec /bin/sh")
-    child.expect(r"# ")
-    child.sendline("PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH; umask 022")
-    child.expect(r"# ")
+    _console(child).login_root_sh(cmd_timeout)
 
 
 def main():
@@ -172,15 +145,24 @@ def main():
     # P2b uses its OWN cache/workdir: its installed image carries the `comp` +
     # `syssrc` sets (needed to build a kernel module in-guest) that the P2a
     # image does not, so it must not collide with the P2a cache.
+    # SHARED installed-disk cache (rd vms-2d9): all three NetBSD/amd64 harnesses
+    # (P2a smoke, P2b, P2c) install the SAME sets into the SAME workdir, so ONE
+    # cached wd0.img -- keyed on the NetBSD version only (see ci.yml) -- serves
+    # every job. The OVMX module is built IN-GUEST after boot and is never baked
+    # into the disk, so nothing OVMX-source-dependent belongs in this workdir or
+    # its cache key. Keep this name/sets IDENTICAL across the three drivers.
     workdir = env("NETBSD_WORKDIR",
-                  "/cache/anita-netbsd-p2b-%s-%s" % (version, arch))
+                  "/cache/anita-netbsd-shared-%s-%s" % (version, arch))
 
     guest_src_dir = env("OVMX_GUEST_SRC", "/netbsd/guest-src")
     src_iso = env("OVMX_SRC_ISO", "/tmp/ovmx-src.iso")
 
-    boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "1200"))
-    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "180"))
-    build_timeout = int(env("NETBSD_BUILD_TIMEOUT", "900"))
+    # Backstop headroom for a genuine cold install/boot (rd vms-2d9); routine
+    # runs restore the shared warm image. Not a substitute for the deterministic
+    # console -- just room for a slow cold boot on a loaded runner.
+    boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "2400"))
+    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "600"))
+    build_timeout = int(env("NETBSD_BUILD_TIMEOUT", "1800"))
 
     skip_load = bool(env("P2B_SKIP_LOAD"))
 
@@ -254,9 +236,18 @@ def main():
             return 10
 
         # ---- build the kernel module --------------------------------------
-        rc, out = run(child, "cd /root/ovmx/kmod && make 2>&1", build_timeout)
-        if rc != 0:
-            log("FAIL: in-guest kernel-module build failed")
+        # Quiet console: redirect the verbose in-guest build to a file (cat it
+        # only on failure). Streaming a kernel `make' to the emulated serial
+        # console floods it and can desync the pexpect handshake under TCG
+        # (rd vms-2d9); the deterministic console resyncs on the prompt, but
+        # keeping per-command output small is the other half of the fix.
+        rc, out = run(child,
+                      "cd /root/ovmx/kmod && make clean >/dev/null 2>&1; "
+                      "make >/tmp/kmodbuild.log 2>&1 && echo KMOD_BUILD_OK "
+                      "|| cat /tmp/kmodbuild.log",
+                      build_timeout)
+        if "KMOD_BUILD_OK" not in out:
+            log("FAIL: in-guest kernel-module build failed (diagnostic above)")
             return 11
         rc, _ = run(child, "test -f /root/ovmx/kmod/vms.kmod", cmd_timeout)
         if rc != 0:
@@ -265,13 +256,14 @@ def main():
         log("OK: vms.kmod built in-guest")
 
         # ---- build the probe ----------------------------------------------
-        rc, _ = run(child,
-                    "cd /root/ovmx/probe && "
-                    "cc -O -Wall -Wextra -I. -o vmsprobe "
-                    "vmsprobe.c kif_transport_netbsd.c 2>&1",
-                    build_timeout)
-        if rc != 0:
-            log("FAIL: in-guest probe build failed")
+        rc, out = run(child,
+                      "cd /root/ovmx/probe && "
+                      "cc -O -Wall -Wextra -I. -o vmsprobe "
+                      "vmsprobe.c kif_transport_netbsd.c >/tmp/toolbuild.log 2>&1 "
+                      "&& echo TOOL_BUILD_OK || cat /tmp/toolbuild.log",
+                      build_timeout)
+        if "TOOL_BUILD_OK" not in out:
+            log("FAIL: in-guest probe build failed (diagnostic above)")
             return 13
         log("OK: vmsprobe built in-guest (through kif_transport_netbsd.c)")
 

@@ -41,6 +41,8 @@ import traceback
 
 import anita
 
+import netbsd_console
+
 
 def log(msg):
     print("[drive_netbsd] %s" % msg, flush=True)
@@ -95,23 +97,28 @@ def accel_args():
     return ["-smp", "2"]
 
 
+# ---- deterministic console (rd vms-2d9) --------------------------------------
+# The console negotiation, login and command execution go through the shared,
+# deterministic NetBSDConsole (tests/netbsd/netbsd_console.py): unique prompt,
+# resync-on-prompt, unique per-command markers -- so this smoke harness drives
+# the guest console the same reliable way the P2b/P2c harnesses do, and stops
+# racing a bare `# ' under TCG. Created lazily from the live child.
+_con = None
+
+
+def _console(child):
+    global _con
+    if _con is None or _con.child is not child:
+        _con = netbsd_console.NetBSDConsole(child, logfn=log)
+    return _con
+
+
 def wait_for_login(child, boot_deadline):
-    # Replicates anita.Anita.boot()'s terminal-negotiation loop but with an
-    # EXPLICIT, bounded child.timeout so a boot that never reaches `login:`
-    # raises pexpect.TIMEOUT (-> nonzero exit) instead of hanging. anita's own
-    # boot() hardcodes child.timeout=3600 in configure_child(); we want the
-    # tighter, self-imposed deadline here (the outer run_tests.sh `timeout` is
-    # the belt to this suspenders).
-    import pexpect
-    child.timeout = boot_deadline
-    while True:
-        r = child.expect([r"\033\[c", r"\033\[5n", r"login:"])
-        if r == 0:
-            child.send("\033[?1;2c")   # terminal-id query -> answer like xterm
-        elif r == 1:
-            child.send("\033[0n")      # terminal-status query -> "ready"
-        elif r == 2:
-            return                     # login prompt reached
+    # Bounded, EXPLICIT child.timeout so a boot that never reaches `login:'
+    # raises pexpect.TIMEOUT (-> nonzero exit) instead of hanging on anita's
+    # hardcoded 3600s (the outer run_tests.sh `timeout' is the belt to this
+    # suspenders). The negotiation loop lives in the shared console.
+    _console(child).wait_for_login(boot_deadline)
 
 
 def main():
@@ -124,7 +131,16 @@ def main():
 
     # The cache/work directory. anita puts its download mirror AND the installed
     # wd0.img here; persisting it across runs is the whole caching story.
-    workdir = env("NETBSD_WORKDIR", "/cache/anita-netbsd-%s-%s" % (version, arch))
+    #
+    # SHARED installed-disk cache (rd vms-2d9): all three NetBSD/amd64 harnesses
+    # (this smoke test, P2b, P2c) install the SAME sets into the SAME workdir so
+    # ONE cached wd0.img -- keyed on the NetBSD version only (see ci.yml) -- serves
+    # every job. This smoke test does not itself build in-guest, but it installs
+    # the SAME (build-capable) sets so that if IT is the job that populates the
+    # shared cache, the image is usable by P2b/P2c too. Keep this workdir + the
+    # `shared_sets' below IDENTICAL across the three drivers.
+    workdir = env("NETBSD_WORKDIR",
+                  "/cache/anita-netbsd-shared-%s-%s" % (version, arch))
 
     # What we assert `uname -srm` prints. Defaults key on the pinned version/arch
     # -> "NetBSD 10.1 amd64". The negative-control modes override these to prove
@@ -136,8 +152,10 @@ def main():
     # Timeouts (seconds). The install is bounded only by run_tests.sh's outer
     # hard `timeout` (a cold install legitimately takes many minutes under TCG);
     # boot and the command assertion get tight internal deadlines here.
-    boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "900"))
-    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "120"))
+    # Headroom for a genuine cold install/boot of the shared image (rd vms-2d9);
+    # routine runs restore the shared warm cache and boot quickly.
+    boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "2400"))
+    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "600"))
 
     # Negative control: FORCE_TIMEOUT shrinks the boot deadline so the boot
     # cannot complete in time -> the harness must FAIL via the timeout path.
@@ -150,13 +168,17 @@ def main():
     log("work/cache dir: %s" % workdir)
     log("asserting `uname -srm` == %r" % expected_line)
 
-    minimal_sets = ["kern-GENERIC", "modules", "base", "etc"]
+    # The SHARED set list + disk size -- IDENTICAL to P2b/P2c (rd vms-2d9) so any
+    # of the three jobs produces the same build-capable image for the shared
+    # cache. This smoke test only boots + asserts `uname', but installing the
+    # same sets is what lets one install serve all three jobs.
+    shared_sets = ["kern-GENERIC", "modules", "base", "etc", "comp", "syssrc"]
 
     a = anita.Anita(
-        dist=anita.URL(url, sets=minimal_sets),
+        dist=anita.URL(url, sets=shared_sets),
         workdir=workdir,
-        memory_size="512M",
-        disk_size="2G",
+        memory_size="1024M",
+        disk_size="8G",
         persist=True,             # keep the installed image; this is the cache
         vmm_args=accel_args(),
     )
@@ -186,27 +208,22 @@ def main():
         wait_for_login(child, boot_deadline)
         a.child = child
 
-        # 4. Log in on the console (anita installs a passwordless root; login()
-        #    sends `root` and expects the `# ` shell prompt).
-        child.timeout = cmd_timeout
-        a.login()
+        # 4. Log in on the console and install the unique prompt. Uses the
+        #    deterministic console (not anita's a.login()) so the smoke test
+        #    drives the console the same robust way as P2b/P2c.
+        con = _console(child)
+        con.login_root_sh(cmd_timeout)
         log("logged in; running the smoke command")
 
-        # 5. THE ASSERTION. Send `uname -srm` and require the exact expected
-        #    line. If the guest prints anything else, the shell prompt returns
-        #    first (index 1) and we fail, showing what it actually printed.
-        expected_re = re.escape(expected_line)
-        child.sendline("uname -srm")
-        idx = child.expect([expected_re, r"# "], timeout=cmd_timeout)
-        if idx == 0:
+        # 5. THE ASSERTION. Run `uname -srm` through the deterministic console
+        #    (unique end marker + prompt resync) and require the exact expected
+        #    line in its output. No racing a bare `# '.
+        _rc, out = con.run("uname -srm", cmd_timeout)
+        if expected_line in out:
             log("PASS: uname -srm printed %r" % expected_line)
-            child.expect(r"# ", timeout=cmd_timeout)   # drain the trailing prompt
             rc = 0
         else:
-            actual = child.before
-            if isinstance(actual, bytes):
-                actual = actual.decode("ascii", "ignore")
-            actual = actual.replace("\r", "").strip()
+            actual = out.strip()
             log("FAIL: uname -srm did not print %r" % expected_line)
             log("  console showed instead:\n%s" % actual)
             rc = 1

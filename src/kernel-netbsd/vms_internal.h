@@ -5,7 +5,7 @@
  * epic vms-8e8; docs/design-netbsd-executive-core.md §4).
  *
  * The Linux executive keeps its shared kernel structs in src/kernel/vms_internal.h,
- * a large header that pulls <linux/*> and carries the WHOLE executive (proc
+ * a large header that pulls <linux/...> and carries the WHOLE executive (proc
  * table, ASTs, locks, mailboxes, ...). The relocated facility
  * src/kernel-core/vms_eflag.c includes "vms_internal.h" with NO substrate in its
  * name, and on Linux the build's -I resolves that to src/kernel's copy.

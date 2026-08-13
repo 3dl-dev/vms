@@ -59,6 +59,8 @@ import traceback
 
 import anita
 
+import netbsd_console
+
 
 def log(msg):
     print("[drive_netbsd_p2c] %s" % msg, flush=True)
@@ -105,16 +107,24 @@ def accel_args():
     return ["-smp", "2"]
 
 
+# ---- deterministic console (rd vms-2d9) --------------------------------------
+# All console driving goes through the shared, deterministic NetBSDConsole
+# (tests/netbsd/netbsd_console.py): unique prompt, resync-on-prompt, unique
+# per-command markers. The thin wrappers below keep every existing call site
+# (`wait_for_login(child, ...)', `login(child, ...)', `run(child, cmd, t)')
+# unchanged; the console is created lazily from the live child.
+_con = None
+
+
+def _console(child):
+    global _con
+    if _con is None or _con.child is not child:
+        _con = netbsd_console.NetBSDConsole(child, logfn=log)
+    return _con
+
+
 def wait_for_login(child, boot_deadline):
-    child.timeout = boot_deadline
-    while True:
-        r = child.expect([r"\033\[c", r"\033\[5n", r"login:"])
-        if r == 0:
-            child.send("\033[?1;2c")
-        elif r == 1:
-            child.send("\033[0n")
-        elif r == 2:
-            return
+    _console(child).wait_for_login(boot_deadline)
 
 
 def build_source_iso(guest_src_dir, out_iso):
@@ -132,41 +142,16 @@ def build_source_iso(guest_src_dir, out_iso):
     log("source ISO built: %s (%d bytes)" % (out_iso, os.path.getsize(out_iso)))
 
 
-# ---- in-guest command helper -------------------------------------------------
-
-_marker_seq = [0]
+# ---- in-guest command helper (delegates to the deterministic console) --------
 
 
 def run(child, cmd, timeout, echo=True):
     """Run one /bin/sh command in the guest; return (exit_status, output)."""
-    _marker_seq[0] += 1
-    mark = "OVMXP2C_%d" % _marker_seq[0]
-    child.sendline("%s; echo %s=$?=" % (cmd, mark))
-    child.expect(r"%s=(\d+)=" % mark, timeout=timeout)
-    rc = int(child.match.group(1))
-    out = child.before
-    if isinstance(out, bytes):
-        out = out.decode("ascii", "ignore")
-    out = out.replace("\r", "")
-    if echo:
-        log("$ %s   -> exit %d" % (cmd, rc))
-        text = out.strip()
-        if text:
-            for line in text.splitlines():
-                print("    | %s" % line, flush=True)
-    return rc, out
+    return _console(child).run(cmd, timeout, echo)
 
 
 def login(child, cmd_timeout):
-    child.timeout = cmd_timeout
-    child.send("\n")
-    child.expect(r"login:")
-    child.send("root\n")
-    child.expect(r"# ")
-    child.sendline("exec /bin/sh")
-    child.expect(r"# ")
-    child.sendline("PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH; umask 022")
-    child.expect(r"# ")
+    _console(child).login_root_sh(cmd_timeout)
 
 
 def main():
@@ -180,8 +165,13 @@ def main():
     # P2c uses its OWN cache/workdir: like P2b its installed image carries the
     # comp + syssrc sets (needed to build a kernel module in-guest), but it must
     # not collide with the P2b cache.
+    # SHARED installed-disk cache (rd vms-2d9): identical workdir + sets across
+    # P2a/P2b/P2c so ONE cached wd0.img (keyed on the NetBSD version only) serves
+    # all three. The OVMX module is built in-guest after boot, never baked into
+    # the disk -- so nothing OVMX-source-dependent belongs here. Keep IDENTICAL
+    # across the three drivers.
     workdir = env("NETBSD_WORKDIR",
-                  "/cache/anita-netbsd-p2c-%s-%s" % (version, arch))
+                  "/cache/anita-netbsd-shared-%s-%s" % (version, arch))
 
     guest_src_dir = env("OVMX_GUEST_SRC", "/netbsd/guest-src")
     src_iso = env("OVMX_SRC_ISO", "/tmp/ovmx-src-p2c.iso")
@@ -190,11 +180,31 @@ def main():
     # so the guest runs under TCG and every in-guest command is much slower than
     # a local KVM run. The build is quiet (redirected to a file) so it no longer
     # floods the console, but a slow guest can still take a while per command.
-    boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "1500"))
-    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "300"))
+    # Backstop headroom for a GENUINE cold install/boot (rd vms-2d9): the shared
+    # version-keyed cache means routine runs restore a warm image (~8min), but
+    # the first-ever/version-bump install boots cold on a possibly-loaded runner,
+    # where the boot and the first login can be slow. This is not a substitute
+    # for the deterministic console (that fixes the desync); it is only room for
+    # a legitimately slow cold boot so it does not trip a tight deadline.
+    boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "2400"))
+    # Generous per-command deadline: this heavy two-process proof runs NIGHTLY
+    # under TCG (see the job gating in ci.yml), where an occasional command
+    # (module load, the multi-process ops, or a slow emulated-CD staging step) can
+    # be much slower than a warm local run. 1200s per command with the 2400s boot
+    # deadline keeps a legitimately slow nightly run from tripping a tight clock.
+    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "1200"))
     build_timeout = int(env("NETBSD_BUILD_TIMEOUT", "1800"))
 
     skip_set = bool(env("P2C_SKIP_SET"))
+
+    # PRIME_ONLY (rd vms-2d9): the dedicated cache-priming CI job runs this driver
+    # with PRIME_ONLY=1 so it ONLY installs (or restores) the shared NetBSD disk
+    # into the shared workdir and exits 0 -- it does not boot, build, or run the
+    # proof. This is what serialises the one unavoidable cold install into a single
+    # job that then saves the cache, so the three parallel test jobs always restore
+    # a warm image and never install. The install uses the SAME workdir + sets as
+    # the test run below, so the primed image is exactly what the test jobs reuse.
+    prime_only = bool(env("PRIME_ONLY"))
 
     log("NetBSD %s/%s  (OVMX/NetBSD common event flags, P2c)" % (version, arch))
     log("release URL:   %s" % url)
@@ -214,7 +224,8 @@ def main():
         vmm_args=accel_args(),
     )
 
-    build_source_iso(guest_src_dir, src_iso)
+    if not prime_only:
+        build_source_iso(guest_src_dir, src_iso)
 
     child = None
     try:
@@ -229,6 +240,15 @@ def main():
                 return 3
         else:
             log("WARNING: no NETBSD_BOOT_ISO_SHA512 provided; skipping ISO verify")
+
+        if prime_only:
+            # Cache-priming mode: the shared disk is installed (or was restored)
+            # and verified; that is all this job exists to do. Exit 0 so the CI
+            # priming job's actions/cache SAVE runs and warms the shared image for
+            # every test job. No boot, no build, no proof here.
+            log("PRIME_ONLY: shared NetBSD disk is installed and present -- "
+                "cache primed, exiting 0 (no boot/build/proof)")
+            return 0
 
         a.persist = False
         cd_args = ["-drive",
@@ -273,8 +293,8 @@ def main():
         # compiler diagnostic is still visible.
         rc, out = run(child,
                       "cd /root/ovmx/kmod && make clean >/dev/null 2>&1; "
-                      "if make >/tmp/kmodbuild.log 2>&1; then echo KMOD_BUILD_OK; "
-                      "else echo KMOD_BUILD_FAIL; cat /tmp/kmodbuild.log; fi",
+                      "make >/tmp/kmodbuild.log 2>&1 && echo KMOD_BUILD_OK "
+                      "|| cat /tmp/kmodbuild.log",
                       build_timeout)
         if "KMOD_BUILD_OK" not in out:
             log("FAIL: in-guest kernel-module build failed (diagnostic above)")
@@ -290,10 +310,9 @@ def main():
         # Same quiet-console discipline as the module build above.
         rc, out = run(child,
                       "cd /root/ovmx/probe && "
-                      "if cc -O -Wall -Wextra -I. -o vmseflag "
-                      "vmseflag.c kif_transport_netbsd.c >/tmp/toolbuild.log 2>&1; "
-                      "then echo TOOL_BUILD_OK; "
-                      "else echo TOOL_BUILD_FAIL; cat /tmp/toolbuild.log; fi",
+                      "cc -O -Wall -Wextra -I. -o vmseflag "
+                      "vmseflag.c kif_transport_netbsd.c >/tmp/toolbuild.log 2>&1 "
+                      "&& echo TOOL_BUILD_OK || cat /tmp/toolbuild.log",
                       build_timeout)
         if "TOOL_BUILD_OK" not in out:
             log("FAIL: in-guest vmseflag build failed (diagnostic above)")

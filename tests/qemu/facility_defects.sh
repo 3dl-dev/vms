@@ -490,6 +490,7 @@ mbx-wrtattn-not-fired
 hiber-ast-not-delivered
 dcl-sysinput-mbx-not-read
 mmk-drive-command-not-sent
+mmk-build-image-not-activated
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -4667,6 +4668,59 @@ EOF
                       ;;
         esac;;
 
+    mmk-build-image-not-activated)
+        case "$_f" in
+        facility)     echo "the MMK-driven native BUILD (self-host spine #6, vms-d1b): the shipped MMK.EXE drives the static TCC.EXE over its persistent mailbox DCL to compile a REAL src/libvmssys runtime TU to an object -- the DCL foreign-command activation (src/vmsdcl/dcl_cmd_process.c dcl_exec_foreign_command -> dcl_activate_image fork+execve) that actually runs the staged compiler in the guest";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_mmk_build";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        # WHY A DEDICATED CONTROL (not a second suite on mmk-drive-command-not-sent).
+        # sp_send=0 (the drive control) reddens BOTH mmk suites by DEADLOCKING
+        # MMK in $HIBER -- two ~50s wedges do not fit run_tests.sh's 120s QEMU
+        # budget in one boot. This control reddens test_syssvc_mmk_build ALONE and
+        # FAST, with NO wedge: dcl_exec_foreign_command reports SS$_NORMAL WITHOUT
+        # activating the image, so the driven DCL "runs" the TCC command
+        # instantly, echoes the marker, and MMK completes -- but TCC never runs,
+        # so NO object is produced. The completion assertions stay GREEN (the
+        # drive did complete); the FIVE object/byte-identity assertions redden.
+        # ISOLATION: among every suite init.sh runs, ONLY test_syssvc_mmk_build
+        # activates an image through a DCL foreign command. mmk_drive's action is
+        # a WRITE builtin; test_syssvc_startup_service uses RUN (dcl_cmd_run, a
+        # different path); test_syssvc_imgact_* activate through sys$imgact, not
+        # DCL. So this mutation is attributable to the build drive alone.
+        why)          echo "dcl_exec_foreign_command stops ACTIVATING the image: it returns SS\$_NORMAL without calling dcl_activate_image, so a foreign command REPORTS success while running nothing -- the INV-6 facade shape (report success without doing the work). For the MMK build drive, the driven DCL's TCC command 'succeeds' instantly and MMK's drive completes, but the static TCC.EXE is never fork+execve'd, so no VMS_STRING.OBJ is produced and the byte-identity oracle has nothing to compare. Parsing, argv construction, the image resolution and every non-activation path are untouched; only whether the resolved image actually runs changes -- the exact question 'did MMK really drive a real compiler in the guest' the suite exists to answer.";;
+        require_fail) cat <<'EOF'
+the MMK-driven TCC.EXE produced VMS_STRING.OBJ in the guest (build #1)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the driven object is a valid ELF relocatable (ET_REL) -- TCC really compiled it in QEMU
+the driven object carries the runtime symbol vms_strlen -- it is a compile of the REAL src/libvmssys/vms_string.c, not a stand-in
+the MMK-driven TCC.EXE produced VMS_STRING.OBJ in the guest (build #2)
+VMS_STRING.OBJ is BYTE-IDENTICAL across two independent MMK-driven in-guest builds (deterministic, zero bash)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME ONE ROOT (the foreign command reports success but activates nothing), seen
+as every downstream absence of the object. With dcl_activate_image never called,
+the driven TCC command completes instantly with a success status, so drive #1
+runs to the end and the spawned DCL still echoes OVMXD1B:COMPILED -- the single
+marker "completion" assertion stays GREEN (this is a fast failure, not a $HIBER
+wedge). But no compiler ran, so drive #1 produces no object; the suite's
+object-keyed short-circuit then skips drive #2. Build #1's object is absent --
+the "produced VMS_STRING.OBJ (build #1)" require_fail -- and its four downstream
+reads redden with it: the valid-ELF and vms_strlen oracles (no object to
+inspect), the build-#2 object (drive #2 skipped), and the byte-identity check
+(nothing to compare). Five observations of the single fact "the driven compiler
+never ran". Nothing outside test_syssvc_mmk_build is touched: it is the only
+suite whose (spawned) DCL activates an image through a foreign command, and with
+no executive it honest-skips before ever spawning that DCL.
+EOF
+                      ;;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -5836,6 +5890,21 @@ apply_edit() {
         # and no end-of-command marker. After substitution the text no longer
         # matches, so a second apply is a no-op (the selftest requires).
         sed -i 's|    uint16_t len = d->dsc$w_length;|    uint16_t len = 0; /* NEGCTL mmk-drive-command-not-sent */|' "$_file";;
+
+    mmk-build-image-not-activated)
+        # UNIQUE TEXT, no range anchor needed: `int fc_status =
+        # dcl_activate_image(ctx, image_spec, linux_path, argv);` occurs exactly
+        # once in dcl_cmd_process.c -- it is the ONE point dcl_exec_foreign_command
+        # actually runs the resolved image. Replacing the call with SS$_NORMAL
+        # makes a foreign command REPORT success while activating nothing (the
+        # (void) casts keep linux_path/argv used, so no unused-variable warning;
+        # dcl_activate_image itself stays defined and is still called by the RUN
+        # path in the same file, so it does not become an unused static). For the
+        # MMK build drive, the driven TCC command then 'succeeds' without running
+        # TCC.EXE, so no object is produced -- the vms-d1b facade. After
+        # substitution the text no longer matches, so a second apply is a no-op
+        # (the selftest requires).
+        sed -i 's|    int fc_status = dcl_activate_image(ctx, image_spec, linux_path, argv);|    int fc_status = SS$_NORMAL; (void)ctx; (void)image_spec; (void)linux_path; (void)argv; /* NEGCTL mmk-build-image-not-activated */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

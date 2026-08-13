@@ -93,6 +93,19 @@ EXEC_DEFINE_HASHTABLE(vms_proc_hash, VMS_PROC_HASH_BITS);
 exec_lock_t vms_proc_hash_lock;
 
 /*
+ * This node's cluster system ID (P4-A locks, rd vms-ff7). DEFINED here in the
+ * module glue, exactly as the Linux vms.ko defines it in vms_module.c -- the
+ * CSID is a per-substrate module-lifecycle value, not portable executive logic
+ * (design record §4). The shared lock manager (src/kernel-core/vms_lock.c) reads
+ * it through the extern in vms_internal.h for its DLM directory/mastering
+ * resolution. 0 is reserved for "unmastered", so the default is a non-zero OVMX
+ * local placeholder; the connection manager assigns the real CSID at cluster
+ * join (0.4). This is NOT a VMS-authentic CSID value or layout (CLAUDE.md
+ * Rule 8).
+ */
+uint32_t vms_local_csid = 1;
+
+/*
  * vms_proc_get - find (or create) the vms_proc for `pid'. The shared facilities
  * need a stable per-process struct across a process's ioctls, keyed by pid; it
  * lives until the facility reaper reclaims it (its backing task has exited) or
@@ -192,15 +205,28 @@ vms_proc_get(pid_t pid)
 	exec_lock_init(&np->chan_lock);
 	exec_list_head_init(&np->mbx_channels);
 
+	/*
+	 * Lock-manager per-process state (P4-A, rd vms-ff7): this process's (initially
+	 * empty, self-linked) list of held locks, its count and their guard. Mirrors
+	 * the Linux vms.ko's proc registration (vms_module.c: INIT_LIST_HEAD(&locks)
+	 * + lock_count=0 + spin_lock_init(&lock_list_lock)). vms_proc_release_locks()
+	 * drains this list at process death.
+	 */
+	exec_list_head_init(&np->locks);
+	np->lock_count = 0;
+	exec_lock_init(&np->lock_list_lock);
+
 	exec_lock(&vms_proc_hash_lock);
 	exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
 		if (p->pid == pid) {
 			/* Lost the race: use the existing proc, drop ours. Its AST
-			 * pending rings and mailbox channel ring are still empty (just
-			 * created), so only the sync objects need tearing down before the
-			 * free -- a live kmutex/kcondvar must be destroyed on NetBSD. */
+			 * pending rings, mailbox channel ring and lock list are still
+			 * empty (just created), so only the sync objects need tearing
+			 * down before the free -- a live kmutex/kcondvar must be
+			 * destroyed on NetBSD. */
 			int m;
 			exec_unlock(&vms_proc_hash_lock);
+			exec_lock_destroy(&np->lock_list_lock);
 			exec_lock_destroy(&np->chan_lock);
 			exec_cv_destroy(&np->hiber_wq);
 			exec_lock_destroy(&np->hiber_lock);
@@ -256,9 +282,15 @@ vms_proc_free_claimed(struct vms_proc *proc)
 	int m;
 
 	vms_mbx_release_all(proc);
+	/* Release every lock this process still held ($DEQ-all at process death, P4-A
+	 * rd vms-ff7). Runs while lock_list_lock is still alive, before it is
+	 * destroyed below -- mirrors the Linux vms.ko's vms_proc_release_locks call
+	 * in vms_module.c's proc free. */
+	vms_proc_release_locks(proc);
 	vms_proc_rundown_asts(proc, PSL_C_KERNEL);
 	vms_proc_release_common_ef(proc);
 
+	exec_lock_destroy(&proc->lock_list_lock);
 	exec_lock_destroy(&proc->chan_lock);
 	exec_cv_destroy(&proc->hiber_wq);
 	exec_lock_destroy(&proc->hiber_lock);
@@ -301,9 +333,18 @@ vms_proctab_teardown(void)
 		 * any AST entries still queued at unload (all four modes: min
 		 * PSL_C_KERNEL == 0), then tear down each mode's guard and the mailbox/
 		 * access/hibernate sync objects. In the harness every process has closed
-		 * the device and no wait is in flight, so this is unraced. */
+		 * the device and no wait is in flight, so this is unraced.
+		 *
+		 * We do NOT call vms_proc_release_locks() here: vms_lock_cleanup() (run
+		 * just before this in vms_modcmd's FINI) has already freed every lock
+		 * entry by walking the resource database, so the entries this process's
+		 * p->locks list pointed at are gone -- the same asymmetry as the COMMON
+		 * event-flag teardown above (freed by vms_eflag_cleanup, not here). We
+		 * only destroy this process's lock_list_lock guard, which vms_lock_cleanup
+		 * did not own. */
 		vms_mbx_release_all(p);
 		vms_proc_rundown_asts(p, PSL_C_KERNEL);
+		exec_lock_destroy(&p->lock_list_lock);
 		exec_lock_destroy(&p->chan_lock);
 		exec_cv_destroy(&p->hiber_wq);
 		exec_lock_destroy(&p->hiber_lock);
@@ -322,21 +363,17 @@ vms_proctab_teardown(void)
  *
  * vms_ioctl_image_rundown() (src/kernel-core/vms_access.c) releases the image's
  * locks, channels and ASTs at rundown by calling three per-facility helpers.
- * On this NetBSD build only the AST facility is present, so vms_proc_rundown_asts
- * is DEFINED (vms_ast.c) and linked; vms_proc_rundown_locks (vms_lock.c, rd
- * vms-ff7) and vms_proc_rundown_channels (vms_mbx.c, rd vms-d7a) are not yet in
- * this module's SRCS. These WEAK no-op definitions keep the module link-coherent
- * and loadable until then, and are OVERRIDDEN by the real (strong) facility
- * definitions the moment vms_lock.c / vms_mbx.c join the build -- no edit here
- * needed when they land. This fabricates nothing (INV-6 / Rule 11): a substrate
- * with no lock or channel facility genuinely has no such resources to run down,
- * so running down nothing is the honest result, not a faked success.
+ * vms_proc_rundown_asts is DEFINED (vms_ast.c) and vms_proc_rundown_locks is now
+ * DEFINED (vms_lock.c, rd vms-ff7 -- locks joined this module's SRCS), so both
+ * link to their real facility definitions. Only vms_proc_rundown_channels has no
+ * definition: vms_mbx.c IS in SRCS but a mailbox channel is released at $DASSGN /
+ * process death (vms_mbx_release_all), not at image rundown, so there is nothing
+ * for it to run down. This WEAK no-op keeps the module link-coherent and would be
+ * OVERRIDDEN by a real strong definition if one ever lands. This fabricates
+ * nothing (INV-6 / Rule 11): a substrate with no image-rundown channel release
+ * genuinely has no such resource to run down, so running down nothing is the
+ * honest result, not a faked success.
  * ================================================================ */
-__attribute__((weak)) void
-vms_proc_rundown_locks(struct vms_proc *proc __unused, uint8_t min_acmode __unused)
-{
-}
-
 __attribute__((weak)) void
 vms_proc_rundown_channels(struct vms_proc *proc __unused, uint8_t min_acmode __unused)
 {
@@ -684,6 +721,51 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		}
 		return vms_facility_errno(r);
 
+	/*
+	 * Lock-manager facility (DLM, src/kernel-core/vms_lock.c) -- P4-A, rd
+	 * vms-ff7, the LAST executive facility. Same dispatch shape as the others:
+	 * find-or-create the caller's proc, hand the framework's kernel buffer `data'
+	 * straight to the shared facility, map its Linux-style return to a NetBSD
+	 * errno. All five are _IOWR and small (<= 104 bytes, vms_enq_args), so all
+	 * ride the framework pre-copy path -- no IOC_VOID big-io shape (unlike the
+	 * mailbox WRITE/READ transfer ops).
+	 *
+	 * $ENQ/$CONVERT take/upgrade a lock on a NAMED resource held in the ONE
+	 * executive resource database (vms_res_hash) every process shares, so an
+	 * incompatible request from a DIFFERENT process genuinely blocks or is
+	 * refused -- the INV-6-decisive property. A synchronous ($ENQW) request that
+	 * cannot be granted at once BLOCKS in the executive (exec_cv_wait_timeout in
+	 * enq_wait_sync) until granted or a wait-for cycle is detected (SS$_DEADLOCK);
+	 * that in-kernel wait can return -ERESTARTSYS, which vms_facility_errno maps
+	 * to ERESTART so the ioctl restarts, exactly as the event-flag WAITFR path
+	 * does. GET_RESMASTER is a read-only DLM directory/mastering view.
+	 */
+	case VMS_IOCTL_ENQ:
+	case VMS_IOCTL_DEQ:
+	case VMS_IOCTL_CONVERT:
+	case VMS_IOCTL_GETLKI:
+	case VMS_IOCTL_GET_RESMASTER:
+		uarg = data;
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+
+		switch (cmd) {
+		case VMS_IOCTL_ENQ:
+			r = vms_ioctl_enq(proc, (unsigned long)uarg);           break;
+		case VMS_IOCTL_DEQ:
+			r = vms_ioctl_deq(proc, (unsigned long)uarg);           break;
+		case VMS_IOCTL_CONVERT:
+			r = vms_ioctl_convert(proc, (unsigned long)uarg);       break;
+		case VMS_IOCTL_GETLKI:
+			r = vms_ioctl_getlki(proc, (unsigned long)uarg);        break;
+		case VMS_IOCTL_GET_RESMASTER:
+			r = vms_ioctl_get_resmaster(proc, (unsigned long)uarg); break;
+		default:
+			return ENOTTY;   /* unreachable */
+		}
+		return vms_facility_errno(r);
+
 	default:
 		return ENOTTY;
 	}
@@ -716,11 +798,16 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		/* Bring up the mailbox table's list guard too (the table starts empty
 		 * -- mailboxes are created on demand by $CREMBX). */
 		vms_mbx_init();
+		/* Bring up the lock manager (P4-A, rd vms-ff7): its two runtime-init'd
+		 * guards (resource hash + lock-ID tree) and the empty resource-database
+		 * bucket array, before any $ENQ can run. */
+		vms_lock_init();
 
 		error = devsw_attach("vms", NULL, &bmajor, &vms_cdevsw, &cmajor);
 		if (error != 0) {
 			printf("vms: devsw_attach failed: %d\n", error);
 			vms_eflag_cleanup();
+			vms_lock_cleanup();
 			vms_proctab_teardown();
 			vms_mbx_cleanup();
 			exec_lock_destroy(&vms_proc_hash_lock);
@@ -739,12 +826,17 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * not busy and no facility wait is in flight.
 		 */
 		devsw_detach(NULL, &vms_cdevsw);
-		/* Free the shared common-EF clusters, then tear down the procs (this
-		 * gives back each proc's mailbox channels and drains its ASTs while the
-		 * mailbox list guard is still alive), then free any remaining permanent
-		 * mailboxes and destroy the mailbox list guard, then the proc-table
-		 * guard. */
+		/* Free the shared common-EF clusters and every lock entry + resource
+		 * (vms_lock_cleanup, walking the resource database) FIRST, then tear down
+		 * the procs (this gives back each proc's mailbox channels, drains its
+		 * ASTs and destroys its lock_list_lock while the mailbox list guard is
+		 * still alive -- the lock ENTRIES it pointed at are already gone), then
+		 * free any remaining permanent mailboxes and destroy the mailbox list
+		 * guard, then the proc-table guard. Ordering mirrors the eflag asymmetry:
+		 * the facility frees its shared objects, then proctab_teardown frees the
+		 * PCBs without re-releasing them. */
 		vms_eflag_cleanup();
+		vms_lock_cleanup();
 		vms_proctab_teardown();
 		vms_mbx_cleanup();
 		exec_lock_destroy(&vms_proc_hash_lock);

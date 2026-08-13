@@ -7,16 +7,13 @@
  * DO NOT include this directly -- include "exec_rbtree.h", which selects this
  * file on a NetBSD kernel build. See that header for the op contract.
  *
- * STATUS -- CONTRACT ONLY, NOT YET COMPILED. The lock manager (vms_lock.c) is
- * not in the NetBSD `vms' module's SRCS (src/kernel-netbsd/Makefile builds only
- * vms_eflag.c today), so nothing on the NetBSD side includes exec_rbtree.h yet.
- * This header therefore DEFINES THE INTERFACE the shared vms_lock.c names -- so
- * the seam boundary is fixed and correct now (Phase G) -- and names the concrete
- * NetBSD mapping the lock-manager-on-NetBSD/VAX proof (rd vms-ff7, the P4-A lock
- * backend proof) will implement, exactly as exec_list_netbsd.{h,c} was written
- * for eflag's proof and exec_hash_netbsd.h for proctab's. It is the direct
- * analogue of exec_hash_netbsd.h: an OVMX-shipped, freestanding intrusive
- * container.
+ * STATUS -- IMPLEMENTED (rd vms-ff7). The lock manager (vms_lock.c) is now in
+ * the NetBSD `vms' module's SRCS (src/kernel-netbsd/Makefile), so this header's
+ * types + descent macros are compiled and the three balancing ops it declares
+ * (exec_rb_link_node / exec_rb_insert_color / exec_rb_erase) are DEFINED in the
+ * companion exec_rbtree_netbsd.c -- OVMX's own textbook red-black tree, the
+ * direct analogue of exec_list_netbsd.{h,c} for eflag and exec_hash_netbsd.{h,c}
+ * for proctab. It is an OVMX-shipped, freestanding intrusive container.
  *
  * WHY AN OVMX INTRUSIVE TREE AND NOT rb_tree(3): the shared contract is
  * LOW-LEVEL -- the core descends the tree itself (exec_rb_left/right), splices a
@@ -41,12 +38,11 @@
  *     splice-as-red-leaf, rebalance-after-insert, and erase-with-rebalance --
  *     the standard CLR red-black algorithm, OVMX's own implementation.
  *
- * Until vms-ff7 ships exec_rbtree_netbsd.c, the splice/rebalance/erase ops
- * forward to extern helpers that are declared but not defined; this file only
- * ever PARSES (no NetBSD TU expands these yet), so it cannot affect the live
- * NetBSD event-flag build. When locks join the NetBSD SRCS, the helpers get
- * their .c and the lock-manager proof runs, exactly as Phase C did for event
- * flags.
+ * The splice/rebalance/erase ops are declared here and DEFINED in
+ * exec_rbtree_netbsd.c, which every module TU that includes exec_rbtree.h links
+ * against (the lock manager is the sole consumer). The Linux backend's
+ * corresponding ops macro-forward to <linux/rbtree.h>; this backend supplies its
+ * own implementation, exactly as Phase C did for event flags' list.
  *
  * Clean-room (CLAUDE.md Rule 8): OVMX's own container; when implemented it maps
  * only to public, documented NetBSD KPIs or ships OVMX's own tree. No NetBSD or

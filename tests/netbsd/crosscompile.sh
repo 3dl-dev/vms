@@ -84,15 +84,22 @@ OBJ="$(mktemp -d)"
 #                    $PROCESS_SCAN/$HIBER/$WAKE/$SETIDENT. Binds the host task and
 #                    the intrusive process hash, so exec_hash_netbsd.c (the NetBSD
 #                    hash impl -- exec_hash_del_rcu/add/init) is listed with it.
+#   vms_lock.c     - the distributed lock manager (rd vms-ff7, the LAST executive
+#                    facility): $ENQ/$DEQ/$CONVERT/$GETLKI + DLM directory/master.
+#                    Sole exec_rbtree consumer (its lock-ID red-black tree), so
+#                    exec_rbtree_netbsd.c (OVMX's own intrusive tree -- the
+#                    exec_rb_link_node/insert_color/erase impl) is listed with it.
 SRCS=(
     "$KMOD/vms_netbsd.c"
     "$KMOD/exec_list_netbsd.c"
     "$KMOD/exec_hash_netbsd.c"
+    "$KMOD/exec_rbtree_netbsd.c"
     "$CORE/vms_eflag.c"
     "$CORE/vms_ast.c"
     "$CORE/vms_access.c"
     "$CORE/vms_mbx.c"
     "$CORE/vms_proctab.c"
+    "$CORE/vms_lock.c"
 )
 
 # ---- teeth check ---------------------------------------------------------
@@ -117,4 +124,4 @@ done
 echo "LD  vms.kmod.o (relocatable)"
 "$CC" -target x86_64-unknown-netbsd -nostdlib -r -o "$OBJ/vms.kmod.o" "$OBJ"/*.c.o
 
-echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c, vms_mbx.c, vms_proctab.c) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"
+echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c, vms_mbx.c, vms_proctab.c, vms_lock.c) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"

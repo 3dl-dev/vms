@@ -110,7 +110,9 @@ WORKDIR /src
 COPY build-libvmssys-vax.sh /usr/local/bin/build-libvmssys-vax.sh
 COPY build-vmsprocess-vax.sh /usr/local/bin/build-vmsprocess-vax.sh
 COPY build-libvms-vax.sh /usr/local/bin/build-libvms-vax.sh
+COPY build-activation-vax.sh /usr/local/bin/build-activation-vax.sh
 RUN chmod +x /usr/local/bin/build-libvmssys-vax.sh /usr/local/bin/build-vmsprocess-vax.sh \
-             /usr/local/bin/build-libvms-vax.sh
+             /usr/local/bin/build-libvms-vax.sh \
+             /usr/local/bin/build-activation-vax.sh
 
 CMD ["bash"]

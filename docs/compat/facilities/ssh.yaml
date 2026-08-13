@@ -1,19 +1,42 @@
 # Source of truth for the SSH row of the Compatibility Surface Register.
+# Scope note: SSH is a VMS-era surface — VSI OpenVMS ships an OpenSSH server as
+# part of TCP/IP Services. The compat surface is "SSH into the system and get an
+# authenticated DCL session," NOT OVMX's internal init plumbing.
 facility: ssh
-name: "SSH (OVMX-Added Remote Access)"
+name: "SSH remote login"
 domain: networking
-vms_ref: "N/A — OVMX addition, not a VMS surface"
+vms_ref: "VSI OpenVMS TCP/IP Services — SSH server (OpenSSH port)"
 scope_1_0: in
 plan_ref: vms-67f
 summary: >
-  vmsshd is real code (903 lines, libssh, full LOGINOUT-equivalent PCB
-  init, execs vmsdcl --login) but is unreachable: PID 1's start_sshd() call
-  is gone (no start_sshd under src/ovmx_init on origin/main) and there is
-  no NIC to reach it (see tcpip-services). Every SSH session also runs
-  euid=0 — no credential drop, a security facade-risk distinct from the
-  reachability gap.
+  SSH login to an authenticated interactive (DCL) session, as VSI OpenVMS
+  provides through TCP/IP Services. OVMX has the daemon but not the end-to-end
+  surface: it is blocked on the networking lane, and the authenticated session
+  does not yet assume the user's identity.
 last_reviewed: 2026-08-13
 items:
-  - {id: ssh$vmsshd-daemon, kind: feature, status: implemented, authenticity: real, vms: "vmsshd — SSH daemon, LOGINOUT-equivalent PCB init, execs vmsdcl --login", evidence: "src/vmsssh/vmssshd.c", notes: "903 lines, libssh-based, full PCB init."}
-  - {id: ssh$pid1-wiring, kind: feature, status: absent, authenticity: facade-risk, vms: "PID 1 startup wiring for sshd", evidence: "src/ovmx_init", scope_1_0: in, notes: "start_sshd() call deleted — no grep hit under src/ovmx_init on origin/main; also no NIC to reach it even if wired (see tcpip-services). vmsshd is unreachable in the shipped system."}
-  - {id: ssh$credential-drop, kind: feature, status: absent, authenticity: facade-risk, vms: "Privilege drop from root to the authenticated user's UIC/credentials", evidence: "src/vmsssh/vmssshd.c", scope_1_0: in, notes: "Every SSH session runs euid=0 — no credential drop. Security facade-risk distinct from the reachability gap. Cross-listed to Draper register."}
+  - id: ssh$remote-login
+    kind: feature
+    status: partial
+    authenticity: real
+    scope_1_0: in
+    vms: "SSH in and get an authenticated interactive DCL/LOGINOUT session"
+    evidence: src/vmsssh/vmssshd.c
+    notes: >
+      Daemon is real (vmsshd, ~903 lines, libssh, LOGINOUT-equivalent PCB init,
+      execs `vmsdcl --login`), but the end-to-end surface does not function in the
+      shipped system: there is no NIC to listen on (see tcpip-services) and the
+      daemon is not started at boot. Blocked on the networking lane (vms-67f) — a
+      reachability gap, honestly stated, not a fake success.
+  - id: ssh$identity
+    kind: feature
+    status: absent
+    authenticity: facade-risk
+    scope_1_0: in
+    vms: "Authenticated session assumes the user's UIC/privileges (LOGINOUT identity), not root"
+    evidence: src/vmsssh/vmssshd.c
+    notes: >
+      Every SSH session runs euid=0 — no credential drop to the authenticated
+      user's UIC. A security facade distinct from the reachability gap;
+      cross-listed to docs/draper-faithfulness-register.md. (Console LOGINOUT drops
+      identity correctly via vms_kif_setident; SSH does not.)

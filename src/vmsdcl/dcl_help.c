@@ -18,8 +18,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdint.h>
 
 #include "dcl/help.h"
+#include "dcl/hlb.h"
 #include "ssdef.h"
 
 /* ------------------------------------------------------------------ */
@@ -190,6 +192,185 @@ void help_close(help_lib_t *lib)
     if (!lib) return;
     node_free(lib->root);
     free(lib);
+}
+
+/* ------------------------------------------------------------------ */
+/* Compiled .HLB (LBRO) reading + HLP$LIBRARY search-list open          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A .HLB is the OVMX "LBRO" container (dcl/hlb.h) LIBRARY/HELP/CREATE writes,
+ * one module per level-1 key. Reading the modules in index order and
+ * concatenating their bodies reconstructs the exact numbered-level source, so a
+ * .HLB feeds the very same parser as a raw .HLP. All the helpers below return a
+ * malloc'd NUL-terminated text buffer (the caller frees) so multiple libraries
+ * can be concatenated for the HLP$LIBRARY search list.
+ */
+
+/* Grow-and-append `len` bytes of `add` onto *buf (*cap tracked); NUL-terminate.
+ * Returns 0 on success, -1 on OOM (leaving *buf as-is for the caller to free). */
+static int str_append(char **buf, size_t *len, size_t *cap,
+                      const char *add, size_t add_len)
+{
+    if (*len + add_len + 1 > *cap) {
+        size_t ncap = *cap ? *cap : 256;
+        while (*len + add_len + 1 > ncap) ncap *= 2;
+        char *nb = realloc(*buf, ncap);
+        if (!nb) return -1;
+        *buf = nb;
+        *cap = ncap;
+    }
+    memcpy(*buf + *len, add, add_len);
+    *len += add_len;
+    (*buf)[*len] = '\0';
+    return 0;
+}
+
+/* Read a whole file into a fresh NUL-terminated buffer, or NULL. */
+static char *read_whole_file(FILE *fp)
+{
+    if (fseek(fp, 0, SEEK_END) != 0) return NULL;
+    long n = ftell(fp);
+    if (n < 0) return NULL;
+    if (fseek(fp, 0, SEEK_SET) != 0) return NULL;
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) return NULL;
+    if (n > 0 && (long)fread(buf, 1, (size_t)n, fp) != n) {
+        free(buf);
+        return NULL;
+    }
+    buf[n] = '\0';
+    return buf;
+}
+
+/* Reconstruct the numbered-level text of an already-open .HLB (its header
+ * already read into *hdr, fp positioned just after the header). Concatenates
+ * each module's body in index order. Returns malloc'd text, or NULL. */
+static char *hlb_reconstruct_text(FILE *fp, const struct lbr_header *hdr)
+{
+    if (hdr->module_count > LBR_MAX_MODULES) return NULL;
+
+    struct lbr_module *mods = NULL;
+    if (hdr->module_count > 0) {
+        mods = calloc(hdr->module_count, sizeof(*mods));
+        if (!mods) return NULL;
+        if (fread(mods, sizeof(*mods), hdr->module_count, fp)
+                != hdr->module_count) {
+            free(mods);
+            return NULL;
+        }
+    }
+
+    char *text = NULL;
+    size_t len = 0, cap = 0;
+    if (str_append(&text, &len, &cap, "", 0) != 0) { /* ensure non-NULL "" */
+        free(mods);
+        return NULL;
+    }
+
+    for (uint32_t i = 0; i < hdr->module_count; i++) {
+        if (mods[i].length == 0) continue;
+        char *chunk = malloc(mods[i].length);
+        if (!chunk) { free(text); free(mods); return NULL; }
+        if (fseek(fp, (long)mods[i].offset, SEEK_SET) != 0 ||
+            fread(chunk, 1, mods[i].length, fp) != mods[i].length) {
+            free(chunk); free(text); free(mods);
+            return NULL;
+        }
+        if (str_append(&text, &len, &cap, chunk, mods[i].length) != 0) {
+            free(chunk); free(text); free(mods);
+            return NULL;
+        }
+        free(chunk);
+        /* A module body ends at its last authored line; guarantee a newline
+         * boundary before the next module's level-1 key. */
+        if (len > 0 && text[len - 1] != '\n')
+            (void)str_append(&text, &len, &cap, "\n", 1);
+    }
+
+    free(mods);
+    return text;
+}
+
+/* Return the numbered-level source text for one library file, auto-detecting a
+ * compiled .HLB (LBRO magic) versus a raw .HLP source. Malloc'd, or NULL. */
+static char *library_source_text(const char *linux_path)
+{
+    FILE *fp = fopen(linux_path, "rb");
+    if (!fp) return NULL;
+
+    struct lbr_header hdr;
+    char *text;
+    if (fread(&hdr, sizeof(hdr), 1, fp) == 1 && hdr.magic == LBR_MAGIC &&
+        hdr.type == LBR_TYPE_HELP) {
+        text = hlb_reconstruct_text(fp, &hdr);
+    } else {
+        text = read_whole_file(fp);
+    }
+    fclose(fp);
+    return text;
+}
+
+help_lib_t *help_open_hlb(const char *linux_path)
+{
+    FILE *fp = fopen(linux_path, "rb");
+    if (!fp) return NULL;
+    struct lbr_header hdr;
+    if (fread(&hdr, sizeof(hdr), 1, fp) != 1 || hdr.magic != LBR_MAGIC ||
+        hdr.type != LBR_TYPE_HELP) {
+        fclose(fp);
+        return NULL;
+    }
+    char *text = hlb_reconstruct_text(fp, &hdr);
+    fclose(fp);
+    if (!text) return NULL;
+    help_lib_t *lib = help_open_text(text);
+    free(text);
+    return lib;
+}
+
+help_lib_t *help_open_any(const char *linux_path)
+{
+    char *text = library_source_text(linux_path);
+    if (!text) return NULL;
+    help_lib_t *lib = help_open_text(text);
+    free(text);
+    return lib;
+}
+
+help_lib_t *help_open_libraries(const char *const paths[], int n)
+{
+    if (!paths || n <= 0) return NULL;
+
+    char *combined = NULL;
+    size_t len = 0, cap = 0;
+    int any = 0;
+
+    for (int i = 0; i < n; i++) {
+        if (!paths[i]) continue;
+        char *text = library_source_text(paths[i]);
+        if (!text) continue;
+        /* Keep libraries newline-separated so a key line never fuses onto the
+         * previous library's trailing body line. */
+        if (any && len > 0 && combined[len - 1] != '\n')
+            (void)str_append(&combined, &len, &cap, "\n", 1);
+        if (str_append(&combined, &len, &cap, text, strlen(text)) != 0) {
+            free(text);
+            free(combined);
+            return NULL;
+        }
+        free(text);
+        any = 1;
+    }
+
+    if (!any) {
+        free(combined);
+        return NULL;
+    }
+
+    help_lib_t *lib = help_open_text(combined);
+    free(combined);
+    return lib;
 }
 
 /* ------------------------------------------------------------------ */

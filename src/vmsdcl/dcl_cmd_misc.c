@@ -799,42 +799,103 @@ int cmd_accounting(struct dcl_command *cmd)
 /* ================================================================== */
 
 /*
- * Locate the HELP library file (numbered-level .HLP source) on disk.
+ * Build the ordered HELP library search list on disk (the HLP$LIBRARY search
+ * list). Each element is a readable Linux path to a .HLB (compiled) or .HLP
+ * (source) library; help_open_libraries() merges them so a key defined in an
+ * earlier library wins -- the documented VMS HELP search order.
  *
- * Order (first hit wins):
- *   1. $OVMX_HELPLIB   -- an explicit Linux path to the .HLP file. This is a
- *      LOCATOR override only (it never changes the CONTENT, which always comes
- *      from the real file), used by the test harness and advanced setups. It
- *      is the OVMX analogue of VMS's "HELP /LIBRARY=file".
- *   2. SYS$HELP:HELPLIB.HLP resolved through the process logical-name tables
- *      (the authentic VMS location: HLP$LIBRARY defaults to HELPLIB, searched
- *      in SYS$HELP -- VSI OpenVMS DCL Dictionary, HELP).
+ * Order (VSI OpenVMS DCL Dictionary, HELP):
+ *   1. $OVMX_HELPLIB  -- a LOCATOR override (a Linux path), the OVMX analogue of
+ *      "HELP/LIBRARY=file"; content always comes from the real file. Used by the
+ *      test harness and advanced setups.
+ *   2. HLP$LIBRARY, HLP$LIBRARY_1 .. HLP$LIBRARY_n -- the process/system HELP
+ *      library search-list logicals, translated in order. A translation with no
+ *      file type defaults to .HLB.
+ *   3. SYS$HELP:HELPLIB.HLB, then SYS$HELP:HELPLIB.HLP -- the default HELP
+ *      library, always searched last.
  *
- * Returns 1 and fills buf on success, 0 if no readable library was found.
+ * Duplicate resolved paths are dropped. Returns the element count.
  */
-static int help_locate_library(struct dcl_context *ctx, char *buf, size_t bufsz)
+#define HELP_MAX_LIBS 18
+
+/* Append a VMS spec (or Linux path) to the search list if it resolves to a
+ * readable file not already present. `linux_in` marks `spec` as already a Linux
+ * path (the $OVMX_HELPLIB locator). */
+static void help_add_library(struct dcl_context *ctx,
+                             char list[][1024], int *count,
+                             const char *spec, int linux_in)
 {
-    const char *env = getenv("OVMX_HELPLIB");
-    if (env && env[0]) {
-        FILE *fp = fopen(env, "r");
-        if (fp) {
-            fclose(fp);
-            snprintf(buf, bufsz, "%s", env);
-            return 1;
-        }
-    }
+    if (*count >= HELP_MAX_LIBS)
+        return;
 
     char resolved[1024];
-    if (dcl_resolve_path(ctx, VMS_HELPLIB_PATH, resolved, sizeof(resolved))
-            == 0) {
-        FILE *fp = fopen(resolved, "r");
-        if (fp) {
-            fclose(fp);
-            snprintf(buf, bufsz, "%s", resolved);
-            return 1;
-        }
+    if (linux_in) {
+        snprintf(resolved, sizeof(resolved), "%s", spec);
+    } else if (dcl_resolve_path(ctx, spec, resolved, sizeof(resolved)) != 0) {
+        return;
     }
-    return 0;
+
+    for (int i = 0; i < *count; i++)
+        if (strcmp(list[i], resolved) == 0)
+            return; /* already present */
+
+    FILE *fp = fopen(resolved, "rb");
+    if (!fp)
+        return;
+    fclose(fp);
+
+    snprintf(list[*count], 1024, "%s", resolved);
+    (*count)++;
+}
+
+/* Give a VMS spec a default .HLB file type if it names no type (the last
+ * path element -- after any ']' ':' '/' -- contains no '.'). */
+static void help_default_type(const char *spec, char *out, size_t outsz)
+{
+    const char *base = spec;
+    for (const char *p = spec; *p; p++)
+        if (*p == ']' || *p == ':' || *p == '/' || *p == '>')
+            base = p + 1;
+    if (strchr(base, '.'))
+        snprintf(out, outsz, "%s", spec);
+    else
+        snprintf(out, outsz, "%s.HLB", spec);
+}
+
+static int help_build_searchlist(struct dcl_context *ctx,
+                                 char list[][1024], int max)
+{
+    int count = 0;
+    (void)max;
+
+    /* 1. $OVMX_HELPLIB locator override. */
+    const char *env = getenv("OVMX_HELPLIB");
+    if (env && env[0])
+        help_add_library(ctx, list, &count, env, 1);
+
+    /* 2. HLP$LIBRARY, HLP$LIBRARY_1 .. HLP$LIBRARY_n. */
+    for (int n = 0; n <= 9 && count < HELP_MAX_LIBS; n++) {
+        char logname[32];
+        if (n == 0)
+            snprintf(logname, sizeof(logname), "HLP$LIBRARY");
+        else
+            snprintf(logname, sizeof(logname), "HLP$LIBRARY_%d", n);
+
+        char equiv[1024];
+        if (dcl_translate_logical(logname, equiv, sizeof(equiv)) != 0 ||
+            equiv[0] == '\0')
+            continue;
+
+        char spec[1024];
+        help_default_type(equiv, spec, sizeof(spec));
+        help_add_library(ctx, list, &count, spec, 0);
+    }
+
+    /* 3. The default library, always searched last (HLB preferred, then HLP). */
+    help_add_library(ctx, list, &count, "SYS$HELP:HELPLIB.HLB", 0);
+    help_add_library(ctx, list, &count, VMS_HELPLIB_PATH, 0);
+
+    return count;
 }
 
 /*
@@ -849,15 +910,20 @@ int cmd_help(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
-    char lib_path[1024];
-    if (!help_locate_library(ctx, lib_path, sizeof(lib_path))) {
+    static char lib_paths[HELP_MAX_LIBS][1024];
+    int nlibs = help_build_searchlist(ctx, lib_paths, HELP_MAX_LIBS);
+    if (nlibs == 0) {
         /* Honest failure -- no fake fallback (Rule 9 / INV-DCL). */
         dcl_error("HELP", 2, "OPENIN",
                   "error opening help library %s", VMS_HELPLIB_PATH);
         return SS$_NOSUCHFILE;
     }
 
-    help_lib_t *lib = help_open_file(lib_path);
+    const char *paths[HELP_MAX_LIBS];
+    for (int i = 0; i < nlibs; i++)
+        paths[i] = lib_paths[i];
+
+    help_lib_t *lib = help_open_libraries(paths, nlibs);
     if (!lib) {
         dcl_error("HELP", 2, "OPENIN",
                   "error opening help library %s", VMS_HELPLIB_PATH);

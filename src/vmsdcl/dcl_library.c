@@ -9,6 +9,11 @@
  *   Header:  magic(4) type(4) module_count(4) reserved(4)
  *   Modules: name(32) offset(4) length(4) per entry
  *   Data:    raw file contents concatenated
+ * The layout lives in dcl/hlb.h, shared with the HELP reader (dcl_help.c) so
+ * HELP can read the compiled .HLB directly. A HELP library stores one module
+ * per level-1 HELP key: LIBRARY/HELP/CREATE compiles a numbered-level .HLP
+ * source into this key-indexed binary form (VSI OpenVMS DCL Dictionary: LIBRARY,
+ * HELP -- unpublished .HLB byte layout is an OVMX design choice, Rule 8).
  *
  * OBJECT library (.OLB) format: a real object library that LINK.EXE consumes to
  * resolve undefined symbols by pulling members. It is a standard `ar` archive of
@@ -26,6 +31,7 @@
 
 #include "dcl/context.h"
 #include "dcl/parser.h"
+#include "dcl/hlb.h"
 #include "ssdef.h"
 #include "ovmx_olb.h"
 
@@ -35,32 +41,8 @@ extern void dcl_error(const char *facility, int severity, const char *ident,
 extern int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
                             char *linux_path, size_t path_size);
 
-/* Library file magic */
-#define LBR_MAGIC       0x4C42524F  /* "LBRO" - Library OVMX */
-
-/* Library types */
-#define LBR_TYPE_TEXT   1
-#define LBR_TYPE_HELP   2
-#define LBR_TYPE_OBJECT 3
-
-/* Limits */
-#define LBR_MAX_MODULES 1024
-#define LBR_NAME_LEN    32
-
-/* On-disk header (16 bytes) */
-struct lbr_header {
-    uint32_t magic;
-    uint32_t type;
-    uint32_t module_count;
-    uint32_t reserved;
-};
-
-/* On-disk module entry (40 bytes) */
-struct lbr_module {
-    char     name[LBR_NAME_LEN];
-    uint32_t offset;
-    uint32_t length;
-};
+/* The LBRO on-disk format (magic, type/limit constants, header + module
+ * structs) is defined in dcl/hlb.h so the HELP reader (dcl_help.c) shares it. */
 
 /*
  * Determine library type from qualifiers or file extension.
@@ -535,6 +517,331 @@ static int lbr_extract(struct dcl_context *ctx, struct dcl_command *cmd)
 }
 
 /* ==========================================================================
+ * HELP library (.HLB) compilation — LIBRARY/HELP/CREATE lib.HLB src.HLP.
+ *
+ * A VMS HELP library is keyed by its level-1 HELP topics: LIBRARY compiles a
+ * numbered-level .HLP source into one module per level-1 key (VSI OpenVMS DCL
+ * Dictionary: LIBRARY; Command Definition, Librarian, and Message Utilities
+ * Manual: Librarian -- "each help module is identified by its level-1 key").
+ * The module name is the level-1 key; the module data is that key's subtree
+ * (the "1 KEY" line through the line before the next "1 " line), so the reader
+ * reconstructs the exact numbered-level text (dcl_help.c help_open_hlb). The
+ * container bytes are the OVMX "LBRO" format (dcl/hlb.h), an OVMX design choice
+ * (Rule 8) -- the VMS .HLB byte layout is unpublished.
+ * ========================================================================== */
+
+/* One compiled HELP module: a level-1 key and the raw source bytes of its
+ * subtree (owned copy). */
+struct hlp_module {
+    char   name[LBR_NAME_LEN]; /* uppercased level-1 key, NUL/space padded */
+    char  *data;
+    size_t length;
+};
+
+/* True for a level-1 HELP key line: '1' in column 1 followed by whitespace. */
+static int hlp_is_level1(const char *line, size_t len)
+{
+    return len >= 2 && line[0] == '1' && (line[1] == ' ' || line[1] == '\t');
+}
+
+/* Fill an uppercased, NUL/space-padded module name from a level-1 key line
+ * ("1 COPY ...") -- the key is the first whitespace token after the digit. */
+static void hlp_key_name(const char *line, size_t len, char out[LBR_NAME_LEN])
+{
+    memset(out, 0, LBR_NAME_LEN);
+    size_t i = 1;
+    while (i < len && (line[i] == ' ' || line[i] == '\t')) i++;
+    size_t k = 0;
+    while (i < len && line[i] != ' ' && line[i] != '\t' && k < LBR_NAME_LEN - 1)
+        out[k++] = (char)toupper((unsigned char)line[i++]);
+}
+
+/* Split a .HLP source buffer into level-1-keyed modules. Returns a malloc'd
+ * array (*out_mods, *out_count), or SS$ error. Bytes before the first level-1
+ * key are ignored (VMS treats them as a leading comment). */
+static int hlp_split_source(const char *src, size_t src_len,
+                            struct hlp_module **out_mods, uint32_t *out_count)
+{
+    *out_mods = NULL;
+    *out_count = 0;
+
+    struct hlp_module *mods = NULL;
+    uint32_t count = 0, cap = 0;
+
+    size_t i = 0;
+    while (i < src_len) {
+        /* Extent of the current physical line [i, eol), with nl at line_end. */
+        size_t eol = i;
+        while (eol < src_len && src[eol] != '\n') eol++;
+        size_t line_end = (eol < src_len) ? eol + 1 : eol; /* include the '\n' */
+        size_t line_len = eol - i;
+
+        if (hlp_is_level1(src + i, line_len)) {
+            if (count == cap) {
+                uint32_t ncap = cap ? cap * 2 : 16;
+                struct hlp_module *nm = realloc(mods, ncap * sizeof(*nm));
+                if (!nm) { goto oom; }
+                mods = nm;
+                cap = ncap;
+            }
+            if (count >= LBR_MAX_MODULES) {
+                dcl_error("LIBRARIAN", 2, "TOOMANYMOD",
+                          "help source has too many level-1 keys");
+                goto fail;
+            }
+            hlp_key_name(src + i, line_len, mods[count].name);
+            mods[count].data = NULL;
+            mods[count].length = 0;
+            count++;
+        }
+
+        if (count > 0) {
+            /* Append this physical line (with its newline) to the current
+             * module's data. */
+            struct hlp_module *m = &mods[count - 1];
+            char *nd = realloc(m->data, m->length + (line_end - i) + 1);
+            if (!nd) goto oom;
+            m->data = nd;
+            memcpy(m->data + m->length, src + i, line_end - i);
+            m->length += (line_end - i);
+            m->data[m->length] = '\0';
+        }
+        i = line_end;
+    }
+
+    if (count == 0) {
+        dcl_error("LIBRARIAN", 2, "NOMODS",
+                  "help source contains no level-1 keys");
+        free(mods);
+        return SS$_BADPARAM;
+    }
+
+    *out_mods = mods;
+    *out_count = count;
+    return SS$_NORMAL;
+
+oom:
+    dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
+fail:
+    for (uint32_t j = 0; j < count; j++) free(mods[j].data);
+    free(mods);
+    return SS$_ABORT;
+}
+
+static void hlp_free_modules(struct hlp_module *mods, uint32_t count)
+{
+    for (uint32_t j = 0; j < count; j++) free(mods[j].data);
+    free(mods);
+}
+
+/* Write an LBRO HELP container from a module array. */
+static int hlp_write_library(const char *lib_path, const char *vms_name,
+                             struct hlp_module *mods, uint32_t count)
+{
+    FILE *fp = fopen(lib_path, "wb");
+    if (!fp) {
+        dcl_error("LIBRARIAN", 2, "OPENOUT",
+                  "error creating library - %s", vms_name);
+        return SS$_FILACCERR;
+    }
+
+    struct lbr_header hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    hdr.magic = LBR_MAGIC;
+    hdr.type = LBR_TYPE_HELP;
+    hdr.module_count = count;
+
+    uint32_t data_base = (uint32_t)(sizeof(hdr) + count * sizeof(struct lbr_module));
+
+    struct lbr_module *idx = calloc(count ? count : 1, sizeof(*idx));
+    if (!idx) {
+        dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
+        fclose(fp);
+        return SS$_ABORT;
+    }
+    uint32_t off = data_base;
+    for (uint32_t j = 0; j < count; j++) {
+        memcpy(idx[j].name, mods[j].name, LBR_NAME_LEN);
+        idx[j].offset = off;
+        idx[j].length = (uint32_t)mods[j].length;
+        off += (uint32_t)mods[j].length;
+    }
+
+    int ok = (fwrite(&hdr, sizeof(hdr), 1, fp) == 1) &&
+             (count == 0 || fwrite(idx, sizeof(*idx), count, fp) == count);
+    for (uint32_t j = 0; ok && j < count; j++) {
+        if (mods[j].length &&
+            fwrite(mods[j].data, 1, mods[j].length, fp) != mods[j].length)
+            ok = 0;
+    }
+    free(idx);
+    if (!ok) {
+        dcl_error("LIBRARIAN", 2, "WRITEERR", "error writing library - %s",
+                  vms_name);
+        fclose(fp);
+        return SS$_ABORT;
+    }
+    fclose(fp);
+    return SS$_NORMAL;
+}
+
+/* Read a whole source file into a fresh buffer (*out/*out_len). */
+static int hlp_read_source(const char *src_path, const char *vms_name,
+                           char **out, size_t *out_len)
+{
+    FILE *src = fopen(src_path, "rb");
+    if (!src) {
+        dcl_error("LIBRARIAN", 2, "OPENIN",
+                  "error opening source file - %s", vms_name);
+        return SS$_NOSUCHFILE;
+    }
+    fseek(src, 0, SEEK_END);
+    long n = ftell(src);
+    if (n < 0) { fclose(src); return SS$_ABORT; }
+    fseek(src, 0, SEEK_SET);
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) {
+        dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
+        fclose(src);
+        return SS$_ABORT;
+    }
+    if (n > 0 && (long)fread(buf, 1, (size_t)n, src) != n) {
+        dcl_error("LIBRARIAN", 2, "READERR",
+                  "error reading source file - %s", vms_name);
+        free(buf);
+        fclose(src);
+        return SS$_ABORT;
+    }
+    buf[n] = '\0';
+    fclose(src);
+    *out = buf;
+    *out_len = (size_t)n;
+    return SS$_NORMAL;
+}
+
+/*
+ * LIBRARY/HELP/CREATE lib.HLB src.HLP  -- compile a .HLP source into a .HLB
+ * (create=1, fresh library), or LIBRARY/HELP lib.HLB src.HLP (create=0, merge:
+ * modules for level-1 keys already present are replaced, new keys appended).
+ */
+static int hlp_compile(struct dcl_context *ctx, struct dcl_command *cmd,
+                       int create)
+{
+    if (cmd->param_count < 2) {
+        dcl_error("LIBRARIAN", 2, "BADPARAM",
+                  "usage: LIBRARY/HELP/CREATE library-file.HLB source-file.HLP");
+        return SS$_BADPARAM;
+    }
+
+    char lib_path[1024], src_path[1024];
+    dcl_resolve_path(ctx, cmd->params[0], lib_path, sizeof(lib_path));
+    dcl_resolve_path(ctx, cmd->params[1], src_path, sizeof(src_path));
+
+    char *src = NULL;
+    size_t src_len = 0;
+    int st = hlp_read_source(src_path, cmd->params[1], &src, &src_len);
+    if (!$VMS_STATUS_SUCCESS(st)) return st;
+
+    struct hlp_module *newmods = NULL;
+    uint32_t newcount = 0;
+    st = hlp_split_source(src, src_len, &newmods, &newcount);
+    free(src);
+    if (!$VMS_STATUS_SUCCESS(st)) return st;
+
+    struct hlp_module *final = newmods;
+    uint32_t final_count = newcount;
+    struct hlp_module *merged = NULL;
+
+    if (!create) {
+        /* Merge onto the existing library: keep old modules whose key is not
+         * being replaced, then all the new ones. */
+        struct lbr_header hdr;
+        struct lbr_module *old = NULL;
+        FILE *fp = lbr_open(lib_path, &hdr, &old, cmd->params[0]);
+        if (fp) {
+            uint32_t mcap = hdr.module_count + newcount;
+            merged = calloc(mcap ? mcap : 1, sizeof(*merged));
+            if (!merged) {
+                dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
+                free(old); fclose(fp);
+                hlp_free_modules(newmods, newcount);
+                return SS$_ABORT;
+            }
+            uint32_t mc = 0;
+            for (uint32_t i = 0; i < hdr.module_count; i++) {
+                int replaced = 0;
+                for (uint32_t k = 0; k < newcount; k++)
+                    if (strncasecmp(old[i].name, newmods[k].name, LBR_NAME_LEN) == 0) {
+                        replaced = 1; break;
+                    }
+                if (replaced) continue;
+                memcpy(merged[mc].name, old[i].name, LBR_NAME_LEN);
+                merged[mc].length = old[i].length;
+                merged[mc].data = malloc(old[i].length ? old[i].length : 1);
+                if (!merged[mc].data) {
+                    dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
+                    free(old); fclose(fp);
+                    hlp_free_modules(merged, mc);
+                    hlp_free_modules(newmods, newcount);
+                    return SS$_ABORT;
+                }
+                fseek(fp, (long)old[i].offset, SEEK_SET);
+                if (old[i].length &&
+                    fread(merged[mc].data, 1, old[i].length, fp) != old[i].length) {
+                    free(old); fclose(fp);
+                    hlp_free_modules(merged, mc + 1);
+                    hlp_free_modules(newmods, newcount);
+                    return SS$_ABORT;
+                }
+                mc++;
+            }
+            for (uint32_t k = 0; k < newcount; k++) {
+                memcpy(merged[mc].name, newmods[k].name, LBR_NAME_LEN);
+                merged[mc].data = newmods[k].data;   /* transfer ownership */
+                merged[mc].length = newmods[k].length;
+                newmods[k].data = NULL;
+                mc++;
+            }
+            free(old);
+            fclose(fp);
+            hlp_free_modules(newmods, newcount); /* frees only NULLed shells */
+            final = merged;
+            final_count = mc;
+        }
+        /* If the library does not exist yet, fall through and create it. */
+    }
+
+    st = hlp_write_library(lib_path, cmd->params[0], final, final_count);
+    hlp_free_modules(final, final_count);
+
+    if ($VMS_STATUS_SUCCESS(st))
+        printf("%%LIBRARIAN-S-%s, help library %s %s (%u module%s)\n",
+               create ? "CREATED" : "INSERTED", cmd->params[0],
+               create ? "created" : "updated", final_count,
+               final_count == 1 ? "" : "s");
+    return st;
+}
+
+/* Route a HELP-library (.HLB, or /HELP) LIBRARY command. */
+static int hlp_dispatch(struct dcl_context *ctx, struct dcl_command *cmd)
+{
+    if (dcl_has_qualifier(cmd, "LIST"))    return lbr_list(ctx, cmd);
+    if (dcl_has_qualifier(cmd, "EXTRACT")) return lbr_extract(ctx, cmd);
+    if (dcl_has_qualifier(cmd, "CREATE")) {
+        /* With a source file, compile it; otherwise create an empty library. */
+        if (cmd->param_count >= 2) return hlp_compile(ctx, cmd, 1);
+        return lbr_create(ctx, cmd);
+    }
+    /* LIBRARY/HELP lib.HLB src.HLP (no /CREATE) = insert/merge. */
+    if (dcl_has_qualifier(cmd, "INSERT") || cmd->param_count >= 2)
+        return hlp_compile(ctx, cmd, 0);
+    /* Only the library named: show its directory. */
+    if (cmd->param_count >= 1) return lbr_list(ctx, cmd);
+    dcl_error("LIBRARIAN", 2, "NOLIB", "no library file specified");
+    return SS$_BADPARAM;
+}
+
+/* ==========================================================================
  * OBJECT library (.OLB) operations — real object-library semantics (vms-ca9).
  *
  * Unlike the TEXT/HELP "LBRO" format above, an OBJECT library is a standard `ar`
@@ -840,6 +1147,13 @@ int cmd_library(struct dcl_command *cmd)
     if (cmd->param_count >= 1 &&
         lbr_get_type(cmd, cmd->params[0]) == LBR_TYPE_OBJECT) {
         return olb_dispatch(ctx, cmd);
+    }
+
+    /* HELP libraries (.HLB, or /HELP) compile a numbered-level .HLP source into
+     * a key-indexed .HLB that the HELP reader consumes (vms-01b). */
+    if (cmd->param_count >= 1 &&
+        lbr_get_type(cmd, cmd->params[0]) == LBR_TYPE_HELP) {
+        return hlp_dispatch(ctx, cmd);
     }
 
     if (dcl_has_qualifier(cmd, "CREATE")) {

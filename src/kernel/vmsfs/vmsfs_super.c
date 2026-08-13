@@ -127,7 +127,7 @@ static void vmsfs_put_super(struct super_block *sb)
             path_put(&sbi->backing);
         } else {
             kfree(sbi->home);
-            kfree(sbi->bitmap);
+            kfree(sbi->vol.bitmap);
         }
         kfree(sbi);
         sb->s_fs_info = NULL;
@@ -193,10 +193,10 @@ static int vmsfs_statfs(struct dentry *dentry, struct kstatfs *buf)
     /* Block-device mode — report from cached home block */
     buf->f_type = VMSFS_MAGIC;
     buf->f_bsize = VMSFS_BLOCK_SIZE;
-    buf->f_blocks = sbi->total_blocks;
-    buf->f_bfree = sbi->free_blocks;
-    buf->f_bavail = sbi->free_blocks;
-    buf->f_files = sbi->max_files;
+    buf->f_blocks = sbi->vol.total_blocks;
+    buf->f_bfree = sbi->vol.free_blocks;
+    buf->f_bavail = sbi->vol.free_blocks;
+    buf->f_files = sbi->vol.max_files;
     buf->f_ffree = 0;  /* TODO: count free file headers */
     buf->f_namelen = VMSFS_FULLNAME_MAX;
     return 0;
@@ -399,35 +399,40 @@ static int vmsfs_fill_super_blkdev(struct super_block *sb, void *data,
         goto err_brelse;
     }
 
-    /* Extract geometry */
-    sbi->bitmap_lbn = le32_to_cpu(hb->hb_bitmap_lbn);
-    sbi->bitmap_blocks = le32_to_cpu(hb->hb_bitmap_blocks);
-    sbi->index_lbn = le32_to_cpu(hb->hb_index_lbn);
-    sbi->max_files = le32_to_cpu(hb->hb_max_files);
-    sbi->data_lbn = le32_to_cpu(hb->hb_data_lbn);
-    sbi->total_blocks = le32_to_cpu(hb->hb_total_blocks);
-    sbi->free_blocks = le32_to_cpu(hb->hb_free_blocks);
+    /*
+     * Extract geometry into the host-neutral volume descriptor (rd vms-d69).
+     * vol.host is this super_block, so the substrate-neutral allocator and
+     * directory scanner reach the volume via vmsfs_bget(vol->host, lbn).
+     */
+    sbi->vol.host = sb;
+    sbi->vol.bitmap_lbn = le32_to_cpu(hb->hb_bitmap_lbn);
+    sbi->vol.bitmap_blocks = le32_to_cpu(hb->hb_bitmap_blocks);
+    sbi->vol.index_lbn = le32_to_cpu(hb->hb_index_lbn);
+    sbi->vol.max_files = le32_to_cpu(hb->hb_max_files);
+    sbi->vol.data_lbn = le32_to_cpu(hb->hb_data_lbn);
+    sbi->vol.total_blocks = le32_to_cpu(hb->hb_total_blocks);
+    sbi->vol.free_blocks = le32_to_cpu(hb->hb_free_blocks);
 
     brelse(bh);
     bh = NULL;
 
     /* Read and cache the storage bitmap */
-    bm_bytes = sbi->bitmap_blocks * VMSFS_BLOCK_SIZE;
-    sbi->bitmap = kzalloc(bm_bytes, GFP_KERNEL);
-    if (!sbi->bitmap) {
+    bm_bytes = sbi->vol.bitmap_blocks * VMSFS_BLOCK_SIZE;
+    sbi->vol.bitmap = kzalloc(bm_bytes, GFP_KERNEL);
+    if (!sbi->vol.bitmap) {
         ret = -ENOMEM;
         goto err_free_home;
     }
 
-    for (i = 0; i < sbi->bitmap_blocks; i++) {
-        bh = sb_bread(sb, sbi->bitmap_lbn + i);
+    for (i = 0; i < sbi->vol.bitmap_blocks; i++) {
+        bh = sb_bread(sb, sbi->vol.bitmap_lbn + i);
         if (!bh) {
             if (!silent)
                 pr_err("vmsfs: unable to read bitmap block %u\n", i);
             ret = -EIO;
             goto err_free_bitmap;
         }
-        memcpy((char *)sbi->bitmap + i * VMSFS_BLOCK_SIZE,
+        memcpy((char *)sbi->vol.bitmap + i * VMSFS_BLOCK_SIZE,
                bh->b_data, VMSFS_BLOCK_SIZE);
         brelse(bh);
     }
@@ -458,13 +463,13 @@ static int vmsfs_fill_super_blkdev(struct super_block *sb, void *data,
 
     pr_info("vmsfs: mounted block device, volume '%.12s', %u blocks, "
             "%u free, %u max files\n",
-            sbi->home->hb_volname, sbi->total_blocks,
-            sbi->free_blocks, sbi->max_files);
+            sbi->home->hb_volname, sbi->vol.total_blocks,
+            sbi->vol.free_blocks, sbi->vol.max_files);
 
     return 0;
 
 err_free_bitmap:
-    kfree(sbi->bitmap);
+    kfree(sbi->vol.bitmap);
 err_free_home:
     kfree(sbi->home);
     goto err_free_sbi;

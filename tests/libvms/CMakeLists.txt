@@ -137,6 +137,38 @@ target_link_libraries(test_libvms_identity PRIVATE
 )
 add_test(NAME test_libvms_identity COMMAND test_libvms_identity)
 
+# Test 11b: vms-98c (self-host spine #4, exec-drive prereq A) — lib$spawn
+# creates a REAL DCL subprocess that runs the command, replacing the /bin/sh
+# facade. Redirects SYS$SYSTEM to a private root and stages the build's own
+# vmsdcl there as DCL.EXE (passed in as VMSDCL_PATH), so the real lib$spawn
+# resolve+fork+exec path runs hermetically. Needs vmsfs (filespec translator)
+# and vmslnm (SYS$SYSTEM redirect), same as test_libvms_identity above.
+add_executable(test_libvms_lib_spawn_dcl
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_spawn_dcl.c)
+target_include_directories(test_libvms_lib_spawn_dcl PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+)
+add_dependencies(test_libvms_lib_spawn_dcl vmsdcl)
+target_link_libraries(test_libvms_lib_spawn_dcl PRIVATE
+    vms
+    vmsfs
+    vmslnm
+    pthread
+    m
+)
+add_test(NAME test_libvms_lib_spawn_dcl COMMAND test_libvms_lib_spawn_dcl)
+# The DCL image path is handed over at RUNTIME via the environment, NOT as a
+# quoted -D compile definition: a string compile definition puts backslash-
+# escaped quotes into compile_commands.json, which the kif_caller_census gate's
+# reader does not unescape. $<TARGET_FILE:vmsdcl> keeps it hermetic (the image
+# the build produced). SKIP_RETURN_CODE lets the test skip honestly if the
+# variable is ever absent (e.g. run standalone) rather than fake a pass.
+set_tests_properties(test_libvms_lib_spawn_dcl PROPERTIES
+    ENVIRONMENT "OVMX_TEST_DCL_IMAGE=$<TARGET_FILE:vmsdcl>"
+    SKIP_RETURN_CODE 77)
+
 # Test 12: vms-2b8 — the SYSTEM protection category is "UIC group <=
 # MAXSYSGROUP", not "UID 0". Guards the rule RMS enforces file protection
 # with once a session really runs as the authenticated user's UIC.

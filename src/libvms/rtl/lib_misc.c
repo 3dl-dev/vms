@@ -9,6 +9,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <stdio.h>
 #include <glob.h>
@@ -17,7 +19,10 @@
 #include "lib$routines.h"
 #include "prcdef.h"
 #include "lnmdef.h"
+#include "clidef.h"          /* CLI$M_NOWAIT — lib$spawn "flags" bits        */
+#include "ovmx_layout.h"     /* VMS_DCL_PATH — the DCL CLI image filespec    */
 #include "rmsdef.h"
+#include "vmsfs/filespec.h"  /* vmsfs_to_linux_path — VMS filespec resolver  */
 #include <pthread.h>
 
 /*
@@ -186,27 +191,82 @@ uint32_t lib$getdvi(const uint32_t *item_code, uint16_t chan,
 }
 
 /*
- * lib$spawn - Spawn a subprocess.
+ * lib$spawn - Spawn a subprocess running the DCL command interpreter.
  *
- * Creates a subprocess to execute the given command. If command is
- * NULL, spawns an interactive shell. Waits for completion and
- * returns the subprocess exit status.
+ * VMS CONTRACT (public: VSI OpenVMS RTL Library (LIB$) Routines Reference
+ * Manual, LIB$SPAWN, and the DCL Dictionary SPAWN command). LIB$SPAWN
+ * creates a subprocess that runs a DCL command interpreter. When a command
+ * string is supplied and no input file is, the subprocess executes that
+ * single command and then terminates; otherwise it takes its commands from
+ * SYS$INPUT (the input file, or the parent's SYS$INPUT). SYS$OUTPUT is the
+ * output file when supplied. Unless CLI$M_NOWAIT is set the caller HIBERNATEs
+ * until the subprocess completes, and the completion status is returned in the
+ * completion-status argument.
+ *
+ * WHAT THIS USED TO BE, AND WHY THAT WAS A FACADE (vms-98c). The prior body
+ * fork+exec'd `/bin/sh -c <command>` -- the Unix Bourne shell, NOT a DCL
+ * command interpreter. It reported SS$_NORMAL for a "SHOW TIME" that /bin/sh
+ * cannot parse and would never run as DCL. That is the exact class of defect
+ * CLAUDE.md Rule 9 / INV-6 exist to kill: a userspace stand-in that reports
+ * success while doing something other than the VMS thing. It is now a REAL
+ * DCL subprocess: the SAME image JOB_CONTROL and PROVISION exec to hand a
+ * user a session -- SYS$SYSTEM:DCL.EXE -- run against the command.
+ *
+ * HONEST BOUNDARY. If SYS$SYSTEM:DCL.EXE cannot be resolved or is not an
+ * executable image, this returns an authentic VMS error (SS$_NOSUCHFILE) and
+ * runs NOTHING -- it never falls back to /bin/sh, and never reports success
+ * for a command it did not run. Resolving and fork/exec'ing the CLI image is
+ * a genuine child process running genuine code; it does not fabricate any
+ * executive facility, so it needs no /dev/vms.
+ *
+ * SCOPE (self-host spine #4, prereq A of vms-ec70's exec-drive). This is the
+ * synchronous "run one DCL command, give me its status" primitive and the
+ * /NOWAIT create. It does NOT itself implement the PERSISTENT-subprocess +
+ * mailbox + write-attention-AST protocol MMK's build_target.c uses to stream
+ * many commands into one long-lived DCL and read each command's $STATUS back
+ * (that is prereqs B/C -- the mailbox IPC and the write-attention AST). See
+ * the "DEFERRED" note at the end of this routine.
  *
  * Parameters:
- *   command     - Command string descriptor (or NULL for interactive)
- *   input_file  - SYS$INPUT redirection (or NULL)
- *   output_file - SYS$OUTPUT redirection (or NULL)
- *   flags       - Spawn flags (ignored)
- *   prcnam      - Subprocess name (ignored)
+ *   command     - Command string; DCL executes it, then the subprocess ends
+ *                 (NULL -> interactive DCL reading from SYS$INPUT)
+ *   input_file  - SYS$INPUT VMS filespec (or NULL to inherit)
+ *   output_file - SYS$OUTPUT VMS filespec (or NULL to inherit)
+ *   flags       - CLI$M_ flags longword; CLI$M_NOWAIT honored (others accepted
+ *                 and ignored -- see the field note)
+ *   prcnam      - Subprocess name (accepted, not yet applied: needs $CREPRC
+ *                 executive registration -- prereq for MMK's named subprocess)
  *   pid         - Receives subprocess PID (or NULL)
- *   status      - Receives exit status (or NULL)
- *   efn         - Event flag (ignored)
- *   astadr      - AST routine (ignored)
- *   astprm      - AST parameter (ignored)
- *   prompt      - Prompt string (ignored)
- *   cli_name    - CLI name (ignored)
- *   table_name  - CLI table name (ignored)
+ *   status      - Receives the subprocess completion status (or NULL)
+ *   efn         - Event flag to set on completion (accepted, not yet wired)
+ *   astadr      - Completion AST routine (accepted, not yet wired)
+ *   astprm      - Completion AST parameter (accepted, not yet wired)
+ *   prompt      - Prompt string (only meaningful for interactive; ignored)
+ *   cli_name    - CLI name (accepted; OVMX's one CLI is DCL)
+ *   table_name  - CLI table name (accepted; OVMX's one CLI is DCL)
+ *
+ * Return: SS$_NORMAL when the subprocess was created (the completion status
+ * lands in *status); an error status when it could not be created.
  */
+
+/* Child pre-exec sentinels: distinct exit codes so the parent can tell "the
+ * CLI image never ran" (a spawn failure) from a command that ran and failed.
+ * Chosen high to avoid colliding with DCL's own 0/1 image exit. */
+#define OVMX_SPAWN_IOERR    250   /* SYS$INPUT/SYS$OUTPUT redirection failed */
+#define OVMX_SPAWN_EXECERR  251   /* execl() of the CLI image failed         */
+
+/* Resolve a VMS filespec to a Linux path for open()/freopen(); if translation
+ * fails, fall back to the spec verbatim (mirrors ovmx_job_control's
+ * vms_to_linux()), so a caller passing a bare Linux path still works. */
+static void spawn_resolve_spec(const struct dsc$descriptor_s *spec,
+                               char *buf, size_t bufsz) {
+    char raw[1024];
+    dsc$strncpy(raw, spec, sizeof(raw));
+    if (vmsfs_to_linux_path(raw, buf, bufsz) != 1) {
+        snprintf(buf, bufsz, "%s", raw);
+    }
+}
+
 uint32_t lib$spawn(const struct dsc$descriptor_s *command,
                    const struct dsc$descriptor_s *input_file,
                    const struct dsc$descriptor_s *output_file,
@@ -219,62 +279,123 @@ uint32_t lib$spawn(const struct dsc$descriptor_s *command,
                    const struct dsc$descriptor_s *prompt,
                    const struct dsc$descriptor_s *cli_name,
                    const struct dsc$descriptor_s *table_name) {
-    (void)flags; (void)prcnam; (void)efn; (void)astadr; (void)astprm;
+    (void)prcnam; (void)efn; (void)astadr; (void)astprm;
     (void)prompt; (void)cli_name; (void)table_name;
 
-    char cmd[4096] = "";
-    char *argv[4];
+    const uint32_t spawn_flags = flags ? *flags : 0;
+    const int nowait = (spawn_flags & CLI$M_NOWAIT) != 0;
 
-    if (command && command->dsc$a_pointer && command->dsc$w_length > 0) {
+    /*
+     * Resolve the DCL CLI image through the VMS filespec translator so a
+     * redefined SYS$SYSTEM (e.g. an alternate system root) is honored, the
+     * same resolution PROVISION.EXE and JOB_CONTROL use. This is userspace
+     * (device table + logical names); it needs no executive.
+     */
+    char dcl_path[1024];
+    if (vmsfs_to_linux_path(VMS_DCL_PATH, dcl_path, sizeof(dcl_path)) != 1)
+        return SS$_NOSUCHFILE;
+
+    /*
+     * The CLI image must be a real, executable regular file. If it is not,
+     * FAIL HONESTLY -- do not fall back to any other program. A spawn that
+     * cannot find its command interpreter created no subprocess.
+     */
+    struct stat st;
+    if (stat(dcl_path, &st) != 0 || !S_ISREG(st.st_mode) ||
+        access(dcl_path, X_OK) != 0)
+        return SS$_NOSUCHFILE;
+
+    char cmd[4096] = "";
+    const int have_cmd = command && command->dsc$a_pointer &&
+                         command->dsc$w_length > 0;
+    if (have_cmd)
         dsc$strncpy(cmd, command, sizeof(cmd));
-        argv[0] = "/bin/sh";
-        argv[1] = "-c";
-        argv[2] = cmd;
-        argv[3] = NULL;
-    } else {
-        /* No command = spawn interactive shell */
-        argv[0] = "/bin/sh";
-        argv[1] = NULL;
-        argv[2] = NULL;
-        argv[3] = NULL;
-    }
+
+    char in_path[1024]  = "";
+    char out_path[1024] = "";
+    const int have_in  = input_file  && input_file->dsc$a_pointer &&
+                         input_file->dsc$w_length  > 0;
+    const int have_out = output_file && output_file->dsc$a_pointer &&
+                         output_file->dsc$w_length > 0;
+    if (have_in)  spawn_resolve_spec(input_file,  in_path,  sizeof(in_path));
+    if (have_out) spawn_resolve_spec(output_file, out_path, sizeof(out_path));
 
     pid_t child = fork();
     if (child < 0) return SS$_INSFMEM;
 
     if (child == 0) {
-        /* Child process - set up I/O redirection */
-        if (input_file && input_file->dsc$a_pointer) {
-            char path[256];
-            dsc$strncpy(path, input_file, sizeof(path));
-            if (!freopen(path, "r", stdin)) _exit(1);
-        }
-        if (output_file && output_file->dsc$a_pointer) {
-            char path[256];
-            dsc$strncpy(path, output_file, sizeof(path));
-            if (!freopen(path, "w", stdout)) _exit(1);
-        }
+        /* Child: SYS$INPUT / SYS$OUTPUT redirection, then BECOME DCL. */
+        if (have_in && !freopen(in_path, "r", stdin))
+            _exit(OVMX_SPAWN_IOERR);
+        if (have_out && !freopen(out_path, "w", stdout))
+            _exit(OVMX_SPAWN_IOERR);
 
-        if (command && command->dsc$a_pointer && command->dsc$w_length > 0) {
-            execv("/bin/sh", argv);
-        } else {
-            execl("/bin/sh", "/bin/sh", (char *)NULL);
-        }
-        _exit(1);
+        if (have_cmd)
+            /* DCL executes the one command and exits (dcl_main.c -c mode). */
+            execl(dcl_path, "DCL", "-c", cmd, (char *)NULL);
+        else
+            /* No command: interactive DCL reading SYS$INPUT. */
+            execl(dcl_path, "DCL", (char *)NULL);
+
+        _exit(OVMX_SPAWN_EXECERR);  /* only reached if execl() failed */
     }
 
-    /* Parent process */
+    /* Parent */
     if (pid) *pid = (uint32_t)child;
 
-    /* Wait for child to complete */
-    int wstatus;
-    waitpid(child, &wstatus, 0);
-    if (status) {
-        *status = WIFEXITED(wstatus) ? (uint32_t)WEXITSTATUS(wstatus) : SS$_ABORT;
+    if (nowait) {
+        /*
+         * CLI$M_NOWAIT: the subprocess was created; return at once. The
+         * completion status is not known yet, and the efn/AST completion
+         * NOTIFICATION path (LIB$SPAWN's event flag / AST arguments) is
+         * prereq C (the write-attention AST, vms-9003) -- accepted here but
+         * not yet delivered, so *status is left unwritten rather than filled
+         * with a value that has not happened.
+         */
+        return SS$_NORMAL;
     }
 
+    /* Wait mode: HIBERNATE until the subprocess completes (VMS default). */
+    int wstatus;
+    while (waitpid(child, &wstatus, 0) < 0 && errno == EINTR)
+        ;
+
+    if (WIFEXITED(wstatus)) {
+        int ec = WEXITSTATUS(wstatus);
+        if (ec == OVMX_SPAWN_IOERR || ec == OVMX_SPAWN_EXECERR) {
+            /* The CLI image never ran the command -> spawn failed. */
+            if (status) *status = SS$_ABORT;
+            return SS$_NOSUCHFILE;
+        }
+        /*
+         * DCL's -c mode collapses $STATUS to a shell 0/1 (dcl_main.c returns
+         * `(status & 1) ? 0 : 1`), so the completion status recoverable HERE
+         * is success/failure, not the subprocess's full VMS $STATUS. Full
+         * $STATUS fidelity is the persistent-subprocess + mailbox EOM-marker
+         * protocol MMK uses (build_target.c "MMK____status="), which rides on
+         * prereqs B/C -- see the DEFERRED note below.
+         */
+        if (status) *status = (ec == 0) ? SS$_NORMAL : SS$_ABORT;
+        return SS$_NORMAL;
+    }
+
+    /* Killed by a signal: the subprocess was created but did not complete. */
+    if (status) *status = SS$_ABORT;
     return SS$_NORMAL;
 }
+
+/*
+ * DEFERRED (vms-ec70 exec-drive, prereqs B/C -- vms-e0b mailbox, vms-9003
+ * write-attention AST): the PERSISTENT DCL subprocess MMK actually drives.
+ * build_target.c opens ONE DCL subprocess (/NOWAIT), then streams resolved
+ * compile/link command lines into it over a VMS MAILBOX, using a write-
+ * attention AST + $HIBER/$WAKE to know when each command finished and to read
+ * that command's $STATUS from an end-of-command marker. That needs: (1) this
+ * /NOWAIT create [DONE here], (2) a mailbox the parent and the DCL child both
+ * hold [prereq B], and (3) the write-attention AST that fires when the child
+ * writes a completion marker [prereq C]. lib$spawn is the create primitive
+ * under that protocol; the mailbox wiring is what turns it into MMK's driver.
+ */
 
 /*
  * lib$find_file - Find file matching wildcard specification.

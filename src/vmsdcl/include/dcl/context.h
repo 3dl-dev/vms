@@ -27,10 +27,20 @@ struct dcl_context {
         FILE *fp;
         char filename[256];
         int  line_number;
-        int  on_error;      /* ON ERROR action: 0=none, 1=continue, 2=goto */
-        int  on_severe;     /* ON SEVERE_ERROR action */
-        char on_error_label[256];
-        char on_severe_label[256];
+        /* Per-level DCL error control (ON / SET [NO]ON). Each command level
+         * (an @ procedure or a CALLed subroutine) carries its own state; a new
+         * level starts at the defaults below (memset on push). Clean-room
+         * (Rule 8): VSI OpenVMS DCL Dictionary — "ON", "SET ON"/"SET NOON";
+         * OpenVMS User's Manual — "Controlling Error Conditions". */
+        int  noon;          /* SET NOON at this level: 1 = DCL does NOT check
+                             * $STATUS after a command (no default exit, no ON
+                             * action). 0 (SET ON, the default) restores it. */
+        int  on_armed;      /* 1 = an ON action is armed at this level (one-shot);
+                             * 0 = default action (exit on ERROR/SEVERE). */
+        int  on_severity;   /* severity that triggers the armed action:
+                             * 0=WARNING, 2=ERROR (ON default), 4=SEVERE_ERROR */
+        char on_action[256];/* THEN command run when triggered (e.g. "GOTO ERR",
+                             * "EXIT"); "CONTINUE" means resume past the error */
         char params[8][256]; /* P1-P8 parameters */
         int  is_subroutine;  /* 1 = this level is a CALLed SUBROUTINE block */
         int  gosub_base;     /* gosub_depth on entry: RETURN below this ends

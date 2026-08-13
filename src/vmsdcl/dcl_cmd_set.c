@@ -2024,15 +2024,25 @@ int cmd_set(struct dcl_command *cmd)
     if (dcl_match_command(subcmd, "PASSWORD", 3))
         return cmd_set_password(cmd);
     if (dcl_match_command(subcmd, "NOON", 4)) {
-        /* SET NOON — suppress ON ERROR handler at current level */
-        struct dcl_context *noon_ctx = dcl_get_context();
-        noon_ctx->noon_active = 1;
+        /* SET NOON — disable $STATUS checking at THIS command level: DCL then
+         * performs neither the default exit-on-error nor any armed ON action,
+         * so the procedure continues past errors. Clean-room (Rule 8): VSI
+         * OpenVMS DCL Dictionary, "SET ON"/"SET NOON". */
+        struct dcl_context *c = dcl_get_context();
+        if (c->proc_depth >= 0)
+            c->proc_stack[c->proc_depth].noon = 1;
+        else
+            c->noon_active = 1;
         return SS$_NORMAL;
     }
     if (dcl_match_command(subcmd, "ON", 2)) {
-        /* SET ON — re-enable ON ERROR handler */
-        struct dcl_context *on_ctx = dcl_get_context();
-        on_ctx->noon_active = 0;
+        /* SET ON — restore $STATUS checking (the default) at this command
+         * level, re-enabling both the default error-stop and any ON action. */
+        struct dcl_context *c = dcl_get_context();
+        if (c->proc_depth >= 0)
+            c->proc_stack[c->proc_depth].noon = 0;
+        else
+            c->noon_active = 0;
         return SS$_NORMAL;
     }
     if (dcl_match_command(subcmd, "SYMBOL", 3))

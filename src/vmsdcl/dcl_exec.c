@@ -1316,41 +1316,51 @@ int dcl_execute_command(struct dcl_command *cmd)
     }
 
     if (strcasecmp(cmd->verb, "ON") == 0) {
-        /* ON ERROR THEN GOTO label / ON ERROR THEN CONTINUE */
-        /* ON SEVERE_ERROR THEN GOTO label / ON SEVERE_ERROR THEN CONTINUE */
+        /* ON WARNING|ERROR|SEVERE_ERROR THEN command
+         *
+         * Arms a ONE-SHOT error action at the current command level. When a
+         * command then completes with $SEVERITY at or above the named threshold,
+         * DCL runs the THEN command (commonly GOTO/EXIT/CONTINUE), and resets the
+         * level to its default action (exit on error) -- a handler re-arms by
+         * issuing another ON. The action is local to this command level.
+         * Clean-room (Rule 8): VSI OpenVMS DCL Dictionary, "ON"; OpenVMS User's
+         * Manual, "Controlling Error Conditions". Severity encoding (low 3 bits
+         * of $STATUS): 0=WARNING, 1=SUCCESS, 2=ERROR, 3=INFO, 4=FATAL(SEVERE). */
         if (cmd->param_count < 3) {
             dcl_error("DCL", 2, "IVKEYW", "invalid ON command syntax");
             return SS$_BADPARAM;
         }
 
-        int is_severe = (strcasecmp(cmd->params[0], "SEVERE_ERROR") == 0);
-        /* params[0] = ERROR/SEVERE_ERROR, params[1] = THEN, params[2] = CONTINUE/GOTO */
+        int sev;
+        if (strcasecmp(cmd->params[0], "WARNING") == 0)          sev = 0;
+        else if (strcasecmp(cmd->params[0], "ERROR") == 0)       sev = 2;
+        else if (strcasecmp(cmd->params[0], "SEVERE_ERROR") == 0) sev = 4;
+        else {
+            dcl_error("DCL", 2, "IVKEYW",
+                      "invalid ON condition keyword - \\%s\\", cmd->params[0]);
+            return SS$_BADPARAM;
+        }
 
-        if (strcasecmp(cmd->params[2], "CONTINUE") == 0) {
-            if (ctx->proc_depth >= 0) {
-                if (is_severe)
-                    ctx->proc_stack[ctx->proc_depth].on_severe = 1;
-                else
-                    ctx->proc_stack[ctx->proc_depth].on_error = 1;
-            } else {
-                ctx->on_error_continue = 1;
-            }
-        } else if (strcasecmp(cmd->params[2], "GOTO") == 0) {
-            if (cmd->param_count >= 4) {
-                if (ctx->proc_depth >= 0) {
-                    if (is_severe) {
-                        ctx->proc_stack[ctx->proc_depth].on_severe = 2;
-                        strncpy(ctx->proc_stack[ctx->proc_depth].on_severe_label,
-                                cmd->params[3],
-                                sizeof(ctx->proc_stack[0].on_severe_label) - 1);
-                    } else {
-                        ctx->proc_stack[ctx->proc_depth].on_error = 2;
-                        strncpy(ctx->proc_stack[ctx->proc_depth].on_error_label,
-                                cmd->params[3],
-                                sizeof(ctx->proc_stack[0].on_error_label) - 1);
-                    }
-                }
-            }
+        /* Reconstruct the THEN command from params[2..] (params[1] == THEN). */
+        char action[256];
+        action[0] = '\0';
+        for (int i = 2; i < cmd->param_count; i++) {
+            if (action[0])
+                strncat(action, " ", sizeof(action) - strlen(action) - 1);
+            strncat(action, cmd->params[i], sizeof(action) - strlen(action) - 1);
+        }
+
+        if (ctx->proc_depth >= 0) {
+            ctx->proc_stack[ctx->proc_depth].on_armed = 1;
+            ctx->proc_stack[ctx->proc_depth].on_severity = sev;
+            strncpy(ctx->proc_stack[ctx->proc_depth].on_action, action,
+                    sizeof(ctx->proc_stack[0].on_action) - 1);
+            ctx->proc_stack[ctx->proc_depth].on_action[
+                sizeof(ctx->proc_stack[0].on_action) - 1] = '\0';
+        } else {
+            /* Interactive level has no procedure to abort; retained for parity. */
+            ctx->on_error_continue = (strcasecmp(action, "CONTINUE") == 0);
+            ctx->on_error_goto = 0;
         }
         return SS$_NORMAL;
     }

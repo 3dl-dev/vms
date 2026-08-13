@@ -1569,6 +1569,64 @@ jobs:
   # to go RED -- proving the assertion has teeth for a couple of minutes of boot,
   # not a second full install.
   # -----------------------------------------------------------------------
+  # Job: NetBSD/amd64 vms module cross-compiles (rd vms-2d9). THE PER-PR NetBSD
+  # GATE -- BUILD ONLY, no QEMU, no console, no boot, ~1-2 min. It cross-compiles
+  # the `vms' kernel module (src/kernel-netbsd/) + the SHARED facility source
+  # (src/kernel-core/vms_eflag.c) against the pinned NetBSD/amd64 kernel headers
+  # with clang -target x86_64-unknown-netbsd, and relocatable-links them. This is
+  # the honest per-PR value: the facility logic is byte-identical Linux-side, so
+  # what a PR must catch is a NetBSD-backend / header-API DRIFT that breaks the
+  # NetBSD build -- a pure compile+link question. The full "does it RUN on NetBSD"
+  # proof (boot + module load + INV-6 cross-process event-flag proof) is the
+  # NIGHTLY console-driven harnesses below: QEMU-TCG on GitHub-hosted runners (no
+  # /dev/kvm) is too slow/variable for a reliable per-PR emulator test, so its
+  # coverage is MOVED to schedule, never deleted (validated in Phase C #393).
+  netbsd-amd64-vms-crosscompile:
+    name: NetBSD/amd64 vms module cross-compiles
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang (NetBSD cross target)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends clang
+
+      # Cache the extracted NetBSD kernel sources, keyed on the pinned release
+      # (netbsd_version.env carries NETBSD_SYSSRC_URL/_SHA512). No OVMX-source
+      # component -- a source change never re-downloads.
+      - name: Cache NetBSD kernel sources (syssrc)
+        uses: actions/cache@v4
+        with:
+          path: .netbsd-src
+          key: netbsd-src-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-src-
+
+      - name: Fetch + verify + extract NetBSD syssrc (kernel headers) if not cached
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . tests/netbsd/netbsd_version.env
+          if [ ! -d .netbsd-src/usr/src/sys ]; then
+            mkdir -p .netbsd-src
+            curl -sSL -o /tmp/syssrc.tgz "$NETBSD_SYSSRC_URL"
+            echo "$NETBSD_SYSSRC_SHA512  /tmp/syssrc.tgz" | sha512sum -c -
+            tar xzf /tmp/syssrc.tgz -C .netbsd-src usr/src/sys usr/src/common
+          fi
+
+      - name: Cross-compile the vms module + shared kernel-core (clang, NetBSD/amd64 kernel)
+        run: OVMX_REPO="$PWD" NBSRC="$PWD/.netbsd-src" CC=clang bash tests/netbsd/crosscompile.sh
+
+      - name: NEGATIVE CONTROL — a deliberately-broken TU must fail the cross-compile
+        run: OVMX_REPO="$PWD" NBSRC="$PWD/.netbsd-src" CC=clang CROSSCOMPILE_NEGCTL=1 bash tests/netbsd/crosscompile.sh
+
+  # -----------------------------------------------------------------------
   # Job: PRIME the shared NetBSD install cache (rd vms-2d9). THE KEYSTONE of
   # reliable NetBSD CI. This job runs FIRST and ALONE and is the ONLY writer of
   # the shared installed-disk cache: it restores the shared image if present, or
@@ -1584,7 +1642,11 @@ jobs:
   netbsd-amd64-prime-cache:
     name: NetBSD/amd64 Prime Install Cache (QEMU)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
+    # NIGHTLY only (rd vms-2d9): this feeds the console-driven jobs, which are all
+    # nightly now (QEMU-TCG on GitHub runners is too slow/variable for reliable
+    # per-PR emulator tests). The per-PR NetBSD gate is the fast build-only
+    # cross-compile job (netbsd-amd64-vms-crosscompile), no QEMU.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 75    # a genuine cold TCG install is ~30-40min; rest is headroom
 
@@ -1641,7 +1703,9 @@ jobs:
   netbsd-amd64-harness:
     name: NetBSD/amd64 Executive Harness (QEMU)
     needs: [changes, netbsd-amd64-prime-cache]
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
+    # NIGHTLY only (rd vms-2d9) — console-driven QEMU boot+drive, too flaky for
+    # per-PR under TCG. The per-PR build gate is netbsd-amd64-vms-crosscompile.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -1758,7 +1822,9 @@ jobs:
   netbsd-amd64-vms-pseudodev:
     name: NetBSD/amd64 vms Pseudo-Device (QEMU)
     needs: [changes, netbsd-amd64-prime-cache]
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
+    # NIGHTLY only (rd vms-2d9) — console-driven QEMU build+modload+PING, too flaky
+    # for per-PR under TCG. The per-PR build gate is netbsd-amd64-vms-crosscompile.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 

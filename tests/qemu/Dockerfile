@@ -606,25 +606,24 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     cp "$MUSL_INC/stdint.h" /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/ && \
     cp "$MUSL_INC/bits/alltypes.h" "$MUSL_INC/bits/stdint.h" \
        /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/bits/ && \
-    # The REAL component sources + their headers the build suite stages into the
-    # MMK work directory (VMS-style upper-case .C). These are the actual
-    # src/libvmssys freestanding runtime TUs vms_string.c + vms_snprintf.c (the
-    # 2-TU library MMK compiles then archives -- vms_math.c is excluded, its SSE
-    # "x"-constraint inline asm is not tcc-compilable on x86_64) PLUS the driver
-    # OVMXRTRUN.C (vms-725: main() calls vms_strlen -> the driven LINK pulls
-    # VMS_STRING from OVMXRT.OLB and the activated image exits 216). The objects
-    # the driven TCC produces must carry vms_strlen / vms_snprintf, the driven
-    # LIBRARIAN must archive both into OVMXRT.OLB, and the driven LINK must build
-    # the driver + .OLB into OVMXRT.EXE. Absence is FATAL: without them the driven
-    # build would have nothing to build.
+    # The REAL component source + its headers the build suite stages into the MMK
+    # work directory (VMS-style upper-case .C): the actual src/libvmssys
+    # freestanding runtime TU vms_string.c (the TU MMK compiles then archives),
+    # PLUS the driver OVMXRTRUN.C (vms-725: main() calls vms_strlen -> the driven
+    # LINK pulls VMS_STRING from OVMXRT.OLB and the activated image exits 216).
+    # Only ONE runtime TU is compiled per drive so the suite stays under the
+    # whole-VM 120s QEMU budget on CI (a two-runtime-TU + LINK drive tipped it);
+    # LIBRARIAN archiving multiple members is proven on the host by
+    # run_mmk_component_build.sh. The object the driven TCC produces must carry
+    # vms_strlen, the driven LIBRARIAN must archive it into OVMXRT.OLB, and the
+    # driven LINK must build the driver + .OLB into OVMXRT.EXE. Absence is FATAL:
+    # without them the driven build would have nothing to build.
     mkdir -p /initramfs/tests/component && \
     { cp /src/repo/src/libvmssys/vms_string.c /initramfs/tests/component/VMS_STRING.C || \
-      { echo "FATAL: VMS_STRING.C (a real runtime TU MMK drives TCC to compile) not staged"; exit 1; }; } && \
-    { cp /src/repo/src/libvmssys/vms_snprintf.c /initramfs/tests/component/VMS_SNPRINTF.C || \
-      { echo "FATAL: VMS_SNPRINTF.C (a real runtime TU MMK drives TCC to compile) not staged"; exit 1; }; } && \
+      { echo "FATAL: VMS_STRING.C (the real runtime TU MMK drives TCC to compile) not staged"; exit 1; }; } && \
     { cp /src/repo/tests/toolchain/component/OVMXRTRUN.C /initramfs/tests/component/OVMXRTRUN.C || \
       { echo "FATAL: OVMXRTRUN.C (the driver MMK drives LINK to build into a runnable image) not staged"; exit 1; }; } && \
-    cp /src/repo/src/libvmssys/vms_string.h /src/repo/src/libvmssys/vms_snprintf.h \
+    cp /src/repo/src/libvmssys/vms_string.h \
        /src/repo/src/libvmssys/vms_types.h \
        /initramfs/tests/component/ && \
     # AUTHORIZE.EXE (vms-4c2), staged at /bin/AUTHORIZE.EXE --

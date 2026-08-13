@@ -9,23 +9,27 @@
  * closes the MMK-driven-EXECUTION residual of spine #5, vms-fe4).
  *
  * THE FULL CHAIN (vms-725, the FINAL self-host rung). The driven MMS:
- *   1. TCC compiles TWO real src/libvmssys runtime TUs (VMS_STRING.C +
- *      VMS_SNPRINTF.C -- both tcc-compilable on x86_64; vms_math.c's SSE "x"
- *      inline asm is NOT, so it is excluded) AND the driver OVMXRTRUN.C;
- *   2. LIBRARIAN /CREATEs OVMXRT.OLB from the two runtime objects;
+ *   1. TCC compiles the real src/libvmssys runtime TU VMS_STRING.C AND the driver
+ *      OVMXRTRUN.C (only ONE runtime TU per drive, to stay under the whole-VM 120s
+ *      QEMU budget on CI's slower runner);
+ *   2. LIBRARIAN /CREATEs OVMXRT.OLB from the runtime object;
  *   3. LINK --executable --use DECC$SHR.EXE links OVMXRTRUN.OBJ + OVMXRT.OLB into
- *      OVMXRT.EXE, SELECTIVELY pulling VMS_STRING from the library (the driver
- *      references vms_strlen; VMS_SNPRINTF stays archived-but-unpulled -- TCC
- *      compiles its varargs to tinycc's __va_arg helper, which DECC$SHR does not
- *      yet export, so the runnable image exercises the string TU only. The
- *      archive still carries both, proven above).
+ *      OVMXRT.EXE, pulling VMS_STRING from the library (the driver references
+ *      vms_strlen).
  * The produced OVMXRT.EXE carries PT_INTERP=/vms/.../IMGACT.EXE; the harness
  * ACTIVATES it (fork+exec -> the kernel loads IMGACT.EXE, which maps DECC$SHR.EXE
  * from SYS$LIBRARY, binds the image's one import, and runs crt0 -> main), and
  * asserts it exits 216 (vms_strlen("OVMXRT")==6, 6*36==216 -- nowhere else for
- * 216 to come from). Every stage is asserted BYTE-IDENTICAL across two
- * independent in-guest MMK-driven builds. This is self-hosting's final rung:
- * MMK builds a real OVMX component to a running image entirely inside OVMX.
+ * 216 to come from).
+ *
+ * TWO DRIVES; the compile+archive OUTPUTS are asserted BYTE-IDENTICAL across the
+ * two independent in-guest MMK drives (determinism). The LINK+activate runs on
+ * drive #2 only (drive #1 is the lighter compile+archive drive); the LINK
+ * OUTPUT's byte-identity is host-proven (run_mmk_component_build.sh links twice,
+ * cmp-clean). LIBRARIAN archiving MULTIPLE members is likewise host-proven there;
+ * in-guest this suite proves the compile->archive->LINK->activate chain end to
+ * end. This is self-hosting's final rung: MMK builds a real OVMX component to a
+ * running image entirely inside OVMX.
  *
  * ============================================================
  * THE POINT. Spine #4 (test_syssvc_mmk_drive.c) proved MMK.EXE drives a
@@ -285,8 +289,8 @@ static int activate_image(const char *exepath)
 }
 
 /*
- * Drive ONE MMK build in a fresh work directory. Both modes compile the two real
- * runtime TUs (VMS_STRING.C + VMS_SNPRINTF.C) with TCC.EXE and archive them into
+ * Drive ONE MMK build in a fresh work directory. Both modes compile the real
+ * runtime TU VMS_STRING.C with TCC.EXE and archive it into
  * OVMXRT.OLB with LIBRARIAN.EXE. When do_link is set, the drive ALSO compiles the
  * driver OVMXRTRUN.C and LINKs OVMXRTRUN.OBJ + OVMXRT.OLB into the runnable image
  * OVMXRT.EXE (LINK.EXE --use DECC$SHR.EXE), and the harness ACTIVATES it before
@@ -325,14 +329,19 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
 
     char path[512], src[512];
 
-    /* Stage the REAL component sources (VMS-style upper-case .C) + their headers.
-     * VMS_STRING.C and VMS_SNPRINTF.C are the two src/libvmssys runtime TUs that
-     * ARE fully tcc-compilable on x86_64 (vms_math.c's SSE "x"-constraint inline
-     * asm is not, so it is excluded from the in-guest 2-TU library). With do_link
-     * OVMXRTRUN.C is staged too -- the freestanding driver whose main() calls
-     * vms_strlen, so the LINK pulls VMS_STRING from the .OLB and the activated
-     * image exits 216. */
-    static const char *srcs[] = { "VMS_STRING.C", "VMS_SNPRINTF.C", NULL };
+    /* Stage the REAL component source (VMS-style upper-case .C) + its headers.
+     * VMS_STRING.C is a real src/libvmssys runtime TU, fully tcc-compilable on
+     * x86_64. Only ONE runtime TU is compiled per drive (not two): this keeps the
+     * suite LIGHTER than the vms-6be compile+archive suite so the whole-VM 120s
+     * QEMU budget is not exceeded on CI's slower runner (a two-runtime-TU + LINK
+     * drive tipped it -- the qemu timeout then reddened the whole run). LIBRARIAN
+     * archiving MULTIPLE members is proven on the host (run_mmk_component_build.sh
+     * archives three members byte-identically); in-guest this suite proves the
+     * compile->archive->LINK->activate chain end to end + its determinism. With
+     * do_link OVMXRTRUN.C is staged too -- the freestanding driver whose main()
+     * calls vms_strlen, so the LINK pulls VMS_STRING from the .OLB and the
+     * activated image exits 216. */
+    static const char *srcs[] = { "VMS_STRING.C", NULL };
     for (int i = 0; srcs[i]; i++) {
         snprintf(src,  sizeof(src),  "%s/%s", comp, srcs[i]);
         snprintf(path, sizeof(path), "%s/%s", workdir, srcs[i]);
@@ -343,10 +352,9 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
         snprintf(path, sizeof(path), "%s/OVMXRTRUN.C", workdir);
         if (copy_file(src, path) != 0) return;
     }
-    /* vms_string.h + vms_snprintf.h + vms_types.h are the TUs' + driver's only
-     * component includes; stage the whole staged header set. */
-    static const char *hdrs[] = { "vms_string.h", "vms_snprintf.h",
-                                  "vms_types.h", NULL };
+    /* vms_string.h + vms_types.h are the TU's + driver's only component
+     * includes; stage the whole staged header set. */
+    static const char *hdrs[] = { "vms_string.h", "vms_types.h", NULL };
     for (int i = 0; hdrs[i]; i++) {
         snprintf(src,  sizeof(src),  "%s/%s", comp, hdrs[i]);
         snprintf(path, sizeof(path), "%s/%s", workdir, hdrs[i]);
@@ -355,8 +363,8 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
 
     /* The descrip.mms: define the TCC + LIBRARIAN (+ LNK) foreign commands
      * (absolute image paths, so they resolve in the spawned DCL without depending
-     * on SYS$SYSTEM), compile the two real TUs (+ the driver), archive the two
-     * runtime objects into OVMXRT.OLB, (LINK the driver + .OLB into the runnable
+     * on SYS$SYSTEM), compile the real runtime TU (+ the driver), archive the
+     * runtime object into OVMXRT.OLB, (LINK the driver + .OLB into the runnable
      * OVMXRT.EXE,) then echo the completion marker. Each TAB-indented line is one
      * command record MMK streams into the spawned DCL -- the same whole-line-raw
      * delivery spine #6 proved for the single compile, extended to the full
@@ -386,27 +394,25 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
     char mms[2560];
     if (do_link)
         snprintf(mms, sizeof(mms),
-            "OVMXRT.EXE : VMS_STRING.C VMS_SNPRINTF.C OVMXRTRUN.C\n"
+            "OVMXRT.EXE : VMS_STRING.C OVMXRTRUN.C\n"
             "\tTCC :== \"$%s\"\n"
             "\tLIBRARIAN :== \"$%s\"\n"
             "\tLNK :== \"$%s\"\n"
             "\tTCC -x c -c -ffreestanding -fno-builtin -I %s -I . VMS_STRING.C -o VMS_STRING.OBJ\n"
-            "\tTCC -x c -c -ffreestanding -fno-builtin -I %s -I . VMS_SNPRINTF.C -o VMS_SNPRINTF.OBJ\n"
             "\tTCC -x c -c -ffreestanding -fno-builtin -I %s -I . OVMXRTRUN.C -o OVMXRTRUN.OBJ\n"
-            "\tLIBRARIAN /CREATE OVMXRT.OLB VMS_STRING.OBJ VMS_SNPRINTF.OBJ\n"
+            "\tLIBRARIAN /CREATE OVMXRT.OLB VMS_STRING.OBJ\n"
             "\tLNK --executable --use %s -o OVMXRT.EXE OVMXRTRUN.OBJ OVMXRT.OLB\n"
             "\tWRITE SYS$OUTPUT \"%s\"\n",
-            tcc, libr, lnk, tccinc, tccinc, tccinc, deccshr, EXPECT_MARKER);
+            tcc, libr, lnk, tccinc, tccinc, deccshr, EXPECT_MARKER);
     else
         snprintf(mms, sizeof(mms),
-            "OVMXRT.OLB : VMS_STRING.C VMS_SNPRINTF.C\n"
+            "OVMXRT.OLB : VMS_STRING.C\n"
             "\tTCC :== \"$%s\"\n"
             "\tLIBRARIAN :== \"$%s\"\n"
             "\tTCC -x c -c -ffreestanding -fno-builtin -I %s -I . VMS_STRING.C -o VMS_STRING.OBJ\n"
-            "\tTCC -x c -c -ffreestanding -fno-builtin -I %s -I . VMS_SNPRINTF.C -o VMS_SNPRINTF.OBJ\n"
-            "\tLIBRARIAN /CREATE OVMXRT.OLB VMS_STRING.OBJ VMS_SNPRINTF.OBJ\n"
+            "\tLIBRARIAN /CREATE OVMXRT.OLB VMS_STRING.OBJ\n"
             "\tWRITE SYS$OUTPUT \"%s\"\n",
-            tcc, libr, tccinc, tccinc, EXPECT_MARKER);
+            tcc, libr, tccinc, EXPECT_MARKER);
     snprintf(path, sizeof(path), "%s/725.MMS", workdir);
     if (write_file(path, mms) != 0) return;
     /* /RULES defaults to MMS$RULES; an empty one keeps the run's status clean. */
@@ -523,10 +529,10 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
     }
 
     /* Cleanup. */
-    const char *rm[] = { "VMS_STRING.C", "VMS_SNPRINTF.C", "OVMXRTRUN.C",
-                         "VMS_STRING.OBJ", "VMS_SNPRINTF.OBJ", "OVMXRTRUN.OBJ",
+    const char *rm[] = { "VMS_STRING.C", "OVMXRTRUN.C",
+                         "VMS_STRING.OBJ", "OVMXRTRUN.OBJ",
                          "OVMXRT.OLB", "OVMXRT.EXE", "vms_string.h",
-                         "vms_snprintf.h", "vms_types.h", "725.MMS", "MMS$RULES",
+                         "vms_types.h", "725.MMS", "MMS$RULES",
                          NULL };
     for (int i = 0; rm[i]; i++) {
         snprintf(path, sizeof(path), "%s/%s", workdir, rm[i]);
@@ -641,10 +647,10 @@ int main(int argc, char **argv)
           "the MMK-driven LIBRARIAN.EXE produced OVMXRT.OLB in the guest (build #1)");
     CHECK(olb1_valid,
           "OVMXRT.OLB is a valid ar-format object library (!<arch> magic) -- LIBRARIAN really archived it in QEMU");
-    CHECK(olblen1 > 0 && olb1 != NULL && contains(olb1, olblen1, "VMS_STRING") && contains(olb1, olblen1, "VMS_SNPRINTF"),
-          "OVMXRT.OLB carries both archived members VMS_STRING and VMS_SNPRINTF -- a real 2-TU library, not a single object");
-    CHECK(olblen1 > 0 && olb1 != NULL && contains(olb1, olblen1, "vms_strlen") && contains(olb1, olblen1, "vms_snprintf"),
-          "OVMXRT.OLB embeds the runtime symbols vms_strlen + vms_snprintf -- its members are compiles of the REAL src/libvmssys TUs");
+    CHECK(olblen1 > 0 && olb1 != NULL && contains(olb1, olblen1, "VMS_STRING"),
+          "OVMXRT.OLB carries the archived member VMS_STRING -- LIBRARIAN inserted the driven object");
+    CHECK(olblen1 > 0 && olb1 != NULL && contains(olb1, olblen1, "vms_strlen"),
+          "OVMXRT.OLB embeds the runtime symbol vms_strlen -- its member is a compile of the REAL src/libvmssys/vms_string.c");
     CHECK(olblen2 > 0 && olb2 != NULL,
           "the MMK-driven LIBRARIAN.EXE produced OVMXRT.OLB in the guest (build #2)");
 

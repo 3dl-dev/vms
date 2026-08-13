@@ -4707,8 +4707,8 @@ the MMK-driven TCC.EXE produced VMS_STRING.OBJ in the guest (build #2)
 VMS_STRING.OBJ is BYTE-IDENTICAL across two independent MMK-driven in-guest builds (deterministic, zero bash)
 the MMK-driven LIBRARIAN.EXE produced OVMXRT.OLB in the guest (build #1)
 OVMXRT.OLB is a valid ar-format object library (!<arch> magic) -- LIBRARIAN really archived it in QEMU
-OVMXRT.OLB carries both archived members VMS_STRING and VMS_SNPRINTF -- a real 2-TU library, not a single object
-OVMXRT.OLB embeds the runtime symbols vms_strlen + vms_snprintf -- its members are compiles of the REAL src/libvmssys TUs
+OVMXRT.OLB carries the archived member VMS_STRING -- LIBRARIAN inserted the driven object
+OVMXRT.OLB embeds the runtime symbol vms_strlen -- its member is a compile of the REAL src/libvmssys/vms_string.c
 the MMK-driven LIBRARIAN.EXE produced OVMXRT.OLB in the guest (build #2)
 OVMXRT.OLB is BYTE-IDENTICAL across two independent MMK-driven in-guest builds (deterministic archive, zero bash)
 the MMK-driven LINK.EXE produced OVMXRT.EXE in the guest

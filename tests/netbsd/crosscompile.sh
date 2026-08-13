@@ -81,6 +81,8 @@ SRCS=(
     "$KMOD/vms_netbsd.c"
     "$KMOD/exec_list_netbsd.c"
     "$CORE/vms_eflag.c"
+    "$CORE/vms_ast.c"
+    "$CORE/vms_access.c"
 )
 
 # ---- teeth check ---------------------------------------------------------
@@ -105,4 +107,4 @@ done
 echo "LD  vms.kmod.o (relocatable)"
 "$CC" -target x86_64-unknown-netbsd -nostdlib -r -o "$OBJ/vms.kmod.o" "$OBJ"/*.c.o
 
-echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core/vms_eflag.c cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"
+echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"

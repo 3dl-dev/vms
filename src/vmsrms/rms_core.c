@@ -72,11 +72,52 @@
 #include <errno.h>
 #include <limits.h>
 #include <pthread.h>
+#include <time.h>
 #include "rms/rms.h"
 #include "rms_internal.h"
 #include "vmsfs/filespec.h"
 #include "vmsfs/version.h"
 #include "ovmx_layout.h"
+#include "ssdef.h"
+#include "lib$routines.h"   /* lib$cvt_vectim: Unix->VMS binary time (vms-3dd) */
+
+/*
+ * unix_time_to_vms - Convert a Unix time_t (seconds since 1970-01-01 UTC) to a
+ * VMS 64-bit binary time: the count of 100-nanosecond intervals since the VMS
+ * base date, 17-NOV-1858 00:00:00 (the Smithsonian Modified Julian Day epoch).
+ *
+ * VMS reference: VSI OpenVMS Programming Concepts Manual, Vol. I, "System Time
+ * Format" -- absolute time is a signed quadword of 100ns ticks past the base
+ * date 17-NOV-1858. The conversion is not done here with a hand-written magic
+ * offset; it is delegated to the existing RTL converter lib$cvt_vectim
+ * (src/libvms/rtl/lib_datetime.c), which owns the documented VMS_EPOCH_OFFSET
+ * constant. We break the absolute Unix instant down to its UTC calendar fields
+ * (gmtime_r) and feed lib$cvt_vectim a numeric time vector; lib$cvt_vectim's
+ * timegm() inverts gmtime() exactly, so the same wall-clock instant round-trips.
+ *
+ * Returns the VMS quadword, or 0 if the instant cannot be represented (which a
+ * VMS tool reads as "no date", the honest empty value).
+ */
+static uint64_t unix_time_to_vms(time_t t)
+{
+    struct tm tmv;
+    if (!gmtime_r(&t, &tmv))
+        return 0;
+
+    uint16_t timvec[7];
+    timvec[0] = (uint16_t)(tmv.tm_year + 1900);   /* year   */
+    timvec[1] = (uint16_t)(tmv.tm_mon + 1);       /* month  */
+    timvec[2] = (uint16_t)tmv.tm_mday;            /* day    */
+    timvec[3] = (uint16_t)tmv.tm_hour;            /* hour   */
+    timvec[4] = (uint16_t)tmv.tm_min;             /* minute */
+    timvec[5] = (uint16_t)(tmv.tm_sec > 59 ? 59 : tmv.tm_sec); /* sec (drop leap) */
+    timvec[6] = 0;                                /* hundredths (stat: 1s res) */
+
+    uint64_t vms_time = 0;
+    if (lib$cvt_vectim(timvec, &vms_time) != SS$_NORMAL)
+        return 0;
+    return vms_time;
+}
 
 /* Mutex protecting internal file/stream identifier counters */
 static pthread_mutex_t rms_id_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1005,9 +1046,15 @@ static uint32_t rms_impl_display(void *fab_ptr)
             while (xab) {
                 if (xab->xab$b_cod == XAB$C_DAT) {
                     struct XABDAT *dat = (struct XABDAT *)xab;
-                    /* Store Unix timestamps as VMS-compatible values */
-                    dat->xab$q_cdt = (uint64_t)st.st_ctime;
-                    dat->xab$q_rdt = (uint64_t)st.st_mtime;
+                    /*
+                     * Store real VMS binary-time quadwords, not raw Unix
+                     * time_t (vms-3dd). st_ctime/st_mtime are seconds since the
+                     * Unix epoch; xab$q_cdt/xab$q_rdt are VMS's 100ns-since-
+                     * 17-NOV-1858 format that DIRECTORY/DATE, $ASCTIM and
+                     * XABDAT readers decode. Convert through the RTL converter.
+                     */
+                    dat->xab$q_cdt = unix_time_to_vms(st.st_ctime);
+                    dat->xab$q_rdt = unix_time_to_vms(st.st_mtime);
                 } else if (xab->xab$b_cod == XAB$C_PRO) {
                     struct XABPRO *pro = (struct XABPRO *)xab;
                     /* Convert Unix uid/gid to VMS UIC (group << 16 | member) */

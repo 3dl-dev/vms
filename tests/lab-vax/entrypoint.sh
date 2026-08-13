@@ -31,14 +31,18 @@ set -euo pipefail
 MODE="${1:-smoke}"
 
 # --- pinned, reproducible inputs ---------------------------------------------
-# NEVER "latest". NetBSD/vax 9.4, from the official NetBSD CDN, verified by the
-# checksum published in the release's images/SHA512 file.
-NETBSD_VERSION="${NETBSD_VERSION:-9.4}"
+# NEVER "latest". NetBSD/vax 10.1, from the official NetBSD CDN, verified by the
+# checksum published in the release's images/SHA512 file. 10.1 matches the
+# NetBSD version the OVMX/NetBSD-vax cross toolchain + syssrc are pinned to
+# (tools/cross-vax/Dockerfile, tests/netbsd/netbsd_version.env), so a cross-built
+# elf32-vax kernel module (P4-B, rd vms-f78bb) is ABI-matched to THIS running
+# kernel -- the lab substrate and the cross-build target are one version.
+NETBSD_VERSION="${NETBSD_VERSION:-10.1}"
 ISO_NAME="NetBSD-${NETBSD_VERSION}-vax.iso"
 ISO_URL="${ISO_URL:-https://cdn.netbsd.org/pub/NetBSD/NetBSD-${NETBSD_VERSION}/images/${ISO_NAME}}"
-# SHA512 of NetBSD-9.4-vax.iso (cdn.netbsd.org .../NetBSD-9.4/images/SHA512).
+# SHA512 of NetBSD-10.1-vax.iso (cdn.netbsd.org .../NetBSD-10.1/images/SHA512).
 # If you bump NETBSD_VERSION you MUST update this from that release's SHA512.
-ISO_SHA512="${ISO_SHA512:-735a8e8aa0e31b0a726f3ebe9602201b334706e7232adfe7426bbc70c1b96c1c2da875c7164a95ba0e9747cc11bd545467e85ba91717118f24361a65597010bf}"
+ISO_SHA512="${ISO_SHA512:-aa763aa2240e4623adf09dd1a1ed2da0e3b96959d33544d52026a0c7c7448c6f0da8517bf059b9c53a9786782c0373b2e3da84de4b36cc5aeb669d219ac0f225}"
 
 # Minimal set list -- all we need to boot to a shell and answer uname. Fewer
 # sets means a dramatically shorter VAX install and a smaller cached disk.

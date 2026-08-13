@@ -26,8 +26,8 @@ SIMH non-interactively, runs `uname -srm`, and asserts the output is
 
 | Thing | Pin | Why |
 |---|---|---|
-| NetBSD/vax | **9.4**, ISO `NetBSD-9.4-vax.iso` | current release; ships a bootable VAX ISO with sets |
-| ISO checksum | SHA512 `735a8e8a…597010bf` | from the release's own `images/SHA512`; verified before every use |
+| NetBSD/vax | **10.1**, ISO `NetBSD-10.1-vax.iso` | current release; ships a bootable VAX ISO with sets. Same version the OVMX/NetBSD-vax **cross toolchain + syssrc** are pinned to (`tools/cross-vax/`, `tests/netbsd/netbsd_version.env`), so a cross-built elf32-vax kernel module is ABI-matched to this running kernel (P4-B, `vms-f78bb`) |
+| ISO checksum | SHA512 `aa763aa2…9ac0f225` | from the release's own `images/SHA512`; verified before every use |
 | SIMH | open-simh commit `2e0d51e9…` | **identical** to `tests/lab`'s `SIMH_REF` -- same emulator source as the OpenVMS/vax lab |
 | Machine | SIMH **MicroVAX 3900 (KA655)** | the NetBSD/vax + OpenVMS/vax reference machine |
 | anita | tag `v2_18` = commit `79c0a3f1…` | NetBSD's own install/boot driver; ISC-licensed |
@@ -109,16 +109,102 @@ docker run --rm -v "$PWD/.boot-cache/lab-vax:/cache" ovmx-vax-lab smoke
 docker run --rm -v "$PWD/.boot-cache/lab-vax:/cache" ovmx-vax-lab negctl
 ```
 
+## P4-B: `/dev/vms` live on NetBSD/vax (`vms-f78bb`)
+
+The `uname` smoke above proves NetBSD/vax boots; **P4-B** proves the OVMX
+executive itself runs on it. `run-devvms.sh` boots the SAME cached disk and
+brings the `vms` pseudo-device up so `/dev/vms` opens and a version/ping ioctl
+round-trips through the NetBSD transport seam (`kif_transport_netbsd.c`) — the
+VAX analogue of the NetBSD/amd64 P2b proof (`tests/netbsd/run_p2b.sh`).
+
+```sh
+tests/lab-vax/run-devvms.sh            # build module+kernel, ensure disk+kernel, PING OK
+tests/lab-vax/run-devvms.sh negctl     # teeth: skip modload -> PING must go RED
+```
+
+**Compile-into-kernel, not plain modload — the decision, and why it was forced.**
+`vms-f78bb`'s done-condition (a real in-kernel `/dev/vms`) allows two build paths
+(design-p4 §4.2, risk 2): load the driver as a `module(9)`, or compile it into a
+custom NetBSD/vax kernel if the VAX port's loadable-module framework is too thin.
+We tried modload first, as directed — and found the risk is **real**, in three
+concrete layers exposed empirically on real NetBSD/vax under SIMH:
+
+1. **vax GENERIC has no `options MODULAR`.** It is the *only* NetBSD port whose
+   GENERIC omits it (amd64/alpha/i386/sparc64/… all enable it). On the stock disk
+   `modctl` returns `ENOSYS` ("Function not implemented") — no module can load.
+2. **The vax module-loader glue was never wired.** Even adding `options MODULAR`
+   to a config fails to *link*: `arch/vax/vax/kobj_machdep.c` (`kobj_reloc`/
+   `kobj_machdep`) has existed since 2018 but is not listed in `files.vax`, and
+   `module_init_md()` (an empty per-arch hook every MODULAR port defines in
+   `machdep.c`) is missing for vax. Both are undefined references at kernel link.
+3. **The module needed `-fno-pic`.** A PIC/GOT build yields `R_VAX_GOT32`
+   relocations the kernel's (GOT-less) `kobj` loader rejects
+   (`Bad relocation … type=7 … unresolved rela`).
+
+So this harness takes the **compile-into-kernel** fallback, in its least-invasive
+form: `tools/cross-vax/build-vax-modular-kernel.sh` builds a `GENERIC + options
+MODULAR` kernel (patching the two vax wiring gaps — OVMX build glue over open
+NetBSD source, not VMS RE), installs it as `/netbsd`, and modloads the
+**unchanged** cross-built OVMX module (built `-fno-pic`). The driver is *not*
+statically linked in — one module source still serves both substrates; only the
+host kernel is customized to carry the module framework the vax port never
+shipped. `drive_devvms_vax.py` never fakes a pass: a `modload` failure is
+reported with its exact kernel error.
+
+Proven on real NetBSD/vax under SIMH:
+
+```
+[  11.25] vms: registered, char major 366
+crw-rw-rw-  1 root  wheel  366, 0  /dev/vms
+PROBE: /dev/vms unreachable (open rc=-1) -> honest failure, SS$_NOSUCHDEV; NOT faking success   (module absent, INV-6)
+PROBE: PING OK -- ack=0x504b4f21 abi=1 substrate=NetBSD status=1
+```
+
+**Cross-built, not in-guest-built — the one difference from amd64 P2b.** The
+amd64 P2b builds the module *inside* the guest with `bsd.kmodule.mk` (its disk
+carries the `comp`+`syssrc` sets). On VAX that is impractical: the `syssrc` set
+alone is ~450 MB and does not fit the emulated VAX system disk, and an in-guest
+VAX compile is punishingly slow. So the module (and the userspace probe) are
+**cross-built on the host** by `tools/cross-vax/build-devvms-vax.sh` against the
+pinned NetBSD/vax kernel headers, then delivered into the guest on a **second
+CD** (`rq2`). Because the lab and the cross toolchain are pinned to the **same**
+NetBSD version (10.1), the cross-built module is ABI-matched to the running
+kernel. `build-devvms-vax.sh` builds the module at `-O2` and asserts every OVMX
+symbol is resolved (only real NetBSD KPIs left undefined), so `modload` has a
+loadable object — unlike B1's per-PR `-r` *compile* gate, which permits
+unresolved symbols.
+
+**Single-user boot — securelevel, not incidental.** The proof boots the guest
+**single-user** (`>>> B/R5:2 DUA0`, R5 = `RB_SINGLE`). This is required: on a
+multiuser NetBSD, `init(8)` raises the kernel securelevel to 1, and
+`secmodel_securelevel(9)` then denies `KAUTH_SYSTEM_MODULE`, so `modload` of an
+out-of-tree module returns `EPERM` ("Operation not permitted"). At securelevel 0
+(single-user, before init raises it) loading a module is permitted for root —
+the standard way to load a test module on a secure BSD. It does not weaken the
+proof: the module still serves a **real in-kernel** `/dev/vms`, and INV-6 holds
+(the module-absent probe still fails honestly with `SS$_NOSUCHDEV`). anita only
+boots multiuser, so the driver reuses anita's `start_simh()` (netbsd.ini + SIMH
+spawn) and drives the `>>>` ROM itself to boot single-user.
+
+**Reuses the cached disk; never reinstalls.** `run-devvms.sh` installs NetBSD/vax
+only if the cache is cold (design-p4 §5). A one-time `install-kernel` session then
+boots the GENERIC disk single-user and swaps in the MODULAR kernel as `/netbsd`
+(SIMH cannot inject a kernel like `qemu -kernel`, so it must reach the disk),
+keeping the original as `/netbsd.GENERIC`; this is marked and done once. The
+`prove` `modload`/`mknod` writes are benign and non-persistent (the module is not
+added to `rc.conf`). The custom kernel (4 MB) is a cached artifact so build.sh
+runs only on a cold cache.
+
 ## The assertion, and the negative control
 
 `smoke` passes only when **both** hold: anita's `--run` (`uname -srm | grep -qx
-'NetBSD 9.4 vax'`) returns 0 in-guest **and** the console transcript actually
-contains a real `NetBSD 9.4 vax` line. Resting on anita's exit code alone would
+'NetBSD 10.1 vax'`) returns 0 in-guest **and** the console transcript actually
+contains a real `NetBSD 10.1 vax` line. Resting on anita's exit code alone would
 trust one plumbing path; resting on the transcript alone would miss a boot that
 never reached a shell.
 
 `negctl` runs the identical path but demands the **wrong** arch
-(`NetBSD 9.4 hppa`). The in-guest `grep -qx` fails, anita exits non-zero, the
+(`NetBSD 10.1 hppa`). The in-guest `grep -qx` fails, anita exits non-zero, the
 harness reports failure -- and `negctl` exits 0 **only because** the harness
 correctly failed. This proves the gate can go red (Rule 7: the harness is a
 test; a test that cannot fail is decoration). A second, equivalent negative

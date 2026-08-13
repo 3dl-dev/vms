@@ -93,6 +93,7 @@ jobs:
             kernel:
               - '.github/workflows/**'
               - 'src/kernel/**'
+              - 'src/kernel-core/**'
               - 'src/libvms/syssvc/**'
               - 'src/libvmssys/vms_kif.*'
               - 'tests/qemu/**'

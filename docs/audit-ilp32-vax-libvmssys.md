@@ -249,3 +249,74 @@ regression). Because there is **no** VAX system emulator in CI, a real VAX-float
 `printf`/`strtod` round-trip must be validated on booted NetBSD/vax under SIMH —
 that is the **P4** follow-up; the static audit + fixes above are complete and
 the non-IEEE branches are compile-proven by the vax cross gate.
+
+## 8. vmsprocess — the next layer up (rd vms-84b, epic vms-8e8; C-track)
+
+The library graph continues `libvmssys → vmsprocess (+pthread) → libvms`
+(CLAUDE.md "Library Build Order"). This section extends the width/portability
+audit to **vmsprocess** — process control blocks (PCB), ASTs, access modes, and
+privileges — now that it cross-compiles + links for netbsd-vax. Build set:
+`vms_pcb.c`, `vms_process.c`, `ast.c`, `access_modes.c` (headers under
+`src/vmsprocess/include/vms/` plus `ssdef.h`/`prvdef.h` from `src/libvms/include`).
+
+**Verdict: width-clean, and no Linux-only wait primitive.** vmsprocess needed
+**no source change** to cross-compile and link for netbsd-vax — only CMake
+standalone wiring + a build/link gate. It is a link-libc consumer: NetBSD
+libc/libpthread supply pthread, signals, and stdio; no OVMX freestanding CRT and
+no raw syscall ABI are pulled on this path.
+
+### 8.1 The wait-primitive question (the anti-stall concern) — no futex dependency
+The RTL audit made Linux `futex` deliberately undefined on NetBSD (§7.2), so the
+key question for vmsprocess was whether its process-control waits reach a
+Linux-only primitive. They do **not**:
+
+- **AST delivery uses POSIX signals, not futex.** `ast.c` arms `SIGUSR1` via
+  `sigaction`/`SA_RESTART` and triggers delivery with `raise(SIGUSR1)`; the
+  handler sets a `volatile int` in the PCB. All of that is POSIX and present on
+  NetBSD/vax — no futex, no `vms_futex.c` (which is excluded from the netbsd
+  build set anyway).
+- **Event flags are NOT in vmsprocess.** They were removed from the PCB (vms-2a8,
+  CLAUDE.md Rule 11) and live in the executive (`src/kernel/vms_eflag.c`, reached
+  through `/dev/vms`). So the classic "event-flag wait needs a futex" hazard is
+  structurally absent here — there is no wait primitive in vmsprocess to port.
+- **io_uring is declared but never called.** The PCB carries `uring_*` fields
+  (set to `-1`/`NULL` in `vms_pcb_init`) and a **weak** `extern vms_uring_cleanup`;
+  no `<liburing.h>`, no io_uring syscall. The weak symbol resolves to NULL when
+  unprovided, so nothing Linux-specific is linked. Clean.
+
+Net: vmsprocess has no hard dependency on a Linux-only wait primitive, so the
+anti-stall STOP condition did not fire.
+
+### 8.2 ILP32 width scan — clean
+| Item (file) | Type / width | ILP32 result | Verdict |
+|---|---|---|---|
+| `vms_process_t.linux_pid` (`process.h`) | `pid_t` (NetBSD `int32_t`) | 32-bit both models | **clean** |
+| identity/UIC fields (`vms_pid`, `uic`, priorities, flags) | `uint32_t` (fixed) | longword-exact, matches VMS `[group,member]` packing | **clean** |
+| PCB privilege masks (`cur_privs`/`perm_privs`) | `uint64_t` (fixed) | 64-bit both models | **clean** |
+| `PRV$M_*` (`prvdef.h`) | `((uint64_t)1 << N)`, N up to 38 | cast-to-64 **before** shift → no ILP32 `1<<32` UB | **clean** |
+| PCB quotas | `uint32_t[]` (fixed) | stable | **clean** |
+| AST `param`/`acmode` (`ast.h`) | `uint32_t`/`uint8_t` (fixed) | stable | **clean** |
+| `__thread current_pcb`, `__atomic_compare_exchange_n` | GCC TLS/atomics | supported by gcc-13.3/vax (libgcc emutls if needed) | **clean** |
+
+No bare `long`/pointer-width field, no `sizeof(long)==8` assumption, and the one
+systemic ILP32 trap for bitmasks (`1 << N` with N≥31 on a 32-bit `int`) is
+avoided in `prvdef.h` by the `(uint64_t)1` cast. VAX and every other target share
+little-endian byte order, so nothing here turns on byte order.
+
+### 8.3 Non-blocking note (not a VAX finding)
+`vms_process.c` draws two `-Wstringop-truncation` warnings (`strncpy` into
+`username[32]`/`prcnam[16]`) — the intentional VMS fixed-field truncation pattern,
+identical on every arch. The netbsd branch compiles `-Wall -Wextra` **without**
+`-Werror`, so it is non-fatal; recorded so a later reader does not misread it as
+an ILP32 defect.
+
+### 8.4 How this was validated
+`tools/cross-vax/build-vmsprocess-vax.sh` (CI job `vmsprocess-netbsd-vax`)
+(0) builds the elf32-vax `libvmssys.a`, (1) builds `libvmsprocess.a` through the
+CMake `VMSPROCESS_STANDALONE` path (asserted `file format elf32-vax`), and
+(2) links a real `vax--netbsdelf` ELF32 executable that references one symbol from
+each of the four translation units, against NetBSD libc + libpthread **and** the
+elf32-vax `libvmssys.a` — proving the process-control layer sits on top of
+libvmssys end to end. No emulation (SIMH boot is the separate P4 job). The Linux
+`Build & Test` + `ctest` (`vmsprocess_unit`) prove the in-tree
+Linux/aarch64/x86_64 build is unregressed.

@@ -37,10 +37,9 @@ set(MMK_COMPAT  ${MMK_OVMX}/ovmx_mmk_compat.h)
 set(MMK_CLD_SRC_H ${CMAKE_CURRENT_BINARY_DIR}/mmk_cld_src.h)
 add_custom_command(
     OUTPUT ${MMK_CLD_SRC_H}
-    COMMAND ${CMAKE_COMMAND}
-            -DIN=${MMK_CORPUS}/mmk_cld.cld -DOUT=${MMK_CLD_SRC_H}
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/gen_mmk_cld_src.cmake
-    DEPENDS ${MMK_CORPUS}/mmk_cld.cld ${CMAKE_CURRENT_SOURCE_DIR}/gen_mmk_cld_src.cmake
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/gen_mmk_cld_src.sh
+            ${MMK_CORPUS}/mmk_cld.cld ${MMK_CLD_SRC_H}
+    DEPENDS ${MMK_CORPUS}/mmk_cld.cld ${CMAKE_CURRENT_SOURCE_DIR}/gen_mmk_cld_src.sh
     COMMENT "Embedding mmk_cld.cld -> mmk_cld_src.h (vms-ec70)"
 )
 

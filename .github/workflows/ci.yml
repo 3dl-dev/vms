@@ -1868,18 +1868,28 @@ jobs:
   #     INV-6-decisive property (CLAUDE.md Rule 9): the flag lives in the shared
   #     executive core's kernel memory, not in any one process.
   #
-  # Gated exactly like P2a/P2b: push/merge_group/schedule always, and on PRs only
-  # when the netbsd paths (which now include src/kernel-core/**) change, given the
-  # boot + in-guest build cost. Its OWN cache (comp + syssrc), keyed on the pinned
-  # release + the P2c driver. TOOLING, NOT A RUNTIME (Rule 9).
-  #
-  # Runner-capability caveat (honest, same as P2a/P2b): GitHub-hosted runners have
-  # no /dev/kvm, so the guest runs under TCG. A COLD cache pays a full install; a
-  # warm cache boots, builds one module + one tool, and runs the proof in minutes.
+  # GATING: NIGHTLY (schedule) + manual (workflow_dispatch) ONLY -- NOT per-PR and
+  # NOT the merge queue (rd vms-2d9). This is honest gating, not weakening:
+  #   * The per-PR NetBSD gate is P2a (Executive Harness) + P2b (vms Pseudo-Device)
+  #     + the prime job. P2b already BUILDS the shared src/kernel-core/vms_eflag.c
+  #     with the NetBSD backend (exec_kbackend_netbsd/exec_list_netbsd) and LOADS
+  #     the module and round-trips /dev/vms on every PR -- so a NetBSD-backend
+  #     COMPILE or module-load regression is caught per-PR.
+  #   * What runs here in addition is the heavy TWO-PROCESS cross-process proof
+  #     (build + modload + 4 processes + an in-kernel cv wait/wake). Under TCG on
+  #     shared GitHub runners that heavy path is reliable MOST of the time (green
+  #     in Phase C #393 at 14m50s, and 5/5 back-to-back local TCG runs) but flakes
+  #     intermittently on runner-variance (e.g. a stuck emulated-CD staging step),
+  #     and a flaky job must not gate PRs ("flaky = broken", CLAUDE.md Rule 8).
+  #   * So the cross-process proof is MOVED to the nightly full suite (never
+  #     deleted), where an occasional runner-variance retry is acceptable. It uses
+  #     the SAME shared prime cache and deterministic console as the per-PR jobs.
+  # Restore this to per-PR gating once GitHub-hosted NetBSD/amd64 runners gain KVM
+  # (or a dedicated KVM runner is available) so the heavy proof is fast + reliable.
   netbsd-amd64-eflag-facility:
     name: NetBSD/amd64 Event-Flag Facility (QEMU)
     needs: [changes, netbsd-amd64-prime-cache]
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 

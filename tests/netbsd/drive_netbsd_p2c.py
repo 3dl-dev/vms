@@ -187,7 +187,12 @@ def main():
     # for the deterministic console (that fixes the desync); it is only room for
     # a legitimately slow cold boot so it does not trip a tight deadline.
     boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "2400"))
-    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "600"))
+    # Generous per-command deadline: this heavy two-process proof runs NIGHTLY
+    # under TCG (see the job gating in ci.yml), where an occasional command
+    # (module load, the multi-process ops, or a slow emulated-CD staging step) can
+    # be much slower than a warm local run. 1200s per command with the 2400s boot
+    # deadline keeps a legitimately slow nightly run from tripping a tight clock.
+    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "1200"))
     build_timeout = int(env("NETBSD_BUILD_TIMEOUT", "1800"))
 
     skip_set = bool(env("P2C_SKIP_SET"))

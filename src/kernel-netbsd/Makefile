@@ -14,15 +14,18 @@ KMOD=		vms
 
 # The module is the NetBSD BACKEND glue (vms_netbsd.c) + the OVMX intrusive-list
 # implementation (exec_list_netbsd.c) + THE SAME executive facility sources the
-# Linux vms.ko builds: ../kernel-core/vms_eflag.c (event flags, P2c) and
-# ../kernel-core/vms_ast.c + vms_access.c (ASTs + access modes, P4-A). There is
+# Linux vms.ko builds: ../kernel-core/vms_eflag.c (event flags, P2c),
+# ../kernel-core/vms_ast.c + vms_access.c (ASTs + access modes, P4-A) and
+# ../kernel-core/vms_mbx.c (executive-resident mailboxes MBAn:, P4-A). There is
 # exactly ONE implementation of each facility; this build compiles them with the
-# NetBSD backend.
+# NetBSD backend. (vms_mbx.c links vms_ast_notify_arrival, so vms_ast.c must be
+# present -- it is, above.)
 SRCS=		vms_netbsd.c \
 		exec_list_netbsd.c \
 		vms_eflag.c \
 		vms_ast.c \
-		vms_access.c
+		vms_access.c \
+		vms_mbx.c
 
 # vms_eflag.c lives in the shared core dir; tell bmake where to find it.
 .PATH:		${.CURDIR}/../kernel-core

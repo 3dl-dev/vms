@@ -48,6 +48,10 @@
 #include "vms_eflag_nb.h"
 #include "vms_ast_nb.h"
 #include "vms_access_nb.h"
+/* Mailbox (MBAn:) wire contract (P4-A, rd vms-d7a): the mailbox arg structs the
+ * facility copies, VMS_DEVNAM_SIZE, the VMS_MBX_* sizing and the VMS_MBX_READ_NOW
+ * modifier. Byte-identical to src/kernel/vms_mbx.h. */
+#include "vms_mbx_nb.h"
 
 /* ================================================================
  * VMS status codes -- the subset the event-flag facility returns. Values match
@@ -66,6 +70,25 @@
 #define SS__NOPRIV     0x00000024  /* SS$_NOPRIV */
 #define SS__EXASTLM    0x00000038  /* SS$_EXASTLM (AST quota exceeded) */
 #define SS__NOTALLPRIV 1664        /* SS$_NOTALLPRIV (not all requested privs authorized) */
+/* Mailbox subset (P4-A, rd vms-d7a). Values match src/kernel/vms_internal.h. */
+#define SS__EXQUOTA   28           /* SS$_EXQUOTA (mailbox buffer quota) */
+#define SS__ENDOFFILE 2160         /* SS$_ENDOFFILE (IO$M_NOW read of an empty mailbox) */
+#define SS__IVCHAN    602          /* SS$_IVCHAN -- invalid I/O channel */
+#define SS__IVDEVNAM  608          /* SS$_IVDEVNAM -- invalid device name */
+#define SS__NOSUCHDEV 2680         /* SS$_NOSUCHDEV -- no such device available */
+
+/* ================================================================
+ * Mailbox privilege bits (P4-A, rd vms-d7a). PSL_C_* and CMKRNL/CMEXEC/SETPRV
+ * come from vms_access_nb.h; the two mailbox-creation privileges the mailbox
+ * facility gates $CREMBX on are added here. Bit positions ORACLE-PINNED in
+ * src/kernel/vms_ioctl.h (PRV$V_PRMMBX 11, PRV$V_TMPMBX 15).
+ * ================================================================ */
+#ifndef VMS_PRV_M_PRMMBX
+#define VMS_PRV_M_PRMMBX  (1ULL << 11)   /* create permanent mailbox  (PRV$V_PRMMBX) */
+#endif
+#ifndef VMS_PRV_M_TMPMBX
+#define VMS_PRV_M_TMPMBX  (1ULL << 15)   /* create temporary mailbox  (PRV$V_TMPMBX) */
+#endif
 
 /* ================================================================
  * Linux-kernel spellings the shared facility uses verbatim, provided for the
@@ -89,6 +112,45 @@
  * not hoist/duplicate the predicate read in a wait loop. */
 #ifndef READ_ONCE
 #define READ_ONCE(x)  (*(volatile __typeof__(x) *)&(x))
+#endif
+
+/* pr_info (Linux) -> the NetBSD kernel printf (<sys/systm.h>). Only the mailbox
+ * facility's one-line vms_mbx_init() load message uses it (P4-A). GNU
+ * ##__VA_ARGS__ is fine under the build's -std=gnu99. */
+#ifndef pr_info
+#define pr_info(fmt, ...)  printf(fmt, ##__VA_ARGS__)
+#endif
+
+/*
+ * kstrtouint (Linux) -- parse a NUL-terminated string as an unsigned int in the
+ * given base, rejecting trailing garbage (a single trailing newline aside),
+ * returning 0 on success or a negative errno. NetBSD's libkern has no kstrtouint,
+ * so this shim is built on its strtoul (<lib/libkern/libkern.h>, pulled by
+ * <sys/systm.h>). The only caller, vms_mbx.c's mbx_normalize_devnam(), passes a
+ * string already validated to be alphanumeric (no sign, no whitespace), so this
+ * exactly reproduces the Linux behaviour that path relies on: "MBA12" -> 12,
+ * "MBA1a" -> -EINVAL. (P4-A, rd vms-d7a.)
+ */
+#ifndef kstrtouint
+static __inline int
+vms_nb_kstrtouint(const char *s, unsigned int base, unsigned int *res)
+{
+	unsigned long v;
+	char *end;
+
+	if (s == NULL || *s == '\0')
+		return -EINVAL;
+	v = strtoul(s, &end, (int)base);
+	if (*end == '\n')          /* Linux kstrtouint tolerates one trailing '\n' */
+		end++;
+	if (*end != '\0')
+		return -EINVAL;
+	if (v > 0xffffffffUL)
+		return -ERANGE;
+	*res = (unsigned int)v;
+	return 0;
+}
+#define kstrtouint(s, base, res)  vms_nb_kstrtouint((s), (base), (res))
 #endif
 
 /* ================================================================
@@ -175,6 +237,19 @@ struct vms_proc {
 	struct vms_ast_state ast[4];          /* one queue per access mode 0..3 */
 	exec_cv_t           hiber_wq;         /* $HIBER waiter cv; broadcast on AST arrival */
 	exec_lock_t         hiber_lock;       /* paired guard for hiber_wq */
+
+	/* Identity (glue-populated; the mailbox facility stamps a created mailbox's
+	 * owner from these -- informational only, not consulted by $ASSIGN's lookup). */
+	pid_t               linux_pid;
+	uint32_t            vms_pid;
+
+	/* Mailbox channels + the channel-number allocator (src/kernel-core/vms_mbx.c,
+	 * P4-A). On real VMS a process's channels are one number space regardless of
+	 * device kind; on this build only mailbox channels are built, so next_chan
+	 * feeds them. */
+	uint32_t            next_chan;
+	exec_lock_t         chan_lock;
+	exec_list_head_t    mbx_channels;     /* struct vms_mbx_chan (defined in vms_mbx.c) */
 };
 
 /* ================================================================
@@ -216,12 +291,32 @@ long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------
+ * MAILBOX facility (MBAn:, P4-A, rd vms-d7a) -- DEFINED in
+ * src/kernel-core/vms_mbx.c, called by the NetBSD `vms' pseudo-device dispatch.
+ * vms_mbx_init/cleanup bracket the module lifetime; vms_mbx_release_all runs
+ * per-process at proc teardown; vms_mbx_dassgn is the $DASSGN fallback (wired
+ * once the device table joins this module, rd vms-31b).
+ * ---------------------------------------------------------------- */
+void vms_mbx_init(void);
+void vms_mbx_cleanup(void);
+long vms_ioctl_mbx_create(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_mbx_assign(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_mbx_delmbx(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_mbx_set_wrtattn(struct vms_proc *proc, unsigned long arg);
+int  vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan);
+void vms_mbx_release_all(struct vms_proc *proc);
+
+/* ----------------------------------------------------------------
  * Cross-facility image-rundown release helpers. vms_ioctl_image_rundown()
- * (vms_access.c) calls all three; only vms_proc_rundown_asts is DEFINED on the
- * NetBSD build today (vms_ast.c). vms_proc_rundown_locks (vms_lock.c, rd vms-ff7)
- * and vms_proc_rundown_channels (vms_mbx.c, rd vms-d7a) are not in this module's
- * SRCS yet, so vms_netbsd.c supplies WEAK no-op stubs that the real facility
- * definitions override once those facilities join the build (see vms_netbsd.c).
+ * (vms_access.c) calls all three; vms_proc_rundown_asts is DEFINED (vms_ast.c).
+ * vms_proc_rundown_locks (vms_lock.c, rd vms-ff7) is not in this module's SRCS
+ * yet; and although vms_mbx.c IS now in SRCS (P4-A), it does not define an
+ * image-rundown channel release (a mailbox channel is released at $DASSGN /
+ * process death via vms_mbx_release_all, not at image rundown). So vms_netbsd.c
+ * still supplies WEAK no-op stubs for both, which a real facility definition
+ * would override if one ever lands (see vms_netbsd.c).
  * ---------------------------------------------------------------- */
 void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode);
 void vms_proc_rundown_channels(struct vms_proc *proc, uint8_t min_acmode);

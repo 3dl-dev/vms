@@ -1396,8 +1396,14 @@ int dcl_execute_command(struct dcl_command *cmd)
      * activates image-spec with args as P1-P8, the same as RUN would if
      * RUN forwarded parameters. See dcl_exec_foreign_command() in
      * dcl_cmd_process.c for the full semantics and documented OVMX
-     * deviations. */
-    const char *symval = dcl_sym_get(cmd->verb);
+     * deviations.
+     *
+     * This is a FIRST-TOKEN (verb-position) translation, so it consults the
+     * verb scope domain: SET SYMBOL/SCOPE=(...)/VERB (or the default /ALL)
+     * governs whether outer-level locals / globals are reachable here, while
+     * /GENERAL leaves this path untouched (OpenVMS DCL Dictionary, SET SYMBOL
+     * /VERB /GENERAL /ALL). */
+    const char *symval = dcl_sym_get_ex(cmd->verb, DCL_SYM_DOMAIN_VERB);
     if (symval && symval[0] == '$') {
         int status = dcl_exec_foreign_command(ctx, cmd, symval + 1);
         dcl_set_status(ctx, status);

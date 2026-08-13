@@ -54,6 +54,7 @@ jobs:
       release: ${{ steps.decide.outputs.release }}
       netbsd: ${{ steps.decide.outputs.netbsd }}
       netbsd_vax: ${{ steps.decide.outputs.netbsd_vax }}
+      vmsfs_core_vax: ${{ steps.decide.outputs.vmsfs_core_vax }}
       aarch64_boot: ${{ steps.decide.outputs.aarch64_boot }}
     steps:
       - name: Checkout
@@ -157,6 +158,12 @@ jobs:
               - 'src/vmsprocess/**'
               - 'docs/design-ovmx-netbsd-syskrnl.md'
               - 'docs/audit-ilp32-vax-libvmssys.md'
+            vmsfs_core_vax:
+              - '.github/workflows/**'
+              - 'tools/cross-vax/**'
+              - 'src/kernel-core/vmsfs/**'
+              - 'src/kernel/vmsfs/vmsfs_ondisk.h'
+              - 'docs/audit-ilp32-vax-vmsfs.md'
             aarch64_boot:
               - '.github/workflows/**'
               - 'tests/qemu-aarch64/**'
@@ -174,6 +181,7 @@ jobs:
               echo "release=${{ steps.filter.outputs.release }}"
               echo "netbsd=${{ steps.filter.outputs.netbsd }}"
               echo "netbsd_vax=${{ steps.filter.outputs.netbsd_vax }}"
+              echo "vmsfs_core_vax=${{ steps.filter.outputs.vmsfs_core_vax }}"
               echo "aarch64_boot=${{ steps.filter.outputs.aarch64_boot }}"
             } >> "$GITHUB_OUTPUT"
           else
@@ -185,6 +193,7 @@ jobs:
               echo "release=true"
               echo "netbsd=true"
               echo "netbsd_vax=true"
+              echo "vmsfs_core_vax=true"
               echo "aarch64_boot=true"
             } >> "$GITHUB_OUTPUT"
           fi
@@ -4022,3 +4031,68 @@ jobs:
           echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
             || { echo "FAIL: linked executable was not a VAX ELF"; exit 1; }
           echo "PASS: vmsprocess built for netbsd-vax and a real ELF32 VAX exe linked against NetBSD libc + libpthread"
+
+  # -----------------------------------------------------------------------
+  # vmsfs-core-elf32-vax (rd vms-bb8, epic vms-8e8; P4-VFS V3).
+  #
+  # BUILD-ONLY cross-compile gate for the substrate-neutral ODS-2 core
+  # (src/kernel-core/vmsfs/*.c). It reuses the SAME pinned vax--netbsdelf GCC
+  # cross toolchain image as libvmssys-netbsd-vax (shared gha layer cache,
+  # scope=cross-vax -- no gcc rebuild), then compiles the whole ODS-2 core
+  # FREESTANDING (-ffreestanding -fno-builtin -Werror, no libc) against the
+  # width-audit backend to elf32-vax relocatable objects. This is the ODS-2
+  # analog of the libvmssys VAX cross-compile: it proves the allocator, the
+  # directory scanner, the file-header codec and the retrieval-map math are
+  # ILP32/endian-clean for the VAX (32-bit) width class -- any long/pointer-width
+  # assumption is a hard compile error, and the on-disk-format _Static_asserts
+  # (512/512/88/8-byte structs) plus the generated width TU's explicit width+offset
+  # asserts are re-evaluated under ILP32. Width audit: docs/audit-ilp32-vax-vmsfs.md.
+  #
+  # DELIBERATELY NOT emulation: there is no VAX system target and the core is not
+  # linked into a runnable image (a booted-volume round-trip is the later SIMH/V5
+  # phase). BUILD/TEST TOOLING, never a runtime (Rule 9): the audit backend binds
+  # no VFS and mounts nothing. Gated like the other build-check jobs: push/
+  # merge_group/schedule always; on a PR only when the core / cross inputs change.
+  # -----------------------------------------------------------------------
+  vmsfs-core-elf32-vax:
+    name: vmsfs-core cross-compiles for elf32-vax (vms-bb8)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.vmsfs_core_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile the ODS-2 core for elf32-vax (ILP32 width proof)
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-vmsfs-core-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: vmsfs-core elf32-vax cross build exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: vmsfs-core compiles for elf32-vax (ILP32 width-clean)' \
+            || { echo "FAIL: did not see the ODS-2 core width-proof PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: objects were not elf32-vax -- wrong target"; exit 1; }
+          echo "PASS: the ODS-2 core compiled ILP32-clean to elf32-vax objects"

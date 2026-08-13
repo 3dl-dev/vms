@@ -106,9 +106,21 @@
  * ccflags; OVMX_KBACKEND_NETBSD via the NetBSD kmodule build in a later phase).
  * __linux__/__KERNEL__ are accepted as a fallback so a stock
  * `make -C src/kernel/vmsfs` still resolves the Linux backend.
+ *
+ * OVMX_KBACKEND_AUDIT is the freestanding WIDTH-AUDIT backend
+ * (tools/cross-vax/vmsfs_backend_audit.h): a host-less realization of the
+ * vmsfs_backend + vmsfs_bio vocabulary used ONLY to cross-compile the ODS-2
+ * core for elf32-vax and prove it is ILP32/endian-clean (rd vms-bb8, epic
+ * vms-8e8). It is BUILD/TEST TOOLING, never a runtime backend (Rule 9): it
+ * binds no filesystem, mounts nothing, and provides no real block I/O -- it
+ * exists so `-Werror` compilation and the on-disk-format _Static_asserts run
+ * under the VAX (32-bit) width class. It is selected only when its macro is
+ * defined explicitly by the cross build, so it never affects the Linux ko.
  */
 #if defined(OVMX_KBACKEND_NETBSD)
 #  include "vmsfs_backend_netbsd.h"
+#elif defined(OVMX_KBACKEND_AUDIT)
+#  include "vmsfs_backend_audit.h"
 #elif defined(OVMX_KBACKEND_LINUX) || defined(__linux__) || defined(__KERNEL__)
 #  include "vmsfs_backend_linux.h"
 #else

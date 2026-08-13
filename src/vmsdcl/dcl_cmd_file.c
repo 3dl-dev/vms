@@ -75,6 +75,36 @@ static const char *dcl_filename_component(const char *spec)
     return p;
 }
 
+/*
+ * dcl_print_dir_total - Emit the DIRECTORY "Total of ..." trailer in the exact
+ * form real OpenVMS uses.
+ *
+ * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, DIRECTORY command
+ * examples (OpenVMS DCL Dictionary, DIRECTORY —
+ * www0.mi.infn.it/~calcolo/OpenVMS/ssb71/9996/9996p013.htm):
+ *   - default listing (no size shown):  "Total of 4 files."   (NO block count)
+ *   - /SIZE (blocks used):              "Total of 4 files, 15 blocks."
+ *   - /FULL (used/allocated):           "Total of 1 file, 390/390 blocks."
+ * i.e. the block count appears ONLY when file sizes are displayed. The prior
+ * OVMX code always printed ", M blocks." even for a bare DIRECTORY, which a VMS
+ * user spots on the first listing.
+ */
+static void dcl_print_dir_total(int file_count, long used_blocks,
+                                long alloc_blocks, int show_size, int show_full)
+{
+    const char *files_s = (file_count != 1) ? "s" : "";
+    const char *blk_s   = (used_blocks != 1) ? "s" : "";
+    if (show_full) {
+        printf("\nTotal of %d file%s, %ld/%ld block%s.\n",
+               file_count, files_s, used_blocks, alloc_blocks, blk_s);
+    } else if (show_size) {
+        printf("\nTotal of %d file%s, %ld block%s.\n",
+               file_count, files_s, used_blocks, blk_s);
+    } else {
+        printf("\nTotal of %d file%s.\n", file_count, files_s);
+    }
+}
+
 /* Compare directory entries: name ascending (case-insensitive), version descending */
 static int dir_entry_cmp(const void *a, const void *b)
 {
@@ -353,7 +383,8 @@ int cmd_directory(struct dcl_command *cmd)
     qsort(entries, (size_t)entry_count, sizeof(struct dir_entry), dir_entry_cmp);
 
     int file_count = 0;
-    long total_blocks = 0;
+    long total_blocks = 0;   /* blocks used (logical, ceil(size/512)) */
+    long total_alloc = 0;    /* blocks allocated (real st_blocks, 512-byte units) */
     int col = 0;
     int col_width = (show_size || show_date) ? 0 : (80 / columns);
 
@@ -386,6 +417,7 @@ int cmd_directory(struct dcl_command *cmd)
         }
 
         total_blocks += blocks;
+        total_alloc += (long)st->st_blocks;   /* real allocated blocks */
         file_count++;
 
         /* If /TOTAL or /GRAND_TOTAL, skip individual file display */
@@ -464,23 +496,32 @@ int cmd_directory(struct dcl_command *cmd)
         printf("\n");
     }
 
-    /* Footer */
+    /* Footer. Block counts appear only when file sizes are displayed
+     * (/SIZE or /FULL) — see dcl_print_dir_total()'s citation. */
     if (show_grand_total) {
-        printf("\nGrand total of %d directory, %d file%s, %ld block%s.\n",
-               1, file_count, file_count != 1 ? "s" : "",
-               total_blocks, total_blocks != 1 ? "s" : "");
+        /* Single-directory grand total (multi-directory rollup is a separate
+         * wildcard/ellipsis slice — see vms-1c6). VMS: "Grand total of D
+         * directories, F files[, ...blocks]." */
+        printf("\nGrand total of 1 directory, %d file%s",
+               file_count, file_count != 1 ? "s" : "");
+        if (show_full) {
+            printf(", %ld/%ld block%s", total_blocks, total_alloc,
+                   total_blocks != 1 ? "s" : "");
+        } else if (show_size) {
+            printf(", %ld block%s", total_blocks,
+                   total_blocks != 1 ? "s" : "");
+        }
+        printf(".\n");
     } else {
-        printf("\nTotal of %d file%s, %ld block%s.\n",
-               file_count, file_count != 1 ? "s" : "",
-               total_blocks, total_blocks != 1 ? "s" : "");
+        dcl_print_dir_total(file_count, total_blocks, total_alloc,
+                            show_size, show_full);
     }
 
-    /* /TRAILING: show trailing directory spec */
+    /* /TRAILING: repeat the totals with the directory spec appended. */
     if (show_trailing) {
-        printf("\nTotal of %d file%s, %ld block%s.\n%s\n",
-               file_count, file_count != 1 ? "s" : "",
-               total_blocks, total_blocks != 1 ? "s" : "",
-               vms_dir);
+        dcl_print_dir_total(file_count, total_blocks, total_alloc,
+                            show_size, show_full);
+        printf("%s\n", vms_dir);
     }
 
     if (pattern) free((void *)pattern);

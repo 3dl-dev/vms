@@ -224,7 +224,7 @@ OFF=$(wc -c <"$LOG")
 send 'DIRECTORY DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
 wait_for 'Total of' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qE 'Total of [1-9][0-9]* files?, [0-9]+ blocks' \
+if printf '%s\n' "$SEG" | grep -qE 'Total of [1-9][0-9]* files?[.,]' \
     && printf '%s\n' "$SEG" | grep -qF 'HELP.EXE'; then
     ok "DIRECTORY independently confirms DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE exists"
 else
@@ -303,7 +303,7 @@ OFF=$(wc -c <"$LOG")
 send 'DIRECTORY DKA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
 wait_for 'Total of' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qE 'Total of [1-9][0-9]* files?, [0-9]+ blocks' \
+if printf '%s\n' "$SEG" | grep -qE 'Total of [1-9][0-9]* files?[.,]' \
     && printf '%s\n' "$SEG" | grep -qF 'HELP.EXE'; then
     ok "installed HELP.EXE survives a full QEMU restart"
 else

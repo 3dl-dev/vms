@@ -287,7 +287,7 @@ send 'DIRECTORY DKA100:[000000]MOUNTTST.TXT'
 wait_for 'Total of' "$RUN_TIMEOUT" "$OFF"
 DIR_CMD='DIRECTORY DKA100:[000000]MOUNTTST.TXT'
 SEG=$(segment_since "$OFF" | grep -vF "$DIR_CMD")
-if printf '%s\n' "$SEG" | grep -qE 'Total of [1-9][0-9]* files?, [0-9]+ blocks' \
+if printf '%s\n' "$SEG" | grep -qE 'Total of [1-9][0-9]* files?[.,]' \
     && printf '%s\n' "$SEG" | grep -qF 'MOUNTTST.TXT'; then
     ok "DIRECTORY independently confirms MOUNTTST.TXT exists on DKA100:"
 else

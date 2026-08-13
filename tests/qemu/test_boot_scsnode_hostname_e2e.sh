@@ -302,12 +302,15 @@ if [ "$rc" -eq 0 ]; then
     # A fresh copy of the distribution disk carries exactly one version.
     send 'DELETE SYS$SYSTEM:OVMXVMSSYS.PAR;1'; sleep 1
     send 'DIRECTORY SYS$SYSTEM:OVMXVMSSYS.PAR'; sleep 2
-    # Measured 2026-08-10: an exact (non-wildcard) filespec with zero matches
-    # reports "Total of 0 files, 0 blocks." -- there is no "%DIRECT-..."
-    # error line for this shape (that facility is for other DIRECTORY
-    # failure modes). This is the actual, correct, honest zero-files report;
-    # the original assertion here guessed the wrong message shape.
-    check "boot 1: OVMXVMSSYS.PAR is gone (DIRECTORY finds nothing)" "$NEG_LOG1" "Total of 0 files, 0 blocks."
+    # An exact (non-wildcard) filespec with zero matches reports the empty
+    # "Total of 0 files." trailer. NOTE (vms-1c6): a bare DIRECTORY trailer
+    # carries NO block count -- blocks appear only with /SIZE or /FULL (VSI
+    # OpenVMS DCL Dictionary, DIRECTORY). OVMX previously printed "Total of 0
+    # files, 0 blocks." here, which this assertion had pinned; corrected to the
+    # authentic no-blocks form. (Real VMS also emits %DIRECT-W-NOFILES for a
+    # zero-match exact spec -- that error-message fidelity is a separate
+    # vms-1c6 slice, not fixed here.)
+    check "boot 1: OVMXVMSSYS.PAR is gone (DIRECTORY finds nothing)" "$NEG_LOG1" "Total of 0 files."
 
     echo "  (settling ${SETTLE_SECS}s for guest writeback)"
     sleep "$SETTLE_SECS"

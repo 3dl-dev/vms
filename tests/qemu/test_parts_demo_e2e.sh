@@ -308,7 +308,7 @@ send "$DIR_CMD"
 wait_for 'Total of' 20 "$DIR_OFF"
 DIR_SEG=$(segment_since "$DIR_OFF")
 DIR_BODY=$(printf '%s\n' "$DIR_SEG" | grep -vF "$DIR_CMD")
-if printf '%s\n' "$DIR_BODY" | grep -qE 'Total of [1-9][0-9]* files?, [0-9]+ blocks' \
+if printf '%s\n' "$DIR_BODY" | grep -qE 'Total of [1-9][0-9]* files?[.,]' \
     && printf '%s\n' "$DIR_BODY" | grep -qF 'PARTS.DAT'; then
     ok "\$ DIRECTORY SYS\$SCRATCH:PARTS.DAT independently confirms the file exists"
 else

@@ -283,6 +283,10 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # by filespec at boot; without this copy every OPEN fails %RMS-E-FNF and
     # every phase (and every site file the driver invokes) silently never runs.
     cp -r "distro/rootfs/vms/SYS0/SYSCOMMON/SYS\$STARTUP/"* "/system-stage/vms/SYS0/SYSCOMMON/SYS\$STARTUP/" && \
+    # SYS$HELP: (vms-01b) -- the hierarchical HELP library HELPLIB.HLP that the
+    # HELP built-in (src/vmsdcl/dcl_help.c) and HELP.EXE walk. Without it the
+    # booted system's HELP has no library to read and every topic fails.
+    cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSHLP/. /system-stage/vms/SYS0/SYSCOMMON/SYSHLP/ && \
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # OVMXVMSSYS.PAR (vms-d34): the initial SYSGEN parameter file, seeded

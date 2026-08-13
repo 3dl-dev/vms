@@ -15,5 +15,5 @@ items:
     status: verified
     authenticity: real
     vms: "HELP — hierarchical topic help, keyword lookup"
-    evidence: tools/vms_help.c
-    verified_against: tests/dcl/test_help_content.sh
+    evidence: src/vmsdcl/dcl_help.c
+    verified_against: tests/dcl/test_help_engine.c, tests/dcl/test_help_content.sh

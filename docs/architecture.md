@@ -55,7 +55,7 @@ Layer 5 ─ Kernel Extensions
            [vms.ko, vmsfs.ko]
 
 Layer 4 ─ User Interface
-           DCL shell, login, help, SSH auth
+           DCL shell (HELP is a DCL built-in), login, help image, SSH auth
            [vmsdcl, vms_login, vms_help, vms_ssh_auth]
 
 Layer 3 ─ File Services
@@ -98,7 +98,8 @@ libvmssys (freestanding, static only)
 
 tools/
   ├── vms_login  (+ libvms, standalone SHA-256)
-  ├── vms_help   (+ libvms)
+  ├── vms_help   (HELP.EXE — thin wrapper over the shared DCL help engine
+  │               src/vmsdcl/dcl_help.c; HELP is primarily a DCL built-in)
   └── vms_ssh_auth (+ libvms, standalone SHA-256)
 
 kernel/ (out-of-tree, separate build)

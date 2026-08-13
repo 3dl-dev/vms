@@ -27,14 +27,22 @@ set_target_properties(vms_login PROPERTIES
 )
 install(TARGETS vms_login RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
+# HELP.EXE (vms-01b): the standalone image form of HELP. HELP is primarily a
+# DCL built-in (src/vmsdcl: cmd_help -> dcl_help.c); this image exists so the
+# INSTALLED SYS$SYSTEM:HELP.EXE can be run directly from a target device, the
+# anti-LARP crux of tests/qemu/test_product_install_e2e.sh. It shares the ONE
+# hierarchical HELP engine (src/vmsdcl/dcl_help.c) and reads the real library
+# data -- the former compiled-in help string and orphaned reader are gone.
 add_executable(vms_help
     vms_help.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_help.c
 )
 
 target_include_directories(vms_help PRIVATE
     ${VMS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
 )
 
 target_compile_definitions(vms_help PRIVATE

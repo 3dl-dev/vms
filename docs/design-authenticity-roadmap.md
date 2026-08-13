@@ -42,7 +42,7 @@ completeness.
 | Tell | Reality today | Location |
 |---|---|---|
 | `SHOW SYSTEM` | Hardcoded `OpenVMS V7.3`; prints exactly **one fabricated process row**, never the real process list | `dcl_cmd_show.c:276` |
-| HELP | Shim — no `.HLB` tree; per-verb one-liners + 3 stale hardcoded sublevels. Real `HELP.EXE` exists but the HELP **verb never calls it** | `dcl_cmd_misc.c:718`; `tools/vms_help.c` |
+| HELP | RESOLVED (vms-01b) — the HELP built-in walks a real hierarchical library tree parsed from `SYS$HELP:HELPLIB.HLP`; the printf shim is gone and `HELP.EXE` is now a thin wrapper over the same shared engine (its compiled-in help string + orphaned duplicate reader deleted) | `src/vmsdcl/dcl_help.c`; `src/vmsdcl/dcl_cmd_misc.c` (cmd_help); `tools/vms_help.c` |
 | Message idents | Format authentic; catalog ~50; some idents **invented** (`QMANERR`, `SUBMITERR`) rather than real VMS idents | `dcl_messages.c:36` |
 | `F$GETSYI` | Recognizes **4** item codes (NODENAME, VERSION, HW_NAME, BOOTTIME); everything else returns empty | `dcl_lexical.c:1267` |
 | Batch queue | Real *store*, **no executor** — `SUBMIT` accepts a job, nothing ever dequeues/runs it | `vmsqueue.c:222` |
@@ -396,20 +396,28 @@ obvious shim in the banner, `SHOW`, `HELP`, or error output.
 - **Purity:** version string — see Decision D1. Column layout → lab-verified.
 - **Size:** 1 session.
 
-### A2 — HELP facility is a real hierarchical library
-- **Outcome:** the HELP verb drives a real hierarchical help library — `HELP`,
-  `HELP SHOW`, `HELP SHOW SYSTEM`, `HELP SET TERMINAL /qualifier` all resolve through a
-  key/subkey tree; retire the inline hardcoded shim.
-- **Done when:** `HELP <verb>` and `HELP <verb> <subtopic>` return structured multi-level
-  help for every builtin verb, sourced from a help library (`.HLB`-style or the wired
-  `HELP.EXE`), with the authentic "Information available:" / "Topic?" interaction; a test
-  covers a 3-level lookup and the "no such topic" path.
-- **Files:** `src/vmsdcl/dcl_cmd_misc.c:707`; `tools/vms_help.c`; help library format
-  (reuse `dcl_library.c` help-lib support at `:529`).
-- **Oracle:** HELP output format from public docs / `~/vax`.
-- **Decision D2:** wire the HELP verb to `HELP.EXE`, or build an in-process `.HLB`
-  reader? (Recommend: wire to `HELP.EXE` + a real help library file — reuses existing
-  code, matches VMS's `SYS$HELP:*.HLB` model.)
+### A2 — HELP facility is a real hierarchical library — DONE (vms-01b)
+- **Outcome (delivered):** the HELP built-in drives a real hierarchical help library —
+  `HELP`, `HELP SHOW`, `HELP SHOW DEFAULT` all resolve through a key/subkey tree parsed
+  from library data; the inline printf shim is retired, and `HELP.EXE` (kept for the
+  install-e2e anti-LARP gate) is now a thin wrapper over the same shared engine with its
+  compiled-in help string and orphaned duplicate reader removed.
+- **Done when (met):** `HELP <verb>` and `HELP <verb> <subtopic>` return structured
+  multi-level help sourced from the HELP library (`SYS$HELP:HELPLIB.HLP`), with the
+  authentic "Information available:" / "Additional information available:" /
+  "Topic?" / "<path> Subtopic?" interaction and the "Sorry, no documentation on <x>"
+  not-found path; `tests/dcl/test_help_engine.c` covers a 3-level lookup, abbreviated
+  keys, the not-found status, and the interactive prompt loop.
+- **Files:** `src/vmsdcl/dcl_help.c` (+ `include/dcl/help.h`); `src/vmsdcl/dcl_cmd_misc.c`
+  (cmd_help); library data `distro/rootfs/.../SYSHLP/HELPLIB.HLP`.
+- **Oracle:** HELP output format / prompt wording from public OpenVMS docs (DCL Dictionary
+  HELP; User's Manual "Getting Help").
+- **Decision D2 (resolved):** built an in-process reader inside the DCL verb (no separate
+  `HELP.EXE`), reading the documented numbered-level `.HLP` source directly. The
+  unpublished `.HLB` binary layout is not reproduced (Rule 8). **Deferred (still part of
+  epic `vms-01b`):** compiling `.HLP` → `.HLB` via LIBRARIAN and locating libraries via
+  the `HLP$LIBRARY` search-list; per-command help auto-generated from CDU tables;
+  `HELP/MESSAGE` from the message DB.
 - **Size:** 1–2 sessions (library content authoring is the bulk).
 
 ### A3 — Message facility: real idents, no invented ones

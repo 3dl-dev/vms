@@ -198,18 +198,19 @@ check_status_reports_failure() {
     label="$1"; cmdline="$2"
     printf '%s\nSHOW SYMBOL $STATUS\n' "$cmdline" \
         | "$DCL" >"$WORK/out2" 2>"$WORK/err2"
-    # 676 = SS$_BUGCHECK, the default of vms_kif_kerr_to_ss()'s closed
-    # errno-mapping switch (src/libvmssys/vms_kif.c) for the EBADF an ioctl
-    # on the never-opened /dev/vms descriptor produces. Measured, not
+    # 676 = SS$_BUGCHECK (%X000002A4), the default of vms_kif_kerr_to_ss()'s
+    # closed errno-mapping switch (src/libvmssys/vms_kif.c) for the EBADF an
+    # ioctl on the never-opened /dev/vms descriptor produces. Measured, not
     # assumed: with only 'MOUNT DUA0: TESTDISK' and no SHOW DEVICE at all,
-    # $STATUS reads 1 (SS$_NORMAL, MOUNT's own status) -- so 676 here can
-    # only come from this command's own executive read failing, not from
-    # something upstream.
-    if grep -qF '$STATUS = 676' "$WORK/out2"; then
-        echo "  OK: $label set \$STATUS = 676 (SS\$_BUGCHECK) though it printed nothing"
+    # $STATUS reads %X00000001 (SS$_NORMAL, MOUNT's own status) -- so
+    # %X000002A4 here can only come from this command's own executive read
+    # failing, not from something upstream. $STATUS is displayed in the VMS
+    # "%Xhhhhhhhh" representation (vms-3983), not decimal.
+    if grep -qF '$STATUS = "%X000002A4"' "$WORK/out2"; then
+        echo "  OK: $label set \$STATUS = %X000002A4 (SS\$_BUGCHECK) though it printed nothing"
     else
         fail "$label did not leave \$STATUS carrying the ioctl failure" \
-             "expected '\$STATUS = 676' in SHOW SYMBOL \$STATUS output; got:" \
+             "expected '\$STATUS = \"%X000002A4\"' in SHOW SYMBOL \$STATUS output; got:" \
              "$(sed 's/^/       | /' "$WORK/out2")"
     fi
 }

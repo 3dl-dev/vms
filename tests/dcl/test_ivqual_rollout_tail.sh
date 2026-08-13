@@ -24,8 +24,8 @@
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQMONITOR\
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQSYSGEN\
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQSYSMAN\
-# EXPECT: contains:$STATUS = 2288
-# EXPECT_NOT: contains:$STATUS = 1
+# EXPECT: contains:$STATUS = "%X000008F0"
+# EXPECT_NOT: contains:$STATUS = "%X00000001"
 #
 # --- Real qualifiers on the SAME verbs still pass (not a blanket reject) ---
 # The positive-control lines use each populated verb's real DCL Dictionary

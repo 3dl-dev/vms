@@ -1,6 +1,6 @@
 #!/bin/bash
 # TEST: SHOW TERMINAL names no terminal it did not read from the executive
-# EXPECT: contains:$STATUS = 676
+# EXPECT: contains:$STATUS = "%X000002A4"
 # EXPECT_NOT: contains:Terminal:
 # EXPECT_NOT: contains:Device_Type:
 # EXPECT_NOT: contains:Terminal Characteristics:

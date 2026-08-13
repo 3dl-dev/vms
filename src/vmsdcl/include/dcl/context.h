@@ -32,6 +32,9 @@ struct dcl_context {
         char on_error_label[256];
         char on_severe_label[256];
         char params[8][256]; /* P1-P8 parameters */
+        int  is_subroutine;  /* 1 = this level is a CALLed SUBROUTINE block */
+        int  gosub_base;     /* gosub_depth on entry: RETURN below this ends
+                              * the level (subroutine/procedure), not a GOSUB */
     } proc_stack[DCL_MAX_NEST];
     int proc_depth;
 
@@ -71,6 +74,13 @@ struct dcl_context {
     int exit_requested;
     int logout_requested;
     int exit_status;
+
+    /* RETURN from a CALLed SUBROUTINE (distinct from GOSUB RETURN, which
+     * unwinds within the same level via gosub_stack). The subroutine loop in
+     * dcl_script.c checks return_requested and stops; return_status carries the
+     * optional status argument, or $STATUS when RETURN gives none. */
+    int return_requested;
+    int return_status;
 
     /* Control-Y handling */
     int ctrl_y_enabled;

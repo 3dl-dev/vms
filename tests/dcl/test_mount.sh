@@ -3,7 +3,7 @@
 #       executive (vms-651) -- honest-failure path, exercised here where
 #       ctest runs and no /dev/vms exists.
 # EXPECT: contains:DCL-ALIVE
-# EXPECT: contains:$STATUS = 676
+# EXPECT: contains:$STATUS = "%X000002A4"
 # EXPECT_NOT: contains:%MOUNT-I-MOUNTED
 # EXPECT_NOT: contains:%DISMOUNT-I-DISMOUNTED
 # EXPECT_NOT: contains:DUA0:

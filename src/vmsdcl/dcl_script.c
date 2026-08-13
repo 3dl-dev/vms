@@ -22,6 +22,7 @@ extern int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
                             char *linux_path, size_t path_size);
 extern void dcl_error(const char *facility, int severity, const char *ident,
                       const char *fmt, ...);
+extern void dcl_set_status(struct dcl_context *ctx, int status);
 
 /*
  * Search a procedure file for a label.
@@ -78,6 +79,219 @@ int dcl_find_label(FILE *fp, const char *label)
     }
 
     return -1; /* Not found */
+}
+
+/*
+ * Run command lines from the current procedure level's file stream until EOF,
+ * an unhandled error stops the procedure, EXIT is requested, or (in a CALLed
+ * subroutine) RETURN/ENDSUBROUTINE sets return_requested. Shared verbatim by
+ * @-procedure execution and CALL subroutine execution so both honour the same
+ * continuation, symbol-substitution, verify and ON-ERROR semantics.
+ *
+ * The caller has already pushed the proc_stack level (with .fp set), pushed the
+ * local symbol frame, and set gosub_base. Returns the status of the last line.
+ */
+static int dcl_run_proc_lines(struct dcl_context *ctx, FILE *fp)
+{
+    char line[DCL_MAX_LINE];
+    int status = SS$_NORMAL;
+
+    while (fgets(line, sizeof(line), fp)) {
+        ctx->proc_stack[ctx->proc_depth].line_number++;
+
+        /* Remove trailing newline */
+        size_t len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+
+        /* Verify mode - echo the line */
+        if (ctx->verify) {
+            printf("%s\n", line);
+        }
+
+        /* Skip leading whitespace */
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+
+        /* Strip leading $ */
+        if (*p == '$') {
+            p++;
+            while (*p == ' ' || *p == '\t') p++;
+        }
+
+        /* Skip empty and comment lines */
+        if (*p == '\0' || *p == '!') continue;
+        if (*p == '$' && *(p + 1) == '!') continue;
+
+        /* Handle line continuation */
+        char full_line[DCL_MAX_LINE];
+        strncpy(full_line, p, sizeof(full_line) - 1);
+        full_line[sizeof(full_line) - 1] = '\0';
+
+        len = strlen(full_line);
+        while (len > 0 && full_line[len - 1] == '-') {
+            full_line[len - 1] = '\0';
+            if (!fgets(line, sizeof(line), fp)) break;
+            ctx->proc_stack[ctx->proc_depth].line_number++;
+            len = strlen(line);
+            if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+
+            p = line;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '$') { p++; while (*p == ' ' || *p == '\t') p++; }
+
+            strncat(full_line, p, sizeof(full_line) - strlen(full_line) - 1);
+            len = strlen(full_line);
+        }
+
+        /* Perform symbol substitution */
+        char substituted[DCL_MAX_LINE];
+        dcl_sym_substitute(full_line, substituted, sizeof(substituted));
+
+        /* Execute the line */
+        status = dcl_execute_line(substituted);
+
+        /* RETURN / ENDSUBROUTINE inside a CALLed subroutine: stop this level. */
+        if (ctx->return_requested)
+            break;
+
+        /* Check for EXIT or error */
+        if (ctx->exit_requested) {
+            /* EXIT was executed in the procedure */
+            ctx->exit_requested = 0; /* Reset for the caller */
+            break;
+        }
+
+        /* Check ON ERROR handling */
+        if (!(status & 1)) {
+            /* Error occurred */
+            int severity = status & 7;
+            int handle_error = 0;
+
+            /* SET NOON suppresses the ON ERROR handler */
+            if (!ctx->noon_active) {
+                if (severity >= 4 && ctx->proc_stack[ctx->proc_depth].on_severe) {
+                    handle_error = ctx->proc_stack[ctx->proc_depth].on_severe;
+                } else if (severity >= 2 && ctx->proc_stack[ctx->proc_depth].on_error) {
+                    handle_error = ctx->proc_stack[ctx->proc_depth].on_error;
+                }
+            }
+
+            if (handle_error == 1) {
+                /* ON ERROR THEN CONTINUE - just continue */
+                continue;
+            } else if (handle_error == 2) {
+                /* ON ERROR THEN GOTO label */
+                const char *label = (severity >= 4) ?
+                    ctx->proc_stack[ctx->proc_depth].on_severe_label :
+                    ctx->proc_stack[ctx->proc_depth].on_error_label;
+                if (label[0]) {
+                    if (dcl_find_label(fp, label) == 0) {
+                        continue; /* Jump to label */
+                    } else {
+                        dcl_error("DCL", 2, "USGOTO",
+                                  "target of GOTO not found - \\%s\\", label);
+                        break;
+                    }
+                }
+            } else if (handle_error == 0) {
+                /* No handler - stop procedure on error */
+                /* Only stop on error/severe, not warning */
+                if (severity >= 2) {
+                    break;
+                }
+            }
+        }
+    }
+
+    return status;
+}
+
+/*
+ * CALL label [p1 ... p8] -- invoke an in-procedure subroutine.
+ *
+ * VMS semantics (DCL Dictionary, "CALL"/"SUBROUTINE"/"RETURN"): CALL transfers
+ * to a label whose block is bracketed by SUBROUTINE...ENDSUBROUTINE, and gives
+ * the subroutine a NEW command level -- its own P1-P8 and its own local symbol
+ * frame (per the vms-2af per-level scoping) -- inside the SAME procedure file.
+ * RETURN [status] (or ENDSUBROUTINE) returns to the line after CALL and sets
+ * $STATUS. The subroutine reads the same file stream; the caller's read
+ * position is saved and restored so execution resumes right after the CALL.
+ *
+ * Returns the subroutine's completion status.
+ */
+int dcl_call_subroutine(const char *label, int argc, char **argv)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+    if (ctx->proc_depth < 0) {
+        dcl_error("DCL", 2, "NOINTERACT",
+                  "CALL not allowed in interactive mode");
+        return SS$_BADPARAM;
+    }
+    if (ctx->proc_depth >= DCL_MAX_NEST - 1) {
+        dcl_error("DCL", 4, "NESTLEV",
+                  "maximum procedure nesting level exceeded");
+        return SS$_BADPARAM;
+    }
+
+    FILE *fp = ctx->proc_stack[ctx->proc_depth].fp;
+    if (!fp) return SS$_BADPARAM;
+
+    /* Save the caller's read position so we resume after the CALL line. */
+    long resume_off = ftell(fp);
+    int  resume_line = ctx->proc_stack[ctx->proc_depth].line_number;
+
+    /* Position at the subroutine's label (fp now points just after it). */
+    if (dcl_find_label(fp, label) != 0) {
+        fseek(fp, resume_off, SEEK_SET);
+        dcl_error("DCL", 2, "USGOTO",
+                  "target of CALL not found - \\%s\\", label);
+        return SS$_BADPARAM;
+    }
+
+    /* Push a new command level that shares the file stream. */
+    ctx->proc_depth++;
+    struct dcl_context *c = ctx;
+    memset(&c->proc_stack[c->proc_depth], 0, sizeof(c->proc_stack[0]));
+    c->proc_stack[c->proc_depth].fp = fp;
+    strncpy(c->proc_stack[c->proc_depth].filename,
+            c->proc_stack[c->proc_depth - 1].filename,
+            sizeof(c->proc_stack[0].filename) - 1);
+    c->proc_stack[c->proc_depth].is_subroutine = 1;
+    c->proc_stack[c->proc_depth].gosub_base = c->gosub_depth;
+    c->proc_stack[c->proc_depth].line_number = 0;
+
+    /* Fresh local symbol frame + P1-P8 for the subroutine. */
+    dcl_sym_push_frame();
+    for (int i = 0; i < 8; i++) {
+        char pname[4];
+        snprintf(pname, sizeof(pname), "P%d", i + 1);
+        if (argv && i < argc && argv[i])
+            dcl_sym_set(pname, argv[i], DCL_SYM_LOCAL);
+        else
+            dcl_sym_set(pname, "", DCL_SYM_LOCAL);
+    }
+
+    int status = dcl_run_proc_lines(ctx, fp);
+
+    /* If the loop stopped on RETURN [status], adopt that status. */
+    if (ctx->return_requested) {
+        status = ctx->return_status;
+        ctx->return_requested = 0;
+    }
+
+    /* Pop the subroutine's local frame and command level. */
+    dcl_sym_pop_frame();
+    ctx->gosub_depth = c->proc_stack[c->proc_depth].gosub_base;
+    ctx->proc_depth--;
+
+    /* Resume the caller right after the CALL line. */
+    fseek(fp, resume_off, SEEK_SET);
+    ctx->proc_stack[ctx->proc_depth].line_number = resume_line;
+
+    /* CALL sets $STATUS to the subroutine's completion status. */
+    dcl_set_status(ctx, status);
+    return status;
 }
 
 /*
@@ -166,6 +380,10 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
     strncpy(ctx->proc_stack[ctx->proc_depth].filename, linux_path,
             sizeof(ctx->proc_stack[0].filename) - 1);
     ctx->proc_stack[ctx->proc_depth].line_number = 0;
+    ctx->proc_stack[ctx->proc_depth].is_subroutine = 0;
+    /* GOSUBs opened inside this procedure return within it; a RETURN below this
+     * base ends the procedure rather than a caller's GOSUB. */
+    ctx->proc_stack[ctx->proc_depth].gosub_base = ctx->gosub_depth;
 
     /* Push a fresh local symbol frame for this command level. VMS gives each
      * @ level its own local symbol table: locals defined here (including P1-P8)
@@ -187,110 +405,13 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
     }
 
     /* Execute lines */
-    char line[DCL_MAX_LINE];
-    int status = SS$_NORMAL;
+    int status = dcl_run_proc_lines(ctx, fp);
 
-    while (fgets(line, sizeof(line), fp)) {
-        ctx->proc_stack[ctx->proc_depth].line_number++;
-
-        /* Remove trailing newline */
-        size_t len = strlen(line);
-        if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
-
-        /* Verify mode - echo the line */
-        if (ctx->verify) {
-            printf("%s\n", line);
-        }
-
-        /* Skip leading whitespace */
-        char *p = line;
-        while (*p == ' ' || *p == '\t') p++;
-
-        /* Strip leading $ */
-        if (*p == '$') {
-            p++;
-            while (*p == ' ' || *p == '\t') p++;
-        }
-
-        /* Skip empty and comment lines */
-        if (*p == '\0' || *p == '!') continue;
-        if (*p == '$' && *(p + 1) == '!') continue;
-
-        /* Handle line continuation */
-        char full_line[DCL_MAX_LINE];
-        strncpy(full_line, p, sizeof(full_line) - 1);
-        full_line[sizeof(full_line) - 1] = '\0';
-
-        len = strlen(full_line);
-        while (len > 0 && full_line[len - 1] == '-') {
-            full_line[len - 1] = '\0';
-            if (!fgets(line, sizeof(line), fp)) break;
-            ctx->proc_stack[ctx->proc_depth].line_number++;
-            len = strlen(line);
-            if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
-
-            p = line;
-            while (*p == ' ' || *p == '\t') p++;
-            if (*p == '$') { p++; while (*p == ' ' || *p == '\t') p++; }
-
-            strncat(full_line, p, sizeof(full_line) - strlen(full_line) - 1);
-            len = strlen(full_line);
-        }
-
-        /* Perform symbol substitution */
-        char substituted[DCL_MAX_LINE];
-        dcl_sym_substitute(full_line, substituted, sizeof(substituted));
-
-        /* Execute the line */
-        status = dcl_execute_line(substituted);
-
-        /* Check for EXIT or error */
-        if (ctx->exit_requested) {
-            /* EXIT was executed in the procedure */
-            ctx->exit_requested = 0; /* Reset for the caller */
-            break;
-        }
-
-        /* Check ON ERROR handling */
-        if (!(status & 1)) {
-            /* Error occurred */
-            int severity = status & 7;
-            int handle_error = 0;
-
-            /* SET NOON suppresses the ON ERROR handler */
-            if (!ctx->noon_active) {
-                if (severity >= 4 && ctx->proc_stack[ctx->proc_depth].on_severe) {
-                    handle_error = ctx->proc_stack[ctx->proc_depth].on_severe;
-                } else if (severity >= 2 && ctx->proc_stack[ctx->proc_depth].on_error) {
-                    handle_error = ctx->proc_stack[ctx->proc_depth].on_error;
-                }
-            }
-
-            if (handle_error == 1) {
-                /* ON ERROR THEN CONTINUE - just continue */
-                continue;
-            } else if (handle_error == 2) {
-                /* ON ERROR THEN GOTO label */
-                const char *label = (severity >= 4) ?
-                    ctx->proc_stack[ctx->proc_depth].on_severe_label :
-                    ctx->proc_stack[ctx->proc_depth].on_error_label;
-                if (label[0]) {
-                    if (dcl_find_label(fp, label) == 0) {
-                        continue; /* Jump to label */
-                    } else {
-                        dcl_error("DCL", 2, "USGOTO",
-                                  "target of GOTO not found - \\%s\\", label);
-                        break;
-                    }
-                }
-            } else if (handle_error == 0) {
-                /* No handler - stop procedure on error */
-                /* Only stop on error/severe, not warning */
-                if (severity >= 2) {
-                    break;
-                }
-            }
-        }
+    /* A stray RETURN at the top level of a procedure (no open GOSUB, not a
+     * subroutine) behaves like EXIT: adopt its status and stop. */
+    if (ctx->return_requested) {
+        status = ctx->return_status;
+        ctx->return_requested = 0;
     }
 
     /* Pop procedure from stack */

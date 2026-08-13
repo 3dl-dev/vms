@@ -4,7 +4,7 @@
 #       fake success
 # EXPECT: contains:%DCL-W-NOTIMPL, ASSIGN /TABLE is not yet implemented
 # EXPECT: contains:%SET-W-NOTIMPL, security auditing is not implemented in OVMX
-# EXPECT_NOT: contains:$STATUS = 1
+# EXPECT_NOT: contains:$STATUS = "%X00000001"
 # EXPECT_NOT: contains:%MOUNT-I-MOUNTED
 #
 # THE FINDING THIS GATES (docs/design-dcl-fidelity.md sec 1, INV-DCL sec 3).

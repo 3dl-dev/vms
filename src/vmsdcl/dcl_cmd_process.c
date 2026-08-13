@@ -1337,11 +1337,64 @@ void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
 
     char line[DCL_MAX_LINE];
     long pos = ftell(fp);
+    /* DECK/EOD explicit in-stream data (vms-3983). Normally the input block
+     * ends at the first '$'-command line; DECK suspends that so a block may
+     * itself contain '$'-lines, ending only at the EOD sentinel. Reference:
+     * DCL Dictionary, "DECK" and "EOD". Default sentinel is a line beginning
+     * "$EOD"; DECK/DOLLAR=string names a different one. */
+    int  deck_mode = 0;
+    char deck_term[48] = "EOD";
     while (fgets(line, sizeof(line), fp)) {
         const char *p = line;
         while (*p == ' ' || *p == '\t')
             p++;
-        if (*p == '$') {
+
+        if (deck_mode) {
+            /* In a deck, only the EOD sentinel line ends the block; every other
+             * line -- including '$'-lines -- is data. */
+            if (*p == '$') {
+                const char *q = p + 1;
+                while (*q == ' ' || *q == '\t') q++;
+                size_t tl = strlen(deck_term);
+                if (strncasecmp(q, deck_term, tl) == 0 &&
+                    (q[tl] == '\0' || q[tl] == '\n' ||
+                     q[tl] == ' '  || q[tl] == '\t')) {
+                    deck_mode = 0;   /* consume the EOD line, feed nothing */
+                    ctx->proc_stack[ctx->proc_depth].line_number++;
+                    pos = ftell(fp);
+                    continue;
+                }
+            }
+            /* fall through to feed the data line below */
+        } else if (*p == '$') {
+            /* A '$ DECK' opens an explicit data block; any other '$'-line is
+             * the next DCL command and terminates the image's input. */
+            const char *q = p + 1;
+            while (*q == ' ' || *q == '\t') q++;
+            if (strncasecmp(q, "DECK", 4) == 0 &&
+                (q[4] == '\0' || q[4] == '\n' || q[4] == ' ' ||
+                 q[4] == '\t' || q[4] == '/')) {
+                /* Optional /DOLLAR=string sets a custom sentinel. */
+                const char *slash = strchr(q, '/');
+                if (slash) {
+                    const char *eq = strchr(slash, '=');
+                    if (eq) {
+                        eq++;
+                        while (*eq == ' ' || *eq == '\t' || *eq == '"') eq++;
+                        size_t di = 0;
+                        while (*eq && *eq != ' ' && *eq != '\t' &&
+                               *eq != '\n' && *eq != '"' &&
+                               di < sizeof(deck_term) - 1)
+                            deck_term[di++] = *eq++;
+                        deck_term[di] = '\0';
+                        if (di == 0) strcpy(deck_term, "EOD");
+                    }
+                }
+                deck_mode = 1;   /* consume the DECK line, feed nothing */
+                ctx->proc_stack[ctx->proc_depth].line_number++;
+                pos = ftell(fp);
+                continue;
+            }
             /* Next DCL command terminates the image's input. Put the stream
              * back at the start of this line so the parent loop reads it. */
             fseek(fp, pos, SEEK_SET);

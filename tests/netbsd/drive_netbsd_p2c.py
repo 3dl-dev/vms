@@ -165,8 +165,13 @@ def main():
     # P2c uses its OWN cache/workdir: like P2b its installed image carries the
     # comp + syssrc sets (needed to build a kernel module in-guest), but it must
     # not collide with the P2b cache.
+    # SHARED installed-disk cache (rd vms-2d9): identical workdir + sets across
+    # P2a/P2b/P2c so ONE cached wd0.img (keyed on the NetBSD version only) serves
+    # all three. The OVMX module is built in-guest after boot, never baked into
+    # the disk -- so nothing OVMX-source-dependent belongs here. Keep IDENTICAL
+    # across the three drivers.
     workdir = env("NETBSD_WORKDIR",
-                  "/cache/anita-netbsd-p2c-%s-%s" % (version, arch))
+                  "/cache/anita-netbsd-shared-%s-%s" % (version, arch))
 
     guest_src_dir = env("OVMX_GUEST_SRC", "/netbsd/guest-src")
     src_iso = env("OVMX_SRC_ISO", "/tmp/ovmx-src-p2c.iso")
@@ -175,8 +180,14 @@ def main():
     # so the guest runs under TCG and every in-guest command is much slower than
     # a local KVM run. The build is quiet (redirected to a file) so it no longer
     # floods the console, but a slow guest can still take a while per command.
-    boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "1500"))
-    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "300"))
+    # Backstop headroom for a GENUINE cold install/boot (rd vms-2d9): the shared
+    # version-keyed cache means routine runs restore a warm image (~8min), but
+    # the first-ever/version-bump install boots cold on a possibly-loaded runner,
+    # where the boot and the first login can be slow. This is not a substitute
+    # for the deterministic console (that fixes the desync); it is only room for
+    # a legitimately slow cold boot so it does not trip a tight deadline.
+    boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "2400"))
+    cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "600"))
     build_timeout = int(env("NETBSD_BUILD_TIMEOUT", "1800"))
 
     skip_set = bool(env("P2C_SKIP_SET"))

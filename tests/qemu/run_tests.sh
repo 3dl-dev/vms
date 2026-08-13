@@ -16,7 +16,17 @@ set -euo pipefail
 # the matching line. Do not reintroduce a pipeline here.
 . "$(dirname "$0")/lib/harness_verdict.sh"
 
-TIMEOUT=120
+# Whole-VM wall budget (rd vms-055). This is ONE QEMU boot that runs every
+# executive suite (~76 as of this writing) sequentially -- there is no
+# per-suite timeout, only this single wall. It was 120s, and the suite set
+# outgrew it: measured under CI contention the guest was SIGTERM'd around suite
+# ~58/76 (e.g. test_syssvc_procnam) with ZERO failing assertions -- a pure
+# capacity red, not a suite defect, and load-dependent (it passed on 2 of 3
+# recent main runs). The work-floor is ~120s * 76/58 ~= 157s; 300s gives ~2x
+# headroom for CI load while staying far under the ci.yml kernel-executive
+# job's timeout-minutes: 60 bound. A wall overrun is detected (timeout rc=124)
+# and reported legibly below, but STILL fails the gate -- see the verdict path.
+TIMEOUT=300
 KERNEL=/boot/vmlinuz
 INITRD=/initramfs.cpio.gz
 ARCH=$(uname -m)
@@ -75,7 +85,13 @@ echo "Kernel: $KERNEL ($(ls -lh $KERNEL | awk '{print $5}'))"
 echo "Initrd: $INITRD ($(ls -lh $INITRD | awk '{print $5}'))"
 echo ""
 
-# Run QEMU with serial on stdio, capture all output
+# Run QEMU with serial on stdio, capture all output.
+# Capture timeout(1)'s exit code instead of discarding it: rc=124 means the
+# whole-VM wall fired (SIGTERM on budget exhaustion), which we render legibly
+# in the verdict path below (rd vms-055) rather than letting it masquerade as a
+# suite assertion failure. `|| QEMU_RC=$?` keeps `set -e` from aborting here
+# exactly as the old `|| true` did; there is no pipe, so pipefail is not in play.
+QEMU_RC=0
 OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     $MACHINE \
     -kernel "$KERNEL" \
@@ -93,7 +109,7 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -device virtio-blk-pci,drive=ovmxdisk0 \
     -drive if=none,id=ovmxdisk1,file="$OVMX_DISK1",format=raw \
     -device virtio-blk-pci,drive=ovmxdisk1 \
-    2>&1) || true
+    2>&1) || QEMU_RC=$?
 
 # Splice the assertion transcript (ttyS1, if this arch has one) back into
 # $OUTPUT right after init.sh's own banner announcing it took that channel.
@@ -145,6 +161,27 @@ if harness_verdict_zero_failures "$OUTPUT_FILE"; then
     echo "=========================================="
     exit 0
 else
+    # Make a wall-timeout LEGIBLE rather than silent (rd vms-055). timeout(1)
+    # returns 124 when it SIGTERMs the guest on budget exhaustion. Before this,
+    # a budget overrun exited nonzero indistinguishably from a real suite
+    # failure -- the transcript was simply truncated before FINAL RESULTS, so
+    # the verdict helper reported failure with no hint that the cause was the
+    # clock, not an assertion. We name it here. Crucially this does NOT swallow
+    # the failure: a genuine overrun must still redden the gate, just legibly,
+    # so we fall through to the same exit 1 below. Every other nonzero exit
+    # (QEMU_RC != 124, or a real FAIL line) stays a genuine suite failure.
+    if [ "$QEMU_RC" -eq 124 ]; then
+        echo "=========================================="
+        echo "  KE VM WALL BUDGET (${TIMEOUT}s) EXCEEDED"
+        echo "=========================================="
+        echo "run_tests.sh: the whole-VM wall timeout fired (timeout rc=124) before"
+        echo "the suite run reached its own FINAL RESULTS accounting. This is a HARNESS"
+        echo "CAPACITY issue (rd vms-055), NOT a suite assertion failure -- assertions"
+        echo "that DID run may all have passed. The gate still fails (a real overrun"
+        echo "must not be swallowed). If the suite set has genuinely outgrown ${TIMEOUT}s,"
+        echo "raise TIMEOUT in tests/qemu/run_tests.sh; do not drop or skip a suite."
+        echo ""
+    fi
     echo "=========================================="
     echo "  KERNEL MODULE TESTS FAILED"
     echo "=========================================="

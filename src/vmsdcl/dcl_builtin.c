@@ -299,7 +299,8 @@ static const struct dcl_qual_def q_reply[] = {
     QUAL_END
 };
 static const struct dcl_qual_def q_recall[] = {
-    { "ALL", CDU_VT_NONE, 0, NULL, NULL },
+    { "ALL",   CDU_VT_NONE, 0, NULL, NULL },
+    { "ERASE", CDU_VT_NONE, 0, NULL, NULL },
     QUAL_END
 };
 

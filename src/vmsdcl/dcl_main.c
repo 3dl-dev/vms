@@ -856,6 +856,14 @@ int main(int argc, char *argv[])
             }
         }
 
+        /* Record the fully-assembled command line in DCL's recall buffer so
+         * RECALL can replay it, independent of readline (vms-7c7). This is the
+         * top-level command loop, so it captures exactly the commands a VMS
+         * recall buffer holds -- commands entered at the interactive command
+         * level, not lines executed from within a @command procedure (those go
+         * through dcl_execute_script, a separate path). */
+        dcl_recall_push(line);
+
         process_line(&dcl_ctx, line);
         free(line);
     }

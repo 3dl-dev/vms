@@ -83,6 +83,17 @@ int cmd_request(struct dcl_command *cmd);
 int cmd_accounting(struct dcl_command *cmd);
 int cmd_help(struct dcl_command *cmd);
 int cmd_recall(struct dcl_command *cmd);
+
+/*
+ * DCL command recall buffer (vms-7c7). The interactive command loop records
+ * each top-level command line here so RECALL can replay it, independent of any
+ * terminal line-editing library. dcl_recall_push() adds one non-empty line;
+ * dcl_recall_erase() clears the buffer (RECALL/ERASE). Defined in
+ * dcl_cmd_misc.c alongside cmd_recall().
+ */
+void dcl_recall_push(const char *line);
+void dcl_recall_erase(void);
+
 int cmd_tcpip(struct dcl_command *cmd);
 int cmd_mount(struct dcl_command *cmd);
 int cmd_dismount(struct dcl_command *cmd);

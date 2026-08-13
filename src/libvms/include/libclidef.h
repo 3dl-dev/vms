@@ -43,15 +43,32 @@ extern "C" {
 #define CLI$K_CLISERV       6   /* General CLI service request */
 
 /* ================================================================
- * CLI callback status returns
+ * CLI$ status returns (from cli$present / cli$get_value)
+ *
+ * SEVERITY IS LOAD-BEARING and matches documented VMS behavior (DCL
+ * Dictionary, CLI$PRESENT / CLI$GET_VALUE): callers test the returned
+ * status with $VMS_STATUS_SUCCESS (see e.g. MMK's cli_get_value wrapper,
+ * tests/corpus/tier3-mmk/mmk.c) to decide whether a value can be fetched.
+ * Therefore CLI$_PRESENT / CLI$_DEFAULTED / CLI$_COMMA / CLI$_CONCAT carry
+ * SUCCESS severity (low bit set) while CLI$_ABSENT / CLI$_NEGATED carry
+ * WARNING severity (low bit clear) so that $VMS_STATUS_SUCCESS is FALSE for
+ * them -- an absent or negated qualifier has no value to get.
+ *
+ * PROVENANCE: the exact 32-bit values are OVMX-assigned (the VSI $CLIDEF
+ * numeric assignments are not published in a fetchable public source this
+ * pass -- flagged, to be pinned to the oracle later). Only the SUCCESS/
+ * WARNING severity bit is grounded in documented behavior. NOTE: this fixes
+ * a latent bug -- CLI$_ABSENT (0x0003A031) and CLI$_NEGATED (0x0003A039)
+ * previously carried SUCCESS severity, which would make MMK fetch a value
+ * from an absent qualifier.
  * ================================================================ */
 
-#define CLI$_PRESENT        0x0003A019  /* Qualifier is present */
-#define CLI$_ABSENT         0x0003A031  /* Qualifier is absent */
-#define CLI$_NEGATED        0x0003A039  /* Qualifier is negated (/NOQUAL) */
-#define CLI$_DEFAULTED      0x0003A041  /* Qualifier has default value */
-#define CLI$_COMMA          0x0003A049  /* More values follow (comma-separated) */
-#define CLI$_CONCAT         0x0003A051  /* More values follow (concatenated) */
+#define CLI$_PRESENT        0x0003A019  /* Entity present (success)          */
+#define CLI$_ABSENT         0x0003A030  /* Entity absent (warning: no value) */
+#define CLI$_NEGATED        0x0003A038  /* Entity negated /NOxxx (warning)   */
+#define CLI$_DEFAULTED      0x0003A041  /* Value came from CLD default (succ)*/
+#define CLI$_COMMA          0x0003A049  /* Value followed by ',' (success)   */
+#define CLI$_CONCAT         0x0003A051  /* Value followed by '+' (success)   */
 
 /* ================================================================
  * Spawn flags for lib$spawn

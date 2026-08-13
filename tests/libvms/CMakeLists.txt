@@ -308,3 +308,15 @@ target_link_libraries(test_libvms_login_logicals PRIVATE
 )
 add_test(NAME test_libvms_login_logicals
          COMMAND test_libvms_login_logicals)
+
+# vms-8c1 -- CLI$ callable interface (cli$dcl_parse / cli$present /
+# cli$get_value) + compiled-CLD support (cli$compile_cld). Compiles the REAL
+# vendored MMK command table (tests/corpus/tier3-mmk/mmk_cld.cld) and drives it
+# with MMK's exact call idioms. Unblocks native MMK.EXE (vms-ec70).
+libvms_add_test(test_libvms_lib_cli
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_cli.c)
+# NB: pass the path UNQUOTED and stringize it in the test (see MMK_CLD_PATH
+# there). A quoted -D value would emit \" backslash escapes into
+# compile_commands.json, which the kif_caller_census reader rejects.
+target_compile_definitions(test_libvms_lib_cli PRIVATE
+    MMK_CLD_PATH=${CMAKE_SOURCE_DIR}/tests/corpus/tier3-mmk/mmk_cld.cld)

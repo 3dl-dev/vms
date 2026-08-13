@@ -24,6 +24,12 @@ endfunction()
 libvms_add_test(test_libvms_fao
     ${CMAKE_CURRENT_SOURCE_DIR}/test_fao.c)
 
+# Test 1b: sys$filescan — file specification field scan (vms-4f3, self-host
+# MMK spine). Parses full/partial/wildcard/node/rooted specs and asserts each
+# FSCN$_ field's returned position, length, and the fldflags presence mask.
+libvms_add_test(test_libvms_filescan
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_filescan.c)
+
 # Test 2: lib$get_vm / lib$free_vm / lib$create_vm_zone / lib$delete_vm_zone
 libvms_add_test(test_libvms_lib_vm
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_vm.c)

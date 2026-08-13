@@ -18,19 +18,25 @@ KMOD=		vms
 # ../kernel-core/vms_ast.c + vms_access.c (ASTs + access modes, P4-A),
 # ../kernel-core/vms_mbx.c (executive-resident mailboxes MBAn:, P4-A) and
 # ../kernel-core/vms_proctab.c (the executive process table -- $GETJPI/$SETPRN/
-# $PROCESS_SCAN/$HIBER/$WAKE/$SETIDENT, P4-A rd vms-ca7). There is exactly ONE
+# $PROCESS_SCAN/$HIBER/$WAKE/$SETIDENT, P4-A rd vms-ca7) and
+# ../kernel-core/vms_lock.c (the distributed lock manager -- $ENQ/$DEQ/$CONVERT/
+# $GETLKI, P4-A rd vms-ff7, the LAST executive facility). There is exactly ONE
 # implementation of each facility; this build compiles them with the NetBSD
 # backend. (vms_mbx.c links vms_ast_notify_arrival, so vms_ast.c must be present
 # -- it is, above. vms_proctab.c binds the host task + the intrusive process
-# hash, so exec_hash_netbsd.c -- the NetBSD hash impl -- is listed too.)
+# hash, so exec_hash_netbsd.c -- the NetBSD hash impl -- is listed too. vms_lock.c
+# is the sole exec_rbtree consumer -- its lock-ID red-black tree -- so
+# exec_rbtree_netbsd.c, OVMX's own intrusive tree, is listed with it.)
 SRCS=		vms_netbsd.c \
 		exec_list_netbsd.c \
 		exec_hash_netbsd.c \
+		exec_rbtree_netbsd.c \
 		vms_eflag.c \
 		vms_ast.c \
 		vms_access.c \
 		vms_mbx.c \
-		vms_proctab.c
+		vms_proctab.c \
+		vms_lock.c
 
 # vms_eflag.c lives in the shared core dir; tell bmake where to find it.
 .PATH:		${.CURDIR}/../kernel-core

@@ -45,6 +45,11 @@
 #include "exec_kbackend.h"
 #include "exec_list.h"
 #include "exec_hash.h"
+/* The lock manager's lock-ID database is an intrusive red-black tree; its NetBSD
+ * backend (exec_rbtree_netbsd.{h,c}) is selected by OVMX_KBACKEND_NETBSD. Needed
+ * for exec_rbtree_node_t embedded in struct vms_lock_entry below (P4-A locks, rd
+ * vms-ff7). */
+#include "exec_rbtree.h"
 
 /* The facility argument structs the shared core copies in/out, plus the access
  * modes and privilege bits they gate on. Byte-identical to src/kernel/vms_ioctl.h;
@@ -62,6 +67,11 @@
  * NONEXPR/IVLOGNAM statuses, VMS_PRV_M_WORLD and the SYSTEM identity constants.
  * Byte-identical to src/kernel/vms_ioctl.h. */
 #include "vms_proctab_nb.h"
+/* Lock-manager (DLM) wire contract (P4-A, rd vms-ff7): the $ENQ/$DEQ/$CONVERT/
+ * $GETLKI/GET_RESMASTER arg structs the facility copies, the LCK_K_* modes,
+ * LCK_M_* flags and LCK_VALBLK_SIZE it tests. Byte-identical to
+ * src/kernel/vms_ioctl.h. */
+#include "vms_lock_nb.h"
 
 /* ================================================================
  * VMS status codes -- the subset the event-flag facility returns. Values match
@@ -86,6 +96,16 @@
 #define SS__IVCHAN    602          /* SS$_IVCHAN -- invalid I/O channel */
 #define SS__IVDEVNAM  608          /* SS$_IVDEVNAM -- invalid device name */
 #define SS__NOSUCHDEV 2680         /* SS$_NOSUCHDEV -- no such device available */
+/* Lock-manager subset (P4-A, rd vms-ff7). Values match src/kernel/vms_internal.h
+ * exactly -- each is the value src/libvms/include/ssdef.h already ships for that
+ * name, produced IN the executive (the lock manager yields VMS condition values,
+ * vms-82a). SS__UNSUPPORTED is the honest "remote directory/master -- not built
+ * yet" answer for a non-local DLM path (0.4), never a fabricated remote grant. */
+#define SS__NOTQUEUED   2488       /* SS$_NOTQUEUED (LCK_M_NOQUEUE, not granted) */
+#define SS__DEADLOCK    3594       /* SS$_DEADLOCK (wait-for cycle detected) */
+#define SS__IVLOCKID    8484       /* SS$_IVLOCKID (invalid lock ID) */
+#define SS__CANCELGRANT 8508       /* SS$_CVTUNGRANT (conversion could not be granted) */
+#define SS__UNSUPPORTED 2296       /* SS$_UNSUPPORTED (remote DLM path -- 0.4) */
 
 /* ================================================================
  * Mailbox privilege bits (P4-A, rd vms-d7a). PSL_C_* and CMKRNL/CMEXEC/SETPRV
@@ -219,6 +239,78 @@ struct vms_ef_state {
 	exec_lock_t                   lock;      /* guards local[], common[], waitq */
 };
 
+/* ================================================================
+ * Lock-manager (DLM) structures (P4-A, rd vms-ff7) -- the exact fields
+ * src/kernel-core/vms_lock.c uses, in the exec_* / exec_list_* / exec_rbtree_*
+ * vocabulary. Compare src/kernel/vms_internal.h's Linux-typed versions (struct
+ * list_head / struct rb_node / struct hlist_node / wait_queue_head_t /
+ * spinlock_t); the facility names only exec_* so it compiles unchanged on either
+ * substrate. These are kernel-internal (never cross the /dev/vms boundary), so
+ * only field PRESENCE and type must match the Linux twin -- not byte layout.
+ * ================================================================ */
+
+/* Lock entry -- a process's view of one granted or waiting lock. */
+struct vms_lock_entry {
+	exec_list_node_t    proc_list;      /* link in the process's lock list */
+	exec_list_node_t    res_granted;    /* link in the resource's granted list */
+	exec_list_node_t    res_waiting;    /* link in the resource's waiting list */
+	exec_rbtree_node_t  rb_node;        /* link in the global lock-ID tree */
+	uint32_t            lkid;
+	uint32_t            granted_mode;   /* current granted mode (0-5) */
+	uint32_t            requested_mode; /* requested mode if waiting */
+	uint32_t            flags;          /* LCK_M_* */
+	uint64_t            astadr;         /* completion AST */
+	uint64_t            astprm;
+	uint64_t            blkastadr;      /* blocking AST */
+	uint8_t             valblk[LCK_VALBLK_SIZE];
+	struct vms_lock_resource *resource;
+	struct vms_proc     *proc;
+	int                 waiting;        /* 1 if on the waiting list */
+	int                 refcount;       /* reference count for safe lookup */
+	exec_cv_t           wait_wq;        /* sync ENQ ($ENQW): blocker sleeps here */
+	int                 grant_state;    /* sync wake: 0=pending, SS__NORMAL=granted,
+	                                     *            SS__DEADLOCK=cycle detected */
+	uint8_t             acmode;         /* access mode $ENQ was issued from (0-3),
+	                                     * for image rundown -- NOT a lock mode */
+};
+
+/* Lock resource -- a named resource in the lock database. */
+struct vms_lock_resource {
+	exec_hash_node_t    hash_node;      /* link in the global resource hash */
+	char                name[32];
+	exec_list_head_t    granted;        /* granted lock list */
+	exec_list_head_t    waiting;        /* waiting lock list (FIFO) */
+	uint8_t             valblk[LCK_VALBLK_SIZE]; /* resource value block */
+	exec_lock_t         lock;
+	int                 refcount;
+	struct vms_lock_resource *parent;
+	/* DLM directory + mastering (vms-ci.5 DB, LOCAL scaffolding): both resolve
+	 * to vms_local_csid on a stub-of-one membership; a non-local directory or
+	 * master returns SS__UNSUPPORTED (0.4), never a fabricated remote grant. */
+	uint32_t            dir_csid;       /* directory node CSID for `name` */
+	uint32_t            master_csid;    /* mastering node CSID; 0 = unmastered */
+};
+
+/* The global resource-database hash. vms_lock.c lays down the bucket array with
+ * EXEC_DEFINE_HASHTABLE(vms_res_hash, VMS_RES_HASH_BITS); this bit count matches
+ * src/kernel/vms_internal.h (1024 buckets). Unlike the RCU process hash, the
+ * resource hash has no lockless readers -- every walk runs under
+ * vms_res_hash_lock (exec_hash_add/del/for_each_possible, non-RCU). */
+#define VMS_RES_HASH_BITS   10
+
+/*
+ * This node's cluster system ID. DEFINED by the module glue
+ * (src/kernel-netbsd/vms_netbsd.c) exactly as the Linux vms.ko defines it in
+ * vms_module.c -- the CSID and its module-lifecycle setter are a per-substrate
+ * rind concern, not portable executive logic (design record §4). The shared lock
+ * manager reads it through this extern for its DLM directory/mastering
+ * resolution. A stub-of-one membership makes every resource resolve to this
+ * CSID (case (1): self is directory and master). NOT a claim of a VMS-authentic
+ * CSID value/layout (CLAUDE.md Rule 8); the connection manager assigns the real
+ * one at cluster join (0.4).
+ */
+extern uint32_t vms_local_csid;
+
 /*
  * Per-process control block. On Linux this is a large struct with the whole
  * executive's per-process state; on the NetBSD substrate the twin carries just
@@ -244,6 +336,15 @@ struct vms_proc {
 	exec_hash_node_t    hash_node;  /* link in vms_proc_hash (glue-owned; the
 	                                 * facility walks it via exec_hash_for_each) */
 	struct vms_ef_state ef;
+
+	/* Lock manager (src/kernel-core/vms_lock.c, P4-A rd vms-ff7). The list of
+	 * every lock this process holds, its count, and their guard -- the glue
+	 * brings them up at proc creation (exec_list_head_init/exec_lock_init) and
+	 * vms_proc_release_locks() drains them at process death, exactly as the
+	 * Linux vms.ko does in vms_module.c. */
+	exec_list_head_t    locks;            /* struct vms_lock_entry, via proc_list */
+	int                 lock_count;
+	exec_lock_t         lock_list_lock;   /* guards locks + lock_count */
 
 	/* Access-mode + privilege state (src/kernel-core/vms_access.c). */
 	uint8_t             current_mode;     /* PSL_C_KERNEL..PSL_C_USER */
@@ -371,14 +472,32 @@ int  vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan);
 void vms_mbx_release_all(struct vms_proc *proc);
 
 /* ----------------------------------------------------------------
+ * LOCK MANAGER facility (DLM, P4-A, rd vms-ff7) -- DEFINED in
+ * src/kernel-core/vms_lock.c, the LAST executive facility promoted onto the
+ * shared core and the sole exec_rbtree consumer. vms_lock_init/cleanup bracket
+ * the module lifetime (the resource hash + lock-ID tree live module-global);
+ * vms_proc_release_locks drains a process's held locks at proc teardown (the
+ * $DEQ-all at process death, mirroring the Linux vms.ko's vms_module.c). The
+ * five ioctl entry points are dispatched by vms_netbsd.c.
+ * ---------------------------------------------------------------- */
+int  vms_lock_init(void);
+void vms_lock_cleanup(void);
+void vms_proc_release_locks(struct vms_proc *proc);
+long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
+
+/* ----------------------------------------------------------------
  * Cross-facility image-rundown release helpers. vms_ioctl_image_rundown()
- * (vms_access.c) calls all three; vms_proc_rundown_asts is DEFINED (vms_ast.c).
- * vms_proc_rundown_locks (vms_lock.c, rd vms-ff7) is not in this module's SRCS
- * yet; and although vms_mbx.c IS now in SRCS (P4-A), it does not define an
- * image-rundown channel release (a mailbox channel is released at $DASSGN /
- * process death via vms_mbx_release_all, not at image rundown). So vms_netbsd.c
- * still supplies WEAK no-op stubs for both, which a real facility definition
- * would override if one ever lands (see vms_netbsd.c).
+ * (vms_access.c) calls all three; vms_proc_rundown_asts is DEFINED (vms_ast.c)
+ * and vms_proc_rundown_locks is DEFINED (vms_lock.c, now in SRCS -- rd vms-ff7).
+ * vms_mbx.c does NOT define an image-rundown channel release (a mailbox channel
+ * is released at $DASSGN / process death via vms_mbx_release_all, not at image
+ * rundown), so vms_netbsd.c still supplies a WEAK no-op stub for
+ * vms_proc_rundown_channels only, which a real facility definition would override
+ * if one ever lands (see vms_netbsd.c).
  * ---------------------------------------------------------------- */
 void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode);
 void vms_proc_rundown_channels(struct vms_proc *proc, uint8_t min_acmode);

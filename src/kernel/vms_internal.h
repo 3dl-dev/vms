@@ -24,10 +24,13 @@
  * <linux/…> header of its own, so the Linux vms_internal.h -- the Linux
  * substrate's vocabulary header, the counterpart of the NetBSD twin's
  * <sys/systm.h> -- supplies them here. vms_mbx.c (rd vms-a88, Phase E) is the
- * first core facility to need them for its MBAn: device-name normalization.
+ * first core facility to need them for its MBAn: device-name normalization;
+ * vms_proctab.c (rd vms-846b, Phase F) adds the string.h spellings
+ * (memcpy/memset/strncmp/strncpy) it uses on process names and user names.
  */
 #include <linux/ctype.h>
 #include <linux/kstrtox.h>
+#include <linux/string.h>
 
 #include "vms_ioctl.h"
 

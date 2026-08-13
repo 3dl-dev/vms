@@ -1950,7 +1950,7 @@ EOF
     proctab-duplicate-name)
         case "$_f" in
         facility)     echo "process table (VMS_IOCTL_SETPRN/GETJPI/PROCSCAN)";;
-        targets)      echo "kernel/vms_proctab.c";;
+        targets)      echo "kernel-core/vms_proctab.c";;
         # BOTH layers of the same refusal: the raw-ioctl suite and the
         # public-API suite. vms-8019 made $CREPRC report the executive's own
         # clash status to the CREATOR, so the same single kernel edit is now
@@ -2024,7 +2024,7 @@ EOF
     proctab-crossgroup-identity)
         case "$_f" in
         facility)     echo "process table, cross-UIC-group identity read (VMS_IOCTL_GETJPI/PROCSCAN authorisation)";;
-        targets)      echo "kernel/vms_proctab.c";;
+        targets)      echo "kernel-core/vms_proctab.c";;
         # Two layers of the same clause, MEASURED not guessed:
         # test_syssvc_showproc names the property through the user-visible
         # command (SHOW PROCESS/ID on an out-of-group process must be
@@ -2138,7 +2138,7 @@ EOF
     proc-acct-not-sourced)
         case "$_f" in
         facility)     echo "process table, per-process accounting sourced from the Linux task (fill_proc_acct(), vms-a7e)";;
-        targets)      echo "kernel/vms_proctab.c";;
+        targets)      echo "kernel-core/vms_proctab.c";;
         # The executive sources CPU time / page faults / resident pages /
         # login time from the task it pins by pid_ref, in fill_proc_acct(),
         # and vms_ioctl_getjpi()/vms_ioctl_procscan() call it after dropping
@@ -2205,7 +2205,7 @@ EOF
     proctab-terminal-redaction-bypassed)
         case "$_f" in
         facility)     echo "process table, terminal field on a redacted row (proc_fill_info(), vms-d0b)";;
-        targets)      echo "kernel/vms_proctab.c";;
+        targets)      echo "kernel-core/vms_proctab.c";;
         # This is proc_fill_info()'s OWN clause, not vms_proc_may_read()'s:
         # the caller's authorisation is untouched, so vms_ioctl_getjpi()'s
         # direct refusal (SS$_NOPRIV, no row at all) never calls
@@ -2234,7 +2234,7 @@ EOF
     proctab-getjpi-nonexpr-status-wrong)
         case "$_f" in
         facility)     echo "process table -- \$GETJPI's own refusal status when NO target is found (VMS_IOCTL_GETJPI)";;
-        targets)      echo "kernel/vms_proctab.c";;
+        targets)      echo "kernel-core/vms_proctab.c";;
         # vms-68e (vms-2b2 follow-up). MEASURED at the 9-of-33 audit: no
         # existing mutation hunk sits inside vms_ioctl_getjpi's own body --
         # proctab-duplicate-name/crossgroup-identity/terminal-redaction-
@@ -2290,7 +2290,7 @@ EOF
     proctab-procscan-nonexpr-status-wrong)
         case "$_f" in
         facility)     echo "process table -- \$PROCSCAN's own terminator status when the scan is exhausted (VMS_IOCTL_PROCSCAN)";;
-        targets)      echo "kernel/vms_proctab.c";;
+        targets)      echo "kernel-core/vms_proctab.c";;
         # vms-68e. MEASURED, same audit: no existing mutation hunk sits
         # inside vms_ioctl_procscan's own body.
         #
@@ -2335,7 +2335,7 @@ EOF
     ident-username-unguarded)
         case "$_f" in
         facility)     echo "authenticated identity (VMS_IOCTL_SETIDENT: user name, UIC and authorized mask)";;
-        targets)      echo "kernel/vms_proctab.c";;
+        targets)      echo "kernel-core/vms_proctab.c";;
         suites_red)   echo "test_kmod_ident";;
         blind_suites) echo "test_syssvc_ident";;
         blind_why)    cat <<'EOF'

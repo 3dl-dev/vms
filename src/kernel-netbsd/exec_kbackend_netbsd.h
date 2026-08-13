@@ -75,6 +75,8 @@
 #include <sys/mutex.h>     /* kmutex_t, mutex_* , IPL_NONE */
 #include <sys/condvar.h>   /* kcondvar_t, cv_* */
 #include <sys/kmem.h>      /* kmem_alloc/zalloc/free, KM_SLEEP/KM_NOSLEEP */
+#include <sys/proc.h>      /* struct proc, curproc, proc_find, p_pid (Phase F) */
+#include <sys/kauth.h>     /* kauth_cred_get, kauth_authorize_generic (Phase F) */
 
 /* ---- primitive types ---- */
 typedef kmutex_t   exec_lock_t;
@@ -222,5 +224,105 @@ exec_free(void *p)
 	h = (union exec_alloc_hdr *)p - 1;
 	kmem_free(h, h->size);
 }
+
+/* ---- 5. host-task binding (Phase F; see exec_kbackend.h) ----
+ *
+ * The privilege gate and liveness handle map to documented NetBSD KPIs
+ * (kauth(9), proc(9)). exec_current_is_privileged is the real "is superuser"
+ * authorization -- the analogue of Linux capable(CAP_SYS_ADMIN). The liveness
+ * handle is the process id; exec_task_alive/pin resolve it with proc_find(9).
+ *
+ * COMPILE STATUS: vms_proctab.c is not yet in this module's SRCS (only
+ * vms_eflag.c is), so these are TYPE-CHECKED but never called on NetBSD. The
+ * identity/liveness/privilege ops carry their real mapping; the ACCOUNTING read
+ * is a compile-safe documented stub -- it deliberately touches NO struct proc
+ * internals (whose exact field spellings the proctab-on-NetBSD/VAX proof, rd
+ * vms-9dc, will bind) and returns zeros, naming the real sources in the
+ * comment. That is the "stub that is clearly a real mapping" the phase allows;
+ * accounting is not part of the design record's shim sketch and is never
+ * fabricated on a live path. */
+typedef struct { pid_t pid; } exec_task_ref_t;  /* PCB pid_ref: the process id */
+struct exec_task_pin;                            /* opaque pinned-proc handle */
+typedef struct exec_task_pin exec_task_pin_t;
+
+static __inline int
+exec_current_is_privileged(void)
+{
+	return kauth_authorize_generic(kauth_cred_get(),
+	    KAUTH_GENERIC_ISSUSER, NULL) == 0;
+}
+
+static __inline int
+exec_task_alive(exec_task_ref_t *ref)
+{
+	if (ref == NULL)
+		return 0;
+	return proc_find(ref->pid) != NULL;
+}
+
+static __inline exec_task_pin_t *
+exec_task_pin(exec_task_ref_t *ref)
+{
+	if (ref == NULL)
+		return NULL;
+	/* vms-9dc: take a real proc reference (proc_find under proc_lock, hold
+	 * it across the accounting read); the cast keeps the handle opaque. */
+	return (exec_task_pin_t *)proc_find(ref->pid);
+}
+
+static __inline void
+exec_task_read_acct(exec_task_pin_t *pin, struct exec_proc_acct *out)
+{
+	/*
+	 * vms-9dc binds these to the real NetBSD sources on the pinned proc:
+	 *   cpu_ns        <- calcru()/p_rusage user+system time
+	 *   page_faults   <- p_stats->p_ru.ru_minflt + ru_majflt
+	 *   create_wall_ns<- p_stats->p_start (a struct timeval, already wall)
+	 *   rss_pages     <- p_vmspace->vm_rssize
+	 * Until then, a compile-safe zero-fill (no struct proc deref, so no
+	 * field-spelling risk on the live event-flag build). Never reached today.
+	 */
+	(void)pin;
+	out->cpu_ns = 0;
+	out->page_faults = 0;
+	out->create_wall_ns = 0;
+	out->rss_pages = 0;
+	out->has_rss = 0;
+}
+
+static __inline void
+exec_task_unpin(exec_task_pin_t *pin)
+{
+	(void)pin;   /* vms-9dc: release the proc reference taken by exec_task_pin */
+}
+
+/* ---- 6. RCU-lite deferred reclaim (Phase F; see exec_kbackend.h) ----
+ * NetBSD has no lockless hash readers (the walks run under the hash kmutex --
+ * design record §5 caveat 3's blessed fallback), so a read section is a no-op
+ * and a deferred free runs immediately: by the time the object is unlinked and
+ * exec_free_deferred is called, no reader can still hold it. */
+typedef struct { void *_unused; } exec_rcu_head_t;
+
+static __inline void exec_rcu_read_lock(void)   { /* no lockless readers */ }
+static __inline void exec_rcu_read_unlock(void) { /* no lockless readers */ }
+
+static __inline void
+exec_free_deferred(exec_rcu_head_t *h, void (*fn)(exec_rcu_head_t *))
+{
+	fn(h);   /* immediate: safe, no grace period needed on this substrate */
+}
+
+/* ---- 7. sleepable mutex (Phase F; see exec_kbackend.h) ----
+ * A process-context adaptive kmutex at IPL_NONE (same primitive class as
+ * exec_lock_t here). No static initializer exists on NetBSD, so EXEC_DEFINE_MUTEX
+ * declares storage that exec_mutex_init must initialize at runtime -- never
+ * expanded on NetBSD today (its only user, vms_proctab.c, is Linux-built). */
+typedef kmutex_t exec_mutex_t;
+
+#define EXEC_DEFINE_MUTEX(name) exec_mutex_t name   /* + runtime exec_mutex_init */
+static __inline void exec_mutex_init(exec_mutex_t *m)    { mutex_init(m, MUTEX_DEFAULT, IPL_NONE); }
+static __inline void exec_mutex_lock(exec_mutex_t *m)    { mutex_enter(m); }
+static __inline void exec_mutex_unlock(exec_mutex_t *m)  { mutex_exit(m); }
+static __inline void exec_mutex_destroy(exec_mutex_t *m) { mutex_destroy(m); }
 
 #endif /* OVMX_EXEC_KBACKEND_NETBSD_H */

@@ -371,7 +371,9 @@ getegid=PROCEDURE,\
 \
 nanosleep=PROCEDURE,\
 \
-tmpfile=PROCEDURE,clearerr=PROCEDURE"
+tmpfile=PROCEDURE,clearerr=PROCEDURE,\
+\
+unsetenv=PROCEDURE"
 
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets
@@ -427,6 +429,16 @@ tmpfile=PROCEDURE,clearerr=PROCEDURE"
 # tmpfile, whose __randname helper is also defined and whole-archived in;
 # clearerr.lo -> T clearerr), so DECC$SHR is the right producer -- the faithful
 # fix, not avoiding the standard calls. DCL.EXE is the first consumer.
+#
+# unsetenv APPENDED for vms-54e (append-only -> prior consumers' vector indices
+# unchanged, GSMATCH LEQUAL-compatible). LIB$GET_FOREIGN (libvms rtl/lib_output.c)
+# consumes the CLI foreign command line on first read by clearing the
+# VMS_FOREIGN_CMD environment variable DCL publishes for it (dcl_cmd_process.c
+# also unsetenv()s it after activation as a safety net), so a second call falls
+# through to SYS$INPUT exactly as OpenVMS's one-shot CLI foreign line does.
+# getenv/setenv were already exported above; unsetenv is the POSIX/C-RTL
+# companion that real OpenVMS DECC$SHR exports and musl's libc.a defines, so
+# DECC$SHR is the right producer. libvms (LIBVMS$SHR) and DCL.EXE are consumers.
 #
 # THE GENERAL RULE, because this is the commonest way to break the VMS-native
 # toolchain jobs: EVERY libc call added to an OVMX library is a claim that

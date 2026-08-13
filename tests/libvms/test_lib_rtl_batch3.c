@@ -17,6 +17,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
@@ -336,9 +337,69 @@ static void test_lookup_key(void)
 }
 
 /* ------------------------------------------------------------------ */
+static void test_foreign_tail(void)
+{
+    printf("Testing lib$get_foreign returns the foreign-command tail...\n");
+
+    /* This is the vms-54e fix: an image activated as a foreign command
+     * ($ FOO :== $dev:[dir]FOO ; then $ FOO /qual target) must get the raw
+     * command tail back from LIB$GET_FOREIGN -- NOT a line read from stdin.
+     * DCL publishes that tail in VMS_FOREIGN_CMD before activation; simulate
+     * that here and assert the exact string is returned. */
+    const char *tail = "/OUTPUT=X.LIS TARGET1 TARGET2";
+    setenv("VMS_FOREIGN_CMD", tail, 1);
+
+    char fbuf[128];
+    struct dsc$descriptor_s f = { sizeof(fbuf) - 1, DSC$K_DTYPE_T,
+                                  DSC$K_CLASS_S, fbuf };
+    uint16_t flen = 0;
+    uint32_t st = lib$get_foreign(&f, NULL, &flen);
+    check(st == SS$_NORMAL,
+          "lib$get_foreign returns SS$_NORMAL when a foreign line is present");
+    check(flen == (uint16_t)strlen(tail),
+          "lib$get_foreign reports the exact tail length");
+    check(memcmp(fbuf, tail, strlen(tail)) == 0,
+          "lib$get_foreign returns the exact foreign-command tail (not stdin)");
+    /* class-S descriptor: remainder is space-padded, VMS convention */
+    check(fbuf[strlen(tail)] == ' ',
+          "lib$get_foreign space-pads a static (class S) descriptor");
+
+    /* One-shot: the CLI foreign line is consumed on first read, so a second
+     * call falls through to SYS$INPUT (here /dev/null -> RMS$_EOF). */
+    if (freopen("/dev/null", "r", stdin)) {
+        flen = 0;
+        check(lib$get_foreign(&f, NULL, &flen) == RMS$_EOF,
+              "second lib$get_foreign reads SYS$INPUT (foreign line consumed)");
+    } else {
+        printf("  SKIP: could not reopen stdin for one-shot check\n");
+    }
+
+    /* Truncation: a tail longer than the resultant descriptor returns
+     * LIB$_INPSTRTRU with the copied text truncated to the buffer. */
+    const char *longtail = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";  /* 32 chars */
+    setenv("VMS_FOREIGN_CMD", longtail, 1);
+    char sbuf[8];
+    struct dsc$descriptor_s s = { sizeof(sbuf), DSC$K_DTYPE_T,
+                                  DSC$K_CLASS_S, sbuf };
+    uint16_t slen = 0;
+    check(lib$get_foreign(&s, NULL, &slen) == LIB$_INPSTRTRU,
+          "lib$get_foreign returns LIB$_INPSTRTRU when the tail is truncated");
+    check(slen == sizeof(sbuf) &&
+          memcmp(sbuf, longtail, sizeof(sbuf)) == 0,
+          "truncated tail fills the descriptor exactly");
+
+    unsetenv("VMS_FOREIGN_CMD");
+}
+
+/* ------------------------------------------------------------------ */
 static void test_input_eof(void)
 {
     printf("Testing lib$get_command / lib$get_foreign EOF behavior...\n");
+
+    /* No foreign command line is published: LIB$GET_FOREIGN must behave like
+     * LIB$GET_INPUT and read SYS$INPUT. Clear the var so this is deterministic
+     * regardless of any earlier test or ambient environment. */
+    unsetenv("VMS_FOREIGN_CMD");
 
     /* Redirect stdin to /dev/null so the read hits end of file. */
     FILE *saved = stdin;
@@ -355,7 +416,7 @@ static void test_input_eof(void)
     check(lib$get_command(&in, NULL, &ilen) == RMS$_EOF,
           "lib$get_command returns RMS$_EOF at end of file");
     check(lib$get_foreign(&in, NULL, &ilen) == RMS$_EOF,
-          "lib$get_foreign returns RMS$_EOF at end of file");
+          "lib$get_foreign returns RMS$_EOF with no foreign line (reads stdin)");
 }
 
 /* ------------------------------------------------------------------ */
@@ -369,6 +430,7 @@ int main(void)
     test_date_routines();
     test_locale_and_msg();
     test_lookup_key();
+    test_foreign_tail();
     test_input_eof();
 
     printf("\n=== %s (%d failure%s) ===\n",

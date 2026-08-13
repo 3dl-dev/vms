@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "ssdef.h"
 #include "rmsdef.h"
@@ -122,17 +123,51 @@ uint32_t lib$get_command(struct dsc$descriptor_s *result,
 }
 
 /*
- * lib$get_foreign - Return the "foreign command" parameter line.
+ * lib$get_foreign - Return the "foreign command" line that activated the image.
  *
- * When an image is invoked as a foreign command ($ FOO :== $dev:[dir]FOO),
- * LIB$GET_FOREIGN returns the text typed after the command verb. When no
- * such line is available it reads from SYS$INPUT exactly like
- * LIB$GET_INPUT (see the corpus lib_get_foreign.c header). OVMX images are
- * launched with an empty foreign line, so this falls through to reading a
- * line from standard input and returns RMS$_EOF at end of file.
+ * On OpenVMS, when an image is activated as a foreign command
+ * ($ FOO :== $dev:[dir]FOO ; then $ FOO /qual target), DCL hands the whole
+ * raw command tail ("/qual target") to the image, and LIB$GET_FOREIGN asks
+ * the CLI for that text. Per the VSI OpenVMS RTL Library (LIB$) Manual:
+ *   - the FIRST call returns the CLI's foreign command line if one is present;
+ *   - if there is NO command line (an ordinary RUN, or a foreign command with
+ *     an empty tail), and on SUBSEQUENT calls, it prompts on SYS$INPUT exactly
+ *     like LIB$GET_INPUT — the corpus lib_get_foreign.c documents this "behaves
+ *     like lib_get_input" fall-through;
+ *   - end of file on the SYS$INPUT path returns RMS$_EOF;
+ *   - if the command line is longer than the resultant-string descriptor the
+ *     text is truncated and LIB$_INPSTRTRU is returned.
  *
- * The optional fourth argument (flags) selects prompting behavior and is
- * accepted for source compatibility.
+ * OVMX plumbing (this is the fix — it previously ALWAYS read stdin, which is
+ * the LARP: an image invoked as `FOO /qual target` could never see its own
+ * arguments). DCL's foreign-command dispatch (dcl_exec_foreign_command in
+ * src/vmsdcl/dcl_cmd_process.c) publishes the raw command tail — cmd->raw_tail,
+ * the exact untokenized text after the verb — in the VMS_FOREIGN_CMD
+ * environment variable before activating the image, following the same
+ * env-channel convention DCL already uses to pass VMS process context
+ * (VMS_DEFAULT_DIR, VMS_PRIVILEGES, ...). The channel works for BOTH activation
+ * models: in-process activation (the image runs in DCL's process and reads the
+ * var directly) and the fork()+execve() fallback (the child inherits DCL's
+ * environment). RUN and DCL-driven utilities do NOT set the variable, so they
+ * correctly fall through to the SYS$INPUT path.
+ *
+ * One-shot semantics: on VMS the CLI foreign line is consumed on first
+ * retrieval, so a second call falls through to SYS$INPUT. We model that
+ * faithfully by CLEARING VMS_FOREIGN_CMD once it has been returned. Modelling
+ * consumption in the environment (rather than in a static flag) is deliberate:
+ * under in-process activation the LIB$ code lives in the resident producer
+ * shareable and its statics persist ACROSS successive image activations, so a
+ * static "already consumed" flag would leak from one image into the next; the
+ * env var is per-activation state that DCL re-establishes for each foreign
+ * command, so keying consumption on it is correct for both activation models.
+ *
+ * The optional fourth argument (flags, an unsigned longword by reference that
+ * the manual sets to 1 after the first call to steer a prompt loop) is accepted
+ * for source compatibility. It is NOT dereferenced: with the "..." prototype
+ * its PRESENCE cannot be detected safely, and every in-tree caller (mmk.c,
+ * corpus lib_get_foreign.c) omits it, so the implementation follows the
+ * documented flags-omitted behavior — first call returns the CLI line,
+ * subsequent calls prompt — which the env-var consumption already provides.
  *
  * Reference: OpenVMS RTL Library (LIB$) Manual — LIB$GET_FOREIGN.
  */
@@ -140,5 +175,40 @@ uint32_t lib$get_foreign(struct dsc$descriptor_s *result,
                          const struct dsc$descriptor_s *prompt,
                          uint16_t *result_len,
                          ...) {
+    if (!result || !result->dsc$a_pointer) return SS$_BADPARAM;
+
+    /* First call with a foreign command line present: return the raw tail
+     * DCL published, then consume it so a second call reads SYS$INPUT. An
+     * empty/absent value is "no command line" -> fall through to SYS$INPUT. */
+    const char *tail = getenv("VMS_FOREIGN_CMD");
+    if (tail && tail[0] != '\0') {
+        size_t len = strlen(tail);
+
+        uint16_t copylen = (uint16_t)len;
+        int truncated = 0;
+        if (len > result->dsc$w_length) {
+            copylen = result->dsc$w_length;
+            truncated = 1;
+        }
+        memcpy(result->dsc$a_pointer, tail, copylen);
+
+        /* Pad with spaces for static (class S) descriptors, matching the
+         * LIB$GET_INPUT convention above. */
+        if (copylen < result->dsc$w_length) {
+            memset(result->dsc$a_pointer + copylen, ' ',
+                   result->dsc$w_length - copylen);
+        }
+
+        if (result_len) *result_len = copylen;
+
+        /* Consume the CLI foreign line: subsequent calls read SYS$INPUT. */
+        unsetenv("VMS_FOREIGN_CMD");
+
+        return truncated ? LIB$_INPSTRTRU : SS$_NORMAL;
+    }
+
+    /* No foreign command line (RUN, an empty tail, or an already-consumed
+     * line): behave exactly like LIB$GET_INPUT, prompting on SYS$INPUT and
+     * returning RMS$_EOF at end of file. */
     return read_line_into(result, prompt, result_len, stdin);
 }

@@ -305,7 +305,7 @@ links" and "the machine boots." Each is now a first-class deliverable.
 |---|---|---|---|
 | `vms-28f` | `ovmx_init` boot-plumbing seam extracted Linux-side: an `ovmx_boot_*` substrate layer (module-load / mount / reboot / device-naming / console-log), ONE `ovmx_init` source, no `#ifdef` | **done (#440)** | Linux backend = current behaviour, Persistent Boot Smoke green, zero behaviour change. |
 | `vms-f2e` | `ovmx_init` boots on NetBSD via that seam (NetBSD backend of `ovmx_boot_*`) | blocked by `vms-28f`, `vms-42d`, `vms-5d1` | ONE `ovmx_init` source, no `#ifdef` fork; NetBSD backend drives module-load/mounts/device-naming/reboot/console-log. |
-| `vms-42d` | image activation decided + working on netbsd-vax: native IMGACT **ELF32-vax** backend (generalize the loader to `ELFCLASS32` in SHARED code, no arch fork) OR a labelled `ld.elf_so` divergence | blocked by `vms-30a` | `LOGINOUT.EXE`/`DCL.EXE` activate on VAX by the decided path. |
+| `vms-42d` | image activation **DECIDED (A) + gated** on netbsd-vax: OVMX images are ordinary NetBSD ELF32-vax dynamic exes activated by `/usr/libexec/ld.elf_so` — a labelled Rule-8 substrate divergence, NOT OVMX-native IMGACT/symbol-vector. See §4.5.1. | blocked by `vms-30a` (RTL width) | **done (this PR)** — a representative OVMX image links elf32-vax + the per-PR `activation-netbsd-vax` gate asserts it activates via ld.elf_so; `LOGINOUT.EXE`/`DCL.EXE` follow the same path once their higher layers cross-build (`vms-5d1`). |
 | `vms-945e` | every boot-required executive facility (proctab/CREPRC, lnm, mbx, ast, access) proven cross-process against the REAL `/dev/vms` on netbsd-vax | blocked by `vms-9bb/ca7/d61/d7a/f78bb` | Full facility parity on VAX (not just event flags — catches ILP32/float/ELF32 bugs amd64 can't). |
 | `vms-7b1` | a bootable OVMX/NetBSD-vax system disk + custom kernel is ASSEMBLED from the OVMX build (the `Dockerfile.bootable`/`vmsfs_master` analog) | blocked by `vms-544d`, `vms-5d1`, `vms-f2e`, `vms-f78bb` | SIMH boots the assembled disk unattended with `ovmx_init` as init. |
 | `vms-625` | boot-conformance harness: lab-vax installs OVMX onto the vax disk, boots it, and mechanically drives the console to a DCL prompt | blocked by `vms-7b1` | Gated, reuses the cached disk, **never reinstalls** (§5). |
@@ -314,6 +314,88 @@ The **lnm mm/mmap seam** the audit called out is already resolved: the
 logical-name manager needed a userspace-publishable arena + memory-barrier
 abstraction to be substrate-portable, and that is the `exec_membar` + `exec_arena`
 seam landed by `vms-d61` (#434) — the last executive facility into the shared core.
+
+#### 4.5.1 Decision record — image activation on netbsd-vax (`vms-42d`)
+
+> **Status:** DECIDED. **Operator-visible:** this call sits on the OVMX-native-
+> toolchain / authenticity pillar (`vms-ade`, [[self-hosting-northstar]]). It does
+> **not** weaken that pillar on its home substrate; it declares that the pillar
+> **does not extend to the NetBSD/vax substrate**, and labels that as a Rule-8
+> divergence (below). Flagged for operator awareness; ratify if the 1.0 authenticity
+> bar ever tightens to "OVMX-native activation on every substrate."
+
+**The two options (from the completeness audit GAP-D):**
+
+- **(A) `ld.elf_so` divergence** — OVMX images on NetBSD/vax are ordinary ELF32-vax
+  **dynamic** executables, activated by NetBSD's own runtime linker
+  `/usr/libexec/ld.elf_so`. No OVMX-native IMGACT.EXE, no `PT_INTERP → IMGACT.EXE`, no
+  `.vms$sv`/`.vms$imp` symbol-vector activation.
+- **(B) native IMGACT ELF32-vax** — generalize the OVMX loader to `ELFCLASS32` in
+  shared code plus a `src/imgact/arch/vax` backend, so OVMX-native PT_INTERP /
+  symbol-vector activation works on VAX too.
+
+**Decision: (A).** And not merely as the recommended option — **(B) is foreclosed by
+three already-merged decisions**, so (A) is the only design-consistent path:
+
+1. **The NetBSD/vax userspace already links NetBSD libc**
+   (`docs/design-ovmx-netbsd-syskrnl.md` §4.1; merged: libvmssys `vms-9dc`,
+   vmsprocess `vms-84b`, libvms `vms-1b2`). Every OVMX image on this substrate is
+   produced by the `vax--netbsdelf` GCC cross toolchain as a **standard NetBSD
+   ELF** — its crt0, TLS setup and syscall plumbing come from NetBSD's csu/libc. A
+   standard NetBSD dynamic ELF is, by definition, activated by
+   `/usr/libexec/ld.elf_so`. There is no OVMX symbol-vector image on VAX to activate
+   any other way.
+2. **There is no OVMX-native VAX toolchain** (§4.3): tcc / LINK.EXE do not target
+   VAX and are explicitly not on the roadmap. The OVMX-native activation model
+   (LINK.EXE emits `.vms$sv` symbol vectors + `PT_INTERP=IMGACT.EXE`; IMGACT.EXE
+   resolves them) exists **only** because on Linux OVMX builds its own toolchain and
+   deliberately avoids `ld.so` — that is the self-hosting pillar. On VAX that
+   premise is absent: nothing emits symbol-vector images, so nothing needs a
+   symbol-vector activator.
+3. **IMGACT.EXE is a raw-Linux-syscall, freestanding, ELFCLASS64-only binary**
+   (`src/imgact/imgact.c`: `SYS_openat`/`SYS_mmap` Linux numbers, `-nostdlib`,
+   `#error` on any non-x86_64/aarch64 arch, `struct elf64_phdr`). Option (B) would
+   require porting it to **raw NetBSD/vax syscalls** — which §4.1 explicitly rejects
+   ("NetBSD's syscall trap ABI is not a stable public contract … hand-rolling raw
+   VAX syscall stubs fights the platform") — plus a hand-written VAX `start.S`. That
+   directly contradicts decision (1)/(2). (A) reuses the platform's own, correct
+   activator instead of re-implementing one against an unstable ABI.
+
+**No hard reason for (B) was found.** The audit's escape hatch — "an image that
+isn't a plain dynamic exe" — does not occur on this substrate: every OVMX image is
+GCC-cross standard ELF, and the boot path needs no symbol-vector resolution
+(`LIBVMS$SHR`/`DECC$SHR`-style shareable images are the Linux native-toolchain
+artifact; on VAX the RTL is linked from `.a` archives + NetBSD libc via
+`ld.elf_so`).
+
+**The Rule-8 divergence, LABELED.** Per CLAUDE.md Rule 8, this is a deliberate,
+documented substrate divergence, not presented as VMS-authentic:
+
+| | Linux / self-hosting substrate | **NetBSD/vax substrate (this decision)** |
+|---|---|---|
+| Toolchain | OVMX-native LINK.EXE | `vax--netbsdelf` GCC cross |
+| Image form | `PT_INTERP=IMGACT.EXE` + `.vms$sv`/`.vms$imp` symbol vectors | plain NetBSD ELF32-vax dynamic exe |
+| Activator | OVMX-native IMGACT.EXE (userspace, freestanding) | NetBSD `/usr/libexec/ld.elf_so` (the platform's runtime linker) |
+| Pillar | is the OVMX-native-toolchain / self-hosting pillar | pillar **does not extend here** (labeled) |
+
+This mirrors the substrate split the whole SYSKRNL effort already commits to
+(`vms.ko` on Linux vs the `vms` pseudo-device on NetBSD): the executive and RTL
+**semantics** are the same shared OVMX code; the **platform plumbing beneath them**
+(runtime linker, csu, libc) is the host's, on both substrates. It does **not**
+weaken Rule 9 (the executive is still a real in-kernel `/dev/vms` facility) and it
+does **not** weaken the authenticity pillar on its home substrate.
+
+**What is implemented for `vms-42d` (this PR).** The per-PR
+`activation-netbsd-vax` CI gate (`tools/cross-vax/build-activation-vax.sh`) builds
+the ported OVMX layers (libvmssys + vmsprocess) for `netbsd-vax`, links a
+**representative OVMX image** (LOGINOUT/DCL-class — the remaining `vmsdcl` /
+`ovmx_init` layers are not yet cross-built, `vms-1cb2`/`vms-5d1`) as a real
+elf32-vax dynamic executable, and **asserts the Decision-A contract**: ELFCLASS32 /
+Digital VAX / little-endian, `PT_INTERP == /usr/libexec/ld.elf_so`, genuinely dynamic
+(`DT_NEEDED` present), **not** `IMGACT.EXE`, and **no** `.vms$sv`/`.vms$imp`
+sections. The gate is build-only (no `qemu-system-vax` exists); the booted-guest
+activation round-trip is the SIMH nightly follow-up under `vms-945e`/`vms-d59`.
+`vms-5d1` (the full LOGINOUT/DCL/`ovmx_init` link) inherits this decided path.
 
 ### 4.6 Capstone — boot to a DCL prompt (`vms-d59`)
 

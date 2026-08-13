@@ -348,6 +348,7 @@ inet_ntop=PROCEDURE,inet_pton=PROCEDURE,ioctl=PROCEDURE,isatty=PROCEDURE,\
 isxdigit=PROCEDURE,mktime=PROCEDURE,ntohl=PROCEDURE,pipe=PROCEDURE,\
 readlink=PROCEDURE,rewind=PROCEDURE,setrlimit=PROCEDURE,settimeofday=PROCEDURE,\
 sleep=PROCEDURE,socket=PROCEDURE,strerror=PROCEDURE,strptime=PROCEDURE,\
+strftime=PROCEDURE,\
 system=PROCEDURE,tcgetattr=PROCEDURE,tcsetattr=PROCEDURE,utimes=PROCEDURE,\
 \
 __addtf3=PROCEDURE,__divtf3=PROCEDURE,__eqtf2=PROCEDURE,__extenddftf2=PROCEDURE,\

@@ -37,6 +37,10 @@ target_include_directories(vmsdcl PRIVATE
     # kernel-interface client (vms-fb9): src/libvmssys/vms_kif.h, which
     # pulls src/kernel/vms_ioctl.h for the shared ioctl structures.
     ${CMAKE_SOURCE_DIR}/src/libvmssys
+    # SHOW CLUSTER reads the SCS daemon's live membership publication
+    # (vms-8d4): src/vmsscs/include/scs_membership.h -- a header-only IPC,
+    # so no vmsscs link dependency is added.
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
 )
 
 # We need POSIX APIs (fork, sigaction, strncasecmp, realpath, etc.)

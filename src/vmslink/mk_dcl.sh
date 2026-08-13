@@ -105,7 +105,8 @@ CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mn
 DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
 INCS="-I$DCL/include -I$REPO_SRC/libvms/include -I$REPO_SRC/vmsfs/include \
 -I$REPO_SRC/vmslnm/include -I$REPO_SRC/vmsrms/include \
--I$REPO_SRC/vmsprocess/include -I$REPO_SRC/vmsqueue -I$REPO_SRC/libvmssys"
+-I$REPO_SRC/vmsprocess/include -I$REPO_SRC/vmsqueue -I$REPO_SRC/libvmssys \
+-I$REPO_SRC/vmsscs/include"   # scs_membership.h for SHOW CLUSTER (vms-8d4)
 
 # The 22 vmsdcl TUs (== src/vmsdcl/CMakeLists.txt, minus readline convenience).
 TUS="dcl_main dcl_lexer dcl_parser dcl_exec dcl_backup dcl_builtin dcl_cmd_show \

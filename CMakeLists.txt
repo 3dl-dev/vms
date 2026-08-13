@@ -575,6 +575,18 @@ if(BUILD_TESTS)
     set_tests_properties(show_device_rows_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 300)
 
+    # SHOW CLUSTER reflects the SCS daemon's LIVE membership (rd vms-8d4,
+    # INV-DCL). cmd_show_cluster() used to hardcode %SYSTEM-I-NOTMEMBER, so a
+    # genuinely-clustered node lied. This RUNS DCL against a membership file
+    # written in SCSD's own publication format (scs_membership.h -- the real
+    # boundary between the daemon and the DCL process) and requires the member
+    # set to be shown when present and NOTMEMBER only when genuinely absent.
+    add_test(NAME show_cluster_membership_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_cluster_membership.sh
+                $<TARGET_FILE:vmsdcl>)
+    set_tests_properties(show_cluster_membership_gate PROPERTIES
+        LABELS "integration;authenticity;cluster" TIMEOUT 60)
+
     # SHOW SYMBOL renders an integer's Hex and Octal columns as a LONGWORD
     # (rd vms-c71), pinned to a side-by-side measurement against OpenVMS VAX
     # V7.3. Two defects lived on one line: a negative sign-extended to 16 hex

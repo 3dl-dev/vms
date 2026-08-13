@@ -403,6 +403,45 @@ int cmd_open(struct dcl_command *cmd)
         default: fmode = "r"; break;
     }
 
+    /* SYS$OUTPUT:/SYS$ERROR:/SYS$INPUT: name the process's standard streams,
+     * not RMS files -- OPEN connects a channel to the current output/error/input
+     * (VSI OpenVMS DCL Dictionary, OPEN). MMK's subprocess protocol OPENs
+     * SYS$OUTPUT: to write its end-of-command $STATUS marker there. dup() the
+     * underlying fd so a later CLOSE of the channel frees only this channel's
+     * handle, never the process's real standard stream. */
+    {
+        char norm[64];
+        size_t nk = 0;
+        for (const char *s = filespec; *s && nk < sizeof(norm) - 1; s++)
+            norm[nk++] = (char)toupper((unsigned char)*s);
+        norm[nk] = '\0';
+        if (nk > 0 && norm[nk - 1] == ':') norm[--nk] = '\0';
+
+        int stdfd = -1;
+        if      (strcmp(norm, "SYS$OUTPUT") == 0) stdfd = STDOUT_FILENO;
+        else if (strcmp(norm, "SYS$ERROR")  == 0) stdfd = STDERR_FILENO;
+        else if (strcmp(norm, "SYS$INPUT")  == 0) stdfd = STDIN_FILENO;
+
+        if (stdfd >= 0) {
+            int dfd = dup(stdfd);
+            FILE *sfp = (dfd >= 0) ? fdopen(dfd, fmode) : NULL;
+            if (!sfp) {
+                if (dfd >= 0) close(dfd);
+                dcl_error("RMS", 2, "FNF", "error opening %s", filespec);
+                return SS$_NOSUCHFILE;
+            }
+            ctx->channels[slot].fp = sfp;
+            ctx->channels[slot].mode = mode;
+            strncpy(ctx->channels[slot].name, channel_name,
+                    sizeof(ctx->channels[0].name) - 1);
+            ctx->channels[slot].name[sizeof(ctx->channels[0].name) - 1] = '\0';
+            for (size_t i = 0; ctx->channels[slot].name[i]; i++)
+                ctx->channels[slot].name[i] =
+                    (char)toupper((unsigned char)ctx->channels[slot].name[i]);
+            return SS$_NORMAL;
+        }
+    }
+
     FILE *fp = fopen(linux_path, fmode);
     if (!fp) {
         dcl_error("RMS", 2, "FNF",
@@ -642,10 +681,16 @@ int cmd_write(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    /* Write all remaining params joined by spaces (but actually as-is) */
+    /* WRITE's argument list is a comma-separated list of DCL expressions,
+     * CONCATENATED with no separator (VSI OpenVMS DCL Dictionary, WRITE). Each
+     * bare word is a symbol reference evaluated to its value; a quoted string is
+     * a literal. The parser strips the quotes, so a bare argument that names a
+     * defined symbol is substituted (MMK's marker
+     * WRITE MMK___OUTPUT "MMK____status=",MMK____status must emit the STATUS
+     * VALUE, not the literal name); anything else is written verbatim. */
     for (int i = 1; i < cmd->param_count; i++) {
-        if (i > 1) fprintf(fp, " ");
-        fprintf(fp, "%s", cmd->params[i]);
+        const char *sv = dcl_sym_get(cmd->params[i]);
+        fprintf(fp, "%s", sv ? sv : cmd->params[i]);
     }
     fprintf(fp, "\n");
     fflush(fp);

@@ -797,7 +797,26 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
     (void)ctx;
 
     int scope = DCL_SYM_LOCAL;
-    const char *value = cmd->rest;
+
+    /* Strip a trailing "!" comment from the assignment right-hand side: DCL
+     * treats an unquoted "!" as a comment to end of line, on assignments as
+     * well as commands (the command lexer already stops at "!", but the RHS is
+     * collected raw as cmd->rest). Without this, MMK's setup assignments --
+     * MMK___OPEN = "OPEN" !'F$VERIFY(0,0)' -- store the comment (and the apostrophe
+     * text mangled by symbol substitution) as the symbol value. VSI OpenVMS
+     * User's Manual, comments. A "!" inside a quoted string is literal. */
+    char rhs[DCL_MAX_LINE];
+    {
+        int in_quote = 0;
+        size_t ri = 0;
+        for (const char *s = cmd->rest; *s && ri < sizeof(rhs) - 1; s++) {
+            if (*s == '"') in_quote = !in_quote;
+            else if (*s == '!' && !in_quote) break;
+            rhs[ri++] = *s;
+        }
+        rhs[ri] = '\0';
+    }
+    const char *value = rhs;
 
     /* Determine assignment type from label field */
     if (strcmp(cmd->label, "==") == 0 || strcmp(cmd->label, ":==") == 0) {
@@ -1245,6 +1264,39 @@ int dcl_execute_command(struct dcl_command *cmd)
         snprintf(buf, sizeof(buf), "%d", status & 7);
         dcl_sym_set("$SEVERITY", buf, DCL_SYM_GLOBAL);
 
+        return status;
+    }
+
+    /* Verb-position symbol substitution (VMS DCL): when the first token is a
+     * symbol whose value is a command string (not a '$'-foreign image, handled
+     * above), DCL replaces the token with the symbol's value and re-scans the
+     * line -- "SYM = ""WRITE""" then "SYM MMK___OUTPUT ..." runs
+     * "WRITE MMK___OUTPUT ...". MMK's subprocess protocol relies on exactly this
+     * (it defines MMK___OPEN/MMK___SET/MMK___WRITE as "OPEN"/"SET"/"WRITE" to run
+     * its end-of-command-marker commands without F$VERIFY echo). The verb token
+     * is replaced; the raw tail after it (including any /qualifier) is kept
+     * verbatim. Reference: VSI OpenVMS User's Manual, "Symbol substitution in
+     * command lines". Bounded to a small iteration depth like DCL's own. */
+    if (symval && symval[0] != '\0') {
+        static int subst_depth = 0;
+        if (subst_depth >= 16) {
+            subst_depth = 0;
+            dcl_error("DCL", 2, "IVVERB",
+                      "symbol substitution nested too deeply\n \\%s\\",
+                      cmd->verb);
+            return SS$_IVVERB;
+        }
+        char newline[DCL_MAX_LINE];
+        const char *tail = cmd->raw_tail;
+        if (tail[0] == '\0')
+            snprintf(newline, sizeof(newline), "%s", symval);
+        else if (tail[0] == '/')            /* qualifier abuts the verb: no space */
+            snprintf(newline, sizeof(newline), "%s%s", symval, tail);
+        else
+            snprintf(newline, sizeof(newline), "%s %s", symval, tail);
+        subst_depth++;
+        int status = dcl_execute_line(newline);
+        subst_depth--;
         return status;
     }
 

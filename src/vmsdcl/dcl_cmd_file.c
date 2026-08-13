@@ -23,6 +23,7 @@
 #include "dcl/dcl_cmd.h"
 #include "dcl/vms_messages.h"
 #include "ssdef.h"
+#include "stsdef.h"
 #include "vmsfs/filespec.h"
 #include "vmsqueue.h"
 
@@ -125,6 +126,357 @@ static int dir_entry_cmp(const void *a, const void *b)
     return eb->version - ea->version;
 }
 
+/*
+ * dir_opts - the display flags a single directory scan needs, packaged so
+ * the per-directory collect/print helpers can be shared between the single-
+ * directory and the multi-directory (ellipsis) paths.
+ */
+struct dir_opts {
+    int show_size, show_date, show_full, show_brief, show_owner,
+        show_protection, suppress_files, columns, versions_limit;
+};
+
+/*
+ * dir_collect - Scan ONE Linux directory, applying the VMS filename
+ * wildcard/exclude filter through the single matcher vmsfs_wildcard_match(),
+ * and return the matching entries sorted (name asc, version desc).
+ *
+ * INV-6 / no facade: this is a real opendir()/readdir()/stat() walk of the
+ * on-disk vmsfs tree — every listed file exists on disk.
+ *
+ * Returns SS$_NORMAL with *out_entries (malloc'd; caller frees) and
+ * *out_count set; SS$_NOSUCHFILE if the directory cannot be opened;
+ * SS$_INSFMEM on allocation failure.
+ */
+static int dir_collect(const char *linux_dir, const char *pattern,
+                       char **excl_pats, int excl_count,
+                       struct dir_entry **out_entries, int *out_count)
+{
+    *out_entries = NULL;
+    *out_count = 0;
+
+    DIR *dir = opendir(linux_dir);
+    if (!dir) return SS$_NOSUCHFILE;
+
+    int capacity = 256;
+    struct dir_entry *entries = malloc((size_t)capacity * sizeof(*entries));
+    if (!entries) { closedir(dir); return SS$_INSFMEM; }
+    int entry_count = 0;
+
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        if (strcmp(de->d_name, ".") == 0 ||
+            strcmp(de->d_name, "..") == 0) continue;
+
+        /* VMS filename wildcard filter — the ONE matcher (% single-char,
+         * * any-chars, version-aware). */
+        if (pattern) {
+            if (!vmsfs_wildcard_match(pattern, de->d_name)) continue;
+        }
+
+        /* /EXCLUDE: skip entries matching any exclusion spec, same matcher. */
+        if (excl_count > 0) {
+            int excluded = 0;
+            for (int xi = 0; xi < excl_count; xi++) {
+                if (vmsfs_wildcard_match(excl_pats[xi], de->d_name)) {
+                    excluded = 1;
+                    break;
+                }
+            }
+            if (excluded) continue;
+        }
+
+        char full_path[2048];
+        snprintf(full_path, sizeof(full_path), "%s%s", linux_dir, de->d_name);
+        struct stat st;
+        if (stat(full_path, &st) != 0) continue;
+
+        if (entry_count >= capacity) {
+            capacity *= 2;
+            struct dir_entry *tmp = realloc(entries,
+                                            (size_t)capacity * sizeof(*entries));
+            if (!tmp) { free(entries); closedir(dir); return SS$_INSFMEM; }
+            entries = tmp;
+        }
+
+        struct dir_entry *e = &entries[entry_count];
+        e->st = st;
+        e->blocks = (st.st_size + 511) / 512;
+        strncpy(e->raw_name, de->d_name, sizeof(e->raw_name) - 1);
+        e->raw_name[sizeof(e->raw_name) - 1] = '\0';
+
+        size_t ni = 0;
+        for (size_t i = 0; de->d_name[i] && ni < sizeof(e->vms_name) - 1; i++) {
+            e->vms_name[ni++] = (char)toupper((unsigned char)de->d_name[i]);
+        }
+        e->vms_name[ni] = '\0';
+
+        char *semi = strrchr(e->vms_name, ';');
+        if (semi && semi[1] != '\0') {
+            e->version = (int)strtol(semi + 1, NULL, 10);
+        } else if (S_ISREG(st.st_mode)) {
+            e->version = 1;
+            strncat(e->vms_name, ";1",
+                    sizeof(e->vms_name) - strlen(e->vms_name) - 1);
+        } else {
+            e->version = 0;
+        }
+
+        if (S_ISDIR(st.st_mode)) {
+            strncat(e->vms_name, ".DIR;1",
+                    sizeof(e->vms_name) - strlen(e->vms_name) - 1);
+        }
+
+        if (S_ISREG(st.st_mode) && !strchr(de->d_name, '.')) {
+            char *s = strrchr(e->vms_name, ';');
+            if (s) {
+                memmove(s + 1, s, strlen(s) + 1);
+                *s = '.';
+            }
+        }
+
+        entry_count++;
+    }
+    closedir(dir);
+
+    qsort(entries, (size_t)entry_count, sizeof(struct dir_entry), dir_entry_cmp);
+
+    *out_entries = entries;
+    *out_count = entry_count;
+    return SS$_NORMAL;
+}
+
+/*
+ * dir_print_entries - Print the file listing for one already-collected,
+ * already-sorted directory, honoring the display qualifiers, and return the
+ * listed file count and block totals. Shared by the single-directory and
+ * multi-directory paths so their per-file output is byte-identical.
+ */
+static void dir_print_entries(const struct dir_entry *entries, int entry_count,
+                              const struct dir_opts *o,
+                              int *out_files, long *out_used, long *out_alloc)
+{
+    int file_count = 0;
+    long total_blocks = 0;
+    long total_alloc = 0;
+    int col = 0;
+    int col_width = (o->show_size || o->show_date) ? 0 : (80 / o->columns);
+
+    char ver_prev_base[288] = "";
+    int  ver_group_seen = 0;
+
+    for (int idx = 0; idx < entry_count; idx++) {
+        const struct dir_entry *e = &entries[idx];
+        const char *vms_name = e->vms_name;
+        long blocks = e->blocks;
+        const struct stat *st = &e->st;
+
+        if (o->versions_limit > 0) {
+            char base[288];
+            strncpy(base, vms_name, sizeof(base) - 1);
+            base[sizeof(base) - 1] = '\0';
+            char *semi = strrchr(base, ';');
+            if (semi) *semi = '\0';
+            if (strcasecmp(base, ver_prev_base) != 0) {
+                strncpy(ver_prev_base, base, sizeof(ver_prev_base) - 1);
+                ver_prev_base[sizeof(ver_prev_base) - 1] = '\0';
+                ver_group_seen = 0;
+            }
+            ver_group_seen++;
+            if (ver_group_seen > o->versions_limit) continue;
+        }
+
+        total_blocks += blocks;
+        total_alloc += (long)st->st_blocks;
+        file_count++;
+
+        if (o->suppress_files) continue;
+
+        if (o->show_full) {
+            printf("%-39s", vms_name);
+            printf(" %6ld", blocks);
+
+            struct tm tm;
+            localtime_r(&st->st_mtime, &tm);
+            printf("  %2d-%s-%04d %02d:%02d:%02d.00",
+                   tm.tm_mday, vms_months[tm.tm_mon],
+                   1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+            uint16_t vprot = vmsfs_mode_to_protection(st->st_mode);
+            char prot_buf[64];
+            vmsfs_format_protection(vprot, prot_buf, sizeof(prot_buf));
+            printf(" %s", prot_buf);
+
+            if (o->show_owner) {
+                printf(" [%03o,%03o]",
+                       (unsigned)(st->st_gid & 0377),
+                       (unsigned)(st->st_uid & 0377));
+            }
+            printf("\n");
+        } else if (o->show_size || o->show_date || o->show_owner ||
+                   o->show_protection) {
+            printf("%-39s", vms_name);
+            if (o->show_size) {
+                printf(" %6ld", blocks);
+            }
+            if (o->show_date) {
+                struct tm tm;
+                localtime_r(&st->st_mtime, &tm);
+                printf("  %2d-%s-%04d %02d:%02d:%02d.00",
+                       tm.tm_mday, vms_months[tm.tm_mon],
+                       1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
+            }
+            if (o->show_owner) {
+                printf(" [%03o,%03o]",
+                       (unsigned)(st->st_gid & 0377),
+                       (unsigned)(st->st_uid & 0377));
+            }
+            if (o->show_protection) {
+                uint16_t vprot = vmsfs_mode_to_protection(st->st_mode);
+                char prot_buf[64];
+                vmsfs_format_protection(vprot, prot_buf, sizeof(prot_buf));
+                printf(" %s", prot_buf);
+            }
+            printf("\n");
+        } else if (o->show_brief) {
+            printf("%s\n", vms_name);
+        } else {
+            if (col_width < 1) col_width = 20;
+            printf("%-*s", col_width, vms_name);
+            col++;
+            if (col >= o->columns) {
+                printf("\n");
+                col = 0;
+            }
+        }
+    }
+
+    /* Finish last line of columnar output */
+    if (col > 0 && !o->show_size && !o->show_date && !o->show_full &&
+        !o->show_brief && !o->show_owner && !o->show_protection &&
+        !o->suppress_files) {
+        printf("\n");
+    }
+
+    *out_files = file_count;
+    *out_used = total_blocks;
+    *out_alloc = total_alloc;
+}
+
+/*
+ * dir_gather_tree - Depth-first collect `base` plus every subdirectory
+ * below it (the real on-disk vmsfs tree), each with a trailing slash, into a
+ * malloc'd, case-insensitively sorted list. This is the concrete walk the
+ * VMS "[...]" ellipsis directory wildcard names. Returns 0 on success.
+ */
+static void dir_gather_recurse(const char *d, char ***list, int *count, int *cap)
+{
+    /* Append d */
+    if (*count >= *cap) {
+        int nc = *cap ? *cap * 2 : 16;
+        char **tmp = realloc(*list, (size_t)nc * sizeof(char *));
+        if (!tmp) return;
+        *list = tmp;
+        *cap = nc;
+    }
+    (*list)[(*count)++] = strdup(d);
+
+    DIR *dir = opendir(d);
+    if (!dir) return;
+
+    /* Collect child subdir names first, then recurse in sorted order. */
+    char **subs = NULL; int scount = 0, scap = 0;
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+            continue;
+        char child[2048];
+        snprintf(child, sizeof(child), "%s%s", d, de->d_name);
+        struct stat st;
+        if (stat(child, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        if (scount >= scap) {
+            int nc = scap ? scap * 2 : 8;
+            char **tmp = realloc(subs, (size_t)nc * sizeof(char *));
+            if (!tmp) break;
+            subs = tmp; scap = nc;
+        }
+        char childslash[2049];
+        snprintf(childslash, sizeof(childslash), "%s/", child);
+        subs[scount++] = strdup(childslash);
+    }
+    closedir(dir);
+
+    /* Sort children so the tree is emitted in a stable VMS-like order. */
+    for (int i = 0; i < scount; i++) {
+        for (int j = i + 1; j < scount; j++) {
+            if (strcasecmp(subs[i], subs[j]) > 0) {
+                char *t = subs[i]; subs[i] = subs[j]; subs[j] = t;
+            }
+        }
+    }
+    for (int i = 0; i < scount; i++) {
+        dir_gather_recurse(subs[i], list, count, cap);
+        free(subs[i]);
+    }
+    free(subs);
+}
+
+/*
+ * dir_deellipsize - Rewrite a VMS directory spec that contains the "..."
+ * ellipsis wildcard into a plain, resolvable directory spec naming the START
+ * of the tree (the ellipsis and everything from it is dropped), and report
+ * whether an ellipsis was present.
+ *
+ *   "[...]*.TXT"     -> "*.TXT"       (start = current default dir)
+ *   "[MYDIR...]*.C"  -> "[MYDIR]*.C"  (start = top-level [MYDIR])
+ *   "[.SUB...]F.T"   -> "[.SUB]F.T"   (start = default's [.SUB])
+ *
+ * The DIRECTORY command then resolves the rewritten spec exactly as it does a
+ * non-ellipsis spec, and walks the tree from the resolved start directory.
+ *
+ * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary — the ellipsis
+ * ("...") in a directory specification means "this directory and all
+ * subdirectories below it"; DIRECTORY over such a spec produces a
+ * per-directory listing plus a "Grand total" line.
+ */
+static int dir_deellipsize(const char *spec, char *out, size_t out_sz)
+{
+    const char *lb = strchr(spec, '[');
+    const char *rb = lb ? strchr(lb, ']') : NULL;
+    if (!lb || !rb) {
+        strncpy(out, spec, out_sz - 1);
+        out[out_sz - 1] = '\0';
+        return 0;
+    }
+
+    size_t dlen = (size_t)(rb - (lb + 1));
+    char dtext[512];
+    if (dlen >= sizeof(dtext)) dlen = sizeof(dtext) - 1;
+    memcpy(dtext, lb + 1, dlen);
+    dtext[dlen] = '\0';
+
+    char *ell = strstr(dtext, "...");
+    if (!ell) {
+        strncpy(out, spec, out_sz - 1);
+        out[out_sz - 1] = '\0';
+        return 0;
+    }
+    *ell = '\0';                 /* drop "..." and everything after it */
+
+    size_t before = (size_t)(lb - spec);
+    char pre[600];
+    if (before >= sizeof(pre)) before = sizeof(pre) - 1;
+    memcpy(pre, spec, before);
+    pre[before] = '\0';
+    const char *post = rb + 1;
+
+    if (dtext[0])
+        snprintf(out, out_sz, "%s[%s]%s", pre, dtext, post);
+    else
+        snprintf(out, out_sz, "%s%s", pre, post);
+    return 1;
+}
+
 int cmd_directory(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -133,8 +485,21 @@ int cmd_directory(struct dcl_command *cmd)
     char linux_dir[1024];
     const char *pattern = NULL;
 
+    /* Detect and strip a "..." ellipsis directory wildcard. `use_spec` is the
+     * spec with the ellipsis removed (naming the START of the tree); the
+     * resolution below treats it exactly like a non-ellipsis spec, and when
+     * has_ellipsis is set the listing walks the resolved directory's whole
+     * subtree (see dir_deellipsize() / dir_gather_recurse()). */
+    char despec[1024];
+    int has_ellipsis = 0;
+    const char *use_spec = NULL;
     if (cmd->param_count >= 1 && cmd->params[0][0] != '\0') {
-        dcl_resolve_path(ctx, cmd->params[0], linux_dir, sizeof(linux_dir));
+        has_ellipsis = dir_deellipsize(cmd->params[0], despec, sizeof(despec));
+        use_spec = despec;
+    }
+
+    if (use_spec && use_spec[0] != '\0') {
+        dcl_resolve_path(ctx, use_spec, linux_dir, sizeof(linux_dir));
         /* Check if this is a directory or a file pattern */
         struct stat st;
         if (stat(linux_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
@@ -143,7 +508,7 @@ int cmd_directory(struct dcl_command *cmd)
             /* Might be a wildcard pattern - split dir and pattern.
              * Use the ORIGINAL filename+version text, not linux_dir's own
              * basename — see dcl_filename_component()'s doc comment. */
-            const char *orig = dcl_filename_component(cmd->params[0]);
+            const char *orig = dcl_filename_component(use_spec);
             char *last_slash = strrchr(linux_dir, '/');
             if (last_slash) {
                 pattern = strdup((orig && orig[0]) ? orig : last_slash + 1);
@@ -250,279 +615,175 @@ int cmd_directory(struct dcl_command *cmd)
     /* If /TOTAL or /GRAND_TOTAL, suppress individual file listing */
     int suppress_files = show_total || show_grand_total;
 
-    /* Display header */
-    char vms_dir[512];
-    /* Remove trailing slash for display */
-    char display_dir[1024];
-    strncpy(display_dir, linux_dir, sizeof(display_dir) - 1);
-    display_dir[sizeof(display_dir) - 1] = '\0';
-    size_t ddlen = strlen(display_dir);
-    if (ddlen > 1 && display_dir[ddlen - 1] == '/') {
-        display_dir[ddlen - 1] = '\0';
-    }
-    dcl_format_directory(display_dir, vms_dir, sizeof(vms_dir));
-    if (show_heading) {
-        printf("\nDirectory %s\n\n", vms_dir);
+    /* Package the display flags once for the per-directory helpers so the
+     * single-directory and multi-directory (ellipsis) paths render files
+     * identically. */
+    struct dir_opts opts;
+    opts.show_size = show_size;
+    opts.show_date = show_date;
+    opts.show_full = show_full;
+    opts.show_brief = show_brief;
+    opts.show_owner = show_owner;
+    opts.show_protection = show_protection;
+    opts.suppress_files = suppress_files;
+    opts.columns = columns;
+    opts.versions_limit = versions_limit;
+
+    char vms_dir[512];   /* VMS display spec of the (last) directory listed */
+    vms_dir[0] = '\0';
+
+    if (!has_ellipsis) {
+        /* ---------------- Single-directory listing ---------------- */
+        struct dir_entry *entries = NULL;
+        int entry_count = 0;
+        int cst = dir_collect(linux_dir, pattern, excl_pats, excl_count,
+                              &entries, &entry_count);
+        if (cst == SS$_NOSUCHFILE) {
+            dcl_error("RMS", 2, "DNF", "directory not found - %s", linux_dir);
+            if (pattern) free((void *)pattern);
+            return SS$_NOSUCHFILE;
+        }
+        if (cst != SS$_NORMAL) {
+            if (pattern) free((void *)pattern);
+            return cst;
+        }
+
+        /* Zero matches: VMS prints %DIRECT-W-NOFILES with NO header — not an
+         * empty "Total of 0 files." trailer.
+         * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, DIRECTORY
+         * — a search that finds nothing yields
+         * "%DIRECT-W-NOFILES, no files found". */
+        if (entry_count == 0) {
+            free(entries);
+            if (pattern) free((void *)pattern);
+            dcl_error("DIRECT", STS$K_WARNING, "NOFILES", "no files found");
+            return SS$_NOSUCHFILE;
+        }
+
+        /* Header (only once we know there is at least one file to list). */
+        char display_dir[1024];
+        strncpy(display_dir, linux_dir, sizeof(display_dir) - 1);
+        display_dir[sizeof(display_dir) - 1] = '\0';
+        size_t ddlen = strlen(display_dir);
+        if (ddlen > 1 && display_dir[ddlen - 1] == '/')
+            display_dir[ddlen - 1] = '\0';
+        dcl_format_directory(display_dir, vms_dir, sizeof(vms_dir));
+        if (show_heading) printf("\nDirectory %s\n\n", vms_dir);
+
+        int file_count = 0;
+        long total_blocks = 0, total_alloc = 0;
+        dir_print_entries(entries, entry_count, &opts,
+                          &file_count, &total_blocks, &total_alloc);
+        free(entries);
+
+        /* Footer. Block counts appear only when file sizes are displayed
+         * (/SIZE or /FULL) — see dcl_print_dir_total()'s citation. */
+        if (show_grand_total) {
+            printf("\nGrand total of 1 directory, %d file%s",
+                   file_count, file_count != 1 ? "s" : "");
+            if (show_full)
+                printf(", %ld/%ld block%s", total_blocks, total_alloc,
+                       total_blocks != 1 ? "s" : "");
+            else if (show_size)
+                printf(", %ld block%s", total_blocks,
+                       total_blocks != 1 ? "s" : "");
+            printf(".\n");
+        } else {
+            dcl_print_dir_total(file_count, total_blocks, total_alloc,
+                                show_size, show_full);
+        }
+
+        /* /TRAILING: repeat the totals with the directory spec appended. */
+        if (show_trailing) {
+            dcl_print_dir_total(file_count, total_blocks, total_alloc,
+                                show_size, show_full);
+            printf("%s\n", vms_dir);
+        }
+
+        if (pattern) free((void *)pattern);
+        return SS$_NORMAL;
     }
 
-    /* Read directory entries */
-    DIR *dir = opendir(linux_dir);
-    if (!dir) {
-        dcl_error("RMS", 2, "DNF",
-                  "directory not found - %s", linux_dir);
+    /* ---------------- Multi-directory ellipsis listing ----------------
+     * The "..." wildcard names the start directory plus every subdirectory
+     * below it. Walk the real on-disk tree, list each directory that has at
+     * least one match with its own header + "Total of N files" subtotal, then
+     * emit a single "Grand total of D directories, F files[, M blocks]." line.
+     * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, DIRECTORY —
+     * ellipsis directory wildcard + the per-directory / Grand total layout. */
+    {
+        struct stat bst;
+        if (stat(linux_dir, &bst) != 0 || !S_ISDIR(bst.st_mode)) {
+            dcl_error("RMS", 2, "DNF", "directory not found - %s", linux_dir);
+            if (pattern) free((void *)pattern);
+            return SS$_NOSUCHFILE;
+        }
+    }
+
+    char **dirs = NULL;
+    int ndirs = 0, dcap = 0;
+    dir_gather_recurse(linux_dir, &dirs, &ndirs, &dcap);
+
+    long grand_used = 0, grand_alloc = 0, grand_files = 0;
+    int  grand_dirs = 0;
+
+    for (int di = 0; di < ndirs; di++) {
+        struct dir_entry *entries = NULL;
+        int entry_count = 0;
+        int cst = dir_collect(dirs[di], pattern, excl_pats, excl_count,
+                              &entries, &entry_count);
+        if (cst != SS$_NORMAL) { free(entries); continue; }
+        if (entry_count == 0) { free(entries); continue; }
+
+        char display_dir[1024];
+        strncpy(display_dir, dirs[di], sizeof(display_dir) - 1);
+        display_dir[sizeof(display_dir) - 1] = '\0';
+        size_t ddlen = strlen(display_dir);
+        if (ddlen > 1 && display_dir[ddlen - 1] == '/')
+            display_dir[ddlen - 1] = '\0';
+        dcl_format_directory(display_dir, vms_dir, sizeof(vms_dir));
+
+        int file_count = 0;
+        long used = 0, alloc = 0;
+        if (show_grand_total) {
+            /* /GRAND_TOTAL: suppress every directory's header, files and
+             * subtotal — only the final grand total is printed. */
+            struct dir_opts sopts = opts;
+            sopts.suppress_files = 1;
+            dir_print_entries(entries, entry_count, &sopts,
+                              &file_count, &used, &alloc);
+        } else {
+            if (show_heading) printf("\nDirectory %s\n\n", vms_dir);
+            dir_print_entries(entries, entry_count, &opts,
+                              &file_count, &used, &alloc);
+            dcl_print_dir_total(file_count, used, alloc, show_size, show_full);
+        }
+        free(entries);
+
+        grand_files += file_count;
+        grand_used  += used;
+        grand_alloc += alloc;
+        grand_dirs++;
+    }
+
+    for (int di = 0; di < ndirs; di++) free(dirs[di]);
+    free(dirs);
+
+    if (grand_files == 0) {
         if (pattern) free((void *)pattern);
+        dcl_error("DIRECT", STS$K_WARNING, "NOFILES", "no files found");
         return SS$_NOSUCHFILE;
     }
 
-    /* Collect all matching entries for sorting */
-
-    int capacity = 256;
-    struct dir_entry *entries = malloc((size_t)capacity * sizeof(*entries));
-    if (!entries) {
-        closedir(dir);
-        if (pattern) free((void *)pattern);
-        return SS$_INSFMEM;
-    }
-    int entry_count = 0;
-
-    struct dirent *de;
-    while ((de = readdir(dir)) != NULL) {
-        /* Skip . and .. */
-        if (strcmp(de->d_name, ".") == 0 ||
-            strcmp(de->d_name, "..") == 0) continue;
-
-        /* Apply wildcard filter if pattern specified.
-         * Use vmsfs_wildcard_match() which handles VMS % (single-char) and * */
-        if (pattern) {
-            if (!vmsfs_wildcard_match(pattern, de->d_name)) continue;
-        }
-
-        /* /EXCLUDE: skip entries matching any exclusion spec. */
-        if (excl_count > 0) {
-            int excluded = 0;
-            for (int xi = 0; xi < excl_count; xi++) {
-                if (vmsfs_wildcard_match(excl_pats[xi], de->d_name)) {
-                    excluded = 1;
-                    break;
-                }
-            }
-            if (excluded) continue;
-        }
-
-        /* Stat the file */
-        char full_path[2048];
-        snprintf(full_path, sizeof(full_path), "%s%s", linux_dir, de->d_name);
-        struct stat st;
-        if (stat(full_path, &st) != 0) continue;
-
-        /* Grow array if needed */
-        if (entry_count >= capacity) {
-            capacity *= 2;
-            struct dir_entry *tmp = realloc(entries,
-                                            (size_t)capacity * sizeof(*entries));
-            if (!tmp) {
-                free(entries);
-                closedir(dir);
-                if (pattern) free((void *)pattern);
-                return SS$_INSFMEM;
-            }
-            entries = tmp;
-        }
-
-        struct dir_entry *e = &entries[entry_count];
-        e->st = st;
-        e->blocks = (st.st_size + 511) / 512;
-        strncpy(e->raw_name, de->d_name, sizeof(e->raw_name) - 1);
-        e->raw_name[sizeof(e->raw_name) - 1] = '\0';
-
-        /* Format the filename in VMS style (uppercase) */
-        size_t ni = 0;
-        for (size_t i = 0; de->d_name[i] && ni < sizeof(e->vms_name) - 1; i++) {
-            e->vms_name[ni++] = (char)toupper((unsigned char)de->d_name[i]);
-        }
-        e->vms_name[ni] = '\0';
-
-        /* Determine version number.
-         * If the filename already contains ;N, extract it.
-         * Otherwise append ;1 for regular files. */
-        char *semi = strrchr(e->vms_name, ';');
-        if (semi && semi[1] != '\0') {
-            /* Already has a version suffix — use it */
-            e->version = (int)strtol(semi + 1, NULL, 10);
-            /* Don't double-add: nothing to append */
-        } else if (S_ISREG(st.st_mode)) {
-            /* No version suffix — add ;1 */
-            e->version = 1;
-            strncat(e->vms_name, ";1",
-                    sizeof(e->vms_name) - strlen(e->vms_name) - 1);
-        } else {
-            e->version = 0;  /* Directories don't have versions per se */
-        }
-
-        /* Add .DIR;1 suffix for subdirectories */
-        if (S_ISDIR(st.st_mode)) {
-            strncat(e->vms_name, ".DIR;1",
-                    sizeof(e->vms_name) - strlen(e->vms_name) - 1);
-        }
-
-        /* Ensure a dot separator for regular files without one.
-         * Insert '.' before ';1' so "FOO;1" becomes "FOO.;1". */
-        if (S_ISREG(st.st_mode) && !strchr(de->d_name, '.')) {
-            char *s = strrchr(e->vms_name, ';');
-            if (s) {
-                memmove(s + 1, s, strlen(s) + 1);
-                *s = '.';
-            }
-        }
-
-        entry_count++;
-    }
-    closedir(dir);
-
-    /* Sort entries: name ascending (case-insensitive), version descending */
-    qsort(entries, (size_t)entry_count, sizeof(struct dir_entry), dir_entry_cmp);
-
-    int file_count = 0;
-    long total_blocks = 0;   /* blocks used (logical, ceil(size/512)) */
-    long total_alloc = 0;    /* blocks allocated (real st_blocks, 512-byte units) */
-    int col = 0;
-    int col_width = (show_size || show_date) ? 0 : (80 / columns);
-
-    /* /VERSIONS=n version-limit state: entries are sorted name-asc,
-     * version-desc, so same-name versions are consecutive newest-first; keep
-     * the first n of each name group and drop the rest. */
-    char ver_prev_base[288] = "";
-    int  ver_group_seen = 0;
-
-    for (int idx = 0; idx < entry_count; idx++) {
-        struct dir_entry *e = &entries[idx];
-        const char *vms_name = e->vms_name;
-        long blocks = e->blocks;
-        struct stat *st = &e->st;
-
-        /* /VERSIONS=n: count versions per name group; drop the oldest. */
-        if (versions_limit > 0) {
-            char base[288];
-            strncpy(base, vms_name, sizeof(base) - 1);
-            base[sizeof(base) - 1] = '\0';
-            char *semi = strrchr(base, ';');
-            if (semi) *semi = '\0';
-            if (strcasecmp(base, ver_prev_base) != 0) {
-                strncpy(ver_prev_base, base, sizeof(ver_prev_base) - 1);
-                ver_prev_base[sizeof(ver_prev_base) - 1] = '\0';
-                ver_group_seen = 0;
-            }
-            ver_group_seen++;
-            if (ver_group_seen > versions_limit) continue; /* not listed */
-        }
-
-        total_blocks += blocks;
-        total_alloc += (long)st->st_blocks;   /* real allocated blocks */
-        file_count++;
-
-        /* If /TOTAL or /GRAND_TOTAL, skip individual file display */
-        if (suppress_files) continue;
-
-        if (show_full) {
-            /* Full listing: one file per line with all info */
-            printf("%-39s", vms_name);
-            printf(" %6ld", blocks);
-
-            struct tm tm;
-            localtime_r(&st->st_mtime, &tm);
-            printf("  %2d-%s-%04d %02d:%02d:%02d.00",
-                   tm.tm_mday, vms_months[tm.tm_mon],
-                   1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
-
-            /* Protection: use vmsfs functions for proper VMS format */
-            uint16_t vprot = vmsfs_mode_to_protection(st->st_mode);
-            char prot_buf[64];
-            vmsfs_format_protection(vprot, prot_buf, sizeof(prot_buf));
-            printf(" %s", prot_buf);
-
-            /* /OWNER: show file owner UIC */
-            if (show_owner) {
-                printf(" [%03o,%03o]",
-                       (unsigned)(st->st_gid & 0377),
-                       (unsigned)(st->st_uid & 0377));
-            }
-            printf("\n");
-        } else if (show_size || show_date || show_owner || show_protection) {
-            /* Size and/or date and/or owner and/or protection */
-            printf("%-39s", vms_name);
-            if (show_size) {
-                printf(" %6ld", blocks);
-            }
-            if (show_date) {
-                struct tm tm;
-                localtime_r(&st->st_mtime, &tm);
-                printf("  %2d-%s-%04d %02d:%02d:%02d.00",
-                       tm.tm_mday, vms_months[tm.tm_mon],
-                       1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
-            }
-            if (show_owner) {
-                printf(" [%03o,%03o]",
-                       (unsigned)(st->st_gid & 0377),
-                       (unsigned)(st->st_uid & 0377));
-            }
-            /* /PROTECTION: file protection column (same VMS format as /FULL). */
-            if (show_protection) {
-                uint16_t vprot = vmsfs_mode_to_protection(st->st_mode);
-                char prot_buf[64];
-                vmsfs_format_protection(vprot, prot_buf, sizeof(prot_buf));
-                printf(" %s", prot_buf);
-            }
-            printf("\n");
-        } else if (show_brief) {
-            /* Brief: just filename */
-            printf("%s\n", vms_name);
-        } else {
-            /* Columnar output */
-            if (col_width < 1) col_width = 20;
-            printf("%-*s", col_width, vms_name);
-            col++;
-            if (col >= columns) {
-                printf("\n");
-                col = 0;
-            }
-        }
-    }
-
-    free(entries);
-
-    /* Finish last line of columnar output */
-    if (col > 0 && !show_size && !show_date && !show_full && !show_brief &&
-        !show_owner && !show_protection && !suppress_files) {
-        printf("\n");
-    }
-
-    /* Footer. Block counts appear only when file sizes are displayed
-     * (/SIZE or /FULL) — see dcl_print_dir_total()'s citation. */
-    if (show_grand_total) {
-        /* Single-directory grand total (multi-directory rollup is a separate
-         * wildcard/ellipsis slice — see vms-1c6). VMS: "Grand total of D
-         * directories, F files[, ...blocks]." */
-        printf("\nGrand total of 1 directory, %d file%s",
-               file_count, file_count != 1 ? "s" : "");
-        if (show_full) {
-            printf(", %ld/%ld block%s", total_blocks, total_alloc,
-                   total_blocks != 1 ? "s" : "");
-        } else if (show_size) {
-            printf(", %ld block%s", total_blocks,
-                   total_blocks != 1 ? "s" : "");
-        }
-        printf(".\n");
-    } else {
-        dcl_print_dir_total(file_count, total_blocks, total_alloc,
-                            show_size, show_full);
-    }
-
-    /* /TRAILING: repeat the totals with the directory spec appended. */
-    if (show_trailing) {
-        dcl_print_dir_total(file_count, total_blocks, total_alloc,
-                            show_size, show_full);
-        printf("%s\n", vms_dir);
-    }
+    printf("\nGrand total of %d director%s, %ld file%s",
+           grand_dirs, grand_dirs == 1 ? "y" : "ies",
+           grand_files, grand_files != 1 ? "s" : "");
+    if (show_full)
+        printf(", %ld/%ld block%s", grand_used, grand_alloc,
+               grand_used != 1 ? "s" : "");
+    else if (show_size)
+        printf(", %ld block%s", grand_used, grand_used != 1 ? "s" : "");
+    printf(".\n");
 
     if (pattern) free((void *)pattern);
     return SS$_NORMAL;

@@ -78,8 +78,9 @@ output=$(echo "SET DEFAULT [.NONEXISTENT_QWERTY_DIR]" | $VMSDCL 2>&1)
 check_vms_format "set default invalid" "$output"
 assert_ident "set default invalid" "%DCL-E-DIRECT" "$output"
 
-# Test 4: DELETE nonexistent file -> %RMS-E-FNF (dcl_cmd_file.c cmd_delete)
-output=$(echo "DELETE NONEXISTENT_FILE_QWERTY.TXT" | $VMSDCL 2>&1)
+# Test 4: DELETE nonexistent file -> %RMS-E-FNF (dcl_cmd_file.c cmd_delete).
+# An explicit version is required (vms-1c6); with one, a missing file is FNF.
+output=$(echo "DELETE NONEXISTENT_FILE_QWERTY.TXT;1" | $VMSDCL 2>&1)
 check_vms_format "delete nonexistent" "$output"
 assert_ident "delete nonexistent" "%RMS-E-FNF" "$output"
 

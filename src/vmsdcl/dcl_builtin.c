@@ -80,6 +80,9 @@ static const struct dcl_qual_def q_copy[] = {
     /* vms-7543: /CONFIRM prompts for Y/N before the copy (DCL Dictionary COPY
      * /CONFIRM). Honoured by cmd_copy(); /NOCONFIRM is the default. */
     { "CONFIRM", CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
+    /* vms-1c6: /NEW_VERSION forces a higher output version when an explicit
+     * output version collides (DCL Dictionary COPY /NEW_VERSION). */
+    { "NEW_VERSION", CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
     QUAL_END
 };
 static const struct dcl_qual_def q_delete[] = {
@@ -92,6 +95,9 @@ static const struct dcl_qual_def q_delete[] = {
 };
 static const struct dcl_qual_def q_rename[] = {
     { "LOG", CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
+    /* vms-1c6: /NEW_VERSION forces a higher output version on collision
+     * (DCL Dictionary RENAME /NEW_VERSION). */
+    { "NEW_VERSION", CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
     QUAL_END
 };
 static const struct dcl_qual_def q_create[] = {

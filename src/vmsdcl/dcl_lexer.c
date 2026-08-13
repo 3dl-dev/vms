@@ -408,6 +408,29 @@ int dcl_lexer_next(dcl_lexer_t *lex, dcl_token_t *token)
                 if (vi < sizeof(token->value) - 1)
                     token->value[vi++] = ch;
                 lex_advance(lex);
+            } else if (ch == ';') {
+                /* VMS file version delimiter appearing INSIDE a filespec word:
+                 * ';', ';N', ';*' or ';-N'. DCL's only comment character is
+                 * '!'; a ';' that immediately follows filespec characters is a
+                 * version field, never a comment (the leading-';' comment case
+                 * is handled before word scanning). Absorb the ';' plus its
+                 * numeric/wildcard version field so commands like
+                 * DELETE FOO.TXT;* and COPY A.TXT;3 B.TXT see the version the
+                 * user typed. (vms-1c6) */
+                if (vi < sizeof(token->value) - 1)
+                    token->value[vi++] = ch;
+                lex_advance(lex);
+                while (lex->pos < lex->length) {
+                    char vch = lex_peek(lex);
+                    if (isdigit((unsigned char)vch) || vch == '*' || vch == '-') {
+                        if (vi < sizeof(token->value) - 1)
+                            token->value[vi++] = vch;
+                        lex_advance(lex);
+                    } else {
+                        break;
+                    }
+                }
+                break;  /* the version field terminates the filespec word */
             } else if (ch == ':') {
                 /* Colon could be: part of label (at end), device name,
                  * or start of := assignment */

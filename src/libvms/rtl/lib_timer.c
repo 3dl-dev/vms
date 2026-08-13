@@ -345,6 +345,55 @@ static double vax_g_to_double(const void *p) {
     return sign ? -val : val;
 }
 
+/*
+ * IEEE single/double decoded ARITHMETICALLY from raw bytes (rd vms-30a, item 5.3).
+ *
+ * The straightforward `memcpy` into a native float/double is exact ONLY when the
+ * host's native float IS IEEE-754. On an IEEE host (x86_64/aarch64/Alpha) that
+ * holds, so we keep the fast memcpy path there. But on the netbsd-vax host gcc
+ * emits VAX F/D/G float, and memcpy'ing IEEE bytes into a VAX-format `double`
+ * would MISREAD them. So on a non-IEEE host we decode the IEEE bit fields
+ * arithmetically -- the mirror image of how vax_*_to_double() decodes VAX bytes
+ * on an IEEE host. Both VAX and the IEEE payload are little-endian, so the raw
+ * word needs no swap for the IEEE format itself. Only finite delays matter to
+ * lib$wait (it rejects NaN/negatives and clamps), so subnormal/inf edge cases
+ * fold into the clamp exactly as the VAX decoders' do.
+ *
+ * Keyed on the ARCH (VAX is the only non-IEEE float target), NOT on
+ * __STDC_IEC_559__: see the discriminator rationale in vms_math.c.
+ */
+#if defined(__vax__) || defined(__vax)
+#  define OVMX_HOST_NONIEEE_FLOAT 1   /* VAX F/D/G float */
+#else
+#  define OVMX_HOST_NONIEEE_FLOAT 0   /* x86_64 / aarch64 / Alpha: IEEE-754 */
+#endif
+
+#if OVMX_HOST_NONIEEE_FLOAT
+static double ieee_s_to_double(const void *p) {
+    uint32_t bits;
+    memcpy(&bits, p, 4);
+    int sign = (int)((bits >> 31) & 1);
+    int exp  = (int)((bits >> 23) & 0xFF);       /* 8-bit, bias 127 */
+    uint32_t frac = bits & 0x7FFFFFu;            /* 23 bits */
+    if (exp == 0) return sign ? -0.0 : 0.0;      /* zero / subnormal ~ 0 */
+    double m = (double)((1u << 23) | frac) / (double)(1u << 23); /* [1,2) */
+    double val = m * pow(2.0, (double)(exp - 127));
+    return sign ? -val : val;
+}
+
+static double ieee_t_to_double(const void *p) {
+    uint64_t bits;
+    memcpy(&bits, p, 8);
+    int sign = (int)((bits >> 63) & 1);
+    int exp  = (int)((bits >> 52) & 0x7FF);      /* 11-bit, bias 1023 */
+    uint64_t frac = bits & 0xFFFFFFFFFFFFFULL;   /* 52 bits */
+    if (exp == 0) return sign ? -0.0 : 0.0;
+    double m = (double)((1ULL << 52) | frac) / (double)(1ULL << 52); /* [1,2) */
+    double val = m * pow(2.0, (double)(exp - 1023));
+    return sign ? -val : val;
+}
+#endif
+
 uint32_t lib$wait(const void *seconds, const uint32_t *flags,
                   const uint32_t *float_type) {
     (void)flags;   /* reserved / control flags (e.g. LIB$K_NOWAKE) */
@@ -354,8 +403,16 @@ uint32_t lib$wait(const void *seconds, const uint32_t *flags,
     uint32_t ft = float_type ? *float_type : LIB$K_IEEE_S;
     double secs;
     switch (ft) {
+#if OVMX_HOST_NONIEEE_FLOAT
+    /* Non-IEEE host (VAX): decode the IEEE bytes arithmetically, never memcpy
+     * them into a native VAX-format float. */
+    case LIB$K_IEEE_S: secs = ieee_s_to_double(seconds); break;
+    case LIB$K_IEEE_T: secs = ieee_t_to_double(seconds); break;
+#else
+    /* IEEE host: native float IS IEEE-754, so memcpy is exact. */
     case LIB$K_IEEE_S: { float f; memcpy(&f, seconds, sizeof f); secs = (double)f; break; }
     case LIB$K_IEEE_T: { double d; memcpy(&d, seconds, sizeof d); secs = d; break; }
+#endif
     case LIB$K_VAX_F:  secs = vax_f_to_double(seconds); break;
     case LIB$K_VAX_D:  secs = vax_d_to_double(seconds); break;
     case LIB$K_VAX_G:  secs = vax_g_to_double(seconds); break;

@@ -122,7 +122,8 @@ set makes that assumption.
 
 None of the three is in the netbsd-vax `libvmssys` build set; each is a
 later-phase concern with a stated fix, recorded here per Rule 5 (no silent spec
-deviation).
+deviation). **All three are now RESOLVED in the RTL phase — see §7 (rd
+vms-30a).**
 
 ### 5.1 `vms_time_t = long` mismatches NetBSD's 64-bit `time_t`
 `vms_types.h` defines `typedef long vms_time_t;` → **32-bit on VAX ILP32**, but
@@ -163,3 +164,88 @@ through the CMake `VMSSYS_SUBSTRATE=netbsd` path, and (3) links a real
 proving the link-libc backend end to end. There is **no** emulation: QEMU has no
 VAX system target and this is a build-only gate (SIMH boot is a later phase, P4).
 The CI job `libvmssys-netbsd-vax` runs the whole thing containerized.
+
+## 7. RTL-phase resolution of §5's three items (rd vms-30a)
+
+The three §5 items were the width/float concerns the P3 audit deferred to the
+RTL phase. This section records their resolution. Each is either **fixed
+portably** or (where it genuinely needs a booted NetBSD/vax to validate) fixed
+in-principle with the runtime check flagged as a **P4 (SIMH boot)** follow-up.
+The netbsd-vax cross gate (`libvmssys-netbsd-vax`) compiles the changed
+`libvmssys` surface — including every `#if defined(__NetBSD__)` / non-IEEE branch
+below — so all of this is **compile-proven on the real VAX toolchain**; the
+Linux x86_64/aarch64 build + `ctest` prove the IEEE path is unregressed.
+
+### 7.1 `vms_time_t` — FIXED
+`src/libvmssys/vms_types.h`: `typedef long vms_time_t;` → `typedef int64_t
+vms_time_t;`. On LP64 this is a no-op (`long`==64-bit), so `struct
+vms_timespec`/`vms_timeval` keep an identical layout on x86_64/aarch64; on VAX
+ILP32 it widens 32→64, matching NetBSD's 64-bit `time_t` and killing the Y2038 /
+truncation defect. A `_Static_assert(sizeof(vms_time_t) >= 8, …)` guards it and
+is compiled by BOTH the LP64 targets and the ILP32 vax gate — so the fix is
+proven where a bare `long` would fail (VAX). No silent truncation remains: a
+full-tree grep shows `vms_time_t`'s only uses are the two typedef'd time structs.
+
+### 7.2 `VMS_O_*` / `VMS_MAP_*` / futex constants — FIXED (substrate-selected)
+`src/libvmssys/vms_types.h`: the file-flag constants are now selected per
+substrate. Under `#if defined(__NetBSD__)` the header `#include`s the sysroot
+`<fcntl.h>`/`<sys/mman.h>` and **aliases** `VMS_O_*`/`VMS_AT_*`/`VMS_MAP_*` to the
+authoritative NetBSD macros (`VMS_O_CREAT → O_CREAT`, `VMS_MAP_ANONYMOUS →
+MAP_ANON`, …) — never a transcribed magic number, so it is correct by
+construction and can never drift from the platform. The Linux raw-syscall numeric
+values are kept under the `#else`. `_Static_assert(VMS_O_CREAT == O_CREAT, …)`
+(compiled by the vax gate against the real NetBSD sysroot) proves the select
+took the NetBSD value, not a stale Linux `0x40`. The Linux-numeric `VMS_FUTEX_*`
+op block is now `#if !defined(__NetBSD__)` — deliberately **undefined** on
+NetBSD (no Linux futex ABI there; the netbsd wait primitive is separate, design
+§4.2, and `vms_futex.c` is excluded from the build set), so a Linux futex op
+number can never reach a NetBSD syscall. Audit evidence: the only consumers of
+these constants — `vms_stdio.c`, `vms_futex.c`, `vms_runtime_init.c`,
+`kif_transport_linux.c` — are all excluded from the netbsd build set, so nothing
+in-set regressed; the fix makes the constants correct for when a NetBSD
+open/mmap-flags path *is* added.
+
+### 7.3 VAX F/D/G float (non-IEEE-754) — FIXED in `libvmssys`, in-principle in `libvms` (P4 runtime)
+The IEEE-only bit tricks were split by target on `#if defined(__vax__)` (VAX is
+the only non-IEEE float target; note `__STDC_IEC_559__` is unusable here because
+`-ffreestanding` leaves it undefined even on x86_64):
+
+- **`src/libvmssys/vms_math.c`** (IN the netbsd-vax build set): the hardcoded
+  IEEE inf/NaN words (`0x7FF0…`/`0xFFF0…`/`0x7FF8…`) are replaced by
+  `vms_math_inf()`/`vms_math_nan()` helpers — bit words on IEEE, `__builtin_huge_val()`
+  / `__builtin_nan("")` on VAX (the target-correct value; VAX has no true
+  Inf/NaN, so gcc/vax lowers these to its reserved-operand / max-magnitude
+  forms — the VMS-authentic outcome). The exponent surgery in `vms_exp()` (the
+  `p * 2^n` reconstruction) and `vms_log()` (mantissa/exponent extraction) keeps
+  the exact IEEE bit path on IEEE targets — load-bearing because the
+  freestanding Linux build is `-ffreestanding -fno-builtin` and must not emit
+  libm calls — and on VAX uses `__builtin_ldexp`/`__builtin_frexp`, which the
+  compiler lowers to native VAX-float scaling (NetBSD libm backs them on the
+  link-libc substrate; the archive tolerates the unresolved symbol and the gate's
+  smoke exe does not pull `vms_math.o`). Bounded residual: `vms_exp`'s 709/-745
+  overflow *clamp* constants are IEEE thresholds — exact for VAX G_float, loose
+  for D_float; because `ldexp` itself signals correctly on VAX overflow this
+  affects only extreme-input overflow *signalling*, not normal-range results, and
+  precise VAX thresholds are a **P4** runtime item.
+
+- **`src/libvms/rtl/lib_timer.c`** (`lib$wait`, DECC$SHR LIB$; NOT yet in a
+  cross-built set — libvms cross-build is the C2 item this work unblocks): its
+  VAX F/D/G decoders were already host-independent arithmetic (correct
+  everywhere). Its `LIB$K_IEEE_S`/`_IEEE_T` cases, however, `memcpy`'d the IEEE
+  bytes into a *native* `float`/`double`, which misreads them on a VAX (non-IEEE
+  native) host. Fixed symmetrically: IEEE hosts keep the exact `memcpy`; non-IEEE
+  hosts decode the IEEE bit fields **arithmetically** (`ieee_s_to_double` /
+  `ieee_t_to_double`), the mirror of how the VAX decoders parse VAX bytes on an
+  IEEE host.
+
+- **`src/libvms/rtl/mth_routines.c`, `ots_routines.c`**: audited **clean** —
+  `MTH$` forwards to libm on native `double` (no bit assumptions; libm handles
+  native VAX float), and `OTS$` conversions are integer/text only.
+
+Static-analysis and runtime coverage: `tests/libvmssys/test_math.c` gains
+exp/log/pow range checks, an `exp(log(x))` round-trip, and inf/-inf/NaN sentinel
+assertions (run on the IEEE host by Linux `ctest`, pinning the split against
+regression). Because there is **no** VAX system emulator in CI, a real VAX-float
+`printf`/`strtod` round-trip must be validated on booted NetBSD/vax under SIMH —
+that is the **P4** follow-up; the static audit + fixes above are complete and
+the non-IEEE branches are compile-proven by the vax cross gate.

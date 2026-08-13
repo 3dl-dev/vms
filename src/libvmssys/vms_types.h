@@ -25,9 +25,22 @@ typedef uint32_t vms_uid_t;
 typedef uint32_t vms_gid_t;
 typedef unsigned long vms_size_t;
 typedef long     vms_ssize_t;
-typedef long     vms_time_t;
+/*
+ * vms_time_t is fixed at 64-bit (NOT `long`). On LP64 (x86_64/aarch64/Alpha)
+ * `long` is already 64-bit, but on the netbsd-vax substrate `long` is 32-bit
+ * (ILP32) while NetBSD's `time_t` is 64-bit on ALL ports -- so a `long`
+ * vms_time_t would truncate a NetBSD time value (wrong result + Y2038). Using a
+ * fixed int64_t keeps the layout identical on the 64-bit targets and stays
+ * time_t-correct at the NetBSD boundary. (rd vms-30a, audit item 5.1.)
+ */
+typedef int64_t  vms_time_t;
 typedef int      vms_clockid_t;
 typedef int      vms_timer_t;
+
+/* Width invariant: must hold a 64-bit NetBSD time_t without truncation. This is
+ * compiled by BOTH the LP64 targets and the netbsd-vax (ILP32) cross gate, so it
+ * proves the fix on VAX, where a bare `long` would be only 32-bit. */
+_Static_assert(sizeof(vms_time_t) >= 8, "vms_time_t must be >= 64-bit (NetBSD time_t)");
 
 /* ================================================================
  * NULL
@@ -39,7 +52,49 @@ typedef int      vms_timer_t;
 
 /* ================================================================
  * File-related constants
+ *
+ * SUBSTRATE-SELECTED (rd vms-30a, audit item 5.2). The VMS_O_* / VMS_AT_* /
+ * VMS_MAP_* flags are handed straight to the platform's open/openat/fcntl/mmap.
+ * On the raw-freestanding Linux path they are Linux's raw-syscall numeric ABI;
+ * on the NetBSD (link-libc) substrate they MUST equal NetBSD's own <fcntl.h> /
+ * <sys/mman.h> values (e.g. Linux O_CREAT=0x40 vs NetBSD O_CREAT=0x200,
+ * Linux MAP_ANONYMOUS=0x20 vs NetBSD MAP_ANON=0x1000) or they would mean the
+ * wrong thing on NetBSD. On NetBSD we ALIAS to the sysroot headers -- so the
+ * values are authoritative and substrate-correct by construction, never a
+ * transcribed magic number.
  * ================================================================ */
+
+#if defined(__NetBSD__)
+#include <fcntl.h>
+#include <sys/mman.h>
+
+/* openat flags -- NetBSD <fcntl.h> values */
+#define VMS_O_RDONLY     O_RDONLY
+#define VMS_O_WRONLY     O_WRONLY
+#define VMS_O_RDWR       O_RDWR
+#define VMS_O_CREAT      O_CREAT
+#define VMS_O_EXCL       O_EXCL
+#define VMS_O_NOCTTY     O_NOCTTY
+#define VMS_O_TRUNC      O_TRUNC
+#define VMS_O_APPEND     O_APPEND
+#define VMS_O_NONBLOCK   O_NONBLOCK
+#define VMS_O_CLOEXEC    O_CLOEXEC
+#define VMS_O_DIRECTORY  O_DIRECTORY
+
+/* Prove the substrate-select actually took the NetBSD header value (compiled by
+ * the netbsd-vax gate). If this ever fired, a stale Linux constant leaked. */
+_Static_assert(VMS_O_CREAT == O_CREAT, "VMS_O_CREAT must resolve to NetBSD O_CREAT");
+_Static_assert(VMS_O_RDWR  == O_RDWR,  "VMS_O_RDWR must resolve to NetBSD O_RDWR");
+
+/* AT_* constants -- NetBSD <fcntl.h> values */
+#define VMS_AT_FDCWD            AT_FDCWD
+#define VMS_AT_REMOVEDIR        AT_REMOVEDIR
+#define VMS_AT_SYMLINK_NOFOLLOW AT_SYMLINK_NOFOLLOW
+#ifdef AT_EMPTY_PATH
+#define VMS_AT_EMPTY_PATH       AT_EMPTY_PATH   /* Linux-ism; NetBSD may lack it */
+#endif
+
+#else /* !__NetBSD__ : Linux raw-syscall numeric ABI (freestanding path) */
 
 /* openat flags */
 #define VMS_O_RDONLY     0x0000
@@ -59,6 +114,8 @@ typedef int      vms_timer_t;
 #define VMS_AT_REMOVEDIR      0x200
 #define VMS_AT_SYMLINK_NOFOLLOW 0x100
 #define VMS_AT_EMPTY_PATH     0x1000
+
+#endif /* __NetBSD__ */
 
 /* seek whence */
 #define VMS_SEEK_SET     0
@@ -170,18 +227,33 @@ struct vms_linux_dirent64 {
  * Memory mapping
  * ================================================================ */
 
+/* PROT_* values are identical on Linux and NetBSD -- no substrate split. */
 #define VMS_PROT_NONE    0x0
 #define VMS_PROT_READ    0x1
 #define VMS_PROT_WRITE   0x2
 #define VMS_PROT_EXEC    0x4
 
+/* MAP_* flags DO differ by substrate (see the file-constants note above);
+ * <sys/mman.h> was already included on the NetBSD path. */
+#if defined(__NetBSD__)
+#define VMS_MAP_SHARED    MAP_SHARED
+#define VMS_MAP_PRIVATE   MAP_PRIVATE
+#define VMS_MAP_FIXED     MAP_FIXED
+#define VMS_MAP_ANONYMOUS MAP_ANON        /* NetBSD spells it MAP_ANON (0x1000) */
+#ifdef MAP_NORESERVE
+#define VMS_MAP_NORESERVE MAP_NORESERVE
+#else
+#define VMS_MAP_NORESERVE 0               /* NetBSD has no MAP_NORESERVE; benign 0 */
+#endif
+#else
 #define VMS_MAP_SHARED   0x01
 #define VMS_MAP_PRIVATE  0x02
 #define VMS_MAP_FIXED    0x10
 #define VMS_MAP_ANONYMOUS 0x20
 #define VMS_MAP_NORESERVE 0x4000
+#endif
 
-#define VMS_MAP_FAILED   ((void *)-1)
+#define VMS_MAP_FAILED   ((void *)-1)     /* identical on Linux and NetBSD */
 
 #define VMS_MADV_NORMAL    0
 #define VMS_MADV_RANDOM    1
@@ -452,8 +524,17 @@ struct vms_io_uring_params {
 
 /* ================================================================
  * Futex operations
+ *
+ * These are Linux futex(2) op numbers. They are deliberately NOT defined on the
+ * NetBSD substrate (rd vms-30a, audit item 5.2): NetBSD has no Linux-compatible
+ * futex ABI, the netbsd executive/lnm/mbx wait primitive is provided separately
+ * (design 4.2), and vms_futex.c (their only consumer) is excluded from the
+ * netbsd build set. Leaving Linux-numeric op values defined on NetBSD would be
+ * exactly the hardcoded-Linux-constant-reaching-a-NetBSD-syscall hazard this
+ * audit item exists to kill, so the whole block is Linux-only.
  * ================================================================ */
 
+#if !defined(__NetBSD__)
 #define VMS_FUTEX_WAIT          0
 #define VMS_FUTEX_WAKE          1
 #define VMS_FUTEX_WAIT_PRIVATE  (VMS_FUTEX_WAIT | 128)
@@ -461,6 +542,7 @@ struct vms_io_uring_params {
 #define VMS_FUTEX_WAIT_BITSET   9
 #define VMS_FUTEX_WAIT_BITSET_PRIVATE  (VMS_FUTEX_WAIT_BITSET | 128)
 #define VMS_FUTEX_BITSET_MATCH_ANY  0xFFFFFFFF
+#endif /* !__NetBSD__ */
 
 /* ================================================================
  * Auxiliary vector (from kernel ELF loader)

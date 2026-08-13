@@ -39,32 +39,57 @@
  * device channels).
  */
 
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/slab.h>
-#include <linux/uaccess.h>
-#include <linux/list.h>
-#include <linux/spinlock.h>
-#include <linux/wait.h>
-#include <linux/sched.h>
-#include <linux/ctype.h>
-#include <linux/string.h>
+/*
+ * Mailboxes are promoted onto the kernel-backend shim (rd vms-a88, Exec-core
+ * Phase E; epic vms-8e8; design docs/design-netbsd-executive-core.md) and, like
+ * event flags (vms_eflag.c, Phase B) and AST/access (Phase D) before them, now
+ * LIVE in src/kernel-core/. Every host primitive this file touches -- locking
+ * (vms_mbx_list_lock, mbx->lock, proc->chan_lock), wait/wake (mbx->read_wq),
+ * user<->kernel copy, and kernel alloc/free -- goes through exec_*
+ * (exec_kbackend.h), and every intrusive-list operation goes through exec_list_*
+ * (exec_list.h). On Linux each op expands to the primitive this file used
+ * before (spin_lock/spin_unlock, copy_*_user, kmalloc/kzalloc/kfree, the
+ * <linux/list.h> list_* macros), so behaviour is preserved; the SAME source
+ * compiles against the NetBSD backend without a single `#if` in this file (no
+ * NetBSD backend for mbx is added in this phase -- Phase E is the Linux-side
+ * extraction only). This file therefore includes ONLY the shim contracts and
+ * the shared OVMX structs (vms_internal.h) -- no `<linux/…>` header of its own.
+ *
+ * THE ONE NON-MECHANICAL CHANGE is the read-path wait/wake conversion, the same
+ * shape vms_eflag.c's waits took (see that file's header note). Linux's
+ * wait_event_interruptible is lock-free; the portable cv contract
+ * (exec_kbackend.h) requires the waiter to HOLD, and the waker to SHARE, the
+ * lock that guards the predicate (the message queue) and the wait object. The
+ * queue's guard is mbx->lock, so vms_ioctl_mbx_read() now dequeues UNDER
+ * mbx->lock, held across exec_cv_wait, and vms_ioctl_mbx_write() moves its
+ * wake INSIDE mbx->lock (it was wake_up_interruptible() after the unlock). This
+ * changes NO VMS-observable behaviour -- a read still blocks until a message is
+ * queued and returns exactly the bytes written, FIFO, and an interrupted wait
+ * with the queue still empty still returns -ERESTARTSYS with no status written
+ * (the exact rule the WAIT-facilities carry, top of vms_eflag.c) so libvmssys'
+ * vms_kif_mbx_read() re-enters the wait. It also removes the pre-existing
+ * dequeue-race window between waking and re-locking as a side effect. The
+ * test_kmod_mbx / test_syssvc_mbx_crossproc suites, which block one process on a
+ * mailbox another writes, are the gate that proves the wake is not lost.
+ */
 
 #include "vms_internal.h"
+#include "exec_kbackend.h"
+#include "exec_list.h"
 
-/* One queued message. Allocated kmalloc(sizeof(*m) + len) with `data` as a
+/* One queued message. Allocated exec_alloc(sizeof(*m) + len) with `data` as a
  * flexible array member -- a mailbox message has no fixed size below the
  * VMS_MBX_IOCTL_MAXLEN ioctl-transfer cap (vms_mbx.h), so there is no
  * reason to always pay for the maximum. */
 struct vms_mbx_msg {
-    struct list_head list;
+    exec_list_node_t list;
     uint32_t len;
     char data[];
 };
 
 /* One executive-resident mailbox. */
 struct vms_mailbox {
-    struct list_head list;      /* in vms_mbx_list */
+    exec_list_node_t list;      /* in vms_mbx_list */
     uint32_t unit;              /* MBAn: unit number */
     char devnam[VMS_DEVNAM_SIZE]; /* "MBAn:" */
     uint32_t permanent;         /* 1 = created with PRMMBX (needs $DELMBX+last-dassgn) */
@@ -84,20 +109,29 @@ struct vms_mailbox {
      */
     pid_t    owner_linux_pid;
     uint32_t owner_vms_pid;
-    struct list_head msgq;      /* struct vms_mbx_msg, FIFO */
-    wait_queue_head_t read_wq;
-    spinlock_t lock;            /* guards everything above except `list` */
+    exec_list_head_t msgq;      /* struct vms_mbx_msg, FIFO */
+    exec_cv_t read_wq;
+    exec_lock_t lock;           /* guards everything above except `list` */
 };
 
 /* One process's channel to a mailbox. */
 struct vms_mbx_chan {
-    struct list_head list;      /* in proc->mbx_channels */
+    exec_list_node_t list;      /* in proc->mbx_channels */
     uint32_t chan;
     struct vms_mailbox *mbx;
 };
 
-static LIST_HEAD(vms_mbx_list);
-static DEFINE_SPINLOCK(vms_mbx_list_lock);
+EXEC_LIST_HEAD(vms_mbx_list);
+/*
+ * The list guard is a plain exec_lock_t initialized at module load in
+ * vms_mbx_init() below, NOT via a static-initializer macro: a NetBSD kmutex(9)
+ * cannot be statically initialized, so runtime exec_lock_init() is the
+ * substrate-agnostic form (the same choice vms_eflag.c made for
+ * vms_common_ef_lock). On Linux this is a zero-initialized spinlock followed by
+ * spin_lock_init(), behaviour-identical to the former DEFINE_SPINLOCK() --
+ * vms_mbx_init() runs once at module load, before any ioctl can reach it.
+ */
+exec_lock_t vms_mbx_list_lock;
 static uint32_t vms_mbx_next_unit = 1;
 
 void vms_mbx_init(void)
@@ -105,24 +139,47 @@ void vms_mbx_init(void)
     /* The table starts empty -- mailboxes are created on demand by
      * $CREMBX, unlike vms_devtab.c's console row (a real driver enters its
      * unit at system init; nothing "boots" a mailbox). */
+    exec_lock_init(&vms_mbx_list_lock);
     pr_info("vms: mailbox table initialized\n");
+}
+
+/*
+ * mbx_free - drain a mailbox's message queue and free the mailbox itself,
+ * destroying the two backend sync objects it owns (mbx->read_wq, mbx->lock)
+ * first. On Linux exec_cv_destroy/exec_lock_destroy are no-ops (a wait_queue/
+ * spinlock owns no external resource), so this is behaviour-identical to the
+ * bare drain-then-kfree these sites used before; on NetBSD they are the
+ * required cv_destroy(9)/mutex_destroy(9). The caller must have already
+ * exec_list_del()'d the mailbox from vms_mbx_list. Centralized so both free
+ * paths -- vms_mbx_cleanup() and mbx_put() -- tear the object down the same way.
+ */
+static void mbx_free(struct vms_mailbox *mbx)
+{
+    struct vms_mbx_msg *m, *tmp;
+
+    exec_list_for_each_entry_safe(m, tmp, &mbx->msgq, list) {
+        exec_list_del(&m->list);
+        exec_free(m);
+    }
+    exec_cv_destroy(&mbx->read_wq);
+    exec_lock_destroy(&mbx->lock);
+    exec_free(mbx);
 }
 
 void vms_mbx_cleanup(void)
 {
     struct vms_mailbox *mbx, *mtmp;
-    struct vms_mbx_msg *m, *mmtmp;
 
-    spin_lock(&vms_mbx_list_lock);
-    list_for_each_entry_safe(mbx, mtmp, &vms_mbx_list, list) {
-        list_del(&mbx->list);
-        list_for_each_entry_safe(m, mmtmp, &mbx->msgq, list) {
-            list_del(&m->list);
-            kfree(m);
-        }
-        kfree(mbx);
+    exec_lock(&vms_mbx_list_lock);
+    exec_list_for_each_entry_safe(mbx, mtmp, &vms_mbx_list, list) {
+        exec_list_del(&mbx->list);
+        mbx_free(mbx);
     }
-    spin_unlock(&vms_mbx_list_lock);
+    exec_unlock(&vms_mbx_list_lock);
+
+    /* Tear down the list's own guard lock (no-op on Linux; mutex_destroy on
+     * NetBSD). Paired with the exec_lock_init in vms_mbx_init. */
+    exec_lock_destroy(&vms_mbx_list_lock);
 }
 
 /*
@@ -182,7 +239,7 @@ static struct vms_mailbox *mbx_find_locked(const char *devnam)
 {
     struct vms_mailbox *mbx;
 
-    list_for_each_entry(mbx, &vms_mbx_list, list) {
+    exec_list_for_each_entry(mbx, &vms_mbx_list, list) {
         if (strcmp(mbx->devnam, devnam) == 0)
             return mbx;
     }
@@ -194,7 +251,7 @@ static struct vms_mbx_chan *mbxchan_find_locked(struct vms_proc *proc, uint32_t 
 {
     struct vms_mbx_chan *ch;
 
-    list_for_each_entry(ch, &proc->mbx_channels, list) {
+    exec_list_for_each_entry(ch, &proc->mbx_channels, list) {
         if (ch->chan == chan)
             return ch;
     }
@@ -229,26 +286,19 @@ static void mbx_put(struct vms_mailbox *mbx)
 {
     int free_it = 0;
 
-    spin_lock(&vms_mbx_list_lock);
-    spin_lock(&mbx->lock);
+    exec_lock(&vms_mbx_list_lock);
+    exec_lock(&mbx->lock);
     if (mbx->refcnt > 0)
         mbx->refcnt--;
     if (mbx->refcnt == 0 && (!mbx->permanent || mbx->delete_pending)) {
-        list_del(&mbx->list);
+        exec_list_del(&mbx->list);
         free_it = 1;
     }
-    spin_unlock(&mbx->lock);
-    spin_unlock(&vms_mbx_list_lock);
+    exec_unlock(&mbx->lock);
+    exec_unlock(&vms_mbx_list_lock);
 
-    if (free_it) {
-        struct vms_mbx_msg *m, *tmp;
-
-        list_for_each_entry_safe(m, tmp, &mbx->msgq, list) {
-            list_del(&m->list);
-            kfree(m);
-        }
-        kfree(mbx);
-    }
+    if (free_it)
+        mbx_free(mbx);
 }
 
 /* ================================================================
@@ -263,24 +313,24 @@ long vms_ioctl_mbx_create(struct vms_proc *proc, unsigned long arg)
     uint32_t unit;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     if (!mbx_priv_check(args.permanent, proc->cur_privs, &args.status))
         goto out_copy;
 
-    mbx = kzalloc(sizeof(*mbx), GFP_KERNEL);
+    mbx = exec_zalloc(sizeof(*mbx));
     if (!mbx)
         return -ENOMEM;
-    ch = kzalloc(sizeof(*ch), GFP_KERNEL);
+    ch = exec_zalloc(sizeof(*ch));
     if (!ch) {
-        kfree(mbx);
+        exec_free(mbx);
         return -ENOMEM;
     }
 
-    INIT_LIST_HEAD(&mbx->msgq);
-    init_waitqueue_head(&mbx->read_wq);
-    spin_lock_init(&mbx->lock);
+    exec_list_head_init(&mbx->msgq);
+    exec_cv_init(&mbx->read_wq);
+    exec_lock_init(&mbx->lock);
 
     mbx->maxmsg = args.maxmsg ? args.maxmsg : VMS_MBX_DEFAULT_MAXMSG;
     if (mbx->maxmsg > VMS_MBX_IOCTL_MAXLEN)
@@ -293,18 +343,18 @@ long vms_ioctl_mbx_create(struct vms_proc *proc, unsigned long arg)
     mbx->owner_linux_pid = proc->linux_pid;
     mbx->owner_vms_pid = proc->vms_pid;
 
-    spin_lock(&vms_mbx_list_lock);
+    exec_lock(&vms_mbx_list_lock);
     unit = vms_mbx_next_unit++;
     mbx->unit = unit;
     snprintf(mbx->devnam, sizeof(mbx->devnam), "MBA%u:", unit);
-    list_add_tail(&mbx->list, &vms_mbx_list);
-    spin_unlock(&vms_mbx_list_lock);
+    exec_list_add_tail(&mbx->list, &vms_mbx_list);
+    exec_unlock(&vms_mbx_list_lock);
 
     ch->mbx = mbx;
-    spin_lock(&proc->chan_lock);
+    exec_lock(&proc->chan_lock);
     ch->chan = ++proc->next_chan;
-    list_add_tail(&ch->list, &proc->mbx_channels);
-    spin_unlock(&proc->chan_lock);
+    exec_list_add_tail(&ch->list, &proc->mbx_channels);
+    exec_unlock(&proc->chan_lock);
 
     args.chan = ch->chan;
     args.unit = unit;
@@ -312,7 +362,7 @@ long vms_ioctl_mbx_create(struct vms_proc *proc, unsigned long arg)
     args.status = SS__NORMAL;
 
 out_copy:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -335,7 +385,7 @@ long vms_ioctl_mbx_assign(struct vms_proc *proc, unsigned long arg)
     uint32_t status;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
     args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
 
@@ -345,34 +395,34 @@ long vms_ioctl_mbx_assign(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    ch = kzalloc(sizeof(*ch), GFP_KERNEL);
+    ch = exec_zalloc(sizeof(*ch));
     if (!ch)
         return -ENOMEM;
 
-    spin_lock(&vms_mbx_list_lock);
+    exec_lock(&vms_mbx_list_lock);
     mbx = mbx_find_locked(devnam);
     if (!mbx) {
-        spin_unlock(&vms_mbx_list_lock);
-        kfree(ch);
+        exec_unlock(&vms_mbx_list_lock);
+        exec_free(ch);
         args.status = SS__NOSUCHDEV;
         goto out;
     }
-    spin_lock(&mbx->lock);
+    exec_lock(&mbx->lock);
     mbx->refcnt++;
-    spin_unlock(&mbx->lock);
-    spin_unlock(&vms_mbx_list_lock);
+    exec_unlock(&mbx->lock);
+    exec_unlock(&vms_mbx_list_lock);
 
     ch->mbx = mbx;
-    spin_lock(&proc->chan_lock);
+    exec_lock(&proc->chan_lock);
     ch->chan = ++proc->next_chan;
-    list_add_tail(&ch->list, &proc->mbx_channels);
-    spin_unlock(&proc->chan_lock);
+    exec_list_add_tail(&ch->list, &proc->mbx_channels);
+    exec_unlock(&proc->chan_lock);
 
     args.chan = ch->chan;
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -391,26 +441,26 @@ long vms_ioctl_mbx_delmbx(struct vms_proc *proc, unsigned long arg)
     struct vms_mailbox *mbx;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&proc->chan_lock);
+    exec_lock(&proc->chan_lock);
     ch = mbxchan_find_locked(proc, args.chan);
     mbx = ch ? ch->mbx : NULL;
-    spin_unlock(&proc->chan_lock);
+    exec_unlock(&proc->chan_lock);
 
     if (!mbx) {
         args.status = SS__IVCHAN;
         goto out;
     }
 
-    spin_lock(&mbx->lock);
+    exec_lock(&mbx->lock);
     mbx->delete_pending = 1;
-    spin_unlock(&mbx->lock);
+    exec_unlock(&mbx->lock);
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -429,18 +479,18 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
     struct vms_mbx_msg *m;
     long ret = 0;
 
-    a = kzalloc(sizeof(*a), GFP_KERNEL);
+    a = exec_zalloc(sizeof(*a));
     if (!a)
         return -ENOMEM;
-    if (copy_from_user(a, (void __user *)arg, sizeof(*a))) {
+    if (exec_copyin(a, (const void *)arg, sizeof(*a))) {
         ret = -EFAULT;
         goto out_free;
     }
 
-    spin_lock(&proc->chan_lock);
+    exec_lock(&proc->chan_lock);
     ch = mbxchan_find_locked(proc, a->chan);
     mbx = ch ? ch->mbx : NULL;
-    spin_unlock(&proc->chan_lock);
+    exec_unlock(&proc->chan_lock);
 
     if (!mbx) {
         a->status = SS__IVCHAN;
@@ -452,9 +502,9 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
         goto out_copy;
     }
 
-    spin_lock(&mbx->lock);
+    exec_lock(&mbx->lock);
     if (a->len > mbx->maxmsg || mbx->bufquo_used + a->len > mbx->bufquo) {
-        spin_unlock(&mbx->lock);
+        exec_unlock(&mbx->lock);
         /*
          * SS$_EXQUOTA for both "too big for this mailbox" and "no room
          * left in it": real VMS's SS$_MBFULL is not yet oracle-pinned
@@ -466,31 +516,38 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
         goto out_copy;
     }
     mbx->bufquo_used += a->len;
-    spin_unlock(&mbx->lock);
+    exec_unlock(&mbx->lock);
 
-    m = kmalloc(sizeof(*m) + a->len, GFP_KERNEL);
+    m = exec_alloc(sizeof(*m) + a->len);
     if (!m) {
-        spin_lock(&mbx->lock);
+        exec_lock(&mbx->lock);
         mbx->bufquo_used -= a->len;
-        spin_unlock(&mbx->lock);
+        exec_unlock(&mbx->lock);
         ret = -ENOMEM;
         goto out_free;
     }
     m->len = a->len;
     memcpy(m->data, a->data, a->len);
 
-    spin_lock(&mbx->lock);
-    list_add_tail(&m->list, &mbx->msgq);
-    spin_unlock(&mbx->lock);
-    wake_up_interruptible(&mbx->read_wq);
+    /*
+     * Queue the message and wake a reader UNDER mbx->lock -- the same lock the
+     * reader holds across its exec_cv_wait, so the wake cannot be lost (cv
+     * contract, exec_kbackend.h). This is the wake that used to be a
+     * wake_up_interruptible() AFTER the unlock; exec_cv_broadcast wakes ALL
+     * waiters, preserving that call's semantics.
+     */
+    exec_lock(&mbx->lock);
+    exec_list_add_tail(&m->list, &mbx->msgq);
+    exec_cv_broadcast(&mbx->read_wq);
+    exec_unlock(&mbx->lock);
 
     a->status = SS__NORMAL;
 
 out_copy:
-    if (copy_to_user((void __user *)arg, a, sizeof(*a)))
+    if (exec_copyout((void *)arg, a, sizeof(*a)))
         ret = -EFAULT;
 out_free:
-    kfree(a);
+    exec_free(a);
     return ret;
 }
 
@@ -506,6 +563,16 @@ out_free:
  * report. So a signal here returns -ERESTARTSYS with NO status written,
  * and libvmssys' vms_kif_mbx_read() re-enters the wait via kif_wait_call()
  * -- the exact helper WAITFR/WFLOR/WFLAND already use.
+ *
+ * WAIT/WAKE (cv contract, exec_kbackend.h; see this file's header note): the
+ * dequeue is done UNDER mbx->lock, held across exec_cv_wait, and the writer
+ * (vms_ioctl_mbx_write) queues-and-wakes under the same lock -- so the two
+ * sides share the guard and no wake is lost. The predicate "a message is
+ * present and I dequeued it" is re-tested under the lock on every wake and has
+ * PRIORITY over an interrupt (matching wait_event_interruptible, which checks
+ * the condition before the signal test): a read that finds a message returns
+ * SS$_NORMAL even if a signal is also pending; a signal with the queue still
+ * empty ends the wait with -ERESTARTSYS and NO status.
  */
 long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg)
 {
@@ -516,45 +583,48 @@ long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg)
     long ret = 0;
     uint32_t n;
 
-    a = kzalloc(sizeof(*a), GFP_KERNEL);
+    a = exec_zalloc(sizeof(*a));
     if (!a)
         return -ENOMEM;
-    if (copy_from_user(a, (void __user *)arg, sizeof(*a))) {
+    if (exec_copyin(a, (const void *)arg, sizeof(*a))) {
         ret = -EFAULT;
         goto out_free;
     }
 
-    spin_lock(&proc->chan_lock);
+    exec_lock(&proc->chan_lock);
     ch = mbxchan_find_locked(proc, a->chan);
     mbx = ch ? ch->mbx : NULL;
-    spin_unlock(&proc->chan_lock);
+    exec_unlock(&proc->chan_lock);
 
     if (!mbx) {
         a->status = SS__IVCHAN;
         goto out_copy;
     }
 
+    exec_lock(&mbx->lock);
     for (;;) {
-        int wret = wait_event_interruptible(mbx->read_wq, !list_empty(&mbx->msgq));
-
-        if (wret) {
-            ret = wret;
+        m = exec_list_first_entry_or_null(&mbx->msgq, struct vms_mbx_msg, list);
+        if (m) {
+            exec_list_del(&m->list);
+            mbx->bufquo_used -= m->len;
+            break;
+        }
+        if (exec_cv_wait(&mbx->read_wq, &mbx->lock)) {
+            /* Interrupted. The predicate still has priority: a message that
+             * arrived is taken; otherwise the wait ends with no status and
+             * libvmssys re-enters it. */
+            m = exec_list_first_entry_or_null(&mbx->msgq, struct vms_mbx_msg, list);
+            if (m) {
+                exec_list_del(&m->list);
+                mbx->bufquo_used -= m->len;
+                break;
+            }
+            exec_unlock(&mbx->lock);
+            ret = -ERESTARTSYS;
             goto out_free;
         }
-
-        spin_lock(&mbx->lock);
-        m = list_first_entry_or_null(&mbx->msgq, struct vms_mbx_msg, list);
-        if (m) {
-            list_del(&m->list);
-            mbx->bufquo_used -= m->len;
-        }
-        spin_unlock(&mbx->lock);
-
-        if (m)
-            break;
-        /* Lost the race to another reader on the same channel/mailbox;
-         * wait for the next message instead of fabricating an answer. */
     }
+    exec_unlock(&mbx->lock);
 
     n = m->len;
     if (n > a->bufsz)
@@ -563,14 +633,14 @@ long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg)
         n = VMS_MBX_IOCTL_MAXLEN;
     memcpy(a->data, m->data, n);
     a->len = m->len;
-    kfree(m);
+    exec_free(m);
     a->status = SS__NORMAL;
 
 out_copy:
-    if (copy_to_user((void __user *)arg, a, sizeof(*a)))
+    if (exec_copyout((void *)arg, a, sizeof(*a)))
         ret = -EFAULT;
 out_free:
-    kfree(a);
+    exec_free(a);
     return ret;
 }
 
@@ -582,33 +652,33 @@ int vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan)
 {
     struct vms_mbx_chan *ch;
 
-    spin_lock(&proc->chan_lock);
+    exec_lock(&proc->chan_lock);
     ch = mbxchan_find_locked(proc, chan);
     if (ch)
-        list_del(&ch->list);
-    spin_unlock(&proc->chan_lock);
+        exec_list_del(&ch->list);
+    exec_unlock(&proc->chan_lock);
 
     if (!ch)
         return -ENOENT;
 
     mbx_put(ch->mbx);
-    kfree(ch);
+    exec_free(ch);
     return 0;
 }
 
 void vms_mbx_release_all(struct vms_proc *proc)
 {
     struct vms_mbx_chan *ch, *tmp;
-    LIST_HEAD(doomed);
+    EXEC_LIST_HEAD(doomed);
 
-    spin_lock(&proc->chan_lock);
-    list_for_each_entry_safe(ch, tmp, &proc->mbx_channels, list)
-        list_move(&ch->list, &doomed);
-    spin_unlock(&proc->chan_lock);
+    exec_lock(&proc->chan_lock);
+    exec_list_for_each_entry_safe(ch, tmp, &proc->mbx_channels, list)
+        exec_list_move(&ch->list, &doomed);
+    exec_unlock(&proc->chan_lock);
 
-    list_for_each_entry_safe(ch, tmp, &doomed, list) {
-        list_del(&ch->list);
+    exec_list_for_each_entry_safe(ch, tmp, &doomed, list) {
+        exec_list_del(&ch->list);
         mbx_put(ch->mbx);
-        kfree(ch);
+        exec_free(ch);
     }
 }

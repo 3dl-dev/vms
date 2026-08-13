@@ -77,3 +77,17 @@ exec_list_del(exec_list_node_t *n)
 	n->next = n;
 	n->prev = n;
 }
+
+/*
+ * exec_list_move - unlink `n' from its current list and push it onto the FRONT
+ * of `h', exactly like exec_list_del(n) then exec_list_add(n, h). Matches Linux
+ * list_move(). Used to drain a per-process list onto a local anchor under a lock
+ * (vms_mbx's release_all path) before freeing the drained nodes unlocked.
+ */
+void
+exec_list_move(exec_list_node_t *n, exec_list_head_t *h)
+{
+	n->prev->next = n->next;
+	n->next->prev = n->prev;
+	__exec_list_splice(n, h, h->next);
+}

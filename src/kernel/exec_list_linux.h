@@ -16,8 +16,10 @@
  *   exec_list_head_init                    -> INIT_LIST_HEAD
  *   exec_list_add / exec_list_add_tail     -> list_add / list_add_tail
  *   exec_list_del                          -> list_del
+ *   exec_list_move                         -> list_move
  *   exec_list_empty                        -> list_empty
  *   exec_list_first_entry                  -> list_first_entry
+ *   exec_list_first_entry_or_null          -> list_first_entry_or_null
  *   exec_list_for_each_entry[_safe]        -> list_for_each_entry[_safe]
  *
  * The for_each_entry forms MUST stay macros: they resolve the element from its
@@ -48,6 +50,7 @@ static inline void exec_list_head_init(exec_list_head_t *h) { INIT_LIST_HEAD(h);
 static inline void exec_list_add(exec_list_node_t *n, exec_list_head_t *h)      { list_add(n, h); }
 static inline void exec_list_add_tail(exec_list_node_t *n, exec_list_head_t *h) { list_add_tail(n, h); }
 static inline void exec_list_del(exec_list_node_t *n)                           { list_del(n); }
+static inline void exec_list_move(exec_list_node_t *n, exec_list_head_t *h)      { list_move(n, h); }
 
 /* ---- query ---- */
 static inline int exec_list_empty(const exec_list_head_t *h) { return list_empty(h); }
@@ -55,6 +58,10 @@ static inline int exec_list_empty(const exec_list_head_t *h) { return list_empty
 /* ---- first element (typed; UNDEFINED on an empty list -- see exec_list.h) ---- */
 #define exec_list_first_entry(head, type, member) \
 	list_first_entry(head, type, member)
+
+/* ---- first element or NULL on empty (typed; see exec_list.h) ---- */
+#define exec_list_first_entry_or_null(head, type, member) \
+	list_first_entry_or_null(head, type, member)
 
 /* ---- iteration (typed; `member` is the exec_list_node_t field name) ---- */
 #define exec_list_for_each_entry(pos, head, member) \

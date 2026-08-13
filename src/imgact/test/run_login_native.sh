@@ -19,8 +19,9 @@
 # than growing conditionals into the DCL one.
 #
 # WHAT THIS SCRIPT PROVES:
-#   1. LOGINOUT.EXE (tools/vms_login.c, the ONE TU) links as a VMS-native
-#      ET_DYN executable via `LINK.EXE --executable --use {DECC$SHR + the six
+#   1. LOGINOUT.EXE (tools/vms_login.c + loginout_display.c + mail_notify.c,
+#      vms-417) links as a VMS-native ET_DYN executable via
+#      `LINK.EXE --executable --use {DECC$SHR + the six
 #      OVMX shareables}` (mk_loginout.sh) -- same shape as DCL.EXE: PT_INTERP
 #      = IMGACT.EXE, all cross-image imports bound, STRICT link.
 #   2. IMGACT.EXE activates LOGINOUT.EXE (crt0 recovers argc/argv, calls

@@ -13,7 +13,6 @@
 #include <signal.h>
 #include <ctype.h>
 #include <time.h>
-#include <sys/utsname.h>
 #include <sys/stat.h>
 #include <termios.h>
 
@@ -323,56 +322,19 @@ static void setup_vms_eof(void)
 }
 
 /*
- * Display the VMS-style login banner.
+ * The DCL-side login banner + last-login emitter was DELETED here (vms-417,
+ * folds vms-46b).
+ *
+ * It was a SECOND, DIVERGENT emitter of the login sequence LOGINOUT already
+ * owns (tools/vms_login.c -> loginout_display.c): a different banner line
+ * ("<product> on node <n> <date>") and a differently-formatted, differently
+ * -sourced "Last interactive login" line that read the raw accounting file
+ * text instead of a formatted timestamp. Two emitters of one VMS surface is
+ * exactly the drift the fidelity work exists to kill -- on the real runtime
+ * DCL is always started by LOGINOUT (--login), which prints the authentic
+ * sequence, and this ran only on the never-taken "vmsdcl interactive, no
+ * --login" path. LOGINOUT is the one emitter.
  */
-static void display_banner(void)
-{
-    struct utsname uts;
-    uname(&uts);
-
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    struct tm tm;
-    localtime_r(&ts.tv_sec, &tm);
-
-    char sysname[OVMX_IDENTITY_MAXLEN];
-    ovmx_node_name(sysname, sizeof(sysname));
-
-    printf("\n");
-    printf("        %s  on node %-8s %2d-%s-%04d %02d:%02d:%02d.%02d\n",
-           ovmx_product_banner(), sysname, tm.tm_mday, vms_months[tm.tm_mon],
-           1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
-           (int)(ts.tv_nsec / 10000000));
-    printf("\n");
-
-    /* Last login message — read from per-user lastlogin file if available.
-     *
-     * Keyed on the user name the EXECUTIVE holds for this process (loaded
-     * in dcl_context_init), not on getenv("VMS_USERNAME") as it used to
-     * be: a process that could name itself here could read another user's
-     * last-login record (vms-2b8). */
-    const char *vms_user = dcl_get_context()->username;
-    if (vms_user && vms_user[0]) {
-        char lastlogin_dir_linux[1024];
-        vmsfs_to_linux_path(VMS_LASTLOGIN_DIR, lastlogin_dir_linux, sizeof(lastlogin_dir_linux));
-        char lastlogin_path[512];
-        snprintf(lastlogin_path, sizeof(lastlogin_path),
-                 "%s/%s", lastlogin_dir_linux, vms_user);
-        FILE *lf = fopen(lastlogin_path, "r");
-        if (lf) {
-            char prev[64];
-            if (fgets(prev, sizeof(prev), lf) != NULL) {
-                /* trim trailing newline */
-                size_t plen = strlen(prev);
-                while (plen > 0 && (prev[plen-1] == '\n' || prev[plen-1] == '\r'))
-                    prev[--plen] = '\0';
-                if (prev[0])
-                    printf("    Last interactive login on %s\n\n", prev);
-            }
-            fclose(lf);
-        }
-    }
-}
 
 /*
  * Set up default logical names and symbols for the session.
@@ -606,10 +568,9 @@ int main(int argc, char *argv[])
 
     /* Interactive mode */
     if (dcl_ctx.interactive) {
-        /* Skip banner in login mode (vms_login already printed welcome) */
-        if (!login_mode) {
-            display_banner();
-        }
+        /* No banner here: LOGINOUT (tools/vms_login.c) is the ONE emitter of
+         * the login sequence (vms-417). The old DCL-side banner call was
+         * removed with its function. */
 
         /* Set up signal handling */
         struct sigaction sa;

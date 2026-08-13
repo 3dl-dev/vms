@@ -31,6 +31,10 @@
 #include "vmsfs/filespec.h"
 /* LOGINOUT stamps the authenticated identity onto the executive's row. */
 #include "vms_kif.h"
+/* The OpenVMS-faithful post-authentication login-info block (vms-417). */
+#include "loginout_display.h"
+/* New-mail count for the login notification (vms-417). */
+#include "vms_mail_notify.h"
 
 /* Maximum number of login attempts before disconnect */
 #define MAX_ATTEMPTS   3
@@ -81,34 +85,61 @@ static int read_password(char *buf, size_t bufsiz)
 /* ------------------------------------------------------------------ */
 /* Start a VMS session: banner, environment, exec DCL shell           */
 /* ------------------------------------------------------------------ */
-static void start_session(const sysuaf_record_t *rec)
+static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
 {
-    static const char *months[] = {
-        "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-        "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
-    };
-
     /* SYS$WELCOME (a boot-defined logical), falling back to the built-in
      * badged OVMX identity when undefined -- as LOGINOUT does on VMS. */
     printf("\n");
     ovmx_banner_welcome(stdout);
+    printf("\n");
 
-    /* Read the REAL last login time from accounting records */
-    time_t last_login = 0;
-    int has_last = (ovmx_accounting_get_lastlogin(rec->username, &last_login) == 0);
+    /*
+     * THE OpenVMS LOGINOUT SESSION-INFORMATION BLOCK (vms-417).
+     *
+     * Order, wording, format and the omit-when-absent rule are pinned to
+     * public OpenVMS docs -- see loginout_display.c. Every line is emitted
+     * ONLY when its value is real; nothing is fabricated (CLAUDE.md Rule 9).
+     *
+     *   Last interactive login    -- REAL, from the accounting record
+     *                                 (ovmx_accounting.c). Absent on a first
+     *                                 login -> line omitted, as on VMS. This is
+     *                                 the same accounting store SSH login uses;
+     *                                 both are interactive/remote logins in VMS
+     *                                 terms, so it is the interactive slot.
+     *
+     *   Last non-interactive login -- NO SOURCE YET (flagged gap, vms-417).
+     *                                 OVMX has no batch/network login that
+     *                                 records a non-interactive timestamp, so
+     *                                 last_noninteractive is always 0 and the
+     *                                 line is omitted -- exactly as VMS omits it
+     *                                 for an account that has never had a
+     *                                 non-interactive login. The emit path is
+     *                                 wired and correct; it lights up the day a
+     *                                 batch/DECnet login records into this slot.
+     *
+     *   N failures since last login -- REAL: the bad-password attempts this
+     *                                 connection made before succeeding
+     *                                 (login_failures, counted by
+     *                                 console_login). Omitted at zero. Narrower
+     *                                 than VMS's cross-connection UAF$W_LOGFAILS
+     *                                 (OVMX does not persist a failure counter),
+     *                                 but it is a true subset, never invented.
+     *
+     *   You have N new mail messages -- REAL, mail_count_unread() (the shared
+     *                                 MAIL counter, vms_mail_notify.h). Omitted
+     *                                 at zero.
+     */
+    time_t last_interactive = 0;
+    (void)ovmx_accounting_get_lastlogin(rec->username, &last_interactive);
 
-    if (has_last && last_login > 0) {
-        struct tm *tm = localtime(&last_login);
-        if (tm) {
-            printf("\n   Last interactive login on %02d-%s-%04d %02d:%02d:%02d\n\n",
-                   tm->tm_mday, months[tm->tm_mon], tm->tm_year + 1900,
-                   tm->tm_hour, tm->tm_min, tm->tm_sec);
-        } else {
-            printf("\n   Last login time could not be determined.\n\n");
-        }
-    } else {
-        printf("\n   No previous interactive login recorded.\n\n");
-    }
+    time_t last_noninteractive = 0;   /* flagged gap: no recorder yet (above) */
+
+    int new_mail = mail_count_unread(rec->username);
+
+    loginout_display_session_info(stdout, last_interactive,
+                                  last_noninteractive, login_failures,
+                                  new_mail);
+    printf("\n");
 
     /* Record this login now (after showing last, before launching DCL) */
     ovmx_accounting_record_login(rec->username);
@@ -541,11 +572,20 @@ static int console_login(void)
         }
 
         /* --- Authentication successful --- */
-        start_session(&user_rec);
+        /* 'attempts' is the number of failed tries before this success --
+         * the real "failures since last successful login" for this
+         * connection (vms-417). */
+        start_session(&user_rec, (unsigned)attempts);
         return 1;  /* Should not reach here */
     }
 
-    printf("\nMaximum login attempts exceeded. Disconnecting.\n");
+    /*
+     * MAX_ATTEMPTS reached: disconnect SILENTLY. VMS LOGINOUT prints no
+     * "maximum attempts exceeded" farewell -- it simply drops the connection
+     * after the last "User authorization failure". The invented sign-off line
+     * that used to stand here was a self-certified VMS message (CLAUDE.md
+     * Rule 10 / vms-417); removed, not reworded.
+     */
     return 1;
 }
 

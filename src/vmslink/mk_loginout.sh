@@ -10,8 +10,10 @@
 # real boot runs. Baron's ruling 2026-08-06: the 0.1 dynamic-linking proof must
 # cover the FULL login chain, not just DCL.EXE.
 #
-# LOGINOUT.EXE is tools/vms_login.c (ONE translation unit) -- unlike DCL it has
-# no vmsdcl/vmsqueue split, just the login program: prompt Username:/Password:,
+# LOGINOUT.EXE is tools/vms_login.c plus two login-local TUs it calls --
+# loginout_display.c (the OpenVMS-faithful login-info block) and mail_notify.c
+# (the shared new-mail counter), both linked in below (vms-417). Unlike DCL it
+# has no vmsdcl/vmsqueue split, just the login program: prompt Username:/Password:,
 # authenticate against SYSUAF, stamp the identity into the executive
 # (vms_kif_setident), name the session (vms_kif_setprn), drop Linux
 # credentials to the SYSUAF UIC, and execl() DCL.EXE with --login. It is an
@@ -85,7 +87,22 @@ SYS_SHR=${9:?need LIBVMSSYS\$SHR.EXE (vms_kif_setident/setprn/getjpi_self produc
 HERE=$(cd "$(dirname "$0")" && pwd)                          # src/vmslink
 REPO_SRC=${11:-$(cd "$HERE/.." && pwd)}                       # src
 LOGIN_SRC=${10:-$(cd "$HERE/../.." && pwd)/tools/vms_login.c} # tools/vms_login.c
+TOOLS_DIR=$(cd "$(dirname "$LOGIN_SRC")" && pwd)             # tools/
 CC=${CC:-gcc}
+
+# LOGINOUT is no longer ONE translation unit (vms-417): vms_login.c now calls
+# loginout_display_session_info() (the OpenVMS-faithful login-info block) and
+# mail_count_unread() (the shared new-mail counter). Both live in their own
+# tools/ TUs and are LINKED INTO LOGINOUT.EXE -- they are executable-local, not
+# cross-image shareable symbols, so they compile here beside vms_login.o rather
+# than being --use'd from a producer image. The libc/RTL calls they add
+# (localtime_r, strtok, atoi, ...) are already in DECC$SHR; the VMS-RTL calls
+# they make (str_upcase/str_trim -> LIBVMS$SHR, vmsfs_to_linux_path ->
+# LIBVMSFS$SHR) resolve from the producers already --use'd below.
+LOGINOUT_EXTRA_SRCS="$TOOLS_DIR/loginout_display.c $TOOLS_DIR/mail_notify.c"
+for f in $LOGINOUT_EXTRA_SRCS; do
+    [ -f "$f" ] || { echo "mk_loginout: required TU not found: $f"; exit 1; }
+done
 
 for f in "$DECC_SHR" "$VMS_SHR" "$PROC_SHR" "$FS_SHR" "$LNM_SHR" "$RMS_SHR" "$SYS_SHR"; do
     [ -f "$f" ] || { echo "mk_loginout: producer image not found: $f"; exit 1; }
@@ -97,7 +114,7 @@ mkdir -p "$WORK"
 
 CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics -U_FORTIFY_SOURCE}"
 DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
-INCS="-I$REPO_SRC/libvms/include -I$REPO_SRC/vmsfs/include \
+INCS="-I$TOOLS_DIR -I$REPO_SRC/libvms/include -I$REPO_SRC/vmsfs/include \
 -I$REPO_SRC/vmslnm/include -I$REPO_SRC/vmsrms/include \
 -I$REPO_SRC/vmsprocess/include -I$REPO_SRC/libvmssys"
 
@@ -107,10 +124,18 @@ echo "mk_loginout: --use DECC\$SHR LIBVMS\$SHR LIBVMSPROCESS\$SHR LIBVMSFS\$SHR 
 echo "  cc $(basename "$LOGIN_SRC")"
 $CC $CFLAGS $DEFS $INCS -c -o "$WORK/vms_login.o" "$LOGIN_SRC"
 
+LOGINOUT_OBJS="$WORK/vms_login.o"
+for src in $LOGINOUT_EXTRA_SRCS; do
+    obj="$WORK/$(basename "${src%.c}").o"
+    echo "  cc $(basename "$src")"
+    $CC $CFLAGS $DEFS $INCS -c -o "$obj" "$src"
+    LOGINOUT_OBJS="$LOGINOUT_OBJS $obj"
+done
+
 echo "mk_loginout: LINK.EXE --executable --use {7 producers} -> $OUT"
 "$LINK_EXE" --executable \
     --use "$DECC_SHR" --use "$VMS_SHR" --use "$PROC_SHR" \
     --use "$FS_SHR" --use "$LNM_SHR" --use "$RMS_SHR" --use "$SYS_SHR" \
-    -o "$OUT" "$WORK/vms_login.o"
+    -o "$OUT" $LOGINOUT_OBJS
 
 echo "mk_loginout: created $OUT"

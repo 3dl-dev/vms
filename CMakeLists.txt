@@ -187,6 +187,7 @@ if(BUILD_TESTS)
     add_subdirectory(tests/dcl)
     add_subdirectory(tests/vmsscs)
     add_subdirectory(tests/ovmx_init)
+    add_subdirectory(tests/tools)
 
     # Toolchain round-trip: LIBRARIAN.EXE + .OLB + LINK.EXE selective member
     # extraction (vms-ca9). Needs the host-built toolchain binaries, so it is

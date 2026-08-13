@@ -20,6 +20,32 @@
 #ifndef VMS_MAIL_NOTIFY_H
 #define VMS_MAIL_NOTIFY_H
 
+#include <stddef.h>
+
+/*
+ * MAIL storage layout -- single-sourced here so the mailbox vms_mail WRITES
+ * and the mailbox mail_count_unread() READS can never drift apart (they used
+ * to be independent #defines inside vms_mail.c). Both are relative to the
+ * account's SYSUAF default directory.
+ */
+#ifndef MAIL_SUBDIR
+#define MAIL_SUBDIR     ".vmsmail"   /* per-user mail directory */
+#endif
+#ifndef MAIL_INDEX
+#define MAIL_INDEX      "MAIL.IDX"   /* message index within MAIL_SUBDIR */
+#endif
+
+/*
+ * get_user_homedir - Resolve a VMS username to its SYSUAF default directory.
+ * Returns 0 on success, -1 if the user is not in SYSUAF.
+ */
+int get_user_homedir(const char *username, char *homedir, size_t sz);
+
+/*
+ * build_maildir - Build the absolute mail-directory path for a username.
+ */
+void build_maildir(const char *username, char *out, size_t sz);
+
 /*
  * mail_count_unread - Count unread messages for a VMS user.
  *

@@ -140,6 +140,11 @@ if(OVMX_LINK_NATIVE)
         ${CMAKE_SOURCE_DIR}/src/vmsdcl/include/*.h
         ${CMAKE_SOURCE_DIR}/src/vmsqueue/*.c
         ${CMAKE_SOURCE_DIR}/tools/vms_login.c
+        # LOGINOUT.EXE's extra TUs, linked in by mk_loginout.sh (vms-417).
+        ${CMAKE_SOURCE_DIR}/tools/loginout_display.c
+        ${CMAKE_SOURCE_DIR}/tools/loginout_display.h
+        ${CMAKE_SOURCE_DIR}/tools/mail_notify.c
+        ${CMAKE_SOURCE_DIR}/tools/vms_mail_notify.h
     )
 
     add_custom_command(

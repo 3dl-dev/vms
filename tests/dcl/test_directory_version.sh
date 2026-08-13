@@ -27,11 +27,18 @@
 #   - DIRECTORY *.DAT           (wildcard, no version) -> ALL versions of
 #     every matching name
 #
+# A bare DIRECTORY (no /SIZE) ends "Total of N files." with NO block count —
+# the block count appears only when file sizes are displayed. Grounded (Rule 8):
+# VSI OpenVMS DCL Dictionary, DIRECTORY examples (default listing ends
+# "Total of 4 files."). The prior assertions here expected "Total of N files,
+# 0 blocks." which was the OVMX fidelity bug fixed under vms-1c6, not VMS
+# behaviour; corrected to match the source of truth.
 # EXPECT: contains:VEROVMX.DAT;1
 # EXPECT: contains:VEROVMX.DAT;2
-# EXPECT: regex:Total of 2 files, 0 blocks\.
-# EXPECT: regex:Total of 1 file, 0 blocks\.
+# EXPECT: regex:Total of 2 files\.
+# EXPECT: regex:Total of 1 file\.
 # EXPECT_NOT: contains:Total of 0 files
+# EXPECT_NOT: regex:Total of [0-9]+ files?, [0-9]+ blocks\.
 VMSDCL="${VMSDCL:-vmsdcl}"
 TDIR=$(mktemp -d)
 touch "$TDIR/verovmx.dat;1"

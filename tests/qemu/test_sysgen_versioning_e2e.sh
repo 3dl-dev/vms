@@ -219,7 +219,7 @@ if printf '%s\n' "$DIR_BODY" | grep -qiF 'OVMXVMSSYS.PAR;2'; then
 else
     bad "DIRECTORY SYS\$SYSTEM:*.PAR shows OVMXVMSSYS.PAR;2 (process A's write)"
 fi
-if printf '%s\n' "$DIR_BODY" | grep -qE 'Total of [1-9][0-9]* files?, [0-9]+ blocks'; then
+if printf '%s\n' "$DIR_BODY" | grep -qE 'Total of [1-9][0-9]* files?[.,]'; then
     ok "DIRECTORY reported a nonzero file count (not an empty/broken listing)"
 else
     bad "DIRECTORY reported a nonzero file count (not an empty/broken listing)"

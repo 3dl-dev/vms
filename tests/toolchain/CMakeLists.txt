@@ -116,3 +116,21 @@ set_tests_properties(toolchain-mmk-component-build PROPERTIES
     TIMEOUT 120
     LABELS "toolchain;librarian;link;selfhost"
 )
+
+# spine #6 (vms-d1b): the STATIC TCC.EXE prerequisite for the QEMU MMK-driven
+# build.  mk_tcc_static.sh builds tinycc as the plain fork+execve compiler DCL
+# activates as a foreign command (no IMGACT/shareable, matching the staged
+# MMK.EXE/DCL.EXE), and this proves it compiles the REAL component runtime TUs
+# (vms_string/vms_snprintf + the driver) to valid, BYTE-IDENTICAL objects -- the
+# compile-step determinism the byte-identical-twice build bar needs.  The
+# MMK-DRIVEN half (TCC run from MMK's persistent mailbox DCL against a real
+# /dev/vms) rides QEMU (tests/qemu/test_syssvc_mmk_build.c).
+add_test(
+    NAME toolchain-tcc-static-component
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_tcc_static_component.sh
+)
+set_tests_properties(toolchain-tcc-static-component PROPERTIES
+    ENVIRONMENT "TCC_SRC=${CMAKE_SOURCE_DIR}/third-party/tcc/src;REPO_SRC=${CMAKE_SOURCE_DIR}/src;COMPONENT=${CMAKE_CURRENT_SOURCE_DIR}/component;CC=${CMAKE_C_COMPILER}"
+    TIMEOUT 300
+    LABELS "toolchain;tcc;selfhost"
+)

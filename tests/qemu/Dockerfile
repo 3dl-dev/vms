@@ -323,6 +323,23 @@ RUN cd /src/repo && \
     echo "--- TESTTLS.EXE (the own-PT_TLS in-process flip subject, test_syssvc_imgact_tls) ---" && \
     ls -la build-static/bin/TESTTLS.EXE
 
+# TCC.EXE (vms-d1b, self-host spine #6): tinycc built as a PLAIN STATIC (musl)
+# foreign-command image -- the compiler test_syssvc_mmk_build.c drives from MMK's
+# persistent mailbox DCL. DCL activates a foreign command by fork()+execve() of
+# the image path (a plain static image is not in-process-eligible, so
+# imgact_activate returns SS$_UNSUPPORTED and DCL forks it), exactly like the
+# staged MMK.EXE/DCL.EXE -- so no IMGACT/shareable staging is needed here. Built
+# by tests/toolchain/mk_tcc_static.sh from the vendored third-party/tcc, the same
+# recipe the host ctest toolchain-tcc-static-component proves compiles the real
+# component TUs byte-identically. Static-musl so it needs no dynamic linker in the
+# initramfs. (mk_tcc_static.sh runs tinycc's own configure + `make tcc`, which
+# need make + musl-gcc -- both already installed above.)
+RUN cd /src/repo && \
+    CC=musl-gcc WORK=/tmp/mk-tcc-static \
+        sh tests/toolchain/mk_tcc_static.sh /src/repo/build-static/bin/TCC.EXE && \
+    echo "--- TCC.EXE (static-musl tinycc; the compiler MMK drives, vms-d1b) ---" && \
+    ls -la build-static/bin/TCC.EXE
+
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
 RUN gcc -O2 -Wall -o /src/tests/qemu/mkimage_vmsfs \
@@ -489,6 +506,44 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE && \
     cp /initramfs/bin/DCL.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
+    # TCC.EXE at SYS$SYSTEM (vms-d1b, self-host spine #6) -- the compiler
+    # test_syssvc_mmk_build.c drives from MMK's persistent mailbox DCL. Its
+    # descrip.mms defines TCC :== $/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE (an absolute
+    # image path, so it resolves in the spawned DCL without depending on
+    # SYS$SYSTEM), and tinycc's own headers are staged BESIDE it at
+    # SYS$SYSTEM:[.include] so both the explicit -I and tcc's default
+    # {tccdir}/include search find stddef.h/stdint.h (tcc satisfies those from its
+    # built-ins too, so this is belt-and-suspenders, and there is NO /usr/include
+    # in the initramfs to fall back on). Absence is FATAL, not skipped: a missing
+    # TCC.EXE would turn the driven-compile + byte-identity assertions into a
+    # no-op (the suite would report the object never appeared) with the job green.
+    { cp /src/repo/build-static/bin/TCC.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE || \
+      { echo "FATAL: TCC.EXE was not built into the static tree -- the MMK-driven TCC compile would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE && \
+    mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include && \
+    cp /src/repo/third-party/tcc/src/include/*.h /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/ && \
+    # tinycc ships stddef.h/stdarg.h but NOT <stdint.h> -- upstream tcc defers
+    # that to the system's <stdint.h>, and the initramfs has no /usr/include to
+    # fall back on. Stage musl's stdint.h + its two-file bits closure beside
+    # tcc's own headers so the freestanding component TU (vms_types.h includes
+    # <stdint.h>) compiles in-guest. The musl glob arch-matches automatically
+    # (x86_64 runner -> x86_64-linux-musl, arm64 -> aarch64-linux-musl), the same
+    # source distro/Dockerfile.bootable and the vms-1d9 stage above already use.
+    MUSL_INC=$(echo /usr/include/*-linux-musl) && \
+    mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/bits && \
+    cp "$MUSL_INC/stdint.h" /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/ && \
+    cp "$MUSL_INC/bits/alltypes.h" "$MUSL_INC/bits/stdint.h" \
+       /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/bits/ && \
+    # The REAL component source + its headers the build suite stages into the
+    # MMK work directory (VMS-style upper-case .C). This is the actual
+    # src/libvmssys freestanding runtime TU vms_string.c -- the object the driven
+    # TCC produces must carry its vms_strlen symbol. Absence is FATAL: without it
+    # the driven compile would have nothing to compile.
+    mkdir -p /initramfs/tests/component && \
+    { cp /src/repo/src/libvmssys/vms_string.c /initramfs/tests/component/VMS_STRING.C || \
+      { echo "FATAL: VMS_STRING.C (the real runtime TU MMK drives TCC to compile) not staged"; exit 1; }; } && \
+    cp /src/repo/src/libvmssys/vms_string.h /src/repo/src/libvmssys/vms_types.h \
+       /initramfs/tests/component/ && \
     # AUTHORIZE.EXE (vms-4c2), staged at /bin/AUTHORIZE.EXE --
     # tests/qemu/test_syssvc_authorize.c execs it by that path. Absence is
     # FATAL, not skipped, for the same reason as DCL.EXE above: a missing

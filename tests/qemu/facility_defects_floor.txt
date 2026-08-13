@@ -351,4 +351,17 @@
 # nor the end-of-command marker -- reddening the suite's driven-result assertion
 # and (same root) its completion assertion, while a no-executive run still
 # honest-skips. See its own entry in facility_defects.sh for what it covers and why.
-96
+# Raised 96 -> 97 by vms-d1b's mmk-build-image-not-activated -- the dedicated
+# per-facility control anchoring the new test_syssvc_mmk_build suite (self-host
+# spine #6: the shipped MMK.EXE drives the static TCC.EXE over its mailbox DCL to
+# compile a real runtime TU in QEMU, byte-identical twice). A DEDICATED control,
+# NOT a second suite on mmk-drive-command-not-sent: that sp_send=0 mutation
+# reddens by deadlocking MMK in $HIBER, and two ~50s wedges do not fit
+# run_tests.sh's 120s QEMU budget in one boot. This mutation instead makes
+# dcl_exec_foreign_command (src/vmsdcl/dcl_cmd_process.c) report success WITHOUT
+# activating the image, so the driven TCC command completes instantly but runs no
+# compiler -- reddening the suite's five object/byte-identity assertions FAST,
+# with no wedge, attributable to the build drive alone (the only suite whose DCL
+# activates an image through a foreign command). See its own entry in
+# facility_defects.sh for what it covers and why.
+97

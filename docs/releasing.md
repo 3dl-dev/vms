@@ -90,26 +90,43 @@ version-controlled log of every published release's notes.
 ## Reviewing the public site manuals
 
 The public documentation set lives in the `openvmx-site` repo, under its
-`docs/`, not here — but it ships the same release. Every cut includes a
-release-engineering review of those manuals. Part of it is mechanical; the rest
-is judgment a gate cannot make.
+`docs/`, not here — but it ships the same release. What release engineering
+owes the manuals depends on the kind of cut.
+
+**Major and minor cuts (0.4, 0.5, 1.0): write them.** Before the cut, the
+release engineer writes or updates the site manuals so they describe what this
+release actually does. New facilities get documented, changed behaviour gets
+corrected, and a manual that was "in preparation" gets written once its subject
+is implemented enough to describe. Ground every manual in what shipped: the
+Compatibility Surface Register (`docs/compat/`) and the e2e gates are the source
+of truth. Do not document a facility the register marks absent, partial, or
+facade-risk as if it worked — that is the LARP the authenticity invariants
+exist to stop.
+
+**Point releases (0.3-x): do not rewrite them.** A point cut is maintenance and
+fixes; it carries no doc-authoring obligation. The mechanical checks below still
+run, but no manual is expected to change.
+
+The mechanical checks run on every cut:
 
 - **The command-drift gate is green.** The public Installation Guide carries a
   hidden, machine-checkable block of its install commands, compared byte for
   byte against the `# GUIDE-STEP` commands in
   `tests/qemu/test_product_install_e2e.sh` at the release tag. It runs in
   `openvmx-site` on every cut (`track-release.yml`) and on every docs PR
-  (`docs-drift.yml`). A green gate proves the commands match, and nothing more —
-  the rest of this list is yours to check.
+  (`docs-drift.yml`).
 - **Each manual's edition stamp matches the cut.** `track-release.yml` rewrites
   the `data-ovmx-version` token from the deployed tag, so the "Applies to" line
-  follows the release. Confirm it landed. Bump the edition and date in the
-  revision-history table by hand whenever the manual's content changed.
+  follows the release. Confirm it landed.
+
+At a major or minor cut, also review by hand:
+
 - **Appendix C and the capability claims match `docs/compat/`.** Re-read the
   Installation Guide's "not yet available" appendix, and any claim about what
   works, against the current Compatibility Surface Register. A facility that
   reached implemented this cut graduates out of the appendix; one that regressed
-  goes back in.
+  goes back in. Bump the edition and date in the revision-history table whenever
+  the manual's content changed.
 - **Drift found is filed, not shipped.** When a manual and the code disagree,
   open a documentation bug and hold the manual change. Do not edit the manual to
   match a claim the register does not carry.

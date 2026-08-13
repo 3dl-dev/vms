@@ -12,11 +12,14 @@
 obj-m := vms.o
 
 # vms_eflag.o / vms_ast.o / vms_access.o / vms_mbx.o / vms_proctab.o / vms_lock.o
-# are built from ../kernel-core/: these substrate-agnostic executive facilities
+# / vms_devtab.o are built from ../kernel-core/: these substrate-agnostic
+# executive facilities
 # LIVE in src/kernel-core/ -- event flags (rd vms-ec4, Phase B), AST delivery and
 # access-mode enforcement (rd vms-5b2, Phase D), mailboxes (rd vms-a88, Phase E),
-# the process table (rd vms-846b, Phase F), and, now, the LOCK MANAGER (rd
-# vms-84a, Phase G -- the 44 KB payoff and the last facility promoted). The Linux
+# the process table (rd vms-846b, Phase F), the LOCK MANAGER (rd vms-84a, Phase G
+# -- the 44 KB payoff), and, now, the DEVICE TABLE (rd vms-31b -- the facility
+# Phase E deferred, landed once its block-layer + host-task-credential seams
+# existed). The Linux
 # vms.ko is the Linux BACKEND for that shared source -- it provides the
 # exec_*/exec_list_*/exec_hash_*/exec_rbtree_* primitives (exec_kbackend_linux.h /
 # exec_list_linux.h / exec_hash_linux.h / exec_rbtree_linux.h here in src/kernel)
@@ -34,19 +37,21 @@ obj-m := vms.o
 # the vms_module.c -> vms_dispatch.c split (design record §8 row F, second half),
 # not with proctab.
 #
-# (vms_lnm.c and vms_devtab.c likewise stay here for now: vms_lnm is coupled to
-# the Linux mm layer -- vmalloc_user/remap_vmalloc_range/vm_flags and smp_wmb
-# barriers; vms_devtab is coupled to the block layer -- lookup_bdev/MAJOR/MINOR/
-# dev_t -- and to host-task credentials. Those seams are not covered by the
-# exec_* shim yet; their extraction waits on later phases.)
+# vms_devtab.c's block-layer coupling (lookup_bdev/MAJOR/MINOR/dev_t) is now
+# behind exec_kbackend.h's block-device seam (exec_blockdev_*, §8) and its
+# host-task-credential coupling behind exec_current_uid/gid, so it joins the
+# core above (vms-31b). vms_lnm.c is the ONE facility still here in src/kernel:
+# it is coupled to the Linux mm layer -- vmalloc_user/remap_vmalloc_range/
+# vm_flags and smp_wmb barriers -- a seam the exec_* shim does not cover yet;
+# its extraction waits on a later phase.
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
+         ../kernel-core/vms_devtab.o \
          ../kernel-core/vms_eflag.o \
          ../kernel-core/vms_lock.o \
          ../kernel-core/vms_mbx.o \
          ../kernel-core/vms_proctab.o \
-         vms_devtab.o \
          vms_lnm.o \
          vms_p0.o \
          vms_p1.o

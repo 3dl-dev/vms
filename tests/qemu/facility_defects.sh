@@ -1591,7 +1591,7 @@ EOF
     devtab-owner-not-recorded)
         case "$_f" in
         facility)     echo "device table (VMS_IOCTL_ASSIGN/DASSGN/GETDVI/DEVSCAN/TTSETMODE/ALLOC/DALLOC)";;
-        targets)      echo "kernel/vms_devtab.c";;
+        targets)      echo "kernel-core/vms_devtab.c";;
         suites_red)   echo "test_kmod_devtab";;
         blind_suites) echo "";;
         blind_why)    echo "";;
@@ -1630,7 +1630,7 @@ EOF
     devtab-alloc-not-recorded)
         case "$_f" in
         facility)     echo "device table (VMS_IOCTL_ASSIGN/DASSGN/GETDVI/DEVSCAN/TTSETMODE/ALLOC/DALLOC)";;
-        targets)      echo "kernel/vms_devtab.c";;
+        targets)      echo "kernel-core/vms_devtab.c";;
         # test_syssvc_showdev.c (vms-fb9) is the derived suite that drives
         # SHOW DEVICE through the real DCL.EXE -- landed after this manifest
         # existed, and facility_negctl_manifest's own coverage check requires
@@ -1663,7 +1663,7 @@ EOF
     devtab-dassgn-status-wrong)
         case "$_f" in
         facility)     echo "device table -- \$DASSGN's own success status (VMS_IOCTL_DASSGN)";;
-        targets)      echo "kernel/vms_devtab.c";;
+        targets)      echo "kernel-core/vms_devtab.c";;
         # vms-2e7 (vms-2b2 follow-up). MEASURED at the 9-of-33 audit: no
         # existing mutation hunk sits inside vms_ioctl_dassgn's own body --
         # devtab-owner-not-recorded and devtab-alloc-not-recorded both
@@ -1696,7 +1696,7 @@ EOF
     devtab-getdvi-devnam-status-wrong)
         case "$_f" in
         facility)     echo "device table -- \$GETDVI's own success status on the by-NAME lookup path (VMS_IOCTL_GETDVI)";;
-        targets)      echo "kernel/vms_devtab.c";;
+        targets)      echo "kernel-core/vms_devtab.c";;
         # vms-2e7. MEASURED, same audit: no existing mutation hunk sits
         # inside vms_ioctl_getdvi's own body. Two "args.status =
         # SS_NORMAL;" sites exist in this function -- the by-CHANNEL path
@@ -1756,7 +1756,7 @@ EOF
     devtab-devscan-found-status-wrong)
         case "$_f" in
         facility)     echo "device table -- \$DEVICE_SCAN's own success status when a row IS found (VMS_IOCTL_DEVSCAN)";;
-        targets)      echo "kernel/vms_devtab.c";;
+        targets)      echo "kernel-core/vms_devtab.c";;
         # vms-2e7. MEASURED, same audit: no existing mutation hunk sits
         # inside vms_ioctl_devscan's own body. The only
         # "args.status = SS_NORMAL;" in this function, so a plain
@@ -1790,7 +1790,7 @@ EOF
     disk-backing-not-resolved)
         case "$_f" in
         facility)     echo "disk unit resolution (VMS_IOCTL_DISK_RESOLVE): the executive hands a process the Linux block device a DK unit was enumerated from";;
-        targets)      echo "kernel/vms_devtab.c";;
+        targets)      echo "kernel-core/vms_devtab.c";;
         # vms-3e8. vms_ioctl_disk_resolve() copies the backing device name in
         # exactly one place -- the strscpy from dev->backing into args.backing.
         # Anchoring on that one line zeroes the name the resolve hands back
@@ -1821,7 +1821,7 @@ EOF
     setterm-binding-not-recorded)
         case "$_f" in
         facility)     echo "job-to-terminal binding (VMS_IOCTL_SETTERM, read back through GETJPI)";;
-        targets)      echo "kernel/vms_devtab.c";;
+        targets)      echo "kernel-core/vms_devtab.c";;
         suites_red)   echo "test_kmod_setterm test_syssvc_showterm";;
         blind_suites) echo "";;
         blind_why)    echo "";;
@@ -4859,7 +4859,7 @@ EOF
         # WHY THIS EXISTS, distinct from the five kernel devtab entries above.
         # devtab-alloc-not-recorded reddens the SAME assertion ("B sees that A
         # allocated the device"), but it mutates the EXECUTIVE (devinfo_fill()
-        # in kernel/vms_devtab.c), so it reddens that assertion in ALL THREE of
+        # in kernel-core/vms_devtab.c), so it reddens that assertion in ALL THREE of
         # test_kmod_devtab, test_syssvc_showdev AND test_syssvc_getdvi at once.
         # The gating teeth of a negctl are check 4 (a suite in suites_red went
         # red), which the raw test_kmod_devtab satisfies regardless of what the
@@ -5278,7 +5278,9 @@ apply_edit() {
         # unique `if (!dev->shareable ...)` line that opens the implicit-
         # ownership block makes the edit unrepeatable, so a second apply is
         # the no-op the self-test requires it to be.
-        sed -i '/if (!dev->shareable && dev->owner_linux_pid == 0) {/,/^    spin_unlock(&dev->lock);$/ s|dev->owner_pid = proc->vms_pid;|/* NEGCTL devtab-owner-not-recorded */|' "$_file";;
+        # Range-end anchor is exec_unlock (not spin_unlock) since vms-31b moved
+        # this facility onto the kernel-backend shim in src/kernel-core/.
+        sed -i '/if (!dev->shareable && dev->owner_linux_pid == 0) {/,/^    exec_unlock(&dev->lock);$/ s|dev->owner_pid = proc->vms_pid;|/* NEGCTL devtab-owner-not-recorded */|' "$_file";;
     devtab-alloc-not-recorded)
         # devinfo_fill() has exactly one `info->allocated =` write; anchoring
         # to it directly (not a range) is safe because it is the only such

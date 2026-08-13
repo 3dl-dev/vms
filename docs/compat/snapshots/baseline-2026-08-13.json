@@ -16,8 +16,31 @@
       "advisory": 34,
       "facade-risk": 46
     },
-    "coverage_index": 55.5,
+    "met": 237,
+    "in_progress": 44,
+    "not_started": 136,
     "facade_risk": 46
+  },
+  "overall_in_scope": {
+    "count": 373,
+    "by_status": {
+      "verified": 27,
+      "implemented": 210,
+      "partial": 42,
+      "stub": 16,
+      "designed": 2,
+      "absent": 76
+    },
+    "by_authenticity": {
+      "real": 233,
+      "n/a": 63,
+      "advisory": 33,
+      "facade-risk": 44
+    },
+    "met": 237,
+    "in_progress": 42,
+    "not_started": 94,
+    "facade_risk": 44
   },
   "by_domain": {
     "programming-interfaces": {
@@ -36,7 +59,9 @@
         "facade-risk": 22,
         "real": 120
       },
-      "coverage_index": 60.6,
+      "met": 134,
+      "in_progress": 15,
+      "not_started": 55,
       "facade_risk": 22
     },
     "file-system": {
@@ -55,7 +80,9 @@
         "n/a": 2,
         "facade-risk": 1
       },
-      "coverage_index": 74.5,
+      "met": 23,
+      "in_progress": 3,
+      "not_started": 4,
       "facade_risk": 1
     },
     "command-language": {
@@ -74,7 +101,9 @@
         "n/a": 13,
         "advisory": 3
       },
-      "coverage_index": 52.7,
+      "met": 29,
+      "in_progress": 14,
+      "not_started": 21,
       "facade_risk": 11
     },
     "system-management": {
@@ -93,7 +122,9 @@
         "advisory": 3,
         "facade-risk": 6
       },
-      "coverage_index": 49.4,
+      "met": 19,
+      "in_progress": 2,
+      "not_started": 15,
       "facade_risk": 6
     },
     "clustering": {
@@ -112,7 +143,9 @@
         "advisory": 1,
         "facade-risk": 1
       },
-      "coverage_index": 43.5,
+      "met": 6,
+      "in_progress": 0,
+      "not_started": 7,
       "facade_risk": 1
     },
     "toolchain": {
@@ -130,7 +163,9 @@
         "n/a": 8,
         "advisory": 3
       },
-      "coverage_index": 57.9,
+      "met": 15,
+      "in_progress": 1,
+      "not_started": 8,
       "facade_risk": 0
     },
     "networking": {
@@ -148,7 +183,9 @@
         "real": 3,
         "facade-risk": 3
       },
-      "coverage_index": 21.8,
+      "met": 2,
+      "in_progress": 1,
+      "not_started": 8,
       "facade_risk": 3
     },
     "runtime-arch": {
@@ -167,7 +204,9 @@
         "facade-risk": 2,
         "advisory": 1
       },
-      "coverage_index": 67.7,
+      "met": 8,
+      "in_progress": 3,
+      "not_started": 2,
       "facade_risk": 2
     },
     "languages": {
@@ -185,7 +224,9 @@
         "advisory": 2,
         "n/a": 16
       },
-      "coverage_index": 15.2,
+      "met": 1,
+      "in_progress": 5,
+      "not_started": 16,
       "facade_risk": 0
     }
   },

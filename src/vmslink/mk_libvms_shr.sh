@@ -177,8 +177,17 @@ fi
 # Newly-discovered universals not yet frozen -> append (sorted) after the frozen
 # block, keeping every frozen index immovable.
 comm -23 "$WORK/disc.names" "$WORK/frozen.names" | sort > "$WORK/append.names"
-: > "$WORK/append.vec"
-[ -s "$WORK/append.names" ] && join -t= "$WORK/append.names" "$WORK/disc.vec" > "$WORK/append.vec"
+# Emit each discovered `name=class` whose name is in the append set. This
+# replaces `join -t= append.names disc.vec`, which is UNAVAILABLE in the
+# alpine-musl native-link container (busybox has no `join`) -> Error 127 broke
+# every LIBVMS$SHR-rebuilding job the moment the append set was non-empty
+# (vms-5a2; bug latent behind vms-bd1's all-frozen state). awk set-membership is
+# the portable equivalent: `disc.vec` is `sort -u`'d (sorted by name, names
+# unique), so iterating it yields append entries in name-sorted order -- byte
+# for byte the same as join's sorted-by-key output. busybox HAS comm+paste, so
+# those lines stay.
+awk -F= 'NR==FNR { want[$1]; next } ($1 in want)' \
+    "$WORK/append.names" "$WORK/disc.vec" > "$WORK/append.vec"
 
 VEC=$( cat "$WORK/frozen.vec" "$WORK/append.vec" | paste -sd, - )
 [ -n "$VEC" ] || { echo "mk_libvms_shr: FAIL: empty symbol vector"; exit 1; }

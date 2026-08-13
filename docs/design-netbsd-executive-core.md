@@ -550,3 +550,83 @@ is unchanged in substance; the new code is entirely per-substrate glue in
    WOKEN by a DIFFERENT process's `$SETEF` (`exec_cv_broadcast`) — the
    lost-wakeup-free cv contract, held across a process boundary on NetBSD `cv(9)`,
    on the cluster's shared kernel `kcondvar`+`kmutex`.
+
+## 11. Phase F landing (`vms-846b`) — process table + the host-task / RCU-lite / hash seam
+
+Phase F promotes `vms_proctab.c` (the executive-resident process database —
+`$SETPRN`, `$GETJPI`, `$PROCSCAN`, `$SETIDENT`, `establish_system`) to
+`src/kernel-core/`, where it names **no** `<linux/…>` symbol. It is the first
+core facility to bind the **host task**, so it is where the design's three
+remaining exec-core seams land. As §2 measured, that binding is concentrated
+here and in `vms_module.c` — the seven earlier facilities carried none — so this
+is a localized job, not a cross-cutting one. Extraction is behaviour-preserving:
+the pure identity/authorisation logic (`vms_proc_may_read`, `proc_fill_info`,
+`find_by_name`/`find_by_vms_pid`, `establish_system`) is **`.o`
+disassembly-identical** to `origin/main`; the only deltas are the three allowed
+seam sites (copy-normalisation, the accounting restructure, the liveness/pin
+folding), proven behaviour-identical by the Kernel Executive QEMU suite.
+
+**The four shim families landed (`exec_kbackend.h` §5–§7 + `exec_hash.h`),
+Linux backend real, NetBSD backend the contract's real mapping:**
+
+1. **Host-task credential + liveness/accounting.** `exec_current_is_privileged()`
+   (Linux `capable(CAP_SYS_ADMIN)`; NetBSD kauth "is-superuser") — proctab's
+   *only* `current->` read is this one privilege gate. The UIC/username
+   *derivation* from `current`'s credentials (`from_kuid`/`current->real_parent`)
+   is **not** here — it lives in `vms_module.c`'s registration and lands with the
+   `vms_module.c → vms_dispatch.c` split (§8 row F, second half). The PCB's
+   liveness handle `pid_ref` becomes the opaque `exec_task_ref_t`, driven by
+   `exec_task_alive` / `exec_task_pin` / `exec_task_read_acct` / `exec_task_unpin`
+   (Linux: `pid_task`/`get_task_struct`/the `fill_proc_acct` reads/`put_task_struct`;
+   NetBSD: `proc_find(9)` + a documented accounting stub). `exec_task_read_acct`
+   returns a substrate-neutral `struct exec_proc_acct`; the VMS unit/field
+   conversions stay in the portable facility. **Scope note:** this is a host-task
+   *property* read (scalar RSS/cputime), **not** the userspace-arena *mapping*
+   seam (`vmalloc_user`/`remap_vmalloc_range`) that `vms_lnm.c` (`vms-d61`) waits
+   on — a different, later seam.
+
+2. **RCU-lite (`exec_rcu_read_lock/unlock`, `exec_free_deferred`,
+   `exec_rcu_head_t`).** RCU has no NetBSD twin (§2/§3/§5 caveat 3). The
+   **read-side/grace-period contract:** the process hash has lockless readers
+   (`vms_module.c`'s `vms_proc_find` walks it under an RCU read section, no table
+   lock), so an unlinked PCB must survive a grace period. Unlink uses
+   `exec_hash_del_rcu` (a node a reader is *already* traversing walks off cleanly;
+   a reader starting *after* the unlink cannot reach it); reclaim uses
+   `exec_free_deferred` (Linux `call_rcu`; NetBSD immediate, as it has no lockless
+   readers). The two are **one idiom** — `exec_hash_del_rcu` then a synchronous
+   free is a use-after-free. Proctab's own read-side RCU (the `pid_task` guards)
+   is folded *inside* `exec_task_*`, so the facility makes no bare RCU call; the
+   deferred-free op is landed and documented but adopted by `vms_module.c`'s
+   `kfree_rcu` in that file's later split.
+
+3. **Sleepable mutex (`exec_mutex_t`, `EXEC_DEFINE_MUTEX`, `exec_mutex_*`).**
+   Distinct from `exec_lock_t`: proctab's reap serialiser is held across a
+   per-victim teardown that may sleep. Linux `struct mutex`; NetBSD adaptive
+   `kmutex(9)` at `IPL_NONE`.
+
+4. **Intrusive hash (`exec_hash.h`), the third container seam beside
+   `exec_list.h`.** Minimal — only what proctab calls: `exec_hash_node_t`,
+   `exec_hash_for_each[_safe]`, `exec_hash_del_rcu`. The table itself
+   (`DECLARE/DEFINE_HASHTABLE`, `hash_init`, `hash_add_rcu`, possible-key lookup)
+   stays raw in the Linux `vms_internal.h` + `vms_module.c` glue, which the core
+   never spells. Linux backend macro-forwards to `<linux/hashtable.h>`; the
+   NetBSD backend is the contract + real-mapping sketch (an OVMX/`hashinit(9)`
+   intrusive hash), not yet compiled because proctab is not yet in the NetBSD
+   `vms` module's SRCS — exactly the state `exec_list.h` was in before Phase C.
+
+**Deliberately flagged residue (a clean partial, per the phase rule).**
+`vms_module.c` stays in `src/kernel/` as Linux glue: registration (host-credential
+identity derivation), the `struct pid`/`kfree_rcu` free path, the hash
+definition, and ioctl dispatch are module-lifecycle host binding, extracted with
+the `vms_dispatch.c` split (§8 row F, second half) — not forced into Phase F.
+The NetBSD-side proof (proctab compiled into the `vms` module + a two-process
+PCB-identity/liveness test, the analogue of Phase C's event-flag proof) is
+`vms-9dc`'s job; Phase F fixes the seam boundary and the Linux backend so that
+proof brings up **zero** new executive facility code.
+
+**Negctl anchors** repointed `kernel/vms_proctab.c → kernel-core/vms_proctab.c`
+(all seven `targets` lines); the five proctab defect seds still hit exactly their
+intended line in the moved file, and the coverage meta-check's failure set is
+byte-identical to `origin/main` (proctab named, no new gap). The two integration
+source-scan gates (`test_system_identity_no_sysuaf{,_negctl}.sh`) that hardcode
+the path are repointed and green.

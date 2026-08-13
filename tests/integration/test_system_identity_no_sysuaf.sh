@@ -97,7 +97,7 @@ scan_present() {
 
 PROVISION_C="$SRC_ROOT/src/ovmx_provision/ovmx_provision.c"
 INTERNAL_H="$SRC_ROOT/src/kernel/vms_internal.h"
-PROCTAB_C="$SRC_ROOT/src/kernel/vms_proctab.c"
+PROCTAB_C="$SRC_ROOT/src/kernel-core/vms_proctab.c"
 IOCTL_H="$SRC_ROOT/src/kernel/vms_ioctl.h"
 
 # --- 1. PROVISION.EXE no longer reads SYSUAF for identity ---------------

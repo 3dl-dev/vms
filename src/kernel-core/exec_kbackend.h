@@ -34,6 +34,31 @@
  *   - deferred free  exec_free_deferred / exec_rcu_*  (Phase F): eflag frees
  *     synchronously under a lock, no RCU.
  *
+ * PHASE F ADDITIONS (this landing -- rd vms-846b, the process table).
+ * vms_proctab.c is the FIRST facility to bind the host task, so it is where
+ * the host-task / RCU-lite / sleepable-mutex seam lands. Added below, each
+ * only because vms_proctab.c actually calls it (design rule: keep it minimal):
+ *
+ *   5. host-task binding   exec_current_is_privileged() (its only current->
+ *      read is capable(CAP_SYS_ADMIN); the UIC/username DERIVATION from
+ *      current's credentials lives in vms_module.c's registration, not here,
+ *      and lands with the vms_module split), and the liveness/accounting
+ *      handle ops exec_task_alive / exec_task_pin / exec_task_read_acct /
+ *      exec_task_unpin over an opaque exec_task_ref_t (the PCB's pid_ref).
+ *   6. RCU-lite            exec_rcu_read_lock / exec_rcu_read_unlock and the
+ *      deferred free exec_free_deferred, plus exec_rcu_head_t. RCU has no
+ *      NetBSD twin (design record §2/§3/§5 caveat 3): the Linux backend maps
+ *      to real RCU; the NetBSD backend uses the design's blessed lock-based
+ *      fallback (no lockless readers there, so free is immediate under the
+ *      hash lock). The intrusive hash itself is a SEPARATE seam, exec_hash.h.
+ *   7. sleepable mutex     exec_mutex_t + EXEC_DEFINE_MUTEX / exec_mutex_lock
+ *      / exec_mutex_unlock / exec_mutex_init / exec_mutex_destroy. DISTINCT
+ *      from exec_lock_t: exec_lock is a non-sleeping spin/adaptive lock;
+ *      exec_mutex is a process-context lock that MAY be held across a
+ *      sleeping operation (vms_proctab's reap serializer holds it across the
+ *      per-victim teardown). Linux: struct mutex. NetBSD: an adaptive
+ *      kmutex(9) at IPL_NONE (process context).
+ *
  * Clean-room (CLAUDE.md Rule 8): this contract and the facility logic are
  * OVMX's own code; each backend maps it to PUBLIC, documented host kernel
  * APIs only. No Linux, NetBSD, or VSI/HPE source or binary is copied.
@@ -123,6 +148,81 @@
  *   void  exec_free(void *p)            free an exec_{z,}alloc/exec_zalloc_atomic
  *                                       block (the backend recovers the size
  *                                       where its free needs one).
+ *
+ * 5. Host-task binding  (Phase F; called ONLY from the process table +, later,
+ *    the device/module glue -- the host-task coupling is concentrated in those
+ *    two files, design record §2). "current" is the host task issuing the ioctl.
+ *
+ *   int  exec_current_is_privileged(void)
+ *        nonzero iff the CURRENT host task is privileged enough to construct a
+ *        VMS identity out of nothing. Linux: capable(CAP_SYS_ADMIN). NetBSD:
+ *        kauth "is-superuser". This is a REAL host credential, not a value a
+ *        process can grant itself (vms_ioctl_establish_system's gate).
+ *
+ *   The PCB stores an OPAQUE liveness handle, exec_task_ref_t (the executive's
+ *   pid_ref: on Linux the thread group's struct pid, taken at registration).
+ *   A facility never dereferences it -- it only passes it to these ops:
+ *
+ *   int  exec_task_alive(exec_task_ref_t *ref)
+ *        nonzero iff the PROCESS backing `ref` still exists. This is a
+ *        whole-process test (the thread-group leader), NOT a per-thread one, so
+ *        a thread exiting out of a live multithreaded image does not make the
+ *        process reapable. Linux: pid_task(ref, PIDTYPE_PID) != NULL under an
+ *        RCU read section (the RCU is INSIDE this op, not the caller's concern).
+ *
+ *   exec_task_pin_t *exec_task_pin(exec_task_ref_t *ref)
+ *        pin the backing task so it survives past a lock drop, returning an
+ *        opaque pinned handle, or NULL if the process has already exited. MUST
+ *        NOT sleep, so it is safe to call while holding an exec_lock (Linux:
+ *        rcu-guarded pid_task + get_task_struct). The caller pins UNDER the
+ *        table lock, drops the lock, then reads accounting off the pinned
+ *        handle -- because that read MAY sleep and must not run under the lock.
+ *
+ *   void exec_task_read_acct(exec_task_pin_t *pin, struct exec_proc_acct *out)
+ *        fill `out` with the pinned process's REAL accounting -- CPU time, page
+ *        faults, creation time, resident pages (JPI$_CPUTIM / PAGEFLTS /
+ *        LOGINTIM / PPGCNT). MAY SLEEP; call it only AFTER dropping the table
+ *        lock, on a handle from exec_task_pin. These are real properties of a
+ *        real process measured by the host kernel (INV-6 / Rule 11: not a
+ *        fabrication); the VMS unit conversions and field mapping stay in the
+ *        portable facility. This is a host-task-PROPERTY read (a scalar RSS/
+ *        cputime read), NOT the userspace-arena MAPPING seam (vmalloc_user /
+ *        remap_vmalloc_range) that vms_lnm.c waits on -- a different, later seam.
+ *
+ *   void exec_task_unpin(exec_task_pin_t *pin)   drop the exec_task_pin ref.
+ *
+ * 6. RCU-lite deferred reclaim  (Phase F). The process hash has LOCKLESS
+ *    readers (vms_module.c's vms_proc_find walks it under an RCU read section,
+ *    no table lock), so an unlinked PCB must not be freed until every such
+ *    reader that could still see it has finished -- a grace period.
+ *
+ *   void exec_rcu_read_lock(void)     enter a read section (a lockless reader
+ *   void exec_rcu_read_unlock(void)   may traverse the hash between these).
+ *   void exec_free_deferred(struct exec_rcu_head *h, void (*fn)(struct exec_rcu_head *))
+ *        free (via `fn`) AFTER a grace period, once no read section that began
+ *        before the unlink is still running. `h` is an exec_rcu_head_t embedded
+ *        in the freed object. Linux: call_rcu. NetBSD: the design's blessed
+ *        fallback -- there are no lockless readers on that substrate (the hash
+ *        walks run under the hash mutex), so `fn` runs immediately.
+ *
+ *   GRACE-PERIOD CONTRACT, and how it pairs with exec_hash.h. The unlink is
+ *   exec_hash_del_rcu (exec_hash.h): it removes the node so no read section
+ *   STARTED AFTER the unlink can reach it, while leaving the node's forward
+ *   pointer valid so a reader ALREADY traversing it walks off cleanly. The
+ *   object is then reclaimed with exec_free_deferred, which waits out the
+ *   readers that began before the unlink. Unlink-with-exec_hash_del_rcu and
+ *   free-with-exec_free_deferred are therefore two halves of ONE idiom; using
+ *   exec_hash_del_rcu and then freeing synchronously is a use-after-free, and
+ *   using a plain exec_hash_del with lockless readers is list corruption.
+ *
+ * 7. Sleepable mutex  (Phase F) -- see the PHASE F ADDITIONS note above for why
+ *    it is distinct from exec_lock_t.
+ *   EXEC_DEFINE_MUTEX(name)             define a file-scope mutex (Linux static
+ *                                       init; NetBSD requires exec_mutex_init).
+ *   void exec_mutex_init(exec_mutex_t *)
+ *   void exec_mutex_lock(exec_mutex_t *)     acquire; MAY sleep
+ *   void exec_mutex_unlock(exec_mutex_t *)
+ *   void exec_mutex_destroy(exec_mutex_t *)  no-op on Linux; mutex_destroy on NetBSD
  */
 
 #ifndef OVMX_EXEC_KBACKEND_H
@@ -130,6 +230,21 @@
 
 /* Normalized copyin/copyout fault code (== EFAULT everywhere we target). */
 #define EXEC_EFAULT 14
+
+/*
+ * Portable process-accounting payload (Phase F). exec_task_read_acct() fills
+ * this from the host task; the facility maps it to VMS JPI items. Substrate-
+ * neutral by construction -- host-clock and mm machinery stay in the backend,
+ * only these already-meaningful scalars cross the seam. uint64_t is provided by
+ * the includer (vms_internal.h pulls the host's fixed-width types before this).
+ */
+struct exec_proc_acct {
+	uint64_t cpu_ns;         /* total CPU time (user+system), nanoseconds */
+	uint64_t page_faults;    /* soft + hard page faults taken by the process */
+	uint64_t create_wall_ns; /* creation time, ns since the Unix epoch (wall) */
+	uint64_t rss_pages;      /* resident set size in pages (valid iff has_rss) */
+	int      has_rss;        /* nonzero iff the process has a user address space */
+};
 
 /*
  * Backend selection. Each substrate's build defines its own macro

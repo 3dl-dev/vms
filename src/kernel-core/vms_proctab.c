@@ -22,23 +22,25 @@
  * [gid,uid], the same packing sys$getjpi's JPI$_UIC item returns.
  */
 
-#include <linux/kernel.h>
-#include <linux/uaccess.h>
-#include <linux/slab.h>
-#include <linux/sched.h>
-#include <linux/sched/cputime.h>
-#include <linux/sched/mm.h>
-#include <linux/mm.h>
-#include <linux/timekeeping.h>
-#include <linux/mutex.h>
-#include <linux/string.h>
-#include <linux/pid.h>
-#include <linux/capability.h>
+/*
+ * SUBSTRATE-AGNOSTIC EXECUTIVE CORE (rd vms-846b, Phase F). This file lives in
+ * src/kernel-core/ and names NO <linux/…> symbol: every host primitive it needs
+ * goes through the kernel-backend shim. It is the FIRST core facility to bind
+ * the host TASK -- process liveness, credentials and accounting -- so it is
+ * where the host-task / RCU-lite / sleepable-mutex seam lands (design record
+ * docs/design-netbsd-executive-core.md §2, §8 row F). The Linux vms.ko provides
+ * the backend (exec_kbackend_linux.h / exec_hash_linux.h); the NetBSD `vms'
+ * module will provide its own when proctab joins its SRCS (rd vms-9dc).
+ */
+#include "vms_internal.h"     /* struct vms_proc, the SS$/args/status codes,
+                               * the C-string + fixed-width vocabulary */
+#include "exec_kbackend.h"    /* exec_lock/copy/current/task/rcu/mutex */
+#include "exec_hash.h"        /* exec_hash_for_each[_safe] / exec_hash_del_rcu */
 
-#include "vms_internal.h"
-
-/* Serializes reaping so two callers cannot claim the same victim. */
-static DEFINE_MUTEX(vms_reap_mutex);
+/* Serializes reaping so two callers cannot claim the same victim. Held across
+ * the per-victim teardown, which may sleep, so it is an exec_mutex (sleepable),
+ * not an exec_lock (non-sleeping). */
+static EXEC_DEFINE_MUTEX(vms_reap_mutex);
 
 /*
  * uic_group - the [group] half of a packed UIC.
@@ -65,16 +67,13 @@ static inline uint32_t uic_group(uint32_t uic)
  */
 static bool vms_proc_task_alive(struct vms_proc *proc)
 {
-    struct task_struct *task;
-
     if (!proc->pid_ref)
         return false;
 
-    rcu_read_lock();
-    task = pid_task(proc->pid_ref, PIDTYPE_PID);
-    rcu_read_unlock();
-
-    return task != NULL;
+    /* exec_task_alive() does the whole-process liveness test described above
+     * (pid_task under an RCU read section) behind the shim; the RCU is the
+     * backend's concern, not this facility's. */
+    return exec_task_alive(proc->pid_ref);
 }
 
 /*
@@ -100,23 +99,23 @@ static bool vms_proc_task_alive(struct vms_proc *proc)
 void vms_proc_reap_dead(void)
 {
     struct vms_proc *proc, *victim;
-    struct hlist_node *tmp;
+    exec_hash_node_t *tmp;
     int bkt;
 
-    mutex_lock(&vms_reap_mutex);
+    exec_mutex_lock(&vms_reap_mutex);
 
     for (;;) {
         victim = NULL;
 
-        spin_lock(&vms_proc_hash_lock);
-        hash_for_each_safe(vms_proc_hash, bkt, tmp, proc, hash_node) {
+        exec_lock(&vms_proc_hash_lock);
+        exec_hash_for_each_safe(vms_proc_hash, bkt, tmp, proc, hash_node) {
             if (!vms_proc_task_alive(proc)) {
-                hash_del_rcu(&proc->hash_node);
+                exec_hash_del_rcu(&proc->hash_node);
                 victim = proc;
                 break;
             }
         }
-        spin_unlock(&vms_proc_hash_lock);
+        exec_unlock(&vms_proc_hash_lock);
 
         if (!victim)
             break;
@@ -124,7 +123,7 @@ void vms_proc_reap_dead(void)
         vms_proc_free_claimed(victim);
     }
 
-    mutex_unlock(&vms_reap_mutex);
+    exec_mutex_unlock(&vms_reap_mutex);
 }
 
 /*
@@ -249,106 +248,92 @@ static void proc_fill_info(const struct vms_proc *proc,
 #define VMS_TIME_UNITS_PER_SEC 10000000ULL   /* 100ns units */
 
 /*
- * vms_proc_pin_task - the Linux task backing this PCB, with a reference
- * taken so the caller can use it after dropping vms_proc_hash_lock.
+ * vms_proc_pin_task - the host task backing this PCB, pinned so the caller
+ * can read its accounting after dropping vms_proc_hash_lock.
  *
- * Caller MUST hold vms_proc_hash_lock. get_task_struct() does not sleep,
- * so it is safe under the spinlock; the heavy, possibly-sleeping accounting
- * read (fill_proc_acct's get_task_mm/mmput) is then done by the caller
- * AFTER the lock is dropped, on the pinned task. Returns NULL if the
- * backing task has already exited (put nothing).
+ * Caller MUST hold vms_proc_hash_lock. exec_task_pin() does not sleep, so it
+ * is safe under the lock; the heavy, possibly-sleeping accounting read
+ * (fill_proc_acct's exec_task_read_acct) is then done by the caller AFTER the
+ * lock is dropped, on the pinned handle. Returns NULL if the backing process
+ * has already exited (nothing to unpin). The pinned handle is opaque -- the
+ * facility never inspects the host task, it only hands the handle back to the
+ * shim (exec_task_read_acct / exec_task_unpin).
  */
-static struct task_struct *vms_proc_pin_task(const struct vms_proc *proc)
+static exec_task_pin_t *vms_proc_pin_task(const struct vms_proc *proc)
 {
-    struct task_struct *task;
-
     if (!proc->pid_ref)
         return NULL;
 
-    rcu_read_lock();
-    task = pid_task(proc->pid_ref, PIDTYPE_PID);
-    if (task)
-        get_task_struct(task);
-    rcu_read_unlock();
-
-    return task;
+    return exec_task_pin(proc->pid_ref);
 }
 
 /*
  * fill_proc_acct - source the accounting fields of one row from the real
- * Linux task the executive owns (vms-a7e).
+ * host task the executive owns (vms-a7e).
  *
- * CALLED AFTER vms_proc_hash_lock IS DROPPED, on a task pinned by
- * vms_proc_pin_task(): get_task_mm()/mmput() below may sleep and must not
- * run under the spinlock.
+ * CALLED AFTER vms_proc_hash_lock IS DROPPED, on a handle pinned by
+ * vms_proc_pin_task(): exec_task_read_acct() below may sleep (its resident-set
+ * read acquires the task's mm) and must not run under the lock.
+ *
+ * WHERE THE PORTABILITY LINE FALLS (rd vms-846b). The HOST reads -- CPU time,
+ * page faults, creation instant, resident pages -- live behind the shim in
+ * exec_task_read_acct(), which hands back a substrate-neutral
+ * struct exec_proc_acct. This function keeps only the VMS SEMANTICS: the unit
+ * conversions (ns -> 10ms, wall-ns -> the 100ns-since-1858 quadword), the
+ * JPI$ field mapping and the fields_valid bookkeeping -- the authenticity-
+ * critical logic that must never drift between substrates. This is a host-task-
+ * PROPERTY read; it is NOT the userspace-arena mapping seam vms_lnm.c waits on.
  *
  * WHY THIS IS NOT A FABRICATION, and where the line is (CLAUDE.md Rule 11,
  * INV-6). CPU time, page faults and resident pages are REAL properties of
  * a real process, measured by the kernel that ran it -- the identical
  * argument the /proc-derived JPI$_CPUTIM already stood on (see jpi_cputim's
- * header in src/libvms/syssvc/sys_process.c). What changes here is WHO
- * reads them: the EXECUTIVE now holds them, sourced from the task its own
- * process table pins by pid_ref, so a VMS command (SHOW SYSTEM) READS an
- * executive facility instead of opening /proc itself as a second source.
- * That is the specific defect docs/oracle/vax73-show-system-process.md §5.1
- * left standing for Page flts/Pages ("/proc has a figure, but a VMS command
- * is a reader of an executive facility, not a second source").
+ * header in src/libvms/syssvc/sys_process.c). What changes vs. that reader is
+ * WHO holds them: the EXECUTIVE now does, sourced from the task its own process
+ * table pins by pid_ref, so a VMS command (SHOW SYSTEM) READS an executive
+ * facility instead of opening /proc itself as a second source. That is the
+ * specific defect docs/oracle/vax73-show-system-process.md §5.1 left standing
+ * for Page flts/Pages ("/proc has a figure, but a VMS command is a reader of an
+ * executive facility, not a second source").
  *
  * CARRIED ON REDACTED ROWS TOO. This is called for every row the scan
  * returns, redacted or not, because nothing in a SHOW SYSTEM row is
  * privileged on VMS -- the oracle printed the whole accounting row for a
  * cross-group process the caller could not $GETJPI (ibid. §1.2) -- and it
- * sources from the pinned task, never from info->linux_pid (which
+ * sources from the pinned handle, never from info->linux_pid (which
  * redaction zeroes). That is what closes the divergence §1.2 recorded.
  */
-static void fill_proc_acct(struct task_struct *task, struct vms_procinfo *info)
+static void fill_proc_acct(exec_task_pin_t *pin, struct vms_procinfo *info)
 {
-    u64 utime, stime;
-    unsigned long flts;
-    struct mm_struct *mm;
-    u64 created_boot_ns, now_boot_ns, wall_now_ns, created_wall_ns;
-    struct timespec64 now_wall;
+    struct exec_proc_acct acct;
 
-    /* JPI$_CPUTIM -- utime+stime in 10ms units, the quantity JPI$_CPUTIM
-     * counts. Read straight from the task's cputime fields (nanoseconds);
-     * no exported helper is used, so nothing here depends on a kernel
-     * symbol a module may not link against. For a single-threaded process
-     * (the DCL case) this is the whole-process figure; a multithreaded
-     * image under-counts its sibling threads' time, an honest approximation
-     * this comment states rather than hides. */
-    utime = task->utime;
-    stime = task->stime;
-    info->cputim = (uint32_t)((utime + stime) / 10000000ULL);   /* ns -> 10ms */
+    exec_task_read_acct(pin, &acct);
+
+    /* JPI$_CPUTIM -- CPU time in 10ms units, the quantity JPI$_CPUTIM counts.
+     * acct.cpu_ns is the task's user+system time in nanoseconds. For a
+     * single-threaded process (the DCL case) this is the whole-process figure;
+     * a multithreaded image under-counts its sibling threads' time, an honest
+     * approximation stated rather than hidden. */
+    info->cputim = (uint32_t)(acct.cpu_ns / 10000000ULL);   /* ns -> 10ms */
     info->fields_valid |= VMS_PI_V_CPUTIM;
 
     /* JPI$_PAGEFLTS -- soft + hard faults taken by this process. */
-    flts = task->min_flt + task->maj_flt;
-    info->pageflts = (uint32_t)flts;
+    info->pageflts = (uint32_t)acct.page_faults;
     info->fields_valid |= VMS_PI_V_PAGEFLTS;
 
-    /* JPI$_LOGINTIM -- process creation time as a VMS quadword. start_boottime
-     * is nanoseconds on the boot clock; convert to wall clock via the current
-     * boot/real pair, then to the VMS 100ns-since-1858 base. */
-    created_boot_ns = task->start_boottime;
-    now_boot_ns = ktime_get_boottime_ns();
-    ktime_get_real_ts64(&now_wall);
-    wall_now_ns = (u64)now_wall.tv_sec * NSEC_PER_SEC + now_wall.tv_nsec;
-    created_wall_ns = (now_boot_ns >= created_boot_ns)
-                        ? wall_now_ns - (now_boot_ns - created_boot_ns)
-                        : wall_now_ns;
-    info->logintim = created_wall_ns / 100ULL
+    /* JPI$_LOGINTIM -- process creation time as a VMS quadword. acct.create_wall_ns
+     * is nanoseconds since the Unix epoch (the backend did the host-clock
+     * conversion); rebase to the VMS 100ns-since-1858 quadword here. */
+    info->logintim = acct.create_wall_ns / 100ULL
                    + VMS_EPOCH_OFFSET_SEC * VMS_TIME_UNITS_PER_SEC;
     info->fields_valid |= VMS_PI_V_LOGINTIM;
 
-    /* JPI$_PPGCNT -- resident set size in pages. get_task_mm may sleep and
-     * returns NULL for a kernel thread (no user address space); a process
-     * with no mm reports no page count rather than a zero the reader could
-     * not tell from a measured one. */
-    mm = get_task_mm(task);
-    if (mm) {
-        info->pages = (uint32_t)get_mm_rss(mm);
+    /* JPI$_PPGCNT -- resident set size in pages. A process with no user address
+     * space (has_rss == 0, e.g. a kernel thread) reports no page count rather
+     * than a zero the reader could not tell from a measured one. */
+    if (acct.has_rss) {
+        info->pages = (uint32_t)acct.rss_pages;
         info->fields_valid |= VMS_PI_V_PAGES;
-        mmput(mm);
     }
 }
 
@@ -390,7 +375,7 @@ static struct vms_proc *find_by_name(uint32_t group, const char *name)
     struct vms_proc *proc;
     int bkt;
 
-    hash_for_each(vms_proc_hash, bkt, proc, hash_node) {
+    exec_hash_for_each(vms_proc_hash, bkt, proc, hash_node) {
         if (uic_group(proc->uic) != group)
             continue;
         if (proc->prcnam[0] == '\0')
@@ -411,7 +396,7 @@ static struct vms_proc *find_by_vms_pid(uint32_t vms_pid)
     struct vms_proc *proc;
     int bkt;
 
-    hash_for_each(vms_proc_hash, bkt, proc, hash_node) {
+    exec_hash_for_each(vms_proc_hash, bkt, proc, hash_node) {
         if (proc->vms_pid == vms_pid)
             return proc;
     }
@@ -431,7 +416,7 @@ long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg)
     struct vms_proc *clash;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     if (!name_is_valid(args.prcnam)) {
@@ -442,21 +427,21 @@ long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg)
     /* A name freed by an exited process must be available again. */
     vms_proc_reap_dead();
 
-    spin_lock(&vms_proc_hash_lock);
+    exec_lock(&vms_proc_hash_lock);
     clash = find_by_name(uic_group(proc->uic), args.prcnam);
     if (clash && clash != proc) {
-        spin_unlock(&vms_proc_hash_lock);
+        exec_unlock(&vms_proc_hash_lock);
         args.status = SS__DUPLNAM;
         goto out;
     }
     memcpy(proc->prcnam, args.prcnam, VMS_PRCNAM_SIZE);
     proc->prcnam[VMS_PRCNAM_SIZE - 1] = '\0';
-    spin_unlock(&vms_proc_hash_lock);
+    exec_unlock(&vms_proc_hash_lock);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -491,10 +476,10 @@ long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_getjpi_args args;
     struct vms_proc *target;
-    struct task_struct *acct_task;
+    exec_task_pin_t *acct_task;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     if (args.select == VMS_JPI_SEL_PRCNAM && !name_is_valid(args.sel_prcnam)) {
@@ -505,7 +490,7 @@ long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg)
 
     vms_proc_reap_dead();
 
-    spin_lock(&vms_proc_hash_lock);
+    exec_lock(&vms_proc_hash_lock);
     switch (args.select) {
     case VMS_JPI_SEL_SELF:
         target = proc;
@@ -518,21 +503,21 @@ long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg)
         break;
     default:
         target = NULL;
-        spin_unlock(&vms_proc_hash_lock);
+        exec_unlock(&vms_proc_hash_lock);
         memset(&args.info, 0, sizeof(args.info));
         args.status = SS__BADPARAM;
         goto out;
     }
 
     if (!target) {
-        spin_unlock(&vms_proc_hash_lock);
+        exec_unlock(&vms_proc_hash_lock);
         memset(&args.info, 0, sizeof(args.info));
         args.status = SS__NONEXPR;
         goto out;
     }
 
     if (!vms_proc_may_read(proc, target)) {
-        spin_unlock(&vms_proc_hash_lock);
+        exec_unlock(&vms_proc_hash_lock);
         memset(&args.info, 0, sizeof(args.info));
         args.status = SS__NOPRIV;
         goto out;
@@ -540,19 +525,19 @@ long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg)
 
     proc_fill_info(target, &args.info, true);
     acct_task = vms_proc_pin_task(target);
-    spin_unlock(&vms_proc_hash_lock);
+    exec_unlock(&vms_proc_hash_lock);
 
     /* Accounting is sourced from the pinned task AFTER the lock is dropped
      * (fill_proc_acct may sleep). See its header. */
     if (acct_task) {
         fill_proc_acct(acct_task, &args.info);
-        put_task_struct(acct_task);
+        exec_task_unpin(acct_task);
     }
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -648,7 +633,7 @@ long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg)
     uint32_t cur_uic;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     if (!username_is_valid(args.username)) {
@@ -665,8 +650,8 @@ long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg)
      * hash_lock OUTER, mode_lock INNER (see struct vms_proc). The pair
      * is held together only here, so there is no ordering to violate.
      */
-    spin_lock(&vms_proc_hash_lock);
-    spin_lock(&proc->mode_lock);
+    exec_lock(&vms_proc_hash_lock);
+    exec_lock(&proc->mode_lock);
 
     has_setprv = (proc->cur_privs & VMS_PRV_M_SETPRV) != 0;
     authorized = proc->perm_privs;
@@ -682,8 +667,8 @@ long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg)
          */
         if ((args.authorized_privs & ~authorized) != 0 ||
             args.uic != cur_uic) {
-            spin_unlock(&proc->mode_lock);
-            spin_unlock(&vms_proc_hash_lock);
+            exec_unlock(&proc->mode_lock);
+            exec_unlock(&vms_proc_hash_lock);
             args.status = SS__NOPRIV;
             goto out;
         }
@@ -707,8 +692,8 @@ long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg)
          * buffer.
          */
         if (strncmp(proc->username, args.username, VMS_USERNAME_SIZE) != 0) {
-            spin_unlock(&proc->mode_lock);
-            spin_unlock(&vms_proc_hash_lock);
+            exec_unlock(&proc->mode_lock);
+            exec_unlock(&vms_proc_hash_lock);
             args.status = SS__NOPRIV;
             goto out;
         }
@@ -731,13 +716,13 @@ long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg)
      */
     proc->cur_privs  = args.authorized_privs;
 
-    spin_unlock(&proc->mode_lock);
-    spin_unlock(&vms_proc_hash_lock);
+    exec_unlock(&proc->mode_lock);
+    exec_unlock(&vms_proc_hash_lock);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -769,16 +754,16 @@ long vms_ioctl_establish_system(struct vms_proc *proc, unsigned long arg)
     struct vms_establish_system_args args;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    if (!capable(CAP_SYS_ADMIN)) {
+    if (!exec_current_is_privileged()) {
         args.status = SS__NOPRIV;
         goto out;
     }
 
-    spin_lock(&vms_proc_hash_lock);
-    spin_lock(&proc->mode_lock);
+    exec_lock(&vms_proc_hash_lock);
+    exec_lock(&proc->mode_lock);
 
     memset(proc->username, 0, VMS_USERNAME_SIZE);
     strncpy(proc->username, "SYSTEM", VMS_USERNAME_SIZE - 1);
@@ -786,13 +771,13 @@ long vms_ioctl_establish_system(struct vms_proc *proc, unsigned long arg)
     proc->perm_privs = VMS_PRV_M_SYSTEM_ALL;
     proc->cur_privs  = VMS_PRV_M_SYSTEM_ALL;
 
-    spin_unlock(&proc->mode_lock);
-    spin_unlock(&vms_proc_hash_lock);
+    exec_unlock(&proc->mode_lock);
+    exec_unlock(&vms_proc_hash_lock);
 
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -827,18 +812,18 @@ long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_procscan_args args;
     struct vms_proc *cur, *target = NULL;
-    struct task_struct *acct_task;
+    exec_task_pin_t *acct_task;
     uint32_t ordinal = 0;
     int bkt;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
     vms_proc_reap_dead();
 
-    spin_lock(&vms_proc_hash_lock);
-    hash_for_each(vms_proc_hash, bkt, cur, hash_node) {
+    exec_lock(&vms_proc_hash_lock);
+    exec_hash_for_each(vms_proc_hash, bkt, cur, hash_node) {
         if (ordinal == args.index) {
             target = cur;
             break;
@@ -847,7 +832,7 @@ long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg)
     }
 
     if (!target) {
-        spin_unlock(&vms_proc_hash_lock);
+        exec_unlock(&vms_proc_hash_lock);
         memset(&args.info, 0, sizeof(args.info));
         args.status = SS__NONEXPR;
         goto out;
@@ -855,7 +840,7 @@ long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg)
 
     proc_fill_info(target, &args.info, vms_proc_may_read(proc, target));
     acct_task = vms_proc_pin_task(target);
-    spin_unlock(&vms_proc_hash_lock);
+    exec_unlock(&vms_proc_hash_lock);
 
     /* Accounting is carried on EVERY row -- redacted or not -- and sourced
      * from the pinned task after the lock is dropped (fill_proc_acct may
@@ -863,14 +848,14 @@ long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg)
      * and docs/oracle/vax73-show-system-process.md §1.2. */
     if (acct_task) {
         fill_proc_acct(acct_task, &args.info);
-        put_task_struct(acct_task);
+        exec_task_unpin(acct_task);
     }
 
     args.index++;
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }

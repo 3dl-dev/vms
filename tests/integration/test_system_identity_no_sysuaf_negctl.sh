@@ -29,7 +29,7 @@ cp -a "$SRC_ROOT/src" "$ROOT/src"
 
 PROVISION_C="$ROOT/src/ovmx_provision/ovmx_provision.c"
 INTERNAL_H="$ROOT/src/kernel/vms_internal.h"
-PROCTAB_C="$ROOT/src/kernel/vms_proctab.c"
+PROCTAB_C="$ROOT/src/kernel-core/vms_proctab.c"
 IOCTL_H="$ROOT/src/kernel/vms_ioctl.h"
 cp "$PROVISION_C" "$WORK/ovmx_provision.c.orig"
 cp "$INTERNAL_H" "$WORK/vms_internal.h.orig"

@@ -40,6 +40,15 @@
 #include <linux/uaccess.h>
 #include <linux/compiler.h>   /* __user */
 #include <linux/gfp.h>
+/* Phase F (host-task / RCU-lite / sleepable mutex) backing headers. */
+#include <linux/pid.h>            /* struct pid, pid_task, PIDTYPE_PID */
+#include <linux/capability.h>     /* capable, CAP_SYS_ADMIN */
+#include <linux/mutex.h>          /* struct mutex, DEFINE_MUTEX, mutex_* */
+#include <linux/rcupdate.h>       /* rcu_read_lock/unlock, call_rcu, rcu_head */
+#include <linux/sched/cputime.h>  /* task cputime fields */
+#include <linux/sched/mm.h>       /* get_task_mm, mmput */
+#include <linux/mm.h>             /* get_mm_rss */
+#include <linux/timekeeping.h>    /* ktime_get_boottime_ns, ktime_get_real_ts64 */
 
 /* ---- primitive types ---- */
 typedef spinlock_t        exec_lock_t;
@@ -116,5 +125,101 @@ static inline void *exec_zalloc(size_t n)        { return kzalloc(n, GFP_KERNEL)
 static inline void *exec_zalloc_atomic(size_t n) { return kzalloc(n, GFP_ATOMIC); }
 static inline void *exec_alloc(size_t n)         { return kmalloc(n, GFP_KERNEL); }
 static inline void  exec_free(void *p)           { kfree(p); }
+
+/* ---- 5. host-task binding (Phase F; see exec_kbackend.h) ----
+ * The opaque handle is the thread group's struct pid (task_tgid); the pinned
+ * handle is a reference-counted struct task_struct. Both forward to exactly the
+ * primitives vms_proctab.c used before this seam existed, so the module is
+ * behaviour-identical. */
+typedef struct pid          exec_task_ref_t;   /* PCB pid_ref: the tgid's pid */
+typedef struct task_struct  exec_task_pin_t;   /* a pinned (referenced) task */
+
+static inline int exec_current_is_privileged(void) { return capable(CAP_SYS_ADMIN); }
+
+static inline int exec_task_alive(exec_task_ref_t *ref)
+{
+	struct task_struct *task;
+
+	if (!ref)
+		return 0;
+	rcu_read_lock();
+	task = pid_task(ref, PIDTYPE_PID);
+	rcu_read_unlock();
+	return task != NULL;
+}
+
+static inline exec_task_pin_t *exec_task_pin(exec_task_ref_t *ref)
+{
+	struct task_struct *task;
+
+	if (!ref)
+		return NULL;
+	rcu_read_lock();
+	task = pid_task(ref, PIDTYPE_PID);
+	if (task)
+		get_task_struct(task);
+	rcu_read_unlock();
+	return task;
+}
+
+static inline void exec_task_unpin(exec_task_pin_t *pin) { put_task_struct(pin); }
+
+/*
+ * exec_task_read_acct - the exact reads vms_proctab.c's fill_proc_acct did,
+ * moved behind the seam so the facility keeps only the VMS unit/field mapping.
+ * cpu_ns = utime+stime (ns); page_faults = min+maj faults; create_wall_ns is
+ * the boot-clock start converted to a Unix-epoch wall time via the current
+ * boot/real pair; rss via get_task_mm/get_mm_rss (get_task_mm may sleep, so
+ * this whole op may sleep and must run with no lock held). NUL of a kernel
+ * thread's mm leaves has_rss 0, as before.
+ */
+static inline void exec_task_read_acct(exec_task_pin_t *pin,
+				       struct exec_proc_acct *out)
+{
+	struct task_struct *task = pin;
+	u64 created_boot_ns, now_boot_ns, wall_now_ns;
+	struct timespec64 now_wall;
+	struct mm_struct *mm;
+
+	out->cpu_ns      = task->utime + task->stime;
+	out->page_faults = (u64)task->min_flt + (u64)task->maj_flt;
+
+	created_boot_ns = task->start_boottime;
+	now_boot_ns     = ktime_get_boottime_ns();
+	ktime_get_real_ts64(&now_wall);
+	wall_now_ns     = (u64)now_wall.tv_sec * NSEC_PER_SEC + now_wall.tv_nsec;
+	out->create_wall_ns = (now_boot_ns >= created_boot_ns)
+				? wall_now_ns - (now_boot_ns - created_boot_ns)
+				: wall_now_ns;
+
+	out->rss_pages = 0;
+	out->has_rss   = 0;
+	mm = get_task_mm(task);
+	if (mm) {
+		out->rss_pages = (u64)get_mm_rss(mm);
+		out->has_rss   = 1;
+		mmput(mm);
+	}
+}
+
+/* ---- 6. RCU-lite deferred reclaim (Phase F; see exec_kbackend.h) ---- */
+typedef struct rcu_head exec_rcu_head_t;
+
+static inline void exec_rcu_read_lock(void)   { rcu_read_lock(); }
+static inline void exec_rcu_read_unlock(void) { rcu_read_unlock(); }
+static inline void exec_free_deferred(exec_rcu_head_t *h,
+				      void (*fn)(exec_rcu_head_t *))
+{
+	call_rcu(h, fn);
+}
+
+/* ---- 7. sleepable mutex (Phase F; see exec_kbackend.h) ---- */
+typedef struct mutex exec_mutex_t;
+
+#define EXEC_DEFINE_MUTEX(name) DEFINE_MUTEX(name)
+static inline void exec_mutex_init(exec_mutex_t *m)    { mutex_init(m); }
+static inline void exec_mutex_lock(exec_mutex_t *m)    { mutex_lock(m); }
+static inline void exec_mutex_unlock(exec_mutex_t *m)  { mutex_unlock(m); }
+static inline void exec_mutex_destroy(exec_mutex_t *m) { mutex_destroy(m); }
 
 #endif /* OVMX_EXEC_KBACKEND_LINUX_H */

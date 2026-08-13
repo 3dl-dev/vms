@@ -78,6 +78,7 @@
 #include <sys/proc.h>      /* struct proc, curproc, proc_find, p_pid (Phase F) */
 #include <sys/kauth.h>     /* kauth_cred_get, kauth_authorize_generic (Phase F) */
 #include <sys/errno.h>     /* EWOULDBLOCK, EINTR, ERESTART (Phase G cv timeout) */
+#include <sys/atomic.h>    /* membar_producer / membar_consumer (vms-d61) */
 
 /* ---- primitive types ---- */
 typedef kmutex_t   exec_lock_t;
@@ -406,5 +407,49 @@ exec_blockdev_lookup(const char *path, exec_dev_t *out)
 }
 static __inline unsigned int exec_blockdev_major(exec_dev_t dev) { return (unsigned int)major(dev); }
 static __inline unsigned int exec_blockdev_minor(exec_dev_t dev) { return (unsigned int)minor(dev); }
+
+/* ---- 9. store/load memory barriers (vms-d61; see exec_kbackend.h) ----
+ * Real mapping: membar_producer/membar_consumer are the portable NetBSD
+ * store-store / load-load barriers (membar_ops(3), <sys/atomic.h> included
+ * above) -- the exact twins of Linux smp_wmb/smp_rmb, and precisely
+ * the fences a seqlock producer/consumer pair needs. Type-checked here; the
+ * logical-name facility that calls exec_membar_producer (vms_lnm.c) is not in
+ * this module's SRCS yet (only vms_eflag.c is), so the producer is never called
+ * on NetBSD today, but the mapping is real, not a stub. */
+static __inline void exec_membar_producer(void) { membar_producer(); }
+static __inline void exec_membar_consumer(void) { membar_consumer(); }
+
+/* ---- 10. userspace-publishable arena (vms-d61; see exec_kbackend.h) ----
+ *
+ * COMPILE STATUS, and why this side is a contract-only twin (the exec_rbtree /
+ * exec_blockdev precedent). vms_lnm.c -- the only facility that allocates an
+ * arena -- is NOT in this module's SRCS yet (only vms_eflag.c is), so these are
+ * type-checked-at-most and never called on NetBSD. The REAL NetBSD binding is a
+ * uvm anonymous object: exec_arena_alloc would uao_create(n, 0) and map its
+ * pages into the kernel (uvm_map with UVM_ADV_NORMAL) to get a writable kernel
+ * VA, taking a uao_reference the char-device mmap glue later hands to a process
+ * with uvm_map + uvm_map_pageable read-only (the uvm twin of Linux
+ * remap_vmalloc_range + clearing VM_MAYWRITE); exec_arena_free would uvm_unmap
+ * the kernel range and uao_detach. Binding that -- and the mmap-time publish in
+ * the NetBSD char-device rind -- is the lnm-on-NetBSD proof's concern (a later
+ * item, following exec_blockdev). Until then this is a compile-safe documented
+ * stub that touches no uvm internals and reports failure, naming its real
+ * source here. It is never on a live path (INV-6 / Rule 11: it allocates
+ * nothing and fabricates nothing -- it fails honestly). */
+typedef void *exec_arena_t;
+static __inline void *
+exec_arena_alloc(size_t n)
+{
+	/* vms-d61: bind to uao_create(n,0) + uvm_map for a writable kernel VA on
+	 * the lnm-on-NetBSD proof (rd, later). Never reached today (vms_lnm.c is
+	 * not in this module's SRCS). */
+	(void)n;
+	return NULL;
+}
+static __inline void
+exec_arena_free(void *arena)
+{
+	(void)arena;   /* vms-d61: uvm_unmap the kernel range + uao_detach. */
+}
 
 #endif /* OVMX_EXEC_KBACKEND_NETBSD_H */

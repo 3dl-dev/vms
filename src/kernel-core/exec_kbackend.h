@@ -281,6 +281,63 @@
  *   unsigned int exec_blockdev_minor(exec_dev_t dev)
  *        the major / minor of a resolved exec_dev_t. Linux: MAJOR() / MINOR().
  *        NetBSD: major() / minor() (real -- these are portable dev_t accessors).
+ *
+ * 9. Store/load memory barriers  (vms-d61; called ONLY from a facility that
+ *    publishes a lock-free snapshot to userspace -- today the logical-name
+ *    arena's seqlock in vms_lnm.c). These are the ordering primitives a
+ *    seqlock needs: the WRITER bumps the generation counter odd, does its
+ *    stores, bumps it even, and fences so a userspace READER never sees the
+ *    counter move before the stores it guards. No lock is involved (the reader
+ *    is in another address space over the mmap), so a plain memory barrier --
+ *    NOT an exec_lock -- is what orders the two sides.
+ *
+ *   void exec_membar_producer(void)
+ *        a STORE-STORE barrier: every store BEFORE it is globally visible
+ *        before any store AFTER it. The seqlock writer calls it between the
+ *        odd-bump and the entry stores, and again between the entry stores and
+ *        the even-bump, so the generation transitions bracket the payload.
+ *        Linux: smp_wmb(). NetBSD: membar_producer().
+ *   void exec_membar_consumer(void)
+ *        the LOAD-LOAD twin: every load AFTER it happens after every load
+ *        BEFORE it. Provided for contract symmetry -- the seqlock READ side
+ *        lives in userspace (vms_kif's arena reader), so no in-kernel facility
+ *        calls this today; it documents the barrier the reader pairs with.
+ *        Linux: smp_rmb(). NetBSD: membar_consumer().
+ *
+ * 10. Userspace-publishable arena  (vms-d61; called ONLY from a facility that
+ *    owns a kernel data structure the host char device maps read-only into
+ *    every process -- today the logical-name arena, vms_lnm.c). This is the
+ *    ALLOCATION half of that seam and NOTHING MORE. The FACILITY allocates the
+ *    arena here, writes it under its own exec_lock, and publishes updates with
+ *    exec_membar_producer; it hands the base+size to the host module's mmap
+ *    handler through a plain accessor.
+ *
+ *   void *exec_arena_alloc(size_t n)
+ *        allocate a ZEROED region of n bytes whose pages the host char
+ *        device's mmap handler can later publish read-only to a process.
+ *        Returns a kernel virtual address the facility writes through with
+ *        ordinary stores (under its lock), or NULL on failure. The SAME
+ *        pointer is the handle the mmap glue maps. Linux: vmalloc_user(n)
+ *        (page-aligned, zeroed, and the one allocation remap_vmalloc_range
+ *        accepts). NetBSD: a uvm-anonymous-object-backed allocation
+ *        (contract-only twin, exec_rbtree/blockdev precedent -- vms_lnm.c is
+ *        not in the NetBSD module's SRCS, so this side is type-checked-at-most,
+ *        never run, and names its real source in the backend comment).
+ *   void exec_arena_free(void *arena)
+ *        free an exec_arena_alloc block. Linux: vfree(). NetBSD: release the
+ *        uvm object (contract-only twin).
+ *
+ *   WHERE THE MMAP-TIME MAPPING IS **NOT**. Publishing the arena INTO a
+ *   process -- remap_vmalloc_range + clearing VM_MAYWRITE on Linux; uao_map /
+ *   uvm_map on NetBSD -- is HOST CHAR-DEVICE GLUE, not facility logic, and does
+ *   NOT cross this seam. It lives in the host module's /dev mmap handler
+ *   (src/kernel/vms_module.c's vms_lnm_mmap, the Linux rind), which asks the
+ *   facility for the arena base+size and does the substrate-specific mapping
+ *   with the raw host primitives. The seam is deliberately "give me an arena I
+ *   can write and a base the mmap handler can map" and stops there: the
+ *   facility never names struct vm_area_struct, remap_vmalloc_range, VM_* or
+ *   PAGE_* (design record docs/design-netbsd-executive-core.md §2, the
+ *   host-mm coupling stays in the rind like registration does).
  */
 
 #ifndef OVMX_EXEC_KBACKEND_H

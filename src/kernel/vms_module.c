@@ -26,6 +26,8 @@
 #include <linux/pid.h>
 #include <linux/sched.h>
 #include <linux/sched/signal.h>     /* thread_group_empty() */
+#include <linux/mm.h>               /* vm_area_struct, vm_flags_clear, PAGE_* (vms_lnm_mmap) */
+#include <linux/vmalloc.h>          /* remap_vmalloc_range (vms_lnm_mmap, vms-d61) */
 
 #include "vms_internal.h"
 
@@ -855,6 +857,56 @@ static int vms_dev_release(struct inode *inode, struct file *filp)
     proc = vms_proc_find_or_err();
     if (proc)
         vms_proc_free(proc);
+
+    return 0;
+}
+
+/*
+ * vms_lnm_mmap - hand userspace a READ-ONLY view of the executive-resident
+ * logical-name arena (vms-d37; the CHAR-DEVICE half of the arena seam, vms-d61).
+ *
+ * The arena itself is owned, allocated and written by the substrate-agnostic
+ * facility (src/kernel-core/vms_lnm.c) through the exec_arena seam
+ * (exec_kbackend.h §10). The MMAP-TIME MAPPING here -- Linux mm machinery:
+ * remap_vmalloc_range and clearing VM_MAYWRITE -- is host char-device glue and
+ * stays in the Linux module rind, NOT in the portable facility (design record
+ * docs/design-netbsd-executive-core.md §2, the host-mm coupling stays in the
+ * rind exactly like registration does). This handler asks the facility for the
+ * arena base+size (vms_lnm_arena_base/_size) and does the Linux mapping itself;
+ * the facility never names struct vm_area_struct, remap_vmalloc_range, VM_* or
+ * PAGE_*.
+ *
+ * The mapping is read-only and VM_MAYWRITE is cleared so mprotect() cannot
+ * turn it writable afterwards -- this is the direct analogue of VMS
+ * protecting system space by processor access mode (design §2.4). The MMU,
+ * not a convention, is what stops a process corrupting the system logical
+ * name table.
+ */
+static int vms_lnm_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+    void *base = vms_lnm_arena_base();
+    unsigned long size = vma->vm_end - vma->vm_start;
+    int ret;
+
+    (void)filp;
+
+    if (!base)
+        return -ENODEV;
+
+    /* Only the arena, only from its start. */
+    if (vma->vm_pgoff != (VMS_LNM_MMAP_OFFSET >> PAGE_SHIFT))
+        return -EINVAL;
+    if (size > PAGE_ALIGN(vms_lnm_arena_size()))
+        return -EINVAL;
+
+    /* Reject any write intent, now and forever. */
+    if (vma->vm_flags & VM_WRITE)
+        return -EACCES;
+    vm_flags_clear(vma, VM_MAYWRITE);
+
+    ret = remap_vmalloc_range(vma, base, 0);
+    if (ret < 0)
+        return ret;
 
     return 0;
 }

@@ -1,46 +1,46 @@
 {
   "version": "baseline-2026-08-13",
   "overall": {
-    "count": 417,
+    "count": 416,
     "by_status": {
       "verified": 27,
-      "implemented": 210,
-      "partial": 44,
+      "implemented": 209,
+      "partial": 45,
       "stub": 19,
       "designed": 2,
-      "absent": 115
+      "absent": 114
     },
     "by_authenticity": {
       "real": 234,
       "n/a": 103,
       "advisory": 34,
-      "facade-risk": 46
+      "facade-risk": 45
     },
-    "met": 237,
-    "in_progress": 44,
-    "not_started": 136,
-    "facade_risk": 46
+    "met": 236,
+    "in_progress": 45,
+    "not_started": 135,
+    "facade_risk": 45
   },
   "overall_in_scope": {
-    "count": 373,
+    "count": 372,
     "by_status": {
       "verified": 27,
-      "implemented": 210,
-      "partial": 42,
+      "implemented": 209,
+      "partial": 43,
       "stub": 16,
       "designed": 2,
-      "absent": 76
+      "absent": 75
     },
     "by_authenticity": {
       "real": 233,
       "n/a": 63,
       "advisory": 33,
-      "facade-risk": 44
+      "facade-risk": 43
     },
-    "met": 237,
-    "in_progress": 42,
-    "not_started": 94,
-    "facade_risk": 44
+    "met": 236,
+    "in_progress": 43,
+    "not_started": 93,
+    "facade_risk": 43
   },
   "by_domain": {
     "programming-interfaces": {
@@ -169,24 +169,24 @@
       "facade_risk": 0
     },
     "networking": {
-      "count": 11,
+      "count": 10,
       "by_status": {
         "verified": 0,
-        "implemented": 2,
-        "partial": 1,
+        "implemented": 1,
+        "partial": 2,
         "stub": 1,
         "designed": 0,
-        "absent": 7
+        "absent": 6
       },
       "by_authenticity": {
         "n/a": 5,
         "real": 3,
-        "facade-risk": 3
+        "facade-risk": 2
       },
-      "met": 2,
-      "in_progress": 1,
-      "not_started": 8,
-      "facade_risk": 3
+      "met": 1,
+      "in_progress": 2,
+      "not_started": 7,
+      "facade_risk": 2
     },
     "runtime-arch": {
       "count": 13,
@@ -1576,17 +1576,12 @@
       "authenticity": "n/a",
       "scope_1_0": "stretch"
     },
-    "ssh$ssh$vmsshd-daemon": {
-      "status": "implemented",
+    "ssh$ssh$remote-login": {
+      "status": "partial",
       "authenticity": "real",
       "scope_1_0": "in"
     },
-    "ssh$ssh$pid1-wiring": {
-      "status": "absent",
-      "authenticity": "facade-risk",
-      "scope_1_0": "in"
-    },
-    "ssh$ssh$credential-drop": {
+    "ssh$ssh$identity": {
       "status": "absent",
       "authenticity": "facade-risk",
       "scope_1_0": "in"

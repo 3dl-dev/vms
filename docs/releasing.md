@@ -15,7 +15,7 @@ artifacts out and write the notes" step left.
 | **Notes** | `tools/gen_release_notes.py` | Release notes generated from merged git history since the previous release tag — never hand-maintained. |
 | **Coverage** | `tools/compat/snapshot.py` + `render_compat.py --check` | The Compatibility Surface Register validates clean, and a per-cut coverage snapshot (`docs/compat/snapshots/<version>.json` + `compat-coverage.json` in the bundle) plus a compatibility-surface delta block (counts + V1 met, no percentages) in the notes are produced. See `docs/compat/REFRESH.md`. |
 | **Prove** | CI: `cut-release-reproducible`, `release-acceptance`, `upgrade-e2e` | Two independent cuts are byte-identical; the cut artifact boots and reports the shipped version; a `0.N→0.N+1` upgrade preserves site config. |
-| **Document** | `tools/check_guide_drift.py` + `guide_drift_gate`; the site-manual drift gate in `openvmx-site` | `docs/install-guide.md` / `docs/upgrade-guide.md` cannot drift from the e2e gates that prove them; the public Installation Guide's install commands are re-checked against `tests/qemu/test_product_install_e2e.sh` on every cut and on every docs PR. |
+| **Document** | `tools/check_guide_drift.py` + `guide_drift_gate`; the site-manual drift + grounding gates in `openvmx-site` | `docs/install-guide.md` / `docs/upgrade-guide.md` cannot drift from the e2e gates that prove them; the public Installation Guide's install commands are re-checked against `tests/qemu/test_product_install_e2e.sh` on every cut and on every docs PR; and at a major/minor cut its capability claims are checked against the compat register by `check_manual_grounding.py`. |
 | **Publish** | `tools/publish-release.sh` + `.github/workflows/release.yml` | Bundle artifacts + generated notes attached to a GitHub Release; notes recorded in-tree under `docs/release-notes/`. |
 
 ## Cutting a release locally
@@ -101,7 +101,9 @@ is implemented enough to describe. Ground every manual in what shipped: the
 Compatibility Surface Register (`docs/compat/`) and the e2e gates are the source
 of truth. Do not document a facility the register marks absent, partial, or
 facade-risk as if it worked — that is the LARP the authenticity invariants
-exist to stop.
+exist to stop. The manual-grounding gate described below enforces this
+mechanically at the cut, so a stale or over-claiming manual fails the build
+rather than shipping.
 
 **Point releases (0.3-x): do not rewrite them.** A point cut is maintenance and
 fixes; it carries no doc-authoring obligation. The mechanical checks below still
@@ -119,14 +121,32 @@ The mechanical checks run on every cut:
   the `data-ovmx-version` token from the deployed tag, so the "Applies to" line
   follows the release. Confirm it landed.
 
+At a major or minor cut, the grounding check runs too:
+
+- **Manual claims match the register — the manual-grounding gate is green.** This
+  is the mechanical backstop for the hand review below. Each manual declares, in
+  a hidden manifest (`ovmx:covers` / `ovmx:not-yet`), the `docs/compat/` facility
+  tokens it asserts as working and the ones it defers as not-yet-available.
+  `openvmx-site`'s `tools/check_manual_grounding.py` renders
+  `build/compat-surface.json` from the register at the release tag and checks the
+  manifest against it: a deferred facility that has reached implemented/verified
+  fails as a stale manual, and a claimed facility the register marks
+  absent/designed/stub or facade-risk fails as an over-claim. The gate runs on
+  major and minor cuts only — a point tag (`0.3-4`, `V0.3-9`) skips it, since a
+  point release carries no doc-authoring obligation — and on every docs PR
+  (`docs-drift.yml`), so grounding drift is caught before merge as well. It
+  compares facility tokens, not prose, so a reworded manual cannot hide a claim
+  the register does not support.
+
 At a major or minor cut, also review by hand:
 
 - **Appendix C and the capability claims match `docs/compat/`.** Re-read the
   Installation Guide's "not yet available" appendix, and any claim about what
   works, against the current Compatibility Surface Register. A facility that
   reached implemented this cut graduates out of the appendix; one that regressed
-  goes back in. Bump the edition and date in the revision-history table whenever
-  the manual's content changed.
+  goes back in. When you move a facility, update the manifest above so the gate
+  tracks the change. Bump the edition and date in the revision-history table
+  whenever the manual's content changed.
 - **Drift found is filed, not shipped.** When a manual and the code disagree,
   open a documentation bug and hold the manual change. Do not edit the manual to
   match a claim the register does not carry.

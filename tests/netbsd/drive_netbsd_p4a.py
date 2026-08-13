@@ -251,6 +251,15 @@ def main():
         a.child = child
 
         login(child, cmd_timeout)
+        # Tell anita we are already logged in: this driver logs in itself (via the
+        # custom-prompt console driver), so anita's own a.halt() must NOT re-run
+        # its login(), which expects the default `login:'/`# ' prompts and would
+        # block forever against our unique prompt -- leaving the final a.halt()
+        # hung until the per-command deadline and starving the "ALL CHECKS PASSED"
+        # banner even though every proof already passed (rd vms-f8a). With this
+        # set, a.halt() short-circuits login() and just sends `halt' + waits
+        # (bounded) for the shutdown confirmation.
+        a.is_logged_in = True
         log("logged in")
 
         # ---- stage the sources from the CD --------------------------------

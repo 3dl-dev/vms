@@ -308,19 +308,44 @@ exec_current_gid(void)
 static __inline int
 exec_task_alive(exec_task_ref_t *ref)
 {
+	int alive;
+
 	if (ref == NULL)
 		return 0;
-	return proc_find(ref->pid) != NULL;
+	/*
+	 * proc_find(9) REQUIRES proc_lock held: proc_find_internal() asserts
+	 * KASSERT(mutex_owned(&proc_lock)) and reads the global pid_table.
+	 * Calling it lock-free races the pid_table against concurrent fork/exit
+	 * on another CPU and can spuriously return NULL for a still-live process
+	 * -- which made vms_proc_reap_dead() reap a running, $SETPRN-named
+	 * process between one reader's $GETJPI (which saw it) and the next
+	 * reader's $PROCESS_SCAN (which then could not enumerate it): rd vms-f8a,
+	 * the P4-A proctab flake. The Linux backend already takes the equivalent
+	 * read-side lock (rcu_read_lock around pid_task); match it here so
+	 * liveness is reliable and INV-DRIFT holds (thin-backend specifics only).
+	 */
+	mutex_enter(&proc_lock);
+	alive = (proc_find(ref->pid) != NULL);
+	mutex_exit(&proc_lock);
+	return alive;
 }
 
 static __inline exec_task_pin_t *
 exec_task_pin(exec_task_ref_t *ref)
 {
+	exec_task_pin_t *pin;
+
 	if (ref == NULL)
 		return NULL;
-	/* vms-9dc: take a real proc reference (proc_find under proc_lock, hold
-	 * it across the accounting read); the cast keeps the handle opaque. */
-	return (exec_task_pin_t *)proc_find(ref->pid);
+	/* Same proc_lock(9) contract as exec_task_alive: the lookup MUST run
+	 * under proc_lock. The accounting read (exec_task_read_acct) is a
+	 * documented zero-stub that never dereferences this handle, so no proc
+	 * reference is carried past the lookup yet (vms-9dc will take one); the
+	 * cast keeps the handle opaque. */
+	mutex_enter(&proc_lock);
+	pin = (exec_task_pin_t *)proc_find(ref->pid);
+	mutex_exit(&proc_lock);
+	return pin;
 }
 
 static __inline void

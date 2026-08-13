@@ -44,7 +44,7 @@
  *       $GETJPI selecting by name; prints perm_privs in hex and asserts the
  *       CMEXEC bit is CLEAR (i.e. it observed A's disable).
  *   vmsaccess wrtattn_bg <name> <secs>
- *       $CREMBX(permanent=1); $QIO SETMODE|WRTATTN arms a write-attention
+ *       $CREMBX(temporary; no PRMMBX needed); $QIO SETMODE|WRTATTN arms a write-attention
  *       AST on the just-created channel with a distinctive astprm; prints
  *       the mailbox's MBAn: device name; $HIBER (blocks in-kernel); on wake,
  *       DELIVERAST and check astprm/acmode match what was armed.
@@ -301,7 +301,16 @@ main(int argc, char **argv)
 		               * <secs> documents the driver's poll budget only. */
 
 		memset(&ca, 0, sizeof(ca));
-		ca.permanent = 1u;
+		/* TEMPORARY mailbox (permanent=0): $CREMBX(permanent=1) needs PRMMBX,
+		 * which no default-privilege process holds on EITHER substrate (Linux
+		 * root gets neither ENFORCED nor DEFAULT PRMMBX; the OVMX seed withholds
+		 * it too, matching VMS). The write-attention AST proof does not need a
+		 * permanent mailbox -- process A holds the channel open across its
+		 * $HIBER, so a temporary mailbox is reachable by B's cross-process write
+		 * for the whole test, exactly as the P4-A mbx cross-process proof
+		 * (vmsmbx create_hold) uses a temporary mailbox for the same reason
+		 * (rd vms-f8a). */
+		ca.permanent = 0u;
 		rc = kif_xport_ioctl(fd, VMS_IOCTL_MBX_CREATE, &ca);
 		if (rc < 0 || (ca.status & 1u) == 0u) {
 			printf("AST WRTATTN CREATE FAILED rc=%d status=%u\n", rc, ca.status);

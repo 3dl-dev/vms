@@ -119,6 +119,19 @@
 #ifndef VMS_PRV_M_TMPMBX
 #define VMS_PRV_M_TMPMBX  (1ULL << 15)   /* create temporary mailbox  (PRV$V_TMPMBX) */
 #endif
+#ifndef VMS_PRV_M_NETMBX
+#define VMS_PRV_M_NETMBX  (1ULL << 20)   /* create network device     (PRV$V_NETMBX) */
+#endif
+/* The privileges EVERY VMS process holds by default (TMPMBX + NETMBX), matching
+ * src/kernel/vms_internal.h's VMS_DEFAULT_PRIVS. A fresh OVMX process must be
+ * seeded with these on BOTH substrates or a default-privilege operation the
+ * oracle allows -- e.g. $CREMBX of a TEMPORARY mailbox, which gates on TMPMBX
+ * (vms_mbx.c mbx_priv_check) -- wrongly returns SS$_NOPRIV (rd vms-f8a: the
+ * NetBSD proc seed omitted them, so the P4-A mailbox cross-process proof's
+ * $CREMBX failed once proctab stopped masking it). */
+#ifndef VMS_DEFAULT_PRIVS
+#define VMS_DEFAULT_PRIVS  (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX)
+#endif
 
 /* ================================================================
  * Linux-kernel spellings the shared facility uses verbatim, provided for the

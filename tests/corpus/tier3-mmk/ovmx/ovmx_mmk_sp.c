@@ -82,6 +82,7 @@
 #include <iosbdef.h>
 #include <str$routines.h>
 #include <libclidef.h>
+#include <vms/pcb.h>
 
 typedef void *SPHANDLE;
 
@@ -168,6 +169,18 @@ unsigned int sp_open(SPHANDLE *ctxpp, void *inicmd,
         return SS$_NORMAL;
     }
 
+    /* Ensure this image has a per-process PCB: every sys$ channel service
+     * (crembx/qio/assign) keys off it (sys_mailbox.c returns SS$_BADPARAM with
+     * no PCB), and unlike DCL.EXE -- which seeds one at startup (dcl_main.c) --
+     * the vendored MMK main never does. Seed it here, the first point MMK reaches
+     * the executive. Privileges are left empty: the real executive on /dev/vms
+     * governs what crembx/spawn may do; the userspace PCB is only the channel
+     * table. Idempotent (guarded on vms_pcb_get). */
+    if (!vms_pcb_get()) {
+        if (!vms_pcb_init(0))
+            return SS$_INSFMEM;
+    }
+
     memset(&g_spb, 0, sizeof(g_spb));
     g_spb.rcvast = rcvast;
     g_spb.astprm = rcvastprm;
@@ -233,7 +246,7 @@ unsigned int sp_open(SPHANDLE *ctxpp, void *inicmd,
 unsigned int sp_send(SPHANDLE *ctxpp, void *cmdstr)
 {
     struct SPB *ctx = ctxpp ? (struct SPB *)*ctxpp : &g_spb;
-    if (noaction || ctx == (struct SPB *)&ovmx_sp_sentinel || !ctx->spawned)
+    if (noaction || !ctx || ctx == (struct SPB *)&ovmx_sp_sentinel || !ctx->spawned)
         return SS$_NORMAL;
 
     /* CLASS_S and CLASS_D descriptors share the leading length+pointer fields. */
@@ -259,7 +272,7 @@ unsigned int sp_send(SPHANDLE *ctxpp, void *cmdstr)
 unsigned int sp_receive(SPHANDLE *ctxpp, void *rcvstr, int *rcvlen)
 {
     struct SPB *ctx = ctxpp ? (struct SPB *)*ctxpp : &g_spb;
-    if (noaction || ctx == (struct SPB *)&ovmx_sp_sentinel || !ctx->spawned) {
+    if (noaction || !ctx || ctx == (struct SPB *)&ovmx_sp_sentinel || !ctx->spawned) {
         if (rcvlen) *rcvlen = 0;
         return SS$_ENDOFFILE;
     }
@@ -291,7 +304,7 @@ unsigned int sp_receive(SPHANDLE *ctxpp, void *rcvstr, int *rcvlen)
 unsigned int sp_close(SPHANDLE *ctxpp)
 {
     struct SPB *ctx = ctxpp ? (struct SPB *)*ctxpp : &g_spb;
-    if (noaction || ctx == (struct SPB *)&ovmx_sp_sentinel)
+    if (noaction || !ctx || ctx == (struct SPB *)&ovmx_sp_sentinel)
         return SS$_NORMAL;
 
     if (ctx->spawned && ctx->pid) {

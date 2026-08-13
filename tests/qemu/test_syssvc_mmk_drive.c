@@ -167,12 +167,14 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* A hermetic work directory on the SYSDISK. MMK opens the description file
-     * through OVMX RMS, which resolves a bare filespec against the process
-     * default directory (cwd); the child chdir()s here before exec. */
-    char workdir[] = "/tmp/mmkb23_XXXXXX";
+    /* A hermetic work directory ON THE SYSDISK (/vms). MMK opens the description
+     * file through OVMX RMS; with a real executive present RMS resolves a bare
+     * filespec against SYS$DISK (the /vms system disk), NOT the Linux cwd, so the
+     * descrip must live under /vms to be found. The child chdir()s here before
+     * exec so a bare "OVMXB23.MMS" resolves to this directory. */
+    char workdir[] = "/vms/mmkb23_XXXXXX";
     if (!mkdtemp(workdir)) {
-        printf("  FAIL: mkdtemp() failed\n");
+        printf("  FAIL: mkdtemp() under /vms failed\n");
         return 1;
     }
 
@@ -246,6 +248,10 @@ int main(int argc, char **argv)
             got_marker = 1;
     }
 
+    /* Surface exactly what MMK echoed so a drive that completes without the
+     * oracle is debuggable from the CI transcript. */
+    printf("  DIAG: MMK echoed %zu bytes: <<<%s>>>\n", acclen, acc);
+
     /* THE POINT OF THE ITEM. MMK.EXE spawned a persistent DCL, streamed the
      * action command into its SYS$INPUT mailbox, and -- through the
      * write-attention AST that interrupted its $HIBER and the IO$M_NOW drain --
@@ -266,6 +272,12 @@ int main(int argc, char **argv)
     }
     CHECK(reaped,
           "MMK.EXE completed (it detected the MMK____status= end-of-command marker and exited, rather than deadlocking in $HIBER)");
+    if (reaped) {
+        if (WIFEXITED(wstatus))
+            printf("  DIAG: MMK exit status = %d (WEXITSTATUS)\n", WEXITSTATUS(wstatus));
+        else if (WIFSIGNALED(wstatus))
+            printf("  DIAG: MMK killed by signal %d\n", WTERMSIG(wstatus));
+    }
     if (!reaped) {
         kill(pid, SIGKILL);
         (void)waitpid(pid, &wstatus, 0);

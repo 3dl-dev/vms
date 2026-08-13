@@ -465,7 +465,18 @@ static int lex_integer(struct dcl_context *ctx, const char *args,
     while (*s == ' ') s++;
     size_t len = strlen(s);
     while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t')) s[--len] = '\0';
-    if (len >= 2 && s[0] == '"' && s[len - 1] == '"') { s[len - 1] = '\0'; s++; }
+    int was_quoted = 0;
+    if (len >= 2 && s[0] == '"' && s[len - 1] == '"') { s[len - 1] = '\0'; s++; was_quoted = 1; }
+
+    /* F$INTEGER takes an EXPRESSION: an unquoted argument that names a defined
+     * symbol is evaluated to that symbol's value first (VSI OpenVMS DCL
+     * Dictionary, F$INTEGER). MMK's end-of-command marker computes
+     * MMK____status = F$INTEGER($STATUS); without this it would read 0 (an even,
+     * "failed" status) and MMK would abort the build after the first command. */
+    if (!was_quoted && s[0] != '\0') {
+        const char *sv = dcl_sym_get(s);
+        if (sv) { strncpy(str, sv, sizeof(str) - 1); str[sizeof(str) - 1] = '\0'; s = str; }
+    }
 
     long val = strtol(s, NULL, 0);
     snprintf(result, result_size, "%ld", val);

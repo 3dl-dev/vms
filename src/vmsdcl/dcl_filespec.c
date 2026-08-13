@@ -468,9 +468,38 @@ int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
     char full_spec[1024];
 
     if (strchr(spec, '[') || strchr(spec, ':')) {
-        /* Already has device or directory — pass through to vmsfs */
-        strncpy(full_spec, spec, sizeof(full_spec) - 1);
-        full_spec[sizeof(full_spec) - 1] = '\0';
+        /*
+         * The spec names a device and/or a directory. VMS filespec defaulting:
+         * a spec that supplies a directory (or file) but NOT a device inherits
+         * the DEVICE from the current default directory — a device-less
+         * "[SUB]" lists SUB on the current default's device, never the volume
+         * root. Without this, a bracketed device-less spec falls through to
+         * vmsfs's device-less path, which resolves the directory against the
+         * system-disk mount root (SYSDISK_MOUNT, /vms) — so "DIRECTORY [SUB]"
+         * after SET DEFAULT onto another device listed the wrong volume.
+         * (VSI OpenVMS DCL Dictionary, DIRECTORY — the listing is relative to
+         * the current default when the device is omitted; VSI OpenVMS User's
+         * Manual, "File Specifications" — an omitted device field defaults to
+         * the current default device. Clean-room, Rule 8: public docs only.)
+         */
+        vmsfs_filespec_t sparts;
+        memset(&sparts, 0, sizeof(sparts));
+        vmsfs_parse_filespec(spec, &sparts);
+        if (!sparts.has_device) {
+            vmsfs_filespec_t dparts;
+            memset(&dparts, 0, sizeof(dparts));
+            vmsfs_parse_filespec(ctx->default_dir, &dparts);
+            if (dparts.has_device && dparts.device[0]) {
+                snprintf(full_spec, sizeof(full_spec), "%s:%s",
+                         dparts.device, spec);
+            } else {
+                strncpy(full_spec, spec, sizeof(full_spec) - 1);
+                full_spec[sizeof(full_spec) - 1] = '\0';
+            }
+        } else {
+            strncpy(full_spec, spec, sizeof(full_spec) - 1);
+            full_spec[sizeof(full_spec) - 1] = '\0';
+        }
     } else {
         /*
          * Plain filename — prefix with default directory.

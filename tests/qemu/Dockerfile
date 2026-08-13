@@ -254,7 +254,7 @@ RUN cd /src/repo && \
         -DOVMX_STATIC=ON \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=ON \
-    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize vms_initialize mmk_native vmslibrarian --parallel $(nproc) 2>&1 && \
+    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize vms_initialize mmk_native vmslibrarian vmslink --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
     # MMK.EXE (vms-b23, self-host spine #4): the shipped MadGoat MMK built as an
@@ -345,7 +345,37 @@ RUN cd /src/repo && \
     # (built above, OVMX_STATIC=ON -> static musl), so DCL activates it by
     # fork()+execve() exactly like TCC.EXE/MMK.EXE -- no IMGACT/shareable staging.
     echo "--- LIBRARIAN.EXE (static-musl; the archiver MMK drives, vms-6be) ---" && \
-    ls -la build-static/bin/LIBRARIAN.EXE
+    ls -la build-static/bin/LIBRARIAN.EXE && \
+    # LINK.EXE (vms-725, self-host spine #7 FINAL rung): the OVMX linker MMK drives
+    # (after the archive) to LINK OVMXRT.OLB + the driver into a runnable image.
+    # Built PLAIN STATIC (musl) by the `vmslink` CMake target (built above,
+    # OVMX_STATIC=ON), so DCL forks it exactly like TCC.EXE/LIBRARIAN.EXE.
+    echo "--- LINK.EXE (static-musl; the linker MMK drives, vms-725) ---" && \
+    ls -la build-static/bin/LINK.EXE
+
+# IMGACT.EXE + DECC$SHR.EXE (vms-725, self-host spine #7 FINAL rung): the runtime
+# the MMK-driven LINK's output image ACTIVATES against. IMGACT.EXE is the OVMX
+# image activator the produced OVMXRT.EXE names as PT_INTERP; DECC$SHR.EXE is the
+# OVMX C run-time shareable the executable link --use's (crt0 + process exit) and
+# IMGACT resolves from SYS$LIBRARY at activation. Both are built the SAME way the
+# host-proven native-link stack builds them (src/imgact/Makefile ARCH=x86_64 for
+# IMGACT.EXE; src/vmslink/mk_decc_shr.sh whole-archiving musl libc.a + libgcc.a
+# via the static LINK.EXE for DECC$SHR.EXE) -- the recipe run_dcl_native.sh's
+# lib_build_graph.sh uses, here reproduced in the ubuntu+musl-gcc image (proven
+# to build the graph clean, vms-725). These are BUILD-TIME artifacts, staged into
+# the initramfs below; the ACTIVATION itself runs in-guest against a real kernel.
+RUN cd /src/repo && \
+    make -C src/imgact CC=musl-gcc ARCH=x86_64 >/dev/null 2>&1 && \
+    { [ -f src/imgact/IMGACT.EXE ] || { echo "FATAL: IMGACT.EXE was not built -- the MMK-driven image could not be activated in-guest"; exit 1; }; } && \
+    echo "--- IMGACT.EXE (image activator; PT_INTERP of the MMK-driven OVMXRT.EXE, vms-725) ---" && \
+    ls -la src/imgact/IMGACT.EXE && \
+    MUSL_LIBC=$(echo /usr/lib/*-linux-musl/libc.a) && \
+    MUSL_LIBGCC=$(musl-gcc -print-libgcc-file-name) && \
+    sh src/vmslink/mk_decc_shr.sh build-static/bin/LINK.EXE \
+        build-static/bin/'DECC$SHR.EXE' "$MUSL_LIBC" "$MUSL_LIBGCC" >/dev/null 2>&1 && \
+    { [ -f 'build-static/bin/DECC$SHR.EXE' ] || { echo "FATAL: DECC\$SHR.EXE was not built -- the MMK-driven executable link would have no --use producer"; exit 1; }; } && \
+    echo "--- DECC\$SHR.EXE (C run-time shareable; --use producer + IMGACT resolves it, vms-725) ---" && \
+    ls -la 'build-static/bin/DECC$SHR.EXE'
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
@@ -537,6 +567,31 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp /src/repo/build-static/bin/LIBRARIAN.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LIBRARIAN.EXE || \
       { echo "FATAL: LIBRARIAN.EXE was not built into the static tree -- the MMK-driven archive would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LIBRARIAN.EXE && \
+    # LINK.EXE at SYS$SYSTEM (vms-725, self-host spine #7 FINAL rung) -- the linker
+    # test_syssvc_mmk_build.c drives from MMK's mailbox DCL after the archive. Its
+    # descrip.mms defines LNK :== $/vms/.../LINK.EXE (absolute path). Absence is
+    # FATAL: a missing LINK.EXE would turn the driven-link + activation assertions
+    # into a no-op (the suite would report the image never appeared) job-green.
+    { cp /src/repo/build-static/bin/LINK.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || \
+      { echo "FATAL: LINK.EXE was not built into the static tree -- the MMK-driven link would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE && \
+    # IMGACT.EXE at SYS$SYSTEM (vms-725) -- the image activator the MMK-driven
+    # OVMXRT.EXE names as PT_INTERP (/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE, baked by
+    # LINK). The kernel loads it as the interpreter when the harness activates the
+    # produced image. Absence is FATAL: activation would fail exec (no interpreter)
+    # and the exit-216 oracle would never be reachable.
+    { cp /src/repo/src/imgact/IMGACT.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE || \
+      { echo "FATAL: IMGACT.EXE was not built -- the MMK-driven image could not be activated in-guest"; exit 1; }; } && \
+    chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE && \
+    # DECC$SHR.EXE at SYS$LIBRARY (vms-725) -- the C run-time shareable the driven
+    # executable link --use's (crt0 + process exit), and which IMGACT resolves from
+    # SYS$LIBRARY (imgact.c IMGACT_FALLBACK_SYSLIB=/vms/SYS0/SYSCOMMON/SYSLIB) at
+    # activation. Absence is FATAL: the driven LINK --use would fail to open it and
+    # no OVMXRT.EXE would be produced.
+    mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSLIB && \
+    { cp '/src/repo/build-static/bin/DECC$SHR.EXE' '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' || \
+      { echo "FATAL: DECC\$SHR.EXE was not built -- the MMK-driven executable link would have no --use producer"; exit 1; }; } && \
+    chmod +x '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' && \
     mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include && \
     cp /src/repo/third-party/tcc/src/include/*.h /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/ && \
     # tinycc ships stddef.h/stdarg.h but NOT <stdint.h> -- upstream tcc defers
@@ -553,17 +608,22 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
        /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/bits/ && \
     # The REAL component sources + their headers the build suite stages into the
     # MMK work directory (VMS-style upper-case .C). These are the actual
-    # src/libvmssys freestanding runtime TUs vms_string.c + vms_snprintf.c (spine
-    # #7, vms-6be: the 2-TU library MMK compiles then archives -- vms_math.c is
-    # excluded, its SSE "x"-constraint inline asm is not tcc-compilable on
-    # x86_64). The objects the driven TCC produces must carry vms_strlen /
-    # vms_snprintf, and the driven LIBRARIAN must archive both into OVMXRT.OLB.
-    # Absence is FATAL: without them the driven build would have nothing to build.
+    # src/libvmssys freestanding runtime TUs vms_string.c + vms_snprintf.c (the
+    # 2-TU library MMK compiles then archives -- vms_math.c is excluded, its SSE
+    # "x"-constraint inline asm is not tcc-compilable on x86_64) PLUS the driver
+    # OVMXRTRUN.C (vms-725: main() calls vms_strlen -> the driven LINK pulls
+    # VMS_STRING from OVMXRT.OLB and the activated image exits 216). The objects
+    # the driven TCC produces must carry vms_strlen / vms_snprintf, the driven
+    # LIBRARIAN must archive both into OVMXRT.OLB, and the driven LINK must build
+    # the driver + .OLB into OVMXRT.EXE. Absence is FATAL: without them the driven
+    # build would have nothing to build.
     mkdir -p /initramfs/tests/component && \
     { cp /src/repo/src/libvmssys/vms_string.c /initramfs/tests/component/VMS_STRING.C || \
       { echo "FATAL: VMS_STRING.C (a real runtime TU MMK drives TCC to compile) not staged"; exit 1; }; } && \
     { cp /src/repo/src/libvmssys/vms_snprintf.c /initramfs/tests/component/VMS_SNPRINTF.C || \
       { echo "FATAL: VMS_SNPRINTF.C (a real runtime TU MMK drives TCC to compile) not staged"; exit 1; }; } && \
+    { cp /src/repo/tests/toolchain/component/OVMXRTRUN.C /initramfs/tests/component/OVMXRTRUN.C || \
+      { echo "FATAL: OVMXRTRUN.C (the driver MMK drives LINK to build into a runnable image) not staged"; exit 1; }; } && \
     cp /src/repo/src/libvmssys/vms_string.h /src/repo/src/libvmssys/vms_snprintf.h \
        /src/repo/src/libvmssys/vms_types.h \
        /initramfs/tests/component/ && \

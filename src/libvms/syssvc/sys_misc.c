@@ -19,9 +19,17 @@
  *     request aimed at another cluster node is answered with this machine's
  *     numbers as though it had been aimed here.
  * OVMX-USERSPACE: sys$getsyiw (vms-642) -- the wait form of the same answer.
+ * OVMX-USERSPACE: sys$setddir (vms-947) -- the process default directory is a
+ *     per-process construct on real VMS too (the RMS default-directory string
+ *     held in P1 process space), not a shared executive resource. OVMX keeps it
+ *     in the PCB (pcb->default_dir via vms_pcb_get / vms_pcb_set_default_dir) --
+ *     the same store sys$assign reads to resolve SYS$DISK and relative file
+ *     specs -- so answering from and mutating the PCB fakes nothing: there is no
+ *     executive-owned copy this could diverge from.
  */
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -242,4 +250,102 @@ uint32_t sys$getsyiw(uint32_t efn, const uint32_t *csidadr,
                      void *iosb,
                      void (*astadr)(uint32_t), uint32_t astprm) {
     return sys$getsyi(efn, csidadr, nodename, itmlst, iosb, astadr, astprm);
+}
+
+/*
+ * sys$setddir - Set/read the process default directory string.
+ *
+ * $SETDDIR reads and (optionally) changes the process default directory -- the
+ * [dir] component used to resolve relative file specifications. It is a
+ * per-process construct; OVMX stores it in the PCB (pcb->default_dir), the same
+ * store sys$assign consults to resolve SYS$DISK and relative specs, so a change
+ * made here is observable by subsequent relative filespec resolution.
+ *
+ * Arguments (OpenVMS System Services Reference, $SETDDIR):
+ *   new_dir  - descriptor of the new default directory string. If 0 (NULL) the
+ *              directory is not changed (a read-only call).
+ *   old_len  - optional word to receive the length of the previous directory
+ *              string returned: the number of bytes placed in old_dir's buffer
+ *              when old_dir is supplied, otherwise the full previous length.
+ *   old_dir  - optional descriptor of a buffer to receive the previous default
+ *              directory string, truncated to the buffer's length.
+ *
+ * The previous directory is captured BEFORE any change, matching VMS order.
+ *
+ * Device coordination: OVMX conflates device+directory into pcb->default_dir.
+ * A bare bracketed "[dir]" new spec keeps whatever device the current default
+ * carries (mirrors SET DEFAULT / cmd_set_default in dcl_cmd_set.c); a full spec
+ * that names a device/logical (contains ':') or a bare name is stored verbatim.
+ * This keeps $SETDDIR and SET DEFAULT consistent and preserves a device set
+ * separately via the SYS$DISK logical.
+ *
+ * Returns SS$_NORMAL on success; SS$_BADPARAM for a missing process context or
+ * an empty / over-long new directory string.
+ */
+uint32_t sys$setddir(const struct dsc$descriptor_s *new_dir,
+                     unsigned short *old_len,
+                     struct dsc$descriptor_s *old_dir)
+{
+    struct vms_pcb *pcb = vms_pcb_get();
+    if (!pcb)
+        return SS$_BADPARAM;
+
+    /* Snapshot the current (about-to-be-previous) default directory string. */
+    char prev[256];
+    strncpy(prev, pcb->default_dir, sizeof(prev) - 1);
+    prev[sizeof(prev) - 1] = '\0';
+    size_t prev_len = strlen(prev);
+
+    /* Return the previous directory to the caller, if requested. */
+    if (old_dir && old_dir->dsc$a_pointer) {
+        size_t cap = old_dir->dsc$w_length;
+        size_t n = (prev_len < cap) ? prev_len : cap;
+        if (n > 0)
+            memcpy(old_dir->dsc$a_pointer, prev, n);
+        if (old_len)
+            *old_len = (unsigned short)n;
+    } else if (old_len) {
+        *old_len = (unsigned short)prev_len;
+    }
+
+    /* No new directory descriptor -> read-only call. */
+    if (!new_dir || !new_dir->dsc$a_pointer)
+        return SS$_NORMAL;
+
+    size_t nlen = new_dir->dsc$w_length;
+    if (nlen == 0 || nlen >= sizeof(pcb->default_dir))
+        return SS$_BADPARAM;
+
+    char newspec[256];
+    memcpy(newspec, new_dir->dsc$a_pointer, nlen);
+    newspec[nlen] = '\0';
+
+    char merged[256];
+    if (newspec[0] == '[' && !strchr(newspec, ':')) {
+        /* Bracketed directory only -> keep the current default's device. */
+        char device[128] = "";
+        const char *colon = strchr(prev, ':');
+        if (colon) {
+            size_t dlen = (size_t)(colon - prev);
+            if (dlen < sizeof(device)) {
+                memcpy(device, prev, dlen);
+                device[dlen] = '\0';
+            }
+        }
+        if (device[0])
+            snprintf(merged, sizeof(merged), "%s:%s", device, newspec);
+        else {
+            strncpy(merged, newspec, sizeof(merged) - 1);
+            merged[sizeof(merged) - 1] = '\0';
+        }
+    } else {
+        strncpy(merged, newspec, sizeof(merged) - 1);
+        merged[sizeof(merged) - 1] = '\0';
+    }
+
+    if (strlen(merged) >= sizeof(pcb->default_dir))
+        return SS$_BADPARAM;
+
+    vms_pcb_set_default_dir(merged);
+    return SS$_NORMAL;
 }

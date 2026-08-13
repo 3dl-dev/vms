@@ -23,15 +23,30 @@ void dcl_sym_cleanup(void);
 int  dcl_sym_push_frame(void);
 void dcl_sym_pop_frame(void);
 
-/* SET SYMBOL/SCOPE for the current level: hide_outer_local (NOLOCAL) hides
+/* SET SYMBOL /SCOPE translation domains (OpenVMS DCL Dictionary, SET SYMBOL
+ * /ALL /GENERAL /VERB). A /SCOPE change can be scoped to only the first-token
+ * (verb-position) translation, only general symbol substitution, or both:
+ *   /ALL     (default) - applies to first-token translation AND general subst
+ *   /GENERAL           - applies to all symbols EXCEPT the first token
+ *   /VERB              - applies ONLY to the first-token (verb) translation */
+#define DCL_SYM_DOMAIN_ALL      0
+#define DCL_SYM_DOMAIN_VERB     1
+#define DCL_SYM_DOMAIN_GENERAL  2
+
+/* SET SYMBOL/SCOPE for the current level, applied to translation domain
+ * `domain` (DCL_SYM_DOMAIN_ALL/VERB/GENERAL): hide_outer_local (NOLOCAL) hides
  * outer levels' local symbols; hide_global (NOGLOBAL) hides global symbols. */
-void dcl_sym_scope_set(int hide_outer_local, int hide_global);
+void dcl_sym_scope_set(int hide_outer_local, int hide_global, int domain);
 
 /* Set a symbol value */
 int dcl_sym_set(const char *name, const char *value, int scope);
 int dcl_sym_set_int(const char *name, int32_t value, int scope);
 
-/* Get a symbol value (returns NULL if not found) */
+/* Get a symbol value (returns NULL if not found). dcl_sym_get() is general
+ * substitution; dcl_sym_get_ex() selects the translation domain (VERB for
+ * first-token/verb-position translation, GENERAL otherwise) so a per-domain
+ * SET SYMBOL/SCOPE=(...)/VERB or /GENERAL is honoured. */
+const char *dcl_sym_get_ex(const char *name, int domain);
 const char *dcl_sym_get(const char *name);
 int dcl_sym_get_int(const char *name, int32_t *value);
 

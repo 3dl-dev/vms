@@ -1884,24 +1884,95 @@ static int cmd_set_volume(struct dcl_command *cmd)
 }
 
 /*
- * SET SYMBOL/SCOPE — establish, for the current command level, whether
- * outer-level local symbols and global symbols are accessible.
+ * SET SYMBOL — control access to local and global symbols in command
+ * procedures, and select which symbol-translation context a scope change
+ * applies to.
  *
- * OpenVMS DCL Dictionary, SET SYMBOL /SCOPE=([NO]LOCAL,[NO]GLOBAL):
- *   NOLOCAL  - local symbols defined in OUTER command levels are not
- *              accessible from the current or inner command levels.
- *   NOGLOBAL - global symbols are not accessible.
- *   Default  - both local and global symbols are accessible.
+ * OpenVMS DCL Dictionary (VSI OpenVMS DCL Dictionary N–Z, SET SYMBOL) defines
+ * EXACTLY four command qualifiers:
+ *
+ *   /SCOPE=(keyword,...)  Controls access to local and global symbols. Keywords:
+ *       NOLOCAL  - local symbols defined in OUTER command levels are treated as
+ *                  undefined by the current and all inner command levels.
+ *       LOCAL    - removes any local translation limit set at this level.
+ *       NOGLOBAL - global symbols are inaccessible to the current and inner
+ *                  command levels.
+ *       GLOBAL   - restores access to all global symbols.
+ *   /ALL      (default)  The /SCOPE values apply BOTH to translation of the
+ *                        first token on a command line and to general symbol
+ *                        substitution. Incompatible with /GENERAL and /VERB.
+ *   /GENERAL             The /SCOPE values apply to all symbols EXCEPT the first
+ *                        token on a command line. Incompatible with /ALL, /VERB.
+ *   /VERB                The /SCOPE values apply ONLY to translation of the
+ *                        first token on a command line as a symbol before
+ *                        processing. Incompatible with /ALL and /GENERAL.
+ *
+ * NOTE (clean-room, vms-c211): the qualifiers /GLOBAL and /LOCAL do NOT exist
+ * on SET SYMBOL — LOCAL/GLOBAL are /SCOPE *keywords*, not qualifiers. Real DCL
+ * rejects "SET SYMBOL/GLOBAL" with %DCL-W-IVQUAL, which is what OVMX does here.
  */
 static int cmd_set_symbol(struct dcl_command *cmd)
 {
-    if (dcl_has_qualifier(cmd, "SCOPE")) {
-        const char *v = dcl_qualifier_value(cmd, "SCOPE");
-        int hide_local = 0, hide_global = 0;   /* default: both accessible */
+    /* The complete SET SYMBOL qualifier set. Any parsed qualifier that is not a
+     * unique (case-insensitive) prefix of one of these is unknown to VMS and
+     * draws an authentic %DCL-W-IVQUAL (INV-DCL: honest error, never a silent
+     * accept). Abbreviations resolve the VMS way — exact wins, else a unique
+     * prefix; an ambiguous prefix is treated as unknown. */
+    static const char *const set_symbol_quals[] = {
+        "SCOPE", "ALL", "GENERAL", "VERB", NULL
+    };
 
-        if (v && *v) {
+    int have_scope = 0, have_all = 0, have_general = 0, have_verb = 0;
+    const char *scope_val = NULL;
+
+    for (int i = 0; i < cmd->qualifier_count; i++) {
+        const char *qn = cmd->qualifiers[i].name;
+        if (!cmd->qualifiers[i].present || !qn[0])
+            continue;
+
+        /* Resolve qn against the legal set (exact, else unique prefix). */
+        const char *canon = NULL;
+        int hits = 0;
+        size_t qlen = strlen(qn);
+        for (const char *const *k = set_symbol_quals; *k; k++) {
+            if (strcasecmp(*k, qn) == 0) { canon = *k; hits = 1; break; }
+            if (strncasecmp(*k, qn, qlen) == 0) { canon = *k; hits++; }
+        }
+
+        /* Unknown qualifier, ambiguous prefix, or a /NO form of a qualifier
+         * that has no negated meaning (/NOSCOPE, /NOVERB, ...): %DCL-W-IVQUAL. */
+        if (hits != 1 || cmd->qualifiers[i].negated) {
+            dcl_error("DCL", 0, "IVQUAL",
+                "unrecognized qualifier - check validity, spelling, and "
+                "placement\n \\%s\\", qn);
+            return SS$_IVQUAL;
+        }
+
+        if (strcmp(canon, "SCOPE") == 0) {
+            have_scope = 1;
+            scope_val = cmd->qualifiers[i].value;
+        } else if (strcmp(canon, "ALL") == 0)     have_all = 1;
+        else if (strcmp(canon, "GENERAL") == 0)   have_general = 1;
+        else /* VERB */                           have_verb = 1;
+    }
+
+    /* /ALL, /GENERAL and /VERB are mutually exclusive (DCL Dictionary). */
+    if (have_all + have_general + have_verb > 1) {
+        dcl_error("DCL", 0, "CONFLICT",
+            "conflicting qualifiers - /ALL, /GENERAL and /VERB may not be "
+            "combined");
+        return SS$_ABORT;
+    }
+
+    int domain = DCL_SYM_DOMAIN_ALL;           /* /ALL is the default */
+    if (have_verb)         domain = DCL_SYM_DOMAIN_VERB;
+    else if (have_general) domain = DCL_SYM_DOMAIN_GENERAL;
+
+    if (have_scope) {
+        int hide_local = 0, hide_global = 0;   /* default: both accessible */
+        if (scope_val && *scope_val) {
             char buf[256];
-            strncpy(buf, v, sizeof(buf) - 1);
+            strncpy(buf, scope_val, sizeof(buf) - 1);
             buf[sizeof(buf) - 1] = '\0';
             for (char *t = strtok(buf, "(), \t");
                  t; t = strtok(NULL, "(), \t")) {
@@ -1917,16 +1988,14 @@ static int cmd_set_symbol(struct dcl_command *cmd)
             }
         }
 
-        dcl_sym_scope_set(hide_local, hide_global);
+        dcl_sym_scope_set(hide_local, hide_global, domain);
         return SS$_NORMAL;
     }
 
-    /* Other SET SYMBOL qualifiers (/ALL, /GLOBAL, /LOCAL, /VERB, ...) are not
-     * yet implemented. Fail honestly rather than silently no-op (INV-DCL). */
-    dcl_error("SET", 0, "NOTIMPL",
-              "SET SYMBOL without /SCOPE is not implemented in OVMX - "
-              "no state changed");
-    return SS$_UNSUPPORTED;
+    /* No /SCOPE: /ALL, /GENERAL and /VERB only qualify a /SCOPE value, so with
+     * nothing to apply this is a valid no-op (as is a bare "SET SYMBOL"). VMS
+     * accepts it without error; changing no state is the honest result. */
+    return SS$_NORMAL;
 }
 
 /*

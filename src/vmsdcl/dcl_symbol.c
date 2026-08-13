@@ -50,10 +50,16 @@ struct sym_entry {
  */
 #define SYM_MAX_FRAMES  64   /* base + DCL_MAX_NEST(32) levels, with headroom */
 
+/* /SCOPE state is tracked per translation domain (SET SYMBOL /VERB /GENERAL
+ * /ALL): index 0 = general symbol substitution, index 1 = first-token (verb)
+ * translation. A bare SET SYMBOL/SCOPE (/ALL, the default) sets both. */
+#define SYM_DOM_GENERAL  0
+#define SYM_DOM_VERB     1
+
 struct sym_frame {
     struct sym_entry *buckets[SYM_TABLE_SIZE];
-    int hide_outer_local;   /* SET SYMBOL/SCOPE=NOLOCAL at/above this level */
-    int hide_global;        /* SET SYMBOL/SCOPE=NOGLOBAL at/above this level */
+    int hide_outer_local[2];  /* SET SYMBOL/SCOPE=NOLOCAL, per domain */
+    int hide_global[2];       /* SET SYMBOL/SCOPE=NOGLOBAL, per domain */
 };
 
 static struct sym_frame sym_frames[SYM_MAX_FRAMES];
@@ -102,8 +108,8 @@ static void free_frame(struct sym_frame *fr)
         }
         fr->buckets[i] = NULL;
     }
-    fr->hide_outer_local = 0;
-    fr->hide_global = 0;
+    fr->hide_outer_local[0] = fr->hide_outer_local[1] = 0;
+    fr->hide_global[0] = fr->hide_global[1] = 0;
 }
 
 /*
@@ -142,8 +148,11 @@ int dcl_sym_push_frame(void)
     int parent = sym_top;
     sym_top++;
     free_frame(&sym_frames[sym_top]);   /* start empty */
-    sym_frames[sym_top].hide_outer_local = sym_frames[parent].hide_outer_local;
-    sym_frames[sym_top].hide_global = sym_frames[parent].hide_global;
+    for (int d = 0; d < 2; d++) {
+        sym_frames[sym_top].hide_outer_local[d] =
+            sym_frames[parent].hide_outer_local[d];
+        sym_frames[sym_top].hide_global[d] = sym_frames[parent].hide_global[d];
+    }
     return 0;
 }
 
@@ -164,11 +173,29 @@ void dcl_sym_pop_frame(void)
  * whether outer-level local symbols and global symbols are accessible.
  * hide_outer_local / hide_global: 1 = inaccessible (NOLOCAL / NOGLOBAL),
  * 0 = accessible (LOCAL / GLOBAL, the default).
+ *
+ * `domain` selects which symbol-translation context the change applies to
+ * (OpenVMS DCL Dictionary, SET SYMBOL /ALL /GENERAL /VERB):
+ *   DCL_SYM_DOMAIN_ALL      - both verb-position translation and general subst
+ *   DCL_SYM_DOMAIN_VERB     - first-token (verb) translation only
+ *   DCL_SYM_DOMAIN_GENERAL  - all symbols except the first token
  */
-void dcl_sym_scope_set(int hide_outer_local, int hide_global)
+void dcl_sym_scope_set(int hide_outer_local, int hide_global, int domain)
 {
-    sym_frames[sym_top].hide_outer_local = hide_outer_local ? 1 : 0;
-    sym_frames[sym_top].hide_global = hide_global ? 1 : 0;
+    struct sym_frame *fr = &sym_frames[sym_top];
+    int hl = hide_outer_local ? 1 : 0;
+    int hg = hide_global ? 1 : 0;
+
+    if (domain == DCL_SYM_DOMAIN_VERB) {
+        fr->hide_outer_local[SYM_DOM_VERB] = hl;
+        fr->hide_global[SYM_DOM_VERB] = hg;
+    } else if (domain == DCL_SYM_DOMAIN_GENERAL) {
+        fr->hide_outer_local[SYM_DOM_GENERAL] = hl;
+        fr->hide_global[SYM_DOM_GENERAL] = hg;
+    } else {   /* DCL_SYM_DOMAIN_ALL (default) */
+        fr->hide_outer_local[SYM_DOM_GENERAL] = fr->hide_outer_local[SYM_DOM_VERB] = hl;
+        fr->hide_global[SYM_DOM_GENERAL] = fr->hide_global[SYM_DOM_VERB] = hg;
+    }
 }
 
 /*
@@ -255,12 +282,18 @@ int dcl_sym_set_int(const char *name, int32_t value, int scope)
 }
 
 /*
- * Get a symbol value. Searches local first, then global.
- * Returns NULL if not found.
+ * Get a symbol value for a specific translation domain. Searches the current
+ * command level's locals first (always accessible — /SCOPE never hides the
+ * current level's own locals), then outer-level locals (unless /SCOPE=NOLOCAL
+ * for this domain), then the shared global table (unless /SCOPE=NOGLOBAL for
+ * this domain). `domain` is DCL_SYM_DOMAIN_VERB (first-token translation) or
+ * DCL_SYM_DOMAIN_GENERAL (everything else). Returns NULL if not found.
  */
-const char *dcl_sym_get(const char *name)
+const char *dcl_sym_get_ex(const char *name, int domain)
 {
     if (!name) return NULL;
+
+    int d = (domain == DCL_SYM_DOMAIN_VERB) ? SYM_DOM_VERB : SYM_DOM_GENERAL;
 
     /* Search the current command level's locals first. */
     struct sym_entry *e = sym_find(cur_local(), name);
@@ -268,7 +301,7 @@ const char *dcl_sym_get(const char *name)
 
     /* Then each enclosing (outer) command level, innermost first — unless the
      * current level set /SCOPE=NOLOCAL, which hides all outer-level locals. */
-    if (!sym_frames[sym_top].hide_outer_local) {
+    if (!sym_frames[sym_top].hide_outer_local[d]) {
         for (int f = sym_top - 1; f >= 0; f--) {
             e = sym_find(sym_frames[f].buckets, name);
             if (e) return e->value;
@@ -276,12 +309,21 @@ const char *dcl_sym_get(const char *name)
     }
 
     /* Then the shared global table — unless /SCOPE=NOGLOBAL. */
-    if (!sym_frames[sym_top].hide_global) {
+    if (!sym_frames[sym_top].hide_global[d]) {
         e = sym_find(global_table, name);
         if (e) return e->value;
     }
 
     return NULL;
+}
+
+/*
+ * Get a symbol value in the general (non-first-token) translation domain.
+ * Searches local first, then global. Returns NULL if not found.
+ */
+const char *dcl_sym_get(const char *name)
+{
+    return dcl_sym_get_ex(name, DCL_SYM_DOMAIN_GENERAL);
 }
 
 /*

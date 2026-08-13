@@ -1,23 +1,28 @@
-# OVMX Self-Host Spine #5/#6/#7 — MMK builds a real component (vms-fe4 / vms-d1b / vms-6be)
+# OVMX Self-Host Spine #5/#6/#7 — MMK builds a real component (vms-fe4 / vms-d1b / vms-6be / vms-725)
 
 > Status (spine #5, vms-fe4): plan + toolchain-determinism proven on the host.
 > Status (spine #6, vms-d1b): **MMK-driven EXECUTION green in QEMU for the
 > COMPILE stage** — the shipped MMK.EXE drives the static TCC.EXE over its
-> persistent mailbox DCL, against a real `/dev/vms`, to compile the real
-> src/libvmssys runtime TU `vms_string.c` to a valid ELF object, byte-identical.
-> Status (spine #7, vms-6be): **the ARCHIVE stage is now driven in-guest too —
-> the same MMK.EXE now drives a real TWO-TU build over its mailbox DCL: TCC.EXE
-> compiles `vms_string.c` AND `vms_snprintf.c` (both fully tcc-compilable on
-> x86_64; `vms_math.c` is excluded, its SSE `"x"`-constraint inline asm is not),
-> then the staged static LIBRARIAN.EXE `/CREATE`s `OVMXRT.OLB` from the two
-> objects — a valid `ar`-format object library carrying both members and their
-> runtime symbols, byte-identical across two in-guest builds, zero bash**
+> persistent mailbox DCL, against a real `/dev/vms`, to compile a real
+> src/libvmssys runtime TU to a valid ELF object, byte-identical.
+> Status (spine #7 archive, vms-6be): the **ARCHIVE** stage joined it — MMK
+> drives TCC.EXE + LIBRARIAN.EXE to compile runtime TUs and `/CREATE`
+> `OVMXRT.OLB`, byte-identical.
+> Status (spine #7 LINK→activate, vms-725): **THE WHOLE CHAIN now runs in-guest.**
+> The same MMK.EXE drives compile → archive → **LINK** over its mailbox DCL —
+> TCC.EXE compiles the runtime TU + the driver `OVMXRTRUN.C`, LIBRARIAN.EXE archives
+> `OVMXRT.OLB`, LINK.EXE `--executable --use DECC$SHR.EXE` links the runnable image
+> `OVMXRT.EXE` — and the harness **ACTIVATES** it through IMGACT (PT_INTERP) to its
+> oracle **exit 216**; the compile+archive outputs are byte-identical across two
+> in-guest drives (LINK+activate rides one drive, its output byte-identity
+> host-proven — a 120s-VM-budget choice), zero bash
 > (`tests/qemu/test_syssvc_mmk_build.c`, wired into the standing
-> `kernel-executive` CI barrier). The FINAL **LINK**-to-runnable-image rung
-> (compile→archive→**LINK→ACTIVATE**) is the remaining residual (see "What is NOT
-> yet driven in-guest" below); **BUILD.COM stays until that lands** (Rule 6/7 —
-> no red gate shipped). Builds on spine #4 (vms-b23, MMK's mailbox-driven DCL
-> drive) and spine #3 (vms-ca9, LIBRARIAN/.OLB). Reads
+> `kernel-executive` CI barrier). This is self-hosting's final MMK-driven rung:
+> **MMK builds a real OVMX component to a running image entirely inside OVMX.**
+> **BUILD.COM nonetheless STAYS** — it is still load-bearing for the S4 self-host
+> *fixpoint* (a multi-TU LINK.EXE gen2==gen3 build, a 1.0 gate) that MMK does not
+> yet drive; see "Retiring BUILD.COM" below. Builds on spine #4 (vms-b23, MMK's
+> mailbox-driven DCL drive) and spine #3 (vms-ca9, LIBRARIAN/.OLB). Reads
 > `docs/design-self-host-mmk-spine.md` (the anchor) and
 > `docs/design-mmk-exec-drive-ovmx.md` first.
 
@@ -122,60 +127,88 @@ out tree (a clean context) and runs the whole QEMU harness, of which this suite
 is one — so the MMK-driven native build is exercised from a clean checkout with
 zero bash in the build path on every run, no new job required.
 
-## What spine #7 (vms-6be) added, and what is STILL not driven in-guest
+## What spine #7 drove in-guest — the WHOLE chain (vms-6be archive + vms-725 LINK→activate)
 
-**Spine #7 (vms-6be) drove the ARCHIVE stage in-guest.** `test_syssvc_mmk_build.c`
-now streams a 2-TU descrip.mms over MMK's mailbox DCL that compiles
-`VMS_STRING.C` + `VMS_SNPRINTF.C` with TCC.EXE and then `/CREATE`s `OVMXRT.OLB`
-with the staged static LIBRARIAN.EXE, and asserts the `.OLB` (a valid `!<arch>`
-container carrying both members + `vms_strlen`/`vms_snprintf`) byte-identical
-across two in-guest drives. The **component choice** is deliberate:
+**Spine #7 drove compile → archive → LINK → activate in-guest, end to end.**
+`test_syssvc_mmk_build.c` streams a descrip.mms over MMK's mailbox DCL that:
 
-- **`vms_math.c` is excluded** — its SSE `"x"`-constraint inline asm and
-  `__builtin_fabs` are rejected by tinycc on x86_64 (asserted, not assumed, by
-  `run_tcc_static_component.sh`'s step 4). So the in-guest library is the two
-  string/format TUs that DO compile under TCC-in-guest; `OVMXRT.MMS`'s full 3-TU
-  form remains the host-side plan/determinism proof.
-- **LIBRARIAN.EXE is a plain static (musl) foreign command**, staged at
-  `SYS$SYSTEM:LIBRARIAN.EXE` exactly like TCC.EXE — DCL forks it (fork+execve,
-  `SS$_UNSUPPORTED` for in-process), so the archive stage needs **no** shareable
-  or IMGACT staging. Determinism is the `ar`-container mtime/uid/gid trap the
-  OVMX LIBRARIAN already zeroes (host-proven by `run_mmk_component_build.sh`; now
-  driven in-guest twice and `cmp`-clean).
+1. compiles the runtime TU `VMS_STRING.C` (+ the driver `OVMXRTRUN.C`) with
+   TCC.EXE;
+2. `/CREATE`s `OVMXRT.OLB` from the runtime object with LIBRARIAN.EXE;
+3. `LINK --executable --use <abs>/DECC$SHR.EXE`s `OVMXRTRUN.OBJ` + `OVMXRT.OLB`
+   into the runnable image `OVMXRT.EXE` (pulling `VMS_STRING` from the library —
+   the driver references `vms_strlen`);
 
-**Still NOT driven in-guest: the final LINK-to-runnable-image rung.** `LNK
---executable --use SYS$LIBRARY:DECC$SHR.EXE …` (the `OVMXRT.EXE` target) needs:
+then the harness **activates** `OVMXRT.EXE` (`fork+exec` → the kernel loads its
+`PT_INTERP=/vms/.../IMGACT.EXE`, which maps `DECC$SHR.EXE` from `SYS$LIBRARY` and
+binds the one cross-image import) and asserts it **exits 216**
+(`vms_strlen("OVMXRT")·36`).
 
-- the **six OVMX shareables** (`DECC$SHR` + `LIBVMS*$SHR`) **built and staged** at
-  `SYS$LIBRARY` in the initramfs — these come from the `build_link_native.sh` /
-  `lib_build_graph.sh` producer graph, today built and activation-proven only in
-  the **alpine musl container** (`run_dcl_native.sh`, x86_64/arm64), NOT inside
-  `tests/qemu/Dockerfile` (ubuntu + `musl-gcc`);
-- **`--use` path resolution** to those shareables — the proven recipe
-  (`mk_dcl.sh`) passes **absolute** `--use` paths (`$SYSLIB/DECC$SHR.EXE`), so a
-  in-guest MMS can do the same (as the compile/archive steps already use an
-  absolute TCC/LIBR path); `SYS$LIBRARY:` **logical-name** resolution inside
-  LINK.EXE is a separate authenticity nicety, not a blocker for a real chain;
-- **IMGACT activation of the produced image** — `IMGACT.EXE` staged at its
-  PT_INTERP path and the linked `OVMXRT.EXE` actually activated + run to its
-  oracle exit status through the **kernel PT_INTERP** path *inside the QEMU
-  busybox harness*. This whole native-link→activate stack is proven on the host
-  (`src/imgact/test/run_dcl_native.sh` activates DCL.EXE end-to-end) but has
-  **never been reproduced in the QEMU harness**, where only *in-process*
-  activation (`test_syssvc_imgact_*`) and the static DCL.EXE run today.
+**The whole-VM 120s budget shaped the suite (two hard lessons).** The
+kernel-executive gate runs ~76 suites in ONE QEMU VM under `run_tests.sh`'s fixed
+`timeout 120`, and the set is already near that edge on CI's (slower) runner. Two
+attempts overran it:
+- Linking + activating on *both* MMK drives, each compiling **two** runtime TUs,
+  was too heavy: the 40s per-drive bound elapsed after the archive but before the
+  LINK (killing MMK mid-drive), and the two full drives blew the whole-VM budget.
+- Even after moving the LINK to one drive, compiling **two** runtime TUs per drive
+  still tipped CI: `mmk_build` itself passed, but the VM hit 120s during the very
+  next suite (`mmk_drive`) and the qemu timeout reddened the run.
 
-Closing that rung (stage the producer graph + IMGACT.EXE in `tests/qemu/Dockerfile`,
-extend the MMS to the `LNK --executable` step with absolute `--use` paths, and
-assert the activated image's oracle exit) is the remaining spine-#7 residual,
-tracked as its own item.
+So the suite is deliberately LIGHTER than the vms-6be compile+archive suite:
+**each drive compiles ONE runtime TU** (`vms_string`), and the **LINK+activate runs
+on drive #2 only** (drive #1 is the lighter compile+archive drive). The
+**compile+archive OUTPUTS are asserted byte-identical across the two drives**
+(determinism). The LINK OUTPUT's byte-identity, and LIBRARIAN archiving MULTIPLE
+members, are proven **on the host** (`run_mmk_component_build.sh` links + archives
+byte-identically); in-guest the suite proves the compile→archive→LINK→activate
+chain end to end. The per-drive bound was raised 40s→60s.
 
-## Retiring BUILD.COM
+Key choices:
 
-`distro/.../BUILD.COM` (the shell-free **DCL** build driver) stays as the
-S3.2/S4 self-host artifact **until the MMK-driven LINK-to-image path is green in
-QEMU** (the residual above); spine #6 proved the COMPILE stage and spine #7
-(vms-6be) the ARCHIVE stage, but the LINK→ACTIVATE rung is still host-only.
-`OVMXRT.MMS` is its MMK-native successor for the build description. BUILD.COM is
-**not** deleted in this session — deletion follows the full
-compile→archive→**link→activate** execution proof in-guest (Rule 6/7 — no red
-gate shipped, no premature retirement).
+- **`vms_math.c` is excluded** (SSE `"x"` inline asm not tcc-compilable on
+  x86_64); `vms_string.c` is the runtime TU the suite drives.
+- **Only `DECC$SHR.EXE` is `--use`d, not the six shareables.** The component is
+  freestanding: its *sole* external symbol is `vms_strlen` (defined in the
+  `.OLB`), so the executable's only cross-image import is crt0/exit from
+  DECC$SHR. That collapses the "six shareables" the residual once anticipated to
+  **one** — DECC$SHR is `mk_decc_shr.sh`'s whole-archived musl `libc.a` +
+  `libgcc.a`, which **builds clean in the ubuntu+`musl-gcc` Dockerfile** (the
+  alpine-only assumption was unfounded; the producer graph links there too).
+- **Absolute `--use` path, not `SYS$LIBRARY:`.** The drive passes the absolute
+  `DECC$SHR.EXE` path (as the compile/archive steps pass absolute TCC/LIBRARIAN
+  paths and `mk_dcl.sh` passes absolute shareable paths); the `$` in `DECC$SHR` is
+  an ordinary VMS filename character in the raw-delivered DCL tail, not an
+  apostrophe substitution. `SYS$LIBRARY:` logical-name resolution inside LINK.EXE
+  remains an unneeded authenticity nicety.
+- **`LNK`, not `LINK`** — `LINK` IS the built-in DCL verb; `LNK` (not a prefix of
+  it) falls through to the foreign-command symbol and forks the staged static
+  LINK.EXE. The same trap as `LIBRARIAN` vs the `LIBRARY` built-in (vms-6be).
+- **A multi-member archive + `vms_snprintf` are host-proven, not driven here.**
+  Keeping the in-guest suite to one runtime TU is the budget choice above;
+  `run_mmk_component_build.sh` archives three members byte-identically on the
+  host. Separately, TCC compiles `vms_snprintf`'s varargs to tinycc's `__va_arg`
+  helper, which DECC$SHR does not export — so exercising `vms_snprintf` in a
+  *runnable* image would first need `__va_arg` appended to DECC$SHR (a follow-up
+  nicety), independent of the budget.
+
+Staged into `tests/qemu/Dockerfile`: the static `vmslink` LINK.EXE, `IMGACT.EXE`
+(`make -C src/imgact ARCH=x86_64`), and `DECC$SHR.EXE` (`mk_decc_shr.sh`).
+
+## Retiring BUILD.COM — STILL BLOCKED (not by the LINK→activate proof, by the S4 fixpoint)
+
+`distro/.../BUILD.COM` (the shell-free **DCL** build driver) **stays.** The
+LINK→activate proof this rung adds does *not* clear it, because BUILD.COM is
+load-bearing for a proof MMK does **not yet** replace:
+`src/imgact/test/run_link_selfhost_native.sh` (CI job `link-selfhost-native`, the
+**S4 self-host FIXPOINT — a 1.0 gate**, vms-62b) copies `BUILD.COM` (line 136) and
+drives it as a **multi-TU** build to rebuild `LINK.EXE` from within OVMX and prove
+`gen2 == gen3` byte-stable; `run_build_com_native.sh` (S3.2) similarly drives it.
+The vms-725 MMK chain builds a **small single-TU** component to a trivial runnable
+image — it does not yet drive the multi-TU LINK.EXE self-host fixpoint. Deleting
+BUILD.COM would redden that 1.0 gate. Retirement therefore waits on **porting the
+S4 fixpoint from BUILD.COM to an MMK descrip.mms** (tracked separately); only then
+do BUILD.COM + `run_build_com_native.sh` + `run_link_selfhost_native.sh`'s
+BUILD.COM use + their CI jobs get removed. `OVMXRT.MMS` remains the MMK-native
+successor for the *build description*; the driver handoff completes at the
+fixpoint port.

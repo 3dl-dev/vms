@@ -4670,7 +4670,7 @@ EOF
 
     mmk-build-image-not-activated)
         case "$_f" in
-        facility)     echo "the MMK-driven native BUILD (self-host spine #6 vms-d1b + spine #7 vms-6be): the shipped MMK.EXE drives the static TCC.EXE + LIBRARIAN.EXE over its persistent mailbox DCL to compile TWO REAL src/libvmssys runtime TUs to objects and archive them into OVMXRT.OLB -- the DCL foreign-command activation (src/vmsdcl/dcl_cmd_process.c dcl_exec_foreign_command -> dcl_activate_image fork+execve) that actually runs the staged toolchain in the guest";;
+        facility)     echo "the MMK-driven native BUILD (self-host spine #6 vms-d1b + spine #7 vms-6be/vms-725): the shipped MMK.EXE drives the static TCC.EXE + LIBRARIAN.EXE + LINK.EXE over its persistent mailbox DCL to compile REAL src/libvmssys runtime TUs, archive them into OVMXRT.OLB, and LINK a runnable OVMXRT.EXE -- the DCL foreign-command activation (src/vmsdcl/dcl_cmd_process.c dcl_exec_foreign_command -> dcl_activate_image fork+execve) that actually runs the staged toolchain in the guest";;
         targets)      echo "vmsdcl/dcl_cmd_process.c";;
         suites_red)   echo "test_syssvc_mmk_build";;
         blind_suites) echo "";;
@@ -4681,17 +4681,21 @@ EOF
         # MMK in $HIBER -- two ~50s wedges do not fit run_tests.sh's 120s QEMU
         # budget in one boot. This control reddens test_syssvc_mmk_build ALONE and
         # FAST, with NO wedge: dcl_exec_foreign_command reports SS$_NORMAL WITHOUT
-        # activating the image, so the driven DCL "runs" the TCC command
+        # activating the image, so the driven DCL "runs" each toolchain command
         # instantly, echoes the marker, and MMK completes -- but the toolchain
-        # never runs, so NO object and NO archive are produced. The completion
-        # assertion stays GREEN (the drive did complete); the compile object/
-        # byte-identity assertions AND the spine-#7 archive assertions redden.
+        # never runs, so NO object, NO archive and NO image are produced. The
+        # completion assertion stays GREEN (the drive did complete); the compile
+        # object/byte-identity assertions, the archive assertions AND the spine-#7
+        # LINK+activate assertions redden.
         # ISOLATION: among every suite init.sh runs, ONLY test_syssvc_mmk_build
         # activates an image through a DCL foreign command. mmk_drive's action is
         # a WRITE builtin; test_syssvc_startup_service uses RUN (dcl_cmd_run, a
         # different path); test_syssvc_imgact_* activate through sys$imgact, not
-        # DCL. So this mutation is attributable to the build drive alone.
-        why)          echo "dcl_exec_foreign_command stops ACTIVATING the image: it returns SS\$_NORMAL without calling dcl_activate_image, so a foreign command REPORTS success while running nothing -- the INV-6 facade shape (report success without doing the work). For the MMK build drive, the driven DCL's TCC and LIBRARIAN commands 'succeed' instantly and MMK's drive completes, but neither TCC.EXE nor LIBRARIAN.EXE is ever fork+execve'd, so no object and hence no OVMXRT.OLB is produced and the byte-identity oracles have nothing to compare. Parsing, argv construction, the image resolution and every non-activation path are untouched; only whether the resolved image actually runs changes -- the exact question 'did MMK really drive a real toolchain in the guest' the suite exists to answer.";;
+        # DCL. So this mutation is attributable to the build drive alone. (The
+        # harness's OWN activation of the produced OVMXRT.EXE -- the exit-216
+        # oracle -- is a plain exec of a file that only exists if LINK ran, so it
+        # too reddens under this root, not independently.)
+        why)          echo "dcl_exec_foreign_command stops ACTIVATING the image: it returns SS\$_NORMAL without calling dcl_activate_image, so a foreign command REPORTS success while running nothing -- the INV-6 facade shape (report success without doing the work). For the MMK build drive, the driven DCL's TCC, LIBRARIAN and LINK commands 'succeed' instantly and MMK's drive completes, but none of TCC.EXE/LIBRARIAN.EXE/LINK.EXE is ever fork+execve'd, so no object, no OVMXRT.OLB and no OVMXRT.EXE is produced and the byte-identity + activation oracles have nothing to inspect. Parsing, argv construction, the image resolution and every non-activation path are untouched; only whether the resolved image actually runs changes -- the exact question 'did MMK really drive a real toolchain in the guest' the suite exists to answer.";;
         require_fail) cat <<'EOF'
 the MMK-driven TCC.EXE produced VMS_STRING.OBJ in the guest (build #1)
 EOF
@@ -4703,32 +4707,39 @@ the MMK-driven TCC.EXE produced VMS_STRING.OBJ in the guest (build #2)
 VMS_STRING.OBJ is BYTE-IDENTICAL across two independent MMK-driven in-guest builds (deterministic, zero bash)
 the MMK-driven LIBRARIAN.EXE produced OVMXRT.OLB in the guest (build #1)
 OVMXRT.OLB is a valid ar-format object library (!<arch> magic) -- LIBRARIAN really archived it in QEMU
-OVMXRT.OLB carries both archived members VMS_STRING and VMS_SNPRINTF -- a real 2-TU library, not a single object
-OVMXRT.OLB embeds the runtime symbols vms_strlen + vms_snprintf -- its members are compiles of the REAL src/libvmssys TUs
+OVMXRT.OLB carries the archived member VMS_STRING -- LIBRARIAN inserted the driven object
+OVMXRT.OLB embeds the runtime symbol vms_strlen -- its member is a compile of the REAL src/libvmssys/vms_string.c
 the MMK-driven LIBRARIAN.EXE produced OVMXRT.OLB in the guest (build #2)
 OVMXRT.OLB is BYTE-IDENTICAL across two independent MMK-driven in-guest builds (deterministic archive, zero bash)
+the MMK-driven LINK.EXE produced OVMXRT.EXE in the guest
+OVMXRT.EXE is a valid OVMX image (ELF ET_DYN) -- LINK really linked it in QEMU
+OVMXRT.EXE carries PT_INTERP=IMGACT.EXE -- it is an image the kernel activates through IMGACT, not a bare ELF
+IMGACT activated the MMK-driven OVMXRT.EXE and it RAN to exit 216 (vms_strlen("OVMXRT")*36) -- the LINK pulled VMS_STRING from the .OLB and the image really runs
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
 SAME ONE ROOT (the foreign command reports success but activates nothing), seen
-as every downstream absence of the object AND of the archive built from it. With
-dcl_activate_image never called, the driven TCC and LIBRARIAN commands complete
-instantly with a success status, so drive #1 runs to the end and the spawned DCL
-still echoes OVMXD1B:COMPILED -- the single marker "completion" assertion stays
-GREEN (this is a fast failure, not a $HIBER wedge). But no compiler ran, so
-drive #1 produces no object; LIBRARIAN then has no input objects to archive, so
-no OVMXRT.OLB is produced either; the suite's OLB-keyed short-circuit then skips
-drive #2. Build #1's object is absent -- the "produced VMS_STRING.OBJ (build #1)"
+as every downstream absence of the object, the archive built from it, AND the
+image linked from that. With dcl_activate_image never called, the driven TCC,
+LIBRARIAN and LINK commands complete instantly with a success status, so drive #1
+runs to the end and the spawned DCL still echoes OVMXD1B:COMPILED -- the single
+marker "completion" assertion stays GREEN (this is a fast failure, not a $HIBER
+wedge). But no compiler ran, so drive #1 produces no object; LIBRARIAN then has
+no input objects to archive, so no OVMXRT.OLB; the suite's OLB-keyed short-circuit
+then skips drive #2 (the compile->archive->LINK drive), so no OVMXRT.EXE is ever
+produced. Build #1's object is absent -- the "produced VMS_STRING.OBJ (build #1)"
 require_fail -- and its downstream reads redden with it: the COMPILE knock_ons
 (valid-ELF and vms_strlen oracles with no object to inspect, the build-#2 object
-with drive #2 skipped, and the object byte-identity check with nothing to
-compare) AND the ARCHIVE knock_ons (no OVMXRT.OLB build #1, so the ar-magic,
-both-members, and embedded-symbols oracles have no archive to inspect; no build
-#2 archive with drive #2 skipped; and the archive byte-identity check with
-nothing to compare). Every one is an observation of the single fact "the driven
-toolchain never ran". Nothing outside test_syssvc_mmk_build is touched: it is the
-only suite whose (spawned) DCL activates an image through a foreign command, and
-with no executive it honest-skips before ever spawning that DCL.
+with drive #2 skipped, and the object byte-identity check); the ARCHIVE knock_ons
+(no OVMXRT.OLB build #1, so the ar-magic, both-members and embedded-symbols
+oracles have no archive; no build #2 archive; the archive byte-identity check);
+and the LINK+ACTIVATE knock_ons (drive #2 skipped -> no OVMXRT.EXE, so the
+valid-ELF and PT_INTERP oracles have no image and the IMGACT activation yields no
+exit 216 because there is no image to run). Every one is an observation of the
+single fact "the driven toolchain never ran". Nothing outside
+test_syssvc_mmk_build is touched: it is the only suite whose (spawned) DCL
+activates an image through a foreign command, and with no executive it
+honest-skips before ever spawning that DCL.
 EOF
                       ;;
         esac;;

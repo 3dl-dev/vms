@@ -45,6 +45,13 @@ struct NAM {
     uint32_t nam$l_wcc;        /* Wildcard context (internal) */
     /* Internal */
     void    *nam$$l_context;   /* Wildcard search context (internal) */
+    /* Parse-control / related-file / device-id fields (vms-ec70: needed by
+     * callers such as MadGoat MMK that set NAM$M_SYNCHK for syntax-only
+     * $PARSE, chain a related-file NAM, or read the device-id back).  Appended
+     * at the end so all pre-existing field offsets are unchanged. */
+    uint8_t  nam$b_nop;        /* $PARSE options (NAM$M_SYNCHK etc.) */
+    struct NAM *nam$l_rlf;     /* Related-file NAM for relative $PARSE */
+    char     nam$t_dvi[16];    /* Device-id (counted string) after $PARSE */
 };
 
 /* NAM flags (nam$l_fnb) */
@@ -68,5 +75,9 @@ struct NAM {
     .nam$b_bid = NAM$C_BID, \
     .nam$b_bln = sizeof(struct NAM) \
 }
+
+/* nam$b_nop $PARSE option flags */
+#define NAM$M_SYNCHK      0x08    /* Syntax-only parse (no device/dir check) */
+#define NAM$M_PWD         0x10    /* Parse-with-directory (search list) */
 
 #endif /* __RMS_NAM_H */

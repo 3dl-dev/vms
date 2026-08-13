@@ -240,12 +240,19 @@
 /*
 ** External references
 */
-#ifndef __VAX
+#ifdef OVMX_MMK
+/* OVMX (vms-ec70): MMK_CLD is the table compiled at run time from mmk_cld.cld
+ * by cli$compile_cld (see ovmx_mmk_cld.c), not a SET COMMAND object symbol. */
+struct cli_command_table;
+struct cli_command_table *ovmx_mmk_get_cld(void);
+#define MMK_CLD (ovmx_mmk_get_cld())
+#elif !defined(__VAX)
     extern mmk_cld;
+#define MMK_CLD (&mmk_cld)
 #else
     globalref mmk_cld;
-#endif
 #define MMK_CLD (&mmk_cld)
+#endif
 
     void Map_Default_Rules(void);
 

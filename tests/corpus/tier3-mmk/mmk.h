@@ -377,7 +377,12 @@ typedef POINTER SPHANDLE;
 **  SYMBOLS
 */
     struct SYMBOL * Lookup_Symbol(char *name);
+#ifdef OVMX_MMK  /* OVMX (vms-ec70): counted form (va_count has no x86-64 ABI equivalent) */
+    void ovmx_Define_Symbol(int ovmx_ac, SYMTYPE symtype, char *name, char *val, int vallen, ...);
+#define Define_Symbol(...) ovmx_Define_Symbol(OVMX_NARG(__VA_ARGS__), __VA_ARGS__)
+#else
     void Define_Symbol(SYMTYPE symtype, char *name, char *val, int vallen, ...);
+#endif
     int Resolve_Symbols(char *in, int inlen, char * *out, int *outlen, int dont_resolve_unknowns);
     void Clear_Local_Symbols(void);
     void Create_Local_Symbols(struct DEPEND *dep, struct OBJREF *srcref, struct QUE *chgque);
@@ -405,7 +410,12 @@ typedef POINTER SPHANDLE;
 */
     void Build_Suffix_List(char *line, int linelen);
     char * itoa(int);
+#ifdef OVMX_MMK  /* OVMX (vms-ec70): counted form (va_count has no x86-64 ABI equivalent) */
+    char * ovmx_cat(int ovmx_ac, char *dest, ...);
+#define cat(...) ovmx_cat(OVMX_NARG(__VA_ARGS__), __VA_ARGS__)
+#else
     char * cat(char *dest, ...);
+#endif
     char * trim(char *s);
     char * find_char(char *base, char *end, char *charset);
     void upcase(char *str);

@@ -108,7 +108,9 @@
 #include <tpadef.h>
 
 #pragma nostandard
+#ifndef OVMX_MMK          /* OVMX (vms-ec70): LIB$_SYNTAXERR is a macro in OVMX <libdef.h> */
     globalvalue unsigned int LIB$_SYNTAXERR;
+#endif
 #pragma standard
 
 /*
@@ -213,7 +215,18 @@
 /*
 ** External references
 */
-#ifndef __VAX
+#ifdef OVMX_MMK
+/* OVMX (vms-ec70): drive the real lib$table_parse engine with the C port of
+ * PARSE_TABLES.MAR (bead vms-486, tests/libvms/mmk_parse_tables.c).  The
+ * engine takes the grammar as its state_table and ignores key_table, so both
+ * &parse_state and &parse_key resolve to the grammar and no call site changes. */
+/* forward-declare only the grammar symbol (mmk_parse_tables.h also defines a
+ * PRS_K_ enum that would collide with MMK's own #defines below). */
+extern const TPA_GRAMMAR mmk_parse_descrip_grammar;
+#define parse_state mmk_parse_descrip_grammar
+#define parse_key   mmk_parse_descrip_grammar
+#define lib$tparse  lib$table_parse
+#elif !defined(__VAX)
     extern int parse_state, parse_key;
     unsigned int lib$table_parse();
 #define lib$tparse lib$table_parse
@@ -280,7 +293,11 @@ void parse_descrip (char *xline, int xlinelen, FILEHANDLE *newu, int *newmaxl,
     tpablk.tpa0.tpa$l_count = TPA_K_COUNT;
     tpablk.tpa0.tpa$l_options = TPA$M_BLANKS;
     tpablk.tpa0.tpa$l_stringcnt = linelen;
+#ifdef OVMX_MMK          /* OVMX (vms-ec70): 64-bit — do not truncate the pointer */
+    tpablk.tpa0.tpa$l_stringptr = (char *)upline;
+#else
     tpablk.tpa0.tpa$l_stringptr = (unsigned int)upline;
+#endif
     tpablk.tpa_l_stringbase = line;
     tpablk.tpa_l_upbase = upline;
     tpablk.tpa_l_unit = newu;

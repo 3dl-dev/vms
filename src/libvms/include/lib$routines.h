@@ -138,6 +138,16 @@ uint32_t lib$delete_vm_zone(
     const uint32_t *zone_id
 );
 
+/*
+ * lib$reset_vm_zone - Bulk-free all memory in a zone, keeping the zone active.
+ *
+ * @param zone_id    Pointer to zone identifier to reset
+ * @return SS$_NORMAL, or LIB$_BADZONE for an invalid/inactive zone
+ */
+uint32_t lib$reset_vm_zone(
+    const uint32_t *zone_id
+);
+
 /* ================================================================
  * Terminal I/O Routines
  * ================================================================ */

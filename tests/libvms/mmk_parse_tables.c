@@ -58,6 +58,7 @@
  * what the ported state machine actually did — the state machine is real; only
  * the "store" side effect is a test probe.
  * -------------------------------------------------------------------------- */
+#ifndef OVMX_MMK_PRODUCTION
 static void mmk_record(mmk_parse_ctx *m, uint32_t code) {
     if (m->nevents >= MMK_MAX_EVENTS)
         return;
@@ -70,7 +71,20 @@ static void mmk_record(mmk_parse_ctx *m, uint32_t code) {
     m->code[m->nevents] = code;
     m->nevents++;
 }
+#endif /* !OVMX_MMK_PRODUCTION */
 
+#ifdef OVMX_MMK_PRODUCTION
+/* OVMX (vms-ec70): PRODUCTION build — this grammar is compiled INTO MMK.EXE and
+ * its transitions must fire MMK's REAL store routines (parse_descrip.c's
+ * parse_store / parse_objects.c's parse_obj_store), which take the TPARSE block
+ * address and dispatch on tpa$l_param exactly like the .mar's PRS_STORE/PO_STORE.
+ * The test-probe bodies below (which record into a mmk_parse_ctx) are compiled
+ * out; the state machine itself is identical either way. */
+extern int parse_store(void *tpablk);
+extern int parse_obj_store(void *tpablk);
+static uint32_t act_prs(void *blk) { return (uint32_t)parse_store(blk); }
+static uint32_t act_po (void *blk) { return (uint32_t)parse_obj_store(blk); }
+#else
 static uint32_t act_prs(void *blk) {
     mmk_parse_ctx *m = (mmk_parse_ctx *)blk;
     uint32_t code = m->tpa.tpa$l_param;
@@ -93,6 +107,7 @@ static uint32_t act_po(void *blk) {
     mmk_record(m, m->tpa.tpa$l_param);
     return SS$_NORMAL;
 }
+#endif /* !OVMX_MMK_PRODUCTION */
 
 /* --------------------------------------------------------------------------
  * State indices (enum == file order, so TPA$K_NEXT_SEQ = index+1 is faithful).

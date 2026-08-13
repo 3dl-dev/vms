@@ -63,14 +63,20 @@
 #pragma module GET_RDT "V1.4"
 #include "mmk.h"
 #include <rms.h>
+#ifndef OVMX_MMK          /* OVMX (vms-ec70): the LBR (.OLB module-date) path is
+                           * seamed out below — OVMX has no lbr$ callable RTL.
+                           * See the OVMX stubs at the bottom of this #ifndef. */
 #include <mhddef.h>
 #include <lbrdef.h>
+#endif
 
 /*
 ** Forward declarations
 */
     unsigned int lbr_get_rdt(char *, char *, TIME *);
     void lbr_flush(void);
+
+#ifndef OVMX_MMK
 
 /*
 ** Context structure and header for the list that tracks them
@@ -283,6 +289,17 @@ void lbr_flush (void) {
     }
     lbrcount = 0;
 }
+#else  /* OVMX_MMK — honest stubs: .OLB module revision-date lookup is not wired
+        * (deferred; see vms-ec70 PR).  Returns an even (failure) status so a
+        * library-module target is treated as needing a rebuild rather than
+        * silently reporting a bogus date. */
+unsigned int lbr_get_rdt (char *lib, char *mod, TIME *rdt) {
+    (void)lib; (void)mod;
+    if (rdt) memset(rdt, 0, sizeof(*rdt));
+    return RMS$_FNF;   /* module not found -> forces "stale" */
+}
+void lbr_flush (void) { }
+#endif /* OVMX_MMK */
 
 /*
 **++

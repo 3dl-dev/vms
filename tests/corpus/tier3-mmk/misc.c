@@ -95,7 +95,9 @@
 */
     void Build_Suffix_List(char *, int);
     char *itoa(int);
+#ifndef OVMX_MMK   /* OVMX (vms-ec70): cat() is the counted ovmx_cat form (mmk.h) */
     char *cat(char *, ...);
+#endif
     char *trim(char *);
     char *find_char(char *, char *, char *);
     void upcase(char *);
@@ -255,7 +257,12 @@ char *itoa(int i) {
 **
 **--
 */
+#ifdef OVMX_MMK   /* OVMX (vms-ec70): counted form; the call-site macro (mmk.h)
+                   * supplies ovmx_ac = total arg count in place of va_count. */
+char *ovmx_cat(int ovmx_ac, char *in, ...) {
+#else
 char *cat(char *in, ...) {
+#endif
 
     int actualcount;
     va_list ap;
@@ -263,7 +270,11 @@ char *cat(char *in, ...) {
     int i, inlen, len, outlen;
 
     outlen = inlen = (in == (char *)0) ? 0 : strlen(in);
+#ifdef OVMX_MMK
+    actualcount = ovmx_ac;
+#else
     va_count(actualcount);
+#endif
     va_start(ap, in);
     i = 1;
     while (i < actualcount) {

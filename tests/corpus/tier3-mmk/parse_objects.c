@@ -86,7 +86,9 @@
 #pragma module PARSE_OBJECTS "V1.8"
 #include "mmk.h"
 #pragma nostandard
+#ifndef OVMX_MMK          /* OVMX (vms-ec70): LIB$_SYNTAXERR is a macro in OVMX <libdef.h> */
     globalvalue int LIB$_SYNTAXERR;
+#endif
 #pragma standard
 #include "globals.h"
 #include <fscndef.h>
@@ -132,7 +134,13 @@
 /*
 ** External references
 */
-#ifndef __VAX
+#ifdef OVMX_MMK
+/* OVMX (vms-ec70): drive lib$table_parse with the vms-486 object-list grammar. */
+extern const TPA_GRAMMAR mmk_parse_objects_grammar;
+#define po_state    mmk_parse_objects_grammar
+#define po_key      mmk_parse_objects_grammar
+#define lib$tparse  lib$table_parse
+#elif !defined(__VAX)
     extern int po_state, po_key;
     unsigned int lib$table_parse();
 #define lib$tparse lib$table_parse
@@ -172,7 +180,11 @@ void Parse_Objects (char *line, int linelen, struct QUE *objque, int is_target) 
     tpablk.tpa0.tpa$l_count = TPA_K_COUNT;
     tpablk.tpa0.tpa$l_options = TPA$M_BLANKS;
     tpablk.tpa0.tpa$l_stringcnt = linelen;
+#ifdef OVMX_MMK          /* OVMX (vms-ec70): 64-bit — do not truncate the pointer */
+    tpablk.tpa0.tpa$l_stringptr = (char *)line;
+#else
     tpablk.tpa0.tpa$l_stringptr = (unsigned int)line;
+#endif
     tpablk.tpa_l_istarget = is_target;
     tpablk.tpa_l_objqptr = objque;
 

@@ -75,8 +75,12 @@ domains:
     blurb: "TCP/IP Services (UCX), DECnet Phase IV, LAT, SSH."
 
   - id: runtime-arch
-    name: "H. Runtime & Architecture"
-    blurb: "Architecture targets, the kernel executive (/dev/vms), image activation / runtime linking."
+    name: "H. Executive"
+    blurb: "The VMS executive itself — access modes, the process model (PCB), scheduling, and the executive-backed IPC that underpins the system services. (Architecture/platform support and OVMX self-hosting are roadmap concerns, not compatibility surfaces — see the release roadmap and release-dimensions, not this register.)"
+
+  - id: languages
+    name: "I. Languages & Compilers"
+    blurb: "The VMS language story: compilers (Fortran/COBOL/BASIC/Pascal/MACRO/Ada/PL/I/…), their language RTLs (FOR$/COB$/BAS$/PAS$), and the OpenVMS Calling Standard that makes cross-language calls work. OVMX today has one language — C, via tcc."
 
 # Facility registry: token -> domain. The generator warns if a facilities/*.yaml
 # names a facility absent here, or if a registered facility has no file yet
@@ -145,12 +149,14 @@ facilities:
     - macro
     - message-compiler
     - mms-mmk
-    - self-host-compiler
   networking:
     - tcpip-services
     - decnet
     - lat
     - ssh
   runtime-arch:
-    - arch-targets
     - kernel-executive
+  languages:
+    - compilers
+    - language-rtl
+    - calling-standard

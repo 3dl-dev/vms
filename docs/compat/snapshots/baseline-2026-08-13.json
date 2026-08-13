@@ -1,23 +1,46 @@
 {
   "version": "baseline-2026-08-13",
   "overall": {
-    "count": 395,
+    "count": 405,
     "by_status": {
-      "verified": 27,
-      "implemented": 209,
-      "partial": 39,
+      "verified": 24,
+      "implemented": 206,
+      "partial": 43,
       "stub": 19,
       "designed": 2,
-      "absent": 99
+      "absent": 111
     },
     "by_authenticity": {
-      "real": 230,
-      "n/a": 87,
-      "advisory": 32,
-      "facade-risk": 46
+      "real": 227,
+      "n/a": 99,
+      "advisory": 34,
+      "facade-risk": 45
     },
-    "coverage_index": 57.8,
-    "facade_risk": 46
+    "met": 230,
+    "in_progress": 43,
+    "not_started": 132,
+    "facade_risk": 45
+  },
+  "overall_in_scope": {
+    "count": 363,
+    "by_status": {
+      "verified": 24,
+      "implemented": 206,
+      "partial": 42,
+      "stub": 16,
+      "designed": 2,
+      "absent": 73
+    },
+    "by_authenticity": {
+      "real": 226,
+      "n/a": 61,
+      "advisory": 33,
+      "facade-risk": 43
+    },
+    "met": 230,
+    "in_progress": 42,
+    "not_started": 91,
+    "facade_risk": 43
   },
   "by_domain": {
     "programming-interfaces": {
@@ -36,7 +59,9 @@
         "facade-risk": 22,
         "real": 120
       },
-      "coverage_index": 60.6,
+      "met": 134,
+      "in_progress": 15,
+      "not_started": 55,
       "facade_risk": 22
     },
     "file-system": {
@@ -55,7 +80,9 @@
         "n/a": 2,
         "facade-risk": 1
       },
-      "coverage_index": 74.5,
+      "met": 23,
+      "in_progress": 3,
+      "not_started": 4,
       "facade_risk": 1
     },
     "command-language": {
@@ -74,7 +101,9 @@
         "n/a": 13,
         "advisory": 3
       },
-      "coverage_index": 52.7,
+      "met": 29,
+      "in_progress": 14,
+      "not_started": 21,
       "facade_risk": 11
     },
     "system-management": {
@@ -93,7 +122,9 @@
         "advisory": 3,
         "facade-risk": 6
       },
-      "coverage_index": 49.4,
+      "met": 19,
+      "in_progress": 2,
+      "not_started": 15,
       "facade_risk": 6
     },
     "clustering": {
@@ -112,63 +143,90 @@
         "advisory": 1,
         "facade-risk": 1
       },
-      "coverage_index": 43.5,
+      "met": 6,
+      "in_progress": 0,
+      "not_started": 7,
       "facade_risk": 1
     },
     "toolchain": {
-      "count": 24,
+      "count": 17,
       "by_status": {
-        "verified": 3,
-        "implemented": 12,
-        "partial": 1,
+        "verified": 2,
+        "implemented": 9,
+        "partial": 0,
         "stub": 0,
         "designed": 2,
-        "absent": 6
+        "absent": 4
       },
       "by_authenticity": {
-        "real": 13,
-        "n/a": 8,
+        "real": 8,
+        "n/a": 6,
         "advisory": 3
       },
-      "coverage_index": 57.9,
+      "met": 11,
+      "in_progress": 0,
+      "not_started": 6,
       "facade_risk": 0
     },
     "networking": {
-      "count": 11,
+      "count": 10,
       "by_status": {
         "verified": 0,
-        "implemented": 2,
-        "partial": 1,
+        "implemented": 1,
+        "partial": 2,
         "stub": 1,
         "designed": 0,
-        "absent": 7
+        "absent": 6
       },
       "by_authenticity": {
         "n/a": 5,
         "real": 3,
-        "facade-risk": 3
+        "facade-risk": 2
       },
-      "coverage_index": 21.8,
-      "facade_risk": 3
+      "met": 1,
+      "in_progress": 2,
+      "not_started": 7,
+      "facade_risk": 2
     },
     "runtime-arch": {
-      "count": 13,
+      "count": 9,
       "by_status": {
-        "verified": 2,
+        "verified": 0,
         "implemented": 6,
-        "partial": 3,
+        "partial": 2,
         "stub": 1,
         "designed": 0,
-        "absent": 1
+        "absent": 0
       },
       "by_authenticity": {
-        "real": 8,
-        "n/a": 2,
+        "real": 6,
         "facade-risk": 2,
         "advisory": 1
       },
-      "coverage_index": 67.7,
+      "met": 6,
+      "in_progress": 2,
+      "not_started": 1,
       "facade_risk": 2
+    },
+    "languages": {
+      "count": 22,
+      "by_status": {
+        "verified": 0,
+        "implemented": 1,
+        "partial": 5,
+        "stub": 0,
+        "designed": 0,
+        "absent": 16
+      },
+      "by_authenticity": {
+        "real": 4,
+        "advisory": 2,
+        "n/a": 16
+      },
+      "met": 1,
+      "in_progress": 5,
+      "not_started": 16,
+      "facade_risk": 0
     }
   },
   "items": {
@@ -186,26 +244,6 @@
       "status": "absent",
       "authenticity": "n/a",
       "scope_1_0": "in"
-    },
-    "arch-targets$arch-targets$x86_64": {
-      "status": "verified",
-      "authenticity": "real",
-      "scope_1_0": "in"
-    },
-    "arch-targets$arch-targets$aarch64": {
-      "status": "verified",
-      "authenticity": "real",
-      "scope_1_0": "in"
-    },
-    "arch-targets$arch-targets$alpha": {
-      "status": "absent",
-      "authenticity": "n/a",
-      "scope_1_0": "in"
-    },
-    "arch-targets$arch-targets$vax": {
-      "status": "partial",
-      "authenticity": "n/a",
-      "scope_1_0": "stretch"
     },
     "audit$audit$security_journal": {
       "status": "absent",
@@ -245,6 +283,26 @@
     "boot$boot$sysgen_params": {
       "status": "partial",
       "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "calling-standard$cs$arg-passing": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "calling-standard$cs$data-types": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "calling-standard$cs$condition-handling": {
+      "status": "partial",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "calling-standard$cs$register-usage": {
+      "status": "partial",
+      "authenticity": "advisory",
       "scope_1_0": "in"
     },
     "chf$lib$establish": {
@@ -321,6 +379,66 @@
       "status": "absent",
       "authenticity": "n/a",
       "scope_1_0": "in"
+    },
+    "compilers$c": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "compilers$macro32": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "out"
+    },
+    "compilers$macro64": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "compilers$fortran": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "compilers$cobol": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "compilers$basic": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "compilers$pascal": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "compilers$cxx": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "compilers$ada": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "compilers$pli": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "compilers$bliss": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "compilers$compilers$_other": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
     },
     "connection-manager$connection-manager$hello-protocol": {
       "status": "verified",
@@ -707,6 +825,36 @@
       "authenticity": "advisory",
       "scope_1_0": "in"
     },
+    "language-rtl$for$": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "language-rtl$cob$": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "language-rtl$bas$": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "language-rtl$pas$": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "undecided"
+    },
+    "language-rtl$pli$": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "language-rtl$language-rtl$shared": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
     "lat$lat$protocol": {
       "status": "absent",
       "authenticity": "n/a",
@@ -876,26 +1024,6 @@
       "status": "implemented",
       "authenticity": "real",
       "scope_1_0": "in"
-    },
-    "link$link$target-x86_64": {
-      "status": "implemented",
-      "authenticity": "real",
-      "scope_1_0": "in"
-    },
-    "link$link$target-aarch64": {
-      "status": "implemented",
-      "authenticity": "real",
-      "scope_1_0": "in"
-    },
-    "link$link$target-alpha": {
-      "status": "absent",
-      "authenticity": "n/a",
-      "scope_1_0": "in"
-    },
-    "link$link$target-vax": {
-      "status": "absent",
-      "authenticity": "n/a",
-      "scope_1_0": "stretch"
     },
     "logical-namespace$lnm$table_system": {
       "status": "verified",
@@ -1377,21 +1505,6 @@
       "authenticity": "facade-risk",
       "scope_1_0": "in"
     },
-    "self-host-compiler$self-host-compiler$tcc-selfhost": {
-      "status": "verified",
-      "authenticity": "real",
-      "scope_1_0": "in"
-    },
-    "self-host-compiler$self-host-compiler$build-com": {
-      "status": "implemented",
-      "authenticity": "real",
-      "scope_1_0": "in"
-    },
-    "self-host-compiler$self-host-compiler$s3-s5-images": {
-      "status": "partial",
-      "authenticity": "real",
-      "scope_1_0": "in"
-    },
     "shadowing$shadowing$host-based-shadowing": {
       "status": "absent",
       "authenticity": "n/a",
@@ -1407,17 +1520,12 @@
       "authenticity": "n/a",
       "scope_1_0": "stretch"
     },
-    "ssh$ssh$vmsshd-daemon": {
-      "status": "implemented",
+    "ssh$ssh$remote-login": {
+      "status": "partial",
       "authenticity": "real",
       "scope_1_0": "in"
     },
-    "ssh$ssh$pid1-wiring": {
-      "status": "absent",
-      "authenticity": "facade-risk",
-      "scope_1_0": "in"
-    },
-    "ssh$ssh$credential-drop": {
+    "ssh$ssh$identity": {
       "status": "absent",
       "authenticity": "facade-risk",
       "scope_1_0": "in"

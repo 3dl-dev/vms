@@ -12,10 +12,30 @@ The **Compatibility Surface Register** is the single, comprehensive, machine-par
 *every VMS functional/compatibility surface* × *its status in OVMX*, filtered to what is in scope
 for 1.0. It answers three questions from one source of truth:
 
-1. **Coverage** — what fraction of each VMS facility does OVMX implement, and how faithfully?
+1. **Status** — for each catalogued VMS surface, what is its status in OVMX, and how faithfully
+   is it done (real vs facade)? (Counts, never a percentage — see §7a.)
 2. **Corpus compatibility** — given a program that calls `LIB$TPARSE`, `SYS$QIO`, `SET HOST`, …,
    is it supported today? (Keyed by canonical symbol/command/feature id → status.)
 3. **Roadmap** — what remains for 1.0, per surface.
+
+**What belongs here — and what does not.** This matrix catalogues **VMS compatibility
+surfaces**: things a VMS program or user observes or depends on — a callable (`SYS$`/`LIB$`/…),
+a command, a file format, a wire protocol, a device, a documented behaviour. Each item's `vms:`
+field must describe *a VMS thing*, never an OVMX symbol, ioctl, or internal mechanism.
+
+The **roadmap is broader than compatibility**, and its non-compatibility parts live elsewhere,
+**not on this matrix**:
+
+- **OVMX engineering milestones** — self-hosting/bootstrap (tcc gen2==gen3, BUILD.COM),
+  reproducible builds → the self-hosting program (`vms-678`) and the release roadmap.
+- **Architecture / platform bring-up** — which CPU targets OVMX runs on (x86_64/aarch64/alpha/vax)
+  → tracked as a **release dimension** by the release machinery, not as a VMS API surface.
+- **Internal implementation & housekeeping** — init wiring, deleted hacks, dead-code residue,
+  refactor leftovers. These are notes at most; never their own "surface" row. (`ssh$pid1-wiring`
+  — "we removed our own `start_sshd()` call" — was exactly this mistake and was deleted.)
+
+If you cannot name the VMS manual, service, command, or format an item corresponds to, it is not
+a compatibility surface — it belongs on the roadmap, not in this register.
 
 It is **not** a replacement for the three existing narrower artifacts; it is their union and
 their index:
@@ -53,7 +73,7 @@ Source of truth: `docs/compat/`.
 
 ```
 docs/compat/
-  domains.yaml              # the 8 domains, facility order, controlled vocabularies
+  domains.yaml              # the 9 domains, facility order, controlled vocabularies
   facilities/
     str.yaml                # one file per facility
     sys-eventflags.yaml
@@ -99,7 +119,7 @@ docs/compat/
 ```yaml
 facility: STR$                       # canonical facility / namespace token
 name: String Manipulation RTL
-domain: programming-interfaces       # one of the 8 domains in domains.yaml
+domain: programming-interfaces       # one of the 9 domains in domains.yaml
 vms_ref: "OpenVMS RTL (STR$) Manual" # public-doc citation (clean-room provenance)
 scope_1_0: in                        # facility-level default; items may override
 tier: 1                              # optional: source-compat tier (1/2/3) from the contract
@@ -123,7 +143,8 @@ items:
 `tools/compat/render_compat.py` reads `docs/compat/` and emits:
 
 1. **`docs/compatibility-surface.md`** — the internal comprehensive register: per-domain sections,
-   per-facility tables, rollup counts (coverage % and authenticity breakdown per facility/domain),
+   per-facility tables, rollup counts (status + authenticity breakdown, and V1
+   met/in-progress/not-started counts per facility/domain — no percentages),
    and a top-line dashboard. Regenerated, never hand-edited.
 2. **`build/compat-surface.json`** — the machine export: the flat list of every item plus rollups,
    consumed by (a) the website and (b) the corpus-compat lookup tool. This is the artifact that
@@ -142,7 +163,7 @@ The website repo (`3dl-dev/openvmx-site`, GH Pages, `openvmx.3dl.dev`) consumes
 status / scope, a search box keyed on `id` (the corpus-lookup UX), and a coverage dashboard. The
 JSON is the contract between the repos; the product repo remains the single source of truth.
 
-## 6. The 8 domains (facility taxonomy)
+## 6. The 9 domains (facility taxonomy)
 
 Grounded in the current header/source inventory on `origin/main`:
 
@@ -162,8 +183,13 @@ Grounded in the current header/source inventory on `origin/main`:
   images); symbol vectors/GSMATCH/ident; LINK.EXE; LIBRARIAN; MACRO/assembler; MESSAGE compiler;
   MMS/MMK; self-hosting compiler.
 - **G. Networking** — TCP/IP Services (UCX QIO + C sockets + EWA0:); DECnet Phase IV; LAT; SSH.
-- **H. Runtime & architecture** — architecture targets (x86_64, aarch64, alpha, vax); kernel
-  executive (`/dev/vms`); image activation / runtime linking.
+- **H. Executive** — the VMS executive itself: access modes, the process model (PCB), scheduling,
+  and the executive-backed IPC underneath the system services. (Architecture/platform support and
+  OVMX self-hosting are roadmap concerns — release dimensions and the self-hosting program — not
+  compatibility surfaces, and are deliberately absent here.)
+- **I. Languages & compilers** — compilers (Fortran/COBOL/BASIC/Pascal/MACRO/Ada/PL/I/BLISS/…),
+  their language RTLs (`FOR$`/`COB$`/`BAS$`/`PAS$`), and the OpenVMS Calling Standard. OVMX has
+  one language today: C, via tcc.
 
 ## 7. Maintenance — keeping it a living artifact
 
@@ -176,6 +202,46 @@ Grounded in the current header/source inventory on `origin/main`:
   references those via `plan_ref` rather than duplicating their plans.
 - **Re-derive, don't recall.** `last_reviewed` dates are the trust signal. A row is only as good as
   its last measurement against `origin/main`.
+
+## 7a. No percentages — an inventory, and a V1 commitment set
+
+**Operator ruling (2026-08-13): we do not put a percentage on the compatibility
+surface.** A percentage needs a known denominator, and the total VMS compatibility
+surface has none — it is fixed, vast, and **not version-scoped**; picking V1
+targets does not shrink it, and it cannot be counted. Any "X% compatible" — even a
+"1.0-scope coverage index" — fabricates a denominator and conflates *what we chose
+for V1* with *the actual surface*. An earlier revision of this register did exactly
+that; it was wrong. So the register reports **two count-based views, and no
+percentage of the whole:**
+
+1. **The inventory (the actual surface).** Absolute counts of catalogued surfaces
+   by status and authenticity. It is stated as **incomplete by construction** — an
+   inventory that grows as surfaces are identified, never a census of all VMS.
+   There is deliberately no "N% done" line here, because the denominator is
+   unknown.
+2. **V1 readiness (a set we define).** Of the surfaces **committed to V1**
+   (`scope_1_0: in` — an enumerable list *we* own), counts of *met*
+   (implemented/verified), *in progress* (partial), and *not started*
+   (absent/stub/designed), plus how many committed surfaces still carry
+   facade-risk. This is honest because the denominator is a commitment list we
+   control — but it is reported as **counts against that list**, and framed so it
+   can never be read as a fraction of VMS. Surfaces that are `out`, `stretch`, or
+   `undecided` are *not* in the V1 denominator but *remain in the inventory*, so
+   deferring work never improves the numbers.
+
+**The Languages & Compilers frontier** is why the distinction bites. OVMX has one
+language (C, via tcc); Fortran/COBOL/BASIC/Pascal/MACRO/Ada/… are `absent`, most
+`undecided` pending an operator scope call (`vms-082`) — the "run corpus software"
+goal (R2) leans on COBOL/Fortran, so they are not automatically out. Cataloguing
+them **added 22 absent surfaces to the inventory** and did *not* flatter any V1
+count. If those `undecided` surfaces are ruled **into** V1, they join the V1
+denominator at status `absent` and the *not-started* count jumps — exactly the
+honest signal a scope decision should produce.
+
+**The guard, stated plainly:** cataloguing more of the real VMS surface should make
+the picture look *less* complete, never more. If adding real surface makes a number
+improve, someone scoped the new surface out (or invented a denominator) to protect
+the score — stop and fix it.
 
 ## 8. Roadmap position
 

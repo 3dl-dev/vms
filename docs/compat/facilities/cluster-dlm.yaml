@@ -17,5 +17,5 @@ items:
     status: absent
     authenticity: real
     vms: "Lock request forwarding / resource remastering to a non-local master node"
-    evidence: src/kernel/vms_lock.c
+    evidence: src/kernel-core/vms_lock.c
     notes: "vms_lock.c:318-390 returns SS$_UNSUPPORTED for a non-local directory or master; membership hard-stubbed to 1 node. Single-node DLM only — no fake grants, so the gap is authentic (real), not a facade."

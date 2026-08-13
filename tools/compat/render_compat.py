@@ -34,12 +34,14 @@ FACILITIES = COMPAT / "facilities"
 OUT_MD = REPO / "docs" / "compatibility-surface.md"
 OUT_JSON = REPO / "build" / "compat-surface.json"
 
-# Coverage weights -- a rough index, labelled as such in the output. Not a score
-# to optimise; a way to sort and to show the shape of the gap.
-COVERAGE_WEIGHT = {
-    "absent": 0.0, "designed": 0.1, "stub": 0.2,
-    "partial": 0.5, "implemented": 0.85, "verified": 1.0,
-}
+# NO coverage percentage. The total VMS compatibility surface has no known
+# denominator, so "% covered" would be a fabricated number (operator ruling
+# 2026-08-13). The register is an INVENTORY with per-surface status; we report
+# absolute counts, and V1 progress against the commitment set we define — never a
+# fraction of the whole surface. These groupings drive count summaries only.
+MET = ("verified", "implemented")          # a V1 commitment is met
+IN_PROGRESS = ("partial",)                 # started, not done
+NOT_STARTED = ("stub", "designed", "absent")
 STATUS_ORDER = ["verified", "implemented", "partial", "stub", "designed", "absent"]
 STATUS_MARK = {
     "verified": "✅", "implemented": "🟢", "partial": "🟡",
@@ -142,17 +144,17 @@ def item_scope(f, it):
 def rollup(items):
     by_status = {s: 0 for s in STATUS_ORDER}
     by_auth = {}
-    weight = 0.0
     for it in items:
         by_status[it["status"]] = by_status.get(it["status"], 0) + 1
         by_auth[it["authenticity"]] = by_auth.get(it["authenticity"], 0) + 1
-        weight += COVERAGE_WEIGHT.get(it["status"], 0.0)
     n = len(items)
     return {
         "count": n,
         "by_status": by_status,
         "by_authenticity": by_auth,
-        "coverage_index": round(100 * weight / n, 1) if n else 0.0,
+        "met": sum(by_status[s] for s in MET),
+        "in_progress": sum(by_status[s] for s in IN_PROGRESS),
+        "not_started": sum(by_status[s] for s in NOT_STARTED),
         "facade_risk": by_auth.get("facade-risk", 0),
     }
 
@@ -198,12 +200,18 @@ def render_md(domains, facilities, uncovered, ctx):
     L.append(f"> Generated {today} from `docs/compat/` against `origin/main`. "
              "Source of truth is the YAML; this file is regenerated. "
              "See `docs/design-compat-surface-register.md`.\n")
-    # dashboard
-    L.append("## Coverage dashboard\n")
+    # dashboard — inventory + counts, NEVER a percentage of the surface
+    rows_in = [r for r in rows if r["scope_1_0"] == "in"]
+    overall_in = rollup(rows_in) if rows_in else rollup([])
+    L.append("## Inventory\n")
     L.append(f"**{overall['count']} surfaces catalogued** across "
-             f"{len(domains['domains'])} domains. "
-             f"Coverage index **{overall['coverage_index']}%** "
-             "(rough weighted index; see design doc).\n")
+             f"{len(domains['domains'])} domains, each with a per-surface status.\n")
+    L.append("> This register is an **inventory, not a percentage.** The total VMS "
+             "compatibility surface has **no known denominator** — it is not version-scoped and "
+             "cannot be counted — so no \"% compatible\" is claimed or computable. The catalogue "
+             "is **incomplete by construction** and grows as surfaces are identified. Below are "
+             "absolute counts; V1 progress is tracked separately against the commitment set we "
+             "define, and is never conflated with the whole surface.\n")
     L.append("| Status | Count | | Authenticity | Count |")
     L.append("|---|---|---|---|---|")
     auth_rows = list(overall["by_authenticity"].items())
@@ -217,12 +225,29 @@ def render_md(domains, facilities, uncovered, ctx):
              f"· {STATUS_MARK['designed']} designed · {STATUS_MARK['absent']} absent · "
              "⚠ facade-risk (INV-6/Draper) · ≈ advisory.\n")
 
-    # scope breakdown
+    # scope breakdown + V1 commitment progress (counts against a set WE define)
     scope_counts = {}
     for r in rows:
         scope_counts[r["scope_1_0"]] = scope_counts.get(r["scope_1_0"], 0) + 1
-    L.append("**1.0 scope:** " + " · ".join(
-        f"{k}={v}" for k, v in sorted(scope_counts.items())) + "\n")
+    L.append("## V1 readiness\n")
+    L.append("Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a "
+             "measure of the whole surface):\n")
+    L.append(f"- **{overall_in['count']} committed** — **{overall_in['met']} met** "
+             f"(implemented/verified), {overall_in['in_progress']} in progress (partial), "
+             f"{overall_in['not_started']} not started (absent/stub/designed).")
+    if overall_in["facade_risk"]:
+        L.append(f"- ⚠ **{overall_in['facade_risk']} of the committed surfaces carry "
+                 "facade-risk** — they must reach honest behaviour, not just \"done\".")
+    other = {k: v for k, v in scope_counts.items() if k != "in"}
+    if other:
+        L.append("- Not in the V1 commitment set: " + " · ".join(
+            f"{v} {k}" for k, v in sorted(other.items()))
+            + " (incl. the language scope calls, `vms-082`).")
+    L.append("")
+    L.append("_These are counts against an enumerable commitment list, deliberately not a "
+             "percentage of VMS. If a surface is later ruled into V1, it joins the denominator "
+             "at whatever status it actually has — cataloguing more of VMS makes the picture "
+             "look less complete, never more._\n")
 
     # per-domain
     fac_by_domain = {}
@@ -231,13 +256,18 @@ def render_md(domains, facilities, uncovered, ctx):
     for d in domains["domains"]:
         dfacs = fac_by_domain.get(d["id"], [])
         ditems = [r for r in rows if r["domain"] == d["id"]]
+        ditems_in = [r for r in ditems if r["scope_1_0"] == "in"]
         dr = rollup(ditems) if ditems else None
+        dr_in = rollup(ditems_in) if ditems_in else None
         L.append(f"## {d['name']}\n")
         L.append(f"_{d['blurb']}_\n")
         if dr:
-            L.append(f"`{bar(dr['by_status'])}`  —  {dr['count']} surfaces, "
-                     f"coverage {dr['coverage_index']}%"
-                     + (f", ⚠ {dr['facade_risk']} facade-risk" if dr['facade_risk'] else "")
+            in_txt = (f"V1: {dr_in['count']} committed, {dr_in['met']} met" if dr_in
+                      else "nothing committed to V1")
+            L.append(f"`{bar(dr['by_status'])}`  —  {dr['count']} surfaces catalogued "
+                     f"({dr['met']} met · {dr['in_progress']} in progress · "
+                     f"{dr['not_started']} not started) · {in_txt}"
+                     + (f" · ⚠ {dr['facade_risk']} facade-risk" if dr['facade_risk'] else "")
                      + "\n")
         for f in dfacs:
             items = f.get("items", []) or []
@@ -262,7 +292,8 @@ def render_md(domains, facilities, uncovered, ctx):
             if f.get("summary"):
                 L.append(f"{f['summary']}\n")
             if fr:
-                L.append(f"<sub>{fr['count']} items · coverage {fr['coverage_index']}%"
+                L.append(f"<sub>{fr['count']} items · {fr['met']} met · "
+                         f"{fr['in_progress']} in progress · {fr['not_started']} not started"
                          + (f" · ⚠ {fr['facade_risk']} facade-risk" if fr['facade_risk'] else "")
                          + "</sub>\n")
             if not items:
@@ -319,7 +350,11 @@ def build_json(domains, facilities):
         "meta": {
             "generated": date.today().isoformat(),
             "source": "docs/compat/",
-            "note": "Machine export of the OVMX Compatibility Surface Register.",
+            "note": ("Machine export of the OVMX Compatibility Surface Register. "
+                     "This is an inventory with per-surface status; it deliberately carries NO "
+                     "coverage percentage — the total VMS surface has no known denominator. "
+                     "Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/"
+                     "not_started) against the commitment set, never a fraction of the whole."),
         },
         "vocab": {
             "status": domains["status"],
@@ -328,6 +363,7 @@ def build_json(domains, facilities):
         },
         "domains": domains["domains"],
         "overall": rollup(rows),
+        "overall_in_scope": rollup([r for r in rows if r["scope_1_0"] == "in"]),
         "facilities": [
             {
                 "facility": f["facility"],

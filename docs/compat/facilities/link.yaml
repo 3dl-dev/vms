@@ -12,8 +12,4 @@ summary: >
   Alpha (EM_ALPHA) or VAX backend exists on origin/main yet.
 last_reviewed: 2026-08-13
 items:
-  - {id: link$core-linker, kind: utility, status: implemented, authenticity: real, vms: "LINK.EXE image linker — symbol resolution, relocation, image build", evidence: "src/vmslink/link.c", notes: "2197 lines; 11 test scripts. Semantics real; image-container byte layout Rule-8-labeled (see image-activation/symbol-vectors)."}
-  - {id: link$target-x86_64, kind: feature, status: implemented, authenticity: real, vms: "x86_64 (EM_X86_64) link target", evidence: "src/vmslink/link.c:296"}
-  - {id: link$target-aarch64, kind: feature, status: implemented, authenticity: real, vms: "aarch64 (EM_AARCH64) link target", evidence: "src/vmslink/link.c:296"}
-  - {id: link$target-alpha, kind: feature, status: absent, authenticity: n/a, vms: "Alpha (EM_ALPHA) link target", evidence: "src/vmslink/link.c:1694", scope_1_0: in, notes: "No Alpha backend on origin/main; operator made AXP first-class 2026-08-10. Freestanding Alpha syscall/crt0 exists only on unmerged local branch vms-054-alpha-port. Cross-listed to arch-targets."}
-  - {id: link$target-vax, kind: feature, status: absent, authenticity: n/a, vms: "VAX link target", evidence: "src/vmslink/link.c:1694", scope_1_0: stretch, notes: "No VAX backend as a libvmssys/LINK.EXE target; VAX exists only via the separate NetBSD substrate path (see arch-targets). libvmssys VAX backend commit vms-9dc not merged."}
+  - {id: link$core-linker, kind: utility, status: implemented, authenticity: real, vms: "LINK.EXE image linker — symbol resolution, relocation, image build", evidence: "src/vmslink/link.c", notes: "2197 lines; 11 test scripts. Semantics real; image-container byte layout Rule-8-labeled (see image-activation/symbol-vectors). Emits x86_64/aarch64 only — which host architectures OVMX targets is a platform/roadmap concern (release dimension), not a VMS surface."}

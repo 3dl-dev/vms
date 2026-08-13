@@ -62,7 +62,8 @@ notes`, naming gaps individually.
 | DCL + utilities + queues | dcl-verbs, dcl-scripting, dcl-qualifiers, lexicals, utilities, help, queues |
 | Security + sysmgmt + boot/install | sysuaf, privileges, rights-db, protection-acl, audit, sysgen, boot, install, accounting |
 | Clustering + executive substrate | kernel-executive, scs, nisca, connection-manager, cluster-dlm, mscp-serve, cluster-logicals, shadowing |
-| Toolchain + networking + arch | object-format, image-activation, symbol-vectors, link, librarian, macro, message-compiler, mms-mmk, self-host-compiler, tcpip-services, decnet, lat, ssh, arch-targets, smg |
+| Toolchain + networking | object-format, image-activation, symbol-vectors, link, librarian, macro, message-compiler, mms-mmk, tcpip-services, decnet, lat, ssh, smg |
+| Languages & compilers | compilers, language-rtl, calling-standard |
 
 ### Steps
 
@@ -92,8 +93,8 @@ The register ships **through** the release machinery, like everything else:
 - **Snapshot at cut.** `tools/cut-release.sh` runs `tools/compat/snapshot.py
   --out-dir dist/release-<version>/`, which writes the tracked
   `docs/compat/snapshots/<version>.json` (per-item coverage, for trend) and a
-  `compat-coverage.json` into the bundle, and prints the "Compatibility coverage"
-  Markdown block (coverage index + delta vs the previous snapshot: surfaces
+  `compat-coverage.json` into the bundle, and prints the "Compatibility surface"
+  Markdown block (counts + V1 met, and the delta vs the previous snapshot: surfaces
   advanced, facades resolved, regressions).
 - **Notes.** `tools/gen_release_notes.py` embeds that block, so every release
   states its coverage and what moved since the last one — generated, never

@@ -20,7 +20,8 @@ const CLUSTERS = [
   { key: 'dcl', facilities: 'dcl-verbs, dcl-scripting, dcl-qualifiers, lexicals, utilities, help, queues (command-language)' },
   { key: 'sec-sysmgmt', facilities: 'sysuaf, privileges, rights-db, protection-acl, audit, sysgen, boot, install, accounting (system-management)' },
   { key: 'clustering', facilities: 'kernel-executive (runtime-arch); scs, nisca, connection-manager, cluster-dlm, mscp-serve, cluster-logicals, shadowing (clustering)' },
-  { key: 'toolchain-net', facilities: 'object-format, image-activation, symbol-vectors, link, librarian, macro, message-compiler, mms-mmk, self-host-compiler (toolchain); tcpip-services, decnet, lat, ssh (networking); arch-targets (runtime-arch); smg (programming-interfaces)' },
+  { key: 'toolchain-net', facilities: 'object-format, image-activation, symbol-vectors, link, librarian, macro, message-compiler, mms-mmk (toolchain); tcpip-services, decnet, lat, ssh (networking); smg (programming-interfaces). NOTE: only VMS surfaces belong here — OVMX self-hosting and architecture/platform bring-up are roadmap, not compatibility.' },
+  { key: 'languages', facilities: 'compilers, language-rtl, calling-standard (languages) — VMS compilers (Fortran/COBOL/BASIC/Pascal/MACRO/Ada/PL/I/…), their FOR$/COB$/BAS$/PAS$ RTLs, and the OpenVMS Calling Standard. OVMX has only C (tcc); the rest are absent and mostly undecided for 1.0 (operator scope call). Do NOT scope a real VMS language out to protect the coverage number.' },
 ]
 
 const CENSUS_SCHEMA = {
@@ -60,6 +61,7 @@ const audit = await agent(
   '1) Every item with status "verified" MUST have a verified_against that names a REAL oracle (lab/mined-capture/CI-negctl-gate/fixpoint), NOT merely a local tests/*.sh that asserts OVMX\'s own output; flag violators.\n' +
   '2) No facility whose coverage is "partial" should contain a "verified" item; flag any.\n' +
   '3) Spot-check that facade-risk items correspond to real success-without-work / fake-shared-state, not honest stubs (honest stubs are stub/advisory, not facade-risk).\n' +
+  '4) SCOPE: every item must be a VMS compatibility surface. Its `vms:` field must name a VMS thing (a manual/service/command/format/behaviour), NOT an OVMX symbol, ioctl, init-wiring, deleted hack, dead-code note, or an engineering milestone (self-hosting, architecture/platform bring-up). Flag any item that is OVMX-internal or a roadmap concern rather than a VMS surface — it belongs on the roadmap, not this matrix.\n' +
   'Return a concise list of any items to correct, with the file, the item id, and the fix. If clean, say so.',
   { label: 'credibility-audit', phase: 'Audit', agentType: 'general-purpose' }
 )

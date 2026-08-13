@@ -4072,7 +4072,7 @@ jobs:
           # Bump implicitly via the pinned strings + harness hash. A NetBSD/SIMH/
           # anita pin change or an entrypoint/Dockerfile change invalidates the
           # cache and forces a fresh, reproducible install.
-          key: lab-vax-netbsd9.4-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
       - name: Build the lab-vax image
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -4094,6 +4094,87 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/.boot-cache/lab-vax:/cache" \
             ovmx-vax-lab negctl
+
+  # -----------------------------------------------------------------------
+  # netbsd-vax-devvms (rd vms-f78bb, parent vms-476, epic vms-8e8; P4-B)
+  #
+  # The RUNTIME proof one rung above netbsd-vax-simh: not just "NetBSD/vax boots"
+  # but "the OVMX EXECUTIVE runs on it". It boots the SAME cached NetBSD/vax disk
+  # under SIMH, cross-builds the OVMX `vms' kernel module + userspace probe for
+  # elf32-vax, DELIVERS them into the guest on a second CD, `modload's the module,
+  # mknod's /dev/vms, and asserts a version/ping ioctl round-trips through the
+  # real in-kernel /dev/vms (kif_transport_netbsd.c) -> "PROBE: PING OK". Plus the
+  # INV-6 module-absent honest-failure control and the P4B_SKIP_LOAD teeth check.
+  # The VAX analogue of the NetBSD/amd64 P2b job. BUILD/TEST tooling, not a
+  # runtime (Rule 9): SIMH is emulation; nothing runs on the host.
+  #
+  # GATING: NIGHTLY (schedule) + manual (workflow_dispatch) ONLY -- NOT per-PR.
+  # SIMH/vax is slow + disk-heavy; the per-PR value for this substrate is the
+  # fast build-only cross-compile gate (exec-netbsd-vax, B1, rd vms-20b9) which
+  # already runs per-PR. This job proves BEHAVIOUR and tolerates the slow TCG
+  # wall-clock because nothing waits on it -- the same split the amd64 P2b/P2c
+  # jobs use (design-p4 sec 6).
+  #
+  # It `needs' netbsd-vax-simh so that job primes the shared 10.1 disk cache
+  # first; this job restores it and NEVER reinstalls in the hot path (design-p4
+  # sec 5). run-devvms.sh wraps every SIMH invocation in a hard timeout.
+  # -----------------------------------------------------------------------
+  netbsd-vax-devvms:
+    name: /dev/vms live on NetBSD/vax under SIMH — PING (vms-f78bb)
+    needs: [changes, netbsd-vax-simh]
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    # Heavier than the smoke job: on a cold cache it also cross-builds a custom
+    # MODULAR NetBSD/vax kernel with build.sh (vax GENERIC omits the module
+    # framework), so give it room. Warm netbsd-OVMX cache -> just boot+modload.
+    timeout-minutes: 180
+    # The full NetBSD src tree + build.sh obj/tools are large, rebuildable scratch
+    # -> keep them OUT of the disk cache (a literal /tmp path; the `runner'
+    # context is not available in a job-level env).
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      # Cache the built MODULAR kernel (4 MB) so the ~40-min build.sh runs only on
+      # a cold cache, keyed on the kernel-build inputs (the OVMX config + the vax
+      # module-wiring patch + the pinned NetBSD version).
+      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
+        uses: actions/cache@v4
+        with:
+          path: .boot-cache/lab-vax/devvms-artifacts/netbsd-OVMX
+          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Prove — /dev/vms live on NetBSD/vax + PING (cross-build, custom MODULAR kernel, modload, ioctl)
+        run: tests/lab-vax/run-devvms.sh prove
+
+      - name: Negative control — skipping modload must redden the PING assertion
+        run: tests/lab-vax/run-devvms.sh negctl
 
   # -----------------------------------------------------------------------
   # libvmssys-netbsd-vax (rd vms-9dc, epic vms-8e8; design sec 4).

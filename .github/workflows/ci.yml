@@ -55,6 +55,7 @@ jobs:
       netbsd: ${{ steps.decide.outputs.netbsd }}
       netbsd_vax: ${{ steps.decide.outputs.netbsd_vax }}
       vmsfs_core_vax: ${{ steps.decide.outputs.vmsfs_core_vax }}
+      exec_netbsd_vax: ${{ steps.decide.outputs.exec_netbsd_vax }}
       aarch64_boot: ${{ steps.decide.outputs.aarch64_boot }}
     steps:
       - name: Checkout
@@ -169,6 +170,13 @@ jobs:
               - 'src/kernel-core/vmsfs/**'
               - 'src/kernel/vmsfs/vmsfs_ondisk.h'
               - 'docs/audit-ilp32-vax-vmsfs.md'
+            exec_netbsd_vax:
+              - '.github/workflows/**'
+              - 'tools/cross-vax/**'
+              - 'src/kernel-core/**'
+              - 'src/kernel-netbsd/**'
+              - 'tests/netbsd/netbsd_version.env'
+              - 'docs/audit-ilp32-vax-netbsd-exec.md'
             aarch64_boot:
               - '.github/workflows/**'
               - 'tests/qemu-aarch64/**'
@@ -187,6 +195,7 @@ jobs:
               echo "netbsd=${{ steps.filter.outputs.netbsd }}"
               echo "netbsd_vax=${{ steps.filter.outputs.netbsd_vax }}"
               echo "vmsfs_core_vax=${{ steps.filter.outputs.vmsfs_core_vax }}"
+              echo "exec_netbsd_vax=${{ steps.filter.outputs.exec_netbsd_vax }}"
               echo "aarch64_boot=${{ steps.filter.outputs.aarch64_boot }}"
             } >> "$GITHUB_OUTPUT"
           else
@@ -199,6 +208,7 @@ jobs:
               echo "netbsd=true"
               echo "netbsd_vax=true"
               echo "vmsfs_core_vax=true"
+              echo "exec_netbsd_vax=true"
               echo "aarch64_boot=true"
             } >> "$GITHUB_OUTPUT"
           fi
@@ -4511,3 +4521,115 @@ jobs:
           echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
             || { echo "FAIL: vmsrms exe was not a VAX ELF"; exit 1; }
           echo "PASS: vmsrms built for netbsd-vax and a real ELF32 VAX exe linked over the full stack"
+
+  # -----------------------------------------------------------------------
+  # Job: NetBSD/vax vms module cross-compiles (rd vms-20b9, epic vms-8e8; P4-B).
+  #
+  # THE elf32-vax TWIN of netbsd-amd64-vms-crosscompile. Where that gate compiles
+  # the whole OVMX executive `vms' kernel module (the shared src/kernel-core/
+  # facilities + the src/kernel-netbsd/ backends) against NetBSD/amd64 kernel
+  # headers with clang, THIS gate compiles the SAME module SRCS against NetBSD/vax
+  # kernel headers with the pinned `vax--netbsdelf' gcc -- the 32-bit VAX (ILP32)
+  # width class no other OVMX target exercises. It is the executive analog of the
+  # vmsfs-core-elf32-vax gate: BUILD-ONLY, no emulator, no boot, -Werror,
+  # relocatable-link, and a generated width-audit TU whose _Static_asserts pin the
+  # ILP32 width class + the packed RB parent+colour word invariant + the intrusive
+  # container node sizes/offsets. Findings: docs/audit-ilp32-vax-netbsd-exec.md.
+  #
+  # It reuses the SAME pinned vax--netbsdelf toolchain image as the libvmssys/
+  # vmsprocess/libvms/vmsfs-core VAX jobs (shared gha layer cache, scope=cross-vax
+  # -- no gcc rebuild) and mounts the SAME pinned NetBSD 10.1 syssrc kernel headers
+  # the amd64 gate uses (tests/netbsd/netbsd_version.env, cached the same way). The
+  # container image carries only the compiler + a NetBSD/vax libc sysroot; the
+  # kernel headers are mounted read-only, exactly as the amd64 gate passes NBSRC.
+  #
+  # Module LOAD on real NetBSD/vax under SIMH + a live /dev/vms is B2 (rd
+  # vms-f78bb), NOT this: B1 is the width-clean COMPILE. BUILD/TEST tooling, never
+  # a runtime (Rule 9). Gated on the exec_netbsd_vax filter (which covers
+  # src/kernel-core/** + src/kernel-netbsd/**, the executive sources the shared
+  # netbsd_vax filter does NOT): push/merge_group/schedule always; on a PR only
+  # when the executive core / NetBSD backends / cross inputs change.
+  # -----------------------------------------------------------------------
+  netbsd-vax-vms-crosscompile:
+    name: NetBSD/vax vms module cross-compiles
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      # The NetBSD/vax KERNEL headers come from the SAME pinned syssrc set the
+      # amd64 gate uses (netbsd_version.env carries NETBSD_SYSSRC_URL/_SHA512).
+      # Cache keyed on that env only -- an OVMX source change never re-downloads.
+      - name: Cache NetBSD kernel sources (syssrc)
+        uses: actions/cache@v4
+        with:
+          path: .netbsd-src
+          key: netbsd-src-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-src-
+
+      - name: Fetch + verify + extract NetBSD syssrc (kernel headers) if not cached
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . tests/netbsd/netbsd_version.env
+          if [ ! -d .netbsd-src/usr/src/sys ]; then
+            mkdir -p .netbsd-src
+            curl -sSL -o /tmp/syssrc.tgz "$NETBSD_SYSSRC_URL"
+            echo "$NETBSD_SYSSRC_SHA512  /tmp/syssrc.tgz" | sha512sum -c -
+            tar xzf /tmp/syssrc.tgz -C .netbsd-src usr/src/sys usr/src/common
+          fi
+
+      - name: Cross-compile the executive vms module for elf32-vax (ILP32 width proof)
+        run: |
+          set +e
+          RAW=$(docker run --rm \
+                  -v "$GITHUB_WORKSPACE:/src" \
+                  -v "$GITHUB_WORKSPACE/.netbsd-src:/nbsrc:ro" \
+                  -w /src -e NBSRC=/nbsrc \
+                  ovmx-cross-vax tools/cross-vax/build-vms-module-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax vms module cross-compile exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: the OVMX executive vms module' \
+            || { echo "FAIL: did not see the executive-module width-proof PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: objects were not elf32-vax -- wrong target"; exit 1; }
+          echo "PASS: the OVMX executive vms module compiled ILP32-clean + relocatable-linked to elf32-vax"
+
+      - name: Teeth check (a deliberately-broken TU must fail the cross-compile)
+        run: |
+          set +e
+          RAW=$(docker run --rm \
+                  -v "$GITHUB_WORKSPACE:/src" \
+                  -v "$GITHUB_WORKSPACE/.netbsd-src:/nbsrc:ro" \
+                  -w /src -e NBSRC=/nbsrc -e CROSSCOMPILE_NEGCTL=1 \
+                  ovmx-cross-vax tools/cross-vax/build-vms-module-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          [ "$RC" -eq 0 ] || { echo "FAIL: negctl run exited nonzero ($RC)"; exit 1; }
+          echo "$RAW" | grep -qF 'PASS (negctl)' \
+            || { echo "FAIL: negctl did not confirm the broken TU was rejected"; exit 1; }

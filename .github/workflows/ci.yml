@@ -156,6 +156,7 @@ jobs:
               - 'tools/cross-vax/**'
               - 'src/libvmssys/**'
               - 'src/vmsprocess/**'
+              - 'src/libvms/**'
               - 'docs/design-ovmx-netbsd-syskrnl.md'
               - 'docs/audit-ilp32-vax-libvmssys.md'
             vmsfs_core_vax:
@@ -4058,6 +4059,32 @@ jobs:
     name: vmsfs-core cross-compiles for elf32-vax (vms-bb8)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.vmsfs_core_vax == 'true' }}
+  # libvms-netbsd-vax (rd vms-1b2, epic vms-8e8, P4-C; CLAUDE.md "Library Build
+  # Order": libvmssys -> vmsprocess -> libvms). The NEXT layer up from
+  # vmsprocess-netbsd-vax and the biggest userspace library -- the VMS runtime
+  # (system services sys$*, RTL lib$/str$/mth$/ots$). Same shape: BUILD-ONLY
+  # cross-compile gate over the pinned `vax--netbsdelf` toolchain. It
+  # (0) builds the elf32-vax libvmssys.a, (0b) the elf32-vax libvmsprocess.a,
+  # (1) builds libvms through the CMake LIBVMS_STANDALONE path -> libvms.a of
+  # elf32-vax objects, and (2) links a real vax--netbsdelf ELF32 executable that
+  # calls into libvms's system-service + RTL surface against NetBSD libc +
+  # libpthread + libm AND the elf32-vax vmsprocess.a + libvmssys.a. This proves
+  # the VMS runtime cross-compiles + links ON TOP of the whole elf32-vax stack.
+  # io_uring is Linux-only: on the netbsd substrate sys_uring.c compiles to
+  # "unavailable" stubs and sys$qio uses its real synchronous read/write path
+  # (docs/audit-ilp32-vax-libvmssys.md §9); no Linux-only facility is pulled.
+  #
+  # DELIBERATELY NOT emulation (no qemu-system-vax; SIMH boot is the separate
+  # netbsd-vax-simh P4 job). Fast once the cross toolchain image layer-caches
+  # (gha, shared scope=cross-vax with the libvmssys/vmsprocess jobs). BUILD/TEST
+  # tooling, never a runtime (Rule 9). Gated on the shared netbsd_vax filter:
+  # push/merge_group/schedule always; on a PR only when the cross inputs change
+  # (src/libvms/**, src/vmsprocess/**, src/libvmssys/**, tools/cross-vax/**, ...).
+  # -----------------------------------------------------------------------
+  libvms-netbsd-vax:
+    name: libvms cross-compiles for netbsd-vax (vms-1b2)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -4069,6 +4096,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
         with:
           context: tools/cross-vax
@@ -4084,6 +4112,11 @@ jobs:
           set +e
           RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
                   ovmx-cross-vax tools/cross-vax/build-vmsfs-core-vax.sh 2>&1)
+      - name: Cross-compile libvms for netbsd-vax + link an ELF32 VAX exe
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax build-libvms-vax.sh 2>&1)
           RC=$?
           set -e
           echo "$RAW"
@@ -4096,3 +4129,13 @@ jobs:
           echo "$RAW" | grep -qiF 'file format elf32-vax' \
             || { echo "FAIL: objects were not elf32-vax -- wrong target"; exit 1; }
           echo "PASS: the ODS-2 core compiled ILP32-clean to elf32-vax objects"
+            echo "FAIL: netbsd-vax libvms cross build/link exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: libvms builds and links for vax--netbsdelf' \
+            || { echo "FAIL: did not see the build+link PASS banner"; exit 1; }
+          echo "$RAW" | grep -qF 'file format elf32-vax' \
+            || { echo "FAIL: objects were not elf32-vax -- wrong target"; exit 1; }
+          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
+            || { echo "FAIL: linked executable was not a VAX ELF"; exit 1; }
+          echo "PASS: libvms built for netbsd-vax and a real ELF32 VAX exe linked against NetBSD libc + libpthread + libm"

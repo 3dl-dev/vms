@@ -7,7 +7,19 @@
  *   - vms_uring_submit_rw(): submit a read/write SQE
  *   - vms_uring_process_completions(): process CQEs, fill IOSBs, set EFs, queue ASTs
  *   - vms_uring_wait_completion(): blocking wait for at least one completion
+ *
+ * io_uring is a Linux-kernel facility. It is a QIO *accelerator*: sys$qio/qiow
+ * fall back to a real synchronous read()/write() path (qio_sync in sys_qio.c)
+ * whenever it is unavailable -- the case on any pre-5.1 Linux kernel and on
+ * every non-Linux substrate. The whole io_uring implementation is therefore
+ * guarded by __linux__; on other substrates (e.g. the netbsd-vax link-libc
+ * port, vms-1b2) the five entry points below compile to "unavailable" stubs so
+ * the synchronous path is taken. This is a substrate selection, not a LARP
+ * fallback (Rule 9 / INV-6): the QIO facility itself is fully implemented by
+ * the synchronous path; only the accelerator is absent.
  */
+
+#if defined(__linux__)
 
 #include <stdint.h>
 #include <string.h>
@@ -295,3 +307,30 @@ void vms_uring_cleanup(void) {
     pcb->uring_cq = NULL;
     pcb->uring_sqes = NULL;
 }
+
+#else  /* !__linux__ -- no io_uring on this substrate (e.g. netbsd-vax) */
+
+/*
+ * "Unavailable" stubs. vms_uring_init() returning -1 makes sys_qio.c's
+ * uring_available() report 0, so sys$qio/qiow use their real synchronous
+ * read()/write() path -- identical to a Linux kernel without io_uring.
+ */
+#include <stdint.h>
+
+int vms_uring_init(void) { return -1; }
+
+int vms_uring_submit_rw(int fd, void *buf, uint32_t len, uint64_t offset,
+                        int is_read, void *iosb, uint32_t efn,
+                        void (*astadr)(uint32_t), uint32_t astprm) {
+    (void)fd; (void)buf; (void)len; (void)offset; (void)is_read;
+    (void)iosb; (void)efn; (void)astadr; (void)astprm;
+    return -1;
+}
+
+int vms_uring_process_completions(void) { return 0; }
+
+int vms_uring_wait_completion(void) { return -1; }
+
+void vms_uring_cleanup(void) { }
+
+#endif  /* __linux__ */

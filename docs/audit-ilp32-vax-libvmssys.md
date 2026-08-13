@@ -320,3 +320,88 @@ elf32-vax `libvmssys.a` — proving the process-control layer sits on top of
 libvmssys end to end. No emulation (SIMH boot is the separate P4 job). The Linux
 `Build & Test` + `ctest` (`vmsprocess_unit`) prove the in-tree
 Linux/aarch64/x86_64 build is unregressed.
+
+## 9. libvms — the VMS runtime (rd vms-1b2, epic vms-8e8; C-track)
+
+The library graph continues `vmsprocess → libvms (+pthread, m)` (CLAUDE.md
+"Library Build Order"). This section extends the width/portability audit to
+**libvms** — the biggest userspace library: system services (`sys$*`) plus the
+full RTL (`lib$`/`str$`/`mth$`/`ots$`) — now that it cross-compiles + links for
+netbsd-vax. Build set: the whole `src/libvms/CMakeLists.txt` source list (60
+translation units; every `syssvc/*.c` and `rtl/*.c`), headers from
+`src/libvms/include` plus the peer include dirs for RMS/FS/LNM/process, and
+`vms_kif.h` (libvmssys), the vmslink symbol-vector headers, and the vmsscs
+membership header as header-only compile deps.
+
+**Verdict: the ENTIRE libvms cross-compiles and links for netbsd-vax.** No
+subsystem had to be extracted or excluded. Two portability defects surfaced — a
+Linux-only I/O accelerator and a Linux-only mmap flag — both fixed with the
+substrate-selected discipline (§7). The ILP32 width surface is clean: libvms's
+public structs already use fixed-width types (`uint32_t` longwords, `uint64_t`
+quadwords, VMS descriptors carry an explicit `uint16_t` length + pointer), so no
+bare `long`/pointer-width assumption or `sizeof(long)==8` reached the VAX build.
+
+### 9.1 `sys_uring.c` — io_uring is Linux-only (FIXED, substrate-guarded)
+`syssvc/sys_uring.c` is a **QIO accelerator**, not the QIO facility: it wraps
+Linux `io_uring` (`<linux/io_uring.h>`, `syscall(__NR_io_uring_setup/enter)`,
+`IORING_*` mmap offsets) — none of which exist on NetBSD. `sys$qio`/`sys$qiow`
+(`sys_qio.c`) already fall back to a **real synchronous `read()`/`write()` path**
+(`qio_sync`) whenever `uring_available()` reports 0 — the case on any pre-5.1
+Linux kernel and on every non-Linux substrate. Fix: the whole io_uring
+implementation is guarded by `#if defined(__linux__)`; on other substrates the
+five entry points (`vms_uring_init/submit_rw/process_completions/
+wait_completion/cleanup`) compile to **"unavailable" stubs** (`init`→-1), so
+`uring_available()` returns 0 and the synchronous path is taken. This is a
+substrate selection, **not** a LARP fallback (Rule 9 / INV-6): the QIO facility
+itself is fully implemented by the synchronous path; only the accelerator is
+absent, exactly as on an old Linux kernel. The gate asserts (`nm`) that
+`sys_uring.o` carries no Linux io_uring syscall on the VAX build.
+
+### 9.2 `sys_memory.c` — `MAP_FIXED_NOREPLACE` is Linux-only (FIXED, substrate-selected)
+`sys$cretva` maps at a requested address **non-destructively** (it must never
+clobber an existing mapping; the fallback re-maps at any address). Linux
+expresses that atomically with `MAP_FIXED_NOREPLACE` (4.17+); NetBSD has no such
+flag. Fix: a `VMS_CRETVA_FIXED_FLAG` macro keyed on **the platform macro's own
+presence** (`#if defined(MAP_FIXED_NOREPLACE)`) — never a transcribed number, so
+correct by construction (the §7.2 discipline). On Linux it resolves to
+`MAP_FIXED_NOREPLACE` (behavior byte-identical); on NetBSD it resolves to `0`, so
+the requested address is passed as a plain **hint** (no `MAP_FIXED`), which the
+kernel honors when the range is free and otherwise places elsewhere — the same
+non-destructive "try the requested range, else any address" contract, with the
+actual placement reported in `retadr[]`. (`MAP_ANONYMOUS` needed no change:
+NetBSD 10 aliases it to `MAP_ANON`, and it compiles on the VAX sysroot.)
+
+### 9.3 ILP32 width + IEEE-float scan — clean
+- **Descriptors / longwords / quadwords.** libvms's system-service and RTL APIs
+  pass VMS descriptors (`struct dsc$descriptor`: `uint16_t` length, `uint8_t`
+  class/dtype, pointer) and fixed-width status/argument longwords (`uint32_t`)
+  and quadwords (`uint64_t`) — no bare `long` or pointer-width field crosses an
+  API boundary, so LP64→ILP32 does not change a single struct layout.
+- **Float RTL (`mth_routines.c`, `ots_routines.c`).** Confirmed the §7.3 finding:
+  `MTH$` forwards to libm on native `double` (no IEEE bit assumptions; NetBSD
+  libm backs it on the link-libc substrate) and `OTS$` conversions are
+  integer/text only. No unguarded IEEE bit-punning reached the VAX build; the one
+  IEEE-decode path that needed a non-IEEE branch (`lib_timer.c`'s
+  `LIB$K_IEEE_S/_T`) was already fixed in §7.3. No new `#if __vax__` float split
+  was required in libvms.
+- **`-Wstringop-truncation` noise.** The same intentional VMS fixed-field
+  `strncpy` truncation pattern flagged in §8.3 recurs across libvms
+  (`sys_assign.c`, `sys_misc.c`, `ovmx_accounting.c`, the `sysgen_params.h` /
+  `scs_membership.h` headers). All are identical on every arch and non-fatal
+  (the netbsd branch is `-Wall -Wextra` without `-Werror`); recorded so a later
+  reader does not misread them as ILP32 defects.
+
+### 9.4 How this was validated
+`tools/cross-vax/build-libvms-vax.sh` (CI job `libvms-netbsd-vax`)
+(0) builds the elf32-vax `libvmssys.a`, (0b) the elf32-vax `libvmsprocess.a`,
+(1) builds `libvms.a` through the CMake `LIBVMS_STANDALONE` path (asserted
+`file format elf32-vax`, and `nm`-asserted that `sys_uring.o` is the non-Linux
+stub), and (2) links a real `vax--netbsdelf` ELF32 executable that calls into
+libvms's system-service + RTL surface (status decoding, the arithmetic RTL)
+against NetBSD libc + libpthread + libm **and** the elf32-vax `libvmsprocess.a` +
+`libvmssys.a` — proving the VMS runtime sits on top of the whole elf32-vax stack
+end to end. No emulation (SIMH boot is the separate P4 job). The Linux `Build &
+Test` + `ctest` prove the in-tree Linux/aarch64/x86_64 build is unregressed (the
+two fixes are byte-identical on Linux: the io_uring path is unchanged inside its
+`__linux__` guard, and `VMS_CRETVA_FIXED_FLAG` resolves to `MAP_FIXED_NOREPLACE`
+there).

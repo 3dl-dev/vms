@@ -734,6 +734,30 @@ ENV MEMORY=512M
 #                         (docs/design-boot-faithful.md §2.2/§3.1). Unset boots
 #                         straight through.
 # SYSDISK_NAME          — disk filename inside /data volume (default: sysdisk.img)
+# OVMX_NET_MODE         — virtio-net NIC mode (vms-7bd, parent vms-67f). The
+#                         guest gets ONE virtio-net-pci device; the guest kernel
+#                         has virtio_net built in (CONFIG_VIRTIO_NET=y) so the
+#                         interface enumerates with no in-guest module load.
+#                         This is the LINUX-LAYER NIC only -- the VMS device
+#                         face (EWAn:) is a separate downstream item.
+#                           user  (DEFAULT) : user-mode NAT (SLIRP), zero host
+#                                             config, works unprivileged / in
+#                                             CI. NO inbound by default.
+#                           tap             : PRE-EXISTING host tap OVMX_NET_TAP
+#                                             (default tap0), script=no; the
+#                                             operator provisions/bridges it.
+#                           bridge          : qemu-bridge-helper to EXISTING
+#                                             host bridge OVMX_NET_BRIDGE
+#                                             (default br0), operator-provisioned.
+#                           none            : no NIC (legacy -nic none behavior).
+#                         tap/bridge need host privileges and will NOT work in
+#                         unprivileged CI; user mode is the safe default. This
+#                         launch never creates a tap/bridge as a side effect.
+# OVMX_NET_TAP          — tap ifname for OVMX_NET_MODE=tap    (default: tap0)
+# OVMX_NET_BRIDGE       — bridge name for OVMX_NET_MODE=bridge (default: br0)
+# OVMX_NET_MAC          — guest NIC MAC (default: QEMU-assigned)
+# OVMX_NET_HOSTFWD      — user-mode ONLY: extra hostfwd rules for deliberate
+#                         inbound (e.g. "tcp::2223-:23"). Empty by default.
 #
 # boot.sh mounts a host directory at /data so the container owns the disk
 # file and can write freely (avoids rootless Docker permission issues).
@@ -763,6 +787,20 @@ CMD ARCH=$(uname -m) && \
     fi && \
     APPEND="$CONSOLE loglevel=3 quiet" && \
     if [ -n "${BOOT_FLAGS:-}" ]; then APPEND="$APPEND ovmx.flags=$BOOT_FLAGS"; fi && \
+    NET_MODE="${OVMX_NET_MODE:-user}" && \
+    DEV_OPTS="netdev=net0,romfile=" && \
+    if [ -n "${OVMX_NET_MAC:-}" ]; then DEV_OPTS="$DEV_OPTS,mac=$OVMX_NET_MAC"; fi && \
+    case "$NET_MODE" in \
+        user) NETDEV="user,id=net0"; \
+              if [ -n "${OVMX_NET_HOSTFWD:-}" ]; then NETDEV="$NETDEV,hostfwd=$OVMX_NET_HOSTFWD"; fi; \
+              set -- -netdev "$NETDEV" -device "virtio-net-pci,$DEV_OPTS" ;; \
+        tap) set -- -netdev "tap,id=net0,ifname=${OVMX_NET_TAP:-tap0},script=no,downscript=no" \
+                    -device "virtio-net-pci,$DEV_OPTS" ;; \
+        bridge) set -- -netdev "bridge,id=net0,br=${OVMX_NET_BRIDGE:-br0}" \
+                       -device "virtio-net-pci,$DEV_OPTS" ;; \
+        none) set -- -nic none ;; \
+        *) echo "Error: unknown OVMX_NET_MODE='$NET_MODE' (want: user|tap|bridge|none)" >&2; exit 1 ;; \
+    esac && \
     exec $QEMU $MACHINE \
         -kernel /boot/vmlinuz \
         -initrd "$INITRAMFS" \
@@ -770,7 +808,7 @@ CMD ARCH=$(uname -m) && \
         -append "$APPEND" \
         -m $MEMORY \
         -smp 2 \
-        -nic none \
+        "$@" \
         -nodefaults \
         -serial mon:stdio \
         -drive file="$DISK",format=raw,if=virtio \

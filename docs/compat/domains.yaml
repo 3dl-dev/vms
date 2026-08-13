@@ -75,8 +75,8 @@ domains:
     blurb: "TCP/IP Services (UCX), DECnet Phase IV, LAT, SSH."
 
   - id: runtime-arch
-    name: "H. Runtime & Architecture"
-    blurb: "Architecture targets, the kernel executive (/dev/vms), image activation / runtime linking."
+    name: "H. Executive"
+    blurb: "The VMS executive itself — access modes, the process model (PCB), scheduling, and the executive-backed IPC that underpins the system services. (Architecture/platform support and OVMX self-hosting are roadmap concerns, not compatibility surfaces — see the release roadmap and release-dimensions, not this register.)"
 
   - id: languages
     name: "I. Languages & Compilers"
@@ -149,14 +149,12 @@ facilities:
     - macro
     - message-compiler
     - mms-mmk
-    - self-host-compiler
   networking:
     - tcpip-services
     - decnet
     - lat
     - ssh
   runtime-arch:
-    - arch-targets
     - kernel-executive
   languages:
     - compilers

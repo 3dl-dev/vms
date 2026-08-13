@@ -89,6 +89,33 @@ int vms_lock_init(void)
     return 0;
 }
 
+/*
+ * lock_entry_free / resource_free - tear down and free one lock entry / resource.
+ *
+ * A lock entry owns a condition variable (wait_wq, init'd by exec_cv_init in the
+ * $ENQ path) and a resource owns a mutex (res->lock, init'd by exec_lock_init in
+ * resource_find_or_create). These MUST be paired with exec_cv_destroy /
+ * exec_lock_destroy before the object is freed. On Linux exec_cv_destroy /
+ * exec_lock_destroy are no-ops (a wait_queue/spinlock owns no external resource),
+ * so routing every free through these helpers is behaviour-identical to the bare
+ * exec_free(); on NetBSD they resolve to cv_destroy/mutex_destroy, without which
+ * the kcondvar/kmutex leaks kernel resources on every free path. Same destroy-
+ * then-free pattern as eflag's vms_common_ef_free (vms_eflag.c). Every free path
+ * below (creation-failure rollback, DEQ via lock_put, proc/image rundown, module
+ * cleanup) MUST go through these.
+ */
+static void lock_entry_free(struct vms_lock_entry *lock)
+{
+    exec_cv_destroy(&lock->wait_wq);
+    exec_free(lock);
+}
+
+static void resource_free(struct vms_lock_resource *res)
+{
+    exec_lock_destroy(&res->lock);
+    exec_free(res);
+}
+
 void vms_lock_cleanup(void)
 {
     struct vms_lock_resource *res;
@@ -102,15 +129,15 @@ void vms_lock_cleanup(void)
         /* Free lock entries on granted list */
         exec_list_for_each_entry_safe(lock, ltmp, &res->granted, res_granted) {
             exec_list_del(&lock->res_granted);
-            exec_free(lock);
+            lock_entry_free(lock);
         }
         /* Free lock entries on waiting list */
         exec_list_for_each_entry_safe(lock, ltmp, &res->waiting, res_waiting) {
             exec_list_del(&lock->res_waiting);
-            exec_free(lock);
+            lock_entry_free(lock);
         }
         exec_hash_del(&res->hash_node);
-        exec_free(res);
+        resource_free(res);
     }
     exec_unlock(&vms_res_hash_lock);
 
@@ -154,7 +181,7 @@ static void lock_put(struct vms_lock_entry *entry)
     if (entry->refcount <= 0) {
         /* Entry was removed from tree and last reference dropped */
         exec_unlock(&vms_lock_id_lock);
-        exec_free(entry);
+        lock_entry_free(entry);
         return;
     }
     exec_unlock(&vms_lock_id_lock);
@@ -234,6 +261,8 @@ static struct vms_lock_resource *resource_find_or_create(const char *name)
     if (res) {
         res->refcount++;
         exec_unlock(&vms_res_hash_lock);
+        /* Bare exec_free (NOT resource_free): new_res->lock is not init'd until
+         * below, so there is no exec_lock_destroy to pair on this race path. */
         exec_free(new_res);
         return res;
     }
@@ -266,7 +295,7 @@ static void resource_release(struct vms_lock_resource *res)
         }
         if (!has_valblk) {
             exec_hash_del(&res->hash_node);
-            exec_free(res);
+            resource_free(res);
         }
     }
     exec_unlock(&vms_res_hash_lock);
@@ -654,7 +683,7 @@ static void lock_teardown_locked(struct vms_lock_entry *lock)
     lock_remove_id(lock);
 
     resource_release(res);
-    exec_free(lock);
+    lock_entry_free(lock);
 }
 
 void vms_proc_release_locks(struct vms_proc *proc)
@@ -932,7 +961,7 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
             exec_unlock(&proc->lock_list_lock);
             lock_remove_id(lock);
             resource_release(res);
-            exec_free(lock);
+            lock_entry_free(lock);
 
             args.lkid = 0;
             args.status = SS__NOTQUEUED;
@@ -953,7 +982,7 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
                 exec_unlock(&proc->lock_list_lock);
                 lock_remove_id(lock);
                 resource_release(res);
-                exec_free(lock);
+                lock_entry_free(lock);
 
                 args.lkid = 0;
                 args.status = SS__DEADLOCK;
@@ -977,7 +1006,7 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
                         exec_unlock(&proc->lock_list_lock);
                         lock_remove_id(lock);
                         resource_release(res);
-                        exec_free(lock);
+                        lock_entry_free(lock);
 
                         args.lkid = 0;
                         args.status = SS__DEADLOCK;

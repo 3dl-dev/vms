@@ -43,7 +43,7 @@ static int rms_open_read(const char *path, struct FAB *fab, struct RAB *rab,
                                     * EOF space-pad (see header) */
 
     uint32_t st = sys$open(fab, 0, 0);
-    fprintf(stderr, "OVMX-RMS: sys$open(\"%s\", 0, 0) -> %08X\n", path, st);
+    fprintf(stderr, "OVMX-RMS: sys$open(\"%s\") -> %08X\n", path, st);
     if (!(st & 1))
         return 0;
 
@@ -61,7 +61,7 @@ static int rms_open_read(const char *path, struct FAB *fab, struct RAB *rab,
     *rab = cc$rms_rab;
     rab->rab$l_fab = fab;
     st = sys$connect(rab, 0, 0);
-    fprintf(stderr, "OVMX-RMS: sys$connect(read \"%s\", 0, 0) -> %08X\n", path, st);
+    fprintf(stderr, "OVMX-RMS: sys$connect(read \"%s\") -> %08X\n", path, st);
     if (!(st & 1)) {
         sys$close(fab, 0, 0);
         return 0;
@@ -95,7 +95,7 @@ uint8_t *ovmx_link_rms_slurp(const char *path, size_t *out_size)
         if (st == RMS$_EOF)
             break;
         if (!(st & 1)) {
-            fprintf(stderr, "OVMX-RMS: sys$get(\"%s\", 0, 0) -> %08X (error)\n", path, st);
+            fprintf(stderr, "OVMX-RMS: sys$get(\"%s\") -> %08X (error)\n", path, st);
             free(buf);
             sys$close(&fab, 0, 0);
             return NULL;
@@ -119,7 +119,7 @@ uint8_t *ovmx_link_rms_slurp(const char *path, size_t *out_size)
             path, ngets, len);
 
     uint32_t st = sys$close(&fab, 0, 0);
-    fprintf(stderr, "OVMX-RMS: sys$close(read \"%s\", 0, 0) -> %08X\n", path, st);
+    fprintf(stderr, "OVMX-RMS: sys$close(read \"%s\") -> %08X\n", path, st);
 
     *out_size = len;
     return buf;
@@ -174,14 +174,14 @@ int ovmx_link_rms_write(const char *path, const uint8_t *buf, size_t size)
                                     * each put's own length, no pad (byte-exact) */
 
     uint32_t st = sys$create(&fab, 0, 0);
-    fprintf(stderr, "OVMX-RMS: sys$create(\"%s\", 0, 0) -> %08X\n", path, st);
+    fprintf(stderr, "OVMX-RMS: sys$create(\"%s\") -> %08X\n", path, st);
     if (!(st & 1))
         return -1;
 
     struct RAB rab = cc$rms_rab;
     rab.rab$l_fab = &fab;
     st = sys$connect(&rab, 0, 0);
-    fprintf(stderr, "OVMX-RMS: sys$connect(write \"%s\", 0, 0) -> %08X\n", path, st);
+    fprintf(stderr, "OVMX-RMS: sys$connect(write \"%s\") -> %08X\n", path, st);
     if (!(st & 1)) {
         sys$close(&fab, 0, 0);
         return -1;
@@ -197,7 +197,7 @@ int ovmx_link_rms_write(const char *path, const uint8_t *buf, size_t size)
         rab.rab$w_rsz = (uint16_t)chunk;
         st = sys$put(&rab, 0, 0);
         if (!(st & 1)) {
-            fprintf(stderr, "OVMX-RMS: sys$put(\"%s\", 0, 0) -> %08X (error)\n", path, st);
+            fprintf(stderr, "OVMX-RMS: sys$put(\"%s\") -> %08X (error)\n", path, st);
             sys$close(&fab, 0, 0);
             return -1;
         }
@@ -208,6 +208,6 @@ int ovmx_link_rms_write(const char *path, const uint8_t *buf, size_t size)
             path, nputs, total);
 
     st = sys$close(&fab, 0, 0);
-    fprintf(stderr, "OVMX-RMS: sys$close(write \"%s\", 0, 0) -> %08X\n", path, st);
+    fprintf(stderr, "OVMX-RMS: sys$close(write \"%s\") -> %08X\n", path, st);
     return (st & 1) ? 0 : -1;
 }

@@ -332,4 +332,14 @@
 # astprm round-trip check, while the self-wake path (vms_ioctl_wake's own
 # broadcast) and test_syssvc_mbx_wrtattn (explicit $SETAST drain, never hibers)
 # stay green. See its own entry in facility_defects.sh.
-94
+# Raised 94 -> 95 by vms-786's dcl-sysinput-mbx-not-read -- the negative control
+# that anchors the new test_syssvc_mbx_dcldrv suite (the shipped DCL.EXE reads
+# SYS$INPUT from / writes SYS$OUTPUT to a mailbox, the persistent-DCL-over-
+# mailboxes drive MMK's send_cmd_and_wait needs, spine #4). PRODUCT-half
+# mutation in src/vmsdcl/dcl_mbx.c: forcing the reader thread's per-message
+# forwarded length to zero (mlen = 0) drains the SYS$INPUT mailbox but delivers
+# nothing to DCL's command loop, so the driven DCL receives no command and
+# delivers no result -- reddening exactly the suite's one driven-result
+# assertion while the parent's own $CREMBX and command writes stay green. See
+# its own entry in facility_defects.sh for what it covers and why.
+95

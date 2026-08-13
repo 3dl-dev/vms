@@ -488,6 +488,7 @@ lnm-privilege-check-bypassed
 mbx-not-shared
 mbx-wrtattn-not-fired
 hiber-ast-not-delivered
+dcl-sysinput-mbx-not-read
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -4616,6 +4617,23 @@ EOF
                       ;;
         esac;;
 
+    dcl-sysinput-mbx-not-read)
+        case "$_f" in
+        facility)     echo "DCL reads SYS\$INPUT from / writes SYS\$OUTPUT to a mailbox device (src/vmsdcl/dcl_mbx.c, vms-786) -- the persistent-DCL-over-mailboxes drive MMK's send_cmd_and_wait stands on (spine #4, vms-b23)";;
+        targets)      echo "vmsdcl/dcl_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_dcldrv";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "dcl_mbx.c's reader thread does the IO\$_READVBLK that pulls each command record out of the SYS\$INPUT mailbox and forwards it (mlen bytes) into the pipe DCL's fgets() loop reads. The mutation forces that forwarded length to zero (mlen = 0), so the reader still drains the mailbox but delivers NOTHING to DCL's command loop -- the child never sees `NUM = 6 * 7` or the WRITE, computes nothing, and delivers no result over SYS\$OUTPUT. The suite's driven-result assertion reddens. What STAYS GREEN pins the mutation to the SYS\$INPUT read path alone: the parent's own \$CREMBX of both mailboxes and its \$QIO WRITEVBLK of both command lines into the input mailbox all still return SS\$_NORMAL -- the child's failure to READ is the only thing broken, exactly the A-writes/B-reads shape INV-6/Rule 11 exists to catch.";;
+        require_fail) cat <<'EOF'
+the spawned DCL read its commands from the SYS$INPUT mailbox, executed them, and delivered the computed result over the SYS$OUTPUT mailbox
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -5765,6 +5783,16 @@ apply_edit() {
         # -- the sticky-wake scenario still passes. After substitution the text no
         # longer matches, so a second apply is a no-op (the selftest requires).
         sed -i 's|    exec_cv_broadcast(&proc->hiber_wq);|    /* NEGCTL hiber-ast-not-delivered: arrival wake removed */|' "$_file";;
+
+    dcl-sysinput-mbx-not-read)
+        # UNIQUE TEXT, no range anchor needed: `uint32_t mlen = actlen;` occurs
+        # exactly once in dcl_mbx.c -- the reader thread's per-message length
+        # (the count of bytes IO$_READVBLK pulled out of the SYS$INPUT mailbox).
+        # Forcing it to zero makes the reader drain the SYS$INPUT mailbox but
+        # forward NOTHING into DCL's command loop, so the driven DCL never
+        # receives a command. After substitution the text no longer matches, so a
+        # second apply is a no-op (the selftest requires).
+        sed -i 's|uint32_t mlen = actlen;|uint32_t mlen = 0; /* NEGCTL dcl-sysinput-mbx-not-read */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

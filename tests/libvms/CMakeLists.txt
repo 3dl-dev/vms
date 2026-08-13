@@ -320,3 +320,10 @@ libvms_add_test(test_libvms_lib_cli
 # compile_commands.json, which the kif_caller_census reader rejects.
 target_compile_definitions(test_libvms_lib_cli PRIVATE
     MMK_CLD_PATH=${CMAKE_SOURCE_DIR}/tests/corpus/tier3-mmk/mmk_cld.cld)
+
+# vms-947 -- sys$setddir: set/read the process default directory string, the
+# [dir] used to resolve relative file specs. Proves the change lands in the PCB
+# store sys$assign reads (SYS$DISK / relative resolution) and round-trips
+# through the service's own old-directory out-arguments. Unblocks native MMK.
+libvms_add_test(test_libvms_setddir
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_setddir.c)

@@ -263,7 +263,7 @@ flags. P4-A closes that for all five in one driver, `drive_netbsd_p4a.py` /
 | Facility | Cross-process assertion |
 |---|---|
 | **PROCTAB** | Process A `$SETPRN`s itself and stays alive; a *different* process B resolves it by name with `$GETJPI`; a *third* process C enumerates the table with `$PROCESS_SCAN` and finds the same row. |
-| **MBX** | Process A `$CREMBX`es a **permanent** mailbox (so it outlives A); a *different* process B writes a message into it **by name**; a *third* process C reads the exact same bytes back. |
+| **MBX** | Process A `$CREMBX`es a **temporary** mailbox and stays alive holding it open (a permanent one needs `PRMMBX`, which a default-privilege process does not hold on either substrate -- `test_kmod_mbx.c` proves that `SS$_NOPRIV` explicitly rather than dodging it); a *different* process B writes a message into it **by name**; a *third* process C reads the exact same bytes back. |
 | **LOCK (DLM)** | Process A `$ENQ`s an **exclusive** lock on a named resource and holds it; a *different* process B's synchronous `$ENQW` for the same resource **blocks in the kernel** (does not even return) until A `$DEQ`s, at which point B's blocked call unblocks and is granted. |
 | **ACCESS MODES** | Process A `$SETPRV`s a real, permanent privilege change on itself and stays alive; a *different* process B's `$GETJPI` reads back the *same* mutated privilege mask. |
 | **AST** | `$DCLAST` is self-directed by VMS design (an AST is declared to the calling process), so there is no direct "A writes, B reads" case for the queue itself. The genuinely cross-process proof reuses the mailbox facility's **write-attention** integration: process A arms a write-attention AST on a mailbox and `$HIBER`s (blocks in-kernel); a *different* process B's write to that *same* mailbox is what lands the AST in A's executive-resident queue and **wakes A's `$HIBER`** — a per-process fake could never be woken by an action taken in a different process. |
@@ -306,7 +306,7 @@ rendezvous point — a real failure reddens the job, it never hangs it.
 | File | Role |
 |------|------|
 | `tests/netbsd/guest/vmsproctab.c` | Process-table cross-process tool: `bg`/`getjpi_name`/`procscan_find`. |
-| `tests/netbsd/guest/vmsmbx.c` | Mailbox cross-process tool: `create`/`write`/`read`. |
+| `tests/netbsd/guest/vmsmbx.c` | Mailbox cross-process tool: `create_hold`/`write`/`read`. |
 | `tests/netbsd/guest/vmslock.c` | Lock-manager cross-process tool: `hold_release`/`enqw`. |
 | `tests/netbsd/guest/vmsaccess.c` | Access-mode + AST tool: `selftest`/`setpriv_bg`/`getpriv`/`wrtattn_bg`/`wrtattn_write`. |
 | `tests/netbsd/drive_netbsd_p4a.py` | P4-A driver: build ISO (all six facilities) → boot → build kmod + four tools → INV-6 negctl (×4) → load → five cross-process proofs → negative control. |

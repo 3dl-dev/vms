@@ -17,11 +17,18 @@
  * which just calls kif_xport_ioctl() the same way for every op.
  *
  * USAGE (one operation per invocation, so each is its own OS process):
- *   vmsmbx create
- *       $CREMBX(permanent=1). Prints the assigned MBAn: device name -- a
- *       PERMANENT mailbox outlives this process (unlike temporary, which is
- *       deleted when its last channel goes away), so a later, different
- *       process can $ASSIGN it by name.
+ *   vmsmbx create_hold <holdsecs>
+ *       $CREMBX(permanent=0) -- a TEMPORARY mailbox, the same oracle
+ *       Linux's own cross-process mbx proofs use (test_syssvc_mbx_crossproc.c,
+ *       test_kmod_mbx.c): creating a PERMANENT mailbox needs the PRMMBX
+ *       privilege, which a default-privilege test process does not hold on
+ *       EITHER substrate -- test_kmod_mbx.c asserts that failure explicitly
+ *       (SS$_NOPRIV) rather than dodging it. A temporary mailbox is freed the
+ *       instant its last channel goes away (src/kernel-core/vms_mbx.c), so
+ *       this process holds its channel open -- staying alive for <holdsecs>,
+ *       mirroring vmslock's hold_release -- so a later, DIFFERENT process can
+ *       still $ASSIGN it by name while A is up. Prints the assigned MBAn:
+ *       device name before the hold.
  *   vmsmbx write <devnam> <text>
  *       $ASSIGN(devnam) then $QIO write <text> into it.
  *   vmsmbx read <devnam> <expected>
@@ -29,7 +36,7 @@
  *       <expected> byte-for-byte.
  *
  * EXIT CODES:
- *   create: 0 = mailbox created; prints "MBX DEVNAM=<name>".
+ *   create_hold: 0 = mailbox created, hold completed, channel closed cleanly.
  *   write:  0 = assign+write succeeded.
  *   read:   0 = assign+read succeeded AND the bytes matched <expected>;
  *           1 = read succeeded but the bytes did NOT match.
@@ -45,13 +52,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "kif_transport.h"
 #include "vms_mbx_nb.h"
 
 #define VMS_SS_NOSUCHDEV 2680u
 
-enum { OP_CREATE, OP_WRITE, OP_READ };
+enum { OP_CREATE_HOLD, OP_WRITE, OP_READ };
 
 static int
 open_or_honest_fail(int *fd_out)
@@ -94,14 +102,14 @@ main(int argc, char **argv)
 
 	if (argc < 2) {
 		fprintf(stderr,
-		    "usage: %s create | write <devnam> <text> | read <devnam> <expected>\n",
-		    argv[0]);
+		    "usage: %s create_hold <holdsecs> | write <devnam> <text> | "
+		    "read <devnam> <expected>\n", argv[0]);
 		return 2;
 	}
 
-	if (strcmp(argv[1], "create") == 0)     op = OP_CREATE;
-	else if (strcmp(argv[1], "write") == 0) op = OP_WRITE;
-	else if (strcmp(argv[1], "read") == 0)  op = OP_READ;
+	if (strcmp(argv[1], "create_hold") == 0) op = OP_CREATE_HOLD;
+	else if (strcmp(argv[1], "write") == 0)  op = OP_WRITE;
+	else if (strcmp(argv[1], "read") == 0)   op = OP_READ;
 	else {
 		fprintf(stderr, "%s: unknown op '%s'\n", argv[0], argv[1]);
 		return 2;
@@ -110,20 +118,39 @@ main(int argc, char **argv)
 	if (open_or_honest_fail(&fd) < 0)
 		return 3;
 
-	if (op == OP_CREATE) {
+	if (op == OP_CREATE_HOLD) {
 		struct vms_mbx_create_args ca;
+		unsigned int holdsecs;
+
+		if (argc != 3) {
+			fprintf(stderr, "usage: %s create_hold <holdsecs>\n", argv[0]);
+			kif_xport_dev_close(fd);
+			return 2;
+		}
+		holdsecs = (unsigned int)strtoul(argv[2], NULL, 0);
 
 		memset(&ca, 0, sizeof(ca));
-		ca.permanent = 1u;   /* PERMANENT: outlives this process (INV-6 proof). */
+		ca.permanent = 0u;   /* TEMPORARY: same oracle as Linux's cross-process
+		                      * mbx proofs -- PRMMBX is not held by default. */
 		rc = kif_xport_ioctl(fd, VMS_IOCTL_MBX_CREATE, &ca);
-		kif_xport_dev_close(fd);
 		if (rc < 0) {
 			printf("MBX IOCTLFAIL CREATE rc=%d (negated errno)\n", rc);
+			kif_xport_dev_close(fd);
 			return 4;
 		}
 		printf("MBX CREATE devnam=%s status=%u\n", ca.devnam, ca.status);
-		if ((ca.status & 1u) == 0u)
+		fflush(stdout);
+		if ((ca.status & 1u) == 0u) {
+			kif_xport_dev_close(fd);
 			return 6;
+		}
+
+		/* Hold the channel open: a temporary mailbox is freed the instant its
+		 * last channel goes away, so this process must stay alive (fd open)
+		 * for B and C to reach it by name. Closing fd here (or process exit)
+		 * releases the channel via vms_close() -> vms_mbx_release_all(). */
+		sleep(holdsecs);
+		kif_xport_dev_close(fd);
 		return 0;
 	}
 

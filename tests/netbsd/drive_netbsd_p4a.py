@@ -315,7 +315,7 @@ def main():
         # ---- INV-6 NEGATIVE CONTROL: no module loaded, for EVERY new tool --
         run(child, "rm -f /dev/vms", cmd_timeout)
         for tool, args in ((PT, "getjpi_name nobody"),
-                            (MB, "create"),
+                            (MB, "create_hold 1"),
                             (LK, "hold_release NORES 0 0"),
                             (AC, "selftest")):
             rc, out = run(child, "%s %s" % (tool, args), cmd_timeout)
@@ -393,17 +393,31 @@ def main():
         run(child, "wait", cmd_timeout)   # let A's bg job finish cleanly
 
         # =====================================================================
-        # MBX: A creates a PERMANENT mailbox; B writes; C reads the same bytes.
+        # MBX: A creates a TEMPORARY mailbox and holds it open; B writes; C
+        # reads the same bytes. TEMPORARY, not permanent: on both substrates
+        # $CREMBX(permanent=1) needs PRMMBX, which a default-privilege test
+        # process does not hold (test_kmod_mbx.c asserts that SS$_NOPRIV
+        # explicitly rather than dodging it) -- so the cross-process by-name
+        # proof uses a temporary mailbox, exactly as Linux's own
+        # test_syssvc_mbx_crossproc.c / test_kmod_mbx.c do. A stays alive
+        # (create_hold) so the mailbox survives long enough for B and C to
+        # reach it by name; it is freed when A's channel closes at the end of
+        # the hold (vms_mbx_release_all on process exit).
         # =====================================================================
-        rc, out = run(child, "%s create" % MB, cmd_timeout)
-        if rc != 0 or "MBX CREATE" not in out:
-            log("FAIL: process A's $CREMBX (permanent) failed")
+        rc, _ = run(child,
+                    "rm -f /tmp/mb_a.out; "
+                    "%s create_hold 8 >/tmp/mb_a.out 2>&1 &" % MB, cmd_timeout)
+        run(child, "sleep 2", cmd_timeout)
+        rc, out = run(child, "cat /tmp/mb_a.out", cmd_timeout)
+        if "MBX CREATE" not in out:
+            log("FAIL: process A's $CREMBX (temporary) failed")
             return 40
         devnam = parse_token(out, "devnam")
         if not devnam:
             log("FAIL: could not parse the created mailbox's device name")
             return 41
-        log("OK: process A created permanent mailbox %s" % devnam)
+        log("OK: process A created temporary mailbox %s and is holding it "
+            "open" % devnam)
 
         rc, out = run(child, "%s write %s 'P4A MBX HELLO'" % (MB, devnam),
                       cmd_timeout)
@@ -420,6 +434,8 @@ def main():
         log("OK: process C (a THIRD, different process) read back the EXACT "
             "bytes B wrote -- the mailbox message queue is shared kernel "
             "state (INV-6)")
+
+        run(child, "wait", cmd_timeout)   # let A's hold finish cleanly
 
         # =====================================================================
         # LOCK: A holds EX; B's ENQW blocks; A releases; B is granted.

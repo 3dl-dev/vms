@@ -91,7 +91,7 @@ INCS="-I$DCL_DIR/include -I$LIBVMS_INC -I$VMSFS_INC -I$LNM_INC -I$RMS_INC -I$VMS
 TUS="dcl_main dcl_lexer dcl_parser dcl_exec dcl_backup dcl_builtin dcl_cmd_show \
 dcl_cmd_set dcl_cmd_file dcl_cmd_process dcl_cmd_io dcl_cmd_misc dcl_disk_logical \
 dcl_editor dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script \
-dcl_messages dcl_library dcl_help"
+dcl_messages dcl_library dcl_help dcl_mbx"
 DCLOBJS=""
 for t in $TUS; do
     $CC $CFLAGS $DEFS $INCS -c -o "$WORK/$t.o" "$DCL_DIR/$t.c"
@@ -101,9 +101,10 @@ $CC $CFLAGS $DEFS $INCS -c -o "$WORK/vmsqueue.o" "$SRC/vmsqueue/vmsqueue.c"
 DCLOBJS="$DCLOBJS $WORK/vmsqueue.o"
 NOBJ=$(echo $DCLOBJS | wc -w)
 echo "-- $NOBJ DCL objects compiled VMS-native-clean --"
-# 23 vmsdcl TUs + vmsqueue = 24 (dcl_disk_logical added by vms-f83;
-# dcl_help added by vms-01b — the hierarchical HELP engine).
-[ "$NOBJ" -eq 24 ] || { echo "FAIL: expected 24 DCL objects, got $NOBJ"; exit 1; }
+# 24 vmsdcl TUs + vmsqueue = 25 (dcl_disk_logical added by vms-f83;
+# dcl_help added by vms-01b — the hierarchical HELP engine;
+# dcl_mbx added by vms-786 — mailbox-backed SYS$INPUT/SYS$OUTPUT).
+[ "$NOBJ" -eq 25 ] || { echo "FAIL: expected 25 DCL objects, got $NOBJ"; exit 1; }
 
 echo
 echo "== DCL.EXE reloc/TLS profile (informative) =="

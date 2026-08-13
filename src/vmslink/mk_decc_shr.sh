@@ -374,7 +374,9 @@ nanosleep=PROCEDURE,\
 \
 tmpfile=PROCEDURE,clearerr=PROCEDURE,\
 \
-unsetenv=PROCEDURE"
+unsetenv=PROCEDURE,\
+\
+pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE"
 
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets
@@ -440,6 +442,17 @@ unsetenv=PROCEDURE"
 # getenv/setenv were already exported above; unsetenv is the POSIX/C-RTL
 # companion that real OpenVMS DECC$SHR exports and musl's libc.a defines, so
 # DECC$SHR is the right producer. libvms (LIBVMS$SHR) and DCL.EXE are consumers.
+#
+# pthread_create/pthread_detach/pthread_join APPENDED for vms-786 (append-only
+# -> prior consumers' vector indices unchanged, GSMATCH LEQUAL-compatible).
+# DCL's mailbox-backed SYS$INPUT/SYS$OUTPUT (src/vmsdcl/dcl_mbx.c) runs a reader
+# thread that blocks in IO$_READVBLK on the input mailbox and a writer thread
+# that drains DCL's output to the output mailbox, so DCL.EXE is the first
+# VMS-native consumer to CREATE a thread (the pthread_mutex_*/pthread_cond_*
+# family was already exported for lock/condition use, but nothing had needed
+# pthread_create/detach/join yet). All three are POSIX threading entry points
+# real OpenVMS DECC$SHR exports (DECthreads) and musl's libc.a defines, so
+# DECC$SHR is the right producer.
 #
 # THE GENERAL RULE, because this is the commonest way to break the VMS-native
 # toolchain jobs: EVERY libc call added to an OVMX library is a claim that

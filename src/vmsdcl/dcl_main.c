@@ -27,6 +27,7 @@
 #include "dcl/dcl_cmd.h"
 #include "dcl/terminal.h"
 #include "dcl/cdu.h"
+#include "dcl/dcl_mbx.h"
 #include "ssdef.h"
 #include "vms/pcb.h"
 #include "ovmx_identity.h"
@@ -639,6 +640,22 @@ int main(int argc, char *argv[])
         return (status & 1) ? 0 : 1;
     }
 
+    /*
+     * MAILBOX-DRIVEN SYS$INPUT/SYS$OUTPUT (vms-786). A persistent DCL a parent
+     * drives over mailboxes -- MMK's send_cmd_and_wait, which feeds command
+     * lines down one mailbox and reads results back over another
+     * (docs/design-mmk-exec-drive-ovmx.md) -- has SYS$INPUT/SYS$OUTPUT bound to
+     * mailbox devices (MBAn:), not a terminal or a file. If those logical names
+     * translate to a mailbox, bind DCL's command-read loop to read commands via
+     * $QIO IO$_READVBLK and its output to leave via IO$_WRITEVBLK (real
+     * executive I/O, Rule 9). This is an ADDED source: for a terminal or
+     * @-procedure SYS$INPUT it binds nothing and the fd/stdio path below is
+     * unchanged. Placed AFTER the -c and script early-returns so only the
+     * persistent-REPL invocation consults it. */
+    int mbx_bound = dcl_mbx_bind_std_streams();
+    if (mbx_bound & DCL_MBX_BOUND_INPUT)
+        dcl_ctx.interactive = 0;   /* a mailbox is never an interactive TTY */
+
     /* Interactive mode */
     if (dcl_ctx.interactive) {
         /* No banner here: LOGINOUT (tools/vms_login.c) is the ONE emitter of
@@ -842,6 +859,12 @@ int main(int argc, char *argv[])
         process_line(&dcl_ctx, line);
         free(line);
     }
+
+    /* Drain and tear down any mailbox-bound SYS$OUTPUT (vms-786) BEFORE the
+     * rest of cleanup: this flushes DCL's final output to the parent's mailbox
+     * and joins the writer thread, so the parent's last read is not lost to
+     * process exit. A no-op when SYS$INPUT/SYS$OUTPUT were not mailboxes. */
+    dcl_mbx_shutdown();
 
     /* Cleanup */
     restore_termios();

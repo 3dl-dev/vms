@@ -117,13 +117,25 @@ struct vms_mbx_write_args {
     char     data[VMS_MBX_IOCTL_MAXLEN];
 };
 
+/* Read modifiers carried in vms_mbx_read_args.flags (in).
+ *
+ * VMS_MBX_READ_NOW is the $QIO IO$M_NOW modifier (public VSI OpenVMS I/O
+ * User's Reference Manual, Mailbox Driver: a read that specifies IO$M_NOW
+ * completes IMMEDIATELY -- it does not wait for a message to be placed in
+ * the mailbox; if the mailbox is empty the read completes with SS$_ENDOFFILE).
+ * When clear, the read blocks (the default, documented mailbox-read shape). */
+#define VMS_MBX_READ_NOW  0x00000001u
+
 /* $QIO IO$_READVBLK-equivalent. Blocks (kernel wait queue) until a message
  * is queued -- see vms_ioctl_mbx_read()'s "INTERRUPTED WAITS" note, which
  * follows vms_eflag.c's WAITFR precedent exactly: no VMS status exists for
- * "the wait was interrupted", so none is invented (CLAUDE.md Rule 10). */
+ * "the wait was interrupted", so none is invented (CLAUDE.md Rule 10) --
+ * UNLESS flags carries VMS_MBX_READ_NOW (IO$M_NOW), in which case an empty
+ * mailbox completes at once with SS$_ENDOFFILE instead of blocking. */
 struct vms_mbx_read_args {
     uint32_t chan;      /* in */
     uint32_t bufsz;     /* in: caller's buffer size (<= VMS_MBX_IOCTL_MAXLEN) */
+    uint32_t flags;     /* in: VMS_MBX_READ_* modifiers (IO$M_NOW) */
     uint32_t len;       /* out: actual message length */
     uint32_t status;    /* out */
     char     data[VMS_MBX_IOCTL_MAXLEN];
@@ -180,7 +192,7 @@ _Static_assert(sizeof(struct vms_mbx_delmbx_args) == 8,
                "vms_mbx_delmbx_args changed size -- VMS_IOCTL_MBX_DELMBX ABI break");
 _Static_assert(sizeof(struct vms_mbx_write_args) == 16 + VMS_MBX_IOCTL_MAXLEN,
                "vms_mbx_write_args changed size -- VMS_IOCTL_MBX_WRITE ABI break");
-_Static_assert(sizeof(struct vms_mbx_read_args) == 16 + VMS_MBX_IOCTL_MAXLEN,
+_Static_assert(sizeof(struct vms_mbx_read_args) == 20 + VMS_MBX_IOCTL_MAXLEN,
                "vms_mbx_read_args changed size -- VMS_IOCTL_MBX_READ ABI break");
 _Static_assert(sizeof(struct vms_mbx_wrtattn_args) == 32,
                "vms_mbx_wrtattn_args changed size -- VMS_IOCTL_MBX_SET_WRTATTN ABI break");

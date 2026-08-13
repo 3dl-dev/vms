@@ -201,7 +201,17 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
         case IO$_READLBLK:
         case IO$_READPBLK:
             if (!p1) { st = SS$_BADPARAM; break; }
-            st = vms_kif_mbx_read(exec_chan, p1, p2, &actlen);
+            /*
+             * IO$M_NOW (vms-5df): a $QIO ...READVBLK|IO$M_NOW completes at
+             * once instead of waiting for a writer. Per the VSI OpenVMS I/O
+             * User's Reference Manual (Mailbox Driver), if the mailbox is
+             * empty the read completes with SS$_ENDOFFILE; the executive's
+             * non-blocking dequeue (VMS_MBX_READ_NOW) does exactly that. The
+             * default (modifier absent) keeps the documented blocking read
+             * that MMK's send_cmd_and_wait and the wrtattn tests rely on.
+             */
+            st = vms_kif_mbx_read(exec_chan, p1, p2, &actlen,
+                                  (func & IO$M_NOW) != 0);
             break;
 
         case IO$_WRITEVBLK:

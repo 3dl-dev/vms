@@ -48,6 +48,7 @@
 #define SS_NOPRIV       36
 #define SS_IVCHAN       602
 #define SS_IVDEVNAM     608
+#define SS_ENDOFFILE    2160
 #define SS_NOSUCHDEV    2680
 
 #define EXIT_SKIP 77
@@ -60,6 +61,7 @@ static int pass = 0, fail = 0;
 } while (0)
 
 static const char MSG1[] = "hello from process A, byte-exact or bust";
+static const char MSG_NOW[] = "queued before an IO$M_NOW non-blocking read";
 
 /* What process A reports back over the pipe. */
 struct mbx_report {
@@ -175,7 +177,7 @@ int main(int argc, char **argv)
         CHECK(st == SS_NOSUCHDEV,
               "no executive: mailbox write fails SS$_NOSUCHDEV, never a local fallback");
 
-        st = vms_kif_mbx_read(1, buf, sizeof(buf), &actlen);
+        st = vms_kif_mbx_read(1, buf, sizeof(buf), &actlen, 0 /* blocking */);
         CHECK(st == SS_NOSUCHDEV,
               "no executive: mailbox read fails SS$_NOSUCHDEV, never a local fallback");
 
@@ -256,12 +258,44 @@ int main(int argc, char **argv)
     char buf[64];
     uint32_t actlen = 0;
     memset(buf, 0, sizeof(buf));
-    status = vms_kif_mbx_read(chan_b1, buf, sizeof(buf), &actlen);
+    status = vms_kif_mbx_read(chan_b1, buf, sizeof(buf), &actlen, 0 /* blocking */);
     /* negctl-knockon: mbx-not-shared */
     CHECK(status == SS_NORMAL, "B: mailbox read succeeds on A's mailbox");
     /* negctl-knockon: mbx-not-shared */
     CHECK(actlen == sizeof(MSG1) && memcmp(buf, MSG1, sizeof(MSG1)) == 0,
           "B reads the EXACT message A wrote (byte-exact, right length)");
+
+    /* --------------------------------------------------------------
+     * IO$M_NOW non-blocking read (vms-5df). The mailbox is EMPTY now
+     * (B just drained MSG1 and there is no other writer). A normal read
+     * here would block forever -- the suite's outer timeout would then
+     * fire, which is exactly the regression sentinel for this feature.
+     * With IO$M_NOW the executive must complete the read at once, and an
+     * empty mailbox completes with SS$_ENDOFFILE (VSI OpenVMS I/O User's
+     * Reference Manual, Mailbox Driver). This proves the NOW flag threads
+     * all the way to a non-blocking dequeue against a real /dev/vms.
+     * -------------------------------------------------------------- */
+    char nbuf[64];
+    uint32_t now_actlen = 999;
+    memset(nbuf, 0xAB, sizeof(nbuf));
+    status = vms_kif_mbx_read(chan_b1, nbuf, sizeof(nbuf), &now_actlen,
+                              1 /* IO$M_NOW */);
+    CHECK(status == SS_ENDOFFILE,
+          "IO$M_NOW read of an EMPTY mailbox returns SS$_ENDOFFILE immediately "
+          "(a blocking read would hang -> the suite timeout catches a regression)");
+
+    /* IO$M_NOW WITH a message queued: it must return the message, not EOF.
+     * B writes one message to its own channel, then non-blocking-reads it. */
+    status = vms_kif_mbx_write(chan_b1, MSG_NOW, sizeof(MSG_NOW));
+    CHECK(status == SS_NORMAL, "B: write a message to drain with IO$M_NOW");
+    memset(nbuf, 0, sizeof(nbuf));
+    now_actlen = 0;
+    status = vms_kif_mbx_read(chan_b1, nbuf, sizeof(nbuf), &now_actlen,
+                              1 /* IO$M_NOW */);
+    CHECK(status == SS_NORMAL && now_actlen == sizeof(MSG_NOW) &&
+          memcmp(nbuf, MSG_NOW, sizeof(MSG_NOW)) == 0,
+          "IO$M_NOW read WITH a queued message returns that message immediately "
+          "(byte-exact), not SS$_ENDOFFILE");
 
     /* A second channel from B, taken before A gives its own back. */
     status = vms_kif_mbx_assign(rep.devnam, &chan_b2);

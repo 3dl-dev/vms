@@ -215,6 +215,17 @@
 #define SS__EXQUOTA     28
 
 /*
+ * SS__ENDOFFILE -- this tree's existing src/libvms/include/ssdef.h value
+ * (SS$_ENDOFFILE == 2160), same single-lineage discipline as SS__EXQUOTA
+ * above (not independently oracle-pinned here). The mailbox read path
+ * returns it for a $QIO IO$M_NOW read that finds the mailbox empty: the
+ * public VSI OpenVMS I/O User's Reference Manual (Mailbox Driver) documents
+ * that a read specifying IO$M_NOW completes immediately, and an empty
+ * mailbox completes such a read with an end-of-file status (vms-5df).
+ */
+#define SS__ENDOFFILE   2160
+
+/*
  * SS__NOTALLPRIV -- ORACLE-PINNED (vms-2b8).
  *
  * MEASURED on the reference lab OpenVMS VAX V7.3 node VAX1, 2026-07-30,

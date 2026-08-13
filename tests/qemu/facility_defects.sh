@@ -4448,6 +4448,9 @@ EOF
         knock_on_fail) cat <<'EOF'
 B: mailbox read succeeds on A's mailbox
 B reads the EXACT message A wrote (byte-exact, right length)
+IO$M_NOW read of an EMPTY mailbox returns SS$_ENDOFFILE immediately (a blocking read would hang -> the suite timeout catches a regression)
+B: write a message to drain with IO$M_NOW
+IO$M_NOW read WITH a queued message returns that message immediately (byte-exact), not SS$_ENDOFFILE
 B: a second $ASSIGN to the same mailbox succeeds
 temporary mailbox SURVIVES its creator's $DASSGN while another process (B) still holds a channel to it
 B: $DELMBX succeeds
@@ -4468,12 +4471,16 @@ PROPERTIES. test_kmod_mbx.c's process B never obtains a valid mailbox
 channel from its first $ASSIGN (chan_b1 stays its zero-initialized value),
 and every knock-on assertion above is B doing something with a channel it
 was never actually given: reading and comparing a message on chan_b1,
-taking a "second" channel (chan_b2, equally refused since B is still not
-the creator), surviving-dassgn and $DELMBX checks against the same
+the IO$M_NOW non-blocking reads and the interposed write that all issue on
+that same phantom chan_b1 (each returning SS$_IVCHAN instead of the
+SS$_ENDOFFILE / SS$_NORMAL the assertion expects -- they fail FAST, never
+hang, because a zero channel is rejected before any wait), taking a
+"second" channel (chan_b2, equally refused since B is still not the
+creator), surviving-dassgn and $DELMBX checks against the same
 never-obtained channels, and finally three $DASSGN calls on channel
 numbers B never held. MEASURED against a real /dev/vms (rebuilt vms.ko,
-reloaded, re-run): this mutation reddens exactly these ten "  FAIL:"
-lines and no others -- 9 passed, 10 failed, out of 19 total assertions.
+reloaded, re-run): this mutation reddens exactly these thirteen "  FAIL:"
+lines and no others -- 9 passed, 13 failed, out of 22 total assertions.
 
 WHAT STAYS GREEN, AND WHY. A's own four assertions ($CREMBX temporary,
 the PRMMBX-privilege refusal, A's write, A's device-name shape) are
@@ -5691,8 +5698,8 @@ apply_edit() {
         # not the creator" makes $ASSIGN refuse (SS$_NOSUCHDEV) every
         # mailbox this caller did not itself create -- MEASURED against a
         # real /dev/vms (build, insmod, run, rmmod): reddens exactly the
-        # ten assertions this defect's require_fail/knock_on_fail name, 9
-        # of test_kmod_mbx's 19 assertions staying green. The replacement
+        # thirteen assertions this defect's require_fail/knock_on_fail name, 9
+        # of test_kmod_mbx's 22 assertions staying green. The replacement
         # text does not contain the original "if (!mbx) {" as a substring
         # (it reads "if (!mbx ||" instead), so a second apply finds nothing
         # left to match -- the no-op selftest requires.

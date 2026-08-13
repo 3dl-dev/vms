@@ -15,7 +15,7 @@ artifacts out and write the notes" step left.
 | **Notes** | `tools/gen_release_notes.py` | Release notes generated from merged git history since the previous release tag — never hand-maintained. |
 | **Coverage** | `tools/compat/snapshot.py` + `render_compat.py --check` | The Compatibility Surface Register validates clean, and a per-cut coverage snapshot (`docs/compat/snapshots/<version>.json` + `compat-coverage.json` in the bundle) plus a compatibility-surface delta block (counts + V1 met, no percentages) in the notes are produced. See `docs/compat/REFRESH.md`. |
 | **Prove** | CI: `cut-release-reproducible`, `release-acceptance`, `upgrade-e2e` | Two independent cuts are byte-identical; the cut artifact boots and reports the shipped version; a `0.N→0.N+1` upgrade preserves site config. |
-| **Document** | `tools/check_guide_drift.py` + `guide_drift_gate` | `docs/install-guide.md` / `docs/upgrade-guide.md` cannot drift from the e2e gates that prove them. |
+| **Document** | `tools/check_guide_drift.py` + `guide_drift_gate`; the site-manual drift gate in `openvmx-site` | `docs/install-guide.md` / `docs/upgrade-guide.md` cannot drift from the e2e gates that prove them; the public Installation Guide's install commands are re-checked against `tests/qemu/test_product_install_e2e.sh` on every cut and on every docs PR. |
 | **Publish** | `tools/publish-release.sh` + `.github/workflows/release.yml` | Bundle artifacts + generated notes attached to a GitHub Release; notes recorded in-tree under `docs/release-notes/`. |
 
 ## Cutting a release locally
@@ -87,7 +87,40 @@ in-tree under `docs/release-notes/RELEASE-NOTES-<version>.md` (staged, not
 committed — you commit the record alongside the tag). That directory is the
 version-controlled log of every published release's notes.
 
+## Reviewing the public site manuals
+
+The public documentation set lives in the `openvmx-site` repo, under its
+`docs/`, not here — but it ships the same release. Every cut includes a
+release-engineering review of those manuals. Part of it is mechanical; the rest
+is judgment a gate cannot make.
+
+- **The command-drift gate is green.** The public Installation Guide carries a
+  hidden, machine-checkable block of its install commands, compared byte for
+  byte against the `# GUIDE-STEP` commands in
+  `tests/qemu/test_product_install_e2e.sh` at the release tag. It runs in
+  `openvmx-site` on every cut (`track-release.yml`) and on every docs PR
+  (`docs-drift.yml`). A green gate proves the commands match, and nothing more —
+  the rest of this list is yours to check.
+- **Each manual's edition stamp matches the cut.** `track-release.yml` rewrites
+  the `data-ovmx-version` token from the deployed tag, so the "Applies to" line
+  follows the release. Confirm it landed. Bump the edition and date in the
+  revision-history table by hand whenever the manual's content changed.
+- **Appendix C and the capability claims match `docs/compat/`.** Re-read the
+  Installation Guide's "not yet available" appendix, and any claim about what
+  works, against the current Compatibility Surface Register. A facility that
+  reached implemented this cut graduates out of the appendix; one that regressed
+  goes back in.
+- **Drift found is filed, not shipped.** When a manual and the code disagree,
+  open a documentation bug and hold the manual change. Do not edit the manual to
+  match a claim the register does not carry.
+
+The `# GUIDE-STEP` annotations in `tests/qemu/test_product_install_e2e.sh` are
+read by the site's drift gate at the tag, so they matter to a repo they do not
+live in. Do not remove or renumber them without matching the public Installation
+Guide's command block.
+
 ## Related
 
 - `docs/install-guide.md`, `docs/upgrade-guide.md` — the tested install/upgrade procedures.
 - `docs/building.md` — building OpenVMX from source for development.
+- `openvmx-site` `docs/installation/` — the public Installation Guide, drift-checked against `tests/qemu/test_product_install_e2e.sh`.

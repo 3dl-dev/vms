@@ -77,3 +77,33 @@ that shifts which assertions redden no longer requires re-committing a ledger or
 re-aligning a manifest equality. The only way the negative controls can now go
 red is the way that matters — a facility whose defect the QEMU/`/dev/vms` suite
 fails to catch.
+
+## The two mandatory veracity questions (vms-14f / vms-ad5, operator-approved 2026-08-13)
+
+Keeping only *runtime* defect-injection proofs is necessary but not sufficient: a
+proof can still be fake if it is constructed wrong. The repeated-failure-class
+circuit breaker (`vms-14f`) tripped when the SAME defect class was overturned
+three times — culminating in a rework that was told the defect, was required to
+"prove it both ways", produced a both-ways proof, and STILL shipped the class,
+because it injected its fault by **monkeypatching the function under test**
+instead of through the `FA_ATTR_CACHE` file the tool actually reads. Its negative
+control proved nothing. The systemic finding (`vms-ad5`) is that the veracity
+rubric never asked two questions. They are now MANDATORY for every negative
+control / self-consistency / "prove-it-both-ways" claim, in review and in
+self-check:
+
+- **Q1 — Independent-oracle sourcing.** Where does the test's EXPECTED VALUE come
+  from? It must come from an independent oracle (public VMS documentation, lab
+  observation, a source other than the code under test) — never be derived from
+  the same code the test validates. A test whose expected value is computed by its
+  target is a tautology that cannot fail (this is exactly the `vms-a4d` defect,
+  which must not merge until reworked to satisfy Q1).
+
+- **Q2 — Real-injection-path.** Is the fault injected through the REAL input path
+  the code actually reads (the file / socket / `/dev/vms` the tool consumes) — not
+  by monkeypatching the function under test? An injection that bypasses the real
+  read path proves nothing about the real read path.
+
+If either answer is wrong, the both-ways proof is fake — reject it. These two
+questions are mirrored in the reviewer veracity checklist so every review applies
+them.

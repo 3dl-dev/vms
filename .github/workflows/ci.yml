@@ -105,6 +105,7 @@ jobs:
               - 'tests/qemu/test_release_e2e.sh'
               - 'tests/qemu/test_executive_integral.sh'
               - 'tests/qemu/test_distrib_boot.sh'
+              - 'tests/qemu/test_virtio_nic.sh'
               - 'tests/qemu/test_startup_phase_driver.sh'
               - 'tests/qemu/test_boot_conformance.sh'
               - 'tests/qemu/test_boot_scsnode_hostname_e2e.sh'
@@ -528,6 +529,26 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_boot_conformance.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-7bd (parent vms-67f, TCP/IP Services). Reuses the image built above
+      # (no extra build). Proves the QEMU runtime gets a virtio-net NIC: the
+      # launcher's arg construction (user-mode SLIRP default, opt-in tap/bridge,
+      # no inbound by default, -nodefaults kept) AND a real boot where the guest
+      # kernel enumerates the virtio-net Ethernet controller with the DEFAULT
+      # user-mode NIC, the PXE ROM is suppressed, and the executive still
+      # attaches (adding the NIC did not regress boot). run-qemu.sh +
+      # Dockerfile.bootable are bind-mounted at /src so the arg-construction
+      # checks run here too, not just the boot check. This is the LINUX-LAYER
+      # NIC only; the VMS device face (EWAn:) is downstream (vms-3be/vms-9d2).
+      - name: virtio-net NIC present on the QEMU runtime (vms-7bd)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_virtio_nic.sh:/test.sh:ro \
+            -v ${{ github.workspace }}/distro/boot/run-qemu.sh:/src/distro/boot/run-qemu.sh:ro \
+            -v ${{ github.workspace }}/distro/Dockerfile.bootable:/src/distro/Dockerfile.bootable:ro \
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh

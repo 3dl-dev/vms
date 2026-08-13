@@ -147,9 +147,12 @@ check "the image actually completed (not just launched)" \
       "a fork that never waits, or a truncated pipe"
 
 check "successful foreign command sets \$STATUS to a VMS success code" \
-      'STATUS = "1"|STATUS = 1' \
+      'STATUS = "%X0*1"' \
       "activation status not threaded back into \$STATUS/\$SEVERITY the way \
        a builtin verb's is"
+# $STATUS is displayed in the VMS "%Xhhhhhhhh" representation (vms-3983 —
+# SHOW SYMBOL $STATUS on real VMS shows "%X00000001" for SS$_NORMAL, not decimal
+# "1"). The success anchor is the odd low bit, shown here as %X0…1.
 
 # --- 2b: nonzero image exit must be surfaced, not swallowed ----------------
 printf 'BAR :== "$%s"\nBAR\n' "$FAILIMG" >"$WORK/cmds2"

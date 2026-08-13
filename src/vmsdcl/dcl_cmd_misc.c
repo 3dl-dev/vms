@@ -36,7 +36,9 @@
 #include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
 #include "dcl/disk_logical.h"
+#include "dcl/help.h"
 #include "ssdef.h"
+#include "ovmx_layout.h"
 #include "vms/logical.h"
 #include "vms/privs.h"
 #include "opcdef.h"
@@ -796,93 +798,93 @@ int cmd_accounting(struct dcl_command *cmd)
 /*                         HELP Command                                */
 /* ================================================================== */
 
+/*
+ * Locate the HELP library file (numbered-level .HLP source) on disk.
+ *
+ * Order (first hit wins):
+ *   1. $OVMX_HELPLIB   -- an explicit Linux path to the .HLP file. This is a
+ *      LOCATOR override only (it never changes the CONTENT, which always comes
+ *      from the real file), used by the test harness and advanced setups. It
+ *      is the OVMX analogue of VMS's "HELP /LIBRARY=file".
+ *   2. SYS$HELP:HELPLIB.HLP resolved through the process logical-name tables
+ *      (the authentic VMS location: HLP$LIBRARY defaults to HELPLIB, searched
+ *      in SYS$HELP -- VSI OpenVMS DCL Dictionary, HELP).
+ *
+ * Returns 1 and fills buf on success, 0 if no readable library was found.
+ */
+static int help_locate_library(struct dcl_context *ctx, char *buf, size_t bufsz)
+{
+    const char *env = getenv("OVMX_HELPLIB");
+    if (env && env[0]) {
+        FILE *fp = fopen(env, "r");
+        if (fp) {
+            fclose(fp);
+            snprintf(buf, bufsz, "%s", env);
+            return 1;
+        }
+    }
+
+    char resolved[1024];
+    if (dcl_resolve_path(ctx, VMS_HELPLIB_PATH, resolved, sizeof(resolved))
+            == 0) {
+        FILE *fp = fopen(resolved, "r");
+        if (fp) {
+            fclose(fp);
+            snprintf(buf, bufsz, "%s", resolved);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * HELP - hierarchical topic help, read from the HELP library (vms-01b).
+ *
+ * Walks the real topic tree parsed from the library data (src/vmsdcl/dcl_help.c)
+ * -- "HELP", "HELP topic", "HELP topic subtopic ...", the "Additional
+ * information available:" subtopic listing, and (interactively) the
+ * "Topic?" / "<path> Subtopic?" prompt loop.  No topic content is hardcoded.
+ */
 int cmd_help(struct dcl_command *cmd)
 {
-    /* If a specific topic is requested */
-    if (cmd->param_count >= 1 && cmd->params[0][0] != '\0') {
-        /* Look up the command for its help text */
-        const struct dcl_verb *verb = dcl_find_verb(cmd->params[0]);
-        if (verb && verb->help) {
-            printf("\n%s\n\n", verb->name);
-            printf("  %s\n\n", verb->help);
+    struct dcl_context *ctx = dcl_get_context();
 
-            /* Provide some standard help structure */
-            if (strcasecmp(verb->name, "SHOW") == 0) {
-                printf("  Subcommands:\n\n");
-                printf("    DEFAULT    Display current default directory\n");
-                printf("    LOGICAL    Display logical name translations\n");
-                printf("    PROCESS    Display current process information\n");
-                printf("    PROTECTION Display process default protection\n");
-                printf("    SYMBOL     Display symbol value(s)\n");
-                printf("    SYSTEM     Display process list\n");
-                printf("    TIME       Display current date/time\n");
-                printf("    USERS      Display logged-in users\n");
-                printf("    VERIFY     Display verification state\n");
-                printf("\n");
-            } else if (strcasecmp(verb->name, "SET") == 0) {
-                printf("  Subcommands:\n\n");
-                printf("    DEFAULT    Change default directory\n");
-                printf("    PASSWORD   Change user password\n");
-                printf("    PROMPT     Change DCL prompt\n");
-                printf("    PROTECTION Set file protection\n");
-                printf("    TERMINAL   Set terminal characteristics (stub)\n");
-                printf("    [NO]VERIFY Set command verification on/off\n");
-                printf("\n");
-            } else if (strcasecmp(verb->name, "DIRECTORY") == 0) {
-                printf("  Format:\n\n");
-                printf("    DIRECTORY [filespec]\n\n");
-                printf("  Qualifiers:\n\n");
-                printf("    /BRIEF      Display filenames only\n");
-                printf("    /COLUMNS=n  Display in n columns\n");
-                printf("    /DATE       Display date/time\n");
-                printf("    /FULL       Display all information\n");
-                printf("    /SIZE       Display file sizes in blocks\n");
-                printf("\n");
-            }
-            return SS$_NORMAL;
-        }
-        dcl_error("DCL", 0, "NOHELP",
-                  "no help available for \"%s\"", cmd->params[0]);
-        return SS$_NORMAL;
+    char lib_path[1024];
+    if (!help_locate_library(ctx, lib_path, sizeof(lib_path))) {
+        /* Honest failure -- no fake fallback (Rule 9 / INV-DCL). */
+        dcl_error("HELP", 2, "OPENIN",
+                  "error opening help library %s", VMS_HELPLIB_PATH);
+        return SS$_NOSUCHFILE;
     }
 
-    /* General help - list all commands */
-    printf("\n");
-    printf("Information available:\n\n");
-
-    int count = 0;
-    const struct dcl_verb *table = dcl_get_verb_table(&count);
-    int col = 0;
-
-    for (int i = 0; i < count; i++) {
-        printf("  %-16s", table[i].name);
-        col++;
-        if (col >= 4) {
-            printf("\n");
-            col = 0;
-        }
-    }
-    if (col > 0) printf("\n");
-
-    printf("\nTopic? ");
-    fflush(stdout);
-
-    char topic[256];
-    if (fgets(topic, sizeof(topic), stdin)) {
-        size_t tlen = strlen(topic);
-        if (tlen > 0 && topic[tlen - 1] == '\n') topic[tlen - 1] = '\0';
-        if (topic[0] != '\0') {
-            struct dcl_command help_cmd;
-            memset(&help_cmd, 0, sizeof(help_cmd));
-            strcpy(help_cmd.verb, "HELP");
-            strncpy(help_cmd.params[0], topic, sizeof(help_cmd.params[0]) - 1);
-            help_cmd.param_count = 1;
-            return cmd_help(&help_cmd);
-        }
+    help_lib_t *lib = help_open_file(lib_path);
+    if (!lib) {
+        dcl_error("HELP", 2, "OPENIN",
+                  "error opening help library %s", VMS_HELPLIB_PATH);
+        return SS$_NOSUCHFILE;
     }
 
-    printf("\n");
-    return SS$_NORMAL;
+    /* Gather the requested topic path from the positional parameters. */
+    const char *path[DCL_MAX_PARAMS];
+    int npath = 0;
+    for (int i = 0; i < cmd->param_count && npath < DCL_MAX_PARAMS; i++) {
+        if (cmd->params[i][0] != '\0')
+            path[npath++] = cmd->params[i];
+    }
+
+    int status;
+    if (isatty(fileno(stdin))) {
+        /* Interactive: display then drive the Topic?/Subtopic? prompt loop. */
+        help_interactive(lib, path, npath, stdin, stdout);
+        status = SS$_NORMAL;
+    } else {
+        /* Non-interactive (piped/batch): show the requested node (or the
+         * top-level list) once, without consuming following SYS$INPUT lines. */
+        status = help_render(lib, path, npath, stdout);
+    }
+
+    help_close(lib);
+    return status;
 }
 
 /* ================================================================== */

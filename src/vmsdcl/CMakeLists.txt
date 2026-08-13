@@ -24,6 +24,7 @@ add_executable(vmsdcl
     dcl_script.c
     dcl_messages.c
     dcl_library.c
+    dcl_help.c
 )
 
 target_include_directories(vmsdcl PRIVATE

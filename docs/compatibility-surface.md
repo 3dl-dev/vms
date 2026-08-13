@@ -634,7 +634,7 @@ The HELP verb and its topic/library content. Real, tested.
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
-| ✅ | `help$verb` | command | HELP — hierarchical topic help, keyword lookup | verified | real | in | `tools/vms_help.c` |
+| ✅ | `help$verb` | command | HELP — hierarchical topic help, keyword lookup | verified | real | in | `src/vmsdcl/dcl_help.c` |
 
 ### lexicals — F$ Lexical Functions
 <sub>scope: in · tier 1 · plan: vms-8ad · ref: OpenVMS DCL Dictionary — F$ Lexical Functions · reviewed 2026-08-13</sub>

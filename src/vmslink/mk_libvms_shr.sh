@@ -130,16 +130,68 @@ done
 # symbol (nm type 'D' initialized, 'B' bss/tentative, 'R' rodata) becomes a =DATA
 # universal (vms-bd1/vms-b65.6). A cross-image consumer that GOT-imports one of
 # these tables binds it to the producer's =DATA universal (vms-e65; link.c honors
-# `=DATA`, exactly the stdin/stdout/stderr path). Name-sorted for a deterministic,
-# GSMATCH-stable vector. `$` in names (lib$/str$/...) is safe: it comes from command
-# substitution, which is NOT re-expanded when the value is used.
-VEC=$( { nm $OBJS 2>/dev/null | awk 'NF==3 && $2=="T"{print $3"=PROCEDURE"}'; \
-         nm $OBJS 2>/dev/null | awk 'NF==3 && ($2=="D"||$2=="B"||$2=="R"){print $3"=DATA"}'; } \
-      | sort -u | paste -sd, -)
-[ -n "$VEC" ] || { echo "mk_libvms_shr: FAIL: empty symbol vector (no T/D symbols?)"; exit 1; }
+# `=DATA`, exactly the stdin/stdout/stderr path). `$` in names (lib$/str$/...) is
+# safe: it comes from command substitution, which is NOT re-expanded downstream.
+#
+# ORDER: FROZEN-ORDER-THEN-APPEND (bead vms-bd1). This was once emitted
+# name-SORTED -- deterministic for a fixed object set, but NOT append-only: a new
+# universal whose name sorts into the middle shifted the symbol-vector index of
+# every later universal, breaking GSMATCH LEQUAL for any consumer (vmsrms, DCL)
+# that had bound an index. Now the ORDER is frozen in the append-only manifest
+# src/vmslink/libvms_shr.vec: every listed universal is emitted FIRST in manifest
+# order (its line number IS its index), then any nm-discovered universal not yet
+# in the manifest is APPENDED (sorted) after the frozen block -- so an established
+# index is immovable. This is the OpenVMS upward-compatibility contract for a
+# GSMATCH LEQUAL image (docs/design-link-native-toolchain.md §5, from the public
+# VSI OpenVMS Linker Utility Manual -- clean-room, CLAUDE.md Rule 8).
+MANIFEST=${LIBVMS_VEC:-$HERE/libvms_shr.vec}
+[ -f "$MANIFEST" ] || { echo "mk_libvms_shr: FAIL: manifest not found: $MANIFEST"; exit 1; }
+
+# Discovered universals: name=class, one per line, unique-sorted.
+{ nm $OBJS 2>/dev/null | awk 'NF==3 && $2=="T"{print $3"=PROCEDURE"}'; \
+  nm $OBJS 2>/dev/null | awk 'NF==3 && ($2=="D"||$2=="B"||$2=="R"){print $3"=DATA"}'; } \
+    | sort -u > "$WORK/disc.vec"
+[ -s "$WORK/disc.vec" ] || { echo "mk_libvms_shr: FAIL: empty symbol vector (no T/D symbols?)"; exit 1; }
+cut -d= -f1 "$WORK/disc.vec" | sort -u > "$WORK/disc.names"
+
+# Frozen manifest entries in file order (strip `#` comments + whitespace/blanks).
+sed 's/#.*//' "$MANIFEST" | sed 's/[[:space:]]//g' | grep -v '^$' > "$WORK/frozen.vec"
+cut -d= -f1 "$WORK/frozen.vec" | sort -u > "$WORK/frozen.names"
+
+# Every frozen NON-retired universal must still be defined. A vanished one is
+# refused LOUDLY: retire it in place (PRIVATE_PROCEDURE/PRIVATE_DATA) rather than
+# delete the line, or every later index shifts.
+MISSING=""
+while IFS= read -r entry; do
+    en=${entry%%=*}; ec=${entry#*=}
+    case "$ec" in PRIVATE_*) continue ;; esac
+    grep -qx "$en" "$WORK/disc.names" || MISSING="$MISSING $en"
+done < "$WORK/frozen.vec"
+if [ -n "$MISSING" ]; then
+    echo "mk_libvms_shr: FAIL: frozen universal(s) no longer defined:$MISSING"
+    echo "mk_libvms_shr:   RETIRE in place -- set the class to PRIVATE_PROCEDURE/PRIVATE_DATA"
+    echo "mk_libvms_shr:   in $MANIFEST; NEVER delete the line, or every later index shifts."
+    exit 1
+fi
+
+# Newly-discovered universals not yet frozen -> append (sorted) after the frozen
+# block, keeping every frozen index immovable.
+comm -23 "$WORK/disc.names" "$WORK/frozen.names" | sort > "$WORK/append.names"
+: > "$WORK/append.vec"
+[ -s "$WORK/append.names" ] && join -t= "$WORK/append.names" "$WORK/disc.vec" > "$WORK/append.vec"
+
+VEC=$( cat "$WORK/frozen.vec" "$WORK/append.vec" | paste -sd, - )
+[ -n "$VEC" ] || { echo "mk_libvms_shr: FAIL: empty symbol vector"; exit 1; }
+NFROZEN=$(wc -l < "$WORK/frozen.vec" | tr -d ' ')
+NAPPEND=$(wc -l < "$WORK/append.vec" | tr -d ' ')
 NPROC=$(printf '%s' "$VEC" | tr ',' '\n' | grep -c '=PROCEDURE' || true)
 NDATA=$(printf '%s' "$VEC" | tr ',' '\n' | grep -c '=DATA' || true)
-echo "mk_libvms_shr: symbol vector has $NPROC PROCEDURE + $NDATA DATA universals"
+echo "mk_libvms_shr: symbol vector: $NFROZEN frozen + $NAPPEND appended = $NPROC PROCEDURE + $NDATA DATA universals"
+if [ "$NAPPEND" -gt 0 ]; then
+    echo "mk_libvms_shr: NOTE: $NAPPEND universal(s) appended BEYOND the frozen manifest."
+    echo "mk_libvms_shr:   Append these lines to $MANIFEST (and libvms_shr.vec.frozen) to lock their indices:"
+    sed 's/^/    /' "$WORK/append.vec"
+fi
 
 echo "mk_libvms_shr: LINK.EXE --shareable --use {DECC\$SHR,LIBVMSPROCESS\$SHR,LIBVMSSYS\$SHR,LIBVMSFS\$SHR} -> $OUT"
 # STRICT (no --allow-undefined): every libc/libm/DATA import MUST bind to DECC$SHR,

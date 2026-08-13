@@ -89,17 +89,19 @@
 /* The real component source + its headers, staged by the Dockerfile. */
 #define COMPONENT_DEFAULT "/tests/component"
 
-/* Failure bounds (ms). A green drive echoes the marker in seconds (TCG tcc
- * compile of one small TU) and MMK exits immediately after; these are ceilings,
- * not pacing. They must be SMALL because a WEDGED drive (the negctl, sp_send
- * dropping the command so MMK deadlocks in $HIBER) burns the full marker bound,
- * and run_tests.sh caps the WHOLE QEMU boot at 120s -- so once the marker bound
- * elapses the drive is known-dead and MMK is killed after only a short grace
- * rather than waited on for a second full bound. Combined with the single-drive
- * short-circuit in main() (drive #2 runs only if #1 produced a valid object), a
- * wedged suite costs ~one marker bound, not four. */
-#define MARKER_TIMEOUT_MS 10000
-#define REAP_GRACE_MS      2000
+/* Failure bound (ms) for ONE drive: MMK spawns a DCL, drives the foreign-command
+ * definition + the TCC compile (a real fork+execve of the compiler, which does
+ * real work) + the marker echo, and EXITS. This is a CEILING, not pacing -- the
+ * wait below returns the instant MMK exits, so a green drive costs only its real
+ * runtime and this bound is only ever reached by a genuine hang. It is generous
+ * because CI's TCG is much slower than a dev host: an earlier run compiled the
+ * object and echoed the marker but MMK had not yet finished tearing down its DCL
+ * subprocess within a tight 2s reap, reddening the run from clean (the whole
+ * point of the vms-d1b gate is to pass from a clean CI build). Kept comfortably
+ * under half run_tests.sh's 120s QEMU cap, and paired with the single-drive
+ * short-circuit in main() (drive #2 is skipped only when drive #1 WEDGED), so
+ * even a genuine hang costs one bound, not four. */
+#define DRIVE_TIMEOUT_MS 40000
 
 #define EXPECT_MARKER "OVMXD1B:COMPILED"
 
@@ -272,43 +274,48 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
     }
     close(outpipe[1]);
 
+    /* ONE bounded wait: drain MMK's output (detecting the completion marker) AND
+     * poll for MMK to EXIT, until it does or the bound elapses. Keying completion
+     * on MMK's own exit -- not on a separate short reap after the marker -- is
+     * what makes this robust on slow CI TCG: a green drive returns the instant
+     * MMK exits (however long its real work + DCL teardown took), while a genuine
+     * hang is bounded and then killed. */
     char acc[16384];
     size_t acclen = 0;
     int waited = 0;
+    int wstatus = 0;
     acc[0] = '\0';
-    while (waited < MARKER_TIMEOUT_MS && !*saw_marker) {
+    while (waited < DRIVE_TIMEOUT_MS) {
         struct pollfd pfd = { .fd = outpipe[0], .events = POLLIN };
         int pr = poll(&pfd, 1, 200);
+        if (pr > 0) {
+            ssize_t n = read(outpipe[0], acc + acclen,
+                             (acclen < sizeof(acc) - 1) ? (sizeof(acc) - 1 - acclen) : 0);
+            if (n > 0) {
+                acclen += (size_t)n;
+                acc[acclen] = '\0';
+                if (strstr(acc, EXPECT_MARKER) != NULL) *saw_marker = 1;
+            }
+        }
+        pid_t r = waitpid(pid, &wstatus, WNOHANG);
+        if (r == pid) { *reaped = 1; break; }
+        if (r < 0) break;
         waited += 200;
-        if (pr <= 0) { if (pr < 0) break; continue; }
+    }
+    if (!*reaped) {
+        kill(pid, SIGKILL);
+        (void)waitpid(pid, &wstatus, 0);
+    }
+    /* Drain any output MMK flushed just before exit (may carry the marker). */
+    for (int i = 0; i < 16; i++) {
+        struct pollfd pfd = { .fd = outpipe[0], .events = POLLIN };
+        if (poll(&pfd, 1, 50) <= 0) break;
         ssize_t n = read(outpipe[0], acc + acclen,
                          (acclen < sizeof(acc) - 1) ? (sizeof(acc) - 1 - acclen) : 0);
         if (n <= 0) break;
         acclen += (size_t)n;
         acc[acclen] = '\0';
         if (strstr(acc, EXPECT_MARKER) != NULL) *saw_marker = 1;
-    }
-
-    /* Reap with only a SHORT grace: a green drive exits right after the marker;
-     * a wedged one (no marker) is already known-dead, so kill it rather than
-     * wait a second full bound (the 120s VM budget). */
-    int wstatus = 0;
-    for (int w = 0; w < REAP_GRACE_MS; w += 20) {
-        pid_t r = waitpid(pid, &wstatus, WNOHANG);
-        if (r == pid) { *reaped = 1; break; }
-        if (r < 0) break;
-        usleep(20000);
-    }
-    if (!*reaped) {
-        kill(pid, SIGKILL);
-        (void)waitpid(pid, &wstatus, 0);
-    }
-    /* Drain remaining output (bounded, best-effort). */
-    for (int i = 0; i < 8; i++) {
-        struct pollfd pfd = { .fd = outpipe[0], .events = POLLIN };
-        if (poll(&pfd, 1, 50) <= 0) break;
-        char tmp[1024];
-        if (read(outpipe[0], tmp, sizeof(tmp)) <= 0) break;
     }
     close(outpipe[0]);
 

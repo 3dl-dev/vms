@@ -1,0 +1,16 @@
+# SYS$ AST Services. See docs/design-compat-surface-register.md.
+facility: sys-ast
+name: "SYS$ AST Services"
+domain: programming-interfaces
+vms_ref: "OpenVMS System Services Reference Manual — Asynchronous System Trap (AST) Services"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  VMS ships ~4 AST-related services; OVMX declares 2, both implemented and
+  real, kernel-queued via vms.ko.
+last_reviewed: 2026-08-13
+items:
+  - {id: sys$dclast, kind: routine, status: implemented, authenticity: real, vms: "Declare an AST for the calling process", evidence: src/libvms/syssvc/sys_ast.c, notes: "kernel-queued via vms.ko"}
+  - {id: sys$setast, kind: routine, status: implemented, authenticity: real, vms: "Enable/disable AST delivery", evidence: src/libvms/syssvc/sys_ast.c}
+  - {id: sys$_other, kind: routine, status: absent, authenticity: n/a, vms: "Remaining AST-related services beyond declare/enable (VMS ships ~4 total)"}

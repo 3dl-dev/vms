@@ -1,0 +1,48 @@
+# Source of truth for the DCL-qualifiers row of the Compatibility Surface Register.
+facility: dcl-qualifiers
+name: "DCL Qualifier Grammar (Engine A / CLD tables)"
+domain: command-language
+vms_ref: "OpenVMS Command Definition Utility (CDU) Manual; DCL Dictionary"
+scope_1_0: in
+tier: 1
+plan_ref: vms-8ad
+summary: >
+  Engine A: per-verb qualifier validation. 28 of 55 builtin verbs carry real
+  CLD-style qualifier tables (hand-written C, not CDU-generated); the
+  remaining 9 accept-all legacy verbs perform zero qualifier validation. A
+  real CLI$-callable CDU compiler exists for external images but is not yet
+  used to generate the 55 builtin verb tables.
+last_reviewed: 2026-08-13
+items:
+  - id: dcl-qualifiers$verb-coverage
+    kind: feature
+    status: partial
+    authenticity: real
+    vms: "Per-verb qualifier tables validating every DCL verb's /QUALIFIER grammar"
+    evidence: src/vmsdcl/dcl_builtin.c
+    notes: "28 of 55 builtin verbs have real qualifier tables (ANALYZE, ASSIGN, ATTACH, BACKUP, CONVERT, COPY, CREATE, DEASSIGN, DEFINE, DELETE, DIRECTORY, DUMP, INQUIRE, LINK, MOUNT, OPEN, PRINT, PRODUCT, PURGE, RECALL, RENAME, REPLY, SEARCH, SORT, SPAWN, STOP, SUBMIT, TYPE)."
+
+  - id: dcl-qualifiers$zero-validation-verbs
+    kind: feature
+    status: absent
+    authenticity: facade-risk
+    vms: "Qualifier validation for SET, SHOW, TCPIP, RUN, LIBRARY, READ, WRITE, INSTALL, MAIL"
+    evidence: src/vmsdcl/dcl_builtin.c
+    notes: "9 legacy accept-all verbs (quals == NULL in builtin_verbs[]): any /QUALIFIER is silently accepted rather than rejected with IVQUAL."
+
+  - id: dcl-qualifiers$per-verb-depth
+    kind: feature
+    status: partial
+    authenticity: real
+    vms: "Full per-verb qualifier set depth (VMS DIRECTORY alone has dozens)"
+    evidence: src/vmsdcl/dcl_builtin.c
+    notes: "Depth still a fraction of VMS: DIRECTORY 13 quals, DELETE 5, PRINT/SUBMIT 3 each, PURGE 3, COPY 2."
+
+  - id: dcl-qualifiers$cdu-compiler
+    kind: routine
+    status: verified
+    authenticity: real
+    vms: "CLI$COMPILE_CLD — compile CLD source into a callable command table"
+    evidence: src/libvms/rtl/lib_cli.c
+    verified_against: "tests/libvms/test_lib_cli.c compiling tests/corpus/tier3-mmk/mmk_cld.cld"
+    notes: "Real CDU compiler, CLI$-callable, proven against an external image's CLD — but the 55 builtin verbs still use hand-written C tables, not CDU-generated ones."

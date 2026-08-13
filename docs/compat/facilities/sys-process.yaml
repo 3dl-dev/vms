@@ -1,0 +1,29 @@
+# SYS$ Process Control. See docs/design-compat-surface-register.md.
+facility: sys-process
+name: "SYS$ Process Control"
+domain: programming-interfaces
+vms_ref: "OpenVMS System Services Reference Manual — Process Control Services"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  VMS ships ~25 process-control services; OVMX declares 14. CREPRC/DELPRC/
+  HIBER/EXIT are real. WAKE/SUSPND/RESUME/SETPRI/FORCEX all silently discard
+  their prcnam argument and act on the calling Linux PID only (facade-risk).
+  SYS$CANCEL is a literal no-op returning SS$_NORMAL (facade-risk). SYS$SETPRN
+  and SYS$PROCESS_SCAN are absent.
+last_reviewed: 2026-08-13
+items:
+  - {id: sys$creprc, kind: routine, status: implemented, authenticity: real, vms: "Create a process", evidence: src/libvms/syssvc/sys_process.c}
+  - {id: sys$delprc, kind: routine, status: implemented, authenticity: real, vms: "Delete a process", evidence: src/libvms/syssvc/sys_process.c}
+  - {id: sys$hiber, kind: routine, status: implemented, authenticity: real, vms: "Hibernate the calling process", evidence: src/libvms/syssvc/sys_process.c}
+  - {id: sys$exit, kind: routine, status: implemented, authenticity: real, vms: "Exit the calling process/image", evidence: src/libvms/syssvc/sys_process.c}
+  - {id: sys$wake, kind: routine, status: implemented, authenticity: facade-risk, vms: "Wake a hibernating/suspended process, by process name or ID", evidence: src/libvms/syssvc/sys_misc.c, notes: "prcnam argument silently discarded; acts on the calling Linux PID only"}
+  - {id: sys$suspnd, kind: routine, status: implemented, authenticity: facade-risk, vms: "Suspend a process", evidence: src/libvms/syssvc/sys_misc.c, notes: "prcnam argument silently discarded; acts on the calling Linux PID only"}
+  - {id: sys$resume, kind: routine, status: implemented, authenticity: facade-risk, vms: "Resume a suspended process", evidence: src/libvms/syssvc/sys_misc.c, notes: "prcnam argument silently discarded; acts on the calling Linux PID only"}
+  - {id: sys$setpri, kind: routine, status: implemented, authenticity: facade-risk, vms: "Set process scheduling priority", evidence: src/libvms/syssvc/sys_misc.c, notes: "prcnam argument silently discarded; acts on the calling Linux PID only"}
+  - {id: sys$forcex, kind: routine, status: implemented, authenticity: facade-risk, vms: "Force a process to exit", evidence: src/libvms/syssvc/sys_misc.c, notes: "prcnam argument silently discarded; acts on the calling Linux PID only"}
+  - {id: sys$cancel, kind: routine, status: stub, authenticity: facade-risk, vms: "Cancel all I/O on all channels of the calling process", evidence: src/libvms/syssvc/sys_process.c, notes: "literal no-op, returns SS$_NORMAL unconditionally"}
+  - {id: sys$setprn, kind: routine, status: absent, authenticity: n/a, vms: "Set the calling process's name"}
+  - {id: sys$process_scan, kind: routine, status: absent, authenticity: n/a, vms: "Scan for processes matching selection criteria"}
+  - {id: sys$_other, kind: routine, status: absent, authenticity: n/a, vms: "Remaining SYS$ process-control services beyond the routines named above (VMS ships ~25 total)"}

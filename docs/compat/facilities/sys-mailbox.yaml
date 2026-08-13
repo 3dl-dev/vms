@@ -1,0 +1,15 @@
+# SYS$ Mailboxes. See docs/design-compat-surface-register.md.
+facility: sys-mailbox
+name: "SYS$ Mailboxes"
+domain: programming-interfaces
+vms_ref: "OpenVMS System Services Reference Manual — Mailbox Services"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  VMS ships ~2 mailbox-creation services; OVMX implements both, real,
+  vms.ko-resident. Replaced an earlier AF_UNIX facade.
+last_reviewed: 2026-08-13
+items:
+  - {id: sys$crembx, kind: routine, status: implemented, authenticity: real, vms: "Create a mailbox device", evidence: src/libvms/syssvc/sys_mailbox.c, notes: "vms.ko-resident; replaced an earlier AF_UNIX facade"}
+  - {id: sys$delmbx, kind: routine, status: implemented, authenticity: real, vms: "Delete a mailbox device", evidence: src/libvms/syssvc/sys_mailbox.c}

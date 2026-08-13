@@ -1,0 +1,22 @@
+# Source of truth for the ODS-2 file system row of the Compatibility Surface Register.
+# See docs/design-compat-surface-register.md.
+facility: ods2
+name: "ODS-2 on-disk file system + versioning"
+domain: file-system
+vms_ref: "OpenVMS File System (ODS-2) documentation; Files-11 On-Disk Structure"
+scope_1_0: in
+plan_ref: vms-0f3
+summary: >
+  Two distinct surfaces: the OVMX runtime filesystem (vmsfs.ko — its own honestly-labeled
+  format, not byte-compatible) and a genuine Files-11 ODS-2 reader/writer for interop,
+  byte-exact-verified against a real OpenVMS VAX volume from lab-2. File versioning is
+  real and wired to DCL; COPY/CREATE has a versioning-semantics gap.
+last_reviewed: 2026-08-13
+items:
+  - {id: vmsfs$runtime_fs, kind: subsystem, status: implemented, authenticity: real, vms: "OVMX runtime file system (vmsfs.ko) — the boot/runtime fs", evidence: src/kernel/vmsfs/vmsfs_ondisk.h, notes: "honestly own format (magic VMFS/VFH2), case-insensitive, versioned, SOGW-protected — NOT byte-compatible with real ODS-2 by design"}
+  - {id: ods2$reader, kind: feature, status: verified, authenticity: real, vms: "Files-11 L2 (ODS-2) volume reader", evidence: src/vmsfs/ods2/ods2_reader.c, verified_against: "real OpenVMS VAX V7.3 ODS-2 volume, tests/ods2/real_vax_ods2.dsk (see tests/ods2/PROVENANCE-real_vax_ods2.md)", notes: "byte-exact: home block, INDEXF.SYS, BITMAP.SYS, FH2 headers, FM2 retrieval pointers, directory listing"}
+  - {id: ods2$writer, kind: feature, status: implemented, authenticity: real, vms: "Files-11 L2 (ODS-2) volume writer", evidence: src/vmsfs/ods2/ods2_writer.c, notes: "not yet oracle round-tripped; some fields are [OVMX-inferred] rather than VSI-doc-cited"}
+  - {id: ods2$versioning, kind: feature, status: implemented, authenticity: real, vms: "File versioning (;N)", evidence: src/vmsrms/rms_core.c, notes: "rms_next_version; wired to DCL via dcl_filespec.c's resolve_version_suffix — bare names resolve to highest ;N"}
+  - {id: ods2$case_fold, kind: feature, status: implemented, authenticity: real, vms: "Filename case-fold", evidence: src/vmsfs/vmsfs_translate.c}
+  - {id: ods2$protection, kind: feature, status: implemented, authenticity: real, vms: "SOGW protection mapping", evidence: src/vmsfs/vmsfs_protect.c, notes: "pinned to VSI wiki; second-opinion check deleted (vms-2b8); enforcement solely at syscall layer, matching VMS delegation to the executive"}
+  - {id: ods2$copy_overwrite, kind: feature, status: implemented, authenticity: facade-risk, vms: "COPY/CREATE overwrite behavior vs. versioning", evidence: src/vmsdcl/dcl_cmd_file.c:538, notes: "cmd_copy uses fopen(\"wb\") on the existing highest version in place instead of creating ;N+1 — breaks VMS ODS-2 versioning semantics"}

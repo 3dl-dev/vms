@@ -1,0 +1,156 @@
+# OVMX Compatibility Surface Register — domain taxonomy + controlled vocabularies.
+# Single source of truth for the generator (tools/compat/render_compat.py).
+# See docs/design-compat-surface-register.md for the full design.
+
+# ---------------------------------------------------------------------------
+# Controlled vocabularies. The generator rejects any facility item whose
+# status / authenticity / scope_1_0 / kind is not one of these keys.
+# ---------------------------------------------------------------------------
+
+status:            # coverage — how much is implemented (ordered worst -> best)
+  absent:      "Not present (a design doc may exist -> 'designed')."
+  designed:    "Design record exists; no implementation yet."
+  stub:        "Declared/callable but honestly returns unsupported / no-op."
+  partial:     "Some routines/cases/qualifiers real; material gaps remain."
+  implemented: "Broadly real for the common cases."
+  verified:    "Implemented AND checked against a VMS oracle (lab or conformance test)."
+
+authenticity:      # faithfulness — how honestly (orthogonal to status)
+  real:        "Does the real thing."
+  advisory:    "Accepts/tracks but does not enforce, honestly and documented."
+  facade-risk: "Returns plausible success without doing the work / per-process fake of shared state (INV-6/INV-DCL bug)."
+  n/a:         "Not a behavioural surface (struct layout, status-code block)."
+
+scope_1_0:         # 1.0 inclusion filter
+  in:          "In scope for 1.0."
+  stretch:     "Wanted, not a 1.0 blocker."
+  out:         "Permanently out of scope."
+  undecided:   "Scope call not yet made by operator -> rd gate."
+
+kind:              # item granularity / type
+  - routine        # a callable (SYS$/LIB$/STR$/... entry point)
+  - command        # a DCL verb
+  - lexical        # an F$ lexical function
+  - struct         # a data structure / descriptor / control block layout
+  - status-block   # a block of condition codes
+  - feature        # a behavioural feature (a cluster capability, a file org)
+  - protocol       # a wire protocol
+  - utility        # a standalone utility image
+  - subsystem      # a whole subsystem
+
+# ---------------------------------------------------------------------------
+# The 8 domains, in render order. `facilities` lists the facility tokens in
+# render order; each must have a matching docs/compat/facilities/<file>.yaml
+# whose `facility:` field equals the token. Facilities not yet authored are
+# listed here with a leading '#' as a coverage TODO so the map stays complete.
+# ---------------------------------------------------------------------------
+
+domains:
+  - id: programming-interfaces
+    name: "A. Programming Interfaces"
+    blurb: "The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API."
+
+  - id: file-system
+    name: "B. File System & Storage"
+    blurb: "ODS-2 on-disk, filespec/wildcard, devices, the logical-name namespace, FDL."
+
+  - id: command-language
+    name: "C. Command Language & Environment"
+    blurb: "DCL verbs and scripting, qualifier grammar, F$ lexicals, utilities, HELP, queues."
+
+  - id: system-management
+    name: "D. System Management & Security"
+    blurb: "SYSUAF/accounts, privileges, rights DB, protection/ACLs, auditing, SYSGEN, boot, install, accounting."
+
+  - id: clustering
+    name: "E. Clustering"
+    blurb: "SCS, NISCA/NISCS, connection manager/quorum, cluster-wide DLM, MSCP serving, cluster-wide logicals, shadowing."
+
+  - id: toolchain
+    name: "F. Toolchain & Images"
+    blurb: "Object/image format, activation, symbol vectors, LINK, LIBRARIAN, MACRO, MESSAGE, MMS/MMK, self-hosting compiler."
+
+  - id: networking
+    name: "G. Networking"
+    blurb: "TCP/IP Services (UCX), DECnet Phase IV, LAT, SSH."
+
+  - id: runtime-arch
+    name: "H. Runtime & Architecture"
+    blurb: "Architecture targets, the kernel executive (/dev/vms), image activation / runtime linking."
+
+# Facility registry: token -> domain. The generator warns if a facilities/*.yaml
+# names a facility absent here, or if a registered facility has no file yet
+# (reported as an uncovered facility in the internal register).
+facilities:
+  programming-interfaces:
+    - descriptors
+    - status-codes
+    - sys-time
+    - sys-eventflags
+    - sys-ast
+    - sys-logicalnames
+    - sys-process
+    - sys-procinfo        # getjpi/getsyi
+    - sys-memory
+    - sys-io              # assign/qio/cancel
+    - sys-mailbox
+    - sys-lock
+    - sys-security        # setprv/chkpro/check_access
+    - sys-fao-msg
+    - lib
+    - str
+    - mth
+    - ots
+    - smg
+    - chf
+    - rms-api
+  file-system:
+    - ods2
+    - filespec
+    - devices
+    - logical-namespace
+    - fdl
+  command-language:
+    - dcl-verbs
+    - dcl-scripting
+    - dcl-qualifiers
+    - lexicals
+    - utilities
+    - help
+    - queues
+  system-management:
+    - sysuaf
+    - privileges
+    - rights-db
+    - protection-acl
+    - audit
+    - sysgen
+    - boot
+    - install
+    - accounting
+  clustering:
+    - scs
+    - nisca
+    - connection-manager
+    - cluster-dlm
+    - mscp-serve
+    - cluster-logicals
+    - shadowing
+  toolchain:
+    - object-format
+    - image-activation
+    - symbol-vectors
+    - link
+    - librarian
+    - macro
+    - message-compiler
+    - mms-mmk
+    - self-host-compiler
+  networking:
+    - tcpip-services
+    - decnet
+    - lat
+    - ssh
+  runtime-arch:
+    - arch-targets
+    - kernel-executive

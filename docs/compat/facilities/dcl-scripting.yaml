@@ -1,0 +1,78 @@
+# Source of truth for the DCL-scripting row of the Compatibility Surface Register.
+facility: dcl-scripting
+name: "DCL Scripting / Flow Control ($STATUS, symbols, CALL, ON, DECK)"
+domain: command-language
+vms_ref: "OpenVMS DCL Dictionary; OpenVMS User's Guide (command procedures)"
+scope_1_0: in
+tier: 1
+plan_ref: vms-8ad
+summary: >
+  Command-procedure control flow: IF/THEN/GOTO/GOSUB are real; the condition
+  model, symbol scoping, and $STATUS reporting have material honesty gaps, the
+  worst of which ($STATUS never refreshed on command-not-found inside a
+  procedure) silently swallows typo'd commands in any .COM.
+last_reviewed: 2026-08-13
+items:
+  - id: dcl-scripting$if-then-goto
+    kind: feature
+    status: verified
+    authenticity: real
+    vms: "IF/THEN, GOTO, GOSUB, labels"
+    evidence: src/vmsdcl/dcl_script.c
+    verified_against: "tests/dcl/test_if_then.sh, tests/dcl/test_parser_goto.sh, tests/dcl/test_script_labels.sh"
+    notes: "Covered by parser + script test suites."
+
+  - id: dcl-scripting$on-condition
+    kind: feature
+    status: partial
+    authenticity: real
+    vms: "ON condition THEN ...; SET ON / SET NOON"
+    evidence: src/vmsdcl/dcl_exec.c
+    notes: "Real but narrower than VMS's full condition-handling model (severity classes, nested handler stacks)."
+
+  - id: dcl-scripting$call-subroutine
+    kind: command
+    status: absent
+    authenticity: n/a
+    vms: "CALL / SUBROUTINE / ENDSUBROUTINE"
+    notes: "See dcl-verbs.yaml dcl-verbs$call-subroutine for the verb-family entry."
+
+  - id: dcl-scripting$deck-eod
+    kind: feature
+    status: absent
+    authenticity: facade-risk
+    vms: "DECK / $EOD in-stream data"
+    evidence: src/vmsdcl/dcl_exec.c
+    notes: "In-stream data is parsed as commands, cascading IVVERB errors rather than an honest not-supported error."
+
+  - id: dcl-scripting$symbol-scoping
+    kind: feature
+    status: absent
+    authenticity: facade-risk
+    vms: "Per-procedure local symbol scope"
+    evidence: src/vmsdcl/dcl_symbol.c
+    notes: "Single flat local-symbol table; an inner procedure's LOCAL symbols leak into the caller's scope instead of being torn down on return."
+
+  - id: dcl-scripting$status-format
+    kind: feature
+    status: implemented
+    authenticity: facade-risk
+    vms: "$STATUS holds a VMS condition code, conventionally displayed %Xhhhhhhhh"
+    evidence: src/vmsdcl/dcl_exec.c:1207
+    notes: "$STATUS is stored/formatted as plain decimal (%d), not the VMS hex condition-code representation."
+
+  - id: dcl-scripting$status-refresh
+    kind: feature
+    status: partial
+    authenticity: facade-risk
+    vms: "$STATUS is set after every command, including an unrecognized verb (IVVERB)"
+    evidence: src/vmsdcl/dcl_exec.c:1209
+    notes: "HIGHEST-IMPACT bug: only the interactive REPL refreshes $STATUS on command-not-found; the command-procedure execution path never does, so IF .NOT.$STATUS THEN GOTO err silently misses a typo'd command anywhere in a .COM."
+
+  - id: dcl-scripting$f-mode
+    kind: lexical
+    status: partial
+    authenticity: facade-risk
+    vms: "F$MODE reports INTERACTIVE/BATCH/OTHER/NETWORK per the actual process context"
+    evidence: src/vmsdcl/dcl_lexical.c
+    notes: "Advisory-adjacent: misreports script (command-procedure) execution as BATCH."

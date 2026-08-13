@@ -1,0 +1,19 @@
+# Source of truth for the install row of the Compatibility Surface Register.
+facility: install
+name: "Install / PCSI Kits / Provisioning"
+domain: system-management
+vms_ref: "OpenVMS System Manager's Manual; POLYCENTER Software Installation Utility Manual"
+scope_1_0: in
+plan_ref: vms-718
+summary: >
+  PRODUCT INSTALL/SHOW and the [SYS0.SYSCOMMON]-rooted install target are
+  real. The PCSI kit byte layout is an OVMX-invented format, correctly
+  labelled as such (clean-room posture — public docs don't publish PCSI's
+  byte-level layout). Boot-to-login is CI-gated and verified.
+last_reviewed: 2026-08-13
+items:
+  - {id: pcsi$kit_format,      kind: struct,   status: implemented, authenticity: advisory, vms: "PCSI kit byte layout", evidence: src/libvms/include/ovmx_kit_format.h, notes: "OVMX-invented format, explicitly labelled as an OVMX design choice (public PCSI docs don't publish byte-level layout) — correct clean-room posture, not presented as VMS-authentic"}
+  - {id: dcl$product_install,  kind: command,  status: implemented, authenticity: real,     vms: "PRODUCT INSTALL <name> /SOURCE=<kit> [/DESTINATION=<devdir>]", evidence: src/product/product.c}
+  - {id: dcl$product_show,     kind: command,  status: implemented, authenticity: real,     vms: "PRODUCT SHOW PRODUCT / PRODUCT SHOW HISTORY [/DESTINATION=<devdir>]", evidence: src/product/product.c}
+  - {id: install$syscommon_root, kind: feature, status: implemented, authenticity: real,    vms: "[SYS0.SYSCOMMON]-rooted install target layout", evidence: "", plan_ref: vms-96ec, notes: "/DESTINATION target boots to login"}
+  - {id: install$boot_login_e2e, kind: feature, status: verified,   authenticity: real,     vms: "End-to-end install -> boot -> login gate", evidence: ".github/workflows/ci.yml:752", verified_against: "CI job install-boot-e2e — fails (not skips) if unset"}

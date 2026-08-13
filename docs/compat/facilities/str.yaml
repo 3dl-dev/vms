@@ -1,0 +1,39 @@
+# Canonical example facility file. See docs/design-compat-surface-register.md.
+# Source of truth for the STR$ row of the Compatibility Surface Register.
+facility: str
+name: "STR$ — String Manipulation RTL"
+domain: programming-interfaces
+vms_ref: "OpenVMS RTL String Manipulation (STR$) Manual"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  Descriptor-based string routines. OVMX declares 23 of the ~85 STR$ routines VMS
+  ships; the 23 present are all real. Remaining routines are absent (compile-time
+  detectable — the correct failure mode for source compat).
+last_reviewed: 2026-08-13
+items:
+  - {id: str$copy_dx,             kind: routine, status: implemented, authenticity: real, vms: "Copy source string into a CLASS_S/CLASS_D descriptor (pad/truncate)", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$copy_r,              kind: routine, status: implemented, authenticity: real, vms: "Copy from length+address pair", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$concat,             kind: routine, status: implemented, authenticity: real, vms: "Concatenate (variadic, NULL-terminated)", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$append,             kind: routine, status: implemented, authenticity: real, vms: "Append to CLASS_D", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$prefix,             kind: routine, status: implemented, authenticity: real, vms: "Prepend to CLASS_D", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$compare,            kind: routine, status: implemented, authenticity: real, vms: "Lexicographic compare with space-pad", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$compare_eql,        kind: routine, status: implemented, authenticity: real, vms: "Exact equality (no padding)", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$case_blind_compare, kind: routine, status: implemented, authenticity: real, vms: "Case-insensitive compare", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$compare_multi,      kind: routine, status: implemented, authenticity: real, vms: "Multinational compare", evidence: src/libvms/rtl/str_routines.c, notes: "Locale flags ignored; behaves as case_blind"}
+  - {id: str$left,               kind: routine, status: implemented, authenticity: real, vms: "Characters 1..end_pos", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$right,              kind: routine, status: implemented, authenticity: real, vms: "Characters start_pos..end", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$len_extr,           kind: routine, status: implemented, authenticity: real, vms: "Substring by position and length", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$element,            kind: routine, status: implemented, authenticity: real, vms: "Delimited element extraction", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$find_first_substring, kind: routine, status: implemented, authenticity: real, vms: "Leftmost match of any substring", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$position,           kind: routine, status: implemented, authenticity: real, vms: "First occurrence of substring", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$match_wild,         kind: routine, status: implemented, authenticity: real, vms: "Match with * and % wildcards", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$trim,               kind: routine, status: implemented, authenticity: real, vms: "Remove trailing spaces/tabs", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$upcase,             kind: routine, status: implemented, authenticity: real, vms: "ASCII uppercase", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$translate,          kind: routine, status: implemented, authenticity: real, vms: "256-byte translation table", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$replace,            kind: routine, status: implemented, authenticity: real, vms: "Replace portion by position range", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$free1_dx,           kind: routine, status: implemented, authenticity: real, vms: "Free CLASS_D storage", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$get1_dx,            kind: routine, status: implemented, authenticity: real, vms: "Allocate CLASS_D of length", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$analyze_sdesc,      kind: routine, status: implemented, authenticity: real, vms: "Extract length+address from any class", evidence: src/libvms/rtl/str_routines.c}
+  - {id: str$_other,             kind: routine, status: absent, authenticity: n/a, vms: "~62 remaining STR$ routines (str$dupl_char, str$divide, str$recip, str$analyze_ldesc, …)", scope_1_0: stretch, notes: "Not declared; compile-time detectable"}

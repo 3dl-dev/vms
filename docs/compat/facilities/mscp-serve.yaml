@@ -1,0 +1,35 @@
+# Source of truth for the mscp-serve row of the Compatibility Surface Register.
+facility: mscp-serve
+name: "MSCP/TMSCP disk & tape serving"
+domain: clustering
+vms_ref: "MSCP/TMSCP protocol (Systems Application A); OpenVMS Cluster Systems manual"
+scope_1_0: in
+plan_ref: vms-6e1
+summary: >
+  MSCP disk serving does real pread()/pwrite() against the actual served
+  volume, default read-only with write opt-in. ONLINE END is book-only and
+  unproven against any capture. TMSCP tape serving is not evidenced.
+last_reviewed: 2026-08-13
+items:
+  - id: mscp-serve$disk-read-write
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "MSCP disk-serving controller: READ/WRITE command responder"
+    evidence: src/vmsscs/scs_mscp_srv.c
+    notes: "Real pread()/pwrite() against the node's actual served volume, not a placeholder. Default read-only; write opt-in (vms-6e1)."
+
+  - id: mscp-serve$online-end
+    kind: feature
+    status: stub
+    authenticity: advisory
+    vms: "ONLINE END (0x89) response"
+    evidence: src/vmsscs/scs_mscp_srv.c
+    notes: "Book-only, unproven: laid out from Table A-7 with no capture in the corpus containing one — the captured joiner never mounts."
+
+  - id: mscp-serve$tmscp-tape
+    kind: feature
+    status: absent
+    authenticity: n/a
+    vms: "TMSCP tape serving"
+    notes: "Not evidenced in the current tree."

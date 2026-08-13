@@ -1,0 +1,14 @@
+# Source of truth for the MACRO-32 row of the Compatibility Surface Register.
+facility: macro
+name: "MACRO-32 Assembler"
+domain: toolchain
+vms_ref: "OpenVMS MACRO Compiler Porting and User's Guide"
+scope_1_0: out
+plan_ref: vms-801
+summary: >
+  MACRO-32 is absent and explicitly out of scope by prior compatibility-
+  contract decision — the self-hosting integrated assembler (tcc) is
+  GAS-syntax only, not MACRO-32.
+last_reviewed: 2026-08-13
+items:
+  - {id: macro$macro-32-assembler, kind: utility, status: absent, authenticity: n/a, vms: "MACRO-32 assembler / compiler", evidence: "docs/compatibility-contract.md:559", scope_1_0: out, notes: "Explicit compatibility-contract decision: TCC integrated assembler is GAS-syntax only; MACRO-32 out of scope."}

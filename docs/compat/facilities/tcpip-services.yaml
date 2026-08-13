@@ -1,0 +1,19 @@
+# Source of truth for the TCP/IP Services row of the Compatibility Surface Register.
+facility: tcpip-services
+name: "TCP/IP Services (UCX QIO + Sockets + EWA0:/BGn:)"
+domain: networking
+vms_ref: "OpenVMS TCP/IP Services for OpenVMS (UCX) manuals"
+scope_1_0: in
+plan_ref: vms-67f
+summary: >
+  Design-only, nothing built. No BG: device, no QIO network path, no usable
+  socket API. The current DCL TCPIP verb is a facade — it opens a Linux
+  AF_INET SOCK_DGRAM socket only to issue SIOCGIF* ioctls (interface
+  introspection), configures nothing durable, and gives VMS code no stack.
+  A NIC as a VMS device (EWA0:/BGn:) is also absent — QEMU boots with
+  `-nic none`. 1.0 blocker (vms-67f).
+last_reviewed: 2026-08-13
+items:
+  - {id: tcpip-services$ucx-qio-socket-api, kind: feature, status: absent, authenticity: n/a, vms: "UCX QIO-based / C-socket network API for VMS programs", evidence: "docs/design-tcpip-services-ovmx.md", scope_1_0: in, notes: "No src/vmstcpip/. No BG: device, no QIO network path, no usable socket API."}
+  - {id: tcpip-services$nic-device, kind: feature, status: absent, authenticity: n/a, vms: "NIC exposed as VMS device EWA0:/BGn:", evidence: "distro/boot/run-qemu.sh:70", scope_1_0: in, notes: "QEMU boots with -nic none (also distro/Dockerfile.bootable:773); no network device path into the VM at all."}
+  - {id: tcpip-services$dcl-tcpip-verb, kind: command, status: implemented, authenticity: facade-risk, vms: "DCL TCPIP verb (show interface/route/host/version, set host)", evidence: "src/vmsdcl/dcl_cmd_misc.c:1093", scope_1_0: in, notes: "Opens a Linux AF_INET SOCK_DGRAM socket only for SIOCGIF* ioctls (host interface introspection); configures nothing durable and gives VMS code no stack. Cross-listed to Draper register (INV-6 facade-risk)."}

@@ -1,0 +1,29 @@
+# OTS$ Object-Time-System RTL. See docs/design-compat-surface-register.md.
+facility: ots
+name: "OTS$ Object-Time-System RTL"
+domain: programming-interfaces
+vms_ref: "OpenVMS RTL Object Time System (OTS$) Manual"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  ~50 OTS$ routines header-declared; 32 of 43 are implemented, broadly real.
+  Gaps: packed-decimal conversions (OTS$CVT_T_P/CVT_P_T, blocking COBOL/DIBOL
+  decimal), the comparison family (OTS$CMP_GTR/GEQ/...), and string-descriptor
+  management (OTS$SCOPY_DXDX/SCOPY_R_DX/SFREE1_DD/SFREEN_DD/SGET1_DD) — all
+  declared in the header but with zero implementation, a pure stub gap.
+last_reviewed: 2026-08-13
+items:
+  - {id: ots$cvt_l_ti, kind: routine, status: implemented, authenticity: real, vms: "Convert longword to trimmed integer string", evidence: src/libvms/rtl/ots_routines.c}
+  - {id: ots$cvt_ti_l, kind: routine, status: implemented, authenticity: real, vms: "Convert trimmed integer string to longword", evidence: src/libvms/rtl/ots_routines.c}
+  - {id: ots$cvt_l_tz, kind: routine, status: implemented, authenticity: real, vms: "Convert longword to zero-filled string", evidence: src/libvms/rtl/ots_routines.c}
+  - {id: ots$cvt_l_to, kind: routine, status: implemented, authenticity: real, vms: "Convert longword to octal string", evidence: src/libvms/rtl/ots_routines.c}
+  - {id: ots$_other_implemented, kind: routine, status: implemented, authenticity: real, vms: "Remaining implemented OTS$ numeric<->string conversion routines beyond the four named above (32/43 declared routines are implemented; VMS ships ~50 total)", evidence: src/libvms/rtl/ots_routines.c}
+  - {id: ots$cvt_t_p, kind: routine, status: absent, authenticity: n/a, vms: "Convert text to packed decimal", notes: "blocks COBOL/DIBOL decimal corpus"}
+  - {id: ots$cvt_p_t, kind: routine, status: absent, authenticity: n/a, vms: "Convert packed decimal to text", notes: "blocks COBOL/DIBOL decimal corpus"}
+  - {id: ots$_cmp_family, kind: routine, status: absent, authenticity: n/a, vms: "Comparison family (OTS$CMP_GTR, OTS$CMP_GEQ, ...)"}
+  - {id: ots$scopy_dxdx, kind: routine, status: absent, authenticity: n/a, vms: "Copy dynamic descriptor to dynamic descriptor", notes: "declared in header, zero implementation — pure stub gap"}
+  - {id: ots$scopy_r_dx, kind: routine, status: absent, authenticity: n/a, vms: "Copy fixed string to dynamic descriptor", notes: "declared in header, zero implementation — pure stub gap"}
+  - {id: ots$sfree1_dd, kind: routine, status: absent, authenticity: n/a, vms: "Free one dynamic descriptor", notes: "declared in header, zero implementation — pure stub gap"}
+  - {id: ots$sfreen_dd, kind: routine, status: absent, authenticity: n/a, vms: "Free N dynamic descriptors", notes: "declared in header, zero implementation — pure stub gap"}
+  - {id: ots$sget1_dd, kind: routine, status: absent, authenticity: n/a, vms: "Allocate one dynamic descriptor", notes: "declared in header, zero implementation — pure stub gap"}

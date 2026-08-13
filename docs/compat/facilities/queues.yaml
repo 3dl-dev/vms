@@ -1,0 +1,75 @@
+# Source of truth for the queues row of the Compatibility Surface Register.
+facility: queues
+name: "Queues + Batch/Print (queue manager, SUBMIT/PRINT)"
+domain: command-language
+vms_ref: "OpenVMS System Management Utilities Reference Manual — Queue Manager"
+scope_1_0: in
+tier: 1
+plan_ref: vms-8ad
+summary: >
+  The queue manager itself is real (binary QMAN$MASTER.DAT, flock-serialized,
+  VMS binary time), and SUBMIT/PRINT can enqueue real entries — but nothing
+  ever dequeues and runs a batch job. Queue-management verb syntax deviates
+  from VMS (SET QUEUE/START etc rather than START/QUEUE).
+last_reviewed: 2026-08-13
+items:
+  - id: queues$manager
+    kind: subsystem
+    status: verified
+    authenticity: real
+    vms: "Queue manager — create/delete/submit/hold/release/status queue entries"
+    evidence: src/vmsqueue/vmsqueue.c
+    verified_against: tests/vmsqueue/test_vmsqueue.c
+    notes: "Real QMAN$MASTER.DAT binary file, flock-serialized, VMS binary time — not an in-memory placeholder."
+
+  - id: queues$submit
+    kind: command
+    status: implemented
+    authenticity: real
+    vms: "SUBMIT — queue a command procedure as a batch job"
+    evidence: src/vmsdcl/dcl_builtin.c
+    verified_against: tests/dcl/test_print_submit_coverage.sh
+    status: verified
+    notes: "Submit-only; see queues$batch-engine — nothing ever runs the submitted job."
+
+  - id: queues$print
+    kind: command
+    status: implemented
+    authenticity: real
+    vms: "PRINT — queue a file to a print queue"
+    evidence: src/vmsdcl/dcl_builtin.c
+    verified_against: tests/dcl/test_print_submit_coverage.sh
+    status: verified
+    notes: "Submit-only, same as SUBMIT."
+
+  - id: queues$batch-engine
+    kind: feature
+    status: absent
+    authenticity: real
+    vms: "Batch execution engine — dequeues and runs submitted batch jobs"
+    evidence: src/vmsqueue/vmsqueue.c
+    notes: "Honestly documented absence, not a facade: jobs queue but are never dequeued/run. Any software or SYSTARTUP procedure that submits a batch job and waits on it hangs forever."
+
+  - id: queues$queue-verb-syntax
+    kind: command
+    status: partial
+    authenticity: facade-risk
+    vms: "START/QUEUE, STOP/QUEUE, INITIALIZE/QUEUE — real VMS queue-management verb syntax"
+    evidence: src/vmsdcl/dcl_cmd_set.c
+    notes: "Reshaped as SET QUEUE/START, /STOP, /PAUSE. The underlying function is real; the surface syntax deviates from authentic VMS verbs."
+
+  - id: queues$show-queue-entry
+    kind: command
+    status: verified
+    authenticity: real
+    vms: "SHOW QUEUE / SHOW QUEUE/ENTRY — display queue and entry status"
+    evidence: src/vmsdcl/dcl_cmd_show.c
+    verified_against: tests/dcl/test_show_queue_entry.sh
+
+  - id: queues$job-control
+    kind: subsystem
+    status: implemented
+    authenticity: real
+    vms: "JOB_CONTROL — detached-process job control plumbing"
+    evidence: src/ovmx_job_control/ovmx_job_control.c
+    notes: "ovmx_job_control (JOB_CONTROL.EXE): real detached-process boot plumbing, not the VMS batch queue execution engine."

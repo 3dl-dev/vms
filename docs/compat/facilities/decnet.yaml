@@ -1,0 +1,19 @@
+# Source of truth for the DECnet Phase IV row of the Compatibility Surface Register.
+facility: decnet
+name: "DECnet Phase IV (NSP, Task-to-Task, SET HOST)"
+domain: networking
+vms_ref: "DECnet for OpenVMS Networking Manual"
+scope_1_0: in
+plan_ref: vms-30e
+summary: >
+  Total greenfield — no implementation anywhere. SET HOST is a stub that
+  honestly reports unavailability. NODE"acc"::dev:[dir]file filespec syntax
+  parses and reconstructs the node prefix (real), but nothing downstream
+  acts on it — no NSP, no task-to-task. 1.0 blocker (vms-30e), depends on
+  vms-19e (owns-kernel).
+last_reviewed: 2026-08-13
+items:
+  - {id: decnet$nsp-transport, kind: protocol, status: absent, authenticity: n/a, vms: "NSP (Network Services Protocol) — DECnet transport layer", evidence: "docs/design-decnet-ovmx.md", scope_1_0: in, notes: "No src/vmsdecnet/. Total greenfield."}
+  - {id: decnet$task-to-task, kind: feature, status: absent, authenticity: n/a, vms: "Task-to-task DECnet communication", evidence: "docs/design-decnet-ovmx.md", scope_1_0: in}
+  - {id: decnet$set-host, kind: command, status: stub, authenticity: real, vms: "SET HOST — DECnet remote-node connection", evidence: "src/vmsdcl/dcl_cmd_set.c:1542", notes: "Honestly reports %SET-I-NOTAVAIL, DECnet is not available on this system — stub, not a facade."}
+  - {id: decnet$node-filespec-syntax, kind: feature, status: partial, authenticity: real, vms: "NODE\"acc\"::dev:[dir]file filespec syntax", evidence: "src/vmsrms/rms_parse.c:173", notes: "Syntax only — sets NAM$M_NODE, parses/reconstructs the node prefix; nothing downstream (no DECnet transport) acts on it."}

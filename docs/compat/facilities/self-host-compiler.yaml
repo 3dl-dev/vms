@@ -1,0 +1,19 @@
+# Source of truth for the Self-Hosting Compiler row of the Compatibility Surface Register.
+facility: self-host-compiler
+name: "Self-Hosting Compiler (tcc -> rustc)"
+domain: toolchain
+vms_ref: "N/A — OVMX-original self-hosting program, not a VMS surface"
+scope_1_0: in
+plan_ref: vms-ade
+summary: >
+  tcc self-hosts inside OVMX (S2): it compiles its own source, and gen2 ==
+  gen3 byte-identical. BUILD.COM is zero-bash. S3-S5 (assembler, LIBRARIAN,
+  MMS, editor as OVMX-native images) are partial — the RTL floor is
+  complete, the images themselves are not built (vms-678). tcc is an
+  independence beachhead, not a performance compiler; the longer-term
+  target is rustc/Rust, not gcc.
+last_reviewed: 2026-08-13
+items:
+  - {id: self-host-compiler$tcc-selfhost, kind: feature, status: verified, authenticity: real, vms: "tcc compiles its own source inside OVMX (S2 self-hosting)", evidence: "src/imgact/test/run_tcc_selfhost.sh", verified_against: "src/imgact/test/run_tcc_selfhost.sh — gen2 == gen3 byte-identical (vms-4ba)"}
+  - {id: self-host-compiler$build-com, kind: utility, status: implemented, authenticity: real, vms: "BUILD.COM — zero-bash build orchestration", evidence: "src/imgact/test/run_build_com_native.sh", notes: "Zero-bash (vms-251)."}
+  - {id: self-host-compiler$s3-s5-images, kind: feature, status: partial, authenticity: real, vms: "S3-S5: assembler / LIBRARIAN / MMS / editor as OVMX-native images", scope_1_0: in, notes: "RTL floor complete; the images themselves (assembler, LIBRARIAN.EXE, MMK.EXE, editor) not yet built. Tracked vms-678."}

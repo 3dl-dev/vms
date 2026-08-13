@@ -1,0 +1,30 @@
+# Source of truth for the scs row of the Compatibility Surface Register.
+facility: scs
+name: "SCS — System Communication Services core"
+domain: clustering
+vms_ref: "OpenVMS Cluster Systems manual; Systems Application A (SCS/SCA architecture)"
+scope_1_0: in
+plan_ref: vms-694
+summary: >
+  The SCS message/connection layer OVMX's cluster wire stack is built on.
+  Connection Descriptor Table and message service are real and wired
+  end-to-end into scsd.c (src/vmsscs is ~19,800 LOC across 24 .c + scsd.c).
+  The datagram (class 2) service is real internal logic with zero production
+  callers — unwired dead code, self-labeled as such.
+last_reviewed: 2026-08-13
+items:
+  - id: scs$cdt-message-service
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "Connection Descriptor Table + SCS message/block-transfer service primitives"
+    evidence: src/vmsscs/scs_cdt.c
+    notes: "Wired into scsd.c, not a standalone demo path."
+
+  - id: scs$datagram-service
+    kind: feature
+    status: stub
+    authenticity: facade-risk
+    vms: "SCS datagram (class 2) send/receive service"
+    evidence: src/vmsscs/scs_dgram.c
+    notes: "Self-labeled: scs_dgram.h documents it never routes a datagram and the run log prints zeros — an honest state, but flagged facade-risk because it is real logic with zero production callers, the exact unwired-dead-code shape the Draper register hunts."

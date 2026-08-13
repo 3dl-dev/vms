@@ -1,0 +1,15 @@
+# Source of truth for the FDL row of the Compatibility Surface Register.
+# See docs/design-compat-surface-register.md.
+facility: fdl
+name: "FDL (File Definition Language)"
+domain: file-system
+vms_ref: "OpenVMS File Definition Language Facility Manual"
+scope_1_0: in
+plan_ref: vms-801
+summary: >
+  FDL is not implemented anywhere in OVMX. The one place it surfaces (CONVERT's /FDL
+  qualifier) is honestly stubbed: accepted, ignored, and says so.
+last_reviewed: 2026-08-13
+items:
+  - {id: convert$fdl_qualifier, kind: command, status: stub, authenticity: advisory, vms: "/FDL qualifier on CONVERT", evidence: src/vmsdcl/dcl_cmd_misc.c:2345, notes: "accepted but ignored with an informational message (%CONVERT-I-FDL); no FDL file is read or written"}
+  - {id: fdl$_other, kind: subsystem, status: absent, authenticity: n/a, vms: "FDL language itself — EDIT/FDL, CREATE/FDL, FDL$ RTL analyze/generate routines", scope_1_0: stretch, notes: "no FDL file format support anywhere in OVMX; RAB$M_FDL bit is declared (rms/rab.h) but nothing acts on it"}

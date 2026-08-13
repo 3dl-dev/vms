@@ -1,0 +1,19 @@
+# Source of truth for the SSH row of the Compatibility Surface Register.
+facility: ssh
+name: "SSH (OVMX-Added Remote Access)"
+domain: networking
+vms_ref: "N/A — OVMX addition, not a VMS surface"
+scope_1_0: in
+plan_ref: vms-67f
+summary: >
+  vmsshd is real code (903 lines, libssh, full LOGINOUT-equivalent PCB
+  init, execs vmsdcl --login) but is unreachable: PID 1's start_sshd() call
+  is gone (no start_sshd under src/ovmx_init on origin/main) and there is
+  no NIC to reach it (see tcpip-services). Every SSH session also runs
+  euid=0 — no credential drop, a security facade-risk distinct from the
+  reachability gap.
+last_reviewed: 2026-08-13
+items:
+  - {id: ssh$vmsshd-daemon, kind: feature, status: implemented, authenticity: real, vms: "vmsshd — SSH daemon, LOGINOUT-equivalent PCB init, execs vmsdcl --login", evidence: "src/vmsssh/vmssshd.c", notes: "903 lines, libssh-based, full PCB init."}
+  - {id: ssh$pid1-wiring, kind: feature, status: absent, authenticity: facade-risk, vms: "PID 1 startup wiring for sshd", evidence: "src/ovmx_init", scope_1_0: in, notes: "start_sshd() call deleted — no grep hit under src/ovmx_init on origin/main; also no NIC to reach it even if wired (see tcpip-services). vmsshd is unreachable in the shipped system."}
+  - {id: ssh$credential-drop, kind: feature, status: absent, authenticity: facade-risk, vms: "Privilege drop from root to the authenticated user's UIC/credentials", evidence: "src/vmsssh/vmssshd.c", scope_1_0: in, notes: "Every SSH session runs euid=0 — no credential drop. Security facade-risk distinct from the reachability gap. Cross-listed to Draper register."}

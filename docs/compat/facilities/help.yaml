@@ -1,0 +1,19 @@
+# Source of truth for the HELP row of the Compatibility Surface Register.
+facility: help
+name: "HELP System"
+domain: command-language
+vms_ref: "OpenVMS DCL Dictionary — HELP"
+scope_1_0: in
+tier: 1
+plan_ref: vms-8ad
+summary: >
+  The HELP verb and its topic/library content. Real, tested.
+last_reviewed: 2026-08-13
+items:
+  - id: help$verb
+    kind: command
+    status: verified
+    authenticity: real
+    vms: "HELP — hierarchical topic help, keyword lookup"
+    evidence: tools/vms_help.c
+    verified_against: tests/dcl/test_help_content.sh

@@ -1,0 +1,14 @@
+# Source of truth for the MESSAGE compiler row of the Compatibility Surface Register.
+facility: message-compiler
+name: "MESSAGE Compiler (.MSG -> Status Codes)"
+domain: toolchain
+vms_ref: "OpenVMS MESSAGE Utility"
+scope_1_0: in
+plan_ref: vms-801
+summary: >
+  The MESSAGE compiler (.MSG source -> generated facility status-code
+  header) is entirely absent — no implementation found anywhere on
+  origin/main.
+last_reviewed: 2026-08-13
+items:
+  - {id: message-compiler$msg-utility, kind: utility, status: absent, authenticity: n/a, vms: "MESSAGE utility — compiles .MSG source into facility status-code definitions", scope_1_0: in, notes: "No implementation anywhere on origin/main."}

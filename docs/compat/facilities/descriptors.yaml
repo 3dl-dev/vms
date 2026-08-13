@@ -1,0 +1,30 @@
+# Descriptors & data types (DESCRIP.H). See docs/design-compat-surface-register.md.
+facility: descriptors
+name: "Descriptors & Data Types (DESCRIP.H)"
+domain: programming-interfaces
+vms_ref: "OpenVMS Programming Concepts Manual, Ch. 4 (Descriptors); OpenVMS Calling Standard"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  16 DSC$K_CLASS_* descriptor classes defined; only S and D are backed by runtime
+  support. A/VS/P/PI are constants only, blocking Fortran array-descriptor and
+  COBOL/BASIC varying-string corpus. ~30 DSC$K_DTYPE_* data-type codes are all
+  defined and real; VAX F/D/G/H floating dtypes are defined but nothing consumes
+  them arithmetically. 6 copy/alloc helpers in descrip.c are implemented and real.
+last_reviewed: 2026-08-13
+items:
+  - {id: dsc$k_class_s,  kind: struct, status: implemented, authenticity: real, vms: "Fixed-length (static) string descriptor class", evidence: src/libvms/include/descrip.h}
+  - {id: dsc$k_class_d,  kind: struct, status: implemented, authenticity: real, vms: "Dynamic string descriptor class", evidence: src/libvms/include/descrip.h}
+  - {id: dsc$k_class_a,  kind: struct, status: absent, authenticity: n/a, vms: "Array descriptor class", evidence: src/libvms/include/descrip.h, notes: "constant only, no runtime array-descriptor support; blocks Fortran array-descriptor corpus"}
+  - {id: dsc$k_class_vs, kind: struct, status: absent, authenticity: n/a, vms: "Varying string descriptor class", evidence: src/libvms/include/descrip.h, notes: "constant only; blocks COBOL/BASIC varying-string corpus"}
+  - {id: dsc$k_class_p,  kind: struct, status: absent, authenticity: n/a, vms: "Procedure descriptor class", evidence: src/libvms/include/descrip.h, notes: "constant only, no runtime support"}
+  - {id: dsc$k_class_pi, kind: struct, status: absent, authenticity: n/a, vms: "Procedure-incarnation descriptor class", evidence: src/libvms/include/descrip.h, notes: "constant only, no runtime support"}
+  - {id: dsc$k_dtype,    kind: struct, status: implemented, authenticity: real, vms: "DSC$K_DTYPE_* data-type codes (~30: byte/word/longword/quadword/ASCII/numeric-string/IEEE float/...)", evidence: src/libvms/include/descrip.h}
+  - {id: dsc$k_dtype_vaxfloat, kind: struct, status: partial, authenticity: advisory, vms: "VAX F/D/G/H floating-point dtype codes", evidence: src/libvms/include/descrip.h, notes: "codes defined; no consuming arithmetic logic reads them"}
+  - {id: vms_desc_copy,  kind: routine, status: implemented, authenticity: real, vms: "Internal descriptor-copy helper (S/D pad/truncate)", evidence: src/libvms/descrip.c}
+  - {id: dsc$alloc_d,    kind: routine, status: implemented, authenticity: real, vms: "Allocate CLASS_D dynamic-string storage", evidence: src/libvms/descrip.c}
+  - {id: dsc$free_d,     kind: routine, status: implemented, authenticity: real, vms: "Free CLASS_D dynamic-string storage", evidence: src/libvms/descrip.c}
+  - {id: dsc$copy,       kind: routine, status: implemented, authenticity: real, vms: "Copy descriptor contents, class-aware pad/truncate", evidence: src/libvms/descrip.c}
+  - {id: dsc$length,     kind: routine, status: implemented, authenticity: real, vms: "Extract descriptor length", evidence: src/libvms/descrip.c}
+  - {id: dsc$pointer,    kind: routine, status: implemented, authenticity: real, vms: "Extract descriptor data pointer", evidence: src/libvms/descrip.c}

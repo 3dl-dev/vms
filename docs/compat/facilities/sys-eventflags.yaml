@@ -1,0 +1,25 @@
+# SYS$ Event Flags. See docs/design-compat-surface-register.md.
+facility: sys-eventflags
+name: "SYS$ Event Flags (Local + Common Clusters)"
+domain: programming-interfaces
+vms_ref: "OpenVMS System Services Reference Manual — Event Flag Services"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  VMS ships ~10 event-flag services; OVMX declares 10, all implemented and
+  real, backed by vms.ko and cross-process proven. SYS$DCLEF (declare/create
+  a common event-flag cluster) is absent.
+last_reviewed: 2026-08-13
+items:
+  - {id: sys$setef, kind: routine, status: implemented, authenticity: real, vms: "Set an event flag", evidence: src/libvms/syssvc/sys_event.c, notes: "cross-process proven via vms.ko"}
+  - {id: sys$clref, kind: routine, status: implemented, authenticity: real, vms: "Clear an event flag", evidence: src/libvms/syssvc/sys_event.c}
+  - {id: sys$waitfr, kind: routine, status: implemented, authenticity: real, vms: "Wait for a single event flag", evidence: src/libvms/syssvc/sys_event.c}
+  - {id: sys$wflor, kind: routine, status: implemented, authenticity: real, vms: "Wait for logical OR of flags in a cluster", evidence: src/libvms/syssvc/sys_event.c}
+  - {id: sys$wfland, kind: routine, status: implemented, authenticity: real, vms: "Wait for logical AND of flags in a cluster", evidence: src/libvms/syssvc/sys_event.c}
+  - {id: sys$synch, kind: routine, status: implemented, authenticity: real, vms: "Wait for the single flag associated with a prior I/O", evidence: src/libvms/syssvc/sys_event.c}
+  - {id: sys$readef, kind: routine, status: implemented, authenticity: real, vms: "Read the state of an event-flag cluster", evidence: src/libvms/syssvc/sys_event.c}
+  - {id: sys$ascefc, kind: routine, status: implemented, authenticity: real, vms: "Associate with a common event-flag cluster", evidence: src/libvms/syssvc/sys_event.c}
+  - {id: sys$dacefc, kind: routine, status: implemented, authenticity: real, vms: "Disassociate from a common event-flag cluster", evidence: src/libvms/syssvc/sys_event.c}
+  - {id: sys$dlcefc, kind: routine, status: implemented, authenticity: real, vms: "Delete a common event-flag cluster", evidence: src/libvms/syssvc/sys_event.c}
+  - {id: sys$dclef, kind: routine, status: absent, authenticity: n/a, vms: "Declare/create an event-flag cluster"}

@@ -1,0 +1,19 @@
+# Source of truth for the Privileges row of the Compatibility Surface Register.
+facility: privileges
+name: "Privileges (Definition + Enforcement)"
+domain: system-management
+vms_ref: "OpenVMS Guide to System Security ch. 3 (Privileges)"
+scope_1_0: in
+plan_ref: vms-8ad
+summary: >
+  All 39 VMS privilege bits are defined. Mode-transition and SETPRV
+  enforcement in the kernel executive are real — including a bit-position
+  bug (SETPRV mismapped to DETACH) caught and fixed against lab-VAX SDA.
+  File-access privilege overrides (SYSPRV/BYPASS/READALL/GRPPRV) are never
+  consulted by the filesystem permission hook — a distinct, unfixed gap.
+last_reviewed: 2026-08-13
+items:
+  - {id: prvdef$bits,          kind: struct,   status: implemented, authenticity: n/a,         vms: "39 VMS privilege bit definitions", evidence: src/libvms/include/prvdef.h}
+  - {id: sys$mode_transition,  kind: feature,  status: verified,    authenticity: real,         vms: "Privilege-checked mode escalation gate", evidence: "src/kernel-core/vms_access.c:108-130", verified_against: "lab-VAX SDA (docs/oracle/vax73-privileges.md §2) — caught SETPRV mismapped to DETACH bit, fixed"}
+  - {id: sys$setprv,           kind: routine,  status: verified,    authenticity: real,         vms: "vms_ioctl_setprv() — SETPRV can only narrow within the authorized mask, never exceed it", evidence: "src/kernel-core/vms_access.c:290", verified_against: "lab-VAX SDA READ SYS$SYSTEM:SYSDEF.STB (docs/oracle/vax73-privileges.md §2)"}
+  - {id: privs$file_access_override, kind: feature, status: absent, authenticity: facade-risk, vms: "SYSPRV/BYPASS/READALL/GRPPRV override normal file protection checks", evidence: "src/kernel/vmsfs/vmsfs_blkdev.c:1256", scope_1_0: in, notes: "vmsfs_blkdev_permission() checks only uid==0/gid, zero SYSPRV refs — both over-grants (any root/SSH session) and under-grants (legit-SYSPRV non-root user denied). Tracked vms-f15/vms-36d, unfixed. Cross-listed to protection-acl."}

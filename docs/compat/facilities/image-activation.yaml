@@ -1,0 +1,20 @@
+# Source of truth for the Image Activation row of the Compatibility Surface Register.
+facility: image-activation
+name: "Image Format + Activation (IMGACT, Shareable/Installed Images, TLS)"
+domain: toolchain
+vms_ref: "OpenVMS Linker Utility Manual; Programming Concepts Manual (image activation)"
+scope_1_0: in
+plan_ref: vms-ade
+summary: >
+  IMGACT.EXE activates images in-process via PT_INTERP (freestanding
+  static-PIE); DCL, LOGINOUT, TCC and all shareable images activate natively
+  through symbol vectors, proven by 25 activation scripts. Installed images
+  (Known Image DB) and TLS in activated images are real. Image container
+  byte layout (.vms$sv/.vms$imp/.vms$rel/.vms$tls) is covered separately
+  under the symbol-vectors facility.
+last_reviewed: 2026-08-13
+items:
+  - {id: image-activation$imgact-pt-interp, kind: feature, status: verified, authenticity: real, vms: "IMGACT.EXE image activation via PT_INTERP", evidence: "src/imgact/imgact.c", verified_against: "src/imgact/test/ — 25 activation scripts", notes: "1537 lines, freestanding static-PIE, arch start.S."}
+  - {id: image-activation$symvec-activation, kind: feature, status: verified, authenticity: real, vms: "Symbol-vector-based activation of shareable images (DCL, LOGINOUT, TCC, all shareables)", evidence: "src/imgact/test/run_symvec_activation.sh", verified_against: "src/imgact/test/run_symvec_activation.sh and related shell tests (run_dcl_native.sh, run_login_native.sh, run_shareable_import_activation.sh)", notes: "Activation behavior real; symbol-vector byte layout is advisory (Rule 8) — see symbol-vectors facility."}
+  - {id: image-activation$known-images, kind: feature, status: implemented, authenticity: real, vms: "Installed Images (Known Image DB) — shared/installed image mapping", evidence: "src/imgact/known_images.c", notes: "mmap MAP_SHARED IPC; exercised by src/imgact/test/run_known_images_lookup.sh."}
+  - {id: image-activation$tls, kind: feature, status: implemented, authenticity: real, vms: "Thread-Local Storage in activated images", evidence: "src/imgact/test/run_exec_tls.sh", notes: ".vms$tls section."}

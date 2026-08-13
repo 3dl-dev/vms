@@ -1,0 +1,38 @@
+# Source of truth for the connection-manager row of the Compatibility Surface Register.
+facility: connection-manager
+name: "Connection manager / membership / quorum / rejoin"
+domain: clustering
+vms_ref: "OpenVMS Cluster Systems manual (connection manager, quorum algorithm)"
+scope_1_0: in
+plan_ref: vms-694
+summary: >
+  Full HELLO/disconnect/reconnect/depart finite-state machines, byte-exact
+  against mined wire captures. Quorum recompute (including quorum disk) is
+  real. Membership/rejoin is a single 3-party member-driven join FSM — VMS's
+  own model has no distinct rejoin state either, and §4(O.38) proved OVMX's
+  rejoin is 4/5 member-oracle reliable once its own self-verdict bug was fixed.
+last_reviewed: 2026-08-13
+items:
+  - id: connection-manager$hello-protocol
+    kind: protocol
+    status: verified
+    authenticity: real
+    vms: "HELLO / disconnect / reconnect / depart connection state machines"
+    evidence: src/vmsscs/scs_hello.c
+    verified_against: "mined lab captures"
+    notes: "scs_hello.c, scs_disc.c, scs_recnx.c (10-state CSB), scs_depart.c — byte-exact against mined wire captures."
+
+  - id: connection-manager$quorum
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "CEVOTES/QUORUM recompute, including quorum disk as a virtual voting member"
+    evidence: src/vmsscs/scs_quorum.c
+
+  - id: connection-manager$membership-rejoin
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "Cluster membership join / rejoin"
+    evidence: src/vmsscs/scsd.c
+    notes: "3-party member-driven join FSM (scsd.c enum join_step); no distinct rejoin state, matching VMS's own model. §4(O.38): 4/5 member-oracle reliable after fixing OVMX's own XITDONE self-verdict bug; residual 1/5 is real member-side loss, not an OVMX defect (operator call)."

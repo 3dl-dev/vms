@@ -1,0 +1,197 @@
+# Source of truth for the utilities row of the Compatibility Surface Register.
+facility: utilities
+name: "Utility Images (AUTHORIZE, BACKUP, SORT, ANALYZE, …)"
+domain: command-language
+vms_ref: "OpenVMS System Management Utilities Reference Manual; OpenVMS Utility Routines Manual"
+scope_1_0: in
+tier: 1
+plan_ref: vms-8ad
+summary: >
+  Standalone utility images invoked as DCL verbs. Most core system-management
+  utilities are real; the record/data utilities (SORT, BACKUP, CONVERT) are
+  honestly partial or facade-risk on their advanced qualifiers rather than
+  full VMS-parity implementations.
+last_reviewed: 2026-08-13
+items:
+  - id: utilities$authorize
+    kind: utility
+    status: implemented
+    authenticity: real
+    vms: "AUTHORIZE — SYSUAF account management utility"
+    evidence: tools/vms_authorize.c
+
+  - id: utilities$sysgen
+    kind: utility
+    status: verified
+    authenticity: real
+    vms: "SYSGEN — system parameter/generation utility"
+    evidence: tools/vms_sysgen.c
+    verified_against: tests/dcl/test_sysgen.sh
+
+  - id: utilities$sysman
+    kind: utility
+    status: partial
+    authenticity: real
+    vms: "SYSMAN — system management utility"
+    evidence: tools/vms_sysman.c
+
+  - id: utilities$monitor
+    kind: utility
+    status: implemented
+    authenticity: real
+    vms: "MONITOR — system performance monitor"
+    evidence: tools/vms_monitor.c
+
+  - id: utilities$mail
+    kind: utility
+    status: implemented
+    authenticity: real
+    vms: "MAIL — interprocess mail utility"
+    evidence: tools/vms_mail.c
+
+  - id: utilities$install
+    kind: utility
+    status: implemented
+    authenticity: real
+    vms: "INSTALL — known-image list management utility"
+    evidence: src/vmsdcl/dcl_cmd_misc.c
+    notes: "Wired to real KFE VMS$KNOWN_IMAGES.DAT; was quietly broken, now fixed."
+
+  - id: utilities$link
+    kind: utility
+    status: implemented
+    authenticity: real
+    vms: "LINK — object linker"
+    evidence: src/vmsdcl/dcl_cmd_misc.c
+    notes: "Native LINK.EXE; self-hosting proven (S4 fixpoint gen2==gen3)."
+
+  - id: utilities$library
+    kind: utility
+    status: partial
+    authenticity: advisory
+    vms: "LIBRARY — object/text librarian utility"
+    evidence: src/vmsdcl/dcl_library.c
+    notes: "Routes by parameter count rather than the full LIBRARIAN grammar; documented, not a lie. Partial slice exercised by tests/dcl/test_library.sh (not a full-coverage oracle)."
+
+  - id: utilities$backup
+    kind: utility
+    status: partial
+    authenticity: advisory
+    vms: "BACKUP — file/volume backup and restore utility"
+    evidence: src/vmsdcl/dcl_backup.c
+    notes: "Only /SAVE_SET and /LIST qualifiers real; /REWIND and other qualifiers honestly deferred, not faked. Slice exercised by tests/dcl/test_backup.sh (not a full-coverage oracle)."
+
+  - id: utilities$product
+    kind: utility
+    status: verified
+    authenticity: real
+    vms: "PRODUCT / PCSI — software product installation utility"
+    evidence: tools/ovmx_kit_pack.c
+    verified_against: "install-boot-e2e CI gate (vms-96ec rooted [SYS0.SYSCOMMON] layout)"
+    notes: "INSTALL/SHOW PRODUCT/SHOW HISTORY real; rooted-layout install proven end-to-end."
+
+  - id: utilities$sort
+    kind: utility
+    status: partial
+    authenticity: facade-risk
+    vms: "SORT — record sort utility with /KEY=(position,size,datatype)"
+    evidence: src/vmsdcl/dcl_cmd_misc.c
+    notes: "Whole-line qsort only; no /KEY field-based sort. No companion MERGE utility."
+
+  - id: utilities$differences
+    kind: utility
+    status: partial
+    authenticity: advisory
+    vms: "DIFFERENCES — file comparison utility"
+    evidence: src/vmsdcl/dcl_cmd_misc.c
+    notes: "Slice exercised by tests/dcl/test_differences.sh (not a full-coverage oracle)."
+
+  - id: utilities$convert
+    kind: utility
+    status: partial
+    authenticity: facade-risk
+    vms: "CONVERT — file/record-format conversion utility"
+    evidence: src/vmsdcl/dcl_cmd_misc.c
+    notes: "/FDL accepted but ignored; body is a line-by-line copy, not a real record-format conversion."
+
+  - id: utilities$analyze-disk-structure
+    kind: utility
+    status: implemented
+    authenticity: real
+    vms: "ANALYZE/DISK_STRUCTURE — ODS-2 volume structure analysis"
+    evidence: tools/vms_analyze.c
+
+  - id: utilities$analyze-system
+    kind: utility
+    status: implemented
+    authenticity: real
+    vms: "ANALYZE/SYSTEM — SDA (System Dump Analyzer), interactive mode"
+    evidence: tools/vms_analyze.c
+    notes: "Interactive live-system analysis only; no standalone crash-dump SDA (see dcl-verbs.yaml)."
+
+  - id: utilities$analyze-image
+    kind: utility
+    status: implemented
+    authenticity: real
+    vms: "ANALYZE/IMAGE — image file structure analysis"
+    evidence: tools/vms_analyze.c
+    notes: "ELF-based, not VMS image-header-based."
+
+  - id: utilities$analyze-object
+    kind: utility
+    status: stub
+    authenticity: real
+    vms: "ANALYZE/OBJECT — object file structure analysis"
+    evidence: tools/vms_analyze.c:557
+    notes: "Honest stub: %ANALYZE-I-NOTIMPL, object file analysis not available."
+
+  - id: utilities$analyze-rms-file
+    kind: utility
+    status: absent
+    authenticity: n/a
+    vms: "ANALYZE/RMS_FILE — RMS file structure analysis"
+
+  - id: utilities$patch
+    kind: utility
+    status: absent
+    authenticity: n/a
+    vms: "PATCH — interactive image binary patch utility"
+    scope_1_0: stretch
+
+  - id: utilities$message-compiler
+    kind: utility
+    status: absent
+    authenticity: n/a
+    vms: "MESSAGE — condition-code message source compiler"
+    scope_1_0: stretch
+
+  - id: utilities$edit
+    kind: utility
+    status: verified
+    authenticity: real
+    vms: "EDIT/EDT — line-mode text editor"
+    evidence: src/vmsdcl/dcl_editor.c
+    verified_against: tests/dcl/test_edit_command.sh
+    notes: "Minimal line-mode EDT; no screen mode."
+
+  - id: utilities$edit-tpu
+    kind: utility
+    status: absent
+    authenticity: n/a
+    vms: "EDIT/TPU — Text Processing Utility (EVE)"
+    scope_1_0: stretch
+
+  - id: utilities$phone
+    kind: utility
+    status: stub
+    authenticity: real
+    vms: "PHONE — interactive terminal-to-terminal chat utility"
+    evidence: src/vmsdcl/dcl_cmd_misc.c
+    notes: "Honest stub: %PHONE-NOTAVAIL."
+
+  - id: utilities$dump
+    kind: utility
+    status: implemented
+    authenticity: real
+    vms: "DUMP — file octal/hex/ASCII dump utility"
+    evidence: src/vmsdcl/dcl_cmd_misc.c

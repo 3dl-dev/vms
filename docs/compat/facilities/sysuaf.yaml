@@ -1,0 +1,21 @@
+# Source of truth for the SYSUAF row of the Compatibility Surface Register.
+facility: sysuaf
+name: "SYSUAF — Accounts + Login Authentication"
+domain: system-management
+vms_ref: "OpenVMS Guide to System Security; Authorize Utility Manual"
+scope_1_0: in
+plan_ref: vms-8ad
+summary: >
+  Full UAF account record storage and SHA-256 password authentication are real.
+  Account-state enforcement (DISUSER, CAPTIVE, password expiration, login
+  limits) is defined in the bit layout but never read at login time — an
+  authentication gate that silently does not gate. SSH additionally drops no
+  credentials after authenticating (cross-ref protection-acl).
+last_reviewed: 2026-08-13
+items:
+  - {id: sysuaf$record,        kind: struct,   status: implemented, authenticity: real,        vms: "Full UAF account record (username, UIC, dirs, quotas, flags, hashed password)", evidence: src/libvms/rtl/sysuaf.c}
+  - {id: sysuaf$authenticate,  kind: routine,  status: implemented, authenticity: real,        vms: "sysuaf_authenticate() — SHA-256 password check against stored hash", evidence: "src/libvms/rtl/sysuaf.c:477"}
+  - {id: sysuaf$disuser,       kind: feature,  status: absent,      authenticity: facade-risk, vms: "UAI$M_DISUSER — interactive login disabled for account", evidence: "src/libvms/include/uaidef.h:142", notes: "Bit defined; sysuaf_authenticate() never reads it — a disabled account logs in normally"}
+  - {id: sysuaf$captive,       kind: feature,  status: absent,      authenticity: facade-risk, vms: "UAI$M_CAPTIVE — restrict account to captive command procedure", evidence: "src/libvms/include/uaidef.h:133", notes: "Bit defined, zero readers"}
+  - {id: sysuaf$pwd_expired,   kind: feature,  status: absent,      authenticity: facade-risk, vms: "UAI$M_PWD_EXPIRED + password-expiration/login-limit fields", evidence: "src/libvms/include/uaidef.h:154", notes: "Bit defined, zero readers; no login-limit enforcement either"}
+  - {id: sysuaf$ssh_credential_drop, kind: feature, status: absent, authenticity: facade-risk, vms: "Process credentials match the authenticated SYSUAF identity after login", evidence: src/vmsssh/vmssshd.c, notes: "Console LOGINOUT drops correctly via vms_kif_setident; vmssshd.c authenticates against SYSUAF (sysuaf_authenticate(), line ~237) but never calls setuid/setgid/seteuid — zero hits in the file. Transport mechanics are networking's; this is the SYSUAF-side credential-drop failure."}

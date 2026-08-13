@@ -1,0 +1,20 @@
+# SYS$ FAO Formatting + Message Services. See docs/design-compat-surface-register.md.
+facility: sys-fao-msg
+name: "SYS$ FAO Formatting + Message Services"
+domain: programming-interfaces
+vms_ref: "OpenVMS System Services Reference Manual — FAO and Message Services"
+scope_1_0: in
+tier: 1
+plan_ref: vms-801
+summary: >
+  FAO (SYS$FAO/SYS$FAOL + LIB$ wrapper forms): 3/3 implemented, real. Message
+  services: 2/4 partial. SYS$PUTMSG silently discards its facnam argument
+  (facade-risk). SYS$SNDJBC is absent.
+last_reviewed: 2026-08-13
+items:
+  - {id: sys$fao, kind: routine, status: implemented, authenticity: real, vms: "Formatted ASCII output (buffer form)", evidence: src/libvms/syssvc/sys_fao.c}
+  - {id: sys$faol, kind: routine, status: implemented, authenticity: real, vms: "Formatted ASCII output (arg-list form)", evidence: src/libvms/syssvc/sys_fao.c}
+  - {id: lib$_fao_forms, kind: routine, status: implemented, authenticity: real, vms: "LIB$ wrapper forms of FAO (LIB$FAO, LIB$FAOL)", evidence: src/libvms/syssvc/sys_fao.c}
+  - {id: sys$getmsg, kind: routine, status: implemented, authenticity: real, vms: "Get formatted message text for a condition code", evidence: src/libvms/syssvc/sys_msg.c}
+  - {id: sys$putmsg, kind: routine, status: partial, authenticity: facade-risk, vms: "Output a formatted message via the condition-handling mechanism", evidence: src/libvms/syssvc/sys_msg.c, notes: "facnam argument silently discarded, (void)facnam"}
+  - {id: sys$sndjbc, kind: routine, status: absent, authenticity: n/a, vms: "Send a message to the job controller"}

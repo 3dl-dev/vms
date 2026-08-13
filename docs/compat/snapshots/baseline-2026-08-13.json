@@ -1,0 +1,2151 @@
+{
+  "version": "baseline-2026-08-13",
+  "overall": {
+    "count": 395,
+    "by_status": {
+      "verified": 27,
+      "implemented": 209,
+      "partial": 39,
+      "stub": 19,
+      "designed": 2,
+      "absent": 99
+    },
+    "by_authenticity": {
+      "real": 230,
+      "n/a": 87,
+      "advisory": 32,
+      "facade-risk": 46
+    },
+    "coverage_index": 57.8,
+    "facade_risk": 46
+  },
+  "by_domain": {
+    "programming-interfaces": {
+      "count": 204,
+      "by_status": {
+        "verified": 1,
+        "implemented": 133,
+        "partial": 15,
+        "stub": 10,
+        "designed": 0,
+        "absent": 45
+      },
+      "by_authenticity": {
+        "advisory": 18,
+        "n/a": 44,
+        "facade-risk": 22,
+        "real": 120
+      },
+      "coverage_index": 60.6,
+      "facade_risk": 22
+    },
+    "file-system": {
+      "count": 30,
+      "by_status": {
+        "verified": 6,
+        "implemented": 17,
+        "partial": 3,
+        "stub": 2,
+        "designed": 0,
+        "absent": 2
+      },
+      "by_authenticity": {
+        "real": 24,
+        "advisory": 3,
+        "n/a": 2,
+        "facade-risk": 1
+      },
+      "coverage_index": 74.5,
+      "facade_risk": 1
+    },
+    "command-language": {
+      "count": 64,
+      "by_status": {
+        "verified": 11,
+        "implemented": 18,
+        "partial": 14,
+        "stub": 2,
+        "designed": 0,
+        "absent": 19
+      },
+      "by_authenticity": {
+        "real": 37,
+        "facade-risk": 11,
+        "n/a": 13,
+        "advisory": 3
+      },
+      "coverage_index": 52.7,
+      "facade_risk": 11
+    },
+    "system-management": {
+      "count": 36,
+      "by_status": {
+        "verified": 3,
+        "implemented": 16,
+        "partial": 2,
+        "stub": 1,
+        "designed": 0,
+        "absent": 14
+      },
+      "by_authenticity": {
+        "real": 18,
+        "n/a": 9,
+        "advisory": 3,
+        "facade-risk": 6
+      },
+      "coverage_index": 49.4,
+      "facade_risk": 6
+    },
+    "clustering": {
+      "count": 13,
+      "by_status": {
+        "verified": 1,
+        "implemented": 5,
+        "partial": 0,
+        "stub": 2,
+        "designed": 0,
+        "absent": 5
+      },
+      "by_authenticity": {
+        "real": 7,
+        "n/a": 4,
+        "advisory": 1,
+        "facade-risk": 1
+      },
+      "coverage_index": 43.5,
+      "facade_risk": 1
+    },
+    "toolchain": {
+      "count": 24,
+      "by_status": {
+        "verified": 3,
+        "implemented": 12,
+        "partial": 1,
+        "stub": 0,
+        "designed": 2,
+        "absent": 6
+      },
+      "by_authenticity": {
+        "real": 13,
+        "n/a": 8,
+        "advisory": 3
+      },
+      "coverage_index": 57.9,
+      "facade_risk": 0
+    },
+    "networking": {
+      "count": 11,
+      "by_status": {
+        "verified": 0,
+        "implemented": 2,
+        "partial": 1,
+        "stub": 1,
+        "designed": 0,
+        "absent": 7
+      },
+      "by_authenticity": {
+        "n/a": 5,
+        "real": 3,
+        "facade-risk": 3
+      },
+      "coverage_index": 21.8,
+      "facade_risk": 3
+    },
+    "runtime-arch": {
+      "count": 13,
+      "by_status": {
+        "verified": 2,
+        "implemented": 6,
+        "partial": 3,
+        "stub": 1,
+        "designed": 0,
+        "absent": 1
+      },
+      "by_authenticity": {
+        "real": 8,
+        "n/a": 2,
+        "facade-risk": 2,
+        "advisory": 1
+      },
+      "coverage_index": 67.7,
+      "facade_risk": 2
+    }
+  },
+  "items": {
+    "accounting$accounting$last_login": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "accounting$accounting$enabled_flag": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "accounting$accounting$journal": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "arch-targets$arch-targets$x86_64": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "arch-targets$arch-targets$aarch64": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "arch-targets$arch-targets$alpha": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "arch-targets$arch-targets$vax": {
+      "status": "partial",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "audit$audit$security_journal": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "audit$audit$breakin_evasion": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "audit$audit$opcom_alarms": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "boot$sysboot$conversational": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "boot$stdrv$phased_startup": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "boot$init$pid1_sequencing": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "boot$opcom$boot_bridge": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "boot$boot$sysgen_params": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "chf$lib$establish": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "chf$lib$revert": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "chf$lib$signal": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "chf$lib$stop": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "chf$lib$sig_to_ret": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "chf$lib$sig_to_stop": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "chf$lib$match_cond": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "chf$chf$mech_array": {
+      "status": "stub",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "chf$sys$unwind": {
+      "status": "stub",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "chf$sys$dclexh": {
+      "status": "stub",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "chf$sys$exiv": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "chf$sys$setexv": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "cluster-dlm$cluster-dlm$cross-node-lock": {
+      "status": "absent",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "cluster-logicals$cluster-logicals$clusterwide-logical-names": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "cluster-logicals$cluster-logicals$global-sections": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "connection-manager$connection-manager$hello-protocol": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "connection-manager$connection-manager$quorum": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "connection-manager$connection-manager$membership-rejoin": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "dcl-qualifiers$dcl-qualifiers$verb-coverage": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "dcl-qualifiers$dcl-qualifiers$zero-validation-verbs": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "dcl-qualifiers$dcl-qualifiers$per-verb-depth": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "dcl-qualifiers$dcl-qualifiers$cdu-compiler": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "dcl-scripting$dcl-scripting$if-then-goto": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "dcl-scripting$dcl-scripting$on-condition": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "dcl-scripting$dcl-scripting$call-subroutine": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "dcl-scripting$dcl-scripting$deck-eod": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "dcl-scripting$dcl-scripting$symbol-scoping": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "dcl-scripting$dcl-scripting$status-format": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "dcl-scripting$dcl-scripting$status-refresh": {
+      "status": "partial",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "dcl-scripting$dcl-scripting$f-mode": {
+      "status": "partial",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "dcl-verbs$dcl-verbs$breadth": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "dcl-verbs$dcl-verbs$call-subroutine": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "dcl-verbs$dcl-verbs$deck-eod": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "dcl-verbs$dcl-verbs$queue-verbs": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "dcl-verbs$dcl-verbs$allocate-deallocate": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "dcl-verbs$dcl-verbs$set-host": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "dcl-verbs$dcl-verbs$patch": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "dcl-verbs$dcl-verbs$standalone-sda": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "dcl-verbs$dcl-verbs$debug": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "dcl-verbs$dcl-verbs$merge": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "dcl-verbs$dcl-verbs$set-show-umbrella": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "decnet$decnet$nsp-transport": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "decnet$decnet$task-to-task": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "decnet$decnet$set-host": {
+      "status": "stub",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "decnet$decnet$node-filespec-syntax": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "descriptors$dsc$k_class_s": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "descriptors$dsc$k_class_d": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "descriptors$dsc$k_class_a": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "descriptors$dsc$k_class_vs": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "descriptors$dsc$k_class_p": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "descriptors$dsc$k_class_pi": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "descriptors$dsc$k_dtype": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "descriptors$dsc$k_dtype_vaxfloat": {
+      "status": "partial",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "descriptors$vms_desc_copy": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "descriptors$dsc$alloc_d": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "descriptors$dsc$free_d": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "descriptors$dsc$copy": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "descriptors$dsc$length": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "descriptors$dsc$pointer": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "devices$sys$getdvi": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "devices$sys$getdviw": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "devices$devices$getdvi_unimplemented_items": {
+      "status": "stub",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "devices$sys$device_scan": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "devices$dcl$mount": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "devices$dcl$dismount": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "devices$dcl$initialize": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "fdl$convert$fdl_qualifier": {
+      "status": "stub",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "fdl$fdl$_other": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "filespec$filespec$wildcard": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "filespec$filespec$ellipsis": {
+      "status": "partial",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "filespec$filespec$concealed_rooted": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "filespec$filespec$searchlist_lookup": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "filespec$filespec$searchlist_trnlnm": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "help$help$verb": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "image-activation$image-activation$imgact-pt-interp": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "image-activation$image-activation$symvec-activation": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "image-activation$image-activation$known-images": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "image-activation$image-activation$tls": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "install$pcsi$kit_format": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "install$dcl$product_install": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "install$dcl$product_show": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "install$install$syscommon_root": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "install$install$boot_login_e2e": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "kernel-executive$kernel-executive$event-flags": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "kernel-executive$kernel-executive$lock-manager": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "kernel-executive$kernel-executive$ast-delivery": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "kernel-executive$kernel-executive$mailboxes": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "kernel-executive$kernel-executive$logical-name-store": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "kernel-executive$kernel-executive$access-modes": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "kernel-executive$kernel-executive$pcb": {
+      "status": "partial",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "kernel-executive$kernel-executive$process-control": {
+      "status": "partial",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "kernel-executive$kernel-executive$scheduling": {
+      "status": "stub",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "lat$lat$protocol": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "lexicals$lexicals$breadth": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lexicals$f$fid_to_name": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "lexicals$f$setprv": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lexicals$f$csid": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lexicals$f$delta_time": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lexicals$f$license": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lexicals$f$multipath": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lexicals$f$cunits": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lexicals$lexicals$unknown-error-path": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_arith_bitops": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$ishft": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "lib$lib$ishftc": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_charscan": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$trim": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_cli_spawn": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$do_command": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_datetime": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_queue": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_symbol": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_tree": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_vm": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_xlate_tables": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_output": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_eventflags": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_logical": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_misc": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_dyndesc": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$sfree_wait": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "lib$lib$tparse": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$table_parse": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "lib$lib$_other": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "stretch"
+    },
+    "librarian$librarian$olb-container-decision": {
+      "status": "designed",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "link$link$core-linker": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "link$link$target-x86_64": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "link$link$target-aarch64": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "link$link$target-alpha": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "link$link$target-vax": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "logical-namespace$lnm$table_system": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "logical-namespace$lnm$table_group": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "logical-namespace$lnm$table_job": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "logical-namespace$lnm$table_process": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "logical-namespace$lnm$iterative_translation": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "logical-namespace$lnm$concealed_rooted": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "logical-namespace$lnm$search_list": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "logical-namespace$lnm$crossproc_visibility": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "logical-namespace$sys$crelnt": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "macro$macro$macro-32-assembler": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "out"
+    },
+    "message-compiler$message-compiler$msg-utility": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "mms-mmk$mms-mmk$rtl-prereqs": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "mms-mmk$mms-mmk$mmk-exe": {
+      "status": "designed",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "mms-mmk$mms-mmk$parse-tables-port": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "mscp-serve$mscp-serve$disk-read-write": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "mscp-serve$mscp-serve$online-end": {
+      "status": "stub",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "mscp-serve$mscp-serve$tmscp-tape": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "mth$mth$_trig_transcendental": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "mth$mth$random": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "mth$mth$init_random_number_generator": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "nisca$nisca$lan-transport": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "object-format$object-format$elf-object-ingest": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "object-format$object-format$ar-whole-archive": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "object-format$object-format$vms-obj-records": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "out"
+    },
+    "ods2$vmsfs$runtime_fs": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "ods2$ods2$reader": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "ods2$ods2$writer": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "ods2$ods2$versioning": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "ods2$ods2$case_fold": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "ods2$ods2$protection": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "ods2$ods2$copy_overwrite": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "ots$ots$cvt_l_ti": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "ots$ots$cvt_ti_l": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "ots$ots$cvt_l_tz": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "ots$ots$cvt_l_to": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "ots$ots$_other_implemented": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "ots$ots$cvt_t_p": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "ots$ots$cvt_p_t": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "ots$ots$_cmp_family": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "ots$ots$scopy_dxdx": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "ots$ots$scopy_r_dx": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "ots$ots$sfree1_dd": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "ots$ots$sfreen_dd": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "ots$ots$sget1_dd": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "privileges$prvdef$bits": {
+      "status": "implemented",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "privileges$sys$mode_transition": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "privileges$sys$setprv": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "privileges$privs$file_access_override": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "protection-acl$fileprot$sogw_uic": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "protection-acl$fileprot$delete_bit": {
+      "status": "stub",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "protection-acl$sys$chkpro": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "protection-acl$sys$check_access": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "protection-acl$acldef$acls": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "protection-acl$fileprot$priv_override": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "queues$queues$manager": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "queues$queues$submit": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "queues$queues$print": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "queues$queues$batch-engine": {
+      "status": "absent",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "queues$queues$queue-verb-syntax": {
+      "status": "partial",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "queues$queues$show-queue-entry": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "queues$queues$job-control": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rights-db$rightslist$identifiers": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rights-db$rightslist$aces": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "rms-api$sys$open": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$create": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$erase": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$close": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$connect": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$disconnect": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$rewind": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$flush": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$display": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$get": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$put": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$update": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$delete": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$find": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$parse": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$sys$search": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$rms$record_locking": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "rms-api$fab": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$rab": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$nam": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$xab$key": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$xab$dat": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$xab$pro": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$xab$fhc": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "rms-api$xab$all": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "rms-api$xab$_other": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "rms-api$rms$xab_silent_unsupported": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "rms-api$rms$org_sequential": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$rms$org_relative": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "rms-api$rms$org_indexed": {
+      "status": "partial",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "rms-api$rms$isam_alternate_key": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "scs$scs$cdt-message-service": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "scs$scs$datagram-service": {
+      "status": "stub",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "self-host-compiler$self-host-compiler$tcc-selfhost": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "self-host-compiler$self-host-compiler$build-com": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "self-host-compiler$self-host-compiler$s3-s5-images": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "shadowing$shadowing$host-based-shadowing": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "out"
+    },
+    "smg$smg$status-constants": {
+      "status": "stub",
+      "authenticity": "advisory",
+      "scope_1_0": "stretch"
+    },
+    "smg$smg$virtual-display-api": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "ssh$ssh$vmsshd-daemon": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "ssh$ssh$pid1-wiring": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "ssh$ssh$credential-drop": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "status-codes$stsdef$_bitfield": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "status-codes$ssdef$_codes": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "status-codes$rmsdef$_codes": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "status-codes$sys$getmsg_text_table": {
+      "status": "partial",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "status-codes$facility_registry": {
+      "status": "stub",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "status-codes$starlet$_symbol_coverage": {
+      "status": "partial",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "str$str$copy_dx": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$copy_r": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$concat": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$append": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$prefix": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$compare": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$compare_eql": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$case_blind_compare": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$compare_multi": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$left": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$right": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$len_extr": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$element": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$find_first_substring": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$position": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$match_wild": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$trim": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$upcase": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$translate": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$replace": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$free1_dx": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$get1_dx": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$analyze_sdesc": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "str$str$_other": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "symbol-vectors$symbol-vectors$universal-symvec": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "symbol-vectors$symbol-vectors$gsmatch": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "symbol-vectors$symbol-vectors$ident": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "sys-ast$sys$dclast": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-ast$sys$setast": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-ast$sys$_other": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sys-eventflags$sys$setef": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-eventflags$sys$clref": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-eventflags$sys$waitfr": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-eventflags$sys$wflor": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-eventflags$sys$wfland": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-eventflags$sys$synch": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-eventflags$sys$readef": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-eventflags$sys$ascefc": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-eventflags$sys$dacefc": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-eventflags$sys$dlcefc": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-eventflags$sys$dclef": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sys-fao-msg$sys$fao": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-fao-msg$sys$faol": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-fao-msg$lib$_fao_forms": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-fao-msg$sys$getmsg": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-fao-msg$sys$putmsg": {
+      "status": "partial",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "sys-fao-msg$sys$sndjbc": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sys-io$sys$assign": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "sys-io$sys$dassgn": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "sys-io$sys$qio": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "sys-io$sys$qiow": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "sys-io$sys$device_scan": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-io$sys$_other": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sys-lock$sys$enq": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-lock$sys$enqw": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-lock$sys$deq": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-lock$sys$getlki": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sys-lock$sys$getlkiw": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sys-lock$sys$_other": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sys-logicalnames$sys$crelnm": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-logicalnames$sys$dellnm": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-logicalnames$sys$trnlnm": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-mailbox$sys$crembx": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-mailbox$sys$delmbx": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-memory$sys$cretva": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-memory$sys$deltva": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-memory$sys$expreg": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-memory$sys$crmpsc": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-memory$sys$dgblsc": {
+      "status": "stub",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "sys-memory$sys$purgws": {
+      "status": "stub",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "sys-memory$sys$lkwset": {
+      "status": "stub",
+      "authenticity": "facade-risk",
+      "scope_1_0": "out"
+    },
+    "sys-memory$sys$ulwset": {
+      "status": "stub",
+      "authenticity": "facade-risk",
+      "scope_1_0": "out"
+    },
+    "sys-memory$sys$adjstk": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sys-memory$sys$updsec": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sys-memory$sys$lckpag": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "out"
+    },
+    "sys-process$sys$creprc": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-process$sys$delprc": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-process$sys$hiber": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-process$sys$exit": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-process$sys$wake": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "sys-process$sys$suspnd": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "sys-process$sys$resume": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "sys-process$sys$setpri": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "sys-process$sys$forcex": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "sys-process$sys$cancel": {
+      "status": "stub",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "sys-process$sys$setprn": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sys-process$sys$process_scan": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sys-process$sys$_other": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sys-procinfo$sys$getjpi": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-procinfo$sys$getjpiw": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-procinfo$sys$getsyi": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-procinfo$sys$getsyiw": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-procinfo$jpi_syi_item_codes": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-security$sys$setprv": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "sys-security$sys$chkpro": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "sys-security$sys$check_access": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "out"
+    },
+    "sys-time$sys$gettim": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-time$sys$numtim": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-time$sys$bintim": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-time$sys$asctim": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sys-time$sys$setimr": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "sys-time$sys$cantim": {
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "sys-time$sys$schdwk": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sys-time$sys$gettim_prec": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sysgen$sysgen$params": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sysgen$sysgen$autogen": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "sysuaf$sysuaf$record": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sysuaf$sysuaf$authenticate": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "sysuaf$sysuaf$disuser": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "sysuaf$sysuaf$captive": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "sysuaf$sysuaf$pwd_expired": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "sysuaf$sysuaf$ssh_credential_drop": {
+      "status": "absent",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "tcpip-services$tcpip-services$ucx-qio-socket-api": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "tcpip-services$tcpip-services$nic-device": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "tcpip-services$tcpip-services$dcl-tcpip-verb": {
+      "status": "implemented",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$authorize": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$sysgen": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$sysman": {
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$monitor": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$mail": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$install": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$link": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$library": {
+      "status": "partial",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$backup": {
+      "status": "partial",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$product": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$sort": {
+      "status": "partial",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$differences": {
+      "status": "partial",
+      "authenticity": "advisory",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$convert": {
+      "status": "partial",
+      "authenticity": "facade-risk",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$analyze-disk-structure": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$analyze-system": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$analyze-image": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$analyze-object": {
+      "status": "stub",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$analyze-rms-file": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$patch": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "utilities$utilities$message-compiler": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "utilities$utilities$edit": {
+      "status": "verified",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$edit-tpu": {
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "stretch"
+    },
+    "utilities$utilities$phone": {
+      "status": "stub",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    },
+    "utilities$utilities$dump": {
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in"
+    }
+  }
+}

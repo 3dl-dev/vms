@@ -1,0 +1,17 @@
+# Source of truth for the LIBRARIAN row of the Compatibility Surface Register.
+facility: librarian
+name: "LIBRARIAN (.OLB Object Libraries)"
+domain: toolchain
+vms_ref: "OpenVMS LIBRARIAN Utility Reference Manual"
+scope_1_0: in
+plan_ref: vms-59a
+summary: >
+  No LIBRARIAN.EXE binary exists yet — design-only. The plan is an `ar`
+  whole-archive container as the .OLB representation (Rule-8 labeled — VMS's
+  .OLB byte format is not reproduced); LINK.EXE already ingests `ar`
+  archives (see object-format), so .OLB consumption needs no new LINK.EXE
+  code — only a LIBRARIAN.EXE image and its native-link wiring
+  (mk_librarian.sh) remain. Self-host gate (vms-59a).
+last_reviewed: 2026-08-13
+items:
+  - {id: librarian$olb-container-decision, kind: subsystem, status: designed, authenticity: n/a, vms: "LIBRARIAN.EXE — build/maintain .OLB object libraries", evidence: "src/vmslink/link.c:2112", scope_1_0: in, notes: "Decision made: ar whole-archive as .OLB container (Rule 8, VMS .OLB byte format not reproduced). LINK.EXE already ingests ar archives at this evidence line, covering .OLB consumption once wired; no LIBRARIAN.EXE binary, no mk_librarian.sh yet."}

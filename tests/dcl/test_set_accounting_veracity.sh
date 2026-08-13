@@ -4,9 +4,9 @@
 #       SHOW ACCOUNTING reads back, and /ENABLE=(class) granularity draws
 #       an honest refusal instead of silent acceptance
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \BOGUS\
-# EXPECT: contains:$STATUS = 2288
+# EXPECT: contains:$STATUS = "%X000008F0"
 # EXPECT: contains:%SET-W-NOTIMPL, per-class accounting (/ENABLE=(class,...) or /DISABLE=(class,...)) is not implemented in OVMX - no state changed
-# EXPECT: contains:$STATUS = 2296
+# EXPECT: contains:$STATUS = "%X000008F8"
 # EXPECT: contains:%SET-I-INTSET, accounting disabled
 # EXPECT: contains:Accounting is currently disabled.
 # EXPECT: contains:%SET-I-INTSET, accounting enabled

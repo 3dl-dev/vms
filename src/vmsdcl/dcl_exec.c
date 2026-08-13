@@ -27,6 +27,9 @@ extern int dcl_eval_lexical(struct dcl_context *ctx, const char *expr,
                             char *result, size_t result_size);
 extern int dcl_find_label(FILE *fp, const char *label);
 extern int dcl_execute_line(const char *line);
+extern int dcl_call_subroutine(const char *label, int argc, char **argv);
+long dcl_parse_int(const char *s, int *ok);
+void dcl_set_status(struct dcl_context *ctx, int status);
 
 /* -------------------------------------------------------------------------
  * DCL Expression Evaluator
@@ -83,6 +86,69 @@ static char ep_consume(expr_parser_t *ep)
 
 /* Forward declaration */
 static expr_val_t parse_expr(expr_parser_t *ep);
+
+/*
+ * Parse a DCL integer literal, honouring the VMS radix prefixes and the
+ * C-style 0x hex form. Recognised forms (after an optional leading sign):
+ *   %X<hex>   %O<octal>   %D<decimal>   %B<binary>   (VMS radix operators)
+ *   0x<hex>                                          (accepted for convenience)
+ *   <decimal>
+ * On return *ok is 1 iff the entire (trimmed) string was a valid integer in
+ * the detected radix, else 0. This is what makes $STATUS work in expressions:
+ * $STATUS is stored VMS-style as "%X00000001", so IF/arithmetic must read a
+ * "%X" value as an integer. Reference: VSI OpenVMS User's Manual, "Radix
+ * qualifiers (%B, %D, %O, %X)"; DCL Dictionary, "Expressions".
+ */
+long dcl_parse_int(const char *s, int *ok)
+{
+    if (ok) *ok = 0;
+    if (!s) return 0;
+    while (*s == ' ' || *s == '\t') s++;
+    int neg = 0;
+    if (*s == '+' || *s == '-') { neg = (*s == '-'); s++; }
+    int base = 10;
+    if (s[0] == '%' && s[1]) {
+        char r = (char)toupper((unsigned char)s[1]);
+        if (r == 'X') { base = 16; s += 2; }
+        else if (r == 'O') { base = 8;  s += 2; }
+        else if (r == 'D') { base = 10; s += 2; }
+        else if (r == 'B') { base = 2;  s += 2; }
+        else return 0;   /* %? — not a recognised radix */
+    } else if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        base = 16; s += 2;
+    }
+    if (*s == '\0') return 0;
+    char *endp;
+    long v = strtol(s, &endp, base);
+    /* Trailing whitespace is tolerated. */
+    while (*endp == ' ' || *endp == '\t') endp++;
+    if (*endp != '\0') return 0;
+    if (ok) *ok = 1;
+    return neg ? -v : v;
+}
+
+/*
+ * Refresh $STATUS and $SEVERITY after a command completes. VMS stores $STATUS
+ * as the 32-bit condition value rendered "%Xhhhhhhhh" (SHOW SYMBOL $STATUS
+ * shows exactly that) and $SEVERITY as the low three bits in decimal. The two
+ * are updated together, once, from the real completion status of every command
+ * DCL runs — including a command it could not find. Centralised here so no
+ * dispatch path can leave a stale success behind (the bug that made
+ * IF .NOT. $STATUS silently miss a mistyped command). Reference: DCL
+ * Dictionary, "$STATUS" and "$SEVERITY".
+ */
+void dcl_set_status(struct dcl_context *ctx, int status)
+{
+    if (ctx) {
+        ctx->last_status = (uint32_t)status;
+        ctx->last_severity = (uint32_t)(status & 7);
+    }
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%%X%08X", (uint32_t)status);
+    dcl_sym_set("$STATUS", buf, DCL_SYM_GLOBAL);
+    snprintf(buf, sizeof(buf), "%u", (uint32_t)status & 7);
+    dcl_sym_set("$SEVERITY", buf, DCL_SYM_GLOBAL);
+}
 
 /*
  * Make integer value.
@@ -178,10 +244,10 @@ static expr_val_t parse_primary(expr_parser_t *ep)
         symname[si] = '\0';
         const char *val = dcl_sym_get(symname);
         if (!val) return make_int(0);
-        /* Try integer */
-        char *endp;
-        long iv = strtol(val, &endp, 0);
-        if (*endp == '\0' && val[0] != '\0') return make_int(iv);
+        /* Try integer (radix-aware: a "%X..." $STATUS-style value is numeric) */
+        int iok;
+        long iv = dcl_parse_int(val, &iok);
+        if (iok) return make_int(iv);
         return make_str(val);
     }
 
@@ -200,9 +266,9 @@ static expr_val_t parse_primary(expr_parser_t *ep)
         symname[si] = '\0';
         const char *val = dcl_sym_get(symname);
         if (!val) return make_int(0);
-        char *endp;
-        long iv = strtol(val, &endp, 0);
-        if (*endp == '\0' && val[0] != '\0') return make_int(iv);
+        int iok;
+        long iv = dcl_parse_int(val, &iok);
+        if (iok) return make_int(iv);
         return make_str(val);
     }
 
@@ -233,10 +299,30 @@ static expr_val_t parse_primary(expr_parser_t *ep)
         result[0] = '\0';
         if (ep->ctx)
             dcl_eval_lexical(ep->ctx, buf, result, sizeof(result));
-        char *endp;
-        long iv = strtol(result, &endp, 0);
-        if (*endp == '\0' && result[0] != '\0') return make_int(iv);
+        int iok;
+        long iv = dcl_parse_int(result, &iok);
+        if (iok) return make_int(iv);
         return make_str(result);
+    }
+
+    /* VMS radix literal: %X<hex> %O<octal> %D<dec> %B<binary> */
+    if (c == '%' && ep->pos + 1 < ep->len) {
+        char r = (char)toupper((unsigned char)ep->input[ep->pos + 1]);
+        if (r == 'X' || r == 'O' || r == 'D' || r == 'B') {
+            char buf[80];
+            size_t bi = 0;
+            buf[bi++] = ep_consume(ep);   /* % */
+            buf[bi++] = ep_consume(ep);   /* radix letter */
+            while (ep->pos < ep->len && bi < sizeof(buf) - 1) {
+                char ch = ep->input[ep->pos];
+                if (isalnum((unsigned char)ch)) { buf[bi++] = ch; ep->pos++; }
+                else break;
+            }
+            buf[bi] = '\0';
+            int iok;
+            long iv = dcl_parse_int(buf, &iok);
+            return make_int(iok ? iv : 0);
+        }
     }
 
     /* Numeric literal (possibly hex with 0x prefix) */
@@ -282,9 +368,9 @@ static expr_val_t parse_primary(expr_parser_t *ep)
         /* Look up as symbol first */
         const char *val = dcl_sym_get(word);
         if (val) {
-            char *endp;
-            long iv = strtol(val, &endp, 0);
-            if (*endp == '\0' && val[0] != '\0') return make_int(iv);
+            int iok;
+            long iv = dcl_parse_int(val, &iok);
+            if (iok) return make_int(iv);
             return make_str(val);
         }
         /* Not a symbol - treat as string literal */
@@ -724,17 +810,19 @@ static int cond_compare(cond_parser_t *cp)
             }
         } else {
             long lv, rv;
-            /* Try to resolve as symbol if not purely numeric */
-            char *ep;
-            lv = strtol(lval, &ep, 0);
-            if (*ep != '\0') {
+            int iok;
+            /* Radix-aware, so a "%X..." $STATUS operand compares as a number.
+             * If the operand is not itself an integer, resolve it as a symbol
+             * and parse that value the same way. */
+            lv = dcl_parse_int(lval, &iok);
+            if (!iok) {
                 const char *sv = dcl_sym_get(lval);
-                lv = sv ? strtol(sv, NULL, 0) : 0;
+                lv = sv ? dcl_parse_int(sv, &iok) : 0;
             }
-            rv = strtol(rval, &ep, 0);
-            if (*ep != '\0') {
+            rv = dcl_parse_int(rval, &iok);
+            if (!iok) {
                 const char *sv = dcl_sym_get(rval);
-                rv = sv ? strtol(sv, NULL, 0) : 0;
+                rv = sv ? dcl_parse_int(sv, &iok) : 0;
             }
             switch (cmp_ops[i].type) {
                 case 0: return (lv == rv);
@@ -755,9 +843,19 @@ static int cond_compare(cond_parser_t *cp)
     if (strcasecmp(lval, "FALSE") == 0) return 0;
     if (lval[0] == '\0') return 0;
 
-    char *ep;
-    long v = strtol(lval, &ep, 0);
-    return (v != 0) ? 1 : 0;
+    /* A bare numeric IF operand is TRUE iff its low bit is set (odd), FALSE if
+     * even -- NOT "non-zero". This is the whole reason `IF $STATUS` detects
+     * success and `IF .NOT. $STATUS` detects failure: VMS status codes are odd
+     * on success, even on error. Reference: DCL Dictionary, "IF" (a numeric
+     * expression is true when the low-order bit is 1). Radix-aware so the
+     * "%X..." $STATUS form is read as an integer. */
+    int iok;
+    long v = dcl_parse_int(lval, &iok);
+    if (!iok) {
+        const char *sv = dcl_sym_get(lval);
+        v = sv ? dcl_parse_int(sv, &iok) : 0;
+    }
+    return (v & 1) ? 1 : 0;
 }
 
 /*
@@ -1143,15 +1241,77 @@ int dcl_execute_command(struct dcl_command *cmd)
     }
 
     if (strcasecmp(cmd->verb, "RETURN") == 0) {
-        if (ctx->gosub_depth <= 0) {
+        /* RETURN unwinds the innermost of: an open GOSUB at this level, or a
+         * CALLed SUBROUTINE, or (at a procedure's top level) the procedure
+         * itself -- where RETURN is equivalent to EXIT. gosub_base separates a
+         * GOSUB opened *in this level* from a caller's still-open GOSUB.
+         * Reference: DCL Dictionary, "RETURN". */
+        int have_gosub = (ctx->proc_depth >= 0 &&
+                          ctx->gosub_depth > ctx->proc_stack[ctx->proc_depth].gosub_base);
+        if (have_gosub) {
+            ctx->gosub_depth--;
+            FILE *fp = ctx->proc_stack[ctx->proc_depth].fp;
+            fseek(fp, ctx->gosub_stack[ctx->gosub_depth].file_offset, SEEK_SET);
+            ctx->proc_stack[ctx->proc_depth].line_number =
+                ctx->gosub_stack[ctx->gosub_depth].line_number;
+            return SS$_NORMAL;
+        }
+
+        if (ctx->proc_depth < 0) {
+            /* Interactive: RETURN has nothing to return from. */
             dcl_error("DCL", 2, "NOGOSUB", "RETURN without GOSUB");
             return SS$_BADPARAM;
         }
-        ctx->gosub_depth--;
-        FILE *fp = ctx->proc_stack[ctx->proc_depth].fp;
-        fseek(fp, ctx->gosub_stack[ctx->gosub_depth].file_offset, SEEK_SET);
-        ctx->proc_stack[ctx->proc_depth].line_number =
-            ctx->gosub_stack[ctx->gosub_depth].line_number;
+
+        /* Return from the current SUBROUTINE / procedure level with an optional
+         * status. RETURN with no operand uses $STATUS. */
+        int rstatus = (int)ctx->last_status;
+        if (cmd->param_count >= 1 && cmd->params[0][0]) {
+            int iok;
+            long v = dcl_parse_int(cmd->params[0], &iok);
+            if (!iok) {
+                const char *sv = dcl_sym_get(cmd->params[0]);
+                v = sv ? dcl_parse_int(sv, &iok) : 0;
+            }
+            if (iok) rstatus = (int)v;
+        }
+        ctx->return_status = rstatus;
+        ctx->return_requested = 1;
+        return SS$_NORMAL;
+    }
+
+    if (strcasecmp(cmd->verb, "CALL") == 0) {
+        if (cmd->param_count < 1) {
+            dcl_error("DCL", 2, "NOLAB", "no subroutine label specified in CALL");
+            return SS$_BADPARAM;
+        }
+        /* params[0] = label; params[1..] = P1..P8 passed to the subroutine. */
+        char *params[8] = {NULL};
+        int pcount = cmd->param_count - 1;
+        for (int i = 0; i < pcount && i < 8; i++)
+            params[i] = cmd->params[i + 1];
+        return dcl_call_subroutine(cmd->params[0], pcount, params);
+    }
+
+    if (strcasecmp(cmd->verb, "SUBROUTINE") == 0) {
+        /* The SUBROUTINE header of a CALLed block is a no-op marker. Reached in
+         * NORMAL (fall-through) execution -- i.e. control ran into a subroutine
+         * definition -- SUBROUTINE is equivalent to EXIT (DCL Dictionary). */
+        if (ctx->proc_depth >= 0 && ctx->proc_stack[ctx->proc_depth].is_subroutine)
+            return SS$_NORMAL;
+        ctx->exit_requested = 1;
+        return SS$_NORMAL;
+    }
+
+    if (strcasecmp(cmd->verb, "ENDSUBROUTINE") == 0) {
+        /* End of a CALLed subroutine: return to the caller with $STATUS.
+         * Reached in normal flow (no active CALL), behave like EXIT. */
+        if (ctx->proc_depth >= 0 && ctx->proc_stack[ctx->proc_depth].is_subroutine) {
+            ctx->return_status = (int)ctx->last_status;
+            ctx->return_requested = 1;
+            return SS$_NORMAL;
+        }
+        ctx->exit_requested = 1;
         return SS$_NORMAL;
     }
 
@@ -1221,27 +1381,12 @@ int dcl_execute_command(struct dcl_command *cmd)
          * (verb->quals == NULL) this returns SS$_NORMAL and nothing changes. */
         int qstatus = dcl_validate_qualifiers(verb, cmd);
         if (qstatus != SS$_NORMAL) {
-            ctx->last_status = (uint32_t)qstatus;
-            ctx->last_severity = (uint32_t)(qstatus & 7);
-            char sbuf[32];
-            snprintf(sbuf, sizeof(sbuf), "%d", qstatus);
-            dcl_sym_set("$STATUS", sbuf, DCL_SYM_GLOBAL);
-            snprintf(sbuf, sizeof(sbuf), "%d", qstatus & 7);
-            dcl_sym_set("$SEVERITY", sbuf, DCL_SYM_GLOBAL);
+            dcl_set_status(ctx, qstatus);
             return qstatus;
         }
 
         int status = verb->handler(cmd);
-        ctx->last_status = (uint32_t)status;
-        ctx->last_severity = (uint32_t)(status & 7);
-
-        /* Update $STATUS and $SEVERITY symbols */
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%d", status);
-        dcl_sym_set("$STATUS", buf, DCL_SYM_GLOBAL);
-        snprintf(buf, sizeof(buf), "%d", status & 7);
-        dcl_sym_set("$SEVERITY", buf, DCL_SYM_GLOBAL);
-
+        dcl_set_status(ctx, status);
         return status;
     }
 
@@ -1255,15 +1400,7 @@ int dcl_execute_command(struct dcl_command *cmd)
     const char *symval = dcl_sym_get(cmd->verb);
     if (symval && symval[0] == '$') {
         int status = dcl_exec_foreign_command(ctx, cmd, symval + 1);
-        ctx->last_status = (uint32_t)status;
-        ctx->last_severity = (uint32_t)(status & 7);
-
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%d", status);
-        dcl_sym_set("$STATUS", buf, DCL_SYM_GLOBAL);
-        snprintf(buf, sizeof(buf), "%d", status & 7);
-        dcl_sym_set("$SEVERITY", buf, DCL_SYM_GLOBAL);
-
+        dcl_set_status(ctx, status);
         return status;
     }
 
@@ -1300,10 +1437,14 @@ int dcl_execute_command(struct dcl_command *cmd)
         return status;
     }
 
-    /* Command not found */
+    /* Command not found. This path MUST refresh $STATUS/$SEVERITY too: a
+     * mistyped command is the classic case where a script does
+     * `IF .NOT. $STATUS THEN GOTO err`, and leaving a stale success here is
+     * exactly the bug that made that check silently pass (parity-map 9.2). */
     dcl_error("DCL", 2, "IVVERB",
               "unrecognized command verb - check validity and spelling\n"
               " \\%s\\", cmd->verb);
+    dcl_set_status(ctx, SS$_IVVERB);
     return SS$_IVVERB;
 }
 

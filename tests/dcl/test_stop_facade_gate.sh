@@ -27,9 +27,12 @@
 # nothing..." above in the same run) instead of fabricating success -- which
 # is exactly INV-DCL's bar, and is provable without a kernel module.
 #
-# --- process-target forms: never $STATUS = 1 (the old unconditional lie),
-#     and never a fabricated %STOP-S- success line ---
-# EXPECT_NOT: regex:\$STATUS = 1[^0-9]
+# --- process-target forms: never $STATUS = SS$_NORMAL (the old unconditional
+#     lie), and never a fabricated %STOP-S- success line ---
+# $STATUS is displayed VMS-style "%Xhhhhhhhh" (vms-3983), so the SS$_NORMAL lie
+# now reads "%X00000001" rather than decimal "1" — the guard tracks the
+# authentic representation so it stays able to catch a fake.
+# EXPECT_NOT: contains:$STATUS = "%X00000001"
 # EXPECT_NOT: contains:%STOP-S-
 # --- malformed /IDENTIFICATION: honest parse-time refusal, not silently
 #     accepted (the old code would have accepted ANY qualifier value,

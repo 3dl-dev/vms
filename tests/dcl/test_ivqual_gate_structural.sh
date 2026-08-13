@@ -11,8 +11,8 @@
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZZZ\
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \FROBNICATE\
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \NOTAREALQUAL\
-# EXPECT: contains:$STATUS = 2288
-# EXPECT_NOT: contains:$STATUS = 1
+# EXPECT: contains:$STATUS = "%X000008F0"
+# EXPECT_NOT: contains:$STATUS = "%X00000001"
 #
 # --- Bad keyword on a keyword-typed qualifier -> %DCL-W-IVKEYW ($STATUS=2292) ---
 # DIRECTORY/DATE is declared CDU_VT_KEYWORD; OVMX honours only the MODIFIED
@@ -20,7 +20,7 @@
 # the authentic IVKEYW rather than silently mapped to mtime (INV-DCL sec 3).
 # EXPECT: contains:%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling - \CREATED\
 # EXPECT: contains:%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling - \BOGUSKW\
-# EXPECT: contains:$STATUS = 2292
+# EXPECT: contains:$STATUS = "%X000008F4"
 #
 # --- Legitimate qualifiers on the SAME verbs still pass (not a blanket reject) ---
 # EXPECT_NOT: regex:IVQUAL.*\\LOG\\

@@ -6,9 +6,9 @@
 #       (%DCL-W-IVQUAL), instead of the old unconditional SS$_NORMAL.
 # EXPECT: contains:DCL-ALIVE
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \BOGUS\
-# EXPECT: contains:$STATUS = 2288
+# EXPECT: contains:$STATUS = "%X000008F0"
 # EXPECT: contains:%SET-E-DEVNOTMNT, device is not mounted - _DKA300:
-# EXPECT: contains:$STATUS = 2688
+# EXPECT: contains:$STATUS = "%X00000A80"
 # EXPECT_NOT: contains:%SET-I-NOTIMPL
 # EXPECT_NOT: contains:SET VOLUME requires a mounted VMSFS volume
 #

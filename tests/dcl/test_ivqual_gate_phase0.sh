@@ -3,8 +3,8 @@
 #       with the authentic VMS error instead of silently succeeding
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \FDAFS\
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \BOGUS\
-# EXPECT: contains:$STATUS = 2288
-# EXPECT_NOT: contains:$STATUS = 1
+# EXPECT: contains:$STATUS = "%X000008F0"
+# EXPECT_NOT: contains:$STATUS = "%X00000001"
 #
 # THE FINDING THIS GATES (docs/design-dcl-fidelity.md sec 2, INV-DCL sec 3).
 # struct dcl_verb (src/vmsdcl/include/dcl/cdu.h) carries only a boolean

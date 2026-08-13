@@ -1184,14 +1184,26 @@ int cmd_create(struct dcl_command *cmd)
         return SS$_FILACCERR;
     }
 
-    /* Read lines from SYS$INPUT until Ctrl-Z (EOF) */
-    if (ctx->interactive) {
+    /* CREATE reads records from SYS$INPUT until end-of-file. Interactively that
+     * is the terminal (Ctrl-Z ends it); inside a command procedure it is the
+     * procedure's following in-stream data lines -- the classic
+     *   $ CREATE FILE.TXT
+     *   ...data...
+     *   $ NEXTCOMMAND
+     * idiom, and the consumer of a DECK/EOD block. dcl_sysinput_setup() points
+     * fd 0 at exactly that block (and is a no-op interactively), so the same
+     * read loop serves both. Reference: DCL Dictionary, "CREATE" (input from
+     * SYS$INPUT); "DECK"/"EOD". (vms-3983) */
+    struct dcl_sysinput si;
+    dcl_sysinput_setup(ctx, &si);
+    if (ctx->interactive || ctx->proc_depth >= 0) {
         char line[4096];
         while (1) {
             if (!fgets(line, sizeof(line), stdin)) break;
             fputs(line, fp);
         }
     }
+    dcl_sysinput_restore(&si);
 
     fclose(fp);
     return SS$_NORMAL;

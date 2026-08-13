@@ -1,7 +1,7 @@
 #!/bin/bash
 # TEST: SHOW DEVICE prints no device row it did not read from the executive
 # EXPECT: contains:DCL-ALIVE
-# EXPECT: contains:$STATUS = 676
+# EXPECT: contains:$STATUS = "%X000002A4"
 # EXPECT_NOT: regex:^Device +Device +Error
 # EXPECT_NOT: contains:NOSUCHDEV
 # EXPECT_NOT: regex:^\$1\$DGA

@@ -1,7 +1,7 @@
 #!/bin/bash
 # TEST: SET TERMINAL /WIDTH=132 is accepted, and does not make SHOW TERMINAL
 #       report a terminal the executive never gave it
-# EXPECT: contains:$STATUS = 1
+# EXPECT: contains:$STATUS = "%X00000001"
 # EXPECT_NOT: contains:Width: 132
 # EXPECT_NOT: contains:Terminal Characteristics:
 #

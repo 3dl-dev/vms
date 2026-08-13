@@ -478,7 +478,14 @@ static int lex_integer(struct dcl_context *ctx, const char *args,
         if (sv) { strncpy(str, sv, sizeof(str) - 1); str[sizeof(str) - 1] = '\0'; s = str; }
     }
 
-    long val = strtol(s, NULL, 0);
+    /* Radix-aware: $STATUS is stored VMS-style as "%X00000001", so
+     * F$INTEGER($STATUS) must read a "%X" value (and %O/%D/%B, 0x) as an
+     * integer. Reference: VSI OpenVMS DCL Dictionary, F$INTEGER + radix
+     * qualifiers. Falls back to the previous strtol for anything else. */
+    extern long dcl_parse_int(const char *s, int *ok);
+    int iok;
+    long val = dcl_parse_int(s, &iok);
+    if (!iok) val = strtol(s, NULL, 0);
     snprintf(result, result_size, "%ld", val);
     return 0;
 }

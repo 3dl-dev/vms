@@ -51,6 +51,7 @@ struct dcl_context *dcl_get_context(void)
 int dcl_execute_line(const char *line);
 int dcl_execute_script(const char *filename, int argc, char **argv);
 int dcl_format_directory(const char *linux_path, char *vms_dir, size_t dir_size);
+void dcl_set_status(struct dcl_context *ctx, int status);
 
 /* Login script paths */
 #include "ovmx_layout.h"
@@ -530,9 +531,9 @@ static void setup_session(struct dcl_context *ctx)
     /* Register built-in commands */
     dcl_register_builtins();
 
-    /* Set initial special symbols */
-    dcl_sym_set("$STATUS", "1", DCL_SYM_GLOBAL);
-    dcl_sym_set("$SEVERITY", "1", DCL_SYM_GLOBAL);
+    /* Set initial special symbols. $STATUS is rendered VMS-style ("%X00000001"
+     * for SS$_NORMAL), not decimal -- see dcl_set_status(). */
+    dcl_set_status(ctx, SS$_NORMAL);
     dcl_sym_set("$RESTART", "FALSE", DCL_SYM_GLOBAL);
 
     /* Set user symbol */
@@ -574,19 +575,13 @@ static int process_line(struct dcl_context *ctx, char *line)
     char substituted[DCL_MAX_LINE];
     dcl_sym_substitute(line, substituted, sizeof(substituted));
 
-    /* Execute the command */
+    /* Execute the command. $STATUS/$SEVERITY are refreshed inside
+     * dcl_execute_command() for every real command (including one that was not
+     * found); control-flow verbs (IF/GOTO/assignment/...) deliberately leave
+     * $STATUS untouched so `IF .NOT. $STATUS` can still see the failing
+     * command's status -- so process_line() must NOT re-stamp $STATUS here, or
+     * it would clobber that value with the control command's success. */
     int status = dcl_execute_line(substituted);
-
-    /* Update $STATUS and $SEVERITY */
-    ctx->last_status = (uint32_t)status;
-    ctx->last_severity = (uint32_t)(status & 7);
-
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%d", status);
-    dcl_sym_set("$STATUS", buf, DCL_SYM_GLOBAL);
-    snprintf(buf, sizeof(buf), "%d", status & 7);
-    dcl_sym_set("$SEVERITY", buf, DCL_SYM_GLOBAL);
-
     return status;
 }
 

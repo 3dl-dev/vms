@@ -364,3 +364,26 @@ target_include_directories(test_libvms_conformance_constants PRIVATE
 )
 add_test(NAME test_libvms_conformance_constants
          COMMAND test_libvms_conformance_constants)
+
+# vms-0d75 -- reflexive Ctrl/T status line. Compiles the PRODUCTION renderer
+# (src/vmsdcl/dcl_terminal.c) directly and drives dcl_format_ctrl_t_status()
+# against a struct vms_procinfo -- the executive's real $GETJPI contract --
+# so it proves the format and real-field consumption at the true data
+# boundary, no monkeypatch. dcl_terminal.c needs the DCL, libvms and
+# libvmssys (vms_kif.h -> vms_ioctl.h) include dirs; the vms lib supplies its
+# incidental vms_kif_procscan() reference. _DEFAULT_SOURCE for localtime_r.
+add_executable(test_libvms_ctrl_t_status
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_ctrl_t_status.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_terminal.c)
+target_include_directories(test_libvms_ctrl_t_status PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
+    ${VMS_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
+)
+target_compile_definitions(test_libvms_ctrl_t_status PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+target_link_libraries(test_libvms_ctrl_t_status PRIVATE vms pthread m)
+add_test(NAME test_libvms_ctrl_t_status
+         COMMAND test_libvms_ctrl_t_status)

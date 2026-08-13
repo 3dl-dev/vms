@@ -17,8 +17,14 @@
 #include <errno.h>
 #include <termios.h>
 #include <ctype.h>
+#include <time.h>
+#include <inttypes.h>
 
 #include "dcl/terminal.h"
+#include "ssdef.h"
+/* struct vms_procinfo + VMS_PI_V_* valid-bit mask (the executive's $GETJPI
+ * contract) -- src/libvmssys/vms_kif.h pulls src/kernel/vms_ioctl.h. */
+#include "vms_kif.h"
 
 /* Path to the shared terminal device table */
 #include "ovmx_layout.h"
@@ -256,5 +262,119 @@ void vms_term_deallocate(const char *device_name)
 
     flock(fileno(fp), LOCK_UN);
     fclose(fp);
+}
+
+/*
+ * dcl_format_ctrl_t_status - render the reflexive Ctrl/T status line.
+ *
+ * FORMAT (CLEAN-ROOM, Rule 8). The one-line layout and every field are from
+ * PUBLIC OpenVMS documentation -- the OpenVMS User's Manual, "Interrupting
+ * Command Execution" / "Ctrl/T", which documents:
+ *
+ *     GREEN::MCCARTHY  13:45:02 EVE    CPU=00:00:03.33 PF=778 IO=295 MEM=315
+ *
+ * and defines the fields as: node and user name; current time of day; the
+ * name of the image (program) executing; charged CPU time in
+ * hours:minutes:seconds.hundredths; the accumulated page-fault count; the
+ * level of I/O activity; and memory usage listed in CPU-specific pages.
+ * (No VSI/HPE binary was disassembled; format taken from the manual text.)
+ *
+ * DATA SOURCE (INV-6 / Rule 9 / Rule 11). Every measured field is READ from
+ * the executive's $GETJPI row (struct vms_procinfo) the caller already
+ * fetched with vms_kif_getjpi_self() -- the SAME source SHOW PROCESS reads
+ * (src/vmsdcl/dcl_cmd_show.c). This function fabricates NOTHING: a field
+ * whose fields_valid bit is CLEAR is OMITTED, never printed as a plausible
+ * zero.
+ *
+ *   node   caller-supplied (ovmx_node_name() -> SCSNODE, the VMS node
+ *          identity, NOT the Linux hostname -- INV-4).
+ *   user   info->username (executive-stamped identity, "" if none).
+ *   time   now, formatted as local HH:MM:SS.
+ *   image  caller-supplied JPI$_IMAGNAME. At the DCL prompt no image is
+ *          activated, so this is empty and the field collapses -- which is
+ *          what VMS shows there (the field names the executing image, and
+ *          none is). OVMX does not yet source JPI$_IMAGNAME while an image
+ *          runs; see the gap note in dcl_main.c's Ctrl-T handler.
+ *   CPU    info->cputim (JPI$_CPUTIM, 10ms units) if VMS_PI_V_CPUTIM.
+ *   PF     info->pageflts (JPI$_PAGEFLTS) if VMS_PI_V_PAGEFLTS.
+ *   IO     JPI$_DIRIO+JPI$_BUFIO. OVMX's executive carries these
+ *          STRUCTURAL, valid bit CLEAR (no faithful direct/buffered I/O
+ *          split exists -- src/kernel/vms_ioctl.h), so the field is OMITTED
+ *          rather than fabricated (INV-6). Sourcing it is deferred work.
+ *   MEM    info->pages (JPI$_PPGCNT, resident pages) if VMS_PI_V_PAGES.
+ *
+ * Returns SS$_NORMAL on success, SS$_BADPARAM on a bad argument. The line is
+ * written WITHOUT a trailing newline; the caller frames it.
+ */
+uint32_t dcl_format_ctrl_t_status(const struct vms_procinfo *info,
+                                  const char *node,
+                                  const char *image,
+                                  time_t now,
+                                  char *out, size_t outlen)
+{
+    if (!info || !out || outlen == 0)
+        return SS$_BADPARAM;
+
+    const char *nodestr = (node && node[0]) ? node : "";
+    const char *userstr = info->username;   /* executive identity; may be "" */
+
+    struct tm tmv;
+    localtime_r(&now, &tmv);
+
+    /* Leading identity + time + (optional) image, VMS spacing. */
+    int n = snprintf(out, outlen, "%s::%s   %02d:%02d:%02d   ",
+                     nodestr, userstr,
+                     tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+    if (n < 0 || (size_t)n >= outlen)
+        return SS$_BADPARAM;
+    size_t len = (size_t)n;
+
+    if (image && image[0]) {
+        n = snprintf(out + len, outlen - len, "%s   ", image);
+        if (n < 0 || (size_t)n >= outlen - len)
+            return SS$_BADPARAM;
+        len += (size_t)n;
+    }
+
+    /* CPU=hh:mm:ss.cc -- JPI$_CPUTIM is in 10ms units (centiseconds). */
+    if (info->fields_valid & VMS_PI_V_CPUTIM) {
+        unsigned long cs = info->cputim;
+        unsigned long total_sec = cs / 100UL;
+        unsigned long cc = cs % 100UL;
+        unsigned long hh = total_sec / 3600UL;
+        unsigned long mm = (total_sec % 3600UL) / 60UL;
+        unsigned long ss = total_sec % 60UL;
+        n = snprintf(out + len, outlen - len,
+                     "CPU=%02lu:%02lu:%02lu.%02lu", hh, mm, ss, cc);
+        if (n < 0 || (size_t)n >= outlen - len)
+            return SS$_BADPARAM;
+        len += (size_t)n;
+    }
+
+    if (info->fields_valid & VMS_PI_V_PAGEFLTS) {
+        n = snprintf(out + len, outlen - len, " PF=%" PRIu32, info->pageflts);
+        if (n < 0 || (size_t)n >= outlen - len)
+            return SS$_BADPARAM;
+        len += (size_t)n;
+    }
+
+    /* IO deliberately omitted: JPI$_DIRIO/BUFIO are unsourced in OVMX
+     * (valid bit never set). Never fabricate it (INV-6). */
+    if (info->fields_valid & (VMS_PI_V_DIRIO | VMS_PI_V_BUFIO)) {
+        n = snprintf(out + len, outlen - len, " IO=%" PRIu32,
+                     info->dirio + info->bufio);
+        if (n < 0 || (size_t)n >= outlen - len)
+            return SS$_BADPARAM;
+        len += (size_t)n;
+    }
+
+    if (info->fields_valid & VMS_PI_V_PAGES) {
+        n = snprintf(out + len, outlen - len, " MEM=%" PRIu32, info->pages);
+        if (n < 0 || (size_t)n >= outlen - len)
+            return SS$_BADPARAM;
+        len += (size_t)n;
+    }
+
+    return SS$_NORMAL;
 }
 

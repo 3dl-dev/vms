@@ -147,4 +147,22 @@ struct terminal_device {
  */
 void vms_term_deallocate(const char *device_name);
 
+/*
+ * dcl_format_ctrl_t_status - render the reflexive Ctrl/T status line into
+ * `out` from an executive $GETJPI row. Pure function (no I/O, no executive
+ * call): the caller supplies the vms_procinfo it already read with
+ * vms_kif_getjpi_self(), the VMS node name, the executing image name (""
+ * when none), and the wall-clock time. See the definition in
+ * dcl_terminal.c for the format citation and per-field data sourcing.
+ * Returns SS$_NORMAL on success. `info` is const void* so this header
+ * does not have to pull the kernel ioctl structures.
+ */
+#include <time.h>
+struct vms_procinfo;
+uint32_t dcl_format_ctrl_t_status(const struct vms_procinfo *info,
+                                  const char *node,
+                                  const char *image,
+                                  time_t now,
+                                  char *out, size_t outlen);
+
 #endif /* __DCL_TERMINAL_H */

@@ -279,6 +279,79 @@ static void ctrl_c_handler(int sig)
 }
 
 /*
+ * dcl_emit_ctrl_t_status - the reflexive Ctrl/T handler.
+ *
+ * VMS prints a one-line process status when the user presses Ctrl/T, if
+ * Ctrl/T is enabled (SET CONTROL=T; disabled by default). This is the
+ * handler the input layer invokes on a Ctrl/T (0x14) keystroke.
+ *
+ * The whole line is sourced from the executive's $GETJPI row --
+ * vms_kif_getjpi_self(), the SAME reader SHOW PROCESS uses -- and rendered
+ * by dcl_format_ctrl_t_status() (dcl_terminal.c), which fabricates nothing:
+ * see its citation and per-field sourcing. If the executive is absent (no
+ * /dev/vms) $GETJPI fails and we emit NOTHING rather than a faked line
+ * (INV-6 / CLAUDE.md Rule 9).
+ *
+ * DEFERRED GAP (vms-0d75 follow-up): the image-name field is empty because
+ * OVMX does not yet source JPI$_IMAGNAME for a running image, and the "IO="
+ * token is omitted because JPI$_DIRIO/BUFIO carry no faithful OVMX source
+ * (their fields_valid bits are never set). Both are honest omissions, not
+ * fabrications; filed as a follow-up rather than filled with plausible
+ * numbers.
+ *
+ * Returns 1 if a status line was emitted, 0 otherwise (disabled or no
+ * executive) so the caller knows whether the display needs a refresh.
+ */
+static int dcl_emit_ctrl_t_status(void)
+{
+    struct dcl_context *ctx = dcl_get_context();
+    if (!ctx->ctrl_t_enabled)
+        return 0;   /* SET NOCONTROL=T (VMS default): Ctrl/T is inert */
+
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    if (!(vms_kif_getjpi_self(&info) & 1))
+        return 0;   /* no executive -> no line, never a fabricated one */
+
+    char node[64];
+    ovmx_node_name(node, sizeof(node));
+
+    char line[256];
+    /* No image name: none is activated at the DCL prompt (see the gap note
+     * above). JPI$_IMAGNAME would be sourced here once OVMX tracks it. */
+    if (dcl_format_ctrl_t_status(&info, node, "", time(NULL),
+                                 line, sizeof(line)) & 1) {
+        fputs("\r\n", stdout);
+        fputs(line, stdout);
+        fputs("\r\n", stdout);
+        fflush(stdout);
+        return 1;
+    }
+    return 0;
+}
+
+#ifdef HAVE_READLINE
+/*
+ * Readline binding for Ctrl/T (0x14). Readline's emacs default maps 0x14 to
+ * transpose-chars; this rebind gives it VMS Ctrl/T semantics instead. The
+ * status line is emitted between the current input line and a fresh redraw
+ * of it, so the reflexive line "momentarily interrupts" without disturbing
+ * what the user has typed (OpenVMS User's Manual). When Ctrl/T is disabled
+ * the keystroke is simply swallowed.
+ */
+static int dcl_ctrl_t_rl_handler(int count, int key)
+{
+    (void)count;
+    (void)key;
+    if (dcl_emit_ctrl_t_status()) {
+        rl_on_new_line();
+        rl_forced_update_display();
+    }
+    return 0;
+}
+#endif
+
+/*
  * Terminal configuration for VMS signal/EOF model.
  * - VEOF = 26 (Ctrl+Z is EOF, not Ctrl+D)
  * - VINTR = 25 (Ctrl+Y generates SIGINT for DCL interrupt)
@@ -594,6 +667,9 @@ int main(int argc, char *argv[])
         using_history();
         /* Bind Ctrl-B to previous-history (VMS-style recall key) */
         rl_bind_key(2, rl_get_previous_history);
+        /* Bind Ctrl-T (0x14) to the reflexive status-line handler, replacing
+         * readline's default transpose-chars. Gated on SET CONTROL=T. */
+        rl_bind_key(20, dcl_ctrl_t_rl_handler);
 #endif
     }
 

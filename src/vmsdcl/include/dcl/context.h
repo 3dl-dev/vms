@@ -76,6 +76,11 @@ struct dcl_context {
     int ctrl_y_enabled;
     pid_t interrupted_pid;    /* PID of Ctrl-Y stopped child (0 = none) */
 
+    /* Control-T handling (SET CONTROL=T / SET NOCONTROL=T). VMS default is
+     * DISABLED (OpenVMS User's Manual, "Interrupting Command Execution":
+     * "Ctrl/T is disabled by default"), so 0 == off until SET CONTROL=T. */
+    int ctrl_t_enabled;
+
     /* User info */
     char username[64];
     char process_name[16];

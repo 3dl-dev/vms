@@ -55,6 +55,7 @@ jobs:
       netbsd: ${{ steps.decide.outputs.netbsd }}
       netbsd_vax: ${{ steps.decide.outputs.netbsd_vax }}
       vmsfs_core_vax: ${{ steps.decide.outputs.vmsfs_core_vax }}
+      vmsfs_mount_vax: ${{ steps.decide.outputs.vmsfs_mount_vax }}
       exec_netbsd_vax: ${{ steps.decide.outputs.exec_netbsd_vax }}
       aarch64_boot: ${{ steps.decide.outputs.aarch64_boot }}
     steps:
@@ -182,6 +183,18 @@ jobs:
               - 'src/kernel-core/vmsfs/**'
               - 'src/kernel/vmsfs/vmsfs_ondisk.h'
               - 'docs/audit-ilp32-vax-vmsfs.md'
+            # The LOADABLE elf32-vax vmsfs.kmod = shared ODS-2 core + NetBSD vnode
+            # backend (src/kernel-netbsd/vmsfs) + mount helper. Distinct from
+            # vmsfs_core_vax (core only): the backend + lab-vax harness gate the
+            # per-PR kmod cross-compile and the nightly SIMH mount+read proof.
+            vmsfs_mount_vax:
+              - '.github/workflows/**'
+              - 'tools/cross-vax/**'
+              - 'src/kernel-core/vmsfs/**'
+              - 'src/kernel-netbsd/vmsfs/**'
+              - 'src/kernel/vmsfs/vmsfs_ondisk.h'
+              - 'tests/lab-vax/**'
+              - 'tests/netbsd/guest/vmsfs_mount.c'
             exec_netbsd_vax:
               - '.github/workflows/**'
               - 'tools/cross-vax/**'
@@ -207,6 +220,7 @@ jobs:
               echo "netbsd=${{ steps.filter.outputs.netbsd }}"
               echo "netbsd_vax=${{ steps.filter.outputs.netbsd_vax }}"
               echo "vmsfs_core_vax=${{ steps.filter.outputs.vmsfs_core_vax }}"
+              echo "vmsfs_mount_vax=${{ steps.filter.outputs.vmsfs_mount_vax }}"
               echo "exec_netbsd_vax=${{ steps.filter.outputs.exec_netbsd_vax }}"
               echo "aarch64_boot=${{ steps.filter.outputs.aarch64_boot }}"
             } >> "$GITHUB_OUTPUT"
@@ -220,6 +234,7 @@ jobs:
               echo "netbsd=true"
               echo "netbsd_vax=true"
               echo "vmsfs_core_vax=true"
+              echo "vmsfs_mount_vax=true"
               echo "exec_netbsd_vax=true"
               echo "aarch64_boot=true"
             } >> "$GITHUB_OUTPUT"
@@ -4194,6 +4209,162 @@ jobs:
 
       - name: Negative control — skipping modload must redden the PING assertion
         run: tests/lab-vax/run-devvms.sh negctl
+
+  # -----------------------------------------------------------------------
+  # netbsd-vax-vmsfs-crosscompile (rd vms-544d, epic vms-8e8; P4-VFS-vax).
+  #
+  # Per-PR cross-compile gate for the LOADABLE elf32-vax vmsfs.kmod = the shared
+  # ODS-2 core (src/kernel-core/vmsfs) + the NetBSD vnode backend
+  # (src/kernel-netbsd/vmsfs) + the static mount helper. The vax analog of
+  # netbsd-amd64-vmsfs-crosscompile and the loadable-module complement to
+  # vmsfs-core-elf32-vax (which compiles ONLY the core): the three vnode-backend
+  # fixes that make an OVMX ODS-2 volume mount+read on vax (register vop_parsepath,
+  # return the looked-up child unlocked, close the device FREAD|FWRITE) live in
+  # the backend, so THIS is their fast per-PR signal. It stands up the pinned
+  # vax--netbsdelf cross toolchain over a SHA512-pinned NetBSD 10.1 syssrc and
+  # cross-compiles the module at -O2 -fno-pic -Werror, asserting elf32-vax +
+  # MODULE() metadata + no GOT32 relocs. BUILD/TEST tooling, never a runtime
+  # (Rule 9). The SIMH mount+read PROOF is the nightly netbsd-vax-vmsfs-mount job.
+  # -----------------------------------------------------------------------
+  netbsd-vax-vmsfs-crosscompile:
+    name: Loadable elf32-vax vmsfs.kmod cross-compiles (vms-544d)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.vmsfs_mount_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      # Same NetBSD release the runtime harness pins (tests/lab-vax/run-vmsfs.sh);
+      # syssrc is arch-independent kernel source, so only usr/src/sys + common are
+      # extracted. A source change never re-downloads (keyed on the harness pin).
+      - name: Cache NetBSD/vax kernel sources (syssrc)
+        uses: actions/cache@v4
+        with:
+          path: .netbsd-vax-src
+          key: netbsd-vax-syssrc-${{ hashFiles('tests/lab-vax/run-vmsfs.sh') }}
+          restore-keys: |
+            netbsd-vax-syssrc-
+
+      - name: Fetch + verify + extract NetBSD/vax syssrc (kernel headers) if not cached
+        run: |
+          set -euo pipefail
+          # Source the pinned version + syssrc SHA512 from the runtime harness so
+          # the two can never drift apart.
+          VER=$(sed -n 's/.*NETBSD_VERSION:-\([0-9.]*\).*/\1/p' tests/lab-vax/run-vmsfs.sh | head -1)
+          SHA=$(sed -n 's/.*SYSSRC_SHA512:-\([0-9a-f]*\).*/\1/p' tests/lab-vax/run-vmsfs.sh | head -1)
+          URL="https://cdn.netbsd.org/pub/NetBSD/NetBSD-${VER}/source/sets/syssrc.tgz"
+          if [ ! -d .netbsd-vax-src/usr/src/sys ]; then
+            mkdir -p .netbsd-vax-src
+            curl -fSL --retry 3 -o /tmp/syssrc.tgz "$URL"
+            echo "$SHA  /tmp/syssrc.tgz" | sha512sum -c -
+            tar xzf /tmp/syssrc.tgz -C .netbsd-vax-src usr/src/sys usr/src/common
+          fi
+
+      - name: Cross-compile the loadable elf32-vax vmsfs.kmod (ODS-2 core + NetBSD vnode backend)
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  -v "$GITHUB_WORKSPACE/.netbsd-vax-src:/nbsrc:ro" \
+                  ovmx-cross-vax:latest sh tools/cross-vax/build-vmsfs-mount-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          [ "$RC" -eq 0 ] || { echo "FAIL: loadable vmsfs.kmod elf32-vax cross build exited nonzero ($RC)"; exit 1; }
+          echo "$RAW" | grep -qiF 'loadable VFS module with MODULE() metadata, no GOT32' \
+            || { echo "FAIL: did not see the loadable-module PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: artifacts were not elf32-vax -- wrong target"; exit 1; }
+          echo "PASS: the loadable vmsfs.kmod (ODS-2 core + NetBSD vnode backend) cross-compiled to elf32-vax"
+
+      - name: NEGATIVE CONTROL — a deliberately-broken vmsfs TU must fail the cross-compile
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+            -v "$GITHUB_WORKSPACE/.netbsd-vax-src:/nbsrc:ro" \
+            -e CROSSCOMPILE_NEGCTL=1 \
+            ovmx-cross-vax:latest sh tools/cross-vax/build-vmsfs-mount-vax.sh
+
+  # -----------------------------------------------------------------------
+  # netbsd-vax-vmsfs-mount (rd vms-544d, epic vms-8e8; P4-VFS-vax). The ODS-2
+  # sibling of netbsd-vax-devvms and the vax analog of netbsd-amd64-vmsfs-mount
+  # (vms-308): boot NetBSD/vax under SIMH, cross-build + modload the loadable
+  # vmsfs.kmod, MOUNT an OVMX ODS-2 volume and READ HELLO.TXT out of it through
+  # the shared ODS-2 core -- the boot-critical /vms mount that gates boot-to-DCL
+  # on vax (vms-7b1 -> vms-d59). Includes the module-absent negative control (the
+  # mount must FAIL HONESTLY with no backend loaded -- INV-6). NIGHTLY
+  # (schedule/dispatch): a full SIMH boot + the ~40-min custom MODULAR-kernel
+  # build (vax GENERIC omits the module framework) is far too heavy for a per-PR
+  # runner; the per-PR signal is netbsd-vax-vmsfs-crosscompile above.
+  # -----------------------------------------------------------------------
+  netbsd-vax-vmsfs-mount:
+    name: OVMX ODS-2 mounts+reads on NetBSD/vax under SIMH (vms-544d)
+    needs: [changes, netbsd-vax-simh]
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    # The full NetBSD src tree + build.sh obj/tools are large, rebuildable scratch
+    # -> keep them OUT of the disk cache (a literal /tmp path; the `runner'
+    # context is not available in a job-level env).
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-vmsfs-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      # Cache the built MODULAR kernel (4 MB) so the ~40-min build.sh runs only on
+      # a cold cache, keyed on the kernel-build inputs (the vax module-wiring
+      # patch + the pinned NetBSD version).
+      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
+        uses: actions/cache@v4
+        with:
+          path: .boot-cache/lab-vax/vmsfs-artifacts/netbsd-OVMX
+          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Prove — OVMX ODS-2 MOUNTS + READS on NetBSD/vax (cross-build, MODULAR kernel, modload, mount, read HELLO.TXT)
+        run: tests/lab-vax/run-vmsfs.sh prove
+
+      - name: Negative control — with the vmsfs module unloaded the ODS-2 mount+read must fail
+        run: tests/lab-vax/run-vmsfs.sh negctl
 
   # -----------------------------------------------------------------------
   # libvmssys-netbsd-vax (rd vms-9dc, epic vms-8e8; design sec 4).

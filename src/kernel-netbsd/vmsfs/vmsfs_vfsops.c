@@ -263,8 +263,15 @@ vmsfs_vfs_unmount(struct mount *mp, int mntflags)
 	if (error)
 		return error;
 
+	/*
+	 * Close the device with the SAME mode vn_bdev_openpath() opened it:
+	 * vn_bdev_open() does VOP_OPEN(FREAD | FWRITE) and bumps v_writecount, so
+	 * closing FREAD-only leaves the open/ref counts imbalanced and panics
+	 * ("vrelel: bad ref count") when the last vnode ref is dropped at unmount.
+	 * Every vn_bdev_openpath() consumer (dev/dm, dev/ccd) closes FREAD | FWRITE.
+	 */
 	if (vmp->vm_devvp != NULL)
-		(void)vn_close(vmp->vm_devvp, FREAD, curlwp->l_cred);
+		(void)vn_close(vmp->vm_devvp, FREAD | FWRITE, curlwp->l_cred);
 
 	mutex_destroy(&vmp->vm_alloc_lock);
 	kmem_free(vmp, sizeof(*vmp));
@@ -461,22 +468,24 @@ vmsfs_lookup(void *v)
 		return 0;
 	}
 
-	/* ".." resolves to the parent directory FID. */
+	/*
+	 * VOP_LOOKUP returns the child REFERENCED but UNLOCKED. In NetBSD's modern
+	 * lookup contract (kern/vfs_lookup.c: lookup_once, then the LOCKLEAF
+	 * `vn_lock(foundobj)' AFTER the VOP), namei() locks the returned vnode
+	 * itself, and it does NOT expect the parent to be unlocked here. A backend
+	 * that vn_lock()s the child (or VOP_UNLOCK()s the parent) causes namei to
+	 * re-lock the same v_lock -> "rw_vector_enter: locking against myself".
+	 * Every stock fs (cd9660, tmpfs, ...) just sets *vpp = <vcache_get result>
+	 * and returns; do the same for `..' and for a normal component.
+	 */
 	if (cnp->cn_flags & ISDOTDOT) {
 		uint32_t pfid = dnode->vn_parent_fid;
 
 		if (pfid == 0)
 			pfid = VMSFS_FID_MFD;
-		VOP_UNLOCK(dvp);
 		error = vcache_get(dvp->v_mount, &pfid, sizeof(pfid), &vp);
-		if (error == 0)
-			error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
-		vn_lock(dvp, LK_EXCLUSIVE | LK_RETRY);
-		if (error) {
-			if (vp != NULL)
-				vrele(vp);
+		if (error)
 			return error;
-		}
 		*vpp = vp;
 		return 0;
 	}
@@ -496,12 +505,7 @@ vmsfs_lookup(void *v)
 	error = vcache_get(dvp->v_mount, &fid, sizeof(fid), &vp);
 	if (error)
 		return error;
-	error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
-	if (error) {
-		vrele(vp);
-		return error;
-	}
-	*vpp = vp;
+	*vpp = vp;		/* referenced, UNLOCKED -- namei locks it */
 	return 0;
 }
 
@@ -794,6 +798,16 @@ int (**vmsfs_vnodeop_p)(void *);
 
 static const struct vnodeopv_entry_desc vmsfs_vnodeop_entries[] = {
 	{ &vop_default_desc,	vn_default_error },
+	/*
+	 * REQUIRED. namei() computes cnp->cn_namelen for every path component by
+	 * calling VOP_PARSEPATH on the directory vnode (kern/vfs_lookup.c). A fs
+	 * that omits this op gets vop_default (vn_default_error), so cn_namelen is
+	 * left stale/garbage while cn_nameptr is correct -- lookups then fail with
+	 * ENOENT/ENAMETOOLONG/ENOTDIR. genfs_parsepath is the stock parser every
+	 * NetBSD fs uses (cf. cd9660_vnops.c). Its absence was masked on LP64 but
+	 * broke every vmsfs lookup on ILP32/vax.
+	 */
+	{ &vop_parsepath_desc,	genfs_parsepath },
 	{ &vop_lookup_desc,	vmsfs_lookup },		/* v2 */
 	{ &vop_open_desc,	vmsfs_open },
 	{ &vop_close_desc,	vmsfs_close },

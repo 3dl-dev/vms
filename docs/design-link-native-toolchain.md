@@ -122,6 +122,22 @@ retire with `PRIVATE_PROCEDURE`/`PRIVATE_DATA`; (3) add new symbols only at the
 (I64) / `IMGACT-F-SYMVECMIS` (Alpha). *(OVMX picks the authentic message set at
 implementation; see §5.6.)*
 
+**OVMX enforcement of these rules (bead vms-bd1).** The universal ORDER of the two
+largest OVMX producers is frozen in checked-in, append-only manifests —
+`src/vmslink/libvmssys_shr.vec` (LIBVMSSYS$SHR's `vms_kif_*` client vector) and
+`src/vmslink/libvms_shr.vec` (LIBVMS$SHR's system-service/RTL universals). A line's
+position in the manifest **is** its symbol-vector index; the build recipes
+(`mk_vmssys_shr.sh`, `mk_libvms_shr.sh`) and every native-link harness derive the
+`--symbol-vector` from these files (via `symvec_emit.sh`) instead of hand-keeping
+their own copies — LIBVMS$SHR was previously emitted name-**sorted**, which shifted
+later indices whenever a name sorted into the middle, and the `vms_kif_*` vector had
+drifted across seven hand-kept copies. `mk_libvms_shr.sh` now emits the manifest
+order first, then appends any newly-discovered universal at the end (rule 3), and
+fails loudly if a frozen universal vanishes (forcing retire-in-place, rules 1–2).
+The standing gate `tests/integration/test_symvec_freeze.sh` proves, from source on
+every `ctest` run, that the committed golden `*.vec.frozen` is still an exact ordered
+prefix of each manifest — reorder or drop ⇒ RED, append ⇒ GREEN.
+
 ### 5.4 `GSMATCH=` — version match  ✅ grounded
 `GSMATCH=match-control,major-id,minor-id` stored in the image. At activation the
 activator compares the executable's link-time GSMATCH vs the shareable image found:

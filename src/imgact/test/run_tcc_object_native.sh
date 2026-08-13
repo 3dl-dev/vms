@@ -113,9 +113,15 @@ for c in vms_string vms_snprintf vms_futex vms_stdio vms_math vms_runtime_init v
 done
 $CC -fPIC -mno-outline-atomics -c -o "$WORK/sys_syscall.o" "$LIBVMSSYS_DIR/arch/aarch64/syscall.S"
 SYSOBJS="$SYSOBJS $WORK/sys_syscall.o"
+# LIBVMSSYS$SHR universals: single-sourced from the frozen, append-only
+# manifest src/vmslink/libvmssys_shr.vec (bead vms-bd1). This was one of six
+# hand-kept inline copies of the vector that had drifted from mk_vmssys_shr.sh's
+# order; all six now derive it from the manifest via symvec_emit.sh.
+SYS_VEC=$(sh "$LINK_DIR/symvec_emit.sh" "$LINK_DIR/libvmssys_shr.vec")
 "$WORK/LINK.EXE" --shareable \
-    --symbol-vector "vms_strlen=PROCEDURE,vms_kif_open=PROCEDURE,vms_kif_enq=PROCEDURE,vms_kif_deq=PROCEDURE,vms_kif_convert=PROCEDURE,vms_kif_assign=PROCEDURE,vms_kif_dassgn=PROCEDURE,vms_kif_getdvi_chan=PROCEDURE,vms_kif_getdvi_devnam=PROCEDURE,vms_kif_devscan=PROCEDURE,vms_kif_setprn=PROCEDURE,vms_kif_setprv=PROCEDURE,vms_kif_getjpi_self=PROCEDURE,vms_kif_getjpi_pid=PROCEDURE,vms_kif_getjpi_prcnam=PROCEDURE,vms_kif_procscan=PROCEDURE,vms_kif_setef=PROCEDURE,vms_kif_clref=PROCEDURE,vms_kif_readef=PROCEDURE,vms_kif_waitfr=PROCEDURE,vms_kif_wflor=PROCEDURE,vms_kif_wfland=PROCEDURE,vms_kif_ascefc=PROCEDURE,vms_kif_dacefc=PROCEDURE,vms_kif_dlcefc=PROCEDURE,vms_kif_dclast=PROCEDURE,vms_kif_setast=PROCEDURE,vms_kif_deliverast=PROCEDURE,vms_kif_lnm_define=PROCEDURE,vms_kif_lnm_delete=PROCEDURE,vms_kif_lnm_translate=PROCEDURE,vms_kif_mbx_create=PROCEDURE,vms_kif_mbx_assign=PROCEDURE,vms_kif_mbx_delmbx=PROCEDURE,vms_kif_mbx_write=PROCEDURE,vms_kif_mbx_read=PROCEDURE,vms_kif_p0_map=PROCEDURE,vms_kif_p0_unmap=PROCEDURE,vms_kif_p1_map=PROCEDURE,vms_kif_enter_image=PROCEDURE,vms_kif_image_rundown=PROCEDURE,vms_kif_p1_protect=PROCEDURE,vms_kif_lnm_enumerate=PROCEDURE,vms_kif_disk_resolve=PROCEDURE,vms_kif_chkpriv=PROCEDURE,vms_kif_alloc=PROCEDURE,vms_kif_dalloc=PROCEDURE,vms_kif_establish_system=PROCEDURE" \
+    --symbol-vector "$SYS_VEC" \
     --gsmatch LEQUAL,1,0 -o "$SYSLIB/LIBVMSSYS\$SHR.EXE" $SYSOBJS
+
 
 echo "== LIBVMSPROCESS\$SHR.EXE =="
 CC="$CC" sh "$LINK_DIR/mk_vmsprocess_shr.sh" \

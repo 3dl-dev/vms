@@ -293,6 +293,26 @@ if(BUILD_TESTS)
     set_tests_properties(runtime_target_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
 
+    # vms-bd1 standing gate: the b65 shareable symbol vectors (LIBVMSSYS$SHR
+    # vms_kif_* + LIBVMS$SHR universals) are FROZEN and APPEND-ONLY, so GSMATCH
+    # LEQUAL stays sound once vmsrms/DCL bind universal indices. Asserts the
+    # committed golden (src/vmslink/*.vec.frozen) is still an exact ordered
+    # prefix of the live manifest (no reorder/drop), no duplicate names, and no
+    # harness re-grew an inline copy of the vector. Pure source scan -- no build.
+    add_test(NAME symvec_freeze_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_symvec_freeze.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(symvec_freeze_gate PROPERTIES
+        LABELS "integration;authenticity;toolchain" TIMEOUT 60)
+
+    # Negative control for the above -- proves the freeze gate reddens on reorder,
+    # drop, duplicate, and a re-grown inline vector copy, and stays green on a
+    # legal append, in a disposable synthetic source tree.
+    add_test(NAME symvec_freeze_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_symvec_freeze_negctl.sh)
+    set_tests_properties(symvec_freeze_negctl PROPERTIES
+        LABELS "integration;authenticity;toolchain" TIMEOUT 60)
+
     # vms-4847 standing gate: every *_no_python3.cmake path a CMakeLists.txt
     # else() branch names must resolve to a file `git ls-files` actually
     # tracks. The blanket `*.cmake` .gitignore rule swallowed three (later

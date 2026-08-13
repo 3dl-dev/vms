@@ -2,9 +2,12 @@
 
 add_executable(vms_login
     vms_login.c
+    loginout_display.c   # OpenVMS-faithful login-info block (vms-417)
+    mail_notify.c        # shared new-mail counter (vms-417)
 )
 
 target_include_directories(vms_login PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${VMS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
     ${VMS_PROCESS_INCLUDE_DIR}
@@ -77,6 +80,7 @@ install(TARGETS vms_authorize RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
 add_executable(vms_mail
     vms_mail.c
+    mail_notify.c        # shared maildir/count helpers (vms-417)
 )
 
 target_include_directories(vms_mail PRIVATE

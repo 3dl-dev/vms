@@ -43,9 +43,10 @@
 #include "vms/logical.h"
 /* Whose mailbox this is comes from the executive (vms-a30). */
 #include "vms_kif.h"
+/* Shared mail storage layout + count/path helpers (vms-417): MAIL_SUBDIR,
+ * MAIL_INDEX, get_user_homedir(), build_maildir(), mail_count_unread(). */
+#include "vms_mail_notify.h"
 #define SYSUAF_PATH     VMS_SYSUAF_PATH
-#define MAIL_SUBDIR     ".vmsmail"
-#define MAIL_INDEX      "MAIL.IDX"
 #define MAX_MESSAGES    1000
 #define MAX_SUBJECT     256
 #define MAX_USERNAME    64
@@ -154,70 +155,14 @@ static int user_exists(const char *username)
     return 0;
 }
 
-/* Get home directory for a VMS username */
-static int get_user_homedir(const char *username, char *homedir, size_t sz)
-{
-    /* Try sysuaf.dat first (default_dir field) */
-    char sysuaf_linux2[1024];
-    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux2, sizeof(sysuaf_linux2));
-    FILE *fp = fopen(sysuaf_linux2, "r");
-    if (fp) {
-        char line[512];
-        while (fgets(line, sizeof(line), fp)) {
-            if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
-                continue;
-            str_trim(line);
-            char *fields[7];
-            char *p = line;
-            int nf = 0;
-            for (nf = 0; nf < 7 && p; nf++) {
-                fields[nf] = p;
-                char *delim = strchr(p, '|');
-                if (delim) { *delim = '\0'; p = delim + 1; }
-                else p = NULL;
-            }
-            if (nf < 5) continue;
-            char uname[MAX_USERNAME];
-            strncpy(uname, fields[0], sizeof(uname) - 1);
-            uname[sizeof(uname) - 1] = '\0';
-            str_upcase(uname);
-            char search[MAX_USERNAME];
-            strncpy(search, username, sizeof(search) - 1);
-            search[sizeof(search) - 1] = '\0';
-            str_upcase(search);
-            if (strcmp(uname, search) == 0) {
-                strncpy(homedir, fields[4], sz - 1);
-                homedir[sz - 1] = '\0';
-                fclose(fp);
-                return 0;
-            }
-        }
-        fclose(fp);
-    }
-
-    /*
-     * DELETED, NOT REPLACED (vms-a30): the /etc/passwd fallback that
-     * stood here handed back pw_dir -- a Linux home directory -- as a
-     * VMS account's default directory. Same defect as in user_exists():
-     * SYSUAF answers this or nothing does.
-     */
-    return -1;
-}
-
 /* ------------------------------------------------------------------ */
 /* Mail directory / index management                                   */
+/*                                                                     */
+/* get_user_homedir() and build_maildir() moved to tools/mail_notify.c */
+/* (declared in vms_mail_notify.h) so the login-time new-mail          */
+/* notification shares MAIL's exact storage layout -- one implementation, */
+/* one mailbox path. (vms-417)                                          */
 /* ------------------------------------------------------------------ */
-
-/* Build maildir path for a given username */
-static void build_maildir(const char *username, char *out, size_t sz)
-{
-    char homedir[4096];
-    if (get_user_homedir(username, homedir, sizeof(homedir)) != 0) {
-        /* Fallback */
-        snprintf(homedir, sizeof(homedir), "/home/%s", username);
-    }
-    snprintf(out, sz, "%s/%s", homedir, MAIL_SUBDIR);
-}
 
 /* Ensure maildir exists */
 static int ensure_maildir(const char *maildir)
@@ -809,46 +754,8 @@ static void interactive_loop(void)
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* New-mail check function (for use by login notification)            */
-/* ------------------------------------------------------------------ */
-
-int mail_count_unread(const char *username)
-{
-    char maildir[4096];
-    build_maildir(username, maildir, sizeof(maildir));
-
-    char idxpath[4096];
-    snprintf(idxpath, sizeof(idxpath), "%s/%s", maildir, MAIL_INDEX);
-
-    FILE *fp = fopen(idxpath, "r");
-    if (!fp) return 0;
-
-    int count = 0;
-    char line[MAX_LINE];
-    while (fgets(line, sizeof(line), fp)) {
-        str_trim(line);
-        if (line[0] == '#' || line[0] == '\0') continue;
-
-        /* Parse: NUMBER|READ|DELETED|... */
-        char tmp[MAX_LINE];
-        strncpy(tmp, line, sizeof(tmp) - 1);
-        tmp[sizeof(tmp) - 1] = '\0';
-
-        char *tok = strtok(tmp, "|");
-        if (!tok) continue; /* number */
-        tok = strtok(NULL, "|");
-        if (!tok) continue;
-        int read = atoi(tok);
-        tok = strtok(NULL, "|");
-        if (!tok) continue;
-        int deleted = atoi(tok);
-
-        if (!read && !deleted) count++;
-    }
-    fclose(fp);
-    return count;
-}
+/* mail_count_unread() moved to tools/mail_notify.c (vms-417) -- see the
+ * "Mail directory / index management" note above. */
 
 /* ------------------------------------------------------------------ */
 /* main                                                                */

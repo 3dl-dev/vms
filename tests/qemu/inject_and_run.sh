@@ -130,6 +130,16 @@ echo "--- rebuilding DCL.EXE (the user-visible command layer) ---"
 ( cd /src/repo && cmake --build build-static --target vmsdcl \
                         --parallel "$(nproc)" ) || exit 4
 
+# MMK.EXE is a SUBJECT test_syssvc_mmk_drive drives, not a suite, so nothing
+# above builds it -- and the mmk-drive-command-not-sent defect mutates a source
+# (tests/corpus/tier3-mmk/ovmx/ovmx_mmk_sp.c) that is compiled ONLY into this
+# image. Without this rebuild + the re-stage below, that defect would inject into
+# a source the harness never recompiled and run against the pristine image-build
+# MMK.EXE -- the exact stale-binary hole the DCL.EXE two-copies note documents.
+echo "--- rebuilding MMK.EXE (the exec-drive subject, vms-b23) ---"
+( cd /src/repo && cmake --build build-static --target mmk_native \
+                        --parallel "$(nproc)" ) || exit 4
+
 echo "--- re-staging the initramfs ---"
 cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
 # Absence is FATAL, never skipped, exactly as in the image build: a missing
@@ -150,6 +160,13 @@ cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
 # output. Both copies must be the SAME freshly rebuilt binary.
 cp /src/repo/build-static/bin/DCL.EXE /initramfs/bin/DCL.EXE || exit 4
 cp /src/repo/build-static/bin/DCL.EXE /initramfs/tests/DCL.EXE || exit 4
+# MMK.EXE + DCL.EXE at SYS$SYSTEM, the SAME two paths the image build stages
+# (tests/qemu/Dockerfile, vms-b23): test_syssvc_mmk_drive execs MMK.EXE there
+# and MMK's lib$spawn resolves SYS$SYSTEM:DCL.EXE. Both must be the freshly
+# rebuilt binaries so the mmk-drive-command-not-sent mutation actually runs.
+mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE || exit 4
+cp /src/repo/build-static/bin/MMK.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE || exit 4
+cp /src/repo/build-static/bin/DCL.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE || exit 4
 for f in /src/tests/qemu/test_*; do
     [ -x "$f" ] && cp "$f" /initramfs/tests/
 done

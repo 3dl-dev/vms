@@ -23,6 +23,7 @@
 #include "dcl/vms_messages.h"
 #include "ssdef.h"
 #include "stsdef.h"
+#include "rmsdef.h"
 #include "vmsfs/filespec.h"
 #include "vmsfs/version.h"
 #include "vmsqueue.h"
@@ -1825,8 +1826,59 @@ int cmd_create(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    char linux_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
+    /*
+     * VMS CREATE mints a NEW version of the file — it never truncates an
+     * existing one. So the output version defaults exactly as COPY's does:
+     * one greater than the highest existing version of the same name.type
+     * (else the name is written unversioned when none exists yet), and an
+     * explicit output version ;n that already exists is refused rather than
+     * silently overwritten. This is the same never-overwrite rule COPY/RENAME
+     * already follow via resolve_out_version(), applied to CREATE.
+     *
+     * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, CREATE —
+     * "creates a sequential disk file" from SYS$INPUT and, like every RMS
+     * file creation, assigns the next-higher version; and VSI OpenVMS User's
+     * Manual, "Version Numbers" — creating a file whose name.type already
+     * exists produces a new, higher version rather than replacing the
+     * existing one. (Before this fix OVMX CREATE fopen("w")-truncated the
+     * resolved highest version, silently destroying its contents — vms-73b.)
+     */
+    char cre_dir[1024], cre_pat[512], cre_vspec[64];
+    int  cre_hasver;
+    split_file_spec(ctx, cmd->params[0], cre_dir, sizeof(cre_dir),
+                    cre_pat, sizeof(cre_pat),
+                    cre_vspec, sizeof(cre_vspec), &cre_hasver);
+
+    char cre_name[256], cre_type[256];
+    split_name_type(cre_pat, cre_name, sizeof(cre_name),
+                    cre_type, sizeof(cre_type));
+
+    int cre_ver = 0;
+    if (!resolve_out_version(cre_dir, cre_name, cre_type,
+                             cre_hasver, cre_vspec, /*new_version=*/0,
+                             &cre_ver)) {
+        dcl_error("RMS", 2, "FEX",
+                  "file already exists, not superseded - %s.%s;%d",
+                  cre_name, cre_type, cre_ver);
+        return RMS$_FEX;
+    }
+
+    char cre_file[600];
+    if (cre_ver > 0) {
+        if (cre_type[0])
+            snprintf(cre_file, sizeof(cre_file), "%s.%s;%d",
+                     cre_name, cre_type, cre_ver);
+        else
+            snprintf(cre_file, sizeof(cre_file), "%s;%d", cre_name, cre_ver);
+    } else {
+        if (cre_type[0])
+            snprintf(cre_file, sizeof(cre_file), "%s.%s", cre_name, cre_type);
+        else
+            snprintf(cre_file, sizeof(cre_file), "%s", cre_name);
+    }
+
+    char linux_path[2600];   /* dir (<=1024) + name.type;ver (<=600), as COPY */
+    snprintf(linux_path, sizeof(linux_path), "%s%s", cre_dir, cre_file);
 
     FILE *fp = fopen(linux_path, "w");
     if (!fp) {

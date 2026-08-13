@@ -85,9 +85,20 @@ RUN set -eux; cd /tmp; \
     cd /tmp; rm -rf build-binutils "binutils-${BINUTILS_VERSION}" "binutils-${BINUTILS_VERSION}.tar.xz"
 
 # ------------------------------------------------------------------
-# gcc (C only) + libgcc for vax--netbsdelf, against the NetBSD sysroot. The heavy
-# build tree is created and removed inside this one RUN so the committed layer is
-# just the installed compiler; peak disk lives only during the RUN.
+# gcc (C only) + libgcc + libatomic for vax--netbsdelf, against the NetBSD
+# sysroot. The heavy build tree is created and removed inside this one RUN so the
+# committed layer is just the installed compiler; peak disk lives only during
+# the RUN.
+#
+# libatomic is REQUIRED (was --disable-libatomic, vms-271): VAX is 32-bit ILP32
+# with no lock-free 8-byte atomic instruction, so any `__atomic_*_n` on a
+# 64-bit object -- e.g. the executive LNM arena's `uint64_t generation` seqlock
+# read in libvmssys vms_kif.c (lnm_gen_load) -- lowers to a libatomic call
+# (__atomic_load_8). Without libatomic those are undefined references at link
+# time, which blocked the link proofs of every userspace library above
+# libvmssys that touches the arena (vmslnm/vmsfs/vmsrms, and next vmsdcl). The
+# arena `generation` is a kernel<->userspace ABI field and stays 64-bit;
+# libatomic's lock-based 8-byte ops give a correct atomic read on VAX.
 # ------------------------------------------------------------------
 RUN set -eux; cd /tmp; \
     wget -q "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz"; \
@@ -98,11 +109,12 @@ RUN set -eux; cd /tmp; \
         --enable-languages=c \
         --disable-nls --disable-werror --disable-multilib \
         --disable-libssp --disable-libquadmath --disable-libgomp \
-        --disable-libatomic --disable-libvtv --disable-shared \
+        --enable-libatomic --disable-libvtv --disable-shared \
         --with-gnu-as --with-gnu-ld; \
     make -j"$(nproc)" all-gcc; \
     make -j"$(nproc)" all-target-libgcc; \
-    make install-gcc install-target-libgcc; \
+    make -j"$(nproc)" all-target-libatomic; \
+    make install-gcc install-target-libgcc install-target-libatomic; \
     cd /tmp; rm -rf build-gcc "gcc-${GCC_VERSION}" "gcc-${GCC_VERSION}.tar.xz"; \
     "$PREFIX/bin/${TARGET}-gcc" --version
 

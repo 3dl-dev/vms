@@ -107,6 +107,12 @@ extern uint32_t      lnm_table_enumerate(lnm_table_t *table,
 
 /* Global static manager instance, protected by pthread_once */
 static lnm_manager_t *g_manager = NULL;
+/* Copyable initializer object. PTHREAD_ONCE_INIT is a braced aggregate on some
+ * libcs (NetBSD/vax) where it is legal only in a declaration, not an assignment
+ * -- it is a bare 0 on glibc, which is why `once = PTHREAD_ONCE_INIT;` compiled
+ * on Linux but not cross for netbsd-vax. Copying from a real const object
+ * initialized with the macro resets the guard portably on both. */
+static const pthread_once_t g_manager_once_init = PTHREAD_ONCE_INIT;
 static pthread_once_t g_manager_once = PTHREAD_ONCE_INIT;
 
 /*
@@ -254,8 +260,11 @@ void lnm_shutdown(lnm_manager_t *mgr)
 
     if (g_manager == mgr) {
         g_manager = NULL;
-        /* Reset so lnm_get_manager() can re-initialize if called again */
-        g_manager_once = PTHREAD_ONCE_INIT;
+        /* Reset so lnm_get_manager() can re-initialize if called again.
+         * Copy from the const init object -- see g_manager_once_init: a bare
+         * `= PTHREAD_ONCE_INIT` is not a portable assignment (braced aggregate
+         * on netbsd-vax). */
+        g_manager_once = g_manager_once_init;
     }
 
     free(mgr);

@@ -8,7 +8,7 @@
  * vms-d37/vms-aba made LNM$SYSTEM/LNM$GROUP/LNM$JOB executive-resident, but
  * ANY registered process could write LNM$SYSTEM or LNM$GROUP -- the
  * privilege check was explicitly deferred (see the removed comment this
- * item replaces in src/kernel/vms_lnm.c) pending an oracle pin for the
+ * item replaces in src/kernel-core/vms_lnm.c) pending an oracle pin for the
  * SYSNAM/GRPNAM bit values. This suite is the regression proof for the
  * check vms-5b7 adds: real, documented VMS behaviour (OpenVMS DCL
  * Dictionary, DEFINE) is that creating or deleting a name in LNM$SYSTEM
@@ -45,7 +45,7 @@
  *
  * NEGATIVE CONTROL (NEW-EXECUTIVE-TEST rule, tests/qemu/facility_defects.sh):
  * anchored by the lnm-privilege-check-bypassed defect, which makes both
- * privilege switches in src/kernel/vms_lnm.c unconditionally fall through
+ * privilege switches in src/kernel-core/vms_lnm.c unconditionally fall through
  * (as if every caller held the privilege), reddening exactly the four
  * "refused" assertions below and no others -- the arena write/read paths,
  * the SYSPRV/GRPPRV alternates and the JOB no-privilege case are all

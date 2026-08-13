@@ -83,7 +83,7 @@
 # the mutation target; see its own entry in facility_defects.sh for what it
 # covers and why.
 # Raised to 62 by vms-d37's lnm-delete-noop -- the first mutation targeting
-# kernel/vms_lnm.c (executive-resident LNM$SYSTEM), anchoring the new
+# kernel-core/vms_lnm.c (executive-resident LNM$SYSTEM), anchoring the new
 # test_syssvc_lnm_crossproc suite's cross-process DEASSIGN/SYSTEM assertion.
 # See its own entry in facility_defects.sh for what it covers and why.
 # Raised to 63 by vms-4d7's register-continue-identity-dropped -- anchors the
@@ -99,7 +99,7 @@
 # Raised to 65 by vms-aba's lnm-group-scope-collapsed -- anchors the new
 # test_syssvc_lnm_groupjob suite (LNM$GROUP/LNM$JOB executive residency, the
 # deferred other half of vms-d37's LNM$SYSTEM work), the first mutation
-# targeting derive_scope_key()'s LNM$GROUP case in kernel/vms_lnm.c. See its
+# targeting derive_scope_key()'s LNM$GROUP case in kernel-core/vms_lnm.c. See its
 # own entry in facility_defects.sh for what it covers and why.
 #
 # NOTE: this file was not updated when lnm-privilege-check-bypassed and
@@ -266,7 +266,7 @@
 # test_syssvc_lnm_searchlist, test_syssvc_rightslist and
 # test_syssvc_sysuaf_uic_base had NO per-facility negctl entry at all, the
 # same class of hole vms-6bdf/#293 closed for test_kmod_resdir. Targets
-# kernel/vms_lnm.c (the multi-value DEFINE's stored equivalence count),
+# kernel-core/vms_lnm.c (the multi-value DEFINE's stored equivalence count),
 # libvms/rtl/rightslist.c (RIGHTSLIST.DAT's %X general-identifier radix) and
 # libvms/include/sysuaf.h (SYSUAF.DAT's shared UIC read radix) respectively.
 # Every in-scope suite is now covered -- `coverage` names none as ungated.

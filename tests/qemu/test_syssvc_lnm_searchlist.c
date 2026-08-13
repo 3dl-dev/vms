@@ -5,7 +5,7 @@
  * ============================================================
  * THE GAP THIS PROVES FIXED. vms-420: DEFINE FOO BAR,BAZ followed by SHOW
  * LOGICAL FOO created "FOO" = "BAR" with BAZ silently dropped. The executive
- * (src/kernel/vms_lnm.h/.c) already stored up to VMS_LNM_MAX_EQUIV
+ * (src/kernel/vms_lnm.h + src/kernel-core/vms_lnm.c) already stored up to VMS_LNM_MAX_EQUIV
  * equivalence strings per entry and the DEFINE ioctl already wrote all of
  * them -- the gap was entirely userspace, in three places:
  *

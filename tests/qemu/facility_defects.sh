@@ -4274,7 +4274,7 @@ EOF
     lnm-delete-noop)
         case "$_f" in
         facility)     echo "executive-resident logical name tables (VMS_IOCTL_LNM_DEFINE/DELETE + the mmap arena, LNM\$SYSTEM), vms-d37";;
-        targets)      echo "kernel/vms_lnm.c";;
+        targets)      echo "kernel-core/vms_lnm.c";;
         suites_red)   echo "test_syssvc_lnm_crossproc";;
         blind_suites) echo "";;
         blind_why)    echo "";;
@@ -4336,7 +4336,7 @@ EOF
     lnm-group-scope-collapsed)
         case "$_f" in
         facility)     echo "executive-resident LNM\$GROUP / LNM\$JOB (VMS_IOCTL_LNM_DEFINE/DELETE + the mmap arena, derive_scope_key() in vms_lnm.c), vms-aba -- the deferred other half of vms-d37's LNM\$SYSTEM residency";;
-        targets)      echo "kernel/vms_lnm.c";;
+        targets)      echo "kernel-core/vms_lnm.c";;
         suites_red)   echo "test_syssvc_lnm_groupjob";;
         blind_suites) echo "";;
         blind_why)    echo "";;
@@ -4379,7 +4379,7 @@ EOF
     lnm-privilege-check-bypassed)
         case "$_f" in
         facility)     echo "SYSNAM/GRPNAM privilege enforcement on LNM\$SYSTEM/LNM\$GROUP mutation (lnm_priv_check() in vms_lnm.c, consulted by both VMS_IOCTL_LNM_DEFINE and VMS_IOCTL_LNM_DELETE), vms-5b7";;
-        targets)      echo "kernel/vms_lnm.c";;
+        targets)      echo "kernel-core/vms_lnm.c";;
         suites_red)   echo "test_syssvc_lnm_privilege";;
         blind_suites) echo "";;
         blind_why)    echo "";;
@@ -4911,8 +4911,8 @@ EOF
 
     lnm-searchlist-equiv-truncated)
         case "$_f" in
-        facility)     echo "executive-resident multi-value (search-list) logical names -- the stored equivalence COUNT (VMS_IOCTL_LNM_DEFINE's num_equiv field, kernel/vms_lnm.c), vms-420";;
-        targets)      echo "kernel/vms_lnm.c";;
+        facility)     echo "executive-resident multi-value (search-list) logical names -- the stored equivalence COUNT (VMS_IOCTL_LNM_DEFINE's num_equiv field, kernel-core/vms_lnm.c), vms-420";;
+        targets)      echo "kernel-core/vms_lnm.c";;
         # No other suite in this manifest's known set calls lnm_create_multi
         # or reads a logical at any equivalence index above 0 (grep across
         # tests/qemu confirms it: test_syssvc_lnm_privilege is the only other

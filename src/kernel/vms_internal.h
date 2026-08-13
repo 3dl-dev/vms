@@ -853,13 +853,19 @@ long vms_ioctl_p0_unmap(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_p1_map(struct vms_proc *proc, unsigned long arg);
 
 /* Logical name tables (executive-resident LNM$SYSTEM/GROUP/JOB, vms-d37) */
-struct file;
-struct vm_area_struct;
 long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_lnm_getscope(struct vms_proc *proc, unsigned long arg);
-/* Map the read-only logical-name arena into the caller (design §3.3). */
-int vms_lnm_mmap(struct file *filp, struct vm_area_struct *vma);
+/*
+ * Arena accessors for the host char device's mmap handler (vms-d61). The
+ * substrate-agnostic facility (src/kernel-core/vms_lnm.c) owns and writes the
+ * arena; the Linux rind's vms_lnm_mmap (vms_module.c) reads the base+size back
+ * through these and does the mmap-time mapping (remap_vmalloc_range + clearing
+ * VM_MAYWRITE) itself, so the mm coupling never enters the portable facility.
+ * vms_lnm_arena_base() returns NULL until vms_lnm_init() has run.
+ */
+void *vms_lnm_arena_base(void);
+size_t vms_lnm_arena_size(void);
 
 /* Mailboxes (executive-resident MBAn:, vms-d44) */
 long vms_ioctl_mbx_create(struct vms_proc *proc, unsigned long arg);

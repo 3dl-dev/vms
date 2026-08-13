@@ -55,6 +55,9 @@
 #include <linux/uidgid.h>         /* from_kuid, from_kgid, init_user_ns */
 #include <linux/blkdev.h>         /* lookup_bdev (resolve /dev/vdX to a dev_t) */
 #include <linux/kdev_t.h>         /* MAJOR / MINOR */
+/* vms-d61 (seqlock barriers + userspace-publishable arena) backing headers. */
+#include <linux/vmalloc.h>        /* vmalloc_user / vfree (exec_arena_*) */
+#include <asm/barrier.h>          /* smp_wmb / smp_rmb (exec_membar_*) */
 
 /* ---- primitive types ---- */
 typedef spinlock_t        exec_lock_t;
@@ -290,5 +293,23 @@ static inline int exec_blockdev_lookup(const char *path, exec_dev_t *out)
 }
 static inline unsigned int exec_blockdev_major(exec_dev_t dev) { return MAJOR(dev); }
 static inline unsigned int exec_blockdev_minor(exec_dev_t dev) { return MINOR(dev); }
+
+/* ---- 9. store/load memory barriers (vms-d61; see exec_kbackend.h) ----
+ * Trivial forwarders to the exact barriers the logical-name seqlock used
+ * before this seam existed (smp_wmb between the generation bumps and the entry
+ * stores), so the converted vms_lnm.c compiles to byte-identical behaviour. */
+static inline void exec_membar_producer(void) { smp_wmb(); }
+static inline void exec_membar_consumer(void) { smp_rmb(); }
+
+/* ---- 10. userspace-publishable arena (vms-d61; see exec_kbackend.h) ----
+ * The allocation half of the arena seam. vmalloc_user() is the exact call the
+ * logical-name arena used before this seam existed: page-aligned, zeroed, and
+ * the one allocation the mmap glue's remap_vmalloc_range accepts -- so the
+ * converted vms_lnm.c is behaviour-identical. The mmap-time mapping itself is
+ * NOT here: it stays as raw Linux glue in vms_module.c's vms_lnm_mmap, which
+ * reads the base back through the facility's accessor. */
+typedef void *exec_arena_t;
+static inline void *exec_arena_alloc(size_t n) { return vmalloc_user(n); }
+static inline void  exec_arena_free(void *arena) { vfree(arena); }
 
 #endif /* OVMX_EXEC_KBACKEND_LINUX_H */

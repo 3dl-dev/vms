@@ -24,39 +24,59 @@
  * non-executive path: a caller reaches these tables only through /dev/vms.
  * When /dev/vms is absent the userspace client fails honestly with
  * SS$_NOSUCHDEV; it does not construct a private SYSTEM table.
+ *
+ * SUBSTRATE-AGNOSTIC EXECUTIVE CORE (rd vms-d61, epic vms-8e8 -- the LAST
+ * facility to leave src/kernel, deferred through Phases D-G because it needed
+ * the hardest seam: a userspace-mapped arena plus store barriers, neither
+ * covered by the earlier shim). This file lives in src/kernel-core/ and names
+ * NO <linux/...> symbol: every host primitive it needs goes through the
+ * kernel-backend shim. vms-d61 adds the two seams it waited on --
+ *   - exec_membar_producer (exec_kbackend.h §9): the seqlock STORE barrier the
+ *     writer used (smp_wmb) between the generation bumps and the entry stores;
+ *   - exec_arena_alloc / exec_arena_free (§10): the ALLOCATION half of the
+ *     userspace-publishable arena (Linux vmalloc_user / vfree).
+ * The MMAP-TIME MAPPING itself (remap_vmalloc_range + clearing VM_MAYWRITE)
+ * is host char-device glue, NOT facility logic, and stays in the Linux rind:
+ * src/kernel/vms_module.c's vms_lnm_mmap asks this facility for the arena
+ * base+size (vms_lnm_arena_base/_size below) and does the substrate-specific
+ * mapping there. The Linux vms.ko provides the backend (exec_kbackend_linux.h);
+ * the NetBSD `vms' module will provide its own -- including the uvm-object arena
+ * and its char-device publish -- when lnm joins its SRCS (a later item; the
+ * NetBSD arena seam is contract-only today, following the exec_blockdev
+ * precedent).
  */
 
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/fs.h>
-#include <linux/mm.h>
-#include <linux/vmalloc.h>
-#include <linux/uaccess.h>
-#include <linux/spinlock.h>
-#include <linux/ctype.h>
-#include <linux/string.h>
-
-#include "vms_internal.h"
+#include "vms_internal.h"     /* struct vms_proc/vms_lnm_arena, the SS$/args/
+                               * status codes, the C-string + ctype vocabulary */
+#include "exec_kbackend.h"    /* exec_lock/copy/alloc/membar/arena */
 
 /*
- * The one arena, allocated at module init with vmalloc_user() so it can be
- * remapped into userspace read-only. The executive is the ONLY writer.
+ * The one arena, allocated at module init via exec_arena_alloc() so its pages
+ * can be published read-only into userspace by the host char device's mmap
+ * handler (src/kernel/vms_module.c's vms_lnm_mmap). The executive is the ONLY
+ * writer.
  */
 static struct vms_lnm_arena *lnm_arena;
 
 /*
  * Serialises writers and orders them against the seqlock generation
- * counter. Readers (in userspace, over the mmap) take no lock.
+ * counter. Readers (in userspace, over the mmap) take no lock. Initialised at
+ * module load in vms_lnm_init() (NOT statically): the NetBSD backend's kmutex
+ * cannot be statically initialised, so runtime exec_lock_init() is the
+ * substrate-agnostic form -- on Linux it forwards to spin_lock_init(), so
+ * behaviour is unchanged.
  */
-static DEFINE_SPINLOCK(lnm_write_lock);
+static exec_lock_t lnm_write_lock;
 
 int vms_lnm_init(void)
 {
-    lnm_arena = vmalloc_user(sizeof(*lnm_arena));
+    lnm_arena = exec_arena_alloc(sizeof(*lnm_arena));
     if (!lnm_arena)
         return -ENOMEM;
 
-    /* vmalloc_user() zeroes the allocation. Fill the header. */
+    exec_lock_init(&lnm_write_lock);
+
+    /* exec_arena_alloc() zeroes the allocation. Fill the header. */
     lnm_arena->magic       = VMS_LNM_ARENA_MAGIC;
     lnm_arena->version     = VMS_LNM_ARENA_VERSION;
     lnm_arena->arena_size  = (uint32_t)sizeof(*lnm_arena);
@@ -71,45 +91,28 @@ int vms_lnm_init(void)
 
 void vms_lnm_cleanup(void)
 {
-    vfree(lnm_arena);
+    exec_arena_free(lnm_arena);
     lnm_arena = NULL;
+    exec_lock_destroy(&lnm_write_lock);
 }
 
 /*
- * vms_lnm_mmap - hand userspace a READ-ONLY view of the arena.
- *
- * The mapping is read-only and VM_MAYWRITE is cleared so mprotect() cannot
- * turn it writable afterwards -- this is the direct analogue of VMS
- * protecting system space by processor access mode (design §2.4). The MMU,
- * not a convention, is what stops a process corrupting the system logical
- * name table.
+ * vms_lnm_arena_base / vms_lnm_arena_size - hand the host char device's mmap
+ * handler what it needs to publish the arena read-only into a process, WITHOUT
+ * this facility naming the host mm layer (design record §2; the mm coupling
+ * stays in the rind). vms_module.c's vms_lnm_mmap reads the base back and does
+ * the substrate-specific mapping (remap_vmalloc_range + clearing VM_MAYWRITE on
+ * Linux) itself. The base is NULL until vms_lnm_init() has run; the size is the
+ * fixed arena size the mmap handler bounds the request against.
  */
-int vms_lnm_mmap(struct file *filp, struct vm_area_struct *vma)
+void *vms_lnm_arena_base(void)
 {
-    unsigned long size = vma->vm_end - vma->vm_start;
-    int ret;
+    return lnm_arena;
+}
 
-    (void)filp;
-
-    if (!lnm_arena)
-        return -ENODEV;
-
-    /* Only the arena, only from its start. */
-    if (vma->vm_pgoff != (VMS_LNM_MMAP_OFFSET >> PAGE_SHIFT))
-        return -EINVAL;
-    if (size > PAGE_ALIGN(sizeof(*lnm_arena)))
-        return -EINVAL;
-
-    /* Reject any write intent, now and forever. */
-    if (vma->vm_flags & VM_WRITE)
-        return -EACCES;
-    vm_flags_clear(vma, VM_MAYWRITE);
-
-    ret = remap_vmalloc_range(vma, lnm_arena, 0);
-    if (ret < 0)
-        return ret;
-
-    return 0;
+size_t vms_lnm_arena_size(void)
+{
+    return sizeof(struct vms_lnm_arena);
 }
 
 /* ---- write helpers ------------------------------------------------- */
@@ -117,18 +120,20 @@ int vms_lnm_mmap(struct file *filp, struct vm_area_struct *vma)
 /*
  * Seqlock: make the generation odd before touching an entry, even after.
  * A userspace reader that samples an odd or changed value retries, so it
- * never observes a torn write. Barriers keep the entry stores from being
- * reordered around the counter.
+ * never observes a torn write. The store barrier (exec_membar_producer, a
+ * smp_wmb on Linux) keeps the entry stores from being reordered around the
+ * counter, so a reader cannot see the counter move before the payload it
+ * guards.
  */
 static inline void lnm_write_begin(void)
 {
     lnm_arena->generation++;    /* -> odd */
-    smp_wmb();
+    exec_membar_producer();
 }
 
 static inline void lnm_write_end(void)
 {
-    smp_wmb();
+    exec_membar_producer();
     lnm_arena->generation++;    /* -> even */
 }
 
@@ -267,11 +272,11 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
     long ret = 0;
     int i;
 
-    a = kzalloc(sizeof(*a), GFP_KERNEL);
+    a = exec_zalloc(sizeof(*a));
     if (!a)
         return -ENOMEM;
 
-    if (copy_from_user(a, (void __user *)arg, sizeof(*a))) {
+    if (exec_copyin(a, (const void *)arg, sizeof(*a))) {
         ret = -EFAULT;
         goto out_free;
     }
@@ -306,7 +311,7 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
 
     scope_key = derive_scope_key(a->table, proc);
 
-    spin_lock(&lnm_write_lock);
+    exec_lock(&lnm_write_lock);
 
     e = lnm_find(a->table, scope_key, a->name);
     if (e) {
@@ -318,13 +323,13 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
         memcpy(e->equiv, a->equiv, sizeof(e->equiv));
         lnm_write_end();
         a->status = SS__SUPERSEDE;
-        spin_unlock(&lnm_write_lock);
+        exec_unlock(&lnm_write_lock);
         goto out_copy;
     }
 
     e = lnm_alloc_slot();
     if (!e) {
-        spin_unlock(&lnm_write_lock);
+        exec_unlock(&lnm_write_lock);
         a->status = SS__EXLNMQUOTA;   /* arena full (PENDING PURITY, design §4.2) */
         goto out_copy;
     }
@@ -344,13 +349,13 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
     lnm_write_end();
 
     a->status = SS__NORMAL;
-    spin_unlock(&lnm_write_lock);
+    exec_unlock(&lnm_write_lock);
 
 out_copy:
-    if (copy_to_user((void __user *)arg, a, sizeof(*a)))
+    if (exec_copyout((void *)arg, a, sizeof(*a)))
         ret = -EFAULT;
 out_free:
-    kfree(a);
+    exec_free(a);
     return ret;
 }
 
@@ -361,11 +366,11 @@ long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg)
     uint32_t scope_key;
     long ret = 0;
 
-    a = kzalloc(sizeof(*a), GFP_KERNEL);
+    a = exec_zalloc(sizeof(*a));
     if (!a)
         return -ENOMEM;
 
-    if (copy_from_user(a, (void __user *)arg, sizeof(*a))) {
+    if (exec_copyin(a, (const void *)arg, sizeof(*a))) {
         ret = -EFAULT;
         goto out_free;
     }
@@ -388,10 +393,10 @@ long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg)
 
     scope_key = derive_scope_key(a->table, proc);
 
-    spin_lock(&lnm_write_lock);
+    exec_lock(&lnm_write_lock);
     e = lnm_find(a->table, scope_key, a->name);
     if (!e) {
-        spin_unlock(&lnm_write_lock);
+        exec_unlock(&lnm_write_lock);
         a->status = SS__NOLOGNAM;
         goto out_copy;
     }
@@ -403,13 +408,13 @@ long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg)
     lnm_write_end();
 
     a->status = SS__NORMAL;
-    spin_unlock(&lnm_write_lock);
+    exec_unlock(&lnm_write_lock);
 
 out_copy:
-    if (copy_to_user((void __user *)arg, a, sizeof(*a)))
+    if (exec_copyout((void *)arg, a, sizeof(*a)))
         ret = -EFAULT;
 out_free:
-    kfree(a);
+    exec_free(a);
     return ret;
 }
 
@@ -435,7 +440,7 @@ long vms_ioctl_lnm_getscope(struct vms_proc *proc, unsigned long arg)
     args.job_key   = derive_scope_key(VMS_LNM_TBL_JOB, proc);
     args.status    = SS__NORMAL;
 
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }

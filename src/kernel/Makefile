@@ -12,14 +12,16 @@
 obj-m := vms.o
 
 # vms_eflag.o / vms_ast.o / vms_access.o / vms_mbx.o / vms_proctab.o / vms_lock.o
-# / vms_devtab.o are built from ../kernel-core/: these substrate-agnostic
-# executive facilities
+# / vms_devtab.o / vms_lnm.o are built from ../kernel-core/: these substrate-
+# agnostic executive facilities
 # LIVE in src/kernel-core/ -- event flags (rd vms-ec4, Phase B), AST delivery and
 # access-mode enforcement (rd vms-5b2, Phase D), mailboxes (rd vms-a88, Phase E),
 # the process table (rd vms-846b, Phase F), the LOCK MANAGER (rd vms-84a, Phase G
-# -- the 44 KB payoff), and, now, the DEVICE TABLE (rd vms-31b -- the facility
-# Phase E deferred, landed once its block-layer + host-task-credential seams
-# existed). The Linux
+# -- the 44 KB payoff), the DEVICE TABLE (rd vms-31b -- the facility Phase E
+# deferred, landed once its block-layer + host-task-credential seams existed),
+# and, now, the LOGICAL-NAME MANAGER (rd vms-d61 -- the LAST facility to leave
+# src/kernel, landed once its store-barrier + userspace-publishable-arena seams
+# existed; every executive facility now lives in the shared core). The Linux
 # vms.ko is the Linux BACKEND for that shared source -- it provides the
 # exec_*/exec_list_*/exec_hash_*/exec_rbtree_* primitives (exec_kbackend_linux.h /
 # exec_list_linux.h / exec_hash_linux.h / exec_rbtree_linux.h here in src/kernel)
@@ -40,19 +42,27 @@ obj-m := vms.o
 # vms_devtab.c's block-layer coupling (lookup_bdev/MAJOR/MINOR/dev_t) is now
 # behind exec_kbackend.h's block-device seam (exec_blockdev_*, §8) and its
 # host-task-credential coupling behind exec_current_uid/gid, so it joins the
-# core above (vms-31b). vms_lnm.c is the ONE facility still here in src/kernel:
-# it is coupled to the Linux mm layer -- vmalloc_user/remap_vmalloc_range/
-# vm_flags and smp_wmb barriers -- a seam the exec_* shim does not cover yet;
-# its extraction waits on a later phase.
+# core above (vms-31b). vms_lnm.c was the LAST facility here in src/kernel: it
+# is coupled to the Linux mm layer -- vmalloc_user/remap_vmalloc_range/vm_flags
+# and smp_wmb barriers. vms-d61 lands its two missing seams -- the STORE BARRIER
+# (exec_membar_producer, §9, the seqlock's smp_wmb) and the ALLOCATION half of a
+# USERSPACE-PUBLISHABLE ARENA (exec_arena_alloc/free, §10, vmalloc_user/vfree) --
+# and moves it into the core below. The one piece that does NOT cross the seam is
+# the MMAP-TIME MAPPING (remap_vmalloc_range + clearing VM_MAYWRITE): that is
+# host char-device glue, so vms_lnm_mmap stays in the Linux rind (vms_module.c),
+# reading the arena base+size back through the facility's accessors. With this
+# move EVERY executive facility lives in src/kernel-core/; what remains here is
+# the Linux glue -- vms_module.c (the /dev/vms char device + registration) and
+# vms_p0.c/vms_p1.c (the P0/P1 region mappers, still host-mm-coupled).
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
          ../kernel-core/vms_devtab.o \
          ../kernel-core/vms_eflag.o \
+         ../kernel-core/vms_lnm.o \
          ../kernel-core/vms_lock.o \
          ../kernel-core/vms_mbx.o \
          ../kernel-core/vms_proctab.o \
-         vms_lnm.o \
          vms_p0.o \
          vms_p1.o
 

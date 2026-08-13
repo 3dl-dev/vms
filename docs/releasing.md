@@ -13,6 +13,7 @@ artifacts out and write the notes" step left.
 | **Version** | `src/libvms/include/ovmx_identity.h` (`OVMX_PRODUCT_VERSION`) | Single source of truth (INV-1); every artifact and note is stamped from here. |
 | **Cut** | `tools/cut-release.sh` | Reproducible, checksummed bundle (artifacts + `SHA256SUMS` + `release-manifest.json` + generated notes) from a clean tree. |
 | **Notes** | `tools/gen_release_notes.py` | Release notes generated from merged git history since the previous release tag — never hand-maintained. |
+| **Coverage** | `tools/compat/snapshot.py` + `render_compat.py --check` | The Compatibility Surface Register validates clean, and a per-cut coverage snapshot (`docs/compat/snapshots/<version>.json` + `compat-coverage.json` in the bundle) plus a coverage-delta block in the notes are produced. See `docs/compat/REFRESH.md`. |
 | **Prove** | CI: `cut-release-reproducible`, `release-acceptance`, `upgrade-e2e` | Two independent cuts are byte-identical; the cut artifact boots and reports the shipped version; a `0.N→0.N+1` upgrade preserves site config. |
 | **Document** | `tools/check_guide_drift.py` + `guide_drift_gate` | `docs/install-guide.md` / `docs/upgrade-guide.md` cannot drift from the e2e gates that prove them. |
 | **Publish** | `tools/publish-release.sh` + `.github/workflows/release.yml` | Bundle artifacts + generated notes attached to a GitHub Release; notes recorded in-tree under `docs/release-notes/`. |
@@ -29,6 +30,16 @@ The bundle contains the four artifacts (`vmlinuz`,
 `initramfs-ovmx-slim.cpio.gz`, `ovmx-distrib.img`, `ovmx-os.kit`), the OS-kit
 internal manifest, `SHA256SUMS`, the machine-readable `release-manifest.json`,
 and the generated `RELEASE-NOTES-<version>.md`.
+
+As part of the cut, the compatibility-coverage snapshot is stamped and the
+coverage-delta block is folded into the notes:
+
+```bash
+# stamps docs/compat/snapshots/<version>.json, drops compat-coverage.json into
+# the bundle, and prints the "Compatibility coverage" block gen_release_notes.py
+# embeds. Full procedure + the register-refresh runbook: docs/compat/REFRESH.md
+python3 tools/compat/snapshot.py --out-dir dist/release-<version>/
+```
 
 ## Publishing a release
 

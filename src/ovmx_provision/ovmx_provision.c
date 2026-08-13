@@ -93,7 +93,6 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/reboot.h>
 
 #include "sysuaf.h"
 #include "ovmx_layout.h"
@@ -102,6 +101,17 @@
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 #include "vms_kif.h"
+/* ovmx_boot_power_off(): the boot-plumbing substrate seam (vms-28f) PID 1
+ * already uses for the exact same power-off-on-fatal-condition need --
+ * Linux: sync(); reboot(RB_POWER_OFF). NetBSD: sync();
+ * reboot(RB_HALT | RB_POWERDOWN, NULL). PROVISION.EXE reuses the SAME
+ * backend objects ovmx_init links (src/ovmx_init/ovmx_boot_{linux,netbsd}.c,
+ * selected by src/ovmx_provision/CMakeLists.txt the same way
+ * src/ovmx_init/CMakeLists.txt already does) rather than calling reboot(2)
+ * directly a second time with a second, drifting set of flags (vms-5d1,
+ * epic vms-8e8: netbsd-vax is a boot-required image too, and NetBSD's
+ * reboot(2) has a different signature and flag names than Linux's). */
+#include "ovmx_boot.h"
 
 /*
  * Translate a VMS filespec to a Linux path. Same wrapper PID 1 uses, for the
@@ -148,7 +158,7 @@ static void provision_halt(const char *what, const char *detail)
         fprintf(stderr, "%%OVMX-I-EXECINIT, %s\n", detail);
     fflush(NULL);
     sync();
-    reboot(RB_POWER_OFF);
+    ovmx_boot_power_off();
     _exit(1);
 }
 

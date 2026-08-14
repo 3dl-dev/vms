@@ -117,6 +117,26 @@
 #define VMSFS_PROT_WLD_SHIFT    12      /* bits 12-15: World  */
 
 /*
+ * MAXSYSGROUP — the SYSGEN parameter that decides which UIC groups get the
+ * VMS SYSTEM protection category: every UIC whose GROUP number is <=
+ * MAXSYSGROUP (default 8) is System, not only group 0. Pinned (not chosen)
+ * to the userspace executive's own copy of this rule
+ * (src/libvms/syssvc/sys_security.c, uic_is_system() /
+ * src/libvms/include/ovmx_secparam.h's OVMX_MAXSYSGROUP — lab VAX V7.3
+ * SYSGEN capture + VSI OpenVMS "UIC Protection" wiki, octal 10 == decimal 8).
+ * It is a settable SYSGEN parameter on VMS and a compile-time constant here
+ * until OVMX has a SYSGEN parameter store.
+ *
+ * Lives in the SHARED on-disk header (not the Linux-only vmsfs.h) because
+ * every backend's SOGW permission check needs it -- the NetBSD ODS-2 vnode
+ * backend (rd vms-e7a) applies the identical System-category rule via
+ * kauth_cred_getegid(), mirroring the Linux block-device backend's
+ * vmsfs_blkdev_permission() (src/kernel/vmsfs/vmsfs_blkdev.c). One
+ * definition, not two independently-drifting ones (INV-DRIFT).
+ */
+#define VMSFS_MAXSYSGROUP 8
+
+/*
  * Default protection: S:RWED, O:RWED, G:RE, W:RE
  *
  * Standard VMS default — system and owner have full access; group and world

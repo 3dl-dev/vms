@@ -20,7 +20,10 @@
 #   4. INSTALL (ovmx-vax-lab): install NetBSD/vax once if the cache is cold.
 #   5. INSTALL-KERNEL (ovmx-vax-lab): swap in the MODULAR kernel once (marked).
 #   6. PROVE (ovmx-vax-lab): boot single-user, modload vmsfs, mount the ra1
-#      volume read-only, ls + cat HELLO.TXT; plus the INV-6 module-absent control.
+#      volume read-only, ls + cat HELLO.TXT; plus the INV-6 module-absent
+#      control; then (rd vms-e7a) remount READ-WRITE and prove the write VOPs
+#      (VOP_CREATE/WRITE/SETATTR/MKDIR/REMOVE) via an unmount+remount
+#      persistence round trip -- see drive_vmsfs_vax.py's stage 4.
 #
 # Nothing installed on the host (Rule 9). Reuses the cached disk; never reinstalls.
 #

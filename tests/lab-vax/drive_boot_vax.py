@@ -98,6 +98,16 @@ MS_PROVISION_IVLOGNAM = "%DCL-E-IVLOGNAM"
 # vmsfs vnode pager closed). Its ABSENCE is the stale-volume / pager regression
 # (PROVISION.EXE "missing" -> %OVMX-F-EXECINIT). No brackets -> literal regex.
 MS_PROVISION_RUNNING = r"system identity SYSTEM"
+# rd vms-e7a: the RW-ODS2 OWNER-path regression signal. provision_ownership()
+# runs IMMEDIATELY after MS_PROVISION_RUNNING (ovmx_provision.c calls it last,
+# right before exec'ing STARTUP), so it is chronologically the FIRST thing to
+# appear in the STEP-2 window below -- before Username:/LNMFAIL/IVLOGNAM/etc.
+# Before this fix it emitted ~28 of these (one per file in the system tree,
+# lchown(2) failing with genfs_eopnotsupp on the read-only ODS-2 mount); after
+# it, this string must NEVER appear. Its absence is verified against the
+# window's FULL captured text (child.before), not a race against the other
+# STEP-2 patterns -- see do_sysboot()'s STEP 2 below.
+MS_PROVISION_OWNER_WARN = "%OVMX-W-OWNER"
 
 
 def log(msg):
@@ -611,6 +621,26 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline):
                     "within the window (%s) -- past the logical-name loop, stopped at "
                     "the next gap (Username: is the separate vms-d59 capstone). tail:\n%s"
                     % (type(e).__name__, tail))
+
+            # rd vms-e7a: the OWNER-flood check. child.before holds everything
+            # consumed by the STEP-2 expect() above, i.e. exactly the console
+            # text between MS_PROVISION_RUNNING and whichever pattern matched
+            # (or the timeout) -- the window provision_ownership() runs in.
+            # Count, don't just detect: the OLD bug was a ~28-line FLOOD (one
+            # per file/dir in the system tree), so a nonzero count is the
+            # regression signal whether it is 1 or 28.
+            post_identity_text = getattr(child, "before", "") or ""
+            owner_warn_count = post_identity_text.count(MS_PROVISION_OWNER_WARN)
+            seen["owner_warn_count"] = owner_warn_count
+            if owner_warn_count:
+                log("OWNER-FLOOD: %d occurrence(s) of %s after SYSTEM identity -- "
+                    "RW-ODS2 ownership stamping is FAILING (vms-e7a not fixed / "
+                    "regressed): PROVISION could not lchown(2) files on the "
+                    "mounted system volume" % (owner_warn_count, MS_PROVISION_OWNER_WARN))
+            else:
+                log("OK: no %s warnings after SYSTEM identity -- PROVISION's "
+                    "provision_ownership() stamped UIC file ownership on the "
+                    "RW-ODS2 volume with NO failures (vms-e7a)" % MS_PROVISION_OWNER_WARN)
     finally:
         _hard_kill(child)
 
@@ -732,6 +762,17 @@ def main():
                     "logical-name layer did NOT create the system logicals -- it "
                     "loops on %%DCL-E-LNMFAIL / %%DCL-E-IVLOGNAM (vms-72da not fixed)")
                 return 1
+            # PASS BAR (rd vms-e7a): the RW-ODS2 OWNER path must be clean -- ZERO
+            # %OVMX-W-OWNER warnings after SYSTEM identity. Before this fix
+            # PROVISION's provision_ownership() hit ~28 of these (lchown(2)
+            # failing on a read-only ODS-2 mount with no write VOPs); their
+            # presence now is a hard FAIL, not a tolerated warning, because
+            # fixing exactly this is what vms-e7a delivers.
+            if seen.get("owner_warn_count"):
+                log("FAIL: %d %%OVMX-W-OWNER warning(s) after SYSTEM identity -- "
+                    "PROVISION could not stamp UIC ownership on the RW-ODS2 volume "
+                    "(vms-e7a regression / not fixed)" % seen["owner_warn_count"])
+                return 1
             # PASS BAR (rd vms-72da): PROVISION.EXE ran (the specific
             # "%OVMX-I-EXEC, system identity SYSTEM" marker) AND no LNMFAIL. That is
             # this proof's deliverable -- the executive LNM$SYSTEM define/translate
@@ -741,8 +782,10 @@ def main():
             # (provision_running unset) or the LNM loop regresses (lnmfail set).
             log("======================================================================")
             log("  SYSBOOT PASSED: ovmx_init booted as PID 1 on NetBSD/vax, mounted the")
-            log("  MASTERED OVMX ODS-2 system volume, passed the installed-system gate,")
-            log("  and PROVISION.EXE DEMAND-PAGED + RAN (SYSTEM identity established).")
+            log("  MASTERED OVMX ODS-2 system volume READ-WRITE, passed the installed-")
+            log("  system gate, PROVISION.EXE DEMAND-PAGED + RAN (SYSTEM identity")
+            log("  established), and stamped UIC file ownership on the RW-ODS2 volume")
+            log("  with ZERO %%OVMX-W-OWNER warnings (rd vms-e7a).")
             if seen.get("login"):
                 log("  *** DCL CAPSTONE (vms-d59): the boot CLEARED the logical-name")
                 log("  *** layer (vms-72da) and reached Username:. ***")

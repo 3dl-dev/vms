@@ -153,6 +153,36 @@ struct vmsfs_fh_rename {
 };
 void vmsfs_fh_write_rename(void *block512, const struct vmsfs_fh_rename *r);
 
+/*
+ * Partial header write-back for the OWNER path (rd vms-e7a: VOP_SETATTR /
+ * ->setattr uid/gid/mode): rewrite protection + UIC group/member on an
+ * EXISTING header block (plus a refreshed modification time), then
+ * re-checksum. Every other on-disk field (size, blocks, map, name, ...) is
+ * preserved -- the SAME read-modify-write discipline as
+ * vmsfs_fh_write_meta/vmsfs_fh_write_rename, just narrower: SETATTR touches
+ * ownership/protection ONLY, never a file's data or its retrieval map.
+ */
+struct vmsfs_fh_owner {
+	uint16_t protection;
+	uint16_t uic_group;
+	uint16_t uic_member;
+};
+void vmsfs_fh_write_owner(void *block512, const struct vmsfs_fh_owner *o);
+
+/*
+ * Unix permission-mode -> VMS SOGW protection-word translation (the inverse
+ * of a backend's own display-only prot->mode mapping, e.g.
+ * src/kernel/vmsfs/vmsfs.h's vmsfs_prot_to_mode()). A backend's VOP_SETATTR /
+ * ->setattr calls this when the caller supplies a new mode: Owner/Group/World
+ * nibbles come from the USR/GRP/OTH permission bits (VMS's set-bit-denies
+ * convention is the inverse of Unix's set-bit-allows); System always decodes
+ * to 0 (no denial), matching VMS convention that SYSTEM has full access.
+ * @unix_mode carries the POSIX-standard 07777 permission bits -- their
+ * numeric values (S_IRUSR == 0400, ...) are identical on every host this
+ * project builds for, so this needs no host <sys/stat.h> include.
+ */
+uint16_t vmsfs_mode_to_prot(uint32_t unix_mode);
+
 /* ================================================================
  * Storage / FID allocator + block-map growth (vmsfs_alloc.c)
  *

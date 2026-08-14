@@ -27,7 +27,15 @@
 #        - `ls /ods2' lists HELLO.TXT (VOP_READDIR over the shared dir scanner),
 #        - `cat /ods2/HELLO.TXT' returns the known content byte-for-byte
 #          (VOP_LOOKUP -> VOP_READ through the shared retrieval-map core).
-#   4. umount, modunload.
+#   4. RW WRITE-VOP PROOF (rd vms-e7a): unmount, remount READ-WRITE, then
+#      VOP_CREATE + VOP_WRITE a new file, VOP_SETATTR its UIC ownership (the
+#      OWNER path PROVISION's provision_ownership() needs), VOP_MKDIR a
+#      directory -- then UNMOUNT AND REMOUNT FRESH and assert all of it
+#      (existence, ownership, content) survived, before VOP_REMOVE-ing the file
+#      and confirming ITS absence also survives a fresh mount. The remount
+#      round trip is the teeth: a silently-faked/no-op write VOP would pass an
+#      in-session check but fail this one.
+#   5. umount, modunload.
 #
 # TOOLING, NOT A RUNTIME (CLAUDE.md Rule 9): booting a real NetBSD/vax under SIMH
 # to load + exercise a real kernel filesystem module is exactly what tests/qemu/
@@ -291,7 +299,118 @@ def main():
         log("OK (read): HELLO.TXT read back the expected content through the "
             "shared vmsfs core on NetBSD/vax under SIMH")
 
-        # ---- 4. cleanup ----------------------------------------------------
+        # ---- 4. RW write-VOP proof (rd vms-e7a) -----------------------------
+        # A write-then-REMOUNT-then-read-back round trip: mounting fresh after
+        # the write proves the data hit the ON-DISK volume (the shared core's
+        # allocator + header writer), not just an in-memory echo -- the teeth
+        # against a silently-faked/no-op write VOP (Rule 9 / INV-6). Exercises
+        # VOP_CREATE + VOP_WRITE (OWNERTEST.TXT), VOP_SETATTR uid/gid (the
+        # OWNER path PROVISION's provision_ownership() needs), VOP_MKDIR
+        # (RWTEST.DIR), VOP_ACCESS honoring VWRITE, and VOP_REMOVE.
+        run(child, "cd /; umount /ods2 2>/dev/null; true", cmd_timeout)
+
+        rc, out = run(child,
+                      "mounted=; for p in %s; do "
+                      "  if /root/ovmx/vmsfs_mount /dev/ra1$p /ods2 rw; then mounted=ra1$p; break; fi; "
+                      "done; "
+                      "echo \"rw-mounted on $mounted\"; test -n \"$mounted\"" % parts,
+                      cmd_timeout)
+        if rc != 0:
+            log("FAIL (rw-mount): could not mount the ODS-2 volume READ-WRITE "
+                "(rd vms-e7a: the RW mount itself is the first gap)")
+            return 40
+        log("OK (rw-mount): ODS-2 volume mounted READ-WRITE on NetBSD/vax")
+
+        # VOP_CREATE + VOP_WRITE: a new file with known content.
+        rc, out = run(child,
+                      "echo -n 'RW-ODS2 owner+write proof vms-e7a' > /ods2/OWNERTEST.TXT; "
+                      "echo WRITE_RC=$?",
+                      cmd_timeout)
+        if "WRITE_RC=0" not in out:
+            log("FAIL (write): could not create+write /ods2/OWNERTEST.TXT -- "
+                "VOP_CREATE/VOP_WRITE did not succeed")
+            return 41
+        log("OK (write): VOP_CREATE + VOP_WRITE created OWNERTEST.TXT")
+
+        # VOP_SETATTR uid/gid: THE OWNER PATH the boot's %OVMX-W-OWNER flood
+        # is about. UIC member=4321 (uid), UIC group=1234 (gid) -- arbitrary,
+        # distinct-from-default values chosen only to be unmistakable in `ls -ln`.
+        rc, out = run(child, "chown 4321:1234 /ods2/OWNERTEST.TXT; echo CHOWN_RC=$?",
+                      cmd_timeout)
+        if "CHOWN_RC=0" not in out:
+            log("FAIL (chown): lchown(2) on OWNERTEST.TXT FAILED -- this is "
+                "EXACTLY PROVISION's %OVMX-W-OWNER symptom (vms-e7a)")
+            return 42
+        log("OK (chown): VOP_SETATTR stamped UIC ownership on OWNERTEST.TXT")
+
+        # VOP_MKDIR.
+        rc, out = run(child, "mkdir /ods2/RWTEST.DIR; echo MKDIR_RC=$?", cmd_timeout)
+        if "MKDIR_RC=0" not in out:
+            log("FAIL (mkdir): VOP_MKDIR could not create RWTEST.DIR")
+            return 43
+        log("OK (mkdir): VOP_MKDIR created RWTEST.DIR")
+
+        # Unmount, then mount FRESH: only an on-disk write survives this.
+        run(child, "cd /; umount /ods2", cmd_timeout)
+        rc, out = run(child,
+                      "mounted=; for p in %s; do "
+                      "  if /root/ovmx/vmsfs_mount /dev/ra1$p /ods2 rw; then mounted=ra1$p; break; fi; "
+                      "done; test -n \"$mounted\"" % parts,
+                      cmd_timeout)
+        if rc != 0:
+            log("FAIL (remount): could not remount the ODS-2 volume after the write test")
+            return 44
+
+        rc, out = run(child, "ls -ln /ods2", cmd_timeout)
+        if "OWNERTEST.TXT" not in out or "RWTEST.DIR" not in out:
+            log("FAIL (persistence/directory): OWNERTEST.TXT and/or RWTEST.DIR "
+                "did NOT survive a fresh mount -- the create/mkdir was NOT "
+                "persisted to disk (a fake/no-op write would look exactly like this)")
+            log("  ls -ln /ods2 output:\n%s" % out)
+            return 45
+        if "4321" not in out or "1234" not in out:
+            log("FAIL (owner persistence): OWNERTEST.TXT's UIC ownership (4321:1234) "
+                "did NOT survive a fresh mount -- VOP_SETATTR is not really "
+                "writing the on-disk header (a fake/no-op chown would look "
+                "exactly like this)")
+            log("  ls -ln /ods2 output:\n%s" % out)
+            return 46
+        log("OK (persistence): OWNERTEST.TXT + RWTEST.DIR + the 4321:1234 UIC "
+            "ownership all survived umount/remount -- these are REAL on-disk "
+            "writes, not an in-memory echo")
+
+        # Read-back: the written bytes, verbatim, through a byte-for-byte compare.
+        rc, out = run(child, "cat /ods2/OWNERTEST.TXT", cmd_timeout)
+        if "RW-ODS2 owner+write proof vms-e7a" not in out:
+            log("FAIL (read-back): OWNERTEST.TXT did not read back its written content")
+            return 47
+        log("OK (read-back): OWNERTEST.TXT read back exactly what was written")
+
+        # VOP_REMOVE, then a fresh mount confirms the deletion also persisted.
+        rc, out = run(child, "rm /ods2/OWNERTEST.TXT; echo RM_RC=$?", cmd_timeout)
+        if "RM_RC=0" not in out:
+            log("FAIL (remove): VOP_REMOVE could not delete OWNERTEST.TXT")
+            return 48
+        run(child, "cd /; umount /ods2", cmd_timeout)
+        rc, out = run(child,
+                      "mounted=; for p in %s; do "
+                      "  if /root/ovmx/vmsfs_mount /dev/ra1$p /ods2 rw; then mounted=ra1$p; break; fi; "
+                      "done; test -n \"$mounted\"" % parts,
+                      cmd_timeout)
+        if rc != 0:
+            log("FAIL (remount-after-remove): could not remount after VOP_REMOVE")
+            return 49
+        rc, out = run(child, "ls /ods2", cmd_timeout)
+        if "OWNERTEST.TXT" in out:
+            log("FAIL (remove persistence): OWNERTEST.TXT still present after a "
+                "fresh mount -- VOP_REMOVE did not really free the directory entry")
+            return 50
+        log("OK (remove persistence): OWNERTEST.TXT is gone after a fresh mount")
+
+        log("VMSFS-VAX RW: ALL WRITE-VOP CHECKS PASSED (VOP_CREATE/WRITE/SETATTR/"
+            "MKDIR/REMOVE all persist real on-disk state, vms-e7a)")
+
+        # ---- 5. cleanup ------------------------------------------------------
         run(child, "cd /; umount /ods2 2>/dev/null; true", cmd_timeout)
         if not skip_load:
             run(child, "modunload vmsfs 2>/dev/null; true", cmd_timeout)

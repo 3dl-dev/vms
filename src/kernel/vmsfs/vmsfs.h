@@ -181,15 +181,10 @@ int vmsfs_inode_cache_init(void);
 void vmsfs_inode_cache_destroy(void);
 
 /*
- * MAXSYSGROUP — the SYSGEN parameter that decides which UIC groups get the
- * VMS SYSTEM protection category: every UIC whose GROUP number is <=
- * MAXSYSGROUP (default 8) is System, not only group 0. This kernel constant
- * MUST match the userspace executive, which already applies this rule in
- * src/libvms/syssvc/sys_security.c (uic_is_system()); the value and its
- * two-source pin (lab VAX V7.3 SYSGEN capture + VSI OpenVMS "UIC Protection"
- * wiki, octal 10 == decimal 8) live in src/libvms/include/ovmx_secparam.h
- * (OVMX_MAXSYSGROUP). It is a settable SYSGEN parameter on VMS and a
- * compile-time constant here until OVMX has a SYSGEN parameter store.
+ * VMSFS_MAXSYSGROUP now lives in the SHARED vmsfs_ondisk.h (rd vms-e7a): the
+ * NetBSD ODS-2 vnode backend's SOGW permission check needs the identical
+ * System-category rule, so a single definition replaces what used to be a
+ * Linux-only one here (INV-DRIFT). See vmsfs_ondisk.h for the citation.
  *
  * WHY IT MATTERS HERE (vms-581): LOGINOUT drops each session to its
  * authenticated UIC (tools/vms_login.c: setgid(uic_group); setuid(uic_member)),
@@ -198,7 +193,6 @@ void vmsfs_inode_cache_destroy(void);
  * Group/World nibble — which VMSFS_PROT_DEFAULT denies WRITE — so RMS CREATE
  * (open(2) O_CREAT) failed %RMS-E-CRE/EACCES on every real vmsfs.ko mount.
  */
-#define VMSFS_MAXSYSGROUP 8
 
 /* ================================================================
  * SOGW permission helpers (vmsfs_blkdev.c)

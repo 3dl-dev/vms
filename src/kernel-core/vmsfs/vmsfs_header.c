@@ -129,6 +129,63 @@ void vmsfs_fh_write_meta(void *block512, const struct vmsfs_fh_meta *m)
 	fh->fh_checksum = vmsfs_cpu_to_le32(vmsfs_checksum(fh, sizeof(*fh)));
 }
 
+void vmsfs_fh_write_owner(void *block512, const struct vmsfs_fh_owner *o)
+{
+	struct vmsfs_file_header *fh = block512;
+
+	fh->fh_protection = vmsfs_cpu_to_le16(o->protection);
+	fh->fh_uic_group  = vmsfs_cpu_to_le16(o->uic_group);
+	fh->fh_uic_member = vmsfs_cpu_to_le16(o->uic_member);
+	fh->fh_modified   = vmsfs_cpu_to_le64(vmsfs_now_seconds());
+
+	fh->fh_checksum = 0;
+	fh->fh_checksum = vmsfs_cpu_to_le32(vmsfs_checksum(fh, sizeof(*fh)));
+}
+
+/*
+ * POSIX-standard permission-bit values (identical on every host this project
+ * builds for -- Linux, NetBSD -- so this pure-arithmetic function needs no
+ * host <sys/stat.h>/<linux/stat.h> include, matching the vmsfs_backend.h
+ * vocabulary discipline the rest of this file follows).
+ */
+#define VMSFS_MODE_IRUSR 0000400
+#define VMSFS_MODE_IWUSR 0000200
+#define VMSFS_MODE_IXUSR 0000100
+#define VMSFS_MODE_IRGRP 0000040
+#define VMSFS_MODE_IWGRP 0000020
+#define VMSFS_MODE_IXGRP 0000010
+#define VMSFS_MODE_IROTH 0000004
+#define VMSFS_MODE_IWOTH 0000002
+#define VMSFS_MODE_IXOTH 0000001
+
+uint16_t vmsfs_mode_to_prot(uint32_t unix_mode)
+{
+	uint16_t prot = 0;
+	uint8_t owner = VMSFS_PROT_R | VMSFS_PROT_W | VMSFS_PROT_E | VMSFS_PROT_D;
+	uint8_t group = VMSFS_PROT_R | VMSFS_PROT_W | VMSFS_PROT_E | VMSFS_PROT_D;
+	uint8_t world = VMSFS_PROT_R | VMSFS_PROT_W | VMSFS_PROT_E | VMSFS_PROT_D;
+
+	if (unix_mode & VMSFS_MODE_IRUSR) owner &= (uint8_t)~VMSFS_PROT_R;
+	if (unix_mode & VMSFS_MODE_IWUSR) owner &= (uint8_t)~(VMSFS_PROT_W | VMSFS_PROT_D);
+	if (unix_mode & VMSFS_MODE_IXUSR) owner &= (uint8_t)~VMSFS_PROT_E;
+
+	if (unix_mode & VMSFS_MODE_IRGRP) group &= (uint8_t)~VMSFS_PROT_R;
+	if (unix_mode & VMSFS_MODE_IWGRP) group &= (uint8_t)~(VMSFS_PROT_W | VMSFS_PROT_D);
+	if (unix_mode & VMSFS_MODE_IXGRP) group &= (uint8_t)~VMSFS_PROT_E;
+
+	if (unix_mode & VMSFS_MODE_IROTH) world &= (uint8_t)~VMSFS_PROT_R;
+	if (unix_mode & VMSFS_MODE_IWOTH) world &= (uint8_t)~(VMSFS_PROT_W | VMSFS_PROT_D);
+	if (unix_mode & VMSFS_MODE_IXOTH) world &= (uint8_t)~VMSFS_PROT_E;
+
+	/* System nibble stays 0 -- SYSTEM always has full access (VMS convention,
+	 * matching src/vmsfs/vmsfs_protect.c's vmsfs_mode_to_protection()). */
+	prot |= (uint16_t)((uint16_t)owner << VMSFS_PROT_OWN_SHIFT);
+	prot |= (uint16_t)((uint16_t)group << VMSFS_PROT_GRP_SHIFT);
+	prot |= (uint16_t)((uint16_t)world << VMSFS_PROT_WLD_SHIFT);
+
+	return prot;
+}
+
 void vmsfs_fh_write_rename(void *block512, const struct vmsfs_fh_rename *r)
 {
 	struct vmsfs_file_header *fh = block512;

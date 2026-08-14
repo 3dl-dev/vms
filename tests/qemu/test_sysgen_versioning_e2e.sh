@@ -173,7 +173,7 @@ check_a '%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to TESTND' \
     "SET SCSNODE changed the value away from the seed's OVMX"
 # THE VERSION-BUMP PROOF: the seed already put ;1 on disk, so a correct
 # WRITE CURRENT MUST land on ;2, not silently overwrite ;1.
-check_a '%SYSGEN-I-WRITTEN, 30 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' \
+check_a '%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' \
     "WRITE CURRENT created version ;2 over the seed's ;1 (real vmsfs version, not an in-memory counter)"
 
 # --- 4. Process B: an INDEPENDENT SYSGEN session's USE CURRENT --------------
@@ -192,7 +192,7 @@ else
 fi
 B_SEG=$(segment_since "$B_OFF")
 check_b() { if printf '%s\n' "$B_SEG" | grep -qF "$1"; then ok "$2"; else bad "$2"; fi; }
-check_b '%SYSGEN-I-LOADED, 30 parameters loaded from' \
+check_b '%SYSGEN-I-LOADED, 31 parameters loaded from' \
     "USE CURRENT loaded a real file (not the NOCURRENT/factory-default fallback)"
 check_b 'ovmxvmssys.par;2' \
     "USE CURRENT read the HIGHEST version (;2), matching the oracle's USE-reads-highest behavior"

@@ -124,6 +124,9 @@ jobs:
               - 'tests/qemu/test_sysboot_conversational.sh'
               - 'tests/qemu/test_sysboot_cluster_params_e2e.sh'
               - 'tests/qemu/run_sysboot_cluster_params_e2e.sh'
+              - 'tests/qemu/test_cluster_params_recnx_e2e.sh'
+              - 'tests/qemu/test_cluster_params_recnx_negctl.sh'
+              - 'tests/qemu/run_cluster_params_recnx_e2e.sh'
               - 'tests/uat/**'
             release:
               - '.github/workflows/**'
@@ -1374,6 +1377,61 @@ jobs:
           rc=$?
           if [ "$rc" -eq 77 ]; then
             echo "FATAL: sysboot_cluster_params_e2e SKIPPED in CI — this gate must actually run the real boot, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2e: cluster params authored via SYSGEN -> persisted -> SCSD adopts,
+  # incl. RECNXINTERVAL (vms-c3b, epic vms-098 R1.1)
+  #
+  # Boots the ACTUAL mastered bootable image, authors the complete 6-param
+  # cluster set via SYSGEN.EXE with WRITE CURRENT (SCSNODE/SCSSYSTEMID/VOTES/
+  # EXPECTED_VOTES/RECNXINTERVAL/ALLOCLASS), and proves a FRESH SCSD
+  # --show-identity reads every one back off the real mounted volume
+  # (RECNXINTERVAL=30) through scsd_recnxinterval() -> sysgen_read_param() --
+  # the authoring->persist->adopt round trip RECNXINTERVAL previously could not
+  # take (it was runtime-only). The runner runs the paired MEASURED negative
+  # control first (unauthored store -> the documented default 20, never 30) so
+  # the positive cannot pass for the wrong reason. See
+  # tests/qemu/test_cluster_params_recnx_e2e.sh's header.
+  #
+  # Same SKIP_RETURN_CODE 77 => hard CI failure convention as the other e2e
+  # gates: this gate must actually run the real boot, never skip silently.
+  # -----------------------------------------------------------------------
+  cluster-params-recnx-e2e:
+    name: SYSGEN authors cluster params, SCSD adopts RECNXINTERVAL (vms-c3b)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Cluster-param RECNXINTERVAL e2e — author, persist, SCSD adopts (+ negctl)
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_cluster_params_recnx_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: cluster_params_recnx_e2e SKIPPED in CI — this gate must actually run the real boot, never skip silently." >&2
             exit 1
           fi
           exit "$rc"

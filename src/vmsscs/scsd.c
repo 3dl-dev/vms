@@ -100,10 +100,23 @@ static uint64_t monotonic_ms(void)
 /*
  * scsd_recnxinterval - the local SYSGEN RECNXINTERVAL, in seconds, that sizes
  * the RECNXINTERVAL reconnect period (vms-c7d, transcript p. 7-30). OVMX
- * configuration, NOT a claimed VMS invariant: OVMX_RECNXINTERVAL overrides the
- * SCS_RECNX_DEFAULT_RECNXINTERVAL fallback (the reference lab runs 20). A value
- * of 0 or an unparseable one leaves the default, so the read is a function
- * rather than an inline strtoul -- a test can state what the interval was.
+ * configuration, NOT a claimed VMS invariant.
+ *
+ * Precedence:
+ *   1. OVMX_RECNXINTERVAL env var  -- explicit test/config override (as before).
+ *   2. vms-c3b: the operator-authored SYSGEN RECNXINTERVAL param, read from the
+ *      current SYS$SYSTEM:OVMXVMSSYS.PAR through sysgen_read_param() -- the same
+ *      store (and the same reader, honoring OVMX_SYSGEN_PATH) scsd already
+ *      consults for SCSNODE/SCSSYSTEMID/ALLOCLASS. This is the AUTHORING surface
+ *      only: it merely SIZES the reconnect period, exactly as the env override
+ *      already did. The reconnect wire/state-machine behavior (scs_recnx.c) is
+ *      vms-694's and is untouched.
+ *   3. SCS_RECNX_DEFAULT_RECNXINTERVAL (20) -- the fallback when nothing is
+ *      authored, matching the SYSGEN param's own factory default (both 20).
+ *
+ * A value of 0 or an unparseable one at any layer falls through to the next, so
+ * the read is a function rather than an inline strtoul -- a test can state what
+ * the interval was and where it came from.
  */
 static unsigned scsd_recnxinterval(void)
 {
@@ -113,6 +126,10 @@ static unsigned scsd_recnxinterval(void)
         if (v > 0UL && v <= 65535UL) {
             return (unsigned)v;
         }
+    }
+    uint32_t sv = 0;
+    if (sysgen_read_param("RECNXINTERVAL", &sv) == 0 && sv > 0u && sv <= 65535u) {
+        return (unsigned)sv;
     }
     return SCS_RECNX_DEFAULT_RECNXINTERVAL;
 }
@@ -12545,8 +12562,16 @@ int main(int argc, char **argv)
             }
             uint16_t idsysid = resolve_scssystemid();
             uint8_t  idalloc = resolve_alloclass();
-            printf("SCSD-I-IDENT, SCSNODE=%s SCSSYSTEMID=%u ALLOCLASS=%u\n",
-                   idnode, (unsigned)idsysid, (unsigned)idalloc);
+            /* vms-c3b: RECNXINTERVAL is adopted the same read-side way, through
+             * scsd_recnxinterval() -> sysgen_read_param() on the persisted
+             * store. Reported here so the config-authoring proof can read back
+             * the operator's authored interval from a fresh SCSD (INV-6: a real
+             * store->boot->scsd round trip, no per-process fake). Surface only:
+             * it does not touch the reconnect wire logic (vms-694). */
+            unsigned idrecnx = scsd_recnxinterval();
+            printf("SCSD-I-IDENT, SCSNODE=%s SCSSYSTEMID=%u ALLOCLASS=%u"
+                   " RECNXINTERVAL=%u\n",
+                   idnode, (unsigned)idsysid, (unsigned)idalloc, idrecnx);
             fflush(stdout);
             return 0;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -12570,8 +12595,9 @@ int main(int argc, char **argv)
                     "  --hello-interval N  seconds between HELLO beacons (default %d)\n"
                     "  --show-identity     print the cluster identity params this\n"
                     "                      node adopts from the SYSGEN store\n"
-                    "                      (SCSNODE/SCSSYSTEMID/ALLOCLASS) and exit;\n"
-                    "                      opens no socket (vms-9cf)\n",
+                    "                      (SCSNODE/SCSSYSTEMID/ALLOCLASS/\n"
+                    "                      RECNXINTERVAL) and exit; opens no\n"
+                    "                      socket (vms-9cf, vms-c3b)\n",
                     argv[0], SCA_ETHERTYPE, HELLO_DEFAULT_INTERVAL_SEC);
             return 0;
         }

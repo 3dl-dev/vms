@@ -508,6 +508,13 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # command fails %SYSGEN-F-NOIMG and SYS$SYSTEM:OVMXVMSSYS.PAR can never
     # be read or written on the real runtime.
     cp build-static/bin/SYSGEN.EXE     /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # SCSD.EXE (vms-c3b): the SCS datalink daemon. Ships so the installed
+    # system can run clustering, and so `SCSD --show-identity` can read back
+    # the operator-authored cluster params (SCSNODE/SCSSYSTEMID/ALLOCLASS/
+    # RECNXINTERVAL) from SYS$SYSTEM:OVMXVMSSYS.PAR through the same
+    # sysgen_read_param()/scsd_recnxinterval() path scsd adopts on boot --
+    # a genuine store->boot->scsd round trip (INV-6), not a per-process fake.
+    cp build-static/bin/SCSD.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # PRODUCT.EXE (vms-df9): `$ PRODUCT INSTALL`/`SHOW PRODUCT`
     # dcl_exec_utility()'s for it at SYS$SYSTEM: -- without this copy every
     # PRODUCT operation fails %PCSI-F-NOIMG on the real runtime.

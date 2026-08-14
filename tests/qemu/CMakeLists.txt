@@ -457,6 +457,31 @@ set_tests_properties(sysgen_versioning_e2e PROPERTIES
     TIMEOUT 600)
 
 # ---------------------------------------------------------------------------
+# CLUSTER PARAM AUTHORING -> PERSIST -> SCSD ADOPTS, incl. RECNXINTERVAL
+# (vms-c3b, epic vms-098 R1.1).
+#
+# Boots the ACTUAL mastered bootable image, authors the complete 6-param
+# cluster set via SYSGEN (SCSNODE/SCSSYSTEMID/VOTES/EXPECTED_VOTES/
+# RECNXINTERVAL/ALLOCLASS) with WRITE CURRENT, and proves a FRESH SCSD
+# --show-identity reads every one back off the real volume (RECNXINTERVAL=30)
+# through scsd_recnxinterval() -> sysgen_read_param(). run_*.sh runs the paired
+# MEASURED negative control (test_cluster_params_recnx_negctl.sh: unauthored
+# store -> default 20, never 30) FIRST, then the positive. See the two test
+# scripts' headers for the full sequence and honest-failure modes.
+#
+# Same opt-in/SKIP convention as the other qemu-full-boot gates: real docker +
+# QEMU boot, real minutes, gated behind OVMX_QEMU_FULL_E2E=1 so it does not run
+# under a bare `ctest`.
+add_test(
+    NAME cluster_params_recnx_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_cluster_params_recnx_e2e.sh
+)
+set_tests_properties(cluster_params_recnx_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 900)
+
+# ---------------------------------------------------------------------------
 # MOUNT/DISMOUNT ARE REAL mount(2)/umount(2) (vms-651).
 #
 # Boots the ACTUAL mastered bootable image TWICE against a SECOND, real

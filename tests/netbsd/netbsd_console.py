@@ -73,10 +73,20 @@ class NetBSDConsole(object):
     """
 
     # How long each expect() slice waits for a command's marker-or-prompt before
-    # re-checking. The wait is sliced (not one blocking expect for the whole
-    # budget) so a LOST marker -- detected by the idle prompt reappearing without
-    # the marker -- is recovered in one slice instead of stalling the full budget.
-    _MARKER_SLICE = 120
+    # re-checking (and, for a retriable command, nudging to tell a lost marker
+    # from a still-running guest). Kept short so a both-dropped marker recovers in
+    # ~one slice rather than the full per-command deadline; a slow command is
+    # legitimately silent (output is file-routed) and simply keeps waiting.
+    _MARKER_SLICE = 30
+
+    # DRIVER GUARANTEE (rd vms-f8a): a non-background command's stdout+stderr are
+    # routed to this guest file; only a BOUNDED tail of it (plus the one-line end
+    # marker) is ever echoed to the console. So no command -- not `ls -R', not a
+    # build/cat log, not any debug flourish -- can flood the emulated UART and
+    # cost the marker its byte. The bound is generous enough for every assertion
+    # the harnesses make on a command's tail while far too small to overrun.
+    _LASTOUT = "/tmp/ovmx_lastcmd.out"
+    _TAIL = 4000
 
     def __init__(self, child, logfn=None):
         self.child = child
@@ -158,7 +168,7 @@ class NetBSDConsole(object):
         self.child.expect(self.prompt_re)              # sync onto the new prompt
 
     # ---- command execution ----------------------------------------------
-    def run(self, cmd, timeout=300, echo=True, retriable=True):
+    def run(self, cmd, timeout=300, echo=True, retriable=True, bg_safe=False):
         """Run one /bin/sh command; return (exit_status, output_text).
 
         Precondition: the shell is at the idle unique prompt (guaranteed by
@@ -183,28 +193,60 @@ class NetBSDConsole(object):
         """
         if self.prompt_re is None:
             raise RuntimeError("login_root_sh()/set_unique_prompt() not called")
-        # A backgrounding command (trailing `&', or a ` & ' launch followed by a
-        # bookkeeping statement) must not be blindly re-issued.
-        is_bg = cmd.rstrip().endswith("&") or " & " in cmd
-        attempts = 1 if (is_bg or not retriable) else 3
-        for attempt in range(attempts):
+        # A command that backgrounds a job it LEAVES RUNNING must not be blindly
+        # re-issued (it would duplicate the job). Detect it conservatively: a
+        # trailing `&', or a ` & ' launch followed by bookkeeping (the shape P2c
+        # and the other shared-driver harnesses use). A collapsed proof phase that
+        # backgrounds a helper INTERNALLY but runs it to completion -- kills it
+        # and emits a single result token before returning -- is idempotent; it
+        # passes bg_safe=True to opt back into retry despite containing ` & '.
+        is_bg = (cmd.rstrip().endswith("&") or " & " in cmd) and not bg_safe
+        can_retry = retriable and not is_bg
+        # Retry an idempotent command to the OVERALL deadline, not a fixed count:
+        # under a lossy TCG serial the marker can be dropped several times in a row
+        # (a burst), so a fixed 3 gives up too early. Each re-issue gets whatever
+        # budget remains; a genuinely slow guest still gets the whole `timeout' on
+        # a single attempt (the prompt stays withheld, so _await_marker keeps
+        # waiting rather than declaring the marker lost). The fix that actually
+        # makes this converge, though, is FEWER markers: the driver runs each proof
+        # phase as ONE in-guest command that emits a single result token.
+        overall_deadline = time.time() + timeout
+        attempt = 0
+        while True:
+            attempt += 1
+            remaining = overall_deadline - time.time()
+            if remaining <= 0:
+                break
             mk = "OVMXm-%s" % _nonce(8)
-            # A command ending in a bare `&' backgrounds a job -- `&' is ALREADY a
-            # statement separator in /bin/sh, so appending `; echo ...' after it is
-            # a syntax error (empty command between `&' and `;': NetBSD's ash
-            # rejects it outright, "Syntax error: \";\" unexpected", which silently
-            # drops the whole line and starves the driver of its end marker until
-            # pexpect times out -- looks exactly like a hung guest, isn't one).
-            # `& echo ...' (no `;') is valid: it launches the background job, then
-            # runs `echo $?=' as the next statement on the same line, reporting the
-            # shell's exit status for STARTING the job (the caller wants the launch
-            # to have succeeded, not the async job's eventual completion status).
-            if cmd.rstrip().endswith("&"):
-                self.child.sendline("%s echo %s=$?=" % (cmd, mk))
+            if is_bg:
+                # A background LAUNCH: the caller already redirects the job's own
+                # output to a file, so the console carries only the marker -- and
+                # we must NOT wrap it in a subshell (that would change job-control
+                # semantics / the launched job's lifetime). A command ending in a
+                # bare `&' backgrounds a job -- `&' is ALREADY a statement
+                # separator in /bin/sh, so appending `; echo ...' after it is a
+                # syntax error (empty command between `&' and `;': NetBSD's ash
+                # rejects it, silently dropping the whole line and starving the
+                # driver of its marker). `& echo ...' (no `;') is valid: it
+                # launches the job, then runs `echo $?=' reporting the shell's
+                # exit status for STARTING the job.
+                if cmd.rstrip().endswith("&"):
+                    self.child.sendline("%s echo %s=$?=" % (cmd, mk))
+                else:
+                    self.child.sendline("%s; echo %s=$?=" % (cmd, mk))
             else:
-                self.child.sendline("%s; echo %s=$?=" % (cmd, mk))
+                # DRIVER GUARANTEE: route the command's stdout+stderr to a guest
+                # file; only a BOUNDED tail of it plus the one-line marker reach
+                # the console, so bulk output can never flood the UART and drop
+                # the marker. `__r' captures the command's real exit status (the
+                # subshell's), unaffected by the tail. Callers still get the
+                # (bounded) tail as `out'.
+                self.child.sendline(
+                    "( %s ) >%s 2>&1; __r=$?; tail -c %d %s 2>/dev/null; "
+                    "echo %s=$__r=" %
+                    (cmd, self._LASTOUT, self._TAIL, self._LASTOUT, mk))
 
-            rc = self._await_marker(mk, timeout)
+            rc = self._await_marker(mk, remaining, allow_nudge=can_retry)
             if rc is not None:
                 out = self.child.before
                 # Resync to the idle prompt (tolerant of a dropped prompt: we
@@ -215,8 +257,8 @@ class NetBSDConsole(object):
                     out = out.decode("ascii", "ignore")
                 out = out.replace("\r", "")
                 if echo:
-                    tail = "" if attempt == 0 else \
-                        "   (recovered after %d lost marker(s))" % attempt
+                    tail = "" if attempt == 1 else \
+                        "   (recovered after %d lost marker(s))" % (attempt - 1)
                     self._log("$ %s   -> exit %d%s" % (cmd, rc, tail))
                     text = out.strip()
                     if text:
@@ -225,16 +267,17 @@ class NetBSDConsole(object):
                 return rc, out
 
             # rc is None: the command completed but its end marker was lost to a
-            # serial desync and we are back at an idle prompt. Re-issue (idempotent
-            # commands only; loop guard above already excludes bg/non-retriable).
-            if attempt + 1 < attempts:
-                self._log("  (console: end marker for `%s' lost to a serial "
-                          "desync; shell is idle -- re-issuing, attempt %d/%d)"
-                          % (cmd, attempt + 2, attempts))
+            # serial desync and we are back at an idle prompt. Re-issue idempotent
+            # commands to the overall deadline; a bg/non-retriable one cannot be
+            # safely re-run, so give up now with a clear timeout.
+            if not can_retry:
+                break
+            self._log("  (console: end marker for `%s' lost to a serial desync; "
+                      "shell is idle -- re-issuing, attempt %d)" % (cmd, attempt + 1))
 
         raise pexpect.TIMEOUT(
-            "end marker never returned for `%s' after %d attempt(s) "
-            "(retriable=%s, is_bg=%s)" % (cmd, attempts, retriable, is_bg))
+            "end marker never returned for `%s' within %ds after %d attempt(s) "
+            "(retriable=%s, is_bg=%s)" % (cmd, timeout, attempt, retriable, is_bg))
 
     def _resync_prompt(self, timeout):
         """Wait for the idle unique prompt after a command's marker was seen.
@@ -245,21 +288,32 @@ class NetBSDConsole(object):
         re-run. The unique prompt cannot be forged by command output, so a nudge
         is unambiguous.
         """
+        got = False
         try:
             self.child.expect(self.prompt_re, timeout=timeout)
-            return
+            got = True
         except pexpect.TIMEOUT:
-            pass
-        for _ in range(3):
-            self.child.sendline("")
+            for _ in range(3):
+                self.child.sendline("")
+                try:
+                    self.child.expect(self.prompt_re, timeout=20)
+                    got = True
+                    break
+                except pexpect.TIMEOUT:
+                    continue
+        if not got:
+            raise pexpect.TIMEOUT("idle prompt never resynced after a command")
+        # Drain any EXTRA idle prompts left behind by both-drop nudges that were
+        # sent while a slow command was still running (their queued newlines are
+        # read by the shell only after the command finished). Left unread they
+        # would shadow the NEXT command's marker as a spurious "marker lost".
+        while True:
             try:
-                self.child.expect(self.prompt_re, timeout=20)
-                return
+                self.child.expect(self.prompt_re, timeout=0.5)
             except pexpect.TIMEOUT:
-                continue
-        raise pexpect.TIMEOUT("idle prompt never resynced after a command")
+                break
 
-    def _await_marker(self, mk, total_timeout):
+    def _await_marker(self, mk, total_timeout, allow_nudge=False):
         """Wait up to total_timeout for THIS command's end marker.
 
         Returns the int exit status once the marker is seen. Returns None if the
@@ -269,6 +323,18 @@ class NetBSDConsole(object):
         burn the whole budget. A still-running (slow) guest withholds the prompt,
         so we keep waiting, sliced, up to total_timeout. The marker always prints
         BEFORE the prompt, so in the normal case idx==0 wins.
+
+        BOTH-DROP RECOVERY (rd vms-f8a). When a slice elapses with NEITHER the
+        marker nor the prompt, the command is either still running OR it finished
+        but BOTH its marker AND its trailing prompt were dropped -- silence looks
+        identical (command output is file-routed, so a slow command is
+        legitimately silent too). If `allow_nudge' (an idle-waiting, retriable,
+        non-bg command), send a bare newline: a fresh prompt with no marker proves
+        the shell is idle and the marker was lost -> return None for a sub-slice
+        re-issue instead of burning the whole per-command deadline (which is how a
+        zero-output command like `rm -f' timed a cold job out). No prompt back ->
+        still running -> keep waiting to the deadline. Nudging is NEVER done for a
+        background launch (a stray newline could perturb it); the caller gates it.
         """
         # IMPORTANT: do NOT put pexpect.TIMEOUT/EOF in this pattern list. The
         # child is anita's pexpect subclass whose expect() unconditionally logs
@@ -289,8 +355,24 @@ class NetBSDConsole(object):
                     [marker_re, self.prompt_re],
                     timeout=min(remaining, self._MARKER_SLICE))
             except pexpect.TIMEOUT:
-                # Neither the marker nor the prompt this slice -> the command is
-                # still running (slow guest). Keep waiting up to total_timeout.
+                # Neither the marker nor the prompt this slice. Nudge (if allowed)
+                # to tell "finished, both dropped" from "still running". The nudge
+                # probe MUST look for the marker too, not just the prompt: a slow
+                # command can finish DURING the nudge window, and then the marker
+                # is present right before the prompt -- matching prompt-only would
+                # ignore that marker and falsely re-issue a still-fine (re-running)
+                # command (a build restarted itself into a loop). So probe both.
+                if allow_nudge:
+                    self.child.sendline("")
+                    try:
+                        idx = self.child.expect(
+                            [marker_re, self.prompt_re],
+                            timeout=min(remaining, 10))
+                    except pexpect.TIMEOUT:
+                        continue        # still running -> keep waiting
+                    if idx == 0:
+                        return int(self.child.match.group(1))  # marker did arrive
+                    return None         # idle prompt, no marker -> marker lost
                 continue
             if idx == 0:
                 return int(self.child.match.group(1))

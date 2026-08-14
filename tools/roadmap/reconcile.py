@@ -63,7 +63,7 @@ MILESTONES = [
      "into a login."),
     ("0.5", "active",
      "Foundations for the network and the toolchain — a shared-state executive, "
-     "VMS-faithful cluster configuration, a self-hosting toolchain, and a self-built kernel."),
+     "VMS-faithful cluster configuration, a self-hosting toolchain, and a kernel substrate of its own."),
     ("0.6", "planned",
      "Cluster correctness — quorum and reconfiguration, a real distributed lock manager, "
      "and cluster membership resident in the executive."),
@@ -99,9 +99,10 @@ GATE_EPICS = [
      "and the client tools.", "0.5-1.0"),
     ("vms-30e", "DECnet Phase IV",
      "Clean-room DECnet: SET HOST and file transfer to and from a lab node.", "1.0"),
-    ("vms-19e", "Owns its kernel",
-     "A kernel built from pinned source with the VMS modules in-tree, curated per "
-     "architecture, and signed.", "0.5"),
+    ("vms-19e", "Kernel substrate",
+     "SYSKRNL: the OVMX executive layered over the Linux and NetBSD kernels — not a "
+     "kernel of its own. Built from pinned upstream source with the VMS modules "
+     "in-tree, curated per architecture.", "0.5"),
 ]
 GATE_IDS = [g[0] for g in GATE_EPICS]
 

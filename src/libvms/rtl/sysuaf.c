@@ -76,10 +76,16 @@ int sysuaf_read_line(FILE *fp, char *buf, size_t bufsz, int *too_long)
  *
  * FIELDS ARE SPLIT ON EVERY SEPARATOR, INCLUDING CONSECUTIVE ONES. strtok()
  * treats a run of delimiters as one, which silently DROPS every empty field
- * and shifts every field after it one position early -- five of the six rows
- * OVMX ships have an empty field, so a strtok split misparsed nearly the
- * whole authorization database (vms-cb5 round 5, measured on the real runtime
- * by tests/qemu/test_syssvc_setuai.c).
+ * and shifts every field after it one position early -- ALL SIX rows OVMX
+ * ships carry an empty FLAGS field (the "||" between DEFAULT_DIR and
+ * PRIVILEGES), so a strtok split dropped that field and shifted PRIVILEGES
+ * into its slot on EVERY row: $GETUAI(UAI$_PRIV) then returned mask 0 for
+ * every account, SYSTEM's "ALL" and GUEST's "TMPMBX" alike. NOT five of six
+ * and not "nearly" the whole file -- 6 of 6, measured (vms-f57): compile the
+ * strtok and strchr splits, run both over the shipped SYSUAF.DAT, and the
+ * strchr parse recovers the privileges field on all six rows the strtok
+ * parse lost. (vms-cb5 round 5 also exercised this on the real runtime via
+ * tests/qemu/test_syssvc_setuai.c.)
  */
 int sysuaf_parse_line(char *line, sysuaf_record_t *rec)
 {
@@ -135,9 +141,13 @@ int sysuaf_parse_line(char *line, sysuaf_record_t *rec)
      *   128/128 and reproduces the oracle exactly. Read as DECIMAL it is
      *   200/200 -> 13107400, which matches nothing.
      *
-     * SYSTEM's 1|4 reads identically in both bases -- that is the coincidence
-     * that hid this for as long as SYSTEM was the only account anyone logged
-     * in as.
+     * A row reads identically in octal and decimal iff BOTH its UIC
+     * components are a single octal digit (0-7); TWO shipped rows qualify,
+     * not one -- SYSTEM (1|4) and OPERATOR (1|6). Measured (vms-f57): of the
+     * six rows, exactly {SYSTEM, OPERATOR} parse the same in both bases; the
+     * four [200,20x] rows all discriminate (octal 128 vs decimal 200). The
+     * coincidence hid this for as long as the only accounts anyone logged in
+     * as were single-octal-digit ones -- it is not unique to SYSTEM.
      *
      * VMS's own convention is quoted in this tree at
      * src/libvms/include/ovmx_secparam.h and docs/oracle/vax73-privileges.md:

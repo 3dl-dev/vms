@@ -507,7 +507,8 @@ tlsdesc-offset-not-biased
 devtab-getdvi-userspace-alloc-dropped
 lnm-searchlist-equiv-truncated
 rightslist-general-hex-as-decimal
-sysuaf-uic-radix-decimal"
+sysuaf-uic-radix-decimal
+sysuaf-uic-writeback-decimal"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -5261,7 +5262,7 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "SYSUAF_UIC_RADIX -- the ONE constant sysuaf_lookup()'s field parse applies to SYSUAF.DAT's UIC_GROUP/UIC_MEMBER columns (vms-e60: every VMS UIC is written in octal) -- is changed from 8 to 10, so a shipped record like DEFAULT's '200|200' is read as decimal 200/200 instead of octal 128/128. SYSTEM's '1|4' is unaffected (identical in both bases, the LIVENESS ANCHOR every one of these suites' own comments name it as); DEFAULT and GUEST, whose fields actually discriminate the base, are not. sysuaf_format_record() (the writer) uses a literal %o unconnected to this constant, so a WRITE alone is not reached -- but any suite that reads a record back afterward through sysuaf_lookup() (test_syssvc_setuai's scenario 4) is.";;
+        why)          echo "SYSUAF_UIC_RADIX -- the ONE constant sysuaf_lookup()'s field parse applies to SYSUAF.DAT's UIC_GROUP/UIC_MEMBER columns (vms-e60: every VMS UIC is written in octal) -- is changed from 8 to 10, so a shipped record like DEFAULT's '200|200' is read as decimal 200/200 instead of octal 128/128. SYSTEM's '1|4' is unaffected (identical in both bases, the LIVENESS ANCHOR every one of these suites' own comments name it as -- as is OPERATOR's '1|6'; TWO shipped rows read the same in both bases, not one, both being single-octal-digit rows, measured vms-f57); DEFAULT and GUEST, whose fields actually discriminate the base, are not. sysuaf_format_record() (the writer) uses a literal %o unconnected to this constant, so a WRITE alone is not reached through THIS mutation -- but any suite that reads a record back afterward through sysuaf_lookup() (test_syssvc_setuai's scenario 4) is. The writer's own octal-ness has its own dedicated control, sysuaf-uic-writeback-decimal.";;
         require_fail) cat <<'EOF'
 member field is octal as well as group
 EOF
@@ -5320,6 +5321,24 @@ for that branch). test_syssvc_setuai's OTHER scenarios (1-3, the SYSPRV
 refusal/grant checks) never read a UIC field back and stay green.
 EOF
                       ;;
+        esac;;
+
+    sysuaf-uic-writeback-decimal)
+        case "$_f" in
+        facility)     echo "SYSUAF.DAT's UIC WRITE-BACK -- sysuaf_format_record()'s octal (%o) formatting of the UIC_GROUP/UIC_MEMBER columns (src/libvms/rtl/sysuaf.c, vms-e60). The WRITER half, the complement of sysuaf-uic-radix-decimal (which mutates the READER): a record's UIC round-trips only if the writer emits the same base the reader parses.";;
+        targets)      echo "libvms/rtl/sysuaf.c";;
+        suites_red)   echo "test_syssvc_setuai";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sysuaf_format_record() formats the two UIC fields with %o (octal, from the same SYSUAF_UIC_RADIX the parse uses). The mutation flips both %o to %u, so a rewritten record whose UIC digits differ between octal and decimal is written in DECIMAL. \$SETUAI's scenario 4 (test_syssvc_setuai) rewrites USER1, whose shipped 200|202 parses to struct 128|130 (decimal): with %o the writer emits '200'|'202' (unchanged), with %u it emits '128'|'130'. The suite reads the rewritten row's FIELD TEXT back with row_field() and asserts it still reads 200 / 202 -- so the %u write reddens exactly those two assertions. MEASURED (vms-f57): strtoul(\"200\",8)=128, strtoul(\"202\",8)=130; snprintf %o of 128/130 = '200'/'202', %u = '128'/'130'. This is DISTINCT from sysuaf-uic-radix-decimal: that entry mutates the READER radix (8->10) so the same round-trip corrupts through the read side (read decimal 200, write %o -> '310'); this one holds the reader octal and proves the WRITER's %o is itself load-bearing. No other qemu suite writes a record via sysuaf_format_record() and then reads a UIC field back (test_syssvc_authorize's session only EXITs; scenario 4 is the sole UIC write-back readback in the suite set), so the mutation reddens nothing outside test_syssvc_setuai.";;
+        require_fail) cat <<'EOF'
+4: the rewritten UIC GROUP field still reads 200 (octal, vms-e60)
+4: the rewritten UIC MEMBER field still reads 202 (octal, vms-e60)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
@@ -6123,6 +6142,15 @@ apply_edit() {
         # reaches both. Idempotent: the edit removes the literal `8` this
         # pattern matches.
         sed -i 's|^#define SYSUAF_UIC_RADIX     8$|#define SYSUAF_UIC_RADIX     10  /* NEGCTL sysuaf-uic-radix-decimal */|' "$_file";;
+
+    sysuaf-uic-writeback-decimal)
+        # Flip the WRITER's octal UIC formatting to decimal. UNIQUE TEXT: the
+        # two sysuaf_format_record() snprintf format strings are the only
+        # `%o|%o` in the file (the with-LGICMD and without-LGICMD variants).
+        # Idempotent: the edit removes the `%o|%o` each pattern matches, so a
+        # second apply finds nothing.
+        sed -i 's@"%s|%s|%o|%o|%s|%s|%s|%s"@"%s|%s|%u|%u|%s|%s|%s|%s" /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file"
+        sed -i 's@"%s|%s|%o|%o|%s|%s|%s"@"%s|%s|%u|%u|%s|%s|%s" /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

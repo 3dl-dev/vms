@@ -364,4 +364,16 @@
 # with no wedge, attributable to the build drive alone (the only suite whose DCL
 # activates an image through a foreign command). See its own entry in
 # facility_defects.sh for what it covers and why.
-97
+# Raised 97 -> 98 by vms-f57's sysuaf-uic-writeback-decimal -- the dedicated
+# per-facility control for the WRITER half of the UIC octal round-trip
+# (sysuaf_format_record's %o UIC formatting, src/libvms/rtl/sysuaf.c), the
+# complement of sysuaf-uic-radix-decimal (which mutates the READER radix).
+# The mutation flips both %o to %u so a rewritten record whose UIC digits
+# differ between octal and decimal is written in decimal; test_syssvc_setuai's
+# scenario 4 rewrites USER1 (ships 200|202, struct 128|130) and reads the row
+# text back, so the two "rewritten UIC {GROUP,MEMBER} field still reads 2xx"
+# assertions redden and nothing outside test_syssvc_setuai does (no other qemu
+# suite writes via sysuaf_format_record and reads a UIC field back). MEASURED
+# host-side (vms-f57): snprintf %o of 128/130 = "200"/"202", %u = "128"/"130".
+# See its own entry in facility_defects.sh for what it covers and why.
+98

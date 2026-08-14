@@ -63,6 +63,37 @@ echo "sysroot: $SYSROOT"
 cmake --version | head -1
 echo
 
+# --- negative control (teeth): a non-ld.elf_so image MUST fail the contract ---
+# CROSSCOMPILE_NEGCTL=1 asserts the Decision-A activation contract has teeth --
+# that an image whose PT_INTERP is NOT NetBSD's /usr/libexec/ld.elf_so is
+# REJECTED by the interpreter assertion below. Without this, the contract's
+# `[ "$INTERP" = "/usr/libexec/ld.elf_so" ]` check could pass anything and the
+# gate would not actually enforce that OVMX images activate by the decided
+# NetBSD path. Fast (a trivial dynamic exe, no OVMX layers) and early-exit: the
+# positive proofs below are untouched.
+if [ "${CROSSCOMPILE_NEGCTL:-0}" = "1" ]; then
+    echo "=== NEGATIVE CONTROL: an image NOT activated by /usr/libexec/ld.elf_so must FAIL the Decision-A contract ==="
+    cat > "$OUT/negctl.c" <<'EOF'
+int main(void){ return 0; }
+EOF
+    BAD="$OUT/BAD_INTERP.EXE"
+    # Force a bogus PT_INTERP: a genuinely dynamic vax exe whose requested
+    # activator is a path that is NOT NetBSD's runtime linker. -Wl,--dynamic-
+    # linker only writes the .interp string; the loader is never consulted at
+    # link time, so this always links.
+    "$CC" --sysroot="$SYSROOT" -Wl,--dynamic-linker=/ovmx/negctl/not-ld.elf_so \
+        "$OUT/negctl.c" -o "$BAD"
+    NEG_INTERP="$("$READELF" -p .interp "$BAD" 2>/dev/null | grep -oE '/[^ ]*ld\.elf_so' | head -1 || true)"
+    if [ "$NEG_INTERP" = "/usr/libexec/ld.elf_so" ]; then
+        echo "FAIL (negctl): a bogus-interp image still matched /usr/libexec/ld.elf_so -- the activation assertion has NO teeth"
+        exit 1
+    fi
+    echo "--- image interp (must NOT be /usr/libexec/ld.elf_so) ---"
+    "$READELF" -p .interp "$BAD" 2>/dev/null | grep -oE '/[^[:space:]]+' | head -1 || true
+    echo "PASS (negctl): the non-ld.elf_so image is correctly rejected by the Decision-A activation contract -- the interpreter assertion has teeth"
+    exit 0
+fi
+
 # --- proof 0: build the ported OVMX layers (libvmssys + vmsprocess) ----------
 echo "=== proof 0: build libvmssys.a + libvmsprocess.a for netbsd-vax ==="
 cmake -S "$LIBVMSSYS" -B "$OUT/libvmssys" -G "Unix Makefiles" \

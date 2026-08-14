@@ -34,6 +34,37 @@ echo "build tools: cmake=$(command -v cmake) make=$(command -v make) ninja=$(com
 cmake --version | head -1
 echo
 
+# --- negative control (teeth): an LP64 width assumption MUST NOT compile ------
+# CROSSCOMPILE_NEGCTL=1 asserts the ILP32 width gate has teeth -- that a TU
+# written with the 64-bit (LP64) long/pointer assumptions every OTHER OVMX
+# target uses is REJECTED by the vax--netbsdelf compiler. Without this, the
+# width sanity below (and every _Static_assert the ported layers rely on) could
+# silently be a no-op and a 64-bit-pointer assumption would ride into a vax
+# image undetected. This is the exact width class (docs/audit-ilp32-vax-
+# libvmssys.md §1) the netbsd-vax port exists to police. Early-exit: the
+# positive build path below is untouched.
+if [ "${CROSSCOMPILE_NEGCTL:-0}" = "1" ]; then
+    echo "=== NEGATIVE CONTROL: an LP64 (64-bit long/pointer) width assumption must FAIL the vax cross-compile ==="
+    cat > "$OUT/width_negctl.c" <<'EOF'
+#include <stdint.h>
+/* Deliberately WRONG for the VAX (ILP32): these assert the LP64 widths. On a
+ * real vax--netbsdelf compile long and void* are 32-bit, so both static
+ * assertions MUST be hard errors. If this TU compiles clean, the width gate
+ * has no teeth -- it would pass code built with 64-bit pointer/long math. */
+_Static_assert(sizeof(long)  == 8, "NEGCTL: pretend VAX long is 64-bit (LP64)");
+_Static_assert(sizeof(void*) == 8, "NEGCTL: pretend VAX pointer is 64-bit (LP64)");
+int main(void){ return 0; }
+EOF
+    if "$CC" --sysroot="$SYSROOT" -c "$OUT/width_negctl.c" -o "$OUT/width_negctl.o" 2>"$OUT/negctl.err"; then
+        echo "FAIL (negctl): the LP64 width assertions compiled clean on vax -- the ILP32 width gate has NO teeth"
+        exit 1
+    fi
+    echo "--- rejected as expected (compiler diagnostics) ---"
+    grep -iE 'static.?assert|error' "$OUT/negctl.err" | head -4 || true
+    echo "PASS (negctl): the LP64 width assumptions were REJECTED by the vax--netbsdelf cross-compile -- the ILP32 width gate has teeth"
+    exit 0
+fi
+
 # --- sanity: the compiler agrees VAX is ILP32 little-endian ------------------
 echo "=== width/endian sanity (the whole reason for the P3 audit) ==="
 cat > "$OUT/width.c" <<'EOF'

@@ -4567,6 +4567,18 @@ jobs:
             || { echo "FAIL: linked executable was not a VAX ELF"; exit 1; }
           echo "PASS: libvmssys built for netbsd-vax and a real ELF32 VAX exe linked against NetBSD libc"
 
+      - name: Teeth check (an LP64 width assumption must fail the vax cross-compile)
+        run: |
+          set +e
+          RAW=$(docker run --rm -e CROSSCOMPILE_NEGCTL=1 -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax build-libvmssys-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          [ "$RC" -eq 0 ] || { echo "FAIL: negctl run exited nonzero ($RC)"; exit 1; }
+          echo "$RAW" | grep -qF 'PASS (negctl): the LP64 width assumptions were REJECTED' \
+            || { echo "FAIL: negctl did not confirm the ILP32 width gate rejects a 64-bit-pointer assumption"; exit 1; }
+
   # vmsprocess-netbsd-vax (rd vms-84b, epic vms-8e8; CLAUDE.md "Library Build
   # Order": libvmssys -> vmsprocess -> libvms). The NEXT layer up from
   # libvmssys-netbsd-vax. Same shape: BUILD-ONLY cross-compile gate over the
@@ -4832,6 +4844,18 @@ jobs:
           echo "$RAW" | grep -qF 'requested interpreter: /usr/libexec/ld.elf_so' \
             || { echo "FAIL: image did not request NetBSD's ld.elf_so as its activator"; exit 1; }
           echo "PASS: a representative elf32-vax OVMX image activates via NetBSD ld.elf_so (Decision A)"
+
+      - name: Teeth check (a non-ld.elf_so image must fail the Decision-A activation contract)
+        run: |
+          set +e
+          RAW=$(docker run --rm -e CROSSCOMPILE_NEGCTL=1 -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax build-activation-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          [ "$RC" -eq 0 ] || { echo "FAIL: negctl run exited nonzero ($RC)"; exit 1; }
+          echo "$RAW" | grep -qF 'PASS (negctl): the non-ld.elf_so image is correctly rejected' \
+            || { echo "FAIL: negctl did not confirm the activation contract rejects a bogus-interp image"; exit 1; }
 
   # -----------------------------------------------------------------------
   # vmslnm+vmsfs+vmsrms-netbsd-vax (rd vms-271, epic vms-8e8, P4-C; CLAUDE.md

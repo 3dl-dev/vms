@@ -12,9 +12,13 @@
 # WHAT THIS PROVES (design doc docs/design-boot-faithful.md §2.2/§3.1/§4.2)
 #
 #   Boot A (flagless):        SYSBOOT> never appears.
-#   Boot B (ovmx.flags=0,1):  SYSBOOT> appears with NOTHING preceding it on
-#                             the console (not even the executive-attach
-#                             line); SHOW SCSNODE's table is byte-shaped to
+#   Boot B (ovmx.flags=0,1):  SYSBOOT> appears with no VMS BANNER and no
+#                             executive narration preceding it (the executive
+#                             attaches only after CONTINUE) -- the firmware/
+#                             substrate preamble (SeaBIOS, the SYSKRNL identity
+#                             line) legitimately precedes it, exactly as the
+#                             SRM console block precedes SYSBOOT> in the §3.1
+#                             oracle; SHOW SCSNODE's table is byte-shaped to
 #                             the oracle capture; SET SCSNODE ZZ9 + CONTINUE
 #                             boots showing node ZZ9.
 #   Boot C (flagless again, SAME disk): node name is back to the disk's
@@ -152,18 +156,26 @@ OUT_B=$(timeout "$TIMEOUT" expect -c "
     expect eof
 " 2>&1 || true)
 
-# The load-bearing proof (§3.1): NOTHING precedes SYSBOOT>, not even the
-# executive-attach line. Slice everything up to and including the FIRST
-# 'SYSBOOT> ' and demand it is empty once that prompt text itself is
-# stripped.
+# The load-bearing proof (§3.1, design-boot-faithful.md line "No banner
+# precedes SYSBOOT>"): no VMS BANNER and no executive narration precedes the
+# prompt -- SYSBOOT> halts BEFORE the executive attaches. It is NOT "the console
+# is byte-empty before SYSBOOT>": the oracle §3.1 capture itself shows firmware/
+# console bootstrap output (the SRM `P00>>>` block: "block 0 ... valid boot
+# block", "jumping to bootstrap code") preceding SYSBOOT>. The OVMX substrate
+# analog is the unavoidable firmware/kernel preamble -- expect's own `spawn`
+# echo, SeaBIOS, "Booting from ROM", the ANSI clear-screen, and the substrate
+# identity line "OVMX/Linux -- SYSKRNL (...)" -- none of which is a VMS banner or
+# executive line. Slice everything up to and including the FIRST 'SYSBOOT> ' and
+# demand it carries NO OVMX/VMS executive marker (the `%OVMX-...` narration incl.
+# the `%OVMX-I-EXEC ... executive attached` line, and the `OpenVMX Vx.x` banner).
 PRE_PROMPT=$(sed -n '1,/SYSBOOT> /p' <<<"$OUT_B" | sed 's/SYSBOOT> $//')
-if [ -z "$(tr -d '[:space:]' <<<"$PRE_PROMPT")" ]; then
-    echo "  PASS: Boot B: nothing precedes SYSBOOT> on the console"
-    PASS=$((PASS + 1))
-else
-    echo "  FAIL: Boot B: output precedes SYSBOOT> on the console:"
+if LEAK=$(grep -aE '%OVMX-|OpenVMX V[0-9]' <<<"$PRE_PROMPT"); then
+    echo "  FAIL: Boot B: a VMS banner/executive line precedes SYSBOOT>:"
     FAIL=$((FAIL + 1))
-    sed 's/^/    | /' <<<"$PRE_PROMPT"
+    sed 's/^/    | /' <<<"$LEAK"
+else
+    echo "  PASS: Boot B: no VMS banner/executive line precedes SYSBOOT> (§3.1)"
+    PASS=$((PASS + 1))
 fi
 
 # SHOW SCSNODE table, byte-shaped to docs/design-boot-faithful.md §3.1's

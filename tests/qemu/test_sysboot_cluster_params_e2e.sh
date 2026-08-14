@@ -216,11 +216,15 @@ if [ "$rc" -eq 0 ]; then
         "$POS_LOG" 'HOSTP = "CLUX"'
 
     # NUMERIC param in effect: dcl_lexical.c reads the OVMXVMSSYS.PAR store
-    # fresh and sees the ;2 the SYSBOOT> WRITE minted.
+    # fresh and sees the ;2 the SYSBOOT> WRITE minted. F$GETSYI returns an
+    # INTEGER for a numeric item (unlike NODENAME, a string), so the DCL symbol
+    # is integer-typed and SHOW SYMBOL renders it UNQUOTED with the Hex/Octal
+    # columns: "SIDP = 1027   Hex = 00000403  Octal = ...". Anchor on the value
+    # AND its hex (0x403 == 1027) so a wrong value cannot pass.
     send 'SIDP = F$GETSYI("SCSSYSTEMID")'; sleep 1
     send 'SHOW SYMBOL SIDP'; sleep 1
     check "in-guest: F\$GETSYI(SCSSYSTEMID) reads the authored 1027" \
-        "$POS_LOG" 'SIDP = "1027"'
+        "$POS_LOG" 'SIDP = 1027   Hex = 00000403'
 fi
 kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
 rm -f "$POS_FIFO"
@@ -275,10 +279,12 @@ if [ "$rc" -eq 0 ]; then
     check "bracket: F\$GETSYI(NODENAME) is the seeded default OVMX" \
         "$DEF_LOG" 'HOSTD = "OVMX"'
 
+    # Numeric item -> integer symbol, rendered unquoted with Hex/Octal (see the
+    # CASE 1 SCSSYSTEMID note); the seeded default is 0 (0x0).
     send 'SIDD = F$GETSYI("SCSSYSTEMID")'; sleep 1
     send 'SHOW SYMBOL SIDD'; sleep 1
     check "bracket: F\$GETSYI(SCSSYSTEMID) is the seeded default 0" \
-        "$DEF_LOG" 'SIDD = "0"'
+        "$DEF_LOG" 'SIDD = 0   Hex = 00000000'
 fi
 kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
 rm -f "$DEF_FIFO"

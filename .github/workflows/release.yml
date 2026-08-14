@@ -89,10 +89,28 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       # Cut the reproducible bundle from the tagged commit into a known dir.
+      # Sign modules with the persistent OVMX signing key from Actions secrets
+      # (vms-19ed): the private key is NEVER in git, but releases all share it,
+      # so their module signatures/keyring are deterministic release-to-release
+      # (vms-d73) and form one stable trust anchor. Absent (e.g. a fork build)
+      # -> cut-release.sh mints an ephemeral key and only the signature bytes
+      # vary. The secret is written to a temp file the script reads via
+      # OVMX_MODULE_SIGNING_KEY, then removed.
       - name: Cut the release bundle
+        env:
+          OVMX_MODULE_SIGNING_KEY_PEM: ${{ secrets.OVMX_MODULE_SIGNING_KEY }}
         run: |
+          if [ -n "${OVMX_MODULE_SIGNING_KEY_PEM:-}" ]; then
+            KEYFILE="$(mktemp)"
+            printf '%s\n' "$OVMX_MODULE_SIGNING_KEY_PEM" > "$KEYFILE"
+            export OVMX_MODULE_SIGNING_KEY="$KEYFILE"
+            echo "release signing: using persistent key from secrets.OVMX_MODULE_SIGNING_KEY"
+          else
+            echo "release signing: no OVMX_MODULE_SIGNING_KEY secret -- ephemeral key (signatures not reproducible)"
+          fi
           tools/cut-release.sh --ref "${{ steps.tag.outputs.tag }}" \
             --out-dir "${{ github.workspace }}/dist/release-cut"
+          [ -n "${KEYFILE:-}" ] && rm -f "$KEYFILE" || true
 
       # Publish artifacts + generated notes. --no-record-notes: committing the
       # in-tree notes record is a source change for a PR, not something a

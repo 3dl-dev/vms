@@ -8,7 +8,11 @@
  *   CPU:      /proc/stat
  *   Memory:   /proc/meminfo
  *   Disk:     /proc/diskstats
- *   Process:  /proc/[pid]/stat, /proc/[pid]/comm
+ *   Process:  the EXECUTIVE process table, via vms_kif_procscan()
+ *             (src/libvmssys/vms_kif.c) -- the SAME single source DCL
+ *             SHOW SYSTEM reads (src/vmsdcl/dcl_cmd_show.c). See the
+ *             process-reader section below for why MONITOR must NOT keep
+ *             its own /proc scan (vms-c840).
  *
  * Usage:
  *   vms_monitor [SYSTEM|PROCESSES|DISK|IO]
@@ -27,7 +31,6 @@
 #include <ctype.h>
 #include <time.h>
 #include <unistd.h>
-#include <dirent.h>
 #include <signal.h>
 #include <errno.h>
 #include <termios.h>
@@ -37,6 +40,7 @@
 #include <sys/ioctl.h>
 
 #include "ovmx_identity.h"
+#include "vms_kif.h"   /* vms_kif_procscan + struct vms_procinfo (vms-c840) */
 
 /* ================================================================== */
 /*                         Constants                                   */
@@ -102,18 +106,22 @@ typedef struct {
     unsigned long long write_sectors;
 } disk_raw_t;
 
-/* Per-process info */
+/* Per-process info, mapped from the executive's struct vms_procinfo row
+ * (vms-c840). A field the executive does not source (VMS state, VMS
+ * priority) carries a `has_*` flag CLEAR and is rendered absent, never as a
+ * fabricated value -- the same discipline SHOW SYSTEM applies to the same
+ * row (docs/oracle/vax73-show-system-process.md sec 5.1). */
 typedef struct {
-    int    pid;
-    char   name[64];
-    char   state;           /* Linux state char */
-    char   vms_state[8];    /* VMS state string */
-    int    priority;
-    long   utime_ticks;     /* CPU user ticks */
-    long   stime_ticks;     /* CPU system ticks */
-    long   cpu_ms;          /* cumulative CPU ms (derived) */
-    char   cpu_str[24];     /* "HH:MM:SS.CC" */
-    long   minflt;          /* page faults */
+    int    pid;             /* JPI$_PID (vms_procinfo.vms_pid) */
+    char   name[64];        /* process name (vms_procinfo.prcnam), "" unnamed */
+    char   vms_state[8];    /* VMS scheduler state -- "" (not executive-sourced) */
+    int    has_state;
+    int    priority;        /* VMS priority (vms_procinfo.cur_pri) if sourced */
+    int    has_pri;
+    char   cpu_str[24];     /* "HH:MM:SS.CC" from JPI$_CPUTIM, "" if absent */
+    int    has_cpu;
+    long   minflt;          /* JPI$_PAGEFLTS (vms_procinfo.pageflts) if sourced */
+    int    has_pgflt;
 } proc_info_t;
 
 /* Session-level rolling stats */
@@ -354,54 +362,34 @@ static int read_meminfo(mem_info_t *m)
     return 0;
 }
 
+/*
+ * Process count and aggregate page faults come from the EXECUTIVE process
+ * table (vms-c840), enumerated with the same vms_kif_procscan() cursor
+ * read_processes() below and DCL SHOW SYSTEM use. A /proc walk here would
+ * be a second, divergent source that also counts Linux tasks the VMS view
+ * does not own -- the exact defect this item fixes.
+ */
 static int count_procs(void)
 {
-    DIR *d = opendir("/proc");
-    if (!d) return 0;
-
+    uint32_t index = 0;
+    struct vms_procinfo info;
     int count = 0;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-        if (isdigit((unsigned char)e->d_name[0])) count++;
-    }
-    closedir(d);
+    while (vms_kif_procscan(&index, &info) & 1)
+        count++;
     return count;
 }
 
-/* Sum page faults across all processes */
+/* Sum page faults across the executive's processes (JPI$_PAGEFLTS per row,
+ * only where the executive sourced it -- absent is not counted as zero). */
 static long sum_page_faults(void)
 {
-    DIR *d = opendir("/proc");
-    if (!d) return 0;
-
+    uint32_t index = 0;
+    struct vms_procinfo info;
     long total = 0;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-        if (!isdigit((unsigned char)e->d_name[0])) continue;
-
-        int xpid = atoi(e->d_name);
-        if (xpid <= 0) continue;
-
-        char path[32];
-        snprintf(path, sizeof(path), "/proc/%d/stat", xpid);
-        FILE *fp = fopen(path, "r");
-        if (!fp) continue;
-
-        /* Fields: pid comm state ppid ... minflt cminflt majflt cmajflt */
-        char buf[1024];
-        if (fgets(buf, sizeof(buf), fp)) {
-            /* Skip past comm field "(name)" to avoid spaces in name */
-            char *p = strrchr(buf, ')');
-            if (p) {
-                long minflt = 0, cminflt = 0;
-                sscanf(p + 2, "%*c %*d %*d %*d %*d %*d %*u %ld %ld",
-                       &minflt, &cminflt);
-                total += minflt;
-            }
-        }
-        fclose(fp);
+    while (vms_kif_procscan(&index, &info) & 1) {
+        if (info.fields_valid & VMS_PI_V_PAGEFLTS)
+            total += (long)info.pageflts;
     }
-    closedir(d);
     return total;
 }
 
@@ -451,92 +439,82 @@ static int read_diskstats(disk_raw_t *d)
     return 0;
 }
 
-/* Map Linux process state char to VMS state string */
-static const char *linux_state_to_vms(char state)
-{
-    switch (state) {
-        case 'R': return "CUR";
-        case 'S': return "LEF";
-        case 'D': return "LEF";
-        case 'Z': return "SUSP";
-        case 'T': return "SUSP";
-        case 'I': return "HIB";
-        default:  return "COM";
-    }
-}
-
-/* Read per-process info — returns count of processes read */
+/*
+ * Read per-process info from the EXECUTIVE process table (vms-c840) --
+ * returns the count of processes read.
+ *
+ * THIS IS THE WHOLE FIX. MONITOR used to build its process list by walking
+ * the /proc directory and each numeric per-PID stat entry under it, which
+ * enumerates EVERY Linux task -- including Linux's own kernel threads and
+ * daemons -- while DCL SHOW
+ * SYSTEM reads the executive's process table through vms_kif_procscan(). Two
+ * different sources answered the same VMS question with two different lists
+ * (operator-observed 2026-08-14). MONITOR now reads the SAME single source
+ * SHOW SYSTEM does, so the two commands list an IDENTICAL set of processes
+ * -- whatever the executive's table holds. There is no filtering here and no
+ * second source: the set is exactly what the executive returns.
+ *
+ * Field mapping mirrors dcl_cmd_show.c's cmd_show_system() row-for-row. A
+ * field the executive sources (name, JPI$_CPUTIM, JPI$_PAGEFLTS) is rendered
+ * at its real value; a field it does NOT source (VMS scheduler state,
+ * VMS priority) is marked absent and rendered blank -- never invented from a
+ * Linux value, the fabrication class the SHOW SYSTEM oracle refused
+ * (docs/oracle/vax73-show-system-process.md sec 5.1).
+ *
+ * INV-6 / Rule 9: /dev/vms is the transport; if it is absent vms_kif_procscan
+ * returns a failure status (odd-bit clear) on the first call, the loop makes
+ * no iterations, and MONITOR shows no processes -- it does NOT fall back to
+ * /proc. In the real runtime PID 1 refuses to boot without the executive, so
+ * the empty case only arises off the runtime (e.g. host CI), exactly as it
+ * does for SHOW SYSTEM.
+ */
 static int read_processes(proc_info_t *procs, int max_procs)
 {
-    DIR *d = opendir("/proc");
-    if (!d) return 0;
-
+    uint32_t index = 0;
+    struct vms_procinfo info;
     int count = 0;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL && count < max_procs) {
-        if (!isdigit((unsigned char)e->d_name[0])) continue;
 
-        int pid = atoi(e->d_name);
-        if (pid <= 0) continue;
-
-        /* Read /proc/pid/stat — path needs: "/proc/" + up to 10 digits + "/stat" + NUL = 22 chars */
-        char path[32];
-        snprintf(path, sizeof(path), "/proc/%d/stat", pid);
-        FILE *fp = fopen(path, "r");
-        if (!fp) continue;
-
-        char buf[1024];
-        if (!fgets(buf, sizeof(buf), fp)) { fclose(fp); continue; }
-        fclose(fp);
-
-        /* Parse stat: pid (comm) state ppid ... utime stime */
-        char *start = strchr(buf, '(');
-        char *end   = strrchr(buf, ')');
-        if (!start || !end || end <= start) continue;
-
-        char comm[64] = {0};
-        size_t comm_len = (size_t)(end - start - 1);
-        if (comm_len >= sizeof(comm)) comm_len = sizeof(comm) - 1;
-        memcpy(comm, start + 1, comm_len);
-
-        char state_c = 0;
-        long utime = 0, stime = 0;
-        long minflt = 0;
-        int priority = 0;
-
-        sscanf(end + 2,
-               "%c %*d %*d %*d %*d %*d %*u "  /* state ppid pgrp ... */
-               "%ld %*d "                        /* minflt cminflt */
-               "%*d %*d "                        /* majflt cmajflt */
-               "%ld %ld "                        /* utime stime */
-               "%*d %*d "                        /* cutime cstime */
-               "%d",                             /* priority */
-               &state_c,
-               &minflt,
-               &utime, &stime,
-               &priority);
-
+    while (count < max_procs && (vms_kif_procscan(&index, &info) & 1)) {
         proc_info_t *p = &procs[count++];
-        p->pid = pid;
+        memset(p, 0, sizeof(*p));
+        p->pid = (int)info.vms_pid;
 
-        /* Uppercase comm, truncate to 63 chars */
+        /* Process name as the executive holds it (prcnam), uppercased for the
+         * VMS display column exactly as the old path uppercased the comm. */
         size_t ci;
-        for (ci = 0; comm[ci] && ci < sizeof(p->name) - 1; ci++)
-            p->name[ci] = (char)toupper((unsigned char)comm[ci]);
+        for (ci = 0; info.prcnam[ci] && ci < sizeof(p->name) - 1; ci++)
+            p->name[ci] = (char)toupper((unsigned char)info.prcnam[ci]);
         p->name[ci] = '\0';
 
-        p->state = state_c ? state_c : '?';
-        strncpy(p->vms_state, linux_state_to_vms(state_c), sizeof(p->vms_state) - 1);
-        p->vms_state[sizeof(p->vms_state) - 1] = '\0';
-        p->priority = (priority > 0) ? priority : 4;
-        p->utime_ticks = utime;
-        p->stime_ticks = stime;
-        p->minflt = minflt;
+        /* CPU time: JPI$_CPUTIM, 10ms units == centiseconds, the same unit
+         * ticks_to_vms_time() already formats (USER_HZ 100). Absent -> "". */
+        if (info.fields_valid & VMS_PI_V_CPUTIM) {
+            ticks_to_vms_time((long)info.cputim, p->cpu_str, sizeof(p->cpu_str));
+            p->has_cpu = 1;
+        }
 
-        long total_ticks = utime + stime;
-        ticks_to_vms_time(total_ticks, p->cpu_str, sizeof(p->cpu_str));
+        /* Page faults: JPI$_PAGEFLTS. Absent -> not shown (not a zero). */
+        if (info.fields_valid & VMS_PI_V_PAGEFLTS) {
+            p->minflt = (long)info.pageflts;
+            p->has_pgflt = 1;
+        }
+
+        /* VMS priority: only if the executive sources it (it does not yet --
+         * VMS_PI_V_PRI clear). No Linux nice-value substitution. */
+        if (info.fields_valid & VMS_PI_V_PRI) {
+            p->priority = (int)info.cur_pri;
+            p->has_pri = 1;
+        }
+
+        /* VMS scheduler state: the executive has no VMS scheduler, so this is
+         * absent (VMS_PI_V_STATE clear) and shown blank -- never mapped from a
+         * Linux task state, which is the divergence SHOW SYSTEM also refuses. */
+        if (info.fields_valid & VMS_PI_V_STATE) {
+            /* Structural: no VMS state string table is defined until the
+             * executive sources one; leave blank rather than invent. */
+            p->has_state = 1;
+        }
     }
-    closedir(d);
     return count;
 }
 
@@ -616,13 +594,23 @@ static void display_processes(void)
     int nproc = read_processes(procs, MAX_PROCS);
 
     for (int i = 0; i < nproc; i++) {
-        printf("%-20s  %08X  %-6s  %3d  %-16s  %ld\n",
+        /* Absent (non-executive-sourced) fields render as blanks of the
+         * column width, never as a fabricated 0 -- the same "absent is not
+         * zero" discipline SHOW SYSTEM applies to this executive row. */
+        char pri_str[8];
+        char pf_str[16];
+        if (procs[i].has_pri) snprintf(pri_str, sizeof(pri_str), "%3d", procs[i].priority);
+        else                  snprintf(pri_str, sizeof(pri_str), "%3s", "");
+        if (procs[i].has_pgflt) snprintf(pf_str, sizeof(pf_str), "%ld", procs[i].minflt);
+        else                    pf_str[0] = '\0';
+
+        printf("%-20s  %08X  %-6s  %s  %-16s  %s\n",
                procs[i].name,
                (unsigned int)procs[i].pid,
                procs[i].vms_state,
-               procs[i].priority,
+               pri_str,
                procs[i].cpu_str,
-               procs[i].minflt);
+               pf_str);
     }
     if (nproc == 0) {
         printf("  (no processes visible)\n");

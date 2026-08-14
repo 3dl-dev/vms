@@ -119,6 +119,10 @@ target_include_directories(vms_monitor PRIVATE
     ${VMS_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
+    # vms-c840: vms_kif.h (the executive process-table client) -- MONITOR now
+    # reads the process list from vms_kif_procscan(), the same source SHOW
+    # SYSTEM uses, instead of its own /proc scan.
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
 )
 
 target_compile_definitions(vms_monitor PRIVATE
@@ -132,7 +136,9 @@ target_compile_options(vms_monitor PRIVATE
 
 # vms-d34: pulls sysgen_params.h transitively via ovmx_identity.h, which now
 # calls through to vmsfs for SYS$SYSTEM:OVMXVMSSYS.PAR version resolution.
-target_link_libraries(vms_monitor PRIVATE vmsfs vmslnm)
+# vms-c840: vmssys provides vms_kif_procscan() -- the executive process table
+# reader, MONITOR's single process source (shared with SHOW SYSTEM).
+target_link_libraries(vms_monitor PRIVATE vmsfs vmslnm vmssys)
 
 set_target_properties(vms_monitor PROPERTIES
     OUTPUT_NAME "MONITOR"

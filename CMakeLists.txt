@@ -671,6 +671,31 @@ if(BUILD_TESTS)
     set_tests_properties(opcom_record_body_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # MONITOR PROCESS and SHOW SYSTEM list the SAME process set because they
+    # read the SAME single source -- the executive process table via
+    # vms_kif_procscan (rd vms-c840). MONITOR used to build its list from its
+    # own /proc walk (every Linux task), so the two commands diverged
+    # (operator-observed 2026-08-14). This RUNS both binaries and requires
+    # their PID sets to be EQUAL, plus proves MONITOR actually read the
+    # executive (strace openat("/dev/vms")) so an empty host set is not a
+    # vacuous pass. BUILD_TOOLS-gated: MONITOR.EXE is a tools/ target.
+    if(BUILD_TOOLS)
+        add_test(NAME monitor_process_source_gate
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_monitor_process_source.sh
+                    $<TARGET_FILE:vms_monitor> $<TARGET_FILE:vmsdcl>)
+        set_tests_properties(monitor_process_source_gate PROPERTIES
+            LABELS "integration;authenticity" TIMEOUT 120)
+
+        # ...and the proof it can go red: a sandbox MONITOR with the /proc scan
+        # reintroduced must drive the gate RED (positive control passes first).
+        # Builds one tool target in a sandbox -- cmake required.
+        add_test(NAME monitor_process_source_negctl
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_monitor_process_source_negctl.sh
+                    ${CMAKE_CURRENT_SOURCE_DIR} $<TARGET_FILE:vmsdcl>)
+        set_tests_properties(monitor_process_source_negctl PROPERTIES
+            LABELS "integration;authenticity" TIMEOUT 300)
+    endif()
+
     # Divider integrity (vms-6d7): catch git's 3-way auto-merge silently
     # truncating/fusing comment-divider blocks -- the vms-371 rebase
     # incident (2e30da9 / 2dcd237), corrupted OUTSIDE the region git

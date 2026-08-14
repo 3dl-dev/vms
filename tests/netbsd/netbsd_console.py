@@ -78,6 +78,15 @@ class NetBSDConsole(object):
     # the marker -- is recovered in one slice instead of stalling the full budget.
     _MARKER_SLICE = 120
 
+    # DRIVER GUARANTEE (rd vms-f8a): a non-background command's stdout+stderr are
+    # routed to this guest file; only a BOUNDED tail of it (plus the one-line end
+    # marker) is ever echoed to the console. So no command -- not `ls -R', not a
+    # build/cat log, not any debug flourish -- can flood the emulated UART and
+    # cost the marker its byte. The bound is generous enough for every assertion
+    # the harnesses make on a command's tail while far too small to overrun.
+    _LASTOUT = "/tmp/ovmx_lastcmd.out"
+    _TAIL = 4000
+
     def __init__(self, child, logfn=None):
         self.child = child
         self._log = logfn or (lambda _m: None)
@@ -208,20 +217,33 @@ class NetBSDConsole(object):
             if remaining <= 0:
                 break
             mk = "OVMXm-%s" % _nonce(8)
-            # A command ending in a bare `&' backgrounds a job -- `&' is ALREADY a
-            # statement separator in /bin/sh, so appending `; echo ...' after it is
-            # a syntax error (empty command between `&' and `;': NetBSD's ash
-            # rejects it outright, "Syntax error: \";\" unexpected", which silently
-            # drops the whole line and starves the driver of its end marker until
-            # pexpect times out -- looks exactly like a hung guest, isn't one).
-            # `& echo ...' (no `;') is valid: it launches the background job, then
-            # runs `echo $?=' as the next statement on the same line, reporting the
-            # shell's exit status for STARTING the job (the caller wants the launch
-            # to have succeeded, not the async job's eventual completion status).
-            if cmd.rstrip().endswith("&"):
-                self.child.sendline("%s echo %s=$?=" % (cmd, mk))
+            if is_bg:
+                # A background LAUNCH: the caller already redirects the job's own
+                # output to a file, so the console carries only the marker -- and
+                # we must NOT wrap it in a subshell (that would change job-control
+                # semantics / the launched job's lifetime). A command ending in a
+                # bare `&' backgrounds a job -- `&' is ALREADY a statement
+                # separator in /bin/sh, so appending `; echo ...' after it is a
+                # syntax error (empty command between `&' and `;': NetBSD's ash
+                # rejects it, silently dropping the whole line and starving the
+                # driver of its marker). `& echo ...' (no `;') is valid: it
+                # launches the job, then runs `echo $?=' reporting the shell's
+                # exit status for STARTING the job.
+                if cmd.rstrip().endswith("&"):
+                    self.child.sendline("%s echo %s=$?=" % (cmd, mk))
+                else:
+                    self.child.sendline("%s; echo %s=$?=" % (cmd, mk))
             else:
-                self.child.sendline("%s; echo %s=$?=" % (cmd, mk))
+                # DRIVER GUARANTEE: route the command's stdout+stderr to a guest
+                # file; only a BOUNDED tail of it plus the one-line marker reach
+                # the console, so bulk output can never flood the UART and drop
+                # the marker. `__r' captures the command's real exit status (the
+                # subshell's), unaffected by the tail. Callers still get the
+                # (bounded) tail as `out'.
+                self.child.sendline(
+                    "( %s ) >%s 2>&1; __r=$?; tail -c %d %s 2>/dev/null; "
+                    "echo %s=$__r=" %
+                    (cmd, self._LASTOUT, self._TAIL, self._LASTOUT, mk))
 
             rc = self._await_marker(mk, remaining)
             if rc is not None:

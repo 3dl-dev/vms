@@ -284,7 +284,7 @@ def main():
                     "  mount_cd9660 /dev/cd0d /mnt ; } && "
                     "cp -R /mnt/kmod /mnt/probe /mnt/kernel-core /root/ovmx/ && "
                     "umount /mnt && chmod -R u+w /root/ovmx && "
-                    "ls -R /root/ovmx",
+                    "test -f /root/ovmx/probe/vmsproctab.c",   # quiet: no ls -R
                     cmd_timeout)
         if rc != 0:
             log("FAIL: could not stage OVMX sources from the CD in the guest")

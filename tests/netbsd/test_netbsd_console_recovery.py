@@ -118,7 +118,35 @@ def _run_no_retry(name, cmd, **kw):
     raise AssertionError("%s: expected TIMEOUT (no re-issue)" % name)
 
 
+def _assert_console_carries_only_markers():
+    """run() MUST route a normal command's output to a guest file and echo only a
+    bounded tail + the marker -- so bulk output can never flood the emulated UART
+    and drop the marker (rd vms-f8a). A background LAUNCH must NOT be wrapped
+    (subshell would change job semantics); its caller already redirects."""
+    # normal command -> wrapped: output to the file, bounded tail to the console.
+    child = _FakeChild(["marker"])
+    _console(child).run("ls -R /root/ovmx", timeout=5, echo=False)
+    sent = child.sent[0]
+    assert nc.NetBSDConsole._LASTOUT in sent and "tail -c" in sent \
+        and sent.lstrip().startswith("("), \
+        "run() must wrap a normal command's output to a file; got: %s" % sent
+    assert "ls -R /root/ovmx" in sent
+    print("PASS console-only-markers: normal command's output is file-routed "
+          "(subshell + tail -c), never streamed raw to the console")
+
+    # background launch -> NOT wrapped (no subshell around the `&').
+    child = _FakeChild(["marker"])
+    _console(child).run("foo >/tmp/x 2>&1 &", timeout=5, echo=False)
+    sent = child.sent[0]
+    assert not sent.lstrip().startswith("(") and nc.NetBSDConsole._LASTOUT not in sent, \
+        "a background launch must NOT be subshell-wrapped; got: %s" % sent
+    print("PASS console-only-markers: background launch left unwrapped "
+          "(job semantics preserved)")
+
+
 def main():
+    _assert_console_carries_only_markers()
+
     # Idempotent command: recovered across 0, 1, 2 dropped markers.
     _run_ok("clean",        ["marker"],                    3, 1)
     _run_ok("lost-then-ok", ["prompt", "marker"],          3, 2)   # cold-CI class

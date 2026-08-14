@@ -103,6 +103,10 @@ GATE_EPICS = [
      "SYSKRNL: the OVMX executive layered over the Linux and NetBSD kernels — not a "
      "kernel of its own. Built from pinned upstream source with the VMS modules "
      "in-tree, curated per architecture.", "0.5"),
+    ("vms-8e8", "VAX as a first-class platform",
+     "OVMX runs natively on VAX through a NetBSD system kernel: the executive, ODS-2 "
+     "storage, and DCL boot on real VAX emulation, co-released across every architecture.",
+     "0.5-1.0"),
 ]
 GATE_IDS = [g[0] for g in GATE_EPICS]
 

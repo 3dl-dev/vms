@@ -92,6 +92,12 @@ MS_PROVISION_HALT    = "%OVMX-F-EXECINIT"
 # boot reaches Username: or the next honest gap) is the vms-72da milestone.
 MS_PROVISION_LNMFAIL = "%DCL-E-LNMFAIL"
 MS_PROVISION_IVLOGNAM = "%DCL-E-IVLOGNAM"
+# vms-63a (#536, on main): PROVISION.EXE DEMAND-PAGES off the mounted ODS-2
+# volume and RUNS -- the executive then establishes its SYSTEM identity. This
+# line is the deterministic proof PROVISION.EXE activated + ran (the boundary the
+# vmsfs vnode pager closed). Its ABSENCE is the stale-volume / pager regression
+# (PROVISION.EXE "missing" -> %OVMX-F-EXECINIT). No brackets -> literal regex.
+MS_PROVISION_RUNNING = r"system identity SYSTEM"
 
 
 def log(msg):
@@ -443,9 +449,15 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline):
     is specifically the mastered system volume that carries the boot past the
     gate (the gate has teeth, Rule 7).
 
-    Whatever PROVISION.EXE's activation produces after MS_STDRV is CAPTURED and
-    logged (the honest scouting boundary -- see MS_PROVISION_* above), never
-    faked into a login the boot did not reach (INV-6)."""
+    PAST MS_STDRV (rd vms-72da, tightened now that the vmsfs vnode pager #536 and
+    the netbsd-vax logical-name facility have landed): the run now REQUIRES that
+    PROVISION.EXE demand-pages + RUNS (MS_PROVISION_RUNNING -- the executive
+    establishes SYSTEM identity) and that the logical-name layer lets it CLEAR the
+    old %DCL-E-LNMFAIL / %DCL-E-IVLOGNAM loop -- reaching Username: (the DCL
+    capstone, vms-d59) or the next honest gap (e.g. RW-ODS2, vms-e7a). A boot that
+    halts at %OVMX-F-EXECINIT (PROVISION.EXE missing -- the stale-volume boundary)
+    or loops on LNMFAIL is a FAILURE, not the "expected boundary" it used to be.
+    Nothing is faked into a login the boot did not reach (INV-6)."""
     import pexpect
 
     ods2_abs = os.path.abspath(sysvol_img)
@@ -502,36 +514,81 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline):
                 "saw=%s" % sorted(seen))
             return seen
 
-        # Past the gate: CAPTURE the PROVISION.EXE exec outcome for the report
-        # (honest scouting boundary -- not asserted, since the exec-from-vmsfs
-        # VOP_GETPAGES gap is exactly what this run scouts).
+        # Past the gate. STEP 1 -- REQUIRE PROVISION.EXE demand-pages + RUNS: the
+        # executive establishes SYSTEM identity (MS_PROVISION_RUNNING). If instead
+        # PID 1 halts at %OVMX-F-EXECINIT (PROVISION.EXE missing) or %OVMX-E-NOIMG
+        # (activation failed), PROVISION never ran and the logical-name layer is
+        # never reached -- a FAILURE (not the old "expected exec-from-vmsfs
+        # boundary", which #536's pager closed).
         if seen.get("stdrv"):
             try:
-                idx = child.expect([MS_PROVISION_LOGIN, MS_PROVISION_NOIMG,
-                                    MS_PROVISION_HALT, MS_PROVISION_LNMFAIL,
-                                    MS_PROVISION_IVLOGNAM, r">>>", pexpect.EOF],
-                                   timeout=300)
-                outcomes = {0: "LOGIN(Username:)", 1: "NOIMG(activation failed)",
-                            2: "EXECINIT(PID 1 halt)",
-                            3: "LNMFAIL(system logicals cannot be created -- vms-72da REGRESSION)",
-                            4: "IVLOGNAM(logical-name loop -- vms-72da REGRESSION)",
-                            5: "console prompt (>>>)", 6: "EOF"}
-                seen["provision_outcome"] = outcomes.get(idx, "unknown")
-                log("PROVISION.EXE exec outcome: %s -- captured for the report "
-                    "(the exec-from-vmsfs gap is the expected boundary)"
-                    % seen["provision_outcome"])
-                # Pull a little trailing console for the record.
-                try:
-                    child.expect([pexpect.TIMEOUT, pexpect.EOF], timeout=20)
-                except Exception:
-                    pass
-                tail = (child.before or "")[-1200:] if hasattr(child, "before") else ""
-                if tail:
-                    log("post-STDRV console tail:\n%s" % tail)
+                idx = child.expect([MS_PROVISION_RUNNING, MS_PROVISION_HALT,
+                                    MS_PROVISION_NOIMG, pexpect.EOF,
+                                    pexpect.TIMEOUT], timeout=300)
+                if idx == 0:
+                    seen["provision_running"] = True
+                    log("MILESTONE: %r -- PROVISION.EXE demand-paged off the ODS-2 "
+                        "volume and RUNS; executive established SYSTEM identity"
+                        % MS_PROVISION_RUNNING)
+                else:
+                    why = {1: "%OVMX-F-EXECINIT (PROVISION.EXE missing / PID 1 halt)",
+                           2: "%OVMX-E-NOIMG (activation failed)",
+                           3: "EOF", 4: "TIMEOUT"}.get(idx, "unknown")
+                    seen["provision_outcome"] = "DID NOT RUN: " + why
+                    tail = (child.before or "")[-1500:] if hasattr(child, "before") else ""
+                    log("PROVISION.EXE did NOT run: %s -- the volume/pager "
+                        "regressed; the logical-name layer was never reached. "
+                        "tail:\n%s" % (why, tail))
+                    return seen
             except pexpect.TIMEOUT:
-                seen["provision_outcome"] = "none within window"
-                log("PROVISION.EXE exec produced no recognized outcome within "
-                    "the window (recorded)")
+                seen["provision_outcome"] = "DID NOT RUN: timeout before identity"
+                log("PROVISION.EXE produced no SYSTEM-identity line within the "
+                    "window -- treated as DID NOT RUN")
+                return seen
+
+        # STEP 2 -- PROVISION runs; does the logical-name layer let it CLEAR the
+        # LNMFAIL/IVLOGNAM loop? Reaching Username: is the DCL capstone; a distinct
+        # honest boundary AFTER identity with NO LNMFAIL is the vms-72da win ("logicals
+        # create, stops next at Z"); a LNMFAIL/IVLOGNAM outcome is a REGRESSION.
+        if seen.get("provision_running"):
+            try:
+                idx = child.expect([MS_PROVISION_LOGIN, MS_PROVISION_LNMFAIL,
+                                    MS_PROVISION_IVLOGNAM, MS_PROVISION_HALT,
+                                    MS_PROVISION_NOIMG, pexpect.EOF,
+                                    pexpect.TIMEOUT], timeout=300)
+                if idx == 0:
+                    seen["login"] = True
+                    seen["lnm_cleared"] = True
+                    seen["provision_outcome"] = "LOGIN(Username:) -- DCL capstone"
+                    log("CAPSTONE: reached Username: -- PROVISION created the system "
+                        "logicals and STARTUP ran to LOGINOUT (vms-72da clears "
+                        "LNMFAIL; DCL login capstone vms-d59)")
+                elif idx in (1, 2):
+                    seen["lnmfail"] = True
+                    seen["provision_outcome"] = "LNMFAIL/IVLOGNAM loop (vms-72da REGRESSION)"
+                    log("REGRESSION: PROVISION runs but still hits %DCL-E-LNMFAIL / "
+                        "%DCL-E-IVLOGNAM -- the netbsd-vax logical-name facility did "
+                        "NOT create the system logicals (vms-72da FAIL)")
+                else:
+                    # Identity established, NO LNMFAIL within the window (the old
+                    # code emitted thousands here), and not Username: -> PROVISION
+                    # created the logicals and STARTUP advanced to the NEXT honest
+                    # gap (e.g. RW-ODS2 vms-e7a). This is the vms-72da win.
+                    seen["lnm_cleared"] = True
+                    seen["next_gap"] = True
+                    seen["provision_outcome"] = "PAST LNMFAIL -> next honest gap"
+                    log("PAST LNMFAIL: PROVISION created the system logicals (no "
+                        "LNMFAIL/IVLOGNAM after identity) and STARTUP advanced to the "
+                        "NEXT honest gap -- the vms-72da win (next: e.g. RW-ODS2 vms-e7a)")
+                tail = (child.before or "")[-1500:] if hasattr(child, "before") else ""
+                if tail:
+                    log("post-identity console tail:\n%s" % tail)
+            except pexpect.TIMEOUT:
+                seen["lnm_cleared"] = True
+                seen["next_gap"] = True
+                seen["provision_outcome"] = "PAST LNMFAIL -> next gap (timeout, no LNMFAIL)"
+                log("PROVISION ran and no LNMFAIL/IVLOGNAM appeared within the "
+                    "window -- past the logical-name loop, stopped at the next gap")
     finally:
         _hard_kill(child)
 
@@ -633,13 +690,41 @@ def main():
                 log("FAIL: mounted the system volume but did not reach "
                     "%STDRV-I-STARTUP; saw=%s" % sorted(seen))
                 return 1
+            # TIGHTENED (rd vms-72da): STDRV alone is NO LONGER a pass. PROVISION.EXE
+            # must demand-page + RUN (the vmsfs pager #536 closed that boundary), so
+            # a halt at %OVMX-F-EXECINIT (PROVISION.EXE missing -- the stale-volume
+            # false-green) now FAILS.
+            if not seen.get("provision_running"):
+                log("FAIL: reached %%STDRV-I-STARTUP but PROVISION.EXE did NOT run "
+                    "(no SYSTEM-identity line) -- outcome: %s. The mounted volume "
+                    "must carry a demand-pageable PROVISION.EXE (stale/mis-mastered "
+                    "system volume, or the vnode pager regressed)."
+                    % seen.get("provision_outcome", "unknown"))
+                return 1
+            # PROVISION runs -> the logical-name layer must let it CLEAR the LNMFAIL
+            # loop (vms-72da). A LNMFAIL/IVLOGNAM outcome is a hard FAIL.
+            if seen.get("lnmfail"):
+                log("FAIL: PROVISION.EXE runs (SYSTEM identity established) but the "
+                    "logical-name layer did NOT create the system logicals -- it "
+                    "loops on %%DCL-E-LNMFAIL / %%DCL-E-IVLOGNAM (vms-72da not fixed)")
+                return 1
+            if not seen.get("lnm_cleared"):
+                log("FAIL: PROVISION.EXE runs but the boot neither cleared past the "
+                    "logical-name loop nor reached a recognized boundary; saw=%s"
+                    % sorted(seen))
+                return 1
             log("======================================================================")
-            log("  SYSBOOT PASSED: ovmx_init booted as PID 1 on NetBSD/vax, mounted")
-            log("  the MASTERED OVMX ODS-2 system volume, passed the installed-system")
-            log("  gate (SYS$SYSTEM:DCL.EXE resolved at the rooted path), and reached")
-            log("  %STDRV-I-STARTUP -- i.e. PID 1's exec of SYS$SYSTEM:PROVISION.EXE.")
-            log("  PROVISION.EXE exec outcome (scouting boundary): %s"
-                % seen.get("provision_outcome", "not captured"))
+            log("  SYSBOOT PASSED: ovmx_init booted as PID 1 on NetBSD/vax, mounted the")
+            log("  MASTERED OVMX ODS-2 system volume, passed the installed-system gate,")
+            log("  and PROVISION.EXE DEMAND-PAGED + RAN (SYSTEM identity established).")
+            if seen.get("login"):
+                log("  *** DCL CAPSTONE (vms-d59): the boot CLEARED the logical-name")
+                log("  *** layer (vms-72da) and reached Username:. ***")
+            else:
+                log("  The logical-name layer is CLEARED (vms-72da): PROVISION created")
+                log("  the system logicals with no %DCL-E-LNMFAIL, and STARTUP advanced")
+                log("  to the next honest gap -- outcome: %s"
+                    % seen.get("provision_outcome", "next gap"))
             log("======================================================================")
             return 0
 

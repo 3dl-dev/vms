@@ -36,9 +36,16 @@
 #   7. Builds the VAX (netbsd-vax/elf32-vax) release artifact set into
 #      OUT_DIR/vax/ via tools/cut-release-vax.sh -- the CO-RELEASE GATE
 #      (rd vms-ca5, epic vms-f10, docs/design-vax-mainstream-release.md):
-#      VAX is a first-class release platform, so this call is UNCONDITIONAL
-#      (no --skip-vax escape hatch) -- a broken VAX build fails THIS script,
-#      which fails the cut, for every caller.
+#      VAX is a first-class release platform, so for any tree that HAS the
+#      VAX tooling this call is UNCONDITIONAL (no --skip-vax escape hatch)
+#      -- a broken VAX build fails THIS script, which fails the cut, for
+#      every caller. EXCEPTION: a ref that predates VAX co-release support
+#      (no tools/cross-vax/Dockerfile in the archived tree -- e.g. a
+#      pre-version-bump baseline tests/qemu/run_upgrade_e2e.sh pins as an
+#      upgrade-test fixture) is not "VAX broken", it is a tree from before
+#      the capability existed -- that case is skipped LOUDLY (a
+#      %CUT-VAX-I-PREVAX log line + a "skipped"/"skipped_reason" field in
+#      release-manifest.json), never silently.
 #
 # Byte-reproducibility (the vms-d73 DONE criterion) depends on
 # SOURCE_DATE_EPOCH: two cuts of the SAME commit must embed the SAME clock
@@ -166,38 +173,57 @@ mkdir -p "$OUT_DIR"
 # tools/cut-release-vax.sh reuses the R1 (vms-9172) per-PR VAX cross-compile
 # recipe (the same tools/cross-vax/build-*.sh scripts ci.yml's netbsd-vax-*
 # gates already call) to build the real elf32-vax artifact set into
-# OUT_DIR/vax/. This call is UNCONDITIONAL -- no --skip-vax flag exists -- so
-# a broken VAX build fails this script, which fails the cut, for every
-# caller (cut-release-reproducible, release-acceptance-e2e, release.yml's
-# tag-triggered publish, `make release`, and a conductor cutting by hand)
-# with no separate wiring to keep in sync. R2 scope only: build + artifact
-# production, no SIMH boot (that is R3 vms-065, gated on the boot-to-DCL
-# capstone vms-d59, still in flight).
+# OUT_DIR/vax/. For any tree that IS VAX-capable this call is UNCONDITIONAL
+# -- no --skip-vax flag exists -- so a broken VAX build fails this script,
+# which fails the cut, for every caller (cut-release-reproducible,
+# release-acceptance-e2e, release.yml's tag-triggered publish,
+# `make release`, and a conductor cutting by hand) with no separate wiring
+# to keep in sync. R2 scope only: build + artifact production, no SIMH boot
+# (that is R3 vms-065, gated on the boot-to-DCL capstone vms-d59, still in
+# flight).
+#
+# HISTORICAL-BASELINE EXCEPTION: this script also cuts refs that PREDATE VAX
+# co-release support entirely (tests/qemu/run_upgrade_e2e.sh pins a BASELINE
+# ref from before the version bump, as an upgrade-test fixture -- never HEAD)
+# -- an archived tree that old has no tools/cross-vax/Dockerfile at all, so
+# demanding a VAX build of it isn't "the VAX build is broken", it is asking a
+# capability of a tree from before the capability existed. The co-release
+# invariant applies to cutting the CURRENT release, not to re-cutting a
+# pre-VAX commit as a fixture. So: skip LOUDLY and honestly (never silently)
+# when the archived tree has no VAX tooling; the gate stays airtight for
+# every tree that DOES have it (in particular every current/HEAD cut).
 #
 # Deliberately runs BEFORE the ~25-30-min x86_64 container build below, not
 # after: a broken VAX build should fail the cut FAST (the same "cheap
 # front-line gate before the expensive stuff" reasoning R1's header-
 # portability gate already uses), not only after paying for a full OS build.
-VAX_OUT_DIR="$OUT_DIR/vax"
-mkdir -p "$VAX_OUT_DIR"
-CUT_RELEASE_VAX_ARGS=(--src-dir "$SRC_DIR" --out-dir "$VAX_OUT_DIR")
-[ "$NO_CACHE" -eq 1 ] && CUT_RELEASE_VAX_ARGS+=(--no-cache)
-log "building VAX (netbsd-vax/elf32-vax) release artifacts -- co-release gate, no skip"
-"$SCRIPT_DIR/cut-release-vax.sh" "${CUT_RELEASE_VAX_ARGS[@]}" \
-    || fail "VAX release-artifact build FAILED -- co-release invariant (docs/design-vax-mainstream-release.md): a release is not cut unless the VAX build gate passes"
-
-# VAX_ARTIFACT_ORDER mirrors what tools/cut-release-vax.sh's own header
-# documents it produces; re-verified here against the SHIPPED bundle dir
-# (ground-source check), not just the sub-script's own exit code.
-VAX_ARTIFACT_ORDER=(vms.kmod.o vmsfs.kmod vmsfs_mount STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE)
-for name in "${VAX_ARTIFACT_ORDER[@]}"; do
-    [ -f "$VAX_OUT_DIR/$name" ] || fail "VAX artifact missing from the cut bundle after cut-release-vax.sh claimed success: vax/$name"
-done
+VAX_ARTIFACT_ORDER=()
 VAX_SHA_NAMES=()
-for name in "${VAX_ARTIFACT_ORDER[@]}"; do
-    VAX_SHA_NAMES+=("vax/$name")
-done
-log "VAX artifact set present in the cut bundle: ${VAX_ARTIFACT_ORDER[*]}"
+VAX_SKIP_NOTE=""
+if [ ! -f "$SRC_DIR/tools/cross-vax/Dockerfile" ]; then
+    log "%CUT-VAX-I-PREVAX, ref $GIT_REF ($COMMIT) predates VAX co-release support (no tools/cross-vax in the archived tree) -- VAX artifacts omitted for this historical cut"
+    VAX_SKIP_NOTE="ref $GIT_REF ($COMMIT) predates VAX co-release support (rd vms-ca5) -- no tools/cross-vax/Dockerfile in the archived tree, so no VAX build was attempted or required for this historical cut."
+else
+    VAX_OUT_DIR="$OUT_DIR/vax"
+    mkdir -p "$VAX_OUT_DIR"
+    CUT_RELEASE_VAX_ARGS=(--src-dir "$SRC_DIR" --out-dir "$VAX_OUT_DIR")
+    [ "$NO_CACHE" -eq 1 ] && CUT_RELEASE_VAX_ARGS+=(--no-cache)
+    log "building VAX (netbsd-vax/elf32-vax) release artifacts -- co-release gate, no skip"
+    "$SCRIPT_DIR/cut-release-vax.sh" "${CUT_RELEASE_VAX_ARGS[@]}" \
+        || fail "VAX release-artifact build FAILED -- co-release invariant (docs/design-vax-mainstream-release.md): a release is not cut unless the VAX build gate passes"
+
+    # VAX_ARTIFACT_ORDER mirrors what tools/cut-release-vax.sh's own header
+    # documents it produces; re-verified here against the SHIPPED bundle dir
+    # (ground-source check), not just the sub-script's own exit code.
+    VAX_ARTIFACT_ORDER=(vms.kmod.o vmsfs.kmod vmsfs_mount STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE)
+    for name in "${VAX_ARTIFACT_ORDER[@]}"; do
+        [ -f "$VAX_OUT_DIR/$name" ] || fail "VAX artifact missing from the cut bundle after cut-release-vax.sh claimed success: vax/$name"
+    done
+    for name in "${VAX_ARTIFACT_ORDER[@]}"; do
+        VAX_SHA_NAMES+=("vax/$name")
+    done
+    log "VAX artifact set present in the cut bundle: ${VAX_ARTIFACT_ORDER[*]}"
+fi
 
 # --- The containerized build (unchanged pipeline; this script drives it) ---
 docker buildx inspect >/dev/null 2>&1 || \
@@ -305,6 +331,10 @@ bytes_of() { stat -c%s "$OUT_DIR/$1"; }
     printf '\n  ],\n'
     printf '  "vax_release_parity": {\n'
     printf '    "_note": "VAX (netbsd-vax/elf32-vax) co-release artifacts (rd vms-ca5, epic vms-f10, R2: docs/design-vax-mainstream-release.md). BUILD-ONLY (Rule 9 tooling, never a runtime claim): vms.kmod.o is a RELOCATABLE object, not yet a loadable .kmod (loading needs the custom MODULAR NetBSD/vax kernel, R3/R4 territory, tools/cross-vax/build-vax-modular-kernel.sh); vmsfs.kmod IS a genuine loadable module. All files under vax/.",\n'
+    printf '    "skipped": %s,\n' "$([ -n "$VAX_SKIP_NOTE" ] && echo true || echo false)"
+    if [ -n "$VAX_SKIP_NOTE" ]; then
+        printf '    "skipped_reason": "%s",\n' "$VAX_SKIP_NOTE"
+    fi
     printf '    "artifacts": [\n'
     vax_first=1
     for name in "${VAX_ARTIFACT_ORDER[@]}"; do

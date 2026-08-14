@@ -39,7 +39,7 @@ hands off to the VMS-native toolchain (the `IMGACT.EXE` image activator and
 
 ```bash
 # Build the kernel + initramfs
-docker build -f Dockerfile.bootable -o dist .
+docker build -f distro/Dockerfile.bootable -o dist .
 
 # Boot it
 ./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz

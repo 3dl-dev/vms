@@ -270,20 +270,31 @@ class NetBSDConsole(object):
         so we keep waiting, sliced, up to total_timeout. The marker always prints
         BEFORE the prompt, so in the normal case idx==0 wins.
         """
+        # IMPORTANT: do NOT put pexpect.TIMEOUT/EOF in this pattern list. The
+        # child is anita's pexpect subclass whose expect() unconditionally logs
+        # self.match.group(0) after every call; on a TIMEOUT-in-list expiry
+        # self.match is the TIMEOUT *class*, so that log call raises
+        # `AttributeError: type object 'TIMEOUT' has no attribute group'
+        # (crashed a cold dispatch, rd vms-f8a). Catch the timeout as an
+        # exception instead: pexpect raises it BEFORE anita's match-logging line,
+        # so it never touches self.match.
         marker_re = r"%s=(\d+)=" % re.escape(mk)
         deadline = time.time() + total_timeout
         while True:
             remaining = deadline - time.time()
             if remaining <= 0:
                 return None
-            idx = self.child.expect(
-                [marker_re, self.prompt_re, pexpect.TIMEOUT],
-                timeout=min(remaining, self._MARKER_SLICE))
+            try:
+                idx = self.child.expect(
+                    [marker_re, self.prompt_re],
+                    timeout=min(remaining, self._MARKER_SLICE))
+            except pexpect.TIMEOUT:
+                # Neither the marker nor the prompt this slice -> the command is
+                # still running (slow guest). Keep waiting up to total_timeout.
+                continue
             if idx == 0:
                 return int(self.child.match.group(1))
-            if idx == 1:
-                return None            # idle prompt, no marker -> marker was lost
-            # idx == 2: neither yet -> command still running; keep waiting.
+            return None                # idle prompt, no marker -> marker was lost
 
     def expect_prompt(self, timeout=120):
         """Wait for the idle unique prompt (used to resync after an ad-hoc

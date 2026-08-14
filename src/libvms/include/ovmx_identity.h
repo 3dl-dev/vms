@@ -122,19 +122,33 @@
 /* ---- SYSKRNL identity (GNU/Linux-style dual identity) ----------
  *
  * "OVMX/Linux" -- WITH THE SLASH, exactly like "GNU/Linux" -- names the
- * SYSKRNL layer (the Linux kernel underneath) OVMX_PRODUCT_NAME ("OpenVMX")
+ * SYSKRNL layer (the host kernel underneath) OVMX_PRODUCT_NAME ("OpenVMX")
  * runs on top of. See the DUAL-IDENTITY REBRAND note above for the full
  * rationale and the two surfaces this is shown on (early boot, distro
  * metadata). Distinct from, and always printed BEFORE, the product banner.
- */
+ *
+ * SUBSTRATE-TRUE (INV-6 / Rule 9). The SYSKRNL name must state the kernel this
+ * image ACTUALLY runs on -- a boot that prints "OVMX/Linux" while running on
+ * NetBSD is a false statement about the running system, exactly the LARP the
+ * authenticity rules forbid. OVMX has a second SYSKRNL, OVMX/NetBSD, that
+ * captures the VAX (docs/design-ovmx-netbsd-syskrnl.md, epic vms-8e8); when an
+ * image is built for a NetBSD substrate this reports OVMX/NetBSD. Selected at
+ * COMPILE time from the target's own predefined macro (__NetBSD__ vs the
+ * Linux/glibc default), so a binary can only ever name the kernel it was built
+ * to run on. */
+#if defined(__NetBSD__)
+#define OVMX_SYSKRNL_NAME     "OVMX/NetBSD"
+#define OVMX_SYSKRNL_BANNER   OVMX_SYSKRNL_NAME " -- SYSKRNL (NetBSD kernel)"
+#else
 #define OVMX_SYSKRNL_NAME     "OVMX/Linux"
 #define OVMX_SYSKRNL_BANNER   OVMX_SYSKRNL_NAME " -- SYSKRNL (Linux kernel)"
+#endif
 
 /*
  * ovmx_syskrnl_banner - The early-boot SYSKRNL identity line. Printed
- * BEFORE ovmx_product_banner() so a boot reads the "OVMX/Linux" SYSKRNL
- * layer coming up, THEN "OpenVMX" product -- see src/ovmx_init/ovmx_init.c
- * main(), which prints this literally first.
+ * BEFORE ovmx_product_banner() so a boot reads the SYSKRNL layer coming up
+ * ("OVMX/Linux" or "OVMX/NetBSD"), THEN "OpenVMX" product -- see
+ * src/ovmx_init/ovmx_init.c main(), which prints this literally first.
  */
 static inline const char *ovmx_syskrnl_banner(void)
 {

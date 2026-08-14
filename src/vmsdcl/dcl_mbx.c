@@ -75,6 +75,8 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <errno.h>
+#include <fcntl.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -95,6 +97,93 @@ static pthread_t g_reader;
 static pthread_t g_writer;
 static int       g_reader_up   = 0;
 static int       g_writer_up   = 0;
+
+/*
+ * SYNCHRONOUS PROMPT DRAIN (vms-195). When DCL's SYS$OUTPUT is a mailbox but
+ * SYS$INPUT is still an interactive terminal (the live console login: the demo
+ * diverts SYS$OUTPUT to an async mailbox writer while the tty stays the command
+ * source), DCL's prompt travels the async path -- fd 1 -> pipe -> writer thread
+ * -> IO$_WRITEVBLK -> mailbox -- while the KERNEL tty echoes the user's next
+ * keystroke synchronously. The newline-less "$ " prompt under _IOLBF is not even
+ * auto-flushed, so the echo can land BEFORE the prompt is emitted ("d$ ir").
+ *
+ * The cure is a drain barrier: after DCL has written (and fflush'd) the prompt
+ * into the output pipe, it calls dcl_mbx_output_drain_sync(), which blocks until
+ * the writer thread has pushed every byte then in the pipe out through the real
+ * mailbox path -- so the prompt is fully emitted before DCL issues the read that
+ * arms the tty echo.
+ *
+ * HOW THE BARRIER KNOWS THE PIPE IS DRAINED, WITHOUT poll(). The writer reads a
+ * blocking first byte, then drains the rest with non-blocking reads until EAGAIN
+ * (the pipe is momentarily empty), then bumps a monotonic g_drain_epoch under
+ * g_out_mtx. Reaching EAGAIN is only possible once every byte written before it
+ * -- FIFO, single reader -- has been pushed to the mailbox. dcl_mbx_output_drain_sync()
+ * snapshots the epoch AFTER the caller fflush()ed the prompt into the pipe and
+ * waits for it to advance: the next EAGAIN necessarily happens after the prompt
+ * entered the pipe (the writer cannot see an empty pipe without first reading the
+ * prompt), so the advance proves the prompt reached the mailbox. The prompt bytes
+ * themselves guarantee the epoch will advance, so there is no wait-forever case.
+ * Only fcntl()/read()/pthread -- all already DECC$SHR universals -- are used; no
+ * poll()/select(), so the VMS-native LINK.EXE graph resolves.
+ */
+static pthread_mutex_t g_out_mtx     = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_out_cv      = PTHREAD_COND_INITIALIZER;
+static uint64_t        g_drain_epoch = 0;   /* ++ each time the writer drains to empty */
+
+/* Toggle O_NONBLOCK on a fd (fcntl is a DECC$SHR universal; poll is not). */
+static void set_nonblock(int fd, int on)
+{
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl < 0)
+        return;
+    int nf = on ? (fl | O_NONBLOCK) : (fl & ~O_NONBLOCK);
+    (void)fcntl(fd, F_SETFL, nf);
+}
+
+/* Bump the drain epoch and wake any waiter (called when the pipe hits empty). */
+static void publish_drained(void)
+{
+    pthread_mutex_lock(&g_out_mtx);
+    g_drain_epoch++;
+    pthread_cond_broadcast(&g_out_cv);
+    pthread_mutex_unlock(&g_out_mtx);
+}
+
+/*
+ * The writer's sink. Production writes each drained chunk to the SYS$OUTPUT
+ * mailbox via the executive ($QIO IO$_WRITEVBLK). A hermetic unit test that has
+ * no /dev/vms overrides this with a plain fd so the drain barrier itself can be
+ * proven without the executive. Default (-1) = the real mailbox path.
+ */
+static int             g_out_sink_fd = -1; /* test-only sink; -1 = mailbox */
+
+#ifdef DCL_MBX_TEST_HOOKS
+/* Artificial writer lag (microseconds) so a hermetic test can make the
+ * prompt/echo race deterministic. Zero (and absent) in every shipping build. */
+static unsigned        g_out_sink_delay_us = 0;
+#endif
+
+/* Return 1 on success, 0 on failure -- the writer breaks its loop on 0. */
+static int out_sink_write(const char *buf, size_t n)
+{
+#ifdef DCL_MBX_TEST_HOOKS
+    if (g_out_sink_delay_us)
+        usleep(g_out_sink_delay_us);
+#endif
+    if (g_out_sink_fd >= 0) {
+        size_t off = 0;
+        while (off < n) {
+            ssize_t w = write(g_out_sink_fd, buf + off, n - off);
+            if (w <= 0) {
+                if (w < 0 && errno == EINTR) continue;
+                return 0;
+            }
+            off += (size_t)w;
+        }
+        return 1;
+    }
+    return (vms_kif_mbx_write(g_out_chan, buf, (uint32_t)n) & 1) ? 1 : 0;
+}
 
 /* A VMS mailbox device name is MBA<unit>: -- what $CREMBX publishes and what a
  * SYS$INPUT/SYS$OUTPUT logical must resolve to for us to bind it. */
@@ -226,14 +315,83 @@ static void *writer_main(void *arg)
     (void)arg;
 
     for (;;) {
+        /* Block for the first byte(s) of the next batch. */
+        set_nonblock(g_out_pipe_r, 0);
         ssize_t n = read(g_out_pipe_r, buf, sizeof(buf));
-        if (n <= 0)
+        if (n == 0)
+            break;                          /* write end (fd 1) closed: shutdown */
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
             break;
-        uint32_t st = vms_kif_mbx_write(g_out_chan, buf, (uint32_t)n);
-        if (!(st & 1))
+        }
+        int eof = 0;
+        if (!out_sink_write(buf, (size_t)n))
+            break;
+
+        /* Drain whatever else is queued without blocking, until the pipe is
+         * momentarily empty (EAGAIN) or closed (0). */
+        set_nonblock(g_out_pipe_r, 1);
+        for (;;) {
+            ssize_t m = read(g_out_pipe_r, buf, sizeof(buf));
+            if (m > 0) {
+                if (!out_sink_write(buf, (size_t)m)) { eof = 1; break; }
+            } else if (m == 0) {
+                eof = 1;
+                break;
+            } else {
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                eof = 1;
+                break;
+            }
+        }
+
+        /* Pipe drained to empty: every byte written before now is out through
+         * the mailbox. Publish the epoch so a prompt drain barrier can proceed. */
+        publish_drained();
+        if (eof)
             break;
     }
+
+    /* Release any waiter that would otherwise block past writer exit. */
+    publish_drained();
     return NULL;
+}
+
+/*
+ * dcl_mbx_output_is_mailbox - has SYS$OUTPUT been bound to a mailbox (the async
+ * writer thread is running)? DCL's interactive prompt loop consults this to
+ * decide whether the prompt must be drain-synced (vms-195).
+ */
+int dcl_mbx_output_is_mailbox(void)
+{
+    return g_writer_up;
+}
+
+/*
+ * dcl_mbx_output_drain_sync - block until the writer thread has pushed every
+ * byte currently in the output pipe out through the mailbox. The caller must
+ * have written and fflush()'d the prompt first, so the prompt bytes are already
+ * in the pipe -- they are what guarantees the writer reaches a fresh empty state
+ * (and thus a fresh epoch), so this never waits forever. A no-op when SYS$OUTPUT
+ * is not mailbox-bound (leaving the ordinary stdio path untouched for a terminal
+ * or file SYS$OUTPUT).
+ */
+void dcl_mbx_output_drain_sync(void)
+{
+    if (!g_writer_up)
+        return;
+
+    pthread_mutex_lock(&g_out_mtx);
+    /* The next drain-to-empty is strictly later than this snapshot (the writer
+     * bumps the epoch under this same mutex), so it necessarily happens after
+     * the prompt entered the pipe -- and the writer cannot see the pipe empty
+     * without having first read the prompt out to the mailbox. */
+    uint64_t want = g_drain_epoch + 1;
+    while (g_drain_epoch < want)
+        pthread_cond_wait(&g_out_cv, &g_out_mtx);
+    pthread_mutex_unlock(&g_out_mtx);
 }
 
 int dcl_mbx_bind_std_streams(void)
@@ -276,7 +434,7 @@ int dcl_mbx_bind_std_streams(void)
             if (pipe(p) == 0) {
                 fflush(stdout);
                 g_out_chan   = chan;
-                g_out_pipe_r = p[0];
+                g_out_pipe_r = p[0];   /* writer toggles O_NONBLOCK per batch */
                 if (dup2(p[1], STDOUT_FILENO) >= 0 &&
                     pthread_create(&g_writer, NULL, writer_main, NULL) == 0) {
                     g_writer_up = 1;
@@ -330,3 +488,49 @@ void dcl_mbx_shutdown(void)
      * cleanly. */
     g_reader_up = 0;
 }
+
+#ifdef DCL_MBX_TEST_HOOKS
+/*
+ * Hermetic test hooks (vms-195). CI has no /dev/vms, so the mailbox bind path
+ * cannot be exercised there. These start the SAME writer-thread + drain-barrier
+ * machinery against a caller-provided plain fd sink (a pipe standing in for the
+ * mailbox far end), so the ordering guarantee dcl_mbx_output_drain_sync() makes
+ * -- the prompt is fully emitted before DCL reads input -- is provable without
+ * the executive. Compiled only under -DDCL_MBX_TEST_HOOKS; absent from every
+ * shipping build.
+ */
+int dcl_mbx__test_start_output(int sink_fd, int *out_write_fd)
+{
+    int p[2];
+    if (pipe(p) != 0)
+        return -1;
+    g_out_pipe_r  = p[0];   /* writer toggles O_NONBLOCK per batch */
+    g_out_sink_fd = sink_fd;
+    g_drain_epoch = 0;
+    if (pthread_create(&g_writer, NULL, writer_main, NULL) != 0) {
+        close(p[0]); close(p[1]);
+        g_out_pipe_r  = -1;
+        g_out_sink_fd = -1;
+        return -1;
+    }
+    g_writer_up = 1;
+    *out_write_fd = p[1];   /* the test writes DCL's "fd 1" output here */
+    return 0;
+}
+
+void dcl_mbx__test_set_sink_delay(unsigned usec)
+{
+    g_out_sink_delay_us = usec;
+}
+
+void dcl_mbx__test_stop_output(void)
+{
+    /* The caller closes its write fd first; the writer then sees EOF. */
+    if (g_writer_up) {
+        pthread_join(g_writer, NULL);
+        g_writer_up = 0;
+    }
+    if (g_out_pipe_r >= 0) { close(g_out_pipe_r); g_out_pipe_r = -1; }
+    g_out_sink_fd = -1;
+}
+#endif /* DCL_MBX_TEST_HOOKS */

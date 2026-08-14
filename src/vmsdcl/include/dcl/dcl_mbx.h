@@ -57,4 +57,25 @@ int dcl_mbx_bind_std_streams(void);
  */
 void dcl_mbx_shutdown(void);
 
+/*
+ * dcl_mbx_output_is_mailbox - non-zero iff SYS$OUTPUT was bound to a mailbox by
+ * dcl_mbx_bind_std_streams() (the async writer thread is running). DCL's
+ * interactive prompt loop uses this to detect the diverted-output case -- a live
+ * console login whose SYS$INPUT is still the terminal but whose SYS$OUTPUT leaves
+ * over a mailbox -- and apply the synchronous-prompt discipline (vms-195).
+ */
+int dcl_mbx_output_is_mailbox(void);
+
+/*
+ * dcl_mbx_output_drain_sync - block until the writer thread has pushed every
+ * byte currently in DCL's output pipe out through the SYS$OUTPUT mailbox. Call
+ * it AFTER writing and fflush()'ing the prompt: it guarantees the newline-less
+ * prompt is fully emitted over the mailbox before DCL issues the read that arms
+ * the terminal's synchronous keystroke echo, closing the prompt/echo race that
+ * produced the interleaved "d$ ir" on the interactive console (vms-195). A no-op
+ * when SYS$OUTPUT is not mailbox-bound, so the ordinary terminal/file path is
+ * unchanged.
+ */
+void dcl_mbx_output_drain_sync(void);
+
 #endif /* OVMX_DCL_MBX_H */

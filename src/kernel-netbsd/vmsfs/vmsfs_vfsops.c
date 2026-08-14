@@ -111,6 +111,17 @@ vmsfs_readblk(struct vnode *devvp, uint32_t lbn, struct buf **bpp)
 	return error;
 }
 
+/*
+ * genfs ops vector for the UVM/UBC vnode pager. Read-only, so exactly cd9660's
+ * shape: only gop_size (genfs_size derives EOF from vp->v_size, which
+ * vmsfs_vfs_loadvnode sets via uvm_vnp_setsize). gop_write / gop_alloc are the
+ * write path (page-out / block allocation) and are never reached -- putpages is
+ * genfs_null_putpages and the mount is MNT_RDONLY.
+ */
+static const struct genfs_ops vmsfs_genfsops = {
+	.gop_size = genfs_size,
+};
+
 /* ================================================================
  * VFS operations
  * ================================================================ */
@@ -430,6 +441,14 @@ vmsfs_vfs_loadvnode(struct mount *mp, struct vnode *vp,
 		vp->v_vflag |= VV_ROOT;
 
 	uvm_vnp_setsize(vp, (voff_t)fhi.size);
+
+	/*
+	 * Arm the genfs vnode pager hook (vn_gnode is the first member of the
+	 * private data, so VTOG(vp) aliases it). Required before any VOP_GETPAGES:
+	 * genfs_node_init() installs the ops vector + initializes the getpages
+	 * rangelock genfs_getpages() takes. Torn down in vmsfs_reclaim().
+	 */
+	genfs_node_init(vp, &vmsfs_genfsops);
 
 	*new_key = &vn->vn_key;
 	return 0;
@@ -879,6 +898,9 @@ vmsfs_reclaim(void *v)
 	struct vop_reclaim_v2_args *ap = v;
 	struct vnode *vp = ap->a_vp;
 	struct vmsfs_node *vn = VTOVMSFS(vp);
+
+	/* Tear down the genfs pager hook (rangelock) armed in loadvnode. */
+	genfs_node_destroy(vp);
 
 	vp->v_data = NULL;
 	if (vn != NULL)

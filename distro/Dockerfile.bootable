@@ -188,6 +188,19 @@ COPY distro/kernel/drivers-ovmx          /tmp/ovmx-src/distro/kernel/drivers-ovm
 COPY distro/kernel/overlay-ovmx-drivers.sh /tmp/ovmx-src/distro/kernel/overlay-ovmx-drivers.sh
 RUN bash /tmp/ovmx-src/distro/kernel/overlay-ovmx-drivers.sh /usr/src/linux /tmp/ovmx-src
 
+# Module signing key (vms-ff5, parent vms-19e "owns-kernel"). CONFIG_MODULE_SIG
+# is enabled in the fragment below with CONFIG_MODULE_SIG_KEY="ovmx-module-
+# signing-key.pem" -- a path the kernel build resolves relative to THIS source
+# tree root. It must be the COMMITTED key (deterministic across builds), not the
+# kernel's default build-ephemeral key: an ephemeral key regenerates randomly
+# every build, which would change both the keyring cert baked into vmlinuz and
+# the module signatures in the initramfs, reddening cut-release-reproducible
+# (vms-d73). Copied in BEFORE the config/build so certs/Makefile embeds this
+# exact certificate into the built-in trusted keyring. SIG_FORCE stays off
+# (fragment + gate below), so this key gates nothing at load -- it only lets the
+# kernel VERIFY the signature and thus NOT set TAINT_UNSIGNED_MODULE.
+COPY distro/kernel/ovmx-module-signing-key.pem /usr/src/linux/ovmx-module-signing-key.pem
+
 # Curated config: x86_64 defconfig + the OVMX boot fragment, reconciled with
 # olddefconfig. The fragment (distro/kernel/ovmx-x86_64.config) is the
 # single source of the OVMX-required option set; see its header.
@@ -207,8 +220,10 @@ RUN set -e; \
     for opt in $need_y; do \
         grep -q "^${opt}=y$" .config || { echo "FAIL: ${opt} not =y in built kernel .config"; exit 1; }; \
     done; \
+    grep -q "^CONFIG_MODULE_SIG=y$" .config || { echo "FAIL: CONFIG_MODULE_SIG=y not set -- modules would not be verifiable, TAINT_UNSIGNED_MODULE would stay set (vms-ff5)"; exit 1; }; \
+    grep -q '^CONFIG_MODULE_SIG_KEY="ovmx-module-signing-key.pem"$' .config || { echo "FAIL: CONFIG_MODULE_SIG_KEY not pinned to the committed OVMX key -- signatures/keyring would be non-reproducible (vms-ff5/vms-d73)"; exit 1; }; \
     if grep -q "^CONFIG_MODULE_SIG_FORCE=y$" .config; then \
-        echo "FAIL: CONFIG_MODULE_SIG_FORCE=y would reject unsigned vms.ko/vmsfs.ko"; exit 1; \
+        echo "FAIL: CONFIG_MODULE_SIG_FORCE=y is deferred (vms-ff5) and would brick boot if a module failed verification"; exit 1; \
     fi; \
     for opt in CONFIG_OVMX CONFIG_OVMX_VMS CONFIG_OVMX_VMSFS; do \
         [ "$opt" = "CONFIG_OVMX" ] && want="=y" || want="=m"; \
@@ -234,18 +249,38 @@ RUN export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}")" && \
     make -s ARCH=x86_64 kernelrelease > /kernel-out/kernelrelease && \
     echo "Built OVMX kernel: $(cat /kernel-out/kernelrelease), bzImage $(ls -lh /kernel-out/vmlinuz | awk '{print $5}'), TS=$KBUILD_BUILD_TIMESTAMP"
 
-# Harvest the IN-TREE-built VMS modules (vms-934) and prove they are in-tree
-# right here, fail-closed. modpost stamps intree=Y for a module built as part of
-# the kernel tree (not via M=); that Y is exactly what makes loading it NOT set
-# TAINT_OUT_OF_TREE. If a future refactor accidentally reverts to an out-of-tree
-# build, intree would be "N"/absent and this gate reddens before anything boots.
+# Harvest the IN-TREE-built VMS modules (vms-934) and prove they are BOTH
+# in-tree (vms-934) AND signed (vms-ff5) right here, fail-closed.
+#
+#   intree=Y  (vms-934): modpost stamps this for a module built as part of the
+#     kernel tree (not via M=); it is exactly what makes loading it NOT set
+#     TAINT_OUT_OF_TREE. A refactor back to an out-of-tree build would flip it
+#     to "N"/absent and redden here before anything boots.
+#
+#   signed     (vms-ff5): the module carries a PKCS#7 appended signature made
+#     with the committed OVMX key whose cert is in this kernel's built-in
+#     keyring -- so finit_module() verifies it at load and does NOT set
+#     TAINT_UNSIGNED_MODULE (bit 13 / 'E'). CONFIG_MODULE_SIG_ALL signs at
+#     modules_install, but these .ko are harvested straight from the build
+#     tree, so we sign them EXPLICITLY here (guarded: skip if the build already
+#     signed them, so we never append a second, corrupting signature). The same
+#     committed PEM supplies both the private key and the X.509 cert to
+#     scripts/sign-file -- no dependency on the build's internal cert path.
 RUN cp drivers/ovmx/vms/vms.ko       /kernel-out/vms.ko && \
     cp drivers/ovmx/vmsfs/vmsfs.ko   /kernel-out/vmsfs.ko && \
+    KEY=/usr/src/linux/ovmx-module-signing-key.pem; \
     for ko in vms vmsfs; do \
-        it=$(modinfo -F intree "/kernel-out/${ko}.ko"); \
+        KO=/kernel-out/${ko}.ko; \
+        it=$(modinfo -F intree "$KO"); \
         [ "$it" = "Y" ] || { echo "FAIL: ${ko}.ko intree='${it}' != Y -- module did not build in-tree (vms-934)"; exit 1; }; \
+        if [ -z "$(modinfo -F signer "$KO" 2>/dev/null)" ]; then \
+            ./scripts/sign-file sha256 "$KEY" "$KEY" "$KO" || { echo "FAIL: could not sign ${ko}.ko (vms-ff5)"; exit 1; }; \
+        fi; \
+        sg=$(modinfo -F signer "$KO" 2>/dev/null); \
+        [ -n "$sg" ] || { echo "FAIL: ${ko}.ko carries NO signature -- finit_module() would set TAINT_UNSIGNED_MODULE (vms-ff5)"; exit 1; }; \
+        echo "OK: ${ko}.ko intree=Y + signed by '$sg'"; \
     done && \
-    echo "OK: vms.ko + vmsfs.ko built IN-TREE (drivers/ovmx/, modinfo intree=Y) -- no TAINT_OUT_OF_TREE on load"
+    echo "OK: vms.ko + vmsfs.ko built IN-TREE (intree=Y, no TAINT_OUT_OF_TREE) and SIGNED (no TAINT_UNSIGNED_MODULE)"
 
 FROM ubuntu:24.04 AS builder
 
@@ -325,18 +360,21 @@ COPY --from=kernel-build /kernel-out/vms.ko       /src/src/kernel/vms.ko
 COPY --from=kernel-build /kernel-out/vmsfs.ko     /src/src/kernel/vmsfs/vmsfs.ko
 
 # The in-tree modules must carry a vermagic matching this kernel (or
-# finit_module() rejects them at boot) AND be stamped intree=Y (or loading them
-# would set TAINT_OUT_OF_TREE) -- assert both here rather than discover it in
-# QEMU. The intree assertion is the vms-934 acceptance property, re-checked on
-# the exact artifact the initramfs will carry.
+# finit_module() rejects them at boot), be stamped intree=Y (or loading them
+# would set TAINT_OUT_OF_TREE), AND carry a signature (or loading them would set
+# TAINT_UNSIGNED_MODULE) -- assert all three here rather than discover it in
+# QEMU. intree=Y is the vms-934 acceptance property; the signature is the
+# vms-ff5 one; both re-checked on the exact artifact the initramfs will carry.
 RUN KVER=$(cat /tmp/kver) && \
     for ko in src/kernel/vms.ko src/kernel/vmsfs/vmsfs.ko; do \
         vm=$(modinfo -F vermagic "$ko" | awk '{print $1}'); \
         [ "$vm" = "$KVER" ] || { echo "FAIL: $ko vermagic '$vm' != kernel '$KVER'"; exit 1; }; \
         it=$(modinfo -F intree "$ko"); \
         [ "$it" = "Y" ] || { echo "FAIL: $ko intree='$it' != Y -- would set TAINT_OUT_OF_TREE (vms-934)"; exit 1; }; \
+        sg=$(modinfo -F signer "$ko" 2>/dev/null); \
+        [ -n "$sg" ] || { echo "FAIL: $ko carries NO signature -- would set TAINT_UNSIGNED_MODULE (vms-ff5)"; exit 1; }; \
     done && \
-    echo "OK: vms.ko + vmsfs.ko in-tree against OVMX kernel $KVER (vermagic matches, intree=Y)"
+    echo "OK: vms.ko + vmsfs.ko in-tree against OVMX kernel $KVER (vermagic matches, intree=Y, signed)"
 
 # Build OVMX userspace — static musl (no glibc dependency)
 RUN cmake -B build-static \

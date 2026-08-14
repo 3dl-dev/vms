@@ -107,8 +107,8 @@ jobs:
               - 'src/ovmx_init/**'
               - 'src/libvms/include/sysgen_params.h'
               - 'tests/qemu/test_persistent_boot.sh'
-              - 'tests/qemu/test_intree_modules.sh'
-              - 'tests/qemu/test_signed_modules.sh'
+              - 'tests/qemu/test_kernel_taint.sh'
+              - 'tests/qemu/test_kernel_taint_negctl.sh'
               - 'tests/qemu/test_release_e2e.sh'
               - 'tests/qemu/test_executive_integral.sh'
               - 'tests/qemu/test_distrib_boot.sh'
@@ -685,34 +685,36 @@ jobs:
             ovmx-boot:latest \
             /test.sh
 
-      # vms-934 (parent vms-19e "owns-kernel"). Reuses the image built above (no
-      # extra build). Proves the VMS modules are built IN-TREE (drivers/ovmx/ of
-      # OUR from-source kernel): modinfo intree=Y on the shipped vms.ko/vmsfs.ko,
-      # and a raised-loglevel boot where the modules load with NO "out-of-tree
-      # module taints kernel" line -- i.e. loading them does not set
-      # TAINT_OUT_OF_TREE.
-      - name: VMS modules are in-tree (intree=Y, no out-of-tree taint)
+      # vms-566 (parent vms-19e "owns-kernel"). Reuses the image built above (no
+      # extra build). THE taint-clean acceptance gate: boots the real runtime with
+      # the ovmx.taintreport flag so PID 1 reads the actual /proc/sys/kernel/tainted
+      # AFTER loading vms.ko/vmsfs.ko and prints the numeric mask, then FAILS if
+      # (mask & 4096) [O, out-of-tree] or (mask & 8192) [E, unsigned] -- the durable
+      # numeric assertion. Also re-asserts, on the shipped artifacts, modinfo
+      # intree=Y (vms-934) AND a PKCS#7 signature (vms-ff5). This CONSOLIDATES and
+      # supersedes the former test_intree_modules.sh + test_signed_modules.sh steps
+      # (every assertion folded in; coverage strictly increased by the numeric read).
+      - name: kernel is taint-clean (numeric /proc/sys/kernel/tainted, no O/E bits)
         run: |
           docker run --rm \
-            -v ${{ github.workspace }}/tests/qemu/test_intree_modules.sh:/test.sh:ro \
+            -v ${{ github.workspace }}/tests/qemu/test_kernel_taint.sh:/test.sh:ro \
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh
 
-      # vms-ff5 (parent vms-19e "owns-kernel"). Reuses the image built above (no
-      # extra build). Proves the VMS modules are SIGNED with the committed OVMX
-      # key whose cert is in the kernel keyring: modinfo shows a PKCS#7 signature
-      # on the shipped vms.ko/vmsfs.ko, and a raised-loglevel boot where the
-      # modules load with NO "module verification failed ... signature and/or
-      # required key missing" notice -- i.e. loading them does not set
-      # TAINT_UNSIGNED_MODULE (bit 13 / 'E'). CONFIG_MODULE_SIG_FORCE stays off.
-      - name: VMS modules are signed (no unsigned-module taint, bit 13 clear)
+      # vms-566 negative control: the taint gate must be TWO-SIDED. Sources the
+      # gate's pure helpers (no boot) and proves taint_mask_forbidden() reddens on
+      # the O, E and O+E masks, and that stripping a real shipped module's intree
+      # stamp / signature reddens ko_intree_ok / ko_signed_ok -- i.e. a revert to
+      # out-of-tree or unsigned modules would turn this gate RED.
+      - name: taint gate is two-sided (negative controls)
         run: |
           docker run --rm \
-            -v ${{ github.workspace }}/tests/qemu/test_signed_modules.sh:/test.sh:ro \
+            -v ${{ github.workspace }}/tests/qemu/test_kernel_taint.sh:/gate.sh:ro \
+            -v ${{ github.workspace }}/tests/qemu/test_kernel_taint_negctl.sh:/negctl.sh:ro \
             --entrypoint bash \
             ovmx-boot:latest \
-            /test.sh
+            /negctl.sh /gate.sh
 
   # -----------------------------------------------------------------------
   # cut-release-reproducible (vms-d73, epic vms-a84 RELEASE ENGINEERING)

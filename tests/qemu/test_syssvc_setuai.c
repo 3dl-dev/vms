@@ -52,9 +52,12 @@
  * printed the two UIC fields with %u while parse_uaf_line() reads them with
  * strtoul(..., 8), so rewriting any record whose UIC digits differ between
  * the bases silently changed that account's UIC. USER1 ships 200|202, which
- * differs; SYSTEM's 1|4 does not, which is what hid it. The assertion is on
- * the FIELD TEXT of the rewritten row, so it fires on the value written, not
- * on a value re-derived by the same parser that produced it.
+ * differs; the single-octal-digit rows do not -- and there are TWO of those,
+ * SYSTEM (1|4) and OPERATOR (1|6), not just SYSTEM (measured, vms-f57). Any
+ * of them would have hidden it; USER1 is chosen precisely because its digits
+ * discriminate. The assertion is on the FIELD TEXT of the rewritten row, so
+ * it fires on the value written, not on a value re-derived by the same
+ * parser that produced it.
  */
 
 #include <stdio.h>
@@ -457,16 +460,24 @@ int main(void)
           "4: the parent process reads the new default directory in the file");
 
     /*
-     * The UIC write-back base (vms-e60). USER1 ships 200|202; %u would have
-     * written 128|130 here, which the next read takes as octal 88|88... --
-     * a different UIC for the same account.
+     * The UIC write-back base (vms-e60). USER1 ships 200|202, which the octal
+     * parse reads into the struct as 128|130 (decimal). %u would have written
+     * those decimal digits back as "128|130"; the NEXT read then parses them
+     * as octal and gets 10|88, NOT 88|88 -- '8' is not an octal digit, so
+     * strtoul("128",8) stops after "12" (= 10) while strtoul("130",8) = 88.
+     * Measured (vms-f57): 128->10, 130->88. Either way it is a different UIC
+     * for the same account, which is what the two field-text checks below
+     * guard -- and the negctl sysuaf-uic-writeback-decimal (facility_defects.sh)
+     * flips %o->%u in the writer to prove those two checks actually have teeth.
      */
     if (row_field(row, 2, field, sizeof(field)))
         printf("  rewritten uic_group field: %s\n", field);
+    /* negctl: sysuaf-uic-writeback-decimal */
     CHECK(row_field(row, 2, field, sizeof(field)) && strcmp(field, "200") == 0,
           "4: the rewritten UIC GROUP field still reads 200 (octal, vms-e60)");
     if (row_field(row, 3, field, sizeof(field)))
         printf("  rewritten uic_member field: %s\n", field);
+    /* negctl: sysuaf-uic-writeback-decimal */
     CHECK(row_field(row, 3, field, sizeof(field)) && strcmp(field, "202") == 0,
           "4: the rewritten UIC MEMBER field still reads 202 (octal, vms-e60)");
 

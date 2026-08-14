@@ -103,7 +103,16 @@ fi
 # superseded rule: "fail honestly with SS$_NOSUCHDEV" is no longer the correct
 # behaviour for an absent executive (see the header). There is nothing left to
 # exempt.
-hits=$(grep -rnE '(no|without|missing|absent).{0,24}/dev/vms|/dev/vms.{0,40}(fall ?back|fallback|emulate|in-process|userspace fake)' \
+#
+# WORD BOUNDARIES on the absence words (\b...\b) -- not cosmetic. Without them
+# the "no" alternative matches the substring inside mkNOd("/dev/vms"), so the
+# LEGITIMATE, devfs-less-SYSKRNL node creation (ovmx_boot_netbsd.c, generalized
+# Rule 9) tripped this check as a phantom "fallback". The absence words are
+# WORDS ("no /dev/vms", "missing /dev/vms"), so anchoring them to word
+# boundaries removes that false positive without weakening the intent -- and the
+# node creation is not merely excused here, it is STRICTLY validated by
+# check 3-node below (honest getdevmajor-guarded major, or the gate fails).
+hits=$(grep -rnE '\b(no|without|missing|absent)\b.{0,24}/dev/vms|/dev/vms.{0,40}(fall ?back|fallback|emulate|in-process|userspace fake)' \
         --include=*.c --include=*.h "$SRC_ROOT/src" 2>/dev/null \
        | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(\*|//|/\*)' || true)
 if [ -n "$hits" ]; then
@@ -270,6 +279,68 @@ terminates() {
     done
     return 1
 }
+
+# --- 3-node. /dev/vms node creation is honest on a devfs-less SYSKRNL --------
+# GENERALIZED Rule 9 (docs/runtime-target.md; docs/design-ovmx-netbsd-syskrnl.md):
+# OVMX has exactly ONE executive, reached through /dev/vms, behind a PLUGGABLE
+# SYSKRNL. On the Linux SYSKRNL the module + devtmpfs auto-create /dev/vms, so
+# ANY userspace mknod of it is suspect -- a fabricated node is a fake executive
+# (INV-6), which is why check 3 (above) flags absence-of-devfs prose near
+# /dev/vms. On a devfs-LESS SYSKRNL (OVMX/NetBSD, where PID 1 == ovmx_init is
+# init) NOTHING auto-creates the node, so PID 1 legitimately mknods it -- but
+# ONLY for the REAL registered driver. This check ENCODES that authenticity
+# condition; it is NOT an allowlist for the node-creation line (a fabricated
+# major or an unguarded mknod still FAILS here). A mknod of /dev/vms is honest
+# IFF, from the same source:
+#   (a) the major is looked up from the loaded driver -- VAR = getdevmajor("vms");
+#   (b) the mknod's device number is built from THAT VAR, never a hardcoded /
+#       fabricated major; and
+#   (c) the node is NOT created when the lookup fails -- a VAR == NODEVMAJOR
+#       guard returns/halts before the mknod, so /dev/vms cannot exist without
+#       the real executive (and executive_attach() -- check 3b -- then halts on
+#       the open). Every property has an evasion recorded in the negctl.
+node_files=$(grep -rlE 'mknod[[:space:]]*\([^;]*"/dev/vms"' --include=*.c "$SRC_ROOT/src" 2>/dev/null || true)
+node_ok=1
+for nf in $node_files; do
+    nsc=$(strip_comments < "$nf")
+    # (a) the real-driver lookup and the variable VAR it binds.
+    nvar=$(printf '%s\n' "$nsc" \
+        | sed -nE 's/.*[^A-Za-z0-9_]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*getdevmajor[[:space:]]*\([[:space:]]*"vms".*/\1/p' \
+        | head -1)
+    if [ -z "$nvar" ]; then
+        echo "FAIL: $nf: mknod(\"/dev/vms\") major is not derived from a getdevmajor(\"vms\") lookup"
+        echo "  -> a userspace /dev/vms node must name the REAL registered driver (INV-6 / generalized Rule 9)."
+        node_ok=0; status=1; continue
+    fi
+    # (b) every mknod("/dev/vms") device number must reference VAR -- reject a
+    #     hardcoded/fabricated major.
+    nbad=$(printf '%s\n' "$nsc" | grep -E 'mknod[[:space:]]*\([^;]*"/dev/vms"' \
+           | sed -E 's/.*"\/dev\/vms"//' \
+           | grep -vE "(^|[^A-Za-z0-9_])${nvar}([^A-Za-z0-9_]|$)" || true)
+    if [ -n "$nbad" ]; then
+        echo "FAIL: $nf: mknod(\"/dev/vms\") uses a hardcoded/fabricated major, not the getdevmajor(\"vms\") result ($nvar)"
+        echo "  -> the node must carry the driver's REAL major; a fabricated major is a fake executive (INV-6)."
+        node_ok=0; status=1; continue
+    fi
+    # (c) the honest-failure guard on VAR, and it must terminate before the mknod.
+    nguard=$(printf '%s\n' "$nsc" | grep -nE "${nvar}[[:space:]]*==[[:space:]]*NODEVMAJOR|NODEVMAJOR[[:space:]]*==[[:space:]]*${nvar}" | head -1)
+    if [ -z "$nguard" ]; then
+        echo "FAIL: $nf: mknod(\"/dev/vms\") has no honest-failure guard ($nvar == NODEVMAJOR) -- the node could be created without the real driver"
+        node_ok=0; status=1; continue
+    fi
+    if ! printf '%s\n' "$nsc" | grep -A1 -E "${nvar}[[:space:]]*==[[:space:]]*NODEVMAJOR|NODEVMAJOR[[:space:]]*==[[:space:]]*${nvar}" \
+         | grep -qE 'return|_exit|exit[[:space:]]*\(|halt|reboot'; then
+        echo "FAIL: $nf: the $nvar == NODEVMAJOR guard does not return/halt before the mknod -- the node is reachable on driver absence"
+        node_ok=0; status=1; continue
+    fi
+done
+if [ "$node_ok" -eq 1 ]; then
+    if [ -n "$node_files" ]; then
+        echo "  OK: every mknod(\"/dev/vms\") is guarded by a getdevmajor(\"vms\") lookup with an honest-failure on driver absence"
+    else
+        echo "  OK: no userspace /dev/vms node creation (Linux SYSKRNL: devtmpfs/module auto-creates it)"
+    fi
+fi
 
 # --- 3b. The executive must be INTEGRAL, not optional -------------------
 # The guarantee that makes check 3 enforceable: PID 1 refuses to bring the

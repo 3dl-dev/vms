@@ -73,12 +73,19 @@ KIF_C="$ROOT/src/libvmssys/vms_kif.c"
 # it. Snapshot it like the others so injection_landed() proves the mutation
 # landed and restore() reverts it.
 BOOT_LINUX_C="$ROOT/src/ovmx_init/ovmx_boot_linux.c"
+# vms-7b1: the gate's check 3-node reads the NetBSD backend, where PID 1 mknods
+# /dev/vms for the REAL registered driver on a devfs-less SYSKRNL. Its controls
+# mutate THIS file (hardcoded major / dropped getdevmajor lookup / dropped or
+# non-terminating NODEVMAJOR guard), so snapshot it like the others.
+BOOT_NETBSD_C="$ROOT/src/ovmx_init/ovmx_boot_netbsd.c"
 INIT_ORIG="$WORK/ovmx_init.c.orig"
 KIF_ORIG="$WORK/vms_kif.c.orig"
 BOOT_LINUX_ORIG="$WORK/ovmx_boot_linux.c.orig"
+BOOT_NETBSD_ORIG="$WORK/ovmx_boot_netbsd.c.orig"
 cp "$INIT_C" "$INIT_ORIG"
 cp "$KIF_C" "$KIF_ORIG"
 cp "$BOOT_LINUX_C" "$BOOT_LINUX_ORIG"
+cp "$BOOT_NETBSD_C" "$BOOT_NETBSD_ORIG"
 
 # vms-fk1: the Phase-4 fake checks (gate section 5) each mutate one of these
 # facility files. Same discipline as INIT_C/KIF_C above: snapshot a pristine
@@ -105,6 +112,7 @@ restore() {
     cp "$INIT_ORIG" "$INIT_C"
     cp "$KIF_ORIG" "$KIF_C"
     cp "$BOOT_LINUX_ORIG" "$BOOT_LINUX_C"
+    cp "$BOOT_NETBSD_ORIG" "$BOOT_NETBSD_C"
     cp "$PCB_ORIG" "$PCB_H"
     cp "$MBX_ORIG" "$MBX_C"
     cp "$DEV_ORIG" "$DEV_C"
@@ -143,6 +151,7 @@ pristine_copy_of() {
         "$INIT_C") echo "$INIT_ORIG" ;;
         "$KIF_C")  echo "$KIF_ORIG" ;;
         "$BOOT_LINUX_C") echo "$BOOT_LINUX_ORIG" ;;
+        "$BOOT_NETBSD_C") echo "$BOOT_NETBSD_ORIG" ;;
         "$PCB_H")  echo "$PCB_ORIG" ;;
         "$MBX_C")  echo "$MBX_ORIG" ;;
         "$DEV_C")  echo "$DEV_ORIG" ;;
@@ -514,6 +523,44 @@ static int kif_bind(void)
 EOF
 replace_bind "$WORK/bind.c"
 expect_red "$KIF_C" "3c(vii) ONE LINE: 'int rc = vms_kif_open(); switch (rc) { ... }'" "$R_PROBE"
+
+# ===========================================================================
+# CHECK 3-node (vms-7b1) -- /dev/vms node creation on a devfs-less SYSKRNL is
+# honest ONLY if the major comes from a getdevmajor("vms") lookup of the loaded
+# driver, the mknod uses THAT major (never a fabricated one), and the node is
+# not created when the lookup fails. Each control is a REAL evasion of one of
+# those properties; each is minimal (trips its property and no other), which the
+# forbidden list asserts. Mutations land in the NetBSD backend, the sole file
+# that legitimately mknods /dev/vms.
+# ===========================================================================
+N_NODE_LOOKUP='major is not derived from a getdevmajor("vms") lookup'
+N_NODE_HARDCODED='uses a hardcoded/fabricated major, not the getdevmajor("vms") result'
+N_NODE_GUARD='has no honest-failure guard'
+N_NODE_GUARDTERM='guard does not return/halt before the mknod'
+
+# (i) THE FABRICATED MAJOR -- the evasion the coordinator called out: mknod a
+# /dev/vms with a hardcoded major, so the node names no real driver. getdevmajor
+# and the guard stay intact, so ONLY the hardcoded-major property may fire.
+sed -i 's/makedev(cmaj, 0)/makedev(366, 0)/' "$BOOT_NETBSD_C"
+expect_red "$BOOT_NETBSD_C" "3-node(i) mknod(/dev/vms) with a HARDCODED major, not the getdevmajor result" \
+    "$N_NODE_HARDCODED" "$N_NODE_LOOKUP" "$N_NODE_GUARD" "$N_NODE_GUARDTERM" "$R_PROBE" "$R_CAPTURE"
+
+# (ii) NO REAL-DRIVER LOOKUP -- the major is invented, not asked of the kernel.
+sed -i 's#cmaj = getdevmajor("vms", S_IFCHR);.*#cmaj = 366;#' "$BOOT_NETBSD_C"
+expect_red "$BOOT_NETBSD_C" "3-node(ii) mknod major invented (getdevmajor(\"vms\") lookup removed)" \
+    "$N_NODE_LOOKUP" "$N_NODE_HARDCODED" "$N_NODE_GUARD" "$N_NODE_GUARDTERM" "$R_PROBE" "$R_CAPTURE"
+
+# (iii) NO HONEST-FAILURE GUARD -- delete the `cmaj == NODEVMAJOR' guard, so the
+# node is created even when the driver never registered (a fabricated executive).
+sed -i '/if (cmaj == NODEVMAJOR)/,+1d' "$BOOT_NETBSD_C"
+expect_red "$BOOT_NETBSD_C" "3-node(iii) NODEVMAJOR honest-failure guard deleted -- node created without the driver" \
+    "$N_NODE_GUARD" "$N_NODE_LOOKUP" "$N_NODE_HARDCODED" "$N_NODE_GUARDTERM" "$R_PROBE" "$R_CAPTURE"
+
+# (iv) GUARD THAT DOES NOT TERMINATE -- the guard is present but falls through
+# to the mknod instead of returning, so absence is detected and then ignored.
+sed -i 's#^        return;.*driver not registered.*#        (void)cmaj;#' "$BOOT_NETBSD_C"
+expect_red "$BOOT_NETBSD_C" "3-node(iv) NODEVMAJOR guard falls through instead of returning" \
+    "$N_NODE_GUARDTERM" "$N_NODE_LOOKUP" "$N_NODE_HARDCODED" "$N_NODE_GUARD" "$R_PROBE" "$R_CAPTURE"
 
 # ===========================================================================
 # CHECK 5 (vms-fk1) -- the retired per-process fakes must not return. One

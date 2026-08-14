@@ -509,7 +509,8 @@ lnm-searchlist-equiv-truncated
 rightslist-general-hex-as-decimal
 sysuaf-uic-radix-decimal
 sysuaf-uic-writeback-decimal
-bg-recv-length-zeroed"
+bg-recv-length-zeroed
+tcpip-ftp-get-length-dropped"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -5359,6 +5360,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    tcpip-ftp-get-length-dropped)
+        case "$_f" in
+        facility)     echo "TCP/IP Services client TOOLS -- the FTP RETR data-drain of the shared client engine (tcpip_ftp_get, src/vmstcpip/services/tcpip_client.h, vms-dbb), the header the DCL FTP/TELNET verbs ship and test_syssvc_tcpip_client proves. The tools drive their connections over the executive-resident INET pseudo-device BGn: (vms-527) through the public \$ASSIGN/\$QIO/\$DASSGN services -- no userspace socket stack; \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive.";;
+        targets)      echo "vmstcpip/services/tcpip_client.h";;
+        suites_red)   echo "test_syssvc_tcpip_client";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tcpip_ftp_get()'s data-drain loop accumulates the received file with 'total += take;'. The mutation flips it to 'total += 0;', so RETR reports zero bytes received while every FTP reply (220/331/230/200/227/150/226) still parses success -- so the RETR STILL COMPLETES (its connect/login/PASV assertion stays green) and only the byte-exact-file assertion reddens (glen != file length, content mismatch). The TELNET assertions and the FTP STOR path never call tcpip_ftp_get and stay green. One assignment zeroed.";;
+        require_fail) cat <<'EOF'
+FTP RETR receives the file BYTE-EXACT over the PASV data channel
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -6180,6 +6198,14 @@ apply_edit() {
         # byte count. After substitution no "a->len = (uint32_t)n;" is left in
         # the range, so a second apply is the no-op the selftest requires.
         sed -i '/^long vms_ioctl_bg_recv/,/^}$/ s|        a->len = (uint32_t)n;|        a->len = 0; /* NEGCTL bg-recv-length-zeroed */|' "$_file";;
+
+    tcpip-ftp-get-length-dropped)
+        # Drop the accumulated received length in tcpip_ftp_get()'s data-drain
+        # loop: 'total += take;' -> 'total += 0;'. The string is UNIQUE in the
+        # header (only tcpip_ftp_get accumulates a transfer this way), so no
+        # range anchor is needed; after substitution no 'total += take;' is left,
+        # making a second apply the no-op the selftest requires.
+        sed -i 's|total += take;          /\* NEGCTL tcpip-ftp-get-length-dropped \*/|total += 0; /* NEGCTL tcpip-ftp-get-length-dropped */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

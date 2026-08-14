@@ -387,4 +387,14 @@
 # echo assertion, with the assign/setmode/connect/write assertions (and the
 # no-executive honest-skip) all staying green. See its own entry in
 # facility_defects.sh for what it covers and why.
-99
+# Raised 99 -> 100 by vms-dbb's tcpip-ftp-get-length-dropped -- the TCP/IP
+# client TOOLS (DCL TELNET + FTP, the second network facility on the vms-527
+# BGn: seam). The FIRST defect targeting src/vmstcpip/services/tcpip_client.h,
+# the header the DCL FTP/TELNET verbs ship and test_syssvc_tcpip_client proves
+# against a real /dev/vms. The mutation drops the accumulated received length in
+# tcpip_ftp_get()'s data-drain loop ('total += take;' -> 'total += 0;'), so RETR
+# reports zero bytes while every FTP reply still parses success -- reddening
+# exactly the suite's byte-exact-RETR assertion, with the connect/login/PASV,
+# the TELNET, and the FTP STOR assertions all staying green. See its own entry
+# in facility_defects.sh for what it covers and why.
+100

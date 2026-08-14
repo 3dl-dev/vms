@@ -422,6 +422,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Invoke the EDT text editor", q_none },
     { "EXIT",        cmd_exit,        CDU_F_ABBREV, 2,
       "Terminate a command procedure or session", q_none },
+    { "FTP",         cmd_ftp,         CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "FTP file transfer client (/GET, /PUT over TCP/IP Services BGn:)" },
     /* HELP takes accept-all qualifiers (quals == NULL, not q_none): a slash
      * token after HELP is a command-qualifier TOPIC to look up (e.g.
      * HELP DIRECTORY QUALIFIERS /EXCLUDE), exactly as VMS HELP treats it, so
@@ -491,6 +493,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Invoke SYSMAN system management utility", q_none },
     { "TCPIP",       cmd_tcpip,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "TCP/IP Services network management commands" },
+    { "TELNET",      cmd_telnet,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "TELNET remote terminal client (over TCP/IP Services BGn:)" },
     { "TYPE",        cmd_type,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Display the contents of a file", q_type },
     { "WAIT",        cmd_wait,        CDU_F_ABBREV | CDU_F_PARAM, 2,

@@ -761,6 +761,13 @@ int main(int argc, char *argv[])
             static char fgets_buf[DCL_MAX_LINE];
             printf("%s", dcl_ctx.prompt);
             fflush(stdout);
+            /* vms-195: when SYS$OUTPUT is a mailbox (async writer) but SYS$INPUT
+             * is still the terminal -- the live console login -- the newline-less
+             * prompt would ride the async writer while the kernel echoes the next
+             * keystroke synchronously, interleaving as "d$ ir". Wait for the
+             * prompt to be fully emitted over the mailbox before reading input,
+             * which arms that echo. A no-op for a terminal/file SYS$OUTPUT. */
+            dcl_mbx_output_drain_sync();
             if (!fgets(fgets_buf, sizeof(fgets_buf), stdin)) {
                 printf("\n");
                 break;
@@ -800,6 +807,7 @@ int main(int argc, char *argv[])
                     static char cbuf[DCL_MAX_LINE];
                     printf("_$ ");
                     fflush(stdout);
+                    dcl_mbx_output_drain_sync();  /* vms-195: prompt before echo */
                     if (fgets(cbuf, sizeof(cbuf), stdin)) {
                         size_t clen = strlen(cbuf);
                         if (clen > 0 && cbuf[clen - 1] == '\n')

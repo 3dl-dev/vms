@@ -47,3 +47,28 @@ set_tests_properties(dcl-harness-selftest PROPERTIES
     LABELS "dcl;harness"
 )
 
+# Hermetic unit test for the interactive prompt/echo race (vms-195). Compiles
+# dcl_mbx.c with its test hooks (-DDCL_MBX_TEST_HOOKS) and drives the writer-
+# thread + synchronous-prompt drain barrier against a plain-pipe stand-in for
+# the mailbox far end -- so the ordering guarantee is proven with no /dev/vms.
+add_executable(test_dcl_prompt_echo_race
+    test_prompt_echo_race.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_mbx.c
+)
+target_include_directories(test_dcl_prompt_echo_race PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
+    ${VMS_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
+)
+target_compile_definitions(test_dcl_prompt_echo_race PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+    DCL_MBX_TEST_HOOKS
+)
+target_link_libraries(test_dcl_prompt_echo_race PRIVATE vms vmssys pthread)
+add_test(NAME dcl-prompt-echo-race COMMAND test_dcl_prompt_echo_race)
+set_tests_properties(dcl-prompt-echo-race PROPERTIES
+    TIMEOUT 60
+    LABELS "dcl;mbx;unit"
+)
+

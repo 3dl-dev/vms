@@ -107,6 +107,11 @@ dump_and_die() {
 }
 
 # --- 1. Boot to login --------------------------------------------------------
+# Mirror the positive gate's proven sequence: wait for the executive-attach
+# line FIRST, THEN send the wake RETURN (LOGINOUT waits for a RETURN before it
+# prints Username: — vms-2213). Sending it at t=0, before the console is
+# listening, loses it and Username: never appears.
+if wait_for '%OVMX-I-EXEC' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
 send ''
 if wait_for 'Username:' "$BOOT_TIMEOUT"; then
     ok "boot reaches the login prompt"

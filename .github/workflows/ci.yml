@@ -4506,6 +4506,88 @@ jobs:
         run: tests/lab-vax/run-vmsfs.sh negctl
 
   # -----------------------------------------------------------------------
+  # netbsd-vax-boot (rd vms-7b1, parent vms-c99, epic vms-8e8). The VAX
+  # capstone-minus-one: ASSEMBLE a bootable OVMX/NetBSD-vax system disk from the
+  # OVMX build and boot it UNATTENDED under SIMH with ovmx_init (STARTUP.EXE) as
+  # PID 1 (init), reaching the boot milestone -- kernel up -> vms.kmod loaded
+  # (/dev/vms live) -> OpenVMX banner -> vmsfs.kmod loaded -> OVMX ODS-2 system
+  # disk (DKA0:) mounted. It WIRES TOGETHER what netbsd-vax-devvms (/dev/vms
+  # PING) and netbsd-vax-vmsfs-mount (ODS-2 mount+read) prove in isolation, but
+  # UNDER ovmx_init as real PID 1 driving its own NetBSD boot seam
+  # (ovmx_boot_netbsd.c). Reaching a full DCL prompt is the SEPARATE capstone
+  # (vms-d59) and is deliberately NOT scoped here.
+  #
+  # It cross-builds STARTUP.EXE (ovmx_init, dynamic elf32-vax, ld.elf_so
+  # activation) + the loadable vms.kmod + vmsfs.kmod, assembles them onto a
+  # PRIVATE COPY of the cached disk (never the shared wd0.img the devvms/vmsfs
+  # proofs boot -- this replaces /sbin/init), and boots it. The prove step
+  # asserts the milestone console lines; the negctl step boots WITHOUT the ODS-2
+  # volume so the "system disk DKA0: mounted" line MUST NOT appear -- proving the
+  # mount assertion has teeth (Rule 7). BUILD/TEST tooling, never a runtime (Rule
+  # 9): SIMH is emulation; nothing runs on the host. run-boot.sh wraps every SIMH
+  # invocation in a hard timeout.
+  #
+  # NIGHTLY (schedule) + manual (workflow_dispatch) ONLY -- a full SIMH boot + the
+  # ~40-min custom MODULAR-kernel build (vax GENERIC omits the module framework)
+  # is far too heavy per-PR; the per-PR signal is the fast cross-compile gates
+  # (exec-netbsd-vax, netbsd-vax-vmsfs-crosscompile). It `needs' netbsd-vax-simh
+  # so that job primes the shared 10.1 disk cache first; this job restores it,
+  # clones a private copy, and NEVER reinstalls in the hot path.
+  # -----------------------------------------------------------------------
+  netbsd-vax-boot:
+    name: OVMX boots as PID 1 on NetBSD/vax under SIMH (vms-7b1)
+    needs: [changes, netbsd-vax-simh]
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    # The full NetBSD src tree + build.sh obj/tools are large, rebuildable scratch
+    # -> keep them OUT of the disk cache (a literal /tmp path).
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-boot-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      # Cache the built MODULAR kernel (4 MB) so the ~40-min build.sh runs only on
+      # a cold cache, keyed on the kernel-build inputs (shared with the sibling
+      # SIMH jobs -- the same kernel).
+      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
+        uses: actions/cache@v4
+        with:
+          path: .boot-cache/lab-vax/boot-artifacts/netbsd-OVMX
+          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: "Prove — ovmx_init boots as PID 1 (executive on /dev/vms, OpenVMX banner, ODS-2 DKA0: mounted)"
+        run: tests/lab-vax/run-boot.sh prove
+
+      - name: "Negative control — without the ODS-2 volume the DKA0: mount milestone must NOT appear"
+        run: tests/lab-vax/run-boot.sh negctl
+
+  # -----------------------------------------------------------------------
   # libvmssys-netbsd-vax (rd vms-9dc, epic vms-8e8; design sec 4).
   #
   # BUILD-ONLY cross-compile gate for the OVMX/NetBSD VAX userspace port. It

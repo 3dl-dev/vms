@@ -80,15 +80,71 @@ typedef int ovmx_boot_netbsd_backend_not_selected;
 #include <string.h>
 #include <unistd.h>
 
-/* The NetBSD/vax host path for the system/boot disk -- the substrate-specific
- * name the seam exists to hide from ovmx_init.c (Linux: "/dev/vda"). "/dev/wd0"
- * matches the seam header and the tests/lab-vax cached disk image ("wd0.img",
- * vms-0041); the exact partition/label is pinned when the bootable disk is
- * ASSEMBLED (vms-7b1). The executive device path "/dev/vms" is NOT hidden
- * behind a macro: it is written literally in ovmx_boot_open_executive() below,
- * exactly as the Linux backend does, so the Rule 9 backend gate can verify the
- * backend really opens the executive device and does not fake a descriptor. */
+/* The NetBSD host path for the OVMX ODS-2 system disk (DKA0:) -- the
+ * substrate-specific name the seam exists to hide from ovmx_init.c (Linux:
+ * "/dev/vda"). PINNED here by the bootable-disk assembly (vms-7b1), which is
+ * exactly where the seam header said the partition/label would be nailed down.
+ *
+ * On NetBSD/vax under SIMH the OVMX ODS-2 volume is a SECOND MSCP disk (the
+ * tests/lab-vax harness attaches the mastered volume on SIMH rq1 -> NetBSD
+ * ra1), whole-disk partition `c' (the whole-disk partition on vax). The NetBSD
+ * root fs is the FIRST MSCP disk (rq0 -> ra0), so DKA0: is ra1c -- the mirror
+ * of the Linux runtime, where the NetBSD root is the initramfs and DKA0: is a
+ * separate virtio disk (/dev/vda). On any other NetBSD substrate the disk-boot
+ * assembly does not yet exist; keep the seam-header placeholder there.
+ *
+ * The executive device path "/dev/vms" is NOT hidden behind a macro: it is
+ * written literally in ovmx_boot_open_executive() below, exactly as the Linux
+ * backend does, so the Rule 9 backend gate can verify the backend really opens
+ * the executive device and does not fake a descriptor. */
+#if defined(__vax__)
+#define OVMX_BOOT_SYSDISK_DEV   "/dev/ra1c"
+#else
 #define OVMX_BOOT_SYSDISK_DEV   "/dev/wd0"
+#endif
+
+/*
+ * Wire PID 1's stdio to the console -- the ONE thing NetBSD's kernel does NOT
+ * do for init that Linux's does. The Linux kernel opens /dev/console as fd
+ * 0/1/2 for the init process (init/main.c), so ovmx_init.c's very first
+ * printf() reaches the console with no help. The NetBSD kernel does NOT: it
+ * leaves init's descriptors closed and expects init(8) to open /dev/console
+ * itself. ovmx_init IS init on this substrate, so if it does not do the same,
+ * EVERY line PID 1 prints -- the SYSKRNL banner, the executive-attach line,
+ * the product banner, the mount narration, and the halt diagnostics -- goes to
+ * a closed descriptor and never reaches the console (empirically: on the first
+ * bring-up the modules loaded and the boot ran to its honest halt, but not one
+ * character of PID 1 output appeared).
+ *
+ * This runs as an ELF constructor (ld.elf_so .init_array), BEFORE main(), so
+ * even main()'s first printf lands on the console. It is the NetBSD-side
+ * realization of a substrate fact -- exactly the kind of thing the boot seam
+ * exists to absorb -- and needs no `#ifdef' in ovmx_init.c (INV-DRIFT): the
+ * Linux backend has no such constructor because the Linux kernel already wired
+ * the console. Guarded to PID 1 with a not-already-a-tty check, so running
+ * STARTUP.EXE from a shell (e.g. the disk-assembly session) is untouched.
+ * Best-effort: if /dev/console will not open, boot proceeds silently rather
+ * than failing -- the fail-honest gate is the executive, not console I/O.
+ */
+__attribute__((constructor))
+static void ovmx_netbsd_wire_console(void)
+{
+    struct stat st;
+    int fd;
+
+    if (getpid() != 1)
+        return;                          /* only PID 1 owns the console */
+    if (fstat(1, &st) == 0 && S_ISCHR(st.st_mode))
+        return;                          /* stdout already a real console/tty */
+    fd = open("/dev/console", O_RDWR | O_NOCTTY);
+    if (fd < 0)
+        return;                          /* best-effort */
+    (void)dup2(fd, 0);
+    (void)dup2(fd, 1);
+    (void)dup2(fd, 2);
+    if (fd > 2)
+        (void)close(fd);
+}
 
 int ovmx_boot_kernel_filesystems_mounted(void)
 {
@@ -300,6 +356,59 @@ static int dev_vms_present(void)
     return stat("/dev/vms", &st) == 0 && S_ISCHR(st.st_mode);
 }
 
+/*
+ * exec_driver_registered - nonzero iff the `vms' cdevsw driver is REALLY
+ * attached in the kernel right now (getdevmajor(3) returns its char major, not
+ * NODEVMAJOR). This is the honest "is the executive live" test, distinct from
+ * dev_vms_present() which only tells whether a /dev NODE FILE exists. They can
+ * disagree on NetBSD in exactly the case the bootable disk creates: the disk
+ * assembly PRE-CREATES /dev/vms (persistent, because there is no devfs to make
+ * it on demand), so on a fresh boot the node file exists while nothing is
+ * loaded yet. Opening such a node yields ENXIO. So the EXEC_AUTO short-circuits
+ * -- "the executive is already here, no load needed" -- must key on the DRIVER
+ * being registered, not on the stale node file existing, or a fresh boot would
+ * skip the load and then fail to open a driverless node.
+ */
+static int exec_driver_registered(void)
+{
+    return getdevmajor("vms", S_IFCHR) != NODEVMAJOR;
+}
+
+/*
+ * ensure_exec_node - make the executive's /dev/vms character node reachable
+ * after the driver is loaded. This is the NetBSD analogue of what Linux
+ * devtmpfs does AUTOMATICALLY the instant finit_module(2) attaches vms.ko:
+ * NetBSD has no devfs, so a freshly-modctl-loaded cdevsw driver gets a
+ * dynamically-assigned char major but no /dev entry, and something has to
+ * create it. On Linux that "something" is the kernel; on NetBSD it is here,
+ * so ovmx_boot_open_executive() finds a node to open.
+ *
+ * FAIL-HONEST (INV-6 / Rule 9), the whole reason this is not a blind mknod:
+ * the major is looked up FROM THE KERNEL by driver name (getdevmajor(3),
+ * libc) -- so the node can only ever name the REAL vms driver. If the driver
+ * is not actually registered, getdevmajor returns NODEVMAJOR and NO node is
+ * created; ovmx_boot_open_executive() then fails and PID 1 halts, exactly as
+ * it must. It never fabricates a node pointing at a major that names no
+ * executive.
+ *
+ * Idempotent and read-only-root-safe: if /dev/vms already exists (e.g. the
+ * bootable-disk assembly pre-created it, or the driver was already loaded)
+ * this is a no-op; if /dev is not writable the mknod simply fails and the
+ * pre-existing node is used. Only the executive ("vms") gets a node -- vmsfs
+ * is a VFS with no device node.
+ */
+static void ensure_exec_node(void)
+{
+    devmajor_t cmaj;
+
+    if (dev_vms_present())
+        return;                          /* already there (pre-created / loaded) */
+    cmaj = getdevmajor("vms", S_IFCHR);  /* ask the kernel for the REAL major */
+    if (cmaj == NODEVMAJOR)
+        return;                          /* driver not registered -> no node */
+    (void)mknod("/dev/vms", S_IFCHR | 0666, makedev(cmaj, 0));
+}
+
 int ovmx_boot_load_module(const char *name)
 {
     enum exec_load_mode mode = exec_load_mode();
@@ -320,7 +429,7 @@ int ovmx_boot_load_module(const char *name)
 
     /* AUTO: if the executive device is already live, it is really here
      * (in-kernel, or an already-loaded module) -- no load needed. */
-    if (mode == EXEC_AUTO && is_exec && dev_vms_present())
+    if (mode == EXEC_AUTO && is_exec && exec_driver_registered())
         return 0;
 
     /* module path: modctl(MODCTL_LOAD) by name. The kernel resolves a bare
@@ -333,11 +442,17 @@ int ovmx_boot_load_module(const char *name)
          * (a thin-modules VAX kernel that built the driver in), the executive
          * really IS present -- succeed. This never fakes: it succeeds only on
          * a real live /dev/vms char device. */
-        if (mode == EXEC_AUTO && is_exec && dev_vms_present())
+        if (mode == EXEC_AUTO && is_exec && exec_driver_registered())
             return 0;
         errno = saved;                           /* preserve modctl's errno */
         return -1;
     }
+    /* The executive driver is now loaded: give it its /dev/vms node the way
+     * Linux devtmpfs would have, so ovmx_boot_open_executive() can open it.
+     * A VFS module (vmsfs) has no device node -- ensure_exec_node() only acts
+     * for the executive and is a no-op otherwise. */
+    if (is_exec)
+        ensure_exec_node();
     return 0;
 }
 
@@ -362,15 +477,23 @@ int ovmx_boot_mount_system_disk(const char *mountpoint)
     /* NetBSD mount(2) carries the device INSIDE the fs args (fspec), unlike
      * Linux's mount(dev, mp, type, ...). Every NetBSD disk filesystem's args
      * struct begins with `char *fspec` (ffs / lfs / ext2fs / msdosfs / cd9660
-     * / ...); the OVMX ODS-2 vnode backend (rd vms-308 / vms-544d) follows the
-     * same convention. Its dedicated args header lands with that backend;
-     * until then the shared fspec-first shape is modelled here so PID 1's mount
-     * call is a real mount(2), not a stub. RW, no special flags -- a blank or
-     * unformatted volume fails to mount (nonzero), and PID 1 halts (it does NOT
-     * initialize or install -- design-init-scope.md §1). */
-    struct { char *fspec; } args;
+     * / ...); the OVMX ODS-2 vnode backend (rd vms-308 / vms-544d) uses exactly
+     * this shape -- `struct vmsfs_args { char *fspec; }`
+     * (src/kernel-netbsd/vmsfs/vmsfs_nb.h) -- so this modelled struct is the
+     * real args blob VFS_MOUNT consumes, byte-for-byte, not a stub.
+     *
+     * MNT_RDONLY: the OVMX ODS-2 vnode backend on this substrate is read-only
+     * (it registers the read VOPs -- VOP_LOOKUP/READ/READDIR -- and the vmsfs
+     * mount+read proof, tests/lab-vax/run-vmsfs.sh, mounts MNT_RDONLY). A
+     * read-write mount would be refused, so the honest flag for what the
+     * backend can actually do today is read-only. This diverges from the Linux
+     * backend's read-write mount and is a real capability difference, not a
+     * silent drop: a blank or unformatted volume still fails to mount (nonzero
+     * return), and PID 1 halts (it does NOT initialize or install --
+     * design-init-scope.md §1). */
+    struct vmsfs_args { char *fspec; } args;
     args.fspec = (char *)OVMX_BOOT_SYSDISK_DEV;
-    return mount("vmsfs", mountpoint, 0, &args, sizeof args);
+    return mount("vmsfs", mountpoint, MNT_RDONLY, &args, sizeof args);
 }
 
 void ovmx_boot_power_off(void)

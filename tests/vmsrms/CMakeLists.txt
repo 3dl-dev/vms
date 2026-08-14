@@ -17,6 +17,26 @@ set_tests_properties(vmsrms_unit PROPERTIES
     TIMEOUT 30
 )
 
+# vms-5c6d: indexed sys$close must flush the in-memory B-tree before freeing it.
+# Regression for a Tier-1 silent-data-loss bug where records inserted since the
+# last periodic index save (rms_idx_put persists only every 100 inserts) were
+# dropped on close while sys$close still returned success. PUTs 250 records,
+# closes, reopens, and keyed-$GETs records past the 200-insert save boundary.
+# Host-only: the indexed B-tree is a userspace, file-backed structure.
+add_executable(test_idx_close_flush test_idx_close_flush.c)
+target_include_directories(test_idx_close_flush PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_idx_close_flush PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_idx_close_flush COMMAND test_idx_close_flush)
+set_tests_properties(vmsrms_idx_close_flush PROPERTIES
+    LABELS "unit;rms"
+    TIMEOUT 30
+)
+
 # vms-d8e: concealed + rooted-directory device logicals through $PARSE
 # (NAM$M_CNCL_DEV / NAM$M_ROOT_DIR) and structural rooted composition. Runs on
 # the host against LNM$PROCESS (genuinely process-private, no /dev/vms needed).

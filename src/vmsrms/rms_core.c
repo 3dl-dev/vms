@@ -129,6 +129,11 @@ static uint16_t next_ifi = 1;
 extern uint16_t vmsfs_mode_to_protection(mode_t mode);
 extern mode_t   vmsfs_protection_to_mode(uint16_t vms_prot);
 
+/* Indexed-file B-tree persistence (rms_idx.c). rms_idx_cleanup saves the
+ * in-memory index before freeing it so sys$close does not drop records added
+ * since the last periodic save (vms-5c6d). */
+extern uint32_t rms_idx_cleanup(struct FAB *fab);
+
 /* rms_read_exact / rms_write_exact now in rms_util.c */
 
 /* RMS metadata sidecar filename suffix */
@@ -860,7 +865,8 @@ static uint32_t rms_impl_close(void *fab_ptr)
     }
 
     /* Handle delete-on-close options */
-    if ((fab->fab$l_fop & FAB$M_DLT) || (fab->fab$l_fop & FAB$M_TMD)) {
+    int deleting = (fab->fab$l_fop & FAB$M_DLT) || (fab->fab$l_fop & FAB$M_TMD);
+    if (deleting) {
         if (fab->_resolved_path[0]) {
             unlink(fab->_resolved_path);
             /* Also remove sidecar */
@@ -876,10 +882,32 @@ static uint32_t rms_impl_close(void *fab_ptr)
         }
     }
 
-    /* Clean up internal state */
+    /*
+     * Clean up internal state.
+     *
+     * For an indexed file, fab->_rms_state holds the in-memory B-tree. Because
+     * rms_idx_put only persists the tree every 100 inserts, the tree normally
+     * carries records added since the last periodic save; freeing it raw would
+     * silently drop them while sys$close still returned success (vms-5c6d).
+     * rms_idx_cleanup() runs btree_save() before freeing so the index reaches
+     * disk, and reports a write failure as RMS$_WER rather than faking success
+     * (INV-6). Sequential and relative files never allocate _rms_state, so
+     * their close path is unchanged (the org guard is belt-and-suspenders).
+     *
+     * When the file is being deleted on close we must NOT re-persist the index
+     * -- the delete block above already unlinked the .rms_idx sidecar, and a
+     * save here would resurrect it as an orphan -- so just free the tree.
+     */
     if (fab->_rms_state) {
-        free(fab->_rms_state);
-        fab->_rms_state = NULL;
+        if (fab->fab$b_org == FAB$C_IDX && !deleting) {
+            uint32_t idx_sts = rms_idx_cleanup(fab);  /* btree_save() + free */
+            if (!(idx_sts & 1u) && (close_sts & 1u)) {
+                close_sts = idx_sts;  /* surface the index write error */
+            }
+        } else {
+            free(fab->_rms_state);
+            fab->_rms_state = NULL;
+        }
     }
 
     fab->fab$w_ifi = 0;

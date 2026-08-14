@@ -55,8 +55,8 @@ extern uint32_t rms_idx_put(struct FAB *fab, struct RAB *rab);
 extern uint32_t rms_idx_update(struct FAB *fab, struct RAB *rab);
 extern uint32_t rms_idx_delete(struct FAB *fab, struct RAB *rab);
 extern uint32_t rms_idx_find(struct FAB *fab, struct RAB *rab);
-extern void rms_idx_flush(struct FAB *fab);
-extern void rms_idx_cleanup(struct FAB *fab);
+extern uint32_t rms_idx_flush(struct FAB *fab);
+extern uint32_t rms_idx_cleanup(struct FAB *fab);
 
 /*
  * Helper: validate RAB and extract associated FAB.

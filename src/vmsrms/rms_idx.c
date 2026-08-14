@@ -89,7 +89,7 @@ static int btree_remove(btree_t *tree, btree_node_t *node,
                         const uint8_t *key, uint16_t key_len,
                         uint8_t dtp);
 static int btree_write_node(FILE *f, btree_node_t *node);
-static void btree_save(btree_t *tree);
+static int btree_save(btree_t *tree);
 static btree_t *btree_load(const char *data_path, struct FAB *fab);
 
 /*
@@ -502,25 +502,38 @@ static btree_node_t *btree_read_node(FILE *f)
 
 /*
  * btree_save - Write the index to the sidecar file.
+ *
+ * Returns 0 on success (or when there is nothing dirty to persist), -1 if the
+ * index could not be written. A write failure is surfaced to the caller rather
+ * than swallowed so that sys$close does not report a fake success while the
+ * index (and therefore the records inserted since the last periodic save) is
+ * lost -- see rms_idx_cleanup and vms-5c6d.
  */
-static void btree_save(btree_t *tree)
+static int btree_save(btree_t *tree)
 {
-    if (!tree || !tree->dirty) return;
+    if (!tree || !tree->dirty) return 0;
 
     FILE *f = fopen(tree->idx_path, "wb");
-    if (!f) return;
+    if (!f) return -1;
 
+    int ok = 1;
     uint32_t magic = IDX_MAGIC;
-    fwrite(&magic, sizeof(magic), 1, f);
-    fwrite(&tree->num_records, sizeof(tree->num_records), 1, f);
-    fwrite(&tree->key_size, sizeof(tree->key_size), 1, f);
-    fwrite(&tree->key_pos, sizeof(tree->key_pos), 1, f);
-    fwrite(&tree->key_dtp, sizeof(tree->key_dtp), 1, f);
-    fwrite(&tree->key_flags, sizeof(tree->key_flags), 1, f);
+    ok &= (fwrite(&magic, sizeof(magic), 1, f) == 1);
+    ok &= (fwrite(&tree->num_records, sizeof(tree->num_records), 1, f) == 1);
+    ok &= (fwrite(&tree->key_size, sizeof(tree->key_size), 1, f) == 1);
+    ok &= (fwrite(&tree->key_pos, sizeof(tree->key_pos), 1, f) == 1);
+    ok &= (fwrite(&tree->key_dtp, sizeof(tree->key_dtp), 1, f) == 1);
+    ok &= (fwrite(&tree->key_flags, sizeof(tree->key_flags), 1, f) == 1);
 
-    btree_write_node(f, tree->root);
-    fclose(f);
+    if (ok && btree_write_node(f, tree->root) != 0) ok = 0;
+
+    /* fclose flushes buffered writes; a failure here means the on-disk index
+     * is incomplete, so it counts as a save failure. */
+    if (fclose(f) != 0) ok = 0;
+
+    if (!ok) return -1;
     tree->dirty = 0;
+    return 0;
 }
 
 /*
@@ -1045,26 +1058,44 @@ uint32_t rms_idx_find(struct FAB *fab, struct RAB *rab)
 }
 
 /*
- * rms_idx_flush - Save the in-memory B-tree index to disk.
- * Called from sys$flush and sys$close.
+ * rms_idx_flush - Save the in-memory B-tree index to disk without freeing it.
+ *
+ * Returns RMS$_NORMAL on success, RMS$_WER if the index could not be written.
  */
-void rms_idx_flush(struct FAB *fab)
+uint32_t rms_idx_flush(struct FAB *fab)
 {
     if (fab->_rms_state) {
-        btree_save((btree_t *)fab->_rms_state);
+        if (btree_save((btree_t *)fab->_rms_state) != 0) {
+            return RMS$_WER;
+        }
     }
+    return RMS$_NORMAL;
 }
 
 /*
- * rms_idx_cleanup - Free the in-memory B-tree.
- * Called when the file is closed.
+ * rms_idx_cleanup - Persist and free the in-memory B-tree.
+ *
+ * rms_idx_put only writes the B-tree to disk on every 100th insert
+ * (num_records % 100 == 0), so at close time the tree normally holds records
+ * inserted since the last periodic save. This routine MUST run btree_save()
+ * before freeing the tree, otherwise every record added since that boundary is
+ * silently lost while sys$close still reports success (vms-5c6d, Tier-1 data
+ * loss). The tree is always freed (even if the save fails) so the FAB is left
+ * clean; the write failure is reported to the caller as RMS$_WER so sys$close
+ * can surface a real error instead of a fake success (INV-6).
+ *
+ * Returns RMS$_NORMAL on success, RMS$_WER if the index could not be written.
  */
-void rms_idx_cleanup(struct FAB *fab)
+uint32_t rms_idx_cleanup(struct FAB *fab)
 {
+    uint32_t sts = RMS$_NORMAL;
     if (fab->_rms_state) {
         btree_t *tree = (btree_t *)fab->_rms_state;
-        btree_save(tree);  /* Save before cleanup */
+        if (btree_save(tree) != 0) {   /* Save before cleanup */
+            sts = RMS$_WER;
+        }
         btree_free(tree);
         fab->_rms_state = NULL;
     }
+    return sts;
 }

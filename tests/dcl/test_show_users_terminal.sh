@@ -44,6 +44,30 @@
 # EXPECT_NOT: regex:_[A-Z]{2,3}[0-9]+:
 # EXPECT_NOT: regex:[0-9A-F]{8}
 #
+# --- trademark ceiling (INV-0) ----------------------------------------
+#
+# The banner brands THIS product, not OpenVMS. Real VMS prints "OpenVMS
+# User Processes"; OVMX must not claim that mark as its own identity
+# (INV-0 -- SHOW SYSTEM already badges for the same reason). So the human
+# header reads "OpenVMX User Processes" and the literal "OpenVMS" must not
+# appear anywhere in this command's output.
+#
+# EXPECT: contains:OpenVMX
+# EXPECT_NOT: contains:OpenVMS
+#
+# --- default form is per-user counts, NOT the /FULL per-process table --
+#
+# Bare SHOW USERS is the per-user summary (Username Node Interactive
+# Subprocess Batch); SHOW USERS/FULL is the per-process detail (Process
+# Name, PID, Terminal). An earlier revision printed the per-process table
+# for BOTH, so the two forms were identical (a fidelity tell). This
+# asserts the default form: the "Interactive" count column IS present and
+# the /FULL-only "Process Name" column is NOT. The complementary /FULL
+# assertion lives in test_show_users_full.sh.
+#
+# EXPECT: contains:Interactive
+# EXPECT_NOT: contains:Process Name
+#
 # --- history (vms-086, superseded the EXPECT_NOT:Node line below) ------
 #
 # This file used to assert EXPECT_NOT: contains:Node. That was never a
@@ -63,7 +87,13 @@
 # that does not exist.
 #
 # EXPECT: contains:Node
-# EXPECT: contains:Type
+#
+# (This file used to assert EXPECT: contains:Type. That "Type" column was
+# an OVMX addition -- an always-"Interactive" per-row field absent from the
+# DCL Dictionary -- carried when both forms printed per-process rows. The
+# per-user/per-process split dropped it: the interactive/subprocess/batch
+# distinction now lives in the default table's own columns, so the default
+# form asserts contains:Interactive above instead.)
 #
 # --- history (vms-fb9, superseded by the above) -----------------------
 # This file used to read:

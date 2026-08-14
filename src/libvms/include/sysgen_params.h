@@ -233,4 +233,133 @@ static inline int sysgen_read_string(const char *name, char *buf, size_t buflen)
     return -1;
 }
 
+/*
+ * sysgen_load_working - Load the FULL current parameter database into a
+ * caller-supplied struct. This is the "work area" that SYSMAN's
+ * PARAMETERS USE CURRENT fills (VSI OpenVMS System Management Utilities
+ * Reference Manual, SYSMAN PARAMETERS USE: loads the current parameter
+ * file into the work area). Honors OVMX_SYSGEN_PATH like the readers
+ * above, and reads the HIGHEST version of SYS$SYSTEM:OVMXVMSSYS.PAR
+ * otherwise (USE CURRENT semantics).
+ *
+ * Returns 0 on success, -1 if no current parameter file exists yet or it
+ * is invalid (wrong magic/version).
+ */
+static inline int sysgen_load_working(struct sysgen_file *out)
+{
+    if (!out) return -1;
+
+    char path[VMSFS_MAX_PATH];
+    if (sysgen_current_path(path, sizeof(path)) != 0) return -1;
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return -1;
+
+    struct sysgen_file db;
+    if (fread(&db, sizeof(db), 1, fp) != 1) {
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+
+    if (db.magic != SYSGEN_MAGIC || db.version != SYSGEN_VERSION)
+        return -1;
+
+    if (db.count > SYSGEN_MAX_PARAMS)
+        db.count = SYSGEN_MAX_PARAMS;
+
+    *out = db;
+    return 0;
+}
+
+/*
+ * sysgen_commit_working - Commit a work area back to the parameter store.
+ * This is the shared body of SYSMAN PARAMETERS WRITE {CURRENT|ACTIVE}
+ * (and SYSGEN WRITE CURRENT); the messages stay in the callers.
+ *
+ * @new_version selects the WRITE target's shape:
+ *   1 (CURRENT) -> mint a NEW file version of SYS$SYSTEM:OVMXVMSSYS.PAR
+ *                  (highest existing + 1, via vmsfs -- the next-boot
+ *                  parameter file; matches the oracle's ALPHAVMSSYS.PAR
+ *                  versioning, docs/design-boot-faithful.md §3.4).
+ *   0 (ACTIVE)  -> overwrite the HIGHEST EXISTING version in place, so the
+ *                  change is what the running system's readers (F$GETSYI,
+ *                  sysgen_read_param) see immediately, WITHOUT minting a new
+ *                  boot generation. If no version exists yet, mint version 1.
+ *
+ * OVMX has a single parameter store (there is no separate in-memory active
+ * parameter set distinct from the on-disk file), so "ACTIVE" here means
+ * "update the store the running readers consult" -- labeled as an OVMX model
+ * choice (Rule 8/INV-6), not a claim of a byte-for-byte VMS active-set copy.
+ *
+ * When OVMX_SYSGEN_PATH is set (tests / an explicit literal target) both
+ * modes write that single unversioned file and report version 0.
+ *
+ * Returns a VMS status; on success writes the resolved Linux path to
+ * @outpath and the resulting version number to *@outver (0 for the
+ * OVMX_SYSGEN_PATH literal case).
+ */
+static inline int sysgen_commit_working(const struct sysgen_file *db,
+                                        int new_version, char *outpath,
+                                        size_t outlen, int *outver)
+{
+    if (!db) return SS$_BADPARAM;
+
+    const char *override = getenv("OVMX_SYSGEN_PATH");
+    if (override && *override) {
+        FILE *fp = fopen(override, "wb");
+        if (!fp) return SS$_NOSUCHFILE;
+        if (fwrite(db, sizeof(*db), 1, fp) != 1) { fclose(fp); return SS$_ABORT; }
+        fclose(fp);
+        if (outpath && outlen) {
+            strncpy(outpath, override, outlen - 1);
+            outpath[outlen - 1] = '\0';
+        }
+        if (outver) *outver = 0;
+        return SS$_NORMAL;
+    }
+
+    char linux_path[VMSFS_MAX_PATH];
+    if (!$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(VMS_PARAMS_PATH, linux_path,
+                                                  sizeof(linux_path)))) {
+        return SS$_NOSUCHFILE;
+    }
+
+    char dir[VMSFS_MAX_PATH];
+    char name[VMSFS_MAX_NAME + 1];
+    char ext[VMSFS_MAX_TYPE + 1];
+    sysgen_split_dir_base(linux_path, dir, sizeof(dir), name, sizeof(name),
+                          ext, sizeof(ext));
+    if (!dir[0]) { dir[0] = '.'; dir[1] = '\0'; }
+
+    char path[VMSFS_MAX_PATH];
+    int version = 0;
+
+    int highest = vmsfs_get_highest_version(dir, name, ext);
+    if (new_version || highest < 1) {
+        /* CURRENT (mint new), or ACTIVE with no file yet (create version 1). */
+        int status = vmsfs_create_new_version(dir, name, ext, path,
+                                              sizeof(path), &version);
+        if (!$VMS_STATUS_SUCCESS(status)) return status;
+    } else {
+        /* ACTIVE: overwrite the highest existing version in place. */
+        version = highest;
+        int n = snprintf(path, sizeof(path), "%s/%s.%s;%d",
+                         dir, name, ext, version);
+        if (n <= 0 || (size_t)n >= sizeof(path)) return SS$_ABORT;
+    }
+
+    FILE *fp = fopen(path, "wb");
+    if (!fp) return SS$_NOSUCHFILE;
+    if (fwrite(db, sizeof(*db), 1, fp) != 1) { fclose(fp); return SS$_ABORT; }
+    fclose(fp);
+
+    if (outpath && outlen) {
+        strncpy(outpath, path, outlen - 1);
+        outpath[outlen - 1] = '\0';
+    }
+    if (outver) *outver = version;
+    return SS$_NORMAL;
+}
+
 #endif /* SYSGEN_PARAMS_H */

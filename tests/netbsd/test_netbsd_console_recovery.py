@@ -56,10 +56,12 @@ class _FakeChild(object):
     that is never delivered, so the overall deadline must be honored).
     """
 
-    def __init__(self, outcomes=(), rc=3, always_timeout=False):
+    def __init__(self, outcomes=(), rc=3, always_timeout=False,
+                 always_prompt=False):
         self.outcomes = list(outcomes)
         self.rc = rc
         self.always_timeout = always_timeout
+        self.always_prompt = always_prompt
         self.sent = []
         self.before = b"OUTPUT-LINE"
         self.match = None
@@ -72,6 +74,9 @@ class _FakeChild(object):
         assert pexpect.TIMEOUT not in patterns and pexpect.EOF not in patterns, \
             "pexpect.TIMEOUT/EOF must NOT be in the pattern list (anita logs " \
             "self.match.group(0) after expect() and would crash)"
+        if self.always_prompt:            # marker forever lost -> only the prompt
+            self.match = _FakeMatch(0)
+            return 1
         if self.always_timeout or not self.outcomes:
             raise pexpect.TIMEOUT("scripted timeout")
         o = self.outcomes.pop(0)
@@ -119,6 +124,24 @@ def main():
     _run_ok("lost-then-ok", ["prompt", "marker"],          3, 2)   # cold-CI class
     _run_ok("lost-lost-ok", ["prompt", "prompt", "marker"], 3, 3)
 
+    # HIGH drop rate: a long burst of dropped markers must still recover to the
+    # deadline (retry is bounded by the OVERALL timeout, not a fixed count -- the
+    # fixed-3 that gave up on the 4th cold dispatch is gone). 12 drops -> 13 sends.
+    _run_ok("burst-12-drops", ["prompt"] * 12 + ["marker"], 3, 13)
+
+    # Marker NEVER delivered (idempotent cmd): retry to the deadline, then a clean
+    # TIMEOUT -- must not hang past the budget and must not crash.
+    child = _FakeChild(always_prompt=True)
+    try:
+        _console(child).run("some idempotent phase", timeout=0.3, echo=False)
+        raise AssertionError("persistent-drop: expected TIMEOUT")
+    except pexpect.TIMEOUT:
+        assert len(child.sent) >= 2, \
+            "persistent-drop: should have re-issued several times, got %d" \
+            % len(child.sent)
+        print("PASS persistent-drop-to-deadline: re-issued %d times then TIMEOUT "
+              "(no hang, no crash)" % len(child.sent))
+
     # Slice TIMEOUT (neither marker nor prompt yet) must LOOP, not crash -- the
     # exact branch that crashed the cold dispatch. Here two slices time out (slow
     # guest) then the marker arrives.
@@ -136,11 +159,26 @@ def main():
     assert rc is None, "slice-timeout-until-deadline: rc=%r != None" % rc
     print("PASS slice-timeout-until-deadline: honored deadline -> None (no crash)")
 
-    # A backgrounding launch must never be re-issued (would spawn a duplicate).
-    _run_no_retry("bg-no-retry",
-                  "vmsproctab bg P4APROC1 >/tmp/x 2>&1 & echo $! > /tmp/p")
-    # An explicitly non-idempotent command (e.g. modload) must not be re-issued.
-    _run_no_retry("modload-no-retry", "modload x", retriable=False)
+    # A command that ENDS by backgrounding a job (trailing `&') must never be
+    # re-issued (would duplicate it).
+    _run_no_retry("bg-trailing-no-retry", "vmsproctab bg P4APROC1 >/tmp/x 2>&1 &")
+    # A ` & ' launch followed by bookkeeping (the P2c/shared-driver shape) must
+    # ALSO not be re-issued by default -- guards P2c against a duplicate launch.
+    _run_no_retry("bg-amp-no-retry",
+                  "vmseflag wait 66 >/tmp/w 2>&1 & echo $! >/tmp/wpid")
+    # An explicitly non-idempotent command must not be re-issued.
+    _run_no_retry("nonidempotent-no-retry", "some raw command", retriable=False)
+
+    # A collapsed proof phase backgrounds a helper INTERNALLY (` & ') but runs to
+    # completion and passes bg_safe=True -- it MUST retry despite the ` & '.
+    child = _FakeChild(["prompt", "marker"], rc=3)
+    con = _console(child)
+    rc, _o = con.run("vmsproctab bg X >/tmp/a 2>&1 & sleep 2; kill %1; echo T=PASS",
+                     timeout=300, echo=False, bg_safe=True)
+    assert rc == 3 and len(child.sent) == 2, \
+        "bg_safe-retries: rc=%r sends=%d" % (rc, len(child.sent))
+    print("PASS bg_safe-retries: ` & '-internal phase with bg_safe=True re-issued "
+          "on marker loss (2 sends)")
 
     print("ALL RECOVERY UNIT CASES PASSED")
     return 0

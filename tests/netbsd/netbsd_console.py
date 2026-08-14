@@ -158,7 +158,7 @@ class NetBSDConsole(object):
         self.child.expect(self.prompt_re)              # sync onto the new prompt
 
     # ---- command execution ----------------------------------------------
-    def run(self, cmd, timeout=300, echo=True, retriable=True):
+    def run(self, cmd, timeout=300, echo=True, retriable=True, bg_safe=False):
         """Run one /bin/sh command; return (exit_status, output_text).
 
         Precondition: the shell is at the idle unique prompt (guaranteed by
@@ -183,11 +183,30 @@ class NetBSDConsole(object):
         """
         if self.prompt_re is None:
             raise RuntimeError("login_root_sh()/set_unique_prompt() not called")
-        # A backgrounding command (trailing `&', or a ` & ' launch followed by a
-        # bookkeeping statement) must not be blindly re-issued.
-        is_bg = cmd.rstrip().endswith("&") or " & " in cmd
-        attempts = 1 if (is_bg or not retriable) else 3
-        for attempt in range(attempts):
+        # A command that backgrounds a job it LEAVES RUNNING must not be blindly
+        # re-issued (it would duplicate the job). Detect it conservatively: a
+        # trailing `&', or a ` & ' launch followed by bookkeeping (the shape P2c
+        # and the other shared-driver harnesses use). A collapsed proof phase that
+        # backgrounds a helper INTERNALLY but runs it to completion -- kills it
+        # and emits a single result token before returning -- is idempotent; it
+        # passes bg_safe=True to opt back into retry despite containing ` & '.
+        is_bg = (cmd.rstrip().endswith("&") or " & " in cmd) and not bg_safe
+        can_retry = retriable and not is_bg
+        # Retry an idempotent command to the OVERALL deadline, not a fixed count:
+        # under a lossy TCG serial the marker can be dropped several times in a row
+        # (a burst), so a fixed 3 gives up too early. Each re-issue gets whatever
+        # budget remains; a genuinely slow guest still gets the whole `timeout' on
+        # a single attempt (the prompt stays withheld, so _await_marker keeps
+        # waiting rather than declaring the marker lost). The fix that actually
+        # makes this converge, though, is FEWER markers: the driver runs each proof
+        # phase as ONE in-guest command that emits a single result token.
+        overall_deadline = time.time() + timeout
+        attempt = 0
+        while True:
+            attempt += 1
+            remaining = overall_deadline - time.time()
+            if remaining <= 0:
+                break
             mk = "OVMXm-%s" % _nonce(8)
             # A command ending in a bare `&' backgrounds a job -- `&' is ALREADY a
             # statement separator in /bin/sh, so appending `; echo ...' after it is
@@ -204,7 +223,7 @@ class NetBSDConsole(object):
             else:
                 self.child.sendline("%s; echo %s=$?=" % (cmd, mk))
 
-            rc = self._await_marker(mk, timeout)
+            rc = self._await_marker(mk, remaining)
             if rc is not None:
                 out = self.child.before
                 # Resync to the idle prompt (tolerant of a dropped prompt: we
@@ -215,8 +234,8 @@ class NetBSDConsole(object):
                     out = out.decode("ascii", "ignore")
                 out = out.replace("\r", "")
                 if echo:
-                    tail = "" if attempt == 0 else \
-                        "   (recovered after %d lost marker(s))" % attempt
+                    tail = "" if attempt == 1 else \
+                        "   (recovered after %d lost marker(s))" % (attempt - 1)
                     self._log("$ %s   -> exit %d%s" % (cmd, rc, tail))
                     text = out.strip()
                     if text:
@@ -225,16 +244,17 @@ class NetBSDConsole(object):
                 return rc, out
 
             # rc is None: the command completed but its end marker was lost to a
-            # serial desync and we are back at an idle prompt. Re-issue (idempotent
-            # commands only; loop guard above already excludes bg/non-retriable).
-            if attempt + 1 < attempts:
-                self._log("  (console: end marker for `%s' lost to a serial "
-                          "desync; shell is idle -- re-issuing, attempt %d/%d)"
-                          % (cmd, attempt + 2, attempts))
+            # serial desync and we are back at an idle prompt. Re-issue idempotent
+            # commands to the overall deadline; a bg/non-retriable one cannot be
+            # safely re-run, so give up now with a clear timeout.
+            if not can_retry:
+                break
+            self._log("  (console: end marker for `%s' lost to a serial desync; "
+                      "shell is idle -- re-issuing, attempt %d)" % (cmd, attempt + 1))
 
         raise pexpect.TIMEOUT(
-            "end marker never returned for `%s' after %d attempt(s) "
-            "(retriable=%s, is_bg=%s)" % (cmd, attempts, retriable, is_bg))
+            "end marker never returned for `%s' within %ds after %d attempt(s) "
+            "(retriable=%s, is_bg=%s)" % (cmd, timeout, attempt, retriable, is_bg))
 
     def _resync_prompt(self, timeout):
         """Wait for the idle unique prompt after a command's marker was seen.

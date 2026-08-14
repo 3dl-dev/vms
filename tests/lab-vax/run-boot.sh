@@ -90,7 +90,8 @@ ensure_images() {
 }
 
 fetch_set() {
-  local name="$1" sha="$2" tgz="${KBUILD_DIR}/${name}.tgz"
+  local name="$1" sha="$2"
+  local tgz="${KBUILD_DIR}/${name}.tgz"
   if [ ! -f "${tgz}" ] || ! echo "${sha}  ${tgz}" | sha512sum -c --status -; then
     log "downloading ${name}.tgz"
     curl -fSL --retry 3 -o "${tgz}.part" "${SRC_BASE}/${name}.tgz"

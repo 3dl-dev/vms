@@ -126,7 +126,16 @@ mutate_proc_scan() {
         { print }
     ' "$WORK/vms_monitor.c.orig" > "$MON_C"
 
-    if ! grep -q 'opendir("/proc")' "$MON_C"; then
+    # The reinjected /proc scan needs <dirent.h> (DIR / opendir / readdir /
+    # struct dirent). The FIXED base file no longer includes it -- it has no
+    # /proc scan -- so the mutation must supply the header itself, or the
+    # mutant would not COMPILE and a mutant that cannot build is not a valid
+    # negative control. Insert it ahead of <signal.h> (present in the base).
+    if ! grep -q '#include <dirent.h>' "$MON_C"; then
+        sed -i 's|#include <signal.h>|#include <dirent.h>\n#include <signal.h>|' "$MON_C"
+    fi
+
+    if ! grep -q 'opendir("/proc")' "$MON_C" || ! grep -q '#include <dirent.h>' "$MON_C"; then
         echo "  FAIL: mutation could not be applied -- read_processes()'s signature"
         echo "        moved, so this control tested NOTHING"
         failed=$((failed + 1)); status=1; restore; return 1

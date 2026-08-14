@@ -59,7 +59,7 @@ calling anything short of that bar 1.0.
 |---|---|---|---:|---:|---:|---:|
 | **0.3** | A real system — the command language, file system, system services, and kernel executive stand on their own. | SHIPPED | 0 | 0 | 0 | — |
 | **0.4** | Installs and boots faithfully — the product installs to a target disk and reboots into a login. | SHIPPED | 0 | 0 | 0 | — |
-| **0.5** | Foundations for the network and the toolchain — a shared-state executive, VMS-faithful cluster configuration, a self-hosting toolchain, and a self-built kernel. | in progress | 9 | 16 | 2 | 36% |
+| **0.5** | Foundations for the network and the toolchain — a shared-state executive, VMS-faithful cluster configuration, a self-hosting toolchain, and a kernel substrate of its own. | in progress | 9 | 16 | 2 | 36% |
 | **0.6** | Cluster correctness — quorum and reconfiguration, a real distributed lock manager, and cluster membership resident in the executive. | planned | 0 | 4 | 0 | 0% |
 | **0.7** | Cluster wire fidelity — the SCS/MSCP connection manager answers a real VAX byte-for-byte. | planned | 0 | 6 | 0 | 0% |
 | **0.8** | Rejoin and satellite boot — a removed node rejoins under its own identity; diskless satellites boot from a served disk. | planned | 0 | 4 | 1 | 0% |
@@ -75,7 +75,7 @@ calling anything short of that bar 1.0.
 | Cluster configuration | `vms-098` | 0.5→1.0 | in progress | 1/6 | 4 |
 | TCP/IP networking | `vms-67f` | 0.5→1.0 | in progress | 5/9 | 2 |
 | DECnet Phase IV | `vms-30e` | 1.0 | in progress | 4/11 | 6 |
-| Owns its kernel | `vms-19e` | 0.5 | in progress | 3/8 | 1 |
+| Kernel substrate | `vms-19e` | 0.5 | in progress | 4/8 | 1 |
 
 ### Per-milestone items (rd)
 

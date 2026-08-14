@@ -25,7 +25,7 @@ one snapshot (`rd list --all --json`) and derives everything from two signals:
    | Cluster configuration | `vms-098` | 0.5 → 1.0 |
    | TCP/IP networking | `vms-67f` | 0.5 → 1.0 |
    | DECnet Phase IV | `vms-30e` | 1.0 |
-   | Owns its kernel | `vms-19e` | 0.5 |
+   | Kernel substrate | `vms-19e` | 0.5 |
 
 Shipped releases come from `git tag` (release-like tags only), newest first.
 

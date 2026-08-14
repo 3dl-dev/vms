@@ -107,6 +107,7 @@ jobs:
               - 'src/libvms/include/sysgen_params.h'
               - 'tests/qemu/test_persistent_boot.sh'
               - 'tests/qemu/test_intree_modules.sh'
+              - 'tests/qemu/test_signed_modules.sh'
               - 'tests/qemu/test_release_e2e.sh'
               - 'tests/qemu/test_executive_integral.sh'
               - 'tests/qemu/test_distrib_boot.sh'
@@ -623,6 +624,21 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_intree_modules.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-ff5 (parent vms-19e "owns-kernel"). Reuses the image built above (no
+      # extra build). Proves the VMS modules are SIGNED with the committed OVMX
+      # key whose cert is in the kernel keyring: modinfo shows a PKCS#7 signature
+      # on the shipped vms.ko/vmsfs.ko, and a raised-loglevel boot where the
+      # modules load with NO "module verification failed ... signature and/or
+      # required key missing" notice -- i.e. loading them does not set
+      # TAINT_UNSIGNED_MODULE (bit 13 / 'E'). CONFIG_MODULE_SIG_FORCE stays off.
+      - name: VMS modules are signed (no unsigned-module taint, bit 13 clear)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_signed_modules.sh:/test.sh:ro \
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh

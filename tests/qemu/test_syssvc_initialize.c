@@ -211,6 +211,7 @@ int main(void)
      * -------------------------------------------------------------- */
     char volname[16];
     uint32_t magic_after = home_block_magic(devpath, volname, sizeof(volname));
+    /* negctl: initialize-home-magic-not-written */
     CHECK(magic_after == VMSFS_HOME_MAGIC,
           "after INITIALIZE, the REAL backing device carries a vmsfs home block");
     CHECK(strncmp(volname, "TESTVOL", 7) == 0,

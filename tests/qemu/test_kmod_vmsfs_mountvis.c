@@ -250,6 +250,7 @@ int main(void)
         show_capture("DCL TYPE DKA100:[000000]HELLO.TXT;1 (separate process)", out);
         CHECK(strstr(out, "OVMX-PROBE-ALIVE") != NULL,
               "DCL.EXE ran the script to completion");
+        /* negctl: vmsfs-mountvis-crossproc-resolve-disabled */
         CHECK(strstr(out, HELLO_CONTENT) != NULL,
               "cross-process: DCL resolves DKA100: (mounted by another process) and reads HELLO.TXT off it -- the mounted unit is visible and readable");
     } else {

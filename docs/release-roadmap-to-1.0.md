@@ -75,7 +75,8 @@ calling anything short of that bar 1.0.
 | Cluster configuration | `vms-098` | 0.5→1.0 | in progress | 1/6 | 4 |
 | TCP/IP networking | `vms-67f` | 0.5→1.0 | in progress | 5/9 | 2 |
 | DECnet Phase IV | `vms-30e` | 1.0 | in progress | 4/11 | 6 |
-| Kernel substrate | `vms-19e` | 0.5 | in progress | 4/8 | 1 |
+| Kernel substrate | `vms-19e` | 0.5 | in progress | 5/8 | 1 |
+| VAX as a first-class platform | `vms-8e8` | 0.5→1.0 | in progress | 49/61 | 4 |
 
 ### Per-milestone items (rd)
 

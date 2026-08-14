@@ -85,6 +85,8 @@ static int vmsfs_access(void *);
 static int vmsfs_getattr(void *);
 static int vmsfs_read(void *);
 static int vmsfs_readdir(void *);
+static int vmsfs_bmap(void *);
+static int vmsfs_strategy(void *);
 static int vmsfs_inactive(void *);
 static int vmsfs_reclaim(void *);
 static int vmsfs_print(void *);
@@ -221,6 +223,23 @@ vmsfs_vfs_mount(struct mount *mp, const char *path, void *data, size_t *data_len
 	mp->mnt_data = vmp;
 	mp->mnt_flag |= MNT_LOCAL;
 	mp->mnt_stat.f_namemax = VMSFS_FULLNAME_MAX;
+
+	/*
+	 * UBC/UVM vnode-pager geometry. The UVM/UBC read pager (genfs_getpages ->
+	 * VOP_BMAP -> VOP_STRATEGY) translates a file offset to a device block in
+	 * two steps and needs both shifts: mnt_fs_bshift is log2(fs block size) and
+	 * mnt_dev_bshift is log2(device block size). An ODS-2 volume is addressed in
+	 * 512-byte logical blocks (VMSFS_BLOCK_SIZE) and the underlying disk in
+	 * 512-byte DEV_BSIZE sectors, so both shifts are DEV_BSHIFT (== 9) and
+	 * VOP_BMAP returns the LBN unscaled. Without these the pager computes bogus
+	 * block numbers (fs_bshift defaults to 0) and demand-paging an image off the
+	 * volume faults garbage -- this is the seam that lets an ELF32-vax image on
+	 * the mounted volume demand-page and RUN (rd vms-63a).
+	 */
+	__CTASSERT(VMSFS_BLOCK_SIZE == DEV_BSIZE);
+	mp->mnt_fs_bshift  = DEV_BSHIFT;
+	mp->mnt_dev_bshift = DEV_BSHIFT;
+
 	vfs_getnewfsid(mp);
 
 	error = set_statvfs_info(path, UIO_USERSPACE, args->fspec, UIO_USERSPACE,
@@ -751,6 +770,98 @@ out:
 	return error;
 }
 
+/*
+ * vmsfs_bmap (VOP_BMAP) - translate a file logical block to its device block.
+ *
+ * This is the map seam the UVM/UBC read pager rides: genfs_getpages() faults a
+ * page of the file by asking VOP_BMAP for the device block backing that file
+ * offset, then hands the buf to VOP_STRATEGY. The translation itself is the
+ * SHARED ODS-2 core's vmsfs_vbn_to_lbn() over the node's cached retrieval map --
+ * the exact same VBN->LBN math vmsfs_read()/vmsfs_readdir()/vmsfs_lookup()
+ * already use (INV-DRIFT: one implementation of the ODS-2 retrieval map, in
+ * src/kernel-core/vmsfs/vmsfs_map.c; this VOP is pure NetBSD glue).
+ *
+ * @a_bn is a 0-based file block in fs-block (512-byte) units; an ODS-2 VBN is
+ * 1-based, so VBN = a_bn + 1. fs_bshift == dev_bshift (both DEV_BSHIFT), so the
+ * LBN is the device block unscaled. An unmapped block (hole / past the mapped
+ * range) reports -1, which the pager treats as a zero-fill.
+ */
+static int
+vmsfs_bmap(void *v)
+{
+	struct vop_bmap_args *ap = v;
+	struct vnode *vp = ap->a_vp;
+	struct vmsfs_node *vn = VTOVMSFS(vp);
+	struct vmsfs_mount *vmp = vn->vn_vmp;
+	uint32_t vbn, lbn;
+
+	/* The device vnode the block lives on. */
+	if (ap->a_vpp != NULL)
+		*ap->a_vpp = vmp->vm_devvp;
+	if (ap->a_bnp == NULL)
+		return 0;
+
+	vbn = (uint32_t)ap->a_bn + 1;   /* 0-based fs block -> 1-based ODS-2 VBN */
+
+	if (vmsfs_vbn_to_lbn(vn->vn_map, vn->vn_map_count, vbn, &lbn) != 0) {
+		/* Not mapped: signal a hole so the pager zero-fills the page. */
+		*ap->a_bnp = (daddr_t)-1;
+	} else {
+		/* fs_bshift == dev_bshift == DEV_BSHIFT, so no scale is needed. */
+		*ap->a_bnp = (daddr_t)lbn;
+	}
+
+	/*
+	 * No readahead run advertised. Reporting 0 keeps the pager to a single
+	 * block per I/O -- correct and simple; the retrieval map is not walked for
+	 * a contiguous run here (a later optimization, not needed to page images).
+	 */
+	if (ap->a_runp != NULL)
+		*ap->a_runp = 0;
+
+	return 0;
+}
+
+/*
+ * vmsfs_strategy (VOP_STRATEGY) - issue a file block I/O against the underlying
+ * device. Called by the UVM/UBC pager (via genfs_getpages) with a buf whose
+ * b_lblkno is a file logical block. Resolve it to a device block through
+ * VOP_BMAP (if not already resolved), then redirect the buf to the block-device
+ * vnode's strategy. Mirrors cd9660_strategy: the read-only ODS-2 analog of a
+ * stock NetBSD fs's block funnel. No write path (read-only mount).
+ */
+static int
+vmsfs_strategy(void *v)
+{
+	struct vop_strategy_args *ap = v;
+	struct buf *bp = ap->a_bp;
+	struct vnode *vp = ap->a_vp;
+	struct vmsfs_node *vn = VTOVMSFS(vp);
+	int error;
+
+	if (vp->v_type == VBLK || vp->v_type == VCHR)
+		panic("vmsfs_strategy: spec");
+
+	/* Resolve the file block to a device block if the pager left it unmapped. */
+	if (bp->b_blkno == bp->b_lblkno) {
+		error = VOP_BMAP(vp, bp->b_lblkno, NULL, &bp->b_blkno, NULL);
+		if (error) {
+			bp->b_error = error;
+			biodone(bp);
+			return error;
+		}
+		if (bp->b_blkno == (daddr_t)-1)
+			clrbuf(bp);   /* hole: zero-fill, no device read */
+	}
+	if (bp->b_blkno == (daddr_t)-1) {
+		biodone(bp);
+		return 0;
+	}
+
+	/* Funnel the I/O to the block-device vnode. */
+	return VOP_STRATEGY(vn->vn_vmp->vm_devvp, bp);
+}
+
 static int
 vmsfs_inactive(void *v)
 {
@@ -824,7 +935,14 @@ static const struct vnodeopv_entry_desc vmsfs_vnodeop_entries[] = {
 	{ &vop_poll_desc,	genfs_poll },
 	{ &vop_kqfilter_desc,	genfs_kqfilter },
 	{ &vop_revoke_desc,	genfs_revoke },
-	{ &vop_mmap_desc,	genfs_eopnotsupp },
+	/*
+	 * Read-only file mapping. genfs_mmap grants a shared/read mapping; it is
+	 * what lets a user mmap(2) a file on the volume. Not on the exec fault path
+	 * (that goes straight through the uvn pager -> VOP_GETPAGES), but a real
+	 * pageable read-only fs advertises it. Writable mappings are refused
+	 * upstream (VOP_ACCESS returns EROFS for VWRITE).
+	 */
+	{ &vop_mmap_desc,	genfs_mmap },
 	{ &vop_fsync_desc,	genfs_nullop },
 	{ &vop_seek_desc,	genfs_seek },
 	{ &vop_remove_desc,	genfs_eopnotsupp },
@@ -840,14 +958,24 @@ static const struct vnodeopv_entry_desc vmsfs_vnodeop_entries[] = {
 	{ &vop_reclaim_desc,	vmsfs_reclaim },	/* v2 */
 	{ &vop_lock_desc,	genfs_lock },
 	{ &vop_unlock_desc,	genfs_unlock },
-	{ &vop_bmap_desc,	genfs_eopnotsupp },
-	{ &vop_strategy_desc,	genfs_eopnotsupp },
+	{ &vop_bmap_desc,	vmsfs_bmap },
+	{ &vop_strategy_desc,	vmsfs_strategy },
 	{ &vop_print_desc,	vmsfs_print },
 	{ &vop_islocked_desc,	genfs_islocked },
 	{ &vop_pathconf_desc,	genfs_eopnotsupp },
 	{ &vop_advlock_desc,	genfs_eopnotsupp },
 	{ &vop_bwrite_desc,	genfs_eopnotsupp },
-	{ &vop_getpages_desc,	genfs_eopnotsupp },
+	/*
+	 * THE demand-paging seam (rd vms-63a). genfs_getpages is the stock UVM/UBC
+	 * read pager: on a page fault against a file mapping (an mmap, or the exec
+	 * image activator's paged-vnode vmcmd) it faults the page in by calling
+	 * VOP_BMAP + VOP_STRATEGY above. Wiring it here (over the old
+	 * genfs_eopnotsupp) is what lets an ELF32-vax image resident on the mounted
+	 * ODS-2 volume DEMAND-PAGE and RUN, instead of exec failing at activation.
+	 * putpages stays genfs_null_putpages: a read-only mount never has dirty
+	 * pages, so page-out is a no-op cleanup.
+	 */
+	{ &vop_getpages_desc,	genfs_getpages },
 	{ &vop_putpages_desc,	genfs_null_putpages },
 	{ NULL, NULL }
 };

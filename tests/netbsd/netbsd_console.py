@@ -73,10 +73,11 @@ class NetBSDConsole(object):
     """
 
     # How long each expect() slice waits for a command's marker-or-prompt before
-    # re-checking. The wait is sliced (not one blocking expect for the whole
-    # budget) so a LOST marker -- detected by the idle prompt reappearing without
-    # the marker -- is recovered in one slice instead of stalling the full budget.
-    _MARKER_SLICE = 120
+    # re-checking (and, for a retriable command, nudging to tell a lost marker
+    # from a still-running guest). Kept short so a both-dropped marker recovers in
+    # ~one slice rather than the full per-command deadline; a slow command is
+    # legitimately silent (output is file-routed) and simply keeps waiting.
+    _MARKER_SLICE = 30
 
     # DRIVER GUARANTEE (rd vms-f8a): a non-background command's stdout+stderr are
     # routed to this guest file; only a BOUNDED tail of it (plus the one-line end
@@ -245,7 +246,7 @@ class NetBSDConsole(object):
                     "echo %s=$__r=" %
                     (cmd, self._LASTOUT, self._TAIL, self._LASTOUT, mk))
 
-            rc = self._await_marker(mk, remaining)
+            rc = self._await_marker(mk, remaining, allow_nudge=can_retry)
             if rc is not None:
                 out = self.child.before
                 # Resync to the idle prompt (tolerant of a dropped prompt: we
@@ -287,21 +288,32 @@ class NetBSDConsole(object):
         re-run. The unique prompt cannot be forged by command output, so a nudge
         is unambiguous.
         """
+        got = False
         try:
             self.child.expect(self.prompt_re, timeout=timeout)
-            return
+            got = True
         except pexpect.TIMEOUT:
-            pass
-        for _ in range(3):
-            self.child.sendline("")
+            for _ in range(3):
+                self.child.sendline("")
+                try:
+                    self.child.expect(self.prompt_re, timeout=20)
+                    got = True
+                    break
+                except pexpect.TIMEOUT:
+                    continue
+        if not got:
+            raise pexpect.TIMEOUT("idle prompt never resynced after a command")
+        # Drain any EXTRA idle prompts left behind by both-drop nudges that were
+        # sent while a slow command was still running (their queued newlines are
+        # read by the shell only after the command finished). Left unread they
+        # would shadow the NEXT command's marker as a spurious "marker lost".
+        while True:
             try:
-                self.child.expect(self.prompt_re, timeout=20)
-                return
+                self.child.expect(self.prompt_re, timeout=0.5)
             except pexpect.TIMEOUT:
-                continue
-        raise pexpect.TIMEOUT("idle prompt never resynced after a command")
+                break
 
-    def _await_marker(self, mk, total_timeout):
+    def _await_marker(self, mk, total_timeout, allow_nudge=False):
         """Wait up to total_timeout for THIS command's end marker.
 
         Returns the int exit status once the marker is seen. Returns None if the
@@ -311,6 +323,18 @@ class NetBSDConsole(object):
         burn the whole budget. A still-running (slow) guest withholds the prompt,
         so we keep waiting, sliced, up to total_timeout. The marker always prints
         BEFORE the prompt, so in the normal case idx==0 wins.
+
+        BOTH-DROP RECOVERY (rd vms-f8a). When a slice elapses with NEITHER the
+        marker nor the prompt, the command is either still running OR it finished
+        but BOTH its marker AND its trailing prompt were dropped -- silence looks
+        identical (command output is file-routed, so a slow command is
+        legitimately silent too). If `allow_nudge' (an idle-waiting, retriable,
+        non-bg command), send a bare newline: a fresh prompt with no marker proves
+        the shell is idle and the marker was lost -> return None for a sub-slice
+        re-issue instead of burning the whole per-command deadline (which is how a
+        zero-output command like `rm -f' timed a cold job out). No prompt back ->
+        still running -> keep waiting to the deadline. Nudging is NEVER done for a
+        background launch (a stray newline could perturb it); the caller gates it.
         """
         # IMPORTANT: do NOT put pexpect.TIMEOUT/EOF in this pattern list. The
         # child is anita's pexpect subclass whose expect() unconditionally logs
@@ -331,8 +355,24 @@ class NetBSDConsole(object):
                     [marker_re, self.prompt_re],
                     timeout=min(remaining, self._MARKER_SLICE))
             except pexpect.TIMEOUT:
-                # Neither the marker nor the prompt this slice -> the command is
-                # still running (slow guest). Keep waiting up to total_timeout.
+                # Neither the marker nor the prompt this slice. Nudge (if allowed)
+                # to tell "finished, both dropped" from "still running". The nudge
+                # probe MUST look for the marker too, not just the prompt: a slow
+                # command can finish DURING the nudge window, and then the marker
+                # is present right before the prompt -- matching prompt-only would
+                # ignore that marker and falsely re-issue a still-fine (re-running)
+                # command (a build restarted itself into a loop). So probe both.
+                if allow_nudge:
+                    self.child.sendline("")
+                    try:
+                        idx = self.child.expect(
+                            [marker_re, self.prompt_re],
+                            timeout=min(remaining, 10))
+                    except pexpect.TIMEOUT:
+                        continue        # still running -> keep waiting
+                    if idx == 0:
+                        return int(self.child.match.group(1))  # marker did arrive
+                    return None         # idle prompt, no marker -> marker lost
                 continue
             if idx == 0:
                 return int(self.child.match.group(1))

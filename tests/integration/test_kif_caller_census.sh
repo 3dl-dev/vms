@@ -448,11 +448,13 @@
 #     gate before the fourth definition reading existed: 44 entry points -> 43,
 #     rc=0, PASS. The fourth term closes it by dropping the name filter and
 #     reading the interface TU's full region unrestricted, which needed a way
-#     to tell vms_syscall.h's 47 `static inline` syscall stubs from an
-#     interface wrapper's exfiltrated body: MEASURED, every one of those 47
-#     (plus vms_errno.h's 2) carries `inline`, and every wrapper vms_kif.c
-#     defines directly does not, so `static-inline` is what the fourth term
-#     excludes and nothing else. RE-MEASURED with the fourth term in place:
+#     to tell vms_syscall.h's `static inline` syscall stubs from an
+#     interface wrapper's exfiltrated body: MEASURED, every one of those stubs
+#     (plus vms_errno.h's generic stubs) carries `inline`, and every wrapper
+#     vms_kif.c defines directly does not, so `static-inline` is what the
+#     fourth term excludes and nothing else. (How many such stubs exist is a
+#     property of the headers; the gate derives and prints the live count --
+#     see vms-797 -- rather than reciting a cardinal that goes stale.) RE-MEASURED with the fourth term in place:
 #     the same seven edits are now rc=1, naming the renamed entry point.
 #     Negative control 48 is this recipe. NOT CLOSED BY THIS: composing the
 #     same recipe with an eighth edit that also adds `inline` to the renamed,
@@ -1403,7 +1405,7 @@ fi
 #
 # This is what makes "read the definitions after preprocessing" safe. Naively,
 # every file-scope definition in the preprocessed vms_kif.c TU would join the
-# universe -- including the 47 static inline functions vms_syscall.h declares,
+# universe -- including the static inline functions vms_syscall.h declares,
 # which are not the kernel interface and would flood the census with entry
 # points nobody can wire. A file compiled into OTHER product TUs is a shared
 # header and is dropped; a file compiled ONLY into vms_kif.c's TU is part of the
@@ -1538,17 +1540,19 @@ fi
     # at file scope in the interface translation unit is an entry point
     # wherever its text lives, so it is counted from anywhere in that TU.
     # The name filter is the price of reading regions this gate cannot
-    # otherwise distinguish from vms_syscall.h's 47 static inlines; what it
+    # otherwise distinguish from vms_syscall.h's static inlines; what it
     # leaves open is that same evasion COMPOSED with a rename out of the
     # namespace, which is recorded under "WHAT THIS GATE DOES NOT SEE".
     call_edges defs < "$WORK/kif_pp_all" | grep -E '	vms_kif_' || true
     # THE FOURTH TERM (vms-05e7), closing the residual the third term's own
     # comment named: THAT SAME EVASION COMPOSED WITH A RENAME out of the
     # vms_kif_ namespace. vms-e2b could not drop the name filter above without
-    # flooding on vms_syscall.h's 47 static inline syscall stubs, also visible
+    # flooding on vms_syscall.h's static inline syscall stubs, also visible
     # in this unrestricted region once the private-origin rule is defeated.
-    # MEASURED on this tree: every one of those 47 (plus vms_errno.h's 2) is
-    # declared `static inline`; every wrapper vms_kif.c defines directly --
+    # MEASURED on this tree: every one of those stubs (plus vms_errno.h's
+    # generic stubs) is declared `static inline`; the live count of them is
+    # derived and printed by the gate below (vms-797), never recited here.
+    # Every wrapper vms_kif.c defines directly --
     # kif_bind, kif_call, kif_wait_call, vms_kif_alloc_op, getjpi_common -- is
     # plain `static`, with no `inline`. The vms-05e7 recipe does not add
     # `inline` to the exfiltrated, renamed body either: it only needs `static`
@@ -1559,6 +1563,21 @@ fi
     # region -- namespaced or not -- is counted.
     call_edges defs < "$WORK/kif_pp_all" | awk -F'\t' '$1 != "static-inline"'
 } | sort -u > "$WORK/defs_all"
+
+# vms-797: DERIVE, don't recite. The fourth term excludes the generic
+# static-inline syscall-stub shape (the awk '$1 != "static-inline"' above).
+# HOW MANY stubs that is, is a PROPERTY of the headers, not a constant to carry
+# in prose. An earlier revision hand-recited "47" in the comments here; the
+# header grew and it silently drifted to a wrong number. So COUNT the live
+# source at gate time and PRINT it -- the diagnostic then tracks vms_syscall.h /
+# vms_errno.h automatically and can never rot. This is a print, not a gate: the
+# exclusion is enforced by the awk shape filter above, which needs no count.
+syscall_inline_n=$(grep -cE '^[[:space:]]*static inline ' "$SRC_ROOT/src/libvmssys/vms_syscall.h")
+errno_inline_n=$(grep -cE '^[[:space:]]*static inline ' "$SRC_ROOT/src/libvmssys/vms_errno.h")
+echo "  fourth term excludes the static-inline syscall-stub shape:" \
+     "${syscall_inline_n} stub(s) in vms_syscall.h + ${errno_inline_n} in vms_errno.h" \
+     "(derived live from source at gate time; vms-797)"
+
 cut -f2 "$WORK/defs_all" | sort -u > "$WORK/defs"
 # A name is externally linked if EITHER reading saw it defined non-static.
 awk -F'\t' '$1 == "extern" { print $2 }' "$WORK/defs_all" | sort -u > "$WORK/defs_extern"

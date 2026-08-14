@@ -63,6 +63,7 @@ static int fail = 0;
 
 #define HOLD_SCRIPT     "/tmp/ovmx904_hold.sh"
 #define SUBJECT_IMAGE   "/bin/sh"
+#define HOLD_SECS       "15"             /* outlives the ms-scale assertions */
 
 #define TGT_SUSP        "OVMX904SUSP"    /* P1/P2: suspended then resumed  */
 #define TGT_FX_PID      "OVMX904FXP"     /* P3:    force-exit by VMS pid    */
@@ -75,6 +76,20 @@ static int fail = 0;
  * near the top of the range is never a live row. */
 #define BOGUS_VMS_PID   0x1FFFFFFFu
 
+/* Every hold child's Linux pid is registered here the moment it resolves, so
+ * a single teardown at the end can reap ALL of them belt-and-suspenders --
+ * nothing may orphan into the next suite in the shared single-boot guest and
+ * eat the whole-VM wall (the leak this suite must not introduce). Each phase
+ * still reaps its own inline; this is the safety net for any path that did
+ * not reach its inline reap (e.g. an early CHECK failure). */
+static uint32_t g_hold[8];
+static int      g_nhold;
+static void track_hold(uint32_t linux_pid)
+{
+    if (linux_pid != 0 && g_nhold < (int)(sizeof(g_hold) / sizeof(g_hold[0])))
+        g_hold[g_nhold++] = linux_pid;
+}
+
 static struct dsc$descriptor_s str_dsc(const char *s)
 {
     struct dsc$descriptor_s d;
@@ -85,8 +100,13 @@ static struct dsc$descriptor_s str_dsc(const char *s)
     return d;
 }
 
-/* spawn_named - $CREPRC a long-lived (600s) named subprocess. *out_pid is
- * the EXECUTIVE-assigned VMS process ID (>= 0x10000001). */
+/* spawn_named - $CREPRC a short-lived named hold subprocess. *out_pid is the
+ * EXECUTIVE-assigned VMS process ID (>= 0x10000001). The hold script `exec`s
+ * sleep so /bin/sh REPLACES itself with the sleep -- one process, not sh+sleep
+ * -- so the pid the test tracks IS the sleeper and reaping it leaves no orphan.
+ * The hold is deliberately SHORT (HOLD_SECS): the assertions complete in ms,
+ * and a short cap means even a hold child that somehow escaped its reap dies on
+ * its own well within the suite rather than lingering into the next one. */
 static uint32_t spawn_named(const char *prcnam, uint32_t *out_pid)
 {
     struct dsc$descriptor_s img = str_dsc(SUBJECT_IMAGE);
@@ -267,7 +287,9 @@ int main(void)
         printf("=== test_syssvc_procctl: 0 passed, 1 failed ===\n");
         return 1;
     }
-    fprintf(hs, "sleep 600\n");
+    /* exec: sh becomes the sleep, so the tracked pid is the only process and
+     * killing it orphans nothing. Short hold (see HOLD_SECS / spawn_named). */
+    fprintf(hs, "exec sleep " HOLD_SECS "\n");
     fclose(hs);
     chmod(HOLD_SCRIPT, 0644);
 
@@ -278,6 +300,7 @@ int main(void)
         CHECK(cst & 1, "P1: $CREPRC creates the suspend/resume target");
         susp_lpid = linux_pid_of(susp_vms);
         CHECK(susp_lpid != 0, "P1: the target resolves to a real Linux pid");
+        track_hold(susp_lpid);
         /* The premise the wrong-process bug fed on: the VMS pid the control
          * service is handed is NOT the Linux pid, and (VMS_PID_BASE) is a
          * number no Linux process can even have. */
@@ -313,6 +336,7 @@ int main(void)
         CHECK(cst & 1, "P3: $CREPRC creates the force-exit-by-pid target");
         lpid = linux_pid_of(vms_pid);
         CHECK(lpid != 0, "P3: the target resolves to a real Linux pid");
+        track_hold(lpid);
         CHECK(wait_for_exec(lpid, "sh") == 0,
               "P3: the target has actually exec'd its image");
 
@@ -337,6 +361,7 @@ int main(void)
         CHECK(cst & 1, "P4: $CREPRC creates the force-exit-by-name target");
         lpid = linux_pid_of(vms_pid);
         CHECK(lpid != 0, "P4: the target resolves to a real Linux pid");
+        track_hold(lpid);
         CHECK(wait_for_exec(lpid, "sh") == 0,
               "P4: the target has actually exec'd its image");
 
@@ -356,6 +381,7 @@ int main(void)
         CHECK(cst & 1, "P5: $CREPRC creates the delprc re-confirm target");
         lpid = linux_pid_of(vms_pid);
         CHECK(lpid != 0, "P5: the target resolves to a real Linux pid");
+        track_hold(lpid);
         CHECK(wait_for_exec(lpid, "sh") == 0,
               "P5: the target has actually exec'd its image");
 
@@ -408,6 +434,13 @@ int main(void)
         CHECK(st == SS$_NONEXPR,
               "P7: sys$suspnd(name) on a nonexistent process returns SS$_NONEXPR");
     }
+
+    /* Teardown: belt-and-suspenders reap of EVERY hold child, so nothing this
+     * suite created can orphan into the next suite in the shared single-boot
+     * guest. reap() is idempotent (a target already reaped inline draws ECHILD
+     * and returns at once), so this is safe over the whole registry. */
+    for (int i = 0; i < g_nhold; i++)
+        reap(g_hold[i]);
 
     printf("=== test_syssvc_procctl: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

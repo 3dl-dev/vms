@@ -102,7 +102,7 @@ item is retiring `BUILD.COM`→MMK for the full tree (rd `vms-89d`); S5
   source (SHA-256 verified, rd `vms-448` "owns-kernel" `vms-19e`); overlay the
   OVMX modules in-tree at `drivers/ovmx/{vms,vmsfs}/` (rd `vms-934`); `make
   ARCH=x86_64 defconfig` + `merge_config.sh` OVMX fragment + `olddefconfig`; `make
-  bzImage modules`; sign modules with the committed key (rd `vms-ff5`).
+  bzImage modules`; sign modules with the OVMX signing key (build secret, not committed; rd `vms-ff5`, `vms-secret-signing-key`).
 - The kernel is pinned at **6.12 LTS** because `vmsfs.ko` targets the pre-6.14 VFS
   mount surface (`vms.ko` builds on 6.18; `vmsfs.ko` does not) — a real porting
   constraint that also lives on the outside toolchain today.
@@ -387,7 +387,7 @@ runs as the larger parallel effort.
   real risk, perl is itself a large port; mitigations: newer kernels have reduced
   perl use, and some scripts have non-perl fallbacks — **verify which the pinned
   6.12 actually needs**); `flex`/`bison` (kconfig); `openssl` (module signing — or
-  reuse the committed-key sign-file path already in the Dockerfile); `libelf`
+  reuse the sign-file path already in the Dockerfile; key is a build secret, not committed); `libelf`
   (objtool/modpost — a hard dependency on modern x86). Each is a distinct OVMX
   image port.
 - **Risk:** this could balloon into "port half of a GNU userland." The lean-shim

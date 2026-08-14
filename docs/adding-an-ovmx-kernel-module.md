@@ -4,7 +4,7 @@
 a hard-coded `vms.ko` + `vmsfs.ko` pair: adding a module is a fixed, three-step
 motion, after which the new module inherits the properties the owns-kernel work
 established — it builds **in-tree** (`modinfo intree=Y`, so loading it does not
-set `TAINT_OUT_OF_TREE`, vms-934) and is **signed** with the committed OVMX key
+set `TAINT_OUT_OF_TREE`, vms-934) and is **signed** with the OVMX signing key
 (so `finit_module()` verifies it and does not set `TAINT_UNSIGNED_MODULE`,
 vms-ff5) — *for free*. This is the slot the DECnet kernel half (vms-30e,
 `docs/design-decnet-ovmx.md`) drops into.
@@ -107,7 +107,7 @@ Once those three touch-points exist, with **no other edits**:
 - The Dockerfile kernel-build stage (`distro/Dockerfile.bootable`) verifies
   `CONFIG_OVMX_<MOD>=m` is present, then **discovers** your built
   `drivers/ovmx/*/*.ko`, harvests it, asserts `intree=Y`, and **signs** it with
-  the committed OVMX key — the loop names no module, so yours is covered.
+  the OVMX signing key — the loop names no module, so yours is covered.
 - If you ship the module in a boot initramfs, the boot-time taint gate
   (`tests/qemu/test_kernel_taint.sh`, vms-566) discovers every `*.ko` in the
   image and asserts each is `intree=Y` + signed against the real
@@ -140,10 +140,13 @@ gated explicitly; a new module is additive.)
 - **No stale top-level Kconfig/Makefile** in `distro/kernel/drivers-ovmx/` — the
   overlay generates them; a checked-in copy would be a second, drifting source.
   The module-home gate fails if one reappears.
-- **Signing stays reproducible.** The committed key
-  (`distro/kernel/ovmx-module-signing-key.pem`, `CONFIG_MODULE_SIG_KEY`) is what
-  keeps signatures byte-identical build-to-build (vms-d73). Do not switch to the
-  kernel's build-ephemeral key. `CONFIG_MODULE_SIG_FORCE` stays **off** (vms-ff5)
-  so a signing slip can never brick the boot.
+- **Signing key is a build secret, never committed** (vms-secret-signing-key). A
+  committed private key is public and lets anyone forge a signature this keyring
+  trusts. Supply it as the `ovmx_module_signing_key` BuildKit secret
+  (`CONFIG_MODULE_SIG_KEY` path, e.g. `OVMX_MODULE_SIGNING_KEY=<pem>
+  tools/cut-release.sh`); two cuts fed the SAME key stay byte-identical (vms-d73).
+  With no secret the kernel generates an ephemeral key and only the signature
+  bytes vary. `CONFIG_MODULE_SIG_FORCE` stays **off** (vms-ff5) so a signing slip
+  can never brick the boot.
 - **Rule 9.** The kernel/QEMU path is the one runtime. A kernel module is real
   executive/driver code proven against a real boot — never a userspace fake.

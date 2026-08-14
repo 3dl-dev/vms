@@ -106,6 +106,7 @@ jobs:
               - 'src/ovmx_init/**'
               - 'src/libvms/include/sysgen_params.h'
               - 'tests/qemu/test_persistent_boot.sh'
+              - 'tests/qemu/test_intree_modules.sh'
               - 'tests/qemu/test_release_e2e.sh'
               - 'tests/qemu/test_executive_integral.sh'
               - 'tests/qemu/test_distrib_boot.sh'
@@ -608,6 +609,20 @@ jobs:
             -v ${{ github.workspace }}/tests/qemu/test_virtio_nic.sh:/test.sh:ro \
             -v ${{ github.workspace }}/distro/boot/run-qemu.sh:/src/distro/boot/run-qemu.sh:ro \
             -v ${{ github.workspace }}/distro/Dockerfile.bootable:/src/distro/Dockerfile.bootable:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-934 (parent vms-19e "owns-kernel"). Reuses the image built above (no
+      # extra build). Proves the VMS modules are built IN-TREE (drivers/ovmx/ of
+      # OUR from-source kernel): modinfo intree=Y on the shipped vms.ko/vmsfs.ko,
+      # and a raised-loglevel boot where the modules load with NO "out-of-tree
+      # module taints kernel" line -- i.e. loading them does not set
+      # TAINT_OUT_OF_TREE.
+      - name: VMS modules are in-tree (intree=Y, no out-of-tree taint)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_intree_modules.sh:/test.sh:ro \
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh

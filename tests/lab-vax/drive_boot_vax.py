@@ -108,6 +108,17 @@ MS_PROVISION_RUNNING = r"system identity SYSTEM"
 # window's FULL captured text (child.before), not a race against the other
 # STEP-2 patterns -- see do_sysboot()'s STEP 2 below.
 MS_PROVISION_OWNER_WARN = "%OVMX-W-OWNER"
+# LIMITATION (do not remove this check, but do not trust it ALONE): absence of
+# this string proves PROVISION reported no ERROR -- it does NOT by itself rule
+# out a write VOP that silently no-ops (the exact INV-6 failure class), since
+# lchown(2) would report success either way. The POSITIVE proof -- that the
+# volume's raw on-disk bytes actually changed during this boot -- is a
+# sha256sum of SYSVOL_IMG taken before/after this SIMH session, done on the
+# HOST in run-boot.sh's `sysboot' case (rq1 is attached WITHOUT `-r', so real
+# guest writes land in that host file). This console check and that hash diff
+# are deliberately two independent signals: this one localizes a regression to
+# the OWNER call sites specifically; the hash diff is what actually rules out
+# a fake/no-op write.
 
 
 def log(msg):

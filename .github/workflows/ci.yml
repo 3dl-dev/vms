@@ -128,6 +128,7 @@ jobs:
             release:
               - '.github/workflows/**'
               - 'tools/cut-release.sh'
+              - 'tools/cut-release-vax.sh'
               - 'tools/publish-release.sh'
               - 'tools/gen_release_notes.py'
               - 'tools/check_guide_drift.py'
@@ -797,6 +798,28 @@ jobs:
         run: |
           tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-b"
 
+      # CO-RELEASE GATE PROOF (vms-ca5, epic vms-f10): tools/cut-release.sh
+      # now builds VAX (netbsd-vax/elf32-vax) artifacts UNCONDITIONALLY as
+      # part of every cut -- this step is the "actually IN the cut bundle"
+      # half of that proof, checked against the REAL bundle a real cut just
+      # produced (the "a broken VAX build fails the cut" half is proven
+      # separately + fast by the cut-release-vax-gate job below, via its own
+      # negative control). Recompute-checksums below (`sha256sum -c
+      # SHA256SUMS`) transitively re-verifies these files' bytes too, since
+      # cut-release.sh now writes vax/* entries into SHA256SUMS.
+      - name: Assert VAX release artifacts are present in the cut bundle
+        run: |
+          set -euo pipefail
+          for d in dist/release-a dist/release-b; do
+            for f in vms.kmod.o vmsfs.kmod vmsfs_mount STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE; do
+              [ -s "$d/vax/$f" ] || { echo "FAIL: $d/vax/$f missing or empty -- VAX co-release artifact not in the cut bundle"; exit 1; }
+              echo "OK: $d/vax/$f present ($(stat -c%s "$d/vax/$f") bytes)"
+            done
+          done
+          grep -q '"vax_release_parity"' dist/release-a/release-manifest.json \
+            || { echo "FAIL: release-manifest.json has no vax_release_parity section"; exit 1; }
+          echo "OK: release-manifest.json carries a vax_release_parity section"
+
       # The manifest's own "cut_at_utc" field legitimately differs between
       # the two invocations (it is wall-clock metadata ABOUT the cut, not a
       # build input) -- the reproducibility claim is scoped to the four real
@@ -1142,6 +1165,18 @@ jobs:
         run: |
           tools/cut-release.sh --out-dir "${{ github.workspace }}/dist/release-acceptance"
 
+      # CO-RELEASE GATE PROOF (vms-ca5, epic vms-f10): the acceptance bundle
+      # is a real cut-release.sh cut, so it now unconditionally carries the
+      # VAX artifact set too -- confirm it landed. R2 scope only (build +
+      # publish); no VAX boot proof here, that is R3 vms-065.
+      - name: Assert VAX release artifacts are present in the acceptance bundle
+        run: |
+          set -euo pipefail
+          for f in vms.kmod.o vmsfs.kmod vmsfs_mount STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE; do
+            [ -s "dist/release-acceptance/vax/$f" ] || { echo "FAIL: dist/release-acceptance/vax/$f missing or empty"; exit 1; }
+          done
+          echo "OK: all 9 VAX co-release artifacts present in the acceptance bundle"
+
       - name: Build bootable image (qemu tooling only -- boots the cut bundle's own artifacts)
         uses: docker/build-push-action@v6
         with:
@@ -1186,6 +1221,100 @@ jobs:
           fi
           echo "Negative control confirmed: the gate correctly reddened (exit $rc) on a genuine version disagreement."
           exit 0
+
+  # -----------------------------------------------------------------------
+  # cut-release-vax-gate (rd vms-ca5, epic vms-f10; "R2 release parity",
+  # docs/design-vax-mainstream-release.md). FAST per-PR complement to the
+  # heavy cut-release-reproducible / release-acceptance-e2e jobs above (which
+  # each now build VAX for real as part of every cut, at full ~25-30-min-cold
+  # cost): this job proves the two co-release-gate HALVES directly against
+  # tools/cut-release-vax.sh, in minutes, without paying for a full x86_64
+  # OS build first --
+  #   1. POSITIVE: the VAX artifact set builds and is byte-present.
+  #   2. NEGATIVE (OVMX_VAX_RELEASE_NEGCTL=1): a deliberately-failed VAX
+  #      stage must make tools/cut-release-vax.sh -- and therefore
+  #      tools/cut-release.sh, which calls it unconditionally -- exit
+  #      nonzero. This is the "a release is NOT cuttable if the VAX build
+  #      fails" half of the invariant, proven mechanically, mirroring how R1
+  #      (vms-9172) gave its per-script cross-compile gates teeth via a
+  #      broken-TU negative control -- this one targets the GATE WIRING
+  #      itself rather than a compiler rejection.
+  # BUILD-ONLY (Rule 9): no SIMH boot here, that is R3 vms-065.
+  # -----------------------------------------------------------------------
+  cut-release-vax-gate:
+    name: VAX co-release gate — artifacts build + a failed VAX build reds the cut (vms-ca5)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Same NetBSD/vax syssrc the R1 gates pin (tests/netbsd/netbsd_version.env,
+      # read by cut-release-vax.sh itself) -- cached so a source-only PR never
+      # re-downloads it.
+      - name: Cache NetBSD/vax kernel sources (syssrc)
+        uses: actions/cache@v4
+        with:
+          path: .netbsd-vax-src-release-cache
+          key: netbsd-vax-syssrc-release-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-vax-syssrc-release-
+
+      - name: POSITIVE — build the VAX release artifact set (tools/cut-release-vax.sh)
+        run: |
+          set -euo pipefail
+          tools/cut-release-vax.sh \
+            --src-dir "${{ github.workspace }}" \
+            --out-dir "${{ github.workspace }}/dist/vax-gate-proof" \
+            --netbsd-src-cache "${{ github.workspace }}/.netbsd-vax-src-release-cache"
+          for f in vms.kmod.o vmsfs.kmod vmsfs_mount STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE; do
+            [ -s "dist/vax-gate-proof/$f" ] || { echo "FAIL: dist/vax-gate-proof/$f missing or empty"; exit 1; }
+          done
+          echo "PASS: all 9 VAX release artifacts built"
+
+      - name: NEGATIVE CONTROL — OVMX_VAX_RELEASE_NEGCTL=1 must fail the VAX artifact build
+        run: |
+          set +e
+          RAW=$(OVMX_VAX_RELEASE_NEGCTL=1 tools/cut-release-vax.sh \
+                  --src-dir "${{ github.workspace }}" \
+                  --out-dir "${{ github.workspace }}/dist/vax-gate-negctl" \
+                  --netbsd-src-cache "${{ github.workspace }}/.netbsd-vax-src-release-cache" 2>&1)
+          rc=$?
+          set -e
+          echo "$RAW"
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: OVMX_VAX_RELEASE_NEGCTL=1 PASSED — the co-release gate has no teeth against a failed VAX build" >&2
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'OVMX_VAX_RELEASE_NEGCTL: deliberately failing the LIBRARIAN.EXE stage' \
+            || { echo "FATAL: did not see the expected NEGCTL failure banner — this failed for the wrong reason" >&2; exit 1; }
+          echo "Negative control confirmed: a failed VAX stage exits nonzero (exit $rc)."
+
+      - name: NEGATIVE CONTROL — tools/cut-release.sh itself must fail when the VAX build fails
+        run: |
+          set +e
+          RAW=$(OVMX_VAX_RELEASE_NEGCTL=1 tools/cut-release.sh --out-dir "${{ github.workspace }}/dist/vax-gate-full-negctl" 2>&1)
+          rc=$?
+          set -e
+          # Truncate: this run legitimately fails during the (slow) x86_64
+          # container build stage too if it ever gets that far, so only the
+          # tail matters for diagnosing which gate fired -- but the VAX stage
+          # runs BEFORE the OS-kit ground-source check, so a VAX failure here
+          # should short-circuit long before any container build starts.
+          echo "$RAW" | tail -60
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: cut-release.sh PASSED despite OVMX_VAX_RELEASE_NEGCTL=1 — the co-release invariant is not wired into cut-release.sh" >&2
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'VAX release-artifact build FAILED -- co-release invariant' \
+            || { echo "FATAL: cut-release.sh failed for the wrong reason (did not name the VAX co-release invariant)" >&2; exit 1; }
+          echo "Negative control confirmed: cut-release.sh itself refuses to cut a release when the VAX build fails (exit $rc)."
 
   # -----------------------------------------------------------------------
   # Job 2b: PARTS 0.2 Demo E2E (vms-1c8, epic vms-2579/vms-5dd)

@@ -79,6 +79,7 @@ CPPFLAGS="-DOVMX_KBACKEND_NETBSD -nostdinc -isystem $KL -isystem $SYS -isystem $
 # EXACTLY src/kernel-netbsd/Makefile's SRCS (= B1's SRCS): the NetBSD backend
 # glue + OVMX intrusive containers + the SHARED executive facility sources.
 SRCS="$KMOD/vms_netbsd.c \
+      $KMOD/vms_lnm_arena_netbsd.c \
       $KMOD/exec_list_netbsd.c \
       $KMOD/exec_hash_netbsd.c \
       $KMOD/exec_rbtree_netbsd.c \
@@ -87,7 +88,8 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_access.c \
       $CORE/vms_mbx.c \
       $CORE/vms_proctab.c \
-      $CORE/vms_lock.c"
+      $CORE/vms_lock.c \
+      $CORE/vms_lnm.c"
 
 echo "=== toolchain ==="; "$CC" --version | head -1; "$CC" -dumpmachine; echo
 

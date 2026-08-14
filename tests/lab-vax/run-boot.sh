@@ -90,7 +90,8 @@ ensure_images() {
 }
 
 fetch_set() {
-  local name="$1" sha="$2"
+  local name="$1"
+  local sha="$2"
   local tgz="${KBUILD_DIR}/${name}.tgz"
   if [ ! -f "${tgz}" ] || ! echo "${sha}  ${tgz}" | sha512sum -c --status -; then
     log "downloading ${name}.tgz"
@@ -199,7 +200,9 @@ ensure_disk() {
 
 # run drive_boot_vax.py in one SIMH session; args: <ovmx_mode> <workdir> [extra -e ...]
 run_session() {
-  local ovmx_mode="$1" workdir="$2"; shift 2
+  local ovmx_mode="$1"
+  local workdir="$2"
+  shift 2
   local cid="ovmx-boot-${ovmx_mode}-$$"; local rc=0
   set +e
   timeout --kill-after="${TIMEOUT_GRACE}" "${SESSION_TIMEOUT}" \

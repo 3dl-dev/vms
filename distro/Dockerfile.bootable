@@ -172,6 +172,22 @@ RUN KMAJ=$(echo "$KERNEL_VERSION" | cut -d. -f1) && \
 
 WORKDIR /usr/src/linux
 
+# Overlay the OVMX VMS modules IN-TREE (vms-934, parent vms-19e "owns-kernel").
+# The canonical module source stays in the OVMX repo (src/kernel/ +
+# src/kernel-core/); this copies it into drivers/ovmx/{vms,vmsfs}/ with in-tree
+# Kbuild+Kconfig and wires drivers/ovmx into the kernel's drivers/Kconfig +
+# drivers/Makefile. Done BEFORE `make defconfig`/olddefconfig so CONFIG_OVMX_VMS
+# / CONFIG_OVMX_VMSFS are recognised Kconfig symbols, and BEFORE `make modules`
+# so they build as part of OUR kernel tree -- modpost then stamps modinfo
+# intree=Y and finit_module() at boot does NOT set TAINT_OUT_OF_TREE. The
+# standalone src/kernel Makefiles are untouched and still drive the QEMU test
+# harness out-of-tree; this is a build-time overlay, not a fork.
+COPY src/kernel                          /tmp/ovmx-src/src/kernel
+COPY src/kernel-core                     /tmp/ovmx-src/src/kernel-core
+COPY distro/kernel/drivers-ovmx          /tmp/ovmx-src/distro/kernel/drivers-ovmx
+COPY distro/kernel/overlay-ovmx-drivers.sh /tmp/ovmx-src/distro/kernel/overlay-ovmx-drivers.sh
+RUN bash /tmp/ovmx-src/distro/kernel/overlay-ovmx-drivers.sh /usr/src/linux /tmp/ovmx-src
+
 # Curated config: x86_64 defconfig + the OVMX boot fragment, reconciled with
 # olddefconfig. The fragment (distro/kernel/ovmx-x86_64.config) is the
 # single source of the OVMX-required option set; see its header.
@@ -194,7 +210,11 @@ RUN set -e; \
     if grep -q "^CONFIG_MODULE_SIG_FORCE=y$" .config; then \
         echo "FAIL: CONFIG_MODULE_SIG_FORCE=y would reject unsigned vms.ko/vmsfs.ko"; exit 1; \
     fi; \
-    echo "OK: OVMX kernel .config carries every load-bearing option"
+    for opt in CONFIG_OVMX CONFIG_OVMX_VMS CONFIG_OVMX_VMSFS; do \
+        [ "$opt" = "CONFIG_OVMX" ] && want="=y" || want="=m"; \
+        grep -q "^${opt}${want}$" .config || { echo "FAIL: ${opt}${want} not set (in-tree VMS modules would not build; vms-934)"; exit 1; }; \
+    done; \
+    echo "OK: OVMX kernel .config carries every load-bearing option + the in-tree VMS modules (=m)"
 
 # Build the bzImage + in-tree modules. Record the exact kernelrelease string
 # (e.g. 6.12.103-ovmx) so downstream stages name modules/headers consistently.
@@ -213,6 +233,19 @@ RUN export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}")" && \
     cp arch/x86/boot/bzImage /kernel-out/vmlinuz && \
     make -s ARCH=x86_64 kernelrelease > /kernel-out/kernelrelease && \
     echo "Built OVMX kernel: $(cat /kernel-out/kernelrelease), bzImage $(ls -lh /kernel-out/vmlinuz | awk '{print $5}'), TS=$KBUILD_BUILD_TIMESTAMP"
+
+# Harvest the IN-TREE-built VMS modules (vms-934) and prove they are in-tree
+# right here, fail-closed. modpost stamps intree=Y for a module built as part of
+# the kernel tree (not via M=); that Y is exactly what makes loading it NOT set
+# TAINT_OUT_OF_TREE. If a future refactor accidentally reverts to an out-of-tree
+# build, intree would be "N"/absent and this gate reddens before anything boots.
+RUN cp drivers/ovmx/vms/vms.ko       /kernel-out/vms.ko && \
+    cp drivers/ovmx/vmsfs/vmsfs.ko   /kernel-out/vmsfs.ko && \
+    for ko in vms vmsfs; do \
+        it=$(modinfo -F intree "/kernel-out/${ko}.ko"); \
+        [ "$it" = "Y" ] || { echo "FAIL: ${ko}.ko intree='${it}' != Y -- module did not build in-tree (vms-934)"; exit 1; }; \
+    done && \
+    echo "OK: vms.ko + vmsfs.ko built IN-TREE (drivers/ovmx/, modinfo intree=Y) -- no TAINT_OUT_OF_TREE on load"
 
 FROM ubuntu:24.04 AS builder
 
@@ -278,18 +311,32 @@ RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
 WORKDIR /src
 COPY . .
 
-# Build kernel modules against the from-source OVMX kernel (vms-448). They
-# must build AND carry a vermagic that matches this kernel, or finit_module()
-# rejects them at boot -- assert that here rather than discover it in QEMU.
+# The VMS modules are now built IN-TREE by the kernel-build stage (vms-934,
+# parent vms-19e "owns-kernel"): vms.ko / vmsfs.ko come from drivers/ovmx/ of
+# OUR kernel tree and are stamped modinfo intree=Y (modpost), so finit_module()
+# at boot does NOT set TAINT_OUT_OF_TREE. Land them at the exact paths the
+# initramfs staging below already reads (src/kernel/vms.ko,
+# src/kernel/vmsfs/vmsfs.ko) so nothing downstream changes. `COPY . .` above
+# carries no *.ko (build artifacts, gitignored), so these overlay onto empty
+# slots. The standalone src/kernel Makefiles remain the canonical source of
+# record and still build these modules out-of-tree for the QEMU test harness
+# (tests/qemu/, src/kernel/Dockerfile) -- unchanged by this item.
+COPY --from=kernel-build /kernel-out/vms.ko       /src/src/kernel/vms.ko
+COPY --from=kernel-build /kernel-out/vmsfs.ko     /src/src/kernel/vmsfs/vmsfs.ko
+
+# The in-tree modules must carry a vermagic matching this kernel (or
+# finit_module() rejects them at boot) AND be stamped intree=Y (or loading them
+# would set TAINT_OUT_OF_TREE) -- assert both here rather than discover it in
+# QEMU. The intree assertion is the vms-934 acceptance property, re-checked on
+# the exact artifact the initramfs will carry.
 RUN KVER=$(cat /tmp/kver) && \
-    cd src/kernel && make KDIR=/usr/src/ovmx-kernel 2>&1 && \
-    cd vmsfs && make KDIR=/usr/src/ovmx-kernel 2>&1 && \
-    cd /src && \
     for ko in src/kernel/vms.ko src/kernel/vmsfs/vmsfs.ko; do \
         vm=$(modinfo -F vermagic "$ko" | awk '{print $1}'); \
         [ "$vm" = "$KVER" ] || { echo "FAIL: $ko vermagic '$vm' != kernel '$KVER'"; exit 1; }; \
+        it=$(modinfo -F intree "$ko"); \
+        [ "$it" = "Y" ] || { echo "FAIL: $ko intree='$it' != Y -- would set TAINT_OUT_OF_TREE (vms-934)"; exit 1; }; \
     done && \
-    echo "OK: vms.ko + vmsfs.ko built against OVMX kernel $KVER (vermagic matches)"
+    echo "OK: vms.ko + vmsfs.ko in-tree against OVMX kernel $KVER (vermagic matches, intree=Y)"
 
 # Build OVMX userspace — static musl (no glibc dependency)
 RUN cmake -B build-static \
@@ -814,8 +861,11 @@ LABEL org.opencontainers.image.title="OVMX/Linux" \
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# kmod: provides `modinfo`, which tests/qemu/test_intree_modules.sh (vms-934)
+# runs on the shipped vms.ko/vmsfs.ko to prove they are stamped intree=Y. Test
+# tooling only (CLAUDE.md Rule 9 distinction), like `expect` above.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio expect \
+    qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio expect kmod \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /boot/vmlinuz /boot/vmlinuz

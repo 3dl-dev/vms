@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# In-tree Kbuild for vms.ko (vms-934, parent vms-19e "owns-kernel").
+#
+# The canonical source lives in the OVMX repo as src/kernel/ (the Linux glue --
+# the /dev/vms char device + the P0/P1 region mappers) and src/kernel-core/ (the
+# substrate-agnostic executive facilities). distro/kernel/overlay-ovmx-
+# drivers.sh copies BOTH into this directory (flattened) at kernel-build time,
+# so every object below is a plain basename here. The object set MUST mirror
+# src/kernel/Makefile's `vms-y` (the standalone/out-of-tree build kept for the
+# QEMU test harness) -- if you add an executive-core .c there, add it here too.
+#
+# OVMX_KBACKEND_LINUX selects the Linux realizations of the exec_* shim
+# contracts (exec_kbackend_linux.h / exec_list_linux.h / exec_hash_linux.h /
+# exec_rbtree_linux.h), which the overlay places beside these sources.
+
+obj-$(CONFIG_OVMX_VMS) += vms.o
+
+vms-y := vms_module.o \
+         vms_p0.o \
+         vms_p1.o \
+         vms_access.o \
+         vms_ast.o \
+         vms_devtab.o \
+         vms_eflag.o \
+         vms_lnm.o \
+         vms_lock.o \
+         vms_mbx.o \
+         vms_proctab.o
+
+ccflags-y := -I $(src) -DOVMX_KBACKEND_LINUX

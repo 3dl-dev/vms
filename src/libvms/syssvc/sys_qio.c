@@ -44,6 +44,7 @@
 extern int vms$$chan_to_fd(uint16_t chan);
 extern uint32_t vms$$chan_exec_chan(uint16_t chan);
 extern int vms$$chan_is_mailbox(uint16_t chan);
+extern int vms$$chan_is_bg(uint16_t chan);
 
 /* Import from sys_uring.c */
 extern int vms_uring_init(void);
@@ -280,6 +281,104 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
 }
 
 /*
+ * qio_bg_op - $QIO functions for an INET pseudo-device (BGn:) channel (vms-527).
+ *
+ * The exact analogue of qio_mailbox_op above, socket-for-queue: a BG channel's
+ * fd is always -1 (see sys_assign.c) because the socket is entirely the
+ * executive's (src/kernel/vms_bg.c), so there is no local descriptor for
+ * io_uring or read()/write() to operate on. Each $QIO function is one thin
+ * vms_kif_bg_* ioctl into vms.ko, which drives the HOST kernel's in-kernel
+ * socket API -- OVMX never reimplements TCP. The function map is the SRI-QIO /
+ * INETDRIVER interface (docs/design-tcpip-services-ovmx.md §4 L2):
+ *
+ *   IO$_SETMODE / IO$_SETCHAR  -> create the socket
+ *   IO$_ACCESS                 -> connect to a peer (P1 = sockaddr, P2 = len)
+ *   IO$_WRITEVBLK              -> send   (P1 = buffer, P2 = length)
+ *   IO$_READVBLK               -> recv   (P1 = buffer, P2 = buffer size)
+ *   IO$_DEACCESS               -> shutdown the connection
+ *
+ * A blocking send/recv that blocks in the executive is the faithful shape here
+ * (the QIOW completes when the host kernel completes the socket op), the same
+ * reasoning qio_mailbox_op gives for a blocking mailbox read.
+ */
+struct bg_sockaddr_in {
+    uint16_t family;    /* AF_INET */
+    uint16_t port;      /* network byte order */
+    uint32_t addr;      /* network byte order (IPv4) */
+};
+
+static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
+                          void *p1, uint32_t p2, uint32_t efn,
+                          void (*astadr)(uint32_t), uint32_t astprm) {
+    struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+    uint32_t exec_chan = vms$$chan_exec_chan(chan);
+    uint32_t base_func = func & IO$M_FCODE;
+    uint32_t st;
+    uint32_t actlen = 0;
+
+    switch (base_func) {
+        case IO$_SETMODE:
+        case IO$_SETCHAR:
+            /* Create the socket on the channel (AF_INET/SOCK_STREAM). */
+            st = vms_kif_bg_setmode(exec_chan);
+            break;
+
+        case IO$_ACCESS:
+            /* Connect. P1 = sockaddr (family/port/addr), P2 = its length. */
+            if (!p1 || p2 < sizeof(struct bg_sockaddr_in)) {
+                st = SS$_BADPARAM;
+                break;
+            }
+            {
+                const struct bg_sockaddr_in *sa =
+                    (const struct bg_sockaddr_in *)p1;
+                st = vms_kif_bg_connect(exec_chan, sa->family, sa->port,
+                                        sa->addr);
+            }
+            break;
+
+        case IO$_WRITEVBLK:
+        case IO$_WRITELBLK:
+        case IO$_WRITEPBLK:
+            if (!p1) { st = SS$_BADPARAM; break; }
+            st = vms_kif_bg_send(exec_chan, p1, p2, &actlen);
+            break;
+
+        case IO$_READVBLK:
+        case IO$_READLBLK:
+        case IO$_READPBLK:
+            if (!p1) { st = SS$_BADPARAM; break; }
+            st = vms_kif_bg_recv(exec_chan, p1, p2, &actlen);
+            break;
+
+        case IO$_DEACCESS:
+            st = vms_kif_bg_deaccess(exec_chan);
+            break;
+
+        case IO$_NOP:
+            st = SS$_NORMAL;
+            break;
+
+        default:
+            st = SS$_ILLIOFUNC;
+            break;
+    }
+
+    if (iosb) {
+        iosb->iosb$w_status = (uint16_t)st;
+        iosb->iosb$w_bcnt = (actlen > 65535) ? 65535 : (uint16_t)actlen;
+        iosb->iosb$l_dev_depend = actlen;
+    }
+
+    if (st & 1) {
+        if (efn != 0) sys$setef(efn);
+        if (astadr) astadr(astprm);
+    }
+
+    return st;
+}
+
+/*
  * qio_validate_and_classify - Shared validation for sys$qio and sys$qiow.
  *
  * Resolves the channel to an fd, validates the function code and buffer,
@@ -398,6 +497,9 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
     if (vms$$chan_is_mailbox(chan))
         return qio_mailbox_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
 
+    if (vms$$chan_is_bg(chan))
+        return qio_bg_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
+
     int fd, is_read;
     uint32_t status = qio_validate_and_classify(chan, func, iosb_ptr, p1,
                                                  efn, astadr, astprm,
@@ -434,6 +536,9 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
 
     if (vms$$chan_is_mailbox(chan))
         return qio_mailbox_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
+
+    if (vms$$chan_is_bg(chan))
+        return qio_bg_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
 
     int fd, is_read;
     uint32_t status = qio_validate_and_classify(chan, func, iosb_ptr, p1,

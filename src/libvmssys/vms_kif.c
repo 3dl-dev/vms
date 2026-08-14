@@ -1837,3 +1837,159 @@ uint32_t vms_kif_mbx_set_wrtattn(uint32_t exec_chan, uint8_t acmode,
 
     return args.status;
 }
+
+/* ================================================================
+ * INET pseudo-device BGn: (vms-527)
+ *
+ * Thin marshalling wrappers over the VMS_IOCTL_BG_* driver in vms.ko
+ * (src/kernel/vms_bg.c), the exact analogue of the vms_kif_mbx_* wrappers
+ * above: bind to /dev/vms (honest SS$_NOSUCHDEV if the executive is absent --
+ * INV-6, never a userspace socket fallback), issue one ioctl, hand back the
+ * driver's own status. There is NO userspace socket here; the socket lives in
+ * the executive.
+ * ================================================================ */
+
+/* Same bind-and-check as mbx_bind_ok(): SS$_NOSUCHDEV when /dev/vms is absent
+ * is the honest state for an executive device whose driver is unreachable. */
+static int bg_bind_ok(void)
+{
+    kif_bind();
+    return vms_dev_fd >= 0;
+}
+
+uint32_t vms_kif_bg_create(uint32_t *exec_chan, uint32_t *unit,
+                           char *devnam, uint32_t devnam_sz)
+{
+    struct vms_bg_create_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+
+    KIF_CALL(VMS_IOCTL_BG_CREATE, &args);
+
+    if (args.status & 1) {
+        if (exec_chan) *exec_chan = args.chan;
+        if (unit) *unit = args.unit;
+        if (devnam && devnam_sz > 0) {
+            vms_strncpy(devnam, args.devnam, devnam_sz - 1);
+            devnam[devnam_sz - 1] = '\0';
+        }
+    }
+    return args.status;
+}
+
+uint32_t vms_kif_bg_setmode(uint32_t exec_chan)
+{
+    struct vms_bg_chanonly_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+
+    KIF_CALL(VMS_IOCTL_BG_SETMODE, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_bg_connect(uint32_t exec_chan, uint16_t family,
+                            uint16_t port, uint32_t addr)
+{
+    struct vms_bg_connect_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.sin_family = family;
+    args.sin_port = port;   /* network byte order, caller's responsibility */
+    args.sin_addr = addr;   /* network byte order */
+
+    KIF_CALL(VMS_IOCTL_BG_CONNECT, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_bg_send(uint32_t exec_chan, const void *buf, uint32_t len,
+                         uint32_t *actlen)
+{
+    struct vms_bg_io_args args;
+
+    if (!buf)
+        return SS$_BADPARAM;
+    if (len > VMS_BG_IOCTL_MAXLEN)
+        return SS$_BADPARAM;
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.len = len;
+    vms_memcpy(args.data, buf, len);
+
+    KIF_CALL(VMS_IOCTL_BG_SEND, &args);
+
+    if ((args.status & 1) && actlen) *actlen = args.len;
+    return args.status;
+}
+
+uint32_t vms_kif_bg_recv(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                         uint32_t *actlen)
+{
+    struct vms_bg_io_args args;
+    uint32_t n;
+
+    if (!buf)
+        return SS$_BADPARAM;
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.len = (bufsz > VMS_BG_IOCTL_MAXLEN) ? VMS_BG_IOCTL_MAXLEN : bufsz;
+
+    KIF_CALL(VMS_IOCTL_BG_RECV, &args);
+
+    if (args.status & 1) {
+        n = args.len;
+        if (n > bufsz) n = bufsz;
+        if (n > VMS_BG_IOCTL_MAXLEN) n = VMS_BG_IOCTL_MAXLEN;
+        vms_memcpy(buf, args.data, n);
+        if (actlen) *actlen = args.len;
+    }
+    return args.status;
+}
+
+uint32_t vms_kif_bg_deaccess(uint32_t exec_chan)
+{
+    struct vms_bg_chanonly_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+
+    KIF_CALL(VMS_IOCTL_BG_DEACCESS, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_bg_dassgn(uint32_t exec_chan)
+{
+    struct vms_bg_chanonly_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+
+    KIF_CALL(VMS_IOCTL_BG_DASSGN, &args);
+
+    return args.status;
+}

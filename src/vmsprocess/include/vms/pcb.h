@@ -82,6 +82,13 @@
 /* Channel flags */
 #define PCB_CHAN_MAILBOX     0x0001  /* Channel is a mailbox */
 #define PCB_CHAN_MBX_READER  0x0002  /* Reader end of mailbox */
+/*
+ * Channel is an INET pseudo-device BGn: (vms-527). Like a mailbox channel its
+ * fd stays -1 -- the socket is executive-resident (src/kernel/vms_bg.c), not a
+ * userspace fd -- and $QIO routes through qio_bg_op()/vms_kif_bg_* instead of
+ * the fd path. exec_chan holds the executive's BG channel number.
+ */
+#define PCB_CHAN_BG          0x0004  /* Channel is an INET BGn: device */
 
 struct pcb_channel {
     int         fd;         /* Linux file descriptor (-1 = unused) */

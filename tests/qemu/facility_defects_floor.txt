@@ -376,4 +376,15 @@
 # suite writes via sysuaf_format_record and reads a UIC field back). MEASURED
 # host-side (vms-f57): snprintf %o of 128/130 = "200"/"202", %u = "128"/"130".
 # See its own entry in facility_defects.sh for what it covers and why.
-98
+# Raised 98 -> 99 by vms-527's bg-recv-length-zeroed -- the FIRST network
+# facility and the first defect targeting the new src/kernel/vms_bg.c, the
+# executive-resident INET pseudo-device BGn: driver (a VMS program $ASSIGNs
+# TCPIP$DEVICE:, $QIOs connect/send/recv/close to a TCP peer, and the socket
+# lives in the executive over the host in-kernel socket API -- not userspace).
+# The mutation zeroes the received byte count in vms_ioctl_bg_recv's own body,
+# so the loopback echo comes back with a wrong IOSB byte count while the recv
+# still reports SS$_NORMAL -- reddening exactly test_syssvc_bg_echo's byte-exact
+# echo assertion, with the assign/setmode/connect/write assertions (and the
+# no-executive honest-skip) all staying green. See its own entry in
+# facility_defects.sh for what it covers and why.
+99

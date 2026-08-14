@@ -90,3 +90,14 @@ vms_kif_mbx_set_wrtattn=PROCEDURE
 # index.
 vms_kif_hiber=PROCEDURE
 vms_kif_wake=PROCEDURE
+# vms-527: INET pseudo-device BGn: driver wrappers (VMS_IOCTL_BG_*, the $QIO
+# network path). APPENDED at the end per the append-only contract above -- a new
+# universal never shifts an existing index. The socket is executive-resident
+# (src/kernel/vms_bg.c); these are the userspace marshalling shims.
+vms_kif_bg_create=PROCEDURE
+vms_kif_bg_setmode=PROCEDURE
+vms_kif_bg_connect=PROCEDURE
+vms_kif_bg_send=PROCEDURE
+vms_kif_bg_recv=PROCEDURE
+vms_kif_bg_deaccess=PROCEDURE
+vms_kif_bg_dassgn=PROCEDURE

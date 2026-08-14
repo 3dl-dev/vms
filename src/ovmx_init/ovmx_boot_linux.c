@@ -78,6 +78,40 @@ void ovmx_boot_start_console_log_bridge(void)
     opcom_kmsg_start();
 }
 
+void ovmx_boot_mute_kernel_console(void)
+{
+    /* SYSLOG_ACTION_CONSOLE_LEVEL = 8 (syslog(2)/klogctl(2) man page).
+     * Issued as a raw syscall rather than through <sys/klog.h>'s klogctl()
+     * wrapper so this file depends on no header beyond what it already
+     * includes (<sys/syscall.h>, already pulled in above for
+     * SYS_finit_module). Level 3 lets EMERG(0)/ALERT(1)/CRIT(2) through --
+     * everything a real kernel bugcheck-class fault would use -- and blocks
+     * pr_info/pr_warn (levels 4-6), which is exactly the vms.ko/vmsfs.ko
+     * lifecycle noise vms-300 reported. */
+    long rc = syscall(SYS_syslog, 8 /* SYSLOG_ACTION_CONSOLE_LEVEL */, NULL, 3);
+    if (rc == 0)
+        return;
+
+    /* Fallback: /proc/sys/kernel/printk's first whitespace-separated field
+     * is console_loglevel (proc(5)). Needs /proc mounted, which
+     * ovmx_boot_mount_kernel_filesystems() has already done by the time
+     * bare_metal_init() calls this op. */
+    int fd = open("/proc/sys/kernel/printk", O_WRONLY);
+    if (fd >= 0) {
+        ssize_t w = write(fd, "3\n", 2);
+        close(fd);
+        if (w == 2)
+            return;
+    }
+
+    /* Best-effort (this op's header comment in ovmx_boot.h): neither path
+     * worked, so boot proceeds with the kernel's default console level --
+     * but say so, since a silent failure here is exactly how this leak went
+     * unnoticed in the first place. */
+    fprintf(stderr,
+            "%%OVMX-W-CONSOLELVL, could not lower kernel console log level\n");
+}
+
 int ovmx_boot_load_module(const char *name)
 {
     char path[256];

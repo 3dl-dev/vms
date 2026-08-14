@@ -257,6 +257,20 @@ void ovmx_boot_start_console_log_bridge(void)
     pthread_attr_destroy(&attr);
 }
 
+/*
+ * vms-300 (Linux/QEMU console-leak fix) / vms-f2e: NetBSD has no single
+ * runtime-adjustable "console_loglevel" knob mirroring Linux's syslog(2)
+ * SYSLOG_ACTION_CONSOLE_LEVEL -- kernel console verbosity there is governed
+ * at boot time (boothowto flags), not by a live syscall this process can
+ * issue. This backend's own console-noise question, if the NetBSD/vax boot
+ * ever shows one, is tracked separately by the NetBSD boot design
+ * (docs/design-p4-netbsd-vax-boot.md); this is a documented no-op, not a
+ * faked success (INV-6 / CLAUDE.md Rule 9).
+ */
+void ovmx_boot_mute_kernel_console(void)
+{
+}
+
 /* ---- executive module load: loadable module(9) OR compiled-in kernel ----- */
 
 /*

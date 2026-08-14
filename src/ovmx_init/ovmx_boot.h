@@ -112,6 +112,41 @@ int ovmx_boot_mount_kernel_filesystems(void);
 void ovmx_boot_start_console_log_bridge(void);
 
 /*
+ * ovmx_boot_mute_kernel_console - lower the substrate kernel's OWN console
+ * log level so routine module printk (KERN_INFO and below) stops reaching
+ * the shared boot console, before ANY OVMX kernel module loads (vms-300).
+ * QEMU's serial console is BOTH the kernel's own console AND ovmx_init's
+ * stdout: vms.ko/vmsfs.ko log their lifecycle at KERN_INFO via pr_info
+ * (src/kernel/vms_module.c etc.), and without this, that raw kernel dmesg
+ * interleaves with -- and is indistinguishable from -- the VMS boot banner
+ * on what is supposed to read as a faithful VMS console.
+ *
+ * Lowered so only EMERG/ALERT/CRIT (bugcheck-class kernel faults) still
+ * reach the console -- a real catastrophic kernel fault surfaces, exactly
+ * as a VAX/Alpha would bugcheck to its own console, but routine INFO/WARN
+ * module chatter does not. Does NOT touch the kernel's own log ring
+ * buffer/log device (Linux /dev/kmsg, NetBSD /dev/klog) -- only the console
+ * SINK -- so ovmx_boot_start_console_log_bridge()'s reader keeps seeing
+ * every line for SYS$MANAGER:OPERATOR.LOG (vms-32a); kernel pr_info() call
+ * sites are deliberately left untouched by this fix.
+ *
+ * Called once, from bare_metal_init(), immediately after
+ * ovmx_boot_start_console_log_bridge() and before the first
+ * ovmx_boot_load_module() call on either boot branch (flagless or
+ * conversational) -- the earliest point in the boot path before any kernel
+ * module is loaded. Idempotent: safe to call more than once. Best-effort: a
+ * substrate that cannot lower its console level must never block or fail
+ * boot -- this is console hygiene, not the fail-honest executive gate (that
+ * is ovmx_boot_open_executive()).
+ *
+ * Linux: SYSLOG_ACTION_CONSOLE_LEVEL via syslog(2), falling back to writing
+ * /proc/sys/kernel/printk's console_loglevel field. NetBSD: vms-f2e -- no
+ * runtime-adjustable console print-level equivalent exists on that backend
+ * yet; documented no-op there, never a faked success.
+ */
+void ovmx_boot_mute_kernel_console(void);
+
+/*
  * ovmx_boot_load_module - load an OVMX executive/filesystem kernel module by
  * LOGICAL name ("vms" for the executive, "vmsfs" for the filesystem). Returns
  * 0 on success; -1 with errno set otherwise. The caller decides whether a

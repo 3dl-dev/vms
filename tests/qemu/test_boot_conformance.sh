@@ -80,12 +80,16 @@ bad()  { echo "  FAIL: $1"; FAIL=1; }
 run_qemu() {
     local initrd="$1" disk="$2" log fifo qp w=0
     log=$(mktemp); fifo=$(mktemp -u); mkfifo "$fifo"
+    # No trailing "quiet" (vms-300): it used to RAISE console_loglevel back
+    # up after "loglevel=3" set it, self-defeating for the pre-PID1 window --
+    # see distro/boot/run-qemu.sh's own APPEND comment for the mechanism.
+    # loglevel=3 alone is already stricter than "quiet" would be.
     # shellcheck disable=SC2086
     timeout "$TIMEOUT" $QEMU $MACHINE \
         -kernel "$KERNEL" \
         -initrd "$initrd" \
         -nographic \
-        -append "$CONSOLE loglevel=3 quiet" \
+        -append "$CONSOLE loglevel=3" \
         -m 256M \
         -smp 1 \
         -nic none \
@@ -225,6 +229,47 @@ else
     echo "  --- diff (expected vs actual) ---"
     diff <(printf '%s\n' "$EXPECTED") <(printf '%s\n' "$SEQ") | sed 's/^/    /' || true
 fi
+
+# --- (d2) NO RAW KERNEL DMESG ON THE CONSOLE (vms-300) -----------------------
+# The pinned SEQUENCE check above (RAW_SEQ/SEQ) is an EXTRACTION: grep -oE
+# pulls out only the tokens matching its own patterns and silently ignores
+# every other byte in the transcript. It therefore proves the tokens that ARE
+# there are in the right order and shape, but proves nothing about whether
+# OTHER, unwanted content -- like raw Linux kernel dmesg -- also made it onto
+# the console alongside them. vms-300: QEMU's ttyS0 is both the kernel's own
+# console and ovmx_init's stdout, one wire; without
+# ovmx_boot_mute_kernel_console() (src/ovmx_init/ovmx_boot_linux.c, called
+# from bare_metal_init() before any kernel module loads) vms.ko/vmsfs.ko's
+# pr_info lifecycle lines -- "vms: initializing VMS kernel module",
+# "vms: disk unit DKA0: -> vda (253:0)", the kernel's own module-taint
+# warning, etc. -- interleaved directly with the VMS boot banner. These two
+# checks assert the SPECIFIC shapes the operator saw, independent of the
+# curated noise list tests/qemu/test_job_control_console.sh already checks:
+# a general kernel-timestamp prefix, and a general vms:/vmsfs: raw prefix
+# (the exact shape opcom_kmsg_classify() recognizes as an OVMX kernel-module
+# record -- see src/ovmx_init/opcom_kmsg.c -- which belongs in
+# SYS$MANAGER:OPERATOR.LOG, never verbatim on the console).
+if printf '%s\n' "$CLEAN" | grep -qE '\[[[:space:]]*[0-9]+\.[0-9]+\]'; then
+    bad "a kernel-timestamped line (e.g. '[   41.332690]') reached the console -- raw dmesg leak (vms-300)"
+else
+    pass "no kernel-timestamped '[ NNN.NNN]' line on the console (vms-300)"
+fi
+if printf '%s\n' "$CLEAN" | grep -qE '^vms: |^vmsfs: '; then
+    bad "a raw 'vms:'/'vmsfs:' kernel-module line reached the console verbatim -- must be OPERATOR.LOG-only via the kmsg bridge (vms-300)"
+else
+    pass "no raw 'vms:'/'vmsfs:' kernel-module line on the console (vms-300)"
+fi
+# OPERATOR.LOG-routing side of the fix (that muting the console console did
+# NOT also starve SYS$MANAGER:OPERATOR.LOG of these same records): NOT
+# reasserted here. This file boots straight to the login prompt and never
+# logs in or runs DCL (see this file's own header: "a SEQUENCE test, not a
+# full boot-to-login proof"), so it has no in-guest way to TYPE the log. That
+# side is covered elsewhere and left alone, not weakened: opcom_kmsg_classify()
+# unit tests (tests/ovmx_init/test_opcom_kmsg.c) prove vms:/vmsfs: and SYSKRNL
+# records route to OPCOM_KMSG_OPERATOR_LOG rather than being dropped, and
+# ovmx_boot_mute_kernel_console() only ever touches the console sink -- never
+# /dev/kmsg, the ring buffer opcom_kmsg.c's reader thread polls -- so the
+# routing path this test cannot reach is structurally unaffected by this fix.
 
 # --- (e) no empty-username "Username:" prompt storm (vms-3ab8) ----------------
 # The 0.4 demo boot showed ~20 "Username:" prompts machine-gunned onto ONE

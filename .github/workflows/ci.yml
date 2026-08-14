@@ -59,6 +59,7 @@ jobs:
       exec_netbsd_vax: ${{ steps.decide.outputs.exec_netbsd_vax }}
       aarch64_boot: ${{ steps.decide.outputs.aarch64_boot }}
       compat_surface: ${{ steps.decide.outputs.compat_surface }}
+      libcrypto: ${{ steps.decide.outputs.libcrypto }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -94,6 +95,9 @@ jobs:
               - 'third-party/tcc/**'
               - 'tools/**'
               - 'distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/BUILD.COM'
+            libcrypto:
+              - '.github/workflows/**'
+              - 'third-party/libcrypto/**'
             kernel:
               - '.github/workflows/**'
               - 'src/kernel/**'
@@ -238,6 +242,7 @@ jobs:
               echo "exec_netbsd_vax=${{ steps.filter.outputs.exec_netbsd_vax }}"
               echo "aarch64_boot=${{ steps.filter.outputs.aarch64_boot }}"
               echo "compat_surface=${{ steps.filter.outputs.compat_surface }}"
+              echo "libcrypto=${{ steps.filter.outputs.libcrypto }}"
             } >> "$GITHUB_OUTPUT"
           else
             {
@@ -253,6 +258,7 @@ jobs:
               echo "exec_netbsd_vax=true"
               echo "aarch64_boot=true"
               echo "compat_surface=true"
+              echo "libcrypto=true"
             } >> "$GITHUB_OUTPUT"
           fi
   # -----------------------------------------------------------------------
@@ -3921,6 +3927,41 @@ jobs:
               apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
               export CC=gcc WORK=/tmp/login-native LOGIN_EXPECT_LINK=1
               sh /src/src/imgact/test/run_login_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # libcrypto-static-musl — OpenSSH port prereq P-C (bead vms-2e8, parent
+  # vms-843, docs/design-openssh-port-ovmx.md §3.1). Fetches the SHA256-pinned
+  # LibreSSL tarball (see third-party/libcrypto/VENDOR-REV), cross-builds a
+  # STATIC libcrypto.a against musl in the same alpine:3.20 (musl) container the
+  # link-native / OVMX_STATIC path uses, then statically links + runs the
+  # hello-crypto probe and asserts its SHA-256 + bignum known-answers. This is
+  # the crypto FOUNDATION the OpenSSH clients (vms-22a) and the sshd swap
+  # (vms-0cd) link against for the bootable image — INDEPENDENT of the post-1.0
+  # OpenSSL-as-OVMX-image (vms-4fa). LibreSSL chosen over OpenSSL because it
+  # cross-builds static-musl clean with no patches (evaluation in VENDOR-REV).
+  # Everything builds out-of-tree to /tmp — no host install, no repo writes.
+  # -----------------------------------------------------------------------
+  libcrypto-static-musl:
+    name: Static libcrypto (musl) — hello-crypto probe
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.libcrypto == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch pinned LibreSSL, build static libcrypto.a (musl), run hello-crypto KAT
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev make perl curl file binutils >/dev/null
+              export CC=gcc WORK=/tmp/ovmx-libcrypto
+              sh /src/third-party/libcrypto/test/run_hello_crypto.sh
             '
 
   # -----------------------------------------------------------------------

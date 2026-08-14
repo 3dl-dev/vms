@@ -308,6 +308,21 @@ int main(void)
         CHECK(0, "SHOW DEVICE OPA0: could not be run");
     }
 
+    /* ---- 1b. SHOW DEVICE lists the NIC face ETH0: (vms-9d2, epic vms-67f L0).
+     * The guest has one virtio-net NIC (run_tests.sh); the executive enters
+     * ETH0: from it via the generic netdev abstraction, so SHOW DEVICE -- a pure
+     * reader of that table -- lists it beside OPA0:, and SHOW DEVICE ETH0:
+     * resolves the name through the executive. On a node with no NIC there would
+     * be no ETH0: row and SHOW DEVICE ETH0: would print the oracle's NOSUCHDEV;
+     * the name is keyed on VMS_NIC_DEVNAM in src/kernel-core/vms_devtab.c. */
+    if (run_dcl("SHOW DEVICE ETH0:", out, sizeof(out)) == 0) {
+        show_capture("SHOW DEVICE ETH0:", out);
+        CHECK(strstr(out, "ETH0:") != NULL && strstr(out, "NOSUCHDEV") == NULL,
+              "SHOW DEVICE ETH0: resolves the NIC name through the executive and prints its row");
+    } else {
+        CHECK(0, "SHOW DEVICE ETH0: could not be run");
+    }
+
     /* ---- 2. A SECOND PROCESS allocates the console ------------------- */
     /*
      * Two pipes, not one. `report` carries the child's verdict up; `stop`

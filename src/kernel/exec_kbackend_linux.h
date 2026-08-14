@@ -55,6 +55,11 @@
 #include <linux/uidgid.h>         /* from_kuid, from_kgid, init_user_ns */
 #include <linux/blkdev.h>         /* lookup_bdev (resolve /dev/vdX to a dev_t) */
 #include <linux/kdev_t.h>         /* MAJOR / MINOR */
+/* vms-9d2 (primary Ethernet net device -> ETH0:) backing headers. */
+#include <linux/netdevice.h>      /* struct net_device, for_each_netdev, netif_carrier_ok */
+#include <linux/rtnetlink.h>      /* rtnl_lock / rtnl_unlock */
+#include <net/net_namespace.h>    /* init_net */
+#include <linux/if_arp.h>         /* ARPHRD_ETHER */
 /* vms-d61 (seqlock barriers + userspace-publishable arena) backing headers. */
 #include <linux/vmalloc.h>        /* vmalloc_user / vfree (exec_arena_*) */
 #include <asm/barrier.h>          /* smp_wmb / smp_rmb (exec_membar_*) */
@@ -293,6 +298,43 @@ static inline int exec_blockdev_lookup(const char *path, exec_dev_t *out)
 }
 static inline unsigned int exec_blockdev_major(exec_dev_t dev) { return MAJOR(dev); }
 static inline unsigned int exec_blockdev_minor(exec_dev_t dev) { return MINOR(dev); }
+
+/* ---- 11. primary Ethernet net device (vms-9d2; see exec_kbackend.h) ----
+ * NIC-agnostic: walk the host's net devices through the GENERIC netdev API and
+ * return the first non-loopback Ethernet controller, naming no driver. This is
+ * the exact primitive set the block seam uses, one layer over: for_each_netdev
+ * enumerates init_net's devices under rtnl_lock (a mutex -- safe from the
+ * module-init process context the device table probes from), IFF_LOOPBACK and
+ * ARPHRD_ETHER classify without touching any driver-private state, and
+ * netif_carrier_ok reads the generic link state. No code is copied from the
+ * Linux source (Rule 8); these are all public, documented kernel APIs. */
+static inline int exec_netdev_primary(char *name, unsigned int namesz, int *link_up)
+{
+	struct net_device *dev;
+	int found = -1;
+
+	rtnl_lock();
+	for_each_netdev(&init_net, dev) {
+		if (dev->flags & IFF_LOOPBACK)
+			continue;
+		if (dev->type != ARPHRD_ETHER)
+			continue;
+		if (name && namesz) {
+			/* Bounded, self-contained copy (no strscpy dependency in this
+			 * header): dev->name is a NUL-terminated IFNAMSIZ string. */
+			unsigned int i;
+			for (i = 0; i + 1 < namesz && dev->name[i]; i++)
+				name[i] = dev->name[i];
+			name[i] = '\0';
+		}
+		if (link_up)
+			*link_up = netif_carrier_ok(dev) ? 1 : 0;
+		found = 0;
+		break;
+	}
+	rtnl_unlock();
+	return found;
+}
 
 /* ---- 9. store/load memory barriers (vms-d61; see exec_kbackend.h) ----
  * Trivial forwarders to the exact barriers the logical-name seqlock used

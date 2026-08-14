@@ -51,6 +51,7 @@
  */
 #define DC__TERM        6   /* DC$_TERM */
 #define DC__DISK        1   /* DC$_DISK */
+#define DC__SCOM        3   /* DC$_SCOM -- serial-communications / LAN class */
 
 /*
  * Device type codes: 0 is "Unknown".
@@ -309,6 +310,108 @@ static void vms_devtab_probe_disks(void)
     }
 }
 
+/*
+ * The NIC as a VMS device (vms-9d2, epic vms-67f L0 -- the device face the
+ * TCP/IP and DECnet stacks layer over; design docs/design-tcpip-services-ovmx.md
+ * §4 "L0 NIC as VMS device").
+ *
+ * THE VMS-VISIBLE NAME IS ONE CONSTANT, ON PURPOSE (operator, 2026-08-14). The
+ * name the executive enters this unit under is defined HERE and nowhere else:
+ * the device is BORN in this table, and SHOW DEVICE / $ASSIGN / $GETDVI are all
+ * readers that operate on whatever name the table holds, never on a literal of
+ * their own. So the naming decision is a one-line change to VMS_NIC_DEVNAM
+ * below; nothing downstream re-encodes the name. The tests that query it carry a
+ * matching constant pointing back here.
+ *
+ * NAMING RULING -- device-native-naming (operator 2026-08-14). OVMX device
+ * names TRACK THE NATIVE KERNEL device name of the substrate, not the VMS
+ * driver-letter convention (so this is NOT presented as VMS-authentic -- Rule
+ * 8, an OVMX design choice, labelled). On the Linux substrate the primary
+ * Ethernet net device roots at "eth", so the VMS-visible name is ETH0:: the
+ * native "eth" root, unit 0, rendered colon-terminated VMS-style. (This
+ * supersedes the VMS "EWn:"/"EZn:" LAN-controller naming the design's §4 first
+ * proposed.) The constant is FIXED to ETH0: rather than derived per-interface:
+ * the actual host interface (which may be eth0 or a predictable-naming
+ * enp0s1) is recorded privately in dev->netif and is never the VMS name --
+ * ETH0: is the stable native-rooted face regardless.
+ *
+ * PROVENANCE for the remaining attributes (CLAUDE.md Rule 8, published-doc-
+ * derived; flagged for operator sign-off per the vms-purity-guardrail rule --
+ * these are constants):
+ *
+ *   - Device class DC$_SCOM (serial-communications device). OpenVMS LAN/Ethernet
+ *     controllers (EWA0:, XQA0:, ...) report DVI$_DEVCLASS = DC$_SCOM -- the
+ *     device class name is always DC$_SCOM for a LAN device (VSI OpenVMS I/O
+ *     User's Reference Manual, LAN drivers; VSI LAN Devices, Counters, and
+ *     Functions Reference). The "network device" wording SHOW DEVICE prints is
+ *     the DEV$M_NET *characteristic* bit, not the class. DC__SCOM's numeric
+ *     value mirrors src/libvms/include/dcdef.h, as the class constants above do.
+ *
+ *   - Device type Unknown (0). This unit is NIC-agnostic -- it fronts whatever
+ *     the host's primary Ethernet net device is (virtio-net, e1000, a real NIC),
+ *     so there is no single VMS device type (DEQNA/DE435/...) that is honestly
+ *     true of it. Unknown is what is true, not a placeholder (same reasoning as
+ *     the console's device type above).
+ *
+ *   - shareable = 1. A LAN controller is a SHAREABLE device on VMS: many users
+ *     and protocols $ASSIGN the same controller concurrently through the
+ *     template-device mechanism (OpenVMS I/O User's Reference Manual, LAN
+ *     drivers; the DEV$M_SHR characteristic). This is the FIRST shareable device
+ *     in the table, so -- exactly as the console's shareable=0 comment in
+ *     vms_devtab_init() says the first shareable device must -- test_kmod_devtab
+ *     now asserts the shareable side of the ownership rule against it: a channel
+ *     to ETH0: confers NO ownership (owner stays unowned), the property measured
+ *     on NLA0: (docs/oracle/vax73-terminal-device.md §7). CAVEAT, disclosed: the
+ *     shareable bit itself is taken from the published LAN-driver docs, not from
+ *     an OVMX oracle capture of SHOW DEVICE/FULL on a LAN device.
+ */
+#define VMS_NIC_DEVNAM  "ETH0:"   /* device-native-naming (operator 2026-08-14) */
+
+static void vms_devtab_probe_nic(void)
+{
+    char ifname[VMS_NETIF_SIZE];
+    int link_up = 0;
+    struct vms_device *nic;
+
+    /*
+     * Ask the host, through the GENERIC netdev seam, for its primary non-loopback
+     * Ethernet net device (exec_netdev_primary, exec_kbackend.h §11). A nonzero
+     * return is the honest "this node has no NIC" case: the executive enters NO
+     * ETH0: unit, so SHOW DEVICE has no ETH0: row and $ASSIGN ETH0: is
+     * SS$_NOSUCHDEV -- never a fake device for a NIC that is not there (INV-6).
+     * The interface NAME is the executive's private record (INV-4): it decides
+     * WHICH real device ETH0: fronts and is never surfaced to a VMS program.
+     */
+    ifname[0] = '\0';
+    if (exec_netdev_primary(ifname, sizeof(ifname), &link_up) != 0) {
+        pr_info("vms: no primary Ethernet net device; %s not created\n",
+                VMS_NIC_DEVNAM);
+        return;
+    }
+
+    nic = vms_devtab_create(VMS_NIC_DEVNAM, DC__SCOM, VMS_DT_UNKNOWN,
+                            1 /* shareable -- a LAN controller is shared */,
+                            0 /* devchar */, 0 /* width */, 0 /* page */);
+    if (!nic) {
+        pr_warn("vms: out of memory creating Ethernet unit %s (%s)\n",
+                VMS_NIC_DEVNAM, ifname);
+        return;
+    }
+
+    /*
+     * Record the backing interface under dev->lock for form (nothing else runs
+     * yet -- this is module init, before /dev/vms exists), keeping the write
+     * paired with any future reader that takes the lock.
+     */
+    exec_lock(&nic->lock);
+    strscpy(nic->netif, ifname, sizeof(nic->netif));
+    nic->link_up = link_up ? 1u : 0u;
+    exec_unlock(&nic->lock);
+
+    pr_info("vms: ethernet unit %s -> %s (carrier %s)\n",
+            VMS_NIC_DEVNAM, ifname, link_up ? "up" : "down");
+}
+
 int vms_devtab_init(void)
 {
     struct vms_device *console;
@@ -349,6 +452,16 @@ int vms_devtab_init(void)
      * -- they exist in the executive's I/O database before /dev/vms does.
      */
     vms_devtab_probe_disks();
+
+    /*
+     * Enter the node's primary Ethernet controller as ETH0: the same way (vms-9d2,
+     * epic vms-67f L0). Sourced through the generic netdev abstraction so it is
+     * NIC-agnostic; if the node has no Ethernet net device, none is entered --
+     * SHOW DEVICE ETH0: then has nothing and $ASSIGN ETH0: is SS$_NOSUCHDEV, the
+     * honest "no NIC" state (INV-6). Like the disks and the console, it exists in
+     * the I/O database before /dev/vms does; no process introduces it.
+     */
+    vms_devtab_probe_nic();
 
     pr_info("vms: device table initialized, console terminal %s created\n",
             VMS_CONSOLE_DEVNAM);

@@ -52,9 +52,23 @@
 #define SS_DEVNOTALLOC  2136
 
 #define DC_TERM         6
+#define DC_SCOM         3       /* DC$_SCOM -- LAN/Ethernet device class */
 
 #define CONSOLE         "OPA0:"
 #define ABSENT_DEV      "ZZA0:"
+
+/*
+ * The VMS-visible name of the NIC device face (vms-9d2). ONE constant, matching
+ * the single source of truth in src/kernel-core/vms_devtab.c (VMS_NIC_DEVNAM):
+ * ETH0: per device-native-naming (operator 2026-08-14) -- OVMX device names
+ * track the substrate's native kernel device name, so the Linux "eth" root
+ * renders as ETH0:. Any later name change is a one-line edit there and here.
+ * NIC_ABSENT is a plausible SECOND Ethernet unit that must NOT exist -- the
+ * executive registers exactly ONE unit for the ONE primary net device, never a
+ * fake for every nameable controller (INV-6).
+ */
+#define NIC_DEV         "ETH0:"
+#define NIC_ABSENT      "ETH1:"
 
 /* What process A changes the console to, so B can look for it. */
 #define A_WIDTH         64
@@ -251,6 +265,81 @@ int main(int argc, char **argv)
     CHECK(status == SS_NOMOREDEV, "device scan terminates with SS$_NOMOREDEV");
     /* negctl-knockon: devtab-devscan-found-status-wrong */
     CHECK(saw_console, "device scan lists the console terminal");
+
+    /* --------------------------------------------------------------
+     * 2b. The NIC as a VMS device ETH0: (vms-9d2, epic vms-67f L0).
+     *
+     *     Like the console and the disks, ETH0: is entered by the
+     *     executive at module init from the node's primary Ethernet net
+     *     device -- sourced through the generic netdev abstraction, so it
+     *     is the SAME executive-owned table this process reads, not a
+     *     per-process fiction. The QEMU harness gives the guest one
+     *     virtio-net NIC (run_tests.sh), which the driver-agnostic probe
+     *     enumerates; on a node with no NIC the executive enters no ETH0:
+     *     and these lookups would honestly report SS$_NOSUCHDEV.
+     * -------------------------------------------------------------- */
+    memset(&info, 0, sizeof(info));
+    status = vms_kif_getdvi_devnam(NIC_DEV, &info);
+    CHECK(status == SS_NORMAL,
+          "NIC ETH0: exists without any process creating it (entered from the host's primary Ethernet net device)");
+    CHECK(strcmp(info.devnam, NIC_DEV) == 0, "ETH0: reports its VMS physical name");
+    CHECK(info.devclass == DC_SCOM, "ETH0: is a LAN-class device (DC$_SCOM)");
+    CHECK(info.owner_pid == 0, "ETH0: starts unowned");
+
+    /* The executive registers exactly ONE unit for the ONE primary net
+     * device -- a second, plausible Ethernet name is NOT invented. This
+     * is the INV-6 line: no fake device for a NIC that is not there. */
+    memset(&info, 0, sizeof(info));
+    status = vms_kif_getdvi_devnam(NIC_ABSENT, &info);
+    CHECK(status == SS_NOSUCHDEV,
+          "a second Ethernet unit ETH1: does NOT exist -- no fabricated NIC (INV-6)");
+
+    /* ETH0: is enumerated by the same scan as the console. */
+    {
+        uint32_t nidx = 0, saw_nic = 0;
+        for (;;) {
+            memset(&info, 0, sizeof(info));
+            status = vms_kif_devscan(&nidx, &info);
+            if (status != SS_NORMAL)
+                break;
+            if (strcmp(info.devnam, NIC_DEV) == 0) {
+                saw_nic = 1;
+                CHECK(info.devclass == DC_SCOM,
+                      "device scan reports ETH0: with the LAN class (DC$_SCOM)");
+            }
+            if (nidx > 64)
+                break;
+        }
+        CHECK(saw_nic, "device scan lists the NIC ETH0:");
+    }
+
+    /* $ASSIGN ETH0: succeeds and -- because a LAN controller is a
+     * SHAREABLE device -- a bare channel confers NO ownership. This is
+     * the shareable side of the ownership rule the console's shareable=0
+     * comment said the first shareable device owes the suite (measured on
+     * NLA0:, docs/oracle/vax73-terminal-device.md §7): OPA0: above took an
+     * owner on $ASSIGN; ETH0: must not. Read back BY NAME, i.e. from the
+     * executive's table, not from this process's channel. */
+    {
+        uint32_t nic_chan = 0;
+        status = vms_kif_assign(NIC_DEV, &nic_chan);
+        CHECK(status == SS_NORMAL && nic_chan != 0,
+              "$ASSIGN ETH0: succeeds (a program can take a channel to the NIC)");
+
+        memset(&info, 0, sizeof(info));
+        status = vms_kif_getdvi_devnam(NIC_DEV, &info);
+        CHECK(status == SS_NORMAL && info.owner_pid == 0,
+              "a channel to the shareable ETH0: confers NO ownership (owner stays unowned)");
+
+        /* $GETDVI through the assigned channel resolves to the same row. */
+        memset(&info, 0, sizeof(info));
+        status = vms_kif_getdvi_chan(nic_chan, &info);
+        CHECK(status == SS_NORMAL && info.devclass == DC_SCOM &&
+              strcmp(info.devnam, NIC_DEV) == 0,
+              "$GETDVI on the ETH0: channel returns the LAN device row");
+
+        vms_kif_dassgn(nic_chan);
+    }
 
     /* --------------------------------------------------------------
      * 3. A-writes / B-reads. A different process assigns the console,

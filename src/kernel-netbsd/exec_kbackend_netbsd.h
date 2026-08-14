@@ -482,6 +482,33 @@ exec_blockdev_lookup(const char *path, exec_dev_t *out)
 static __inline unsigned int exec_blockdev_major(exec_dev_t dev) { return (unsigned int)major(dev); }
 static __inline unsigned int exec_blockdev_minor(exec_dev_t dev) { return (unsigned int)minor(dev); }
 
+/* ---- 11. primary Ethernet net device (vms-9d2; see exec_kbackend.h) ----
+ *
+ * COMPILE STATUS, and why this side is a contract-only twin (the exec_blockdev
+ * precedent above). The device table (vms_devtab.c), the ONLY caller, is NOT in
+ * this module's SRCS yet, so this is type-checked at most and never run on
+ * NetBSD. The REAL NetBSD binding is the generic ifnet list: IFNET_LOCK() /
+ * IFNET_READER_FOREACH(ifp) over the interface list, skipping ifp->if_type ==
+ * IFT_LOOP and requiring IFT_ETHER, copying ifp->if_xname and reading the link
+ * state through if_link_state (LINK_STATE_UP) -- the exact NetBSD twins of
+ * Linux for_each_netdev / ARPHRD_ETHER / netif_carrier_ok, and just as
+ * driver-agnostic. Binding that -- and registering ETH0: on NetBSD -- is the
+ * devtab-on-NetBSD proof's concern (a later item, following exec_blockdev).
+ * Until then this is a compile-safe documented stub that touches no ifnet
+ * internals and reports "no such device", naming its real source here. It is
+ * never on a live path (INV-6 / Rule 11: it fabricates nothing). */
+static __inline int
+exec_netdev_primary(char *name, unsigned int namesz, int *link_up)
+{
+	/* vms-9d2: bind to IFNET_READER_FOREACH(ifp) filtered on IFT_ETHER on the
+	 * NetBSD devtab proof (rd, later). Never reached today (devtab is
+	 * Linux-built). */
+	(void)name;
+	(void)namesz;
+	(void)link_up;
+	return -1;   /* no such device */
+}
+
 /* ---- 9. store/load memory barriers (vms-d61; see exec_kbackend.h) ----
  * Real mapping: membar_producer/membar_consumer are the portable NetBSD
  * store-store / load-load barriers (membar_ops(3), <sys/atomic.h> included

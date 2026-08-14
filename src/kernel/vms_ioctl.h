@@ -548,6 +548,17 @@ struct vms_register_args {
 #define VMS_BACKING_SIZE 16
 
 /*
+ * Size of the BACKING host network-interface name (e.g. "eth0", "enp0s1") the
+ * executive records for the Ethernet unit ETH0: (vms-9d2), NUL included.
+ * Long enough for a Linux IFNAMSIZ (16) name. Like VMS_BACKING_SIZE this is an
+ * OVMX construct with no VMS counterpart -- a VMS device is not "backed by" a
+ * host interface -- so it is an OVMX design choice (CLAUDE.md Rule 8), and it is
+ * NEVER surfaced to a VMS program (INV-4): it is the executive's private record
+ * of which real, driver-agnostic net device this unit was enumerated from.
+ */
+#define VMS_NETIF_SIZE 16
+
+/*
  * Terminal characteristics.
  *
  * PROVENANCE (CLAUDE.md rules 8 and 10): the NAMES below and the fact

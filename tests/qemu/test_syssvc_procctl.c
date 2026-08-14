@@ -197,8 +197,20 @@ static int wait_for_notstate(uint32_t pid, char notwant)
     return -1;
 }
 
-/* wait_for_exec - poll until the subject has actually exec'd its image, so
- * the target is genuinely running before a test tries to control it. */
+/* wait_for_exec - bounded poll (an OBSERVED condition, never a fixed sleep)
+ * until the subject has actually exec'd through to its STABLE hold image, so
+ * the target is genuinely running before a test tries to control it.
+ *
+ * The hold child's comm passes through two exec's: $CREPRC exec's SUBJECT_IMAGE
+ * (/bin/sh -> comm "sh"), then the hold script's `exec sleep` REPLACES the shell
+ * (-> comm "sleep"). "sh" is therefore a TRANSIENT intermediate that a slow
+ * (congested TCG/QEMU) runner has already blown past by the time this poll runs,
+ * while "sleep" is the stable state the child holds for HOLD_SECS. So `want` must
+ * be the FINAL image ("sleep"): polling for the transient "sh" races the runner
+ * speed and times out on a slow one; polling for the stable "sleep" is
+ * deterministic on any runner -- once reached it persists far past the deadline.
+ * Returns 0 once the child is observed at `want`, -1 on timeout (a real failure
+ * to reach the hold image, never a fabricated pass). */
 static int wait_for_exec(uint32_t pid, const char *want)
 {
     char comm[64];
@@ -313,7 +325,7 @@ int main(void)
         CHECK(susp_vms != susp_lpid && susp_vms >= 0x10000000u,
               "P1: the target's VMS pid differs from its Linux pid and is "
               "above every possible Linux pid ($CREPRC namespace gap)");
-        CHECK(wait_for_exec(susp_lpid, "sh") == 0,
+        CHECK(wait_for_exec(susp_lpid, "sleep") == 0,
               "P1: the target has actually exec'd its image");
         char st0 = 0;
         CHECK(proc_state(susp_lpid, &st0) == 0 && st0 != 'T',
@@ -343,7 +355,7 @@ int main(void)
         lpid = linux_pid_of(vms_pid);
         CHECK(lpid != 0, "P3: the target resolves to a real Linux pid");
         track_hold(lpid);
-        CHECK(wait_for_exec(lpid, "sh") == 0,
+        CHECK(wait_for_exec(lpid, "sleep") == 0,
               "P3: the target has actually exec'd its image");
 
         uint32_t fst = sys$forcex(&vms_pid, NULL, 0);
@@ -368,7 +380,7 @@ int main(void)
         lpid = linux_pid_of(vms_pid);
         CHECK(lpid != 0, "P4: the target resolves to a real Linux pid");
         track_hold(lpid);
-        CHECK(wait_for_exec(lpid, "sh") == 0,
+        CHECK(wait_for_exec(lpid, "sleep") == 0,
               "P4: the target has actually exec'd its image");
 
         struct dsc$descriptor_s nd = str_dsc(TGT_FX_NAME);
@@ -388,7 +400,7 @@ int main(void)
         lpid = linux_pid_of(vms_pid);
         CHECK(lpid != 0, "P5: the target resolves to a real Linux pid");
         track_hold(lpid);
-        CHECK(wait_for_exec(lpid, "sh") == 0,
+        CHECK(wait_for_exec(lpid, "sleep") == 0,
               "P5: the target has actually exec'd its image");
 
         uint32_t dst = sys$delprc(&vms_pid, NULL);

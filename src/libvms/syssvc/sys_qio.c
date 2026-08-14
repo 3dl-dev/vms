@@ -291,15 +291,27 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
  * socket API -- OVMX never reimplements TCP. The function map is the SRI-QIO /
  * INETDRIVER interface (docs/design-tcpip-services-ovmx.md §4 L2):
  *
- *   IO$_SETMODE / IO$_SETCHAR  -> create the socket
+ *   IO$_SETMODE / IO$_SETCHAR  -> create the socket, OR bind (P1 = sockaddr),
+ *                                 OR listen (P3 = backlog)      [server, vms-698]
  *   IO$_ACCESS                 -> connect to a peer (P1 = sockaddr, P2 = len)
+ *   IO$_ACCESS | IO$M_ACCEPT   -> accept an inbound conn onto a second BG
+ *                                 channel (P3 = that channel)   [server, vms-698]
  *   IO$_WRITEVBLK              -> send   (P1 = buffer, P2 = length)
  *   IO$_READVBLK               -> recv   (P1 = buffer, P2 = buffer size)
  *   IO$_DEACCESS               -> shutdown the connection
  *
- * A blocking send/recv that blocks in the executive is the faithful shape here
- * (the QIOW completes when the host kernel completes the socket op), the same
- * reasoning qio_mailbox_op gives for a blocking mailbox read.
+ * The SERVER verbs (vms-698) reuse IO$_SETMODE for bind/listen and
+ * IO$_ACCESS|IO$M_ACCEPT for accept exactly as the public SRI-QIO / INETDRIVER
+ * interface documents (docs/design-tcpip-services-ovmx.md §4 L2). Which SETMODE
+ * a call means is disambiguated by its parameters, so the vms-527 client's
+ * create call (P1 == NULL, P3 == 0) is unchanged:
+ *   - P1 != NULL  -> bind to *P1 (and read the effective local addr back)
+ *   - P1 == NULL, P3 != 0 -> listen with backlog P3
+ *   - P1 == NULL, P3 == 0 -> create the socket (client path)
+ *
+ * A blocking send/recv/accept that blocks in the executive is the faithful
+ * shape here (the QIOW completes when the host kernel completes the socket op),
+ * the same reasoning qio_mailbox_op gives for a blocking mailbox read.
  */
 struct bg_sockaddr_in {
     uint16_t family;    /* AF_INET */
@@ -308,7 +320,7 @@ struct bg_sockaddr_in {
 };
 
 static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
-                          void *p1, uint32_t p2, uint32_t efn,
+                          void *p1, uint32_t p2, uint32_t p3, uint32_t efn,
                           void (*astadr)(uint32_t), uint32_t astprm) {
     struct _iosb *iosb = (struct _iosb *)iosb_ptr;
     uint32_t exec_chan = vms$$chan_exec_chan(chan);
@@ -319,11 +331,51 @@ static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
     switch (base_func) {
         case IO$_SETMODE:
         case IO$_SETCHAR:
-            /* Create the socket on the channel (AF_INET/SOCK_STREAM). */
-            st = vms_kif_bg_setmode(exec_chan);
+            if (p1) {
+                /* bind (server, vms-698). P1 = local sockaddr; the effective
+                 * local port/addr are written BACK into P1 so a port-0 bind
+                 * learns its ephemeral port. */
+                struct bg_sockaddr_in *sa;
+                uint16_t eff_port = 0;
+                uint32_t eff_addr = 0;
+                if (p2 < sizeof(struct bg_sockaddr_in)) { st = SS$_BADPARAM; break; }
+                sa = (struct bg_sockaddr_in *)p1;
+                st = vms_kif_bg_bind(exec_chan, sa->family, sa->port, sa->addr,
+                                     &eff_port, &eff_addr);
+                if (st & 1) {
+                    sa->port = eff_port;
+                    sa->addr = eff_addr;
+                }
+            } else if (p3) {
+                /* listen (server, vms-698). P3 = backlog. */
+                st = vms_kif_bg_listen(exec_chan, p3);
+            } else {
+                /* Create the socket on the channel (AF_INET/SOCK_STREAM). */
+                st = vms_kif_bg_setmode(exec_chan);
+            }
             break;
 
         case IO$_ACCESS:
+            if (func & IO$M_ACCEPT) {
+                /* accept (server, vms-698). P3 = the SECOND BG channel (a
+                 * freshly-$ASSIGNed BG channel with no socket) onto which the
+                 * inbound connection is installed; P1 (optional) = a
+                 * bg_sockaddr_in to receive the peer address. */
+                uint16_t acc_chan = (uint16_t)p3;
+                uint32_t acc_exec_chan;
+                uint16_t pf = 0, pp = 0;
+                uint32_t pa = 0;
+                if (!vms$$chan_is_bg(acc_chan)) { st = SS$_IVCHAN; break; }
+                acc_exec_chan = vms$$chan_exec_chan(acc_chan);
+                st = vms_kif_bg_accept(exec_chan, acc_exec_chan, &pf, &pp, &pa);
+                if ((st & 1) && p1 && p2 >= sizeof(struct bg_sockaddr_in)) {
+                    struct bg_sockaddr_in *sa = (struct bg_sockaddr_in *)p1;
+                    sa->family = pf;
+                    sa->port = pp;
+                    sa->addr = pa;
+                }
+                break;
+            }
             /* Connect. P1 = sockaddr (family/port/addr), P2 = its length. */
             if (!p1 || p2 < sizeof(struct bg_sockaddr_in)) {
                 st = SS$_BADPARAM;
@@ -498,7 +550,7 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
         return qio_mailbox_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
 
     if (vms$$chan_is_bg(chan))
-        return qio_bg_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
+        return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
 
     int fd, is_read;
     uint32_t status = qio_validate_and_classify(chan, func, iosb_ptr, p1,
@@ -538,7 +590,7 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
         return qio_mailbox_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
 
     if (vms$$chan_is_bg(chan))
-        return qio_bg_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
+        return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
 
     int fd, is_read;
     uint32_t status = qio_validate_and_classify(chan, func, iosb_ptr, p1,

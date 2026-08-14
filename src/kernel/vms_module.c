@@ -842,6 +842,12 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_bg_setmode(proc, arg);
     case VMS_IOCTL_BG_CONNECT:
         return vms_ioctl_bg_connect(proc, arg);
+    case VMS_IOCTL_BG_BIND:
+        return vms_ioctl_bg_bind(proc, arg);
+    case VMS_IOCTL_BG_LISTEN:
+        return vms_ioctl_bg_listen(proc, arg);
+    case VMS_IOCTL_BG_ACCEPT:
+        return vms_ioctl_bg_accept(proc, arg);
     case VMS_IOCTL_BG_SEND:
         return vms_ioctl_bg_send(proc, arg);
     case VMS_IOCTL_BG_RECV:

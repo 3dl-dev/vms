@@ -710,6 +710,20 @@ uint32_t vms_kif_bg_setmode(uint32_t exec_chan);
 /* IO$_ACCESS -- connect to a peer (sockaddr_in fields, network byte order). */
 uint32_t vms_kif_bg_connect(uint32_t exec_chan, uint16_t family,
                             uint16_t port, uint32_t addr);
+/* SERVER PATH (vms-698). IO$_SETMODE (bind) -- bind to a local address; the
+ * EFFECTIVE local port and addr are read back through the out_port / out_addr
+ * pointers (host getsockname) so a port-0 bind learns its ephemeral port. */
+uint32_t vms_kif_bg_bind(uint32_t exec_chan, uint16_t family,
+                         uint16_t port, uint32_t addr,
+                         uint16_t *out_port, uint32_t *out_addr);
+/* IO$_SETMODE (listen) -- put the bound socket into the LISTEN state. */
+uint32_t vms_kif_bg_listen(uint32_t exec_chan, uint32_t backlog);
+/* IO$_ACCESS|IO$M_ACCEPT (accept) -- block until an inbound connection arrives
+ * on the listening channel and install it onto accept_exec_chan (a second BG
+ * channel with no socket). Peer address returned through the *out_ pointers. */
+uint32_t vms_kif_bg_accept(uint32_t listen_exec_chan, uint32_t accept_exec_chan,
+                           uint16_t *out_family, uint16_t *out_port,
+                           uint32_t *out_addr);
 /* IO$_WRITEVBLK -- send one buffer; *actlen gets the bytes sent. */
 uint32_t vms_kif_bg_send(uint32_t exec_chan, const void *buf, uint32_t len,
                          uint32_t *actlen);

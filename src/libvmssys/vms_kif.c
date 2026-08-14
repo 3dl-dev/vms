@@ -1914,6 +1914,69 @@ uint32_t vms_kif_bg_connect(uint32_t exec_chan, uint16_t family,
     return args.status;
 }
 
+uint32_t vms_kif_bg_bind(uint32_t exec_chan, uint16_t family,
+                         uint16_t port, uint32_t addr,
+                         uint16_t *out_port, uint32_t *out_addr)
+{
+    struct vms_bg_bind_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.sin_family = family;
+    args.sin_port = port;   /* network byte order, caller's responsibility */
+    args.sin_addr = addr;   /* network byte order */
+
+    KIF_CALL(VMS_IOCTL_BG_BIND, &args);
+
+    if (args.status & 1) {
+        if (out_port) *out_port = args.sin_port;  /* effective (getsockname) */
+        if (out_addr) *out_addr = args.sin_addr;
+    }
+    return args.status;
+}
+
+uint32_t vms_kif_bg_listen(uint32_t exec_chan, uint32_t backlog)
+{
+    struct vms_bg_listen_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.backlog = backlog;
+
+    KIF_CALL(VMS_IOCTL_BG_LISTEN, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_bg_accept(uint32_t listen_exec_chan, uint32_t accept_exec_chan,
+                           uint16_t *out_family, uint16_t *out_port,
+                           uint32_t *out_addr)
+{
+    struct vms_bg_accept_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.listen_chan = listen_exec_chan;
+    args.accept_chan = accept_exec_chan;
+
+    KIF_CALL(VMS_IOCTL_BG_ACCEPT, &args);
+
+    if (args.status & 1) {
+        if (out_family) *out_family = args.sin_family;
+        if (out_port) *out_port = args.sin_port;
+        if (out_addr) *out_addr = args.sin_addr;
+    }
+    return args.status;
+}
+
 uint32_t vms_kif_bg_send(uint32_t exec_chan, const void *buf, uint32_t len,
                          uint32_t *actlen)
 {

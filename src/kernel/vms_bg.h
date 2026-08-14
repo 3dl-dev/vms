@@ -141,6 +141,61 @@ struct vms_bg_pollfd_args {
     uint32_t status;        /* out */
 };
 
+/*
+ * SERVER PATH (vms-698). The client half above (create/setmode/connect/send/
+ * recv/deaccess) was vms-527; this adds the inbound half -- bind / listen /
+ * accept -- so a VMS program can be a TCP SERVER. Same executive-resident model
+ * (the socket lives in vms.ko over the host in-kernel socket API); same $ASSIGN
+ * + $QIO surface. The QIO-function mapping is doc-derived (docs/design-tcpip-
+ * services-ovmx.md §4 L2, the SRI-QIO / INETDRIVER interface): IO$_SETMODE /
+ * IO$_SETCHAR carry bind + listen, IO$_ACCESS|IO$M_ACCEPT is accept.
+ */
+
+/*
+ * IO$_SETMODE (bind): bind the channel's socket to a LOCAL address, then read
+ * the EFFECTIVE local address back (host getsockname) INTO THE SAME FIELDS, so
+ * a caller that bound port 0 learns the ephemeral port the host kernel chose.
+ * Same eight-byte sockaddr_in shape as vms_bg_connect_args, network byte order.
+ */
+struct vms_bg_bind_args {
+    uint32_t chan;          /* in */
+    uint32_t status;        /* out */
+    uint16_t sin_family;    /* in: AF_INET (2); out: effective family */
+    uint16_t sin_port;      /* in: network byte order (0 = ephemeral);
+                             * out: the EFFECTIVE bound port, network order */
+    uint32_t sin_addr;      /* in/out: network byte order (e.g. 127.0.0.1) */
+};
+
+/*
+ * IO$_SETMODE (listen): put the channel's bound socket into the LISTEN state
+ * with a connection backlog. A separate shape from the chan-only args because
+ * it carries the backlog.
+ */
+struct vms_bg_listen_args {
+    uint32_t chan;          /* in */
+    uint32_t backlog;       /* in: listen backlog (>= 1; clamped to a cap) */
+    uint32_t status;        /* out */
+    uint32_t pad;
+};
+
+/*
+ * IO$_ACCESS|IO$M_ACCEPT (accept): block until an inbound connection arrives on
+ * the LISTENING channel, then install the accepted socket onto a SECOND,
+ * freshly-$ASSIGNed BG channel (accept_chan) that has no socket of its own --
+ * the executive-resident analogue of the mailbox handing a queued message off
+ * to another channel (a socket-for-message handoff). The peer address is
+ * returned (host getpeername). Both channels belong to the SAME process.
+ */
+struct vms_bg_accept_args {
+    uint32_t listen_chan;   /* in: the listening channel */
+    uint32_t accept_chan;   /* in: a second BG channel to receive the conn */
+    uint32_t status;        /* out */
+    uint16_t sin_family;    /* out: peer family */
+    uint16_t sin_port;      /* out: peer port, network byte order */
+    uint32_t sin_addr;      /* out: peer addr, network byte order */
+    uint32_t pad;
+};
+
 #define VMS_IOCTL_BG_CREATE   _IOWR(VMS_IOC_MAGIC, 0x80, struct vms_bg_create_args)
 #define VMS_IOCTL_BG_SETMODE  _IOWR(VMS_IOC_MAGIC, 0x81, struct vms_bg_chanonly_args)
 #define VMS_IOCTL_BG_CONNECT  _IOWR(VMS_IOC_MAGIC, 0x82, struct vms_bg_connect_args)
@@ -149,6 +204,12 @@ struct vms_bg_pollfd_args {
 #define VMS_IOCTL_BG_DEACCESS _IOWR(VMS_IOC_MAGIC, 0x85, struct vms_bg_chanonly_args)
 #define VMS_IOCTL_BG_DASSGN   _IOWR(VMS_IOC_MAGIC, 0x86, struct vms_bg_chanonly_args)
 #define VMS_IOCTL_BG_POLLFD   _IOWR(VMS_IOC_MAGIC, 0x87, struct vms_bg_pollfd_args)
+/* SERVER PATH (vms-698) -- bind / listen / accept, appended after the client
+ * range AND after POLLFD (0x87, vms-22a/#566, landed first) so no existing
+ * request number moves. */
+#define VMS_IOCTL_BG_BIND     _IOWR(VMS_IOC_MAGIC, 0x88, struct vms_bg_bind_args)
+#define VMS_IOCTL_BG_LISTEN   _IOWR(VMS_IOC_MAGIC, 0x89, struct vms_bg_listen_args)
+#define VMS_IOCTL_BG_ACCEPT   _IOWR(VMS_IOC_MAGIC, 0x8a, struct vms_bg_accept_args)
 
 /*
  * Freeze the shared layouts -- see vms_mbx.h's identical note for why this
@@ -166,5 +227,11 @@ _Static_assert(sizeof(struct vms_bg_io_args) == 16 + VMS_BG_IOCTL_MAXLEN,
                "vms_bg_io_args changed size -- VMS_IOCTL_BG_SEND/RECV ABI break");
 _Static_assert(sizeof(struct vms_bg_pollfd_args) == 12,
                "vms_bg_pollfd_args changed size -- VMS_IOCTL_BG_POLLFD ABI break");
+_Static_assert(sizeof(struct vms_bg_bind_args) == 16,
+               "vms_bg_bind_args changed size -- VMS_IOCTL_BG_BIND ABI break");
+_Static_assert(sizeof(struct vms_bg_listen_args) == 16,
+               "vms_bg_listen_args changed size -- VMS_IOCTL_BG_LISTEN ABI break");
+_Static_assert(sizeof(struct vms_bg_accept_args) == 24,
+               "vms_bg_accept_args changed size -- VMS_IOCTL_BG_ACCEPT ABI break");
 
 #endif /* _VMS_BG_H */

@@ -43,6 +43,15 @@
 #
 #   tests/lab-vax/run-boot.sh              # build all, assemble, PROVE
 #   tests/lab-vax/run-boot.sh negctl       # teeth: boot without the ODS-2 volume
+#
+# vms-d9c (parent vms-d59) adds two more modes that reuse the SAME assembled
+# boot-work disk but attach a MASTERED OVMX SYSTEM volume (the five cross-built
+# boot images + reused data/COM files + the Decision-A SYSTARTUP_VMS.COM,
+# mastered by tools/vmsfs_master.c) instead of the small test ODS-2 volume:
+#   tests/lab-vax/run-boot.sh sysboot         # boot PAST the installed-system
+#                                             # gate to the PROVISION.EXE exec
+#   tests/lab-vax/run-boot.sh sysboot-negctl  # teeth: flat volume (no DCL.EXE)
+#                                             # must halt the installed-system gate
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -62,6 +71,12 @@ SYSSRC_SHA512="${SYSSRC_SHA512:-766ac21f33cfe0e701dfedb894fa07f36d811da1a12e9791
 CACHE_DIR="${CACHE_DIR:-${REPO}/.boot-cache/lab-vax}"
 ARTIFACTS_DIR="${CACHE_DIR}/boot-artifacts"      # STARTUP.EXE + vms.kmod + vmsfs.kmod + netbsd-OVMX
 ODS2_IMG="${ODS2_IMG:-${CACHE_DIR}/ovmx-ods2-vax.img}"
+# vms-d9c: the MASTERED OVMX system volume + the flat dir of the five boot .EXE
+# images it carries (built by build-boot-images-vax.sh, staged by
+# stage_sysvol.sh, mastered by tools/vmsfs_master.c). Used only by the sysboot
+# modes; the prove/negctl modes use the small test ODS2_IMG above unchanged.
+SYSVOL_IMG="${SYSVOL_IMG:-${CACHE_DIR}/ovmx-sysvol-vax.img}"
+SYSVOL_IMAGES_DIR="${SYSVOL_IMAGES_DIR:-${CACHE_DIR}/sysvol-images}"
 KBUILD_DIR="${KBUILD_DIR:-${CACHE_DIR}/kbuild}"
 NBSRC_DIR="${NBSRC_DIR:-${KBUILD_DIR}/nbsrc}"
 KERNEL_MARKER="${CACHE_DIR}/.ovmx-modular-kernel-installed"   # SHARED with siblings
@@ -181,6 +196,57 @@ master_volume() {
   [ -f "${ODS2_IMG}" ] || die "ODS-2 mastering did not produce ${ODS2_IMG}"
 }
 
+# 3b (sysboot). Cross-build the FULL set of five boot images (DCL.EXE,
+#    PROVISION.EXE, LOGINOUT.EXE, JOB_CONTROL.EXE, STARTUP.EXE) for elf32-vax
+#    and collect them by name into SYSVOL_IMAGES_DIR. build-boot-images-vax.sh
+#    already builds + Decision-A-activation-asserts all five; here we just copy
+#    the delivered images up. Cached.
+build_boot_image_set() {
+  if [ "${FORCE_SYSVOL_BUILD:-0}" != "1" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/DCL.EXE" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/PROVISION.EXE" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/LOGINOUT.EXE" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/JOB_CONTROL.EXE" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/STARTUP.EXE" ]; then
+    log "boot image set present -- NOT rebuilding (set FORCE_SYSVOL_BUILD=1 to force)"; return 0; fi
+  mkdir -p "${SYSVOL_IMAGES_DIR}"
+  log "cross-building the full boot image set (STARTUP/PROVISION/DCL/JOB_CONTROL/LOGINOUT) for elf32-vax"
+  docker run --rm -v "${REPO}:/src" -w /src -v "${SYSVOL_IMAGES_DIR}:/out" \
+    --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      OUT_ROOT=/tmp/vax-boot-images sh tools/cross-vax/build-boot-images-vax.sh
+      cp /tmp/vax-boot-images/ovmx-init/STARTUP.EXE      /out/STARTUP.EXE
+      cp /tmp/vax-boot-images/provision/PROVISION.EXE    /out/PROVISION.EXE
+      cp /tmp/vax-boot-images/vmsdcl/DCL.EXE             /out/DCL.EXE
+      cp /tmp/vax-boot-images/job-control/JOB_CONTROL.EXE /out/JOB_CONTROL.EXE
+      cp /tmp/vax-boot-images/loginout/LOGINOUT.EXE      /out/LOGINOUT.EXE'
+  for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE; do
+    [ -f "${SYSVOL_IMAGES_DIR}/${img}" ] || die "boot image set missing ${img}"
+  done
+}
+
+# 3c (sysboot). Master the OVMX SYSTEM volume: build the host vmsfs_master, stage
+#    the rooted [SYS0.SYSCOMMON] tree (stage_sysvol.sh: the five vax images +
+#    reused data/COM files + the Decision-A SYSTARTUP_VMS.COM), and master a
+#    64 MB vmsfs volume. All inside CROSS_IMAGE's native cc (same "cc a host tool
+#    in the container" pattern as master_volume above -- nothing on the host).
+#    vmsfs is little-endian on disk, so a host-built vmsfs_master masters a
+#    vax-bootable volume directly.
+master_system_volume() {
+  if [ "${FORCE_SYSVOL_BUILD:-0}" != "1" ] && [ -f "${SYSVOL_IMG}" ]; then
+    log "mastered system volume present -- NOT re-mastering"; return 0; fi
+  log "mastering the OVMX/NetBSD-vax SYSTEM volume (vmsfs_master + stage_sysvol.sh)"
+  docker run --rm -v "${REPO}:/src:ro" -v "${SYSVOL_IMAGES_DIR}:/images:ro" \
+    -v "$(dirname "${SYSVOL_IMG}"):/out" --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+         -I /src/src/kernel/vmsfs -o /tmp/vmsfs_master /src/tools/vmsfs_master.c
+      bash /src/tests/lab-vax/stage_sysvol.sh /images /src /tmp/stage
+      /tmp/vmsfs_master master /out/'"$(basename "${SYSVOL_IMG}")"' OVMXSYS /tmp/stage 64
+      /tmp/vmsfs_master list /out/'"$(basename "${SYSVOL_IMG}")"
+  [ -f "${SYSVOL_IMG}" ] || die "system-volume mastering did not produce ${SYSVOL_IMG}"
+}
+
 # 4. ensure the shared NetBSD/vax disk (install once).
 ensure_disk() {
   if [ -f "${CACHE_DIR}/anita-work/wd0.img" ]; then
@@ -210,6 +276,7 @@ run_session() {
       -e NETBSD_VERSION="${NETBSD_VERSION}" -e "SETS=${SETS}" \
       -e OVMX_MODE="${ovmx_mode}" -e OVMX_ARTIFACTS=/artifacts -e OVMX_NETBSD_DIR=/netbsd \
       -e NETBSD_WORKDIR="${workdir}" -e OVMX_ODS2_IMG=/cache/"$(basename "${ODS2_IMG}")" \
+      -e OVMX_SYSVOL_IMG=/cache/"$(basename "${SYSVOL_IMG}")" \
       "$@" \
       -v "${CACHE_DIR}:/cache" -v "${ARTIFACTS_DIR}:/artifacts:ro" \
       -v "${REPO}/tests/netbsd:/netbsd:ro" -v "${REPO}/tests/lab-vax:/lab-vax:ro" \
@@ -277,5 +344,32 @@ case "${MODE}" in
     fi
     die "NEGATIVE CONTROL FAILED unexpectedly (see console output above)"
     ;;
-  *) die "unknown mode '${MODE}' (want: prove | negctl)" ;;
+  sysboot)
+    # vms-d9c: master the OVMX system volume and boot vms-7b1's disk with it,
+    # proving the boot passes the installed-system gate and reaches the
+    # SYS$SYSTEM:PROVISION.EXE exec.
+    build_boot_image_set
+    master_system_volume
+    if run_session sysboot /cache/boot-work; then
+      log "======================================================================"
+      log "  SYSBOOT PASSED: ovmx_init on NetBSD/vax mounted the MASTERED OVMX"
+      log "  ODS-2 SYSTEM volume, passed the installed-system gate, and reached"
+      log "  PID 1's exec of SYS\$SYSTEM:PROVISION.EXE (%STDRV-I-STARTUP)."
+      log "======================================================================"
+      exit 0
+    fi
+    die "SYSBOOT FAILED (see console output above)"
+    ;;
+  sysboot-negctl)
+    # Teeth: boot the SAME disk with the FLAT test volume (no SYS$SYSTEM:DCL.EXE)
+    # -- the installed-system gate must halt and %STDRV-I-STARTUP must NOT appear.
+    if run_session sysboot-negctl /cache/boot-work; then
+      log "PASS: sysboot negative control -- the flat volume (no DCL.EXE)"
+      log "      halted the installed-system gate and never reached STDRV"
+      log "      (the installed-system gate has teeth)"
+      exit 0
+    fi
+    die "SYSBOOT NEGATIVE CONTROL FAILED unexpectedly (see console output above)"
+    ;;
+  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl)" ;;
 esac

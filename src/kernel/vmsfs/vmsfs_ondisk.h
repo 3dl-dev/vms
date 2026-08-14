@@ -22,9 +22,20 @@
 #ifndef _VMSFS_ONDISK_H
 #define _VMSFS_ONDISK_H
 
-#ifdef __KERNEL__
+/*
+ * Fixed-width types (uint8/16/32/64_t) for the on-disk layout. This header is
+ * shared THREE ways -- the Linux vmsfs.ko, the NetBSD/BSD vnode module, and
+ * userspace tools (vmsfs_master) -- so the include must be portable across all
+ * three. __KERNEL__ is a LINUX-only macro; the NetBSD kernel-module build
+ * defines _KERNEL (never __KERNEL__), so a bare `#ifdef __KERNEL__ ... #else
+ * <stdint.h>' wrongly pulled userspace <stdint.h> into the -nostdinc BSD kernel
+ * build and broke it (INV-DRIFT). Branch on each kernel explicitly.
+ */
+#if defined(__KERNEL__)         /* Linux kernel */
 #include <linux/types.h>
-#else
+#elif defined(_KERNEL)          /* NetBSD / BSD kernel: fixed-width types, no libc */
+#include <sys/stdint.h>
+#else                           /* userspace */
 #include <stdint.h>
 #endif
 

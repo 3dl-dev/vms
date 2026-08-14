@@ -137,6 +137,32 @@
 #ifndef VMS_PRV_M_NETMBX
 #define VMS_PRV_M_NETMBX  (1ULL << 20)   /* create network device     (PRV$V_NETMBX) */
 #endif
+#ifndef VMS_PRV_V_MOUNT
+#define VMS_PRV_V_MOUNT   17             /* execute the MOUNT ACP function (PRV$V_MOUNT) */
+#endif
+#ifndef VMS_PRV_M_MOUNT
+#define VMS_PRV_M_MOUNT  (1ULL << VMS_PRV_V_MOUNT)
+#endif
+
+/*
+ * VMS_PRV_M_ENFORCED (rd vms-72da) -- the privilege mask a PRIVILEGED process is
+ * seeded with, BYTE-IDENTICAL to src/kernel/vms_ioctl.h. It MUST include SYSNAM:
+ * the executive gates LNM$SYSTEM DEFINE/DELETE on SYSNAM|SYSPRV (vms_lnm.c
+ * lnm_priv_check), and PID 1 (ovmx_init) seeds SYS$SYSTEM / SYS$SYSROOT /
+ * SYS$SYSDEVICE through lnm_setup_defaults BEFORE any $SETIDENT, so a privileged
+ * proc must ALREADY hold SYSNAM or the boot's system logicals never get created.
+ * The netbsd proc seed previously hand-listed only CMKRNL|CMEXEC|SETPRV, omitting
+ * SYSNAM -- so SYS$SYSTEM never resolved on netbsd and the vax boot halted at
+ * %OVMX-F-EXECINIT. Component bits: CMKRNL/CMEXEC/SETPRV (vms_access_nb.h), WORLD
+ * (vms_proctab_nb.h), SYSNAM/GRPNAM (vms_lnm_nb.h), MOUNT (above) -- all in scope
+ * here, since vms_internal.h includes those twins above.
+ */
+#ifndef VMS_PRV_M_ENFORCED
+#define VMS_PRV_M_ENFORCED  (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | \
+                             VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD | \
+                             VMS_PRV_M_SYSNAM | VMS_PRV_M_GRPNAM | \
+                             VMS_PRV_M_MOUNT)
+#endif
 /* The privileges EVERY VMS process holds by default (TMPMBX + NETMBX), matching
  * src/kernel/vms_internal.h's VMS_DEFAULT_PRIVS. A fresh OVMX process must be
  * seeded with these on BOTH substrates or a default-privilege operation the

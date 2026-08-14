@@ -48,6 +48,9 @@ third-party source (CLAUDE.md Rule 8).
 """
 
 import re
+import time
+
+import pexpect
 
 try:
     import secrets
@@ -69,10 +72,22 @@ class NetBSDConsole(object):
     /bin/sh with a UNIQUE prompt, then run() for each command.
     """
 
+    # How long each expect() slice waits for a command's marker-or-prompt before
+    # re-checking. The wait is sliced (not one blocking expect for the whole
+    # budget) so a LOST marker -- detected by the idle prompt reappearing without
+    # the marker -- is recovered in one slice instead of stalling the full budget.
+    _MARKER_SLICE = 120
+
     def __init__(self, child, logfn=None):
         self.child = child
         self._log = logfn or (lambda _m: None)
         self.prompt_re = None      # set by set_unique_prompt(); None until login
+        # NB: do NOT set child.searchwindowsize here. login_root_sh() matches the
+        # NON-unique default `# ' prompt several times; bounding the search window
+        # can make pexpect match a DIFFERENT `# ' than the buffer's first when the
+        # boot motd is large, desynchronising the whole login handshake. The
+        # lossy-serial robustness lives in run()/_await_marker instead, which key
+        # on the UNIQUE end marker + unique prompt and so are safe to bound.
 
     # ---- boot / login ---------------------------------------------------
     def wait_for_login(self, boot_deadline):
@@ -143,49 +158,132 @@ class NetBSDConsole(object):
         self.child.expect(self.prompt_re)              # sync onto the new prompt
 
     # ---- command execution ----------------------------------------------
-    def run(self, cmd, timeout=300, echo=True):
+    def run(self, cmd, timeout=300, echo=True, retriable=True):
         """Run one /bin/sh command; return (exit_status, output_text).
 
         Precondition: the shell is at the idle unique prompt (guaranteed by
         login_root_sh(), or by the previous run()'s trailing prompt resync). We
-        send the command plus a UNIQUE end marker carrying $?, expect exactly that
-        marker (so the reply is unambiguously this command's), then RESYNC to the
-        idle prompt -- draining the marker line's tail so the next command is,
-        again, only ever sent into an idle shell.
+        send the command plus a UNIQUE end marker carrying $?, wait for exactly
+        that marker (so the reply is unambiguously this command's), then RESYNC to
+        the idle prompt.
+
+        LOSSY-SERIAL RECOVERY (rd vms-f8a). Under TCG the emulated serial console
+        intermittently drops output: a command runs to completion but its
+        `echo <marker>=$?=' line never reaches pexpect, and a plain
+        expect(marker, timeout) then stalls for the WHOLE budget on a marker that
+        will never arrive (observed: a fast, idempotent module-absent negctl probe
+        hanging 1200s in cold CI). _await_marker() distinguishes the two cases by
+        watching for the idle prompt: if the prompt reappears WITHOUT the marker,
+        the command finished but its marker line was lost, so -- for an idempotent
+        command -- we re-issue it (bounded attempts) instead of hanging. This is
+        NOT a timeout bump: a genuinely slow guest, which keeps the prompt
+        withheld, still gets the full `timeout'. A backgrounding command is NEVER
+        re-issued (that would spawn a duplicate job); pass retriable=False for any
+        other non-idempotent command (e.g. modload).
         """
         if self.prompt_re is None:
             raise RuntimeError("login_root_sh()/set_unique_prompt() not called")
-        mk = "OVMXm-%s" % _nonce(8)
-        # A command ending in a bare `&' backgrounds a job -- `&' is ALREADY a
-        # statement separator in /bin/sh, so appending `; echo ...' after it is
-        # a syntax error (empty command between `&' and `;': NetBSD's ash
-        # rejects it outright, "Syntax error: \";\" unexpected", which silently
-        # drops the whole line and starves the driver of its end marker until
-        # pexpect times out -- looks exactly like a hung guest, isn't one).
-        # `& echo ...' (no `;') is valid: it launches the background job, then
-        # runs `echo $?=' as the next statement on the same line, reporting the
-        # shell's exit status for STARTING the job (the caller wants the launch
-        # to have succeeded, not the async job's eventual completion status).
-        if cmd.rstrip().endswith("&"):
-            self.child.sendline("%s echo %s=$?=" % (cmd, mk))
-        else:
-            self.child.sendline("%s; echo %s=$?=" % (cmd, mk))
-        self.child.expect(r"%s=(\d+)=" % re.escape(mk), timeout=timeout)
-        rc = int(self.child.match.group(1))
-        out = self.child.before
-        # Resync to the idle prompt. Generous but bounded: draining a marker line
-        # is trivial even on a slow guest, but give it room under TCG.
-        self.child.expect(self.prompt_re, timeout=min(timeout, 120))
-        if isinstance(out, bytes):
-            out = out.decode("ascii", "ignore")
-        out = out.replace("\r", "")
-        if echo:
-            self._log("$ %s   -> exit %d" % (cmd, rc))
-            text = out.strip()
-            if text:
-                for line in text.splitlines():
-                    print("    | %s" % line, flush=True)
-        return rc, out
+        # A backgrounding command (trailing `&', or a ` & ' launch followed by a
+        # bookkeeping statement) must not be blindly re-issued.
+        is_bg = cmd.rstrip().endswith("&") or " & " in cmd
+        attempts = 1 if (is_bg or not retriable) else 3
+        for attempt in range(attempts):
+            mk = "OVMXm-%s" % _nonce(8)
+            # A command ending in a bare `&' backgrounds a job -- `&' is ALREADY a
+            # statement separator in /bin/sh, so appending `; echo ...' after it is
+            # a syntax error (empty command between `&' and `;': NetBSD's ash
+            # rejects it outright, "Syntax error: \";\" unexpected", which silently
+            # drops the whole line and starves the driver of its end marker until
+            # pexpect times out -- looks exactly like a hung guest, isn't one).
+            # `& echo ...' (no `;') is valid: it launches the background job, then
+            # runs `echo $?=' as the next statement on the same line, reporting the
+            # shell's exit status for STARTING the job (the caller wants the launch
+            # to have succeeded, not the async job's eventual completion status).
+            if cmd.rstrip().endswith("&"):
+                self.child.sendline("%s echo %s=$?=" % (cmd, mk))
+            else:
+                self.child.sendline("%s; echo %s=$?=" % (cmd, mk))
+
+            rc = self._await_marker(mk, timeout)
+            if rc is not None:
+                out = self.child.before
+                # Resync to the idle prompt (tolerant of a dropped prompt: we
+                # already have rc, so a lost trailing prompt just needs a fresh
+                # one nudged, not the whole command re-run).
+                self._resync_prompt(min(timeout, 120))
+                if isinstance(out, bytes):
+                    out = out.decode("ascii", "ignore")
+                out = out.replace("\r", "")
+                if echo:
+                    tail = "" if attempt == 0 else \
+                        "   (recovered after %d lost marker(s))" % attempt
+                    self._log("$ %s   -> exit %d%s" % (cmd, rc, tail))
+                    text = out.strip()
+                    if text:
+                        for line in text.splitlines():
+                            print("    | %s" % line, flush=True)
+                return rc, out
+
+            # rc is None: the command completed but its end marker was lost to a
+            # serial desync and we are back at an idle prompt. Re-issue (idempotent
+            # commands only; loop guard above already excludes bg/non-retriable).
+            if attempt + 1 < attempts:
+                self._log("  (console: end marker for `%s' lost to a serial "
+                          "desync; shell is idle -- re-issuing, attempt %d/%d)"
+                          % (cmd, attempt + 2, attempts))
+
+        raise pexpect.TIMEOUT(
+            "end marker never returned for `%s' after %d attempt(s) "
+            "(retriable=%s, is_bg=%s)" % (cmd, attempts, retriable, is_bg))
+
+    def _resync_prompt(self, timeout):
+        """Wait for the idle unique prompt after a command's marker was seen.
+
+        Tolerant of a serial desync that drops the trailing prompt: since the
+        exit status is already in hand, a lost prompt just needs a fresh one
+        nudged (a bare newline into the idle shell) rather than the command
+        re-run. The unique prompt cannot be forged by command output, so a nudge
+        is unambiguous.
+        """
+        try:
+            self.child.expect(self.prompt_re, timeout=timeout)
+            return
+        except pexpect.TIMEOUT:
+            pass
+        for _ in range(3):
+            self.child.sendline("")
+            try:
+                self.child.expect(self.prompt_re, timeout=20)
+                return
+            except pexpect.TIMEOUT:
+                continue
+        raise pexpect.TIMEOUT("idle prompt never resynced after a command")
+
+    def _await_marker(self, mk, total_timeout):
+        """Wait up to total_timeout for THIS command's end marker.
+
+        Returns the int exit status once the marker is seen. Returns None if the
+        idle prompt appears WITHOUT the marker first -- i.e. the command finished
+        but its `echo <marker>=$?=' output was dropped by a transient serial
+        desync -- so the caller may re-issue an idempotent command rather than
+        burn the whole budget. A still-running (slow) guest withholds the prompt,
+        so we keep waiting, sliced, up to total_timeout. The marker always prints
+        BEFORE the prompt, so in the normal case idx==0 wins.
+        """
+        marker_re = r"%s=(\d+)=" % re.escape(mk)
+        deadline = time.time() + total_timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return None
+            idx = self.child.expect(
+                [marker_re, self.prompt_re, pexpect.TIMEOUT],
+                timeout=min(remaining, self._MARKER_SLICE))
+            if idx == 0:
+                return int(self.child.match.group(1))
+            if idx == 1:
+                return None            # idle prompt, no marker -> marker was lost
+            # idx == 2: neither yet -> command still running; keep waiting.
 
     def expect_prompt(self, timeout=120):
         """Wait for the idle unique prompt (used to resync after an ad-hoc

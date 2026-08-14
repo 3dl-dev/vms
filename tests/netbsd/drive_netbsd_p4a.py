@@ -148,9 +148,9 @@ def build_source_iso(guest_src_dir, out_iso):
     log("source ISO built: %s (%d bytes)" % (out_iso, os.path.getsize(out_iso)))
 
 
-def run(child, cmd, timeout, echo=True):
+def run(child, cmd, timeout, echo=True, retriable=True):
     """Run one /bin/sh command in the guest; return (exit_status, output)."""
-    return _console(child).run(cmd, timeout, echo)
+    return _console(child).run(cmd, timeout, echo, retriable)
 
 
 def login(child, cmd_timeout):
@@ -349,7 +349,7 @@ def main():
                       "test -n \"$MAJ\" && "
                       "mknod /dev/vms c $MAJ 0 && chmod 666 /dev/vms && "
                       "ls -l /dev/vms && test -c /dev/vms",
-                      cmd_timeout)
+                      cmd_timeout, retriable=False)   # modload is not idempotent
         if rc != 0:
             log("FAIL: could not load the module / create /dev/vms")
             return 14

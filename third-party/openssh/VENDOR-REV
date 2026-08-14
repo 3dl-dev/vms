@@ -61,48 +61,42 @@ product ever lands in the repo (shared-host rule / "ALL deps containerized").
 
   build-openssh.sh          fetch (SHA256-verified) + build the ssh client
                             static against musl + the vendored libcrypto
-                            (third-party/libcrypto). Optional OVMX transport
-                            substitution (OVMX_BG_TRANSPORT=1, §below).
-  ovmx/ovmx_bg_transport.h  OVMX port layer: route the ssh transport over the
-  ovmx/ovmx_bg_transport.c  executive BGn: INET device (public $ASSIGN/$QIO),
-                            NOT a raw socket(). Mirrors
-                            src/vmstcpip/services/tcpip_client.h (vms-527).
-  ovmx/sshconnect-bg.patch  the minimal, localized edit to the vendored
-                            sshconnect.c (ssh_connect_direct) that calls the
-                            shim, guarded by -DOVMX_BG_TRANSPORT.
+                            (third-party/libcrypto).
   test/run_ssh_build.sh     acceptance: build static ssh; assert it is fully
-                            static + prints its version; then compile-check the
-                            transport shim against the real OVMX headers and the
-                            patched sshconnect.c against the shim. CI job:
+                            static + prints its version. CI job:
                             openssh-static-musl.
 
 --------------------------------------------------------------------------------
-THE OVMX TRANSPORT SUBSTITUTION (BGn:) — what is proven where
+THE OVMX TRANSPORT IS NOT HERE — ssh uses STANDARD BSD sockets over the veneer
 --------------------------------------------------------------------------------
-Stock OpenSSH opens its TCP connection with socket()/connect() in sshconnect.c
-and then drives KEX/auth/channel I/O as read()/write()/poll() on that fd. On
-OVMX a VMS program reaches TCP the ordinary VMS way: $ASSIGN TCPIP$DEVICE: +
-$QIO into the executive-resident BGn: socket (vms.ko, over the host kernel's
-in-kernel socket API) — there is NO userspace socket stack. ovmx_bg_connect()
-substitutes that path: it $ASSIGNs/$QIOs a BGn: connection and hands OpenSSH an
-ordinary pollable socketpair fd that pump threads bridge to the VMS channel, so
-the vendored packet layer is unchanged (design §2.3, the "BSD-socket veneer over
-BGn:"). If /dev/vms is absent, $ASSIGN returns SS$_NOSUCHDEV and the connect
-fails honestly (errno ENODEV) — never a raw-socket fallback (Rule 9 / INV-6).
+Correct layering (operator/conductor ruling 2026-08-14):
+
+  ssh  →  socket()/connect()  [STANDARD BSD sockets, UNCHANGED]
+        →  OVMX BSD-sockets RTL veneer over BGn:   (the DECC$SOCKET-equivalent)
+             →  $QIO to BGn:  →  vms.ko  →  host kernel TCP/IP  →  interface
+
+An application opens a socket to a remote IP:port and lets the stack route; it
+never touches the transport device. So ssh keeps its ordinary socket()/connect()
+and OVMX supplies those calls through a BSD-sockets veneer that translates them
+into the $QIO-to-BGn: ops (IO$_SETMODE create / IO$_ACCESS connect / IO$_READVBLK
+/ IO$_WRITEVBLK / IO$_DEACCESS) — exactly the ops src/vmstcpip/services/
+tcpip_client.h already shows. ssh must NOT mention BGn:/$QIO/TCPIP$DEVICE:.
+
+The veneer is a SEPARATE, foundational prerequisite (filed as its own item, the
+"BSD-sockets RTL veneer over BGn:"). This directory is ONLY the OpenSSH vendoring
++ static-build proof; ssh links the veneer and activates as the OVMX IMGACT image
+in the follow-on. The earlier "$QIO shim inside sshconnect.c" approach was WRONG
+(it made the app talk to the transport device) and has been discarded.
 
 Proven by CI (openssh-static-musl, this item):
-  1. OpenSSH 10.0p1 ssh cross-builds FULLY STATIC against musl + the vendored
-     LibreSSL libcrypto, zero source patches (--without-zlib --without-pam).
-  2. ovmx_bg_transport.c compiles clean (-Wall -Wextra) against the real OVMX
-     system-service headers (src/libvms/include).
-  3. The sshconnect-bg.patch applies to the pinned source and the patched TU
-     compiles with -DOVMX_BG_TRANSPORT, its object referencing ovmx_bg_connect
-     (the substitution is wired, not just present on disk).
+  OpenSSH 10.0p1 ssh cross-builds FULLY STATIC against musl + the vendored
+  LibreSSL libcrypto, zero source patches (--without-zlib --without-pam), and
+  `ssh -V` runs.
 
-Deferred to the QEMU Kernel-Executive proof (continuation, see the PR/design):
-  building ssh as the OVMX IMGACT image linked against libvms and proving a REAL
-  SSH key exchange + auth + remote command over BGn: against an in-guest loopback
-  sshd on a real /dev/vms (Rule 9), honest-skip (77) without the executive.
+Follow-on (rides on the veneer prerequisite): build ssh as the OVMX IMGACT image
+linked against the veneer; prove a REAL SSH key exchange + auth + remote command
+over the veneer/BGn: against an in-guest loopback sshd on a real /dev/vms (Rule 9),
+honest-skip (77) without the executive; then scp + sftp.
 
 --------------------------------------------------------------------------------
 Rule 8 / clean-room

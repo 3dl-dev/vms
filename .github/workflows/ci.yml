@@ -103,7 +103,6 @@ jobs:
               - '.github/workflows/**'
               - 'third-party/openssh/**'
               - 'third-party/libcrypto/**'
-              - 'src/libvms/include/**'
             kernel:
               - '.github/workflows/**'
               - 'src/kernel/**'
@@ -4169,22 +4168,21 @@ jobs:
             '
 
   # -----------------------------------------------------------------------
-  # openssh-static-musl — OpenSSH CLIENTS port, ssh increment (bead vms-22a,
-  # parent vms-843, docs/design-openssh-port-ovmx.md §2.3). Fetches the
+  # openssh-static-musl — OpenSSH CLIENTS port, ssh vendoring + static build
+  # (bead vms-22a, parent vms-843, docs/design-openssh-port-ovmx.md). Fetches the
   # SHA256-pinned OpenSSH-portable tarball (see third-party/openssh/VENDOR-REV),
   # cross-builds the `ssh` client FULLY STATIC against musl + the vendored
   # libcrypto (third-party/libcrypto) in the same alpine:3.20 (musl) container,
-  # then compile-checks the OVMX BGn: transport substitution: the shim TU against
-  # the real OVMX system-service headers, and the patched sshconnect.c with the
-  # OVMX branch active (its object must reference ovmx_bg_connect). This proves
-  # OpenSSH+LibreSSL+musl links and the transport substitution is wired; the full
-  # IMGACT-image link (against libvms) + the real-KEX QEMU proof over BGn: are the
-  # continuation. Everything builds out-of-tree to /tmp — no host install, no repo
-  # writes. Mirrors libcrypto-static-musl (this is a build probe, NOT a
-  # kernel-executive QEMU suite, so no facility_defects negctl anchor applies).
+  # and asserts `ssh -V` runs. This proves the make-or-break: OpenSSH+LibreSSL+
+  # musl links a static ssh. The OVMX transport is NOT here — ssh uses STANDARD
+  # BSD sockets, which OVMX supplies via the BSD-sockets RTL veneer over BGn: (a
+  # separate prerequisite); the app never speaks $QIO. Everything builds
+  # out-of-tree to /tmp — no host install, no repo writes. Mirrors
+  # libcrypto-static-musl (a build probe, NOT a kernel-executive QEMU suite, so
+  # no facility_defects negctl anchor applies).
   # -----------------------------------------------------------------------
   openssh-static-musl:
-    name: "Static ssh (musl) — OpenSSH client + BGn: transport substitution"
+    name: "Static ssh (musl) — OpenSSH client vendored build"
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.openssh == 'true' }}
     runs-on: ubuntu-latest
@@ -4194,13 +4192,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fetch pinned OpenSSH, build static ssh (musl + libcrypto), OVMX transport compile-check
+      - name: Fetch pinned OpenSSH, build static ssh (musl + libcrypto)
         run: |
           docker run --rm --platform linux/amd64 \
             -v "${{ github.workspace }}":/src -w /src \
             docker.io/library/alpine:3.20 sh -c '
               set -e
-              apk add --no-cache gcc musl-dev make perl curl file binutils linux-headers patch >/dev/null
+              apk add --no-cache gcc musl-dev make perl curl file binutils linux-headers >/dev/null
               export CC=gcc WORK=/tmp/ovmx-openssh
               sh /src/third-party/openssh/test/run_ssh_build.sh
             '

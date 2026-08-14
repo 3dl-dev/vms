@@ -163,21 +163,28 @@ vms_proc_get(pid_t pid)
 	 *     0 == PSL_C_KERNEL would be wrong, and zalloc gives 0).
 	 *   - the authorized/current privilege masks are DERIVED, not requested:
 	 *     exec_current_is_privileged() is the NetBSD kauth(9) twin of Linux
-	 *     capable(CAP_SYS_ADMIN) (a real credential read, not an asserted word),
-	 *     and a privileged caller is seeded exactly the privileges vms_access.c/
-	 *     vms_ast.c ENFORCE (CMKRNL/CMEXEC/SETPRV) so the access-mode proofs can
-	 *     exercise both the allow and deny paths; an unprivileged caller gets
-	 *     none. Broader SYSUAF privileges arrive later via $SETIDENT (proctab,
-	 *     P4-B), never conjured here. This seed is an OVMX glue choice (Rule 8),
-	 *     not a VMS-authentic value -- /dev/vms has no VMS counterpart.
+	 *     capable(CAP_SYS_ADMIN) (a real credential read, not an asserted word).
+	 *     EVERY process -- privileged or not -- gets VMS_DEFAULT_PRIVS
+	 *     (TMPMBX|NETMBX), the privileges every VMS process holds by default;
+	 *     this matches src/kernel/vms_module.c's seed EXACTLY (privileged:
+	 *     ENFORCED|DEFAULT, unprivileged: DEFAULT) and is what lets a
+	 *     default-privilege $CREMBX of a temporary mailbox succeed (rd vms-f8a:
+	 *     omitting DEFAULT here made the P4-A mbx proof's $CREMBX return
+	 *     SS$_NOPRIV once proctab stopped masking it). A privileged caller ALSO
+	 *     gets the access-mode privileges vms_access.c/vms_ast.c ENFORCE
+	 *     (CMKRNL/CMEXEC/SETPRV) so the access-mode proofs exercise both the
+	 *     allow and deny paths. Broader SYSUAF privileges arrive later via
+	 *     $SETIDENT (proctab, P4-B), never conjured here. This seed is an OVMX
+	 *     glue choice (Rule 8), not a VMS-authentic value.
 	 *   - each per-mode AST queue is enabled by default (Linux vms_module.c) with
 	 *     an empty (self-linked) pending ring and its own guard.
 	 *   - the hibernate cv + its paired lock back async AST delivery (vms-feb).
 	 */
 	np->current_mode = PSL_C_USER;
 	np->perm_privs = exec_current_is_privileged()
-	               ? (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | VMS_PRV_M_SETPRV)
-	               : 0;
+	               ? (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | VMS_PRV_M_SETPRV |
+	                  VMS_DEFAULT_PRIVS)
+	               : VMS_DEFAULT_PRIVS;
 	np->cur_privs = np->perm_privs;
 	exec_lock_init(&np->mode_lock);
 	{

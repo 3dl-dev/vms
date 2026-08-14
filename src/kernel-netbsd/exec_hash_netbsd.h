@@ -66,21 +66,47 @@ void exec_hash_del_rcu(exec_hash_node_t *n);
  * generic bucket walk (exec_hash_walk_init/next), the same technique
  * exec_list_netbsd.h uses. Placeholder shapes; vms-9dc fills the walker in .c.
  */
-#define exec_hash_for_each(name, bkt, obj, member) \
-	for ((bkt) = 0; (bkt) < (int)(sizeof(name) / sizeof((name)[0])); (bkt)++) \
-		for (exec_hash_node_t *_ehn = (name)[bkt].first; \
-		     _ehn && ((obj) = exec_hash_entry(_ehn, __typeof__(*(obj)), member), 1); \
-		     _ehn = _ehn->next)
-
-#define exec_hash_for_each_safe(name, bkt, tmp, obj, member) \
-	for ((bkt) = 0; (bkt) < (int)(sizeof(name) / sizeof((name)[0])); (bkt)++) \
-		for (exec_hash_node_t *_ehn = (name)[bkt].first; \
-		     _ehn && ((tmp) = _ehn->next, \
-			      (obj) = exec_hash_entry(_ehn, __typeof__(*(obj)), member), 1); \
-		     _ehn = (tmp))
-
 #define exec_hash_entry(ptr, type, member) \
 	((type *)((char *)(ptr) - offsetof(type, member)))
+
+/* NULL-safe container_of: maps a NULL node to a NULL element so an exhausted
+ * bucket leaves the loop cursor NULL (the sentinel the outer walk keys on). */
+#define exec_hash_entry_safe(ptr, type, member) \
+	((ptr) ? exec_hash_entry(ptr, type, member) : NULL)
+
+/*
+ * FAITHFUL to Linux hash_for_each's break/return semantics (rd vms-f8a). Linux's
+ * hash_for_each guards its OUTER bucket loop with `obj == NULL', so a `break' in
+ * the body -- which leaves `obj' set to the matched element -- terminates the
+ * WHOLE walk, not just the current bucket's chain. The shared core relies on this
+ * (vms_ioctl_procscan breaks at the ordinal it wants; vms_proc_reap_dead breaks
+ * on the first dead entry it will reap). A naive nested double-`for' (two
+ * independent loops) would make `break' escape only the INNER chain loop and let
+ * the OUTER bucket loop keep scanning later buckets -- silently visiting past the
+ * intended stop (the P4-A proctab bug: $PROCESS_SCAN's positional `target' was
+ * overwritten by a later bucket's entry, so it returned the wrong row and never
+ * enumerated a live, $SETPRN-named process). Match Linux exactly: the inner
+ * chain loop drives `obj' (NULL at chain end via exec_hash_entry_safe) and the
+ * outer loop advances buckets only while `obj == NULL'.
+ */
+#define exec_hash_for_each(name, bkt, obj, member) \
+	for ((bkt) = 0, (obj) = NULL; \
+	     (obj) == NULL && (bkt) < (int)(sizeof(name) / sizeof((name)[0])); \
+	     (bkt)++) \
+		for ((obj) = exec_hash_entry_safe((name)[bkt].first, \
+						  __typeof__(*(obj)), member); \
+		     (obj) != NULL; \
+		     (obj) = exec_hash_entry_safe((obj)->member.next, \
+						  __typeof__(*(obj)), member))
+
+#define exec_hash_for_each_safe(name, bkt, tmp, obj, member) \
+	for ((bkt) = 0, (obj) = NULL; \
+	     (obj) == NULL && (bkt) < (int)(sizeof(name) / sizeof((name)[0])); \
+	     (bkt)++) \
+		for ((obj) = exec_hash_entry_safe((name)[bkt].first, \
+						  __typeof__(*(obj)), member); \
+		     (obj) != NULL && ((tmp) = (obj)->member.next, 1); \
+		     (obj) = exec_hash_entry_safe((tmp), __typeof__(*(obj)), member))
 
 /*
  * PHASE G ADDITIONS (rd vms-84a) -- CONTRACT ONLY, NOT YET COMPILED. The lock

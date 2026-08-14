@@ -77,6 +77,36 @@ check_output "OPEN nonexistent" "$output"
 output=$(echo "RENAME NONEXISTENT_FILE.TXT NEWNAME.TXT" | $VMSDCL 2>&1)
 check_output "RENAME nonexistent" "$output"
 
+# Test 11: SHOW DEVICE must not surface the host Linux mount table (vms-b9f).
+#
+# The original vms-b9f leak walked /proc/mounts and presented each Linux
+# mount as a VMS disk: invented "$1$DGAn:" names, "Mounted" status, and the
+# mount-point basename (or the truncated kernel version) as the Volume Label
+# -- e.g. "5.15.167.4-MICR" (5.15.167.4-microsoft-standard-WSL2), "DRIVERS"
+# (/usr/lib/wsl/drivers), "BINFMT_MISC" (/proc/sys/fs/binfmt_misc). vms-fb9
+# rewrote SHOW DEVICE to READ the executive device table instead, so with no
+# /dev/vms here it prints nothing at all. This probe re-arms that fix: it can
+# only go red if the /proc/mounts fabricator returns, and the fabricator
+# needs no executive -- so it WOULD produce rows in exactly this environment.
+#
+# None of the leak tells below are Unix paths, so the generic UNIX_PATTERNS
+# above cannot catch them; they are matched explicitly. All are
+# format-independent of the current oracle-pinned 3-column listing (which,
+# with no executive, is never emitted here anyway):
+#   - the 7-column mount-derived header ("Error  Volume" / "Blocks Count Cnt")
+#   - invented "$1$DGAn:" unit names derived from mount points
+#   - a "NAME: Mounted" device row printed with no executive present
+#   - host-mount volume-label tells: a kernel-version-shaped label, and the
+#     WSL / binfmt_misc mount basenames the real capture showed
+HOST_MOUNT_TELLS='(Error +Volume|Blocks +Count +Cnt|\$1\$DGA[0-9]|^[A-Z0-9$_]+: +Mounted|[0-9]+\.[0-9]+\.[0-9]+.*(microsoft|MICR|WSL)|binfmt_misc|BINFMT_MISC|/usr/lib/wsl)'
+output=$(echo "SHOW DEVICE" | $VMSDCL 2>&1)
+check_output "SHOW DEVICE (generic)" "$output"
+if echo "$output" | grep -qE "$HOST_MOUNT_TELLS"; then
+    echo "  LEAK in SHOW DEVICE: host mount table surfaced as VMS devices"
+    echo "$output" | grep -E "$HOST_MOUNT_TELLS" | head -3 | sed 's/^/    /'
+    LEAKS_FOUND=$((LEAKS_FOUND + 1))
+fi
+
 if [ $LEAKS_FOUND -gt 0 ]; then
     echo "UNIX_LEAK_DETECTED: $LEAKS_FOUND command(s) leaked Unix paths/errors"
     echo "LEAK_CHECK_COMPLETE ($LEAKS_FOUND leaks found)"

@@ -1,0 +1,130 @@
+name: Ledger drift gates
+
+# INV-LEDGER (vms-8465): one authoritative source per surface; every derived view
+# is machine-generated, never hand-authored. This workflow enforces that.
+#
+# THE DESIGN ASYMMETRY (read before editing -- do NOT "simplify" it away):
+#   * COMPAT is repo-local. docs/compat/*.yaml is the source; render_compat.py
+#     regenerates docs/compatibility-surface.md. A PR that hand-edits the md, or
+#     edits a yaml without regenerating, is CLEANLY caught by `--check` (it diffs
+#     the committed md against a regen at the committed date). So compat is a
+#     BLOCKING per-PR gate. This is the clean, high-value half.
+#   * ROADMAP derives from LIVE rd, which is NOT in the repo and mutates
+#     continuously (other sessions close items every hour). Running
+#     `reconcile.py --check` per-PR would regenerate from CURRENT rd and red on
+#     drift the PR author never caused -- it would red EVERY innocent PR. So the
+#     per-PR roadmap gate is the WEAK, rd-free check_roadmap_block.py (marker /
+#     structural integrity + releases-match-git-tags, all repo-local). The live-rd
+#     reconcile runs OUT of per-PR CI: the conductor's checkpoint (vms-8747) and
+#     the `regen` job below (which needs rd on PATH, absent on GitHub runners).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'tools/compat/**'
+      - 'tools/roadmap/**'
+      - 'tools/ledger/**'
+      - '**/*.md'
+      - '.github/workflows/ledger.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'tools/compat/**'
+      - 'tools/roadmap/**'
+      - 'tools/ledger/**'
+      - '**/*.md'
+      - '.github/workflows/ledger.yml'
+  merge_group:
+  # Scheduled + manual: the ONLY place the live-rd roadmap regen can run (needs
+  # `rd` on PATH -- absent on GitHub-hosted runners, so it self-skips there).
+  workflow_dispatch:
+  schedule:
+    - cron: '41 6 * * *'  # daily 06:41 UTC, before the 07:17 main CI sweep
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ledger-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Per-PR / push / merge_group BLOCKING drift gate. Repo-local, no rd, no
+  # false-reds on live-rd drift.
+  # ---------------------------------------------------------------------------
+  drift-gate:
+    name: Ledger drift gate (compat + roadmap block + no-new-hand-copies)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history so `git tag` is present for the releases check)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install PyYAML (render_compat.py source parser)
+        run: python3 -m pip install --user pyyaml
+
+      - name: COMPAT drift gate -- yaml is source, md is generated
+        run: python3 tools/compat/render_compat.py --check
+
+      - name: ROADMAP block gate -- marker integrity + releases match git tags
+        run: python3 tools/ledger/check_roadmap_block.py
+
+      - name: NO-NEW-HAND-COPIES -- forbid a second, hand-kept ledger
+        run: python3 tools/ledger/no_new_hand_copies.py
+
+  # ---------------------------------------------------------------------------
+  # Scheduled/manual live-rd roadmap regen. Keeps the GENERATED block + compat md
+  # current WITHOUT blaming per-PR authors. Needs `rd` (and the CEK epoch) on the
+  # runner; GitHub-hosted runners have neither, so this SELF-SKIPS there (exit 0,
+  # never red). It runs for real where rd lives: a self-hosted runner, or when
+  # the conductor triggers it via `gh workflow run ledger.yml` from a machine
+  # with rd. When it finds drift it opens a PR (reviewable) rather than pushing
+  # to main -- the roadmap doc is in-repo, but a PR keeps the human in the loop.
+  # ---------------------------------------------------------------------------
+  regen:
+    name: Roadmap/compat regen from live rd (rd-gated; self-skips without rd)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Regenerate derived views from live rd (self-skip if rd is absent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! command -v rd >/dev/null 2>&1; then
+            echo "rd not on PATH -- this runner cannot reach the single source of"
+            echo "truth. Regen is a no-op here; it runs on a runner with rd, or via"
+            echo "the conductor's checkpoint (vms-8747). Exiting 0 (never red)."
+            exit 0
+          fi
+          python3 -m pip install --user pyyaml
+          python3 tools/roadmap/reconcile.py
+          python3 tools/compat/render_compat.py
+          if git diff --quiet -- docs/release-roadmap-to-1.0.md docs/compatibility-surface.md; then
+            echo "clean -- derived views already match live rd + yaml sources."
+            exit 0
+          fi
+          branch="ledger/regen-$(date -u +%Y%m%d)"
+          git config user.name  "ovmx-ledger-bot"
+          git config user.email "noreply@anthropic.com"
+          git checkout -b "$branch"
+          git add docs/release-roadmap-to-1.0.md docs/compatibility-surface.md
+          git commit -m "ledger: scheduled regen of derived views from live rd (INV-LEDGER)"
+          git push -u origin "$branch"
+          gh pr create --fill \
+            --title "ledger: scheduled regen of roadmap + compat derived views" \
+            --body "Automated INV-LEDGER (vms-8465) regen from the single source of truth (live rd + docs/compat/*.yaml). Review and merge to keep the derived views current."

@@ -1117,11 +1117,14 @@ static int cmd_show_process(struct dcl_command *cmd)
  * until a username has more than one session. Fixed below by counting
  * distinct usernames separately from rows.
  *
- * THE DCL DICTIONARY ALSO PINS the column set: the default table is
+ * THE DCL DICTIONARY ALSO PINS the column set, and the two forms differ
+ * (that difference is the point of /FULL): the DEFAULT table is
  * "Username Node Interactive Subprocess Batch" (per-user counts); /FULL
  * is "Username Node Process Name PID Terminal" (per-process rows, plus
- * "port information"). OVMX's existing table is /FULL-shaped (rows, not
- * per-user counts) with Node missing -- restored below.
+ * "port information"). This split is implemented below -- default
+ * aggregates per user, /FULL lists per process. An earlier revision
+ * printed the /FULL-shaped per-process rows for BOTH forms, so bare
+ * SHOW USERS and SHOW USERS/FULL rendered identically (a fidelity tell).
  *
  * INTERACTIVE/SUBPROCESS/BATCH IS SOURCED, NOT GUESSED, and it comes
  * out constant today for a STRUCTURAL reason worth stating plainly
@@ -1151,20 +1154,15 @@ static int cmd_show_process(struct dcl_command *cmd)
  * struct vms_procinfo, vms_ioctl.h -- and adding it is a kernel-side
  * follow-up, not this item's).
  *
- * /FULL LOGIN TIME is an OVMX EXTENSION beyond the literal DCL
- * Dictionary SHOW USERS entry above, which documents no login-time
- * field for this command (CLAUDE.md Rule 8: where public docs do not
- * pin a byte/field, OVMX states its own choice rather than claiming
- * VMS-authentic verbatim output). It is offered because the source now
- * exists: JPI$_LOGINTIM (VMS_PI_V_LOGINTIM, vms-a7e) is carried on the
- * SAME row this command already reads, sourced in the executive from
- * the real Linux task's start_boottime (fill_proc_acct,
- * src/kernel/vms_proctab.c) -- not a second source (Rule 11). Formatted
- * through sys$asctim (starlet.h), which renders VMS's own canonical
- * "DD-MMM-YYYY HH:MM:SS.CC", so the value at least LOOKS like VMS even
- * where its placement in this command does not claim to reproduce a
- * measured VMS transcript. Absent the valid bit (no /dev/vms, INV-6),
- * the field renders as blanks -- never a fabricated timestamp.
+ * NO LOGIN-TIME COLUMN. An earlier revision carried a /FULL "Login Time"
+ * column as a disclosed OVMX extension (JPI$_LOGINTIM, VMS_PI_V_LOGINTIM,
+ * vms-a7e). It is dropped here: the DCL Dictionary /FULL entry documents
+ * no login-time field, and an extra column a real VMS admin would not
+ * expect is itself a fidelity tell -- the very class of divergence this
+ * pass exists to remove. The JPI$_LOGINTIM source still exists on the row
+ * (fill_proc_acct, src/kernel/vms_proctab.c) for any surface that has a
+ * VMS-authentic place to show it (e.g. SHOW PROCESS); SHOW USERS is not
+ * that surface.
  *
  * "Total number of users" is COUNTED BY WALKING THE SCAN, not carried in
  * a separate hand-maintained variable (Method Requirement 4): the header
@@ -1181,89 +1179,104 @@ static int cmd_show_users(struct dcl_command *cmd)
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
-    printf("      OpenVMS User Processes at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+    /* Banner brand is OVMX, not "OpenVMS": the human header names THIS
+     * product, and the trademark ceiling (INV-0) forbids claiming the
+     * OpenVMS mark as our own identity. Real VMS prints "OpenVMS User
+     * Processes"; SHOW SYSTEM already badges via ovmx_product_banner() for
+     * exactly this reason -- SHOW USERS was the one human header the
+     * rebrand missed. */
+    printf("      %s User Processes at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+           OVMX_PRODUCT_NAME,
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(ts.tv_nsec / 10000000));
 
+    char node[OVMX_IDENTITY_MAXLEN];
+    ovmx_node_name(node, sizeof(node));
+
+    /* One scan, walked twice (Method Requirement 4): the summary needs the
+     * counts before any table prints. Pass 1 aggregates per-user rows --
+     * distinct usernames and, per user, an Interactive count. Every
+     * terminal-bound row is interactive (structural, see above), so a
+     * user's Interactive count is simply the number of that user's rows;
+     * Subprocess/Batch are honest zeros. 256 distinct usernames is well
+     * above any realistic concurrent-login count for a single OVMX node --
+     * this cap de-duplicates within one scan, it does not bound how many
+     * rows the /FULL table can print. */
     uint32_t index = 0;
     struct vms_procinfo info;
     int process_count = 0;
-    int interactive_count = 0;   /* every row this scan can return, see above */
-    int subprocess_count = 0;    /* structurally unreachable today, see above */
-    int batch_count = 0;         /* structurally unreachable today, see above */
-    /* 256 distinct usernames is comfortably above any realistic concurrent
-     * interactive-login count for a single OVMX node; a table this size
-     * still exists solely to de-duplicate usernames within one scan, not
-     * to bound how many rows print (process_count/interactive_count are
-     * exact regardless of this cap). */
     char seen_users[256][VMS_USERNAME_SIZE];
-    int seen_count = 0;
+    int  seen_interactive[256];
+    int  seen_count = 0;
 
     while (vms_kif_procscan(&index, &info) & 1) {
         if (info.redacted || info.terminal[0] == '\0')
             continue;
         process_count++;
-        interactive_count++;
 
-        int already_seen = 0;
+        int slot = -1;
         for (int i = 0; i < seen_count; i++) {
             if (strcasecmp(seen_users[i], info.username) == 0) {
-                already_seen = 1;
+                slot = i;
                 break;
             }
         }
-        if (!already_seen && seen_count < 256) {
-            strncpy(seen_users[seen_count], info.username, VMS_USERNAME_SIZE - 1);
-            seen_users[seen_count][VMS_USERNAME_SIZE - 1] = '\0';
-            seen_count++;
+        if (slot < 0 && seen_count < 256) {
+            slot = seen_count++;
+            strncpy(seen_users[slot], info.username, VMS_USERNAME_SIZE - 1);
+            seen_users[slot][VMS_USERNAME_SIZE - 1] = '\0';
+            seen_interactive[slot] = 0;
         }
+        if (slot >= 0)
+            seen_interactive[slot]++;
     }
 
-    printf("    Total number of users = %d,  number of processes = %d\n"
-           "    (interactive = %d, subprocess = %d, batch = %d)\n\n",
-           seen_count, process_count,
-           interactive_count, subprocess_count, batch_count);
+    /* Two distinct counts, wording confirmed by three independent captures
+     * (see the FORMAT block above). No OVMX parenthetical -- VMS prints
+     * only this line. */
+    printf("    Total number of users = %d,  number of processes = %d\n\n",
+           seen_count, process_count);
 
-    char node[OVMX_IDENTITY_MAXLEN];
-    ovmx_node_name(node, sizeof(node));
-
-    if (full)
+    if (full) {
+        /* /FULL: per-process rows. DCL Dictionary column set is exactly
+         * Username Node Process-Name PID Terminal (plus "port information"
+         * OVMX has none of) -- no Type column, no login-time field. */
         printf("      Username     Node       Process Name      PID        "
-               "Terminal        Type         Login Time\n");
-    else
-        printf("      Username     Node       Process Name      PID        "
-               "Terminal        Type\n");
+               "Terminal\n");
 
-    index = 0;
-    while (vms_kif_procscan(&index, &info) & 1) {
-        if (info.redacted || info.terminal[0] == '\0')
-            continue;
+        index = 0;
+        while (vms_kif_procscan(&index, &info) & 1) {
+            if (info.redacted || info.terminal[0] == '\0')
+                continue;
 
-        char upper_name[VMS_USERNAME_SIZE];
-        size_t i;
-        for (i = 0; i < sizeof(upper_name) - 1 && info.username[i]; i++)
-            upper_name[i] = (char)toupper((unsigned char)info.username[i]);
-        upper_name[i] = '\0';
+            char upper_name[VMS_USERNAME_SIZE];
+            size_t i;
+            for (i = 0; i < sizeof(upper_name) - 1 && info.username[i]; i++)
+                upper_name[i] = (char)toupper((unsigned char)info.username[i]);
+            upper_name[i] = '\0';
 
-        printf("      %-12s %-10s %-16s  %08X   %-15s %-12s",
-               upper_name, node, info.prcnam, (unsigned)info.vms_pid,
-               info.terminal, "Interactive");
-
-        if (full) {
-            char login_str[24] = "";
-            if (info.fields_valid & VMS_PI_V_LOGINTIM) {
-                struct dsc$descriptor_s login_d = {
-                    sizeof(login_str) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S,
-                    login_str
-                };
-                uint16_t login_len = 0;
-                uint64_t logintim = info.logintim;
-                sys$asctim(&login_len, &login_d, &logintim, 0);
-                login_str[login_len] = '\0';
-            }
-            printf(" %s", login_str);
+            printf("      %-12s %-10s %-16s  %08X   %-15s\n",
+                   upper_name, node, info.prcnam, (unsigned)info.vms_pid,
+                   info.terminal);
         }
-        printf("\n");
+    } else {
+        /* Default: per-user counts. DCL Dictionary column set is
+         * Username Node Interactive Subprocess Batch. Subprocess/Batch are
+         * structurally zero today (see above) and VMS renders a zero
+         * column blank, so only the Interactive count prints. */
+        printf("      Username     Node       Interactive  Subprocess     "
+               "Batch\n");
+
+        for (int i = 0; i < seen_count; i++) {
+            char upper_name[VMS_USERNAME_SIZE];
+            size_t j;
+            for (j = 0; j < sizeof(upper_name) - 1 && seen_users[i][j]; j++)
+                upper_name[j] = (char)toupper((unsigned char)seen_users[i][j]);
+            upper_name[j] = '\0';
+
+            printf("      %-12s %-10s %11d\n", upper_name, node,
+                   seen_interactive[i]);
+        }
     }
 
     return SS$_NORMAL;

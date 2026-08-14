@@ -429,6 +429,16 @@ static void bare_metal_init(void)
     ovmx_boot_start_console_log_bridge();
 
     /*
+     * Lower the kernel's OWN console log level (vms-300) BEFORE either boot
+     * branch below makes its first ovmx_boot_load_module() call -- the
+     * earliest point in the boot path before any kernel module is loaded.
+     * The bridge just started above keeps reading every kmsg record for
+     * OPERATOR.LOG regardless of this; only the console SINK is muted. See
+     * ovmx_boot_mute_kernel_console()'s header comment (ovmx_boot.h).
+     */
+    ovmx_boot_mute_kernel_console();
+
+    /*
      * Conversational boot (vms-b81): the platform's boot-flag register is
      * the kernel cmdline (sysboot.h). Reading it needs only the /proc mount
      * just above and produces no output -- checking it here, before

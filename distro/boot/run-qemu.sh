@@ -92,7 +92,16 @@ if [ -n "$DISK" ]; then
     DISK_ARGS="-drive file=$DISK,format=raw,if=virtio,cache=writeback"
 fi
 
-APPEND="$CONSOLE loglevel=3 quiet"
+# loglevel=3 alone (vms-300): a trailing "quiet" here used to RAISE the
+# console level back up (Linux's `quiet` cmdline flag sets console_loglevel
+# to CONSOLE_LOGLEVEL_QUIET=4, looser than the loglevel=3 just to its left,
+# so cmdline parsing order made "quiet" win) for the pre-PID1 window before
+# ovmx_boot_mute_kernel_console() (src/ovmx_init/ovmx_boot_linux.c) gets a
+# chance to run. loglevel=3 already restricts the console to EMERG/ALERT/
+# CRIT, which is stricter than what "quiet" alone provides, so "quiet" is
+# redundant once the ordering bug is gone -- belt-and-suspenders alongside
+# that userspace mute, not the primary fix.
+APPEND="$CONSOLE loglevel=3"
 if [ -n "$BOOT_FLAGS" ]; then
     APPEND="$APPEND ovmx.flags=$BOOT_FLAGS"
 fi

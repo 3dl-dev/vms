@@ -393,3 +393,9 @@ lib$reset_vm_zone=PROCEDURE
 # or it lands in the "appended beyond frozen" set. APPENDED at the end per the
 # append-only contract -- a new universal never shifts an existing index.
 vms$$deliver_pending_asts=PROCEDURE
+
+# vms-c8fa: SYSUAF login-flag enforcement predicates, called by LOGINOUT
+# (tools/vms_login.c, a --use consumer of LIBVMS$SHR). New universals — APPENDED
+# at the end per the append-only contract so no existing index shifts.
+sysuaf_interactive_login_permitted=PROCEDURE
+sysuaf_account_captive=PROCEDURE

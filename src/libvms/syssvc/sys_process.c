@@ -61,8 +61,14 @@
  *     pcb->exit_handlers[] in the per-process PCB, then _exit()s.
  * OVMX-USERSPACE: sys$dclexh (vms-pt1) -- appends to that same per-process
  *     array; no executive records that the process has an exit handler.
- * OVMX-USERSPACE: sys$forcex (vms-pt1) -- with no pidadr it degenerates to
- *     sys$exit on the caller; otherwise kill() by Linux pid. prcnam discarded.
+ * OVMX-PARTIAL: sys$forcex (vms-904) -- with no target it degenerates to
+ *     sys$exit on the caller; otherwise the target is RESOLVED in the
+ *     executive (by prcnam within the caller's UIC group, or by VMS pid in
+ *     any group gated by GROUP/WORLD -- the SAME resolve_control_target()
+ *     path sys$delprc uses), and the force-exit signal goes to the resolved
+ *     Linux pid, NEVER a raw cast of the caller's VMS-pid argument. A target
+ *     the executive does not carry is SS$_NONEXPR, not a signal to whatever
+ *     Linux process wears that number.
  * OVMX-PARTIAL: sys$delprc (vms-1a8) -- exec: the target is now RESOLVED in
  *     the executive, by prcnam (within the caller's UIC group) or by VMS
  *     pid (any group, gated by WORLD -- see sys$delprc's own comment), the
@@ -93,9 +99,13 @@
  *     process before the call, and $WAKE by process NAME is not resolved (prcnam
  *     discarded, redirecting a named target to self); those are not the
  *     executive's.
- * OVMX-USERSPACE: sys$suspnd (vms-pt1) -- kill(SIGSTOP), same shape.
+ * OVMX-PARTIAL: sys$suspnd (vms-904) -- exec: the target is RESOLVED in the
+ *     executive (resolve_control_target(), as sys$delprc), then SIGSTOP is
+ *     sent to the resolved Linux pid; a VMS-pid argument is never cast into
+ *     kill() directly. Absent target -> SS$_NONEXPR.
  * OVMX-USERSPACE: sys$suspend (vms-pt1) -- tail-calls sys$suspnd.
- * OVMX-USERSPACE: sys$resume (vms-pt1) -- kill(SIGCONT), same shape.
+ * OVMX-PARTIAL: sys$resume (vms-904) -- exec: same resolution as sys$suspnd,
+ *     SIGCONT to the resolved Linux pid. Absent target -> SS$_NONEXPR.
  * OVMX-USERSPACE: sys$setpri (vms-pt1) -- getpriority/setpriority on the
  *     CALLING process; pidadr as well as prcnam is discarded, so it cannot
  *     change any other process's priority however it is invoked.
@@ -944,6 +954,76 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
 }
 
 /*
+ * resolve_control_target - shared target resolution + cross-process
+ * authorization for the control-by-VMS-pid services: sys$delprc (vms-1a8)
+ * and, since vms-904, sys$forcex / sys$suspnd / sys$resume.
+ *
+ * THE WRONG-PROCESS BUG THIS CLOSES (vms-904). The target of every one of
+ * these services is a VMS PROCESS ID (or a process NAME), NEVER a Linux pid:
+ * $CREPRC deliberately hands back a VMS pid that is NOT the Linux pid (two
+ * separate namespaces since vms-2b8; only the executive knows which Linux
+ * task a VMS pid names). $DELPRC was fixed to resolve through the executive;
+ * $FORCEX/$SUSPND/$RESUME were not -- they cast *pidadr straight into
+ * kill(), so they signalled whatever Linux process happened to wear that
+ * number, or ESRCH'd when none did. This helper is the ONE resolution path
+ * all four now share, so none of them can drift back to a raw cast.
+ *
+ * Resolution is exactly sys$getjpi's: a non-empty prcnam names a process
+ * WITHIN THE CALLER'S OWN UIC GROUP (vms_kif_getjpi_prcnam), otherwise a
+ * non-zero *pidadr names one BY VMS PROCESS ID in any group
+ * (vms_kif_getjpi_pid), otherwise the caller itself (vms_kif_getjpi_self).
+ * A target the executive does not carry comes back as its own SS$_NONEXPR --
+ * never a signal to a Linux pid nothing in the executive ever named.
+ *
+ * PRIVILEGE (OpenVMS DCL Dictionary; see sys$delprc's own comment for the
+ * full citation and the "WORLD is enforced by resolution, only same-group is
+ * still ungated here" reasoning): affecting ANOTHER process in the caller's
+ * own UIC group requires GROUP (or the broader WORLD); a cross-group target
+ * could not even be RESOLVED without WORLD, so it is already gated above;
+ * the caller's OWN process takes no privilege. On success *target holds the
+ * resolved row, whose linux_pid is the ONLY pid a caller may signal.
+ */
+static uint32_t resolve_control_target(const uint32_t *pidadr,
+                                       const struct dsc$descriptor_s *prcnam,
+                                       struct vms_procinfo *target) {
+    struct vms_procinfo self_info;
+    uint32_t status;
+
+    if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0) {
+        char key[VMS_PRCNAM_XFER];
+        dsc$strncpy(key, prcnam, sizeof(key));
+        status = vms_kif_getjpi_prcnam(key, target);
+    } else if (pidadr && *pidadr != 0) {
+        status = vms_kif_getjpi_pid(*pidadr, target);
+    } else {
+        status = vms_kif_getjpi_self(target);
+    }
+    if (!(status & 1))
+        return status;
+
+    status = vms_kif_getjpi_self(&self_info);
+    if (!(status & 1))
+        return status;
+
+    if (target->vms_pid != self_info.vms_pid) {
+        int same_group = ((target->uic >> 16) == (self_info.uic >> 16));
+        /* WORLD is the BROADER privilege ("affect any process, any group")
+         * and so authorizes a same-group control op too, same as it
+         * authorizes everything GROUP does; GROUP alone does not reach
+         * outside the caller's own group. A same-group target is therefore
+         * authorized by EITHER bit, a cross-group one by WORLD alone --
+         * caught live by tests/qemu/test_syssvc_delprc.c P1/P2, whose caller
+         * holds WORLD (the executive's default privileged-registration grant,
+         * VMS_PRV_M_ENFORCED) but not GROUP (granted to nobody by default). */
+        uint64_t authorized = self_info.cur_privs &
+            (same_group ? (PRV$M_GROUP | PRV$M_WORLD) : PRV$M_WORLD);
+        if (!authorized)
+            return SS$_NOPRIV;
+    }
+    return SS$_NORMAL;
+}
+
+/*
  * sys$delprc - Delete (terminate) a process (vms-1a8).
  *
  * A READER (to resolve the target) and ACTOR (to terminate it) against the
@@ -1003,43 +1083,10 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
  */
 uint32_t sys$delprc(const uint32_t *pidadr,
                     const struct dsc$descriptor_s *prcnam) {
-    struct vms_procinfo target, self_info;
-    uint32_t status;
-
-    if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0) {
-        char key[VMS_PRCNAM_XFER];
-        dsc$strncpy(key, prcnam, sizeof(key));
-        status = vms_kif_getjpi_prcnam(key, &target);
-    } else if (pidadr && *pidadr != 0) {
-        status = vms_kif_getjpi_pid(*pidadr, &target);
-    } else {
-        status = vms_kif_getjpi_self(&target);
-    }
+    struct vms_procinfo target;
+    uint32_t status = resolve_control_target(pidadr, prcnam, &target);
     if (!(status & 1))
         return status;
-
-    status = vms_kif_getjpi_self(&self_info);
-    if (!(status & 1))
-        return status;
-
-    if (target.vms_pid != self_info.vms_pid) {
-        int same_group = ((target.uic >> 16) == (self_info.uic >> 16));
-        /* WORLD is the BROADER privilege ("affect any process, any group")
-         * and so authorizes a same-group delete too, same as it authorizes
-         * everything GROUP does; GROUP alone does not reach outside the
-         * caller's own group. A same-group target is therefore authorized
-         * by EITHER bit, a cross-group one by WORLD alone -- caught live by
-         * tests/qemu/test_syssvc_delprc.c P1/P2, whose caller holds WORLD
-         * (the executive's default privileged-registration grant,
-         * VMS_PRV_M_ENFORCED) but not GROUP (granted to nobody by default;
-         * nothing enforced it before this item). Requiring GROUP outright
-         * for the same-group case -- this function's first version --
-         * refused that caller's own same-group STOP with SS$_NOPRIV. */
-        uint64_t authorized = self_info.cur_privs &
-            (same_group ? (PRV$M_GROUP | PRV$M_WORLD) : PRV$M_WORLD);
-        if (!authorized)
-            return SS$_NOPRIV;
-    }
 
     /*
      * THE TERMINATION ITSELF REMAINS SIGTERM-BY-LINUX-PID (OVMX design
@@ -1085,55 +1132,53 @@ uint32_t sys$dclexh(void *desblk) {
 }
 
 /*
- * sys$forcex - Force image exit on another process.
+ * sys$forcex - Force image exit on another process (vms-904).
  *
- * Sends SIGUSR1 to the target process to force it to exit.
- * If both pidadr and prcnam are NULL, force exit on current process
- * (equivalent to calling sys$exit with the provided code).
+ * If both pidadr and prcnam are NULL, force exit on the current process
+ * (equivalent to sys$exit with the provided code). Otherwise the target is
+ * a VMS process (id or name) RESOLVED through the executive by the shared
+ * resolve_control_target() -- the SAME path sys$delprc uses -- and SIGUSR1
+ * goes to the resolved Linux pid. The VMS pid is NEVER cast into kill()
+ * directly (the wrong-process bug this closes); a target the executive does
+ * not carry is SS$_NONEXPR, not a signal to a random Linux process.
  */
 uint32_t sys$forcex(const uint32_t *pidadr,
                     const struct dsc$descriptor_s *prcnam,
                     uint32_t code) {
-    (void)prcnam;
-
     /* If no target specified, force exit on current process */
     if (!pidadr && !prcnam) {
         return sys$exit(code);
     }
 
-    pid_t pid;
-    if (pidadr) {
-        pid = (pid_t)*pidadr;
-    } else {
-        pid = getpid();
-    }
+    struct vms_procinfo target;
+    uint32_t status = resolve_control_target(pidadr, prcnam, &target);
+    if (!(status & 1))
+        return status;
 
-    /* Send SIGUSR1 to force the target process to exit */
-    if (kill(pid, SIGUSR1) < 0) return SS$_NONEXPR;
+    /* Send SIGUSR1 to the RESOLVED target's Linux pid to force it to exit */
+    if (kill((pid_t)target.linux_pid, SIGUSR1) < 0) return SS$_NONEXPR;
     return SS$_NORMAL;
 }
 
 /*
- * sys$suspnd - Suspend a process (canonical VMS name).
+ * sys$suspnd - Suspend a process (canonical VMS name, vms-904).
  *
- * Sends SIGSTOP to the target process. If pidadr is NULL,
- * suspend the current process.
+ * The target is a VMS process (id or name, or the caller when neither is
+ * given) RESOLVED through the executive by resolve_control_target() -- as
+ * sys$delprc -- and SIGSTOP goes to the resolved Linux pid. A VMS pid is
+ * never cast into kill() directly; an absent target is SS$_NONEXPR.
  *
  * The VMS system service name is sys$suspnd (no trailing 'e').
  * sys$suspend is provided as a backwards-compatibility alias.
  */
 uint32_t sys$suspnd(const uint32_t *pidadr,
                     const struct dsc$descriptor_s *prcnam) {
-    (void)prcnam;
+    struct vms_procinfo target;
+    uint32_t status = resolve_control_target(pidadr, prcnam, &target);
+    if (!(status & 1))
+        return status;
 
-    pid_t pid;
-    if (pidadr) {
-        pid = (pid_t)*pidadr;
-    } else {
-        pid = getpid();
-    }
-
-    if (kill(pid, SIGSTOP) < 0) return SS$_NONEXPR;
+    if (kill((pid_t)target.linux_pid, SIGSTOP) < 0) return SS$_NONEXPR;
     return SS$_NORMAL;
 }
 
@@ -1149,22 +1194,20 @@ uint32_t sys$suspend(const uint32_t *pidadr,
 }
 
 /*
- * sys$resume - Resume a suspended process.
+ * sys$resume - Resume a suspended process (vms-904).
  *
- * Sends SIGCONT to the target process to resume it from suspension.
+ * The target is RESOLVED through the executive by resolve_control_target()
+ * (same path as sys$suspnd/sys$delprc) and SIGCONT goes to the resolved
+ * Linux pid -- never a raw cast of the VMS pid. Absent target -> SS$_NONEXPR.
  */
 uint32_t sys$resume(const uint32_t *pidadr,
                     const struct dsc$descriptor_s *prcnam) {
-    (void)prcnam;
+    struct vms_procinfo target;
+    uint32_t status = resolve_control_target(pidadr, prcnam, &target);
+    if (!(status & 1))
+        return status;
 
-    pid_t pid;
-    if (pidadr) {
-        pid = (pid_t)*pidadr;
-    } else {
-        pid = getpid();
-    }
-
-    if (kill(pid, SIGCONT) < 0) return SS$_NONEXPR;
+    if (kill((pid_t)target.linux_pid, SIGCONT) < 0) return SS$_NONEXPR;
     return SS$_NORMAL;
 }
 

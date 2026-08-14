@@ -282,6 +282,31 @@ static uint16_t resolve_scssystemid(void)
 }
 
 /*
+ * resolve_alloclass - Read ALLOCLASS from the SYSGEN store (vms-9cf), the
+ * allocation class for shared cluster devices. Mirrors resolve_scssystemid()'s
+ * sysgen_read_param path and honors OVMX_SYSGEN_PATH the same way.
+ *
+ * Unlike SCSNODE/SCSSYSTEMID this is NOT half of the fatal identity pair: 0 is
+ * the documented default (SYSGEN ALLOCLASS defaults to 0 = "no allocation
+ * class", VSI OpenVMS System Manager's Manual). So an absent or 0 value is an
+ * honest default, not a mis-config -- no fatal exit, no warning. The value is
+ * an IDENTITY/config param the operator authors via SYSGEN/SYSMAN; scsd adopts
+ * it on (re)boot the same way it adopts SCSNODE/SCSSYSTEMID. It is read and
+ * reported only -- it does NOT touch any wire frame or the VOTES=0 non-voting
+ * join (that reconciliation is vms-41d, owned by the cluster-wire session).
+ *
+ * Returns the authored allocation class, or 0 when unconfigured.
+ */
+static uint8_t resolve_alloclass(void)
+{
+    uint32_t v = 0;
+    if (sysgen_read_param("ALLOCLASS", &v) == 0) {
+        return (uint8_t)(v & 0xffu);
+    }
+    return 0u;
+}
+
+/*
  * ovmx_cluster_logical - vms-9f3: compute OVMX's cluster-LOGICAL LAVC address
  * from its SCSSYSTEMID. GROUNDED convention (spec sec 3 decoder ring + README-lab):
  * a cluster node's logical addr is aa:00:04:00:<LE16(SCSSYSTEMID)>, e.g. VAX2
@@ -12498,6 +12523,32 @@ int main(int argc, char **argv)
             do_connect = 1;
         } else if (strcmp(argv[i], "--hello-interval") == 0 && i + 1 < argc) {
             hello_interval = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--show-identity") == 0) {
+            /* vms-9cf: report the cluster IDENTITY params this node would adopt
+             * on boot -- SCSNODE, SCSSYSTEMID, ALLOCLASS -- read from the SYSGEN
+             * store (OVMXVMSSYS.PAR; honors OVMX_SYSGEN_PATH), then exit. This
+             * is the read-side adoption surface the R1 config-authoring proof
+             * (vms-9cf) drives: SET the params the VMS way + WRITE CURRENT, then
+             * a fresh SCSD picks them up here. It opens NO raw socket and needs
+             * no privilege -- it is a pure read of the persisted param store, so
+             * the store->boot->scsd round trip is genuine, not a per-process
+             * fake (INV-6). It touches NO wire frame and does NOT read or emit
+             * VOTES (the deliberate VOTES=0 non-voting join is untouched;
+             * VOTES/quorum reconciliation is vms-41d, the cluster-wire session).
+             *
+             * A named store that carries SCSNODE but fails to yield it is fatal
+             * here for the same reason it is fatal on a real boot
+             * (resolve_node_identity): a wrong identity must never be invented. */
+            char idnode[SYSGEN_STRVAL_LEN];
+            if (resolve_node_identity(idnode, sizeof(idnode)) != 0) {
+                return 1;
+            }
+            uint16_t idsysid = resolve_scssystemid();
+            uint8_t  idalloc = resolve_alloclass();
+            printf("SCSD-I-IDENT, SCSNODE=%s SCSSYSTEMID=%u ALLOCLASS=%u\n",
+                   idnode, (unsigned)idsysid, (unsigned)idalloc);
+            fflush(stdout);
+            return 0;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             fprintf(stderr,
                     "usage: %s [--iface IFACE] [--duration SECONDS] [--emit-hello]\n"
@@ -12516,7 +12567,11 @@ int main(int argc, char **argv)
                     "                      channel forms and answer a peer CONNECT-\n"
                     "                      REQUEST with CONNECT-RESPONSE (spec sec 4g).\n"
                     "                      Implies --respond.\n"
-                    "  --hello-interval N  seconds between HELLO beacons (default %d)\n",
+                    "  --hello-interval N  seconds between HELLO beacons (default %d)\n"
+                    "  --show-identity     print the cluster identity params this\n"
+                    "                      node adopts from the SYSGEN store\n"
+                    "                      (SCSNODE/SCSSYSTEMID/ALLOCLASS) and exit;\n"
+                    "                      opens no socket (vms-9cf)\n",
                     argv[0], SCA_ETHERTYPE, HELLO_DEFAULT_INTERVAL_SEC);
             return 0;
         }
@@ -12666,6 +12721,16 @@ int main(int argc, char **argv)
         return 1;
     }
     uint16_t ovmx_scssystemid = resolve_scssystemid();
+    /* vms-9cf: the allocation class this node adopts from the SYSGEN store.
+     * Reported at startup beside the rest of the identity so a run log shows
+     * exactly which authored ALLOCLASS the daemon booted with; used for local
+     * reporting only -- it is NOT placed on any wire frame (that stays vms-41d's
+     * / the cluster-wire session's call) and does not affect the VOTES=0 join. */
+    uint8_t ovmx_alloclass = resolve_alloclass();
+    log_ts(stdout);
+    printf(" SCSD-I-IDENT, SCSNODE=%s SCSSYSTEMID=%u ALLOCLASS=%u\n",
+           ovmx_node, (unsigned)ovmx_scssystemid, (unsigned)ovmx_alloclass);
+    fflush(stdout);
     /* vms-2f3: have we been admitted to a cluster before under this identity? */
     prior_admission_load();
     /* vms-9f3: OVMX's cluster-LOGICAL LAVC address, computed ONCE from its own

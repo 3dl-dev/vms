@@ -603,6 +603,34 @@ set_tests_properties(boot_scsnode_hostname_e2e PROPERTIES
     TIMEOUT 900)
 
 # ---------------------------------------------------------------------------
+# CLUSTER PARAMS AUTHORED AT SYSBOOT> -> BOOTED SYSTEM REFLECTS THEM
+# (vms-46c gap #2, conversational boot).
+#
+# Boots the ACTUAL mastered bootable image (same distro/Dockerfile.bootable as
+# boot_scsnode_hostname_e2e above) with the conversational boot flag
+# (ovmx.flags=0,1), authors a STRING (SCSNODE) and a NUMERIC (SCSSYSTEMID)
+# cluster-identity parameter at the SYSBOOT> prompt (SET ... / WRITE /
+# CONTINUE), and proves against the REAL mounted volume, in the booted
+# logged-in guest, that F$GETSYI reads BOTH authored values back -- with a
+# flagless bracket boot on a fresh disk showing the seeded defaults. This is
+# the numeric-parameter + booted-reflection half that
+# test_sysboot_conversational.sh (string + pre-banner/persistence, boot-smoke
+# job) does not cover. See tests/qemu/test_sysboot_cluster_params_e2e.sh's
+# header for the full two-case sequence.
+#
+# Same opt-in/SKIP convention as the other qemu-full-boot gates: real docker +
+# QEMU boot, real minutes, gated behind OVMX_QEMU_FULL_E2E=1 so it does not run
+# under a bare `ctest`.
+add_test(
+    NAME sysboot_cluster_params_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_sysboot_cluster_params_e2e.sh
+)
+set_tests_properties(sysboot_cluster_params_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 900)
+
+# ---------------------------------------------------------------------------
 # JOB_CONTROL OWNS THE CONSOLE SESSION, END TO END (vms-8d2).
 #
 # Boots the ACTUAL mastered bootable image (same distro/Dockerfile.bootable

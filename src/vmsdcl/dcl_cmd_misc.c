@@ -54,6 +54,13 @@
 #include "ovmx_layout.h"
 #include "vms_kif.h"
 
+/* TELNET / FTP client engines (vms-dbb) -- the SAME header the QEMU proof
+ * (tests/qemu/test_syssvc_tcpip_client.c) drives, so the shipped verb and the
+ * proven code are one. Relative path: dcl_cmd_misc.c compiles in-place under
+ * src/vmsdcl/ in both the CMake and the VMS-native (mk_dcl.sh) builds, so no
+ * new -I is needed and no new compiled object joins DCL.EXE's native link. */
+#include "../vmstcpip/services/tcpip_client.h"
+
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
 #include <readline/history.h>
@@ -3017,4 +3024,226 @@ int cmd_product(struct dcl_command *cmd)
 
     argv[argc] = NULL;
     return dcl_exec_utility("PRODUCT.EXE", "PCSI", argv, argc);
+}
+
+/* ================================================================== */
+/*             TELNET / FTP client tools (vms-dbb)                     */
+/* ================================================================== */
+/*
+ * These verbs drive their connections over the INET pseudo-device BGn:
+ * (vms-527) through the public $ASSIGN/$QIO/$DASSGN services -- the protocol
+ * engines live in src/vmstcpip/services/tcpip_client.h (included above), the
+ * SAME code tests/qemu/test_syssvc_tcpip_client.c proves against a real
+ * /dev/vms. There is no userspace socket stack: if the executive is absent,
+ * tcpip_connect() returns SS$_NOSUCHDEV and the verb reports it honestly
+ * (CLAUDE.md Rule 9 / INV-6). Command grammar is from the public VSI OpenVMS
+ * TCP/IP Services documentation; the wire is IETF-standard (Rule 8).
+ *
+ * SCOPE (vms-dbb): loopback / a reachable-peer client. FTP is single-transfer
+ * (/GET, /PUT), passive-mode; TELNET is a half-duplex line client (a blocking
+ * $QIO recv precludes a concurrent reader -- full-duplex AST-driven I/O and an
+ * interactive FTP> shell are later increments). Host names need the BIND
+ * resolver (a later phase), so a host argument must be a dotted-quad literal.
+ */
+
+/* Parse an unsigned decimal port (1..65535); 0 = empty/invalid. */
+static uint16_t tcpip_tool_parse_port(const char *s)
+{
+    unsigned int n = 0;
+    int any = 0;
+    if (!s) return 0;
+    while (*s >= '0' && *s <= '9') {
+        n = n * 10u + (unsigned int)(*s - '0');
+        if (n > 65535u) return 0;
+        s++;
+        any = 1;
+    }
+    if (*s != '\0' || !any) return 0;
+    return (uint16_t)n;
+}
+
+/* Case-insensitive prefix test (avoids a strncasecmp dependency on DECC$SHR). */
+static int tcpip_tool_iprefix(const char *line, const char *word)
+{
+    size_t i;
+    for (i = 0; word[i]; i++)
+        if (tolower((unsigned char)line[i]) != tolower((unsigned char)word[i]))
+            return 0;
+    return 1;
+}
+
+/* Resolve a host argument to a network-order IPv4 address. Name resolution (the
+ * BIND resolver) is a later phase; only a dotted-quad literal is accepted. */
+static int tcpip_tool_resolve(const char *facility, const char *host,
+                              uint32_t *addr_be)
+{
+    if (tcpip_parse_ipv4(host, addr_be))
+        return 1;
+    dcl_error(facility, 2, "NORESOLVE",
+              "host name resolution is not available yet (BIND resolver pending)"
+              " - use a dotted-quad IP address");
+    return 0;
+}
+
+int cmd_telnet(struct dcl_command *cmd)
+{
+    struct tcpip_conn conn;
+    uint32_t addr_be = 0;
+    uint16_t port = 23;
+    char buf[1024];
+    char line[1024];
+    uint32_t got = 0;
+    uint32_t st;
+
+    if (cmd->param_count < 1) {
+        dcl_error("TELNET", 2, "NOHOST", "missing host - supply an address to connect to");
+        return SS$_BADPARAM;
+    }
+    if (!tcpip_tool_resolve("TELNET", cmd->params[0], &addr_be))
+        return SS$_BADPARAM;
+    if (cmd->param_count >= 2) {
+        port = tcpip_tool_parse_port(cmd->params[1]);
+        if (port == 0) {
+            dcl_error("TELNET", 2, "IVPORT", "invalid port number - \\%s\\", cmd->params[1]);
+            return SS$_BADPARAM;
+        }
+    }
+
+    printf("%%TELNET-I-TRYING, trying %s port %u ...\n", cmd->params[0], (unsigned)port);
+    st = tcpip_connect(&conn, addr_be, port);
+    if (!(st & 1)) {
+        if (st == SS$_NOSUCHDEV)
+            dcl_error("TELNET", 2, "NONET",
+                      "TCP/IP Services (BGn: executive device) is not available");
+        else
+            dcl_error("TELNET", 2, "NOCONN",
+                      "cannot connect to %s port %u", cmd->params[0], (unsigned)port);
+        return st;
+    }
+    printf("Connected to %s.\n", cmd->params[0]);
+
+    /* Initial server banner, telnet option negotiation stripped. */
+    st = tcpip_telnet_recv(&conn, buf, sizeof(buf) - 1, &got);
+    if ((st & 1) && got) { fwrite(buf, 1, got, stdout); fflush(stdout); }
+
+    /* Half-duplex line loop over SYS$INPUT. */
+    while (fgets(line, sizeof(line), stdin)) {
+        if (tcpip_tool_iprefix(line, "quit") || tcpip_tool_iprefix(line, "exit"))
+            break;
+        st = tcpip_telnet_send(&conn, line, (uint32_t)strlen(line));
+        if (!(st & 1)) break;
+        got = 0;
+        st = tcpip_telnet_recv(&conn, buf, sizeof(buf) - 1, &got);
+        if (!(st & 1) || got == 0) break;
+        fwrite(buf, 1, got, stdout);
+        fflush(stdout);
+    }
+
+    tcpip_close(&conn);
+    printf("%%TELNET-I-SESSEND, connection to %s closed\n", cmd->params[0]);
+    return SS$_NORMAL;
+}
+
+int cmd_ftp(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+    uint32_t addr_be = 0;
+    uint16_t port = 21;
+    const char *user, *pass, *get, *put, *pq;
+
+    if (cmd->param_count < 1) {
+        dcl_error("FTP", 2, "NOHOST", "missing host - supply an address to connect to");
+        return SS$_BADPARAM;
+    }
+    if (!tcpip_tool_resolve("FTP", cmd->params[0], &addr_be))
+        return SS$_BADPARAM;
+
+    pq = dcl_qualifier_value(cmd, "PORT");
+    if (pq && pq[0]) {
+        port = tcpip_tool_parse_port(pq);
+        if (port == 0) { dcl_error("FTP", 2, "IVPORT", "invalid port - \\%s\\", pq); return SS$_BADPARAM; }
+    }
+
+    user = dcl_qualifier_value(cmd, "USER");
+    pass = dcl_qualifier_value(cmd, "PASSWORD");
+    if (!user || !user[0]) user = "anonymous";
+    if (!pass || !pass[0]) pass = "ovmx@ovmx";
+
+    get = dcl_qualifier_value(cmd, "GET");
+    put = dcl_qualifier_value(cmd, "PUT");
+    if ((!get || !get[0]) && (!put || !put[0])) {
+        dcl_error("FTP", 2, "NOOP",
+                  "specify /GET=remote-file or /PUT=local-file"
+                  " (an interactive FTP> shell is a later increment)");
+        return SS$_BADPARAM;
+    }
+
+    if (get && get[0]) {
+        size_t cap = 1u << 20;                 /* 1 MiB transfer cap (increment) */
+        unsigned char *buf = malloc(cap);
+        uint32_t glen = 0;
+        uint32_t st;
+        const char *out;
+
+        if (!buf) { dcl_error("FTP", 2, "INSFMEM", "insufficient memory"); return SS$_BADPARAM; }
+        st = tcpip_ftp_get(addr_be, port, user, pass, get, buf, (uint32_t)cap, &glen);
+        if (!(st & 1)) {
+            free(buf);
+            if (st == SS$_NOSUCHDEV)
+                dcl_error("FTP", 2, "NONET", "TCP/IP Services (BGn: executive device) is not available");
+            else
+                dcl_error("FTP", 2, "GETERR", "RETR of %s failed", get);
+            return st;
+        }
+        out = dcl_qualifier_value(cmd, "OUTPUT");
+        if (out && out[0]) {
+            char lpath[PATH_MAX];
+            FILE *f;
+            dcl_resolve_path(ctx, out, lpath, sizeof(lpath));
+            f = fopen(lpath, "wb");
+            if (!f) { free(buf); dcl_error("FTP", 2, "OPENOUT", "cannot open output file %s", out); return SS$_BADPARAM; }
+            fwrite(buf, 1, glen, f);
+            fclose(f);
+            printf("%%FTP-S-RETR, %u bytes retrieved to %s\n", (unsigned)glen, out);
+        } else {
+            fwrite(buf, 1, glen, stdout);
+            printf("\n%%FTP-S-RETR, %u bytes retrieved from %s\n", (unsigned)glen, get);
+        }
+        free(buf);
+        return SS$_NORMAL;
+    }
+
+    /* /PUT */
+    {
+        char lpath[PATH_MAX];
+        FILE *f;
+        size_t cap = 1u << 20;
+        unsigned char *buf;
+        size_t n;
+        const char *remote;
+        uint32_t st;
+
+        dcl_resolve_path(ctx, put, lpath, sizeof(lpath));
+        f = fopen(lpath, "rb");
+        if (!f) { dcl_error("FTP", 2, "OPENIN", "cannot open local file %s", put); return SS$_BADPARAM; }
+        buf = malloc(cap);
+        if (!buf) { fclose(f); dcl_error("FTP", 2, "INSFMEM", "insufficient memory"); return SS$_BADPARAM; }
+        n = fread(buf, 1, cap, f);
+        fclose(f);
+
+        remote = dcl_qualifier_value(cmd, "REMOTE");
+        if (!remote || !remote[0]) remote = put;
+
+        st = tcpip_ftp_put(addr_be, port, user, pass, remote, buf, (uint32_t)n);
+        free(buf);
+        if (!(st & 1)) {
+            if (st == SS$_NOSUCHDEV)
+                dcl_error("FTP", 2, "NONET", "TCP/IP Services (BGn: executive device) is not available");
+            else
+                dcl_error("FTP", 2, "PUTERR", "STOR of %s failed", remote);
+            return st;
+        }
+        printf("%%FTP-S-STOR, %u bytes stored to %s\n", (unsigned)n, remote);
+        return SS$_NORMAL;
+    }
 }

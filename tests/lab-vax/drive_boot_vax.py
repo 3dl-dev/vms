@@ -68,6 +68,22 @@ MS_EXEC    = "VMS executive attached on /dev/vms"           # /dev/vms open
 MS_BANNER  = "OpenVMS-compatible"                           # product banner
 MS_MOUNTED = "system disk DKA0: mounted"                    # ODS-2 mounted
 
+# vms-d9c: the milestones PAST the mount, on a real installed OVMX SYSTEM volume
+# (the sysboot mode). require_installed_system() halts %OVMX-F-SYSINIT with this
+# detail when SYS$SYSTEM:DCL.EXE is absent (the flat/test volume); on a MASTERED
+# system volume it passes and the boot reaches print_stdrv_begun() (MS_STDRV),
+# emitted IMMEDIATELY before run_startup() execs SYS$SYSTEM:PROVISION.EXE.
+MS_INSTALLED_GATE_FAIL = "is not an installed OVMX system volume"
+MS_STDRV               = "%STDRV-I-STARTUP"
+# The honest post-STDRV outcomes: PROVISION.EXE either activates + reaches a
+# login prompt, or its activation FAILS (the exec-from-vmsfs gap -- the vax
+# vmsfs mount's VOP_GETPAGES is genfs_eopnotsupp, so demand-paging PROVISION.EXE
+# off the mounted ODS-2 volume cannot succeed yet), surfacing as %OVMX-E-NOIMG
+# (child) and/or %OVMX-F-EXECINIT (PID 1's halt after PROVISION returns nonzero).
+MS_PROVISION_LOGIN   = "Username:"
+MS_PROVISION_NOIMG   = "%OVMX-E-NOIMG"
+MS_PROVISION_HALT    = "%OVMX-F-EXECINIT"
+
 
 def log(msg):
     print("[drive_boot_vax] %s" % msg, flush=True)
@@ -398,6 +414,118 @@ def do_prove(a, ods2_img, negctl, boot_deadline):
     return seen
 
 
+def do_sysboot(a, sysvol_img, negctl, boot_deadline):
+    """vms-d9c: boot the assembled vms-7b1 disk (ovmx_init as PID 1) with a real
+    MASTERED OVMX SYSTEM volume on rq1 (-> ra1 -> DKA0:), and assert the boot
+    proceeds PAST ovmx_init's installed-system gate and reaches the point where
+    PID 1 execs SYS$SYSTEM:PROVISION.EXE.
+
+    The pre-mount milestones (executive attach, banner, MOUNTED) are identical
+    to do_prove -- the difference is what the mounted volume CARRIES. On the
+    mastered system volume, require_installed_system() finds SYS$SYSTEM:DCL.EXE
+    at the rooted [SYS0.SYSCOMMON.SYSEXE] path and does NOT halt; the boot then
+    reaches print_stdrv_begun() (MS_STDRV), emitted immediately before
+    run_startup() execs PROVISION.EXE. Reaching MS_STDRV is the deterministic
+    proof that the boot got past the gate and is at the PROVISION.EXE exec.
+
+    negctl boots the SAME disk with the FLAT test volume (mkimage_vmsfs's
+    HELLO.TXT-only volume, no DCL.EXE): require_installed_system() MUST halt
+    %OVMX-F-SYSINIT (DCL.EXE absent), and MS_STDRV must NOT appear -- proving it
+    is specifically the mastered system volume that carries the boot past the
+    gate (the gate has teeth, Rule 7).
+
+    Whatever PROVISION.EXE's activation produces after MS_STDRV is CAPTURED and
+    logged (the honest scouting boundary -- see MS_PROVISION_* above), never
+    faked into a login the boot did not reach (INV-6)."""
+    import pexpect
+
+    ods2_abs = os.path.abspath(sysvol_img)
+    vmm_args = ["set rq1 ra92", "attach rq1 " + ods2_abs]
+    if negctl:
+        log("SYSBOOT NEGATIVE CONTROL: booting with the FLAT test volume (no "
+            "SYS$SYSTEM:DCL.EXE) -- the installed-system gate MUST halt and "
+            "'%s' MUST NOT appear" % MS_STDRV)
+    else:
+        log("SYSBOOT: booting the assembled disk with the MASTERED OVMX system "
+            "volume on rq1 -> ra1 -> DKA0: (deadline %ds); expecting the boot "
+            "to pass the installed-system gate and reach the PROVISION.EXE exec"
+            % boot_deadline)
+
+    a.dist.set_workdir(a.workdir)
+    a.n_cdrom = 0
+    child = a.start_simh(vmm_args)
+    seen = {}
+    try:
+        child.timeout = boot_deadline
+        child.expect(r">>>")
+        child.send("B/R5:2 DUA0\r")
+
+        # Pre-mount milestones, same order as do_prove.
+        for key, pat in [("syskrnl", MS_SYSKRNL), ("exec", MS_EXEC),
+                         ("banner", MS_BANNER), ("mounted", MS_MOUNTED)]:
+            try:
+                child.expect(pat, timeout=boot_deadline)
+                seen[key] = True
+                log("MILESTONE: saw %r" % pat)
+            except (pexpect.TIMEOUT, pexpect.EOF):
+                log("did not reach milestone %r; saw=%s" % (pat, sorted(seen)))
+                return seen
+
+        # The decisive race: does the installed-system gate HALT (DCL.EXE
+        # absent), or does the boot reach %STDRV-I-STARTUP (past the gate,
+        # about to exec PROVISION.EXE)?
+        try:
+            idx = child.expect([MS_STDRV, MS_INSTALLED_GATE_FAIL, pexpect.EOF],
+                               timeout=boot_deadline)
+            if idx == 0:
+                seen["stdrv"] = True
+                log("MILESTONE: saw %r -- PAST the installed-system gate; PID 1 "
+                    "is at the SYS$SYSTEM:PROVISION.EXE exec" % MS_STDRV)
+            elif idx == 1:
+                seen["installed_gate_fail"] = True
+                log("saw %r -- the installed-system gate HALTED (DCL.EXE absent)"
+                    % MS_INSTALLED_GATE_FAIL)
+            else:
+                log("SIMH exited before the gate resolved; saw=%s" % sorted(seen))
+                return seen
+        except pexpect.TIMEOUT:
+            log("timed out waiting for the installed-system gate to resolve; "
+                "saw=%s" % sorted(seen))
+            return seen
+
+        # Past the gate: CAPTURE the PROVISION.EXE exec outcome for the report
+        # (honest scouting boundary -- not asserted, since the exec-from-vmsfs
+        # VOP_GETPAGES gap is exactly what this run scouts).
+        if seen.get("stdrv"):
+            try:
+                idx = child.expect([MS_PROVISION_LOGIN, MS_PROVISION_NOIMG,
+                                    MS_PROVISION_HALT, r">>>", pexpect.EOF],
+                                   timeout=300)
+                outcomes = {0: "LOGIN(Username:)", 1: "NOIMG(activation failed)",
+                            2: "EXECINIT(PID 1 halt)", 3: "console prompt (>>>)",
+                            4: "EOF"}
+                seen["provision_outcome"] = outcomes.get(idx, "unknown")
+                log("PROVISION.EXE exec outcome: %s -- captured for the report "
+                    "(the exec-from-vmsfs gap is the expected boundary)"
+                    % seen["provision_outcome"])
+                # Pull a little trailing console for the record.
+                try:
+                    child.expect([pexpect.TIMEOUT, pexpect.EOF], timeout=20)
+                except Exception:
+                    pass
+                tail = (child.before or "")[-1200:] if hasattr(child, "before") else ""
+                if tail:
+                    log("post-STDRV console tail:\n%s" % tail)
+            except pexpect.TIMEOUT:
+                seen["provision_outcome"] = "none within window"
+                log("PROVISION.EXE exec produced no recognized outcome within "
+                    "the window (recorded)")
+    finally:
+        _hard_kill(child)
+
+    return seen
+
+
 def main():
     version = env("NETBSD_VERSION", "10.1")
     arch = env("NETBSD_ARCH", "vax")
@@ -410,6 +538,7 @@ def main():
     artifacts_dir = env("OVMX_ARTIFACTS", "/artifacts")
     src_iso = env("OVMX_SRC_ISO", "/tmp/ovmx-vax-boot.iso")
     ods2_img = env("OVMX_ODS2_IMG", "/cache/ovmx-ods2-vax.img")
+    sysvol_img = env("OVMX_SYSVOL_IMG", "/cache/ovmx-sysvol-vax.img")
 
     boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "1800"))
     cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "600"))
@@ -441,6 +570,66 @@ def main():
 
         if mode == "install-boot":
             return do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout)
+
+        if mode in ("sysboot", "sysboot-negctl"):
+            sb_negctl = (mode == "sysboot-negctl")
+            # negctl reuses the FLAT test volume (no DCL.EXE); the positive
+            # case uses the mastered SYSTEM volume.
+            vol = ods2_img if sb_negctl else sysvol_img
+            if not os.path.isfile(vol):
+                log("FAIL: volume image not found at %s (master it first)" % vol)
+                return 4
+            seen = do_sysboot(a, vol, sb_negctl, boot_deadline)
+
+            # Pre-mount milestones are required in BOTH cases -- a run that never
+            # even mounts cannot conclude anything about the installed-system
+            # gate.
+            if not (seen.get("syskrnl") and seen.get("exec")
+                    and seen.get("banner") and seen.get("mounted")):
+                log("SYSBOOT INCONCLUSIVE: did not reach the pre-gate milestones "
+                    "(executive attach + banner + MOUNTED); saw=%s" % sorted(seen))
+                return 21
+
+            if sb_negctl:
+                # Teeth: the flat volume MUST halt the installed-system gate and
+                # MUST NOT reach %STDRV-I-STARTUP.
+                if seen.get("stdrv"):
+                    log("SYSBOOT NEGATIVE CONTROL DID NOT FAIL: reached "
+                        "%STDRV-I-STARTUP with a volume that has no "
+                        "SYS$SYSTEM:DCL.EXE -- the installed-system gate has no "
+                        "teeth")
+                    return 20
+                if not seen.get("installed_gate_fail"):
+                    log("SYSBOOT NEGATIVE CONTROL INCONCLUSIVE: the flat volume "
+                        "neither halted the gate nor reached STDRV; saw=%s"
+                        % sorted(seen))
+                    return 22
+                log("PASS: sysboot negative control -- the flat volume (no "
+                    "DCL.EXE) correctly HALTED the installed-system gate and "
+                    "never reached %STDRV-I-STARTUP (the gate has teeth)")
+                return 0
+
+            # Positive: the mastered system volume MUST carry the boot PAST the
+            # gate to %STDRV-I-STARTUP (i.e. to the PROVISION.EXE exec).
+            if seen.get("installed_gate_fail"):
+                log("FAIL: the mastered system volume HALTED the installed-"
+                    "system gate (DCL.EXE not found at the rooted "
+                    "[SYS0.SYSCOMMON.SYSEXE] path) -- the volume did not master "
+                    "or the vax vmsfs mount cannot resolve the subdirectory path")
+                return 1
+            if not seen.get("stdrv"):
+                log("FAIL: mounted the system volume but did not reach "
+                    "%STDRV-I-STARTUP; saw=%s" % sorted(seen))
+                return 1
+            log("======================================================================")
+            log("  SYSBOOT PASSED: ovmx_init booted as PID 1 on NetBSD/vax, mounted")
+            log("  the MASTERED OVMX ODS-2 system volume, passed the installed-system")
+            log("  gate (SYS$SYSTEM:DCL.EXE resolved at the rooted path), and reached")
+            log("  %STDRV-I-STARTUP -- i.e. PID 1's exec of SYS$SYSTEM:PROVISION.EXE.")
+            log("  PROVISION.EXE exec outcome (scouting boundary): %s"
+                % seen.get("provision_outcome", "not captured"))
+            log("======================================================================")
+            return 0
 
         negctl = (mode == "negctl")
         seen = do_prove(a, ods2_img, negctl, boot_deadline)

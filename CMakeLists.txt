@@ -406,6 +406,20 @@ if(BUILD_TESTS)
                     ${CMAKE_CURRENT_SOURCE_DIR})
         set_tests_properties(vmsfs_master_roundtrip PROPERTIES
             LABELS "integration;tools" TIMEOUT 120)
+
+        # vms-d9c: the OVMX/NetBSD-vax SYSTEM volume must master to a rooted,
+        # bootable [SYS0.SYSCOMMON.SYSEXE] layout (the shape ovmx_init's
+        # require_installed_system() / run_startup() resolve), and the staged
+        # SYS$MANAGER:SYSTARTUP_VMS.COM must be the Decision-A vax variant with
+        # NO INSTALL ADD SYS$SHARE block. Host, per-PR half of vms-d9c (the SIMH
+        # boot is the nightly netbsd-vax-sysboot job); shares the same host
+        # vmsfs_master the roundtrip test uses.
+        add_test(NAME sysvol_master_vax
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_sysvol_master_vax.sh
+                    $<TARGET_FILE:vmsfs_master>
+                    ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(sysvol_master_vax PROPERTIES
+            LABELS "integration;tools;netbsd-vax" TIMEOUT 120)
     endif()
 
     # vms-0b6: the OVMX kit packer (tools/ovmx_kit_pack.c) must produce a kit

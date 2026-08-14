@@ -4609,6 +4609,89 @@ jobs:
         run: tests/lab-vax/run-boot.sh negctl
 
   # -----------------------------------------------------------------------
+  # netbsd-vax-sysboot (rd vms-d9c, epic vms-8e8, parent vms-d59).
+  #
+  # THE LAST INTEGRATION MILESTONE BEFORE THE DCL CAPSTONE (vms-d59). It masters
+  # a real OVMX *system* ODS-2 volume for netbsd-vax -- the five cross-built boot
+  # images (DCL.EXE, PROVISION.EXE, LOGINOUT.EXE, JOB_CONTROL.EXE, STARTUP.EXE)
+  # in the rooted+concealed [SYS0.SYSCOMMON.SYSEXE] layout, plus the reused
+  # arch-independent data files (SYSUAF.DAT, RIGHTSLIST.DAT, OVMXVMSSYS.PAR) and
+  # the Decision-A SYS$MANAGER:SYSTARTUP_VMS.COM (no INSTALL ADD SYS$SHARE block,
+  # which would red the boot under vax static linking) -- and boots vms-7b1's
+  # assembled disk (ovmx_init as PID 1) WITH that volume on rq1 -> ra1 -> DKA0:.
+  #
+  # It asserts the boot proceeds PAST ovmx_init's installed-system gate (no more
+  # "%OVMX-F-SYSINIT, ... DCL.EXE is absent" halt) and reaches %STDRV-I-STARTUP
+  # -- the line print_stdrv_begun() emits IMMEDIATELY before run_startup() execs
+  # SYS$SYSTEM:PROVISION.EXE -- i.e. it boots far enough to exec PROVISION.EXE
+  # from the mounted system volume. The sysboot-negctl step is its teeth: booting
+  # the SAME disk with the FLAT test volume (no DCL.EXE) MUST halt the gate and
+  # MUST NOT reach %STDRV-I-STARTUP, proving it is specifically the mastered
+  # system volume that carries the boot past the gate (Rule 7).
+  #
+  # PROVISION.EXE's activation itself is the honest scouting boundary: the vax
+  # vmsfs mount's VOP_GETPAGES is genfs_eopnotsupp (read-only mount), so
+  # demand-paging an image OFF the mounted ODS-2 volume cannot succeed yet
+  # (exec-from-vmsfs -- a separate item). The driver CAPTURES that outcome for
+  # the record; the asserted pass condition is reaching the PROVISION.EXE exec,
+  # never a faked login (INV-6).
+  #
+  # Same gating/shape as netbsd-vax-boot: NIGHTLY (schedule) + manual dispatch
+  # ONLY. Needs netbsd-vax-simh to prime the shared 10.1 disk cache; restores it,
+  # rebuilds the (cached) boot-work disk, cross-builds the boot image set, masters
+  # the system volume (host vmsfs_master), and boots. run-boot.sh wraps every
+  # SIMH invocation in a hard timeout. The host, per-PR half of this item is the
+  # `sysvol_master_vax' ctest (tests/integration/test_sysvol_master_vax.sh).
+  # -----------------------------------------------------------------------
+  netbsd-vax-sysboot:
+    name: OVMX boots past the installed-system gate to PROVISION.EXE on NetBSD/vax (vms-d9c)
+    needs: [changes, netbsd-vax-simh]
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-sysboot-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
+        uses: actions/cache@v4
+        with:
+          path: .boot-cache/lab-vax/boot-artifacts/netbsd-OVMX
+          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: "Sysboot — master the OVMX system volume and boot PAST the installed-system gate to the PROVISION.EXE exec"
+        run: tests/lab-vax/run-boot.sh sysboot
+
+      - name: "Negative control — the flat test volume (no DCL.EXE) must HALT the installed-system gate"
+        run: tests/lab-vax/run-boot.sh sysboot-negctl
+
+  # -----------------------------------------------------------------------
   # libvmssys-netbsd-vax (rd vms-9dc, epic vms-8e8; design sec 4).
   #
   # BUILD-ONLY cross-compile gate for the OVMX/NetBSD VAX userspace port. It

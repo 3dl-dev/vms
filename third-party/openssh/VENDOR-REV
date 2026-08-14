@@ -1,0 +1,116 @@
+Vendored package:  OpenSSH portable (clients: ssh, and later scp/sftp)
+Upstream:          OpenBSD OpenSSH portable release
+Primary URL:       https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.0p1.tar.gz
+Mirror URL:        https://ftp.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.0p1.tar.gz
+Pinned version:    10.0p1
+Tarball SHA256:    021a2e709a0edf4250b1256bd5a9e500411a90dddabea830ed59cef90eb9d85c
+Inner directory:   openssh-10.0p1
+Vendored:          2026-08-14
+License:           BSD / ISC — permissive OSS (see LICENCE in the extracted
+                   tree). The core SSH protocol code is under the OpenBSD
+                   2-clause BSD terms; portable/openbsd-compat carries a mix of
+                   BSD/ISC/public-domain notices. All OSI-approved permissive —
+                   legitimately vendorable and portable (this is precisely what
+                   the VSI/HP OpenVMS SSH port did via GNV).
+
+--------------------------------------------------------------------------------
+WHY OpenSSH portable, and the operator ruling (item vms-22a, parent vms-843)
+--------------------------------------------------------------------------------
+Operator directive (2026-08-14): SSH is THE networking client that matters.
+Do NOT hand-roll SSH — crypto and protocol are security-critical. PORT the real
+OpenSSH (OpenBSD upstream + the portable tree, which has an OpenVMS-port lineage
+via GNV). The original vms-843 body (a minimal from-scratch SSH-2 server) is
+abandoned. Full plan: docs/design-openssh-port-ovmx.md.
+
+This item (vms-22a) lands the CLIENT half first — ssh, then scp/sftp — because
+the clients only CONNECT OUT and so ride the already-done BGn: client path
+(vms-527); they are unblocked by the (still-pending) BGn: server path the sshd
+swap (vms-0cd) needs.
+
+--------------------------------------------------------------------------------
+WHY 10.0p1 (the exact pin), and the p2 mirror note
+--------------------------------------------------------------------------------
+10.0 is the current OpenSSH major (portable p-series). The pin is BY SHA256 —
+that is the reproducibility invariant, not the file name. Note a mirror quirk
+observed 2026-08-14: the OpenBSD CDN serves openssh-10.0p2.tar.gz with BYTES
+IDENTICAL to openssh-10.0p1.tar.gz (same SHA256 021a2e70…, inner directory
+openssh-10.0p1), and — the deciding detail — the SOURCE ITSELF self-identifies
+as OpenSSH_10.0p2: the built binary prints "OpenSSH_10.0p2, LibreSSL 4.1.2" for
+`ssh -V` (SSH_VERSION in version.h is p2). So the CONTENT is the security-fixed
+p2 release; only the CDN's file name / inner-directory label reads p1. We pin
+the exact tarball name that resolves reproducibly (openssh-10.0p1.tar.gz) with
+its verified SHA256, and the acceptance test asserts the OpenSSH_10.0 banner so
+the real version is checked, not assumed.
+
+To move the pin (e.g. when the mirror publishes genuinely distinct p2 bytes, or
+a later 10.x lands): update Pinned version / Tarball SHA256 / Inner directory /
+URLs here AND the OSSH_VERSION / OSSH_SHA256 / OSSH_INNER defaults in
+build-openssh.sh, then rerun third-party/openssh/test/run_ssh_build.sh in the
+musl container to reconfirm the static build + the transport-shim compile-check.
+
+--------------------------------------------------------------------------------
+LAYOUT — fetch-vendored, NOT a source copy in-tree (same model as libcrypto)
+--------------------------------------------------------------------------------
+Like third-party/libcrypto (and unlike third-party/tcc, a committed source
+copy), OpenSSH is a large, actively-developed tree; committing it wholesale
+would bloat the repo. This is a PINNED FETCH: build-openssh.sh fetches exactly
+this tarball, verifies it against the SHA256 above (mismatch = hard fail), and
+builds entirely out-of-tree (default /tmp) inside the project's containerized
+musl build tooling (alpine:3.20). Nothing is installed on the host and no build
+product ever lands in the repo (shared-host rule / "ALL deps containerized").
+
+  build-openssh.sh          fetch (SHA256-verified) + build the ssh client
+                            static against musl + the vendored libcrypto
+                            (third-party/libcrypto). Optional OVMX transport
+                            substitution (OVMX_BG_TRANSPORT=1, §below).
+  ovmx/ovmx_bg_transport.h  OVMX port layer: route the ssh transport over the
+  ovmx/ovmx_bg_transport.c  executive BGn: INET device (public $ASSIGN/$QIO),
+                            NOT a raw socket(). Mirrors
+                            src/vmstcpip/services/tcpip_client.h (vms-527).
+  ovmx/sshconnect-bg.patch  the minimal, localized edit to the vendored
+                            sshconnect.c (ssh_connect_direct) that calls the
+                            shim, guarded by -DOVMX_BG_TRANSPORT.
+  test/run_ssh_build.sh     acceptance: build static ssh; assert it is fully
+                            static + prints its version; then compile-check the
+                            transport shim against the real OVMX headers and the
+                            patched sshconnect.c against the shim. CI job:
+                            openssh-static-musl.
+
+--------------------------------------------------------------------------------
+THE OVMX TRANSPORT SUBSTITUTION (BGn:) — what is proven where
+--------------------------------------------------------------------------------
+Stock OpenSSH opens its TCP connection with socket()/connect() in sshconnect.c
+and then drives KEX/auth/channel I/O as read()/write()/poll() on that fd. On
+OVMX a VMS program reaches TCP the ordinary VMS way: $ASSIGN TCPIP$DEVICE: +
+$QIO into the executive-resident BGn: socket (vms.ko, over the host kernel's
+in-kernel socket API) — there is NO userspace socket stack. ovmx_bg_connect()
+substitutes that path: it $ASSIGNs/$QIOs a BGn: connection and hands OpenSSH an
+ordinary pollable socketpair fd that pump threads bridge to the VMS channel, so
+the vendored packet layer is unchanged (design §2.3, the "BSD-socket veneer over
+BGn:"). If /dev/vms is absent, $ASSIGN returns SS$_NOSUCHDEV and the connect
+fails honestly (errno ENODEV) — never a raw-socket fallback (Rule 9 / INV-6).
+
+Proven by CI (openssh-static-musl, this item):
+  1. OpenSSH 10.0p1 ssh cross-builds FULLY STATIC against musl + the vendored
+     LibreSSL libcrypto, zero source patches (--without-zlib --without-pam).
+  2. ovmx_bg_transport.c compiles clean (-Wall -Wextra) against the real OVMX
+     system-service headers (src/libvms/include).
+  3. The sshconnect-bg.patch applies to the pinned source and the patched TU
+     compiles with -DOVMX_BG_TRANSPORT, its object referencing ovmx_bg_connect
+     (the substitution is wired, not just present on disk).
+
+Deferred to the QEMU Kernel-Executive proof (continuation, see the PR/design):
+  building ssh as the OVMX IMGACT image linked against libvms and proving a REAL
+  SSH key exchange + auth + remote command over BGn: against an in-guest loopback
+  sshd on a real /dev/vms (Rule 9), honest-skip (77) without the executive.
+
+--------------------------------------------------------------------------------
+Rule 8 / clean-room
+--------------------------------------------------------------------------------
+OpenSSH (BSD/ISC) and LibreSSL (ISC/OpenSSL-style) are permissive OSS we may
+legitimately read, port and adapt — Rule 8's HARD INVARIANT is about
+reverse-engineered VMS formats/protocols and VSI/HPE source/binaries, which we
+never touch. The VMS-facing surface the shim speaks (TCPIP$DEVICE:, the QIO
+function map, the 8-byte BGn: sockaddr) is from public VSI OpenVMS TCP/IP
+Services docs + the already-landed BGn: driver, and the shim is labeled an OVMX
+design choice — no VMS-authentic claim is made for it.

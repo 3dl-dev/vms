@@ -298,3 +298,71 @@ Prereq A (func)  ┌───────────────┴────
 - **Non-negotiable (Rule 9 / INV-6):** every network + terminal facility routes
   through `/dev/vms`; absent executive → honest `SS$_NOSUCHDEV`, never a
   per-process fake.
+
+---
+
+## 7. Implementation status — `ssh` client, increment 1 (vms-22a)
+
+> Landed by `work/vms-22a`. This section records what is proven vs. deferred; it
+> is the continuation pointer for finishing the clients.
+
+The **client half** starts here because the clients only *connect out* and so
+ride the already-done BGn: client path (`vms-527`), unblocked by the (pending)
+BGn: server path the sshd swap needs.
+
+### 7.1 Vendored (fetch-vendored, SHA-pinned — same model as `libcrypto`)
+`third-party/openssh/` — `VENDOR-REV` pins **OpenSSH-portable 10.0** (tarball
+`openssh-10.0p1.tar.gz`, SHA256 `021a2e70…`; the source self-identifies as
+`OpenSSH_10.0p2`, LibreSSL 4.1.2 — see the VENDOR-REV p2/p1 mirror note).
+`build-openssh.sh` fetches (SHA-verified) + cross-builds the `ssh` client
+**fully static** against musl + the vendored static `libcrypto`
+(`third-party/libcrypto`), out-of-tree, `--without-zlib --without-pam`. License
+BSD/ISC (permissive OSS; Rule 8 unaffected — §5).
+
+### 7.2 Transport substitution → BGn: (the OVMX-specific work)
+`third-party/openssh/ovmx/` is the OVMX **port layer**:
+- `ovmx_bg_transport.{c,h}` — `ovmx_bg_connect(sa)` opens the transport over the
+  executive-resident BGn: INET device via the **public** `$ASSIGN TCPIP$DEVICE:`
+  + `$QIO` (`IO$_SETMODE`/`IO$_ACCESS`/`IO$_READVBLK`/`IO$_WRITEVBLK`/`IO$_DEACCESS`),
+  mirroring `src/vmstcpip/services/tcpip_client.h` (`vms-527`/`vms-dbb`). It hands
+  OpenSSH an ordinary **pollable socketpair fd** and runs two pump threads that
+  bridge that fd to the VMS channel, so OpenSSH's packet/poll loop is unchanged —
+  the concrete realization of §2.3's "BSD-socket veneer over BGn:". Every wire
+  byte transits `$QIO` into `vms.ko`; there is **no userspace socket stack**.
+  If `/dev/vms` is absent, `$ASSIGN` returns `SS$_NOSUCHDEV` → `ovmx_bg_connect`
+  fails `ENODEV` — **never** a raw `socket()` fallback (Rule 9 / INV-6).
+- `sshconnect-bg.patch` — the **minimal, localized** edit to the vendored
+  `sshconnect.c` (`ssh_connect_direct`'s inner loop) that calls `ovmx_bg_connect`
+  in place of `ssh_create_socket` + `timeout_connect`, guarded by
+  `-DOVMX_BG_TRANSPORT`. The connect functions named as the substitution target
+  in the item scope are exactly these.
+
+### 7.3 Proven in CI (`openssh-static-musl`, mirrors `libcrypto-static-musl`)
+`third-party/openssh/test/run_ssh_build.sh` asserts, from a clean fetch in the
+alpine:3.20 musl container:
+1. **`ssh` cross-builds fully static** against musl + vendored libcrypto (no
+   `(NEEDED)` entries) — the make-or-break for the whole port — and `ssh -V`
+   runs and prints `OpenSSH_10.0p2, LibreSSL 4.1.2`.
+2. `ovmx_bg_transport.c` **compiles clean** (`-Wall -Wextra`) against the real
+   OVMX system-service headers (`src/libvms/include`).
+3. The `sshconnect-bg.patch` **applies** to the pinned source and the patched TU
+   **compiles** with the OVMX branch active, its object **referencing
+   `ovmx_bg_connect`** (the substitution is wired, not just present on disk).
+
+### 7.4 Continuation (deferred — do next, in order)
+1. **`ssh` as the OVMX IMGACT image.** Build `ssh` as a static-PIE `PT_INTERP`
+   image linked against **libvms** (so `ovmx_bg_transport.c`'s `$ASSIGN`/`$QIO`
+   resolve to the real services) that activates through IMGACT — the OVMX-native
+   image the guest actually runs. This is the piece that turns the compile-checked
+   shim into a linked, activatable client.
+2. **Real-KEX QEMU proof (Rule 9).** A `tests/qemu` Kernel-Executive suite where
+   the OVMX `ssh` performs a REAL SSH key exchange + auth against an in-guest
+   loopback `sshd` over `127.0.0.1` via BGn:, and runs a trivial remote command
+   captured byte-exact; honest-skip (77 / `SS$_NOSUCHDEV`) without `/dev/vms`.
+   As a NEW executive-exercising QEMU suite this needs its paired MEASURED negctl
+   entry in `tests/qemu/facility_defects.sh` (`suites_red`) + a `facility_defects_floor.txt`
+   bump — model on `facility_attribution_negctl.sh` (the build probe in 7.3 is
+   NOT a QEMU suite, so it carries no such anchor).
+3. **`scp` + `sftp`** (+ `sftp-server` subsystem) as IMGACT images over the same
+   BGn: client path + crypto/compat shims — file round-trips. Filed as follow-ups
+   to `vms-22a`.

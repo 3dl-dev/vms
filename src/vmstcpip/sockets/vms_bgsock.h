@@ -31,6 +31,15 @@
  * porting -- map socket/connect/close to the ovmx_* entries). Every wire byte
  * still transits $QIO into the executive.
  *
+ * BRIDGE CAVEAT (OPEN -- docs/design-bgsockets-veneer-ovmx.md §4). The current
+ * two-thread pump issues concurrent BLOCKING $QIOW read and write on the SAME
+ * BGn: channel; a first QEMU proof showed this WEDGES in-guest (the proven raw
+ * path test_syssvc_bg_echo only ever does write-THEN-read on one thread). The
+ * next increment reworks the bridge to async $QIO + AST multiplex (or confirms
+ * concurrent per-channel read/write in vms_bg.c) and lands the green Rule-9
+ * proof + its negctl. Until then the verified surface is compile + the host-side
+ * honest-skip / resolver, not the /dev/vms byte round-trip.
+ *
  * INV-6 / Rule 9 (HONEST FAILURE). If /dev/vms is absent the executive INET
  * device does not exist: $ASSIGN TCPIP$DEVICE: returns SS$_NOSUCHDEV and
  * ovmx_socket() fails with errno=ENODEV -- it NEVER falls back to a raw Linux

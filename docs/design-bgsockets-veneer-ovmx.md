@@ -58,15 +58,35 @@ fails `ENODEV`. The veneer **never** falls back to a raw Linux `socket()` that
 would connect while sharing nothing with the executive. A silent userspace
 fallback is exactly the LARP bug class the authenticity invariants kill.
 
-## 4. Proof (Rule 9)
+## 4. Proof (Rule 9) — status: OPEN, a real finding
 
-`tests/qemu/test_syssvc_bgsock_echo.c` — a program `ovmx_socket()`+`ovmx_connect()`s
-to a 127.0.0.1 loopback echo peer and round-trips a message **byte-exact** through
-ordinary `read()`/`write()` on the returned fd, against a **real `/dev/vms`**;
-honest-skip (77) without the executive. The pure numeric-IPv4 resolver is checked
-on both branches. Negative control `bgsock-recv-length-zeroed`
-(`tests/qemu/facility_defects.sh`, floor 102→103) zeroes the received byte count
-in the veneer's inbound pump so only the byte-exact echo assertion reddens.
+A QEMU Kernel-Executive proof (`test_syssvc_bgsock_echo`: `ovmx_socket()`+
+`ovmx_connect()` to a 127.0.0.1 loopback echo peer, byte-exact round-trip over a
+real `/dev/vms`, honest-skip 77 without it, with a paired negctl) was written and
+run. **It failed in-guest, and the failure is a real design finding, not a test
+bug:**
+
+> The current bridge runs **two pump threads doing concurrent BLOCKING `$QIOW`
+> — `IO$_READVBLK` and `IO$_WRITEVBLK` — on the SAME BGn: channel**. In QEMU this
+> wedges (the client's `write()` fails / the run times out). The proven raw path
+> `test_syssvc_bg_echo` does write-**then**-read *sequentially on one thread*, so
+> it never exercises concurrent same-channel QIO. A pollable-fd veneer inherently
+> needs both directions live at once, so the bridge must not serialize on one
+> blocking-QIO channel.
+
+**Fix direction (next increment), pick one and prove it:**
+1. **Async QIO + AST multiplex on one channel** — issue `$QIO` (not `$QIOW`) for
+   both directions with completion ASTs / event flags, so a single pump services
+   read and write completions without two threads blocking the same channel.
+2. **Confirm/enable concurrent read+write in the BGn: driver** (`vms_bg.c`) — if
+   the executive already tolerates a simultaneous outstanding read and write IRP
+   per channel, the two-thread model can stay; the QEMU proof will say which.
+
+Until this lands, the veneer's client connect/close path and the numeric-IPv4
+resolver are the verified surface (compile + host-side honest-skip); the byte
+round-trip over `/dev/vms` is the open proof. The `test_syssvc_bgsock_echo` suite
++ its `bgsock-recv-length-zeroed` negctl are **held back** (not landed red) until
+the bridge is fixed and the proof is green by SHA.
 
 ## 5. Scope / follow-on
 

@@ -405,12 +405,4 @@
 # (The third baselined-unanchored suite, test_kmod_vmsfs_sysgroup, was moved
 # to SCOPE_OUT_SUITES, not made a defect: its property lives in vmsfs.ko, which
 # this executive gate declares out of scope -- so it adds no defect here.)
-# Raised to 103 by vms-22a's bgsock-recv-length-zeroed -- the BSD-sockets RTL
-# veneer over BGn: (src/vmstcpip/sockets/vms_bgsock.c), the DECC$SOCKET-
-# equivalent layer between an application's standard socket()/connect() and the
-# executive BGn: driver. Anchors the new test_syssvc_bgsock_echo suite (a
-# 127.0.0.1 loopback echo driven through ovmx_socket()/ovmx_connect() + read()/
-# write() over a real /dev/vms); the mutation zeroes the received byte count in
-# the veneer's inbound pump so the echo comes back short while socket/connect/
-# write stay green. See its own entry in facility_defects.sh for what it covers.
-103
+102

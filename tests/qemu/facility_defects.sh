@@ -511,7 +511,6 @@ sysuaf-uic-radix-decimal
 sysuaf-uic-writeback-decimal
 bg-recv-length-zeroed
 tcpip-ftp-get-length-dropped
-bgsock-recv-length-zeroed
 vmsfs-mountvis-crossproc-resolve-disabled
 initialize-home-magic-not-written"
 
@@ -5395,23 +5394,6 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
-    bgsock-recv-length-zeroed)
-        case "$_f" in
-        facility)     echo "BSD-sockets RTL veneer over BGn: -- the inbound pump of the OVMX sockets veneer (pump_in, src/vmstcpip/sockets/vms_bgsock.c, vms-22a prereq), the DECC\$SOCKET-equivalent middle layer between an application's standard socket()/connect() and the executive-resident BGn: driver. The app speaks ONLY sockets; the veneer translates them into the public \$ASSIGN TCPIP\$DEVICE: + \$QIO ops. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive (ovmx_socket -> ENODEV).";;
-        targets)      echo "vmstcpip/sockets/vms_bgsock.c";;
-        suites_red)   echo "test_syssvc_bgsock_echo";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "the inbound pump reads the wire with IO\$_READVBLK and forwards the bytes to the application through the socketpair. The mutation zeroes the received byte count ('got = iosb\$w_bcnt;' -> 'got = 0;'), so the pump treats every recv as EOF and forwards nothing -- the loopback echo comes back short/empty. The recv itself still returns SS\$_NORMAL, and ovmx_socket/ovmx_connect/write all stay green -- only the byte-exact echo assertion reddens. One assignment zeroed.";;
-        require_fail) cat <<'EOF'
-read() returns the echoed message BYTE-EXACT through the veneer (pump <- IO$_READVBLK)
-EOF
-                      ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
-        esac;;
-
     # -------------------------------------------------------------------
     # vms-6c6: two suites #284/#272 (vms-8b6, vms-cf62) left with NO
     # per-facility negative control -- the same coverage-gate hole
@@ -6288,15 +6270,6 @@ apply_edit() {
         # range anchor is needed; after substitution no 'total += take;' is left,
         # making a second apply the no-op the selftest requires.
         sed -i 's|total += take;          /\* NEGCTL tcpip-ftp-get-length-dropped \*/|total += 0; /* NEGCTL tcpip-ftp-get-length-dropped */|' "$_file";;
-
-    bgsock-recv-length-zeroed)
-        # Zero the received byte count in the veneer's inbound pump (pump_in),
-        # anchored on its own NEGCTL comment so the text is unique in the file:
-        # 'got = iosb$w_bcnt;' -> 'got = 0;'. The pump then treats every recv as
-        # EOF and forwards nothing, so the loopback echo comes back short. After
-        # substitution no 'got = iosb$w_bcnt;' with that comment is left, making
-        # a second apply the no-op the selftest requires.
-        sed -i 's|got = iosb.iosb$w_bcnt;         /\* NEGCTL bgsock-recv-length-zeroed \*/|got = 0; /* NEGCTL bgsock-recv-length-zeroed */|' "$_file";;
 
     vmsfs-mountvis-crossproc-resolve-disabled)
         # UNIQUE TEXT: vmsfs_device_resolve_executive's own /proc/mounts guard;

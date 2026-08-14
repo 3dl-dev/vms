@@ -107,7 +107,11 @@ CPPFLAGS="-DOVMX_KBACKEND_NETBSD -nostdinc -isystem $KL -isystem $SYS -isystem $
 #   vms_mbx.c           - executive-resident mailboxes MBAn:
 #   vms_proctab.c       - executive process table ($GETJPI/$SETPRN/$PROCESS_SCAN)
 #   vms_lock.c          - distributed lock manager ($ENQ/$DEQ/$CONVERT/$GETLKI)
+#   vms_lnm.c           - executive-resident logical-name tables LNM$SYSTEM/GROUP/
+#                         JOB (rd vms-72da, the LAST facility): DEFINE/DELETE/
+#                         GETSCOPE + the read-only arena (sole exec_arena consumer)
 SRCS="$KMOD/vms_netbsd.c \
+      $KMOD/vms_lnm_arena_netbsd.c \
       $KMOD/exec_list_netbsd.c \
       $KMOD/exec_hash_netbsd.c \
       $KMOD/exec_rbtree_netbsd.c \
@@ -116,7 +120,8 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_access.c \
       $CORE/vms_mbx.c \
       $CORE/vms_proctab.c \
-      $CORE/vms_lock.c"
+      $CORE/vms_lock.c \
+      $CORE/vms_lnm.c"
 
 # ---- teeth check ---------------------------------------------------------
 # A deliberately-broken TU MUST fail the cross-compile, or a real break slips by.
@@ -234,6 +239,7 @@ done
 [ "$FAIL" -eq 0 ] || { echo "FAIL: at least one object was not elf32-vax/vax"; exit 1; }
 echo
 
-echo "=== ALL PROOFS PASSED: the OVMX executive vms module (10 TUs: vms_netbsd.c,"
-echo "    exec_{list,hash,rbtree}_netbsd.c + shared vms_{eflag,ast,access,mbx,proctab,lock}.c)"
+echo "=== ALL PROOFS PASSED: the OVMX executive vms module (12 TUs: vms_netbsd.c,"
+echo "    vms_lnm_arena_netbsd.c, exec_{list,hash,rbtree}_netbsd.c + shared"
+echo "    vms_{eflag,ast,access,mbx,proctab,lock,lnm}.c)"
 echo "    cross-compiles + relocatable-links for elf32-vax, ILP32 width-clean ==="

@@ -520,37 +520,31 @@ exec_netdev_primary(char *name, unsigned int namesz, int *link_up)
 static __inline void exec_membar_producer(void) { membar_producer(); }
 static __inline void exec_membar_consumer(void) { membar_consumer(); }
 
-/* ---- 10. userspace-publishable arena (vms-d61; see exec_kbackend.h) ----
+/* ---- 10. userspace-publishable arena (vms-d61 contract; vms-72da binding) ----
  *
- * COMPILE STATUS, and why this side is a contract-only twin (the exec_rbtree /
- * exec_blockdev precedent). vms_lnm.c -- the only facility that allocates an
- * arena -- is NOT in this module's SRCS yet (only vms_eflag.c is), so these are
- * type-checked-at-most and never called on NetBSD. The REAL NetBSD binding is a
- * uvm anonymous object: exec_arena_alloc would uao_create(n, 0) and map its
- * pages into the kernel (uvm_map with UVM_ADV_NORMAL) to get a writable kernel
- * VA, taking a uao_reference the char-device mmap glue later hands to a process
- * with uvm_map + uvm_map_pageable read-only (the uvm twin of Linux
- * remap_vmalloc_range + clearing VM_MAYWRITE); exec_arena_free would uvm_unmap
- * the kernel range and uao_detach. Binding that -- and the mmap-time publish in
- * the NetBSD char-device rind -- is the lnm-on-NetBSD proof's concern (a later
- * item, following exec_blockdev). Until then this is a compile-safe documented
- * stub that touches no uvm internals and reports failure, naming its real
- * source here. It is never on a live path (INV-6 / Rule 11: it allocates
- * nothing and fabricates nothing -- it fails honestly). */
+ * BOUND on NetBSD as of vms-72da (lnm joined the module's SRCS). The arena is
+ * physically-backed, WIRED kernel memory: uvm_km_alloc(kernel_map, ...,
+ * UVM_KMF_WIRED | UVM_KMF_ZERO) returns a zeroed, page-aligned kernel VA whose
+ * pages are real RAM that never pages out -- so the char device's d_mmap can
+ * resolve each page to a physical frame with pmap_extract() and publish it
+ * read-only into a process (the standard NetBSD /dev/mem idiom: d_mmap returns
+ * atop(pa) per page and the device pager reconstructs the frame via
+ * pmap_phys_address). It is the real thing (INV-6 / Rule 11): genuine shared
+ * kernel state, one writer (the executive), MMU-enforced RO for readers.
+ *
+ * WHY THESE ARE EXTERN, NOT INLINE (unlike every other op in this backend). The
+ * uvm KPIs the arena needs (uvm_km_alloc/free, kernel_map, pmap_extract) live
+ * behind <uvm/uvm_extern.h>, which transitively pulls <sys/rbtree.h> -- whose
+ * rb_left/rb_right MACROS collide with OVMX's intrusive exec_rbtree_netbsd.h
+ * (the DLM's lock-ID tree), a header EVERY executive TU also includes via
+ * vms_internal.h. So the uvm-coupled definitions cannot live in a header shared
+ * with the rbtree; they live in a DEDICATED glue TU that includes uvm but NOT
+ * the executive's rbtree headers: src/kernel-netbsd/vms_lnm_arena_netbsd.c. This
+ * is the MMAP-glue-stays-in-the-rind rule (design §2) taken one step further:
+ * the arena's host-mm coupling is quarantined in its own rind TU. The signatures
+ * here carry no uvm type, so this declaration needs no uvm header. */
 typedef void *exec_arena_t;
-static __inline void *
-exec_arena_alloc(size_t n)
-{
-	/* vms-d61: bind to uao_create(n,0) + uvm_map for a writable kernel VA on
-	 * the lnm-on-NetBSD proof (rd, later). Never reached today (vms_lnm.c is
-	 * not in this module's SRCS). */
-	(void)n;
-	return NULL;
-}
-static __inline void
-exec_arena_free(void *arena)
-{
-	(void)arena;   /* vms-d61: uvm_unmap the kernel range + uao_detach. */
-}
+void *exec_arena_alloc(size_t n);
+void  exec_arena_free(void *arena);
 
 #endif /* OVMX_EXEC_KBACKEND_NETBSD_H */

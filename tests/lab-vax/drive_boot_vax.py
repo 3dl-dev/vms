@@ -83,6 +83,15 @@ MS_STDRV               = "%STDRV-I-STARTUP"
 MS_PROVISION_LOGIN   = "Username:"
 MS_PROVISION_NOIMG   = "%OVMX-E-NOIMG"
 MS_PROVISION_HALT    = "%OVMX-F-EXECINIT"
+# vms-72da: the logical-name-layer boundary. Before the NetBSD executive gained
+# the logical-name facility (vms.kmod's LNM$SYSTEM arena + DEFINE/DELETE/GETSCOPE
+# ioctls + the read-only arena mmap), PROVISION.EXE ran but could not CREATE the
+# system logicals SYS$STARTUP/SYS$LOGIN/SYS$UPDATE, so STARTUP looped on
+# %DCL-E-LNMFAIL -> %RMS-E-FNF (VMS$PHASES.DAT) -> %DCL-E-IVLOGNAM (~22,263x).
+# Seeing LNMFAIL/IVLOGNAM now is a REGRESSION of that facility; NOT seeing it (the
+# boot reaches Username: or the next honest gap) is the vms-72da milestone.
+MS_PROVISION_LNMFAIL = "%DCL-E-LNMFAIL"
+MS_PROVISION_IVLOGNAM = "%DCL-E-IVLOGNAM"
 
 
 def log(msg):
@@ -499,11 +508,14 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline):
         if seen.get("stdrv"):
             try:
                 idx = child.expect([MS_PROVISION_LOGIN, MS_PROVISION_NOIMG,
-                                    MS_PROVISION_HALT, r">>>", pexpect.EOF],
+                                    MS_PROVISION_HALT, MS_PROVISION_LNMFAIL,
+                                    MS_PROVISION_IVLOGNAM, r">>>", pexpect.EOF],
                                    timeout=300)
                 outcomes = {0: "LOGIN(Username:)", 1: "NOIMG(activation failed)",
-                            2: "EXECINIT(PID 1 halt)", 3: "console prompt (>>>)",
-                            4: "EOF"}
+                            2: "EXECINIT(PID 1 halt)",
+                            3: "LNMFAIL(system logicals cannot be created -- vms-72da REGRESSION)",
+                            4: "IVLOGNAM(logical-name loop -- vms-72da REGRESSION)",
+                            5: "console prompt (>>>)", 6: "EOF"}
                 seen["provision_outcome"] = outcomes.get(idx, "unknown")
                 log("PROVISION.EXE exec outcome: %s -- captured for the report "
                     "(the exec-from-vmsfs gap is the expected boundary)"

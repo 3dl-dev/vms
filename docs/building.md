@@ -67,7 +67,7 @@ Builds a minimal Linux system with OVMX as the userspace.
 
 ```bash
 # Build kernel + initramfs (outputs to dist/)
-docker build -f Dockerfile.bootable -o dist .
+docker build -f distro/Dockerfile.bootable -o dist .
 
 # Boot with QEMU
 ./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz

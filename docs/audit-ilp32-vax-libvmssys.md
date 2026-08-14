@@ -390,6 +390,26 @@ NetBSD 10 aliases it to `MAP_ANON`, and it compiles on the VAX sysroot.)
   `scs_membership.h` headers). All are identical on every arch and non-fatal
   (the netbsd branch is `-Wall -Wextra` without `-Werror`); recorded so a later
   reader does not misread them as ILP32 defects.
+- **`sys_imgact.c` `-Wint-to-pointer-cast` (6×) — EXPECTED, dead on vax, NOT a
+  defect.** `sys_imgact.c` is the OVMX-native in-process image activator
+  (`SYS$IMGACT` as a library, the Linux / self-hosting-pillar path). It hardcodes
+  the 64-bit ELF structures (`Elf64_Ehdr/Phdr/Dyn/Rela`) and casts an
+  `unsigned long base` + 64-bit `p_vaddr`/`r_offset` to pointers, so on ILP32 the
+  vax compiler emits "cast to pointer from integer of different size" for those
+  casts. This is **not** an ILP32 defect and **cannot** execute on vax: under
+  Decision A (rd vms-42d) OVMX images on netbsd-vax are activated by NetBSD
+  `/usr/libexec/ld.elf_so`, never by this activator. `imgact_activate()` gates on
+  `eh.e_ident[EI_CLASS] != ELFCLASS64` (→ `SS$_BADPARAM`) and `IMGACT_EM == 0`
+  (→ `SS$_UNSUPPORTED`) *before* any of the flagged casts is reached; every vax
+  image is ELFCLASS32, so it always declines and DCL's `RUN` path
+  (`dcl_activate_image`) falls through to its `fork()+execve()` model — the
+  correct netbsd-vax activation. The warned-on code is therefore unreachable on
+  vax. It is *not* substrate-guarded the way `sys_uring.c`/`sys_memory.c` are
+  (§9.1/§9.2); guarding it to a `#if !defined(__linux__)` stub (to make the
+  netbsd-vax libvms compile warning-clean, matching that pattern) is filed as a
+  follow-up cleanliness item — it touches the activation / self-hosting pillar
+  surface, changes no runtime behavior on any substrate, and is not required for
+  the boot (the images already build, link, and activate).
 
 ### 9.4 How this was validated
 `tools/cross-vax/build-libvms-vax.sh` (CI job `libvms-netbsd-vax`)

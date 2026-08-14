@@ -117,6 +117,9 @@ jobs:
               - 'tests/qemu/test_boot_conformance.sh'
               - 'tests/qemu/test_boot_scsnode_hostname_e2e.sh'
               - 'tests/qemu/run_boot_scsnode_hostname_e2e.sh'
+              - 'tests/qemu/test_sysboot_conversational.sh'
+              - 'tests/qemu/test_sysboot_cluster_params_e2e.sh'
+              - 'tests/qemu/run_sysboot_cluster_params_e2e.sh'
               - 'tests/uat/**'
             release:
               - '.github/workflows/**'
@@ -554,7 +557,10 @@ jobs:
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 40 (was 30): the SYSBOOT> conversational proof (vms-b81, wired in by
+    # vms-46c) adds a three-boot expect-driven step to this job; the extra
+    # margin keeps a congested runner from tripping the ceiling as a flake.
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -661,6 +667,25 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_boot_conformance.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-b81. Reuses the image built above (no extra build). The SYSBOOT>
+      # conversational-boot proof: on ovmx.flags=0,1 the boot halts at the
+      # SYSBOOT> prompt with NOTHING preceding it on the console (not even the
+      # executive-attach line), the SHOW SCSNODE table is byte-shaped to the
+      # OpenVMS Alpha 8.4 oracle (docs/design-boot-faithful.md §3.1), SET
+      # SCSNODE + CONTINUE boots showing the SET node name, and a subsequent
+      # flagless boot on the SAME disk shows the value is back to the file's
+      # (SET is in-memory-only unless WRITEn -- VMS persistence semantics).
+      # `expect` (test tooling, not runtime -- Rule 9) drives the real serial
+      # console. This gate authored the mechanism but was never wired into CI
+      # until vms-46c; it runs here now.
+      - name: SYSBOOT> conversational boot halts pre-banner (vms-b81)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_sysboot_conversational.sh:/test.sh:ro \
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh
@@ -1266,6 +1291,62 @@ jobs:
           rc=$?
           if [ "$rc" -eq 77 ]; then
             echo "FATAL: boot_scsnode_hostname_e2e SKIPPED in CI — this gate must actually run the real boot, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2d: cluster params authored at SYSBOOT> -> booted system reflects them
+  # (vms-46c gap #2, conversational boot)
+  #
+  # The conversational-boot MECHANISM (SYSBOOT> halts pre-banner on the boot
+  # flag; SHOW/SET/USE/WRITE/CONTINUE against SYS$SYSTEM:OVMXVMSSYS.PAR) landed
+  # with vms-b81; test_sysboot_conversational.sh (boot-smoke job above) proves
+  # it for a STRING parameter and the pre-banner/persistence semantics. THIS
+  # gate proves the part that does not: a NUMERIC cluster-identity parameter
+  # (SCSSYSTEMID) driven through the same prompt with WRITE, and BOTH the
+  # string node name AND the numeric parameter observably in effect in the
+  # booted, logged-in system (F$GETSYI reads them) -- the whole point of
+  # conversational boot for clustering (docs/design-boot-faithful.md §2.2/§4.2).
+  # A flagless bracket boot on a fresh disk shows the seeded defaults, proving
+  # the authored values came from the SYSBOOT> session, not the seed.
+  #
+  # Same SKIP_RETURN_CODE 77 => hard CI failure convention as the scsnode e2e
+  # above: this gate must actually run the real boot, never skip silently.
+  # -----------------------------------------------------------------------
+  sysboot-cluster-params-e2e:
+    name: SYSBOOT> authors cluster params (vms-46c gap #2)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: SYSBOOT> cluster-param e2e — author at prompt, boot, verify in-guest
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_sysboot_cluster_params_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: sysboot_cluster_params_e2e SKIPPED in CI — this gate must actually run the real boot, never skip silently." >&2
             exit 1
           fi
           exit "$rc"

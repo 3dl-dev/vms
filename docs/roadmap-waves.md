@@ -1,5 +1,9 @@
 # OVMX Roadmap — Wave Plan (swarm-dispatch execution)
 
+> **Historical / superseded (2026-08-14).** The roadmap of record is
+> `docs/release-roadmap-to-1.0.md` (generated from rd + git tags). This document is
+> retained as pre-pivot design history; re-derive any status from `rd` before acting.
+
 > Purpose: a dependency-wired, outcome-scoped execution plan so `swarm-dispatch`
 > can iterate the roadmap in **waves** across clean sessions. A *wave* is simply
 > "the set of `rd ready` items at a point in time" — when a wave's items close,

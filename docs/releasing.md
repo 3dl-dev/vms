@@ -16,7 +16,7 @@ artifacts out and write the notes" step left.
 | **Coverage** | `tools/compat/snapshot.py` + `render_compat.py --check` | The Compatibility Surface Register validates clean, and a per-cut coverage snapshot (`docs/compat/snapshots/<version>.json` + `compat-coverage.json` in the bundle) plus a compatibility-surface delta block (counts + V1 met, no percentages) in the notes are produced. See `docs/compat/REFRESH.md`. |
 | **Prove** | CI: `cut-release-reproducible`, `release-acceptance`, `upgrade-e2e` | Two independent cuts are byte-identical; the cut artifact boots and reports the shipped version; a `0.N→0.N+1` upgrade preserves site config. |
 | **Document** | `tools/check_guide_drift.py` + `guide_drift_gate`; the site-manual drift + grounding gates in `openvmx-site` | `docs/install-guide.md` / `docs/upgrade-guide.md` cannot drift from the e2e gates that prove them; the public Installation Guide's install commands are re-checked against `tests/qemu/test_product_install_e2e.sh` on every cut and on every docs PR; and at a major/minor cut its capability claims are checked against the compat register by `check_manual_grounding.py`. |
-| **Publish** | `tools/publish-release.sh` + `.github/workflows/release.yml` | Bundle artifacts + generated notes attached to a GitHub Release; notes recorded in-tree under `docs/release-notes/`. |
+| **Publish** | `tools/publish-release.sh` + `.github/workflows/release.yml` | Bundle artifacts + generated notes attached to a GitHub Release; notes recorded in-tree at `docs/RELEASE-NOTES-<version>.md`. |
 
 ## Cutting a release locally
 
@@ -89,11 +89,15 @@ never silently ship corrupt bytes or the wrong version label.
 ## Tracking release notes
 
 `tools/gen_release_notes.py` derives notes mechanically from git history, so
-they never drift from what actually shipped. `publish-release.sh` both
-**publishes** those notes (as the GitHub Release body) and **records** them
-in-tree under `docs/release-notes/RELEASE-NOTES-<version>.md` (staged, not
-committed — you commit the record alongside the tag). That directory is the
-version-controlled log of every published release's notes.
+they never drift from what actually shipped. `publish-release.sh` **publishes**
+those notes as the GitHub Release body; its `docs/release-notes/`
+in-tree-recording path exists but is disabled by `--no-record-notes` in the
+tag-triggered `release.yml` job (committing the in-tree record is a source
+change for a PR, not something a tag publish should push back to the branch).
+In practice the version-controlled log lives at
+`docs/RELEASE-NOTES-<version>.md` (repo `docs/` root) — added as part of the
+version-bump PR that cuts the release. That is the canonical, tracked location
+of every published release's notes.
 
 ## Reviewing the public site manuals
 

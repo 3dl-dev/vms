@@ -1,9 +1,14 @@
 # OVMX — course to a V1.0 release
 
-> Written 2026-08-04 against the live board (`rd list`), `tracking/roadmap.md`,
-> `docs/product-vision.md`, `docs/roadmap-waves.md`, and the repo. Progress claims
-> below are measured from item status, not recalled. Re-derive before acting on any
-> of them — this document is an execution pointer, not stored truth.
+> **Historical / superseded (2026-08-14).** The roadmap of record is
+> `docs/release-roadmap-to-1.0.md` (generated from rd + git tags). This document is
+> retained as pre-pivot design history; re-derive any status from `rd` before acting.
+
+> Written 2026-08-04 against the live board (`rd list`), `tracking/roadmap.md` (itself
+> pre-pivot history, not a live source — see §6 item 3), `docs/product-vision.md`,
+> `docs/roadmap-waves.md`, and the repo. Progress claims below are measured from item
+> status, not recalled. Re-derive before acting on any of them — this document is an
+> execution pointer, not stored truth.
 >
 > **Scope ruled by the operator 2026-08-04, in two rulings:**
 > 1. **Rail A is not deferred.** V1.0 ships both rails; the release gate is the
@@ -468,8 +473,9 @@ claim measurable.
    real one and return the rest to ready/blocked.
 2. **194 inbox items are untriaged.** Triage against the six gates: label
    `v1-gate-r1`…`r6`, or `post-v1`. Anything that lands in neither is a candidate to close.
-3. **`tracking/roadmap.md` is stale** — it stops at the 2026-07-25 pivot and shows the
-   whole toolchain spine as unstarted when it is complete.
+3. **`tracking/roadmap.md` is pre-pivot history, not a live source** — it stops at the
+   2026-07-25 pivot and shows the whole toolchain spine as unstarted when it is
+   complete. Treat it as archival; do not cite it for current status.
 4. **`docs/roadmap-waves.md` is stale in its invariants** — aarch64-first (the dev seat
    and primary arch are now x86_64) and the lab path `~/vax/cluster` (the lab is at
    `/data/training/vax`). Its DAG structure is still sound.

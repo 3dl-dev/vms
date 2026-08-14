@@ -63,7 +63,7 @@ static int fail = 0;
 
 #define HOLD_SCRIPT     "/tmp/ovmx904_hold.sh"
 #define SUBJECT_IMAGE   "/bin/sh"
-#define HOLD_SECS       "15"             /* outlives the ms-scale assertions */
+#define HOLD_SECS       "600"    /* outlives the WHOLE suite on a slow runner */
 
 #define TGT_SUSP        "OVMX904SUSP"    /* P1/P2: suspended then resumed  */
 #define TGT_FX_PID      "OVMX904FXP"     /* P3:    force-exit by VMS pid    */
@@ -100,13 +100,17 @@ static struct dsc$descriptor_s str_dsc(const char *s)
     return d;
 }
 
-/* spawn_named - $CREPRC a short-lived named hold subprocess. *out_pid is the
+/* spawn_named - $CREPRC a named hold subprocess. *out_pid is the
  * EXECUTIVE-assigned VMS process ID (>= 0x10000001). The hold script `exec`s
  * sleep so /bin/sh REPLACES itself with the sleep -- one process, not sh+sleep
  * -- so the pid the test tracks IS the sleeper and reaping it leaves no orphan.
- * The hold is deliberately SHORT (HOLD_SECS): the assertions complete in ms,
- * and a short cap means even a hold child that somehow escaped its reap dies on
- * its own well within the suite rather than lingering into the next one. */
+ * The hold is LONG (HOLD_SECS): every process-control assertion must still find
+ * its target ALIVE, and on a congested runner the whole KE VM runs for many
+ * minutes, so the hold must comfortably outlive the entire suite -- a short
+ * hold would exit before $SUSPND/$RESUME/$FORCEX/$DELPRC ever run against it.
+ * Orphan-prevention is NOT the hold length: it is the teardown reap loop below
+ * (track_hold + reap over the whole registry), which kills every hold child at
+ * suite end, so a long-lived sleep never lingers into the next suite. */
 static uint32_t spawn_named(const char *prcnam, uint32_t *out_pid)
 {
     struct dsc$descriptor_s img = str_dsc(SUBJECT_IMAGE);
@@ -288,7 +292,9 @@ int main(void)
         return 1;
     }
     /* exec: sh becomes the sleep, so the tracked pid is the only process and
-     * killing it orphans nothing. Short hold (see HOLD_SECS / spawn_named). */
+     * killing it orphans nothing. Long hold (see HOLD_SECS / spawn_named): the
+     * target must stay alive through every assertion; the teardown reap loop,
+     * not a short duration, is what stops it lingering. */
     fprintf(hs, "exec sleep " HOLD_SECS "\n");
     fclose(hs);
     chmod(HOLD_SCRIPT, 0644);

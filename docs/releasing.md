@@ -59,6 +59,14 @@ The tag push fires `.github/workflows/release.yml`, which runs
 Release with all bundle assets attached and the generated notes as the release
 body.
 
+The tag name may be bare (`0.4`), lowercase-prefixed (`v0.4`), or
+uppercase-prefixed (`V0.4-1`), with an optional `-N` point suffix — the
+workflow's trigger accepts every such spelling and `publish-release.sh` strips a
+leading `V`/`v` before matching the tag to the bundle's `product_version`.
+GitHub tag filters are **case-sensitive**: if you add a genuinely new tag shape,
+add its literal glob to `release.yml` or the push will silently publish nothing
+(this is what stranded `V0.3-9`..`V0.4-4` with tags but no releases).
+
 ### Publishing by hand (or from an existing bundle)
 
 ```bash

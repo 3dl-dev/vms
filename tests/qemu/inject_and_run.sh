@@ -141,6 +141,16 @@ echo "--- rebuilding MMK.EXE (the exec-drive subject test_syssvc_mmk_drive drive
 ( cd /src/repo && cmake --build build-static --target mmk_native \
                         --parallel "$(nproc)" ) || exit 4
 
+# INITIALIZE.EXE is a SUBJECT test_syssvc_initialize drives (vms-cf62), not a
+# suite, so nothing above builds it -- and initialize-home-magic-not-written
+# (vms-6c6) targets tools/vms_initialize.c, compiled into INITIALIZE.EXE.
+# Rebuilt unconditionally, same reason as DCL.EXE/MMK.EXE: a stale image-build
+# INITIALIZE.EXE would run the pristine code against a real /dev/vms and the
+# control could never go red.
+echo "--- rebuilding INITIALIZE.EXE (the subject test_syssvc_initialize drives) ---"
+( cd /src/repo && cmake --build build-static --target vms_initialize \
+                        --parallel "$(nproc)" ) || exit 4
+
 echo "--- re-staging the initramfs ---"
 cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
 # Absence is FATAL, never skipped, exactly as in the image build: a missing
@@ -161,6 +171,15 @@ cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
 # output. Both copies must be the SAME freshly rebuilt binary.
 cp /src/repo/build-static/bin/DCL.EXE /initramfs/bin/DCL.EXE || exit 4
 cp /src/repo/build-static/bin/DCL.EXE /initramfs/tests/DCL.EXE || exit 4
+
+# INITIALIZE.EXE at /tests/INITIALIZE.EXE (test_syssvc_initialize's
+# OVMX_INITIALIZE default, staged there by tests/qemu/Dockerfile) -- the SAME
+# stale-binary trap the DCL.EXE two-copies note documents (vms-6c6). Without
+# this refresh the freshly-mutated INITIALIZE.EXE never reaches the guest and
+# initialize-home-magic-not-written could never go red. Absence is FATAL,
+# exactly as in the image build.
+cp /src/repo/build-static/bin/INITIALIZE.EXE /initramfs/tests/INITIALIZE.EXE || exit 4
+chmod +x /initramfs/tests/INITIALIZE.EXE || exit 4
 
 # MMK.EXE + its spawned DCL.EXE at SYS$SYSTEM (vms-b23, spine #4) -- the SAME
 # stale-binary trap the DCL.EXE two-copies note above documents. test_syssvc_

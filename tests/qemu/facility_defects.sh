@@ -510,7 +510,9 @@ rightslist-general-hex-as-decimal
 sysuaf-uic-radix-decimal
 sysuaf-uic-writeback-decimal
 bg-recv-length-zeroed
-tcpip-ftp-get-length-dropped"
+tcpip-ftp-get-length-dropped
+vmsfs-mountvis-crossproc-resolve-disabled
+initialize-home-magic-not-written"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -549,7 +551,7 @@ tcpip-ftp-get-length-dropped"
 # SCOPE_OUT_SUITES      derived tests/qemu suites with no facility control.
 # ---------------------------------------------------------------------------
 SCOPE_OUT_UNIT_DIRS="kernel/vmsfs"
-SCOPE_OUT_SUITES="test_kmod_vmsfs test_kmod_vmsfs_blkdev test_kmod_vmsfs_exepath test_kmod_vmsfs_rename test_kmod_vmsfs_readdir"
+SCOPE_OUT_SUITES="test_kmod_vmsfs test_kmod_vmsfs_blkdev test_kmod_vmsfs_exepath test_kmod_vmsfs_rename test_kmod_vmsfs_readdir test_kmod_vmsfs_sysgroup"
 
 scope_out_why() {
     cat <<'EOF'
@@ -564,7 +566,22 @@ they do not depend on the executive. Injecting an executive defect
 therefore cannot turn them red, and a control that could would be
 testing vmsfs, not the executive.
 CONSEQUENCE, STATED PLAINLY: this gate proves nothing about vmsfs.ko.
-The two vmsfs suites are covered by CI job 3c, not by this one.
+These vmsfs suites are covered by CI job 3c, not by this one.
+
+test_kmod_vmsfs_sysgroup (vms-581, added by #284/#272) is here for exactly
+this reason and was added to SCOPE_OUT_SUITES by vms-6c6: the property it
+proves -- the System-category SOGW decision (UIC group <= MAXSYSGROUP) that
+lets a SYSTEM session create in a system-group directory -- is decided
+entirely inside vmsfs.ko's vmsfs_blkdev_permission() (src/kernel/vmsfs/,
+SCOPE_OUT_UNIT_DIRS above). It is reached through the VFS open(2) path, not
+through /dev/vms; no userspace consumer mirrors the decision (the create is
+a raw open(2), never sys$create/RMS), so the only control that could redden
+it is a kernel/vmsfs mutation -- which SCOPE_OUT_UNIT_DIRS forbids precisely
+because it would be testing vmsfs, not the executive. Its sibling
+test_kmod_vmsfs_mountvis (vms-8b6) is NOT scope-out: its cross-process
+resolution lives in a userspace library (src/vmsfs/vmsfs_device.c), a
+targetable product-half consumer of the kernel mount table, so vms-6c6
+anchors it with a real control instead.
 EOF
 }
 
@@ -5345,7 +5362,7 @@ EOF
 
     bg-recv-length-zeroed)
         case "$_f" in
-        facility)     echo "INET pseudo-device BGn: -- the IO$_READVBLK (recv) handler of the executive-resident BGn: driver (vms_ioctl_bg_recv, src/kernel/vms_bg.c, vms-527). The first network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs connect/send/recv/close to a TCP peer, and the socket lives IN the executive (host in-kernel socket API), not in userspace.";;
+        facility)     echo "INET pseudo-device BGn: -- the IO\$_READVBLK (recv) handler of the executive-resident BGn: driver (vms_ioctl_bg_recv, src/kernel/vms_bg.c, vms-527). The first network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs connect/send/recv/close to a TCP peer, and the socket lives IN the executive (host in-kernel socket API), not in userspace.";;
         targets)      echo "kernel/vms_bg.c";;
         suites_red)   echo "test_syssvc_bg_echo";;
         blind_suites) echo "";;
@@ -5371,6 +5388,53 @@ EOF
         why)          echo "tcpip_ftp_get()'s data-drain loop accumulates the received file with 'total += take;'. The mutation flips it to 'total += 0;', so RETR reports zero bytes received while every FTP reply (220/331/230/200/227/150/226) still parses success -- so the RETR STILL COMPLETES (its connect/login/PASV assertion stays green) and only the byte-exact-file assertion reddens (glen != file length, content mismatch). The TELNET assertions and the FTP STOR path never call tcpip_ftp_get and stay green. One assignment zeroed.";;
         require_fail) cat <<'EOF'
 FTP RETR receives the file BYTE-EXACT over the PASV data channel
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    # -------------------------------------------------------------------
+    # vms-6c6: two suites #284/#272 (vms-8b6, vms-cf62) left with NO
+    # per-facility negative control -- the same coverage-gate hole
+    # vms-6d6/#293 closed for the lnm search-list suites. Baselined before
+    # this change: `coverage` named both in "NAMED BY NO defect's suites_red"
+    # and "in-scope suite(s) with NO anchor at all". The THIRD suite in that
+    # baseline, test_kmod_vmsfs_sysgroup, is NOT anchored here: its property
+    # (the System-category SOGW decision) lives entirely in vmsfs.ko
+    # (kernel/vmsfs, SCOPE_OUT_UNIT_DIRS), which this executive gate declares
+    # out of scope, so it is moved to SCOPE_OUT_SUITES with its siblings --
+    # see the scope_out_why note and the vms-6c6 rd trail.
+    # -------------------------------------------------------------------
+
+    vmsfs-mountvis-crossproc-resolve-disabled)
+        case "$_f" in
+        facility)     echo "cross-process device-mount VISIBILITY -- the executive/system-wide resolution of a MOUNTed unit through the kernel's own mount table (vmsfs_device_resolve_executive, src/vmsfs/vmsfs_device.c, vms-8b6). A VMS mount is EXECUTIVE state: a unit MOUNTed by one process must resolve for a SEPARATE process (an exec'd AUTHORIZE.EXE, SYSGEN.EXE, any RUN'd image). The per-process device_table cannot carry that, so a table miss consults /proc/mounts -- the kernel's own mount table, global and cross-process. This is the userspace consumer of that executive-owned state (the same product-half class as the devtab/rms translation entries, INV-6), not a vms.ko-dispatched ioctl.";;
+        targets)      echo "vmsfs/vmsfs_device.c";;
+        suites_red)   echo "test_kmod_vmsfs_mountvis";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vmsfs_device_resolve_executive() stops consulting the kernel mount table on a per-process device_table miss: the guard \`if (!mount_table_has(mp))\` is forced true (\`if (1 || !mount_table_has(mp))\`), so every dynamically-MOUNTed unit resolves SS\$_NOSUCHDEV for a process that did not itself mount it -- the exact per-process view vms-8b6 converted away from. DCL.EXE (a separate process) can no longer resolve DKA100: mounted by the test process and falls back to the system disk, where the volume's distinctive HELLO.TXT does not exist. DKA0: never reaches this path (seeded into device_table at startup), so every suite that only touches the system disk stays green; the unmounted-unit negative control (DKA200:) still returns NOSUCHDEV, so nothing is fabricated. One guard forced true.";;
+        require_fail) cat <<'EOF'
+cross-process: DCL resolves DKA100: (mounted by another process) and reads HELLO.TXT off it -- the mounted unit is visible and readable
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    initialize-home-magic-not-written)
+        case "$_f" in
+        facility)     echo "INITIALIZE writing a VALID vmsfs home block to the executive-RESOLVED real backing device (format_volume, tools/vms_initialize.c, vms-cf62). INITIALIZE.EXE resolves DKA100: through the executive (vms_kif_disk_resolve, the same authoritative path MOUNT uses) to its backing block device and formats THAT store -- the anti-facade property (INV-6, CLAUDE.md Rule 9): the real device is actually formatted, not merely reported so. A userspace consumer of the executive disk-resolution facility, the same product-half class as the devtab entries.";;
+        targets)      echo "../tools/vms_initialize.c";;
+        suites_red)   echo "test_syssvc_initialize";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "format_volume() writes the vmsfs home block to LBN 1 of the resolved backing device with \`hb.hb_magic = VMSFS_HOME_MAGIC;\`. The mutation zeroes it (\`hb.hb_magic = 0;\`), so INITIALIZE still exits 0 (the block is written and its checksum recomputed over it) but the REAL device carries NO valid home block -- it reports success while the store is unformatted, the exact fake-success class vms-cf62 exists to kill. Only the A/B \"after INITIALIZE the backing device carries a home block\" assertion reads hb_magic and reddens; the label field is still written correctly (the volname assertion stays green), the command's own rc stays 0, and the BOGUS999: honest-failure negative control is untouched. One constant zeroed.";;
+        require_fail) cat <<'EOF'
+after INITIALIZE, the REAL backing device carries a vmsfs home block
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -6207,6 +6271,24 @@ apply_edit() {
         # making a second apply the no-op the selftest requires.
         sed -i 's|total += take;          /\* NEGCTL tcpip-ftp-get-length-dropped \*/|total += 0; /* NEGCTL tcpip-ftp-get-length-dropped */|' "$_file";;
 
+    vmsfs-mountvis-crossproc-resolve-disabled)
+        # UNIQUE TEXT: vmsfs_device_resolve_executive's own /proc/mounts guard;
+        # `if (!mount_table_has(mp))` occurs once in the file. Forcing it true
+        # with `1 ||` makes every cross-process resolve of a MOUNTed unit return
+        # NOSUCHDEV. After substitution the guard reads
+        # `if (1 || !mount_table_has(mp))`, so a second apply finds no
+        # `if (!mount_table_has(mp))` left -- the no-op selftest requires.
+        sed -i 's|    if (!mount_table_has(mp))|    if (1 \|\| !mount_table_has(mp)) /* NEGCTL vmsfs-mountvis-crossproc-resolve-disabled */|' "$_file";;
+
+    initialize-home-magic-not-written)
+        # UNIQUE TEXT: the home-block magic write in format_volume
+        # (`hb.hb_magic        = VMSFS_HOME_MAGIC;`) is the only occurrence of
+        # that assignment in the file. Zeroing it leaves a written-but-invalid
+        # home block on the real device. After substitution no
+        # `hb.hb_magic        = VMSFS_HOME_MAGIC;` is left -- the no-op selftest
+        # requires.
+        sed -i 's|hb.hb_magic        = VMSFS_HOME_MAGIC;|hb.hb_magic        = 0; /* NEGCTL initialize-home-magic-not-written */|' "$_file";;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -6866,7 +6948,7 @@ cmd_selftest() {
             done
         done
 
-        rm -rf "$_st_tmp/tree" "$_st_tmp/tests"
+        rm -rf "$_st_tmp/tree" "$_st_tmp/tests" "$_st_tmp/tools"
         mkdir -p "$_st_tmp/tree"
         # libvms, vmsdcl, vmsrms and vmslnm are copied too: a defect may
         # target the PRODUCT half of an interface (creprc-handshake-eintr and
@@ -6877,13 +6959,39 @@ cmd_selftest() {
         # DCL/vmsfs-facing manager built on top of the executive-resident
         # LNM$SYSTEM), and a target this function cannot see would be
         # reported as a dead anchor on every run.
+        # vmsfs is copied too (vms-6c6): vmsfs-mountvis-crossproc-resolve-disabled
+        # targets vmsfs/vmsfs_device.c -- the userspace mount-visibility library
+        # (a product-half consumer of the kernel mount table, same class as the
+        # vmsrms/vmsdcl entries above), which vmsdcl links but is its own
+        # translation unit under src/vmsfs. Without it that defect's anchor would
+        # be reported as a dead fixture on every run.
+        # vmstcpip is copied too (vms-6c6): tcpip-ftp-get-length-dropped targets
+        # vmstcpip/services/tcpip_client.h -- the shared TCP/IP client engine
+        # header the DCL FTP/TELNET verbs ship (a product-half consumer of the
+        # executive-resident BGn: device). It was absent from this copy set, so
+        # that defect was reported as a dead fixture ("its sed anchor no longer
+        # matches") on every selftest run even though its anchor is fine.
         if ! cp -a "$_st_root/kernel" "$_st_root/kernel-core" \
                    "$_st_root/libvmssys" "$_st_root/libvms" \
                    "$_st_root/vmsdcl" "$_st_root/vmsrms" "$_st_root/vmslnm" \
+                   "$_st_root/vmsfs" "$_st_root/vmstcpip" \
                    "$_st_tmp/tree/" 2>/dev/null; then
-            echo "FAIL: cannot copy $_st_root/{kernel,kernel-core,libvmssys,libvms,vmsdcl,vmsrms,vmslnm} for the self-test"
+            echo "FAIL: cannot copy $_st_root/{kernel,kernel-core,libvmssys,libvms,vmsdcl,vmsrms,vmslnm,vmsfs,vmstcpip} for the self-test"
             rm -rf "$_st_tmp"
             return 2
+        fi
+        # tools/ staged as a SIBLING of tree (same convention as tests/qemu and
+        # tests/corpus below, vms-6c6): initialize-home-magic-not-written targets
+        # "../tools/vms_initialize.c" -- INITIALIZE.EXE's source, relative to a
+        # src/ root exactly as the real driver's /src/repo/src resolves it. It is
+        # a shipped image (a userspace consumer of the executive disk-resolution
+        # facility), not a src/ translation unit, so it lives beside src/ here.
+        if [ -d "$_st_repo/tools" ]; then
+            if ! cp -a "$_st_repo/tools" "$_st_tmp/tools" 2>/dev/null; then
+                echo "FAIL: cannot copy $_st_repo/tools for the self-test"
+                rm -rf "$_st_tmp"
+                return 2
+            fi
         fi
         # tests/qemu is staged as a SIBLING of tree (mirroring tree's own
         # role as $_st_root, i.e. src/, with tests/qemu next to it in every

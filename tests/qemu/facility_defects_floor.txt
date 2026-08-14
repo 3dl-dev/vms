@@ -397,4 +397,12 @@
 # exactly the suite's byte-exact-RETR assertion, with the connect/login/PASV,
 # the TELNET, and the FTP STOR assertions all staying green. See its own entry
 # in facility_defects.sh for what it covers and why.
-100
+# Raised to 102 by vms-6c6's vmsfs-mountvis-crossproc-resolve-disabled
+# (cross-process MOUNT visibility through the kernel mount table,
+# src/vmsfs/vmsfs_device.c, vms-8b6) and initialize-home-magic-not-written
+# (INITIALIZE formatting the executive-resolved real backing device,
+# tools/vms_initialize.c, vms-cf62) -- see their entries in facility_defects.sh.
+# (The third baselined-unanchored suite, test_kmod_vmsfs_sysgroup, was moved
+# to SCOPE_OUT_SUITES, not made a defect: its property lives in vmsfs.ko, which
+# this executive gate declares out of scope -- so it adds no defect here.)
+102

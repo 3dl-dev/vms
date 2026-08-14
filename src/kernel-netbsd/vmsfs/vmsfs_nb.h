@@ -23,6 +23,7 @@
 #include <sys/mount.h>
 #include <sys/vnode.h>
 #include <sys/mutex.h>
+#include <miscfs/genfs/genfs_node.h>   /* struct genfs_node (UVM/UBC pager) */
 
 /*
  * The substrate-neutral ODS-2 core contract: struct vmsfs_volume, the vmsfs_bio
@@ -62,6 +63,16 @@ struct vmsfs_mount {
  * address is handed back to vcache from vfs_loadvnode.
  */
 struct vmsfs_node {
+	/*
+	 * MUST be first: the UVM/UBC vnode pager (genfs_getpages) reaches the
+	 * per-vnode getpages rangelock + ops vector via VTOG(vp) == (struct
+	 * genfs_node *)vp->v_data, i.e. it aliases the FRONT of the fs private
+	 * data. Every genfs-paged fs (cd9660's iso_node, ffs's inode, ...) leads
+	 * its in-core node with a struct genfs_node and calls genfs_node_init().
+	 * Omitting it makes genfs_getpages dereference garbage -> kernel fault
+	 * (observed as a hard VAX HALT when exec demand-paged an image, vms-63a).
+	 */
+	struct genfs_node          vn_gnode;      /* genfs pager hook -- KEEP FIRST */
 	struct vnode              *vn_vp;         /* back-pointer to the vnode */
 	struct vmsfs_mount        *vn_vmp;        /* owning mount */
 	uint32_t                   vn_fid;        /* file header number (FID) */

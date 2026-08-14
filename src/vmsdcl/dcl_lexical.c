@@ -1405,6 +1405,16 @@ static int lex_getsyi(struct dcl_context *ctx, const char *args,
         uint32_t sysid = 0;   /* OVMX default when unconfigured */
         (void)sysgen_read_param("SCSSYSTEMID", &sysid);
         snprintf(result, result_size, "%u", sysid);
+    } else if (strcmp(s, "ALLOCLASS") == 0) {
+        /* vms-9cf: the allocation class for shared cluster devices, a SYSGEN
+         * parameter the operator authors via SYSGEN/SYSMAN. Reads the same
+         * OVMXVMSSYS.PAR store SCSSYSTEMID does; 0 is the documented default
+         * when unconfigured. This is the DCL reader surface that reflects the
+         * authored ALLOCLASS after a WRITE CURRENT + reboot (the store is read
+         * fresh on each F$GETSYI, so it is genuine adoption, not a fake). */
+        uint32_t alloclass = 0;   /* OVMX/VMS default when unconfigured */
+        (void)sysgen_read_param("ALLOCLASS", &alloclass);
+        snprintf(result, result_size, "%u", alloclass);
     } else if (strcmp(s, "VERSION") == 0) {
         /* Machine surface: the true-to-arch VMS-compat token, from the
          * identity SSOT (INV-1). Never a hardcoded constant here. */

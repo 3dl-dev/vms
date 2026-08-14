@@ -1,0 +1,68 @@
+Vendored package:  LibreSSL (libcrypto only)
+Upstream:          OpenBSD LibreSSL portable release
+Primary URL:       https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl-4.1.2.tar.gz
+Mirror URL:        https://cdn.openbsd.org/pub/OpenBSD/LibreSSL/libressl-4.1.2.tar.gz
+Pinned version:    4.1.2   (stable 4.1 branch release)
+Tarball SHA256:    fba4e2fa2a7f52306df7a389970a10e98b97eb0edb299a9fdb9dbf49999c61e1
+Vendored:          2026-08-14
+License:           ISC (LibreSSL's own code) + the historical dual
+                   OpenSSL/original-SSLeay licenses for the inherited legacy
+                   files (see COPYING in the extracted tree). All OSI-approved
+                   permissive OSS — legitimately vendorable.
+
+--------------------------------------------------------------------------------
+WHY LibreSSL over OpenSSL (the P-C evaluation, bead vms-2e8)
+--------------------------------------------------------------------------------
+The OpenSSH port (parent vms-843, docs/design-openssh-port-ovmx.md §3.1) needs a
+static libcrypto it can link into the musl-static bootable image WITHOUT waiting
+on the post-1.0 OpenSSL-as-OVMX-image (vms-4fa). The design flags LibreSSL as the
+likely-cleaner cross-build. Confirmed empirically:
+
+  LibreSSL 4.1.2, in a stock alpine:3.20 (musl) container, built libcrypto.a
+  (~11 MB) on the FIRST try with:
+      ./configure --enable-static --disable-shared --disable-tests
+      make -C crypto libcrypto.la
+  — zero source patches, no perl-heavy Configure dance, plain autotools that
+  cross-builds against musl out of the box. LibreSSL is OpenBSD's own tree,
+  ships alongside OpenSSH-portable, and is what upstream OpenSSH targets.
+
+Plain OpenSSL (Apache-2.0) is the documented fallback (its perl `Configure` +
+`no-shared` path also builds static-musl, but it is the heavier machinery). We
+did not need it: LibreSSL built clean, so it is the pin.
+
+This lib is the crypto FOUNDATION for the OpenSSH clients (ssh/scp/sftp,
+vms-22a) and the SSHD swap (vms-0cd). It is a clean standalone static libcrypto
+they link — deliberately NOT entangled with OpenSSH itself (later items). Only
+libcrypto is built (OpenSSH uses libcrypto, not libssl/libtls).
+
+Rule 8 note: LibreSSL is permissive OSS — vendoring it is not a clean-room
+concern. CLAUDE.md rule 8's HARD INVARIANT covers reverse-engineered VMS
+formats/protocols only, never upstream OSS crypto source.
+
+--------------------------------------------------------------------------------
+LAYOUT — fetch-vendored, NOT a source copy in-tree
+--------------------------------------------------------------------------------
+Unlike third-party/tcc (a full committed source copy), libcrypto is a large,
+actively-developed tree (tens of MB); committing it wholesale would bloat the
+repo. Instead this is a PINNED FETCH: build-libcrypto.sh fetches exactly this
+tarball, verifies it against the SHA256 above (reproducible — a mismatch is a
+hard fail), and builds libcrypto.a entirely out-of-tree (default /tmp) inside
+the project's containerized musl build tooling. Nothing is installed on the host
+and no build product ever lands in the repo (shared-host / Rule: ALL deps
+containerized).
+
+  build-libcrypto.sh   fetch (SHA256-verified) + configure static + build
+                       libcrypto.a into $WORK (default /tmp/ovmx-libcrypto).
+  test/hello-crypto.c  tiny probe: SHA256 known-answer test against libcrypto.a.
+  test/run_hello_crypto.sh
+                       build the lib, then compile+static-link+run the probe and
+                       assert the SHA-256 known-answer — the acceptance for this
+                       bead. Runs in CI (job: libcrypto-static-musl).
+
+To move the pin:
+  1. Pick a new libressl-X.Y.Z.tar.gz from the OpenBSD LibreSSL directory.
+  2. Fetch its SHA256 from that directory's SHA256 file.
+  3. Update Pinned version / Tarball SHA256 / URLs above and the
+     LIBRESSL_VERSION / LIBRESSL_SHA256 defaults in build-libcrypto.sh.
+  4. Re-run third-party/libcrypto/test/run_hello_crypto.sh in the musl
+     container to reconfirm the probe still passes at the new pin.

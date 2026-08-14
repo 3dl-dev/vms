@@ -41,6 +41,8 @@
 #include "sysuaf.h"
 #include "str_util.h"
 #include "term_map.h"
+/* Credential drop to the authenticated UIC before execl (vms-49e). */
+#include "cred_drop.h"
 #include "vms/pcb.h"
 #include "vms/privs.h"
 #include "vms/logical.h"
@@ -417,17 +419,15 @@ static void handle_connection(ssh_session session)
          * negative-control rig exercises deliberately for an absent
          * executive, but here for a session that DID authenticate.
          *
-         * NOT DONE HERE, AND FLAGGED RATHER THAN SILENTLY OMITTED: LOGINOUT
-         * (tools/vms_login.c) also drops this process's Linux credentials
-         * to the SYSUAF UIC after this call, which is what makes the
-         * executive's enforcement (vms_ioctl_setident's one-way-drop rule)
-         * load-bearing rather than cosmetic for the session that follows.
-         * vmssshd's process/session model (PTY, fork-per-connection,
-         * libssh callbacks) is different enough from LOGINOUT's that
-         * porting the drop needs its own verification against a live SSH
-         * session, which this change does not have -- there is no
-         * automated SSH login test in this tree to prove it against. This
-         * is reported as a known gap, not fixed here.
+         * THE CREDENTIAL DROP THAT MAKES THIS ENFORCEMENT LOAD-BEARING is
+         * performed just before the execl() below (vms-49e), mirroring
+         * LOGINOUT (tools/vms_login.c): setgid before setuid, permanent,
+         * fail-closed. Before that fix this call stamped the executive
+         * identity but the session still ran as euid=0/root, so the
+         * executive's one-way-drop rule protected exactly one task and any
+         * forked child re-registering with CAP_SYS_ADMIN got it all back.
+         * The drop is done AFTER this call because vms_ioctl_setident needs
+         * the SETPRV the root-derived registration granted.
          */
         {
             uint32_t ssh_uic = (sysuaf_rec.uic_group << 16) | sysuaf_rec.uic_member;
@@ -539,6 +539,42 @@ static void handle_connection(ssh_session session)
         /* Record this login (after displaying last, before launching DCL) */
         ovmx_accounting_record_login(sysuaf_rec.username);
         fflush(stdout);
+
+        /*
+         * BECOME THE AUTHENTICATED USER (vms-49e) -- mirror of LOGINOUT's
+         * credential drop (tools/vms_login.c), factored into
+         * ovmx_cred_drop_to_uic() so its ordering and fail-closed behaviour
+         * are unit-tested (tests/vmsssh/test_cred_drop.c).
+         *
+         * WHY: without this the session and every process it forks ran as
+         * euid=0/root -- vmsfs_blkdev.c grants euid==0 full System-category
+         * access to the whole volume, and a forked child re-registering with
+         * CAP_SYS_ADMIN reclaims all privileges the executive's identity drop
+         * removed. The setident() above is only load-bearing once the Linux
+         * credentials agree with it.
+         *
+         * ORDER: after setident (needs the SETPRV of root registration) and
+         * after the accounting write (needs to touch the protected store),
+         * and BEFORE execl so the image the user drives never holds
+         * credentials it did not authenticate for. The executive row survives
+         * -- it is keyed on the thread-group id, which neither setuid nor exec
+         * changes.
+         *
+         * FAILURE IS FATAL (fail closed). "vmssshd authenticated a user and
+         * then ran the session as root anyway" is not a state we hand a
+         * handler; _exit rather than exec. The message wears the OVMX facility
+         * (a failed credential drop is an OVMX event) and matches LOGINOUT's
+         * %OVMX-F-NOUIC.
+         */
+        if (ovmx_cred_drop_to_uic(sysuaf_rec.uic_group, sysuaf_rec.uic_member,
+                                  &ovmx_cred_real_syscalls) != 0) {
+            printf("%%OVMX-F-NOUIC, could not become UIC [%o,%o] for user "
+                   "%s: %s\n", (unsigned)sysuaf_rec.uic_group,
+                   (unsigned)sysuaf_rec.uic_member, sysuaf_rec.username,
+                   strerror(errno));
+            fflush(stdout);
+            _exit(1);
+        }
 
         /* ---- Step 4: Exec vmsdcl --login ----
          * Hand over the SYSUAF login command file (LGICMD, or the documented

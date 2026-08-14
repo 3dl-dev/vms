@@ -34,3 +34,25 @@ set_tests_properties(term_mapping PROPERTIES
     LABELS "unit;ssh"
     TIMEOUT 10
 )
+
+# vms-49e (Tier-0 security): the SSH session credential drop. Like
+# test_term_mapping above, this links the REAL product translation unit
+# (src/vmsssh/cred_drop.c) directly -- it is dependency-free (no libssh), so it
+# builds and runs even where the vmssshd daemon does not. The test injects mock
+# syscalls to assert the security-critical properties (UIC->uid/gid derivation,
+# setgid-before-setuid, fail-closed on any error) WITHOUT the test process
+# dropping its own credentials.
+add_executable(test_cred_drop
+    test_cred_drop.c
+    ${CMAKE_SOURCE_DIR}/src/vmsssh/cred_drop.c
+)
+target_include_directories(test_cred_drop PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsssh
+)
+add_test(NAME ssh_cred_drop
+    COMMAND test_cred_drop
+)
+set_tests_properties(ssh_cred_drop PROPERTIES
+    LABELS "unit;ssh;security"
+    TIMEOUT 10
+)

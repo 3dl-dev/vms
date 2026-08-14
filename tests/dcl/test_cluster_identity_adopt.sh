@@ -55,6 +55,9 @@ fail() { echo "  FAIL: $1"; FAILURES=$((FAILURES + 1)); }
 AUTH_NODE="CLSTX"
 AUTH_SID="1042"
 AUTH_ALLOC="7"
+# vms-c3b: RECNXINTERVAL is now an AUTHORED SYSGEN param SCSD adopts on the same
+# --show-identity read path. Authored value distinct from the default (20).
+AUTH_RECNX="30"
 
 # Read helpers ---------------------------------------------------------------
 # F$GETSYI via SHOW SYMBOL (the proven pattern from test_lexical_scsnode.sh).
@@ -81,16 +84,22 @@ echo "control: $c_scsd"
 [ "$c_alloc" = "0" ]   || fail "control ALLOCLASS was '$c_alloc', expected the default 0"
 echo "$c_scsd" | grep -q 'ALLOCLASS=0' \
     || fail "control SCSD --show-identity did not report the default ALLOCLASS=0"
+# vms-c3b: on the unauthored store SCSD reports the documented default
+# RECNXINTERVAL=20 (OpenVMS System Management Utilities Reference Manual).
+echo "$c_scsd" | grep -q 'RECNXINTERVAL=20' \
+    || fail "control SCSD --show-identity did not report the default RECNXINTERVAL=20"
 
 # --- AUTHOR the identity the VMS way, then WRITE CURRENT --------------------
-setout=$(printf 'PARAMETERS SET SCSNODE %s\nPARAMETERS SET SCSSYSTEMID %s\nPARAMETERS SET ALLOCLASS %s\nPARAMETERS WRITE CURRENT\nEXIT\n' \
-    "$AUTH_NODE" "$AUTH_SID" "$AUTH_ALLOC" | "$SYSMAN" 2>&1)
+setout=$(printf 'PARAMETERS SET SCSNODE %s\nPARAMETERS SET SCSSYSTEMID %s\nPARAMETERS SET ALLOCLASS %s\nPARAMETERS SET RECNXINTERVAL %s\nPARAMETERS WRITE CURRENT\nEXIT\n' \
+    "$AUTH_NODE" "$AUTH_SID" "$AUTH_ALLOC" "$AUTH_RECNX" | "$SYSMAN" 2>&1)
 echo "$setout" | grep -q "%SYSMAN-I-SETPARAM, SCSNODE changed from OVMX to ${AUTH_NODE}" \
     || fail "SET SCSNODE did not report the real change"
 echo "$setout" | grep -q "%SYSMAN-I-SETPARAM, SCSSYSTEMID changed from 0 to ${AUTH_SID}" \
     || fail "SET SCSSYSTEMID did not report the real change"
 echo "$setout" | grep -q "%SYSMAN-I-SETPARAM, ALLOCLASS changed from 0 to ${AUTH_ALLOC}" \
     || fail "SET ALLOCLASS did not report the real change"
+echo "$setout" | grep -q "%SYSMAN-I-SETPARAM, RECNXINTERVAL changed from 20 to ${AUTH_RECNX}" \
+    || fail "SET RECNXINTERVAL did not report the real change"
 
 # --- REBOOT: fresh SCSD + fresh DCL adopt the authored identity ------------
 r_node=$(getsyi SCSNODE)
@@ -105,14 +114,18 @@ echo "reboot:  $r_scsd"
 [ "$r_sid" = "$AUTH_SID" ]     || fail "F\$GETSYI SCSSYSTEMID did not adopt authored $AUTH_SID (got '$r_sid')"
 [ "$r_alloc" = "$AUTH_ALLOC" ] || fail "F\$GETSYI ALLOCLASS did not adopt authored $AUTH_ALLOC (got '$r_alloc')"
 
-# SCSD (the daemon's own identity resolver) reflects the authored identity.
-echo "$r_scsd" | grep -q "SCSNODE=${AUTH_NODE} SCSSYSTEMID=${AUTH_SID} ALLOCLASS=${AUTH_ALLOC}" \
-    || fail "SCSD --show-identity did not adopt the authored identity"
+# SCSD (the daemon's own identity resolver) reflects the authored identity
+# AND the authored RECNXINTERVAL, both on the same --show-identity read path.
+echo "$r_scsd" | grep -q "SCSNODE=${AUTH_NODE} SCSSYSTEMID=${AUTH_SID} ALLOCLASS=${AUTH_ALLOC} RECNXINTERVAL=${AUTH_RECNX}" \
+    || fail "SCSD --show-identity did not adopt the authored identity + RECNXINTERVAL"
 
 # --- BRACKET: authored values are genuinely DIFFERENT from the control -----
 [ "$r_node" != "$c_node" ]   || fail "SCSNODE did not change from the control default (bracket failed)"
 [ "$r_sid" != "$c_sid" ]     || fail "SCSSYSTEMID did not change from the control default (bracket failed)"
 [ "$r_alloc" != "$c_alloc" ] || fail "ALLOCLASS did not change from the control default (bracket failed)"
+# RECNXINTERVAL bracket: authored 30 is genuinely different from the default 20.
+echo "$c_scsd" | grep -q 'RECNXINTERVAL=20' && echo "$r_scsd" | grep -q "RECNXINTERVAL=${AUTH_RECNX}" \
+    || fail "RECNXINTERVAL did not change from the control default 20 to authored ${AUTH_RECNX} (bracket failed)"
 
 # --- Shared store: SYSGEN sees exactly what SYSMAN wrote (not a private copy)
 sgview=$(printf 'USE %s\nSHOW ALLOCLASS\nEXIT\n' "$OVMX_SYSGEN_PATH" | "$SYSGEN" 2>&1)

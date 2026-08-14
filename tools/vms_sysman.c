@@ -40,7 +40,6 @@
 
 #define SYSMGR_DIR     VMS_MANAGER_DIR
 #define STARTUP_LIST   SYSMGR_DIR "/STARTUP_LIST.DAT"
-#define SYSPARAMS_DAT  SYSMGR_DIR "/SYSPARAMS.DAT"
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -299,7 +298,148 @@ static void cmd_startup(const char *rest)
 }
 
 /* ------------------------------------------------------------------ */
-/*  PARAMETERS SHOW param                                              */
+/*  PARAMETERS work area                                               */
+/* ------------------------------------------------------------------ */
+/*
+ * SYSMAN PARAMETERS operates on a "work area" -- an in-memory copy of a
+ * parameter set loaded by PARAMETERS USE {ACTIVE|CURRENT|file}, modified by
+ * PARAMETERS SET, displayed by PARAMETERS SHOW, and committed back by
+ * PARAMETERS WRITE {ACTIVE|CURRENT|file} (VSI OpenVMS System Management
+ * Utilities Reference Manual, SYSMAN PARAMETERS command family; VSI OpenVMS
+ * System Manager's Manual, Vol. 2, "Managing System Parameters with SYSMAN").
+ *
+ * The store is the SAME one SYSGEN.EXE reads and writes -- the current
+ * SYS$SYSTEM:OVMXVMSSYS.PAR parameter file (sysgen_params.h) -- so a change
+ * SET+WRITTEN here is visible to SYSGEN and to F$GETSYI, and vice versa.
+ * The work area is type-aware (numeric and string parameters, e.g. the
+ * string-typed SCSNODE), matching SYSGEN.EXE.
+ */
+static struct sysgen_file ws;
+static int ws_loaded;
+static int ws_modified;
+
+/* Load CURRENT into the work area (auto-load on first SHOW/SET if the user
+ * did not issue an explicit PARAMETERS USE). Returns 1 on success, 0 if no
+ * current parameter file exists yet. */
+static int params_autoload(void)
+{
+    if (ws_loaded)
+        return 1;
+    if (sysgen_load_working(&ws) == 0) {
+        ws_loaded = 1;
+        ws_modified = 0;
+        return 1;
+    }
+    return 0;
+}
+
+/* Render a string-typed value the way SHOW displays it: double-quoted and
+ * padded to the stored width (mirrors SYSGEN.EXE's format_sysgen_string_field
+ * so the two utilities agree; the field width is an OVMX display choice, not a
+ * byte-for-byte VMS match). */
+static void params_format_string(const char *val, char *out, size_t outlen)
+{
+    char padded[SYSGEN_STRVAL_LEN];
+    size_t i = 0;
+    for (; i < sizeof(padded) - 1 && val[i]; i++) padded[i] = val[i];
+    for (; i < sizeof(padded) - 1; i++) padded[i] = ' ';
+    padded[sizeof(padded) - 1] = '\0';
+    snprintf(out, outlen, "\"%s\"", padded);
+}
+
+static void params_show_header(void)
+{
+    printf("\n");
+    printf("  %-32s %10s %10s %10s %10s\n",
+           "Parameter Name", "Current", "Default", "Minimum", "Maximum");
+    printf("  %-32s %10s %10s %10s %10s\n",
+           "--------------", "-------", "-------", "-------", "-------");
+}
+
+static void params_show_row(const struct sysgen_param *p)
+{
+    if (p->type == SYSGEN_TYPE_STRING) {
+        char cur[SYSGEN_STRVAL_LEN + 2], def[SYSGEN_STRVAL_LEN + 2];
+        params_format_string(p->str_current, cur, sizeof(cur));
+        params_format_string(p->str_default, def, sizeof(def));
+        printf("  %-32s %10s %10s %10s %10s",
+               p->name, cur, def, "-", "-");
+    } else {
+        printf("  %-32s %10u %10u %10u %10u",
+               p->name, p->current, p->default_val, p->min_val, p->max_val);
+    }
+    if (p->flags & SYSGEN_F_DYNAMIC)
+        printf("  D");
+    printf("\n");
+}
+
+/* ------------------------------------------------------------------ */
+/*  PARAMETERS USE {ACTIVE | CURRENT | file}                           */
+/* ------------------------------------------------------------------ */
+static void cmd_parameters_use(const char *rest)
+{
+    char target[256] = "";
+    const char *p = skip_ws(rest);
+    int ti = 0;
+    while (*p && !isspace((unsigned char)*p) && ti < (int)sizeof(target) - 1)
+        target[ti++] = *p++;
+    target[ti] = '\0';
+
+    if (target[0] == '\0') {
+        printf("%%SYSMAN-E-SYNTAX, PARAMETERS USE {ACTIVE|CURRENT|file-spec}\n");
+        return;
+    }
+
+    /* ACTIVE and CURRENT both resolve to OVMX's single parameter store (the
+     * running readers consult the same file the boot uses -- there is no
+     * separate in-memory active set to load; documented in sysgen_params.h). */
+    if (strcasecmp(target, "CURRENT") == 0 || strcasecmp(target, "ACTIVE") == 0) {
+        if (sysgen_load_working(&ws) == 0) {
+            ws_loaded = 1;
+            ws_modified = 0;
+            printf("%%SYSMAN-I-USEPARAM, %u parameters loaded from %s parameter set\n",
+                   ws.count, strcasecmp(target, "ACTIVE") == 0 ? "ACTIVE" : "CURRENT");
+        } else {
+            printf("%%SYSMAN-E-NOPARAMS, current system parameter file not found\n");
+            printf("-SYSMAN-I-USESYSGEN, use SYSGEN USE DEFAULT / WRITE CURRENT to create it\n");
+        }
+        return;
+    }
+
+    /* Explicit file target (literal path -- no versioning). */
+    FILE *fp = fopen(target, "rb");
+    if (!fp) {
+        printf("%%SYSMAN-E-OPENIN, error opening %s as input\n", target);
+        return;
+    }
+    struct sysgen_file tmp;
+    if (fread(&tmp, sizeof(tmp), 1, fp) != 1) {
+        printf("%%SYSMAN-E-READERR, error reading %s\n", target);
+        fclose(fp);
+        return;
+    }
+    fclose(fp);
+    if (tmp.magic != SYSGEN_MAGIC) {
+        printf("%%SYSMAN-E-BADFILE, %s is not a valid SYSGEN parameter file\n",
+               target);
+        return;
+    }
+    if (tmp.version != SYSGEN_VERSION) {
+        printf("%%SYSMAN-E-BADVER, unsupported parameter file version %u\n",
+               tmp.version);
+        return;
+    }
+    if (tmp.count > SYSGEN_MAX_PARAMS)
+        tmp.count = SYSGEN_MAX_PARAMS;
+    ws = tmp;
+    ws_loaded = 1;
+    ws_modified = 0;
+    printf("%%SYSMAN-I-USEPARAM, %u parameters loaded from %s\n",
+           ws.count, target);
+}
+
+/* ------------------------------------------------------------------ */
+/*  PARAMETERS SHOW {param | prefix* | /ALL}                           */
 /* ------------------------------------------------------------------ */
 static void cmd_parameters_show(const char *rest)
 {
@@ -309,68 +449,61 @@ static void cmd_parameters_show(const char *rest)
     while (*p && !isspace((unsigned char)*p) && ni < (int)sizeof(name) - 1)
         name[ni++] = *p++;
     name[ni] = '\0';
-    str_upper(name);
 
     if (name[0] == '\0') {
         printf("%%SYSMAN-E-NOPARAM, no parameter name specified\n");
+        printf("-SYSMAN-I-SYNTAX, PARAMETERS SHOW {param | prefix* | /ALL}\n");
         return;
     }
 
-    FILE *fp = fopen(SYSPARAMS_DAT, "rb");
-    if (!fp) {
-        printf("%%SYSMAN-E-NOPARAMS, system parameter file not found\n");
-        printf("  (Run SYSGEN USE DEFAULT / SYSGEN WRITE CURRENT to create it)\n");
+    if (!params_autoload()) {
+        printf("%%SYSMAN-E-NOPARAMS, current system parameter file not found\n");
+        printf("-SYSMAN-I-USESYSGEN, use SYSGEN USE DEFAULT / WRITE CURRENT to create it\n");
         return;
     }
 
-    /* Read and validate sysgen_file header */
-    struct sysgen_file sf;
-    if (fread(&sf, sizeof(sf), 1, fp) != 1) {
-        printf("%%SYSMAN-E-READERR, error reading parameter file\n");
-        fclose(fp);
+    /* SHOW /ALL */
+    if (strcasecmp(name, "/ALL") == 0) {
+        params_show_header();
+        for (uint32_t i = 0; i < ws.count; i++)
+            params_show_row(&ws.params[i]);
+        printf("\n  %u parameters displayed. (D = Dynamic)\n\n", ws.count);
         return;
     }
-    fclose(fp);
 
-    if (sf.magic != SYSGEN_MAGIC) {
-        printf("%%SYSMAN-E-BADFILE, %s is not a valid SYSGEN parameter file\n",
-               SYSPARAMS_DAT);
-        return;
-    }
-    if (sf.version != SYSGEN_VERSION) {
-        printf("%%SYSMAN-E-BADVER, unsupported parameter file version %u\n",
-               sf.version);
-        return;
-    }
-    if (sf.count > SYSGEN_MAX_PARAMS)
-        sf.count = SYSGEN_MAX_PARAMS;
-
-    int found = 0;
-    for (uint32_t i = 0; i < sf.count; i++) {
-        struct sysgen_param *param = &sf.params[i];
-        char pname[33];
-        memcpy(pname, param->name, 32);
-        pname[32] = '\0';
-        /* Trim trailing spaces */
-        for (int j = 31; j >= 0 && (pname[j] == ' ' || pname[j] == '\0'); j--)
-            pname[j] = '\0';
-        str_upper(pname);
-        if (strcmp(pname, name) == 0) {
-            found = 1;
-            printf("\nParameter Name    Current    Default    Minimum    Maximum\n");
-            printf("--------------    -------    -------    -------    -------\n");
-            printf("%-16s  %-9u  %-9u  %-9u  %u\n",
-                   pname, param->current, param->default_val,
-                   param->min_val, param->max_val);
-            if (param->description[0])
-                printf("  %s\n", param->description);
+    /* Exact match first. */
+    for (uint32_t i = 0; i < ws.count; i++) {
+        if (strcasecmp(ws.params[i].name, name) == 0) {
+            params_show_header();
+            params_show_row(&ws.params[i]);
+            if (ws.params[i].description[0])
+                printf("  %s\n", ws.params[i].description);
             printf("\n");
-            break;
+            return;
         }
     }
 
-    if (!found)
-        printf("%%SYSMAN-E-NOTFOUND, parameter %s not found\n", name);
+    /* Trailing-* wildcard prefix match. */
+    size_t len = strlen(name);
+    if (len > 1 && name[len - 1] == '*') {
+        name[len - 1] = '\0';
+        len--;
+        int found = 0;
+        params_show_header();
+        for (uint32_t i = 0; i < ws.count; i++) {
+            if (strncasecmp(ws.params[i].name, name, len) == 0) {
+                params_show_row(&ws.params[i]);
+                found = 1;
+            }
+        }
+        if (found) {
+            printf("\n");
+            return;
+        }
+    }
+
+    str_upper(name);
+    printf("%%SYSMAN-E-NOSUCHP, %s is not a valid parameter name\n", name);
 }
 
 /* ------------------------------------------------------------------ */
@@ -385,7 +518,6 @@ static void cmd_parameters_set(const char *rest)
     while (*p && !isspace((unsigned char)*p) && ni < (int)sizeof(name) - 1)
         name[ni++] = *p++;
     name[ni] = '\0';
-    str_upper(name);
 
     p = skip_ws(p);
     int vi = 0;
@@ -398,66 +530,127 @@ static void cmd_parameters_set(const char *rest)
         return;
     }
 
-    uint32_t value = (uint32_t)strtoul(valstr, NULL, 0);
-
-    FILE *fp = fopen(SYSPARAMS_DAT, "r+b");
-    if (!fp) {
-        printf("%%SYSMAN-E-NOPARAMS, system parameter file not found\n");
+    if (!params_autoload()) {
+        printf("%%SYSMAN-E-NOPARAMS, current system parameter file not found\n");
+        printf("-SYSMAN-I-USESYSGEN, use SYSGEN USE DEFAULT / WRITE CURRENT to create it\n");
         return;
     }
 
-    /* Read and validate sysgen_file header */
-    struct sysgen_file sf;
-    if (fread(&sf, sizeof(sf), 1, fp) != 1) {
-        printf("%%SYSMAN-E-READERR, error reading parameter file\n");
-        fclose(fp);
-        return;
-    }
-
-    if (sf.magic != SYSGEN_MAGIC) {
-        printf("%%SYSMAN-E-BADFILE, %s is not a valid SYSGEN parameter file\n",
-               SYSPARAMS_DAT);
-        fclose(fp);
-        return;
-    }
-    if (sf.version != SYSGEN_VERSION) {
-        printf("%%SYSMAN-E-BADVER, unsupported parameter file version %u\n",
-               sf.version);
-        fclose(fp);
-        return;
-    }
-    if (sf.count > SYSGEN_MAX_PARAMS)
-        sf.count = SYSGEN_MAX_PARAMS;
-
-    int found = 0;
-    for (uint32_t i = 0; i < sf.count; i++) {
-        struct sysgen_param *param = &sf.params[i];
-        char pname[33];
-        memcpy(pname, param->name, 32);
-        pname[32] = '\0';
-        for (int j = 31; j >= 0 && (pname[j] == ' ' || pname[j] == '\0'); j--)
-            pname[j] = '\0';
-        str_upper(pname);
-        if (strcmp(pname, name) == 0) {
-            found = 1;
-            if (value < param->min_val || value > param->max_val) {
-                printf("%%SYSMAN-E-RANGE, value %u outside range [%u, %u]\n",
-                       value, param->min_val, param->max_val);
-                fclose(fp);
-                return;
-            }
-            param->current = value;
-            /* Write entire file back */
-            fseek(fp, 0, SEEK_SET);
-            fwrite(&sf, sizeof(sf), 1, fp);
-            printf("%%SYSMAN-I-SETPARAM, %s set to %u\n", pname, value);
+    struct sysgen_param *found = NULL;
+    for (uint32_t i = 0; i < ws.count; i++) {
+        if (strcasecmp(ws.params[i].name, name) == 0) {
+            found = &ws.params[i];
             break;
         }
     }
-    fclose(fp);
 
-    if (!found)
-        printf("%%SYSMAN-E-NOTFOUND, parameter %s not found\n", name);
+    if (!found) {
+        str_upper(name);
+        printf("%%SYSMAN-E-NOSUCHP, %s is not a valid parameter name\n", name);
+        return;
+    }
+
+    if (found->flags & SYSGEN_F_INFORMATIONAL) {
+        printf("%%SYSMAN-E-RDONLY, parameter %s is informational (read-only)\n",
+               found->name);
+        return;
+    }
+
+    if (found->type == SYSGEN_TYPE_STRING) {
+        char newval[SYSGEN_STRVAL_LEN];
+        strncpy(newval, valstr, sizeof(newval) - 1);
+        newval[sizeof(newval) - 1] = '\0';
+        str_upper(newval);
+
+        char oldval[SYSGEN_STRVAL_LEN];
+        memcpy(oldval, found->str_current, sizeof(oldval));
+        memcpy(found->str_current, newval, sizeof(found->str_current));
+        ws_modified = 1;
+        printf("%%SYSMAN-I-SETPARAM, %s changed from %s to %s\n",
+               found->name, oldval, found->str_current);
+        return;
+    }
+
+    /* Numeric parameter. */
+    char *endptr;
+    unsigned long val = strtoul(valstr, &endptr, 0);
+    if (*endptr != '\0') {
+        printf("%%SYSMAN-E-IVVAL, \"%s\" is not a valid numeric value\n", valstr);
+        return;
+    }
+    if (val < found->min_val) {
+        printf("%%SYSMAN-E-TOOSMALL, value %lu below minimum %u for %s\n",
+               val, found->min_val, found->name);
+        return;
+    }
+    if (val > found->max_val) {
+        printf("%%SYSMAN-E-TOOLARGE, value %lu exceeds maximum %u for %s\n",
+               val, found->max_val, found->name);
+        return;
+    }
+
+    uint32_t old_val = found->current;
+    found->current = (uint32_t)val;
+    ws_modified = 1;
+    printf("%%SYSMAN-I-SETPARAM, %s changed from %u to %u\n",
+           found->name, old_val, (uint32_t)val);
+}
+
+/* ------------------------------------------------------------------ */
+/*  PARAMETERS WRITE {ACTIVE | CURRENT | file}                         */
+/* ------------------------------------------------------------------ */
+static void cmd_parameters_write(const char *rest)
+{
+    char target[256] = "";
+    const char *p = skip_ws(rest);
+    int ti = 0;
+    while (*p && !isspace((unsigned char)*p) && ti < (int)sizeof(target) - 1)
+        target[ti++] = *p++;
+    target[ti] = '\0';
+
+    if (target[0] == '\0') {
+        printf("%%SYSMAN-E-SYNTAX, PARAMETERS WRITE {ACTIVE|CURRENT|file-spec}\n");
+        return;
+    }
+    if (!ws_loaded) {
+        printf("%%SYSMAN-E-NODATA, no parameter set loaded -- USE ACTIVE/CURRENT first\n");
+        return;
+    }
+
+    if (strcasecmp(target, "CURRENT") == 0 || strcasecmp(target, "ACTIVE") == 0) {
+        int is_active = (strcasecmp(target, "ACTIVE") == 0);
+        char path[VMSFS_MAX_PATH] = "";
+        int version = 0;
+        /* CURRENT mints a new next-boot version; ACTIVE updates the store the
+         * running readers consult in place (sysgen_params.h documents the
+         * single-store model). */
+        int status = sysgen_commit_working(&ws, is_active ? 0 : 1,
+                                            path, sizeof(path), &version);
+        if (!$VMS_STATUS_SUCCESS(status)) {
+            printf("%%SYSMAN-E-WRITEERR, error writing %s system parameters\n",
+                   is_active ? "ACTIVE" : "CURRENT");
+            return;
+        }
+        ws_modified = 0;
+        printf("%%SYSMAN-I-WRITTEN, %u parameters written to %s parameter set\n",
+               ws.count, is_active ? "ACTIVE" : "CURRENT");
+        return;
+    }
+
+    /* Explicit literal file target (no versioning). */
+    FILE *fp = fopen(target, "wb");
+    if (!fp) {
+        printf("%%SYSMAN-E-OPENOUT, error opening %s for output\n", target);
+        return;
+    }
+    if (fwrite(&ws, sizeof(ws), 1, fp) != 1) {
+        printf("%%SYSMAN-E-WRITEERR, error writing %s\n", target);
+        fclose(fp);
+        return;
+    }
+    fclose(fp);
+    ws_modified = 0;
+    printf("%%SYSMAN-I-WRITTEN, %u parameters written to %s\n", ws.count, target);
 }
 
 /* ------------------------------------------------------------------ */
@@ -471,9 +664,13 @@ static void cmd_parameters(const char *rest)
         cmd_parameters_show(p + 4);
     } else if (prefix_match(p, "SET")) {
         cmd_parameters_set(p + 3);
+    } else if (prefix_match(p, "USE")) {
+        cmd_parameters_use(p + 3);
+    } else if (prefix_match(p, "WRITE")) {
+        cmd_parameters_write(p + 5);
     } else {
         printf("%%SYSMAN-E-SYNTAX, unrecognized PARAMETERS subcommand\n");
-        printf("  Valid: PARAMETERS SHOW param | PARAMETERS SET param value\n");
+        printf("  Valid: SHOW | SET | USE {ACTIVE|CURRENT|file} | WRITE {ACTIVE|CURRENT|file}\n");
     }
 }
 
@@ -550,8 +747,10 @@ static void cmd_help(void)
     printf("  STARTUP SHOW                 List startup procedures\n");
     printf("  STARTUP ADD file /PHASE=ph   Add startup procedure (LPMAIN/LPBETA)\n");
     printf("  STARTUP REMOVE file          Remove startup procedure\n");
-    printf("  PARAMETERS SHOW param        Show system parameter value\n");
-    printf("  PARAMETERS SET param value   Set system parameter value\n");
+    printf("  PARAMETERS USE {ACTIVE|CURRENT|file}   Load parameters into work area\n");
+    printf("  PARAMETERS SHOW {param|prefix*|/ALL}   Show system parameter value(s)\n");
+    printf("  PARAMETERS SET param value             Set system parameter value\n");
+    printf("  PARAMETERS WRITE {ACTIVE|CURRENT|file} Commit the work area\n");
     printf("  DO command                   Execute DCL command on target node\n");
     printf("  SHUTDOWN NODE                Shut down the target node\n");
     printf("  HELP                         Display this help\n");

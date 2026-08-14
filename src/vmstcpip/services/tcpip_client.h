@@ -647,12 +647,17 @@ static inline uint32_t tcpip_ftp_put(uint32_t server_addr_be, uint16_t server_po
     if (!(st & 1)) { tcpip_close(&ctl); return st; }
 
     st = tcpip_ftp_reply(&ctl, &code, line, sizeof(line));   /* 226 complete */
-    tcpip_ftp_send_cmd(&ctl, "QUIT", NULL);
-    tcpip_ftp_reply(&ctl, &code, line, sizeof(line));        /* 221 bye */
-    tcpip_close(&ctl);
-
-    if (!(st & 1) || code != 226)
-        return SS$_ABORT;
+    /* Capture the STOR completion verdict BEFORE the QUIT/221 exchange reuses
+     * `code` -- otherwise the 221 reply clobbers the 226 we just confirmed and
+     * the completion check below always fails (the transfer itself succeeded). */
+    {
+        int completed = (st & 1) && code == 226;
+        tcpip_ftp_send_cmd(&ctl, "QUIT", NULL);
+        tcpip_ftp_reply(&ctl, &code, line, sizeof(line));    /* 221 bye */
+        tcpip_close(&ctl);
+        if (!completed)
+            return SS$_ABORT;
+    }
     return SS$_NORMAL;
 }
 

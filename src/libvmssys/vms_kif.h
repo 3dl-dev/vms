@@ -691,4 +691,34 @@ uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
 uint32_t vms_kif_mbx_set_wrtattn(uint32_t exec_chan, uint8_t acmode,
                                  uint64_t astadr, uint64_t astprm);
 
+/* ================================================================
+ * INET pseudo-device BGn: (vms-527)
+ *
+ * Marshalling wrappers over the VMS_IOCTL_BG_* driver in vms.ko
+ * (src/kernel/vms_bg.c). Every one binds to /dev/vms and returns
+ * SS$_NOSUCHDEV if the executive is absent -- the honest state for an
+ * executive device whose driver is unreachable (INV-6), never a userspace
+ * socket fallback. The socket is executive-resident; these move only the
+ * request/response bytes.
+ * ================================================================ */
+
+/* $ASSIGN TCPIP$DEVICE: -- allocate a fresh BGn: unit + a channel to it. */
+uint32_t vms_kif_bg_create(uint32_t *exec_chan, uint32_t *unit,
+                           char *devnam, uint32_t devnam_sz);
+/* IO$_SETMODE -- create the channel's host socket (AF_INET/SOCK_STREAM). */
+uint32_t vms_kif_bg_setmode(uint32_t exec_chan);
+/* IO$_ACCESS -- connect to a peer (sockaddr_in fields, network byte order). */
+uint32_t vms_kif_bg_connect(uint32_t exec_chan, uint16_t family,
+                            uint16_t port, uint32_t addr);
+/* IO$_WRITEVBLK -- send one buffer; *actlen gets the bytes sent. */
+uint32_t vms_kif_bg_send(uint32_t exec_chan, const void *buf, uint32_t len,
+                         uint32_t *actlen);
+/* IO$_READVBLK -- receive into buf (<= bufsz); *actlen gets the bytes read. */
+uint32_t vms_kif_bg_recv(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                         uint32_t *actlen);
+/* IO$_DEACCESS -- shut the connection down both ways. */
+uint32_t vms_kif_bg_deaccess(uint32_t exec_chan);
+/* $DASSGN -- release the channel and its host socket. */
+uint32_t vms_kif_bg_dassgn(uint32_t exec_chan);
+
 #endif /* _VMS_KIF_H */

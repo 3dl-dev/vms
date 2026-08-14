@@ -191,6 +191,17 @@
 #define SS__NOMOREDEV   2648        /* device scan exhausted */
 #define SS__NOSUCHDEV   2680        /* no such device available */
 /*
+ * SS__ABORT (SS$_ABORT == 44, this tree's src/libvms/include/ssdef.h value,
+ * single-lineage the same way SS__EXQUOTA / SS__ENDOFFILE below are). The BGn:
+ * driver (vms-527) returns it when a host-kernel socket operation
+ * (connect/send/recv) fails -- the same status src/libvms/syssvc/sys_qio.c's
+ * synchronous read/write path already maps a failed I/O to. Not the connection-
+ * specific SS$_LINKDISCON/SS$_CONNECFAIL family (not oracle-pinned in this tree
+ * yet); reusing an already-grounded status rather than inventing one this tree
+ * cannot cite (CLAUDE.md Rule 8), the same choice vms_mbx.c makes for SS$_MBFULL.
+ */
+#define SS__ABORT       44          /* I/O aborted (ssdef.h SS$_ABORT) */
+/*
  * Allocation statuses. Unlike the four above, these two were measured
  * directly on the oracle rather than inherited: VMS's own message
  * facility on the ~/vax OpenVMS VAX V7.3 lab reports
@@ -582,6 +593,17 @@ struct vms_proc {
     struct list_head    mbx_channels;   /* struct vms_mbx_chan */
 
     /*
+     * INET pseudo-device channels (executive-resident BGn:, vms-527). A
+     * separate list, same chan_lock and next_chan counter as the device and
+     * mailbox channels above (vms_bg.h) -- a BG channel carries a host-kernel
+     * `struct socket *` a generic device row has no field for, exactly as a
+     * mailbox channel carries a message queue, so it gets its own per-process
+     * binding (struct vms_bg_chan, src/kernel/vms_bg.c). Released at process
+     * teardown by vms_bg_release_all().
+     */
+    struct list_head    bg_channels;    /* struct vms_bg_chan */
+
+    /*
      * The job's terminal (vms-d0b). "" until VMS_IOCTL_SETTERM records
      * one, which the executive only does from a channel this process
      * already holds to a device of class DC$_TERM -- so the name is a
@@ -964,6 +986,24 @@ long vms_ioctl_mbx_set_wrtattn(struct vms_proc *proc, unsigned long arg);
 int vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan);
 /* Give back every mailbox channel a dying process holds. */
 void vms_mbx_release_all(struct vms_proc *proc);
+
+/*
+ * INET pseudo-device (executive-resident BGn:, vms-527). The BGn: driver is
+ * Linux host-kernel-socket glue (src/kernel/vms_bg.c), so unlike the mailbox
+ * (which lives in the substrate-agnostic kernel-core) it is NOT called from
+ * kernel-core: vms_module.c dispatches its ioctls and calls vms_bg_release_all
+ * at process teardown directly, keeping kernel-core free of the host socket
+ * API.
+ */
+long vms_ioctl_bg_create(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_bg_setmode(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_bg_connect(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_bg_send(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_bg_recv(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_bg_deaccess(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_bg_dassgn(struct vms_proc *proc, unsigned long arg);
+/* Give back every BG channel (and its host socket) a dying process holds. */
+void vms_bg_release_all(struct vms_proc *proc);
 
 /* Subsystem init/cleanup */
 int vms_lock_init(void);

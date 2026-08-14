@@ -1714,4 +1714,15 @@ _Static_assert(VMS_IOCTL_IMAGE_RUNDOWN == 0xC0085667u,
  * ================================================================ */
 #include "vms_mbx.h"
 
+/* ================================================================
+ * INET pseudo-device (executive-resident BGn:, vms-527).
+ *
+ * The ioctl structures and request numbers live in vms_bg.h, included
+ * here for the same reason as vms_mbx.h above: one frozen definition for
+ * every consumer, kernel and userspace, on either architecture. BGn: is
+ * the TCP/IP transport device (the SRI-QIO / INETDRIVER interface),
+ * distinct from the NIC device ETH0: it layers over.
+ * ================================================================ */
+#include "vms_bg.h"
+
 #endif /* _VMS_IOCTL_H */

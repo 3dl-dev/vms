@@ -51,9 +51,12 @@ obj-m := vms.o
 # the MMAP-TIME MAPPING (remap_vmalloc_range + clearing VM_MAYWRITE): that is
 # host char-device glue, so vms_lnm_mmap stays in the Linux rind (vms_module.c),
 # reading the arena base+size back through the facility's accessors. With this
-# move EVERY executive facility lives in src/kernel-core/; what remains here is
-# the Linux glue -- vms_module.c (the /dev/vms char device + registration) and
-# vms_p0.c/vms_p1.c (the P0/P1 region mappers, still host-mm-coupled).
+# move EVERY substrate-agnostic executive facility lives in src/kernel-core/;
+# what remains here is the Linux glue -- vms_module.c (the /dev/vms char device
+# + registration), vms_p0.c/vms_p1.c (the P0/P1 region mappers, still host-mm-
+# coupled), and vms_bg.c (the BGn: INET pseudo-device, vms-527 -- a kernel-mode
+# driver over the HOST kernel's in-kernel socket API, deliberately not in the
+# core because it names the host transport directly; see its own header).
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
          ../kernel-core/vms_ast.o \
@@ -64,7 +67,8 @@ vms-y := vms_module.o \
          ../kernel-core/vms_mbx.o \
          ../kernel-core/vms_proctab.o \
          vms_p0.o \
-         vms_p1.o
+         vms_p1.o \
+         vms_bg.o
 
 # -I$(src)/../kernel-core: the substrate-agnostic executive core + the shim
 #   contracts (exec_kbackend.h, exec_list.h, exec_hash.h). The relocated core

@@ -459,6 +459,10 @@ struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
      * next_chan counter as the device channels above (vms_mbx.h). */
     INIT_LIST_HEAD(&proc->mbx_channels);
 
+    /* INET pseudo-device channels (BGn:, vms-527) -- likewise a separate list
+     * on the same chan_lock and next_chan counter (vms_bg.h). */
+    INIT_LIST_HEAD(&proc->bg_channels);
+
     /* P0 program region (vms-68f.i): unmapped until VMS_IOCTL_P0_MAP
      * records an extent. kmem_cache_zalloc() above already zeroed
      * p0_base/p0_limit; only the lock needs initializing. */
@@ -573,6 +577,14 @@ void vms_proc_free_claimed(struct vms_proc *proc)
      * ownership when the last channel goes.
      */
     vms_proc_release_channels(proc);
+
+    /*
+     * Give back every INET pseudo-device channel (BGn:, vms-527) and release
+     * its host socket. Called here rather than from vms_proc_release_channels
+     * (kernel-core) because the BG driver is host-socket glue that the
+     * substrate-agnostic core must not name -- see vms_bg.c's header.
+     */
+    vms_bg_release_all(proc);
 
     /* Drop the pinned pid reference taken at registration */
     if (proc->pid_ref) {
@@ -819,6 +831,25 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_mbx_delmbx(proc, arg);
     case VMS_IOCTL_MBX_SET_WRTATTN:
         return vms_ioctl_mbx_set_wrtattn(proc, arg);
+
+    /* INET pseudo-device (executive-resident BGn:, vms-527). BGn: is a
+     * kernel-mode driver over the host in-kernel socket API (src/kernel/
+     * vms_bg.c); $ASSIGN creates a unit+channel, IO$_SETMODE the socket, and
+     * IO$_ACCESS/WRITEVBLK/READVBLK/DEACCESS map to connect/send/recv/shutdown. */
+    case VMS_IOCTL_BG_CREATE:
+        return vms_ioctl_bg_create(proc, arg);
+    case VMS_IOCTL_BG_SETMODE:
+        return vms_ioctl_bg_setmode(proc, arg);
+    case VMS_IOCTL_BG_CONNECT:
+        return vms_ioctl_bg_connect(proc, arg);
+    case VMS_IOCTL_BG_SEND:
+        return vms_ioctl_bg_send(proc, arg);
+    case VMS_IOCTL_BG_RECV:
+        return vms_ioctl_bg_recv(proc, arg);
+    case VMS_IOCTL_BG_DEACCESS:
+        return vms_ioctl_bg_deaccess(proc, arg);
+    case VMS_IOCTL_BG_DASSGN:
+        return vms_ioctl_bg_dassgn(proc, arg);
 
     /* P0 program region (vms-68f.i, in-process image activation foundation) */
     case VMS_IOCTL_P0_MAP:

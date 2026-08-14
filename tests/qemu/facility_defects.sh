@@ -508,7 +508,8 @@ devtab-getdvi-userspace-alloc-dropped
 lnm-searchlist-equiv-truncated
 rightslist-general-hex-as-decimal
 sysuaf-uic-radix-decimal
-sysuaf-uic-writeback-decimal"
+sysuaf-uic-writeback-decimal
+bg-recv-length-zeroed"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -5341,6 +5342,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    bg-recv-length-zeroed)
+        case "$_f" in
+        facility)     echo "INET pseudo-device BGn: -- the IO$_READVBLK (recv) handler of the executive-resident BGn: driver (vms_ioctl_bg_recv, src/kernel/vms_bg.c, vms-527). The first network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs connect/send/recv/close to a TCP peer, and the socket lives IN the executive (host in-kernel socket API), not in userspace.";;
+        targets)      echo "kernel/vms_bg.c";;
+        suites_red)   echo "test_syssvc_bg_echo";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_bg_recv() reports the received byte count as 0 instead of the count the host kernel's kernel_recvmsg returned, so the echo comes back with a zero IOSB byte count (and the userspace wrapper then copies 0 bytes out). The read still returns SS\$_NORMAL -- a completed recv of nothing is not an error to the driver -- so only the byte-exact echo assertion sees it. One assignment zeroed.";;
+        require_fail) cat <<'EOF'
+BG $QIO IO$_READVBLK returns the exact bytes the echo peer sent back
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -6151,6 +6169,17 @@ apply_edit() {
         # second apply finds nothing.
         sed -i 's@"%s|%s|%o|%o|%s|%s|%s|%s"@"%s|%s|%u|%u|%s|%s|%s|%s" /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file"
         sed -i 's@"%s|%s|%o|%o|%s|%s|%s"@"%s|%s|%u|%u|%s|%s|%s" /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file";;
+
+    bg-recv-length-zeroed)
+        # RANGE-ANCHORED to vms_ioctl_bg_recv's own body: the 8-space
+        # "a->len = (uint32_t)n;" also appears in vms_ioctl_bg_send (its
+        # send-count assignment, earlier in the file), so the range opens at
+        # "^long vms_ioctl_bg_recv" and closes at that function's own column-0
+        # "}" to exclude send's copy. Zeroing the received length reports a
+        # completed recv of 0 bytes -- the echo comes back with a wrong IOSB
+        # byte count. After substitution no "a->len = (uint32_t)n;" is left in
+        # the range, so a second apply is the no-op the selftest requires.
+        sed -i '/^long vms_ioctl_bg_recv/,/^}$/ s|        a->len = (uint32_t)n;|        a->len = 0; /* NEGCTL bg-recv-length-zeroed */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

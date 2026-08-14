@@ -61,6 +61,14 @@ struct vms_device_result {
     int  is_mailbox;            /* nonzero if MBA<n>: device */
     int  mbx_unit;              /* mailbox unit number (if is_mailbox) */
     /*
+     * vms-527: nonzero if this name identifies the INET pseudo-device --
+     * TCPIP$DEVICE: (the transport device) or a BG<n>: unit. Like a mailbox,
+     * BGn: is executive-resident (src/kernel/vms_bg.c): $ASSIGN allocates a
+     * fresh unit through the executive (vms_kif_bg_create), the channel's fd
+     * stays -1, and $QIO routes through qio_bg_op() instead of the fd path.
+     */
+    int  is_bg;
+    /*
      * vms-1c57: nonzero if this name identifies the executive's console
      * terminal (src/kernel/vms_devtab.c's ONE registered device, OPA0:).
      * $ASSIGN must obtain a channel FROM THE EXECUTIVE for this case --
@@ -89,6 +97,7 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
     result->is_mailbox = 0;
     result->mbx_unit = 0;
     result->is_terminal = 0;
+    result->is_bg = 0;
 
     if (!name || !name[0])
         return 0;
@@ -184,6 +193,28 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
         if (*endp == '\0' && unit >= 0) {
             result->is_mailbox = 1;
             result->mbx_unit = (int)unit;
+            return 1;
+        }
+    }
+
+    /*
+     * INET pseudo-device (vms-527). TCPIP$DEVICE: is the INET transport
+     * device VMS TCP/IP Services present; BG<n>: is a specific INET unit.
+     * Both resolve to a BG-create in the executive -- $ASSIGN allocates a
+     * fresh BGn: unit the way $CREMBX allocates a fresh mailbox unit (this
+     * first increment does not model rendezvous to a specific existing BG
+     * unit; every $ASSIGN gets its own). BG is distinct from the NIC device
+     * ETH0: it layers over (device-native-naming).
+     */
+    if (strcmp(upper, "TCPIP$DEVICE") == 0) {
+        result->is_bg = 1;
+        return 1;
+    }
+    if (strncmp(upper, "BG", 2) == 0 && upper[2] != '\0') {
+        char *endp;
+        long unit = strtol(upper + 2, &endp, 10);
+        if (*endp == '\0' && unit >= 0) {
+            result->is_bg = 1;
             return 1;
         }
     }
@@ -374,6 +405,39 @@ uint32_t sys$assign(const struct dsc$descriptor_s *devnam,
             return SS$_NORMAL;
         }
 
+        if (devres.is_bg) {
+            /*
+             * vms-527: $ASSIGN TCPIP$DEVICE:/BGn: -- allocate a fresh INET
+             * pseudo-device unit + channel in the executive (src/kernel/
+             * vms_bg.c), the analogue of the mailbox $CREMBX path above. The
+             * socket is executive-resident; there is no local fd to open, so
+             * this channel's fd stays -1 and $QIO routes through qio_bg_op()
+             * (see sys_qio.c's PCB_CHAN_BG check). If the executive is absent
+             * vms_kif_bg_create returns SS$_NOSUCHDEV -- no per-process socket
+             * fake (INV-6).
+             */
+            uint32_t bg_exec_chan = 0;
+            uint32_t st = vms_kif_bg_create(&bg_exec_chan, NULL, NULL, 0);
+            if (!(st & 1)) {
+                pthread_mutex_unlock(&pcb->chan_lock);
+                return st;
+            }
+
+            pcb->channels[slot].fd = -1;
+            pcb->channels[slot].in_use = 1;
+            pcb->channels[slot].ref_count = 1;
+            pcb->channels[slot].flags = PCB_CHAN_BG;
+            pcb->channels[slot].mbx_peer_fd = -1;
+            pcb->channels[slot].exec_chan = bg_exec_chan;
+            strncpy(pcb->channels[slot].devnam, name,
+                    sizeof(pcb->channels[slot].devnam) - 1);
+            pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';
+            *chan = (uint16_t)slot;
+
+            pthread_mutex_unlock(&pcb->chan_lock);
+            return SS$_NORMAL;
+        }
+
         if (devres.is_terminal) {
             /*
              * vms-1c57: THE CHANNEL IS THE IDENTITY. A terminal is a row in
@@ -467,14 +531,30 @@ uint32_t sys$dassgn(uint16_t chan) {
     }
 
     /*
-     * vms-1c57: give the executive's channel back FIRST. If it refuses --
-     * which should not happen, since this process is the only one that
-     * could have obtained this exec_chan -- leave the whole channel
-     * assigned rather than tearing down the local half only: the channel
-     * is the identity, so a channel the executive still holds is still
-     * assigned, whatever the local bookkeeping believes.
+     * vms-527: an INET pseudo-device channel is released through the BG
+     * driver's own $DASSGN ioctl (vms_kif_bg_dassgn), which also releases the
+     * executive-resident socket. It cannot go through the generic
+     * vms_kif_dassgn below: BG channels live in the executive's bg_channels
+     * list, not its device table, so the generic $DASSGN would not find one
+     * (and the generic path lives in the substrate-agnostic kernel-core,
+     * which must not name the host socket API). fd is -1, so there is no
+     * local descriptor to close afterwards.
      */
-    if (pcb->channels[chan].exec_chan != 0) {
+    if (pcb->channels[chan].flags & PCB_CHAN_BG) {
+        uint32_t st = vms_kif_bg_dassgn(pcb->channels[chan].exec_chan);
+        if (!(st & 1)) {
+            pthread_mutex_unlock(&pcb->chan_lock);
+            return st;
+        }
+    } else if (pcb->channels[chan].exec_chan != 0) {
+        /*
+         * vms-1c57: give the executive's channel back FIRST. If it refuses --
+         * which should not happen, since this process is the only one that
+         * could have obtained this exec_chan -- leave the whole channel
+         * assigned rather than tearing down the local half only: the channel
+         * is the identity, so a channel the executive still holds is still
+         * assigned, whatever the local bookkeeping believes.
+         */
         uint32_t st = vms_kif_dassgn(pcb->channels[chan].exec_chan);
         if (!(st & 1)) {
             pthread_mutex_unlock(&pcb->chan_lock);
@@ -556,4 +636,19 @@ int vms$$chan_is_mailbox(uint16_t chan) {
     if (!pcb) return 0;
     if (!pcb->channels[chan].in_use) return 0;
     return (pcb->channels[chan].flags & PCB_CHAN_MAILBOX) ? 1 : 0;
+}
+
+/*
+ * vms$$chan_is_bg - Internal helper: is this channel an INET pseudo-device
+ * (BGn:) channel (vms-527)? Used by sys$qio to route the $QIO functions to
+ * the executive's BG driver (vms_kif_bg_*) instead of the fd-based path -- a
+ * BG channel's fd is always -1, since the socket is executive-resident.
+ */
+int vms$$chan_is_bg(uint16_t chan) {
+    if (chan == 0 || chan >= PCB_MAX_CHANNELS) return 0;
+
+    struct vms_pcb *pcb = vms_pcb_get();
+    if (!pcb) return 0;
+    if (!pcb->channels[chan].in_use) return 0;
+    return (pcb->channels[chan].flags & PCB_CHAN_BG) ? 1 : 0;
 }

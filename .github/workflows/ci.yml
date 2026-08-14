@@ -58,6 +58,7 @@ jobs:
       vmsfs_mount_vax: ${{ steps.decide.outputs.vmsfs_mount_vax }}
       exec_netbsd_vax: ${{ steps.decide.outputs.exec_netbsd_vax }}
       aarch64_boot: ${{ steps.decide.outputs.aarch64_boot }}
+      compat_surface: ${{ steps.decide.outputs.compat_surface }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -210,6 +211,15 @@ jobs:
               - '.github/workflows/**'
               - 'tests/qemu-aarch64/**'
               - 'src/libvmssys/**'
+            # INV-LEDGER (vms-8465): docs/compatibility-surface.md is GENERATED
+            # from docs/compat/*.yaml by tools/compat/render_compat.py -- the
+            # YAML is the single ledger. This filter is intentionally narrow
+            # (no C/H sources): the drift job below runs Python + PyYAML only.
+            compat_surface:
+              - '.github/workflows/**'
+              - 'docs/compat/**'
+              - 'tools/compat/**'
+              - 'docs/compatibility-surface.md'
 
       - name: Decide (force every output true on non-PR events)
         id: decide
@@ -227,6 +237,7 @@ jobs:
               echo "vmsfs_mount_vax=${{ steps.filter.outputs.vmsfs_mount_vax }}"
               echo "exec_netbsd_vax=${{ steps.filter.outputs.exec_netbsd_vax }}"
               echo "aarch64_boot=${{ steps.filter.outputs.aarch64_boot }}"
+              echo "compat_surface=${{ steps.filter.outputs.compat_surface }}"
             } >> "$GITHUB_OUTPUT"
           else
             {
@@ -241,8 +252,68 @@ jobs:
               echo "vmsfs_mount_vax=true"
               echo "exec_netbsd_vax=true"
               echo "aarch64_boot=true"
+              echo "compat_surface=true"
             } >> "$GITHUB_OUTPUT"
           fi
+  # -----------------------------------------------------------------------
+  # Job: compatibility surface drift gate (INV-LEDGER, vms-8465)
+  #
+  # docs/compat/domains.yaml + docs/compat/facilities/*.yaml are the single
+  # ledger for the VMS compatibility surface register; docs/compatibility-
+  # surface.md and build/compat-surface.json are GENERATED from them by
+  # tools/compat/render_compat.py and must never be hand-edited (its own
+  # banner says so). Without a gate, nothing stops the YAML and the tracked
+  # md from silently diverging -- someone edits a status in the YAML and
+  # forgets to regenerate, or hand-patches the md directly.
+  #
+  # `render_compat.py --check` only validates vocab/schema (status/
+  # authenticity/kind against docs/compat/domains.yaml, cross-refs, evidence
+  # paths) -- it does NOT compare its output against the tracked md, so it
+  # cannot catch drift by itself. This job adds that comparison: regenerate,
+  # then diff the fresh render against the committed file. The generated
+  # header carries a "Generated <today>" date stamp that changes on every
+  # run regardless of content, so both sides of the diff have that one line
+  # stripped first -- otherwise the gate would redden on pure calendar
+  # rollover, which is not the drift this gate exists to catch.
+  #
+  # In-repo and network-free (no rd, no external calls), so this is cleanly
+  # CI-gateable, unlike tools/roadmap/reconcile.py --check (needs `rd`, which
+  # is not available in GitHub Actions -- that stays a local/checkpoint
+  # check, not a CI job).
+  # -----------------------------------------------------------------------
+  compat-surface-drift:
+    name: Compat Surface Drift Gate (INV-LEDGER)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.compat_surface == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install PyYAML
+        run: pip install --disable-pip-version-check pyyaml
+
+      - name: Validate compat surface YAML (schema/vocab)
+        run: python3 tools/compat/render_compat.py --check
+
+      - name: Detect drift between docs/compat/*.yaml and the generated register
+        run: |
+          set -e
+          cp docs/compatibility-surface.md /tmp/compat-surface-tracked.md
+          python3 tools/compat/render_compat.py
+          if ! diff -u <(grep -v '^> Generated ' /tmp/compat-surface-tracked.md) \
+                       <(grep -v '^> Generated ' docs/compatibility-surface.md); then
+            echo "::error::docs/compatibility-surface.md has drifted from docs/compat/*.yaml (single ledger, INV-LEDGER). Run 'python3 tools/compat/render_compat.py' and commit the regenerated file."
+            exit 1
+          fi
+          echo "OK: docs/compatibility-surface.md matches a fresh render of docs/compat/ (date stamp ignored)."
   # -----------------------------------------------------------------------
   # Job: aarch64 system-emulation boot proof (rd vms-f66)
   #

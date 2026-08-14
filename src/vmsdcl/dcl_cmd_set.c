@@ -36,6 +36,7 @@
 #include "vms/pcb.h"
 #include "vms_kif.h"
 #include "sysuaf.h"
+#include "uaidef.h"    /* UAI$M_LOCKPWD (vms-c8fa) */
 #include "sha256.h"
 #include "ovmx_accounting.h"
 
@@ -651,6 +652,22 @@ static int cmd_set_password(struct dcl_command *cmd)
         dcl_error("UAF", 2, "NOSUCHUSER", "no such user %s in SYSUAF",
                   ctx->username);
         return SS$_NOSUCHID;
+    }
+
+    /*
+     * LOCKPWD (vms-c8fa). "To prevent the user from changing the password, use
+     * the LOCKPWD flag" -- OpenVMS Guide to System Security, Primary Passwords:
+     * with LOCKPWD set "the security administrator controls all changes made
+     * to the password," so a self-service SET PASSWORD is refused; only a
+     * privileged manager may change it through AUTHORIZE. This is honored
+     * BEFORE any password is prompted -- the user is told plainly rather than
+     * walked through prompts whose result would be discarded. The %SET-F-
+     * PWDLOCKED text is the documented VMS message for this condition.
+     */
+    if (sysuaf_flags_to_mask(rec.flags) & UAI$M_LOCKPWD) {
+        dcl_error("SET", 4, "PWDLOCKED",
+                  "password is locked to prevent change");
+        return SS$_NOPRIV;
     }
 
     char old_pw[128], new_pw[128], verify_pw[128];

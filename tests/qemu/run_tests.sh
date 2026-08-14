@@ -33,7 +33,23 @@ set -euo pipefail
 # remains the OUTER bound so a genuine hang (not mere slowness) still surfaces.
 # A wall overrun is detected (timeout rc=124) and reported legibly below, but
 # STILL fails the gate -- see the verdict path.
-TIMEOUT=600
+#
+# 600 -> 1500 (vms-904, extends vms-4003/vms-055). The suite set has GROWN
+# past what 600s covers, not because any one suite regressed but because the
+# self-host spine landed HEAVY build-driving suites that each cost tens of
+# seconds under TCG -- test_syssvc_mmk_build alone drives MMK.EXE compiling a
+# real TU with TCC.EXE inside the guest, and test_syssvc_imgact_{realimg,
+# nonres,tls,extern} each activate a real image. MEASURED at this change: a
+# pure-TCG run (no KVM, as CI boots) completed only 59 suites before the 600s
+# wall fired -- on this host AND on CI (both SIGTERM'd right after
+# test_syssvc_procctl), and the KE gate was already failing on main for this
+# reason (e702905d, 7fba9da5). Extrapolating 59 suites/600s to the full ~80
+# gives ~815s; 1500s covers that with ~1.8x margin for TCG runner variance,
+# while ci.yml's timeout-minutes: 60 stays the OUTER bound so a genuine hang
+# still surfaces. The DURABLE fix is sharding the ~80 suites across N parallel
+# VM jobs (rd vms-ea7 / vms-4003), which this interim wall raise does not
+# replace -- it only stops a capacity red from masquerading as a suite defect.
+TIMEOUT=1500
 KERNEL=/boot/vmlinuz
 INITRD=/initramfs.cpio.gz
 ARCH=$(uname -m)

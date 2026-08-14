@@ -61,14 +61,15 @@
  *     pcb->exit_handlers[] in the per-process PCB, then _exit()s.
  * OVMX-USERSPACE: sys$dclexh (vms-pt1) -- appends to that same per-process
  *     array; no executive records that the process has an exit handler.
- * OVMX-PARTIAL: sys$forcex (vms-904) -- with no target it degenerates to
- *     sys$exit on the caller; otherwise the target is RESOLVED in the
- *     executive (by prcnam within the caller's UIC group, or by VMS pid in
- *     any group gated by GROUP/WORLD -- the SAME resolve_control_target()
- *     path sys$delprc uses), and the force-exit signal goes to the resolved
- *     Linux pid, NEVER a raw cast of the caller's VMS-pid argument. A target
- *     the executive does not carry is SS$_NONEXPR, not a signal to whatever
- *     Linux process wears that number.
+ * OVMX-PARTIAL: sys$forcex (vms-904) -- exec: with a target, the VMS pid or
+ *     name is RESOLVED to a Linux pid through the executive (the SAME
+ *     resolve_control_target() path sys$delprc uses; another process is gated
+ *     by GROUP/WORLD), and a target the executive does not carry is
+ *     SS$_NONEXPR -- never a raw cast of the caller's VMS-pid argument.
+ * OVMX-LOCAL: sys$forcex -- the force-exit itself is still kill(SIGUSR1)
+ *     against the resolved Linux pid, and the no-target form is sys$exit()
+ *     (_exit) on the caller: OVMX has no executive-side "force image exit"
+ *     primitive, so the signal is the mechanism, same as sys$delprc's SIGTERM.
  * OVMX-PARTIAL: sys$delprc (vms-1a8) -- exec: the target is now RESOLVED in
  *     the executive, by prcnam (within the caller's UIC group) or by VMS
  *     pid (any group, gated by WORLD -- see sys$delprc's own comment), the
@@ -99,13 +100,23 @@
  *     process before the call, and $WAKE by process NAME is not resolved (prcnam
  *     discarded, redirecting a named target to self); those are not the
  *     executive's.
- * OVMX-PARTIAL: sys$suspnd (vms-904) -- exec: the target is RESOLVED in the
- *     executive (resolve_control_target(), as sys$delprc), then SIGSTOP is
- *     sent to the resolved Linux pid; a VMS-pid argument is never cast into
- *     kill() directly. Absent target -> SS$_NONEXPR.
- * OVMX-USERSPACE: sys$suspend (vms-pt1) -- tail-calls sys$suspnd.
- * OVMX-PARTIAL: sys$resume (vms-904) -- exec: same resolution as sys$suspnd,
- *     SIGCONT to the resolved Linux pid. Absent target -> SS$_NONEXPR.
+ * OVMX-PARTIAL: sys$suspnd (vms-904) -- exec: the target (VMS pid, name, or
+ *     the caller) is RESOLVED to a Linux pid through the executive
+ *     (resolve_control_target(), as sys$delprc); a VMS-pid argument is never
+ *     cast into kill() directly, and an absent target is SS$_NONEXPR.
+ * OVMX-LOCAL: sys$suspnd -- the suspension itself is still kill(SIGSTOP)
+ *     against the resolved Linux pid: OVMX has no executive-side "suspend this
+ *     PCB" primitive, so the signal is the mechanism.
+ * OVMX-PARTIAL: sys$suspend (vms-904) -- exec: backwards-compat alias that
+ *     tail-calls sys$suspnd, inheriting its executive resolution of the
+ *     target (resolve_control_target()).
+ * OVMX-LOCAL: sys$suspend -- inherits sys$suspnd's local half: the suspension
+ *     itself is kill(SIGSTOP) against the resolved Linux pid.
+ * OVMX-PARTIAL: sys$resume (vms-904) -- exec: same executive resolution as
+ *     sys$suspnd (resolve_control_target()); an absent target is SS$_NONEXPR.
+ * OVMX-LOCAL: sys$resume -- the resume itself is still kill(SIGCONT) against
+ *     the resolved Linux pid; OVMX has no executive-side "resume this PCB"
+ *     primitive, so the signal is the mechanism.
  * OVMX-USERSPACE: sys$setpri (vms-pt1) -- getpriority/setpriority on the
  *     CALLING process; pidadr as well as prcnam is discarded, so it cannot
  *     change any other process's priority however it is invoked.

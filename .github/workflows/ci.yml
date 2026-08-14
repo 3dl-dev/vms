@@ -168,6 +168,8 @@ jobs:
               - 'src/ovmx_init/**'
               - 'src/ovmx_provision/**'
               - 'src/ovmx_job_control/**'
+              - 'src/vmslink/librarian.c'
+              - 'src/vmslink/include/ovmx_olb.h'
               - 'tools/vms_login.c'
               - 'tools/loginout_display.c'
               - 'tools/loginout_display.h'
@@ -1739,6 +1741,13 @@ jobs:
 
       - name: NEGATIVE CONTROL — a deliberately-broken TU must fail the cross-compile
         run: OVMX_REPO="$PWD" NBSRC="$PWD/.netbsd-src" CC=clang CROSSCOMPILE_NEGCTL=1 bash tests/netbsd/crosscompile-vmsfs.sh
+
+      # HEADER-PORTABILITY NEGATIVE CONTROL (rd vms-9172 / vms-bbf): a
+      # vmsfs_ondisk.h regressed to the pre-#516 bug (_KERNEL branch -> bare
+      # <stdint.h>) must be REJECTED by the -H stdint-portability check. Proves
+      # the per-PR gate now has teeth against the exact #509 class it missed.
+      - name: HEADER-PORTABILITY NEGATIVE CONTROL — a regressed vmsfs_ondisk.h must red the gate
+        run: OVMX_REPO="$PWD" NBSRC="$PWD/.netbsd-src" CC=clang CROSSCOMPILE_NEGCTL_HDR=1 bash tests/netbsd/crosscompile-vmsfs.sh
 
   # -----------------------------------------------------------------------
   # Job: PRIME the shared NetBSD install cache (rd vms-2d9). THE KEYSTONE of
@@ -4439,6 +4448,18 @@ jobs:
             -e CROSSCOMPILE_NEGCTL=1 \
             ovmx-cross-vax:latest sh tools/cross-vax/build-vmsfs-mount-vax.sh
 
+      # HEADER-PORTABILITY NEGATIVE CONTROL (rd vms-9172 / vms-bbf): a
+      # vmsfs_ondisk.h regressed to the pre-#516 bug (_KERNEL branch -> bare
+      # <stdint.h>) must be REJECTED by the -H stdint-portability check. The vax
+      # cross-build ALSO slipped the #509 break through (its toolchain include
+      # dir exposed <stdint.h>); this gives the per-PR vax gate teeth against it.
+      - name: HEADER-PORTABILITY NEGATIVE CONTROL — a regressed vmsfs_ondisk.h must red the gate
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+            -v "$GITHUB_WORKSPACE/.netbsd-vax-src:/nbsrc:ro" \
+            -e CROSSCOMPILE_NEGCTL_HDR=1 \
+            ovmx-cross-vax:latest sh tools/cross-vax/build-vmsfs-mount-vax.sh
+
   # -----------------------------------------------------------------------
   # netbsd-vax-vmsfs-mount (rd vms-544d, epic vms-8e8; P4-VFS-vax). The ODS-2
   # sibling of netbsd-vax-devvms and the vax analog of netbsd-amd64-vmsfs-mount
@@ -5276,3 +5297,69 @@ jobs:
               || { echo "FAIL: $img did not pass the activation contract assertion"; exit 1; }
           done
           echo "PASS: all 5 OVMX boot images (STARTUP.EXE, PROVISION.EXE, DCL.EXE, JOB_CONTROL.EXE, LOGINOUT.EXE) cross-build, link, and activate via ld.elf_so for netbsd-vax"
+
+  # -----------------------------------------------------------------------
+  # librarian-netbsd-vax (rd vms-9172, epic vms-f10; VAX build parity R1).
+  # Per-PR elf32-vax cross-compile + link gate for LIBRARIAN.EXE
+  # (src/vmslink/librarian.c) -- the OVMX object-library archiver that mints
+  # the .OLB object libraries LINK.EXE consumes (rd vms-ca9, #429). It is a
+  # SYS$SYSTEM: image alongside LINK.EXE/OVMXDUMP, so for VAX to be a first-
+  # class release platform the archiver must cross-compile for elf32-vax
+  # exactly as DCL.EXE (vmsdcl-netbsd-vax), LOGINOUT/STARTUP (ovmx-boot-images-
+  # netbsd-vax) and the userspace stack already do. Was the ONE shipped OVMX
+  # image with no netbsd-vax gate; this closes that gap. Fast (compile+link
+  # only, no SIMH); the cross toolchain image layer-caches (gha scope=cross-vax).
+  # Carries a broken-TU negative control. TOOLING, never a runtime (Rule 9).
+  # Gated on the shared netbsd_vax filter (which now includes src/vmslink/
+  # librarian.c + its .OLB layout headers).
+  # -----------------------------------------------------------------------
+  librarian-netbsd-vax:
+    name: LIBRARIAN.EXE cross-compiles for netbsd-vax (vms-9172)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile LIBRARIAN.EXE for netbsd-vax + link a real ELF32 VAX image
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-librarian-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax LIBRARIAN.EXE cross build/link exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: LIBRARIAN.EXE builds and links for vax--netbsdelf' \
+            || { echo "FAIL: did not see the LIBRARIAN build+link PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: librarian object was not elf32-vax -- wrong target"; exit 1; }
+          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
+            || { echo "FAIL: LIBRARIAN.EXE was not a VAX ELF"; exit 1; }
+          echo "PASS: LIBRARIAN.EXE built for netbsd-vax and linked a real ELF32 VAX image"
+
+      - name: NEGATIVE CONTROL — a deliberately-broken LIBRARIAN TU must fail the cross-compile
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+            -e CROSSCOMPILE_NEGCTL=1 \
+            ovmx-cross-vax tools/cross-vax/build-librarian-vax.sh

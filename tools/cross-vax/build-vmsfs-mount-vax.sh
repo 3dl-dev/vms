@@ -77,6 +77,40 @@ SRCS="$KMOD/vmsfs_vfsops.c \
       $CORE/vmsfs_alloc.c \
       $CORE/vmsfs_dirscan.c"
 
+# --- on-disk header stdint-portability check (rd vms-9172 / vms-bbf) --------
+# The #509 incident: vmsfs_ondisk.h's fixed-width-type include reached a bare
+# <stdint.h> on the _KERNEL branch (__KERNEL__ is Linux-only, so the NetBSD
+# kernel build -- which defines _KERNEL, never __KERNEL__ -- fell through to the
+# userspace #else). The -isystem gcc freestanding include dir (re-added below so
+# the header's OWN <stdint.h>-shaped includes resolve under -nostdinc) MASKED
+# that per-PR: gcc's stdint.h satisfied the bad include, so only the nightly
+# in-guest build (no such dir) reddened -- and the break reached main (fix-forward
+# #516). This check gives the per-PR gate teeth against a regression of that
+# exact class: it asserts the _KERNEL build resolves fixed-width types from
+# <sys/stdint.h> and NOT from any compiler/sysroot <stdint.h>, by inspecting the
+# actual -H include tree of a probe that includes vmsfs_ondisk.h.
+check_ondisk_stdint_portability() {   # <header-file> -> 0 portable / 1 leak
+    _hdr="$1"; _d="$(mktemp -d)"
+    cp "$_hdr" "$_d/vmsfs_ondisk.h"
+    printf '#include "vmsfs_ondisk.h"\nuint32_t _ovmx_probe;\n' > "$_d/probe.c"
+    # -I"$_d" FIRST so this header copy wins; -H dumps the include tree to stderr.
+    # shellcheck disable=SC2086
+    if ! "$CC" $CFLAGS $CPPFLAGS -I"$_d" -H -fsyntax-only "$_d/probe.c" 2>"$_d/tree.txt"; then
+        echo "  header-portability: probe FAILED to compile:"; sed 's/^/    /' "$_d/tree.txt"; rm -rf "$_d"; return 1
+    fi
+    _stdint="$(awk '/^[.]+ / { if ($NF ~ /stdint(-gcc)?\.h$/) print $NF }' "$_d/tree.txt" | sort -u)"
+    rm -rf "$_d"
+    echo "$_stdint" | grep -q '/sys/stdint\.h$' \
+        || { echo "  header-portability: <sys/stdint.h> was NOT reached (fixed-width types from the wrong header)"; return 1; }
+    _leak="$(echo "$_stdint" | grep -v '/sys/stdint\.h$' || true)"
+    if [ -n "$_leak" ]; then
+        echo "  header-portability: LEAK -- fixed-width types resolved via a non-<sys/stdint.h> header:"
+        echo "$_leak" | sed 's/^/    /'
+        return 1
+    fi
+    return 0
+}
+
 # ---- teeth check ---------------------------------------------------------
 # A deliberately-broken TU MUST fail the cross-compile, or a real break slips by
 # (mirrors build-vms-module-vax.sh's CROSSCOMPILE_NEGCTL).
@@ -90,7 +124,27 @@ if [ "${CROSSCOMPILE_NEGCTL:-}" = "1" ]; then
     echo "PASS (negctl): a deliberately-broken vmsfs TU fails the elf32-vax cross-compile"; exit 0
 fi
 
+# ---- header-portability teeth check --------------------------------------
+# Regress vmsfs_ondisk.h to the pre-#516 bug (_KERNEL branch -> bare <stdint.h>)
+# and assert the portability check REJECTS it. Proves the check bites on the
+# exact incident class rather than passing vacuously.
+if [ "${CROSSCOMPILE_NEGCTL_HDR:-}" = "1" ]; then
+    reg="$OUT/vmsfs_ondisk_regressed.h"
+    sed 's@#[[:space:]]*include[[:space:]]*<sys/stdint.h>@#include <stdint.h>@' \
+        "$ONDISK_SRC/vmsfs_ondisk.h" > "$reg"
+    if check_ondisk_stdint_portability "$reg"; then
+        echo "FAIL (hdr-negctl): a regressed vmsfs_ondisk.h (_KERNEL -> bare <stdint.h>) PASSED the check -- NO TEETH"; exit 1
+    fi
+    echo "PASS (hdr-negctl): a regressed vmsfs_ondisk.h is correctly REJECTED by the stdint-portability check"; exit 0
+fi
+
 echo "=== toolchain ==="; "$CC" --version | head -1; "$CC" -dumpmachine; echo
+
+echo "=== header portability: vmsfs_ondisk.h reaches <sys/stdint.h> on the _KERNEL build (rd vms-9172 / vms-bbf) ==="
+check_ondisk_stdint_portability "$ONDISK_SRC/vmsfs_ondisk.h" \
+    || { echo "FAIL: vmsfs_ondisk.h did not resolve fixed-width types via <sys/stdint.h> under the _KERNEL build (INV-DRIFT / #509 class)"; exit 1; }
+echo "  OK: fixed-width types resolve from <sys/stdint.h> -- no compiler/sysroot <stdint.h> leak"
+echo
 
 echo "=== compile each vmsfs module TU at -O2 -fno-pic for elf32-vax ==="
 OBJS=""

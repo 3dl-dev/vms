@@ -145,13 +145,33 @@ def build_source_iso(guest_src_dir, out_iso):
 # ---- in-guest command helper (delegates to the deterministic console) --------
 
 
-def run(child, cmd, timeout, echo=True):
-    """Run one /bin/sh command in the guest; return (exit_status, output)."""
-    return _console(child).run(cmd, timeout, echo)
+def run(child, cmd, timeout, echo=True, retriable=True, bg_safe=False):
+    """Run one /bin/sh command in the guest; return (exit_status, output).
+
+    Passes `retriable'/`bg_safe' through to the shared deterministic console
+    (tests/netbsd/netbsd_console.py) so a phase that backgrounds a helper
+    INTERNALLY but runs it to completion and emits a single result token can opt
+    back into lost-marker retry with bg_safe=True -- exactly as drive_netbsd_p4a.py
+    does for its collapsed proof phases (rd vms-3e7)."""
+    return _console(child).run(cmd, timeout, echo, retriable, bg_safe)
 
 
 def login(child, cmd_timeout):
     _console(child).login_root_sh(cmd_timeout)
+
+
+def phase_token(out, key):
+    """Return VALUE from the LAST `KEY=VALUE' line a collapsed phase script
+    emitted on its own line (the single result token the harness keys on, so a
+    verbose phase crosses the lossy serial as ONE small token instead of many
+    interactive round-trips). Last match wins so an echoed command line cannot
+    shadow the real result. Same helper drive_netbsd_p4a.py uses (rd vms-3e7)."""
+    val = None
+    for line in out.splitlines():
+        s = line.strip()
+        if s.startswith(key + "="):
+            val = s[len(key) + 1:].strip()
+    return val
 
 
 def main():
@@ -336,68 +356,89 @@ def main():
             "(SS$_NOSUCHDEV), it did not fake success")
 
         # ---- 4. load the module + create the node -------------------------
+        # Made IDEMPOTENT so it is retriable to the deadline like every other
+        # command under the lossy TCG serial (rd vms-3e7): a leading `modunload'
+        # drops any module a lost-marker retry left loaded, and `rm -f /dev/vms'
+        # before the mknod means a re-issue cannot fail on a pre-existing node.
+        # Emits one MODLOAD token the harness keys on -- same shape as
+        # drive_netbsd_p4a.py's proven MODLOAD phase.
         rc, out = run(child,
+                      "modunload vms 2>/dev/null; "
                       "modload /root/ovmx/kmod/vms.kmod && "
                       "MAJ=`dmesg | sed -n "
                       "'s/.*vms: registered, char major \\([0-9][0-9]*\\).*/\\1/p'"
                       " | tail -1` && "
-                      "echo \"parsed major=$MAJ\" && "
-                      "test -n \"$MAJ\" && "
+                      "test -n \"$MAJ\" && rm -f /dev/vms && "
                       "mknod /dev/vms c $MAJ 0 && chmod 666 /dev/vms && "
-                      "ls -l /dev/vms && test -c /dev/vms",
+                      "test -c /dev/vms && echo MODLOAD=OK || echo MODLOAD=FAIL",
                       cmd_timeout)
-        if rc != 0:
+        if phase_token(out, "MODLOAD") != "OK":
             log("FAIL: could not load the module / create /dev/vms")
             return 14
         log("OK: module loaded and /dev/vms created")
 
-        # ---- 4a. process A sets common flag 64 ----------------------------
-        if not skip_set:
-            rc, out = run(child, "%s set 64" % EF, cmd_timeout)
-            if rc != 0 or "EFLAG SETEF efn=64" not in out:
-                log("FAIL: process A could not set common flag 64")
-                return 15
-            log("OK: process A ($SETEF 64) succeeded")
-        else:
+        # ---- 4a-4e. CROSS-PROCESS SHARED-STATE PROOF (collapsed) ----------
+        # LOSS-TOLERANT TRANSPORT (rd vms-3e7): the emulated TCG serial drops
+        # output intermittently, so per-command markers are lost at random on a
+        # cold nightly run. Worse, `clear 64' is NOT idempotent -- its reported
+        # "previous state" changes if a lost-marker retry re-runs it -- so the
+        # per-command robust run() could turn a lost marker into a SPURIOUS
+        # failure. So (exactly as drive_netbsd_p4a.py does) this phase runs as ONE
+        # in-guest command that performs every step, asserts each INV-6 property
+        # IN-GUEST over reliable local pipes, and emits a SINGLE result token. It
+        # is idempotent -- it SETS flag 64 itself before reading/clearing it -- so
+        # a lost-marker re-issue re-establishes its own precondition and cannot
+        # corrupt the proof. Every process is still a DISTINCT `vmseflag'
+        # invocation (A sets, B reads, B2 reads the control flag, C clears, D
+        # re-reads), so the cross-process INV-6 property is UNCHANGED; only the
+        # transport is collapsed.
+        if skip_set:
             log("SKIP: process A's SETEF skipped (P2C_SKIP_SET) -- the "
                 "cross-process 'B sees flag 64 SET' assertion must fail next")
-
-        # ---- 4b. process B (DIFFERENT process) reads flag 64 --------------
-        # THIS is the INV-6-decisive step: B is a separate OS process from A,
-        # yet it observes A's set because the flag lives in the KERNEL.
-        rc, out = run(child, "%s read 64" % EF, cmd_timeout)
-        if rc != 0 or "EFLAG SET efn=64" not in out:
-            log("FAIL: process B did NOT observe common flag 64 as SET -- the "
-                "cross-process shared-kernel-state proof did not hold "
-                "(tool exit %d)" % rc)
-            return 16
-        log("OK: process B (a DIFFERENT process) observed common flag 64 SET -- "
-            "the flag lives in the KERNEL, shared across processes (INV-6)")
-
-        # ---- 4c. control flag: process B2 reads flag 65 (must be CLEAR) ----
-        rc, out = run(child, "%s read 65" % EF, cmd_timeout)
-        if "EFLAG CLEAR efn=65" not in out:
-            log("FAIL: control flag 65 was not CLEAR -- the read does not "
-                "actually reflect per-flag state")
-            return 17
-        log("OK: control flag 65 read CLEAR -- the read reflects real per-flag "
-            "state, not a blanket 'set'")
-
-        # ---- 4d. process C clears flag 64; prev-state must be was-set ------
-        rc, out = run(child, "%s clear 64" % EF, cmd_timeout)
-        if rc != 0 or "was-set" not in out:
-            log("FAIL: process C's $CLREF 64 did not report previous state "
-                "was-set -- C did not see A's set either")
-            return 18
-        log("OK: process C ($CLREF 64) saw previous state was-set -- it too "
-            "observed A's cross-process set")
-
-        # ---- 4e. process D confirms flag 64 now CLEAR (CLREF shared too) ---
-        rc, out = run(child, "%s read 64" % EF, cmd_timeout)
-        if "EFLAG CLEAR efn=64" not in out:
+        set_a = "" if skip_set else (
+            "%s set 64 >/tmp/e.out 2>&1; "
+            "grep -q 'EFLAG SETEF efn=64' /tmp/e.out || F=\"$F setA\"; " % EF)
+        efl = ("F=''; " + set_a +
+               "%s read 64 >/tmp/e.out 2>&1; "
+               "grep -q 'EFLAG SET efn=64' /tmp/e.out || F=\"$F seeB\"; "
+               "%s read 65 >/tmp/e.out 2>&1; "
+               "grep -q 'EFLAG CLEAR efn=65' /tmp/e.out || F=\"$F ctl65\"; "
+               "%s clear 64 >/tmp/e.out 2>&1; "
+               "grep -q 'was-set' /tmp/e.out || F=\"$F clrC\"; "
+               "%s read 64 >/tmp/e.out 2>&1; "
+               "grep -q 'EFLAG CLEAR efn=64' /tmp/e.out || F=\"$F seeD\"; "
+               "[ -z \"$F\" ] && echo EFLAG=PASS || echo \"EFLAG=FAIL:$F\""
+               % (EF, EF, EF, EF))
+        rc, out = run(child, efl, cmd_timeout)
+        tok = phase_token(out, "EFLAG")
+        if tok != "PASS":
+            # A's SETEF, or a DIFFERENT process's read of it, did not observe
+            # flag 64 SET: the cross-process shared-kernel-state proof did not
+            # hold. This is also the P2C_SKIP_SET negative-control path.
+            if not tok or "setA" in tok or "seeB" in tok:
+                log("FAIL: process B did NOT observe common flag 64 as SET -- the "
+                    "cross-process shared-kernel-state proof did not hold "
+                    "(phase token: %s)" % tok)
+                return 16
+            if "ctl65" in tok:
+                log("FAIL: control flag 65 was not CLEAR -- the read does not "
+                    "actually reflect per-flag state")
+                return 17
+            if "clrC" in tok:
+                log("FAIL: process C's $CLREF 64 did not report previous state "
+                    "was-set -- C did not see A's set either")
+                return 18
             log("FAIL: process D still saw flag 64 SET after $CLREF -- the "
                 "clear was not shared across processes")
             return 19
+        if not skip_set:
+            log("OK: process A ($SETEF 64) succeeded")
+        log("OK: process B (a DIFFERENT process) observed common flag 64 SET -- "
+            "the flag lives in the KERNEL, shared across processes (INV-6)")
+        log("OK: control flag 65 read CLEAR -- the read reflects real per-flag "
+            "state, not a blanket 'set'")
+        log("OK: process C ($CLREF 64) saw previous state was-set -- it too "
+            "observed A's cross-process set")
         log("OK: process D observed flag 64 CLEAR after $CLREF -- the clear was "
             "shared across processes too")
 
@@ -410,37 +451,46 @@ def main():
         # on the cluster's shared kernel cv+mutex. It is the strongest form of
         # the shared-state proof: not just visibility of a word, but a real
         # in-kernel sleep woken across a process boundary.
-        rc, _ = run(child,
-                    "rm -f /tmp/wait.out /tmp/wait.pid; "
-                    "%s wait 66 >/tmp/wait.out 2>&1 & echo $! >/tmp/wait.pid" % EF,
-                    cmd_timeout)
-        # let the waiter descend into the in-kernel wait
-        run(child, "sleep 3", cmd_timeout)
-        rc, out = run(child, "cat /tmp/wait.out 2>/dev/null; echo ---END---",
-                      cmd_timeout)
-        if "WAITDONE" in out:
-            log("FAIL: the waiter returned BEFORE any process set flag 66 -- "
-                "the wait has no teeth (it did not actually block)")
-            return 22
-        log("OK: the waiter is BLOCKED in-kernel on common flag 66 (no WAITDONE "
-            "yet) -- exec_cv_wait is really sleeping")
-
-        # a DIFFERENT process sets flag 66 -> must wake the blocked waiter
-        rc, out = run(child, "%s set 66" % EF, cmd_timeout)
-        if rc != 0 or "EFLAG SETEF efn=66" not in out:
-            log("FAIL: could not set common flag 66 to wake the waiter")
-            return 23
-        # bounded poll for the waiter to complete
-        rc, out = run(child,
-                      "i=0; while [ $i -lt 15 ]; do "
-                      "grep -q 'EFLAG WAITDONE efn=66' /tmp/wait.out && break; "
-                      "i=$((i+1)); sleep 1; done; "
-                      "cat /tmp/wait.out 2>/dev/null; echo ---END---",
-                      cmd_timeout)
-        if "EFLAG WAITDONE efn=66" not in out:
+        #
+        # LOSS-TOLERANT TRANSPORT (rd vms-3e7): the OLD form launched the waiter
+        # as a bare ` & ' background job and then observed/set/polled across
+        # SEPARATE console commands. The launch was a background command the
+        # robust run() must NOT re-issue (a lost marker there gave a raw
+        # pexpect.TIMEOUT -- the exact flake this item fixes). Collapsed, like
+        # drive_netbsd_p4a.py's lock phase, into ONE in-guest command that
+        # backgrounds the waiter, asserts it BLOCKS, sets 66 from a DIFFERENT
+        # process, polls for the wake, KILLS its own helper and emits ONE token.
+        # It clears flag 66 FIRST so a bg_safe=True lost-marker re-issue re-parks
+        # the waiter on a clear flag (idempotent); bg_safe=True opts the phase back
+        # into retry despite the internal ` & '.
+        cvw = ("%s clear 66 >/dev/null 2>&1; rm -f /tmp/wait.out; F=''; "
+               "%s wait 66 >/tmp/wait.out 2>&1 & WP=$!; sleep 3; "
+               "grep -q 'EFLAG WAITDONE efn=66' /tmp/wait.out && F=\"$F notblocked\"; "
+               "%s set 66 >/tmp/set66.out 2>&1; "
+               "grep -q 'EFLAG SETEF efn=66' /tmp/set66.out || F=\"$F noset\"; "
+               "i=0; while [ $i -lt 15 ]; do "
+               "grep -q 'EFLAG WAITDONE efn=66' /tmp/wait.out && break; "
+               "i=$((i+1)); sleep 1; done; "
+               "grep -q 'EFLAG WAITDONE efn=66' /tmp/wait.out || F=\"$F nowake\"; "
+               "kill $WP 2>/dev/null; wait 2>/dev/null; "
+               "[ -z \"$F\" ] && echo CVWAIT=PASS || echo \"CVWAIT=FAIL:$F\""
+               % (EF, EF, EF))
+        rc, out = run(child, cvw, cmd_timeout, bg_safe=True)
+        tok = phase_token(out, "CVWAIT")
+        if tok != "PASS":
+            if tok and "notblocked" in tok:
+                log("FAIL: the waiter returned BEFORE any process set flag 66 -- "
+                    "the wait has no teeth (it did not actually block)")
+                return 22
+            if tok and "noset" in tok:
+                log("FAIL: could not set common flag 66 to wake the waiter")
+                return 23
             log("FAIL: the blocked waiter did NOT wake after a DIFFERENT process "
-                "set common flag 66 -- the cross-process cv wake was LOST")
+                "set common flag 66 -- the cross-process cv wake was LOST "
+                "(phase token: %s)" % tok)
             return 24
+        log("OK: the waiter BLOCKED in-kernel on common flag 66 (no WAITDONE "
+            "until a DIFFERENT process set it) -- exec_cv_wait really slept")
         log("OK: the blocked waiter WOKE when a DIFFERENT process set common flag "
             "66 -- the shared exec_cv_wait/broadcast holds cross-process on "
             "NetBSD cv(9) (THE PAYOFF)")

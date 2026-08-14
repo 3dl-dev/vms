@@ -531,14 +531,26 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline):
                         "volume and RUNS; executive established SYSTEM identity"
                         % MS_PROVISION_RUNNING)
                 else:
-                    why = {1: "%OVMX-F-EXECINIT (PROVISION.EXE missing / PID 1 halt)",
+                    why = {1: "%OVMX-F-EXECINIT (SYS$SYSTEM:PROVISION.EXE did not resolve)",
                            2: "%OVMX-E-NOIMG (activation failed)",
                            3: "EOF", 4: "TIMEOUT"}.get(idx, "unknown")
                     seen["provision_outcome"] = "DID NOT RUN: " + why
                     tail = (child.before or "")[-1500:] if hasattr(child, "before") else ""
-                    log("PROVISION.EXE did NOT run: %s -- the volume/pager "
-                        "regressed; the logical-name layer was never reached. "
-                        "tail:\n%s" % (why, tail))
+                    # HONEST diagnosis (rd vms-72da): the volume + vnode pager are
+                    # FINE -- require_installed_system() already resolved DCL.EXE via
+                    # the DEVICE-TABLE path (DKA0:[SYS0.SYSCOMMON.SYSEXE], no logical),
+                    # and run-boot.sh's content gate proved PROVISION.EXE + OVMXVMSSYS.PAR
+                    # are ON the mastered volume. read_boot_parameters (OVMXVMSSYS.PAR)
+                    # and run_startup (PROVISION.EXE) resolve the "SYS$SYSTEM:" LOGICAL;
+                    # a halt here means the executive LOGICAL-NAME layer did NOT resolve
+                    # SYS$SYSTEM on this substrate (the LNM$SYSTEM arena define/translate
+                    # roundtrip), NOT a volume/pager problem.
+                    log("PROVISION.EXE did NOT run: %s. The volume + pager are fine "
+                        "(DCL.EXE resolved at the gate via the device-table path, and "
+                        "PROVISION.EXE/OVMXVMSSYS.PAR are on the mastered volume) -- so "
+                        "the failure is executive SYS$SYSTEM LOGICAL-NAME resolution "
+                        "(LNM$SYSTEM arena roundtrip), the vms-72da target. tail:\n%s"
+                        % (why, tail))
                     return seen
             except pexpect.TIMEOUT:
                 seen["provision_outcome"] = "DID NOT RUN: timeout before identity"
@@ -696,9 +708,11 @@ def main():
             # false-green) now FAILS.
             if not seen.get("provision_running"):
                 log("FAIL: reached %%STDRV-I-STARTUP but PROVISION.EXE did NOT run "
-                    "(no SYSTEM-identity line) -- outcome: %s. The mounted volume "
-                    "must carry a demand-pageable PROVISION.EXE (stale/mis-mastered "
-                    "system volume, or the vnode pager regressed)."
+                    "(no SYSTEM-identity line) -- outcome: %s. DCL.EXE resolved at the "
+                    "gate (device-table path) and run-boot.sh content-gated PROVISION.EXE "
+                    "onto the volume, so this is executive SYS$SYSTEM LOGICAL-NAME "
+                    "resolution failing (the LNM$SYSTEM define/translate arena roundtrip "
+                    "on this substrate) -- the vms-72da target, NOT a volume/pager fault."
                     % seen.get("provision_outcome", "unknown"))
                 return 1
             # PROVISION runs -> the logical-name layer must let it CLEAR the LNMFAIL

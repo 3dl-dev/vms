@@ -131,4 +131,11 @@ done
 echo "LD  vms.kmod.o (relocatable)"
 "$CC" -target x86_64-unknown-netbsd -nostdlib -r -o "$OBJ/vms.kmod.o" "$OBJ"/*.c.o
 
+# Payload-staging guard (rd vms-72da): this gate builds from the REAL src tree,
+# so it cannot catch a file the module needs but the QEMU harness's curated
+# Dockerfile payload forgot to stage. Run the negative control that DOES (it
+# reddened the amd64 executive jobs when vms_lnm_nb.h was unstaged).
+echo "CHK guest-payload staging (tests/netbsd/Dockerfile completeness)"
+OVMX_REPO="$REPO" bash "$REPO/tests/netbsd/check_guest_payload.sh"
+
 echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c, vms_mbx.c, vms_proctab.c, vms_lock.c, vms_lnm.c) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"

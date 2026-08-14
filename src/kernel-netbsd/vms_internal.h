@@ -543,6 +543,10 @@ int    vms_lnm_init(void);
 void   vms_lnm_cleanup(void);
 void  *vms_lnm_arena_base(void);
 size_t vms_lnm_arena_size(void);
+/* DEFINED in the uvm glue TU vms_lnm_arena_netbsd.c (rd vms-72da): a load-time
+ * console self-check that the arena the executive wrote is the one d_mmap
+ * publishes (pmap_extract + magic readback). */
+void   vms_lnm_arena_selftest(void);
 long   vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg);
 long   vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg);
 long   vms_ioctl_lnm_getscope(struct vms_proc *proc, unsigned long arg);

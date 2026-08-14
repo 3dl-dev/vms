@@ -872,6 +872,11 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 			exec_lock_destroy(&vms_proc_hash_lock);
 			return ENOMEM;
 		}
+		/* Prove the arena seam on THIS substrate before /dev/vms is openable
+		 * (rd vms-72da): one console line reporting the arena kva -> pa ->
+		 * magic roundtrip, so a broken mmap publish is visible here, not only as
+		 * a downstream SYS$SYSTEM resolution failure. */
+		vms_lnm_arena_selftest();
 
 		error = devsw_attach("vms", NULL, &bmajor, &vms_cdevsw, &cmajor);
 		if (error != 0) {

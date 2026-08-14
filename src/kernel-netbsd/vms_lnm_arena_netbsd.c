@@ -64,39 +64,71 @@ void  *vms_lnm_arena_base(void);
 size_t vms_lnm_arena_size(void);
 
 /*
+ * The one arena's kernel VA + extent. This is the SOLE arena in the system
+ * (allocated once at vms_lnm_init, freed once at vms_lnm_cleanup), so a file-
+ * static pair is the natural place to remember the extent uvm_km_free needs --
+ * cleaner than the earlier in-band header page, and it keeps the arena base
+ * EXACTLY uvm_km_alloc's page-aligned return (no offset), so d_mmap resolves the
+ * same page the executive writes.
+ */
+static vaddr_t arena_kva;
+static vsize_t arena_extent;
+
+/*
  * exec_arena_alloc - allocate the ONE read-only-publishable arena (exec_kbackend.h
- * §10). Wired, page-aligned, zeroed kernel memory whose pages d_mmap can resolve
- * to physical frames.
- *
- * SIZE TRACKING. The facility frees with only the pointer (the Linux vfree
- * contract), but uvm_km_free needs the extent -- so we over-allocate one leading
- * page, stash the whole extent there, and return the still-page-aligned arena page
- * above it. The leading page is never mapped to userspace: d_mmap addresses the
- * arena base (this returned pointer), PAGE_SIZE above the extent header.
+ * §10). Wired, page-aligned, zeroed kernel memory whose pages d_mmap resolves to
+ * physical frames (pmap_extract) and publishes read-only to userspace.
  */
 void *
 exec_arena_alloc(size_t n)
 {
-	vsize_t total = round_page(n) + PAGE_SIZE;   /* +1 page: the extent header */
-	vaddr_t va = uvm_km_alloc(kernel_map, total, 0,
-	                          UVM_KMF_WIRED | UVM_KMF_ZERO);
-	if (va == 0)
+	arena_extent = round_page(n);
+	arena_kva = uvm_km_alloc(kernel_map, arena_extent, 0,
+	                         UVM_KMF_WIRED | UVM_KMF_ZERO);
+	if (arena_kva == 0) {
+		arena_extent = 0;
 		return NULL;
-	*(vsize_t *)va = total;                      /* remember the extent for free */
-	return (void *)(va + PAGE_SIZE);             /* page-aligned, zeroed arena */
+	}
+	return (void *)arena_kva;
 }
 
 void
 exec_arena_free(void *arena)
 {
-	vaddr_t va;
-	vsize_t total;
-
-	if (arena == NULL)
+	if (arena == NULL || arena_kva == 0)
 		return;
-	va = (vaddr_t)arena - PAGE_SIZE;
-	total = *(vsize_t *)va;
-	uvm_km_free(kernel_map, va, total, UVM_KMF_WIRED);
+	uvm_km_free(kernel_map, arena_kva, arena_extent, UVM_KMF_WIRED);
+	arena_kva = 0;
+	arena_extent = 0;
+}
+
+/*
+ * vms_lnm_arena_selftest - prove, at module load, that the arena the executive
+ * WROTE is the one d_mmap will PUBLISH: pmap_extract the arena base (the exact
+ * resolution d_mmap does per page) and report it alongside the magic the
+ * executive stamped via the kernel VA (vms_lnm_init). If pmap_extract fails, or
+ * the magic is not 'LNMA', the userspace mmap roundtrip cannot work and every
+ * SYS$SYSTEM translation will miss -- this line makes that visible on the console
+ * instead of surfacing only as a downstream %OVMX-F-EXECINIT. Prints once; it is
+ * a substrate self-check, not scaffolding (Rule 7: prove the seam, don't assume).
+ */
+void
+vms_lnm_arena_selftest(void)
+{
+	void *base = vms_lnm_arena_base();
+	paddr_t pa = 0;
+	int ok;
+
+	if (base == NULL) {
+		printf("vms: lnm arena selftest: NO ARENA (alloc failed)\n");
+		return;
+	}
+	ok = pmap_extract(pmap_kernel(), (vaddr_t)base, &pa) ? 1 : 0;
+	printf("vms: lnm arena kva=%p size=%zu PAGE_SIZE=%u "
+	       "pmap_extract=%d pa=0x%lx atop(pa)=0x%lx magic@kva=0x%08x\n",
+	       base, vms_lnm_arena_size(), (unsigned)PAGE_SIZE,
+	       ok, (unsigned long)pa, (unsigned long)atop(pa),
+	       *(volatile uint32_t *)base);
 }
 
 /*

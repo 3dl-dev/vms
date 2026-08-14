@@ -106,6 +106,12 @@ COPY src/kernel-netbsd/exec_hash_netbsd.h    /netbsd/guest-src/kmod/exec_hash_ne
 COPY src/kernel-netbsd/exec_hash_netbsd.c    /netbsd/guest-src/kmod/exec_hash_netbsd.c
 COPY src/kernel-netbsd/exec_rbtree_netbsd.h  /netbsd/guest-src/kmod/exec_rbtree_netbsd.h
 COPY src/kernel-netbsd/exec_rbtree_netbsd.c  /netbsd/guest-src/kmod/exec_rbtree_netbsd.c
+# Logical-name facility (rd vms-72da): the wire-contract twin vms_internal.h
+# #includes, and the uvm arena/mmap glue TU src/kernel-netbsd/Makefile's SRCS
+# lists. Without these the in-guest `make' fails at `vms_lnm_nb.h: No such file'
+# (vms_internal.h:81) and cannot link vms_lnm_{init,cleanup}/vms_ioctl_lnm_*/vms_mmap.
+COPY src/kernel-netbsd/vms_lnm_nb.h          /netbsd/guest-src/kmod/vms_lnm_nb.h
+COPY src/kernel-netbsd/vms_lnm_arena_netbsd.c /netbsd/guest-src/kmod/vms_lnm_arena_netbsd.c
 # --- kernel-core/: the shared, substrate-agnostic facility + shim contracts ---
 COPY src/kernel-core/vms_eflag.c             /netbsd/guest-src/kernel-core/vms_eflag.c
 COPY src/kernel-core/exec_kbackend.h         /netbsd/guest-src/kernel-core/exec_kbackend.h
@@ -118,6 +124,9 @@ COPY src/kernel-core/vms_access.c            /netbsd/guest-src/kernel-core/vms_a
 COPY src/kernel-core/vms_mbx.c               /netbsd/guest-src/kernel-core/vms_mbx.c
 COPY src/kernel-core/vms_proctab.c           /netbsd/guest-src/kernel-core/vms_proctab.c
 COPY src/kernel-core/vms_lock.c              /netbsd/guest-src/kernel-core/vms_lock.c
+# Logical-name facility source (rd vms-72da) -- the SAME shared source the Linux
+# vms.ko and the per-PR crosscompile.sh gate build; listed in the Makefile SRCS.
+COPY src/kernel-core/vms_lnm.c               /netbsd/guest-src/kernel-core/vms_lnm.c
 COPY src/kernel-core/exec_hash.h             /netbsd/guest-src/kernel-core/exec_hash.h
 COPY src/kernel-core/exec_rbtree.h           /netbsd/guest-src/kernel-core/exec_rbtree.h
 # --- probe/: the userspace tools + the NetBSD transport seam ---

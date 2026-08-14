@@ -268,7 +268,24 @@ vms_size_t vms_fwrite(const void *ptr, vms_size_t size, vms_size_t nmemb, vms_fi
         return done / size;
     }
 
+    /* committed = source bytes confirmed flushed to the fd. On a flush error we
+     * report only the items that were durably written (INV-6: never fake the
+     * bytes that a failing flush did not persist), rather than the buggy i/size
+     * which counted merely-buffered bytes as written. */
+    vms_size_t committed = 0;
+
     for (vms_size_t i = 0; i < total; i++) {
+        /* Flush BEFORE writing so buf[VMS_STDIO_BUFSZ] is never addressed.
+         * In the normal path the post-write flush below keeps buf_pos < BUFSZ,
+         * so this guard is a no-op and flush timing is unchanged; it only fires
+         * when a prior flush failure left buf_pos == BUFSZ, which otherwise
+         * overflows the buffer by one byte on the next write. */
+        if (f->buf_pos >= VMS_STDIO_BUFSZ) {
+            if (flush_write_buf(f) < 0)
+                return committed / size;
+            committed = i;
+        }
+
         f->buf[f->buf_pos++] = src[i];
 
         int do_flush = 0;
@@ -279,7 +296,8 @@ vms_size_t vms_fwrite(const void *ptr, vms_size_t size, vms_size_t nmemb, vms_fi
 
         if (do_flush) {
             if (flush_write_buf(f) < 0)
-                return i / size;
+                return committed / size;
+            committed = i + 1;
         }
     }
 

@@ -56,10 +56,15 @@ class _FakeChild(object):
     that is never delivered, so the overall deadline must be honored).
     """
 
-    def __init__(self, outcomes=(), rc=3, always_timeout=False):
+    def __init__(self, outcomes=(), rc=3, always_timeout=False,
+                 always_prompt=False, single_outcomes=()):
         self.outcomes = list(outcomes)
         self.rc = rc
         self.always_timeout = always_timeout
+        self.always_prompt = always_prompt
+        # results for SINGLE-pattern expects (the nudge/resync prompt probes):
+        # 'prompt' -> the idle prompt appeared; anything else -> TIMEOUT.
+        self.single_outcomes = list(single_outcomes)
         self.sent = []
         self.before = b"OUTPUT-LINE"
         self.match = None
@@ -68,10 +73,20 @@ class _FakeChild(object):
         self.sent.append(s)
 
     def expect(self, patterns, timeout=None):
+        if not isinstance(patterns, (list, tuple)):
+            # SINGLE-pattern probe: a nudge/resync waiting for the idle prompt.
+            o = self.single_outcomes.pop(0) if self.single_outcomes else "timeout"
+            if o == "prompt":
+                self.match = _FakeMatch(0)
+                return 0
+            raise pexpect.TIMEOUT("scripted single-pattern timeout")
         # Guard against regressing to the anita-incompatible TIMEOUT-in-list form.
         assert pexpect.TIMEOUT not in patterns and pexpect.EOF not in patterns, \
             "pexpect.TIMEOUT/EOF must NOT be in the pattern list (anita logs " \
             "self.match.group(0) after expect() and would crash)"
+        if self.always_prompt:            # marker forever lost -> only the prompt
+            self.match = _FakeMatch(0)
+            return 1
         if self.always_timeout or not self.outcomes:
             raise pexpect.TIMEOUT("scripted timeout")
         o = self.outcomes.pop(0)
@@ -113,11 +128,57 @@ def _run_no_retry(name, cmd, **kw):
     raise AssertionError("%s: expected TIMEOUT (no re-issue)" % name)
 
 
+def _assert_console_carries_only_markers():
+    """run() MUST route a normal command's output to a guest file and echo only a
+    bounded tail + the marker -- so bulk output can never flood the emulated UART
+    and drop the marker (rd vms-f8a). A background LAUNCH must NOT be wrapped
+    (subshell would change job semantics); its caller already redirects."""
+    # normal command -> wrapped: output to the file, bounded tail to the console.
+    child = _FakeChild(["marker"])
+    _console(child).run("ls -R /root/ovmx", timeout=5, echo=False)
+    sent = child.sent[0]
+    assert nc.NetBSDConsole._LASTOUT in sent and "tail -c" in sent \
+        and sent.lstrip().startswith("("), \
+        "run() must wrap a normal command's output to a file; got: %s" % sent
+    assert "ls -R /root/ovmx" in sent
+    print("PASS console-only-markers: normal command's output is file-routed "
+          "(subshell + tail -c), never streamed raw to the console")
+
+    # background launch -> NOT wrapped (no subshell around the `&').
+    child = _FakeChild(["marker"])
+    _console(child).run("foo >/tmp/x 2>&1 &", timeout=5, echo=False)
+    sent = child.sent[0]
+    assert not sent.lstrip().startswith("(") and nc.NetBSDConsole._LASTOUT not in sent, \
+        "a background launch must NOT be subshell-wrapped; got: %s" % sent
+    print("PASS console-only-markers: background launch left unwrapped "
+          "(job semantics preserved)")
+
+
 def main():
+    _assert_console_carries_only_markers()
+
     # Idempotent command: recovered across 0, 1, 2 dropped markers.
     _run_ok("clean",        ["marker"],                    3, 1)
     _run_ok("lost-then-ok", ["prompt", "marker"],          3, 2)   # cold-CI class
     _run_ok("lost-lost-ok", ["prompt", "prompt", "marker"], 3, 3)
+
+    # HIGH drop rate: a long burst of dropped markers must still recover to the
+    # deadline (retry is bounded by the OVERALL timeout, not a fixed count -- the
+    # fixed-3 that gave up on the 4th cold dispatch is gone). 12 drops -> 13 sends.
+    _run_ok("burst-12-drops", ["prompt"] * 12 + ["marker"], 3, 13)
+
+    # Marker NEVER delivered (idempotent cmd): retry to the deadline, then a clean
+    # TIMEOUT -- must not hang past the budget and must not crash.
+    child = _FakeChild(always_prompt=True)
+    try:
+        _console(child).run("some idempotent phase", timeout=0.3, echo=False)
+        raise AssertionError("persistent-drop: expected TIMEOUT")
+    except pexpect.TIMEOUT:
+        assert len(child.sent) >= 2, \
+            "persistent-drop: should have re-issued several times, got %d" \
+            % len(child.sent)
+        print("PASS persistent-drop-to-deadline: re-issued %d times then TIMEOUT "
+              "(no hang, no crash)" % len(child.sent))
 
     # Slice TIMEOUT (neither marker nor prompt yet) must LOOP, not crash -- the
     # exact branch that crashed the cold dispatch. Here two slices time out (slow
@@ -136,11 +197,62 @@ def main():
     assert rc is None, "slice-timeout-until-deadline: rc=%r != None" % rc
     print("PASS slice-timeout-until-deadline: honored deadline -> None (no crash)")
 
-    # A backgrounding launch must never be re-issued (would spawn a duplicate).
-    _run_no_retry("bg-no-retry",
-                  "vmsproctab bg P4APROC1 >/tmp/x 2>&1 & echo $! > /tmp/p")
-    # An explicitly non-idempotent command (e.g. modload) must not be re-issued.
-    _run_no_retry("modload-no-retry", "modload x", retriable=False)
+    # BOTH-DROP nudge: a slice elapses with NEITHER marker nor prompt (both were
+    # dropped); a nudge's probe sees the idle prompt (no marker) -> fast re-issue
+    # signal (None), not a deadline burn (the failure that reddened a cold job on
+    # a zero-output `rm -f'). Assert a nudge newline WAS sent.
+    child = _FakeChild(outcomes=["timeout", "prompt"])
+    con = _console(child)
+    con._MARKER_SLICE = 0.02
+    rc = con._await_marker("mk", total_timeout=30, allow_nudge=True)
+    assert rc is None, "both-drop-nudge: rc=%r != None" % rc
+    assert "" in child.sent, "both-drop-nudge: no nudge newline was sent"
+    print("PASS both-drop-nudge: nudge probe saw prompt-without-marker -> fast "
+          "re-issue (marker+prompt both dropped, no deadline burn)")
+
+    # CRITICAL: a slow command that FINISHES during the nudge window leaves the
+    # marker right before the prompt; the nudge probe must match the MARKER (not
+    # the trailing prompt) and return rc -- NOT falsely declare it lost and
+    # re-issue (that looped a build restarting itself). Assert rc is returned.
+    child = _FakeChild(outcomes=["timeout", "marker"], rc=5)
+    con = _console(child)
+    con._MARKER_SLICE = 0.02
+    rc = con._await_marker("mk", total_timeout=30, allow_nudge=True)
+    assert rc == 5, "nudge-finds-marker: rc=%r != 5 (false re-issue!)" % rc
+    print("PASS nudge-finds-marker: marker arriving during the nudge window is "
+          "honored (no false re-issue of a slow command)")
+
+    # No nudge when nudging is disallowed (e.g. a background launch): a stray
+    # newline must NEVER be injected; the deadline is the only backstop.
+    child = _FakeChild(always_timeout=True)
+    con = _console(child)
+    con._MARKER_SLICE = 0.02
+    rc = con._await_marker("mk", total_timeout=0.2, allow_nudge=False)
+    assert rc is None
+    assert "" not in child.sent, "no-nudge: a nudge was injected when disallowed"
+    print("PASS no-nudge-when-disallowed: no newline injected while awaiting a "
+          "non-nudge (e.g. background-launch) marker")
+
+    # A command that ENDS by backgrounding a job (trailing `&') must never be
+    # re-issued (would duplicate it).
+    _run_no_retry("bg-trailing-no-retry", "vmsproctab bg P4APROC1 >/tmp/x 2>&1 &")
+    # A ` & ' launch followed by bookkeeping (the P2c/shared-driver shape) must
+    # ALSO not be re-issued by default -- guards P2c against a duplicate launch.
+    _run_no_retry("bg-amp-no-retry",
+                  "vmseflag wait 66 >/tmp/w 2>&1 & echo $! >/tmp/wpid")
+    # An explicitly non-idempotent command must not be re-issued.
+    _run_no_retry("nonidempotent-no-retry", "some raw command", retriable=False)
+
+    # A collapsed proof phase backgrounds a helper INTERNALLY (` & ') but runs to
+    # completion and passes bg_safe=True -- it MUST retry despite the ` & '.
+    child = _FakeChild(["prompt", "marker"], rc=3)
+    con = _console(child)
+    rc, _o = con.run("vmsproctab bg X >/tmp/a 2>&1 & sleep 2; kill %1; echo T=PASS",
+                     timeout=300, echo=False, bg_safe=True)
+    assert rc == 3 and len(child.sent) == 2, \
+        "bg_safe-retries: rc=%r sends=%d" % (rc, len(child.sent))
+    print("PASS bg_safe-retries: ` & '-internal phase with bg_safe=True re-issued "
+          "on marker loss (2 sends)")
 
     print("ALL RECOVERY UNIT CASES PASSED")
     return 0

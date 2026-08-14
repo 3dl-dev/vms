@@ -148,13 +148,27 @@ def build_source_iso(guest_src_dir, out_iso):
     log("source ISO built: %s (%d bytes)" % (out_iso, os.path.getsize(out_iso)))
 
 
-def run(child, cmd, timeout, echo=True, retriable=True):
+def run(child, cmd, timeout, echo=True, retriable=True, bg_safe=False):
     """Run one /bin/sh command in the guest; return (exit_status, output)."""
-    return _console(child).run(cmd, timeout, echo, retriable)
+    return _console(child).run(cmd, timeout, echo, retriable, bg_safe)
 
 
 def login(child, cmd_timeout):
     _console(child).login_root_sh(cmd_timeout)
+
+
+def phase_token(out, key):
+    """Return VALUE from the LAST `KEY=VALUE' line a collapsed phase script
+    emitted on its own line (the single result token the harness keys on, so a
+    verbose phase crosses the lossy serial as one small token instead of ~5-7
+    interactive round-trips). Last match wins so an echoed command line cannot
+    shadow the real result."""
+    val = None
+    for line in out.splitlines():
+        s = line.strip()
+        if s.startswith(key + "="):
+            val = s[len(key) + 1:].strip()
+    return val
 
 
 def parse_token(out, key):
@@ -270,7 +284,7 @@ def main():
                     "  mount_cd9660 /dev/cd0d /mnt ; } && "
                     "cp -R /mnt/kmod /mnt/probe /mnt/kernel-core /root/ovmx/ && "
                     "umount /mnt && chmod -R u+w /root/ovmx && "
-                    "ls -R /root/ovmx",
+                    "test -f /root/ovmx/probe/vmsproctab.c",   # quiet: no ls -R
                     cmd_timeout)
         if rc != 0:
             log("FAIL: could not stage OVMX sources from the CD in the guest")
@@ -320,70 +334,80 @@ def main():
         MB = "/root/ovmx/probe/vmsmbx"
         LK = "/root/ovmx/probe/vmslock"
         AC = "/root/ovmx/probe/vmsaccess"
+        PB = poll_budget
+        TX = "/tmp/p4a_tx"     # in-guest transcript, cat'd ONCE at the end
 
-        # ---- INV-6 NEGATIVE CONTROL: no module loaded, for EVERY new tool --
-        run(child, "rm -f /dev/vms", cmd_timeout)
-        for tool, args in ((PT, "getjpi_name nobody"),
-                            (MB, "create_hold 1"),
-                            (LK, "hold_release NORES 0 0"),
-                            (AC, "selftest")):
-            rc, out = run(child, "%s %s" % (tool, args), cmd_timeout)
-            if rc == 0:
-                log("FAIL (INV-6): %s returned SUCCESS with no /dev/vms present"
-                    % tool)
-                return 20
-            if "NOT faking success" not in out:
-                log("FAIL (INV-6): %s failed, but not via the honest "
-                    "device-unreachable path" % tool)
-                return 21
+        # LOSS-TOLERANT TRANSPORT (rd vms-f8a). The emulated TCG serial drops
+        # output intermittently; with ~40 interactive per-command markers per run,
+        # some marker is lost almost every cold run, and per-marker robustness
+        # never reaches zero loss. So each PHASE below runs as ONE in-guest
+        # command that does all its steps (including backgrounding process A and
+        # killing it), asserts every INV-6 property IN-GUEST over reliable local
+        # pipes, appends a full transcript to TX, and emits exactly ONE result
+        # token. The harness awaits that single token (retriable to the overall
+        # deadline, since each phase is idempotent -- it cleans up its own helper
+        # before the token), then prints the human/CI assertion line. INV-6 is
+        # unchanged: every probe still opens /dev/vms and each property is still
+        # asserted -- only the transport is collapsed. The full transcript is read
+        # once at the very end for evidence.
+        run(child, "rm -f %s" % TX, cmd_timeout)
+
+        # ---- INV-6 NEGATIVE CONTROL (module absent): ONE token for all four ----
+        neg = ("rm -f /dev/vms; F=''; "
+               "for S in 'vmsproctab getjpi_name nobody' 'vmsmbx create_hold 1' "
+               "'vmslock hold_release NORES 0 0' 'vmsaccess selftest'; do "
+               "O=$(/root/ovmx/probe/$S 2>&1); R=$?; "
+               "{ echo \"### negctl $S rc=$R\"; echo \"$O\"; } >>%s; "
+               "[ $R -eq 0 ] && F=\"$F faked[$S]\"; "
+               "echo \"$O\" | grep -q 'NOT faking success' || F=\"$F nohonest[$S]\"; "
+               "done; "
+               "[ -z \"$F\" ] && echo NEGCTL=ALL_HONEST || echo \"NEGCTL=FAIL:$F\""
+               % TX)
+        rc, out = run(child, neg, cmd_timeout)
+        if phase_token(out, "NEGCTL") != "ALL_HONEST":
+            log("FAIL (INV-6): module-absent honest-failure negctl did not pass "
+                "for every probe: %s" % phase_token(out, "NEGCTL"))
+            return 20
         log("OK (INV-6): all four new probe tools FAILED HONESTLY "
             "(SS$_NOSUCHDEV) with no module loaded -- none faked success")
 
         # ---- load the module + create the node -----------------------------
+        # Made IDEMPOTENT (so it is retriable to the deadline like every other
+        # phase): a leading `modunload' drops any module a lost-marker retry left
+        # loaded, and /dev/vms is recreated fresh. Emits one MODLOAD token.
         rc, out = run(child,
+                      "modunload vms 2>/dev/null; "
                       "modload /root/ovmx/kmod/vms.kmod && "
                       "MAJ=`dmesg | sed -n "
                       "'s/.*vms: registered, char major \\([0-9][0-9]*\\).*/\\1/p'"
                       " | tail -1` && "
-                      "echo \"parsed major=$MAJ\" && "
-                      "test -n \"$MAJ\" && "
+                      "test -n \"$MAJ\" && rm -f /dev/vms && "
                       "mknod /dev/vms c $MAJ 0 && chmod 666 /dev/vms && "
-                      "ls -l /dev/vms && test -c /dev/vms",
-                      cmd_timeout, retriable=False)   # modload is not idempotent
-        if rc != 0:
+                      "test -c /dev/vms && echo MODLOAD=OK || echo MODLOAD=FAIL",
+                      cmd_timeout)
+        if phase_token(out, "MODLOAD") != "OK":
             log("FAIL: could not load the module / create /dev/vms")
             return 14
         log("OK: module loaded and /dev/vms created")
 
         # =====================================================================
-        # PROCTAB: A registers + stays alive (INDEFINITELY, until explicitly
-        # released below -- a fixed-duration hold previously raced the slow
-        # QEMU-TCG console cadence: B's GETJPI could land inside the window
-        # but C's PROCSCAN, a command-turnaround later, could land after A
-        # had already exited, a real observed flake, not a harness bug);
-        # B resolves by name; C enumerates.
+        # PROCTAB (collapsed): A ($SETPRN bg) launched, B ($GETJPI by name) and
+        # C ($PROCESS_SCAN) query it, A killed -- all in one in-guest command,
+        # asserted in-guest, one token. A blocks indefinitely (vmsproctab bg) so
+        # both readers observe it before it is killed.
         # =====================================================================
-        if not skip_proctab_bg:
-            rc, _ = run(child,
-                        "rm -f /tmp/pt_a.out /tmp/pt_a.pid; "
-                        "%s bg P4APROC1 >/tmp/pt_a.out 2>&1 & "
-                        "echo $! > /tmp/pt_a.pid" % PT,
-                        cmd_timeout)
-            run(child, "sleep 2", cmd_timeout)
-        else:
-            log("SKIP: process A's SETPRN (bg) skipped (P4A_SKIP_PROCTAB_BG) "
-                "-- B's lookup below must fail")
-
-        rc, out = run(child, "%s getjpi_name P4APROC1" % PT, cmd_timeout)
-        found = (rc == 0 and "PROCTAB GETJPI_FOUND name=P4APROC1" in out)
-
         if skip_proctab_bg:
-            # NEGATIVE CONTROL: A never registered, so the positive assertion
-            # below MUST fail -- and the whole harness must go RED right here
-            # (short-circuit, exactly like P2c's P2C_SKIP_SET path), never
-            # silently continue into the other four facilities and report an
-            # overall pass. A CI step asserts this exit is nonzero.
-            if found:
+            # NEGATIVE CONTROL: A is never launched, so B's by-name $GETJPI must
+            # find nothing. One token; the harness goes RED right here if B finds
+            # a name A never registered (a CI step asserts the nonzero exit).
+            negp = ("GJ=$(%s getjpi_name P4APROC1 2>&1); R=$?; "
+                    "{ echo '### proctab-negctl getjpi'; echo \"$GJ\"; } >>%s; "
+                    "{ [ $R -ne 0 ] && ! echo \"$GJ\" | "
+                    "grep -q 'PROCTAB GETJPI_FOUND name=P4APROC1'; } "
+                    "&& echo PROCTAB=NEGCTL_NOTFOUND || echo PROCTAB=NEGCTL_FOUND"
+                    % (PT, TX))
+            rc, out = run(child, negp, cmd_timeout)
+            if phase_token(out, "PROCTAB") == "NEGCTL_FOUND":
                 log("FAIL (negctl): B found a name process A never "
                     "registered -- the negative control has no teeth")
                 return 33
@@ -391,23 +415,33 @@ def main():
                 "when A never registered -- the positive assertion has teeth")
             return 30
 
-        if not found:
-            log("FAIL: process B (a DIFFERENT process) did not resolve "
-                "process A's name via $GETJPI")
-            return 31
+        proc = ("rm -f /tmp/pt_a.out; "
+                "%s bg P4APROC1 >/tmp/pt_a.out 2>&1 & AP=$!; sleep 2; "
+                "GJ=$(%s getjpi_name P4APROC1 2>&1); "
+                "PS=$(%s procscan_find P4APROC1 128 2>&1); "
+                "kill $AP 2>/dev/null; wait 2>/dev/null; "
+                "{ echo '### proctab A'; cat /tmp/pt_a.out; "
+                "echo '### proctab B getjpi'; echo \"$GJ\"; "
+                "echo '### proctab C procscan'; echo \"$PS\"; } >>%s; "
+                "F=''; echo \"$GJ\" | "
+                "grep -q 'PROCTAB GETJPI_FOUND name=P4APROC1' || F=\"$F getjpi\"; "
+                "echo \"$PS\" | grep -q 'PROCTAB PROCSCAN_FOUND' || F=\"$F procscan\"; "
+                "[ -z \"$F\" ] && echo PROCTAB=PASS || echo \"PROCTAB=FAIL:$F\""
+                % (PT, PT, PT, TX))
+        rc, out = run(child, proc, cmd_timeout, bg_safe=True)
+        tok = phase_token(out, "PROCTAB")
+        if tok != "PASS":
+            if tok and "getjpi" in tok:
+                log("FAIL: process B (a DIFFERENT process) did not resolve "
+                    "process A's name via $GETJPI")
+                return 31
+            log("FAIL: process C's $PROCESS_SCAN did not enumerate A's row "
+                "(phase token: %s)" % tok)
+            return 32
         log("OK: process B (a DIFFERENT process) resolved A's name via "
             "$GETJPI -- the process table is shared kernel state (INV-6)")
-
-        rc, out = run(child, "%s procscan_find P4APROC1 128" % PT, cmd_timeout)
-        if rc != 0 or "PROCTAB PROCSCAN_FOUND" not in out:
-            log("FAIL: process C's $PROCESS_SCAN did not enumerate A's row")
-            return 32
         log("OK: process C enumerated the shared process table with "
             "$PROCESS_SCAN and found A's row")
-
-        # Release A now that both readers have observed it (A blocks
-        # indefinitely on its own -- see vmsproctab.c bg's rationale).
-        run(child, "kill `cat /tmp/pt_a.pid` 2>/dev/null; wait", cmd_timeout)
 
         # =====================================================================
         # MBX: A creates a TEMPORARY mailbox and holds it open; B writes; C
@@ -421,114 +455,120 @@ def main():
         # reach it by name; it is freed when A's channel closes at the end of
         # the hold (vms_mbx_release_all on process exit).
         # =====================================================================
-        rc, _ = run(child,
-                    "rm -f /tmp/mb_a.out; "
-                    "%s create_hold 8 >/tmp/mb_a.out 2>&1 &" % MB, cmd_timeout)
-        run(child, "sleep 2", cmd_timeout)
-        rc, out = run(child, "cat /tmp/mb_a.out", cmd_timeout)
-        if "MBX CREATE" not in out:
-            log("FAIL: process A's $CREMBX (temporary) failed")
-            return 40
-        devnam = parse_token(out, "devnam")
-        if not devnam:
-            log("FAIL: could not parse the created mailbox's device name")
-            return 41
-        log("OK: process A created temporary mailbox %s and is holding it "
-            "open" % devnam)
-
-        rc, out = run(child, "%s write %s 'P4A MBX HELLO'" % (MB, devnam),
-                      cmd_timeout)
-        if rc != 0 or "MBX WRITE" not in out:
-            log("FAIL: process B's write to %s failed" % devnam)
-            return 42
-        log("OK: process B (a DIFFERENT process) wrote to A's mailbox by name")
-
-        rc, out = run(child, "%s read %s 'P4A MBX HELLO'" % (MB, devnam),
-                      cmd_timeout)
-        if rc != 0 or "match=1" not in out:
-            log("FAIL: process C did not read back the exact bytes B wrote")
+        mbx = ("rm -f /tmp/mb_a.out; "
+               "%s create_hold 8 >/tmp/mb_a.out 2>&1 & AP=$!; sleep 2; "
+               "D=$(grep 'MBX CREATE' /tmp/mb_a.out | "
+               "sed 's/.*devnam=//; s/ .*//' | head -1); "
+               "W=$(%s write \"$D\" 'P4A MBX HELLO' 2>&1); WR=$?; "
+               "R=$(%s read \"$D\" 'P4A MBX HELLO' 2>&1); RR=$?; "
+               "kill $AP 2>/dev/null; wait 2>/dev/null; "
+               "{ echo '### mbx A'; cat /tmp/mb_a.out; echo \"### mbx devnam=$D\"; "
+               "echo '### mbx B write'; echo \"$W\"; "
+               "echo '### mbx C read'; echo \"$R\"; } >>%s; "
+               "F=''; grep -q 'MBX CREATE' /tmp/mb_a.out || F=\"$F create\"; "
+               "[ -n \"$D\" ] || F=\"$F devnam\"; "
+               "{ [ $WR -eq 0 ] && echo \"$W\" | grep -q 'MBX WRITE'; } "
+               "|| F=\"$F write\"; "
+               "{ [ $RR -eq 0 ] && echo \"$R\" | grep -q 'match=1'; } "
+               "|| F=\"$F read\"; "
+               "[ -z \"$F\" ] && echo MBX=PASS || echo \"MBX=FAIL:$F\""
+               % (MB, MB, MB, TX))
+        rc, out = run(child, mbx, cmd_timeout, bg_safe=True)
+        tok = phase_token(out, "MBX")
+        if tok != "PASS":
+            log("FAIL: mailbox cross-process proof failed (phase token: %s)" % tok)
+            if tok and ("create" in tok or "devnam" in tok):
+                return 40
+            if tok and "write" in tok:
+                return 42
             return 43
+        log("OK: process A created a temporary mailbox and B (a DIFFERENT "
+            "process) wrote to it by name")
         log("OK: process C (a THIRD, different process) read back the EXACT "
             "bytes B wrote -- the mailbox message queue is shared kernel "
             "state (INV-6)")
 
-        run(child, "wait", cmd_timeout)   # let A's hold finish cleanly
-
         # =====================================================================
         # LOCK: A holds EX; B's ENQW blocks; A releases; B is granted.
         # =====================================================================
-        rc, _ = run(child,
-                    "rm -f /tmp/lk_a.out /tmp/lk_b.out; "
-                    "%s hold_release P4ARES 5 8 >/tmp/lk_a.out 2>&1 &" % LK,
-                    cmd_timeout)
-        run(child, "sleep 2", cmd_timeout)
-        rc, out = run(child, "cat /tmp/lk_a.out", cmd_timeout)
-        if "LOCK ENQ GRANTED" not in out:
-            log("FAIL: process A did not acquire the EX lock")
-            return 50
-        log("OK: process A holds an EXCLUSIVE lock on P4ARES")
-
-        rc, _ = run(child,
-                    "%s enqw P4ARES 5 >/tmp/lk_b.out 2>&1 &" % LK, cmd_timeout)
-        run(child, "sleep 2", cmd_timeout)
-        rc, out = run(child, "cat /tmp/lk_b.out; echo ---END---", cmd_timeout)
-        if "LOCK ENQW GRANTED" in out:
-            log("FAIL: process B's conflicting ENQW granted immediately -- "
-                "the lock manager did not actually block it")
-            return 51
-        log("OK: process B's conflicting synchronous $ENQW is BLOCKED IN THE "
-            "KERNEL (no grant yet) while A still holds the lock")
-
-        rc, out = run(child,
-                      "i=0; while [ $i -lt %d ]; do "
-                      "grep -q 'LOCK DEQ RELEASED' /tmp/lk_a.out && break; "
-                      "i=$((i+1)); sleep 1; done; cat /tmp/lk_a.out; "
-                      "echo ---END---" % poll_budget, cmd_timeout)
-        if "LOCK DEQ RELEASED" not in out:
-            log("FAIL: process A never released the lock (bounded poll expired)")
-            return 52
-
-        rc, out = run(child,
-                      "i=0; while [ $i -lt %d ]; do "
-                      "grep -q 'LOCK ENQW GRANTED' /tmp/lk_b.out && break; "
-                      "i=$((i+1)); sleep 1; done; cat /tmp/lk_b.out; "
-                      "echo ---END---" % poll_budget, cmd_timeout)
-        if "LOCK ENQW GRANTED" not in out:
-            log("FAIL: process B's blocked ENQW never unblocked after A's DEQ "
-                "-- the cross-process lock wait/wake was LOST")
+        lock = ("rm -f /tmp/lk_a.out /tmp/lk_b.out; F=''; "
+                "%s hold_release P4ARES 5 8 >/tmp/lk_a.out 2>&1 & AP=$!; sleep 2; "
+                "grep -q 'LOCK ENQ GRANTED' /tmp/lk_a.out || F=\"$F ahold\"; "
+                "%s enqw P4ARES 5 >/tmp/lk_b.out 2>&1 & BP=$!; sleep 2; "
+                "grep -q 'LOCK ENQW GRANTED' /tmp/lk_b.out && F=\"$F notblocked\"; "
+                "i=0; while [ $i -lt %d ]; do "
+                "grep -q 'LOCK DEQ RELEASED' /tmp/lk_a.out && break; "
+                "i=$((i+1)); sleep 1; done; "
+                "grep -q 'LOCK DEQ RELEASED' /tmp/lk_a.out || F=\"$F norelease\"; "
+                "i=0; while [ $i -lt %d ]; do "
+                "grep -q 'LOCK ENQW GRANTED' /tmp/lk_b.out && break; "
+                "i=$((i+1)); sleep 1; done; "
+                "grep -q 'LOCK ENQW GRANTED' /tmp/lk_b.out || F=\"$F nogrant\"; "
+                "kill $AP $BP 2>/dev/null; wait 2>/dev/null; "
+                "{ echo '### lock A'; cat /tmp/lk_a.out; "
+                "echo '### lock B'; cat /tmp/lk_b.out; } >>%s; "
+                "[ -z \"$F\" ] && echo LOCK=PASS || echo \"LOCK=FAIL:$F\""
+                % (LK, LK, PB, PB, TX))
+        rc, out = run(child, lock, cmd_timeout, bg_safe=True)
+        tok = phase_token(out, "LOCK")
+        if tok != "PASS":
+            log("FAIL: lock manager cross-process block/wake proof failed "
+                "(phase token: %s)" % tok)
+            if tok and "ahold" in tok:
+                return 50
+            if tok and "notblocked" in tok:
+                return 51
+            if tok and "norelease" in tok:
+                return 52
             return 53
-        log("OK: process B's blocked $ENQW UNBLOCKED and was GRANTED the "
+        log("OK: process A held an EXCLUSIVE lock, B's conflicting synchronous "
+            "$ENQW BLOCKED IN THE KERNEL, then UNBLOCKED and was GRANTED the "
             "instant A released -- the lock resource database + wait queue "
             "are shared kernel state (INV-6, THE PAYOFF)")
 
         # =====================================================================
         # ACCESS: intra-process round trip, then A mutates privs; B observes.
         # =====================================================================
-        rc, out = run(child, "%s selftest" % AC, cmd_timeout)
-        if rc != 0 or "ACCESS SELFTEST PASS" not in out:
-            log("FAIL: the access-mode/AST intra-process round trip did not "
-                "pass (SETMODE/ENTER_IMAGE/DCLAST/DELIVERAST/IMAGE_RUNDOWN)")
-            return 60
+        acc = ("S=$(%s selftest 2>&1); SR=$?; "
+               "rm -f /tmp/acc_a.out; "
+               "%s setpriv_bg P4APRIV1 10 >/tmp/acc_a.out 2>&1 & AP=$!; sleep 2; "
+               "G=$(%s getpriv P4APRIV1 2>&1); GR=$?; "
+               "kill $AP 2>/dev/null; wait 2>/dev/null; "
+               "{ echo '### access selftest'; echo \"$S\"; "
+               "echo '### access A setpriv'; cat /tmp/acc_a.out; "
+               "echo '### access B getpriv'; echo \"$G\"; } >>%s; "
+               "F=''; "
+               "{ [ $SR -eq 0 ] && echo \"$S\" | grep -q 'ACCESS SELFTEST PASS'; } "
+               "|| F=\"$F selftest\"; "
+               "{ [ $GR -eq 0 ] && echo \"$G\" | grep -q 'cmexec_clear=1'; } "
+               "|| F=\"$F getpriv\"; "
+               "[ -z \"$F\" ] && echo ACCESS=PASS || echo \"ACCESS=FAIL:$F\""
+               % (AC, AC, AC, TX))
+        rc, out = run(child, acc, cmd_timeout, bg_safe=True)
+        tok = phase_token(out, "ACCESS")
+        if tok != "PASS":
+            log("FAIL: access-mode cross-process proof failed (phase token: %s)"
+                % tok)
+            return 60 if (tok and "selftest" in tok) else 61
         log("OK: SETMODE/GETMODE/ENTER_IMAGE/DCLAST/DELIVERAST/IMAGE_RUNDOWN "
             "round-trip through the real /dev/vms")
-
-        rc, _ = run(child,
-                    "%s setpriv_bg P4APRIV1 10 >/tmp/acc_a.out 2>&1 &" % AC,
-                    cmd_timeout)
-        run(child, "sleep 2", cmd_timeout)
-        rc, out = run(child, "%s getpriv P4APRIV1" % AC, cmd_timeout)
-        if rc != 0 or "cmexec_clear=1" not in out:
-            log("FAIL: process B did not observe process A's $SETPRV "
-                "(disable CMEXEC, permanent) via $GETJPI")
-            return 61
         log("OK: process B (a DIFFERENT process) observed A's real $SETPRV "
             "mutation via $GETJPI -- the privilege mask is shared kernel "
             "state (INV-6)")
-        run(child, "wait", cmd_timeout)
 
         # =====================================================================
         # AST: A arms a mailbox write-attention AST and $HIBERs; B's write on
-        # that SAME mailbox is what fires the AST and wakes A -- cross-process.
+        # that SAME mailbox fires the AST and wakes A -- cross-process.
+        #
+        # NOT collapsed into one in-guest command like the phases above: the
+        # write-attention path is timing-sensitive (B's $QIO write must land
+        # AFTER A is actually parked in $HIBER on the armed channel), and driving
+        # it as discrete steps -- arm+HIBER, observe ARMED, then write, then
+        # observe FIRED -- gives A the interval it needs; a single back-to-back
+        # in-guest command raced the write ahead of the park and wedged. The
+        # helper A is launched with a trailing `&' so the console driver treats it
+        # as a non-retriable background launch (it must not be duplicated); the
+        # remaining steps are idempotent polls/reads and retry to the deadline.
         # =====================================================================
         rc, _ = run(child,
                     "rm -f /tmp/ast_a.out; "
@@ -548,14 +588,11 @@ def main():
             log("FAIL: the AST fired before ANY process wrote to the "
                 "mailbox -- the wait has no teeth (it did not actually block)")
             return 71
-        log("OK: process A is BLOCKED IN THE KERNEL ($HIBER) with its "
-            "write-attention AST armed on %s (no FIRED yet)" % ast_devnam)
 
         rc, out = run(child, "%s wrtattn_write %s" % (AC, ast_devnam), cmd_timeout)
         if rc != 0 or "AST WRTATTN WRITE status=" not in out:
             log("FAIL: process B's write to A's mailbox failed")
             return 72
-        log("OK: process B (a DIFFERENT process) wrote to A's mailbox")
 
         rc, out = run(child,
                       "i=0; while [ $i -lt %d ]; do "
@@ -570,6 +607,10 @@ def main():
             "delivered the EXACT armed AST -- the AST queue + HIBER/wake "
             "path are shared kernel state reachable from a DIFFERENT "
             "process (INV-6, THE AST PAYOFF)")
+
+        # ---- evidence: read the full in-guest transcript ONCE ---------------
+        run(child, "echo '=== P4-A TRANSCRIPT ==='; cat %s; echo '=== END ==='"
+            % TX, cmd_timeout)
 
         # ---- cleanup --------------------------------------------------------
         run(child, "modunload vms", cmd_timeout)

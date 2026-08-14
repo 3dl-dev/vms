@@ -26,8 +26,17 @@ KMOD=		vms
 # -- it is, above. vms_proctab.c binds the host task + the intrusive process
 # hash, so exec_hash_netbsd.c -- the NetBSD hash impl -- is listed too. vms_lock.c
 # is the sole exec_rbtree consumer -- its lock-ID red-black tree -- so
-# exec_rbtree_netbsd.c, OVMX's own intrusive tree, is listed with it.)
+# exec_rbtree_netbsd.c, OVMX's own intrusive tree, is listed with it. vms_lnm.c
+# (rd vms-72da) is the executive-resident logical-name tables LNM$SYSTEM/GROUP/JOB
+# -- the LAST facility to join SRCS; it is the sole exec_arena consumer (the
+# read-only-publishable arena). Its host-mm glue -- exec_arena_alloc/free
+# (uvm_km_alloc(WIRED)) and the cdevsw d_mmap (vms_mmap) that maps the arena's
+# wired pages read-only into a process -- is quarantined in the dedicated backend
+# TU vms_lnm_arena_netbsd.c, which includes <uvm/uvm_extern.h> but NOT the
+# executive's exec_rbtree_netbsd.h (their <sys/rbtree.h> rb_left/rb_right macros
+# would collide), listed with the other _netbsd backend TUs above.)
 SRCS=		vms_netbsd.c \
+		vms_lnm_arena_netbsd.c \
 		exec_list_netbsd.c \
 		exec_hash_netbsd.c \
 		exec_rbtree_netbsd.c \
@@ -36,7 +45,8 @@ SRCS=		vms_netbsd.c \
 		vms_access.c \
 		vms_mbx.c \
 		vms_proctab.c \
-		vms_lock.c
+		vms_lock.c \
+		vms_lnm.c
 
 # vms_eflag.c lives in the shared core dir; tell bmake where to find it.
 .PATH:		${.CURDIR}/../kernel-core

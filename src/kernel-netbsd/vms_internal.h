@@ -72,6 +72,13 @@
  * LCK_M_* flags and LCK_VALBLK_SIZE it tests. Byte-identical to
  * src/kernel/vms_ioctl.h. */
 #include "vms_lock_nb.h"
+/* Logical-name (LNM$SYSTEM/GROUP/JOB) wire contract (rd vms-72da): the
+ * DEFINE/DELETE/GETSCOPE arg structs the facility copies, the read-only arena
+ * struct the char device's mmap publishes, the VMS_LNM_* sizing/table ids, and
+ * the SYSNAM/GRPNAM/SYSPRV/GRPPRV privilege bits lnm_priv_check() gates on.
+ * Byte-identical to src/kernel/vms_lnm.h. lnm is the LAST facility to join the
+ * NetBSD module's SRCS (the arena seam was contract-only through vms-d61). */
+#include "vms_lnm_nb.h"
 
 /* ================================================================
  * VMS status codes -- the subset the event-flag facility returns. Values match
@@ -106,6 +113,14 @@
 #define SS__IVLOCKID    8484       /* SS$_IVLOCKID (invalid lock ID) */
 #define SS__CANCELGRANT 8508       /* SS$_CVTUNGRANT (conversion could not be granted) */
 #define SS__UNSUPPORTED 2296       /* SS$_UNSUPPORTED (remote DLM path -- 0.4) */
+/* Logical-name subset (rd vms-72da). Values match src/kernel/vms_internal.h
+ * exactly. SS__IVLOGNAM (340) comes from vms_proctab_nb.h. SUPERSEDE/NOLOGNAM
+ * are public $SSDEF; SS__EXLNMQUOTA is the ONE value not yet in ssdef.h --
+ * ORACLE-PINNED (lab-1 F$MESSAGE, design docs/design-logical-name-placement.md
+ * §4.2, vms-556) exactly as src/kernel/vms_internal.h pins it. */
+#define SS__SUPERSEDE   844        /* SS$_SUPERSEDE (a name was superseded) */
+#define SS__NOLOGNAM    444        /* SS$_NOLOGNAM (no such logical name) */
+#define SS__EXLNMQUOTA  8780       /* oracle-pinned lab-1 F$MESSAGE (arena full) */
 
 /* ================================================================
  * Mailbox privilege bits (P4-A, rd vms-d7a). PSL_C_* and CMKRNL/CMEXEC/SETPRV
@@ -121,6 +136,32 @@
 #endif
 #ifndef VMS_PRV_M_NETMBX
 #define VMS_PRV_M_NETMBX  (1ULL << 20)   /* create network device     (PRV$V_NETMBX) */
+#endif
+#ifndef VMS_PRV_V_MOUNT
+#define VMS_PRV_V_MOUNT   17             /* execute the MOUNT ACP function (PRV$V_MOUNT) */
+#endif
+#ifndef VMS_PRV_M_MOUNT
+#define VMS_PRV_M_MOUNT  (1ULL << VMS_PRV_V_MOUNT)
+#endif
+
+/*
+ * VMS_PRV_M_ENFORCED (rd vms-72da) -- the privilege mask a PRIVILEGED process is
+ * seeded with, BYTE-IDENTICAL to src/kernel/vms_ioctl.h. It MUST include SYSNAM:
+ * the executive gates LNM$SYSTEM DEFINE/DELETE on SYSNAM|SYSPRV (vms_lnm.c
+ * lnm_priv_check), and PID 1 (ovmx_init) seeds SYS$SYSTEM / SYS$SYSROOT /
+ * SYS$SYSDEVICE through lnm_setup_defaults BEFORE any $SETIDENT, so a privileged
+ * proc must ALREADY hold SYSNAM or the boot's system logicals never get created.
+ * The netbsd proc seed previously hand-listed only CMKRNL|CMEXEC|SETPRV, omitting
+ * SYSNAM -- so SYS$SYSTEM never resolved on netbsd and the vax boot halted at
+ * %OVMX-F-EXECINIT. Component bits: CMKRNL/CMEXEC/SETPRV (vms_access_nb.h), WORLD
+ * (vms_proctab_nb.h), SYSNAM/GRPNAM (vms_lnm_nb.h), MOUNT (above) -- all in scope
+ * here, since vms_internal.h includes those twins above.
+ */
+#ifndef VMS_PRV_M_ENFORCED
+#define VMS_PRV_M_ENFORCED  (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | \
+                             VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD | \
+                             VMS_PRV_M_SYSNAM | VMS_PRV_M_GRPNAM | \
+                             VMS_PRV_M_MOUNT)
 #endif
 /* The privileges EVERY VMS process holds by default (TMPMBX + NETMBX), matching
  * src/kernel/vms_internal.h's VMS_DEFAULT_PRIVS. A fresh OVMX process must be
@@ -388,6 +429,18 @@ struct vms_proc {
 	 * SRCS -- it stays "" until then, honestly empty).
 	 */
 	uint32_t            uic;                       /* (group << 16) | member */
+	/*
+	 * Job-tree id -- the LNM$JOB scope key derive_scope_key() reads (vms_lnm.c,
+	 * rd vms-72da). On Linux the glue stamps it at registration from the parent
+	 * (vms_proc_parent_job_id() in vms_module.c) so a SPAWN tree shares one
+	 * LNM$JOB. The NetBSD glue does NOT yet derive a job tree, so this stays 0,
+	 * HONESTLY -- exactly as terminal/p0/p1 stay empty until their glue joins
+	 * SRCS. Consequence, stated not hidden: LNM$JOB on NetBSD currently collapses
+	 * to a single scope (key 0). LNM$SYSTEM (scope 0 by definition) and LNM$GROUP
+	 * (scope = real uic>>16) are unaffected -- those are the tables PROVISION's
+	 * STARTUP uses. Wiring per-process job trees on NetBSD is a later item.
+	 */
+	uint32_t            job_id;                     /* LNM$JOB scope key (0 on NetBSD until job glue joins) */
 	char                prcnam[VMS_PRCNAM_SIZE];   /* process name ("" if unnamed) */
 	char                username[VMS_USERNAME_SIZE]; /* "" until $SETIDENT stamps it */
 	char                terminal[VMS_DEVNAM_SIZE]; /* "" (no device table in SRCS yet) */
@@ -501,6 +554,28 @@ long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
+
+/* ----------------------------------------------------------------
+ * LOGICAL-NAME facility (LNM$SYSTEM/GROUP/JOB, rd vms-72da) -- DEFINED in
+ * src/kernel-core/vms_lnm.c, the LAST executive facility to join the NetBSD
+ * module's SRCS. vms_lnm_init/cleanup bracket the module lifetime: init
+ * allocates the ONE read-only-publishable arena through the exec_arena seam
+ * (uvm_km_alloc(UVM_KMF_WIRED) on NetBSD) BEFORE /dev/vms exists; cleanup frees
+ * it. The char device's d_mmap (vms_netbsd.c vms_mmap) publishes the arena's
+ * wired pages read-only using vms_lnm_arena_base/_size. The three ioctl entry
+ * points MUTATE the tables (translation is a zero-syscall mmap read, no ioctl).
+ * ---------------------------------------------------------------- */
+int    vms_lnm_init(void);
+void   vms_lnm_cleanup(void);
+void  *vms_lnm_arena_base(void);
+size_t vms_lnm_arena_size(void);
+/* DEFINED in the uvm glue TU vms_lnm_arena_netbsd.c (rd vms-72da): a load-time
+ * console self-check that the arena the executive wrote is the one d_mmap
+ * publishes (pmap_extract + magic readback). */
+void   vms_lnm_arena_selftest(void);
+long   vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg);
+long   vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg);
+long   vms_ioctl_lnm_getscope(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------
  * Cross-facility image-rundown release helpers. vms_ioctl_image_rundown()

@@ -171,19 +171,30 @@ vms_proc_get(pid_t pid)
 	 *     default-privilege $CREMBX of a temporary mailbox succeed (rd vms-f8a:
 	 *     omitting DEFAULT here made the P4-A mbx proof's $CREMBX return
 	 *     SS$_NOPRIV once proctab stopped masking it). A privileged caller ALSO
-	 *     gets the access-mode privileges vms_access.c/vms_ast.c ENFORCE
-	 *     (CMKRNL/CMEXEC/SETPRV) so the access-mode proofs exercise both the
-	 *     allow and deny paths. Broader SYSUAF privileges arrive later via
-	 *     $SETIDENT (proctab, P4-B), never conjured here. This seed is an OVMX
-	 *     glue choice (Rule 8), not a VMS-authentic value.
+	 *     gets VMS_PRV_M_ENFORCED -- the access-mode privileges vms_access.c/
+	 *     vms_ast.c enforce (CMKRNL/CMEXEC/SETPRV) AND SYSNAM/GRPNAM/WORLD/MOUNT --
+	 *     so both the access-mode allow/deny paths and LNM$SYSTEM DEFINE at boot
+	 *     work (rd vms-72da). Broader SYSUAF privileges arrive later via $SETIDENT
+	 *     (proctab, P4-B), never conjured here. This seed is an OVMX glue choice
+	 *     (Rule 8), not a VMS-authentic value.
 	 *   - each per-mode AST queue is enabled by default (Linux vms_module.c) with
 	 *     an empty (self-linked) pending ring and its own guard.
 	 *   - the hibernate cv + its paired lock back async AST delivery (vms-feb).
 	 */
 	np->current_mode = PSL_C_USER;
+	/*
+	 * A privileged (root/kauth) caller gets VMS_PRV_M_ENFORCED | VMS_DEFAULT_PRIVS,
+	 * BYTE-IDENTICAL to src/kernel/vms_module.c (capable(CAP_SYS_ADMIN) path). This
+	 * previously hand-listed a SUBSET (CMKRNL|CMEXEC|SETPRV) that omitted SYSNAM,
+	 * so PID 1's lnm_setup_defaults could not DEFINE the system logicals
+	 * (SYS$SYSTEM et al.) -- the executive gates LNM$SYSTEM on SYSNAM|SYSPRV -- and
+	 * the netbsd-vax boot halted at %OVMX-F-EXECINIT with SYS$SYSTEM unresolved
+	 * (rd vms-72da). ENFORCED carries SYSNAM (+ WORLD/GRPNAM/MOUNT), restoring
+	 * exact Linux parity. Broader SYSUAF privileges still arrive later via
+	 * $SETIDENT (proctab, P4-B), never conjured here.
+	 */
 	np->perm_privs = exec_current_is_privileged()
-	               ? (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | VMS_PRV_M_SETPRV |
-	                  VMS_DEFAULT_PRIVS)
+	               ? (VMS_PRV_M_ENFORCED | VMS_DEFAULT_PRIVS)
 	               : VMS_DEFAULT_PRIVS;
 	np->cur_privs = np->perm_privs;
 	exec_lock_init(&np->mode_lock);
@@ -393,6 +404,15 @@ vms_proc_rundown_channels(struct vms_proc *proc __unused, uint8_t min_acmode __u
 static dev_type_open(vms_open);
 static dev_type_close(vms_close);
 static dev_type_ioctl(vms_ioctl);
+/*
+ * The read-only logical-name arena's d_mmap (LNM$SYSTEM, rd vms-72da). Its
+ * DEFINITION lives in the dedicated glue TU src/kernel-netbsd/vms_lnm_arena_netbsd.c
+ * -- NOT here -- because it needs the uvm/pmap KPIs (<uvm/uvm_extern.h>) whose
+ * transitive <sys/rbtree.h> collides with the executive's exec_rbtree_netbsd.h
+ * that this TU includes (via vms_internal.h, for the DLM). So it is an EXTERNAL
+ * reference here: dev_type_mmap declares it (external linkage), the cdevsw points
+ * at it, and the glue TU defines it. See that file's header for the mapping. */
+dev_type_mmap(vms_mmap);
 
 static struct cdevsw vms_cdevsw = {
 	.d_open     = vms_open,
@@ -403,7 +423,7 @@ static struct cdevsw vms_cdevsw = {
 	.d_stop     = nostop,
 	.d_tty      = notty,
 	.d_poll     = nopoll,
-	.d_mmap     = nommap,
+	.d_mmap     = vms_mmap,   /* read-only logical-name arena (LNM$SYSTEM, vms-72da) */
 	.d_kqfilter = nokqfilter,
 	.d_discard  = nodiscard,
 	.d_flag     = D_OTHER,
@@ -773,6 +793,44 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		}
 		return vms_facility_errno(r);
 
+	/*
+	 * Logical-name facility (LNM$SYSTEM/GROUP/JOB, src/kernel-core/vms_lnm.c) --
+	 * rd vms-72da. Same dispatch shape as the others: find-or-create the caller's
+	 * proc (the facility derives its LNM$GROUP/JOB scope from the PCB's uic/job_id
+	 * and gates DEFINE/DELETE on the PCB's cur_privs), hand the framework's kernel
+	 * buffer `data' straight to the shared facility, map its Linux-style return to
+	 * a NetBSD errno. All three are _IOWR; the largest (vms_lnm_def_args, 2352 B)
+	 * is <= one page (NBPG == 4096 on NetBSD/vax), so all ride the framework
+	 * pre-copy path -- no IOC_VOID big-io shape (unlike the mailbox WRITE/READ
+	 * transfer ops). Translation is NOT here: it is a zero-syscall read of the
+	 * read-only arena the char device's d_mmap (vms_mmap) publishes.
+	 *
+	 * These CREATE and RESOLVE SYS$STARTUP / SYS$LOGIN / SYS$UPDATE (and the whole
+	 * LNM$SYSTEM table) during PROVISION's STARTUP phase -- the INV-6-decisive
+	 * property: a name one process defines in LNM$SYSTEM is visible to every other
+	 * process on the node, because the table lives in the executive and is shared,
+	 * not faked per-process.
+	 */
+	case VMS_IOCTL_LNM_DEFINE:
+	case VMS_IOCTL_LNM_DELETE:
+	case VMS_IOCTL_LNM_GETSCOPE:
+		uarg = data;
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+
+		switch (cmd) {
+		case VMS_IOCTL_LNM_DEFINE:
+			r = vms_ioctl_lnm_define(proc, (unsigned long)uarg);   break;
+		case VMS_IOCTL_LNM_DELETE:
+			r = vms_ioctl_lnm_delete(proc, (unsigned long)uarg);   break;
+		case VMS_IOCTL_LNM_GETSCOPE:
+			r = vms_ioctl_lnm_getscope(proc, (unsigned long)uarg); break;
+		default:
+			return ENOTTY;   /* unreachable */
+		}
+		return vms_facility_errno(r);
+
 	default:
 		return ENOTTY;
 	}
@@ -809,10 +867,32 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * guards (resource hash + lock-ID tree) and the empty resource-database
 		 * bucket array, before any $ENQ can run. */
 		vms_lock_init();
+		/* Bring up the logical-name arena (rd vms-72da) BEFORE /dev/vms exists,
+		 * so no open/mmap can race a NULL arena. vms_lnm_init allocates the ONE
+		 * read-only-publishable arena (uvm_km_alloc(UVM_KMF_WIRED)); a failure
+		 * here is out of memory, so unwind the facilities brought up above and
+		 * refuse to attach rather than expose a device whose LNM path can only
+		 * fail. */
+		error = vms_lnm_init();
+		if (error != 0) {
+			printf("vms: vms_lnm_init failed: %d\n", error);
+			vms_eflag_cleanup();
+			vms_lock_cleanup();
+			vms_proctab_teardown();
+			vms_mbx_cleanup();
+			exec_lock_destroy(&vms_proc_hash_lock);
+			return ENOMEM;
+		}
+		/* Prove the arena seam on THIS substrate before /dev/vms is openable
+		 * (rd vms-72da): one console line reporting the arena kva -> pa ->
+		 * magic roundtrip, so a broken mmap publish is visible here, not only as
+		 * a downstream SYS$SYSTEM resolution failure. */
+		vms_lnm_arena_selftest();
 
 		error = devsw_attach("vms", NULL, &bmajor, &vms_cdevsw, &cmajor);
 		if (error != 0) {
 			printf("vms: devsw_attach failed: %d\n", error);
+			vms_lnm_cleanup();
 			vms_eflag_cleanup();
 			vms_lock_cleanup();
 			vms_proctab_teardown();
@@ -846,6 +926,9 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		vms_lock_cleanup();
 		vms_proctab_teardown();
 		vms_mbx_cleanup();
+		/* Free the logical-name arena LAST (rd vms-72da): no process can reach it
+		 * anymore (the device is detached) and no facility above references it. */
+		vms_lnm_cleanup();
 		exec_lock_destroy(&vms_proc_hash_lock);
 		printf("vms: unregistered\n");
 		return 0;

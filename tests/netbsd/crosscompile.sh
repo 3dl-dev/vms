@@ -89,8 +89,14 @@ OBJ="$(mktemp -d)"
 #                    Sole exec_rbtree consumer (its lock-ID red-black tree), so
 #                    exec_rbtree_netbsd.c (OVMX's own intrusive tree -- the
 #                    exec_rb_link_node/insert_color/erase impl) is listed with it.
+#   vms_lnm.c      - executive-resident logical-name tables LNM$SYSTEM/GROUP/JOB
+#                    (rd vms-72da, the LAST facility to join SRCS): DEFINE/DELETE/
+#                    GETSCOPE + the read-only-publishable arena. Sole exec_arena
+#                    consumer (exec_kbackend_netbsd.h §10 uvm_km_alloc(WIRED)),
+#                    published read-only via the cdevsw d_mmap in vms_netbsd.c.
 SRCS=(
     "$KMOD/vms_netbsd.c"
+    "$KMOD/vms_lnm_arena_netbsd.c"
     "$KMOD/exec_list_netbsd.c"
     "$KMOD/exec_hash_netbsd.c"
     "$KMOD/exec_rbtree_netbsd.c"
@@ -100,6 +106,7 @@ SRCS=(
     "$CORE/vms_mbx.c"
     "$CORE/vms_proctab.c"
     "$CORE/vms_lock.c"
+    "$CORE/vms_lnm.c"
 )
 
 # ---- teeth check ---------------------------------------------------------
@@ -124,4 +131,11 @@ done
 echo "LD  vms.kmod.o (relocatable)"
 "$CC" -target x86_64-unknown-netbsd -nostdlib -r -o "$OBJ/vms.kmod.o" "$OBJ"/*.c.o
 
-echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c, vms_mbx.c, vms_proctab.c, vms_lock.c) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"
+# Payload-staging guard (rd vms-72da): this gate builds from the REAL src tree,
+# so it cannot catch a file the module needs but the QEMU harness's curated
+# Dockerfile payload forgot to stage. Run the negative control that DOES (it
+# reddened the amd64 executive jobs when vms_lnm_nb.h was unstaged).
+echo "CHK guest-payload staging (tests/netbsd/Dockerfile completeness)"
+OVMX_REPO="$REPO" bash "$REPO/tests/netbsd/check_guest_payload.sh"
+
+echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c, vms_mbx.c, vms_proctab.c, vms_lock.c, vms_lnm.c) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"

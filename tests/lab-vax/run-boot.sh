@@ -233,18 +233,35 @@ build_boot_image_set() {
 #    vmsfs is little-endian on disk, so a host-built vmsfs_master masters a
 #    vax-bootable volume directly.
 master_system_volume() {
-  if [ "${FORCE_SYSVOL_BUILD:-0}" != "1" ] && [ -f "${SYSVOL_IMG}" ]; then
-    log "mastered system volume present -- NOT re-mastering"; return 0; fi
+  # ALWAYS re-master (rd vms-72da). The mastered volume must reflect the CURRENT
+  # staged boot images (stage_sysvol.sh + SYSVOL_IMAGES_DIR). Mastering is cheap
+  # -- build vmsfs_master + stage + master a 64-block volume, seconds -- while the
+  # EXPENSIVE artifacts (the MODULAR kernel, the NetBSD disk, the cross-built
+  # EXEs) are cached separately (build_boot_images self-heals on any missing EXE).
+  # A `-f SYSVOL_IMG' reuse guard here booted a STALE cached volume that predated
+  # PROVISION.EXE joining the staging: the boot passed the DCL.EXE installed-gate
+  # but PROVISION.EXE + OVMXVMSSYS.PAR were "missing", so PID 1 halted at
+  # %OVMX-F-EXECINIT and the LNM/pager code was NEVER reached -- a false green.
   log "mastering the OVMX/NetBSD-vax SYSTEM volume (vmsfs_master + stage_sysvol.sh)"
-  docker run --rm -v "${REPO}:/src:ro" -v "${SYSVOL_IMAGES_DIR}:/images:ro" \
+  rm -f "${SYSVOL_IMG}"
+  listing="$(docker run --rm -v "${REPO}:/src:ro" -v "${SYSVOL_IMAGES_DIR}:/images:ro" \
     -v "$(dirname "${SYSVOL_IMG}"):/out" --entrypoint sh "${CROSS_IMAGE}" -c '
       set -e
       cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
          -I /src/src/kernel/vmsfs -o /tmp/vmsfs_master /src/tools/vmsfs_master.c
       bash /src/tests/lab-vax/stage_sysvol.sh /images /src /tmp/stage
       /tmp/vmsfs_master master /out/'"$(basename "${SYSVOL_IMG}")"' OVMXSYS /tmp/stage 64
-      /tmp/vmsfs_master list /out/'"$(basename "${SYSVOL_IMG}")"
+      /tmp/vmsfs_master list /out/'"$(basename "${SYSVOL_IMG}")")"
+  echo "${listing}"
   [ -f "${SYSVOL_IMG}" ] || die "system-volume mastering did not produce ${SYSVOL_IMG}"
+  # Hard content gate: the mastered volume MUST carry the images PID 1 execs and
+  # the SYSGEN params it reads, so a staging/caching regression fails HERE (red),
+  # never as a lenient boot that halts before PROVISION runs (rd vms-72da).
+  for f in DCL.EXE PROVISION.EXE OVMXVMSSYS.PAR; do
+    echo "${listing}" | grep -qiF "${f}" \
+      || die "mastered system volume is MISSING ${f} -- staging/caching regression (vms-72da)"
+  done
+  log "mastered system volume carries DCL.EXE + PROVISION.EXE + OVMXVMSSYS.PAR"
 }
 
 # 4. ensure the shared NetBSD/vax disk (install once).

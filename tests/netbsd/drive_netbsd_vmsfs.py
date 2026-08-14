@@ -292,7 +292,12 @@ def main():
             log("VMSFS_SKIP_MODLOAD: leaving module unloaded; the mount+read "
                 "assertions below must go RED (teeth)")
         else:
-            rc, out = run(child, "modload /root/ovmx/kmod/vmsfs.kmod && "
+            # IDEMPOTENT (rd vms-3e7): a leading `modunload' drops any module a
+            # lost-marker retry left loaded, so the robust run() can re-issue this
+            # to the deadline under the lossy TCG serial without a second
+            # `modload' failing "already loaded" and reporting a false failure.
+            rc, out = run(child, "modunload vmsfs 2>/dev/null; "
+                          "modload /root/ovmx/kmod/vmsfs.kmod && "
                           "echo MODLOAD_OK", cmd_timeout)
             if "MODLOAD_OK" not in out:
                 log("FAIL: modload of vmsfs.kmod failed")
@@ -300,7 +305,13 @@ def main():
             log("OK: vmsfs.kmod loaded")
 
         # ---- 4. mount READ-ONLY + read HELLO.TXT --------------------------
-        rc, out = run(child, "%s /dev/wd1d /ods2" % MNT, cmd_timeout)
+        # IDEMPOTENT (rd vms-3e7): a leading `umount' clears any mount a
+        # lost-marker retry left behind, so re-issuing the mount cannot fail
+        # "already mounted" and report a false failure. In the module-absent /
+        # VMSFS_SKIP_MODLOAD teeth cases the umount is a harmless no-op and the
+        # mount still fails as it must.
+        rc, out = run(child, "umount /ods2 2>/dev/null; %s /dev/wd1d /ods2" % MNT,
+                      cmd_timeout)
         if "MOUNT_OK" not in out:
             log("FAIL: mounting the mastered ODS-2 volume failed")
             return 22

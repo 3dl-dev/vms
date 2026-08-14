@@ -401,6 +401,75 @@ static void executive_attach(void)
 }
 
 /*
+ * report_kernel_taint() - OVMX taint-audit readout (rd vms-566, epic vms-19e
+ * "owns-kernel").
+ *
+ * After BOTH OVMX kernel modules have loaded -- vms.ko via executive_attach()
+ * and vmsfs.ko via ovmx_boot_load_module("vmsfs") -- read the REAL
+ * /proc/sys/kernel/tainted mask and, IF the boot-flag register (kernel cmdline)
+ * carries the token "ovmx.taintreport", print it as an OVMX-facility line the
+ * taint-clean acceptance gate scrapes (tests/qemu/test_kernel_taint.sh). This is
+ * the GROUND-SOURCE read that gate's numeric bit test keys on (Rule 7): the
+ * actual booted kernel's taint state, after the actual modules loaded -- never a
+ * stubbed value. The two bits the untaint work forbids are named inline:
+ * O = out-of-tree module (bit 12 = 4096, cleared by vms-934's in-tree build) and
+ * E = unsigned module (bit 13 = 8192, cleared by vms-ff5's module signing).
+ *
+ * Gated behind the cmdline flag ON PURPOSE. The normal (faithful) boot console
+ * is pinned to an oracle-derived facility sequence (tests/qemu/
+ * test_boot_conformance.sh and test_job_control_console.sh) and must stay
+ * pristine, so this diagnostic line appears ONLY when a taint audit explicitly
+ * asks for it -- the flag is off on every normal boot. The mask VALUE is real
+ * either way; the flag controls the diagnostic PRINT, not the read. Reading a
+ * boot-flag token here (rather than always printing) is exactly how the boot
+ * seam keeps substrate diagnostics out of the pinned sequence.
+ *
+ * OVMX-facility (Rule 10): VMS never reports a Linux kernel taint mask, so this
+ * is not dressed as a borrowed VMS message -- same class as the %OVMX-W-MODFAIL
+ * / %OVMX-I-EXEC lines this file already prints for Linux-substrate boot steps.
+ */
+static void report_kernel_taint(void)
+{
+    /* Boot-flag register (kernel cmdline): only emit when the audit asked. */
+    FILE *cf = fopen("/proc/cmdline", "r");
+    if (!cf)
+        return;
+    char cmd[1024];
+    size_t clen = fread(cmd, 1, sizeof(cmd) - 1, cf);
+    fclose(cf);
+    cmd[clen] = '\0';
+    if (!strstr(cmd, "ovmx.taintreport"))
+        return;
+
+    FILE *tf = fopen("/proc/sys/kernel/tainted", "r");
+    if (!tf) {
+        printf("%%OVMX-W-TAINT, /proc/sys/kernel/tainted unreadable: %s\n",
+               strerror(errno));
+        return;
+    }
+    /* fread + strtoul, not fscanf -- the same primitives sysboot.c uses to read
+     * the boot-flag register, so this stays within the ovmx_init libc subset on
+     * every substrate (Linux and the NetBSD/VAX SYSKRNL). */
+    char tbuf[64];
+    size_t tlen = fread(tbuf, 1, sizeof(tbuf) - 1, tf);
+    fclose(tf);
+    tbuf[tlen] = '\0';
+    char *end = tbuf;
+    unsigned long mask = strtoul(tbuf, &end, 10);
+    if (end == tbuf) {
+        printf("%%OVMX-W-TAINT, /proc/sys/kernel/tainted did not parse\n");
+        return;
+    }
+
+    /* The gate keys on the numeric mask; the O:/E: text is for the human
+     * reading the console, and names exactly the two forbidden bits. */
+    printf("%%OVMX-I-TAINT, kernel taint mask = %lu (0x%lx)%s%s\n",
+           mask, mask,
+           (mask & 4096UL) ? " O:out-of-tree" : "",
+           (mask & 8192UL) ? " E:unsigned" : "");
+}
+
+/*
  * Bare-metal bootstrap: mount the Linux base layer, set hostname, attach the
  * executive, load vmsfs.ko, and MOUNT THE SYSTEM DISK OR HALT. Called when
  * running as PID 1 on bare metal or QEMU.
@@ -521,6 +590,11 @@ static void bare_metal_init(void)
         }
 
         printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
+
+        /* Both OVMX modules are loaded (vms.ko via executive_attach() above,
+         * vmsfs.ko just before the mount): the taint mask is now final.
+         * Emits ONLY under the ovmx.taintreport boot flag (vms-566). */
+        report_kernel_taint();
         return;
     }
 
@@ -585,6 +659,11 @@ static void bare_metal_init(void)
 
         printf("%%OVMX-I-SYSDISK, mounting system disk DKA0:\n");
         printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
+
+        /* Both OVMX modules are loaded on this path too (vmsfs.ko above,
+         * vms.ko via the executive_attach() just before this block): emit the
+         * taint mask readout, gated on the ovmx.taintreport boot flag (vms-566). */
+        report_kernel_taint();
     }
 
     if (vmsfs_load_failed)

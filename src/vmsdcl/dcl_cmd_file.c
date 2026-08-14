@@ -1490,24 +1490,35 @@ int cmd_delete(struct dcl_command *cmd)
     if (dcl_has_qualifier(cmd, "ENTRY")) {
         const char *entry_str = dcl_qualifier_value(cmd, "ENTRY");
         if (!entry_str || !entry_str[0]) {
-            dcl_error("DCL", 2, "NOENTRY", "missing entry number with /ENTRY");
+            dcl_error("DCL", 0, "INSFPRM",
+                      "missing command parameters - supply all required parameters");
             return SS$_BADPARAM;
         }
         char *endptr;
         long entry_val = strtol(entry_str, &endptr, 10);
         if (endptr == entry_str || *endptr != '\0' || entry_val <= 0) {
-            dcl_error("DCL", 2, "BADENTRY", "invalid entry number - %s", entry_str);
+            dcl_error("OVMX", 2, "IVENTNUM", "invalid entry number - %s", entry_str);
             return SS$_BADPARAM;
         }
         uint32_t entry_id = (uint32_t)entry_val;
         int qsts = ensure_queue_init();
         if (!(qsts & 1)) {
-            dcl_error("DELETE", 2, "QMANERR", "queue manager initialization failed");
+            dcl_error("JBC", 2, "JOBQUEDIS", "system job queue manager is not running");
             return qsts;
         }
         qsts = vmsq_delete_entry(entry_id);
         if (!(qsts & 1)) {
-            dcl_error("DELETE", 2, "ENTNOTFND", "entry %u not found", entry_id);
+            /* Faithful two-line VMS rendering: a DELETE/ENTRY of a nonexistent
+             * entry prints the command-facility primary chained with the JBC
+             * secondary, exactly as the VSI OpenVMS DCL Dictionary DELETE/ENTRY
+             * example shows (see docs/audit-message-idents-vms-916.md):
+             *   %DELETE-W-SEARCHFAIL, error searching for <n>
+             *   -JBC-E-NOSUCHENT, no such entry
+             * The '-' continuation prefix is VMS's, not '%', so it is emitted
+             * directly rather than through dcl_error() (which always writes a
+             * primary '%' line). */
+            dcl_error("DELETE", 0, "SEARCHFAIL", "error searching for %u", entry_id);
+            fprintf(stderr, "-JBC-E-NOSUCHENT, no such entry\n");
             return qsts;
         }
         printf("%%DELETE-S-DELETED, entry %u deleted\n", entry_id);

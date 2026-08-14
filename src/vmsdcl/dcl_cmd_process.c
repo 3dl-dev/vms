@@ -105,6 +105,23 @@ int cmd_wait(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 /*
+ * Queue message idents (vms-916, authenticity Tier-0). The queue/submit
+ * commands below emit REAL VSI OpenVMS message idents from the JBC (Job
+ * Controller / queue) facility, NOT the invented QMANERR/SUBMITERR/PRINTERR/
+ * ENTNOTFND idents that used to sit here. Grounded to public VSI OpenVMS
+ * documentation (clean-room Rule 8); the ident-by-ident table with citations
+ * is docs/audit-message-idents-vms-916.md. Summary:
+ *   queue manager unavailable  -> %JBC-E-JOBQUEDIS, system job queue manager
+ *                                 is not running
+ *   no such queue              -> %JBC-E-NOSUCHQUE, no such queue
+ *   no such queue entry        -> %JBC-E-NOSUCHENT, no such entry
+ *                                 (DELETE/ENTRY chains %DELETE-W-SEARCHFAIL)
+ *   missing required parameter -> %DCL-W-INSFPRM, missing command parameters
+ * Two idents have no VMS-authentic equivalent and are LABELLED OVMX-design so
+ * no reader mistakes them for VMS: %OVMX-E-IVENTNUM (a non-numeric entry value,
+ * which real VMS rejects in the CLD parser OVMX does not reach here) and
+ * %OVMX-E-QUESETERR (an internal queue-state write fault).
+ *
  * Queue initialization helper — ensures QMAN$MASTER.DAT exists and
  * default queues (SYS$BATCH, SYS$PRINT) are created.
  * Called lazily on first queue command.
@@ -156,7 +173,7 @@ int cmd_submit(struct dcl_command *cmd)
 
     int sts = ensure_queue_init();
     if (!(sts & 1)) {
-        dcl_error("SUBMIT", 2, "QMANERR", "queue manager initialization failed");
+        dcl_error("JBC", 2, "JOBQUEDIS", "system job queue manager is not running");
         return sts;
     }
 
@@ -212,8 +229,7 @@ int cmd_submit(struct dcl_command *cmd)
     uint32_t entry_id = 0;
     sts = vmsq_submit(queue_name, upper_name, user, &entry_id);
     if (!(sts & 1)) {
-        dcl_error("SUBMIT", 2, "SUBMITERR", "failed to submit job to queue %s",
-                  queue_name);
+        dcl_error("JBC", 2, "NOSUCHQUE", "no such queue - %s", queue_name);
         return sts;
     }
 
@@ -259,7 +275,7 @@ int cmd_print(struct dcl_command *cmd)
 
     int sts = ensure_queue_init();
     if (!(sts & 1)) {
-        dcl_error("PRINT", 2, "QMANERR", "queue manager initialization failed");
+        dcl_error("JBC", 2, "JOBQUEDIS", "system job queue manager is not running");
         return sts;
     }
 
@@ -305,8 +321,7 @@ int cmd_print(struct dcl_command *cmd)
     uint32_t entry_id = 0;
     sts = vmsq_submit(queue_name, upper_name, user, &entry_id);
     if (!(sts & 1)) {
-        dcl_error("PRINT", 2, "PRINTERR", "failed to queue file to %s",
-                  queue_name);
+        dcl_error("JBC", 2, "NOSUCHQUE", "no such queue - %s", queue_name);
         return sts;
     }
 
@@ -333,7 +348,7 @@ int cmd_show_queue(struct dcl_command *cmd)
 {
     int sts = ensure_queue_init();
     if (!(sts & 1)) {
-        dcl_error("SHOW", 2, "QMANERR", "queue manager initialization failed");
+        dcl_error("JBC", 2, "JOBQUEDIS", "system job queue manager is not running");
         return sts;
     }
 
@@ -350,7 +365,7 @@ int cmd_show_queue(struct dcl_command *cmd)
         struct vms_queue qinfo;
         sts = vmsq_show_queue(queue_name, &qinfo);
         if (!(sts & 1)) {
-            dcl_error("SHOW", 2, "NOSUCHQUE", "no such queue - %s", queue_name);
+            dcl_error("JBC", 2, "NOSUCHQUE", "no such queue - %s", queue_name);
             return sts;
         }
 
@@ -423,20 +438,21 @@ int cmd_set_entry(struct dcl_command *cmd)
 {
     int sts = ensure_queue_init();
     if (!(sts & 1)) {
-        dcl_error("SET", 2, "QMANERR", "queue manager initialization failed");
+        dcl_error("JBC", 2, "JOBQUEDIS", "system job queue manager is not running");
         return sts;
     }
 
     /* Entry number is params[1] (params[0] is "ENTRY") */
     if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
-        dcl_error("SET", 2, "NOENTRY", "missing entry number");
+        dcl_error("DCL", 0, "INSFPRM",
+                  "missing command parameters - supply all required parameters");
         return SS$_BADPARAM;
     }
 
     char *endptr;
     long entry_val = strtol(cmd->params[1], &endptr, 10);
     if (endptr == cmd->params[1] || *endptr != '\0' || entry_val <= 0) {
-        dcl_error("SET", 2, "BADENTRY", "invalid entry number - %s", cmd->params[1]);
+        dcl_error("OVMX", 2, "IVENTNUM", "invalid entry number - %s", cmd->params[1]);
         return SS$_BADPARAM;
     }
     uint32_t entry_id = (uint32_t)entry_val;
@@ -444,14 +460,14 @@ int cmd_set_entry(struct dcl_command *cmd)
     if (dcl_has_qualifier(cmd, "HOLD")) {
         sts = vmsq_hold_entry(entry_id);
         if (!(sts & 1)) {
-            dcl_error("SET", 2, "ENTNOTFND", "entry %u not found", entry_id);
+            dcl_error("JBC", 2, "NOSUCHENT", "no such entry");
             return sts;
         }
         printf("%%SET-S-MODIFIED, entry %u set to HOLD\n", entry_id);
     } else if (dcl_has_qualifier(cmd, "RELEASE")) {
         sts = vmsq_release_entry(entry_id);
         if (!(sts & 1)) {
-            dcl_error("SET", 2, "ENTNOTFND", "entry %u not found", entry_id);
+            dcl_error("JBC", 2, "NOSUCHENT", "no such entry");
             return sts;
         }
         printf("%%SET-S-MODIFIED, entry %u released\n", entry_id);
@@ -473,7 +489,7 @@ int cmd_show_entry(struct dcl_command *cmd)
 {
     int sts = ensure_queue_init();
     if (!(sts & 1)) {
-        dcl_error("SHOW", 2, "QMANERR", "queue manager initialization failed");
+        dcl_error("JBC", 2, "JOBQUEDIS", "system job queue manager is not running");
         return sts;
     }
 
@@ -486,7 +502,7 @@ int cmd_show_entry(struct dcl_command *cmd)
         char *endptr;
         long entry_val = strtol(cmd->params[1], &endptr, 10);
         if (endptr == cmd->params[1] || *endptr != '\0' || entry_val <= 0) {
-            dcl_error("SHOW", 2, "BADENTRY", "invalid entry number - %s",
+            dcl_error("OVMX", 2, "IVENTNUM", "invalid entry number - %s",
                       cmd->params[1]);
             return SS$_BADPARAM;
         }
@@ -495,7 +511,7 @@ int cmd_show_entry(struct dcl_command *cmd)
         struct vms_queue_entry entry;
         sts = vmsq_show_entry(entry_id, &entry);
         if (!(sts & 1)) {
-            dcl_error("SHOW", 2, "ENTNOTFND", "entry %u not found", entry_id);
+            dcl_error("JBC", 2, "NOSUCHENT", "no such entry");
             return sts;
         }
 
@@ -579,13 +595,14 @@ int cmd_set_queue(struct dcl_command *cmd)
 {
     int sts = ensure_queue_init();
     if (!(sts & 1)) {
-        dcl_error("SET", 2, "QMANERR", "queue manager initialization failed");
+        dcl_error("JBC", 2, "JOBQUEDIS", "system job queue manager is not running");
         return sts;
     }
 
     /* Queue name is params[1] (params[0] is "QUEUE") */
     if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
-        dcl_error("SET", 2, "NOQUNAM", "missing queue name");
+        dcl_error("DCL", 0, "INSFPRM",
+                  "missing command parameters - supply all required parameters");
         return SS$_BADPARAM;
     }
 
@@ -595,28 +612,28 @@ int cmd_set_queue(struct dcl_command *cmd)
     struct vms_queue qinfo;
     sts = vmsq_show_queue(queue_name, &qinfo);
     if (!(sts & 1)) {
-        dcl_error("SET", 2, "NOSUCHQUE", "no such queue - %s", queue_name);
+        dcl_error("JBC", 2, "NOSUCHQUE", "no such queue - %s", queue_name);
         return sts;
     }
 
     if (dcl_has_qualifier(cmd, "STOP")) {
         sts = vmsq_set_queue_status(queue_name, VMSQ_STATUS_STOPPED);
         if (!(sts & 1)) {
-            dcl_error("SET", 2, "QMANERR", "failed to stop queue %s", queue_name);
+            dcl_error("OVMX", 2, "QUESETERR", "failed to stop queue %s", queue_name);
             return sts;
         }
         printf("%%SET-S-QUEMOD, queue %s stopped\n", queue_name);
     } else if (dcl_has_qualifier(cmd, "START")) {
         sts = vmsq_set_queue_status(queue_name, VMSQ_STATUS_STARTED);
         if (!(sts & 1)) {
-            dcl_error("SET", 2, "QMANERR", "failed to start queue %s", queue_name);
+            dcl_error("OVMX", 2, "QUESETERR", "failed to start queue %s", queue_name);
             return sts;
         }
         printf("%%SET-S-QUEMOD, queue %s started\n", queue_name);
     } else if (dcl_has_qualifier(cmd, "PAUSE")) {
         sts = vmsq_set_queue_status(queue_name, VMSQ_STATUS_PAUSED);
         if (!(sts & 1)) {
-            dcl_error("SET", 2, "QMANERR", "failed to pause queue %s", queue_name);
+            dcl_error("OVMX", 2, "QUESETERR", "failed to pause queue %s", queue_name);
             return sts;
         }
         printf("%%SET-S-QUEMOD, queue %s paused\n", queue_name);

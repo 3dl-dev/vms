@@ -709,6 +709,24 @@ struct vms_device {
     uint32_t            backing_minor;
 
     /*
+     * Ethernet backing (devclass == DC$_SCOM, vms-9d2). The host network
+     * interface this LAN unit (ETH0:) was enumerated from at module init --
+     * "eth0", "enp0s1", whatever the host names its primary non-loopback
+     * Ethernet net device, sourced through the GENERIC netdev abstraction so it
+     * is driver-agnostic (virtio-net in the QEMU runtime, e1000, a real NIC on
+     * bare metal all land the same way). link_up is the carrier state observed
+     * at enumeration. Empty/zero for every non-Ethernet device.
+     *
+     * NEVER SURFACED TO A VMS PROGRAM (INV-4). Unlike `backing` above (which a
+     * process reads via vms_ioctl_disk_resolve to MOUNT a disk), there is no
+     * ioctl that hands `netif` back: it is the executive's own record of which
+     * real interface ETH0: fronts, for the IP stack layered over it later
+     * (vms-527) to bind to. A VMS program sees ETH0:, never "eth0".
+     */
+    char                netif[VMS_NETIF_SIZE];
+    uint32_t            link_up;
+
+    /*
      * Every channel currently assigned to this device, by any process.
      * The device has to know this to decide when implicit ownership
      * ends: it ends when the owner has no channel left, not when any

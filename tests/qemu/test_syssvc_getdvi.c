@@ -185,6 +185,18 @@ int main(void)
     CHECK(gst == SS$_NORMAL && devclass == DC$_TERM,
           "this process can still read the device");
 
+    /* The NIC device face ETH0: (vms-9d2, epic vms-67f L0): the PUBLIC
+     * sys$getdvi resolves it in the executive table and reports the LAN device
+     * class DC$_SCOM. The guest has one virtio-net NIC (run_tests.sh); the
+     * executive enters ETH0: from it through the generic netdev abstraction, so
+     * a program that never touched DCL reads the same class SHOW DEVICE would.
+     * Keyed on the single name constant in src/kernel-core/vms_devtab.c
+     * (VMS_NIC_DEVNAM). */
+    uint32_t ewclass = 0;
+    uint32_t ewst = getdvi_l("ETH0:", (uint16_t)DVI$_DEVCLASS, &ewclass);
+    CHECK(ewst == SS$_NORMAL && ewclass == DC$_SCOM,
+          "sys$getdvi ETH0: returns the LAN device class (DC$_SCOM)");
+
     /* A device the executive does not have is refused, not fabricated. (This
      * assertion holds in every rig -- ZZA0: is never a real row -- so it is
      * anchored to no defect: nothing can make it go red, and that is fine.) */

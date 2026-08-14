@@ -338,6 +338,32 @@
  *   facility never names struct vm_area_struct, remap_vmalloc_range, VM_* or
  *   PAGE_* (design record docs/design-netbsd-executive-core.md §2, the
  *   host-mm coupling stays in the rind like registration does).
+ *
+ * 11. Primary Ethernet net device  (vms-9d2; called ONLY from the device table,
+ *    which surfaces the node's primary Ethernet controller as the VMS device
+ *    ETH0:). The block-layer seam's network twin: a small set of host
+ *    PRIMITIVES, no container, so it lands here rather than in a container-style
+ *    header. NIC-AGNOSTIC BY CONSTRUCTION (operator, 2026-08-14): the executive
+ *    names NO driver -- it asks the host for its primary non-loopback Ethernet
+ *    net device through the GENERIC netdev abstraction, so ETH0: backs whatever
+ *    that device happens to be (virtio-net in the QEMU runtime, e1000, a real
+ *    NIC on bare metal) with no code path keyed on any one driver. The interface
+ *    NAME the host uses (eth0/enp0s1/...) is a host detail the executive records
+ *    for its own binding and NEVER surfaces to a VMS program (INV-4).
+ *
+ *   int exec_netdev_primary(char *name, unsigned int namesz, int *link_up)
+ *        find the host's PRIMARY (first, in kernel enumeration order)
+ *        non-loopback Ethernet net device. Returns 0 and, when name/namesz are
+ *        given, copies the host interface name (NUL-terminated, truncated to
+ *        namesz-1) and sets *link_up (nonzero iff the carrier is up) when one
+ *        exists; returns nonzero when the node has NO such device -- the honest
+ *        "no NIC" case, in which the executive registers no ETH0: at all (INV-6:
+ *        no fake device for a NIC that is not there). Linux: for_each_netdev over
+ *        init_net under rtnl_lock, skipping IFF_LOOPBACK and requiring
+ *        ARPHRD_ETHER, taking the first match. NetBSD: the documented
+ *        contract-only twin until devtab joins the NetBSD module's SRCS
+ *        (following the exec_blockdev precedent -- type-checked, never run, and
+ *        names its real source in the backend comment).
  */
 
 #ifndef OVMX_EXEC_KBACKEND_H

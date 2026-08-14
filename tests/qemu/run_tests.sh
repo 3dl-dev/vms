@@ -63,6 +63,17 @@ OVMX_DISK1=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 truncate -s 16M "$OVMX_DISK0" "$OVMX_DISK1"
 trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1"' EXIT
 
+# One virtio-net NIC (vms-9d2). Exactly as the two virtio disks above give the
+# executive real block devices to enumerate into DK units, this gives it a real
+# Ethernet net device to enumerate into the VMS device ETH0: -- test_kmod_devtab
+# / test_syssvc_getdvi / test_syssvc_showdev assert ETH0: against a real vms.ko,
+# so the guest must actually HAVE a NIC. Added to the QEMU line below as
+# -netdev user (SLIRP, zero host config, unprivileged/CI-safe) + a
+# virtio-net-pci device with romfile= to suppress the PXE ROM (no boot pause),
+# the same pair distro/boot/run-qemu.sh ships (vms-7bd). The executive sources
+# the device through the GENERIC netdev abstraction, so virtio-net here stands in
+# for whatever NIC a real deployment has -- the code path is driver-agnostic.
+
 # Select QEMU binary and machine config based on architecture
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
     QEMU=qemu-system-aarch64
@@ -108,7 +119,8 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -m 256M \
     -no-reboot \
     -smp 1 \
-    -nic none \
+    -netdev user,id=net0 \
+    -device virtio-net-pci,netdev=net0,romfile= \
     -nodefaults \
     -serial stdio \
     "${SECOND_SERIAL[@]}" \

@@ -1,28 +1,27 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * vms_bgsock.c - OVMX BSD-sockets RTL veneer over BGn: (DECC$SOCKET-equivalent).
- * See vms_bgsock.h for the layering, the pollable-fd model, and the Rule 9 /
- * INV-6 honest-failure contract.
+ * See vms_bgsock.h for the layering, the full-duplex blocking model, and the
+ * Rule 9 / INV-6 honest-failure contract.
  *
- * The connect/read/write framing mirrors the already-proven
- * src/vmstcpip/services/tcpip_client.h (vms-527 / vms-dbb): $ASSIGN a channel to
- * TCPIP$DEVICE:, IO$_SETMODE to create the executive socket, IO$_ACCESS to
- * connect, then IO$_WRITEVBLK / IO$_READVBLK to move bytes, IO$_DEACCESS +
- * $DASSGN to close. The veneer adds the sockets-API surface + the pollable-fd
- * bridge (a socketpair the pump threads drive) so the application uses ordinary
- * socket()/connect()/read()/write()/poll().
+ * Each sockets call becomes ONE public $ASSIGN/$QIO/$DASSGN op, exactly as
+ * src/vmstcpip/services/tcpip_client.h and test_syssvc_bg_echo.c do -- there is
+ * no userspace socket stack. ovmx_send()/ovmx_recv() each do a single BLOCKING
+ * $QIO; the executive supports a blocking read and a blocking write outstanding
+ * at once on one channel (no lock is held across the socket op at any layer, and
+ * the host kernel socket is full-duplex), so an app can read and write the same
+ * connection concurrently from two threads.
  */
 
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <stdint.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-/* OVMX system-service surface (src/libvms/include) -- the same headers
+/* OVMX system-service surface (src/libvms/include) -- the same public services
  * tcpip_client.h speaks; no kernel header, no userspace socket stack. */
 #include "starlet.h"
 #include "descrip.h"
@@ -47,136 +46,66 @@ struct bg_sockaddr_in {
 };
 
 /* ---- veneer socket table ---------------------------------------------------
- * Maps an app-visible fd (the socketpair end handed out) to its BGn: channel +
- * pump state. Small fixed table under a mutex -- a client process holds a
- * handful of sockets. */
+ * Maps an OVMX socket handle to its $ASSIGN channel. A blocking send and a
+ * blocking recv on the SAME handle run concurrently from two threads: they read
+ * only the immutable `chan` here and then each block in its own $QIO, so no lock
+ * is held across the executive op (the table lock guards only alloc/find/free). */
 struct bg_sock {
-    int             in_use;
-    int             app_fd;     /* fd handed to the app (socketpair[0]) */
-    int             int_fd;     /* internal end the pumps drive (socketpair[1]) */
-    uint16_t        chan;       /* $ASSIGN channel */
-    int             connected;  /* IO$_ACCESS succeeded, pumps running */
-    pthread_t       t_out, t_in;
-    pthread_mutex_t lock;       /* guards refs/closed for the two pumps */
-    int             refs;       /* live pump threads */
-    int             closed;     /* channel already released */
+    int      in_use;
+    uint16_t chan;              /* $ASSIGN channel (sys$ channel number) */
+    int      connected;         /* IO$_ACCESS succeeded */
 };
 
 #define BG_SOCK_MAX 64
 static struct bg_sock g_socks[BG_SOCK_MAX];
 static pthread_mutex_t g_socks_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static struct bg_sock *sock_find(int app_fd)
+/* handle <-> table index */
+static int idx_of(int s)
 {
-    struct bg_sock *s = NULL;
-    int i;
-    pthread_mutex_lock(&g_socks_lock);
-    for (i = 0; i < BG_SOCK_MAX; i++) {
-        if (g_socks[i].in_use && g_socks[i].app_fd == app_fd) {
-            s = &g_socks[i];
-            break;
-        }
-    }
-    pthread_mutex_unlock(&g_socks_lock);
-    return s;
+    int i = s - OVMX_BGSOCK_BASE;
+    return (i >= 0 && i < BG_SOCK_MAX) ? i : -1;
 }
 
-static struct bg_sock *sock_alloc(void)
+static struct bg_sock *sock_get(int s)
 {
-    struct bg_sock *s = NULL;
-    int i;
+    int i = idx_of(s);
+    struct bg_sock *p = NULL;
+    if (i < 0)
+        return NULL;
+    pthread_mutex_lock(&g_socks_lock);
+    if (g_socks[i].in_use)
+        p = &g_socks[i];
+    pthread_mutex_unlock(&g_socks_lock);
+    return p;
+}
+
+/* Allocate a table slot; returns the handle (>= OVMX_BGSOCK_BASE) or -1. */
+static int sock_alloc(uint16_t chan)
+{
+    int i, handle = -1;
     pthread_mutex_lock(&g_socks_lock);
     for (i = 0; i < BG_SOCK_MAX; i++) {
         if (!g_socks[i].in_use) {
-            s = &g_socks[i];
-            memset(s, 0, sizeof(*s));
-            s->in_use = 1;
-            pthread_mutex_init(&s->lock, NULL);
+            g_socks[i].in_use    = 1;
+            g_socks[i].chan      = chan;
+            g_socks[i].connected = 0;
+            handle = OVMX_BGSOCK_BASE + i;
             break;
         }
     }
     pthread_mutex_unlock(&g_socks_lock);
-    return s;
+    return handle;
 }
 
-static void sock_free(struct bg_sock *s)
+static void sock_release(int s)
 {
+    int i = idx_of(s);
+    if (i < 0)
+        return;
     pthread_mutex_lock(&g_socks_lock);
-    pthread_mutex_destroy(&s->lock);
-    memset(s, 0, sizeof(*s));   /* clears in_use */
+    memset(&g_socks[i], 0, sizeof(g_socks[i]));
     pthread_mutex_unlock(&g_socks_lock);
-}
-
-/* Release one pump ref; the last one out IO$_DEACCESS + $DASSGNs the channel. */
-static void pump_release(struct bg_sock *s)
-{
-    int last;
-    pthread_mutex_lock(&s->lock);
-    last = (--s->refs == 0);
-    if (last && !s->closed) {
-        struct _iosb iosb;
-        sys$qiow(0, s->chan, IO$_DEACCESS, &iosb, 0, 0, 0, 0, 0, 0, 0, 0);
-        sys$dassgn(s->chan);
-        s->closed = 1;
-    }
-    pthread_mutex_unlock(&s->lock);
-}
-
-/* app -> wire: read from the socketpair, IO$_WRITEVBLK to the BGn: channel. */
-static void *pump_out(void *arg)
-{
-    struct bg_sock *s = arg;
-    unsigned char buf[OVMX_BG_XFER_MAX];
-    for (;;) {
-        ssize_t n = read(s->int_fd, buf, sizeof(buf));
-        uint32_t off = 0;
-        if (n <= 0)
-            break;
-        while (off < (uint32_t)n) {
-            struct _iosb iosb;
-            uint32_t chunk = (uint32_t)n - off;
-            uint32_t st;
-            if (chunk > OVMX_BG_XFER_MAX)
-                chunk = OVMX_BG_XFER_MAX;
-            st = sys$qiow(0, s->chan, IO$_WRITEVBLK, &iosb, 0, 0,
-                          buf + off, chunk, 0, 0, 0, 0);
-            if (!(st & 1) || iosb.iosb$w_bcnt == 0)
-                goto done;
-            off += iosb.iosb$w_bcnt;
-        }
-    }
-done:
-    shutdown(s->int_fd, SHUT_RDWR);
-    pump_release(s);
-    return NULL;
-}
-
-/* wire -> app: IO$_READVBLK off the channel, write into the socketpair. */
-static void *pump_in(void *arg)
-{
-    struct bg_sock *s = arg;
-    unsigned char buf[OVMX_BG_XFER_MAX];
-    for (;;) {
-        struct _iosb iosb;
-        uint32_t st = sys$qiow(0, s->chan, IO$_READVBLK, &iosb, 0, 0,
-                               buf, sizeof(buf), 0, 0, 0, 0);
-        uint32_t got, off = 0;
-        if (!(st & 1))
-            break;
-        got = iosb.iosb$w_bcnt;         /* NEGCTL bgsock-recv-length-zeroed */
-        if (got == 0)
-            break;                      /* EOF */
-        while (off < got) {
-            ssize_t w = write(s->int_fd, buf + off, got - off);
-            if (w <= 0)
-                goto done;
-            off += (uint32_t)w;
-        }
-    }
-done:
-    shutdown(s->int_fd, SHUT_RDWR);
-    pump_release(s);
-    return NULL;
 }
 
 static int bg_status_to_errno(uint32_t st)
@@ -190,11 +119,10 @@ int ovmx_socket(int domain, int type, int protocol)
 {
     static const char devname[] = "TCPIP$DEVICE:";
     struct dsc$descriptor_s dev;
-    struct bg_sock *s;
     struct _iosb iosb;
-    int sv[2] = { -1, -1 };
     uint16_t chan = 0;
     uint32_t st;
+    int handle;
 
     if (domain != AF_INET) { errno = EAFNOSUPPORT; return -1; }
     if (type != SOCK_STREAM) { errno = EPROTOTYPE; return -1; }
@@ -207,8 +135,8 @@ int ovmx_socket(int domain, int type, int protocol)
     dev.dsc$b_class   = DSC$K_CLASS_S;
     dev.dsc$a_pointer = (char *)devname;
 
-    /* $ASSIGN TCPIP$DEVICE: -- SS$_NOSUCHDEV here means no /dev/vms; fail
-     * honestly, never a raw socket() fallback (INV-6). */
+    /* $ASSIGN TCPIP$DEVICE: -- SS$_NOSUCHDEV means no /dev/vms; fail honestly,
+     * never a raw socket() fallback (INV-6). */
     st = sys$assign(&dev, &chan, 0, 0);
     if (!(st & 1)) { errno = bg_status_to_errno(st); return -1; }
 
@@ -216,132 +144,122 @@ int ovmx_socket(int domain, int type, int protocol)
     st = sys$qiow(0, chan, IO$_SETMODE, &iosb, 0, 0, 0, 0, 0, 0, 0, 0);
     if (!(st & 1)) { errno = bg_status_to_errno(st); sys$dassgn(chan); return -1; }
 
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
-        int e = errno;
-        sys$dassgn(chan);
-        errno = e;
-        return -1;
-    }
-
-    s = sock_alloc();
-    if (s == NULL) {
-        close(sv[0]); close(sv[1]);
-        sys$dassgn(chan);
-        errno = EMFILE;
-        return -1;
-    }
-    s->app_fd    = sv[0];
-    s->int_fd    = sv[1];
-    s->chan      = chan;
-    s->connected = 0;
-    return sv[0];
+    handle = sock_alloc(chan);
+    if (handle < 0) { sys$dassgn(chan); errno = EMFILE; return -1; }
+    return handle;
 }
 
-int ovmx_connect(int fd, const struct sockaddr *addr, socklen_t addrlen)
+int ovmx_connect(int s, const struct sockaddr *addr, socklen_t addrlen)
 {
-    struct bg_sock *s = sock_find(fd);
+    struct bg_sock *p = sock_get(s);
     const struct sockaddr_in *sin = (const struct sockaddr_in *)addr;
     struct bg_sockaddr_in bsa;
     struct _iosb iosb;
     uint32_t st;
 
-    if (s == NULL) { errno = EBADF; return -1; }
-    if (s->connected) { errno = EISCONN; return -1; }
+    if (p == NULL) { errno = EBADF; return -1; }
+    if (p->connected) { errno = EISCONN; return -1; }
     if (addr == NULL || (size_t)addrlen < sizeof(*sin) ||
         addr->sa_family != AF_INET) {
         errno = EAFNOSUPPORT; return -1;
     }
 
-    /* IO$_ACCESS connects (network-order port + addr, straight from sockaddr). */
     bsa.family = 2;                     /* AF_INET as the driver expects */
     bsa.port   = sin->sin_port;         /* already network order */
     bsa.addr   = sin->sin_addr.s_addr;  /* already network order */
-    st = sys$qiow(0, s->chan, IO$_ACCESS, &iosb, 0, 0,
+    st = sys$qiow(0, p->chan, IO$_ACCESS, &iosb, 0, 0,
                   &bsa, (uint32_t)sizeof(bsa), 0, 0, 0, 0);
     if (!(st & 1)) { errno = bg_status_to_errno(st); return -1; }
 
-    /* Start the pumps: refs=2, one per direction; last one out releases. */
-    pthread_mutex_lock(&s->lock);
-    s->refs = 1;
-    pthread_mutex_unlock(&s->lock);
-    if (pthread_create(&s->t_out, NULL, pump_out, s) != 0) {
-        pthread_mutex_lock(&s->lock); s->refs = 0; pthread_mutex_unlock(&s->lock);
-        errno = EIO; return -1;
-    }
-    pthread_mutex_lock(&s->lock);
-    s->refs = 2;
-    pthread_mutex_unlock(&s->lock);
-    if (pthread_create(&s->t_in, NULL, pump_in, s) != 0) {
-        /* t_out owns the channel now; drop our ref + shut the pipe so it exits. */
-        pthread_mutex_lock(&s->lock); s->refs = 1; pthread_mutex_unlock(&s->lock);
-        shutdown(s->int_fd, SHUT_RDWR);
-        pthread_join(s->t_out, NULL);
-        errno = EIO;
-        return -1;
-    }
-    pthread_detach(s->t_out);
-    pthread_detach(s->t_in);
-    s->connected = 1;
+    p->connected = 1;
     return 0;
+}
+
+ssize_t ovmx_send(int s, const void *buf, size_t len, int flags)
+{
+    struct bg_sock *p = sock_get(s);
+    const unsigned char *b = buf;
+    size_t off = 0;
+    (void)flags;
+
+    if (p == NULL) { errno = EBADF; return -1; }
+    if (buf == NULL) { errno = EFAULT; return -1; }
+
+    /* Send the whole buffer, chunked to the driver's per-QIO cap. Each chunk is
+     * one BLOCKING IO$_WRITEVBLK -- safe to run while another thread blocks in
+     * ovmx_recv on this same handle (full-duplex). */
+    while (off < len) {
+        struct _iosb iosb;
+        uint32_t chunk = (uint32_t)(len - off);
+        uint32_t st;
+        if (chunk > OVMX_BG_XFER_MAX)
+            chunk = OVMX_BG_XFER_MAX;
+        st = sys$qiow(0, p->chan, IO$_WRITEVBLK, &iosb, 0, 0,
+                      (void *)(b + off), chunk, 0, 0, 0, 0);
+        if (!(st & 1)) { errno = bg_status_to_errno(st); return (off ? (ssize_t)off : -1); }
+        if (iosb.iosb$w_bcnt == 0)
+            break;                      /* wrote nothing -- treat as done */
+        off += iosb.iosb$w_bcnt;
+    }
+    return (ssize_t)off;
+}
+
+ssize_t ovmx_recv(int s, void *buf, size_t len, int flags)
+{
+    struct bg_sock *p = sock_get(s);
+    struct _iosb iosb;
+    uint32_t bufsz, st;
+    ssize_t n;
+    (void)flags;
+
+    if (p == NULL) { errno = EBADF; return -1; }
+    if (buf == NULL) { errno = EFAULT; return -1; }
+
+    bufsz = (len > OVMX_BG_XFER_MAX) ? OVMX_BG_XFER_MAX : (uint32_t)len;
+
+    /* One BLOCKING IO$_READVBLK. Returns 0 on an orderly peer close (EOF). */
+    st = sys$qiow(0, p->chan, IO$_READVBLK, &iosb, 0, 0,
+                  buf, bufsz, 0, 0, 0, 0);
+    if (!(st & 1)) { errno = bg_status_to_errno(st); return -1; }
+    n = iosb.iosb$w_bcnt;               /* NEGCTL bgsock-recv-length-zeroed */
+    return n;
 }
 
 /* SERVER path: needs the BGn: bind/listen/accept executive path (vms-698).
  * Honest ENOSYS until then -- never a userspace fake (Rule 9 / INV-6). */
-int ovmx_bind(int fd, const struct sockaddr *addr, socklen_t addrlen)
+int ovmx_bind(int s, const struct sockaddr *addr, socklen_t addrlen)
 {
-    (void)fd; (void)addr; (void)addrlen; errno = ENOSYS; return -1;
+    (void)s; (void)addr; (void)addrlen; errno = ENOSYS; return -1;
 }
-int ovmx_listen(int fd, int backlog)
+int ovmx_listen(int s, int backlog)
 {
-    (void)fd; (void)backlog; errno = ENOSYS; return -1;
+    (void)s; (void)backlog; errno = ENOSYS; return -1;
 }
-int ovmx_accept(int fd, struct sockaddr *addr, socklen_t *addrlen)
+int ovmx_accept(int s, struct sockaddr *addr, socklen_t *addrlen)
 {
-    (void)fd; (void)addr; (void)addrlen; errno = ENOSYS; return -1;
-}
-
-ssize_t ovmx_send(int fd, const void *buf, size_t len, int flags)
-{
-    (void)flags;
-    return write(fd, buf, len);         /* pump does the IO$_WRITEVBLK */
-}
-ssize_t ovmx_recv(int fd, void *buf, size_t len, int flags)
-{
-    (void)flags;
-    return read(fd, buf, len);          /* pump does the IO$_READVBLK */
+    (void)s; (void)addr; (void)addrlen; errno = ENOSYS; return -1;
 }
 
-int ovmx_shutdown(int fd, int how)
+int ovmx_shutdown(int s, int how)
 {
-    struct bg_sock *s = sock_find(fd);
-    if (s == NULL) { errno = EBADF; return -1; }
-    /* Half-close the app end toward the pumps; the wire is torn down when the
-     * pumps see EOF, which IO$_DEACCESSes the channel. */
-    return shutdown(s->app_fd, how);
+    struct bg_sock *p = sock_get(s);
+    struct _iosb iosb;
+    (void)how;
+    if (p == NULL) { errno = EBADF; return -1; }
+    if (p->connected)
+        sys$qiow(0, p->chan, IO$_DEACCESS, &iosb, 0, 0, 0, 0, 0, 0, 0, 0);
+    return 0;
 }
 
-int ovmx_socket_close(int fd)
+int ovmx_socket_close(int s)
 {
-    struct bg_sock *s = sock_find(fd);
-    if (s == NULL) {
-        /* Not a veneer fd -- behave like close() so callers can use it
-         * uniformly. */
-        return close(fd);
-    }
-    /* Closing the app fd makes pump_out's read() return EOF; the pumps then
-     * IO$_DEACCESS + $DASSGN the channel (last one out). If never connected,
-     * release the channel here. */
-    close(s->app_fd);
-    pthread_mutex_lock(&s->lock);
-    if (!s->connected && !s->closed) {
-        struct _iosb iosb;
-        sys$qiow(0, s->chan, IO$_DEACCESS, &iosb, 0, 0, 0, 0, 0, 0, 0, 0);
-        sys$dassgn(s->chan);
-        s->closed = 1;
-        close(s->int_fd);
-    }
-    pthread_mutex_unlock(&s->lock);
-    sock_free(s);
+    struct bg_sock *p = sock_get(s);
+    struct _iosb iosb;
+    if (p == NULL) { errno = EBADF; return -1; }
+    if (p->connected)
+        sys$qiow(0, p->chan, IO$_DEACCESS, &iosb, 0, 0, 0, 0, 0, 0, 0, 0);
+    sys$dassgn(p->chan);
+    sock_release(s);
     return 0;
 }
 

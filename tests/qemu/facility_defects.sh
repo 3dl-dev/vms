@@ -511,6 +511,7 @@ sysuaf-uic-radix-decimal
 sysuaf-uic-writeback-decimal
 bg-recv-length-zeroed
 tcpip-ftp-get-length-dropped
+bgsock-recv-length-zeroed
 vmsfs-mountvis-crossproc-resolve-disabled
 initialize-home-magic-not-written"
 
@@ -5394,6 +5395,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    bgsock-recv-length-zeroed)
+        case "$_f" in
+        facility)     echo "BSD-sockets RTL veneer over BGn: -- the ovmx_recv() receive path of the OVMX sockets veneer (src/vmstcpip/sockets/vms_bgsock.c, vms-22a prereq), the DECC\$SOCKET-equivalent middle layer between an application's standard socket()/send()/recv() and the executive-resident BGn: driver. The app speaks ONLY sockets; the veneer translates them into the public \$ASSIGN TCPIP\$DEVICE: + \$QIO ops. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive (ovmx_socket -> ENODEV).";;
+        targets)      echo "vmstcpip/sockets/vms_bgsock.c";;
+        suites_red)   echo "test_syssvc_bgsock_echo";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ovmx_recv() does one blocking IO\$_READVBLK and returns the IOSB byte count. The mutation zeroes it ('n = iosb\$w_bcnt;' -> 'n = 0;'), so recv reports EOF (0) and the reader thread receives nothing while the send, connect and socket-open all stay green -- only the byte-exact full-duplex echo assertion reddens. One assignment zeroed.";;
+        require_fail) cat <<'EOF'
+the reader thread received the echoed message BYTE-EXACT concurrently with the send (full-duplex)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     # -------------------------------------------------------------------
     # vms-6c6: two suites #284/#272 (vms-8b6, vms-cf62) left with NO
     # per-facility negative control -- the same coverage-gate hole
@@ -6270,6 +6288,14 @@ apply_edit() {
         # range anchor is needed; after substitution no 'total += take;' is left,
         # making a second apply the no-op the selftest requires.
         sed -i 's|total += take;          /\* NEGCTL tcpip-ftp-get-length-dropped \*/|total += 0; /* NEGCTL tcpip-ftp-get-length-dropped */|' "$_file";;
+
+    bgsock-recv-length-zeroed)
+        # Zero the received byte count in ovmx_recv(), anchored on its own NEGCTL
+        # comment so the text is unique: 'n = iosb$w_bcnt;' -> 'n = 0;'. recv then
+        # reports EOF and the reader gets nothing. After substitution no
+        # 'n = iosb$w_bcnt;' with that comment is left, so a second apply is the
+        # no-op the selftest requires.
+        sed -i 's|n = iosb.iosb$w_bcnt;               /\* NEGCTL bgsock-recv-length-zeroed \*/|n = 0; /* NEGCTL bgsock-recv-length-zeroed */|' "$_file";;
 
     vmsfs-mountvis-crossproc-resolve-disabled)
         # UNIQUE TEXT: vmsfs_device_resolve_executive's own /proc/mounts guard;

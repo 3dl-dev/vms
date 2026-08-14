@@ -75,7 +75,6 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <pthread.h>
-#include <poll.h>
 #include <errno.h>
 #include <fcntl.h>
 
@@ -112,16 +111,43 @@ static int       g_writer_up   = 0;
  * into the output pipe, it calls dcl_mbx_output_drain_sync(), which blocks until
  * the writer thread has pushed every byte then in the pipe out through the real
  * mailbox path -- so the prompt is fully emitted before DCL issues the read that
- * arms the tty echo. A self-pipe wakes the writer out of poll() to acknowledge;
- * the writer's normal job (drain pipe -> mailbox) is otherwise unchanged, so the
- * MMK persistent-subprocess path is unaffected.
+ * arms the tty echo.
+ *
+ * HOW THE BARRIER KNOWS THE PIPE IS DRAINED, WITHOUT poll(). The writer reads a
+ * blocking first byte, then drains the rest with non-blocking reads until EAGAIN
+ * (the pipe is momentarily empty), then bumps a monotonic g_drain_epoch under
+ * g_out_mtx. Reaching EAGAIN is only possible once every byte written before it
+ * -- FIFO, single reader -- has been pushed to the mailbox. dcl_mbx_output_drain_sync()
+ * snapshots the epoch AFTER the caller fflush()ed the prompt into the pipe and
+ * waits for it to advance: the next EAGAIN necessarily happens after the prompt
+ * entered the pipe (the writer cannot see an empty pipe without first reading the
+ * prompt), so the advance proves the prompt reached the mailbox. The prompt bytes
+ * themselves guarantee the epoch will advance, so there is no wait-forever case.
+ * Only fcntl()/read()/pthread -- all already DECC$SHR universals -- are used; no
+ * poll()/select(), so the VMS-native LINK.EXE graph resolves.
  */
-static int             g_wake_r    = -1;  /* drain-request self-pipe (read end) */
-static int             g_wake_w    = -1;  /* drain-request self-pipe (write end) */
-static pthread_mutex_t g_out_mtx   = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  g_out_cv    = PTHREAD_COND_INITIALIZER;
-static int             g_drain_req = 0;    /* incremented by a drain requester */
-static int             g_drain_ack = 0;    /* writer sets == req once drained    */
+static pthread_mutex_t g_out_mtx     = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_out_cv      = PTHREAD_COND_INITIALIZER;
+static uint64_t        g_drain_epoch = 0;   /* ++ each time the writer drains to empty */
+
+/* Toggle O_NONBLOCK on a fd (fcntl is a DECC$SHR universal; poll is not). */
+static void set_nonblock(int fd, int on)
+{
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl < 0)
+        return;
+    int nf = on ? (fl | O_NONBLOCK) : (fl & ~O_NONBLOCK);
+    (void)fcntl(fd, F_SETFL, nf);
+}
+
+/* Bump the drain epoch and wake any waiter (called when the pipe hits empty). */
+static void publish_drained(void)
+{
+    pthread_mutex_lock(&g_out_mtx);
+    g_drain_epoch++;
+    pthread_cond_broadcast(&g_out_cv);
+    pthread_mutex_unlock(&g_out_mtx);
+}
 
 /*
  * The writer's sink. Production writes each drained chunk to the SYS$OUTPUT
@@ -289,61 +315,47 @@ static void *writer_main(void *arg)
     (void)arg;
 
     for (;;) {
-        struct pollfd pfd[2];
-        int nfds = 1;
-        pfd[0].fd = g_out_pipe_r; pfd[0].events = POLLIN; pfd[0].revents = 0;
-        pfd[1].fd = g_wake_r;     pfd[1].events = POLLIN; pfd[1].revents = 0;
-        if (g_wake_r >= 0) nfds = 2;
-
-        int pr = poll(pfd, (nfds_t)nfds, -1);
-        if (pr < 0) {
-            if (errno == EINTR) continue;
+        /* Block for the first byte(s) of the next batch. */
+        set_nonblock(g_out_pipe_r, 0);
+        ssize_t n = read(g_out_pipe_r, buf, sizeof(buf));
+        if (n == 0)
+            break;                          /* write end (fd 1) closed: shutdown */
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
             break;
         }
-
         int eof = 0;
+        if (!out_sink_write(buf, (size_t)n))
+            break;
 
-        /* Drain everything currently in the output pipe to the sink FIRST, so a
-         * drain acknowledgement below reflects the prompt bytes that were pushed
-         * into the pipe before the wake byte was sent. The read end is
-         * non-blocking, so we read until EAGAIN. */
-        if (pfd[0].revents & (POLLIN | POLLHUP | POLLERR)) {
-            for (;;) {
-                ssize_t n = read(g_out_pipe_r, buf, sizeof(buf));
-                if (n > 0) {
-                    if (!out_sink_write(buf, (size_t)n)) { eof = 1; break; }
-                } else if (n == 0) {
-                    eof = 1;            /* write end (fd 1) closed: shutdown */
-                    break;
-                } else {
-                    if (errno == EINTR) continue;
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-                    eof = 1;
-                    break;
-                }
+        /* Drain whatever else is queued without blocking, until the pipe is
+         * momentarily empty (EAGAIN) or closed (0). */
+        set_nonblock(g_out_pipe_r, 1);
+        for (;;) {
+            ssize_t m = read(g_out_pipe_r, buf, sizeof(buf));
+            if (m > 0) {
+                if (!out_sink_write(buf, (size_t)m)) { eof = 1; break; }
+            } else if (m == 0) {
+                eof = 1;
+                break;
+            } else {
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                eof = 1;
+                break;
             }
         }
 
-        /* A drain request: the output pipe was just drained above, so publish
-         * the acknowledgement and wake any waiter. */
-        if (nfds == 2 && (pfd[1].revents & POLLIN)) {
-            char d[64];
-            while (read(g_wake_r, d, sizeof(d)) > 0) { /* drain wake bytes */ }
-            pthread_mutex_lock(&g_out_mtx);
-            g_drain_ack = g_drain_req;
-            pthread_cond_broadcast(&g_out_cv);
-            pthread_mutex_unlock(&g_out_mtx);
-        }
-
-        if (eof) {
-            /* Release any waiter that would otherwise block forever. */
-            pthread_mutex_lock(&g_out_mtx);
-            g_drain_ack = g_drain_req;
-            pthread_cond_broadcast(&g_out_cv);
-            pthread_mutex_unlock(&g_out_mtx);
+        /* Pipe drained to empty: every byte written before now is out through
+         * the mailbox. Publish the epoch so a prompt drain barrier can proceed. */
+        publish_drained();
+        if (eof)
             break;
-        }
     }
+
+    /* Release any waiter that would otherwise block past writer exit. */
+    publish_drained();
     return NULL;
 }
 
@@ -360,26 +372,24 @@ int dcl_mbx_output_is_mailbox(void)
 /*
  * dcl_mbx_output_drain_sync - block until the writer thread has pushed every
  * byte currently in the output pipe out through the mailbox. The caller must
- * have fflush()'d stdout first, so the prompt bytes are already in the pipe.
- * A no-op when SYS$OUTPUT is not mailbox-bound (leaving the ordinary stdio path
- * untouched for a terminal or file SYS$OUTPUT).
+ * have written and fflush()'d the prompt first, so the prompt bytes are already
+ * in the pipe -- they are what guarantees the writer reaches a fresh empty state
+ * (and thus a fresh epoch), so this never waits forever. A no-op when SYS$OUTPUT
+ * is not mailbox-bound (leaving the ordinary stdio path untouched for a terminal
+ * or file SYS$OUTPUT).
  */
 void dcl_mbx_output_drain_sync(void)
 {
-    if (!g_writer_up || g_wake_w < 0)
+    if (!g_writer_up)
         return;
 
     pthread_mutex_lock(&g_out_mtx);
-    int want = ++g_drain_req;
-    pthread_mutex_unlock(&g_out_mtx);
-
-    /* Wake the writer out of poll() to service the request. */
-    char b = 1;
-    ssize_t wr;
-    do { wr = write(g_wake_w, &b, 1); } while (wr < 0 && errno == EINTR);
-
-    pthread_mutex_lock(&g_out_mtx);
-    while (g_drain_ack < want)
+    /* The next drain-to-empty is strictly later than this snapshot (the writer
+     * bumps the epoch under this same mutex), so it necessarily happens after
+     * the prompt entered the pipe -- and the writer cannot see the pipe empty
+     * without having first read the prompt out to the mailbox. */
+    uint64_t want = g_drain_epoch + 1;
+    while (g_drain_epoch < want)
         pthread_cond_wait(&g_out_cv, &g_out_mtx);
     pthread_mutex_unlock(&g_out_mtx);
 }
@@ -420,25 +430,11 @@ int dcl_mbx_bind_std_streams(void)
     if (resolve_to_mailbox("SYS$OUTPUT", dev, sizeof(dev))) {
         uint32_t chan = 0;
         if (vms_kif_mbx_assign(dev, &chan) & 1) {
-            int p[2], w[2];
+            int p[2];
             if (pipe(p) == 0) {
                 fflush(stdout);
                 g_out_chan   = chan;
-                g_out_pipe_r = p[0];
-                /* The writer polls the read end and reads until EAGAIN, so it
-                 * must be non-blocking (vms-195 drain barrier). */
-                int fl = fcntl(g_out_pipe_r, F_GETFL, 0);
-                if (fl >= 0) (void)fcntl(g_out_pipe_r, F_SETFL, fl | O_NONBLOCK);
-                /* Self-pipe used to wake the writer out of poll() for a
-                 * synchronous prompt drain. Best-effort: if it can't be made,
-                 * the drain barrier degrades to a no-op (dcl_mbx_output_drain_sync
-                 * returns early) and output stays async as before. */
-                if (pipe(w) == 0) {
-                    g_wake_r = w[0];
-                    g_wake_w = w[1];
-                    int wf = fcntl(g_wake_r, F_GETFL, 0);
-                    if (wf >= 0) (void)fcntl(g_wake_r, F_SETFL, wf | O_NONBLOCK);
-                }
+                g_out_pipe_r = p[0];   /* writer toggles O_NONBLOCK per batch */
                 if (dup2(p[1], STDOUT_FILENO) >= 0 &&
                     pthread_create(&g_writer, NULL, writer_main, NULL) == 0) {
                     g_writer_up = 1;
@@ -453,8 +449,6 @@ int dcl_mbx_bind_std_streams(void)
                     close(p[1]);
                     g_out_pipe_r = -1;
                     g_out_chan   = 0;
-                    if (g_wake_r >= 0) { close(g_wake_r); g_wake_r = -1; }
-                    if (g_wake_w >= 0) { close(g_wake_w); g_wake_w = -1; }
                     (void)vms_kif_dassgn(chan);
                 }
             } else {
@@ -481,8 +475,6 @@ void dcl_mbx_shutdown(void)
             close(g_out_pipe_r);
             g_out_pipe_r = -1;
         }
-        if (g_wake_r >= 0) { close(g_wake_r); g_wake_r = -1; }
-        if (g_wake_w >= 0) { close(g_wake_w); g_wake_w = -1; }
         if (g_out_chan) {
             (void)vms_kif_dassgn(g_out_chan);
             g_out_chan = 0;
@@ -509,26 +501,15 @@ void dcl_mbx_shutdown(void)
  */
 int dcl_mbx__test_start_output(int sink_fd, int *out_write_fd)
 {
-    int p[2], w[2];
+    int p[2];
     if (pipe(p) != 0)
         return -1;
-    if (pipe(w) != 0) {
-        close(p[0]); close(p[1]);
-        return -1;
-    }
-    g_out_pipe_r = p[0];
-    int fl = fcntl(g_out_pipe_r, F_GETFL, 0);
-    if (fl >= 0) (void)fcntl(g_out_pipe_r, F_SETFL, fl | O_NONBLOCK);
-    g_wake_r = w[0];
-    g_wake_w = w[1];
-    int wf = fcntl(g_wake_r, F_GETFL, 0);
-    if (wf >= 0) (void)fcntl(g_wake_r, F_SETFL, wf | O_NONBLOCK);
+    g_out_pipe_r  = p[0];   /* writer toggles O_NONBLOCK per batch */
     g_out_sink_fd = sink_fd;
-    g_drain_req = 0;
-    g_drain_ack = 0;
+    g_drain_epoch = 0;
     if (pthread_create(&g_writer, NULL, writer_main, NULL) != 0) {
-        close(p[0]); close(p[1]); close(w[0]); close(w[1]);
-        g_out_pipe_r = g_wake_r = g_wake_w = -1;
+        close(p[0]); close(p[1]);
+        g_out_pipe_r  = -1;
         g_out_sink_fd = -1;
         return -1;
     }
@@ -550,8 +531,6 @@ void dcl_mbx__test_stop_output(void)
         g_writer_up = 0;
     }
     if (g_out_pipe_r >= 0) { close(g_out_pipe_r); g_out_pipe_r = -1; }
-    if (g_wake_r >= 0) { close(g_wake_r); g_wake_r = -1; }
-    if (g_wake_w >= 0) { close(g_wake_w); g_wake_w = -1; }
     g_out_sink_fd = -1;
 }
 #endif /* DCL_MBX_TEST_HOOKS */

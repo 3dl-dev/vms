@@ -1,5 +1,9 @@
 # OVMX Roadmap: OpenVMS Alpha Source Compatibility
 
+> **Historical / superseded (2026-08-14).** The roadmap of record is
+> `docs/release-roadmap-to-1.0.md` (generated from rd + git tags). This document is
+> retained as pre-pivot design history; re-derive any status from `rd` before acting.
+
 ## Context
 
 OVMX has Phases 1-7 complete — a working VMS-inspired environment with 56 system services, 49 RTL functions, full descriptors, RMS, DCL, kernel modules, and a bootable distro. But it has never been tested against real VMS source code. The project goal is now clear: **OpenVMS Alpha source compatibility** — real VMS C programs compile against OVMX headers and run correctly. Follow-on targets: Fortran, BASIC, BLISS, and DECnet Phase IV.

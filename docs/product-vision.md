@@ -57,7 +57,7 @@ This table is the **source of truth** for product direction. If a spec or calcul
 ## Scope
 
 ### Foundation — COMPLETE (Phases 1-7)
-Freestanding syscall layer (x86_64 + aarch64), VMS system services + RTL, process management (PCBs/ASTs/event flags/access modes), logical name manager, VMS filesystem library, RMS (sequential/relative/indexed), DCL shell, kernel modules (`vms.ko`, `vmsfs.ko`), bootable distro (Docker + QEMU), multi-user SSH with SYSUAF auth. See `tracking/roadmap.md`.
+Freestanding syscall layer (x86_64 + aarch64), VMS system services + RTL, process management (PCBs/ASTs/event flags/access modes), logical name manager, VMS filesystem library, RMS (sequential/relative/indexed), DCL shell, kernel modules (`vms.ko`, `vmsfs.ko`), bootable distro (Docker + QEMU), multi-user SSH with SYSUAF auth. Current status: `docs/release-roadmap-to-1.0.md` (roadmap of record, generated from rd + git tags) and `rd`. `tracking/roadmap.md` is pre-pivot history, not a live source.
 
 ### Rail A — Cluster interop (`vms-ci`)
 Reference lab (SIMH VAX 7.3 cluster) → capture + dissect SCS/NISCA/MSCP → the OVMX/Linux node appears in real `SHOW CLUSTER` → MSCP-served disk → distributed lock manager → rolling evacuation. Clean-room throughout.

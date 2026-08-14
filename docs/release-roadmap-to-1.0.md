@@ -45,6 +45,71 @@ calling anything short of that bar 1.0.
 
 ---
 
+<!-- GENERATED:BEGIN roadmap-reconcile — do not edit by hand, run tools/roadmap/reconcile.py -->
+
+## Live status — generated
+
+> Reconciled from rd (source of truth) **as of 2026-08-14** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
+
+### Milestone ladder
+
+| Milestone | Theme | Status | Done | Open | Blocked | Signal |
+|---|---|---|---:|---:|---:|---:|
+| **0.3** | A real system — the command language, file system, system services, and kernel executive stand on their own. | SHIPPED | 0 | 0 | 0 | — |
+| **0.4** | Installs and boots faithfully — the product installs to a target disk and reboots into a login. | SHIPPED | 0 | 0 | 0 | — |
+| **0.5** | Foundations for the network and the toolchain — a shared-state executive, VMS-faithful cluster configuration, a self-hosting toolchain, and a self-built kernel. | planned | 0 | 0 | 0 | — |
+| **0.6** | Cluster correctness — quorum and reconfiguration, a real distributed lock manager, and cluster membership resident in the executive. | planned | 0 | 0 | 0 | — |
+| **0.7** | Cluster wire fidelity — the SCS/MSCP connection manager answers a real VAX byte-for-byte. | planned | 0 | 0 | 0 | — |
+| **0.8** | Rejoin and satellite boot — a removed node rejoins under its own identity; diskless satellites boot from a served disk. | planned | 0 | 0 | 0 | — |
+| **1.0** | Joins and serves a real cluster, and runs the software — a voting member that serves genuine ODS-2 storage, holds locks, and evacuates a live node. | 1.0 goal | 0 | 0 | 0 | — |
+
+### 1.0-gate workstreams (epic rollups)
+
+| Workstream | Epic | Lands by | Status | Done/Total | Blocked |
+|---|---|---|---|---:|---:|
+| Executive substrate | `vms-6b8` | 0.5 | MISSING | 0/0 | 0 |
+| Command-surface parity | `vms-8ad` | continuous | MISSING | 0/0 | 0 |
+| Self-hosting toolchain | `vms-678` | 0.5→1.0 | MISSING | 0/0 | 0 |
+| Cluster configuration | `vms-098` | 0.5→1.0 | MISSING | 0/0 | 0 |
+| TCP/IP networking | `vms-67f` | 0.5→1.0 | MISSING | 0/0 | 0 |
+| DECnet Phase IV | `vms-30e` | 1.0 | MISSING | 0/0 | 0 |
+| Owns its kernel | `vms-19e` | 0.5 | MISSING | 0/0 | 0 |
+
+### Per-milestone items (rd)
+
+### Shipped releases (git tags)
+
+- **V0.4-4** — Feature pack marching toward 0.5.
+- **V0.4-3** — Feature pack marching toward 0.5.
+- **V0.4-2** — Feature pack marching toward 0.5.
+- **V0.4-1** — Dense feature pack toward 0.5.
+- **V0.4** — Installs to a target disk and reboots into a login.
+- **V0.3-9** — Executive-backed DCL, cluster rejoin, OPCOM messages.
+- **0.3-8** — Point release.
+- **0.3-7** — Point release.
+- **0.3-6** — Point release.
+- **0.3-5** — Point release.
+- **0.3-4** — SET ACCOUNTING / SET VOLUME, clean cluster leave.
+- **0.3-3** — Conversational boot, DCL parser fidelity.
+
+### rd-labeling gaps (fix these to keep the source accurate)
+
+Gate epics carrying **no `rel-*` label** — the generated milestone view cannot place their milestone from rd alone; the band below is editorial (`GATE_EPICS` in the script), not derived:
+
+- `vms-6b8` — Executive substrate (editorial band: 0.5) · also not `level=epic`
+- `vms-8ad` — Command-surface parity (editorial band: continuous) · also not `level=epic`
+- `vms-678` — Self-hosting toolchain (editorial band: 0.5-1.0) · also not `level=epic`
+- `vms-098` — Cluster configuration (editorial band: 0.5-1.0) · also not `level=epic`
+- `vms-67f` — TCP/IP networking (editorial band: 0.5-1.0) · also not `level=epic`
+- `vms-30e` — DECnet Phase IV (editorial band: 1.0) · also not `level=epic`
+- `vms-19e` — Owns its kernel (editorial band: 0.5) · also not `level=epic`
+
+- Children of unlabeled gate epics with no `rel-*` of their own: **0** (they inherit the editorial band; label them to make rd authoritative).
+
+<!-- GENERATED:END roadmap-reconcile -->
+
+---
+
 ## 2. The 1.0 objective and its pillars
 
 `docs/product-vision.md` read literally: OVMX commoditizes the two scarcities VSI sells

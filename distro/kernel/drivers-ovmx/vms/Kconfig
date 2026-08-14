@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Per-module Kconfig fragment for the OVMX VMS executive (vms.ko).
+#
+# This declares exactly ONE `config OVMX_<MOD>` symbol. The overlay script
+# (distro/kernel/overlay-ovmx-drivers.sh) discovers this module by finding this
+# subdir's Kbuild, generates the drivers/ovmx/Kconfig wrapper to `source` this
+# fragment under `menuconfig OVMX`, and derives the drivers/ovmx/Makefile
+# `obj-$(CONFIG_OVMX_VMS) += vms/` line from the symbol declared below. Adding a
+# new OVMX module never edits this file -- it drops in its own subdir with its
+# own Kconfig/Kbuild/sources.conf (see docs/adding-an-ovmx-kernel-module.md).
+
+config OVMX_VMS
+	tristate "OVMX VMS executive (/dev/vms)"
+	default n
+	help
+	  The OVMX VMS executive: the /dev/vms misc character device through
+	  which userspace reaches the VMS executive facilities (event flags,
+	  ASTs, access modes, mailboxes, the process table, the lock manager,
+	  the device table and the logical-name manager). This is the runtime
+	  the OVMX product boots against (CLAUDE.md Rule 9).
+
+	  Built as a module (M) it appears as vms.ko. Say M unless you are
+	  statically building an OVMX-only kernel.

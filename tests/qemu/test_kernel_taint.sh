@@ -179,13 +179,19 @@ else
     echo "FATAL: could not unpack $INITRD"; exit 1
 fi
 
-for mod in vms vmsfs; do
-    ko=$(find "$WORK" -name "${mod}.ko" | head -1)
-    if [ -z "$ko" ]; then
-        record "${mod}.ko present in boot initramfs" 1
-        continue
-    fi
-    record "${mod}.ko present in boot initramfs" 0
+# DISCOVER every kernel module shipped in the boot initramfs and gate each one
+# (vms-bae: the drivers/ovmx/ home is a MENU, so a new OVMX module that ships in
+# the image must inherit this taint gate for free -- not just the two named
+# below). vms.ko + vmsfs.ko are ALSO asserted present explicitly as a floor, so
+# an empty/broken initramfs cannot silently pass.
+mapfile -t SHIPPED_KOS < <(find "$WORK" -name '*.ko' | sort)
+record "at least one kernel module shipped in boot initramfs" $([ "${#SHIPPED_KOS[@]}" -gt 0 ] && echo 0 || echo 1)
+for req in vms vmsfs; do
+    find "$WORK" -name "${req}.ko" | grep -q .; record "${req}.ko present in boot initramfs (required)" $?
+done
+
+for ko in "${SHIPPED_KOS[@]}"; do
+    mod=$(basename "$ko" .ko)
 
     intree=$(modinfo -F intree "$ko" 2>/dev/null)
     echo "    modinfo -F intree  ${mod}.ko => '${intree:-<empty>}'"

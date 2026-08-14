@@ -301,6 +301,20 @@ if(BUILD_TESTS)
     set_tests_properties(runtime_target_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
 
+    # vms-bae standing gate: drivers/ovmx/ is a REUSABLE kernel-module home, not
+    # a hard-coded {vms,vmsfs} pair. Runs the real overlay against a fabricated
+    # kernel tree with a hypothetical third module dropped in as {subdir +
+    # Kconfig stanza + config flag} only, and proves it is discovered and fully
+    # wired (menu sourced, Makefile obj- line, sources flattened) with the
+    # overlay script byte-for-byte unchanged. Hermetic source/wiring proof -- no
+    # kernel build; the real intree=Y + signed proof on the shipped modules is
+    # the boot-time gate tests/qemu/test_kernel_taint.sh.
+    add_test(NAME ovmx_module_home_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_ovmx_module_home.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(ovmx_module_home_gate PROPERTIES
+        LABELS "integration;kernel" TIMEOUT 120)
+
     # vms-bd1 standing gate: the b65 shareable symbol vectors (LIBVMSSYS$SHR
     # vms_kif_* + LIBVMS$SHR universals) are FROZEN and APPEND-ONLY, so GSMATCH
     # LEQUAL stays sound once vmsrms/DCL bind universal indices. Asserts the

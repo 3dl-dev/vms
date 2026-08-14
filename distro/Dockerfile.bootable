@@ -172,16 +172,19 @@ RUN KMAJ=$(echo "$KERNEL_VERSION" | cut -d. -f1) && \
 
 WORKDIR /usr/src/linux
 
-# Overlay the OVMX VMS modules IN-TREE (vms-934, parent vms-19e "owns-kernel").
-# The canonical module source stays in the OVMX repo (src/kernel/ +
-# src/kernel-core/); this copies it into drivers/ovmx/{vms,vmsfs}/ with in-tree
-# Kbuild+Kconfig and wires drivers/ovmx into the kernel's drivers/Kconfig +
-# drivers/Makefile. Done BEFORE `make defconfig`/olddefconfig so CONFIG_OVMX_VMS
-# / CONFIG_OVMX_VMSFS are recognised Kconfig symbols, and BEFORE `make modules`
-# so they build as part of OUR kernel tree -- modpost then stamps modinfo
-# intree=Y and finit_module() at boot does NOT set TAINT_OUT_OF_TREE. The
-# standalone src/kernel Makefiles are untouched and still drive the QEMU test
-# harness out-of-tree; this is a build-time overlay, not a fork.
+# Overlay the OVMX kernel modules IN-TREE (vms-934, parent vms-19e "owns-kernel";
+# generalized into a reusable module home by vms-bae). drivers/ovmx/ is a MENU:
+# the overlay DISCOVERS each self-describing module subdir under
+# distro/kernel/drivers-ovmx/<mod>/ (Kconfig + Kbuild + sources.conf), flattens
+# the canonical source each names, and GENERATES drivers/ovmx/{Kconfig,Makefile}
+# + wires drivers/ovmx into the kernel's drivers/Kconfig + drivers/Makefile.
+# Done BEFORE `make defconfig`/olddefconfig so the CONFIG_OVMX_<MOD> symbols are
+# recognised, and BEFORE `make modules` so each <mod>.ko builds as part of OUR
+# kernel tree -- modpost then stamps modinfo intree=Y and finit_module() at boot
+# does NOT set TAINT_OUT_OF_TREE. A new OVMX module needs no edit here (COPY is
+# the whole scaffold dir). The standalone src/kernel Makefiles are untouched and
+# still drive the QEMU test harness out-of-tree; this is an overlay, not a fork.
+# See docs/adding-an-ovmx-kernel-module.md.
 COPY src/kernel                          /tmp/ovmx-src/src/kernel
 COPY src/kernel-core                     /tmp/ovmx-src/src/kernel-core
 COPY distro/kernel/drivers-ovmx          /tmp/ovmx-src/distro/kernel/drivers-ovmx
@@ -225,11 +228,11 @@ RUN set -e; \
     if grep -q "^CONFIG_MODULE_SIG_FORCE=y$" .config; then \
         echo "FAIL: CONFIG_MODULE_SIG_FORCE=y is deferred (vms-ff5) and would brick boot if a module failed verification"; exit 1; \
     fi; \
-    for opt in CONFIG_OVMX CONFIG_OVMX_VMS CONFIG_OVMX_VMSFS; do \
-        [ "$opt" = "CONFIG_OVMX" ] && want="=y" || want="=m"; \
-        grep -q "^${opt}${want}$" .config || { echo "FAIL: ${opt}${want} not set (in-tree VMS modules would not build; vms-934)"; exit 1; }; \
+    grep -q "^CONFIG_OVMX=y$" .config || { echo "FAIL: CONFIG_OVMX=y not set (the drivers/ovmx menu; vms-934)"; exit 1; }; \
+    for sym in $(grep -h '^config OVMX_' drivers/ovmx/*/Kconfig | awk '{print $2}'); do \
+        grep -q "^CONFIG_${sym}=m$" .config || { echo "FAIL: CONFIG_${sym}=m not set (in-tree OVMX module would not build; vms-934/vms-bae)"; exit 1; }; \
     done; \
-    echo "OK: OVMX kernel .config carries every load-bearing option + the in-tree VMS modules (=m)"
+    echo "OK: OVMX kernel .config carries every load-bearing option + CONFIG_OVMX=y and every discovered in-tree OVMX module (=m)"
 
 # Build the bzImage + in-tree modules. Record the exact kernelrelease string
 # (e.g. 6.12.103-ovmx) so downstream stages name modules/headers consistently.
@@ -249,8 +252,14 @@ RUN export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}")" && \
     make -s ARCH=x86_64 kernelrelease > /kernel-out/kernelrelease && \
     echo "Built OVMX kernel: $(cat /kernel-out/kernelrelease), bzImage $(ls -lh /kernel-out/vmlinuz | awk '{print $5}'), TS=$KBUILD_BUILD_TIMESTAMP"
 
-# Harvest the IN-TREE-built VMS modules (vms-934) and prove they are BOTH
+# Harvest the IN-TREE-built OVMX modules (vms-934) and prove they are BOTH
 # in-tree (vms-934) AND signed (vms-ff5) right here, fail-closed.
+#
+# GENERALIZED (vms-bae): this DISCOVERS every module the overlay built under
+# drivers/ovmx/*/*.ko rather than naming vms/vmsfs. A new OVMX module (a new
+# drivers-ovmx/<mod>/ subdir + CONFIG_OVMX_<MOD>=m) is harvested, verified and
+# signed here with ZERO edits to this loop -- that is the "inherits intree=Y +
+# signing for free" property. Each .ko lands at /kernel-out/<mod>.ko.
 #
 #   intree=Y  (vms-934): modpost stamps this for a module built as part of the
 #     kernel tree (not via M=); it is exactly what makes loading it NOT set
@@ -266,11 +275,13 @@ RUN export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}")" && \
 #     signed them, so we never append a second, corrupting signature). The same
 #     committed PEM supplies both the private key and the X.509 cert to
 #     scripts/sign-file -- no dependency on the build's internal cert path.
-RUN cp drivers/ovmx/vms/vms.ko       /kernel-out/vms.ko && \
-    cp drivers/ovmx/vmsfs/vmsfs.ko   /kernel-out/vmsfs.ko && \
-    KEY=/usr/src/linux/ovmx-module-signing-key.pem; \
-    for ko in vms vmsfs; do \
+RUN KEY=/usr/src/linux/ovmx-module-signing-key.pem; \
+    n=0; \
+    for KOSRC in drivers/ovmx/*/*.ko; do \
+        [ -e "$KOSRC" ] || { echo "FAIL: no drivers/ovmx/*/*.ko built -- overlay/config regression (vms-934/vms-bae)"; exit 1; }; \
+        ko=$(basename "$KOSRC" .ko); \
         KO=/kernel-out/${ko}.ko; \
+        cp "$KOSRC" "$KO"; \
         it=$(modinfo -F intree "$KO"); \
         [ "$it" = "Y" ] || { echo "FAIL: ${ko}.ko intree='${it}' != Y -- module did not build in-tree (vms-934)"; exit 1; }; \
         if [ -z "$(modinfo -F signer "$KO" 2>/dev/null)" ]; then \
@@ -279,8 +290,11 @@ RUN cp drivers/ovmx/vms/vms.ko       /kernel-out/vms.ko && \
         sg=$(modinfo -F signer "$KO" 2>/dev/null); \
         [ -n "$sg" ] || { echo "FAIL: ${ko}.ko carries NO signature -- finit_module() would set TAINT_UNSIGNED_MODULE (vms-ff5)"; exit 1; }; \
         echo "OK: ${ko}.ko intree=Y + signed by '$sg'"; \
-    done && \
-    echo "OK: vms.ko + vmsfs.ko built IN-TREE (intree=Y, no TAINT_OUT_OF_TREE) and SIGNED (no TAINT_UNSIGNED_MODULE)"
+        n=$((n + 1)); \
+    done; \
+    [ "$n" -ge 2 ] || { echo "FAIL: harvested $n OVMX module(s); expected at least vms.ko + vmsfs.ko (vms-934)"; exit 1; }; \
+    [ -f /kernel-out/vms.ko ] && [ -f /kernel-out/vmsfs.ko ] || { echo "FAIL: vms.ko/vmsfs.ko not harvested (vms-934)"; exit 1; }; \
+    echo "OK: $n OVMX module(s) built IN-TREE (intree=Y, no TAINT_OUT_OF_TREE) and SIGNED (no TAINT_UNSIGNED_MODULE)"
 
 FROM ubuntu:24.04 AS builder
 

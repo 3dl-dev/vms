@@ -24,14 +24,24 @@ name: Cut and Publish Release
 on:
   push:
     tags:
-      # Release-shaped tags only: 0.4, 0.3-1, v1.0.0, 1.2.3 ... (this repo's
-      # tags are bare like "0.3"; a leading v and a "-1" point suffix are both
-      # allowed). Non-release tags (wip/*, migration/*) never match.
+      # Release-shaped tags only: 0.4, 0.3-1, V0.4-2, v1.0.0, 1.2.3 ...
+      # GitHub tag filters are CASE-SENSITIVE and have no alternation, so every
+      # accepted spelling needs its own literal glob. The prefix may be absent,
+      # lowercase 'v', or uppercase 'V' -- this repo has SHIPPED all three: bare
+      # `0.3-8`, then `V0.3-9` / `V0.4` / `V0.4-1`..`V0.4-4` -- and a `-N` point
+      # suffix is allowed on every form. Missing any one variant means a real
+      # release tag pushes but silently never publishes: that is exactly the
+      # V0.3-9..V0.4-4 gap (6 tags, 0 releases) this list closes (vms-644).
+      # Non-release tags (wip/*, migration/*) still match nothing here.
       - '[0-9]+.[0-9]+'
       - '[0-9]+.[0-9]+-[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+-[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'V[0-9]+.[0-9]+'
+      - 'V[0-9]+.[0-9]+-[0-9]+'
+      - 'V[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
     inputs:
       tag:

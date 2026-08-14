@@ -350,3 +350,5 @@ vms_uring_submit_rw=PROCEDURE
 vms_uring_wait_completion=PROCEDURE
 lib$reset_vm_zone=PROCEDURE
 vms$$deliver_pending_asts=PROCEDURE
+sysuaf_interactive_login_permitted=PROCEDURE
+sysuaf_account_captive=PROCEDURE

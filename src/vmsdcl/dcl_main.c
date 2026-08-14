@@ -609,15 +609,33 @@ int main(int argc, char *argv[])
      * with --lgicmd <spec> (vms-e48: the SYSUAF LGICMD field, already resolved
      * to its documented default by LOGINOUT when the field was empty). */
     int login_mode = 0;
+    int captive_mode = 0;   /* vms-c8fa: --captive from LOGINOUT */
     const char *login_lgicmd = NULL;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--login") == 0) {
             login_mode = 1;
             dcl_ctx.logged_in = 1;
+        } else if (strcmp(argv[i], "--captive") == 0) {
+            captive_mode = 1;
         } else if (strcmp(argv[i], "--lgicmd") == 0 && i + 1 < argc) {
             login_lgicmd = argv[++i];
         }
     }
+
+    /*
+     * CAPTIVE ACCOUNT (vms-c8fa). LOGINOUT passes --captive for an account
+     * whose SYSUAF record carries the CAPTIVE flag. A captive account is
+     * confined to its login command procedure and cannot escape to the DCL
+     * command level: "Because the DISCTLY flag in the UAF record is turned on,
+     * any use of Ctrl/Y fails" (OpenVMS Guide to System Security, "Captive
+     * Accounts"). Disable Ctrl/Y now, BEFORE the login command procedure runs
+     * below, so the procedure cannot be interrupted to reach a bare "$"
+     * prompt. The REPL itself is suppressed for captive logins further down
+     * (see the login_mode block), so the session runs only the procedure and
+     * then logs out. Non-captive logins are untouched (ctrl_y stays enabled).
+     */
+    if (captive_mode)
+        dcl_ctx.ctrl_y_enabled = 0;
 
     /* Check for -c "command" mode */
     if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
@@ -736,6 +754,20 @@ int main(int argc, char *argv[])
             && stat(user_login, &st) == 0 && S_ISREG(st.st_mode)) {
             dcl_execute_script(user_login, 0, NULL);
         }
+
+        /*
+         * CAPTIVE CONFINEMENT (vms-c8fa). The login command procedure(s) have
+         * now run. A captive account is confined to them and "denie[d] ...
+         * access to the DCL command level" (OpenVMS Guide to System Security,
+         * "Captive Accounts"): it must NOT fall through to the interactive
+         * REPL and present a "$" prompt. Request logout so the loop below is
+         * skipped and the session ends the moment its procedure returns --
+         * exactly as VMS logs a captive user out when the login procedure
+         * completes without keeping control. Ctrl/Y was already disabled above
+         * so the procedure could not be interrupted to reach "$" either.
+         */
+        if (captive_mode)
+            dcl_ctx.logout_requested = 1;
     }
 
     /* Main REPL */

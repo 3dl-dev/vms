@@ -489,6 +489,62 @@ int sysuaf_authenticate(const sysuaf_record_t *rec, const char *password)
 }
 
 /* ------------------------------------------------------------------ */
+/* Login-flag enforcement (vms-c8fa)                                   */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Authenticating the password proves the CREDENTIAL; it does not prove the
+ * account may LOG IN. OpenVMS gates login on the SYSUAF login flags as a
+ * SEPARATE step from the password check, so a correct password on a disabled
+ * account is still refused. These two predicates carry that decision so the
+ * one answer lives here (INV-1: not re-derived at each login site), reading
+ * the already-parsed FLAGS field through the one converter
+ * (sysuaf_flags_to_mask) -- never a second parse.
+ *
+ * sysuaf_interactive_login_permitted: 0 iff a DISABLING flag is set.
+ *   - UAI$M_DISUSER  -- OpenVMS Guide to System Security, "Disusering
+ *     Accounts": "To disable an account without deleting it, set the disable
+ *     user flag (/FLAGS=DISUSER) using AUTHORIZE." A login attempt against
+ *     such an account is refused with the same anti-enumeration diagnostic
+ *     ("User authorization failure") the wrong-password path uses -- VMS does
+ *     not disclose which half failed.
+ *   - UAI$M_DISACNT  -- the disabled-account flag; treated identically
+ *     (account disabled -> no login).
+ * CAPTIVE and PWD_EXPIRED are deliberately NOT tested here: they do not DENY
+ * login, they CONSTRAIN a permitted session, and are handled on the session
+ * path (LOGINOUT/DCL), not by refusing entry.
+ */
+int sysuaf_interactive_login_permitted(const sysuaf_record_t *rec)
+{
+    if (!rec)
+        return 0;   /* fail closed */
+    uint32_t mask = sysuaf_flags_to_mask(rec->flags);
+    if (mask & (UAI$M_DISUSER | UAI$M_DISACNT))
+        return 0;
+    return 1;
+}
+
+/*
+ * sysuaf_account_captive: 1 iff the account is CAPTIVE.
+ *
+ * OpenVMS Guide to System Security, "Captive Accounts": a captive account is
+ * created "by assigning the CAPTIVE flag" (/FLAGS=CAPTIVE), and "Once logged
+ * in to a captive account, a user cannot escape to the DCL command level
+ * through the Ctrl/Y sequence, the SPAWN command, or the INQUIRE command.
+ * Because the DISCTLY flag in the UAF record is turned on, any use of Ctrl/Y
+ * fails." The login command procedure (SYLOGIN.COM + the account's LGICMD)
+ * runs and controls the session; the user is confined to it and "denie[d]
+ * ... access to the DCL command level." LOGINOUT conveys this to DCL, which
+ * disables Ctrl/Y and logs out rather than presenting a bare "$" prompt.
+ */
+int sysuaf_account_captive(const sysuaf_record_t *rec)
+{
+    if (!rec)
+        return 0;
+    return (sysuaf_flags_to_mask(rec->flags) & UAI$M_CAPTIVE) ? 1 : 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* sysuaf_write_record                                                 */
 /* ------------------------------------------------------------------ */
 

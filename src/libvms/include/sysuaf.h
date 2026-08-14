@@ -250,6 +250,23 @@ int sysuaf_lookup_by_uic(uint32_t uic, sysuaf_record_t *rec);
    hash must mean "cannot authenticate", not "no password required". */
 int sysuaf_authenticate(const sysuaf_record_t *rec, const char *password);
 
+/*
+ * LOGIN-FLAG ENFORCEMENT (vms-c8fa), separate from the password check above.
+ * Authenticating proves the credential; these prove the account may log in
+ * and how the session is constrained. Both read the parsed FLAGS field
+ * through the one converter (sysuaf_flags_to_mask), never a second parse.
+ *
+ * sysuaf_interactive_login_permitted: 0 if a DISABLING flag (DISUSER or
+ *   DISACNT) forbids login, else 1. A NULL record fails closed (returns 0).
+ *   A correct password on a disabled account MUST still be refused.
+ * sysuaf_account_captive: 1 if the account is CAPTIVE (confined to its login
+ *   command procedure, no escape to the "$" DCL prompt), else 0.
+ * See the doc comments in src/libvms/rtl/sysuaf.c for the public-doc
+ * (OpenVMS Guide to System Security) grounding of each flag's behavior.
+ */
+int sysuaf_interactive_login_permitted(const sysuaf_record_t *rec);
+int sysuaf_account_captive(const sysuaf_record_t *rec);
+
 /* Parse VMS privilege string (e.g. "TMPMBX,NETMBX,OPER") into bitmask */
 uint64_t sysuaf_parse_privileges(const char *priv_string);
 

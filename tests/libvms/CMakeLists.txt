@@ -271,6 +271,25 @@ add_test(NAME test_libvms_sysuaf_auth
 libvms_add_test(test_libvms_sysuaf_line_limit
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_line_limit.c)
 
+# vms-c8fa — SYSUAF login-flag enforcement. Authenticating the password is not
+# authorizing the login: a DISUSER (disabled) account with the right password
+# used to log straight in. Exercises the two pure decision predicates
+# (sysuaf_interactive_login_permitted / sysuaf_account_captive) directly, and
+# source-guards that LOGINOUT (tools/vms_login.c) and DCL (src/vmsdcl/dcl_main.c)
+# actually call them on the login path. Source paths are passed as argv so the
+# guard reads the real tree (not via libvms_add_test(), which registers no
+# argv -- same pattern as test_libvms_sysuaf_auth above).
+add_executable(test_libvms_sysuaf_login_flags
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_login_flags.c)
+target_include_directories(test_libvms_sysuaf_login_flags PRIVATE
+    ${VMS_INCLUDE_DIR})
+target_link_libraries(test_libvms_sysuaf_login_flags PRIVATE
+    vms pthread m)
+add_test(NAME test_libvms_sysuaf_login_flags
+    COMMAND test_libvms_sysuaf_login_flags
+    "${CMAKE_SOURCE_DIR}/tools/vms_login.c"
+    "${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_main.c")
+
 # vms-982 — the LCK$M_/LCK$K_ constants in <lckdef.h> must match the authentic
 # OpenVMS $LCKDEF layout, pinned by two independent documented-tool methods on
 # the VAX V7.3 oracle (LIBRARIAN extract + MACRO-32 symbol table). Guards the

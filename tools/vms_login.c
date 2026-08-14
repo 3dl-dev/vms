@@ -414,11 +414,27 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
     char login_lgicmd[256];
     sysuaf_login_command_file(rec, login_lgicmd, sizeof(login_lgicmd));
 
+    /*
+     * CAPTIVE CONFINEMENT (vms-c8fa). A captive account is confined to its
+     * login command procedure: it runs SYLOGIN.COM and the account's LGICMD
+     * and is then logged out -- it never reaches the "$" DCL prompt, and
+     * Ctrl/Y is disabled so the procedure cannot be interrupted to escape to
+     * DCL (OpenVMS Guide to System Security, "Captive Accounts"). LOGINOUT
+     * conveys the CAPTIVE flag to DCL with --captive; DCL disables Ctrl/Y and
+     * logs out instead of entering the interactive REPL. A non-captive
+     * account execs EXACTLY as before -- this is purely additive.
+     */
+    int captive = sysuaf_account_captive(rec);
+
     /* Exec the DCL shell with --login flag */
     char dcl_linux[1024];
     vmsfs_to_linux_path(DCL_SHELL_PATH, dcl_linux, sizeof(dcl_linux));
-    execl(dcl_linux, "vmsdcl", "--login", "--lgicmd", login_lgicmd,
-          (char *)NULL);
+    if (captive)
+        execl(dcl_linux, "vmsdcl", "--login", "--captive",
+              "--lgicmd", login_lgicmd, (char *)NULL);
+    else
+        execl(dcl_linux, "vmsdcl", "--login", "--lgicmd", login_lgicmd,
+              (char *)NULL);
 
     /* If exec fails, fall back to sh */
     perror("vmsdcl");
@@ -566,6 +582,28 @@ static int console_login(void)
 
         /* Authenticate */
         if (!sysuaf_authenticate(&user_rec, password)) {
+            printf("\nUser authorization failure\n\n");
+            attempts++;
+            continue;
+        }
+
+        /*
+         * LOGIN-FLAG ENFORCEMENT (vms-c8fa). The password is correct; that is
+         * NOT sufficient. OpenVMS gates login on the SYSUAF login flags as a
+         * step distinct from the password check, so a disabled account
+         * (DISUSER / DISACNT) does not reach a session no matter what password
+         * is typed. Refused with the SAME "User authorization failure" text
+         * the wrong-password branch above uses -- deliberately, so a failed
+         * login cannot be used to learn whether the account exists, is
+         * disabled, or the password was wrong (OpenVMS Guide to System
+         * Security, "Disusering Accounts"). The decision lives in the SYSUAF
+         * library (sysuaf_interactive_login_permitted) and is fail-closed:
+         * this gate stands BEFORE start_session(), so a disabled account
+         * never sees the welcome banner, the identity stamp, or the "$"
+         * prompt. CAPTIVE and expired-password are NOT denials -- they
+         * constrain a permitted session and are handled in start_session().
+         */
+        if (!sysuaf_interactive_login_permitted(&user_rec)) {
             printf("\nUser authorization failure\n\n");
             attempts++;
             continue;

@@ -101,3 +101,7 @@ tests/netbsd/.netbsd-cache/
 .netbsd-cache/
 .netbsd-cache-p2c/
 .netbsd-src/
+
+# Kernel module signing key — supplied as a build secret, NEVER committed
+# (vms-secret-signing-key). A committed private key is public.
+distro/kernel/ovmx-module-signing-key.pem

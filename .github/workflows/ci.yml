@@ -787,6 +787,24 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # The module signing key is the one remaining random build input (vms-
+      # secret-signing-key). It is NEVER committed. Mint ONE ephemeral key here
+      # and feed it to BOTH cuts via OVMX_MODULE_SIGNING_KEY, so the signatures/
+      # keyring are identical between them -- which is exactly what this gate
+      # asserts -- without any private key living in git. The key is scoped to
+      # this job and never persisted.
+      - name: Mint one ephemeral module-signing key for both cuts
+        run: |
+          set -euo pipefail
+          KEYDIR="${{ runner.temp }}/ovmx-sign"
+          mkdir -p "$KEYDIR"
+          openssl req -new -nodes -utf8 -sha256 -x509 -newkey rsa:2048 -days 36500 \
+            -subj "/CN=OVMX ephemeral module signing key (reproducibility gate)/" \
+            -keyout "$KEYDIR/key.pem" -out "$KEYDIR/cert.pem"
+          cat "$KEYDIR/key.pem" "$KEYDIR/cert.pem" > "$KEYDIR/signing.pem"
+          echo "OVMX_MODULE_SIGNING_KEY=$KEYDIR/signing.pem" >> "$GITHUB_ENV"
+          echo "Minted ephemeral signing key for both cuts (job-scoped, never persisted)."
+
       # First independent cut. --no-cache on both cuts is the point: this
       # proves the BUILD is reproducible, not that BuildKit's cache is.
       - name: Cut release A (clean tree, no cache)

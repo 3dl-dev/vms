@@ -165,6 +165,20 @@ BUILDX_ARGS=(
     --output "type=local,dest=$DOCKER_OUT_DIR"
 )
 [ "$NO_CACHE" -eq 1 ] && BUILDX_ARGS+=(--no-cache)
+
+# Kernel module signing key (vms-secret-signing-key). Passed as a BuildKit
+# secret, NEVER committed. If OVMX_MODULE_SIGNING_KEY points at a PEM (private
+# key + cert), feed it so this cut's module signatures/keyring are deterministic;
+# two cuts given the SAME key are byte-identical (that is how the reproducibility
+# gate stays green -- it mints one ephemeral key and passes it to both cuts).
+# Unset -> the kernel build generates an ephemeral key and signatures vary.
+if [ -n "${OVMX_MODULE_SIGNING_KEY:-}" ]; then
+    [ -s "$OVMX_MODULE_SIGNING_KEY" ] || fail "OVMX_MODULE_SIGNING_KEY=$OVMX_MODULE_SIGNING_KEY is not a non-empty file"
+    BUILDX_ARGS+=(--secret "id=ovmx_module_signing_key,src=$OVMX_MODULE_SIGNING_KEY")
+    log "module signing: using key from OVMX_MODULE_SIGNING_KEY (deterministic signatures)"
+else
+    log "module signing: no OVMX_MODULE_SIGNING_KEY set -- kernel will use an ephemeral key (signatures not byte-reproducible)"
+fi
 BUILDX_ARGS+=("$SRC_DIR")
 
 log "building (SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH, no-cache=$NO_CACHE) -- this runs the full" \

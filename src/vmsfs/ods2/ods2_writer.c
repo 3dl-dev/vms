@@ -12,15 +12,30 @@
  * bits, [F] reserved-file names read off the real-VAX increment-2 fixture)
  * and the simplifications explicitly labeled [OVMX-inferred] there.
  *
- * Like ods2_reader.c, this operates purely over an in-memory image buffer
- * (caller-owned) and does no I/O of its own.
+ * The original (in-memory) writer operates purely over a caller-owned image
+ * buffer and does no I/O of its own. Increment 11 (vms-6d3b, R2 of the
+ * real-ODS-2-runtime epic vms-5eb) ADDS a block-device-backed mode -- see
+ * ods2.h's "BLOCK-DEVICE-BACKED WRITER" section for the full design. Every
+ * static helper below still reaches the volume through the single wblk()
+ * choke point; only wblk() itself, ods2_volume_format() (split into a
+ * shared format_common() + a thin in-memory-mode wrapper), the block
+ * bump-allocator, and ods2_wvolume_dir_insert()'s header re-read are
+ * touched to add the second mode. Both modes coexist; the in-memory path's
+ * behavior/output is unchanged.
  */
+
+/* pread / pwrite / lseek / off_t / SEEK_END, for the block-device-backed
+ * mode added in increment 11 -- same feature-test macro ods2_bdev.c uses,
+ * so this TU is self-sufficient regardless of the compiler's default -std
+ * extensions. Harmless for the (still default) in-memory-only callers. */
+#define _POSIX_C_SOURCE 200809L
 
 #include "vmsfs/ods2.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* ---- little-endian scalar writes (endian-independent) ---- */
 
@@ -43,9 +58,243 @@ static inline uint16_t rd16(const uint8_t *p)
     return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
 }
 
+/* ================================================================
+ * Sparse block cache -- backs BLOCK-DEVICE-BACKED mode (increment 11,
+ * vms-6d3b). See ods2.h's "BLOCK-DEVICE-BACKED WRITER" section for the
+ * full design. Fixed capacity, open-addressed by LBN; a cache miss on an
+ * LBN not explicitly seeded (wcache_seed_zero_range()) is fetched via
+ * pread -- this writer never depends on ambient/foreign device content, so
+ * every miss it can legitimately hit is either a fresh seed or a re-read
+ * of its OWN earlier pwrite. OVMX design choice, not an on-disk fact: the
+ * cache shape is pure bookkeeping and changes nothing about the bytes
+ * committed to the device.
+ * ================================================================ */
+
+#define WCACHE_CAP 4096u   /* ~2MB; bounds one top-level call's own working
+                            * set (format()'s fixed reserved-layout region,
+                            * or one create_file/create_dir/dir_insert's
+                            * touched blocks -- see ods2_wvolume_flush(),
+                            * called automatically at the end of every
+                            * top-level entry point so the cache never
+                            * needs to hold more than that). Exceeding it is
+                            * reported via wvol->io_error (ODS2_ERR_NOSPACE),
+                            * never silently dropped -- the same convention
+                            * ODS2_WDIR_MAX_BLOCKS/_EXTENTS already use. */
+
+typedef struct wcache_ent {
+    uint32_t lbn;
+    uint8_t  used;
+    uint8_t  data[ODS2_BLOCK_SIZE];
+} wcache_ent_t;
+
+typedef struct wcache {
+    unsigned      cap;
+    unsigned      n;
+    wcache_ent_t *ent;
+} wcache_t;
+
+/* Returned on cache-full / I/O-failure so a wblk() caller's subsequent
+ * field writes never dereference NULL; wvol->io_error is set so the
+ * failure still surfaces honestly at the top-level call's return. */
+static uint8_t wcache_scratch[ODS2_BLOCK_SIZE];
+
+static ods2_status_t wcache_init(ods2_wvolume_t *wvol)
+{
+    wcache_t *c = (wcache_t *)calloc(1, sizeof(*c));
+    if (!c)
+        return ODS2_ERR_NOSPACE;
+    c->ent = (wcache_ent_t *)calloc(WCACHE_CAP, sizeof(wcache_ent_t));
+    if (!c->ent) {
+        free(c);
+        return ODS2_ERR_NOSPACE;
+    }
+    c->cap = WCACHE_CAP;
+    c->n   = 0;
+    wvol->wcache_priv = c;
+    wvol->io_error    = ODS2_OK;
+    return ODS2_OK;
+}
+
+static void wcache_free(ods2_wvolume_t *wvol)
+{
+    wcache_t *c = (wcache_t *)wvol->wcache_priv;
+    if (!c)
+        return;
+    free(c->ent);
+    free(c);
+    wvol->wcache_priv = NULL;
+}
+
+/* Open-addressed find-or-insert. Returns NULL (cache full, LBN not already
+ * present) rather than evicting -- callers report ODS2_ERR_NOSPACE. */
+static wcache_ent_t *wcache_slot(wcache_t *c, uint32_t lbn, int *created)
+{
+    unsigned start = (unsigned)((lbn * 2654435761u) % c->cap);
+    unsigned i = start;
+
+    for (;;) {
+        wcache_ent_t *e = &c->ent[i];
+        if (e->used && e->lbn == lbn) {
+            *created = 0;
+            return e;
+        }
+        if (!e->used) {
+            *created = 1;
+            return e;
+        }
+        i = (i + 1) % c->cap;
+        if (i == start)
+            return NULL;   /* full, and lbn not present */
+    }
+}
+
+/*
+ * Fetch (or create) the cache entry for `lbn`. A newly created entry is
+ * either zero-filled (`zero_fill`, for an LBN this writer is about to
+ * overwrite from scratch -- see wcache_seed_zero_range()) or pread from
+ * `wvol->bdev_fd` (a re-read of this writer's own earlier pwrite). Never
+ * fails outwardly -- a real failure is recorded in `wvol->io_error` and the
+ * shared scratch block is returned so the caller's writes land somewhere
+ * valid but harmless.
+ */
+static uint8_t *wcache_block(ods2_wvolume_t *wvol, uint32_t lbn, int zero_fill)
+{
+    wcache_t *c = (wcache_t *)wvol->wcache_priv;
+    wcache_ent_t *e;
+    int created;
+
+    if (!c) {
+        wvol->io_error = ODS2_ERR_ARGS;
+        return wcache_scratch;
+    }
+    e = wcache_slot(c, lbn, &created);
+    if (!e) {
+        wvol->io_error = ODS2_ERR_NOSPACE;
+        return wcache_scratch;
+    }
+    if (created) {
+        e->used = 1;
+        e->lbn  = lbn;
+        c->n++;
+        if (zero_fill) {
+            memset(e->data, 0, ODS2_BLOCK_SIZE);
+        } else {
+            off_t off = (off_t)lbn * (off_t)ODS2_BLOCK_SIZE;
+            size_t done = 0;
+            while (done < ODS2_BLOCK_SIZE) {
+                ssize_t n = pread(wvol->bdev_fd, e->data + done,
+                                  ODS2_BLOCK_SIZE - done, off + (off_t)done);
+                if (n <= 0) {
+                    wvol->io_error = ODS2_ERR_IO;
+                    break;
+                }
+                done += (size_t)n;
+            }
+        }
+    }
+    return e->data;
+}
+
+/*
+ * Seed LBNs [base, base+count) into the cache as all-zero, WITHOUT any
+ * pread -- the block-device-backed equivalent of ods2_volume_format()'s
+ * whole-image memset(0), scoped to only the LBNs about to be used (the
+ * fixed reserved-layout region at format time, or a range just handed out
+ * by the bump allocator). No-op in in-memory mode (already zeroed by
+ * ods2_volume_format()'s own top-level memset).
+ */
+static void wcache_seed_zero_range(ods2_wvolume_t *wvol, uint32_t base_lbn,
+                                   uint32_t count)
+{
+    uint32_t i;
+    if (!wvol->is_bdev)
+        return;
+    for (i = 0; i < count; i++)
+        (void)wcache_block(wvol, base_lbn + i, /*zero_fill=*/1);
+}
+
+ods2_status_t ods2_wvolume_flush(ods2_wvolume_t *wvol)
+{
+    wcache_t *c;
+    unsigned i;
+
+    if (!wvol)
+        return ODS2_ERR_ARGS;
+    if (!wvol->is_bdev)
+        return ODS2_OK;   /* in-memory mode: nothing to flush */
+    c = (wcache_t *)wvol->wcache_priv;
+    if (!c)
+        return ODS2_OK;
+
+    for (i = 0; i < c->cap; i++) {
+        wcache_ent_t *e = &c->ent[i];
+        off_t off;
+        size_t done = 0;
+
+        if (!e->used)
+            continue;
+        off = (off_t)e->lbn * (off_t)ODS2_BLOCK_SIZE;
+        while (done < ODS2_BLOCK_SIZE) {
+            ssize_t n = pwrite(wvol->bdev_fd, e->data + done,
+                               ODS2_BLOCK_SIZE - done, off + (off_t)done);
+            if (n <= 0) {
+                wvol->io_error = ODS2_ERR_IO;
+                break;
+            }
+            done += (size_t)n;
+        }
+        e->used = 0;
+    }
+    c->n = 0;
+
+    return wvol->io_error;
+}
+
+void ods2_wvolume_close(ods2_wvolume_t *wvol)
+{
+    if (!wvol || !wvol->is_bdev)
+        return;
+    (void)ods2_wvolume_flush(wvol);   /* best-effort */
+    wcache_free(wvol);
+}
+
+/*
+ * The single choke point every static helper in this file uses to reach a
+ * block's bytes. In-memory mode: unchanged pointer arithmetic. Block-
+ * device-backed mode (increment 11): the sparse cache above -- a hit
+ * returns the cached copy (so a block written earlier in the same
+ * top-level call is seen by a later touch within that call, exactly like
+ * the in-memory buffer); a miss is fetched via pread (never zero-filled
+ * here -- wcache_seed_zero_range() is the only zero-fill path, called
+ * explicitly by format()/alloc_blocks() for LBNs about to be overwritten
+ * from scratch).
+ */
 static uint8_t *wblk(ods2_wvolume_t *wvol, uint32_t lbn)
 {
-    return wvol->image + (size_t)lbn * ODS2_BLOCK_SIZE;
+    if (!wvol->is_bdev)
+        return wvol->image + (size_t)lbn * ODS2_BLOCK_SIZE;
+    return wcache_block(wvol, lbn, /*zero_fill=*/0);
+}
+
+/*
+ * Tail-call helper for every top-level ods2_wvolume_*() entry point
+ * (create_file/create_dir/dir_insert -- format_bdev() does the same thing
+ * inline since it also needs to free the cache on failure). In-memory mode:
+ * a no-op, ODS2_OK. Block-device-backed mode: surface any sticky
+ * pread/pwrite/cache-capacity failure recorded during the call (see
+ * wcache_block()'s design note), then commit + clear the cache via
+ * ods2_wvolume_flush() so this call's working set never lingers into the
+ * next one.
+ */
+static ods2_status_t wvol_commit(ods2_wvolume_t *wvol, ods2_status_t st)
+{
+    if (st != ODS2_OK)
+        return st;
+    if (!wvol->is_bdev)
+        return ODS2_OK;
+    if (wvol->io_error != ODS2_OK)
+        return wvol->io_error;
+    return ods2_wvolume_flush(wvol);
 }
 
 /* ================================================================
@@ -587,37 +836,24 @@ static void write_home_block(ods2_wvolume_t *wvol, uint32_t self_lbn,
 }
 
 /* ================================================================
- * ods2_volume_format()
+ * ods2_volume_format() / ods2_wvolume_format_bdev()
+ *
+ * format_common() is the SHARED body -- everything that was originally
+ * ods2_volume_format() from "---- fixed layout ----" onward, unchanged --
+ * reaching the volume purely through wvol/wblk(), so it runs identically in
+ * either mode. Split out in increment 11 (vms-6d3b) so the block-device-
+ * backed entry point below does not duplicate any byte-encoding logic.
  * ================================================================ */
 
-ods2_status_t ods2_volume_format(uint8_t *image, size_t image_len,
-                                 const ods2_format_params_t *params,
-                                 ods2_wvolume_t *wvol)
+static ods2_status_t format_common(ods2_wvolume_t *wvol,
+                                   const ods2_format_params_t *params)
 {
-    uint32_t total_blocks, maxfiles;
+    uint32_t total_blocks = wvol->nblocks, maxfiles = wvol->maxfiles;
     uint32_t ibmap_size, hdr_base, altidx_lbn;
     uint32_t bitmap_scb_lbn, bitmap_bits_blocks, bitmap_total;
     uint32_t mfd_lbn, security_lbn, reserved_end;
     ods2_status_t st;
     ods2_uic_t system_uic;
-
-    if (!image || !params || !wvol || !params->volname)
-        return ODS2_ERR_ARGS;
-
-    total_blocks = params->total_blocks;
-    maxfiles     = params->maxfiles;
-    if (total_blocks == 0 || (size_t)total_blocks * ODS2_BLOCK_SIZE > image_len)
-        return ODS2_ERR_ARGS;
-    if (maxfiles < ODS2_RESFILES)
-        return ODS2_ERR_ARGS;
-
-    memset(image, 0, (size_t)total_blocks * ODS2_BLOCK_SIZE);
-
-    memset(wvol, 0, sizeof(*wvol));
-    wvol->image     = image;
-    wvol->image_len = image_len;
-    wvol->nblocks   = total_blocks;
-    wvol->maxfiles  = maxfiles;
 
     /* ---- fixed layout ----
      * [F12] (increment 6, vms-0f3): PHYSICAL LBN order now matches the
@@ -695,6 +931,13 @@ ods2_status_t ods2_volume_format(uint8_t *image, size_t image_len,
 
     if (reserved_end >= total_blocks)
         return ODS2_ERR_SIZE;   /* volume too small for the fixed layout */
+
+    /* Block-device-backed mode only (increment 11): seed the ENTIRE fixed
+     * reserved-layout region [0, reserved_end) as zero before anything
+     * below touches it -- the scoped equivalent of the in-memory path's
+     * whole-image memset(0) at the top of ods2_volume_format(). No-op in
+     * in-memory mode (already zeroed there). */
+    wcache_seed_zero_range(wvol, 0, reserved_end);
 
     wvol->ibmap_lbn          = bitmap_scb_lbn + bitmap_total;
     wvol->ibmap_size         = ibmap_size;
@@ -973,6 +1216,94 @@ ods2_status_t ods2_volume_format(uint8_t *image, size_t image_len,
         }
     }
 
+    if (wvol->is_bdev && wvol->io_error != ODS2_OK)
+        return wvol->io_error;
+    return ODS2_OK;
+}
+
+ods2_status_t ods2_volume_format(uint8_t *image, size_t image_len,
+                                 const ods2_format_params_t *params,
+                                 ods2_wvolume_t *wvol)
+{
+    uint32_t total_blocks, maxfiles;
+
+    if (!image || !params || !wvol || !params->volname)
+        return ODS2_ERR_ARGS;
+
+    total_blocks = params->total_blocks;
+    maxfiles     = params->maxfiles;
+    if (total_blocks == 0 || (size_t)total_blocks * ODS2_BLOCK_SIZE > image_len)
+        return ODS2_ERR_ARGS;
+    if (maxfiles < ODS2_RESFILES)
+        return ODS2_ERR_ARGS;
+
+    memset(image, 0, (size_t)total_blocks * ODS2_BLOCK_SIZE);
+
+    memset(wvol, 0, sizeof(*wvol));
+    wvol->image     = image;
+    wvol->image_len = image_len;
+    wvol->nblocks   = total_blocks;
+    wvol->maxfiles  = maxfiles;
+
+    return format_common(wvol, params);
+}
+
+/*
+ * Block-device-backed twin of ods2_volume_format() (increment 11, vms-6d3b).
+ * See ods2.h's "BLOCK-DEVICE-BACKED WRITER" section for the full design.
+ */
+ods2_status_t ods2_wvolume_format_bdev(int fd, uint64_t span_bytes,
+                                       const ods2_format_params_t *params,
+                                       ods2_wvolume_t *wvol)
+{
+    uint32_t total_blocks, maxfiles;
+    ods2_status_t st;
+
+    if (fd < 0 || !params || !wvol || !params->volname)
+        return ODS2_ERR_ARGS;
+
+    /* Auto-detect the volume size when the caller passes 0, same convention
+     * as ods2_bdev_open(). */
+    if (span_bytes == 0) {
+        off_t end = lseek(fd, 0, SEEK_END);
+        if (end < 0)
+            return ODS2_ERR_IO;
+        span_bytes = (uint64_t)end;
+    }
+
+    total_blocks = params->total_blocks;
+    maxfiles     = params->maxfiles;
+    if (total_blocks == 0 ||
+        (uint64_t)total_blocks * ODS2_BLOCK_SIZE > span_bytes)
+        return ODS2_ERR_ARGS;
+    if (maxfiles < ODS2_RESFILES)
+        return ODS2_ERR_ARGS;
+
+    memset(wvol, 0, sizeof(*wvol));
+    wvol->is_bdev  = 1;
+    wvol->bdev_fd  = fd;
+    wvol->nblocks  = total_blocks;
+    wvol->maxfiles = maxfiles;
+
+    st = wcache_init(wvol);
+    if (st != ODS2_OK)
+        return st;
+
+    st = format_common(wvol, params);
+    if (st != ODS2_OK) {
+        wcache_free(wvol);
+        return st;
+    }
+
+    /* Commit the whole fixed reserved layout (home block pair, index file
+     * bitmap, ten reserved files, BITMAP.SYS SCB + storage bitmap, MFD) to
+     * the real block device via pwrite before returning -- no buffer sized
+     * to total_blocks was ever allocated to get here. */
+    st = ods2_wvolume_flush(wvol);
+    if (st != ODS2_OK) {
+        wcache_free(wvol);
+        return st;
+    }
     return ODS2_OK;
 }
 
@@ -991,10 +1322,19 @@ ods2_status_t ods2_wvolume_alloc_blocks(ods2_wvolume_t *wvol,
         return ODS2_ERR_NOSPACE;
 
     lbn = wvol->next_free_lbn;
+    /* Block-device-backed mode only (increment 11): the caller is about to
+     * overwrite [lbn, lbn+count) from scratch (a fresh file's data blocks,
+     * a fresh header slot, a grown directory's new blocks) -- seed it zero
+     * without a pread, the same "no ambient content matters" reasoning
+     * format_common() applies to the fixed reserved-layout region. No-op in
+     * in-memory mode (the whole image was already zeroed at format time). */
+    wcache_seed_zero_range(wvol, lbn, count);
     storage_bitmap_mark_used(wvol, lbn, count);
     wvol->next_free_lbn += count;
 
     *lbn_out = lbn;
+    if (wvol->is_bdev && wvol->io_error != ODS2_OK)
+        return wvol->io_error;
     return ODS2_OK;
 }
 
@@ -1164,7 +1504,7 @@ ods2_status_t ods2_wvolume_create_file(ods2_wvolume_t *wvol,
     }
 
     fid_from_num(fidnum, fid_out);
-    return ODS2_OK;
+    return wvol_commit(wvol, ODS2_OK);
 }
 
 ods2_status_t ods2_wvolume_create_dir(ods2_wvolume_t *wvol,
@@ -1195,7 +1535,7 @@ ods2_status_t ods2_wvolume_create_dir(ods2_wvolume_t *wvol,
         return st;
 
     fid_from_num(fidnum, fid_out);
-    return ODS2_OK;
+    return wvol_commit(wvol, ODS2_OK);
 }
 
 /* ================================================================
@@ -1302,7 +1642,8 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                                       ods2_fid_t entry_fid)
 {
     uint8_t hdr[ODS2_BLOCK_SIZE];
-    ods2_volume_t view;
+    ods2_fh2_t hdr_parsed;
+    uint32_t dir_fidnum;
     ods2_status_t st;
     struct wdir_extents exts;
     uint32_t lbns[ODS2_WDIR_MAX_BLOCKS];
@@ -1322,15 +1663,30 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
     if (namecount == 0 || namecount > 255)
         return ODS2_ERR_ARGS;
 
-    /* Re-open a read view of this same image (home block + all headers
-     * written so far are already finalized/checksummed) to reuse the
-     * increment-1 reader's header-read + map-walk logic rather than
-     * duplicating it. */
-    st = ods2_volume_open(&view, wvol->image, wvol->image_len);
-    if (st != ODS2_OK)
-        return st;
-    st = ods2_volume_read_header(&view, ods2_fid_number(&dir_fid),
-                                 hdr, sizeof(hdr));
+    /*
+     * Read the directory's own header (already finalized/checksummed by an
+     * earlier create_dir()/format() call) straight through wblk() -- the
+     * SAME choke point every other helper in this file uses, mode-agnostic
+     * between in-memory and block-device-backed. wvol->hdr_base_lbn is, by
+     * construction, exactly what ods2_volume_read_header() would compute
+     * from the home block itself (hm2_ibmaplbn + hm2_ibmapsize -- see
+     * write_home_block() above, which writes hm2_ibmaplbn == wvol->
+     * ibmap_lbn, and wvol->hdr_base_lbn == wvol->ibmap_lbn + wvol->
+     * ibmap_size), so this is provably equivalent to the increment-1..10
+     * "reopen a reader view" approach it replaces (increment 11, vms-6d3b)
+     * -- it was needed as a reader-reuse convenience for the in-memory-only
+     * `ods2_volume_open(vol, wvol->image, ...)` call, which has no
+     * block-device-backed equivalent (there is no flat `image` to open a
+     * view over in that mode). ods2_fh2_parse() still validates the header's
+     * checksum exactly as ods2_volume_read_header() did internally.
+     */
+    dir_fidnum = ods2_fid_number(&dir_fid);
+    if (dir_fidnum < 1)
+        return ODS2_ERR_ARGS;
+    if (dir_fidnum > wvol->maxfiles)
+        return ODS2_ERR_RANGE;
+    memcpy(hdr, wblk(wvol, wvol->hdr_base_lbn + (dir_fidnum - 1)), ODS2_BLOCK_SIZE);
+    st = ods2_fh2_parse(hdr, ODS2_BLOCK_SIZE, &hdr_parsed);
     if (st != ODS2_OK)
         return st;
 
@@ -1534,5 +1890,5 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
         put16(h + offsetof(ods2_fh2_t, fh2_checksum), ods2_block_checksum(h));
     }
 
-    return ODS2_OK;
+    return wvol_commit(wvol, ODS2_OK);
 }

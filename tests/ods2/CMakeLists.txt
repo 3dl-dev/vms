@@ -75,6 +75,24 @@ set_tests_properties(ods2_bdev PROPERTIES
     TIMEOUT 30
 )
 
+# vms-6d3b (R2 of the real-ODS-2-runtime epic vms-5eb): the BLOCK-DEVICE-
+# BACKED WRITER -- the WRITE counterpart to vms-6cb's block-backed reader
+# above. Builds a genuine volume DIRECTLY against a real loop-image fd via
+# ods2_wvolume_format_bdev()/create_dir()/create_file()/dir_insert() (pwrite,
+# never an in-memory whole-image buffer), reads it back with the EXISTING
+# block-backed reader (ods2_bdev_*) over the SAME fd, decodes a created
+# file's VAR records byte-exact, and cross-checks the output against the
+# in-memory writer (ods2_volume_format()) for byte-identity.
+add_executable(test_ods2_write_bdev test_ods2_write_bdev.c)
+target_include_directories(test_ods2_write_bdev PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_write_bdev PRIVATE ods2)
+
+add_test(NAME ods2_write_bdev COMMAND test_ods2_write_bdev)
+set_tests_properties(ods2_write_bdev PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)
+
 # vms-1bd (R8 of the real-ODS-2-runtime epic vms-5eb): MULTI-BLOCK DIRECTORY
 # GROWTH ([F17]). Inserts more files into one directory than fit in a single
 # 512-byte directory block, forcing ods2_wvolume_dir_insert() to grow the

@@ -1993,3 +1993,23 @@ uint32_t vms_kif_bg_dassgn(uint32_t exec_chan)
 
     return args.status;
 }
+
+uint32_t vms_kif_bg_pollfd(uint32_t exec_chan, int *out_fd)
+{
+    struct vms_bg_pollfd_args args;
+
+    if (out_fd)
+        *out_fd = -1;
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.fd = -1;
+
+    KIF_CALL(VMS_IOCTL_BG_POLLFD, &args);
+
+    if ((args.status & 1) && out_fd)
+        *out_fd = args.fd;
+    return args.status;
+}

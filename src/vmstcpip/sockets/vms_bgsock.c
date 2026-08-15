@@ -242,6 +242,21 @@ int ovmx_socket_close(int s)
     return 0;
 }
 
+int ovmx_pollfd(int s)
+{
+    struct bg_sock *p = sock_get(s);
+    int fd = -1;
+    uint32_t st;
+
+    if (p == NULL) { errno = EBADF; return -1; }
+    /* Ask the executive for a real readiness-only pollable fd on the channel's
+     * socket. The fd is poll()/select()-able and reflects the socket's true
+     * readiness; data still moves via ovmx_send()/ovmx_recv(). */
+    st = vms_kif_bg_pollfd(p->exec_chan, &fd);
+    if (!(st & 1)) { errno = bg_status_to_errno(st); return -1; }
+    return fd;
+}
+
 /* ---- numeric IPv4 resolution (no DNS yet) ------------------------------- */
 
 int ovmx_inet_pton(int af, const char *src, void *dst)

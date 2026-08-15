@@ -101,3 +101,4 @@ vms_kif_bg_send=PROCEDURE
 vms_kif_bg_recv=PROCEDURE
 vms_kif_bg_deaccess=PROCEDURE
 vms_kif_bg_dassgn=PROCEDURE
+vms_kif_bg_pollfd=PROCEDURE

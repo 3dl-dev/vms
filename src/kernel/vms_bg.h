@@ -123,6 +123,24 @@ struct vms_bg_io_args {
     char     data[VMS_BG_IOCTL_MAXLEN];
 };
 
+/*
+ * Readiness poll fd (vms-22a): hand back a REAL Linux pollable fd for the
+ * channel's socket, so a userspace event loop (poll()/select(), e.g. OpenSSH's
+ * clientloop/serverloop) can wait for the connection to become readable or
+ * writable WITHOUT reading its data. The fd is READINESS-ONLY: it has no read/
+ * write file ops, its .poll delegates to the executive socket's own readiness,
+ * so the socket stays executive-resident and data still moves ONLY through
+ * IO$_READVBLK / IO$_WRITEVBLK. This is what makes a VMS TCP/IP Services socket
+ * select()-able, and it lets OpenSSH's poll() over the connection fd work
+ * unchanged. OVMX design choice (Rule 8): the fd is our own readiness handle,
+ * not a VMS-authentic object.
+ */
+struct vms_bg_pollfd_args {
+    uint32_t chan;          /* in */
+    int32_t  fd;            /* out: readiness-only pollable fd (>= 0), else -1 */
+    uint32_t status;        /* out */
+};
+
 #define VMS_IOCTL_BG_CREATE   _IOWR(VMS_IOC_MAGIC, 0x80, struct vms_bg_create_args)
 #define VMS_IOCTL_BG_SETMODE  _IOWR(VMS_IOC_MAGIC, 0x81, struct vms_bg_chanonly_args)
 #define VMS_IOCTL_BG_CONNECT  _IOWR(VMS_IOC_MAGIC, 0x82, struct vms_bg_connect_args)
@@ -130,6 +148,7 @@ struct vms_bg_io_args {
 #define VMS_IOCTL_BG_RECV     _IOWR(VMS_IOC_MAGIC, 0x84, struct vms_bg_io_args)
 #define VMS_IOCTL_BG_DEACCESS _IOWR(VMS_IOC_MAGIC, 0x85, struct vms_bg_chanonly_args)
 #define VMS_IOCTL_BG_DASSGN   _IOWR(VMS_IOC_MAGIC, 0x86, struct vms_bg_chanonly_args)
+#define VMS_IOCTL_BG_POLLFD   _IOWR(VMS_IOC_MAGIC, 0x87, struct vms_bg_pollfd_args)
 
 /*
  * Freeze the shared layouts -- see vms_mbx.h's identical note for why this
@@ -145,5 +164,7 @@ _Static_assert(sizeof(struct vms_bg_connect_args) == 16,
                "vms_bg_connect_args changed size -- VMS_IOCTL_BG_CONNECT ABI break");
 _Static_assert(sizeof(struct vms_bg_io_args) == 16 + VMS_BG_IOCTL_MAXLEN,
                "vms_bg_io_args changed size -- VMS_IOCTL_BG_SEND/RECV ABI break");
+_Static_assert(sizeof(struct vms_bg_pollfd_args) == 12,
+               "vms_bg_pollfd_args changed size -- VMS_IOCTL_BG_POLLFD ABI break");
 
 #endif /* _VMS_BG_H */

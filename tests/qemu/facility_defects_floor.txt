@@ -408,4 +408,9 @@
 # Raised to 103 by vms-22a bgsock-recv-length-zeroed -- the BSD-sockets RTL
 # veneer over BGn: (vms_bgsock.c ovmx_recv); anchors test_syssvc_bgsock_echo
 # (concurrent full-duplex 127.0.0.1 echo over a real /dev/vms).
-103
+# Raised to 104 by vms-22a bgsock-poll-always-ready -- the executive readiness
+# poll fd (kernel/vms_bg.c, VMS_IOCTL_BG_POLLFD): a real readiness-only Linux
+# pollable fd for a BGn: socket. Anchors test_syssvc_bgsock_poll (poll() on the
+# fd blocks until the loopback peer sends, over a real /dev/vms); the mutation
+# makes .poll report readable unconditionally so poll() fires before data.
+104

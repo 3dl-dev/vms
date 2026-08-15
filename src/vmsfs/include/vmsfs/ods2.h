@@ -1177,9 +1177,25 @@ typedef struct ods2_format_params {
 } ods2_format_params_t;
 
 /*
- * Writer handle for an in-memory volume image under construction. `image`
- * is caller-owned (typically a heap buffer of total_blocks * ODS2_BLOCK_SIZE
- * bytes) and is written into directly by every ods2_wvolume_*() call.
+ * Writer handle for a volume under construction. TWO modes, selected by
+ * which constructor initializes `wvol`:
+ *
+ *   - IN-MEMORY mode (ods2_volume_format()): `image` is a caller-owned flat
+ *     buffer (typically total_blocks * ODS2_BLOCK_SIZE bytes) and every
+ *     ods2_wvolume_*() call writes into it directly via plain pointer
+ *     arithmetic. `is_bdev` is 0, `image` is non-NULL.
+ *
+ *   - BLOCK-DEVICE-BACKED mode (ods2_wvolume_format_bdev(), vms-6d3b, R2 of
+ *     the real-ODS-2-runtime epic vms-5eb following R1's block-backed
+ *     READER, vms-6cb / ods2_bdev.c): `image` is NULL, `is_bdev` is 1, and
+ *     every touched block is committed to `bdev_fd` via pwrite instead of
+ *     living in a buffer sized to the whole volume -- the WRITE counterpart
+ *     of ods2_bdev_t. See the "BLOCK-DEVICE-BACKED WRITER" section below the
+ *     WRITER section for the full design + provenance.
+ *
+ * ALL existing ods2_wvolume_*() entry points (create_file/create_dir/
+ * dir_insert/alloc_blocks) work UNCHANGED in either mode -- they go through
+ * the single wblk() choke point internally, which dispatches on `is_bdev`.
  */
 typedef struct ods2_wvolume {
     uint8_t  *image;
@@ -1194,6 +1210,18 @@ typedef struct ods2_wvolume {
     uint32_t  next_free_lbn;        /* bump allocator watermark, blocks     */
     uint32_t  next_free_fid;        /* bump allocator watermark, FIDs       */
     ods2_fid_t mfd_fid;             /* FID of [000000] (ODS2_FID_MFD)       */
+
+    /* ---- block-device-backed mode only (vms-6d3b) ---- */
+    int            is_bdev;         /* 0 == in-memory `image` mode (above)  */
+    int            bdev_fd;         /* backing fd, borrowed (not owned)     */
+    void          *wcache_priv;     /* opaque sparse block cache, see .c    */
+    ods2_status_t  io_error;        /* sticky I/O/capacity failure, checked
+                                      * at the tail of every public entry
+                                      * point so a pread/pwrite failure deep
+                                      * inside wblk() (which cannot itself
+                                      * return a status -- see the .c file's
+                                      * design note) is never silently
+                                      * swallowed as a fabricated success. */
 } ods2_wvolume_t;
 
 /*
@@ -1294,6 +1322,111 @@ ods2_status_t ods2_security_build(uint8_t block[ODS2_BLOCK_SIZE],
 ods2_status_t ods2_security_parse(const void *block, size_t block_len,
                                   char *label_out, size_t label_out_size,
                                   ods2_uic_t *owner_out);
+
+/* ================================================================
+ * BLOCK-DEVICE-BACKED WRITER (implemented in ods2/ods2_writer.c) --
+ * increment 11, vms-6d3b, R2 of the real-ODS-2-runtime epic vms-5eb.
+ *
+ * The WRITE counterpart to R1's block-backed reader (vms-6cb, ods2_bdev.c):
+ * ods2_wvolume_format_bdev() + the SAME ods2_wvolume_create_file()/
+ * _create_dir()/_dir_insert()/_alloc_blocks() entry points the in-memory
+ * writer already uses build a genuine ODS-2 volume directly against a real
+ * block device / loop-image fd (pwrite), WITHOUT ever allocating a buffer
+ * sized to the whole volume. `total_blocks` in ods2_format_params_t can
+ * therefore represent a real disk far larger than any buffer this process
+ * could hold in RAM.
+ *
+ * DESIGN (Rule 8: this is layout-NEUTRAL bookkeeping, not an on-disk format
+ * choice -- it changes nothing about the bytes this writer produces, only
+ * WHERE they live before being committed; the byte-genuineness citations
+ * for every field this writer emits are unchanged, see the WRITER section
+ * above):
+ *
+ *   Every static helper in ods2_writer.c (write_fh2_header_ext(),
+ *   bitmap_set(), write_home_block(), ods2_wvolume_dir_insert()'s
+ *   flatten/repack, ...) already reaches the volume through exactly ONE
+ *   choke point: a static wblk(wvol, lbn) returning a uint8_t* to that
+ *   block's 512 bytes. In IN-MEMORY mode this is `wvol->image +
+ *   lbn*ODS2_BLOCK_SIZE`, unchanged. In BLOCK-DEVICE-BACKED mode (this
+ *   section), it instead returns a pointer into a bounded, SPARSE cache
+ *   keyed by LBN (a fixed-capacity open-addressed hash table, ~2MB
+ *   regardless of volume size -- OVMX design choice, not a Files-11 fact):
+ *     - a cache hit returns the existing entry (so a block written earlier
+ *       in the SAME top-level call, then re-touched later in that call --
+ *       e.g. the alternate-index-header memcpy, or a directory's re-pack --
+ *       sees its own prior writes, exactly like the in-memory buffer would);
+ *     - a cache miss on an LBN this writer is about to OVERWRITE FROM
+ *       SCRATCH (the fixed reserved-layout region at format() time, or a
+ *       block just handed out by ods2_wvolume_alloc_blocks()'s bump
+ *       allocator) is seeded ALL-ZERO without any I/O -- this writer never
+ *       depends on a freshly allocated block's prior on-device content (it
+ *       always either 0xFF/0x00-fills it outright or overwrites every field
+ *       the byte-genuine layout defines), the same way ods2_volume_format()
+ *       zeroes the WHOLE in-memory image up front; seeding just the
+ *       about-to-be-used LBN range is the block-device-backed equivalent of
+ *       that same zero-fill, scoped to what will actually be touched;
+ *     - a cache miss on any OTHER LBN (an existing directory's data block,
+ *       or its own header, read back by a LATER top-level call after an
+ *       earlier one flushed and cleared the cache) is fetched via pread --
+ *       always returning exactly what THIS writer itself pwrote earlier,
+ *       never foreign/ambient device content, since this writer never reads
+ *       a block it did not itself create.
+ *   Every top-level entry point (format_bdev/create_file/create_dir/
+ *   dir_insert) commits its cache to `bdev_fd` via ods2_wvolume_flush()
+ *   (pwrite, whole-block, hard-failure-on-short-write -- the same shape
+ *   ods2_bdev.c's pread side and src/vmsscs/scs_mscp_srv.c use) and clears
+ *   it before returning success, so the cache never holds more than one
+ *   call's own working set regardless of how many files/inserts a caller
+ *   makes across the volume's lifetime.
+ *
+ *   A pread/pwrite failure or cache-capacity overflow inside wblk() cannot
+ *   itself return a status (wblk()'s signature, shared with the in-memory
+ *   path, is a plain pointer accessor with no error channel) -- it is
+ *   recorded in `wvol->io_error` and a scratch dummy block is returned so
+ *   the caller's subsequent field writes do not crash; every public
+ *   ods2_wvolume_*() entry point checks `io_error` before returning success,
+ *   so a real I/O failure always surfaces as an honest ods2_status_t to the
+ *   caller (never a silently-fabricated ODS2_OK) -- the same "fail honest,
+ *   never fake" convention the reader side (ods2_bdev.c) and CLAUDE.md's
+ *   Rule 9 executive-facility invariant require.
+ * ================================================================ */
+
+/*
+ * Format a fresh, genuine ODS-2 volume directly onto `fd` (a real block
+ * device / character device such as /dev/vms, or a loop-image regular
+ * file) -- the block-device-backed twin of ods2_volume_format() above.
+ * `span_bytes` is the usable size of the volume in bytes; pass 0 to
+ * auto-detect via lseek(fd, 0, SEEK_END), same convention as
+ * ods2_bdev_open(). Every block this call touches (the fixed reserved
+ * layout -- home block pair, index file bitmap, the ten reserved files,
+ * BITMAP.SYS's SCB + storage bitmap, the MFD) is committed via pwrite
+ * before this call returns; NO buffer sized to `params->total_blocks` is
+ * ever allocated. `wvol` is initialized (is_bdev == 1) for subsequent
+ * ods2_wvolume_create_file()/_create_dir()/_dir_insert() calls, which work
+ * completely unchanged from the in-memory path.
+ */
+ods2_status_t ods2_wvolume_format_bdev(int fd, uint64_t span_bytes,
+                                       const ods2_format_params_t *params,
+                                       ods2_wvolume_t *wvol);
+
+/*
+ * Commit every block currently held in `wvol`'s sparse cache to its backing
+ * fd via pwrite, then clear the cache (freeing it to hold the next call's
+ * working set). A no-op returning ODS2_OK in in-memory mode. Called
+ * automatically by every top-level ods2_wvolume_*() entry point in
+ * block-device-backed mode when it succeeds; exposed publicly for a caller
+ * that wants an explicit sync point (e.g. before reading the volume back
+ * with ods2_bdev_* over the same fd).
+ */
+ods2_status_t ods2_wvolume_flush(ods2_wvolume_t *wvol);
+
+/*
+ * Release `wvol`'s sparse block cache (best-effort ods2_wvolume_flush()
+ * first, then frees the cache memory). Does NOT close `bdev_fd` -- exactly
+ * like ods2_bdev_t, the fd is borrowed, not owned. A no-op in in-memory
+ * mode. Safe to call on an already-closed/never-opened `wvol`.
+ */
+void ods2_wvolume_close(ods2_wvolume_t *wvol);
 
 #ifdef __cplusplus
 }

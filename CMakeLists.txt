@@ -213,6 +213,16 @@ add_subdirectory(src/vmsdcl)
 # sockets), so it builds unconditionally like known_images.
 add_subdirectory(src/vmsscs)
 
+# NetBSD/vax facility guest test tools (vmseflag/vmsaccess/vmsproctab/vmsmbx
+# + their width-safety negctl teeth) -- vms-74b, epic vms-509 "unified
+# cross-platform build" Rung D, docs/design-unified-cross-build.md §5/§8.
+# tests/netbsd/guest/CMakeLists.txt no-ops itself (return()) unless
+# CMAKE_SYSTEM_NAME is NetBSD, so this is unconditional and independent of
+# BUILD_TESTS/BUILD_TOOLS -- it replaces the four hand-maintained
+# tools/cross-vax/build-{eflag,access,proctab,mbx}-tool-vax.sh scripts, which
+# always built regardless of any flag either.
+add_subdirectory(tests/netbsd/guest)
+
 if(BUILD_TESTS)
     add_subdirectory(tests/libvms)
     add_subdirectory(tests/vmsprocess)

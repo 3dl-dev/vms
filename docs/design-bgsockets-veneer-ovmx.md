@@ -56,36 +56,44 @@ fails `ENODEV`. The veneer **never** falls back to a raw Linux `socket()` that
 would connect while sharing nothing with the executive. A silent userspace
 fallback is exactly the LARP bug class the authenticity invariants kill.
 
-## 4. Root cause of the first wedge, and the fix
+## 4. Root cause of the wedge, and the fix
 
-A first bridge exposed a *pollable fd* via a socketpair + two pump threads
-(one `IO$_WRITEVBLK`, one `IO$_READVBLK`). It wedged in-guest. Investigation
-(conductor step 1) traced the whole `$QIO` path and found **the executive fully
-supports a blocking read and a blocking write outstanding at once on one
-channel** — nothing serializes them:
+The first bridge (a socketpair + two pump threads exposing a pollable fd) wedged;
+the second (direct blocking `sys$qiow`) failed one assertion reproducibly — **the
+send on the main thread passed, the recv on a reader thread failed**. That tell
+located the real cause, and it is **not** executive serialization:
 
-- **kernel dispatch** — `vms_dev_ioctl` is `unlocked_ioctl` (concurrent per-fd);
-  it takes no lock.
-- **`vms_bg.c`** — `bgchan_lookup` lifts the socket pointer out from under
-  `proc->chan_lock` and **drops the lock** before the sleeping
-  `kernel_recvmsg`/`kernel_sendmsg`.
-- **`sys_qio.c`** — `qio_bg_op` holds no lock across `vms_kif_bg_send/recv`.
-- The proc is shared by `current->tgid` (all threads), `REGISTER` is idempotent,
-  the kif args are stack-local, and the host kernel socket is inherently
-  full-duplex.
+- The executive fully supports a blocking read and a blocking write outstanding
+  at once on one channel — nothing holds a lock across the socket op (kernel
+  `unlocked_ioctl`; `vms_bg.c` drops `proc->chan_lock` before the sleeping
+  `kernel_recvmsg`/`kernel_sendmsg`; `sys_qio.c` holds no lock across the kif
+  call), and the host kernel socket is full-duplex. So `vms_bg.c` did **not**
+  need fixing.
+- **The userspace channel table is per-thread.** `src/vmsprocess/vms_pcb.c` keeps
+  the PCB pointer in `__thread current_pcb`, and `vms_pcb_init()` gives each
+  thread its **own** PCB with its **own** channel table. So the sys$ channel the
+  main thread `$ASSIGN`ed does not exist in a reader thread's PCB — its
+  `sys$qiow(recv)` cannot find the socket, while the main thread's `sys$qiow(send)`
+  finds it. A socket is a *process* resource (SSH reads and writes it from
+  different threads), so a per-thread channel table cannot back multi-threaded
+  sockets.
 
-So **`vms_bg.c` did not need fixing** — the wedge was in the veneer's own
-socketpair/pump lifecycle. The fix removes that machinery: the veneer now issues
-**simple blocking `$QIO` directly** (`ovmx_send`→`IO$_WRITEVBLK`,
-`ovmx_recv`→`IO$_READVBLK`). Full-duplex is inherent — two threads may hold a
-send and a recv outstanding at once.
+**Fix (this increment):** the veneer addresses the **executive** BG channel
+directly via the `vms_kif_bg_*` layer. The executive channel **is** process-wide
+— `vms.ko` keys the BG channel list on `current->tgid` (shared by all threads) —
+so every thread operates on the one connection. It is the same executive-resident
+socket and the same `IO$_SETMODE`/`IO$_ACCESS`/`IO$_WRITEVBLK`/`IO$_READVBLK`/
+`IO$_DEACCESS` ops; no userspace socket stack; honest `SS$_NOSUCHDEV`→`ENODEV`
+without `/dev/vms`.
 
-`ovmx_socket()` returns an **OVMX handle** (offset `OVMX_BGSOCK_BASE`, never a
-libc fd), used only with the `ovmx_*` calls. A **pollable-fd form** (for
-OpenSSH's `poll()`/`select()` multiplexing) is the next increment — an async
-`$QIO` + AST veneer poll, or a fixed fd bridge.
+> **Finding (filed):** making the userspace PCB's channel table *process-wide*
+> (so the public `sys$assign`/`sys$qiow` path itself works across threads, as VMS
+> channels do) is the VMS-faithful long-term fix. It has a broad blast radius
+> across every sys$ service that reads `vms_pcb_get()`, so it is out of scope for
+> this increment; the veneer's kif-direct path is the correct, localized answer
+> for now.
 
-## 4b. Proof (Rule 9) — GREEN
+## 4b. Proof (Rule 9) — full-duplex, GREEN
 
 `tests/qemu/test_syssvc_bgsock_echo.c` — a **reader thread blocks in
 `ovmx_recv()`** on the connection while the main thread `ovmx_send()`s on the

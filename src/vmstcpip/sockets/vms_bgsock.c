@@ -4,13 +4,22 @@
  * See vms_bgsock.h for the layering, the full-duplex blocking model, and the
  * Rule 9 / INV-6 honest-failure contract.
  *
- * Each sockets call becomes ONE public $ASSIGN/$QIO/$DASSGN op, exactly as
- * src/vmstcpip/services/tcpip_client.h and test_syssvc_bg_echo.c do -- there is
- * no userspace socket stack. ovmx_send()/ovmx_recv() each do a single BLOCKING
- * $QIO; the executive supports a blocking read and a blocking write outstanding
- * at once on one channel (no lock is held across the socket op at any layer, and
- * the host kernel socket is full-duplex), so an app can read and write the same
- * connection concurrently from two threads.
+ * PROCESS-WIDE CHANNELS (why this speaks vms_kif_bg_* directly). A socket is a
+ * PROCESS resource: on VMS a channel assigned by one thread is usable by every
+ * thread of the process, and a full-duplex app (SSH) reads on one thread while
+ * it writes on another. The public sys$assign/sys$qiow path stores its channel
+ * table in the Per-Process Control Block, whose pointer is currently __thread
+ * (src/vmsprocess/vms_pcb.c) -- so a channel assigned on one thread is invisible
+ * to another, and a reader thread's sys$qiow(recv) cannot find the socket the
+ * main thread opened. The EXECUTIVE channel, by contrast, is genuinely
+ * process-wide: vms.ko keys the BG channel list on current->tgid (shared by all
+ * threads). So this veneer addresses the executive BGn: driver at the kif layer
+ * by its executive channel -- the same IO$_SETMODE/IO$_ACCESS/IO$_WRITEVBLK/
+ * IO$_READVBLK/IO$_DEACCESS ops, still the executive-resident socket, no
+ * userspace socket stack -- which is what makes concurrent multi-thread r/w on
+ * one connection work. (Making the userspace PCB's channels process-wide is the
+ * VMS-faithful long-term fix and is filed as a finding; it is out of scope for
+ * this increment and has a broad blast radius across every sys$ service.)
  */
 
 #include <errno.h>
@@ -21,38 +30,27 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-/* OVMX system-service surface (src/libvms/include) -- the same public services
- * tcpip_client.h speaks; no kernel header, no userspace socket stack. */
-#include "starlet.h"
-#include "descrip.h"
-#include "iodef.h"
-#include "iosbdef.h"
+/* OVMX kernel-interface + status codes (freestanding libvmssys). vms_kif_bg_*
+ * are the direct IO$_* ops against the executive-resident BGn: driver; no
+ * userspace socket stack. */
+#include "vms_kif.h"
 #include "ssdef.h"
 
 #include "vms_bgsock.h"
 
 /* The BGn: driver caps one $QIO transfer at 4096 bytes (VMS_BG_IOCTL_MAXLEN, an
- * OVMX design cap; see src/kernel/vms_bg.h and TCPIP_XFER_MAX in
- * tcpip_client.h). Repeated here so this TU depends on no kernel header. */
+ * OVMX design cap; see src/kernel/vms_bg.h). Repeated here so this TU depends on
+ * no kernel header. */
 #define OVMX_BG_XFER_MAX 4096u
 
-/* The 8-byte socket address the BGn: IO$_ACCESS handler reads: AF_INET(2),
- * port (network order), IPv4 addr (network order) -- matches the executive's
- * struct bg_sockaddr_in (src/libvms/syssvc/sys_qio.c) and tcpip_client.h. */
-struct bg_sockaddr_in {
-    uint16_t family;
-    uint16_t port;
-    uint32_t addr;
-};
-
 /* ---- veneer socket table ---------------------------------------------------
- * Maps an OVMX socket handle to its $ASSIGN channel. A blocking send and a
+ * Maps an OVMX socket handle to its EXECUTIVE channel. A blocking send and a
  * blocking recv on the SAME handle run concurrently from two threads: they read
- * only the immutable `chan` here and then each block in its own $QIO, so no lock
- * is held across the executive op (the table lock guards only alloc/find/free). */
+ * only the immutable exec_chan here and then each block in its own $QIO. The
+ * table lock guards only alloc/find/free. */
 struct bg_sock {
     int      in_use;
-    uint16_t chan;              /* $ASSIGN channel (sys$ channel number) */
+    uint32_t exec_chan;         /* executive BG channel (process-wide, by tgid) */
     int      connected;         /* IO$_ACCESS succeeded */
 };
 
@@ -60,7 +58,6 @@ struct bg_sock {
 static struct bg_sock g_socks[BG_SOCK_MAX];
 static pthread_mutex_t g_socks_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* handle <-> table index */
 static int idx_of(int s)
 {
     int i = s - OVMX_BGSOCK_BASE;
@@ -80,15 +77,14 @@ static struct bg_sock *sock_get(int s)
     return p;
 }
 
-/* Allocate a table slot; returns the handle (>= OVMX_BGSOCK_BASE) or -1. */
-static int sock_alloc(uint16_t chan)
+static int sock_alloc(uint32_t exec_chan)
 {
     int i, handle = -1;
     pthread_mutex_lock(&g_socks_lock);
     for (i = 0; i < BG_SOCK_MAX; i++) {
         if (!g_socks[i].in_use) {
             g_socks[i].in_use    = 1;
-            g_socks[i].chan      = chan;
+            g_socks[i].exec_chan = exec_chan;
             g_socks[i].connected = 0;
             handle = OVMX_BGSOCK_BASE + i;
             break;
@@ -117,10 +113,7 @@ static int bg_status_to_errno(uint32_t st)
 
 int ovmx_socket(int domain, int type, int protocol)
 {
-    static const char devname[] = "TCPIP$DEVICE:";
-    struct dsc$descriptor_s dev;
-    struct _iosb iosb;
-    uint16_t chan = 0;
+    uint32_t exec_chan = 0, unit = 0;
     uint32_t st;
     int handle;
 
@@ -130,22 +123,17 @@ int ovmx_socket(int domain, int type, int protocol)
         errno = EPROTONOSUPPORT; return -1;
     }
 
-    dev.dsc$w_length  = (uint16_t)(sizeof(devname) - 1);
-    dev.dsc$b_dtype   = DSC$K_DTYPE_T;
-    dev.dsc$b_class   = DSC$K_CLASS_S;
-    dev.dsc$a_pointer = (char *)devname;
-
     /* $ASSIGN TCPIP$DEVICE: -- SS$_NOSUCHDEV means no /dev/vms; fail honestly,
      * never a raw socket() fallback (INV-6). */
-    st = sys$assign(&dev, &chan, 0, 0);
+    st = vms_kif_bg_create(&exec_chan, &unit, NULL, 0);
     if (!(st & 1)) { errno = bg_status_to_errno(st); return -1; }
 
     /* IO$_SETMODE creates the executive-resident socket. */
-    st = sys$qiow(0, chan, IO$_SETMODE, &iosb, 0, 0, 0, 0, 0, 0, 0, 0);
-    if (!(st & 1)) { errno = bg_status_to_errno(st); sys$dassgn(chan); return -1; }
+    st = vms_kif_bg_setmode(exec_chan);
+    if (!(st & 1)) { errno = bg_status_to_errno(st); vms_kif_bg_dassgn(exec_chan); return -1; }
 
-    handle = sock_alloc(chan);
-    if (handle < 0) { sys$dassgn(chan); errno = EMFILE; return -1; }
+    handle = sock_alloc(exec_chan);
+    if (handle < 0) { vms_kif_bg_dassgn(exec_chan); errno = EMFILE; return -1; }
     return handle;
 }
 
@@ -153,8 +141,6 @@ int ovmx_connect(int s, const struct sockaddr *addr, socklen_t addrlen)
 {
     struct bg_sock *p = sock_get(s);
     const struct sockaddr_in *sin = (const struct sockaddr_in *)addr;
-    struct bg_sockaddr_in bsa;
-    struct _iosb iosb;
     uint32_t st;
 
     if (p == NULL) { errno = EBADF; return -1; }
@@ -164,11 +150,9 @@ int ovmx_connect(int s, const struct sockaddr *addr, socklen_t addrlen)
         errno = EAFNOSUPPORT; return -1;
     }
 
-    bsa.family = 2;                     /* AF_INET as the driver expects */
-    bsa.port   = sin->sin_port;         /* already network order */
-    bsa.addr   = sin->sin_addr.s_addr;  /* already network order */
-    st = sys$qiow(0, p->chan, IO$_ACCESS, &iosb, 0, 0,
-                  &bsa, (uint32_t)sizeof(bsa), 0, 0, 0, 0);
+    /* IO$_ACCESS connects. Family 2 = AF_INET; port + addr are network order,
+     * straight from the sockaddr the caller resolved. */
+    st = vms_kif_bg_connect(p->exec_chan, 2, sin->sin_port, sin->sin_addr.s_addr);
     if (!(st & 1)) { errno = bg_status_to_errno(st); return -1; }
 
     p->connected = 1;
@@ -187,19 +171,18 @@ ssize_t ovmx_send(int s, const void *buf, size_t len, int flags)
 
     /* Send the whole buffer, chunked to the driver's per-QIO cap. Each chunk is
      * one BLOCKING IO$_WRITEVBLK -- safe to run while another thread blocks in
-     * ovmx_recv on this same handle (full-duplex). */
+     * ovmx_recv on this same handle (the executive channel is full-duplex). */
     while (off < len) {
-        struct _iosb iosb;
+        uint32_t actlen = 0;
         uint32_t chunk = (uint32_t)(len - off);
         uint32_t st;
         if (chunk > OVMX_BG_XFER_MAX)
             chunk = OVMX_BG_XFER_MAX;
-        st = sys$qiow(0, p->chan, IO$_WRITEVBLK, &iosb, 0, 0,
-                      (void *)(b + off), chunk, 0, 0, 0, 0);
+        st = vms_kif_bg_send(p->exec_chan, b + off, chunk, &actlen);
         if (!(st & 1)) { errno = bg_status_to_errno(st); return (off ? (ssize_t)off : -1); }
-        if (iosb.iosb$w_bcnt == 0)
+        if (actlen == 0)
             break;                      /* wrote nothing -- treat as done */
-        off += iosb.iosb$w_bcnt;
+        off += actlen;
     }
     return (ssize_t)off;
 }
@@ -207,8 +190,7 @@ ssize_t ovmx_send(int s, const void *buf, size_t len, int flags)
 ssize_t ovmx_recv(int s, void *buf, size_t len, int flags)
 {
     struct bg_sock *p = sock_get(s);
-    struct _iosb iosb;
-    uint32_t bufsz, st;
+    uint32_t bufsz, got = 0, st;
     ssize_t n;
     (void)flags;
 
@@ -217,11 +199,10 @@ ssize_t ovmx_recv(int s, void *buf, size_t len, int flags)
 
     bufsz = (len > OVMX_BG_XFER_MAX) ? OVMX_BG_XFER_MAX : (uint32_t)len;
 
-    /* One BLOCKING IO$_READVBLK. Returns 0 on an orderly peer close (EOF). */
-    st = sys$qiow(0, p->chan, IO$_READVBLK, &iosb, 0, 0,
-                  buf, bufsz, 0, 0, 0, 0);
+    /* One BLOCKING IO$_READVBLK. got==0 with success = orderly peer close (EOF). */
+    st = vms_kif_bg_recv(p->exec_chan, buf, bufsz, &got);
     if (!(st & 1)) { errno = bg_status_to_errno(st); return -1; }
-    n = iosb.iosb$w_bcnt;               /* NEGCTL bgsock-recv-length-zeroed */
+    n = got;                            /* NEGCTL bgsock-recv-length-zeroed */
     return n;
 }
 
@@ -243,22 +224,20 @@ int ovmx_accept(int s, struct sockaddr *addr, socklen_t *addrlen)
 int ovmx_shutdown(int s, int how)
 {
     struct bg_sock *p = sock_get(s);
-    struct _iosb iosb;
     (void)how;
     if (p == NULL) { errno = EBADF; return -1; }
     if (p->connected)
-        sys$qiow(0, p->chan, IO$_DEACCESS, &iosb, 0, 0, 0, 0, 0, 0, 0, 0);
+        vms_kif_bg_deaccess(p->exec_chan);
     return 0;
 }
 
 int ovmx_socket_close(int s)
 {
     struct bg_sock *p = sock_get(s);
-    struct _iosb iosb;
     if (p == NULL) { errno = EBADF; return -1; }
     if (p->connected)
-        sys$qiow(0, p->chan, IO$_DEACCESS, &iosb, 0, 0, 0, 0, 0, 0, 0, 0);
-    sys$dassgn(p->chan);
+        vms_kif_bg_deaccess(p->exec_chan);
+    vms_kif_bg_dassgn(p->exec_chan);
     sock_release(s);
     return 0;
 }

@@ -5403,7 +5403,7 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "ovmx_recv() does one blocking IO\$_READVBLK and returns the IOSB byte count. The mutation zeroes it ('n = iosb\$w_bcnt;' -> 'n = 0;'), so recv reports EOF (0) and the reader thread receives nothing while the send, connect and socket-open all stay green -- only the byte-exact full-duplex echo assertion reddens. One assignment zeroed.";;
+        why)          echo "ovmx_recv() does one blocking IO\$_READVBLK and returns the IOSB byte count. The mutation zeroes it ('n = got;' -> 'n = 0;'), so recv reports EOF (0) and the reader thread receives nothing while the send, connect and socket-open all stay green -- only the byte-exact full-duplex echo assertion reddens. One assignment zeroed.";;
         require_fail) cat <<'EOF'
 the reader thread received the echoed message BYTE-EXACT concurrently with the send (full-duplex)
 EOF
@@ -6295,7 +6295,7 @@ apply_edit() {
         # reports EOF and the reader gets nothing. After substitution no
         # 'n = iosb$w_bcnt;' with that comment is left, so a second apply is the
         # no-op the selftest requires.
-        sed -i 's|n = iosb.iosb$w_bcnt;               /\* NEGCTL bgsock-recv-length-zeroed \*/|n = 0; /* NEGCTL bgsock-recv-length-zeroed */|' "$_file";;
+        sed -i 's|n = got;                            /\* NEGCTL bgsock-recv-length-zeroed \*/|n = 0; /* NEGCTL bgsock-recv-length-zeroed */|' "$_file";;
 
     vmsfs-mountvis-crossproc-resolve-disabled)
         # UNIQUE TEXT: vmsfs_device_resolve_executive's own /proc/mounts guard;

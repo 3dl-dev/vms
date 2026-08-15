@@ -53,6 +53,9 @@ add_library(vmsbgsock STATIC
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets/vms_bgsock.c)
 target_include_directories(vmsbgsock PRIVATE
     ${VMS_INCLUDE_DIR}
+    # vms_kif.h -- the veneer addresses the executive BG channel directly (it is
+    # process-wide by tgid, unlike the __thread sys$ channel table).
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets)
 
 function(qemu_syssvc_add_test name source)

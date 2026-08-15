@@ -5873,145 +5873,6 @@ jobs:
         run: tests/lab-vax/run-boot.sh sysboot-negctl
 
   # -----------------------------------------------------------------------
-  # libvmssys-netbsd-vax (rd vms-9dc, epic vms-8e8; design sec 4).
-  #
-  # BUILD-ONLY cross-compile gate for the OVMX/NetBSD VAX userspace port. It
-  # stands up the pinned `vax--netbsdelf` GCC cross toolchain (binutils 2.42,
-  # gcc 13.3.0) over a SHA512-pinned NetBSD 10.1/vax sysroot, then (1) builds
-  # libvmssys.a for netbsd-vax through the CMake VMSSYS_SUBSTRATE=netbsd path and
-  # (2) links a real vax--netbsdelf ELF32 executable against NetBSD libc --
-  # proving the link-libc backend (design sec 4.1) and the ILP32 width audit
-  # (docs/audit-ilp32-vax-libvmssys.md) compile clean for VAX.
-  #
-  # This is DELIBERATELY NOT emulation: QEMU has no VAX system target, and
-  # booting NetBSD/vax under SIMH is the separate netbsd-vax-simh job (P4). This
-  # gate is fast once the toolchain image layer-caches (gha). BUILD/TEST tooling,
-  # never a runtime (Rule 9 / docs/runtime-target.md). Gated like the SIMH job:
-  # push/merge_group/schedule always; on a PR only when the cross inputs change.
-  # -----------------------------------------------------------------------
-  libvmssys-netbsd-vax:
-    name: libvmssys cross-compiles for netbsd-vax (vms-9dc)
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
-        uses: docker/build-push-action@v6
-        with:
-          context: tools/cross-vax
-          file: tools/cross-vax/Dockerfile
-          push: false
-          load: true
-          tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
-          cache-to: type=gha,mode=max,scope=cross-vax
-
-      - name: Cross-compile libvmssys for netbsd-vax + link an ELF32 VAX exe
-        run: |
-          set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  ovmx-cross-vax build-libvmssys-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          if [ "$RC" -ne 0 ]; then
-            echo "FAIL: netbsd-vax cross build/link exited nonzero ($RC)"
-            exit 1
-          fi
-          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: libvmssys builds and links for vax--netbsdelf' \
-            || { echo "FAIL: did not see the build+link PASS banner"; exit 1; }
-          echo "$RAW" | grep -qF 'file format elf32-vax' \
-            || { echo "FAIL: objects were not elf32-vax -- wrong target"; exit 1; }
-          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
-            || { echo "FAIL: linked executable was not a VAX ELF"; exit 1; }
-          echo "PASS: libvmssys built for netbsd-vax and a real ELF32 VAX exe linked against NetBSD libc"
-
-      - name: Teeth check (an LP64 width assumption must fail the vax cross-compile)
-        run: |
-          set +e
-          RAW=$(docker run --rm -e CROSSCOMPILE_NEGCTL=1 -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  ovmx-cross-vax build-libvmssys-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          [ "$RC" -eq 0 ] || { echo "FAIL: negctl run exited nonzero ($RC)"; exit 1; }
-          echo "$RAW" | grep -qF 'PASS (negctl): the LP64 width assumptions were REJECTED' \
-            || { echo "FAIL: negctl did not confirm the ILP32 width gate rejects a 64-bit-pointer assumption"; exit 1; }
-
-  # vmsprocess-netbsd-vax (rd vms-84b, epic vms-8e8; CLAUDE.md "Library Build
-  # Order": libvmssys -> vmsprocess -> libvms). The NEXT layer up from
-  # libvmssys-netbsd-vax. Same shape: BUILD-ONLY cross-compile gate over the
-  # pinned `vax--netbsdelf` toolchain. It (0) builds the elf32-vax libvmssys.a
-  # (the layer below), (1) builds vmsprocess through the CMake
-  # VMSPROCESS_STANDALONE path -> libvmsprocess.a of elf32-vax objects, and
-  # (2) links a real vax--netbsdelf ELF32 executable that calls into all four
-  # vmsprocess translation units (PCB, process identity, ASTs, access modes)
-  # against NetBSD libc + libpthread AND the elf32-vax libvmssys.a. This proves
-  # the process-control layer cross-compiles + links ON TOP of libvmssys with no
-  # Linux-only wait primitive (AST delivery is POSIX signals; event flags live
-  # in the executive, not the PCB).
-  #
-  # DELIBERATELY NOT emulation (no qemu-system-vax; SIMH boot is the separate
-  # netbsd-vax-simh P4 job). Fast once the cross toolchain image layer-caches
-  # (gha, shared scope=cross-vax with the libvmssys job). BUILD/TEST tooling,
-  # never a runtime (Rule 9). Gated on the shared netbsd_vax filter: push/
-  # merge_group/schedule always; on a PR only when the cross inputs change
-  # (src/vmsprocess/**, tools/cross-vax/**, src/libvmssys/**, ...).
-  # -----------------------------------------------------------------------
-  vmsprocess-netbsd-vax:
-    name: vmsprocess cross-compiles for netbsd-vax (vms-84b)
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
-        uses: docker/build-push-action@v6
-        with:
-          context: tools/cross-vax
-          file: tools/cross-vax/Dockerfile
-          push: false
-          load: true
-          tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
-          cache-to: type=gha,mode=max,scope=cross-vax
-
-      - name: Cross-compile vmsprocess for netbsd-vax + link an ELF32 VAX exe
-        run: |
-          set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  ovmx-cross-vax build-vmsprocess-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          if [ "$RC" -ne 0 ]; then
-            echo "FAIL: netbsd-vax vmsprocess cross build/link exited nonzero ($RC)"
-            exit 1
-          fi
-          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: vmsprocess builds and links for vax--netbsdelf' \
-            || { echo "FAIL: did not see the build+link PASS banner"; exit 1; }
-          echo "$RAW" | grep -qF 'file format elf32-vax' \
-            || { echo "FAIL: objects were not elf32-vax -- wrong target"; exit 1; }
-          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
-            || { echo "FAIL: linked executable was not a VAX ELF"; exit 1; }
-          echo "PASS: vmsprocess built for netbsd-vax and a real ELF32 VAX exe linked against NetBSD libc + libpthread"
-
-  # -----------------------------------------------------------------------
   # vmsfs-core-elf32-vax (rd vms-bb8, epic vms-8e8; P4-VFS V3).
   #
   # BUILD-ONLY cross-compile gate for the substrate-neutral ODS-2 core
@@ -6075,265 +5936,6 @@ jobs:
           echo "$RAW" | grep -qiF 'file format elf32-vax' \
             || { echo "FAIL: objects were not elf32-vax -- wrong target"; exit 1; }
           echo "PASS: the ODS-2 core compiled ILP32-clean to elf32-vax objects"
-
-  # libvms-netbsd-vax (rd vms-1b2, epic vms-8e8, P4-C; CLAUDE.md "Library Build
-  # Order": libvmssys -> vmsprocess -> libvms). The NEXT layer up from
-  # vmsprocess-netbsd-vax and the biggest userspace library -- the VMS runtime
-  # (system services sys$*, RTL lib$/str$/mth$/ots$). Same shape: BUILD-ONLY
-  # cross-compile gate over the pinned `vax--netbsdelf` toolchain. It
-  # (0) builds the elf32-vax libvmssys.a, (0b) the elf32-vax libvmsprocess.a,
-  # (1) builds libvms through the CMake LIBVMS_STANDALONE path -> libvms.a of
-  # elf32-vax objects, and (2) links a real vax--netbsdelf ELF32 executable that
-  # calls into libvms's system-service + RTL surface against NetBSD libc +
-  # libpthread + libm AND the elf32-vax vmsprocess.a + libvmssys.a. This proves
-  # the VMS runtime cross-compiles + links ON TOP of the whole elf32-vax stack.
-  # io_uring is Linux-only: on the netbsd substrate sys_uring.c compiles to
-  # "unavailable" stubs and sys$qio uses its real synchronous read/write path
-  # (docs/audit-ilp32-vax-libvmssys.md §9); no Linux-only facility is pulled.
-  #
-  # DELIBERATELY NOT emulation (no qemu-system-vax; SIMH boot is the separate
-  # netbsd-vax-simh P4 job). Fast once the cross toolchain image layer-caches
-  # (gha, shared scope=cross-vax with the libvmssys/vmsprocess jobs). BUILD/TEST
-  # tooling, never a runtime (Rule 9). Gated on the shared netbsd_vax filter:
-  # push/merge_group/schedule always; on a PR only when the cross inputs change
-  # (src/libvms/**, src/vmsprocess/**, src/libvmssys/**, tools/cross-vax/**, ...).
-  # -----------------------------------------------------------------------
-  libvms-netbsd-vax:
-    name: libvms cross-compiles for netbsd-vax (vms-1b2)
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
-        uses: docker/build-push-action@v6
-        with:
-          context: tools/cross-vax
-          file: tools/cross-vax/Dockerfile
-          push: false
-          load: true
-          tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
-          cache-to: type=gha,mode=max,scope=cross-vax
-
-      - name: Cross-compile libvms for netbsd-vax + link an ELF32 VAX exe
-        run: |
-          set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  ovmx-cross-vax build-libvms-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          if [ "$RC" -ne 0 ]; then
-            echo "FAIL: netbsd-vax libvms cross build/link exited nonzero ($RC)"
-            exit 1
-          fi
-          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: libvms builds and links for vax--netbsdelf' \
-            || { echo "FAIL: did not see the build+link PASS banner"; exit 1; }
-          echo "$RAW" | grep -qF 'file format elf32-vax' \
-            || { echo "FAIL: objects were not elf32-vax -- wrong target"; exit 1; }
-          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
-            || { echo "FAIL: linked executable was not a VAX ELF"; exit 1; }
-          echo "PASS: libvms built for netbsd-vax and a real ELF32 VAX exe linked against NetBSD libc + libpthread + libm"
-
-  # -----------------------------------------------------------------------
-  # activation-netbsd-vax (rd vms-42d, epic vms-8e8; docs/design-p4-netbsd-vax-
-  # boot.md §4.5 + decision record §4.5.1).
-  #
-  # THE IMAGE-ACTIVATION gate for OVMX images on netbsd-vax. It sits ABOVE the
-  # layer build gates (libvmssys/vmsprocess/libvms-netbsd-vax): those prove the
-  # OVMX libraries cross-compile + link; this proves the linked image ACTIVATES
-  # by the DECIDED path.
-  #
-  # DECISION A (a LABELED Rule-8 substrate divergence, docs/design-p4 §4.5.1):
-  # OVMX images on NetBSD/vax are ORDINARY NetBSD ELF32-vax DYNAMIC executables,
-  # activated by NetBSD's own runtime linker /usr/libexec/ld.elf_so -- NOT by
-  # OVMX-native IMGACT.EXE + `.vms$sv` symbol-vector activation (the Linux /
-  # self-hosting-pillar path). This gate links a representative OVMX image
-  # (LOGINOUT/DCL-class) and asserts it requests /usr/libexec/ld.elf_so, is a plain
-  # NetBSD ELF (no .vms$sv/.vms$imp, no IMGACT.EXE interp), and is genuinely
-  # dynamic -- i.e. the decided activation model actually holds for a real
-  # elf32-vax OVMX image.
-  #
-  # DELIBERATELY NOT emulation (no qemu-system-vax; a booted-guest activation
-  # round-trip is the SIMH nightly follow-up, rd vms-945e/vms-d59). BUILD/TEST
-  # tooling, never a runtime (Rule 9). Fast once the cross toolchain image
-  # layer-caches (gha, shared scope=cross-vax). Gated on the shared netbsd_vax
-  # filter: push/merge_group/schedule always; on a PR only when the cross inputs
-  # change.
-  # -----------------------------------------------------------------------
-  activation-netbsd-vax:
-    name: OVMX image activates on netbsd-vax via ld.elf_so (vms-42d)
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
-        uses: docker/build-push-action@v6
-        with:
-          context: tools/cross-vax
-          file: tools/cross-vax/Dockerfile
-          push: false
-          load: true
-          tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
-          cache-to: type=gha,mode=max,scope=cross-vax
-
-      - name: Link a representative OVMX image + assert ld.elf_so activation
-        run: |
-          set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  ovmx-cross-vax build-activation-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          if [ "$RC" -ne 0 ]; then
-            echo "FAIL: netbsd-vax activation gate exited nonzero ($RC)"
-            exit 1
-          fi
-          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: representative OVMX image activates on netbsd-vax via ld.elf_so' \
-            || { echo "FAIL: did not see the activation PASS banner"; exit 1; }
-          echo "$RAW" | grep -qF 'requested interpreter: /usr/libexec/ld.elf_so' \
-            || { echo "FAIL: image did not request NetBSD's ld.elf_so as its activator"; exit 1; }
-          echo "PASS: a representative elf32-vax OVMX image activates via NetBSD ld.elf_so (Decision A)"
-
-      - name: Teeth check (a non-ld.elf_so image must fail the Decision-A activation contract)
-        run: |
-          set +e
-          RAW=$(docker run --rm -e CROSSCOMPILE_NEGCTL=1 -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  ovmx-cross-vax build-activation-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          [ "$RC" -eq 0 ] || { echo "FAIL: negctl run exited nonzero ($RC)"; exit 1; }
-          echo "$RAW" | grep -qF 'PASS (negctl): the non-ld.elf_so image is correctly rejected' \
-            || { echo "FAIL: negctl did not confirm the activation contract rejects a bogus-interp image"; exit 1; }
-
-  # -----------------------------------------------------------------------
-  # vmslnm+vmsfs+vmsrms-netbsd-vax (rd vms-271, epic vms-8e8, P4-C; CLAUDE.md
-  # "Library Build Order": ... libvms -> vmslnm -> vmsfs -> vmsrms -> vmsdcl).
-  # The three userspace libraries above libvms: the logical name manager, the
-  # userspace filespec/device layer, and Record Management Services. ONE gate,
-  # three BUILD+LINK proofs over the pinned `vax--netbsdelf` toolchain -- each
-  # builds its elf32-vax dependency stack, compiles the library to elf32-vax
-  # objects through its CMake *_STANDALONE path, and links a real vax--netbsdelf
-  # ELF32 executable calling into the library against NetBSD libc/libpthread(/m):
-  #   * vmslnm  -> libvmslnm.a, links over the elf32-vax libvmssys.a (its
-  #               vms_kif LNM-arena client);
-  #   * vmsfs   -> libvmsfs.a,  links over the elf32-vax vmslnm.a + libvmssys.a
-  #               (filespec translation resolves logical names);
-  #   * vmsrms  -> libvmsrms.a, links over the WHOLE elf32-vax stack (libvms +
-  #               vmsfs + vmslnm + vmsprocess + libvmssys). RMS file I/O is
-  #               ordinary POSIX (open/lseek/off_t/fcntl/dirent/fnmatch) resolved
-  #               from the NetBSD sysroot -- no Linux syscall/constant assumption
-  #               (docs/audit-ilp32-vax-libvmssys.md §11).
-  # The link proofs exercise the executive LNM-arena path, so they require the
-  # cross toolchain's libatomic (VAX has no lock-free 8-byte atomic; the arena's
-  # uint64_t generation seqlock lowers to __atomic_load_8, linked via -latomic) --
-  # enabled in tools/cross-vax/Dockerfile (vms-271). DELIBERATELY NOT emulation.
-  # BUILD/TEST tooling, never a runtime (Rule 9). Gated on the shared netbsd_vax
-  # filter: push/merge_group/schedule always; on a PR only when the cross inputs
-  # change (src/vmslnm/**, src/vmsfs/**, src/vmsrms/**, and the lower stack/cross).
-  # -----------------------------------------------------------------------
-  vmslnm-vmsfs-vmsrms-netbsd-vax:
-    name: netbsd-vax userspace libs cross-compile (vmslnm+vmsfs+vmsrms)
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
-        uses: docker/build-push-action@v6
-        with:
-          context: tools/cross-vax
-          file: tools/cross-vax/Dockerfile
-          push: false
-          load: true
-          tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
-          cache-to: type=gha,mode=max,scope=cross-vax
-
-      - name: Cross-compile vmslnm for netbsd-vax + link an ELF32 VAX exe
-        run: |
-          set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  ovmx-cross-vax tools/cross-vax/build-vmslnm-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          if [ "$RC" -ne 0 ]; then
-            echo "FAIL: netbsd-vax vmslnm cross build/link exited nonzero ($RC)"
-            exit 1
-          fi
-          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: vmslnm builds and links for vax--netbsdelf' \
-            || { echo "FAIL: did not see the vmslnm build+link PASS banner"; exit 1; }
-          echo "$RAW" | grep -qiF 'file format elf32-vax' \
-            || { echo "FAIL: vmslnm objects were not elf32-vax -- wrong target"; exit 1; }
-          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
-            || { echo "FAIL: vmslnm exe was not a VAX ELF"; exit 1; }
-          echo "PASS: vmslnm built for netbsd-vax and a real ELF32 VAX exe linked"
-
-      - name: Cross-compile vmsfs (userspace) for netbsd-vax + link an ELF32 VAX exe
-        run: |
-          set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  ovmx-cross-vax tools/cross-vax/build-vmsfs-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          if [ "$RC" -ne 0 ]; then
-            echo "FAIL: netbsd-vax vmsfs cross build/link exited nonzero ($RC)"
-            exit 1
-          fi
-          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: vmsfs builds and links for vax--netbsdelf' \
-            || { echo "FAIL: did not see the vmsfs build+link PASS banner"; exit 1; }
-          echo "$RAW" | grep -qiF 'file format elf32-vax' \
-            || { echo "FAIL: vmsfs objects were not elf32-vax -- wrong target"; exit 1; }
-          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
-            || { echo "FAIL: vmsfs exe was not a VAX ELF"; exit 1; }
-          echo "PASS: vmsfs built for netbsd-vax and a real ELF32 VAX exe linked"
-
-      - name: Cross-compile vmsrms for netbsd-vax + link an ELF32 VAX exe
-        run: |
-          set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  ovmx-cross-vax tools/cross-vax/build-vmsrms-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          if [ "$RC" -ne 0 ]; then
-            echo "FAIL: netbsd-vax vmsrms cross build/link exited nonzero ($RC)"
-            exit 1
-          fi
-          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: vmsrms builds and links for vax--netbsdelf' \
-            || { echo "FAIL: did not see the vmsrms build+link PASS banner"; exit 1; }
-          echo "$RAW" | grep -qiF 'file format elf32-vax' \
-            || { echo "FAIL: vmsrms objects were not elf32-vax -- wrong target"; exit 1; }
-          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
-            || { echo "FAIL: vmsrms exe was not a VAX ELF"; exit 1; }
-          echo "PASS: vmsrms built for netbsd-vax and a real ELF32 VAX exe linked over the full stack"
 
   # -----------------------------------------------------------------------
   # Job: NetBSD/vax vms module cross-compiles (rd vms-20b9, epic vms-8e8; P4-B).
@@ -6551,148 +6153,6 @@ jobs:
             || { echo "FAIL: did not see all 4 negctl teeth pass (100% tests passed, 0 tests failed out of 4)"; exit 1; }
           echo "PASS: facility guest tools (eflag/access/proctab/mbx) built for netbsd-vax as real ELF32 VAX executables via CMake, and every width negctl teeth genuinely rejected the LP64 TU"
 
-
-  # -----------------------------------------------------------------------
-  # vmsdcl-netbsd-vax (rd vms-1cb2, epic vms-8e8, P4-C; CLAUDE.md "Library Build
-  # Order": ... vmsfs -> vmsrms -> vmsdcl). The TOP of the userspace library
-  # graph and the LAST userspace library before the init+images integration:
-  # the DCL command-language interpreter. BUILD-ONLY, over the pinned
-  # `vax--netbsdelf` toolchain. It (0..0f) builds the whole elf32-vax dependency
-  # stack (libvmssys, vmsprocess, libvms, vmslnm, vmsfs, vmsrms, vmsqueue),
-  # (1) compiles every DCL translation unit through the CMake VMSDCL_STANDALONE
-  # path -> libvmsdcl.a of elf32-vax objects, and (2) links a REAL vax--netbsdelf
-  # DCL.EXE with --whole-archive (every DCL object must resolve -- a complete
-  # shell, not just what crt0 reaches) against that stack + NetBSD libc +
-  # libpthread + libm + libatomic. readline is OPTIONAL and absent from the
-  # NetBSD/vax sysroot, so HAVE_READLINE stays undefined and DCL's own
-  # non-readline line editor is used (the same degrade path the static musl QEMU
-  # build takes); the gate asserts no readline symbol leaked in. DCL is
-  # overwhelmingly string/parse work over ordinary POSIX; its integer symbols are
-  # longwords (expr_val_t.ival is `long`, `%ld`), which on ILP32 VAX is the exact
-  # VMS width -- self-consistent, no width fix. The genuinely Linux-only surface
-  # (TCPIP SHOW/SET INTERFACE ifr_hwaddr/ifr_netmask/SIOCGIFHWADDR + /sys/class/net
-  # -- the AF_INET networking engine, vms-67f) is substrate-guarded #if __linux__
-  # and honestly degrades on netbsd-vax (no fabrication). DELIBERATELY NOT
-  # emulation; BUILD/TEST tooling, never a runtime (Rule 9). Fast once the cross
-  # toolchain image layer-caches (gha, shared scope=cross-vax). Gated on the
-  # shared netbsd_vax filter: push/merge_group/schedule always; on a PR only when
-  # the cross inputs change (src/vmsdcl/**, src/vmsqueue/**, and the lower
-  # stack/cross).
-  # -----------------------------------------------------------------------
-  vmsdcl-netbsd-vax:
-    name: vmsdcl cross-compiles for netbsd-vax (vms-1cb2)
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
-        uses: docker/build-push-action@v6
-        with:
-          context: tools/cross-vax
-          file: tools/cross-vax/Dockerfile
-          push: false
-          load: true
-          tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
-          cache-to: type=gha,mode=max,scope=cross-vax
-
-      - name: Cross-compile vmsdcl for netbsd-vax + link a real ELF32 VAX DCL.EXE
-        run: |
-          set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  ovmx-cross-vax tools/cross-vax/build-vmsdcl-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          if [ "$RC" -ne 0 ]; then
-            echo "FAIL: netbsd-vax vmsdcl cross build/link exited nonzero ($RC)"
-            exit 1
-          fi
-          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: vmsdcl builds and links a DCL.EXE for vax--netbsdelf' \
-            || { echo "FAIL: did not see the vmsdcl build+link PASS banner"; exit 1; }
-          echo "$RAW" | grep -qiF 'file format elf32-vax' \
-            || { echo "FAIL: vmsdcl objects were not elf32-vax -- wrong target"; exit 1; }
-          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
-            || { echo "FAIL: DCL.EXE was not a VAX ELF"; exit 1; }
-          echo "$RAW" | grep -qF 'no undefined readline symbols' \
-            || { echo "FAIL: readline auto-degrade assertion did not run"; exit 1; }
-          echo "PASS: vmsdcl built for netbsd-vax and a real ELF32 VAX DCL.EXE linked over the full stack"
-
-  # -----------------------------------------------------------------------
-  # ovmx-init-netbsd-vax (rd vms-f2e, epic vms-8e8, P4-C boot; docs/design-p4-
-  # netbsd-vax-boot.md §4.5). The boot orchestrator (STARTUP.EXE, PID 1) cross-
-  # compiles + links for netbsd-vax against the NetBSD realization of the
-  # boot-plumbing seam (src/ovmx_init/ovmx_boot_netbsd.c, the NetBSD twin of
-  # ovmx_boot_linux.c from vms-28f). It builds the full elf32-vax userspace
-  # library stack, asserts ovmx_init.c carries NO substrate #ifdef fork of the
-  # boot logic (INV-DRIFT -- the split lives ONLY in the ovmx_boot backend),
-  # confirms the NetBSD backend defines every ovmx_boot.h op and opens the REAL
-  # /dev/vms (fail-honest, INV-6 / Rule 9), and links a real vax--netbsdelf
-  # ELF32 STARTUP.EXE (dynamic, activated by NetBSD ld.elf_so -- Decision A,
-  # vms-42d). This unblocks vms-5d1 (all images link+activate -> bootable-disk
-  # assembly). DELIBERATELY NOT emulation (no qemu-system-vax); build/test
-  # tooling, never a runtime (Rule 9). Fast once the cross toolchain image
-  # layer-caches (gha, shared scope=cross-vax). Gated on the shared netbsd_vax
-  # filter: push/merge_group/schedule always; on a PR only when the cross
-  # inputs change (src/ovmx_init/** and the lower stack/cross).
-  # -----------------------------------------------------------------------
-  ovmx-init-netbsd-vax:
-    name: ovmx_init cross-compiles for netbsd-vax (vms-f2e)
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
-        uses: docker/build-push-action@v6
-        with:
-          context: tools/cross-vax
-          file: tools/cross-vax/Dockerfile
-          push: false
-          load: true
-          tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
-          cache-to: type=gha,mode=max,scope=cross-vax
-
-      - name: Cross-compile ovmx_init for netbsd-vax + link a real ELF32 VAX STARTUP.EXE
-        run: |
-          set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  ovmx-cross-vax tools/cross-vax/build-ovmx-init-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          if [ "$RC" -ne 0 ]; then
-            echo "FAIL: netbsd-vax ovmx_init cross build/link exited nonzero ($RC)"
-            exit 1
-          fi
-          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: ovmx_init (STARTUP.EXE) builds and links for vax--netbsdelf' \
-            || { echo "FAIL: did not see the ovmx_init build+link PASS banner"; exit 1; }
-          echo "$RAW" | grep -qiF 'file format elf32-vax' \
-            || { echo "FAIL: ovmx_init objects were not elf32-vax -- wrong target"; exit 1; }
-          echo "$RAW" | grep -qF 'OK: ovmx_init.c has no __NetBSD__/__linux__ boot-logic fork' \
-            || { echo "FAIL: INV-DRIFT assertion (no substrate #ifdef fork) did not run"; exit 1; }
-          echo "$RAW" | grep -qF 'OK: all 9 ovmx_boot.h ops defined by the NetBSD backend' \
-            || { echo "FAIL: NetBSD backend did not define every ovmx_boot.h op"; exit 1; }
-          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
-            || { echo "FAIL: STARTUP.EXE was not a VAX ELF"; exit 1; }
-          echo "PASS: ovmx_init built for netbsd-vax and a real ELF32 VAX STARTUP.EXE linked over the full stack"
-
   # -----------------------------------------------------------------------
   # vax-cmake-images (rd vms-64a, epic vms-509 "unified cross-platform
   # build", Rung B; docs/design-unified-cross-build.md §3-B/§8). This job
@@ -6723,10 +6183,35 @@ jobs:
   # rd vms-d65 Rung C retired the standalone `ovmx-boot-images-netbsd-vax`
   # (vms-5d1) job that duplicated it via the old per-image
   # build-boot-images-vax.sh path; that script itself remains for
-  # tests/lab-vax/run-boot.sh, which still consumes it directly (script
-  # deletion is rung E's scope, not this one). Runs ALONGSIDE every existing
-  # per-image tools/cross-vax/build-*.sh script's own CI job (all green;
-  # retiring the hand scripts and their remaining standalone jobs is rung E).
+  # tests/lab-vax/run-boot.sh, which still consumes it directly.
+  #
+  # RUNG E (rd vms-08cb, docs/design-unified-cross-build.md §6/§8): this is
+  # now the ONLY per-PR vax build gate for every per-lib/per-image script
+  # this job's aggregate transitively covers. Retired as redundant:
+  # libvmssys-netbsd-vax, vmsprocess-netbsd-vax, libvms-netbsd-vax,
+  # vmslnm-vmsfs-vmsrms-netbsd-vax, vmsdcl-netbsd-vax, ovmx-init-netbsd-vax,
+  # librarian-netbsd-vax, activation-netbsd-vax -- each script's positive
+  # build+link proof is subsumed by the per-image activation-contract loop
+  # below (the aggregate transitively builds+links every library and image
+  # those jobs proved standalone). Every negctl/teeth assertion those jobs
+  # carried that this job did not already prove was MIGRATED, not dropped
+  # (CLAUDE.md Rule 7/9, INV-6) -- see "MIGRATED TEETH" in
+  # tools/cross-vax/build-ovmx-images-vax-cmake.sh's header and the extra
+  # banner assertions below. The underlying build-libvmssys-vax.sh,
+  # build-vmsprocess-vax.sh, build-libvms-vax.sh, build-vmslnm-vax.sh,
+  # build-vmsfs-vax.sh, build-vmsrms-vax.sh, build-librarian-vax.sh, and
+  # build-activation-vax.sh scripts were deleted along with their jobs (zero
+  # remaining references outside this job's own history). build-vmsdcl-vax.sh
+  # and build-ovmx-init-vax.sh are KEPT ON DISK (unlike the rest) because
+  # tests/lab-vax/run-boot.sh still calls them directly and via
+  # build-boot-images-vax.sh -- only their now-redundant standalone CI jobs
+  # were removed.
+  #
+  # netbsd-vax-vms-crosscompile (the vms.kmod.o executive module),
+  # netbsd-vax-vmsfs-crosscompile (the vmsfs.kmod loadable module), and
+  # netbsd-vax-facility-tools-crosscompile (the eflag/access/proctab/mbx
+  # guest tools, not shipped images) are UNTOUCHED by this rung -- they are
+  # not per-lib/per-image script gates this aggregate covers.
   # Gated on the same shared netbsd_vax filter. Fast once the cross
   # toolchain image layer-caches (gha, shared scope=cross-vax).
   # -----------------------------------------------------------------------
@@ -6767,8 +6252,6 @@ jobs:
             echo "FAIL: cmake vax-toolchain configure/build of ovmx-images exited nonzero ($RC)"
             exit 1
           fi
-          echo "$RAW" | grep -qF "ALL PROOFS PASSED: ovmx-images builds the full shipped image set via 'cmake --build --target ovmx-images' for vax--netbsdelf and every image passes the Decision-A activation contract" \
-            || { echo "FAIL: did not see the ovmx-images PASS banner"; exit 1; }
           for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE OVMXDUMP HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE SCSD.EXE; do
             echo "$RAW" | grep -qF -- "-> $img: ELF32 Digital VAX, dynamically linked, interp=/usr/libexec/ld.elf_so" \
               || { echo "FAIL: $img did not pass the activation contract assertion"; exit 1; }
@@ -6777,71 +6260,28 @@ jobs:
             echo "$RAW" | grep -qF "DRIFT-CLOSED: $img" \
               || { echo "FAIL: $img was not reported as a closed parity-drift image"; exit 1; }
           done
-          echo "PASS: ovmx-images built the full shipped image set for netbsd-vax; 10/10 vms-e1d parity-drift images closed"
 
-  # -----------------------------------------------------------------------
-  # librarian-netbsd-vax (rd vms-9172, epic vms-f10; VAX build parity R1).
-  # Per-PR elf32-vax cross-compile + link gate for LIBRARIAN.EXE
-  # (src/vmslink/librarian.c) -- the OVMX object-library archiver that mints
-  # the .OLB object libraries LINK.EXE consumes (rd vms-ca9, #429). It is a
-  # SYS$SYSTEM: image alongside LINK.EXE/OVMXDUMP, so for VAX to be a first-
-  # class release platform the archiver must cross-compile for elf32-vax
-  # exactly as DCL.EXE (vmsdcl-netbsd-vax), LOGINOUT/STARTUP (vax-cmake-images'
-  # boot-image-set loop, rd vms-d65) and the userspace stack already do. Was
-  # the ONE shipped OVMX image with no netbsd-vax gate; this closes that gap.
-  # Fast (compile+link only, no SIMH); the cross toolchain image layer-caches
-  # (gha scope=cross-vax).
-  # Carries a broken-TU negative control. TOOLING, never a runtime (Rule 9).
-  # Gated on the shared netbsd_vax filter (which now includes src/vmslink/
-  # librarian.c + its .OLB layout headers).
-  # -----------------------------------------------------------------------
-  librarian-netbsd-vax:
-    name: LIBRARIAN.EXE cross-compiles for netbsd-vax (vms-9172)
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+          # --- MIGRATED TEETH (rd vms-08cb, Rung E) -- each ported from a retired
+          # per-job script's own gate (see the job header comment above). Defense
+          # in depth beyond the script's own `set -e`: confirm every migrated
+          # check's banner actually appeared, not just that the script exited 0.
+          echo "$RAW" | grep -qF "libvmssys_ilp32_negctl_vax .......   Passed" \
+            || { echo "FAIL: the libvmssys ilp32 negctl (was build-libvmssys-vax.sh) did not run"; exit 1; }
+          echo "$RAW" | grep -qF "librarian_negctl_vax .............   Passed" \
+            || { echo "FAIL: the librarian negctl (was build-librarian-vax.sh) did not run"; exit 1; }
+          echo "$RAW" | grep -qF "100% tests passed, 0 tests failed out of 2" \
+            || { echo "FAIL: the migrated ctest negctls did not both pass"; exit 1; }
+          echo "$RAW" | grep -qF "OK: ovmx_init.c has no __NetBSD__/__linux__ boot-logic fork" \
+            || { echo "FAIL: the ovmx_init.c INV-DRIFT check (was build-ovmx-init-vax.sh) did not run"; exit 1; }
+          echo "$RAW" | grep -qF "OK: all 9 ovmx_boot.h ops defined by the NetBSD backend" \
+            || { echo "FAIL: the NetBSD boot-backend ops check (was build-ovmx-init-vax.sh) did not run"; exit 1; }
+          echo "$RAW" | grep -qF "OK: ovmx_boot_open_executive() opens the real /dev/vms (fail-honest)" \
+            || { echo "FAIL: the real-/dev/vms check (was build-ovmx-init-vax.sh) did not run"; exit 1; }
+          echo "$RAW" | grep -qF "OK: no undefined readline symbols -- DCL's own non-readline line editor is used" \
+            || { echo "FAIL: the DCL.EXE no-readline check (was build-vmsdcl-vax.sh) did not run"; exit 1; }
+          echo "$RAW" | grep -qF "PASS (negctl): the non-ld.elf_so image is correctly rejected by the Decision-A activation contract" \
+            || { echo "FAIL: the activation-contract negctl (was build-activation-vax.sh) did not run"; exit 1; }
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
-        uses: docker/build-push-action@v6
-        with:
-          context: tools/cross-vax
-          file: tools/cross-vax/Dockerfile
-          push: false
-          load: true
-          tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
-          cache-to: type=gha,mode=max,scope=cross-vax
-
-      - name: Cross-compile LIBRARIAN.EXE for netbsd-vax + link a real ELF32 VAX image
-        run: |
-          set +e
-          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-                  ovmx-cross-vax tools/cross-vax/build-librarian-vax.sh 2>&1)
-          RC=$?
-          set -e
-          echo "$RAW"
-          if [ "$RC" -ne 0 ]; then
-            echo "FAIL: netbsd-vax LIBRARIAN.EXE cross build/link exited nonzero ($RC)"
-            exit 1
-          fi
-          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: LIBRARIAN.EXE builds and links for vax--netbsdelf' \
-            || { echo "FAIL: did not see the LIBRARIAN build+link PASS banner"; exit 1; }
-          echo "$RAW" | grep -qiF 'file format elf32-vax' \
-            || { echo "FAIL: librarian object was not elf32-vax -- wrong target"; exit 1; }
-          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
-            || { echo "FAIL: LIBRARIAN.EXE was not a VAX ELF"; exit 1; }
-          echo "PASS: LIBRARIAN.EXE built for netbsd-vax and linked a real ELF32 VAX image"
-
-      - name: NEGATIVE CONTROL — a deliberately-broken LIBRARIAN TU must fail the cross-compile
-        run: |
-          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
-            -e CROSSCOMPILE_NEGCTL=1 \
-            ovmx-cross-vax tools/cross-vax/build-librarian-vax.sh
+          echo "$RAW" | grep -qF "ALL PROOFS PASSED: ovmx-images builds the full shipped image set via 'cmake --build --target ovmx-images' for vax--netbsdelf, every image passes the Decision-A activation contract, and every migrated teeth check genuinely fires" \
+            || { echo "FAIL: did not see the ovmx-images PASS banner"; exit 1; }
+          echo "PASS: ovmx-images built the full shipped image set for netbsd-vax; 10/10 vms-e1d parity-drift images closed; every migrated Rung-E teeth check fired"

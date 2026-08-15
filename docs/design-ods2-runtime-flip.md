@@ -1,0 +1,164 @@
+# Design record: the ODS-2 runtime flip (epic vms-5eb, rungs R2/R3/R5/R6)
+
+Status: **IN PROGRESS — read-path foundation landed; the atomic flip is NOT
+complete and this branch does NOT boot-to-login on a genuine ODS-2 SYS$DISK.**
+This record exists so the conductor can re-plan: driving the four "flip" rungs
+surfaced two load-bearing dependencies the epic's rung decomposition did not
+account for. See "Newly-surfaced blockers" below.
+
+Architecture A1 (ratified, epic note 2026-08-15): the LIVE userspace
+RMS/DCL/MOUNT path resolves genuine ODS-2 over a block device via the
+`src/vmsfs/ods2/` library; the bespoke `vmsfs.ko` VMFS/VFH2 format is demoted;
+the `vmsfs_to_linux_path -> /vms -> POSIX` passthrough is retired for SYS$DISK.
+A2 (kernel-native ODS-2 driver) is NOT adopted. FLAG-1 = clean break (no
+migrator).
+
+---
+
+## 1. The boot data-flow as it exists today (what the flip must replace)
+
+The genuine ODS-2 library (`src/vmsfs/ods2/`) is real and validated against a
+real OpenVMS VAX volume, but at runtime it is wired into **exactly one** place:
+`tools/vms_initialize.c` as an opt-in `--ods2` / `OVMX_INIT_ODS2` branch. The
+entire boot spine runs on the bespoke VMFS format and reaches files by POSIX:
+
+```
+host tree /system-stage/vms  (SYS0/SYSCOMMON/{SYSEXE,SYSLIB,SYSMGR,SYSHLP}, USERS, SYSTMP)
+   │  tools/vmsfs_master.c  "master ... OVMXSYS ... 64"   (bespoke VMFS/VFH2, vmsfs_ondisk.h)
+   ▼
+/boot/ovmx-distrib.img       (distro/Dockerfile.bootable:714; round-trip-verified)
+   │  QEMU -drive file=...,if=virtio   (distro/boot/run-qemu.sh)
+   ▼
+/dev/vda   (guest block device)
+   │  PID 1 ovmx_init: load vmsfs.ko; mount("/dev/vda","/vms","vmsfs")
+   │        (src/ovmx_init/ovmx_boot_linux.c:156; vmsfs.ko checks hb_magic==VMSFS_HOME_MAGIC
+   │         at src/kernel/vmsfs/vmsfs_super.c:387)
+   ▼
+/vms == SYSDISK_MOUNT ; DKA0: ; SYS$SYSTEM = /vms/SYS0/SYSCOMMON/SYSEXE  (ovmx_layout.h)
+   │
+   ├─ RMS/DCL/IMGACT/LOGINOUT/INSTALL/provisioning ALL reach files by translating VMS
+   │   filespecs -> /vms/... via vmsfs_to_linux_path, then open(2)/opendir(2)/read(2)/write(2)
+   └─ DCL MOUNT of other disks: cmd_mount -> vms_mount_helper "mount ... vmsfs" (+ readlabel)
+```
+
+`/dev/vms` is the `vms.ko` **executive** char device (locks/EF/AST) — it is NOT
+the system disk. The system disk is a **block** device (`/dev/vda`) whose
+contents `vmsfs.ko` presents as an ordinary POSIX tree at `/vms`. That POSIX
+tree is the substrate the whole system reads today.
+
+## 2. What this branch delivers (landed, tested, atomic-safe)
+
+The read-path FOUNDATION that R2/R3/R5 all require but the library did not yet
+offer over a block device: **block-backed ODS-2 path resolution + content
+read** — `src/vmsfs/ods2/ods2_path.c`, declared in
+`src/vmsfs/include/vmsfs/ods2.h`:
+
+- `ods2_bdev_dir_find()` — find `{name, version, fid}` in a directory header.
+- `ods2_bdev_resolve_dir()` — walk MFD (FID 4) -> component -> component to a
+  directory's header + FID (a "SYS0" component is the on-disk `SYS0.DIR`).
+- `ods2_bdev_resolve_file()` — resolve `[dir.sub]NAME.EXT;ver` to a file
+  header + FID (version 0 = highest).
+- `ods2_bdev_read_file()` / `ods2_bdev_read_file_text()` — read a file's
+  content by pread-ing its FM2 retrieval-pointer extents (multi-extent
+  supported); the `_text` variant decodes RFM=VAR records to newline-joined
+  text.
+
+Rule 8: adds NO on-disk format facts — it only sequences directory traversal +
+extent reads the reader already implements from its cited Files-11 sources.
+Name matching (`SYS0`->`SYS0.DIR`, `LOGIN.COM;3`) is VMS filespec semantics.
+
+Proof: `tests/ods2/test_ods2_path.c` (ctest `ods2_path`, green) builds a
+genuine ODS-2 volume carrying the real system-disk hierarchy shape
+(`[000000]->[SYS0]->[SYS0.SYSCOMMON]->[SYS0.SYSCOMMON.SYSEXE]` with files),
+lays it on a real loop-image fd, and drives the resolver over that fd:
+resolves the directory through a real MFD->SYS0->SYSCOMMON->SYSEXE FID chain
+(never POSIX opendir), lists its real records, resolves files by highest and
+exact version, and reads their content back byte-for-byte — verified against
+`ods2.h` structs, never POSIX `stat`/`opendir`. This is also exactly the
+`ods2_volume_format` + `ods2_wvolume_create_dir/create_file/dir_insert`
+sequence the R6 boot-master builder will use, so it doubles as a builder proof.
+
+This branch flips **no live path**: it is purely additive (a new library TU +
+its unit test + this doc). Boot is unaffected; nothing is half-flipped on the
+runtime path.
+
+## 3. Remaining work to complete the flip (in dependency order)
+
+R6-build  `tools/vmsfs_master.c` `do_master`/`emit_tree`/`write_header`/
+          `write_dir_data`/`write_home` -> rebuild on `ods2_volume_format` +
+          `ods2_wvolume_create_dir/create_file/dir_insert` (pattern proven in
+          `format_volume_ods2`, `tools/vms_initialize.c:365`, and in
+          `test_ods2_path`); add `ods2` to `tools/CMakeLists.txt:293`.
+R6-kernel `src/kernel/vmsfs/vmsfs_super.c:387` magic/checksum/geometry -> parse
+          the ODS-2 home/SCB (kernel analog of `ods2_home_parse`/`ods2_scb_parse`).
+          The one piece the userspace library does not cover.
+R6-mount  fstype `"vmsfs"` at `ovmx_boot_linux.c:158`, `ovmx_boot_netbsd.c`,
+          `tools/vms_mount_helper.c:148`; and `read_vmsfs_label` -> ODS-2 home
+          block. INITIALIZE default flip (`vms_initialize.c:575`).
+R2-RMS    `rms_core.c` `resolve_filename`/`rms_impl_open` -> resolve via
+          `ods2_bdev_*` (this branch's `ods2_path.c`) instead of
+          `vmsfs_to_linux_path`+`open(2)`; drop `rms_validate_path_boundary`
+          for SYS$DISK. Reroute record I/O off `_linux_fd`
+          (`rms_record.c`/`rms_seq.c`/`rms_rel.c`/`rms_idx.c`) and `$SEARCH`
+          off `opendir` (`rms_search.c`) onto the bdev volume. `ovmx_link_rms_io.c`
+          is a pure RMS client — converts transparently.
+R3-DCL    `cmd_directory`/`dir_collect` (`dcl_cmd_file.c`) -> list via
+          `ods2_bdev_resolve_dir` + `ods2_bdev_list_dir` (real names/versions/
+          FIDs; `/FULL` can finally emit File ID). `cmd_set_default`
+          (`dcl_cmd_set.c`) -> validate the directory against the real MFD.
+R5-MOUNT  `cmd_mount` (`dcl_cmd_misc.c`) -> validate home block via
+          `ods2_home_parse` + SCB via `ods2_scb_parse`, REJECT a non-ODS-2
+          device, set the volume label from the real home block. Optionally
+          teach `sys_device.c` `fill_dvi_item` DVI$_VOLNAM from the home block.
+Retire    `vmsfs_ondisk.h`, `format_volume` in `vms_initialize.c`, the bespoke
+          halves of `vmsfs_master.c`, and the `vmsfs_master_roundtrip` test wiring.
+Proof     negctl anchors `rms-open-uses-posix-passthrough` +
+          `mount-is-getcwd-logical-alias` (+ `facility_defects_floor.txt` bump);
+          `tests/dcl/test_set_default_root.sh` asserts real-ODS-2 behaviour;
+          boot-smoke + install-e2e green BY SHA on a genuine ODS-2 SYS$DISK.
+
+## 4. Newly-surfaced blockers (NOT in the epic's rung plan — conductor call)
+
+These two dependencies were discovered while mapping the flip. Neither is
+covered by R1/R4/R8 (which delivered the block-backed reader, INITIALIZE, and
+in-memory writer completeness). Both gate a boot-to-login flip. They should be
+filed as rungs and sequenced before R2/R5 can land green.
+
+**B1 — Block-backed ODS-2 WRITER (create/put/erase/allocate over a block
+device via pwrite).** `src/vmsfs/ods2/ods2_writer.c` operates on a caller-owned
+**whole-volume in-memory image**; there is no way to create a file, append a
+record, extend an allocation, or maintain a directory *on a mounted block
+device*. But under A1, RMS `$CREATE`/`$PUT`/`$ERASE`, indexed writes, and any
+boot-time write to SYS$DISK (SYSUAF last-login updates, accounting, operator
+log, temp files, STARTUP-authored files) must write real ODS-2 blocks. Without
+B1 the write path has no honest backing: the only alternatives are (a) keep a
+POSIX write fallback — the exact silent-fallback LARP the authenticity
+invariants forbid (INV-6, CLAUDE.md Rule 9) — or (b) fail every write, which
+will not reach login. B1 is a Rule-8, oracle-grounded effort comparable to the
+original writer (R3/R4/R8) and is the critical long pole.
+
+**B2 — System-wide dismantling of the POSIX `/vms` passthrough + a userspace
+mounted-volume model + a new PID-1 boot mount.** Today `vmsfs_to_linux_path ->
+/vms` is called "at the point of each syscall" by RMS, DCL, IMGACT, LOGINOUT,
+INSTALL, and provisioning — not just RMS/DCL. A1 requires the system disk to
+stay a raw ODS-2 block device that userspace reads via `ods2_bdev`, which means:
+(i) PID 1 registers `/dev/vda` into a userspace mounted-volume table
+(device -> open fd + cached `ods2_bdev_t`) instead of `mount("/dev/vda","/vms",
+"vmsfs")`; (ii) the device table (`src/vmsfs/vmsfs_device.c`, today device ->
+mount-point string) gains a per-device fd/volume handle (the RMS mapper
+identified this as the natural home); (iii) **every** `/vms` consumer, not only
+the four flip rungs, moves to the volume handle. R2/R3/R5 as written flip
+RMS/DCL/MOUNT but implicitly assume this substrate exists. The atomic group is
+therefore larger than R2+R3+R5+R6: it must also carry B2, or boot breaks the
+moment `/vms` stops being a POSIX tree.
+
+## 5. Atomicity assessment
+
+R2/R3/R5/R6 cannot land in a state that boots to login without B1 and B2. This
+branch deliberately stops at the tested, additive read foundation rather than
+land a half-flip that breaks boot (the constraint the dispatch and CLAUDE.md
+Rule 9 both impose). Recommended sequencing: file B1 and B2 as rungs; land B1
+(block-backed writer) and B2 (volume-handle substrate + boot mount) as
+additive foundations the way R1/R4/R8 were; then the true atomic group
+(R2+R3+R5+R6, all consuming B1/B2 + this branch's `ods2_path.c`) lands and is
+gated on a real QEMU boot-to-login on a genuine ODS-2 SYS$DISK.

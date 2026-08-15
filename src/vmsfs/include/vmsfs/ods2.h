@@ -767,6 +767,74 @@ ods2_status_t ods2_file_read_text(const ods2_volume_t *vol,
                                   char *out, size_t out_cap, size_t *out_len);
 
 /* ================================================================
+ * RUNTIME PATH RESOLUTION + CONTENT READ  (ods2/ods2_path.c)
+ *
+ * vms-5eb read-path foundation: compose the block-backed primitives above
+ * into the two operations the live userspace RMS/DCL/MOUNT path needs --
+ * resolve an on-volume path to a file/dir header+FID (walking from the MFD),
+ * and read a file's content off the block device. Adds NO on-disk format
+ * facts (Rule 8): it only sequences directory traversal + extent reads the
+ * reader already implements. Name matching is VMS filespec semantics (a dir
+ * component "SYS0" is the on-disk entry "SYS0.DIR"; a file "LOGIN.COM;3" is
+ * entry "LOGIN.COM" at version 3), case-insensitive.
+ * ================================================================ */
+
+/*
+ * Find an entry by name (INCLUDING its type, e.g. "SYS0.DIR" / "LOGIN.COM")
+ * in the directory whose validated header block is `dir_header_block`.
+ * want_version == 0 returns the highest version present; otherwise the exact
+ * version. On success fills *fid_out and *version_out (either may be NULL).
+ * Returns ODS2_ERR_NOTFOUND if no such entry.
+ */
+ods2_status_t ods2_bdev_dir_find(const ods2_bdev_t *bv,
+                                 const void *dir_header_block,
+                                 const char *name, uint16_t want_version,
+                                 ods2_fid_t *fid_out, uint16_t *version_out);
+
+/*
+ * Resolve a directory given as an array of components WITHOUT the ".DIR"
+ * type (e.g. {"SYS0","SYSCOMMON","SYSEXE"}), starting at the MFD (FID 4).
+ * ndirs == 0 resolves the MFD itself. Copies the target directory's
+ * validated 512-byte header into `dir_header_out` (>= ODS2_BLOCK_SIZE) and
+ * its FID into *fid_out (may be NULL).
+ */
+ods2_status_t ods2_bdev_resolve_dir(const ods2_bdev_t *bv,
+                                    const char *const *comps, unsigned ndirs,
+                                    ods2_fid_t *fid_out,
+                                    void *dir_header_out, size_t out_len);
+
+/*
+ * Resolve a file: walk `comps`[0..ndirs) to its directory, then find
+ * `filename` ("NAME.EXT", type included; version 0 => highest). Copies the
+ * file's validated header block into `file_header_out` and its FID into
+ * *fid_out (may be NULL).
+ */
+ods2_status_t ods2_bdev_resolve_file(const ods2_bdev_t *bv,
+                                     const char *const *comps, unsigned ndirs,
+                                     const char *filename, uint16_t version,
+                                     ods2_fid_t *fid_out,
+                                     void *file_header_out, size_t out_len);
+
+/*
+ * Read a file's raw content bytes (up to its recattr valid byte count) by
+ * pread-ing ALL of its retrieval-pointer extents in VBN order. Unlike
+ * ods2_file_read_text(), this supports multi-extent files. Returns
+ * ODS2_ERR_SIZE if out_cap is smaller than the valid byte count.
+ */
+ods2_status_t ods2_bdev_read_file(const ods2_bdev_t *bv,
+                                  const void *file_header_block,
+                                  void *out, size_t out_cap, size_t *out_len);
+
+/*
+ * Block-backed twin of ods2_file_read_text(): read a VAR-record file's
+ * content and decode it to newline-joined text (one '\n' per record).
+ */
+ods2_status_t ods2_bdev_read_file_text(const ods2_bdev_t *bv,
+                                       const void *file_header_block,
+                                       char *out, size_t out_cap,
+                                       size_t *out_len);
+
+/* ================================================================
  * WRITER  (implemented in ods2/ods2_writer.c) -- increment 3.
  *
  * Produces a genuine ODS-2 volume image: primary + alternate home block,

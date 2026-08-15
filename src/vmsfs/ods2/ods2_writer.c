@@ -434,7 +434,11 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
 {
     uint32_t lbn = wvol->hdr_base_lbn + (fidnum - 1);
     uint8_t *h;
-    char idbuf[21];
+    /* "NAME;VERSION" ident text: fi2_filename (20) + fi2_filenamext (66)
+     * == 86 chars max ([N] ods2_ident_t), plus a NUL. Names that fit in
+     * 20 chars only ever use the first 21 bytes of this buffer -- see
+     * the byte-identical-for-short-names note below. */
+    char idbuf[20 + 66 + 1];
     size_t base_len, n;
     ods2_status_t st;
     uint8_t rtype, rattrib;
@@ -455,7 +459,11 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
     base_len = strlen(name);
     if (base_len == 0)
         return ODS2_ERR_ARGS;
-    /* "NAME;VERSION", space-padded to 20 -- must fit. */
+    /* "NAME;VERSION" -- must fit in the ident area's 20+66 = 86 chars
+     * (fi2_filename + fi2_filenamext, [N] ods2_ident_t). vms-88d: real
+     * distro-tree names like "LIBVMSPROCESS$SHR.EXE;1" (23 chars) exceed
+     * the old 20-char-only cap; the ident write below splits anything
+     * over 20 chars across both fields. */
     n = (size_t)snprintf(idbuf, sizeof(idbuf), "%s;%u", name, (unsigned)version);
     if (n >= sizeof(idbuf))
         return ODS2_ERR_ARGS;
@@ -650,14 +658,38 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
           (kind == FH2_KIND_DIR) ? 0xBA00u : 0xFA00u);
     put32(h + offsetof(ods2_fh2_t, fh2_highwater), hiblk + 1);
 
-    /* ident area: fi2_filename, space-padded, "NAME.TYPE;VERSION". */
+    /* ident area: fi2_filename, space-padded, "NAME.TYPE;VERSION".
+     *
+     * vms-88d: names <=20 chars (n <= 20) fit entirely in fi2_filename
+     * and this is BYTE-IDENTICAL to the pre-fix encoding -- fi2_filenamext
+     * is never touched, so it stays zero via the block-wide memset()
+     * above, exactly as before.
+     *
+     * Names >20 chars ([N] ods2_ident_t: fi2_filename[20] at offset 0,
+     * fi2_filenamext[66] at offset 54 is the documented "name.type;ver
+     * continuation") split: the first 20 chars go in fi2_filename (which
+     * is then completely full, needing no space padding of its own), and
+     * chars 21..n go in fi2_filenamext, space-padded to fill the
+     * remaining 66 bytes -- the same space-pad convention the Files-11
+     * On-Disk Structure Specification documents for fi2_filename itself,
+     * applied to its continuation field.
+     */
     {
         uint8_t *id = h + (size_t)ID_OFF_WORDS * 2;
+        size_t first_len = (n < 20) ? n : 20;
+        size_t ext_len = (n > 20) ? (n - 20) : 0;
+
         memset(id, ' ', 20);
-        memcpy(id, idbuf, n);
+        memcpy(id, idbuf, first_len);
         put16(id + 20, version); /* fi2_revision */
-        /* fi2_credate .. fi2_bakdate and fi2_filenamext left zero:
+        /* fi2_credate .. fi2_bakdate left zero:
          * [OVMX-inferred] timestamps not modeled, see ods2.h. */
+        if (ext_len > 0) {
+            uint8_t *ext = id + offsetof(ods2_ident_t, fi2_filenamext);
+
+            memset(ext, ' ', sizeof(((ods2_ident_t *)0)->fi2_filenamext));
+            memcpy(ext, idbuf + 20, ext_len);
+        }
     }
 
     /* map area: one FM2 format-1 retrieval pointer per extent. Real

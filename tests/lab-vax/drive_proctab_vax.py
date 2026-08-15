@@ -414,14 +414,35 @@ def main():
             log("OK: module loaded and /dev/vms created on NetBSD/vax")
 
         # ---- 4a-4c. CROSS-PROCESS PROCESS-TABLE PROOF (collapsed) ----------
-        # Same loss-tolerant-transport technique as drive_eflag_vax.py: ONE
-        # in-guest command performs every step, asserts each property IN-GUEST
-        # over reliable local pipes, and emits a SINGLE result token, so a lost
-        # marker on the lossy SIMH serial cannot corrupt the proof. Process A
-        # ($SETPRN, blocks indefinitely) is a DISTINCT `vmsproctab' invocation
-        # from B ($GETJPI by name) and C ($PROCESS_SCAN); B and C's pid+uic
-        # (procscan prints no uic, so only pid) are cross-checked so the two
-        # readers are proven to see the SAME row, not merely "a" row.
+        # Same loss-tolerant-transport technique as drive_eflag_vax.py /
+        # drive_netbsd_p4a.py's PROCTAB phase: ONE in-guest command performs
+        # every step and emits a SINGLE result token, so a lost marker on the
+        # lossy SIMH serial cannot corrupt the proof. Process A ($SETPRN,
+        # blocks indefinitely) is a DISTINCT `vmsproctab' invocation from B
+        # ($GETJPI by name) and C ($PROCESS_SCAN).
+        #
+        # FILE-based capture, not $(...) + inline sed (rd vms-2e0 postmortem):
+        # an earlier revision captured B/C's output via command substitution
+        # PLUS three inline `sed -n 's/.../.../p'` extractions, all crammed
+        # into one ~900-char line. On the real nightly run that line came
+        # back as driver exit=2 with EMPTY captured output (not even the
+        # unconditional trailing echo) -- consistent with the compound
+        # command being cut short by something on the lossy VAX/SIMH serial
+        # before reaching the end, since plain POSIX sh (no `set -e`) cannot
+        # otherwise skip an unconditional trailing statement. Redirecting
+        # each vmsproctab invocation straight to a FILE (exactly
+        # drive_netbsd_p4a.py's MBX phase shape) removes the sed regex
+        # overhead and shortens the line; the PASS/FAIL decision is a plain
+        # `grep -q ... /file` against those files, and a TRANSCRIPT (the same
+        # `{ echo '### ...'; cat ...; } >>TX` pattern drive_netbsd_p4a.py
+        # uses) is ALWAYS dumped afterward -- on a pass AND on a failure --
+        # so a repeat of this failure mode is diagnosable from the console
+        # instead of leaving a bare "tok=None". The pid/uic CROSS-CHECK (B
+        # and C must report the SAME row, not merely "a" row) is done
+        # PYTHON-side against that dumped transcript text, keeping the
+        # in-guest script itself as close to the proven p4a.py shape as
+        # possible.
+        #
         # NEGCTL CONTRACT (PROCTAB_SKIP_BG, mirrors PROCTAB_SKIP_LOAD /
         # EFLAG_SKIP_SET exactly -- and is the fix for the EXACT bug class
         # rd vms-cf5 documents): when skip_bg is set, process A is simply
@@ -434,49 +455,56 @@ def main():
         # positive-assertion script every positive run executes; with no A,
         # B's by-name $GETJPI finds nothing for real, so the SAME "getjpi"
         # failure branch below fires naturally and this function returns its
-        # ordinary nonzero code. run-proctab.sh's negctl-bg mode (via
-        # negctl_gate.sh, negctl=1) is what inverts that nonzero exit into
-        # "teeth confirmed" -- one exit-code contract, shared by every mode.
+        # ordinary nonzero code -- never 0, never a distinct "harness-error"
+        # code (the ACCESS/vms-4b7 bug class the coordinator flagged): every
+        # failure path below returns a plain positive int, and negctl_gate()/
+        # negctl_gate.sh only ever test zero-vs-nonzero, so any of these
+        # codes inverts correctly under run-proctab.sh's negctl-bg mode.
+        TX = "/tmp/pt_transcript"
         if skip_bg:
             log("SKIP: process A's $SETPRN skipped (PROCTAB_SKIP_BG) -- "
                 "process B's by-name $GETJPI must find nothing next, and "
                 "the cross-process assertion below must fail for real")
-            proc = ("GJ=$(%s getjpi_name P4VPROC1 2>&1); "
-                    "PS=$(%s procscan_find P4VPROC1 128 2>&1); "
-                    "GPID=$(echo \"$GJ\" | sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p'); "
-                    "GUIC=$(echo \"$GJ\" | sed -n 's/.*uic=\\(0x[0-9a-fA-F]*\\).*/\\1/p'); "
-                    "PPID=$(echo \"$PS\" | sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p'); "
+            proc = ("rm -f /tmp/pt_b.out /tmp/pt_c.out %s; "
+                    "%s getjpi_name P4VPROC1 >/tmp/pt_b.out 2>&1; "
+                    "%s procscan_find P4VPROC1 128 >/tmp/pt_c.out 2>&1; "
+                    "{ echo '### proctab B (getjpi_name, A never launched)'; "
+                    "cat /tmp/pt_b.out; "
+                    "echo '### proctab C (procscan_find, A never launched)'; "
+                    "cat /tmp/pt_c.out; } >>%s; "
                     "F=''; "
-                    "echo \"$GJ\" | grep -q 'PROCTAB GETJPI_FOUND name=P4VPROC1' "
+                    "grep -q 'PROCTAB GETJPI_FOUND name=P4VPROC1' /tmp/pt_b.out "
                     "|| F=\"$F getjpi\"; "
-                    "echo \"$PS\" | grep -q 'PROCTAB PROCSCAN_FOUND' || F=\"$F procscan\"; "
-                    "[ -n \"$GPID\" ] && [ -n \"$PPID\" ] && [ \"$GPID\" = \"$PPID\" ] "
-                    "|| F=\"$F pidmismatch\"; "
-                    "[ -n \"$GUIC\" ] || F=\"$F nouic\"; "
-                    "[ -z \"$F\" ] && echo \"PROCTAB=PASS pid=$GPID uic=$GUIC\" "
-                    "|| echo \"PROCTAB=FAIL:$F\""
-                    % (PT, PT))
+                    "grep -q 'PROCTAB PROCSCAN_FOUND' /tmp/pt_c.out || F=\"$F procscan\"; "
+                    "[ -z \"$F\" ] && echo PROCTAB=PASS || echo \"PROCTAB=FAIL:$F\""
+                    % (TX, PT, PT, TX))
         else:
-            proc = ("rm -f /tmp/pt_a.out; "
-                    "%s bg P4VPROC1 >/tmp/pt_a.out 2>&1 & AP=$!; sleep 2; "
-                    "GJ=$(%s getjpi_name P4VPROC1 2>&1); "
-                    "PS=$(%s procscan_find P4VPROC1 128 2>&1); "
+            proc = ("rm -f /tmp/pt_a.out /tmp/pt_b.out /tmp/pt_c.out %s; "
+                    "%s bg P4VPROC1 >/tmp/pt_a.out 2>&1 & AP=$!; sleep 3; "
+                    "%s getjpi_name P4VPROC1 >/tmp/pt_b.out 2>&1; "
+                    "%s procscan_find P4VPROC1 128 >/tmp/pt_c.out 2>&1; "
                     "kill $AP 2>/dev/null; wait 2>/dev/null; "
-                    "GPID=$(echo \"$GJ\" | sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p'); "
-                    "GUIC=$(echo \"$GJ\" | sed -n 's/.*uic=\\(0x[0-9a-fA-F]*\\).*/\\1/p'); "
-                    "PPID=$(echo \"$PS\" | sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p'); "
+                    "{ echo '### proctab A (bg)'; cat /tmp/pt_a.out; "
+                    "echo '### proctab B (getjpi_name)'; cat /tmp/pt_b.out; "
+                    "echo '### proctab C (procscan_find)'; cat /tmp/pt_c.out; } >>%s; "
                     "F=''; "
-                    "echo \"$GJ\" | grep -q 'PROCTAB GETJPI_FOUND name=P4VPROC1' "
+                    "grep -q 'PROCTAB GETJPI_FOUND name=P4VPROC1' /tmp/pt_b.out "
                     "|| F=\"$F getjpi\"; "
-                    "echo \"$PS\" | grep -q 'PROCTAB PROCSCAN_FOUND' || F=\"$F procscan\"; "
-                    "[ -n \"$GPID\" ] && [ -n \"$PPID\" ] && [ \"$GPID\" = \"$PPID\" ] "
-                    "|| F=\"$F pidmismatch\"; "
-                    "[ -n \"$GUIC\" ] || F=\"$F nouic\"; "
-                    "[ -z \"$F\" ] && echo \"PROCTAB=PASS pid=$GPID uic=$GUIC\" "
-                    "|| echo \"PROCTAB=FAIL:$F\""
-                    % (PT, PT, PT))
+                    "grep -q 'PROCTAB PROCSCAN_FOUND' /tmp/pt_c.out || F=\"$F procscan\"; "
+                    "[ -z \"$F\" ] && echo PROCTAB=PASS || echo \"PROCTAB=FAIL:$F\""
+                    % (TX, PT, PT, PT, TX))
         rc, out = run(child, proc, cmd_timeout, bg_safe=True)
         tok = phase_token(out, "PROCTAB")
+
+        # ALWAYS dump the transcript -- pass or fail -- so a console read
+        # (or a future re-diagnosis) has the raw per-process output, not
+        # just a bare token. This is also the source for the pid/uic
+        # cross-check below (no in-guest sed needed).
+        rc2, tx_out = run(
+            child,
+            "echo '=== PROCTAB TRANSCRIPT ==='; cat %s; echo '=== END ==='" % TX,
+            cmd_timeout)
+        log("proctab transcript:\n%s" % tx_out.strip())
 
         # NOTE: skip_bg is deliberately NOT special-cased from here on -- the
         # exact same interpretation below handles both modes (a PASS token is
@@ -491,23 +519,46 @@ def main():
                 log("FAIL: process B (a DIFFERENT process) did NOT resolve "
                     "process A's name via $GETJPI -- the cross-process "
                     "shared-kernel-state proof did not hold on NetBSD/vax "
-                    "(phase token: %s)" % tok)
+                    "(phase token: %s; see transcript above)" % tok)
                 proof.emit_result_line()
                 return 16
             if "procscan" in tok:
                 log("FAIL: process C's $PROCESS_SCAN did not enumerate A's "
-                    "row (phase token: %s)" % tok)
+                    "row (phase token: %s; see transcript above)" % tok)
                 proof.emit_result_line()
                 return 17
-            log("FAIL: process B and process C did not agree on the SAME "
-                "row (pid/uic mismatch) -- the two readers may not be "
-                "observing shared kernel state (phase token: %s)" % tok)
+            log("FAIL: unrecognized phase token (phase token: %s; see "
+                "transcript above)" % tok)
+            proof.emit_result_line()
+            return 19
+
+        # PASS: cross-check B's and C's rows are the SAME row (matching
+        # pid), and that B reported a uic -- parsed from the transcript text
+        # (Python-side, not in-guest sed).
+        b_match = re.search(
+            r"PROCTAB GETJPI_FOUND name=\S+ pid=(\d+) uic=(0x[0-9a-fA-F]+)",
+            tx_out)
+        c_match = re.search(r"PROCTAB PROCSCAN_FOUND idx=\d+ name=\S+ pid=(\d+)",
+                             tx_out)
+        if not b_match or not c_match:
+            proof.record("proctab-cross-process", False,
+                          detail="PASS token but transcript unparsable")
+            log("FAIL: phase token said PASS but the transcript did not "
+                "contain a parsable GETJPI_FOUND/PROCSCAN_FOUND line -- "
+                "see transcript above")
+            proof.emit_result_line()
+            return 18
+        pid_seen, uic_seen = b_match.group(1), b_match.group(2)
+        pid_c = c_match.group(1)
+        if pid_seen != pid_c:
+            proof.record("proctab-cross-process", False,
+                          detail="pid mismatch: B=%s C=%s" % (pid_seen, pid_c))
+            log("FAIL: process B (pid=%s) and process C (pid=%s) did NOT "
+                "agree on the SAME row -- the two readers may not be "
+                "observing shared kernel state" % (pid_seen, pid_c))
             proof.emit_result_line()
             return 18
 
-        m = re.search(r"pid=(\d+)\s+uic=(0x[0-9a-fA-F]+)", tok)
-        pid_seen = m.group(1) if m else "?"
-        uic_seen = m.group(2) if m else "?"
         proof.record("proctab-cross-process", True,
                       detail="pid=%s uic=%s" % (pid_seen, uic_seen))
         log("OK: process B (a DIFFERENT process) resolved A's name via "

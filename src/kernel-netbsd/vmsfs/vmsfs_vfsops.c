@@ -21,13 +21,18 @@
  * vmsfs_dir_format_name, vmsfs_vbn_to_lbn). Never re-derives the format -- that
  * would be the exact backend drift epic vms-8e5 exists to prevent (INV-DRIFT).
  *
- * READ-ONLY. This backend mounts the volume MNT_RDONLY: the mount+READ proof
- * (mount a mastered ODS-2 disk on NetBSD/amd64, read DCL.EXE) needs no write
- * path, and a read-only mount is a complete, honest feature. The shared
- * allocator / directory-add / header-write cores are still COMPILED and LINKED
- * here (proving the whole ODS-2 core cross-compiles against the NetBSD
- * backend); they are simply not driven at run time. The write VOPs map to
- * genfs_eopnotsupp, and VOP_ACCESS refuses VWRITE with EROFS.
+ * READ-WRITE (rd vms-e7a). The mount honors whatever MNT_RDONLY the caller
+ * passed instead of forcing it: a caller that asks for read-write gets the
+ * real write VOPs (VOP_SETATTR/WRITE/CREATE/MKDIR/REMOVE) driving the SAME
+ * shared allocator / directory-add / header-write core the Linux block-device
+ * backend uses (src/kernel-core/vmsfs/vmsfs_alloc.c, vmsfs_dirscan.c,
+ * vmsfs_header.c) -- this is what lets PROVISION.EXE stamp UIC file ownership
+ * and STARTUP write SYSUAF logs / account-dir files onto the mounted system
+ * volume, matching real VMS mounting its system disk read-write. A caller
+ * that asks for MNT_RDONLY (the amd64/vax mount+read-only proofs still do)
+ * gets an honestly read-only mount: no storage bitmap is loaded, and every
+ * write VOP refuses with EROFS before ever reaching the allocator (Rule 9 --
+ * no silent no-op, an explicit read-only mount stays exactly that).
  *
  * TOOLING, NOT A RUNTIME OF ITS OWN (CLAUDE.md Rule 9): booting a real NetBSD to
  * load and exercise this real kernel module is exactly what tests/qemu/ does for
@@ -83,7 +88,12 @@ static int vmsfs_open(void *);
 static int vmsfs_close(void *);
 static int vmsfs_access(void *);
 static int vmsfs_getattr(void *);
+static int vmsfs_setattr(void *);
 static int vmsfs_read(void *);
+static int vmsfs_write(void *);
+static int vmsfs_create(void *);
+static int vmsfs_mkdir(void *);
+static int vmsfs_remove(void *);
 static int vmsfs_readdir(void *);
 static int vmsfs_bmap(void *);
 static int vmsfs_strategy(void *);
@@ -162,15 +172,18 @@ vmsfs_vfs_mount(struct mount *mp, const char *path, void *data, size_t *data_len
 		return 0;
 	}
 
-	/* This backend is read-only; a rw update request is refused. */
+	/*
+	 * Toggling read-only <-> read-write via an update-remount is not
+	 * supported (the storage bitmap is loaded only at INITIAL mount, below):
+	 * request the desired mode at mount(2) time. An update that keeps or
+	 * requests MNT_RDONLY is a harmless no-op; one that asks to ADD write
+	 * (RDONLY not set) to an already-mounted volume is refused honestly.
+	 */
 	if (mp->mnt_flag & MNT_UPDATE) {
 		if ((mp->mnt_flag & MNT_RDONLY) == 0)
 			return EOPNOTSUPP;
 		return 0;
 	}
-
-	/* Force read-only regardless of what the caller asked for. */
-	mp->mnt_flag |= MNT_RDONLY;
 
 	if (args->fspec == NULL)
 		return EINVAL;
@@ -215,8 +228,9 @@ vmsfs_vfs_mount(struct mount *mp, const char *path, void *data, size_t *data_len
 	/*
 	 * Geometry into the host-neutral volume descriptor. vol.host == devvp, so
 	 * the shared core's vmsfs_bget(vol->host, lbn) reads the volume directly.
-	 * The storage bitmap is NOT loaded: it is needed only by the allocator,
-	 * which a read-only mount never drives (vol.bitmap stays NULL).
+	 * The storage bitmap is loaded below, ONLY for a read-write mount (a
+	 * read-only mount never drives the allocator, so vol.bitmap stays NULL --
+	 * see the loop after this block).
 	 */
 	vmp->vm_vol.host          = devvp;
 	vmp->vm_vol.bitmap        = NULL;
@@ -230,6 +244,38 @@ vmsfs_vfs_mount(struct mount *mp, const char *path, void *data, size_t *data_len
 
 	brelse(bp, 0);
 	bp = NULL;
+
+	/*
+	 * Read-write mount (rd vms-e7a): load the on-disk storage bitmap into
+	 * memory so the shared core's allocator (vmsfs_alloc_block /
+	 * vmsfs_alloc_fid / vmsfs_grow_map, src/kernel-core/vmsfs/vmsfs_alloc.c)
+	 * has something to mutate -- exactly the bitmap the Linux blkdev backend
+	 * keeps live in sbi->vol.bitmap. A caller that asked for MNT_RDONLY skips
+	 * this entirely: no write VOP ever reaches the allocator on a read-only
+	 * mount (each refuses first), so there is nothing to load.
+	 */
+	if ((mp->mnt_flag & MNT_RDONLY) == 0) {
+		size_t bmsize = (size_t)vmp->vm_vol.bitmap_blocks * VMSFS_BLOCK_SIZE;
+		uint32_t i;
+
+		if (vmp->vm_vol.bitmap_blocks == 0 || bmsize == 0) {
+			error = EINVAL;
+			goto fail;
+		}
+		vmp->vm_vol.bitmap = kmem_zalloc(bmsize, KM_SLEEP);
+		vmp->vm_bitmap_bytes = bmsize;
+
+		for (i = 0; i < vmp->vm_vol.bitmap_blocks; i++) {
+			struct buf *bbp = NULL;
+
+			error = vmsfs_readblk(devvp, vmp->vm_vol.bitmap_lbn + i, &bbp);
+			if (error)
+				goto fail;
+			memcpy((char *)vmp->vm_vol.bitmap + (size_t)i * VMSFS_BLOCK_SIZE,
+			    bbp->b_data, VMSFS_BLOCK_SIZE);
+			brelse(bbp, 0);
+		}
+	}
 
 	mp->mnt_data = vmp;
 	mp->mnt_flag |= MNT_LOCAL;
@@ -263,6 +309,8 @@ vmsfs_vfs_mount(struct mount *mp, const char *path, void *data, size_t *data_len
 fail:
 	if (bp != NULL)
 		brelse(bp, 0);
+	if (vmp->vm_vol.bitmap != NULL)
+		kmem_free(vmp->vm_vol.bitmap, vmp->vm_bitmap_bytes);
 	if (devvp != NULL)
 		(void)vn_close(devvp, FREAD, l->l_cred);
 	mutex_destroy(&vmp->vm_alloc_lock);
@@ -302,6 +350,9 @@ vmsfs_vfs_unmount(struct mount *mp, int mntflags)
 	 */
 	if (vmp->vm_devvp != NULL)
 		(void)vn_close(vmp->vm_devvp, FREAD | FWRITE, curlwp->l_cred);
+
+	if (vmp->vm_vol.bitmap != NULL)
+		kmem_free(vmp->vm_vol.bitmap, vmp->vm_bitmap_bytes);
 
 	mutex_destroy(&vmp->vm_alloc_lock);
 	kmem_free(vmp, sizeof(*vmp));
@@ -493,10 +544,12 @@ vmsfs_lookup(void *v)
 	if (dvp->v_type != VDIR)
 		return ENOTDIR;
 
-	/* A read-only mount refuses every mutating lookup up front. */
-	if ((cnp->cn_flags & ISLASTCN) &&
-	    (cnp->cn_nameiop == CREATE || cnp->cn_nameiop == RENAME ||
-	     cnp->cn_nameiop == DELETE))
+	/* RENAME is not implemented (VOP_RENAME is still genfs_eopnotsupp, rd
+	 * vms-e7a scoped CREATE/REMOVE/MKDIR only) -- refuse it here too, honestly,
+	 * before namei ever reaches the unimplemented VOP. CREATE and DELETE are
+	 * handled below: CREATE (rd vms-e7a) has a real VOP_CREATE now, and
+	 * DELETE needs the target resolved (VOP_REMOVE needs an existing vnode). */
+	if ((cnp->cn_flags & ISLASTCN) && cnp->cn_nameiop == RENAME)
 		return EROFS;
 
 	/* "." resolves to the directory itself. */
@@ -533,6 +586,23 @@ vmsfs_lookup(void *v)
 	memcpy(name, cnp->cn_nameptr, cnp->cn_namelen);
 	name[cnp->cn_namelen] = '\0';
 
+	/*
+	 * CREATE intent is NEVER satisfied from an existing resolution (rd
+	 * vms-e7a): on VMS, creating "FOO.TXT" when FOO.TXT;1 exists produces
+	 * FOO.TXT;2 -- it never reopens ;1. EJUSTRETURN (a documented BSD VFS
+	 * sentinel, <sys/errno.h>) with *vpp left NULL is the standard "this
+	 * name does not exist for CREATE purposes; the caller's VOP_CREATE will
+	 * make it" signal, so VOP_CREATE (below) always runs and always cuts a
+	 * version via the shared core's vmsfs_dir_highest_version(), mirroring
+	 * the Linux backend's identical "CREATE INTENT IS NEVER SATISFIED FROM
+	 * CACHE" rule (src/kernel/vmsfs/vmsfs_inode.c, vmsfs_d_revalidate()).
+	 */
+	if ((cnp->cn_flags & ISLASTCN) && cnp->cn_nameiop == CREATE) {
+		if (dvp->v_mount->mnt_flag & MNT_RDONLY)
+			return EROFS;
+		return EJUSTRETURN;
+	}
+
 	error = vmsfs_dir_resolve(&vmp->vm_vol, dnode->vn_map,
 	    dnode->vn_map_count, vmp->vm_case_blind, name, &fid);
 	if (error)
@@ -552,8 +622,9 @@ vmsfs_open(void *v)
 {
 	struct vop_open_args *ap = v;
 
-	/* Read-only mount: refuse a write open. */
-	if (ap->a_mode & FWRITE)
+	/* A read-only MOUNT refuses a write open; a read-write mount defers to
+	 * VOP_ACCESS's SOGW check (already run by namei/vn_open before this). */
+	if ((ap->a_mode & FWRITE) && (ap->a_vp->v_mount->mnt_flag & MNT_RDONLY))
 		return EROFS;
 	return 0;
 }
@@ -566,19 +637,59 @@ vmsfs_close(void *v)
 }
 
 /*
- * vmsfs_access - a read-only mount grants read/execute and refuses write.
- * (The SOGW protection mask is preserved in the node and reported through
- * getattr; enforcing the full SOGW model on NetBSD is a later slice -- the
- * read proof needs only the read grant and the honest write refusal.)
+ * vmsfs_check_access - the SOGW protection check (rd vms-e7a). Same category-
+ * assignment rule and nibble semantics as the Linux backend's twin
+ * (src/kernel/vmsfs/vmsfs_blkdev.c, vmsfs_blkdev_permission()) -- the shared
+ * on-disk format's VMSFS_PROT_* bits/shifts and VMSFS_MAXSYSGROUP
+ * (vmsfs_ondisk.h) are the SAME constants both backends check (INV-DRIFT);
+ * only credential extraction (kauth(9) here, kuid/kgid there) is
+ * substrate-specific.
+ *
+ * Category assignment (priority order):
+ *   System: euid 0, or egid (the process's UIC group) <= VMSFS_MAXSYSGROUP.
+ *   Owner:  euid matches the file's UIC member AND egid matches its UIC group.
+ *   Group:  egid matches the file's UIC group.
+ *   World:  no match.
+ */
+static int
+vmsfs_check_access(struct vmsfs_node *vn, kauth_cred_t cred, accmode_t accmode)
+{
+	uint16_t prot = vn->vn_prot;
+	uint8_t deny;
+	uid_t euid = kauth_cred_geteuid(cred);
+	gid_t egid = kauth_cred_getegid(cred);
+
+	if (euid == 0 || egid <= VMSFS_MAXSYSGROUP)
+		deny = (prot >> VMSFS_PROT_SYS_SHIFT) & 0xF;
+	else if (euid == (uid_t)vn->vn_uic_member && egid == (gid_t)vn->vn_uic_group)
+		deny = (prot >> VMSFS_PROT_OWN_SHIFT) & 0xF;
+	else if (egid == (gid_t)vn->vn_uic_group)
+		deny = (prot >> VMSFS_PROT_GRP_SHIFT) & 0xF;
+	else
+		deny = (prot >> VMSFS_PROT_WLD_SHIFT) & 0xF;
+
+	if ((accmode & VREAD)  && (deny & VMSFS_PROT_R)) return EACCES;
+	if ((accmode & VWRITE) && (deny & VMSFS_PROT_W)) return EACCES;
+	if ((accmode & VEXEC)  && (deny & VMSFS_PROT_E)) return EACCES;
+	return 0;
+}
+
+/*
+ * vmsfs_access - a read-only MOUNT refuses write outright (Rule 9: an
+ * explicit read-only mount stays exactly that, regardless of protection
+ * bits); a read-write mount defers to the real SOGW check above.
  */
 static int
 vmsfs_access(void *v)
 {
 	struct vop_access_args *ap = v;
+	struct vnode *vp = ap->a_vp;
+	struct vmsfs_node *vn = VTOVMSFS(vp);
 
-	if (ap->a_accmode & (VWRITE))
+	if ((ap->a_accmode & VWRITE) && (vp->v_mount->mnt_flag & MNT_RDONLY))
 		return EROFS;
-	return 0;
+
+	return vmsfs_check_access(vn, ap->a_cred, ap->a_accmode);
 }
 
 static int
@@ -612,6 +723,81 @@ vmsfs_getattr(void *v)
 	vap->va_rdev      = NODEV;
 	vap->va_bytes     = (u_quad_t)vn->vn_blocks * VMSFS_BLOCK_SIZE;
 	vap->va_filerev   = vn->vn_version;
+	return 0;
+}
+
+/*
+ * vmsfs_setattr (VOP_SETATTR) - the OWNER path (rd vms-e7a): uid/gid/mode.
+ *
+ * This is the specific gap the boot surfaced: PROVISION's provision_ownership()
+ * calls lchown(2) on every file in the system tree to stamp UIC file ownership,
+ * which reaches here with only va_uid/va_gid set (everything else VNOVAL).
+ * chown/chmod are privileged (System category only -- root, or a UIC group <=
+ * VMSFS_MAXSYSGROUP -- matching real VMS where only a suitably privileged
+ * process may restamp another file's ownership/protection); mode translates
+ * through the shared core's vmsfs_mode_to_prot(). Every OTHER attribute
+ * (size/truncate, atime/mtime, flags) is refused honestly (EOPNOTSUPP) rather
+ * than silently ignored -- Rule 9/INV-6, no fake success.
+ */
+static int
+vmsfs_setattr(void *v)
+{
+	struct vop_setattr_args *ap = v;
+	struct vnode *vp = ap->a_vp;
+	struct vattr *vap = ap->a_vap;
+	struct vmsfs_node *vn = VTOVMSFS(vp);
+	struct vmsfs_mount *vmp = vn->vn_vmp;
+	kauth_cred_t cred = ap->a_cred;
+	struct vmsfs_bh *bh;
+	struct vmsfs_fh_owner ow;
+	uint16_t new_prot, new_uic_group, new_uic_member;
+	int change_owner, change_mode;
+	uid_t euid;
+	gid_t egid;
+	uint32_t lbn;
+
+	if (vap->va_size != (u_quad_t)VNOVAL || vap->va_flags != (u_long)VNOVAL ||
+	    vap->va_atime.tv_sec != VNOVAL || vap->va_mtime.tv_sec != VNOVAL)
+		return EOPNOTSUPP;
+
+	change_owner = (vap->va_uid != (uid_t)VNOVAL) || (vap->va_gid != (gid_t)VNOVAL);
+	change_mode  = (vap->va_mode != (mode_t)VNOVAL);
+	if (!change_owner && !change_mode)
+		return 0;
+
+	if (vp->v_mount->mnt_flag & MNT_RDONLY)
+		return EROFS;
+
+	/* chown/chmod are privileged: only a System-category credential may
+	 * restamp ownership/protection (the exact category PROVISION's SYSTEM
+	 * identity runs under). */
+	euid = kauth_cred_geteuid(cred);
+	egid = kauth_cred_getegid(cred);
+	if (euid != 0 && egid > VMSFS_MAXSYSGROUP)
+		return EPERM;
+
+	new_uic_member = (vap->va_uid != (uid_t)VNOVAL)
+	    ? (uint16_t)vap->va_uid : vn->vn_uic_member;
+	new_uic_group  = (vap->va_gid != (gid_t)VNOVAL)
+	    ? (uint16_t)vap->va_gid : vn->vn_uic_group;
+	new_prot = change_mode ? vmsfs_mode_to_prot((uint32_t)vap->va_mode) : vn->vn_prot;
+
+	lbn = vmp->vm_vol.index_lbn + vn->vn_fid - 1;
+	bh = vmsfs_bget(vmp->vm_devvp, lbn);
+	if (bh == NULL)
+		return EIO;
+
+	ow.protection = new_prot;
+	ow.uic_group  = new_uic_group;
+	ow.uic_member = new_uic_member;
+	vmsfs_fh_write_owner(vmsfs_bdata(bh), &ow);
+	vmsfs_bdirty_sync(bh);
+	vmsfs_bput(bh);
+
+	vn->vn_prot       = new_prot;
+	vn->vn_uic_group  = new_uic_group;
+	vn->vn_uic_member = new_uic_member;
+
 	return 0;
 }
 
@@ -667,6 +853,435 @@ vmsfs_read(void *v)
 			break;
 	}
 
+	return error;
+}
+
+/*
+ * vmsfs_write (VOP_WRITE, rd vms-e7a) - write regular-file data, growing the
+ * file's block map as needed via the shared core's vmsfs_grow_map() (the SAME
+ * allocator vmsfs_mkdir/vmsfs_create below and the Linux blkdev backend's
+ * vmsfs_get_block(create=1) drive). Direct block I/O through the device's
+ * buffer cache (vmsfs_bget/vmsfs_bput on vmp->vm_devvp) -- the same path
+ * vmsfs_read() already uses, not the UBC/genfs page cache the read-only
+ * exec/mmap pager (VOP_GETPAGES, rd vms-63a) rides. This backend has no
+ * writable mmap (VOP_ACCESS/VOP_OPEN gate VWRITE at open time, and the genfs
+ * ops vector stays read-only-pager-shaped, genfs_null_putpages): every write
+ * goes through here, so there is no write-back page cache to keep coherent.
+ */
+static int
+vmsfs_write(void *v)
+{
+	struct vop_write_args *ap = v;
+	struct vnode *vp = ap->a_vp;
+	struct uio *uio = ap->a_uio;
+	struct vmsfs_node *vn = VTOVMSFS(vp);
+	struct vmsfs_mount *vmp = vn->vn_vmp;
+	int ioflag = ap->a_ioflag;
+	struct vmsfs_bh *hbh;
+	struct vmsfs_fh_meta meta;
+	uint32_t hlbn;
+	int error = 0;
+
+	if (vp->v_type == VDIR)
+		return EISDIR;
+	if (vp->v_type != VREG)
+		return EINVAL;
+	if (vp->v_mount->mnt_flag & MNT_RDONLY)
+		return EROFS;
+	if (uio->uio_offset < 0)
+		return EINVAL;
+
+	if (ioflag & IO_APPEND)
+		uio->uio_offset = (off_t)vn->vn_size;
+
+	while (uio->uio_resid > 0) {
+		struct vmsfs_bh *bh;
+		uint32_t vbn, lbn, blkoff;
+		size_t n;
+		int blocks_added = 0;
+
+		vbn    = (uint32_t)(uio->uio_offset / VMSFS_BLOCK_SIZE) + 1;
+		blkoff = (uint32_t)(uio->uio_offset % VMSFS_BLOCK_SIZE);
+
+		mutex_enter(&vmp->vm_alloc_lock);
+		error = vmsfs_grow_map(&vmp->vm_vol, vn->vn_map, &vn->vn_map_count,
+		    vbn, &blocks_added);
+		vn->vn_blocks += (uint32_t)blocks_added;
+		if (!error)
+			error = vmsfs_vbn_to_lbn(vn->vn_map, vn->vn_map_count, vbn, &lbn);
+		mutex_exit(&vmp->vm_alloc_lock);
+		if (error) {
+			error = -error;
+			break;
+		}
+
+		bh = vmsfs_bget(vmp->vm_devvp, lbn);
+		if (bh == NULL) {
+			error = EIO;
+			break;
+		}
+
+		n = VMSFS_BLOCK_SIZE - blkoff;
+		if (n > uio->uio_resid)
+			n = uio->uio_resid;
+
+		error = uiomove((char *)vmsfs_bdata(bh) + blkoff, n, uio);
+		vmsfs_bdirty_sync(bh);
+		vmsfs_bput(bh);
+		if (error)
+			break;
+
+		if ((uint64_t)uio->uio_offset > vn->vn_size)
+			vn->vn_size = (uint64_t)uio->uio_offset;
+	}
+
+	uvm_vnp_setsize(vp, (voff_t)vn->vn_size);
+
+	/*
+	 * Persist size/blocks/map -- even on a partial write (an honest partial
+	 * success, never a silently-dropped tail) -- via the shared core's
+	 * read-modify-write header writer, the SAME one create/mkdir/rename
+	 * already use.
+	 */
+	hlbn = vmp->vm_vol.index_lbn + vn->vn_fid - 1;
+	hbh = vmsfs_bget(vmp->vm_devvp, hlbn);
+	if (hbh == NULL)
+		return error ? error : EIO;
+
+	meta.size       = vn->vn_size;
+	meta.blocks     = vn->vn_blocks;
+	meta.link_count = vn->vn_link_count ? vn->vn_link_count : 1;
+	meta.protection = vn->vn_prot;
+	meta.map_count  = vn->vn_map_count;
+	meta.map        = vn->vn_map;
+	vmsfs_fh_write_meta(vmsfs_bdata(hbh), &meta);
+	vmsfs_bdirty_sync(hbh);
+	vmsfs_bput(hbh);
+
+	return error;
+}
+
+/*
+ * vmsfs_create (VOP_CREATE, rd vms-e7a) - create a new file with VMS
+ * auto-versioning. Mirrors the Linux backend's vmsfs_blkdev_create() exactly
+ * (same shared-core calls, same version-resolution rule): parse an explicit
+ * ";N" version out of the name or bump the highest existing version, allocate
+ * a FID, encode a fresh header, add the directory entry, and update the
+ * volume free-count. The new file's UIC starts at [0,0] -- the OWNER path
+ * (vmsfs_setattr, above) is what the caller uses to stamp real ownership,
+ * matching Unix create-then-chown semantics.
+ *
+ * Per the documented VOP_CREATE contract (vnode_if.src: "% create vpp - U -"),
+ * dvp stays exactly as locked as the caller left it (never touched here) and
+ * the new vp is returned referenced and UNLOCKED -- the same "namei's caller
+ * locks it" contract vmsfs_lookup() already follows.
+ */
+static int
+vmsfs_create(void *v)
+{
+	struct vop_create_v3_args *ap = v;
+	struct vnode *dvp = ap->a_dvp;
+	struct componentname *cnp = ap->a_cnp;
+	struct vmsfs_mount *vmp = VFSTOVMSFS(dvp->v_mount);
+	struct vmsfs_node *dnode = VTOVMSFS(dvp);
+	struct vnode *vp;
+	char name[VMSFS_MAX_FILENAME + 1];
+	char base[VMSFS_MAX_FILENAME + 1];
+	char fname[VMSFS_MAX_NAME + 1];
+	char ftype[VMSFS_MAX_TYPE + 1];
+	uint32_t fid, lbn;
+	uint16_t highest, new_version;
+	int req_version;
+	struct vmsfs_bh *bh;
+	struct vmsfs_fh_info fhi;
+	uint64_t now;
+	int blocks_added;
+	int error;
+
+	if (dvp->v_mount->mnt_flag & MNT_RDONLY)
+		return EROFS;
+	if (cnp->cn_namelen > VMSFS_MAX_FILENAME)
+		return ENAMETOOLONG;
+	memcpy(name, cnp->cn_nameptr, cnp->cn_namelen);
+	name[cnp->cn_namelen] = '\0';
+
+	if (vmsfs_parse_version(name, base, sizeof(base), &req_version))
+		return EINVAL;
+	vmsfs_strupper(base);
+	vmsfs_split_name_type(base, fname, sizeof(fname), ftype, sizeof(ftype));
+
+	mutex_enter(&vmp->vm_alloc_lock);
+
+	if (req_version > 0) {
+		new_version = (uint16_t)req_version;
+	} else {
+		highest = vmsfs_dir_highest_version(&vmp->vm_vol, dnode->vn_map,
+		    dnode->vn_map_count, vmp->vm_case_blind, base, strlen(base));
+		new_version = (uint16_t)(highest + 1);
+		if (new_version > VMSFS_VERSION_MAX) {
+			mutex_exit(&vmp->vm_alloc_lock);
+			return ENOSPC;
+		}
+	}
+
+	error = vmsfs_alloc_fid(&vmp->vm_vol, &fid);
+	if (error) {
+		mutex_exit(&vmp->vm_alloc_lock);
+		return -error;
+	}
+
+	lbn = vmp->vm_vol.index_lbn + fid - 1;
+	bh = vmsfs_bget(vmp->vm_devvp, lbn);
+	if (bh == NULL) {
+		vmsfs_free_fid(&vmp->vm_vol, fid);
+		mutex_exit(&vmp->vm_alloc_lock);
+		return EIO;
+	}
+
+	now = vmsfs_now_seconds();
+	memset(&fhi, 0, sizeof(fhi));
+	fhi.fid        = fid;
+	fhi.created    = now;
+	fhi.modified   = now;
+	fhi.accessed   = now;
+	fhi.parent_fid = dnode->vn_fid;
+	fhi.flags      = VMSFS_FH_INUSE;
+	fhi.version    = new_version;
+	fhi.protection = VMSFS_PROT_DEFAULT;
+	fhi.link_count = 1;
+	strscpy(fhi.name, fname, sizeof(fhi.name));
+	strscpy(fhi.type, ftype, sizeof(fhi.type));
+	vmsfs_fh_encode(&fhi, vmsfs_bdata(bh));
+	vmsfs_bdirty_sync(bh);
+	vmsfs_bput(bh);
+
+	blocks_added = 0;
+	error = vmsfs_dir_add_entry(&vmp->vm_vol, dnode->vn_map, &dnode->vn_map_count,
+	    fid, base, (uint8_t)strlen(base), new_version, &blocks_added);
+	if (error) {
+		vmsfs_free_fid(&vmp->vm_vol, fid);
+		mutex_exit(&vmp->vm_alloc_lock);
+		return -error;
+	}
+	if (blocks_added) {
+		struct vmsfs_bh *dbh;
+		struct vmsfs_fh_meta meta;
+		uint32_t dlbn = vmp->vm_vol.index_lbn + dnode->vn_fid - 1;
+
+		dnode->vn_blocks += (uint32_t)blocks_added;
+		dnode->vn_size += (uint64_t)blocks_added * VMSFS_BLOCK_SIZE;
+		dbh = vmsfs_bget(vmp->vm_devvp, dlbn);
+		if (dbh != NULL) {
+			meta.size       = dnode->vn_size;
+			meta.blocks     = dnode->vn_blocks;
+			meta.link_count = dnode->vn_link_count ? dnode->vn_link_count : 2;
+			meta.protection = dnode->vn_prot;
+			meta.map_count  = dnode->vn_map_count;
+			meta.map        = dnode->vn_map;
+			vmsfs_fh_write_meta(vmsfs_bdata(dbh), &meta);
+			vmsfs_bdirty_sync(dbh);
+			vmsfs_bput(dbh);
+		}
+	}
+
+	vmsfs_update_home_block(&vmp->vm_vol);
+	mutex_exit(&vmp->vm_alloc_lock);
+
+	error = vcache_get(dvp->v_mount, &fid, sizeof(fid), &vp);
+	if (error)
+		return error;
+	*ap->a_vpp = vp;
+	return 0;
+}
+
+/*
+ * vmsfs_mkdir (VOP_MKDIR, rd vms-e7a) - create a directory: an unversioned
+ * file header (VMSFS_FH_DIRECTORY) with one zeroed data block. Mirrors the
+ * Linux backend's vmsfs_blkdev_mkdir(). Same "vp returned unlocked" contract
+ * as vmsfs_create() above.
+ */
+static int
+vmsfs_mkdir(void *v)
+{
+	struct vop_mkdir_v3_args *ap = v;
+	struct vnode *dvp = ap->a_dvp;
+	struct componentname *cnp = ap->a_cnp;
+	struct vmsfs_mount *vmp = VFSTOVMSFS(dvp->v_mount);
+	struct vmsfs_node *dnode = VTOVMSFS(dvp);
+	struct vnode *vp;
+	char uname[VMSFS_MAX_FILENAME + 1];
+	char fname[VMSFS_MAX_NAME + 1];
+	char ftype[VMSFS_MAX_TYPE + 1];
+	uint32_t fid, data_lbn, lbn;
+	struct vmsfs_bh *bh;
+	struct vmsfs_fh_info fhi;
+	uint64_t now;
+	size_t nlen;
+	int blocks_added;
+	int error;
+
+	if (dvp->v_mount->mnt_flag & MNT_RDONLY)
+		return EROFS;
+	if (cnp->cn_namelen > VMSFS_MAX_FILENAME)
+		return ENAMETOOLONG;
+	memcpy(uname, cnp->cn_nameptr, cnp->cn_namelen);
+	uname[cnp->cn_namelen] = '\0';
+	vmsfs_strupper(uname);
+
+	strscpy(fname, uname, sizeof(fname));
+	nlen = strlen(fname);
+	if (nlen > 4 && strncasecmp(fname + nlen - 4, ".DIR", 4) == 0)
+		fname[nlen - 4] = '\0';
+	strscpy(ftype, "DIR", sizeof(ftype));
+
+	mutex_enter(&vmp->vm_alloc_lock);
+
+	error = vmsfs_alloc_fid(&vmp->vm_vol, &fid);
+	if (error) {
+		mutex_exit(&vmp->vm_alloc_lock);
+		return -error;
+	}
+
+	error = vmsfs_alloc_block(&vmp->vm_vol, &data_lbn);
+	if (error) {
+		vmsfs_free_fid(&vmp->vm_vol, fid);
+		mutex_exit(&vmp->vm_alloc_lock);
+		return -error;
+	}
+
+	bh = vmsfs_bget(vmp->vm_devvp, data_lbn);
+	if (bh == NULL) {
+		vmsfs_free_block(&vmp->vm_vol, data_lbn);
+		vmsfs_free_fid(&vmp->vm_vol, fid);
+		mutex_exit(&vmp->vm_alloc_lock);
+		return EIO;
+	}
+	memset(vmsfs_bdata(bh), 0, VMSFS_BLOCK_SIZE);
+	vmsfs_bdirty_sync(bh);
+	vmsfs_bput(bh);
+
+	lbn = vmp->vm_vol.index_lbn + fid - 1;
+	bh = vmsfs_bget(vmp->vm_devvp, lbn);
+	if (bh == NULL) {
+		vmsfs_free_block(&vmp->vm_vol, data_lbn);
+		vmsfs_free_fid(&vmp->vm_vol, fid);
+		mutex_exit(&vmp->vm_alloc_lock);
+		return EIO;
+	}
+
+	now = vmsfs_now_seconds();
+	memset(&fhi, 0, sizeof(fhi));
+	fhi.fid        = fid;
+	fhi.size       = VMSFS_BLOCK_SIZE;
+	fhi.created    = now;
+	fhi.modified   = now;
+	fhi.accessed   = now;
+	fhi.blocks     = 1;
+	fhi.parent_fid = dnode->vn_fid;
+	fhi.flags      = VMSFS_FH_INUSE | VMSFS_FH_DIRECTORY;
+	fhi.version    = 0;
+	fhi.protection = VMSFS_PROT_DEFAULT;
+	fhi.link_count = 2;
+	fhi.map_count  = 1;
+	strscpy(fhi.name, fname, sizeof(fhi.name));
+	strscpy(fhi.type, ftype, sizeof(fhi.type));
+	fhi.map[0].rp_lbn   = data_lbn;
+	fhi.map[0].rp_count = 1;
+	vmsfs_fh_encode(&fhi, vmsfs_bdata(bh));
+	vmsfs_bdirty_sync(bh);
+	vmsfs_bput(bh);
+
+	blocks_added = 0;
+	error = vmsfs_dir_add_entry(&vmp->vm_vol, dnode->vn_map, &dnode->vn_map_count,
+	    fid, uname, (uint8_t)strlen(uname), 0, &blocks_added);
+	if (error) {
+		vmsfs_free_block(&vmp->vm_vol, data_lbn);
+		vmsfs_free_fid(&vmp->vm_vol, fid);
+		mutex_exit(&vmp->vm_alloc_lock);
+		return -error;
+	}
+
+	dnode->vn_link_count = (uint16_t)((dnode->vn_link_count ? dnode->vn_link_count : 1) + 1);
+	if (blocks_added) {
+		dnode->vn_blocks += (uint32_t)blocks_added;
+		dnode->vn_size += (uint64_t)blocks_added * VMSFS_BLOCK_SIZE;
+	}
+	{
+		struct vmsfs_bh *dbh;
+		struct vmsfs_fh_meta meta;
+		uint32_t dlbn = vmp->vm_vol.index_lbn + dnode->vn_fid - 1;
+
+		dbh = vmsfs_bget(vmp->vm_devvp, dlbn);
+		if (dbh != NULL) {
+			meta.size       = dnode->vn_size;
+			meta.blocks     = dnode->vn_blocks;
+			meta.link_count = dnode->vn_link_count;
+			meta.protection = dnode->vn_prot;
+			meta.map_count  = dnode->vn_map_count;
+			meta.map        = dnode->vn_map;
+			vmsfs_fh_write_meta(vmsfs_bdata(dbh), &meta);
+			vmsfs_bdirty_sync(dbh);
+			vmsfs_bput(dbh);
+		}
+	}
+
+	vmsfs_update_home_block(&vmp->vm_vol);
+	mutex_exit(&vmp->vm_alloc_lock);
+
+	error = vcache_get(dvp->v_mount, &fid, sizeof(fid), &vp);
+	if (error)
+		return error;
+	*ap->a_vpp = vp;
+	return 0;
+}
+
+/*
+ * vmsfs_remove (VOP_REMOVE, rd vms-e7a) - delete a file: remove its directory
+ * entry, free its data blocks + FID, update the volume free-count. Mirrors
+ * the Linux backend's vmsfs_blkdev_unlink(). Per the documented VOP_REMOVE
+ * contract (vnode_if.src: "% remove vp L U U"), THIS op is responsible for
+ * releasing @a_vp exactly once on every exit path (WILLPUT) -- dvp is left
+ * exactly as the caller locked it, untouched here.
+ */
+static int
+vmsfs_remove(void *v)
+{
+	struct vop_remove_v3_args *ap = v;
+	struct vnode *dvp = ap->a_dvp;
+	struct vnode *vp = ap->a_vp;
+	struct vmsfs_mount *vmp = VFSTOVMSFS(dvp->v_mount);
+	struct vmsfs_node *dnode = VTOVMSFS(dvp);
+	struct vmsfs_node *vn = VTOVMSFS(vp);
+	int error;
+
+	if (dvp->v_mount->mnt_flag & MNT_RDONLY) {
+		error = EROFS;
+		goto out;
+	}
+	if (vp->v_type == VDIR) {
+		error = EPERM;
+		goto out;
+	}
+
+	mutex_enter(&vmp->vm_alloc_lock);
+	error = vmsfs_dir_remove_entry(&vmp->vm_vol, dnode->vn_map,
+	    dnode->vn_map_count, vn->vn_fid, vn->vn_version);
+	if (!error) {
+		vmsfs_free_file_blocks(&vmp->vm_vol, vn->vn_map, vn->vn_map_count);
+		vmsfs_free_fid(&vmp->vm_vol, vn->vn_fid);
+		vmsfs_update_home_block(&vmp->vm_vol);
+	}
+	mutex_exit(&vmp->vm_alloc_lock);
+
+	if (error) {
+		error = -error;
+	} else {
+		vn->vn_flags &= (uint16_t)~VMSFS_FH_INUSE;
+		vn->vn_link_count = 0;
+	}
+
+out:
+	vput(vp);
 	return error;
 }
 
@@ -942,14 +1557,15 @@ static const struct vnodeopv_entry_desc vmsfs_vnodeop_entries[] = {
 	 */
 	{ &vop_parsepath_desc,	genfs_parsepath },
 	{ &vop_lookup_desc,	vmsfs_lookup },		/* v2 */
+	{ &vop_create_desc,	vmsfs_create },		/* v3, rd vms-e7a */
 	{ &vop_open_desc,	vmsfs_open },
 	{ &vop_close_desc,	vmsfs_close },
 	{ &vop_access_desc,	vmsfs_access },
 	{ &vop_accessx_desc,	genfs_accessx },
 	{ &vop_getattr_desc,	vmsfs_getattr },
-	{ &vop_setattr_desc,	genfs_eopnotsupp },
+	{ &vop_setattr_desc,	vmsfs_setattr },
 	{ &vop_read_desc,	vmsfs_read },
-	{ &vop_write_desc,	genfs_eopnotsupp },
+	{ &vop_write_desc,	vmsfs_write },
 	{ &vop_fallocate_desc,	genfs_eopnotsupp },
 	{ &vop_fdiscard_desc,	genfs_eopnotsupp },
 	{ &vop_ioctl_desc,	genfs_enoioctl },
@@ -967,10 +1583,10 @@ static const struct vnodeopv_entry_desc vmsfs_vnodeop_entries[] = {
 	{ &vop_mmap_desc,	genfs_mmap },
 	{ &vop_fsync_desc,	genfs_nullop },
 	{ &vop_seek_desc,	genfs_seek },
-	{ &vop_remove_desc,	genfs_eopnotsupp },
+	{ &vop_remove_desc,	vmsfs_remove },
 	{ &vop_link_desc,	genfs_eopnotsupp },
 	{ &vop_rename_desc,	genfs_eopnotsupp },
-	{ &vop_mkdir_desc,	genfs_eopnotsupp },
+	{ &vop_mkdir_desc,	vmsfs_mkdir },
 	{ &vop_rmdir_desc,	genfs_eopnotsupp },
 	{ &vop_symlink_desc,	genfs_eopnotsupp },
 	{ &vop_readdir_desc,	vmsfs_readdir },

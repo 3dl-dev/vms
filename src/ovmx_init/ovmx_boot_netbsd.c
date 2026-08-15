@@ -496,18 +496,22 @@ int ovmx_boot_mount_system_disk(const char *mountpoint)
      * (src/kernel-netbsd/vmsfs/vmsfs_nb.h) -- so this modelled struct is the
      * real args blob VFS_MOUNT consumes, byte-for-byte, not a stub.
      *
-     * MNT_RDONLY: the OVMX ODS-2 vnode backend on this substrate is read-only
-     * (it registers the read VOPs -- VOP_LOOKUP/READ/READDIR -- and the vmsfs
-     * mount+read proof, tests/lab-vax/run-vmsfs.sh, mounts MNT_RDONLY). A
-     * read-write mount would be refused, so the honest flag for what the
-     * backend can actually do today is read-only. This diverges from the Linux
-     * backend's read-write mount and is a real capability difference, not a
-     * silent drop: a blank or unformatted volume still fails to mount (nonzero
-     * return), and PID 1 halts (it does NOT initialize or install --
-     * design-init-scope.md §1). */
+     * READ-WRITE (rd vms-e7a): the OVMX ODS-2 vnode backend now registers real
+     * write VOPs (VOP_SETATTR/WRITE/CREATE/MKDIR/REMOVE, alongside the
+     * existing VOP_LOOKUP/READ/READDIR/the exec-from-vmsfs pager), so the
+     * system volume mounts read-write here -- matching real VMS, which mounts
+     * its system disk read-write, and matching the Linux backend's mount mode.
+     * This is what lets PROVISION.EXE stamp UIC file ownership
+     * (provision_ownership()) and STARTUP write SYSUAF logs / account-dir
+     * files onto the mounted volume. tests/lab-vax/run-vmsfs.sh's read-only
+     * mount+read proof still passes MNT_RDONLY explicitly (a caller that asks
+     * for read-only still gets an honestly read-only mount: no bitmap load,
+     * every write VOP refuses with EROFS). A blank or unformatted volume still
+     * fails to mount (nonzero return), and PID 1 halts (it does NOT initialize
+     * or install -- design-init-scope.md §1). */
     struct vmsfs_args { char *fspec; } args;
     args.fspec = (char *)OVMX_BOOT_SYSDISK_DEV;
-    return mount("vmsfs", mountpoint, MNT_RDONLY, &args, sizeof args);
+    return mount("vmsfs", mountpoint, 0, &args, sizeof args);
 }
 
 void ovmx_boot_power_off(void)

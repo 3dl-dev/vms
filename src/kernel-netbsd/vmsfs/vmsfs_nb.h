@@ -53,6 +53,9 @@ struct vmsfs_mount {
 	struct vmsfs_volume     vm_vol;       /* geometry; vm_vol.host == vm_devvp */
 	kmutex_t                vm_alloc_lock; /* guards vm_vol allocation state */
 	int                     vm_case_blind; /* case-insensitive lookup (default 1) */
+	size_t                  vm_bitmap_bytes; /* vm_vol.bitmap's kmem_alloc size,
+						   * 0 on a read-only mount (no bitmap
+						   * loaded) -- rd vms-e7a */
 };
 
 /*

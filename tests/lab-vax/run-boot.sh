@@ -367,11 +367,32 @@ case "${MODE}" in
     # SYS$SYSTEM:PROVISION.EXE exec.
     build_boot_image_set
     master_system_volume
+    # rd vms-e7a TEETH: drive_boot_vax.py's console check (no %OVMX-W-OWNER
+    # after SYSTEM identity) only proves PROVISION reported no ERROR -- a
+    # write VOP that silently no-ops (INV-6's exact failure class) would ALSO
+    # produce zero warnings, since lchown(2) would report success either way.
+    # A HASH of the raw sysvol image, before this boot vs. after, is the
+    # positive proof: rq1 is attached WITHOUT `-r' (see do_sysboot's vmm_args),
+    # so the guest's real block writes land in THIS host file. provision_
+    # ownership() unconditionally lchown()s ~28 objects in the system tree
+    # every boot (rd vms-e7a's own comment: "WHY IT RUNS ON EVERY BOOT"), so a
+    # working write path MUST change these bytes; a no-op VOP_SETATTR cannot.
+    sysvol_hash_before="$(sha256sum "${SYSVOL_IMG}" | awk '{print $1}')"
+    log "sysvol pre-boot sha256:  ${sysvol_hash_before}"
     if run_session sysboot /cache/boot-work; then
+      sysvol_hash_after="$(sha256sum "${SYSVOL_IMG}" | awk '{print $1}')"
+      log "sysvol post-boot sha256: ${sysvol_hash_after}"
+      if [ "${sysvol_hash_before}" = "${sysvol_hash_after}" ]; then
+        die "SYSBOOT: the mounted ODS-2 SYSTEM volume's raw on-disk bytes did NOT change during the boot (rd vms-e7a). provision_ownership() unconditionally lchown()s every object in the system tree on every boot -- identical before/after bytes means either it never ran, or (the INV-6 failure class) VOP_SETATTR silently no-op'd instead of really writing. A green console (no %OVMX-W-OWNER) is NOT sufficient by itself; this hash diff is the positive proof of a real write."
+      fi
+      log "OK (rd vms-e7a): the mounted ODS-2 SYSTEM volume's on-disk bytes CHANGED"
+      log "  during this boot -- REAL block writes hit the volume (not a"
+      log "  silently-faked/no-op VOP_SETATTR; INV-6 honest-failure teeth)."
       log "======================================================================"
       log "  SYSBOOT PASSED: ovmx_init on NetBSD/vax mounted the MASTERED OVMX"
-      log "  ODS-2 SYSTEM volume, passed the installed-system gate, and reached"
-      log "  PID 1's exec of SYS\$SYSTEM:PROVISION.EXE (%STDRV-I-STARTUP)."
+      log "  ODS-2 SYSTEM volume READ-WRITE, passed the installed-system gate,"
+      log "  reached PID 1's exec of SYS\$SYSTEM:PROVISION.EXE (%STDRV-I-STARTUP),"
+      log "  and PROVISION's UIC-ownership writes really hit the on-disk volume."
       log "======================================================================"
       exit 0
     fi

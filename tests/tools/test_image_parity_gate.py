@@ -296,24 +296,28 @@ def test_allowlist_loads_and_every_entry_is_well_formed(allowlist):
 
 
 def test_gate_run_against_real_repo_reports_known_findings():
-    """Documents the CURRENT known state of the gate against this repo.
+    """Documents the CURRENT known state of the gate against this repo: fully
+    set-equal (drift 0) in BOTH directions.
 
-    The x86_64-has-vax-lacks direction (the operator's explicit "no release
-    with x86_64-not-vax" bar) is CLOSED: vms-838 (SCSD.EXE) + vms-88c (the
-    vax release cut shipping the full ovmx-images aggregate) closed all ten
-    images this gate originally found drifting that direction.
+    x86_64-has-vax-lacks (the operator's explicit "no release with
+    x86_64-not-vax" bar) is CLOSED: vms-838 (SCSD.EXE) + vms-88c (the vax
+    release cut shipping the full ovmx-images aggregate) closed all ten images
+    this gate originally found drifting that direction.
 
-    Real (unallowlisted) drift remains in the OTHER direction: the
-    ovmx-images aggregate builds LIBRARIAN.EXE and OVMXDUMP for every
-    substrate (including x86_64), but distro/Dockerfile.bootable's shipped
-    /system-stage staging list never `cp`s either of them into the x86_64
-    release image -- a real, pre-existing gap, out of scope for this gate
-    rung to fix (fixing it means editing Dockerfile.bootable, a different
-    rung's territory). This test PASSES by correctly detecting that state --
-    it is not asserting parity exists, it is asserting the gate correctly
-    sees what does and doesn't. When Dockerfile.bootable starts staging
-    LIBRARIAN.EXE/OVMXDUMP, update this test's expected sets to match -- do
-    NOT loosen it to silence a real gap.
+    vax-has-x86_64-lacks is now ALSO closed: vms-3bc (#595) added the two
+    images the aggregate builds for every substrate but the x86_64 image had
+    not staged -- LIBRARIAN.EXE (backs the LIBRARY command; %LIB-F-NOIMG
+    without it) and OVMXDUMP (the object/image dumper) -- to
+    distro/Dockerfile.bootable's /system-stage SYSEXE list. The extractor also
+    learned OVMXDUMP has no .EXE/.ko suffix (_EXTENSIONLESS_IMAGE_BASENAMES).
+
+    This test now asserts the fully-closed, set-equal state -- the state that
+    lets `Cross-Arch Image Parity Gate (vms-e1d)` become a REQUIRED,
+    bidirectional, CI-enforced invariant. If either assertion below fails, a
+    genuine cross-arch gap reopened: fix the gap (build/ship the image for the
+    missing arch), or -- only for a documented Decision-A difference -- add a
+    reviewed allowlist entry. Do NOT loosen or delete an assertion to silence
+    a real gap.
     """
     result = ip.run(REPO_ROOT)
 
@@ -329,18 +333,33 @@ def test_gate_run_against_real_repo_reports_known_findings():
     assert "SCSD.EXE" not in result.x86_64_only
     assert "SCSD.EXE" not in result.allowlisted_x86_64_only
 
-    # The vax-has-x86_64-lacks direction still carries known, reported
-    # (not allowlisted) real drift.
-    assert {"LIBRARIAN.EXE", "OVMXDUMP"} <= result.vax_only
+    # The vax-has-x86_64-lacks direction is now ALSO closed: vms-3bc (#595)
+    # added LIBRARIAN.EXE + OVMXDUMP to distro/Dockerfile.bootable's x86_64
+    # SYSEXE staging (LIBRARIAN.EXE backs the LIBRARY command; OVMXDUMP is the
+    # object/image dumper -- VMS ships both in SYS$SYSTEM on every install), so
+    # neither is vax-only drift anymore. Per this test's own standing note, the
+    # expectations are updated to the resolved state -- NOT loosened to hide a
+    # gap: both images genuinely ship on both arches now.
+    assert "LIBRARIAN.EXE" not in result.vax_only
+    assert "OVMXDUMP" not in result.vax_only
+    assert result.vax_only == set(), (
+        f"vax-only images reappeared (real regression on the now-closed "
+        f"reverse direction): {result.vax_only}"
+    )
 
     # And the Decision-A diffs must NOT show up as unallowlisted drift.
     for name in ip.LINK_NATIVE_SHAREABLES:
         assert name not in result.x86_64_only
     assert "IMGACT.EXE" not in result.x86_64_only
-    assert result.has_real_drift, (
-        "the gate currently has real, reported (not allowlisted) findings -- "
-        "see rd vms-e1d. If this now fails, x86_64 staging caught up: update "
-        "the expectations above rather than deleting them."
+
+    # Both directions are now closed: the gate is set-equal (drift 0), which is
+    # exactly the state that lets it become a REQUIRED bidirectional invariant.
+    assert not result.has_real_drift, (
+        "the gate reports real, unallowlisted drift -- see rd vms-e1d. This test "
+        "asserts the fully-closed (set-equal) state; if it fails, a genuine "
+        "cross-arch gap reopened. Fix the gap (build/ship the image for the "
+        "missing arch) or, only for a documented Decision-A difference, add a "
+        "reviewed allowlist entry -- do NOT delete this assertion."
     )
 
 

@@ -103,6 +103,16 @@ _X86_64_NON_IMAGE_BASENAMES = {
     "PARTS_SETUP.COM",
 }
 
+# Shipped ovmx-images whose staged basename carries NO .EXE/.ko suffix. The vax
+# side derives these from CMakeLists' _OVMX_IMAGES_DEPS `# NAME` comments (which
+# name OVMXDUMP with no extension), so the x86_64 Dockerfile extractor must
+# recognize the same suffix-less basenames or it would falsely report drift for
+# an image that genuinely ships on both arches (OVMXDUMP = the OVMX object/image
+# dumper, the vmsdump target; staged by distro/Dockerfile.bootable since vms-3bc).
+_EXTENSIONLESS_IMAGE_BASENAMES = {
+    "OVMXDUMP",
+}
+
 _CP_LINE_RE = re.compile(
     r"""cp\s+                       # the cp command
         (?P<flags>-\w+\s+)?         # optional flags (e.g. -r, -L)
@@ -175,7 +185,11 @@ def extract_x86_64_images(dockerfile_text: str) -> set[str]:
         if basename == "*.EXE" and src.rstrip("/").endswith("SYSLIB/*.EXE"):
             images.update(LINK_NATIVE_SHAREABLES)
             continue
-        if not (basename.endswith(".EXE") or basename.endswith(".ko")):
+        if not (
+            basename.endswith(".EXE")
+            or basename.endswith(".ko")
+            or basename in _EXTENSIONLESS_IMAGE_BASENAMES
+        ):
             continue
         if basename in _X86_64_NON_IMAGE_BASENAMES:
             continue

@@ -301,6 +301,211 @@ out:
 }
 
 /*
+ * IO$_SETMODE (bind) -- bind the channel's socket to a local address
+ * (kernel_bind), then read the effective local address back (kernel_getsockname)
+ * into the same fields, so a caller that bound port 0 learns the ephemeral port
+ * the host kernel assigned. The SERVER counterpart of vms_ioctl_bg_connect
+ * (vms-698): same eight-byte sockaddr_in, same "hand it straight to the host
+ * kernel" posture.
+ */
+long vms_ioctl_bg_bind(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_bg_bind_args args;
+    struct vms_bg_chan *ch;
+    struct socket *sock;
+    struct sockaddr_in sa;
+    int rc;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (const void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    ch = bgchan_lookup(proc, args.chan, &sock);
+    if (!ch) {
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+    if (!sock) {
+        args.status = SS__IVCHAN;   /* no socket: IO$_SETMODE (create) never issued */
+        goto out;
+    }
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = args.sin_family;
+    sa.sin_port = args.sin_port;    /* network byte order, straight through */
+    sa.sin_addr.s_addr = args.sin_addr;
+
+    rc = kernel_bind(sock, (struct sockaddr *)&sa, sizeof(sa));
+    if (rc) {
+        args.status = SS__ABORT;
+        goto out;
+    }
+
+    /* Read the EFFECTIVE local address back so an ephemeral (port 0) bind hands
+     * the caller the port the host kernel actually chose. On a 6.x kernel
+     * kernel_getsockname returns the address length (>= 0) or -errno; either
+     * way, a failure just leaves the caller's requested fields in place. */
+    memset(&sa, 0, sizeof(sa));
+    rc = kernel_getsockname(sock, (struct sockaddr *)&sa);
+    if (rc >= 0) {
+        args.sin_family = sa.sin_family;
+        args.sin_port = sa.sin_port;
+        args.sin_addr = sa.sin_addr.s_addr;
+    }
+    args.status = SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * IO$_SETMODE (listen) -- put the channel's bound socket into the LISTEN state
+ * (kernel_listen) with a connection backlog (vms-698).
+ */
+long vms_ioctl_bg_listen(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_bg_listen_args args;
+    struct vms_bg_chan *ch;
+    struct socket *sock;
+    int backlog;
+    int rc;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (const void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    ch = bgchan_lookup(proc, args.chan, &sock);
+    if (!ch) {
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+    if (!sock) {
+        args.status = SS__IVCHAN;   /* no socket / never bound */
+        goto out;
+    }
+
+    /* Clamp the backlog to SOMAXCONN; 0 (or unset) falls back to a small
+     * default rather than a zero-length queue. */
+    backlog = (int)args.backlog;
+    if (backlog <= 0)
+        backlog = 5;
+    if (backlog > SOMAXCONN)
+        backlog = SOMAXCONN;
+
+    rc = kernel_listen(sock, backlog);
+    args.status = rc ? SS__ABORT : SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * IO$_ACCESS|IO$M_ACCEPT (accept) -- block until an inbound connection arrives
+ * on the LISTENING channel (kernel_accept), then install the accepted socket
+ * onto a SECOND, freshly-$ASSIGNed BG channel that has no socket of its own
+ * (vms-698). This is the executive-resident handoff the mailbox does with a
+ * queued message: the accepted socket is the "message", handed to another
+ * channel of the same process, which then reads/writes it through the ordinary
+ * IO$_READVBLK / IO$_WRITEVBLK path.
+ *
+ * kernel_accept may sleep, so it runs with proc->chan_lock DROPPED (the same
+ * discipline the rest of this file follows); the target channel is re-found
+ * under the lock afterwards and the socket installed only if it is still empty.
+ */
+long vms_ioctl_bg_accept(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_bg_accept_args args;
+    struct vms_bg_chan *lch, *tch;
+    struct socket *lsock, *tsock, *newsock = NULL;
+    struct vms_bg_socket *newbs = NULL;
+    struct sockaddr_in peer;
+    int rc;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (const void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    /* The listening channel must exist and have a (bound + listening) socket. */
+    lch = bgchan_lookup(proc, args.listen_chan, &lsock);
+    if (!lch || !lsock) {
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+
+    /* The accept target must exist and be EMPTY -- it receives the new socket. */
+    tch = bgchan_lookup(proc, args.accept_chan, &tsock);
+    if (!tch) {
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+    if (tsock) {
+        args.status = SS__BADPARAM; /* target already carries a socket */
+        goto out;
+    }
+
+    /* Blocking accept (lock dropped): completes when a peer connects, which is
+     * the faithful $QIOW shape -- the wait lives in the executive. */
+    rc = kernel_accept(lsock, &newsock, 0);
+    if (rc || !newsock) {
+        args.status = SS__ABORT;
+        goto out;
+    }
+
+    /* Peer address for the caller (best-effort; a failure leaves the out fields
+     * zero, not an error -- the connection is still good). */
+    memset(&peer, 0, sizeof(peer));
+    rc = kernel_getpeername(newsock, (struct sockaddr *)&peer);
+    if (rc >= 0) {
+        args.sin_family = peer.sin_family;
+        args.sin_port = peer.sin_port;
+        args.sin_addr = peer.sin_addr.s_addr;
+    }
+
+    /* Wrap the accepted socket in a refcounted holder -- the channel's one
+     * reference -- exactly as IO$_SETMODE does for a created socket (#566). This
+     * is what makes the accepted channel's socket + any later readiness poll fd
+     * (VMS_IOCTL_BG_POLLFD) share the same lifetime as a connected channel's:
+     * the socket is reached through ch->bs->sock and released by the last kref,
+     * never a bare ch->sock. Allocate before the lock (GFP_KERNEL may sleep). */
+    newbs = kmalloc(sizeof(*newbs), GFP_KERNEL);
+    if (!newbs) {
+        sock_release(newsock);
+        args.status = SS__ABORT;
+        goto out;
+    }
+    newbs->sock = newsock;
+    kref_init(&newbs->kref);        /* the target channel's reference */
+
+    /* Install the accepted socket's holder onto the target channel, under the
+     * lock, only if the channel is still present and still empty. */
+    spin_lock(&proc->chan_lock);
+    tch = bgchan_find_locked(proc, args.accept_chan);
+    if (tch && !tch->bs) {
+        tch->bs = newbs;            /* HANDOFF: accepted socket -> target channel */
+        newbs = NULL;
+    }
+    spin_unlock(&proc->chan_lock);
+
+    if (newbs) {
+        /* Target vanished or filled underneath us; do not leak the socket. The
+         * last (only) kref drop releases the host socket and frees the holder. */
+        kref_put(&newbs->kref, vms_bg_socket_free);
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+    args.status = SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * IO$_WRITEVBLK -- send one buffer over the connection (kernel_sendmsg).
  */
 long vms_ioctl_bg_send(struct vms_proc *proc, unsigned long arg)

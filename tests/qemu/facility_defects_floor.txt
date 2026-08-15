@@ -413,4 +413,13 @@
 # pollable fd for a BGn: socket. Anchors test_syssvc_bgsock_poll (poll() on the
 # fd blocks until the loopback peer sends, over a real /dev/vms); the mutation
 # makes .poll report readable unconditionally so poll() fires before data.
-104
+# Raised 104 -> 105 by vms-698's bg-accept-socket-not-installed -- the BGn:
+# SERVER path (bind/listen/accept), the inbound half of the vms-527 network
+# facility and the second defect targeting src/kernel/vms_bg.c. The dedicated
+# per-facility control anchoring the new test_syssvc_bg_server suite: the
+# accept handler (vms_ioctl_bg_accept) reports success but RELEASES the
+# accepted socket instead of installing it onto the target channel, so the
+# accepted-channel read and write both fail SS$_IVCHAN while assign/setmode/
+# bind/listen/accept-status stay green. See its own entry in facility_defects.sh
+# for what it covers and why.
+105

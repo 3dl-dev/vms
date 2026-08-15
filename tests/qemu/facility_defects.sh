@@ -510,6 +510,7 @@ rightslist-general-hex-as-decimal
 sysuaf-uic-radix-decimal
 sysuaf-uic-writeback-decimal
 bg-recv-length-zeroed
+bg-accept-socket-not-installed
 tcpip-ftp-get-length-dropped
 bgsock-recv-length-zeroed
 bgsock-poll-always-ready
@@ -5379,6 +5380,24 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    bg-accept-socket-not-installed)
+        case "$_f" in
+        facility)     echo "INET pseudo-device BGn: SERVER path -- the IO\$_ACCESS|IO\$M_ACCEPT (accept) handler of the executive-resident BGn: driver (vms_ioctl_bg_accept, src/kernel/vms_bg.c, vms-698). The inbound half of the network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs bind + listen, then accepts an inbound TCP connection onto a SECOND BG channel, and the accepted socket lives IN the executive (host in-kernel socket API) exactly as the vms-527 client socket does.";;
+        targets)      echo "kernel/vms_bg.c";;
+        suites_red)   echo "test_syssvc_bg_server";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_bg_accept() completes kernel_accept and reports SS\$_NORMAL, but the mutation RELEASES the accepted socket instead of installing it onto the target channel (tch->sock stays NULL) -- the executive-resident handoff the whole server path turns on. The accept still returns success, so the accept-status assertion stays green; but the accepted channel now carries no socket, so the subsequent IO\$_READVBLK and IO\$_WRITEVBLK on it both fail SS\$_IVCHAN -- reddening exactly the two accepted-channel assertions. The assign / setmode / bind / listen assertions (and the no-executive honest-skip) all stay green. One install replaced by a release. bg-recv-length-zeroed cannot stand in for this: that mutation zeroes a recv byte COUNT with the socket present; this proves the accept HANDOFF itself is load-bearing.";;
+        require_fail) cat <<'EOF'
+the accepted BG channel returns the exact bytes the inbound client sent
+the accepted BG channel sends a reply back to the inbound client
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     tcpip-ftp-get-length-dropped)
         case "$_f" in
         facility)     echo "TCP/IP Services client TOOLS -- the FTP RETR data-drain of the shared client engine (tcpip_ftp_get, src/vmstcpip/services/tcpip_client.h, vms-dbb), the header the DCL FTP/TELNET verbs ship and test_syssvc_tcpip_client proves. The tools drive their connections over the executive-resident INET pseudo-device BGn: (vms-527) through the public \$ASSIGN/\$QIO/\$DASSGN services -- no userspace socket stack; \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive.";;
@@ -6298,6 +6317,17 @@ apply_edit() {
         # byte count. After substitution no "a->len = (uint32_t)n;" is left in
         # the range, so a second apply is the no-op the selftest requires.
         sed -i '/^long vms_ioctl_bg_recv/,/^}$/ s|        a->len = (uint32_t)n;|        a->len = 0; /* NEGCTL bg-recv-length-zeroed */|' "$_file";;
+
+    bg-accept-socket-not-installed)
+        # RANGE-ANCHORED to vms_ioctl_bg_accept's own body. The install line
+        # "tch->sock = newsock;" (with its HANDOFF comment) is unique, but the
+        # range keeps the anchor honest against a future second socket install.
+        # Replacing the install with a release leaves the target channel with no
+        # socket while the accept still returns SS$_NORMAL -- the read and write
+        # on the accepted channel then both fail SS$_IVCHAN. After substitution
+        # the "tch->sock = newsock;" line is gone from the range, so a second
+        # apply is the no-op the selftest requires.
+        sed -i '/^long vms_ioctl_bg_accept/,/^}$/ s|        tch->sock = newsock;        /\* HANDOFF: accepted socket -> target channel \*/|        sock_release(newsock); newsock = NULL; /* NEGCTL bg-accept-socket-not-installed */|' "$_file";;
 
     tcpip-ftp-get-length-dropped)
         # Drop the accumulated received length in tcpip_ftp_get()'s data-drain

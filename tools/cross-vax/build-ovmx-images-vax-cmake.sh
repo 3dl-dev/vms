@@ -22,7 +22,7 @@
 # MIGRATED TEETH (vms-08cb, Rung E) -- each ported from a retired per-job
 # script, run AFTER the main build below so the ovmx-images artifacts already
 # exist to check:
-#   * libvmssys_width_negctl_vax / librarian_negctl_vax (ctest build-negatives
+#   * libvmssys_ilp32_negctl_vax / librarian_negctl_vax (ctest build-negatives
 #     registered in tests/netbsd/guest/CMakeLists.txt) -- was
 #     build-libvmssys-vax.sh's / build-librarian-vax.sh's CROSSCOMPILE_NEGCTL=1
 #     branch.
@@ -143,17 +143,22 @@ done
 # =============================================================================
 
 echo
-echo "=== migrated teeth: ctest build-negatives (libvmssys width, librarian) ==="
+echo "=== migrated teeth: ctest build-negatives (libvmssys ilp32, librarian) ==="
 # enable_testing()+add_test() for these two live in
 # tests/netbsd/guest/CMakeLists.txt (added unconditionally on the NetBSD
 # substrate, independent of BUILD_TESTS), so the top-level configure above
 # already registered them in $BUILD_DIR/tests/netbsd/guest. Was
 # build-libvmssys-vax.sh / build-librarian-vax.sh's CROSSCOMPILE_NEGCTL=1.
+# Selected by exact name (not the facility jobs' '_width_negctl_vax$'
+# pattern): libvmssys_ilp32_negctl_vax is deliberately NOT named
+# "*_width_negctl_vax" so it does not also match
+# build-facility-tools-vax-cmake.sh's selector and inflate that job's
+# expected count of 4.
 NEGCTL_BUILD_DIR="$BUILD_DIR/tests/netbsd/guest"
 test -f "$NEGCTL_BUILD_DIR/CTestTestfile.cmake" \
     || { echo "FAIL: $NEGCTL_BUILD_DIR/CTestTestfile.cmake missing -- negctl tests were not registered"; exit 1; }
-if ! (cd "$NEGCTL_BUILD_DIR" && ctest -R '^(libvmssys_width|librarian)_negctl_vax$' --output-on-failure); then
-    echo "FAIL: the libvmssys width negctl or the librarian negctl did not fire"
+if ! (cd "$NEGCTL_BUILD_DIR" && ctest -R '^(libvmssys_ilp32|librarian)_negctl_vax$' --output-on-failure); then
+    echo "FAIL: the libvmssys ilp32 negctl or the librarian negctl did not fire"
     exit 1
 fi
 

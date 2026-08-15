@@ -102,22 +102,27 @@ endforeach()
 # vax-cmake-images CI job can select exactly these two without re-running the
 # facility-guest-tools set (that stays netbsd-vax-facility-tools-crosscompile's
 # job, unchanged by this rung).
-#   * libvmssys_width_negctl_vax  -- was build-libvmssys-vax.sh's
+#   * libvmssys_ilp32_negctl_vax  -- was build-libvmssys-vax.sh's
 #     CROSSCOMPILE_NEGCTL=1 branch (the toolchain-level ILP32 width gate).
+#     Named "*_ilp32_negctl_vax", NOT "*_width_negctl_vax" like the four
+#     facility tests above: build-facility-tools-vax-cmake.sh selects its set
+#     with `ctest -R '_width_negctl_vax$'` and asserts an exact count of 4 --
+#     a "*_width_negctl_vax" name here would silently join that job's set and
+#     break its count assertion.
 #   * librarian_negctl_vax        -- was build-librarian-vax.sh's
 #     CROSSCOMPILE_NEGCTL=1 branch (a deliberately-broken TU must reject).
 # ---------------------------------------------------------------------------
 add_test(
-    NAME libvmssys_width_negctl_vax
+    NAME libvmssys_ilp32_negctl_vax
     COMMAND
         ${CMAKE_CURRENT_SOURCE_DIR}/negctl/run_negctl.sh
         "${CMAKE_C_COMPILER}"
         "${CMAKE_SYSROOT}"
         "libvmssys"
-        "${CMAKE_CURRENT_SOURCE_DIR}/negctl/libvmssys_width_negctl.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/negctl/libvmssys_ilp32_negctl.c"
         "${CMAKE_CURRENT_BINARY_DIR}/negctl/libvmssys"
 )
-set_tests_properties(libvmssys_width_negctl_vax PROPERTIES
+set_tests_properties(libvmssys_ilp32_negctl_vax PROPERTIES
     LABELS "negctl;vax;netbsd;vax-images"
     TIMEOUT 60
 )

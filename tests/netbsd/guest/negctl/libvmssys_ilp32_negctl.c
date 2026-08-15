@@ -1,5 +1,5 @@
 /*
- * libvmssys_width_negctl.c - width-safety NEGATIVE CONTROL for the vax
+ * libvmssys_ilp32_negctl.c - width-safety NEGATIVE CONTROL for the vax
  * toolchain itself (vms-9dc, epic vms-509 "unified cross-platform build"
  * Rung E, docs/design-unified-cross-build.md §5/§8). Re-expresses the
  * CROSSCOMPILE_NEGCTL=1 heredoc formerly hand-rolled in the retired
@@ -8,6 +8,12 @@
  * content, moved to a checked-in fixture, compiled by
  * tests/netbsd/guest/negctl/run_negctl.sh under ctest instead of a
  * hand-invoked shell script.
+ *
+ * Named "*_ilp32_negctl_vax" rather than "*_width_negctl_vax" (unlike the
+ * four facility fixtures) so it does NOT match
+ * build-facility-tools-vax-cmake.sh's `ctest -R '_width_negctl_vax$'`
+ * selector -- that job asserts an exact count of 4 facility tests, and this
+ * fixture is not one of them (a real collision hit in CI review of vms-08cb).
  *
  * Deliberately WRONG for the VAX (ILP32): these assert the LP64 widths. On a
  * real vax--netbsdelf compile long and void* are 32-bit, so both static

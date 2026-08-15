@@ -6265,9 +6265,9 @@ jobs:
           # per-job script's own gate (see the job header comment above). Defense
           # in depth beyond the script's own `set -e`: confirm every migrated
           # check's banner actually appeared, not just that the script exited 0.
-          echo "$RAW" | grep -qF "Test #5: libvmssys_width_negctl_vax" \
-            || { echo "FAIL: the libvmssys width negctl (was build-libvmssys-vax.sh) did not run"; exit 1; }
-          echo "$RAW" | grep -qF "Test #6: librarian_negctl_vax" \
+          echo "$RAW" | grep -qF "libvmssys_ilp32_negctl_vax .......   Passed" \
+            || { echo "FAIL: the libvmssys ilp32 negctl (was build-libvmssys-vax.sh) did not run"; exit 1; }
+          echo "$RAW" | grep -qF "librarian_negctl_vax .............   Passed" \
             || { echo "FAIL: the librarian negctl (was build-librarian-vax.sh) did not run"; exit 1; }
           echo "$RAW" | grep -qF "100% tests passed, 0 tests failed out of 2" \
             || { echo "FAIL: the migrated ctest negctls did not both pass"; exit 1; }

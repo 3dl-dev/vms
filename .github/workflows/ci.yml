@@ -103,6 +103,8 @@ jobs:
               - '.github/workflows/**'
               - 'third-party/openssh/**'
               - 'third-party/libcrypto/**'
+              - 'src/vmstcpip/sockets/**'
+              - 'src/libvmssys/**'
             kernel:
               - '.github/workflows/**'
               - 'src/kernel/**'
@@ -4182,7 +4184,7 @@ jobs:
   # no facility_defects negctl anchor applies).
   # -----------------------------------------------------------------------
   openssh-static-musl:
-    name: "Static ssh (musl) — OpenSSH client vendored build"
+    name: "Static ssh (musl) — OpenSSH client on the OVMX veneer"
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.openssh == 'true' }}
     runs-on: ubuntu-latest
@@ -4192,13 +4194,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fetch pinned OpenSSH, build static ssh (musl + libcrypto)
+      - name: Build ssh with the OVMX veneer transport+poll substitution (static musl)
         run: |
           docker run --rm --platform linux/amd64 \
             -v "${{ github.workspace }}":/src -w /src \
             docker.io/library/alpine:3.20 sh -c '
               set -e
-              apk add --no-cache gcc musl-dev make perl curl file binutils linux-headers >/dev/null
+              apk add --no-cache gcc musl-dev make perl curl file binutils linux-headers patch >/dev/null
               export CC=gcc WORK=/tmp/ovmx-openssh
               sh /src/third-party/openssh/test/run_ssh_build.sh
             '

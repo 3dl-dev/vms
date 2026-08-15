@@ -91,6 +91,18 @@ echo "== extract =="
 tar xzf "$TARBALL"
 [ -d "$SRCDIR" ] || { echo "FAIL: expected inner dir $SRCDIR not found after extract" >&2; exit 1; }
 
+if [ "${OVMX_VENEER:-0}" = "1" ]; then
+    echo "== apply OVMX veneer transport+poll substitution (sshconnect + packet) =="
+    ( cd "$SRCDIR" && patch -p1 < "$HERE/ovmx/sshconnect-veneer.patch" \
+                   && patch -p1 < "$HERE/ovmx/packet-veneer.patch" )
+    # Stage the veneer header + glue so the vendored source's #include "ovmx/..."
+    # resolves off -I. (srcdir).
+    mkdir -p "$SRCDIR/ovmx"
+    cp "$ROOT/src/vmstcpip/sockets/vms_bgsock.h" "$SRCDIR/ovmx/"
+    cp "$HERE/ovmx/ovmx_ssh_glue.h" "$SRCDIR/ovmx/"
+    cp "$HERE/ovmx/ovmx_ssh_glue.c" "$SRCDIR/ovmx/"
+fi
+
 cd "$SRCDIR"
 echo "== configure (static, musl, vendored libcrypto) =="
 CC="$CC" CFLAGS="-O2" LDFLAGS="-static" \
@@ -105,6 +117,36 @@ CC="$CC" CFLAGS="-O2" LDFLAGS="-static" \
         tail -40 "$WORK/openssh-configure.log" >&2
         exit 1
     }
+
+if [ "${OVMX_VENEER:-0}" = "1" ]; then
+    echo "== build the OVMX veneer object set (freestanding libvmssys subset) =="
+    # The veneer reaches the executive over its own direct syscalls
+    # (__vms_syscallN, syscall.S) -- no glibc/musl socket path -- so this set is
+    # self-contained and links into the hosted-musl ssh without collision.
+    VINC="-I$ROOT/src/libvms/include -I$ROOT/src/libvmssys -I$ROOT/src/vmstcpip/sockets -I$ROOT/src/kernel"
+    "$CC" -O2 -ffreestanding -c $VINC "$ROOT/src/vmstcpip/sockets/vms_bgsock.c"   -o "$WORK/ovmx_vms_bgsock.o"
+    "$CC" -O2 -ffreestanding -c $VINC "$ROOT/src/libvmssys/vms_kif.c"             -o "$WORK/ovmx_vms_kif.o"
+    "$CC" -O2 -ffreestanding -c $VINC "$ROOT/src/libvmssys/kif_transport_linux.c" -o "$WORK/ovmx_kif_xport.o"
+    "$CC" -O2 -ffreestanding -c $VINC "$ROOT/src/libvmssys/vms_string.c"          -o "$WORK/ovmx_vms_string.o"
+    "$CC" -c "$ROOT/src/libvmssys/arch/x86_64/syscall.S" -o "$WORK/ovmx_syscall.o"
+    ar rcs "$WORK/libovmxveneer.a" \
+        "$WORK/ovmx_vms_bgsock.o" "$WORK/ovmx_vms_kif.o" "$WORK/ovmx_kif_xport.o" \
+        "$WORK/ovmx_vms_string.o" "$WORK/ovmx_syscall.o"
+
+    echo "== compile the OpenSSH<->veneer glue with OpenSSH's own flags =="
+    # Reuse the exact CFLAGS/CPPFLAGS configure baked into the Makefile so the
+    # glue sees config.h + sshbuf.h, plus -DOVMX_VENEER and the srcdir include.
+    OSSH_CFLAGS=$(sed -n 's/^CFLAGS=[[:space:]]*//p' Makefile | head -1)
+    OSSH_CPPFLAGS=$(sed -n 's/^CPPFLAGS=[[:space:]]*//p' Makefile | head -1 | sed "s#\$(PATHS)##; s#\$(srcdir)#$SRCDIR#g")
+    "$CC" $OSSH_CFLAGS $OSSH_CPPFLAGS -DOVMX_VENEER -I"$SRCDIR" \
+        -c "$SRCDIR/ovmx/ovmx_ssh_glue.c" -o "$WORK/ovmx_ssh_glue.o"
+
+    echo "== wire the OVMX branch + objects into the ssh link =="
+    # -DOVMX_VENEER activates the patched branches; the glue object + veneer
+    # archive are appended to LIBS so they resolve at the final ssh link.
+    sed -i 's/^CPPFLAGS=/CPPFLAGS=-DOVMX_VENEER /' Makefile
+    sed -i "s#^LIBS=#LIBS=$WORK/ovmx_ssh_glue.o $WORK/libovmxveneer.a #" Makefile
+fi
 
 echo "== make ssh (static) =="
 make -j"$(nproc 2>/dev/null || echo 2)" ssh >"$WORK/openssh-make.log" 2>&1 || {

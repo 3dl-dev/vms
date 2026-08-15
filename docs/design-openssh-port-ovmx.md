@@ -339,23 +339,41 @@ real `/dev/vms` (honest-skip 77 without it) + a paired MEASURED negctl anchor in
 > The earlier "$QIO shim inside `sshconnect.c`" idea was WRONG — it made the app
 > talk to the *transport device* rather than a socket — and has been discarded.
 
-### 7.2 Landed this increment (`third-party/openssh/`)
-Vendored fetch-vendored + SHA-pinned (same model as `libcrypto`): `VENDOR-REV`
-pins **OpenSSH-portable 10.0** (tarball `openssh-10.0p1.tar.gz`, SHA256
-`021a2e70…`; the source self-identifies as `OpenSSH_10.0p2`, LibreSSL 4.1.2 — see
-the VENDOR-REV p2/p1 mirror note). `build-openssh.sh` fetches (SHA-verified) +
-cross-builds `ssh` **fully static** against musl + the vendored static
-`libcrypto`, `--without-zlib --without-pam`, **zero source patches**. Proven by
-CI `openssh-static-musl` (`test/run_ssh_build.sh`): `ssh` is fully static (no
-`(NEEDED)`) and `ssh -V` prints `OpenSSH_10.0p2, LibreSSL 4.1.2`. License BSD/ISC
-(permissive OSS; Rule 8 unaffected — §5).
+### 7.2 Landed — the transport + event-loop substitution onto the veneer
+`third-party/openssh/` vendors OpenSSH-portable 10.0 (SHA-pinned; `ssh -V` =
+`OpenSSH_10.0p2, LibreSSL 4.1.2`) and now links `ssh` **onto the veneer**:
+
+- **`ovmx/ovmx_ssh_glue.{c,h}`** — the OVMX port layer. `ovmx_ssh_connect()`
+  opens+connects a veneer socket (`ovmx_socket`/`ovmx_connect`) and returns the
+  veneer's **real pollable readiness fd** (`ovmx_pollfd`) as OpenSSH's connection
+  fd, so **every OpenSSH poll/ppoll path works unchanged**. `ovmx_ssh_read`/
+  `ovmx_ssh_write`/`ovmx_ssh_sshbuf_read` move data through the veneer
+  (`ovmx_recv`/`ovmx_send`) for a connection fd (a tiny fd→handle map), falling
+  back to `read()`/`write()` for any other fd.
+- **`ovmx/sshconnect-veneer.patch`** — `ssh_connect_direct` obtains its transport
+  from `ovmx_ssh_connect` instead of `ssh_create_socket`+`timeout_connect`.
+- **`ovmx/packet-veneer.patch`** — the **three** data-I/O sites in `packet.c`
+  (`ssh_packet_read_seqnr`'s `read`, `ssh_packet_process_read`'s `sshbuf_read`,
+  `ssh_packet_write_poll`'s `write`) route through the glue. The `ppoll` waits
+  and `clientloop` poll set are UNCHANGED — they poll the veneer readiness fd.
+- All guarded by `-DOVMX_VENEER`; **no `$QIO`/`vms_kif` in OpenSSH, no raw
+  `socket()`**. `build-openssh.sh OVMX_VENEER=1` builds the veneer object set
+  (`vms_bgsock` + the `vms_kif` bg path + `kif_transport_linux` + `vms_string` +
+  `syscall.S` — self-contained via `__vms_syscallN`, no musl collision), compiles
+  the glue with OpenSSH's own flags, and links it into `ssh`.
+
+Proven by CI `openssh-static-musl` (`test/run_ssh_build.sh`): `ssh` cross-builds
+**fully static** with the substitution, `nm` confirms the whole chain is wired
+(`ovmx_ssh_connect`/`read`/`write`/`sshbuf_read` → `ovmx_socket`/`connect`/`send`/
+`recv`/`pollfd` → `vms_kif_bg_pollfd`), and `ssh -V` runs. License BSD/ISC.
 
 ### 7.3 Continuation (in order)
-1. **BSD-sockets RTL veneer over BGn:** (the prerequisite item) — build + prove
-   per §7.1.
-2. **`ssh` as the OVMX IMGACT image** — static-PIE `PT_INTERP` image linked
-   against the veneer, activating through IMGACT.
-3. **Real-KEX QEMU proof (Rule 9)** — OVMX `ssh` does a REAL key exchange + auth +
-   remote command against an in-guest loopback `sshd` over the veneer/BGn:,
-   captured byte-exact; honest-skip (77) without `/dev/vms`.
-4. **`scp` + `sftp`** file round-trips over the same veneer.
+1. **Real-KEX QEMU proof (Rule 9)** — stage the veneer-linked `ssh` + a stock
+   `sshd` (+ host/user keys) into the QEMU initramfs and drive a REAL key
+   exchange + auth + remote command over `127.0.0.1` via the veneer/BGn: on a
+   live `/dev/vms`, byte-exact; honest-skip 77 without it; paired negctl + floor
+   bump. This is the payoff proof; it needs the initramfs/sshd/keys harness.
+2. **`ssh` as the OVMX IMGACT image** — static-PIE `PT_INTERP` so DCL activates
+   it through IMGACT (the veneer-linked binary already runs against `/dev/vms`;
+   this is the VMS image-activation packaging).
+3. **`scp` + `sftp`** over the same veneer.

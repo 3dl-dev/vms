@@ -66,37 +66,27 @@ product ever lands in the repo (shared-host rule / "ALL deps containerized").
                             static + prints its version. CI job:
                             openssh-static-musl.
 
+THE OVMX TRANSPORT + EVENT-LOOP SUBSTITUTION (onto the veneer)
 --------------------------------------------------------------------------------
-THE OVMX TRANSPORT IS NOT HERE — ssh uses STANDARD BSD sockets over the veneer
---------------------------------------------------------------------------------
-Correct layering (operator/conductor ruling 2026-08-14):
+ssh uses STANDARD BSD sockets; they resolve to the OVMX BSD-sockets veneer over
+BGn: (src/vmstcpip/sockets), which routes to the executive -- the app never
+speaks $QIO/TCPIP$DEVICE:, and there is no raw Linux socket(). Correct layering:
 
-  ssh  →  socket()/connect()  [STANDARD BSD sockets, UNCHANGED]
-        →  OVMX BSD-sockets RTL veneer over BGn:   (the DECC$SOCKET-equivalent)
-             →  $QIO to BGn:  →  vms.ko  →  host kernel TCP/IP  →  interface
+  ssh  ->  socket()/connect()/poll()/read()/write()   [STANDARD BSD]
+        ->  OVMX veneer over BGn:  ->  $QIO  ->  vms.ko  ->  host TCP/IP
 
-An application opens a socket to a remote IP:port and lets the stack route; it
-never touches the transport device. So ssh keeps its ordinary socket()/connect()
-and OVMX supplies those calls through a BSD-sockets veneer that translates them
-into the $QIO-to-BGn: ops (IO$_SETMODE create / IO$_ACCESS connect / IO$_READVBLK
-/ IO$_WRITEVBLK / IO$_DEACCESS) — exactly the ops src/vmstcpip/services/
-tcpip_client.h already shows. ssh must NOT mention BGn:/$QIO/TCPIP$DEVICE:.
+This directory carries the OpenSSH-side port glue (ovmx/):
+  ovmx_ssh_glue.{c,h}     ovmx_ssh_connect() (transport, returns the veneer's
+                          real pollable readiness fd) + ovmx_ssh_read/write/
+                          sshbuf_read (packet I/O -> ovmx_recv/ovmx_send).
+  sshconnect-veneer.patch ssh_connect_direct -> ovmx_ssh_connect.
+  packet-veneer.patch     the 3 packet.c data-I/O sites -> the glue; poll/ppoll
+                          UNCHANGED (they poll the veneer readiness fd).
+All guarded by -DOVMX_VENEER. build-openssh.sh OVMX_VENEER=1 links ssh against
+the self-contained veneer object set (proven static-musl by openssh-static-musl).
 
-The veneer is a SEPARATE, foundational prerequisite (filed as its own item, the
-"BSD-sockets RTL veneer over BGn:"). This directory is ONLY the OpenSSH vendoring
-+ static-build proof; ssh links the veneer and activates as the OVMX IMGACT image
-in the follow-on. The earlier "$QIO shim inside sshconnect.c" approach was WRONG
-(it made the app talk to the transport device) and has been discarded.
-
-Proven by CI (openssh-static-musl, this item):
-  OpenSSH 10.0p1 ssh cross-builds FULLY STATIC against musl + the vendored
-  LibreSSL libcrypto, zero source patches (--without-zlib --without-pam), and
-  `ssh -V` runs.
-
-Follow-on (rides on the veneer prerequisite): build ssh as the OVMX IMGACT image
-linked against the veneer; prove a REAL SSH key exchange + auth + remote command
-over the veneer/BGn: against an in-guest loopback sshd on a real /dev/vms (Rule 9),
-honest-skip (77) without the executive; then scp + sftp.
+Follow-on: the real KEX handshake over a live /dev/vms is the QEMU proof (stage
+ssh + a stock sshd in the initramfs); then ssh as the IMGACT image; then scp/sftp.
 
 --------------------------------------------------------------------------------
 Rule 8 / clean-room

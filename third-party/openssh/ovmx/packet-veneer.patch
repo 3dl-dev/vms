@@ -1,0 +1,50 @@
+--- a/packet.c
++++ b/packet.c
+@@ -95,6 +95,9 @@
+ #include "ssh.h"
+ #include "packet.h"
+ #include "ssherr.h"
++#ifdef OVMX_VENEER
++#include "ovmx/ovmx_ssh_glue.h"
++#endif
+ #include "sshbuf.h"
+ 
+ #ifdef PACKET_DEBUG
+@@ -1487,7 +1490,11 @@
+ 			goto out;
+ 		}
+ 		/* Read data from the socket. */
++#ifdef OVMX_VENEER
++		len = ovmx_ssh_read(state->connection_in, buf, sizeof(buf));
++#else
+ 		len = read(state->connection_in, buf, sizeof(buf));
++#endif
+ 		if (len == 0) {
+ 			r = SSH_ERR_CONN_CLOSED;
+ 			goto out;
+@@ -1922,7 +1929,11 @@
+ 	int r;
+ 	size_t rlen;
+ 
++#ifdef OVMX_VENEER
++	if ((r = ovmx_ssh_sshbuf_read(fd, state->input, PACKET_MAX_SIZE, &rlen)) != 0)
++#else
+ 	if ((r = sshbuf_read(fd, state->input, PACKET_MAX_SIZE, &rlen)) != 0)
++#endif
+ 		return r;
+ 
+ 	if (state->packet_discard) {
+@@ -2110,8 +2121,13 @@
+ 	int r;
+ 
+ 	if (len > 0) {
++#ifdef OVMX_VENEER
++		len = ovmx_ssh_write(state->connection_out,
++		    sshbuf_ptr(state->output), len);
++#else
+ 		len = write(state->connection_out,
+ 		    sshbuf_ptr(state->output), len);
++#endif
+ 		if (len == -1) {
+ 			if (errno == EINTR || errno == EAGAIN ||
+ 			    errno == EWOULDBLOCK)

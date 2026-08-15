@@ -19,6 +19,7 @@
 #include "vmsfs/ods2.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- little-endian scalar writes (endian-independent) ---- */
@@ -1201,16 +1202,30 @@ ods2_status_t ods2_wvolume_create_dir(ods2_wvolume_t *wvol,
  * Directory-record insertion.
  * ================================================================ */
 
-struct dir_single_extent_ctx {
-    ods2_extent_t ext;
+/*
+ * A directory file's block set, collected VBN-order from its FM2 map.
+ * ODS2_WDIR_MAX_EXTENTS / _MAX_BLOCKS bound the on-stack work arrays: a
+ * single FH2 map area holds at most ~70 retrieval pointers (byte 228..510,
+ * 4 bytes each), and 256 blocks * ~20 records is thousands of entries --
+ * far past anything the system-disk hierarchy (R6) builds. Overrun of
+ * either is reported (ODS2_ERR_NOSPACE), never silently truncated.
+ */
+#define ODS2_WDIR_MAX_EXTENTS 70u
+#define ODS2_WDIR_MAX_BLOCKS  256u
+
+struct wdir_extents {
+    ods2_extent_t ext[ODS2_WDIR_MAX_EXTENTS];
     unsigned      n;
+    int           overflow;
 };
 
-static int dir_single_extent_cb(const ods2_extent_t *ext, void *ctx)
+static int wdir_extent_collect(const ods2_extent_t *ext, void *ctx)
 {
-    struct dir_single_extent_ctx *c = (struct dir_single_extent_ctx *)ctx;
-    if (c->n == 0)
-        c->ext = *ext;
+    struct wdir_extents *c = (struct wdir_extents *)ctx;
+    if (c->n < ODS2_WDIR_MAX_EXTENTS)
+        c->ext[c->n] = *ext;
+    else
+        c->overflow = 1;
     c->n++;
     return 0;
 }
@@ -1230,6 +1245,57 @@ static int dir_name_cmp(const char *a, unsigned alen, const char *b, unsigned bl
     return 0;
 }
 
+/*
+ * [F17] (increment 10, vms-1bd): MULTI-BLOCK DIRECTORY GROWTH.
+ *
+ * ORACLE GROUNDING (Rule 8). The multi-block directory layout is NOT
+ * groundable from tests/ods2/real_vax_ods2.dsk: that fixture's only
+ * >1-block directory is its own MFD (FID 4), which reads as extent
+ * [LBN 3, count 2] but efblk=2/ffbyte=0 -- i.e. VBN 2 (LBN 4) is
+ * ALLOCATED SLACK holding NO records (a direct byte decode of LBN 4
+ * shows it zero-filled, past EOF). So the fixture never demonstrates how
+ * records DISTRIBUTE across two live blocks. That rule therefore comes
+ * from the PUBLIC Files-11 spec (the on-disk directory structure), not
+ * from the fixture, and is FLAGGED as such:
+ *
+ *   1. A directory file is a sequence of variable-length records sorted
+ *      in ascending file-name order -- across the WHOLE file, not just
+ *      within a block ([F13] already grounded the sort key against the
+ *      fixture MFD's own 11 records).
+ *   2. A directory record NEVER crosses a 512-byte virtual-block
+ *      boundary. Each block holds a whole number of records terminated by
+ *      a dir_size == 0xFFFF (ODS2_DIR_END) sentinel; when the next record
+ *      would not fit, the block is left terminated and the record starts
+ *      the next block. (This is exactly what the reader already assumes:
+ *      ods2_dir_block_scan() decodes each block independently and stops
+ *      at ODS2_DIR_END, and ods2_volume_list_dir()/ods2_bdev_list_dir()
+ *      map-walk EVERY extent block. So "records do not straddle" is the
+ *      invariant the validated reader already enforces -- distinct from a
+ *      DATA file's VAR records, which the fixture proved MAY straddle,
+ *      see [F16]/ods2_var_records_decode().)
+ *   3. EFBLK/FFBYTE express an end-of-file POSITION, not allocation:
+ *      efblk = (last block containing records) + 1, ffbyte = 0 ([F15],
+ *      fixture-grounded on FID 4 and FID 11).
+ *
+ * IMPLEMENTATION. Because records must stay globally sorted and inserts
+ * arrive in arbitrary order, each insert rebuilds the directory: flatten
+ * every existing record (raw bytes -- verlimit/flags/all value entries
+ * preserved verbatim, so [F13]/[F14] stay byte-exact) into one sorted
+ * stream, splice the new record at its sorted position, then re-pack the
+ * stream greedily into the file's blocks (rule 2 above, reserving the
+ * 2-byte ODS2_DIR_END terminator per block exactly as the prior
+ * single-block path did). If the packed form needs more blocks than the
+ * file has, the extra blocks are allocated and the FH2 map + recattr are
+ * rewritten (rule 3). A single-block directory re-packs byte-for-byte
+ * identically to the prior in-place code, so the real-VAX-MOUNT-clean
+ * [F13]/[F14]/[F15] output is unchanged when no growth occurs. FLAGGED
+ * OPEN (n=0 fixture samples): the exact record-to-block DISTRIBUTION a
+ * real VAX produces is unobserved; greedy first-fit packing satisfies
+ * rules 1-3 and any real VAX MOUNT/DIRECTORY reads it, but is not claimed
+ * to be byte-identical to what VMS's own directory maintenance would lay
+ * down for the same insert sequence. See PROVENANCE-real_vax_ods2.md's
+ * increment-10 addendum.
+ */
 ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                                       ods2_fid_t dir_fid,
                                       const char *name, uint16_t version,
@@ -1238,10 +1304,16 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
     uint8_t hdr[ODS2_BLOCK_SIZE];
     ods2_volume_t view;
     ods2_status_t st;
-    struct dir_single_extent_ctx ec = { { 0, 0 }, 0 };
-    uint8_t *blk;
-    unsigned off, insert_off, namecount, name_off, val_off, rec_end, needed;
-    unsigned end_off, tail_len;
+    struct wdir_extents exts;
+    uint32_t lbns[ODS2_WDIR_MAX_BLOCKS];
+    unsigned nlbn = 0, blocks_before, namecount, e, k, b;
+    uint8_t newrec[ODS2_BLOCK_SIZE];     /* one record is always < 1 block */
+    unsigned new_valoff, newrec_len;
+    uint8_t *flat;
+    size_t flatcap, flat_used = 0, insert_off = 0;
+    int have_insert = 0;
+    unsigned nblk, cur;
+    size_t foff;
 
     if (!wvol || !name)
         return ODS2_ERR_ARGS;
@@ -1262,120 +1334,205 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
     if (st != ODS2_OK)
         return st;
 
-    st = ods2_fh2_map_walk(hdr, dir_single_extent_cb, &ec, NULL);
+    /* Collect the directory file's block set, VBN order. */
+    exts.n = 0;
+    exts.overflow = 0;
+    st = ods2_fh2_map_walk(hdr, wdir_extent_collect, &exts, NULL);
     if (st != ODS2_OK)
         return st;
-    if (ec.n != 1)
-        return ODS2_ERR_NOSPACE; /* directory growth beyond one extent unsupported */
-
-    blk = wblk(wvol, ec.ext.lbn);
-
-    /*
-     * [F13] (increment 6, vms-0f3): FOUND THE FILENUMCHK/BADIRECTORY chain
-     * this way -- once [F12]'s genuine multi-extent INDEXF.SYS resolved
-     * FILENUMCHK, the very next real-VAX MOUNT attempt failed differently:
-     * "-SYSTEM-W-BADIRECTORY, bad directory file format". Decoding the
-     * real fixture's OWN [000000] MFD directory data block (LBN 3, its
-     * FID4 extent (3,2)) record-by-record -- not just `strings`, as
-     * increment 4's [F8] pass did -- showed its 11 entries stored in
-     * STRICT ASCENDING BYTE ORDER by filename: 000000.DIR, BACKUP.SYS,
-     * BADBLK.SYS, BADLOG.SYS, BITMAP.SYS, CONTIN.SYS, CORIMG.SYS,
-     * INDEXF.SYS, OVMXDIR.DIR, SECURITY.SYS, VOLSET.SYS -- NOT FID order
-     * (this writer's own insertion order via ods2_volume_format()'s [F8]
-     * loop: INDEXF/BITMAP/BADBLK/000000/CORIMG/VOLSET/CONTIN/BACKUP/
-     * BADLOG/SECURITY, then OVMXDIR.DIR appended last). A real VAX
-     * evidently validates (or at least a directory-format check
-     * encountered while scanning for QUOTA.SYS/SECURITY.SYS enforces)
-     * ascending name order within a directory block -- this writer
-     * previously just appended at the first free slot, in call order.
-     * Fixed by finding the correct SORTED insertion point and shifting
-     * the existing tail right to make room, instead of always appending.
-     * (Multiple versions of the SAME name sharing one name-record, per
-     * the public dir$rec layout's "descending version order" value-list,
-     * is NOT implemented -- every name this writer ever inserts is
-     * distinct, so that case does not arise here.)
-     */
-    off = 0;
-    insert_off = (unsigned)-1;
-    for (;;) {
-        uint16_t rec_size;
-        unsigned nc, this_end;
-        if (off + 6 > ODS2_BLOCK_SIZE)
-            return ODS2_ERR_NOSPACE;
-        rec_size = rd16(blk + off);
-        if (rec_size == ODS2_DIR_END)
-            break;
-        this_end = off + 2 + rec_size;
-        if (this_end > ODS2_BLOCK_SIZE)
-            return ODS2_ERR_NOSPACE; /* malformed existing block */
-        nc = blk[off + 5];
-        if (insert_off == (unsigned)-1 &&
-            dir_name_cmp(name, namecount, (const char *)blk + off + 6, nc) < 0)
-            insert_off = off;
-        off = this_end;
+    if (exts.n == 0 || exts.overflow)
+        return ODS2_ERR_NOSPACE;
+    for (e = 0; e < exts.n; e++) {
+        for (k = 0; k < exts.ext[e].count; k++) {
+            if (nlbn >= ODS2_WDIR_MAX_BLOCKS)
+                return ODS2_ERR_NOSPACE;
+            lbns[nlbn++] = exts.ext[e].lbn + k;
+        }
     }
-    end_off = off;                     /* offset of the ODS2_DIR_END sentinel */
-    if (insert_off == (unsigned)-1)
-        insert_off = end_off;          /* new name sorts after everything existing */
+    blocks_before = nlbn;
 
-    name_off = insert_off + 6;
-    val_off  = name_off + namecount;
-    if (val_off & 1)
-        val_off++;                                 /* word-align */
-    rec_end  = val_off + (unsigned)sizeof(ods2_dir_ent_t);
-    needed   = rec_end - insert_off;
-
-    if (end_off + needed + 2 > ODS2_BLOCK_SIZE)
-        return ODS2_ERR_NOSPACE; /* leave room for a trailing END marker */
-
-    /* Shift every existing record at or after the insertion point right by
-     * `needed` bytes to open a gap, THEN write the new record into it.
-     * [F13] regression fix: the gap memmove() opens up is NOT guaranteed
-     * to be 0xFF -- it is whatever the shifted-away tail record's OWN
-     * bytes used to hold at these offsets. The word-alignment pad byte
-     * between the name and val_off (only present when namecount is odd,
-     * e.g. "OVMXDIR.DIR" -- 11 chars) relies on reading back as part of
-     * the empty-directory 0xFF fill and was NEVER explicitly written by
-     * the field writes below; append-only insertion (before this
-     * increment) always landed on virgin fill, so this never mattered
-     * until sorted mid-block insertion started reusing previously-live
-     * bytes. Pre-clear the whole gap so that invariant holds again. */
-    tail_len = end_off - insert_off;
-    if (tail_len > 0)
-        memmove(blk + insert_off + needed, blk + insert_off, tail_len);
-    /* Now that the tail is safely relocated, the gap at [insert_off,
-     * insert_off + needed) holds only stale pre-move bytes (never live
-     * data -- the move destination starts at insert_off + needed) and can
-     * be reset to the empty-fill convention before the field writes below
-     * populate the parts that matter. */
-    memset(blk + insert_off, 0xFF, needed);
-
-    put16(blk + insert_off + 0, (uint16_t)(rec_end - insert_off - 2)); /* dir_size */
-    /* [F14] dir_verlimit is the per-NAME version-limit POLICY field, not
-     * this entry's own version (that is dir_version, in the value entry
-     * below, and was already correct). See ods2.h's [F14] comment: the
-     * real fixture's own MFD splits cleanly by whether the entry is one
-     * of the 10 reserved files (verlimit == 1, its own locked version) or
-     * caller-created (verlimit == 0x7FFF, "no limit set"). */
-    put16(blk + insert_off + 2,
+    /* Build the new record's on-disk bytes. [F13] name-sorted position is
+     * found below; [F14] dir_verlimit is the per-NAME version-LIMIT policy
+     * (reserved files: their own locked version; caller-created: 0x7FFF),
+     * NOT this entry's own version (that is dir_version, in the value
+     * entry). memset 0xFF first so the name/value word-alignment pad byte
+     * (present iff namecount is odd) reads back as the empty-fill 0xFF the
+     * reader expects. */
+    new_valoff = 6 + namecount;
+    if (new_valoff & 1)
+        new_valoff++;
+    newrec_len = new_valoff + (unsigned)sizeof(ods2_dir_ent_t);
+    memset(newrec, 0xFF, sizeof(newrec));
+    put16(newrec + 0, (uint16_t)(newrec_len - 2));               /* dir_size */
+    put16(newrec + 2,
           (entry_fid.fid_num <= ODS2_RESFILES) ? version
                                                 : ODS2_DIR_VERLIMIT_DEFAULT);
-    blk[insert_off + 4] = 0;                                     /* dir_flags */
-    blk[insert_off + 5] = (uint8_t)namecount;                    /* dir_namecount */
-    memcpy(blk + name_off, name, namecount);
-    /* Any word-alignment pad byte between the name and val_off is already
-     * 0xFF from the block's initial empty-directory fill; nothing to write. */
+    newrec[4] = 0;                                               /* dir_flags */
+    newrec[5] = (uint8_t)namecount;                             /* dir_namecount */
+    memcpy(newrec + 6, name, namecount);
+    put16(newrec + new_valoff + 0, version);
+    put16(newrec + new_valoff + 2, entry_fid.fid_num);
+    put16(newrec + new_valoff + 4, entry_fid.fid_seq);
+    newrec[new_valoff + 6] = entry_fid.fid_rvn;
+    newrec[new_valoff + 7] = entry_fid.fid_nmx;
 
-    put16(blk + val_off + 0, version);
-    put16(blk + val_off + 2, entry_fid.fid_num);
-    put16(blk + val_off + 4, entry_fid.fid_seq);
-    blk[val_off + 6] = entry_fid.fid_rvn;
-    blk[val_off + 7] = entry_fid.fid_nmx;
+    /* Flatten every existing record (raw bytes) into one sorted stream and
+     * locate the new name's sorted insertion point. Upper bound on the
+     * stream is one full block per existing block plus the new record. */
+    flatcap = (size_t)nlbn * ODS2_BLOCK_SIZE + newrec_len + 8;
+    flat = (uint8_t *)malloc(flatcap);
+    if (!flat)
+        return ODS2_ERR_NOSPACE;    /* honest failure -- never a silent fake */
 
-    /* Everything from the new end-of-records onward is either freshly
-     * shifted-forward 0xFF filler or (on the very first insert) the
-     * block's original all-0xFF fill -- both already read back as
-     * ODS2_DIR_END, so no separate terminator write is needed. */
+    for (b = 0; b < nlbn; b++) {
+        const uint8_t *blk = wblk(wvol, lbns[b]);
+        unsigned off = 0;
+        for (;;) {
+            uint16_t rec_size;
+            unsigned reclen, nc;
+            if (off + 6 > ODS2_BLOCK_SIZE)
+                break;
+            rec_size = rd16(blk + off);
+            if (rec_size == ODS2_DIR_END)
+                break;
+            reclen = 2u + rec_size;
+            if (off + reclen > ODS2_BLOCK_SIZE) {
+                free(flat);
+                return ODS2_ERR_FORMAT;      /* malformed existing block */
+            }
+            nc = blk[off + 5];
+            if (6u + nc > reclen) {
+                free(flat);
+                return ODS2_ERR_FORMAT;
+            }
+            if (!have_insert) {
+                int cmp = dir_name_cmp(name, namecount,
+                                       (const char *)blk + off + 6, nc);
+                if (cmp == 0) {
+                    free(flat);
+                    return ODS2_ERR_ARGS;    /* duplicate name */
+                }
+                if (cmp < 0) {
+                    insert_off = flat_used;
+                    have_insert = 1;
+                }
+            }
+            memcpy(flat + flat_used, blk + off, reclen);
+            flat_used += reclen;
+            off += reclen;
+        }
+    }
+    if (!have_insert)
+        insert_off = flat_used;         /* sorts after everything existing */
+
+    /* Splice the new record in at its sorted byte offset. */
+    if (insert_off < flat_used)
+        memmove(flat + insert_off + newrec_len, flat + insert_off,
+                flat_used - insert_off);
+    memcpy(flat + insert_off, newrec, newrec_len);
+    flat_used += newrec_len;
+
+    /* Count blocks needed: greedy pack, a record never crosses a block
+     * boundary, and every block keeps >=2 trailing bytes for its
+     * ODS2_DIR_END terminator (the same +2 reservation the single-block
+     * path enforced -- see [F17] rule 2). */
+    nblk = 1;
+    cur = 0;
+    for (foff = 0; foff < flat_used; ) {
+        unsigned reclen = 2u + rd16(flat + foff);
+        if (cur + reclen + 2u > ODS2_BLOCK_SIZE) {
+            nblk++;
+            cur = 0;
+        }
+        cur += reclen;
+        foff += reclen;
+    }
+    if (nblk > ODS2_WDIR_MAX_BLOCKS) {
+        free(flat);
+        return ODS2_ERR_NOSPACE;
+    }
+
+    /* Grow the directory file if the packed form needs more blocks. New
+     * blocks come contiguous from the bump allocator (and are marked used
+     * in BITMAP.SYS by ods2_wvolume_alloc_blocks). */
+    if (nblk > blocks_before) {
+        uint32_t extra = nblk - blocks_before;
+        uint32_t grown_lbn;
+        st = ods2_wvolume_alloc_blocks(wvol, extra, &grown_lbn);
+        if (st != ODS2_OK) {
+            free(flat);
+            return st;
+        }
+        for (k = 0; k < extra; k++)
+            lbns[nlbn++] = grown_lbn + k;
+    }
+
+    /* Lay the sorted stream into the (possibly grown) block set. Each block
+     * is 0xFF-filled first so trailing space reads back as ODS2_DIR_END. */
+    for (b = 0; b < nblk; b++)
+        memset(wblk(wvol, lbns[b]), 0xFF, ODS2_BLOCK_SIZE);
+    {
+        unsigned bi = 0;
+        uint8_t *dst = wblk(wvol, lbns[0]);
+        cur = 0;
+        for (foff = 0; foff < flat_used; ) {
+            unsigned reclen = 2u + rd16(flat + foff);
+            if (cur + reclen + 2u > ODS2_BLOCK_SIZE) {
+                bi++;
+                cur = 0;
+                dst = wblk(wvol, lbns[bi]);
+            }
+            memcpy(dst + cur, flat + foff, reclen);
+            cur += reclen;
+            foff += reclen;
+        }
+    }
+    free(flat);
+
+    /* Rewrite the FH2 map + recattr ONLY when the block count changed --
+     * a same-block re-pack keeps the header byte-identical (map, hiblk,
+     * efblk all unchanged), preserving the validated single-block output.
+     * [F15]/[F17] rule 3: hiblk = allocated blocks, efblk = last-data-block
+     * + 1, ffbyte = 0. */
+    if (nblk > blocks_before) {
+        uint32_t hlbn = wvol->hdr_base_lbn + (ods2_fid_number(&dir_fid) - 1);
+        uint8_t *h = wblk(wvol, hlbn);
+        uint8_t *mp_base = h + (size_t)MP_OFF_WORDS * 2;
+        size_t map_cap = ODS2_BLOCK_SIZE - (size_t)MP_OFF_WORDS * 2 - 2;
+        unsigned nx = 0;
+        uint32_t hiblk = nblk, efblk = nblk + 1;
+
+        memset(mp_base, 0, map_cap);     /* clear stale FM2 pointers */
+        b = 0;
+        while (b < nblk) {
+            uint32_t run_lbn = lbns[b];
+            uint32_t run = 1;
+            while (b + run < nblk && run < 256 &&
+                   lbns[b + run] == run_lbn + run)
+                run++;
+            if ((size_t)nx * 4 + 4 > map_cap)
+                return ODS2_ERR_NOSPACE; /* map area full */
+            st = encode_map_extent(mp_base + (size_t)nx * 4, run_lbn, run);
+            if (st != ODS2_OK)
+                return st;
+            nx++;
+            b += run;
+        }
+        h[offsetof(ods2_fh2_t, fh2_map_inuse)] = (uint8_t)(nx * 2);
+
+        put16(h + offsetof(ods2_fh2_t, fh2_recattr) +
+              offsetof(ods2_recattr_t, fat_hiblk) + 0, (uint16_t)(hiblk >> 16));
+        put16(h + offsetof(ods2_fh2_t, fh2_recattr) +
+              offsetof(ods2_recattr_t, fat_hiblk) + 2, (uint16_t)(hiblk & 0xFFFF));
+        put16(h + offsetof(ods2_fh2_t, fh2_recattr) +
+              offsetof(ods2_recattr_t, fat_efblk) + 0, (uint16_t)(efblk >> 16));
+        put16(h + offsetof(ods2_fh2_t, fh2_recattr) +
+              offsetof(ods2_recattr_t, fat_efblk) + 2, (uint16_t)(efblk & 0xFFFF));
+        put16(h + offsetof(ods2_fh2_t, fh2_recattr) +
+              offsetof(ods2_recattr_t, fat_ffbyte), 0);
+        put32(h + offsetof(ods2_fh2_t, fh2_highwater), hiblk + 1);
+        put16(h + offsetof(ods2_fh2_t, fh2_checksum), ods2_block_checksum(h));
+    }
 
     return ODS2_OK;
 }

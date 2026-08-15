@@ -75,6 +75,22 @@ set_tests_properties(ods2_bdev PROPERTIES
     TIMEOUT 30
 )
 
+# vms-1bd (R8 of the real-ODS-2-runtime epic vms-5eb): MULTI-BLOCK DIRECTORY
+# GROWTH ([F17]). Inserts more files into one directory than fit in a single
+# 512-byte directory block, forcing ods2_wvolume_dir_insert() to grow the
+# directory across blocks + extend its FH2 map/recattr, then proves BOTH the
+# in-memory reader and R1's block-backed reader (ods2_bdev_*) list every
+# entry and that a created file's content round-trips through the VAR framing.
+add_executable(test_ods2_dirgrow test_ods2_dirgrow.c)
+target_include_directories(test_ods2_dirgrow PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_dirgrow PRIVATE ods2)
+
+add_test(NAME ods2_dirgrow COMMAND test_ods2_dirgrow)
+set_tests_properties(ods2_dirgrow PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)
+
 # vms-6ef (R4 of the real-ODS-2-runtime epic vms-5eb): INITIALIZE writes a
 # GENUINE ODS-2 volume. Proves the ODS-2 method INITIALIZE uses produces a
 # real Files-11 volume the block-backed reader (R1) parses clean + that the

@@ -225,6 +225,7 @@ jobs:
               - 'tests/netbsd/netbsd_version.env'
               - 'tests/netbsd/guest/vmseflag.c'
               - 'tests/netbsd/guest/vmsaccess.c'
+              - 'tests/netbsd/guest/vmsproctab.c'
               - 'src/libvmssys/kif_transport_netbsd.c'
               - 'src/libvmssys/kif_transport.h'
               - 'docs/audit-ilp32-vax-netbsd-exec.md'
@@ -4936,6 +4937,98 @@ jobs:
         run: tests/lab-vax/run-access.sh negctl-astwrite
 
   # -----------------------------------------------------------------------
+  # netbsd-vax-proctab (rd vms-2e0, parent vms-945e, epic vms-8e8). The
+  # process-table / $GETJPI / $PROCESS_SCAN analogue of netbsd-vax-eflag
+  # (vms-4e7) and the VAX runtime proof for the PROCTAB phase
+  # tests/netbsd/drive_netbsd_p4a.py already proves on NetBSD/amd64: process A
+  # $SETPRNs itself and stays alive; a DIFFERENT process B resolves it by name
+  # with $GETJPI; a DIFFERENT process C enumerates the shared table with
+  # $PROCESS_SCAN and finds the SAME row (same pid, same uic) -- the
+  # INV-6-decisive property a per-process userspace fake cannot satisfy,
+  # because the row lives in the executive's KERNEL memory
+  # (src/kernel-core/vms_proctab.c), not in either reader. vax is ILP32 /
+  # non-IEEE-float / ELF32 -- a width class amd64 (LP64) cannot exercise, so a
+  # struct-layout bug in the shared vms_proctab_nb.h wire contract could pass
+  # on every other OVMX target and only misbehave here. BUILD/TEST tooling,
+  # not a runtime (Rule 9): SIMH is emulation; nothing runs on the host.
+  #
+  # THE PILOT ADOPTION OF vaxharness.py (rd vms-cf5): drive_proctab_vax.py
+  # routes its boot-console handshake through safe_expect() and its pass/fail
+  # decision through Proof/StepResult, and this job's negctl modes are gated
+  # by run-proctab.sh sourcing negctl_gate.sh instead of hand-rolling the
+  # driver-exit-code inversion -- the fix for the exact driver/wrapper
+  # contract mismatch rd vms-cf5 documents.
+  #
+  # GATING: NIGHTLY (schedule) + manual (workflow_dispatch) ONLY -- NOT per-PR,
+  # same reasoning as netbsd-vax-eflag/netbsd-vax-devvms (SIMH/vax is slow +
+  # disk-heavy). The per-PR value for the guest tool is
+  # netbsd-vax-proctab-crosscompile (fast, link-only, no SIMH), and for the
+  # shared facility source it is the existing B1 gate
+  # (netbsd-vax-vms-crosscompile, which already width-checks vms_proctab.c as
+  # part of the module's TU set).
+  #
+  # It `needs' netbsd-vax-simh so that job primes the shared 10.1 disk cache
+  # first; this job restores it and NEVER reinstalls in the hot path. Own
+  # cached MODULAR-kernel artifact (proctab-artifacts, mirrors how
+  # netbsd-vax-eflag's eflag-artifacts is kept separate from
+  # netbsd-vax-devvms's devvms-artifacts) so this job's cache is independent of
+  # the other SIMH/vax runtime proofs. run-proctab.sh wraps every SIMH
+  # invocation in a hard timeout.
+  # -----------------------------------------------------------------------
+  netbsd-vax-proctab:
+    name: Process table proven cross-process on NetBSD/vax under SIMH — INV-6 (vms-2e0)
+    needs: [changes, netbsd-vax-simh]
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-proctab-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      # Cache this job's OWN built MODULAR kernel (4 MB) so the ~40-min
+      # build.sh runs only on a cold cache, keyed on the kernel-build inputs.
+      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX, proctab-artifacts)
+        uses: actions/cache@v4
+        with:
+          path: .boot-cache/lab-vax/proctab-artifacts/netbsd-OVMX
+          key: vax-modular-kernel-proctab-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Prove — process table shared cross-process on NetBSD/vax (cross-build, custom MODULAR kernel, modload, SETPRN/GETJPI/PROCESS_SCAN)
+        run: tests/lab-vax/run-proctab.sh prove
+
+      - name: Negative control — skipping modload must redden the whole proof
+        run: tests/lab-vax/run-proctab.sh negctl-load
+
+      - name: Negative control — skipping process A's SETPRN must redden the cross-process GETJPI assertion
+        run: tests/lab-vax/run-proctab.sh negctl-bg
+
+  # -----------------------------------------------------------------------
   # netbsd-vax-vmsfs-crosscompile (rd vms-544d, epic vms-8e8; P4-VFS-vax).
   #
   # Per-PR cross-compile gate for the LOADABLE elf32-vax vmsfs.kmod = the shared
@@ -5985,6 +6078,87 @@ jobs:
           set +e
           RAW=$(docker run --rm -e CROSSCOMPILE_NEGCTL=1 -v "$GITHUB_WORKSPACE:/src" -w /src \
                   ovmx-cross-vax sh tools/cross-vax/build-access-tool-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          [ "$RC" -eq 0 ] || { echo "FAIL: negctl run exited nonzero ($RC)"; exit 1; }
+          echo "$RAW" | grep -qF 'PASS (negctl)' \
+            || { echo "FAIL: negctl did not confirm the LP64 width assumption was rejected"; exit 1; }
+
+  # -----------------------------------------------------------------------
+  # netbsd-vax-proctab-crosscompile (rd vms-2e0, parent vms-945e, epic
+  # vms-8e8). FAST PER-PR gate, no NBSRC / no SIMH: the vax analogue of
+  # netbsd-vax-eflag-crosscompile, but for the process-table GUEST TOOL
+  # (tests/netbsd/guest/vmsproctab.c) rather than the event-flag one. B1
+  # (netbsd-vax-vms-crosscompile) already width-checks the SHARED facility
+  # source (src/kernel-core/vms_proctab.c) that ships inside the module; this
+  # job is the complement -- it cross-compiles + LINKS the userspace tool that
+  # will drive that facility cross-process, against the NetBSD/vax
+  # kif_transport leaf (src/libvmssys/kif_transport_netbsd.c). No kernel
+  # headers needed (vmsproctab.c is ordinary userspace code, like vmsprobe.c/
+  # vmseflag.c); fast, and it catches a struct-layout/width break in the
+  # shared wire contract (src/kernel-netbsd/vms_proctab_nb.h) on every PR
+  # instead of only on the NIGHTLY SIMH run (netbsd-vax-proctab, vms-2e0).
+  # BUILD/TEST tooling, never a runtime (Rule 9). Gated on exec_netbsd_vax
+  # (covers vmsproctab.c + the kif_transport_netbsd leaf + the shared
+  # kernel-core/kernel-netbsd sources): push/merge_group/schedule always; on a
+  # PR only when those inputs change.
+  # -----------------------------------------------------------------------
+  netbsd-vax-proctab-crosscompile:
+    name: Process-table guest tool cross-compiles for netbsd-vax (vms-2e0)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile + link vmsproctab for netbsd-vax
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax sh tools/cross-vax/build-proctab-tool-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax proctab-tool cross build/link exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: vmsproctab' \
+            || { echo "FAIL: did not see the build+link PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: vmsproctab was not elf32-vax -- wrong target"; exit 1; }
+          echo "PASS: vmsproctab (process-table guest tool) built for netbsd-vax and linked as a real ELF32 VAX exe"
+
+      - name: Teeth check (a deliberately-broken width TU must fail the cross-compile)
+        run: |
+          set +e
+          RAW=$(docker run --rm -e CROSSCOMPILE_NEGCTL=1 -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax sh tools/cross-vax/build-proctab-tool-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          [ "$RC" -eq 0 ] || { echo "FAIL: negctl run exited nonzero ($RC)"; exit 1; }
+          echo "$RAW" | grep -qF 'PASS (negctl)' \
+            || { echo "FAIL: negctl did not confirm the LP64 width assumption was rejected"; exit 1; }
+
           RC=$?
           set -e
           echo "$RAW"

@@ -38,10 +38,23 @@ target_include_directories(ovmx_provision PRIVATE
     ${CMAKE_SOURCE_DIR}/src/ovmx_init
 )
 
-target_compile_definitions(ovmx_provision PRIVATE
-    _POSIX_C_SOURCE=200809L
-    _DEFAULT_SOURCE
-)
+# Feature-test macros. On Linux (glibc) POSIX 2008 + _DEFAULT_SOURCE expose
+# the BSD/sysv extensions ovmx_boot_linux.c uses. On NetBSD the same surface
+# (u_int, S_IFCHR/mknod, devmajor_t/NODEVMAJOR/getdevmajor, mount(2) flags,
+# reboot(2)/RB_*) that ovmx_boot_netbsd.c needs is gated behind
+# _NETBSD_SOURCE, and defining _POSIX_C_SOURCE would TURN IT OFF -- same
+# seam src/ovmx_init/CMakeLists.txt already carries (vms-f2e) for the SAME
+# shared ovmx_boot_netbsd.c source this target also compiles (vms-64a: this
+# target had its own hardcoded _POSIX_C_SOURCE, unlike ovmx_init's, so it
+# was the one PROVISION.EXE-specific seam still blocking the vax cross build).
+if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    target_compile_definitions(ovmx_provision PRIVATE _NETBSD_SOURCE)
+else()
+    target_compile_definitions(ovmx_provision PRIVATE
+        _POSIX_C_SOURCE=200809L
+        _DEFAULT_SOURCE
+    )
+endif()
 
 target_link_libraries(ovmx_provision PRIVATE vms vmsfs vmslnm vmsprocess pthread)
 

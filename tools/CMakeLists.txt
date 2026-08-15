@@ -69,10 +69,19 @@ target_include_directories(vms_authorize PRIVATE
     ${VMS_LNM_INCLUDE_DIR}
 )
 
-target_compile_definitions(vms_authorize PRIVATE
-    _POSIX_C_SOURCE=200809L
-    _DEFAULT_SOURCE
-)
+# Feature-test macros. AUTHORIZE.EXE's SYSUAF file locking uses flock()/
+# LOCK_EX/LOCK_UN (<sys/file.h>), a BSD extension _POSIX_C_SOURCE turns OFF
+# on NetBSD -- so the netbsd-vax cross selects the native widest namespace
+# instead, same pattern src/ovmx_init/CMakeLists.txt and src/vmsdcl/
+# CMakeLists.txt already use (vms-64a).
+if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    target_compile_definitions(vms_authorize PRIVATE _NETBSD_SOURCE)
+else()
+    target_compile_definitions(vms_authorize PRIVATE
+        _POSIX_C_SOURCE=200809L
+        _DEFAULT_SOURCE
+    )
+endif()
 
 target_compile_options(vms_authorize PRIVATE
     -Wall -Wextra

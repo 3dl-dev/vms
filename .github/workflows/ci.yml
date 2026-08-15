@@ -197,6 +197,23 @@ jobs:
               - 'tools/mail_notify.c'
               - 'tools/vms_mail_notify.h'
               - 'tools/CMakeLists.txt'
+              # vms-64a (unified cross-build Rung B): the ovmx-images
+              # aggregate now builds these images too, so their sources are
+              # netbsd_vax inputs (vax-cmake-images job).
+              - 'tools/vms_help.c'
+              - 'tools/vms_authorize.c'
+              - 'tools/vms_mail.c'
+              - 'tools/vms_monitor.c'
+              - 'tools/vms_initialize.c'
+              - 'tools/vms_sysgen.c'
+              - 'src/install/**'
+              - 'src/product/**'
+              - 'src/apps/parts/**'
+              - 'src/vmsfs/ods2/**'
+              - 'src/vmsscs/**'
+              - 'src/imgact/known_images.c'
+              - 'src/imgact/known_images.h'
+              - 'src/product/ovmx_kit_reader.c'
               # vms-75f (unified cross-build Rung A): the top-level project
               # now configures + builds STARTUP.EXE directly under the vax
               # toolchain file (vax-cmake-toolchain job), so its own
@@ -6845,6 +6862,83 @@ jobs:
           echo "$RAW" | grep -qF "OK: no .vms\$sv / .vms\$imp symbol-vector section" \
             || { echo "FAIL: symbol-vector-absence assertion did not run"; exit 1; }
           echo "PASS: STARTUP.EXE built by the top-level CMake project under the vax toolchain and passes the Decision-A activation contract"
+
+  # -----------------------------------------------------------------------
+  # vax-cmake-images (rd vms-64a, epic vms-509 "unified cross-platform
+  # build", Rung B; docs/design-unified-cross-build.md §3-B/§8). Rung A
+  # (vax-cmake-toolchain, above) proved the top-level project builds ONE
+  # image (STARTUP.EXE) via cmake. This job proves the `ovmx-images`
+  # aggregate target -- the single authoritative "what ships" list -- builds
+  # the FULL shipped userspace image set for vax, and specifically closes rd
+  # vms-e1d's cross-arch parity-drift gap: HELP.EXE, AUTHORIZE.EXE, MAIL.EXE,
+  # MONITOR.EXE, INITIALIZE.EXE, INSTALL.EXE, SYSGEN.EXE, PRODUCT.EXE, and
+  # PARTS.EXE (nine of the ten drift images) now cross-build + link for
+  # netbsd-vax and pass the Decision-A activation contract (vms-42d): ELF32,
+  # Digital VAX, dynamically linked, PT_INTERP == /usr/libexec/ld.elf_so,
+  # NEEDED subset of {libc,libpthread,libm,libatomic}. The tenth drift image,
+  # SCSD.EXE, is a REPORTED exception, not a silent gap: it opens a Linux-
+  # only AF_PACKET raw socket (src/vmsscs/scsd.c) with no NetBSD equivalent
+  # (NetBSD's analogue is bpf(4), a materially different API) -- porting it
+  # is its own design-sized follow-up, deliberately excluded from
+  # `ovmx-images` on the NetBSD substrate (CMakeLists.txt) rather than forced.
+  # LINK.EXE is excluded for the same "no VAX role by design" reason
+  # IMGACT.EXE already carries in tools/parity/image-parity-allowlist.json
+  # (it produces x86_64/aarch64 Mode-2 shareables; vax has no Mode 2). Runs
+  # ALONGSIDE vax-cmake-toolchain and every existing per-image tools/cross-
+  # vax/build-*.sh script (all green; retiring the hand scripts is rung E).
+  # Gated on the same shared netbsd_vax filter. Fast once the cross
+  # toolchain image layer-caches (gha, shared scope=cross-vax).
+  # -----------------------------------------------------------------------
+  vax-cmake-images:
+    name: vax toolchain builds the ovmx-images aggregate; 9/10 parity-drift images close (vms-64a)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Configure + build the ovmx-images aggregate via the top-level CMake project under the vax toolchain
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-ovmx-images-vax-cmake.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: cmake vax-toolchain configure/build of ovmx-images exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF "ALL PROOFS PASSED: ovmx-images builds the full shipped image set via 'cmake --build --target ovmx-images' for vax--netbsdelf and every image passes the Decision-A activation contract" \
+            || { echo "FAIL: did not see the ovmx-images PASS banner"; exit 1; }
+          for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE OVMXDUMP HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE; do
+            echo "$RAW" | grep -qF -- "-> $img: ELF32 Digital VAX, dynamically linked, interp=/usr/libexec/ld.elf_so" \
+              || { echo "FAIL: $img did not pass the activation contract assertion"; exit 1; }
+          done
+          for img in HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE; do
+            echo "$RAW" | grep -qF "DRIFT-CLOSED: $img" \
+              || { echo "FAIL: $img was not reported as a closed parity-drift image"; exit 1; }
+          done
+          echo "$RAW" | grep -qF "SCSD.EXE excluded (Linux-only AF_PACKET, no NetBSD BPF port -- reported gap, not silent skip)" \
+            || { echo "FAIL: SCSD.EXE's reported exception did not print"; exit 1; }
+          echo "PASS: ovmx-images built the full shipped image set for netbsd-vax; 9/10 vms-e1d parity-drift images closed (SCSD.EXE remains a reported, justified exception)"
 
   # -----------------------------------------------------------------------
   # ovmx-boot-images-netbsd-vax (rd vms-5d1, epic vms-8e8, P4-C boot; docs/

@@ -214,12 +214,6 @@ add_subdirectory(src/vmsdcl)
 add_subdirectory(src/vmsscs)
 
 if(BUILD_TESTS)
-    # PARTS demo application (RMS indexed file) + its host functional gate
-    # (beads vms-e97/vms-f20). Guarded by BUILD_TESTS so the distro image build
-    # (Dockerfile.bootable, BUILD_TESTS=OFF) is unaffected; the VMS-native
-    # PARTS.EXE is built separately by src/apps/parts/mk_parts.sh.
-    add_subdirectory(src/apps/parts)
-
     add_subdirectory(tests/libvms)
     add_subdirectory(tests/vmsprocess)
     add_subdirectory(tests/vmslnm)
@@ -868,9 +862,90 @@ if(BUILD_TOOLS)
     add_subdirectory(src/ovmx_init)
     add_subdirectory(src/ovmx_provision)  # PROVISION.EXE (startup process, vms-9b7)
     add_subdirectory(src/ovmx_job_control) # JOB_CONTROL.EXE (console-session process, vms-8d2)
-    add_subdirectory(src/vmslink)   # LINK.EXE + OVMXDUMP (VMS-native linker)
+    add_subdirectory(src/vmslink)   # LINK.EXE + OVMXDUMP + LIBRARIAN.EXE (VMS-native linker)
     add_subdirectory(src/install)   # INSTALL.EXE (known image database, vms-913.5)
     add_subdirectory(src/product)   # PRODUCT.EXE (PCSI-equivalent installer, vms-df9)
+
+    # PARTS.EXE (vms-e97/vms-f20 demo, vms-64a unified cross-build Rung B):
+    # moved here from the BUILD_TESTS block below. On x86_64/aarch64 the
+    # SHIPPED PARTS.EXE is the Mode-2 self-hosted LINK.EXE image
+    # (src/apps/parts/mk_parts.sh, docs/design-unified-cross-build.md §4) --
+    # this CMake target stays the host/dev demo used by ctest. On vax there is
+    # no Mode 2 at all (Mode 2 is host-arch-only), so this Mode-1 CMake target
+    # IS vax's PARTS.EXE -- the same pattern DCL.EXE/LOGINOUT.EXE already
+    # follow (ordinary CMake targets on vax, Mode-2 link-native on x86_64).
+    # BUILD_TOOLS-gated (not BUILD_TESTS-gated) so it is part of the shipped
+    # image set / ovmx-images aggregate on every toolchain; the functional
+    # ctest gate inside src/apps/parts/CMakeLists.txt stays BUILD_TESTS-gated.
+    add_subdirectory(src/apps/parts)
+endif()
+
+# ovmx-images (vms-64a, epic vms-509 "unified cross-platform build" Rung B,
+# docs/design-unified-cross-build.md §3-B): the SINGLE authoritative "what
+# ships" list. One custom aggregate target that depends on exactly the
+# shipped userspace images (+ the RTL they pull in transitively via
+# target_link_libraries) -- the CMake-native replacement for the hand-
+# maintained VAX_ARTIFACT_ORDER array in tools/cut-release.sh and the `cp`
+# lines in distro/Dockerfile.bootable (rd vms-e1d's parity gate compares
+# those two by text-parsing today; the design's stated end state is pointing
+# that gate at this target's outputs instead, once every image builds
+# through it for every arch -- tracked as a Rung C/E/F follow-up, not done
+# by this rung). `cmake --build <dir> --target ovmx-images` builds the whole
+# shipped set for whatever arch/toolchain is configured, and NOTHING else
+# (no tests, no host factory tooling like vmsfs_master/ovmx_kit_pack, no
+# vms_mount_helper). Porting a new image for a substrate = adding its target
+# here, never a new tools/cross-vax/build-*.sh script (operator freeze).
+if(BUILD_TOOLS)
+    set(_OVMX_IMAGES_DEPS
+        ovmx_init            # STARTUP.EXE
+        ovmx_provision       # PROVISION.EXE
+        ovmx_job_control     # JOB_CONTROL.EXE
+        vmsdcl                # DCL.EXE
+        vms_login            # LOGINOUT.EXE
+        vmsdump              # OVMXDUMP
+        vmslibrarian         # LIBRARIAN.EXE
+        vms_install          # INSTALL.EXE
+        vms_product          # PRODUCT.EXE
+        vms_help             # HELP.EXE
+        vms_authorize        # AUTHORIZE.EXE
+        vms_mail             # MAIL.EXE
+        vms_monitor          # MONITOR.EXE
+        vms_initialize       # INITIALIZE.EXE
+        vms_sysgen           # SYSGEN.EXE
+        PARTS                # PARTS.EXE
+    )
+
+    # SCSD.EXE (scsd_exe, src/vmsscs/CMakeLists.txt): the SCS datalink daemon
+    # opens an AF_PACKET SOCK_RAW socket (src/vmsscs/scsd.c) -- a Linux-only
+    # socket family with no NetBSD equivalent (NetBSD's analogous raw-link
+    # access is bpf(4)/`/dev/bpf`, a materially different API, not a drop-in
+    # header swap). This is a REAL, currently-unclosed vax gap, not a script
+    # that was never written: porting SCSD to a NetBSD BPF backend is its own
+    # design-sized follow-up (candidate for a justified
+    # tools/parity/image-parity-allowlist.json entry, or a future rung, once
+    # scoped) -- it is deliberately NOT forced into this aggregate on the
+    # NetBSD substrate, per docs/design-unified-cross-build.md §3-B ("non-
+    # portable targets stay out of the aggregate until individually ported").
+    # It stays in the aggregate on every other substrate (unregressed there).
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+        list(APPEND _OVMX_IMAGES_DEPS scsd_exe)  # SCSD.EXE
+
+        # LINK.EXE (vmslink, src/vmslink/link.c): the OVMX-native ELF64
+        # LINK.EXE hardcodes AArch64/x86_64 ELF64 relocation handling
+        # (R_AARCH64_*, Elf64_Section) -- it is the linker that PRODUCES
+        # x86_64/aarch64 Mode-2 shareable images (docs/design-unified-
+        # cross-build.md §4), a role that has no meaning on vax: Decision-A
+        # vax images are ordinary NetBSD ld.elf_so-activated ELF32
+        # executables with no LINK.EXE/IMGACT.EXE involvement at all, the
+        # same "no VAX role by design" status IMGACT.EXE already carries in
+        # tools/parity/image-parity-allowlist.json. Not one of the vms-e1d
+        # drift images (LINK.EXE was never in VAX_ARTIFACT_ORDER); a
+        # genuine by-design exclusion, not an unbuilt gap.
+        list(APPEND _OVMX_IMAGES_DEPS vmslink)  # LINK.EXE
+    endif()
+
+    add_custom_target(ovmx-images)
+    add_dependencies(ovmx-images ${_OVMX_IMAGES_DEPS})
 endif()
 
 # Install VMS system disk (ODS-2 directory structure)

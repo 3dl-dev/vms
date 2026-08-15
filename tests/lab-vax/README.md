@@ -247,6 +247,89 @@ source (`vms_eflag.c`) is already width-checked per-PR by B1
 (`netbsd-vax-vms-crosscompile`); this SIMH proof is the nightly runtime
 complement to both.
 
+## P4-access: access-mode enforcement + cross-process AST delivery proven on NetBSD/vax (`vms-4b7`)
+
+P4-E closed the INV-6 gap for event flags. This proof closes the same gap for
+the **two most intricate remaining facilities** — `run-access.sh` boots the
+SAME cached disk, cross-builds the `vms.kmod` module (carrying
+`src/kernel-core/vms_ast.c` + `src/kernel-core/vms_access.c`, the identical
+sources the Linux `vms.ko` builds) plus the `vmsaccess` guest tool
+(`tests/netbsd/guest/vmsaccess.c`), and proves **both**:
+
+- **Access-mode enforcement**: an intra-process round trip —
+  `$SETMODE`/`$GETMODE`/`ENTER_IMAGE`/`$DCLAST`/`DELIVERAST`/`IMAGE_RUNDOWN` —
+  proves mode transitions are actually GATED (a mode raise without CMEXEC/
+  CMKRNL, or an `ENTER_IMAGE` from the wrong starting mode, is refused by
+  `vms_access.c`, not merely assumed); then CROSS-PROCESS: process A mutates
+  its own permanent privilege mask with `$SETPRV` and records a name with
+  `$SETPRN`; a DIFFERENT process B's `$GETJPI` on that name reads back the
+  SAME mutated mask — the mask lives in the executive's shared process table,
+  not in either process.
+- **Cross-process AST delivery**: process A arms a write-attention AST on a
+  temporary mailbox and `$HIBER`s (blocks in-kernel); a DIFFERENT process B's
+  write to that SAME mailbox is what lands the AST in A's executive-resident
+  queue and WAKES A's `$HIBER`, with the delivered `astprm`/`acmode` matching
+  exactly what A armed. `$DCLAST` is self-directed by VMS design, so this
+  mailbox write-attention integration (`src/kernel-core/vms_mbx.c` calling
+  `vms_ast_notify_arrival`, `src/kernel-core/vms_ast.c`) is what makes the AST
+  queue's cross-process reality provable at all — a per-process fake could
+  never be woken by an action taken in a different process.
+
+This is the VAX analogue of the NetBSD/amd64 ACCESS+AST phases of
+`tests/netbsd/drive_netbsd_p4a.py`; scope is **access modes + ASTs only** —
+the remaining boot-required facilities (proctab/lnm/mbx) are the other
+children of `vms-945e`.
+
+```sh
+tests/lab-vax/run-access.sh                   # build everything, ensure disk+kernel, PROVE
+tests/lab-vax/run-access.sh negctl-load        # teeth: skip modload -> whole proof must go RED
+tests/lab-vax/run-access.sh negctl-setpriv     # teeth: skip process A's SETPRV/SETPRN -> cross-process GETJPI assertion must go RED
+tests/lab-vax/run-access.sh negctl-astwrite    # teeth: skip process B's mailbox write -> A's armed AST must NOT fire
+```
+
+**Why VAX specifically.** Same reasoning as P4-E: vax is ILP32 /
+non-IEEE-float / ELF32, so a struct-layout or width bug in the shared wire
+contracts (`src/kernel-netbsd/vms_access_nb.h`'s `cur_privs`/`perm_privs`,
+`src/kernel-netbsd/vms_ast_nb.h`'s `astadr`/`astprm` — all explicit
+`uint64_t`) could compile clean and pass on every 64-bit OVMX target and only
+misbehave here. AST delivery + access-mode transitions are exactly where a
+vax width/frame bug hides — an `astprm` truncated across the ioctl boundary,
+or a `PSL$C_` mode byte misinterpreted.
+
+**Reuses P4-B/P4-E's decisions unchanged**: compile-into-kernel (not plain
+modload — vax GENERIC has no `options MODULAR`), cross-built + CD-delivered
+artifacts (not in-guest build), single-user boot (securelevel 0, required for
+`modload` to be permitted). Own cached MODULAR-kernel artifact
+(`access-artifacts/netbsd-OVMX`), independent of every sibling proof's own
+cache.
+
+**The AST proof is NOT collapsed** into one in-guest command the way the
+ACCESS phase (and P4-E's event-flag phases) are: the write-attention path is
+timing-sensitive — process B's write must land AFTER process A is actually
+parked in `$HIBER` on the armed channel — so it is driven as discrete,
+individually-retriable steps (arm+HIBER, observe ARMED, write-or-skip,
+observe FIRED), mirroring the identical choice `drive_netbsd_p4a.py`'s AST
+phase makes for the same reason on amd64/anita.
+
+**The negative control with teeth (`negctl-astwrite`, rd vms-4b7's explicit
+ask).** With process B's write skipped, process A's armed AST must NOT fire
+within the bounded poll budget. This is the discriminator a per-process fake
+cannot pass: a fake that "delivers" an AST without any real cross-process
+signal has nothing to make it wait on, so it would fire (or never truly
+block) regardless of whether a DIFFERENT process ever wrote anything.
+`drive_access_vax.py` distinguishes this from the ordinary "did not fire"
+case in its own exit-code diagnostics (`ast-crossprocess` StepResult detail)
+so a run-access.sh failure investigation does not need to guess which case
+happened. The built-in INV-6 negative control (module absent) asserts
+`vmsaccess` fails honestly with `SS$_NOSUCHDEV`, never fakes success.
+
+**Fast per-PR complement**: `netbsd-vax-access-crosscompile` (CI)
+cross-compiles + links `vmsaccess` for `vax--netbsdelf` with no SIMH boot —
+mirrors `netbsd-vax-eflag-crosscompile`. The shared facility sources
+(`vms_ast.c`, `vms_access.c`) are already width-checked per-PR by B1
+(`netbsd-vax-vms-crosscompile`); this SIMH proof is the nightly runtime
+complement to both.
+
 ## The assertion, and the negative control
 
 `smoke` passes only when **both** hold: anita's `--run` (`uname -srm | grep -qx
@@ -332,11 +415,17 @@ property itself raises, asserting the honest structured result comes back in
 every case and nothing ever raises; plus the full `negctl_gate` truth table
 in both Python and bash. Run: `pytest tests/lab-vax/test_vaxharness.py -v`.
 
-**Adoption (follow-up, not this item).** `vaxharness.py` is a new,
-standalone module -- it does not yet replace the ad hoc `_console_text()` /
-scattered `except (pexpect.TIMEOUT, pexpect.EOF, Exception)` call sites in
-the existing `drive_*.py` drivers. That retrofit is separate follow-up work,
-sequenced after `vms-84fe` (mid-flight in `drive_boot_vax.py`) merges, and is
-also the intended contract for `vms-945e`'s remaining facility drivers
-(proctab/mbx/ast/access), so they adopt `safe_expect`/`Proof`/`negctl_gate`
-from day one instead of re-deriving them.
+**Adoption.** `vaxharness.py` was a new, standalone module at merge time -- it
+did not yet replace the ad hoc `_console_text()` / scattered
+`except (pexpect.TIMEOUT, pexpect.EOF, Exception)` call sites in the existing
+`drive_*.py` drivers. `drive_access_vax.py` (rd vms-4b7, "P4-access" above)
+follows drive_proctab_vax.py's shape rather than re-deriving it: its
+boot-console handshake goes through `safe_expect()` and its pass/fail
+decision is a `Proof` of `StepResult`s; `run-access.sh` sources
+`negctl_gate.sh` rather than hand-rolling the exit-code inversion.
+Retrofitting the remaining pre-existing drivers (`drive_boot_vax.py`,
+`drive_devvms_vax.py`, `drive_eflag_vax.py`) to the same contract is still
+separate follow-up work, sequenced after `vms-84fe` (mid-flight in
+`drive_boot_vax.py`) merges. `vms-945e`'s remaining facility drivers
+(proctab/mbx/lnm) adopt `safe_expect`/`Proof`/`negctl_gate` from day one,
+following this same shape.

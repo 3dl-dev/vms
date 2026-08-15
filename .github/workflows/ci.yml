@@ -224,6 +224,7 @@ jobs:
               - 'src/kernel-netbsd/**'
               - 'tests/netbsd/netbsd_version.env'
               - 'tests/netbsd/guest/vmseflag.c'
+              - 'tests/netbsd/guest/vmsaccess.c'
               - 'src/libvmssys/kif_transport_netbsd.c'
               - 'src/libvmssys/kif_transport.h'
               - 'docs/audit-ilp32-vax-netbsd-exec.md'
@@ -4831,6 +4832,110 @@ jobs:
         run: tests/lab-vax/run-eflag.sh negctl-set
 
   # -----------------------------------------------------------------------
+  # netbsd-vax-access (rd vms-4b7, parent vms-945e, epic vms-8e8). The MOST
+  # INTRICATE of the facility proofs (rd vms-4b7's framing): ACCESS-MODE
+  # enforcement AND cross-process AST delivery, both proven on the SAME
+  # /dev/vms, both via ONE guest tool (tests/netbsd/guest/vmsaccess.c) that
+  # already carries the identical scenario tests/netbsd/drive_netbsd_p4a.py
+  # proves on NetBSD/amd64: an intra-process SETMODE/GETMODE/ENTER_IMAGE/
+  # DCLAST/DELIVERAST/IMAGE_RUNDOWN round trip proves access-mode transitions
+  # are ENFORCED (not merely believed); process A's $SETPRV mutation is
+  # observed by a DIFFERENT process B via $GETJPI (the process table is
+  # shared kernel state); and process A arms a mailbox write-attention AST
+  # and $HIBERs -- a DIFFERENT process B's write is what lands the AST in A's
+  # executive-resident queue and WAKES A's $HIBER, with the delivered
+  # astprm/acmode matching exactly what A armed. A per-process fake could
+  # never be woken by an action taken in a different process, and the
+  # AST_SKIP_WRITE negative control below (B never writes) asserts exactly
+  # that: without a real cross-process write, A's AST must NOT fire. vax is
+  # ILP32 / non-IEEE-float / ELF32 -- a width class amd64 (LP64) cannot
+  # exercise, so a struct-layout bug in the shared wire contracts
+  # (vms_access_nb.h's cur_privs/perm_privs, vms_ast_nb.h's astadr/astprm --
+  # all explicit uint64_t) could pass on every other OVMX target and only
+  # misbehave here. BUILD/TEST tooling, not a runtime (Rule 9): SIMH is
+  # emulation; nothing runs on the host.
+  #
+  # ADOPTS vaxharness.py (rd vms-cf5), following drive_proctab_vax.py's shape:
+  # the boot-console handshake goes through safe_expect(), and the pass/fail
+  # decision is a Proof of StepResults, emitted as one JSON line. run-access.sh
+  # sources negctl_gate.sh instead of hand-rolling the driver-exit-code
+  # inversion; none of drive_access_vax.py's *_SKIP_* env vars early-return a
+  # "negctl ok" -- each just omits one real action, so the SAME
+  # positive-assertion script fails FOR REAL every time.
+  #
+  # GATING: NIGHTLY (schedule) + manual (workflow_dispatch) ONLY -- NOT per-PR,
+  # same reasoning as netbsd-vax-eflag/netbsd-vax-devvms (SIMH/vax is slow +
+  # disk-heavy). The per-PR value for the guest tool is
+  # netbsd-vax-access-crosscompile (fast, link-only, no SIMH), and for the
+  # shared facility sources it is the existing B1 gate
+  # (netbsd-vax-vms-crosscompile, which already width-checks vms_ast.c and
+  # vms_access.c as part of the module's TU set).
+  #
+  # It `needs' netbsd-vax-simh so that job primes the shared 10.1 disk cache
+  # first; this job restores it and NEVER reinstalls in the hot path. Own
+  # cached MODULAR-kernel artifact (access-artifacts, mirrors how
+  # netbsd-vax-eflag's eflag-artifacts is kept separate from
+  # netbsd-vax-devvms's devvms-artifacts) so this job's cache is independent
+  # of the other SIMH/vax runtime proofs. run-access.sh wraps every SIMH
+  # invocation in a hard timeout.
+  # -----------------------------------------------------------------------
+  netbsd-vax-access:
+    name: Access-mode enforcement + cross-process AST delivery proven on NetBSD/vax under SIMH — INV-6 (vms-4b7)
+    needs: [changes, netbsd-vax-simh]
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-access-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      # Cache this job's OWN built MODULAR kernel (4 MB) so the ~40-min
+      # build.sh runs only on a cold cache, keyed on the kernel-build inputs.
+      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX, access-artifacts)
+        uses: actions/cache@v4
+        with:
+          path: .boot-cache/lab-vax/access-artifacts/netbsd-OVMX
+          key: vax-modular-kernel-access-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Prove — access-mode enforcement + cross-process AST delivery on NetBSD/vax (cross-build, custom MODULAR kernel, modload, selftest/SETPRV/GETJPI + wrtattn AST)
+        run: tests/lab-vax/run-access.sh prove
+
+      - name: Negative control — skipping modload must redden the whole proof
+        run: tests/lab-vax/run-access.sh negctl-load
+
+      - name: Negative control — skipping process A's SETPRV/SETPRN must redden the cross-process GETJPI assertion
+        run: tests/lab-vax/run-access.sh negctl-setpriv
+
+      - name: Negative control — skipping process B's mailbox write must redden the cross-process AST assertion (the AST must NOT fire)
+        run: tests/lab-vax/run-access.sh negctl-astwrite
+
+  # -----------------------------------------------------------------------
   # netbsd-vax-vmsfs-crosscompile (rd vms-544d, epic vms-8e8; P4-VFS-vax).
   #
   # Per-PR cross-compile gate for the LOADABLE elf32-vax vmsfs.kmod = the shared
@@ -5804,6 +5909,82 @@ jobs:
           set +e
           RAW=$(docker run --rm -e CROSSCOMPILE_NEGCTL=1 -v "$GITHUB_WORKSPACE:/src" -w /src \
                   ovmx-cross-vax sh tools/cross-vax/build-eflag-tool-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          [ "$RC" -eq 0 ] || { echo "FAIL: negctl run exited nonzero ($RC)"; exit 1; }
+          echo "$RAW" | grep -qF 'PASS (negctl)' \
+            || { echo "FAIL: negctl did not confirm the LP64 width assumption was rejected"; exit 1; }
+
+  # -----------------------------------------------------------------------
+  # netbsd-vax-access-crosscompile (rd vms-4b7, parent vms-945e, epic
+  # vms-8e8). FAST PER-PR gate, no NBSRC / no SIMH: the vax analogue of
+  # netbsd-vax-eflag-crosscompile / netbsd-vax-proctab-crosscompile, but for
+  # the access-mode + cross-process AST GUEST TOOL
+  # (tests/netbsd/guest/vmsaccess.c) rather than event flags or the process
+  # table. B1 (netbsd-vax-vms-crosscompile) already width-checks the SHARED
+  # facility sources (src/kernel-core/vms_ast.c, src/kernel-core/vms_access.c)
+  # that ship inside the module; this job is the complement -- it
+  # cross-compiles + LINKS the userspace tool that will drive those facilities
+  # cross-process, against the NetBSD/vax kif_transport leaf
+  # (src/libvmssys/kif_transport_netbsd.c). No kernel headers needed
+  # (vmsaccess.c is ordinary userspace code, like vmseflag.c/vmsproctab.c);
+  # fast, and it catches a struct-layout/width break in the shared wire
+  # contracts (src/kernel-netbsd/vms_access_nb.h, src/kernel-netbsd/
+  # vms_ast_nb.h) on every PR instead of only on the NIGHTLY SIMH run
+  # (netbsd-vax-access, vms-4b7). BUILD/TEST tooling, never a runtime (Rule 9).
+  # Gated on exec_netbsd_vax (covers vmsaccess.c + the kif_transport_netbsd
+  # leaf + the shared kernel-core/kernel-netbsd sources): push/merge_group/
+  # schedule always; on a PR only when those inputs change.
+  # -----------------------------------------------------------------------
+  netbsd-vax-access-crosscompile:
+    name: Access-mode + AST guest tool cross-compiles for netbsd-vax (vms-4b7)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile + link vmsaccess for netbsd-vax
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax sh tools/cross-vax/build-access-tool-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax access-tool cross build/link exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: vmsaccess' \
+            || { echo "FAIL: did not see the build+link PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: vmsaccess was not elf32-vax -- wrong target"; exit 1; }
+          echo "PASS: vmsaccess (access-mode + cross-process AST guest tool) built for netbsd-vax and linked as a real ELF32 VAX exe"
+
+      - name: Teeth check (a deliberately-broken width TU must fail the cross-compile)
+        run: |
+          set +e
+          RAW=$(docker run --rm -e CROSSCOMPILE_NEGCTL=1 -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax sh tools/cross-vax/build-access-tool-vax.sh 2>&1)
           RC=$?
           set -e
           echo "$RAW"

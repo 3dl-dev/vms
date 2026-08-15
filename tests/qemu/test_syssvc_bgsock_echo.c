@@ -95,16 +95,30 @@ static void bring_lo_up(void)
     close(s);
 }
 
-/* Loopback echo peer: accept one connection, read one buffer, write it back. */
+/* Loopback echo peer: accept one connection, read the WHOLE message (looping
+ * until it has sizeof(MSG) bytes or EOF -- TCP may split it, especially on a
+ * slow/loaded runner), then write it all back. A single recv() would echo a
+ * partial message under segmentation and the reader would come up short. */
 static void *echo_peer(void *arg)
 {
     int lsock = *(int *)arg;
     int c = accept(lsock, NULL, NULL);
     if (c >= 0) {
         char buf[256];
-        ssize_t n = recv(c, buf, sizeof(buf), 0);
-        if (n > 0)
-            (void)!write(c, buf, (size_t)n);
+        size_t got = 0;
+        while (got < sizeof(MSG)) {
+            ssize_t n = recv(c, buf + got, sizeof(MSG) - got, 0);
+            if (n <= 0) break;          /* EOF or error */
+            got += (size_t)n;
+        }
+        if (got > 0) {
+            size_t off = 0;
+            while (off < got) {
+                ssize_t w = write(c, buf + off, got - off);
+                if (w <= 0) break;
+                off += (size_t)w;
+            }
+        }
         close(c);
     }
     close(lsock);

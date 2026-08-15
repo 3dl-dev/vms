@@ -6,10 +6,14 @@
  *
  * SHA256 is provided by libvms (src/libvms/rtl/sha256.c).
  * Build: part of tools/ CMakeLists.txt (links vms library)
+ *
+ * Feature-test macros (_POSIX_C_SOURCE/_DEFAULT_SOURCE on Linux, or
+ * _NETBSD_SOURCE on NetBSD -- flock()/LOCK_EX in <sys/file.h> are a BSD
+ * extension gated OFF by _POSIX_C_SOURCE on NetBSD, vms-64a) are supplied
+ * by tools/CMakeLists.txt's target_compile_definitions(vms_authorize ...),
+ * not hardcoded here, so the netbsd-vax cross build can select the wider
+ * namespace -- same pattern src/ovmx_init/CMakeLists.txt uses.
  */
-
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>

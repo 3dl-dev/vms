@@ -394,6 +394,78 @@ nonzero exit into "teeth confirmed".
 cross-compiles + links `vmsproctab` for `vax--netbsdelf` with no SIMH boot —
 mirrors `netbsd-vax-eflag-crosscompile`. The shared facility source
 (`vms_proctab.c`) is already width-checked per-PR by B1
+## Mailboxes proven cross-process on NetBSD/vax (`vms-fe8`)
+
+The mailbox (`$CREMBX`/`$ASSIGN`/`$QIO`, `MBAn:`) analogue of P4-E, and the
+last of the boot-required facilities `vms-945e` tracks for vax (proctab and
+mailboxes are now both proven; the remaining are lnm/ast/access — access is
+also now proven, above). `run-mbx.sh` boots the SAME cached disk,
+cross-builds the `vms.kmod` module (carrying `src/kernel-core/vms_mbx.c`, the
+identical source the Linux `vms.ko` and the NetBSD/amd64 P4-A proof build)
+plus the `vmsmbx` guest tool (`tests/netbsd/guest/vmsmbx.c`), and proves:
+process A `$CREMBX`s a TEMPORARY mailbox and holds its channel open; a
+DIFFERENT process B `$ASSIGN`s it by name and `$QIO`-writes a message; a
+THIRD, different process C `$ASSIGN`s the SAME name and `$QIO`-reads the
+message back BYTE-FOR-BYTE — because the mailbox and its message queue live
+in the executive's KERNEL memory, not in any of the three processes. This is
+the VAX analogue of the NetBSD/amd64 P4-A mailbox phase
+(`tests/netbsd/drive_netbsd_p4a.py`).
+
+```sh
+tests/lab-vax/run-mbx.sh                 # build everything, ensure disk+kernel, PROVE
+tests/lab-vax/run-mbx.sh negctl-load     # teeth: skip modload -> whole proof must go RED
+tests/lab-vax/run-mbx.sh negctl-create   # teeth: skip process A's mailbox creation -> write/read assertion must go RED
+```
+
+**Why VAX specifically.** vax is ILP32 / non-IEEE-float / ELF32 — a width
+class the amd64 (LP64) proof cannot exercise. A struct-layout or width bug
+in the shared wire contract (`src/kernel-netbsd/vms_mbx_nb.h`) — including
+its IOC_VOID big-io path for WRITE/READ, which pushes the 4096-byte message
+buffers past NetBSD's one-page `IOCPARM_MAX` — could compile clean and pass
+on every 64-bit OVMX target and only misbehave here.
+
+**Reuses P4-B's/P4-E's decisions unchanged**: compile-into-kernel (not plain
+modload — vax GENERIC has no `options MODULAR`), cross-built + CD-delivered
+artifacts (not in-guest build — the vax system disk cannot hold `comp`+
+`syssrc`), single-user boot (securelevel 0, required for `modload` to be
+permitted). Own cached MODULAR-kernel artifact (`mbx-artifacts/netbsd-OVMX`),
+independent of P4-E's `eflag-artifacts/netbsd-OVMX` and P4-B's
+`devvms-artifacts/netbsd-OVMX` — same kernel config, separate cache entries.
+
+**The cross-process proof (collapsed into a single in-guest command, FILE-based
+capture).** Process A backgrounds `vmsmbx create_hold 8`, redirecting straight
+to its own file; its MBAn: name is parsed from that file (one short `sed`
+extraction, mirroring `tests/netbsd/drive_netbsd_p4a.py`'s proven MBX-phase
+shape); process B (`vmsmbx write <devnam> <text>`) and process C (`vmsmbx
+read <devnam> <text>`) each redirect straight to their OWN file too — no
+`$(...)` command substitution stacked with inline `sed` for the pass/fail
+decision, which is a plain `grep -q ... /file` against those files. This is
+the fix for a real postmortem (rd vms-2e0): an earlier proctab-vax revision
+crammed three `$(...)` + inline-`sed` extractions into one ~900-char line,
+and a real nightly run came back with the whole command silently truncated
+on the lossy VAX/SIMH serial (driver exit=2, empty captured output, not even
+the unconditional trailing echo). A full transcript is ALWAYS dumped
+afterward — pass or fail — so a repeat of that failure mode is diagnosable
+from the console. The tool itself compares B's and C's bytes byte-for-byte
+(`match=1`). The built-in INV-6 negative control (module absent) asserts
+`vmsmbx` fails honestly with `SS$_NOSUCHDEV`, never fakes success.
+`MBX_SKIP_CREATE` (process A never launched, so no MBAn: name is ever
+captured) gives the positive proof teeth — a per-process fake that "reads
+back" without a real shared executive would not need A's mailbox to exist at
+all. Every failure path returns a plain nonzero exit code (the vms-4b7
+exit-code audit: no code collides with the harness-error contract), so
+`negctl_gate()`/`negctl_gate.sh`'s pure zero-vs-nonzero inversion holds for
+every mode.
+
+**Built ON `vaxharness.py`** (rd vms-cf5) from the start, the same way the
+proctab and access proofs are: every console wait in the boot handshake goes
+through `safe_expect()`, and the pass/fail decision is a `Proof` of
+`StepResult`s emitted as one JSON line. `run-mbx.sh` sources `negctl_gate.sh`
+instead of hand-rolling the driver-exit-code inversion.
+
+**Fast per-PR complement**: `netbsd-vax-mbx-crosscompile` (CI) cross-compiles
++ links `vmsmbx` for `vax--netbsdelf` with no SIMH boot. The shared facility
+source (`vms_mbx.c`) is already width-checked per-PR by B1
 (`netbsd-vax-vms-crosscompile`); this SIMH proof is the nightly runtime
 complement to both.
 
@@ -513,3 +585,20 @@ return -- aborting the whole script before `rc=$?` (and the
 negctl proof-failure reddens the JOB instead of being inverted to PASS. The
 only safe call-site form is `||`-protected: `rc=0; run_session ... || rc=$?`
 -- both `run-access.sh` and `run-proctab.sh` use this form exclusively.
+`drive_*.py` drivers. `drive_access_vax.py` (rd vms-4b7, "P4-access" above)
+and `drive_mbx_vax.py` (rd vms-fe8, "Mailboxes" above) follow
+drive_proctab_vax.py's shape rather than re-deriving it: their boot-console
+handshakes go through `safe_expect()` and their pass/fail decision is a
+`Proof` of `StepResult`s; `run-access.sh`/`run-mbx.sh` source
+`negctl_gate.sh` rather than hand-rolling the exit-code inversion.
+`drive_mbx_vax.py` also carries forward two postmortems flagged from its
+siblings: the vms-2e0 fix (redirect every guest-tool invocation to a file
+instead of `$(...)` + inline `sed`, to survive the lossy VAX/SIMH serial) and
+the vms-4b7 audit (every failure path returns a plain nonzero int, no
+"harness-error" code collides with the clean-proof-fail contract).
+Retrofitting the remaining pre-existing drivers (`drive_boot_vax.py`,
+`drive_devvms_vax.py`, `drive_eflag_vax.py`) to the same contract is still
+separate follow-up work, sequenced after `vms-84fe` (mid-flight in
+`drive_boot_vax.py`) merges. `vms-945e`'s remaining facility drivers
+(proctab/lnm) adopt `safe_expect`/`Proof`/`negctl_gate` from day one,
+following this same shape.

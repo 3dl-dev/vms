@@ -142,19 +142,25 @@ int main(void)
     bring_lo_up();
     (void)mkdir(OVMX_PRIVSEP, 0755);    /* privsep dir (root-owned 0755) */
 
-    /* ---- start the stock sshd (host sockets; it daemonizes) ---- */
+    /* ---- start the stock sshd in the FOREGROUND (-D) as a child; log to a
+     * file we dump on failure so a startup error is visible in the KE log. ---- */
     pid_t sd = fork();
     if (sd == 0) {
-        char *av[] = { (char *)OVMX_SSHD, "-f", (char *)OVMX_SSHDCFG,
-                       "-E", (char *)"/tmp/sshd.log", NULL };
+        int lf = open("/tmp/sshd.log", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+        if (lf >= 0) { dup2(lf, 1); dup2(lf, 2); close(lf); }
+        char *av[] = { (char *)OVMX_SSHD, "-D", "-e", "-f", (char *)OVMX_SSHDCFG, NULL };
         execv(OVMX_SSHD, av);
         _exit(127);
     }
-    int st;
-    waitpid(sd, &st, 0);                /* reap the launcher; the daemon backgrounds */
-    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, "stock sshd started (daemonized) on 127.0.0.1");
-
-    CHECK(wait_for_sshd(50), "sshd is accepting connections on 127.0.0.1:2222");
+    int up = wait_for_sshd(50);
+    CHECK(up, "sshd is accepting connections on 127.0.0.1:2222");
+    if (!up) {
+        FILE *lf = fopen("/tmp/sshd.log", "r");
+        char line[512];
+        printf("  --- sshd.log (startup failure) ---\n");
+        if (lf) { while (fgets(line, sizeof(line), lf)) printf("  sshd: %s", line); fclose(lf); }
+        else printf("  (no sshd.log)\n");
+    }
 
     /* ---- run the veneer-linked ssh; capture its stdout ---- */
     int pfd[2];
@@ -187,8 +193,15 @@ int main(void)
     /* negctl: bg-recv-length-zeroed */
     CHECK(strstr(buf, "OVMX_SSH_OK") != NULL,
           "the remote command output came back BYTE-EXACT over the veneer (real KEX proven)");
+    if (strstr(buf, "OVMX_SSH_OK") == NULL) {
+        FILE *lf = fopen("/tmp/sshd.log", "r");
+        char line[512];
+        printf("  --- ssh client stdout: [%s] ---\n", buf);
+        printf("  --- sshd.log (KEX failure) ---\n");
+        if (lf) { while (fgets(line, sizeof(line), lf)) printf("  sshd: %s", line); fclose(lf); }
+    }
 
-    kill(sd, SIGTERM);   /* best-effort; the daemon may be a separate pid */
+    kill(sd, SIGTERM);   /* stop the foreground sshd child */
     system("kill $(cat /ovmxssh/sshd.pid 2>/dev/null) 2>/dev/null");
 
     printf("=== test_syssvc_ssh_kex: %d passed, %d failed ===\n", pass, fail);

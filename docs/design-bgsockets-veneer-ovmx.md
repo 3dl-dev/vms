@@ -32,24 +32,22 @@ the C RTL exposes, backed by the executive INET device. `tcpip_client.h`
 
 ## 2. API (increment 1 — client path, IPv4)
 
-`src/vmstcpip/sockets/vms_bgsock.h`:
+`src/vmstcpip/sockets/vms_bgsock.h` — each sockets call is ONE `$QIO` op:
 
 | Call | Maps to |
 |------|---------|
-| `ovmx_socket(AF_INET, SOCK_STREAM, 0)` | `$ASSIGN TCPIP$DEVICE:` + `IO$_SETMODE` (create executive socket) + a socketpair |
-| `ovmx_connect(fd, sockaddr_in)` | `IO$_ACCESS` (connect) + start the pump threads |
-| `read()`/`write()`/`poll()` on the fd | pumped to `IO$_READVBLK`/`IO$_WRITEVBLK` |
-| `ovmx_send`/`ovmx_recv` | thin wrappers over the fd (completeness) |
-| `ovmx_shutdown`/`ovmx_socket_close` | half-close / `IO$_DEACCESS` + `$DASSGN` + close |
-| `ovmx_inet_pton`/`ovmx_getaddrinfo_numeric` | numeric IPv4 resolution (no DNS yet) |
-| `ovmx_bind`/`ovmx_listen`/`ovmx_accept` | **ENOSYS** until the BGn: server path (`vms-698`) |
+| `ovmx_socket(AF_INET, SOCK_STREAM, 0)` | `$ASSIGN TCPIP$DEVICE:` + `IO$_SETMODE` (create executive socket); returns an OVMX handle |
+| `ovmx_connect(s, sockaddr_in)` | `IO$_ACCESS` (connect) |
+| `ovmx_send(s, ...)` / `ovmx_recv(s, ...)` | one BLOCKING `IO$_WRITEVBLK` / `IO$_READVBLK` |
+| `ovmx_shutdown` / `ovmx_socket_close` | `IO$_DEACCESS` / `IO$_DEACCESS` + `$DASSGN` |
+| `ovmx_inet_pton` / `ovmx_getaddrinfo_numeric` | numeric IPv4 resolution (no DNS yet) |
+| `ovmx_bind` / `ovmx_listen` / `ovmx_accept` | **ENOSYS** until the BGn: server path (`vms-698`) |
 
-**Pollable fds.** `ovmx_socket()` returns an ordinary pollable fd (one end of a
-socketpair); two pump threads shuttle bytes between it and the executive BGn:
-channel. So the app's ordinary `read()`/`write()`/`poll()`/`select()` work
-unchanged — this is what lets a large consumer like OpenSSH use the veneer with
-only minimal porting (map `socket`/`connect`/`close` → the `ovmx_*` entries; the
-app source is otherwise untouched). Every wire byte still transits `$QIO`.
+**Full-duplex, simple blocking semantics.** `ovmx_send`/`ovmx_recv` each do one
+blocking `$QIO`; a recv and a send may be outstanding at once on one handle from
+two threads (§4). `ovmx_socket()` returns an **OVMX handle** (offset
+`OVMX_BGSOCK_BASE`, never a libc fd), used only with the `ovmx_*` calls — a
+**pollable-fd** form for OpenSSH's `poll()`/`select()` is the next increment (§4).
 
 ## 3. Honest failure (Rule 9 / INV-6)
 
@@ -58,35 +56,45 @@ fails `ENODEV`. The veneer **never** falls back to a raw Linux `socket()` that
 would connect while sharing nothing with the executive. A silent userspace
 fallback is exactly the LARP bug class the authenticity invariants kill.
 
-## 4. Proof (Rule 9) — status: OPEN, a real finding
+## 4. Root cause of the first wedge, and the fix
 
-A QEMU Kernel-Executive proof (`test_syssvc_bgsock_echo`: `ovmx_socket()`+
-`ovmx_connect()` to a 127.0.0.1 loopback echo peer, byte-exact round-trip over a
-real `/dev/vms`, honest-skip 77 without it, with a paired negctl) was written and
-run. **It failed in-guest, and the failure is a real design finding, not a test
-bug:**
+A first bridge exposed a *pollable fd* via a socketpair + two pump threads
+(one `IO$_WRITEVBLK`, one `IO$_READVBLK`). It wedged in-guest. Investigation
+(conductor step 1) traced the whole `$QIO` path and found **the executive fully
+supports a blocking read and a blocking write outstanding at once on one
+channel** — nothing serializes them:
 
-> The current bridge runs **two pump threads doing concurrent BLOCKING `$QIOW`
-> — `IO$_READVBLK` and `IO$_WRITEVBLK` — on the SAME BGn: channel**. In QEMU this
-> wedges (the client's `write()` fails / the run times out). The proven raw path
-> `test_syssvc_bg_echo` does write-**then**-read *sequentially on one thread*, so
-> it never exercises concurrent same-channel QIO. A pollable-fd veneer inherently
-> needs both directions live at once, so the bridge must not serialize on one
-> blocking-QIO channel.
+- **kernel dispatch** — `vms_dev_ioctl` is `unlocked_ioctl` (concurrent per-fd);
+  it takes no lock.
+- **`vms_bg.c`** — `bgchan_lookup` lifts the socket pointer out from under
+  `proc->chan_lock` and **drops the lock** before the sleeping
+  `kernel_recvmsg`/`kernel_sendmsg`.
+- **`sys_qio.c`** — `qio_bg_op` holds no lock across `vms_kif_bg_send/recv`.
+- The proc is shared by `current->tgid` (all threads), `REGISTER` is idempotent,
+  the kif args are stack-local, and the host kernel socket is inherently
+  full-duplex.
 
-**Fix direction (next increment), pick one and prove it:**
-1. **Async QIO + AST multiplex on one channel** — issue `$QIO` (not `$QIOW`) for
-   both directions with completion ASTs / event flags, so a single pump services
-   read and write completions without two threads blocking the same channel.
-2. **Confirm/enable concurrent read+write in the BGn: driver** (`vms_bg.c`) — if
-   the executive already tolerates a simultaneous outstanding read and write IRP
-   per channel, the two-thread model can stay; the QEMU proof will say which.
+So **`vms_bg.c` did not need fixing** — the wedge was in the veneer's own
+socketpair/pump lifecycle. The fix removes that machinery: the veneer now issues
+**simple blocking `$QIO` directly** (`ovmx_send`→`IO$_WRITEVBLK`,
+`ovmx_recv`→`IO$_READVBLK`). Full-duplex is inherent — two threads may hold a
+send and a recv outstanding at once.
 
-Until this lands, the veneer's client connect/close path and the numeric-IPv4
-resolver are the verified surface (compile + host-side honest-skip); the byte
-round-trip over `/dev/vms` is the open proof. The `test_syssvc_bgsock_echo` suite
-+ its `bgsock-recv-length-zeroed` negctl are **held back** (not landed red) until
-the bridge is fixed and the proof is green by SHA.
+`ovmx_socket()` returns an **OVMX handle** (offset `OVMX_BGSOCK_BASE`, never a
+libc fd), used only with the `ovmx_*` calls. A **pollable-fd form** (for
+OpenSSH's `poll()`/`select()` multiplexing) is the next increment — an async
+`$QIO` + AST veneer poll, or a fixed fd bridge.
+
+## 4b. Proof (Rule 9) — GREEN
+
+`tests/qemu/test_syssvc_bgsock_echo.c` — a **reader thread blocks in
+`ovmx_recv()`** on the connection while the main thread `ovmx_send()`s on the
+**same handle** (concurrent `IO$_READVBLK` + `IO$_WRITEVBLK`), against a real
+`/dev/vms`, and the echoed reply is asserted **byte-exact**; honest-skip (77)
+without the executive; the numeric-IPv4 resolver is checked on both branches.
+Negative control `bgsock-recv-length-zeroed` (`facility_defects.sh`, floor
+102→103) zeroes `ovmx_recv()`'s returned count so only the byte-exact assertion
+reddens.
 
 ## 5. Scope / follow-on
 

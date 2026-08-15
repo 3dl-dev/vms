@@ -195,6 +195,58 @@ keeping the original as `/netbsd.GENERIC`; this is marked and done once. The
 added to `rc.conf`). The custom kernel (4 MB) is a cached artifact so build.sh
 runs only on a cold cache.
 
+## P4-E: common event flags proven cross-process on NetBSD/vax (`vms-4e7`)
+
+P4-B proves ONE ioctl round-trips through a live `/dev/vms`; that alone does not
+rule out a per-process userspace fake answering it. **P4-E** closes that gap for
+event flags: `run-eflag.sh` boots the SAME cached disk, cross-builds the
+`vms.kmod` module (carrying `src/kernel-core/vms_eflag.c`, the identical source
+the Linux `vms.ko` builds) plus the `vmseflag` guest tool
+(`tests/netbsd/guest/vmseflag.c`), and proves a COMMON event flag set by one OS
+process is observed by a genuinely DIFFERENT process — and that a blocked
+waiter is WOKEN across a process boundary — because the flag lives in the
+executive's KERNEL memory, not in either process. This is the VAX analogue of
+the NetBSD/amd64 P2c proof (`tests/netbsd/run_p2c.sh`); scope is **event flags
+only** — the other boot-required facilities (proctab/lnm/mbx/ast/access) are the
+separate `vms-945e`.
+
+```sh
+tests/lab-vax/run-eflag.sh                # build everything, ensure disk+kernel, PROVE
+tests/lab-vax/run-eflag.sh negctl-load     # teeth: skip modload -> whole proof must go RED
+tests/lab-vax/run-eflag.sh negctl-set      # teeth: skip process A's SETEF -> cross-process SET assertion must go RED
+```
+
+**Why VAX specifically.** vax is ILP32 / non-IEEE-float / ELF32 — a width class
+the amd64 (LP64) proof cannot exercise. A struct-layout or width bug in the
+shared wire contract (`src/kernel-netbsd/vms_eflag_nb.h`) could compile clean
+and pass on every 64-bit OVMX target and only misbehave here.
+
+**Reuses P4-B's decisions unchanged**: compile-into-kernel (not plain modload —
+vax GENERIC has no `options MODULAR`), cross-built + CD-delivered artifacts (not
+in-guest build — the vax system disk cannot hold `comp`+`syssrc`), single-user
+boot (securelevel 0, required for `modload` to be permitted). Own cached
+MODULAR-kernel artifact (`eflag-artifacts/netbsd-OVMX`), independent of P4-B's
+`devvms-artifacts/netbsd-OVMX` and P4-C's `boot-artifacts/netbsd-OVMX` — same
+kernel config, separate cache entries, mirroring how those two already keep
+independent caches.
+
+**The cross-process proof (collapsed into single in-guest commands, same
+loss-tolerant-transport technique `drive_netbsd_p2c.py` uses for the lossy
+serial):** process A `$SETEF`s common flag 64; a DIFFERENT process B `$READEF`s
+it and must see SET; a control flag (65) must read CLEAR; process C `$CLREF`s
+64 and its previous-state must report `was-set`; process D re-reads 64 and must
+see CLEAR. Then the payoff — a waiter process `$WAITFR`s on flag 66 and BLOCKS
+in-kernel; a DIFFERENT process `$SETEF`s it; the blocked waiter must WAKE. The
+built-in INV-6 negative control (module absent) asserts `vmseflag` fails
+honestly with `SS$_NOSUCHDEV`, never fakes success.
+
+**Fast per-PR complement**: `netbsd-vax-eflag-crosscompile` (CI) cross-compiles
++ links `vmseflag` for `vax--netbsdelf` with no SIMH boot — the guest-tool
+analogue of the `libvmssys-netbsd-vax` per-PR library gates. The shared facility
+source (`vms_eflag.c`) is already width-checked per-PR by B1
+(`netbsd-vax-vms-crosscompile`); this SIMH proof is the nightly runtime
+complement to both.
+
 ## The assertion, and the negative control
 
 `smoke` passes only when **both** hold: anita's `--run` (`uname -srm | grep -qx

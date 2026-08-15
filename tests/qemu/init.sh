@@ -185,6 +185,46 @@ SUITE_FIFO=/tmp/suite_fifo.$$
 # finish; see below for why that distinction is the whole fix.
 SUITE_DRAIN_TIMEOUT=${SUITE_DRAIN_TIMEOUT:-20}
 
+# SUITE SHARDING (rd vms-ea7). The ~79-suite run is partitioned across N
+# parallel QEMU VMs, each booting its own guest over a deterministic subset,
+# so a single whole-VM wall (run_tests.sh TIMEOUT=600s) trivially covers a
+# ~13-suite subset even on a pathologically slow (~10x) GitHub TCG runner --
+# where the whole set had walled at 60/79. run_tests.sh passes the shard
+# coordinates on the kernel command line (ovmx.shard=I / ovmx.shards=N); the
+# DEFAULT is shard 0 of 1, i.e. RUN EVERYTHING, so any caller that does not
+# shard (the negative-control image, a hand-run `docker run`) is unaffected.
+#
+# The assignment is BY NAME-HASH, not by position: shard(name) =
+# (first 6 hex of md5(name)) mod N. This is deliberately independent of the
+# glob's iteration order and of which families exist, so ci.yml can re-derive
+# the SAME partition from the checked-out sources (identical md5sum + the same
+# arithmetic -- proven byte-identical GNU-vs-busybox, vms-ea7) to know exactly
+# which suites THIS shard must have run, with no positional list to drift.
+# Every suite maps to exactly one shard in [0,N); the union over all shards is
+# the whole set with no gaps and no overlap (a residue class partition).
+SHARD_INDEX=0
+SHARD_TOTAL=1
+for _tok in $(cat /proc/cmdline 2>/dev/null); do
+    case "$_tok" in
+        ovmx.shard=*)  SHARD_INDEX=${_tok#ovmx.shard=} ;;
+        ovmx.shards=*) SHARD_TOTAL=${_tok#ovmx.shards=} ;;
+    esac
+done
+# Defensive: a malformed/empty value must not silently turn the loop into a
+# no-op (which would pass a shard that ran nothing). Fall back to run-all.
+case "$SHARD_TOTAL" in ''|*[!0-9]*|0) SHARD_TOTAL=1 ;; esac
+case "$SHARD_INDEX" in ''|*[!0-9]*) SHARD_INDEX=0 ;; esac
+if [ "$SHARD_TOTAL" -gt 1 ]; then
+    echo "=== SHARD PLAN: this VM runs shard $SHARD_INDEX of $SHARD_TOTAL (suites where md5(name) mod $SHARD_TOTAL == $SHARD_INDEX) ==="
+fi
+
+# Returns 0 (true) if $1 belongs to this shard. SHARD_TOTAL=1 -> always true.
+suite_in_shard() {
+    [ "$SHARD_TOTAL" -le 1 ] && return 0
+    _h=$(printf '%s' "$1" | md5sum | cut -c1-6)
+    [ $(( 0x$_h % SHARD_TOTAL )) -eq "$SHARD_INDEX" ]
+}
+
 # CORPUS DEVICE-COVERAGE FIXTURE (vms-08c). tests/corpus/tier1-examples/
 # lib_getdvi.c (an unmodified Eight-Cubed download) asks $GETDVI about the
 # VMS logical name SYS$SYSDEVICE: -- this rig never runs STARTUP.COM, so
@@ -202,6 +242,12 @@ fi
 for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/test_corpus_*; do
     [ -x "$test" ] || continue
     name=$(basename "$test")
+    # Sharding (vms-ea7): skip suites not assigned to this VM's shard. The
+    # skipped suites run in a SIBLING shard VM; the union is the whole set.
+    # A skipped suite prints NO "=== SUITE ... ===" line, so ci.yml's per-
+    # shard verdict check (which asserts only THIS shard's assigned suites)
+    # is not fooled -- an absent line for an ASSIGNED suite is still RED.
+    suite_in_shard "$name" || continue
     echo "" >&4
     echo "--- $name ---" >&4
     rm -f "$SUITE_OUT" "$SUITE_FIFO"

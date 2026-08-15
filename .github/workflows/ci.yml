@@ -1634,12 +1634,59 @@ jobs:
   # this job talks to /dev/vms from inside a container's own namespace, it
   # boots an independent guest kernel that loads the module for real.
   # -----------------------------------------------------------------------
-  kernel-executive:
-    name: Kernel Executive (vms.ko via /dev/vms, QEMU)
+  # SHARDED (rd vms-ea7). MEASURED root cause: this job booted ONE QEMU VM
+  # that ran the whole ~79-suite executive sequentially under a single fixed
+  # whole-VM wall (run_tests.sh TIMEOUT=600s). A normal GitHub runner does the
+  # full set in ~90s, but GitHub's TCG runner quality varies wildly and a
+  # pathologically slow (~10x) runner reached only 60/79 in 600s and WALLED --
+  # reddening proven work non-deterministically (#502 failed 3x consecutively
+  # at escalating walls 120s/300s/600s; the 600s run did 60/79). A fixed wall
+  # buys only LINEAR headroom against an UNBOUNDED-slow runner, so it cannot
+  # fix the variance -- raising it again was rejected (Rule 8: a bigger wall
+  # hides the margin problem, it does not fix it).
+  #
+  # The fix partitions the ~79 suites into N shards, each a SEPARATE matrix leg
+  # booting its OWN QEMU VM over ~1/N of the suites under the SAME 600s wall.
+  # ~13 suites/shard fit that wall even at 10x-slow (~125s worst case). The
+  # partition is BY NAME-HASH -- shard(name) = (first 6 hex of md5(name)) mod N
+  # -- computed identically in tests/qemu/init.sh (busybox) and in the
+  # verification step below (proven byte-identical GNU-vs-busybox md5sum,
+  # vms-ea7), so it is a residue-class partition: every suite lands in exactly
+  # one shard, the union is the whole set, no gaps and no overlap. No suite is
+  # dropped; coverage is unchanged, only spread. init.sh reads the shard
+  # coordinates off the kernel command line (run_tests.sh forwards SHARD_INDEX/
+  # SHARD_TOTAL as ovmx.shard/ovmx.shards); the default is shard 0 of 1 = run
+  # everything, so the negative-control image below is unaffected.
+  #
+  # ⚠ THE ORIGINAL REQUIRED-CHECK NAME 'Kernel Executive (vms.ko via /dev/vms,
+  # QEMU)' is preserved by the AGGREGATE job `kernel-executive` further down,
+  # which needs: all shards and is green iff every shard is green -- so branch
+  # protection keying on that name is unaffected by this split. This matrix job
+  # deliberately uses a DIFFERENT name (the shard suffix), never the bare
+  # original.
+  kernel-executive-shard:
+    name: Kernel Executive (vms.ko via /dev/vms, QEMU) — shard ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' }}
     runs-on: ubuntu-latest
+    # Per shard: the fixed image build (gha layer cache, shared scope across
+    # shards so it is built once and reused) + one QEMU boot over ~1/N suites.
+    # The 60m was sized for the whole-set single VM; a shard is a fraction of
+    # that, but kept at 60m as the OUTER bound so a genuine hang (not slowness)
+    # still surfaces -- the 600s per-VM wall inside run_tests.sh is the real
+    # budget the shard is sized against, and it is unchanged.
     timeout-minutes: 60
+    strategy:
+      # A slow/failed shard must not cancel its siblings: each shard is an
+      # independent proof over its own suite subset, and we want ALL shard
+      # verdicts on a red run, not just the first.
+      fail-fast: false
+      matrix:
+        # N shards. ~79 suites / 6 ≈ 11-16 per shard (measured, vms-ea7) --
+        # comfortably under the 600s wall even at 10x-slow. `strategy.job-total`
+        # (used in the name and passed to the guest) derives N from this list,
+        # so changing the shard count is a one-line edit here.
+        shard: [0, 1, 2, 3, 4, 5]
 
     steps:
       - name: Checkout
@@ -1648,11 +1695,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Content-addressed gha layer cache: the vms.ko/vmsfs.ko + initramfs image
-      # is rebuilt only when the kernel/rootfs sources change, not every run --
-      # this is what keeps the real /dev/vms executive proof fast enough to stay
-      # in the pre-merge tier for kernel-touching PRs (never demoted to nightly).
-      # load: true keeps `docker run ovmx-ktest:latest` below working unchanged.
+      # Content-addressed gha layer cache, SHARED SCOPE across all shards
+      # (scope=kernel-executive): the vms.ko/vmsfs.ko + initramfs image is
+      # identical for every shard (the shard only changes the boot cmdline, not
+      # the image), so all N legs pull the same cached layers -- the image is
+      # effectively built once, not N times. load: true keeps `docker run
+      # ovmx-ktest:latest` below working unchanged.
       - name: Build kernel executive test image (gha layer cache)
         uses: docker/build-push-action@v6
         with:
@@ -1664,10 +1712,16 @@ jobs:
           cache-from: type=gha,scope=kernel-executive
           cache-to: type=gha,mode=max,scope=kernel-executive
 
-      - name: Boot QEMU, insmod vms.ko, run executive assertions against /dev/vms
+      - name: Boot QEMU, insmod vms.ko, run this shard's executive suites against /dev/vms
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_TOTAL: ${{ strategy.job-total }}
         run: |
           set +e
-          RAW=$(docker run --rm ovmx-ktest:latest 2>&1)
+          # -e SHARD_INDEX/-e SHARD_TOTAL: run_tests.sh forwards these onto the
+          # guest kernel cmdline (ovmx.shard/ovmx.shards); init.sh runs only the
+          # residue class md5(name) mod SHARD_TOTAL == SHARD_INDEX.
+          RAW=$(docker run --rm -e SHARD_INDEX -e SHARD_TOTAL ovmx-ktest:latest 2>&1)
           RC=$?
           set -e
           # QEMU's serial console emits CRLF; normalise so line-anchored
@@ -1676,7 +1730,7 @@ jobs:
           echo "$OUTPUT"
 
           if [ "$RC" -ne 0 ]; then
-            echo "FAIL: kernel-executive harness exited nonzero"
+            echo "FAIL: kernel-executive harness exited nonzero (shard $SHARD_INDEX/$SHARD_TOTAL)"
             exit 1
           fi
 
@@ -1714,11 +1768,18 @@ jobs:
           #   * suite FAILS   -> verdict line says rc!=0 -> RED
           # All three directions are proven by real podman+QEMU runs (see
           # vms-1d9 notes), not by inspection.
+          #
+          # SHARDING (vms-ea7): the FULL expected set is derived here exactly
+          # as before (so the FLOOR still sees every source), then FILTERED to
+          # this shard's residue class using the SAME md5(name) mod N the guest
+          # used. Only THIS shard's assigned suites are asserted to have run --
+          # the rest ran in sibling shards. An assigned suite whose verdict
+          # line is absent is still RED (it proves the suite was dropped, not
+          # that it ran elsewhere -- the guest's own glob would have run it in
+          # THIS shard had it been staged).
           # ---------------------------------------------------------------
           EXPECTED=$(cd "$GITHUB_WORKSPACE" && ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c \
                      | xargs -n1 basename | sed 's/\.c$//' | sort)
-          echo "Derived expected suites from the checkout:"
-          echo "$EXPECTED" | sed 's/^/  /'
 
           # `|| true`: grep -c exits 1 on an empty set, and GitHub runs `run:`
           # steps under `bash -e`, so without it an empty derived set would
@@ -1728,10 +1789,11 @@ jobs:
           # Monotone FLOOR on the number of suite SOURCES, not on any tally.
           # The derived set above cannot notice a suite whose .c file was
           # deleted outright (the set simply shrinks), so this catches that.
-          # It is a floor, so ADDING suites never requires touching it; only
-          # deliberately removing a suite does, which is the intended
-          # forcing function (see project Rule: do not delete the test that
-          # exposed a defect).
+          # Sharding does not touch this: the FULL set is counted here, on
+          # every shard, BEFORE the residue filter below. It is a floor, so
+          # ADDING suites never requires touching it; only deliberately
+          # removing a suite does, which is the intended forcing function
+          # (see project Rule: do not delete the test that exposed a defect).
           if [ "$N_EXPECTED" -lt 12 ]; then
             echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 12)."
             echo "A tests/qemu/test_kmod_*.c or test_syssvc_*.c was deleted. Deleting an executive"
@@ -1739,12 +1801,35 @@ jobs:
             exit 1
           fi
 
+          # Filter the full expected set to THIS shard's residue class, using
+          # the SAME hash the guest applied (md5 first-6-hex mod SHARD_TOTAL).
+          SHARD_EXPECTED=""
+          for suite in $EXPECTED; do
+            h=$(printf '%s' "$suite" | md5sum | cut -c1-6)
+            if [ "$(( 0x$h % SHARD_TOTAL ))" -eq "$SHARD_INDEX" ]; then
+              SHARD_EXPECTED="$SHARD_EXPECTED $suite"
+            fi
+          done
+          N_SHARD=$(printf '%s\n' $SHARD_EXPECTED | grep -c . || true)
+          echo "Shard $SHARD_INDEX/$SHARD_TOTAL owns $N_SHARD of $N_EXPECTED kmod/syssvc suites:"
+          printf '  %s\n' $SHARD_EXPECTED
+
+          # A shard that asserts on NOTHING is a toothless leg -- with ~79
+          # suites over 6 shards this cannot happen, but guard it so a future
+          # N > suite-count (or a hash collapse) fails loudly instead of
+          # passing vacuously.
+          if [ "$N_SHARD" -lt 1 ]; then
+            echo "FAIL: shard $SHARD_INDEX/$SHARD_TOTAL was assigned NO suites -- the partition is degenerate (too many shards for the suite count, or the hash is broken)."
+            exit 1
+          fi
+
           # init.sh prints one verdict line per staged binary it actually
           # execs, carrying the binary's REAL exit status. A missing line
           # proves the binary never ran (dropped by the build or the
-          # initramfs copy); rc!=0 proves it ran and failed.
+          # initramfs copy); rc!=0 proves it ran and failed. We check only
+          # THIS shard's assigned suites -- the others ran in sibling shards.
           BAD=""
-          for suite in $EXPECTED; do
+          for suite in $SHARD_EXPECTED; do
             line=$(echo "$OUTPUT" | grep -F "=== SUITE $suite rc=" | tail -1)
             if [ -z "$line" ]; then
               BAD="$BAD
@@ -1765,7 +1850,7 @@ jobs:
             vmsfs.ko: did not load / filesystem not registered"
 
           if [ -n "$BAD" ]; then
-            echo "FAIL: kernel-executive suite verdicts not all clean:$BAD"
+            echo "FAIL: kernel-executive suite verdicts not all clean (shard $SHARD_INDEX/$SHARD_TOTAL):$BAD"
             exit 1
           fi
 
@@ -1774,11 +1859,100 @@ jobs:
           # suite that failed inside init.sh's accounting without producing
           # a verdict line at all (e.g. a harness edit that reorders them),
           # and it proves the harness reached its own accounting rather than
-          # panicking or timing out mid-run.
+          # panicking or timing out mid-run. Per shard the "passed" count is
+          # this shard's subset; "0 suites failed" is what matters.
           echo "$OUTPUT" | grep -qE '=== FINAL RESULTS: [0-9]+ suites passed, 0 suites failed ===' \
             || { echo "FAIL: expected a '<N> suites passed, 0 suites failed' split -- a suite failed, or the harness never reached its own accounting (panic/timeout)"; exit 1; }
 
-          echo "PASS: all $N_EXPECTED derived suites ran with rc=0 against a real /dev/vms, both modules loaded"
+          echo "PASS: shard $SHARD_INDEX/$SHARD_TOTAL -- all $N_SHARD assigned suites ran with rc=0 against a real /dev/vms, both modules loaded"
+
+  # -----------------------------------------------------------------------
+  # Job 3b-aggregate: Kernel Executive (vms.ko via /dev/vms, QEMU) — REQUIRED
+  # CHECK NAME PRESERVED (rd vms-ea7)
+  #
+  # This job exists ONLY to keep the exact status-check name the single
+  # pre-sharding job reported -- 'Kernel Executive (vms.ko via /dev/vms,
+  # QEMU)' -- so any branch-protection required check keyed on that name still
+  # resolves after the split into `kernel-executive-shard` matrix legs. It
+  # needs: all shards (as a matrix, `needs.kernel-executive-shard.result` is
+  # `success` iff EVERY leg succeeded) and is green iff every shard is green.
+  #
+  # if: always() so this REPORTS on every run (a needed job that failed would
+  # otherwise SKIP this by default -- which branch protection reads as a
+  # non-blocking skipped check, the exact false-green trap). With always() we
+  # run regardless and assert the shard matrix result explicitly:
+  #   success  -> every shard passed                       -> PASS
+  #   skipped  -> shards did not run (no kernel change on a PR; the original
+  #               job skipped in the same case) -> gate not applicable -> PASS
+  #   *        -> at least one shard failed/cancelled       -> FAIL
+  # A skipped-matrix PASS mirrors the original job's `if:` skip behavior; it
+  # cannot mask a real failure, because a real shard failure yields result
+  # 'failure', not 'skipped'.
+  # -----------------------------------------------------------------------
+  kernel-executive:
+    name: Kernel Executive (vms.ko via /dev/vms, QEMU)
+    needs: [kernel-executive-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # COVERAGE / UNION PROOF (vms-ea7): re-derive the full suite set and
+      # assign each to a shard with the SAME md5(name) mod N the guest and the
+      # shard verification use, then prove the partition is well-formed --
+      # every suite lands in exactly one shard in [0,N), and the union of the
+      # per-shard counts equals the total (no suite dropped, no overlap). N is
+      # read from the shard matrix's own list so it cannot drift from the legs.
+      - name: Prove the shard partition covers every suite exactly once (union = all)
+        run: |
+          N=$(sed -n 's/^ *shard: \[\(.*\)\].*/\1/p' .github/workflows/ci.yml \
+              | head -1 | tr ',' '\n' | grep -c '[0-9]')
+          echo "shard count N derived from the matrix list: $N"
+          [ "$N" -ge 2 ] || { echo "FAIL: could not derive N>=2 shards from the matrix"; exit 1; }
+          # Every suite init.sh actually runs (all four families), so the union
+          # proof covers the whole run, not just the kmod/syssvc subset the
+          # per-shard verdict check asserts.
+          ALL=$(ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c \
+                   tests/qemu/test_imgact_*.c tests/qemu/test_corpus_*.c \
+                | xargs -n1 basename | sed 's/\.c$//' | sort)
+          TOTAL=$(echo "$ALL" | grep -c .)
+          covered=0
+          i=0
+          while [ "$i" -lt "$N" ]; do
+            c=0
+            for s in $ALL; do
+              h=$(printf '%s' "$s" | md5sum | cut -c1-6)
+              [ "$(( 0x$h % N ))" -eq "$i" ] && c=$((c+1))
+            done
+            echo "  shard $i/$N: $c suites"
+            covered=$((covered + c))
+            i=$((i+1))
+          done
+          echo "total suites: $TOTAL ; sum over shards: $covered"
+          if [ "$covered" -ne "$TOTAL" ]; then
+            echo "FAIL: union of shards ($covered) != total suites ($TOTAL) -- a residue-class partition must cover every suite exactly once."
+            exit 1
+          fi
+          echo "PASS: the $N-way md5(name) mod N partition covers all $TOTAL suites exactly once (no gap, no overlap)."
+
+      - name: Aggregate — every KE shard passed (preserves the required-check name)
+        run: |
+          result='${{ needs.kernel-executive-shard.result }}'
+          echo "kernel-executive-shard matrix result: $result"
+          case "$result" in
+            success)
+              echo "PASS: every Kernel Executive shard passed against a real /dev/vms."
+              ;;
+            skipped)
+              echo "SKIPPED: the KE shard matrix did not run (no kernel-affecting change on this PR) -- the original single job skipped in the same case. Gate not applicable; reporting green under the required-check name."
+              ;;
+            *)
+              echo "FAIL: the KE shard matrix result is '$result' -- at least one shard failed or was cancelled. The executive gate is RED."
+              exit 1
+              ;;
+          esac
 
   # -----------------------------------------------------------------------
   # Job 3c: Kernel Executive — negative control (vms-e4d)

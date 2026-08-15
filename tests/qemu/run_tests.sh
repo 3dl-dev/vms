@@ -38,6 +38,26 @@ KERNEL=/boot/vmlinuz
 INITRD=/initramfs.cpio.gz
 ARCH=$(uname -m)
 
+# SUITE SHARDING (rd vms-ea7). This whole-VM wall (TIMEOUT above) is a fixed
+# budget; a pathologically slow (~10x) GitHub TCG runner walled the full
+# ~79-suite run at 60/79. The durable fix is to boot N of these VMs in
+# parallel (a ci.yml matrix), each running ~1/N of the suites, so the SAME
+# 600s wall trivially covers a ~13-suite subset regardless of runner speed --
+# rather than chasing unbounded runner variance with an ever-bigger wall (Rule
+# 8: sharding is the fix, not a bigger wall; the wall is unchanged at 600s).
+#
+# The coordinates are passed to the guest ON THE KERNEL COMMAND LINE
+# (ovmx.shard / ovmx.shards); init.sh parses them and runs only its residue
+# class by md5(name) mod N. The DEFAULT is shard 0 of 1 = run everything, so
+# every existing caller (the negative-control image, a bare `docker run
+# ovmx-ktest`) is byte-for-byte unaffected -- only a caller that sets these
+# env vars shards. Set via `docker run -e SHARD_INDEX=I -e SHARD_TOTAL=N`.
+SHARD_INDEX=${SHARD_INDEX:-0}
+SHARD_TOTAL=${SHARD_TOTAL:-1}
+case "$SHARD_TOTAL" in ''|*[!0-9]*|0) SHARD_TOTAL=1 ;; esac
+case "$SHARD_INDEX" in ''|*[!0-9]*) SHARD_INDEX=0 ;; esac
+KCMD_SHARD="ovmx.shard=$SHARD_INDEX ovmx.shards=$SHARD_TOTAL"
+
 # ASSERTION TRANSCRIPT (vms-b5b round 2). ttyS0 (below) carries the boot
 # banner, kernel printk and init.sh's own aggregate lines -- exactly what it
 # always has. A SECOND serial port, ttyS1, is wired to a plain file so that
@@ -101,6 +121,7 @@ echo "Architecture: $ARCH"
 echo "QEMU: $QEMU"
 echo "Kernel: $KERNEL ($(ls -lh $KERNEL | awk '{print $5}'))"
 echo "Initrd: $INITRD ($(ls -lh $INITRD | awk '{print $5}'))"
+echo "Shard: $SHARD_INDEX of $SHARD_TOTAL (kernel cmdline: $KCMD_SHARD)"
 echo ""
 
 # Run QEMU with serial on stdio, capture all output.
@@ -115,7 +136,7 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
     -nographic \
-    -append "$CONSOLE panic=-1 loglevel=4" \
+    -append "$CONSOLE panic=-1 loglevel=4 $KCMD_SHARD" \
     -m 256M \
     -no-reboot \
     -smp 1 \

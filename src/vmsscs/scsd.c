@@ -324,6 +324,44 @@ static uint8_t resolve_alloclass(void)
 }
 
 /*
+ * resolve_votes / resolve_expected_votes - Read the operator-authored VOTES and
+ * EXPECTED_VOTES back from the SYSGEN store (OVMXVMSSYS.PAR; honors
+ * OVMX_SYSGEN_PATH), exactly the way resolve_alloclass() reads ALLOCLASS. Both
+ * default to 1 (VSI OpenVMS System Management Utilities Reference Manual, SYSGEN
+ * parameter defaults; the same defaults tools/vms_sysgen.c's table carries).
+ *
+ * SCOPE (vms-495, epic vms-098 R1.3): these are the read-back ADOPTION surface
+ * for the quorum-identity params -- the value the operator authored via SYSGEN /
+ * SYSMAN and WRITE CURRENT, read fresh off the persisted store so a rebooted
+ * executive is shown to adopt exactly what was authored (not a per-process fake;
+ * INV-6). They are read and REPORTED ONLY. They deliberately do NOT touch any
+ * wire frame and do NOT drive quorum: the on-wire VOTES field stays the
+ * deliberate VOTES=0 non-voting join, and the live two-node VC quorum recompute
+ * from authored VOTES remains vms-41d (the operator-reserved R1-split, owned by
+ * the cluster-wire session). Reading the authored config value back is the
+ * config-adoption slice R1.3 proves; consuming it on the wire is not.
+ *
+ * Returns the authored value, or the documented default 1 when unconfigured.
+ */
+static uint16_t resolve_votes(void)
+{
+    uint32_t v = 1;
+    if (sysgen_read_param("VOTES", &v) == 0) {
+        return (uint16_t)(v & 0xffffu);
+    }
+    return 1u;
+}
+
+static uint16_t resolve_expected_votes(void)
+{
+    uint32_t v = 1;
+    if (sysgen_read_param("EXPECTED_VOTES", &v) == 0) {
+        return (uint16_t)(v & 0xffffu);
+    }
+    return 1u;
+}
+
+/*
  * ovmx_cluster_logical - vms-9f3: compute OVMX's cluster-LOGICAL LAVC address
  * from its SCSSYSTEMID. GROUNDED convention (spec sec 3 decoder ring + README-lab):
  * a cluster node's logical addr is aa:00:04:00:<LE16(SCSSYSTEMID)>, e.g. VAX2
@@ -12549,9 +12587,19 @@ int main(int argc, char **argv)
              * a fresh SCSD picks them up here. It opens NO raw socket and needs
              * no privilege -- it is a pure read of the persisted param store, so
              * the store->boot->scsd round trip is genuine, not a per-process
-             * fake (INV-6). It touches NO wire frame and does NOT read or emit
-             * VOTES (the deliberate VOTES=0 non-voting join is untouched;
-             * VOTES/quorum reconciliation is vms-41d, the cluster-wire session).
+             * fake (INV-6). It touches NO wire frame.
+             *
+             * vms-495 (epic vms-098 R1.3): the read-back set now also carries
+             * the operator-authored VOTES and EXPECTED_VOTES, resolved the same
+             * pure-read way (resolve_votes/resolve_expected_votes -> the SYSGEN
+             * store), so the R1 across-reboot proof can read the authored quorum
+             * identity back from a FRESH SCSD after a reboot. This reports the
+             * authored CONFIG value only; it still touches NO wire frame -- the
+             * on-wire VOTES field stays the deliberate VOTES=0 non-voting join,
+             * and the live two-node VC quorum recompute from authored VOTES
+             * remains vms-41d (the operator-reserved R1-split, cluster-wire
+             * session). Reading the authored value back is config adoption;
+             * consuming it on the wire / in quorum is not, and is not done here.
              *
              * A named store that carries SCSNODE but fails to yield it is fatal
              * here for the same reason it is fatal on a real boot
@@ -12562,6 +12610,8 @@ int main(int argc, char **argv)
             }
             uint16_t idsysid = resolve_scssystemid();
             uint8_t  idalloc = resolve_alloclass();
+            uint16_t idvotes = resolve_votes();
+            uint16_t idxvotes = resolve_expected_votes();
             /* vms-c3b: RECNXINTERVAL is adopted the same read-side way, through
              * scsd_recnxinterval() -> sysgen_read_param() on the persisted
              * store. Reported here so the config-authoring proof can read back
@@ -12570,8 +12620,9 @@ int main(int argc, char **argv)
              * it does not touch the reconnect wire logic (vms-694). */
             unsigned idrecnx = scsd_recnxinterval();
             printf("SCSD-I-IDENT, SCSNODE=%s SCSSYSTEMID=%u ALLOCLASS=%u"
-                   " RECNXINTERVAL=%u\n",
-                   idnode, (unsigned)idsysid, (unsigned)idalloc, idrecnx);
+                   " RECNXINTERVAL=%u VOTES=%u EXPECTED_VOTES=%u\n",
+                   idnode, (unsigned)idsysid, (unsigned)idalloc, idrecnx,
+                   (unsigned)idvotes, (unsigned)idxvotes);
             fflush(stdout);
             return 0;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -12596,8 +12647,9 @@ int main(int argc, char **argv)
                     "  --show-identity     print the cluster identity params this\n"
                     "                      node adopts from the SYSGEN store\n"
                     "                      (SCSNODE/SCSSYSTEMID/ALLOCLASS/\n"
-                    "                      RECNXINTERVAL) and exit; opens no\n"
-                    "                      socket (vms-9cf, vms-c3b)\n",
+                    "                      RECNXINTERVAL/VOTES/EXPECTED_VOTES)\n"
+                    "                      and exit; opens no socket\n"
+                    "                      (vms-9cf, vms-c3b, vms-495)\n",
                     argv[0], SCA_ETHERTYPE, HELLO_DEFAULT_INTERVAL_SEC);
             return 0;
         }

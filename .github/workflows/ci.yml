@@ -127,6 +127,10 @@ jobs:
               - 'tests/qemu/test_cluster_params_recnx_e2e.sh'
               - 'tests/qemu/test_cluster_params_recnx_negctl.sh'
               - 'tests/qemu/run_cluster_params_recnx_e2e.sh'
+              - 'tests/qemu/test_cluster_param_adoption.sh'
+              - 'tests/qemu/test_cluster_param_adoption_negctl.sh'
+              - 'tests/qemu/run_cluster_param_adoption_e2e.sh'
+              - 'src/vmsscs/scsd.c'
               - 'tests/uat/**'
             release:
               - '.github/workflows/**'
@@ -1468,6 +1472,62 @@ jobs:
           rc=$?
           if [ "$rc" -eq 77 ]; then
             echo "FATAL: cluster_params_recnx_e2e SKIPPED in CI — this gate must actually run the real boot, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2f: cluster params adopted ACROSS REBOOT -- the R1 release proof
+  # (vms-495, epic vms-098 R1.3)
+  #
+  # R1.1 (cluster-params-recnx-e2e above) proves authoring->persist->adopt within
+  # ONE boot. This gate proves the R1 acceptance that one does not: a FRESH
+  # executive booted from the SAME persistent disk on a later power cycle comes
+  # up already carrying the authored cluster identity/quorum set. Boot 1 authors
+  # SCSNODE/SCSSYSTEMID/VOTES/EXPECTED_VOTES via SYSGEN + WRITE CURRENT; boot 2
+  # (a new PID 1 on the same disk) is shown to adopt every value -- boot console
+  # SCSNODE line, a fresh SCSD --show-identity read-back, and F$GETSYI. A CONTROL
+  # BRACKET disk authored with DIFFERENT values boots with THOSE; the runner runs
+  # the paired MEASURED negative control (unauthored store -> seed defaults,
+  # never the authored identity) FIRST. See tests/qemu/test_cluster_param_
+  # adoption.sh's header.
+  #
+  # Same SKIP_RETURN_CODE 77 => hard CI failure convention as the other e2e
+  # gates: this gate must actually run the real boot, never skip silently.
+  # -----------------------------------------------------------------------
+  cluster-param-adoption-e2e:
+    name: Cluster params adopted across reboot (vms-495)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.boot == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Cluster-param adoption e2e — author, reboot, adopt (+ control + negctl)
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_cluster_param_adoption_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: cluster_param_adoption_e2e SKIPPED in CI — this gate must actually run the real boot, never skip silently." >&2
             exit 1
           fi
           exit "$rc"

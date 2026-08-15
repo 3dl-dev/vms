@@ -421,6 +421,7 @@ long vms_ioctl_bg_accept(struct vms_proc *proc, unsigned long arg)
     struct vms_bg_accept_args args;
     struct vms_bg_chan *lch, *tch;
     struct socket *lsock, *tsock, *newsock = NULL;
+    struct vms_bg_socket *newbs = NULL;
     struct sockaddr_in peer;
     int rc;
 
@@ -464,19 +465,35 @@ long vms_ioctl_bg_accept(struct vms_proc *proc, unsigned long arg)
         args.sin_addr = peer.sin_addr.s_addr;
     }
 
-    /* Install the accepted socket onto the target channel, under the lock, only
-     * if the channel is still present and still empty. */
+    /* Wrap the accepted socket in a refcounted holder -- the channel's one
+     * reference -- exactly as IO$_SETMODE does for a created socket (#566). This
+     * is what makes the accepted channel's socket + any later readiness poll fd
+     * (VMS_IOCTL_BG_POLLFD) share the same lifetime as a connected channel's:
+     * the socket is reached through ch->bs->sock and released by the last kref,
+     * never a bare ch->sock. Allocate before the lock (GFP_KERNEL may sleep). */
+    newbs = kmalloc(sizeof(*newbs), GFP_KERNEL);
+    if (!newbs) {
+        sock_release(newsock);
+        args.status = SS__ABORT;
+        goto out;
+    }
+    newbs->sock = newsock;
+    kref_init(&newbs->kref);        /* the target channel's reference */
+
+    /* Install the accepted socket's holder onto the target channel, under the
+     * lock, only if the channel is still present and still empty. */
     spin_lock(&proc->chan_lock);
     tch = bgchan_find_locked(proc, args.accept_chan);
-    if (tch && !tch->sock) {
-        tch->sock = newsock;        /* HANDOFF: accepted socket -> target channel */
-        newsock = NULL;
+    if (tch && !tch->bs) {
+        tch->bs = newbs;            /* HANDOFF: accepted socket -> target channel */
+        newbs = NULL;
     }
     spin_unlock(&proc->chan_lock);
 
-    if (newsock) {
-        /* Target vanished or filled underneath us; do not leak the socket. */
-        sock_release(newsock);
+    if (newbs) {
+        /* Target vanished or filled underneath us; do not leak the socket. The
+         * last (only) kref drop releases the host socket and frees the holder. */
+        kref_put(&newbs->kref, vms_bg_socket_free);
         args.status = SS__IVCHAN;
         goto out;
     }

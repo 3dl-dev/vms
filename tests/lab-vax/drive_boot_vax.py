@@ -160,6 +160,50 @@ def console(child):
     return _con
 
 
+def expect_wake(child, patterns, total_timeout, wake_period=1.0):
+    """child.expect(patterns, timeout=total_timeout), but sends a bare CR to
+    the console once every `wake_period` seconds while waiting -- the vax
+    analogue of every tests/qemu/*.sh harness's `wake_login()`/`send ''`
+    helper (grep vms-2213: OPA0: LOGINOUT blocks in a getchar() loop for the
+    operator's RETURN, tools/vms_login.c console_login(), before it prints
+    SYS$ANNOUNCE + "Username:" -- the classic "press RETURN to log in"
+    console behaviour, VSI OpenVMS System Manager's Manual Vol I). Every
+    Linux/QEMU boot proof already feeds that keystroke; THIS driver never
+    did, so an unattended sysboot run stalled forever at JOB_CONTROL's
+    freshly-forked LOGINOUT with the console gone silent right after
+    "%RUN-S-PROC_ID, identification of created process is ..." -- exactly
+    the vms-84fe symptom. A stray CR reaching the console before JOB_CONTROL
+    exists is harmless: nothing else on OPA0: (STARTUP.COM's DCL process,
+    PID 1) ever reads stdin, so the keystrokes just wait in the tty's input
+    queue -- LOGINOUT's own wake loop discards any extra type-ahead
+    (vms-3ab8) before it prompts.
+
+    Same TIMEOUT/EOF discipline as every other expect() in this file: never
+    put pexpect.TIMEOUT/pexpect.EOF in `patterns` (anita's logging expect()
+    wrapper unconditionally calls self.match.group(0) on the return, which
+    crashes on the TIMEOUT/EOF sentinel) -- a real timeout/EOF here RAISES,
+    exactly like a plain child.expect() call, for the caller's existing
+    try/except to catch."""
+    import time
+    import pexpect
+
+    deadline = time.monotonic() + total_timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise pexpect.TIMEOUT(
+                "expect_wake budget (%ds) exhausted waiting for %r"
+                % (total_timeout, patterns))
+        try:
+            return child.expect(patterns, timeout=min(wake_period, remaining))
+        except pexpect.TIMEOUT:
+            try:
+                child.send("\r")
+            except Exception:
+                pass
+            continue
+
+
 def run(child, cmd, timeout, echo=True):
     return console(child).run(cmd, timeout, echo)
 
@@ -505,8 +549,11 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline):
     the netbsd-vax logical-name facility have landed): the run now REQUIRES that
     PROVISION.EXE demand-pages + RUNS (MS_PROVISION_RUNNING -- the executive
     establishes SYSTEM identity) and that the logical-name layer lets it CLEAR the
-    old %DCL-E-LNMFAIL / %DCL-E-IVLOGNAM loop -- reaching Username: (the DCL
-    capstone, vms-d59) or the next honest gap (e.g. RW-ODS2, vms-e7a). A boot that
+    old %DCL-E-LNMFAIL / %DCL-E-IVLOGNAM loop, and (rd vms-84fe, tightened again)
+    that the boot goes on to reach Username: -- the DCL capstone, vms-d59 -- which
+    is now REQUIRED, not scouting: see expect_wake() and main()'s pass bar for why
+    an unattended run needs to feed OPA0: a CR (vms-2213's operator-RETURN wait)
+    to ever get there. A boot that
     halts at %OVMX-F-EXECINIT (PROVISION.EXE missing -- the stale-volume boundary)
     or loops on LNMFAIL is a FAILURE, not the "expected boundary" it used to be.
     Nothing is faked into a login the boot did not reach (INV-6)."""
@@ -621,12 +668,15 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline):
         if seen.get("provision_running"):
             try:
                 # Same anita caveat as STEP 1: NO pexpect.EOF/TIMEOUT in the list.
-                # This is pure SCOUTING -- the vms-72da PASS is already decided by
-                # provision_running (SYSTEM identity) + absence of LNMFAIL; reaching
-                # Username: is the SEPARATE vms-d59 capstone, not gated here.
-                idx = child.expect([MS_PROVISION_LOGIN, MS_PROVISION_LNMFAIL,
-                                    MS_PROVISION_IVLOGNAM, MS_PROVISION_HALT,
-                                    MS_PROVISION_NOIMG], timeout=300)
+                # rd vms-84fe: THIS wait now GATES the vms-d59 DCL capstone (reaching
+                # Username: is required to pass, see main()'s pass bar below), so it
+                # must actually give LOGINOUT the operator RETURN it is blocking on
+                # -- expect_wake() feeds a CR once a second the whole time, the same
+                # wake_login()/`send ''` every tests/qemu/*.sh boot proof already
+                # does for the Linux runtime (vms-2213).
+                idx = expect_wake(child, [MS_PROVISION_LOGIN, MS_PROVISION_LNMFAIL,
+                                          MS_PROVISION_IVLOGNAM, MS_PROVISION_HALT,
+                                          MS_PROVISION_NOIMG], total_timeout=300)
                 if idx == 0:
                     seen["login"] = True
                     seen["provision_outcome"] = "LOGIN(Username:) -- DCL capstone (vms-d59)"
@@ -839,28 +889,45 @@ def main():
                     "not proof of a real write; need this positive signal too)"
                     % MS_STARTUP_EXECUTING)
                 return 1
-            # PASS BAR (rd vms-72da): PROVISION.EXE ran (the specific
-            # "%OVMX-I-EXEC, system identity SYSTEM" marker) AND no LNMFAIL. That is
-            # this proof's deliverable -- the executive LNM$SYSTEM define/translate
-            # roundtrip created the system logicals. Reaching Username: is the
-            # SEPARATE DCL login capstone (vms-d59), captured as scouting, NOT gated
-            # here. This still has teeth: it FAILS if PROVISION does not run
-            # (provision_running unset) or the LNM loop regresses (lnmfail set).
+            # PASS BAR (rd vms-84fe, tightened from vms-72da's "next honest gap"
+            # bar): reaching Username: -- the vms-d59 DCL login capstone -- is now
+            # REQUIRED, not scouting. Diagnosis (vms-84fe): STARTUP.COM's END-phase
+            # RUN/DETACHED correctly creates JOB_CONTROL (the "%RUN-S-PROC_ID,
+            # identification of created process is ..." line every prior nightly
+            # run stopped dead after), which forks LOGINOUT.EXE on OPA0: -- but
+            # LOGINOUT's console_login() (tools/vms_login.c, vms-2213) blocks in a
+            # getchar() wake-wait for the OPERATOR'S RETURN before it will print
+            # SYS$ANNOUNCE + "Username:" (the documented "press RETURN to log in"
+            # OPA0: behaviour). Every Linux/QEMU boot proof already feeds that
+            # keystroke (wake_login()/`send ''` in a dozen tests/qemu/*.sh
+            # scripts); THIS driver watched the console PASSIVELY and never sent
+            # it, so an unattended run stalled forever waiting for a RETURN nobody
+            # would ever send -- not a JOB_CONTROL/LOGINOUT defect, a harness gap.
+            # STEP 2's wait above now uses expect_wake() (vms-84fe) to feed that
+            # same CR, so a real boot can actually reach the prompt here. This
+            # still has teeth on every prior gate: it FAILS if PROVISION does not
+            # run (provision_running unset), the LNM loop regresses (lnmfail set),
+            # the OWNER path breaks (owner_warn_count), STARTUP never visibly runs
+            # (startup_executing unset) -- OR the login prompt itself never
+            # appears within the (CR-fed) window (seen.get("login") unset), which
+            # is now a hard FAIL rather than a tolerated "next honest gap".
+            if not seen.get("login"):
+                log("FAIL: PROVISION ran, the logical-name layer cleared (no "
+                    "LNMFAIL), OWNER stamping succeeded, and STARTUP.COM visibly "
+                    "executed -- but the boot never reached Username: even with "
+                    "the CR wake-loop feeding LOGINOUT's OPA0: RETURN-wait "
+                    "(vms-2213). This is a NEW boundary past vms-84fe's fix; "
+                    "outcome: %s" % seen.get("provision_outcome", "unknown"))
+                return 1
             log("======================================================================")
             log("  SYSBOOT PASSED: ovmx_init booted as PID 1 on NetBSD/vax, mounted the")
             log("  MASTERED OVMX ODS-2 system volume READ-WRITE, passed the installed-")
             log("  system gate, PROVISION.EXE DEMAND-PAGED + RAN (SYSTEM identity")
-            log("  established), and stamped UIC file ownership on the RW-ODS2 volume")
-            log("  with ZERO %%OVMX-W-OWNER warnings -- and STARTUP.COM was seen ACTIVELY")
-            log("  EXECUTING commands, not merely an absence of errors (rd vms-e7a).")
-            if seen.get("login"):
-                log("  *** DCL CAPSTONE (vms-d59): the boot CLEARED the logical-name")
-                log("  *** layer (vms-72da) and reached Username:. ***")
-            else:
-                log("  The logical-name layer is CLEARED (vms-72da): PROVISION created")
-                log("  the system logicals with no %DCL-E-LNMFAIL, and STARTUP advanced")
-                log("  to the next honest gap -- outcome: %s"
-                    % seen.get("provision_outcome", "next gap"))
+            log("  established), stamped UIC file ownership on the RW-ODS2 volume with")
+            log("  ZERO %%OVMX-W-OWNER warnings, STARTUP.COM was seen ACTIVELY EXECUTING")
+            log("  commands, and JOB_CONTROL's LOGINOUT reached the console prompt.")
+            log("  *** DCL CAPSTONE (vms-d59): the boot CLEARED the logical-name layer")
+            log("  *** (vms-72da) and reached a real interactive Username: prompt. ***")
             log("======================================================================")
             return 0
 

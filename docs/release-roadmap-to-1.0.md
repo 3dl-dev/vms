@@ -51,7 +51,7 @@ calling anything short of that bar 1.0.
 
 ## Live status — generated
 
-> Reconciled from rd (source of truth) **as of 2026-08-14** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
+> Reconciled from rd (source of truth) **as of 2026-08-15** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
 
 ### Milestone ladder
 
@@ -59,100 +59,31 @@ calling anything short of that bar 1.0.
 |---|---|---|---:|---:|---:|---:|
 | **0.3** | A real system — the command language, file system, system services, and kernel executive stand on their own. | SHIPPED | 0 | 0 | 0 | — |
 | **0.4** | Installs and boots faithfully — the product installs to a target disk and reboots into a login. | SHIPPED | 0 | 0 | 0 | — |
-| **0.5** | Foundations for the network and the toolchain — a shared-state executive, VMS-faithful cluster configuration, a self-hosting toolchain, and a kernel substrate of its own. | in progress | 9 | 16 | 2 | 36% |
-| **0.6** | Cluster correctness — quorum and reconfiguration, a real distributed lock manager, and cluster membership resident in the executive. | planned | 0 | 4 | 0 | 0% |
-| **0.7** | Cluster wire fidelity — the SCS/MSCP connection manager answers a real VAX byte-for-byte. | planned | 0 | 6 | 0 | 0% |
-| **0.8** | Rejoin and satellite boot — a removed node rejoins under its own identity; diskless satellites boot from a served disk. | planned | 0 | 4 | 1 | 0% |
-| **1.0** | Joins and serves a real cluster, and runs the software — a voting member that serves genuine ODS-2 storage, holds locks, and evacuates a live node. | 1.0 goal | 1 | 15 | 8 | 6% |
+| **0.5** | Foundations for the network and the toolchain — a shared-state executive, VMS-faithful cluster configuration, a self-hosting toolchain, and a kernel substrate of its own. | planned | 0 | 0 | 0 | — |
+| **0.6** | Cluster correctness — quorum and reconfiguration, a real distributed lock manager, and cluster membership resident in the executive. | planned | 0 | 0 | 0 | — |
+| **0.7** | Cluster wire fidelity — the SCS/MSCP connection manager answers a real VAX byte-for-byte. | planned | 0 | 0 | 0 | — |
+| **0.8** | Rejoin and satellite boot — a removed node rejoins under its own identity; diskless satellites boot from a served disk. | planned | 0 | 0 | 0 | — |
+| **1.0** | Joins and serves a real cluster, and runs the software — a voting member that serves genuine ODS-2 storage, holds locks, and evacuates a live node. | 1.0 goal | 0 | 0 | 0 | — |
 
 ### 1.0-gate workstreams (epic rollups)
 
 | Workstream | Epic | Lands by | Status | Done/Total | Blocked |
 |---|---|---|---|---:|---:|
-| Executive substrate | `vms-6b8` | 0.5 | in progress | 17/22 | 0 |
-| Command-surface parity | `vms-8ad` | continuous | in progress | 37/73 | 0 |
-| Self-hosting toolchain | `vms-678` | 0.5→1.0 | in progress | 15/23 | 2 |
-| Cluster configuration | `vms-098` | 0.5→1.0 | in progress | 1/6 | 4 |
-| TCP/IP networking | `vms-67f` | 0.5→1.0 | in progress | 5/9 | 2 |
-| DECnet Phase IV | `vms-30e` | 1.0 | in progress | 4/11 | 6 |
-| Kernel substrate | `vms-19e` | 0.5 | in progress | 5/8 | 1 |
-| VAX as a first-class platform | `vms-8e8` | 0.5→1.0 | in progress | 49/61 | 4 |
+| Executive substrate | `vms-6b8` | 0.5 | MISSING | 0/0 | 0 |
+| Command-surface parity | `vms-8ad` | continuous | MISSING | 0/0 | 0 |
+| Self-hosting toolchain | `vms-678` | 0.5→1.0 | MISSING | 0/0 | 0 |
+| Cluster configuration | `vms-098` | 0.5→1.0 | MISSING | 0/0 | 0 |
+| TCP/IP networking | `vms-67f` | 0.5→1.0 | MISSING | 0/0 | 0 |
+| DECnet Phase IV | `vms-30e` | 1.0 | MISSING | 0/0 | 0 |
+| Kernel substrate | `vms-19e` | 0.5 | MISSING | 0/0 | 0 |
+| VAX as a first-class platform | `vms-8e8` | 0.5→1.0 | MISSING | 0/0 | 0 |
 
 ### Per-milestone items (rd)
 
-**0.5** — rel-0.5 (9/25 done)
-
-- `vms-098` [inbox] VMS-faithful cluster configuration: operator provisions a node into a cluster the VMS way (SYSGEN -> MODPARAMS/AUTOGEN -> CLUSTER_AUTHORIZE -> CLUSTER_CONFIG_LAN.COM)
-- `vms-195` [done] DCL prompt/echo race (d$ ir): async mailbox prompt vs tty echo
-- `vms-19e` [inbox] OVMX owns its kernel: self-built + curated + untainted + signed, with an in-tree home for VMS modules
-- `vms-272` [done] DCL SET DEFAULT corrupts volume root [000000] to [VMS] + silent no-op
-- `vms-3251` [inbox] Cluster docs: write + keep current the Cluster Systems manual and the Installation Guide clustering sections as cluster-config UX lands (release engineering owns)
-- `vms-37b` [blocked] R1: cluster SYSGEN params authored the VMS way, adopted on reboot (SCSNODE/SCSSYSTEMID/VOTES/EXPECTED_VOTES/RECNXINTERVAL/ALLOCLASS via SYSGEN.EXE + SYSMAN PARAMETERS SET/SHOW/WRITE)
-- `vms-405` [inbox] Cluster group number + password: establish whether OVMX must authenticate
-- `vms-47d` [inbox] DESIGN CHANGE: device-native-naming — VMS-visible device names track the NATIVE KERNEL device name (Linux: sda→SDA0:, eth0→ETH0:; NetBSD names on the NetBSD SYSKRNL), VMS logical layer intact
-- `vms-544d` [done] the ODS-2 system disk MOUNTS + READS on netbsd-vax under SIMH (satisfies the PID-1 /vms mount)
-- `vms-678` [inbox] 1.0 GATE: self-hosting (Build-native) — OVMX builds OVMX from within, no bash in the build path, agent drives OVMX-native toolchain via DCL
-- `vms-67f` [inbox] TCP/IP Services for OVMX — VMS-faithful IP networking layered product
-- `vms-6b8` [active] THE EXECUTIVE GAP: OVMX has no shared system state — build a system-state substrate
-- `vms-732` [inbox] RE gap: CLUSTER_AUTHORIZE credential/nonce derivation — the (group#,password)->nonce hash is NOT recoverable from passive capture
-- `vms-7b1` [done] a bootable OVMX/NetBSD-vax system disk + custom kernel is ASSEMBLED from the OVMX build (Dockerfile.bootable/vmsfs_master analog); SIMH boots it unattended with ovmx_init as init
-- `vms-8747` [done] Repeatable roadmap reconcile + publish: rd (source of truth) → release-roadmap-to-1.0.md + status → openvmx-site, idempotent, run on every checkpoint
-- `vms-8ad` [active] VMS command-surface & tools parity (PROGRAM) — real breadth + depth, not facades
-- `vms-8d4` [done] DCL facade-kill: SHOW CLUSTER hardcodes NOTMEMBER — wire it to the real SCS daemon state (INV-DCL)
-- `vms-8e5` [inbox] P4-VFS: ODS-2/vmsfs factored for portability — one shared core, Linux + NetBSD VFS backends (no feature drift)
-- `vms-8e8` [inbox] EPIC: OVMX/NetBSD SYSKRNL — pluggable executive substrate to capture VAX as a first-class runtime
-- `vms-9172` [done] Build parity: every PR runs VAX cross-compile gates for the code it touches — a change that breaks the VAX kernel-module/userspace/image build REDS the PR (no feature merges broken on VAX)
-- `vms-953` [inbox] OVMX join triggered a real VMS Fatal CNXMGRERR bugcheck on the peer (vaxlab-0, 0feA1 run) -- check against the vms-2f3 rejoin
-- `vms-c99` [done] P4-C: full OVMX userspace cross-builds for netbsd-vax (library build order + RTL width)
-- `vms-ca5` [active] Release parity: release.yml builds + publishes VAX artifacts alongside aarch64/x86_64/alpha, and a release is NOT cut unless the VAX build gate passes (co-release, no lopsided cut)
-- `vms-eb8` [done] DCL DIRECTORY [SUB] relative bracketed arg lists against SYS$DISK not current default device
-- `vms-f4c` [blocked] R2: MODPARAMS.DAT + AUTOGEN drive cluster SYSGEN params (edit MODPARAMS -> AUTOGEN -> new .PAR version adopted at boot)
-
-**0.6** — rel-0.6 (0/4 done)
-
-- `vms-2d6` [inbox] Quorum loss: killing the only voting node produces NO reconfiguration -- survivors go silent (run q1)
-- `vms-407` [inbox] RMS reaches no arbitrator: FAB share/access and RAB record locking have no lock manager behind them
-- `vms-551` [inbox] Cluster membership crosses into the executive: SHOW CLUSTER / $GETSYI / cluster-wide locking see a real cluster through /dev/vms
-- `vms-7fa` [inbox] OVMX holds real distributed lock state and answers ENQ-class DLM requests
-
-**0.7** — rel-0.7 (0/6 done)
-
-- `vms-257` [inbox] scsd.c's MSCP accept path treats a real peer's REJECT_REQ/REJECT_RSP as ACCEPT/CONFIRM after vms-754's MTYPE 4/5 correction
-- `vms-298` [inbox] OVMX replays a stale send_seq + reuses a Con.ID when a peer opens a SECOND MSCP$DISK connect
-- `vms-41d` [inbox] RE gap: bind the vote/quorum bytes in the connection-manager connect/config body (no vote-config contrast on the current wire)
-- `vms-770` [inbox] vms-a61 audit: has_conid widening now causes scsd.c branch (c) to transmit a CONNECT-RESPONSE for previously-silent frame classes -- undisclosed wire-emission change, no lab bracket
-- `vms-7f4` [inbox] vms-a61 audit: removing scs_credit_header_offset's redundant pre-gate lets a conformant-but-non-allowlisted MTYPE-10 frame silently debit Send Credit and zero Pending Receive Credit with nothing transmitted
-- `vms-abd` [inbox] A real VAX REFUSES OVMX's DISCONNECT_REQ: Inappropriate SCA Control Message
-
-**0.8** — rel-0.8 (0/4 done)
-
-- `vms-2248` [inbox] op 0x02 REJOIN: member declines to reciprocate config on the joiner VC — the rejoin readmission blocker (NOT the op 0x02 body)
-- `vms-2f3` [waiting] OVMX cannot REJOIN a cluster it was just removed from, under the same SCSNODE/SCSSYSTEMID
-- `vms-4838` [inbox] REJOIN: drive op 0x02 CM readmission on the MEMBER-INITIATED VMS$VAXcluster connection (rejoiner=TARGET), not OVMX's own outbound joiner VC
-- `vms-ce7` [inbox] Complete diskless satellite boot: NISCS boot-time disk-server VC formation (no MOP load — VMB is ROM-resident) -> pure MSCP-served-disk-over-NISCA capture
-
-**1.0** — rel-1.0 (1/16 done)
-
-- `vms-065` [blocked] Runtime parity: the VAX boot-to-DCL SIMH proof joins the release acceptance gate so every co-release includes a working VAX runtime
-- `vms-30e` [inbox] DECnet Phase IV for OVMX — clean-room VMS-faithful networking layered product
-- `vms-476` [blocked] P4-B: the OVMX executive builds + loads on NetBSD-VAX under SIMH (/dev/vms live)
-- `vms-4834` [blocked] VAX installer: faithful-install model (media boots full OS -> PCSI kit -> bootable VAX system disk -> DCL), the netbsd-vax analog of the x86_64 installer (vms-718/vms-37f)
-- `vms-5eb` [waiting] Runtime SYS$DISK is host-FS passthrough, not real ODS-2 (faithfulness gap)
-- `vms-600` [blocked] OVMX becomes a real MSCP$DISK server: a VAX joins the cluster and mounts a disk served by OVMX
-- `vms-63a` [done] exec-from-vmsfs on netbsd-vax: a real vmsfs vnode pager (VOP_BMAP over the shared kernel-core retrieval-map + VOP_STRATEGY to devvp + UBC/getpages) so an ELF32-vax image (PROVISION.EXE) demand-pages + RUNS off the mounted ODS-2 volume — replaces vop_getpages_desc=genfs_eopnotsupp in vmsfs_vfsops.c
-- `vms-72da` [active] netbsd-vax executive logical-name layer: PROVISION's STARTUP phase cannot create the system logicals SYS$STARTUP/SYS$LOGIN/SYS$UPDATE (%DCL-E-LNMFAIL) → RMS FNF on VMS$PHASES.DAT → infinite %DCL-E-IVLOGNAM loop; image RUNS + identity SYSTEM[1,4] is established, so this is the LNM-table facility on netbsd-vax, the new blocker to Username:
-- `vms-945e` [inbox] every boot-required executive facility (proctab/CREPRC, lnm, mbx, ast, access) proven cross-process against the REAL /dev/vms on netbsd-vax (not just event flags; catches ILP32/float/ELF32 bugs amd64 can't)
-- `vms-9c6c` [blocked] R4 (capstone): CLUSTER_CONFIG_LAN.COM provisions OVMX into a cluster end-to-end (operator runs @SYS$MANAGER:CLUSTER_CONFIG_LAN.COM ADD -> node JOINS -> SHOW CLUSTER shows it)
-- `vms-a662` [inbox] Cluster-interop gate: OVMX's on-disk vmsfs is 'ODS-2-INSPIRED', NOT genuine ODS-2 (src/kernel/vmsfs/vmsfs_ondisk.h) — so a REAL VAX cannot MOUNT an OVMX MSCP-served volume. This blocks the vms-600 'a real VAX mounts the served unit and reads files' acceptance and any volume-level interop. Serving real blocks is easy (fd-agnostic); serving a volume a real VMS node can actually USE requires genuine ODS-2 content. This is the true prerequisite for authentic cluster storage sharing.
-- `vms-ci` [inbox] EPIC: Cluster Interop — OVMX joins a real VMScluster
-- `vms-d21` [blocked] R3: real CLUSTER_AUTHORIZE.DAT format + authoring (group# + password -> grounded HELLO credential; replace the minimal stand-in so OVMX joins an ARBITRARY cluster)
-- `vms-d59` [blocked] P4: OVMX/NetBSD-vax boots under SIMH; executive test green on real in-kernel /dev/vms
-- `vms-e7a` [inbox] read-write ODS-2 vnode backend on netbsd-vax: drop MNT_RDONLY, implement the write VOPs (currently genfs_eopnotsupp) + VOP_ACCESS VWRITE, so PROVISION/STARTUP can write SYSUAF logs + account dirs on the mounted system volume
-- `vms-f10` [inbox] VAX first-class in the unified build + release stream — co-release parity across aarch64/x86_64/alpha/VAX
-
 ### Shipped releases (git tags)
 
-- **V0.4-5** — Point release.
+- **V0.4-6** — Real OpenSSH key exchange over the executive network path, genuine ODS-2 read/write/INITIALIZE foundations, cluster rejoin proof, VAX co-release, and a sharded kernel-executive gate.
+- **V0.4-5** — Feature pack marching toward 0.5.
 - **V0.4-4** — Feature pack marching toward 0.5.
 - **V0.4-3** — Feature pack marching toward 0.5.
 - **V0.4-2** — Feature pack marching toward 0.5.
@@ -163,11 +94,19 @@ calling anything short of that bar 1.0.
 - **0.3-7** — Point release.
 - **0.3-6** — Point release.
 - **0.3-5** — Point release.
-- **0.3-4** — SET ACCOUNTING / SET VOLUME, clean cluster leave.
 
 ### rd-labeling gaps (fix these to keep the source accurate)
 
-- All gate epics carry a `rel-*` label. ✓
+Gate epics carrying **no `rel-*` label** — the generated milestone view cannot place their milestone from rd alone; the band below is editorial (`GATE_EPICS` in the script), not derived:
+
+- `vms-6b8` — Executive substrate (editorial band: 0.5) · also not `level=epic`
+- `vms-8ad` — Command-surface parity (editorial band: continuous) · also not `level=epic`
+- `vms-678` — Self-hosting toolchain (editorial band: 0.5-1.0) · also not `level=epic`
+- `vms-098` — Cluster configuration (editorial band: 0.5-1.0) · also not `level=epic`
+- `vms-67f` — TCP/IP networking (editorial band: 0.5-1.0) · also not `level=epic`
+- `vms-30e` — DECnet Phase IV (editorial band: 1.0) · also not `level=epic`
+- `vms-19e` — Kernel substrate (editorial band: 0.5) · also not `level=epic`
+- `vms-8e8` — VAX as a first-class platform (editorial band: 0.5-1.0) · also not `level=epic`
 
 - Children of unlabeled gate epics with no `rel-*` of their own: **0** (they inherit the editorial band; label them to make rd authoritative).
 

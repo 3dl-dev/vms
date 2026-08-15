@@ -112,6 +112,8 @@ GATE_IDS = [g[0] for g in GATE_EPICS]
 
 # Editorial release notes, tag -> one line. Tags without an entry get a generic note.
 RELEASE_NOTES = {
+    "V0.4-6": "Real OpenSSH key exchange over the executive network path, genuine ODS-2 read/write/INITIALIZE foundations, cluster rejoin proof, VAX co-release, and a sharded kernel-executive gate.",
+    "V0.4-5": "Feature pack marching toward 0.5.",
     "V0.4-4": "Feature pack marching toward 0.5.",
     "V0.4-3": "Feature pack marching toward 0.5.",
     "V0.4-2": "Feature pack marching toward 0.5.",

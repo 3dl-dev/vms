@@ -542,7 +542,8 @@ typedef enum ods2_status {
     ODS2_ERR_FORMAT,        /* format string / structure level bad    */
     ODS2_ERR_RANGE,         /* LBN/VBN out of range                   */
     ODS2_ERR_NOTFOUND,      /* file / entry not found                 */
-    ODS2_ERR_NOSPACE        /* no free blocks/FIDs/directory room     */
+    ODS2_ERR_NOSPACE,       /* no free blocks/FIDs/directory room     */
+    ODS2_ERR_IO             /* backing-store I/O error (pread short/failed) */
 } ods2_status_t;
 
 const char *ods2_strerror(ods2_status_t st);
@@ -650,6 +651,79 @@ typedef int (*ods2_dir_cb)(const char *name, unsigned name_len,
 ods2_status_t ods2_volume_list_dir(const ods2_volume_t *vol,
                                    const void *dir_header_block,
                                    ods2_dir_cb cb, void *ctx);
+
+/*
+ * Decode ONE 512-byte directory data block's variable-length records,
+ * invoking `cb` once per {name, version, fid}. Returns non-zero if the
+ * callback asked to stop early, 0 otherwise. This is the record-decoding
+ * core shared by BOTH the in-memory volume walker (ods2_volume_list_dir)
+ * and the block-backed one (ods2_bdev_list_dir) -- extracted so there is a
+ * single, identical directory-record decoder behind either block source
+ * (no new format facts; same layout the reader always used). [N] direct.h
+ */
+int ods2_dir_block_scan(const void *dir_block, ods2_dir_cb cb, void *ctx);
+
+/* ---- Volume-level reader over a real BLOCK DEVICE / image fd ----
+ *
+ * A block-backed twin of ods2_volume_t: instead of a whole-volume in-memory
+ * `const uint8_t *image`, blocks are fetched on demand via pread() over a
+ * backing fd (a loop/disk image file, or a block/character device such as
+ * /dev/vms). This is the FOUNDATION rung (vms-6cb) that lets the SAME
+ * genuine reader logic (ods2_home_parse / ods2_fh2_parse / ods2_fh2_map_walk
+ * / ods2_dir_block_scan) run over live storage without loading the entire
+ * volume into RAM. The pread block-transfer shape deliberately mirrors
+ * src/vmsscs/scs_mscp_srv.c's raw-block server (whole-block reads, a short
+ * read is a hard failure, offsets computed in 64 bits). The in-memory
+ * ods2_volume_t path is UNCHANGED and both variants coexist.
+ *
+ * The fd is NOT owned by ods2_bdev_t -- the caller opens and closes it.
+ */
+typedef struct ods2_bdev {
+    int         fd;         /* backing block device / image fd (borrowed)  */
+    uint32_t    nblocks;    /* volume size in 512-byte blocks              */
+    ods2_home_t home;       /* parsed, validated home block (LBN 1)        */
+} ods2_bdev_t;
+
+/*
+ * Attach a block-backed reader to the volume on `fd`. `span_bytes` is the
+ * usable size of the volume in bytes; pass 0 to auto-detect via
+ * lseek(fd, 0, SEEK_END) (works for regular/loop image files; a device that
+ * cannot report a size via lseek must pass span_bytes explicitly). Reads and
+ * validates the home block at LBN 1 (checksums + "DECFILE11B  " + strict
+ * structure level), caching it in `bv->home`, exactly as ods2_volume_open()
+ * does for the in-memory image.
+ */
+ods2_status_t ods2_bdev_open(ods2_bdev_t *bv, int fd, uint64_t span_bytes);
+
+/*
+ * Read raw block `lbn` (512 bytes) into `buf` (must be >= ODS2_BLOCK_SIZE)
+ * via pread. Returns ODS2_ERR_RANGE if lbn is past the volume, ODS2_ERR_IO
+ * on a short/failed read. The block-backed analog of ods2_volume_block(),
+ * but copying into caller storage rather than returning an interior pointer.
+ */
+ods2_status_t ods2_bdev_read_block(const ods2_bdev_t *bv, uint32_t lbn,
+                                   void *buf, size_t buf_len);
+
+/*
+ * Read + validate the primary file header for file number `fid_num` by the
+ * SAME INDEXF.SYS arithmetic ods2_volume_read_header() uses
+ * (idx_lbn = hm2_ibmaplbn + hm2_ibmapsize; header N at idx_lbn + (N-1)),
+ * copying the validated 512-byte header into `header_out` (>= 512 bytes).
+ */
+ods2_status_t ods2_bdev_read_header(const ods2_bdev_t *bv, uint32_t fid_num,
+                                    void *header_out, size_t out_len);
+
+/*
+ * List a directory given its (already-read) header block, walking the
+ * directory's data blocks via its FM2 retrieval pointers and decoding the
+ * variable-length records -- the block-backed twin of ods2_volume_list_dir().
+ * Each data block is pread on demand; records are decoded by the shared
+ * ods2_dir_block_scan(), so the result is byte-for-byte identical to the
+ * in-memory walker over the same volume.
+ */
+ods2_status_t ods2_bdev_list_dir(const ods2_bdev_t *bv,
+                                 const void *dir_header_block,
+                                 ods2_dir_cb cb, void *ctx);
 
 /*
  * [F16] (increment 9, vms-0f3): decode a contiguous RMS variable-length

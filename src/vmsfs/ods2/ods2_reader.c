@@ -45,6 +45,8 @@ const char *ods2_strerror(ods2_status_t st)
     case ODS2_ERR_FORMAT:   return "bad format / structure level";
     case ODS2_ERR_RANGE:    return "block out of range";
     case ODS2_ERR_NOTFOUND: return "not found";
+    case ODS2_ERR_NOSPACE:  return "no space";
+    case ODS2_ERR_IO:       return "backing-store I/O error";
     default:                return "unknown";
     }
 }
@@ -381,10 +383,18 @@ struct dir_walk_ctx {
     uint32_t             vbn;   /* running VBN (1-based) — unused but honest */
 };
 
-/* Decode one directory data block's records. */
-static int dir_scan_block(struct dir_walk_ctx *c, const uint8_t *blk)
+/*
+ * Decode one directory data block's records, invoking `cb` per {name,
+ * version, fid}. Shared by the in-memory walker (dir_scan_block below) and
+ * the block-backed one (ods2_bdev_list_dir); returns 1 if `cb` asked to stop.
+ */
+int ods2_dir_block_scan(const void *dir_block, ods2_dir_cb cb, void *ctx)
 {
+    const uint8_t *blk = (const uint8_t *)dir_block;
     unsigned off = 0;
+
+    if (!dir_block || !cb)
+        return 0;
 
     while (off + 6 <= ODS2_BLOCK_SIZE) {
         uint16_t rec_size = le16(blk + off);
@@ -416,15 +426,23 @@ static int dir_scan_block(struct dir_walk_ctx *c, const uint8_t *blk)
             fid.fid_rvn = blk[val_off + 6];
             fid.fid_nmx = blk[val_off + 7];
 
-            if (c->cb((const char *)(blk + name_off), namecount,
-                      version, &fid, c->user)) {
-                c->stop = 1;
+            if (cb((const char *)(blk + name_off), namecount,
+                   version, &fid, ctx))
                 return 1;
-            }
             val_off += (unsigned)sizeof(ods2_dir_ent_t);
         }
 
         off = rec_end;
+    }
+    return 0;
+}
+
+/* Decode one directory data block's records (in-memory walk thread). */
+static int dir_scan_block(struct dir_walk_ctx *c, const uint8_t *blk)
+{
+    if (ods2_dir_block_scan(blk, c->cb, c->user)) {
+        c->stop = 1;
+        return 1;
     }
     return 0;
 }

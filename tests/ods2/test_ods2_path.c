@@ -63,6 +63,29 @@ static int g_failures = 0;
 static const char *const LOGIN_TEXT  = "$ SET NOON\n$ WRITE SYS$OUTPUT \"HI\"\n";
 static const char *const README_TEXT = "OVMX\nSYS EXE\n";
 
+/*
+ * A BINARY image blob (vms-5eb R6-build): 700 bytes (> one 512-byte block)
+ * deliberately full of the bytes RFM=VAR framing would mangle -- 0x0A
+ * newlines (VAR splits records on them), 0x00 NULs, 0xFF (the ODS2_DIR_END
+ * sentinel), and a 2-byte-length-prefix collision pattern. ods2_wvolume_
+ * create_file_raw() must store these VERBATIM so IMGACT reads a real .EXE
+ * back unchanged; ods2_wvolume_create_file() (VAR) would corrupt them.
+ */
+#define IMAGE_LEN 700u
+static uint8_t IMAGE_BLOB[IMAGE_LEN];
+static void image_blob_init(void)
+{
+    unsigned i;
+    for (i = 0; i < IMAGE_LEN; i++)
+        IMAGE_BLOB[i] = (uint8_t)((i * 37u + (i % 5u == 0 ? 0x0A : 0)) & 0xFF);
+    IMAGE_BLOB[0]   = 0x7F;   /* ELF-ish magic lead */
+    IMAGE_BLOB[1]   = 'E'; IMAGE_BLOB[2] = 'L'; IMAGE_BLOB[3] = 'F';
+    IMAGE_BLOB[10]  = 0x0A;   /* newline mid-block */
+    IMAGE_BLOB[11]  = 0x00;   /* NUL */
+    IMAGE_BLOB[520] = 0xFF;   /* dir-end sentinel byte, in the SECOND block */
+    IMAGE_BLOB[521] = 0x0A;
+}
+
 struct dir_cap {
     char names[32][20];
     uint16_t vers[32];
@@ -153,6 +176,15 @@ int main(void)
     st = ods2_wvolume_dir_insert(&wvol, sysexe, "README.TXT", 1, readme_fid);
     CHECK(st == ODS2_OK, "insert README.TXT;1");
 
+    /* A binary image: verbatim bytes via create_file_raw (R6-build path). */
+    image_blob_init();
+    ods2_fid_t image_fid;
+    st = ods2_wvolume_create_file_raw(&wvol, "IMAGE.EXE", 1,
+                                      IMAGE_BLOB, IMAGE_LEN, sysexe, &image_fid);
+    CHECK(st == ODS2_OK, "create IMAGE.EXE;1 verbatim (multi-block binary)");
+    st = ods2_wvolume_dir_insert(&wvol, sysexe, "IMAGE.EXE", 1, image_fid);
+    CHECK(st == ODS2_OK, "insert IMAGE.EXE;1");
+
     /* ---- lay the metadata region onto a real loop image fd ---- */
     char path[] = "/tmp/test_ods2_path.XXXXXX";
     int fd = mkstemp(path);
@@ -227,6 +259,23 @@ int main(void)
     CHECK(st == ODS2_OK && textlen == readme_len &&
           memcmp(textbuf, README_TEXT, readme_len) == 0,
           "README.TXT content round-trips");
+
+    /* IMAGE.EXE: verbatim binary round-trip. read_file (RAW, no VAR decode)
+     * must return byte-for-byte what create_file_raw wrote -- the property a
+     * .EXE needs for IMGACT. Its recattr also reports the exact byte length. */
+    st = ods2_bdev_resolve_file(&bv, sysexe_comps, 3, "IMAGE.EXE", 0,
+                                &got_file_fid, filehdr, sizeof(filehdr));
+    CHECK(st == ODS2_OK, "resolve IMAGE.EXE");
+    CHECK(ods2_fid_number(&got_file_fid) == ods2_fid_number(&image_fid),
+          "IMAGE.EXE resolves to the FID create_file_raw allocated");
+    uint8_t imgbuf[2048];
+    size_t imglen = 0;
+    st = ods2_bdev_read_file(&bv, filehdr, imgbuf, sizeof(imgbuf), &imglen);
+    CHECK(st == ODS2_OK, "read IMAGE.EXE raw content off the block device");
+    CHECK(imglen == IMAGE_LEN,
+          "IMAGE.EXE valid-byte length (efblk/ffbyte) equals the bytes written");
+    CHECK(imglen == IMAGE_LEN && memcmp(imgbuf, IMAGE_BLOB, IMAGE_LEN) == 0,
+          "IMAGE.EXE bytes round-trip VERBATIM (VAR framing would have corrupted them)");
 
     /* Honest failure: a missing directory component and a missing file. */
     const char *bad_comps[] = { "SYS0", "NOPE", "SYSEXE" };

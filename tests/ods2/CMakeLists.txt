@@ -74,3 +74,27 @@ set_tests_properties(ods2_bdev PROPERTIES
     LABELS "unit;ods2;vmsfs"
     TIMEOUT 30
 )
+
+# vms-6ef (R4 of the real-ODS-2-runtime epic vms-5eb): INITIALIZE writes a
+# GENUINE ODS-2 volume. Proves the ODS-2 method INITIALIZE uses produces a
+# real Files-11 volume the block-backed reader (R1) parses clean + that the
+# on-disk bytes are byte-identical to the writer's known-good output. When
+# BUILD_TOOLS is on, INIT_EXE points the test at the actual shipped
+# INITIALIZE.EXE so the binary itself is exercised, not just the library.
+add_executable(test_ods2_initialize test_ods2_initialize.c)
+target_include_directories(test_ods2_initialize PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_initialize PRIVATE ods2)
+
+add_test(NAME ods2_initialize COMMAND test_ods2_initialize)
+set_tests_properties(ods2_initialize PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)
+if(BUILD_TOOLS)
+    # Generator expression -- resolved at generate time, so it is valid even
+    # though tools/ is add_subdirectory'd after tests/ods2. Exercises the real
+    # binary; add_dependencies makes the tool build before this test's target.
+    set_property(TEST ods2_initialize APPEND PROPERTY
+        ENVIRONMENT "INIT_EXE=$<TARGET_FILE:vms_initialize>")
+    add_dependencies(test_ods2_initialize vms_initialize)
+endif()

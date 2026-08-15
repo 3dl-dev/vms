@@ -1461,6 +1461,70 @@ ods2_status_t ods2_wvolume_flush(ods2_wvolume_t *wvol);
  */
 void ods2_wvolume_close(ods2_wvolume_t *wvol);
 
+/*
+ * OPEN AN EXISTING volume for incremental WRITE (vms-02e, epic vms-5eb, the
+ * WRITE half of the ODS-2 runtime flip). The reattach twin of
+ * ods2_wvolume_format_bdev(): instead of laying down a fresh reserved layout,
+ * it RECONSTRUCTS the writer's bump-allocator state (next free block / next
+ * free FID) + the fixed-layout LBN fields from a volume THIS writer (or
+ * INITIALIZE) already formatted onto `fd`, so a subsequent
+ * ods2_wvolume_create_file()/_create_file_raw()/_create_dir()/_dir_insert()/
+ * _append_file() continues allocating exactly where the volume left off.
+ * `span_bytes` follows the ods2_bdev_open() convention (0 == auto-detect via
+ * lseek). Validates the home block (checksums + DECFILE11B + level) and
+ * CROSS-CHECKS the reconstructed geometry against the on-disk home block
+ * (hm2_ibmaplbn / hm2_ibmapsize) -- a volume whose layout this writer cannot
+ * reconstruct is refused with ODS2_ERR_FORMAT (fail-honest, Rule 9 / INV-6),
+ * never silently mis-appended to.
+ *
+ * ADDITIVE: reads only the home block, SCB, and the two on-disk bitmaps to
+ * rebuild the allocator watermark; writes NOTHING until the caller performs
+ * an actual create/append. `wvol` is initialized (is_bdev == 1); the caller
+ * closes it with ods2_wvolume_close() (which flushes + frees, leaving `fd`
+ * open -- borrowed, not owned).
+ *
+ * Returns ODS2_OK, ODS2_ERR_ARGS (bad fd/wvol), the ods2_bdev_open() error
+ * for a non-genuine volume, ODS2_ERR_FORMAT (SCB/home disagree or a layout
+ * this writer did not produce), ODS2_ERR_SIZE (volume too small), or
+ * ODS2_ERR_IO / ODS2_ERR_NOSPACE (backing-store read / cache-alloc failure).
+ */
+ods2_status_t ods2_wvolume_open_bdev(int fd, uint64_t span_bytes,
+                                     ods2_wvolume_t *wvol);
+
+/*
+ * APPEND `data_len` verbatim bytes to the END of an EXISTING file identified
+ * by `file_fid` on `wvol` (vms-02e). The write twin of
+ * ods2_wvolume_create_file_raw() for a file that already exists: it extends
+ * the file's FM2 retrieval-pointer allocation on demand (allocating and
+ * chaining additional extents when the appended bytes overflow the current
+ * allocation, merging a physically-contiguous run into the last extent) and
+ * updates the FH2 header's end-of-file position (fat_efblk / fat_ffbyte /
+ * fat_hiblk / fh2_highwater) + checksum so a following ods2_bdev_read_file()
+ * returns the FULL pre-existing + appended content, byte-exact. An
+ * OPERATOR.LOG-style repeated append is exactly this call, repeated.
+ *
+ * Rule 8: the extent-extension + EOF-position update reuse the SAME on-disk
+ * field encodings ods2_wvolume_create_file_raw() already writes for an
+ * RFM=FIXED file (see write_fh2_header_ext()'s FH2_KIND_DATA_FIX branch and
+ * the ods2_recattr_t / [F15]/[F16] provenance) -- no new on-disk format fact
+ * is introduced; the appended bytes and the grown map/EOF are the same shape
+ * a from-scratch create_file_raw() of the concatenation would have produced.
+ *
+ * DEFINED ONLY for RFM=FIXED (verbatim, create_file_raw-shaped) data files --
+ * the shape SYS$DISK's images/logs carry. Appending raw bytes to an RFM=VAR
+ * text file or a directory would corrupt its record/directory framing, so
+ * those are refused with ODS2_ERR_ARGS (fail-honest), never silently
+ * mis-framed. A zero-length append is a successful no-op.
+ *
+ * Returns ODS2_OK, ODS2_ERR_ARGS (bad args / not a FIXED data file),
+ * ODS2_ERR_NOTFOUND (the header does not self-report `file_fid`),
+ * ODS2_ERR_CHECKSUM / ODS2_ERR_FORMAT (corrupt existing header),
+ * ODS2_ERR_NOSPACE (no free blocks / extent-map full), or ODS2_ERR_IO.
+ */
+ods2_status_t ods2_wvolume_append_file(ods2_wvolume_t *wvol,
+                                       ods2_fid_t file_fid,
+                                       const void *data, size_t data_len);
+
 #ifdef __cplusplus
 }
 #endif

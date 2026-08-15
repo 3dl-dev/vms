@@ -23,6 +23,7 @@
 
 #include <ctype.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -233,4 +234,160 @@ int ods2_sysdisk_list_dir(const char *linux_path, ods2_dir_cb cb, void *ctx)
         return ods2_status_to_vms(st);
 
     return SS$_NORMAL;
+}
+
+/* ================================================================
+ * SYS$DISK WRITE adapter (vms-02e, epic vms-5eb -- the WRITE half of the
+ * ODS-2 runtime flip). See vmsfs/sysdisk.h for the contract, the ADDITIVE /
+ * fail-honest rationale, and the concurrency note. Each entry point opens a
+ * per-call block-device-backed writer over the registered SYS$DISK volume's
+ * fd (ods2_wvolume_open_bdev), mutates, and closes it (flush + free, fd
+ * borrowed). It adds NO on-disk format facts (Rule 8) -- it only sequences
+ * the writer's existing create/append/dir-insert primitives over the same
+ * "/vms/..." path bridge the read adapter uses.
+ * ================================================================ */
+
+/* Usable byte span of a registered volume handle (its validated block count). */
+static uint64_t sysdisk_span(const ods2_bdev_t *bv)
+{
+    return (uint64_t)bv->nblocks * (uint64_t)ODS2_BLOCK_SIZE;
+}
+
+int ods2_sysdisk_create_file(const char *linux_path,
+                             const void *data, size_t data_len)
+{
+    if (!linux_path || (!data && data_len > 0))
+        return SS$_BADPARAM;
+    if (!ods2_sysdisk_owns_path(linux_path))
+        return SS$_BADPARAM;
+
+    const ods2_bdev_t *bv = vmsfs_volume_handle(SYSDISK_DEVICE);
+    if (!bv)
+        return SS$_DEVNOTMOUNT;   /* fail-honest: no ODS-2 SYS$DISK mounted */
+
+    char store[SYSDISK_MAX_COMPS][SYSDISK_MAX_NAME];
+    const char *comps[SYSDISK_MAX_COMPS];
+    int n = split_path(linux_path, store, comps);
+    if (n < 1)
+        return SS$_BADPARAM;      /* no filename component (cannot create the MFD) */
+
+    char *filename = store[n - 1];
+    uint16_t version = split_version(filename);
+    if (version == 0)
+        version = 1;              /* an absent ";ver" creates version 1 */
+    unsigned ndirs = (unsigned)(n - 1);
+
+    /* Resolve the (already-existing) parent directory over the reader handle. */
+    uint8_t dirhdr[ODS2_BLOCK_SIZE];
+    ods2_fid_t parent_fid;
+    ods2_status_t st = ods2_bdev_resolve_dir(bv, comps, ndirs, &parent_fid,
+                                             dirhdr, sizeof(dirhdr));
+    if (st != ODS2_OK)
+        return ods2_status_to_vms(st);
+
+    ods2_wvolume_t wvol;
+    st = ods2_wvolume_open_bdev(bv->fd, sysdisk_span(bv), &wvol);
+    if (st != ODS2_OK)
+        return ods2_status_to_vms(st);
+
+    ods2_fid_t newfid;
+    st = ods2_wvolume_create_file_raw(&wvol, filename, version,
+                                      (const uint8_t *)data, data_len,
+                                      parent_fid, &newfid);
+    if (st == ODS2_OK)
+        st = ods2_wvolume_dir_insert(&wvol, parent_fid, filename, version,
+                                     newfid);
+    ods2_wvolume_close(&wvol);   /* flushes; surfaces any pwrite failure below */
+
+    return ods2_status_to_vms(st);
+}
+
+int ods2_sysdisk_append_file(const char *linux_path,
+                             const void *data, size_t data_len)
+{
+    if (!linux_path || (!data && data_len > 0))
+        return SS$_BADPARAM;
+    if (!ods2_sysdisk_owns_path(linux_path))
+        return SS$_BADPARAM;
+
+    const ods2_bdev_t *bv = vmsfs_volume_handle(SYSDISK_DEVICE);
+    if (!bv)
+        return SS$_DEVNOTMOUNT;
+
+    char store[SYSDISK_MAX_COMPS][SYSDISK_MAX_NAME];
+    const char *comps[SYSDISK_MAX_COMPS];
+    int n = split_path(linux_path, store, comps);
+    if (n < 1)
+        return SS$_BADPARAM;
+
+    char *filename = store[n - 1];
+    uint16_t version = split_version(filename);   /* 0 == highest */
+    unsigned ndirs = (unsigned)(n - 1);
+
+    /* Resolve the EXISTING file's FID over the reader handle. */
+    uint8_t fhdr[ODS2_BLOCK_SIZE];
+    ods2_fid_t file_fid;
+    ods2_status_t st = ods2_bdev_resolve_file(bv, comps, ndirs, filename,
+                                              version, &file_fid,
+                                              fhdr, sizeof(fhdr));
+    if (st != ODS2_OK)
+        return ods2_status_to_vms(st);
+
+    ods2_wvolume_t wvol;
+    st = ods2_wvolume_open_bdev(bv->fd, sysdisk_span(bv), &wvol);
+    if (st != ODS2_OK)
+        return ods2_status_to_vms(st);
+
+    st = ods2_wvolume_append_file(&wvol, file_fid, data, data_len);
+    ods2_wvolume_close(&wvol);
+
+    return ods2_status_to_vms(st);
+}
+
+int ods2_sysdisk_mkdir(const char *linux_path)
+{
+    if (!linux_path)
+        return SS$_BADPARAM;
+    if (!ods2_sysdisk_owns_path(linux_path))
+        return SS$_BADPARAM;
+
+    const ods2_bdev_t *bv = vmsfs_volume_handle(SYSDISK_DEVICE);
+    if (!bv)
+        return SS$_DEVNOTMOUNT;
+
+    char store[SYSDISK_MAX_COMPS][SYSDISK_MAX_NAME];
+    const char *comps[SYSDISK_MAX_COMPS];
+    int n = split_path(linux_path, store, comps);
+    if (n < 1)
+        return SS$_BADPARAM;      /* need at least the new directory's name */
+
+    /* The last component names the new directory (bare, no type); its on-disk
+     * directory-entry name is "NAME.DIR". The preceding components are the
+     * already-existing parent chain. */
+    const char *newname = comps[n - 1];
+    char dirname[SYSDISK_MAX_NAME + 8];
+    int m = snprintf(dirname, sizeof(dirname), "%s.DIR", newname);
+    if (m <= 0 || (size_t)m >= sizeof(dirname))
+        return SS$_BADPARAM;
+    unsigned ndirs = (unsigned)(n - 1);
+
+    uint8_t dirhdr[ODS2_BLOCK_SIZE];
+    ods2_fid_t parent_fid;
+    ods2_status_t st = ods2_bdev_resolve_dir(bv, comps, ndirs, &parent_fid,
+                                             dirhdr, sizeof(dirhdr));
+    if (st != ODS2_OK)
+        return ods2_status_to_vms(st);
+
+    ods2_wvolume_t wvol;
+    st = ods2_wvolume_open_bdev(bv->fd, sysdisk_span(bv), &wvol);
+    if (st != ODS2_OK)
+        return ods2_status_to_vms(st);
+
+    ods2_fid_t newfid;
+    st = ods2_wvolume_create_dir(&wvol, dirname, 1, parent_fid, &newfid);
+    if (st == ODS2_OK)
+        st = ods2_wvolume_dir_insert(&wvol, parent_fid, dirname, 1, newfid);
+    ods2_wvolume_close(&wvol);
+
+    return ods2_status_to_vms(st);
 }

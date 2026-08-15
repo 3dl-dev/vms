@@ -1357,6 +1357,181 @@ ods2_status_t ods2_wvolume_format_bdev(int fd, uint64_t span_bytes,
 }
 
 /* ================================================================
+ * Reattach to an EXISTING volume for incremental write (vms-02e, epic
+ * vms-5eb, the WRITE half of the ODS-2 runtime flip). See ods2.h's
+ * ods2_wvolume_open_bdev() contract.
+ * ================================================================ */
+
+/*
+ * Reconstruct the deterministic reserved-layout LBN fields into `wvol` from
+ * its (already-set) nblocks/maxfiles -- the SAME arithmetic format_common()
+ * runs (lines under its "---- fixed layout ----" comment). Kept a SEPARATE
+ * function rather than refactored out of format_common() so the heavily
+ * lab-validated golden format path is not disturbed; ods2_wvolume_open_bdev()
+ * additionally cross-checks the result against the on-disk home block, so a
+ * divergence between the two is caught at runtime, not silently mis-appended.
+ * Returns the first LBN available to callers (reserved_end) via
+ * *reserved_end_out, or ODS2_ERR_SIZE if the volume is too small.
+ */
+static ods2_status_t reconstruct_layout(ods2_wvolume_t *wvol,
+                                        uint32_t *reserved_end_out)
+{
+    uint32_t total_blocks = wvol->nblocks, maxfiles = wvol->maxfiles;
+    uint32_t ibmap_size, hdr_base, altidx_lbn;
+    uint32_t bitmap_scb_lbn, bitmap_bits_blocks, bitmap_total;
+    uint32_t mfd_lbn, security_lbn, reserved_end;
+
+    mfd_lbn = 3;
+    bitmap_bits_blocks = (total_blocks + BITS_PER_BLOCK - 1) / BITS_PER_BLOCK;
+    if (bitmap_bits_blocks < 1) bitmap_bits_blocks = 1;
+    bitmap_scb_lbn = mfd_lbn + 1;
+    bitmap_total   = 1 + bitmap_bits_blocks;
+
+    ibmap_size = (maxfiles + BITS_PER_BLOCK - 1) / BITS_PER_BLOCK;
+    if (ibmap_size < 1) ibmap_size = 1;
+    hdr_base   = bitmap_scb_lbn + bitmap_total + ibmap_size;
+    altidx_lbn = hdr_base + maxfiles;
+    security_lbn = altidx_lbn + 1;
+    reserved_end = security_lbn + ODS2_SECURITY_DATA_BLOCKS;
+
+    if (reserved_end >= total_blocks)
+        return ODS2_ERR_SIZE;
+
+    wvol->ibmap_lbn          = bitmap_scb_lbn + bitmap_total;
+    wvol->ibmap_size         = ibmap_size;
+    wvol->hdr_base_lbn       = hdr_base;
+    wvol->bitmap_scb_lbn     = bitmap_scb_lbn;
+    wvol->bitmap_data_blocks = bitmap_bits_blocks;
+
+    *reserved_end_out = reserved_end;
+    return ODS2_OK;
+}
+
+/*
+ * Read one bit out of an on-disk bitmap region (storage bitmap or index-file
+ * bitmap) via the block-backed READER -- the read-only inverse of the writer's
+ * bitmap_set(). Used only by ods2_wvolume_open_bdev() to rebuild the bump
+ * watermark; it reads a whole block per bit (a bounded, one-time scan), so it
+ * stays out of the write cache entirely (open touches no write state).
+ */
+static ods2_status_t bdev_bitmap_get(const ods2_bdev_t *bv, uint32_t base_lbn,
+                                     uint32_t bitno, int *out)
+{
+    uint32_t blk_idx  = bitno / BITS_PER_BLOCK;
+    uint32_t in_block = bitno % BITS_PER_BLOCK;
+    uint32_t word_idx = in_block / BITS_PER_WORD;
+    uint32_t bit_idx  = in_block % BITS_PER_WORD;
+    uint8_t buf[ODS2_BLOCK_SIZE];
+    const uint8_t *b;
+    uint32_t w;
+    ods2_status_t st = ods2_bdev_read_block(bv, base_lbn + blk_idx,
+                                            buf, sizeof(buf));
+    if (st != ODS2_OK)
+        return st;
+    b = buf + (size_t)word_idx * 4;
+    w = (uint32_t)b[0] | ((uint32_t)b[1] << 8) |
+        ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+    *out = (int)((w >> bit_idx) & 1u);
+    return ODS2_OK;
+}
+
+ods2_status_t ods2_wvolume_open_bdev(int fd, uint64_t span_bytes,
+                                     ods2_wvolume_t *wvol)
+{
+    ods2_bdev_t rd;
+    ods2_scb_t  scb;
+    uint8_t     blk[ODS2_BLOCK_SIZE];
+    uint32_t    reserved_end, total_blocks, i;
+    ods2_status_t st;
+
+    if (fd < 0 || !wvol)
+        return ODS2_ERR_ARGS;
+
+    /* Validate + read the home block (checksums + DECFILE11B + strict level)
+     * over the existing block-backed reader -- open_bdev attaches to a volume
+     * already formatted; a non-genuine backing store fails here, honestly. */
+    st = ods2_bdev_open(&rd, fd, span_bytes);
+    if (st != ODS2_OK)
+        return st;
+
+    /* Authoritative total_blocks == the SCB's scb_volsize. BITMAP.SYS's VBN1
+     * (the SCB) is always LBN 4 for this writer's fixed layout (mfd_lbn 3 + 1,
+     * see format_common()); reusing scb_volsize keeps the reconstructed
+     * bitmap geometry identical to the format that produced the volume. */
+    st = ods2_bdev_read_block(&rd, 4, blk, sizeof(blk));
+    if (st != ODS2_OK)
+        return st;
+    st = ods2_scb_parse(blk, sizeof(blk), &scb);
+    if (st != ODS2_OK)
+        return st;
+    total_blocks = scb.scb_volsize;
+    if (total_blocks == 0 || total_blocks > rd.nblocks)
+        return ODS2_ERR_FORMAT;   /* SCB disagrees with the backing store */
+
+    memset(wvol, 0, sizeof(*wvol));
+    wvol->is_bdev  = 1;
+    wvol->bdev_fd  = fd;
+    wvol->nblocks  = total_blocks;
+    wvol->maxfiles = rd.home.hm2_maxfiles;
+    if (wvol->maxfiles < ODS2_RESFILES)
+        return ODS2_ERR_FORMAT;
+
+    st = reconstruct_layout(wvol, &reserved_end);
+    if (st != ODS2_OK)
+        return st;
+
+    /* Cross-check the reconstructed geometry against the on-disk home block:
+     * refuse (fail-honest) any volume whose layout this writer did not
+     * produce -- e.g. a real-VAX INITIALIZE with a different bitmap placement
+     * that open_bdev cannot safely continue allocating into. */
+    if (wvol->ibmap_lbn      != rd.home.hm2_ibmaplbn ||
+        wvol->ibmap_size     != rd.home.hm2_ibmapsize ||
+        wvol->bitmap_scb_lbn != 4)
+        return ODS2_ERR_FORMAT;
+
+    /* next_free_lbn: the bump watermark == the first FREE storage-bitmap bit
+     * (bit == 1 -> free, [N2]) at/after reserved_end. This writer's allocator
+     * is a pure gapless bump with no deallocation, so the first free block
+     * after the fixed layout is exactly where the next allocation continues. */
+    {
+        uint32_t nf = total_blocks;   /* volume full unless a free bit is found */
+        for (i = reserved_end; i < total_blocks; i++) {
+            int bit;
+            st = bdev_bitmap_get(&rd, wvol->bitmap_scb_lbn + 1, i, &bit);
+            if (st != ODS2_OK)
+                return st;
+            if (bit) { nf = i; break; }
+        }
+        wvol->next_free_lbn = nf;
+    }
+
+    /* next_free_fid: the first FREE index-file-bitmap bit (bit == 0 -> free,
+     * [N2]) past the ten reserved files; FIDs are bump-allocated gaplessly. */
+    {
+        uint32_t nf = wvol->maxfiles + 1;   /* index full unless a free FID found */
+        for (i = ODS2_RESFILES + 1; i <= wvol->maxfiles; i++) {
+            int bit;
+            st = bdev_bitmap_get(&rd, wvol->ibmap_lbn, i - 1, &bit);
+            if (st != ODS2_OK)
+                return st;
+            if (!bit) { nf = i; break; }
+        }
+        wvol->next_free_fid = nf;
+    }
+
+    wvol->mfd_fid.fid_num = ODS2_FID_MFD;
+    wvol->mfd_fid.fid_seq = ODS2_FID_MFD;
+    wvol->mfd_fid.fid_rvn = 0;
+    wvol->mfd_fid.fid_nmx = 0;
+
+    st = wcache_init(wvol);
+    if (st != ODS2_OK)
+        return st;
+
+    return ODS2_OK;
+}
+
+/* ================================================================
  * Block / FID allocation
  * ================================================================ */
 
@@ -1995,6 +2170,187 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
         put32(h + offsetof(ods2_fh2_t, fh2_highwater), hiblk + 1);
         put16(h + offsetof(ods2_fh2_t, fh2_checksum), ods2_block_checksum(h));
     }
+
+    return wvol_commit(wvol, ODS2_OK);
+}
+
+/* ================================================================
+ * Append to an EXISTING file (vms-02e, epic vms-5eb -- the WRITE half of the
+ * ODS-2 runtime flip). See ods2.h's ods2_wvolume_append_file() contract.
+ * ================================================================ */
+
+/* Translate a 0-based file block index to its LBN through the extent list. */
+static ods2_status_t append_block_lbn(const struct wdir_extents *ex,
+                                      uint32_t block_index, uint32_t *lbn_out)
+{
+    uint32_t acc = 0, i;
+    for (i = 0; i < ex->n; i++) {
+        if (block_index < acc + ex->ext[i].count) {
+            *lbn_out = ex->ext[i].lbn + (block_index - acc);
+            return ODS2_OK;
+        }
+        acc += ex->ext[i].count;
+    }
+    return ODS2_ERR_RANGE;
+}
+
+ods2_status_t ods2_wvolume_append_file(ods2_wvolume_t *wvol,
+                                       ods2_fid_t file_fid,
+                                       const void *data, size_t data_len)
+{
+    const uint8_t *bytes = (const uint8_t *)data;
+    uint32_t fidnum, hlbn, cur_hiblk, new_alloc, additional;
+    size_t cur_valid, new_valid, k, bi0, bi1;
+    uint8_t hdr_copy[ODS2_BLOCK_SIZE];
+    ods2_fh2_t parsed;
+    struct wdir_extents ex;
+    unsigned mp_off_words;
+    size_t map_cap;
+    ods2_status_t st;
+    uint8_t *h;
+
+    if (!wvol || (!data && data_len > 0))
+        return ODS2_ERR_ARGS;
+    if (data_len == 0)
+        return ODS2_OK;                 /* a zero-length append is a no-op */
+
+    fidnum = ods2_fid_number(&file_fid);
+    if (fidnum < 1 || fidnum > wvol->maxfiles)
+        return ODS2_ERR_ARGS;
+
+    /* Read + validate the file's existing header. wblk() pread-fills it in
+     * block-device mode; parse a COPY so map-walk sees the ORIGINAL extents
+     * while we patch `h` in place afterward. */
+    hlbn = wvol->hdr_base_lbn + (fidnum - 1);
+    h = wblk(wvol, hlbn);
+    memcpy(hdr_copy, h, ODS2_BLOCK_SIZE);
+
+    st = ods2_fh2_parse(hdr_copy, sizeof(hdr_copy), &parsed);
+    if (st != ODS2_OK)
+        return st;
+    /* The header at this FID's slot must self-report this FID -- never extend
+     * a stale/garbage block. */
+    if (ods2_fid_number(&parsed.fh2_fid) != fidnum)
+        return ODS2_ERR_NOTFOUND;
+    /* Append is defined for VERBATIM (RFM=FIXED, create_file_raw-shaped)
+     * data files only -- raw-appending a VAR text file or a directory would
+     * corrupt its record/directory framing. Refuse honestly. */
+    if (parsed.fh2_recattr.fat_rtype != ODS2_RTYPE_FIX ||
+        (parsed.fh2_filechar & ODS2_FH2_M_DIRECTORY))
+        return ODS2_ERR_ARGS;
+
+    cur_hiblk = ods2_recattr_hiblk(&parsed.fh2_recattr);
+    cur_valid = ods2_recattr_data_bytes(&parsed.fh2_recattr);
+    new_valid = cur_valid + data_len;
+    new_alloc = (uint32_t)((new_valid + ODS2_BLOCK_SIZE - 1) / ODS2_BLOCK_SIZE);
+    if (new_alloc == 0)
+        new_alloc = 1;
+    additional = (new_alloc > cur_hiblk) ? (new_alloc - cur_hiblk) : 0;
+
+    /* Collect the file's current retrieval-pointer extents (VBN order). */
+    ex.n = 0;
+    ex.overflow = 0;
+    st = ods2_fh2_map_walk(hdr_copy, wdir_extent_collect, &ex, NULL);
+    if (st != ODS2_OK)
+        return st;
+    if (ex.overflow)
+        return ODS2_ERR_NOSPACE;
+
+    /* Extend the allocation when the appended bytes overflow it. A single
+     * bump allocation yields one contiguous run; chain it onto the map,
+     * merging into the last extent where physically contiguous and within the
+     * FM2 format-1 256-block-per-pointer cap, else adding new <=256 extents. */
+    if (additional > 0) {
+        uint32_t newlbn, at, remaining;
+        st = ods2_wvolume_alloc_blocks(wvol, additional, &newlbn);
+        if (st != ODS2_OK)
+            return st;
+        at = newlbn;
+        remaining = additional;
+        while (remaining > 0) {
+            if (ex.n > 0 &&
+                ex.ext[ex.n - 1].lbn + ex.ext[ex.n - 1].count == at &&
+                ex.ext[ex.n - 1].count < 256) {
+                uint32_t room = 256 - ex.ext[ex.n - 1].count;
+                uint32_t take = remaining < room ? remaining : room;
+                ex.ext[ex.n - 1].count += take;
+                at += take;
+                remaining -= take;
+            } else {
+                uint32_t take = remaining < 256 ? remaining : 256;
+                if (ex.n >= ODS2_WDIR_MAX_EXTENTS)
+                    return ODS2_ERR_NOSPACE;
+                ex.ext[ex.n].lbn = at;
+                ex.ext[ex.n].count = take;
+                ex.n++;
+                at += take;
+                remaining -= take;
+            }
+        }
+    }
+
+    /* Write the appended bytes across the (now sufficient) extent map. Each
+     * touched block goes through wblk(): the partially-filled last existing
+     * block is pread so its head content is preserved; freshly allocated
+     * blocks were zero-seeded by ods2_wvolume_alloc_blocks(). Never memcpy
+     * across a 512-byte block boundary (block-device-backed cache is
+     * per-block). */
+    bi0 = cur_valid / ODS2_BLOCK_SIZE;
+    bi1 = (new_valid - 1) / ODS2_BLOCK_SIZE;
+    for (k = bi0; k <= bi1; k++) {
+        uint32_t lbn;
+        size_t blk_start = k * ODS2_BLOCK_SIZE;
+        size_t blk_end   = blk_start + ODS2_BLOCK_SIZE;
+        size_t lo = cur_valid > blk_start ? cur_valid : blk_start;
+        size_t hi = new_valid < blk_end ? new_valid : blk_end;
+        uint8_t *blk;
+        st = append_block_lbn(&ex, (uint32_t)k, &lbn);
+        if (st != ODS2_OK)
+            return st;
+        blk = wblk(wvol, lbn);
+        memcpy(blk + (lo - blk_start), bytes + (lo - cur_valid), hi - lo);
+    }
+
+    /* Patch the FH2 header: grown extent map + map_inuse, new end-of-file
+     * position (fat_hiblk/efblk/ffbyte -- the FH2_KIND_DATA_FIX convention:
+     * efblk == allocated blocks, ffbyte == bytes in the last block), highwater
+     * (first never-written VBN == hiblk+1, [F11]), and a fresh checksum.
+     * Re-fetch `h` (the sparse cache never moves a live entry, but be
+     * explicit) and use the file's OWN stored map offset. */
+    h = wblk(wvol, hlbn);
+    mp_off_words = h[offsetof(ods2_fh2_t, fh2_mpoffset)];
+    map_cap = ODS2_BLOCK_SIZE - (size_t)mp_off_words * 2 - 2;
+    if ((size_t)ex.n * 4 > map_cap)
+        return ODS2_ERR_NOSPACE;        /* map area cannot hold the extents */
+    {
+        uint8_t *mp_base = h + (size_t)mp_off_words * 2;
+        unsigned ei;
+        memset(mp_base, 0, map_cap);    /* clear any stale FM2 pointers */
+        for (ei = 0; ei < ex.n; ei++) {
+            st = encode_map_extent(mp_base + (size_t)ei * 4,
+                                   ex.ext[ei].lbn, ex.ext[ei].count);
+            if (st != ODS2_OK)
+                return st;
+        }
+        h[offsetof(ods2_fh2_t, fh2_map_inuse)] = (uint8_t)(ex.n * 2);
+    }
+    {
+        size_t ra = offsetof(ods2_fh2_t, fh2_recattr);
+        uint32_t hiblk = new_alloc, efblk = new_alloc;
+        uint16_t ffbyte =
+            (uint16_t)(new_valid - (size_t)(new_alloc - 1) * ODS2_BLOCK_SIZE);
+        put16(h + ra + offsetof(ods2_recattr_t, fat_hiblk) + 0,
+              (uint16_t)(hiblk >> 16));
+        put16(h + ra + offsetof(ods2_recattr_t, fat_hiblk) + 2,
+              (uint16_t)(hiblk & 0xFFFF));
+        put16(h + ra + offsetof(ods2_recattr_t, fat_efblk) + 0,
+              (uint16_t)(efblk >> 16));
+        put16(h + ra + offsetof(ods2_recattr_t, fat_efblk) + 2,
+              (uint16_t)(efblk & 0xFFFF));
+        put16(h + ra + offsetof(ods2_recattr_t, fat_ffbyte), ffbyte);
+        put32(h + offsetof(ods2_fh2_t, fh2_highwater), hiblk + 1);
+    }
+    put16(h + offsetof(ods2_fh2_t, fh2_checksum), ods2_block_checksum(h));
 
     return wvol_commit(wvol, ODS2_OK);
 }

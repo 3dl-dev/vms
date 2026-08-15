@@ -89,8 +89,20 @@ int vmsfs_volume_register(const char *devname, const char *backing_path,
      * and the parsed handle are stack-local until we commit them under the lock.
      * O_CLOEXEC: a child (a RUN'd image) inherits neither this fd nor this
      * process's table; it registers its own.
+     *
+     * O_RDWR first (vms-02e, epic vms-5eb WRITE half): the SYS$DISK ODS-2
+     * WRITE adapter (ods2_sysdisk_create_file/_append_file/_mkdir) needs the
+     * registered volume's fd to be writable to pwrite the live volume. This is
+     * ADDITIVE -- it flips no live path; the read adapter and boot are
+     * unchanged. Fall back to O_RDONLY when the backing store is not writable
+     * (read-only media / permissions) so a genuinely read-only volume still
+     * REGISTERS and READS exactly as before; a later write attempt against
+     * that read-only fd then fails HONESTLY (pwrite EBADF -> ODS2_ERR_IO ->
+     * an SS$_ error), never a silent fake success (Rule 9 / INV-6).
      */
-    int fd = open(backing_path, O_RDONLY | O_CLOEXEC);
+    int fd = open(backing_path, O_RDWR | O_CLOEXEC);
+    if (fd < 0)
+        fd = open(backing_path, O_RDONLY | O_CLOEXEC);
     if (fd < 0)
         return SS$_NOSUCHDEV;
 

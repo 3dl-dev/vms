@@ -186,6 +186,27 @@ set_tests_properties(ods2_sysdisk PROPERTIES
     TIMEOUT 30
 )
 
+# vms-02e (epic vms-5eb, the WRITE half of the ODS-2 runtime flip): the
+# SYS$DISK ODS-2 WRITE adapter (src/vmsfs/ods2_sysdisk.c create/append/mkdir
+# + ods2_writer.c ods2_wvolume_open_bdev/_append_file). Builds a genuine ODS-2
+# loop image with the system hierarchy, registers it as DKA0: (O_RDWR, as PID 1
+# does), and through "/vms/..." paths: creates a verbatim file (byte-identical
+# read-back), APPENDS to an existing file repeatedly across contiguous AND
+# non-contiguous extent growth (the novel path -- read-back concatenation
+# byte-exact), mkdir + creates a file inside it, and exercises the fail-honest
+# edges (no volume -> SS$_DEVNOTMOUNT, non-/vms -> SS$_BADPARAM, absent file ->
+# SS$_NOSUCHFILE, write over an O_RDONLY volume fails honestly -- INV-6).
+# Additive: flips no live path. Links vmsfs_volume.
+add_executable(test_ods2_write_adapter test_ods2_write_adapter.c)
+target_include_directories(test_ods2_write_adapter PRIVATE ${VMS_FS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
+target_link_libraries(test_ods2_write_adapter PRIVATE vmsfs_volume)
+
+add_test(NAME ods2_write_adapter COMMAND test_ods2_write_adapter)
+set_tests_properties(ods2_write_adapter PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)
+
 # vms-88d (R6-build unblocker for the ODS-2 flip vms-5eb): the WRITER's
 # long-filename IDENT-area encoding. The real distro tree contains names
 # like "LIBVMSPROCESS$SHR.EXE;1" (23 chars) that the writer's old 20-char-only

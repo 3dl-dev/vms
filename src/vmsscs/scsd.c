@@ -2,9 +2,9 @@
  * scsd.c - SCSD skeleton: the SCS Datalink daemon.
  *
  * Per docs/design-cluster-node.md section 3.1: a new src/vmsscs/ subsystem,
- * a userspace daemon that opens an AF_PACKET raw socket bound to the
- * cluster interface, receives SCA frames (ethertype 0x6007, DEC LAVC/SCA),
- * and classifies them by the GROUNDED length rule (see scs_classify.h /
+ * a userspace daemon that opens a raw-L2 datalink bound to the cluster
+ * interface, receives SCA frames (ethertype 0x6007, DEC LAVC/SCA), and
+ * classifies them by the GROUNDED length rule (see scs_classify.h /
  * docs/cluster-protocol-spec.md section 2).
  *
  * SCOPE (vms-294): raw socket open + bind + receive loop + length
@@ -21,25 +21,34 @@
  * OVMX_CLUSTER_AUTH_PATH), defaulting to group 1 (the reference lab's
  * group) if unconfigured.
  *
- * Requires CAP_NET_RAW (run as root, or `setcap cap_net_raw+ep` on the
- * built binary) -- AF_PACKET SOCK_RAW sockets need it.
+ * vms-838: the raw-L2 transport is now scs_datalink.h/.c (open/close,
+ * MAC-get, send, recv, recv-timeout), not an AF_PACKET socket opened
+ * inline in this file. On Linux that backend is byte-for-byte the same
+ * AF_PACKET/SOCK_RAW socket this file always opened (still needs
+ * CAP_NET_RAW -- run as root, or `setcap cap_net_raw+ep` on the built
+ * binary). On NetBSD (the vax substrate) it is bpf(4), which has no
+ * AF_PACKET equivalent -- see scs_datalink.h for the split. This file's
+ * own socket/ioctl code is gone; every send/recv/MAC-get call site below
+ * goes through that header instead, unchanged in shape and behavior.
  */
-#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <net/if.h>
-#include <netpacket/packet.h>
+#include <net/if.h>  /* if_nametoindex() -- portable, unlike the raw-socket
+                      * headers vms-838 removed (<netpacket/packet.h>,
+                      * <sys/socket.h>, <arpa/inet.h>): NetBSD has this one
+                      * too. */
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "scs_datalink.h"
 
 #include "cluster_authorize.h"
 #include "scs_cdt.h"
@@ -175,26 +184,18 @@ static void log_ts(FILE *out)
 }
 
 /*
- * get_iface_hwaddr - Resolve ifname's hardware (MAC) address via
- * SIOCGIFHWADDR on a throwaway AF_INET socket (works for both physical
- * NICs and bridge devices like br0).
+ * get_iface_hwaddr - Resolve ifname's hardware (MAC) address (works for
+ * both physical NICs and bridge devices like br0).
+ *
+ * vms-838: delegates to scs_datalink_get_hwaddr() -- SIOCGIFHWADDR on Linux
+ * (unchanged), getifaddrs()/AF_LINK on NetBSD (which has no SIOCGIFHWADDR).
+ * Kept as a thin named wrapper rather than replacing every call site with
+ * scs_datalink_get_hwaddr() directly, so this file's own MAC-resolution
+ * call sites (there are several) are untouched.
  */
 static int get_iface_hwaddr(const char *ifname, uint8_t mac_out[6])
 {
-    int s = socket(AF_INET, SOCK_DGRAM, 0);
-    if (s < 0) {
-        return -1;
-    }
-    struct ifreq ifr;
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
-    if (ioctl(s, SIOCGIFHWADDR, &ifr) < 0) {
-        close(s);
-        return -1;
-    }
-    memcpy(mac_out, ifr.ifr_hwaddr.sa_data, 6);
-    close(s);
-    return 0;
+    return scs_datalink_get_hwaddr(ifname, mac_out);
 }
 
 /*
@@ -3301,14 +3302,15 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
     scsd_test_frames++;
     return (ssize_t)len;
 #else
-    struct sockaddr_ll da;
-    memset(&da, 0, sizeof(da));
-    da.sll_family = AF_PACKET;
-    da.sll_protocol = htons(SCA_ETHERTYPE);
-    da.sll_ifindex = ifindex;
-    da.sll_halen = 6;
-    memcpy(da.sll_addr, mac, 6);
-    return sendto(sock, frame, len, 0, (struct sockaddr *)&da, sizeof(da));
+    /* vms-838: the AF_PACKET sockaddr_ll build + sendto() that used to live
+     * here moved to scs_datalink_send()'s Linux backend (byte-for-byte the
+     * same construction) -- see scs_datalink.c. This keeps send_frame_raw()
+     * as the choke point tests/vmsscs/test_scsd_send_sites.py's SEND SITE
+     * TABLE names, while letting the actual platform primitive (sendto() on
+     * Linux, write() on NetBSD's bpf) live behind one header shared with a
+     * future DECnet Phase IV (vms-30e) sender. That script's own vms-838
+     * update explains how it now covers the moved primitive. */
+    return scs_datalink_send(sock, ifindex, SCA_ETHERTYPE, mac, frame, len);
 #endif
 }
 
@@ -11959,7 +11961,7 @@ static void scsd_shutdown_teardown(struct scsd_rx *rx, uint8_t *buf, size_t bufs
         if (scsd_open_connection_count() == 0) {
             break;
         }
-        ssize_t n = recv(rx->sock, buf, bufsz, 0);
+        ssize_t n = scs_datalink_recv(rx->sock, buf, bufsz);
         if (n < 0) {
             if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
                 continue; /* the socket's SO_RCVTIMEO is the inner bound */
@@ -12578,8 +12580,9 @@ int main(int argc, char **argv)
             fprintf(stderr,
                     "usage: %s [--iface IFACE] [--duration SECONDS] [--emit-hello]\n"
                     "          [--respond] [--connect] [--hello-interval SECONDS]\n"
-                    "  SCS datalink listener: opens an AF_PACKET raw socket on\n"
-                    "  ethertype 0x%04x (DEC SCA/LAVC), classifies received frames\n"
+                    "  SCS datalink listener: opens a raw-L2 datalink (AF_PACKET on\n"
+                    "  Linux, bpf(4) on NetBSD) on ethertype 0x%04x (DEC SCA/LAVC),\n"
+                    "  classifies received frames\n"
                     "  by the GROUNDED length rule, and logs them.\n"
                     "  --emit-hello        also multicast a spec-valid HELLO beacon\n"
                     "                      (identity from SCSNODE/cluster-group config;\n"
@@ -12624,31 +12627,23 @@ int main(int argc, char **argv)
         emit_hello = 1;
     }
 
-    int sock = socket(AF_PACKET, SOCK_RAW, htons(SCA_ETHERTYPE));
+    /* vms-838: open + bind the raw-L2 datalink -- AF_PACKET/SOCK_RAW +
+     * bind(2) on Linux (unchanged), bpf(4) BIOCSETIF on NetBSD. See
+     * scs_datalink.h. */
+    int sock = scs_datalink_open(ifname, SCA_ETHERTYPE);
     if (sock < 0) {
         fprintf(stderr,
-                "SCSD-E-NOSOCKET, socket(AF_PACKET, SOCK_RAW) failed: %s\n"
-                "  (needs CAP_NET_RAW -- run as root or setcap cap_net_raw+ep on this binary)\n",
-                strerror(errno));
+                "SCSD-E-NOSOCKET, scs_datalink_open('%s') failed: %s\n"
+                "  (Linux needs CAP_NET_RAW -- run as root or setcap cap_net_raw+ep"
+                " on this binary; NetBSD needs read/write on /dev/bpf*)\n",
+                ifname, strerror(errno));
         return 1;
     }
 
     unsigned ifindex = if_nametoindex(ifname);
     if (ifindex == 0) {
         fprintf(stderr, "SCSD-E-NOIFACE, unknown interface '%s': %s\n", ifname, strerror(errno));
-        close(sock);
-        return 1;
-    }
-
-    struct sockaddr_ll sll;
-    memset(&sll, 0, sizeof(sll));
-    sll.sll_family = AF_PACKET;
-    sll.sll_protocol = htons(SCA_ETHERTYPE);
-    sll.sll_ifindex = (int)ifindex;
-
-    if (bind(sock, (struct sockaddr *)&sll, sizeof(sll)) < 0) {
-        fprintf(stderr, "SCSD-E-BINDFAIL, bind to '%s' failed: %s\n", ifname, strerror(errno));
-        close(sock);
+        scs_datalink_close(sock);
         return 1;
     }
 
@@ -12743,7 +12738,7 @@ int main(int argc, char **argv)
      * shared by every peer's START responder. */
     char ovmx_node[SYSGEN_STRVAL_LEN];
     if (resolve_node_identity(ovmx_node, sizeof(ovmx_node)) != 0) {
-        close(sock);
+        scs_datalink_close(sock);
         return 1;
     }
     uint16_t ovmx_scssystemid = resolve_scssystemid();
@@ -12786,13 +12781,13 @@ int main(int argc, char **argv)
         if (get_iface_hwaddr(ifname, hw_mac) != 0) {
             fprintf(stderr, "SCSD-E-NOHWADDR, cannot resolve HW address of '%s': %s\n",
                     ifname, strerror(errno));
-            close(sock);
+            scs_datalink_close(sock);
             return 1;
         }
 
         char node_name[SYSGEN_STRVAL_LEN];
         if (resolve_node_identity(node_name, sizeof(node_name)) != 0) {
-            close(sock);
+            scs_datalink_close(sock);
             return 1;
         }
         uint16_t group = resolve_cluster_group();
@@ -12815,13 +12810,11 @@ int main(int argc, char **argv)
                 hello_interval);
 
         /* Bound recv() so the loop wakes periodically to check the HELLO
-         * timer even when the wire is idle. */
-        struct timeval rcvtimeo;
-        rcvtimeo.tv_sec = 1;
-        rcvtimeo.tv_usec = 0;
-        if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo)) < 0) {
-            fprintf(stderr, "SCSD-E-RCVTIMEO, setsockopt(SO_RCVTIMEO) failed: %s\n", strerror(errno));
-            close(sock);
+         * timer even when the wire is idle. vms-838: SO_RCVTIMEO on Linux,
+         * BIOCSRTIMEOUT on NetBSD -- see scs_datalink_set_recv_timeout(). */
+        if (scs_datalink_set_recv_timeout(sock, 1) < 0) {
+            fprintf(stderr, "SCSD-E-RCVTIMEO, scs_datalink_set_recv_timeout failed: %s\n", strerror(errno));
+            scs_datalink_close(sock);
             return 1;
         }
     }
@@ -12952,7 +12945,7 @@ int main(int argc, char **argv)
          * header before adding a second entry point. */
         (void)scsd_diskrun_ungate_tick(&rx, monotonic_ms());
 
-        ssize_t n = recv(sock, buf, sizeof(buf), 0);
+        ssize_t n = scs_datalink_recv(sock, buf, sizeof(buf));
         if (n < 0) {
             if (errno == EINTR) {
                 continue; /* SIGALRM/SIGINT -- g_stop checked at loop top */
@@ -12987,6 +12980,6 @@ int main(int argc, char **argv)
 
     scsd_exit_summary(&rx, stderr);
 
-    close(sock);
+    scs_datalink_close(sock);
     return 0;
 }

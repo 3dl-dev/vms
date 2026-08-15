@@ -6871,17 +6871,19 @@ jobs:
   # aggregate target -- the single authoritative "what ships" list -- builds
   # the FULL shipped userspace image set for vax, and specifically closes rd
   # vms-e1d's cross-arch parity-drift gap: HELP.EXE, AUTHORIZE.EXE, MAIL.EXE,
-  # MONITOR.EXE, INITIALIZE.EXE, INSTALL.EXE, SYSGEN.EXE, PRODUCT.EXE, and
-  # PARTS.EXE (nine of the ten drift images) now cross-build + link for
-  # netbsd-vax and pass the Decision-A activation contract (vms-42d): ELF32,
-  # Digital VAX, dynamically linked, PT_INTERP == /usr/libexec/ld.elf_so,
-  # NEEDED subset of {libc,libpthread,libm,libatomic}. The tenth drift image,
-  # SCSD.EXE, is a REPORTED exception, not a silent gap: it opens a Linux-
-  # only AF_PACKET raw socket (src/vmsscs/scsd.c) with no NetBSD equivalent
-  # (NetBSD's analogue is bpf(4), a materially different API) -- porting it
-  # is its own design-sized follow-up, deliberately excluded from
-  # `ovmx-images` on the NetBSD substrate (CMakeLists.txt) rather than forced.
-  # LINK.EXE is excluded for the same "no VAX role by design" reason
+  # MONITOR.EXE, INITIALIZE.EXE, INSTALL.EXE, SYSGEN.EXE, PRODUCT.EXE,
+  # PARTS.EXE, and (rd vms-838) SCSD.EXE -- all ten drift images -- now
+  # cross-build + link for netbsd-vax and pass the Decision-A activation
+  # contract (vms-42d): ELF32, Digital VAX, dynamically linked, PT_INTERP ==
+  # /usr/libexec/ld.elf_so, NEEDED subset of {libc,libpthread,libm,
+  # libatomic}. SCSD.EXE was the last holdout: it opened a Linux-only
+  # AF_PACKET raw socket (src/vmsscs/scsd.c) with no NetBSD equivalent
+  # (NetBSD's raw-link facility is bpf(4), a materially different API).
+  # rd vms-838 closed the gap with a thin raw-L2 datalink abstraction
+  # (src/vmsscs/scs_datalink.h/.c: an unchanged Linux AF_PACKET backend and
+  # a new NetBSD bpf(4) backend behind one header), so it is no longer
+  # excluded from `ovmx-images` on the NetBSD substrate (CMakeLists.txt).
+  # LINK.EXE stays excluded for the "no VAX role by design" reason
   # IMGACT.EXE already carries in tools/parity/image-parity-allowlist.json
   # (it produces x86_64/aarch64 Mode-2 shareables; vax has no Mode 2). Runs
   # ALONGSIDE vax-cmake-toolchain and every existing per-image tools/cross-
@@ -6890,7 +6892,7 @@ jobs:
   # toolchain image layer-caches (gha, shared scope=cross-vax).
   # -----------------------------------------------------------------------
   vax-cmake-images:
-    name: vax toolchain builds the ovmx-images aggregate; 9/10 parity-drift images close (vms-64a)
+    name: vax toolchain builds the ovmx-images aggregate; 10/10 parity-drift images close (vms-64a, vms-838)
     needs: changes
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
     runs-on: ubuntu-latest
@@ -6928,17 +6930,15 @@ jobs:
           fi
           echo "$RAW" | grep -qF "ALL PROOFS PASSED: ovmx-images builds the full shipped image set via 'cmake --build --target ovmx-images' for vax--netbsdelf and every image passes the Decision-A activation contract" \
             || { echo "FAIL: did not see the ovmx-images PASS banner"; exit 1; }
-          for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE OVMXDUMP HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE; do
+          for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE OVMXDUMP HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE SCSD.EXE; do
             echo "$RAW" | grep -qF -- "-> $img: ELF32 Digital VAX, dynamically linked, interp=/usr/libexec/ld.elf_so" \
               || { echo "FAIL: $img did not pass the activation contract assertion"; exit 1; }
           done
-          for img in HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE; do
+          for img in HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE SCSD.EXE; do
             echo "$RAW" | grep -qF "DRIFT-CLOSED: $img" \
               || { echo "FAIL: $img was not reported as a closed parity-drift image"; exit 1; }
           done
-          echo "$RAW" | grep -qF "SCSD.EXE excluded (Linux-only AF_PACKET, no NetBSD BPF port -- reported gap, not silent skip)" \
-            || { echo "FAIL: SCSD.EXE's reported exception did not print"; exit 1; }
-          echo "PASS: ovmx-images built the full shipped image set for netbsd-vax; 9/10 vms-e1d parity-drift images closed (SCSD.EXE remains a reported, justified exception)"
+          echo "PASS: ovmx-images built the full shipped image set for netbsd-vax; 10/10 vms-e1d parity-drift images closed"
 
   # -----------------------------------------------------------------------
   # ovmx-boot-images-netbsd-vax (rd vms-5d1, epic vms-8e8, P4-C boot; docs/

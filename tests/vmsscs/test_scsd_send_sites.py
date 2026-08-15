@@ -10,11 +10,20 @@ is three rounds of review each finding one more sender that did not. A runtime
 test can only prove the paths it happens to drive; this proves the SHAPE.
 
 WHAT IT ASSERTS, against src/vmsscs/scsd.c itself:
-  0. THE TRANSMIT PRIMITIVE ITSELF is confined: the only function in the file
-     containing a sendto/send/sendmsg/sendmmsg/write/writev call is
-     send_frame_raw(), and it contains exactly one. This is check 0 because
-     checks 1-4 all key on the WRAPPER NAMES, and a raw socket call is invisible
-     to a name check by construction.
+  0. THE TRANSMIT PRIMITIVE ITSELF is confined. Pre-vms-838: the only
+     function in scsd.c containing a sendto/send/sendmsg/sendmmsg/write/
+     writev call was send_frame_raw(), exactly once. vms-838 moved that
+     primitive into src/vmsscs/scs_datalink.c (a Linux AF_PACKET backend and
+     a NetBSD bpf(4) backend behind one header, since NetBSD -- the vax
+     substrate -- has no AF_PACKET) so send_frame_raw() now calls
+     scs_datalink_send() instead of holding the syscall itself. Check 0
+     therefore now asserts TWO things: scsd.c contains ZERO transmit
+     primitives (the abstraction is not bypassed), and scs_datalink.c
+     contains exactly one in each of its two named backend functions
+     (datalink_send_linux(), datalink_send_netbsd()) -- the same "one named
+     function owns the syscall" discipline, one file further out. This is
+     check 0 because checks 1-4 all key on the WRAPPER NAMES, and a raw
+     socket call is invisible to a name check by construction.
   1. Every call to send_frame_raw() (the transport, which applies no policy)
      sits inside one of the functions the SEND SITE TABLE names as EXEMPT.
      A new direct caller anywhere else reds this test.
@@ -88,6 +97,14 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 SCSD = os.path.join(ROOT, "src", "vmsscs", "scsd.c")
+# vms-838: the raw-L2 transport backend (AF_PACKET on Linux, bpf(4) on
+# NetBSD) moved out of scsd.c into its own file, scs_datalink.c, so it can
+# be shared with a future DECnet Phase IV sender (rd vms-30e) instead of
+# being scsd-specific. That is exactly the primitive this census's check 0
+# exists to keep confined -- see its updated header below for what changed
+# and why the shape (one choke point, now one hop further out) is
+# unchanged.
+DATALINK = os.path.join(ROOT, "src", "vmsscs", "scs_datalink.c")
 
 # The functions permitted to call send_frame_raw() directly, and why. Keep this
 # in step with the EXEMPT block of the SEND SITE TABLE in scsd.c -- check 2
@@ -150,82 +167,141 @@ DEFN = re.compile(r"^[A-Za-z_][A-Za-z0-9_ \*]*?([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 # blanked to newlines above) belong to nobody -- attributing them to the
 # preceding function inflates every span and would make the size check below
 # lie.
-owner = [None] * len(code_lines)
-current = None
-depth = 0
-started = False
-for i, line in enumerate(code_lines):
-    if current is None:
-        m = DEFN.match(line)
-        if m and not line.rstrip().endswith(";"):
-            current = m.group(1)
-            started = False
-    if current is not None:
-        owner[i] = current
-        depth += line.count("{") - line.count("}")
-        if depth > 0:
-            started = True
-        elif started:
-            current = None
-            depth = 0
-            started = False
+def function_owner_map(code_lines):
+    """Map every (stripped) source line to its enclosing top-level function.
+    A function definition starts at column 0 with a type and an identifier
+    followed by '(' -- the style both scsd.c and scs_datalink.c use
+    throughout. A line belongs to a function only from its definition line
+    to the closing brace of its body. Lines BETWEEN functions (the doc
+    comments, which were blanked to newlines by the caller) belong to
+    nobody -- attributing them to the preceding function inflates every
+    span and would make a size check lie."""
+    owner = [None] * len(code_lines)
+    current = None
+    depth = 0
+    started = False
+    for i, line in enumerate(code_lines):
+        if current is None:
+            m = DEFN.match(line)
+            if m and not line.rstrip().endswith(";"):
+                current = m.group(1)
+                started = False
+        if current is not None:
+            owner[i] = current
+            depth += line.count("{") - line.count("}")
+            if depth > 0:
+                started = True
+            elif started:
+                current = None
+                depth = 0
+                started = False
+    return owner
+
+
+owner = function_owner_map(code_lines)
+
+# --- vms-838: the datalink backend file, parsed the same way ---
+dl_src = open(DATALINK, encoding="utf-8").read()
+dl_code = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), dl_src, flags=re.S)
+dl_code = re.sub(r"//[^\n]*", "", dl_code)
+dl_code = re.sub(r'"(?:\\.|[^"\\])*"', '""', dl_code)
+dl_code_lines = dl_code.splitlines()
+dl_owner = function_owner_map(dl_code_lines)
 
 # --- check 0: the transmit primitive is confined to ONE function ---
 # Checks 1, 3 and 6 attribute calls to the WRAPPER NAMES. That is exactly the
 # hole a raw socket call walks through, so this pass keys on the syscall
-# wrappers themselves instead. Everything that can put a byte on the AF_PACKET
-# socket is listed; if a future one is added to libc, add it here.
+# wrappers themselves instead. Everything that can put a byte on the wire
+# is listed; if a future one is added to libc, add it here.
 #
 # MATCHED AS A BARE IDENTIFIER, not as `name(`, so that TAKING one of these as a
 # value -- `= sendto;`, `&sendmsg`, stashing it in a dispatch table -- is caught
 # too. Comments and string literals were blanked above, so a mention in prose
-# does not trip it. Measured on the current file this costs nothing: the bare
-# scan and the call-shaped scan find the same single site, scsd.c's sendto()
-# inside send_frame_raw(). A future local named `send` would red here; renaming
+# does not trip it. A future local named `send` would red here; renaming
 # it (or, if it really transmits, entering it in the SEND SITE TABLE) is the
 # intended response -- do NOT loosen the regex to make it pass.
 TRANSMIT_PRIMITIVES = ("sendto", "sendmsg", "sendmmsg", "send",
                        "writev", "pwritev", "pwrite", "write", "syscall")
 PRIM_RE = re.compile(r"\b(" + "|".join(TRANSMIT_PRIMITIVES) + r")\b")
 
-# The ONLY function permitted to contain a transmit primitive, and how many it
-# may contain. send_frame_raw() is the transport: it is where the sockaddr_ll is
-# built and the one sendto() lives (the SCSD_UNIT_TEST arm of the same function
-# captures into a buffer instead and calls nothing). Anything else that wants to
-# transmit must reach it through send_frame_vc() (choked) or, with a written
-# justification in the SEND SITE TABLE, through an EXEMPT wrapper.
-PRIMITIVE_OWNERS = {"send_frame_raw": 1}
+# vms-838: THE PRIMITIVE MOVED. Before this item, scsd.c opened the AF_PACKET
+# socket itself and send_frame_raw() called sendto() on it directly, so the
+# primitive scan below (and the "must contain exactly 1" invariant) ran
+# entirely against scsd.c. NetBSD (the vax substrate SCSD.EXE now also ships
+# on, closing rd vms-e1d's last parity-drift image) has no AF_PACKET -- its
+# raw-link facility is bpf(4), a materially different API -- so the actual
+# platform primitive (sendto() on Linux, write() on NetBSD's bpf) now lives
+# in src/vmsscs/scs_datalink.c instead, behind a header scsd.c's
+# send_frame_raw() calls into (scs_datalink_send()). Two consequences,
+# BOTH ENFORCED BELOW rather than merely asserted here:
+#   1. scsd.c itself must contain ZERO transmit primitives -- not "exactly
+#      1 inside send_frame_raw()" anymore. A raw sendto()/write() appearing
+#      ANYWHERE in scsd.c, including inside send_frame_raw(), means the
+#      abstraction was bypassed and this reds.
+#   2. scs_datalink.c must contain the primitive(s), each confined to its
+#      own per-backend function (datalink_send_linux/datalink_send_netbsd),
+#      the same "one named function owns the syscall" discipline check 0
+#      always enforced, just applied one file further out. Both backends'
+#      source text is always present (the actual platform selection is a
+#      compile-time #ifdef __linux__/__NetBSD__ inside scs_datalink.c), so
+#      a plain per-file text scan -- which does not run the preprocessor,
+#      same as the scsd.c scan never did -- legitimately finds both.
+# scsd.c's own owner map (SCSD_PRIMITIVE_OWNERS) is intentionally gone: since
+# vms-838 the correct count there is zero, unconditionally -- see the `check`
+# on `prim_sites` just below, which asserts that directly rather than via an
+# owners table (an empty table and a table asserting "zero of everything" are
+# the same thing; the direct assertion says so without one).
+DATALINK_PRIMITIVE_OWNERS = {
+    "datalink_send_linux": 1,   # sendto() -- the pre-vms-838 scsd.c body, moved.
+    "datalink_send_netbsd": 1,  # write() -- bpf(4) has no per-packet destination
+                                # address, so no sockaddr_ll-equivalent is built.
+}
 
-prim_sites = {}
-for i, line in enumerate(code_lines):
-    n = len(PRIM_RE.findall(line))
-    if n:
-        prim_sites.setdefault(owner[i], []).extend([i + 1] * n)
 
-check(bool(prim_sites),
-      "no transmit primitive found anywhere in scsd.c -- the primitive scan is "
-      "broken, not the source (send_frame_raw() must contain a sendto())")
-for fn, at in sorted(prim_sites.items(), key=lambda kv: (kv[0] or "")):
-    which = sorted({p for a in set(at) for p in PRIM_RE.findall(code_lines[a - 1])})
-    check(fn in PRIMITIVE_OWNERS,
+def scan_primitives(code_lines, owner):
+    sites = {}
+    for i, line in enumerate(code_lines):
+        n = len(PRIM_RE.findall(line))
+        if n:
+            sites.setdefault(owner[i], []).extend([i + 1] * n)
+    return sites
+
+
+prim_sites = scan_primitives(code_lines, owner)
+dl_prim_sites = scan_primitives(dl_code_lines, dl_owner)
+
+check(not prim_sites,
+      f"scsd.c contains a transmit primitive directly ({prim_sites}) -- since "
+      f"vms-838 the raw send lives in scs_datalink.c behind scs_datalink_send(), "
+      f"not in this file. A primitive found here means the abstraction was "
+      f"bypassed (e.g. a stray sendto()/write() added back inside "
+      f"send_frame_raw() or elsewhere).")
+
+check(bool(dl_prim_sites),
+      "no transmit primitive found anywhere in scs_datalink.c -- the primitive "
+      "scan is broken, not the source (datalink_send_linux()/"
+      "datalink_send_netbsd() must each contain one)")
+for fn, at in sorted(dl_prim_sites.items(), key=lambda kv: (kv[0] or "")):
+    which = sorted({p for a in set(at) for p in PRIM_RE.findall(dl_code_lines[a - 1])})
+    check(fn in DATALINK_PRIMITIVE_OWNERS,
           f"{fn or '<file scope>'}() names a transmit primitive "
           f"({'/'.join(which)}) "
-          f"DIRECTLY at scsd.c line(s) {at}, bypassing send_frame_raw(). A raw "
-          f"socket call is invisible to the send_frame_raw()/send_frame_vc() "
-          f"name census -- which is how main()'s HELLO beacon sat outside the "
-          f"SEND SITE TABLE. Route it through send_frame_vc() (SCS traffic) or "
-          f"through an EXEMPT wrapper named in the table.")
-for fn, want in sorted(PRIMITIVE_OWNERS.items()):
-    got = len(prim_sites.get(fn, []))
+          f"DIRECTLY at scs_datalink.c line(s) {at}, outside the two backend "
+          f"send functions. Route it through datalink_send_linux()/"
+          f"datalink_send_netbsd(), or -- if this is deliberately a new "
+          f"backend -- add it to DATALINK_PRIMITIVE_OWNERS here.")
+for fn, want in sorted(DATALINK_PRIMITIVE_OWNERS.items()):
+    got = len(dl_prim_sites.get(fn, []))
     check(got == want,
-          f"{fn}() contains {got} transmit primitive call(s), expected {want} "
-          f"(lines {prim_sites.get(fn, [])}). An EXTRA raw send inside the "
-          f"transport itself is still an unenumerated sender. If the change is "
-          f"intended, update PRIMITIVE_OWNERS and the SEND SITE TABLE together.")
+          f"{fn}() contains {got} transmit primitive call(s) in scs_datalink.c, "
+          f"expected {want} (lines {dl_prim_sites.get(fn, [])}). An EXTRA raw "
+          f"send inside a backend transport function is still an unenumerated "
+          f"sender. If the change is intended, update DATALINK_PRIMITIVE_OWNERS.")
 
-print(f"  {sum(len(v) for v in prim_sites.values())} transmit primitive call(s) "
-      f"in {len(prim_sites)} function(s): "
-      f"{', '.join(sorted(k or '<file scope>' for k in prim_sites))}")
+print(f"  scsd.c: 0 transmit primitive call(s) (moved to scs_datalink.c, vms-838)")
+print(f"  scs_datalink.c: {sum(len(v) for v in dl_prim_sites.values())} transmit "
+      f"primitive call(s) in {len(dl_prim_sites)} function(s): "
+      f"{', '.join(sorted(k or '<file scope>' for k in dl_prim_sites))}")
 
 # --- check 2: the in-source table names the same exempt functions ---
 tbl = re.search(r"SEND SITE TABLE ={5,}\n(.*?)\n \* ={20,}", src, flags=re.S)

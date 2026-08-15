@@ -915,21 +915,18 @@ if(BUILD_TOOLS)
         PARTS                # PARTS.EXE
     )
 
-    # SCSD.EXE (scsd_exe, src/vmsscs/CMakeLists.txt): the SCS datalink daemon
-    # opens an AF_PACKET SOCK_RAW socket (src/vmsscs/scsd.c) -- a Linux-only
-    # socket family with no NetBSD equivalent (NetBSD's analogous raw-link
-    # access is bpf(4)/`/dev/bpf`, a materially different API, not a drop-in
-    # header swap). This is a REAL, currently-unclosed vax gap, not a script
-    # that was never written: porting SCSD to a NetBSD BPF backend is its own
-    # design-sized follow-up (candidate for a justified
-    # tools/parity/image-parity-allowlist.json entry, or a future rung, once
-    # scoped) -- it is deliberately NOT forced into this aggregate on the
-    # NetBSD substrate, per docs/design-unified-cross-build.md §3-B ("non-
-    # portable targets stay out of the aggregate until individually ported").
-    # It stays in the aggregate on every other substrate (unregressed there).
-    if(NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
-        list(APPEND _OVMX_IMAGES_DEPS scsd_exe)  # SCSD.EXE
+    # SCSD.EXE (scsd_exe, src/vmsscs/CMakeLists.txt): the SCS datalink daemon.
+    # vms-838 gave it a thin raw-L2 datalink abstraction (scs_datalink.h/.c,
+    # src/vmsscs/) with a Linux AF_PACKET backend (unchanged behavior) and a
+    # NetBSD bpf(4) backend (NetBSD has no AF_PACKET; bpf(4) is its raw-link
+    # facility, a materially different API), selected at compile time --
+    # scsd.c itself no longer opens a socket directly. That closed the last
+    # of rd vms-e1d's ten x86_64<->vax parity-drift images, so SCSD.EXE now
+    # ships in the aggregate on every substrate, same as everything else in
+    # _OVMX_IMAGES_DEPS above.
+    list(APPEND _OVMX_IMAGES_DEPS scsd_exe)  # SCSD.EXE
 
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
         # LINK.EXE (vmslink, src/vmslink/link.c): the OVMX-native ELF64
         # LINK.EXE hardcodes AArch64/x86_64 ELF64 relocation handling
         # (R_AARCH64_*, Elf64_Section) -- it is the linker that PRODUCES

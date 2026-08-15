@@ -279,6 +279,61 @@ static void *ftpd_mock(void *arg)
     return NULL;
 }
 
+/* ============ TELNET client read-until-complete helper ============ */
+/*
+ * Read option-stripped application data from a TELNET stream, ACCUMULATING
+ * across as many $QIO IO$_READVBLK reads as the byte stream takes, until
+ * `needle` appears in what has been received or the peer closes (EOF).
+ *
+ * This is the only correct way to consume a TCP byte stream for a whole logical
+ * line: one IO$_READVBLK returns only whatever the host kernel has buffered at
+ * that instant (vms_ioctl_bg_recv -> kernel_recvmsg with flags 0, a possibly
+ * short read), so the peer's banner CRLF or the echoed line can arrive in a
+ * LATER segment -- a single read cannot be assumed to carry the whole line.
+ * That is exactly the vms-5ef flake: tcpip_telnet_recv returns as soon as it
+ * has application bytes and its buffer is drained, so the banner's trailing
+ * "\r\n" could be left unconsumed and a one-shot echo read would then capture
+ * that leftover CRLF (or a fragmented echo) instead of "PING OVMX\r\n".
+ *
+ * Each tcpip_telnet_recv blocks on REAL socket data, so this loop is driven by
+ * socket readiness -- never a timed sleep -- and the suite's alarm() watchdog
+ * still bounds a genuinely wedged peer. `*saw_iac` reports whether any raw
+ * telnet control byte leaked into the recovered application data (it must not).
+ */
+static uint32_t telnet_recv_until(struct tcpip_conn *conn, char *buf,
+                                  uint32_t bufsz, const char *needle,
+                                  uint32_t *total_out, int *saw_iac)
+{
+    uint32_t total = 0;
+    uint32_t st = SS$_NORMAL;
+
+    *saw_iac = 0;
+    buf[0] = '\0';
+    for (;;) {
+        uint32_t got = 0;
+        uint32_t i;
+        uint32_t room = (total + 1 < bufsz) ? bufsz - 1 - total : 0;
+
+        if (room == 0)
+            break;                 /* buffer full -- return what we have */
+
+        st = tcpip_telnet_recv(conn, buf + total, room, &got);
+        if (!(st & 1))
+            break;
+        for (i = 0; i < got; i++)
+            if ((unsigned char)buf[total + i] == TN_IAC)
+                *saw_iac = 1;
+        total += got;
+        buf[total] = '\0';
+        if (needle && strstr(buf, needle))
+            break;                 /* the full expected line has arrived */
+        if (got == 0)
+            break;                 /* EOF: peer closed, nothing more coming */
+    }
+    *total_out = total;
+    return st;
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -320,7 +375,7 @@ int main(void)
             pthread_t th;
             struct tcpip_conn conn;
             char buf[256];
-            uint32_t got = 0, i;
+            uint32_t got = 0;
             int has_iac = 0;
             uint32_t st;
 
@@ -329,22 +384,27 @@ int main(void)
             st = tcpip_connect(&conn, lo_be, port);
             CHECK(st & 1, "TELNET $ASSIGN TCPIP$DEVICE: + $QIO connect to the telnet peer");
 
-            st = tcpip_telnet_recv(&conn, buf, sizeof(buf) - 1, &got);
-            buf[got < sizeof(buf) ? got : sizeof(buf) - 1] = '\0';
-            for (i = 0; i < got; i++)
-                if ((unsigned char)buf[i] == TN_IAC) has_iac = 1;
             /* The banner is delivered with all telnet control (IAC WILL/DO)
              * stripped -- proving the client processed and refused negotiation
-             * inline rather than leaking option bytes into application data. */
+             * inline rather than leaking option bytes into application data.
+             * Accumulate until the banner is fully in hand (it may span
+             * segments); has_iac stays set if any control byte leaked. */
+            st = telnet_recv_until(&conn, buf, sizeof(buf), TELNET_BANNER,
+                                   &got, &has_iac);
             CHECK((st & 1) && !has_iac && strstr(buf, TELNET_BANNER) != NULL,
                   "TELNET reads the server banner with IAC option negotiation stripped");
 
             st = tcpip_telnet_send(&conn, TELNET_LINE, (uint32_t)strlen(TELNET_LINE));
             CHECK(st & 1, "TELNET sends an application line over the connection");
 
-            got = 0;
-            st = tcpip_telnet_recv(&conn, buf, sizeof(buf) - 1, &got);
-            buf[got < sizeof(buf) ? got : sizeof(buf) - 1] = '\0';
+            /* Read the echo the SAME way -- accumulate across $QIO reads until
+             * the whole echoed line ("PING OVMX...") is in hand. A single
+             * IO$_READVBLK returns only the bytes buffered at that instant, so
+             * the banner's trailing CRLF (if left unconsumed in a later segment)
+             * or a fragmented echo would otherwise make a one-shot read capture
+             * the wrong/partial bytes -- the historical flake (vms-5ef). */
+            st = telnet_recv_until(&conn, buf, sizeof(buf), "PING OVMX",
+                                   &got, &has_iac);
             CHECK((st & 1) && strstr(buf, "PING OVMX") != NULL,
                   "TELNET reads the line echoed back by the server");
 

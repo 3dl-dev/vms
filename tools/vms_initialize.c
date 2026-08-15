@@ -31,6 +31,7 @@
 #include <linux/fs.h>   /* BLKGETSIZE64 */
 
 #include "vmsfs_ondisk.h"
+#include "vmsfs/ods2.h" /* GENUINE ODS-2 (Files-11 L2) writer: ods2_volume_format */
 #include "vms_kif.h"    /* vms_kif_disk_resolve -- executive device table */
 #include "ssdef.h"      /* SS$_NORMAL / SS$_NOSUCHDEV / SS$_IVDEVNAM */
 
@@ -332,6 +333,101 @@ static int format_volume(int fd, uint64_t size_bytes, const char *volname)
 }
 
 /*
+ * Format the volume as a GENUINE ODS-2 (Files-11 On-Disk Structure Level 2)
+ * volume (vms-6ef, R4 of the real-ODS-2-runtime epic vms-5eb).
+ *
+ * Unlike format_volume() above -- which writes OVMX's bespoke, NON-genuine
+ * VMFS/VFH2 structure (hb_magic == VMSFS_HOME_MAGIC, MFD == FID 3) -- this
+ * delegates to the byte-genuine writer in src/vmsfs/ods2 (ods2_volume_format,
+ * the same [F15] path that MOUNTs clean on a real VAX). The result is a real
+ * "DECFILE11B  " Files-11 volume: home block pair with dual additive
+ * checksums, the ten reserved system files (INDEXF.SYS FID 1, BITMAP.SYS FID
+ * 2, 000000.DIR/MFD FID 4, ... SECURITY.SYS FID 10), the SCB + storage
+ * bitmap, and the MFD populated with directory entries for all ten.
+ *
+ * ORACLE VALUES: every rw on-disk constant this path emits is inherited
+ * unchanged from ods2_volume_format / ods2.h, where each is grounded per
+ * Rule 8 -- ODS2_STRUCLEV_V2 (0x0201) from the public Files-11 structure-
+ * level encoding [S]; hm2_resfiles == 10 and the FID 6-10 reserved names
+ * from the real-VAX fixture tests/ods2/real_vax_ods2.dsk [F]; the SCB fields
+ * still flagged [OVMX-inferred] (scb_blksize==1, scb_status/status2==0,
+ * scb_writecnt, scb_volockname width) carried exactly as the writer emits
+ * them. INITIALIZE introduces NO new unpinned rw value of its own.
+ *
+ * The writer operates over a caller-owned in-memory image; INITIALIZE builds
+ * the full image, then writes only the populated metadata region
+ * [0, wvol.next_free_lbn) to the device -- the data area beyond it is marked
+ * free in the storage bitmap and left untouched (a real VMS INITIALIZE does
+ * not scrub the platter either). NOTE: the current writer requires the whole
+ * total_blocks*512 image in RAM (it zero-fills the full buffer); a windowed
+ * writer is left to the writer-completeness rung (R8, vms-af7a).
+ */
+static int format_volume_ods2(int fd, uint64_t size_bytes, const char *volname)
+{
+    if (size_bytes / ODS2_BLOCK_SIZE > 0xFFFFFFFFULL) {
+        fprintf(stderr, "%%INIT-F-TOOBIG, volume exceeds the 2^32-block ODS-2 limit\n");
+        return -1;
+    }
+    uint32_t total_blocks = (uint32_t)(size_bytes / ODS2_BLOCK_SIZE);
+
+    if (total_blocks < MIN_BLOCKS) {
+        fprintf(stderr, "%%INIT-F-TOOSMALL, volume too small (%u blocks, need %d)\n",
+                total_blocks, MIN_BLOCKS);
+        return -1;
+    }
+
+    /* Index-file capacity: ~1% of the volume, floored well above the ten
+     * reserved files and capped so the fixed reserved-file layout (which
+     * grows with maxfiles) stays a small fraction of a modest volume. */
+    uint32_t maxfiles = total_blocks / 100;
+    if (maxfiles < 16)    maxfiles = 16;
+    if (maxfiles > 65535) maxfiles = 65535;
+    if (maxfiles < ODS2_RESFILES) maxfiles = ODS2_RESFILES;
+
+    size_t image_len = (size_t)total_blocks * ODS2_BLOCK_SIZE;
+    uint8_t *image = calloc(1, image_len);
+    if (!image) {
+        fprintf(stderr,
+                "%%INIT-F-NOMEM, cannot allocate a %zu-byte ODS-2 image "
+                "(volume too large for the in-memory writer)\n", image_len);
+        return -1;
+    }
+
+    ods2_format_params_t params;
+    params.total_blocks = total_blocks;
+    params.maxfiles     = maxfiles;
+    params.volname      = volname;
+
+    ods2_wvolume_t wvol;
+    ods2_status_t st = ods2_volume_format(image, image_len, &params, &wvol);
+    if (st != ODS2_OK) {
+        fprintf(stderr, "%%INIT-F-FORMAT, ODS-2 format failed: %s\n",
+                ods2_strerror(st));
+        free(image);
+        return -1;
+    }
+
+    printf("%%INIT-I-FORMAT, formatting %.12s as genuine ODS-2 (DECFILE11B)\n",
+           volname);
+    printf("%%INIT-I-LAYOUT, %u blocks, %u max files, %u metadata blocks\n",
+           total_blocks, maxfiles, wvol.next_free_lbn);
+
+    /* Write only the populated metadata region; the data area is already
+     * accounted for as free in the on-disk storage bitmap. */
+    for (uint32_t lbn = 0; lbn < wvol.next_free_lbn; lbn++) {
+        if (write_block(fd, lbn, image + (size_t)lbn * ODS2_BLOCK_SIZE) < 0) {
+            free(image);
+            return -1;
+        }
+    }
+
+    free(image);
+
+    printf("%%INIT-I-COMPLETE, volume %.12s initialized (ODS-2)\n", volname);
+    return 0;
+}
+
+/*
  * Get size of a block device via ioctl.
  */
 static int get_device_size(int fd, uint64_t *size)
@@ -414,7 +510,8 @@ static uint32_t resolve_vms_device(const char *name, char *devpath,
  * geometry (never a caller-supplied MB count -- the hardware size is
  * authoritative), and write the vmsfs structures to the real store.
  */
-static int initialize_device(const char *devpath, const char *volname)
+static int initialize_device(const char *devpath, const char *volname,
+                             int use_ods2)
 {
     int fd = open(devpath, O_RDWR);
     if (fd < 0) {
@@ -446,7 +543,8 @@ static int initialize_device(const char *devpath, const char *volname)
         return 1;
     }
 
-    int rc = format_volume(fd, size_bytes, volname);
+    int rc = use_ods2 ? format_volume_ods2(fd, size_bytes, volname)
+                      : format_volume(fd, size_bytes, volname);
     if (fsync(fd) < 0)
         perror("%%INIT-W-FSYNC, sync warning");
     close(fd);
@@ -455,15 +553,55 @@ static int initialize_device(const char *devpath, const char *volname)
 
 int main(int argc, char *argv[])
 {
-    if (argc < 3 || argc > 4) {
-        fprintf(stderr, "Usage: INITIALIZE <device-or-file> <volume-label> [size-in-MB]\n");
-        fprintf(stderr, "  Format a device or image file with VMSFS structure.\n");
+    /*
+     * On-disk format selection (vms-6ef, R4 of epic vms-5eb):
+     *   --ods2   write a GENUINE ODS-2 (Files-11 L2) "DECFILE11B" volume
+     *   --vmfs   write OVMX's bespoke VMFS/VFH2 structure (the default)
+     * plus OVMX_INIT_ODS2 in the environment (non-empty, != "0") as a default.
+     *
+     * The default stays VMFS deliberately: the live guest MOUNT path
+     * (tools/vms_mount_helper.c -> vmsfs.ko block-device mode, which
+     * validates VMSFS_HOME_MAGIC in src/kernel/vmsfs/vmsfs_super.c), the
+     * INITIALIZE unit test (tests/qemu/test_syssvc_initialize.c), and the
+     * install/upgrade e2e gates all still READ the VMFS structure. Flipping
+     * the default to ODS-2 must land atomically with the ODS-2 read path
+     * (epic vms-5eb R2/R3/R5/R6); doing it here would break those enforcing
+     * consumers -- exactly the "do not flip the live MOUNT resolvers or the
+     * boot path" constraint this rung is written under. ODS-2 is therefore
+     * opt-in for R4: the writer capability + proof land now; the atomic flip
+     * of the default is deferred to the read-path group.
+     */
+    const char *env_ods2 = getenv("OVMX_INIT_ODS2");
+    int use_ods2 = (env_ods2 && env_ods2[0] && strcmp(env_ods2, "0") != 0);
+
+    int argi = 1;
+    while (argi < argc && argv[argi][0] == '-' && argv[argi][1] == '-') {
+        if (strcmp(argv[argi], "--ods2") == 0) {
+            use_ods2 = 1;
+        } else if (strcmp(argv[argi], "--vmfs") == 0) {
+            use_ods2 = 0;
+        } else if (strcmp(argv[argi], "--") == 0) {
+            argi++;
+            break;
+        } else {
+            fprintf(stderr, "%%INIT-F-BADOPT, unknown option %s\n", argv[argi]);
+            return 1;
+        }
+        argi++;
+    }
+
+    int posargc = argc - argi;   /* positional args after any flags */
+    if (posargc < 2 || posargc > 3) {
+        fprintf(stderr, "Usage: INITIALIZE [--ods2|--vmfs] <device-or-file> <volume-label> [size-in-MB]\n");
+        fprintf(stderr, "  Format a device or image file. Default structure is VMFS;\n");
+        fprintf(stderr, "  --ods2 writes a genuine ODS-2 (Files-11 L2) DECFILE11B volume.\n");
         fprintf(stderr, "  Size is required when creating a new image file.\n");
         return 1;
     }
 
-    const char *target = argv[1];
-    const char *volname = argv[2];
+    const char *target = argv[argi];
+    const char *volname = argv[argi + 1];
+    const char *size_arg = (posargc == 3) ? argv[argi + 2] : NULL;
     uint64_t size_bytes = 0;
     int create_file = 0;
 
@@ -489,7 +627,7 @@ int main(int argc, char *argv[])
         char devpath[VMS_BACKING_SIZE + 8];
         if (resolve_vms_device(target, devpath, sizeof(devpath)) != SS$_NORMAL)
             return 1;   /* honest %INIT- error already printed */
-        return initialize_device(devpath, volname);
+        return initialize_device(devpath, volname, use_ods2);
     }
 
     struct stat st;
@@ -516,7 +654,7 @@ int main(int argc, char *argv[])
         }
     } else {
         /* Target doesn't exist — create file, need size argument */
-        if (argc < 4) {
+        if (size_arg == NULL) {
             fprintf(stderr, "%%INIT-F-NEEDSIZE, size-in-MB required for new image file\n");
             return 1;
         }
@@ -524,8 +662,8 @@ int main(int argc, char *argv[])
     }
 
     /* Parse optional size argument (overrides detected size for files) */
-    if (argc == 4) {
-        long mb = strtol(argv[3], NULL, 10);
+    if (size_arg != NULL) {
+        long mb = strtol(size_arg, NULL, 10);
         if (mb <= 0) {
             fprintf(stderr, "%%INIT-F-BADSIZE, size must be a positive number of MB\n");
             return 1;
@@ -558,7 +696,8 @@ int main(int argc, char *argv[])
         }
     }
 
-    int rc = format_volume(fd, size_bytes, volname);
+    int rc = use_ods2 ? format_volume_ods2(fd, size_bytes, volname)
+                      : format_volume(fd, size_bytes, volname);
 
     if (fsync(fd) < 0)
         perror("%%INIT-W-FSYNC, sync warning");

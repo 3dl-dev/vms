@@ -103,6 +103,13 @@ enum scs_recnx_action {
  * reference lab runs SYSGEN RECNXINTERVAL = 20 (docs/cluster-protocol-spec.md
  * sec references the lab's value 20); OVMX uses that as its fallback but the
  * value is configuration, NOT a claimed VMS invariant -- callers pass their own.
+ *
+ * vms-c3b: RECNXINTERVAL is now a first-class AUTHORED SYSGEN parameter
+ * (tools/vms_sysgen.c default_params[], default 20, GROUNDED from the public
+ * OpenVMS System Management Utilities Reference Manual). scsd_recnxinterval()
+ * adopts the authored value from SYS$SYSTEM:OVMXVMSSYS.PAR and falls back to
+ * THIS constant, so the two agree by construction -- keep them in step (both 20)
+ * if either is ever re-grounded.
  */
 #define SCS_RECNX_DEFAULT_RECNXINTERVAL 20u
 

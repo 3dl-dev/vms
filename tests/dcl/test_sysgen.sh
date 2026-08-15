@@ -82,6 +82,52 @@ if ! echo "$last_show" | grep -qE "MAXPROCESSCNT +128 "; then
     FAILURES=$((FAILURES + 1))
 fi
 
+# ---------------------------------------------------------------------------
+# vms-c3b: RECNXINTERVAL, the cluster reconnection interval, is now a
+# first-class AUTHORED SYSGEN parameter (tools/vms_sysgen.c default_params[]).
+# Same live-working-set discipline as above: SET must change the Current
+# column a FOLLOWING SHOW reflects, and its documented range (min 1, max
+# 32767 -- OpenVMS System Management Utilities Reference Manual, RECNXINTERVAL)
+# must be enforced with the real %SYSGEN-E-TOOSMALL/TOOLARGE idents, without
+# silently mutating the value.
+recnx_default=$(grep '\.name = "RECNXINTERVAL"' -A2 "$(dirname "${BASH_SOURCE[0]}")/../../tools/vms_sysgen.c" 2>/dev/null | grep -oE '\.current = [0-9]+' | head -1 | grep -oE '[0-9]+')
+[ -z "$recnx_default" ] && recnx_default=20  # grounded fallback (VMS default 20)
+
+recnx_out=$(printf 'USE DEFAULT\nSHOW RECNXINTERVAL\nSET RECNXINTERVAL 30\nSHOW RECNXINTERVAL\nSET RECNXINTERVAL 0\nSET RECNXINTERVAL 99999\nSHOW RECNXINTERVAL\nEXIT\n' | "$SYSGEN" 2>&1)
+echo "$recnx_out"
+
+# 5. USE DEFAULT reports the documented factory default (20).
+if ! echo "$recnx_out" | grep -qE "RECNXINTERVAL +${recnx_default} +${recnx_default} +1 +32767"; then
+    echo "  FAIL: initial SHOW RECNXINTERVAL did not report the factory default (${recnx_default}) with range 1..32767"
+    FAILURES=$((FAILURES + 1))
+fi
+
+# 6. SET must change it and the FOLLOWING SHOW must reflect Current=30.
+if ! echo "$recnx_out" | grep -q "%SYSGEN-I-SETPARAM, RECNXINTERVAL changed from ${recnx_default} to 30"; then
+    echo "  FAIL: SET RECNXINTERVAL 30 did not report the real change"
+    FAILURES=$((FAILURES + 1))
+fi
+if ! echo "$recnx_out" | grep -qE "RECNXINTERVAL +30 +${recnx_default}"; then
+    echo "  FAIL: SHOW after SET did not reflect Current=30 (Default stays ${recnx_default})"
+    FAILURES=$((FAILURES + 1))
+fi
+
+# 7. Below-minimum and above-maximum SETs must be rejected with the real
+#    idents (min 1, max 32767) and must NOT change the value.
+if ! echo "$recnx_out" | grep -q '%SYSGEN-E-TOOSMALL, value 0 below minimum 1 for RECNXINTERVAL'; then
+    echo "  FAIL: SET RECNXINTERVAL 0 did not produce the real TOOSMALL rejection"
+    FAILURES=$((FAILURES + 1))
+fi
+if ! echo "$recnx_out" | grep -q '%SYSGEN-E-TOOLARGE, value 99999 exceeds maximum 32767 for RECNXINTERVAL'; then
+    echo "  FAIL: SET RECNXINTERVAL 99999 did not produce the real TOOLARGE rejection"
+    FAILURES=$((FAILURES + 1))
+fi
+recnx_last=$(echo "$recnx_out" | grep -E "^  RECNXINTERVAL" | tail -1)
+if ! echo "$recnx_last" | grep -qE "RECNXINTERVAL +30 "; then
+    echo "  FAIL: value changed despite the out-of-range SETs being rejected (last SHOW: $recnx_last)"
+    FAILURES=$((FAILURES + 1))
+fi
+
 if [ $FAILURES -eq 0 ]; then
     echo "SYSGEN_ROUNDTRIP_OK"
 else

@@ -121,6 +121,24 @@ static const struct sysgen_param default_params[] = {
       .min_val = 0, .max_val = 2, .flags = SYSGEN_F_DYNAMIC,
       .description = "Cluster participation (0=disabled,1=enabled,2=auto)",
       .type = SYSGEN_TYPE_NUMERIC },
+    /* --- vms-c3b: RECNXINTERVAL, the cluster reconnection interval ---
+     * GROUNDED (CLAUDE.md Rule 8) from PUBLIC OpenVMS docs, NOT VSI source:
+     * the VSI/HPE OpenVMS System Management Utilities Reference Manual (SYSGEN
+     * Parameters) documents RECNXINTERVAL as the polling interval, in seconds,
+     * during which the OpenVMS Cluster software attempts to restore a lost
+     * connection -- default 20, and (Appendix J, "System Parameters by
+     * Category") a CLUSTER parameter marked Dynamic. Its documented SYSGEN
+     * range is minimum 1, maximum 32767 seconds. The default 20 matches
+     * scs_recnx.h's SCS_RECNX_DEFAULT_RECNXINTERVAL (the runtime reconnect
+     * loop's fallback, vms-c7d), so an unconfigured store and the runtime
+     * agree. Authored here so scsd adopts the operator's value on (re)boot the
+     * same way it adopts SCSNODE/SCSSYSTEMID/ALLOCLASS; this is the AUTHORING
+     * surface only -- the reconnect wire behavior is vms-694's (scs_recnx.c),
+     * unchanged. */
+    { .name = "RECNXINTERVAL", .current = 20, .default_val = 20,
+      .min_val = 1, .max_val = 32767, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Cluster reconnection interval, in seconds",
+      .type = SYSGEN_TYPE_NUMERIC },
     { .name = "SCSNODE", .flags = SYSGEN_F_DYNAMIC,
       .description = "Cluster node name (SCS system name, max 6 chars)",
       .type = SYSGEN_TYPE_STRING,

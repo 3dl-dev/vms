@@ -215,7 +215,7 @@ if [ "$rc" -eq 0 ]; then
     send 'SET SCSNODE ALPHA9'; sleep 1
     send 'WRITE CURRENT'; sleep 1
     send 'EXIT'; sleep 1
-    if waitfor '%SYSGEN-I-WRITTEN, 30 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' 20 "$POS_LOG1"; then
+    if waitfor '%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' 20 "$POS_LOG1"; then
         rc=0
     else
         rc=1

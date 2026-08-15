@@ -183,9 +183,10 @@ if [ "$rc" -eq 0 ]; then
         '%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1027'
 
     # Persist: a REAL new vmsfs version ;2 over the seed's ;1 (same primitive
-    # SYSGEN WRITE CURRENT uses). 30 params, matching the seeded set count.
+    # SYSGEN WRITE CURRENT uses). 31 params, matching the seeded set count
+    # (vms-c3b added RECNXINTERVAL to the authored cluster set).
     send 'WRITE'; sleep 1
-    if waitfor '%SYSGEN-I-WRITTEN, 30 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' 20 "$POS_LOG"; then
+    if waitfor '%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' 20 "$POS_LOG"; then
         rc=0; else rc=1; fi
     record "SYSBOOT>: WRITE minted OVMXVMSSYS.PAR;2 (real vmsfs version)" "$rc"
 

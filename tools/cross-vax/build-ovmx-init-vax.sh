@@ -96,6 +96,13 @@ LIBVMSLNM_A="$(build_dep vmslnm "$VMSLNM" vmslnm libvmslnm.a)"
 LIBVMSFS_A="$(build_dep vmsfs "$VMSFS" vmsfs libvmsfs.a)"
 LIBVMSRMS_A="$(build_dep vmsrms "$VMSRMS" vmsrms libvmsrms.a)"
 LIBVMSQUEUE_A="$(build_dep vmsqueue "$VMSQUEUE" vmsqueue libvmsqueue.a)"
+# vms-351 (epic vms-5eb "B2"): the genuine-ODS-2 reader sublibrary. PID 1 now
+# registers the boot device into the userspace mounted-volume table
+# (vmsfs_volume.c, compiled below), which links this. Built from the ods2
+# standalone CMake project (src/vmsfs/ods2) exactly as the vmsfs stack above --
+# it is NOT part of libvmsfs.a (the standalone src/vmsfs build omits the ods2
+# sublibrary + vmsfs_volume; both live only in the non-standalone else branch).
+LIBODS2_A="$(build_dep ods2 "$VMSFS/ods2" ods2 libods2.a)"
 echo "dependency stack built:"
 echo "  $LIBVMSSYS_A"
 echo "  $LIBVMSPROCESS_A"
@@ -104,6 +111,7 @@ echo "  $LIBVMSLNM_A"
 echo "  $LIBVMSFS_A"
 echo "  $LIBVMSRMS_A"
 echo "  $LIBVMSQUEUE_A"
+echo "  $LIBODS2_A"
 echo
 
 # --- proof 1: INV-DRIFT -- ovmx_init.c has no substrate #ifdef fork ----------
@@ -138,6 +146,12 @@ echo "=== proof 2: cross-compile ovmx_init.c + ovmx_boot_netbsd.c + sysboot.c ==
 "$CC" $CFLAGS_COMMON -c "$OVMX_INIT/ovmx_boot_netbsd.c" -o "$OUT/ovmx_boot_netbsd.o"
 # shellcheck disable=SC2086
 "$CC" $CFLAGS_COMMON -c "$OVMX_INIT/sysboot.c"          -o "$OUT/sysboot.o"
+# vms-351: the userspace mounted-volume table PID 1 registers the boot device
+# into. A src/vmsfs TU compiled directly here (it is built by src/vmsfs's CMake
+# only in the non-standalone tree, so the standalone libvmsfs.a above omits it);
+# it links the ods2 reader sublibrary (LIBODS2_A) added to proof 3's link group.
+# shellcheck disable=SC2086
+"$CC" $CFLAGS_COMMON -c "$VMSFS/vmsfs_volume.c"         -o "$OUT/vmsfs_volume.o"
 echo "--- object arch check (must be VAX / ELF32 LSB) ---"
 "$TARGET-objdump" -f "$OUT/ovmx_boot_netbsd.o" | grep -Ei 'file format|architecture'
 
@@ -170,11 +184,15 @@ echo "=== proof 3: link a real vax--netbsdelf STARTUP.EXE (PID 1) ==="
 # Dynamic (no -static): Decision A activates OVMX images on netbsd-vax through
 # NetBSD's ld.elf_so (rd vms-42d), so PID 1 is a plain NetBSD ELF32-vax dynamic
 # exe. --start-group resolves the libvms<->vmsfs archive cycle.
+# vms-351: vmsfs_volume.o + libods2.a join the link (PID 1's boot-device
+# registration). libods2.a goes in the --start-group with the rest of the
+# archive stack so vmsfs_volume.o's ods2_bdev_* references resolve.
 "$CC" --sysroot="$SYSROOT" \
     "$OUT/ovmx_init.o" "$OUT/ovmx_boot_netbsd.o" "$OUT/sysboot.o" \
+    "$OUT/vmsfs_volume.o" \
     -Wl,--start-group \
         "$LIBVMSQUEUE_A" "$LIBVMSRMS_A" "$LIBVMS_A" "$LIBVMSFS_A" \
-        "$LIBVMSLNM_A" "$LIBVMSPROCESS_A" "$LIBVMSSYS_A" \
+        "$LIBVMSLNM_A" "$LIBVMSPROCESS_A" "$LIBVMSSYS_A" "$LIBODS2_A" \
     -Wl,--end-group \
     -lpthread -lm -latomic -o "$OUT/STARTUP.EXE"
 echo "--- linked executable ---"

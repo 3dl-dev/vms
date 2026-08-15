@@ -71,6 +71,21 @@ else()
     # module distinct from the ODS-2-inspired on-disk format. See ods2/.
     add_subdirectory(ods2)
 
+    # Userspace MOUNTED-VOLUME table (vms-351, epic vms-5eb "B2"): device name
+    # -> (open backing fd + cached genuine-ODS-2 block-backed reader handle).
+    # A DISTINCT static module linking the ods2 sublibrary directly -- NOT a
+    # translation unit of LIBVMSFS$SHR.EXE. Folding the ods2_bdev_* / pread
+    # primitives into the shareable's STRICT symbol-vector link
+    # (src/vmslink/mk_vmsfs_shr.sh, no --allow-undefined) would drag the ODS-2
+    # runtime-flip dependencies into the live shareable before the atomic group
+    # (rungs R2/R3/R5/R6) is ready. Its consumers link it directly: PID 1
+    # (STARTUP.EXE) today for the additive boot registration; RMS/DCL when the
+    # flip lands. See src/vmsfs/vmsfs_volume.c and docs/design-ods2-runtime-flip.md.
+    add_library(vmsfs_volume STATIC vmsfs_volume.c)
+    target_include_directories(vmsfs_volume PUBLIC include ${VMS_INCLUDE_DIR})
+    target_link_libraries(vmsfs_volume PUBLIC ods2 pthread)
+    set_target_properties(vmsfs_volume PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
     # Static twin for the static PID-1 bootstrap (STARTUP.EXE). IMGACT mode only.
     if(OVMX_IMGACT)
         add_library(vmsfs_static STATIC ${VMSFS_SOURCES})

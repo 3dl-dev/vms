@@ -150,3 +150,20 @@ set_tests_properties(ods2_path PROPERTIES
     LABELS "unit;ods2;vmsfs"
     TIMEOUT 30
 )
+
+# vms-351 (epic vms-5eb "B2"): the userspace MOUNTED-VOLUME table
+# (src/vmsfs/vmsfs_volume.c) -- device name -> (open fd + cached ods2_bdev_t).
+# The additive substrate PID 1 registers the boot device into at boot. Builds a
+# genuine ODS-2 loop image, drives the SAME vmsfs_volume_register() call PID 1
+# makes, and resolves [SYS0.SYSCOMMON.SYSEXE]LOGIN.COM through the cached handle
+# -- plus the fail-honest paths (non-ODS-2 / unopenable backing store register
+# nothing). Links vmsfs_volume (which links the ods2 reader sublibrary).
+add_executable(test_ods2_volume test_ods2_volume.c)
+target_include_directories(test_ods2_volume PRIVATE ${VMS_FS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
+target_link_libraries(test_ods2_volume PRIVATE vmsfs_volume)
+
+add_test(NAME ods2_volume COMMAND test_ods2_volume)
+set_tests_properties(ods2_volume PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)

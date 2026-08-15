@@ -126,6 +126,7 @@ jobs:
               - 'tests/qemu/test_virtio_nic.sh'
               - 'tests/qemu/test_startup_phase_driver.sh'
               - 'tests/qemu/test_boot_conformance.sh'
+              - 'tests/qemu/test_ods2_boot_register.sh'
               - 'tests/qemu/test_boot_scsnode_hostname_e2e.sh'
               - 'tests/qemu/run_boot_scsnode_hostname_e2e.sh'
               - 'tests/qemu/test_sysboot_conversational.sh'
@@ -806,6 +807,27 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_boot_conformance.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-351 (epic vms-5eb "B2"). Reuses the image built above (no extra
+      # build). Boots the pre-installed distribution disk WITH the ovmx.ods2reg
+      # boot flag and asserts PID 1 registered the boot device DKA0: into the
+      # userspace ODS-2 mounted-volume table (register_system_volume() in
+      # src/ovmx_init/ovmx_init.c) -- ADDITIVELY, beside the existing mount:
+      # the %OVMX-I-ODS2VOL readout appears (registration ran), it is the
+      # fail-honest "not registered" variant on today's bespoke-VMFS boot disk
+      # (INV-6 / Rule 9, no per-process fake until R6 masters genuine ODS-2),
+      # and boot still reaches Username: (the /vms passthrough is untouched).
+      # The done-condition resolve-through-handle proof is the host ctest
+      # tests/ods2/test_ods2_volume.c (a full boot-time resolve is not feasible
+      # until the boot master is genuine ODS-2). Default boots stay silent, so
+      # the pinned boot-conformance sequence above is unaffected.
+      - name: PID-1 ODS-2 mounted-volume registration (vms-351, additive)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_ods2_boot_register.sh:/test.sh:ro \
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh

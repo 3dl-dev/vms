@@ -48,11 +48,18 @@ else()
     )
 endif()
 
+# vmsfs_volume (vms-351, epic vms-5eb "B2"): the userspace mounted-volume table
+# PID 1 registers the boot device into at boot. A STATIC module (links the ods2
+# reader sublibrary) in BOTH modes -- ovmx_init/STARTUP.EXE is always statically
+# linked (PID 1 runs before IMGACT.EXE exists), so it links this the same way
+# regardless of OVMX_IMGACT. Kept out of LIBVMSFS$SHR on purpose (see
+# src/vmsfs/CMakeLists.txt): folding ods2_bdev_* into the shareable's strict
+# symbol-vector link would drag the ODS-2-flip deps in prematurely.
 if(OVMX_IMGACT)
     # Static PID-1 bootstrap: link the static twins, not the shareable images.
-    target_link_libraries(ovmx_init PRIVATE vmsprocess_static vmsfs_static vmslnm_static vmssys pthread)
+    target_link_libraries(ovmx_init PRIVATE vmsprocess_static vmsfs_static vmslnm_static vmssys vmsfs_volume pthread)
 else()
-    target_link_libraries(ovmx_init PRIVATE vmsprocess vmsfs vmslnm vmssys pthread)
+    target_link_libraries(ovmx_init PRIVATE vmsprocess vmsfs vmslnm vmssys vmsfs_volume pthread)
 endif()
 
 set_target_properties(ovmx_init PROPERTIES

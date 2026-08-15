@@ -423,18 +423,36 @@ def main():
             proof.record("modload", True)
             log("OK: module loaded and /dev/vms created on NetBSD/vax")
 
-        # ---- 4a-4c. CROSS-PROCESS MAILBOX PROOF (collapsed) ----------------
-        # Same loss-tolerant-transport technique as drive_eflag_vax.py /
-        # drive_proctab_vax.py: ONE in-guest command performs every step,
-        # asserts each property IN-GUEST over reliable local pipes, and emits
-        # a SINGLE result token, so a lost marker on the lossy SIMH serial
-        # cannot corrupt the proof. Process A (`create_hold`, backgrounded,
-        # holds its channel open so the TEMPORARY mailbox survives) is a
-        # DISTINCT `vmsmbx' invocation from B (`write`) and C (`read`); B and
-        # C reach the mailbox purely by the MBAn: NAME A's own stdout
-        # reported -- never through any state shared IN this shell, which is
-        # what makes "C read back exactly what B wrote" a genuine
-        # cross-process, shared-executive proof (INV-6).
+        # ---- 4a-4c. CROSS-PROCESS MAILBOX PROOF (collapsed, FILE-based) ----
+        # Same loss-tolerant-transport technique as drive_eflag_vax.py: ONE
+        # in-guest command performs every step and emits a SINGLE result
+        # token, so a lost marker on the lossy SIMH serial cannot corrupt the
+        # proof. Process A (`create_hold`, backgrounded, holds its channel
+        # open so the TEMPORARY mailbox survives) is a DISTINCT `vmsmbx'
+        # invocation from B (`write`) and C (`read`); B and C reach the
+        # mailbox purely by the MBAn: NAME A's own stdout reported -- never
+        # through any state shared IN this shell, which is what makes "C
+        # read back exactly what B wrote" a genuine cross-process,
+        # shared-executive proof (INV-6).
+        #
+        # FILE-based capture, not $(...) + inline sed on the write/read
+        # steps (rd vms-2e0's postmortem, flagged for this driver too): an
+        # earlier proctab-vax revision crammed three inline `sed -n
+        # 's/.../.../p'` extractions plus $(...) command substitution into
+        # one ~900-char line, and a real nightly run came back with driver
+        # exit=2 and a completely EMPTY captured console line (not even the
+        # unconditional trailing echo) -- consistent with that long compound
+        # command getting corrupted/truncated on the lossy VAX/SIMH serial.
+        # The fix (mirrors drive_netbsd_p4a.py's proven MBX-phase shape,
+        # generalized the way the fixed drive_proctab_vax.py generalizes
+        # it): each `vmsmbx' invocation writes straight to its OWN file
+        # (`>file 2>&1`), the PASS/FAIL decision is a plain `grep -q ...
+        # /file` against those files (no $(...), no inline sed beyond the
+        # single short DEVNAM extraction from A's own file), and a
+        # TRANSCRIPT is ALWAYS dumped afterward -- pass or fail -- so a
+        # repeat of this failure mode is diagnosable from the console
+        # instead of a bare "tok=None". The devnam is parsed PYTHON-side
+        # from that dumped transcript, not via in-guest sed.
         #
         # NEGCTL CONTRACT (MBX_SKIP_CREATE, mirrors PROCTAB_SKIP_BG /
         # EFLAG_SKIP_SET exactly): when skip_create is set, process A is
@@ -443,41 +461,63 @@ def main():
         # reasoning, and rd vms-cf5's whole point). Instead this falls
         # through into the SAME positive-assertion script every positive run
         # executes; with no A, no MBAn: name is ever captured, so B's write
-        # (and thus C's read) fail for real via the SAME "nodevnam"/"write"
-        # branches below, and this function returns its ordinary nonzero
-        # code. run-mbx.sh's negctl-create mode (via negctl_gate.sh) is what
-        # inverts that nonzero exit into "teeth confirmed".
+        # (and thus C's read) fail for real via the SAME "devnam"/"write"/
+        # "read" branches below, and this function returns its ordinary
+        # nonzero code -- never 0, never a distinct "harness-error" code
+        # (the ACCESS/vms-4b7 bug class): every failure path below returns a
+        # plain positive int, and negctl_gate()/negctl_gate.sh only ever
+        # test zero-vs-nonzero, so any of these codes inverts correctly
+        # under run-mbx.sh's negctl-create mode.
+        TX = "/tmp/mbx_transcript"
         msg = "MBXPROOF-vms-fe8"
         if skip_create:
             log("SKIP: process A's create_hold skipped (MBX_SKIP_CREATE) -- "
                 "no MBAn: name will ever be captured, and process B's write "
                 "(and C's read) must fail for real next")
-            mbx = ("F=''; DEVNAM=''; "
-                   "WOUT=$(%s write \"$DEVNAM\" '%s' 2>&1); "
-                   "echo \"$WOUT\" | grep -q \"^MBX WRITE devnam=$DEVNAM len=\" "
-                   "|| F=\"$F write\"; "
-                   "ROUT=$(%s read \"$DEVNAM\" '%s' 2>&1); "
-                   "echo \"$ROUT\" | grep -qE \"^MBX READ devnam=$DEVNAM len=[0-9]+ match=1\" "
-                   "|| F=\"$F read\"; "
-                   "[ -z \"$F\" ] && echo \"MBX=PASS devnam=$DEVNAM\" || echo \"MBX=FAIL:$F\""
-                   % (MB, msg, MB, msg))
+            mbx = ("rm -f /tmp/mbx_b.out /tmp/mbx_c.out %s; "
+                   "DEVNAM=''; "
+                   "%s write \"$DEVNAM\" '%s' >/tmp/mbx_b.out 2>&1; "
+                   "%s read \"$DEVNAM\" '%s' >/tmp/mbx_c.out 2>&1; "
+                   "{ echo '### mbx B write (A never created a mailbox)'; "
+                   "cat /tmp/mbx_b.out; "
+                   "echo '### mbx C read (A never created a mailbox)'; "
+                   "cat /tmp/mbx_c.out; } >>%s; "
+                   "F=''; "
+                   "grep -qE '^MBX WRITE devnam=.* len=' /tmp/mbx_b.out || F=\"$F write\"; "
+                   "grep -qE '^MBX READ devnam=.* len=[0-9]+ match=1' /tmp/mbx_c.out || F=\"$F read\"; "
+                   "[ -z \"$F\" ] && echo MBX=PASS || echo \"MBX=FAIL:$F\""
+                   % (TX, MB, msg, MB, msg, TX))
         else:
-            mbx = ("rm -f /tmp/mbx_a.out; "
-                   "%s create_hold 8 >/tmp/mbx_a.out 2>&1 & AP=$!; sleep 2; "
-                   "DEVNAM=$(sed -n 's/.*MBX CREATE devnam=\\([A-Za-z0-9:]*\\) status=.*/\\1/p' "
-                   "/tmp/mbx_a.out | head -1); F=''; "
-                   "[ -n \"$DEVNAM\" ] || F=\"$F nodevnam\"; "
-                   "WOUT=$(%s write \"$DEVNAM\" '%s' 2>&1); "
-                   "echo \"$WOUT\" | grep -q \"^MBX WRITE devnam=$DEVNAM len=\" "
-                   "|| F=\"$F write\"; "
-                   "ROUT=$(%s read \"$DEVNAM\" '%s' 2>&1); "
-                   "echo \"$ROUT\" | grep -qE \"^MBX READ devnam=$DEVNAM len=[0-9]+ match=1\" "
-                   "|| F=\"$F read\"; "
+            mbx = ("rm -f /tmp/mbx_a.out /tmp/mbx_b.out /tmp/mbx_c.out %s; "
+                   "%s create_hold 8 >/tmp/mbx_a.out 2>&1 & AP=$!; sleep 3; "
+                   "DEVNAM=$(grep 'MBX CREATE' /tmp/mbx_a.out | "
+                   "sed 's/.*devnam=//; s/ .*//' | head -1); "
+                   "%s write \"$DEVNAM\" '%s' >/tmp/mbx_b.out 2>&1; "
+                   "%s read \"$DEVNAM\" '%s' >/tmp/mbx_c.out 2>&1; "
                    "kill $AP 2>/dev/null; wait 2>/dev/null; "
-                   "[ -z \"$F\" ] && echo \"MBX=PASS devnam=$DEVNAM\" || echo \"MBX=FAIL:$F\""
-                   % (MB, msg, MB, msg))
+                   "{ echo '### mbx A (create_hold)'; cat /tmp/mbx_a.out; "
+                   "echo \"### mbx devnam=$DEVNAM\"; "
+                   "echo '### mbx B write'; cat /tmp/mbx_b.out; "
+                   "echo '### mbx C read'; cat /tmp/mbx_c.out; } >>%s; "
+                   "F=''; "
+                   "grep -q 'MBX CREATE' /tmp/mbx_a.out || F=\"$F create\"; "
+                   "[ -n \"$DEVNAM\" ] || F=\"$F devnam\"; "
+                   "grep -qE '^MBX WRITE devnam=.* len=' /tmp/mbx_b.out || F=\"$F write\"; "
+                   "grep -qE '^MBX READ devnam=.* len=[0-9]+ match=1' /tmp/mbx_c.out || F=\"$F read\"; "
+                   "[ -z \"$F\" ] && echo MBX=PASS || echo \"MBX=FAIL:$F\""
+                   % (TX, MB, MB, msg, MB, msg, TX))
         rc, out = run(child, mbx, cmd_timeout, bg_safe=True)
         tok = phase_token(out, "MBX")
+
+        # ALWAYS dump the transcript -- pass or fail -- so a repeat of the
+        # proctab truncation failure mode is diagnosable from the console
+        # instead of a bare "tok=None". Also the source for the devnam
+        # parse below (no in-guest sed needed for it).
+        rc2, tx_out = run(
+            child,
+            "echo '=== MBX TRANSCRIPT ==='; cat %s; echo '=== END ==='" % TX,
+            cmd_timeout)
+        log("mbx transcript:\n%s" % tx_out.strip())
 
         # NOTE: skip_create is deliberately NOT special-cased from here on --
         # the exact same interpretation below handles both modes (a PASS
@@ -485,27 +525,27 @@ def main():
         # is what keeps this driver's exit code mode-agnostic.
         if not tok or not tok.startswith("PASS"):
             proof.record("mbx-cross-process", False, detail="tok=%s" % tok)
-            if not tok or "nodevnam" in tok:
+            if not tok or "create" in tok or "devnam" in tok:
                 log("FAIL: process A never created a mailbox (or its MBAn: "
                     "name was never captured) -- no mailbox exists for B/C "
-                    "to reach (phase token: %s)" % tok)
+                    "to reach (phase token: %s; see transcript above)" % tok)
                 proof.emit_result_line()
                 return 16
             if "write" in tok:
                 log("FAIL: process B (a DIFFERENT process) could not WRITE "
                     "into the mailbox process A created -- the cross-process "
                     "shared-kernel-state proof did not hold on NetBSD/vax "
-                    "(phase token: %s)" % tok)
+                    "(phase token: %s; see transcript above)" % tok)
                 proof.emit_result_line()
                 return 17
             log("FAIL: process C (a THIRD, different process) did NOT read "
                 "back the exact bytes process B wrote -- the mailbox message "
-                "queue was not shared across processes (phase token: %s)"
-                % tok)
+                "queue was not shared across processes (phase token: %s; "
+                "see transcript above)" % tok)
             proof.emit_result_line()
             return 18
 
-        m = re.search(r"devnam=(\S+)", tok)
+        m = re.search(r"MBX CREATE devnam=(\S+) status=", tx_out)
         devnam_seen = m.group(1) if m else "?"
         proof.record("mbx-cross-process", True, detail="devnam=%s" % devnam_seen)
         log("OK: process B (a DIFFERENT process) $ASSIGNed + $QIO-wrote into "

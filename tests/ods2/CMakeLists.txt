@@ -58,3 +58,19 @@ set_tests_properties(ods2_security PROPERTIES
     LABELS "unit;ods2;vmsfs"
     TIMEOUT 30
 )
+
+# vms-6cb (R1 of the real-ODS-2-runtime epic vms-5eb): the BLOCK-BACKED reader.
+# Builds a genuine volume with the writer, lays it into a real loop-image fd,
+# and drives ods2_bdev_open/_read_block/_read_header/_list_dir over it --
+# proving the block-backed reader returns byte-for-byte identical results to
+# the in-memory reader (home block + both checksums + DECFILE11B, MFD FID
+# (4,4,0), INDEXF.SYS FID 1, BITMAP.SYS FID 2, and a versioned FID chain).
+add_executable(test_ods2_bdev test_ods2_bdev.c)
+target_include_directories(test_ods2_bdev PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_bdev PRIVATE ods2)
+
+add_test(NAME ods2_bdev COMMAND test_ods2_bdev)
+set_tests_properties(ods2_bdev PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)

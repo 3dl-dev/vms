@@ -60,6 +60,15 @@ import anita
 sys.path.insert(0, os.environ.get("OVMX_NETBSD_DIR", "/netbsd"))
 import netbsd_console
 
+# vaxharness.py (rd vms-cf5) lives in THIS directory (tests/lab-vax), staged
+# alongside this script by run-boot.sh -- no sys.path insert needed. This
+# driver only adopts the canonical exit-code CONTRACT (PROOF_FAILED /
+# HARNESS_ERROR, rd vms-cf5's retrofit tail); its own boot-console handshake
+# already has its own crash-hardened `_console_text()` / scattered
+# `except (pexpect.TIMEOUT, pexpect.EOF, Exception)` handling (see below), so
+# it is not re-derived onto `safe_expect()` here.
+from vaxharness import HARNESS_ERROR, PROOF_FAILED
+
 
 # The milestone lines ovmx_init emits, in the order the flagless NetBSD boot
 # path produces them (src/ovmx_init/ovmx_init.c bare_metal_init / main).
@@ -277,7 +286,7 @@ def do_install_kernel(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
                   cmd_timeout)
     if rc != 0:
         log("FAIL: could not install the MODULAR kernel onto /netbsd")
-        return 30
+        return PROOF_FAILED
     run(child, "sync; mount -u -r / 2>/dev/null; sync", cmd_timeout)
     log("OK: installed MODULAR kernel as /netbsd; next boot has modules(9)")
     return 0
@@ -346,7 +355,7 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
                   cmd_timeout)
     if rc != 0:
         log("FAIL: could not stage the boot artifacts from the OVMX CD")
-        return 10
+        return PROOF_FAILED
     log("OK: staged STARTUP.EXE + vms.kmod + vmsfs.kmod")
 
     # 2. Place the modules in the kernel module_path so ovmx_init's bare-name
@@ -362,7 +371,7 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
                   cmd_timeout)
     if rc != 0:
         log("FAIL: could not place vms.kmod/vmsfs.kmod in the module_path")
-        return 11
+        return PROOF_FAILED
     log("OK: modules placed in the kernel module_path")
 
     # 3. Verify BARE-NAME modload works (exactly ovmx_init's path) for BOTH
@@ -373,7 +382,7 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
     if rc != 0:
         log("FAIL: bare-name `modload vms' FAILED -- ovmx_init's modctl load "
             "would fail identically. Console output above.")
-        return 12
+        return PROOF_FAILED
     rc, out = run(child,
                   "MAJ=`dmesg | sed -n "
                   "'s/.*vms: registered, char major \\([0-9][0-9]*\\).*/\\1/p'"
@@ -384,14 +393,14 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
                   cmd_timeout)
     if rc != 0:
         log("FAIL: could not capture the vms char major / pre-create /dev/vms")
-        return 13
+        return PROOF_FAILED
     run(child, "modunload vms 2>/dev/null; true", cmd_timeout)
 
     rc, out = run(child, "modload vmsfs && echo LOADED_VMSFS", cmd_timeout)
     if rc != 0:
         log("FAIL: bare-name `modload vmsfs' FAILED -- ovmx_init's vmsfs load "
             "would fail identically.")
-        return 14
+        return PROOF_FAILED
     run(child, "modunload vmsfs 2>/dev/null; true", cmd_timeout)
     log("OK: both modules bare-name modload cleanly; /dev/vms pre-created")
 
@@ -405,7 +414,7 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
                   cmd_timeout)
     if rc != 0:
         log("FAIL: could not MAKEDEV ra1 / create the boot mount points")
-        return 15
+        return PROOF_FAILED
     log("OK: /dev/ra1c (DKA0:) node + boot mount points created")
 
     # 5. Install STARTUP.EXE as /sbin/init (keep the NetBSD init as a backup).
@@ -428,11 +437,11 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
     if rc != 0:
         log("FAIL: could not install STARTUP.EXE as /sbin/init (size mismatch "
             "means the replace was skipped)")
-        return 16
+        return PROOF_FAILED
     if "not found" in out:
         log("FAIL: /sbin/init (STARTUP.EXE) has an unresolved shared library "
             "on the guest -- ld.elf_so could not activate PID 1:\n%s" % out)
-        return 17
+        return PROOF_FAILED
     log("OK: STARTUP.EXE installed as /sbin/init; all shared libs resolve")
 
     # Flush to the disk image and remount root read-only (clean-unmount
@@ -779,7 +788,7 @@ def main():
 
     if not os.path.isfile(iso_path):
         log("FAIL: install ISO not found at %s (run lab-vax install first)" % iso_path)
-        return 3
+        return HARNESS_ERROR
 
     a = anita.Anita(
         dist=anita.ISO(iso_path, sets=sets),
@@ -805,7 +814,7 @@ def main():
             vol = ods2_img if sb_negctl else sysvol_img
             if not os.path.isfile(vol):
                 log("FAIL: volume image not found at %s (master it first)" % vol)
-                return 4
+                return HARNESS_ERROR
             seen = do_sysboot(a, vol, sb_negctl, boot_deadline)
 
             # Pre-mount milestones are required in BOTH cases -- a run that never
@@ -815,7 +824,7 @@ def main():
                     and seen.get("banner") and seen.get("mounted")):
                 log("SYSBOOT INCONCLUSIVE: did not reach the pre-gate milestones "
                     "(executive attach + banner + MOUNTED); saw=%s" % sorted(seen))
-                return 21
+                return PROOF_FAILED
 
             if sb_negctl:
                 # Teeth: the flat volume MUST halt the installed-system gate and
@@ -825,12 +834,12 @@ def main():
                         "%STDRV-I-STARTUP with a volume that has no "
                         "SYS$SYSTEM:DCL.EXE -- the installed-system gate has no "
                         "teeth")
-                    return 20
+                    return PROOF_FAILED
                 if not seen.get("installed_gate_fail"):
                     log("SYSBOOT NEGATIVE CONTROL INCONCLUSIVE: the flat volume "
                         "neither halted the gate nor reached STDRV; saw=%s"
                         % sorted(seen))
-                    return 22
+                    return PROOF_FAILED
                 log("PASS: sysboot negative control -- the flat volume (no "
                     "DCL.EXE) correctly HALTED the installed-system gate and "
                     "never reached %STDRV-I-STARTUP (the gate has teeth)")
@@ -843,11 +852,11 @@ def main():
                     "system gate (DCL.EXE not found at the rooted "
                     "[SYS0.SYSCOMMON.SYSEXE] path) -- the volume did not master "
                     "or the vax vmsfs mount cannot resolve the subdirectory path")
-                return 1
+                return PROOF_FAILED
             if not seen.get("stdrv"):
                 log("FAIL: mounted the system volume but did not reach "
                     "%STDRV-I-STARTUP; saw=%s" % sorted(seen))
-                return 1
+                return PROOF_FAILED
             # TIGHTENED (rd vms-72da): STDRV alone is NO LONGER a pass. PROVISION.EXE
             # must demand-page + RUN (the vmsfs pager #536 closed that boundary), so
             # a halt at %OVMX-F-EXECINIT (PROVISION.EXE missing -- the stale-volume
@@ -860,14 +869,14 @@ def main():
                     "resolution failing (the LNM$SYSTEM define/translate arena roundtrip "
                     "on this substrate) -- the vms-72da target, NOT a volume/pager fault."
                     % seen.get("provision_outcome", "unknown"))
-                return 1
+                return PROOF_FAILED
             # PROVISION runs -> the logical-name layer must let it CLEAR the LNMFAIL
             # loop (vms-72da). A LNMFAIL/IVLOGNAM outcome is a hard FAIL.
             if seen.get("lnmfail"):
                 log("FAIL: PROVISION.EXE runs (SYSTEM identity established) but the "
                     "logical-name layer did NOT create the system logicals -- it "
                     "loops on %%DCL-E-LNMFAIL / %%DCL-E-IVLOGNAM (vms-72da not fixed)")
-                return 1
+                return PROOF_FAILED
             # PASS BAR (rd vms-e7a): the RW-ODS2 OWNER path must be clean -- ZERO
             # %OVMX-W-OWNER warnings after SYSTEM identity. Before this fix
             # PROVISION's provision_ownership() hit ~28 of these (lchown(2)
@@ -878,7 +887,7 @@ def main():
                 log("FAIL: %d %%OVMX-W-OWNER warning(s) after SYSTEM identity -- "
                     "PROVISION could not stamp UIC ownership on the RW-ODS2 volume "
                     "(vms-e7a regression / not fixed)" % seen["owner_warn_count"])
-                return 1
+                return PROOF_FAILED
             # SECOND HALF of the vms-e7a pass bar: OWNER-flood absence alone
             # cannot rule out provision_ownership() being skipped entirely
             # (silence looks identical either way -- INV-6). Require the
@@ -888,7 +897,7 @@ def main():
                     "execute within the window (owner-flood absence alone is "
                     "not proof of a real write; need this positive signal too)"
                     % MS_STARTUP_EXECUTING)
-                return 1
+                return PROOF_FAILED
             # PASS BAR (rd vms-84fe, tightened from vms-72da's "next honest gap"
             # bar): reaching Username: -- the vms-d59 DCL login capstone -- is now
             # REQUIRED, not scouting. Diagnosis (vms-84fe): STARTUP.COM's END-phase
@@ -918,7 +927,7 @@ def main():
                     "the CR wake-loop feeding LOGINOUT's OPA0: RETURN-wait "
                     "(vms-2213). This is a NEW boundary past vms-84fe's fix; "
                     "outcome: %s" % seen.get("provision_outcome", "unknown"))
-                return 1
+                return PROOF_FAILED
             log("======================================================================")
             log("  SYSBOOT PASSED: ovmx_init booted as PID 1 on NetBSD/vax, mounted the")
             log("  MASTERED OVMX ODS-2 system volume READ-WRITE, passed the installed-")
@@ -941,12 +950,12 @@ def main():
                 log("NEGATIVE CONTROL DID NOT FAIL: the MOUNTED milestone "
                     "appeared with no ODS-2 volume -- the mount assertion has "
                     "no teeth")
-                return 20
+                return PROOF_FAILED
             if not (seen.get("syskrnl") and seen.get("exec") and seen.get("banner")):
                 log("NEGATIVE CONTROL INCONCLUSIVE: ovmx_init did not even reach "
                     "the pre-mount milestones (executive attach + banner); "
                     "cannot conclude the mount assertion is what reddened")
-                return 21
+                return PROOF_FAILED
             log("PASS: negative control -- ovmx_init attached the executive and "
                 "emitted the banner, but the MOUNTED milestone correctly did "
                 "NOT appear without an ODS-2 system disk")
@@ -956,7 +965,7 @@ def main():
         missing = [k for k in need if not seen.get(k)]
         if missing:
             log("FAIL: boot did not reach every milestone; missing=%s" % missing)
-            return 1
+            return PROOF_FAILED
         log("======================================================================")
         log("  BOOT-VAX PASSED: ovmx_init ran as PID 1 on NetBSD/vax under SIMH,")
         log("  attached the executive on /dev/vms, emitted the OpenVMX banner,")
@@ -967,7 +976,7 @@ def main():
     except Exception:
         log("FAIL: unexpected error driving the harness")
         traceback.print_exc()
-        return 2
+        return HARNESS_ERROR
     finally:
         _hard_kill(child)
         if _con is not None:

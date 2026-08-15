@@ -231,7 +231,7 @@ class TestProofStructuredResult:
     def test_proof_with_no_steps_is_not_ok(self):
         proof = vh.Proof("empty")
         assert proof.ok is False
-        assert proof.exit_code() == 1
+        assert proof.exit_code() == vh.PROOF_FAILED
 
     def test_proof_all_steps_ok_yields_zero_exit(self):
         proof = vh.Proof("demo")
@@ -245,7 +245,20 @@ class TestProofStructuredResult:
         proof.record("a", True)
         proof.record("b", False, detail="facility absent")
         assert proof.ok is False
-        assert proof.exit_code() == 1
+        assert proof.exit_code() == vh.PROOF_FAILED
+
+    def test_exit_code_never_returns_anything_but_zero_or_proof_failed(self):
+        """rd vms-cf5's retrofit ask: Proof.exit_code() must be able to
+        return EXACTLY one of two values -- never a driver-invented ad hoc
+        nonzero code."""
+        ok = vh.Proof("demo"); ok.record("a", True)
+        bad = vh.Proof("demo"); bad.record("a", False)
+        assert ok.exit_code() in (0, vh.PROOF_FAILED)
+        assert ok.exit_code() == 0
+        assert bad.exit_code() in (0, vh.PROOF_FAILED)
+        assert bad.exit_code() == vh.PROOF_FAILED
+        assert vh.PROOF_FAILED != 0
+        assert vh.PROOF_FAILED != vh.HARNESS_ERROR
 
     def test_emit_result_line_is_exactly_one_parseable_json_line(self):
         import io
@@ -300,6 +313,36 @@ class TestNegctlGatePython:
         driver_exit_code_from_buggy_variant = 0  # "negctl ok" -- WRONG per contract
         assert vh.negctl_gate(driver_exit_code_from_buggy_variant, negctl=True) is False
 
+    # ----------------------------------------------------------------------
+    # rd vms-cf5's retrofit tail: the PROOF_FAILED/HARNESS_ERROR carve-out.
+    # ----------------------------------------------------------------------
+    def test_proof_failed_code_inverts_under_negctl(self):
+        assert vh.negctl_gate(vh.PROOF_FAILED, negctl=True) is True
+
+    def test_proof_failed_code_is_not_satisfied_in_positive_mode(self):
+        assert vh.negctl_gate(vh.PROOF_FAILED, negctl=False) is False
+
+    def test_harness_error_code_stays_red_under_negctl(self):
+        """The one behavior change this retrofit makes: a genuine
+        harness-level break must NEVER look like 'negctl teeth confirmed',
+        even though it is a nonzero exit code -- the old 'any nonzero
+        inverts' rule would have wrongly satisfied this."""
+        assert vh.negctl_gate(vh.HARNESS_ERROR, negctl=True) is False
+
+    def test_harness_error_code_stays_red_in_positive_mode_too(self):
+        assert vh.negctl_gate(vh.HARNESS_ERROR, negctl=False) is False
+
+    def test_harness_error_never_satisfies_the_wrapper_either(self):
+        assert vh.negctl_wrapper_exit_code(vh.HARNESS_ERROR, True) == 1
+        assert vh.negctl_wrapper_exit_code(vh.HARNESS_ERROR, False) == 1
+
+    def test_legacy_nonzero_codes_still_invert_unchanged(self):
+        """A not-yet-migrated call site returning some other ad hoc nonzero
+        value keeps behaving exactly as it always did -- this retrofit is
+        additive, not a wholesale semantics change."""
+        assert vh.negctl_gate(60, negctl=True) is True
+        assert vh.negctl_gate(16, negctl=True) is True
+
 
 # --------------------------------------------------------------------------
 # Bug #3, bash mirror: negctl_gate.sh must implement the IDENTICAL table
@@ -346,6 +389,68 @@ class TestNegctlGateBashMirror:
         # not just the ones enumerated in this table -- these two "cannot
         # disagree" per the module contract.
         assert _bash_negctl_gate(driver_exit_code, negctl) is vh.negctl_gate(driver_exit_code, negctl)
+
+    @pytest.mark.parametrize(
+        "driver_exit_code,negctl,expected",
+        [
+            (vh.PROOF_FAILED, True, True),
+            (vh.PROOF_FAILED, False, False),
+            (vh.HARNESS_ERROR, True, False),
+            (vh.HARNESS_ERROR, False, False),
+        ],
+    )
+    def test_bash_mirror_matches_the_new_carve_out(self, driver_exit_code, negctl, expected):
+        assert _bash_negctl_gate(driver_exit_code, negctl) is expected
+        assert _bash_negctl_gate(driver_exit_code, negctl) is vh.negctl_gate(driver_exit_code, negctl)
+
+
+# --------------------------------------------------------------------------
+# Bug #4: the shared guest-session run helper.
+# --------------------------------------------------------------------------
+class TestRunCaptured:
+    def test_returns_the_guest_rc_and_text_without_raising(self):
+        """A nonzero guest rc (a clean proof-fail) must come back as an
+        ordinary (rc, text) tuple -- run_captured() itself must never raise
+        or abort just because the underlying command failed."""
+        calls = []
+
+        def fake_run_fn(cmd, timeout):
+            calls.append((cmd, timeout))
+            return 7, "some captured output\n"
+
+        rc, out = vh.run_captured(fake_run_fn, "false", "/tmp/x.out", 30)
+        assert rc == 7
+        assert out == "some captured output\n"
+        assert len(calls) == 1
+        sent_cmd, sent_timeout = calls[0]
+        assert sent_timeout == 30
+        assert "/tmp/x.out" in sent_cmd
+        assert "cat /tmp/x.out" in sent_cmd
+
+    def test_default_cleanup_prefixes_rm(self):
+        calls = []
+        vh.run_captured(lambda cmd, timeout: calls.append(cmd) or (0, ""),
+                         "echo hi", "/tmp/y.out", 10)
+        assert calls[0].startswith("rm -f /tmp/y.out; ")
+
+    def test_cleanup_false_appends_instead_of_truncating(self):
+        calls = []
+        vh.run_captured(lambda cmd, timeout: calls.append(cmd) or (0, ""),
+                         "echo hi", "/tmp/y.out", 10, cleanup=False)
+        assert "rm -f" not in calls[0]
+        assert ">>/tmp/y.out" in calls[0]
+
+    def test_the_guest_command_itself_is_embedded_unmodified(self):
+        calls = []
+        vh.run_captured(lambda cmd, timeout: calls.append(cmd) or (0, ""),
+                         "vmsprobe selftest", "/tmp/z.out", 10)
+        assert "vmsprobe selftest" in calls[0]
+
+    def test_zero_rc_success_path_also_passes_through_cleanly(self):
+        rc, out = vh.run_captured(
+            lambda cmd, timeout: (0, "PASS\n"), "true", "/tmp/ok.out", 5)
+        assert rc == 0
+        assert out == "PASS\n"
 
 
 if __name__ == "__main__":

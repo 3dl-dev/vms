@@ -20,6 +20,15 @@
 #   - THIS function is what inverts the meaning for negctl mode:
 #       positive mode (negctl=0): gate satisfied <=> driver exit code == 0
 #       negctl mode   (negctl=1): gate satisfied <=> driver exit code != 0
+#   - ONE CARVE-OUT (rd vms-cf5's retrofit tail): VAXHARNESS_HARNESS_ERROR
+#     is NEVER "the gate satisfied", in EITHER mode -- a genuine harness-
+#     level break (console timeout/EOF, an unhandled driver exception, a
+#     missing prerequisite) during a negctl run is not evidence the
+#     negative control had teeth. Keep this constant's VALUE in sync with
+#     vaxharness.py's HARNESS_ERROR -- every driver's main() now collapses
+#     onto exactly {0, PROOF_FAILED, HARNESS_ERROR} (vaxharness.py's
+#     PROOF_FAILED/HARNESS_ERROR constants), so no other value needs a
+#     mirror here.
 #
 # Usage (source this file, then):
 #   run_driver ...; rc=$?
@@ -38,6 +47,9 @@
 #
 # This is OVMX's own code (CLAUDE.md Rule 8): no third-party source.
 
+# Keep in sync with vaxharness.py's HARNESS_ERROR constant.
+VAXHARNESS_HARNESS_ERROR=66
+
 # vaxharness_negctl_gate DRIVER_EXIT_CODE NEGCTL_FLAG
 #   DRIVER_EXIT_CODE: the raw exit status of the driver invocation (an
 #     integer; $? from the caller).
@@ -53,6 +65,12 @@ vaxharness_negctl_gate() {
     1 | true | TRUE | yes | YES) negctl_flag=1 ;;
     *) negctl_flag=0 ;;
   esac
+
+  if [ "${driver_exit_code}" -eq "${VAXHARNESS_HARNESS_ERROR}" ]; then
+    # A genuine harness-level break is NEVER "the gate satisfied", in
+    # EITHER mode -- see the header comment above.
+    return 1
+  fi
 
   if [ "${negctl_flag}" -eq 1 ]; then
     # negctl mode: satisfied iff the driver did NOT exit 0.

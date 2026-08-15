@@ -106,7 +106,7 @@ import netbsd_console
 
 # vaxharness.py (rd vms-cf5) lives in THIS directory (tests/lab-vax), staged
 # alongside this script by run-mbx.sh -- no sys.path insert needed.
-from vaxharness import Proof, safe_expect
+from vaxharness import HARNESS_ERROR, Proof, safe_expect
 
 
 def log(msg):
@@ -249,7 +249,7 @@ def main():
 
     if not os.path.isfile(iso_path):
         log("FAIL: install ISO not found at %s (run lab-vax install first)" % iso_path)
-        return 3
+        return HARNESS_ERROR
 
     a = anita.Anita(
         dist=anita.ISO(iso_path, sets=sets),
@@ -317,13 +317,13 @@ def main():
                 log("FAIL: could not install the MODULAR kernel onto /netbsd")
                 proof.record("install-kernel", False, detail="cp/mv failed")
                 proof.emit_result_line()
-                return 30
+                return proof.exit_code()
             run(child, "sync; mount -u -r / 2>/dev/null; sync", cmd_timeout)
             log("OK: installed MODULAR kernel as /netbsd (GENERIC kept as "
                 "/netbsd.GENERIC), flushed to disk; the next boot runs it")
             proof.record("install-kernel", True)
             proof.emit_result_line()
-            return 0
+            return proof.exit_code()
 
         # ---- stage the artifacts from the OVMX CD --------------------------
         run(child, "dmesg | grep -iE 'cd[0-9]|mscp|uba' | tail -20; "
@@ -353,7 +353,7 @@ def main():
             log("FAIL: could not find/mount the OVMX artifact CD in the guest "
                 "(see the CD-device diagnostics above)")
             proof.emit_result_line()
-            return 10
+            return proof.exit_code()
         log("OK: staged vms.kmod + vmsmbx from the OVMX CD")
 
         MB = "/root/ovmx/vmsmbx"
@@ -370,7 +370,7 @@ def main():
             log("FAIL (INV-6): tool returned SUCCESS with no /dev/vms present "
                 "-- the faked-success bug INV-6 forbids")
             proof.emit_result_line()
-            return 20
+            return proof.exit_code()
         if not inv6_honest:
             proof.record("inv6-module-absent", False,
                           detail="failed, but not via the honest "
@@ -378,7 +378,7 @@ def main():
             log("FAIL (INV-6): tool failed, but not via the honest "
                 "device-unreachable path (unexpected reason)")
             proof.emit_result_line()
-            return 21
+            return proof.exit_code()
         proof.record("inv6-module-absent", True,
                       detail="SS$_NOSUCHDEV, NOT faking success")
         log("OK (INV-6): with no module loaded the tool FAILED HONESTLY "
@@ -419,7 +419,7 @@ def main():
                     "NetBSD/vax (this is the modules(9)-on-vax risk P4-B "
                     "documents; console output above)")
                 proof.emit_result_line()
-                return 14
+                return proof.exit_code()
             proof.record("modload", True)
             log("OK: module loaded and /dev/vms created on NetBSD/vax")
 
@@ -530,20 +530,20 @@ def main():
                     "name was never captured) -- no mailbox exists for B/C "
                     "to reach (phase token: %s; see transcript above)" % tok)
                 proof.emit_result_line()
-                return 16
+                return proof.exit_code()
             if "write" in tok:
                 log("FAIL: process B (a DIFFERENT process) could not WRITE "
                     "into the mailbox process A created -- the cross-process "
                     "shared-kernel-state proof did not hold on NetBSD/vax "
                     "(phase token: %s; see transcript above)" % tok)
                 proof.emit_result_line()
-                return 17
+                return proof.exit_code()
             log("FAIL: process C (a THIRD, different process) did NOT read "
                 "back the exact bytes process B wrote -- the mailbox message "
                 "queue was not shared across processes (phase token: %s; "
                 "see transcript above)" % tok)
             proof.emit_result_line()
-            return 18
+            return proof.exit_code()
 
         m = re.search(r"MBX CREATE devnam=(\S+) status=", tx_out)
         devnam_seen = m.group(1) if m else "?"
@@ -566,26 +566,26 @@ def main():
         proof.emit_result_line()
         log("MBX-VAX: ALL CHECKS PASSED -- a real in-kernel VMS mailbox "
             "facility on NetBSD/vax shares state across processes (INV-6)")
-        return 0
+        return proof.exit_code()
 
     except pexpect.TIMEOUT as e:
         log("FAIL: timed out driving the NetBSD/vax console")
         log("  %s" % e)
         proof.record("unhandled", False, detail="pexpect.TIMEOUT: %s" % e)
         proof.emit_result_line()
-        return 1
+        return HARNESS_ERROR
     except pexpect.EOF as e:
         log("FAIL: SIMH exited unexpectedly (EOF on the console)")
         log("  %s" % e)
         proof.record("unhandled", False, detail="pexpect.EOF: %s" % e)
         proof.emit_result_line()
-        return 1
+        return HARNESS_ERROR
     except Exception:
         log("FAIL: unexpected error driving the harness")
         traceback.print_exc()
         proof.record("unhandled", False, detail="unexpected exception")
         proof.emit_result_line()
-        return 2
+        return HARNESS_ERROR
     finally:
         try:
             if child is not None and child.isalive():

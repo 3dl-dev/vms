@@ -83,6 +83,10 @@ import anita
 sys.path.insert(0, os.environ.get("OVMX_NETBSD_DIR", "/netbsd"))
 import netbsd_console
 
+# vaxharness.py (rd vms-cf5) lives in THIS directory (tests/lab-vax), staged
+# alongside this script by run-eflag.sh -- no sys.path insert needed.
+from vaxharness import HARNESS_ERROR, PROOF_FAILED
+
 
 def log(msg):
     print("[drive_eflag_vax] %s" % msg, flush=True)
@@ -178,7 +182,7 @@ def main():
 
     if not os.path.isfile(iso_path):
         log("FAIL: install ISO not found at %s (run lab-vax install first)" % iso_path)
-        return 3
+        return HARNESS_ERROR
 
     a = anita.Anita(
         dist=anita.ISO(iso_path, sets=sets),
@@ -252,7 +256,7 @@ def main():
                           cmd_timeout)
             if rc != 0:
                 log("FAIL: could not install the MODULAR kernel onto /netbsd")
-                return 30
+                return PROOF_FAILED
             run(child, "sync; mount -u -r / 2>/dev/null; sync", cmd_timeout)
             log("OK: installed MODULAR kernel as /netbsd (GENERIC kept as "
                 "/netbsd.GENERIC), flushed to disk; the next boot runs it")
@@ -283,7 +287,7 @@ def main():
         if rc != 0:
             log("FAIL: could not find/mount the OVMX artifact CD in the guest "
                 "(see the CD-device diagnostics above)")
-            return 10
+            return PROOF_FAILED
         log("OK: staged vms.kmod + vmseflag from the OVMX CD")
 
         EF = "/root/ovmx/vmseflag"
@@ -294,11 +298,11 @@ def main():
         if rc == 0:
             log("FAIL (INV-6): tool returned SUCCESS with no /dev/vms present "
                 "-- the faked-success bug INV-6 forbids")
-            return 20
+            return PROOF_FAILED
         if "SS$_NOSUCHDEV" not in out or "NOT faking success" not in out:
             log("FAIL (INV-6): tool failed, but not via the honest "
                 "device-unreachable path (unexpected reason)")
-            return 21
+            return PROOF_FAILED
         log("OK (INV-6): with no module loaded the tool FAILED HONESTLY "
             "(SS$_NOSUCHDEV), it did not fake success")
 
@@ -333,7 +337,7 @@ def main():
                 log("FAIL: could not load the module / create /dev/vms on "
                     "NetBSD/vax (this is the modules(9)-on-vax risk P4-B "
                     "documents; console output above)")
-                return 14
+                return PROOF_FAILED
             log("OK: module loaded and /dev/vms created on NetBSD/vax")
 
         # ---- 4a-4e. CROSS-PROCESS SHARED-STATE PROOF (collapsed) -----------
@@ -370,18 +374,18 @@ def main():
                 log("FAIL: process B did NOT observe common flag 64 as SET -- "
                     "the cross-process shared-kernel-state proof did not hold "
                     "on NetBSD/vax (phase token: %s)" % tok)
-                return 16
+                return PROOF_FAILED
             if "ctl65" in tok:
                 log("FAIL: control flag 65 was not CLEAR -- the read does not "
                     "actually reflect per-flag state")
-                return 17
+                return PROOF_FAILED
             if "clrC" in tok:
                 log("FAIL: process C's $CLREF 64 did not report previous "
                     "state was-set -- C did not see A's set either")
-                return 18
+                return PROOF_FAILED
             log("FAIL: process D still saw flag 64 SET after $CLREF -- the "
                 "clear was not shared across processes")
-            return 19
+            return PROOF_FAILED
         if not skip_set:
             log("OK: process A ($SETEF 64) succeeded")
         log("OK: process B (a DIFFERENT process) observed common flag 64 SET "
@@ -417,14 +421,14 @@ def main():
             if tok and "notblocked" in tok:
                 log("FAIL: the waiter returned BEFORE any process set flag 66 "
                     "-- the wait has no teeth (it did not actually block)")
-                return 22
+                return PROOF_FAILED
             if tok and "noset" in tok:
                 log("FAIL: could not set common flag 66 to wake the waiter")
-                return 23
+                return PROOF_FAILED
             log("FAIL: the blocked waiter did NOT wake after a DIFFERENT "
                 "process set common flag 66 on NetBSD/vax -- the cross-process "
                 "cv wake was LOST (phase token: %s)" % tok)
-            return 24
+            return PROOF_FAILED
         log("OK: the waiter BLOCKED in-kernel on common flag 66 on NetBSD/vax "
             "(no WAITDONE until a DIFFERENT process set it)")
         log("OK: the blocked waiter WOKE when a DIFFERENT process set common "
@@ -446,15 +450,15 @@ def main():
     except pexpect.TIMEOUT as e:
         log("FAIL: timed out driving the NetBSD/vax console")
         log("  %s" % e)
-        return 1
+        return HARNESS_ERROR
     except pexpect.EOF as e:
         log("FAIL: SIMH exited unexpectedly (EOF on the console)")
         log("  %s" % e)
-        return 1
+        return HARNESS_ERROR
     except Exception:
         log("FAIL: unexpected error driving the harness")
         traceback.print_exc()
-        return 2
+        return HARNESS_ERROR
     finally:
         try:
             if child is not None and child.isalive():

@@ -514,8 +514,8 @@ gate.py`): that gate never scrapes a console -- it runs one adapter command
 and parses ONE line of JSON from stdout, target-agnostic. This module adapts
 that shape to a SIMH/pexpect console.
 
-**The three bugs it kills** (see the module docstring in `vaxharness.py` for
-full detail and exact call-site provenance):
+**The bugs it kills** (see the module docstring in `vaxharness.py` for full
+detail and exact call-site provenance):
 
 1. **anita's `expect()` crashes on its own TIMEOUT/EOF sentinel.** anita's
    vendored pexpect subclass unconditionally calls `self.match.group(0)`
@@ -539,37 +539,75 @@ full detail and exact call-site provenance):
    bash mirror `negctl_gate.sh`'s `vaxharness_negctl_gate`) to invert that
    meaning for negctl mode. Both implementations are unit-tested against the
    identical table so they cannot silently diverge.
+3b. **The retrofit tail (rd vms-cf5, 2026-08-15): the SAME exit-code
+   contradiction, systemically.** Building the four facility proofs (event
+   flags, proctab, mbx, access) hit bug 3 THREE more times, each fixed
+   per-driver by hand: every driver invented its own ad hoc nonzero failure
+   codes (access: 60/61/70-74; proctab/mbx: their own ranges), with no
+   distinction between "a proof assertion legitimately failed" and "the
+   harness itself broke" (a console timeout/EOF, an unhandled exception, a
+   missing prerequisite artifact). `PROOF_FAILED`/`HARNESS_ERROR` are the two
+   canonical exit codes every driver's `main()` now collapses onto:
+   `Proof.exit_code()` can only ever return `0` or `PROOF_FAILED`; a genuine
+   harness-level except-block returns `HARNESS_ERROR` directly, never through
+   `exit_code()`. `negctl_gate()`/`negctl_gate.sh` treat `HARNESS_ERROR` as an
+   automatic "gate NOT satisfied" in **both** modes -- a harness crash during
+   a negctl run is not evidence the negative control had teeth -- while every
+   other exit code keeps the exact zero-vs-nonzero table bug 3 already
+   established (additive, not a semantics rewrite: a not-yet-migrated call
+   site's legacy nonzero code still inverts exactly as before).
+4. **Long collapsed one-line guest commands truncate on the lossy VAX/SIMH
+   serial.** A guest command built with `$(...)` command substitution +
+   inline `sed`, several steps deep, can lose its trailing marker output to
+   the lossy serial before it arrives, producing a spurious `exit=2`/
+   empty-output read on the DRIVER side, not a real guest failure. The proven
+   fix (first hand-hardened in `drive_proctab_vax.py`/`drive_mbx_vax.py`,
+   mirrored from `tests/netbsd/drive_netbsd_p4a.py`'s MBX phase): redirect
+   each guest call's output to a FILE, `cat` it back over the console as a
+   separate trivial read, and parse the returned text PYTHON-side -- never a
+   big inline one-liner with in-guest command substitution.
+   `run_captured(run_fn, cmd, outfile, timeout)` encodes that convention ONCE
+   for future drivers to call instead of hand-rolling it.
 
 **The structured result contract.** `Proof`/`StepResult` turn a driver's
 pass/fail decision into DATA -- one `{step, ok, marker_seen, detail}` per
 proof step, reduced by `Proof.emit_result_line()` to exactly one JSON line on
 stdout (mirroring the Target Adapter Protocol's "exactly one JSON object"
 contract) -- instead of scattered `if seen.get(...)` checks through the
-script.
+script. `Proof.exit_code()` is the canonical way a driver's `main()` ends:
+`sys.exit(proof.exit_code())`.
 
 **Self-test:** `test_vaxharness.py` (pytest, no SIMH/anita/container needed)
 feeds `safe_expect()` fake children that raise `pexpect.TIMEOUT`,
 `pexpect.EOF`, the exact anita `AttributeError`, and one whose `.before`
 property itself raises, asserting the honest structured result comes back in
 every case and nothing ever raises; plus the full `negctl_gate` truth table
-in both Python and bash. Run: `pytest tests/lab-vax/test_vaxharness.py -v`.
+(including the `PROOF_FAILED`/`HARNESS_ERROR` carve-out) in both Python and
+bash, and `run_captured()`'s never-raises/redirect-shape contract. Run:
+`pytest tests/lab-vax/test_vaxharness.py -v`.
 
-**Adoption.** `vaxharness.py` was a new, standalone module at merge time -- it
-did not yet replace the ad hoc `_console_text()` / scattered
-`except (pexpect.TIMEOUT, pexpect.EOF, Exception)` call sites in the existing
-`drive_*.py` drivers. `drive_proctab_vax.py` (rd vms-2e0, "P4-proctab" above)
-is the **first real adopter**: its boot-console handshake goes through
-`safe_expect()` and its pass/fail decision is a `Proof` of `StepResult`s;
-`run-proctab.sh` sources `negctl_gate.sh` rather than hand-rolling the
-exit-code inversion. `drive_access_vax.py` (rd vms-4b7, "P4-access" above)
-is the second adopter, following `drive_proctab_vax.py`'s shape rather than
-re-deriving it, with the identical `safe_expect()`/`Proof`/`negctl_gate.sh`
-shape. Retrofitting the remaining pre-existing drivers (`drive_boot_vax.py`,
-`drive_devvms_vax.py`, `drive_eflag_vax.py`) to the same contract is still
-separate follow-up work, sequenced after `vms-84fe` (mid-flight in
-`drive_boot_vax.py`) merges. `vms-945e`'s remaining facility drivers
-(mbx/lnm/lock) adopt `safe_expect`/`Proof`/`negctl_gate` from day one,
-following `drive_proctab_vax.py`'s shape.
+**Adoption -- COMPLETE (rd vms-cf5).** All seven vax drivers now share this
+one contract. `drive_proctab_vax.py` (rd vms-2e0) was the first real
+adopter, followed by `drive_access_vax.py` (rd vms-4b7) and
+`drive_mbx_vax.py` (rd vms-fe8) in the same shape: boot-console handshake
+through `safe_expect()`, pass/fail decision a `Proof` of `StepResult`s,
+`run-*.sh` sourcing `negctl_gate.sh` rather than hand-rolling the exit-code
+inversion. The retrofit tail then brought the remaining four onto the
+canonical `PROOF_FAILED`/`HARNESS_ERROR` exit-code contract:
+`drive_boot_vax.py`, `drive_eflag_vax.py`, `drive_devvms_vax.py`, and
+`drive_vmsfs_vax.py` now import `PROOF_FAILED`/`HARNESS_ERROR` from
+`vaxharness` and return them at every clean-proof-fail / genuine-harness-
+error site respectively, and `run-eflag.sh`/`run-devvms.sh`/`run-vmsfs.sh`
+now source `negctl_gate.sh` instead of hand-rolling
+`if run_session ...; then die "NO TEETH"; fi`. This retrofit is
+deliberately behavior-preserving: it does not touch these four drivers'
+`_console_text()`/`safe_expect`-shaped boot handshake (already
+crash-hardened on its own terms) or any assertion logic, only WHICH integer
+a clean-fail/harness-error site returns. `run-boot.sh` is the one wrapper
+that stays un-routed through `negctl_gate.sh` by design: `drive_boot_vax.py`
+already computes the final pass/fail verdict for every mode (including
+`negctl`/`sysboot-negctl`) itself, so there is no wrapper-side inversion to
+apply -- see the comment above its `case "${MODE}"` dispatch.
 
 **The `set -e` scope-leak trap (rd vms-4b7, hit again verbatim on vms-2e0's
 own first nightly run -- read this before writing a new `run-*.sh`).**
@@ -584,21 +622,6 @@ return -- aborting the whole script before `rc=$?` (and the
 `vaxharness_negctl_gate` call after it) ever runs, so a clean, honest
 negctl proof-failure reddens the JOB instead of being inverted to PASS. The
 only safe call-site form is `||`-protected: `rc=0; run_session ... || rc=$?`
--- both `run-access.sh` and `run-proctab.sh` use this form exclusively.
-`drive_*.py` drivers. `drive_access_vax.py` (rd vms-4b7, "P4-access" above)
-and `drive_mbx_vax.py` (rd vms-fe8, "Mailboxes" above) follow
-drive_proctab_vax.py's shape rather than re-deriving it: their boot-console
-handshakes go through `safe_expect()` and their pass/fail decision is a
-`Proof` of `StepResult`s; `run-access.sh`/`run-mbx.sh` source
-`negctl_gate.sh` rather than hand-rolling the exit-code inversion.
-`drive_mbx_vax.py` also carries forward two postmortems flagged from its
-siblings: the vms-2e0 fix (redirect every guest-tool invocation to a file
-instead of `$(...)` + inline `sed`, to survive the lossy VAX/SIMH serial) and
-the vms-4b7 audit (every failure path returns a plain nonzero int, no
-"harness-error" code collides with the clean-proof-fail contract).
-Retrofitting the remaining pre-existing drivers (`drive_boot_vax.py`,
-`drive_devvms_vax.py`, `drive_eflag_vax.py`) to the same contract is still
-separate follow-up work, sequenced after `vms-84fe` (mid-flight in
-`drive_boot_vax.py`) merges. `vms-945e`'s remaining facility drivers
-(proctab/lnm) adopt `safe_expect`/`Proof`/`negctl_gate` from day one,
-following this same shape.
+-- every `run-*.sh` that sources `negctl_gate.sh` (`run-access.sh`,
+`run-proctab.sh`, `run-mbx.sh`, `run-eflag.sh`, `run-devvms.sh`,
+`run-vmsfs.sh`) uses this form exclusively.

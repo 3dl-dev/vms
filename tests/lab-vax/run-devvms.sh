@@ -32,11 +32,21 @@
 #
 #   tests/lab-vax/run-devvms.sh              # build everything, ensure disk+kernel, PROVE
 #   tests/lab-vax/run-devvms.sh negctl       # P4B_SKIP_LOAD teeth check (fail-then-pass)
+#
+# THE NEGCTL CONTRACT (rd vms-cf5): this wrapper never hand-rolls its own
+# "if driver_exit; then die ...; fi" inversion for negctl mode -- it sources
+# negctl_gate.sh and applies vaxharness_negctl_gate() to the driver session's
+# raw exit code, the ONE inversion rule shared with vaxharness.py's Python
+# negctl_gate() (and unit-tested identically to it, test_vaxharness.py).
+# drive_devvms_vax.py itself is NEVER negctl-mode-aware.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "${HERE}/../.." && pwd)"
 MODE="${1:-prove}"
+
+# shellcheck source=tests/lab-vax/negctl_gate.sh
+source "${HERE}/negctl_gate.sh"
 
 # --- pinned inputs (bump deliberately, together, with fresh checksums) --------
 NETBSD_VERSION="${NETBSD_VERSION:-10.1}"
@@ -158,7 +168,17 @@ ensure_disk() {
   [ -f "${CACHE_DIR}/anita-work/wd0.img" ] || die "install finished but wd0.img missing"
 }
 
-# run the driver in one SIMH session with a given OVMX_MODE
+# run the driver in one SIMH session with a given OVMX_MODE; returns the
+# driver's RAW (never mode-inverted) exit code via $? -- negctl_gate.sh
+# applies the inversion in the caller, never here.
+#
+# CALL-SITE CONTRACT (bash `set -e` scope-leak; see run-mbx.sh's/run-
+# access.sh's identical comment for the full empirical repro): `errexit` is
+# a GLOBAL shell option, not function-scoped, so the `set -e` this function
+# runs right before its own `return "${rc}"` stays in effect in the CALLER
+# too. The ONLY safe way to call this function is `||`-protected --
+#     rc=0; run_session ... || rc=$?
+# -- never `set +e; run_session ...; rc=$?; set -e`.
 run_session() {
   local ovmx_mode="$1" skip_load="${2:-}"; local cid="ovmx-vax-devvms-${ovmx_mode}-$$"; local rc=0
   set +e
@@ -192,21 +212,25 @@ ensure_modular_kernel
 
 case "${MODE}" in
   prove)
-    if run_session prove; then
+    rc=0
+    run_session prove || rc=$?
+    if vaxharness_negctl_gate "${rc}" 0; then
       log "======================================================================"
       log "  DEVVMS-VAX PASSED: /dev/vms live on NetBSD/vax under SIMH, PING OK"
       log "======================================================================"
       exit 0
     fi
-    die "DEVVMS-VAX FAILED (see console output above)"
+    die "DEVVMS-VAX FAILED (driver exit=${rc}; see console output above)"
     ;;
   negctl)
     # Teeth: with the module skipped, the PING OK assertion MUST fail.
-    if run_session prove skip; then
-      die "NEGATIVE CONTROL DID NOT FAIL: harness passed with the module unloaded -- no teeth"
+    rc=0
+    run_session prove skip || rc=$?
+    if vaxharness_negctl_gate "${rc}" 1; then
+      log "PASS: negative control failed as required (driver exit=${rc}; the PING assertion has teeth)"
+      exit 0
     fi
-    log "PASS: negative control failed as required (the PING assertion has teeth)"
-    exit 0
+    die "NEGATIVE CONTROL DID NOT FAIL: harness passed (exit=${rc}) with the module unloaded -- no teeth"
     ;;
   *) die "unknown mode '${MODE}' (want: prove | negctl)" ;;
 esac

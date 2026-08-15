@@ -59,6 +59,10 @@ import anita
 sys.path.insert(0, os.environ.get("OVMX_NETBSD_DIR", "/netbsd"))
 import netbsd_console
 
+# vaxharness.py (rd vms-cf5) lives in THIS directory (tests/lab-vax), staged
+# alongside this script by run-devvms.sh -- no sys.path insert needed.
+from vaxharness import HARNESS_ERROR, PROOF_FAILED
+
 
 def log(msg):
     print("[drive_devvms_vax] %s" % msg, flush=True)
@@ -136,7 +140,7 @@ def main():
 
     if not os.path.isfile(iso_path):
         log("FAIL: install ISO not found at %s (run lab-vax install first)" % iso_path)
-        return 3
+        return HARNESS_ERROR
 
     # ISO dist: anita guesses arch 'vax' from the ISO name and selects the simh
     # vmm automatically. sets must match what produced the cached disk.
@@ -236,7 +240,7 @@ def main():
                           cmd_timeout)
             if rc != 0:
                 log("FAIL: could not install the MODULAR kernel onto /netbsd")
-                return 30
+                return PROOF_FAILED
             # Flush the swap to the disk image by remounting root read-only
             # (a clean-unmount-equivalent), so an abrupt SIMH teardown cannot lose
             # it. Then return: the finally-block terminates SIMH at once (sending
@@ -276,7 +280,7 @@ def main():
         if rc != 0:
             log("FAIL: could not find/mount the OVMX module CD in the guest "
                 "(see the CD-device diagnostics above)")
-            return 10
+            return PROOF_FAILED
         log("OK: staged vms.kmod + vmsprobe from the OVMX CD")
 
         # ---- 2. INV-6 NEGATIVE CONTROL: probe with NO module loaded --------
@@ -285,11 +289,11 @@ def main():
         if rc == 0:
             log("FAIL (INV-6): probe returned SUCCESS with no /dev/vms present "
                 "-- the faked-success bug INV-6 forbids")
-            return 20
+            return PROOF_FAILED
         if "SS$_NOSUCHDEV" not in out or "NOT faking success" not in out:
             log("FAIL (INV-6): probe failed, but not via the honest "
                 "device-unreachable path (unexpected reason)")
-            return 21
+            return PROOF_FAILED
         log("OK (INV-6): with no module loaded the probe FAILED HONESTLY "
             "(SS$_NOSUCHDEV), it did not fake success")
 
@@ -303,7 +307,7 @@ def main():
                     "is the modules(9)-on-vax risk (design-p4 risk 2); the "
                     "documented fallback is compiling the driver into a custom "
                     "NetBSD/vax kernel. Console output above." % rc)
-                return 14
+                return PROOF_FAILED
             # Parse the char major the module printed to dmesg (runtime output,
             # not command text), mknod /dev/vms, and assert the node exists.
             rc, out = run(child,
@@ -318,7 +322,7 @@ def main():
             if rc != 0:
                 log("FAIL: module loaded but /dev/vms node could not be created "
                     "(major parse / mknod failed)")
-                return 15
+                return PROOF_FAILED
             log("OK: module loaded and /dev/vms created on NetBSD/vax")
         else:
             log("SKIP: module NOT loaded (P4B_SKIP_LOAD) -- expecting the PING "
@@ -328,7 +332,7 @@ def main():
         if rc != 0 or "PROBE: PING OK" not in out:
             log("FAIL: the version/ping ioctl did not round-trip on NetBSD/vax "
                 "(probe exit %d)" % rc)
-            return 16
+            return PROOF_FAILED
         log("OK: PING OK -- one ioctl round-tripped through a REAL in-kernel "
             "/dev/vms on NetBSD/vax under SIMH, via kif_transport_netbsd.c")
 
@@ -350,15 +354,15 @@ def main():
     except pexpect.TIMEOUT as e:
         log("FAIL: timed out driving the NetBSD/vax console")
         log("  %s" % e)
-        return 1
+        return HARNESS_ERROR
     except pexpect.EOF as e:
         log("FAIL: SIMH exited unexpectedly (EOF on the console)")
         log("  %s" % e)
-        return 1
+        return HARNESS_ERROR
     except Exception:
         log("FAIL: unexpected error driving the harness")
         traceback.print_exc()
-        return 2
+        return HARNESS_ERROR
     finally:
         try:
             if child is not None and child.isalive():

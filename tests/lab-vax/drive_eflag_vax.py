@@ -303,38 +303,38 @@ def main():
             "(SS$_NOSUCHDEV), it did not fake success")
 
         # ---- 4. load the module + create the node ---------------------------
+        # NEGCTL CONTRACT (mirrors drive_devvms_vax.py's P4B_SKIP_LOAD exactly):
+        # when skip_load is set, modload is skipped and /dev/vms stays ABSENT
+        # (removed by the INV-6 check above, never recreated) -- the driver
+        # does NOT special-case an early "negctl satisfied" exit here. It falls
+        # through into the SAME cross-process proof every positive run
+        # executes; that proof then fails FOR REAL (every vmseflag invocation
+        # hits the honest device-unreachable path), and this function returns
+        # its ordinary nonzero failure code below. run-eflag.sh's negctl-load
+        # mode is what inverts "the driver exited nonzero" into "teeth
+        # confirmed" -- exactly one exit-code contract for this script, shared
+        # by the positive and negative runs, so the two sides can never
+        # disagree about what "the harness passed" means.
         if skip_load:
-            log("SKIP: modload skipped (EFLAG_SKIP_LOAD) -- the cross-process "
-                "proof must fail next")
-            rc, out = run(child, "%s read 64" % EF, cmd_timeout)
-            if rc == 0:
-                log("FAIL (negctl): the tool succeeded with EFLAG_SKIP_LOAD set "
-                    "-- the negative control has no teeth")
-                return 25
-            log("OK (negctl): with modload skipped the proof correctly failed "
-                "-- EFLAG_SKIP_LOAD has teeth")
-            try:
-                child.sendline("halt")
-            except Exception:
-                pass
-            return 0
-
-        rc, out = run(child,
-                      "modunload vms 2>/dev/null; "
-                      "modload /root/ovmx/vms.kmod && "
-                      "MAJ=`dmesg | sed -n "
-                      "'s/.*vms: registered, char major \\([0-9][0-9]*\\).*/\\1/p'"
-                      " | tail -1` && "
-                      "test -n \"$MAJ\" && rm -f /dev/vms && "
-                      "mknod /dev/vms c $MAJ 0 && chmod 666 /dev/vms && "
-                      "test -c /dev/vms && echo MODLOAD=OK || echo MODLOAD=FAIL",
-                      cmd_timeout)
-        if phase_token(out, "MODLOAD") != "OK":
-            log("FAIL: could not load the module / create /dev/vms on "
-                "NetBSD/vax (this is the modules(9)-on-vax risk P4-B "
-                "documents; console output above)")
-            return 14
-        log("OK: module loaded and /dev/vms created on NetBSD/vax")
+            log("SKIP: modload skipped (EFLAG_SKIP_LOAD) -- /dev/vms stays "
+                "absent; the cross-process proof below must fail for real")
+        else:
+            rc, out = run(child,
+                          "modunload vms 2>/dev/null; "
+                          "modload /root/ovmx/vms.kmod && "
+                          "MAJ=`dmesg | sed -n "
+                          "'s/.*vms: registered, char major \\([0-9][0-9]*\\).*/\\1/p'"
+                          " | tail -1` && "
+                          "test -n \"$MAJ\" && rm -f /dev/vms && "
+                          "mknod /dev/vms c $MAJ 0 && chmod 666 /dev/vms && "
+                          "test -c /dev/vms && echo MODLOAD=OK || echo MODLOAD=FAIL",
+                          cmd_timeout)
+            if phase_token(out, "MODLOAD") != "OK":
+                log("FAIL: could not load the module / create /dev/vms on "
+                    "NetBSD/vax (this is the modules(9)-on-vax risk P4-B "
+                    "documents; console output above)")
+                return 14
+            log("OK: module loaded and /dev/vms created on NetBSD/vax")
 
         # ---- 4a-4e. CROSS-PROCESS SHARED-STATE PROOF (collapsed) -----------
         # Same loss-tolerant-transport technique as drive_netbsd_p2c.py: ONE

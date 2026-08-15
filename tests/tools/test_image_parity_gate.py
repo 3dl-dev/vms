@@ -4,12 +4,16 @@
 
 Two jobs:
   1. Prove the gate has TEETH: a synthetic unallowlisted gap must fail it,
-     and the identical gap once allowlisted must pass.
-  2. Prove the REAL extraction (Dockerfile.bootable / cut-release.sh parsing)
-     still finds the images we know are there, on the actual repo tree --
-     so a future edit to either file that breaks the text-scan (renames a
-     stage, re-flows the RUN block, restructures VAX_ARTIFACT_ORDER) reds
-     THIS test instead of silently making the live gate blind.
+     and the identical gap once allowlisted must pass -- both for the
+     compute_diff() core and for the CMakeLists.txt/_OVMX_IMAGES_DEPS
+     extraction specifically (a target dropped from the aggregate must
+     disappear from the extracted vax set).
+  2. Prove the REAL extraction (Dockerfile.bootable / CMakeLists.txt /
+     cut-release-vax.sh parsing) still finds the images we know are there,
+     on the actual repo tree -- so a future edit to any of them that breaks
+     the text-scan (renames a stage, re-flows the RUN block, restructures
+     _OVMX_IMAGES_DEPS) reds THIS test instead of silently making the live
+     gate blind.
 
 Run: python3 -m pytest tests/tools/test_image_parity_gate.py -v
 """
@@ -104,6 +108,12 @@ def test_load_allowlist_rejects_bad_missing_on(tmp_path):
         ip.load_allowlist(bad)
 
 
+_FAKE_CUT_RELEASE_VAX_SH = (
+    "printf '%s\\n' vms.kmod.o vmsfs.kmod vmsfs_mount\n"
+    'printf \'%s\\n\' "${IMAGE_NAMES[@]}"\n'
+)
+
+
 def test_main_cli_exits_nonzero_on_real_drift(tmp_path, capsys):
     """End-to-end through main(): a repo tree with a real gap must produce a
     nonzero exit code, not just an internal DiffResult."""
@@ -116,12 +126,12 @@ def test_main_cli_exits_nonzero_on_real_drift(tmp_path, capsys):
         "RUN cp build-static/bin/STARTUP.EXE /system-stage/init && \\\n"
         "    cp build-static/bin/FOO.EXE /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/\n"
     )
-    (repo / "tools" / "cut-release.sh").write_text(
-        'VAX_ARTIFACT_ORDER=()\n'
-        'if true; then\n'
-        '    VAX_ARTIFACT_ORDER=(STARTUP.EXE)\n'
-        "fi\n"
+    (repo / "CMakeLists.txt").write_text(
+        "set(_OVMX_IMAGES_DEPS\n"
+        "    ovmx_init            # STARTUP.EXE\n"
+        ")\n"
     )
+    (repo / "tools" / "cut-release-vax.sh").write_text(_FAKE_CUT_RELEASE_VAX_SH)
     (repo / "tools" / "parity" / "image-parity-allowlist.json").write_text('{"entries": []}')
 
     exit_code = ip.main(["--repo-root", str(repo)])
@@ -140,14 +150,18 @@ def test_main_cli_exits_zero_when_fully_allowlisted(tmp_path, capsys):
         "# LIBVMSLNM$SHR.EXE, LIBVMSFS$SHR.EXE, LIBVMS$SHR.EXE, LIBVMSRMS$SHR.EXE)\n"
         "RUN cp build-static/bin/STARTUP.EXE /system-stage/init\n"
     )
-    (repo / "tools" / "cut-release.sh").write_text(
-        'VAX_ARTIFACT_ORDER=()\n'
-        'if true; then\n'
-        '    VAX_ARTIFACT_ORDER=(STARTUP.EXE LIBRARIAN.EXE)\n'
-        "fi\n"
+    (repo / "CMakeLists.txt").write_text(
+        "set(_OVMX_IMAGES_DEPS\n"
+        "    ovmx_init            # STARTUP.EXE\n"
+        "    vmslibrarian         # LIBRARIAN.EXE\n"
+        ")\n"
     )
+    (repo / "tools" / "cut-release-vax.sh").write_text(_FAKE_CUT_RELEASE_VAX_SH)
     (repo / "tools" / "parity" / "image-parity-allowlist.json").write_text(
-        '{"entries": [{"names": ["LIBRARIAN.EXE"], "missing_on": "x86_64", "reason": "test fixture"}]}'
+        '{"entries": ['
+        '{"names": ["LIBRARIAN.EXE", "vms.kmod.o", "vmsfs.kmod", "vmsfs_mount"], '
+        '"missing_on": "x86_64", "reason": "test fixture"}'
+        "]}"
     )
 
     exit_code = ip.main(["--repo-root", str(repo)])
@@ -155,6 +169,57 @@ def test_main_cli_exits_zero_when_fully_allowlisted(tmp_path, capsys):
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "OK: no unallowlisted image-set drift" in out
+
+
+def test_extract_vax_images_regression_when_target_dropped():
+    """TEETH on the extraction itself (not just compute_diff): removing a
+    target from _OVMX_IMAGES_DEPS must remove its shipped name from the
+    extracted vax set -- the exact regression this gate exists to catch
+    (e.g. someone reverting the vms-838 SCSD.EXE cross-build)."""
+    full_cmakelists = (
+        "set(_OVMX_IMAGES_DEPS\n"
+        "    ovmx_init            # STARTUP.EXE\n"
+        ")\n"
+        "list(APPEND _OVMX_IMAGES_DEPS scsd_exe)  # SCSD.EXE\n"
+    )
+    regressed_cmakelists = (
+        "set(_OVMX_IMAGES_DEPS\n"
+        "    ovmx_init            # STARTUP.EXE\n"
+        ")\n"
+        "# scsd_exe dropped -- simulates reverting the vax SCSD.EXE cross-build\n"
+    )
+
+    full = ip.extract_vax_images(full_cmakelists, _FAKE_CUT_RELEASE_VAX_SH)
+    regressed = ip.extract_vax_images(regressed_cmakelists, _FAKE_CUT_RELEASE_VAX_SH)
+
+    assert "SCSD.EXE" in full
+    assert "SCSD.EXE" not in regressed
+
+    # And end-to-end: with x86_64 shipping SCSD.EXE, the regressed vax set
+    # must surface it as real (unallowlisted) drift.
+    x86_64_images = {"STARTUP.EXE", "SCSD.EXE"}
+    result = ip.compute_diff(x86_64_images, regressed, [])
+    assert "SCSD.EXE" in result.x86_64_only
+    assert result.has_real_drift
+
+
+def test_extract_vax_images_excludes_vmslink_under_netbsd_guard():
+    """vmslink (LINK.EXE) is appended to _OVMX_IMAGES_DEPS only `if(NOT
+    CMAKE_SYSTEM_NAME STREQUAL "NetBSD")` -- it must NOT appear in the vax
+    extraction."""
+    cmakelists = (
+        "set(_OVMX_IMAGES_DEPS\n"
+        "    ovmx_init            # STARTUP.EXE\n"
+        ")\n"
+        "list(APPEND _OVMX_IMAGES_DEPS scsd_exe)  # SCSD.EXE\n"
+        'if(NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD")\n'
+        "    list(APPEND _OVMX_IMAGES_DEPS vmslink)  # LINK.EXE\n"
+        "endif()\n"
+    )
+    images = ip.extract_vax_images(cmakelists, _FAKE_CUT_RELEASE_VAX_SH)
+    assert "LINK.EXE" not in images
+    assert "SCSD.EXE" in images
+    assert "STARTUP.EXE" in images
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +233,13 @@ def dockerfile_text() -> str:
 
 
 @pytest.fixture(scope="module")
-def cut_release_text() -> str:
-    return (REPO_ROOT / ip.CUT_RELEASE_SH).read_text()
+def cmakelists_text() -> str:
+    return (REPO_ROOT / ip.CMAKELISTS_TXT).read_text()
+
+
+@pytest.fixture(scope="module")
+def cut_release_vax_text() -> str:
+    return (REPO_ROOT / ip.CUT_RELEASE_VAX_SH).read_text()
 
 
 @pytest.fixture(scope="module")
@@ -197,13 +267,24 @@ def test_real_x86_64_extraction_excludes_non_images(dockerfile_text):
     assert "PARTS_SETUP.COM" not in images
 
 
-def test_real_vax_extraction_finds_boot_chain_images(cut_release_text):
-    images = ip.extract_vax_images(cut_release_text)
-    for expected in ("STARTUP.EXE", "DCL.EXE", "LOGINOUT.EXE", "PROVISION.EXE", "JOB_CONTROL.EXE", "LIBRARIAN.EXE"):
-        assert expected in images
+def test_real_vax_extraction_finds_boot_chain_images(cmakelists_text, cut_release_vax_text):
+    images = ip.extract_vax_images(cmakelists_text, cut_release_vax_text)
+    for expected in (
+        "STARTUP.EXE", "DCL.EXE", "LOGINOUT.EXE", "PROVISION.EXE", "JOB_CONTROL.EXE",
+        "LIBRARIAN.EXE", "SCSD.EXE",
+    ):
+        assert expected in images, f"{expected} missing from vax extraction -- CMakeLists.txt _OVMX_IMAGES_DEPS parsing regressed"
 
     for expected in ("vms.kmod.o", "vmsfs.kmod", "vmsfs_mount"):
         assert expected in images
+
+
+def test_real_vax_extraction_excludes_vmslink(cmakelists_text, cut_release_vax_text):
+    """LINK.EXE has no vax role by design (Decision A) -- it must not appear
+    in the real extraction, matching the guard around vmslink in
+    CMakeLists.txt's ovmx-images aggregate."""
+    images = ip.extract_vax_images(cmakelists_text, cut_release_vax_text)
+    assert "LINK.EXE" not in images
 
 
 def test_allowlist_loads_and_every_entry_is_well_formed(allowlist):
@@ -215,33 +296,42 @@ def test_allowlist_loads_and_every_entry_is_well_formed(allowlist):
 
 
 def test_gate_run_against_real_repo_reports_known_findings():
-    """Documents the CURRENT known state of the gate against this repo: real
-    (unallowlisted) drift exists today because VAX release-artifact coverage
-    (tools/cut-release-vax.sh, R2 scope) does not yet build the full x86_64
-    system-utility surface, and x86_64's release image does not stage
-    LIBRARIAN.EXE the way the VAX release bundle does. This test PASSES by
-    correctly detecting that state -- it is not asserting parity exists, it
-    is asserting the gate correctly sees that it doesn't. When VAX coverage
-    (or x86_64's LIBRARIAN.EXE staging) changes, update this test's expected
-    sets to match -- do NOT loosen it to silence a real gap.
+    """Documents the CURRENT known state of the gate against this repo.
+
+    The x86_64-has-vax-lacks direction (the operator's explicit "no release
+    with x86_64-not-vax" bar) is CLOSED: vms-838 (SCSD.EXE) + vms-88c (the
+    vax release cut shipping the full ovmx-images aggregate) closed all ten
+    images this gate originally found drifting that direction.
+
+    Real (unallowlisted) drift remains in the OTHER direction: the
+    ovmx-images aggregate builds LIBRARIAN.EXE and OVMXDUMP for every
+    substrate (including x86_64), but distro/Dockerfile.bootable's shipped
+    /system-stage staging list never `cp`s either of them into the x86_64
+    release image -- a real, pre-existing gap, out of scope for this gate
+    rung to fix (fixing it means editing Dockerfile.bootable, a different
+    rung's territory). This test PASSES by correctly detecting that state --
+    it is not asserting parity exists, it is asserting the gate correctly
+    sees what does and doesn't. When Dockerfile.bootable starts staging
+    LIBRARIAN.EXE/OVMXDUMP, update this test's expected sets to match -- do
+    NOT loosen it to silence a real gap.
     """
     result = ip.run(REPO_ROOT)
 
-    expected_x86_64_only_at_least = {
-        "HELP.EXE",
-        "AUTHORIZE.EXE",
-        "MAIL.EXE",
-        "MONITOR.EXE",
-        "INITIALIZE.EXE",
-        "INSTALL.EXE",
-        "SYSGEN.EXE",
-        "SCSD.EXE",
-        "PRODUCT.EXE",
-        "PARTS.EXE",
-    }
-    assert expected_x86_64_only_at_least <= result.x86_64_only
+    # The x86_64-has-vax-lacks direction is fully closed: nothing shipped on
+    # x86_64 real drifts un-covered on vax.
+    assert result.x86_64_only == set(), (
+        f"x86_64-only images reappeared (real regression on the closed direction): {result.x86_64_only}"
+    )
 
-    assert "LIBRARIAN.EXE" in result.vax_only
+    # SCSD.EXE in particular must never be allowlisted -- it now builds+ships
+    # for vax (vms-838), so its Decision-A-free presence on both sides must
+    # show up as neither drift nor an allowlist entry.
+    assert "SCSD.EXE" not in result.x86_64_only
+    assert "SCSD.EXE" not in result.allowlisted_x86_64_only
+
+    # The vax-has-x86_64-lacks direction still carries known, reported
+    # (not allowlisted) real drift.
+    assert {"LIBRARIAN.EXE", "OVMXDUMP"} <= result.vax_only
 
     # And the Decision-A diffs must NOT show up as unallowlisted drift.
     for name in ip.LINK_NATIVE_SHAREABLES:
@@ -249,7 +339,7 @@ def test_gate_run_against_real_repo_reports_known_findings():
     assert "IMGACT.EXE" not in result.x86_64_only
     assert result.has_real_drift, (
         "the gate currently has real, reported (not allowlisted) findings -- "
-        "see rd vms-e1d. If this now fails, VAX coverage caught up: update "
+        "see rd vms-e1d. If this now fails, x86_64 staging caught up: update "
         "the expectations above rather than deleting them."
     )
 

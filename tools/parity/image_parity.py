@@ -20,21 +20,31 @@ x86_64 and not vax, it's your ass." This script is the mechanical backstop.
 WHAT IT DOES. Extracts the x86_64 shippable-image set from
 distro/Dockerfile.bootable (ground truth: what actually gets staged into the
 shipped system disk / OS kit / kernel-module harvest) and the VAX shippable-
-image set from tools/cut-release.sh's VAX_ARTIFACT_ORDER (ground truth: the
-already-reviewed, already-gated release-cut artifact list -- cut-release.sh
-itself `fail`s if any of these are missing from a VAX cut). Diffs them.
-Anything present on one side and absent on the other, and NOT covered by an
-explicit allowlist entry (image-parity-allowlist.json, the single reviewed
-record of legitimate per-arch differences -- see docs/design-vax-mainstream-
-release.md "Decision A", vms-42d), is reported as REAL DRIFT and fails the
-gate.
+image set from the `ovmx-images` CMake aggregate (top-level CMakeLists.txt's
+`_OVMX_IMAGES_DEPS` target list -- vms-64a/vms-88c, epic vms-509 Rungs B/F),
+plus the kernel-module/mount-helper artifacts tools/cut-release-vax.sh ships
+alongside that aggregate. Diffs them. Anything present on one side and absent
+on the other, and NOT covered by an explicit allowlist entry
+(image-parity-allowlist.json, the single reviewed record of legitimate
+per-arch differences -- see docs/design-vax-mainstream-release.md
+"Decision A", vms-42d), is reported as REAL DRIFT and fails the gate.
 
-THIS IS AN INTERIM GATE. The real fix is the unified CMake build (vms-509),
-after which every image becomes an ordinary CMake target built for every
-arch and this comparison collapses to "diff two build-output directories"
-(vms-64a/vms-88c can point EXTRACT_VAX_IMAGES / EXTRACT_X86_64_IMAGES at that
-aggregate instead of text-parsing these two files). Until then, this is the
-mechanical guarantee.
+WHY NOT tools/cut-release.sh's VAX_ARTIFACT_ORDER (the original vms-e1d
+design). vms-88c (epic vms-509 Rung F) changed VAX_ARTIFACT_ORDER from a
+static array literal to one DERIVED at cut-time from
+vax-artifact-manifest.txt, a file cut-release-vax.sh only writes as a BUILD
+OUTPUT (inside a real, ~20-minute containerized VAX cross-build) -- it does
+not exist in the repo tree for a fast, buildless gate to read. So this gate
+reads the same authoritative source that build output is itself derived
+from: the `ovmx-images` CMake aggregate's own target list, the thing the
+design doc (docs/design-unified-cross-build.md §3-B) names as the intended
+long-term source for this exact gate.
+
+THIS IS STILL AN INTERIM GATE relative to the unified CMake build's end
+state (vms-509): once every image builds through `ovmx-images` for every
+arch with no separate Dockerfile/text-parsing step, this comparison
+collapses further to "diff two `cmake --install` manifests" directly. Until
+then, this is the mechanical guarantee.
 
 Usage:
     python3 tools/parity/image_parity.py [--repo-root DIR]
@@ -55,7 +65,8 @@ from pathlib import Path
 
 REPO_ROOT_DEFAULT = Path(__file__).resolve().parents[2]
 DOCKERFILE_BOOTABLE = "distro/Dockerfile.bootable"
-CUT_RELEASE_SH = "tools/cut-release.sh"
+CMAKELISTS_TXT = "CMakeLists.txt"
+CUT_RELEASE_VAX_SH = "tools/cut-release-vax.sh"
 ALLOWLIST_JSON = "tools/parity/image-parity-allowlist.json"
 
 X86_64 = "x86_64"
@@ -176,31 +187,91 @@ def extract_x86_64_images(dockerfile_text: str) -> set[str]:
 # VAX extraction
 # ---------------------------------------------------------------------------
 
-_VAX_ARTIFACT_ORDER_RE = re.compile(
-    r"VAX_ARTIFACT_ORDER=\(([^)]+)\)", re.MULTILINE
+# CMakeLists.txt's `_OVMX_IMAGES_DEPS` list carries each target's shipped
+# basename as an inline `# NAME` comment right next to the target name (e.g.
+# `ovmx_init            # STARTUP.EXE`) -- verified against every listed
+# target's own OUTPUT_NAME/SUFFIX properties when this gate was written (see
+# rd vms-e1d), and read straight from there rather than duplicated into a
+# second hardcoded table here, so there is nothing left to drift.
+_OVMX_IMAGES_DEPS_BLOCK_RE = re.compile(
+    r"set\(_OVMX_IMAGES_DEPS(.*?)\)", re.DOTALL
+)
+_OVMX_IMAGES_DEPS_ENTRY_RE = re.compile(
+    r"^\s*(\w+)\s+#\s*(\S+)\s*$", re.MULTILINE
+)
+_OVMX_IMAGES_APPEND_RE = re.compile(
+    r"list\(APPEND _OVMX_IMAGES_DEPS\s+(\w+)\)\s*#\s*(\S+)"
+)
+# The ovmx-images aggregate is arch-agnostic EXCEPT for this one guard: vmslink
+# (LINK.EXE) only joins the dependency list `if(NOT CMAKE_SYSTEM_NAME STREQUAL
+# "NetBSD")`, and the vax cross-build sets CMAKE_SYSTEM_NAME=NetBSD (tools/
+# cross-vax/toolchain-vax-netbsd.cmake) -- so LINK.EXE never builds for vax.
+# It also never ships on x86_64 (Dockerfile.bootable uses it only as a
+# build-time tool, never `cp`s it to /system-stage), so it is absent from
+# both extracted sets and needs no allowlist entry either.
+_NETBSD_GUARD_RE = re.compile(
+    r'if\(NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD"\)(.*?)endif\(\)', re.DOTALL
+)
+
+# Kernel-module + mount-helper artifacts tools/cut-release-vax.sh ships
+# ALONGSIDE the ovmx-images aggregate (its stage 1/2 -- kernel modules, not
+# CMake install-component members, so there is no aggregate target to derive
+# them from). Extracted from that script's own static `printf` line so a
+# future rename still flows through here rather than silently going stale.
+_VAX_MODULE_ARTIFACTS_RE = re.compile(
+    r"printf '%s\\n' (vms\.kmod\.o\s+vmsfs\.kmod\s+vmsfs_mount)\s*$", re.MULTILINE
 )
 
 
-def extract_vax_images(cut_release_text: str) -> set[str]:
-    """The VAX shippable-image set: tools/cut-release.sh's own
-    VAX_ARTIFACT_ORDER -- already the reviewed, already-gated list (a real
-    VAX release cut hard-`fail`s if any of these is missing from the built
-    bundle), so it is the authoritative VAX side rather than re-deriving one
-    from the ~25 tools/cross-vax/build-*.sh scripts by hand.
-
-    cut-release.sh declares `VAX_ARTIFACT_ORDER=()` (empty) up front, then
-    reassigns it to the real name list inside the branch that handles a
-    VAX-capable tree -- so this takes the LAST (non-empty) assignment in the
-    file, not the first regex match."""
-    matches = _VAX_ARTIFACT_ORDER_RE.findall(cut_release_text)
-    non_empty = [m for m in matches if m.strip()]
-    if not non_empty:
+def _cmake_ovmx_images_entries(cmakelists_text: str) -> dict[str, str]:
+    """target name -> shipped basename, for every target the ovmx-images
+    aggregate builds ON THE VAX (NetBSD) TOOLCHAIN -- i.e. excluding vmslink,
+    which CMakeLists.txt only appends under the non-NetBSD guard."""
+    block_m = _OVMX_IMAGES_DEPS_BLOCK_RE.search(cmakelists_text)
+    if not block_m:
         raise RuntimeError(
-            f"image_parity.py: could not find a populated VAX_ARTIFACT_ORDER=(...) in "
-            f"{CUT_RELEASE_SH} -- has the release script been restructured? Update "
-            "extract_vax_images()."
+            f"image_parity.py: could not find set(_OVMX_IMAGES_DEPS ...) in "
+            f"{CMAKELISTS_TXT} -- has the ovmx-images aggregate been restructured? "
+            "Update extract_vax_images()."
         )
-    return set(non_empty[-1].split())
+    entries = dict(_OVMX_IMAGES_DEPS_ENTRY_RE.findall(block_m.group(1)))
+    if not entries:
+        raise RuntimeError(
+            f"image_parity.py: set(_OVMX_IMAGES_DEPS ...) in {CMAKELISTS_TXT} parsed "
+            "to zero target/name pairs -- has its `target  # NAME.EXE` comment "
+            "convention changed? Update extract_vax_images()."
+        )
+
+    guarded_spans = [m.span() for m in _NETBSD_GUARD_RE.finditer(cmakelists_text)]
+    for m in _OVMX_IMAGES_APPEND_RE.finditer(cmakelists_text):
+        inside_netbsd_excluded_guard = any(start <= m.start() < end for start, end in guarded_spans)
+        if not inside_netbsd_excluded_guard:
+            entries[m.group(1)] = m.group(2)
+    return entries
+
+
+def extract_vax_images(cmakelists_text: str, cut_release_vax_text: str) -> set[str]:
+    """The VAX shippable-image set: the `ovmx-images` CMake aggregate's
+    target list (top-level CMakeLists.txt `_OVMX_IMAGES_DEPS`, as it builds
+    under the vax/NetBSD toolchain -- see _cmake_ovmx_images_entries), plus
+    the kernel-module/mount-helper artifacts tools/cut-release-vax.sh ships
+    alongside it. This is the authoritative source cut-release-vax.sh itself
+    builds+installs (`cmake --build --target ovmx-images` + `cmake --install
+    --component ovmx-images`) to produce vax-artifact-manifest.txt, the file
+    tools/cut-release.sh's VAX_ARTIFACT_ORDER is derived from at cut-time --
+    reading the CMake target list directly, rather than that generated
+    manifest, means this gate needs no VAX build to run."""
+    images = set(_cmake_ovmx_images_entries(cmakelists_text).values())
+
+    module_m = _VAX_MODULE_ARTIFACTS_RE.search(cut_release_vax_text)
+    if not module_m:
+        raise RuntimeError(
+            "image_parity.py: could not find the vms.kmod.o/vmsfs.kmod/vmsfs_mount "
+            f"artifact-manifest printf line in {CUT_RELEASE_VAX_SH} -- has it been "
+            "restructured? Update extract_vax_images()."
+        )
+    images.update(module_m.group(1).split())
+    return images
 
 
 # ---------------------------------------------------------------------------
@@ -274,11 +345,12 @@ def compute_diff(
 
 def run(repo_root: Path) -> DiffResult:
     dockerfile_text = (repo_root / DOCKERFILE_BOOTABLE).read_text()
-    cut_release_text = (repo_root / CUT_RELEASE_SH).read_text()
+    cmakelists_text = (repo_root / CMAKELISTS_TXT).read_text()
+    cut_release_vax_text = (repo_root / CUT_RELEASE_VAX_SH).read_text()
     allowlist = load_allowlist(repo_root / ALLOWLIST_JSON)
 
     x86_64_images = extract_x86_64_images(dockerfile_text)
-    vax_images = extract_vax_images(cut_release_text)
+    vax_images = extract_vax_images(cmakelists_text, cut_release_vax_text)
     return compute_diff(x86_64_images, vax_images, allowlist)
 
 

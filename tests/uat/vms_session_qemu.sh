@@ -1237,58 +1237,79 @@ fi
 # the executive-assigned VMS pid 10000003 -- two different numbers for one
 # process, because SHOW USERS was never actually looking at it.
 #
-# THE DISCRIMINATING CHECK: the PID in SHOW USERS's row must equal SYSPID,
-# the SAME executive-assigned pid this session's own 'SHOW PROCESS' response
-# already printed earlier in the transcript (extracted here, straight out of
-# CMD_OUTPUT -- not re-typed as a literal, which would just be trusting this
-# script's own arithmetic instead of the product's). A fabricated
-# getpid()-based row could still coincidentally print 8 hex digits in the
-# right column; it could not print the SAME 8 hex digits SHOW PROCESS
-# already proved were the VMS pid.
+# THE DISCRIMINATING CHECK: the PID in SHOW USERS/FULL's row must equal
+# SYSPID, the SAME executive-assigned pid this session's own 'SHOW PROCESS'
+# response already printed earlier in the transcript (extracted here,
+# straight out of CMD_OUTPUT -- not re-typed as a literal, which would just
+# be trusting this script's own arithmetic instead of the product's). A
+# fabricated getpid()-based row could still coincidentally print 8 hex
+# digits in the right column; it could not print the SAME 8 hex digits SHOW
+# PROCESS already proved were the VMS pid.
+#
+# vms-eaa (#555) SPLIT bare SHOW USERS from SHOW USERS/FULL into the two
+# DIFFERENT tables the DCL Dictionary actually specifies (cmd_show_users()
+# header comment, src/vmsdcl/dcl_cmd_show.c): the default form is per-USER
+# counts and carries no PID at all -- only /FULL is per-PROCESS and carries
+# one. This PID check now runs against 'SHOW USERS/FULL', not bare
+# 'SHOW USERS'; tests/dcl/test_show_users_full.sh /
+# test_show_users_terminal.sh pin the same split and are the ground truth
+# this block was re-aligned against.
 SYSPID=$(printf '%s' "${CMD_OUTPUT['SHOW PROCESS']}" | grep -oE 'Process ID:   [0-9A-F]{8}' | grep -oE '[0-9A-F]{8}$')
 if [ -n "$SYSPID" ]; then
-    check_response 'SHOW USERS' "$SYSPID"
+    check_response 'SHOW USERS/FULL' "$SYSPID"
 else
     FAIL=$((FAIL + 1))
-    ERRORS="${ERRORS}\n  FAIL: could not extract A's own VMS pid to check SHOW USERS against"
+    ERRORS="${ERRORS}\n  FAIL: could not extract A's own VMS pid to check SHOW USERS/FULL against"
 fi
 
-# vms-086: SHOW USERS gained a Node column (Username, Node, Process Name,
-# PID, Terminal, Type -- VSI OpenVMS DCL Dictionary SHOW USERS /FULL entry,
-# https://www0.mi.infn.it/~calcolo/OpenVMS/ssb71/9996/9996p060.htm). The old
-# 'SYSTEM +SYSTEM' pattern assumed username was immediately followed by
-# process name; ovmx_node_name() (the same fact SHOW PROCESS's own
-# 'Node: +OVMX' check above already proves) now sits between them, so the
-# pattern is tightened to require it rather than merely tolerate it.
-check_response 'SHOW USERS' 'SYSTEM +OVMX +SYSTEM'
+# vms-086 gave SHOW USERS/FULL a Node column (Username, Node, Process Name,
+# PID, Terminal -- VSI OpenVMS DCL Dictionary SHOW USERS /FULL entry,
+# https://www0.mi.infn.it/~calcolo/OpenVMS/ssb71/9996/9996p060.htm), sitting
+# between username and process name -- the same fact SHOW PROCESS's own
+# 'Node: +OVMX' check above already proves. vms-eaa (#555) kept the Node
+# column but dropped the Type column (an always-"Interactive" OVMX addition
+# absent from the DCL Dictionary) from /FULL's row set -- see
+# test_show_users_full.sh's EXPECT_NOT:Interactive and the cmd_show_users()
+# header comment. This session's process name is its own username
+# (tools/vms_login.c's vms_kif_setprn(rec->username) call), so the /FULL row
+# reads Username, Node, Process-Name all "SYSTEM", in that column order.
+check_response 'SHOW USERS/FULL' 'SYSTEM +OVMX +SYSTEM'
 
-# vms-086: the total line used to compute "number of users" and "number of
-# processes" from the SAME loop variable, so they could never disagree even
-# though real VMS prints two DISTINCT counts (VSI DCL Dictionary SHOW USERS,
-# ibid.; independently confirmed by three captures -- see the header comment
-# above cmd_show_users(), src/vmsdcl/dcl_cmd_show.c). One SYSTEM session is
-# one distinct user and one process, so both figures read 1 here; the
-# interactive/subprocess/batch breakdown must show all three sourced counts,
-# with subprocess and batch reading their honest zero (see that same header
-# comment for why OVMX cannot source either today: VMS_IOCTL_SETTERM binds
-# only the login-root process, never a SPAWN child or a batch job).
+# vms-eaa (#555): the default form is per-USER counts (Username Node
+# Interactive Subprocess Batch), NOT the /FULL per-process table above --
+# and #555 also dropped the pre-#555 "(interactive = N, subprocess = N,
+# batch = N)" parenthetical summary line as a non-VMS addition (the DCL
+# Dictionary has no such line). What's left to assert is the real header
+# and the real count row: the header carries all three named columns, and
+# the one SYSTEM session -- one distinct user, one process -- rolls up to
+# an Interactive count of 1 next to its Username/Node columns (Subprocess
+# and Batch render blank at zero, per the cmd_show_users() header comment).
+# The "Total number of users"/"number of processes" line is unchanged by
+# #555 and still computed from two distinct counts (vms-086; independently
+# confirmed by three captures, ibid.), so it is re-asserted as-is.
+check_response 'SHOW USERS' 'Username +Node +Interactive +Subprocess +Batch'
 check_response 'SHOW USERS' 'Total number of users = 1,  number of processes = 1'
-check_response 'SHOW USERS' 'interactive = 1, subprocess = 0, batch = 0'
+check_response 'SHOW USERS' 'SYSTEM +OVMX +1'
 
-# vms-086: the Type column must classify the real session as Interactive --
-# sourced from the terminal-binding fact above, not a guess (see the
-# cmd_show_users() header comment for the structural argument).
-check_response 'SHOW USERS' 'SYSTEM +OVMX +SYSTEM.*Interactive'
+# ... and the default form must NOT be the /FULL per-process table (vms-eaa,
+# #555's whole fidelity point) -- this session's process name must not leak
+# into the default row the way it legitimately does in /FULL above.
+check_not_response 'SHOW USERS' 'Process Name'
 
-# vms-086: SHOW USERS/FULL adds a Login Time column, sourced from
-# JPI$_LOGINTIM (VMS_PI_V_LOGINTIM, vms-a7e) on the SAME executive row this
-# command already reads, formatted through sys$asctim's own
-# "DD-MMM-YYYY HH:MM:SS.CC". A REAL login on a REAL /dev/vms must render a
-# REAL timestamp here -- not blanks, which is what INV-6 says OVMX must show
-# instead of a fabricated one when the valid bit is clear. This is the
-# positive proof the host-side (no /dev/vms) test cannot give: that proof
-# only shows blanks are honest when there is no executive to source from.
-check_response 'SHOW USERS/FULL' 'SYSTEM +OVMX +SYSTEM.*Interactive +[0-9]{1,2}-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{2}'
+# vms-eaa (#555): SHOW USERS/FULL's row set is exactly Username, Node,
+# Process Name, PID, Terminal (VSI OpenVMS DCL Dictionary SHOW USERS /FULL
+# entry, ibid.). The vms-086 "Login Time" column asserted below until now
+# was an unsourced OVMX extension -- absent from the DCL Dictionary, nothing
+# populated JPI$_LOGINTIM into it -- and #555 dropped it as a fidelity tell
+# alongside Type (cmd_show_users() header comment; confirmed against the
+# current /FULL printf, which emits no timestamp field at all). Assert it
+# stays gone rather than merely stop asserting it is there: a regression
+# that resurrected an unsourced timestamp on the process row, specifically,
+# should fail this test. (The banner line above the table legitimately
+# carries this same DD-MMM-YYYY timestamp format for "at <now>" -- this
+# check is anchored to the SYSTEM/OVMX/SYSTEM process row itself, a
+# different line, so it cannot be satisfied/defeated by the banner.)
+check_not_response 'SHOW USERS/FULL' 'SYSTEM +OVMX +SYSTEM.*[0-9]{1,2}-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{2}'
 
 # SHOW TERMINAL must name the terminal THIS LOGIN SESSION is on, read out of
 # the executive (vms-d0b).

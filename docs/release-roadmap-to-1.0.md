@@ -152,6 +152,7 @@ calling anything short of that bar 1.0.
 
 ### Shipped releases (git tags)
 
+- **V0.4-5** — Point release.
 - **V0.4-4** — Feature pack marching toward 0.5.
 - **V0.4-3** — Feature pack marching toward 0.5.
 - **V0.4-2** — Feature pack marching toward 0.5.
@@ -163,7 +164,6 @@ calling anything short of that bar 1.0.
 - **0.3-6** — Point release.
 - **0.3-5** — Point release.
 - **0.3-4** — SET ACCOUNTING / SET VOLUME, clean cluster leave.
-- **0.3-3** — Conversational boot, DCL parser fidelity.
 
 ### rd-labeling gaps (fix these to keep the source accurate)
 

@@ -79,6 +79,7 @@ RUN apt-get update && \
     busybox-static \
     cpio \
     zstd \
+    curl perl ca-certificates patch \
     cmake musl-tools linux-libc-dev \
     "$QEMU_PKG" \
     && rm -rf /var/lib/apt/lists/*
@@ -376,6 +377,48 @@ RUN cd /src/repo && \
     { [ -f 'build-static/bin/DECC$SHR.EXE' ] || { echo "FATAL: DECC\$SHR.EXE was not built -- the MMK-driven executable link would have no --use producer"; exit 1; }; } && \
     echo "--- DECC\$SHR.EXE (C run-time shareable; --use producer + IMGACT resolves it, vms-725) ---" && \
     ls -la 'build-static/bin/DECC$SHR.EXE'
+
+# SSH KEX proof harness (vms-22a): the veneer-linked `ssh` CLIENT + a stock
+# `sshd` server (+ sshd-session/sshd-auth) + generated keys/config, staged at the
+# RUNTIME path /ovmxssh so the in-guest test_syssvc_ssh_kex drives a REAL SSH key
+# exchange over the veneer -> BGn: -> executive against a loopback sshd on a real
+# /dev/vms. Built static against musl (musl-gcc) + the vendored libcrypto, out of
+# the SHA-pinned OpenSSH tree (third-party/openssh/build-ssh-kex-harness.sh).
+# ABSENCE is fatal here -- a missing binary/key would silently turn the KEX proof
+# into a no-op while the job stayed green.
+RUN cd /src/repo && \
+    CC=musl-gcc WORK=/tmp/ovmx-ssh-kex \
+        OSSH_LIBEXECDIR=/ovmxssh/libexec OSSH_PRIVSEP=/ovmxssh/empty \
+        sh third-party/openssh/build-ssh-kex-harness.sh > /tmp/kexh.log 2>&1 || \
+        { echo "FATAL: SSH KEX harness build failed"; tail -40 /tmp/kexh.log; exit 1; } && \
+    SSHB=$(sed -n 's/^OVMX_KEX_SSH=//p' /tmp/kexh.log | tail -1) && \
+    SSHDB=$(sed -n 's/^OVMX_KEX_SSHD=//p' /tmp/kexh.log | tail -1) && \
+    KEYGEN=$(sed -n 's/^OVMX_KEX_KEYGEN=//p' /tmp/kexh.log | tail -1) && \
+    mkdir -p /ovmxssh/etc /ovmxssh/libexec /ovmxssh/empty && chmod 755 /ovmxssh/empty && \
+    cp "$SSHB" /ovmxssh/ssh && cp "$SSHDB" /ovmxssh/sshd && \
+    chmod +x /ovmxssh/ssh /ovmxssh/sshd && \
+    ls -la /ovmxssh/libexec/sshd-session /ovmxssh/libexec/sshd-auth && \
+    # Deterministic host + user keypairs (checked NOWHERE -- generated fresh, so
+    # the proof is self-contained and reproducible per build).
+    "$KEYGEN" -t ed25519 -f /ovmxssh/etc/hostkey -N "" -q && \
+    "$KEYGEN" -t ed25519 -f /ovmxssh/etc/userkey -N "" -q && \
+    cp /ovmxssh/etc/userkey.pub /ovmxssh/etc/authorized_keys && \
+    chmod 600 /ovmxssh/etc/hostkey /ovmxssh/etc/userkey /ovmxssh/etc/authorized_keys && \
+    printf '%s\n' \
+        'Port 2222' 'ListenAddress 127.0.0.1' 'HostKey /ovmxssh/etc/hostkey' \
+        'PidFile /ovmxssh/sshd.pid' 'AuthorizedKeysFile /ovmxssh/etc/authorized_keys' \
+        'StrictModes no' 'PubkeyAuthentication yes' 'PasswordAuthentication no' \
+        'LogLevel VERBOSE' 'Subsystem sftp internal-sftp' \
+        > /ovmxssh/etc/sshd_config && \
+    printf '%s\n' \
+        'Host testpeer' '  HostName 127.0.0.1' '  Port 2222' '  User root' \
+        '  IdentityFile /ovmxssh/etc/userkey' '  StrictHostKeyChecking no' \
+        '  UserKnownHostsFile /dev/null' '  IdentitiesOnly yes' \
+        > /ovmxssh/etc/ssh_config && \
+    echo "--- /ovmxssh staged (ssh veneer client + stock sshd + keys/config) ---" && \
+    ls -la /ovmxssh /ovmxssh/etc && \
+    { readelf -d /ovmxssh/ssh 2>/dev/null | grep -q NEEDED && \
+        { echo "FATAL: staged ssh is not static"; exit 1; } || true; }
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
@@ -725,6 +768,26 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
            /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/ || \
         { echo "FATAL: $f was not staged into the initramfs -- F\$IDENTIFIER reads the rights database now, and every identifier assertion would silently become a miss"; exit 1; }; \
     done && \
+    # SSH KEX proof staging (vms-22a): the veneer-linked ssh + stock sshd (+
+    # session/auth workers) + generated keys/config, plus the minimal account
+    # files sshd privilege separation needs (root = the login user, sshd = the
+    # privsep user). test_syssvc_ssh_kex starts sshd on 127.0.0.1 and drives the
+    # veneer ssh through a REAL KEX over BGn:. ABSENCE is fatal -- a missing
+    # binary/key would turn the KEX proof into a no-op while the job stayed green.
+    mkdir -p /initramfs/ovmxssh /initramfs/etc /initramfs/root && \
+    cp -a /ovmxssh/. /initramfs/ovmxssh/ && \
+    chmod 755 /initramfs/ovmxssh/empty && \
+    printf '%s\n' \
+        'root:x:0:0:root:/root:/bin/sh' \
+        'sshd:x:74:74:sshd privsep:/ovmxssh/empty:/bin/false' \
+        > /initramfs/etc/passwd && \
+    printf '%s\n' 'root:x:0:' 'sshd:x:74:' > /initramfs/etc/group && \
+    ln -sf busybox /initramfs/bin/false && \
+    { [ -x /initramfs/ovmxssh/ssh ] && [ -x /initramfs/ovmxssh/sshd ] && \
+      [ -x /initramfs/ovmxssh/libexec/sshd-session ] && \
+      [ -f /initramfs/ovmxssh/etc/hostkey ] || \
+      { echo "FATAL: SSH KEX harness not fully staged into initramfs"; exit 1; }; } && \
+    echo "--- SSH KEX harness staged into initramfs ---" && \
     # Init script (PID 1)
     cp /src/tests/qemu/init.sh /initramfs/init && \
     if [ "$NEGATIVE_CONTROL" = "1" ]; then \

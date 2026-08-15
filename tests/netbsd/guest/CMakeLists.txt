@@ -92,3 +92,47 @@ foreach(_facility ${_OVMX_NB_GUEST_FACILITIES})
         TIMEOUT 60
     )
 endforeach()
+
+# ---------------------------------------------------------------------------
+# vms-08cb, epic vms-509 "unified cross-platform build" Rung E
+# (docs/design-unified-cross-build.md §5/§6/§8): two more negctl teeth
+# migrated here from the per-image CI gates the ovmx-images aggregate
+# (vax-cmake-images) now supersedes -- same run_negctl.sh mechanism as the
+# four facility teeth above, labeled separately (LABELS "vax-images") so the
+# vax-cmake-images CI job can select exactly these two without re-running the
+# facility-guest-tools set (that stays netbsd-vax-facility-tools-crosscompile's
+# job, unchanged by this rung).
+#   * libvmssys_width_negctl_vax  -- was build-libvmssys-vax.sh's
+#     CROSSCOMPILE_NEGCTL=1 branch (the toolchain-level ILP32 width gate).
+#   * librarian_negctl_vax        -- was build-librarian-vax.sh's
+#     CROSSCOMPILE_NEGCTL=1 branch (a deliberately-broken TU must reject).
+# ---------------------------------------------------------------------------
+add_test(
+    NAME libvmssys_width_negctl_vax
+    COMMAND
+        ${CMAKE_CURRENT_SOURCE_DIR}/negctl/run_negctl.sh
+        "${CMAKE_C_COMPILER}"
+        "${CMAKE_SYSROOT}"
+        "libvmssys"
+        "${CMAKE_CURRENT_SOURCE_DIR}/negctl/libvmssys_width_negctl.c"
+        "${CMAKE_CURRENT_BINARY_DIR}/negctl/libvmssys"
+)
+set_tests_properties(libvmssys_width_negctl_vax PROPERTIES
+    LABELS "negctl;vax;netbsd;vax-images"
+    TIMEOUT 60
+)
+
+add_test(
+    NAME librarian_negctl_vax
+    COMMAND
+        ${CMAKE_CURRENT_SOURCE_DIR}/negctl/run_negctl.sh
+        "${CMAKE_C_COMPILER}"
+        "${CMAKE_SYSROOT}"
+        "librarian"
+        "${CMAKE_CURRENT_SOURCE_DIR}/negctl/librarian_negctl.c"
+        "${CMAKE_CURRENT_BINARY_DIR}/negctl/librarian"
+)
+set_tests_properties(librarian_negctl_vax PROPERTIES
+    LABELS "negctl;vax;netbsd;vax-images"
+    TIMEOUT 60
+)

@@ -148,7 +148,10 @@ endif()
 # syscalls through the asm CRT). They belong to the raw-freestanding (linux)
 # substrate only. On the netbsd link-libc substrate there is no OVMX CRT to link
 # them against and they are not part of the build set; the netbsd-vax gate is
-# tools/cross-vax/build-libvmssys-vax.sh (library build + a link-libc smoke exe).
+# the ovmx-images aggregate built via the top-level CMake project under
+# tools/cross-vax/toolchain-vax-netbsd.cmake (CI job vax-cmake-images, rd
+# vms-64a; the per-library build-libvmssys-vax.sh CI gate was retired in Rung
+# E, rd vms-08cb, once the aggregate proved it transitively).
 if(VMSSYS_SUBSTRATE STREQUAL "linux")
 
 # Helper function: build a freestanding test binary

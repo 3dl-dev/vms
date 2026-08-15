@@ -19,7 +19,7 @@
 # Usage:
 #   docker build -f tools/cross-vax/Dockerfile -t ovmx-cross-vax tools/cross-vax
 #   docker run --rm -v "$PWD:/src" -w /src ovmx-cross-vax \
-#       tools/cross-vax/build-libvmssys-vax.sh
+#       tools/cross-vax/build-ovmx-images-vax-cmake.sh
 #
 # Everything is pinned. Bump versions deliberately, together, with fresh hashes.
 
@@ -119,12 +119,17 @@ RUN set -eux; cd /tmp; \
     "$PREFIX/bin/${TARGET}-gcc" --version
 
 WORKDIR /src
-COPY build-libvmssys-vax.sh /usr/local/bin/build-libvmssys-vax.sh
-COPY build-vmsprocess-vax.sh /usr/local/bin/build-vmsprocess-vax.sh
-COPY build-libvms-vax.sh /usr/local/bin/build-libvms-vax.sh
-COPY build-activation-vax.sh /usr/local/bin/build-activation-vax.sh
-RUN chmod +x /usr/local/bin/build-libvmssys-vax.sh /usr/local/bin/build-vmsprocess-vax.sh \
-             /usr/local/bin/build-libvms-vax.sh \
-             /usr/local/bin/build-activation-vax.sh
+
+# The four scripts formerly baked in here (build-libvmssys-vax.sh,
+# build-vmsprocess-vax.sh, build-libvms-vax.sh, build-activation-vax.sh) were
+# deleted by rd vms-08cb (epic vms-509 "unified cross-platform build" Rung E,
+# docs/design-unified-cross-build.md §5/§6/§8): their per-job netbsd-vax CI
+# gates were redundant with the ovmx-images aggregate (vax-cmake-images job)
+# and every teeth/assertion they carried was migrated there. Every other
+# tools/cross-vax/*.sh script (kept or retired) is invoked from the mounted
+# source tree by its full relative path (`docker run ... ovmx-cross-vax
+# tools/cross-vax/<script>.sh`), never baked into the image -- these four
+# were the only exceptions, and with them gone nothing needs to be COPY'd
+# into /usr/local/bin anymore.
 
 CMD ["bash"]

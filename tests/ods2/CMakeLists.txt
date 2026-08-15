@@ -167,3 +167,23 @@ set_tests_properties(ods2_volume PROPERTIES
     LABELS "unit;ods2;vmsfs"
     TIMEOUT 30
 )
+
+# vms-88d (R6-build unblocker for the ODS-2 flip vms-5eb): the WRITER's
+# long-filename IDENT-area encoding. The real distro tree contains names
+# like "LIBVMSPROCESS$SHR.EXE;1" (23 chars) that the writer's old 20-char-only
+# fi2_filename cap rejected outright. Builds a genuine volume via the
+# block-device-backed writer, inspects the raw on-disk IDENT area
+# (ods2_fh2_ident()) to prove the >20-char split across fi2_filename[20] +
+# fi2_filenamext[66] is byte-exact, resolves + reads the long-named file back
+# through ods2_bdev_resolve_file()/_read_file() (the same path DCL/RMS use),
+# and regression-guards that <=20-char names (including the exact 20-char
+# boundary) are byte-identical to the pre-fix encoding.
+add_executable(test_ods2_longname test_ods2_longname.c)
+target_include_directories(test_ods2_longname PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_longname PRIVATE ods2)
+
+add_test(NAME ods2_longname COMMAND test_ods2_longname)
+set_tests_properties(ods2_longname PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)

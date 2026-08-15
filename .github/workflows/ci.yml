@@ -376,6 +376,51 @@ jobs:
           fi
           echo "OK: docs/compatibility-surface.md matches a fresh render of docs/compat/ (date stamp ignored)."
   # -----------------------------------------------------------------------
+  # Job: cross-arch shippable-image parity gate (rd vms-e1d)
+  #
+  # Operator ruling: "if I see a release that has something on x86_64 and
+  # not vax, it's your ass." Today the OVMX shippable-image set is defined
+  # twice by hand -- distro/Dockerfile.bootable's `cp` lines (x86_64) and
+  # tools/cut-release.sh's VAX_ARTIFACT_ORDER (vax, itself fed by ~25
+  # tools/cross-vax/build-*.sh scripts) -- with nothing mechanically
+  # comparing them. tools/parity/image_parity.py diffs the two sets and
+  # fails on ANY unallowlisted gap in either direction; the only permitted
+  # differences are the reviewed, justified ones in
+  # tools/parity/image-parity-allowlist.json (Decision A / vms-42d: VAX
+  # activates images via NetBSD's own ld.elf_so, not IMGACT.EXE's symbol-
+  # vector scheme, so it has no $SHR shareables or IMGACT.EXE by design;
+  # plus the vms/vmsfs kernel-module packaging and filename-convention
+  # differences and the NetBSD-only vmsfs_mount helper). This is the
+  # INTERIM gate for the vms-509 unified-build migration -- no SIMH, no
+  # docker, pure text-parsing, so it runs on every PR fast. Unconditional
+  # (not gated on a path filter): a drift-introducing change can touch
+  # either source file, or neither (e.g. a VAX build regression that
+  # silently drops an artifact from a future manifest-driven source), so
+  # this always runs.
+  # -----------------------------------------------------------------------
+  image-parity-gate:
+    name: Cross-Arch Image Parity Gate (vms-e1d)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install pytest (test deps only -- no docker/SIMH)
+        run: pip install --disable-pip-version-check pytest
+
+      - name: Run image_parity.py self-tests (prove the gate has teeth)
+        run: python3 -m pytest tests/tools/test_image_parity_gate.py -v
+
+      - name: Run the live cross-arch image-parity gate
+        run: python3 tools/parity/image_parity.py
+  # -----------------------------------------------------------------------
   # Job: vax SIMH harness self-test (rd vms-cf5, epic vms-8e8)
   #
   # tests/lab-vax/vaxharness.py is the shared crash-proof helper (safe_expect,

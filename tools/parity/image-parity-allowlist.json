@@ -1,0 +1,56 @@
+{
+  "_format": "ovmx-image-parity-allowlist",
+  "_note": "SINGLE SOURCE for legitimate x86_64<->vax shippable-image differences (rd vms-e1d, INV-LEDGER). Read by tools/parity/image_parity.py. Every entry names the image(s) that legitimately exist on only ONE arch, which side lacks them, and WHY -- the reviewed record of 'why this arch legitimately differs'. A gap NOT listed here is real drift and fails the gate. Do not add an entry just to make the gate pass -- each one needs sign-off that the difference is a deliberate design choice (usually 'Decision A', vms-42d: VAX activates images via NetBSD's own ld.elf_so instead of the custom IMGACT.EXE symbol-vector scheme x86_64 uses), not an unbuilt gap.",
+  "entries": [
+    {
+      "group": "link-native-shareables",
+      "names": [
+        "DECC$SHR.EXE",
+        "LIBVMSSYS$SHR.EXE",
+        "LIBVMSPROCESS$SHR.EXE",
+        "LIBVMSLNM$SHR.EXE",
+        "LIBVMSFS$SHR.EXE",
+        "LIBVMS$SHR.EXE",
+        "LIBVMSRMS$SHR.EXE"
+      ],
+      "missing_on": "vax",
+      "reason": "Decision A (vms-42d): VAX boot images (STARTUP/PROVISION/DCL/JOB_CONTROL/LOGINOUT.EXE) are ordinary dynamic NetBSD elf32-vax executables activated by the OS's own ld.elf_so, not IMGACT.EXE's .vms$sv symbol-vector scheme -- so VAX never links against OVMX's own DECC$SHR/LIBVMS*$SHR shareable-image family, which exists only under the x86_64 VMS-native LINK.EXE activation model (docs/design-link-native-toolchain.md)."
+    },
+    {
+      "group": "imgact-activator",
+      "names": ["IMGACT.EXE"],
+      "missing_on": "vax",
+      "reason": "Decision A (vms-42d): VAX activates images via NetBSD's native ld.elf_so, not a custom activator, so IMGACT.EXE (the freestanding symbol-vector image activator, vms-913.11) has no VAX role by design -- not an unbuilt gap."
+    },
+    {
+      "group": "executive-module-packaging-x86_64",
+      "names": ["vms.ko"],
+      "missing_on": "vax",
+      "reason": "x86_64 ships the OVMX executive module as a loadable vms.ko (Linux kernel-module convention). The logically-same module ships for VAX only as vms.kmod.o (see the companion 'executive-module-packaging-vax' entry) -- NetBSD/vax GENERIC has no MODULAR framework yet (that is R3/R4 territory: tools/cross-vax/build-vax-modular-kernel.sh, the nightly netbsd-vax-devvms/netbsd-vax-boot jobs), so it cannot be a loadable .kmod today. Same module, different packaging maturity, tracked openly in tools/cut-release-vax.sh's own 'BUILD-ONLY, never a runtime claim' note -- not hidden."
+    },
+    {
+      "group": "executive-module-packaging-vax",
+      "names": ["vms.kmod.o"],
+      "missing_on": "x86_64",
+      "reason": "Companion to 'executive-module-packaging-x86_64': x86_64 has no relocatable vms.kmod.o because its executive module ships loadable (vms.ko) directly -- there is no intermediate relocatable-object packaging step on the Linux side."
+    },
+    {
+      "group": "vmsfs-module-filename-convention-x86_64",
+      "names": ["vmsfs.ko"],
+      "missing_on": "vax",
+      "reason": "Naming convention only, not a functional gap: x86_64's loadable ODS-2 VFS module is named vmsfs.ko (Linux .ko convention). The identical loadable module ships for VAX as vmsfs.kmod (NetBSD .kmod convention) -- see the companion 'vmsfs-module-filename-convention-vax' entry. Unlike vms.ko/vms.kmod.o, both are genuine loadable modules on both arches."
+    },
+    {
+      "group": "vmsfs-module-filename-convention-vax",
+      "names": ["vmsfs.kmod"],
+      "missing_on": "x86_64",
+      "reason": "Companion to 'vmsfs-module-filename-convention-x86_64': same loadable ODS-2 VFS module, NetBSD .kmod filename convention instead of Linux .ko."
+    },
+    {
+      "group": "vmsfs-mount-helper-vax",
+      "names": ["vmsfs_mount"],
+      "missing_on": "x86_64",
+      "reason": "NetBSD VFS registration for a new on-disk format needs a userspace mount(8) helper to translate `mount -t vmsfs ...` arguments into the vfsops mount call -- vmsfs_mount is that helper (tests/netbsd/guest/vmsfs_mount.c). Linux's vmsfs.ko registers via register_filesystem() and is mounted through the standard mount(2)/mount.<fstype> path directly, so x86_64 needs no separate helper binary."
+    }
+  ]
+}

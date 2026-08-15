@@ -173,6 +173,29 @@ ensure_disk() {
 # run the driver in one SIMH session with a given OVMX_MODE; returns the
 # driver's RAW (never mode-inverted) exit code via $? -- negctl_gate.sh
 # applies the inversion in the caller, never here.
+#
+# CALL-SITE CONTRACT (bash `set -e` scope-leak, found on vms-4b7's own
+# nightly run: a driver's clean negctl-load proof-failure, exit 60, reddened
+# the JOB even though vaxharness_negctl_gate() should have inverted it).
+# `errexit` is a GLOBAL shell option, not function-scoped: the `set -e` this
+# function runs right before `return "${rc}"` stays in effect in the CALLER
+# after the call returns, regardless of what `set -e`/`set +e` the caller had
+# in effect when it MADE the call. So a caller that invokes this function as
+# a bare statement --
+#     set +e; run_session ...; rc=$?; set -e
+# -- does NOT actually protect itself: by the time `run_session` returns a
+# nonzero `rc`, `-e` has already been turned back ON (by this function, one
+# line above its own `return`), and bash's errexit check fires against THAT
+# state, aborting the whole script immediately -- `rc=$?` and everything
+# after it (including the `vaxharness_negctl_gate` call) never runs. Verified
+# empirically: a minimal repro of this exact shape aborts before the second
+# statement after the call.
+#
+# THE FIX, and the ONLY safe way to call this function: protect the call
+# with `||`, which bash exempts from errexit unconditionally --
+#     rc=0; run_session ... || rc=$?
+# -- never `set +e; run_session ...; rc=$?; set -e`. Every case in the MODE
+# dispatch below uses the `||` form for exactly this reason.
 run_session() {
   local ovmx_mode="$1" skip_load="${2:-}" skip_setpriv="${3:-}" skip_write="${4:-}"
   local cid="ovmx-vax-access-${ovmx_mode}-$$"; local rc=0
@@ -208,10 +231,8 @@ ensure_modular_kernel
 
 case "${MODE}" in
   prove)
-    set +e
-    run_session prove
-    rc=$?
-    set -e
+    rc=0
+    run_session prove || rc=$?
     if vaxharness_negctl_gate "${rc}" 0; then
       log "======================================================================"
       log "  ACCESS-VAX PASSED: access-mode enforcement + cross-process AST"
@@ -224,10 +245,8 @@ case "${MODE}" in
     ;;
   negctl-load)
     # Teeth: with modload skipped, the whole proof MUST fail (driver exit != 0).
-    set +e
-    run_session prove skip "" ""
-    rc=$?
-    set -e
+    rc=0
+    run_session prove skip "" "" || rc=$?
     if vaxharness_negctl_gate "${rc}" 1; then
       log "PASS: ACCESS_SKIP_LOAD negative control failed as required (driver exit=${rc})"
       exit 0
@@ -241,10 +260,8 @@ case "${MODE}" in
     # special-case this into an early "negctl ok" exit -- rd vms-cf5's whole
     # point). Gate shape identical to negctl-load: negctl=1, satisfied iff
     # the driver exited nonzero.
-    set +e
-    run_session prove "" skip ""
-    rc=$?
-    set -e
+    rc=0
+    run_session prove "" skip "" || rc=$?
     if vaxharness_negctl_gate "${rc}" 1; then
       log "PASS: ACCESS_SKIP_SETPRIV negative control failed as required (driver exit=${rc})"
       exit 0
@@ -263,10 +280,8 @@ case "${MODE}" in
     # "FAIL (negctl teeth)" distinctly from the honest return-73 "did not
     # fire" path for that reason -- read the console output above, not just
     # this gate's verdict, when investigating a negctl-astwrite failure.
-    set +e
-    run_session prove "" "" skip
-    rc=$?
-    set -e
+    rc=0
+    run_session prove "" "" skip || rc=$?
     if vaxharness_negctl_gate "${rc}" 1; then
       log "PASS: AST_SKIP_WRITE negative control failed as required (driver exit=${rc}) -- A's AST correctly did not fire without a cross-process write"
       exit 0

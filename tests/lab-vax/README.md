@@ -330,6 +330,73 @@ mirrors `netbsd-vax-eflag-crosscompile`. The shared facility sources
 (`netbsd-vax-vms-crosscompile`); this SIMH proof is the nightly runtime
 complement to both.
 
+## Process table proven cross-process on NetBSD/vax (`vms-2e0`)
+
+P4-E closed the INV-6 gap for event flags; this proof closes the same gap for
+the **process table** — `run-proctab.sh` boots the SAME cached disk,
+cross-builds the `vms.kmod` module (carrying `src/kernel-core/vms_proctab.c`,
+the identical source the Linux `vms.ko` builds) plus the `vmsproctab` guest
+tool (`tests/netbsd/guest/vmsproctab.c`), and proves process A's `$SETPRN`
+name is resolvable by a genuinely DIFFERENT process B via `$GETJPI`
+(`VMS_JPI_SEL_PRCNAM`), and enumerable by a THIRD, different process C via
+`$PROCESS_SCAN` — both readers seeing the **same** row (matching pid and uic,
+not merely "a" row) — because the row lives in the executive's KERNEL memory,
+not in either reader. This is the VAX analogue of the NetBSD/amd64 PROCTAB
+phase of `tests/netbsd/drive_netbsd_p4a.py`; scope is **process table only** —
+the other boot-required facilities still to prove cross-process on vax
+(lnm/mbx/lock) are the remaining children of `vms-945e` (access modes + ASTs
+are proven above, event flags by P4-E).
+
+```sh
+tests/lab-vax/run-proctab.sh                # build everything, ensure disk+kernel, PROVE
+tests/lab-vax/run-proctab.sh negctl-load     # teeth: skip modload -> whole proof must go RED
+tests/lab-vax/run-proctab.sh negctl-bg       # teeth: skip process A's $SETPRN -> cross-process GETJPI assertion must go RED
+```
+
+**Why VAX specifically.** Same reasoning as P4-E: vax is ILP32 /
+non-IEEE-float / ELF32, so a struct-layout or width bug in the shared wire
+contract (`src/kernel-netbsd/vms_proctab_nb.h` — e.g. `vms_pid`/`uic` as
+`uint32_t`) could compile clean and pass on every 64-bit OVMX target and only
+misbehave here.
+
+**Reuses P4-B/P4-E's decisions unchanged**: compile-into-kernel (not plain
+modload — vax GENERIC has no `options MODULAR`), cross-built + CD-delivered
+artifacts (not in-guest build), single-user boot (securelevel 0, required for
+`modload` to be permitted). Own cached MODULAR-kernel artifact
+(`proctab-artifacts/netbsd-OVMX`), independent of P4-B's `devvms-artifacts`
+and P4-E's `eflag-artifacts`.
+
+**The cross-process proof (collapsed into one in-guest command, the same
+loss-tolerant-transport technique `drive_eflag_vax.py` uses):** process A
+(`vmsproctab bg`) `$SETPRN`s itself and blocks indefinitely so its row stays
+present; process B (`vmsproctab getjpi_name`) resolves it by name and prints
+its pid+uic; process C (`vmsproctab procscan_find`) enumerates the table and
+finds the same pid B saw; A is then killed. The built-in INV-6 negative
+control (module absent) asserts `vmsproctab` fails honestly with
+`SS$_NOSUCHDEV`, never fakes success.
+
+**THE PILOT ADOPTION OF `vaxharness.py` (rd vms-cf5).** `drive_proctab_vax.py`
+is the first driver built on the shared harness contract: its boot-console
+handshake (the `>>>` ROM monitor / single-user shell prompts, before
+`netbsd_console.py`'s own already-safe `run()` takes over) goes through
+`safe_expect()`, and its pass/fail decision is recorded as a `Proof` of
+`StepResult`s, emitted as one JSON line at the end. `run-proctab.sh` sources
+`negctl_gate.sh` instead of hand-rolling its own exit-code inversion — the
+**exact** fix for the bug class rd vms-cf5 documents: this driver's
+`PROCTAB_SKIP_BG` negative control does **not** special-case an early
+"negctl ok" return (the way an older amd64 driver variant, and the mistake
+`negctl_gate()`'s docstring documents, once did) — it falls through into the
+SAME positive-assertion script, which fails for real when process A is
+absent, and `run-proctab.sh`'s `negctl-bg` mode is what inverts that ordinary
+nonzero exit into "teeth confirmed".
+
+**Fast per-PR complement**: `netbsd-vax-proctab-crosscompile` (CI)
+cross-compiles + links `vmsproctab` for `vax--netbsdelf` with no SIMH boot —
+mirrors `netbsd-vax-eflag-crosscompile`. The shared facility source
+(`vms_proctab.c`) is already width-checked per-PR by B1
+(`netbsd-vax-vms-crosscompile`); this SIMH proof is the nightly runtime
+complement to both.
+
 ## The assertion, and the negative control
 
 `smoke` passes only when **both** hold: anita's `--run` (`uname -srm | grep -qx
@@ -418,14 +485,31 @@ in both Python and bash. Run: `pytest tests/lab-vax/test_vaxharness.py -v`.
 **Adoption.** `vaxharness.py` was a new, standalone module at merge time -- it
 did not yet replace the ad hoc `_console_text()` / scattered
 `except (pexpect.TIMEOUT, pexpect.EOF, Exception)` call sites in the existing
-`drive_*.py` drivers. `drive_access_vax.py` (rd vms-4b7, "P4-access" above)
-follows drive_proctab_vax.py's shape rather than re-deriving it: its
-boot-console handshake goes through `safe_expect()` and its pass/fail
-decision is a `Proof` of `StepResult`s; `run-access.sh` sources
-`negctl_gate.sh` rather than hand-rolling the exit-code inversion.
-Retrofitting the remaining pre-existing drivers (`drive_boot_vax.py`,
+`drive_*.py` drivers. `drive_proctab_vax.py` (rd vms-2e0, "P4-proctab" above)
+is the **first real adopter**: its boot-console handshake goes through
+`safe_expect()` and its pass/fail decision is a `Proof` of `StepResult`s;
+`run-proctab.sh` sources `negctl_gate.sh` rather than hand-rolling the
+exit-code inversion. `drive_access_vax.py` (rd vms-4b7, "P4-access" above)
+is the second adopter, following `drive_proctab_vax.py`'s shape rather than
+re-deriving it, with the identical `safe_expect()`/`Proof`/`negctl_gate.sh`
+shape. Retrofitting the remaining pre-existing drivers (`drive_boot_vax.py`,
 `drive_devvms_vax.py`, `drive_eflag_vax.py`) to the same contract is still
 separate follow-up work, sequenced after `vms-84fe` (mid-flight in
 `drive_boot_vax.py`) merges. `vms-945e`'s remaining facility drivers
-(proctab/mbx/lnm) adopt `safe_expect`/`Proof`/`negctl_gate` from day one,
-following this same shape.
+(mbx/lnm/lock) adopt `safe_expect`/`Proof`/`negctl_gate` from day one,
+following `drive_proctab_vax.py`'s shape.
+
+**The `set -e` scope-leak trap (rd vms-4b7, hit again verbatim on vms-2e0's
+own first nightly run -- read this before writing a new `run-*.sh`).**
+`errexit` is a GLOBAL shell option, not function-scoped: if a `run_session()`
+helper internally does `rc=$?; set -e` right before its own `return "${rc}"`,
+that `-e` stays ON in the CALLER after the call returns, regardless of what
+`set -e`/`set +e` the caller had in effect when it made the call. So the
+call-site pattern `set +e; run_session ...; rc=$?; set -e` does **not**
+protect itself: by the time `run_session` returns a nonzero `rc`, `-e` is
+already back on, and bash's errexit fires immediately against that nonzero
+return -- aborting the whole script before `rc=$?` (and the
+`vaxharness_negctl_gate` call after it) ever runs, so a clean, honest
+negctl proof-failure reddens the JOB instead of being inverted to PASS. The
+only safe call-site form is `||`-protected: `rc=0; run_session ... || rc=$?`
+-- both `run-access.sh` and `run-proctab.sh` use this form exclusively.

@@ -519,6 +519,18 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # dcl_exec_utility()'s for it at SYS$SYSTEM: -- without this copy every
     # PRODUCT operation fails %PCSI-F-NOIMG on the real runtime.
     cp build-static/bin/PRODUCT.EXE    /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # LIBRARIAN.EXE (src/vmslink, OpenVMS LIBRARY command) + OVMXDUMP (the OVMX
+    # image inspector; VMS analog ANALYZE/IMAGE + DUMP). Both are standard
+    # SYS$SYSTEM utilities on a real OpenVMS install -- LIBRARY/.OLB/.TLB/.HLB
+    # management is a runtime facility, not a build-only tool -- so a faithful
+    # runtime ships them; without LIBRARIAN.EXE `$ LIBRARY` fails %LIB-F-NOIMG
+    # exactly like PRODUCT/SYSGEN above. This also brings x86_64 to parity with
+    # the vax aggregate-derived cut (which ships both) so the #589 image-parity
+    # gate holds set-equal across arches -- a non-arch-technical curation gap
+    # closed by leveling up, not allowlisting. tests/qemu/Dockerfile already
+    # stages build-static/bin/LIBRARIAN.EXE, so the path + presence are proven.
+    cp build-static/bin/LIBRARIAN.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/OVMXDUMP       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # The setuid-root mount(2)/umount(2) helper (vms-651, tools/
     # vms_mount_helper.c) -- NOT a VMS image, lives outside SYS$SYSTEM: at a
     # fixed Linux path (ovmx_layout.h VMS_MOUNT_HELPER_PATH). Owned by root

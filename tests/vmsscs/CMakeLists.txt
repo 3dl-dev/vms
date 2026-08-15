@@ -285,6 +285,12 @@ target_link_libraries(test_scsd_wire PRIVATE
     # RECNXINTERVAL reconnect loop (scs_csb_*), so the whole-file test seam
     # needs the reconnect library too.
     vmsscs_recnx
+    # vms-838: scsd.c's get_iface_hwaddr() now delegates to
+    # scs_datalink_get_hwaddr() unconditionally (not just on the
+    # SCSD_UNIT_TEST transmit-capture path), so the whole-file test seam
+    # needs the datalink backend linked in even though send_frame_raw()'s
+    # SCSD_UNIT_TEST branch never calls into it.
+    vmsscs_datalink
 )
 
 add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)

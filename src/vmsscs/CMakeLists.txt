@@ -13,6 +13,20 @@
 # through to vmsfs (SYS$SYSTEM:OVMXVMSSYS.PAR version resolution), so scsd_exe
 # DOES carry a real link dependency on vmsfs/vmslnm now -- see scsd_exe below.
 
+# vms-838 - the raw-L2 datalink abstraction (scs_datalink.h/.c): ONE
+# transport backend, Linux AF_PACKET or NetBSD bpf(4) selected at compile
+# time via __linux__/__NetBSD__ inside scs_datalink.c itself (no per-image
+# CMake branching needed -- the toolchain file already picks the platform).
+# No dependency on any other vmsscs library; scsd_exe links it for its
+# socket/bpf open + MAC-get + send + recv primitives (see scsd.c's
+# send_frame_raw()/get_iface_hwaddr()). Written generic (no SCS type baked
+# in) so rd vms-30e (DECnet Phase IV), a second raw-L2 consumer, can link it
+# too instead of re-deriving a bpf backend.
+add_library(vmsscs_datalink STATIC scs_datalink.c)
+target_include_directories(vmsscs_datalink PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 # vms-ec7 (MSCP epic Phase A) - THE SCS MESSAGE ENVELOPE, as a layer. One build
 # path, one parse path, one set of offsets, one MTYPE namespace, shared by every
 # SCS message OVMX emits or receives. Pure: no socket, no allocation, no
@@ -396,7 +410,8 @@ target_include_directories(scsd_exe PRIVATE
 # through vmsfs (highest-version lookup) instead of a bare Linux path, so
 # scsd_exe needs the vmsfs/vmslnm link it previously didn't (see the
 # header-only claim at the top of this file -- no longer true).
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_quorum vmsscs_recnx vmsscs_mscp vmsscs_mscp_srv vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit vmsfs vmslnm)
+# vms-838: the raw-L2 transport backend (see vmsscs_datalink above).
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_quorum vmsscs_recnx vmsscs_mscp vmsscs_mscp_srv vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll vmsscs_rx vmsscs_credit vmsscs_datalink vmsfs vmslnm)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

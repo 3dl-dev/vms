@@ -37,6 +37,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+/*
+ * vms-838: this capture shim casts sendto()'s `to` to `struct sockaddr_ll`
+ * (below) to print the destination MAC. Before vms-838 that type reached us
+ * transitively through SCSD_SOURCE (scsd.c #included <netpacket/packet.h>);
+ * the raw-L2 send now lives in scs_datalink.c, so scsd.c no longer pulls it
+ * in and this tool must own the include for the type it directly uses.
+ */
+#include <netpacket/packet.h>
 
 static ssize_t scsd_wire_capture_sendto(int fd, const void *buf, size_t len, int flags,
                                         const struct sockaddr *to, socklen_t tolen);

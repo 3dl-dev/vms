@@ -5366,7 +5366,7 @@ EOF
         case "$_f" in
         facility)     echo "INET pseudo-device BGn: -- the IO\$_READVBLK (recv) handler of the executive-resident BGn: driver (vms_ioctl_bg_recv, src/kernel/vms_bg.c, vms-527). The first network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs connect/send/recv/close to a TCP peer, and the socket lives IN the executive (host in-kernel socket API), not in userspace.";;
         targets)      echo "kernel/vms_bg.c";;
-        suites_red)   echo "test_syssvc_bg_echo";;
+        suites_red)   echo "test_syssvc_bg_echo test_syssvc_ssh_kex";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -5375,8 +5375,11 @@ EOF
 BG $QIO IO$_READVBLK returns the exact bytes the echo peer sent back
 EOF
                       ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
+        knock_on_fail) cat <<'EOF'
+the remote command output came back BYTE-EXACT over the veneer (real KEX proven)
+EOF
+                      ;;
+        knock_on_why)  echo "test_syssvc_ssh_kex drives the veneer-linked OpenSSH ssh through a REAL SSH KEX + session over BGn:; ssh's packet reads bottom out in this same vms_ioctl_bg_recv. Zeroing the recv count makes ssh read EOF mid-handshake, so the session never completes and OVMX_SSH_OK never returns -- the one-assignment fault reddens the KEX proof as a knock-on of the byte-count echo assertion.";;
         esac;;
 
     tcpip-ftp-get-length-dropped)

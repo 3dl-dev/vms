@@ -1,64 +1,113 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
- * ovmx_ssh_glue.c - OVMX port layer: route OpenSSH's transport + event loop
- * onto the OVMX BSD-sockets veneer over BGn:. See ovmx_ssh_glue.h for the model.
+ * ovmx_ssh_glue.c - OVMX port layer: route OpenSSH's transport onto the OVMX
+ * BSD-sockets veneer over BGn:. See ovmx_ssh_glue.h for the model.
  *
- * Built INSIDE the OpenSSH source tree (build-openssh.sh copies it there), so it
- * may use OpenSSH's sshbuf/ssherr headers. It talks to the OVMX veneer through
- * the veneer's public API only (ovmx_socket/ovmx_connect/ovmx_send/ovmx_recv/
- * ovmx_pollfd/ovmx_socket_close) -- no $QIO/vms_kif here.
+ * WHY A SOCKETPAIR BRIDGE (not the raw veneer handle / a readiness fd). OpenSSH
+ * treats its connection fd as a full BSD socket: besides read()/write()/poll()
+ * it does getsockname()/getpeername()/setsockopt() and, crucially, the SSH
+ * version-banner exchange (kex.c) does its own atomicio(read/vwrite) on the fd,
+ * OUTSIDE the packet layer. A veneer HANDLE is not an fd, and the executive
+ * readiness fd has no read/write file-ops -- either makes those raw fd calls
+ * fail (EBADF / "Not a socket"). So ovmx_ssh_connect() hands OpenSSH a REAL
+ * fd -- one end of an AF_UNIX socketpair -- and a pair of pump threads shuttle
+ * every byte between the other end and the executive-resident BGn: socket via
+ * the veneer (ovmx_send/ovmx_recv). ALL of OpenSSH's socket operations then work
+ * unchanged, and every wire byte still transits the veneer -> $QIO -> executive.
+ * The veneer's BGn: channel is process-wide (keyed on the executive proc, not a
+ * thread) and full-duplex, so a blocking recv and a blocking send run
+ * concurrently in the two pump threads (proven by test_syssvc_bgsock_echo).
+ *
+ * The fd OpenSSH gets is an ordinary socketpair end, so the packet-layer shims
+ * (ovmx_ssh_read/write/sshbuf_read) simply fall through to read()/write()/
+ * sshbuf_read on it -- they add nothing here but stay harmless.
+ *
+ * INV-6 / Rule 9. ovmx_ssh_connect() fails (-1) when /dev/vms is absent (the
+ * veneer's ovmx_socket returns ENODEV) -- never a raw socket() fallback.
  */
 
 #include <errno.h>
 #include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-#include "sshbuf.h"      /* OpenSSH: struct sshbuf, sshbuf_reserve/consume_end */
-#include "ssherr.h"      /* OpenSSH: SSH_ERR_* */
+#include "sshbuf.h"      /* OpenSSH: sshbuf_read (fall-through path) */
+#include "ssherr.h"
 
-#include "ovmx/vms_bgsock.h"   /* the OVMX veneer (copied under ovmx/ at build) */
+#include "ovmx/vms_bgsock.h"
 #include "ovmx/ovmx_ssh_glue.h"
 
-/* fd (veneer readiness fd) -> veneer socket handle. A client process holds one
- * or two connections; a tiny fixed map under a mutex suffices. */
-struct conn_map { int in_use; int fd; int handle; };
-#define OVMX_SSH_CONN_MAX 8
-static struct conn_map g_conns[OVMX_SSH_CONN_MAX];
-static pthread_mutex_t g_conns_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Per-connection pump state. Refcounted so the last pump thread out releases the
+ * veneer socket. OVMX_BG_XFER_MAX mirrors the veneer's per-op cap. */
+#define OVMX_SSH_XFER 4096
+struct ovmx_ssh_pump {
+    int             handle;     /* veneer socket handle (ovmx_*) */
+    int             int_fd;     /* internal socketpair end the pumps drive */
+    pthread_mutex_t lock;
+    int             refs;
+    int             closed;
+};
 
-static int handle_for(int fd)
+static void pump_release(struct ovmx_ssh_pump *p)
 {
-    int i, h = -1;
-    pthread_mutex_lock(&g_conns_lock);
-    for (i = 0; i < OVMX_SSH_CONN_MAX; i++)
-        if (g_conns[i].in_use && g_conns[i].fd == fd) { h = g_conns[i].handle; break; }
-    pthread_mutex_unlock(&g_conns_lock);
-    return h;
+    int last;
+    pthread_mutex_lock(&p->lock);
+    last = (--p->refs == 0);
+    if (last && !p->closed) { ovmx_socket_close(p->handle); p->closed = 1; }
+    pthread_mutex_unlock(&p->lock);
+    if (last) { close(p->int_fd); pthread_mutex_destroy(&p->lock); free(p); }
 }
 
-static void conn_add(int fd, int handle)
+/* app -> wire: read what OpenSSH wrote to the socketpair, ovmx_send it. */
+static void *pump_out(void *arg)
 {
-    int i;
-    pthread_mutex_lock(&g_conns_lock);
-    for (i = 0; i < OVMX_SSH_CONN_MAX; i++)
-        if (!g_conns[i].in_use) {
-            g_conns[i].in_use = 1; g_conns[i].fd = fd; g_conns[i].handle = handle;
-            break;
+    struct ovmx_ssh_pump *p = arg;
+    unsigned char buf[OVMX_SSH_XFER];
+    for (;;) {
+        ssize_t n = read(p->int_fd, buf, sizeof(buf));
+        ssize_t off = 0;
+        if (n <= 0) break;
+        while (off < n) {
+            ssize_t w = ovmx_send(p->handle, buf + off, (size_t)(n - off), 0);
+            if (w <= 0) goto done;
+            off += w;
         }
-    pthread_mutex_unlock(&g_conns_lock);
+    }
+done:
+    shutdown(p->int_fd, SHUT_RDWR);
+    pump_release(p);
+    return NULL;
 }
 
-int ovmx_ssh_is_conn(int fd)
+/* wire -> app: ovmx_recv from the executive socket, write into the socketpair. */
+static void *pump_in(void *arg)
 {
-    return fd >= 0 && handle_for(fd) >= 0;
+    struct ovmx_ssh_pump *p = arg;
+    unsigned char buf[OVMX_SSH_XFER];
+    for (;;) {
+        ssize_t n = ovmx_recv(p->handle, buf, sizeof(buf), 0);
+        ssize_t off = 0;
+        if (n <= 0) break;              /* 0 = orderly peer close (EOF) */
+        while (off < n) {
+            ssize_t w = write(p->int_fd, buf + off, (size_t)(n - off));
+            if (w <= 0) goto done;
+            off += w;
+        }
+    }
+done:
+    shutdown(p->int_fd, SHUT_RDWR);
+    pump_release(p);
+    return NULL;
 }
 
 int ovmx_ssh_connect(const struct sockaddr *sa, socklen_t salen)
 {
-    int handle, pfd;
+    struct ovmx_ssh_pump *p;
+    pthread_t t_out, t_in;
+    int handle, sv[2] = { -1, -1 };
 
     if (sa == NULL || (size_t)salen < sizeof(struct sockaddr_in) ||
         sa->sa_family != AF_INET) {
@@ -69,71 +118,49 @@ int ovmx_ssh_connect(const struct sockaddr *sa, socklen_t salen)
     handle = ovmx_socket(AF_INET, SOCK_STREAM, 0);
     if (handle < 0)
         return -1;                      /* errno set (ENODEV if no /dev/vms) */
-
     if (ovmx_connect(handle, sa, salen) != 0) {
-        int e = errno;
-        ovmx_socket_close(handle);
-        errno = e;
-        return -1;
+        int e = errno; ovmx_socket_close(handle); errno = e; return -1;
     }
-
-    /* Hand OpenSSH the REAL readiness fd as its connection fd: its poll/ppoll
-     * paths then work unchanged; the data shims below map it back to `handle`. */
-    pfd = ovmx_pollfd(handle);
-    if (pfd < 0) {
-        int e = errno;
-        ovmx_socket_close(handle);
-        errno = e;
-        return -1;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        int e = errno; ovmx_socket_close(handle); errno = e; return -1;
     }
-    conn_add(pfd, handle);
-    return pfd;
+    p = calloc(1, sizeof(*p));
+    if (p == NULL) { close(sv[0]); close(sv[1]); ovmx_socket_close(handle); errno = ENOMEM; return -1; }
+    p->handle = handle;
+    p->int_fd = sv[1];
+    pthread_mutex_init(&p->lock, NULL);
+
+    pthread_mutex_lock(&p->lock); p->refs = 1; pthread_mutex_unlock(&p->lock);
+    if (pthread_create(&t_out, NULL, pump_out, p) != 0) {
+        pthread_mutex_destroy(&p->lock); free(p);
+        close(sv[0]); close(sv[1]); ovmx_socket_close(handle);
+        errno = EIO; return -1;
+    }
+    pthread_mutex_lock(&p->lock); p->refs = 2; pthread_mutex_unlock(&p->lock);
+    if (pthread_create(&t_in, NULL, pump_in, p) != 0) {
+        /* t_out owns the veneer socket now; drop our ref, shut the pipe so it
+         * exits and does the final release. From here p belongs to t_out. */
+        pthread_mutex_lock(&p->lock); p->refs = 1; pthread_mutex_unlock(&p->lock);
+        shutdown(sv[1], SHUT_RDWR);
+        close(sv[0]);
+        errno = EIO; return -1;
+    }
+    pthread_detach(t_out);
+    pthread_detach(t_in);
+    return sv[0];                       /* OpenSSH's connection fd: a real socket */
 }
 
-ssize_t ovmx_ssh_read(int fd, void *buf, size_t n)
+int ovmx_ssh_is_conn(int fd)
 {
-    int h = handle_for(fd);
-    if (h < 0)
-        return read(fd, buf, n);        /* not a veneer connection */
-    return ovmx_recv(h, buf, n, 0);     /* 0 = EOF, -1 = error (errno set) */
+    (void)fd;
+    return 0;   /* the connection fd is a real socketpair end; no special mapping */
 }
 
-ssize_t ovmx_ssh_write(int fd, const void *buf, size_t n)
-{
-    int h = handle_for(fd);
-    if (h < 0)
-        return write(fd, buf, n);
-    return ovmx_send(h, buf, n, 0);
-}
-
-/* Mirror sshbuf_read() but move bytes through the veneer for a connection fd:
- * reserve maxlen, ovmx_recv into it, trim to the actual count. */
+/* The connection fd is a real socket, so these are plain pass-throughs; the
+ * packet-layer patch calls them but they add nothing over read()/write(). */
+ssize_t ovmx_ssh_read(int fd, void *buf, size_t n)  { return read(fd, buf, n); }
+ssize_t ovmx_ssh_write(int fd, const void *buf, size_t n) { return write(fd, buf, n); }
 int ovmx_ssh_sshbuf_read(int fd, struct sshbuf *buf, size_t maxlen, size_t *rlen)
 {
-    int h = handle_for(fd);
-    u_char *d;
-    ssize_t len;
-    int r;
-
-    if (h < 0)
-        return sshbuf_read(fd, buf, maxlen, rlen);   /* non-connection fd */
-
-    if (rlen != NULL)
-        *rlen = 0;
-    if ((r = sshbuf_reserve(buf, maxlen, &d)) != 0)
-        return r;
-    len = ovmx_recv(h, d, maxlen, 0);
-    if (len == -1) {
-        (void)sshbuf_consume_end(buf, maxlen);
-        return SSH_ERR_SYSTEM_ERROR;
-    }
-    if (len == 0) {
-        (void)sshbuf_consume_end(buf, maxlen);
-        return SSH_ERR_CONN_CLOSED;      /* orderly peer close (EOF) */
-    }
-    if ((r = sshbuf_consume_end(buf, maxlen - (size_t)len)) != 0)
-        return r;
-    if (rlen != NULL)
-        *rlen = (size_t)len;
-    return 0;
+    return sshbuf_read(fd, buf, maxlen, rlen);
 }

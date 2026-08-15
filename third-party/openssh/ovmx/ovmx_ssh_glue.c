@@ -40,6 +40,7 @@
 #include "ovmx/vms_bgsock.h"
 #include "ovmx/ovmx_ssh_glue.h"
 
+#ifndef OVMX_WRAP   /* the socketpair+pump bridge -- retired in the --wrap de-veneer build */
 /* Per-connection pump state. Refcounted so the last pump thread out releases the
  * veneer socket. OVMX_BG_XFER_MAX mirrors the veneer's per-op cap. */
 #define OVMX_SSH_XFER 4096
@@ -102,12 +103,16 @@ done:
     pump_release(p);
     return NULL;
 }
+#endif /* !OVMX_WRAP */
 
 int ovmx_ssh_connect(const struct sockaddr *sa, socklen_t salen)
 {
+#ifndef OVMX_WRAP
     struct ovmx_ssh_pump *p;
     pthread_t t_out, t_in;
-    int handle, sv[2] = { -1, -1 };
+    int sv[2] = { -1, -1 };
+#endif
+    int handle;
 
     if (sa == NULL || (size_t)salen < sizeof(struct sockaddr_in) ||
         sa->sa_family != AF_INET) {
@@ -121,6 +126,19 @@ int ovmx_ssh_connect(const struct sockaddr *sa, socklen_t salen)
     if (ovmx_connect(handle, sa, salen) != 0) {
         int e = errno; ovmx_socket_close(handle); errno = e; return -1;
     }
+
+#ifdef OVMX_WRAP
+    /*
+     * DE-VENEER (vms-4bf): return the veneer HANDLE directly -- no socketpair,
+     * no pump threads. The `ssh` binary is linked with `-Wl,--wrap=read,write,
+     * getpeername,setsockopt,poll,ppoll,...` (ovmx_ssh_wrap.c), so every fd
+     * syscall OpenSSH issues on this handle -- the kex.c banner atomicio,
+     * getpeername for known_hosts, setsockopt(TCP_NODELAY), the clientloop poll
+     * set -- dispatches to a real $QIO on BGn:. The handle is >= OVMX_BGSOCK_BASE
+     * so the wrappers can tell it from a real fd.
+     */
+    return handle;
+#else
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
         int e = errno; ovmx_socket_close(handle); errno = e; return -1;
     }
@@ -148,6 +166,7 @@ int ovmx_ssh_connect(const struct sockaddr *sa, socklen_t salen)
     pthread_detach(t_out);
     pthread_detach(t_in);
     return sv[0];                       /* OpenSSH's connection fd: a real socket */
+#endif /* OVMX_WRAP */
 }
 
 int ovmx_ssh_is_conn(int fd)

@@ -2013,3 +2013,66 @@ uint32_t vms_kif_bg_pollfd(uint32_t exec_chan, int *out_fd)
         *out_fd = args.fd;
     return args.status;
 }
+
+uint32_t vms_kif_bg_getname(uint32_t exec_chan, uint32_t which,
+                            uint16_t *family, uint16_t *port, uint32_t *addr)
+{
+    struct vms_bg_name_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.which = which;
+
+    KIF_CALL(VMS_IOCTL_BG_GETNAME, &args);
+
+    if (args.status & 1) {
+        if (family) *family = args.sin_family;
+        if (port)   *port   = args.sin_port;
+        if (addr)   *addr   = args.sin_addr;
+    }
+    return args.status;
+}
+
+uint32_t vms_kif_bg_setsockopt(uint32_t exec_chan, int level, int optname,
+                               int optval)
+{
+    struct vms_bg_sockopt_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.op = 0;                        /* set */
+    args.level = level;
+    args.optname = optname;
+    args.optval = optval;
+
+    KIF_CALL(VMS_IOCTL_BG_SOCKOPT, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_bg_getsockopt(uint32_t exec_chan, int level, int optname,
+                               int *out_optval)
+{
+    struct vms_bg_sockopt_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.op = 1;                        /* get */
+    args.level = level;
+    args.optname = optname;
+
+    KIF_CALL(VMS_IOCTL_BG_SOCKOPT, &args);
+
+    if ((args.status & 1) && out_optval)
+        *out_optval = args.optval;
+    return args.status;
+}

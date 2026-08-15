@@ -58,7 +58,10 @@
 #include <linux/file.h>
 #include <linux/poll.h>
 #include <linux/anon_inodes.h>
+#include <linux/tcp.h>          /* tcp_sk() -- read TCP_NODELAY back off the socket */
 #include <net/sock.h>
+#include <net/tcp.h>            /* TCP_NAGLE_OFF */
+#include <net/inet_sock.h>      /* inet_sk() -- read IP_TOS back off the socket */
 
 #include "vms_internal.h"   /* struct vms_proc / SS__* / VMS_DEVNAM_SIZE and,
                              * via vms_ioctl.h, the struct vms_bg_* args */
@@ -528,6 +531,145 @@ long vms_ioctl_bg_pollfd(struct vms_proc *proc, unsigned long arg)
     fd_install(fd, file);           /* the file now owns the bs reference */
     args.fd = fd;
     args.status = SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * IO$_SENSEMODE (getsockname / getpeername) -- report the channel socket's
+ * local or peer address, read straight from the host kernel socket. This is the
+ * de-veneer crux (vms-4bf): the answer comes from the REAL kernel socket via
+ * kernel_getsockname / kernel_getpeername, so an unmodified OpenSSH getpeername()
+ * gets the true remote IP:port (known_hosts records the right host), not the
+ * AF_UNIX peer a socketpair bridge would return.
+ */
+long vms_ioctl_bg_getname(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_bg_name_args args;
+    struct vms_bg_chan *ch;
+    struct socket *sock;
+    struct sockaddr_storage ss;
+    struct sockaddr_in *sin;
+    int rc;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (const void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    ch = bgchan_lookup(proc, args.chan, &sock);
+    if (!ch || !sock) {
+        args.status = SS__IVCHAN;   /* no socket: IO$_SETMODE was never issued */
+        goto out;
+    }
+
+    memset(&ss, 0, sizeof(ss));
+    if (args.which)
+        rc = kernel_getpeername(sock, (struct sockaddr *)&ss);
+    else
+        rc = kernel_getsockname(sock, (struct sockaddr *)&ss);
+    if (rc < 0) {
+        args.status = SS__ABORT;
+        goto out;
+    }
+    if (ss.ss_family != AF_INET) {
+        args.status = SS__ABORT;    /* IPv6 not carried by this 8-byte tuple yet */
+        goto out;
+    }
+
+    sin = (struct sockaddr_in *)&ss;
+    args.sin_family = sin->sin_family;
+    args.sin_port   = sin->sin_port;            /* network byte order, straight through */
+    args.sin_addr   = sin->sin_addr.s_addr;     /* NEGCTL bgsock-getname-addr-zeroed */
+    args.status = SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * IO$_SETMODE / IO$_SENSEMODE socket-option subfunction (setsockopt /
+ * getsockopt) on the channel's REAL host kernel socket.
+ *
+ * SET routes the integer value through the socket's own ->setsockopt with a
+ * KERNEL_SOCKPTR, so the option genuinely takes effect on the kernel socket
+ * (this is the anti-veneer point: a socketpair would swallow TCP_NODELAY as
+ * ENOPROTOOPT; here it is applied for real). GET reads the option back out of
+ * the live socket state -- ->getsockopt takes user pointers so it is unusable
+ * from kernel context; instead we read the small integer-option whitelist that
+ * OpenSSH sets directly off the socket, which is the true current value.
+ * Anything outside the whitelist returns SS$_BADPARAM (honest "unsupported",
+ * mapped to ENOPROTOOPT by the veneer), never a fake success.
+ */
+long vms_ioctl_bg_sockopt(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_bg_sockopt_args args;
+    struct vms_bg_chan *ch;
+    struct socket *sock;
+    struct sock *sk;
+    int rc;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (const void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    ch = bgchan_lookup(proc, args.chan, &sock);
+    if (!ch || !sock) {
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+    sk = sock->sk;
+    if (!sk) {
+        args.status = SS__ABORT;
+        goto out;
+    }
+
+    if (args.op == 0) {
+        /* setsockopt: apply the integer value to the real kernel socket. The
+         * SOL_SOCKET special-casing that __sys_setsockopt does in the syscall
+         * path is NOT in ->setsockopt (which reaches only the protocol/IP
+         * handlers), so SOL_SOCKET options must go through sock_setsockopt
+         * directly; every other level rides ->setsockopt. */
+        int val = args.optval;
+        if (args.level == SOL_SOCKET) {
+            rc = sock_setsockopt(sock, args.level, args.optname,
+                                 KERNEL_SOCKPTR(&val), sizeof(val));
+        } else if (sock->ops && sock->ops->setsockopt) {
+            rc = sock->ops->setsockopt(sock, args.level, args.optname,
+                                       KERNEL_SOCKPTR(&val), sizeof(val));
+        } else {
+            args.status = SS__BADPARAM;
+            goto out;
+        }
+        args.status = rc ? SS__BADPARAM : SS__NORMAL;
+        goto out;
+    }
+
+    /* getsockopt: read the option back off the live socket. The whitelist
+     * covers exactly the integer options OpenSSH probes (misc.c/sshconnect.c);
+     * each value is the socket's genuine current state. */
+    if (args.level == SOL_SOCKET && args.optname == SO_KEEPALIVE) {
+        args.optval = sock_flag(sk, SOCK_KEEPOPEN) ? 1 : 0;
+        args.status = SS__NORMAL;
+    } else if (args.level == SOL_SOCKET && args.optname == SO_REUSEADDR) {
+        args.optval = sk->sk_reuse ? 1 : 0;
+        args.status = SS__NORMAL;
+    } else if (args.level == SOL_SOCKET && args.optname == SO_ERROR) {
+        args.optval = -sock_error(sk);          /* pending error, cleared (as getsockopt does) */
+        args.status = SS__NORMAL;
+    } else if (args.level == IPPROTO_TCP && args.optname == TCP_NODELAY) {
+        args.optval = (tcp_sk(sk)->nonagle & TCP_NAGLE_OFF) ? 1 : 0;
+        args.status = SS__NORMAL;
+    } else if (args.level == IPPROTO_IP && args.optname == IP_TOS) {
+        args.optval = inet_sk(sk)->tos;
+        args.status = SS__NORMAL;
+    } else {
+        args.status = SS__BADPARAM;             /* unsupported option: honest, not faked */
+    }
 
 out:
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))

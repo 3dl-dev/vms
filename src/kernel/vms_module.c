@@ -852,6 +852,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_bg_dassgn(proc, arg);
     case VMS_IOCTL_BG_POLLFD:
         return vms_ioctl_bg_pollfd(proc, arg);
+    case VMS_IOCTL_BG_GETNAME:
+        return vms_ioctl_bg_getname(proc, arg);
+    case VMS_IOCTL_BG_SOCKOPT:
+        return vms_ioctl_bg_sockopt(proc, arg);
 
     /* P0 program region (vms-68f.i, in-process image activation foundation) */
     case VMS_IOCTL_P0_MAP:

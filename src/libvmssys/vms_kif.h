@@ -724,5 +724,19 @@ uint32_t vms_kif_bg_dassgn(uint32_t exec_chan);
  * channel's socket (poll()/select()-able; data still moves via send/recv). The
  * fd is installed in the caller's fd table; *out_fd gets it on success. */
 uint32_t vms_kif_bg_pollfd(uint32_t exec_chan, int *out_fd);
+/* IO$_SENSEMODE -- report the channel socket's local (which==0) or peer
+ * (which==1) address, straight from the host kernel socket. The de-veneer path
+ * (vms-4bf): getpeername gets the REAL remote IP:port. Out params (network byte
+ * order) may be NULL if not wanted. */
+uint32_t vms_kif_bg_getname(uint32_t exec_chan, uint32_t which,
+                            uint16_t *family, uint16_t *port, uint32_t *addr);
+/* IO$_SETMODE socket-option subfunction -- apply an integer option (e.g.
+ * TCP_NODELAY, SO_KEEPALIVE) to the REAL host kernel socket. */
+uint32_t vms_kif_bg_setsockopt(uint32_t exec_chan, int level, int optname,
+                               int optval);
+/* IO$_SENSEMODE socket-option subfunction -- read an integer option back off
+ * the live host kernel socket; *out_optval gets it on success. */
+uint32_t vms_kif_bg_getsockopt(uint32_t exec_chan, int level, int optname,
+                               int *out_optval);
 
 #endif /* _VMS_KIF_H */

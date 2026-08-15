@@ -1003,6 +1003,8 @@ long vms_ioctl_bg_recv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_deaccess(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_dassgn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_pollfd(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_bg_getname(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_bg_sockopt(struct vms_proc *proc, unsigned long arg);
 /* Give back every BG channel (and its host socket) a dying process holds. */
 void vms_bg_release_all(struct vms_proc *proc);
 

@@ -313,9 +313,9 @@ class TestNegctlGatePython:
         driver_exit_code_from_buggy_variant = 0  # "negctl ok" -- WRONG per contract
         assert vh.negctl_gate(driver_exit_code_from_buggy_variant, negctl=True) is False
 
-    # ----------------------------------------------------------------------
+    # --------------------------------------------------------------------------
     # rd vms-cf5's retrofit tail: the PROOF_FAILED/HARNESS_ERROR carve-out.
-    # ----------------------------------------------------------------------
+    # --------------------------------------------------------------------------
     def test_proof_failed_code_inverts_under_negctl(self):
         assert vh.negctl_gate(vh.PROOF_FAILED, negctl=True) is True
 

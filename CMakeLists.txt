@@ -213,6 +213,27 @@ add_subdirectory(src/vmsdcl)
 # sockets), so it builds unconditionally like known_images.
 add_subdirectory(src/vmsscs)
 
+# NetBSD/vax facility guest test tools (vmseflag/vmsaccess/vmsproctab/vmsmbx
+# + their width-safety negctl teeth) -- vms-74b, epic vms-509 "unified
+# cross-platform build" Rung D, docs/design-unified-cross-build.md §5/§8.
+# tests/netbsd/guest/CMakeLists.txt no-ops itself (return()) unless
+# CMAKE_SYSTEM_NAME is NetBSD, so this is independent of BUILD_TESTS/BUILD_TOOLS
+# -- it replaces the four hand-maintained
+# tools/cross-vax/build-{eflag,access,proctab,mbx}-tool-vax.sh scripts, which
+# always built regardless of any flag either.
+#
+# EXISTS-guarded (not unconditional): some builds configure the top-level
+# project against a partial checkout that copies only src/ + CMakeLists.txt and
+# NOT tests/ -- notably the behavioural mutation-sandbox negctls
+# (tests/integration/test_show_*_negctl.sh: `cp -a src`, `cp CMakeLists.txt`,
+# then `cmake -S <tree>`). An unconditional add_subdirectory() of an absent dir
+# is a hard configure error there. The guard keeps the guest tools building on
+# any full checkout (native no-ops via the subdir's own NetBSD guard; vax builds
+# them) while staying invisible to a src-only sandbox build.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/netbsd/guest/CMakeLists.txt")
+    add_subdirectory(tests/netbsd/guest)
+endif()
+
 if(BUILD_TESTS)
     add_subdirectory(tests/libvms)
     add_subdirectory(tests/vmsprocess)

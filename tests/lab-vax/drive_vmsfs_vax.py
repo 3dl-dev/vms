@@ -57,6 +57,10 @@ import anita
 sys.path.insert(0, os.environ.get("OVMX_NETBSD_DIR", "/netbsd"))
 import netbsd_console
 
+# vaxharness.py (rd vms-cf5) lives in THIS directory (tests/lab-vax), staged
+# alongside this script by run-vmsfs.sh -- no sys.path insert needed.
+from vaxharness import HARNESS_ERROR, PROOF_FAILED
+
 
 # The known HELLO.TXT content mastered by tests/qemu/mkimage_vmsfs.c
 # (TEST_CONTENT). Kept in sync with that tool.
@@ -129,9 +133,9 @@ def main():
             "loaded; the mount+read assertion must go RED")
 
     if not os.path.isfile(iso_path):
-        log("FAIL: install ISO not found at %s" % iso_path); return 3
+        log("FAIL: install ISO not found at %s" % iso_path); return HARNESS_ERROR
     if not os.path.isfile(ods2_img):
-        log("FAIL: mastered ODS-2 image not found at %s" % ods2_img); return 3
+        log("FAIL: mastered ODS-2 image not found at %s" % ods2_img); return HARNESS_ERROR
 
     a = anita.Anita(dist=anita.ISO(iso_path, sets=sets), workdir=workdir, persist=True)
     build_source_iso(artifacts_dir, src_iso)
@@ -206,7 +210,7 @@ def main():
                           cmd_timeout)
             if rc != 0:
                 log("FAIL: could not install the MODULAR kernel onto /netbsd")
-                return 30
+                return PROOF_FAILED
             run(child, "sync; mount -u -r / 2>/dev/null; sync", cmd_timeout)
             log("OK: installed MODULAR kernel as /netbsd; the next boot runs it")
             return 0
@@ -236,7 +240,7 @@ def main():
                       cmd_timeout)
         if rc != 0:
             log("FAIL: could not find/mount the OVMX artifact CD in the guest")
-            return 10
+            return PROOF_FAILED
         log("OK: staged vmsfs.kmod + vmsfs_mount from the artifact CD")
 
         # The whole-disk partition of a raw MSCP disk with no NetBSD disklabel:
@@ -256,7 +260,7 @@ def main():
         if rc != 0:
             log("FAIL (INV-6): a 'vmsfs' mount SUCCEEDED with no module loaded "
                 "-- the faked-mount bug INV-6 forbids")
-            return 20
+            return PROOF_FAILED
         log("OK (INV-6): with no vmsfs module loaded, the mount FAILED HONESTLY")
 
         if skip_load:
@@ -267,7 +271,7 @@ def main():
             if rc != 0:
                 log("FAIL: modload of vmsfs.kmod on NetBSD/vax FAILED (rc=%d). "
                     "Console output above." % rc)
-                return 14
+                return PROOF_FAILED
             log("OK: vmsfs module loaded (vfs_attach registered 'vmsfs')")
 
         # ---- 3. mount the ODS-2 volume read-only ---------------------------
@@ -280,14 +284,14 @@ def main():
                       cmd_timeout)
         if rc != 0:
             log("FAIL: could not mount the ODS-2 volume on any ra1 partition")
-            return 15
+            return PROOF_FAILED
         log("OK: ODS-2 volume mounted read-only on NetBSD/vax")
 
         # ---- readdir: HELLO.TXT must appear (VOP_READDIR on the root) -----
         rc, out = run(child, "ls /ods2", cmd_timeout)
         if "HELLO.TXT" not in out:
             log("FAIL (readdir): HELLO.TXT not listed in the mounted volume")
-            return 16
+            return PROOF_FAILED
         log("OK (readdir): HELLO.TXT appears in the mounted ODS-2 volume")
 
         # ---- read-back: assert the known bytes (VOP_LOOKUP -> VOP_READ) ----
@@ -295,7 +299,7 @@ def main():
         if HELLO_CONTENT not in out:
             log("FAIL (read): HELLO.TXT did not read back the expected content")
             log("  expected substring: %r" % HELLO_CONTENT)
-            return 17
+            return PROOF_FAILED
         log("OK (read): HELLO.TXT read back the expected content through the "
             "shared vmsfs core on NetBSD/vax under SIMH")
 
@@ -318,7 +322,7 @@ def main():
         if rc != 0:
             log("FAIL (rw-mount): could not mount the ODS-2 volume READ-WRITE "
                 "(rd vms-e7a: the RW mount itself is the first gap)")
-            return 40
+            return PROOF_FAILED
         log("OK (rw-mount): ODS-2 volume mounted READ-WRITE on NetBSD/vax")
 
         # VOP_CREATE + VOP_WRITE: a new file with known content.
@@ -329,7 +333,7 @@ def main():
         if "WRITE_RC=0" not in out:
             log("FAIL (write): could not create+write /ods2/OWNERTEST.TXT -- "
                 "VOP_CREATE/VOP_WRITE did not succeed")
-            return 41
+            return PROOF_FAILED
         log("OK (write): VOP_CREATE + VOP_WRITE created OWNERTEST.TXT")
 
         # VOP_SETATTR uid/gid: THE OWNER PATH the boot's %OVMX-W-OWNER flood
@@ -340,14 +344,14 @@ def main():
         if "CHOWN_RC=0" not in out:
             log("FAIL (chown): lchown(2) on OWNERTEST.TXT FAILED -- this is "
                 "EXACTLY PROVISION's %OVMX-W-OWNER symptom (vms-e7a)")
-            return 42
+            return PROOF_FAILED
         log("OK (chown): VOP_SETATTR stamped UIC ownership on OWNERTEST.TXT")
 
         # VOP_MKDIR.
         rc, out = run(child, "mkdir /ods2/RWTEST.DIR; echo MKDIR_RC=$?", cmd_timeout)
         if "MKDIR_RC=0" not in out:
             log("FAIL (mkdir): VOP_MKDIR could not create RWTEST.DIR")
-            return 43
+            return PROOF_FAILED
         log("OK (mkdir): VOP_MKDIR created RWTEST.DIR")
 
         # Unmount, then mount FRESH: only an on-disk write survives this.
@@ -359,7 +363,7 @@ def main():
                       cmd_timeout)
         if rc != 0:
             log("FAIL (remount): could not remount the ODS-2 volume after the write test")
-            return 44
+            return PROOF_FAILED
 
         rc, out = run(child, "ls -ln /ods2", cmd_timeout)
         if "OWNERTEST.TXT" not in out or "RWTEST.DIR" not in out:
@@ -367,14 +371,14 @@ def main():
                 "did NOT survive a fresh mount -- the create/mkdir was NOT "
                 "persisted to disk (a fake/no-op write would look exactly like this)")
             log("  ls -ln /ods2 output:\n%s" % out)
-            return 45
+            return PROOF_FAILED
         if "4321" not in out or "1234" not in out:
             log("FAIL (owner persistence): OWNERTEST.TXT's UIC ownership (4321:1234) "
                 "did NOT survive a fresh mount -- VOP_SETATTR is not really "
                 "writing the on-disk header (a fake/no-op chown would look "
                 "exactly like this)")
             log("  ls -ln /ods2 output:\n%s" % out)
-            return 46
+            return PROOF_FAILED
         log("OK (persistence): OWNERTEST.TXT + RWTEST.DIR + the 4321:1234 UIC "
             "ownership all survived umount/remount -- these are REAL on-disk "
             "writes, not an in-memory echo")
@@ -383,14 +387,14 @@ def main():
         rc, out = run(child, "cat /ods2/OWNERTEST.TXT", cmd_timeout)
         if "RW-ODS2 owner+write proof vms-e7a" not in out:
             log("FAIL (read-back): OWNERTEST.TXT did not read back its written content")
-            return 47
+            return PROOF_FAILED
         log("OK (read-back): OWNERTEST.TXT read back exactly what was written")
 
         # VOP_REMOVE, then a fresh mount confirms the deletion also persisted.
         rc, out = run(child, "rm /ods2/OWNERTEST.TXT; echo RM_RC=$?", cmd_timeout)
         if "RM_RC=0" not in out:
             log("FAIL (remove): VOP_REMOVE could not delete OWNERTEST.TXT")
-            return 48
+            return PROOF_FAILED
         run(child, "cd /; umount /ods2", cmd_timeout)
         rc, out = run(child,
                       "mounted=; for p in %s; do "
@@ -399,12 +403,12 @@ def main():
                       cmd_timeout)
         if rc != 0:
             log("FAIL (remount-after-remove): could not remount after VOP_REMOVE")
-            return 49
+            return PROOF_FAILED
         rc, out = run(child, "ls /ods2", cmd_timeout)
         if "OWNERTEST.TXT" in out:
             log("FAIL (remove persistence): OWNERTEST.TXT still present after a "
                 "fresh mount -- VOP_REMOVE did not really free the directory entry")
-            return 50
+            return PROOF_FAILED
         log("OK (remove persistence): OWNERTEST.TXT is gone after a fresh mount")
 
         log("VMSFS-VAX RW: ALL WRITE-VOP CHECKS PASSED (VOP_CREATE/WRITE/SETATTR/"
@@ -419,11 +423,11 @@ def main():
         return 0
 
     except pexpect.TIMEOUT as e:
-        log("FAIL: timed out driving the NetBSD/vax console"); log("  %s" % e); return 1
+        log("FAIL: timed out driving the NetBSD/vax console"); log("  %s" % e); return HARNESS_ERROR
     except pexpect.EOF as e:
-        log("FAIL: SIMH exited unexpectedly (EOF on the console)"); log("  %s" % e); return 1
+        log("FAIL: SIMH exited unexpectedly (EOF on the console)"); log("  %s" % e); return HARNESS_ERROR
     except Exception:
-        log("FAIL: unexpected error driving the harness"); traceback.print_exc(); return 2
+        log("FAIL: unexpected error driving the harness"); traceback.print_exc(); return HARNESS_ERROR
     finally:
         try:
             if child is not None and child.isalive():

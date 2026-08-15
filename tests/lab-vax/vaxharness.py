@@ -48,6 +48,39 @@ THE THREE BUGS THIS KILLS (all observed on origin/main in tests/lab-vax/):
      byte-for-byte in `negctl_gate.sh` for bash wrappers, so a driver's raw
      exit code and a wrapper's interpretation of it can never diverge again.
 
+  3b. THE RETROFIT TAIL (rd vms-cf5, 2026-08-15): building the four facility
+      proofs (event flags, proctab, mbx, access) surfaced a SYSTEMIC variant
+      of bug #3 three more times -- each driver invented its OWN nonzero
+      failure codes (access: 60/61/70-74; proctab/mbx: their own ranges) with
+      NO distinction between "a proof assertion legitimately failed" and "the
+      harness itself broke" (a pexpect.TIMEOUT/EOF, an unhandled exception, a
+      missing prerequisite artifact) -- a genuine harness crash during a
+      negctl run could accidentally look like "teeth confirmed". `PROOF_
+      FAILED` / `HARNESS_ERROR` below are the two canonical exit codes every
+      driver now collapses onto: `Proof.exit_code()` can only ever return `0`
+      or `PROOF_FAILED`, and a driver's own except-block returns `HARNESS_
+      ERROR` directly (never through `exit_code()`). `negctl_gate()` treats
+      `HARNESS_ERROR` as an automatic "gate NOT satisfied" in BOTH modes --
+      the one behavior change to the inversion rule -- while every other
+      exit code (0, PROOF_FAILED, or any legacy nonzero a not-yet-fully-
+      migrated call site still returns) keeps the EXACT table it always had.
+      This is deliberately the minimal, additive change: it makes the "a
+      driver's crash looks like negctl teeth" failure mode structurally
+      impossible without touching (or risking regressing) any driver's
+      existing, currently-green proof-fail exit codes.
+
+  4. LONG COLLAPSED ONE-LINE GUEST COMMANDS TRUNCATE ON THE LOSSY VAX/SIMH
+     SERIAL. A guest command built with `$(...)` command substitution +
+     inline `sed` piping, several steps deep, can lose its trailing
+     `echo`/marker output to the lossy serial before it reaches the console,
+     producing a spurious `exit=2`/empty-output read on the DRIVER side (not
+     a real guest failure). The proven fix (mirrored from proctab's/mbx's
+     hardening and from tests/netbsd/drive_netbsd_p4a.py's MBX phase):
+     redirect each guest call's output to a FILE, `cat` the file back over
+     the console, and parse the returned text PYTHON-side -- never a giant
+     inline one-liner with in-guest command substitution. `run_captured()`
+     below encodes that convention ONCE so no future driver hand-rolls it.
+
 This is OVMX's own code, written against the public pexpect API; it copies no
 third-party source (CLAUDE.md Rule 8). It has NO SIMH/anita import at module
 scope -- `pexpect` is imported lazily inside `safe_expect()` so this module
@@ -61,6 +94,24 @@ import json
 import sys
 from dataclasses import dataclass, field, asdict
 from typing import Any, List, Optional, Sequence
+
+
+# --------------------------------------------------------------------------
+# Bug #3b: the canonical exit-code contract every driver's main() collapses
+# onto. `Proof.exit_code()` can only ever return `0` or `PROOF_FAILED`; a
+# driver's own except-block (a real pexpect.TIMEOUT/EOF, an unhandled
+# exception, a missing prerequisite artifact) returns `HARNESS_ERROR`
+# DIRECTLY -- never through `exit_code()`, which would misreport a harness
+# break as an ordinary proof failure. `negctl_gate()` below is the ONE place
+# that knows `HARNESS_ERROR` must never be treated as "the gate satisfied".
+#
+# The specific integer values are deliberately arbitrary (never compared by
+# magnitude, only by identity against these names) -- pick any two distinct
+# nonzero values; these two were chosen only to be unmistakable in a log or a
+# `$?` echo and to not collide with either of the two reserved shell exit
+# codes (126/127) or 128+signal.
+PROOF_FAILED = 42
+HARNESS_ERROR = 66
 
 
 # --------------------------------------------------------------------------
@@ -285,10 +336,16 @@ class Proof:
 
     def exit_code(self) -> int:
         """The RAW process exit code a driver's main() should return: 0 iff
-        every step held. This is deliberately NOT mode-aware (see
+        every step held, else the canonical `PROOF_FAILED` (rd vms-cf5's
+        retrofit -- NEVER a driver-invented ad hoc nonzero value; see the
+        module docstring's bug #3b). This is deliberately NOT mode-aware (see
         `negctl_gate()` below) -- a driver never special-cases negctl into an
-        early exit; it always reports its own honest proof-of-work result."""
-        return 0 if self.ok else 1
+        early exit; it always reports its own honest proof-of-work result.
+        A driver's main() should end with `sys.exit(proof.exit_code())` (or
+        equivalent); a genuine harness-level failure (pexpect.TIMEOUT/EOF, an
+        unhandled exception, a missing prerequisite) is NOT reported this
+        way -- that except-block returns `HARNESS_ERROR` directly."""
+        return 0 if self.ok else PROOF_FAILED
 
 
 # --------------------------------------------------------------------------
@@ -319,10 +376,22 @@ def negctl_gate(driver_exit_code: int, negctl: bool) -> bool:
         FOR REAL (nonzero exit); a negctl run that exits 0 (the proof
         somehow passed despite the facility being missing) has NO TEETH and
         MUST be reported as gate FAILURE.
+      - ONE CARVE-OUT (rd vms-cf5's retrofit, bug #3b): `HARNESS_ERROR` is
+        NEVER "the gate satisfied", in EITHER mode. A genuine harness-level
+        break (a pexpect.TIMEOUT/EOF talking to the console, an unhandled
+        driver exception, a missing prerequisite artifact) occurring during
+        a negctl run is NOT evidence the negative control had teeth -- the
+        proof never actually ran far enough to exercise the assertion the
+        negative control is supposed to defeat. Every OTHER nonzero exit
+        code (including the canonical `PROOF_FAILED`, and any legacy
+        driver-specific code a not-yet-migrated call site still returns)
+        keeps the plain table above unchanged.
 
     See `negctl_gate.sh` in this directory for the byte-for-byte bash
     mirror of this same table, for use directly in a run-*.sh wrapper.
     """
+    if driver_exit_code == HARNESS_ERROR:
+        return False
     if negctl:
         return driver_exit_code != 0
     return driver_exit_code == 0
@@ -335,3 +404,53 @@ def negctl_wrapper_exit_code(driver_exit_code: int, negctl: bool) -> int:
     `0 if negctl_gate(...) else 1`, provided so a wrapper never has to
     re-derive that inversion either."""
     return 0 if negctl_gate(driver_exit_code, negctl) else 1
+
+
+# --------------------------------------------------------------------------
+# Bug #4: the shared guest-session run helper. Encodes the redirect-to-file +
+# Python-side-parse + always-dump-a-transcript convention ONCE, so no future
+# driver hand-rolls a giant console one-liner the way proctab's/mbx's own
+# hardening comments describe having to fix by hand.
+# --------------------------------------------------------------------------
+def run_captured(run_fn, cmd, outfile, timeout, cleanup=True):
+    """Run one guest command with its output redirected to `outfile`, then
+    `cat` the file back over the console and return `(rc, captured_text)` --
+    exactly like `run_fn` itself returns, never raising on the GUEST
+    command's own nonzero exit status.
+
+    THE BUG THIS KILLS (module docstring bug #4): a long collapsed one-line
+    guest command built with `$(...)` command substitution + inline `sed`,
+    several steps deep, can lose its trailing marker output to the lossy
+    VAX/SIMH serial console before it arrives, producing a spurious
+    `exit=2`/empty-output read on the DRIVER side -- not a real guest
+    failure. The fix, proven by drive_proctab_vax.py's and drive_mbx_vax.py's
+    hand-hardened transcript code (mirrored from
+    tests/netbsd/drive_netbsd_p4a.py's MBX phase): redirect the command's
+    output to a FILE on the guest, `cat` that file back as a SEPARATE,
+    trivial console read, and parse the returned text PYTHON-side -- never a
+    big inline one-liner with in-guest command substitution feeding a
+    trailing echo. This function is that shape, factored out ONCE.
+
+    `run_fn` is the caller's own low-level runner -- typically
+    `console(child).run` (`netbsd_console.NetBSDConsole.run`) or an
+    equivalent `lambda cmd, timeout: (rc, out)` callable. This module has NO
+    pexpect/anita import at module scope (see the module docstring), so it
+    never talks to a console directly; it only builds the redirect/cleanup
+    SHAPE around the caller's own command text and passes it through
+    `run_fn` unchanged otherwise -- `run_fn`'s own timeout/retry/marker
+    semantics (e.g. NetBSDConsole.run()'s lossy-serial marker recovery)
+    apply exactly as they would to any other command.
+
+    `cleanup=True` (the default) prefixes `rm -f <outfile>` so a stale file
+    from a previous run can never be misread as this run's output. Pass
+    `cleanup=False` to instead APPEND (`>>`) to a transcript file multiple
+    calls share, mirroring proctab's/mbx's own shared-transcript (`TX`)
+    convention -- the caller is then responsible for clearing it once,
+    up-front, itself.
+    """
+    if cleanup:
+        script = "rm -f %s; { %s ; } >%s 2>&1; cat %s" % (
+            outfile, cmd, outfile, outfile)
+    else:
+        script = "{ %s ; } >>%s 2>&1; cat %s" % (cmd, outfile, outfile)
+    return run_fn(script, timeout)

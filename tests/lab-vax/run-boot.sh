@@ -342,6 +342,18 @@ ensure_modular_kernel
 make_boot_copy
 ensure_boot_install
 
+# THE NEGCTL CONTRACT, BOOT'S OWN SHAPE (rd vms-cf5): unlike the facility
+# drivers (access/eflag/proctab/mbx/devvms/vmsfs), drive_boot_vax.py's main()
+# already computes the FINAL pass/fail verdict for EVERY mode itself --
+# including negctl/sysboot-negctl, where "the negative control had teeth" IS
+# the 0 exit (see drive_boot_vax.py's own mode dispatch). This wrapper is
+# therefore deliberately NOT routed through negctl_gate.sh: there is no
+# inversion to apply here (0 always means "this mode's gate is satisfied",
+# nonzero always means it is not), so sourcing vaxharness_negctl_gate() would
+# be a no-op at best and a real inversion bug at worst. drive_boot_vax.py's
+# raw exit code is still exactly one of {0, PROOF_FAILED, HARNESS_ERROR}
+# (rd vms-cf5's canonical exit-code contract) -- only the WRAPPER-side
+# inversion step differs from its sibling drivers, by design.
 case "${MODE}" in
   prove)
     if run_session prove /cache/boot-work; then

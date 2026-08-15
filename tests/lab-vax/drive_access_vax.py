@@ -122,7 +122,7 @@ import netbsd_console
 
 # vaxharness.py (rd vms-cf5) lives in THIS directory (tests/lab-vax), staged
 # alongside this script by run-access.sh -- no sys.path insert needed.
-from vaxharness import Proof, safe_expect
+from vaxharness import HARNESS_ERROR, Proof, safe_expect
 
 
 def log(msg):
@@ -271,7 +271,7 @@ def main():
 
     if not os.path.isfile(iso_path):
         log("FAIL: install ISO not found at %s (run lab-vax install first)" % iso_path)
-        return 3
+        return HARNESS_ERROR
 
     a = anita.Anita(
         dist=anita.ISO(iso_path, sets=sets),
@@ -339,13 +339,13 @@ def main():
                 log("FAIL: could not install the MODULAR kernel onto /netbsd")
                 proof.record("install-kernel", False, detail="cp/mv failed")
                 proof.emit_result_line()
-                return 30
+                return proof.exit_code()
             run(child, "sync; mount -u -r / 2>/dev/null; sync", cmd_timeout)
             log("OK: installed MODULAR kernel as /netbsd (GENERIC kept as "
                 "/netbsd.GENERIC), flushed to disk; the next boot runs it")
             proof.record("install-kernel", True)
             proof.emit_result_line()
-            return 0
+            return proof.exit_code()
 
         # ---- stage the artifacts from the OVMX CD --------------------------
         run(child, "dmesg | grep -iE 'cd[0-9]|mscp|uba' | tail -20; "
@@ -375,7 +375,7 @@ def main():
             log("FAIL: could not find/mount the OVMX artifact CD in the guest "
                 "(see the CD-device diagnostics above)")
             proof.emit_result_line()
-            return 10
+            return proof.exit_code()
         log("OK: staged vms.kmod + vmsaccess from the OVMX CD")
 
         AC = "/root/ovmx/vmsaccess"
@@ -392,7 +392,7 @@ def main():
             log("FAIL (INV-6): tool returned SUCCESS with no /dev/vms present "
                 "-- the faked-success bug INV-6 forbids")
             proof.emit_result_line()
-            return 20
+            return proof.exit_code()
         if not inv6_honest:
             proof.record("inv6-module-absent", False,
                           detail="failed, but not via the honest "
@@ -400,7 +400,7 @@ def main():
             log("FAIL (INV-6): tool failed, but not via the honest "
                 "device-unreachable path (unexpected reason)")
             proof.emit_result_line()
-            return 21
+            return proof.exit_code()
         proof.record("inv6-module-absent", True,
                       detail="SS$_NOSUCHDEV, NOT faking success")
         log("OK (INV-6): with no module loaded the tool FAILED HONESTLY "
@@ -440,7 +440,7 @@ def main():
                     "NetBSD/vax (this is the modules(9)-on-vax risk P4-B "
                     "documents; console output above)")
                 proof.emit_result_line()
-                return 14
+                return proof.exit_code()
             proof.record("modload", True)
             log("OK: module loaded and /dev/vms created on NetBSD/vax")
 
@@ -492,7 +492,7 @@ def main():
             log("FAIL: access-mode proof failed on NetBSD/vax (phase token: %s)"
                 % tok)
             proof.emit_result_line()
-            return 60 if (tok and "selftest" in tok) else 61
+            return proof.exit_code()
         proof.record("access-cross-process", True)
         log("OK: SETMODE/GETMODE/ENTER_IMAGE/DCLAST/DELIVERAST/IMAGE_RUNDOWN "
             "round-trip through the real /dev/vms on NetBSD/vax -- access-mode "
@@ -538,7 +538,7 @@ def main():
             log("FAIL: process A never armed its write-attention AST "
                 "(bounded poll expired)")
             proof.emit_result_line()
-            return 70
+            return proof.exit_code()
         if "AST WRTATTN FIRED" in out:
             proof.record("ast-armed", False,
                           detail="AST fired before ANY process wrote to the "
@@ -546,7 +546,7 @@ def main():
             log("FAIL: the AST fired before ANY process wrote to the "
                 "mailbox -- the wait has no teeth (it did not actually block)")
             proof.emit_result_line()
-            return 71
+            return proof.exit_code()
         proof.record("ast-armed", True, detail="devnam=%s" % ast_devnam)
         log("OK: process A armed a write-attention AST on mailbox %s and "
             "blocked in $HIBER (no premature FIRED)" % ast_devnam)
@@ -562,7 +562,7 @@ def main():
                               detail="process B's write to A's mailbox failed")
                 log("FAIL: process B's write to A's mailbox failed")
                 proof.emit_result_line()
-                return 72
+                return proof.exit_code()
             proof.record("ast-write", True)
             log("OK: process B (a DIFFERENT process) wrote to A's mailbox")
 
@@ -588,7 +588,7 @@ def main():
                     "no process ever wrote to its mailbox -- this would be a "
                     "per-process fake, exactly what INV-6 forbids")
                 proof.emit_result_line()
-                return 74
+                return proof.exit_code()
             proof.record("ast-crossprocess", False,
                           detail="AST_SKIP_WRITE: correctly did NOT fire "
                                  "(bounded poll expired) -- teeth confirmed")
@@ -597,7 +597,7 @@ def main():
                 "$HIBER never woke -- run-access.sh's negctl-astwrite mode "
                 "inverts this same nonzero exit into PASS")
             proof.emit_result_line()
-            return 73
+            return proof.exit_code()
         if not fired:
             proof.record("ast-crossprocess", False,
                           detail="A's $HIBER never woke / DELIVERAST did not "
@@ -605,7 +605,7 @@ def main():
             log("FAIL: process A's $HIBER never woke / DELIVERAST did not "
                 "return the write-attention AST B's write should have fired")
             proof.emit_result_line()
-            return 73
+            return proof.exit_code()
         proof.record("ast-crossprocess", True, detail="devnam=%s" % ast_devnam)
         log("OK: process B's mailbox write WOKE process A's $HIBER and "
             "delivered the EXACT armed AST (astprm/acmode match) -- the AST "
@@ -629,26 +629,26 @@ def main():
             "cross-process AST delivery, both compiled from "
             "src/kernel-core/ with the NetBSD backend, hold on real "
             "NetBSD/vax under SIMH (INV-6)")
-        return 0
+        return proof.exit_code()
 
     except pexpect.TIMEOUT as e:
         log("FAIL: timed out driving the NetBSD/vax console")
         log("  %s" % e)
         proof.record("unhandled", False, detail="pexpect.TIMEOUT: %s" % e)
         proof.emit_result_line()
-        return 1
+        return HARNESS_ERROR
     except pexpect.EOF as e:
         log("FAIL: SIMH exited unexpectedly (EOF on the console)")
         log("  %s" % e)
         proof.record("unhandled", False, detail="pexpect.EOF: %s" % e)
         proof.emit_result_line()
-        return 1
+        return HARNESS_ERROR
     except Exception:
         log("FAIL: unexpected error driving the harness")
         traceback.print_exc()
         proof.record("unhandled", False, detail="unexpected exception")
         proof.emit_result_line()
-        return 2
+        return HARNESS_ERROR
     finally:
         try:
             if child is not None and child.isalive():

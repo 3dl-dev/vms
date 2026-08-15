@@ -512,6 +512,7 @@ sysuaf-uic-writeback-decimal
 bg-recv-length-zeroed
 tcpip-ftp-get-length-dropped
 bgsock-recv-length-zeroed
+bgsock-poll-always-ready
 vmsfs-mountvis-crossproc-resolve-disabled
 initialize-home-magic-not-written"
 
@@ -5412,6 +5413,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    bgsock-poll-always-ready)
+        case "$_f" in
+        facility)     echo "BSD-sockets RTL veneer over BGn: -- the executive readiness POLL FD (vms_bg.c, VMS_IOCTL_BG_POLLFD, vms-22a). vms.ko hands userspace a real, readiness-ONLY Linux pollable fd whose .poll delegates to the executive socket's own poll, so an event loop (OpenSSH's clientloop/serverloop) can poll()/select() on the BGn: connection while data still moves only through IO\$_READVBLK / IO\$_WRITEVBLK. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive.";;
+        targets)      echo "kernel/vms_bg.c";;
+        suites_red)   echo "test_syssvc_bgsock_poll";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_bg_pollfd_poll() delegates to the host socket's own poll so the fd reports readable ONLY when the socket really is. The mutation returns EPOLLIN|EPOLLOUT unconditionally (ignoring the socket state), so poll() reports the fd readable BEFORE any data has arrived -- reddening exactly the 'NOT readable before any data' assertion, while the readable-after-send poll and the byte-exact read stay green (data still flows). One return replaced.";;
+        require_fail) cat <<'EOF'
+poll() reports NOT readable before any data arrives (readiness reflects the socket)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     # -------------------------------------------------------------------
     # vms-6c6: two suites #284/#272 (vms-8b6, vms-cf62) left with NO
     # per-facility negative control -- the same coverage-gate hole
@@ -6296,6 +6314,14 @@ apply_edit() {
         # 'n = iosb$w_bcnt;' with that comment is left, so a second apply is the
         # no-op the selftest requires.
         sed -i 's|n = got;                            /\* NEGCTL bgsock-recv-length-zeroed \*/|n = 0; /* NEGCTL bgsock-recv-length-zeroed */|' "$_file";;
+
+    bgsock-poll-always-ready)
+        # Make the readiness fd's .poll report readable unconditionally, anchored
+        # on its own NEGCTL comment: the sock->ops->poll delegation ->
+        # (EPOLLIN|EPOLLOUT). poll() then reports readable before any data, so the
+        # "not readable before data" assertion reddens. After substitution the
+        # delegating call with that comment is gone, so a second apply is a no-op.
+        sed -i 's@return sock->ops->poll(file, sock, wait);  /\* NEGCTL bgsock-poll-always-ready \*/@return (EPOLLIN | EPOLLOUT); /* NEGCTL bgsock-poll-always-ready */@' "$_file";;
 
     vmsfs-mountvis-crossproc-resolve-disabled)
         # UNIQUE TEXT: vmsfs_device_resolve_executive's own /proc/mounts guard;

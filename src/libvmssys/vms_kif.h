@@ -720,5 +720,9 @@ uint32_t vms_kif_bg_recv(uint32_t exec_chan, void *buf, uint32_t bufsz,
 uint32_t vms_kif_bg_deaccess(uint32_t exec_chan);
 /* $DASSGN -- release the channel and its host socket. */
 uint32_t vms_kif_bg_dassgn(uint32_t exec_chan);
+/* Readiness poll fd -- hand back a real Linux readiness-only pollable fd for the
+ * channel's socket (poll()/select()-able; data still moves via send/recv). The
+ * fd is installed in the caller's fd table; *out_fd gets it on success. */
+uint32_t vms_kif_bg_pollfd(uint32_t exec_chan, int *out_fd);
 
 #endif /* _VMS_KIF_H */

@@ -113,6 +113,37 @@ reddens.
   image using standard `socket()/connect()` (`vms-22a`); telnet/ftp can move off
   the raw `tcpip_client.h` `$QIO` onto the veneer.
 
+## 7. Pollable-fd increment (vms-22a) — select()-able sockets
+
+OpenSSH's event loop (`clientloop`/`serverloop`) does `poll()`/`select()` on the
+connection fd. The veneer's kif-direct handles are not Linux fds, so the executive
+now exposes a **real readiness fd** per BG channel:
+
+- **`vms_bg.c` (`VMS_IOCTL_BG_POLLFD`)** hands userspace an **anon-inode fd** whose
+  `.poll` **delegates to the executive socket's own `->poll`** — registering the
+  socket's wait queue, so `poll()`/`select()` blocks and wakes on the socket's
+  *true* readiness and returns its real `EPOLLIN`/`EPOLLOUT` mask. The fd is
+  **readiness-only**: no read/write file-ops, so data still moves solely through
+  `IO$_READVBLK`/`IO$_WRITEVBLK` and the socket stays executive-resident. The host
+  socket is held by a small **refcounted holder** (`struct vms_bg_socket`, kref),
+  referenced by both the channel and the poll fd, so it outlives a poll fd still
+  open at `$DASSGN`. New kif entry `vms_kif_bg_pollfd` (manifest
+  `libvmssys_shr.vec`, append-only); veneer entry `ovmx_pollfd(s)` returns the fd.
+- Because `.poll` reflects the real socket state, `poll()` composes transparently
+  with OpenSSH's multi-fd event loop — **no OpenSSH poll shim needed**.
+
+**Proof (Rule 9, GREEN):** `tests/qemu/test_syssvc_bgsock_poll.c` — obtain the
+readiness fd, confirm `poll()` reports **not readable before any data** (times
+out), `ovmx_send()`, then `poll()` **blocks until the loopback peer's echo makes
+the fd readable**, and `ovmx_recv()` reads it byte-exact; honest-skip 77 without
+`/dev/vms`. Negctl `bgsock-poll-always-ready` (`facility_defects.sh`, floor
+103→104) makes `.poll` report readable unconditionally so `poll()` fires before
+data.
+
+With this, the veneer surfaces standard `socket()/connect()/send()/recv()` **and**
+a `poll()`-able fd — the full plumbing OpenSSH needs. Next: link the vendored
+`ssh` against the veneer (`#563`).
+
 ## 6. Clean-room (Rule 8)
 
 The BSD sockets API is POSIX. The VMS-facing surface the veneer speaks

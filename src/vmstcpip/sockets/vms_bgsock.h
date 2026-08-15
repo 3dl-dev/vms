@@ -98,6 +98,14 @@ int ovmx_accept(int s, struct sockaddr *addr, socklen_t *addrlen);
 int ovmx_shutdown(int s, int how);
 int ovmx_socket_close(int s);
 
+/* Return a REAL Linux readiness-only pollable fd for the connection, so an event
+ * loop can poll()/select() on it to wait for readability/writability (this is
+ * what lets OpenSSH's clientloop/serverloop poll the connection fd). The fd
+ * exposes only readiness -- data still moves through ovmx_send()/ovmx_recv(); do
+ * NOT read()/write() it. The caller close()s the returned fd when done. Returns
+ * the fd (>= 0), or -1 with errno (ENODEV = no /dev/vms). */
+int ovmx_pollfd(int s);
+
 /* Numeric IPv4 helpers (no DNS yet). ovmx_inet_pton: "a.b.c.d" -> network-order
  * in_addr; returns 1 on success, 0 on a non-literal, -1 on bad af.
  * ovmx_getaddrinfo_numeric: fill *out (AF_INET) from a dotted-quad host + port;

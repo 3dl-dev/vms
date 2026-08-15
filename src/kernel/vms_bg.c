@@ -53,6 +53,11 @@
 #include <linux/in.h>
 #include <linux/socket.h>
 #include <linux/errno.h>
+#include <linux/kref.h>
+#include <linux/fs.h>
+#include <linux/file.h>
+#include <linux/poll.h>
+#include <linux/anon_inodes.h>
 #include <net/sock.h>
 
 #include "vms_internal.h"   /* struct vms_proc / SS__* / VMS_DEVNAM_SIZE and,
@@ -62,11 +67,62 @@
  * IO$_SETMODE creates it) -- the executive-resident object this facility is
  * about, keyed to the channel, exactly as a mailbox channel points at the
  * executive-resident mailbox. */
+/* A refcounted holder for the host socket. The channel holds one reference; a
+ * readiness poll fd (VMS_IOCTL_BG_POLLFD) holds another, so the socket outlives
+ * a poll fd that is still open when the channel is $DASSGN'd. The last reference
+ * to drop releases the host socket. */
+struct vms_bg_socket {
+    struct socket *sock;        /* host-kernel socket */
+    struct kref    kref;
+};
+
+static void vms_bg_socket_free(struct kref *kref)
+{
+    struct vms_bg_socket *bs = container_of(kref, struct vms_bg_socket, kref);
+    if (bs->sock)
+        sock_release(bs->sock);
+    kfree(bs);
+}
+
 struct vms_bg_chan {
     struct list_head list;      /* in proc->bg_channels */
     uint32_t chan;              /* this process's channel number */
     uint32_t unit;              /* BGn: unit number */
-    struct socket *sock;        /* host-kernel socket, NULL until SETMODE */
+    struct vms_bg_socket *bs;   /* refcounted host socket, NULL until SETMODE */
+};
+
+/* ---- readiness-only poll fd (VMS_IOCTL_BG_POLLFD) --------------------------
+ * A real Linux fd whose .poll delegates to the executive socket's own poll, and
+ * which has NO read/write ops -- so a userspace event loop can wait on the BGn:
+ * connection's readability/writability while data still moves only through
+ * IO$_READVBLK / IO$_WRITEVBLK. Its private_data is a held vms_bg_socket. */
+static __poll_t vms_bg_pollfd_poll(struct file *file, struct poll_table_struct *wait)
+{
+    struct vms_bg_socket *bs = file->private_data;
+    struct socket *sock = bs ? bs->sock : NULL;
+
+    if (!sock || !sock->ops || !sock->ops->poll)
+        return EPOLLERR;
+    /* Delegate to the host socket's poll: this registers the socket's wait
+     * queue with `wait`, so poll()/select() blocks and wakes on real socket
+     * readiness, and returns the socket's current mask (EPOLLIN/EPOLLOUT/...). */
+    return sock->ops->poll(file, sock, wait);  /* NEGCTL bgsock-poll-always-ready */
+}
+
+static int vms_bg_pollfd_release(struct inode *inode, struct file *file)
+{
+    struct vms_bg_socket *bs = file->private_data;
+    (void)inode;
+    if (bs)
+        kref_put(&bs->kref, vms_bg_socket_free);
+    return 0;
+}
+
+static const struct file_operations vms_bg_pollfd_fops = {
+    .owner   = THIS_MODULE,
+    .poll    = vms_bg_pollfd_poll,
+    .release = vms_bg_pollfd_release,
+    .llseek  = noop_llseek,
 };
 
 /* BGn: unit numbers are node-wide and monotonic, like the mailbox's
@@ -98,7 +154,7 @@ static struct vms_bg_chan *bgchan_lookup(struct vms_proc *proc, uint32_t chan,
 
     spin_lock(&proc->chan_lock);
     ch = bgchan_find_locked(proc, chan);
-    *sock = ch ? ch->sock : NULL;
+    *sock = (ch && ch->bs) ? ch->bs->sock : NULL;
     spin_unlock(&proc->chan_lock);
     return ch;
 }
@@ -123,7 +179,7 @@ long vms_ioctl_bg_create(struct vms_proc *proc, unsigned long arg)
         return -ENOMEM;
 
     ch->unit = (uint32_t)atomic_inc_return(&vms_bg_next_unit);
-    ch->sock = NULL;
+    ch->bs = NULL;
 
     spin_lock(&proc->chan_lock);
     ch->chan = ++proc->next_chan;
@@ -173,15 +229,28 @@ long vms_ioctl_bg_setmode(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    spin_lock(&proc->chan_lock);
-    if (!ch->sock) {
-        ch->sock = sock;
-        sock = NULL;
-    }
-    spin_unlock(&proc->chan_lock);
+    {
+        struct vms_bg_socket *bs = kmalloc(sizeof(*bs), GFP_KERNEL);
+        if (!bs) {
+            sock_release(sock);
+            args.status = SS__ABORT;
+            goto out;
+        }
+        bs->sock = sock;
+        kref_init(&bs->kref);       /* the channel's reference */
 
-    if (sock)               /* someone raced us in; release the spare */
-        sock_release(sock);
+        spin_lock(&proc->chan_lock);
+        if (!ch->bs) {
+            ch->bs = bs;
+            bs = NULL;
+        }
+        spin_unlock(&proc->chan_lock);
+
+        if (bs) {                   /* someone raced us in; drop the spare */
+            sock_release(bs->sock);
+            kfree(bs);
+        }
+    }
     args.status = SS__NORMAL;
 
 out:
@@ -392,9 +461,72 @@ long vms_ioctl_bg_dassgn(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    if (ch->sock)
-        sock_release(ch->sock);
+    if (ch->bs)
+        kref_put(&ch->bs->kref, vms_bg_socket_free);
     kfree(ch);
+    args.status = SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * VMS_IOCTL_BG_POLLFD -- hand back a real Linux readiness-only pollable fd for
+ * the channel's socket (see the fops above and vms_bg.h). The fd's .poll
+ * delegates to the executive socket's own poll, so a userspace event loop can
+ * wait for the connection to become readable/writable while data still moves
+ * only through IO$_READVBLK / IO$_WRITEVBLK. Item vms-22a (OpenSSH's poll()).
+ */
+long vms_ioctl_bg_pollfd(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_bg_pollfd_args args;
+    struct vms_bg_chan *ch;
+    struct vms_bg_socket *bs = NULL;
+    struct file *file;
+    int fd;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (const void __user *)arg, sizeof(args)))
+        return -EFAULT;
+    args.fd = -1;
+
+    /* Take a reference to the channel's socket holder under the lock so it
+     * cannot be released out from under the poll fd. */
+    spin_lock(&proc->chan_lock);
+    ch = bgchan_find_locked(proc, args.chan);
+    if (ch && ch->bs) {
+        bs = ch->bs;
+        kref_get(&bs->kref);
+    }
+    spin_unlock(&proc->chan_lock);
+
+    if (!ch) {
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+    if (!bs) {
+        args.status = SS__IVCHAN;   /* no socket: IO$_SETMODE was never issued */
+        goto out;
+    }
+
+    fd = get_unused_fd_flags(O_CLOEXEC);
+    if (fd < 0) {
+        kref_put(&bs->kref, vms_bg_socket_free);
+        args.status = SS__ABORT;
+        goto out;
+    }
+    file = anon_inode_getfile("[bgpoll]", &vms_bg_pollfd_fops, bs,
+                              O_RDONLY | O_CLOEXEC);
+    if (IS_ERR(file)) {
+        put_unused_fd(fd);
+        kref_put(&bs->kref, vms_bg_socket_free);
+        args.status = SS__ABORT;
+        goto out;
+    }
+    fd_install(fd, file);           /* the file now owns the bs reference */
+    args.fd = fd;
     args.status = SS__NORMAL;
 
 out:
@@ -421,8 +553,8 @@ void vms_bg_release_all(struct vms_proc *proc)
 
     list_for_each_entry_safe(ch, tmp, &doomed, list) {
         list_del(&ch->list);
-        if (ch->sock)
-            sock_release(ch->sock);
+        if (ch->bs)
+            kref_put(&ch->bs->kref, vms_bg_socket_free);
         kfree(ch);
     }
 }

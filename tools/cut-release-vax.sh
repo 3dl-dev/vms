@@ -8,18 +8,34 @@
 # VAX build red a PR via fast per-PR cross-compile gates in ci.yml
 # (netbsd-vax-vms-crosscompile, netbsd-vax-vmsfs-crosscompile, vmsdcl-netbsd-
 # vax, ovmx-init-netbsd-vax/ovmx-boot-images-netbsd-vax, librarian-netbsd-
-# vax). This script is R2: it reuses that SAME build recipe -- the exact
-# tools/cross-vax/build-*.sh scripts those CI jobs already call, over the
-# same pinned ovmx-cross-vax toolchain image and NetBSD syssrc -- to produce
-# a real VAX artifact set and drop it into a release bundle. It does not
-# reinvent the cross-compile; it drives it, the same way tools/cut-release.sh
-# drives distro/Dockerfile.bootable rather than reinventing the x86_64 build.
+# vax). This script is R2: it reuses that SAME cross toolchain image and
+# pinned NetBSD syssrc to produce a real VAX artifact set and drop it into a
+# release bundle. It does not reinvent the cross-compile; it drives it, the
+# same way tools/cut-release.sh drives distro/Dockerfile.bootable rather than
+# reinventing the x86_64 build.
+#
+# vms-88c (epic vms-509 "unified cross-platform build" Rung F) changed HOW
+# the userspace image set is produced and closed a real accountability gap:
+# before this rung, this script called four PARTIAL per-image
+# tools/cross-vax/build-*.sh scripts and shipped exactly 9 hand-named
+# artifacts, while x86_64's Dockerfile.bootable build shipped the FULL
+# `ovmx-images` CMake aggregate (~16-18 images, docs/design-unified-cross-
+# build.md §3-B). Stage 3 below now builds and installs that SAME aggregate
+# under the vax toolchain and SHIPS EVERY IMAGE IT NAMES -- the userspace
+# image set here is DERIVED from CMake's own
+# install_manifest_ovmx-images.txt, not a hand-maintained list, so a new
+# add_executable() joining CMakeLists.txt's `_OVMX_IMAGES_DEPS` auto-appears
+# in the next vax release with zero changes to this script. See
+# tools/cross-vax/build-ovmx-images-vax-cmake.sh (vms-64a Rung B) for the
+# proof that `cmake --build --target ovmx-images` produces a real,
+# Decision-A-compliant elf32-vax executable for every one of those images;
+# this script reuses that same configure/build recipe and adds
+# `cmake --install --component ovmx-images` on top.
 #
 # SCOPE (R2, explicitly NOT R3/R4). BUILD + artifact production only -- no
 # SIMH boot, no custom MODULAR NetBSD/vax kernel build (that ~40-min kernel +
 # boot proof is runtime parity, R3 vms-065, gated on the boot-to-DCL capstone
-# vms-d59, still in flight). This script produces exactly what the FAST
-# per-PR VAX gates already prove, for elf32-vax:
+# vms-d59, still in flight). This script produces:
 #
 #   vms.kmod.o        the OVMX executive module -- a RELOCATABLE object
 #                      (build-vms-module-vax.sh). NOT yet a loadable .kmod:
@@ -37,11 +53,24 @@
 #                      netbsd-vax-vmsfs-crosscompile gate proves it
 #                      (build-vmsfs-mount-vax.sh). Its static mount helper
 #                      (vmsfs_mount) ships alongside it.
-#   STARTUP.EXE, PROVISION.EXE, DCL.EXE, JOB_CONTROL.EXE, LOGINOUT.EXE
-#                      the full boot image set, ordinary dynamic NetBSD
-#                      ELF32-vax executables activated by ld.elf_so
-#                      (build-boot-images-vax.sh, Decision A / vms-42d).
-#   LIBRARIAN.EXE      the object-library archiver (build-librarian-vax.sh).
+#   [every image in the ovmx-images aggregate] the full shipped userspace
+#                      image set (STARTUP.EXE, PROVISION.EXE, JOB_CONTROL.EXE,
+#                      DCL.EXE, LOGINOUT.EXE, OVMXDUMP, LIBRARIAN.EXE,
+#                      INSTALL.EXE, PRODUCT.EXE, HELP.EXE, AUTHORIZE.EXE,
+#                      MAIL.EXE, MONITOR.EXE, INITIALIZE.EXE, SYSGEN.EXE,
+#                      PARTS.EXE as of this writing, plus SCSD.EXE once
+#                      vms-838 lands and LINK.EXE if a future rung gives it a
+#                      vax role -- CMakeLists.txt's `_OVMX_IMAGES_DEPS` is
+#                      authoritative, not this comment), ordinary dynamic
+#                      NetBSD ELF32-vax executables activated by ld.elf_so
+#                      (Decision A / vms-42d).
+#
+# This script ALSO writes $OUT_DIR/vax-artifact-manifest.txt: the flat,
+# newline-separated list of every artifact basename it actually shipped, in
+# the order it shipped them (modules first, then the CMake install manifest's
+# own order). tools/cut-release.sh reads THAT file to build its
+# VAX_ARTIFACT_ORDER array -- the shipped set is generated fresh on every
+# cut, never hand-duplicated, so there is nothing left to drift.
 #
 # GATE SEMANTICS (the co-release invariant, made mechanical). This script
 # runs under `set -e` and exits nonzero on ANY stage failure.
@@ -53,7 +82,7 @@
 # `make release`, and a conductor cutting by hand) inherits the VAX gate for
 # free, with no separate wiring to keep in sync.
 #
-# OVMX_VAX_RELEASE_NEGCTL=1 deliberately fails one stage (LIBRARIAN.EXE) --
+# OVMX_VAX_RELEASE_NEGCTL=1 deliberately fails the userspace-image stage --
 # a controlled proof that the GATING plumbing here propagates a VAX build
 # failure into a nonzero exit, distinct from (and a complement to) R1's own
 # per-script "broken TU" teeth checks, which prove the COMPILER rejects bad
@@ -92,7 +121,7 @@ TOOLCHAIN_IMAGE="ovmx-cross-vax:release"
 NO_CACHE=0
 
 usage() {
-    sed -n '2,63p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,113p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -122,7 +151,7 @@ fail() { echo "cut-release-vax: FATAL: $*" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || fail "docker not found"
 
 NEGCTL="${OVMX_VAX_RELEASE_NEGCTL:-0}"
-[ "$NEGCTL" = "1" ] && log "OVMX_VAX_RELEASE_NEGCTL=1 -- WILL deliberately fail the LIBRARIAN.EXE stage (gate-wiring proof, never set this in a real cut)"
+[ "$NEGCTL" = "1" ] && log "OVMX_VAX_RELEASE_NEGCTL=1 -- WILL deliberately fail the userspace-image stage (gate-wiring proof, never set this in a real cut)"
 
 mkdir -p "$OUT_DIR"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/ovmx-cut-release-vax.XXXXXX")"
@@ -173,12 +202,12 @@ else
     log "NetBSD syssrc cache hit: $NBSRC_CACHE"
 fi
 
-# --- Stage 1/4: the OVMX executive module (vms.kmod.o, relocatable) --------
+# --- Stage 1/3: the OVMX executive module (vms.kmod.o, relocatable) --------
 # build-vms-module-vax.sh does `rm -rf "$OUT"; mkdir -p "$OUT"` -- OUT is set
 # to a SUBDIRECTORY of the bind mount (/out/build), not the mount point
 # itself, because `rm -rf` on the mount point of a bind mount fails with
 # "Device or resource busy" (Docker cannot unlink the mountpoint inode).
-log "=== stage 1/4: OVMX executive module (vms.kmod.o) ==="
+log "=== stage 1/3: OVMX executive module (vms.kmod.o) ==="
 STAGE1="$WORK/vms-module"; mkdir -p "$STAGE1"
 docker run --rm \
     -v "$SRC_DIR:/src" -w /src \
@@ -189,8 +218,8 @@ docker run --rm \
 cp "$STAGE1/build/vms.kmod.o" "$OUT_DIR/vms.kmod.o"
 log "-> $OUT_DIR/vms.kmod.o"
 
-# --- Stage 2/4: the loadable ODS-2 VFS module (vmsfs.kmod) + mount helper --
-log "=== stage 2/4: loadable ODS-2 VFS module (vmsfs.kmod) ==="
+# --- Stage 2/3: the loadable ODS-2 VFS module (vmsfs.kmod) + mount helper --
+log "=== stage 2/3: loadable ODS-2 VFS module (vmsfs.kmod) ==="
 STAGE2="$WORK/vmsfs-mount"; mkdir -p "$STAGE2"
 docker run --rm \
     -v "$SRC_DIR:/src" -w /src \
@@ -203,42 +232,78 @@ cp "$STAGE2/vmsfs.kmod" "$OUT_DIR/vmsfs.kmod"
 cp "$STAGE2/vmsfs_mount" "$OUT_DIR/vmsfs_mount"
 log "-> $OUT_DIR/vmsfs.kmod, $OUT_DIR/vmsfs_mount"
 
-# --- Stage 3/4: the full boot image set -------------------------------------
-log "=== stage 3/4: boot image set (STARTUP/PROVISION/DCL/JOB_CONTROL/LOGINOUT) ==="
-STAGE3="$WORK/boot-images"; mkdir -p "$STAGE3"
-docker run --rm \
-    -v "$SRC_DIR:/src" -w /src \
-    -v "$STAGE3:/out" -e OUT_ROOT=/out \
-    "$TOOLCHAIN_IMAGE" tools/cross-vax/build-boot-images-vax.sh
-declare -A BOOT_IMAGE_SUBDIR=(
-    [STARTUP.EXE]=ovmx-init
-    [PROVISION.EXE]=provision
-    [DCL.EXE]=vmsdcl
-    [JOB_CONTROL.EXE]=job-control
-    [LOGINOUT.EXE]=loginout
-)
-for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE; do
-    src="$STAGE3/${BOOT_IMAGE_SUBDIR[$img]}/$img"
-    [ -f "$src" ] || fail "$img missing after cross-compile ($src)"
-    cp "$src" "$OUT_DIR/$img"
-    log "-> $OUT_DIR/$img"
-done
-
-# --- Stage 4/4: LIBRARIAN.EXE (also the OVMX_VAX_RELEASE_NEGCTL target) ----
-log "=== stage 4/4: LIBRARIAN.EXE ==="
+# --- Stage 3/3: the full userspace image set (ovmx-images aggregate) -------
+# (rd vms-88c, epic vms-509 Rung F). Also the OVMX_VAX_RELEASE_NEGCTL target
+# -- fail loudly BEFORE spending the build time, same pattern the old stage
+# 4/LIBRARIAN.EXE negctl used.
+log "=== stage 3/3: userspace images (ovmx-images CMake aggregate) ==="
 if [ "$NEGCTL" = "1" ]; then
-    fail "OVMX_VAX_RELEASE_NEGCTL: deliberately failing the LIBRARIAN.EXE stage to prove the release-cut gate has teeth against a failed VAX build"
+    fail "OVMX_VAX_RELEASE_NEGCTL: deliberately failing the userspace-image stage to prove the release-cut gate has teeth against a failed VAX build"
 fi
-# Same bind-mount-root `rm -rf "$OUT"` constraint as stage 1 -- OUT is a
-# subdirectory of the mount, not the mount point itself.
-STAGE4="$WORK/librarian"; mkdir -p "$STAGE4"
+# STAGE3 is bind-mounted at /out; /out/build is the CMake build tree,
+# /out/stage is the --install destination prefix. Both are subdirectories of
+# the mount point, not the mount point itself (the stage 1 `rm -rf "$OUT"`
+# constraint doesn't apply here since nothing here removes $STAGE3, but the
+# subdirectory convention is kept for consistency with the other stages).
+STAGE3="$WORK/images"; mkdir -p "$STAGE3/build" "$STAGE3/stage"
 docker run --rm \
     -v "$SRC_DIR:/src" -w /src \
-    -v "$STAGE4:/out" -e OUT=/out/build \
-    "$TOOLCHAIN_IMAGE" tools/cross-vax/build-librarian-vax.sh
-[ -f "$STAGE4/build/LIBRARIAN.EXE" ] || fail "LIBRARIAN.EXE missing after cross-compile"
-cp "$STAGE4/build/LIBRARIAN.EXE" "$OUT_DIR/LIBRARIAN.EXE"
-log "-> $OUT_DIR/LIBRARIAN.EXE"
+    -v "$STAGE3:/out" \
+    "$TOOLCHAIN_IMAGE" sh -c '
+        set -eu
+        cmake -S /src -B /out/build \
+            -DCMAKE_TOOLCHAIN_FILE=/src/tools/cross-vax/toolchain-vax-netbsd.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/out/stage
+        cmake --build /out/build --target ovmx-images -- -j"$(nproc)"
+        cmake --install /out/build --component ovmx-images
+    '
+
+# install_manifest_ovmx-images.txt (CMake writes this name -- not the plain
+# install_manifest.txt -- because the install above named an explicit
+# --component; see CMakeLists.txt's COMPONENT ovmx-images install loop,
+# vms-88c) records every file that COMPONENT actually installed, as absolute
+# paths INSIDE the container (under /out/stage/...). Since $STAGE3 is the
+# same bind mount, the host path is the container path with the /out prefix
+# swapped for $STAGE3 -- no separate translation table to maintain.
+IMAGE_MANIFEST="$STAGE3/build/install_manifest_ovmx-images.txt"
+[ -f "$IMAGE_MANIFEST" ] || fail "install_manifest_ovmx-images.txt missing after cmake --install --component ovmx-images -- the ovmx-images CMakeLists.txt COMPONENT install loop did not run"
+[ -s "$IMAGE_MANIFEST" ] || fail "install_manifest_ovmx-images.txt is empty -- ovmx-images installed nothing"
+
+IMAGE_NAMES=()
+# `|| [ -n "$container_path" ]` is load-bearing: CMake's own
+# install_manifest_*.txt (string(REPLACE ";" "\n" ...) + file(WRITE ...))
+# ends WITHOUT a trailing newline after the last entry, so a plain
+# `while read` silently drops that last line -- `read` returns nonzero on
+# that final partial read even though it populated the variable, and a bare
+# `while read ...; do` treats nonzero as loop-end before the body runs.
+# Verified empirically: without this guard, PARTS.EXE (the last _OVMX_IMAGES_DEPS
+# entry as of this writing) never made it into IMAGE_NAMES, $OUT_DIR, or the
+# artifact manifest -- exactly the silent-drop class of bug INV-6 exists to
+# kill, just self-inflicted instead of a fake success.
+while IFS= read -r container_path || [ -n "$container_path" ]; do
+    [ -n "$container_path" ] || continue
+    name="$(basename "$container_path")"
+    host_path="$STAGE3${container_path#/out}"
+    [ -f "$host_path" ] || fail "image named in install_manifest_ovmx-images.txt is missing on disk: $name ($host_path)"
+    cp "$host_path" "$OUT_DIR/$name"
+    log "-> $OUT_DIR/$name"
+    IMAGE_NAMES+=("$name")
+done < "$IMAGE_MANIFEST"
+[ "${#IMAGE_NAMES[@]}" -gt 0 ] || fail "no images copied from install_manifest_ovmx-images.txt"
+log "ovmx-images aggregate: ${#IMAGE_NAMES[@]} images shipped (derived from install_manifest_ovmx-images.txt, not a hand list)"
+
+# --- Shipped-artifact manifest (vms-88c): the DERIVED "what actually
+# shipped" list, module artifacts first (fixed, kernel-module stages above)
+# then every image name from the CMake install manifest, in the order CMake
+# installed them. tools/cut-release.sh reads this file to build its
+# VAX_ARTIFACT_ORDER array -- generated fresh every cut, never hand-
+# duplicated, so it cannot drift from what was actually built.
+{
+    printf '%s\n' vms.kmod.o vmsfs.kmod vmsfs_mount
+    printf '%s\n' "${IMAGE_NAMES[@]}"
+} > "$OUT_DIR/vax-artifact-manifest.txt"
+log "-> $OUT_DIR/vax-artifact-manifest.txt ($(( ${#IMAGE_NAMES[@]} + 3 )) artifacts total)"
 
 log "=== ALL VAX RELEASE ARTIFACTS BUILT: $OUT_DIR ==="
 ls -la "$OUT_DIR"

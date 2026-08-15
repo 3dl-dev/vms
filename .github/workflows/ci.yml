@@ -905,15 +905,23 @@ jobs:
       - name: Assert VAX release artifacts are present in the cut bundle
         run: |
           set -euo pipefail
+          # vms-88c (epic vms-509 Rung F): the shipped set is DERIVED from
+          # each cut's own vax/vax-artifact-manifest.txt, not a hand-named
+          # list here -- so this check never goes stale.
           for d in dist/release-a dist/release-b; do
-            for f in vms.kmod.o vmsfs.kmod vmsfs_mount STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE; do
+            MANIFEST="$d/vax/vax-artifact-manifest.txt"
+            [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+            while IFS= read -r f || [ -n "$f" ]; do
+              [ -n "$f" ] || continue
               [ -s "$d/vax/$f" ] || { echo "FAIL: $d/vax/$f missing or empty -- VAX co-release artifact not in the cut bundle"; exit 1; }
               echo "OK: $d/vax/$f present ($(stat -c%s "$d/vax/$f") bytes)"
-            done
+            done < "$MANIFEST"
           done
           grep -q '"vax_release_parity"' dist/release-a/release-manifest.json \
             || { echo "FAIL: release-manifest.json has no vax_release_parity section"; exit 1; }
-          echo "OK: release-manifest.json carries a vax_release_parity section"
+          grep -q '"vax_artifacts"' dist/release-a/release-manifest.json \
+            || { echo "FAIL: release-manifest.json has no vax_artifacts field"; exit 1; }
+          echo "OK: release-manifest.json carries vax_release_parity + vax_artifacts"
 
       # The manifest's own "cut_at_utc" field legitimately differs between
       # the two invocations (it is wall-clock metadata ABOUT the cut, not a
@@ -1267,10 +1275,18 @@ jobs:
       - name: Assert VAX release artifacts are present in the acceptance bundle
         run: |
           set -euo pipefail
-          for f in vms.kmod.o vmsfs.kmod vmsfs_mount STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE; do
+          # vms-88c (epic vms-509 Rung F): DERIVED from the cut's own
+          # vax/vax-artifact-manifest.txt -- see cut-release-vax-gate for the
+          # same pattern.
+          MANIFEST="dist/release-acceptance/vax/vax-artifact-manifest.txt"
+          [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+          n=0
+          while IFS= read -r f || [ -n "$f" ]; do
+            [ -n "$f" ] || continue
             [ -s "dist/release-acceptance/vax/$f" ] || { echo "FAIL: dist/release-acceptance/vax/$f missing or empty"; exit 1; }
-          done
-          echo "OK: all 9 VAX co-release artifacts present in the acceptance bundle"
+            n=$((n + 1))
+          done < "$MANIFEST"
+          echo "OK: all $n VAX co-release artifacts present in the acceptance bundle"
 
       - name: Build bootable image (qemu tooling only -- boots the cut bundle's own artifacts)
         uses: docker/build-push-action@v6
@@ -1368,10 +1384,25 @@ jobs:
             --src-dir "${{ github.workspace }}" \
             --out-dir "${{ github.workspace }}/dist/vax-gate-proof" \
             --netbsd-src-cache "${{ github.workspace }}/.netbsd-vax-src-release-cache"
-          for f in vms.kmod.o vmsfs.kmod vmsfs_mount STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE; do
-            [ -s "dist/vax-gate-proof/$f" ] || { echo "FAIL: dist/vax-gate-proof/$f missing or empty"; exit 1; }
-          done
-          echo "PASS: all 9 VAX release artifacts built"
+          # vms-88c (epic vms-509 Rung F): the shipped set is DERIVED from
+          # vax-artifact-manifest.txt (itself derived from CMake's
+          # install_manifest_ovmx-images.txt), not a hand-named list here --
+          # so this check never goes stale when a new image joins the
+          # ovmx-images aggregate. Ground-source both directions: every named
+          # artifact must be a real non-empty file, and no extra files may be
+          # present beyond what the manifest names.
+          MANIFEST="dist/vax-gate-proof/vax-artifact-manifest.txt"
+          [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+          n=0
+          while IFS= read -r f || [ -n "$f" ]; do
+            [ -n "$f" ] || continue
+            [ -s "dist/vax-gate-proof/$f" ] || { echo "FAIL: dist/vax-gate-proof/$f missing or empty (named in $MANIFEST)"; exit 1; }
+            n=$((n + 1))
+          done < "$MANIFEST"
+          dir_count=$(find dist/vax-gate-proof -maxdepth 1 -type f ! -name 'vax-artifact-manifest.txt' | wc -l)
+          [ "$dir_count" -eq "$n" ] || { echo "FAIL: $MANIFEST names $n artifacts but dist/vax-gate-proof/ contains $dir_count files"; exit 1; }
+          [ "$n" -ge 9 ] || { echo "FAIL: only $n VAX release artifacts named in $MANIFEST -- expected at least the pre-Rung-F baseline of 9"; exit 1; }
+          echo "PASS: all $n VAX release artifacts named in $MANIFEST are present"
 
       - name: NEGATIVE CONTROL — OVMX_VAX_RELEASE_NEGCTL=1 must fail the VAX artifact build
         run: |
@@ -1387,7 +1418,7 @@ jobs:
             echo "FATAL: OVMX_VAX_RELEASE_NEGCTL=1 PASSED — the co-release gate has no teeth against a failed VAX build" >&2
             exit 1
           fi
-          echo "$RAW" | grep -qF 'OVMX_VAX_RELEASE_NEGCTL: deliberately failing the LIBRARIAN.EXE stage' \
+          echo "$RAW" | grep -qF 'OVMX_VAX_RELEASE_NEGCTL: deliberately failing the userspace-image stage' \
             || { echo "FATAL: did not see the expected NEGCTL failure banner — this failed for the wrong reason" >&2; exit 1; }
           echo "Negative control confirmed: a failed VAX stage exits nonzero (exit $rc)."
 

@@ -107,6 +107,66 @@ int ods2_sysdisk_read_file(const char *linux_path,
 int ods2_sysdisk_list_dir(const char *linux_path,
                           ods2_dir_cb cb, void *ctx);
 
+/* ================================================================
+ * SYS$DISK WRITE adapter (vms-02e, epic vms-5eb -- the WRITE half of the
+ * ODS-2 runtime flip). The write twin of the read adapter above: it turns a
+ * resolved "/vms/A/B/.../NAME.EXT;ver" Linux path into a genuine-ODS-2 WRITE
+ * over the SAME registered SYS$DISK volume handle (vmsfs_volume_handle(
+ * SYSDISK_DEVICE)), through a per-call block-device-backed writer
+ * (ods2_wvolume_open_bdev/_append_file/_create_file_raw/_create_dir/
+ * _dir_insert) opened over the registered volume's fd.
+ *
+ * ADDITIVE, EXACTLY LIKE THE READ ADAPTER. This header FLIPS NO LIVE PATH: no
+ * RMS/DCL/boot writer is rerouted onto it (that is the atomic group,
+ * NonRMSWriters vms-d75 + R2). It only makes the write reroute AVAILABLE and
+ * proves it against a live registered volume. Boot still reaches login
+ * exactly as before.
+ *
+ * FAIL-HONEST (Rule 9 / INV-6). With no genuine-ODS-2 SYS$DISK volume
+ * registered these return SS$_DEVNOTMOUNT and write NOTHING -- never a silent
+ * POSIX fallback. A path not under "/vms" returns SS$_BADPARAM ("not mine").
+ * If the registered volume was opened read-only (unwritable backing store),
+ * the underlying pwrite fails and the write surfaces an honest SS$_DATACHECK,
+ * never a fabricated success.
+ *
+ * CONCURRENCY: each call opens, mutates, flushes, and closes its own
+ * block-device-backed writer over the registered fd (whose reads/writes use
+ * absolute pread/pwrite offsets, independent of the reader handle). Intended
+ * for the additive boot/runtime write path; not a multi-writer transaction
+ * manager.
+ * ================================================================ */
+
+/*
+ * Create a NEW file on SYS$DISK at resolved path "/vms/A/B/.../NAME.EXT;ver",
+ * writing `data` (`data_len` bytes) VERBATIM (RFM=FIXED, create_file_raw
+ * shape -- byte-identical read-back), and insert its directory record into
+ * the (already-existing) parent directory. An absent ";ver" defaults to
+ * version 1. Returns SS$_NORMAL, SS$_BADPARAM (path NULL / not under /vms /
+ * no filename component), SS$_DEVNOTMOUNT (no volume), SS$_NOSUCHFILE (parent
+ * directory chain does not exist), or SS$_DATACHECK (write / medium failure).
+ */
+int ods2_sysdisk_create_file(const char *linux_path,
+                             const void *data, size_t data_len);
+
+/*
+ * Append `data_len` bytes VERBATIM to the END of an EXISTING SYS$DISK file at
+ * resolved path "/vms/A/B/.../NAME.EXT;ver" -- the novel runtime path (an
+ * OPERATOR.LOG-style repeated append). Read-back returns the full pre-existing
+ * + appended content, byte-exact. Returns SS$_NORMAL, SS$_BADPARAM,
+ * SS$_DEVNOTMOUNT, SS$_NOSUCHFILE (no such file), or SS$_DATACHECK.
+ */
+int ods2_sysdisk_append_file(const char *linux_path,
+                             const void *data, size_t data_len);
+
+/*
+ * Create a NEW directory on SYS$DISK at resolved path "/vms/A/B/.../NEWDIR"
+ * (the last component names the directory; its on-disk entry is "NEWDIR.DIR")
+ * and insert its record into the (already-existing) parent. Returns
+ * SS$_NORMAL, SS$_BADPARAM, SS$_DEVNOTMOUNT, SS$_NOSUCHFILE (parent chain
+ * absent), or SS$_DATACHECK.
+ */
+int ods2_sysdisk_mkdir(const char *linux_path);
+
 #ifdef __cplusplus
 }
 #endif

@@ -298,3 +298,82 @@ Prereq A (func)  ┌───────────────┴────
 - **Non-negotiable (Rule 9 / INV-6):** every network + terminal facility routes
   through `/dev/vms`; absent executive → honest `SS$_NOSUCHDEV`, never a
   per-process fake.
+
+---
+
+---
+
+## 7. Implementation status — `ssh` client (vms-22a) + the veneer prerequisite
+
+> Landed by `work/vms-22a`. Corrected layering (operator/conductor 2026-08-14).
+
+The **client half** starts here because the clients only *connect out* and so
+ride the already-done BGn: client path (`vms-527`), unblocked by the (pending)
+BGn: server path the sshd swap needs.
+
+### 7.1 Correct layering — ssh uses STANDARD sockets over a veneer
+An application opens a socket to a remote IP:port and lets the stack route; it
+never touches the transport device. So the port is:
+
+```
+ssh  →  socket()/connect()   [STANDARD BSD sockets, UNCHANGED]
+      →  OVMX BSD-sockets RTL veneer over BGn:   (DECC$SOCKET-equivalent)
+           →  $QIO to BGn:  →  vms.ko  →  host kernel TCP/IP  →  interface
+```
+
+The **foundational deliverable** is therefore the **BSD-sockets RTL veneer over
+BGn:** — `socket()`, `connect()`, `bind()`, `listen()`, `accept()`,
+`send()/recv()/read()/write()`, `close()/shutdown()`, and a resolver (numeric
+IPv4 first, DNS later) — that translates standard sockets calls into the
+`$QIO`-to-BGn: ops `src/vmstcpip/services/tcpip_client.h` already shows
+(`IO$_SETMODE` create / `IO$_ACCESS` connect w/ sockaddr_in / `IO$_READVBLK` /
+`IO$_WRITEVBLK` / `IO$_DEACCESS`). This is the VMS TCP/IP Services sockets-library
+model. ssh then links the veneer and uses its standard `socket()/connect()`
+UNCHANGED (minimal VMS porting, as the real OpenVMS OpenSSH port did) — ssh must
+NOT mention BGn:/`$QIO`/`TCPIP$DEVICE:`. The veneer is filed as its own
+prerequisite item; Rule-9 proof = a minimal C client that `socket()`+`connect()`s
+to an in-guest loopback listener over 127.0.0.1 and round-trips bytes against a
+real `/dev/vms` (honest-skip 77 without it) + a paired MEASURED negctl anchor in
+`tests/qemu/facility_defects.sh` + a `facility_defects_floor.txt` bump.
+
+> The earlier "$QIO shim inside `sshconnect.c`" idea was WRONG — it made the app
+> talk to the *transport device* rather than a socket — and has been discarded.
+
+### 7.2 Landed — the transport + event-loop substitution onto the veneer
+`third-party/openssh/` vendors OpenSSH-portable 10.0 (SHA-pinned; `ssh -V` =
+`OpenSSH_10.0p2, LibreSSL 4.1.2`) and now links `ssh` **onto the veneer**:
+
+- **`ovmx/ovmx_ssh_glue.{c,h}`** — the OVMX port layer. `ovmx_ssh_connect()`
+  opens+connects a veneer socket (`ovmx_socket`/`ovmx_connect`) and returns the
+  veneer's **real pollable readiness fd** (`ovmx_pollfd`) as OpenSSH's connection
+  fd, so **every OpenSSH poll/ppoll path works unchanged**. `ovmx_ssh_read`/
+  `ovmx_ssh_write`/`ovmx_ssh_sshbuf_read` move data through the veneer
+  (`ovmx_recv`/`ovmx_send`) for a connection fd (a tiny fd→handle map), falling
+  back to `read()`/`write()` for any other fd.
+- **`ovmx/sshconnect-veneer.patch`** — `ssh_connect_direct` obtains its transport
+  from `ovmx_ssh_connect` instead of `ssh_create_socket`+`timeout_connect`.
+- **`ovmx/packet-veneer.patch`** — the **three** data-I/O sites in `packet.c`
+  (`ssh_packet_read_seqnr`'s `read`, `ssh_packet_process_read`'s `sshbuf_read`,
+  `ssh_packet_write_poll`'s `write`) route through the glue. The `ppoll` waits
+  and `clientloop` poll set are UNCHANGED — they poll the veneer readiness fd.
+- All guarded by `-DOVMX_VENEER`; **no `$QIO`/`vms_kif` in OpenSSH, no raw
+  `socket()`**. `build-openssh.sh OVMX_VENEER=1` builds the veneer object set
+  (`vms_bgsock` + the `vms_kif` bg path + `kif_transport_linux` + `vms_string` +
+  `syscall.S` — self-contained via `__vms_syscallN`, no musl collision), compiles
+  the glue with OpenSSH's own flags, and links it into `ssh`.
+
+Proven by CI `openssh-static-musl` (`test/run_ssh_build.sh`): `ssh` cross-builds
+**fully static** with the substitution, `nm` confirms the whole chain is wired
+(`ovmx_ssh_connect`/`read`/`write`/`sshbuf_read` → `ovmx_socket`/`connect`/`send`/
+`recv`/`pollfd` → `vms_kif_bg_pollfd`), and `ssh -V` runs. License BSD/ISC.
+
+### 7.3 Continuation (in order)
+1. **Real-KEX QEMU proof (Rule 9)** — stage the veneer-linked `ssh` + a stock
+   `sshd` (+ host/user keys) into the QEMU initramfs and drive a REAL key
+   exchange + auth + remote command over `127.0.0.1` via the veneer/BGn: on a
+   live `/dev/vms`, byte-exact; honest-skip 77 without it; paired negctl + floor
+   bump. This is the payoff proof; it needs the initramfs/sshd/keys harness.
+2. **`ssh` as the OVMX IMGACT image** — static-PIE `PT_INTERP` so DCL activates
+   it through IMGACT (the veneer-linked binary already runs against `/dev/vms`;
+   this is the VMS image-activation packaging).
+3. **`scp` + `sftp`** over the same veneer.

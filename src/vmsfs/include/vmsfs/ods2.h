@@ -1076,14 +1076,27 @@ ods2_status_t ods2_file_read_text(const ods2_volume_t *vol,
  *     checksum -- see ods2_security_build() in ods2_writer.c -- resolving
  *     the SPECIFIC increment-3 BADCHECKSUM failure mode. A full real MOUNT
  *     NOW COMPLETES CLEANLY (increment 8, [F15]) and both [000000] and
- *     [OVMXDIR] are directory-listable; see [F9]'s UPDATE trail. The
- *     writer's MFD is still a single block (vs. the real fixture's 2 --
- *     out of reach until multi-block directory growth is implemented) and
- *     data-file content is a raw byte stream rather than RMS
- *     variable-length records with per-record length prefixes, so `TYPE`
- *     of a plain data file does not yet show its content even though the
- *     bytes are genuinely on disk (confirmed via `DUMP`) -- open for a
- *     future increment.
+ *     [OVMXDIR] are directory-listable; see [F9]'s UPDATE trail.
+ *   - RESOLVED (increment 9, [F16]): created-file content is written as
+ *     RMS variable-length (RFM=VAR) records with per-record 2-byte LE
+ *     length prefixes (on-disk framing oracle-grounded against the
+ *     fixture's own HELLO.TXT), so a real VAX's RMS `TYPE` shows a created
+ *     file's content, not just `DUMP`. Round-tripped through
+ *     ods2_var_records_decode()/ods2_file_read_text().
+ *   - RESOLVED (increment 10, [F17], vms-1bd): directories are no longer
+ *     capped at one data block. ods2_wvolume_dir_insert() grows a
+ *     directory across as many blocks as its name-sorted records need,
+ *     allocating blocks + extending the FH2 map/recattr on demand;
+ *     records never cross a 512-byte block boundary (the Files-11
+ *     public-spec rule the reader already assumes). A single-block
+ *     directory still serializes byte-for-byte as before, so the
+ *     [F13]/[F14]/[F15] real-VAX-MOUNT-clean output is unchanged when no
+ *     growth occurs. FLAGGED (Rule 8): the exact record-to-block
+ *     distribution is NOT fixture-grounded -- the fixture's only 2-block
+ *     directory (FID 4 MFD) has an empty, past-EOF second block and never
+ *     demonstrates a live multi-block split; greedy first-fit packing is a
+ *     spec-faithful OVMX choice, not claimed byte-identical to VMS's own
+ *     directory maintenance. See [F17] in ods2_writer.c.
  * ================================================================ */
 
 /* Volume-format parameters for ods2_volume_format(). */
@@ -1173,13 +1186,18 @@ ods2_status_t ods2_wvolume_create_dir(ods2_wvolume_t *wvol,
                                       ods2_fid_t *fid_out);
 
 /*
- * Insert a {name, version, entry_fid} directory record into the single
- * data block of directory `dir_fid` (as read via ods2_volume_read_header
- * on the wvolume's own image). Walks existing records the same way
- * ods2_volume_list_dir()/dir_scan_block() do, to find the first free
- * (ODS2_DIR_END) slot, and writes the new record there. Only ONE data
- * block per directory is supported (no directory growth) -- returns
- * ODS2_ERR_NOSPACE if the record does not fit.
+ * Insert a {name, version, entry_fid} directory record into directory
+ * `dir_fid` (as read via ods2_volume_read_header on the wvolume's own
+ * image), keeping the whole directory in ascending name order ([F13]).
+ * The directory GROWS beyond one block as needed ([F17], increment 10,
+ * vms-1bd): each insert re-packs the sorted record stream across the
+ * file's data blocks (a record never crosses a 512-byte boundary),
+ * allocating additional blocks and extending the FH2 map/recattr when the
+ * packed form no longer fits the current allocation. Returns
+ * ODS2_ERR_ARGS on a duplicate name, ODS2_ERR_NOSPACE if the volume has
+ * no free blocks left or the directory exceeds the writer's block/extent
+ * caps (ODS2_WDIR_MAX_BLOCKS / _MAX_EXTENTS), ODS2_ERR_FORMAT if an
+ * existing directory block is malformed.
  */
 ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                                       ods2_fid_t dir_fid,

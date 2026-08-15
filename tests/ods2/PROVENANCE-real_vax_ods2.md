@@ -1006,3 +1006,83 @@ matches this writer's computed `fat_rsize` exactly.
 OVMX-written ODS-2 volume cleanly (increment 8) AND reads its files'
 actual content via `TYPE`/`DIRECTORY/FULL` (this increment) -- the
 directory-traversal half and the file-content half are both closed.**
+
+---
+
+## Addendum (increment 10, vms-1bd): multi-block DIRECTORY growth ([F17])
+
+R8 of the real-ODS-2-runtime epic (vms-5eb) closes the last writer
+simplification: `ods2_wvolume_dir_insert()` used to return
+`ODS2_ERR_NOSPACE` once a directory's records exceeded a single 512-byte
+block. It now grows a directory across as many blocks as its (name-sorted)
+records need.
+
+### Rule-8 grounding — and the FLAG
+
+The multi-block record *distribution* is **not** groundable from this
+fixture, and is flagged as such in the code ([F17] in `ods2_writer.c`,
+SIMPLIFICATIONS in `ods2.h`).
+
+The fixture's only directory that spans two blocks is its own MFD, FID 4
+(`000000.DIR`), decoded directly from `real_vax_ods2.dsk`:
+
+```
+FID 4 (000000.DIR): extent=[LBN 3, count 2]  hiblk=2  efblk=2  ffbyte=0
+  LBN 3: 11 records (000000.DIR..VOLSET.SYS, ascending), then 0xFFFF
+  LBN 4: ZERO-filled, no records
+```
+
+`efblk=2 / ffbyte=0` means end-of-file is the *start* of VBN 2 — i.e. the
+11 real records all live in VBN 1 (LBN 3) and the second allocated block
+(LBN 4) is **empty slack past EOF**. So the fixture never demonstrates how
+records distribute across two *live* directory blocks; it only shows a
+pre-allocated-but-unused trailing block.
+
+What the writer relies on therefore comes from the **public Files-11
+directory-file structure**, not from the fixture:
+
+1. Records are sorted ascending by file name across the *whole* directory
+   (the sort key itself was fixture-grounded earlier — see [F13]).
+2. A directory record never crosses a 512-byte block boundary; each block
+   holds a whole number of records terminated by a `0xFFFF`
+   (`ODS2_DIR_END`) sentinel. This is exactly the invariant the validated
+   reader already enforces (`ods2_dir_block_scan()` decodes each block
+   independently; `ods2_volume_list_dir()`/`ods2_bdev_list_dir()`
+   map-walk every extent). It is DISTINCT from a data file's VAR records,
+   which the fixture proved MAY straddle (finding 3 above).
+3. `efblk = (last block containing records) + 1`, `ffbyte = 0` — the
+   EOF-position rule already fixture-grounded on FID 4/FID 11 ([F15]),
+   generalized to N live blocks.
+
+**FLAGGED, n=0 fixture samples:** the exact record-to-block split a real
+VAX's directory maintenance produces for a given insert sequence is
+unobserved. The writer uses greedy first-fit packing (reserving the 2-byte
+terminator per block, exactly as the prior single-block path did). Any
+real VAX `MOUNT`/`DIRECTORY` reads such a directory — rules 1–3 are what
+matter for readability — but the byte-level distribution is an OVMX design
+choice, not claimed VMS-authentic.
+
+### What is proved offline (test_ods2_dirgrow.c)
+
+- Inserting 60 files into `[OVMXDIR]` grows it to **3 data blocks**
+  (`hiblk=3 efblk=4 ffbyte=0`, 3 single-block FM2 retrieval pointers
+  because header blocks were allocated between growths); records pack
+  21/21/18 and stay globally ascending across all three blocks.
+- Inserting 40 subdirectories into `[000000]` grows the **MFD itself**
+  to 3 blocks (`hiblk=3 efblk=4`), 51 = 10 reserved + `OVMXDIR.DIR` + 40.
+- Both readers list every entry: the in-memory `ods2_volume_list_dir()`
+  and R1's block-backed `ods2_bdev_list_dir()` (driven over a real
+  loop-image fd via `pread`) agree entry-for-entry.
+- A created file's content in the multi-block directory round-trips
+  through the VAR framing ([F16]) read back BOTH via
+  `ods2_file_read_text()` (in-memory) AND via the block-backed path
+  (`ods2_bdev_read_header` + `ods2_bdev_read_block` +
+  `ods2_var_records_decode`).
+- A single-block directory serializes byte-for-byte as before (all prior
+  ods2 tests, including the real-VAX-MOUNT-validated `test_ods2_write` /
+  `test_ods2_bdev` / `test_ods2_initialize` outputs, are unchanged).
+
+A real-VAX `MOUNT` + `DIRECTORY` of a genuinely multi-block-populated
+volume is the outstanding lab cross-check (dump via `ODS2_WRITE_DUMP`); as
+with R1/R4 the offline reader round-trip + byte-consistency is the
+committed-CI proof.

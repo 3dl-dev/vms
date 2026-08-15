@@ -52,6 +52,13 @@
 #                                             # gate to the PROVISION.EXE exec
 #   tests/lab-vax/run-boot.sh sysboot-negctl  # teeth: flat volume (no DCL.EXE)
 #                                             # must halt the installed-system gate
+#
+# vms-065 (parent vms-f10) adds ONE MORE mode: the gate-invokable, clean
+# pass/fail check a release-acceptance/frozen-verify caller invokes directly
+# -- runs sysboot THEN sysboot-negctl (both must hold) under ONE exit code,
+# proven stable across N consecutive runs (see the vms-065 PR description):
+#   tests/lab-vax/run-boot.sh gate            # 0 = VAX boots to DCL,
+#                                             # nonzero = not release-clean
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -354,6 +361,73 @@ ensure_boot_install
 # raw exit code is still exactly one of {0, PROOF_FAILED, HARNESS_ERROR}
 # (rd vms-cf5's canonical exit-code contract) -- only the WRAPPER-side
 # inversion step differs from its sibling drivers, by design.
+
+# soft_die: die()'s message shape (the "[run-boot] FATAL: ..." line to
+# stderr every failure path below already used) WITHOUT the `exit 1` --
+# used only inside run_sysboot_positive/run_sysboot_negctl (vms-065) so
+# those two can be called as ordinary functions returning 0/1 and composed
+# by the `gate` mode below, instead of each unconditionally terminating the
+# whole script the moment `sysboot`/`sysboot-negctl` runs standalone.
+soft_die() { echo "[run-boot] FATAL: $*" >&2; return 1; }
+
+# vms-065: the sysboot positive proof and its negative control, factored out
+# of the case arms below into plain functions (0 = held, 1 = failed; never
+# `exit` themselves) so `gate` mode can chain BOTH under one pass/fail exit
+# code -- the single command a release-acceptance/frozen-verify caller
+# invokes. Standalone `sysboot`/`sysboot-negctl` mode is unchanged: same log
+# lines, same pass/fail conditions, just reached through a function call.
+run_sysboot_positive() {
+  # vms-d9c: master the OVMX system volume and boot vms-7b1's disk with it,
+  # proving the boot passes the installed-system gate and reaches the
+  # SYS$SYSTEM:PROVISION.EXE exec.
+  build_boot_image_set
+  master_system_volume
+  # rd vms-e7a TEETH: drive_boot_vax.py's console check (no %OVMX-W-OWNER
+  # after SYSTEM identity) only proves PROVISION reported no ERROR -- a
+  # write VOP that silently no-ops (INV-6's exact failure class) would ALSO
+  # produce zero warnings, since lchown(2) would report success either way.
+  # A HASH of the raw sysvol image, before this boot vs. after, is the
+  # positive proof: rq1 is attached WITHOUT `-r' (see do_sysboot's vmm_args),
+  # so the guest's real block writes land in THIS host file. provision_
+  # ownership() unconditionally lchown()s ~28 objects in the system tree
+  # every boot (rd vms-e7a's own comment: "WHY IT RUNS ON EVERY BOOT"), so a
+  # working write path MUST change these bytes; a no-op VOP_SETATTR cannot.
+  local sysvol_hash_before sysvol_hash_after
+  sysvol_hash_before="$(sha256sum "${SYSVOL_IMG}" | awk '{print $1}')"
+  log "sysvol pre-boot sha256:  ${sysvol_hash_before}"
+  if run_session sysboot /cache/boot-work; then
+    sysvol_hash_after="$(sha256sum "${SYSVOL_IMG}" | awk '{print $1}')"
+    log "sysvol post-boot sha256: ${sysvol_hash_after}"
+    if [ "${sysvol_hash_before}" = "${sysvol_hash_after}" ]; then
+      soft_die "SYSBOOT: the mounted ODS-2 SYSTEM volume's raw on-disk bytes did NOT change during the boot (rd vms-e7a). provision_ownership() unconditionally lchown()s every object in the system tree on every boot -- identical before/after bytes means either it never ran, or (the INV-6 failure class) VOP_SETATTR silently no-op'd instead of really writing. A green console (no %OVMX-W-OWNER) is NOT sufficient by itself; this hash diff is the positive proof of a real write."
+      return 1
+    fi
+    log "OK (rd vms-e7a): the mounted ODS-2 SYSTEM volume's on-disk bytes CHANGED"
+    log "  during this boot -- REAL block writes hit the volume (not a"
+    log "  silently-faked/no-op VOP_SETATTR; INV-6 honest-failure teeth)."
+    log "======================================================================"
+    log "  SYSBOOT PASSED: ovmx_init on NetBSD/vax mounted the MASTERED OVMX"
+    log "  ODS-2 SYSTEM volume READ-WRITE, passed the installed-system gate,"
+    log "  reached PID 1's exec of SYS\$SYSTEM:PROVISION.EXE (%STDRV-I-STARTUP),"
+    log "  and PROVISION's UIC-ownership writes really hit the on-disk volume."
+    log "======================================================================"
+    return 0
+  fi
+  soft_die "SYSBOOT FAILED (see console output above)"
+}
+
+run_sysboot_negctl() {
+  # Teeth: boot the SAME disk with the FLAT test volume (no SYS$SYSTEM:DCL.EXE)
+  # -- the installed-system gate must halt and %STDRV-I-STARTUP must NOT appear.
+  if run_session sysboot-negctl /cache/boot-work; then
+    log "PASS: sysboot negative control -- the flat volume (no DCL.EXE)"
+    log "      halted the installed-system gate and never reached STDRV"
+    log "      (the installed-system gate has teeth)"
+    return 0
+  fi
+  soft_die "SYSBOOT NEGATIVE CONTROL FAILED unexpectedly (see console output above)"
+}
+
 case "${MODE}" in
   prove)
     if run_session prove /cache/boot-work; then
@@ -374,52 +448,37 @@ case "${MODE}" in
     die "NEGATIVE CONTROL FAILED unexpectedly (see console output above)"
     ;;
   sysboot)
-    # vms-d9c: master the OVMX system volume and boot vms-7b1's disk with it,
-    # proving the boot passes the installed-system gate and reaches the
-    # SYS$SYSTEM:PROVISION.EXE exec.
-    build_boot_image_set
-    master_system_volume
-    # rd vms-e7a TEETH: drive_boot_vax.py's console check (no %OVMX-W-OWNER
-    # after SYSTEM identity) only proves PROVISION reported no ERROR -- a
-    # write VOP that silently no-ops (INV-6's exact failure class) would ALSO
-    # produce zero warnings, since lchown(2) would report success either way.
-    # A HASH of the raw sysvol image, before this boot vs. after, is the
-    # positive proof: rq1 is attached WITHOUT `-r' (see do_sysboot's vmm_args),
-    # so the guest's real block writes land in THIS host file. provision_
-    # ownership() unconditionally lchown()s ~28 objects in the system tree
-    # every boot (rd vms-e7a's own comment: "WHY IT RUNS ON EVERY BOOT"), so a
-    # working write path MUST change these bytes; a no-op VOP_SETATTR cannot.
-    sysvol_hash_before="$(sha256sum "${SYSVOL_IMG}" | awk '{print $1}')"
-    log "sysvol pre-boot sha256:  ${sysvol_hash_before}"
-    if run_session sysboot /cache/boot-work; then
-      sysvol_hash_after="$(sha256sum "${SYSVOL_IMG}" | awk '{print $1}')"
-      log "sysvol post-boot sha256: ${sysvol_hash_after}"
-      if [ "${sysvol_hash_before}" = "${sysvol_hash_after}" ]; then
-        die "SYSBOOT: the mounted ODS-2 SYSTEM volume's raw on-disk bytes did NOT change during the boot (rd vms-e7a). provision_ownership() unconditionally lchown()s every object in the system tree on every boot -- identical before/after bytes means either it never ran, or (the INV-6 failure class) VOP_SETATTR silently no-op'd instead of really writing. A green console (no %OVMX-W-OWNER) is NOT sufficient by itself; this hash diff is the positive proof of a real write."
-      fi
-      log "OK (rd vms-e7a): the mounted ODS-2 SYSTEM volume's on-disk bytes CHANGED"
-      log "  during this boot -- REAL block writes hit the volume (not a"
-      log "  silently-faked/no-op VOP_SETATTR; INV-6 honest-failure teeth)."
-      log "======================================================================"
-      log "  SYSBOOT PASSED: ovmx_init on NetBSD/vax mounted the MASTERED OVMX"
-      log "  ODS-2 SYSTEM volume READ-WRITE, passed the installed-system gate,"
-      log "  reached PID 1's exec of SYS\$SYSTEM:PROVISION.EXE (%STDRV-I-STARTUP),"
-      log "  and PROVISION's UIC-ownership writes really hit the on-disk volume."
-      log "======================================================================"
-      exit 0
-    fi
-    die "SYSBOOT FAILED (see console output above)"
+    run_sysboot_positive && exit 0
+    exit 1
     ;;
   sysboot-negctl)
-    # Teeth: boot the SAME disk with the FLAT test volume (no SYS$SYSTEM:DCL.EXE)
-    # -- the installed-system gate must halt and %STDRV-I-STARTUP must NOT appear.
-    if run_session sysboot-negctl /cache/boot-work; then
-      log "PASS: sysboot negative control -- the flat volume (no DCL.EXE)"
-      log "      halted the installed-system gate and never reached STDRV"
-      log "      (the installed-system gate has teeth)"
+    run_sysboot_negctl && exit 0
+    exit 1
+    ;;
+  gate)
+    # vms-065: THE gate-invokable check -- ONE command, ONE clean exit code
+    # (0 = VAX boots to a real DCL Username: prompt AND the negative control
+    # has teeth; nonzero = not release-acceptance clean), bounded by
+    # run_session's existing hard `timeout --kill-after` per SIMH stage
+    # (SESSION_TIMEOUT, default 2700s each -- this mode runs at most two).
+    # Runs the DCL-capstone positive proof (mastered SYSTEM volume boots PAST
+    # the installed-system gate, through PROVISION.EXE demand-paging +
+    # SYSTEM-identity + the logical-name layer + STARTUP.COM, to a real
+    # interactive Username: prompt) THEN its negative control (the flat
+    # volume, no DCL.EXE, MUST halt the gate) -- both must hold. This is the
+    # single command a release-acceptance / frozen-verify caller invokes:
+    #   tests/lab-vax/run-boot.sh gate
+    if run_sysboot_positive && run_sysboot_negctl; then
+      log "======================================================================"
+      log "  GATE PASSED (vms-065): the VAX boot-to-DCL proof and its negative"
+      log "  control both held -- SIMH/NetBSD-vax boots ovmx_init as PID 1 to a"
+      log "  real interactive DCL Username: prompt on a mastered OVMX system"
+      log "  volume, and the installed-system gate correctly refuses a volume"
+      log "  with no DCL.EXE. Release-acceptance clean for the VAX runtime."
+      log "======================================================================"
       exit 0
     fi
-    die "SYSBOOT NEGATIVE CONTROL FAILED unexpectedly (see console output above)"
+    die "GATE FAILED (vms-065) -- see console output above"
     ;;
-  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl)" ;;
+  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | gate)" ;;
 esac

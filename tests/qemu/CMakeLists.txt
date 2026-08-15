@@ -43,12 +43,29 @@
 # qemu_syssvc_tests target below (not any one test by name) and copies
 # build-static/bin/test_syssvc_* by glob.
 
+# OVMX BSD-sockets RTL veneer over BGn: (src/vmstcpip/sockets, the vms-22a
+# prerequisite). A small LOCAL static lib compiled only for the QEMU test build
+# -- deliberately NOT part of libvms / the native-link symbol-vector graph, so it
+# adds no cross-image-symbol wiring. test_syssvc_bgsock_echo links it to drive a
+# 127.0.0.1 loopback echo through ovmx_socket()/ovmx_connect() over a real
+# /dev/vms; other suites link it too (static, unused objects dropped).
+add_library(vmsbgsock STATIC
+    ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets/vms_bgsock.c)
+target_include_directories(vmsbgsock PRIVATE
+    ${VMS_INCLUDE_DIR}
+    # vms_kif.h -- the veneer addresses the executive BG channel directly (it is
+    # process-wide by tgid, unlike the __thread sys$ channel table).
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
+    ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets)
+
 function(qemu_syssvc_add_test name source)
     add_executable(${name} ${source})
     target_include_directories(${name} PRIVATE
         ${VMS_INCLUDE_DIR}
         ${VMS_RMS_INCLUDE_DIR}
         ${CMAKE_SOURCE_DIR}/src/libvmssys
+        # vms_bgsock.h -- the BSD-sockets veneer test_syssvc_bgsock_echo drives.
+        ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets
         # vmsfs_ondisk.h -- test_syssvc_initialize.c (vms-cf62) reads the raw
         # home block off the backing device to prove INITIALIZE wrote it there.
         ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
@@ -59,6 +76,7 @@ function(qemu_syssvc_add_test name source)
         ${CMAKE_SOURCE_DIR}/src/vmslink/include
     )
     target_link_libraries(${name} PRIVATE
+        vmsbgsock
         vms
         vmsrms
         pthread

@@ -405,4 +405,7 @@
 # (The third baselined-unanchored suite, test_kmod_vmsfs_sysgroup, was moved
 # to SCOPE_OUT_SUITES, not made a defect: its property lives in vmsfs.ko, which
 # this executive gate declares out of scope -- so it adds no defect here.)
-102
+# Raised to 103 by vms-22a bgsock-recv-length-zeroed -- the BSD-sockets RTL
+# veneer over BGn: (vms_bgsock.c ovmx_recv); anchors test_syssvc_bgsock_echo
+# (concurrent full-duplex 127.0.0.1 echo over a real /dev/vms).
+103

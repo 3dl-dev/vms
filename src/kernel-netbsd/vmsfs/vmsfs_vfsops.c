@@ -311,8 +311,15 @@ fail:
 		brelse(bp, 0);
 	if (vmp->vm_vol.bitmap != NULL)
 		kmem_free(vmp->vm_vol.bitmap, vmp->vm_bitmap_bytes);
+	/*
+	 * Close with the SAME mode vn_bdev_openpath() opened it (FREAD | FWRITE),
+	 * mirroring vmsfs_vfs_unmount() below -- closing FREAD-only here leaves
+	 * v_writecount imbalanced and panics ("vrelel: bad ref count") when the
+	 * last vnode ref drops, e.g. rejecting a real-ODS2 (non-VMFS) volume on a
+	 * bad home-block magic (rd vms-1c7).
+	 */
 	if (devvp != NULL)
-		(void)vn_close(devvp, FREAD, l->l_cred);
+		(void)vn_close(devvp, FREAD | FWRITE, l->l_cred);
 	mutex_destroy(&vmp->vm_alloc_lock);
 	kmem_free(vmp, sizeof(*vmp));
 	mp->mnt_data = NULL;

@@ -142,6 +142,22 @@ int main(void)
     bring_lo_up();
     (void)mkdir(OVMX_PRIVSEP, 0755);    /* privsep dir (root-owned 0755) */
 
+    /* sshd's privilege separation looks up the 'sshd' user via getpwnam(); the
+     * command runs as the 'root' login user. Write the minimal account files at
+     * runtime so the proof does not depend on initramfs /etc staging. */
+    (void)mkdir("/etc", 0755);
+    {
+        FILE *f = fopen("/etc/passwd", "w");
+        if (f) {
+            fputs("root:x:0:0:root:/root:/bin/sh\n"
+                  "sshd:x:74:74:sshd privsep:/ovmxssh/empty:/bin/false\n", f);
+            fclose(f);
+        }
+        FILE *g = fopen("/etc/group", "w");
+        if (g) { fputs("root:x:0:\nsshd:x:74:\n", g); fclose(g); }
+    }
+    (void)mkdir("/root", 0755);
+
     /* ---- start the stock sshd in the FOREGROUND (-D) as a child; log to a
      * file we dump on failure so a startup error is visible in the KE log. ---- */
     pid_t sd = fork();

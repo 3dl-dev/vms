@@ -22,6 +22,6 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     endif()
 endif()
 
-add_library(ods2 STATIC ods2_reader.c ods2_writer.c ods2_bdev.c)
+add_library(ods2 STATIC ods2_reader.c ods2_writer.c ods2_bdev.c ods2_path.c)
 target_include_directories(ods2 PUBLIC ${VMS_FS_INCLUDE_DIR})
 set_target_properties(ods2 PROPERTIES POSITION_INDEPENDENT_CODE ON)

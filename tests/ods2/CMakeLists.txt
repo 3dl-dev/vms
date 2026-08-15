@@ -114,3 +114,21 @@ if(BUILD_TOOLS)
         ENVIRONMENT "INIT_EXE=$<TARGET_FILE:vms_initialize>")
     add_dependencies(test_ods2_initialize vms_initialize)
 endif()
+
+# vms-5eb (R2/R3/R5 read-path foundation): the block-backed PATH-RESOLUTION +
+# CONTENT-READ layer (src/vmsfs/ods2/ods2_path.c). Builds a genuine ODS-2
+# volume carrying the real system-disk hierarchy shape
+# ([000000]->[SYS0]->[SYS0.SYSCOMMON]->[SYS0.SYSCOMMON.SYSEXE] with files),
+# lays it on a loop-image fd, and drives ods2_bdev_resolve_dir/_resolve_file/
+# _dir_find/_read_file/_read_file_text over it -- proving the live RMS/DCL/
+# MOUNT path can reach SYS$SYSTEM files through a real FID chain + FM2 extents,
+# never POSIX opendir/open. Also the shape the R6 boot-master builder uses.
+add_executable(test_ods2_path test_ods2_path.c)
+target_include_directories(test_ods2_path PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_path PRIVATE ods2)
+
+add_test(NAME ods2_path COMMAND test_ods2_path)
+set_tests_properties(ods2_path PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)

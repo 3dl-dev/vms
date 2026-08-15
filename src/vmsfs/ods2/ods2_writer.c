@@ -400,7 +400,16 @@ static ods2_status_t encode_map_extent(uint8_t *mp, uint32_t lbn, uint32_t count
  * ods2_wvolume_create_file()'s post-write rsize patch below and the
  * ods2_recattr_t comment in ods2.h.
  */
-enum fh2_kind { FH2_KIND_SYSTEM = 0, FH2_KIND_DIR, FH2_KIND_DATA };
+/*
+ * FH2_KIND_DATA_FIX (vms-5eb R6-build): a data file whose bytes are written
+ * VERBATIM under RFM=FIXED (fat_rtype==1, [S]) rather than re-framed into
+ * RFM=VAR records like FH2_KIND_DATA. Used by ods2_wvolume_create_file_raw()
+ * for binary image files (.EXE) the boot master lays down for IMGACT to read
+ * raw. efblk/ffbyte are computed exactly as for FH2_KIND_DATA so the reader's
+ * ods2_recattr_data_bytes() returns the true byte length.
+ */
+enum fh2_kind { FH2_KIND_SYSTEM = 0, FH2_KIND_DIR, FH2_KIND_DATA,
+                FH2_KIND_DATA_FIX };
 
 /*
  * Write a complete FH2 header for FID `fidnum` at that FID's slot
@@ -499,6 +508,13 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
     case FH2_KIND_DATA:
         rtype = 2; rattrib = 0x02; rsize = 0;   maxrec = 0;
         break;
+    case FH2_KIND_DATA_FIX:
+        /* RFM=FIXED, 512-byte records, no record attributes -- the shape a
+         * real VMS image (.EXE) file carries [S]. Verbatim bytes; the
+         * reader bounds valid length off efblk/ffbyte below, not the
+         * record framing. */
+        rtype = ODS2_RTYPE_FIX; rattrib = 0x00; rsize = 512; maxrec = 512;
+        break;
     default: /* FH2_KIND_SYSTEM */
         rtype = 1; rattrib = 0x00; rsize = 512; maxrec = 512;
         break;
@@ -547,7 +563,8 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
             ffbyte = 0;
         } else {
             efblk = total_count;
-            if (kind == FH2_KIND_DATA && data_len > 0) {
+            if ((kind == FH2_KIND_DATA || kind == FH2_KIND_DATA_FIX) &&
+                data_len > 0) {
                 size_t last_block_bytes = data_len - (size_t)(total_count - 1) * ODS2_BLOCK_SIZE;
                 ffbyte = (uint16_t)last_block_bytes; /* 1..512 */
             } else {
@@ -1502,6 +1519,63 @@ ods2_status_t ods2_wvolume_create_file(ods2_wvolume_t *wvol,
         put16(fh + rsize_off, max_reclen);
         put16(fh + offsetof(ods2_fh2_t, fh2_checksum), ods2_block_checksum(fh));
     }
+
+    fid_from_num(fidnum, fid_out);
+    return wvol_commit(wvol, ODS2_OK);
+}
+
+ods2_status_t ods2_wvolume_create_file_raw(ods2_wvolume_t *wvol,
+                                           const char *name, uint16_t version,
+                                           const uint8_t *data, size_t data_len,
+                                           ods2_fid_t parent_dir,
+                                           ods2_fid_t *fid_out)
+{
+    uint32_t fidnum, lbn, nblocks, b;
+    ods2_status_t st;
+
+    if (!wvol || !name || (!data && data_len > 0) || !fid_out)
+        return ODS2_ERR_ARGS;
+
+    nblocks = (uint32_t)((data_len + ODS2_BLOCK_SIZE - 1) / ODS2_BLOCK_SIZE);
+    if (nblocks == 0)
+        nblocks = 1;   /* even a zero-length file gets one data block */
+
+    st = ods2_wvolume_alloc_blocks(wvol, nblocks, &lbn);
+    if (st != ODS2_OK)
+        return st;
+
+    /*
+     * Copy `data` VERBATIM into the allocated contiguous run, block by
+     * block via wblk() -- correct in BOTH in-memory mode (wblk returns a
+     * flat-image pointer) and block-device-backed mode (wblk returns a
+     * per-block cache entry, which is why this never memcpy's across a
+     * 512-byte span). The tail of the last block is zero-padded; the
+     * blocks were already zero-seeded by ods2_wvolume_alloc_blocks().
+     */
+    for (b = 0; b < nblocks; b++) {
+        uint8_t *blk = wblk(wvol, lbn + b);
+        size_t off = (size_t)b * ODS2_BLOCK_SIZE;
+        size_t take = 0;
+        if (off < data_len)
+            take = data_len - off < ODS2_BLOCK_SIZE
+                       ? data_len - off : ODS2_BLOCK_SIZE;
+        if (take < ODS2_BLOCK_SIZE)
+            memset(blk + take, 0, ODS2_BLOCK_SIZE - take);
+        if (take > 0)
+            memcpy(blk, data + off, take);
+    }
+
+    st = alloc_fid(wvol, &fidnum);
+    if (st != ODS2_OK)
+        return st;
+
+    /* seq == 1 (first generation); backlink == parent_dir. `data_len` (the
+     * verbatim byte count) drives write_fh2_header_ext's FH2_KIND_DATA_FIX
+     * efblk/ffbyte, so ods2_recattr_data_bytes() reports exactly data_len. */
+    st = write_fh2_header(wvol, fidnum, 1, name, version, 0, FH2_KIND_DATA_FIX,
+                          lbn, nblocks, data_len, parent_dir);
+    if (st != ODS2_OK)
+        return st;
 
     fid_from_num(fidnum, fid_out);
     return wvol_commit(wvol, ODS2_OK);

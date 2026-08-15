@@ -176,6 +176,7 @@ static inline uint32_t ods2_fid_number(const ods2_fid_t *f)
 #define ODS2_RAT_CR    0x02u
 #define ODS2_RAT_PRN   0x04u
 #define ODS2_RAT_BLK   0x08u
+#define ODS2_RTYPE_FIX 1u
 #define ODS2_RTYPE_VAR 2u
 
 typedef struct ods2_recattr {
@@ -1267,6 +1268,38 @@ ods2_status_t ods2_wvolume_create_file(ods2_wvolume_t *wvol,
                                        const uint8_t *data, size_t data_len,
                                        ods2_fid_t parent_dir,
                                        ods2_fid_t *fid_out);
+
+/*
+ * Create a new file whose `data_len` bytes are written to disk VERBATIM
+ * (raw, byte-for-byte), NOT re-framed into RFM=VAR records the way
+ * ods2_wvolume_create_file() above does. The file is stamped RFM=FIXED
+ * (fat_rtype == ODS2_RTYPE_FIX, the public FAB$B_RFM==FIX$C_FIX on-disk
+ * analog [S]) with a 512-byte record size; its fh2_recattr efblk/ffbyte
+ * express the exact valid-byte length, so ods2_bdev_read_file() reads the
+ * original `data_len` bytes back unchanged.
+ *
+ * WHY THIS EXISTS (vms-5eb R6-build): the system disk carries BINARY image
+ * files -- DCL.EXE, LOGINOUT.EXE, IMGACT.EXE, DECC$SHR.EXE, the LINK.EXE
+ * shareable graph, PARTS.EXE -- that IMGACT activates by reading their raw
+ * blocks. Re-framing those bytes as newline-split VAR records (what
+ * create_file() does, correct for .COM/.TXT text) would corrupt every
+ * binary. A boot-master built purely on create_file() therefore cannot
+ * produce a bootable genuine-ODS-2 system disk; this verbatim path is the
+ * missing primitive. Text records still go through create_file(); raw
+ * images go through here. Same allocation / FID / dir_insert contract as
+ * create_file(): call ods2_wvolume_dir_insert() separately with the SAME
+ * parent_dir.
+ *
+ * Rule 8: fat_rtype==1 (FIXED) and a 512-byte rsize are public Files-11 /
+ * RMS FAB$B_RFM facts (see the ods2_recattr_t comment); the verbatim
+ * block layout adds no new on-disk format fact beyond what the FIXED
+ * record format and the existing FH2/FM2 map already describe.
+ */
+ods2_status_t ods2_wvolume_create_file_raw(ods2_wvolume_t *wvol,
+                                           const char *name, uint16_t version,
+                                           const uint8_t *data, size_t data_len,
+                                           ods2_fid_t parent_dir,
+                                           ods2_fid_t *fid_out);
 
 /*
  * Create a new, empty directory file: one contiguous data block

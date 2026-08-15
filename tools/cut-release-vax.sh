@@ -7,8 +7,10 @@
 # (docs/design-vax-mainstream-release.md). R1 (vms-9172, DONE) made a broken
 # VAX build red a PR via fast per-PR cross-compile gates in ci.yml
 # (netbsd-vax-vms-crosscompile, netbsd-vax-vmsfs-crosscompile, vmsdcl-netbsd-
-# vax, ovmx-init-netbsd-vax/ovmx-boot-images-netbsd-vax, librarian-netbsd-
-# vax). This script is R2: it reuses that SAME cross toolchain image and
+# vax, ovmx-init-netbsd-vax, librarian-netbsd-vax). vms-d65 (unified
+# cross-build Rung C) retired the standalone ovmx-boot-images-netbsd-vax
+# job -- the boot-image set's per-PR proof now lives in vax-cmake-images'
+# activation loop. This script is R2: it reuses that SAME cross toolchain image and
 # pinned NetBSD syssrc to produce a real VAX artifact set and drop it into a
 # release bundle. It does not reinvent the cross-compile; it drives it, the
 # same way tools/cut-release.sh drives distro/Dockerfile.bootable rather than

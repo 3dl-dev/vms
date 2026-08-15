@@ -279,3 +279,64 @@ control is a forced timeout: `BOOT_TIMEOUT=1 ... smoke` -> the `timeout` fires
 - **VAX RAM ceiling.** NetBSD/vax panics with too much RAM (a known SIMH-VAX +
   NetBSD issue at 512 MB); anita's default vax memory size stays safely below
   it. Do not raise `--memory-size` without checking.
+
+## Shared harness contract: `vaxharness.py` (rd vms-cf5)
+
+The **port** code on vax lands clean; the **harness** is the time-sink -- it
+re-bites the same fragility class once per rung, and three separate agents
+have each hand-rolled a fix for a variant of it inside `drive_boot_vax.py` /
+`drive_eflag_vax.py`. `vaxharness.py` (+ its bash mirror `negctl_gate.sh`)
+kills the class ONCE, mined from `~/projects/pcjs-vax`'s Target Adapter
+Protocol (`docs/reference/target-adapter-protocol.md`, `tools/ehkaa-gate/
+gate.py`): that gate never scrapes a console -- it runs one adapter command
+and parses ONE line of JSON from stdout, target-agnostic. This module adapts
+that shape to a SIMH/pexpect console.
+
+**The three bugs it kills** (see the module docstring in `vaxharness.py` for
+full detail and exact call-site provenance):
+
+1. **anita's `expect()` crashes on its own TIMEOUT/EOF sentinel.** anita's
+   vendored pexpect subclass unconditionally calls `self.match.group(0)`
+   after every `expect()`, which raises `AttributeError` when the match IS
+   the `pexpect.TIMEOUT`/`pexpect.EOF` sentinel (neither has `.group()`).
+   `safe_expect(child, patterns, timeout)` never puts those sentinels in the
+   pattern list (so pexpect raises them as exceptions instead, sidestepping
+   anita's buggy hook entirely), catches `pexpect.TIMEOUT`/`pexpect.EOF`/any
+   other exception, and **never raises** -- it always returns a
+   `SafeExpectResult` (`kind` = `match`/`timeout`/`eof`/`error`).
+2. **`child.before` can be `None`** after a failed `expect()`, crashing any
+   `.count()`/`.strip()` call downstream. Every `SafeExpectResult.before`
+   (and `.after`) is unconditionally a `str`, never `None` -- even if the
+   attribute access itself raises.
+3. **Negative-control exit-code contradictions.** A driver and its wrapper
+   disagreeing about what "negctl satisfied" means (`run-eflag.sh` wanted a
+   nonzero driver exit; one driver variant exited 0 logging "negctl ok").
+   `negctl_gate(driver_exit_code, negctl)` is the ONE inversion rule: a
+   driver's exit code is **never** mode-aware (0 = every positive assertion
+   held, regardless of negctl); the WRAPPER applies `negctl_gate()` (or its
+   bash mirror `negctl_gate.sh`'s `vaxharness_negctl_gate`) to invert that
+   meaning for negctl mode. Both implementations are unit-tested against the
+   identical table so they cannot silently diverge.
+
+**The structured result contract.** `Proof`/`StepResult` turn a driver's
+pass/fail decision into DATA -- one `{step, ok, marker_seen, detail}` per
+proof step, reduced by `Proof.emit_result_line()` to exactly one JSON line on
+stdout (mirroring the Target Adapter Protocol's "exactly one JSON object"
+contract) -- instead of scattered `if seen.get(...)` checks through the
+script.
+
+**Self-test:** `test_vaxharness.py` (pytest, no SIMH/anita/container needed)
+feeds `safe_expect()` fake children that raise `pexpect.TIMEOUT`,
+`pexpect.EOF`, the exact anita `AttributeError`, and one whose `.before`
+property itself raises, asserting the honest structured result comes back in
+every case and nothing ever raises; plus the full `negctl_gate` truth table
+in both Python and bash. Run: `pytest tests/lab-vax/test_vaxharness.py -v`.
+
+**Adoption (follow-up, not this item).** `vaxharness.py` is a new,
+standalone module -- it does not yet replace the ad hoc `_console_text()` /
+scattered `except (pexpect.TIMEOUT, pexpect.EOF, Exception)` call sites in
+the existing `drive_*.py` drivers. That retrofit is separate follow-up work,
+sequenced after `vms-84fe` (mid-flight in `drive_boot_vax.py`) merges, and is
+also the intended contract for `vms-945e`'s remaining facility drivers
+(proctab/mbx/ast/access), so they adopt `safe_expect`/`Proof`/`negctl_gate`
+from day one instead of re-deriving them.

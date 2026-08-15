@@ -330,6 +330,42 @@ jobs:
           fi
           echo "OK: docs/compatibility-surface.md matches a fresh render of docs/compat/ (date stamp ignored)."
   # -----------------------------------------------------------------------
+  # Job: vax SIMH harness self-test (rd vms-cf5, epic vms-8e8)
+  #
+  # tests/lab-vax/vaxharness.py is the shared crash-proof helper (safe_expect,
+  # Proof/StepResult, negctl_gate) that kills the anita expect()-crash /
+  # child.before-is-None / negctl-exit-code-contradiction fragility class the
+  # SIMH+anita vax drivers keep re-biting. This job proves the helper itself
+  # with no SIMH, no anita, no container -- plain pytest against fake pexpect
+  # children (see test_vaxharness.py). It is a CHEAP, fast complement to the
+  # heavy netbsd-vax-* SIMH jobs below (which still exercise the real drivers
+  # under real SIMH); this one exists so the helper's own correctness is
+  # proven on every PR that touches it, without paying for an emulator boot.
+  # Gated on the same netbsd_vax path filter those jobs share (covers
+  # tests/lab-vax/**), but this job itself never touches SIMH/anita/docker.
+  # -----------------------------------------------------------------------
+  vaxharness-selftest:
+    name: vax Harness Self-Test (rd vms-cf5)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install pexpect + pytest (test deps only -- no SIMH/anita/container)
+        run: pip install --disable-pip-version-check pexpect pytest
+
+      - name: Run vaxharness.py self-tests
+        run: python3 -m pytest tests/lab-vax/test_vaxharness.py -v
+  # -----------------------------------------------------------------------
   # Job: aarch64 system-emulation boot proof (rd vms-f66)
   #
   # The aarch64 positioning lane. Every other positioning arch has a

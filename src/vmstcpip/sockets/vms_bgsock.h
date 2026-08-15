@@ -106,6 +106,36 @@ int ovmx_socket_close(int s);
  * the fd (>= 0), or -1 with errno (ENODEV = no /dev/vms). */
 int ovmx_pollfd(int s);
 
+/* Return the channel's CACHED executive readiness fd (created once, owned by the
+ * veneer socket, closed at ovmx_socket_close). This is what a poll()/select()
+ * --wrap layer folds into a real fd set for a veneer handle; unlike ovmx_pollfd
+ * the caller must NOT close it. Returns the fd (>= 0) or -1 with errno. */
+int ovmx_readyfd(int s);
+
+/* Socket-name + option surface (the OpenSSH de-veneer, vms-4bf). These read/
+ * write the REAL executive-resident host kernel socket via new IO$_SENSEMODE /
+ * IO$_SETMODE ops, so an UNMODIFIED OpenSSH's getpeername()/setsockopt() calls
+ * touch VMS ($QIO on BGn:) rather than a bypassed AF_UNIX socketpair.
+ *
+ * ovmx_getpeername returns the TRUE remote IP:port of the connected peer (the
+ * anti-veneer bar: known_hosts records the right host); ovmx_getsockname the
+ * local endpoint. ovmx_set/getsockopt carry an integer option to/from the live
+ * kernel socket (TCP_NODELAY / SO_KEEPALIVE / IP_TOS / SO_REUSEADDR / SO_ERROR)
+ * -- honored for real, not swallowed; an unsupported option fails ENOPROTOOPT.
+ * All return 0 on success, -1 with errno on failure (ENODEV = no /dev/vms). */
+int ovmx_getpeername(int s, struct sockaddr *addr, socklen_t *addrlen);
+int ovmx_getsockname(int s, struct sockaddr *addr, socklen_t *addrlen);
+int ovmx_setsockopt(int s, int level, int optname, const void *optval,
+                    socklen_t optlen);
+int ovmx_getsockopt(int s, int level, int optname, void *optval,
+                    socklen_t *optlen);
+
+/* F_GETFL / F_SETFL for O_NONBLOCK (what OpenSSH sets on the connection fd).
+ * Non-blocking send/recv are gated on the executive readiness fd so a
+ * would-block returns EAGAIN without issuing a blocking $QIO. Returns the flags
+ * (F_GETFL) or 0 on success, -1 with errno on failure. */
+int ovmx_fcntl(int s, int cmd, int arg);
+
 /* Numeric IPv4 helpers (no DNS yet). ovmx_inet_pton: "a.b.c.d" -> network-order
  * in_addr; returns 1 on success, 0 on a non-literal, -1 on bad af.
  * ovmx_getaddrinfo_numeric: fill *out (AF_INET) from a dotted-quad host + port;

@@ -141,6 +141,46 @@ struct vms_bg_pollfd_args {
     uint32_t status;        /* out */
 };
 
+/*
+ * IO$_SENSEMODE (getsockname / getpeername) -- report the channel socket's
+ * LOCAL (which==0) or PEER (which==1) address, straight from the host kernel
+ * socket via kernel_getsockname / kernel_getpeername. The answer is the REAL
+ * kernel-socket endpoint, never a userspace guess: this is what lets an
+ * unmodified OpenSSH's getpeername() record the true remote IP for known_hosts
+ * (OpenSSH de-veneer Tier A, vms-4bf). The address is returned as the same
+ * 8-byte AF_INET tuple IO$_ACCESS accepts (family + network-order port + v4
+ * addr); IPv6 is a later phase.
+ */
+struct vms_bg_name_args {
+    uint32_t chan;          /* in */
+    uint32_t which;         /* in: 0 = getsockname (local), 1 = getpeername (peer) */
+    uint32_t status;        /* out */
+    uint16_t sin_family;    /* out: AF_INET (2) */
+    uint16_t sin_port;      /* out: network byte order */
+    uint32_t sin_addr;      /* out: network byte order */
+};
+
+/*
+ * IO$_SETMODE / IO$_SENSEMODE socket-option subfunction (setsockopt /
+ * getsockopt) -- carry a single INTEGER-valued option to/from the REAL host
+ * kernel socket. On SET the value is applied through the socket's own
+ * ->setsockopt (so SO_KEEPALIVE / TCP_NODELAY / IP_TOS / SO_REUSEADDR take
+ * genuine effect on the kernel socket, NOT swallowed); on GET the executive
+ * reads the option back from the live socket state. Only the small
+ * integer-option whitelist OpenSSH sets is honored; anything else returns
+ * SS$_BADPARAM (the veneer maps that to ENOPROTOOPT), an honest "unsupported",
+ * never a fake success. OVMX design choice (Rule 8): the int-only wire form is
+ * ours; the option semantics are the host kernel's.
+ */
+struct vms_bg_sockopt_args {
+    uint32_t chan;          /* in */
+    uint32_t op;            /* in: 0 = setsockopt, 1 = getsockopt */
+    int32_t  level;         /* in: SOL_SOCKET / IPPROTO_TCP / IPPROTO_IP */
+    int32_t  optname;       /* in */
+    int32_t  optval;        /* in for set / out for get (integer options only) */
+    uint32_t status;        /* out */
+};
+
 #define VMS_IOCTL_BG_CREATE   _IOWR(VMS_IOC_MAGIC, 0x80, struct vms_bg_create_args)
 #define VMS_IOCTL_BG_SETMODE  _IOWR(VMS_IOC_MAGIC, 0x81, struct vms_bg_chanonly_args)
 #define VMS_IOCTL_BG_CONNECT  _IOWR(VMS_IOC_MAGIC, 0x82, struct vms_bg_connect_args)
@@ -149,6 +189,8 @@ struct vms_bg_pollfd_args {
 #define VMS_IOCTL_BG_DEACCESS _IOWR(VMS_IOC_MAGIC, 0x85, struct vms_bg_chanonly_args)
 #define VMS_IOCTL_BG_DASSGN   _IOWR(VMS_IOC_MAGIC, 0x86, struct vms_bg_chanonly_args)
 #define VMS_IOCTL_BG_POLLFD   _IOWR(VMS_IOC_MAGIC, 0x87, struct vms_bg_pollfd_args)
+#define VMS_IOCTL_BG_GETNAME  _IOWR(VMS_IOC_MAGIC, 0x88, struct vms_bg_name_args)
+#define VMS_IOCTL_BG_SOCKOPT  _IOWR(VMS_IOC_MAGIC, 0x89, struct vms_bg_sockopt_args)
 
 /*
  * Freeze the shared layouts -- see vms_mbx.h's identical note for why this
@@ -166,5 +208,9 @@ _Static_assert(sizeof(struct vms_bg_io_args) == 16 + VMS_BG_IOCTL_MAXLEN,
                "vms_bg_io_args changed size -- VMS_IOCTL_BG_SEND/RECV ABI break");
 _Static_assert(sizeof(struct vms_bg_pollfd_args) == 12,
                "vms_bg_pollfd_args changed size -- VMS_IOCTL_BG_POLLFD ABI break");
+_Static_assert(sizeof(struct vms_bg_name_args) == 20,
+               "vms_bg_name_args changed size -- VMS_IOCTL_BG_GETNAME ABI break");
+_Static_assert(sizeof(struct vms_bg_sockopt_args) == 24,
+               "vms_bg_sockopt_args changed size -- VMS_IOCTL_BG_SOCKOPT ABI break");
 
 #endif /* _VMS_BG_H */

@@ -102,3 +102,11 @@ vms_kif_bg_recv=PROCEDURE
 vms_kif_bg_deaccess=PROCEDURE
 vms_kif_bg_dassgn=PROCEDURE
 vms_kif_bg_pollfd=PROCEDURE
+# vms-4bf: OpenSSH de-veneer Tier A -- getsockname/getpeername (IO$_SENSEMODE)
+# and get/setsockopt (IO$_SETMODE/SENSEMODE) over BGn:, so unmodified OpenSSH's
+# getpeername()/setsockopt() dispatch to $QIO on the executive-resident socket.
+# APPENDED at the end per the append-only contract -- a new universal never
+# shifts an existing index.
+vms_kif_bg_getname=PROCEDURE
+vms_kif_bg_setsockopt=PROCEDURE
+vms_kif_bg_getsockopt=PROCEDURE

@@ -101,6 +101,9 @@ if [ "${OVMX_VENEER:-0}" = "1" ]; then
     cp "$ROOT/src/vmstcpip/sockets/vms_bgsock.h" "$SRCDIR/ovmx/"
     cp "$HERE/ovmx/ovmx_ssh_glue.h" "$SRCDIR/ovmx/"
     cp "$HERE/ovmx/ovmx_ssh_glue.c" "$SRCDIR/ovmx/"
+    # OVMX_WRAP (vms-4bf de-veneer): the linker-`--wrap` dispatch TU that routes
+    # every fd syscall on the veneer handle to $QIO, retiring the socketpair.
+    cp "$HERE/ovmx/ovmx_ssh_wrap.c" "$SRCDIR/ovmx/"
 fi
 
 cd "$SRCDIR"
@@ -136,16 +139,35 @@ if [ "${OVMX_VENEER:-0}" = "1" ]; then
     echo "== compile the OpenSSH<->veneer glue with OpenSSH's own flags =="
     # Reuse the exact CFLAGS/CPPFLAGS configure baked into the Makefile so the
     # glue sees config.h + sshbuf.h, plus -DOVMX_VENEER and the srcdir include.
+    # OVMX_WRAP=1 additionally builds the --wrap dispatch layer (vms-4bf): the
+    # glue returns the veneer HANDLE directly (no socketpair/pump), and every fd
+    # syscall on it is routed to $QIO by ovmx_ssh_wrap.o via linker --wrap.
     OSSH_CFLAGS=$(sed -n 's/^CFLAGS=[[:space:]]*//p' Makefile | head -1)
     OSSH_CPPFLAGS=$(sed -n 's/^CPPFLAGS=[[:space:]]*//p' Makefile | head -1 | sed "s#\$(PATHS)##; s#\$(srcdir)#$SRCDIR#g")
-    "$CC" $OSSH_CFLAGS $OSSH_CPPFLAGS -DOVMX_VENEER -I"$SRCDIR" \
+    OVMX_DEFS="-DOVMX_VENEER"
+    OVMX_WRAP_OBJ=""
+    OVMX_WRAP_LDFLAGS=""
+    if [ "${OVMX_WRAP:-0}" = "1" ]; then
+        OVMX_DEFS="-DOVMX_VENEER -DOVMX_WRAP"
+        "$CC" $OSSH_CFLAGS $OSSH_CPPFLAGS $OVMX_DEFS -I"$SRCDIR" \
+            -c "$SRCDIR/ovmx/ovmx_ssh_wrap.c" -o "$WORK/ovmx_ssh_wrap.o"
+        OVMX_WRAP_OBJ="$WORK/ovmx_ssh_wrap.o"
+        # One --wrap per fd syscall unmodified OpenSSH issues on the connection.
+        for _s in read write close getpeername getsockname setsockopt getsockopt \
+                  shutdown fcntl poll ppoll; do
+            OVMX_WRAP_LDFLAGS="$OVMX_WRAP_LDFLAGS -Wl,--wrap=$_s"
+        done
+    fi
+    "$CC" $OSSH_CFLAGS $OSSH_CPPFLAGS $OVMX_DEFS -I"$SRCDIR" \
         -c "$SRCDIR/ovmx/ovmx_ssh_glue.c" -o "$WORK/ovmx_ssh_glue.o"
 
     echo "== wire the OVMX branch + objects into the ssh link =="
     # -DOVMX_VENEER activates the patched branches; the glue object + veneer
-    # archive are appended to LIBS so they resolve at the final ssh link.
-    sed -i 's/^CPPFLAGS=/CPPFLAGS=-DOVMX_VENEER /' Makefile
-    sed -i "s#^LIBS=#LIBS=$WORK/ovmx_ssh_glue.o $WORK/libovmxveneer.a #" Makefile
+    # archive (+ the wrap object under OVMX_WRAP) are appended to LIBS so they
+    # resolve at the final ssh link. The --wrap flags rewrite the fd-syscall
+    # symbol references at link time.
+    sed -i "s/^CPPFLAGS=/CPPFLAGS=$OVMX_DEFS /" Makefile
+    sed -i "s#^LIBS=#LIBS=$OVMX_WRAP_LDFLAGS $WORK/ovmx_ssh_glue.o $OVMX_WRAP_OBJ $WORK/libovmxveneer.a #" Makefile
 fi
 
 echo "== make ssh (static) =="

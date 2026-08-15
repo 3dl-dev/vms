@@ -513,6 +513,7 @@ bg-recv-length-zeroed
 tcpip-ftp-get-length-dropped
 bgsock-recv-length-zeroed
 bgsock-poll-always-ready
+bgsock-getname-addr-zeroed
 vmsfs-mountvis-crossproc-resolve-disabled
 initialize-home-magic-not-written"
 
@@ -5433,6 +5434,24 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    bgsock-getname-addr-zeroed)
+        case "$_f" in
+        facility)     echo "BSD-sockets RTL veneer over BGn: -- getsockname/getpeername (vms_ioctl_bg_getname, VMS_IOCTL_BG_GETNAME, IO\$_SENSEMODE) in the executive BGn: driver (src/kernel/vms_bg.c, OpenSSH de-veneer Tier A vms-4bf). The executive reads the connected socket's local/peer address STRAIGHT FROM THE HOST KERNEL SOCKET (kernel_getsockname/kernel_getpeername), so an unmodified OpenSSH getpeername() records the TRUE remote IP for known_hosts, never an AF_UNIX socketpair peer. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive.";;
+        targets)      echo "kernel/vms_bg.c";;
+        suites_red)   echo "test_syssvc_bgsock_peername";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_bg_getname() copies the kernel socket's sin_addr into the answer the veneer hands getpeername/getsockname. The mutation zeroes it ('args.sin_addr = sin->sin_addr.s_addr;' -> 'args.sin_addr = 0;'), so getpeername/getsockname report 0.0.0.0 -- reddening exactly the 'returns the REAL remote IP' and 'local 127.0.0.1' address assertions, while the port, sockopt round-trips and non-blocking EAGAIN stay green (family and port are still copied). One assignment zeroed.";;
+        require_fail) cat <<'EOF'
+getpeername() returns the REAL remote IP 127.0.0.1 (known_hosts sees the true host, not an AF_UNIX peer)
+ovmx_getsockname() returns the local 127.0.0.1:<ephemeral> endpoint
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     # -------------------------------------------------------------------
     # vms-6c6: two suites #284/#272 (vms-8b6, vms-cf62) left with NO
     # per-facility negative control -- the same coverage-gate hole
@@ -6325,6 +6344,15 @@ apply_edit() {
         # "not readable before data" assertion reddens. After substitution the
         # delegating call with that comment is gone, so a second apply is a no-op.
         sed -i 's@return sock->ops->poll(file, sock, wait);  /\* NEGCTL bgsock-poll-always-ready \*/@return (EPOLLIN | EPOLLOUT); /* NEGCTL bgsock-poll-always-ready */@' "$_file";;
+
+    bgsock-getname-addr-zeroed)
+        # Zero the peer/local address the executive copies out of the kernel
+        # socket in vms_ioctl_bg_getname(), anchored on its own NEGCTL comment so
+        # the text is unique: 'args.sin_addr = sin->sin_addr.s_addr;' -> '= 0;'.
+        # getpeername/getsockname then report 0.0.0.0. After substitution the
+        # delegating assignment with that comment is gone, so a second apply is a
+        # no-op -- BROKEN FIXTURE, as selftest requires.
+        sed -i 's@args.sin_addr   = sin->sin_addr.s_addr;     /\* NEGCTL bgsock-getname-addr-zeroed \*/@args.sin_addr   = 0; /* NEGCTL bgsock-getname-addr-zeroed */@' "$_file";;
 
     vmsfs-mountvis-crossproc-resolve-disabled)
         # UNIQUE TEXT: vmsfs_device_resolve_executive's own /proc/mounts guard;

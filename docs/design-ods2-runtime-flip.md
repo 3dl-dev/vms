@@ -47,17 +47,64 @@ foundations, and the first flip rung's builder primitive is landed:
     RFM=VAR records (real-VMS record format) vs verbatim stream bytes. Not
     taken here; the verbatim default is the conservative byte-faithful choice.
 
+- **SYS$DISK read ADAPTER — LANDED (update 2026-08-15, this branch).**
+  `src/vmsfs/ods2_sysdisk.c` + `src/vmsfs/include/vmsfs/sysdisk.h`
+  (`ods2_sysdisk_owns_path` / `_resolve_file` / `_read_file` / `_list_dir`),
+  built into the `vmsfs_volume` static library, test `ods2_sysdisk`
+  (`tests/ods2/test_ods2_sysdisk.c`, 26 assertions, green). This is the ONE
+  bridge R2/R3/R5 all consume but that B2 did not yet offer: it turns a
+  resolved `"/vms/A/B/.../NAME.EXT;ver"` Linux path — the exact string every
+  `/vms` consumer already computes via `vmsfs_to_linux_path` — into an
+  `ods2_bdev` directory-component walk + file resolve/read/list over the
+  registered SYS$DISK volume handle (`vmsfs_volume_handle(SYSDISK_DEVICE)`).
+  Proven: verbatim binary read-back byte-identical (the A1 property; via
+  `create_file_raw`), `;ver`/highest version selection, directory listing, and
+  every fail-honest edge (no volume → `SS$_DEVNOTMOUNT`, non-`/vms` →
+  `SS$_BADPARAM`, missing file → `SS$_NOSUCHFILE`, undersized buffer →
+  `SS$_DATACHECK`). Additive; **flips no live path** (boot unaffected). Rule 8:
+  adds no on-disk fact — only sequences the reader's existing primitives.
+  **This is the READ half only.** The reroute of each consumer ONTO it, and the
+  write half (below), remain in the atomic group.
+
+- **⚠ NEWLY CONFIRMED (2026-08-15) — boot-to-login is NOT read-only on
+  SYS$DISK.** A full trace of PID 1 → STARTUP → LOGINOUT → `Username:` found
+  exactly two GUARANTEED per-boot writers to SYS$DISK, and — critically — both
+  bypass RMS entirely (plain `fopen`/`mkdir` on the `/vms` tree via
+  `vmsfs_to_linux_path`), so §4's "B1 = RMS `$PUT`/`$CREATE`" framing was
+  incomplete:
+  1. **OPERATOR.LOG append** — `src/ovmx_init/opcom_kmsg.c:258-270`,
+     `fopen(SYS$MANAGER:OPERATOR.LOG, "a")` on the PID 1 `/dev/kmsg` follower
+     thread, every boot once the disk is mounted.
+  2. **LASTLOGIN rewrite + mkdir** — `src/libvms/rtl/ovmx_accounting.c:158-199`
+     (+ `ensure_dir` :43-51), temp-file write + `rename()` of
+     `SYS$MANAGER:LASTLOGIN/<USER>`, plus `mkdir` of the dir, on every
+     interactive login (called from `tools/vms_login.c:145`, before the shell).
+  SYSUAF/RIGHTSLIST/SYSGEN-params/VMS$PHASES/VMS$VMS/all images are read-only
+  in this window (SYSUAF is consulted, never written at login). **Implication:**
+  the atomic flip's write path is (a) an ODS-2 runtime WRITER over the LIVE
+  registered volume — append-to-existing-file (OPERATOR.LOG), create-file
+  (LASTLOGIN temp), and mkdir — which needs the volume opened O_RDWR (today
+  `vmsfs_volume_register` opens O_RDONLY) and the `ods2_wvolume_*` block writer
+  driven against the mounted device, AND (b) rerouting these two NON-RMS
+  `fopen`/`mkdir` callers, not only RMS `$CREATE`/`$PUT`. The `ods2_wvolume_*`
+  block-backed create/alloc/dir_insert/grow primitives already exist (§0 B1);
+  what is missing is the runtime "append a record to an existing file" +
+  O_RDWR-handle + non-RMS-caller reroute. This is the true long pole.
+
 Remaining atomic group (still must land together, boot-gated): R6-kernel,
-R6-mount, R2-RMS, R3-DCL, R5-MOUNT, Retire, Proof. Current-state anchors:
+R6-mount, R2-RMS, R3-DCL, R5-MOUNT, **the write half (Wr)**, Retire, Proof.
+Current-state anchors:
 
 | Rung | Anchor (current) |
 |------|------------------|
 | R6-build (flip default) | `tools/vmsfs_master.c` `--ods2` DONE; flip caller in `distro/Dockerfile.bootable` (mastering step ~line 713) to `--ods2` / `OVMX_MASTER_ODS2=1` |
 | R6-kernel | `src/kernel/vmsfs/vmsfs_super.c:387` (`VMSFS_HOME_MAGIC` check) — under A1 the SYS$DISK kernel MOUNT is RETIRED, so this is home/SCB parse for boot-device VALIDATION only, not a POSIX mount |
-| R6-mount | `src/ovmx_init/ovmx_init.c` `bare_metal_init` (stop `mount(...,"vmsfs")` at `ovmx_boot_linux.c:158`; rely on `register_system_volume()` volume handle); `tools/vms_mount_helper.c` |
-| R2-RMS | `src/vmsrms/rms_core.c` `resolve_filename` (:413), `rms_impl_open`, drop `rms_validate_path_boundary` (:207) for SYS$DISK, reroute record I/O off `fab->_linux_fd` |
-| R3-DCL | `src/vmsdcl/dcl_cmd_file.c` `dir_collect` (:280)/`cmd_directory` (:648, `vmsfs_to_linux_path` at :686/:690); `src/vmsdcl/dcl_cmd_set.c` `cmd_set_default` (:97) |
+| R6-mount | `src/ovmx_init/ovmx_init.c` `bare_metal_init` (stop `mount(...,"vmsfs")` at `ovmx_boot_linux.c:158`; rely on `register_system_volume()` volume handle — which must open O_RDWR for the write half); `tools/vms_mount_helper.c` |
+| **read adapter** | **DONE — `src/vmsfs/ods2_sysdisk.c` (`ods2_sysdisk_read_file`/`_resolve_file`/`_list_dir`/`_owns_path`); test `ods2_sysdisk`. R2/R3/R5 reroute their read/list sites onto this.** |
+| R2-RMS | `src/vmsrms/rms_core.c` `resolve_filename` (:413), `rms_impl_open` read-open at `:702` (O_RDONLY) → `ods2_sysdisk_read_file`/resolve when `ods2_sysdisk_owns_path(_resolved_path)`; drop `rms_validate_path_boundary` (:207) for SYS$DISK; reroute record I/O off `fab->_linux_fd` (rms_read_exact/rms_write_exact in `rms_util.c:15/:34` + `lseek` cursors in rms_seq/rel/idx); `$SEARCH` `opendir`/`readdir` (`rms_search.c:173/:186`) → `ods2_sysdisk_list_dir`. Write-open (`rms_impl_create` `:808` O_CREAT) → Wr. |
+| R3-DCL | `src/vmsdcl/dcl_cmd_file.c` `dir_collect` (:280)/`cmd_directory` (:648, `vmsfs_to_linux_path` at :686/:690) → `ods2_sysdisk_list_dir`; `src/vmsdcl/dcl_cmd_set.c` `cmd_set_default` (:97) → `ods2_sysdisk_resolve_file`/`_list_dir` to validate the dir |
 | R5-MOUNT | `src/vmsdcl/dcl_cmd_misc.c` `cmd_mount` (:2211) — validate home via `ods2_home_parse` + SCB via `ods2_scb_parse`, reject non-ODS-2 |
+| **Wr (write half)** | NEW long pole. (a) `vmsfs_volume` O_RDWR handle + a `ods2_sysdisk_write`/`_append`/`_mkdir` twin driving `ods2_wvolume_*` over the LIVE mounted device; (b) reroute the two guaranteed non-RMS boot writers — `opcom_kmsg.c:258` OPERATOR.LOG append, `ovmx_accounting.c:158`/`:43` LASTLOGIN write+mkdir — plus RMS `rms_impl_create`/`$PUT`, off `vmsfs_to_linux_path`+`fopen`/`open(O_CREAT)` onto it |
 
 ---
 

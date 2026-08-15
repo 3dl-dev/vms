@@ -305,6 +305,7 @@ add_executable(vmsfs_master
 
 target_include_directories(vmsfs_master PRIVATE
     ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
+    ${VMS_FS_INCLUDE_DIR}   # vmsfs/ods2.h -- genuine ODS-2 writer/reader (vms-5eb R6-build)
 )
 
 target_compile_definitions(vmsfs_master PRIVATE
@@ -315,6 +316,12 @@ target_compile_definitions(vmsfs_master PRIVATE
 target_compile_options(vmsfs_master PRIVATE
     -Wall -Wextra
 )
+
+# vms-5eb R6-build: the genuine-ODS-2 master/list path (--ods2) writes/reads a
+# real Files-11 (DECFILE11B) volume through the byte-genuine writer/reader in
+# src/vmsfs/ods2, the same library INITIALIZE.EXE and the block-backed runtime
+# reader use. The legacy VMFS path (default) needs no extra link.
+target_link_libraries(vmsfs_master PRIVATE ods2)
 
 set_target_properties(vmsfs_master PROPERTIES
     OUTPUT_NAME "vmsfs_master"

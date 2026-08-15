@@ -58,6 +58,7 @@
 #include <sys/types.h>
 
 #include "vmsfs_ondisk.h"
+#include "vmsfs/ods2.h"     /* GENUINE ODS-2 writer/reader (vms-5eb R6-build) */
 
 /* Mastering policy constants (OVMX build-tool choices, not VMS-authentic). */
 #define MASTER_UIC_GROUP   1      /* SYSTEM group */
@@ -994,36 +995,422 @@ static int do_list(const char *image)
  * main
  * ================================================================ */
 
+/* ================================================================
+ * GENUINE ODS-2 master mode (vms-5eb R6-build, docs/design-ods2-runtime-flip.md)
+ *
+ * The block-device-backed twin of do_master() above: lay the SAME host source
+ * tree onto a GENUINE ODS-2 (Files-11 level 2, "DECFILE11B") volume via the
+ * byte-genuine writer in src/vmsfs/ods2 (ods2_wvolume_format_bdev +
+ * ods2_wvolume_create_dir/create_file_raw/dir_insert) instead of the
+ * OVMX-inspired VMFS format vmsfs_ondisk.h describes. This is the R6-build
+ * rung of the ODS-2 runtime flip: the boot master must produce a genuine ODS-2
+ * SYS$DISK for the atomic RMS/DCL/MOUNT flip (R2/R3/R5) to read over a raw
+ * block device (ods2_bdev_*), retiring the /vms POSIX passthrough.
+ *
+ * This mode is ADDITIVE and OPT-IN (--ods2, or OVMX_MASTER_ODS2 in the env):
+ * the default remains the VMFS master (do_master) so boot is unaffected until
+ * the whole atomic group lands together (§5 atomicity). It mirrors exactly how
+ * INITIALIZE.EXE gained its --ods2 genuine-volume path (tools/vms_initialize.c,
+ * vms-6ef) ahead of the runtime flip.
+ *
+ * File-content policy (Rule 8 / architecture A1): every regular file is written
+ * VERBATIM via ods2_wvolume_create_file_raw() so its on-disk bytes are
+ * byte-for-byte the host file's bytes. Binary images (.EXE) MUST be verbatim --
+ * ods2_wvolume_create_file()'s RFM=VAR reframing corrupts them -- and storing
+ * text verbatim too keeps the whole volume byte-identical to today's POSIX /vms
+ * passthrough, the property the runtime read path (RMS/DCL/IMGACT) relies on.
+ * Whether RMS should instead present .COM/.TXT as RFM=VAR records is an
+ * R2-coupled record-attribute decision and is deliberately NOT taken here.
+ * ================================================================ */
+
+/* Read the whole host file at `path` (`size` bytes per its stat) into a fresh
+ * malloc'd buffer. On success *buf_out owns the bytes (caller frees) and
+ * *len_out is the byte count. A zero-length file yields *buf_out == NULL. */
+static int read_host_file(const char *path, uint64_t size,
+                          uint8_t **buf_out, size_t *len_out)
+{
+    *buf_out = NULL;
+    *len_out = 0;
+    if (size == 0)
+        return 0;
+
+    int in = open(path, O_RDONLY);
+    if (in < 0) {
+        fprintf(stderr, "%%MASTER-F-OPENIN, cannot read %s: %s\n",
+                path, strerror(errno));
+        return -1;
+    }
+
+    uint8_t *buf = malloc((size_t)size);
+    if (!buf) {
+        fprintf(stderr, "%%MASTER-F-NOMEM, out of memory reading %s\n", path);
+        close(in);
+        return -1;
+    }
+
+    size_t got = 0;
+    while (got < size) {
+        ssize_t k = read(in, buf + got, (size_t)size - got);
+        if (k < 0) {
+            fprintf(stderr, "%%MASTER-F-READ, error reading %s: %s\n",
+                    path, strerror(errno));
+            free(buf);
+            close(in);
+            return -1;
+        }
+        if (k == 0)
+            break;          /* file shrank since stat(); take what we got */
+        got += (size_t)k;
+    }
+    close(in);
+
+    *buf_out = buf;
+    *len_out = got;
+    return 0;
+}
+
+/* Construct a node's on-disk directory-entry name: "NAME.DIR" for a directory,
+ * "NAME.TYPE" (or bare "NAME" when the type is empty) for a file -- exactly the
+ * spelling ods2_wvolume_create_dir/create_file_raw + dir_insert expect and the
+ * reader resolves back (a "SYS0" path component is the entry "SYS0.DIR"). */
+static void ods2_entry_name(const struct node *n, char *out, size_t outsz)
+{
+    if (n->is_dir)
+        snprintf(out, outsz, "%s.DIR", n->name);
+    else if (n->type[0])
+        snprintf(out, outsz, "%s.%s", n->name, n->type);
+    else
+        snprintf(out, outsz, "%s", n->name);
+}
+
+/* Recursively create every child of `dir` (already created, FID `dir_fid`) on
+ * the volume under construction, inserting each into `dir_fid` in the process.
+ * Directories are created empty then recursed into; files are written verbatim.
+ * Every ODS-2 name/version is 1 (MASTER_FILE_VER), matching do_master's policy
+ * and the writer's ";1" convention. */
+static int emit_tree_ods2(ods2_wvolume_t *wvol, const struct node *dir,
+                          ods2_fid_t dir_fid)
+{
+    char entry[VMSFS_NAME_MAX + VMSFS_TYPE_MAX + 8];
+    ods2_status_t st;
+
+    for (size_t i = 0; i < dir->nchild; i++) {
+        struct node *c = dir->children[i];
+        ods2_entry_name(c, entry, sizeof(entry));
+
+        if (c->is_dir) {
+            ods2_fid_t child_fid;
+            st = ods2_wvolume_create_dir(wvol, entry, MASTER_FILE_VER,
+                                         dir_fid, &child_fid);
+            if (st != ODS2_OK) {
+                fprintf(stderr, "%%MASTER-F-MKDIR, create %s failed: %s\n",
+                        entry, ods2_strerror(st));
+                return -1;
+            }
+            st = ods2_wvolume_dir_insert(wvol, dir_fid, entry,
+                                         MASTER_FILE_VER, child_fid);
+            if (st != ODS2_OK) {
+                fprintf(stderr, "%%MASTER-F-DIRENT, insert %s failed: %s\n",
+                        entry, ods2_strerror(st));
+                return -1;
+            }
+            if (emit_tree_ods2(wvol, c, child_fid) < 0)
+                return -1;
+        } else {
+            uint8_t *data = NULL;
+            size_t   dlen = 0;
+            if (read_host_file(c->host_path, c->size, &data, &dlen) < 0)
+                return -1;
+
+            ods2_fid_t file_fid;
+            st = ods2_wvolume_create_file_raw(wvol, entry, MASTER_FILE_VER,
+                                              data, dlen, dir_fid, &file_fid);
+            free(data);
+            if (st != ODS2_OK) {
+                fprintf(stderr, "%%MASTER-F-MKFILE, create %s failed: %s\n",
+                        entry, ods2_strerror(st));
+                return -1;
+            }
+            st = ods2_wvolume_dir_insert(wvol, dir_fid, entry,
+                                         MASTER_FILE_VER, file_fid);
+            if (st != ODS2_OK) {
+                fprintf(stderr, "%%MASTER-F-DIRENT, insert %s failed: %s\n",
+                        entry, ods2_strerror(st));
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int do_master_ods2(const char *image, const char *label,
+                          const char *srcdir, long size_mb)
+{
+    size_t llen = strlen(label);
+    if (llen == 0 || llen > 12) {
+        fprintf(stderr, "%%MASTER-F-BADLABEL, volume label must be 1-12 chars\n");
+        return 1;
+    }
+
+    /* Build the tree; its root IS the MFD ([000000]). Children of the root are
+     * inserted into wvol.mfd_fid below. */
+    struct node *root = build_tree(srcdir);
+    root->is_dir = 1;
+    root->version = 0;
+    strncpy(root->name, "000000", sizeof(root->name) - 1);
+
+    /* ---- Sizing. The reserved layout grows with maxfiles; the data area
+     * with the tree. Over-provision generously -- ftruncate creates a sparse
+     * file and ods2_wvolume_format_bdev writes only touched blocks. ---- */
+    uint32_t user_headers = 0;
+    count_headers(root, &user_headers);
+    uint32_t data_needed = 0;
+    count_data_blocks(root, &data_needed);
+
+    uint32_t needed_files = ODS2_RESFILES + user_headers;
+    uint32_t maxfiles = needed_files + needed_files / 4 + 16;
+    if (maxfiles > 65535) maxfiles = 65535;
+
+    uint32_t total_blocks;
+    if (size_mb > 0) {
+        uint64_t sz = (uint64_t)size_mb * 1024 * 1024;
+        if (sz / ODS2_BLOCK_SIZE > 0xFFFFFFFFULL) {
+            fprintf(stderr, "%%MASTER-F-TOOBIG, volume exceeds the ODS-2 block limit\n");
+            return 1;
+        }
+        total_blocks = (uint32_t)(sz / ODS2_BLOCK_SIZE);
+    } else {
+        /* metadata (index headers + home/bitmap/reserved files + dir data) +
+         * data + 10% + fixed headroom. */
+        uint32_t meta = maxfiles + 64;
+        uint64_t t = (uint64_t)meta + data_needed;
+        t += t / 10 + 128;
+        total_blocks = t > 0xFFFFFFFFULL ? 0xFFFFFFFFu : (uint32_t)t;
+    }
+    if (total_blocks < (uint32_t)MIN_BLOCKS)
+        total_blocks = (uint32_t)MIN_BLOCKS;
+
+    /* ---- Create + size the image, then format it as a genuine ODS-2 volume
+     * directly on the fd (block-device-backed writer, no whole-image buffer). */
+    int fd = open(image, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        fprintf(stderr, "%%MASTER-F-CREATE, cannot create %s: %s\n",
+                image, strerror(errno));
+        return 1;
+    }
+    uint64_t span = (uint64_t)total_blocks * ODS2_BLOCK_SIZE;
+    if (ftruncate(fd, (off_t)span) < 0) {
+        fprintf(stderr, "%%MASTER-F-TRUNC, cannot size %s: %s\n",
+                image, strerror(errno));
+        close(fd);
+        return 1;
+    }
+
+    ods2_format_params_t params;
+    params.total_blocks = total_blocks;
+    params.maxfiles     = maxfiles;
+    params.volname      = label;
+
+    ods2_wvolume_t wvol;
+    ods2_status_t st = ods2_wvolume_format_bdev(fd, span, &params, &wvol);
+    if (st != ODS2_OK) {
+        fprintf(stderr, "%%MASTER-F-FORMAT, ODS-2 format failed: %s\n",
+                ods2_strerror(st));
+        close(fd);
+        return 1;
+    }
+
+    printf("%%MASTER-I-FORMAT, mastering %s as genuine ODS-2 (DECFILE11B)\n", image);
+    printf("%%MASTER-I-LAYOUT, %u blocks, %u max files\n", total_blocks, maxfiles);
+
+    int rc = 0;
+    if (emit_tree_ods2(&wvol, root, wvol.mfd_fid) < 0)
+        rc = 1;
+
+    if (rc == 0) {
+        st = ods2_wvolume_flush(&wvol);
+        if (st != ODS2_OK) {
+            fprintf(stderr, "%%MASTER-F-FLUSH, ODS-2 flush failed: %s\n",
+                    ods2_strerror(st));
+            rc = 1;
+        }
+    }
+    ods2_wvolume_close(&wvol);
+
+    if (fsync(fd) < 0)
+        fprintf(stderr, "%%MASTER-W-FSYNC, sync warning: %s\n", strerror(errno));
+    close(fd);
+
+    if (rc == 0)
+        printf("%%MASTER-I-DONE, mastered %s (volume %.12s, ODS-2)\n",
+               image, label);
+    return rc;
+}
+
+/* ---- ODS-2 list: walk the volume the master wrote back over a REAL block
+ * device via ods2_bdev_* (never POSIX opendir), the round-trip proof that the
+ * genuine-ODS-2 image is readable by the same code the runtime flip uses.
+ *
+ * C has no closures, so directory recursion threads a component-path array
+ * (comps[0..ndirs)) plus a printable VMS prefix explicitly. Each frame lists
+ * one directory (printing every entry) while collecting its ".DIR" children
+ * into a frame-local array, then recurses into each. The boot tree is shallow;
+ * ODS2_LIST_MAXDEPTH bounds it defensively. ---- */
+
+#define ODS2_LIST_MAXDEPTH 16
+#define ODS2_LIST_MAXSUB   256
+
+struct ods2_list_ctx {
+    const char *prefix;                 /* e.g. "[SYS0.SYSCOMMON]"        */
+    char        sub[ODS2_LIST_MAXSUB][40]; /* collected subdir components */
+    unsigned    nsub;
+};
+
+static int ods2_list_cb(const char *name, unsigned name_len,
+                        uint16_t version, const ods2_fid_t *fid, void *vctx)
+{
+    struct ods2_list_ctx *ctx = vctx;
+    char nm[64];
+    unsigned n = name_len < sizeof(nm) - 1 ? name_len : (unsigned)sizeof(nm) - 1;
+    memcpy(nm, name, n);
+    nm[n] = '\0';
+
+    printf("%s%s;%u  (%u,%u,%u)\n", ctx->prefix, nm, version,
+           fid->fid_num, fid->fid_seq, fid->fid_rvn);
+
+    /* A subdirectory entry ends in ".DIR"; collect its component (name minus
+     * ".DIR") for recursion, skipping the [000000] self-alias. */
+    if (n > 4 && strcmp(nm + n - 4, ".DIR") == 0) {
+        unsigned cn = n - 4;
+        if (cn < sizeof(ctx->sub[0]) &&
+            strncmp(nm, "000000", cn) != 0 &&
+            ctx->nsub < ODS2_LIST_MAXSUB) {
+            memcpy(ctx->sub[ctx->nsub], nm, cn);
+            ctx->sub[ctx->nsub][cn] = '\0';
+            ctx->nsub++;
+        }
+    }
+    return 0;
+}
+
+static void ods2_list_recurse(const ods2_bdev_t *bv, const char *comps[],
+                              unsigned ndirs, const char *prefix, unsigned depth)
+{
+    if (depth > ODS2_LIST_MAXDEPTH)
+        return;
+
+    uint8_t dirhdr[ODS2_BLOCK_SIZE];
+    ods2_status_t st = ods2_bdev_resolve_dir(bv, ndirs ? comps : NULL, ndirs,
+                                             NULL, dirhdr, sizeof(dirhdr));
+    if (st != ODS2_OK) {
+        fprintf(stderr, "%%MASTER-W-NODIR, cannot resolve %s: %s\n",
+                prefix, ods2_strerror(st));
+        return;
+    }
+
+    struct ods2_list_ctx ctx;
+    ctx.prefix = prefix;
+    ctx.nsub = 0;
+    ods2_bdev_list_dir(bv, dirhdr, ods2_list_cb, &ctx);
+
+    for (unsigned i = 0; i < ctx.nsub; i++) {
+        comps[ndirs] = ctx.sub[i];
+        char child_prefix[256];
+        if (ndirs == 0)
+            snprintf(child_prefix, sizeof(child_prefix), "[%s]", ctx.sub[i]);
+        else {
+            /* prefix is "[A.B]"; splice ".sub" before the closing ']'. */
+            size_t plen = strlen(prefix);
+            if (plen >= 2 && prefix[plen - 1] == ']') {
+                snprintf(child_prefix, sizeof(child_prefix), "%.*s.%s]",
+                         (int)(plen - 1), prefix, ctx.sub[i]);
+            } else {
+                snprintf(child_prefix, sizeof(child_prefix), "[%s]", ctx.sub[i]);
+            }
+        }
+        ods2_list_recurse(bv, comps, ndirs + 1, child_prefix, depth + 1);
+    }
+}
+
+static int do_list_ods2(const char *image)
+{
+    int fd = open(image, O_RDONLY);
+    if (fd < 0) {
+        fprintf(stderr, "%%MASTER-F-OPENIN, cannot open %s: %s\n",
+                image, strerror(errno));
+        return 1;
+    }
+
+    ods2_bdev_t bv;
+    ods2_status_t st = ods2_bdev_open(&bv, fd, 0 /* auto-detect */);
+    if (st != ODS2_OK) {
+        fprintf(stderr, "%%MASTER-F-NOTODS2, %s is not a genuine ODS-2 volume: %s\n",
+                image, ods2_strerror(st));
+        close(fd);
+        return 1;
+    }
+
+    printf("%%MASTER-I-VOLUME, %.12s (%u blocks, DECFILE11B)\n",
+           bv.home.hm2_volname, bv.nblocks);
+
+    const char *comps[ODS2_LIST_MAXDEPTH + 1];
+    ods2_list_recurse(&bv, comps, 0, "[000000]", 0);
+
+    close(fd);
+    return 0;
+}
+
 static void usage(void)
 {
     fprintf(stderr,
         "Usage:\n"
-        "  vmsfs_master master  <image> <volume-label> <source-dir> [size-in-MB]\n"
-        "  vmsfs_master extract <image> <output-dir>\n"
-        "  vmsfs_master list    <image>\n");
+        "  vmsfs_master [--ods2|--vmfs] master  <image> <volume-label> <source-dir> [size-in-MB]\n"
+        "  vmsfs_master [--ods2]        list    <image>\n"
+        "  vmsfs_master                 extract <image> <output-dir>   (VMFS only)\n"
+        "\n"
+        "  --ods2 masters/lists a genuine ODS-2 (Files-11 L2, DECFILE11B) volume\n"
+        "         (vms-5eb R6-build); default and OVMX_MASTER_ODS2=0 use VMFS.\n");
 }
 
 int main(int argc, char *argv[])
 {
-    if (argc < 2) { usage(); return 1; }
+    /* Format selection (vms-5eb R6-build): --ods2 masters/lists a GENUINE
+     * ODS-2 (DECFILE11B) volume; --vmfs forces the legacy OVMX VMFS format.
+     * Absent a flag, OVMX_MASTER_ODS2 (non-empty, != "0") in the environment
+     * selects ODS-2, else the default remains VMFS -- exactly the toggle
+     * convention INITIALIZE.EXE uses (OVMX_INIT_ODS2). The default stays VMFS
+     * so boot is unaffected until the atomic RMS/DCL/MOUNT flip lands. */
+    const char *env = getenv("OVMX_MASTER_ODS2");
+    int use_ods2 = (env && env[0] && strcmp(env, "0") != 0) ? 1 : 0;
 
-    if (strcmp(argv[1], "master") == 0) {
-        if (argc < 5 || argc > 6) { usage(); return 1; }
+    int argi = 1;
+    if (argc > argi && strcmp(argv[argi], "--ods2") == 0) { use_ods2 = 1; argi++; }
+    else if (argc > argi && strcmp(argv[argi], "--vmfs") == 0) { use_ods2 = 0; argi++; }
+
+    if (argc <= argi) { usage(); return 1; }
+
+    if (strcmp(argv[argi], "master") == 0) {
+        int rest = argc - argi;   /* master + image + label + srcdir [+ size] */
+        if (rest < 4 || rest > 5) { usage(); return 1; }
         long size_mb = 0;
-        if (argc == 6) {
-            size_mb = strtol(argv[5], NULL, 10);
+        if (rest == 5) {
+            size_mb = strtol(argv[argi + 4], NULL, 10);
             if (size_mb <= 0) {
                 fprintf(stderr, "%%MASTER-F-BADSIZE, size must be positive MB\n");
                 return 1;
             }
         }
-        return do_master(argv[2], argv[3], argv[4], size_mb);
-    } else if (strcmp(argv[1], "extract") == 0) {
-        if (argc != 4) { usage(); return 1; }
-        return do_extract(argv[2], argv[3]);
-    } else if (strcmp(argv[1], "list") == 0) {
-        if (argc != 3) { usage(); return 1; }
-        return do_list(argv[2]);
+        return use_ods2
+            ? do_master_ods2(argv[argi + 1], argv[argi + 2], argv[argi + 3], size_mb)
+            : do_master(argv[argi + 1], argv[argi + 2], argv[argi + 3], size_mb);
+    } else if (strcmp(argv[argi], "extract") == 0) {
+        if (argc - argi != 3) { usage(); return 1; }
+        /* extract is VMFS-only; the genuine-ODS-2 read path is ods2_bdev_* via
+         * `list`, which the runtime flip (RMS/DCL) consumes directly. */
+        return do_extract(argv[argi + 1], argv[argi + 2]);
+    } else if (strcmp(argv[argi], "list") == 0) {
+        if (argc - argi != 2) { usage(); return 1; }
+        return use_ods2 ? do_list_ods2(argv[argi + 1]) : do_list(argv[argi + 1]);
     }
 
     usage();

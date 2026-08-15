@@ -945,6 +945,50 @@ if(BUILD_TOOLS)
     add_dependencies(ovmx-images ${_OVMX_IMAGES_DEPS})
 endif()
 
+# ovmx-images COMPONENT-scoped install (vms-88c, epic vms-509 "unified
+# cross-platform build" Rung F, docs/design-unified-cross-build.md §3-B
+# follow-up: "point the vms-e1d parity gate at this target's outputs instead
+# [of the hand-maintained VAX_ARTIFACT_ORDER array]"). Every target above
+# already carries its own ordinary install(TARGETS ... RUNTIME DESTINATION
+# ${VMS_SYSTEM_DIR}) rule in its own CMakeLists.txt (default "Unspecified"
+# component, installed unconditionally by a plain `cmake --install`,
+# UNCHANGED by this block). This loop ADDITIONALLY tags each one into a
+# second, named install COMPONENT ("ovmx-images") so
+# `cmake --install <dir> --component ovmx-images` installs EXACTLY this
+# aggregate's members and nothing else -- in particular, none of the OTHER
+# targets a plain `cmake --install` would also try to install (vmsssh,
+# vms_tcpip_config, vms_sysman, vms_analyze, host factory tooling, tests...),
+# which is fatal ("file INSTALL cannot find ...") on any build tree that only
+# ran `cmake --build --target ovmx-images` (as tools/cross-vax/build-ovmx-
+# images-vax-cmake.sh and tools/cut-release-vax.sh both do) -- those other
+# targets were never built, so a plain --install errors trying to copy their
+# missing binaries.
+#
+# This is what lets tools/cut-release-vax.sh derive the shipped VAX
+# userspace image set from install_manifest.txt instead of a hand-maintained
+# list: add a new target to _OVMX_IMAGES_DEPS above and it is installed by
+# this loop automatically, with no second place to remember to edit -- and
+# no per-target CMakeLists.txt to touch either, since this loop reads that
+# same list.
+#
+# Library targets (LIBRARY, not RUNTIME) are deliberately skipped -- the
+# aggregate's dependency closure pulls shared libs in transitively via
+# target_link_libraries, but the SHIPPED "what ships to SYS$SYSTEM" set this
+# component models is executables only; libraries keep shipping through
+# their own existing SYSLIB install rules, untouched by this rung.
+if(BUILD_TOOLS)
+    foreach(_ovmx_image_tgt ${_OVMX_IMAGES_DEPS})
+        if(TARGET ${_ovmx_image_tgt})
+            get_target_property(_ovmx_image_tgt_type ${_ovmx_image_tgt} TYPE)
+            if(_ovmx_image_tgt_type STREQUAL "EXECUTABLE")
+                install(TARGETS ${_ovmx_image_tgt}
+                    RUNTIME DESTINATION ${VMS_SYSTEM_DIR}
+                    COMPONENT ovmx-images)
+            endif()
+        endif()
+    endforeach()
+endif()
+
 # Install VMS system disk (ODS-2 directory structure)
 install(DIRECTORY distro/rootfs/vms/ DESTINATION /vms
     DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE

@@ -212,17 +212,45 @@ else
     "$SCRIPT_DIR/cut-release-vax.sh" "${CUT_RELEASE_VAX_ARGS[@]}" \
         || fail "VAX release-artifact build FAILED -- co-release invariant (docs/design-vax-mainstream-release.md): a release is not cut unless the VAX build gate passes"
 
-    # VAX_ARTIFACT_ORDER mirrors what tools/cut-release-vax.sh's own header
-    # documents it produces; re-verified here against the SHIPPED bundle dir
-    # (ground-source check), not just the sub-script's own exit code.
-    VAX_ARTIFACT_ORDER=(vms.kmod.o vmsfs.kmod vmsfs_mount STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE)
+    # VAX_ARTIFACT_ORDER (vms-88c, epic vms-509 Rung F): DERIVED from
+    # cut-release-vax.sh's own vax-artifact-manifest.txt -- the flat list of
+    # every artifact basename it actually shipped (module artifacts first,
+    # then the full `ovmx-images` CMake aggregate, itself derived from
+    # install_manifest_ovmx-images.txt -- see that script's header). This is
+    # NOT a hand-maintained list here anymore: there is nothing left to
+    # duplicate-and-drift, because the array is read straight from what the
+    # VAX build actually produced on THIS cut.
+    VAX_MANIFEST_FILE="$VAX_OUT_DIR/vax-artifact-manifest.txt"
+    [ -f "$VAX_MANIFEST_FILE" ] || fail "cut-release-vax.sh claimed success but wrote no vax-artifact-manifest.txt: $VAX_MANIFEST_FILE"
+    while IFS= read -r name || [ -n "$name" ]; do
+        [ -n "$name" ] && VAX_ARTIFACT_ORDER+=("$name")
+    done < "$VAX_MANIFEST_FILE"
+    [ "${#VAX_ARTIFACT_ORDER[@]}" -gt 0 ] || fail "vax-artifact-manifest.txt named zero artifacts: $VAX_MANIFEST_FILE"
+
+    # Ground-source check, both directions -- not just the sub-script's own
+    # exit code and not just "the manifest's own claims":
+    #   1. every name the manifest claims must actually be a real file in the
+    #      shipped bundle (a manifest entry with no matching file).
+    #   2. every real file in the shipped bundle (other than the manifest
+    #      itself) must be named in the manifest (a shipped file the manifest
+    #      forgot to name -- the same class of drift this rung exists to
+    #      kill, just now possible inside cut-release-vax.sh instead of here).
     for name in "${VAX_ARTIFACT_ORDER[@]}"; do
         [ -f "$VAX_OUT_DIR/$name" ] || fail "VAX artifact missing from the cut bundle after cut-release-vax.sh claimed success: vax/$name"
     done
+    VAX_DIR_COUNT="$(find "$VAX_OUT_DIR" -maxdepth 1 -type f ! -name 'vax-artifact-manifest.txt' | wc -l)"
+    [ "$VAX_DIR_COUNT" -eq "${#VAX_ARTIFACT_ORDER[@]}" ] || \
+        fail "VAX artifact count mismatch: vax-artifact-manifest.txt names ${#VAX_ARTIFACT_ORDER[@]} artifacts but $VAX_OUT_DIR contains $VAX_DIR_COUNT files -- something shipped that the manifest did not name, or vice versa"
+
     for name in "${VAX_ARTIFACT_ORDER[@]}"; do
         VAX_SHA_NAMES+=("vax/$name")
     done
-    log "VAX artifact set present in the cut bundle: ${VAX_ARTIFACT_ORDER[*]}"
+    # vax-artifact-manifest.txt itself is deterministic, git-tree-derived
+    # content (a list of names, not wall-clock metadata), so it belongs in
+    # the SAME byte-reproducibility/checksum net as every other artifact --
+    # checksummed here, not left as the one file in vax/ nothing verifies.
+    VAX_SHA_NAMES+=("vax/vax-artifact-manifest.txt")
+    log "VAX artifact set present in the cut bundle (${#VAX_ARTIFACT_ORDER[@]} artifacts, derived from vax-artifact-manifest.txt): ${VAX_ARTIFACT_ORDER[*]}"
 fi
 
 # --- The containerized build (unchanged pipeline; this script drives it) ---
@@ -349,6 +377,18 @@ bytes_of() { stat -c%s "$OUT_DIR/$1"; }
     if [ -n "$VAX_SKIP_NOTE" ]; then
         printf '    "skipped_reason": "%s",\n' "$VAX_SKIP_NOTE"
     fi
+    # vax_artifacts (vms-88c, epic vms-509 Rung F): the plain, flat list of
+    # shipped VAX artifact basenames -- exactly VAX_ARTIFACT_ORDER, which is
+    # itself DERIVED from cut-release-vax.sh's vax-artifact-manifest.txt (see
+    # above), never hand-maintained. A quick-consumption sibling to the
+    # detailed "artifacts" array below (component/sha256/bytes per entry).
+    printf '    "vax_artifacts": [\n'
+    vax_names_first=1
+    for name in "${VAX_ARTIFACT_ORDER[@]}"; do
+        [ "$vax_names_first" -eq 1 ] && vax_names_first=0 || printf ',\n'
+        printf '      "%s"' "$name"
+    done
+    printf '\n    ],\n'
     printf '    "artifacts": [\n'
     vax_first=1
     for name in "${VAX_ARTIFACT_ORDER[@]}"; do

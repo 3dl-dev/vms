@@ -63,6 +63,49 @@ static int ods2_status_to_vms(ods2_status_t st)
     }
 }
 
+/*
+ * Cross-process SYS$DISK handle resolver (epic vms-5eb, the atomic flip's
+ * missing substrate).
+ *
+ * vmsfs_volume.c's table is process-local by construction (an fd + ods2_bdev_t
+ * are per-process). PID 1 registers DKA0: at boot via register_system_volume(),
+ * but the flip's live consumers -- RMS in LOGINOUT, DCL in the shell image,
+ * every RUN'd image -- run in OTHER processes whose tables start empty. Without
+ * a per-process registration path each of those would get a NULL handle and
+ * fail SS$_DEVNOTMOUNT, so the reroute could never reach login. This helper
+ * closes that gap: it returns the already-registered handle if present, else
+ * lazily registers SYS$DISK in THIS process from the boot device path PID 1
+ * exports in the OVMX_SYSDISK_DEV environment variable (inherited across VMS
+ * image activation), then returns the freshly-registered handle.
+ *
+ * OVMX DESIGN CHOICE (not VMS-authentic; labelled per CLAUDE.md Rule 8). The
+ * env-exported backing path is the minimal honest cross-process channel for the
+ * flip; the VMS-faithful refinement is to translate the SYS$SYSDEVICE logical
+ * to the boot device and resolve its backing store, which a later rung can
+ * substitute here without touching any consumer.
+ *
+ * FAIL-HONEST (Rule 9 / INV-6). If OVMX_SYSDISK_DEV is unset/empty, or names a
+ * store that is absent or not a genuine ODS-2 volume, registration fails and
+ * this returns NULL -- the caller then surfaces SS$_DEVNOTMOUNT, never a silent
+ * POSIX fallback. Registration is idempotent: a second call returns the same
+ * cached handle (vmsfs_volume_register re-registers by name).
+ */
+static const ods2_bdev_t *sysdisk_handle(void)
+{
+    const ods2_bdev_t *bv = vmsfs_volume_handle(SYSDISK_DEVICE);
+    if (bv)
+        return bv;
+
+    const char *backing = getenv("OVMX_SYSDISK_DEV");
+    if (!backing || !backing[0])
+        return NULL;   /* fail-honest: no boot-device channel in this process */
+
+    if (vmsfs_volume_register(SYSDISK_DEVICE, backing, NULL) != SS$_NORMAL)
+        return NULL;   /* fail-honest: not a genuine ODS-2 volume / unopenable */
+
+    return vmsfs_volume_handle(SYSDISK_DEVICE);
+}
+
 int ods2_sysdisk_owns_path(const char *linux_path)
 {
     if (!linux_path)
@@ -154,7 +197,7 @@ int ods2_sysdisk_resolve_file(const char *linux_path,
     if (!ods2_sysdisk_owns_path(linux_path))
         return SS$_BADPARAM;
 
-    const ods2_bdev_t *bv = vmsfs_volume_handle(SYSDISK_DEVICE);
+    const ods2_bdev_t *bv = sysdisk_handle();
     if (!bv)
         return SS$_DEVNOTMOUNT;   /* fail-honest: no ODS-2 SYS$DISK mounted */
 
@@ -213,7 +256,7 @@ int ods2_sysdisk_list_dir(const char *linux_path, ods2_dir_cb cb, void *ctx)
     if (!ods2_sysdisk_owns_path(linux_path))
         return SS$_BADPARAM;
 
-    const ods2_bdev_t *bv = vmsfs_volume_handle(SYSDISK_DEVICE);
+    const ods2_bdev_t *bv = sysdisk_handle();
     if (!bv)
         return SS$_DEVNOTMOUNT;
 
@@ -261,7 +304,7 @@ int ods2_sysdisk_create_file(const char *linux_path,
     if (!ods2_sysdisk_owns_path(linux_path))
         return SS$_BADPARAM;
 
-    const ods2_bdev_t *bv = vmsfs_volume_handle(SYSDISK_DEVICE);
+    const ods2_bdev_t *bv = sysdisk_handle();
     if (!bv)
         return SS$_DEVNOTMOUNT;   /* fail-honest: no ODS-2 SYS$DISK mounted */
 
@@ -310,7 +353,7 @@ int ods2_sysdisk_append_file(const char *linux_path,
     if (!ods2_sysdisk_owns_path(linux_path))
         return SS$_BADPARAM;
 
-    const ods2_bdev_t *bv = vmsfs_volume_handle(SYSDISK_DEVICE);
+    const ods2_bdev_t *bv = sysdisk_handle();
     if (!bv)
         return SS$_DEVNOTMOUNT;
 
@@ -351,7 +394,7 @@ int ods2_sysdisk_mkdir(const char *linux_path)
     if (!ods2_sysdisk_owns_path(linux_path))
         return SS$_BADPARAM;
 
-    const ods2_bdev_t *bv = vmsfs_volume_handle(SYSDISK_DEVICE);
+    const ods2_bdev_t *bv = sysdisk_handle();
     if (!bv)
         return SS$_DEVNOTMOUNT;
 

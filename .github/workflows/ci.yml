@@ -197,6 +197,17 @@ jobs:
               - 'tools/mail_notify.c'
               - 'tools/vms_mail_notify.h'
               - 'tools/CMakeLists.txt'
+              # vms-69a/vms-8cf/vms-cde6/vms-d13 (epic vms-f10 R4, installer
+              # utility cross-builds): PRODUCT.EXE, AUTHORIZE.EXE,
+              # INITIALIZE.EXE, SYSGEN.EXE and the ODS-2 writer INITIALIZE
+              # links.
+              - 'src/product/**'
+              - 'tools/vms_authorize.c'
+              - 'tools/vms_initialize.c'
+              - 'tools/vms_sysgen.c'
+              - 'src/vmsfs/ods2/**'
+              - 'src/libvms/include/sysgen_params.h'
+              - 'docs/design-vax-installer.md'
               - 'docs/design-ovmx-netbsd-syskrnl.md'
               - 'docs/design-p4-netbsd-vax-boot.md'
               - 'docs/audit-ilp32-vax-libvmssys.md'
@@ -6743,3 +6754,264 @@ jobs:
           docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
             -e CROSSCOMPILE_NEGCTL=1 \
             ovmx-cross-vax tools/cross-vax/build-librarian-vax.sh
+
+  # -----------------------------------------------------------------------
+  # product-netbsd-vax (rd vms-69a, rung A of docs/design-vax-installer.md
+  # §9, epic vms-f10 R4). Per-PR elf32-vax cross-compile + link gate for
+  # PRODUCT.EXE (src/product/product.c + src/product/ovmx_kit_reader.c) --
+  # the OVMX PCSI-equivalent installer OVMX$INSTALL.COM's menu RUNs to lay a
+  # kit's payload onto the target device. One of the four installer
+  # utilities that had NO netbsd-vax cross-build (only the five boot images
+  # did, ovmx-boot-images-netbsd-vax above); this closes that gap for
+  # PRODUCT.EXE. Fast (compile+link only, no SIMH); the cross toolchain
+  # image layer-caches (gha scope=cross-vax). Carries a broken-TU negative
+  # control. TOOLING, never a runtime (Rule 9). Gated on the shared
+  # netbsd_vax filter (which now includes src/product/** and
+  # tools/vms_authorize.c/vms_initialize.c/vms_sysgen.c for this and the
+  # three sibling jobs below).
+  # -----------------------------------------------------------------------
+  product-netbsd-vax:
+    name: PRODUCT.EXE cross-compiles for netbsd-vax (vms-69a)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile PRODUCT.EXE for netbsd-vax + link a real ELF32 VAX image
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-product-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax PRODUCT.EXE cross build/link exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: PRODUCT.EXE builds and links for vax--netbsdelf' \
+            || { echo "FAIL: did not see the PRODUCT.EXE build+link PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: product.o was not elf32-vax -- wrong target"; exit 1; }
+          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
+            || { echo "FAIL: PRODUCT.EXE was not a VAX ELF"; exit 1; }
+          echo "PASS: PRODUCT.EXE built for netbsd-vax and linked a real ELF32 VAX image"
+
+      - name: NEGATIVE CONTROL — a deliberately-broken PRODUCT.EXE TU must fail the cross-compile
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+            -e CROSSCOMPILE_NEGCTL=1 \
+            ovmx-cross-vax tools/cross-vax/build-product-vax.sh
+
+  # -----------------------------------------------------------------------
+  # authorize-netbsd-vax (rd vms-8cf, rung B of docs/design-vax-installer.md
+  # §9, epic vms-f10 R4). Per-PR elf32-vax cross-compile + link gate for
+  # AUTHORIZE.EXE (tools/vms_authorize.c) -- OVMX$INSTALL.COM's menu RUNs it
+  # (inline SYS$INPUT) to set the SYSTEM password on the target before the
+  # vax install menu can be driven end-to-end. Fast (compile+link only, no
+  # SIMH); the cross toolchain image layer-caches (gha scope=cross-vax).
+  # Carries a broken-TU negative control. TOOLING, never a runtime (Rule 9).
+  # -----------------------------------------------------------------------
+  authorize-netbsd-vax:
+    name: AUTHORIZE.EXE cross-compiles for netbsd-vax (vms-8cf)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile AUTHORIZE.EXE for netbsd-vax + link a real ELF32 VAX image
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-authorize-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax AUTHORIZE.EXE cross build/link exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: AUTHORIZE.EXE builds and links for vax--netbsdelf' \
+            || { echo "FAIL: did not see the AUTHORIZE.EXE build+link PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: vms_authorize.o was not elf32-vax -- wrong target"; exit 1; }
+          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
+            || { echo "FAIL: AUTHORIZE.EXE was not a VAX ELF"; exit 1; }
+          echo "PASS: AUTHORIZE.EXE built for netbsd-vax and linked a real ELF32 VAX image"
+
+      - name: NEGATIVE CONTROL — a deliberately-broken AUTHORIZE.EXE TU must fail the cross-compile
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+            -e CROSSCOMPILE_NEGCTL=1 \
+            ovmx-cross-vax tools/cross-vax/build-authorize-vax.sh
+
+  # -----------------------------------------------------------------------
+  # initialize-netbsd-vax (rd vms-cde6, rung C of docs/design-vax-installer.md
+  # §9, epic vms-f10 R4). Per-PR elf32-vax cross-compile + link gate for
+  # INITIALIZE.EXE (tools/vms_initialize.c) -- formats a blank target volume
+  # for the vax install lab harness; OVMX$INSTALL.COM's own INITIALIZE
+  # branch has a pre-existing, cross-arch VMS-device-resolution gap this
+  # rung does not fix (proves the PRESERVE branch only, same scope as the
+  # existing x86_64 gate). This gate is also where a REAL vax portability
+  # bug was found and fixed: tools/vms_initialize.c unconditionally included
+  # the Linux-only <linux/fs.h> (BLKGETSIZE64), which does not exist on
+  # NetBSD -- fixed with a platform split (Linux keeps BLKGETSIZE64; NetBSD
+  # uses the standard disklabel(9) DIOCGDINFO ioctl), so this is the one
+  # utility gate whose negative-control step also protects a genuine width/
+  # portability fix, not just a mechanical link. Fast (compile+link only, no
+  # SIMH); the cross toolchain image layer-caches (gha scope=cross-vax).
+  # TOOLING, never a runtime (Rule 9).
+  # -----------------------------------------------------------------------
+  initialize-netbsd-vax:
+    name: INITIALIZE.EXE cross-compiles for netbsd-vax (vms-cde6)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile INITIALIZE.EXE for netbsd-vax + link a real ELF32 VAX image
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-initialize-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax INITIALIZE.EXE cross build/link exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: INITIALIZE.EXE builds and links for vax--netbsdelf' \
+            || { echo "FAIL: did not see the INITIALIZE.EXE build+link PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: vms_initialize.o was not elf32-vax -- wrong target"; exit 1; }
+          echo "$RAW" | grep -qF 'OK: get_device_size() took the NetBSD DIOCGDINFO branch, not Linux'"'"'s BLKGETSIZE64' \
+            || { echo "FAIL: did not see confirmation that the NetBSD block-size portability fix compiled clean"; exit 1; }
+          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
+            || { echo "FAIL: INITIALIZE.EXE was not a VAX ELF"; exit 1; }
+          echo "PASS: INITIALIZE.EXE built for netbsd-vax and linked a real ELF32 VAX image"
+
+      - name: NEGATIVE CONTROL — a deliberately-broken INITIALIZE.EXE TU must fail the cross-compile
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+            -e CROSSCOMPILE_NEGCTL=1 \
+            ovmx-cross-vax tools/cross-vax/build-initialize-vax.sh
+
+  # -----------------------------------------------------------------------
+  # sysgen-netbsd-vax (rd vms-d13, rung D of docs/design-vax-installer.md
+  # §9, epic vms-f10 R4). Per-PR elf32-vax cross-compile + link gate for
+  # SYSGEN.EXE (tools/vms_sysgen.c) -- needed for the install menu's
+  # SCSNODE/SCSSYSTEMID step; inherits the pre-existing vms-597 gap
+  # (SYSGEN.EXE not yet resolvable as an image on the target), which this
+  # rung does not fix (cross-build only). Fast (compile+link only, no SIMH);
+  # the cross toolchain image layer-caches (gha scope=cross-vax). Carries a
+  # broken-TU negative control. TOOLING, never a runtime (Rule 9). This is
+  # the fourth and last of the four installer-utility gaps rungs A-D close
+  # (vms-69a/vms-8cf/vms-cde6/vms-d13) -- with this job, every image
+  # OVMX$INSTALL.COM's menu runs (the five boot images plus PRODUCT/
+  # AUTHORIZE/INITIALIZE/SYSGEN) cross-builds for elf32-vax.
+  # -----------------------------------------------------------------------
+  sysgen-netbsd-vax:
+    name: SYSGEN.EXE cross-compiles for netbsd-vax (vms-d13)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Cross-compile SYSGEN.EXE for netbsd-vax + link a real ELF32 VAX image
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax tools/cross-vax/build-sysgen-vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: netbsd-vax SYSGEN.EXE cross build/link exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL PROOFS PASSED: SYSGEN.EXE builds and links for vax--netbsdelf' \
+            || { echo "FAIL: did not see the SYSGEN.EXE build+link PASS banner"; exit 1; }
+          echo "$RAW" | grep -qiF 'file format elf32-vax' \
+            || { echo "FAIL: vms_sysgen.o was not elf32-vax -- wrong target"; exit 1; }
+          echo "$RAW" | grep -qiF 'Machine:                           Digital VAX' \
+            || { echo "FAIL: SYSGEN.EXE was not a VAX ELF"; exit 1; }
+          echo "PASS: SYSGEN.EXE built for netbsd-vax and linked a real ELF32 VAX image"
+
+      - name: NEGATIVE CONTROL — a deliberately-broken SYSGEN.EXE TU must fail the cross-compile
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+            -e CROSSCOMPILE_NEGCTL=1 \
+            ovmx-cross-vax tools/cross-vax/build-sysgen-vax.sh

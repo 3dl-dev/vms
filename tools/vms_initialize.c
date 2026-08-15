@@ -28,7 +28,11 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
-#include <linux/fs.h>   /* BLKGETSIZE64 */
+#if defined(__linux__)
+#include <linux/fs.h>       /* BLKGETSIZE64 */
+#elif defined(__NetBSD__)
+#include <sys/disklabel.h>  /* DIOCGDINFO / struct disklabel (vms-cde6: netbsd-vax port) */
+#endif
 
 #include "vmsfs_ondisk.h"
 #include "vmsfs/ods2.h" /* GENUINE ODS-2 (Files-11 L2) writer: ods2_volume_format */
@@ -428,11 +432,28 @@ static int format_volume_ods2(int fd, uint64_t size_bytes, const char *volname)
 }
 
 /*
- * Get size of a block device via ioctl.
+ * Get size of a block device via ioctl. Hardware-generic per-platform query
+ * (Rule 9: the block-device path must not be QEMU/virtio-specific, and must
+ * fail honestly rather than fake a size) -- Linux uses BLKGETSIZE64; NetBSD
+ * (vms-cde6: netbsd-vax cross-build) has no such ioctl, so this uses the
+ * standard NetBSD disklabel(9) query (DIOCGDINFO -> struct disklabel's
+ * d_secsize/d_secperunit), documented public NetBSD kernel API, not any VMS
+ * format (Rule 8 does not apply here).
  */
 static int get_device_size(int fd, uint64_t *size)
 {
+#if defined(__linux__)
     return ioctl(fd, BLKGETSIZE64, size) == 0 ? 0 : -1;
+#elif defined(__NetBSD__)
+    struct disklabel dl;
+    if (ioctl(fd, DIOCGDINFO, &dl) != 0)
+        return -1;
+    *size = (uint64_t)dl.d_secsize * (uint64_t)dl.d_secperunit;
+    return 0;
+#else
+    (void)fd; (void)size;
+    return -1;
+#endif
 }
 
 /*

@@ -5,6 +5,22 @@
 # directory records, storage bitmap). Kept separate from the ODS-2-INSPIRED
 # src/kernel/vmsfs on-disk format, which is not byte-genuine. See vmsfs/ods2.h
 # for provenance (reader: increments 1-2; writer: increment 3).
+#
+# Standalone netbsd-vax cross (vms-cde6, epic vms-f10, R4 rung C): INITIALIZE.EXE
+# (tools/vms_initialize.c) links this library directly (tools/CMakeLists.txt:
+# target_link_libraries(vms_initialize PRIVATE vmssys ods2)) for its --ods2
+# genuine-volume writer path. Mirrors the standalone-detection guard
+# src/vmsfs/CMakeLists.txt and src/vmsprocess/CMakeLists.txt already use:
+# when configured directly (no enclosing project()), declare one and default
+# VMS_FS_INCLUDE_DIR to the sibling include/ dir the parent build normally
+# injects.
+cmake_minimum_required(VERSION 3.16)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    project(ods2_standalone C)
+    if(NOT DEFINED VMS_FS_INCLUDE_DIR)
+        set(VMS_FS_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+    endif()
+endif()
 
 add_library(ods2 STATIC ods2_reader.c ods2_writer.c ods2_bdev.c)
 target_include_directories(ods2 PUBLIC ${VMS_FS_INCLUDE_DIR})

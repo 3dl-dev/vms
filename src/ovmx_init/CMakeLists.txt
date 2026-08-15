@@ -32,10 +32,21 @@ target_include_directories(ovmx_init PRIVATE
     ${CMAKE_SOURCE_DIR}/src/libvmssys
 )
 
-target_compile_definitions(ovmx_init PRIVATE
-    _POSIX_C_SOURCE=200809L
-    _DEFAULT_SOURCE
-)
+# Feature-test macros. On Linux (glibc) POSIX 2008 + _DEFAULT_SOURCE expose
+# the BSD/sysv extensions ovmx_boot_linux.c/sysboot.c use. On NetBSD the same
+# surface (u_int, S_IFCHR/mknod, devmajor_t/NODEVMAJOR/getdevmajor, mount(2)
+# flags, reboot(2)/RB_*, sethostname) is gated behind _NETBSD_SOURCE, and
+# defining _POSIX_C_SOURCE would TURN IT OFF -- so the netbsd-vax cross
+# selects the native widest namespace instead, same pattern as
+# src/vmsdcl/CMakeLists.txt (vms-1cb2).
+if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    target_compile_definitions(ovmx_init PRIVATE _NETBSD_SOURCE)
+else()
+    target_compile_definitions(ovmx_init PRIVATE
+        _POSIX_C_SOURCE=200809L
+        _DEFAULT_SOURCE
+    )
+endif()
 
 if(OVMX_IMGACT)
     # Static PID-1 bootstrap: link the static twins, not the shareable images.

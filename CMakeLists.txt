@@ -45,7 +45,19 @@ set(VMS_LNM_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src/vmslnm/include)
 set(VMS_PROCESS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src/vmsprocess/include)
 
 # Options
-option(BUILD_TESTS "Build test programs" ON)
+#
+# Unified cross-build (vms-509): under a cross toolchain file (CMAKE_
+# CROSSCOMPILING), default the un-runnable / host-only knobs off, mirroring
+# docs/design-unified-cross-build.md §3-A. Cross tests cannot execute on the
+# build host, so BUILD_TESTS defaults OFF when cross-compiling; a caller can
+# still force it back on with -DBUILD_TESTS=ON. BUILD_TOOLS stays ON in both
+# cases -- the shipped boot images live behind it.
+if(CMAKE_CROSSCOMPILING)
+    set(_OVMX_BUILD_TESTS_DEFAULT OFF)
+else()
+    set(_OVMX_BUILD_TESTS_DEFAULT ON)
+endif()
+option(BUILD_TESTS "Build test programs" ${_OVMX_BUILD_TESTS_DEFAULT})
 option(BUILD_TOOLS "Build VMS tools" ON)
 option(BUILD_FUSE "Build FUSE ODS-2 driver (requires libfuse)" OFF)
 option(OVMX_STATIC "Build all libraries as static and link statically" OFF)
@@ -60,12 +72,43 @@ if(OVMX_STATIC AND OVMX_IMGACT)
         "IMGACT mode produces dynamically activated (shared) images.")
 endif()
 
-if(OVMX_STATIC)
+if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    # Decision-A linkage (rd vms-42d, docs/design-unified-cross-build.md §2.1):
+    # a THIRD linkage mode, distinct from both branches below. The OVMX RTL
+    # libraries build as STATIC archives, but images stay ORDINARY DYNAMIC
+    # NetBSD ELF32 executables activated by /usr/libexec/ld.elf_so -- this is
+    # NOT OVMX_STATIC (which adds a global -static, producing an executable
+    # with no dynamic linker at all) and NOT OVMX_IMGACT (whose PT_INTERP=
+    # IMGACT.EXE activation has no meaning on this substrate; ld.elf_so is the
+    # activator here). Unconditional for the NetBSD substrate -- there is no
+    # SHARED mode on netbsd-vax today (docs/design-ovmx-netbsd-syskrnl.md).
+    if(OVMX_STATIC OR OVMX_IMGACT)
+        message(FATAL_ERROR
+            "OVMX_STATIC and OVMX_IMGACT are host-substrate (Linux) link "
+            "modes; the NetBSD substrate uses Decision-A linkage "
+            "unconditionally (rd vms-42d) and must not combine with either.")
+    endif()
+    set(OVMX_LIB_TYPE STATIC)
+elseif(OVMX_STATIC)
     set(OVMX_LIB_TYPE STATIC)
     # Produce fully static executables (no dynamic linker dependency)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static")
 else()
     set(OVMX_LIB_TYPE SHARED)
+endif()
+
+# Mode 2 self-hosting (OVMX_LINK_NATIVE, src/vmslink/CMakeLists.txt) is a
+# host-arch-only (aarch64/x86_64 musl) build of the VMS-native LINK.EXE
+# shareable-image graph, orthogonal to the Mode-1 cross bootstrap build this
+# file configures (docs/design-unified-cross-build.md §4 -- the two modes
+# must never collapse). It already self-selects off for any non-musl compiler
+# target via the -dumpmachine probe below, but force it off explicitly here,
+# before src/vmslink is added, so a cross configure can never attempt the
+# native LINK.EXE graph even if -DOVMX_LINK_NATIVE=ON is passed by mistake.
+if(CMAKE_CROSSCOMPILING)
+    set(OVMX_LINK_NATIVE OFF CACHE BOOL
+        "Forced OFF under cross-compiling -- Mode 2 self-hosting is host-arch only (vms-509 Mode 1/Mode 2 split)"
+        FORCE)
 endif()
 
 # --- IMGACT.EXE image-activation build mode --------------------------------

@@ -168,6 +168,24 @@ set_tests_properties(ods2_volume PROPERTIES
     TIMEOUT 30
 )
 
+# vms-5eb (ODS-2 runtime flip): the SYS$DISK read adapter
+# (src/vmsfs/ods2_sysdisk.c) -- the "/vms/A/B/.../NAME.EXT;ver" -> ods2_bdev
+# path bridge every flip consumer (RMS rms_impl_open, DCL cmd_directory/$SEARCH,
+# MOUNT) reroutes onto. Builds a genuine ODS-2 loop image with the system
+# hierarchy, registers it as DKA0: (as PID 1 does), and drives resolve/read/list
+# through "/vms/..." paths -- byte-identical verbatim read-back, version
+# selection, directory listing, and the fail-honest paths (no volume ->
+# SS$_DEVNOTMOUNT, non-/vms -> SS$_BADPARAM). Links vmsfs_volume.
+add_executable(test_ods2_sysdisk test_ods2_sysdisk.c)
+target_include_directories(test_ods2_sysdisk PRIVATE ${VMS_FS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
+target_link_libraries(test_ods2_sysdisk PRIVATE vmsfs_volume)
+
+add_test(NAME ods2_sysdisk COMMAND test_ods2_sysdisk)
+set_tests_properties(ods2_sysdisk PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)
+
 # vms-88d (R6-build unblocker for the ODS-2 flip vms-5eb): the WRITER's
 # long-filename IDENT-area encoding. The real distro tree contains names
 # like "LIBVMSPROCESS$SHR.EXE;1" (23 chars) that the writer's old 20-char-only

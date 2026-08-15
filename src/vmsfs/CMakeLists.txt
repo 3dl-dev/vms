@@ -81,7 +81,10 @@ else()
     # (rungs R2/R3/R5/R6) is ready. Its consumers link it directly: PID 1
     # (STARTUP.EXE) today for the additive boot registration; RMS/DCL when the
     # flip lands. See src/vmsfs/vmsfs_volume.c and docs/design-ods2-runtime-flip.md.
-    add_library(vmsfs_volume STATIC vmsfs_volume.c)
+    # ods2_sysdisk.c: the SYS$DISK read adapter -- the "/vms/..." -> ods2_bdev
+    # path bridge every flip consumer (RMS/DCL/MOUNT) reroutes onto. Additive;
+    # flips no live path. See src/vmsfs/sysdisk.h + docs/design-ods2-runtime-flip.md.
+    add_library(vmsfs_volume STATIC vmsfs_volume.c ods2_sysdisk.c)
     target_include_directories(vmsfs_volume PUBLIC include ${VMS_INCLUDE_DIR})
     target_link_libraries(vmsfs_volume PUBLIC ods2 pthread)
     set_target_properties(vmsfs_volume PROPERTIES POSITION_INDEPENDENT_CODE ON)

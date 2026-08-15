@@ -15,6 +15,52 @@ migrator).
 
 ---
 
+## 0. Progress since this record (update 2026-08-15)
+
+The two "newly-surfaced blockers" §4 flagged are now LANDED as additive
+foundations, and the first flip rung's builder primitive is landed:
+
+- **B1 (block-backed WRITER) — LANDED.** `ods2_wvolume_format_bdev()` +
+  `ods2_wvolume_create_file_raw()` (verbatim RFM=FIXED, for binary `.EXE`) +
+  long-filename support (fi2_filename + fi2_filenamext, up to 86 chars) are in
+  `src/vmsfs/ods2/ods2_writer.c` (tests `ods2_write_bdev`, `ods2_longname`).
+- **B2 (userspace mounted-volume table) — LANDED.** `src/vmsfs/vmsfs_volume.c`
+  + `include/vmsfs/volume.h` (`vmsfs_volume_register/_handle/_unregister`);
+  PID 1 `register_system_volume()` (`src/ovmx_init/ovmx_init.c:506`) already
+  registers the boot device DKA0: additively (fails honest today because the
+  boot disk is still VMFS, not DECFILE11B). Test `ods2_volume`.
+- **R6-build (boot-master → genuine ODS-2) — builder primitive LANDED,
+  default NOT yet flipped.** `tools/vmsfs_master.c` gained an ADDITIVE `--ods2`
+  master + list mode (env `OVMX_MASTER_ODS2`), mirroring how INITIALIZE gained
+  `--ods2` (vms-6ef). It lays the host source tree onto a genuine DECFILE11B
+  volume via `ods2_wvolume_format_bdev` + `create_dir`/`create_file_raw`/
+  `dir_insert`, and `--ods2 list` reads it back over the real block device via
+  `ods2_bdev_*`. Test `ods2_master` (`tests/ods2/test_ods2_master.sh`) drives
+  the real binary end-to-end incl. the fail-honest NOTODS2 path. **The default
+  remains VMFS** so boot is unaffected — the atomic group must flip the default
+  (Dockerfile.bootable / callers to `--ods2`, or `OVMX_MASTER_ODS2=1`) TOGETHER
+  with R6-kernel + R6-mount + R2 + R3 + R5 (§5 atomicity).
+  - File-content policy chosen: EVERY regular file is written VERBATIM
+    (`create_file_raw`), not just binaries — this keeps the whole volume
+    byte-identical to today's POSIX `/vms` reads (the A1 read-path property).
+    **OPEN R2 decision:** whether RMS should instead see `.COM`/`.TXT` as
+    RFM=VAR records (real-VMS record format) vs verbatim stream bytes. Not
+    taken here; the verbatim default is the conservative byte-faithful choice.
+
+Remaining atomic group (still must land together, boot-gated): R6-kernel,
+R6-mount, R2-RMS, R3-DCL, R5-MOUNT, Retire, Proof. Current-state anchors:
+
+| Rung | Anchor (current) |
+|------|------------------|
+| R6-build (flip default) | `tools/vmsfs_master.c` `--ods2` DONE; flip caller in `distro/Dockerfile.bootable` (mastering step ~line 713) to `--ods2` / `OVMX_MASTER_ODS2=1` |
+| R6-kernel | `src/kernel/vmsfs/vmsfs_super.c:387` (`VMSFS_HOME_MAGIC` check) — under A1 the SYS$DISK kernel MOUNT is RETIRED, so this is home/SCB parse for boot-device VALIDATION only, not a POSIX mount |
+| R6-mount | `src/ovmx_init/ovmx_init.c` `bare_metal_init` (stop `mount(...,"vmsfs")` at `ovmx_boot_linux.c:158`; rely on `register_system_volume()` volume handle); `tools/vms_mount_helper.c` |
+| R2-RMS | `src/vmsrms/rms_core.c` `resolve_filename` (:413), `rms_impl_open`, drop `rms_validate_path_boundary` (:207) for SYS$DISK, reroute record I/O off `fab->_linux_fd` |
+| R3-DCL | `src/vmsdcl/dcl_cmd_file.c` `dir_collect` (:280)/`cmd_directory` (:648, `vmsfs_to_linux_path` at :686/:690); `src/vmsdcl/dcl_cmd_set.c` `cmd_set_default` (:97) |
+| R5-MOUNT | `src/vmsdcl/dcl_cmd_misc.c` `cmd_mount` (:2211) — validate home via `ods2_home_parse` + SCB via `ods2_scb_parse`, reject non-ODS-2 |
+
+---
+
 ## 1. The boot data-flow as it exists today (what the flip must replace)
 
 The genuine ODS-2 library (`src/vmsfs/ods2/`) is real and validated against a

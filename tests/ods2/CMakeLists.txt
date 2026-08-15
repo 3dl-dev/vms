@@ -187,3 +187,20 @@ set_tests_properties(ods2_longname PROPERTIES
     LABELS "unit;ods2;vmsfs"
     TIMEOUT 30
 )
+
+# vms-5eb R6-build: the vmsfs_master BINARY masters a host source tree onto a
+# GENUINE ODS-2 (DECFILE11B) volume via --ods2 and reads it back over a real
+# block device (ods2_bdev_*). Exercises the actual shipped boot-master tool
+# end-to-end -- the R6-build primitive the atomic RMS/DCL/MOUNT flip consumes --
+# plus the fail-honest path (list --ods2 rejects a non-ODS-2 VMFS volume,
+# INV-6). Gated on BUILD_TOOLS since it drives the real binary.
+if(BUILD_TOOLS)
+    add_test(NAME ods2_master
+             COMMAND ${CMAKE_COMMAND} -E env
+                     VMSFS_MASTER=$<TARGET_FILE:vmsfs_master>
+                     sh ${CMAKE_CURRENT_SOURCE_DIR}/test_ods2_master.sh)
+    set_tests_properties(ods2_master PROPERTIES
+        LABELS "integration;ods2;vmsfs;tools"
+        TIMEOUT 60
+    )
+endif()

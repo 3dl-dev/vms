@@ -5,9 +5,10 @@
 # Do NOT build on the host — use build-in-podman.sh, which runs this Makefile
 # inside an Alpine container per the project's containerized-deps rule.
 #
-# aarch64 and x86_64 are supported. ARCH defaults to the host machine but may
-# be overridden for a cross build, e.g.:
+# aarch64, x86_64, and alpha are supported. ARCH defaults to the host machine
+# but may be overridden for a cross build, e.g.:
 #   make ARCH=x86_64 CC="x86_64-linux-gnu-gcc"
+#   make ARCH=alpha  CC="alpha-linux-gnu-gcc"
 
 CC      ?= gcc
 ARCH    ?= $(shell uname -m | sed -e 's/arm64/aarch64/' -e 's/amd64/x86_64/')

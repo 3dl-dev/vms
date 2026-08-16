@@ -37,8 +37,10 @@
 #  include "arch/aarch64/imgact_arch.h"
 #elif defined(__x86_64__)
 #  include "arch/x86_64/imgact_arch.h"
+#elif defined(__alpha__)
+#  include "arch/alpha/imgact_arch.h"
 #else
-#  error "IMGACT.EXE: unsupported architecture (aarch64 and x86_64 only)"
+#  error "IMGACT.EXE: unsupported architecture (aarch64, x86_64, alpha only)"
 #endif
 #include "ovmx_image.h"   /* OVMX symbol-vector image format (LINK.EXE) */
 #include "ovmx_symvec.h"  /* shared resolver + GSMATCH (bead vms-8d5)  */
@@ -100,7 +102,16 @@ static long sys_munmap(void *addr, unsigned long len)
 #endif
 #ifndef MAP_PRIVATE
 #define MAP_PRIVATE   0x02
+/* MAP_ANONYMOUS is NOT the same bit across Linux ports: x86_64/aarch64 (and
+ * most others) use 0x20, but Alpha (like mips/sparc/parisc) uses 0x10 --
+ * confirmed against alpha-linux-gnu's own <asm/mman.h> and empirically (a
+ * plain 0x20 anonymous mmap() on Alpha returned -EBADF: the kernel read it
+ * as a file-backed mapping request against the fd=-1 sentinel). vms-e11. */
+#if defined(__alpha__)
+#define MAP_ANONYMOUS 0x10
+#else
 #define MAP_ANONYMOUS 0x20
+#endif
 #endif
 #define MAP_FAILED ((void *)-1)
 
@@ -169,6 +180,8 @@ static char *xstrcat(char *d, const char *s)
 #  define IMGACT_SYS_FSTAT 80
 #elif defined(__x86_64__)
 #  define IMGACT_SYS_FSTAT 5
+#elif defined(__alpha__)
+#  define IMGACT_SYS_FSTAT 91
 #endif
 
 int open(const char *path, int flags, ...)
@@ -286,13 +299,21 @@ static void die_tlserr(const char *name)
 #define PAGE_UP(x)   PAGE_DOWN((x) + PAGE_SIZE - 1)
 #define ALIGN_UP(x, a) (((x) + ((a) - 1)) & ~((unsigned long)(a) - 1))
 
+/* SysV .hash section entry width: 4 bytes (Elf32_Word) everywhere except
+ * Alpha, which uses 8 bytes (Elf64_Xword) -- see imgact_arch.h. */
+#ifdef IMGACT_HASH_XWORD
+typedef Elf64_Xword imgact_hashword_t;
+#else
+typedef Elf64_Word imgact_hashword_t;
+#endif
+
 struct obj {
 	char           name[64];
 	unsigned long  base;          /* load bias */
 	Elf64_Dyn     *dyn;
 	Elf64_Sym     *symtab;
 	const char    *strtab;
-	Elf64_Word    *hash;          /* DT_HASH */
+	imgact_hashword_t *hash;      /* DT_HASH */
 	Elf64_Rela    *rela;
 	unsigned long  relasz;
 	Elf64_Rela    *jmprel;
@@ -344,17 +365,80 @@ unsigned long __getauxval(unsigned long type) { return imgact_getauxval(type); }
 static int imgact_probe(void) { return 0; }
 int imgact_counter = 0;
 
+#ifdef IMGACT_R_TLS_DTPMOD
+/*
+ * __tls_get_addr — General Dynamic TLS runtime resolver (bead vms-e11,
+ * Alpha[A2]). Architectures with no TLSDESC (Alpha: GCC rejects
+ * -mtls-dialect=desc/gnu2 outright) fall back to the classic model: the
+ * compiler emits a JMP_SLOT-resolved call to __tls_get_addr(&tls_index),
+ * where the two-word tls_index is filled by DTPMOD64 (runtime module id)
+ * + DTPREL64 (module-relative offset) relocations -- both handled in
+ * apply_rela() below, guarded on this same macro.
+ *
+ * IMGACT owns the runtime module numbering (it assigns each g_objs[]
+ * module id = its 1-based array index at DTPMOD64-relocation time, below),
+ * so no real DTV is needed: every module's TP-relative offset is already
+ * fixed by assign_tls_offsets()/setup_tls() before any target/lib code that
+ * could call __tls_get_addr() runs.
+ */
+struct tls_index { unsigned long ti_module; unsigned long ti_offset; };
+
+static void *imgact_tls_get_addr(struct tls_index *ti)
+{
+	if (ti->ti_module < 1 || ti->ti_module > (unsigned long)g_nobjs)
+		die_tlserr("__tls_get_addr");
+	struct obj *o = &g_objs[ti->ti_module - 1];
+	char *tp = (char *)imgact_get_tp();
+	return tp + o->tls_offset + ti->ti_offset;
+}
+void *__tls_get_addr(struct tls_index *ti) { return imgact_tls_get_addr(ti); }
+#endif
+
 struct builtin_sym { const char *name; unsigned long addr; };
 static const struct builtin_sym g_builtins[] = {
 	{ "imgact_probe",   (unsigned long)imgact_probe   },
 	{ "imgact_counter", (unsigned long)&imgact_counter },
 	{ "__getauxval",    (unsigned long)__getauxval    },
+#ifdef IMGACT_R_TLS_DTPMOD
+	{ "__tls_get_addr", (unsigned long)__tls_get_addr },
+#endif
 };
 #define N_BUILTINS (sizeof(g_builtins) / sizeof(g_builtins[0]))
 
 /* --------------------------------------------------------------------------
  * Symbol resolution.
  * -------------------------------------------------------------------------- */
+
+#if defined(__alpha__)
+/* Alpha has no integer-divide instruction (see the "division-free decimal"
+ * note in tools/cross-alpha/ovmx-alpha-selftest.c); GCC normally lowers `%`
+ * to a call to libgcc's __remqu, which this -nostdlib build doesn't link and
+ * which uses a non-standard, undocumented-here register convention anyway
+ * (confirmed by inspecting IMGACT.EXE's own disassembly: the plain `%`
+ * operator left a live GLOB_DAT relocation against __remqu that IMGACT's
+ * self_relocate() -- RELATIVE-only, by design -- never fills, so any call
+ * would jump through a null GOT slot). Software binary long division sidesteps
+ * both problems: it is normal, standard-calling-convention C, so it needs no
+ * ABI assumption at all. */
+static unsigned long umod64(unsigned long a, unsigned long b)
+{
+	unsigned long q = 0, r = 0;
+	for (int i = 63; i >= 0; i--) {
+		r = (r << 1) | ((a >> i) & 1UL);
+		if (r >= b) {
+			r -= b;
+			q |= (1UL << i);
+		}
+	}
+	(void)q;
+	return r;
+}
+#else
+static inline unsigned long umod64(unsigned long a, unsigned long b)
+{
+	return a % b;
+}
+#endif
 
 static unsigned long elf_sysv_hash(const char *name)
 {
@@ -374,12 +458,12 @@ static Elf64_Sym *obj_find(struct obj *o, const char *name, unsigned long hash)
 {
 	if (!o->hash || !o->symtab || !o->strtab)
 		return 0;
-	Elf64_Word nbucket = o->hash[0];
-	Elf64_Word *bucket = o->hash + 2;
-	Elf64_Word *chain  = bucket + nbucket;
+	imgact_hashword_t  nbucket = o->hash[0];
+	imgact_hashword_t *bucket  = o->hash + 2;
+	imgact_hashword_t *chain   = bucket + nbucket;
 	if (!nbucket)
 		return 0;
-	for (Elf64_Word i = bucket[hash % nbucket]; i; i = chain[i]) {
+	for (imgact_hashword_t i = bucket[umod64(hash, nbucket)]; i; i = chain[i]) {
 		Elf64_Sym *s = &o->symtab[i];
 		if (s->st_shndx == SHN_UNDEF)
 			continue;
@@ -448,7 +532,7 @@ static void parse_dynamic(struct obj *o)
 	/* Dynamic-section pointers are link-time vaddrs: apply the load bias. */
 	o->strtab       = strtab ? (const char *)(o->base + strtab) : 0;
 	o->symtab       = symtab ? (Elf64_Sym *)(o->base + symtab) : 0;
-	o->hash         = hash ? (Elf64_Word *)(o->base + hash) : 0;
+	o->hash         = hash ? (imgact_hashword_t *)(o->base + hash) : 0;
 	o->rela         = rela ? (Elf64_Rela *)(o->base + rela) : 0;
 	o->relasz       = relasz;
 	o->jmprel       = jmprel ? (Elf64_Rela *)(o->base + jmprel) : 0;
@@ -780,6 +864,7 @@ static void apply_rela(struct obj *o, Elf64_Rela *rela, unsigned long size)
 			break;
 		}
 
+#ifdef IMGACT_R_TLSDESC
 		case IMGACT_R_TLSDESC: {
 			/* Fill the 2-word descriptor: [resolver, TP-rel offset].
 			 * o->tls_offset carries the module block's signed
@@ -802,6 +887,46 @@ static void apply_rela(struct obj *o, Elf64_Rela *rela, unsigned long size)
 			where[1] = arg;
 			break;
 		}
+#endif
+
+#ifdef IMGACT_R_TLS_DTPMOD
+		case IMGACT_R_TLS_DTPMOD: {
+			/* General Dynamic model (bead vms-e11, Alpha[A2]): fill
+			 * the runtime module id __tls_get_addr() indexes g_objs[]
+			 * with -- IMGACT's own numbering (1-based array index),
+			 * assigned here exactly like a real ld.so assigns one at
+			 * load time. */
+			if (symi) {
+				const char *name =
+					o->strtab + o->symtab[symi].st_name;
+				struct symres res = resolve_sym(name);
+				if (!res.found || !res.obj || !res.obj->has_tls)
+					die_tlserr(name);
+				*where = (unsigned long)(res.obj - g_objs) + 1;
+			} else {
+				/* Local TLS symbol: this module's own id. */
+				*where = (unsigned long)(o - g_objs) + 1;
+			}
+			break;
+		}
+		case IMGACT_R_TLS_DTPREL: {
+			/* General Dynamic model: module-relative offset (S + A,
+			 * matching the resolve_sym()-based cases' "value already
+			 * carries the module-internal offset" contract). */
+			if (symi) {
+				const char *name =
+					o->strtab + o->symtab[symi].st_name;
+				struct symres res = resolve_sym(name);
+				if (!res.found)
+					die_undsym(name);
+				*where = res.sym->st_value
+					 + (unsigned long)r->r_addend;
+			} else {
+				*where = (unsigned long)r->r_addend;
+			}
+			break;
+		}
+#endif
 
 		case IMGACT_R_ABS64: {
 			const char *name = o->strtab + o->symtab[symi].st_name;

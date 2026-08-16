@@ -186,18 +186,40 @@ struct vms_stat {
     uint64_t st_ctime_nsec;
     uint32_t __unused[2];
 };
+#elif defined(__alpha__)
 /*
- * __alpha__: struct vms_stat is intentionally NOT yet defined here.
- * Alpha's stat ABI is irregular and must be derived from the alpha
- * <asm/stat.h> oracle, not guessed -- and there is a trap: __NR_fstat
- * (91) fills Alpha's OLD stat layout while fstatat64 (455, mapped to
- * __NR_newfstatat) fills a stat64.  The x86_64/aarch64 code assumes one
- * struct services both calls; Alpha needs the wrappers pointed at the
- * stat64 pair (fstat64/fstatat64) with vms_stat laid out as Alpha
- * stat64.  Tracked as remaining port work in rd vms-054.  Leaving this
- * undefined makes any Alpha code path that dereferences vms_stat fail
- * loudly rather than silently reading a wrong layout.
+ * Alpha stat64 layout, from arch/alpha/include/uapi/asm/stat.h
+ * (`struct stat64`) in the alpha-linux-gnu cross toolchain / Linux
+ * 6.6.52 source -- verified field-for-field (offsetof + sizeof) against
+ * that header under qemu-alpha, not transcribed from memory.  This is
+ * the buffer shape __NR_fstat64 (427) and __NR_fstatat64 (455, aliased
+ * to __NR_newfstatat below) fill.  Alpha's OLD __NR_fstat (91) target
+ * -- struct stat, not stat64 -- is a DIFFERENT, narrower layout and
+ * must never be pointed at this struct; the wrappers below are wired
+ * to the stat64 pair only.
  */
+struct vms_stat {
+    uint64_t st_dev;
+    uint64_t st_ino;
+    uint64_t st_rdev;
+    int64_t  st_size;
+    uint64_t st_blocks;
+
+    uint32_t st_mode;
+    uint32_t st_uid;
+    uint32_t st_gid;
+    uint32_t st_blksize;
+    uint32_t st_nlink;
+    uint32_t __pad0;
+
+    uint64_t st_atime_sec;
+    uint64_t st_atime_nsec;
+    uint64_t st_mtime_sec;
+    uint64_t st_mtime_nsec;
+    uint64_t st_ctime_sec;
+    uint64_t st_ctime_nsec;
+    int64_t  __unused[3];
+};
 #endif
 
 /* stat mode bits */
@@ -257,6 +279,26 @@ struct vms_linux_dirent64 {
 #else
 #define VMS_MAP_NORESERVE 0               /* NetBSD has no MAP_NORESERVE; benign 0 */
 #endif
+#elif defined(__alpha__)
+/*
+ * Alpha's mmap flag bits are NOT the generic Linux ones -- confirmed
+ * against arch/alpha/include/uapi/asm/mman.h in the alpha-linux-gnu cross
+ * toolchain (that header's own comment: "0x01 - 0x03 are defined in
+ * linux/mman.h" i.e. SHARED/PRIVATE are common, but MAP_FIXED and
+ * MAP_ANONYMOUS are OSF/1-heritage values, and every "Linux-specific"
+ * flag from MAP_GROWSDOWN up is shifted relative to x86_64/aarch64/the
+ * asm-generic values used by the #else branch below). Found by tracing a
+ * real qemu-alpha segfault in tests/libvmssys/test_syscall.c's mmap/
+ * munmap test: with the generic (wrong) MAP_ANONYMOUS bit, the kernel
+ * returned a small negative errno that didn't equal VMS_MAP_FAILED
+ * ((void*)-1), so the test's "mmap succeeded" branch dereferenced a
+ * bogus pointer.
+ */
+#define VMS_MAP_SHARED    0x01
+#define VMS_MAP_PRIVATE   0x02
+#define VMS_MAP_FIXED     0x100
+#define VMS_MAP_ANONYMOUS 0x10
+#define VMS_MAP_NORESERVE 0x10000
 #else
 #define VMS_MAP_SHARED   0x01
 #define VMS_MAP_PRIVATE  0x02
@@ -277,6 +319,43 @@ struct vms_linux_dirent64 {
  * Signal definitions
  * ================================================================ */
 
+#if defined(__alpha__)
+/*
+ * Alpha signal numbers are NOT the generic Linux ones below -- Alpha
+ * keeps OSF/1-compatible numbering (arch/alpha/include/uapi/asm/
+ * signal.h in the alpha-linux-gnu cross toolchain / Linux 6.6.52
+ * source; also src/libvmssys/vms_syscall.h's __alpha__ block header
+ * comment). Several of the low numbers happen to coincide with the
+ * generic set (HUP/INT/QUIT/ILL/ABRT/FPE/KILL/SEGV/PIPE/ALRM/TERM), but
+ * 10/12/17-20 do NOT: on Alpha, 10=SIGBUS and 12=SIGSYS (not USR1/USR2
+ * at all), and CHLD/CONT/STOP are renumbered. This was found the hard
+ * way: tests/libvmssys/test_futex.c's clone()-based fork-emulation
+ * passed VMS_SIGCHLD (17, i.e. Alpha's real SIGSTOP) as the clone exit
+ * signal and got EINVAL back from the kernel every time; passing
+ * Alpha's real SIGCHLD (20) succeeds (confirmed under qemu-alpha).
+ * VMS_SIGRTMIN here is the kernel's raw first-realtime-signal number
+ * (Alpha NSIG=32, so 32) -- NOT glibc's userspace-reserved SIGRTMIN
+ * (commonly 34 on other targets, itself a libc convention this
+ * freestanding layer doesn't otherwise implement).
+ */
+#define VMS_SIGHUP     1
+#define VMS_SIGINT     2
+#define VMS_SIGQUIT    3
+#define VMS_SIGILL     4
+#define VMS_SIGABRT    6
+#define VMS_SIGFPE     8
+#define VMS_SIGKILL    9
+#define VMS_SIGSEGV    11
+#define VMS_SIGPIPE    13
+#define VMS_SIGALRM    14
+#define VMS_SIGTERM    15
+#define VMS_SIGUSR1    30
+#define VMS_SIGUSR2    31
+#define VMS_SIGCHLD    20
+#define VMS_SIGCONT    19
+#define VMS_SIGSTOP    17
+#define VMS_SIGRTMIN   32
+#else
 #define VMS_SIGHUP     1
 #define VMS_SIGINT     2
 #define VMS_SIGQUIT    3
@@ -294,6 +373,7 @@ struct vms_linux_dirent64 {
 #define VMS_SIGCONT    18
 #define VMS_SIGSTOP    19
 #define VMS_SIGRTMIN   34
+#endif
 
 #define VMS_SIG_DFL    ((void (*)(int))0)
 #define VMS_SIG_IGN    ((void (*)(int))1)
@@ -327,11 +407,25 @@ struct vms_sigaction {
     unsigned long sa_flags;
     vms_sigset_t sa_mask;
 };
+#elif defined(__alpha__)
 /*
- * __alpha__: struct vms_sigaction not yet defined -- Alpha's kernel
- * sigaction layout (sa_handler/sa_mask/sa_flags order) must come from
- * the alpha <asm/signal.h> oracle.  Remaining port work, rd vms-054.
+ * Alpha kernel sigaction layout, from
+ * arch/alpha/include/uapi/asm/signal.h (`struct sigaction`) in the
+ * alpha-linux-gnu cross toolchain / Linux 6.6.52 source -- same shape
+ * in glibc's alpha bits/sigaction.h.  Verified field-for-field
+ * (offsetof + sizeof) against that header under qemu-alpha.  Order is
+ * handler / mask / flags -- NOT flags-then-mask like x86_64/aarch64 --
+ * and there is no sa_restorer field: unlike x86_64, Alpha's rt_sigaction
+ * syscall takes the restorer as an explicit 5th syscall argument (see
+ * arch/alpha/kernel/signal.c SYSCALL_DEFINE5(rt_sigaction, ...)), so
+ * vms_sys_rt_sigaction has an Alpha-specific 5-arg body in
+ * vms_syscall.h rather than sharing the generic 4-arg wrapper.
  */
+struct vms_sigaction {
+    void     (*sa_handler)(int);
+    vms_sigset_t sa_mask;
+    int      sa_flags;
+};
 #endif
 
 /* ================================================================
@@ -376,7 +470,11 @@ struct vms_sigevent {
  * Process / clone
  * ================================================================ */
 
-#define VMS_SIGCHLD       17
+/* VMS_SIGCHLD is already defined above (Signal definitions, per-arch:
+ * 17 generic / 20 on Alpha) -- do not redefine it here. A duplicate,
+ * unconditional `#define VMS_SIGCHLD 17` used to live in this section
+ * and silently clobbered the Alpha value via macro redefinition (found
+ * while fixing the clone()-exit-signal EINVAL below). */
 
 /* clone flags */
 #define VMS_CLONE_VM            0x00000100

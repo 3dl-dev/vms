@@ -11,11 +11,13 @@
 cmake_minimum_required(VERSION 3.16)
 
 # When configured standalone (the netbsd-vax cross build drives
-# `cmake -S src/libvmssys` with a toolchain file, outside the top-level tree),
-# there is no enclosing project(); declare one. C only -- the freestanding ASM
-# backends are added per-substrate below, and the netbsd substrate has none.
+# `cmake -S src/libvmssys` with a toolchain file, outside the top-level tree;
+# so does the ovmx-cross-alpha qemu-alpha test gate), there is no enclosing
+# project(); declare one. ASM is enabled unconditionally here too -- harmless
+# for the netbsd substrate (which adds no ASM sources) and required for the
+# raw-freestanding linux substrate (x86_64/aarch64/alpha), which does.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    project(vmssys_standalone C)
+    project(vmssys_standalone C ASM)
 endif()
 
 # ================================================================
@@ -80,6 +82,12 @@ else()
         arch/${VMSSYS_ARCH}/crt0.S
         arch/${VMSSYS_ARCH}/sigreturn.S
     )
+    # Alpha's __divqu/__remqu use a non-standard calling convention (args
+    # in $24/$25, return address in $23, result in $27 -- see softdiv.S)
+    # that cannot be expressed as a plain C function; hand-written asm.
+    if(VMSSYS_ARCH STREQUAL "alpha")
+        list(APPEND VMSSYS_ASM_SOURCES arch/alpha/softdiv.S)
+    endif()
     set(VMSSYS_C_SOURCES
         vms_string.c
         vms_snprintf.c
@@ -90,6 +98,16 @@ else()
         vms_kif.c
         kif_transport_linux.c
     )
+    # Alpha has no hardware integer divide and GCC's alpha backend has no
+    # inline expansion for __builtin_sqrt/floor/ceil (both confirmed by
+    # inspection, see the file header) -- softmath.c supplies __divqu/
+    # __remqu/sqrt/sqrtf/floor/ceil so the freestanding link (-nostdlib,
+    # no glibc, Rule 3) doesn't need them from anywhere else. x86_64 and
+    # aarch64 have hardware support for all of these and never reference
+    # this file.
+    if(VMSSYS_ARCH STREQUAL "alpha")
+        list(APPEND VMSSYS_C_SOURCES arch/alpha/softmath.c)
+    endif()
 endif()
 
 # ================================================================
@@ -155,6 +173,16 @@ endif()
 # vms-64a; the per-library build-libvmssys-vax.sh CI gate was retired in Rung
 # E, rd vms-08cb, once the aggregate proved it transitively).
 if(VMSSYS_SUBSTRATE STREQUAL "linux")
+
+# When configured standalone (e.g. the ovmx-cross-alpha qemu-alpha gate
+# driving `cmake -S src/libvmssys` directly), there is no enclosing
+# enable_testing() from the top-level tree's BUILD_TESTS path -- without it
+# the add_test() calls below register nothing into CTestTestfile.cmake and
+# `ctest` silently reports "No tests were found". When embedded in the
+# top-level build this is a harmless no-op re-call.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    enable_testing()
+endif()
 
 # Helper function: build a freestanding test binary
 function(vmssys_add_test name source)

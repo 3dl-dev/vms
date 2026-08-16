@@ -5,7 +5,7 @@
  * providing type safety and proper argument counts.  Return value
  * is the raw kernel return (negative = -errno).
  *
- * Supports x86_64 and aarch64.
+ * Supports x86_64, aarch64, and alpha.
  */
 
 #ifndef _VMS_SYSCALL_H
@@ -172,12 +172,22 @@
  *   - Alpha has no newfstatat(); it exposes fstatat64() (nr 455).  That
  *     call fills a stat64-shaped buffer -- see the __alpha__ struct
  *     vms_stat layout note in vms_types.h before trusting fstat results.
+ *   - Alpha's plain __NR_fstat (91) fills the OLD, narrower `struct stat`
+ *     (not stat64) -- deliberately NOT wired to vms_sys_fstat.  The
+ *     fstat wrapper uses __NR_fstat64 (427) instead, so both stat
+ *     entry points (vms_sys_fstat, vms_sys_newfstatat) fill the same
+ *     stat64-shaped struct vms_stat.
+ *   - Alpha's rt_sigaction is SYSCALL_DEFINE5, not 4-arg like
+ *     x86_64/aarch64: the signal restorer is an explicit 5th syscall
+ *     argument rather than a struct sigaction field.  See the
+ *     Alpha-specific vms_sys_rt_sigaction body below.
  */
 #define __NR_read               3
 #define __NR_write              4
 #define __NR_open               45
 #define __NR_close              6
-#define __NR_fstat              91
+#define __NR_fstat              91     /* OLD struct stat -- NOT used, see above */
+#define __NR_fstat64            427    /* stat64 buffer -- what vms_sys_fstat uses */
 #define __NR_lseek              19
 #define __NR_mmap               71
 #define __NR_mprotect           74
@@ -284,7 +294,14 @@ static inline vms_off_t vms_sys_lseek(int fd, vms_off_t offset, int whence)
 
 static inline int vms_sys_fstat(int fd, struct vms_stat *buf)
 {
+#if defined(__alpha__)
+    /* stat64 pair: __NR_fstat (91) fills the OLD struct stat, which does
+     * not match the stat64-shaped struct vms_stat defined for Alpha in
+     * vms_types.h.  Use __NR_fstat64 (427) instead. */
+    return (int)__vms_syscall2(__NR_fstat64, fd, (long)buf);
+#else
     return (int)__vms_syscall2(__NR_fstat, fd, (long)buf);
+#endif
 }
 
 static inline int vms_sys_newfstatat(int dirfd, const char *path, struct vms_stat *buf, int flags)
@@ -433,10 +450,29 @@ static inline vms_pid_t vms_sys_setsid(void)
  * Signals
  * ================================================================ */
 
+/* rt_sigreturn trampoline (arch/<arch>/sigreturn.S); forward-declared here so
+ * the Alpha rt_sigaction wrapper below can pass it as the syscall's
+ * explicit restorer argument. Also re-declared below for reference on
+ * the other architectures, where it is wired in via struct sigaction
+ * instead (or not required at all). */
+extern void __vms_rt_sigreturn(void);
+
 static inline int vms_sys_rt_sigaction(int signum, const struct vms_sigaction *act,
                                         struct vms_sigaction *oldact, vms_size_t sigsetsize)
 {
+#if defined(__alpha__)
+    /* Alpha's rt_sigaction is SYSCALL_DEFINE5(rt_sigaction, sig, act, oact,
+     * sigsetsize, restorer) -- arch/alpha/kernel/signal.c.  The restorer
+     * is a separate syscall argument, not a struct sigaction field (Alpha's
+     * struct vms_sigaction has no sa_restorer member).  Passing
+     * __vms_rt_sigreturn unconditionally is harmless when act == NULL
+     * (query-only mode): the kernel only consults ka_restorer inside the
+     * `if (act)` branch of sys_rt_sigaction. */
+    return (int)__vms_syscall5(__NR_rt_sigaction, signum, (long)act, (long)oldact,
+                               sigsetsize, (long)__vms_rt_sigreturn);
+#else
     return (int)__vms_syscall4(__NR_rt_sigaction, signum, (long)act, (long)oldact, sigsetsize);
+#endif
 }
 
 static inline int vms_sys_rt_sigprocmask(int how, const vms_sigset_t *set,
@@ -444,9 +480,6 @@ static inline int vms_sys_rt_sigprocmask(int how, const vms_sigset_t *set,
 {
     return (int)__vms_syscall4(__NR_rt_sigprocmask, how, (long)set, (long)oldset, sigsetsize);
 }
-
-/* rt_sigreturn is handled by sigreturn.S -- declared here for reference */
-extern void __vms_rt_sigreturn(void);
 
 /* ================================================================
  * Synchronization (futex)

@@ -376,7 +376,9 @@ tmpfile=PROCEDURE,clearerr=PROCEDURE,\
 \
 unsetenv=PROCEDURE,\
 \
-pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE"
+pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE,\
+\
+pread=PROCEDURE,pwrite=PROCEDURE"
 
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets
@@ -453,6 +455,24 @@ pthread_create=PROCEDURE,pthread_detach=PROCEDURE,pthread_join=PROCEDURE"
 # pthread_create/detach/join yet). All three are POSIX threading entry points
 # real OpenVMS DECC$SHR exports (DECthreads) and musl's libc.a defines, so
 # DECC$SHR is the right producer.
+#
+# pread/pwrite APPENDED for the ODS-2 runtime-flip native-link plumbing (epic
+# vms-5eb, branch work/ods2-native-link-direct; append-only -> prior consumers'
+# vector indices unchanged, GSMATCH LEQUAL-compatible). The SYS$DISK ODS-2
+# adapter closure (src/vmsfs/ods2_sysdisk.c + vmsfs_volume.c + the ods2/
+# reader/writer/bdev/path sublibrary) is now linked DIRECTLY into its VMS-native
+# consumers -- DCL.EXE (mk_dcl.sh, internal objects) and LIBVMSRMS$SHR.EXE
+# (mk_vmsrms_shr.sh, internal objects NOT in the RMS symbol vector) -- so the
+# reroute branches (R2/vms-af7a, R3/vms-496) can native-link when they land. The
+# block-device codec reads/writes the volume with pread(2)/pwrite(2) at absolute
+# offsets (ods2_bdev.c / ods2_writer.c); every other libc call the closure makes
+# was already exported above. Both are plain POSIX C-RTL entry points real
+# OpenVMS DECC$SHR exports and musl's libc.a defines, so DECC$SHR is the right
+# producer. NOTE (design correction, docs/design-ods2-runtime-flip.md): the ods2
+# adapter is deliberately NOT folded into LIBVMSFS$SHR's strict symbol vector
+# (that would drag the ODS-2 runtime-flip deps into the live shareable); it is a
+# distinct module its consumers link directly, so these two universals are all
+# DECC$SHR needs for the flip.
 #
 # THE GENERAL RULE, because this is the commonest way to break the VMS-native
 # toolchain jobs: EVERY libc call added to an OVMX library is a claim that

@@ -129,6 +129,27 @@ echo "  cc vmsqueue.c"
 $CC $CFLAGS $DEFS $INCS -c -o "$WORK/vmsqueue.o" "$REPO_SRC/vmsqueue/vmsqueue.c"
 OBJS="$OBJS $WORK/vmsqueue.o"
 
+# ODS-2 SYS$DISK adapter closure, linked DIRECTLY into DCL.EXE as INTERNAL
+# objects (epic vms-5eb, the ODS-2 runtime flip). DCL's DIRECTORY / SET DEFAULT /
+# generic filespec reroutes (dcl_cmd_file.c / dcl_cmd_set.c / dcl_filespec.c,
+# rungs R3/vms-496 + R2/vms-af7a) call ods2_sysdisk_* + ods2_fh2_parse over the
+# registered SYS$DISK volume handle. Matching src/vmsdcl/CMakeLists.txt (which
+# links the `vmsfs_volume` static target), these objects are a DISTINCT module
+# NOT exported by LIBVMSFS$SHR's strict symbol vector -- consumers link them
+# directly. DCL.EXE is an EXECUTABLE (no symbol vector), so they are purely
+# internal CALL26 targets resolved intra-image; their only cross-image imports
+# are libc (-> DECC$SHR, incl. pread/pwrite appended in mk_decc_shr.sh). Present
+# now but UNCALLED until the reroute branches land -- additive, DCL still links
+# and runs exactly as before. See docs/design-ods2-runtime-flip.md.
+ODS2_ADAPTER="vmsfs/vmsfs_volume vmsfs/ods2_sysdisk vmsfs/ods2/ods2_reader \
+vmsfs/ods2/ods2_writer vmsfs/ods2/ods2_bdev vmsfs/ods2/ods2_path"
+for o in $ODS2_ADAPTER; do
+    b=$(basename "$o")
+    echo "  cc $o.c (ODS-2 SYS\$DISK adapter, internal)"
+    $CC $CFLAGS $DEFS $INCS -c -o "$WORK/$b.o" "$REPO_SRC/$o.c"
+    OBJS="$OBJS $WORK/$b.o"
+done
+
 echo "mk_dcl: LINK.EXE --executable --use {7 producers} -> $OUT"
 # shellcheck disable=SC2086
 "$LINK_EXE" --executable \

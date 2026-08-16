@@ -1,5 +1,35 @@
 # Design record: the ODS-2 runtime flip (epic vms-5eb, rungs R2/R3/R5/R6)
 
+> **⛔ SUPERSEDED (operator pivot, 2026-08-16). This architecture is no longer
+> the plan. Kept only as history — do not act on it.**
+>
+> The operator ratified that a filesystem is an executive facility, so ODS-2
+> must be a **genuine Files-11 ACP/XQP in the executive** (CLAUDE.md Rule 9 /
+> INV-6), **not** a userspace shim (Architecture "A1" below) that live VMS
+> components opt into. The userspace SYS$DISK adapter (`ods2_sysdisk.c`) and
+> the process-local mounted-volume table (`vmsfs_volume.c`) this record
+> describes as "LANDED" were **reverted** — they no longer exist on main.
+> References below to `ods2_sysdisk_*`, `vmsfs_volume_*`,
+> `register_system_volume()`, and tests `ods2_sysdisk`/`ods2_sysdisk_ensure`/
+> `ods2_volume`/`ods2_write_adapter`/`ods2_write_broker`/
+> `test_ods2_boot_register.sh` are historical; those files are gone.
+>
+> **What survived the revert (and why):** the genuine ODS-2 **codec**
+> `src/vmsfs/ods2/*` — the real-VAX-validated on-disk-format read/write engine
+> — is architecture-neutral and is exactly what the new ACP reuses. That
+> includes #611's two reusable codec primitives `ods2_wvolume_open_bdev()`
+> (reattach a writer to an existing volume) and `ods2_wvolume_append_file()`
+> (append to an existing RFM=FIXED file), now covered directly by
+> `tests/ods2/test_ods2_wvolume_reopen_append.c`. `vmsfs_master --ods2` (the
+> offline volume-master tool) also survives; an in-executive ACP still needs
+> *something* to master a genuine ODS-2 boot disk.
+>
+> **The forward design is `docs/design-files11-acp-executive.md`** (epic
+> vms-208). One real problem this record identified carries forward: the single
+> SYS$DISK block device has no transaction manager, so concurrent writers tear
+> it — the ACP solves that with a kernel-side lock (an executive DLM resource),
+> not the userspace `flock(2)` broker (#614) this record's write half used.
+
 Status: **IN PROGRESS — read-path foundation landed; the atomic flip is NOT
 complete and this branch does NOT boot-to-login on a genuine ODS-2 SYS$DISK.**
 This record exists so the conductor can re-plan: driving the four "flip" rungs

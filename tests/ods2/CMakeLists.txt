@@ -169,105 +169,22 @@ set_tests_properties(ods2_path PROPERTIES
     TIMEOUT 30
 )
 
-# vms-351 (epic vms-5eb "B2"): the userspace MOUNTED-VOLUME table
-# (src/vmsfs/vmsfs_volume.c) -- device name -> (open fd + cached ods2_bdev_t).
-# The additive substrate PID 1 registers the boot device into at boot. Builds a
-# genuine ODS-2 loop image, drives the SAME vmsfs_volume_register() call PID 1
-# makes, and resolves [SYS0.SYSCOMMON.SYSEXE]LOGIN.COM through the cached handle
-# -- plus the fail-honest paths (non-ODS-2 / unopenable backing store register
-# nothing). Links vmsfs_volume (which links the ods2 reader sublibrary).
-add_executable(test_ods2_volume test_ods2_volume.c)
-target_include_directories(test_ods2_volume PRIVATE ${VMS_FS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
-target_link_libraries(test_ods2_volume PRIVATE vmsfs_volume)
+# vms-208 (Files-11 ACP foundation): CODEC-LEVEL coverage for the two reusable
+# block-device writer primitives ods2_wvolume_open_bdev() (reattach a writer to
+# an existing volume, reconstructing the bump-allocator watermark) and
+# ods2_wvolume_append_file() (append verbatim to an existing RFM=FIXED file).
+# Introduced by #611, these were only exercised transitively through the
+# now-deleted userspace SYS$DISK adapter's test; this test drives them DIRECTLY
+# against a raw ODS-2 block device (no adapter) so codec coverage never drops
+# as the adapter is reverted. The Files-11 ACP (epic vms-208) reuses both.
+add_executable(test_ods2_wvolume_reopen_append test_ods2_wvolume_reopen_append.c)
+target_include_directories(test_ods2_wvolume_reopen_append PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_wvolume_reopen_append PRIVATE ods2)
 
-add_test(NAME ods2_volume COMMAND test_ods2_volume)
-set_tests_properties(ods2_volume PROPERTIES
+add_test(NAME ods2_wvolume_reopen_append COMMAND test_ods2_wvolume_reopen_append)
+set_tests_properties(ods2_wvolume_reopen_append PROPERTIES
     LABELS "unit;ods2;vmsfs"
     TIMEOUT 30
-)
-
-# vms-5eb (ODS-2 runtime flip): the SYS$DISK read adapter
-# (src/vmsfs/ods2_sysdisk.c) -- the "/vms/A/B/.../NAME.EXT;ver" -> ods2_bdev
-# path bridge every flip consumer (RMS rms_impl_open, DCL cmd_directory/$SEARCH,
-# MOUNT) reroutes onto. Builds a genuine ODS-2 loop image with the system
-# hierarchy, registers it as DKA0: (as PID 1 does), and drives resolve/read/list
-# through "/vms/..." paths -- byte-identical verbatim read-back, version
-# selection, directory listing, and the fail-honest paths (no volume ->
-# SS$_DEVNOTMOUNT, non-/vms -> SS$_BADPARAM). Links vmsfs_volume.
-add_executable(test_ods2_sysdisk test_ods2_sysdisk.c)
-target_include_directories(test_ods2_sysdisk PRIVATE ${VMS_FS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
-target_link_libraries(test_ods2_sysdisk PRIVATE vmsfs_volume)
-
-add_test(NAME ods2_sysdisk COMMAND test_ods2_sysdisk)
-set_tests_properties(ods2_sysdisk PROPERTIES
-    LABELS "unit;ods2;vmsfs"
-    TIMEOUT 30
-)
-
-# vms-5eb (ODS-2 runtime flip): the SYS$DISK read adapter's CROSS-PROCESS lazy
-# registration (src/vmsfs/ods2_sysdisk.c sysdisk_handle()). The flip's live
-# consumers (RMS in LOGINOUT, DCL in the shell image) run in processes whose
-# volume table starts empty -- only PID 1 registers DKA0: explicitly. This test
-# NEVER calls vmsfs_volume_register: it drives the adapter exactly as a fresh
-# RMS/DCL process would, proving the adapter lazily registers SYS$DISK from the
-# OVMX_SYSDISK_DEV boot-device channel, byte-identical read-back, idempotence,
-# and the fail-honest edges (no channel / non-ODS-2 channel -> SS$_DEVNOTMOUNT,
-# table stays empty -- Rule 9 / INV-6). Links vmsfs_volume.
-add_executable(test_ods2_sysdisk_ensure test_ods2_sysdisk_ensure.c)
-target_include_directories(test_ods2_sysdisk_ensure PRIVATE ${VMS_FS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
-target_link_libraries(test_ods2_sysdisk_ensure PRIVATE vmsfs_volume)
-
-add_test(NAME ods2_sysdisk_ensure COMMAND test_ods2_sysdisk_ensure)
-set_tests_properties(ods2_sysdisk_ensure PROPERTIES
-    LABELS "unit;ods2;vmsfs"
-    TIMEOUT 30
-)
-
-# vms-02e (epic vms-5eb, the WRITE half of the ODS-2 runtime flip): the
-# SYS$DISK ODS-2 WRITE adapter (src/vmsfs/ods2_sysdisk.c create/append/mkdir
-# + ods2_writer.c ods2_wvolume_open_bdev/_append_file). Builds a genuine ODS-2
-# loop image with the system hierarchy, registers it as DKA0: (O_RDWR, as PID 1
-# does), and through "/vms/..." paths: creates a verbatim file (byte-identical
-# read-back), APPENDS to an existing file repeatedly across contiguous AND
-# non-contiguous extent growth (the novel path -- read-back concatenation
-# byte-exact), mkdir + creates a file inside it, and exercises the fail-honest
-# edges (no volume -> SS$_DEVNOTMOUNT, non-/vms -> SS$_BADPARAM, absent file ->
-# SS$_NOSUCHFILE, write over an O_RDONLY volume fails honestly -- INV-6).
-# Additive: flips no live path. Links vmsfs_volume.
-add_executable(test_ods2_write_adapter test_ods2_write_adapter.c)
-target_include_directories(test_ods2_write_adapter PRIVATE ${VMS_FS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
-target_link_libraries(test_ods2_write_adapter PRIVATE vmsfs_volume)
-
-add_test(NAME ods2_write_adapter COMMAND test_ods2_write_adapter)
-set_tests_properties(ods2_write_adapter PROPERTIES
-    LABELS "unit;ods2;vmsfs"
-    TIMEOUT 30
-)
-
-# vms-49d (epic vms-5eb, the WRITE half): the SYS$DISK write-path single-writer
-# SERIALIZATION BROKER (src/vmsfs/ods2_sysdisk.c sysdisk_wlock -- flock(LOCK_EX)
-# on the volume block-device fd, held across the whole open_bdev -> mutate ->
-# flush span of each create/append/mkdir). At boot three independent processes
-# write the one SYS$DISK with no transaction manager; without the broker their
-# per-call block-backed writers read the same free-block/free-FID watermark and
-# clobber each other's dir_insert. This test drives the REAL cross-process case:
-# fork()'d children, each REGISTERING SYS$DISK for itself (its own open file
-# description -- flock is inode-associated, so pthreads would not exercise it),
-# barrier-released to maximally overlap, each creating one distinct byte-patterned
-# file in a shared directory over several rounds. Asserts every file present +
-# BYTE-EXACT and each directory lists exactly NCHILD entries (no torn block, no
-# lost insert), plus fail-honest (no volume -> SS$_DEVNOTMOUNT). ADDITIVE: it
-# reroutes no live writer -- it unblocks vms-af7a (R2-checkin) and vms-d75
-# (NonRMSWriters), which need this serialization before they land. Links
-# vmsfs_volume.
-add_executable(test_ods2_write_broker test_ods2_write_broker.c)
-target_include_directories(test_ods2_write_broker PRIVATE ${VMS_FS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
-target_link_libraries(test_ods2_write_broker PRIVATE vmsfs_volume)
-
-add_test(NAME ods2_write_broker COMMAND test_ods2_write_broker)
-set_tests_properties(ods2_write_broker PROPERTIES
-    LABELS "unit;ods2;vmsfs"
-    TIMEOUT 60
 )
 
 # vms-88d (R6-build unblocker for the ODS-2 flip vms-5eb): the WRITER's

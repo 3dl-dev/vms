@@ -96,37 +96,10 @@ for c in $LIST; do
     OBJS="$OBJS $WORK/$c.o"
 done
 
-# ODS-2 SYS$DISK adapter closure, linked DIRECTLY into LIBVMSRMS$SHR as INTERNAL
-# objects (epic vms-5eb, the ODS-2 runtime flip). RMS's working-copy model
-# (rms_core.c, rung R2/vms-af7a) calls ods2_sysdisk_* + ods2_fh2_parse over the
-# registered SYS$DISK volume handle. Matching src/vmsrms/CMakeLists.txt (which
-# links the `vmsfs_volume` static target PRIVATE), this is a DISTINCT module
-# deliberately kept OUT of LIBVMSFS$SHR's strict symbol vector -- RMS is one of
-# its designated DIRECT consumers. These objects are compiled into the shareable
-# but are NOT added to the symbol vector below (VEC is generated from the 8 RMS
-# objects only): RMS references them as INTERNAL intra-image CALL26 targets, not
-# as universals. Their only cross-image imports are libc (-> DECC$SHR, incl.
-# pread/pwrite appended in mk_decc_shr.sh) and vmsfs_volume_* which is self-
-# defined within this closure. Present now but UNCALLED until R2 lands --
-# additive, LIBVMSRMS$SHR links and activates exactly as before. See
-# docs/design-ods2-runtime-flip.md.
-VMSFS_SRC=$(cd "$(dirname "$VMSFS_INC")" && pwd)            # src/vmsfs (source dir)
-ODS2_ADAPTER="vmsfs_volume ods2_sysdisk ods2/ods2_reader \
-ods2/ods2_writer ods2/ods2_bdev ods2/ods2_path"
-ODS2_OBJS=""
-for o in $ODS2_ADAPTER; do
-    b=$(basename "$o")
-    echo "  cc vmsfs/$o.c (ODS-2 SYS\$DISK adapter, internal -- not a universal)"
-    $CC $CFLAGS -I"$VMSFS_INC" -I"$LIBVMS_INC" -c -o "$WORK/$b.o" "$VMSFS_SRC/$o.c"
-    ODS2_OBJS="$ODS2_OBJS $WORK/$b.o"
-done
-
 # Generate the PROCEDURE symbol vector from the compiled objects: every GLOBAL
 # defined-text symbol (nm type 'T') becomes a universal, name-sorted for a
 # deterministic vector. `$` in the sys$* names is safe: it comes from command
 # substitution, which is NOT re-expanded when the value is used.
-# NB: generated from $OBJS (the 8 RMS objects) ONLY -- the ODS-2 adapter closure
-# ($ODS2_OBJS) is linked internally but is NOT exported (design: not a universal).
 VEC=$(nm $OBJS 2>/dev/null | awk 'NF==3 && $2=="T"{print $3}' | sort -u \
       | sed 's/$/=PROCEDURE/' | paste -sd, -)
 [ -n "$VEC" ] || { echo "mk_vmsrms_shr: FAIL: empty symbol vector (no T symbols?)"; exit 1; }
@@ -141,6 +114,6 @@ echo "mk_vmsrms_shr: LINK.EXE --shareable --use {DECC\$SHR,LIBVMS\$SHR,LIBVMSFS\
     --use "$DECC_SHR" --use "$VMS_SHR" --use "$FS_SHR" \
     --symbol-vector "$VEC" \
     --gsmatch "$GSMATCH" \
-    -o "$OUT" $OBJS $ODS2_OBJS
+    -o "$OUT" $OBJS
 
 echo "mk_vmsrms_shr: created $OUT"

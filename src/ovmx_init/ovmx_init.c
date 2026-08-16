@@ -56,12 +56,6 @@
 #include "vms/logical.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
-/* ADDITIVE ODS-2 mounted-volume registration (vms-351, epic vms-5eb "B2"):
- * PID 1 registers the boot device DKA0: into the userspace mounted-volume
- * table (device -> open fd + cached ods2_bdev_t) at boot, IN ADDITION TO its
- * mount(2) of the same device. See register_system_volume() below. */
-#include "vmsfs/volume.h"
-#include "vmsfs/ods2.h"
 #include "ovmx_layout.h"
 #include "ovmx_identity.h"
 #include "ssdef.h"
@@ -476,64 +470,6 @@ static void report_kernel_taint(void)
 }
 
 /*
- * register_system_volume() - ADDITIVE ODS-2 mounted-volume registration
- * (vms-351, epic vms-5eb "B2", docs/design-ods2-runtime-flip.md §4).
- *
- * Register the boot device DKA0: into the userspace mounted-volume table as a
- * genuine-ODS-2 block-backed handle (device -> open fd + cached ods2_bdev_t),
- * IN ADDITION TO -- never instead of -- the mount(2) of the same device at
- * SYSDISK_MOUNT that bare_metal_init() has already done. This makes the volume
- * handle AVAILABLE for the future atomic RMS/DCL/MOUNT flip (rungs R2/R3/R5/R6)
- * WITHOUT rerouting a single live path: the vmsfs_to_linux_path -> /vms POSIX
- * passthrough is untouched, so boot still reaches login exactly as before. The
- * two coexist by design (§5's atomicity constraint: this foundation must break
- * no boot).
- *
- * FAIL-HONEST (CLAUDE.md Rule 9 / INV-6). vmsfs_volume_register() reads the
- * REAL block device (ovmx_boot_system_disk_dev(), e.g. /dev/vda). Today's boot
- * disk is still the bespoke VMFS format (the R6 boot-master flip to genuine
- * ODS-2 has not landed), so ods2_bdev_open() honestly reports it is not a
- * DECFILE11B volume and NOTHING is registered -- never a per-process fake. The
- * moment R6 masters the boot disk as genuine ODS-2, the SAME call succeeds and
- * the handle is live, with no change here.
- *
- * SILENT on the normal console: the boot facility+ident sequence is pinned to
- * the OpenVMS oracle (tests/qemu/test_boot_conformance.sh) and must not gain a
- * line. The outcome is surfaced ONLY under the ovmx.ods2reg boot flag, exactly
- * as report_kernel_taint() gates its readout behind ovmx.taintreport -- for a
- * targeted QEMU assertion that PID 1 ran the registration (vms-351's proof).
- */
-static void register_system_volume(void)
-{
-    ods2_status_t ost = ODS2_OK;
-    int st = vmsfs_volume_register(SYSDISK_DEVICE, ovmx_boot_system_disk_dev(),
-                                   &ost);
-
-    /* Boot-flag register (kernel cmdline): only emit when the audit asked --
-     * same gate mechanism and libc subset (fopen/fread/strstr) as
-     * report_kernel_taint(). Default boots stay byte-identical. */
-    FILE *cf = fopen("/proc/cmdline", "r");
-    if (!cf)
-        return;
-    char cmd[1024];
-    size_t clen = fread(cmd, 1, sizeof(cmd) - 1, cf);
-    fclose(cf);
-    cmd[clen] = '\0';
-    if (!strstr(cmd, "ovmx.ods2reg"))
-        return;
-
-    if (st == SS$_NORMAL) {
-        const ods2_bdev_t *bv = vmsfs_volume_handle(SYSDISK_DEVICE);
-        printf("%%OVMX-I-ODS2VOL, DKA0: registered as genuine ODS-2 volume "
-               "handle (%u blocks)\n", bv ? bv->nblocks : 0u);
-    } else {
-        /* Fail-honest readout: names the real reason the handle is not live. */
-        printf("%%OVMX-I-ODS2VOL, DKA0: not a genuine ODS-2 volume (%s); "
-               "handle not registered\n", ods2_strerror(ost));
-    }
-}
-
-/*
  * Bare-metal bootstrap: mount the Linux base layer, set hostname, attach the
  * executive, load vmsfs.ko, and MOUNT THE SYSTEM DISK OR HALT. Called when
  * running as PID 1 on bare metal or QEMU.
@@ -659,12 +595,6 @@ static void bare_metal_init(void)
          * vmsfs.ko just before the mount): the taint mask is now final.
          * Emits ONLY under the ovmx.taintreport boot flag (vms-566). */
         report_kernel_taint();
-
-        /* ADDITIVE ODS-2 mounted-volume registration (vms-351): register DKA0:
-         * as a genuine-ODS-2 block-backed handle IN ADDITION TO the mount just
-         * above. Silent on the normal console (gated behind ovmx.ods2reg);
-         * fail-honest on today's non-ODS-2 boot disk. Flips no live path. */
-        register_system_volume();
         return;
     }
 
@@ -734,11 +664,6 @@ static void bare_metal_init(void)
          * vms.ko via the executive_attach() just before this block): emit the
          * taint mask readout, gated on the ovmx.taintreport boot flag (vms-566). */
         report_kernel_taint();
-
-        /* ADDITIVE ODS-2 mounted-volume registration (vms-351): as on the
-         * flagless path, register DKA0: as a genuine-ODS-2 handle beside the
-         * mount. Silent (gated behind ovmx.ods2reg); flips no live path. */
-        register_system_volume();
     }
 
     if (vmsfs_load_failed)

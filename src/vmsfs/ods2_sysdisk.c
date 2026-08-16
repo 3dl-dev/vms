@@ -22,10 +22,12 @@
  */
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>   /* flock(2) -- the single-writer serialization broker */
 
 #include "vmsfs/sysdisk.h"
 #include "vmsfs/volume.h"
@@ -296,6 +298,62 @@ static uint64_t sysdisk_span(const ods2_bdev_t *bv)
     return (uint64_t)bv->nblocks * (uint64_t)ODS2_BLOCK_SIZE;
 }
 
+/* ----------------------------------------------------------------------------
+ * SINGLE-WRITER SERIALIZATION BROKER (vms-49d).
+ *
+ * The one SYS$DISK block device has NO transaction manager, yet at boot THREE
+ * independent processes write it concurrently: PID 1's OPERATOR.LOG append
+ * (opcom), a login LASTLOGIN write, and RMS $PUT. Each write entry point below
+ * opens a per-call block-device-backed writer (ods2_wvolume_open_bdev, which
+ * RECONSTRUCTS the free-block and free-FID watermarks by reading the on-disk
+ * bitmaps), mutates, and flushes. Two such spans interleaving on the same
+ * device tear blocks and lose updates: both open_bdev calls read the SAME
+ * watermark and allocate the SAME LBN/FID, and two dir_insert read-modify-
+ * writes of one parent directory block clobber each other (last writer wins,
+ * dropping the other's entry). Because the watermark is read INSIDE open_bdev,
+ * the critical section must begin BEFORE open_bdev and end AFTER close -- so
+ * the lock lives here at the adapter entry points, not down inside the writer.
+ *
+ * MECHANISM: flock(fd, LOCK_EX) on the registered volume's block-device fd,
+ * held across the whole open -> read-modify-write -> flush -> close span, then
+ * released. flock is a REAL OS-level, inode-associated advisory lock: two
+ * DIFFERENT processes (each with its own open file description on the device,
+ * exactly the boot case -- every process lazily registers SYS$DISK for itself
+ * via sysdisk_handle()) contend on it and are serialized. This is INV-6 clean:
+ * it is a kernel lock on the shared object, never a per-process fake that
+ * reports success while sharing nothing.
+ *
+ * OVMX DESIGN CHOICE (not VMS-authentic; labelled per CLAUDE.md Rule 8). The
+ * VMS-faithful mechanism is an executive Distributed Lock Manager resource --
+ * sys$enq of an EX-mode lock on a per-volume resource name -- which also
+ * generalizes to the clustered/MSCP-served case. flock-on-device is the
+ * minimal correct single-node broker for the additive write half; a later rung
+ * can substitute a DLM lock here without touching any consumer. See
+ * docs/design-ods2-runtime-flip.md.
+ *
+ * FAIL-SAFE: if flock somehow fails (e.g. EINTR after retry, or a backing fd
+ * that does not support locking), the write proceeds UNSERIALIZED rather than
+ * failing the write -- honesty about the medium (the data would still be
+ * written) is preferred to spuriously refusing a boot-time log append. This is
+ * a best-effort broker over an existing correct single-writer path, not a new
+ * failure mode. The concurrency test (tests/ods2/test_ods2_write_broker.c)
+ * proves the lock is what prevents corruption under real fork()'d contention.
+ */
+static int sysdisk_wlock(int fd)
+{
+    int rc;
+    do {
+        rc = flock(fd, LOCK_EX);
+    } while (rc != 0 && errno == EINTR);
+    return rc;   /* 0 == held; nonzero == unlocked (proceed unserialized) */
+}
+
+static void sysdisk_wunlock(int fd, int locked)
+{
+    if (locked == 0)
+        (void)flock(fd, LOCK_UN);
+}
+
 int ods2_sysdisk_create_file(const char *linux_path,
                              const void *data, size_t data_len)
 {
@@ -320,18 +378,27 @@ int ods2_sysdisk_create_file(const char *linux_path,
         version = 1;              /* an absent ";ver" creates version 1 */
     unsigned ndirs = (unsigned)(n - 1);
 
+    /* vms-49d broker: serialize the whole resolve -> open_bdev -> mutate ->
+     * flush span against every other writer of this device (held before
+     * open_bdev, whose watermark read is part of the critical section). */
+    int locked = sysdisk_wlock(bv->fd);
+
     /* Resolve the (already-existing) parent directory over the reader handle. */
     uint8_t dirhdr[ODS2_BLOCK_SIZE];
     ods2_fid_t parent_fid;
     ods2_status_t st = ods2_bdev_resolve_dir(bv, comps, ndirs, &parent_fid,
                                              dirhdr, sizeof(dirhdr));
-    if (st != ODS2_OK)
+    if (st != ODS2_OK) {
+        sysdisk_wunlock(bv->fd, locked);
         return ods2_status_to_vms(st);
+    }
 
     ods2_wvolume_t wvol;
     st = ods2_wvolume_open_bdev(bv->fd, sysdisk_span(bv), &wvol);
-    if (st != ODS2_OK)
+    if (st != ODS2_OK) {
+        sysdisk_wunlock(bv->fd, locked);
         return ods2_status_to_vms(st);
+    }
 
     ods2_fid_t newfid;
     st = ods2_wvolume_create_file_raw(&wvol, filename, version,
@@ -341,6 +408,7 @@ int ods2_sysdisk_create_file(const char *linux_path,
         st = ods2_wvolume_dir_insert(&wvol, parent_fid, filename, version,
                                      newfid);
     ods2_wvolume_close(&wvol);   /* flushes; surfaces any pwrite failure below */
+    sysdisk_wunlock(bv->fd, locked);
 
     return ods2_status_to_vms(st);
 }
@@ -367,22 +435,30 @@ int ods2_sysdisk_append_file(const char *linux_path,
     uint16_t version = split_version(filename);   /* 0 == highest */
     unsigned ndirs = (unsigned)(n - 1);
 
+    /* vms-49d broker: serialize the whole span (see ods2_sysdisk_create_file). */
+    int locked = sysdisk_wlock(bv->fd);
+
     /* Resolve the EXISTING file's FID over the reader handle. */
     uint8_t fhdr[ODS2_BLOCK_SIZE];
     ods2_fid_t file_fid;
     ods2_status_t st = ods2_bdev_resolve_file(bv, comps, ndirs, filename,
                                               version, &file_fid,
                                               fhdr, sizeof(fhdr));
-    if (st != ODS2_OK)
+    if (st != ODS2_OK) {
+        sysdisk_wunlock(bv->fd, locked);
         return ods2_status_to_vms(st);
+    }
 
     ods2_wvolume_t wvol;
     st = ods2_wvolume_open_bdev(bv->fd, sysdisk_span(bv), &wvol);
-    if (st != ODS2_OK)
+    if (st != ODS2_OK) {
+        sysdisk_wunlock(bv->fd, locked);
         return ods2_status_to_vms(st);
+    }
 
     st = ods2_wvolume_append_file(&wvol, file_fid, data, data_len);
     ods2_wvolume_close(&wvol);
+    sysdisk_wunlock(bv->fd, locked);
 
     return ods2_status_to_vms(st);
 }
@@ -414,23 +490,31 @@ int ods2_sysdisk_mkdir(const char *linux_path)
         return SS$_BADPARAM;
     unsigned ndirs = (unsigned)(n - 1);
 
+    /* vms-49d broker: serialize the whole span (see ods2_sysdisk_create_file). */
+    int locked = sysdisk_wlock(bv->fd);
+
     uint8_t dirhdr[ODS2_BLOCK_SIZE];
     ods2_fid_t parent_fid;
     ods2_status_t st = ods2_bdev_resolve_dir(bv, comps, ndirs, &parent_fid,
                                              dirhdr, sizeof(dirhdr));
-    if (st != ODS2_OK)
+    if (st != ODS2_OK) {
+        sysdisk_wunlock(bv->fd, locked);
         return ods2_status_to_vms(st);
+    }
 
     ods2_wvolume_t wvol;
     st = ods2_wvolume_open_bdev(bv->fd, sysdisk_span(bv), &wvol);
-    if (st != ODS2_OK)
+    if (st != ODS2_OK) {
+        sysdisk_wunlock(bv->fd, locked);
         return ods2_status_to_vms(st);
+    }
 
     ods2_fid_t newfid;
     st = ods2_wvolume_create_dir(&wvol, dirname, 1, parent_fid, &newfid);
     if (st == ODS2_OK)
         st = ods2_wvolume_dir_insert(&wvol, parent_fid, dirname, 1, newfid);
     ods2_wvolume_close(&wvol);
+    sysdisk_wunlock(bv->fd, locked);
 
     return ods2_status_to_vms(st);
 }

@@ -244,6 +244,32 @@ set_tests_properties(ods2_write_adapter PROPERTIES
     TIMEOUT 30
 )
 
+# vms-49d (epic vms-5eb, the WRITE half): the SYS$DISK write-path single-writer
+# SERIALIZATION BROKER (src/vmsfs/ods2_sysdisk.c sysdisk_wlock -- flock(LOCK_EX)
+# on the volume block-device fd, held across the whole open_bdev -> mutate ->
+# flush span of each create/append/mkdir). At boot three independent processes
+# write the one SYS$DISK with no transaction manager; without the broker their
+# per-call block-backed writers read the same free-block/free-FID watermark and
+# clobber each other's dir_insert. This test drives the REAL cross-process case:
+# fork()'d children, each REGISTERING SYS$DISK for itself (its own open file
+# description -- flock is inode-associated, so pthreads would not exercise it),
+# barrier-released to maximally overlap, each creating one distinct byte-patterned
+# file in a shared directory over several rounds. Asserts every file present +
+# BYTE-EXACT and each directory lists exactly NCHILD entries (no torn block, no
+# lost insert), plus fail-honest (no volume -> SS$_DEVNOTMOUNT). ADDITIVE: it
+# reroutes no live writer -- it unblocks vms-af7a (R2-checkin) and vms-d75
+# (NonRMSWriters), which need this serialization before they land. Links
+# vmsfs_volume.
+add_executable(test_ods2_write_broker test_ods2_write_broker.c)
+target_include_directories(test_ods2_write_broker PRIVATE ${VMS_FS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
+target_link_libraries(test_ods2_write_broker PRIVATE vmsfs_volume)
+
+add_test(NAME ods2_write_broker COMMAND test_ods2_write_broker)
+set_tests_properties(ods2_write_broker PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 60
+)
+
 # vms-88d (R6-build unblocker for the ODS-2 flip vms-5eb): the WRITER's
 # long-filename IDENT-area encoding. The real distro tree contains names
 # like "LIBVMSPROCESS$SHR.EXE;1" (23 chars) that the writer's old 20-char-only

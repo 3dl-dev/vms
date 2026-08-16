@@ -841,6 +841,13 @@ if(BUILD_TESTS)
     # about a file's ELF contents. Mastering the VMS-native PARTS.EXE into
     # the bootable image and the full QEMU boot->install->run chain are
     # vms-cde's e2e gate, not this one.
+    # PARTS is a BUILD_TOOLS target (src/apps/parts); these two gates use it as
+    # a stand-in image, so they only register when the demo target exists. Under
+    # BUILD_TESTS with BUILD_TOOLS=OFF (e.g. the cross-alpha lib-stack gate, rd
+    # vms-fed) PARTS is absent -- registering the tests then hard-fails Generate
+    # on an unresolved $<TARGET_FILE:PARTS>. The comment below already frames
+    # PARTS as "if available".
+    if(TARGET PARTS)
     add_test(NAME parts_setup_gate
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_parts_setup.sh
                 $<TARGET_FILE:vmsdcl> $<TARGET_FILE:PARTS>
@@ -862,6 +869,7 @@ if(BUILD_TESTS)
                 $<TARGET_FILE:vmsdcl> $<TARGET_FILE:PARTS>)
     set_tests_properties(foreign_command_dispatch_gate PROPERTIES
         LABELS "integration;dcl" TIMEOUT 60)
+    endif()  # TARGET PARTS
 endif()
 
 # vmssshd requires libssh — skip if headers not available

@@ -303,7 +303,7 @@ static void test_ots_cvt_l_ti(void)
     desc.dsc$a_pointer = buf;
 
     int32_t val = 42;
-    uint32_t st = ots$cvt_l_ti(&val, &desc, NULL, NULL, NULL);
+    uint32_t st = ots$cvt_l_ti(&val, &desc, 0, 0, 0);
     check(st == SS$_NORMAL, "ots$cvt_l_ti(42) returns SS$_NORMAL");
 
     /* Result should be right-justified: "        42" */
@@ -314,7 +314,7 @@ static void test_ots_cvt_l_ti(void)
     /* Negative value */
     memset(buf, 0, sizeof(buf));
     val = -7;
-    st = ots$cvt_l_ti(&val, &desc, NULL, NULL, NULL);
+    st = ots$cvt_l_ti(&val, &desc, 0, 0, 0);
     check(st == SS$_NORMAL, "ots$cvt_l_ti(-7) returns SS$_NORMAL");
 
     /* Should contain "-7" right-justified */

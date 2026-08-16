@@ -47,6 +47,28 @@ static long syscall3(long n, long a, long b, long c)
 			 : "rcx", "r11", "memory");
 	return r;
 }
+#elif defined(__alpha__)
+/* Alpha: syscall number in $0 (v0), args in $16-$18 (a0-a2), `callsys`.
+ * Error is out-of-band in $19 (a3); this proof harness only ever calls
+ * write()/exit_group() with valid arguments, so the return value (positive
+ * on success) is all it needs -- no negative-errno normalization here (see
+ * src/imgact/arch/alpha/imgact_arch.h's syscall6() for that, used by
+ * IMGACT.EXE itself). */
+#define SC_write       4
+#define SC_exit_group  405
+static long syscall3(long n, long a, long b, long c)
+{
+	register long v0 __asm__("$0")  = n;
+	register long a0 __asm__("$16") = a;
+	register long a1 __asm__("$17") = b;
+	register long a2 __asm__("$18") = c;
+	__asm__ volatile("callsys"
+			 : "+r"(v0)
+			 : "r"(a0), "r"(a1), "r"(a2)
+			 : "$19", "$20", "$21", "$22", "$23", "$24", "$25",
+			   "$27", "$28", "memory");
+	return v0;
+}
 #else
 #error "test_prog: unsupported architecture"
 #endif

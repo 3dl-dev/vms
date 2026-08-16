@@ -53,8 +53,20 @@ CMake arch branch. All of `libvmssys`'s C sources cross-compile for alpha. `stru
 `struct vms_sigaction` Alpha layouts landed in `vms_types.h` (rung A1, rd
 vms-40b) -- verified field-for-field against the alpha-linux-gnu kernel
 headers under qemu-alpha, with `vms_sys_fstat`/`vms_sys_rt_sigaction` wired
-to the correct stat64/5-arg-rt_sigaction ABI. Remaining for a full port: an
-`imgact` EM_ALPHA arch header.
+to the correct stat64/5-arg-rt_sigaction ABI.
+
+`src/imgact/arch/alpha/` (rung A2, rd vms-e11) is also ported: a
+cross-built, freestanding static-PIE Alpha OVMX image (PT_INTERP=IMGACT.EXE,
+DT_NEEDED on a shareable) activates and runs correctly under `qemu-alpha`
+(user-mode) -- see `src/imgact/test/run_test_alpha.sh`. Three real Alpha ABI
+wrinkles surfaced and are now handled (each documented at its fix site in
+`imgact.c`/`imgact_arch.h`): `MAP_ANONYMOUS` is `0x10` on Alpha, not the
+generic `0x20`; the SysV `.hash` section uses 8-byte (`Elf64_Xword`) fields on
+Alpha instead of the 4-byte fields every other 64-bit port uses; and Alpha has
+no TLSDESC (GCC rejects `-mtls-dialect=desc/gnu2`), so its TLS access model is
+the classic General Dynamic one (`__tls_get_addr` + DTPMOD64/DTPREL64),
+implemented as an IMGACT builtin rather than the TLSDESC resolver the other
+two backends use.
 
 ## The executive on Alpha: vms.ko + /dev/vms (rd vms-89dd, rung A4)
 

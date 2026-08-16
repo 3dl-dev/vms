@@ -1917,6 +1917,92 @@ static int dir_name_cmp(const char *a, unsigned alen, const char *b, unsigned bl
  * down for the same insert sequence. See PROVENANCE-real_vax_ods2.md's
  * increment-10 addendum.
  */
+/*
+ * [vms-9794] Merge a new {version, entry_fid} value entry into an EXISTING
+ * directory record for the SAME name, so a NAME can carry more than one
+ * version (";2"/";3" of an already-inserted file) instead of the prior
+ * hard reject on any duplicate name.
+ *
+ * GROUNDING (Rule 8): this adds NO new on-disk format fact. The reader
+ * (ods2_dir_block_scan(), ods2_reader.c) ALREADY walks a record's value-
+ * entry array as a `while (val_off + sizeof(ods2_dir_ent_t) <= rec_end)`
+ * loop, i.e. it already expects zero or more {dir_version,dir_fid} 8-byte
+ * entries per name -- this writer change only teaches ods2_wvolume_dir_
+ * insert() to EMIT what the reader already consumes. The entry layout
+ * itself (uint16 dir_version + 6-byte ods2_fid_t, 8 bytes, [N] direct.h
+ * dir$ent) is unchanged and already cited in ods2.h. Ordering (descending
+ * by version, highest first) matches ods2.h's directory-record comment
+ * ("one or more value entries {version, fid} in DESCENDING version
+ * order") and this file's own [F17] comment. dir_verlimit and dir_flags
+ * are left byte-identical to the existing record -- [F14] already
+ * establishes dir_verlimit is a per-NAME policy value, not per-version,
+ * so a second/third version of the same name must not perturb it.
+ *
+ * `src` points at the existing record's dir_size word (blk+off); `src_len`
+ * is that record's whole on-disk length (2 + dir_size). `namecount` is the
+ * record's own dir_namecount (already validated by the caller against
+ * `src_len`). Writes the merged record into `out` (caller-owned, must have
+ * room for at least src_len + sizeof(ods2_dir_ent_t) bytes) and its length
+ * into *out_len.
+ *
+ * Fail-honest (Rule 9 convention, no silent fabrication): ODS2_ERR_FORMAT
+ * if the existing record's value-entry area is not a whole number of
+ * 8-byte entries (corrupt directory); ODS2_ERR_ARGS if `version` already
+ * has an entry for this name (duplicate version -- never silently
+ * overwritten); ODS2_ERR_NOSPACE if the grown record would not fit in a
+ * single 512-byte directory block (a record may never cross a block
+ * boundary, [F17] rule 2).
+ */
+static ods2_status_t merge_dir_record(const uint8_t *src, unsigned src_len,
+                                      unsigned namecount, uint16_t version,
+                                      ods2_fid_t entry_fid,
+                                      uint8_t *out, unsigned *out_len)
+{
+    unsigned val_off = 6u + namecount;
+    unsigned n_old, i, new_idx;
+    unsigned new_len;
+
+    if (val_off & 1)
+        val_off++;
+    if (val_off > src_len || ((src_len - val_off) % 8u) != 0)
+        return ODS2_ERR_FORMAT;           /* malformed existing record */
+    n_old = (src_len - val_off) / 8u;
+
+    /* Find the descending-order insertion index; reject an exact-version
+     * duplicate rather than silently overwriting it. */
+    new_idx = n_old;
+    for (i = 0; i < n_old; i++) {
+        uint16_t v = rd16(src + val_off + i * 8u);
+        if (v == version)
+            return ODS2_ERR_ARGS;         /* duplicate version */
+        if (v < version) {
+            new_idx = i;
+            break;
+        }
+    }
+
+    new_len = val_off + (n_old + 1u) * 8u;
+    if (new_len > ODS2_BLOCK_SIZE - 2u)
+        return ODS2_ERR_NOSPACE;          /* cannot fit any single block */
+
+    memset(out, 0xFF, new_len);
+    put16(out + 0, (uint16_t)(new_len - 2));      /* dir_size */
+    memcpy(out + 2, src + 2, 4);                  /* verlimit + flags + namecount, unchanged */
+    memcpy(out + 6, src + 6, namecount);           /* name bytes, unchanged */
+    for (i = 0; i < new_idx; i++)
+        memcpy(out + val_off + i * 8u, src + val_off + i * 8u, 8u);
+    put16(out + val_off + new_idx * 8u + 0, version);
+    put16(out + val_off + new_idx * 8u + 2, entry_fid.fid_num);
+    put16(out + val_off + new_idx * 8u + 4, entry_fid.fid_seq);
+    out[val_off + new_idx * 8u + 6] = entry_fid.fid_rvn;
+    out[val_off + new_idx * 8u + 7] = entry_fid.fid_nmx;
+    for (i = new_idx; i < n_old; i++)
+        memcpy(out + val_off + (i + 1u) * 8u, src + val_off + i * 8u, 8u);
+
+    *out_len = new_len;
+    return ODS2_OK;
+}
+
 ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                                       ods2_fid_t dir_fid,
                                       const char *name, uint16_t version,
@@ -1933,7 +2019,7 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
     unsigned new_valoff, newrec_len;
     uint8_t *flat;
     size_t flatcap, flat_used = 0, insert_off = 0;
-    int have_insert = 0;
+    int have_insert = 0, found_name = 0;
     unsigned nblk, cur;
     size_t foff;
 
@@ -2042,12 +2128,28 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                 free(flat);
                 return ODS2_ERR_FORMAT;
             }
-            if (!have_insert) {
+            if (!found_name && !have_insert) {
                 int cmp = dir_name_cmp(name, namecount,
                                        (const char *)blk + off + 6, nc);
                 if (cmp == 0) {
-                    free(flat);
-                    return ODS2_ERR_ARGS;    /* duplicate name */
+                    /* [vms-9794] NAME already exists: merge the new
+                     * {version, fid} into THIS record's value-entry array
+                     * (in place of the record's raw bytes) instead of
+                     * rejecting -- see merge_dir_record() above. The
+                     * merged record replaces this record at its own sorted
+                     * position; no separate splice is needed. */
+                    unsigned merged_len;
+                    st = merge_dir_record(blk + off, reclen, nc, version,
+                                          entry_fid, flat + flat_used,
+                                          &merged_len);
+                    if (st != ODS2_OK) {
+                        free(flat);
+                        return st;
+                    }
+                    flat_used += merged_len;
+                    found_name = 1;
+                    off += reclen;
+                    continue;
                 }
                 if (cmp < 0) {
                     insert_off = flat_used;
@@ -2059,15 +2161,18 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
             off += reclen;
         }
     }
-    if (!have_insert)
-        insert_off = flat_used;         /* sorts after everything existing */
 
-    /* Splice the new record in at its sorted byte offset. */
-    if (insert_off < flat_used)
-        memmove(flat + insert_off + newrec_len, flat + insert_off,
-                flat_used - insert_off);
-    memcpy(flat + insert_off, newrec, newrec_len);
-    flat_used += newrec_len;
+    if (!found_name) {
+        if (!have_insert)
+            insert_off = flat_used;     /* sorts after everything existing */
+
+        /* Splice the new record in at its sorted byte offset. */
+        if (insert_off < flat_used)
+            memmove(flat + insert_off + newrec_len, flat + insert_off,
+                    flat_used - insert_off);
+        memcpy(flat + insert_off, newrec, newrec_len);
+        flat_used += newrec_len;
+    }
 
     /* Count blocks needed: greedy pack, a record never crosses a block
      * boundary, and every block keeps >=2 trailing bytes for its

@@ -515,7 +515,8 @@ bgsock-recv-length-zeroed
 bgsock-poll-always-ready
 bgsock-getname-addr-zeroed
 vmsfs-mountvis-crossproc-resolve-disabled
-initialize-home-magic-not-written"
+initialize-home-magic-not-written
+ods2-read-content-vbn"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -5499,6 +5500,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    ods2-read-content-vbn)
+        case "$_f" in
+        facility)     echo "genuine ODS-2 codec, kernel-resident CONTENT read (ods2_bdev_read_file over the block-backed reader compiled into vmsfs.ko's ods2ro presentation, rd vms-dcd)";;
+        targets)      echo "vmsfs/ods2/ods2_path.c";;
+        suites_red)   echo "test_kmod_ods2_codec";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ods2_bdev_read_file()'s per-extent loop reads each of a file's data blocks at its retrieval-pointer LBN (ext->lbn + k). The mutation reads ext->lbn + k + 1 -- one block too far -- so the KERNEL-RESIDENT codec returns the WRONG content bytes for [OVMXDIR]HELLO.TXT, while its length, its INDEXF.SYS header/FID lookup and the directory walk (all different code paths) stay correct: mount, both directory listings, stat size and read length all still pass. The read-back therefore differs from the COMMITTED golden (tests/ods2/ovmxdir_hello.golden, immune to this codec mutation because it is not regenerated from the codec), and ONLY the byte-identical assertion reddens. One wrong VBN in the content read.";;
+        require_fail) cat <<'EOF'
+BYTE-IDENTICAL: kernel-resident codec read == committed golden
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -6371,6 +6389,15 @@ apply_edit() {
         # `hb.hb_magic        = VMSFS_HOME_MAGIC;` is left -- the no-op selftest
         # requires.
         sed -i 's|hb.hb_magic        = VMSFS_HOME_MAGIC;|hb.hb_magic        = 0; /* NEGCTL initialize-home-magic-not-written */|' "$_file";;
+
+    ods2-read-content-vbn)
+        # UNIQUE TEXT: ods2_bdev_read_file()'s per-extent block read
+        # (`c->bv, ext->lbn + k,` -- the LBN argument to ods2_bdev_read_block)
+        # occurs once in ods2_path.c. Reading `ext->lbn + k + 1` returns the
+        # WRONG data block for a file's content while leaving length + metadata
+        # paths correct. After substitution no `c->bv, ext->lbn + k,` is left
+        # (now `+ k + 1,`) -- the no-op the idempotency selftest requires.
+        sed -i 's|c->bv, ext->lbn + k,|c->bv, ext->lbn + k + 1, /* NEGCTL ods2-read-content-vbn */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

@@ -11,10 +11,15 @@
  * the shared FS engine's vmsfs_bio.h backend -- with NO userspace codec and NO
  * POSIX in the kernel path.
  *
- * The byte-identical oracle is /test_data/hello.golden, produced at image-build
- * time by the USERSPACE codec (tests/qemu/mkgolden_ods2, ods2_bdev_read_file
- * over the same fixture). This test only mounts + read()s + memcmp()s: the
- * kernel read must equal the userspace-codec read, byte for byte.
+ * The byte-identical oracle is /test_data/hello.golden -- a COMMITTED fixture
+ * (tests/ods2/ovmxdir_hello.golden, the real on-disk content of [OVMXDIR]
+ * HELLO.TXT, 17218 bytes). It is committed rather than regenerated from the
+ * codec ON PURPOSE (rd vms-dcd negctl): a committed oracle is IMMUNE to a
+ * mutation in the codec read path, so the facility-defects negative control
+ * (ods2-read-content-vbn -- a wrong-VBN in ods2_path.c's content read) makes
+ * this byte-identical assertion GENUINELY go red instead of corrupting both
+ * sides equally. This test only mounts + read()s + memcmp()s: the kernel read
+ * must equal the committed golden, byte for byte.
  *
  * SKIPs honestly (0 failures) if the fixture/golden are absent, matching
  * test_kmod_vmsfs_blkdev's convention -- never a fabricated pass.
@@ -81,7 +86,7 @@ int main(void)
         return 0;
     }
 
-    /* Load the userspace-codec golden (the byte-identical oracle). */
+    /* Load the committed golden (the byte-identical oracle). */
     fd = open(GOLDEN, O_RDONLY);
     if (fd >= 0 && fstat(fd, &st) == 0) {
         golden_len = st.st_size;
@@ -93,7 +98,7 @@ int main(void)
     } else {
         golden_len = 0;
     }
-    CHECK(golden != NULL, "loaded userspace-codec golden");
+    CHECK(golden != NULL, "loaded committed golden");
 
     loopfd = loop_attach();
     CHECK(loopfd >= 0, "attach fixture to loop device");
@@ -154,7 +159,7 @@ int main(void)
     rc = stat(HELLO_PATH, &st);
     CHECK(rc == 0, "stat [OVMXDIR]HELLO.TXT");
     CHECK(rc == 0 && st.st_size == golden_len,
-          "kernel file size == userspace-codec byte count");
+          "kernel file size == committed golden byte count");
 
     fd = open(HELLO_PATH, O_RDONLY);
     CHECK(fd >= 0, "open [OVMXDIR]HELLO.TXT");
@@ -162,8 +167,9 @@ int main(void)
         kbuf = malloc(golden_len ? golden_len : 1);
         ssize_t n = kbuf ? read(fd, kbuf, golden_len) : -1;
         CHECK(n == golden_len, "read full file content in-kernel");
+        /* negctl: ods2-read-content-vbn */
         CHECK(n == golden_len && memcmp(kbuf, golden, golden_len) == 0,
-              "BYTE-IDENTICAL: kernel-resident codec read == userspace codec read");
+              "BYTE-IDENTICAL: kernel-resident codec read == committed golden");
         /* EOF at exactly the valid byte count (no trailing block padding). */
         {
             uint8_t extra;

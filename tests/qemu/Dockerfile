@@ -95,6 +95,15 @@ RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && \
 # it must sit beside /src/kernel as /src/kernel-core.
 COPY src/kernel-core/ /src/kernel-core/
 COPY src/kernel/ /src/kernel/
+# The genuine ODS-2 codec compiled kernel-resident into vmsfs.ko (rd vms-dcd):
+# src/kernel/vmsfs/Makefile's vmsfs-y lists ../../vmsfs/ods2/*.o (the SAME
+# cross-dir pattern it already uses for ../../kernel-core/vmsfs/*.o), so kbuild
+# needs those .c sources present in the build context -- exactly as it needs
+# src/kernel-core above. Copy them BEFORE the vmsfs.ko build below. (A later
+# stage re-references these for the mkgolden_ods2 host tool; Docker layer-caches
+# the COPY, so the earlier placement is free.)
+COPY src/vmsfs/include/ /src/vmsfs/include/
+COPY src/vmsfs/ods2/ /src/vmsfs/ods2/
 RUN KVER=$(cat /tmp/kver) && \
     cd /src/kernel && \
     make KDIR=/lib/modules/${KVER}/build 2>&1 && \
@@ -432,9 +441,8 @@ RUN gcc -O2 -Wall -o /src/tests/qemu/mkimage_vmsfs \
 # in-guest, and build the byte-identical GOLDEN with the USERSPACE codec so the
 # in-guest test (test_kmod_ods2_codec, mounting via the KERNEL-RESIDENT codec)
 # can memcmp kernel-read == userspace-read. mkgolden_ods2 is a thin host CLI over
-# the same codec sources (mirrors mkimage_vmsfs).
-COPY src/vmsfs/include/ /src/vmsfs/include/
-COPY src/vmsfs/ods2/ /src/vmsfs/ods2/
+# the same codec sources (mirrors mkimage_vmsfs). src/vmsfs/{include,ods2} were
+# already COPYd earlier (for the kernel-resident vmsfs.ko build); reused here.
 COPY tests/ods2/real_vax_ods2.dsk /ods2_real.img
 COPY tests/qemu/mkgolden_ods2.c /src/tests/qemu/
 RUN gcc -O2 -Wall -o /src/tests/qemu/mkgolden_ods2 \

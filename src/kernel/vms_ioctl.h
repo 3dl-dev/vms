@@ -15,7 +15,44 @@
 #include <linux/ioctl.h>
 #else
 #include <stdint.h>
-/* ioctl macros for userspace -- use system macros if already defined */
+/*
+ * ioctl macros for userspace -- use system macros if already defined.
+ *
+ * These MUST reproduce the kernel's per-architecture <asm/ioctl.h> encoding
+ * byte-for-byte: the command number userspace passes to ioctl(2) is compared
+ * for EQUALITY against the number the driver's switch computed from the SAME
+ * macros under __KERNEL__ (which pulls the arch's real <asm/ioctl.h>). If the
+ * two disagree, the driver falls through to `default: return -ENOTTY` and the
+ * ioctl silently never reaches its handler.
+ *
+ * Most Linux architectures (x86_64, aarch64, arm, ...) use the asm-generic
+ * encoding: a 2-bit direction field at bit 30 and a 14-bit size field. Alpha
+ * (like MIPS/PowerPC/SPARC) inherits the OSF/1-derived encoding instead: a
+ * 3-bit direction field at bit 29 with _IOC_NONE=1/_IOC_READ=2/_IOC_WRITE=4,
+ * and a 13-bit size field. Under that layout _IOWR (READ|WRITE = 6 << 29)
+ * COLLIDES with the generic _IOWR (3 << 30) -- both are 0xC000_0000 -- so an
+ * all-_IOWR interface works by luck, but _IOR (2 << 29 vs 2 << 30) and _IOW
+ * (4 << 29 vs 1 << 30) DIVERGE. That is exactly why VMS_IOCTL_DELIVERAST, the
+ * one _IOR in the cross-process path, was unreachable on Alpha while every
+ * _IOWR lock/eflag/register ioctl worked (rd vms-9535). Encode Alpha's layout
+ * explicitly so freestanding userspace agrees with the Alpha kernel.
+ */
+#if defined(__alpha__)
+/* OSF/1-derived encoding: dir(3) << 29 | size(13) << 16 | type << 8 | nr */
+#ifndef _IO
+#define _IO(type, nr)           (((1U) << 29) | ((type) << 8) | (nr))
+#endif
+#ifndef _IOR
+#define _IOR(type, nr, size)    (((2U) << 29) | ((sizeof(size)) << 16) | ((type) << 8) | (nr))
+#endif
+#ifndef _IOW
+#define _IOW(type, nr, size)    (((4U) << 29) | ((sizeof(size)) << 16) | ((type) << 8) | (nr))
+#endif
+#ifndef _IOWR
+#define _IOWR(type, nr, size)   (((6U) << 29) | ((sizeof(size)) << 16) | ((type) << 8) | (nr))
+#endif
+#else
+/* asm-generic encoding: dir(2) << 30 | size(14) << 16 | type << 8 | nr */
 #ifndef _IO
 #define _IO(type, nr)           (((type) << 8) | (nr))
 #endif
@@ -27,6 +64,7 @@
 #endif
 #ifndef _IOWR
 #define _IOWR(type, nr, size)   (((3U) << 30) | ((sizeof(size)) << 16) | ((type) << 8) | (nr))
+#endif
 #endif
 #endif
 

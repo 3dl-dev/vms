@@ -2,6 +2,7 @@
 #define __RMS_FAB_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 /* File Access Block - main control block for file operations */
 
@@ -102,6 +103,20 @@ struct FAB {
     int      _linux_fd;         /* Underlying Linux file descriptor */
     char     _resolved_path[1024]; /* Resolved Linux path */
     void    *_rms_state;        /* Internal RMS state */
+    /*
+     * SYS$DISK ODS-2 working-copy model (epic vms-5eb, R2 -- the ODS-2 runtime
+     * flip). When _resolved_path names a file on the genuine-ODS-2 SYS$DISK,
+     * _linux_fd is NOT a POSIX /vms file but a per-open in-memory WORKING COPY
+     * (a memfd holding the checked-out ODS-2 file bytes) so the seq/rel/idx
+     * positioned-I/O engines run byte-for-byte unchanged over an ordinary fd;
+     * on $CLOSE a dirty writable copy is checked in as a NEW ODS-2 version via
+     * the SYS$DISK write adapter. See rms_core.c's rms_sysdisk_* helpers.
+     */
+    uint8_t  _sysdisk_workcopy; /* 1 == _linux_fd is a checked-out ODS-2 copy   */
+    uint8_t  _sysdisk_writable; /* 1 == opened write-capable (checkin candidate) */
+    uint8_t  _sysdisk_created;  /* 1 == $CREATE (checkin as new version always)  */
+    size_t   _sysdisk_orig_len; /* checked-out original byte count (dirty compare) */
+    void    *_sysdisk_orig;     /* checked-out original bytes (dirty compare)      */
 };
 
 /* Initialization macro matching VMS cc$rms_fab */

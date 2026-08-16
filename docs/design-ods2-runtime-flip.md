@@ -156,9 +156,69 @@ foundations, and the first flip rung's builder primitive is landed:
    "atomic" and is why this branch's progress is red-in-CI until the whole
    group lands — expected, not a regression.
 
+- **R2-RMS WORKING-COPY MODEL — LANDED (update 2026-08-16, branch
+  `work/vms-af7a-rms-working-copy`, vms-af7a).** Route (a) is built in
+  `src/vmsrms/rms_core.c`. When `ods2_sysdisk_owns_path(fab->_resolved_path)`:
+  - **$OPEN (checkout)** — `rms_sysdisk_checkout()` reads the whole ODS-2 file
+    into an anonymous **memfd** (`memfd_create`, tmpfile fallback) via
+    `ods2_sysdisk_read_file` (exact size first from the FH2 recattr, so a short
+    read is an honest fault), and points `fab->_linux_fd` at it. rms_seq/rel/idx
+    and `rms_read_exact`/`rms_write_exact` run over the memfd **byte-for-byte
+    unchanged — not one positioned-I/O site was touched.**
+  - **$CREATE (checkout)** — an empty memfd, `_sysdisk_created=1`.
+  - **$CLOSE (checkin)** — `rms_sysdisk_checkin()`: a writable + **dirty** copy
+    (created, or content differs from the cached checked-out original) is
+    written back as a new ODS-2 version via `ods2_sysdisk_create_file`;
+    read-only / unchanged copies just discard the memfd (no spurious version).
+  - `resolve_filename` drops `rms_validate_path_boundary` for SYS$DISK paths
+    (the adapter owns the boundary); `resolve_for_open` skips the POSIX
+    `rms_resolve_version` opendir so the adapter selects the highest genuine
+    version.
+  - **FAIL-HONEST (INV-6 / Rule 9):** with no ODS-2 SYS$DISK reachable, $OPEN/
+    $CREATE of a `/vms/...` file returns the honest error (SS$_DEVNOTMOUNT ->
+    RMS) and **never** falls through to a POSIX open (proven: `_linux_fd`
+    stays -1). CIF (create-if) is the one honored fall-through, as on POSIX.
+  - **VAX-portable:** the whole reroute is under `#if defined(__linux__)`;
+    on the netbsd-vax cross (vms-271) `rms_sysdisk_owns()` is a constant 0 and
+    checkout/checkin are inert stubs, so RMS keeps its POSIX file path there
+    (verified: `rms_core.c` `-fsyntax-only` clean with `__linux__` undefined).
+  - **Wiring:** `src/vmsrms/CMakeLists.txt` links `vmsfs_volume` (PRIVATE) into
+    LIBVMSRMS$SHR.EXE — the designated direct consumer of the ODS-2 adapters,
+    deliberately kept out of the LIBVMSFS$SHR.EXE symbol vector until the flip.
+  - **Proof:** `tests/vmsrms/test_rms_sysdisk_workcopy.c` (ctest
+    `vmsrms_sysdisk_workcopy`, 30 checks, GREEN) drives the real RMS API against
+    a genuine-ODS-2 DKA0:: checkout byte-identity, seq $GET stream == a POSIX
+    $GET of the same bytes, a $CREATE+$PUT+$CLOSE checked back in as a real
+    ODS-2 file whose content == what $PUT wrote, read-only close mints no
+    version, owns_path routing, and the fail-honest no-volume path.
+  - **STILL RED / DEFERRED (this increment does NOT boot alone — expected):**
+    - **⚠ WRITER SUBSTRATE GAP — new version of an EXISTING name.** The checkin
+      mints a new version by `ods2_sysdisk_create_file(".../NAME.EXT;N+1")`, but
+      `ods2_wvolume_dir_insert()` **rejects a duplicate NAME regardless of
+      version** (ods2.h:1326 — one version per directory record). So checkin of
+      a BRAND-NEW filename works (mints ;1), but re-writing an existing file to
+      a higher version fails HONESTLY (no corruption of the prior version — the
+      test guards this). Real ODS-2 directory records carry multiple `{version,
+      FID}` entries per name; teaching the WRITER that is a **substrate rung**
+      (owner: the ods2 writer, alongside vms-02e), a prerequisite for general
+      RMS `$CREATE`-over-existing / `$PUT` new-version semantics.
+    - **Sidecar metadata (.rms_meta / .rms_idx) for SYS$DISK is disabled** (it
+      cannot live on the ODS-2 volume as a POSIX companion, and would be an
+      on-disk POSIX fact — Rule 8). RMS keeps the caller/default record format;
+      persisting org/rfm in the FH2 record attributes is deferred R2 work. In
+      consequence **indexed SYS$DISK files are not yet supported** (seq/rel
+      only); the close path frees `_rms_state` without a /vms sidecar save.
+    - **Delete-on-close (DLT/TMD) for SYS$DISK is a no-op** (no ODS-2 erase
+      adapter yet).
+    - **CONCURRENCY (vms-49d, separate rung):** checkin is a new-version create,
+      so concurrent writers off the same base each mint their own version with
+      no interlock — noted, transaction broker out of scope.
+
 Remaining atomic group (still must land together, boot-gated): R6-kernel,
-R6-mount, R2-RMS (record-I/O working-copy model above), R3-DCL, R5-MOUNT,
-**the write-half reroutes (Wr)**, test-fixture switch to ODS-2, Retire, Proof.
+R6-mount, ~~R2-RMS record-I/O working-copy model~~ **(LANDED above; the
+writer multi-version gap + PID-1 `OVMX_SYSDISK_DEV` export + fixture switch are
+the remaining R2 co-land pieces)**, R3-DCL, R5-MOUNT, **the write-half reroutes
+(Wr)**, test-fixture switch to ODS-2, Retire, Proof.
 Current-state anchors:
 
 | Rung | Anchor (current) |
@@ -168,7 +228,7 @@ Current-state anchors:
 | R6-mount | `src/ovmx_init/ovmx_init.c` `bare_metal_init` (stop `mount(...,"vmsfs")` at `ovmx_boot_linux.c:158`; rely on `register_system_volume()` volume handle — which must open O_RDWR for the write half); `tools/vms_mount_helper.c` |
 | **read adapter** | **DONE — `src/vmsfs/ods2_sysdisk.c` (`ods2_sysdisk_read_file`/`_resolve_file`/`_list_dir`/`_owns_path`); test `ods2_sysdisk`. R2/R3/R5 reroute their read/list sites onto this.** |
 | **cross-process registration** | **DONE — `sysdisk_handle()` in `src/vmsfs/ods2_sysdisk.c` lazily registers SYS$DISK per-process from `OVMX_SYSDISK_DEV`; all adapter entry points route through it; test `ods2_sysdisk_ensure`. R6-mount must have PID 1 EXPORT `OVMX_SYSDISK_DEV=<boot dev>` so children inherit the channel.** |
-| R2-RMS | `src/vmsrms/rms_core.c` `resolve_filename` (:413), `rms_impl_open` read-open at `:702` (O_RDONLY); drop `rms_validate_path_boundary` (:207) for SYS$DISK; `$SEARCH` `opendir`/`readdir` (`rms_search.c:173/:186`) → `ods2_sysdisk_list_dir`. **Record I/O off `fab->_linux_fd` = the POSITIONED-I/O sub-project (see RE-PLAN #1): recommended first cut = per-open working copy — on open `ods2_sysdisk_read_file` → `memfd`/tmpfile → `fab->_linux_fd`; seq/rel/idx (`rms_util.c:15/:34` + `lseek` in rms_seq/rel/idx) stay UNCHANGED; on `$CLOSE` write back via the write adapter. Move `.rms_meta`/idx sidecars (`rms_core.c:532/:600`, `rms_idx.c:516/:568`) off `/vms` too.** Write-open (`rms_impl_create` `:808` O_CREAT) → Wr. |
+| R2-RMS | **WORKING-COPY MODEL DONE (branch `work/vms-af7a-rms-working-copy`, vms-af7a).** `src/vmsrms/rms_core.c`: `rms_sysdisk_checkout`/`_checkin` + SYS$DISK branches in `rms_impl_open`/`_create`/`_close`; `resolve_filename` drops `rms_validate_path_boundary` and `resolve_for_open` skips `rms_resolve_version` for SYS$DISK; `vmsfs_volume` linked into vmsrms. Test `vmsrms_sysdisk_workcopy`. **REMAINING R2:** (a) WRITER multi-version `dir_insert` (substrate gap — blocks new-version-of-existing checkin); (b) FH2-resident record-format metadata (sidecars disabled → indexed SYS$DISK unsupported); (c) `$SEARCH` `opendir`/`readdir` (`rms_search.c:173/:186`) → `ods2_sysdisk_list_dir` (NOT yet rerouted); (d) DLT/TMD erase adapter. |
 | R3-DCL | `src/vmsdcl/dcl_cmd_file.c` `dir_collect` (:280)/`cmd_directory` (:648, `vmsfs_to_linux_path` at :686/:690) → `ods2_sysdisk_list_dir`; `src/vmsdcl/dcl_cmd_set.c` `cmd_set_default` (:97) → `ods2_sysdisk_resolve_file`/`_list_dir` to validate the dir |
 | R5-MOUNT | `src/vmsdcl/dcl_cmd_misc.c` `cmd_mount` (:2211) — validate home via `ods2_home_parse` + SCB via `ods2_scb_parse`, reject non-ODS-2 |
 | **Wr (write half)** | NEW long pole. (a) `vmsfs_volume` O_RDWR handle + a `ods2_sysdisk_write`/`_append`/`_mkdir` twin driving `ods2_wvolume_*` over the LIVE mounted device; (b) reroute the two guaranteed non-RMS boot writers — `opcom_kmsg.c:258` OPERATOR.LOG append, `ovmx_accounting.c:158`/`:43` LASTLOGIN write+mkdir — plus RMS `rms_impl_create`/`$PUT`, off `vmsfs_to_linux_path`+`fopen`/`open(O_CREAT)` onto it |

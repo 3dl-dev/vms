@@ -112,3 +112,28 @@ set_tests_properties(vmsrms_iterative_translation PROPERTIES
     LABELS "unit;rms;lnm"
     TIMEOUT 30
 )
+
+# vms-af7a (epic vms-5eb, R2 -- the ODS-2 runtime flip): the RMS SYS$DISK
+# WORKING-COPY model (src/vmsrms/rms_core.c rms_sysdisk_checkout/_checkin).
+# Drives the real RMS API (sys$open/$create/$connect/$get/$put/$close) against
+# files on a GENUINE-ODS-2 SYS$DISK registered as DKA0:, proving: $OPEN checks
+# the file out into a memfd whose bytes are byte-identical (seq $GET matches a
+# POSIX read of the same bytes), a write-open+$PUT+$CLOSE checks the copy back
+# in as a NEW ODS-2 version (prior version survives), a read-only close mints no
+# version, ods2_sysdisk_owns_path routing, and fail-honest (no volume -> $OPEN
+# fails, no POSIX fallback). Links vmsfs_volume for the ODS-2 adapters (the same
+# distinct static module rms_core.c consumes for the flip -- vms-5eb).
+add_executable(test_rms_sysdisk_workcopy test_rms_sysdisk_workcopy.c)
+target_include_directories(test_rms_sysdisk_workcopy PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_rms_sysdisk_workcopy PRIVATE
+    vmsrms vmsfs vmslnm vmsfs_volume pthread)
+add_test(NAME vmsrms_sysdisk_workcopy COMMAND test_rms_sysdisk_workcopy)
+set_tests_properties(vmsrms_sysdisk_workcopy PROPERTIES
+    LABELS "unit;rms;ods2;vmsfs"
+    TIMEOUT 30
+)

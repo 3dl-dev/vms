@@ -82,6 +82,26 @@
 #include "lib$routines.h"   /* lib$cvt_vectim: Unix->VMS binary time (vms-3dd) */
 
 /*
+ * SYS$DISK ODS-2 working-copy model (epic vms-5eb, R2 -- the ODS-2 runtime
+ * flip; docs/design-ods2-runtime-flip.md §0). This is Linux-runtime-only: the
+ * SYS$DISK reroute reads/writes a genuine ODS-2 volume through the src/vmsfs/
+ * write+read adapters (ods2_sysdisk_*), which are linked only into the Linux
+ * userspace stack. The netbsd-vax cross-build (vms-271) compiles this same TU
+ * as portable C -- rms_sysdisk_owns() is a constant 0 there and the checkout/
+ * checkin/release helpers are inert stubs, so RMS keeps its ordinary POSIX
+ * file path on that substrate and nothing here references a Linux-only symbol.
+ */
+#if defined(__linux__)
+#  define OVMX_RMS_SYSDISK 1
+#  include <sys/mman.h>          /* memfd_create */
+#  include <strings.h>           /* strncasecmp  */
+#  include "vmsfs/sysdisk.h"     /* ods2_sysdisk_owns_path/_read_file/_create_file/_list_dir */
+#  include "rms_util.h"          /* rms_read_exact / rms_write_exact over the working fd */
+#else
+#  define OVMX_RMS_SYSDISK 0
+#endif
+
+/*
  * unix_time_to_vms - Convert a Unix time_t (seconds since 1970-01-01 UTC) to a
  * VMS 64-bit binary time: the count of 100-nanosecond intervals since the VMS
  * base date, 17-NOV-1858 00:00:00 (the Smithsonian Modified Julian Day epoch).
@@ -153,6 +173,315 @@ extern uint32_t rms_idx_cleanup(struct FAB *fab);
 /* Forward decl: rms_impl_open falls through to rms_impl_create on FAB$M_CIF,
  * which is defined later in this file. */
 static uint32_t rms_impl_create(void *fab_ptr);
+
+/* ============================================================================
+ * SYS$DISK ODS-2 working-copy model (epic vms-5eb, R2). See the design record
+ * docs/design-ods2-runtime-flip.md §0 (RE-PLAN #1, route (a)).
+ *
+ * PROBLEM. RMS's seq/rel/idx engines are built on a POSIX fd + lseek/read/write
+ * at arbitrary offsets (60+ sites). The genuine-ODS-2 SYS$DISK adapter offers
+ * only whole-file read/create/append/list -- NO positioned fd. Rewriting every
+ * positioned-I/O site is the "route (b)" long pole.
+ *
+ * ROUTE (a), THE RECOMMENDED FIRST CUT (built here). On $OPEN/$CREATE of a file
+ * that ods2_sysdisk_owns_path(), read the whole ODS-2 file into a private
+ * working copy -- an anonymous memfd -- and point fab->_linux_fd at THAT. Every
+ * seq/rel/idx lseek/read/write then operates on the memfd BYTE-FOR-BYTE
+ * UNCHANGED: not one positioned-I/O site is touched. On $CLOSE, a writable copy
+ * that was actually modified (dirty) is checked in as a NEW ODS-2 version via
+ * the SYS$DISK write adapter; a read-only copy just closes the memfd, leaving
+ * the volume untouched. The working fd is a per-channel window, exactly like a
+ * VMS RMS record buffer -- the durable store stays genuine ODS-2 (INV-6: no
+ * silent POSIX fallback; a SYS$DISK path that cannot reach the volume fails
+ * honestly, never degrading to a POSIX open of a non-existent /vms tree).
+ *
+ * CONCURRENCY HAZARD (noted, NOT solved here -- vms-49d, a separate rung). The
+ * checkin is a new-version create, so two processes that check the SAME file
+ * out, modify it, and check in concurrently each create their own new version
+ * off the same base -- last-writer-does-not-win, both survive as distinct
+ * versions (VMS-plausible) but there is no interlock making the second see the
+ * first. The transaction broker that arbitrates that is out of scope for R2.
+ * ==========================================================================*/
+
+#if OVMX_RMS_SYSDISK
+
+/* Cap on a single working-copy checkout (guards a corrupt header's byte count
+ * from demanding an unbounded allocation). SYS$DISK runtime files are small;
+ * 256 MiB is far above any boot/login file yet bounded. */
+#define RMS_SYSDISK_MAX_FILE  (256u * 1024u * 1024u)
+
+/* Map a SYS$DISK adapter status (SS$_ codes) to an RMS$_ status for the open/
+ * create path. Fail-honest: a real medium/parameter error surfaces as itself,
+ * never as "file not found" masking a mount failure. */
+static uint32_t rms_sysdisk_map_status(int ss)
+{
+    switch (ss) {
+    case SS$_NORMAL:        return RMS$_NORMAL;
+    case SS$_DEVNOTMOUNT:   return SS$_DEVNOTMOUNT; /* honest: no ODS-2 SYS$DISK */
+    case SS$_NOSUCHFILE:    return RMS$_FNF;
+    case SS$_BADPARAM:      return RMS$_SYN;
+    case SS$_DATACHECK:     return RMS$_RER;
+    default:                return RMS$_ACC;
+    }
+}
+
+/*
+ * Create the anonymous working-copy fd. memfd_create on any modern Linux; a
+ * tmpfile() fallback (immediately unlinked, so still anonymous) on the rare
+ * kernel/libc lacking memfd_create, so seq/rel/idx get an ordinary fd either
+ * way. Returns the fd, or -1.
+ */
+static int rms_sysdisk_workfd(void)
+{
+    int fd = memfd_create("ovmx_rms_workcopy", 0);
+    if (fd >= 0)
+        return fd;
+
+    FILE *tf = tmpfile();       /* fallback: anonymous (auto-unlinked) temp file */
+    if (!tf)
+        return -1;
+    int dupfd = dup(fileno(tf));
+    fclose(tf);                 /* the dup keeps the now-unlinked file alive */
+    return dupfd;
+}
+
+/*
+ * Exact valid-byte length of an existing SYS$DISK file, from its ODS-2 header
+ * (efblk/ffbyte -- ods2_recattr_data_bytes). Returns SS$_NORMAL and *len_out,
+ * or an SS$_ failure (fail-honest). Getting the exact size up front lets the
+ * checkout allocate precisely and read exactly, so a short/over read is an
+ * honest medium fault, not an ambiguous buffer-too-small.
+ */
+static int rms_sysdisk_file_size(const char *path, size_t *len_out)
+{
+    const ods2_bdev_t *bv = NULL;
+    uint8_t header[ODS2_BLOCK_SIZE];
+    int vst = ods2_sysdisk_resolve_file(path, &bv, NULL, header, sizeof(header));
+    if (vst != SS$_NORMAL)
+        return vst;
+
+    ods2_fh2_t fh2;
+    if (ods2_fh2_parse(header, sizeof(header), &fh2) != ODS2_OK)
+        return SS$_DATACHECK;
+
+    *len_out = ods2_recattr_data_bytes(&fh2.fh2_recattr);
+    return SS$_NORMAL;
+}
+
+/*
+ * $OPEN/$CREATE checkout: seed a working-copy fd for a SYS$DISK file and point
+ * fab->_linux_fd at it.
+ *   - created==1 ($CREATE): an EMPTY working copy; the checkin always writes a
+ *     new version (a $CREATE always yields a file/version on VMS).
+ *   - created==0 ($OPEN): read the whole ODS-2 file into the working copy. When
+ *     writable, the original bytes are cached so $CLOSE can skip a spurious new
+ *     version if nothing was actually written (the dirty compare).
+ * Returns RMS$_NORMAL, or an RMS$_ error (fail-honest -- caller must NOT fall
+ * back to a POSIX open).
+ */
+static uint32_t rms_sysdisk_checkout(struct FAB *fab, int writable, int created)
+{
+    int wfd = rms_sysdisk_workfd();
+    if (wfd < 0)
+        return RMS$_CRE;
+
+    void  *orig = NULL;
+    size_t orig_len = 0;
+
+    if (!created) {
+        size_t sz = 0;
+        int vst = rms_sysdisk_file_size(fab->_resolved_path, &sz);
+        if (vst != SS$_NORMAL) {
+            close(wfd);
+            return rms_sysdisk_map_status(vst);
+        }
+        if (sz > RMS_SYSDISK_MAX_FILE) {
+            close(wfd);
+            return RMS$_RER;
+        }
+
+        orig = malloc(sz ? sz : 1);
+        if (!orig) {
+            close(wfd);
+            return RMS$_CRE;
+        }
+        if (sz > 0) {
+            size_t got = 0;
+            vst = ods2_sysdisk_read_file(fab->_resolved_path, orig, sz, &got);
+            if (vst != SS$_NORMAL || got != sz) {
+                free(orig);
+                close(wfd);
+                return (vst != SS$_NORMAL) ? rms_sysdisk_map_status(vst)
+                                           : RMS$_RER;
+            }
+            if (rms_write_exact(wfd, orig, sz) != 0) {
+                free(orig);
+                close(wfd);
+                return RMS$_WER;
+            }
+            lseek(wfd, 0, SEEK_SET);
+        }
+        orig_len = sz;
+    }
+
+    fab->_linux_fd        = wfd;
+    fab->_sysdisk_workcopy = 1;
+    fab->_sysdisk_writable = writable ? 1 : 0;
+    fab->_sysdisk_created  = created ? 1 : 0;
+
+    /* Keep the original only for a writable OPEN's dirty compare. A read-only
+     * open never checks in; a $CREATE always checks in -- neither needs it. */
+    if (writable && !created) {
+        fab->_sysdisk_orig     = orig;
+        fab->_sysdisk_orig_len = orig_len;
+    } else {
+        free(orig);
+        fab->_sysdisk_orig     = NULL;
+        fab->_sysdisk_orig_len = 0;
+    }
+    return RMS$_NORMAL;
+}
+
+/* Split a resolved SYS$DISK path "/vms/A/B/NAME.EXT[;ver]" into its parent
+ * directory path ("/vms/A/B") and the bare filename ("NAME.EXT", version
+ * stripped). Returns 0 on success. */
+static int rms_sysdisk_split(const char *path, char *dir, size_t dirlen,
+                             char *name, size_t namelen)
+{
+    const char *slash = strrchr(path, '/');
+    if (!slash)
+        return -1;
+
+    size_t dlen = (size_t)(slash - path);
+    if (dlen == 0)               /* "/NAME" -- parent is "/", not a SYS$DISK dir */
+        return -1;
+    if (dlen >= dirlen)
+        return -1;
+    memcpy(dir, path, dlen);
+    dir[dlen] = '\0';
+
+    /* filename without any ";ver" suffix */
+    char raw[512];
+    strncpy(raw, slash + 1, sizeof(raw) - 1);
+    raw[sizeof(raw) - 1] = '\0';
+    char *semi = strchr(raw, ';');
+    if (semi)
+        *semi = '\0';
+    if (raw[0] == '\0' || strlen(raw) >= namelen)
+        return -1;
+    strcpy(name, raw);
+    return 0;
+}
+
+struct rms_sysdisk_verctx {
+    const char *name;       /* filename to match (version-stripped, uppercase) */
+    uint16_t    maxv;       /* highest version seen for that name */
+};
+
+static int rms_sysdisk_ver_cb(const char *name, unsigned name_len,
+                              uint16_t version, const ods2_fid_t *fid, void *ctx)
+{
+    (void)fid;
+    struct rms_sysdisk_verctx *c = (struct rms_sysdisk_verctx *)ctx;
+    if (name_len == strlen(c->name) &&
+        strncasecmp(name, c->name, name_len) == 0) {
+        if (version > c->maxv)
+            c->maxv = version;
+    }
+    return 0;   /* keep scanning */
+}
+
+/*
+ * $CLOSE checkin: if the working copy is writable and dirty, write its current
+ * contents back as a NEW ODS-2 version of the file. Read-only copies and
+ * unchanged writable copies write nothing (no spurious version). Always closes
+ * the working fd and frees the cached original. Returns RMS$_NORMAL or an
+ * RMS$_ error (fail-honest -- a failed checkin is surfaced, never swallowed).
+ */
+static uint32_t rms_sysdisk_checkin(struct FAB *fab)
+{
+    uint32_t sts = RMS$_NORMAL;
+
+    if (fab->_sysdisk_writable && fab->_linux_fd >= 0) {
+        /* Snapshot the working copy. */
+        off_t end = lseek(fab->_linux_fd, 0, SEEK_END);
+        size_t len = (end > 0) ? (size_t)end : 0;
+        void  *data = malloc(len ? len : 1);
+        if (!data) {
+            sts = RMS$_WER;
+            goto done;
+        }
+        if (len > 0) {
+            if (lseek(fab->_linux_fd, 0, SEEK_SET) < 0 ||
+                rms_read_exact(fab->_linux_fd, data, len) != (ssize_t)len) {
+                free(data);
+                sts = RMS$_RER;
+                goto done;
+            }
+        }
+
+        /* Dirty compare for a modified-in-place OPEN: identical content ->
+         * skip the checkin so a read-then-write that changed nothing does not
+         * mint a spurious new version. A $CREATE always checks in. */
+        int dirty = fab->_sysdisk_created ||
+                    len != fab->_sysdisk_orig_len ||
+                    (len > 0 && memcmp(data, fab->_sysdisk_orig, len) != 0);
+
+        if (dirty) {
+            char dir[1024], name[256];
+            if (rms_sysdisk_split(fab->_resolved_path, dir, sizeof(dir),
+                                  name, sizeof(name)) != 0) {
+                free(data);
+                sts = RMS$_SYN;
+                goto done;
+            }
+
+            /* Next version = highest existing version of NAME in the parent
+             * directory + 1 (1 if none exists yet). */
+            struct rms_sysdisk_verctx vc = { name, 0 };
+            (void)ods2_sysdisk_list_dir(dir, rms_sysdisk_ver_cb, &vc);
+            unsigned newver = (unsigned)vc.maxv + 1u;
+
+            char newpath[1088];
+            int m = snprintf(newpath, sizeof(newpath), "%s/%s;%u",
+                             dir, name, newver);
+            if (m <= 0 || (size_t)m >= sizeof(newpath)) {
+                free(data);
+                sts = RMS$_SYN;
+                goto done;
+            }
+
+            int vst = ods2_sysdisk_create_file(newpath, data, len);
+            if (vst != SS$_NORMAL)
+                sts = rms_sysdisk_map_status(vst);
+        }
+        free(data);
+    }
+
+done:
+    if (fab->_linux_fd >= 0) {
+        close(fab->_linux_fd);
+        fab->_linux_fd = -1;
+    }
+    free(fab->_sysdisk_orig);
+    fab->_sysdisk_orig     = NULL;
+    fab->_sysdisk_orig_len = 0;
+    fab->_sysdisk_workcopy = 0;
+    fab->_sysdisk_writable = 0;
+    fab->_sysdisk_created  = 0;
+    return sts;
+}
+
+static int rms_sysdisk_owns(const char *p) { return ods2_sysdisk_owns_path(p); }
+
+#else  /* !OVMX_RMS_SYSDISK -- netbsd-vax cross: inert stubs, never reached */
+
+static int rms_sysdisk_owns(const char *p) { (void)p; return 0; }
+static uint32_t rms_sysdisk_checkout(struct FAB *fab, int writable, int created)
+{ (void)fab; (void)writable; (void)created; return RMS$_ACC; }
+static uint32_t rms_sysdisk_checkin(struct FAB *fab) { (void)fab; return RMS$_NORMAL; }
+
+#endif /* OVMX_RMS_SYSDISK */
 
 struct rms_metadata {
     uint32_t magic;         /* RMS_META_MAGIC */
@@ -478,8 +807,17 @@ static int resolve_filename(struct FAB *fab)
         }
         /* Security: verify VMS-translated paths stay within VMS root.
          * Only enforce boundary for true VMS filespecs (with : or [),
-         * not for paths that just have a version number (;N). */
+         * not for paths that just have a version number (;N).
+         *
+         * SYS$DISK ODS-2 flip (epic vms-5eb, R2): a "/vms/..." path is served
+         * by the genuine-ODS-2 volume adapter, which OWNS its own boundary
+         * (it can only ever address files reachable from the volume's MFD).
+         * realpath()-based validation assumes /vms is a live POSIX tree, which
+         * it is NOT once the flip lands, so it would wrongly reject every
+         * SYS$DISK path. Skip it for adapter-owned paths -- the adapter is the
+         * boundary. */
         if (is_vms_spec && fab->_resolved_path[0] == '/' &&
+            !rms_sysdisk_owns(fab->_resolved_path) &&
             rms_validate_path_boundary(fab->_resolved_path) != 0) {
             fab->_resolved_path[0] = '\0';
             return -1;
@@ -503,6 +841,15 @@ static int resolve_filename(struct FAB *fab)
 static int resolve_for_open(struct FAB *fab)
 {
     if (resolve_filename(fab) < 0) return -1;
+
+    /* SYS$DISK ODS-2 flip (epic vms-5eb, R2): version resolution for a
+     * "/vms/..." file is the adapter's job, not a POSIX opendir. Leaving the
+     * path unversioned (or with the caller's explicit ";ver") lets
+     * ods2_sysdisk_* select the highest genuine ODS-2 version. rms_resolve_
+     * version() below opendir()s the /vms POSIX tree, which does not exist
+     * once the flip lands, so it must NOT run for adapter-owned paths. */
+    if (rms_sysdisk_owns(fab->_resolved_path))
+        return 0;
 
     /* Resolve version (;0 or unspecified -> highest existing) */
     char resolved[1024];
@@ -695,6 +1042,37 @@ static uint32_t rms_impl_open(void *fab_ptr)
     }
 
     /*
+     * SYS$DISK ODS-2 flip (epic vms-5eb, R2): a file on the genuine-ODS-2
+     * SYS$DISK is opened through the working-copy model, NOT a POSIX open of a
+     * /vms tree. Check the whole ODS-2 file out into a memfd and point
+     * _linux_fd at it; the seq/rel/idx engines then run byte-for-byte
+     * unchanged. FAIL-HONEST (INV-6 / Rule 9): a checkout failure is returned
+     * as-is and NEVER falls through to the POSIX open below -- except CIF
+     * (create-if-nonexistent), which is honored exactly as the POSIX path does.
+     */
+    if (rms_sysdisk_owns(fab->_resolved_path)) {
+        uint32_t cst = rms_sysdisk_checkout(fab, need_write, /*created=*/0);
+        if (!(cst & 1u)) {
+            if (cst == RMS$_FNF && (fab->fab$l_fop & FAB$M_CIF))
+                return rms_impl_create(fab_ptr);
+            fab->fab$l_sts = cst;
+            fab->fab$l_stv = 0;
+            return cst;
+        }
+        /* No POSIX .rms_meta sidecar for a SYS$DISK file (it cannot live on the
+         * ODS-2 volume as a POSIX companion); the FAB keeps its caller-supplied
+         * or default record format. Sidecar-metadata persistence for SYS$DISK
+         * is deferred R2 work -- see docs/design-ods2-runtime-flip.md §0. */
+        pthread_mutex_lock(&rms_id_lock);
+        fab->fab$w_ifi = next_ifi++;
+        if (next_ifi == 0) next_ifi = 1;
+        pthread_mutex_unlock(&rms_id_lock);
+        fab->fab$l_sts = RMS$_NORMAL;
+        fab->fab$l_stv = 0;
+        return RMS$_NORMAL;
+    }
+
+    /*
      * NO PRE-CHECK HERE (vms-2b8, operator ruling 2026-07-31): see the
      * deleted rms_check_protection() above. open() below is the only
      * protection decision now; EACCES/EPERM maps to RMS$_PRV just below.
@@ -754,6 +1132,29 @@ static uint32_t rms_impl_create(void *fab_ptr)
     if (resolve_filename(fab) < 0) {
         fab->fab$l_sts = RMS$_SYN;
         return RMS$_SYN;
+    }
+
+    /* SYS$DISK ODS-2 flip (epic vms-5eb, R2): create a file on the genuine-
+     * ODS-2 SYS$DISK via the working-copy model. The new version is minted at
+     * $CLOSE (checkin) from the live ODS-2 directory listing, so the POSIX
+     * directory-scan / version / open(O_CREAT) / sidecar machinery below is
+     * bypassed. _resolved_path keeps the version-less "/vms/.../NAME.EXT";
+     * checkin appends the next ";ver". Fail-honest: a checkout failure
+     * (e.g. no ODS-2 volume) returns as-is, never a POSIX create fallback. */
+    if (rms_sysdisk_owns(fab->_resolved_path)) {
+        uint32_t cst = rms_sysdisk_checkout(fab, /*writable=*/1, /*created=*/1);
+        if (!(cst & 1u)) {
+            fab->fab$l_sts = cst;
+            fab->fab$l_stv = 0;
+            return cst;
+        }
+        pthread_mutex_lock(&rms_id_lock);
+        fab->fab$w_ifi = next_ifi++;
+        if (next_ifi == 0) next_ifi = 1;
+        pthread_mutex_unlock(&rms_id_lock);
+        fab->fab$l_sts = RMS$_CREATED;
+        fab->fab$l_stv = 0;
+        return RMS$_NORMAL;
     }
 
     /* Split path into directory and base filename */
@@ -852,6 +1253,25 @@ static uint32_t rms_impl_close(void *fab_ptr)
     struct FAB *fab = (struct FAB *)fab_ptr;
     if (!fab || fab->fab$b_bid != FAB$C_BID) {
         return RMS$_FAB;
+    }
+
+    /* SYS$DISK ODS-2 flip (epic vms-5eb, R2): a working-copy close is a
+     * checkin, not a POSIX close. A dirty writable copy is written back as a
+     * new ODS-2 version; a read-only / unchanged copy just discards the memfd
+     * (leaving the volume untouched). This bypasses the POSIX fsync/unlink/
+     * sidecar machinery below entirely -- delete-on-close (DLT/TMD) and the
+     * indexed .rms_idx sidecar for SYS$DISK files are deferred R2 work (seq/rel
+     * only in this increment); any _rms_state is freed without touching /vms. */
+    if (fab->_sysdisk_workcopy) {
+        uint32_t st = rms_sysdisk_checkin(fab);
+        if (fab->_rms_state) {
+            free(fab->_rms_state);
+            fab->_rms_state = NULL;
+        }
+        fab->fab$w_ifi = 0;
+        fab->fab$l_sts = st;
+        fab->fab$l_stv = 0;
+        return st;
     }
 
     uint32_t close_sts = RMS$_NORMAL;

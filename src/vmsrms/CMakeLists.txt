@@ -74,7 +74,14 @@ if(VMSRMS_STANDALONE)
     target_link_libraries(vmsrms PUBLIC pthread m)
     target_compile_options(vmsrms PRIVATE -Wall -Wextra -O2)
 else()
+    # vmsfs_volume carries the SYS$DISK ODS-2 adapters (ods2_sysdisk_* +
+    # ods2 reader/writer) the working-copy model in rms_core.c consumes for
+    # the ODS-2 runtime flip (epic vms-5eb, R2). It is a DISTINCT static module
+    # deliberately kept OUT of the LIBVMSFS$SHR.EXE symbol vector until the flip
+    # lands; RMS is one of its designated direct consumers. PRIVATE: RMS uses
+    # the adapters internally; they are not part of the RMS public interface.
     target_link_libraries(vmsrms PUBLIC vms vmsfs vmslnm)
+    target_link_libraries(vmsrms PRIVATE vmsfs_volume)
 
     set_target_properties(vmsrms PROPERTIES
         PREFIX ""

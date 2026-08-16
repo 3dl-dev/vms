@@ -40,6 +40,17 @@
 #include "sha256.h"
 #include "ovmx_accounting.h"
 
+#if defined(__linux__)
+/* ODS-2 runtime flip (epic vms-5eb, rung R3): SET DEFAULT to a SYS$DISK
+ * directory validates the directory through the genuine-ODS-2 volume handle
+ * (the real MFD / FID chains), NOT a POSIX stat of the /vms passthrough --
+ * closing the vms-272 defect class. Linux-only; the netbsd-vax cross keeps its
+ * POSIX validation. See docs/design-ods2-runtime-flip.md. */
+#include "vmsfs/sysdisk.h"
+#include "ssdef.h"
+#include "stsdef.h"
+#endif
+
 /* Forward declarations for queue subcommands (dcl_cmd_process.c) */
 extern int cmd_set_entry(struct dcl_command *cmd);
 extern int cmd_set_queue(struct dcl_command *cmd);
@@ -94,6 +105,19 @@ static uint64_t enforced_privs_held(void)
     return info.cur_privs & VMS_PRV_M_ENFORCED;
 }
 
+#if defined(__linux__)
+/* Directory-existence probe callback for the SYS$DISK ODS-2 validation path:
+ * existence is proven by the directory resolve, so this consumes records and
+ * asks nothing of them. */
+static int set_default_noop_cb(const char *name, unsigned name_len,
+                               uint16_t version, const ods2_fid_t *fid,
+                               void *ctx)
+{
+    (void)name; (void)name_len; (void)version; (void)fid; (void)ctx;
+    return 0;
+}
+#endif
+
 static int cmd_set_default(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -117,10 +141,29 @@ static int cmd_set_default(struct dcl_command *cmd)
         check_path[cplen - 1] = '\0';
     }
 
-    struct stat st;
-    if (stat(check_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
-        dcl_error("DCL", 2, "DIRECT", "invalid directory - \\%s\\", dirspec);
-        return SS$_NOSUCHFILE;
+#if defined(__linux__)
+    /* A SYS$DISK directory is validated against the genuine ODS-2 volume (the
+     * real MFD), not a POSIX stat of the /vms passthrough (rung R3). A
+     * device-not-mounted result is surfaced HONESTLY (Rule 9 / INV-6). */
+    if (ods2_sysdisk_owns_path(check_path)) {
+        int lst = ods2_sysdisk_list_dir(check_path, set_default_noop_cb, NULL);
+        if (lst == SS$_DEVNOTMOUNT) {
+            dcl_error("SYSTEM", STS$K_ERROR, "DEVNOTMOUNT",
+                      "device not mounted - \\%s\\", dirspec);
+            return SS$_DEVNOTMOUNT;
+        }
+        if (lst != SS$_NORMAL) {
+            dcl_error("DCL", 2, "DIRECT", "invalid directory - \\%s\\", dirspec);
+            return SS$_NOSUCHFILE;
+        }
+    } else
+#endif
+    {
+        struct stat st;
+        if (stat(check_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            dcl_error("DCL", 2, "DIRECT", "invalid directory - \\%s\\", dirspec);
+            return SS$_NOSUCHFILE;
+        }
     }
 
     /* Store the VMS dirspec directly — don't round-trip through Linux.

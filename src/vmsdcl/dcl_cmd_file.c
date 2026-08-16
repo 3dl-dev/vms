@@ -28,6 +28,16 @@
 #include "vmsfs/version.h"
 #include "vmsqueue.h"
 
+#if defined(__linux__)
+/* The ODS-2 runtime flip (epic vms-5eb, rung R3): on Linux the live SYS$DISK
+ * DIRECTORY listing resolves through the genuine-ODS-2 volume handle via the
+ * ods2_sysdisk read adapter, NOT the POSIX /vms passthrough. Guarded to Linux;
+ * the netbsd-vax cross keeps its POSIX opendir()/readdir() walk (there is no
+ * block-device volume handle there). See docs/design-ods2-runtime-flip.md. */
+#include "vmsfs/sysdisk.h"
+#include "vmsfs/ods2.h"
+#endif
+
 /* Directory entry for sorting in DIRECTORY command */
 struct dir_entry {
     char vms_name[256];  /* Formatted VMS name (UPPERCASE, with version) */
@@ -39,6 +49,13 @@ struct dir_entry {
     int  has_btime;         /* 1 = btime is a genuine creation time; 0 = the
                              * backing volume records none, so DIRECTORY/FULL
                              * must NOT invent one (INV-6). */
+    int  has_fid;           /* 1 = this entry came from a GENUINE ODS-2 read
+                             * (SYS$DISK resolved through the real MFD, not a
+                             * POSIX opendir of the /vms passthrough), so the
+                             * File ID below is real and DIRECTORY/FULL may
+                             * print it. 0 = passthrough entry, no genuine
+                             * File ID exists (INV-6 / vms-272). */
+    unsigned fid_num, fid_seq, fid_rvn;  /* genuine ODS-2 File ID (n,n,n) */
 };
 
 /* /SIZE[=option] mode. VSI OpenVMS DCL Dictionary, DIRECTORY /SIZE: bare /SIZE
@@ -277,10 +294,135 @@ struct dir_opts {
  * *out_count set; SS$_NOSUCHFILE if the directory cannot be opened;
  * SS$_INSFMEM on allocation failure.
  */
+#if defined(__linux__)
+/*
+ * dir_collect_ods2 - the ODS-2 twin of dir_collect for a SYS$DISK directory
+ * (epic vms-5eb, rung R3). Lists the directory through the genuine-ODS-2 volume
+ * handle (ods2_sysdisk_list_dir) instead of POSIX opendir/readdir/stat, so
+ * every entry, its VERSION, and its File ID come from the real Master File
+ * Directory / FID chains -- not a getcwd/opendir alias (the vms-272 defect
+ * class). Fail-honest (Rule 9 / INV-6): with no ODS-2 SYS$DISK volume
+ * registered the list returns SS$_DEVNOTMOUNT and this propagates it -- never a
+ * silent POSIX fallback.
+ */
+struct ods2_collect_ctx {
+    const char *linux_dir;      /* directory path, trailing '/' */
+    const char *pattern;
+    char **excl_pats;
+    int excl_count;
+    struct dir_entry *entries;
+    int count;
+    int capacity;
+    int oom;
+};
+
+static int ods2_collect_cb(const char *name, unsigned name_len,
+                           uint16_t version, const ods2_fid_t *fid, void *vctx)
+{
+    struct ods2_collect_ctx *c = (struct ods2_collect_ctx *)vctx;
+
+    char ename[256];
+    if (name_len >= sizeof(ename)) name_len = sizeof(ename) - 1;
+    memcpy(ename, name, name_len);
+    ename[name_len] = '\0';
+
+    /* Build "NAME.EXT;version" so the SAME VMS wildcard/exclude matcher the
+     * POSIX collector runs over its d_name applies here unchanged. */
+    char matchname[300];
+    snprintf(matchname, sizeof(matchname), "%s;%u", ename, (unsigned)version);
+
+    if (c->pattern && !vmsfs_wildcard_match(c->pattern, matchname))
+        return 0;
+    for (int xi = 0; xi < c->excl_count; xi++) {
+        if (vmsfs_wildcard_match(c->excl_pats[xi], matchname))
+            return 0;
+    }
+
+    if (c->count >= c->capacity) {
+        int nc = c->capacity * 2;
+        struct dir_entry *tmp = realloc(c->entries,
+                                        (size_t)nc * sizeof(*c->entries));
+        if (!tmp) { c->oom = 1; return 1; }   /* stop; caller reports SS$_INSFMEM */
+        c->entries = tmp;
+        c->capacity = nc;
+    }
+
+    struct dir_entry *e = &c->entries[c->count];
+    memset(e, 0, sizeof(*e));
+    strncpy(e->vms_name, matchname, sizeof(e->vms_name) - 1);
+    strncpy(e->raw_name, ename, sizeof(e->raw_name) - 1);
+    e->version = (int)version;
+    e->has_fid = 1;
+    e->fid_num = ods2_fid_number(fid);
+    e->fid_seq = fid->fid_seq;
+    e->fid_rvn = fid->fid_rvn;
+
+    /* Size + allocated blocks from the GENUINE ODS-2 file header (INV-6: real,
+     * or left zero -- never fabricated). Directory entries carry ".DIR". */
+    int is_dir = (name_len >= 4 &&
+                  strcasecmp(ename + name_len - 4, ".DIR") == 0);
+    e->st.st_mode = is_dir ? (S_IFDIR | 0755) : (S_IFREG | 0644);
+
+    char epath[1400];
+    snprintf(epath, sizeof(epath), "%s%s;%u", c->linux_dir, ename,
+             (unsigned)version);
+    uint8_t hdr[ODS2_BLOCK_SIZE];
+    if (ods2_sysdisk_resolve_file(epath, NULL, NULL, hdr, sizeof(hdr))
+            == SS$_NORMAL) {
+        ods2_fh2_t fh2;
+        if (ods2_fh2_parse(hdr, sizeof(hdr), &fh2) == ODS2_OK) {
+            size_t bytes = ods2_recattr_data_bytes(&fh2.fh2_recattr);
+            e->st.st_size = (off_t)bytes;
+            e->blocks = (long)((bytes + 511) / 512);
+            e->st.st_blocks = (blkcnt_t)ods2_recattr_hiblk(&fh2.fh2_recattr);
+        }
+    }
+
+    c->count++;
+    return 0;
+}
+
+static int dir_collect_ods2(const char *linux_dir, const char *pattern,
+                            char **excl_pats, int excl_count,
+                            struct dir_entry **out_entries, int *out_count)
+{
+    *out_entries = NULL;
+    *out_count = 0;
+
+    struct ods2_collect_ctx c;
+    c.linux_dir = linux_dir;
+    c.pattern = pattern;
+    c.excl_pats = excl_pats;
+    c.excl_count = excl_count;
+    c.capacity = 256;
+    c.count = 0;
+    c.oom = 0;
+    c.entries = malloc((size_t)c.capacity * sizeof(*c.entries));
+    if (!c.entries) return SS$_INSFMEM;
+
+    int st = ods2_sysdisk_list_dir(linux_dir, ods2_collect_cb, &c);
+    if (st != SS$_NORMAL) { free(c.entries); return st; }
+    if (c.oom) { free(c.entries); return SS$_INSFMEM; }
+
+    qsort(c.entries, (size_t)c.count, sizeof(struct dir_entry), dir_entry_cmp);
+    *out_entries = c.entries;
+    *out_count = c.count;
+    return SS$_NORMAL;
+}
+#endif /* __linux__ */
+
 static int dir_collect(const char *linux_dir, const char *pattern,
                        char **excl_pats, int excl_count,
                        struct dir_entry **out_entries, int *out_count)
 {
+#if defined(__linux__)
+    /* ODS-2 runtime flip (rung R3): a SYS$DISK ("/vms/...") directory lists
+     * through the genuine-ODS-2 volume handle, not the POSIX passthrough. */
+    if (ods2_sysdisk_owns_path(linux_dir))
+        return dir_collect_ods2(linux_dir, pattern, excl_pats, excl_count,
+                                out_entries, out_count);
+#endif
+
     *out_entries = NULL;
     *out_count = 0;
 
@@ -331,6 +473,7 @@ static int dir_collect(const char *linux_dir, const char *pattern,
         struct dir_entry *e = &entries[entry_count];
         e->st = st;
         e->blocks = (st.st_size + 511) / 512;
+        e->has_fid = 0;   /* passthrough entry: no genuine File ID (vms-272) */
         e->has_btime = ovmx_file_btime(full_path, &e->btime);
         strncpy(e->raw_name, de->d_name, sizeof(e->raw_name) - 1);
         e->raw_name[sizeof(e->raw_name) - 1] = '\0';
@@ -433,9 +576,16 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
              * vms-5e2 PR's source-and-gap table. */
             long alloc = (long)st->st_blocks;   /* real on-disk allocation */
 
-            /* Line 1: file name. (Real VMS also prints "File ID: (n,n,n)" here;
-             * omitted -- no genuine File ID exists for a passthrough file.) */
-            printf("%s\n", vms_name);
+            /* Line 1: file name, plus the "File ID: (n,n,n)" real VMS prints
+             * beside it. Under the ODS-2 runtime flip (rung R3) a SYS$DISK
+             * listing carries a GENUINE File ID from the MFD/FID chains, so it
+             * is printed; a POSIX passthrough entry has none, so it is omitted
+             * rather than fabricated (INV-6 / vms-272). */
+            if (e->has_fid)
+                printf("%s                File ID:  (%u,%u,%u)\n",
+                       vms_name, e->fid_num, e->fid_seq, e->fid_rvn);
+            else
+                printf("%s\n", vms_name);
 
             /* Size (used/allocated) + Owner UIC [group,member]. */
             char sizebuf[32];
@@ -589,6 +739,105 @@ static void dir_gather_recurse(const char *d, char ***list, int *count, int *cap
     free(subs);
 }
 
+#if defined(__linux__)
+/* Probe whether a SYS$DISK path names a listable directory on the genuine
+ * ODS-2 volume. Returns the raw VMS status: SS$_NORMAL (exists), SS$_NOSUCHFILE
+ * (absent), or SS$_DEVNOTMOUNT (no ODS-2 volume registered -- surfaced honestly
+ * by the caller, never a POSIX fallback). */
+static int sysdisk_noop_cb(const char *name, unsigned name_len,
+                           uint16_t version, const ods2_fid_t *fid, void *ctx)
+{
+    (void)name; (void)name_len; (void)version; (void)fid; (void)ctx;
+    return 0;   /* consume every record; existence is proven by the dir resolve */
+}
+
+static int sysdisk_dir_status(const char *linux_dir)
+{
+    return ods2_sysdisk_list_dir(linux_dir, sysdisk_noop_cb, NULL);
+}
+
+/* ODS-2 twin of dir_gather_recurse: enumerate `d` (trailing '/') plus every
+ * subdirectory below it, over the genuine-ODS-2 volume handle. Subdirectories
+ * are the ".DIR" entries of each directory; the child path uses the bare name
+ * (the adapter re-appends ".DIR" when resolving), so dir_collect() lists each
+ * through the SAME ODS-2 path. */
+struct ods2_gather_ctx {
+    const char *base;   /* directory path, trailing '/' */
+    char **subs;
+    int scount;
+    int scap;
+};
+
+static int ods2_gather_cb(const char *name, unsigned name_len,
+                          uint16_t version, const ods2_fid_t *fid, void *vctx)
+{
+    (void)version; (void)fid;
+    struct ods2_gather_ctx *g = (struct ods2_gather_ctx *)vctx;
+
+    /* `name` is NOT null-terminated (it points into the directory block); copy
+     * to a bounded local before any C-string comparison. */
+    char ename[256];
+    if (name_len >= sizeof(ename)) name_len = sizeof(ename) - 1;
+    memcpy(ename, name, name_len);
+    ename[name_len] = '\0';
+
+    if (name_len < 4 || strcasecmp(ename + name_len - 4, ".DIR") != 0)
+        return 0;                       /* only subdirectories */
+
+    unsigned base_len = name_len - 4;   /* strip ".DIR" */
+    if (base_len == 0)
+        return 0;
+    /* Skip the MFD self-reference "000000.DIR" if a directory lists it. */
+    if (base_len == 6 && strncmp(ename, "000000", 6) == 0)
+        return 0;
+
+    char childslash[2100];
+    snprintf(childslash, sizeof(childslash), "%s%.*s/", g->base,
+             (int)base_len, ename);
+
+    if (g->scount >= g->scap) {
+        int nc = g->scap ? g->scap * 2 : 8;
+        char **tmp = realloc(g->subs, (size_t)nc * sizeof(char *));
+        if (!tmp) return 1;
+        g->subs = tmp;
+        g->scap = nc;
+    }
+    g->subs[g->scount++] = strdup(childslash);
+    return 0;
+}
+
+static void dir_gather_recurse_ods2(const char *d, char ***list,
+                                    int *count, int *cap)
+{
+    if (*count >= *cap) {
+        int nc = *cap ? *cap * 2 : 16;
+        char **tmp = realloc(*list, (size_t)nc * sizeof(char *));
+        if (!tmp) return;
+        *list = tmp;
+        *cap = nc;
+    }
+    (*list)[(*count)++] = strdup(d);
+
+    struct ods2_gather_ctx g = { d, NULL, 0, 0 };
+    if (sysdisk_dir_status(d) != SS$_NORMAL)
+        return;   /* absent / not mounted: nothing to recurse (honest) */
+    ods2_sysdisk_list_dir(d, ods2_gather_cb, &g);
+
+    for (int i = 0; i < g.scount; i++) {
+        for (int j = i + 1; j < g.scount; j++) {
+            if (strcasecmp(g.subs[i], g.subs[j]) > 0) {
+                char *t = g.subs[i]; g.subs[i] = g.subs[j]; g.subs[j] = t;
+            }
+        }
+    }
+    for (int i = 0; i < g.scount; i++) {
+        dir_gather_recurse_ods2(g.subs[i], list, count, cap);
+        free(g.subs[i]);
+    }
+    free(g.subs);
+}
+#endif /* __linux__ */
+
 /*
  * dir_deellipsize - Rewrite a VMS directory spec that contains the "..."
  * ellipsis wildcard into a plain, resolvable directory spec naming the START
@@ -668,9 +917,28 @@ int cmd_directory(struct dcl_command *cmd)
 
     if (use_spec && use_spec[0] != '\0') {
         dcl_resolve_path(ctx, use_spec, linux_dir, sizeof(linux_dir));
-        /* Check if this is a directory or a file pattern */
-        struct stat st;
-        if (stat(linux_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
+        /* Check if this is a directory or a file pattern. A SYS$DISK path is
+         * probed through the genuine-ODS-2 volume (rung R3), never POSIX stat;
+         * a device-not-mounted result is surfaced HONESTLY, not silently
+         * treated as a pattern (Rule 9 / INV-6). */
+        int is_dir;
+#if defined(__linux__)
+        if (ods2_sysdisk_owns_path(linux_dir)) {
+            int pst = sysdisk_dir_status(linux_dir);
+            if (pst == SS$_DEVNOTMOUNT) {
+                dcl_error("SYSTEM", STS$K_ERROR, "DEVNOTMOUNT",
+                          "device not mounted - %s", linux_dir);
+                if (pattern) free((void *)pattern);
+                return SS$_DEVNOTMOUNT;
+            }
+            is_dir = (pst == SS$_NORMAL);
+        } else
+#endif
+        {
+            struct stat st;
+            is_dir = (stat(linux_dir, &st) == 0 && S_ISDIR(st.st_mode));
+        }
+        if (is_dir) {
             /* It's a directory */
         } else {
             /* Might be a wildcard pattern - split dir and pattern.
@@ -819,6 +1087,15 @@ int cmd_directory(struct dcl_command *cmd)
             if (pattern) free((void *)pattern);
             return SS$_NOSUCHFILE;
         }
+        if (cst == SS$_DEVNOTMOUNT) {
+            /* Fail-honest (Rule 9 / INV-6): a SYS$DISK listing with no genuine
+             * ODS-2 volume registered surfaces device-not-mounted, never a
+             * silent POSIX fallback. */
+            dcl_error("SYSTEM", STS$K_ERROR, "DEVNOTMOUNT",
+                      "device not mounted - %s", linux_dir);
+            if (pattern) free((void *)pattern);
+            return SS$_DEVNOTMOUNT;
+        }
         if (cst != SS$_NORMAL) {
             if (pattern) free((void *)pattern);
             return cst;
@@ -890,6 +1167,23 @@ int cmd_directory(struct dcl_command *cmd)
      * emit a single "Grand total of D directories, F files[, M blocks]." line.
      * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, DIRECTORY —
      * ellipsis directory wildcard + the per-directory / Grand total layout. */
+#if defined(__linux__)
+    int base_is_ods2 = ods2_sysdisk_owns_path(linux_dir);
+    if (base_is_ods2) {
+        int bst = sysdisk_dir_status(linux_dir);
+        if (bst == SS$_DEVNOTMOUNT) {
+            dcl_error("SYSTEM", STS$K_ERROR, "DEVNOTMOUNT",
+                      "device not mounted - %s", linux_dir);
+            if (pattern) free((void *)pattern);
+            return SS$_DEVNOTMOUNT;
+        }
+        if (bst != SS$_NORMAL) {
+            dcl_error("RMS", 2, "DNF", "directory not found - %s", linux_dir);
+            if (pattern) free((void *)pattern);
+            return SS$_NOSUCHFILE;
+        }
+    } else
+#endif
     {
         struct stat bst;
         if (stat(linux_dir, &bst) != 0 || !S_ISDIR(bst.st_mode)) {
@@ -901,6 +1195,11 @@ int cmd_directory(struct dcl_command *cmd)
 
     char **dirs = NULL;
     int ndirs = 0, dcap = 0;
+#if defined(__linux__)
+    if (base_is_ods2)
+        dir_gather_recurse_ods2(linux_dir, &dirs, &ndirs, &dcap);
+    else
+#endif
     dir_gather_recurse(linux_dir, &dirs, &ndirs, &dcap);
 
     long grand_used = 0, grand_alloc = 0, grand_files = 0;

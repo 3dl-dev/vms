@@ -492,6 +492,7 @@ dcl-sysinput-mbx-not-read
 mmk-drive-command-not-sent
 mmk-build-image-not-activated
 acp-assign-unmounted-fabricates-channel
+acp-mount-nonods2-accepted
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -4787,6 +4788,38 @@ EOF
                       ;;
         esac;;
 
+    acp-mount-nonods2-accepted)
+        case "$_f" in
+        facility)     echo "Files-11 (ODS-2) ACP \$MOUNT volume validation (VMS_IOCTL_ACP_MOUNT reads + validates the home block + SCB off the backing block device before recording the unit executive-global), vms-127, epic vms-208";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_mount";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_acp_mount() stops VALIDATING the media: the acp_validate_ods2() call that reads the home block + SCB and returns SS\$_DEVNOTMOUNT for non-ODS-2 media is replaced by an unconditional SS\$_NORMAL, so \$MOUNT records ANY unit -- including the BLANK, all-zero DKA100: -- as a mounted ODS-2 volume. That is the exact INV-6 facade the ACP exists to refuse: a mount table that admits a non-ODS-2 blob reports a volume the executive never validated. Every assertion about the GENUINE DKA0: volume (mount succeeds, idempotent, cross-process visible, dismount) stays green -- it really is a valid ODS-2 volume -- so only the fail-honest-REJECT assertions on the blank DKA100: can tell the difference, which is precisely the 'report success while sharing nothing' shape CLAUDE.md Rule 9 exists to catch.";;
+        require_fail) cat <<'EOF'
+$MOUNT of the BLANK DKA100: is REJECTED SS$_DEVNOTMOUNT -- non-ODS-2 media, not recorded
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+$DISMOUNT of the rejected DKA100: is SS$_NOSUCHDEV (the reject recorded nothing)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME ONE ROOT, OBSERVED A SECOND TIME. With validation bypassed, $MOUNT of
+the blank DKA100: now SUCCEEDS and RECORDS the unit as a mounted volume. So the
+require_fail assertion (the mount must be REJECTED SS$_DEVNOTMOUNT) goes red --
+and the very next assertion, which checks that the reject recorded nothing by
+$DISMOUNTing DKA100: and expecting SS$_NOSUCHDEV, ALSO goes red: DKA100: is now
+in the mounted-volume table, so its $DISMOUNT returns SS$_NORMAL instead. One
+deleted validation explains exactly these two reds -- the recording of media the
+executive never validated, seen once at the mount and once at the dismount --
+and no others: the genuine DKA0: volume validates and behaves identically either
+way.
+EOF
+                      ;;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -6157,6 +6190,20 @@ apply_edit() {
         # replacement does not contain the original comment text, so a second
         # apply matches nothing (the no-op selftest requires).
         sed -i '/^long vms_ioctl_acp_assign/,/^}$/ s|args.status = SS__NOSUCHDEV;    /\* not a mounted volume -- fail honest \*/|args.status = SS__NORMAL; /* NEGCTL acp-assign-unmounted-fabricates-channel (was SS__NOSUCHDEV) */|' "$_file";;
+
+    acp-mount-nonods2-accepted)
+        # ANCHORED to the single acp_validate_ods2() call in vms_ioctl_acp_mount:
+        # `status = acp_validate_ods2(backing_major, backing_minor, vol);` occurs
+        # exactly once in the file (its definition has a different signature --
+        # `acp_validate_ods2(uint32_t major, uint32_t minor, ...)` -- so there is
+        # no second textual match). Replacing the CALL with an unconditional
+        # `status = SS__NORMAL;` makes $MOUNT skip validation entirely and record
+        # ANY unit -- including the blank, non-ODS-2 DKA0: -- as a mounted volume,
+        # the INV-6 facade (a volume the executive never validated). The genuine
+        # DKA100: path is untouched (it validated anyway), so only the blank-media
+        # REJECT assertions redden. After substitution the original call text is
+        # gone, so a second apply matches nothing (the no-op selftest requires).
+        sed -i 's|status = acp_validate_ods2(backing_major, backing_minor, vol);|status = SS__NORMAL; /* NEGCTL acp-mount-nonods2-accepted (was acp_validate_ods2) */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

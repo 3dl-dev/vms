@@ -41,15 +41,41 @@
 #include "exec_list.h"
 
 /*
- * One executive-resident mounted ODS-2 volume. THIS RUNG carries only the
- * unit name and the assigned-channel refcount; the backing block device, the
- * validated home block/SCB and the codec volume handle are added by the full
- * $MOUNT rung (design §4.3, §4.4).
+ * The GENUINE ODS-2 codec, compiled kernel-resident (-DOVMX_ODS2_KERNEL), gives
+ * $MOUNT its home-block/SCB validation (vms-127). It is present ONLY in the
+ * out-of-tree QEMU-test vms.ko (src/kernel/Makefile links ods2_reader.o and
+ * defines OVMX_ODS2_KERNEL); the in-tree BOOTABLE overlay (distro/kernel/
+ * drivers-ovmx/vms) does NOT yet carry the codec, because it flattens sources to
+ * basenames and the codec includes the public header as the subdir path
+ * "vmsfs/ods2.h" (the same flatten-safe-include follow-up vmsfs.ko's bootable
+ * build still owes -- distro/kernel/drivers-ovmx/vmsfs/Kbuild). So the codec use
+ * BELOW is gated on OVMX_ODS2_KERNEL: with it, $MOUNT validates the volume for
+ * real and rejects non-ODS-2 media; without it, $MOUNT fail-honestly refuses
+ * (SS$_DEVNOTMOUNT) rather than recording an unvalidated volume -- a fake mount
+ * is the exact INV-6 facade CLAUDE.md Rule 9 forbids. No product path calls the
+ * bootable ACP $MOUNT yet (the ODS-2 runtime-flip capstone is a later rung), so
+ * the refuse-without-codec branch is off every live path today.
+ */
+#if defined(OVMX_ODS2_KERNEL)
+#include "vmsfs/ods2.h"
+#endif
+
+/*
+ * One executive-resident mounted ODS-2 volume. The unit name + assigned-channel
+ * refcount are the channel rung's (vms-149); vms-127 adds the VALIDATED volume
+ * identity -- backing device, structure level, size and label read off the home
+ * block/SCB at $MOUNT time. Executive-global: every process that $ASSIGNs the
+ * unit reaches this SAME row, so the identity is the volume's, never a process's.
  */
 struct vms_acp_volume {
     exec_list_node_t list;              /* in vms_acp_vol_list */
     char             devnam[VMS_DEVNAM_SIZE]; /* canonical unit name, e.g. "DKA0:" */
     uint32_t         refcnt;            /* file-class channels assigned, any process */
+    uint32_t         backing_major;     /* backing block device (vms-127) */
+    uint32_t         backing_minor;
+    uint32_t         volsize;           /* SCB volume size, 512-byte blocks */
+    uint16_t         struclev;          /* home/SCB structure level (0x0201) */
+    char             volname[13];       /* NUL-terminated ODS-2 volume label */
 };
 
 /* One process's file-class channel to a mounted volume. */
@@ -157,30 +183,149 @@ static struct vms_acp_chan *acp_chan_find_locked(struct vms_proc *proc, uint32_t
 }
 
 /* ================================================================
+ * ODS-2 volume validation (vms-127) -- reads the home block + SCB off the
+ * backing block device and confirms the media is genuine Files-11 ODS-2.
+ * Present only with the kernel-resident codec (see the OVMX_ODS2_KERNEL note
+ * at the top of this file).
+ * ================================================================ */
+#if defined(OVMX_ODS2_KERNEL)
+
+/* Capture the FIRST allocated extent of a file header's FM2 retrieval map. */
+struct acp_first_extent { uint32_t lbn; int got; };
+static int acp_first_extent_cb(const ods2_extent_t *ext, void *ctx)
+{
+    struct acp_first_extent *fe = (struct acp_first_extent *)ctx;
+
+    if (!fe->got && ext && ext->count) {
+        fe->lbn = ext->lbn;
+        fe->got = 1;
+        return 1;                       /* stop the walk -- first extent is enough */
+    }
+    return 0;
+}
+
+/*
+ * Validate that (major,minor) backs a GENUINE ODS-2 volume, and record its
+ * identity into *out. Reads exactly the blocks real $MOUNT reads to recognize a
+ * Files-11 structure:
+ *
+ *   1. the HOME block at LBN 1 -- ods2_home_parse(strict) confirms the
+ *      "DECFILE11B  " format id, structure level 0x0201 and BOTH additive
+ *      checksums (bytes 0..57 and 0..509);
+ *   2. the STORAGE CONTROL BLOCK (BITMAP.SYS VBN1) -- located by the same
+ *      INDEXF arithmetic the codec's readers use (idx_lbn = hm2_ibmaplbn +
+ *      hm2_ibmapsize; BITMAP.SYS primary header = idx_lbn + (FID 2 - 1)),
+ *      then its first FM2 extent, whose VBN1 is the SCB; ods2_scb_parse
+ *      confirms the SCB's own checksum and structure level.
+ *
+ * Any failure -- an unreadable block, a parse/checksum failure, a wrong level --
+ * returns SS$_DEVNOTMOUNT: the honest "this is not a mountable ODS-2 volume"
+ * (INV-6, never a fabricated success). All parse/decode is the clean-room codec
+ * (src/vmsfs/ods2, ods2.h provenance [N]/[S]); this function only sequences the
+ * block reads and maps ODS2_OK/!OK to a VMS status.
+ */
+/*
+ * HEAP scratch (not stack): a 512-byte block buffer plus the three parsed ODS-2
+ * structures are ~2 KB together -- too much for the kernel stack (the compiler's
+ * -Wframe-larger-than caps it). exec_zalloc'd once per validate call (a $MOUNT
+ * is rare and already sleeps on the block reads), freed before return.
+ */
+struct acp_val_scratch {
+    uint8_t     blk[ODS2_BLOCK_SIZE];
+    ods2_home_t home;
+    ods2_fh2_t  bmhdr;
+    ods2_scb_t  scb;
+};
+
+static uint32_t acp_validate_ods2(uint32_t major, uint32_t minor,
+                                  struct vms_acp_volume *out)
+{
+    struct acp_val_scratch *s;
+    struct acp_first_extent fe = { 0, 0 };
+    uint32_t idx_lbn, bitmap_hdr_lbn;
+    uint32_t result = SS__DEVNOTMOUNT;
+    ods2_status_t st;
+
+    s = exec_zalloc(sizeof(*s));
+    if (!s)
+        return SS__DEVNOTMOUNT;         /* no memory -- cannot validate, refuse */
+
+    /* --- (1) home block, LBN 1 --- */
+    if (exec_blockdev_read_block(major, minor, 1u, s->blk, sizeof(s->blk)) != 0)
+        goto done;
+    st = ods2_home_parse(s->blk, sizeof(s->blk), &s->home, /*strict_level*/1);
+    if (st != ODS2_OK)
+        goto done;
+
+    /* --- (2a) BITMAP.SYS (FID 2) primary header --- */
+    idx_lbn        = s->home.hm2_ibmaplbn + s->home.hm2_ibmapsize;
+    bitmap_hdr_lbn = idx_lbn + (ODS2_FID_BITMAP - 1u);
+    if (exec_blockdev_read_block(major, minor, bitmap_hdr_lbn, s->blk, sizeof(s->blk)) != 0)
+        goto done;
+    st = ods2_fh2_parse(s->blk, sizeof(s->blk), &s->bmhdr);   /* validates its checksum */
+    if (st != ODS2_OK)
+        goto done;
+
+    /* --- (2b) locate + read the SCB (BITMAP.SYS VBN1) --- */
+    st = ods2_fh2_map_walk(s->blk, acp_first_extent_cb, &fe, NULL);
+    if (st != ODS2_OK || !fe.got)
+        goto done;
+    if (exec_blockdev_read_block(major, minor, fe.lbn, s->blk, sizeof(s->blk)) != 0)
+        goto done;
+    st = ods2_scb_parse(s->blk, sizeof(s->blk), &s->scb);
+    if (st != ODS2_OK)
+        goto done;
+    if (s->scb.scb_struclev != ODS2_STRUCLEV_V2)
+        goto done;
+
+    /* Genuine ODS-2. Record the validated identity (the volume's, not a
+     * process's -- this row is executive-global). */
+    out->struclev = s->home.hm2_struclev;
+    out->volsize  = s->scb.scb_volsize;
+    memcpy(out->volname, s->home.hm2_volname, 12);
+    out->volname[12] = '\0';
+    result = SS__NORMAL;
+
+done:
+    exec_free(s);
+    return result;
+}
+#endif /* OVMX_ODS2_KERNEL */
+
+/* ================================================================
  * ioctl handlers
  * ================================================================ */
 
 /*
- * $MOUNT an ODS-2 volume into the executive-global table (design §4.3). Records
- * the unit as a mounted volume that every process then sees -- the shared
- * executive state that replaces the userspace adapter's per-process passthrough.
+ * $MOUNT an ODS-2 volume into the executive-global table (design §4.3). Now
+ * VALIDATES the media is genuine Files-11 ODS-2 (vms-127): the executive resolves
+ * the unit to its backing block device, reads + validates the home block and SCB
+ * with the kernel-resident codec, and records the unit -- with its validated
+ * label/level/size -- in shared executive state EVERY process then sees. A unit
+ * whose backing is NOT a genuine ODS-2 volume is REJECTED fail-honest
+ * (SS$_DEVNOTMOUNT), never recorded (INV-6): a mount table that admits a
+ * non-ODS-2 blob would be the "report success while sharing nothing" facade
+ * CLAUDE.md Rule 9 exists to kill. This deletes the userspace adapter's
+ * per-process OVMX_SYSDISK_DEV passthrough: the mount is the executive's, so a
+ * SECOND process that $ASSIGNs the unit sees the SAME volume the FIRST mounted.
+ *
  * Idempotent: mounting a unit already in the table returns SS$_NORMAL (the
  * volume IS mounted), rather than inventing an "already mounted" condition this
- * tree cannot oracle-pin.
+ * tree cannot oracle-pin -- and it does NOT re-read the disk.
  *
  * PRIVILEGE. Real $MOUNT of a system volume is privileged; this rung does NOT
  * gate the mount on a privilege it cannot yet enforce faithfully -- that check
- * (VOLPRO / mount privileges) lands with the full $MOUNT rung that also binds
- * the backing device and validates the home block. Stated rather than silently
- * omitted (CLAUDE.md Rule 10): the mount table is a foundation the later rung
- * hardens, not a security control claimed here.
+ * (VOLPRO / mount privileges) is a later rung. Stated rather than silently
+ * omitted (CLAUDE.md Rule 10): the executive-global validated mount is a
+ * foundation a later rung hardens, not a security control claimed here.
  */
 long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg)
 {
-    struct vms_acp_mount_args args;
     struct vms_acp_volume *vol;
     char devnam[VMS_DEVNAM_SIZE];
     uint32_t status;
+    uint32_t backing_major = 0, backing_minor = 0;
+    struct vms_acp_mount_args args;
 
     (void)proc;
     memset(&args, 0, sizeof(args));
@@ -194,20 +339,75 @@ long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    /* Allocate before taking the table lock -- exec_zalloc may sleep. */
+    /*
+     * Idempotence FIRST, before touching the disk: if the unit is already a
+     * mounted volume it was already validated, so re-validating (and re-reading
+     * the home block) would be wasted I/O.
+     */
+    exec_lock(&vms_acp_vol_lock);
+    if (acp_vol_find_locked(devnam)) {
+        exec_unlock(&vms_acp_vol_lock);
+        args.status = SS__NORMAL;
+        goto out;
+    }
+    exec_unlock(&vms_acp_vol_lock);
+
+    /*
+     * Resolve the unit to its backing block device (executive fact, vms-3e8):
+     * SS$_NOSUCHDEV if there is no such unit, SS$_IVDEVNAM if it is not a disk.
+     */
+    status = vms_devtab_disk_backing(devnam, &backing_major, &backing_minor);
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    /* Allocate before validating -- exec_zalloc may sleep (as may the reads). */
     vol = exec_zalloc(sizeof(*vol));
     if (!vol)
         return -ENOMEM;
 
+#if defined(OVMX_ODS2_KERNEL)
+    /*
+     * VALIDATE the media is genuine ODS-2 (home block + SCB). No lock held: the
+     * block reads sleep. A non-ODS-2 volume is rejected here, before anything is
+     * recorded.
+     */
+    status = acp_validate_ods2(backing_major, backing_minor, vol);
+    if (status != SS__NORMAL) {
+        exec_free(vol);
+        args.status = status;           /* not genuine ODS-2 -- reject fail-honest */
+        goto out;
+    }
+#else
+    /*
+     * No kernel-resident codec in this build (the bootable overlay, see the top-
+     * of-file note): the executive cannot validate the volume, so it REFUSES
+     * rather than record an unvalidated mount (INV-6). No live product path
+     * reaches this today.
+     */
+    exec_free(vol);
+    args.status = SS__DEVNOTMOUNT;
+    goto out;
+#endif
+
+    strscpy(vol->devnam, devnam, sizeof(vol->devnam));
+    vol->refcnt        = 0;
+    vol->backing_major = backing_major;
+    vol->backing_minor = backing_minor;
+
+    /*
+     * Publish into the executive-global table. Re-check for a racing mount of
+     * the same unit (validation ran unlocked); if another thread won, keep its
+     * row and report success -- the volume IS mounted either way (idempotent).
+     */
     exec_lock(&vms_acp_vol_lock);
     if (acp_vol_find_locked(devnam)) {
         exec_unlock(&vms_acp_vol_lock);
-        exec_free(vol);                 /* already mounted -- idempotent */
+        exec_free(vol);
         args.status = SS__NORMAL;
         goto out;
     }
-    strscpy(vol->devnam, devnam, sizeof(vol->devnam));
-    vol->refcnt = 0;
     exec_list_add_tail(&vol->list, &vms_acp_vol_list);
     exec_unlock(&vms_acp_vol_lock);
 

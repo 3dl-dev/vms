@@ -482,6 +482,29 @@ exec_blockdev_lookup(const char *path, exec_dev_t *out)
 static __inline unsigned int exec_blockdev_major(exec_dev_t dev) { return (unsigned int)major(dev); }
 static __inline unsigned int exec_blockdev_minor(exec_dev_t dev) { return (unsigned int)minor(dev); }
 
+/* READ one 512-byte block off a backing block device (vms-127; see
+ * exec_kbackend.h). CONTRACT-ONLY TWIN, the exec_blockdev_lookup precedent
+ * above: the only caller (the Files-11 ODS-2 ACP $MOUNT in kernel-core/
+ * vmsfs_acp.c) is NOT in this module's SRCS yet, so this is type-checked at most
+ * and never run on NetBSD. The REAL NetBSD binding opens the block device by
+ * dev_t (bdevsw_lookup + the devsw d_open) and reads the block through the buffer
+ * cache (bread(9) on the device vnode, brelse(9)) -- the NetBSD twins of Linux
+ * bdev_open_by_dev + __bread. Binding that is the same devtab-on-NetBSD proof's
+ * concern; until then this compile-safe stub touches no device internals and
+ * reports failure, naming its real source here (INV-6 / Rule 11: it reads
+ * nothing and fabricates nothing). */
+static __inline int
+exec_blockdev_read_block(unsigned int major_, unsigned int minor_,
+			 uint64_t lbn, void *buf, size_t buflen)
+{
+	(void)major_;
+	(void)minor_;
+	(void)lbn;
+	(void)buf;
+	(void)buflen;
+	return -1;   /* not readable (contract-only twin) */
+}
+
 /* ---- 11. primary Ethernet net device (vms-9d2; see exec_kbackend.h) ----
  *
  * COMPILE STATUS, and why this side is a contract-only twin (the exec_blockdev

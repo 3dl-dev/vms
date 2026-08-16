@@ -190,6 +190,21 @@
 #define SS__IVDEVNAM    608         /* invalid device name */
 #define SS__NOMOREDEV   2648        /* device scan exhausted */
 #define SS__NOSUCHDEV   2680        /* no such device available */
+#define SS__DEVMOUNT    2684        /* device already mounted (ssdef.h SS$_DEVMOUNT) */
+/*
+ * SS__DEVNOTMOUNT (SS$_DEVNOTMOUNT == 2688, this tree's src/libvms/include/
+ * ssdef.h value, single-lineage the same way SS__NOSUCHDEV above is). The
+ * Files-11 ODS-2 ACP $MOUNT (vms_ioctl_acp_mount, vms-127) returns it when the
+ * named unit's backing block device is NOT a genuine ODS-2 volume -- the home
+ * block / SCB fail the codec's validation (bad "DECFILE11B  " format, wrong
+ * structure level, or a checksum mismatch). REJECT-THE-MEDIA is an OVMX design
+ * choice of an already-grounded status (Rule 8): VMS's own MOUNT reports an
+ * unrecognized structure through the MOUNT-facility message set (MOUNT-F-
+ * FILESTRUCT, not an SS$ condition), which this tree does not carry, so the ACP
+ * answers "this device could not be mounted" -- SS$_DEVNOTMOUNT -- rather than
+ * inventing a status it cannot cite. Labelled as such in vmsfs_acp.c.
+ */
+#define SS__DEVNOTMOUNT 2688        /* device not mounted / not a mountable volume */
 /*
  * SS__ABORT (SS$_ABORT == 44, this tree's src/libvms/include/ssdef.h value,
  * single-lineage the same way SS__EXQUOTA / SS__ENDOFFILE below are). The BGn:
@@ -925,6 +940,14 @@ long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg);
  * /sys/block itself. SS$_NOSUCHDEV / SS$_IVDEVNAM as in the header.
  */
 long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg);
+/*
+ * Internal (non-ioctl) twin of disk_resolve for an in-executive caller: the
+ * Files-11 ODS-2 ACP $MOUNT (vms-127) resolves a canonical disk-unit name to its
+ * backing (major,minor) so it can read the home block/SCB and validate the
+ * volume. SS$_NORMAL / SS$_NOSUCHDEV / SS$_IVDEVNAM. Defined in kernel-core.
+ */
+uint32_t vms_devtab_disk_backing(const char *devnam,
+                                 uint32_t *major_out, uint32_t *minor_out);
 /* The job-to-terminal binding. Lives with the channel machinery because
  * its argument is a channel; the value it writes is process-table
  * state (struct vms_proc::terminal). */

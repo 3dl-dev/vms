@@ -53,8 +53,10 @@
 /* vms-31b (exec_current_uid/gid + block-device resolution) backing headers. */
 #include <linux/cred.h>           /* current_uid, current_gid */
 #include <linux/uidgid.h>         /* from_kuid, from_kgid, init_user_ns */
-#include <linux/blkdev.h>         /* lookup_bdev (resolve /dev/vdX to a dev_t) */
-#include <linux/kdev_t.h>         /* MAJOR / MINOR */
+#include <linux/blkdev.h>         /* lookup_bdev, bdev_open_by_dev/bdev_file_open_by_dev */
+#include <linux/kdev_t.h>         /* MAJOR / MINOR / MKDEV */
+#include <linux/bio.h>            /* bio_init / __bio_add_page / submit_bio_wait (vms-127) */
+#include <linux/version.h>        /* LINUX_VERSION_CODE / KERNEL_VERSION (bdev-open guard) */
 /* vms-9d2 (primary Ethernet net device -> ETH0:) backing headers. */
 #include <linux/netdevice.h>      /* struct net_device, for_each_netdev, netif_carrier_ok */
 #include <linux/rtnetlink.h>      /* rtnl_lock / rtnl_unlock */
@@ -298,6 +300,79 @@ static inline int exec_blockdev_lookup(const char *path, exec_dev_t *out)
 }
 static inline unsigned int exec_blockdev_major(exec_dev_t dev) { return MAJOR(dev); }
 static inline unsigned int exec_blockdev_minor(exec_dev_t dev) { return MINOR(dev); }
+
+/*
+ * READ one 512-byte logical block off a backing block device, for the Files-11
+ * ODS-2 ACP $MOUNT (vms-127; see exec_kbackend.h). Opens the device READ-ONLY
+ * and NON-EXCLUSIVELY (holder == NULL), then reads the one block with a
+ * SYNCHRONOUS bio (submit_bio_wait) rather than the buffer cache: __bread /
+ * sb_bread assume a mounted-filesystem context (a superblock with a set block
+ * size), which the ACP does not have -- it reads a RAW disk unit before any
+ * volume is mounted. submit_bio_wait is the direct, self-contained block read
+ * (bi_sector is in 512-byte units, matching ODS-2 LBNs) and does not depend on
+ * the bdev's buffer-cache block-size state. All PUBLIC, documented block-layer
+ * APIs -- no Linux source is copied (Rule 8).
+ *
+ * VERSION-GUARDED across the bdev-open API split so the SAME header compiles on
+ * BOTH kernels this module targets: the QEMU-test build (Ubuntu 6.8, out-of-tree)
+ * and the shipped bootable build (linux-6.12 LTS, distro/Dockerfile.bootable).
+ * 6.9 replaced bdev_open_by_dev()/struct bdev_handle with
+ * bdev_file_open_by_dev()/struct file (+ file_bdev/fput). This inline is only
+ * CALLED under -DOVMX_ODS2_KERNEL (the out-of-tree vms.ko), but it still has to
+ * COMPILE everywhere the header is included -- an unconditional reference to a
+ * symbol the bootable 6.12 kernel lacks would break the bootable modpost even
+ * unused (the #623 class of breakage), so the guard is mandatory, not cosmetic.
+ */
+static inline int exec_blockdev_read_block(unsigned int major, unsigned int minor,
+					   uint64_t lbn, void *buf, size_t buflen)
+{
+	dev_t devt = MKDEV(major, minor);
+	struct block_device *bdev;
+	struct bio bio;
+	struct bio_vec bvec;
+	struct page *page;
+	int ret = -1;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+	struct file *bf;
+#else
+	struct bdev_handle *bh_open;
+#endif
+
+	if (!buf || buflen < 512)
+		return -1;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+	bf = bdev_file_open_by_dev(devt, BLK_OPEN_READ, NULL, NULL);
+	if (IS_ERR(bf))
+		return -1;
+	bdev = file_bdev(bf);
+#else
+	bh_open = bdev_open_by_dev(devt, BLK_OPEN_READ, NULL, NULL);
+	if (IS_ERR(bh_open))
+		return -1;
+	bdev = bh_open->bdev;
+#endif
+
+	page = alloc_page(GFP_KERNEL);
+	if (page) {
+		bio_init(&bio, bdev, &bvec, 1, REQ_OP_READ);
+		bio.bi_iter.bi_sector = (sector_t)lbn;   /* 512-byte units == ODS-2 LBN */
+		__bio_add_page(&bio, page, 512, 0);
+		if (submit_bio_wait(&bio) == 0) {
+			memcpy(buf, page_address(page), 512);
+			ret = 0;
+		}
+		bio_uninit(&bio);
+		__free_page(page);
+	}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+	fput(bf);
+#else
+	bdev_release(bh_open);
+#endif
+	return ret;
+}
 
 /* ---- 11. primary Ethernet net device (vms-9d2; see exec_kbackend.h) ----
  * NIC-agnostic: walk the host's net devices through the GENERIC netdev API and

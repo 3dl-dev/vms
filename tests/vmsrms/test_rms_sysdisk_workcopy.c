@@ -354,8 +354,6 @@ int main(void)
         }
         sys$disconnect(&rab, 0, 0);
         st = sys$close(&fab, 0, 0);
-        if (st != RMS$_NORMAL)
-            printf("  (checkin close st=0x%X stv=0x%X)\n", st, fab.fab$l_stv);
         CHECK(st == RMS$_NORMAL, "$CLOSE writes the working copy back (checkin)");
     }
 

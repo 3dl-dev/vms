@@ -213,6 +213,30 @@ foundations, and the first flip rung's builder primitive is landed:
     - **CONCURRENCY (vms-49d, separate rung):** checkin is a new-version create,
       so concurrent writers off the same base each mint their own version with
       no interlock — noted, transaction broker out of scope.
+    - **⚠ NATIVE-LINK / SELF-HOST RED (expected co-land wiring).** The Mode-2
+      self-host recipe `src/vmslink/mk_vmsrms_shr.sh` compiles `rms_core.c` and
+      links LIBVMSRMS$SHR.EXE with `--use {DECC$SHR, LIBVMS$SHR, LIBVMSFS$SHR}`
+      only. rms_core now imports `ods2_sysdisk_owns_path`/`_read_file`/
+      `_create_file`/`_list_dir`/`_resolve_file` + `ods2_fh2_parse`, which are
+      in the `vmsfs_volume`/`ods2` static libs, deliberately NOT in the
+      LIBVMSFS$SHR symbol vector. So the native-link job FAILS with undefined
+      symbols until the flip's co-land either folds the ods2 reader/writer +
+      ods2_sysdisk symbols into LIBVMSFS$SHR.EXE's vector (mk_vmsfs_shr.sh +
+      `.vec`) or introduces a new shareable and `--use`s it from
+      mk_vmsrms_shr.sh. Debug ctest (which links the CMake `vmsfs_volume`
+      target directly) is unaffected and stays GREEN.
+
+FIXTURE-SWITCH SCOPE (observed 2026-08-16): the full Debug ctest suite (minus
+`qemu`) is GREEN with this branch — no Debug RMS/DCL test does an RMS
+`$OPEN`/`$CREATE` on a `/vms` path (RMS unit tests use `/tmp`; DCL COPY/TYPE/
+DIRECTORY are fopen/opendir-based, unaffected by the RMS reroute). The reroute
+therefore reddens the **boot-to-login QEMU path + the install/e2e suites**
+(`qemu-full-boot`, `install_boot_e2e`, `product_install_e2e`, `mount_e2e`,
+`release_install_e2e`, ... — skipped/excluded in the plain Debug run), which
+DO drive RMS against SYS$SYSTEM files on `/vms`: with the reroute active and
+no `OVMX_SYSDISK_DEV` exported / no ODS-2 default-flip, every SYS$SYSTEM RMS
+open fails `SS$_DEVNOTMOUNT` (fail-honest). Those go green only when R6-build's
+default flip + PID-1 `OVMX_SYSDISK_DEV` export + R6-mount co-land with this.
 
 Remaining atomic group (still must land together, boot-gated): R6-kernel,
 R6-mount, ~~R2-RMS record-I/O working-copy model~~ **(LANDED above; the

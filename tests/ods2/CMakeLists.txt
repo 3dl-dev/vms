@@ -169,6 +169,24 @@ set_tests_properties(ods2_path PROPERTIES
     TIMEOUT 30
 )
 
+# vms-208 (Files-11 ACP foundation): CODEC-LEVEL coverage for the two reusable
+# block-device writer primitives ods2_wvolume_open_bdev() (reattach a writer to
+# an existing volume, reconstructing the bump-allocator watermark) and
+# ods2_wvolume_append_file() (append verbatim to an existing RFM=FIXED file).
+# Introduced by #611, these were only exercised transitively through the
+# now-deleted userspace SYS$DISK adapter's test; this test drives them DIRECTLY
+# against a raw ODS-2 block device (no adapter) so codec coverage never drops
+# as the adapter is reverted. The Files-11 ACP (epic vms-208) reuses both.
+add_executable(test_ods2_wvolume_reopen_append test_ods2_wvolume_reopen_append.c)
+target_include_directories(test_ods2_wvolume_reopen_append PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_wvolume_reopen_append PRIVATE ods2)
+
+add_test(NAME ods2_wvolume_reopen_append COMMAND test_ods2_wvolume_reopen_append)
+set_tests_properties(ods2_wvolume_reopen_append PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)
+
 # vms-351 (epic vms-5eb "B2"): the userspace MOUNTED-VOLUME table
 # (src/vmsfs/vmsfs_volume.c) -- device name -> (open fd + cached ods2_bdev_t).
 # The additive substrate PID 1 registers the boot device into at boot. Builds a

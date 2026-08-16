@@ -125,7 +125,20 @@ static void test_zone_create_delete(void)
     printf("Testing lib$create_vm_zone / lib$delete_vm_zone...\n");
     uint32_t zone_id = 0;
 
-    uint32_t st = lib$create_vm_zone(&zone_id);
+    /* lib$create_vm_zone reads TEN optional positional arguments to reach the
+     * position-10 zone-name descriptor (there is no VMS argument-count register
+     * in this C port).  A bare call supplies none of them, so the va_arg loop
+     * over-reads past the caller's argument list and dereferences whatever the
+     * ABI left in those slots as a name descriptor.  On x86_64/aarch64 that
+     * garbage happened to be benign; on Alpha's varargs ABI the position-10
+     * slot is a stack value beyond this frame and the deref faults (SIGSEGV).
+     * Pass the explicit NULL argument list -- the exact pattern the MMK corpus
+     * shim (tests/corpus/tier3-mmk/ovmx/ovmx_mmk_compat.c) and test_lib_rtl_
+     * batch3.c already use -- so the name slot is a real NULL: no over-read, no
+     * name, same default-zone result. */
+    uint32_t st = lib$create_vm_zone(&zone_id,
+        (void *)0, (void *)0, (void *)0, (void *)0, (void *)0,
+        (void *)0, (void *)0, (void *)0, (void *)0, (void *)0);
     check(st == SS$_NORMAL, "create_vm_zone returns SS$_NORMAL");
     check(zone_id != 0, "zone_id is non-zero (not default zone)");
 

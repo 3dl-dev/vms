@@ -536,7 +536,13 @@ uint32_t lib$get_vm_page(const uint32_t *num_pages, void **base_adr)
         return SS$_BADPARAM;
 
     uint32_t bytes = *num_pages * VMS_PAGE_SIZE;
-    return lib$get_vm(&bytes, base_adr);
+    /* lib$get_vm is variadic (optional zone_id); it always va_arg-reads one
+     * pointer.  Forwarding without it makes that read walk past our argument
+     * list and dereference garbage as a zone_id pointer.  On x86_64/aarch64 the
+     * over-read slot happened to be benign; on Alpha's varargs ABI it is a live
+     * stack value and the deref at "*zone_id_ptr" faults.  Pass an explicit NULL
+     * (default zone) so the read is defined. */
+    return lib$get_vm(&bytes, base_adr, (const uint32_t *)NULL);
 }
 
 /*
@@ -545,7 +551,10 @@ uint32_t lib$get_vm_page(const uint32_t *num_pages, void **base_adr)
 uint32_t lib$free_vm_page(const uint32_t *num_pages, void **base_adr)
 {
     uint32_t bytes = num_pages ? *num_pages * VMS_PAGE_SIZE : 0;
-    return lib$free_vm(&bytes, base_adr);
+    /* Same variadic contract as lib$get_vm_page above: pass the optional
+     * zone_id explicitly (NULL = default zone) so lib$free_vm's va_arg read is
+     * defined and does not fault on Alpha. */
+    return lib$free_vm(&bytes, base_adr, (const uint32_t *)NULL);
 }
 
 /* ================================================================

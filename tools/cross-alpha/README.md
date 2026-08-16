@@ -53,3 +53,45 @@ CMake arch branch. All of `libvmssys`'s C sources cross-compile for alpha.
 Remaining for a full port: `struct vms_stat` / `vms_sigaction` Alpha layouts in
 `vms_types.h` (deliberately left undefined so they fail loud, not silently
 wrong), and an `imgact` EM_ALPHA arch header.
+
+## The executive on Alpha: vms.ko + /dev/vms (rd vms-89dd, rung A4)
+
+On the OVMX/Linux-Alpha substrate (operator ruling 2026-08-16) the VMS
+executive on Alpha is **`vms.ko` recompiled for the Linux/Alpha kernel** and
+reached via `/dev/vms` -- NOT a NetBSD SYSKRNL port (that is the VAX path).
+Two scripts prove it, both build/test tooling (Rule 9), never a runtime:
+
+- `build-vmsko-alpha.sh` -- cross-compiles the executive `vms.ko` and the
+  ACP-bearing filesystem `vmsfs.ko` (the genuine kernel-resident ODS-2 codec,
+  epic vms-208) for the Linux/Alpha kernel (6.6.52, `alpha-linux-gnu-`).
+  **Result: both modules cross-compile CLEAN** -- every kernel-core facility
+  (locks / event flags / AST / mailboxes / process table / device table /
+  logical names) and every ODS-2 codec source builds with zero width or
+  endianness warnings. Alpha is little-endian + LP64 like x86_64, and the
+  codec reads on-disk fields through byte-wise `le16/le32` helpers, so the
+  ODS-2 work converged onto Alpha without change. (The one and only warning is
+  a pre-existing large-stack-frame note in `ods2_writer.c`, not Alpha-specific.)
+  Produces `elf64-alpha` `vms.ko`/`vmsfs.ko`, vermagic `6.6.52`.
+
+  NOTE: `make modules` (not just `vmlinux modules_prepare`) is required so the
+  kernel emits `Module.symvers`; an external module's modpost resolves the
+  vmlinux-exported symbols against it.
+
+- `boot-vmsko-qemu-alpha.sh` + `ke-init-alpha.c` -- boots the cross-compiled
+  `vms.ko` under `qemu-system-alpha -M clipper` (the DS10 compute stack) with a
+  static PID-1 init that loads the module, confirms `/dev/vms`, and runs the
+  SAME cross-process (A-writes/B-reads) executive suites the x86_64 Kernel
+  Executive CI job runs. **Result:** `/dev/vms` comes up on Alpha;
+  `test_kmod_eflag_mproc` proves common event flag clusters cross-process
+  **13/13** (including local-flag isolation, the anti-shared-memory
+  discriminator); `test_kmod_lock_mproc` proves cross-process lock state
+  **15/16** -- EX blocks EX/CR, cross-process `$GETLKI` sees the peer's queued
+  request, CR+CR compatibility, `$DEQ`. The one deterministic failure is the
+  cross-process **blocking-AST DELIVERY** leg: `VMS_IOCTL_DELIVERAST` returns
+  `-EAGAIN` (no AST pending) on Alpha where x86_64 delivers it. The queued
+  incompatible request IS visible cross-process, so this is specifically the
+  async AST-delivery path, not lock state sharing. Code pointers for the
+  follow-up: `vms_ioctl_deliverast` (`src/kernel-core/vms_ast.c:263`, the
+  `!enabled || empty pending` -> `-EAGAIN` branch) and `notify_blocking_asts`
+  (`src/kernel-core/vms_lock.c:611`, called from :991/:1184). Tracked for the
+  executive owner; every other cross-process facility converged on Alpha.

@@ -322,3 +322,45 @@ Rule 9 both impose). Recommended sequencing: file B1 and B2 as rungs; land B1
 additive foundations the way R1/R4/R8 were; then the true atomic group
 (R2+R3+R5+R6, all consuming B1/B2 + this branch's `ods2_path.c`) lands and is
 gated on a real QEMU boot-to-login on a genuine ODS-2 SYS$DISK.
+
+### 5.1 Write-path concurrency: the single-writer serialization broker (vms-49d)
+
+The write half (§0, the `ods2_sysdisk_create_file` / `_append_file` / `_mkdir`
+adapter over the block-device-backed writer) has a concurrency hazard the read
+half does not. At boot **three independent processes write the one SYS$DISK
+with no transaction manager**: PID 1's OPERATOR.LOG append (opcom), the login
+LASTLOGIN write, and RMS `$PUT`. Each adapter entry point opens a per-call
+writer with `ods2_wvolume_open_bdev`, which **reconstructs the free-block and
+free-FID watermarks by reading the on-disk bitmaps**, then mutates and flushes.
+Two such spans interleaving on the same device tear the volume two ways: both
+`open_bdev` calls read the *same* watermark and allocate the *same* LBN/FID, and
+two `dir_insert` read-modify-writes of one parent directory block clobber each
+other (last writer wins, dropping the other entry). Because the watermark is
+read *inside* `open_bdev`, the critical section must begin *before* it.
+
+**This must land before the write-half reroutes** (NonRMSWriters `vms-d75`,
+R2-checkin `vms-af7a`) — those make the three boot writers real, so the
+serialization has to exist first. `vms-49d` is that additive broker.
+
+**Mechanism (chosen): `flock(fd, LOCK_EX)` on the volume block-device fd**, held
+across the whole `open_bdev -> read-modify-write -> flush -> close` span of each
+write entry point, released after. `flock` is a real OS-level, *inode*-
+associated advisory lock: two different processes — each with its own open file
+description on the device, exactly the boot case, since every process lazily
+registers SYS$DISK for itself via `sysdisk_handle()` — contend on it and are
+serialized. It is INV-6 clean: a kernel lock on the shared object, never a
+per-process fake. It is placed at the adapter entry points (`ods2_sysdisk.c`),
+not down inside the writer, precisely because the watermark read must be inside
+the critical section. Proven by `tests/ods2/test_ods2_write_broker.c`, which
+drives fork()'d, barrier-released children (the real cross-process case; threads
+share one open file description and would not exercise the lock) and asserts
+byte-exact survival of every concurrently-written file plus complete directory
+listings — and which fails if the lock is neutered.
+
+**VMS-authentic path (possible future refinement, NOT built now):** the faithful
+mechanism is an executive Distributed Lock Manager resource — `sys$enq` of an
+EX-mode lock on a per-volume resource name — which additionally generalizes to
+the clustered / MSCP-served case where the volume is written from more than one
+node. `flock`-on-device is the minimal correct *single-node* broker for the
+additive write half; a later rung can substitute a DLM lock at the same seam
+without touching any consumer.

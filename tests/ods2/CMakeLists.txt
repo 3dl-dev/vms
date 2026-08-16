@@ -223,6 +223,26 @@ set_tests_properties(ods2_sysdisk_ensure PROPERTIES
     TIMEOUT 30
 )
 
+# vms-6f5 (R5-MOUNT of the ODS-2 runtime flip epic vms-5eb): MOUNT volume
+# validation (src/vmsfs/ods2_sysdisk.c ods2_sysdisk_validate_backing/_handle).
+# Builds a genuine ODS-2 loop image + a non-ODS-2 blob, and proves MOUNT's home
+# block + SCB (BITMAP.SYS VBN 1) parse ACCEPTS the ODS-2 volume (reflecting the
+# real volume label / cluster factor / volume-size-in-blocks) and REJECTS the
+# non-ODS-2 blob honestly (SS$_DEVNOTMOUNT -- no false success), plus the
+# fail-honest SYS$DISK edge (no registered volume -> SS$_DEVNOTMOUNT). This is
+# the C proof for cmd_mount's reroute, which cannot be driven end-to-end where
+# ctest runs (no /dev/vms -> MOUNT short-circuits at the executive priv check).
+# Links vmsfs_volume.
+add_executable(test_ods2_mount_validate test_ods2_mount_validate.c)
+target_include_directories(test_ods2_mount_validate PRIVATE ${VMS_FS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
+target_link_libraries(test_ods2_mount_validate PRIVATE vmsfs_volume)
+
+add_test(NAME ods2_mount_validate COMMAND test_ods2_mount_validate)
+set_tests_properties(ods2_mount_validate PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)
+
 # vms-02e (epic vms-5eb, the WRITE half of the ODS-2 runtime flip): the
 # SYS$DISK ODS-2 WRITE adapter (src/vmsfs/ods2_sysdisk.c create/append/mkdir
 # + ods2_writer.c ods2_wvolume_open_bdev/_append_file). Builds a genuine ODS-2

@@ -141,6 +141,18 @@ else()
     # Core link libraries
     target_link_libraries(vmsdcl PRIVATE pthread vms vmsfs vmsprocess vmslnm vmsqueue)
 
+    # R5-MOUNT (vms-6f5, epic vms-5eb -- the ODS-2 runtime flip): MOUNT
+    # validates a genuine ODS-2 volume (home block + SCB) through the SYS$DISK
+    # adapter (src/vmsfs/ods2_sysdisk.c: ods2_sysdisk_validate_backing/_handle)
+    # instead of mount(2)-ing arbitrary bytes as vmsfs. That adapter lives in
+    # the DISTINCT vmsfs_volume static library (NOT the LIBVMSFS$SHR.EXE strict
+    # symbol-vector shareable), linking the ods2 codec directly -- so DCL.EXE
+    # consumes it here. In the native-link (OVMX_LINK_NATIVE) build DCL.EXE is
+    # re-linked with a strict symbol vector that does not yet export these
+    # ods2_bdev_* symbols; that vector wiring co-lands with the atomic group
+    # (a separate task owns the vmsfs export vector). See sysdisk.h.
+    target_link_libraries(vmsdcl PRIVATE vmsfs_volume)
+
     # Try to find readline for better interactive experience (skip for static
     # builds; and for the netbsd-vax cross, which has no readline in its sysroot
     # and takes DCL's own non-readline line editor instead).

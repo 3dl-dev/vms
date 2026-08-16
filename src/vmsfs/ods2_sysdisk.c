@@ -27,6 +27,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>      /* open(2) -- MOUNT volume-validation probe */
+#include <unistd.h>     /* close(2) */
 #include <sys/file.h>   /* flock(2) -- the single-writer serialization broker */
 
 #include "vmsfs/sysdisk.h"
@@ -279,6 +281,101 @@ int ods2_sysdisk_list_dir(const char *linux_path, ods2_dir_cb cb, void *ctx)
         return ods2_status_to_vms(st);
 
     return SS$_NORMAL;
+}
+
+/* ================================================================
+ * MOUNT VOLUME VALIDATION (vms-6f5, R5-MOUNT of epic vms-5eb). See
+ * vmsfs/sysdisk.h for the contract. Adds no on-disk format fact (Rule 8): it
+ * only sequences the reader's existing home/SCB validators over the block
+ * device -- ods2_bdev_open() validates the home block, and read_scb() below
+ * reads BITMAP.SYS's VBN 1 and hands it to ods2_scb_parse().
+ * ================================================================ */
+
+/* ods2_fh2_map_walk callback: capture the FIRST retrieval-pointer extent's
+ * starting LBN (VBN 1 of the file) and stop. */
+struct first_extent_ctx { uint32_t lbn; int got; };
+
+static int first_extent_cb(const ods2_extent_t *ext, void *ctx)
+{
+    struct first_extent_ctx *fe = (struct first_extent_ctx *)ctx;
+    fe->lbn = ext->lbn;
+    fe->got = 1;
+    return 1;   /* stop after the first extent */
+}
+
+/*
+ * Read + validate the Storage Control Block over the block-device handle
+ * `bv`: the SCB is VBN 1 of BITMAP.SYS (FID 2), i.e. the first LBN of that
+ * file's first FM2 retrieval-pointer extent. Returns SS$_NORMAL (+ *out, may
+ * be NULL) or an honest SS$_DATACHECK on any read/decode failure.
+ */
+static int read_scb(const ods2_bdev_t *bv, ods2_scb_t *out)
+{
+    uint8_t hdr[ODS2_BLOCK_SIZE];
+    ods2_status_t s = ods2_bdev_read_header(bv, ODS2_FID_BITMAP,
+                                            hdr, sizeof(hdr));
+    if (s != ODS2_OK)
+        return ods2_status_to_vms(s);
+
+    struct first_extent_ctx fe = { 0, 0 };
+    s = ods2_fh2_map_walk(hdr, first_extent_cb, &fe, NULL);
+    if (s != ODS2_OK)
+        return ods2_status_to_vms(s);
+    if (!fe.got)
+        return SS$_DATACHECK;   /* BITMAP.SYS with no extent -- corrupt */
+
+    uint8_t blk[ODS2_BLOCK_SIZE];
+    s = ods2_bdev_read_block(bv, fe.lbn, blk, sizeof(blk));
+    if (s != ODS2_OK)
+        return ods2_status_to_vms(s);
+
+    ods2_scb_t scb;
+    s = ods2_scb_parse(blk, sizeof(blk), &scb);
+    if (s != ODS2_OK)
+        return ods2_status_to_vms(s);
+
+    if (out)
+        *out = scb;
+    return SS$_NORMAL;
+}
+
+int ods2_sysdisk_validate_backing(const char *backing_path,
+                                  ods2_home_t *home_out, ods2_scb_t *scb_out)
+{
+    if (!backing_path)
+        return SS$_BADPARAM;
+
+    int fd = open(backing_path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return SS$_NOSUCHDEV;
+
+    ods2_bdev_t bv;
+    ods2_status_t s = ods2_bdev_open(&bv, fd, 0);
+    if (s != ODS2_OK) {
+        close(fd);
+        /* Opened, but not a genuine ODS-2 (DECFILE11B) volume: the honest
+         * MOUNT rejection for non-ODS-2 media (fail-honest, Rule 9 / INV-6). */
+        return SS$_DEVNOTMOUNT;
+    }
+
+    if (home_out)
+        *home_out = bv.home;   /* ods2_bdev_open cached the validated home */
+
+    int vst = read_scb(&bv, scb_out);
+    close(fd);
+    return vst;
+}
+
+int ods2_sysdisk_validate_handle(ods2_home_t *home_out, ods2_scb_t *scb_out)
+{
+    const ods2_bdev_t *bv = sysdisk_handle();
+    if (!bv)
+        return SS$_DEVNOTMOUNT;   /* fail-honest: no registered SYS$DISK volume */
+
+    if (home_out)
+        *home_out = bv->home;
+
+    return read_scb(bv, scb_out);
 }
 
 /* ================================================================

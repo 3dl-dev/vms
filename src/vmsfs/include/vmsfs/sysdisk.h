@@ -108,6 +108,58 @@ int ods2_sysdisk_list_dir(const char *linux_path,
                           ods2_dir_cb cb, void *ctx);
 
 /* ================================================================
+ * MOUNT VOLUME VALIDATION (vms-6f5, R5-MOUNT of epic vms-5eb -- the ODS-2
+ * runtime flip). The MOUNT half of the reroute: instead of mount(2)-ing an
+ * arbitrary backing device as vmsfs and reporting success (the retired /vms
+ * passthrough, which never proved the media was ODS-2), MOUNT parses the
+ * candidate volume's genuine ODS-2 structures -- its HOME block (LBN 1:
+ * DECFILE11B + both additive checksums + structure level, via ods2_bdev_open)
+ * and its STORAGE CONTROL BLOCK (SCB, BITMAP.SYS VBN 1, via ods2_scb_parse) --
+ * and ACCEPTS the volume only if both validate. Non-ODS-2 media is REJECTED
+ * honestly (SS$_DEVNOTMOUNT), never aliased to success (INV-6 / Rule 9).
+ *
+ * ADDITIVE, EXACTLY LIKE THE READ ADAPTER. These entry points are consumed by
+ * cmd_mount when the atomic group lands; they flip no live path and add no
+ * on-disk format fact (Rule 8) -- they only sequence the reader's existing
+ * home/SCB validators over the block device.
+ * ================================================================ */
+
+/*
+ * Validate the volume on backing block-device / image path `backing_path`
+ * (e.g. "/dev/vda"): open it read-only, validate the home block via
+ * ods2_bdev_open() (DECFILE11B + checksums + strict structure level), then
+ * read + validate the SCB (BITMAP.SYS VBN 1). On SS$_NORMAL, *home_out /
+ * *scb_out (either may be NULL) carry the parsed structures -- volume label
+ * (home hm2_volname), cluster factor (home hm2_cluster / scb_cluster), volume
+ * size in blocks (scb_volsize).
+ *
+ * Returns (VMS status codes, odd == success):
+ *   SS$_NORMAL       genuine ODS-2 volume; *home_out / *scb_out filled.
+ *   SS$_BADPARAM     backing_path NULL.
+ *   SS$_NOSUCHDEV    backing_path could not be opened.
+ *   SS$_DEVNOTMOUNT  opened, but NOT a genuine ODS-2 volume (home invalid) --
+ *                    fail-honest, the honest MOUNT rejection for non-ODS-2 media.
+ *   SS$_DATACHECK    home valid but the SCB could not be read/validated
+ *                    (a real medium fault, reported honestly not masked).
+ */
+int ods2_sysdisk_validate_backing(const char *backing_path,
+                                  ods2_home_t *home_out, ods2_scb_t *scb_out);
+
+/*
+ * Validate the already-registered SYS$DISK volume (DKA0:) through the
+ * process's registered ODS-2 volume handle (lazily registered from
+ * OVMX_SYSDISK_DEV, exactly as every SYS$DISK read/write consumer does),
+ * reading its cached validated home block and its SCB. Used by MOUNT of the
+ * boot SYS$DISK, which under architecture A1 is NOT re-mounted as vmsfs but
+ * resolved through the registered handle.
+ *
+ * Returns SS$_NORMAL (+ *home_out / *scb_out, either may be NULL),
+ * SS$_DEVNOTMOUNT (no genuine-ODS-2 SYS$DISK volume registered -- fail-honest),
+ * or SS$_DATACHECK (SCB unreadable).
+ */
+int ods2_sysdisk_validate_handle(ods2_home_t *home_out, ods2_scb_t *scb_out);
+
+/* ================================================================
  * SYS$DISK WRITE adapter (vms-02e, epic vms-5eb -- the WRITE half of the
  * ODS-2 runtime flip). The write twin of the read adapter above: it turns a
  * resolved "/vms/A/B/.../NAME.EXT;ver" Linux path into a genuine-ODS-2 WRITE

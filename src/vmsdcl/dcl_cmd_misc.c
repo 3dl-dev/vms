@@ -53,6 +53,13 @@
 #include "vmsfs/device.h"
 #include "ovmx_layout.h"
 #include "vms_kif.h"
+#if defined(__linux__)
+/* R5-MOUNT (vms-6f5, epic vms-5eb): MOUNT validates a genuine ODS-2 volume
+ * (home block + SCB) through the SYS$DISK adapter instead of mount(2)-ing
+ * arbitrary bytes as vmsfs. Linux-only: the vmsfs_volume/ods2 static library
+ * is not part of the netbsd-vax cross stack, which keeps the mount(2) path. */
+#include "vmsfs/sysdisk.h"
+#endif
 
 /* TELNET / FTP client engines (vms-dbb) -- the SAME header the QEMU proof
  * (tests/qemu/test_syssvc_tcpip_client.c) drives, so the shipped verb and the
@@ -2313,46 +2320,115 @@ int cmd_mount(struct dcl_command *cmd)
         label[llen] = '\0';
     }
 
-    /*
-     * The actual mount(2), performed by the setuid-root helper
-     * (tools/vms_mount_helper.c, vms-651): LOGINOUT setuid()/setgid()'s
-     * every VMS session onto its SYSUAF UIC (tools/vms_login.c), so THIS
-     * process holds no Linux capability regardless of the PRV$M_MOUNT it
-     * was just found to hold -- mount(2) itself requires CAP_SYS_ADMIN
-     * unconditionally. The helper re-derives PRV$M_MOUNT from the
-     * executive itself (it does not trust this process's claim) before
-     * doing anything privileged -- see its header comment for why a
-     * kernel-mediated mount is not available on this platform and for the
-     * full security reasoning. The mount point already exists --
-     * src/ovmx_init/ovmx_init.c's provision_disk_mount_points() created it,
-     * as root, before any session dropped privilege.
-     */
     char backing_path[VMS_BACKING_SIZE + 8];
     snprintf(backing_path, sizeof(backing_path), "/dev/%s", backing);
-    char *helper_argv[] = {
-        (char *)VMS_MOUNT_HELPER_PATH, (char *)"mount",
-        backing_path, mount_point, NULL
-    };
-    int helper_errno = 0;
-    int hrc = run_mount_helper(helper_argv, &helper_errno);
-    if (hrc == 3) {
+
+    /* Volume label reported to the operator + used for the DISK$<label>
+     * logical. READ FROM THE VOLUME (never the command-line token): on Linux
+     * from the parsed ODS-2 home block below; on the netbsd-vax path from the
+     * mount helper's readlabel. */
+    char vol_label[16] = "";
+    int skip_fs_mount = 0;
+
+#if defined(__linux__)
+    /*
+     * R5-MOUNT (vms-6f5, epic vms-5eb / docs/design-ods2-runtime-flip.md): a
+     * volume is accepted only after MOUNT PROVES it is a genuine ODS-2 disk --
+     * validating its home block (DECFILE11B + both checksums + structure
+     * level) and its Storage Control Block (BITMAP.SYS VBN 1). Under
+     * architecture A1 the /vms passthrough is retired for SYS$DISK: MOUNT no
+     * longer mount(2)s arbitrary bytes as vmsfs and reports success -- it
+     * parses the real on-disk structures and REJECTS non-ODS-2 media honestly
+     * (SS$_DEVNOTMOUNT), never a getcwd/logical-name alias (INV-6 / Rule 9).
+     *
+     *   - The boot SYS$DISK (DKA0:) is NOT re-mounted: PID 1 already registered
+     *     it and MOUNT resolves through the process's registered ODS-2 volume
+     *     handle. No volume registered -> SS$_DEVNOTMOUNT (fail-honest).
+     *   - Any other unit is validated by probing its backing block device's
+     *     home + SCB directly; only a genuine ODS-2 volume then proceeds to the
+     *     (preserved) mount(2) attach -- a non-ODS-2 blob is rejected before
+     *     any logical name is created.
+     *
+     * ATOMIC-GROUP MEMBER (red-by-design): the SYS$DISK volume is registered
+     * only once PID 1 exports OVMX_SYSDISK_DEV over a genuine-ODS-2 boot disk,
+     * which co-lands with the default-flip. Until then this path fails
+     * SS$_DEVNOTMOUNT -- expected, not a regression.
+     */
+    ods2_home_t vhome;
+    memset(&vhome, 0, sizeof(vhome));
+    int is_sysdisk = (strcmp(log_name, SYSDISK_DEVICE) == 0);
+    int vst = is_sysdisk
+                  ? ods2_sysdisk_validate_handle(&vhome, NULL)
+                  : ods2_sysdisk_validate_backing(backing_path, &vhome, NULL);
+    if (vst != SS$_NORMAL) {
         vms_kif_dalloc(dev_name);
-        dcl_error("SYSTEM", 4, "NOPRIV",
-                  "insufficient privilege or object protection violation");
-        return SS$_NOPRIV;
-    }
-    if (hrc != 0) {
-        vms_kif_dalloc(dev_name);
-        dcl_error("OVMX", 4, "MOUNTFAIL",
-                  "%s would not mount as vmsfs: %s", dev_name,
-                  hrc == 1 ? strerror(helper_errno) : "mount helper did not run");
-        return SS$_BUGCHECK;
+        if (vst == SS$_DEVNOTMOUNT)
+            dcl_error("MOUNT", 4, "DEVNOTMOUNT",
+                      "%s does not carry a mounted ODS-2 volume", dev_name);
+        else if (vst == SS$_NOSUCHDEV)
+            dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
+        else
+            dcl_error("MOUNT", 4, "BADVOLUME",
+                      "%s is not a valid ODS-2 volume", dev_name);
+        return vst;
     }
 
-    /* Tell the per-process VMS-filespec translator (the same mechanism
-     * DKA0:/SYSDISK_MOUNT already uses) so filespecs against this device
-     * resolve for the rest of this session. */
-    vmsfs_device_add(log_name, mount_point);
+    /* Volume label from the real home block. hm2_volname is a 12-byte,
+     * space-padded field (not NUL-terminated); copy and trim trailing pad. */
+    {
+        size_t n = sizeof(vhome.hm2_volname);
+        if (n >= sizeof(vol_label)) n = sizeof(vol_label) - 1;
+        memcpy(vol_label, vhome.hm2_volname, n);
+        vol_label[n] = '\0';
+        while (n > 0 && (vol_label[n - 1] == ' ' || vol_label[n - 1] == '\0'))
+            vol_label[--n] = '\0';
+    }
+
+    /* The boot SYS$DISK is already attached at boot -- do not mount(2) it. */
+    skip_fs_mount = is_sysdisk;
+#endif /* __linux__ */
+
+    if (!skip_fs_mount) {
+        /*
+         * The actual mount(2), performed by the setuid-root helper
+         * (tools/vms_mount_helper.c, vms-651): LOGINOUT setuid()/setgid()'s
+         * every VMS session onto its SYSUAF UIC (tools/vms_login.c), so THIS
+         * process holds no Linux capability regardless of the PRV$M_MOUNT it
+         * was just found to hold -- mount(2) itself requires CAP_SYS_ADMIN
+         * unconditionally. The helper re-derives PRV$M_MOUNT from the
+         * executive itself (it does not trust this process's claim) before
+         * doing anything privileged -- see its header comment for why a
+         * kernel-mediated mount is not available on this platform and for the
+         * full security reasoning. The mount point already exists --
+         * src/ovmx_init/ovmx_init.c's provision_disk_mount_points() created it,
+         * as root, before any session dropped privilege.
+         */
+        char *helper_argv[] = {
+            (char *)VMS_MOUNT_HELPER_PATH, (char *)"mount",
+            backing_path, mount_point, NULL
+        };
+        int helper_errno = 0;
+        int hrc = run_mount_helper(helper_argv, &helper_errno);
+        if (hrc == 3) {
+            vms_kif_dalloc(dev_name);
+            dcl_error("SYSTEM", 4, "NOPRIV",
+                      "insufficient privilege or object protection violation");
+            return SS$_NOPRIV;
+        }
+        if (hrc != 0) {
+            vms_kif_dalloc(dev_name);
+            dcl_error("OVMX", 4, "MOUNTFAIL",
+                      "%s would not mount as vmsfs: %s", dev_name,
+                      hrc == 1 ? strerror(helper_errno)
+                               : "mount helper did not run");
+            return SS$_BUGCHECK;
+        }
+
+        /* Tell the per-process VMS-filespec translator (the same mechanism
+         * DKA0:/SYSDISK_MOUNT already uses) so filespecs against this device
+         * resolve for the rest of this session. */
+        vmsfs_device_add(log_name, mount_point);
+    }
 
     /* Create logical name for device -> linux path */
     const char *table = LNM_PROCESS_TABLE;
@@ -2365,27 +2441,31 @@ int cmd_mount(struct dcl_command *cmd)
                    LNM_ATTR_TERMINAL, LNM_MODE_USER);
     }
 
+#if !defined(__linux__)
+    /* netbsd-vax keeps its path: read the label from the volume via the
+     * mount helper (no ODS-2 home/SCB probe on this platform). */
+    (void)mount_helper_readlabel(backing_path, vol_label, sizeof(vol_label));
+#endif
+
     /*
      * DISK$<volume-label> (vms-f83): VMS MOUNT defines a logical name from the
      * volume's own label so the disk can be addressed by label independent of
      * the physical unit -- DISK$MYVOL:[DIR]FILE resolves wherever MYVOL is
      * mounted (VSI OpenVMS System Manager's Manual, Vol. 1, "Mounting
      * Volumes"; VSI OpenVMS DCL Dictionary, MOUNT). The label is READ FROM THE
-     * VOLUME (its vmsfs home block, via the setuid helper), not the command-
-     * line token, so the DISK$ name always reflects the disk actually mounted;
-     * if it cannot be read, no DISK$ logical is defined rather than
-     * fabricating one (INV-DCL). The equivalence is the device (DKA100:), so
-     * DISK$<label>:[dir]file translates through the device the mount just
-     * established. DISMOUNT removes it. Placed in the same table as the device
-     * logical above so it is resolvable in exactly the same scope.
+     * VOLUME (its ODS-2 home block on Linux; the mount helper on netbsd-vax),
+     * not the command-line token, so the DISK$ name always reflects the disk
+     * actually mounted; if it cannot be read, no DISK$ logical is defined
+     * rather than fabricating one (INV-DCL). The equivalence is the device
+     * (DKA100:), so DISK$<label>:[dir]file translates through the device the
+     * mount just established. DISMOUNT removes it. Placed in the same table as
+     * the device logical above so it is resolvable in exactly the same scope.
      */
-    char vol_label[16] = "";
-    if (mgr && mount_helper_readlabel(backing_path, vol_label,
-                                      sizeof(vol_label))) {
+    if (mgr && vol_label[0])
         (void)dcl_mount_define_disk(mgr, table, vol_label, dev_name);
-    }
 
-    printf("%%MOUNT-I-MOUNTED, %s mounted on _%s\n", label, dev_name);
+    printf("%%MOUNT-I-MOUNTED, %s mounted on _%s\n",
+           vol_label[0] ? vol_label : label, dev_name);
     return SS$_NORMAL;
 }
 

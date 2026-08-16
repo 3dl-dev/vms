@@ -99,9 +99,7 @@ COPY src/kernel/ /src/kernel/
 # src/kernel/vmsfs/Makefile's vmsfs-y lists ../../vmsfs/ods2/*.o (the SAME
 # cross-dir pattern it already uses for ../../kernel-core/vmsfs/*.o), so kbuild
 # needs those .c sources present in the build context -- exactly as it needs
-# src/kernel-core above. Copy them BEFORE the vmsfs.ko build below. (A later
-# stage re-references these for the mkgolden_ods2 host tool; Docker layer-caches
-# the COPY, so the earlier placement is free.)
+# src/kernel-core above. Copy them BEFORE the vmsfs.ko build below.
 COPY src/vmsfs/include/ /src/vmsfs/include/
 COPY src/vmsfs/ods2/ /src/vmsfs/ods2/
 RUN KVER=$(cat /tmp/kver) && \
@@ -438,22 +436,15 @@ RUN gcc -O2 -Wall -o /src/tests/qemu/mkimage_vmsfs \
 
 # GENUINE ODS-2 codec kernel-resident proof (rd vms-dcd, epic vms-208).
 # Stage the REAL-VAX fixture as the block-device image the "ods2ro" mount reads
-# in-guest, and build the byte-identical GOLDEN with the USERSPACE codec so the
-# in-guest test (test_kmod_ods2_codec, mounting via the KERNEL-RESIDENT codec)
-# can memcmp kernel-read == userspace-read. mkgolden_ods2 is a thin host CLI over
-# the same codec sources (mirrors mkimage_vmsfs). src/vmsfs/{include,ods2} were
-# already COPYd earlier (for the kernel-resident vmsfs.ko build); reused here.
+# in-guest, and the COMMITTED byte-identical golden (tests/ods2/ovmxdir_hello.
+# golden = the real on-disk content of [OVMXDIR]HELLO.TXT). The golden is
+# COMMITTED, not regenerated from the codec here, ON PURPOSE (rd vms-dcd negctl):
+# a committed oracle is immune to a codec mutation, so the facility-defects
+# negative control (ods2-read-content-vbn) makes test_kmod_ods2_codec's
+# byte-identical assertion genuinely go red -- a golden regenerated from the
+# mutated codec would corrupt both sides equally and hide the defect.
 COPY tests/ods2/real_vax_ods2.dsk /ods2_real.img
-COPY tests/qemu/mkgolden_ods2.c /src/tests/qemu/
-RUN gcc -O2 -Wall -o /src/tests/qemu/mkgolden_ods2 \
-        /src/tests/qemu/mkgolden_ods2.c \
-        /src/vmsfs/ods2/ods2_reader.c \
-        /src/vmsfs/ods2/ods2_writer.c \
-        /src/vmsfs/ods2/ods2_bdev.c \
-        /src/vmsfs/ods2/ods2_path.c \
-        /src/vmsfs/ods2/ods2_block_posix.c \
-        -I/src/vmsfs/include -I/src/vmsfs/ods2 && \
-    /src/tests/qemu/mkgolden_ods2 /ods2_real.img /hello.golden
+COPY tests/ods2/ovmxdir_hello.golden /hello.golden
 
 # Locate the kernel image (may already exist as symlink)
 RUN KVER=$(cat /tmp/kver) && \

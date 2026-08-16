@@ -138,8 +138,14 @@ endif()
 if(VMSDCL_STANDALONE)
     target_compile_options(vmsdcl PRIVATE -Wall -Wextra -O2)
 else()
-    # Core link libraries
-    target_link_libraries(vmsdcl PRIVATE pthread vms vmsfs vmsprocess vmslnm vmsqueue)
+    # Core link libraries. vmsfs_volume carries the ODS-2 SYS$DISK adapter
+    # (ods2_sysdisk_*) the generic filespec resolution in dcl_filespec.c routes
+    # SYS$DISK version/existence resolution onto for the ODS-2 runtime flip
+    # (epic vms-5eb, R2/vms-af7a; R3 DIRECTORY/SET DEFAULT co-lands the same
+    # link) -- a distinct static module linking the ods2 sublibrary directly,
+    # NOT part of LIBVMSFS$SHR.EXE's strict symbol vector. Host build only; the
+    # netbsd-vax cross keeps its POSIX path.
+    target_link_libraries(vmsdcl PRIVATE pthread vms vmsfs vmsfs_volume vmsprocess vmslnm vmsqueue)
 
     # Try to find readline for better interactive experience (skip for static
     # builds; and for the netbsd-vax cross, which has no readline in its sysroot

@@ -13,7 +13,9 @@
  *       byte-identical to reading the same bytes via a POSIX file.
  *   (2) a write-open + $PUT + $CLOSE writes the working copy back as a NEW
  *       ODS-2 version whose content (read via the genuine reader) equals what
- *       was written; the prior version survives.
+ *       was written; the prior version survives. Two $OPEN(write)->modify->
+ *       $CLOSE cycles over an EXISTING file mint ;2 then ;3 (multiversion
+ *       dir_insert, vms-9794/#613): each byte-exact, all versions coexist.
  *   (3) a read-only $OPEN + $CLOSE leaves the volume UNCHANGED -- no spurious
  *       new version.
  *   (4) ods2_sysdisk_owns_path() routes SYS$DISK ("/vms/...") vs non-SYS$DISK.
@@ -314,12 +316,11 @@ int main(void)
      * whose content, read via the genuine reader, equals exactly what $PUT
      * wrote.
      *
-     * NOTE the substrate boundary (see the handoff / design §0): minting a NEW
-     * VERSION of an EXISTING name (e.g. TESTSEQ.DAT;2) is blocked today because
-     * the ODS-2 writer's dir_insert rejects a duplicate NAME regardless of
-     * version (ods2.h:1326). That multi-version-directory support is a WRITER
-     * substrate gap, not a working-copy-model defect -- checked below as an
-     * HONEST failure (no silent corruption of ;1). */
+     * Minting a NEW VERSION of an EXISTING name (TESTSEQ.DAT;2/;3) is exercised
+     * below in section (2b): the ODS-2 writer's dir_insert now merges multiple
+     * {version,FID} value entries into one directory record (vms-9794 / #613),
+     * so a dirty writable $CLOSE mints the next-higher version while every prior
+     * version survives -- real VMS file-versioning semantics. */
     const char *NEWFILE_VMS = SYSDISK_MOUNT "/SYS0/SYSCOMMON/SYSEXE/NEWFILE.DAT";
     static const char *const NEWRECS[] = {
         "FRESHLY WRITTEN LINE ALPHA",
@@ -375,35 +376,85 @@ int main(void)
               "checked-in ODS-2 file content == what RMS $PUT wrote");
     }
 
-    /* ---- (2b) known substrate gap: a new VERSION of an EXISTING name.
-     * $CREATE over TESTSEQ.DAT tries to mint ;2 at checkin; the writer's
-     * dir_insert refuses the duplicate name, so $CLOSE surfaces an HONEST
-     * failure (INV-6) and -- crucially -- the original ;1 is NOT corrupted. */
+    /* ---- (2b) NEW VERSION OF AN EXISTING NAME -- the multiversion checkin.
+     * The done-condition for vms-af7a: $OPEN(write) -> modify -> $CLOSE of an
+     * EXISTING file mints the NEXT-HIGHER ODS-2 version while every prior
+     * version survives (real VMS file-versioning). The writer's dir_insert now
+     * merges multiple {version,FID} value entries per directory record
+     * (vms-9794 / #613), so this path -- previously a substrate gap -- works.
+     *
+     * $OPEN(write) checks the HIGHEST existing version out into the memfd
+     * (byte-for-byte); $PUT appends a record (rms_seq_put seeks to EOF), so the
+     * working copy is now (prior content + the appended record) -- dirty; the
+     * checkin lists the directory, finds the current max version, and mints
+     * max+1 via ods2_sysdisk_create_file(".../TESTSEQ.DAT;N+1"). Doing it twice
+     * mints ;2 then ;3, each based on the then-latest content. Every version is
+     * read back byte-exact through the genuine ODS-2 reader and all coexist. */
+    const char *TESTSEQ_APPEND[] = {
+        "APPENDED LINE FOR VERSION TWO",
+        "APPENDED LINE FOR VERSION THREE",
+    };
+    /* Expected byte content of each minted version, built incrementally: ;2 is
+     * SEQ_CONTENT + append[0]; ;3 is (;2 content) + append[1]. */
+    char expect_v2[2048], expect_v3[2048];
     {
+        int n = snprintf(expect_v2, sizeof(expect_v2), "%s%s\n",
+                         SEQ_CONTENT, TESTSEQ_APPEND[0]);
+        (void)n;
+        snprintf(expect_v3, sizeof(expect_v3), "%s%s\n",
+                 expect_v2, TESTSEQ_APPEND[1]);
+    }
+
+    for (int pass = 0; pass < 2; pass++) {
+        const unsigned want_ver = (unsigned)pass + 2;   /* ;2 then ;3 */
         struct FAB fab = cc$rms_fab;
         char spec[] = SEQ_VMS_PATH;
         fab.fab$l_fna = spec;
         fab.fab$b_fns = (uint8_t)strlen(spec);
-        fab.fab$b_fac = FAB$M_PUT | FAB$M_GET;
+        fab.fab$b_fac = FAB$M_PUT | FAB$M_GET;   /* write-open of existing file */
         fab.fab$b_rfm = FAB$C_STMLF;
         fab.fab$b_org = FAB$C_SEQ;
 
-        uint32_t st = sys$create(&fab, 0, 0);
-        CHECK(st == RMS$_NORMAL, "$CREATE over existing name opens a working copy");
+        uint32_t st = sys$open(&fab, 0, 0);
+        CHECK(st == RMS$_NORMAL, "$OPEN(write) existing SYS$DISK file (checkout latest)");
+        CHECK(fab._sysdisk_workcopy == 1 && fab._sysdisk_writable == 1,
+              "write-open is marked a checkin candidate");
+
         struct RAB rab = cc$rms_rab;
         rab.rab$l_fab = &fab;
-        sys$connect(&rab, 0, 0);
-        rab.rab$l_rbf = (char *)"WOULD-BE VERSION 2";
-        rab.rab$w_rsz = (uint16_t)strlen("WOULD-BE VERSION 2");
-        sys$put(&rab, 0, 0);
+        st = sys$connect(&rab, 0, 0);
+        CHECK(st == RMS$_NORMAL, "$CONNECT the write working copy");
+        rab.rab$l_rbf = (char *)TESTSEQ_APPEND[pass];
+        rab.rab$w_rsz = (uint16_t)strlen(TESTSEQ_APPEND[pass]);
+        st = sys$put(&rab, 0, 0);
+        CHECK(st == RMS$_NORMAL, "$PUT appends a record (working copy now dirty)");
         sys$disconnect(&rab, 0, 0);
+
         st = sys$close(&fab, 0, 0);
-        printf("  (existing-name checkin close st=0x%X -- new-version substrate gap)\n", st);
-        CHECK(!(st & 1u),
-              "new-version-of-existing checkin fails HONESTLY (writer gap, no LARP)");
+        CHECK(st == RMS$_NORMAL, "$CLOSE mints the next ODS-2 version (checkin)");
+
+        /* The just-minted version reads back byte-exact via the genuine reader. */
+        char verpath[256];
+        snprintf(verpath, sizeof(verpath), "%s;%u", SEQ_VMS_PATH, want_ver);
+        const char *expect = (want_ver == 2) ? expect_v2 : expect_v3;
+        size_t explen = strlen(expect);
+        uint8_t rback[2048];
+        size_t rlen = 0;
+        int vst = ods2_sysdisk_read_file(verpath, rback, sizeof(rback), &rlen);
+        CHECK(vst == SS$_NORMAL, "genuine reader reads the newly minted version");
+        CHECK(rlen == explen && memcmp(rback, expect, explen) == 0,
+              want_ver == 2
+                  ? "minted TESTSEQ.DAT;2 is byte-exact (prior content + append)"
+                  : "minted TESTSEQ.DAT;3 is byte-exact (;2 content + append)");
     }
-    /* No corruption: TESTSEQ.DAT;1 is still byte-intact and still the only
-     * version, whatever the failed checkin attempted. */
+
+    /* All three versions coexist in the directory (proves the multiversion
+     * dir_insert path -- one directory record now carries ;1, ;2, ;3). */
+    CHECK(count_versions() == 3,
+          "TESTSEQ.DAT has 3 coexisting versions after two write-open checkins");
+
+    /* Every version is still independently readable and byte-exact -- the older
+     * versions were NOT overwritten by the newer checkins. */
     {
         uint8_t v1[2048];
         size_t v1len = 0;
@@ -412,9 +463,15 @@ int main(void)
         CHECK(vst == SS$_NORMAL &&
               v1len == sizeof(SEQ_CONTENT) - 1 &&
               memcmp(v1, SEQ_CONTENT, v1len) == 0,
-              "original TESTSEQ.DAT;1 survives a failed checkin, byte-intact");
+              "original TESTSEQ.DAT;1 still byte-intact alongside ;2 and ;3");
+
+        uint8_t v2[2048];
+        size_t v2len = 0;
+        vst = ods2_sysdisk_read_file(SEQ_VMS_PATH ";2", v2, sizeof(v2), &v2len);
+        CHECK(vst == SS$_NORMAL && v2len == strlen(expect_v2) &&
+              memcmp(v2, expect_v2, v2len) == 0,
+              "TESTSEQ.DAT;2 still byte-exact after ;3 was minted");
     }
-    CHECK(count_versions() == 1, "failed checkin minted NO version of TESTSEQ.DAT");
 
     /* ---- (3) read-only $OPEN + $CLOSE leaves the volume unchanged ---- */
     {

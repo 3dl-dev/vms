@@ -191,17 +191,17 @@ foundations, and the first flip rung's builder primitive is landed:
     $GET of the same bytes, a $CREATE+$PUT+$CLOSE checked back in as a real
     ODS-2 file whose content == what $PUT wrote, read-only close mints no
     version, owns_path routing, and the fail-honest no-volume path.
+  - **WRITER MULTI-VERSION dir_insert — LANDED (vms-9794 / #613).** The checkin
+    mints a new version by `ods2_sysdisk_create_file(".../NAME.EXT;N+1")`;
+    `ods2_wvolume_dir_insert()` now **merges multiple `{version,FID}` value
+    entries into one directory record** (descending version order), so a dirty
+    writable `$CLOSE` of an EXISTING file mints the next-higher version while
+    every prior version survives — real VMS file-versioning. Proven by
+    `vmsrms_sysdisk_workcopy` §(2b): two `$OPEN(write)→$PUT→$CLOSE` cycles over
+    `TESTSEQ.DAT` mint `;2` then `;3`, each byte-exact via the genuine reader,
+    all three versions coexisting. (Was the prior "writer substrate gap"; the
+    checkin was already wired to it and the gap closing needed only the writer.)
   - **STILL RED / DEFERRED (this increment does NOT boot alone — expected):**
-    - **⚠ WRITER SUBSTRATE GAP — new version of an EXISTING name.** The checkin
-      mints a new version by `ods2_sysdisk_create_file(".../NAME.EXT;N+1")`, but
-      `ods2_wvolume_dir_insert()` **rejects a duplicate NAME regardless of
-      version** (ods2.h:1326 — one version per directory record). So checkin of
-      a BRAND-NEW filename works (mints ;1), but re-writing an existing file to
-      a higher version fails HONESTLY (no corruption of the prior version — the
-      test guards this). Real ODS-2 directory records carry multiple `{version,
-      FID}` entries per name; teaching the WRITER that is a **substrate rung**
-      (owner: the ods2 writer, alongside vms-02e), a prerequisite for general
-      RMS `$CREATE`-over-existing / `$PUT` new-version semantics.
     - **Sidecar metadata (.rms_meta / .rms_idx) for SYS$DISK is disabled** (it
       cannot live on the ODS-2 volume as a POSIX companion, and would be an
       on-disk POSIX fact — Rule 8). RMS keeps the caller/default record format;
@@ -224,19 +224,27 @@ foundations, and the first flip rung's builder primitive is landed:
       ods2_sysdisk symbols into LIBVMSFS$SHR.EXE's vector (mk_vmsfs_shr.sh +
       `.vec`) or introduces a new shareable and `--use`s it from
       mk_vmsrms_shr.sh. Debug ctest (which links the CMake `vmsfs_volume`
-      target directly) is unaffected and stays GREEN.
+      target directly) is unaffected and stays GREEN. **Same for DCL:**
+      `dcl_filespec.c` now imports `ods2_sysdisk_owns_path`/`_list_dir`/
+      `_resolve_file`, so the DCL native-link (`DCL.EXE` via `LIBVMSFS$SHR`)
+      reds the same way and is fixed by the same co-land vector wiring — no new
+      DCL cross-image *export* (no new TU/symbol enumeration), only imports.
 
-FIXTURE-SWITCH SCOPE (observed 2026-08-16): the full Debug ctest suite (minus
-`qemu`) is GREEN with this branch — no Debug RMS/DCL test does an RMS
-`$OPEN`/`$CREATE` on a `/vms` path (RMS unit tests use `/tmp`; DCL COPY/TYPE/
-DIRECTORY are fopen/opendir-based, unaffected by the RMS reroute). The reroute
-therefore reddens the **boot-to-login QEMU path + the install/e2e suites**
-(`qemu-full-boot`, `install_boot_e2e`, `product_install_e2e`, `mount_e2e`,
-`release_install_e2e`, ... — skipped/excluded in the plain Debug run), which
-DO drive RMS against SYS$SYSTEM files on `/vms`: with the reroute active and
-no `OVMX_SYSDISK_DEV` exported / no ODS-2 default-flip, every SYS$SYSTEM RMS
-open fails `SS$_DEVNOTMOUNT` (fail-honest). Those go green only when R6-build's
-default flip + PID-1 `OVMX_SYSDISK_DEV` export + R6-mount co-land with this.
+FIXTURE-SWITCH SCOPE (re-verified 2026-08-16 after the vms-af7a versioning +
+DCL reroute): the full Debug ctest suite minus `qemu` (**199 tests, 100%
+GREEN**) is unaffected — no Debug RMS/DCL test does an RMS `$OPEN`/`$CREATE`
+or a `dcl_resolve_filespec` single-file resolution on a live `/vms` SYS$DISK
+path (RMS unit tests use `/tmp`; DCL COPY/TYPE/DIRECTORY are fopen/opendir-based
+in these tests; the install/e2e ctest entries `mount_e2e`/`product_install_e2e`/
+`install_boot_e2e`/`release_install_e2e` **SKIP** without `OVMX_QEMU_FULL_E2E=1`).
+Both reroutes therefore redden only the **full QEMU boot-to-login + full-e2e
+path** (`qemu-full-boot`, and the above e2e suites run with
+`OVMX_QEMU_FULL_E2E=1`), which DO drive RMS `$OPEN` **and** DCL single-file
+resolution against SYS$SYSTEM files on `/vms`: with the reroutes active and no
+`OVMX_SYSDISK_DEV` exported / no ODS-2 default-flip, every such access fails
+`SS$_DEVNOTMOUNT` (fail-honest — never a POSIX fallback, never a wrong answer).
+Those go green only when R6-build's default flip + PID-1 `OVMX_SYSDISK_DEV`
+export + R6-mount co-land with this. This is the atomic-group contract.
 
 Remaining atomic group (still must land together, boot-gated): R6-kernel,
 R6-mount, ~~R2-RMS record-I/O working-copy model~~ **(LANDED above; the
@@ -252,7 +260,7 @@ Current-state anchors:
 | R6-mount | `src/ovmx_init/ovmx_init.c` `bare_metal_init` (stop `mount(...,"vmsfs")` at `ovmx_boot_linux.c:158`; rely on `register_system_volume()` volume handle — which must open O_RDWR for the write half); `tools/vms_mount_helper.c` |
 | **read adapter** | **DONE — `src/vmsfs/ods2_sysdisk.c` (`ods2_sysdisk_read_file`/`_resolve_file`/`_list_dir`/`_owns_path`); test `ods2_sysdisk`. R2/R3/R5 reroute their read/list sites onto this.** |
 | **cross-process registration** | **DONE — `sysdisk_handle()` in `src/vmsfs/ods2_sysdisk.c` lazily registers SYS$DISK per-process from `OVMX_SYSDISK_DEV`; all adapter entry points route through it; test `ods2_sysdisk_ensure`. R6-mount must have PID 1 EXPORT `OVMX_SYSDISK_DEV=<boot dev>` so children inherit the channel.** |
-| R2-RMS | **WORKING-COPY MODEL DONE (branch `work/vms-af7a-rms-working-copy`, vms-af7a).** `src/vmsrms/rms_core.c`: `rms_sysdisk_checkout`/`_checkin` + SYS$DISK branches in `rms_impl_open`/`_create`/`_close`; `resolve_filename` drops `rms_validate_path_boundary` and `resolve_for_open` skips `rms_resolve_version` for SYS$DISK; `vmsfs_volume` linked into vmsrms. Test `vmsrms_sysdisk_workcopy`. **REMAINING R2:** (a) WRITER multi-version `dir_insert` (substrate gap — blocks new-version-of-existing checkin); (b) FH2-resident record-format metadata (sidecars disabled → indexed SYS$DISK unsupported); (c) `$SEARCH` `opendir`/`readdir` (`rms_search.c:173/:186`) → `ods2_sysdisk_list_dir` (NOT yet rerouted); (d) DLT/TMD erase adapter. |
+| R2-RMS | **WORKING-COPY MODEL DONE (branch `work/vms-af7a-rms-working-copy`, vms-af7a).** `src/vmsrms/rms_core.c`: `rms_sysdisk_checkout`/`_checkin` + SYS$DISK branches in `rms_impl_open`/`_create`/`_close`; `resolve_filename` drops `rms_validate_path_boundary` and `resolve_for_open` skips `rms_resolve_version` for SYS$DISK; `vmsfs_volume` linked into vmsrms. Test `vmsrms_sysdisk_workcopy` (incl. `;2`/`;3` multiversion checkin). **REMAINING R2:** ~~(a) WRITER multi-version `dir_insert`~~ **(DONE — vms-9794/#613)**; (b) FH2-resident record-format metadata (sidecars disabled → indexed SYS$DISK unsupported); (c) `$SEARCH` `opendir`/`readdir` (`rms_search.c:173/:186`) → `ods2_sysdisk_list_dir` (NOT yet rerouted); (d) DLT/TMD erase adapter. **DCL generic single-file resolution (TYPE/COPY/DELETE): `src/vmsdcl/dcl_filespec.c` `dcl_resolve_filespec` → `sysdisk_resolve_filespec` routes SYS$DISK version/existence through `ods2_sysdisk_list_dir`/`_resolve_file` (owns_path-guarded, Linux-only), skipping the POSIX `/vms` scans — the scope R3-DCL (#615) left to vms-af7a.** |
 | R3-DCL | `src/vmsdcl/dcl_cmd_file.c` `dir_collect` (:280)/`cmd_directory` (:648, `vmsfs_to_linux_path` at :686/:690) → `ods2_sysdisk_list_dir`; `src/vmsdcl/dcl_cmd_set.c` `cmd_set_default` (:97) → `ods2_sysdisk_resolve_file`/`_list_dir` to validate the dir |
 | R5-MOUNT | `src/vmsdcl/dcl_cmd_misc.c` `cmd_mount` (:2211) — validate home via `ods2_home_parse` + SCB via `ods2_scb_parse`, reject non-ODS-2 |
 | **Wr (write half)** | NEW long pole. (a) `vmsfs_volume` O_RDWR handle + a `ods2_sysdisk_write`/`_append`/`_mkdir` twin driving `ods2_wvolume_*` over the LIVE mounted device; (b) reroute the two guaranteed non-RMS boot writers — `opcom_kmsg.c:258` OPERATOR.LOG append, `ovmx_accounting.c:158`/`:43` LASTLOGIN write+mkdir — plus RMS `rms_impl_create`/`$PUT`, off `vmsfs_to_linux_path`+`fopen`/`open(O_CREAT)` onto it |

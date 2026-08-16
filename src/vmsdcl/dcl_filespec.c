@@ -23,6 +23,23 @@
 #include "vmsfs/version.h"
 #include "ovmx_layout.h"
 
+/*
+ * SYS$DISK ODS-2 runtime flip (epic vms-5eb, R2 / vms-af7a). Linux-runtime
+ * only: generic single-file filespec resolution for a SYS$DISK ("/vms/...")
+ * path routes version/existence resolution through the genuine-ODS-2 adapter
+ * (ods2_sysdisk_*), NOT the POSIX opendir/stat scans below -- once the flip
+ * lands the /vms POSIX tree is retired for SYS$DISK, so those scans are wrong.
+ * The netbsd-vax cross (no adapter linked) keeps its POSIX path unchanged.
+ */
+#if defined(__linux__)
+#  define OVMX_DCL_SYSDISK 1
+#  include <strings.h>         /* strncasecmp */
+#  include "vmsfs/sysdisk.h"   /* ods2_sysdisk_owns_path/_resolve_file/_list_dir */
+#  include "vmsfs/ods2.h"      /* ods2_fid_t, ods2_dir_cb */
+#else
+#  define OVMX_DCL_SYSDISK 0
+#endif
+
 /* Forward declaration of logical name translation */
 extern int dcl_translate_logical(const char *name, char *result, size_t result_size);
 
@@ -178,6 +195,92 @@ static int resolve_case(char *linux_path, size_t path_size)
     return -1;
 }
 
+#if OVMX_DCL_SYSDISK
+/*
+ * SYS$DISK generic-resolution reroute (epic vms-5eb, R2 / vms-af7a).
+ *
+ * The POSIX resolve_version_suffix()/resolve_case() above scan the /vms tree
+ * with opendir()/stat(). For a SYS$DISK file that tree is retired once the
+ * ODS-2 flip lands, so those scans are wrong; version + existence resolution
+ * must go through the genuine-ODS-2 adapter instead. This is the single-file
+ * resolution path (TYPE/COPY/DELETE) that R3-DCL (DIRECTORY/SET DEFAULT,
+ * dcl_cmd_file.c/dcl_cmd_set.c) deliberately left to vms-af7a.
+ *
+ * Semantics mirror resolve_version_suffix() over ODS-2:
+ *   - an explicit ";N" (N>0) names that exact version -- left untouched;
+ *   - a bare name, bare ";", or ";0" resolve to the HIGHEST existing version,
+ *     appended as the concrete ";N" the adapter reports;
+ *   - a name with no version on the volume is left unversioned (a create
+ *     target, e.g. COPY's destination).
+ * FAIL-HONEST (Rule 9 / INV-6): with no ODS-2 SYS$DISK reachable the adapter
+ * finds nothing and the path is left as the caller gave it -- the honest
+ * SS$_DEVNOTMOUNT surfaces when the (co-landing) consumer opens via the
+ * adapter, NEVER a POSIX /vms fallback here.
+ */
+struct dcl_sysdisk_verctx {
+    const char *name;   /* version-stripped filename to match */
+    uint16_t    maxv;   /* highest version seen for that name */
+};
+static int dcl_sysdisk_ver_cb(const char *name, unsigned name_len,
+                              uint16_t version, const ods2_fid_t *fid, void *ctx)
+{
+    (void)fid;
+    struct dcl_sysdisk_verctx *c = (struct dcl_sysdisk_verctx *)ctx;
+    if (name_len == strlen(c->name) &&
+        strncasecmp(name, c->name, name_len) == 0 && version > c->maxv)
+        c->maxv = version;
+    return 0;   /* keep scanning */
+}
+
+static int sysdisk_resolve_filespec(char *linux_path, size_t path_size)
+{
+    char *last_slash = strrchr(linux_path, '/');
+    char *filename = last_slash ? last_slash + 1 : linux_path;
+
+    /* An explicit ";N" (N>0) is a specific version -- leave the path untouched
+     * (the adapter/open reports NOSUCHFILE if it does not exist). A bare ";"
+     * or ";0" means "highest" -- strip it so we can re-append the concrete N. */
+    char *semi = strrchr(filename, ';');
+    if (semi) {
+        const char *p = semi + 1;
+        if (*p != '\0') {
+            int alldigits = 1;
+            for (const char *q = p; *q; q++)
+                if (!isdigit((unsigned char)*q)) { alldigits = 0; break; }
+            if (!alldigits) return 0;         /* not a version marker */
+            if (strtol(p, NULL, 10) != 0) return 0;  /* explicit ;N (N>0) */
+        }
+        *semi = '\0';                          /* bare ; or ;0 -> resolve below */
+    }
+
+    if (!last_slash) return 0;                 /* no directory to resolve against */
+
+    /* Parent directory path + bare filename. */
+    char dir_part[VMSFS_MAX_PATH];
+    size_t dir_len = (size_t)(filename - linux_path - 1);
+    if (dir_len == 0 || dir_len >= sizeof(dir_part)) return 0;
+    memcpy(dir_part, linux_path, dir_len);
+    dir_part[dir_len] = '\0';
+    if (filename[0] == '\0') return 0;
+
+    /* Highest existing version of this name on the genuine ODS-2 volume. */
+    struct dcl_sysdisk_verctx vc = { filename, 0 };
+    int lst = ods2_sysdisk_list_dir(dir_part, dcl_sysdisk_ver_cb, &vc);
+    if (lst != SS$_NORMAL || vc.maxv == 0)
+        return 0;                              /* not found / no volume -> as-is */
+
+    /* Append the concrete ";N" and confirm it resolves over the adapter. */
+    size_t flen = strlen(filename);
+    size_t avail = path_size - (size_t)(filename - linux_path);
+    int n = snprintf(filename + flen, avail - flen, ";%u", (unsigned)vc.maxv);
+    if (n < 0 || (size_t)n >= avail - flen) { filename[flen] = '\0'; return 0; }
+
+    if (ods2_sysdisk_resolve_file(linux_path, NULL, NULL, NULL, 0) != SS$_NORMAL)
+        filename[flen] = '\0';                 /* not resolvable -> unversioned */
+    return 0;
+}
+#endif /* OVMX_DCL_SYSDISK */
+
 /*
  * Resolve a VMS filespec to a Linux path.
  *
@@ -200,6 +303,13 @@ int dcl_resolve_filespec(struct dcl_context *ctx, const char *spec,
         linux_path[0] = '\0';
         return -1;
     }
+
+#if OVMX_DCL_SYSDISK
+    /* SYS$DISK ODS-2 flip (epic vms-5eb, R2 / vms-af7a): resolve version +
+     * existence through the ODS-2 adapter, NOT the POSIX /vms scans below. */
+    if (ods2_sysdisk_owns_path(linux_path))
+        return sysdisk_resolve_filespec(linux_path, path_size);
+#endif
 
     /* Resolve the VMS version marker against what's actually on disk. */
     resolve_version_suffix(linux_path, path_size);

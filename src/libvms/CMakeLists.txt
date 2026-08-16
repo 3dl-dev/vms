@@ -142,7 +142,17 @@ else()
     target_include_directories(vms PRIVATE ${CMAKE_SOURCE_DIR}/src/vmsscs/include)
     # vmssys provides vms_kif_* (the /dev/vms ioctl wrappers used by sys_lock.c
     # to reach the kernel lock manager).
-    target_link_libraries(vms PUBLIC vmsprocess vmsfs vmssys pthread m)
+    #
+    # vmsfs_volume: the SYS$DISK ODS-2 write adapter (ods2_sysdisk_owns_path/
+    # _append_file/_create_file/_mkdir). vms-d75 (epic vms-5eb, the ODS-2 runtime
+    # flip) reroutes the per-boot non-RMS SYS$DISK writers -- OPERATOR.LOG in
+    # sys_operator.c and LASTLOGIN + the accounting dir in rtl/ovmx_accounting.c
+    # -- onto it (guarded by ods2_sysdisk_owns_path(), Linux-only). It is a
+    # distinct static module (links the ods2 reader/writer sublibrary), NOT a TU
+    # of the LIBVMSFS$SHR.EXE strict symbol-vector shareable. ATOMIC GROUP member:
+    # the reroute is fail-honest (SS$_DEVNOTMOUNT with no ODS-2 volume) and lands
+    # with the default flip. See src/vmsfs/sysdisk.h + docs/design-ods2-runtime-flip.md.
+    target_link_libraries(vms PUBLIC vmsprocess vmsfs vmsfs_volume vmssys pthread m)
     set_target_properties(vms PROPERTIES
         PREFIX ""
         OUTPUT_NAME "LIBVMS\$SHR"

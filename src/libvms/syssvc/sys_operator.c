@@ -84,6 +84,10 @@
 /* Operator log file path */
 #include "ovmx_layout.h"
 #include "vmsfs/filespec.h"
+#include "ssdef.h"
+#if defined(__linux__)
+#include "vmsfs/sysdisk.h"   /* ODS-2 runtime flip (vms-d75): SYS$DISK write adapter */
+#endif
 #define OPERATOR_LOG_PATH VMS_OPERATOR_LOG
 
 /*
@@ -215,17 +219,48 @@ static void get_current_username(char *buf, size_t bufsz)
 }
 
 /*
- * Open the operator log file, trying primary then fallback path.
- * Returns FILE* opened in append mode, or NULL on failure.
+ * Commit one already-formatted OPCOM record to OPERATOR.LOG.
+ *
+ * OPERATOR.LOG lives on SYS$DISK, so on Linux its append is rerouted onto the
+ * serialized genuine-ODS-2 write adapter (vms-d75, epic vms-5eb, the ODS-2
+ * runtime flip) -- never a plain fopen on the /vms POSIX passthrough. The
+ * adapter is already single-writer-serialized by the #614 flock broker, so no
+ * locking is added here.
+ *
+ * FAIL-HONEST (Rule 9 / INV-6): when SYS$DISK owns the path but no genuine
+ * ODS-2 volume is registered, the honest error is surfaced -- NEVER a silent
+ * POSIX fallback (the exact LARP this rung exists to kill). A path that is
+ * genuinely NOT on SYS$DISK (the /tmp fallback, or the VAX POSIX substrate
+ * where the adapter is compiled out) keeps the honest raw-Linux append the
+ * caller owns. The append is create-on-absent so the fopen("a") "create the
+ * log if it does not exist yet" semantics are preserved (an OPCOM record on a
+ * fresh boot must still land).
+ *
+ * Returns a VMS status code (odd == success).
  */
-static FILE *open_operator_log(void)
+static uint32_t write_operator_log(const char *rec, size_t reclen)
 {
     char oplog_linux[1024];
     vmsfs_to_linux_path(OPERATOR_LOG_PATH, oplog_linux, sizeof(oplog_linux));
+
+#if defined(__linux__)
+    if (ods2_sysdisk_owns_path(oplog_linux)) {
+        int st = ods2_sysdisk_append_file(oplog_linux, rec, reclen);
+        if (st == SS$_NOSUCHFILE)
+            st = ods2_sysdisk_create_file(oplog_linux, rec, reclen);
+        return $VMS_STATUS_SUCCESS(st) ? SS$_NORMAL : (uint32_t)st;
+    }
+#endif
+
     FILE *f = fopen(oplog_linux, "a");
     if (!f)
         f = fopen(OPERATOR_LOG_FALLBACK, "a");
-    return f;
+    if (!f)
+        return SS$_FILACCERR;
+    fwrite(rec, 1, reclen, f);
+    fflush(f);
+    fclose(f);
+    return SS$_NORMAL;
 }
 
 /*
@@ -305,25 +340,7 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
     static volatile unsigned int req_count = 0;
     unsigned int this_req = __atomic_add_fetch(&req_count, 1, __ATOMIC_SEQ_CST);
 
-    /* Open log */
-    FILE *log = open_operator_log();
-    if (!log)
-        return SS$_FILACCERR;
-
-    /*
-     * Write the OPCOM header, oracle-exact (see format_opcom_banner()
-     * above): the boxed banner line, then "Request N, from user U on N" --
-     * the numbered-request body-line-2 variant, preserved rather than
-     * replaced with the bare "Message from user U on N" form, because
-     * every sys$sndopr call in this tree already assigns a request number
-     * (this same req_count counter, unchanged by this fix).
-     */
-    char banner[64];
-    format_opcom_banner(banner, sizeof(banner), timestamp);
-    fprintf(log, "%s\n", banner);
-    fprintf(log, "Request %u, from user %s on %s\n", this_req, username, node);
-
-    /* Write message body (strip trailing whitespace) */
+    /* Strip trailing whitespace from the message body. */
     size_t msglen = strlen(msgtext);
     while (msglen > 0 &&
            (msgtext[msglen - 1] == '\n' || msgtext[msglen - 1] == '\r' ||
@@ -331,11 +348,27 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
         msglen--;
     msgtext[msglen] = '\0';
 
-    fprintf(log, "%s\n\n", msgtext);
-    fflush(log);
-    fclose(log);
+    /*
+     * Build the whole OPCOM record into one buffer, then commit it in a single
+     * append. The reroute onto the ODS-2 write adapter (write_operator_log)
+     * needs the finished record bytes rather than a stream of fprintf()s: the
+     * two header lines (oracle-exact -- the boxed banner, then the numbered
+     * "Request N, from user U on N" body line preserved from format_opcom_
+     * banner()) plus the message body and its trailing blank line.
+     */
+    char banner[64];
+    format_opcom_banner(banner, sizeof(banner), timestamp);
 
-    return SS$_NORMAL;
+    char record[1024];
+    int rlen = snprintf(record, sizeof(record),
+                        "%s\nRequest %u, from user %s on %s\n%s\n\n",
+                        banner, this_req, username, node, msgtext);
+    if (rlen < 0)
+        return SS$_FILACCERR;
+    size_t reclen = (rlen < (int)sizeof(record)) ? (size_t)rlen
+                                                 : sizeof(record) - 1;
+
+    return write_operator_log(record, reclen);
 }
 
 /*
@@ -474,8 +507,7 @@ uint32_t sys$brkthruw(uint32_t efn,
          * target terminal (which the OLD line here wrote into the user
          * field by mistake).
          */
-        FILE *log = open_operator_log();
-        if (log) {
+        {
             char btimestamp[32];
             char buser[VMS_USERNAME_SIZE];
             char bnode[OVMX_IDENTITY_MAXLEN];
@@ -486,10 +518,19 @@ uint32_t sys$brkthruw(uint32_t efn,
             ovmx_node_name(bnode, sizeof(bnode));
             format_opcom_banner(bbanner, sizeof(bbanner), btimestamp);
 
-            fprintf(log, "%s\n", bbanner);
-            fprintf(log, "Message from user %s on %s\n", buser, bnode);
-            fprintf(log, "%s\n\n", msgtext);
-            fclose(log);
+            char brecord[1024];
+            int brlen = snprintf(brecord, sizeof(brecord),
+                                 "%s\nMessage from user %s on %s\n%s\n\n",
+                                 bbanner, buser, bnode, msgtext);
+            if (brlen > 0) {
+                size_t brreclen = (brlen < (int)sizeof(brecord))
+                                      ? (size_t)brlen
+                                      : sizeof(brecord) - 1;
+                /* Same SYS$DISK reroute as sys$sndopr: genuine-ODS-2 append,
+                 * never a silent POSIX fallback (Rule 9 / INV-6). Best-effort
+                 * (the broadcast itself already went to the terminal). */
+                (void)write_operator_log(brecord, brreclen);
+            }
         }
     } else {
         status = SS$_NOSUCHDEV;

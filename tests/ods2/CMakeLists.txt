@@ -270,6 +270,30 @@ set_tests_properties(ods2_write_broker PROPERTIES
     TIMEOUT 60
 )
 
+# vms-d75 (epic vms-5eb, ATOMIC GROUP -- RED-BY-DESIGN until the default flip):
+# the per-boot NON-RMS SYS$DISK writers rerouted onto the serialized ODS-2 write
+# adapter. Drives the ACTUAL rerouted library entry points -- sys$sndopr
+# (OPERATOR.LOG append, src/libvms/syssvc/sys_operator.c) and
+# ovmx_accounting_record_login (LASTLOGIN write + accounting-dir mkdir,
+# src/libvms/rtl/ovmx_accounting.c) -- against a LIVE registered genuine-ODS-2
+# SYS$DISK, verifying each write landed as a real ODS-2 record read back through
+# an INDEPENDENT ods2_bdev reader (never POSIX), that OPCOM appends accumulate,
+# and the fail-honest edge (no volume -> SS$_DEVNOTMOUNT / -1, nothing written to
+# the POSIX passthrough -- INV-6). Links ONLY `vms` (LIBVMS$SHR.EXE): the lazy
+# OVMX_SYSDISK_DEV registration, the rerouted writers, and the ods2 reader/writer
+# it verifies with all resolve to the shareable's single copy of the volume table,
+# so there is no duplicate-static-state hazard.
+add_executable(test_ods2_nonrms_writers test_ods2_nonrms_writers.c)
+target_include_directories(test_ods2_nonrms_writers PRIVATE
+    ${VMS_FS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
+target_link_libraries(test_ods2_nonrms_writers PRIVATE vms pthread m)
+
+add_test(NAME ods2_nonrms_writers COMMAND test_ods2_nonrms_writers)
+set_tests_properties(ods2_nonrms_writers PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)
+
 # vms-88d (R6-build unblocker for the ODS-2 flip vms-5eb): the WRITER's
 # long-filename IDENT-area encoding. The real distro tree contains names
 # like "LIBVMSPROCESS$SHR.EXE;1" (23 chars) that the writer's old 20-char-only

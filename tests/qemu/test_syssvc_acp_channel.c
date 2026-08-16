@@ -38,6 +38,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "vms/pcb.h"
 
 #define EXIT_SKIP 77
 
@@ -94,6 +95,18 @@ int main(void)
 
     printf("=== test_syssvc_acp_channel: executive ACP file channel to a "
            "mounted ODS-2 volume (vms-149, epic vms-208) ===\n");
+
+    /*
+     * A per-process PCB is a prerequisite for every sys$ channel call (the
+     * channel table $ASSIGN/$DASSGN operate on lives in it); a gcc/musl test
+     * binary must make its own -- see test_syssvc_bg_echo.c /
+     * test_syssvc_mbx_crossproc.c. Without it vms_pcb_get() is NULL and
+     * sys$assign returns SS$_BADPARAM before it ever reaches the ACP path.
+     */
+    if (!vms_pcb_init(0xFFFFFFFFFFFFFFFFULL)) {
+        printf("  FAIL: vms_pcb_init() failed\n");
+        return 1;
+    }
 
     if (!executive_present()) {
         printf("=== test_syssvc_acp_channel: 0 passed, 0 failed "

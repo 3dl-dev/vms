@@ -282,6 +282,28 @@
  *        the major / minor of a resolved exec_dev_t. Linux: MAJOR() / MINOR().
  *        NetBSD: major() / minor() (real -- these are portable dev_t accessors).
  *
+ *   int exec_blockdev_read_block(unsigned int major, unsigned int minor,
+ *                                uint64_t lbn, void *buf, size_t buflen)
+ *        READ exactly one 512-byte logical block at `lbn` from the block device
+ *        named by (major, minor) into `buf` (at least ODS2_BLOCK_SIZE == 512
+ *        bytes). Returns 0 on success, nonzero on any failure (device not
+ *        openable, short/failed transfer, buffer too small). This is the read
+ *        twin the Files-11 ODS-2 ACP $MOUNT needs (vms-127): the executive
+ *        already resolves a VMS disk unit to its backing (major,minor) via the
+ *        lookup+major+minor ops above, and MOUNT must read the home block (LBN
+ *        1) + SCB off that device to VALIDATE the volume is genuine ODS-2 before
+ *        recording it in the executive-global mounted table -- so the read lives
+ *        in the executive, not in a process (CLAUDE.md Rule 11 / INV-6). MAY
+ *        SLEEP (opens the device + reads through the host buffer cache); call it
+ *        only from process context with no exec_lock held. Linux: bdev opened
+ *        read-only, non-exclusively (version-guarded across the bdev_open_by_dev
+ *        / bdev_file_open_by_dev API split) + a SYNCHRONOUS bio (submit_bio_wait)
+ *        rather than the buffer cache, which assumes a mounted-filesystem block
+ *        size the ACP does not have when it reads a raw disk pre-mount. NetBSD:
+ *        the documented contract-only twin until devtab joins the module's SRCS
+ *        (following the exec_blockdev_lookup precedent -- type-checked, never
+ *        run, and names its real source in the backend comment).
+ *
  * 9. Store/load memory barriers  (vms-d61; called ONLY from a facility that
  *    publishes a lock-free snapshot to userspace -- today the logical-name
  *    arena's seqlock in vms_lnm.c). These are the ordering primitives a

@@ -71,16 +71,37 @@ KCMD_SHARD="ovmx.shard=$SHARD_INDEX ovmx.shards=$SHARD_TOTAL"
 # disclosed, not silently assumed fixed -- see the comment there.
 ASSERT_TRANSCRIPT=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 
-# Two blank virtio disks (vms-3e8). The executive enumerates the node's virtio
-# block devices into DK units (DKA0: from vda, DKA100: from vdb) at module init
-# -- test_kmod_disk asserts that against a real vms.ko, so the guest must
-# actually HAVE two virtio disks. Raw sparse files, never mounted or formatted:
-# the test reads only the unit->backing-device mapping, so their content does
-# not matter. Cleaned up with the transcript below (ONE trap, all temp files --
-# see the trap note further down).
+# Two virtio disks (vms-3e8). The executive enumerates the node's virtio block
+# devices into DK units (DKA0: from vda, DKA100: from vdb) at module init --
+# test_kmod_disk asserts that mapping against a real vms.ko, so the guest must
+# actually HAVE two virtio disks. Cleaned up with the transcript below (ONE trap,
+# all temp files -- see the trap note further down).
+#
+#   vda (DKA0:)   -- a GENUINE real-VAX ODS-2 volume: the SYSTEM DISK. The
+#                    Files-11 ACP $MOUNT VALIDATES a real Files-11 structure (home
+#                    block + SCB) against a real /dev/vms and records it
+#                    executive-global; $ASSIGN of DKA0:/SYS$SYSDEVICE then reaches
+#                    it (sys_assign.c routes the boot unit to the ACP). The
+#                    fixture /ods2_real.img is staged by tests/qemu/Dockerfile
+#                    (COPY tests/ods2/real_vax_ods2.dsk /ods2_real.img); it is
+#                    copied to a writable temp so QEMU's raw block open never
+#                    touches the staged image. (test_syssvc_acp_{channel,mount}.)
+#   vdb (DKA100:) -- BLANK 16M: the non-ODS-2 media the ACP $MOUNT must REJECT
+#                    fail-honest (its home block is all-zero, so ods2_home_parse
+#                    fails the "DECFILE11B  " format check), AND the scratch unit
+#                    test_syssvc_initialize.c formats. test_kmod_disk reads only
+#                    the unit->backing-device mapping, not content or size.
 OVMX_DISK0=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 OVMX_DISK1=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
-truncate -s 16M "$OVMX_DISK0" "$OVMX_DISK1"
+truncate -s 16M "$OVMX_DISK1"
+OVMX_ODS2_SRC=/ods2_real.img
+if [ -f "$OVMX_ODS2_SRC" ]; then
+    cp "$OVMX_ODS2_SRC" "$OVMX_DISK0"
+else
+    echo "run_tests.sh: FATAL: ODS-2 fixture $OVMX_ODS2_SRC missing -- the Files-11" >&2
+    echo "                ACP mount test (vms-127) needs a genuine ODS-2 volume on DKA0: (vda)" >&2
+    exit 2
+fi
 trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1"' EXIT
 
 # One virtio-net NIC (vms-9d2). Exactly as the two virtio disks above give the

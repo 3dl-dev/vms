@@ -986,6 +986,47 @@ out:
 }
 
 /*
+ * vms_devtab_disk_backing - INTERNAL (non-ioctl) resolve of a DISK unit to its
+ * backing (major, minor), for the Files-11 ODS-2 ACP $MOUNT (vms-127). The exact
+ * lookup vms_ioctl_disk_resolve() does, minus the copyin/copyout: the caller is
+ * IN the executive (vmsfs_acp.c reading the home block/SCB to validate a volume),
+ * not a process handing structs across /dev/vms. `devnam` must already be a
+ * canonical "DDCU:" name (the ACP normalizes before calling). Returns SS$_NORMAL
+ * and fills the major_out and minor_out outputs on a disk unit; SS$_NOSUCHDEV if
+ * there is no such unit; SS$_IVDEVNAM if the unit exists but is not a disk (only disk units
+ * have a backing block device -- the same category verdict the ioctl gives).
+ */
+uint32_t vms_devtab_disk_backing(const char *devnam,
+                                 uint32_t *major_out, uint32_t *minor_out)
+{
+    struct vms_device *dev;
+
+    if (!devnam)
+        return SS__NOSUCHDEV;
+
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        exec_unlock(&vms_device_list_lock);
+        return SS__NOSUCHDEV;
+    }
+    if (dev->devclass != DC__DISK) {
+        exec_unlock(&vms_device_list_lock);
+        return SS__IVDEVNAM;
+    }
+
+    exec_lock(&dev->lock);
+    if (major_out)
+        *major_out = dev->backing_major;
+    if (minor_out)
+        *minor_out = dev->backing_minor;
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+
+    return SS__NORMAL;
+}
+
+/*
  * Resolve a DISK unit to the Linux block device the executive enumerated it
  * from (vms-3e8). Read-only: it reports the vda/vdb/... name and the dev_t the
  * unit was created against at module init, so a process that must open the

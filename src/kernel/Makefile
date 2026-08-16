@@ -67,9 +67,25 @@ vms-y := vms_module.o \
          ../kernel-core/vms_mbx.o \
          ../kernel-core/vms_proctab.o \
          ../kernel-core/vmsfs_acp.o \
+         ../vmsfs/ods2/ods2_reader.o \
          vms_p0.o \
          vms_p1.o \
          vms_bg.o
+
+# The GENUINE ODS-2 codec, kernel-resident, gives the Files-11 ACP $MOUNT
+# (kernel-core/vmsfs_acp.c, vms-127) its home-block/SCB validation. Only
+# ods2_reader.o is needed: it carries the PURE parse/validate surface
+# (ods2_home_parse / ods2_fh2_parse / ods2_fh2_map_walk / ods2_scb_parse, plus
+# the inline checksum in vmsfs/ods2.h), with no block-I/O seam -- vmsfs_acp.c
+# does its own block reads through the exec_blockdev_read_block shim, so neither
+# ods2_block_*.o nor the writer is linked here. -DOVMX_ODS2_KERNEL selects the
+# codec's kernel string/type vocabulary (ods2_kcompat.h). This is the OUT-OF-TREE
+# / QEMU-test module; the in-tree bootable overlay (distro/kernel/drivers-ovmx/
+# vms) deliberately does NOT carry the codec yet (flatten-safe-include follow-up),
+# so vmsfs_acp.c gates its codec use on OVMX_ODS2_KERNEL and $MOUNT fail-honestly
+# refuses there. This build MUST mirror into the bootable Kbuild ONLY the object
+# set the bootable module can resolve -- ods2_reader.o is intentionally absent
+# from distro/kernel/drivers-ovmx/vms/Kbuild.
 
 # -I$(src)/../kernel-core: the substrate-agnostic executive core + the shim
 #   contracts (exec_kbackend.h, exec_list.h, exec_hash.h). The relocated core
@@ -77,7 +93,12 @@ vms-y := vms_module.o \
 #   header, still here in src/kernel) resolved via -I$(src). The Linux backend
 #   impls (exec_kbackend_linux.h, exec_list_linux.h, exec_hash_linux.h) live here
 #   in src/kernel and are selected by OVMX_KBACKEND_LINUX below.
-ccflags-y := -I$(src) -I$(src)/../kernel-core -DOVMX_KBACKEND_LINUX
+# -I$(src)/../vmsfs/include + -I$(src)/../vmsfs/ods2: the codec's public header
+#   ("vmsfs/ods2.h") and its private vocabulary header (ods2_kcompat.h), for the
+#   ods2_reader.o above and vmsfs_acp.c's codec use (vms-127).
+ccflags-y := -I$(src) -I$(src)/../kernel-core \
+             -I$(src)/../vmsfs/include -I$(src)/../vmsfs/ods2 \
+             -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL
 
 # Default target: build against running kernel
 KDIR ?= /lib/modules/$(shell uname -r)/build

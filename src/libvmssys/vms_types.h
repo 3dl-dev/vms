@@ -186,6 +186,18 @@ struct vms_stat {
     uint64_t st_ctime_nsec;
     uint32_t __unused[2];
 };
+/*
+ * __alpha__: struct vms_stat is intentionally NOT yet defined here.
+ * Alpha's stat ABI is irregular and must be derived from the alpha
+ * <asm/stat.h> oracle, not guessed -- and there is a trap: __NR_fstat
+ * (91) fills Alpha's OLD stat layout while fstatat64 (455, mapped to
+ * __NR_newfstatat) fills a stat64.  The x86_64/aarch64 code assumes one
+ * struct services both calls; Alpha needs the wrappers pointed at the
+ * stat64 pair (fstat64/fstatat64) with vms_stat laid out as Alpha
+ * stat64.  Tracked as remaining port work in rd vms-054.  Leaving this
+ * undefined makes any Alpha code path that dereferences vms_stat fail
+ * loudly rather than silently reading a wrong layout.
+ */
 #endif
 
 /* stat mode bits */
@@ -315,6 +327,11 @@ struct vms_sigaction {
     unsigned long sa_flags;
     vms_sigset_t sa_mask;
 };
+/*
+ * __alpha__: struct vms_sigaction not yet defined -- Alpha's kernel
+ * sigaction layout (sa_handler/sa_mask/sa_flags order) must come from
+ * the alpha <asm/signal.h> oracle.  Remaining port work, rd vms-054.
+ */
 #endif
 
 /* ================================================================

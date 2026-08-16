@@ -160,6 +160,83 @@
 #define __NR_io_uring_enter     426
 #define __NR_io_uring_register  427
 
+#elif defined(__alpha__)
+
+/*
+ * Alpha uses the OSF/1-derived syscall table -- numbers differ entirely
+ * from x86_64/aarch64.  All values below are verified against the
+ * alpha-linux-gnu <asm/unistd.h> in the cross toolchain (not transcribed
+ * from memory).  Two Alpha-specific mappings worth calling out:
+ *   - Alpha has no getpid(); getxpid() (nr 20) returns the pid in v0, so
+ *     aliasing __NR_getpid to it is correct for our wrapper.
+ *   - Alpha has no newfstatat(); it exposes fstatat64() (nr 455).  That
+ *     call fills a stat64-shaped buffer -- see the __alpha__ struct
+ *     vms_stat layout note in vms_types.h before trusting fstat results.
+ */
+#define __NR_read               3
+#define __NR_write              4
+#define __NR_open               45
+#define __NR_close              6
+#define __NR_fstat              91
+#define __NR_lseek              19
+#define __NR_mmap               71
+#define __NR_mprotect           74
+#define __NR_munmap             73
+#define __NR_brk                17
+#define __NR_rt_sigaction       352
+#define __NR_rt_sigprocmask     353
+#define __NR_rt_sigreturn       351
+#define __NR_ioctl              54
+#define __NR_pipe2              488
+#define __NR_dup3               487
+#define __NR_nanosleep          340
+#define __NR_getpid             20     /* getxpid: pid in v0 */
+#define __NR_socket             97
+#define __NR_connect            98
+#define __NR_accept4            502
+#define __NR_sendto             133
+#define __NR_recvfrom           125
+#define __NR_bind               104
+#define __NR_listen             106
+#define __NR_clone              312
+#define __NR_fork               2
+#define __NR_execve             59
+#define __NR_exit               1
+#define __NR_wait4              365
+#define __NR_kill               37
+#define __NR_uname              339
+#define __NR_fcntl              92
+#define __NR_flock              131
+#define __NR_fsync              95
+#define __NR_ftruncate          130
+#define __NR_getcwd             367
+#define __NR_chdir              12
+#define __NR_mkdirat            451
+#define __NR_unlinkat           456
+#define __NR_renameat2          510
+#define __NR_openat             450
+#define __NR_newfstatat         455    /* fstatat64 -- stat64 buffer, see vms_types.h */
+#define __NR_getdents64         377
+#define __NR_set_tid_address    411
+#define __NR_set_robust_list    466
+#define __NR_futex              394
+#define __NR_setsid             147
+#define __NR_getuid             24
+#define __NR_getgid             47
+#define __NR_gettid             378
+#define __NR_clock_gettime      420
+#define __NR_clock_nanosleep    422
+#define __NR_timer_create       414
+#define __NR_timer_settime      415
+#define __NR_timer_delete       418
+#define __NR_exit_group         405
+#define __NR_madvise            75
+#define __NR_arch_prctl         (-1)   /* x86_64 only */
+#define __NR_sysinfo            318
+#define __NR_io_uring_setup     535
+#define __NR_io_uring_enter     536
+#define __NR_io_uring_register  537
+
 #else
 #error "Unsupported architecture for libvmssys"
 #endif

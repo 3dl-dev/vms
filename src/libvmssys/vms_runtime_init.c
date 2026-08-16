@@ -153,6 +153,46 @@ static void setup_tls(void)
     /* .tbss is zero (tls_block is BSS) */
 
     __asm__ volatile("msr tpidr_el0, %0" : : "r"(tp));
+
+#elif defined(__alpha__)
+    /*
+     * Alpha TLS variant I, TCB size 16 bytes, same shape as AArch64
+     * above (TP + 16 + offset) -- but pinned empirically, not from a
+     * spec: no toolchain header publishes the tprel-to-TP relationship,
+     * and the installed glibc's own __tls_init_tp (dl-tls_init_tp.o)
+     * never calls wruniq at all (Linux/Alpha relies on the kernel
+     * having already set "unique" for the initial thread, which our
+     * freestanding CRT -- correctly -- cannot assume), so there was no
+     * reference implementation to read the constant off. Instead: wrote
+     * a probe that filled a scratch buffer with zero except a single
+     * 4242 marker at a known byte offset, swept wruniq() across
+     * candidate thread-pointer values, and asked a real thread-local
+     * variable (in a separate TU, so the offset couldn't be constant-
+     * folded away) which value it read back. Exactly one offset
+     * matched, giving tprel_offset(x) = 16 for every candidate tried
+     * (confirmed under qemu-alpha; see rd vms-40b for the probe). The
+     * thread pointer is read/written via the unprivileged PALcode calls
+     * PAL_rduniq (0x9e) / PAL_wruniq (0x9f) -- arch/alpha/include/uapi/
+     * asm/pal.h in the Linux 6.6.52 source -- which GCC's alpha backend
+     * already emits directly for __thread variable access (confirmed by
+     * inspecting its -S output), so no syscall is involved.
+     */
+    unsigned long tp = (unsigned long)&tls_block[0];
+    tp = (tp + 15) & ~15UL;
+
+    /* Zero the TCB area (first 16 bytes) */
+    vms_memset((void *)tp, 0, 16);
+
+    /* Copy .tdata template to TP + 16 */
+    if (tls_filesz > 0 && tls_addr) {
+        vms_memcpy((void *)(tp + 16), (void *)tls_addr, tls_filesz);
+    }
+    /* .tbss is zero (tls_block is BSS) */
+
+    {
+        register unsigned long __r16 __asm__("$16") = tp;
+        __asm__ volatile("call_pal 0x9f" : "+r"(__r16) : : "memory");
+    }
 #endif
     (void)tls_block;
 }

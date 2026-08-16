@@ -49,10 +49,12 @@ source (OSF/1 console + timer callbacks); that is its own effort, not this one.
 The freestanding layer is ported and committed: `src/libvmssys/arch/alpha/`
 (`crt0.S`, `syscall.S`, `sigreturn.S`), the `__alpha__` syscall table in
 `vms_syscall.h` (numbers derived from the toolchain's `<asm/unistd.h>`), and a
-CMake arch branch. All of `libvmssys`'s C sources cross-compile for alpha.
-Remaining for a full port: `struct vms_stat` / `vms_sigaction` Alpha layouts in
-`vms_types.h` (deliberately left undefined so they fail loud, not silently
-wrong), and an `imgact` EM_ALPHA arch header.
+CMake arch branch. All of `libvmssys`'s C sources cross-compile for alpha. `struct vms_stat` /
+`struct vms_sigaction` Alpha layouts landed in `vms_types.h` (rung A1, rd
+vms-40b) -- verified field-for-field against the alpha-linux-gnu kernel
+headers under qemu-alpha, with `vms_sys_fstat`/`vms_sys_rt_sigaction` wired
+to the correct stat64/5-arg-rt_sigaction ABI. Remaining for a full port: an
+`imgact` EM_ALPHA arch header.
 
 ## The executive on Alpha: vms.ko + /dev/vms (rd vms-89dd, rung A4)
 

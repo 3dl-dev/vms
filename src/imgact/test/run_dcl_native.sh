@@ -99,33 +99,12 @@ for t in $TUS; do
 done
 $CC $CFLAGS $DEFS $INCS -c -o "$WORK/vmsqueue.o" "$SRC/vmsqueue/vmsqueue.c"
 DCLOBJS="$DCLOBJS $WORK/vmsqueue.o"
-NDCL=$(echo $DCLOBJS | wc -w)
-echo "-- $NDCL DCL (vmsdcl+vmsqueue) objects compiled VMS-native-clean --"
+NOBJ=$(echo $DCLOBJS | wc -w)
+echo "-- $NOBJ DCL objects compiled VMS-native-clean --"
 # 24 vmsdcl TUs + vmsqueue = 25 (dcl_disk_logical added by vms-f83;
 # dcl_help added by vms-01b — the hierarchical HELP engine;
 # dcl_mbx added by vms-786 — mailbox-backed SYS$INPUT/SYS$OUTPUT).
-[ "$NDCL" -eq 25 ] || { echo "FAIL: expected 25 DCL objects, got $NDCL"; exit 1; }
-
-# ODS-2 SYS$DISK adapter closure (epic vms-5eb, the ODS-2 runtime flip): the
-# six objects mk_dcl.sh now links DIRECTLY into DCL.EXE as INTERNAL objects so
-# DCL's DIRECTORY / SET DEFAULT / generic-filespec reroutes (rungs R3/vms-496 +
-# R2/vms-af7a) can call ods2_sysdisk_* + ods2_fh2_parse. Compiled here too so
-# the reloc/TLS diagnostic below reflects the real DCL.EXE object set. They are
-# a DISTINCT module NOT part of LIBVMSFS$SHR's strict symbol vector; DCL.EXE (an
-# executable) absorbs them as intra-image CALL26 targets. Present-but-uncalled
-# until the reroute branches land — additive. See docs/design-ods2-runtime-flip.md.
-ODS2_ADAPTER="vmsfs/vmsfs_volume vmsfs/ods2_sysdisk vmsfs/ods2/ods2_reader \
-vmsfs/ods2/ods2_writer vmsfs/ods2/ods2_bdev vmsfs/ods2/ods2_path"
-for o in $ODS2_ADAPTER; do
-    b=$(basename "$o")
-    $CC $CFLAGS $DEFS -I"$VMSFS_INC" -I"$LIBVMS_INC" -c -o "$WORK/$b.o" "$SRC/$o.c"
-    DCLOBJS="$DCLOBJS $WORK/$b.o"
-done
-NOBJ=$(echo $DCLOBJS | wc -w)
-echo "-- $NOBJ total DCL.EXE objects (25 DCL + 6 ODS-2 adapter) --"
-# 25 DCL (vmsdcl+vmsqueue) + 6 ODS-2 SYS$DISK adapter (vmsfs_volume, ods2_sysdisk,
-# ods2_reader/writer/bdev/path) = 31. Mirrors mk_dcl.sh's object set exactly.
-[ "$NOBJ" -eq 31 ] || { echo "FAIL: expected 31 DCL.EXE objects, got $NOBJ"; exit 1; }
+[ "$NOBJ" -eq 25 ] || { echo "FAIL: expected 25 DCL objects, got $NOBJ"; exit 1; }
 
 echo
 echo "== DCL.EXE reloc/TLS profile (informative) =="

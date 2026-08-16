@@ -66,6 +66,7 @@ vms-y := vms_module.o \
          ../kernel-core/vms_lock.o \
          ../kernel-core/vms_mbx.o \
          ../kernel-core/vms_proctab.o \
+         ../kernel-core/vmsfs_acp.o \
          vms_p0.o \
          vms_p1.o \
          vms_bg.o

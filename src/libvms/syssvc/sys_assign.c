@@ -77,6 +77,18 @@ struct vms_device_result {
      * running against a raw /dev/tty the executive never heard about.
      */
     int  is_terminal;
+    /*
+     * vms-149: nonzero if this name identifies the Files-11 (ODS-2) ACP boot
+     * unit -- DKA0:/SYS$SYSDEVICE, the system disk. Like a mailbox or BG
+     * channel, an ACP file channel is executive-resident (bound to a mounted
+     * ODS-2 volume in src/kernel-core/vmsfs_acp.c): $ASSIGN obtains an
+     * EXECUTIVE channel through vms_kif_acp_assign(), the channel's fd stays
+     * -1, and the later ACP-QIO rungs route file $QIOs through the executive
+     * (PCB_CHAN_FILE) rather than the /vms POSIX passthrough. Fail-honest: if
+     * the volume is not mounted (or /dev/vms is absent) $ASSIGN refuses with
+     * SS$_NOSUCHDEV -- no per-process fallback (CLAUDE.md Rule 9 / INV-6).
+     */
+    int  is_file;
 };
 
 /*
@@ -98,6 +110,7 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
     result->mbx_unit = 0;
     result->is_terminal = 0;
     result->is_bg = 0;
+    result->is_file = 0;
 
     if (!name || !name[0])
         return 0;
@@ -173,6 +186,21 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
     }
 
     /* Default disk - use process default directory from PCB */
+    /*
+     * vms-149: the Files-11 (ODS-2) ACP boot unit -- the system disk, named
+     * DKA0: (device-native default, epic vms-47d) or by the SYS$SYSDEVICE
+     * spelling. $ASSIGN of it must obtain an EXECUTIVE channel bound to the
+     * mounted ODS-2 volume, so it is recognized here and handled by the
+     * is_file path in sys$assign (vms_kif_acp_assign), not opened as a POSIX
+     * path. `upper` has had its trailing ':' stripped above. This is distinct
+     * from SYS$DISK below, which is the process default-directory passthrough.
+     */
+    if (strcmp(upper, "DKA0") == 0 || strcmp(upper, "_DKA0") == 0 ||
+        strcmp(upper, "SYS$SYSDEVICE") == 0) {
+        result->is_file = 1;
+        return 1;
+    }
+
     if (strcmp(upper, "SYS$DISK") == 0) {
         struct vms_pcb *pcb = vms_pcb_get();
         if (pcb && pcb->default_dir[0]) {
@@ -438,6 +466,40 @@ uint32_t sys$assign(const struct dsc$descriptor_s *devnam,
             return SS$_NORMAL;
         }
 
+        if (devres.is_file) {
+            /*
+             * vms-149: $ASSIGN of the Files-11 (ODS-2) ACP boot unit
+             * (DKA0:/SYS$SYSDEVICE) -- obtain an EXECUTIVE channel bound to the
+             * mounted ODS-2 volume (src/kernel-core/vmsfs_acp.c), the analogue
+             * of the mailbox/BG paths above. The volume is the executive's;
+             * there is no local fd to open, so this channel's fd stays -1 and
+             * the later ACP-QIO rungs route file $QIOs through the executive
+             * (PCB_CHAN_FILE). If the unit is not a mounted volume, or the
+             * executive is absent, vms_kif_acp_assign returns SS$_NOSUCHDEV and
+             * $ASSIGN refuses -- no per-process passthrough fallback (INV-6).
+             */
+            uint32_t file_exec_chan = 0;
+            uint32_t st = vms_kif_acp_assign(name, &file_exec_chan);
+            if (!(st & 1)) {
+                pthread_mutex_unlock(&pcb->chan_lock);
+                return st;
+            }
+
+            pcb->channels[slot].fd = -1;
+            pcb->channels[slot].in_use = 1;
+            pcb->channels[slot].ref_count = 1;
+            pcb->channels[slot].flags = PCB_CHAN_FILE;
+            pcb->channels[slot].mbx_peer_fd = -1;
+            pcb->channels[slot].exec_chan = file_exec_chan;
+            strncpy(pcb->channels[slot].devnam, name,
+                    sizeof(pcb->channels[slot].devnam) - 1);
+            pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';
+            *chan = (uint16_t)slot;
+
+            pthread_mutex_unlock(&pcb->chan_lock);
+            return SS$_NORMAL;
+        }
+
         if (devres.is_terminal) {
             /*
              * vms-1c57: THE CHANNEL IS THE IDENTITY. A terminal is a row in
@@ -636,6 +698,24 @@ int vms$$chan_is_mailbox(uint16_t chan) {
     if (!pcb) return 0;
     if (!pcb->channels[chan].in_use) return 0;
     return (pcb->channels[chan].flags & PCB_CHAN_MAILBOX) ? 1 : 0;
+}
+
+/*
+ * vms$$chan_is_file - Internal helper: is this channel a Files-11 (ODS-2) ACP
+ * file-class channel (vms-149, epic vms-208)? A file channel is bound to a
+ * mounted ODS-2 volume in the executive (src/kernel-core/vmsfs_acp.c); its fd
+ * is always -1, and the later ACP-QIO rungs route file $QIOs through the
+ * executive over exec_chan rather than the fd path. $ASSIGN of the boot unit
+ * (DKA0:/SYS$SYSDEVICE) sets PCB_CHAN_FILE; this is the reader that proves the
+ * channel is the executive's, not a Linux fd.
+ */
+int vms$$chan_is_file(uint16_t chan) {
+    if (chan == 0 || chan >= PCB_MAX_CHANNELS) return 0;
+
+    struct vms_pcb *pcb = vms_pcb_get();
+    if (!pcb) return 0;
+    if (!pcb->channels[chan].in_use) return 0;
+    return (pcb->channels[chan].flags & PCB_CHAN_FILE) ? 1 : 0;
 }
 
 /*

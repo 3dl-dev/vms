@@ -2076,3 +2076,77 @@ uint32_t vms_kif_bg_getsockopt(uint32_t exec_chan, int level, int optname,
         *out_optval = args.optval;
     return args.status;
 }
+
+/* ================================================================
+ * Files-11 (ODS-2) ACP -- channel + mount front-end (vms-149, epic vms-208)
+ *
+ * See vms_kif.h for the residency story and the no-fallback (INV-6) contract.
+ * ================================================================ */
+
+/*
+ * acp_bind_ok - bind (open + register) and report whether /dev/vms is
+ * reachable, so an ACP call fails honestly with SS$_NOSUCHDEV rather than let a
+ * bad-fd ioctl fall through kif_call()'s generic errno mapping (CLAUDE.md
+ * Rule 9 / INV-6). Same technique as mbx_bind_ok().
+ */
+static int acp_bind_ok(void)
+{
+    kif_bind();
+    return vms_dev_fd >= 0;
+}
+
+uint32_t vms_kif_acp_mount(const char *devnam)
+{
+    struct vms_acp_mount_args args;
+
+    if (!devnam)
+        return SS$_BADPARAM;
+    if (!acp_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, sizeof(args.devnam) - 1);
+    args.devnam[sizeof(args.devnam) - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_ACP_MOUNT, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_acp_dmount(const char *devnam)
+{
+    struct vms_acp_dmount_args args;
+
+    if (!devnam)
+        return SS$_BADPARAM;
+    if (!acp_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, sizeof(args.devnam) - 1);
+    args.devnam[sizeof(args.devnam) - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_ACP_DMOUNT, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_acp_assign(const char *devnam, uint32_t *exec_chan)
+{
+    struct vms_acp_assign_args args;
+
+    if (!devnam || !exec_chan)
+        return SS$_BADPARAM;
+    if (!acp_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, sizeof(args.devnam) - 1);
+    args.devnam[sizeof(args.devnam) - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_ACP_ASSIGN, &args);
+
+    if (args.status & 1)
+        *exec_chan = args.chan;
+    return args.status;
+}

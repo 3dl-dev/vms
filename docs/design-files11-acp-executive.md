@@ -218,7 +218,14 @@ caller's context. Option A is the only one that reproduces that.
   `exec_chan` to disk-device channels, alongside the existing mailbox/BG classes.
   `$ASSIGN "DKA0:"` (or the discovered SYS$SYSDEVICE) returns a channel bound to
   the mounted ODS-2 volume in the executive — not a Linux fd.
-- **New ioctl band `0x60–0x6F`** on `/dev/vms`, e.g. `VMS_IOCTL_ACP_ACCESS`,
+- **New ioctl band** on `/dev/vms`. *Reconciled at build time (vms-149): the
+  nominal "0x60–0x6F" named here was written before the low half of that range
+  was taken — 0x60–0x62 are the logical-name ioctls, 0x63–0x65 the P0/P1 region
+  mappers, 0x66–0x67 the ENTER_IMAGE/IMAGE_RUNDOWN pair — so the ACP occupies
+  the still-free tail **`0x68–0x6F`** (mailboxes start at 0x70). vms-149 lands
+  the channel front-end at 0x68 (`VMS_IOCTL_ACP_MOUNT`), 0x69
+  (`_ACP_DMOUNT`) and 0x6A (`_ACP_ASSIGN`); the ACP-QIO file operations below
+  take 0x6B–0x6F in the later rungs.* e.g. `VMS_IOCTL_ACP_ACCESS`,
   `_ACP_CREATE`, `_ACP_DEACCESS`, `_ACP_MODIFY`, `_ACP_DELETE`, `_ACP_CONTROL`,
   `_ACP_READVB`, `_ACP_WRITEVB`, plus `_ACP_MOUNT`/`_ACP_DMOUNT`. Each carries a
   flat, fixed-width, `_Static_assert`-sized `struct vms_acp_*_args` (the executive

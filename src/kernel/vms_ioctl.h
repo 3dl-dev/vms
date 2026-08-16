@@ -1725,4 +1725,14 @@ _Static_assert(VMS_IOCTL_IMAGE_RUNDOWN == 0xC0085667u,
  * ================================================================ */
 #include "vms_bg.h"
 
+/* ================================================================
+ * Files-11 (ODS-2) ACP -- channel + mount ioctls (vms-149, epic vms-208).
+ *
+ * The executive-global mounted-volume table, the file-class channel and the
+ * ACP ioctl band (0x68-0x6F) live in vms_acp.h, included here for the same
+ * reason as vms_lnm.h / vms_mbx.h / vms_bg.h above: one frozen definition for
+ * every consumer, kernel and userspace, on either architecture.
+ * ================================================================ */
+#include "vms_acp.h"
+
 #endif /* _VMS_IOCTL_H */

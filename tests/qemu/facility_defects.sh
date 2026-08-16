@@ -491,6 +491,7 @@ hiber-ast-not-delivered
 dcl-sysinput-mbx-not-read
 mmk-drive-command-not-sent
 mmk-build-image-not-activated
+acp-assign-unmounted-fabricates-channel
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -4753,6 +4754,39 @@ EOF
                       ;;
         esac;;
 
+    acp-assign-unmounted-fabricates-channel)
+        case "$_f" in
+        facility)     echo "Files-11 (ODS-2) ACP file-class channel + mount table (VMS_IOCTL_ACP_MOUNT/DMOUNT/ASSIGN, executive-resident mounted-volume table), vms-149, epic vms-208";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_channel";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_acp_assign() stops FAILING when the named unit is not a mounted volume: the SS\$_NOSUCHDEV on the not-found (!vol) path becomes SS\$_NORMAL, so \$ASSIGN of the boot unit hands back a 'success' (and libvmssys then stores a PCB_CHAN_FILE slot) for a volume the executive does not have. That is the exact INV-6 facade the ACP exists to refuse -- a channel to nothing reported as an executive channel to something. The MOUNTED-volume \$ASSIGN is untouched (vol is found, so the mutated line never runs), so only the two fail-honest assertions -- \$ASSIGN before any \$MOUNT and \$ASSIGN after \$DISMOUNT -- can tell the difference, which is precisely the 'report success while sharing nothing' shape CLAUDE.md Rule 9 exists to catch.";;
+        require_fail) cat <<'EOF'
+$ASSIGN of an UNMOUNTED boot unit returns SS$_NOSUCHDEV -- fail-honest, no fabricated channel
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+after $DISMOUNT, $ASSIGN of the boot unit is SS$_NOSUCHDEV again (volume gone)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME ONE ROOT, OBSERVED A SECOND TIME. Both reddened assertions are an
+$ASSIGN of the boot unit while NO volume is mounted for it -- the first before
+any $MOUNT, the second after the $DISMOUNT has removed the volume again. With
+the not-found path returning SS$_NORMAL instead of SS$_NOSUCHDEV, each of those
+two $ASSIGNs now reports success (over a channel bound to a volume the executive
+does not have), so each assertion that requires SS$_NOSUCHDEV goes red. Nothing
+between them is affected: the MOUNTED $ASSIGN, the file-class check, both
+$DASSGNs, the idempotent $MOUNT and the $DISMOUNT all find (or create) a real
+volume and stay green, because the mutated line is reached ONLY when the volume
+lookup fails. One term flipped on one line explains exactly these two reds and
+no others.
+EOF
+                      ;;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -6108,6 +6142,21 @@ apply_edit() {
         # substitution the text no longer matches, so a second apply is a no-op
         # (the selftest requires).
         sed -i 's|    int fc_status = dcl_activate_image(ctx, image_spec, linux_path, argv);|    int fc_status = SS$_NORMAL; (void)ctx; (void)image_spec; (void)linux_path; (void)argv; /* NEGCTL mmk-build-image-not-activated */|' "$_file";;
+
+    acp-assign-unmounted-fabricates-channel)
+        # RANGE-ANCHORED to vms_ioctl_acp_assign's own body: the comment-bearing
+        # `args.status = SS__NOSUCHDEV;    /* not a mounted volume -- fail honest
+        # */` occurs exactly once, on the !vol (not-a-mounted-volume) path. The
+        # file's OTHER SS__NOSUCHDEV is in vms_ioctl_acp_dmount, a different
+        # handler, so the /^long vms_ioctl_acp_assign/,/^}$/ range confines the
+        # substitution to $ASSIGN's own fail-honest answer. Flipping it to
+        # SS__NORMAL makes $ASSIGN report success for a unit that is not a
+        # mounted volume -- the INV-6 facade (a channel to a volume the executive
+        # does not have). MOUNTED $ASSIGN is untouched (vol is found, this line
+        # never runs), so only the two fail-honest assertions redden. The
+        # replacement does not contain the original comment text, so a second
+        # apply matches nothing (the no-op selftest requires).
+        sed -i '/^long vms_ioctl_acp_assign/,/^}$/ s|args.status = SS__NOSUCHDEV;    /\* not a mounted volume -- fail honest \*/|args.status = SS__NORMAL; /* NEGCTL acp-assign-unmounted-fabricates-channel (was SS__NOSUCHDEV) */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

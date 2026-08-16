@@ -27,6 +27,7 @@ vms-y := vms_module.o \
          vms_lnm.o \
          vms_lock.o \
          vms_mbx.o \
-         vms_proctab.o
+         vms_proctab.o \
+         vmsfs_acp.o
 
 ccflags-y := -I $(src) -DOVMX_KBACKEND_LINUX

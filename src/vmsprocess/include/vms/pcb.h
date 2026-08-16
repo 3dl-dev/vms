@@ -89,6 +89,15 @@
  * the fd path. exec_chan holds the executive's BG channel number.
  */
 #define PCB_CHAN_BG          0x0004  /* Channel is an INET BGn: device */
+/*
+ * Channel is a Files-11 (ODS-2) ACP file-class channel (vms-149, epic
+ * vms-208). Like a mailbox or BG channel its fd stays -1 -- the channel is
+ * bound to a mounted ODS-2 volume in the executive (src/kernel-core/vmsfs_acp.c)
+ * reached through exec_chan, not a userspace fd -- and the later ACP-QIO rungs
+ * route file $QIOs through the executive rather than the fd path. $ASSIGN of the
+ * boot unit (DKA0:/SYS$SYSDEVICE) sets this; $DASSGN releases the exec_chan.
+ */
+#define PCB_CHAN_FILE        0x0008  /* Channel is an ODS-2 ACP file/disk device */
 
 struct pcb_channel {
     int         fd;         /* Linux file descriptor (-1 = unused) */

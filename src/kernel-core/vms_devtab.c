@@ -816,6 +816,18 @@ long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg)
         device_release_channel(ch);
         exec_free(ch);
         args.status = SS__NORMAL;
+    } else if (vms_acp_dassgn(proc, args.chan) == 0) {
+        /*
+         * vms-149: `chan` named a Files-11 ACP file-class channel, not a
+         * device one -- a file channel is bound to a mounted ODS-2 volume in
+         * the executive-global mount table (src/kernel-core/vmsfs_acp.c), not a
+         * struct vms_device row, so it is in proc->file_channels rather than
+         * proc->channels, but $DASSGN is still the ONE ioctl that releases any
+         * channel kind, drawing from the same channel-number space
+         * (proc->next_chan). vms_acp_dassgn() has already dropped the volume's
+         * assigned-channel reference.
+         */
+        args.status = SS__NORMAL;
     } else if (vms_mbx_dassgn(proc, args.chan) == 0) {
         /*
          * vms-d44: `chan` named a mailbox channel, not a device one --

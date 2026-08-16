@@ -604,6 +604,18 @@ struct vms_proc {
     struct list_head    bg_channels;    /* struct vms_bg_chan */
 
     /*
+     * Files-11 (ODS-2) ACP file-class channels (vms-149, epic vms-208). A
+     * separate list, same chan_lock and next_chan counter as the device,
+     * mailbox and BG channels above -- a file channel is bound to a mounted
+     * ODS-2 volume in the executive-global mount table, not a struct vms_device
+     * row, so it gets its own per-process binding (struct vms_acp_chan,
+     * src/kernel-core/vmsfs_acp.c). vms_ioctl_dassgn() (vms_devtab.c) falls back
+     * to vms_acp_dassgn() for it; released at process teardown by
+     * vms_acp_release_all().
+     */
+    struct list_head    file_channels;  /* struct vms_acp_chan */
+
+    /*
      * The job's terminal (vms-d0b). "" until VMS_IOCTL_SETTERM records
      * one, which the executive only does from a channel this process
      * already holds to a device of class DC$_TERM -- so the name is a
@@ -986,6 +998,26 @@ long vms_ioctl_mbx_set_wrtattn(struct vms_proc *proc, unsigned long arg);
 int vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan);
 /* Give back every mailbox channel a dying process holds. */
 void vms_mbx_release_all(struct vms_proc *proc);
+
+/*
+ * Files-11 (ODS-2) ACP -- channel + mount front-end (vms-149, epic vms-208;
+ * src/kernel-core/vmsfs_acp.c). $MOUNT/$DISMOUNT of an ODS-2 volume into the
+ * executive-global mounted table, and $ASSIGN of a file-class channel bound to
+ * a mounted volume. See vms_acp.h and docs/design-files11-acp-executive.md §4.
+ */
+long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_dmount(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg);
+/*
+ * Release one file-class channel by number, for vms_ioctl_dassgn()'s fallback
+ * when `chan` is neither a device nor a mailbox channel. Returns 0 if `chan`
+ * named a file channel (released), or -ENOENT if it did not.
+ */
+int vms_acp_dassgn(struct vms_proc *proc, uint32_t chan);
+/* Give back every file-class channel a dying process holds. */
+void vms_acp_release_all(struct vms_proc *proc);
+void vms_acp_init(void);
+void vms_acp_cleanup(void);
 
 /*
  * INET pseudo-device (executive-resident BGn:, vms-527). The BGn: driver is

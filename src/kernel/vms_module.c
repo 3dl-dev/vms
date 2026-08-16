@@ -463,6 +463,10 @@ struct vms_proc *vms_proc_register(pid_t pid, bool continue_identity)
      * on the same chan_lock and next_chan counter (vms_bg.h). */
     INIT_LIST_HEAD(&proc->bg_channels);
 
+    /* Files-11 (ODS-2) ACP file-class channels (vms-149) -- likewise a separate
+     * list on the same chan_lock and next_chan counter (vms_acp.h). */
+    INIT_LIST_HEAD(&proc->file_channels);
+
     /* P0 program region (vms-68f.i): unmapped until VMS_IOCTL_P0_MAP
      * records an extent. kmem_cache_zalloc() above already zeroed
      * p0_base/p0_limit; only the lock needs initializing. */
@@ -585,6 +589,11 @@ void vms_proc_free_claimed(struct vms_proc *proc)
      * substrate-agnostic core must not name -- see vms_bg.c's header.
      */
     vms_bg_release_all(proc);
+
+    /* Give back this process's Files-11 ACP file-class channels too (vms-149),
+     * dropping each mounted volume's assigned-channel refcount -- exactly as
+     * the mailbox and BG channels above. */
+    vms_acp_release_all(proc);
 
     /* Drop the pinned pid reference taken at registration */
     if (proc->pid_ref) {
@@ -829,6 +838,16 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_mbx_read(proc, arg);
     case VMS_IOCTL_MBX_DELMBX:
         return vms_ioctl_mbx_delmbx(proc, arg);
+
+    /* Files-11 (ODS-2) ACP: mount table + file-class channel (vms-149,
+     * epic vms-208). The ACP-QIO file operations get the remaining band
+     * slots in a later rung; this rung is mount/dismount + $ASSIGN. */
+    case VMS_IOCTL_ACP_MOUNT:
+        return vms_ioctl_acp_mount(proc, arg);
+    case VMS_IOCTL_ACP_DMOUNT:
+        return vms_ioctl_acp_dmount(proc, arg);
+    case VMS_IOCTL_ACP_ASSIGN:
+        return vms_ioctl_acp_assign(proc, arg);
     case VMS_IOCTL_MBX_SET_WRTATTN:
         return vms_ioctl_mbx_set_wrtattn(proc, arg);
 
@@ -1099,10 +1118,15 @@ static int __init vms_init(void)
      * (see vms_mbx.c's vms_mbx_init()). */
     vms_mbx_init();
 
+    /* Files-11 (ODS-2) ACP mounted-volume table (vms-149) -- starts empty,
+     * nothing that can fail here (see vmsfs_acp.c's vms_acp_init()). */
+    vms_acp_init();
+
     /* Register /dev/vms */
     ret = misc_register(&vms_misc);
     if (ret) {
         pr_err("vms: failed to register /dev/vms: %d\n", ret);
+        vms_acp_cleanup();
         vms_mbx_cleanup();
         vms_lnm_cleanup();
         vms_devtab_cleanup();
@@ -1140,6 +1164,7 @@ static void __exit vms_exit(void)
     vms_devtab_cleanup();
     vms_lnm_cleanup();
     vms_mbx_cleanup();
+    vms_acp_cleanup();
 
     kmem_cache_destroy(vms_proc_cache);
 

@@ -110,3 +110,12 @@ vms_kif_bg_pollfd=PROCEDURE
 vms_kif_bg_getname=PROCEDURE
 vms_kif_bg_setsockopt=PROCEDURE
 vms_kif_bg_getsockopt=PROCEDURE
+# --- Files-11 (ODS-2) ACP channel + mount front-end (vms-149, epic vms-208).
+# $MOUNT/$DISMOUNT of an ODS-2 volume into the executive-global mounted table
+# and $ASSIGN of a file-class channel bound to a mounted volume. APPENDED at the
+# end per the append-only contract -- a new universal never shifts an existing
+# index. vms_kif_acp_mount/dmount are OVMX-UNWIRED (test-only) today; exported
+# so the vector is stable when the boot-time $MOUNT rung wires them.
+vms_kif_acp_mount=PROCEDURE
+vms_kif_acp_dmount=PROCEDURE
+vms_kif_acp_assign=PROCEDURE

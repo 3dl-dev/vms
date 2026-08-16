@@ -739,4 +739,46 @@ uint32_t vms_kif_bg_setsockopt(uint32_t exec_chan, int level, int optname,
 uint32_t vms_kif_bg_getsockopt(uint32_t exec_chan, int level, int optname,
                                int *out_optval);
 
+/* ================================================================
+ * Files-11 (ODS-2) ACP -- channel + mount front-end (vms-149, epic vms-208)
+ *
+ * The executive owns the mounted-volume table (src/kernel-core/vmsfs_acp.c): a
+ * volume mounted by one process is reachable by ANY other process that $ASSIGNs
+ * the unit -- the shared executive state that replaces the userspace adapter's
+ * per-process passthrough. This rung carries the CHANNEL half of the ACP; the
+ * ACP-QIO file operations (IO$_ACCESS/READVBLK/...) are later rungs.
+ *
+ * NO PER-PROCESS FALLBACK (CLAUDE.md Rule 9 / INV-6): every entry point below
+ * returns SS$_NOSUCHDEV, never a private substitute, when /dev/vms is
+ * unreachable -- checked explicitly (acp_bind_ok()) exactly as the mailbox
+ * wrappers do.
+ * ================================================================ */
+
+/* $MOUNT an ODS-2 volume into the executive-global mounted table by unit name
+ * (e.g. "DKA0:"). Idempotent. SS$_NOSUCHDEV if /dev/vms is absent.
+ * OVMX-UNWIRED: vms_kif_acp_mount (vms-149) -- no product caller yet: PID 1's
+ * boot-time $MOUNT of the system disk is a later rung of epic vms-208 (the full
+ * $MOUNT that binds the backing device + validates the home block). Exercised
+ * now only by tests/qemu/test_syssvc_acp_channel.c, the same footing as
+ * vms_kif_get_resmaster. */
+uint32_t vms_kif_acp_mount(const char *devnam);
+
+/* $DISMOUNT: remove a volume from the executive-global mounted table.
+ * SS$_NOSUCHDEV if it is not mounted, SS$_DEVALLOC while channels remain
+ * assigned to it, SS$_NOSUCHDEV if /dev/vms is absent.
+ * OVMX-UNWIRED: vms_kif_acp_dmount (vms-149) -- the dismount counterpart of
+ * vms_kif_acp_mount above, exercised only by tests/qemu/test_syssvc_acp_channel.c
+ * until PID 1's mount/dismount lifecycle lands in a later vms-208 rung. */
+uint32_t vms_kif_acp_dmount(const char *devnam);
+
+/* $ASSIGN a FILE-CLASS channel to a mounted ODS-2 volume by unit name; the
+ * returned exec_chan is an EXECUTIVE channel bound to the volume (see
+ * src/libvms/syssvc/sys_assign.c for how it is stored in the caller's PCB).
+ * SS$_NOSUCHDEV if the unit is not a mounted volume (fail-honest -- never a
+ * fabricated channel) or if /dev/vms is absent. Released by vms_kif_dassgn().
+ * Wired (vms-149): src/libvms/syssvc/sys_assign.c routes $ASSIGN of the boot
+ * unit (DKA0:/SYS$SYSDEVICE) here -- the census gate is what proves it has a
+ * product caller. */
+uint32_t vms_kif_acp_assign(const char *devnam, uint32_t *exec_chan);
+
 #endif /* _VMS_KIF_H */

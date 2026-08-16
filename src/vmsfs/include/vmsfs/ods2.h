@@ -1322,11 +1322,22 @@ ods2_status_t ods2_wvolume_create_dir(ods2_wvolume_t *wvol,
  * vms-1bd): each insert re-packs the sorted record stream across the
  * file's data blocks (a record never crosses a 512-byte boundary),
  * allocating additional blocks and extending the FH2 map/recattr when the
- * packed form no longer fits the current allocation. Returns
- * ODS2_ERR_ARGS on a duplicate name, ODS2_ERR_NOSPACE if the volume has
- * no free blocks left or the directory exceeds the writer's block/extent
- * caps (ODS2_WDIR_MAX_BLOCKS / _MAX_EXTENTS), ODS2_ERR_FORMAT if an
- * existing directory block is malformed.
+ * packed form no longer fits the current allocation.
+ *
+ * [vms-9794] If `name` already has a directory record, `version` is ADDED
+ * as a new {version, fid} value entry to that SAME record (versions kept
+ * in descending order, highest first -- matching the reader's and this
+ * writer's own [F17] value-entry convention), instead of being rejected --
+ * this is how a caller mints ";2"/";3" of an existing file. A duplicate
+ * {name, version} pair (re-inserting the SAME version) is still rejected.
+ * A single-version insert (the first version of a NAME) is byte-identical
+ * to the pre-vms-9794 output -- no regression.
+ *
+ * Returns ODS2_ERR_ARGS on a duplicate {name, version} pair, ODS2_ERR_NOSPACE
+ * if the volume has no free blocks left, the directory exceeds the writer's
+ * block/extent caps (ODS2_WDIR_MAX_BLOCKS / _MAX_EXTENTS), or a name's
+ * merged record would not fit in a single directory block, ODS2_ERR_FORMAT
+ * if an existing directory block/record is malformed.
  */
 ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                                       ods2_fid_t dir_fid,

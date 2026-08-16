@@ -93,6 +93,24 @@ set_tests_properties(ods2_write_bdev PROPERTIES
     TIMEOUT 30
 )
 
+# vms-9794 (additive substrate fix for the ODS-2 flip vms-5eb): MULTI-VERSION
+# directory insert. Proves ods2_wvolume_dir_insert() now MERGES a new
+# {version, fid} value entry into an existing NAME's directory record
+# (FOO.TXT;1/;2/;3, three distinct FIDs, all reachable + content-correct via
+# the genuine block-backed reader, in descending-version order) instead of
+# rejecting the duplicate name outright, while a single-version insert
+# (BAR.TXT;1) stays byte-identical to the pre-fix layout and a duplicate
+# {name,version} pair is still rejected.
+add_executable(test_ods2_multiversion test_ods2_multiversion.c)
+target_include_directories(test_ods2_multiversion PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_multiversion PRIVATE ods2)
+
+add_test(NAME ods2_multiversion COMMAND test_ods2_multiversion)
+set_tests_properties(ods2_multiversion PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)
+
 # vms-1bd (R8 of the real-ODS-2-runtime epic vms-5eb): MULTI-BLOCK DIRECTORY
 # GROWTH ([F17]). Inserts more files into one directory than fit in a single
 # 512-byte directory block, forcing ods2_wvolume_dir_insert() to grow the

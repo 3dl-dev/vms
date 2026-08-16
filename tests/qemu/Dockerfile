@@ -427,6 +427,26 @@ RUN gcc -O2 -Wall -o /src/tests/qemu/mkimage_vmsfs \
         -I/src/kernel/vmsfs && \
     /src/tests/qemu/mkimage_vmsfs /vmsfs_test.img
 
+# GENUINE ODS-2 codec kernel-resident proof (rd vms-dcd, epic vms-208).
+# Stage the REAL-VAX fixture as the block-device image the "ods2ro" mount reads
+# in-guest, and build the byte-identical GOLDEN with the USERSPACE codec so the
+# in-guest test (test_kmod_ods2_codec, mounting via the KERNEL-RESIDENT codec)
+# can memcmp kernel-read == userspace-read. mkgolden_ods2 is a thin host CLI over
+# the same codec sources (mirrors mkimage_vmsfs).
+COPY src/vmsfs/include/ /src/vmsfs/include/
+COPY src/vmsfs/ods2/ /src/vmsfs/ods2/
+COPY tests/ods2/real_vax_ods2.dsk /ods2_real.img
+COPY tests/qemu/mkgolden_ods2.c /src/tests/qemu/
+RUN gcc -O2 -Wall -o /src/tests/qemu/mkgolden_ods2 \
+        /src/tests/qemu/mkgolden_ods2.c \
+        /src/vmsfs/ods2/ods2_reader.c \
+        /src/vmsfs/ods2/ods2_writer.c \
+        /src/vmsfs/ods2/ods2_bdev.c \
+        /src/vmsfs/ods2/ods2_path.c \
+        /src/vmsfs/ods2/ods2_block_posix.c \
+        -I/src/vmsfs/include -I/src/vmsfs/ods2 && \
+    /src/tests/qemu/mkgolden_ods2 /ods2_real.img /hello.golden
+
 # Locate the kernel image (may already exist as symlink)
 RUN KVER=$(cat /tmp/kver) && \
     if [ ! -e /boot/vmlinuz ]; then \
@@ -491,6 +511,13 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     [ -f /tmp/loop.ko ] && cp /tmp/loop.ko /initramfs/lib/modules/ || true && \
     # Block-device test image
     [ -f /vmsfs_test.img ] && cp /vmsfs_test.img /initramfs/test_data/ || true && \
+    # Genuine ODS-2 fixture + byte-identical golden for test_kmod_ods2_codec
+    # (rd vms-dcd): the kernel-resident ODS-2 codec proof. Absence is FATAL --
+    # a silently-missing fixture would make the suite honest-skip forever.
+    { [ -f /ods2_real.img ] && cp /ods2_real.img /initramfs/test_data/ods2_real.img || \
+        { echo "FATAL: /ods2_real.img (ODS-2 fixture) missing"; exit 1; }; } && \
+    { [ -f /hello.golden ] && cp /hello.golden /initramfs/test_data/hello.golden || \
+        { echo "FATAL: /hello.golden (ODS-2 golden) missing"; exit 1; }; } && \
     # Test programs (statically linked, no libc needed in VM). GLOB over
     # every test_* binary the gcc stages produced -- the .c sources sitting
     # in the same directory are not executable, so [ -x ] filters them out.

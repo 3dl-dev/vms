@@ -18,7 +18,7 @@
 
 #include "vmsfs/ods2.h"
 
-#include <string.h>
+#include "ods2_kcompat.h"   /* string/mem vocabulary, userspace or kernel */
 
 /* ---- little-endian scalar reads (endian-independent) ---- */
 

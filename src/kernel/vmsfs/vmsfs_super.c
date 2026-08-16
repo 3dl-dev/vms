@@ -564,6 +564,20 @@ static int __init vmsfs_init(void)
         return ret;
     }
 
+    /*
+     * Register the read-only genuine-ODS-2 presentation (rd vms-dcd, epic
+     * vms-208): the foundation-rung proof that the genuine ODS-2 codec runs
+     * KERNEL-RESIDENT off a real block device. Non-fatal if it fails -- the
+     * bespoke-VMFS "vmsfs" path above is independent.
+     */
+    ret = vmsfs_ods2ro_register();
+    if (ret) {
+        pr_err("vmsfs: failed to register ods2ro: %d\n", ret);
+        unregister_filesystem(&vmsfs_fs_type);
+        vmsfs_inode_cache_destroy();
+        return ret;
+    }
+
     pr_info("vmsfs: filesystem registered successfully\n");
     return 0;
 }
@@ -572,6 +586,7 @@ static void __exit vmsfs_exit(void)
 {
     pr_info("vmsfs: unloading VMS filesystem module\n");
 
+    vmsfs_ods2ro_unregister();
     unregister_filesystem(&vmsfs_fs_type);
     /*
      * RCU grace period to ensure all inode frees have completed

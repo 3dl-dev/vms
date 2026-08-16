@@ -38,6 +38,13 @@ obj-m := vmsfs.o
 # vmsfs_backend_linux.h). After this vmsfs_blkdev.o is the thin VFS + vmsfs_bio
 # backend; ALL ODS-2 logic lives in the core. The seam is DESIGNED in
 # README-backend.md §3.
+# The GENUINE ODS-2 codec (src/vmsfs/ods2/) compiled KERNEL-RESIDENT (rd
+# vms-dcd, epic vms-208): the on-disk reader/writer/path plus the KERNEL
+# realization of its block-access seam (ods2_block_kern.o, bound to vmsfs_bio.h),
+# and vmsfs_ods2ro.o -- a read-only Files-11 presentation that drives the codec
+# off a real struct block_device (the foundation-rung proof that the codec runs
+# in-kernel; NOT the authoritative $QIO ACP path, which lands in vms.ko later).
+# The SAME sources compile userspace for INITIALIZE/vmsfs_master + host ctest.
 vmsfs-y := vmsfs_super.o \
            vmsfs_inode.o \
            vmsfs_file.o \
@@ -48,6 +55,12 @@ vmsfs-y := vmsfs_super.o \
            ../../kernel-core/vmsfs/vmsfs_alloc.o \
            ../../kernel-core/vmsfs/vmsfs_dirscan.o \
            ../../kernel-core/vmsfs/vmsfs_header.o \
+           ../../vmsfs/ods2/ods2_reader.o \
+           ../../vmsfs/ods2/ods2_writer.o \
+           ../../vmsfs/ods2/ods2_bdev.o \
+           ../../vmsfs/ods2/ods2_path.o \
+           ../../vmsfs/ods2/ods2_block_kern.o \
+           vmsfs_ods2ro.o \
            vmsfs_blkdev.o
 
 # -I$(src)/../../kernel-core/vmsfs: the substrate-agnostic ODS-2 core + the shim
@@ -55,7 +68,13 @@ vmsfs-y := vmsfs_super.o \
 #   them, and also include vmsfs_ondisk.h (still here beside this glue) resolved
 #   via -I$(src). The Linux backend impl (vmsfs_backend_linux.h) lives here and is
 #   selected by OVMX_KBACKEND_LINUX below.
-ccflags-y := -I$(src) -I$(src)/.. -I$(src)/../../kernel-core/vmsfs -DOVMX_KBACKEND_LINUX
+# -I$(src)/../../vmsfs/include: the genuine ODS-2 codec's public header
+#   (vmsfs/ods2.h); -I$(src)/../../vmsfs/ods2: its private seam headers
+#   (ods2_kcompat.h, ods2_block.h). -DOVMX_ODS2_KERNEL selects the codec's
+#   kernel-resident world (kernel types/alloc + the vmsfs_bio block backend).
+ccflags-y := -I$(src) -I$(src)/.. -I$(src)/../../kernel-core/vmsfs \
+             -I$(src)/../../vmsfs/include -I$(src)/../../vmsfs/ods2 \
+             -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL
 
 # Default target: build against running kernel
 KDIR ?= /lib/modules/$(shell uname -r)/build

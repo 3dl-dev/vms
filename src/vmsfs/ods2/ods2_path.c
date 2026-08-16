@@ -34,13 +34,9 @@
  * separate, not-yet-built foundation -- see docs/design-ods2-runtime-flip.md.
  */
 
-#define _POSIX_C_SOURCE 200809L
-
 #include "vmsfs/ods2.h"
 
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
+#include "ods2_kcompat.h"   /* string/ctype/snprintf + ods2_kalloc/ods2_kfree */
 
 /* Case-insensitive compare of a length-counted on-disk name against a C
  * string. Returns 1 on equal, 0 otherwise. */
@@ -310,17 +306,17 @@ ods2_status_t ods2_bdev_read_file_text(const ods2_bdev_t *bv,
         return ODS2_OK;
     }
 
-    raw = (uint8_t *)malloc(data_bytes);
+    raw = (uint8_t *)ods2_kalloc(data_bytes);
     if (!raw)
         return ODS2_ERR_IO;
 
     st = ods2_bdev_read_file(bv, file_header_block, raw, data_bytes, &raw_len);
     if (st != ODS2_OK) {
-        free(raw);
+        ods2_kfree(raw);
         return st;
     }
 
     st = ods2_var_records_decode(raw, raw_len, out, out_cap, out_len);
-    free(raw);
+    ods2_kfree(raw);
     return st;
 }

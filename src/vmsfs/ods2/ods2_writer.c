@@ -24,18 +24,21 @@
  * behavior/output is unchanged.
  */
 
-/* pread / pwrite / lseek / off_t / SEEK_END, for the block-device-backed
- * mode added in increment 11 -- same feature-test macro ods2_bdev.c uses,
- * so this TU is self-sufficient regardless of the compiler's default -std
- * extensions. Harmless for the (still default) in-memory-only callers. */
+/* _POSIX_C_SOURCE must precede ALL system headers (glibc locks feature-test
+ * macros at the first include). Needed userspace for lseek/off_t in the
+ * fd-based block-device constructors below; harmless in the kernel build. */
+#ifndef OVMX_ODS2_KERNEL
 #define _POSIX_C_SOURCE 200809L
+#endif
 
 #include "vmsfs/ods2.h"
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+#include "ods2_kcompat.h"   /* string/mem/snprintf + ods2_kalloc/kzalloc/kfree */
+#include "ods2_block.h"     /* block-access seam (userspace pread / kernel bio) */
+
+#ifndef OVMX_ODS2_KERNEL
+#include <unistd.h>         /* lseek / off_t / SEEK_END for format_bdev/open_bdev */
+#endif
 
 /* ---- little-endian scalar writes (endian-independent) ---- */
 
@@ -93,19 +96,28 @@ typedef struct wcache {
     wcache_ent_t *ent;
 } wcache_t;
 
-/* Returned on cache-full / I/O-failure so a wblk() caller's subsequent
- * field writes never dereference NULL; wvol->io_error is set so the
- * failure still surfaces honestly at the top-level call's return. */
-static uint8_t wcache_scratch[ODS2_BLOCK_SIZE];
+/*
+ * On cache-full / I/O-failure wblk() returns a harmless scratch block so a
+ * caller's subsequent field writes never dereference NULL; wvol->io_error is
+ * set so the failure still surfaces honestly at the top-level call's return.
+ * rd vms-dcd moved this scratch OUT of a file-scope static and INTO the wvolume
+ * handle (wvol->wcache_scratch): the kernel-resident ACP runs this writer
+ * concurrently in many caller contexts, where a shared static would be a
+ * cross-process data race. No file-scope mutable state remains in this TU.
+ */
 
+#ifndef OVMX_ODS2_KERNEL
+/* Only the userspace fd-based block-device constructors (format_bdev/open_bdev,
+ * gated below) initialize the write cache; the kernel-resident writer runs
+ * in-memory mode only (is_bdev stays 0), so wcache_init is unused there. */
 static ods2_status_t wcache_init(ods2_wvolume_t *wvol)
 {
-    wcache_t *c = (wcache_t *)calloc(1, sizeof(*c));
+    wcache_t *c = (wcache_t *)ods2_kzalloc(sizeof(*c));
     if (!c)
         return ODS2_ERR_NOSPACE;
-    c->ent = (wcache_ent_t *)calloc(WCACHE_CAP, sizeof(wcache_ent_t));
+    c->ent = (wcache_ent_t *)ods2_kzalloc((size_t)WCACHE_CAP * sizeof(wcache_ent_t));
     if (!c->ent) {
-        free(c);
+        ods2_kfree(c);
         return ODS2_ERR_NOSPACE;
     }
     c->cap = WCACHE_CAP;
@@ -114,14 +126,15 @@ static ods2_status_t wcache_init(ods2_wvolume_t *wvol)
     wvol->io_error    = ODS2_OK;
     return ODS2_OK;
 }
+#endif /* !OVMX_ODS2_KERNEL -- wcache_init */
 
 static void wcache_free(ods2_wvolume_t *wvol)
 {
     wcache_t *c = (wcache_t *)wvol->wcache_priv;
     if (!c)
         return;
-    free(c->ent);
-    free(c);
+    ods2_kfree(c->ent);
+    ods2_kfree(c);
     wvol->wcache_priv = NULL;
 }
 
@@ -165,12 +178,12 @@ static uint8_t *wcache_block(ods2_wvolume_t *wvol, uint32_t lbn, int zero_fill)
 
     if (!c) {
         wvol->io_error = ODS2_ERR_ARGS;
-        return wcache_scratch;
+        return wvol->wcache_scratch;
     }
     e = wcache_slot(c, lbn, &created);
     if (!e) {
         wvol->io_error = ODS2_ERR_NOSPACE;
-        return wcache_scratch;
+        return wvol->wcache_scratch;
     }
     if (created) {
         e->used = 1;
@@ -179,17 +192,13 @@ static uint8_t *wcache_block(ods2_wvolume_t *wvol, uint32_t lbn, int zero_fill)
         if (zero_fill) {
             memset(e->data, 0, ODS2_BLOCK_SIZE);
         } else {
-            off_t off = (off_t)lbn * (off_t)ODS2_BLOCK_SIZE;
-            size_t done = 0;
-            while (done < ODS2_BLOCK_SIZE) {
-                ssize_t n = pread(wvol->bdev_fd, e->data + done,
-                                  ODS2_BLOCK_SIZE - done, off + (off_t)done);
-                if (n <= 0) {
-                    wvol->io_error = ODS2_ERR_IO;
-                    break;
-                }
-                done += (size_t)n;
-            }
+            /* A cache miss on an LBN this writer itself wrote earlier: fetch it
+             * back through the block-access seam (userspace pread / kernel
+             * vmsfs_bio). */
+            ods2_status_t rst = ods2_blk_read(ODS2_WVOL_DEV(wvol), wvol->nblocks,
+                                              lbn, e->data, ODS2_BLOCK_SIZE);
+            if (rst != ODS2_OK)
+                wvol->io_error = ODS2_ERR_IO;
         }
     }
     return e->data;
@@ -228,21 +237,16 @@ ods2_status_t ods2_wvolume_flush(ods2_wvolume_t *wvol)
 
     for (i = 0; i < c->cap; i++) {
         wcache_ent_t *e = &c->ent[i];
-        off_t off;
-        size_t done = 0;
+        ods2_status_t wst;
 
         if (!e->used)
             continue;
-        off = (off_t)e->lbn * (off_t)ODS2_BLOCK_SIZE;
-        while (done < ODS2_BLOCK_SIZE) {
-            ssize_t n = pwrite(wvol->bdev_fd, e->data + done,
-                               ODS2_BLOCK_SIZE - done, off + (off_t)done);
-            if (n <= 0) {
-                wvol->io_error = ODS2_ERR_IO;
-                break;
-            }
-            done += (size_t)n;
-        }
+        /* Commit through the block-access seam (userspace pwrite / kernel
+         * vmsfs_bio bdirty+sync). */
+        wst = ods2_blk_write(ODS2_WVOL_DEV(wvol), wvol->nblocks,
+                             e->lbn, e->data, ODS2_BLOCK_SIZE);
+        if (wst != ODS2_OK)
+            wvol->io_error = ODS2_ERR_IO;
         e->used = 0;
     }
     c->n = 0;
@@ -309,7 +313,7 @@ static ods2_status_t wvol_commit(ods2_wvolume_t *wvol, ods2_status_t st)
 
 /* Set or clear bit `bitno` within a bitmap region starting at `base_lbn`
  * (block 0 of the region == bits 0..4095, block 1 == bits 4096..8191, ...). */
-static void bitmap_set(ods2_wvolume_t *wvol, uint32_t base_lbn,
+static void ods2_bitmap_set(ods2_wvolume_t *wvol, uint32_t base_lbn,
                        uint32_t bitno, int value)
 {
     uint32_t blk_idx  = bitno / BITS_PER_BLOCK;
@@ -330,7 +334,7 @@ static void bitmap_set(ods2_wvolume_t *wvol, uint32_t base_lbn,
 
 /* Fill an entire bitmap region (blocks..blocks) with all-1 (all free/unused
  * bits), covering `nbits` bits starting at `base_lbn`. */
-static void bitmap_init_all_set(ods2_wvolume_t *wvol, uint32_t base_lbn,
+static void ods2_bitmap_init_all_set(ods2_wvolume_t *wvol, uint32_t base_lbn,
                                 uint32_t nblocks)
 {
     uint32_t i;
@@ -345,13 +349,13 @@ static void storage_bitmap_mark_used(ods2_wvolume_t *wvol,
 {
     uint32_t i;
     for (i = 0; i < count; i++)
-        bitmap_set(wvol, wvol->bitmap_scb_lbn + 1, lbn + i, 0);
+        ods2_bitmap_set(wvol, wvol->bitmap_scb_lbn + 1, lbn + i, 0);
 }
 
 /* Mark FID `fidnum` (1-based) in-use (bit -> 1) in the index file bitmap. */
 static void ifile_bitmap_mark_used(ods2_wvolume_t *wvol, uint32_t fidnum)
 {
-    bitmap_set(wvol, wvol->ibmap_lbn, fidnum - 1, 1);
+    ods2_bitmap_set(wvol, wvol->ibmap_lbn, fidnum - 1, 1);
 }
 
 /* ================================================================
@@ -997,17 +1001,17 @@ static ods2_status_t format_common(ods2_wvolume_t *wvol,
     wvol->next_free_fid      = ODS2_RESFILES + 1;
 
     /* ---- index file bitmap: FIDs 1..RESFILES in use, rest free ---- */
-    bitmap_init_all_set(wvol, wvol->ibmap_lbn, wvol->ibmap_size);
+    ods2_bitmap_init_all_set(wvol, wvol->ibmap_lbn, wvol->ibmap_size);
     {
         uint32_t i;
         for (i = 1; i <= ODS2_RESFILES; i++)
-            bitmap_set(wvol, wvol->ibmap_lbn, i - 1, 1); /* mark IN USE */
+            ods2_bitmap_set(wvol, wvol->ibmap_lbn, i - 1, 1); /* mark IN USE */
         for (i = ODS2_RESFILES + 1; i <= maxfiles; i++)
-            bitmap_set(wvol, wvol->ibmap_lbn, i - 1, 0); /* mark free */
+            ods2_bitmap_set(wvol, wvol->ibmap_lbn, i - 1, 0); /* mark free */
     }
 
     /* ---- storage bitmap: init all free, then mark the fixed layout used --- */
-    bitmap_init_all_set(wvol, wvol->bitmap_scb_lbn + 1, wvol->bitmap_data_blocks);
+    ods2_bitmap_init_all_set(wvol, wvol->bitmap_scb_lbn + 1, wvol->bitmap_data_blocks);
     storage_bitmap_mark_used(wvol, 0, reserved_end); /* LBN 0..reserved_end-1 */
     /* also mark padding bits beyond total_blocks (inside the last bitmap
      * block) as allocated, so they never get handed out. */
@@ -1015,7 +1019,7 @@ static ods2_status_t format_common(ods2_wvolume_t *wvol,
         uint32_t nbits = wvol->bitmap_data_blocks * BITS_PER_BLOCK;
         uint32_t i;
         for (i = total_blocks; i < nbits; i++)
-            bitmap_set(wvol, wvol->bitmap_scb_lbn + 1, i, 0);
+            ods2_bitmap_set(wvol, wvol->bitmap_scb_lbn + 1, i, 0);
     }
 
     /* ---- home block pair ---- */
@@ -1297,6 +1301,17 @@ ods2_status_t ods2_volume_format(uint8_t *image, size_t image_len,
     return format_common(wvol, params);
 }
 
+#ifndef OVMX_ODS2_KERNEL
+/*
+ * The fd-based block-device constructors (format_bdev / open_bdev) are
+ * USERSPACE-only: they auto-detect volume size via lseek and attach an
+ * fd-based reader (ods2_bdev_open). The kernel-resident writer has no fd; when
+ * an in-kernel WRITE path is chartered (a later rung of epic vms-208) it adds
+ * host-based twins. The block cache's own reads/writes go through the seam in
+ * BOTH worlds, so create_file/create_dir/dir_insert/append still compile
+ * kernel-resident (in-memory mode) unchanged.
+ */
+
 /*
  * Block-device-backed twin of ods2_volume_format() (increment 11, vms-6d3b).
  * See ods2.h's "BLOCK-DEVICE-BACKED WRITER" section for the full design.
@@ -1410,7 +1425,7 @@ static ods2_status_t reconstruct_layout(ods2_wvolume_t *wvol,
 /*
  * Read one bit out of an on-disk bitmap region (storage bitmap or index-file
  * bitmap) via the block-backed READER -- the read-only inverse of the writer's
- * bitmap_set(). Used only by ods2_wvolume_open_bdev() to rebuild the bump
+ * ods2_bitmap_set(). Used only by ods2_wvolume_open_bdev() to rebuild the bump
  * watermark; it reads a whole block per bit (a bounded, one-time scan), so it
  * stays out of the write cache entirely (open touches no write state).
  */
@@ -1530,6 +1545,7 @@ ods2_status_t ods2_wvolume_open_bdev(int fd, uint64_t span_bytes,
 
     return ODS2_OK;
 }
+#endif /* !OVMX_ODS2_KERNEL -- fd-based block-device constructors */
 
 /* ================================================================
  * Block / FID allocation
@@ -2103,7 +2119,7 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
      * locate the new name's sorted insertion point. Upper bound on the
      * stream is one full block per existing block plus the new record. */
     flatcap = (size_t)nlbn * ODS2_BLOCK_SIZE + newrec_len + 8;
-    flat = (uint8_t *)malloc(flatcap);
+    flat = (uint8_t *)ods2_kalloc(flatcap);
     if (!flat)
         return ODS2_ERR_NOSPACE;    /* honest failure -- never a silent fake */
 
@@ -2120,12 +2136,12 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                 break;
             reclen = 2u + rec_size;
             if (off + reclen > ODS2_BLOCK_SIZE) {
-                free(flat);
+                ods2_kfree(flat);
                 return ODS2_ERR_FORMAT;      /* malformed existing block */
             }
             nc = blk[off + 5];
             if (6u + nc > reclen) {
-                free(flat);
+                ods2_kfree(flat);
                 return ODS2_ERR_FORMAT;
             }
             if (!found_name && !have_insert) {
@@ -2143,7 +2159,7 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                                           entry_fid, flat + flat_used,
                                           &merged_len);
                     if (st != ODS2_OK) {
-                        free(flat);
+                        ods2_kfree(flat);
                         return st;
                     }
                     flat_used += merged_len;
@@ -2190,7 +2206,7 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
         foff += reclen;
     }
     if (nblk > ODS2_WDIR_MAX_BLOCKS) {
-        free(flat);
+        ods2_kfree(flat);
         return ODS2_ERR_NOSPACE;
     }
 
@@ -2202,7 +2218,7 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
         uint32_t grown_lbn;
         st = ods2_wvolume_alloc_blocks(wvol, extra, &grown_lbn);
         if (st != ODS2_OK) {
-            free(flat);
+            ods2_kfree(flat);
             return st;
         }
         for (k = 0; k < extra; k++)
@@ -2229,7 +2245,7 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
             foff += reclen;
         }
     }
-    free(flat);
+    ods2_kfree(flat);
 
     /* Rewrite the FH2 map + recattr ONLY when the block count changed --
      * a same-block re-pack keeps the header byte-identical (map, hiblk,

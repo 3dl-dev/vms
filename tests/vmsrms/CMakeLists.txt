@@ -96,6 +96,29 @@ set_tests_properties(vmsrms_sysroot_composed PROPERTIES
     TIMEOUT 30
 )
 
+# vms-dca (epic vms-5eb, rung R5b): $SEARCH walks the genuine ODS-2 SYS$DISK.
+# A SYS$DISK ("/vms/...") wildcard search enumerates through the registered
+# genuine-ODS-2 volume handle (ods2_sysdisk_list_dir), so names + VERSIONS come
+# from the real MFD/FID chains -- not opendir/readdir on the /vms passthrough.
+# Builds a genuine ODS-2 volume with multi-version files (vmsfs_master --ods2
+# shape), registers it via OVMX_SYSDISK_DEV, and asserts the $SEARCH sequence
+# equals the genuine reader's records in reader order, iterates one-per-call,
+# and fails HONESTLY with SS$_DEVNOTMOUNT when no volume is registered (Rule 9 /
+# INV-6, no silent POSIX fallback). Links vmsfs_volume for the ODS-2 adapter.
+add_executable(test_search_ods2 test_search_ods2.c)
+target_include_directories(test_search_ods2 PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_search_ods2 PRIVATE vmsrms vmsfs vmsfs_volume vmslnm pthread)
+add_test(NAME vmsrms_search_ods2 COMMAND test_search_ods2)
+set_tests_properties(vmsrms_search_ods2 PROPERTIES
+    LABELS "unit;rms;ods2"
+    TIMEOUT 30
+)
+
 # vms-240: iterative device-field LNM resolution through $PARSE and the unified
 # TERMINAL-honoring driver (lnm_translate_filespec). Host LNM$PROCESS, no
 # /dev/vms needed.

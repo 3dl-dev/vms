@@ -22,10 +22,19 @@
  *     Linux directory through the executive-resident LNM$SYSTEM table
  *     (vmsfs_to_linux_path -> lnm_translate -> vms_kif_lnm_translate) for system
  *     logical names before the directory walk begins.
- * OVMX-LOCAL: sys$search -- walks the host directory with readdir(2) and matches
- *     in this process; the wildcard context lives in nam$$l_context in the
- *     caller's own NAM block, so the enumeration is a private snapshot with no
- *     executive file-system interlock behind it.
+ * OVMX-LOCAL: sys$search -- for a non-SYS$DISK directory it walks the host
+ *     directory with readdir(2) and matches in this process; the wildcard
+ *     context lives in nam$$l_context in the caller's own NAM block, so the
+ *     enumeration is a private snapshot with no executive file-system interlock
+ *     behind it.
+ *
+ * ODS-2 runtime flip (epic vms-5eb, rung R5b -- vms-dca): a SYS$DISK
+ *     ("/vms/...") directory is enumerated through the genuine-ODS-2 volume
+ *     handle (ods2_sysdisk_list_dir), so the names, VERSIONS and FIDs come from
+ *     the real Master File Directory / FID chains, not opendir/readdir on the
+ *     /vms passthrough. Fail-honest (Rule 9 / INV-6): with no ODS-2 SYS$DISK
+ *     volume registered $SEARCH returns SS$_DEVNOTMOUNT -- never a silent POSIX
+ *     fallback. Linux only; the netbsd-vax cross keeps the POSIX walk.
  */
 
 #include <stdio.h>
@@ -36,15 +45,45 @@
 #include <fnmatch.h>
 #include "rms/rms.h"
 #include "vmsfs/filespec.h"
+#if defined(__linux__)
+#include "vmsfs/sysdisk.h"   /* ODS-2 runtime flip (epic vms-5eb, rung R5b) */
+#endif
 
 /*
  * Internal: wildcard search context maintained across $SEARCH calls.
  */
+#if defined(__linux__)
+/*
+ * ODS-2 runtime flip (epic vms-5eb, rung R5b -- vms-dca). One matched genuine-
+ * ODS-2 directory record: its "NAME.EXT;version" filename (built from the real
+ * Master File Directory / FID chains, NOT a POSIX d_name) and numeric version.
+ */
+struct ods2_match {
+    char     vms_name[256];     /* "NAME.EXT;version" from the ODS-2 record */
+    uint16_t version;
+};
+#endif
+
 struct search_context {
-    DIR *dir;                   /* Open directory handle */
+    DIR *dir;                   /* Open directory handle (POSIX branch) */
     char directory[1024];       /* Linux directory path being searched */
-    char pattern[256];          /* fnmatch-compatible pattern */
+    char pattern[256];          /* fnmatch-compatible pattern (POSIX branch) */
     int  active;                /* Context is valid */
+#if defined(__linux__)
+    /*
+     * SYS$DISK ODS-2 branch. When the resolved directory is on the genuine-
+     * ODS-2 SYS$DISK ("/vms/..."), the enumeration reads the real ODS-2
+     * directory records through the volume handle instead of opendir/readdir
+     * on the /vms passthrough. ods2_sysdisk_list_dir delivers every entry in
+     * one callback sweep, so the wildcard-matched entries are collected up
+     * front on the first call and returned one per subsequent call -- the
+     * $SEARCH "next match per call" contract is preserved over match_index.
+     */
+    int   ods2;                 /* SYS$DISK ODS-2 branch active */
+    struct ods2_match *matches; /* wildcard-matched ODS-2 records, in reader order */
+    int   match_count;
+    int   match_index;          /* next match to return */
+#endif
 };
 
 /*
@@ -76,6 +115,62 @@ static void vms_to_glob(const char *vms, char *glob, size_t globlen)
     }
     *p = '\0';
 }
+
+#if defined(__linux__)
+/*
+ * ods2_collect_ctx / ods2_collect_cb - collect the genuine-ODS-2 directory
+ * records of a SYS$DISK directory that match the $SEARCH VMS wildcard pattern,
+ * exactly as DCL's DIRECTORY reroute (dir_collect_ods2, rung R3) does: every
+ * record's name, VERSION and FID come from the real MFD/FID chains via
+ * ods2_sysdisk_list_dir, and the SAME version-aware VMS matcher
+ * (vmsfs_wildcard_match) filters them -- never fnmatch over a POSIX d_name.
+ * Entries are appended in the reader's delivery order (no re-sort), so the
+ * $SEARCH iteration order is the genuine ODS-2 directory order, not opendir's.
+ */
+struct ods2_collect_ctx {
+    const char        *pattern;   /* raw VMS filename pattern (may carry ;ver) */
+    struct ods2_match *matches;
+    int                count;
+    int                capacity;
+    int                oom;
+};
+
+static int ods2_collect_cb(const char *name, unsigned name_len,
+                           uint16_t version, const ods2_fid_t *fid, void *vctx)
+{
+    struct ods2_collect_ctx *c = (struct ods2_collect_ctx *)vctx;
+    (void)fid;
+
+    char ename[256];
+    if (name_len >= sizeof(ename)) name_len = (unsigned)(sizeof(ename) - 1);
+    memcpy(ename, name, name_len);
+    ename[name_len] = '\0';
+
+    /* Build "NAME.EXT;version" so the SAME version-aware VMS wildcard matcher
+     * used across OVMX applies here unchanged (bare/absent version in the
+     * pattern matches every version; an explicit ;N narrows to that one). */
+    char matchname[300];
+    snprintf(matchname, sizeof(matchname), "%s;%u", ename, (unsigned)version);
+
+    if (c->pattern && *c->pattern && !vmsfs_wildcard_match(c->pattern, matchname))
+        return 0;
+
+    if (c->count >= c->capacity) {
+        int nc = c->capacity ? c->capacity * 2 : 32;
+        struct ods2_match *tmp = realloc(c->matches,
+                                         (size_t)nc * sizeof(*c->matches));
+        if (!tmp) { c->oom = 1; return 1; }   /* stop; caller reports RMS$_DME */
+        c->matches = tmp;
+        c->capacity = nc;
+    }
+
+    struct ods2_match *m = &c->matches[c->count++];
+    memset(m, 0, sizeof(*m));
+    strncpy(m->vms_name, matchname, sizeof(m->vms_name) - 1);
+    m->version = version;
+    return 0;
+}
+#endif /* __linux__ */
 
 /*
  * sys$search - Find the next file matching a wildcard pattern.
@@ -154,8 +249,9 @@ static uint32_t rms_impl_search(void *fab_ptr)
             linux_path[sizeof(linux_path) - 1] = '\0';
         }
 
-        /* Split into directory and filename pattern */
+        /* Split into directory path and the (raw VMS) filename pattern. */
         const char *last_slash = strrchr(linux_path, '/');
+        const char *filepart;
         if (last_slash) {
             size_t dlen = (size_t)(last_slash - linux_path);
             if (dlen >= sizeof(ctx->directory)) {
@@ -163,23 +259,115 @@ static uint32_t rms_impl_search(void *fab_ptr)
             }
             memcpy(ctx->directory, linux_path, dlen);
             ctx->directory[dlen] = '\0';
-            vms_to_glob(last_slash + 1, ctx->pattern, sizeof(ctx->pattern));
+            filepart = last_slash + 1;
         } else {
             strcpy(ctx->directory, ".");
-            vms_to_glob(linux_path, ctx->pattern, sizeof(ctx->pattern));
+            filepart = linux_path;
         }
 
-        /* Open the directory */
-        ctx->dir = opendir(ctx->directory);
-        if (!ctx->dir) {
-            free(ctx);
-            fab->fab$l_sts = RMS$_DNF;
-            return RMS$_DNF;
-        }
+#if defined(__linux__)
+        /*
+         * ODS-2 runtime flip (epic vms-5eb, rung R5b -- vms-dca). A SYS$DISK
+         * ("/vms/...") directory is enumerated through the genuine-ODS-2 volume
+         * handle, NOT opendir/readdir on the /vms passthrough. Fail-honest
+         * (Rule 9 / INV-6): with no ODS-2 SYS$DISK volume registered the list
+         * returns SS$_DEVNOTMOUNT and this propagates it -- never a silent
+         * POSIX fallback.
+         */
+        if (ods2_sysdisk_owns_path(ctx->directory)) {
+            struct ods2_collect_ctx cc;
+            memset(&cc, 0, sizeof(cc));
+            cc.pattern = filepart;   /* raw VMS pattern (*, %, optional ;ver) */
 
-        ctx->active = 1;
-        nam->nam$$l_context = ctx;
+            int st = ods2_sysdisk_list_dir(ctx->directory,
+                                           ods2_collect_cb, &cc);
+            if (st != SS$_NORMAL) {
+                free(cc.matches);
+                free(ctx);
+                /* SS$_DEVNOTMOUNT (no volume), SS$_NOSUCHFILE (no such dir),
+                 * SS$_BADPARAM -- surfaced honestly, no POSIX fallback. */
+                fab->fab$l_sts = st;
+                nam->nam$l_sts = st;
+                return (uint32_t)st;
+            }
+            if (cc.oom) {
+                free(cc.matches);
+                free(ctx);
+                fab->fab$l_sts = RMS$_DME;
+                return RMS$_DME;
+            }
+
+            ctx->ods2 = 1;
+            ctx->matches = cc.matches;
+            ctx->match_count = cc.count;
+            ctx->match_index = 0;
+            ctx->active = 1;
+            nam->nam$$l_context = ctx;
+        } else
+#endif
+        {
+            vms_to_glob(filepart, ctx->pattern, sizeof(ctx->pattern));
+
+            /* Open the directory */
+            ctx->dir = opendir(ctx->directory);
+            if (!ctx->dir) {
+                free(ctx);
+                fab->fab$l_sts = RMS$_DNF;
+                return RMS$_DNF;
+            }
+
+            ctx->active = 1;
+            nam->nam$$l_context = ctx;
+        }
     }
+
+#if defined(__linux__)
+    /*
+     * SYS$DISK ODS-2 branch: return the next collected genuine-ODS-2 match
+     * (name + version from the real directory records), one per call.
+     */
+    if (ctx->ods2) {
+        if (ctx->match_index < ctx->match_count) {
+            struct ods2_match *m = &ctx->matches[ctx->match_index++];
+
+            /* Resolved "/vms/.../NAME.EXT;version" Linux path (for a following
+             * $OPEN via _resolved_path). */
+            char result_path[1024];
+            snprintf(result_path, sizeof(result_path), "%s/%s",
+                     ctx->directory, m->vms_name);
+
+            /* Store the VMS resultant string in the NAM block. */
+            if (nam->nam$l_rsa && nam->nam$b_rss > 0) {
+                char vms_result[1024];
+                if (vmsfs_to_vms_spec(result_path, vms_result,
+                                      sizeof(vms_result)) < 0) {
+                    strncpy(vms_result, result_path, sizeof(vms_result) - 1);
+                    vms_result[sizeof(vms_result) - 1] = '\0';
+                }
+                size_t rlen = strlen(vms_result);
+                if (rlen > nam->nam$b_rss) rlen = nam->nam$b_rss;
+                memcpy(nam->nam$l_rsa, vms_result, rlen);
+                nam->nam$b_rsl = (uint8_t)rlen;
+            }
+
+            snprintf(fab->_resolved_path, sizeof(fab->_resolved_path),
+                     "%s/%s", ctx->directory, m->vms_name);
+
+            fab->fab$l_sts = RMS$_NORMAL;
+            nam->nam$l_sts = RMS$_NORMAL;
+            return RMS$_NORMAL;
+        }
+
+        /* No more matches - clean up context. */
+        free(ctx->matches);
+        free(ctx);
+        nam->nam$$l_context = NULL;
+
+        fab->fab$l_sts = RMS$_NMF;
+        nam->nam$l_sts = RMS$_NMF;
+        return RMS$_NMF;
+    }
+#endif
 
     /* Iterate through directory entries looking for matches */
     struct dirent *entry;

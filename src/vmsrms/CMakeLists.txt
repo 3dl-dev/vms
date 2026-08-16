@@ -74,7 +74,13 @@ if(VMSRMS_STANDALONE)
     target_link_libraries(vmsrms PUBLIC pthread m)
     target_compile_options(vmsrms PRIVATE -Wall -Wextra -O2)
 else()
-    target_link_libraries(vmsrms PUBLIC vms vmsfs vmslnm)
+    # vmsfs_volume carries the ODS-2 SYS$DISK read adapter (ods2_sysdisk.c) that
+    # rms_search.c's $SEARCH reroute (epic vms-5eb rung R5b, vms-dca) walks for a
+    # SYS$DISK directory instead of opendir/readdir on the /vms passthrough.
+    # Host-only, additive: it links the genuine-ODS-2 sublibrary and is kept out
+    # of the STRICT LIBVMSFS$SHR.EXE symbol vector until the atomic group lands
+    # (see src/vmsfs/CMakeLists.txt). Mirrors vmsdcl's R3 wiring.
+    target_link_libraries(vmsrms PUBLIC vms vmsfs vmsfs_volume vmslnm)
 
     set_target_properties(vmsrms PROPERTIES
         PREFIX ""

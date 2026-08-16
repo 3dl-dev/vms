@@ -186,6 +186,25 @@ set_tests_properties(ods2_sysdisk PROPERTIES
     TIMEOUT 30
 )
 
+# vms-5eb (ODS-2 runtime flip): the SYS$DISK read adapter's CROSS-PROCESS lazy
+# registration (src/vmsfs/ods2_sysdisk.c sysdisk_handle()). The flip's live
+# consumers (RMS in LOGINOUT, DCL in the shell image) run in processes whose
+# volume table starts empty -- only PID 1 registers DKA0: explicitly. This test
+# NEVER calls vmsfs_volume_register: it drives the adapter exactly as a fresh
+# RMS/DCL process would, proving the adapter lazily registers SYS$DISK from the
+# OVMX_SYSDISK_DEV boot-device channel, byte-identical read-back, idempotence,
+# and the fail-honest edges (no channel / non-ODS-2 channel -> SS$_DEVNOTMOUNT,
+# table stays empty -- Rule 9 / INV-6). Links vmsfs_volume.
+add_executable(test_ods2_sysdisk_ensure test_ods2_sysdisk_ensure.c)
+target_include_directories(test_ods2_sysdisk_ensure PRIVATE ${VMS_FS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
+target_link_libraries(test_ods2_sysdisk_ensure PRIVATE vmsfs_volume)
+
+add_test(NAME ods2_sysdisk_ensure COMMAND test_ods2_sysdisk_ensure)
+set_tests_properties(ods2_sysdisk_ensure PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)
+
 # vms-02e (epic vms-5eb, the WRITE half of the ODS-2 runtime flip): the
 # SYS$DISK ODS-2 WRITE adapter (src/vmsfs/ods2_sysdisk.c create/append/mkdir
 # + ods2_writer.c ods2_wvolume_open_bdev/_append_file). Builds a genuine ODS-2

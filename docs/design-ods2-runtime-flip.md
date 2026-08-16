@@ -91,8 +91,74 @@ foundations, and the first flip rung's builder primitive is landed:
   what is missing is the runtime "append a record to an existing file" +
   O_RDWR-handle + non-RMS-caller reroute. This is the true long pole.
 
+- **CROSS-PROCESS lazy SYS$DISK registration — LANDED (update 2026-08-15,
+  this branch). The atomic flip's MISSING SUBSTRATE, surfaced while wiring the
+  reroute.** `vmsfs_volume.c`'s mounted-volume table is process-local by
+  construction (an fd + `ods2_bdev_t` are per-process); only PID 1 registers
+  DKA0: (`register_system_volume()`). But the flip's LIVE consumers — RMS in
+  the LOGINOUT process, DCL in the shell image, every RUN'd image — execute in
+  OTHER processes whose tables start EMPTY, so `vmsfs_volume_handle(SYSDISK_
+  DEVICE)` returns NULL there and every rerouted read/write would fail
+  `SS$_DEVNOTMOUNT` — the reroute could NEVER reach login. No landed rung
+  covered this (§4 B2 named "every consumer moves to the volume handle" but
+  provided no cross-process registration path). Closed by a static
+  `sysdisk_handle()` in `ods2_sysdisk.c`: returns the registered handle if
+  present, else lazily registers SYS$DISK in the calling process from the boot
+  device path PID 1 exports in `OVMX_SYSDISK_DEV`, then returns it. Every
+  adapter entry point (read + write) now routes through it. Fail-honest: no /
+  bad channel → NULL → `SS$_DEVNOTMOUNT`, table stays empty (Rule 9 / INV-6).
+  Additive; **flips no live path** (`OVMX_SYSDISK_DEV` is exported by nobody
+  yet — that wiring is part of the atomic group's R6-mount step). Test
+  `ods2_sysdisk_ensure` (`tests/ods2/test_ods2_sysdisk_ensure.c`) drives the
+  adapter as a fresh RMS/DCL process would (never registers itself): proves
+  lazy register, byte-identical read-back, idempotence, and both fail-honest
+  edges. **OVMX design choice (labelled, Rule 8):** the VMS-faithful refinement
+  is to translate the `SYS$SYSDEVICE` logical → boot device and resolve its
+  backing store; a later rung substitutes that inside `sysdisk_handle()`
+  without touching a single consumer.
+
+**⚠ RE-PLAN — the two remaining long poles are BIGGER than §3/§4 framed
+(update 2026-08-15, grounded by reading every reroute site).**
+
+1. **R2-RMS record I/O is a POSITIONED-I/O reroute, not a call-swap.** RMS's
+   sequential/relative/indexed engines (`rms_seq.c`, `rms_rel.c`, `rms_idx.c`)
+   are built ENTIRELY on a POSIX `fd` + `lseek`/`read`/`write` at arbitrary
+   offsets — 60+ sites: append-at-`SEEK_END`, random `lseek(rec_offset)`,
+   in-place status-byte deletes, record rewrites, `SEEK_CUR` cursors. The
+   SYS$DISK adapter offers only whole-file `read_file`/`append_file`/
+   `create_file`/`list_dir` — NO positioned read/write and NO fd. The doc's
+   "reroute record I/O off `fab->_linux_fd`" is therefore a substantial
+   sub-project, not a line edit. Two honest routes, both bigger than a rung:
+   (a) **per-open working copy (checkout/checkin):** on `$OPEN`/`$CREATE` of a
+   SYS$DISK file, `ods2_sysdisk_read_file` the whole file into a private
+   working fd (`memfd`/tmpfile), keep `fab->_linux_fd` pointing at THAT so
+   seq/rel/idx stay byte-for-byte unchanged, and on `$CLOSE` write the working
+   copy back as a new ODS-2 version via the write adapter. Honest (the store is
+   genuine ODS-2; the working fd is a per-channel window, like a VMS RMS
+   buffer), lowest-risk, but rewrites the whole file on any write and needs the
+   `.rms_meta` indexed sidecars (`rms_core.c:532/:600`, `rms_idx.c:516/:568`)
+   moved off `/vms` too. (b) **positioned bdev I/O:** extend the adapter with
+   `ods2_sysdisk_pread/pwrite(fid, off, …)` mapping file offset → FM2 extent
+   LBN, and swap the fd for a `{volume, fid, offset}` cursor in
+   `rms_read_exact`/`rms_write_exact`. More faithful, much larger. **Route (a)
+   is the recommended first cut.** Either way R2 is its own multi-session pole.
+
+2. **No partial reroute keeps the suite green — the flip is genuinely atomic
+   with the DEFAULT-FLIP and the TEST FIXTURES.** Debug ctest and the boot
+   image run RMS/DCL against a POSIX `/vms` tree with NO ODS-2 volume
+   registered. The moment a consumer is rerouted "use the adapter when
+   `ods2_sysdisk_owns_path()`", every existing RMS/DCL test that touches a
+   `/vms` path fails `SS$_DEVNOTMOUNT` (fail-honest is mandatory — a POSIX
+   fallback is the forbidden LARP). So the reroute CANNOT land incrementally
+   green: R6-build's default flip to genuine ODS-2, PID 1 exporting
+   `OVMX_SYSDISK_DEV`, AND every RMS/DCL test fixture switching to an ODS-2
+   backing volume must co-land with R2/R3/R5. This is the real content of §5's
+   "atomic" and is why this branch's progress is red-in-CI until the whole
+   group lands — expected, not a regression.
+
 Remaining atomic group (still must land together, boot-gated): R6-kernel,
-R6-mount, R2-RMS, R3-DCL, R5-MOUNT, **the write half (Wr)**, Retire, Proof.
+R6-mount, R2-RMS (record-I/O working-copy model above), R3-DCL, R5-MOUNT,
+**the write-half reroutes (Wr)**, test-fixture switch to ODS-2, Retire, Proof.
 Current-state anchors:
 
 | Rung | Anchor (current) |
@@ -101,7 +167,8 @@ Current-state anchors:
 | R6-kernel | `src/kernel/vmsfs/vmsfs_super.c:387` (`VMSFS_HOME_MAGIC` check) — under A1 the SYS$DISK kernel MOUNT is RETIRED, so this is home/SCB parse for boot-device VALIDATION only, not a POSIX mount |
 | R6-mount | `src/ovmx_init/ovmx_init.c` `bare_metal_init` (stop `mount(...,"vmsfs")` at `ovmx_boot_linux.c:158`; rely on `register_system_volume()` volume handle — which must open O_RDWR for the write half); `tools/vms_mount_helper.c` |
 | **read adapter** | **DONE — `src/vmsfs/ods2_sysdisk.c` (`ods2_sysdisk_read_file`/`_resolve_file`/`_list_dir`/`_owns_path`); test `ods2_sysdisk`. R2/R3/R5 reroute their read/list sites onto this.** |
-| R2-RMS | `src/vmsrms/rms_core.c` `resolve_filename` (:413), `rms_impl_open` read-open at `:702` (O_RDONLY) → `ods2_sysdisk_read_file`/resolve when `ods2_sysdisk_owns_path(_resolved_path)`; drop `rms_validate_path_boundary` (:207) for SYS$DISK; reroute record I/O off `fab->_linux_fd` (rms_read_exact/rms_write_exact in `rms_util.c:15/:34` + `lseek` cursors in rms_seq/rel/idx); `$SEARCH` `opendir`/`readdir` (`rms_search.c:173/:186`) → `ods2_sysdisk_list_dir`. Write-open (`rms_impl_create` `:808` O_CREAT) → Wr. |
+| **cross-process registration** | **DONE — `sysdisk_handle()` in `src/vmsfs/ods2_sysdisk.c` lazily registers SYS$DISK per-process from `OVMX_SYSDISK_DEV`; all adapter entry points route through it; test `ods2_sysdisk_ensure`. R6-mount must have PID 1 EXPORT `OVMX_SYSDISK_DEV=<boot dev>` so children inherit the channel.** |
+| R2-RMS | `src/vmsrms/rms_core.c` `resolve_filename` (:413), `rms_impl_open` read-open at `:702` (O_RDONLY); drop `rms_validate_path_boundary` (:207) for SYS$DISK; `$SEARCH` `opendir`/`readdir` (`rms_search.c:173/:186`) → `ods2_sysdisk_list_dir`. **Record I/O off `fab->_linux_fd` = the POSITIONED-I/O sub-project (see RE-PLAN #1): recommended first cut = per-open working copy — on open `ods2_sysdisk_read_file` → `memfd`/tmpfile → `fab->_linux_fd`; seq/rel/idx (`rms_util.c:15/:34` + `lseek` in rms_seq/rel/idx) stay UNCHANGED; on `$CLOSE` write back via the write adapter. Move `.rms_meta`/idx sidecars (`rms_core.c:532/:600`, `rms_idx.c:516/:568`) off `/vms` too.** Write-open (`rms_impl_create` `:808` O_CREAT) → Wr. |
 | R3-DCL | `src/vmsdcl/dcl_cmd_file.c` `dir_collect` (:280)/`cmd_directory` (:648, `vmsfs_to_linux_path` at :686/:690) → `ods2_sysdisk_list_dir`; `src/vmsdcl/dcl_cmd_set.c` `cmd_set_default` (:97) → `ods2_sysdisk_resolve_file`/`_list_dir` to validate the dir |
 | R5-MOUNT | `src/vmsdcl/dcl_cmd_misc.c` `cmd_mount` (:2211) — validate home via `ods2_home_parse` + SCB via `ods2_scb_parse`, reject non-ODS-2 |
 | **Wr (write half)** | NEW long pole. (a) `vmsfs_volume` O_RDWR handle + a `ods2_sysdisk_write`/`_append`/`_mkdir` twin driving `ods2_wvolume_*` over the LIVE mounted device; (b) reroute the two guaranteed non-RMS boot writers — `opcom_kmsg.c:258` OPERATOR.LOG append, `ovmx_accounting.c:158`/`:43` LASTLOGIN write+mkdir — plus RMS `rms_impl_create`/`$PUT`, off `vmsfs_to_linux_path`+`fopen`/`open(O_CREAT)` onto it |

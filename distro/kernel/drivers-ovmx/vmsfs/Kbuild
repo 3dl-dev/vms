@@ -8,7 +8,18 @@
 # directory (flattened) at kernel-build time, so every object below is a plain
 # basename here. The object set MUST mirror src/kernel/vmsfs/Makefile's
 # `vmsfs-y` (the standalone/out-of-tree build kept for the QEMU test harness) --
-# if you add an ODS-2 core .c there, add it here too.
+# if you add a src/kernel-core/vmsfs ODS-2 core .c there, add it here too.
+#
+# NOT YET MIRRORED (rd vms-dcd, epic vms-208): src/kernel/vmsfs/Makefile's
+# vmsfs-y now also compiles the genuine ODS-2 codec (src/vmsfs/ods2/*.c) +
+# vmsfs_ods2ro.o kernel-resident. Those are intentionally absent here for now:
+# this in-tree overlay FLATTENS all sources to basenames, but the codec includes
+# the public header as "vmsfs/ods2.h" (a subdir path), which the flatten model
+# does not resolve. Wiring the codec into the in-tree/bootable vmsfs.ko (so the
+# shipped module carries the ods2ro presentation too, not just the QEMU-test
+# module) is a follow-up that must first make that include flatten-safe. The
+# out-of-tree QEMU build (src/kernel/vmsfs/Makefile) IS the kernel-resident
+# proof for this rung.
 #
 # OVMX_KBACKEND_LINUX selects the Linux realization of the vmsfs_backend shim
 # (vmsfs_backend_linux.h), which the overlay places beside these sources.

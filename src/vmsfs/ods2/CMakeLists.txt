@@ -22,6 +22,15 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     endif()
 endif()
 
-add_library(ods2 STATIC ods2_reader.c ods2_writer.c ods2_bdev.c ods2_path.c)
+# ods2_block_posix.c: the USERSPACE realization of the block-access seam
+# (ods2_block.h, rd vms-dcd). The kernel FS engine compiles ods2_block_kern.c
+# instead (against vmsfs_bio.h), so the SAME reader/writer/path sources run both
+# userspace (these tools + host ctest) and kernel-resident (the ODS-2 ACP).
+add_library(ods2 STATIC
+    ods2_reader.c
+    ods2_writer.c
+    ods2_bdev.c
+    ods2_path.c
+    ods2_block_posix.c)
 target_include_directories(ods2 PUBLIC ${VMS_FS_INCLUDE_DIR})
 set_target_properties(ods2 PROPERTIES POSITION_INDEPENDENT_CODE ON)

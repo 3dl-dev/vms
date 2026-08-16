@@ -46,8 +46,19 @@
 #ifndef _VMSFS_ODS2_H
 #define _VMSFS_ODS2_H
 
+/*
+ * The genuine ODS-2 codec compiles BOTH userspace (INITIALIZE/vmsfs_master +
+ * host ctest) and kernel-resident (the shared FS engine's ODS-2 ACP, built with
+ * -DOVMX_ODS2_KERNEL). Pull fixed-width types + size_t/offsetof from the right
+ * world; the block-access seam (pread vs vmsfs_bio) is ods2_block.h. rd vms-dcd.
+ */
+#ifdef OVMX_ODS2_KERNEL
+#include <linux/types.h>
+#include <linux/stddef.h>
+#else
 #include <stdint.h>
 #include <stddef.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -680,7 +691,13 @@ int ods2_dir_block_scan(const void *dir_block, ods2_dir_cb cb, void *ctx);
  * The fd is NOT owned by ods2_bdev_t -- the caller opens and closes it.
  */
 typedef struct ods2_bdev {
+#ifdef OVMX_ODS2_KERNEL
+    void       *host;       /* opaque block backend handle (Linux: super_block)
+                            * passed to vmsfs_bget(); see ods2_block.h. Bound by
+                            * ods2_bdev_open_host() in the kernel FS engine.   */
+#else
     int         fd;         /* backing block device / image fd (borrowed)  */
+#endif
     uint32_t    nblocks;    /* volume size in 512-byte blocks              */
     ods2_home_t home;       /* parsed, validated home block (LBN 1)        */
 } ods2_bdev_t;
@@ -695,6 +712,19 @@ typedef struct ods2_bdev {
  * does for the in-memory image.
  */
 ods2_status_t ods2_bdev_open(ods2_bdev_t *bv, int fd, uint64_t span_bytes);
+
+#ifdef OVMX_ODS2_KERNEL
+/*
+ * KERNEL-RESIDENT open (rd vms-dcd, epic vms-208): attach a block-backed reader
+ * to a mounted volume in the shared FS engine. `host` is the opaque handle the
+ * vmsfs_bio.h backend takes (a struct super_block *, its block size already set
+ * to ODS2_BLOCK_SIZE by the ACP mount); `nblocks` is the volume size in 512-byte
+ * blocks (the fd-based ods2_bdev_open()'s lseek auto-detect has no kernel
+ * analog, so the caller supplies it, e.g. i_size_read(bdev->bd_inode) / 512).
+ * Reads + validates the home block at LBN 1 exactly as ods2_bdev_open() does.
+ */
+ods2_status_t ods2_bdev_open_host(ods2_bdev_t *bv, void *host, uint32_t nblocks);
+#endif
 
 /*
  * Read raw block `lbn` (512 bytes) into `buf` (must be >= ODS2_BLOCK_SIZE)
@@ -1214,8 +1244,21 @@ typedef struct ods2_wvolume {
 
     /* ---- block-device-backed mode only (vms-6d3b) ---- */
     int            is_bdev;         /* 0 == in-memory `image` mode (above)  */
+#ifdef OVMX_ODS2_KERNEL
+    void          *host;            /* backing device handle for vmsfs_bget()
+                                    * (kernel-resident writer, rd vms-dcd)  */
+#else
     int            bdev_fd;         /* backing fd, borrowed (not owned)     */
+#endif
     void          *wcache_priv;     /* opaque sparse block cache, see .c    */
+    /*
+     * wcache "block returned so a caller's field writes land somewhere valid
+     * but harmless after a cache miss reports io_error". rd vms-dcd moved this
+     * OUT of a file-scope static and INTO the handle: the kernel-resident ACP
+     * runs the writer concurrently in many caller contexts, so a shared static
+     * scratch block would be a cross-process data race. One per wvolume.
+     */
+    uint8_t        wcache_scratch[ODS2_BLOCK_SIZE];
     ods2_status_t  io_error;        /* sticky I/O/capacity failure, checked
                                       * at the tail of every public entry
                                       * point so a pread/pwrite failure deep

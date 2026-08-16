@@ -275,4 +275,12 @@ extern const struct file_operations vmsfs_blkdev_file_fops;
 /* Block-device file inode operations */
 extern const struct inode_operations vmsfs_blkdev_file_iops;
 
+/*
+ * Read-only genuine-ODS-2 presentation (vmsfs_ods2ro.c, rd vms-dcd): the
+ * foundation-rung proof that the genuine ODS-2 codec runs kernel-resident off a
+ * real block device. Registered/unregistered alongside the "vmsfs" fs type.
+ */
+int  vmsfs_ods2ro_register(void);
+void vmsfs_ods2ro_unregister(void);
+
 #endif /* _VMSFS_H */

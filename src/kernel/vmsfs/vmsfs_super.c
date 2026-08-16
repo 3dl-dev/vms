@@ -564,6 +564,32 @@ static int __init vmsfs_init(void)
         return ret;
     }
 
+    /*
+     * Register the read-only genuine-ODS-2 presentation (rd vms-dcd, epic
+     * vms-208): the foundation-rung proof that the genuine ODS-2 codec runs
+     * KERNEL-RESIDENT off a real block device. Non-fatal if it fails -- the
+     * bespoke-VMFS "vmsfs" path above is independent.
+     *
+     * COMPILE-GATED on OVMX_ODS2_KERNEL (rd vms-dcd): the codec + vmsfs_ods2ro.o
+     * are compiled into vmsfs.ko ONLY by the out-of-tree build
+     * (src/kernel/vmsfs/Makefile defines -DOVMX_ODS2_KERNEL). The in-tree
+     * bootable overlay (distro/kernel/drivers-ovmx/vmsfs/Kbuild) does NOT define
+     * it and does NOT flatten those objects, so these calls MUST compile out
+     * there -- otherwise vmsfs_ods2ro_register/_unregister are undefined symbols
+     * at modpost and the bzImage build dies. Wiring the codec into the in-tree
+     * bootable module (so this gate flips on there too) is the follow-up rung
+     * vms-4a8; until then the in-tree module builds byte-for-byte as on main.
+     */
+#if defined(OVMX_ODS2_KERNEL)
+    ret = vmsfs_ods2ro_register();
+    if (ret) {
+        pr_err("vmsfs: failed to register ods2ro: %d\n", ret);
+        unregister_filesystem(&vmsfs_fs_type);
+        vmsfs_inode_cache_destroy();
+        return ret;
+    }
+#endif
+
     pr_info("vmsfs: filesystem registered successfully\n");
     return 0;
 }
@@ -572,6 +598,9 @@ static void __exit vmsfs_exit(void)
 {
     pr_info("vmsfs: unloading VMS filesystem module\n");
 
+#if defined(OVMX_ODS2_KERNEL)   /* see vmsfs_init(): out-of-tree only (rd vms-dcd) */
+    vmsfs_ods2ro_unregister();
+#endif
     unregister_filesystem(&vmsfs_fs_type);
     /*
      * RCU grace period to ensure all inode frees have completed

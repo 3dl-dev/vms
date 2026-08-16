@@ -817,7 +817,18 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # <linux/*> or NetBSD kernel headers and so is equally uncompilable in a host
 # userland build -- the SAME sound reason. Anchored with ^ so only these exact
 # directories match -- none is a prefix of another.
-SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/"
+#
+# ONE file-level exclusion (rd vms-dcd, epic vms-208): the genuine ODS-2 codec
+# (src/vmsfs/ods2/) is a single source of truth compiled BOTH userspace (its
+# reader/writer/bdev/path .c files, scanned here normally) AND kernel-resident
+# (the ODS-2 ACP in vmsfs.ko). ods2_block_kern.c is the KERNEL realization of
+# the codec's block-access seam: it includes vmsfs_bio.h -> <linux/*> and so is
+# uncompilable in a host userland build, for the SAME sound reason as
+# src/kernel-core -- it is a kernel TU that merely happens to live under the
+# otherwise-userspace src/vmsfs/ tree. Its userspace peer ods2_block_posix.c IS
+# scanned. Exports no sys$ symbol either way. Anchored + $-terminated so it
+# excludes exactly this one file, never a directory.
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$"
 
 SYMCC=""
 for _c in cc gcc; do

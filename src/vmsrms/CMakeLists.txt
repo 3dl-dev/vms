@@ -54,6 +54,7 @@ add_library(vmsrms ${OVMX_LIB_TYPE}
     rms_seq.c
     rms_rel.c
     rms_idx.c
+    rms_prolog3.c
     rms_record.c
     rms_parse.c
     rms_search.c

@@ -85,6 +85,7 @@
 #include "rms/rms.h"
 #include "rms_internal.h"
 #include "rms_io.h"
+#include "rms_prolog3.h"
 #include "vmsfs/filespec.h"
 #include "vmsfs/device.h"      /* vms-0044: compose directory/concealed logicals -> ODS-2 candidates */
 #include "vmsfs/version.h"
@@ -1230,14 +1231,6 @@ static uint32_t rms_impl_open(void *fab_ptr)
             fab->fab$l_stv = 0;
             return RMS$_SYN;
         }
-        if (fab->fab$b_org == FAB$C_IDX) {
-            /* Indexed-over-ACP (the ODS-2 prologue/bucket index) is a later
-             * rung of epic vms-208: the data fork rides the ACP, but the index
-             * has no ACP home yet. Fail-honest rather than silently serve an
-             * un-persistable index (INV-6). */
-            fab->fab$l_sts = RMS$_ORG;
-            return RMS$_ORG;
-        }
         strncpy(fab->_resolved_path, specs[0].name,
                 sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
@@ -1255,6 +1248,27 @@ static uint32_t rms_impl_open(void *fab_ptr)
             return fab->fab$l_sts;
         }
         fab->_rms_file = h;
+
+        /* Indexed-over-ACP (vms-5f0, epic vms-d0c): the data fork is ACCESSed;
+         * bind the genuine Prolog-3 prologue (VBN 1 fixed prolog + key
+         * descriptors) read via IO$_READVBLK. This SUPERSEDES the old
+         * RMS$_ORG rejection -- a real indexed open over the mounted volume now
+         * reads records by key from the on-disk bucket tree (rms_prolog3.c),
+         * NOT from a private .rms_idx sidecar. A malformed / non-Prolog-3 /
+         * compression-bearing prologue fails honestly (RMS$_PLG), never a
+         * silent success (INV-6). */
+        if (fab->fab$b_org == FAB$C_IDX) {
+            p3_ctx_t *p3 = NULL;
+            uint32_t pst = rms_p3_bind(h, &p3);
+            if (!$VMS_STATUS_SUCCESS(pst)) {
+                rms_acp_close_handle(h);
+                fab->_rms_file = NULL;
+                fab->fab$l_stv = 0;
+                fab->fab$l_sts = pst;
+                return pst;
+            }
+            fab->_rms_state = p3;
+        }
 
         pthread_mutex_lock(&rms_id_lock);
         fab->fab$w_ifi = next_ifi++;

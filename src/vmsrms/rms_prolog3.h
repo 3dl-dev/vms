@@ -1,0 +1,252 @@
+/*
+ * rms_prolog3.h - RMS Prolog-3 indexed-file READ engine (vms-5f0, epic vms-d0c
+ * / vms-1e5). The genuine Files-11 Prolog-3 on-disk index, read over the
+ * executive ACP ($ASSIGN + IO$_ACCESS + IO$_READVBLK), superseding the faked
+ * in-memory `.rms_idx` B-tree sidecar (rms_idx.c) for the /dev/vms-present
+ * runtime path.
+ *
+ * ====================================================================
+ * WHAT THIS IS
+ * ====================================================================
+ * A reader for a real Prolog-3 indexed file: it parses the prologue (fixed
+ * prolog block + area descriptors + per-key descriptors), then walks the
+ * key-of-reference index buckets down to the primary data bucket and returns
+ * the record whose embedded key matches a search key ($GET/$FIND by key). It
+ * does NOT invent an index in a private sidecar; the index IS the on-disk
+ * bucket tree, read block-by-block through the same rms_io_* positioned-I/O
+ * vocabulary the seq/rel engines use -- which dispatches to IO$_READVBLK on the
+ * ACP channel window when /dev/vms is present (Rule 9 / INV-6), and to a plain
+ * fd only on the executive-absent host defer / netbsd-vax cross.
+ *
+ * ====================================================================
+ * ORACLE GROUNDING (docs/oracle/vax73-alpha84-rms-prolog3.md, vms-8438)
+ * ====================================================================
+ * The geometry was measured clean-room (ANALYZE/RMS_FILE + DUMP/BLOCKS on real
+ * OpenVMS VAX V7.3 and Alpha V8.4; no VSI source). The oracle pins the field
+ * SET, the field ORDER, and specific facts; it does NOT publish byte-level
+ * offsets WITHIN the fixed-prolog block, the key descriptor, or the 14-byte
+ * bucket header (ANALYZE labels the fields, it does not dump their offsets).
+ * Per CLAUDE.md Rule 8, where the byte layout is not published OVMX defines its
+ * own representation and LABELS it an OVMX design choice. Below, [PIN] marks a
+ * fact taken verbatim from the oracle; [OVMX] marks a byte-offset choice this
+ * header defines so the OVMX writer (vms-045) and this reader agree.
+ *
+ *   [PIN] Prolog Version == 3.
+ *   [PIN] Area-descriptor array begins at VBN 3; descriptors are 64 bytes each,
+ *         carrying {bucket size, reclaimed-bucket VBN, current extent
+ *         {start,blocks,used,next}, default extend qty, total allocation}.
+ *   [PIN] Key descriptor #0 lives in VBN 1; descriptors chain by
+ *         {next-descriptor VBN, offset}; per key: Root VBN, First Data Bucket
+ *         VBN, Root Level, Index/Data Bucket Size, Key Flags bitfield, Key
+ *         Segments, Key Size, Minimum Record Size, Segment Positions/Sizes,
+ *         Data Type, Name.
+ *   [PIN] Key-flag bit positions: DUPKEYS 0, CHGKEYS 1, NULKEYS 2, IDX_COMPR 3,
+ *         INITIDX 4, KEY_COMPR 6, REC_COMPR 7.
+ *   [PIN] Bucket header is 14 bytes; records begin at bucket offset 0x0E.
+ *         Header fields (in order): check character, key-of-reference, VBN
+ *         sample, free-space offset (next free byte in bucket), free record ID,
+ *         next-bucket VBN (horizontal chain), level (0 == data), flags
+ *         (LASTBKT bit 0, ROOTBKT bit 1).
+ *   [PIN] Index records use 2-byte bucket pointers, ordered {pointer, key}.
+ *   [PIN] Primary data record leads with a record-control-flags byte
+ *         (IRC$V_DELETED bit 2, IRC$V_RRV bit 3, IRC$V_NOPTRSZ bit 4,
+ *         IRC$V_RU_DELETE bit 5, IRC$V_RU_UPDATE bit 6), a Record ID, and an
+ *         RRV entry (RRV ID + a 2-or-4-byte bucket pointer), then the key.
+ *   [PIN] No VAX/Alpha divergence -- the format is architecture-independent
+ *         (this is why the reader below uses fixed-width LE fields only, so one
+ *         implementation serves x86_64/aarch64 LP64 and VAX ILP32 alike).
+ *
+ * ====================================================================
+ * SUBSTRATE-AGNOSTIC INVARIANT (vms-5f0 thin-seam)
+ * ====================================================================
+ * Every serialized field below is a fixed-width uint8/16/32 read through the
+ * le16()/le32() accessors -- NEVER a native long/size_t/pointer. There is NO
+ * substrate #ifdef in rms_prolog3.c; per-substrate block transfer lives behind
+ * rms_io_* (rms_io.h). VAX ILP32 + Alpha/x86_64 LP64 therefore share this file
+ * byte-for-byte.
+ *
+ * ====================================================================
+ * SCOPE (smallest genuine increment; see rms_prolog3.c header comment)
+ * ====================================================================
+ * READ by primary key over a single-level index (Root Level 1), uncompressed
+ * keys/records. Compression, multi-level descent, bucket overflow/split chains,
+ * secondary-key SIDR read, and the WRITE engine are labelled follow-on rungs
+ * (compression + SIDR: this epic; write: vms-045). Where a file asks for a
+ * feature this rung does not implement (e.g. a compression flag is set), the
+ * reader FAILS HONESTLY with RMS$_PLG rather than mis-decoding (INV-6).
+ */
+#ifndef RMS_PROLOG3_H
+#define RMS_PROLOG3_H
+
+#include <stddef.h>
+#include <stdint.h>
+#include "rms_io.h"
+
+/* -------- block / VBN geometry -------- */
+#define P3_BLK              512u
+#define P3_PROLOG_VERSION   3u
+/* Maximum bucket size this reader will buffer (blocks). RMS caps bucket size at
+ * 63 blocks; the reader rejects anything larger as a malformed prologue. */
+#define P3_MAX_BKT_BLOCKS   63u
+
+/* VBN assignments (1-based). [PIN] area descriptors at VBN 3. The fixed-prolog
+ * + key-descriptor placement in VBN 1 is [OVMX] (oracle pins key descriptor #0
+ * "at VBN 1" but not the intra-VBN split with the fixed-prolog fields). */
+#define P3_VBN_FIXED_PROLOG 1u
+#define P3_VBN_AREA_DESC    3u   /* [PIN] */
+
+/* -------- fixed prolog block, VBN 1 offset 0 ([OVMX] field offsets) -------- */
+#define P3_FP_OFF_VERSION       0u   /* u16, [PIN] value == 3               */
+#define P3_FP_OFF_NUM_KEYS      2u   /* u16                                 */
+#define P3_FP_OFF_NUM_AREAS     4u   /* u16                                 */
+#define P3_FP_OFF_FIRST_AREAVBN 6u   /* u16, [PIN] value == 3               */
+#define P3_FP_OFF_FIRST_KEYOFF  8u   /* u16, byte offset of key-desc array  */
+#define P3_FP_HDR_SIZE          16u  /* key descriptors start here by default */
+
+/* -------- area descriptor (VBN 3+), 64 bytes each [PIN size], [OVMX] offs -- */
+#define P3_AREADESC_SIZE        64u  /* [PIN] */
+
+/* -------- key descriptor ([OVMX] offsets; [PIN] 102-byte stride) ----------- */
+#define P3_KEYDESC_SIZE         102u /* [PIN] key-descriptor record length 0x66 */
+#define P3_KD_OFF_NEXT_VBN      0u   /* u16  next key descriptor VBN         */
+#define P3_KD_OFF_NEXT_OFF      2u   /* u16  next key descriptor byte offset */
+#define P3_KD_OFF_REF           4u   /* u8   key of reference                */
+#define P3_KD_OFF_DTP           5u   /* u8   data type                       */
+#define P3_KD_OFF_FLAGS         6u   /* u16  key flags ([PIN] bit positions) */
+#define P3_KD_OFF_ROOT_LEVEL    8u   /* u8   root level                      */
+#define P3_KD_OFF_IBS           9u   /* u8   index bucket size (blocks)      */
+#define P3_KD_OFF_DBS           10u  /* u8   data bucket size (blocks)       */
+#define P3_KD_OFF_NSEG          11u  /* u8   number of key segments          */
+#define P3_KD_OFF_ROOT_VBN      12u  /* u32  root bucket VBN                  */
+#define P3_KD_OFF_FIRST_DATAVBN 16u  /* u32  first data bucket VBN            */
+#define P3_KD_OFF_KEY_SIZE      20u  /* u16  total key size                   */
+#define P3_KD_OFF_MIN_REC_SIZE  22u  /* u16  minimum record size              */
+#define P3_KD_OFF_SEG0_POS      24u  /* u16  segment 0 position               */
+#define P3_KD_OFF_SEG0_SIZ      26u  /* u8   segment 0 size                   */
+#define P3_KD_OFF_NAME          40u  /* char[32] key name                     */
+
+/* key-flag bit positions [PIN] */
+#define P3_KEYV_DUPKEYS   0u
+#define P3_KEYV_CHGKEYS   1u
+#define P3_KEYV_NULKEYS   2u
+#define P3_KEYV_IDX_COMPR 3u
+#define P3_KEYV_INITIDX   4u
+#define P3_KEYV_KEY_COMPR 6u
+#define P3_KEYV_REC_COMPR 7u
+#define P3_KEYM_ANY_COMPR ((1u<<P3_KEYV_IDX_COMPR)|(1u<<P3_KEYV_KEY_COMPR)| \
+                           (1u<<P3_KEYV_REC_COMPR))
+
+/* -------- bucket header, 14 bytes [PIN size + records@0x0E]; [OVMX] offs ---- */
+#define P3_BKT_HDR_SIZE         14u  /* [PIN] records begin at 0x0E */
+#define P3_BH_OFF_CHECK         0u   /* u8   check character (algo [OVMX])   */
+#define P3_BH_OFF_KOR           1u   /* u8   key of reference                */
+#define P3_BH_OFF_LEVEL         2u   /* u8   level (0 == data bucket)         */
+#define P3_BH_OFF_FLAGS         3u   /* u8   flags ([PIN] LASTBKT 0, ROOT 1)  */
+#define P3_BH_OFF_FREESPACE     4u   /* u16  next free byte in bucket         */
+#define P3_BH_OFF_FREE_RECID    6u   /* u16  next record ID                   */
+#define P3_BH_OFF_VBN_SAMPLE    8u   /* u16  VBN sample (low 16 bits)         */
+#define P3_BH_OFF_NEXT_VBN      10u  /* u32  next bucket VBN (horizontal)     */
+#define P3_BKTV_LASTBKT   0u   /* [PIN] */
+#define P3_BKTV_ROOTBKT   1u   /* [PIN] */
+
+/* -------- index record ([PIN] {2-byte pointer, key}; [OVMX] fixed stride) --
+ * Uncompressed high-key stored at full key_size (this rung is IDX_COMPR off).
+ *   u16 child_vbn ; key_size bytes high_key
+ * stride = 2 + key_size */
+#define P3_IDXREC_PTR_SIZE      2u   /* [PIN] 2-byte bucket pointer */
+
+/* -------- primary data record ([PIN] field set/order; [OVMX] widths/lenfld) -
+ *   u8  control_flags ([PIN] IRC$V_* bits)
+ *   u16 record_id
+ *   u16 rrv_id
+ *   u32 rrv_bucket_ptr   ([PIN] RRV carries a bucket pointer; 4-byte per oracle)
+ *   u16 rec_data_len (L) ([OVMX] variable-record length within the bucket)
+ *   L   record_data      (the full user record; embedded key at seg0 position)
+ * stride = 11 + L */
+#define P3_DR_OFF_CTRL          0u
+#define P3_DR_OFF_RECID         1u
+#define P3_DR_OFF_RRVID         3u
+#define P3_DR_OFF_RRVPTR        5u
+#define P3_DR_OFF_DATALEN       9u
+#define P3_DR_HDR_SIZE          11u  /* bytes before record_data */
+#define P3_IRCV_DELETED   2u   /* [PIN] */
+#define P3_IRCV_RRV       3u   /* [PIN] */
+#define P3_IRCV_NOPTRSZ   4u   /* [PIN] */
+#define P3_IRCV_RU_DELETE 5u   /* [PIN] */
+#define P3_IRCV_RU_UPDATE 6u   /* [PIN] */
+
+/* -------- little-endian fixed-width accessors (substrate-agnostic) --------- */
+static inline uint16_t p3_le16(const uint8_t *p)
+{
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+static inline uint32_t p3_le32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+static inline void p3_put_le16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v & 0xff); p[1] = (uint8_t)((v >> 8) & 0xff);
+}
+static inline void p3_put_le32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v & 0xff);        p[1] = (uint8_t)((v >> 8) & 0xff);
+    p[2] = (uint8_t)((v >> 16) & 0xff); p[3] = (uint8_t)((v >> 24) & 0xff);
+}
+
+/* -------- parsed per-key descriptor (host-side, native widths OK: not
+ *          serialized -- this is in-memory working state) -------- */
+typedef struct p3_keydesc {
+    uint8_t  ref;
+    uint8_t  dtp;
+    uint16_t flags;
+    uint8_t  root_level;
+    uint8_t  ibs;            /* index bucket size (blocks) */
+    uint8_t  dbs;            /* data bucket size (blocks)  */
+    uint8_t  nseg;
+    uint32_t root_vbn;
+    uint32_t first_data_vbn;
+    uint16_t key_size;
+    uint16_t min_rec_size;
+    uint16_t seg0_pos;
+    uint8_t  seg0_siz;
+} p3_keydesc_t;
+
+/* -------- bound Prolog-3 file context (stored on FAB->_rms_state) ---------- */
+#define P3_CTX_MAGIC 0x50334358u  /* "P3CX" -- distinguishes from btree_t */
+#define P3_MAX_KEYS  8u
+typedef struct p3_ctx {
+    uint32_t     magic;          /* P3_CTX_MAGIC (first field: discriminator) */
+    rms_file_t  *f;              /* the ACP/POSIX handle (borrowed from FAB)  */
+    uint16_t     version;
+    uint16_t     num_keys;
+    uint16_t     num_areas;
+    p3_keydesc_t keys[P3_MAX_KEYS];
+} p3_ctx_t;
+
+/* Parse the prologue of an already-open Prolog-3 file into a fresh ctx.
+ * Returns RMS$_NORMAL, or RMS$_PLG on a bad/unsupported prologue. On success
+ * *out points to a malloc'd ctx the caller frees with rms_p3_free(). */
+uint32_t rms_p3_bind(rms_file_t *f, p3_ctx_t **out);
+void     rms_p3_free(p3_ctx_t *ctx);
+
+/* Read the record whose primary(-of-reference) key matches `key`
+ * (key_len bytes). `krf` selects the key of reference (0 = primary). On match
+ * copies up to buf_sz bytes of the record into buf and sets *rec_len.
+ * rop_kge/rop_kgt select >= / > semantics (0/0 == exact match).
+ * Returns RMS$_NORMAL, RMS$_RNF (no such key), RMS$_RTB (buffer too small,
+ * *rec_len set to the true size), RMS$_KEY (bad key of reference / key),
+ * RMS$_PLG (unsupported feature -- e.g. compression), RMS$_RER (read error). */
+uint32_t rms_p3_get_by_key(p3_ctx_t *ctx, uint8_t krf,
+                           const uint8_t *key, uint16_t key_len,
+                           int rop_kge, int rop_kgt,
+                           uint8_t *buf, uint16_t buf_sz, uint16_t *rec_len);
+
+/* Locate-only variant of the above (for $FIND): resolves the record and
+ * returns its size in *rec_len without copying data. */
+uint32_t rms_p3_find_by_key(p3_ctx_t *ctx, uint8_t krf,
+                            const uint8_t *key, uint16_t key_len,
+                            int rop_kge, int rop_kgt, uint16_t *rec_len);
+
+#endif /* RMS_PROLOG3_H */

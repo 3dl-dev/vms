@@ -17,6 +17,30 @@ set_tests_properties(vmsrms_unit PROPERTIES
     TIMEOUT 30
 )
 
+# vms-5f0: genuine Files-11 Prolog-3 indexed READ over the ACP block substrate.
+# Authors a real Prolog-3 image (fixed prolog + key descriptor + single-level
+# key-of-reference index bucket + two data buckets) and reads records BY PRIMARY
+# KEY through the on-disk index engine (rms_prolog3.c) -- no .rms_idx sidecar, no
+# flat scan. Host-only: the engine reads blocks via rms_io_read_exact wrapping a
+# plain fd (no /dev/vms); the /dev/vms ACP end-to-end is the paired positive
+# pending the write rung (vms-045). Links libvmsrms (which resolves the ACP
+# block symbols); the test drives rms_prolog3.c through its public API on the
+# POSIX rms_io backend.
+add_executable(test_prolog3_read test_prolog3_read.c)
+target_include_directories(test_prolog3_read PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsrms
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_prolog3_read PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_prolog3_read COMMAND test_prolog3_read)
+set_tests_properties(vmsrms_prolog3_read PROPERTIES
+    LABELS "unit;rms;ods2"
+    TIMEOUT 30
+)
+
 # vms-5c6d: indexed sys$close must flush the in-memory B-tree before freeing it.
 # Regression for a Tier-1 silent-data-loss bug where records inserted since the
 # last periodic index save (rms_idx_put persists only every 100 inserts) were

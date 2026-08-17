@@ -29,6 +29,7 @@
 #include "rms_internal.h"
 #include "rms_util.h"
 #include "rms_io.h"
+#include "rms_prolog3.h"
 
 /* B-tree order (max children per node) */
 #define BTREE_ORDER     64
@@ -609,6 +610,83 @@ static btree_t *get_tree(struct FAB *fab)
 /* read_exact/write_exact now provided by rms_util.h */
 
 /*
+ * rms_idx_p3 - Return the bound Prolog-3 read context if this FAB was opened
+ * over the executive ACP (vms-5f0), else NULL (legacy B-tree sidecar path).
+ *
+ * When /dev/vms is present, rms_impl_open ACCESSes the indexed file over the
+ * ACP and binds a p3_ctx (rms_prolog3.c) into fab->_rms_state; that context is
+ * tagged with P3_CTX_MAGIC in its first field so it is unambiguously
+ * distinguishable from the btree_t the executive-absent defer stores in the
+ * same slot. This is the discriminator that keeps the genuine engine and the
+ * legacy sidecar from colliding on _rms_state.
+ */
+static p3_ctx_t *rms_idx_p3(struct FAB *fab)
+{
+    if (fab->_rms_state &&
+        *(const uint32_t *)fab->_rms_state == P3_CTX_MAGIC)
+        return (p3_ctx_t *)fab->_rms_state;
+    return NULL;
+}
+
+/*
+ * rms_idx_get_p3 - keyed $GET over the genuine on-disk Prolog-3 index
+ * (rms_prolog3.c), the /dev/vms-present runtime path. Translates the RAB keyed-
+ * access request into rms_p3_get_by_key and maps the record back into the RAB.
+ * Only RAB$C_KEY is served here; sequential-by-key-order $GET over Prolog-3 is a
+ * labelled follow-on rung (RMS$_PLG until then, fail-honest per INV-6).
+ */
+static uint32_t rms_idx_get_p3(struct FAB *fab, struct RAB *rab, p3_ctx_t *ctx)
+{
+    (void)fab;
+    if (!rab->rab$l_ubf || rab->rab$w_usz == 0)
+        return RMS$_RAB;
+    if (rab->rab$b_rac != RAB$C_KEY)
+        return RMS$_PLG;               /* sequential over Prolog-3: follow-on */
+    if (!rab->rab$l_kbf || rab->rab$b_ksz == 0)
+        return RMS$_KEY;
+
+    uint16_t rec_len = 0;
+    uint32_t st = rms_p3_get_by_key(
+        ctx, rab->rab$b_krf,
+        (const uint8_t *)rab->rab$l_kbf, rab->rab$b_ksz,
+        (rab->rab$l_rop & RAB$M_KGE) != 0,
+        (rab->rab$l_rop & RAB$M_KGT) != 0,
+        (uint8_t *)rab->rab$l_ubf, rab->rab$w_usz, &rec_len);
+
+    if (st == RMS$_RTB)
+        rab->rab$l_stv = rec_len;
+    if (!(st & 1u))
+        return st;
+
+    rab->rab$w_rsz = rec_len;
+    rab->rab$l_rbf = rab->rab$l_ubf;
+    return RMS$_NORMAL;
+}
+
+/*
+ * rms_idx_find_p3 - keyed $FIND (locate without data copy) over the on-disk
+ * Prolog-3 index.
+ */
+static uint32_t rms_idx_find_p3(struct FAB *fab, struct RAB *rab, p3_ctx_t *ctx)
+{
+    (void)fab;
+    if (!rab->rab$l_kbf || rab->rab$b_ksz == 0)
+        return RMS$_KEY;
+
+    uint16_t rec_len = 0;
+    uint32_t st = rms_p3_find_by_key(
+        ctx, rab->rab$b_krf,
+        (const uint8_t *)rab->rab$l_kbf, rab->rab$b_ksz,
+        (rab->rab$l_rop & RAB$M_KGE) != 0,
+        (rab->rab$l_rop & RAB$M_KGT) != 0, &rec_len);
+    if (!(st & 1u))
+        return st;
+
+    rab->_last_rec_size = rec_len;
+    return RMS$_NORMAL;
+}
+
+/*
  * rms_idx_get - Read a record from an indexed file.
  *
  * Access modes:
@@ -628,6 +706,11 @@ uint32_t rms_idx_get(struct FAB *fab, struct RAB *rab)
 {
     struct rms_file *fd = fab->_rms_file;
     if (!fd) return RMS$_ACC;
+
+    /* vms-5f0: genuine on-disk Prolog-3 index over the ACP (runtime path). */
+    p3_ctx_t *p3 = rms_idx_p3(fab);
+    if (p3) return rms_idx_get_p3(fab, rab, p3);
+
     if (!rab->rab$l_ubf || rab->rab$w_usz == 0) return RMS$_RAB;
 
     btree_t *tree = get_tree(fab);
@@ -1021,6 +1104,10 @@ uint32_t rms_idx_find(struct FAB *fab, struct RAB *rab)
     struct rms_file *fd = fab->_rms_file;
     if (!fd) return RMS$_ACC;
 
+    /* vms-5f0: genuine on-disk Prolog-3 index over the ACP (runtime path). */
+    p3_ctx_t *p3 = rms_idx_p3(fab);
+    if (p3) return rms_idx_find_p3(fab, rab, p3);
+
     btree_t *tree = get_tree(fab);
     if (!tree) return RMS$_DME;
 
@@ -1090,6 +1177,17 @@ uint32_t rms_idx_flush(struct FAB *fab)
 uint32_t rms_idx_cleanup(struct FAB *fab)
 {
     uint32_t sts = RMS$_NORMAL;
+
+    /* vms-5f0: the ACP runtime path stores a Prolog-3 read context here, not a
+     * B-tree. It is read-only (the WRITE engine is vms-045) so there is nothing
+     * to persist -- just free it. Discriminated by the P3_CTX_MAGIC tag. */
+    p3_ctx_t *p3 = rms_idx_p3(fab);
+    if (p3) {
+        rms_p3_free(p3);
+        fab->_rms_state = NULL;
+        return RMS$_NORMAL;
+    }
+
     if (fab->_rms_state) {
         btree_t *tree = (btree_t *)fab->_rms_state;
         if (btree_save(tree) != 0) {   /* Save before cleanup */

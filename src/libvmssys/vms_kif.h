@@ -781,4 +781,23 @@ uint32_t vms_kif_acp_dmount(const char *devnam);
  * product caller. */
 uint32_t vms_kif_acp_assign(const char *devnam, uint32_t *exec_chan);
 
+/*
+ * IO$_ACCESS / IO$_DEACCESS (vms-204, epic vms-208): open a file on a
+ * file-class channel and release it. The caller fills the IN fields of *args
+ * (chan, acctl, either fidmode+fid_* for open-by-FID or did_*+name+version for
+ * open-by-name, and optionally probe_vbn); on return *args carries the resolved
+ * FID, attributes, window summary and probe_lbn, and the function returns the
+ * SS$_ status (SS$_NOSUCHFILE / SS$_NOPRIV / SS$_IVCHAN fail-honest, or
+ * SS$_NOSUCHDEV if /dev/vms is absent). See src/kernel/vms_acp.h for the FIB/ATR
+ * interface.
+ *
+ * OVMX-UNWIRED: vms_kif_acp_access (vms-204) -- no product caller yet: RMS
+ * $OPEN/$CLOSE is the path that will emit these, and that is the next rung
+ * (RMS-over-$QIO) of epic vms-208. Exercised today only by
+ * tests/qemu/test_syssvc_acp_access.c against a real /dev/vms.
+ * OVMX-UNWIRED: vms_kif_acp_deaccess (vms-204) -- the IO$_DEACCESS counterpart
+ * of vms_kif_acp_access above, same reason, same test. */
+uint32_t vms_kif_acp_access(struct vms_acp_access_args *args);
+uint32_t vms_kif_acp_deaccess(uint32_t chan);
+
 #endif /* _VMS_KIF_H */

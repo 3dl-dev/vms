@@ -848,6 +848,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_acp_dmount(proc, arg);
     case VMS_IOCTL_ACP_ASSIGN:
         return vms_ioctl_acp_assign(proc, arg);
+    case VMS_IOCTL_ACP_ACCESS:
+        return vms_ioctl_acp_access(proc, arg);
+    case VMS_IOCTL_ACP_DEACCESS:
+        return vms_ioctl_acp_deaccess(proc, arg);
     case VMS_IOCTL_MBX_SET_WRTATTN:
         return vms_ioctl_mbx_set_wrtattn(proc, arg);
 

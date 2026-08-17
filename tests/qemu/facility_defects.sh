@@ -493,6 +493,7 @@ mmk-drive-command-not-sent
 mmk-build-image-not-activated
 acp-assign-unmounted-fabricates-channel
 acp-mount-nonods2-accepted
+acp-access-window-vbn-offbyone
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -4820,6 +4821,39 @@ EOF
                       ;;
         esac;;
 
+    acp-access-window-vbn-offbyone)
+        case "$_f" in
+        facility)     echo "Files-11 (ODS-2) ACP IO\$_ACCESS VBN->LBN window (VMS_IOCTL_ACP_ACCESS builds a file's retrieval-pointer window from its FH2 and resolves a VBN through it), vms-204, epic vms-208";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_access";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_window_map_vbn() -- the function that resolves a virtual block number through the built window to its logical block number -- returns win[i].lbn + (vbn - win[i].start_vbn) + 1, an off-by-one, instead of the correct win[i].lbn + (vbn - win[i].start_vbn). Every VBN then maps ONE LBN too high, so the probe_lbn IO\$_ACCESS returns for a caller-supplied VBN is wrong by exactly one block. This is the executive's VBN->LBN translation -- the whole point of a file window -- so a defect here is a file that reads the wrong block. The window's extent COUNT, its first-extent LBN, and total_blocks all come from the map-walk builder, not from this resolver, so they stay correct; only the assertions that resolve a VBN through the window (the negctl-anchored probe checks) can tell the difference.";;
+        require_fail) cat <<'EOF'
+a VBN probe resolves through the window to the LBN the codec computes (VBN 34 -> LBN 65)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+by-FID open's window maps VBN 1 -> the file's first LBN (32)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME ONE ROOT, OBSERVED AT A SECOND VBN. The off-by-one is in the single
+VBN->LBN resolver, so EVERY probe is wrong by one block, not just the one named
+as require_fail. The by-name open probes VBN 34 (expecting the file's last LBN,
+65) and the by-FID open probes VBN 1 (expecting the file's first LBN, 32); the
+mutation returns 66 and 33 respectively, so both probe assertions redden from
+the one deleted correction. Nothing else moves: the window's extent count (1),
+its first_lbn (32) and total_blocks (34) are computed by the map-walk BUILDER
+(acp_winbuild_cb), which the mutation does not touch, so every assertion that
+reads those -- and the FID/attribute/protection assertions, which never resolve
+a VBN at all -- stays green. One wrong resolver, two probes at two VBNs naming
+the same broken translation.
+EOF
+                      ;;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -6204,6 +6238,18 @@ apply_edit() {
         # REJECT assertions redden. After substitution the original call text is
         # gone, so a second apply matches nothing (the no-op selftest requires).
         sed -i 's|status = acp_validate_ods2(backing_major, backing_minor, vol);|status = SS__NORMAL; /* NEGCTL acp-mount-nonods2-accepted (was acp_validate_ods2) */|' "$_file";;
+
+    acp-access-window-vbn-offbyone)
+        # ANCHORED to the single VBN->LBN translation in acp_window_map_vbn:
+        # `return win[i].lbn + (vbn - win[i].start_vbn);` occurs exactly once in
+        # the file. Adding `+ 1` makes every VBN resolve one LBN too high, so the
+        # probe_lbn IO$_ACCESS returns is off by one -- a file window that maps to
+        # the wrong block. The window's extent count / first_lbn / total_blocks
+        # (built by acp_winbuild_cb, untouched) stay correct, so only the
+        # negctl-anchored VBN-probe assertions redden. After substitution the
+        # original text is gone, so a second apply matches nothing (the no-op
+        # selftest requires).
+        sed -i 's|return win\[i\].lbn + (vbn - win\[i\].start_vbn);|return win[i].lbn + (vbn - win[i].start_vbn) + 1; /* NEGCTL acp-access-window-vbn-offbyone */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

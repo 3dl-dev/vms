@@ -229,19 +229,33 @@ caller's context. Option A is the only one that reproduces that.
   `_ACP_CREATE`, `_ACP_DEACCESS`, `_ACP_MODIFY`, `_ACP_DELETE`, `_ACP_CONTROL`,
   `_ACP_READVB`, `_ACP_WRITEVB`, plus `_ACP_MOUNT`/`_ACP_DMOUNT`. Each carries a
   flat, fixed-width, `_Static_assert`-sized `struct vms_acp_*_args` (the executive
-  convention). `sys_qio.c` marshals the caller's FIB (P1), name descriptor (P2),
-  resultant-name (P3/P4), and ATR list (P5) into these structs and issues the
-  ioctl through `kif_call`/`kif_wait_call` (the latter when the op may block on
-  the volume lock). Completion fills the IOSB; an `astadr` queues into
-  `proc->ast[acmode]`.
+  convention). **LANDED (vms-204): `IO$_ACCESS`/`IO$_DEACCESS` at 0x6B/0x6C**
+  (`VMS_IOCTL_ACP_ACCESS`/`_ACP_DEACCESS`, `struct vms_acp_access_args`/
+  `vms_acp_deaccess_args` in `src/kernel/vms_acp.h`) — open a file by FIB name
+  (P2, within the FIB$W_DID directory, MFD by default) or by FIB$W_FID, build
+  its window, return the resolved FID + an ATR subset (P5), release it. Driven
+  today by the KIF helper `vms_kif_acp_access()`/`_deaccess()`; the `sys_qio.c`
+  marshalling of the caller's FIB (P1), name descriptor (P2), resultant-name
+  (P3/P4), and ATR list (P5) into these structs — issued through
+  `kif_call`/`kif_wait_call` (the latter when the op may block on the volume
+  lock), completion filling the IOSB, an `astadr` queuing into
+  `proc->ast[acmode]` — is the RMS-over-$QIO rung that follows.
 - **Function → handler map** is §2's table, each implemented as
   `vms_ioctl_acp_*(struct vms_proc *proc, unsigned long arg)` in
   `src/kernel-core/vmsfs_acp.c`, calling the ported codec. Protection/ACL checks
   gate on `proc->uic`/privs (INV-6).
 - **Window model.** On `IO$_ACCESS`/`IO$_CREATE` the ACP builds a *window* — the
   file's VBN→LBN retrieval-pointer map, decoded by the codec's
-  `ods2_fh2_map_walk` — and stores it in the channel's per-process ACP sub-state
-  in `struct vms_proc` (a new sub-struct, guarded by its own lock, like `ast[4]`).
+  `ods2_fh2_map_walk` — and stores it in the channel's per-process ACP sub-state.
+  *(vms-204 as-built: the window lives on the per-process file channel itself —
+  `struct vms_acp_chan` in `src/kernel-core/vmsfs_acp.c`, one accessed file per
+  channel with its `win[]` extents under `proc->chan_lock` — rather than a new
+  `struct vms_proc` sub-struct; the channel is already the per-file handle. The
+  ACP sources blocks through the executive's `exec_blockdev_read_block`
+  (submit_bio_wait), the same raw path $MOUNT validates the home block with, not
+  the codec's `sb_bread` host seam — there is no mounted `super_block` behind an
+  ACP volume — so the handler sequences block reads and feeds the codec's pure
+  parsers.)*
   `IO$_READVBLK`/`IO$_WRITEVBLK` translate {VBN, byte-offset, length} through the
   window to block I/O on the backing device. A write past EOF triggers an implicit
   extend (BITMAP.SYS allocation + window/HIBLK update), matching RMS `$EXTEND`.

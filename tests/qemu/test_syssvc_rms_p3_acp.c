@@ -54,6 +54,14 @@
 
 #define KEY_SIZE 8u
 #define NREC     40                   /* forces several 1-block-bucket splits */
+#define SECNAME  "P3SEC.TST"          /* the secondary-key scenario file */
+
+/* Secondary-key (SIDR) scenario record: [16 username][4 UIC][8 payload]. */
+#define SEC_USERKEY 16u
+#define SEC_UICPOS  16u
+#define SEC_UICKEY  4u
+#define SEC_RECLEN  28u
+#define SEC_NREC    40                /* forces primary splits under the SIDR */
 
 static int pass = 0;
 static int fail = 0;
@@ -109,6 +117,172 @@ static void seed_handle(rms_file_t *h, uint32_t chan,
     h->hiblk     = f->new_hiblk;
     h->eof       = (uint64_t)(f->new_efblk ? (f->new_efblk - 1u) : 0) * 512u
                    + f->new_ffbyte;
+}
+
+/* --- secondary-key (SIDR) scenario helpers --- */
+static uint32_t sec_uic_of(int n)
+{
+    if (n == 5 || n == 11) n = 2;              /* dup group {2,5,11} share a UIC */
+    return 0x00010000u + (uint32_t)n;
+}
+static void sec_make(int n, uint8_t *rec)
+{
+    char u[24], d[16];
+    int un = snprintf(u, sizeof(u), "ACCT%05d", n);
+    memset(rec, ' ', SEC_USERKEY);
+    memcpy(rec, u, (size_t)un < SEC_USERKEY ? (size_t)un : SEC_USERKEY);
+    p3_put_le32(rec + SEC_UICPOS, sec_uic_of(n));
+    memset(rec + 20, 0, 8);
+    snprintf(d, sizeof(d), "D%05d", n);
+    memcpy(rec + 20, d, 7);
+}
+
+/* Author [OVMXDIR]P3SEC.TST on `chan`: a primary (username) key + a UIC
+ * secondary index, $PUT SEC_NREC records over IO$_WRITEVBLK, then read them BY
+ * THE SECONDARY KEY over IO$_READVBLK (secondary index -> SIDR -> primary RFA),
+ * exercise the duplicate-UIC pointer array, and $DELETE (SIDR purge). Every
+ * block transfer is executive-resident; nothing here fakes a lookup. */
+static void run_secondary_scenario(uint32_t chan)
+{
+    struct vms_acp_fileop_args f;
+    struct vms_acp_access_args a;
+    rms_file_t h;
+    p3_ctx_t *ctx = NULL;
+    p3_create_params_t cp, sp;
+    uint32_t st;
+    int i, order[SEC_NREC];
+
+    /* fresh writable file */
+    memset(&f, 0, sizeof(f));
+    f.chan = chan; f.func = VMS_ACP_FOP_DELETE; f.modifiers = VMS_ACP_M_DELETE;
+    f.did_num = OVMXDIR_FID_NUM; f.did_seq = 1; f.version = 0;
+    strncpy(f.name, SECNAME, VMS_ACP_NAME_SIZE - 1);
+    (void)vms_kif_acp_fileop(&f);
+
+    memset(&f, 0, sizeof(f));
+    f.chan = chan; f.func = VMS_ACP_FOP_CREATE;
+    f.modifiers = VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS;
+    f.acctl = VMS_ACP_ACCTL_WRITE; f.kind = ODS2_FK_DATA;
+    f.did_num = OVMXDIR_FID_NUM; f.did_seq = 1; f.version = 0;
+    strncpy(f.name, SECNAME, VMS_ACP_NAME_SIZE - 1);
+    st = vms_kif_acp_fileop(&f);
+    check($VMS_STATUS_SUCCESS(st), "IO$_CREATE [OVMXDIR]P3SEC.TST");
+    if (!$VMS_STATUS_SUCCESS(st)) return;
+    seed_handle(&h, chan, &f);
+
+    memset(&cp, 0, sizeof(cp));
+    cp.key_size = SEC_USERKEY; cp.seg0_pos = 0; cp.seg0_siz = SEC_USERKEY;
+    cp.bkt_blocks = 1; cp.allow_dup = 0;
+    st = rms_p3_create(&h, &cp, &ctx);
+    check(st == RMS$_CREATED && ctx, "rms_p3_create (primary key) over the ACP");
+    if (!ctx) { (void)vms_kif_acp_deaccess(chan); return; }
+
+    memset(&sp, 0, sizeof(sp));
+    sp.key_size = SEC_UICKEY; sp.seg0_pos = SEC_UICPOS; sp.seg0_siz = SEC_UICKEY;
+    sp.bkt_blocks = 1; sp.allow_dup = 1;
+    st = rms_p3_add_secondary_key(ctx, &sp);
+    check(st == RMS$_NORMAL && ctx->num_keys == 2,
+          "rms_p3_add_secondary_key (UIC index) writes its prologue on disk");
+
+    for (i = 0; i < SEC_NREC; i++) order[i] = i;
+    for (i = SEC_NREC - 1; i > 0; i--) {
+        int j = (int)(((unsigned)(i * 2654435761u)) % (unsigned)(i + 1));
+        int t = order[i]; order[i] = order[j]; order[j] = t;
+    }
+    {
+        int put_ok = 1;
+        for (i = 0; i < SEC_NREC; i++) {
+            uint8_t rec[SEC_RECLEN];
+            sec_make(order[i], rec);
+            if (!$VMS_STATUS_SUCCESS(rms_p3_put(ctx, 0, rec, SEC_RECLEN))) put_ok = 0;
+        }
+        check(put_ok, "all $PUTs land (primary + SIDR maintenance) over IO$_WRITEVBLK");
+    }
+
+    /* read every distinct-UIC record BY THE SECONDARY KEY over the ACP */
+    {
+        int ok = 1;
+        for (i = 0; i < SEC_NREC; i++) {
+            uint8_t uk[SEC_UICKEY], buf[64], want[SEC_RECLEN]; uint16_t rl = 0;
+            if (i == 5 || i == 11) continue;
+            p3_put_le32(uk, sec_uic_of(i)); sec_make(i, want);
+            if (!($VMS_STATUS_SUCCESS(rms_p3_get_by_key(ctx, 1, uk, SEC_UICKEY,
+                    0, 0, buf, sizeof(buf), &rl)) && rl == SEC_RECLEN &&
+                  memcmp(buf, want, SEC_RECLEN) == 0)) ok = 0;
+        }
+        check(ok, "records resolve BY UIC over the ACP (index->SIDR->primary RFA, "
+                  "across primary splits)");
+    }
+
+    /* duplicate UIC: SIDR carries {2,5,11} */
+    {
+        uint8_t uk[SEC_UICKEY]; p3_rfa_t rfa[8]; uint16_t cnt = 0;
+        int seen2 = 0, seen5 = 0, seen11 = 0;
+        p3_put_le32(uk, sec_uic_of(2));
+        st = rms_p3_sidr_lookup(ctx, 1, uk, SEC_UICKEY, rfa, 8, &cnt);
+        check($VMS_STATUS_SUCCESS(st) && cnt == 3, "duplicate-UIC SIDR has 3 pointers");
+        for (i = 0; i < (int)cnt; i++) {
+            uint8_t buf[64]; uint16_t rl = 0; int c;
+            if (!$VMS_STATUS_SUCCESS(rms_p3_get_by_rfa(ctx, rfa[i].home_vbn,
+                    rfa[i].home_recid, buf, sizeof(buf), &rl))) continue;
+            for (c = 0; c < SEC_NREC; c++) {
+                uint8_t w[SEC_RECLEN]; sec_make(c, w);
+                if (rl == SEC_RECLEN && memcmp(buf, w, SEC_RECLEN) == 0) {
+                    if (c == 2) seen2 = 1; else if (c == 5) seen5 = 1;
+                    else if (c == 11) seen11 = 1;
+                }
+            }
+        }
+        check(seen2 && seen5 && seen11,
+              "all 3 duplicate-UIC pointers resolve to the correct users over the ACP");
+    }
+
+    /* $DELETE purges the SIDR: delete user 5, dup array shrinks to {2,11} */
+    {
+        uint8_t k5[SEC_USERKEY], rec5[SEC_RECLEN];
+        uint8_t uk[SEC_UICKEY]; p3_rfa_t rfa[8]; uint16_t cnt = 0;
+        sec_make(5, rec5); memcpy(k5, rec5, SEC_USERKEY);
+        check($VMS_STATUS_SUCCESS(rms_p3_delete(ctx, 0, k5, SEC_USERKEY)),
+              "$DELETE user 5 over the ACP");
+        p3_put_le32(uk, sec_uic_of(2));
+        st = rms_p3_sidr_lookup(ctx, 1, uk, SEC_UICKEY, rfa, 8, &cnt);
+        check($VMS_STATUS_SUCCESS(st) && cnt == 2,
+              "SIDR pointer array shrank to 2 after $DELETE (SIDR purged on disk)");
+    }
+
+    /* durability: DEACCESS, re-ACCESS, re-bind, re-read one record by UIC */
+    rms_p3_free(ctx); ctx = NULL;
+    (void)vms_kif_acp_deaccess(chan);
+    memset(&a, 0, sizeof(a));
+    a.chan = chan; a.did_num = OVMXDIR_FID_NUM; a.did_seq = 1;
+    strncpy(a.name, SECNAME, VMS_ACP_NAME_SIZE - 1);
+    st = vms_kif_acp_access(&a);
+    check($VMS_STATUS_SUCCESS(st), "re-ACCESS P3SEC.TST");
+    if ($VMS_STATUS_SUCCESS(st)) {
+        p3_ctx_t *rc = NULL;
+        memset(&h, 0, sizeof(h));
+        h.chan = chan; h.assigned = 1; h.accessed = 1; h.writable = 0; h.fd = -1;
+        h.eof = (uint64_t)(a.attr.efblk ? (a.attr.efblk - 1u) : 0) * 512u + a.attr.ffbyte;
+        h.hiblk = a.attr.hiblk;
+        if ($VMS_STATUS_SUCCESS(rms_p3_bind(&h, &rc)) && rc && rc->num_keys == 2) {
+            uint8_t uk[SEC_UICKEY], buf[64], want[SEC_RECLEN]; uint16_t rl = 0;
+            p3_put_le32(uk, sec_uic_of(7)); sec_make(7, want);
+            check($VMS_STATUS_SUCCESS(rms_p3_get_by_key(rc, 1, uk, SEC_UICKEY,
+                    0, 0, buf, sizeof(buf), &rl)) && rl == SEC_RECLEN &&
+                  memcmp(buf, want, SEC_RECLEN) == 0,
+                  "secondary index survives DEACCESS+re-ACCESS (durable SIDR on volume)");
+            rms_p3_free(rc);
+        } else {
+            check(0, "re-bind 2-key prologue from disk");
+        }
+    }
+
+    (void)vms_kif_acp_deaccess(chan);
+    memset(&f, 0, sizeof(f));
+    f.chan = chan; f.func = VMS_ACP_FOP_DELETE; f.modifiers = VMS_ACP_M_DELETE;
+    f.did_num = OVMXDIR_FID_NUM; f.did_seq = 1; f.version = 0;
+    strncpy(f.name, SECNAME, VMS_ACP_NAME_SIZE - 1);
+    (void)vms_kif_acp_fileop(&f);
 }
 
 /* Read every record back by key against ctx; returns 1 if all present+exact. */
@@ -266,6 +440,9 @@ int main(void)
     strncpy(f.name, TESTNAME, VMS_ACP_NAME_SIZE - 1);
     st = vms_kif_acp_fileop(&f);
     check($VMS_STATUS_SUCCESS(st), "IO$_DELETE removes the test file (isolation)");
+
+    /* ---- secondary key / SIDR end-to-end over the ACP (vms-2ae) ---- */
+    run_secondary_scenario(chan);
 
     vms_kif_dassgn(chan);
 

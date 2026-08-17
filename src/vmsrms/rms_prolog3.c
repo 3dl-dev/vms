@@ -34,6 +34,21 @@
 #include "rmsdef.h"
 #include "ssdef.h"
 
+/* -------- secondary-key / SIDR internals (defined at end of file) ---------- */
+static uint32_t p3_maintain_secondaries_put(p3_ctx_t *ctx, const uint8_t *rec,
+                                            uint16_t rec_len, uint32_t home_vbn,
+                                            uint16_t home_recid);
+static uint32_t p3_sidr_put(p3_ctx_t *ctx, const p3_keydesc_t *sk,
+                            const uint8_t *keyval, p3_rfa_t rfa);
+static uint32_t p3_sidr_remove(p3_ctx_t *ctx, const p3_keydesc_t *sk,
+                               const uint8_t *keyval, p3_rfa_t rfa);
+static uint32_t p3_split_sidr_bucket(p3_ctx_t *ctx, const p3_keydesc_t *sk,
+                                     uint8_t *root, uint16_t entry_off,
+                                     uint32_t data_vbn, const uint8_t *xold);
+static uint32_t p3_resolve_rfa(p3_ctx_t *ctx, const p3_keydesc_t *pk,
+                               uint32_t vbn, uint16_t id,
+                               uint8_t *bkt, uint16_t *rec_off);
+
 /* Read `nblk` consecutive 512-byte blocks starting at VBN `vbn` (1-based) into
  * buf. Returns 0 on success, -1 on short read / I/O error. */
 static int p3_read_blocks(rms_file_t *f, uint32_t vbn, uint32_t nblk,
@@ -380,6 +395,30 @@ uint32_t rms_p3_get_by_key(p3_ctx_t *ctx, uint8_t krf,
 
     if (!ctx || ctx->magic != P3_CTX_MAGIC || !buf || !rec_len)
         return RMS$_PLG;
+
+    /* Secondary key of reference: descend the secondary index to a SIDR, take
+     * its first primary pointer, and resolve THAT primary record by RFA -- a
+     * real secondary-index lookup, not a filtered flat scan. KGE/KGT on a
+     * secondary key is a labelled follow-on (fail honest, never mis-resolve). */
+    {
+        const p3_keydesc_t *k = p3_find_key(ctx, krf);
+        if (k && k->ref != 0) {
+            p3_rfa_t rfa;
+            uint16_t cnt = 0;
+            uint32_t s;
+            if (rop_kge || rop_kgt)
+                return RMS$_PLG;
+            s = rms_p3_sidr_lookup(ctx, krf, key, key_len, &rfa, 1u, &cnt);
+            if (s == RMS$_RTB)          /* duplicates: $GET returns the first */
+                s = RMS$_NORMAL;
+            if (!$VMS_STATUS_SUCCESS(s))
+                return s;
+            if (cnt == 0)
+                return RMS$_RNF;
+            return rms_p3_get_by_rfa(ctx, rfa.home_vbn, rfa.home_recid,
+                                     buf, buf_sz, rec_len);
+        }
+    }
 
     bkt = (uint8_t *)malloc((size_t)P3_MAX_BKT_BLOCKS * P3_BLK);
     if (!bkt)
@@ -741,9 +780,13 @@ static uint32_t p3_split_data_bucket(p3_ctx_t *ctx, const p3_keydesc_t *kd,
         uint16_t rs = p3_rec_size(xold, so);
         memcpy(ybuf + yo, xold + so, rs);
         ybuf[yo + P3_DR_OFF_CTRL] = 0;
-        p3_put_le16(ybuf + yo + P3_DR_OFF_RECID, yid);
-        p3_put_le16(ybuf + yo + P3_DR_OFF_RRVID, yid);
-        p3_put_le32(ybuf + yo + P3_DR_OFF_RRVPTR, vy);   /* home bucket = self */
+        p3_put_le16(ybuf + yo + P3_DR_OFF_RECID, yid);  /* fresh LOCAL id in Y */
+        /* PRESERVE the stable home RFA (rrv-ptr/rrv-id copied by the memcpy):
+         * a secondary SIDR points at this record by its home {vbn,id}, which
+         * never moves. The RRV stub left in X below chains home->Y by LOCAL id
+         * (stub.rrv_id == this record's new Y local id), so rms_p3_get_by_rfa
+         * resolves home -> stub -> Y, and rms_p3_delete recovers the home RFA
+         * from these preserved fields to purge the SIDRs. */
         yo = (uint16_t)(yo + rs);
         yid++;
     }
@@ -916,6 +959,15 @@ uint32_t rms_p3_put(p3_ctx_t *ctx, uint8_t krf,
                 if (p3_write_blocks(ctx->f, kd->root_vbn, kd->ibs ? kd->ibs : 1u,
                                     root) != 0) { st = RMS$_WPL; goto done; }
             }
+            /* Maintain every secondary index: insert a SIDR pointer from each
+             * secondary key VALUE to this record's stable RFA {home bucket,
+             * record id}. The RFA stays resolvable across later primary splits
+             * (RRV stubs), so the secondary lookup always finds the record. */
+            if (krf == 0 && ctx->num_keys > 1) {
+                st = p3_maintain_secondaries_put(ctx, rec, rec_len,
+                                                 data_vbn, recid);
+                if (!$VMS_STATUS_SUCCESS(st)) goto done;
+            }
             st = RMS$_NORMAL; goto done;
         }
 
@@ -1013,6 +1065,709 @@ uint32_t rms_p3_update(p3_ctx_t *ctx, uint8_t krf,
         }
     }
     st = rms_p3_put(ctx, krf, rec, rec_len);
+
+done:
+    free(root);
+    free(data);
+    return st;
+}
+
+/*
+ * ============================================================================
+ * SECONDARY KEYS / SIDR (vms-2ae) -- a second key of reference with its own
+ * index tree whose level-0 leaves are SIDR records mapping a secondary-key
+ * VALUE to the primary record(s) carrying it. Same [PIN]/[OVMX] bucket + index
+ * machinery as the primary key: genuine descent, genuine SIDR-bucket split,
+ * genuine RFA resolution to the primary record -- NEVER a flat scan filtered by
+ * the secondary field, NEVER a sidecar.
+ *
+ * SIDR record ([OVMX], oracle §5 leaves the per-pointer sub-layout unpinned):
+ *   [u8 ctrl][u16 payload_len][key_size key][u16 nptr][nptr * {u32 vbn,u16 id}]
+ * A primary RFA is the record's HOME {vbn,id} (bucket it was first inserted
+ * into + the id assigned there). p3_resolve_rfa follows the RRV stub chain the
+ * primary split leaves, so the RFA resolves to the record's CURRENT location.
+ * ============================================================================
+ */
+
+/* Resolve a primary RFA {vbn,id} to the record's CURRENT data-bucket offset,
+ * following RRV stubs (a split leaves a stub at the home {vbn,id} whose rrv-id
+ * is the moved record's new LOCAL id in its new bucket). Leaves the resolved
+ * bucket in `bkt`, its record offset in *rec_off. */
+static uint32_t p3_resolve_rfa(p3_ctx_t *ctx, const p3_keydesc_t *pk,
+                               uint32_t vbn, uint16_t id,
+                               uint8_t *bkt, uint16_t *rec_off)
+{
+    uint32_t dbs = pk->dbs ? pk->dbs : 1u;
+    int guard;
+
+    for (guard = 0; guard < 64; guard++) {
+        uint16_t fo, off;
+        int hopped = 0;
+
+        if (p3_read_blocks(ctx->f, vbn, dbs, bkt) != 0)
+            return RMS$_RER;
+        if (bkt[P3_BH_OFF_LEVEL] != 0)
+            return RMS$_PLG;
+        fo = p3_le16(bkt + P3_BH_OFF_FREESPACE);
+        if (fo < P3_BKT_HDR_SIZE || fo > dbs * P3_BLK)
+            return RMS$_PLG;
+
+        for (off = P3_BKT_HDR_SIZE;
+             (uint16_t)(off + P3_DR_HDR_SIZE) <= fo; ) {
+            uint16_t rid = p3_le16(bkt + off + P3_DR_OFF_RECID);
+            uint8_t  ctrl = bkt[off + P3_DR_OFF_CTRL];
+            uint16_t rn = (uint16_t)(off + p3_rec_size(bkt, off));
+            if (rn > fo)
+                break;
+            if (rid == id) {
+                if ((ctrl >> P3_IRCV_RRV) & 1u) {   /* stub: chain to new home */
+                    vbn = p3_le32(bkt + off + P3_DR_OFF_RRVPTR);
+                    id  = p3_le16(bkt + off + P3_DR_OFF_RRVID);
+                    hopped = 1;
+                    break;
+                }
+                if ((ctrl >> P3_IRCV_DELETED) & 1u)
+                    return RMS$_RNF;                 /* record was deleted */
+                *rec_off = off;
+                return RMS$_NORMAL;
+            }
+            off = rn;
+        }
+        if (!hopped)
+            return RMS$_RNF;                         /* id not present */
+    }
+    return RMS$_PLG;                                 /* stub cycle */
+}
+
+uint32_t rms_p3_get_by_rfa(p3_ctx_t *ctx, uint32_t home_vbn, uint16_t home_recid,
+                           uint8_t *buf, uint16_t buf_sz, uint16_t *rec_len)
+{
+    const p3_keydesc_t *pk;
+    uint8_t *bkt;
+    uint16_t rec_off = 0, dlen;
+    uint32_t st;
+
+    if (!ctx || ctx->magic != P3_CTX_MAGIC || !rec_len)
+        return RMS$_PLG;
+    pk = p3_find_key(ctx, 0);
+    if (!pk)
+        return RMS$_KEY;
+
+    bkt = (uint8_t *)malloc((size_t)P3_MAX_BKT_BLOCKS * P3_BLK);
+    if (!bkt)
+        return RMS$_DME;
+
+    st = p3_resolve_rfa(ctx, pk, home_vbn, home_recid, bkt, &rec_off);
+    if (!$VMS_STATUS_SUCCESS(st)) { free(bkt); return st; }
+
+    dlen = p3_le16(bkt + rec_off + P3_DR_OFF_DATALEN);
+    *rec_len = dlen;
+    if (buf) {
+        if (dlen > buf_sz) { free(bkt); return RMS$_RTB; }
+        if (dlen > 0)
+            memcpy(buf, bkt + rec_off + P3_DR_HDR_SIZE, dlen);
+    }
+    free(bkt);
+    return RMS$_NORMAL;
+}
+
+/* Split a FULL SIDR bucket X into X + a fresh bucket Y, redistributing the live
+ * SIDR records (already key-sorted) by half and inserting Y's {child,high-key}
+ * into the secondary root. SIDR records carry NO RRV stub (nothing references a
+ * SIDR by RFA). Returns RMS$_NORMAL, RMS$_ORG (secondary index would need a 2nd
+ * level -- deferred), RMS$_RSZ (< 2 records -> unsplittable), or an I/O status. */
+static uint32_t p3_split_sidr_bucket(p3_ctx_t *ctx, const p3_keydesc_t *sk,
+                                     uint8_t *root, uint16_t entry_off,
+                                     uint32_t data_vbn, const uint8_t *xold)
+{
+    uint32_t cap   = (sk->dbs ? sk->dbs : 1u) * P3_BLK;
+    uint16_t istr  = (uint16_t)(P3_IDXREC_PTR_SIZE + sk->key_size);
+    uint16_t icap  = (uint16_t)((sk->ibs ? sk->ibs : 1u) * P3_BLK);
+    uint16_t rfree = p3_le16(root + P3_BH_OFF_FREESPACE);
+    uint16_t xfree = p3_le16(xold + P3_BH_OFF_FREESPACE);
+    uint8_t  xflags = xold[P3_BH_OFF_FLAGS];
+    uint32_t xnext  = p3_le32(xold + P3_BH_OFF_NEXT_VBN);
+    uint16_t ksz    = sk->key_size;
+    uint16_t maxrec = (uint16_t)(cap / P3_SIDR_HDR_SIZE + 1);
+    uint16_t *ent = NULL, nent = 0, i, off, split_idx, xo, yo;
+    uint8_t  *xbuf = NULL, *ybuf = NULL;
+    uint32_t vy, st = RMS$_NORMAL;
+
+    if ((uint32_t)rfree + istr > icap)
+        return RMS$_ORG;                 /* 2-level secondary index: deferred */
+
+    ent  = (uint16_t *)malloc((size_t)maxrec * sizeof(uint16_t));
+    xbuf = (uint8_t  *)malloc((size_t)cap);
+    ybuf = (uint8_t  *)malloc((size_t)cap);
+    if (!ent || !xbuf || !ybuf) { st = RMS$_DME; goto done; }
+
+    for (off = P3_BKT_HDR_SIZE;
+         (uint16_t)(off + P3_SIDR_HDR_SIZE) <= xfree; ) {
+        uint8_t  ctrl = xold[off + P3_SIDR_OFF_CTRL];
+        uint16_t P    = p3_le16(xold + off + P3_SIDR_OFF_LEN);
+        uint16_t rn   = (uint16_t)(off + P3_SIDR_HDR_SIZE + P);
+        if (rn > xfree) break;
+        if (!((ctrl >> P3_IRCV_DELETED) & 1u) && nent < maxrec)
+            ent[nent++] = off;
+        off = rn;
+    }
+    if (nent < 2) { st = RMS$_RSZ; goto done; }
+    split_idx = (uint16_t)(nent / 2);
+
+    vy = ctx->alloc_next;
+    ctx->alloc_next += (sk->dbs ? sk->dbs : 1u);
+
+    memset(ybuf, 0, (size_t)cap);
+    yo = P3_BKT_HDR_SIZE;
+    for (i = split_idx; i < nent; i++) {
+        uint16_t so = ent[i];
+        uint16_t rs = (uint16_t)(P3_SIDR_HDR_SIZE +
+                                 p3_le16(xold + so + P3_SIDR_OFF_LEN));
+        memcpy(ybuf + yo, xold + so, rs);
+        yo = (uint16_t)(yo + rs);
+    }
+    p3_set_bkt_header(ybuf, 0, (uint8_t)(xflags & (1u << P3_BKTV_LASTBKT)),
+                      yo, 1, xnext);
+
+    memset(xbuf, 0, (size_t)cap);
+    xo = P3_BKT_HDR_SIZE;
+    for (i = 0; i < split_idx; i++) {
+        uint16_t so = ent[i];
+        uint16_t rs = (uint16_t)(P3_SIDR_HDR_SIZE +
+                                 p3_le16(xold + so + P3_SIDR_OFF_LEN));
+        memcpy(xbuf + xo, xold + so, rs);
+        xo = (uint16_t)(xo + rs);
+    }
+    p3_set_bkt_header(xbuf, 0, (uint8_t)(xflags & ~(1u << P3_BKTV_LASTBKT)),
+                      xo, 1, vy);
+
+    {
+        const uint8_t *xhigh = xold + ent[split_idx - 1] + P3_SIDR_HDR_SIZE;
+        const uint8_t *yhigh = xold + ent[nent - 1] + P3_SIDR_HDR_SIZE;
+        uint16_t pos = (uint16_t)(entry_off + istr);
+        uint8_t *xe = root + entry_off + P3_IDXREC_PTR_SIZE;
+        uint8_t *ye = root + pos + P3_IDXREC_PTR_SIZE;
+        memmove(root + pos + istr, root + pos, (size_t)(rfree - pos));
+        memcpy(xe, xhigh, ksz);
+        p3_put_le16(root + pos, (uint16_t)vy);
+        memcpy(ye, yhigh, ksz);
+        rfree = (uint16_t)(rfree + istr);
+        p3_put_le16(root + P3_BH_OFF_FREESPACE, rfree);
+    }
+
+    if (p3_write_blocks(ctx->f, vy, sk->dbs ? sk->dbs : 1u, ybuf) != 0 ||
+        p3_write_blocks(ctx->f, data_vbn, sk->dbs ? sk->dbs : 1u, xbuf) != 0 ||
+        p3_write_blocks(ctx->f, sk->root_vbn, sk->ibs ? sk->ibs : 1u, root) != 0 ||
+        p3_flush_alloc_next(ctx) != 0) {
+        st = RMS$_WPL;
+        goto done;
+    }
+
+done:
+    free(ent); free(xbuf); free(ybuf);
+    return st;
+}
+
+/* Insert (secondary value -> primary RFA) into secondary key `sk`. If a SIDR for
+ * `keyval` exists, APPENDS the RFA (duplicate secondary value, dup allowed);
+ * else inserts a new key-sorted SIDR. Splits the SIDR bucket when it fills. */
+static uint32_t p3_sidr_put(p3_ctx_t *ctx, const p3_keydesc_t *sk,
+                            const uint8_t *keyval, p3_rfa_t rfa)
+{
+    uint32_t icap = (sk->ibs ? sk->ibs : 1u) * P3_BLK;
+    uint32_t cap  = (sk->dbs ? sk->dbs : 1u) * P3_BLK;
+    uint16_t ksz  = sk->key_size;
+    uint8_t *root = NULL, *data = NULL;
+    uint32_t st = RMS$_NORMAL;
+    int attempt;
+
+    root = (uint8_t *)malloc((size_t)icap);
+    data = (uint8_t *)malloc((size_t)cap);
+    if (!root || !data) { st = RMS$_DME; goto done; }
+
+    for (attempt = 0; attempt < 4; attempt++) {
+        uint16_t entry_off = 0, dfree, off, ins_off, found = 0xFFFF;
+        uint32_t data_vbn = 0;
+
+        if (p3_read_blocks(ctx->f, sk->root_vbn, sk->ibs ? sk->ibs : 1u,
+                           root) != 0) { st = RMS$_RER; goto done; }
+        st = p3_index_locate(sk, root, keyval, ksz, &entry_off, &data_vbn);
+        if (!$VMS_STATUS_SUCCESS(st)) goto done;
+        if (p3_read_blocks(ctx->f, data_vbn, sk->dbs ? sk->dbs : 1u,
+                           data) != 0) { st = RMS$_RER; goto done; }
+        if (data[P3_BH_OFF_LEVEL] != 0) { st = RMS$_PLG; goto done; }
+        dfree = p3_le16(data + P3_BH_OFF_FREESPACE);
+        if (dfree < P3_BKT_HDR_SIZE || dfree > cap) { st = RMS$_PLG; goto done; }
+
+        ins_off = dfree;
+        for (off = P3_BKT_HDR_SIZE;
+             (uint16_t)(off + P3_SIDR_HDR_SIZE) <= dfree; ) {
+            uint8_t  ctrl = data[off + P3_SIDR_OFF_CTRL];
+            uint16_t P    = p3_le16(data + off + P3_SIDR_OFF_LEN);
+            uint16_t rn   = (uint16_t)(off + P3_SIDR_HDR_SIZE + P);
+            int c;
+            if (rn > dfree) break;
+            if ((ctrl >> P3_IRCV_DELETED) & 1u) { off = rn; continue; }
+            c = p3_keycmp(data + off + P3_SIDR_HDR_SIZE, ksz, keyval, ksz);
+            if (c == 0) { found = off; break; }
+            if (c > 0)  { ins_off = off; break; }
+            off = rn;
+        }
+
+        if (found != 0xFFFF) {
+            /* duplicate secondary value: append the RFA to the pointer array */
+            uint16_t P     = p3_le16(data + found + P3_SIDR_OFF_LEN);
+            uint16_t nptr  = p3_le16(data + found + P3_SIDR_HDR_SIZE + ksz);
+            uint16_t recend = (uint16_t)(found + P3_SIDR_HDR_SIZE + P);
+            if (!(sk->flags & (1u << P3_KEYV_DUPKEYS))) { st = RMS$_DUP; goto done; }
+            if ((uint32_t)dfree + P3_RFA_SIZE <= cap) {
+                uint8_t *slot;
+                memmove(data + recend + P3_RFA_SIZE, data + recend,
+                        (size_t)(dfree - recend));
+                slot = data + recend;
+                p3_put_le32(slot, rfa.home_vbn);
+                p3_put_le16(slot + 4, rfa.home_recid);
+                p3_put_le16(data + found + P3_SIDR_HDR_SIZE + ksz,
+                            (uint16_t)(nptr + 1));
+                p3_put_le16(data + found + P3_SIDR_OFF_LEN,
+                            (uint16_t)(P + P3_RFA_SIZE));
+                dfree = (uint16_t)(dfree + P3_RFA_SIZE);
+                p3_put_le16(data + P3_BH_OFF_FREESPACE, dfree);
+                if (p3_write_blocks(ctx->f, data_vbn, sk->dbs ? sk->dbs : 1u,
+                                    data) != 0) { st = RMS$_WPL; goto done; }
+                st = RMS$_NORMAL; goto done;
+            }
+        } else {
+            /* fresh SIDR: 3 hdr + key + 2 nptr + 6 rfa */
+            uint16_t need = (uint16_t)(P3_SIDR_HDR_SIZE + ksz +
+                                       P3_SIDR_NPTR_SIZE + P3_RFA_SIZE);
+            if ((uint32_t)dfree + need <= cap) {
+                uint8_t *r = data + ins_off, *slot;
+                memmove(data + ins_off + need, data + ins_off,
+                        (size_t)(dfree - ins_off));
+                r[P3_SIDR_OFF_CTRL] = 0;
+                p3_put_le16(r + P3_SIDR_OFF_LEN,
+                            (uint16_t)(ksz + P3_SIDR_NPTR_SIZE + P3_RFA_SIZE));
+                memcpy(r + P3_SIDR_HDR_SIZE, keyval, ksz);
+                p3_put_le16(r + P3_SIDR_HDR_SIZE + ksz, 1);
+                slot = r + P3_SIDR_HDR_SIZE + ksz + P3_SIDR_NPTR_SIZE;
+                p3_put_le32(slot, rfa.home_vbn);
+                p3_put_le16(slot + 4, rfa.home_recid);
+                dfree = (uint16_t)(dfree + need);
+                p3_put_le16(data + P3_BH_OFF_FREESPACE, dfree);
+                if (p3_write_blocks(ctx->f, data_vbn, sk->dbs ? sk->dbs : 1u,
+                                    data) != 0) { st = RMS$_WPL; goto done; }
+                /* grow the index high-key if this value routed to the rightmost
+                 * entry and exceeds its separator (same as the primary path) */
+                if (p3_keycmp(keyval, ksz,
+                              root + entry_off + P3_IDXREC_PTR_SIZE, ksz) > 0) {
+                    memcpy(root + entry_off + P3_IDXREC_PTR_SIZE, keyval, ksz);
+                    if (p3_write_blocks(ctx->f, sk->root_vbn,
+                                        sk->ibs ? sk->ibs : 1u, root) != 0) {
+                        st = RMS$_WPL; goto done;
+                    }
+                }
+                st = RMS$_NORMAL; goto done;
+            }
+        }
+
+        /* no room: split the SIDR bucket, then loop to retry the insert */
+        st = p3_split_sidr_bucket(ctx, sk, root, entry_off, data_vbn, data);
+        if (!$VMS_STATUS_SUCCESS(st)) goto done;
+    }
+    st = RMS$_ORG;
+
+done:
+    free(root);
+    free(data);
+    return st;
+}
+
+/* Remove one primary RFA from the SIDR for `keyval` in secondary key `sk`. When
+ * the last pointer goes, the whole SIDR record is removed. */
+static uint32_t p3_sidr_remove(p3_ctx_t *ctx, const p3_keydesc_t *sk,
+                               const uint8_t *keyval, p3_rfa_t rfa)
+{
+    uint32_t icap = (sk->ibs ? sk->ibs : 1u) * P3_BLK;
+    uint32_t cap  = (sk->dbs ? sk->dbs : 1u) * P3_BLK;
+    uint16_t ksz  = sk->key_size;
+    uint8_t *root = NULL, *data = NULL;
+    uint32_t data_vbn = 0, st = RMS$_NORMAL;
+    uint16_t entry_off = 0, dfree, off;
+
+    root = (uint8_t *)malloc((size_t)icap);
+    data = (uint8_t *)malloc((size_t)cap);
+    if (!root || !data) { st = RMS$_DME; goto done; }
+
+    if (p3_read_blocks(ctx->f, sk->root_vbn, sk->ibs ? sk->ibs : 1u, root) != 0) {
+        st = RMS$_RER; goto done;
+    }
+    st = p3_index_locate(sk, root, keyval, ksz, &entry_off, &data_vbn);
+    if (!$VMS_STATUS_SUCCESS(st)) goto done;
+    if (p3_read_blocks(ctx->f, data_vbn, sk->dbs ? sk->dbs : 1u, data) != 0) {
+        st = RMS$_RER; goto done;
+    }
+    dfree = p3_le16(data + P3_BH_OFF_FREESPACE);
+    if (dfree < P3_BKT_HDR_SIZE || dfree > cap) { st = RMS$_PLG; goto done; }
+
+    for (off = P3_BKT_HDR_SIZE;
+         (uint16_t)(off + P3_SIDR_HDR_SIZE) <= dfree; ) {
+        uint8_t  ctrl = data[off + P3_SIDR_OFF_CTRL];
+        uint16_t P    = p3_le16(data + off + P3_SIDR_OFF_LEN);
+        uint16_t rn   = (uint16_t)(off + P3_SIDR_HDR_SIZE + P);
+        if (rn > dfree) break;
+        if (!((ctrl >> P3_IRCV_DELETED) & 1u) &&
+            p3_keycmp(data + off + P3_SIDR_HDR_SIZE, ksz, keyval, ksz) == 0) {
+            uint16_t nptr = p3_le16(data + off + P3_SIDR_HDR_SIZE + ksz);
+            uint8_t *pa   = data + off + P3_SIDR_HDR_SIZE + ksz + P3_SIDR_NPTR_SIZE;
+            uint16_t j, match = 0xFFFF;
+            for (j = 0; j < nptr; j++) {
+                uint32_t v  = p3_le32(pa + j * P3_RFA_SIZE);
+                uint16_t id = p3_le16(pa + j * P3_RFA_SIZE + 4);
+                if (v == rfa.home_vbn && id == rfa.home_recid) { match = j; break; }
+            }
+            if (match == 0xFFFF) { st = RMS$_RNF; goto done; }
+            if (nptr > 1) {
+                uint8_t *slot = pa + match * P3_RFA_SIZE;
+                uint16_t tail = (uint16_t)((nptr - match - 1) * P3_RFA_SIZE);
+                uint16_t recend = (uint16_t)(off + P3_SIDR_HDR_SIZE + P);
+                memmove(slot, slot + P3_RFA_SIZE, tail);   /* close array gap */
+                memmove(data + recend - P3_RFA_SIZE, data + recend,
+                        (size_t)(dfree - recend));          /* close bucket gap */
+                p3_put_le16(data + off + P3_SIDR_HDR_SIZE + ksz,
+                            (uint16_t)(nptr - 1));
+                p3_put_le16(data + off + P3_SIDR_OFF_LEN,
+                            (uint16_t)(P - P3_RFA_SIZE));
+                dfree = (uint16_t)(dfree - P3_RFA_SIZE);
+            } else {
+                uint16_t rs = (uint16_t)(P3_SIDR_HDR_SIZE + P);
+                memmove(data + off, data + off + rs,
+                        (size_t)(dfree - (off + rs)));
+                dfree = (uint16_t)(dfree - rs);
+            }
+            p3_put_le16(data + P3_BH_OFF_FREESPACE, dfree);
+            if (p3_write_blocks(ctx->f, data_vbn, sk->dbs ? sk->dbs : 1u,
+                                data) != 0) { st = RMS$_WPL; goto done; }
+            st = RMS$_NORMAL; goto done;
+        }
+        off = rn;
+    }
+    st = RMS$_RNF;
+
+done:
+    free(root);
+    free(data);
+    return st;
+}
+
+/* Insert a SIDR pointer into EVERY secondary key for a freshly $PUT primary
+ * record. A record too short to carry a secondary key is skipped for that key
+ * (no SIDR entry -- VMS treats a missing key as a null-key case). */
+static uint32_t p3_maintain_secondaries_put(p3_ctx_t *ctx, const uint8_t *rec,
+                                            uint16_t rec_len, uint32_t home_vbn,
+                                            uint16_t home_recid)
+{
+    uint16_t i;
+    p3_rfa_t rfa;
+    rfa.home_vbn   = home_vbn;
+    rfa.home_recid = home_recid;
+
+    for (i = 0; i < ctx->num_keys; i++) {
+        const p3_keydesc_t *sk = &ctx->keys[i];
+        uint8_t kv[256];
+        uint32_t st;
+        if (sk->ref == 0)
+            continue;                                /* primary: not a SIDR */
+        if ((uint32_t)sk->seg0_pos + sk->seg0_siz > rec_len)
+            continue;                                /* key absent in record */
+        if (sk->key_size == 0 || sk->key_size > 255)
+            return RMS$_PLG;
+        memset(kv, 0, sk->key_size);
+        memcpy(kv, rec + sk->seg0_pos, sk->seg0_siz); /* zero-padded to key_size */
+        st = p3_sidr_put(ctx, sk, kv, rfa);
+        if (!$VMS_STATUS_SUCCESS(st))
+            return st;
+    }
+    return RMS$_NORMAL;
+}
+
+uint32_t rms_p3_add_secondary_key(p3_ctx_t *ctx, const p3_create_params_t *p)
+{
+    uint8_t vbn1[P3_BLK];
+    uint8_t *blk = NULL, *chk = NULL;
+    const p3_keydesc_t *pk;
+    p3_keydesc_t *sk;
+    uint32_t sidr_vbn, sroot_vbn;
+    uint16_t new_off, last_off, pdbs;
+    uint8_t  B;
+
+    if (!ctx || ctx->magic != P3_CTX_MAGIC || !ctx->writable || !p)
+        return RMS$_KEY;
+    if (ctx->num_keys == 0 || ctx->num_keys >= P3_MAX_KEYS)
+        return RMS$_KEY;
+    if (p->key_size == 0 || p->key_size > 255)
+        return RMS$_KEY;
+    if (p->seg0_siz == 0 || p->seg0_siz > p->key_size)
+        return RMS$_KEY;
+    B = p->bkt_blocks ? p->bkt_blocks : 1u;
+    if (B > P3_MAX_BKT_BLOCKS)
+        return RMS$_KEY;
+    if ((uint32_t)P3_BKT_HDR_SIZE + P3_IDXREC_PTR_SIZE + p->key_size >
+        (uint32_t)B * P3_BLK)
+        return RMS$_KEY;
+    new_off = (uint16_t)(P3_FP_HDR_SIZE + ctx->num_keys * P3_KEYDESC_SIZE);
+    if ((uint32_t)new_off + P3_KEYDESC_SIZE > P3_BLK)
+        return RMS$_KEY;                              /* descriptor won't fit VBN1 */
+
+    pk = p3_find_key(ctx, 0);
+    if (!pk)
+        return RMS$_KEY;
+
+    /* This rung defines keys on an EMPTY file (SYSUAF/RIGHTSLIST are created
+     * with all keys before any record loads). Back-filling SIDRs over existing
+     * records is a labelled follow-on -> fail honest if data is already present. */
+    pdbs = pk->dbs ? pk->dbs : 1u;
+    chk = (uint8_t *)malloc((size_t)pdbs * P3_BLK);
+    if (!chk)
+        return RMS$_DME;
+    if (p3_read_blocks(ctx->f, pk->first_data_vbn, pdbs, chk) != 0) {
+        free(chk); return RMS$_RER;
+    }
+    if (p3_le16(chk + P3_BH_OFF_FREESPACE) != P3_BKT_HDR_SIZE) {
+        free(chk); return RMS$_KEY;                  /* records already present */
+    }
+    free(chk);
+
+    sidr_vbn  = ctx->alloc_next; ctx->alloc_next += B;
+    sroot_vbn = ctx->alloc_next; ctx->alloc_next += B;
+
+    /* VBN 1: chain the last descriptor to the new one, append the descriptor,
+     * bump num_keys + the allocation high-water (read-modify-write). */
+    if (p3_read_blocks(ctx->f, P3_VBN_FIXED_PROLOG, 1u, vbn1) != 0)
+        return RMS$_RER;
+    last_off = (uint16_t)(P3_FP_HDR_SIZE + (ctx->num_keys - 1) * P3_KEYDESC_SIZE);
+    p3_put_le16(vbn1 + last_off + P3_KD_OFF_NEXT_VBN, P3_VBN_FIXED_PROLOG);
+    p3_put_le16(vbn1 + last_off + P3_KD_OFF_NEXT_OFF, new_off);
+    {
+        uint8_t *k = vbn1 + new_off;
+        memset(k, 0, P3_KEYDESC_SIZE);
+        p3_put_le16(k + P3_KD_OFF_NEXT_VBN, 0);
+        p3_put_le16(k + P3_KD_OFF_NEXT_OFF, 0);
+        k[P3_KD_OFF_REF]        = (uint8_t)ctx->num_keys;
+        k[P3_KD_OFF_DTP]        = p->dtp;
+        p3_put_le16(k + P3_KD_OFF_FLAGS,
+                    p->allow_dup ? (uint16_t)(1u << P3_KEYV_DUPKEYS) : 0u);
+        k[P3_KD_OFF_ROOT_LEVEL] = 1;
+        k[P3_KD_OFF_IBS]        = B;
+        k[P3_KD_OFF_DBS]        = B;
+        k[P3_KD_OFF_NSEG]       = 1;
+        p3_put_le32(k + P3_KD_OFF_ROOT_VBN,      sroot_vbn);
+        p3_put_le32(k + P3_KD_OFF_FIRST_DATAVBN, sidr_vbn);
+        p3_put_le16(k + P3_KD_OFF_KEY_SIZE,      p->key_size);
+        p3_put_le16(k + P3_KD_OFF_MIN_REC_SIZE,
+                    (uint16_t)(p->seg0_pos + p->seg0_siz));
+        p3_put_le16(k + P3_KD_OFF_SEG0_POS,      p->seg0_pos);
+        k[P3_KD_OFF_SEG0_SIZ]   = p->seg0_siz;
+        memcpy(k + P3_KD_OFF_NAME, "SECONDARY", 9);
+    }
+    p3_put_le16(vbn1 + P3_FP_OFF_NUM_KEYS, (uint16_t)(ctx->num_keys + 1));
+    p3_put_le32(vbn1 + P3_FP_OFF_ALLOC_NEXT, ctx->alloc_next);
+    if (p3_write_blocks(ctx->f, P3_VBN_FIXED_PROLOG, 1u, vbn1) != 0)
+        return RMS$_WPL;
+
+    blk = (uint8_t *)malloc((size_t)B * P3_BLK);
+    if (!blk)
+        return RMS$_DME;
+
+    /* first SIDR bucket: empty, level 0, LASTBKT */
+    memset(blk, 0, (size_t)B * P3_BLK);
+    p3_set_bkt_header(blk, 0, (uint8_t)(1u << P3_BKTV_LASTBKT),
+                      P3_BKT_HDR_SIZE, 1, 0);
+    if (p3_write_blocks(ctx->f, sidr_vbn, B, blk) != 0) { free(blk); return RMS$_WPL; }
+
+    /* secondary root index bucket: one entry {sidr_vbn, high-key = 0} */
+    memset(blk, 0, (size_t)B * P3_BLK);
+    {
+        uint16_t off = P3_BKT_HDR_SIZE;
+        p3_put_le16(blk + off, (uint16_t)sidr_vbn);
+        memset(blk + off + P3_IDXREC_PTR_SIZE, 0, p->key_size);
+        off = (uint16_t)(off + P3_IDXREC_PTR_SIZE + p->key_size);
+        p3_set_bkt_header(blk, 1,
+                          (uint8_t)((1u << P3_BKTV_ROOTBKT) |
+                                    (1u << P3_BKTV_LASTBKT)),
+                          off, 1, sroot_vbn);
+    }
+    if (p3_write_blocks(ctx->f, sroot_vbn, B, blk) != 0) { free(blk); return RMS$_WPL; }
+    free(blk);
+
+    sk = &ctx->keys[ctx->num_keys];
+    memset(sk, 0, sizeof(*sk));
+    sk->ref            = (uint8_t)ctx->num_keys;
+    sk->dtp            = p->dtp;
+    sk->flags          = p->allow_dup ? (uint16_t)(1u << P3_KEYV_DUPKEYS) : 0u;
+    sk->root_level     = 1;
+    sk->ibs            = B;
+    sk->dbs            = B;
+    sk->nseg           = 1;
+    sk->root_vbn       = sroot_vbn;
+    sk->first_data_vbn = sidr_vbn;
+    sk->key_size       = p->key_size;
+    sk->min_rec_size   = (uint16_t)(p->seg0_pos + p->seg0_siz);
+    sk->seg0_pos       = p->seg0_pos;
+    sk->seg0_siz       = p->seg0_siz;
+    ctx->num_keys++;
+    return RMS$_NORMAL;
+}
+
+uint32_t rms_p3_sidr_lookup(p3_ctx_t *ctx, uint8_t krf,
+                            const uint8_t *key, uint16_t key_len,
+                            p3_rfa_t *out, uint16_t max, uint16_t *count)
+{
+    const p3_keydesc_t *sk;
+    uint8_t *bkt;
+    uint8_t  kbuf[256];
+    uint32_t data_vbn = 0, st, dbs;
+    uint16_t ksz, fo, off;
+
+    if (!ctx || ctx->magic != P3_CTX_MAGIC || !key || !count)
+        return RMS$_PLG;
+    *count = 0;
+    sk = p3_find_key(ctx, krf);
+    if (!sk || sk->ref == 0)
+        return RMS$_KEY;                              /* must be a secondary key */
+    if (sk->flags & P3_KEYM_ANY_COMPR)
+        return RMS$_PLG;
+    ksz = sk->key_size;
+    if (ksz == 0 || ksz > 255)
+        return RMS$_PLG;
+    if (key_len > ksz) key_len = ksz;
+    memset(kbuf, 0, ksz);
+    memcpy(kbuf, key, key_len);                       /* zero-padded search key */
+
+    bkt = (uint8_t *)malloc((size_t)P3_MAX_BKT_BLOCKS * P3_BLK);
+    if (!bkt)
+        return RMS$_DME;
+
+    st = p3_descend(ctx, sk, kbuf, ksz, bkt, &data_vbn);
+    if (!$VMS_STATUS_SUCCESS(st)) { free(bkt); return st; }
+
+    dbs = sk->dbs ? sk->dbs : 1u;
+    if (p3_read_blocks(ctx->f, data_vbn, dbs, bkt) != 0) { free(bkt); return RMS$_RER; }
+    if (bkt[P3_BH_OFF_LEVEL] != 0) { free(bkt); return RMS$_PLG; }
+    fo = p3_le16(bkt + P3_BH_OFF_FREESPACE);
+    if (fo < P3_BKT_HDR_SIZE || fo > dbs * P3_BLK) { free(bkt); return RMS$_PLG; }
+
+    for (off = P3_BKT_HDR_SIZE; (uint16_t)(off + P3_SIDR_HDR_SIZE) <= fo; ) {
+        uint8_t  ctrl = bkt[off + P3_SIDR_OFF_CTRL];
+        uint16_t P    = p3_le16(bkt + off + P3_SIDR_OFF_LEN);
+        uint16_t rn   = (uint16_t)(off + P3_SIDR_HDR_SIZE + P);
+        if (rn > fo) break;
+        if (!((ctrl >> P3_IRCV_DELETED) & 1u) &&
+            p3_keycmp(bkt + off + P3_SIDR_HDR_SIZE, ksz, kbuf, ksz) == 0) {
+            uint16_t nptr = p3_le16(bkt + off + P3_SIDR_HDR_SIZE + ksz);
+            const uint8_t *pa = bkt + off + P3_SIDR_HDR_SIZE + ksz +
+                                P3_SIDR_NPTR_SIZE;
+            uint16_t i;
+            *count = nptr;
+            for (i = 0; i < nptr && i < max; i++) {
+                out[i].home_vbn   = p3_le32(pa + i * P3_RFA_SIZE);
+                out[i].home_recid = p3_le16(pa + i * P3_RFA_SIZE + 4);
+            }
+            free(bkt);
+            return (nptr > max) ? RMS$_RTB : RMS$_NORMAL;
+        }
+        off = rn;
+    }
+    free(bkt);
+    return RMS$_RNF;
+}
+
+uint32_t rms_p3_delete(p3_ctx_t *ctx, uint8_t krf,
+                       const uint8_t *key, uint16_t key_len)
+{
+    const p3_keydesc_t *pk;
+    uint8_t *root = NULL, *data = NULL;
+    uint32_t cap, icap, st = RMS$_NORMAL;
+    uint16_t entry_off = 0, dfree, off, rec_off = 0xFFFF, dlen = 0, i;
+    uint32_t data_vbn = 0;
+    p3_rfa_t rfa;
+
+    if (!ctx || ctx->magic != P3_CTX_MAGIC || !ctx->writable || !key)
+        return RMS$_PLG;
+    if (krf != 0)
+        return RMS$_KEY;                              /* delete by primary key */
+    pk = p3_find_key(ctx, 0);
+    if (!pk)
+        return RMS$_KEY;
+    if (pk->flags & P3_KEYM_ANY_COMPR)
+        return RMS$_PLG;
+
+    cap  = (pk->dbs ? pk->dbs : 1u) * P3_BLK;
+    icap = (pk->ibs ? pk->ibs : 1u) * P3_BLK;
+    root = (uint8_t *)malloc((size_t)icap);
+    data = (uint8_t *)malloc((size_t)cap);
+    if (!root || !data) { st = RMS$_DME; goto done; }
+
+    if (p3_read_blocks(ctx->f, pk->root_vbn, pk->ibs ? pk->ibs : 1u, root) != 0) {
+        st = RMS$_RER; goto done;
+    }
+    st = p3_index_locate(pk, root, key, key_len, &entry_off, &data_vbn);
+    if (!$VMS_STATUS_SUCCESS(st)) goto done;
+    if (p3_read_blocks(ctx->f, data_vbn, pk->dbs ? pk->dbs : 1u, data) != 0) {
+        st = RMS$_RER; goto done;
+    }
+    dfree = p3_le16(data + P3_BH_OFF_FREESPACE);
+    if (dfree < P3_BKT_HDR_SIZE || dfree > cap) { st = RMS$_PLG; goto done; }
+
+    for (off = P3_BKT_HDR_SIZE; (uint16_t)(off + P3_DR_HDR_SIZE) <= dfree; ) {
+        uint8_t  ctrl = data[off + P3_DR_OFF_CTRL];
+        uint16_t rn   = (uint16_t)(off + p3_rec_size(data, off));
+        if (rn > dfree) break;
+        if (!((ctrl >> P3_IRCV_RRV) & 1u) && !((ctrl >> P3_IRCV_DELETED) & 1u) &&
+            p3_keycmp(data + off + P3_DR_HDR_SIZE + pk->seg0_pos, pk->seg0_siz,
+                      key, key_len) == 0) {
+            rec_off = off;
+            break;
+        }
+        off = rn;
+    }
+    if (rec_off == 0xFFFF) { st = RMS$_RNF; goto done; }
+
+    /* recover the record's STABLE home RFA (preserved through splits) */
+    rfa.home_vbn   = p3_le32(data + rec_off + P3_DR_OFF_RRVPTR);
+    rfa.home_recid = p3_le16(data + rec_off + P3_DR_OFF_RRVID);
+    dlen = p3_le16(data + rec_off + P3_DR_OFF_DATALEN);
+
+    /* purge each secondary SIDR pointer BEFORE compacting the primary record
+     * (the record body -- source of the secondary key values -- is still in
+     * `data`; p3_sidr_remove touches only secondary VBNs, never `data`) */
+    for (i = 0; i < ctx->num_keys; i++) {
+        const p3_keydesc_t *sk = &ctx->keys[i];
+        uint8_t kv[256];
+        uint32_t ds;
+        if (sk->ref == 0)
+            continue;
+        if ((uint32_t)sk->seg0_pos + sk->seg0_siz > dlen)
+            continue;                                /* record had no such key */
+        memset(kv, 0, sk->key_size);
+        memcpy(kv, data + rec_off + P3_DR_HDR_SIZE + sk->seg0_pos, sk->seg0_siz);
+        ds = p3_sidr_remove(ctx, sk, kv, rfa);
+        if (!$VMS_STATUS_SUCCESS(ds) && ds != RMS$_RNF) { st = ds; goto done; }
+    }
+
+    /* compact the primary record out of its data bucket (RFA of every OTHER
+     * record is by {vbn,id}, unaffected by the byte shift) */
+    {
+        uint16_t rs = p3_rec_size(data, rec_off);
+        memmove(data + rec_off, data + rec_off + rs,
+                (size_t)(dfree - (rec_off + rs)));
+        dfree = (uint16_t)(dfree - rs);
+        p3_put_le16(data + P3_BH_OFF_FREESPACE, dfree);
+        if (p3_write_blocks(ctx->f, data_vbn, pk->dbs ? pk->dbs : 1u, data) != 0) {
+            st = RMS$_WPL; goto done;
+        }
+    }
+    st = RMS$_NORMAL;
 
 done:
     free(root);

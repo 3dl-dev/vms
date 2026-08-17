@@ -181,6 +181,39 @@
 #define P3_IRCV_RU_DELETE 5u   /* [PIN] */
 #define P3_IRCV_RU_UPDATE 6u   /* [PIN] */
 
+/* -------- SIDR: secondary index data record (vms-2ae) ----------------------
+ * The oracle ([PIN], oracle §4/§5): a SECONDARY key of reference has its OWN
+ * index tree; its leaf (level-0) buckets hold SIDR records, one per distinct
+ * secondary-key VALUE, and each SIDR is `{key value, then an ARRAY of pointers
+ * to the primary records carrying that value}`. Non-duplicate -> one pointer;
+ * duplicate secondary values grow the pointer array. ANALYZE labels ONLY the
+ * SIDR key -- the per-pointer sub-layout is NOT published, so it is an [OVMX]
+ * design choice below (oracle §5, Rule 8).
+ *
+ * [OVMX] on-disk SIDR record (variable length, in a level-0 SIDR bucket whose
+ * 14-byte header is the SAME p3 bucket header as a data bucket):
+ *     u8  ctrl        (IRC$V_DELETED tombstone bit; SIDRs carry NO RRV -- nothing
+ *                      references a SIDR by RFA, so no stub is ever left)
+ *     u16 payload_len (P == bytes after this field: key_size + 2 + nptr*6)
+ *     key_size bytes  secondary key value (zero-padded to key_size)
+ *     u16 nptr        (number of primary pointers, >= 1)
+ *     nptr * RFA      each a primary Record File Address (see below)
+ *   stride = P3_SIDR_HDR_SIZE + P
+ *
+ * [OVMX] RFA (primary Record File Address, stable across a primary split):
+ *     u32 home_vbn    (the data bucket the record was FIRST inserted into)
+ *     u16 home_recid  (the record id assigned in that home bucket)
+ * The primary write engine keeps this address resolvable across bucket splits
+ * by (a) leaving an RRV stub at the home {vbn,id} that chains to the record's
+ * new location and (b) PRESERVING the home {vbn,id} in the moved record's
+ * rrv-ptr/rrv-id fields, so rms_p3_get_by_rfa resolves the CURRENT record and
+ * rms_p3_delete recovers the stored RFA to purge SIDRs. */
+#define P3_SIDR_OFF_CTRL    0u
+#define P3_SIDR_OFF_LEN     1u   /* u16 payload length */
+#define P3_SIDR_HDR_SIZE    3u   /* bytes before the key value */
+#define P3_RFA_SIZE         6u   /* u32 home_vbn + u16 home_recid */
+#define P3_SIDR_NPTR_SIZE   2u   /* u16 pointer count before the RFA array */
+
 /* -------- little-endian fixed-width accessors (substrate-agnostic) --------- */
 static inline uint16_t p3_le16(const uint8_t *p)
 {
@@ -305,5 +338,54 @@ uint32_t rms_p3_put(p3_ctx_t *ctx, uint8_t krf,
 uint32_t rms_p3_update(p3_ctx_t *ctx, uint8_t krf,
                        const uint8_t *key, uint16_t key_len,
                        const uint8_t *rec, uint16_t rec_len);
+
+/* ====================================================================
+ * SECONDARY KEYS / SIDR (vms-2ae) -- a second key of reference with its own
+ * index tree whose leaves are SIDR records mapping a secondary-key VALUE to the
+ * primary record(s) carrying it. Built on the SAME [PIN]/[OVMX] bucket + index
+ * machinery as the primary key; no flat scan, no sidecar.
+ * ==================================================================== */
+
+/* A resolved primary Record File Address (stable across a primary split). */
+typedef struct p3_rfa {
+    uint32_t home_vbn;
+    uint16_t home_recid;
+} p3_rfa_t;
+
+/* Define ONE secondary key of reference on the just-CREATEd, still-EMPTY file
+ * `ctx` (must be writable, no records $PUT yet). Allocates the secondary key
+ * descriptor (chained after the existing descriptors in VBN 1), a fresh root
+ * index bucket (Root Level 1) and the first empty SIDR bucket, and bumps
+ * ctx->num_keys. `p` gives the secondary key geometry: seg0_pos/seg0_siz locate
+ * the key WITHIN the primary record; key_size is the stored/compared width
+ * (>= seg0_siz; zero-padded). allow_dup permits duplicate secondary values.
+ * Returns RMS$_NORMAL, RMS$_KEY (bad params / not empty / too many keys),
+ * RMS$_WPL, RMS$_DME, RMS$_PLG. */
+uint32_t rms_p3_add_secondary_key(p3_ctx_t *ctx, const p3_create_params_t *p);
+
+/* Look up a SECONDARY key of reference `krf` (>= 1) by VALUE: descends the
+ * secondary index to the SIDR bucket, finds the SIDR for `key`, and returns its
+ * primary-pointer array into out[0..*count) (up to `max`). Duplicate secondary
+ * values yield count > 1. Returns RMS$_NORMAL, RMS$_RNF (no such value),
+ * RMS$_KEY (not a secondary key), RMS$_RTB (more pointers than `max`; *count is
+ * the true count), RMS$_PLG, RMS$_RER. */
+uint32_t rms_p3_sidr_lookup(p3_ctx_t *ctx, uint8_t krf,
+                            const uint8_t *key, uint16_t key_len,
+                            p3_rfa_t *out, uint16_t max, uint16_t *count);
+
+/* Resolve a primary RFA (home_vbn/home_recid) to the CURRENT primary record --
+ * following RRV stubs left by any bucket splits -- and copy up to buf_sz bytes,
+ * setting *rec_len. Returns RMS$_NORMAL, RMS$_RNF (dangling/deleted), RMS$_RTB,
+ * RMS$_RER, RMS$_PLG. This is how a secondary lookup reaches the data record. */
+uint32_t rms_p3_get_by_rfa(p3_ctx_t *ctx, uint32_t home_vbn, uint16_t home_recid,
+                           uint8_t *buf, uint16_t buf_sz, uint16_t *rec_len);
+
+/* Delete the primary record whose primary key matches `key` (krf must be 0):
+ * removes the record from its data bucket AND purges its pointer from every
+ * secondary SIDR (by matching the record's stable RFA), so no secondary lookup
+ * can resolve to a deleted record. Returns RMS$_NORMAL, RMS$_RNF, RMS$_KEY,
+ * RMS$_WPL, RMS$_PLG, RMS$_DME, RMS$_RER. */
+uint32_t rms_p3_delete(p3_ctx_t *ctx, uint8_t krf,
+                       const uint8_t *key, uint16_t key_len);
 
 #endif /* RMS_PROLOG3_H */

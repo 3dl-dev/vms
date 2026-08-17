@@ -65,6 +65,31 @@ set_tests_properties(vmsrms_prolog3_write PROPERTIES
     TIMEOUT 30
 )
 
+# vms-2ae: genuine Files-11 Prolog-3 SECONDARY key / SIDR. Models SYSUAF
+# (primary = 32-byte username, secondary key-of-reference 1 = 4-byte UIC with
+# duplicates allowed). Defines the secondary index (rms_p3_add_secondary_key),
+# $PUTs records past both a PRIMARY data-bucket split and a SIDR-bucket split,
+# then reads records BY THE SECONDARY KEY -- descending the secondary index to
+# the SIDR, taking the primary RFA, and resolving the primary record byte-exact
+# (a real secondary index, NOT a flat scan). Covers a 3-member duplicate group,
+# RFA stability across the primary split, and $DELETE purging the SIDR. Host-only
+# (POSIX rms_io backend); the /dev/vms ACP positive is
+# tests/qemu/test_syssvc_rms_p3_acp.c.
+add_executable(test_prolog3_seckey test_prolog3_seckey.c)
+target_include_directories(test_prolog3_seckey PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsrms
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_prolog3_seckey PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_prolog3_seckey COMMAND test_prolog3_seckey)
+set_tests_properties(vmsrms_prolog3_seckey PROPERTIES
+    LABELS "unit;rms;ods2"
+    TIMEOUT 30
+)
+
 # vms-5c6d: indexed sys$close must flush the in-memory B-tree before freeing it.
 # Regression for a Tier-1 silent-data-loss bug where records inserted since the
 # last periodic index save (rms_idx_put persists only every 100 inserts) were

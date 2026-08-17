@@ -728,10 +728,14 @@ RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SY
 # policy (SYSTEM UIC [1,4], every file version ;1, the OVMXSYS volume label) is
 # an OVMX build-tool choice, not a VMS-authentic fact.
 #
-# 64 MB matches the system-disk convention used everywhere else (boot.sh /
-# run-qemu.sh / test_persistent_boot.sh all size a blank DKA0: at 64M) and
-# leaves free space for runtime writes (e.g. PARTS creating its indexed data
-# file), while staying well above the tree's own footprint.
+# 128 MB (vms-5f0): the genuine ODS-2 system volume must hold the full static
+# system tree PLUS the redundant SYS$UPDATE:OVMX-OS.KIT copy, which together sit
+# right at the old 64 MB edge and overflow it -- ODS-2 gives every file at least
+# one 512-byte block and no cross-file packing, so it needs a little more room
+# than the retired VMFS master did for the same tree. 128 MB clears the tree +
+# kit and still leaves free space for runtime writes (e.g. PARTS creating its
+# indexed data file). Blank DKA0: disks (boot.sh / run-qemu.sh /
+# test_persistent_boot.sh) stay 64M -- those hold no system tree.
 # ATOMIC FLIP (vms-5f0, epic vms-208): the boot master emits a GENUINE ODS-2
 # (DECFILE11B) volume by default (--ods2), NOT the bespoke OVMX VMFS format.
 # SYS$DISK is now $MOUNTed by the Files-11 ACP in the executive (ovmx_init.c),
@@ -743,7 +747,7 @@ RUN mkdir -p /kit-stage/SYSEXE /kit-stage/SYSLIB /kit-stage/SYSMGR /kit-stage/SY
 # tests/qemu/test_syssvc_dirlogical_acp.c / _rms_acp.c against a real /dev/vms;
 # extract is VMFS-only, so the build gate here is a genuine-ODS-2 presence gate.)
 RUN /src/build-static/bin/vmsfs_master --ods2 master \
-        /boot/ovmx-distrib.img OVMXSYS /system-stage/vms 64 && \
+        /boot/ovmx-distrib.img OVMXSYS /system-stage/vms 128 && \
     /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-distrib.img > /tmp/distrib-list.txt && \
     cat /tmp/distrib-list.txt && \
     for name in DCL.EXE LOGINOUT.EXE IMGACT.EXE PROVISION.EXE SYSUAF.DAT; do \
@@ -801,7 +805,7 @@ RUN cp -r /system-stage/vms /system-stage-negctl-vms && \
         echo "FAIL: negctl VMS\$VMS.DAT still names JOB_CONTROL_STARTUP.COM"; exit 1; \
     fi && \
     /src/build-static/bin/vmsfs_master --ods2 master \
-        /boot/ovmx-distrib-negctl.img OVMXSYS /system-stage-negctl-vms 64 && \
+        /boot/ovmx-distrib-negctl.img OVMXSYS /system-stage-negctl-vms 128 && \
     /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-distrib-negctl.img && \
     rm -rf /system-stage-negctl-vms && \
     echo "NEGCTL DISTRIB image: $(ls -lh /boot/ovmx-distrib-negctl.img | awk '{print $5}')"
@@ -838,7 +842,7 @@ RUN cp -r /system-stage/vms /system-stage-install-media-vms && \
     ! grep -q 'OVMX\$INSTALL' /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
     echo "OK: ovmx-distrib.img's own SYSTARTUP_VMS.COM (unmodified /system-stage) does NOT invoke OVMX\$INSTALL.COM" && \
     /src/build-static/bin/vmsfs_master --ods2 master \
-        /boot/ovmx-install-media.img OVMXSYS /system-stage-install-media-vms 64 && \
+        /boot/ovmx-install-media.img OVMXSYS /system-stage-install-media-vms 128 && \
     /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-install-media.img && \
     rm -rf /system-stage-install-media-vms && \
     echo "INSTALL-MEDIA image: $(ls -lh /boot/ovmx-install-media.img | awk '{print $5}')"

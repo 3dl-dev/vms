@@ -114,6 +114,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     rtl/sha256.c
     rtl/sysuaf.c
     rtl/rightslist.c
+    rtl/rms_textfile.c
     rtl/str_util.c
     rtl/lib_cli.c
 )

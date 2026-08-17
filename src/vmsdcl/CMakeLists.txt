@@ -142,6 +142,7 @@ else()
     # reach files through RMS ($OPEN/$GET/$CREATE/$PUT/$SEARCH + rms_file_attr,
     # which route to the Files-11 ODS-2 ACP), so vmsdcl links vmsrms. (The
     # native-link build already --uses LIBVMSRMS$SHR; mk_dcl.sh.)
+    # vms-274: F$IDENTIFIER/SHOW read RIGHTSLIST/SYSUAF via RMS-over-ACP too.
     target_link_libraries(vmsdcl PRIVATE pthread vms vmsrms vmsfs vmsprocess vmslnm vmsqueue)
 
     # Try to find readline for better interactive experience (skip for static

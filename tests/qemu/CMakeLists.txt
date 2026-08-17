@@ -59,12 +59,7 @@ target_include_directories(vmsbgsock PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets)
 
 function(qemu_syssvc_add_test name source)
-    # rms_acp_bind.c force-binds the weak RMS-over-ACP service seam (sys$open/...)
-    # so a suite that only reads SYSUAF/RIGHTSLIST through the weak references in
-    # src/libvms/rtl/rms_textfile.c still pulls LIBVMSRMS in and reaches the ACP
-    # instead of getting sys$open == NULL and failing every read as "not found"
-    # (vms-058). See tests/qemu/rms_acp_bind.c for the full mechanism.
-    add_executable(${name} ${source} ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)
+    add_executable(${name} ${source})
     target_include_directories(${name} PRIVATE
         ${VMS_INCLUDE_DIR}
         ${VMS_RMS_INCLUDE_DIR}
@@ -106,6 +101,38 @@ file(GLOB QEMU_SYSSVC_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_syssvc_*.c)
 foreach(_src ${QEMU_SYSSVC_SOURCES})
     get_filename_component(_name ${_src} NAME_WE)
     qemu_syssvc_add_test(${_name} ${_src})
+endforeach()
+
+# ---------------------------------------------------------------------------
+# RMS-over-ACP force-bind (rms_acp_bind.c) -- OPT-IN, not blanket (vms-5f0).
+#
+# rms_acp_bind.c makes a STRONG reference to sys$open/$get/... so a suite that
+# reaches SYSUAF/RIGHTSLIST ONLY through the `#pragma weak` seam in
+# src/libvms/rtl/rms_textfile.c still pulls LIBVMSRMS in and reaches the real
+# ACP, instead of getting sys$open == NULL and failing every read as "not
+# found" (vms-058). See tests/qemu/rms_acp_bind.c for the full mechanism.
+#
+# WHY OPT-IN: a strong reference to the seven RMS entry points EXTRACTS the
+# whole vmsrms archive (RMS + the ODS-2 codec) into the static musl binary.
+# Applying it to ALL 31 syssvc suites via the shared recipe bloated the shared
+# kernel-test initramfs 31M->36M and overflowed the QEMU test-VM boot
+# ("Initramfs unpacking failed: write error", every shard died before shard
+# selection). So it is applied ONLY to the suites that (a) read an identity
+# file IN-PROCESS through the libvms reader AND (b) do NOT already carry a
+# strong sys$ RMS call of their own -- the exact three below. Suites that call
+# sys$create/$open directly (loginout_acp, rms_acp, dcl_acp, scratch_writable,
+# acp_*) already pull vmsrms with no anchor; suites that read SYSUAF via a
+# spawned external image (ident->DCL.EXE, authorize/identcont->AUTHORIZE.EXE)
+# need the bind in that IMAGE's link script (mk_dcl.sh / mk_loginout.sh, the
+# production seam, vms-5f0 Fix 2), not in the test binary.
+foreach(_anchored
+        test_syssvc_sysuaf_uic_base
+        test_syssvc_rightslist
+        test_syssvc_setuai)
+    if(TARGET ${_anchored})
+        target_sources(${_anchored} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)
+    endif()
 endforeach()
 
 # test_syssvc_imgact_acp (vms-3e8e) drives the EXACT freestanding ACP reader

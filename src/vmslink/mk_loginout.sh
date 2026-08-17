@@ -44,11 +44,24 @@
 #       import them by (producer,index) without inverting the layering into a
 #       build cycle (LIBVMSRMS$SHR --use's LIBVMS$SHR). LINK.EXE therefore records
 #       those weak references in LIBVMS$SHR's .vms$wimp, and IMGACT binds them by
-#       NAME at activation against the loaded producer set. --use'ing
-#       LIBVMSRMS$SHR HERE is what puts it in that set: drop it and sys$open et al.
-#       resolve to 0, rms_services_present() reads FALSE, and LOGINOUT cannot open
-#       SYSUAF -- "User authorization failure" with the ACP never even reached.
-#       (vms-5f0; the weak-by-name mechanism is run_weak_import_activation.sh.)
+#       NAME at activation against the LOADED producer set.
+#
+#       BUT --use'ing LIBVMSRMS$SHR is NOT, by itself, enough to put it in that
+#       loaded set (vms-5f0). IMGACT loads a producer only when the activated
+#       image names it in a STRONG .vms$imp entry (bind_imports walks .vms$imp).
+#       LOGINOUT --use's LIBVMSRMS$SHR but makes no strong reference to any RMS
+#       universal of its own -- all its RMS use is through LIBVMS$SHR's weak seam
+#       -- so LINK.EXE records no strong import naming LIBVMSRMS$SHR, IMGACT never
+#       loads it, resolve_weak_imports() cannot find sys$open in the loaded set,
+#       LIBVMS$SHR's weak cell stays 0, rms_services_present() reads FALSE, and
+#       LOGINOUT cannot open SYSUAF -- "User authorization failure" with the ACP
+#       never even reached. loginout_rms_bind.c (linked in below) closes this: a
+#       guarded, never-executed strong CALL to sys$open et al. makes LINK.EXE
+#       record a strong .vms$imp import naming LIBVMSRMS$SHR, so IMGACT loads it
+#       and the weak seam binds. This is the LINK.EXE-image face of the same
+#       --as-needed/DT_NEEDED root cause the static-link test anchor
+#       (tests/qemu/rms_acp_bind.c) closes for the syssvc suites.
+#       (the weak-by-name mechanism is run_weak_import_activation.sh.)
 #       ovmx_banner_welcome/announce and parse_privilege_string are `static
 #       inline` in their headers (ovmx_banner.h / vms/privs.h) -- they compile
 #       straight into vms_login.o and are NOT cross-image imports.
@@ -108,7 +121,14 @@ CC=${CC:-gcc}
 # (localtime_r, strtok, atoi, ...) are already in DECC$SHR; the VMS-RTL calls
 # they make (str_upcase/str_trim -> LIBVMS$SHR, vmsfs_to_linux_path ->
 # LIBVMSFS$SHR) resolve from the producers already --use'd below.
-LOGINOUT_EXTRA_SRCS="$TOOLS_DIR/loginout_display.c $TOOLS_DIR/mail_notify.c"
+#
+# loginout_rms_bind.c ($HERE/loginout_rms_bind.c) is the RMS force-bind anchor
+# (vms-5f0): a guarded, never-executed strong CALL to sys$open/$connect/$get/...
+# so LINK.EXE records a strong .vms$imp import naming the --use'd LIBVMSRMS$SHR
+# and IMGACT loads it, letting resolve_weak_imports() bind LIBVMS$SHR's weak RMS
+# seam at activation (see the header block above). Executable-local, like the
+# other two TUs -- it exports nothing; it only anchors the producer dependency.
+LOGINOUT_EXTRA_SRCS="$TOOLS_DIR/loginout_display.c $TOOLS_DIR/mail_notify.c $HERE/loginout_rms_bind.c"
 for f in $LOGINOUT_EXTRA_SRCS; do
     [ -f "$f" ] || { echo "mk_loginout: required TU not found: $f"; exit 1; }
 done

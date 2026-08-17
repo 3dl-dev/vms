@@ -31,9 +31,13 @@
  * the `vmsrms` the recipe already links -- extracting the archive member
  * (static) / keeping LIBVMSRMS$SHR needed (shared) -- so rms_services_present()
  * is TRUE and the genuine ACP read runs. It changes NO behaviour of its own
- * (never called); it only anchors the symbols. GENERAL: it lives in the shared
- * qemu_syssvc_add_test() recipe, so every current and future syssvc suite that
- * reads any file through the RMS-over-ACP layer inherits the binding.
+ * (never called); it only anchors the symbols. It is applied OPT-IN (vms-5f0),
+ * via target_sources() in tests/qemu/CMakeLists.txt, to exactly the suites that
+ * read an identity file IN-PROCESS through the libvms reader and carry no strong
+ * sys$ RMS call of their own (sysuaf_uic_base, rightslist, setuai). A strong ref
+ * here EXTRACTS the whole vmsrms archive + ODS-2 codec into the static binary,
+ * so applying it to ALL syssvc suites bloated the shared kernel-test initramfs
+ * 31M->36M and overflowed the QEMU boot -- hence opt-in, not the blanket recipe.
  *
  * NOTE: this binds the TEST surface. Production OVMX images that read SYSUAF via
  * the ACP after IMGACT activation (LOGINOUT.EXE, the spawned DCL that answers

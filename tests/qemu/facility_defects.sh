@@ -498,6 +498,7 @@ acp-writevb-extend-alloc-offbyone
 acp-search-cursor-skips-versions
 acp-create-header-slot-offbyone
 acp-fileop-no-dlm-lock
+rms-put-wrong-vbn
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -4876,6 +4877,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    rms-put-wrong-vbn)
+        case "$_f" in
+        facility)     echo "RMS reaches file data through the Files-11 (ODS-2) ACP: a record \$PUT is IO\$_WRITEVBLK at the record's {VBN, byte-offset} on the file's channel window, and a \$GET is IO\$_READVBLK at the same coordinate (src/vmsrms/rms_io.c, the block-I/O substrate under rms_seq/rel/idx; RMS \$OPEN/\$CREATE/\$CLOSE ride the ACP in rms_core.c), vms-bc7, epic vms-208";;
+        targets)      echo "vmsrms/rms_io.c";;
+        suites_red)   echo "test_syssvc_rms_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_io_write() -- the \$PUT side of the substrate -- computes the transfer's starting virtual block as (cursor / 512) + 2 instead of + 1, so every record RMS writes lands ONE VBN too high on disk (IO\$_WRITEVBLK persists it there, and grows the file's EOF to cover the gap). The \$GET side, rms_io_read(), is untouched and still computes the correct VBN, so after \$CLOSE + re-\$OPEN a record read back at its true VBN finds the empty (never-written) block instead of the data. This is exactly the property RMS-over-\$QIO exists to provide -- that a record written through the window is the record read back through it (INV-6: it hit the disk WHERE RMS says it did, not a block off) -- so the byte-exact readback assertions redden while \$CREATE/\$CONNECT/\$PUT (which still 'succeed', just to the wrong block) stay green. The read path being the untouched half is what lets the round-trip catch the write-side fault.";;
+        require_fail) cat <<'EOF'
+RMS-over-ACP: all records round-tripped byte-exact through the ACP window
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     acp-search-cursor-skips-versions)
         case "$_f" in
         facility)     echo "Files-11 (ODS-2) ACP IO\$_ACPCONTROL wildcard directory search -- the \$SEARCH primitive (VMS_IOCTL_ACP_ACPCONTROL returns successive matching directory entries in genuine ODS-2 order [name ascending, version descending], maintaining the FIB\$L_WCC continuation cursor on the channel), vms-a0b, epic vms-208";;
@@ -6766,6 +6784,17 @@ apply_edit() {
         # wrong block. After substitution no `(lbn & 0xFFFF)` is left (now
         # `((lbn + 1u) & 0xFFFF)`) -- the no-op the idempotency selftest requires.
         sed -i 's|w1 = (uint16_t)(lbn \& 0xFFFF);|w1 = (uint16_t)((lbn + 1u) \& 0xFFFF); /* NEGCTL acp-writevb-extend-alloc-offbyone */|' "$_file";;
+
+    rms-put-wrong-vbn)
+        # The `a.vbn = (cursor/512)+1u` line appears in BOTH rms_io_read and
+        # rms_io_write; scope the mutation to the WRITE function
+        # (/^ssize_t rms_io_write/,/^}$/) so ONLY the $PUT side is shifted -- the
+        # $GET side must stay CORRECT or the round-trip could not catch it (both
+        # shifted would be self-consistent and escape). `+ 1u` -> `+ 2u` writes
+        # every record ONE VBN too high; the untouched read then finds the empty
+        # true VBN on re-$OPEN. A second apply finds no `+ 1u;` left in the range
+        # and is the no-op the idempotency selftest requires.
+        sed -i '/^ssize_t rms_io_write/,/^}$/ s|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 1u;|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 2u; /* NEGCTL rms-put-wrong-vbn */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

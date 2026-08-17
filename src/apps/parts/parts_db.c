@@ -70,7 +70,7 @@ static void init_fab(struct FAB *fab, struct XABKEY *xab,
     fab->fab$l_fna = (char *)filespec;
     fab->fab$b_fns = (uint8_t)strlen(filespec);
     fab->fab$l_xab = xab;
-    fab->_linux_fd = -1;
+    fab->_rms_file = 0;   /* vms-bc7: RMS handle (was _linux_fd) */
 }
 
 static void init_rab(struct RAB *rab, struct FAB *fab)

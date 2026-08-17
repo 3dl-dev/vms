@@ -18,6 +18,7 @@
 #include "rms/rms.h"
 #include "rms_internal.h"
 #include "rms_util.h"
+#include "rms_io.h"
 
 /*
  * rms_seq_get - Read a record from a sequential file.
@@ -41,13 +42,13 @@
  */
 uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
 {
-    int fd = fab->_linux_fd;
-    if (fd < 0) return RMS$_ACC;
+    struct rms_file *fd = fab->_rms_file;
+    if (!fd) return RMS$_ACC;
     if (rab->_eof) return RMS$_EOF;
     if (!rab->rab$l_ubf || rab->rab$w_usz == 0) return RMS$_RAB;
 
     /* Seek to current stream position */
-    lseek(fd, rab->_current_offset, SEEK_SET);
+    rms_io_lseek(fd, rab->_current_offset, SEEK_SET);
 
     /* Remember where this record starts */
     rab->_last_rec_offset = rab->_current_offset;
@@ -69,7 +70,7 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
             ssize_t n;
 
             while (pos < rab->rab$w_usz) {
-                n = read(fd, &ch, 1);
+                n = rms_io_read(fd, &ch, 1);
                 if (n <= 0) {
                     if (pos == 0) {
                         rab->_eof = 1;
@@ -84,7 +85,7 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
                 if (ch == '\r' && fab->fab$b_rfm == FAB$C_STM) {
                     /* Peek at next char */
                     char next;
-                    ssize_t pn = read(fd, &next, 1);
+                    ssize_t pn = rms_io_read(fd, &next, 1);
                     if (pn > 0 && next == '\n') break;  /* \r\n found */
                     /* Not \r\n, include \r in record */
                     if (pos < rab->rab$w_usz) rab->rab$l_ubf[pos++] = '\r';
@@ -98,7 +99,7 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
 
             rab->rab$w_rsz = (uint16_t)pos;
             rab->_last_rec_size = (uint16_t)pos;
-            rab->_current_offset = lseek(fd, 0, SEEK_CUR);
+            rab->_current_offset = rms_io_lseek(fd, 0, SEEK_CUR);
             break;
         }
 
@@ -114,7 +115,7 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
                 return RMS$_RTB;
             }
 
-            ssize_t n = rms_read_exact(fd, rab->rab$l_ubf, recsize);
+            ssize_t n = rms_io_read_exact(fd, rab->rab$l_ubf, recsize);
             if (n <= 0) {
                 rab->_eof = 1;
                 return RMS$_EOF;
@@ -137,7 +138,7 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
              * to word (2-byte) boundaries.
              */
             uint16_t reclen;
-            ssize_t n = rms_read_exact(fd, &reclen, 2);
+            ssize_t n = rms_io_read_exact(fd, &reclen, 2);
             if (n <= 0) {
                 rab->_eof = 1;
                 return RMS$_EOF;
@@ -147,22 +148,22 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
             if (reclen > rab->rab$w_usz) {
                 rab->rab$l_stv = reclen;
                 /* Skip past the record data so we don't corrupt the stream */
-                lseek(fd, reclen + (reclen & 1), SEEK_CUR);
-                rab->_current_offset = lseek(fd, 0, SEEK_CUR);
+                rms_io_lseek(fd, reclen + (reclen & 1), SEEK_CUR);
+                rab->_current_offset = rms_io_lseek(fd, 0, SEEK_CUR);
                 return RMS$_RTB;
             }
 
             if (reclen > 0) {
-                n = rms_read_exact(fd, rab->rab$l_ubf, reclen);
+                n = rms_io_read_exact(fd, rab->rab$l_ubf, reclen);
                 if (n < reclen) return RMS$_RER;
             }
 
             /* Skip pad byte for word alignment */
-            if (reclen & 1) lseek(fd, 1, SEEK_CUR);
+            if (reclen & 1) rms_io_lseek(fd, 1, SEEK_CUR);
 
             rab->rab$w_rsz = reclen;
             rab->_last_rec_size = reclen;
-            rab->_current_offset = lseek(fd, 0, SEEK_CUR);
+            rab->_current_offset = rms_io_lseek(fd, 0, SEEK_CUR);
             break;
         }
 
@@ -174,7 +175,7 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
              * The count includes the fixed control area.
              */
             uint16_t reclen;
-            ssize_t n = rms_read_exact(fd, &reclen, 2);
+            ssize_t n = rms_io_read_exact(fd, &reclen, 2);
             if (n <= 0) {
                 rab->_eof = 1;
                 return RMS$_EOF;
@@ -188,8 +189,8 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
 
             if (datalen > rab->rab$w_usz) {
                 rab->rab$l_stv = datalen;
-                lseek(fd, reclen + (reclen & 1), SEEK_CUR);
-                rab->_current_offset = lseek(fd, 0, SEEK_CUR);
+                rms_io_lseek(fd, reclen + (reclen & 1), SEEK_CUR);
+                rab->_current_offset = rms_io_lseek(fd, 0, SEEK_CUR);
                 return RMS$_RTB;
             }
 
@@ -197,22 +198,22 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
             if (fsz > 0) {
                 char ctrl[256];
                 uint8_t to_read = (fsz <= sizeof(ctrl)) ? fsz : (uint8_t)sizeof(ctrl);
-                n = rms_read_exact(fd, ctrl, to_read);
+                n = rms_io_read_exact(fd, ctrl, to_read);
                 if (n < to_read) return RMS$_RER;
             }
 
             /* Read the data portion */
             if (datalen > 0) {
-                n = rms_read_exact(fd, rab->rab$l_ubf, datalen);
+                n = rms_io_read_exact(fd, rab->rab$l_ubf, datalen);
                 if (n < datalen) return RMS$_RER;
             }
 
             /* Skip pad byte for word alignment */
-            if (reclen & 1) lseek(fd, 1, SEEK_CUR);
+            if (reclen & 1) rms_io_lseek(fd, 1, SEEK_CUR);
 
             rab->rab$w_rsz = datalen;
             rab->_last_rec_size = datalen;
-            rab->_current_offset = lseek(fd, 0, SEEK_CUR);
+            rab->_current_offset = rms_io_lseek(fd, 0, SEEK_CUR);
             break;
         }
 
@@ -240,41 +241,41 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
  */
 uint32_t rms_seq_put(struct FAB *fab, struct RAB *rab)
 {
-    int fd = fab->_linux_fd;
-    if (fd < 0) return RMS$_ACC;
+    struct rms_file *fd = fab->_rms_file;
+    if (!fd) return RMS$_ACC;
 
     char *buf = rab->rab$l_rbf ? rab->rab$l_rbf : rab->rab$l_ubf;
     if (!buf) return RMS$_RAB;
     uint16_t len = rab->rab$w_rsz;
 
     /* Seek to end for sequential writes */
-    lseek(fd, 0, SEEK_END);
+    rms_io_lseek(fd, 0, SEEK_END);
 
     switch (fab->fab$b_rfm) {
         case FAB$C_STMLF: {
             /* Stream-LF: write data followed by \n */
             if (len > 0) {
-                if (rms_write_exact(fd, buf, len) < 0) return RMS$_WER;
+                if (rms_io_write_exact(fd, buf, len) < 0) return RMS$_WER;
             }
-            if (rms_write_exact(fd, "\n", 1) < 0) return RMS$_WER;
+            if (rms_io_write_exact(fd, "\n", 1) < 0) return RMS$_WER;
             break;
         }
 
         case FAB$C_STMCR: {
             /* Stream-CR: write data followed by \r */
             if (len > 0) {
-                if (rms_write_exact(fd, buf, len) < 0) return RMS$_WER;
+                if (rms_io_write_exact(fd, buf, len) < 0) return RMS$_WER;
             }
-            if (rms_write_exact(fd, "\r", 1) < 0) return RMS$_WER;
+            if (rms_io_write_exact(fd, "\r", 1) < 0) return RMS$_WER;
             break;
         }
 
         case FAB$C_STM: {
             /* Stream: write data followed by \r\n */
             if (len > 0) {
-                if (rms_write_exact(fd, buf, len) < 0) return RMS$_WER;
+                if (rms_io_write_exact(fd, buf, len) < 0) return RMS$_WER;
             }
-            if (rms_write_exact(fd, "\r\n", 2) < 0) return RMS$_WER;
+            if (rms_io_write_exact(fd, "\r\n", 2) < 0) return RMS$_WER;
             break;
         }
 
@@ -300,7 +301,7 @@ uint32_t rms_seq_put(struct FAB *fab, struct RAB *rab)
             uint16_t copylen = (len < recsize) ? len : recsize;
             memcpy(padded, buf, copylen);
 
-            int rc = rms_write_exact(fd, padded, recsize);
+            int rc = rms_io_write_exact(fd, padded, recsize);
             free(padded);
             if (rc < 0) return RMS$_WER;
             break;
@@ -316,14 +317,14 @@ uint32_t rms_seq_put(struct FAB *fab, struct RAB *rab)
                 return RMS$_RTB;
             }
 
-            if (rms_write_exact(fd, &len, 2) < 0) return RMS$_WER;
+            if (rms_io_write_exact(fd, &len, 2) < 0) return RMS$_WER;
             if (len > 0) {
-                if (rms_write_exact(fd, buf, len) < 0) return RMS$_WER;
+                if (rms_io_write_exact(fd, buf, len) < 0) return RMS$_WER;
             }
             /* Pad to word boundary */
             if (len & 1) {
                 char zero = 0;
-                if (rms_write_exact(fd, &zero, 1) < 0) return RMS$_WER;
+                if (rms_io_write_exact(fd, &zero, 1) < 0) return RMS$_WER;
             }
             break;
         }
@@ -343,22 +344,22 @@ uint32_t rms_seq_put(struct FAB *fab, struct RAB *rab)
             }
 
             uint16_t total = (uint16_t)(fsz + len);
-            if (rms_write_exact(fd, &total, 2) < 0) return RMS$_WER;
+            if (rms_io_write_exact(fd, &total, 2) < 0) return RMS$_WER;
 
             /* Write fixed control area (zeroed) */
             char ctrl[256];
             memset(ctrl, 0, sizeof(ctrl));
-            if (rms_write_exact(fd, ctrl, fsz) < 0) return RMS$_WER;
+            if (rms_io_write_exact(fd, ctrl, fsz) < 0) return RMS$_WER;
 
             /* Write data */
             if (len > 0) {
-                if (rms_write_exact(fd, buf, len) < 0) return RMS$_WER;
+                if (rms_io_write_exact(fd, buf, len) < 0) return RMS$_WER;
             }
 
             /* Pad to word boundary */
             if (total & 1) {
                 char zero = 0;
-                if (rms_write_exact(fd, &zero, 1) < 0) return RMS$_WER;
+                if (rms_io_write_exact(fd, &zero, 1) < 0) return RMS$_WER;
             }
             break;
         }
@@ -367,6 +368,6 @@ uint32_t rms_seq_put(struct FAB *fab, struct RAB *rab)
             return RMS$_ORG;
     }
 
-    rab->_current_offset = lseek(fd, 0, SEEK_CUR);
+    rab->_current_offset = rms_io_lseek(fd, 0, SEEK_CUR);
     return RMS$_NORMAL;
 }

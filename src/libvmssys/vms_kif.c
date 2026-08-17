@@ -2204,3 +2204,18 @@ uint32_t vms_kif_acp_writevb(struct vms_acp_rw_args *args)
     KIF_CALL(VMS_IOCTL_ACP_WRITEVBLK, args);
     return args->status;
 }
+
+uint32_t vms_kif_acp_acpcontrol(struct vms_acp_acpcontrol_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!acp_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->pattern[VMS_ACP_NAME_SIZE - 1] = '\0';
+    args->status = 0;
+
+    KIF_CALL(VMS_IOCTL_ACP_ACPCONTROL, args);
+
+    return args->status;
+}

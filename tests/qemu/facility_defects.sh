@@ -495,6 +495,7 @@ acp-assign-unmounted-fabricates-channel
 acp-mount-nonods2-accepted
 acp-access-window-vbn-offbyone
 acp-writevb-extend-alloc-offbyone
+acp-search-cursor-skips-versions
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -4872,6 +4873,42 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    acp-search-cursor-skips-versions)
+        case "$_f" in
+        facility)     echo "Files-11 (ODS-2) ACP IO\$_ACPCONTROL wildcard directory search -- the \$SEARCH primitive (VMS_IOCTL_ACP_ACPCONTROL returns successive matching directory entries in genuine ODS-2 order [name ascending, version descending], maintaining the FIB\$L_WCC continuation cursor on the channel), vms-a0b, epic vms-208";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_search";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_after_cursor() -- the FIB\$L_WCC continuation test that decides whether a directory entry is still ahead of the cursor -- inverts its same-name comparison from 'version < prev_ver' (a LOWER version of the cursor's name is still ahead, versions descending) to 'version > prev_ver'. After the highest version of a multi-version name is returned, every LOWER version is then judged 'not ahead' and SKIPPED: a \$SEARCH of a name at several versions returns only its highest, then jumps straight to the next name. Only a suite that iterates a name at MULTIPLE versions in all-versions mode can tell -- the highest-only (;0) and exact-version (;N) searches short-circuit before this line, and single-version names never reach the same-name branch, so they stay green.";;
+        require_fail) cat <<'EOF'
+wildcard search *.TXT match 2 is A.TXT version 2 FID 13 (versions descending within a name)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+wildcard search *.TXT match 3 is A.TXT version 1 FID 12
+wildcard search *.TXT match 4 is B.TXT version 1 FID 16
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME ONE SKIP, SEEN AT EACH LATER STEP OF THE ITERATION. The mutation drops
+every lower version of a name once its highest was returned, so the *.TXT search
+(A.TXT at versions 3, 2, 1 then B.TXT at version 1) collapses from its correct
+sequence [A.TXT;3, A.TXT;2, A.TXT;1, B.TXT;1] to [A.TXT;3, B.TXT;1]. match 1
+(A.TXT version 3) is the highest and is returned correctly, so it stays green;
+match 2 (require_fail) then observes B.TXT instead of A.TXT version 2; match 3
+observes SS$_NOMOREFILES instead of A.TXT version 1; match 4 observes
+SS$_NOMOREFILES instead of B.TXT version 1. One skip in the continuation test,
+three later steps of the same iteration reddened. Everything outside the
+multi-version iteration -- the highest-only (;0) listing, the exact-version
+(;N) match, the no-match pattern, the empty-context and bad-channel fail-honest
+checks, and the FID round-trip -- never reaches the inverted branch and stays
+green.
+EOF
+                      ;;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -6268,6 +6305,18 @@ apply_edit() {
         # original text is gone, so a second apply matches nothing (the no-op
         # selftest requires).
         sed -i 's|return win\[i\].lbn + (vbn - win\[i\].start_vbn);|return win[i].lbn + (vbn - win[i].start_vbn) + 1; /* NEGCTL acp-access-window-vbn-offbyone */|' "$_file";;
+
+    acp-search-cursor-skips-versions)
+        # ANCHORED to the single same-name continuation test in acp_after_cursor:
+        # `return version < c->prev_ver;` occurs exactly once in the file.
+        # Inverting `<` to `>` makes every lower version of the cursor's name
+        # judged "not ahead" and skipped, so a $SEARCH of a name at several
+        # versions returns only its highest -- the multi-version iteration in
+        # test_syssvc_acp_search collapses. The highest-only (;0) and exact (;N)
+        # paths short-circuit before this line and stay green. After
+        # substitution the original text is gone, so a second apply matches
+        # nothing (the no-op selftest requires).
+        sed -i 's|return version < c->prev_ver;|return version > c->prev_ver; /* NEGCTL acp-search-cursor-skips-versions */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

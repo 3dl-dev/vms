@@ -93,6 +93,7 @@ ASSERT_TRANSCRIPT=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2;
 #                    the unit->backing-device mapping, not content or size.
 OVMX_DISK0=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 OVMX_DISK1=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
+OVMX_DISK2=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 truncate -s 16M "$OVMX_DISK1"
 OVMX_ODS2_SRC=/ods2_real.img
 if [ -f "$OVMX_ODS2_SRC" ]; then
@@ -102,7 +103,21 @@ else
     echo "                ACP mount test (vms-127) needs a genuine ODS-2 volume on DKA0: (vda)" >&2
     exit 2
 fi
-trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1"' EXIT
+#   vdc (DKA200:) -- a GENERATED multi-version genuine ODS-2 volume (from
+#                    /ods2_search.img == tests/qemu/mkimage_ods2_search.c). Its
+#                    [SRCH] directory carries a name at several versions, which
+#                    the real-VAX fixture on DKA0: does not; the IO$_ACPCONTROL
+#                    wildcard directory search test (test_syssvc_acp_search,
+#                    vms-a0b) $MOUNTs it and iterates the versions.
+OVMX_ODS2_SEARCH_SRC=/ods2_search.img
+if [ -f "$OVMX_ODS2_SEARCH_SRC" ]; then
+    cp "$OVMX_ODS2_SEARCH_SRC" "$OVMX_DISK2"
+else
+    echo "run_tests.sh: FATAL: ODS-2 search fixture $OVMX_ODS2_SEARCH_SRC missing --" >&2
+    echo "                the \$SEARCH test (vms-a0b) needs a multi-version ODS-2 volume on DKA200: (vdc)" >&2
+    exit 2
+fi
+trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1" "$OVMX_DISK2"' EXIT
 
 # One virtio-net NIC (vms-9d2). Exactly as the two virtio disks above give the
 # executive real block devices to enumerate into DK units, this gives it a real
@@ -170,6 +185,8 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -device virtio-blk-pci,drive=ovmxdisk0 \
     -drive if=none,id=ovmxdisk1,file="$OVMX_DISK1",format=raw \
     -device virtio-blk-pci,drive=ovmxdisk1 \
+    -drive if=none,id=ovmxdisk2,file="$OVMX_DISK2",format=raw \
+    -device virtio-blk-pci,drive=ovmxdisk2 \
     2>&1) || QEMU_RC=$?
 
 # Splice the assertion transcript (ttyS1, if this arch has one) back into

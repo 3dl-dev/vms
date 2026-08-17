@@ -252,6 +252,18 @@
  */
 #define SS__DEVICEFULL  2664        /* device full (extend cannot allocate) */
 /*
+ * SS__NOMOREFILES (SS$_NOMOREFILES == 2352, %X0930) -- ORACLE-PINNED (vms-a0b,
+ * 2026-08-17). MEASURED on the reference lab OpenVMS VAX V7.3 node VAX1 by
+ * assembling `.LONG SS$_NOMOREFILES` after `$SSDEF` and reading the resolved
+ * absolute value off the MACRO/LIST listing (00000930 == 2352); cross-checked
+ * against SS$_NOMOREDEV = 00000A58 = 2648 in the same run (matches this tree's
+ * SS__NOMOREDEV exactly, confirming the method). src/libvms/include/ssdef.h
+ * carries the same value + the full provenance. The Files-11 ODS-2 ACP's
+ * IO$_ACPCONTROL wildcard directory search ($SEARCH) returns it when the
+ * wildcard context is exhausted (VSI I/O User's Reference, "ACP-QIO Interface").
+ */
+#define SS__NOMOREFILES 2352        /* no more files (wildcard $SEARCH exhausted) */
+/*
  * SS__EXQUOTA -- this tree's existing src/libvms/include/ssdef.h value
  * (SS$_EXQUOTA == 28), NOT independently re-derived here, same discipline
  * as the device-table block above. ssdef.h carries no oracle citation for
@@ -1061,6 +1073,7 @@ long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg);
  */
 long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_acpcontrol(struct vms_proc *proc, unsigned long arg);
 /*
  * IO$_READVBLK / IO$_WRITEVBLK (vms-c60): virtual-block transfer on an accessed
  * file channel through its window; a write past EOF triggers an implicit extend

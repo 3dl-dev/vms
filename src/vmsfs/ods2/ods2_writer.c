@@ -359,24 +359,49 @@ static void ifile_bitmap_mark_used(ods2_wvolume_t *wvol, uint32_t fidnum)
 }
 
 /* ================================================================
- * FM2 retrieval-pointer encoder (format 1: <= 256 blocks, <= 22-bit LBN).
- * Inverse of ods2_fh2_map_walk()'s format-1 decode in ods2_reader.c. [N]
- * ================================================================ */
-static ods2_status_t encode_map_extent(uint8_t *mp, uint32_t lbn, uint32_t count)
+ * FM2 retrieval-pointer encoder. Chooses the smallest FM2 format that
+ * covers `count` blocks (the inverse of ods2_fh2_map_walk()'s decode in
+ * ods2_reader.c [N]):
+ *   format 1 (2 words): count <= 256,   lbn < 2^22
+ *   format 2 (3 words): count <= 16384, lbn < 2^32
+ *   format 3 (4 words): count <= 2^30,  lbn < 2^32
+ * A large CONTIGUOUS file (an image like AUTHORIZE.EXE / LIBVMS$SHR.EXE)
+ * is thus one pointer, exactly as real VMS records a contiguous file --
+ * NOT a fan of 256-block format-1 pointers, which would blow the runtime
+ * ACP file-window slot budget (ACP_WINDOW_MAX). vms-5f0: before this the
+ * encoder was format-1-only and any file over 128 KB (256 blocks) failed
+ * ODS2_ERR_ARGS, so a genuine ODS-2 system disk could not hold real
+ * binaries. On success *words_out gets the pointer size in 16-bit words. */
+static ods2_status_t encode_map_extent(uint8_t *mp, uint32_t lbn,
+                                       uint32_t count, unsigned *words_out)
 {
-    uint16_t w0, w1;
-    uint32_t high6;
-
-    if (count < 1 || count > 256 || lbn >= (1u << 22))
+    if (count < 1)
         return ODS2_ERR_ARGS;
 
-    high6 = (lbn >> 16) & 0x3F;
-    w0 = (uint16_t)(0x4000u | ((count - 1) & 0xFF) | (high6 << 8));
-    w1 = (uint16_t)(lbn & 0xFFFF);
-
-    put16(mp + 0, w0);
-    put16(mp + 2, w1);
-    return ODS2_OK;
+    if (count <= 256 && lbn < (1u << 22)) {
+        uint32_t high6 = (lbn >> 16) & 0x3F;
+        put16(mp + 0, (uint16_t)(0x4000u | ((count - 1) & 0xFF) | (high6 << 8)));
+        put16(mp + 2, (uint16_t)(lbn & 0xFFFF));
+        if (words_out) *words_out = 2;
+        return ODS2_OK;
+    }
+    if (count <= (1u << 14)) {                       /* format 2: 3 words */
+        put16(mp + 0, (uint16_t)(0x8000u | ((count - 1) & 0x3FFF)));
+        put16(mp + 2, (uint16_t)(lbn & 0xFFFF));
+        put16(mp + 4, (uint16_t)((lbn >> 16) & 0xFFFF));
+        if (words_out) *words_out = 3;
+        return ODS2_OK;
+    }
+    if (count <= (1u << 30)) {                       /* format 3: 4 words */
+        uint32_t cm1 = count - 1;
+        put16(mp + 0, (uint16_t)(0xC000u | ((cm1 >> 16) & 0x3FFF)));
+        put16(mp + 2, (uint16_t)(cm1 & 0xFFFF));
+        put16(mp + 4, (uint16_t)(lbn & 0xFFFF));
+        put16(mp + 6, (uint16_t)((lbn >> 16) & 0xFFFF));
+        if (words_out) *words_out = 4;
+        return ODS2_OK;
+    }
+    return ODS2_ERR_ARGS;
 }
 
 /* ================================================================
@@ -696,16 +721,26 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
         }
     }
 
-    /* map area: one FM2 format-1 retrieval pointer per extent. Real
-     * INDEXF.SYS uses 3 (see write_indexf_header() below); every other
-     * file this writer emits uses exactly 1. */
-    for (ei = 0; ei < n_extents; ei++) {
-        uint8_t *mp = h + (size_t)MP_OFF_WORDS * 2 + (size_t)ei * 4;
-        st = encode_map_extent(mp, extents[ei].lbn, extents[ei].count);
-        if (st != ODS2_OK)
-            return st;
+    /* map area: one FM2 retrieval pointer per extent, each sized by
+     * encode_map_extent (format 1/2/3 by block count). A large contiguous
+     * file is a single format-2/3 pointer. The map area runs from
+     * MP_OFF_WORDS*2 to the checksum at byte 510, so bound-check each
+     * pointer against that ceiling (vms-5f0). */
+    {
+        const size_t map_cap = ODS2_BLOCK_SIZE - (size_t)MP_OFF_WORDS * 2 - 2;
+        size_t mp_bytes = 0;
+        for (ei = 0; ei < n_extents; ei++) {
+            unsigned words = 0;
+            uint8_t *mp = h + (size_t)MP_OFF_WORDS * 2 + mp_bytes;
+            if (mp_bytes + 8 > map_cap)          /* worst-case pointer = 4 words */
+                return ODS2_ERR_ARGS;
+            st = encode_map_extent(mp, extents[ei].lbn, extents[ei].count, &words);
+            if (st != ODS2_OK)
+                return st;
+            mp_bytes += (size_t)words * 2;
+        }
+        h[offsetof(ods2_fh2_t, fh2_map_inuse)] = (uint8_t)(mp_bytes / 2);
     }
-    h[offsetof(ods2_fh2_t, fh2_map_inuse)] = (uint8_t)(n_extents * 2);
 
     /* checksum over first 255 words -> offset 510 */
     put16(h + offsetof(ods2_fh2_t, fh2_checksum), ods2_block_checksum(h));
@@ -2292,7 +2327,7 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                 st = ODS2_ERR_NOSPACE;   /* map area full */
                 goto done;
             }
-            st = encode_map_extent(mp_base + (size_t)nx * 4, run_lbn, run);
+            st = encode_map_extent(mp_base + (size_t)nx * 4, run_lbn, run, NULL);
             if (st != ODS2_OK)
                 goto done;
             nx++;
@@ -2481,7 +2516,7 @@ ods2_status_t ods2_wvolume_append_file(ods2_wvolume_t *wvol,
         memset(mp_base, 0, map_cap);    /* clear any stale FM2 pointers */
         for (ei = 0; ei < ex.n; ei++) {
             st = encode_map_extent(mp_base + (size_t)ei * 4,
-                                   ex.ext[ei].lbn, ex.ext[ei].count);
+                                   ex.ext[ei].lbn, ex.ext[ei].count, NULL);
             if (st != ODS2_OK)
                 return st;
         }

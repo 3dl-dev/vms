@@ -224,6 +224,18 @@ vms_proc_get(pid_t pid)
 	exec_list_head_init(&np->mbx_channels);
 
 	/*
+	 * Files-11 (ODS-2) ACP file-class channels (rd vms-6a7f, epic vms-208) --
+	 * this process's (initially empty) file-channel ring, same chan_lock/
+	 * next_chan space as mbx_channels above. Only the list head is
+	 * initialized here: vmsfs_acp.c is not yet a TU of THIS module build
+	 * (tools/cross-vax/build-vms-module-vax.sh's SRCS), so its release-all
+	 * teardown call is deliberately NOT wired below (that link-in is the
+	 * later NetBSD-VAX ACP re-target, vms-d5d) -- an always-empty list is
+	 * harmless to drain-skip.
+	 */
+	exec_list_head_init(&np->file_channels);
+
+	/*
 	 * Lock-manager per-process state (P4-A, rd vms-ff7): this process's (initially
 	 * empty, self-linked) list of held locks, its count and their guard. Mirrors
 	 * the Linux vms.ko's proc registration (vms_module.c: INIT_LIST_HEAD(&locks)

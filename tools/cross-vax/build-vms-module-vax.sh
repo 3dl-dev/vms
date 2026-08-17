@@ -48,6 +48,22 @@
 #      including the relocatable-linked module object.
 # Findings: docs/audit-ilp32-vax-netbsd-exec.md.
 #
+# ACP COMPILE-COVERAGE (rd vms-6a7f, epic vms-208). As of this rung the SRCS
+# below are a DELIBERATE SUPERSET of src/kernel-netbsd/Makefile: they add
+# src/kernel-core/vmsfs_acp.c (the Files-11 ODS-2 ACP channel + IO$_ACCESS /
+# READVBLK / WRITEVBLK handlers) and src/vmsfs/ods2/ods2_edit.c (the pure
+# on-disk EDIT helpers vmsfs_acp.c's implicit-extend path calls), built with
+# -DOVMX_ODS2_KERNEL against the real NetBSD contract headers
+# (src/kernel-netbsd/vms_internal.h + the new vms_acp_nb.h twin, exactly the
+# same headers vms_mbx.c / vms_lnm.c already prove clean here). This closes the
+# ONE compile leg that used to skip the ACP handlers entirely: the LP64 Alpha
+# Linux build compiles them but cannot catch an ILP32 width regression, and
+# nothing else cross-compiled them for a 32-bit target at all. SCOPE: this is
+# COMPILE-COVERAGE ONLY -- vmsfs_acp.c is NOT added to src/kernel-netbsd/
+# Makefile's real SRCS, so it is not (yet) linked into the loadable NetBSD/vax
+# `vms' module and vms_netbsd.c does not dispatch its ioctls. Wiring it into
+# the real NetBSD-VAX kmod so it RUNS there is a later re-target (vms-d5d).
+#
 # Clean-room (CLAUDE.md Rule 8): OVMX's own build glue over the PUBLIC NetBSD
 # kernel headers + a stock gcc. No NetBSD or VSI/HPE source is copied into OVMX.
 #
@@ -68,6 +84,8 @@ OBJDUMP="${TARGET}-objdump"
 SRC="$(pwd)"
 KMOD="$SRC/src/kernel-netbsd"
 CORE="$SRC/src/kernel-core"
+ODS2="$SRC/src/vmsfs/ods2"             # the ACP's pure on-disk EDIT helpers
+ODS2_INC="$SRC/src/vmsfs/include"      # vmsfs/ods2.h (the genuine ODS-2 codec)
 NBSRC="${NBSRC:-/nbsrc}"
 SYS="$NBSRC/usr/src/sys"
 OUT="${OUT:-/tmp/vms-module-vax}"
@@ -91,7 +109,7 @@ ln -sf "$SYS/arch/vax/include" "$KL/vax"
 # VAX build uses, plus -Werror so a warning is a per-PR failure. No x86-only
 # codegen flags (-mno-sse / -mcmodel=kernel are amd64-only); VAX needs none.
 CFLAGS="-std=gnu99 -Werror -Wall -ffreestanding -fno-strict-aliasing -fno-omit-frame-pointer"
-CPPFLAGS="-DOVMX_KBACKEND_NETBSD -nostdinc -isystem $KL -isystem $SYS -isystem $SYS/arch -isystem $SYS/../common/include -D_KERNEL -D_MODULE -I$KMOD -I$CORE"
+CPPFLAGS="-DOVMX_KBACKEND_NETBSD -DOVMX_ODS2_KERNEL -nostdinc -isystem $KL -isystem $SYS -isystem $SYS/arch -isystem $SYS/../common/include -D_KERNEL -D_MODULE -I$KMOD -I$CORE -I$ODS2_INC"
 
 # The module's translation units -- EXACTLY src/kernel-netbsd/Makefile's SRCS:
 # the NetBSD backend glue + the OVMX intrusive containers + THE SHARED executive
@@ -121,7 +139,9 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_mbx.c \
       $CORE/vms_proctab.c \
       $CORE/vms_lock.c \
-      $CORE/vms_lnm.c"
+      $CORE/vms_lnm.c \
+      $CORE/vmsfs_acp.c \
+      $ODS2/ods2_edit.c"
 
 # ---- teeth check ---------------------------------------------------------
 # A deliberately-broken TU MUST fail the cross-compile, or a real break slips by.
@@ -239,7 +259,8 @@ done
 [ "$FAIL" -eq 0 ] || { echo "FAIL: at least one object was not elf32-vax/vax"; exit 1; }
 echo
 
-echo "=== ALL PROOFS PASSED: the OVMX executive vms module (12 TUs: vms_netbsd.c,"
+echo "=== ALL PROOFS PASSED: the OVMX executive vms module (14 TUs: vms_netbsd.c,"
 echo "    vms_lnm_arena_netbsd.c, exec_{list,hash,rbtree}_netbsd.c + shared"
-echo "    vms_{eflag,ast,access,mbx,proctab,lock,lnm}.c)"
+echo "    vms_{eflag,ast,access,mbx,proctab,lock,lnm}.c + the Files-11 ACP"
+echo "    vmsfs_acp.c + its ods2_edit.c EDIT helpers, rd vms-6a7f)"
 echo "    cross-compiles + relocatable-links for elf32-vax, ILP32 width-clean ==="

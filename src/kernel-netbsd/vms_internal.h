@@ -79,6 +79,13 @@
  * Byte-identical to src/kernel/vms_lnm.h. lnm is the LAST facility to join the
  * NetBSD module's SRCS (the arena seam was contract-only through vms-d61). */
 #include "vms_lnm_nb.h"
+/* Files-11 (ODS-2) ACP wire contract (rd vms-6a7f, epic vms-208): the
+ * $MOUNT/$DISMOUNT/$ASSIGN/IO$_ACCESS/IO$_DEACCESS/READVBLK/WRITEVBLK arg
+ * structs src/kernel-core/vmsfs_acp.c copies, VMS_ACP_NAME_SIZE and
+ * VMS_ACP_ACCTL_WRITE. Byte-identical to src/kernel/vms_acp.h. This is the
+ * elf32-vax cross-build's compile-coverage rung; the real NetBSD/VAX kmod
+ * driver wiring (d_ioctl dispatch) is a later re-target (vms-d5d). */
+#include "vms_acp_nb.h"
 
 /* ================================================================
  * VMS status codes -- the subset the event-flag facility returns. Values match
@@ -121,6 +128,26 @@
 #define SS__SUPERSEDE   844        /* SS$_SUPERSEDE (a name was superseded) */
 #define SS__NOLOGNAM    444        /* SS$_NOLOGNAM (no such logical name) */
 #define SS__EXLNMQUOTA  8780       /* oracle-pinned lab-1 F$MESSAGE (arena full) */
+/*
+ * Files-11 (ODS-2) ACP subset (rd vms-6a7f, epic vms-208): the six SS$ codes
+ * src/kernel-core/vmsfs_acp.c returns that were not yet in this twin. Values
+ * are copied VERBATIM from src/kernel/vms_internal.h -- NOT independently
+ * re-derived here -- so the Linux and NetBSD builds of the SAME shared
+ * facility source can never answer a given fault with two different
+ * numbers. Each is that Linux header's existing single-lineage
+ * src/libvms/include/ssdef.h value (see its own per-constant provenance
+ * comment there); SS__NOSUCHFILE in particular carries a FILED discrepancy
+ * there (2320 oracle vs 2696 this tree, under reconciliation) -- this twin
+ * intentionally tracks whatever src/kernel/vms_internal.h currently ships
+ * (2696) so the two substrates agree with each other while that
+ * reconciliation is open, rather than picking a value neither side used.
+ */
+#define SS__ACCVIO      0x0000000C /* SS$_ACCVIO (access violation) */
+#define SS__DEVNOTMOUNT 2688       /* SS$_DEVNOTMOUNT (device not mounted / not ODS-2) */
+#define SS__NOSUCHFILE  2696       /* SS$_NOSUCHFILE (IO$_ACCESS resolve miss) */
+#define SS__FILNOTACC   2744       /* SS$_FILNOTACC (IO$_DEACCESS w/o access) */
+#define SS__DEVICEFULL  2664       /* SS$_DEVICEFULL (extend cannot allocate) */
+#define SS__DEVALLOC    2112       /* SS$_DEVALLOC (device already allocated to another user) */
 
 /* ================================================================
  * Mailbox privilege bits (P4-A, rd vms-d7a). PSL_C_* and CMKRNL/CMEXEC/SETPRV
@@ -474,6 +501,17 @@ struct vms_proc {
 	exec_lock_t         chan_lock;
 	exec_list_head_t    mbx_channels;     /* struct vms_mbx_chan (defined in vms_mbx.c) */
 
+	/* Files-11 (ODS-2) ACP file-class channels (rd vms-6a7f, epic vms-208) --
+	 * a separate list on the SAME chan_lock/next_chan space, mirroring
+	 * mbx_channels exactly (struct vms_acp_chan is defined in the shared
+	 * src/kernel-core/vmsfs_acp.c). Added here so vmsfs_acp.c's `proc->
+	 * file_channels' resolves under the NetBSD substrate twin the same way it
+	 * already does under src/kernel/vms_internal.h's Linux struct vms_proc.
+	 * Scope note: this field lands with the elf32-vax COMPILE-coverage rung
+	 * (vms-6a7f); the NetBSD glue does not yet call vms_acp_release_all() in
+	 * this build's process-teardown path (mirrored in vms_netbsd.c). */
+	exec_list_head_t    file_channels;    /* struct vms_acp_chan (defined in vmsfs_acp.c) */
+
 	/* Deferred-free head (P4-A, rd vms-ca7). The reaper unlinks a dead PCB under
 	 * vms_proc_hash_lock (exec_hash_del_rcu) and reclaims it through
 	 * exec_free_deferred(&proc->rcu, ...) -- immediate on NetBSD (no lockless
@@ -576,6 +614,43 @@ void   vms_lnm_arena_selftest(void);
 long   vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg);
 long   vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg);
 long   vms_ioctl_lnm_getscope(struct vms_proc *proc, unsigned long arg);
+
+/* ----------------------------------------------------------------
+ * Files-11 (ODS-2) ACP (rd vms-6a7f, epic vms-208) -- DEFINED in
+ * src/kernel-core/vmsfs_acp.c, added to THIS cross-build's compile-coverage
+ * SRCS (tools/cross-vax/build-vms-module-vax.sh) but NOT (yet) to
+ * src/kernel-netbsd/Makefile's real SRCS or to vms_netbsd.c's ioctl dispatch --
+ * wiring it into the live NetBSD/vax `vms' module is a later re-target
+ * (vms-d5d). Declared here only so vmsfs_acp.c type-checks against this real
+ * contract twin.
+ * ---------------------------------------------------------------- */
+void vms_acp_init(void);
+void vms_acp_cleanup(void);
+long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_dmount(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg);
+int  vms_acp_dassgn(struct vms_proc *proc, uint32_t chan);
+void vms_acp_release_all(struct vms_proc *proc);
+/*
+ * Internal (non-ioctl) twin of the device table's disk-unit resolver
+ * (src/kernel/vms_internal.h's identical declaration, DEFINED there in
+ * src/kernel-core/vms_devtab.c): resolves a canonical disk-unit name to its
+ * backing (major,minor) so $MOUNT can read the home block/SCB. The NetBSD
+ * substrate has NOT ported the device table yet (no src/kernel-core/
+ * vms_devtab.c in either Makefile's SRCS -- a separate, larger facility port,
+ * not this rung); vmsfs_acp.c's $MOUNT path calls it, so the prototype is
+ * declared here for the compile-coverage proof even though no definition is
+ * built into this module yet. The call therefore remains an unresolved
+ * symbol in the relocatable object -- the SAME "not-yet-ported NetBSD KPI"
+ * shape every other undefined symbol in this build already carries; it is
+ * NOT reached by any live path in this compile-only gate (Rule 9).
+ */
+uint32_t vms_devtab_disk_backing(const char *devnam,
+                                 uint32_t *major_out, uint32_t *minor_out);
 
 /* ----------------------------------------------------------------
  * Cross-facility image-rundown release helpers. vms_ioctl_image_rundown()

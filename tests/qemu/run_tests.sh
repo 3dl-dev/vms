@@ -121,10 +121,14 @@ else
 fi
 #   vdd (DKA300:) -- a GENERATED genuine ODS-2 SYSTEM-DISK tree (from
 #                    /ods2_sysvol.img == tests/qemu/mkimage_ods2_sysvol.c). It
-#                    carries [SYS0.SYSCOMMON.{SYSEXE,SYSMGR,SYSLIB}] with
-#                    SYSUAF.DAT etc., so the directory-logical resolution test
-#                    (test_syssvc_dirlogical_acp, vms-0044) can compose
-#                    SYS$SYSTEM:SYSUAF.DAT and walk the ACP to the file FID.
+#                    carries [SYS0.SYSCOMMON.{SYSEXE,SYSMGR,SYSLIB}] with the REAL
+#                    shipped SYSUAF.DAT / RIGHTSLIST.DAT (verbatim from
+#                    distro/rootfs), so the directory-logical resolution test
+#                    (test_syssvc_dirlogical_acp, vms-0044) composes
+#                    SYS$SYSTEM:SYSUAF.DAT and walks the ACP to the file FID, and
+#                    the login/rights suites (test_syssvc_sysuaf_uic_base,
+#                    test_syssvc_rightslist, vms-5f0) read the real records back
+#                    through the RMS-over-ACP rooted-logical $OPEN.
 #   vde (DKA400:) -- a GENERATED genuine ODS-2 volume carrying [IMGACT]TESTIMG.EXE
 #                    (a real ELF image) from /ods2_imgact.img ==
 #                    tests/qemu/mkimage_ods2_imgact.c. test_syssvc_imgact_acp

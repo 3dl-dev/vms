@@ -44,6 +44,28 @@
 #include "vms_kif.h"
 
 #define EXIT_SKIP 77
+#define ODS2_UNIT "DKA300:"    /* vdd: the generated system-disk ODS-2 fixture */
+
+/* Seed the concealed-rooted system logicals pointed at ODS2_UNIT into the
+ * process table (identical to test_syssvc_dirlogical_acp.c). This is what the
+ * RMS-over-ACP $OPEN composes, so rightslist_name_to_value() reads the REAL
+ * shipped RIGHTSLIST.DAT (general identifiers) and sysuaf_lookup_by_uic() reads
+ * the REAL SYSUAF.DAT (UIC identifiers) off the mounted ODS-2 volume through the
+ * ACP -- not any /vms passthrough. */
+static void seed_system_logicals(lnm_manager_t *mgr)
+{
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSDEVICE", ODS2_UNIT,
+               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    static const char *sysroot[] = {
+        "SYS$SYSDEVICE:[SYS0.]",
+        "SYS$SYSDEVICE:[SYS0.SYSCOMMON.]"
+    };
+    lnm_create_multi(mgr, LNM_PROCESS_TABLE, "SYS$SYSROOT", sysroot, 2,
+                     LNM_ATTR_CONCEALED, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSTEM",  "SYS$SYSROOT:[SYSEXE]", 0, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$MANAGER", "SYS$SYSROOT:[SYSMGR]", 0, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$LIBRARY", "SYS$SYSROOT:[SYSLIB]", 0, LNM_MODE_EXEC);
+}
 
 static int pass = 0;
 static int fail = 0;
@@ -116,31 +138,50 @@ int main(void)
            "(vms-2f8/vms-d37) ===\n");
 
     /*
-     * Bootstrap filespec resolution the same way every shipped image does and
-     * tests/qemu/test_syssvc_setuai.c does: the device table for DKA0:, the
-     * executive-resident logical name table for SYS$SYSTEM. RIGHTSLIST_PATH is
-     * "SYS$SYSTEM:RIGHTSLIST.DAT" and SYSUAF_PATH "SYS$SYSTEM:SYSUAF.DAT", so
-     * both halves are needed and the SYS$SYSTEM half resolves only in the guest.
-     */
-    vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
-    lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
-
-    /*
      * This suite requires a real executive: the rights-database reads are only
-     * meaningful when SYS$SYSTEM resolves through the executive-resident
-     * LNM$SYSTEM to the shipped RIGHTSLIST.DAT / SYSUAF.DAT. With no /dev/vms it
-     * honest-skips (77), never a fake pass -- the contract every test_syssvc_*
-     * is held to (.github/workflows/ci.yml). Nothing is asserted on the skip
-     * path (matching tests/qemu/test_syssvc_setuai.c): while vms-fk1's host-LNM
-     * fake still exists, lnm_setup_defaults above reseeds SYS$SYSTEM into
-     * LNM$PROCESS on a hostless build, so a read here could resolve for the
-     * WRONG reason -- the honest signal is simply "no executive -> skip".
+     * meaningful when SYS$SYSTEM composes through the concealed-rooted chain and
+     * the Files-11 ACP reads the shipped RIGHTSLIST.DAT / SYSUAF.DAT off a
+     * MOUNTED ODS-2 volume. With no /dev/vms it honest-skips (77), never a fake
+     * pass -- the contract every test_syssvc_* is held to (.github/workflows/
+     * ci.yml). Nothing is asserted on the skip path.
      */
     if (!executive_present()) {
         printf("=== test_syssvc_rightslist: 0 passed, 0 failed "
                "(SKIPPED: no /dev/vms -- the rights-database reads need the "
-               "executive-resident LNM$SYSTEM) ===\n");
+               "Files-11 ACP on a mounted ODS-2 volume) ===\n");
         return EXIT_SKIP;
+    }
+
+    /*
+     * Bootstrap the VMS namespace the way the booted system does: seed the
+     * concealed-rooted system logicals on DKA300: and $MOUNT the generated
+     * system-disk ODS-2 fixture. rightslist_name_to_value() then opens
+     * SYS$SYSTEM:RIGHTSLIST.DAT -> RMS-over-ACP $OPEN composes
+     * DKA300:[SYS0.SYSCOMMON.SYSEXE]RIGHTSLIST.DAT and reads the REAL shipped
+     * rows off the ODS-2 platter; UIC identifiers derive from SYSUAF.DAT read the
+     * same way. NO /vms passthrough (Rule 9 / INV-6).
+     */
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (!mgr) { check(0, "no LNM manager"); goto done; }
+    seed_system_logicals(mgr);
+
+    uint32_t mst = vms_kif_acp_mount(ODS2_UNIT);
+    check($VMS_STATUS_SUCCESS(mst),
+          "$MOUNT of the system-disk ODS-2 fixture on " ODS2_UNIT " (precondition)");
+    if (!$VMS_STATUS_SUCCESS(mst)) goto done;
+
+    /* PROVENANCE: a general identifier resolves while mounted, and the same read
+     * FAILS honestly once DISMOUNTED -- so the rows below came off the ACP
+     * volume, never a POSIX substitute. Remounted for the assertions. */
+    {
+        uint32_t v = 0;
+        check(rightslist_name_to_value("BATCH", &v) == 0 && v == 0x80000001u,
+              "BATCH reads via RMS-over-ACP off the mounted ODS-2 volume");
+        vms_kif_acp_dmount(ODS2_UNIT);
+        uint32_t v2 = 0;
+        check(rightslist_name_to_value("BATCH", &v2) != 0,
+              "with the volume DISMOUNTED the rights read fails-honest (no /vms fallback)");
+        (void)vms_kif_acp_mount(ODS2_UNIT);
     }
 
     /* --- general identifiers, from RIGHTSLIST.DAT --------------------- */
@@ -211,6 +252,9 @@ int main(void)
         check(0, "LOCAL resolves, for the regression check");
     }
 
+    vms_kif_acp_dmount(ODS2_UNIT);
+
+done:
     printf("=== test_syssvc_rightslist: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
 }

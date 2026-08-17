@@ -462,18 +462,24 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_search \
     /src/tests/qemu/mkimage_ods2_search /ods2_search.img 1
 
 # GENERATED genuine ODS-2 SYSTEM-DISK tree for the directory-logical resolution
-# proof (vms-0044, epic vms-208). mkimage_ods2_sysvol.c masters, with the SAME
-# byte-genuine writer, a concealed-rooted layout [SYS0.SYSCOMMON.{SYSEXE,SYSMGR,
-# SYSLIB}] holding SYSUAF.DAT etc. Staged as /ods2_sysvol.img, which
-# run_tests.sh copies onto DKA300: (vdd). test_syssvc_dirlogical_acp composes
-# SYS$SYSTEM:SYSUAF.DAT and walks the ACP MFD->[SYS0]->[SYSCOMMON]->[SYSEXE] to
-# the file FID, then reads it byte-exact.
+# proof (vms-0044, epic vms-208) AND the login/rights read path (vms-5f0).
+# mkimage_ods2_sysvol.c masters, with the SAME byte-genuine writer, a
+# concealed-rooted layout [SYS0.SYSCOMMON.{SYSEXE,SYSMGR,SYSLIB}] holding the
+# REAL shipped SYSUAF.DAT / RIGHTSLIST.DAT (copied VERBATIM from the product's
+# own distro/rootfs, so the suites assert against what actually boots). Staged as
+# /ods2_sysvol.img, which run_tests.sh copies onto DKA300: (vdd).
+# test_syssvc_dirlogical_acp composes SYS$SYSTEM:SYSUAF.DAT and walks the ACP
+# MFD->[SYS0]->[SYSCOMMON]->[SYSEXE] to the file FID, then reads it byte-exact;
+# test_syssvc_sysuaf_uic_base / test_syssvc_rightslist $MOUNT the volume and read
+# the real records back through the RMS-over-ACP rooted-logical $OPEN.
 COPY tests/qemu/mkimage_ods2_sysvol.c /src/tests/qemu/
 RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_sysvol \
         /src/tests/qemu/mkimage_ods2_sysvol.c \
         /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
         /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
-    /src/tests/qemu/mkimage_ods2_sysvol /ods2_sysvol.img 2
+    /src/tests/qemu/mkimage_ods2_sysvol /ods2_sysvol.img 2 \
+        /src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT \
+        /src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT
 
 # GENERATED ODS-2 volume carrying a real ELF image [IMGACT]TESTIMG.EXE for the
 # IMGACT-over-ACP proof (vms-3e8e, epic vms-208). mkimage_ods2_imgact.c lays the

@@ -25,18 +25,31 @@
  *     [000000]SYS0.DIR
  *       [SYS0]SYSCOMMON.DIR
  *         [SYS0.SYSCOMMON]SYSEXE.DIR
- *           SYSUAF.DAT;1        (raw/FIXED, 512 bytes, known pattern)
+ *           SYSUAF.DAT;1        (raw/FIXED; the REAL shipped SYSUAF.DAT bytes)
+ *           RIGHTSLIST.DAT;1    (raw/FIXED; the REAL shipped RIGHTSLIST.DAT bytes)
  *         [SYS0.SYSCOMMON]SYSMGR.DIR
  *           STARTUP.COM;1       (text)
  *           WELCOME.TXT;1       (text)
  *         [SYS0.SYSCOMMON]SYSLIB.DIR
  *           STARLET.OLB;1       (raw/FIXED, 512 bytes, known pattern)
  *
+ * THE SYSTEM DATA FILES ARE THE PRODUCT'S OWN, NOT INVENTED HERE (vms-5f0, epic
+ * vms-208). SYSUAF.DAT and RIGHTSLIST.DAT are copied VERBATIM from
+ * distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/ -- the exact files ovmx_init
+ * provisions onto the system disk on the real boot -- so the login/rights suites
+ * that read them back through the RMS-over-ACP rooted-logical open
+ * (SYS$SYSTEM:SYSUAF.DAT -> DKA300:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT) assert
+ * against what actually boots, not a fixture invented for the harness. They are
+ * written stream-LF verbatim (add_raw), which is byte-identical to what a real
+ * $CREATE/$PUT of the same text would lay down (one line == one LF-delimited
+ * record), so RMS $GET reads them back as records.
+ *
  * Built with the SAME byte-genuine writer (src/vmsfs/ods2/ods2_writer.c) that
  * the boot master, mkimage_ods2_real.c and mkimage_ods2_search.c use -- it adds
  * no new ODS-2 knowledge (CLAUDE.md Rule 8; see vmsfs/ods2.h's provenance).
  *
- * Usage: mkimage_ods2_sysvol <output-file> [size-in-MB]
+ * Usage: mkimage_ods2_sysvol <output-file> <size-in-MB> \
+ *                            <sysuaf-path> <rightslist-path>
  */
 
 #include <stdio.h>
@@ -51,14 +64,27 @@
 #define DEFAULT_SIZE_MB 2
 #define MIN_BLOCKS      64
 
-/* The known SYSUAF.DAT pattern the test reads back byte-exact. Kept in sync
- * with test_syssvc_dirlogical_acp.c's SYSUAF_BYTE(i). */
-#define SYSUAF_LEN 512
-static void fill_sysuaf(uint8_t *b)
+/* Read an entire file into a malloc'd buffer. Exits on any error -- a missing
+ * or unreadable shipped file must fail the master LOUDLY (the suites that read
+ * it back would otherwise assert against a stale/absent fixture). */
+static uint8_t *read_whole_file(const char *path, size_t *out_len)
 {
-    for (int i = 0; i < SYSUAF_LEN; i++)
-        b[i] = (uint8_t)(0x5A ^ (i * 3u));
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "mkimage_ods2_sysvol: cannot open %s\n", path); exit(1); }
+    if (fseek(f, 0, SEEK_END) != 0) { perror("fseek"); exit(1); }
+    long n = ftell(f);
+    if (n < 0) { perror("ftell"); exit(1); }
+    rewind(f);
+    uint8_t *buf = malloc((size_t)n + 1);
+    if (!buf) { fprintf(stderr, "mkimage_ods2_sysvol: OOM reading %s\n", path); exit(1); }
+    if (n > 0 && fread(buf, 1, (size_t)n, f) != (size_t)n) {
+        fprintf(stderr, "mkimage_ods2_sysvol: short read on %s\n", path); exit(1);
+    }
+    fclose(f);
+    *out_len = (size_t)n;
+    return buf;
 }
+
 #define STARLET_LEN 512
 static void fill_starlet(uint8_t *b)
 {
@@ -129,15 +155,36 @@ static void add_raw(ods2_wvolume_t *wvol, ods2_fid_t dir, const char *name,
            (unsigned)ods2_fid_number(&fid), fid.fid_seq, fid.fid_rvn, len);
 }
 
+/* Create a STREAM-LF text file (bytes verbatim, RFM=STMLF) and enter it in
+ * <dir>. Verbatim like add_raw (so a block-mode VBN read sees the exact file
+ * bytes), but framed RFM=STMLF so an RMS $GET returns one LF-delimited record
+ * per call -- the format a genuine VMS text file (SYSUAF.DAT, RIGHTSLIST.DAT)
+ * carries, and what LOGINOUT's SYSUAF scan / F$IDENTIFIER's rights read need. */
+static void add_stmlf(ods2_wvolume_t *wvol, ods2_fid_t dir, const char *name,
+                      const uint8_t *data, size_t len)
+{
+    ods2_fid_t fid;
+    ods2_status_t st;
+    st = ods2_wvolume_create_file_stmlf(wvol, name, 1, data, len, dir, &fid);
+    if (st != ODS2_OK) die(name, st);
+    st = ods2_wvolume_dir_insert(wvol, dir, name, 1, fid);
+    if (st != ODS2_OK) die("dir_insert(stmlf)", st);
+    printf("  %-28s -> FID (%u,%u,%u)  [%zu bytes verbatim, RFM=STMLF]\n", name,
+           (unsigned)ods2_fid_number(&fid), fid.fid_seq, fid.fid_rvn, len);
+}
+
 int main(int argc, char *argv[])
 {
-    if (argc < 2 || argc > 3) {
-        fprintf(stderr, "Usage: mkimage_ods2_sysvol <output-file> [size-in-MB]\n");
+    if (argc != 5) {
+        fprintf(stderr, "Usage: mkimage_ods2_sysvol <output-file> <size-in-MB> "
+                        "<sysuaf-path> <rightslist-path>\n");
         return 1;
     }
-    const char *outpath = argv[1];
-    uint64_t size_mb = (argc == 3) ? (uint64_t)strtoul(argv[2], NULL, 10)
-                                   : DEFAULT_SIZE_MB;
+    const char *outpath   = argv[1];
+    uint64_t    size_mb   = (uint64_t)strtoul(argv[2], NULL, 10);
+    const char *sysuaf_p  = argv[3];
+    const char *rights_p  = argv[4];
+    if (size_mb == 0) size_mb = DEFAULT_SIZE_MB;
     uint32_t total_blocks = (uint32_t)((size_mb * 1024ULL * 1024ULL) / ODS2_BLOCK_SIZE);
     if (total_blocks < MIN_BLOCKS) {
         fprintf(stderr, "mkimage_ods2_sysvol: volume too small (%u blocks)\n",
@@ -175,13 +222,20 @@ int main(int argc, char *argv[])
     ods2_fid_t sysmgr   = add_dir(&wvol, syscommon,    "SYSMGR");
     ods2_fid_t syslib   = add_dir(&wvol, syscommon,    "SYSLIB");
 
-    uint8_t sysuaf[SYSUAF_LEN];   fill_sysuaf(sysuaf);
+    /* The REAL shipped system data files (verbatim from distro/rootfs). */
+    size_t sysuaf_len = 0, rights_len = 0;
+    uint8_t *sysuaf = read_whole_file(sysuaf_p, &sysuaf_len);
+    uint8_t *rights = read_whole_file(rights_p, &rights_len);
     uint8_t starlet[STARLET_LEN]; fill_starlet(starlet);
 
-    add_raw (&wvol, sysexe, "SYSUAF.DAT",  sysuaf,  SYSUAF_LEN);
+    add_stmlf(&wvol, sysexe, "SYSUAF.DAT",     sysuaf, sysuaf_len);
+    add_stmlf(&wvol, sysexe, "RIGHTSLIST.DAT", rights, rights_len);
     add_text(&wvol, sysmgr, "STARTUP.COM", "$ WRITE SYS$OUTPUT \"OVMX boot\"\n");
     add_text(&wvol, sysmgr, "WELCOME.TXT", "Welcome to OVMX.\n");
     add_raw (&wvol, syslib, "STARLET.OLB", starlet, STARLET_LEN);
+
+    free(sysuaf);
+    free(rights);
 
     int fd = open(outpath, O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) { perror(outpath); free(image); return 1; }

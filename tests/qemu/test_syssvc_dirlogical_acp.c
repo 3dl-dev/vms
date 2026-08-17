@@ -59,9 +59,14 @@
 #define EXIT_SKIP 77
 #define ODS2_UNIT  "DKA300:"     /* vdd: the generated system-disk fixture */
 
-/* The known SYSUAF.DAT bytes (kept in sync with mkimage_ods2_sysvol.c). */
+/* SYSUAF.DAT on this fixture is now the REAL shipped file (vms-5f0): the sysvol
+ * master copies distro/rootfs/.../SYSUAF.DAT verbatim, so the login/rights
+ * suites read back what actually boots. Its first line is a fixed, deterministic
+ * header, so VBN 1 read off the ODS-2 volume must begin with these exact bytes --
+ * a byte-exact discriminator against the shipped content (not a synthetic
+ * pattern). Kept in sync with the first line of that shipped file. */
 #define SYSUAF_LEN 512
-#define SYSUAF_BYTE(i) ((uint8_t)(0x5A ^ ((i) * 3u)))
+static const char SYSUAF_HEADER[] = "# System User Authorization File\n";
 
 #define ODS2_FH2_M_DIRECTORY 0x2000u
 
@@ -273,11 +278,12 @@ int main(void)
             r.chan = chan; r.vbn = 1; r.offset = 0; r.length = SYSUAF_LEN;
             r.buffer = (uint64_t)(uintptr_t)buf;
             uint32_t rst = vms_kif_acp_readvb(&r);
-            int exact = 1;
-            for (int i = 0; i < SYSUAF_LEN; i++)
-                if (buf[i] != SYSUAF_BYTE(i)) { exact = 0; break; }
-            check($VMS_STATUS_SUCCESS(rst) && r.xferred == SYSUAF_LEN && exact,
-                  "$GET/IO$_READVBLK reads SYSUAF.DAT byte-exact off the ODS-2 volume (no vmsfs_to_linux_path)");
+            size_t hlen = sizeof(SYSUAF_HEADER) - 1;   /* exclude the NUL */
+            int exact = ($VMS_STATUS_SUCCESS(rst) && r.xferred == SYSUAF_LEN &&
+                         memcmp(buf, SYSUAF_HEADER, hlen) == 0);
+            check(exact,
+                  "$GET/IO$_READVBLK reads SYSUAF.DAT byte-exact off the ODS-2 "
+                  "volume -- VBN 1 begins with the shipped header (no vmsfs_to_linux_path)");
             (void)vms_kif_acp_deaccess(chan);
             (void)vms_kif_dassgn(chan);
         }

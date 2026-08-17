@@ -523,7 +523,8 @@ bgsock-poll-always-ready
 bgsock-getname-addr-zeroed
 vmsfs-mountvis-crossproc-resolve-disabled
 initialize-home-magic-not-written
-ods2-read-content-vbn"
+ods2-read-content-vbn
+loginout-acp-auth-from-ods2"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4961,6 +4962,41 @@ EOF
                       ;;
         esac;;
 
+    loginout-acp-auth-from-ods2)
+        case "$_f" in
+        facility)     echo "LOGINOUT authenticates from SYSUAF via the Files-11 (ODS-2) ACP: the SYSUAF / RIGHTSLIST / \$GETUAI readers open their file with RMS \$OPEN/\$GET over the mounted ODS-2 volume (rms_textfile_open -> sys\$open/sys\$get, routed by rms_impl_open to \$ASSIGN + IO\$_ACCESS + IO\$_READVBLK), NOT fopen on a /vms passthrough -- so a login reads its SYSUAF credential off the genuine ODS-2 SYS\$DISK (src/libvms/rtl/rms_textfile.c, vms-274, epic vms-208). A userspace consumer of the ACP facility, the same product-half class as the RMS/devtab reroutes.";;
+        targets)      echo "libvms/rtl/rms_textfile.c";;
+        suites_red)   echo "test_syssvc_loginout_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_textfile_open() -- the sequential reader every SYSUAF / RIGHTSLIST / \$GETUAI read now rides -- opens the file declaring the wrong record format (FAB\$C_VAR instead of FAB\$C_STMLF). SYSUAF.DAT is stream-LF (one pipe-delimited row per LF-terminated record); read as VARIABLE, RMS takes the first two data bytes of each row as a binary record-length count, so every \$GET reframes the record into garbage and no row parses to a username. sysuaf_lookup(\"SYSTEM\") therefore returns not-found -- the exact property this reroute exists to provide (the login credential is read byte-faithful from the ODS-2 record through RMS-over-ACP; INV-6: it came off the platter as written). The \$CREATE/\$PUT that built the fixture, the OPERATOR.LOG/LASTLOGIN writers (their own \$PUT path), and the mount/dismount edges are untouched; only assertions that READ SYSUAF/LASTLOGIN back through rms_textfile_open can tell. The wrong-password and absent-account checks want a NEGATIVE result and still get one, so they stay green.";;
+        require_fail) cat <<'EOF'
+sysuaf_lookup(SYSTEM) reads the account via RMS-over-ACP
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+OPERATOR.LOG record read back byte-exact from the ODS-2 volume
+LASTLOGIN timestamp read back from the ODS-2 volume
+LOGINOUT auth + boot writers are sourced from the ODS-2 volume via the ACP
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME MISFRAMED READER, SEEN AT EACH READ-BACK THAT RIDES rms_textfile_open().
+Once the reader opens as VARIABLE, every $GET misframes, so the SYSUAF read
+(require_fail) and BOTH writer read-backs -- the OPERATOR.LOG record and the
+LASTLOGIN timestamp, each re-read through rms_textfile_open() -- redden, and the
+whole-suite gate that asserts auth + writers are sourced from the ODS-2 volume
+reddens with them. The guarded UIC / correct-password sub-checks do NOT run once
+the SYSUAF read fails (so they are neither green nor a second red); the
+OPERATOR.LOG APPEND and LASTLOGIN WRITE themselves use $PUT/$CREATE (the writer
+path, untouched, still stream-LF) and stay green; and the dismounted-read,
+absent-file, and product-fail-honest checks all expect a NEGATIVE result (a NULL
+handle / not-found) and stay green regardless of record format.
+EOF
+                      ;;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -6693,6 +6729,18 @@ apply_edit() {
         # true VBN on re-$OPEN. A second apply finds no `+ 1u;` left in the range
         # and is the no-op the idempotency selftest requires.
         sed -i '/^ssize_t rms_io_write/,/^}$/ s|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 1u;|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 2u; /* NEGCTL rms-put-wrong-vbn */|' "$_file";;
+
+    loginout-acp-auth-from-ods2)
+        # `fab$b_rfm = FAB$C_STMLF;` appears in rms_textfile_open, _append_line
+        # and _write_line; scope the mutation to the READER (rms_textfile_open,
+        # /^rms_textfile_t \*rms_textfile_open/,/^}$/) so ONLY the read path
+        # misframes -- the writers must keep writing stream-LF or the record they
+        # store would not be the one a correct reader reads back. STMLF -> VAR
+        # makes RMS take each row's first two bytes as a length count, so the
+        # SYSUAF/LASTLOGIN read-backs reframe into garbage while the $PUT/$CREATE
+        # writers are untouched. After substitution no `FAB$C_STMLF` is left in
+        # the reader's range -- the no-op the idempotency selftest requires.
+        sed -i '/^rms_textfile_t \*rms_textfile_open/,/^}$/ s|    tf->fab.fab$b_rfm = FAB$C_STMLF;|    tf->fab.fab$b_rfm = FAB$C_VAR; /* NEGCTL loginout-acp-auth-from-ods2 */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

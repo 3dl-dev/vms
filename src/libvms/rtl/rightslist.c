@@ -28,6 +28,7 @@
 #include "sysuaf.h"
 #include "str_util.h"
 #include "vmsfs/filespec.h"
+#include "rms_textfile.h"
 
 /* ------------------------------------------------------------------ */
 /* Value notation                                                      */
@@ -108,9 +109,13 @@ static int parse_value(const char *s, uint32_t *value)
 static int rightslist_scan(const char *want_name, uint32_t want_value,
                            uint32_t *out_value, char *out_name, size_t bufsz)
 {
-    char linux_path[1024];
-    vmsfs_to_linux_path(RIGHTSLIST_PATH, linux_path, sizeof(linux_path));
-    FILE *fp = fopen(linux_path, "r");
+    /*
+     * The rights database is read the VMS way: RMS $OPEN/$GET over the
+     * Files-11 ODS-2 ACP (vms-274), not fopen on a /vms passthrough. An absent
+     * or unreachable database is a miss, never a fall-back to a built-in table
+     * (Rule 9 / INV-6) -- rms_textfile_open() returns NULL and the caller
+     * renders the miss as VMS renders it. */
+    rms_textfile_t *fp = rms_textfile_open(RIGHTSLIST_PATH);
     if (!fp)
         return -1;
 
@@ -124,7 +129,7 @@ static int rightslist_scan(const char *want_name, uint32_t want_value,
 
     char line[512];
     int found = -1;
-    while (found != 0 && fgets(line, sizeof(line), fp)) {
+    while (found != 0 && rms_textfile_getline(fp, line, sizeof(line), NULL)) {
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
             continue;
         str_trim(line);
@@ -164,7 +169,7 @@ static int rightslist_scan(const char *want_name, uint32_t want_value,
         }
     }
 
-    fclose(fp);
+    rms_textfile_close(fp);
     return found;
 }
 

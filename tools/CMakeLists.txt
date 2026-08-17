@@ -19,7 +19,9 @@ target_compile_definitions(vms_login PRIVATE
     _DEFAULT_SOURCE
 )
 
-target_link_libraries(vms_login PRIVATE vms vmsfs vmslnm vmsprocess pthread)
+# vmsrms: SYSUAF/RIGHTSLIST authentication reads go through RMS $OPEN/$GET over
+# the Files-11 ODS-2 ACP now (vms-274) -- LOGINOUT must resolve sys$open/$get.
+target_link_libraries(vms_login PRIVATE vms vmsrms vmsfs vmslnm vmsprocess pthread)
 
 set_target_properties(vms_login PROPERTIES
     OUTPUT_NAME "LOGINOUT"

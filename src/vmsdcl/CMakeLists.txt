@@ -139,7 +139,8 @@ if(VMSDCL_STANDALONE)
     target_compile_options(vmsdcl PRIVATE -Wall -Wextra -O2)
 else()
     # Core link libraries
-    target_link_libraries(vmsdcl PRIVATE pthread vms vmsfs vmsprocess vmslnm vmsqueue)
+    # vmsrms: F$IDENTIFIER/SHOW read RIGHTSLIST/SYSUAF via RMS-over-ACP (vms-274).
+    target_link_libraries(vmsdcl PRIVATE pthread vms vmsrms vmsfs vmsprocess vmslnm vmsqueue)
 
     # Try to find readline for better interactive experience (skip for static
     # builds; and for the netbsd-vax cross, which has no readline in its sysroot

@@ -75,6 +75,7 @@
  * read SYSUAF at all, so the justification has no subject left.
  */
 #include "sysuaf.h"
+#include "rms_textfile.h"
 
 /*
  * Find a user record in sysuaf.dat by username.
@@ -85,39 +86,44 @@ static int find_uaf_record(const char *username_str,
                             sysuaf_record_t *out_rec,
                             long *out_offset)
 {
-    char sysuaf_linux[1024];
-    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
-    FILE *f = fopen(sysuaf_linux, "r");
+    /*
+     * $GETUAI reads SYSUAF the VMS way now: RMS $OPEN/$GET over the Files-11
+     * ODS-2 ACP (vms-274), not fopen on a /vms passthrough. Fail-honest: no
+     * mounted ACP volume / no such file -> rms_textfile_open() is NULL and the
+     * lookup reports an I/O error, never a POSIX fallback (Rule 9 / INV-6).
+     *
+     * out_offset is vestigial -- both callers pass NULL, and $SETUAI rewrites
+     * the whole file by username match (see below), never by byte offset. It
+     * is cleared for compatibility rather than tracked. */
+    if (out_offset)
+        *out_offset = 0;
+
+    rms_textfile_t *f = rms_textfile_open(SYSUAF_PATH);
     if (!f)
         return -1;
 
     char line[SYSUAF_LINE_MAX];
-    long offset = 0;
     int found = 0;
     int too_long = 0;
 
-    while (sysuaf_read_line(f, line, sizeof(line), &too_long)) {
+    while (rms_textfile_getline(f, line, sizeof(line), &too_long)) {
         sysuaf_record_t rec;
         /* An over-length line is not a short record. Reporting and skipping
          * it is the whole fix (vms-9b7): parsing its prefix is how a
          * seven-field row became a five-field one. */
-        if (too_long) {
-            offset = ftell(f);
+        if (too_long)
             continue;
-        }
         int rc = sysuaf_parse_line(line, &rec);
         if (rc == 1) {
             if (strcasecmp(rec.username, username_str) == 0) {
                 if (out_rec)    *out_rec    = rec;
-                if (out_offset) *out_offset = offset;
                 found = 1;
                 break;
             }
         }
-        offset = ftell(f);
     }
 
-    fclose(f);
+    rms_textfile_close(f);
     return found;
 }
 

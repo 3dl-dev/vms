@@ -24,6 +24,7 @@
 #include "sysuaf.h"
 #include "vmsfs/filespec.h"
 #include "vms/privs.h"
+#include "rms_textfile.h"
 
 /* str_upcase() and str_trim() replaced by str_str_upcase()/str_trim() from str_util.h */
 
@@ -350,9 +351,14 @@ void sysuaf_mask_to_flags(uint32_t mask, char *out, size_t outsz)
 static int sysuaf_scan(const char *username, uint32_t want_uic,
                        sysuaf_record_t *out)
 {
-    char sysuaf_linux[SYSUAF_LINE_MAX];
-    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
-    FILE *fp = fopen(sysuaf_linux, "r");
+    /*
+     * SYSUAF is read the VMS way: RMS $OPEN/$GET over the Files-11 ODS-2 ACP
+     * (vms-274), not fopen on a /vms passthrough. A login therefore
+     * authenticates by reading SYSUAF from the genuine ODS-2 SYS$DISK. With no
+     * mounted ACP volume the $OPEN fails and rms_textfile_open() returns NULL
+     * -- fail-honest, never a POSIX fallback (Rule 9 / INV-6).
+     */
+    rms_textfile_t *fp = rms_textfile_open(SYSUAF_PATH);
     if (!fp)
         return -1;
 
@@ -367,7 +373,7 @@ static int sysuaf_scan(const char *username, uint32_t want_uic,
 
     char line[SYSUAF_LINE_MAX];
     int too_long = 0;
-    while (sysuaf_read_line(fp, line, sizeof(line), &too_long)) {
+    while (rms_textfile_getline(fp, line, sizeof(line), &too_long)) {
         /*
          * A LINE THAT DID NOT FIT IS NOT A RECORD. It is reported and
          * skipped, never parsed as the short row its prefix resembles --
@@ -392,12 +398,12 @@ static int sysuaf_scan(const char *username, uint32_t want_uic,
             ? strcmp(row.username, search_copy) == 0
             : ((row.uic_group << 16) | row.uic_member) == want_uic) {
             *out = row;
-            fclose(fp);
+            rms_textfile_close(fp);
             return 0;
         }
     }
 
-    fclose(fp);
+    rms_textfile_close(fp);
     return -1;  /* No matching account */
 }
 

@@ -115,10 +115,16 @@ EOF
 cp "$OVERLAY" "$WORK/repo/distro/kernel/overlay-ovmx-drivers.sh"
 cp -r "$SCAFFOLD2" "$WORK/repo/distro/kernel/drivers-ovmx"
 # The scratch repo carries the REAL vms/vmsfs sources so those two modules still
-# flatten (the overlay fails a module that flattens 0 files); the demo adds its
-# own src/ovmxdemo/ alongside.
+# flatten (the overlay fails a module whose sources.conf glob matches 0 files);
+# the demo adds its own src/ovmxdemo/ alongside. src/vmsfs is required because
+# vmsfs's sources.conf stages the genuine ODS-2 codec from src/vmsfs/ods2/ + the
+# public header src/vmsfs/include/vmsfs/ods2.h (rd vms-4a8) -- the SAME trees the
+# real distro/Dockerfile.bootable kernel-build stage now COPYs into its overlay
+# context. Without it the codec glob matches nothing and the overlay's
+# zero-match-glob guard (correctly) aborts.
 cp -r "$SRC_ROOT/src/kernel"      "$WORK/repo/src/kernel"
 cp -r "$SRC_ROOT/src/kernel-core" "$WORK/repo/src/kernel-core"
+cp -r "$SRC_ROOT/src/vmsfs"       "$WORK/repo/src/vmsfs"
 # The new module subdir: Kconfig stanza + Kbuild + sources.conf. NOTHING ELSE.
 DEMO="$WORK/repo/distro/kernel/drivers-ovmx/ovmxdemo"
 mkdir -p "$DEMO"

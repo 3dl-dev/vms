@@ -2024,20 +2024,32 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                                       const char *name, uint16_t version,
                                       ods2_fid_t entry_fid)
 {
-    uint8_t hdr[ODS2_BLOCK_SIZE];
-    ods2_fh2_t hdr_parsed;
     uint32_t dir_fidnum;
     ods2_status_t st;
     struct wdir_extents exts;
-    uint32_t lbns[ODS2_WDIR_MAX_BLOCKS];
     unsigned nlbn = 0, blocks_before, namecount, e, k, b;
-    uint8_t newrec[ODS2_BLOCK_SIZE];     /* one record is always < 1 block */
     unsigned new_valoff, newrec_len;
-    uint8_t *flat;
+    uint8_t *flat = NULL;
     size_t flatcap, flat_used = 0, insert_off = 0;
     int have_insert = 0, found_name = 0;
     unsigned nblk, cur;
     size_t foff;
+    /*
+     * rd vms-4a8: hdr[512] + hdr_parsed(512) + newrec[512] + lbns[256]*4(1024)
+     * = ~2.6KB of on-stack scratch pushed this frame to 3288 bytes, over the
+     * kernel's 2048-byte -Werror=frame-larger-than= limit once the codec is
+     * compiled kernel-resident (OVMX_ODS2_KERNEL) -- the kernel stack is a few
+     * pages and this is a leaf of the ACP call chain. Move them into ONE heap
+     * block through the codec's allocator seam (ods2_kzalloc -> kvmalloc in the
+     * kernel, malloc in userspace); byte-for-byte identical behaviour, freed
+     * once at the single `done:` exit alongside `flat`.
+     */
+    struct di_scratch {
+        uint8_t    hdr[ODS2_BLOCK_SIZE];
+        ods2_fh2_t hdr_parsed;
+        uint8_t    newrec[ODS2_BLOCK_SIZE];  /* one record is always < 1 block */
+        uint32_t   lbns[ODS2_WDIR_MAX_BLOCKS];
+    } *s = NULL;
 
     if (!wvol || !name)
         return ODS2_ERR_ARGS;
@@ -2068,24 +2080,33 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
         return ODS2_ERR_ARGS;
     if (dir_fidnum > wvol->maxfiles)
         return ODS2_ERR_RANGE;
-    memcpy(hdr, wblk(wvol, wvol->hdr_base_lbn + (dir_fidnum - 1)), ODS2_BLOCK_SIZE);
-    st = ods2_fh2_parse(hdr, ODS2_BLOCK_SIZE, &hdr_parsed);
+
+    s = (struct di_scratch *)ods2_kzalloc(sizeof(*s));
+    if (!s)
+        return ODS2_ERR_NOSPACE;    /* honest failure -- never a silent fake */
+
+    memcpy(s->hdr, wblk(wvol, wvol->hdr_base_lbn + (dir_fidnum - 1)), ODS2_BLOCK_SIZE);
+    st = ods2_fh2_parse(s->hdr, ODS2_BLOCK_SIZE, &s->hdr_parsed);
     if (st != ODS2_OK)
-        return st;
+        goto done;
 
     /* Collect the directory file's block set, VBN order. */
     exts.n = 0;
     exts.overflow = 0;
-    st = ods2_fh2_map_walk(hdr, wdir_extent_collect, &exts, NULL);
+    st = ods2_fh2_map_walk(s->hdr, wdir_extent_collect, &exts, NULL);
     if (st != ODS2_OK)
-        return st;
-    if (exts.n == 0 || exts.overflow)
-        return ODS2_ERR_NOSPACE;
+        goto done;
+    if (exts.n == 0 || exts.overflow) {
+        st = ODS2_ERR_NOSPACE;
+        goto done;
+    }
     for (e = 0; e < exts.n; e++) {
         for (k = 0; k < exts.ext[e].count; k++) {
-            if (nlbn >= ODS2_WDIR_MAX_BLOCKS)
-                return ODS2_ERR_NOSPACE;
-            lbns[nlbn++] = exts.ext[e].lbn + k;
+            if (nlbn >= ODS2_WDIR_MAX_BLOCKS) {
+                st = ODS2_ERR_NOSPACE;
+                goto done;
+            }
+            s->lbns[nlbn++] = exts.ext[e].lbn + k;
         }
     }
     blocks_before = nlbn;
@@ -2101,30 +2122,32 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
     if (new_valoff & 1)
         new_valoff++;
     newrec_len = new_valoff + (unsigned)sizeof(ods2_dir_ent_t);
-    memset(newrec, 0xFF, sizeof(newrec));
-    put16(newrec + 0, (uint16_t)(newrec_len - 2));               /* dir_size */
-    put16(newrec + 2,
+    memset(s->newrec, 0xFF, sizeof(s->newrec));
+    put16(s->newrec + 0, (uint16_t)(newrec_len - 2));               /* dir_size */
+    put16(s->newrec + 2,
           (entry_fid.fid_num <= ODS2_RESFILES) ? version
                                                 : ODS2_DIR_VERLIMIT_DEFAULT);
-    newrec[4] = 0;                                               /* dir_flags */
-    newrec[5] = (uint8_t)namecount;                             /* dir_namecount */
-    memcpy(newrec + 6, name, namecount);
-    put16(newrec + new_valoff + 0, version);
-    put16(newrec + new_valoff + 2, entry_fid.fid_num);
-    put16(newrec + new_valoff + 4, entry_fid.fid_seq);
-    newrec[new_valoff + 6] = entry_fid.fid_rvn;
-    newrec[new_valoff + 7] = entry_fid.fid_nmx;
+    s->newrec[4] = 0;                                               /* dir_flags */
+    s->newrec[5] = (uint8_t)namecount;                             /* dir_namecount */
+    memcpy(s->newrec + 6, name, namecount);
+    put16(s->newrec + new_valoff + 0, version);
+    put16(s->newrec + new_valoff + 2, entry_fid.fid_num);
+    put16(s->newrec + new_valoff + 4, entry_fid.fid_seq);
+    s->newrec[new_valoff + 6] = entry_fid.fid_rvn;
+    s->newrec[new_valoff + 7] = entry_fid.fid_nmx;
 
     /* Flatten every existing record (raw bytes) into one sorted stream and
      * locate the new name's sorted insertion point. Upper bound on the
      * stream is one full block per existing block plus the new record. */
     flatcap = (size_t)nlbn * ODS2_BLOCK_SIZE + newrec_len + 8;
     flat = (uint8_t *)ods2_kalloc(flatcap);
-    if (!flat)
-        return ODS2_ERR_NOSPACE;    /* honest failure -- never a silent fake */
+    if (!flat) {
+        st = ODS2_ERR_NOSPACE;      /* honest failure -- never a silent fake */
+        goto done;
+    }
 
     for (b = 0; b < nlbn; b++) {
-        const uint8_t *blk = wblk(wvol, lbns[b]);
+        const uint8_t *blk = wblk(wvol, s->lbns[b]);
         unsigned off = 0;
         for (;;) {
             uint16_t rec_size;
@@ -2136,13 +2159,13 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                 break;
             reclen = 2u + rec_size;
             if (off + reclen > ODS2_BLOCK_SIZE) {
-                ods2_kfree(flat);
-                return ODS2_ERR_FORMAT;      /* malformed existing block */
+                st = ODS2_ERR_FORMAT;        /* malformed existing block */
+                goto done;
             }
             nc = blk[off + 5];
             if (6u + nc > reclen) {
-                ods2_kfree(flat);
-                return ODS2_ERR_FORMAT;
+                st = ODS2_ERR_FORMAT;
+                goto done;
             }
             if (!found_name && !have_insert) {
                 int cmp = dir_name_cmp(name, namecount,
@@ -2158,10 +2181,8 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                     st = merge_dir_record(blk + off, reclen, nc, version,
                                           entry_fid, flat + flat_used,
                                           &merged_len);
-                    if (st != ODS2_OK) {
-                        ods2_kfree(flat);
-                        return st;
-                    }
+                    if (st != ODS2_OK)
+                        goto done;
                     flat_used += merged_len;
                     found_name = 1;
                     off += reclen;
@@ -2186,7 +2207,7 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
         if (insert_off < flat_used)
             memmove(flat + insert_off + newrec_len, flat + insert_off,
                     flat_used - insert_off);
-        memcpy(flat + insert_off, newrec, newrec_len);
+        memcpy(flat + insert_off, s->newrec, newrec_len);
         flat_used += newrec_len;
     }
 
@@ -2206,8 +2227,8 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
         foff += reclen;
     }
     if (nblk > ODS2_WDIR_MAX_BLOCKS) {
-        ods2_kfree(flat);
-        return ODS2_ERR_NOSPACE;
+        st = ODS2_ERR_NOSPACE;
+        goto done;
     }
 
     /* Grow the directory file if the packed form needs more blocks. New
@@ -2217,28 +2238,26 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
         uint32_t extra = nblk - blocks_before;
         uint32_t grown_lbn;
         st = ods2_wvolume_alloc_blocks(wvol, extra, &grown_lbn);
-        if (st != ODS2_OK) {
-            ods2_kfree(flat);
-            return st;
-        }
+        if (st != ODS2_OK)
+            goto done;
         for (k = 0; k < extra; k++)
-            lbns[nlbn++] = grown_lbn + k;
+            s->lbns[nlbn++] = grown_lbn + k;
     }
 
     /* Lay the sorted stream into the (possibly grown) block set. Each block
      * is 0xFF-filled first so trailing space reads back as ODS2_DIR_END. */
     for (b = 0; b < nblk; b++)
-        memset(wblk(wvol, lbns[b]), 0xFF, ODS2_BLOCK_SIZE);
+        memset(wblk(wvol, s->lbns[b]), 0xFF, ODS2_BLOCK_SIZE);
     {
         unsigned bi = 0;
-        uint8_t *dst = wblk(wvol, lbns[0]);
+        uint8_t *dst = wblk(wvol, s->lbns[0]);
         cur = 0;
         for (foff = 0; foff < flat_used; ) {
             unsigned reclen = 2u + rd16(flat + foff);
             if (cur + reclen + 2u > ODS2_BLOCK_SIZE) {
                 bi++;
                 cur = 0;
-                dst = wblk(wvol, lbns[bi]);
+                dst = wblk(wvol, s->lbns[bi]);
             }
             memcpy(dst + cur, flat + foff, reclen);
             cur += reclen;
@@ -2246,6 +2265,7 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
         }
     }
     ods2_kfree(flat);
+    flat = NULL;
 
     /* Rewrite the FH2 map + recattr ONLY when the block count changed --
      * a same-block re-pack keeps the header byte-identical (map, hiblk,
@@ -2263,16 +2283,18 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
         memset(mp_base, 0, map_cap);     /* clear stale FM2 pointers */
         b = 0;
         while (b < nblk) {
-            uint32_t run_lbn = lbns[b];
+            uint32_t run_lbn = s->lbns[b];
             uint32_t run = 1;
             while (b + run < nblk && run < 256 &&
-                   lbns[b + run] == run_lbn + run)
+                   s->lbns[b + run] == run_lbn + run)
                 run++;
-            if ((size_t)nx * 4 + 4 > map_cap)
-                return ODS2_ERR_NOSPACE; /* map area full */
+            if ((size_t)nx * 4 + 4 > map_cap) {
+                st = ODS2_ERR_NOSPACE;   /* map area full */
+                goto done;
+            }
             st = encode_map_extent(mp_base + (size_t)nx * 4, run_lbn, run);
             if (st != ODS2_OK)
-                return st;
+                goto done;
             nx++;
             b += run;
         }
@@ -2292,7 +2314,17 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
         put16(h + offsetof(ods2_fh2_t, fh2_checksum), ods2_block_checksum(h));
     }
 
-    return wvol_commit(wvol, ODS2_OK);
+    st = wvol_commit(wvol, ODS2_OK);
+
+done:
+    /* Single-exit cleanup (rd vms-4a8): free the heap directory scratch and the
+     * flatten buffer. `flat` is NULL on the success path (freed + cleared above)
+     * and on the early failures before it was allocated, so the guard makes the
+     * free idempotent; `s` is always live here (every goto is after its alloc). */
+    if (flat)
+        ods2_kfree(flat);
+    ods2_kfree(s);
+    return st;
 }
 
 /* ================================================================

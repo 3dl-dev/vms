@@ -10,19 +10,27 @@
 # `vmsfs-y` (the standalone/out-of-tree build kept for the QEMU test harness) --
 # if you add a src/kernel-core/vmsfs ODS-2 core .c there, add it here too.
 #
-# NOT YET MIRRORED (rd vms-dcd, epic vms-208): src/kernel/vmsfs/Makefile's
-# vmsfs-y now also compiles the genuine ODS-2 codec (src/vmsfs/ods2/*.c) +
-# vmsfs_ods2ro.o kernel-resident. Those are intentionally absent here for now:
-# this in-tree overlay FLATTENS all sources to basenames, but the codec includes
-# the public header as "vmsfs/ods2.h" (a subdir path), which the flatten model
-# does not resolve. Wiring the codec into the in-tree/bootable vmsfs.ko (so the
-# shipped module carries the ods2ro presentation too, not just the QEMU-test
-# module) is a follow-up that must first make that include flatten-safe. The
-# out-of-tree QEMU build (src/kernel/vmsfs/Makefile) IS the kernel-resident
-# proof for this rung.
+# MIRRORED as of rd vms-4a8 (epic vms-208): src/kernel/vmsfs/Makefile's vmsfs-y
+# also compiles the genuine ODS-2 codec (src/vmsfs/ods2/*.c) + vmsfs_ods2ro.o
+# kernel-resident, and so does this overlay now -- the SHIPPED bootable vmsfs.ko
+# carries the ods2ro presentation, not just the QEMU-test module. The codec's
+# only subdir'd include, #include "vmsfs/ods2.h", is made flatten-safe by
+# staging that one header at <moddir>/vmsfs/ods2.h via the '->' convention in
+# overlay-ovmx-drivers.sh (see this module's sources.conf); every other codec
+# include is basename-only and resolves under -I$(src). The out-of-tree QEMU
+# build (src/kernel/vmsfs/Makefile) remains the co-authoritative object list --
+# if you add a codec .c there, add it here too.
+#
+# ADDITIVE (rd vms-4a8): compiling the codec in is present-but-not-yet-driving-
+# boot. It does NOT flip the boot default or mount SYS$DISK via the ACP; the
+# ods2ro registration under OVMX_ODS2_KERNEL in vmsfs_super.c now resolves (the
+# objects below satisfy it) but the bespoke-VMFS path still drives boot until
+# the atomic flip rung.
 #
 # OVMX_KBACKEND_LINUX selects the Linux realization of the vmsfs_backend shim
 # (vmsfs_backend_linux.h), which the overlay places beside these sources.
+# OVMX_ODS2_KERNEL selects the codec's kernel-resident world (kernel types/alloc
+# + the vmsfs_bio block backend) and flips on the ods2ro register path.
 
 obj-$(CONFIG_OVMX_VMSFS) += vmsfs.o
 
@@ -36,6 +44,12 @@ vmsfs-y := vmsfs_super.o \
            vmsfs_name.o \
            vmsfs_alloc.o \
            vmsfs_dirscan.o \
-           vmsfs_header.o
+           vmsfs_header.o \
+           ods2_reader.o \
+           ods2_writer.o \
+           ods2_bdev.o \
+           ods2_path.o \
+           ods2_block_kern.o \
+           vmsfs_ods2ro.o
 
-ccflags-y := -I $(src) -DOVMX_KBACKEND_LINUX
+ccflags-y := -I $(src) -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL

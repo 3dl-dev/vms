@@ -30,6 +30,7 @@
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/buffer_head.h>
+#include <linux/blkdev.h>       /* bdev_nr_bytes() -- device geometry */
 #include <linux/slab.h>
 #include <linux/pagemap.h>
 #include <linux/uio.h>
@@ -383,8 +384,12 @@ static int ods2ro_fill_super(struct super_block *sb, void *data, int silent)
 		goto err;
 	}
 
-	/* Volume size in 512-byte blocks, from the backing device geometry. */
-	nblocks = (uint32_t)(i_size_read(sb->s_bdev->bd_inode) / ODS2_BLOCK_SIZE);
+	/* Volume size in 512-byte blocks, from the backing device geometry.
+	 * bdev_nr_bytes() replaces i_size_read(bdev->bd_inode): 'bd_inode' was
+	 * removed from struct block_device in the 6.x block layer (the bdev inode
+	 * moved out of the public struct), and bdev_nr_bytes() is the supported
+	 * device-size accessor (linux/blkdev.h, since 5.16) -- same byte count. */
+	nblocks = (uint32_t)(bdev_nr_bytes(sb->s_bdev) / ODS2_BLOCK_SIZE);
 
 	/*
 	 * Bind the genuine ODS-2 codec to this mounted block device. host == sb,

@@ -155,7 +155,7 @@ ARG SOURCE_DATE_EPOCH=0
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc make bc bison flex libssl-dev libelf-dev openssl \
+    gcc binutils make bc bison flex libssl-dev libelf-dev openssl \
     xz-utils curl ca-certificates kmod cpio \
     && rm -rf /var/lib/apt/lists/*
 
@@ -187,6 +187,12 @@ WORKDIR /usr/src/linux
 # See docs/adding-an-ovmx-kernel-module.md.
 COPY src/kernel                          /tmp/ovmx-src/src/kernel
 COPY src/kernel-core                     /tmp/ovmx-src/src/kernel-core
+# src/vmsfs carries the genuine ODS-2 codec (src/vmsfs/ods2/*.c) + its public
+# header (src/vmsfs/include/vmsfs/ods2.h) that vmsfs/sources.conf stages kernel-
+# resident (rd vms-4a8, epic vms-208). Without it the overlay's codec globs
+# match nothing and Kbuild dies on "No rule to make target ods2_reader.o" -- the
+# overlay now FAILs loudly on a zero-match glob rather than silently dropping it.
+COPY src/vmsfs                           /tmp/ovmx-src/src/vmsfs
 COPY distro/kernel/drivers-ovmx          /tmp/ovmx-src/distro/kernel/drivers-ovmx
 COPY distro/kernel/overlay-ovmx-drivers.sh /tmp/ovmx-src/distro/kernel/overlay-ovmx-drivers.sh
 RUN bash /tmp/ovmx-src/distro/kernel/overlay-ovmx-drivers.sh /usr/src/linux /tmp/ovmx-src
@@ -321,7 +327,10 @@ RUN KEY=/usr/src/linux/ovmx-module-signing-key.pem; \
     done; \
     [ "$n" -ge 2 ] || { echo "FAIL: harvested $n OVMX module(s); expected at least vms.ko + vmsfs.ko (vms-934)"; exit 1; }; \
     [ -f /kernel-out/vms.ko ] && [ -f /kernel-out/vmsfs.ko ] || { echo "FAIL: vms.ko/vmsfs.ko not harvested (vms-934)"; exit 1; }; \
-    echo "OK: $n OVMX module(s) built IN-TREE (intree=Y, no TAINT_OUT_OF_TREE) and SIGNED (no TAINT_UNSIGNED_MODULE)"
+    echo "OK: $n OVMX module(s) built IN-TREE (intree=Y, no TAINT_OUT_OF_TREE) and SIGNED (no TAINT_UNSIGNED_MODULE)"; \
+    nm /kernel-out/vmsfs.ko | grep -q ' vmsfs_ods2ro_register$' || { echo "FAIL: shipped vmsfs.ko is missing vmsfs_ods2ro_register -- the kernel-resident ODS-2 codec did NOT compile in (rd vms-4a8, epic vms-208); the OVMX_ODS2_KERNEL gate in vmsfs_super.c would be a dangling-symbol modpost break, not a clean build"; exit 1; }; \
+    nm /kernel-out/vmsfs.ko | grep -q ' ods2_bdev_finish_open$' || { echo "FAIL: shipped vmsfs.ko is missing the genuine ODS-2 codec symbols (ods2_*) -- codec NOT compiled in (rd vms-4a8)"; exit 1; }; \
+    echo "OK: shipped vmsfs.ko CARRIES the kernel-resident ODS-2 codec (vmsfs_ods2ro_register + ods2_* present; rd vms-4a8, epic vms-208)"
 
 FROM ubuntu:24.04 AS builder
 

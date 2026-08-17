@@ -59,7 +59,12 @@ target_include_directories(vmsbgsock PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets)
 
 function(qemu_syssvc_add_test name source)
-    add_executable(${name} ${source})
+    # rms_acp_bind.c force-binds the weak RMS-over-ACP service seam (sys$open/...)
+    # so a suite that only reads SYSUAF/RIGHTSLIST through the weak references in
+    # src/libvms/rtl/rms_textfile.c still pulls LIBVMSRMS in and reaches the ACP
+    # instead of getting sys$open == NULL and failing every read as "not found"
+    # (vms-058). See tests/qemu/rms_acp_bind.c for the full mechanism.
+    add_executable(${name} ${source} ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)
     target_include_directories(${name} PRIVATE
         ${VMS_INCLUDE_DIR}
         ${VMS_RMS_INCLUDE_DIR}

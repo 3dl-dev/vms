@@ -446,6 +446,21 @@ RUN gcc -O2 -Wall -o /src/tests/qemu/mkimage_vmsfs \
 COPY tests/ods2/real_vax_ods2.dsk /ods2_real.img
 COPY tests/ods2/ovmxdir_hello.golden /hello.golden
 
+# GENERATED multi-version ODS-2 volume for the $SEARCH proof (vms-a0b, epic
+# vms-208). The real-VAX fixture above carries only single versions; the
+# IO$_ACPCONTROL wildcard directory search must be proven against a directory
+# with a name at several versions. mkimage_ods2_search.c masters one with the
+# SAME byte-genuine writer the real fixture and vms_initialize --ods2 use
+# (src/vmsfs/ods2/*, staged at /src/vmsfs above) -- [SRCH] carrying A.TXT at
+# versions 1/2/3, B.LOG;1, B.TXT;1, README.DAT;1. Staged as /ods2_search.img,
+# which run_tests.sh copies onto DKA200: (vdc). test_syssvc_acp_search reads it.
+COPY tests/qemu/mkimage_ods2_search.c /src/tests/qemu/
+RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_search \
+        /src/tests/qemu/mkimage_ods2_search.c \
+        /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
+        /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
+    /src/tests/qemu/mkimage_ods2_search /ods2_search.img 1
+
 # Locate the kernel image (may already exist as symlink)
 RUN KVER=$(cat /tmp/kver) && \
     if [ ! -e /boot/vmlinuz ]; then \

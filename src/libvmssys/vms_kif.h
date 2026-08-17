@@ -812,4 +812,14 @@ uint32_t vms_kif_acp_deaccess(uint32_t chan);
 uint32_t vms_kif_acp_readvb(struct vms_acp_rw_args *args);
 uint32_t vms_kif_acp_writevb(struct vms_acp_rw_args *args);
 
+/* IO$_ACPCONTROL wildcard directory search -- the $SEARCH primitive (vms-a0b).
+ * (Re)open (args->wcc_reset) or continue a wildcard directory context on a
+ * file-class channel and return the NEXT matching {name, version, FID}, or
+ * SS$_NOMOREFILES when the context is exhausted. See src/kernel/vms_acp.h for
+ * the FIB/wildcard interface. Returns SS$_NOSUCHDEV if /dev/vms is absent.
+ * OVMX-UNWIRED: vms_kif_acp_acpcontrol (vms-a0b) -- no product caller yet
+ * (RMS $SEARCH and the DCL DIRECTORY / F$SEARCH lexical wire to it in a later
+ * rung); exercised by tests/qemu/test_syssvc_acp_search.c against real /dev/vms. */
+uint32_t vms_kif_acp_acpcontrol(struct vms_acp_acpcontrol_args *args);
+
 #endif /* _VMS_KIF_H */

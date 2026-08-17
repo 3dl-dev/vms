@@ -455,6 +455,19 @@ extern "C" {
 #define SS$_DEVALRALLOC     1601    /* Device already allocated */
 #define SS$_LOWPREC         1873    /* Low precision (Alpha V8.4 oracle) */
 #define SS$_NOMOREPROC      2472    /* No more processes (end of $GETJPI wildcard) */
+/*
+ * SS$_NOMOREFILES (%X0930 == 2352) -- ORACLE-PINNED (vms-a0b, 2026-08-17).
+ * MEASURED on the reference lab OpenVMS VAX V7.3 node VAX1 by assembling
+ * `.LONG SS$_NOMOREFILES` after `$SSDEF` and reading the resolved absolute
+ * value from the MACRO/LIST listing + symbol table:
+ *   SS$_NOMOREFILES = 00000930   (2352.)
+ * Cross-checked in the same run: SS$_NOMOREDEV = 00000A58 (2648) -- which
+ * matches this header's existing SS$_NOMOREDEV exactly, confirming the method.
+ * The Files-11 ODS-2 ACP's IO$_ACPCONTROL wildcard directory search
+ * ($SEARCH primitive) returns it when the wildcard context is exhausted
+ * (VSI OpenVMS I/O User's Reference Manual, "ACP-QIO Interface").
+ */
+#define SS$_NOMOREFILES     2352    /* No more files (wildcard $SEARCH exhausted) */
 #define SS$_DUPIDENT        8748    /* Duplicate identifier */
 #define SS$_NOSUCHCPU       9028    /* No such CPU */
 #define SS$_NOCALLPRIV      9284    /* No privilege for calling access mode */

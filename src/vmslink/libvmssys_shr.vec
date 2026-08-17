@@ -134,3 +134,10 @@ vms_kif_acp_deaccess=PROCEDURE
 # the RMS-over-$QIO $GET/$PUT rung wires them.
 vms_kif_acp_readvb=PROCEDURE
 vms_kif_acp_writevb=PROCEDURE
+# --- Files-11 (ODS-2) ACP IO$_ACPCONTROL wildcard directory search (vms-a0b,
+# epic vms-208). The $SEARCH primitive: successive one-per-call matches against
+# a wildcard directory context (FIB$L_WCC), terminating SS$_NOMOREFILES.
+# APPENDED at the end per the append-only contract -- a new universal never
+# shifts an existing index. OVMX-UNWIRED (test-only) today; exported so the
+# vector is stable when the RMS $SEARCH / DCL F$SEARCH rung wires it.
+vms_kif_acp_acpcontrol=PROCEDURE

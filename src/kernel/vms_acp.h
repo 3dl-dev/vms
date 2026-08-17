@@ -311,4 +311,110 @@ _Static_assert(VMS_IOCTL_ACP_ACCESS == 0xC0E0566Bu,
 _Static_assert(VMS_IOCTL_ACP_DEACCESS == 0xC008566Cu,
                "VMS_IOCTL_ACP_DEACCESS encodes differently here than on the reference build");
 
+/*
+ * ============================================================================
+ * IO$_ACPCONTROL -- wildcard directory-context search, the $SEARCH / DIRECTORY
+ * primitive (vms-a0b, epic vms-208). The FIFTH rung: on real OpenVMS a
+ * wildcard directory lookup is a $QIO(IO$_ACPCONTROL) on a channel $ASSIGNed
+ * to the volume, with a FIB whose FIB$W_NMCTL FIB$V_WILD bit is set and whose
+ * FIB$L_WCC holds the wildcard-continuation context -- each successive call
+ * returns the NEXT matching directory entry and updates FIB$L_WCC, until the
+ * directory is exhausted and the ACP returns SS$_NOMOREFILES (VSI OpenVMS I/O
+ * User's Reference Manual, "ACP-QIO Interface"; the RMS $SEARCH service and
+ * the DCL DIRECTORY / F$SEARCH lexical are layered on exactly this). The QIO
+ * parameters map the same way IO$_ACCESS's do: P1 = the FIB (directory DID +
+ * the wildcard context), P2 = the wildcard name string, P3 = a word to receive
+ * the resultant-name length, P4 = the resultant-name buffer.
+ *
+ * UMBRELLA OP. IO$_ACPCONTROL is a MISCELLANEOUS ACP control code (the manual
+ * groups wildcard search, lock/unlock-volume, and mount/dismount under it), so
+ * the arg struct carries a `func` SUBFUNCTION selector: this rung defines only
+ * VMS_ACP_CTL_SEARCH; later ACP-control subfunctions get further VMS_ACP_CTL_*
+ * codes on this SAME ioctl (0x6F), rather than each burning an ioctl nr.
+ *
+ * FIB$L_WCC CONTINUATION -- OVMX design choice (labelled, Rule 8 D2). VMS keeps
+ * the wildcard-continuation cookie in the caller's FIB (FIB$L_WCC) and the
+ * caller passes it back each call. OVMX keeps the continuation context in the
+ * EXECUTIVE, on the file-class channel (one active wildcard search per channel,
+ * struct vms_acp_chan), and the caller simply asks to CONTINUE (wcc_reset == 0)
+ * or to (RE)OPEN a fresh context with `pattern` (wcc_reset == 1). This is the
+ * faithful effect -- successive one-per-call matches with maintained context --
+ * reached the executive-resident way, not a byte-level FIB$L_WCC wire (which
+ * the manual does not publish a layout for anyway).
+ *
+ * CLEAN-ROOM (Rule 8). The FIB roles (FIB$W_DID, FIB$V_WILD, FIB$L_WCC) and the
+ * SS$_NOMOREFILES exhaustion status come from the public I/O manual + $FIBDEF /
+ * $SSDEF (SS$_NOMOREFILES oracle-pinned == 2352, vms-a0b). The ODS-2 ON-DISK
+ * directory records the search reads are byte-authentic (the codec, validated
+ * against a real VAX volume). The BYTE LAYOUT of the struct below and the
+ * wildcard-version semantics (below) are OVMX design choices, labelled as such.
+ */
+
+/* IO$_ACPCONTROL subfunctions (the umbrella `func` selector). */
+#define VMS_ACP_CTL_SEARCH    1u    /* wildcard directory context ($SEARCH) */
+
+/*
+ * Resultant-name buffer (P3/P4): "NAME.TYPE;VERSION". VMS_ACP_NAME_SIZE (80)
+ * holds "NAME.TYPE"; ";" + up to a 5-digit version (ODS-2 version is a 16-bit
+ * field, max 65535) + a NUL fit in 4 spare, rounded to keep the struct's
+ * 4-byte tail alignment clean.
+ */
+#define VMS_ACP_RESNAM_SIZE   84
+
+/*
+ * IO$_ACPCONTROL wildcard directory search. Open (wcc_reset) or continue a
+ * wildcard context on `chan` and return the NEXT matching {name, version, FID}.
+ *
+ *  - wcc_reset != 0: (RE)OPEN the context -- the executive parses `pattern`
+ *    (a VMS wildcard filespec, e.g. "*.TXT", "*.*;*", "A.TXT;0"), records the
+ *    directory to search (FIB$W_DID; all-zero => the MFD [000000]), clears the
+ *    continuation cursor, then returns the FIRST match.
+ *  - wcc_reset == 0: CONTINUE the context opened by the last wcc_reset call on
+ *    this channel and return the NEXT match. SS$_BADPARAM if no context is open.
+ *
+ * The match order is the genuine ODS-2 directory order the codec decodes: name
+ * ASCENDING (case-insensitive), and within a name version DESCENDING (highest
+ * first) -- NOT a POSIX readdir order. On each match: status SS$_NORMAL, the
+ * matched FID (fid_*), its version (out_version), and the resultant name
+ * "NAME.TYPE;VERSION" (resnam / resnam_len). When the directory is exhausted:
+ * SS$_NOMOREFILES (a pattern that matches nothing returns it on the very first
+ * call). Fail-honest: an invalid channel => SS$_IVCHAN; a DID that is not a
+ * directory => SS$_NOSUCHFILE; a codec-free build => SS$_DEVNOTMOUNT.
+ *
+ * Wildcard-version semantics (OVMX design choice, grounded in DCL DIRECTORY /
+ * F$SEARCH behaviour): no ";" or ";*" => ALL versions (each a separate match);
+ * ";N" (N>0) => exactly version N; ";0" => the HIGHEST version of each name.
+ * The name and type fields take "*" (zero+ chars) and "%" (exactly one char)
+ * VMS wildcards; a pattern with no "." matches any type.
+ */
+struct vms_acp_acpcontrol_args {
+    uint32_t chan;             /* in: file-class channel ($ASSIGN of the volume) */
+    uint32_t func;             /* in: VMS_ACP_CTL_* subfunction (SEARCH here) */
+    uint16_t did_num;          /* in: FIB$W_DID directory FID (0/0/0 => MFD) */
+    uint16_t did_seq;
+    uint8_t  did_rvn;
+    uint8_t  did_nmx;
+    uint8_t  wcc_reset;        /* in: 1 => (re)open ctx with `pattern`; 0 => continue */
+    uint8_t  pad0;
+    uint16_t fid_num;          /* out: matched file FID number low 16 */
+    uint16_t fid_seq;          /* out: sequence */
+    uint8_t  fid_rvn;          /* out: relative volume */
+    uint8_t  fid_nmx;          /* out: file number high 8 */
+    uint16_t out_version;      /* out: matched version */
+    uint16_t resnam_len;       /* out: length of resnam (P3), excl. NUL */
+    uint16_t pad1;
+    char     pattern[VMS_ACP_NAME_SIZE];   /* in (P2): wildcard, e.g. "*.TXT" */
+    char     resnam[VMS_ACP_RESNAM_SIZE];  /* out (P4): "NAME.TYPE;VERSION" */
+    uint32_t status;           /* out: SS$_ (NORMAL / NOMOREFILES / IVCHAN / ...) */
+    uint32_t pad2;
+};
+
+#define VMS_IOCTL_ACP_ACPCONTROL \
+    _IOWR(VMS_IOC_MAGIC, 0x6F, struct vms_acp_acpcontrol_args)
+
+_Static_assert(sizeof(struct vms_acp_acpcontrol_args) == 200,
+               "vms_acp_acpcontrol_args changed size -- VMS_IOCTL_ACP_ACPCONTROL ABI break");
+_Static_assert(VMS_IOCTL_ACP_ACPCONTROL == 0xC0C8566Fu,
+               "VMS_IOCTL_ACP_ACPCONTROL encodes differently here than on the reference build");
+
 #endif /* _VMS_ACP_H */

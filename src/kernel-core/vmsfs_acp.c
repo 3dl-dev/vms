@@ -149,6 +149,27 @@ struct vms_acp_chan {
     uint16_t         acc_pad;
     uint32_t         win_n;             /* extents in win[] */
     struct acp_win_ext win[ACP_WINDOW_MAX];
+    /*
+     * Wildcard directory-search context (FIB$L_WCC), vms-a0b. One active
+     * IO$_ACPCONTROL($SEARCH) per channel: the parsed pattern, the directory
+     * being searched, and the continuation cursor (the last {name, version}
+     * returned). search_active is set by a wcc_reset call and stays set so a
+     * later "continue" call resumes; cleared only by another wcc_reset or when
+     * the channel is released. All-zero until the first wcc_reset.
+     */
+    uint8_t          search_active;     /* 1 while a wildcard context is open */
+    uint8_t          search_ver_mode;   /* ACP_VER_ALL / _EXACT / _HIGHEST */
+    uint16_t         search_ver_exact;  /* wanted version when _EXACT */
+    uint32_t         search_did_num;    /* directory FID number being searched */
+    uint16_t         search_did_seq;
+    uint8_t          search_did_rvn;
+    uint8_t          search_did_nmx;
+    uint8_t          search_have_prev;  /* cursor valid (a match was returned) */
+    uint8_t          spad0;
+    uint16_t         search_prev_ver;   /* cursor: last returned version */
+    char             search_name_pat[VMS_ACP_NAME_SIZE]; /* name-part glob (upcased) */
+    char             search_type_pat[VMS_ACP_NAME_SIZE]; /* type-part glob (upcased) */
+    char             search_prev_name[VMS_ACP_NAME_SIZE]; /* cursor: last "NAME.TYPE" */
 };
 
 /*
@@ -879,6 +900,293 @@ struct acp_access_scratch {
     ods2_fh2_t fh;
 };
 
+/* ================================================================
+ * IO$_ACPCONTROL wildcard directory search ($SEARCH, vms-a0b) -- helpers.
+ * Same discipline as IO$_ACCESS above: this file SEQUENCES block reads and
+ * feeds the codec's PURE directory decoder (ods2_dir_block_scan); the ODS-2
+ * directory records are byte-authentic (the codec). The wildcard-match and
+ * $SEARCH-ordering logic is OVMX's own (FIB$V_WILD / FIB$L_WCC effect from the
+ * public I/O manual), labelled in vms_acp.h.
+ * ================================================================ */
+
+/* Wildcard-version selector (parsed from the pattern's ";VER" field). */
+#define ACP_VER_ALL      0u
+#define ACP_VER_EXACT    1u
+#define ACP_VER_HIGHEST  2u
+
+/*
+ * A snapshot of one channel's wildcard-search context taken under the channel
+ * lock, so the directory walk (which SLEEPS on block reads) runs WITHOUT the
+ * lock held -- exactly the release-then-reacquire pattern IO$_ACCESS uses. The
+ * cursor {have_prev, prev_name, prev_ver} is FIB$L_WCC; best_* accumulates the
+ * next match across the walk.
+ */
+struct acp_search_ctx {
+    char       name_pat[VMS_ACP_NAME_SIZE];
+    char       type_pat[VMS_ACP_NAME_SIZE];
+    uint8_t    ver_mode;
+    uint16_t   ver_exact;
+    uint8_t    have_prev;
+    uint16_t   prev_ver;
+    char       prev_name[VMS_ACP_NAME_SIZE];   /* cursor: last returned "NAME.TYPE" */
+    int        have_best;
+    char       best_name[VMS_ACP_NAME_SIZE];
+    uint16_t   best_ver;
+    ods2_fid_t best_fid;
+};
+
+/* Case-insensitive strcmp over two C-strings (order two directory names). */
+static int acp_ci_cmp_cstr(const char *a, const char *b)
+{
+    unsigned i = 0;
+    for (;;) {
+        int ca = toupper((unsigned char)a[i]);
+        int cb = toupper((unsigned char)b[i]);
+        if (ca != cb)
+            return ca - cb;
+        if (ca == '\0')
+            return 0;
+        i++;
+    }
+}
+
+/*
+ * VMS filespec glob, case-insensitive: '*' matches zero+ characters, '%'
+ * matches exactly one. Iterative with '*' backtracking; no allocation, no
+ * recursion (kernel-stack safe). pat and str are NUL-terminated.
+ */
+static int acp_glob_ci(const char *pat, const char *str)
+{
+    const char *star = NULL;
+    const char *ss = NULL;
+
+    while (*str) {
+        if (*pat == '%' ||
+            (*pat != '*' && toupper((unsigned char)*pat) == toupper((unsigned char)*str))) {
+            pat++;
+            str++;
+        } else if (*pat == '*') {
+            star = pat++;
+            ss = str;
+        } else if (star) {
+            pat = star + 1;
+            str = ++ss;
+        } else {
+            return 0;
+        }
+    }
+    while (*pat == '*')
+        pat++;
+    return *pat == '\0';
+}
+
+/* Split "NAME.TYPE" on the FIRST '.' into name_out / type_out (no '.' => type
+ * "" ). Bounded by sz. */
+static void acp_split_name(const char *full, char *name_out, char *type_out, size_t sz)
+{
+    size_t i = 0, j = 0;
+
+    while (full[i] && full[i] != '.' && j + 1 < sz)
+        name_out[j++] = full[i++];
+    name_out[j] = '\0';
+    while (full[i] && full[i] != '.')   /* skip any over-length name remainder */
+        i++;
+    if (full[i] == '.')
+        i++;
+    j = 0;
+    while (full[i] && j + 1 < sz)
+        type_out[j++] = full[i++];
+    type_out[j] = '\0';
+}
+
+/*
+ * Parse a VMS wildcard filespec ("*.TXT", "*.*;*", "A.TXT;0", ...) into an
+ * upcased name-part glob, type-part glob, and version selector. Version rules
+ * (OVMX design choice, DCL DIRECTORY / F$SEARCH behaviour): no ";" or ";*" =>
+ * ALL versions; ";N" (N>0) => exactly N; ";0" => highest per name. A pattern
+ * with no "." matches any type.
+ */
+static void acp_parse_search_pattern(const char *pattern,
+                                     char *name_pat, char *type_pat, size_t sz,
+                                     uint8_t *ver_mode, uint16_t *ver_exact)
+{
+    char work[VMS_ACP_NAME_SIZE];
+    size_t i, semi = (size_t)-1, dot = (size_t)-1;
+
+    for (i = 0; i + 1 < sizeof(work) && pattern[i]; i++)
+        work[i] = (char)toupper((unsigned char)pattern[i]);
+    work[i] = '\0';
+
+    *ver_mode = ACP_VER_ALL;
+    *ver_exact = 0;
+
+    /* Locate ';' (version) and the FIRST '.' (before the ';'). */
+    for (i = 0; work[i]; i++) {
+        if (work[i] == ';') { semi = i; break; }
+        if (work[i] == '.' && dot == (size_t)-1) dot = i;
+    }
+
+    if (semi != (size_t)-1) {
+        const char *v = &work[semi + 1];
+        if (v[0] == '\0' || (v[0] == '*' && v[1] == '\0')) {
+            *ver_mode = ACP_VER_ALL;
+        } else {
+            unsigned long n = 0;
+            int digits = 1, k;
+            for (k = 0; v[k]; k++) {
+                if (v[k] < '0' || v[k] > '9') { digits = 0; break; }
+                n = n * 10u + (unsigned long)(v[k] - '0');
+            }
+            if (!digits)      *ver_mode = ACP_VER_ALL;      /* unparseable => all */
+            else if (n == 0)  *ver_mode = ACP_VER_HIGHEST;
+            else { *ver_mode = ACP_VER_EXACT; *ver_exact = (uint16_t)(n > 65535u ? 65535u : n); }
+        }
+        work[semi] = '\0';                                  /* trim version off */
+    }
+
+    if (dot != (size_t)-1 && dot < semi) {
+        work[dot] = '\0';
+        strscpy(name_pat, work[0] ? work : "*", sz);
+        strscpy(type_pat, &work[dot + 1], sz);              /* may be "" (literal) */
+    } else {
+        strscpy(name_pat, work[0] ? work : "*", sz);
+        strscpy(type_pat, "*", sz);                         /* no '.' => any type */
+    }
+}
+
+/*
+ * $SEARCH ordering. (name,ver) is strictly BEFORE (name2,ver2) iff name sorts
+ * earlier (case-insensitive ascending), or same name and HIGHER version
+ * (versions descending -- highest first, both for ALL and HIGHEST modes).
+ */
+static int acp_order_less(const char *name_a, uint16_t ver_a,
+                          const char *name_b, uint16_t ver_b)
+{
+    int c = acp_ci_cmp_cstr(name_a, name_b);
+    if (c != 0)
+        return c < 0;
+    return ver_a > ver_b;
+}
+
+/*
+ * FIB$L_WCC continuation test: is (name,version) strictly AFTER the cursor
+ * (i.e. still an un-returned future match)? With no cursor yet, everything is
+ * ahead. For ;0-HIGHEST, once a name's highest version was returned the whole
+ * name is consumed (skip its lower versions); otherwise a LOWER version of the
+ * cursor's name is still ahead (versions descending).
+ */
+static int acp_after_cursor(const struct acp_search_ctx *c,
+                            const char *name, uint16_t version)
+{
+    int cmp;
+
+    if (!c->have_prev)
+        return 1;
+    cmp = acp_ci_cmp_cstr(name, c->prev_name);
+    if (cmp > 0)
+        return 1;
+    if (cmp < 0)
+        return 0;
+    if (c->ver_mode == ACP_VER_HIGHEST)
+        return 0;
+    return version < c->prev_ver;
+}
+
+/* Directory-record callback: consider one {name,version,fid} as the next
+ * match. Never asks the codec to stop -- the walk must see the whole directory
+ * to pick the global minimum-ordered entry after the cursor. */
+static int acp_search_scan_cb(const char *name, unsigned name_len,
+                              uint16_t version, const ods2_fid_t *fid, void *ctx)
+{
+    struct acp_search_ctx *c = (struct acp_search_ctx *)ctx;
+    char ename[VMS_ACP_NAME_SIZE];
+    char nm[VMS_ACP_NAME_SIZE], tp[VMS_ACP_NAME_SIZE];
+    unsigned i;
+
+    if (name_len >= sizeof(ename))
+        name_len = sizeof(ename) - 1;
+    for (i = 0; i < name_len; i++)
+        ename[i] = name[i];
+    ename[name_len] = '\0';
+
+    acp_split_name(ename, nm, tp, sizeof(nm));
+
+    if (!acp_glob_ci(c->name_pat, nm))
+        return 0;
+    if (!acp_glob_ci(c->type_pat, tp))
+        return 0;
+    if (c->ver_mode == ACP_VER_EXACT && version != c->ver_exact)
+        return 0;
+    if (!acp_after_cursor(c, ename, version))
+        return 0;
+
+    if (!c->have_best ||
+        acp_order_less(ename, version, c->best_name, c->best_ver)) {
+        c->have_best = 1;
+        strscpy(c->best_name, ename, sizeof(c->best_name));
+        c->best_ver = version;
+        c->best_fid = *fid;
+    }
+    return 0;
+}
+
+struct acp_search_mapwalk {
+    struct vms_acp_volume *vol;
+    uint8_t              *dblk;
+    struct acp_search_ctx *sctx;
+    int                   io_err;
+};
+
+/* Read each directory data block and scan its records. */
+static int acp_search_map_cb(const ods2_extent_t *ext, void *ctx)
+{
+    struct acp_search_mapwalk *m = (struct acp_search_mapwalk *)ctx;
+    uint32_t k;
+
+    for (k = 0; k < ext->count; k++) {
+        if (exec_blockdev_read_block(m->vol->backing_major, m->vol->backing_minor,
+                                     ext->lbn + k, m->dblk, ODS2_BLOCK_SIZE) != 0) {
+            m->io_err = 1;
+            return 1;
+        }
+        (void)ods2_dir_block_scan(m->dblk, acp_search_scan_cb, m->sctx);
+    }
+    return 0;
+}
+
+/* Format "NAME.TYPE;VERSION" into out (bounded). Returns the length written. */
+static unsigned acp_fmt_resnam(char *out, size_t outsz, const char *name, uint16_t ver)
+{
+    unsigned n = 0;
+    char tmp[6];
+    int t = 0;
+    uint16_t v = ver;
+
+    while (name[n] && n + 1 < outsz) {
+        out[n] = name[n];
+        n++;
+    }
+    if (n + 1 < outsz)
+        out[n++] = ';';
+    if (v == 0)
+        tmp[t++] = '0';
+    else
+        while (v && t < (int)sizeof(tmp)) { tmp[t++] = (char)('0' + v % 10u); v /= 10u; }
+    while (t > 0 && n + 1 < outsz)
+        out[n++] = tmp[--t];
+    out[n] = '\0';
+    return n;
+}
+
+/* Heap scratch for one IO$_ACPCONTROL search (dir header + a data block + the
+ * parsed header + the search context) -- too much for the kernel stack. */
+struct acp_search_scratch {
+    uint8_t    dirhdr[ODS2_BLOCK_SIZE];
+    uint8_t    dblk[ODS2_BLOCK_SIZE];
+    ods2_fh2_t dfh;
+    struct acp_search_ctx sctx;
+};
+
 #endif /* OVMX_ODS2_KERNEL */
 
 /*
@@ -1113,6 +1421,171 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
     exec_unlock(&proc->chan_lock);
 
     args.status = status;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * IO$_ACPCONTROL wildcard directory search -- the $SEARCH / DIRECTORY primitive
+ * (vms-a0b, epic vms-208). (Re)open (wcc_reset) or continue a wildcard context
+ * on a file-class channel and return the NEXT matching {name, version, FID} in
+ * genuine ODS-2 directory order (name ascending, version descending -- NOT a
+ * POSIX order), maintaining the continuation cursor (FIB$L_WCC) on the channel
+ * across calls. Exhaustion is SS$_NOMOREFILES (a no-match pattern returns it on
+ * the first call). See vms_acp.h for the FIB/wildcard interface (OVMX-labelled
+ * layout, Rule 8 D2). Fail-honest: an invalid channel => SS$_IVCHAN; an unknown
+ * subfunction or a "continue" with no open context => SS$_BADPARAM; a DID that
+ * resolves to no directory => SS$_NOSUCHFILE; a codec-free build =>
+ * SS$_DEVNOTMOUNT (no volume can be mounted there, so no channel reaches here on
+ * a live system).
+ */
+long vms_ioctl_acp_acpcontrol(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_acp_acpcontrol_args args;
+    struct vms_acp_chan *ch;
+    struct vms_acp_volume *vol = NULL;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.pattern[VMS_ACP_NAME_SIZE - 1] = '\0';
+
+    if (args.func != VMS_ACP_CTL_SEARCH) {
+        args.status = SS__BADPARAM;         /* only the $SEARCH subfunction today */
+        goto out;
+    }
+
+    exec_lock(&proc->chan_lock);
+    ch = acp_chan_find_locked(proc, args.chan);
+    if (ch)
+        vol = ch->vol;
+    exec_unlock(&proc->chan_lock);
+    if (!ch || !vol) {
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+
+#if defined(OVMX_ODS2_KERNEL)
+    {
+        struct acp_search_scratch *s;
+        struct acp_search_mapwalk mw;
+        uint32_t did_num, status;
+
+        s = exec_zalloc(sizeof(*s));
+        if (!s)
+            return -ENOMEM;
+
+        /*
+         * (Re)open or continue the channel's wildcard context, and SNAPSHOT it
+         * into s->sctx under the channel lock -- the directory walk below sleeps
+         * on block reads, so it must run with no lock held (as IO$_ACCESS does).
+         */
+        exec_lock(&proc->chan_lock);
+        ch = acp_chan_find_locked(proc, args.chan);
+        if (!ch) {
+            exec_unlock(&proc->chan_lock);
+            exec_free(s);
+            args.status = SS__IVCHAN;
+            goto out;
+        }
+        if (args.wcc_reset) {
+            ods2_fid_t did;
+
+            memset(&did, 0, sizeof(did));
+            did.fid_num = args.did_num;
+            did.fid_nmx = args.did_nmx;
+            ch->search_did_num = ods2_fid_number(&did);
+            if (ch->search_did_num == 0)
+                ch->search_did_num = ODS2_FID_MFD;          /* all-zero DID => MFD */
+            ch->search_did_seq = args.did_seq;
+            ch->search_did_rvn = args.did_rvn;
+            ch->search_did_nmx = args.did_nmx;
+            acp_parse_search_pattern(args.pattern,
+                                     ch->search_name_pat, ch->search_type_pat,
+                                     sizeof(ch->search_name_pat),
+                                     &ch->search_ver_mode, &ch->search_ver_exact);
+            ch->search_have_prev = 0;
+            ch->search_prev_ver  = 0;
+            ch->search_prev_name[0] = '\0';
+            ch->search_active = 1;
+        } else if (!ch->search_active) {
+            exec_unlock(&proc->chan_lock);
+            exec_free(s);
+            args.status = SS__BADPARAM;      /* continue with no open context */
+            goto out;
+        }
+        /* snapshot pattern + cursor for the (lock-free) walk */
+        strscpy(s->sctx.name_pat, ch->search_name_pat, sizeof(s->sctx.name_pat));
+        strscpy(s->sctx.type_pat, ch->search_type_pat, sizeof(s->sctx.type_pat));
+        s->sctx.ver_mode  = ch->search_ver_mode;
+        s->sctx.ver_exact = ch->search_ver_exact;
+        s->sctx.have_prev = ch->search_have_prev;
+        s->sctx.prev_ver  = ch->search_prev_ver;
+        strscpy(s->sctx.prev_name, ch->search_prev_name, sizeof(s->sctx.prev_name));
+        s->sctx.have_best = 0;
+        did_num = ch->search_did_num;
+        exec_unlock(&proc->chan_lock);
+
+        /* Read + validate the directory header; confirm it IS a directory. */
+        status = acp_read_header(vol, did_num, s->dirhdr, &s->dfh);
+        if (status != SS__NORMAL) {
+            exec_free(s);
+            args.status = status;            /* DID resolves to no header */
+            goto out;
+        }
+        if (!(s->dfh.fh2_filechar & ODS2_FH2_M_DIRECTORY)) {
+            exec_free(s);
+            args.status = SS__NOSUCHFILE;    /* DID is not a directory */
+            goto out;
+        }
+
+        /* Walk the directory's data blocks, decoding records with the codec and
+         * selecting the next match after the cursor. */
+        mw.vol    = vol;
+        mw.dblk   = s->dblk;
+        mw.sctx   = &s->sctx;
+        mw.io_err = 0;
+        if (ods2_fh2_map_walk(s->dirhdr, acp_search_map_cb, &mw, NULL) != ODS2_OK ||
+            mw.io_err) {
+            exec_free(s);
+            args.status = SS__DEVNOTMOUNT;   /* corrupt map / block-read failure */
+            goto out;
+        }
+
+        if (!s->sctx.have_best) {
+            exec_free(s);
+            args.status = SS__NOMOREFILES;   /* context exhausted (or no match) */
+            goto out;
+        }
+
+        /* Advance the channel's cursor to the match just found. */
+        exec_lock(&proc->chan_lock);
+        ch = acp_chan_find_locked(proc, args.chan);
+        if (ch && ch->search_active) {
+            ch->search_have_prev = 1;
+            ch->search_prev_ver  = s->sctx.best_ver;
+            strscpy(ch->search_prev_name, s->sctx.best_name,
+                    sizeof(ch->search_prev_name));
+        }
+        exec_unlock(&proc->chan_lock);
+
+        /* Fill the resultant FID, version and name ("NAME.TYPE;VERSION"). */
+        args.fid_num     = s->sctx.best_fid.fid_num;
+        args.fid_seq     = s->sctx.best_fid.fid_seq;
+        args.fid_rvn     = s->sctx.best_fid.fid_rvn;
+        args.fid_nmx     = s->sctx.best_fid.fid_nmx;
+        args.out_version = s->sctx.best_ver;
+        args.resnam_len  = (uint16_t)acp_fmt_resnam(args.resnam, sizeof(args.resnam),
+                                                    s->sctx.best_name, s->sctx.best_ver);
+        args.status = SS__NORMAL;
+        exec_free(s);
+    }
+#else
+    args.status = SS__DEVNOTMOUNT;           /* no codec: nothing mountable here */
+#endif /* OVMX_ODS2_KERNEL */
+
+out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;

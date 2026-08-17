@@ -514,6 +514,20 @@ int ovmx_boot_mount_system_disk(const char *mountpoint)
     return mount("vmsfs", mountpoint, 0, &args, sizeof args);
 }
 
+const char *ovmx_boot_system_disk_unit(void)
+{
+    return "DKA0:";
+}
+
+/* NetBSD keeps the vmsfs VFS mount for SYS$DISK (the VAX runtime re-target,
+ * vms-d5d, is driven separately); the Files-11 ACP $MOUNT flip (vms-5f0) is the
+ * Linux path only for now. ovmx_init.c calls this only under __linux__, so this
+ * is a never-reached seam completion -- fail-honest rather than fake a mount. */
+int ovmx_boot_acp_mount_system_disk(void)
+{
+    return -1;
+}
+
 void ovmx_boot_power_off(void)
 {
     sync();

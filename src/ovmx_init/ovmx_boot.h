@@ -202,6 +202,26 @@ int ovmx_boot_system_disk_present(void);
 int ovmx_boot_mount_system_disk(const char *mountpoint);
 
 /*
+ * ovmx_boot_system_disk_unit - the VMS device name of the boot/system unit as
+ * the executive enumerates it (Linux: "DKA0:" from vda). This is what the
+ * Files-11 ACP $MOUNT and $ASSIGN name, distinct from the substrate host device
+ * path returned by ovmx_boot_system_disk_dev(). Returns storage valid for the
+ * life of the process (vms-5f0, epic vms-208).
+ */
+const char *ovmx_boot_system_disk_unit(void);
+
+/*
+ * ovmx_boot_acp_mount_system_disk - ATOMIC FLIP (vms-5f0): $MOUNT the boot unit
+ * through the Files-11 (ODS-2) ACP in the executive, recording it executive-
+ * global so SYS$DISK is served by the ACP over the genuine ODS-2 block device --
+ * the replacement for the Linux vmsfs.ko VFS mount at SYSDISK_MOUNT. Requires
+ * the executive open (executive_attach()). Returns 0 on success, nonzero on
+ * failure (PID 1 then halts honestly, exactly as the vmsfs mount(2) failure
+ * did). The device and ACP are the substrate's; NetBSD supplies its own.
+ */
+int ovmx_boot_acp_mount_system_disk(void);
+
+/*
  * ovmx_boot_power_off - flush and power the machine off, PID 1's analogue of
  * the VAX halting to the console prompt after a fail-stop boot. Returns ONLY
  * if the substrate refused (no privilege to power off); the caller then

@@ -546,21 +546,6 @@ static void bare_metal_init(void)
          * here, as root. */
         provision_disk_mount_points();
 
-        /* vmsfs.ko is the filesystem, not the executive; a failure here
-         * surfaces as the mount failure below, which halts honestly. The
-         * executive itself is loaded and pinned by executive_attach().
-         * OVMX-facility, not STARTUP: VMS never narrates a Linux kernel
-         * module load, so this is not dressed as a borrowed VMS message
-         * (vms-1fb facility audit, docs/design-boot-faithful.md). */
-        if (ovmx_boot_load_module("vmsfs") != 0 && errno != EEXIST) {
-            fprintf(stderr, "%%OVMX-W-MODFAIL, failed to load vmsfs.ko: %s\n",
-                    strerror(errno));
-        }
-
-        struct stat vms_st;
-        if (stat(SYSDISK_MOUNT, &vms_st) != 0)
-            return;  /* No system disk mount point in initramfs */
-
         /* The system disk must be a real block device. There is no overlay
          * and no auto-initialize fallback: if it is not here, the system does
          * not come up (design-init-scope.md §1). */
@@ -575,6 +560,37 @@ static void bare_metal_init(void)
 
         printf("%%OVMX-I-SYSDISK, mounting system disk DKA0:\n");
 
+#if defined(__linux__)
+        /* ATOMIC FLIP (vms-5f0, epic vms-208): $MOUNT the boot unit through the
+         * Files-11 (ODS-2) ACP in the executive -- NOT the vmsfs.ko VFS mount of
+         * a bespoke-VMFS volume at /vms. SYS$DISK is now a genuine ODS-2 block
+         * device the ACP owns; every consumer (RMS/DCL/IMGACT/LOGINOUT) reaches
+         * it by $ASSIGN + $QIO, not through vmsfs_to_linux_path -> /vms. The
+         * executive is already attached (executive_attach() above), which the
+         * ACP $MOUNT requires. A blank/unformatted or non-ODS-2 volume fails to
+         * mount -- PID 1 does NOT initialize it (the installer spine does). */
+        if (ovmx_boot_acp_mount_system_disk() != 0) {
+            char msg[128];
+            snprintf(msg, sizeof(msg),
+                     "system disk %s (%s) would not $MOUNT via the Files-11 ACP",
+                     ovmx_boot_system_disk_unit(), ovmx_boot_system_disk_dev());
+            ovmx_sysinit_halt(
+                msg,
+                "the volume is not an installed genuine ODS-2 system disk; "
+                "OVMX does not initialize or install it at boot");
+        }
+#else
+        /* vmsfs.ko is the filesystem, not the executive; a failure here
+         * surfaces as the mount failure below, which halts honestly. The
+         * executive itself is loaded and pinned by executive_attach().
+         * OVMX-facility, not STARTUP: VMS never narrates a Linux kernel
+         * module load, so this is not dressed as a borrowed VMS message
+         * (vms-1fb facility audit, docs/design-boot-faithful.md). */
+        if (ovmx_boot_load_module("vmsfs") != 0 && errno != EEXIST) {
+            fprintf(stderr, "%%OVMX-W-MODFAIL, failed to load vmsfs.ko: %s\n",
+                    strerror(errno));
+        }
+
         /* Mount the pre-installed disk, or halt. A blank or unformatted disk
          * fails to mount as vmsfs -- and PID 1 does NOT initialize it (that
          * is the installer spine's INITIALIZE/PCSI job, run out of band). */
@@ -588,6 +604,7 @@ static void bare_metal_init(void)
                 "the volume is not an installed VMSFS system disk; "
                 "OVMX does not initialize or install it at boot");
         }
+#endif
 
         printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
 

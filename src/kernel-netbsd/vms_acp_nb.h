@@ -5,7 +5,8 @@
  * executive-core.md, docs/design-files11-acp-executive.md).
  *
  * WHY THIS FILE. src/kernel-core/vmsfs_acp.c -- the substrate-agnostic Files-11
- * ACP channel/mount/IO$_ACCESS/READVBLK/WRITEVBLK handlers -- compiles by
+ * ACP channel/mount/IO$_ACCESS/READVBLK/WRITEVBLK/IO$_ACPCONTROL ($SEARCH)
+ * handlers -- compiles by
  * `#include "vms_internal.h"` resolving, via -I, to the per-substrate twin. On
  * Linux that twin (src/kernel/vms_internal.h) reaches these argument structs
  * transitively through vms_ioctl.h's `#include "vms_acp.h"` (src/kernel/
@@ -161,8 +162,37 @@ struct vms_acp_rw_args {
 	uint32_t pad;
 };
 
+/* IO$_ACPCONTROL subfunctions (the umbrella `func` selector) -- byte-identical
+ * to src/kernel/vms_acp.h. */
+#define VMS_ACP_CTL_SEARCH    1u    /* wildcard directory context ($SEARCH) */
+
+/* Resultant-name buffer (P3/P4) -- byte-identical to src/kernel/vms_acp.h. */
+#define VMS_ACP_RESNAM_SIZE   84
+
+struct vms_acp_acpcontrol_args {
+	uint32_t chan;             /* in: file-class channel ($ASSIGN of the volume) */
+	uint32_t func;             /* in: VMS_ACP_CTL_* subfunction (SEARCH here) */
+	uint16_t did_num;          /* in: FIB$W_DID directory FID (0/0/0 => MFD) */
+	uint16_t did_seq;
+	uint8_t  did_rvn;
+	uint8_t  did_nmx;
+	uint8_t  wcc_reset;        /* in: 1 => (re)open ctx with `pattern`; 0 => continue */
+	uint8_t  pad0;
+	uint16_t fid_num;          /* out: matched file FID number low 16 */
+	uint16_t fid_seq;          /* out: sequence */
+	uint8_t  fid_rvn;          /* out: relative volume */
+	uint8_t  fid_nmx;          /* out: file number high 8 */
+	uint16_t out_version;      /* out: matched version */
+	uint16_t resnam_len;       /* out: length of resnam (P3), excl. NUL */
+	uint16_t pad1;
+	char     pattern[VMS_ACP_NAME_SIZE];   /* in (P2): wildcard, e.g. "*.TXT" */
+	char     resnam[VMS_ACP_RESNAM_SIZE];  /* out (P4): "NAME.TYPE;VERSION" */
+	uint32_t status;           /* out: SS$_ (NORMAL / NOMOREFILES / IVCHAN / ...) */
+	uint32_t pad2;
+};
+
 /* ================================================================
- * Request numbers -- same NR band as src/kernel/vms_acp.h (0x68-0x6E); the
+ * Request numbers -- same NR band as src/kernel/vms_acp.h (0x68-0x6F); the
  * NetBSD _IOWR encoding of type/nr/size legitimately differs in VALUE from
  * Linux's (the vms_mbx_nb.h precedent), so no cross-substrate equality assert.
  * ================================================================ */
@@ -173,6 +203,7 @@ struct vms_acp_rw_args {
 #define VMS_IOCTL_ACP_DEACCESS  _IOWR(VMS_ACP_IOC_MAGIC, 0x6C, struct vms_acp_deaccess_args)
 #define VMS_IOCTL_ACP_READVBLK  _IOWR(VMS_ACP_IOC_MAGIC, 0x6D, struct vms_acp_rw_args)
 #define VMS_IOCTL_ACP_WRITEVBLK _IOWR(VMS_ACP_IOC_MAGIC, 0x6E, struct vms_acp_rw_args)
+#define VMS_IOCTL_ACP_ACPCONTROL _IOWR(VMS_ACP_IOC_MAGIC, 0x6F, struct vms_acp_acpcontrol_args)
 
 /*
  * Freeze the shared layouts -- see src/kernel/vms_acp.h's identical asserts:
@@ -193,5 +224,7 @@ _Static_assert(sizeof(struct vms_acp_deaccess_args) == 8,
                "vms_acp_deaccess_args changed size -- VMS_IOCTL_ACP_DEACCESS ABI break");
 _Static_assert(sizeof(struct vms_acp_rw_args) == 48,
                "vms_acp_rw_args changed size -- ACP READVBLK/WRITEVBLK ABI break");
+_Static_assert(sizeof(struct vms_acp_acpcontrol_args) == 200,
+               "vms_acp_acpcontrol_args changed size -- VMS_IOCTL_ACP_ACPCONTROL ABI break");
 
 #endif /* _VMS_ACP_NB_H */

@@ -1411,6 +1411,41 @@ ods2_status_t ods2_security_parse(const void *block, size_t block_len,
                                   ods2_uic_t *owner_out);
 
 /* ================================================================
+ * PURE EDIT surface (implemented in ods2/ods2_edit.c) -- the write-side twins
+ * of the reader's pure parse operations, for the Files-11 ODS-2 ACP's
+ * IO$_WRITEVBLK / implicit-extend path (vms-c60, epic vms-208). Each operates
+ * on a caller-supplied 512-byte block buffer with NO allocation and NO I/O, so
+ * the executive ACP (src/kernel-core/vmsfs_acp.c) can SEQUENCE the raw
+ * exec_blockdev_* block reads/writes around them exactly as #633's IO$_ACCESS
+ * sequences the pure PARSE helpers -- keeping every on-disk ODS-2 format fact in
+ * the codec (Rule 8). See ods2_edit.c for the per-field provenance.
+ * ================================================================ */
+
+/* Storage-bitmap bits per 512-byte BITMAP.SYS data block ([N2]): 128 words *
+ * 32 bits. The ACP maps whole-volume bit N (== LBN N, cluster factor 1) to
+ * bitmap block N / this and bit N % this. */
+#define ODS2_SBM_BITS_PER_BLOCK   4096u
+
+/* Append one format-1 FM2 retrieval pointer [lbn, lbn+count) to a file header's
+ * map area (bumps fh2_map_inuse). ODS2_ERR_NOSPACE if the map area is full,
+ * ODS2_ERR_ARGS if count/lbn exceed the format-1 range. Reseal after. */
+ods2_status_t ods2_fh2_map_append(void *header_block, uint32_t lbn, uint32_t count);
+
+/* Set a file header's RECATTR size fields (fat_hiblk/fat_efblk/fat_ffbyte) +
+ * fh2_highwater to a new end-of-file / allocation position. Reseal after. */
+ods2_status_t ods2_fh2_set_eof(void *header_block, uint32_t hiblk,
+                               uint32_t efblk, uint16_t ffbyte);
+
+/* Recompute + store the FH2 additive checksum after edits (so it re-parses). */
+void ods2_fh2_reseal(void *header_block);
+
+/* Storage-bitmap (one 512-byte BITMAP.SYS data block): test a bit FREE, mark it
+ * ALLOCATED, or mark it FREE (rollback). bit_in_block in 0..4095. */
+int  ods2_sbm_block_bit_free(const void *bitmap_block, unsigned bit_in_block);
+void ods2_sbm_block_alloc(void *bitmap_block, unsigned bit_in_block);
+void ods2_sbm_block_free(void *bitmap_block, unsigned bit_in_block);
+
+/* ================================================================
  * BLOCK-DEVICE-BACKED WRITER (implemented in ods2/ods2_writer.c) --
  * increment 11, vms-6d3b, R2 of the real-ODS-2-runtime epic vms-5eb.
  *

@@ -29,6 +29,7 @@ endif()
 add_library(ods2 STATIC
     ods2_reader.c
     ods2_writer.c
+    ods2_edit.c
     ods2_bdev.c
     ods2_path.c
     ods2_block_posix.c)

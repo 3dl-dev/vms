@@ -68,6 +68,7 @@ vms-y := vms_module.o \
          ../kernel-core/vms_proctab.o \
          ../kernel-core/vmsfs_acp.o \
          ../vmsfs/ods2/ods2_reader.o \
+         ../vmsfs/ods2/ods2_edit.o \
          vms_p0.o \
          vms_p1.o \
          vms_bg.o
@@ -78,7 +79,11 @@ vms-y := vms_module.o \
 # (ods2_home_parse / ods2_fh2_parse / ods2_fh2_map_walk / ods2_scb_parse, plus
 # the inline checksum in vmsfs/ods2.h), with no block-I/O seam -- vmsfs_acp.c
 # does its own block reads through the exec_blockdev_read_block shim, so neither
-# ods2_block_*.o nor the writer is linked here. -DOVMX_ODS2_KERNEL selects the
+# ods2_block_*.o nor the writer is linked here. ods2_edit.o (vms-c60) joins it:
+# the pure EDIT twins of those parsers (FM2 map append, FH2 EOF/HIBLK set +
+# checksum reseal, storage-bitmap bit alloc) the IO$_WRITEVBLK / implicit-extend
+# path uses -- also pure (no block-I/O seam), so vmsfs_acp.c sequences the raw
+# exec_blockdev_write_block writes around them. -DOVMX_ODS2_KERNEL selects the
 # codec's kernel string/type vocabulary (ods2_kcompat.h). This is the OUT-OF-TREE
 # / QEMU-test module; the in-tree bootable overlay (distro/kernel/drivers-ovmx/
 # vms) deliberately does NOT carry the codec yet (flatten-safe-include follow-up),

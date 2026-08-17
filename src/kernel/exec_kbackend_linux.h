@@ -374,6 +374,74 @@ static inline int exec_blockdev_read_block(unsigned int major, unsigned int mino
 	return ret;
 }
 
+/*
+ * WRITE one 512-byte logical block to a backing block device, the write twin of
+ * exec_blockdev_read_block above -- for the Files-11 ODS-2 ACP IO$_WRITEVBLK /
+ * implicit-extend path (vms-c60; see exec_kbackend.h). Opens the device
+ * READ-WRITE and NON-EXCLUSIVELY (holder == NULL), then commits the one block
+ * with a SYNCHRONOUS write bio (submit_bio_wait, REQ_OP_WRITE): the ACP writes a
+ * RAW disk unit (there is no mounted super_block behind an ACP volume, so no
+ * page cache / sb_getblk), exactly as its reads do. bi_sector is in 512-byte
+ * units, matching ODS-2 LBNs. All PUBLIC, documented block-layer APIs -- no
+ * Linux source is copied (Rule 8).
+ *
+ * VERSION-GUARDED across the bdev-open API split for the SAME reason the read
+ * twin is (6.9's bdev_file_open_by_dev / file_bdev / fput vs the older
+ * bdev_open_by_dev / bdev_handle / bdev_release), so the one header compiles on
+ * both the QEMU-test (6.8) and shipped bootable (6.12) kernels; called only
+ * under -DOVMX_ODS2_KERNEL but it must COMPILE everywhere the header is
+ * included (the #623 dangling-symbol class).
+ */
+static inline int exec_blockdev_write_block(unsigned int major, unsigned int minor,
+					    uint64_t lbn, const void *buf, size_t buflen)
+{
+	dev_t devt = MKDEV(major, minor);
+	struct block_device *bdev;
+	struct bio bio;
+	struct bio_vec bvec;
+	struct page *page;
+	int ret = -1;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+	struct file *bf;
+#else
+	struct bdev_handle *bh_open;
+#endif
+
+	if (!buf || buflen < 512)
+		return -1;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+	bf = bdev_file_open_by_dev(devt, BLK_OPEN_WRITE, NULL, NULL);
+	if (IS_ERR(bf))
+		return -1;
+	bdev = file_bdev(bf);
+#else
+	bh_open = bdev_open_by_dev(devt, BLK_OPEN_WRITE, NULL, NULL);
+	if (IS_ERR(bh_open))
+		return -1;
+	bdev = bh_open->bdev;
+#endif
+
+	page = alloc_page(GFP_KERNEL);
+	if (page) {
+		memcpy(page_address(page), buf, 512);
+		bio_init(&bio, bdev, &bvec, 1, REQ_OP_WRITE);
+		bio.bi_iter.bi_sector = (sector_t)lbn;   /* 512-byte units == ODS-2 LBN */
+		__bio_add_page(&bio, page, 512, 0);
+		if (submit_bio_wait(&bio) == 0)
+			ret = 0;
+		bio_uninit(&bio);
+		__free_page(page);
+	}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+	fput(bf);
+#else
+	bdev_release(bh_open);
+#endif
+	return ret;
+}
+
 /* ---- 11. primary Ethernet net device (vms-9d2; see exec_kbackend.h) ----
  * NIC-agnostic: walk the host's net devices through the GENERIC netdev API and
  * return the first non-loopback Ethernet controller, naming no driver. This is

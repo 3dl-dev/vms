@@ -61,6 +61,17 @@
 #endif
 
 /*
+ * The Files-11 logical block size (512). The exec_blockdev_* shim's contract is
+ * FIXED at 512-byte logical blocks independent of the codec (exec_kbackend.h),
+ * so the codec-free IO$_READVBLK / in-place IO$_WRITEVBLK paths -- which compile
+ * in the codec-free bootable overlay, where vmsfs/ods2.h (and its
+ * ACP_BLOCK_SIZE) is NOT included -- need this constant WITHOUT the codec. It
+ * is the same 512 as the codec's ACP_BLOCK_SIZE; a distinct name avoids any
+ * dependence on the gated header (the #623 codec-free-overlay-must-link class).
+ */
+#define ACP_BLOCK_SIZE 512u
+
+/*
  * One executive-resident mounted ODS-2 volume. The unit name + assigned-channel
  * refcount are the channel rung's (vms-149); vms-127 adds the VALIDATED volume
  * identity -- backing device, structure level, size and label read off the home
@@ -125,6 +136,17 @@ struct vms_acp_chan {
     uint16_t         acc_fid_seq;
     uint8_t          acc_fid_rvn;
     uint8_t          acc_fid_nmx;
+    /*
+     * End-of-file position (vms-c60): efblk = VBN of the block holding the last
+     * valid byte, ffbyte = valid bytes in that block (the codec's [F16]
+     * convention, valid_bytes = (efblk-1)*512 + ffbyte). Recorded at IO$_ACCESS
+     * from the file's FH2 so IO$_READVBLK can bound at EOF and IO$_WRITEVBLK can
+     * grow it on a write past EOF. win_n/win[] carry the ALLOCATED extent map
+     * (up to HIBLK); efblk/ffbyte carry the logical end WITHIN that allocation.
+     */
+    uint32_t         acc_efblk;
+    uint16_t         acc_ffbyte;
+    uint16_t         acc_pad;
     uint32_t         win_n;             /* extents in win[] */
     struct acp_win_ext win[ACP_WINDOW_MAX];
 };
@@ -226,6 +248,29 @@ static struct vms_acp_chan *acp_chan_find_locked(struct vms_proc *proc, uint32_t
     return NULL;
 }
 
+/*
+ * Resolve VBN through a built window to its LBN, or 0 if unmapped. PURE (no
+ * codec), so it lives OUTSIDE the OVMX_ODS2_KERNEL gate: IO$_ACCESS builds the
+ * window with the codec, but IO$_READVBLK / IO$_WRITEVBLK (vms-c60) resolve
+ * through the ALREADY-BUILT window with no codec, so they -- and this resolver
+ * -- compile in the codec-free bootable overlay too (where no window is ever
+ * built, so a transfer honestly finds no accessed file: fail-honest, not a
+ * dangling symbol -- the #623 class).
+ */
+static uint32_t acp_window_map_vbn(const struct acp_win_ext *win, uint32_t n,
+                                   uint32_t vbn)
+{
+    uint32_t i;
+
+    if (vbn == 0)
+        return 0;
+    for (i = 0; i < n; i++) {
+        if (vbn >= win[i].start_vbn && vbn < win[i].start_vbn + win[i].count)
+            return win[i].lbn + (vbn - win[i].start_vbn);
+    }
+    return 0;
+}
+
 /* ================================================================
  * ODS-2 volume validation (vms-127) -- reads the home block + SCB off the
  * backing block device and confirms the media is genuine Files-11 ODS-2.
@@ -275,7 +320,7 @@ static int acp_first_extent_cb(const ods2_extent_t *ext, void *ctx)
  * is rare and already sleeps on the block reads), freed before return.
  */
 struct acp_val_scratch {
-    uint8_t     blk[ODS2_BLOCK_SIZE];
+    uint8_t     blk[ACP_BLOCK_SIZE];
     ods2_home_t home;
     ods2_fh2_t  bmhdr;
     ods2_scb_t  scb;
@@ -673,9 +718,9 @@ static uint32_t acp_read_header(struct vms_acp_volume *vol, uint32_t fid_num,
         return SS__NOSUCHFILE;
     lbn = vol->idx_lbn + (fid_num - 1u);
     if (exec_blockdev_read_block(vol->backing_major, vol->backing_minor,
-                                 lbn, raw, ODS2_BLOCK_SIZE) != 0)
+                                 lbn, raw, ACP_BLOCK_SIZE) != 0)
         return SS__NOSUCHFILE;
-    if (ods2_fh2_parse(raw, ODS2_BLOCK_SIZE, parsed) != ODS2_OK)
+    if (ods2_fh2_parse(raw, ACP_BLOCK_SIZE, parsed) != ODS2_OK)
         return SS__NOSUCHFILE;
     return SS__NORMAL;
 }
@@ -745,7 +790,7 @@ static int acp_dirwalk_map_cb(const ods2_extent_t *ext, void *ctx)
 
     for (k = 0; k < ext->count; k++) {
         if (exec_blockdev_read_block(w->vol->backing_major, w->vol->backing_minor,
-                                     ext->lbn + k, w->dblk, ODS2_BLOCK_SIZE) != 0) {
+                                     ext->lbn + k, w->dblk, ACP_BLOCK_SIZE) != 0) {
             w->io_err = 1;
             return 1;                   /* stop the walk */
         }
@@ -819,21 +864,6 @@ static int acp_winbuild_cb(const ods2_extent_t *ext, void *ctx)
     return 0;
 }
 
-/* Resolve VBN through a built window to its LBN, or 0 if unmapped. */
-static uint32_t acp_window_map_vbn(const struct acp_win_ext *win, uint32_t n,
-                                   uint32_t vbn)
-{
-    uint32_t i;
-
-    if (vbn == 0)
-        return 0;
-    for (i = 0; i < n; i++) {
-        if (vbn >= win[i].start_vbn && vbn < win[i].start_vbn + win[i].count)
-            return win[i].lbn + (vbn - win[i].start_vbn);
-    }
-    return 0;
-}
-
 /*
  * Heap scratch for one IO$_ACCESS: the directory + file header blocks, a
  * directory data-block buffer, and the two parsed headers -- ~2.5 KB, too much
@@ -842,9 +872,9 @@ static uint32_t acp_window_map_vbn(const struct acp_win_ext *win, uint32_t n,
  * return.
  */
 struct acp_access_scratch {
-    uint8_t    dirhdr[ODS2_BLOCK_SIZE];
-    uint8_t    filehdr[ODS2_BLOCK_SIZE];
-    uint8_t    dblk[ODS2_BLOCK_SIZE];
+    uint8_t    dirhdr[ACP_BLOCK_SIZE];
+    uint8_t    filehdr[ACP_BLOCK_SIZE];
+    uint8_t    dblk[ACP_BLOCK_SIZE];
     ods2_fh2_t dfh;
     ods2_fh2_t fh;
 };
@@ -1000,6 +1030,8 @@ long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg)
         ch->acc_fid_seq   = file_fid.fid_seq;
         ch->acc_fid_rvn   = file_fid.fid_rvn;
         ch->acc_fid_nmx   = file_fid.fid_nmx;
+        ch->acc_efblk     = ods2_recattr_efblk(&s->fh.fh2_recattr);
+        ch->acc_ffbyte    = s->fh.fh2_recattr.fat_ffbyte;
         ch->win_n = wb.n;
         memcpy(ch->win, window, wb.n * sizeof(window[0]));
         exec_unlock(&proc->chan_lock);
@@ -1081,6 +1113,557 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
     exec_unlock(&proc->chan_lock);
 
     args.status = status;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/* ================================================================
+ * IO$_READVBLK / IO$_WRITEVBLK (vms-c60, epic vms-208) -- virtual-block transfer
+ * on an ACCESSED file channel, mapping {VBN, byte-offset, length} through the
+ * channel's window (built by IO$_ACCESS) to LBN block I/O, with an implicit
+ * EXTEND (BITMAP.SYS allocation + FH2 grow) on a write past EOF.
+ *
+ * The read + in-place write are CODEC-FREE (window + exec_blockdev_read_block /
+ * _write_block only), so they compile in the codec-free bootable overlay too;
+ * only the EXTEND path (bitmap allocation + FH2 map/EOF edit) uses the codec and
+ * is gated on OVMX_ODS2_KERNEL. In the overlay no window is ever built (ACCESS
+ * refuses), so a transfer honestly finds no accessed file -- fail-honest, never
+ * a dangling codec symbol.
+ * ================================================================ */
+
+/* Cap one transfer's work (bounds the per-call block-I/O loop); a larger
+ * request is refused SS$_BADPARAM rather than pinned in the executive. */
+#define ACP_RW_MAX_XFER   (1u << 20)   /* 1 MiB */
+
+/*
+ * A snapshot of a channel's accessed-file state, taken under proc->chan_lock so
+ * the block I/O below runs WITHOUT the lock held (the reads/writes sleep). The
+ * window is copied out; a concurrent IO$_DEACCESS in this process then cannot
+ * free anything the transfer is mid-way through.
+ */
+struct acp_chan_snap {
+    int                acc;             /* file accessed on the channel */
+    int                acc_write;       /* opened for write */
+    uint32_t           efblk;
+    uint16_t           ffbyte;
+    uint32_t           fid_num;         /* full file number (num | nmx<<16) */
+    uint32_t           backing_major;
+    uint32_t           backing_minor;
+    uint32_t           idx_lbn;         /* INDEXF.SYS file-1 header base */
+    uint32_t           volsize;
+    uint32_t           win_n;
+    struct acp_win_ext win[ACP_WINDOW_MAX];
+};
+
+/* Snapshot channel `chan`'s accessed-file state. Returns SS$_IVCHAN if the
+ * channel is invalid, SS$_FILNOTACC if no file is accessed on it, else
+ * SS$_NORMAL with *snap filled. */
+static uint32_t acp_chan_snapshot(struct vms_proc *proc, uint32_t chan,
+                                  struct acp_chan_snap *snap)
+{
+    struct vms_acp_chan *ch;
+    uint32_t status;
+
+    memset(snap, 0, sizeof(*snap));
+    exec_lock(&proc->chan_lock);
+    ch = acp_chan_find_locked(proc, chan);
+    if (!ch) {
+        status = SS__IVCHAN;
+    } else if (!ch->file_accessed) {
+        status = SS__FILNOTACC;
+    } else {
+        snap->acc           = 1;
+        snap->acc_write     = ch->acc_write;
+        snap->efblk         = ch->acc_efblk;
+        snap->ffbyte        = ch->acc_ffbyte;
+        snap->fid_num       = (uint32_t)ch->acc_fid_num |
+                              ((uint32_t)ch->acc_fid_nmx << 16);
+        snap->backing_major = ch->vol->backing_major;
+        snap->backing_minor = ch->vol->backing_minor;
+        snap->idx_lbn       = ch->vol->idx_lbn;
+        snap->volsize       = ch->vol->volsize;
+        snap->win_n         = ch->win_n;
+        memcpy(snap->win, ch->win, ch->win_n * sizeof(ch->win[0]));
+        status = SS__NORMAL;
+    }
+    exec_unlock(&proc->chan_lock);
+    return status;
+}
+
+/* valid_bytes = (efblk-1)*512 + ffbyte (the codec [F16] convention); 0 for an
+ * empty file (efblk 0). */
+static uint32_t acp_valid_bytes(uint32_t efblk, uint16_t ffbyte)
+{
+    if (efblk == 0)
+        return 0;
+    return (efblk - 1u) * ACP_BLOCK_SIZE + ffbyte;
+}
+
+/* Highest allocated VBN a window covers (== HIBLK), or 0 for an empty window. */
+static uint32_t acp_win_hiblk(const struct acp_win_ext *win, uint32_t n)
+{
+    if (n == 0)
+        return 0;
+    return win[n - 1].start_vbn + win[n - 1].count - 1u;
+}
+
+/*
+ * IO$_READVBLK: read `length` bytes starting at {VBN, offset} through the
+ * channel window into the caller's buffer, clamped at end-of-file. A read that
+ * begins at or past EOF is SS$_ENDOFFILE (fail-honest). Byte-granular
+ * (offset+length) is an OVMX convenience over the pure block QIO -- labelled --
+ * so RMS $GET and a byte-exact vs-codec comparison both land cleanly; the block
+ * MAPPING is the genuine ACP window.
+ */
+long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_acp_rw_args args;
+    struct acp_chan_snap *snap;
+    uint8_t *blk;
+    uint32_t status, valid, start_byte, avail, want, done_bytes;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    if (args.vbn == 0 || args.offset >= ACP_BLOCK_SIZE ||
+        args.length > ACP_RW_MAX_XFER) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+
+    snap = exec_zalloc(sizeof(*snap) + ACP_BLOCK_SIZE);
+    if (!snap)
+        return -ENOMEM;
+    blk = (uint8_t *)(snap + 1);
+
+    status = acp_chan_snapshot(proc, args.chan, snap);
+    if (status != SS__NORMAL) {
+        args.status = status;
+        exec_free(snap);
+        goto out;
+    }
+
+    valid = acp_valid_bytes(snap->efblk, snap->ffbyte);
+    start_byte = (args.vbn - 1u) * ACP_BLOCK_SIZE + args.offset;
+    if (start_byte >= valid) {
+        args.status = SS__ENDOFFILE;        /* nothing to read past EOF */
+        args.xferred = 0;
+        args.new_hiblk = acp_win_hiblk(snap->win, snap->win_n);
+        args.new_efblk = snap->efblk;
+        exec_free(snap);
+        goto out;
+    }
+    avail = valid - start_byte;
+    want = args.length < avail ? args.length : avail;   /* clamp at EOF */
+
+    done_bytes = 0;
+    while (done_bytes < want) {
+        uint32_t pos = start_byte + done_bytes;
+        uint32_t cur_vbn = pos / ACP_BLOCK_SIZE + 1u;
+        uint32_t blk_off = pos % ACP_BLOCK_SIZE;
+        uint32_t chunk = ACP_BLOCK_SIZE - blk_off;
+        uint32_t lbn;
+
+        if (chunk > want - done_bytes)
+            chunk = want - done_bytes;
+        lbn = acp_window_map_vbn(snap->win, snap->win_n, cur_vbn);
+        if (lbn == 0) {                     /* mapped range says EOF but window
+                                             * has a hole: honest corruption */
+            args.status = SS__DEVNOTMOUNT;
+            args.xferred = done_bytes;
+            exec_free(snap);
+            goto out;
+        }
+        if (exec_blockdev_read_block(snap->backing_major, snap->backing_minor,
+                                     lbn, blk, ACP_BLOCK_SIZE) != 0) {
+            args.status = SS__DEVNOTMOUNT;
+            args.xferred = done_bytes;
+            exec_free(snap);
+            goto out;
+        }
+        if (exec_copyout((void *)(uintptr_t)(args.buffer + done_bytes),
+                         blk + blk_off, chunk)) {
+            args.status = SS__ACCVIO;
+            args.xferred = done_bytes;
+            exec_free(snap);
+            goto out;
+        }
+        done_bytes += chunk;
+    }
+
+    args.xferred = done_bytes;
+    args.new_hiblk = acp_win_hiblk(snap->win, snap->win_n);
+    args.new_efblk = snap->efblk;
+    args.status = SS__NORMAL;
+    exec_free(snap);
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * Heap scratch for one IO$_WRITEVBLK: the data block (RMW), the file's FH2
+ * header, a BITMAP.SYS header block + one storage-bitmap data block, and the
+ * channel snapshot -- ~2.6 KB, too much for the kernel stack. Only RAW byte
+ * buffers + the codec-free snapshot, so it is definable in the codec-free
+ * overlay too (where the extend/header-edit paths that use bmhdr/bmblk are
+ * gated off and unreachable).
+ */
+struct acp_rw_scratch {
+    struct acp_chan_snap snap;
+    uint8_t    blk[ACP_BLOCK_SIZE];    /* data block RMW */
+    uint8_t    hdr[ACP_BLOCK_SIZE];    /* the file's FH2 (edited + written back) */
+    uint8_t    bmhdr[ACP_BLOCK_SIZE];  /* BITMAP.SYS FH2 */
+    uint8_t    bmblk[ACP_BLOCK_SIZE];  /* one storage-bitmap data block */
+};
+
+#if defined(OVMX_ODS2_KERNEL)
+
+/* Read the file number a raw FH2 block self-reports (ods2_fid_t at offset 8:
+ * num[2], seq[2], rvn[1], nmx[1]); the full number is num | nmx<<16. Used to
+ * guard a header write-back against a torn/wrong block without a full parse. */
+static uint32_t acp_fh2_self_fidnum(const uint8_t *hdr)
+{
+    uint32_t off = (uint32_t)offsetof(ods2_fh2_t, fh2_fid);
+    uint32_t num = (uint32_t)hdr[off] | ((uint32_t)hdr[off + 1] << 8);
+    uint32_t nmx = hdr[off + 5];
+    return num | (nmx << 16);
+}
+
+/*
+ * acp_bitmap_alloc - allocate `need` CONTIGUOUS free blocks from the volume's
+ * BITMAP.SYS storage bitmap and return the run's start LBN. Reads BITMAP.SYS's
+ * FH2 (FID 2, header at idx_lbn+1), builds its VBN->LBN window (VBN1 = SCB,
+ * VBN2.. = the storage bitmap data blocks), scans whole-volume bit N (== LBN N,
+ * cluster factor 1) for a run of `need` set (FREE) bits, and clears them (marks
+ * ALLOCATED) on disk. SS$_DEVICEFULL if no such run exists; SS$_DEVNOTMOUNT on a
+ * block-read/write or map failure. Every bitmap FORMAT fact is the codec's
+ * (ods2_sbm_* / ods2_fh2_map_walk); this only sequences the raw block I/O.
+ *
+ * CONCURRENCY (design §4.7): the allocate/read-modify-write span is NOT yet
+ * serialized against a second concurrent writer -- the VMS-authentic mechanism
+ * is the per-volume DLM synchronization lock (vms-233), a LATER rung. Single-
+ * writer is acceptable for now and stated rather than faked (CLAUDE.md Rule 10):
+ * no in-kernel flock stand-in is built; the DLM lock supersedes this.
+ */
+static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
+                                 struct acp_rw_scratch *s,
+                                 uint32_t need, uint32_t *lbn_out)
+{
+    struct acp_winbuild wb;
+    struct acp_win_ext  bmwin[ACP_WINDOW_MAX];
+    uint32_t bmhdr_lbn;
+    uint32_t b, run_start = 0, run_len = 0, cur_bmvbn = 0;
+    uint32_t i;
+    int loaded = 0, found = 0;
+
+    if (need == 0)
+        return SS__BADPARAM;
+
+    /* BITMAP.SYS (FID 2) primary header, the INDEXF arithmetic (idx_lbn base). */
+    bmhdr_lbn = snap->idx_lbn + (ODS2_FID_BITMAP - 1u);
+    if (exec_blockdev_read_block(snap->backing_major, snap->backing_minor,
+                                 bmhdr_lbn, s->bmhdr, ACP_BLOCK_SIZE) != 0)
+        return SS__DEVNOTMOUNT;             /* cannot read BITMAP.SYS header */
+
+    wb.win = bmwin;
+    wb.max = ACP_WINDOW_MAX;
+    wb.n = 0;
+    wb.next_vbn = 1;
+    wb.overflow = 0;
+    if (ods2_fh2_map_walk(s->bmhdr, acp_winbuild_cb, &wb, NULL) != ODS2_OK ||
+        wb.n == 0)
+        return SS__DEVNOTMOUNT;
+
+    /* Scan for a run of `need` consecutive free blocks. Bit 0 (LBN 0, the boot
+     * block) is never a data block; the reserved region is already marked used
+     * in the bitmap, so the scan simply skips it. */
+    for (b = 1; b < snap->volsize; b++) {
+        uint32_t bmvbn = 2u + b / ODS2_SBM_BITS_PER_BLOCK;
+        uint32_t lbn;
+
+        if (!loaded || bmvbn != cur_bmvbn) {
+            lbn = acp_window_map_vbn(bmwin, wb.n, bmvbn);
+            if (lbn == 0)
+                break;                      /* past the bitmap's coverage */
+            if (exec_blockdev_read_block(snap->backing_major, snap->backing_minor,
+                                         lbn, s->bmblk, ACP_BLOCK_SIZE) != 0)
+                return SS__DEVNOTMOUNT;
+            cur_bmvbn = bmvbn;
+            loaded = 1;
+        }
+        if (ods2_sbm_block_bit_free(s->bmblk, b % ODS2_SBM_BITS_PER_BLOCK)) {
+            if (run_len == 0)
+                run_start = b;
+            run_len++;
+            if (run_len == need) {
+                found = 1;
+                break;
+            }
+        } else {
+            run_len = 0;
+        }
+    }
+    if (!found)
+        return SS__DEVICEFULL;              /* no contiguous free run -- honest */
+
+    /* Mark the run allocated (bit -> 0), one bitmap block RMW per bit (need is
+     * small); roll back on a write failure so no block leaks. */
+    for (i = 0; i < need; i++) {
+        uint32_t bit = run_start + i;
+        uint32_t bmvbn = 2u + bit / ODS2_SBM_BITS_PER_BLOCK;
+        uint32_t lbn = acp_window_map_vbn(bmwin, wb.n, bmvbn);
+
+        if (lbn == 0 ||
+            exec_blockdev_read_block(snap->backing_major, snap->backing_minor,
+                                     lbn, s->bmblk, ACP_BLOCK_SIZE) != 0) {
+            return SS__DEVNOTMOUNT;
+        }
+        ods2_sbm_block_alloc(s->bmblk, bit % ODS2_SBM_BITS_PER_BLOCK);
+        if (exec_blockdev_write_block(snap->backing_major, snap->backing_minor,
+                                      lbn, s->bmblk, ACP_BLOCK_SIZE) != 0)
+            return SS__DEVNOTMOUNT;
+    }
+
+    /*
+     * Zero-fill the freshly allocated run on disk so a caller's write that does
+     * not fully cover it (a partial tail, or a gap between old EOF and the write
+     * position) never exposes stale on-device content -- the data-write loop
+     * then overwrites whatever it does cover. (s->blk is reused as the zero
+     * source; the write loop re-fills it per block afterwards.)
+     */
+    memset(s->blk, 0, ACP_BLOCK_SIZE);
+    for (i = 0; i < need; i++) {
+        if (exec_blockdev_write_block(snap->backing_major, snap->backing_minor,
+                                      run_start + i, s->blk, ACP_BLOCK_SIZE) != 0)
+            return SS__DEVNOTMOUNT;
+    }
+
+    *lbn_out = run_start;
+    return SS__NORMAL;
+}
+#endif /* OVMX_ODS2_KERNEL */
+
+/*
+ * IO$_WRITEVBLK: write `length` bytes at {VBN, offset} through the channel
+ * window to the mapped LBNs. A write whose end lies past the file's highest
+ * allocated VBN triggers an IMPLICIT EXTEND (BITMAP.SYS allocation, FH2 map +
+ * EOF/HIBLK grow, window update). Fail-honest: a channel accessed READ-ONLY is
+ * SS$_NOPRIV; a full extent map / no free blocks is SS$_DEVICEFULL; an invalid
+ * channel/no accessed file is SS$_IVCHAN/SS$_FILNOTACC.
+ */
+long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_acp_rw_args args;
+    struct acp_rw_scratch *s;
+    struct acp_chan_snap *snap;
+    struct acp_win_ext lwin[ACP_WINDOW_MAX + 1];
+    uint32_t lwin_n;
+    uint32_t status, start_byte, end_byte, old_valid, old_hiblk, last_vbn;
+    uint32_t new_hiblk, new_valid, new_efblk, done_bytes;
+    uint16_t new_ffbyte;
+    uint32_t extended = 0;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    if (args.vbn == 0 || args.offset >= ACP_BLOCK_SIZE ||
+        args.length > ACP_RW_MAX_XFER) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+
+    s = exec_zalloc(sizeof(*s));
+    if (!s)
+        return -ENOMEM;
+    snap = &s->snap;
+
+    status = acp_chan_snapshot(proc, args.chan, snap);
+    if (status != SS__NORMAL) {
+        args.status = status;
+        exec_free(s);
+        goto out;
+    }
+    if (!snap->acc_write) {
+        args.status = SS__NOPRIV;           /* channel accessed read-only */
+        exec_free(s);
+        goto out;
+    }
+
+    /* Local window we can extend for mapping the writes (channel copy + at most
+     * one new extent). */
+    lwin_n = snap->win_n;
+    memcpy(lwin, snap->win, lwin_n * sizeof(lwin[0]));
+
+    old_valid  = acp_valid_bytes(snap->efblk, snap->ffbyte);
+    old_hiblk  = acp_win_hiblk(snap->win, snap->win_n);
+    start_byte = (args.vbn - 1u) * ACP_BLOCK_SIZE + args.offset;
+    end_byte   = start_byte + args.length;
+    last_vbn   = args.length ? ((end_byte - 1u) / ACP_BLOCK_SIZE + 1u) : old_hiblk;
+    new_hiblk  = old_hiblk;
+
+    /* ---- implicit EXTEND when the write runs past the allocation ---- */
+    if (last_vbn > old_hiblk) {
+#if defined(OVMX_ODS2_KERNEL)
+        uint32_t need = last_vbn - old_hiblk;
+        uint32_t alloc_lbn = 0;
+
+        if (lwin_n >= ACP_WINDOW_MAX) {
+            args.status = SS__DEVICEFULL;   /* window full -- cannot map more */
+            exec_free(s);
+            goto out;
+        }
+        status = acp_bitmap_alloc(snap, s, need, &alloc_lbn);
+        if (status != SS__NORMAL) {
+            args.status = status;           /* SS$_DEVICEFULL / SS$_DEVNOTMOUNT */
+            exec_free(s);
+            goto out;
+        }
+        /* Append the new extent to the local window (contiguous with the file's
+         * VBN space at old_hiblk+1). */
+        lwin[lwin_n].start_vbn = old_hiblk + 1u;
+        lwin[lwin_n].lbn       = alloc_lbn;
+        lwin[lwin_n].count     = need;
+        lwin_n++;
+        new_hiblk = last_vbn;
+        extended  = need;
+#else
+        /* Codec-free overlay: no accessed file ever reaches here (ACCESS
+         * refuses without the codec), so an extend is unreachable. Refuse. */
+        args.status = SS__DEVNOTMOUNT;
+        exec_free(s);
+        goto out;
+#endif
+    }
+
+    /* New end-of-file position (grows only if the write extends valid data). */
+    new_valid = end_byte > old_valid ? end_byte : old_valid;
+    if (new_valid == 0) {
+        new_efblk = 0;
+        new_ffbyte = 0;
+    } else {
+        new_efblk = (new_valid + ACP_BLOCK_SIZE - 1u) / ACP_BLOCK_SIZE;
+        new_ffbyte = (uint16_t)(new_valid - (new_efblk - 1u) * ACP_BLOCK_SIZE);
+    }
+
+    /* ---- write the data blocks (allocation, if any, is already on disk) ---- */
+    done_bytes = 0;
+    while (done_bytes < args.length) {
+        uint32_t pos = start_byte + done_bytes;
+        uint32_t cur_vbn = pos / ACP_BLOCK_SIZE + 1u;
+        uint32_t blk_off = pos % ACP_BLOCK_SIZE;
+        uint32_t chunk = ACP_BLOCK_SIZE - blk_off;
+        uint32_t lbn;
+
+        if (chunk > args.length - done_bytes)
+            chunk = args.length - done_bytes;
+        lbn = acp_window_map_vbn(lwin, lwin_n, cur_vbn);
+        if (lbn == 0) {
+            args.status = SS__DEVNOTMOUNT;  /* unmapped after extend: corruption */
+            args.xferred = done_bytes;
+            exec_free(s);
+            goto out;
+        }
+        if (blk_off != 0 || chunk != ACP_BLOCK_SIZE) {
+            /* Partial block. A newly-allocated block (past old_hiblk) starts
+             * from zeros -- never stale on-device content; an existing block is
+             * read-modified so bytes outside the write survive. */
+            if (cur_vbn > old_hiblk)
+                memset(s->blk, 0, ACP_BLOCK_SIZE);
+            else if (exec_blockdev_read_block(snap->backing_major,
+                                              snap->backing_minor, lbn,
+                                              s->blk, ACP_BLOCK_SIZE) != 0) {
+                args.status = SS__DEVNOTMOUNT;
+                args.xferred = done_bytes;
+                exec_free(s);
+                goto out;
+            }
+        }
+        if (exec_copyin(s->blk + blk_off,
+                        (const void *)(uintptr_t)(args.buffer + done_bytes),
+                        chunk)) {
+            args.status = SS__ACCVIO;
+            args.xferred = done_bytes;
+            exec_free(s);
+            goto out;
+        }
+        if (exec_blockdev_write_block(snap->backing_major, snap->backing_minor,
+                                      lbn, s->blk, ACP_BLOCK_SIZE) != 0) {
+            args.status = SS__DEVNOTMOUNT;
+            args.xferred = done_bytes;
+            exec_free(s);
+            goto out;
+        }
+        done_bytes += chunk;
+    }
+
+    /* ---- update the file header (FH2) last, so a mid-transfer failure never
+     * advertises valid bytes that were not written ---- */
+#if defined(OVMX_ODS2_KERNEL)
+    if (extended || new_valid != old_valid) {
+        uint32_t hdr_lbn = snap->idx_lbn + (snap->fid_num - 1u);
+
+        if (exec_blockdev_read_block(snap->backing_major, snap->backing_minor,
+                                     hdr_lbn, s->hdr, ACP_BLOCK_SIZE) != 0 ||
+            acp_fh2_self_fidnum(s->hdr) != snap->fid_num) {
+            /* torn/wrong header block -- refuse rather than reseal garbage */
+            args.status = SS__DEVNOTMOUNT;
+            args.xferred = done_bytes;
+            exec_free(s);
+            goto out;
+        }
+        if (extended &&
+            ods2_fh2_map_append(s->hdr, lwin[lwin_n - 1].lbn,
+                                lwin[lwin_n - 1].count) != ODS2_OK) {
+            args.status = SS__DEVICEFULL;   /* FH2 map area full */
+            args.xferred = done_bytes;
+            exec_free(s);
+            goto out;
+        }
+        (void)ods2_fh2_set_eof(s->hdr, new_hiblk, new_efblk, new_ffbyte);
+        ods2_fh2_reseal(s->hdr);
+        if (exec_blockdev_write_block(snap->backing_major, snap->backing_minor,
+                                      hdr_lbn, s->hdr, ACP_BLOCK_SIZE) != 0) {
+            args.status = SS__DEVNOTMOUNT;
+            args.xferred = done_bytes;
+            exec_free(s);
+            goto out;
+        }
+    }
+#endif
+
+    /* ---- reflect the new extent + EOF back onto the channel so a following
+     * IO$_READVBLK on the SAME channel sees the grown file without re-ACCESS ---- */
+    {
+        struct vms_acp_chan *ch;
+        exec_lock(&proc->chan_lock);
+        ch = acp_chan_find_locked(proc, args.chan);
+        if (ch && ch->file_accessed &&
+            ((uint32_t)ch->acc_fid_num | ((uint32_t)ch->acc_fid_nmx << 16))
+                == snap->fid_num) {
+            if (extended && ch->win_n < ACP_WINDOW_MAX) {
+                ch->win[ch->win_n] = lwin[lwin_n - 1];
+                ch->win_n++;
+            }
+            ch->acc_efblk  = new_efblk;
+            ch->acc_ffbyte = new_ffbyte;
+        }
+        exec_unlock(&proc->chan_lock);
+    }
+
+    args.xferred   = done_bytes;
+    args.new_hiblk = new_hiblk;
+    args.new_efblk = new_efblk;
+    args.extended  = extended;
+    args.status    = SS__NORMAL;
+    exec_free(s);
+
+out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;

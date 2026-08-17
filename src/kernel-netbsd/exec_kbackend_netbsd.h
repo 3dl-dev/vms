@@ -505,6 +505,29 @@ exec_blockdev_read_block(unsigned int major_, unsigned int minor_,
 	return -1;   /* not readable (contract-only twin) */
 }
 
+/* WRITE one 512-byte block to a backing block device (vms-c60; the write twin of
+ * the read stub above and its contract-only NetBSD twin, for the same reason:
+ * the only caller, the Files-11 ODS-2 ACP IO$_WRITEVBLK / implicit-extend in
+ * kernel-core/vmsfs_acp.c, is not in this module's SRCS yet, so this is
+ * type-checked at most and never run on NetBSD). The REAL NetBSD binding opens
+ * the block device by dev_t (bdevsw_lookup + the devsw d_open) and commits the
+ * block through the buffer cache (bwrite(9) on a getblk(9)'d device buffer) --
+ * the NetBSD twin of Linux bdev_open_by_dev + a REQ_OP_WRITE bio. Until devtab
+ * lands on NetBSD this compile-safe stub touches no device internals and reports
+ * failure, naming its real source here (INV-6 / Rule 11: it writes nothing and
+ * fabricates nothing). */
+static __inline int
+exec_blockdev_write_block(unsigned int major_, unsigned int minor_,
+			  uint64_t lbn, const void *buf, size_t buflen)
+{
+	(void)major_;
+	(void)minor_;
+	(void)lbn;
+	(void)buf;
+	(void)buflen;
+	return -1;   /* not writable (contract-only twin) */
+}
+
 /* ---- 11. primary Ethernet net device (vms-9d2; see exec_kbackend.h) ----
  *
  * COMPILE STATUS, and why this side is a contract-only twin (the exec_blockdev

@@ -304,6 +304,22 @@
  *        (following the exec_blockdev_lookup precedent -- type-checked, never
  *        run, and names its real source in the backend comment).
  *
+ *   int exec_blockdev_write_block(unsigned int major, unsigned int minor,
+ *                                 uint64_t lbn, const void *buf, size_t buflen)
+ *        WRITE exactly one 512-byte logical block at `lbn` to (major, minor)
+ *        from `buf` (>= ODS2_BLOCK_SIZE == 512 bytes). Returns 0 on success,
+ *        nonzero on any failure. The write twin of exec_blockdev_read_block, for
+ *        the Files-11 ODS-2 ACP IO$_WRITEVBLK and implicit-extend path (vms-c60):
+ *        the executive writes a file's mapped LBNs, the BITMAP.SYS storage
+ *        bitmap, and the FH2 header back to the RAW backing device -- the write
+ *        half of the ACP the read half already does in the executive (CLAUDE.md
+ *        Rule 11 / INV-6, never in a process). MAY SLEEP; call it only from
+ *        process context with no exec_lock held. Linux: bdev opened READ-WRITE,
+ *        non-exclusively (same version-guarded open split as the read twin) + a
+ *        SYNCHRONOUS write bio (submit_bio_wait, REQ_OP_WRITE), not the buffer
+ *        cache, for the same raw-disk / no-mounted-super_block reason. NetBSD:
+ *        the documented contract-only twin until devtab joins the module's SRCS.
+ *
  * 9. Store/load memory barriers  (vms-d61; called ONLY from a facility that
  *    publishes a lock-free snapshot to userspace -- today the logical-name
  *    arena's seqlock in vms_lnm.c). These are the ordering primitives a

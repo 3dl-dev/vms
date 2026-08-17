@@ -494,6 +494,7 @@ mmk-build-image-not-activated
 acp-assign-unmounted-fabricates-channel
 acp-mount-nonods2-accepted
 acp-access-window-vbn-offbyone
+acp-writevb-extend-alloc-offbyone
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -4854,6 +4855,23 @@ EOF
                       ;;
         esac;;
 
+    acp-writevb-extend-alloc-offbyone)
+        case "$_f" in
+        facility)     echo "Files-11 (ODS-2) ACP IO\$_WRITEVBLK implicit extend (a write past EOF allocates from BITMAP.SYS and appends a retrieval pointer to the file's FH2 so the grown allocation PERSISTS), vms-c60, epic vms-208";;
+        targets)      echo "vmsfs/ods2/ods2_edit.c";;
+        suites_red)   echo "test_syssvc_acp_rw";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ods2_fh2_map_append() -- the pure codec helper that records a newly allocated extent in the file header's FM2 retrieval map -- encodes the extent's LBN as lbn+1 instead of lbn. The IO\$_WRITEVBLK extend path writes the caller's data to the LBN the allocator actually handed out and appends that SAME LBN to the in-memory channel window, so a read on the SAME channel (in-memory window) is correct; but the extent PERSISTED to the on-disk FH2 now points one block too high. After the file is DEACCESSed and re-ACCESSed, the window is rebuilt from the corrupted on-disk map, so IO\$_READVBLK of the extended VBN resolves to the wrong LBN and does not read the data back. This is exactly the property the implicit extend exists to provide -- that the grown allocation is durable, not a per-open illusion (INV-6) -- so only the re-ACCESS read-back assertion can tell the difference: the same-channel read (before deaccess) and the FH2 EOF/HIBLK assertions (set by ods2_fh2_set_eof, untouched) all stay green.";;
+        require_fail) cat <<'EOF'
+after DEACCESS + re-ACCESS, the extended VBN 35 STILL reads its pattern (allocation persisted)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -6540,6 +6558,17 @@ apply_edit() {
         # paths correct. After substitution no `c->bv, ext->lbn + k,` is left
         # (now `+ k + 1,`) -- the no-op the idempotency selftest requires.
         sed -i 's|c->bv, ext->lbn + k,|c->bv, ext->lbn + k + 1, /* NEGCTL ods2-read-content-vbn */|' "$_file";;
+
+    acp-writevb-extend-alloc-offbyone)
+        # UNIQUE TEXT: ods2_fh2_map_append()'s format-1 low-LBN word encode
+        # (`w1 = (uint16_t)(lbn & 0xFFFF);`) occurs once in ods2_edit.c. Encoding
+        # (lbn + 1) records the newly allocated extent ONE LBN too high in the
+        # on-disk FH2 map, while the IO$_WRITEVBLK path writes the data (and its
+        # in-memory channel window) at the correct LBN -- so only the re-ACCESS
+        # read-back (window rebuilt from the corrupted on-disk map) reads the
+        # wrong block. After substitution no `(lbn & 0xFFFF)` is left (now
+        # `((lbn + 1u) & 0xFFFF)`) -- the no-op the idempotency selftest requires.
+        sed -i 's|w1 = (uint16_t)(lbn \& 0xFFFF);|w1 = (uint16_t)((lbn + 1u) \& 0xFFFF); /* NEGCTL acp-writevb-extend-alloc-offbyone */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

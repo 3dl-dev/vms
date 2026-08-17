@@ -799,5 +799,17 @@ uint32_t vms_kif_acp_assign(const char *devnam, uint32_t *exec_chan);
  * of vms_kif_acp_access above, same reason, same test. */
 uint32_t vms_kif_acp_access(struct vms_acp_access_args *args);
 uint32_t vms_kif_acp_deaccess(uint32_t chan);
+/*
+ * Virtual-block transfer on an accessed file channel ({vbn,offset,length}
+ * through the window); a write past EOF implicitly extends (BITMAP.SYS
+ * allocation + FH2 grow). args carries the transfer control fields + a user data
+ * `buffer` pointer; see src/kernel/vms_acp.h. Fail-honest (SS$_NOSUCHDEV if
+ * /dev/vms is absent). Exercised only by tests/qemu/test_syssvc_acp_rw.c against
+ * a real /dev/vms until the RMS-over-$QIO rung wires $GET/$PUT to them.
+ * OVMX-UNWIRED: vms_kif_acp_readvb (vms-c60) -- no product caller yet; RMS $GET reaches it on the RMS-over-$QIO rung
+ * OVMX-UNWIRED: vms_kif_acp_writevb (vms-c60) -- no product caller yet; RMS $PUT reaches it on the RMS-over-$QIO rung
+ */
+uint32_t vms_kif_acp_readvb(struct vms_acp_rw_args *args);
+uint32_t vms_kif_acp_writevb(struct vms_acp_rw_args *args);
 
 #endif /* _VMS_KIF_H */

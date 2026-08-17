@@ -2180,3 +2180,27 @@ uint32_t vms_kif_acp_deaccess(uint32_t chan)
 
     return args.status;
 }
+
+uint32_t vms_kif_acp_readvb(struct vms_acp_rw_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!acp_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_ACP_READVBLK, args);
+    return args->status;
+}
+
+uint32_t vms_kif_acp_writevb(struct vms_acp_rw_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!acp_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_ACP_WRITEVBLK, args);
+    return args->status;
+}

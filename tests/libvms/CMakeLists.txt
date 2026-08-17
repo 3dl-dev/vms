@@ -316,6 +316,12 @@ target_include_directories(test_libvms_sysuaf_write_veracity PRIVATE
 )
 target_link_libraries(test_libvms_sysuaf_write_veracity PRIVATE
     vms
+    # Bind rms_textfile_open()'s WEAK RMS references so SYSUAF is read the same
+    # RMS way LOGINOUT/DCL read it; with no /dev/vms the vms-5f0 legacy defer
+    # serves it over POSIX (INV-6). --no-as-needed forces the DT_NEEDED: the
+    # references are weak-only, so the default --as-needed would drop the lib
+    # (LOGINOUT/DCL keep it via strong RMS refs elsewhere; this test has none).
+    -Wl,--no-as-needed vmsrms -Wl,--as-needed
     vmsfs
     vmslnm
     pthread
@@ -342,6 +348,10 @@ target_include_directories(test_libvms_accounting_veracity PRIVATE
 )
 target_link_libraries(test_libvms_accounting_veracity PRIVATE
     vms
+    # Bind rms_textfile's WEAK RMS refs (accounting state is read/written the RMS
+    # way); vms-5f0 legacy defer serves it over POSIX when /dev/vms is absent
+    # (INV-6). --no-as-needed forces the otherwise-dropped weak-only DT_NEEDED.
+    -Wl,--no-as-needed vmsrms -Wl,--as-needed
     vmsfs
     vmslnm
     pthread

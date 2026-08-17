@@ -55,6 +55,32 @@
 #include <string.h>
 #include "rms/rms.h"
 
+/* Both search backends are compiled below (vms-5f0). The POSIX passthrough is
+ * the netbsd-vax cross's backend AND the __linux__ atomic-flip defer: when the
+ * executive / /dev/vms is absent (host ctest, plain-container gates) $SEARCH
+ * over the ACP would fail RMS$_DNF, so the dispatcher falls back to a readdir()
+ * of the /vms passthrough, exactly as rms_impl_open/create/erase defer. When
+ * /dev/vms IS present the ACP backend runs and stays fail-honest (INV-6). */
+#include <dirent.h>
+#include <fnmatch.h>
+#include "vmsfs/filespec.h"
+
+/* First member of BOTH $SEARCH context layouts, so the rms_impl_search /
+ * rms_search_fid / rms_search_end dispatchers can route a continuation call to
+ * the backend that opened the context (0 = ACP, 1 = POSIX). */
+struct search_ctx_hdr { int is_posix; };
+
+static uint32_t rms_posix_search(void *fab_ptr);
+static int      rms_posix_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,
+                                     uint8_t *rvn, uint8_t *nmx);
+static void     rms_posix_search_end(void *nam_ptr);
+#if defined(__linux__)
+static uint32_t rms_acp_search(void *fab_ptr);
+static int      rms_acp_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,
+                                   uint8_t *rvn, uint8_t *nmx);
+static void     rms_acp_search_end(void *nam_ptr);
+#endif
+
 #if defined(__linux__)
 
 #include "vms_kif.h"     /* Files-11 ODS-2 ACP over /dev/vms (vms_kif_acp_*) */
@@ -66,7 +92,8 @@
  * $ASSIGNed channel); this context only holds the channel plus the pieces
  * needed to reconstruct the resultant VMS spec and the last matched FID.
  */
-struct search_context {
+struct acp_search_context {
+    int      is_posix;          /* search_ctx_hdr discriminator: 0 == ACP     */
     uint32_t chan;              /* executive channel $ASSIGNed to the volume */
     int      assigned;          /* 1 once the channel is $ASSIGNed           */
     int      opened;            /* 1 once the wildcard context is (re)opened  */
@@ -129,7 +156,7 @@ static void search_split(const char *spec, char *dev, size_t devsz,
 }
 
 /* Release the executive channel behind a search context and free it. */
-static void search_ctx_free(struct search_context *ctx)
+static void search_ctx_free(struct acp_search_context *ctx)
 {
     if (!ctx) return;
     if (ctx->assigned) vms_kif_dassgn(ctx->chan);
@@ -149,7 +176,7 @@ static uint32_t rms_acp_search_status(uint32_t ss)
     }
 }
 
-static uint32_t rms_impl_search(void *fab_ptr)
+static uint32_t rms_acp_search(void *fab_ptr)
 {
     struct FAB *fab = (struct FAB *)fab_ptr;
     if (!fab || fab->fab$b_bid != FAB$C_BID) {
@@ -162,7 +189,7 @@ static uint32_t rms_impl_search(void *fab_ptr)
         return RMS$_NAM;
     }
 
-    struct search_context *ctx = (struct search_context *)nam->nam$$l_context;
+    struct acp_search_context *ctx = (struct acp_search_context *)nam->nam$$l_context;
     struct vms_acp_acpcontrol_args a;
     uint32_t st;
 
@@ -183,7 +210,7 @@ static uint32_t rms_impl_search(void *fab_ptr)
             return RMS$_SYN;
         }
 
-        ctx = calloc(1, sizeof(struct search_context));
+        ctx = calloc(1, sizeof(struct acp_search_context));
         if (!ctx) { fab->fab$l_sts = RMS$_DME; return RMS$_DME; }
 
         search_split(expanded, ctx->devnam, sizeof(ctx->devnam),
@@ -277,13 +304,13 @@ static uint32_t rms_impl_search(void *fab_ptr)
  * block's active wildcard context (DIRECTORY /FULL emits the real FID). Returns
  * 1 and fills the num/seq/rvn/nmx outputs if a match FID is available, else 0.
  */
-int rms_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,
-                   uint8_t *rvn, uint8_t *nmx)
+static int rms_acp_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,
+                              uint8_t *rvn, uint8_t *nmx)
 {
     struct NAM *nam = (struct NAM *)nam_ptr;
     if (!nam || nam->nam$b_bid != NAM$C_BID || !nam->nam$$l_context)
         return 0;
-    struct search_context *ctx = (struct search_context *)nam->nam$$l_context;
+    struct acp_search_context *ctx = (struct acp_search_context *)nam->nam$$l_context;
     if (num) *num = ctx->fid_num;
     if (seq) *seq = ctx->fid_seq;
     if (rvn) *rvn = ctx->fid_rvn;
@@ -292,27 +319,29 @@ int rms_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,
 }
 
 /*
- * rms_search_end - release a NAM block's wildcard search context WITHOUT running
- * it to exhaustion. A caller that stops iterating early (DIRECTORY found what it
- * needed) uses this to $DASSGN the executive channel the context holds -- the
- * normal RMS$_NMF path frees it, but an early stop would otherwise leak it.
+ * rms_acp_search_end - release a NAM block's wildcard search context WITHOUT
+ * running it to exhaustion. A caller that stops iterating early (DIRECTORY found
+ * what it needed) uses this to $DASSGN the executive channel the context holds
+ * -- the normal RMS$_NMF path frees it, but an early stop would otherwise leak.
  */
-void rms_search_end(void *nam_ptr)
+static void rms_acp_search_end(void *nam_ptr)
 {
     struct NAM *nam = (struct NAM *)nam_ptr;
     if (!nam || nam->nam$b_bid != NAM$C_BID || !nam->nam$$l_context)
         return;
-    search_ctx_free((struct search_context *)nam->nam$$l_context);
+    search_ctx_free((struct acp_search_context *)nam->nam$$l_context);
     nam->nam$$l_context = NULL;
 }
 
-#else /* !__linux__ : netbsd-vax standalone cross keeps the POSIX passthrough */
+#endif /* __linux__ ACP $SEARCH backend */
 
-#include <dirent.h>
-#include <fnmatch.h>
-#include "vmsfs/filespec.h"
+/* ==========================================================================
+ * POSIX $SEARCH backend (readdir of the /vms passthrough): the netbsd-vax
+ * cross's backend AND the __linux__ vms-5f0 legacy defer (executive absent).
+ * ========================================================================== */
 
-struct search_context {
+struct posix_search_context {
+    int  is_posix;              /* search_ctx_hdr discriminator: 1 == POSIX */
     DIR *dir;                   /* Open directory handle */
     char directory[1024];       /* Linux directory path being searched */
     char pattern[256];          /* fnmatch-compatible pattern */
@@ -331,7 +360,7 @@ static void vms_to_glob(const char *vms, char *glob, size_t globlen)
     *p = '\0';
 }
 
-static uint32_t rms_impl_search(void *fab_ptr)
+static uint32_t rms_posix_search(void *fab_ptr)
 {
     struct FAB *fab = (struct FAB *)fab_ptr;
     if (!fab || fab->fab$b_bid != FAB$C_BID) {
@@ -344,11 +373,13 @@ static uint32_t rms_impl_search(void *fab_ptr)
         return RMS$_NAM;
     }
 
-    struct search_context *ctx = (struct search_context *)nam->nam$$l_context;
+    struct posix_search_context *ctx =
+        (struct posix_search_context *)nam->nam$$l_context;
 
     if (!ctx) {
-        ctx = calloc(1, sizeof(struct search_context));
+        ctx = calloc(1, sizeof(struct posix_search_context));
         if (!ctx) { fab->fab$l_sts = RMS$_DME; return RMS$_DME; }
+        ctx->is_posix = 1;
 
         char expanded[1024] = "";
         if (nam->nam$l_esa && nam->nam$b_esl > 0) {
@@ -431,26 +462,85 @@ static uint32_t rms_impl_search(void *fab_ptr)
 
 /* No executive FID on the POSIX passthrough -- the resultant filespec carries
  * no genuine File ID (DIRECTORY /FULL omits it), so report "unavailable". */
-int rms_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,
-                   uint8_t *rvn, uint8_t *nmx)
+static int rms_posix_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,
+                                uint8_t *rvn, uint8_t *nmx)
 {
     (void)nam_ptr; (void)num; (void)seq; (void)rvn; (void)nmx;
     return 0;
 }
 
 /* POSIX passthrough: free the readdir context + handle if the caller stops early. */
-void rms_search_end(void *nam_ptr)
+static void rms_posix_search_end(void *nam_ptr)
 {
     struct NAM *nam = (struct NAM *)nam_ptr;
     if (!nam || nam->nam$b_bid != NAM$C_BID || !nam->nam$$l_context)
         return;
-    struct search_context *ctx = (struct search_context *)nam->nam$$l_context;
+    struct posix_search_context *ctx =
+        (struct posix_search_context *)nam->nam$$l_context;
     if (ctx->dir) closedir(ctx->dir);
     free(ctx);
     nam->nam$$l_context = NULL;
 }
 
-#endif /* __linux__ */
+/* ==========================================================================
+ * Public $SEARCH dispatchers: route each call to the ACP or POSIX backend
+ * (vms-5f0). A continuation call (context already open) routes by the context's
+ * is_posix tag; a first call probes the executive on __linux__ -- SS$_NOSUCHDEV
+ * (no /dev/vms) defers to POSIX, otherwise the ACP backend runs. On non-__linux__
+ * there is only the POSIX backend.
+ * ========================================================================== */
+
+static uint32_t rms_impl_search(void *fab_ptr)
+{
+    struct FAB *fab = (struct FAB *)fab_ptr;
+#if defined(__linux__)
+    if (fab && fab->fab$b_bid == FAB$C_BID) {
+        struct NAM *nam = fab->fab$l_nam;
+        if (nam && nam->nam$b_bid == NAM$C_BID && nam->nam$$l_context) {
+            /* Continuation: stay on the backend that opened this context. */
+            return ((struct search_ctx_hdr *)nam->nam$$l_context)->is_posix
+                       ? rms_posix_search(fab_ptr) : rms_acp_search(fab_ptr);
+        }
+    }
+    /* First call: probe the executive. SS$_NOSUCHDEV => /dev/vms absent. */
+    {
+        uint32_t pchan = 0;
+        uint32_t pst = vms_kif_acp_assign(RMS_ACP_DEFAULT_DEV, &pchan);
+        if (pst == SS$_NOSUCHDEV)
+            return rms_posix_search(fab_ptr);
+        if ($VMS_STATUS_SUCCESS(pst))
+            vms_kif_dassgn(pchan);
+    }
+    return rms_acp_search(fab_ptr);
+#else
+    return rms_posix_search(fab_ptr);
+#endif
+}
+
+int rms_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,
+                   uint8_t *rvn, uint8_t *nmx)
+{
+#if defined(__linux__)
+    struct NAM *nam = (struct NAM *)nam_ptr;
+    if (nam && nam->nam$b_bid == NAM$C_BID && nam->nam$$l_context &&
+        ((struct search_ctx_hdr *)nam->nam$$l_context)->is_posix == 0)
+        return rms_acp_search_fid(nam_ptr, num, seq, rvn, nmx);
+#endif
+    return rms_posix_search_fid(nam_ptr, num, seq, rvn, nmx);
+}
+
+void rms_search_end(void *nam_ptr)
+{
+#if defined(__linux__)
+    struct NAM *nam = (struct NAM *)nam_ptr;
+    if (nam && nam->nam$b_bid == NAM$C_BID && nam->nam$$l_context &&
+        ((struct search_ctx_hdr *)nam->nam$$l_context)->is_posix == 0) {
+        rms_acp_search_end(nam_ptr);
+        return;
+    }
+#endif
+    rms_posix_search_end(nam_ptr);
+}
 
 
 /* ============================================================

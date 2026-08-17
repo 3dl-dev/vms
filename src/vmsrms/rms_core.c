@@ -168,6 +168,20 @@ extern uint32_t rms_idx_cleanup(struct FAB *fab);
 /* Forward decl: rms_impl_open falls through to rms_impl_create on FAB$M_CIF,
  * which is defined later in this file. */
 static uint32_t rms_impl_create(void *fab_ptr);
+
+/* vms-5f0 legacy POSIX bodies. These are the pre-flip $OPEN/$CREATE/$ERASE
+ * implementations (a Linux fd + RMS metadata sidecar over the /vms passthrough).
+ * They are the sole record backend on the netbsd-vax standalone cross, and on
+ * __linux__ they back the atomic-flip defer: rms_impl_open/create/erase probe
+ * the executive and, only when /dev/vms is absent (SS$_NOSUCHDEV -- host ctest
+ * and the plain-container self-host/link/activation gates), fall back to these,
+ * exactly as IMGACT's imgsrc_open() defers (commit f2817d31). When /dev/vms IS
+ * present the runtime never reaches them and RMS stays ACP-only, failing honest
+ * (CLAUDE.md Rule 9 / INV-6). */
+static uint32_t rms_posix_open(struct FAB *fab);
+static uint32_t rms_posix_create(struct FAB *fab);
+static uint32_t rms_posix_erase(struct FAB *fab);
+static void rms_posix_close(struct FAB *fab, int deleting, uint32_t *close_sts);
 /* rms_resolve_spec (filespec + default merge) is defined further down; the ACP
  * lifecycle helpers below use it to apply fab$l_dna defaults. */
 static int rms_resolve_spec(const char *spec, const char *default_spec,
@@ -477,7 +491,73 @@ static void rms_acp_close_handle(rms_file_t *h)
     if (h->assigned)  vms_kif_dassgn(h->chan);
     free(h);
 }
+
+/*
+ * rms_acp_absent - vms-5f0 executive-presence probe. A cheap $ASSIGN that comes
+ * back SS$_NOSUCHDEV means /dev/vms / the Files-11 ACP is unreachable (host
+ * ctest, plain-container self-host/link gates); RMS then defers $OPEN/$CREATE/
+ * $ERASE to its legacy POSIX bodies, exactly as IMGACT's imgsrc_open() defers.
+ * Any other status (success, or a real ACP error) means the executive IS
+ * present, so the runtime stays ACP-only with no POSIX fallback (Rule 9/INV-6).
+ * Probed up front -- BEFORE rms_acp_specs_from_fab, whose ODS-2 candidate walk
+ * needs the mounted volume and cannot resolve without the executive.
+ */
+static int rms_acp_absent(void)
+{
+    uint32_t chan = 0;
+    uint32_t st = vms_kif_acp_assign(RMS_ACP_DEFAULT_DEV, &chan);
+    if (st == SS$_NOSUCHDEV)
+        return 1;
+    if ($VMS_STATUS_SUCCESS(st))
+        vms_kif_dassgn(chan);
+    return 0;
+}
 #endif /* __linux__ ACP lifecycle helpers */
+
+/*
+ * rms_posix_file_attr - legacy passthrough attribute lookup (vms-5f0): stat()
+ * the resolved Linux path. The netbsd-vax cross's sole implementation, and the
+ * __linux__ executive-absent defer. No genuine FID; record format is not on
+ * disk here. A VMS directory "DEV:[p]C.DIR" maps (via vmsfs_to_linux_path) to
+ * the Linux directory that backs it, so is_directory is reported correctly.
+ */
+static uint32_t rms_posix_file_attr(const char *vmsspec, struct rms_fileattr *out)
+{
+    char linux_path[1024];
+    struct stat sbuf;
+    if (!$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(vmsspec, linux_path,
+                                                 sizeof(linux_path))))
+        return RMS$_SYN;
+    if (stat(linux_path, &sbuf) != 0) {
+        /*
+         * A VMS directory "DEV:[p]C.DIR" translates to the FILENAME
+         * ".../c.dir", but on the passthrough a VMS directory IS a real Linux
+         * directory ".../c" (no .dir suffix). When the .dir file itself is
+         * absent, retry the suffix-stripped path as a directory so SET DEFAULT's
+         * dir-existence probe (set_default_dir_exists -> rms_file_attr on the
+         * .DIR file) resolves exactly as it did pre-flip (vms-5f0).
+         */
+        size_t n = strlen(linux_path);
+        if (n > 4 && (strcmp(linux_path + n - 4, ".dir") == 0 ||
+                      strcmp(linux_path + n - 4, ".DIR") == 0)) {
+            char dirpath[1024];
+            memcpy(dirpath, linux_path, n - 4);
+            dirpath[n - 4] = '\0';
+            if (stat(dirpath, &sbuf) == 0 && S_ISDIR(sbuf.st_mode)) {
+                out->is_directory = 1;
+                out->rfm = FAB$C_STMLF;
+                return RMS$_NORMAL;
+            }
+        }
+        return RMS$_FNF;
+    }
+    out->efblk = (uint32_t)((sbuf.st_size + 511) / 512) + 1u;
+    out->hiblk = (uint32_t)((sbuf.st_size + 511) / 512);
+    out->ffbyte = (uint16_t)(sbuf.st_size % 512);
+    out->is_directory = S_ISDIR(sbuf.st_mode) ? 1 : 0;
+    out->rfm = FAB$C_STMLF;
+    return RMS$_NORMAL;
+}
 
 /*
  * rms_file_attr - genuine ODS-2 header attributes for a filespec (vms-481).
@@ -491,6 +571,10 @@ uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out)
     memset(out, 0, sizeof(*out));
 
 #if defined(__linux__)
+    /* ATOMIC-FLIP DEFER (vms-5f0): executive absent => legacy POSIX stat. */
+    if (rms_acp_absent())
+        return rms_posix_file_attr(vmsspec, out);
+
     struct FAB tfab = cc$rms_fab;
     struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
     struct vms_acp_access_args a;
@@ -552,21 +636,8 @@ uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out)
     vms_kif_dassgn(chan);
     return RMS$_NORMAL;
 #else
-    /* netbsd-vax standalone cross: no ACP yet (vms-d5d) -- stat() the resolved
-     * passthrough path. No genuine FID; record format is not on disk here. */
-    char linux_path[1024];
-    struct stat sbuf;
-    if (!$VMS_STATUS_SUCCESS(vmsfs_to_linux_path(vmsspec, linux_path,
-                                                 sizeof(linux_path))))
-        return RMS$_SYN;
-    if (stat(linux_path, &sbuf) != 0)
-        return RMS$_FNF;
-    out->efblk = (uint32_t)((sbuf.st_size + 511) / 512) + 1u;
-    out->hiblk = (uint32_t)((sbuf.st_size + 511) / 512);
-    out->ffbyte = (uint16_t)(sbuf.st_size % 512);
-    out->is_directory = S_ISDIR(sbuf.st_mode) ? 1 : 0;
-    out->rfm = FAB$C_STMLF;
-    return RMS$_NORMAL;
+    /* netbsd-vax standalone cross: no ACP yet (vms-d5d) -- passthrough stat. */
+    return rms_posix_file_attr(vmsspec, out);
 #endif
 }
 
@@ -620,30 +691,53 @@ static int rms_strip_version(const char *filename, char *out, size_t outlen)
  *
  * Returns 0 if the path is within the VMS root, -1 if it escapes.
  */
+/*
+ * rms_sysdisk_root - the boundary root a resolved path must stay within.
+ *
+ * It is wherever SYSDISK (DKA0) is ACTUALLY mounted -- the same device-table
+ * entry vmsfs_to_linux_path() translates through -- so a caller that remaps
+ * DKA0: to a private root (a test's mkdtemp namespace) is honoured exactly as
+ * the runtime's /vms is. Falls back to the compile-time SYSDISK_MOUNT when the
+ * device is not registered (before the device table is bootstrapped). This is
+ * NOT a weakening: the path is still confined to the one registered SYSDISK
+ * mount; it just reads that mount from the table instead of hardcoding /vms.
+ */
+static void rms_sysdisk_root(char *out, size_t outsz)
+{
+    if (!$VMS_STATUS_SUCCESS(vmsfs_device_resolve(SYSDISK_DEVICE, out, outsz)) ||
+        out[0] == '\0') {
+        strncpy(out, SYSDISK_MOUNT, outsz - 1);
+        out[outsz - 1] = '\0';
+    }
+}
+
 static int rms_validate_path_boundary(const char *path)
 {
     if (!path || !path[0])
         return -1;
 
-    /* Only validate absolute paths under VMS root */
+    /* Only validate absolute paths under the SYSDISK root */
     if (path[0] != '/')
         return 0;
+
+    char root[PATH_MAX];
+    rms_sysdisk_root(root, sizeof(root));
+    size_t root_len = strlen(root);
 
     char resolved[PATH_MAX];
     if (realpath(path, resolved) != NULL) {
         /* File exists — check the canonical path */
-        if (strncmp(resolved, SYSDISK_MOUNT, strlen(SYSDISK_MOUNT)) != 0)
+        if (strncmp(resolved, root, root_len) != 0)
             return -1;
-        /* Ensure it's actually under /vms and not just /vmsXYZ */
-        size_t mount_len = strlen(SYSDISK_MOUNT);
-        if (resolved[mount_len] != '\0' && resolved[mount_len] != '/')
+        /* Ensure it's actually under <root> and not just <root>XYZ */
+        if (resolved[root_len] != '\0' && resolved[root_len] != '/')
             return -1;
         return 0;
     }
 
     /*
      * File doesn't exist yet (e.g., $CREATE) — canonicalize the parent
-     * directory and verify it's within the VMS root.
+     * directory and verify it's within the SYSDISK root.
      */
     char pathcopy[PATH_MAX];
     strncpy(pathcopy, path, sizeof(pathcopy) - 1);
@@ -652,16 +746,15 @@ static int rms_validate_path_boundary(const char *path)
     /* Find last slash to get parent directory */
     char *last_slash = strrchr(pathcopy, '/');
     if (!last_slash || last_slash == pathcopy) {
-        /* Root-level path or no slash — not under /vms */
+        /* Root-level path or no slash — not under the SYSDISK root */
         return -1;
     }
     *last_slash = '\0';
 
     if (realpath(pathcopy, resolved) != NULL) {
-        if (strncmp(resolved, SYSDISK_MOUNT, strlen(SYSDISK_MOUNT)) != 0)
+        if (strncmp(resolved, root, root_len) != 0)
             return -1;
-        size_t mount_len = strlen(SYSDISK_MOUNT);
-        if (resolved[mount_len] != '\0' && resolved[mount_len] != '/')
+        if (resolved[root_len] != '\0' && resolved[root_len] != '/')
             return -1;
         return 0;
     }
@@ -1107,14 +1200,13 @@ static uint32_t rms_impl_open(void *fab_ptr)
                           (fab->fab$b_fac & FAB$M_DEL) ||
                           (fab->fab$b_fac & FAB$M_TRN));
 
-        if (fab->fab$b_org == FAB$C_IDX) {
-            /* Indexed-over-ACP (the ODS-2 prologue/bucket index) is a later
-             * rung of epic vms-208: the data fork rides the ACP, but the index
-             * has no ACP home yet. Fail-honest rather than silently serve an
-             * un-persistable index (INV-6). */
-            fab->fab$l_sts = RMS$_ORG;
-            return RMS$_ORG;
-        }
+        /* ATOMIC-FLIP DEFER (vms-5f0): executive absent => legacy POSIX body for
+         * EVERY org, indexed included (its .rms_idx sidecar is the pre-flip
+         * home). Probed BEFORE the ODS-2 candidate walk, which cannot resolve
+         * without the mounted volume. */
+        if (rms_acp_absent())
+            return rms_posix_open(fab);
+
         /* vms-5f0: resolve directory/concealed logicals (SYS$STARTUP:, etc.)
          * to on-volume ODS-2 candidates and try each in search-list order. */
         ncand = rms_acp_specs_from_fab(fab, specs, RMS_ACP_MAX_CANDS);
@@ -1122,6 +1214,14 @@ static uint32_t rms_impl_open(void *fab_ptr)
             fab->fab$l_sts = RMS$_SYN;
             fab->fab$l_stv = 0;
             return RMS$_SYN;
+        }
+        if (fab->fab$b_org == FAB$C_IDX) {
+            /* Indexed-over-ACP (the ODS-2 prologue/bucket index) is a later
+             * rung of epic vms-208: the data fork rides the ACP, but the index
+             * has no ACP home yet. Fail-honest rather than silently serve an
+             * un-persistable index (INV-6). */
+            fab->fab$l_sts = RMS$_ORG;
+            return RMS$_ORG;
         }
         strncpy(fab->_resolved_path, specs[0].name,
                 sizeof(fab->_resolved_path) - 1);
@@ -1151,6 +1251,17 @@ static uint32_t rms_impl_open(void *fab_ptr)
         return RMS$_NORMAL;
     }
 #else
+    return rms_posix_open(fab);
+#endif /* __linux__ */
+}
+
+/*
+ * rms_posix_open - the pre-flip legacy $OPEN body (POSIX fd + metadata sidecar
+ * over the /vms passthrough). The netbsd-vax cross's record backend, and the
+ * __linux__ executive-absent defer target (vms-5f0). See the forward decl.
+ */
+static uint32_t rms_posix_open(struct FAB *fab)
+{
     if (resolve_for_open(fab) < 0) {
         fab->fab$l_sts = RMS$_SYN;
         fab->fab$l_stv = 0;
@@ -1159,11 +1270,9 @@ static uint32_t rms_impl_open(void *fab_ptr)
 
     /* Determine open flags from file access mode */
     int flags = O_RDONLY;
-    int need_write = 0;
     if ((fab->fab$b_fac & FAB$M_PUT) || (fab->fab$b_fac & FAB$M_UPD) ||
         (fab->fab$b_fac & FAB$M_DEL) || (fab->fab$b_fac & FAB$M_TRN)) {
         flags = O_RDWR;
-        need_write = 1;
     }
 
     /*
@@ -1178,7 +1287,7 @@ static uint32_t rms_impl_open(void *fab_ptr)
             case ENOENT:
                 /* If CIF (create-if) option set, try to create */
                 if (fab->fab$l_fop & FAB$M_CIF) {
-                    return rms_impl_create(fab_ptr);
+                    return rms_posix_create(fab);
                 }
                 fab->fab$l_sts = RMS$_FNF;
                 return RMS$_FNF;
@@ -1208,7 +1317,6 @@ static uint32_t rms_impl_open(void *fab_ptr)
     fab->fab$l_sts = RMS$_NORMAL;
     fab->fab$l_stv = 0;
     return RMS$_NORMAL;
-#endif /* __linux__ */
 }
 
 /*
@@ -1235,10 +1343,11 @@ static uint32_t rms_impl_create(void *fab_ptr)
         uint32_t chan = 0, st;
         int ncand;
 
-        if (fab->fab$b_org == FAB$C_IDX) {   /* deferred: see rms_impl_open */
-            fab->fab$l_sts = RMS$_ORG;
-            return RMS$_ORG;
-        }
+        /* ATOMIC-FLIP DEFER (vms-5f0): executive absent => legacy POSIX create,
+         * every org (see rms_impl_open). Probed before the ODS-2 candidate walk. */
+        if (rms_acp_absent())
+            return rms_posix_create(fab);
+
         /* vms-5f0: compose the target through any directory/concealed logical
          * (SYS$SYSTEM:, SYS$MANAGER:, ...) and create in the PRIMARY search-list
          * member -- exactly where VMS places a new file for a search list. */
@@ -1251,6 +1360,10 @@ static uint32_t rms_impl_create(void *fab_ptr)
         strncpy(fab->_resolved_path, sp.name, sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
 
+        if (fab->fab$b_org == FAB$C_IDX) {   /* deferred: see rms_impl_open */
+            fab->fab$l_sts = RMS$_ORG;
+            return RMS$_ORG;
+        }
         st = vms_kif_acp_assign(sp.devnam, &chan);
         if (!$VMS_STATUS_SUCCESS(st)) {
             fab->fab$l_stv = st;
@@ -1312,6 +1425,17 @@ static uint32_t rms_impl_create(void *fab_ptr)
         return RMS$_NORMAL;
     }
 #else
+    return rms_posix_create(fab);
+#endif /* __linux__ */
+}
+
+/*
+ * rms_posix_create - the pre-flip legacy $CREATE body (versioned POSIX file +
+ * metadata sidecar). netbsd-vax record backend / __linux__ defer target
+ * (vms-5f0). See the forward decl.
+ */
+static uint32_t rms_posix_create(struct FAB *fab)
+{
     if (resolve_filename(fab) < 0) {
         fab->fab$l_sts = RMS$_SYN;
         return RMS$_SYN;
@@ -1400,7 +1524,33 @@ static uint32_t rms_impl_create(void *fab_ptr)
     fab->fab$l_sts = RMS$_CREATED;
     fab->fab$l_stv = 0;
     return RMS$_NORMAL;
-#endif /* __linux__ */
+}
+
+/*
+ * rms_posix_close - POSIX teardown for a legacy-defer / netbsd-vax handle:
+ * fsync+close the fd, and on delete-on-close (DLT/TMD) unlink the data file and
+ * its metadata/index sidecars (vms-5f0). A failed fsync surfaces as RMS$_WER.
+ */
+static void rms_posix_close(struct FAB *fab, int deleting, uint32_t *close_sts)
+{
+    if (fab->_rms_file) {
+        int fd = rms_io_posix_fd((rms_file_t *)fab->_rms_file);
+        if (fd >= 0 && fsync(fd) < 0)
+            *close_sts = RMS$_WER;
+        rms_io_posix_unwrap((rms_file_t *)fab->_rms_file);
+        fab->_rms_file = NULL;
+    }
+    if (deleting && fab->_resolved_path[0]) {
+        unlink(fab->_resolved_path);
+        char sidecar[1088];
+        snprintf(sidecar, sizeof(sidecar), "%s%s",
+                 fab->_resolved_path, RMS_SIDECAR_SUFFIX);
+        unlink(sidecar);
+        char idxfile[1088];
+        snprintf(idxfile, sizeof(idxfile), "%s%s",
+                 fab->_resolved_path, RMS_INDEX_SUFFIX);
+        unlink(idxfile);
+    }
 }
 
 /*
@@ -1421,8 +1571,12 @@ static uint32_t rms_impl_close(void *fab_ptr)
     int deleting = (fab->fab$l_fop & FAB$M_DLT) || (fab->fab$l_fop & FAB$M_TMD);
 
 #if defined(__linux__)
-    /* --- ACP path (vms-bc7): IO$_DEACCESS + $DASSGN (+ IO$_DELETE on DLT/TMD) --- */
-    if (fab->_rms_file) {
+    if (fab->_rms_file && ((rms_file_t *)fab->_rms_file)->fd >= 0) {
+        /* vms-5f0 legacy-defer handle: POSIX teardown (fd close + sidecar
+         * unlink on DLT/TMD), identical to the netbsd-vax path below. */
+        rms_posix_close(fab, deleting, &close_sts);
+    } else if (fab->_rms_file) {
+        /* --- ACP path (vms-bc7): IO$_DEACCESS + $DASSGN (+ IO$_DELETE on DLT/TMD) --- */
         rms_file_t *h = (rms_file_t *)fab->_rms_file;
         rms_io_fsync(h);                       /* WRITEVBLK is write-through */
         if (deleting) {
@@ -1442,25 +1596,7 @@ static uint32_t rms_impl_close(void *fab_ptr)
         fab->_rms_file = NULL;
     }
 #else
-    /* --- POSIX path (netbsd-vax standalone; VAX re-targets under vms-d5d) --- */
-    if (fab->_rms_file) {
-        int fd = rms_io_posix_fd((rms_file_t *)fab->_rms_file);
-        if (fd >= 0 && fsync(fd) < 0)
-            close_sts = RMS$_WER;
-        rms_io_posix_unwrap((rms_file_t *)fab->_rms_file);
-        fab->_rms_file = NULL;
-    }
-    if (deleting && fab->_resolved_path[0]) {
-        unlink(fab->_resolved_path);
-        char sidecar[1088];
-        snprintf(sidecar, sizeof(sidecar), "%s%s",
-                 fab->_resolved_path, RMS_SIDECAR_SUFFIX);
-        unlink(sidecar);
-        char idxfile[1088];
-        snprintf(idxfile, sizeof(idxfile), "%s%s",
-                 fab->_resolved_path, RMS_INDEX_SUFFIX);
-        unlink(idxfile);
-    }
+    rms_posix_close(fab, deleting, &close_sts);
 #endif
 
     /*
@@ -1518,6 +1654,11 @@ static uint32_t rms_impl_erase(void *fab_ptr)
         uint32_t chan = 0, st = SS$_NOSUCHFILE;
         int ncand, done = 0;
 
+        /* ATOMIC-FLIP DEFER (vms-5f0): executive absent => legacy POSIX unlink
+         * (see rms_impl_open). Probed before the ODS-2 candidate walk. */
+        if (rms_acp_absent())
+            return rms_posix_erase(fab);
+
         /* vms-5f0: resolve directory/concealed logicals and try each search-
          * list candidate in order; the first that resolves + deletes wins. */
         ncand = rms_acp_specs_from_fab(fab, specs, RMS_ACP_MAX_CANDS);
@@ -1561,6 +1702,16 @@ static uint32_t rms_impl_erase(void *fab_ptr)
         return RMS$_NORMAL;
     }
 #else
+    return rms_posix_erase(fab);
+#endif /* __linux__ */
+}
+
+/*
+ * rms_posix_erase - the pre-flip legacy $ERASE body (unlink data + sidecars).
+ * netbsd-vax record backend / __linux__ defer target (vms-5f0). See fwd decl.
+ */
+static uint32_t rms_posix_erase(struct FAB *fab)
+{
     if (resolve_for_open(fab) < 0) {
         fab->fab$l_sts = RMS$_SYN;
         return RMS$_SYN;
@@ -1602,7 +1753,6 @@ static uint32_t rms_impl_erase(void *fab_ptr)
     fab->fab$l_sts = RMS$_NORMAL;
     fab->fab$l_stv = 0;
     return RMS$_NORMAL;
-#endif /* __linux__ */
 }
 
 /*

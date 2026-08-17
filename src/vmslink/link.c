@@ -212,8 +212,23 @@
  * external-image activation (which matches on the basename, vms-db2) is
  * unaffected by which absolute path is baked.
  */
+/*
+ * The CMake `vmslink` target overrides the interp via -DIMGACT_INTERP_PATH=
+ * <unquoted path> (NOT a -DIMGACT_INTERP="..." string): a quoted string macro
+ * lands in compile_commands.json as \"...\" backslash escapes, which the
+ * kif_caller_census authenticity gate's line reader refuses (vms-5f0). Passing
+ * the path as a bare token and stringifying it here keeps the compile database
+ * escape-free. The standalone native-activation tests build link.c with neither
+ * macro and keep the /vms default, exactly as before.
+ */
 #ifndef IMGACT_INTERP
-#define IMGACT_INTERP "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"
+# ifdef IMGACT_INTERP_PATH
+#  define IMGACT_INTERP_STR_(s) #s
+#  define IMGACT_INTERP_STR(s)  IMGACT_INTERP_STR_(s)
+#  define IMGACT_INTERP IMGACT_INTERP_STR(IMGACT_INTERP_PATH)
+# else
+#  define IMGACT_INTERP "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"
+# endif
 #endif
 
 /* --------------------------------------------------------------------------

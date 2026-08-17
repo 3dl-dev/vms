@@ -31,6 +31,8 @@
  */
 
 #include <string.h>
+#include <unistd.h>
+#include <stdlib.h>
 
 #include "rms_io.h"
 
@@ -67,6 +69,88 @@ off_t rms_io_lseek(rms_file_t *f, off_t offset, int whence)
     return (off_t)f->cursor;
 }
 
+/* ==========================================================================
+ * Backend B: POSIX (pread/pwrite/ftruncate on a bare fd held in the handle).
+ *
+ * Compiled on ALL platforms (vms-5f0). It is the netbsd-vax standalone cross's
+ * sole record backend AND the __linux__ atomic-flip legacy defer: when the
+ * executive / /dev/vms is absent (host ctest, plain-container self-host & link
+ * gates) rms_impl_open/create wrap a POSIX fd here and rms_io_* dispatches to
+ * this backend on f->fd >= 0. An ACP handle carries f->fd == -1, so a runtime
+ * with /dev/vms present never lands here and stays ACP-only (Rule 9 / INV-6).
+ * ========================================================================== */
+
+static ssize_t rms_io_read_posix(rms_file_t *f, void *buf, size_t n)
+{
+    ssize_t r;
+    if (!f || f->fd < 0)
+        return -1;
+    r = pread(f->fd, buf, n, (off_t)f->cursor);
+    if (r > 0)
+        f->cursor += (uint64_t)r;
+    return r;
+}
+
+static ssize_t rms_io_write_posix(rms_file_t *f, const void *buf, size_t n)
+{
+    ssize_t r;
+    if (!f || f->fd < 0)
+        return -1;
+    r = pwrite(f->fd, buf, n, (off_t)f->cursor);
+    if (r > 0) {
+        f->cursor += (uint64_t)r;
+        if (f->cursor > f->eof)
+            f->eof = f->cursor;
+    }
+    return r;
+}
+
+static int rms_io_ftruncate_posix(rms_file_t *f, off_t length)
+{
+    if (!f || f->fd < 0 || length < 0)
+        return -1;
+    if (ftruncate(f->fd, length) < 0)
+        return -1;
+    f->eof = (uint64_t)length;
+    return 0;
+}
+
+static int rms_io_fsync_posix(rms_file_t *f)
+{
+    if (!f || f->fd < 0)
+        return -1;
+    return fsync(f->fd);
+}
+
+rms_file_t *rms_io_posix_wrap(int fd)
+{
+    rms_file_t *f = (rms_file_t *)calloc(1, sizeof(*f));
+    off_t end;
+    if (!f)
+        return NULL;
+    f->fd = fd;
+    f->accessed = 1;
+    f->writable = 1;
+    end = lseek(fd, 0, SEEK_END);
+    f->eof = (end > 0) ? (uint64_t)end : 0;
+    f->cursor = 0;
+    return f;
+}
+
+void rms_io_posix_unwrap(rms_file_t *f)
+{
+    if (!f)
+        return;
+    if (f->fd >= 0)
+        close(f->fd);
+    free(f);
+}
+
+int rms_io_posix_fd(rms_file_t *f)
+{
+    return f ? f->fd : -1;
+}
+
 #if defined(__linux__)
 /* ==========================================================================
  * Backend A: Files-11 ODS-2 ACP (the product runtime, Rule 9).
@@ -77,7 +161,7 @@ off_t rms_io_lseek(rms_file_t *f, off_t offset, int whence)
 
 #define RMS_IO_MAX_XFER  (1u << 20)   /* mirror ACP_RW_MAX_XFER (1 MiB) */
 
-ssize_t rms_io_read(rms_file_t *f, void *buf, size_t n)
+static ssize_t rms_io_read_acp(rms_file_t *f, void *buf, size_t n)
 {
     uint8_t *p = (uint8_t *)buf;
     size_t done = 0;
@@ -121,7 +205,7 @@ ssize_t rms_io_read(rms_file_t *f, void *buf, size_t n)
     return (ssize_t)done;
 }
 
-ssize_t rms_io_write(rms_file_t *f, const void *buf, size_t n)
+static ssize_t rms_io_write_acp(rms_file_t *f, const void *buf, size_t n)
 {
     const uint8_t *p = (const uint8_t *)buf;
     size_t done = 0;
@@ -160,7 +244,7 @@ ssize_t rms_io_write(rms_file_t *f, const void *buf, size_t n)
     return (ssize_t)done;
 }
 
-int rms_io_ftruncate(rms_file_t *f, off_t length)
+static int rms_io_ftruncate_acp(rms_file_t *f, off_t length)
 {
     if (!f || !f->accessed || length < 0)
         return -1;
@@ -176,7 +260,7 @@ int rms_io_ftruncate(rms_file_t *f, off_t length)
         uint8_t zero = 0;
         ssize_t r;
         f->cursor = (uint64_t)length - 1u;
-        r = rms_io_write(f, &zero, 1);
+        r = rms_io_write_acp(f, &zero, 1);
         f->cursor = save;
         return (r == 1) ? 0 : -1;
     }
@@ -209,98 +293,62 @@ int rms_io_ftruncate(rms_file_t *f, off_t length)
     }
 }
 
-int rms_io_fsync(rms_file_t *f)
-{
-    /* IO$_WRITEVBLK is write-through (the ACP writes each block synchronously),
-     * so there is nothing buffered to flush. */
-    (void)f;
-    return 0;
-}
+#endif /* __linux__ ACP backend */
 
-#else
 /* ==========================================================================
- * Backend B: POSIX (netbsd-vax standalone cross; VAX re-targets under vms-d5d).
- * The fd lives in the handle; positioned I/O uses the cursor so the engines'
- * lseek+read/write idiom maps to pread/pwrite without an implicit kernel fd
- * position (which multiple RABs on one FAB would otherwise race).
+ * Public positioned-I/O entry points: runtime dispatch between the two
+ * backends. An ACP handle carries f->fd == -1 (set at $ASSIGN in rms_core.c);
+ * a POSIX-backed handle (the netbsd-vax cross, or the __linux__ vms-5f0 legacy
+ * defer) carries f->fd >= 0. On non-__linux__ there is no ACP backend, so the
+ * POSIX backend is the only choice.
  * ========================================================================== */
-
-#include <unistd.h>
 
 ssize_t rms_io_read(rms_file_t *f, void *buf, size_t n)
 {
-    ssize_t r;
-    if (!f || f->fd < 0)
-        return -1;
-    r = pread(f->fd, buf, n, (off_t)f->cursor);
-    if (r > 0)
-        f->cursor += (uint64_t)r;
-    return r;
+#if defined(__linux__)
+    if (f && f->fd >= 0)
+        return rms_io_read_posix(f, buf, n);
+    return rms_io_read_acp(f, buf, n);
+#else
+    return rms_io_read_posix(f, buf, n);
+#endif
 }
 
 ssize_t rms_io_write(rms_file_t *f, const void *buf, size_t n)
 {
-    ssize_t r;
-    if (!f || f->fd < 0)
-        return -1;
-    r = pwrite(f->fd, buf, n, (off_t)f->cursor);
-    if (r > 0) {
-        f->cursor += (uint64_t)r;
-        if (f->cursor > f->eof)
-            f->eof = f->cursor;
-    }
-    return r;
+#if defined(__linux__)
+    if (f && f->fd >= 0)
+        return rms_io_write_posix(f, buf, n);
+    return rms_io_write_acp(f, buf, n);
+#else
+    return rms_io_write_posix(f, buf, n);
+#endif
 }
 
 int rms_io_ftruncate(rms_file_t *f, off_t length)
 {
-    if (!f || f->fd < 0 || length < 0)
-        return -1;
-    if (ftruncate(f->fd, length) < 0)
-        return -1;
-    f->eof = (uint64_t)length;
-    return 0;
+#if defined(__linux__)
+    if (f && f->fd >= 0)
+        return rms_io_ftruncate_posix(f, length);
+    return rms_io_ftruncate_acp(f, length);
+#else
+    return rms_io_ftruncate_posix(f, length);
+#endif
 }
 
 int rms_io_fsync(rms_file_t *f)
 {
-    if (!f || f->fd < 0)
-        return -1;
-    return fsync(f->fd);
+#if defined(__linux__)
+    if (f && f->fd >= 0)
+        return rms_io_fsync_posix(f);
+    /* ACP handle: IO$_WRITEVBLK is write-through (the ACP writes each block
+     * synchronously), so there is nothing buffered to flush. */
+    (void)f;
+    return 0;
+#else
+    return rms_io_fsync_posix(f);
+#endif
 }
-
-#include <stdlib.h>
-
-rms_file_t *rms_io_posix_wrap(int fd)
-{
-    rms_file_t *f = (rms_file_t *)calloc(1, sizeof(*f));
-    off_t end;
-    if (!f)
-        return NULL;
-    f->fd = fd;
-    f->accessed = 1;
-    f->writable = 1;
-    end = lseek(fd, 0, SEEK_END);
-    f->eof = (end > 0) ? (uint64_t)end : 0;
-    f->cursor = 0;
-    return f;
-}
-
-void rms_io_posix_unwrap(rms_file_t *f)
-{
-    if (!f)
-        return;
-    if (f->fd >= 0)
-        close(f->fd);
-    free(f);
-}
-
-int rms_io_posix_fd(rms_file_t *f)
-{
-    return f ? f->fd : -1;
-}
-
-#endif /* backend select */
 
 /* ==========================================================================
  * *_exact wrappers (backend-independent -- built on rms_io_read/write above).

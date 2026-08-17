@@ -99,14 +99,19 @@ int rms_io_ftruncate(rms_file_t *f, off_t length);
  * flush. Returns 0. Present so the record engines keep a symmetric vocabulary. */
 int rms_io_fsync(rms_file_t *f);
 
-#if !defined(__linux__)
-/* POSIX-backend (netbsd-vax standalone cross) only: wrap a freshly open(2)'d fd
- * in a handle (eof seeded from the file's current size), release it (close +
- * free), and read back the fd. The __linux__ ACP build has no fd -- the FAB
- * lifecycle there $ASSIGNs/IO$_ACCESSes instead. */
+/* POSIX-backend helpers: wrap a freshly open(2)'d fd in a handle (eof seeded
+ * from the file's current size), release it (close + free), and read back the
+ * fd.
+ *
+ * Available on ALL platforms (vms-5f0). The netbsd-vax standalone cross uses
+ * them as its sole record backend. On __linux__ they back the atomic-flip
+ * legacy defer: when /dev/vms / the executive is absent (host ctest, plain-
+ * container self-host & link gates), rms_impl_open/create fall back to a POSIX
+ * open and wrap the fd here, and rms_io_* dispatches to the POSIX backend on
+ * f->fd >= 0 (an ACP handle carries f->fd == -1). When /dev/vms IS present the
+ * runtime never reaches this path and stays ACP-only (CLAUDE.md Rule 9/INV-6). */
 rms_file_t *rms_io_posix_wrap(int fd);
 void        rms_io_posix_unwrap(rms_file_t *f);   /* close(fd) + free(handle) */
 int         rms_io_posix_fd(rms_file_t *f);
-#endif
 
 #endif /* RMS_IO_H */

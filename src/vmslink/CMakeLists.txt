@@ -33,8 +33,11 @@ set_target_properties(vmslink PROPERTIES OUTPUT_NAME "LINK" SUFFIX ".EXE")
 # src/libvms/include/ovmx_layout.h. The default in link.c stays the /vms path so
 # the standalone native activation tests (which build their own LINK.EXE from
 # source and stage IMGACT.EXE under /vms) are untouched.
+# Bare (unquoted) token, stringified in link.c -- a quoted string macro would
+# land in compile_commands.json as \"...\" and trip the kif_caller_census gate's
+# line reader (vms-5f0). Kept in sync with OVMX_BOOT_STAGE_DIR / OVMX_LAYOUT.
 target_compile_definitions(vmslink PRIVATE
-    IMGACT_INTERP="/run/ovmx-boot/IMGACT.EXE")
+    IMGACT_INTERP_PATH=/run/ovmx-boot/IMGACT.EXE)
 install(TARGETS vmslink RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
 add_executable(vmsdump dump_image.c)

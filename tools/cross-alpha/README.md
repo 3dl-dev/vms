@@ -40,6 +40,19 @@ wrapped in a hard `timeout`.
   IMGACT is not in the static boot chain, and this proves the rung-A2 activator
   in the booted-kernel context).
 - `alpha-imgact-init.c` — PID 1 for BOOT B.
+- `run-boot-alpha.sh` (rd vms-359, rung A6) — the gate-invokable,
+  release-acceptance analog of `tests/lab-vax/run-boot.sh gate` (rd vms-065):
+  a single command, one clean exit code (0 = the Alpha runtime boots to a real
+  interactive DCL `Username:` prompt; nonzero = it doesn't), bounded by a hard
+  per-boot timeout. Runs BOOT A only (BOOT B is a separate capability proof,
+  not part of the "boots to DCL" claim). Caches the (slow, ~20-30 min)
+  kernel/userland/disk assembly under its own `.boot-cache/alpha-gate/`
+  (never the ambient `/tmp/ovmx-alpha-boot`/`/tmp/ovmx-vmsko-alpha` a manual
+  debugging session may be using) and re-runs the actual boot, from a fresh
+  disk copy, every invocation — modes: `gate` (default), `build`, `boot`,
+  `validate [N]` (N consecutive real boots, for reliability validation).
+  Deliberately **not** wired into `.github/workflows/ci.yml`; it's release
+  process tooling, invoked by the conductor at cut time on the frozen SHA.
 - `boot-alpha-probe.sh` (`PROBE=provision|contention|exec`) drives the three
   diagnostic inits that root-caused the frontier stall, each as PID 1 under the
   booted kernel with the system disk on `/dev/vda`:

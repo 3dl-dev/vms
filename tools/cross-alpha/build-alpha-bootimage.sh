@@ -113,6 +113,16 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     cp /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT "$SYSEXE/" 2>/dev/null || true
     cp /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/OVMXVMSSYS.PAR "$SYSEXE/" 2>/dev/null || true
     cp -r /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* "$ST/vms/SYS0/SYSCOMMON/SYSMGR/"
+    # ALPHA STATIC-BOOTSTRAP OVERLAY (vms-3f6): the Linux SYSTARTUP_VMS.COM
+    # INSTALL ADDs 7 OVMX shareables (DECC$SHR etc.) that DO NOT EXIST on a
+    # static Alpha volume -- the Alpha boot/login chain is static EM_ALPHA with
+    # no VMS-native LINK.EXE shareable graph -- so every INSTALL ADD failed
+    # %INSTALL-E-FILNOTFND (non-fatal under SET NOON, but 7 lines of misleading
+    # noise). Replace it with the static-bootstrap variant that omits the
+    # INSTALL block, mirroring the netbsd-vax Decision-A variant
+    # (distro/rootfs-vax, vms-42d/vms-d9c).
+    cp /repo/distro/rootfs-alpha/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM \
+       "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
     cp -r "/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYS\$STARTUP/." "$ST/vms/SYS0/SYSCOMMON/SYS\$STARTUP/" 2>/dev/null || true
     cp -r /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSHLP/. "$ST/vms/SYS0/SYSCOMMON/SYSHLP/" 2>/dev/null || true
 

@@ -48,15 +48,43 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
 
     #########################################################################
     # BOOT A -- the real OVMX/Alpha boot (init=STARTUP.EXE), disk on /dev/vda.
+    #
+    # CONSOLE WAKE (vms-3f6). On OPA0: LOGINOUT waits for the operator RETURN
+    # before it presents "Username:" -- the "press RETURN to log in" console
+    # behaviour (vms-2213, tools/vms_login.c console_login()). An UNATTENDED
+    # boot must therefore DRIVE the console, exactly as the x86_64 boot gate
+    # tests/qemu/test_persistent_boot.sh does: background QEMU on a FIFO stdin
+    # and feed a CR every couple of seconds until "Username:" appears in the log
+    # (or the guest exits). Without this the Alpha login chain runs correctly
+    # -- JOB_CONTROL forks LOGINOUT.EXE, which execs and reaches the wake wait
+    # -- but blocks there unseen and "Username:" never reaches the log. This is
+    # a HARNESS driver, not a boot change: the same disk booted under a human at
+    # the console reaches the prompt on the operator's own RETURN.
     #########################################################################
     echo "======================================================================"
     echo "== BOOT A: real OVMX/Alpha image -- init=STARTUP.EXE, VMSFS on /dev/vda"
     echo "======================================================================"
     rm -f diskA.img; cp ovmx-distrib-alpha.img diskA.img
+    FIFO=/work/bootA.fifo; rm -f "$FIFO"; mkfifo "$FIFO"
     timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
         -kernel vmlinux-boot -append "console=ttyS0 panic=-1" \
         -drive file=diskA.img,format=raw,if=virtio \
-        -nographic -no-reboot > /work/bootA.raw 2>&1 || true
+        -nographic -no-reboot <"$FIFO" > /work/bootA.raw 2>&1 &
+    QP=$!
+    exec 6>"$FIFO"
+    trap "" PIPE   # a CR fed just as the guest exits must not kill this shell
+    W=0
+    while kill -0 "$QP" 2>/dev/null; do
+        grep -qaF "Username:" /work/bootA.raw 2>/dev/null && break
+        printf "\r" >&6 2>/dev/null || true
+        sleep 2; W=$((W + 2))
+        [ "$W" -ge "$BT" ] && break
+    done
+    exec 6>&-
+    sleep 2                       # let LOGINOUT flush the prompt after the wake CR
+    kill "$QP" 2>/dev/null || true
+    wait "$QP" 2>/dev/null || true
+    rm -f "$FIFO"
     grep -avE "TSUNAMI machine check|tsunami_(read|write)" /work/bootA.raw > /work/bootA.log || true
     tail -80 /work/bootA.log
 
@@ -116,6 +144,12 @@ echo
 echo "==================== FRONTIER VERDICT ===================="
 echo "-- BOOT A milestones (real OVMX/Alpha boot) --"
 grep -aE "OVMX/Linux|OVMX-I-EXEC|executive attached|vmsfs|STDRV-I-STARTUP|PROVISION|Username:|%OVMX|%RMS|%SYSTEM|halt|HALT|DEVNOTMOUNT|SS\\\$_" "$WORK/bootA.log" 2>/dev/null | sed 's/^/  /' | tail -40 || echo "  (no milestone lines)"
+echo
+if grep -qaF "Username:" "$WORK/bootA.log" 2>/dev/null; then
+    echo "  PASS: Alpha booted to the interactive DCL login prompt (Username:) under qemu-system-alpha."
+else
+    echo "  NOT REACHED: Username: prompt absent -- see $WORK/bootA.log"
+fi
 echo
 echo "-- BOOT B (IMGACT capability) --"
 if grep -aq "OVMX-ALPHA-IMGACT: ALL-PROVEN" "$WORK/bootB.log" 2>/dev/null; then

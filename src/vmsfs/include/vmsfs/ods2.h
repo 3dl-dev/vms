@@ -47,14 +47,48 @@
 #define _VMSFS_ODS2_H
 
 /*
- * The genuine ODS-2 codec compiles BOTH userspace (INITIALIZE/vmsfs_master +
- * host ctest) and kernel-resident (the shared FS engine's ODS-2 ACP, built with
- * -DOVMX_ODS2_KERNEL). Pull fixed-width types + size_t/offsetof from the right
- * world; the block-access seam (pread vs vmsfs_bio) is ods2_block.h. rd vms-dcd.
+ * The genuine ODS-2 codec compiles THREE ways: userspace (INITIALIZE/
+ * vmsfs_master + host ctest), Linux kernel-resident (the shared FS engine's
+ * ODS-2 ACP + vmsfs.ko, built with -DOVMX_ODS2_KERNEL), and -- as of rd
+ * vms-6a7f -- a second, freestanding kernel-resident build: the elf32-vax
+ * cross-compile of src/kernel-core/vmsfs_acp.c (the Files-11 ACP handlers,
+ * epic vms-208) against the NetBSD SYSKRNL contract headers
+ * (tools/cross-vax/build-vms-module-vax.sh), which also defines
+ * OVMX_ODS2_KERNEL but is NOT Linux. Pull fixed-width types + size_t/offsetof
+ * from the right world; the block-access seam (pread vs vmsfs_bio) is
+ * ods2_block.h.
+ *
+ * __KERNEL__ is a LINUX-only macro; the NetBSD kernel-module build defines
+ * _KERNEL (never __KERNEL__) -- a bare `#ifdef OVMX_ODS2_KERNEL ... <linux/
+ * types.h>' unconditionally would have pulled the Linux kernel headers into
+ * the NetBSD -nostdinc cross-build and broken it. This is the SAME
+ * three-way split src/kernel/vmsfs/vmsfs_ondisk.h already carries for
+ * exactly this reason (rd vms-9172 / vms-bbf) and the same Linux-detection
+ * idiom src/kernel-core/vmsfs/vmsfs_backend.h uses (OVMX_KBACKEND_LINUX /
+ * __linux__ / __KERNEL__).
  */
-#ifdef OVMX_ODS2_KERNEL
+#if defined(OVMX_ODS2_KERNEL) && \
+    (defined(OVMX_KBACKEND_LINUX) || defined(__linux__) || defined(__KERNEL__))
 #include <linux/types.h>
 #include <linux/stddef.h>
+#elif defined(OVMX_ODS2_KERNEL) && defined(_KERNEL)
+/*
+ * NetBSD / BSD kernel: fixed-width types, no libc, no <linux/...>. offsetof
+ * is normally pulled in transitively (vms_internal.h -> <sys/systm.h> ->
+ * <lib/libkern/libkern.h>) when this header is reached via vmsfs_acp.c, but
+ * src/vmsfs/ods2/ods2_edit.c compiles as ITS OWN standalone TU (its only
+ * include is this header, by design -- it is a PURE, dependency-free EDIT
+ * surface, see its own top-of-file note) and never pulls that chain in, so
+ * offsetof must be self-sufficient here rather than assumed present. The
+ * compiler builtin is exactly what <lib/libkern/libkern.h> itself expands to
+ * (also #ifndef-guarded there), so this is a no-op if that header lands
+ * first, and a definition if it does not.
+ */
+#include <sys/stdint.h>
+#include <sys/types.h>
+#ifndef offsetof
+#define offsetof(type, member) __builtin_offsetof(type, member)
+#endif
 #else
 #include <stdint.h>
 #include <stddef.h>

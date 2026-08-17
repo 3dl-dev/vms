@@ -100,6 +100,7 @@ COPY src/kernel-netbsd/exec_list_netbsd.c    /netbsd/guest-src/kmod/exec_list_ne
 COPY src/kernel-netbsd/vms_ast_nb.h          /netbsd/guest-src/kmod/vms_ast_nb.h
 COPY src/kernel-netbsd/vms_access_nb.h       /netbsd/guest-src/kmod/vms_access_nb.h
 COPY src/kernel-netbsd/vms_mbx_nb.h          /netbsd/guest-src/kmod/vms_mbx_nb.h
+COPY src/kernel-netbsd/vms_acp_nb.h          /netbsd/guest-src/kmod/vms_acp_nb.h
 COPY src/kernel-netbsd/vms_proctab_nb.h      /netbsd/guest-src/kmod/vms_proctab_nb.h
 COPY src/kernel-netbsd/vms_lock_nb.h         /netbsd/guest-src/kmod/vms_lock_nb.h
 COPY src/kernel-netbsd/exec_hash_netbsd.h    /netbsd/guest-src/kmod/exec_hash_netbsd.h

@@ -68,6 +68,11 @@ HERE=$(cd "$(dirname "$0")" && pwd)                          # src/vmslink
 SRC=${6:-$(cd "$HERE/../vmsrms" && pwd)}                     # src/vmsrms
 LIBVMS_INC=${7:-$(cd "$HERE/../libvms/include" && pwd)}      # ovmx_layout.h/ssdef.h/rmsdef.h
 VMSFS_INC=${8:-$(cd "$HERE/../vmsfs/include" && pwd)}        # vmsfs/filespec.h, version.h
+# vms-bc7: rms_io.c / rms_core.c include vms_kif.h (the /dev/vms ACP wrappers);
+# vms_kif.h pulls ../kernel/vms_ioctl.h -> vms_acp.h. The vms_kif_acp_* symbols
+# they import are producers in libvmssys_shr.vec (already exported), resolved by
+# --use at native link -- this only needs the header on the compile path.
+LIBVMSSYS_INC=${9:-$(cd "$HERE/../libvmssys" && pwd)}        # vms_kif.h
 CC=${CC:-gcc}
 GSMATCH=${GSMATCH:-LEQUAL,1,0}
 
@@ -80,14 +85,15 @@ WORK=${WORK:-/tmp/mk-vmsrms-shr}
 mkdir -p "$WORK"
 
 CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics -U_FORTIFY_SOURCE}"
-INCS="-I$SRC/include -I$LIBVMS_INC -I$VMSFS_INC"
+INCS="-I$SRC/include -I$LIBVMS_INC -I$VMSFS_INC -I$LIBVMSSYS_INC"
 
 echo "mk_vmsrms_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH"
 echo "mk_vmsrms_shr: src=$SRC"
 echo "mk_vmsrms_shr: --use $DECC_SHR $VMS_SHR $FS_SHR"
 
-# The 8 translation units of the vmsrms library (== src/vmsrms/CMakeLists.txt).
-LIST="rms_core rms_seq rms_rel rms_idx rms_record rms_parse rms_search rms_util"
+# The translation units of the vmsrms library (== src/vmsrms/CMakeLists.txt).
+# vms-bc7 added rms_io.c (the ACP block-I/O substrate) -- keep in lockstep.
+LIST="rms_core rms_io rms_seq rms_rel rms_idx rms_record rms_parse rms_search rms_util"
 
 OBJS=""
 for c in $LIST; do

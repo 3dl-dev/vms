@@ -50,6 +50,7 @@ endif()
 
 add_library(vmsrms ${OVMX_LIB_TYPE}
     rms_core.c
+    rms_io.c
     rms_seq.c
     rms_rel.c
     rms_idx.c
@@ -75,6 +76,15 @@ if(VMSRMS_STANDALONE)
     target_compile_options(vmsrms PRIVATE -Wall -Wextra -O2)
 else()
     target_link_libraries(vmsrms PUBLIC vms vmsfs vmslnm)
+
+    # vms-bc7: rms_io.c / rms_core.c reach the Files-11 ODS-2 ACP through the
+    # libvmssys /dev/vms wrappers (vms_kif_acp_*). vms_kif.h lives in libvmssys
+    # and pulls ../kernel/vms_ioctl.h -> vms_acp.h. Header-only compile dep --
+    # the vms_kif_* symbols resolve through the transitive libvmssys link edge
+    # (vms -> vmsprocess -> libvmssys). NOT added on the netbsd-vax standalone
+    # cross, which keeps the POSIX backend (no /dev/vms).
+    target_include_directories(vmsrms PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/libvmssys)
 
     set_target_properties(vmsrms PROPERTIES
         PREFIX ""

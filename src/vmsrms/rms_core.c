@@ -12,11 +12,12 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * Each service below works on the caller's own FAB/RAB; where it touches a
- * file it does so through a plain path or through the fd cached in
- * fab->_linux_fd, in this process. There is no executive file or record layer,
- * so there is no cross-process record locking and no shared file access
- * arbitration behind any of them.
+ * Each service below works on the caller's own FAB/RAB. Since vms-bc7 the file
+ * and block layer IS the executive's: file access rides the Files-11 ODS-2 ACP
+ * (channel + $QIO over /dev/vms, FAB._rms_file), not a per-process POSIX fd.
+ * What is still missing is cross-process RECORD locking / shared-access
+ * arbitration -- RMS runs in the caller's process (as it does on VMS too), but
+ * the RAB$M_ lock options do not yet reach the executive lock manager.
  *
  * THEY CITED vms-5b4 UNTIL vms-fab -- the item that BUILT this register, closed
  * when the register landed, owning none of the facades in it. vms-407 owns them
@@ -25,27 +26,36 @@
  * the arbitration the process context is supposed to CALL, and vms-ci.7 already
  * built the lock manager it should call.
  *
- * FILESPEC RESOLUTION NOW REACHES THE EXECUTIVE (vms-96e2). sys$open/$create/
- * $erase take a VMS filespec and resolve it through vmsfs_to_linux_path ->
- * lnm_translate -> vms_kif_lnm_translate, which reads the executive-resident
- * LNM$SYSTEM table for system logical names (SYS$SYSDEVICE, SYS$UPDATE, ...).
- * That step, and only that step, is the executive's; the RMS operation itself
- * is still this process's. So they are PARTIAL, not wholly userspace.
+ * FILE ACCESS NOW REACHES THE EXECUTIVE THROUGH THE Files-11 ODS-2 ACP
+ * (vms-bc7, epic vms-208). sys$open/$create/$close/$erase/$extend $ASSIGN an
+ * executive channel to the mounted SYS$DISK, resolve the file by name to a FID,
+ * and issue the ACP $QIO file operations (IO$_ACCESS / IO$_CREATE / IO$_DEACCESS
+ * / IO$_DELETE / IO$_MODIFY) over /dev/vms -- there is no longer a per-process
+ * POSIX fd (FAB._linux_fd is retired). What stays this process's is the RMS
+ * bookkeeping: record-attribute defaults carried on the FAB, the RAB cursor,
+ * the IFI/ISI counters. So these are PARTIAL. (The netbsd-vax standalone cross
+ * keeps a POSIX backend until VAX's own ACP re-target, vms-d5d.)
  *
- * OVMX-PARTIAL: sys$open (vms-96e2) -- exec: the VMS filespec is translated to a
- *     Linux path via the executive-resident LNM$SYSTEM table (vmsfs_to_linux_path
- *     -> lnm_translate -> vms_kif_lnm_translate).
- * OVMX-LOCAL: sys$open -- the open itself is open(2) on the translated path; the
- *     FAB share/access fields do not reach any arbitrator.
- * OVMX-PARTIAL: sys$create (vms-96e2) -- exec: same executive-resident filespec
- *     resolution as sys$open, before the file is created.
- * OVMX-LOCAL: sys$create -- open(2) with O_CREAT, plus a .rms_meta sidecar
- *     written by this process.
- * OVMX-USERSPACE: sys$close (vms-407) -- close(2) of the caller's own fd.
- * OVMX-PARTIAL: sys$erase (vms-96e2) -- exec: same executive-resident filespec
- *     resolution as sys$open, before the file is removed.
- * OVMX-LOCAL: sys$erase -- unlink(2) with no interlock against another process
- *     holding the file open.
+ * OVMX-PARTIAL: sys$open (vms-bc7) -- exec: $ASSIGN the volume + IO$_ACCESS
+ *     resolves the filespec by name to a FID and builds the file's VBN->LBN
+ *     window (rms_acp_open_file).
+ * OVMX-LOCAL: sys$open -- the FAB record-format fields and IFI are set in this
+ *     process; the FAB share/access fields do not reach any arbitrator.
+ * OVMX-PARTIAL: sys$create (vms-bc7) -- exec: IO$_CREATE mints a real FID from
+ *     INDEXF.SYS, enters a versioned directory record, and builds a write window.
+ * OVMX-LOCAL: sys$create -- the record-format/organization attributes are
+ *     carried on the caller's FAB; no executive record lock is taken.
+ * OVMX-PARTIAL: sys$close (vms-bc7) -- exec: IO$_DEACCESS tears down the file
+ *     window and $DASSGN releases the executive channel.
+ * OVMX-LOCAL: sys$close -- frees the RMS handle and clears the IFI in this
+ *     process.
+ * OVMX-PARTIAL: sys$erase (vms-bc7) -- exec: $ASSIGN + IO$_DELETE removes the
+ *     directory entry and deallocates the file's header and blocks.
+ * OVMX-LOCAL: sys$erase -- resolves the filespec fields in this process; no
+ *     interlock against another accessor is taken here.
+ * OVMX-PARTIAL: sys$extend (vms-bc7) -- exec: IO$_MODIFY allocates fab$l_alq
+ *     more blocks (BITMAP.SYS + FH2 retrieval-pointer append) without moving EOF.
+ * OVMX-LOCAL: sys$extend -- validates the caller's own FAB before the request.
  * OVMX-USERSPACE: sys$connect (vms-407) -- initializes the stream-position
  *     fields (_current_offset/_eof/_last_rec_offset/_last_rec_size/rab$w_isi)
  *     directly inside the caller's own RAB. Measured: it never allocates;
@@ -54,13 +64,12 @@
  * OVMX-USERSPACE: sys$disconnect (vms-407) -- resets those same fields and
  *     frees rab->_rms_stream if non-NULL, which measurement shows is always
  *     NULL -- no code path in the tree ever assigns it.
- * OVMX-USERSPACE: sys$display (vms-407) -- reloads the .rms_meta sidecar this
- *     process wrote; the attributes are file content, not executive metadata.
- * OVMX-USERSPACE: sys$rewind (vms-407) -- repositions the caller's own fd.
- * OVMX-USERSPACE: sys$flush (vms-407) -- flushes the caller's own fd.
- * OVMX-USERSPACE: sys$extend (vms-da9) -- validates the caller's own FAB and
- *     requires an open fd; the requested allocation is met by the Linux backing
- *     store's on-demand block allocation, so no executive allocator is called.
+ * OVMX-USERSPACE: sys$display (vms-407) -- fills XAB fields from FAB/handle
+ *     state in this process; it issues no ACP $QIO.
+ * OVMX-USERSPACE: sys$rewind (vms-407) -- repositions the RAB byte cursor
+ *     (rms_io_lseek is pure cursor arithmetic; no $QIO).
+ * OVMX-USERSPACE: sys$flush (vms-407) -- IO$_WRITEVBLK is already write-through,
+ *     so the flush issues no $QIO (rms_io_fsync is a no-op on the ACP backend).
  */
 
 #include <stdio.h>
@@ -75,11 +84,16 @@
 #include <time.h>
 #include "rms/rms.h"
 #include "rms_internal.h"
+#include "rms_io.h"
 #include "vmsfs/filespec.h"
 #include "vmsfs/version.h"
 #include "ovmx_layout.h"
 #include "ssdef.h"
 #include "lib$routines.h"   /* lib$cvt_vectim: Unix->VMS binary time (vms-3dd) */
+#if defined(__linux__)
+#include "vms_kif.h"        /* vms-bc7: the Files-11 ODS-2 ACP over /dev/vms   */
+#include "vmsfs/ods2.h"     /* ODS2_FK_* file-kind selectors for IO$_CREATE    */
+#endif
 
 /*
  * unix_time_to_vms - Convert a Unix time_t (seconds since 1970-01-01 UTC) to a
@@ -153,6 +167,254 @@ extern uint32_t rms_idx_cleanup(struct FAB *fab);
 /* Forward decl: rms_impl_open falls through to rms_impl_create on FAB$M_CIF,
  * which is defined later in this file. */
 static uint32_t rms_impl_create(void *fab_ptr);
+/* rms_resolve_spec (filespec + default merge) is defined further down; the ACP
+ * lifecycle helpers below use it to apply fab$l_dna defaults. */
+static int rms_resolve_spec(const char *spec, const char *default_spec,
+                            char *out, size_t outlen);
+
+#if defined(__linux__)
+/* ======================================================================
+ * vms-bc7: Files-11 (ODS-2) ACP file lifecycle -- the product runtime.
+ *
+ * $OPEN/$CREATE $ASSIGN an executive channel to the mounted volume, resolve
+ * the directory FID, and IO$_ACCESS / IO$_CREATE the file (building the
+ * VBN->LBN window RMS record I/O then rides via rms_io_*). $CLOSE IO$_DEACCESS
+ * + $DASSGN; $ERASE IO$_DELETE; $EXTEND IO$_MODIFY. No POSIX file I/O, no
+ * sidecar, no vmsfs_to_linux_path -- fail-honest against a real /dev/vms
+ * (SS$_NOSUCHDEV / SS$_NOSUCHFILE / SS$_NOPRIV), never a silent local success
+ * (CLAUDE.md Rule 9 / INV-6).
+ * ====================================================================== */
+
+/* The boot volume unit RMS $ASSIGNs when the filespec names no device. The
+ * discovered-SYS$DISK logical (device-native naming, epic vms-47d) is bound by
+ * the boot flip that ACP-mounts the system disk; until then the mounted unit is
+ * the boot unit DKA0:, which is also what the QEMU ACP fixtures mount. */
+#define RMS_ACP_DEFAULT_DEV "DKA0:"
+
+struct rms_acp_spec {
+    char     devnam[16];             /* "DKA0:" (mounted unit to $ASSIGN)   */
+    char     dirpath[256];           /* raw "A.B.C" inside [] (no brackets) */
+    char     name[VMS_ACP_NAME_SIZE];/* "NAME.TYP" upcased                  */
+    uint16_t version;                /* 0 => highest (open) / highest+1 (create) */
+};
+
+/* Compose the effective VMS filespec from fab$l_fna (+ fab$l_dna defaults) and
+ * split it into device / directory / name.type / version. ODS-2 is case-
+ * insensitive; the name is upcased so it matches the on-disk directory records
+ * the codec decodes. Returns 0 on success, -1 on a malformed / empty spec. */
+static int rms_acp_spec_from_fab(struct FAB *fab, struct rms_acp_spec *s)
+{
+    char spec[1024] = "";
+    const char *p;
+    const char *lb, *rb, *colon;
+
+    if (!fab->fab$l_fna || fab->fab$b_fns == 0)
+        return -1;
+
+    {
+        size_t len = fab->fab$b_fns;
+        if (len >= sizeof(spec)) len = sizeof(spec) - 1;
+        memcpy(spec, fab->fab$l_fna, len);
+        spec[len] = '\0';
+    }
+    /* Apply a default filespec (fab$l_dna) for any missing name/type. */
+    if (fab->fab$l_dna && fab->fab$b_dns > 0) {
+        char dflt[1024] = "";
+        char combined[1024];
+        size_t dlen = fab->fab$b_dns;
+        if (dlen >= sizeof(dflt)) dlen = sizeof(dflt) - 1;
+        memcpy(dflt, fab->fab$l_dna, dlen);
+        dflt[dlen] = '\0';
+        if (rms_resolve_spec(spec, dflt, combined, sizeof(combined)) == 0) {
+            strncpy(spec, combined, sizeof(spec) - 1);
+            spec[sizeof(spec) - 1] = '\0';
+        }
+    }
+
+    memset(s, 0, sizeof(*s));
+    strncpy(s->devnam, RMS_ACP_DEFAULT_DEV, sizeof(s->devnam) - 1);
+    s->version = 0;
+
+    p = spec;
+
+    /* DEVICE: text before the FIRST ':' that precedes any '[' (a logical name
+     * or physical unit). Store WITH the trailing ':' as $ASSIGN expects. */
+    lb = strchr(spec, '[');
+    colon = strchr(spec, ':');
+    if (colon && (!lb || colon < lb)) {
+        size_t dl = (size_t)(colon - spec) + 1;   /* include ':' */
+        if (dl < sizeof(s->devnam)) {
+            memcpy(s->devnam, spec, dl);
+            s->devnam[dl] = '\0';
+        }
+        p = colon + 1;
+    }
+
+    /* DIRECTORY: text inside [ ]. */
+    lb = strchr(p, '[');
+    rb = lb ? strchr(lb, ']') : NULL;
+    if (lb && rb && rb > lb + 1) {
+        size_t dl = (size_t)(rb - lb - 1);
+        if (dl >= sizeof(s->dirpath)) dl = sizeof(s->dirpath) - 1;
+        memcpy(s->dirpath, lb + 1, dl);
+        s->dirpath[dl] = '\0';
+        p = rb + 1;
+    }
+
+    /* NAME.TYP;VER: the remainder. Split off ';version' first. */
+    {
+        char rest[VMS_ACP_NAME_SIZE + 16] = "";
+        const char *semi;
+        size_t rl;
+        strncpy(rest, p, sizeof(rest) - 1);
+        rest[sizeof(rest) - 1] = '\0';
+        semi = strchr(rest, ';');
+        if (semi) {
+            long v = 0;
+            const char *q = semi + 1;
+            /* ';' with no digits, or ';0', => highest; else the literal N. */
+            for (; *q >= '0' && *q <= '9'; q++)
+                v = v * 10 + (*q - '0');
+            s->version = (uint16_t)v;
+            rl = (size_t)(semi - rest);
+        } else {
+            rl = strlen(rest);
+        }
+        if (rl == 0)
+            return -1;                       /* no filename component */
+        if (rl >= sizeof(s->name)) rl = sizeof(s->name) - 1;
+        for (size_t i = 0; i < rl; i++) {
+            char c = rest[i];
+            if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+            s->name[i] = c;
+        }
+        s->name[rl] = '\0';
+    }
+    return 0;
+}
+
+/* Resolve the directory named by s->dirpath to its FID by walking each
+ * "COMP" as "COMP.DIR" from the MFD ([000000] == FID 4, addressed by an
+ * all-zero DID). Empty/[000000] dirpath => the MFD itself (all-zero DID). */
+static uint32_t rms_acp_resolve_did(uint32_t chan, const char *dirpath,
+                                    uint16_t *dn, uint16_t *ds,
+                                    uint8_t *dr, uint8_t *dx)
+{
+    char work[256];
+    char *save = NULL, *tok;
+
+    *dn = 0; *ds = 0; *dr = 0; *dx = 0;   /* MFD */
+
+    if (!dirpath || dirpath[0] == '\0')
+        return SS$_NORMAL;
+    strncpy(work, dirpath, sizeof(work) - 1);
+    work[sizeof(work) - 1] = '\0';
+    if (strcmp(work, "000000") == 0)
+        return SS$_NORMAL;
+
+    for (tok = strtok_r(work, ".", &save); tok;
+         tok = strtok_r(NULL, ".", &save)) {
+        struct vms_acp_access_args a;
+        uint32_t st;
+        size_t tl = strlen(tok);
+        char nm[VMS_ACP_NAME_SIZE];
+
+        if (tl == 0)
+            continue;
+        if (tl > VMS_ACP_NAME_SIZE - 5) tl = VMS_ACP_NAME_SIZE - 5;
+        for (size_t i = 0; i < tl; i++) {
+            char c = tok[i];
+            if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+            nm[i] = c;
+        }
+        nm[tl] = '\0';
+        strncat(nm, ".DIR", sizeof(nm) - strlen(nm) - 1);
+
+        memset(&a, 0, sizeof(a));
+        a.chan    = chan;
+        a.did_num = *dn; a.did_seq = *ds; a.did_rvn = *dr; a.did_nmx = *dx;
+        a.version = 1;                       /* directories are version ;1 */
+        strncpy(a.name, nm, VMS_ACP_NAME_SIZE - 1);
+
+        st = vms_kif_acp_access(&a);
+        if (!$VMS_STATUS_SUCCESS(st))
+            return st;                        /* SS$_NOSUCHFILE etc -- honest */
+        /* Chain: this directory's FID is the DID for the next component. */
+        *dn = a.fid_num; *ds = a.fid_seq; *dr = a.fid_rvn; *dx = a.fid_nmx;
+        /* Release the transient directory access; we only wanted its FID. */
+        vms_kif_acp_deaccess(chan);
+    }
+    return SS$_NORMAL;
+}
+
+/* Map an ACP SS$_ status from the file-open path to the RMS $OPEN status. */
+static uint32_t rms_acp_open_status(uint32_t ss)
+{
+    switch (ss) {
+        case SS$_NOSUCHFILE: return RMS$_FNF;
+        case SS$_NOPRIV:     return RMS$_PRV;
+        /* No SYS$DISK mounted / no /dev/vms: RMS$_ACC (file access error, ACP)
+         * -- fail-honest, never a silent local success (INV-6). */
+        case SS$_NOSUCHDEV:  return RMS$_ACC;
+        case SS$_DEVNOTMOUNT:return RMS$_ACC;
+        default:             return RMS$_ACC;
+    }
+}
+
+/* Seed the handle's cached EOF/HIBLK from an IO$_ACCESS/IO$_CREATE attr block. */
+static void rms_acp_seed_handle(rms_file_t *h, const struct vms_acp_fileattr *at)
+{
+    uint32_t efblk = at->efblk;
+    h->eof = (uint64_t)(efblk ? (efblk - 1u) : 0) * 512u + at->ffbyte;
+    h->hiblk = at->hiblk;
+}
+
+/* $ASSIGN + resolve DID + IO$_ACCESS a file by name; fills *hp with a fresh
+ * handle on success. want_write selects read vs write access. */
+static uint32_t rms_acp_open_file(struct rms_acp_spec *s, int want_write,
+                                  rms_file_t **hp)
+{
+    rms_file_t *h;
+    struct vms_acp_access_args a;
+    uint32_t chan = 0, st;
+
+    st = vms_kif_acp_assign(s->devnam, &chan);
+    if (!$VMS_STATUS_SUCCESS(st))
+        return st;
+
+    h = calloc(1, sizeof(*h));
+    if (!h) { vms_kif_dassgn(chan); return SS$_INSFMEM; }
+    h->chan = chan; h->assigned = 1; h->fd = -1;
+
+    memset(&a, 0, sizeof(a));
+    a.chan = chan;
+    if (want_write) a.acctl = VMS_ACP_ACCTL_WRITE;
+    st = rms_acp_resolve_did(chan, s->dirpath,
+                             &a.did_num, &a.did_seq, &a.did_rvn, &a.did_nmx);
+    if (!$VMS_STATUS_SUCCESS(st)) { free(h); vms_kif_dassgn(chan); return st; }
+    a.version = s->version;
+    strncpy(a.name, s->name, VMS_ACP_NAME_SIZE - 1);
+
+    st = vms_kif_acp_access(&a);
+    if (!$VMS_STATUS_SUCCESS(st)) { free(h); vms_kif_dassgn(chan); return st; }
+
+    h->accessed = 1; h->writable = want_write ? 1 : 0;
+    h->fid_num = a.fid_num; h->fid_seq = a.fid_seq;
+    h->fid_rvn = a.fid_rvn; h->fid_nmx = a.fid_nmx;
+    rms_acp_seed_handle(h, &a.attr);
+    *hp = h;
+    return SS$_NORMAL;
+}
+
+/* IO$_DEACCESS + $DASSGN + free. */
+static void rms_acp_close_handle(rms_file_t *h)
+{
+    if (!h) return;
+    if (h->accessed)  vms_kif_acp_deaccess(h->chan);
+    if (h->assigned)  vms_kif_dassgn(h->chan);
+    free(h);
+}
+#endif /* __linux__ ACP lifecycle helpers */
 
 struct rms_metadata {
     uint32_t magic;         /* RMS_META_MAGIC */
@@ -679,6 +941,53 @@ static uint32_t rms_impl_open(void *fab_ptr)
         return RMS$_FAB;
     }
 
+#if defined(__linux__)
+    /* --- Files-11 ODS-2 ACP path (vms-bc7): $ASSIGN + IO$_ACCESS --- */
+    {
+        struct rms_acp_spec sp;
+        rms_file_t *h = NULL;
+        uint32_t st;
+        int need_write = ((fab->fab$b_fac & FAB$M_PUT) ||
+                          (fab->fab$b_fac & FAB$M_UPD) ||
+                          (fab->fab$b_fac & FAB$M_DEL) ||
+                          (fab->fab$b_fac & FAB$M_TRN));
+
+        if (fab->fab$b_org == FAB$C_IDX) {
+            /* Indexed-over-ACP (the ODS-2 prologue/bucket index) is a later
+             * rung of epic vms-208: the data fork rides the ACP, but the index
+             * has no ACP home yet. Fail-honest rather than silently serve an
+             * un-persistable index (INV-6). */
+            fab->fab$l_sts = RMS$_ORG;
+            return RMS$_ORG;
+        }
+        if (rms_acp_spec_from_fab(fab, &sp) < 0) {
+            fab->fab$l_sts = RMS$_SYN;
+            fab->fab$l_stv = 0;
+            return RMS$_SYN;
+        }
+        strncpy(fab->_resolved_path, sp.name, sizeof(fab->_resolved_path) - 1);
+        fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
+
+        st = rms_acp_open_file(&sp, need_write, &h);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            if (st == SS$_NOSUCHFILE && (fab->fab$l_fop & FAB$M_CIF))
+                return rms_impl_create(fab_ptr);
+            fab->fab$l_stv = st;
+            fab->fab$l_sts = rms_acp_open_status(st);
+            return fab->fab$l_sts;
+        }
+        fab->_rms_file = h;
+
+        pthread_mutex_lock(&rms_id_lock);
+        fab->fab$w_ifi = next_ifi++;
+        if (next_ifi == 0) next_ifi = 1;
+        pthread_mutex_unlock(&rms_id_lock);
+
+        fab->fab$l_sts = RMS$_NORMAL;
+        fab->fab$l_stv = 0;
+        return RMS$_NORMAL;
+    }
+#else
     if (resolve_for_open(fab) < 0) {
         fab->fab$l_sts = RMS$_SYN;
         fab->fab$l_stv = 0;
@@ -723,7 +1032,8 @@ static uint32_t rms_impl_open(void *fab_ptr)
         }
     }
 
-    fab->_linux_fd = fd;
+    fab->_rms_file = rms_io_posix_wrap(fd);
+    if (!fab->_rms_file) { close(fd); fab->fab$l_sts = RMS$_DME; return RMS$_DME; }
     load_metadata(fab);
 
     /* Assign an internal file identifier */
@@ -735,6 +1045,7 @@ static uint32_t rms_impl_open(void *fab_ptr)
     fab->fab$l_sts = RMS$_NORMAL;
     fab->fab$l_stv = 0;
     return RMS$_NORMAL;
+#endif /* __linux__ */
 }
 
 /*
@@ -751,6 +1062,86 @@ static uint32_t rms_impl_create(void *fab_ptr)
         return RMS$_FAB;
     }
 
+#if defined(__linux__)
+    /* --- Files-11 ODS-2 ACP path (vms-bc7): $ASSIGN + IO$_CREATE(+ACCESS) --- */
+    {
+        struct rms_acp_spec sp;
+        rms_file_t *h;
+        struct vms_acp_fileop_args fop;
+        uint32_t chan = 0, st;
+
+        if (fab->fab$b_org == FAB$C_IDX) {   /* deferred: see rms_impl_open */
+            fab->fab$l_sts = RMS$_ORG;
+            return RMS$_ORG;
+        }
+        if (rms_acp_spec_from_fab(fab, &sp) < 0) {
+            fab->fab$l_sts = RMS$_SYN;
+            return RMS$_SYN;
+        }
+        strncpy(fab->_resolved_path, sp.name, sizeof(fab->_resolved_path) - 1);
+        fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
+
+        st = vms_kif_acp_assign(sp.devnam, &chan);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            fab->fab$l_stv = st;
+            fab->fab$l_sts = rms_acp_open_status(st);
+            return fab->fab$l_sts;
+        }
+        h = calloc(1, sizeof(*h));
+        if (!h) { vms_kif_dassgn(chan); fab->fab$l_sts = RMS$_DME; return RMS$_DME; }
+        h->chan = chan; h->assigned = 1; h->fd = -1;
+
+        memset(&fop, 0, sizeof(fop));
+        fop.chan      = chan;
+        fop.func      = VMS_ACP_FOP_CREATE;
+        /* IO$M_CREATE enters a versioned directory entry; IO$M_ACCESS builds
+         * the write window on this channel so record $PUTs ride it directly. */
+        fop.modifiers = VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS;
+        fop.acctl     = VMS_ACP_ACCTL_WRITE;
+        fop.kind      = (fab->fab$b_rfm == FAB$C_FIX) ? ODS2_FK_DATA_FIX
+                                                      : ODS2_FK_DATA;
+        st = rms_acp_resolve_did(chan, sp.dirpath, &fop.did_num, &fop.did_seq,
+                                 &fop.did_rvn, &fop.did_nmx);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            free(h); vms_kif_dassgn(chan);
+            fab->fab$l_stv = st; fab->fab$l_sts = RMS$_DNF;
+            return RMS$_DNF;
+        }
+        fop.version = 0;                     /* highest existing + 1 */
+        strncpy(fop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
+
+        st = vms_kif_acp_fileop(&fop);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            free(h); vms_kif_dassgn(chan);
+            fab->fab$l_stv = st; fab->fab$l_sts = RMS$_CRE;
+            return RMS$_CRE;
+        }
+        h->accessed = 1; h->writable = 1;
+        h->fid_num = fop.fid_num; h->fid_seq = fop.fid_seq;
+        h->fid_rvn = fop.fid_rvn; h->fid_nmx = fop.fid_nmx;
+        h->eof   = (uint64_t)(fop.new_efblk ? (fop.new_efblk - 1u) : 0) * 512u
+                   + fop.new_ffbyte;
+        h->hiblk = fop.new_hiblk;
+        fab->_rms_file = h;
+
+        /* Relative files pre-allocate their fixed cells (IO$_MODIFY extend via
+         * rms_io_ftruncate); best-effort, exactly as the old POSIX path. */
+        if (fab->fab$b_org == FAB$C_REL && fab->fab$l_mrn > 0 &&
+            fab->fab$w_mrs > 0) {
+            size_t cell = (size_t)fab->fab$w_mrs + 1;
+            if (fab->fab$l_mrn <= SIZE_MAX / cell)
+                (void)rms_io_ftruncate(h, (off_t)(cell * fab->fab$l_mrn));
+        }
+
+        pthread_mutex_lock(&rms_id_lock);
+        fab->fab$w_ifi = next_ifi++;
+        if (next_ifi == 0) next_ifi = 1;
+        pthread_mutex_unlock(&rms_id_lock);
+        fab->fab$l_sts = RMS$_CREATED;
+        fab->fab$l_stv = 0;
+        return RMS$_NORMAL;
+    }
+#else
     if (resolve_filename(fab) < 0) {
         fab->fab$l_sts = RMS$_SYN;
         return RMS$_SYN;
@@ -812,7 +1203,8 @@ static uint32_t rms_impl_create(void *fab_ptr)
         return RMS$_CRE;
     }
 
-    fab->_linux_fd = fd;
+    fab->_rms_file = rms_io_posix_wrap(fd);
+    if (!fab->_rms_file) { close(fd); fab->fab$l_sts = RMS$_DME; return RMS$_DME; }
 
     /* Pre-allocate space for relative files */
     if (fab->fab$b_org == FAB$C_REL && fab->fab$l_mrn > 0 &&
@@ -838,6 +1230,7 @@ static uint32_t rms_impl_create(void *fab_ptr)
     fab->fab$l_sts = RMS$_CREATED;
     fab->fab$l_stv = 0;
     return RMS$_NORMAL;
+#endif /* __linux__ */
 }
 
 /*
@@ -855,32 +1248,50 @@ static uint32_t rms_impl_close(void *fab_ptr)
     }
 
     uint32_t close_sts = RMS$_NORMAL;
-    if (fab->_linux_fd >= 0) {
-        /* Flush before closing */
-        if (fsync(fab->_linux_fd) < 0) {
-            close_sts = RMS$_WER;
-        }
-        close(fab->_linux_fd);
-        fab->_linux_fd = -1;
-    }
-
-    /* Handle delete-on-close options */
     int deleting = (fab->fab$l_fop & FAB$M_DLT) || (fab->fab$l_fop & FAB$M_TMD);
-    if (deleting) {
-        if (fab->_resolved_path[0]) {
-            unlink(fab->_resolved_path);
-            /* Also remove sidecar */
-            char sidecar[1088];
-            snprintf(sidecar, sizeof(sidecar), "%s%s",
-                     fab->_resolved_path, RMS_SIDECAR_SUFFIX);
-            unlink(sidecar);
-            /* Remove index sidecar if present */
-            char idxfile[1088];
-            snprintf(idxfile, sizeof(idxfile), "%s%s",
-                     fab->_resolved_path, RMS_INDEX_SUFFIX);
-            unlink(idxfile);
+
+#if defined(__linux__)
+    /* --- ACP path (vms-bc7): IO$_DEACCESS + $DASSGN (+ IO$_DELETE on DLT/TMD) --- */
+    if (fab->_rms_file) {
+        rms_file_t *h = (rms_file_t *)fab->_rms_file;
+        rms_io_fsync(h);                       /* WRITEVBLK is write-through */
+        if (deleting) {
+            /* Release the window, then deallocate the file by FID. */
+            struct vms_acp_fileop_args fop;
+            if (h->accessed) { vms_kif_acp_deaccess(h->chan); h->accessed = 0; }
+            memset(&fop, 0, sizeof(fop));
+            fop.chan      = h->chan;
+            fop.func      = VMS_ACP_FOP_DELETE;
+            fop.modifiers = VMS_ACP_M_DELETE;
+            fop.fidmode   = 1;
+            fop.fid_num   = h->fid_num; fop.fid_seq = h->fid_seq;
+            fop.fid_rvn   = h->fid_rvn; fop.fid_nmx = h->fid_nmx;
+            (void)vms_kif_acp_fileop(&fop);
         }
+        rms_acp_close_handle(h);               /* deaccess (if any) + dassgn + free */
+        fab->_rms_file = NULL;
     }
+#else
+    /* --- POSIX path (netbsd-vax standalone; VAX re-targets under vms-d5d) --- */
+    if (fab->_rms_file) {
+        int fd = rms_io_posix_fd((rms_file_t *)fab->_rms_file);
+        if (fd >= 0 && fsync(fd) < 0)
+            close_sts = RMS$_WER;
+        rms_io_posix_unwrap((rms_file_t *)fab->_rms_file);
+        fab->_rms_file = NULL;
+    }
+    if (deleting && fab->_resolved_path[0]) {
+        unlink(fab->_resolved_path);
+        char sidecar[1088];
+        snprintf(sidecar, sizeof(sidecar), "%s%s",
+                 fab->_resolved_path, RMS_SIDECAR_SUFFIX);
+        unlink(sidecar);
+        char idxfile[1088];
+        snprintf(idxfile, sizeof(idxfile), "%s%s",
+                 fab->_resolved_path, RMS_INDEX_SUFFIX);
+        unlink(idxfile);
+    }
+#endif
 
     /*
      * Clean up internal state.
@@ -929,6 +1340,51 @@ static uint32_t rms_impl_erase(void *fab_ptr)
         return RMS$_FAB;
     }
 
+#if defined(__linux__)
+    /* --- ACP path (vms-bc7): $ASSIGN + IO$_DELETE (remove entry + dealloc) --- */
+    {
+        struct rms_acp_spec sp;
+        struct vms_acp_fileop_args fop;
+        uint32_t chan = 0, st;
+
+        if (rms_acp_spec_from_fab(fab, &sp) < 0) {
+            fab->fab$l_sts = RMS$_SYN;
+            return RMS$_SYN;
+        }
+        st = vms_kif_acp_assign(sp.devnam, &chan);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            fab->fab$l_stv = st;
+            fab->fab$l_sts = rms_acp_open_status(st);
+            return fab->fab$l_sts;
+        }
+        memset(&fop, 0, sizeof(fop));
+        fop.chan      = chan;
+        fop.func      = VMS_ACP_FOP_DELETE;
+        fop.modifiers = VMS_ACP_M_DELETE;    /* remove entry AND deallocate */
+        st = rms_acp_resolve_did(chan, sp.dirpath, &fop.did_num, &fop.did_seq,
+                                 &fop.did_rvn, &fop.did_nmx);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            vms_kif_dassgn(chan);
+            fab->fab$l_stv = st; fab->fab$l_sts = RMS$_DNF;
+            return RMS$_DNF;
+        }
+        fop.version = sp.version;            /* 0 => all versions */
+        strncpy(fop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
+
+        st = vms_kif_acp_fileop(&fop);
+        vms_kif_dassgn(chan);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            fab->fab$l_stv = st;
+            fab->fab$l_sts = (st == SS$_NOSUCHFILE) ? RMS$_FNF
+                           : (st == SS$_NOPRIV)     ? RMS$_PRV
+                                                    : RMS$_ACC;
+            return fab->fab$l_sts;
+        }
+        fab->fab$l_sts = RMS$_NORMAL;
+        fab->fab$l_stv = 0;
+        return RMS$_NORMAL;
+    }
+#else
     if (resolve_for_open(fab) < 0) {
         fab->fab$l_sts = RMS$_SYN;
         return RMS$_SYN;
@@ -970,6 +1426,7 @@ static uint32_t rms_impl_erase(void *fab_ptr)
     fab->fab$l_sts = RMS$_NORMAL;
     fab->fab$l_stv = 0;
     return RMS$_NORMAL;
+#endif /* __linux__ */
 }
 
 /*
@@ -991,7 +1448,7 @@ static uint32_t rms_impl_connect(void *rab_ptr)
         return RMS$_FAB;
     }
 
-    if (fab->_linux_fd < 0) {
+    if (!fab->_rms_file) {
         rab->rab$l_sts = RMS$_ACC;
         return RMS$_ACC;
     }
@@ -1011,7 +1468,7 @@ static uint32_t rms_impl_connect(void *rab_ptr)
 
     /* If RAB$M_EOF is set, position to end of file */
     if (rab->rab$l_rop & RAB$M_EOF) {
-        rab->_current_offset = lseek(fab->_linux_fd, 0, SEEK_END);
+        rab->_current_offset = rms_io_lseek(fab->_rms_file, 0, SEEK_END);
         if (rab->_current_offset < 0) rab->_current_offset = 0;
     }
 
@@ -1111,12 +1568,12 @@ static uint32_t rms_impl_rewind(void *rab_ptr)
     }
 
     struct FAB *fab = rab->rab$l_fab;
-    if (!fab || fab->_linux_fd < 0) {
+    if (!fab || !fab->_rms_file) {
         rab->rab$l_sts = RMS$_ACC;
         return RMS$_ACC;
     }
 
-    lseek(fab->_linux_fd, 0, SEEK_SET);
+    rms_io_lseek(fab->_rms_file, 0, SEEK_SET);
     rab->_current_offset = 0;
     rab->_eof = 0;
     rab->_last_rec_offset = 0;
@@ -1137,12 +1594,12 @@ static uint32_t rms_impl_flush(void *rab_ptr)
     }
 
     struct FAB *fab = rab->rab$l_fab;
-    if (!fab || fab->_linux_fd < 0) {
+    if (!fab || !fab->_rms_file) {
         rab->rab$l_sts = RMS$_ACC;
         return RMS$_ACC;
     }
 
-    if (fsync(fab->_linux_fd) < 0) {
+    if (rms_io_fsync(fab->_rms_file) < 0) {
         rab->rab$l_sts = RMS$_WER;
         rab->rab$l_stv = (uint32_t)errno;
         return RMS$_WER;
@@ -1178,13 +1635,46 @@ static uint32_t rms_impl_extend(void *fab_ptr)
     if (!fab || fab->fab$b_bid != FAB$C_BID) {
         return RMS$_FAB;
     }
-    if (fab->_linux_fd < 0) {
+    if (!fab->_rms_file) {
         fab->fab$l_sts = RMS$_IFI;
         return RMS$_IFI;
     }
 
+#if defined(__linux__)
+    /* $EXTEND -> IO$_MODIFY (vms-bc7): allocate fab$l_alq more blocks to the
+     * file WITHOUT moving EOF -- a real ODS-2 allocation (BITMAP.SYS +
+     * retrieval-pointer append), by FID on the accessed channel. A zero request
+     * is a no-op success. Fail-honest: a full volume is SS$_DEVICEFULL. */
+    {
+        rms_file_t *h = (rms_file_t *)fab->_rms_file;
+        struct vms_acp_fileop_args fop;
+        uint32_t st;
+
+        if (fab->fab$l_alq == 0) {
+            fab->fab$l_sts = RMS$_NORMAL;
+            return RMS$_NORMAL;
+        }
+        memset(&fop, 0, sizeof(fop));
+        fop.chan    = h->chan;
+        fop.func    = VMS_ACP_FOP_MODIFY;
+        fop.fidmode = 1;
+        fop.fid_num = h->fid_num; fop.fid_seq = h->fid_seq;
+        fop.fid_rvn = h->fid_rvn; fop.fid_nmx = h->fid_nmx;
+        fop.exsz    = fab->fab$l_alq;
+        st = vms_kif_acp_fileop(&fop);
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            fab->fab$l_stv = st;
+            fab->fab$l_sts = RMS$_CRE;   /* allocation/extend error */
+            return RMS$_CRE;
+        }
+        h->hiblk = fop.new_hiblk;        /* EOF unchanged; only allocation grows */
+        fab->fab$l_sts = RMS$_NORMAL;
+        return RMS$_NORMAL;
+    }
+#else
     fab->fab$l_sts = RMS$_NORMAL;
     return RMS$_NORMAL;
+#endif
 }
 
 

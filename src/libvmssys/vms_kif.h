@@ -791,12 +791,11 @@ uint32_t vms_kif_acp_assign(const char *devnam, uint32_t *exec_chan);
  * SS$_NOSUCHDEV if /dev/vms is absent). See src/kernel/vms_acp.h for the FIB/ATR
  * interface.
  *
- * OVMX-UNWIRED: vms_kif_acp_access (vms-204) -- no product caller yet: RMS
- * $OPEN/$CLOSE is the path that will emit these, and that is the next rung
- * (RMS-over-$QIO) of epic vms-208. Exercised today only by
- * tests/qemu/test_syssvc_acp_access.c against a real /dev/vms.
- * OVMX-UNWIRED: vms_kif_acp_deaccess (vms-204) -- the IO$_DEACCESS counterpart
- * of vms_kif_acp_access above, same reason, same test. */
+ * WIRED (vms-bc7, epic vms-208): RMS $OPEN/$CREATE emit vms_kif_acp_access to
+ * open a file on the SYS$DISK channel (src/vmsrms/rms_core.c rms_acp_open_file,
+ * and rms_acp_resolve_did walking directory components), and $CLOSE emits
+ * vms_kif_acp_deaccess (rms_impl_close / rms_acp_close_handle). Also exercised
+ * by tests/qemu/test_syssvc_acp_access.c and test_syssvc_rms_acp.c. */
 uint32_t vms_kif_acp_access(struct vms_acp_access_args *args);
 uint32_t vms_kif_acp_deaccess(uint32_t chan);
 /*
@@ -805,9 +804,11 @@ uint32_t vms_kif_acp_deaccess(uint32_t chan);
  * allocation + FH2 grow). args carries the transfer control fields + a user data
  * `buffer` pointer; see src/kernel/vms_acp.h. Fail-honest (SS$_NOSUCHDEV if
  * /dev/vms is absent). Exercised only by tests/qemu/test_syssvc_acp_rw.c against
- * a real /dev/vms until the RMS-over-$QIO rung wires $GET/$PUT to them.
- * OVMX-UNWIRED: vms_kif_acp_readvb (vms-c60) -- no product caller yet; RMS $GET reaches it on the RMS-over-$QIO rung
- * OVMX-UNWIRED: vms_kif_acp_writevb (vms-c60) -- no product caller yet; RMS $PUT reaches it on the RMS-over-$QIO rung
+ * a real /dev/vms.
+ * WIRED (vms-bc7, epic vms-208): RMS record I/O rides these -- $GET is
+ * vms_kif_acp_readvb and $PUT is vms_kif_acp_writevb, through the block-I/O
+ * substrate src/vmsrms/rms_io.c (rms_io_read / rms_io_write) under the seq/rel
+ * record engines; also exercised by test_syssvc_acp_rw.c / test_syssvc_rms_acp.c.
  */
 uint32_t vms_kif_acp_readvb(struct vms_acp_rw_args *args);
 uint32_t vms_kif_acp_writevb(struct vms_acp_rw_args *args);
@@ -829,9 +830,11 @@ uint32_t vms_kif_acp_acpcontrol(struct vms_acp_acpcontrol_args *args);
  * and blocks), modify a file (extend/truncate/write attributes). func-dispatched
  * on args->func (VMS_ACP_FOP_*). See src/kernel/vms_acp.h for the FIB/ATR
  * interface and the ioctl-mapping decision. Returns SS$_NOSUCHDEV if /dev/vms
- * is absent. OVMX-UNWIRED: vms_kif_acp_fileop (vms-5303) -- no product caller
- * yet (RMS $CREATE/$ERASE/$EXTEND wire to it in a later rung); exercised by
- * tests/qemu/test_syssvc_acp_create.c against real /dev/vms. */
+ * is absent. WIRED (vms-bc7, epic vms-208): RMS $CREATE emits IO$_CREATE,
+ * $ERASE emits IO$_DELETE, and $EXTEND / truncate emit IO$_MODIFY through this
+ * umbrella (src/vmsrms/rms_core.c rms_impl_create/_erase/_extend/_close and
+ * rms_io.c rms_io_ftruncate); also exercised by tests/qemu/test_syssvc_acp_create.c
+ * and test_syssvc_rms_acp.c against real /dev/vms. */
 uint32_t vms_kif_acp_fileop(struct vms_acp_fileop_args *args);
 
 #endif /* _VMS_KIF_H */

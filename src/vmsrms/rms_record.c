@@ -12,22 +12,35 @@
  * tests/integration/test_userspace_service_register.sh
  *
  * Each of the five validates the caller's RAB/FAB and dispatches to an
- * organization handler (rms_seq.c / rms_rel.c / rms_idx.c) that reads and
- * writes through fab->_linux_fd, this process's own descriptor. RAB$M_ options
- * that request record locking have no executive lock manager behind them here,
- * so two processes reading and writing the same file are not serialised by
- * anything RMS does.
+ * organization handler (rms_seq.c / rms_rel.c / rms_idx.c). Since vms-bc7 those
+ * handlers reach file data through the Files-11 ODS-2 ACP: the block-I/O
+ * substrate (rms_io.c) turns each positioned record transfer into IO$_READVBLK /
+ * IO$_WRITEVBLK on the file's channel window over /dev/vms -- NOT a per-process
+ * POSIX fd. The RECORD framing (RFM/RAT decode, key compares) is still done in
+ * this process; only the block I/O beneath it is the executive's. RAB$M_ record
+ * locking still has no executive lock manager behind it here (vms-407 owns that
+ * missing arbitration, across rms_core.c, this file and rms_search.c).
  *
- * These five cited vms-5b4 until vms-fab; it is closed and owned none of them.
- * vms-407 owns the missing arbitration, across rms_core.c, this file and
- * rms_search.c.
- *
- * OVMX-USERSPACE: sys$get (vms-407) -- read(2) through the caller's own fd.
- * OVMX-USERSPACE: sys$put (vms-407) -- write(2) through the caller's own fd.
- * OVMX-USERSPACE: sys$update (vms-407) -- rewrite in place through that fd.
- * OVMX-USERSPACE: sys$delete (vms-407) -- marks the record through that fd.
- * OVMX-USERSPACE: sys$find (vms-407) -- positions that fd without transferring
- *     a record.
+ * OVMX-PARTIAL: sys$get (vms-bc7) -- exec: IO$_READVBLK reads the record's
+ *     virtual block(s) through the ACP window (rms_io_read).
+ * OVMX-LOCAL: sys$get -- the RFM record framing / RAB cursor bookkeeping runs
+ *     in this process; no executive record lock is taken.
+ * OVMX-PARTIAL: sys$put (vms-bc7) -- exec: IO$_WRITEVBLK writes the record's
+ *     virtual block(s) through the ACP window (rms_io_write), extending on EOF.
+ * OVMX-LOCAL: sys$put -- the record framing / sequential-append positioning is
+ *     this process's; no executive record lock is taken.
+ * OVMX-PARTIAL: sys$update (vms-bc7) -- exec: IO$_WRITEVBLK rewrites the record
+ *     in place through the ACP window.
+ * OVMX-LOCAL: sys$update -- the in-process record framing decides what bytes to
+ *     rewrite; no executive record lock is taken.
+ * OVMX-PARTIAL: sys$delete (vms-bc7) -- exec: IO$_WRITEVBLK marks the record's
+ *     cell through the ACP window.
+ * OVMX-LOCAL: sys$delete -- the cell-status bookkeeping is this process's; no
+ *     executive record lock is taken.
+ * OVMX-PARTIAL: sys$find (vms-bc7) -- exec: IO$_READVBLK reads the cell status
+ *     through the ACP window to position without transferring a record.
+ * OVMX-LOCAL: sys$find -- the RAB positioning arithmetic is this process's; no
+ *     executive record lock is taken.
  */
 
 #include <stdio.h>
@@ -74,7 +87,7 @@ static struct FAB *validate_rab(struct RAB *rab)
         return NULL;
     }
 
-    if (fab->_linux_fd < 0) {
+    if (!fab->_rms_file) {
         rab->rab$l_sts = RMS$_ACC;
         return NULL;
     }

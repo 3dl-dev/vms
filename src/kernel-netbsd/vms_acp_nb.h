@@ -191,6 +191,57 @@ struct vms_acp_acpcontrol_args {
 	uint32_t pad2;
 };
 
+/*
+ * IO$_CREATE / IO$_DELETE / IO$_MODIFY via a func-dispatched ioctl on nr 0x6F
+ * (size-distinct from ACPCONTROL). NetBSD-substrate MIRROR of the same-named
+ * surface in src/kernel/vms_acp.h -- byte-identical (all fixed-width, so the
+ * layout + the sizeof==252 hold identically on ILP32 and LP64). See vms_acp.h
+ * for the FIB/ATR role documentation; retire this twin per vms-02b.
+ */
+#define VMS_ACP_FOP_CREATE   9u    /* IO$_CREATE */
+#define VMS_ACP_FOP_DELETE   3u    /* IO$_DELETE */
+#define VMS_ACP_FOP_MODIFY   6u    /* IO$_MODIFY */
+#define VMS_ACP_M_CREATE     0x0001u  /* IO$M_CREATE: enter the file in a directory */
+#define VMS_ACP_M_ACCESS     0x0002u  /* IO$M_ACCESS: also access it (build a window) */
+#define VMS_ACP_M_DELETE     0x0004u  /* IO$M_DELETE: also delete the file (dealloc) */
+#define VMS_ACP_ATTR_PROT    0x01u    /* apply attr.fileprot */
+#define VMS_ACP_ATTR_OWNER   0x02u    /* apply attr.uic_group/uic_member */
+struct vms_acp_fileop_args {
+	uint32_t chan;
+	uint32_t func;
+	uint32_t modifiers;
+	uint32_t acctl;
+	uint16_t did_num;
+	uint16_t did_seq;
+	uint8_t  did_rvn;
+	uint8_t  did_nmx;
+	uint8_t  fidmode;
+	uint8_t  kind;
+	uint16_t fid_num;
+	uint16_t fid_seq;
+	uint8_t  fid_rvn;
+	uint8_t  fid_nmx;
+	uint16_t version;
+	uint16_t out_version;
+	uint8_t  attr_ctl;
+	uint8_t  pad0;
+	uint32_t exsz;
+	uint32_t trunc_efblk;
+	uint16_t trunc_ffbyte;
+	uint16_t pad1;
+	uint32_t window_nextents;
+	uint32_t total_blocks;
+	uint32_t first_lbn;
+	uint32_t new_hiblk;
+	uint32_t new_efblk;
+	uint32_t new_ffbyte;
+	uint32_t pad2;
+	char     name[VMS_ACP_NAME_SIZE];
+	struct vms_acp_fileattr attr;
+	uint32_t status;
+	uint32_t pad3;
+};
+
 /* ================================================================
  * Request numbers -- same NR band as src/kernel/vms_acp.h (0x68-0x6F); the
  * NetBSD _IOWR encoding of type/nr/size legitimately differs in VALUE from
@@ -204,6 +255,7 @@ struct vms_acp_acpcontrol_args {
 #define VMS_IOCTL_ACP_READVBLK  _IOWR(VMS_ACP_IOC_MAGIC, 0x6D, struct vms_acp_rw_args)
 #define VMS_IOCTL_ACP_WRITEVBLK _IOWR(VMS_ACP_IOC_MAGIC, 0x6E, struct vms_acp_rw_args)
 #define VMS_IOCTL_ACP_ACPCONTROL _IOWR(VMS_ACP_IOC_MAGIC, 0x6F, struct vms_acp_acpcontrol_args)
+#define VMS_IOCTL_ACP_FILEOP     _IOWR(VMS_ACP_IOC_MAGIC, 0x6F, struct vms_acp_fileop_args)
 
 /*
  * Freeze the shared layouts -- see src/kernel/vms_acp.h's identical asserts:
@@ -226,5 +278,9 @@ _Static_assert(sizeof(struct vms_acp_rw_args) == 48,
                "vms_acp_rw_args changed size -- ACP READVBLK/WRITEVBLK ABI break");
 _Static_assert(sizeof(struct vms_acp_acpcontrol_args) == 200,
                "vms_acp_acpcontrol_args changed size -- VMS_IOCTL_ACP_ACPCONTROL ABI break");
+_Static_assert(sizeof(struct vms_acp_fileop_args) == 252,
+               "vms_acp_fileop_args changed size -- VMS_IOCTL_ACP_FILEOP ABI break");
+_Static_assert(VMS_IOCTL_ACP_FILEOP != VMS_IOCTL_ACP_ACPCONTROL,
+               "FILEOP/ACPCONTROL must stay distinct on nr 0x6F (size-distinct _IOWR)");
 
 #endif /* _VMS_ACP_NB_H */

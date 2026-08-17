@@ -210,4 +210,99 @@
  */
 #define VMS_MOUNT_HELPER_PATH "/sbin/vms_mount_helper"
 
+/* ------------------------------------------------------------------ */
+/* Boot-image staging tmpfs — the ACP-read bootstrap bridge (vms-5f0)  */
+/* ------------------------------------------------------------------ */
+/*
+ * ATOMIC FLIP. SYS$DISK is now a genuine Files-11 (ODS-2) volume owned by
+ * the executive ACP; the vmsfs_to_linux_path -> /vms POSIX passthrough is
+ * retired. But the Linux kernel still activates a VMS image the Unix way:
+ * execve() maps a MAIN image's PT_LOAD and opens its PT_INTERP (IMGACT.EXE)
+ * BY POSIX PATH, before any OVMX code runs. The boot chain genuinely
+ * fork()+execve()s a small set of images -- PROVISION.EXE (PID 1),
+ * DCL.EXE (PROVISION), JOB_CONTROL.EXE (RUN/DETACHED), LOGINOUT.EXE
+ * (JOB_CONTROL) -- plus the PT_INTERP IMGACT.EXE the kernel opens for each.
+ * With /vms gone those files have no POSIX home.
+ *
+ * The bridge: PID 1 reads that first-hop image set FROM THE GENUINE ODS-2
+ * VOLUME THROUGH THE EXECUTIVE ACP (vms_kif_acp_* / imgact_acp.c, IO$_ACCESS
+ * + IO$_READVBLK) and writes each into this tmpfs, then every execve target
+ * that names a SYS$SYSTEM image is rewritten here (ovmx_boot_stage_exec_path
+ * below). tmpfs is ONLY the Linux-exec handoff (the chicken-and-egg of
+ * activating image #1); the BYTES come from the ACP, never a /vms read, and
+ * presence is never faked (INV-6). Everything downstream of the first hop --
+ * shareables, data files -- flows through the ACP in-process, not here.
+ *
+ * KERNEL-BINFMT ENDGAME (NOTE, not built here): the deeper end state is a
+ * kernel binfmt handler that activates a VMS image directly from the ACP,
+ * so even the first-hop main image never needs a POSIX file. That removes
+ * this tmpfs entirely. It is POST-boot-flip work; the bridge below is the
+ * boot-path realisation the flip ships.
+ */
+#define OVMX_BOOT_STAGE_DIR  "/run/ovmx-boot"
+
+/*
+ * If `in` names a SYS$SYSTEM image (a ".EXE" whose path passes through the
+ * SYSEXE directory), fill `out` with its boot-staging location
+ * (OVMX_BOOT_STAGE_DIR "/" basename) and return 1. Otherwise return 0 and
+ * leave `out` untouched, so the caller keeps the original path.
+ *
+ * Self-contained: no libc, because this header is included by freestanding
+ * translation units (libvmssys). Callers pass it a resolved Linux path
+ * (…/SYSEXE/NAME.EXE) or an equivalent and use the rewritten path as the
+ * execve target.
+ */
+static inline int ovmx_boot_stage_exec_path(const char *in, char *out,
+                                            unsigned long sz)
+    __attribute__((unused));
+static inline int ovmx_boot_stage_exec_path(const char *in, char *out,
+                                            unsigned long sz)
+{
+    if (!in || !out || sz == 0)
+        return 0;
+
+    /* Length of `in`, and basename = char after the last '/'. */
+    unsigned long len = 0;
+    const char *base = in;
+    for (const char *p = in; *p; p++) {
+        len++;
+        if (*p == '/')
+            base = p + 1;
+    }
+
+    /* Basename must end in ".EXE" (images are uppercased on the volume). */
+    unsigned long bl = 0;
+    while (base[bl])
+        bl++;
+    if (bl < 4 || base[bl - 4] != '.' || base[bl - 3] != 'E' ||
+        base[bl - 2] != 'X' || base[bl - 1] != 'E')
+        return 0;
+
+    /* Guard: only rewrite images that live in the SYSEXE directory, so a
+     * non-system image path is never redirected into the boot staging dir. */
+    int in_sysexe = 0;
+    if (len >= 6) {
+        for (unsigned long i = 0; i + 6 <= len; i++) {
+            if (in[i] == 'S' && in[i + 1] == 'Y' && in[i + 2] == 'S' &&
+                in[i + 3] == 'E' && in[i + 4] == 'X' && in[i + 5] == 'E') {
+                in_sysexe = 1;
+                break;
+            }
+        }
+    }
+    if (!in_sysexe)
+        return 0;
+
+    /* out = OVMX_BOOT_STAGE_DIR "/" basename (bounded). */
+    static const char pre[] = OVMX_BOOT_STAGE_DIR "/";
+    unsigned long i = 0, j = 0;
+    while (pre[j] && i + 1 < sz)
+        out[i++] = pre[j++];
+    j = 0;
+    while (base[j] && i + 1 < sz)
+        out[i++] = base[j++];
+    out[i] = '\0';
+    return 1;
+}
+
 #endif /* __OVMX_LAYOUT_H */

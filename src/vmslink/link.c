@@ -186,6 +186,25 @@
  * pair. It is not a variable: its "module offset" is 0 by definition. */
 #define TLS_MODULE_BASE_SYM "_TLS_MODULE_BASE_"
 
+/*
+ * PT_INTERP baked into every LINK.EXE executable: the OVMX image activator.
+ *
+ * ATOMIC FLIP (vms-5f0), spot #3 -- DEFERRED, see note. When the /vms POSIX
+ * passthrough is retired this interp path no longer resolves at boot, so the
+ * kernel cannot exec IMGACT.EXE for a native image (DCL.EXE/LOGINOUT.EXE). PID
+ * 1 already stages IMGACT.EXE off the ODS-2 volume THROUGH the ACP into
+ * OVMX_BOOT_STAGE_DIR ("/run/ovmx-boot", src/ovmx_init/ovmx_boot_acp_read.c),
+ * so the FINAL flip is to bake IMGACT_INTERP = OVMX_BOOT_STAGE_DIR
+ * "/IMGACT.EXE". It is NOT done here for two reasons: (a) the boot walls at the
+ * data-read layer (PROVISION's SYSUAF read over the retired /vms) BEFORE any
+ * native image's PT_INTERP is ever resolved, so the flip yields no observable
+ * progress this rung; (b) ~30 native activation tests (src/imgact/test/*.sh)
+ * bake this exact string and stage IMGACT.EXE at it, so the interp flip must
+ * land TOGETHER with migrating those tests to OVMX_BOOT_STAGE_DIR. The basename
+ * stays IMGACT.EXE either way, so sys_imgact.c's in-process external-image
+ * activation (which matches on the basename, vms-db2) is unaffected by the
+ * eventual flip.
+ */
 #define IMGACT_INTERP "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"
 
 /* --------------------------------------------------------------------------

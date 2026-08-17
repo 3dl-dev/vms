@@ -436,23 +436,33 @@ int main(void)
     vms_to_linux(VMS_STARTUP_PATH, startup_path, sizeof(startup_path));
     vms_to_linux(VMS_DCL_PATH, dcl_path, sizeof(dcl_path));
 
-    struct stat st_buf;
-    if (stat(startup_path, &st_buf) != 0) {
-        /*
-         * NOT A SILENT SKIP. A missing startup procedure used to be a bare
-         * `return` in PID 1 -- the same shape that let VMSSSHD.EXE vanish
-         * while the boot banner still announced SSH (see the NOTE ON SERVICES
-         * in src/ovmx_init/ovmx_init.c). It is reported, and the boot goes on
-         * to the login prompt with the identity established: a system with no
-         * SYS$MANAGER:STARTUP.COM is a system with no site startup, which is
-         * survivable; a system with no identity is not.
-         */
-        fprintf(stderr, "%%OVMX-W-NOSTARTUP, %s not found -- no site startup\n",
-                VMS_STARTUP_PATH);
-        return 0;
+    /* ATOMIC FLIP (vms-5f0): execve the DCL.EXE copy PID 1 staged off the
+     * ODS-2 volume over the ACP into OVMX_BOOT_STAGE_DIR -- the /vms POSIX
+     * path no longer exists for the kernel to map. Self-guarding: use the
+     * staged copy only if it is present, so a substrate that did not stage
+     * (NetBSD-vax, vms-d5d) keeps the original path. */
+    {
+        char staged[512];
+        if (ovmx_boot_stage_exec_path(dcl_path, staged, sizeof(staged)) &&
+            access(staged, X_OK) == 0)
+            snprintf(dcl_path, sizeof(dcl_path), "%s", staged);
     }
 
-    execl(dcl_path, "vmsdcl", startup_path, (char *)NULL);
+    /* STARTUP.COM presence is DCL's to resolve. With the /vms passthrough
+     * retired it is read through the executive ACP (RMS/$QIO), not a POSIX
+     * stat here -- a stat() of the retired /vms path would spuriously report
+     * "no site startup" on a volume that in fact carries it. DCL reports an
+     * absent procedure itself. On a substrate that still exposes the POSIX
+     * tree the stat is a harmless best-effort warning, not a gate. */
+    struct stat st_buf;
+    if (stat(startup_path, &st_buf) != 0)
+        fprintf(stderr,
+                "%%OVMX-I-STARTUP, handing %s to DCL for ACP resolution\n",
+                VMS_STARTUP_PATH);
+
+    /* Hand DCL the VMS filespec (not the retired /vms path) so it opens the
+     * procedure through its own ACP-routed RMS path. */
+    execl(dcl_path, "vmsdcl", VMS_STARTUP_PATH, (char *)NULL);
     fprintf(stderr, "%%OVMX-E-NOIMG, cannot activate %s: %s\n",
             VMS_DCL_PATH, strerror(errno));
     return 1;

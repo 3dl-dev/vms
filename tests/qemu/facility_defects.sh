@@ -497,6 +497,7 @@ acp-access-window-vbn-offbyone
 acp-writevb-extend-alloc-offbyone
 acp-search-cursor-skips-versions
 acp-create-header-slot-offbyone
+acp-fileop-no-dlm-lock
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -4943,6 +4944,44 @@ EOF
                       ;;
         esac;;
 
+    acp-fileop-no-dlm-lock)
+        case "$_f" in
+        facility)     echo "Files-11 (ODS-2) ACP concurrent-writer serialization via the DLM per-volume synchronization lock (vms_ioctl_acp_fileop takes an EX-mode \$ENQ on a per-volume resource across the IO\$_CREATE/DELETE/MODIFY allocate/read-modify-write/flush span, vms_lock_acp_vol_ex), vms-233, epic vms-208";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_dlm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_acp_fileop wraps its whole write critical section in an EX-mode \$ENQ on the per-volume DLM resource (vms_lock_acp_vol_ex(proc, fop_resnam, &fop_lkid)) -- the VMS-authentic XQP volume-synchronization lock. Replacing that call with SS\$_NORMAL leaves fop_lkid at 0 (so the free_sc release is a no-op) and runs the create allocate/read-modify-write/flush span UNSERIALIZED. The single-writer assertions never notice: a lone CREATE, its FID, and every fail-honest edge (bad func, non-directory DID, delete-nonexistent) behave identically with or without the lock. ONLY the cross-process concurrency proof can tell: N unrelated processes, released from a pipe barrier at the same instant, each IO\$_CREATE a file in the SAME directory, so their FID allocations scan the SAME first-free bit of INDEXF.SYS's index bitmap concurrently. Without the lock, every process sleeps in submit_bio_wait reading the same index-bitmap block before any writes it back, so they all claim the SAME FID and all write a header at that FID's slot -- the writes clobber each other and both directory records point at the one FID -- so at least one created file's name is lost or two names share one FID. The barrier + N=8 writers make the collision reliable in one run (submit_bio_wait genuinely sleeps and bypasses any cache, so even the single-CPU guest interleaves).";;
+        require_fail) cat <<'EOF'
+every file the concurrent writers created is present BY NAME (no lost file)
+every created file resolves a DISTINCT FID (no duplicate FID from a raced index bitmap)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+every concurrent writer completed its create (no honest allocation failure)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME ROOT -- ONE MISSING VOLUME LOCK, SEEN AT THREE READS OF THE SHARED
+ON-DISK STRUCTURES. With the per-volume EX $ENQ dropped, the simultaneously
+released CREATEs race INDEXF.SYS's index bitmap (and the shared [OVMXDIR]
+directory blocks): every process reads the same free bit, hands out the SAME
+FID, and the header writes clobber each other. The two require_fail assertions
+name that corruption directly at verify time -- a name whose header was
+clobbered is not present BY NAME (lost file), and the duplicated FID makes two
+distinct names share one file number (FIDs not distinct). The knock-on
+"every writer completed its create" can also redden here, because a worker whose
+create collided on a directory read-modify-write can see its own insert lost or
+a status error; it is the same one missing lock observed at the worker rather
+than at the parent's verify. The single-writer path -- one CREATE, its FID, the
+fail-honest edges -- never has two processes in the critical section at once, so
+it is identical locked or not and stays green; only the SIMULTANEOUS release of
+N writers onto one volume is what the lock exists to serialize.
+EOF
+                      ;;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -5836,21 +5875,24 @@ apply_edit() {
         # the no-op the selftest requires.
         sed -i 's|            if (waiter->flags & LCK_M_VALBLK)|            if (0 \&\& (waiter->flags \& LCK_M_VALBLK)) /* NEGCTL lock-valblk-grant-not-delivered: no delivery */|' "$_file";;
     lock-enq-immediate-grant-status-wrong)
-        # RANGE-ANCHORED to vms_ioctl_enq's own body. `args.status =
+        # RANGE-ANCHORED to vms_enq_core's own body (the $ENQ logic; vms-233
+        # moved it out of vms_ioctl_enq, now a thin copyin/copyout wrapper, so
+        # the immediate-grant status line lives here). `args.status =
         # SS__NORMAL;` at this exact 8-space indentation also appears in
         # vms_ioctl_convert's immediate-conversion branch (same text, same
         # indentation -- indentation alone does not disambiguate this pair).
-        # vms_ioctl_enq is defined BEFORE vms_ioctl_convert in this file, so
-        # the range closes at enq's own `}` and excludes convert's copy.
-        sed -i '/^long vms_ioctl_enq/,/^}$/ s|^        args\.status = SS__NORMAL;$|        args.status = SS__NOTQUEUED; /* NEGCTL lock-enq-immediate-grant-status-wrong */|' "$_file";;
+        # vms_enq_core is defined BEFORE vms_ioctl_convert in this file, so
+        # the range closes at its own `}` and excludes convert's copy.
+        sed -i '/^static long vms_enq_core/,/^}$/ s|^        args\.status = SS__NORMAL;$|        args.status = SS__NOTQUEUED; /* NEGCTL lock-enq-immediate-grant-status-wrong */|' "$_file";;
     lock-deq-status-wrong)
-        # RANGE-ANCHORED to vms_ioctl_deq's own body. `args.status =
-        # SS__NORMAL;` at this exact 4-space indentation also appears in
-        # vms_ioctl_convert's own fallthrough path (same text, same
-        # indentation). vms_ioctl_deq is defined BEFORE vms_ioctl_convert in
-        # this file, so the range closes at deq's own `}` and excludes
-        # convert's copy.
-        sed -i '/^long vms_ioctl_deq/,/^}$/ s|^    args\.status = SS__NORMAL;$|    args.status = SS__IVLOCKID; /* NEGCTL lock-deq-status-wrong */|' "$_file";;
+        # RANGE-ANCHORED to vms_deq_core's own body (the $DEQ logic; vms-233
+        # moved it out of vms_ioctl_deq, now a thin copyin/copyout wrapper, so
+        # the success status line lives here). `args.status = SS__NORMAL;` at
+        # this exact 4-space indentation also appears in vms_ioctl_convert's own
+        # fallthrough path (same text, same indentation). vms_deq_core is
+        # defined BEFORE vms_ioctl_convert in this file, so the range closes at
+        # its own `}` and excludes convert's copy.
+        sed -i '/^static long vms_deq_core/,/^}$/ s|^    args\.status = SS__NORMAL;$|    args.status = SS__IVLOCKID; /* NEGCTL lock-deq-status-wrong */|' "$_file";;
     lock-convert-mode-not-updated)
         # RANGE-ANCHORED to vms_ioctl_convert's own body. `lock->granted_mode
         # = args.lkmode;` at 8-space indent also appears in $ENQ's
@@ -6363,6 +6405,20 @@ apply_edit() {
         # text is gone, so a second apply matches nothing (the no-op selftest
         # requires).
         sed -i 's|vol->idx_lbn + (new_fidnum - 1u)|vol->idx_lbn + (new_fidnum) /* NEGCTL acp-create-header-slot-offbyone */|' "$_file";;
+
+    acp-fileop-no-dlm-lock)
+        # ANCHORED to the single per-volume DLM write-lock acquisition in
+        # vms_ioctl_acp_fileop: `vms_lock_acp_vol_ex(proc, fop_resnam, &fop_lkid)`
+        # occurs exactly once in the file (IO$_WRITEVBLK's acquisition uses the
+        # distinct `wr_resnam`/`wr_lkid` names). Replacing the call with
+        # SS$_NORMAL leaves fop_lkid at 0 -- the enqueue never runs, the create
+        # critical section is unserialized, and free_sc's release is a no-op --
+        # so concurrent CREATEs race INDEXF's index bitmap and collide on FIDs.
+        # Only test_syssvc_acp_dlm's simultaneous N-writer proof reddens; the
+        # single-writer suites are identical with or without the lock. After
+        # substitution the original text is gone, so a second apply matches
+        # nothing (the no-op selftest requires).
+        sed -i 's|vms_lock_acp_vol_ex(proc, fop_resnam, &fop_lkid)|SS__NORMAL /* NEGCTL acp-fileop-no-dlm-lock */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

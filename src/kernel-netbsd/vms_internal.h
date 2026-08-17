@@ -601,6 +601,12 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
+/* In-kernel volume-synchronization lock for the Files-11 ACP (vms-233): an
+ * EX-mode $ENQ on a per-volume resource, enqueued directly in the caller's
+ * ioctl context (no /dev/vms round-trip). Release with a zero lkid is a no-op. */
+uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
+                             uint32_t *lkid_out);
+uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------

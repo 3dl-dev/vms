@@ -499,6 +499,7 @@ acp-search-cursor-skips-versions
 acp-create-header-slot-offbyone
 acp-fileop-no-dlm-lock
 rms-put-wrong-vbn
+imgact-acp-valid-bytes-offbyone
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -5071,6 +5072,23 @@ EOF
                       ;;
         esac;;
 
+    imgact-acp-valid-bytes-offbyone)
+        case "$_f" in
+        facility)     echo "IMGACT image reads over the Files-11 (ODS-2) ACP -- the freestanding activator opens an image by IO\$_ACCESS (walking its directory chain) and reads its header + PT_LOAD segments by IO\$_READVBLK, decoding the accessed file's valid-byte count from its on-disk FH2 (efblk/ffbyte) so a read never over-reads past end-of-file, vms-3e8e, epic vms-208";;
+        targets)      echo "imgact/imgact_acp.c";;
+        suites_red)   echo "test_syssvc_imgact_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_access_name() -- the IO\$_ACCESS helper that decodes the accessed image file's total valid-byte count from its FH2 -- computes (efblk - 1) * 512 + ffbyte + 1, one byte too many. That count is the file window's extent the reader clamps every IO\$_READVBLK to, so IMGACT would believe the image is one byte longer than it is. The over-count is HARMLESS to every in-bounds read -- the ELF header, the program-header table and each PT_LOAD segment all lie well inside the real file, so each imgact_acp_pread still clamps to their own lengths and returns byte-exact data -- which is exactly why only the assertion that reads the valid count BACK off the accessed file can tell the difference: the byte-exact header/phdr/segment/whole-image reads, the directory-walk open, and the fail-honest NOSUCHFILE/NOSUCHDEV checks all stay green, and only the on-disk-geometry assertion reddens. INV-6's shape: the accessed file's real size is a fact the executive holds on disk, not a value the reader may inflate.";;
+        require_fail) cat <<'EOF'
+the accessed image's valid-byte count (1424) matches the on-disk FH2
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -6543,6 +6561,18 @@ apply_edit() {
         # gone, so a second apply matches nothing (the no-op selftest requires).
         sed -i 's|for (uint8_t i = 0; i < n \&\& \*count < max_out; i++) {|for (uint8_t i = 0; i < 1 \&\& *count < max_out; i++) { /* NEGCTL dirlogical-compose-drops-common-member */|' "$_file";;
 
+    imgact-acp-valid-bytes-offbyone)
+        # UNIQUE TEXT, no range anchor needed: `(efblk - 1u) * 512u` is the only
+        # valid-byte-count decode in imgact_acp.c (acp_access_name). Dropping the
+        # `- 1u` makes the accessed file's valid count one block too high, so the
+        # reader believes the image is 512 bytes longer than it is. Every in-bounds
+        # read (header, phdr table, each PT_LOAD, the whole 1424-byte image) still
+        # clamps to its own length and returns byte-exact data, so only the suite's
+        # on-disk-geometry assertion (valid == 1424) reddens. After substitution
+        # the `(efblk - 1u)` text is gone, so a second apply matches nothing (the
+        # no-op selftest requires).
+        sed -i 's|(efblk - 1u) \* 512u|efblk * 512u /* NEGCTL imgact-acp-valid-bytes-offbyone: valid overcounts by a block */|' "$_file";;
+
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =
         # args.base;` immediately followed by `proc->p0_limit = args.limit;`
@@ -7564,9 +7594,9 @@ cmd_selftest() {
         if ! cp -a "$_st_root/kernel" "$_st_root/kernel-core" \
                    "$_st_root/libvmssys" "$_st_root/libvms" \
                    "$_st_root/vmsdcl" "$_st_root/vmsrms" "$_st_root/vmslnm" \
-                   "$_st_root/vmsfs" "$_st_root/vmstcpip" \
+                   "$_st_root/vmsfs" "$_st_root/vmstcpip" "$_st_root/imgact" \
                    "$_st_tmp/tree/" 2>/dev/null; then
-            echo "FAIL: cannot copy $_st_root/{kernel,kernel-core,libvmssys,libvms,vmsdcl,vmsrms,vmslnm,vmsfs,vmstcpip} for the self-test"
+            echo "FAIL: cannot copy $_st_root/{kernel,kernel-core,libvmssys,libvms,vmsdcl,vmsrms,vmslnm,vmsfs,vmstcpip,imgact} for the self-test"
             rm -rf "$_st_tmp"
             return 2
         fi

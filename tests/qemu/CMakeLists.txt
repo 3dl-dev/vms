@@ -103,6 +103,21 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
     qemu_syssvc_add_test(${_name} ${_src})
 endforeach()
 
+# test_syssvc_imgact_acp (vms-3e8e) drives the EXACT freestanding ACP reader
+# IMGACT.EXE runs (src/imgact/imgact_acp.c) against a real /dev/vms: the generic
+# function above already registered the target off the glob, so augment it with
+# that one extra source and the imgact/kernel/qemu headers it needs
+# (imgact_acp.h, vms_ioctl.h + vms_acp.h, imgact_acp_fixture_elf.h). The test
+# provides the three host primitives imgact_acp.c calls on libc.
+if(TARGET test_syssvc_imgact_acp)
+    target_sources(test_syssvc_imgact_acp PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/imgact/imgact_acp.c)
+    target_include_directories(test_syssvc_imgact_acp PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/imgact
+        ${CMAKE_SOURCE_DIR}/src/kernel
+        ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
+
 # ---------------------------------------------------------------------------
 # DEVICE-CORPUS PROGRAMS UNDER A REAL /dev/vms (vms-08c).
 #

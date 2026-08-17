@@ -47,6 +47,7 @@
 #include "known_images.h" /* Known Image DB lookup (bead vms-913.5; wired vms-30d) */
 #include "imgact_prodreg.h" /* publish resident producers into LIBVMS$SHR (vms-db2) */
 #include "imgact_acp.h"   /* image reads over the executive Files-11 ACP (vms-3e8e) */
+#include "ssdef.h"        /* SS$_NOSUCHDEV -- the "executive absent" defer signal */
 
 #ifndef AT_EXECFN
 #define AT_EXECFN 31
@@ -81,10 +82,17 @@ static long sys_openat(const char *path, int flags)
 	return syscall6(SYS_openat, -100, (long)path, flags, 0, 0, 0);
 }
 static long sys_close(int fd) { return syscall6(SYS_close, fd, 0, 0, 0, 0, 0); }
-/* NOTE (vms-3e8e): image-file reads no longer use pread(2) on a /vms POSIX
- * path -- they ride the executive Files-11 ACP (IO$_READVBLK, imgact_acp.c).
- * SYS_pread64 stays defined for the arch headers' completeness; there is no
- * sys_pread() wrapper because nothing in the activator reads a file that way. */
+/* NOTE (vms-3e8e): image-file reads normally ride the executive Files-11 ACP
+ * (IO$_READVBLK, imgact_acp.c) and never touch a /vms POSIX path. The one
+ * exception is the vms-5f0 legacy defer in imgsrc_open(): when /dev/vms is
+ * absent (host ctest / plain-container self-host & link gates) the ACP open
+ * returns SS$_NOSUCHDEV and the activator falls back to a POSIX read of the
+ * image, matching the RMS rung's RMS$_ACC defer. sys_pread() backs that path;
+ * the runtime boot path (with /dev/vms present) never reaches it (INV-6). */
+static long sys_pread(int fd, void *buf, unsigned long n, long off)
+{
+	return syscall6(SYS_pread64, fd, (long)buf, n, off, 0, 0);
+}
 static long sys_write(int fd, const void *buf, unsigned long n)
 {
 	return syscall6(SYS_write, fd, (long)buf, n, 0, 0, 0);
@@ -604,7 +612,9 @@ static void scan_tls(struct obj *o, Elf64_Phdr *phdr, int phnum)
  * (CLAUDE.md Rule 9 / INV-6). imgsrc_pread() keeps pread(2) semantics so the
  * existing exact-count read checks below are unchanged.
  * -------------------------------------------------------------------------- */
-struct imgsrc { struct imgact_acp_file f; };
+/* posix_fd >= 0 selects the vms-5f0 legacy POSIX defer (executive absent);
+ * otherwise reads ride the ACP handle f. */
+struct imgsrc { struct imgact_acp_file f; int posix_fd; };
 
 /*
  * ATOMIC FLIP (vms-5f0): the first-hop boot images (DCL.EXE, LOGINOUT.EXE, ...)
@@ -646,15 +656,45 @@ static int imgsrc_open(struct imgsrc *s, const char *path)
 {
 	char mapped[256];
 	const char *p = imgsrc_map_staged(path, mapped, sizeof mapped);
+	s->posix_fd = -1;
 	uint32_t st = imgact_acp_open(&s->f, IMGACT_ACP_SYSDEVICE, p);
-	return (st & 1u) ? 0 : -1;
+	if (st & 1u)
+		return 0;
+	/*
+	 * ATOMIC-FLIP DEFER (vms-5f0): the ACP is unavailable only when
+	 * /dev/vms / the executive is absent -- imgact_acp_open() renders that
+	 * as SS$_NOSUCHDEV. In that environment (host ctest and the plain-
+	 * container self-host / link / activation gates) there is no runtime to
+	 * be authentic against, so we defer to the legacy POSIX open() on the
+	 * pre-flip /vms path, exactly as the RMS rung defers RMS$_ACC to its
+	 * legacy resolver (host ctest byte-identical). When /dev/vms IS present
+	 * the ACP open would have succeeded or failed for a real reason (e.g.
+	 * SS$_NOSUCHFILE) and we never fall through here, so the runtime boot
+	 * path stays ACP-only with NO POSIX image-read fallback (CLAUDE.md
+	 * Rule 9 / INV-6).
+	 */
+	if (st == SS$_NOSUCHDEV) {
+		long fd = sys_openat(path, O_RDONLY);
+		if (fd >= 0) {
+			s->posix_fd = (int)fd;
+			return 0;
+		}
+	}
+	return -1;
 }
 static long imgsrc_pread(struct imgsrc *s, void *buf, unsigned long n, long off)
 {
+	if (s->posix_fd >= 0)
+		return sys_pread(s->posix_fd, buf, n, off);
 	return imgact_acp_pread(&s->f, buf, n, off);
 }
 static void imgsrc_close(struct imgsrc *s)
 {
+	if (s->posix_fd >= 0) {
+		sys_close(s->posix_fd);
+		s->posix_fd = -1;
+		return;
+	}
 	imgact_acp_close(&s->f);
 }
 

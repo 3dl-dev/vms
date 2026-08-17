@@ -46,6 +46,23 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     [ -d linux-$KV ] || tar xf linux-$KV.tar.xz
     cd linux-$KV
 
+    # ---- OVMX kernel patches (rd vms-80d et al.) ----
+    # Applied idempotently to the (possibly cached) tree. `patch --dry-run`
+    # succeeds only if a patch still applies forward, so an already-patched
+    # tree is skipped; a fresh apply busts the build sentinel so the change
+    # actually recompiles. The sibling boot scripts reuse THIS tree, so the
+    # fix reaches vmlinux-boot / the probe kernels via their own make.
+    for p in /repo/tools/cross-alpha/patches/*.patch; do
+        [ -e "$p" ] || continue
+        if patch -p1 --dry-run --forward <"$p" >/dev/null 2>&1; then
+            echo "-- applying kernel patch: $(basename "$p")"
+            patch -p1 --forward <"$p"
+            rm -f .ovmx-kernel-built
+        else
+            echo "-- kernel patch already applied (or N/A): $(basename "$p")"
+        fi
+    done
+
     if [ ! -f .ovmx-kernel-built ]; then
         make defconfig >/dev/null 2>&1
         # Modules + a bootable-enough config for the sibling boot script:

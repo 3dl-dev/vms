@@ -52,9 +52,18 @@ wrapped in a hard `timeout`.
   - `alpha-exec-provision-init.c` (`PROBE=exec`) — fork+execl's the **real**
     PROVISION.EXE off the mounted disk; reproduces the stall.
 
-The frontier reached, the x86_64 comparison, and the root cause (PROVISION.EXE
-hangs before `main()` — a pre-`main` RTL initializer on Alpha) are recorded in
-the rung-A5a PR (vms-989).
+The frontier reached and the x86_64 comparison are recorded in the rung-A5a PR
+(vms-989). The stall the `exec` probe reproduced initially *looked* like a
+pre-`main` RTL initializer (PROVISION's `main()` breadcrumb never printed), but
+the true root cause was one layer down, in the guest kernel (rd vms-80d): a
+demand-paged read of PROVISION.EXE off the virtio-blk VMSFS disk built a
+scatter-gather request with more than 128 segments, which Alpha's SG allocator
+(`CONFIG_ARCH_NO_SG_CHAIN`, `SG_MAX_SEGMENTS == 128`) rejects — `virtio_blk`
+never clamped `max_segments` to that limit, so the request requeued forever and
+PROVISION's text never faulted in. STARTUP.EXE was unaffected because it loads
+from the initramfs, not virtio-blk. The fix is a one-line clamp carried as
+`patches/0001-virtio_blk-clamp-max-segments-to-SG_MAX_SEGMENTS.patch`, applied
+to the kernel tree by the build/boot scripts before `make` (idempotently).
 
 ## The proving ground: qemu-system-alpha, and why not AXPbox
 

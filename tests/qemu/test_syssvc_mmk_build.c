@@ -165,16 +165,20 @@
  * compiler is running under, so it cannot be outrun by TCG speed the way a
  * constant can.
  *
- * Model (see drive_budget_ms): budget = DRIVE_COMPILE_MARGIN * t_cal +
- * DRIVE_FIXED_OVERHEAD_MS + (do_link ? DRIVE_LINK_OVERHEAD_MS : 0). Both
- * drives compile VMS_STRING.C (398 lines) as their dominant cost; do_link
- * additionally compiles the tiny 38-line OVMXRTRUN.C driver (folded into
- * DRIVE_LINK_OVERHEAD_MS, not a second compile_units multiplier -- it is not
- * TCG-compile-cost-dominant) and then LINKs + activates the result -- the
- * SAME "extra tiny compile + LINK + activation" cost the 40000->60000 raise
- * in this constant's git history already documented and paid for with a
- * flat +20000. DRIVE_LINK_OVERHEAD_MS preserves that same headroom, now atop
- * a calibrated (not fixed) compile budget.
+ * Model (see drive_budget_ms): budget = margin(do_link) * t_cal +
+ * DRIVE_FIXED_OVERHEAD_MS, floored at CAL_FALLBACK_MS. Both drives compile
+ * VMS_STRING.C (398 lines) as their dominant cost, so DRIVE_COMPILE_MARGIN
+ * covers drive #1 (compile + archive). do_link additionally compiles the
+ * tiny 38-line OVMXRTRUN.C driver, then LINKs and the harness ACTIVATES the
+ * result -- real in-guest CPU work under the SAME TCG slowdown the reference
+ * compile measures (this file's own history says so: the 40000->60000 raise
+ * for this drive was explicitly because "under slow/contended TCG the whole
+ * chain can exceed the old bound", i.e. LINK+activate cost is
+ * TCG-speed-dependent too, not a fixed add-on). So do_link uses a LARGER
+ * margin, DRIVE_COMPILE_MARGIN_LINK, applied to the SAME t_cal -- scaling
+ * proportionally with measured guest speed instead of adding a flat
+ * constant that (like the old fixed budget itself) cannot adapt to a run
+ * slower than whatever host it was tuned on.
  */
 
 /* Ceiling for the calibration compile itself (a single, light, non-DCL
@@ -191,27 +195,28 @@
  * held to. */
 #define CAL_FALLBACK_MS 60000
 
-/* Multiplier applied to the measured calibration compile time to get the
- * compile-proportional share of a drive's budget. Generous (not tight):
- * covers run-to-run compile-time jitter and the small extra cost of
- * compiling through DCL's foreign-command dispatch (fork+execve is the same
- * either way; only DCL's own parse/dispatch sits on top) rather than
- * calibrate_tcc_ms's direct fork+exec. */
+/* Multiplier applied to the measured calibration compile time to get
+ * drive #1's (compile + archive) budget. Generous (not tight): covers
+ * run-to-run compile-time jitter and the small extra cost of compiling
+ * through DCL's foreign-command dispatch (fork+execve is the same either
+ * way; only DCL's own parse/dispatch sits on top) rather than
+ * calibrate_tcc_ms's direct fork+exec, plus the archive step. */
 #define DRIVE_COMPILE_MARGIN 3
 
-/* Fixed per-drive overhead: lib$spawn of the persistent DCL, $CREMBX x2,
- * foreign-command definition + dispatch, LIBRARIAN archiving the one small
- * object, and the marker echo. Small and roughly constant relative to the
- * compile itself -- the vms-9d4f diagnosis is explicit that this overhead
- * was never what blew the old 60s bound, the compile was. */
-#define DRIVE_FIXED_OVERHEAD_MS 8000
+/* Multiplier for the do_link=1 drive: the same compile, PLUS the tiny
+ * OVMXRTRUN.C compile, PLUS LINK (real relocation/symbol-resolution work),
+ * PLUS the harness's post-drive activation -- all real in-guest work, all
+ * under the same TCG slowdown t_cal measures. Set well above
+ * DRIVE_COMPILE_MARGIN (not just +overhead) so this drive's budget keeps
+ * scaling with guest speed the way its own history shows it needs to. */
+#define DRIVE_COMPILE_MARGIN_LINK 6
 
-/* Extra fixed overhead for the do_link=1 drive ONLY: the tiny OVMXRTRUN.C
- * compile, the LINK, and the harness's post-drive image activation. Mirrors
- * the flat +20000 this file's history already applied when this drive was
- * added (40000 -> 60000), now layered on a calibrated base instead of a
- * fixed one. */
-#define DRIVE_LINK_OVERHEAD_MS 20000
+/* Fixed per-drive overhead: lib$spawn of the persistent DCL, $CREMBX x2,
+ * foreign-command definition + dispatch, and the marker echo. Small and
+ * roughly constant relative to the compile itself -- the vms-9d4f diagnosis
+ * is explicit that this overhead was never what blew the old 60s bound, the
+ * compile was. */
+#define DRIVE_FIXED_OVERHEAD_MS 8000
 
 #define EXPECT_MARKER "OVMXD1B:COMPILED"
 
@@ -440,8 +445,8 @@ static long calibrate_tcc_ms(const char *tcc, const char *tccinc, const char *co
 static long drive_budget_ms(long t_cal_ms, int do_link)
 {
     long base = (t_cal_ms > 0) ? t_cal_ms : CAL_FALLBACK_MS;
-    long budget = DRIVE_COMPILE_MARGIN * base + DRIVE_FIXED_OVERHEAD_MS;
-    if (do_link) budget += DRIVE_LINK_OVERHEAD_MS;
+    long margin = do_link ? DRIVE_COMPILE_MARGIN_LINK : DRIVE_COMPILE_MARGIN;
+    long budget = margin * base + DRIVE_FIXED_OVERHEAD_MS;
     /* Never budget a real drive below the historical floor -- calibration
      * refines the budget upward for a slow guest, it never shrinks the bound
      * a fast guest has always run under. */

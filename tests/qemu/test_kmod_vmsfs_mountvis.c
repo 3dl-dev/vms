@@ -257,19 +257,20 @@ int main(void)
         CHECK(0, "DCL.EXE could not be run for the cross-process read probe");
     }
 
-    /* 3. NEGATIVE CONTROL: DKA300: is a unit with nothing behind it (the guest
-     *    attaches three virtio disks -> DKA0:/DKA100:/DKA200:; there is no
-     *    fourth). The fix reads the kernel mount table -- it must NOT fabricate
+    /* 3. NEGATIVE CONTROL: DKA400: is a unit with nothing behind it (the guest
+     *    attaches four virtio disks -> DKA0:/DKA100:/DKA200:/DKA300:; there is no
+     *    fifth). The fix reads the kernel mount table -- it must NOT fabricate
      *    a mount for an absent unit (INV-6), so DCL cannot read HELLO.TXT
-     *    through DKA300:. (Was DKA200: before vms-a0b added a third disk on
-     *    vdc for the $SEARCH test; DKA300: preserves the "nothing behind it"
-     *    intent.) */
-    if (run_dcl("TYPE DKA300:[000000]HELLO.TXT;1", out, sizeof(out)) == 0) {
-        show_capture("DCL TYPE DKA300:[000000]HELLO.TXT;1 (never mounted)", out);
+     *    through DKA400:. (Was DKA200: before vms-a0b added a third disk on vdc
+     *    for the $SEARCH test, then DKA300: before vms-0044 added a fourth disk
+     *    on vdd for the directory-logical test; DKA400: preserves the "nothing
+     *    behind it" intent.) */
+    if (run_dcl("TYPE DKA400:[000000]HELLO.TXT;1", out, sizeof(out)) == 0) {
+        show_capture("DCL TYPE DKA400:[000000]HELLO.TXT;1 (never mounted)", out);
         CHECK(strstr(out, "OVMX-PROBE-ALIVE") != NULL,
               "DCL.EXE ran the negative-control script to completion");
         CHECK(strstr(out, HELLO_CONTENT) == NULL,
-              "an UNMOUNTED unit (DKA300:) yields NO volume content -- the fix does not fabricate success for a unit that is not mounted");
+              "an UNMOUNTED unit (DKA400:) yields NO volume content -- the fix does not fabricate success for a unit that is not mounted");
     } else {
         CHECK(0, "DCL.EXE could not be run for the negative-control probe");
     }

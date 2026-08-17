@@ -715,6 +715,180 @@ static int expand_rooted_concealed_multi(const vmsfs_filespec_t *parsed,
 }
 
 /*
+ * dir_concat - concatenate a PARENT directory body with a caller SUBdirectory
+ * per the VMS directory-logical rule for a NON-rooted directory-bearing
+ * equivalence (e.g. SYS$SYSTEM = SYS$SYSROOT:[SYSEXE]). The parent is the
+ * equivalence's directory body ("SYSEXE"); the sub is whatever directory the
+ * caller supplied after the logical (usually NONE, since SYS$SYSTEM:FILE.EXT
+ * carries no directory). "000000" and a leading '.' relative form are handled.
+ * (Rooted-root composition -- the trailing-dot [SYS0.] case -- is a separate
+ * rule handled by merge_rooted_root(); this is the plain concatenation.)
+ */
+static void dir_concat(const char *parent, const char *sub,
+                       char *out, size_t out_sz)
+{
+    if (sub && sub[0] == '.')
+        sub++;                                  /* [.SMITH] relative form */
+    int have_sub = (sub && sub[0] && strcmp(sub, "000000") != 0);
+    if (!parent || !parent[0]) {
+        snprintf(out, out_sz, "%s", have_sub ? sub : "");
+    } else if (have_sub) {
+        snprintf(out, out_sz, "%s.%s", parent, sub);
+    } else {
+        snprintf(out, out_sz, "%s", parent);
+    }
+}
+
+/*
+ * vmsfs_compose_ods2_candidates - vms-0044: resolve a VMS filespec whose DEVICE
+ * field may be a directory logical, a concealed rooted (search-list) logical,
+ * or a chain of them, into one or more FULLY-COMPOSED, ON-VOLUME ODS-2
+ * candidate specs of the form  PHYSICALDEV:[DIR.SUB.SUB]NAME.TYPE;VERSION .
+ *
+ * This is the VMS-spec-producing sibling of vmsfs_to_linux_path_one(): it runs
+ * the SAME concealed-rooted-logical composition machinery
+ * (vmsfs_device_concealed_rooted / merge_rooted_root, honouring LNM$M_CONCEALED
+ * and the trailing-dot rooted rule -- VSI OpenVMS User's Manual, "Rooted
+ * Directories"; System Manager's Manual Vol. 1, "The System Disk") but STOPS at
+ * the resolved VMS specification instead of continuing to a Linux path. It is
+ * what the Files-11 ACP directory walk consumes: the composed spec's directory
+ * is the [SYSn.SYSCOMMON.SYSEXE] path the ACP resolves to a directory FID, and
+ * its device is the physical unit the volume is $ASSIGNed on.
+ *
+ * The DEVICE field is resolved iteratively through LNM$FILE_DEV:
+ *   - a directory-bearing equivalence (SYS$SYSTEM -> SYS$SYSROOT:[SYSEXE]) folds
+ *     its directory under the caller's and continues with its device;
+ *   - a CONCEALED ROOTED device (SYS$SYSROOT = dev:[SYS0.], dev:[SYS0.SYSCOMMON.])
+ *     fans out: each member's root is merged with the caller's subdirectory and
+ *     each candidate is resolved in turn -- node-specific member first, common
+ *     member second, exactly the search order a running system disk presents;
+ *   - a terminal/plain device name is swapped in and re-resolved;
+ *   - a name that is not a logical is a PHYSICAL device: the composed spec is
+ *     emitted.
+ *
+ * Returns the number of candidate specs written to out[] (search-list fan-out,
+ * in search order), 0 if nothing composed (no device, no LNM manager, or an
+ * unresolvable chain). Fail-honest: an unresolvable logical yields 0 candidates,
+ * never a fabricated path (INV-6) -- the caller reports the honest RMS error.
+ */
+static void compose_ods2_r(const vmsfs_filespec_t *parsed,
+                           char out[][VMSFS_MAX_FILESPEC],
+                           int *count, int max_out, int depth)
+{
+    if (*count >= max_out || depth >= VMSFS_RESOLVE_MAX_DEPTH)
+        return;
+    if (!parsed->has_device || !parsed->device[0])
+        return;
+
+    char dev_up[VMSFS_MAX_DEVICE + 1];
+    strncpy(dev_up, parsed->device, sizeof(dev_up) - 1);
+    dev_up[sizeof(dev_up) - 1] = '\0';
+    size_t dl = strlen(dev_up);
+    if (dl > 0 && dev_up[dl - 1] == ':')
+        dev_up[dl - 1] = '\0';
+    str_upcase(dev_up);
+
+    lnm_manager_t *mgr = lnm_get_manager();
+    char equiv[256];
+    uint16_t elen = 0;
+    uint32_t attrs = 0;
+    uint32_t st = mgr ? lnm_translate(mgr, LNM_FILE_DEV, dev_up, equiv,
+                                      sizeof(equiv), &elen, &attrs)
+                      : SS$_NOLOGNAM;
+
+    if (!$VMS_STATUS_SUCCESS(st)) {
+        /* dev_up is not a logical name -> a physical device. Emit the fully
+         * composed VMS spec with the device normalised (upcased, no colon --
+         * compose_filespec re-adds the single colon). */
+        vmsfs_filespec_t final = *parsed;
+        strncpy(final.device, dev_up, sizeof(final.device) - 1);
+        final.device[sizeof(final.device) - 1] = '\0';
+        final.has_device = 1;
+        char spec[VMSFS_MAX_FILESPEC];
+        if ($VMS_STATUS_SUCCESS(vmsfs_compose_filespec(&final, spec, sizeof(spec)))) {
+            strncpy(out[*count], spec, VMSFS_MAX_FILESPEC - 1);
+            out[*count][VMSFS_MAX_FILESPEC - 1] = '\0';
+            (*count)++;
+        }
+        return;
+    }
+    if (elen >= sizeof(equiv))
+        elen = sizeof(equiv) - 1;
+    equiv[elen] = '\0';
+
+    /* A concealed ROOTED device (possibly a search list): fan out its members,
+     * merging each root with the caller's subdirectory, and resolve each. */
+    int concealed = 0, rooted = 0;
+    (void)vmsfs_device_concealed_rooted(dev_up, &concealed, &rooted);
+    if (rooted) {
+        char vals[LNM_MAX_SEARCHLIST][LNM_MAX_VALUE + 1];
+        uint8_t n = 0;
+        if (lnm_translate_searchlist(mgr, dev_up, vals, LNM_MAX_SEARCHLIST,
+                                     &n, NULL) == SS$_NORMAL) {
+            for (uint8_t i = 0; i < n && *count < max_out; i++) {
+                vmsfs_filespec_t cand;
+                if (merge_rooted_root(vals[i], parsed, &cand))
+                    compose_ods2_r(&cand, out, count, max_out, depth + 1);
+            }
+            return;
+        }
+    }
+
+    /* A directory-bearing equivalence (SYS$SYSTEM -> SYS$SYSROOT:[SYSEXE]):
+     * fold its directory under the caller's and continue with its device. */
+    if (strchr(equiv, '[')) {
+        vmsfs_filespec_t e;
+        if ($VMS_STATUS_SUCCESS(vmsfs_parse_filespec(equiv, &e)) &&
+            e.has_device && e.device[0]) {
+            vmsfs_filespec_t nxt = *parsed;     /* keep name/type/version */
+            strncpy(nxt.device, e.device, sizeof(nxt.device) - 1);
+            nxt.device[sizeof(nxt.device) - 1] = '\0';
+            nxt.has_device = 1;
+            char merged[VMSFS_MAX_DIRECTORY + 1];
+            dir_concat(e.has_directory ? e.directory : "",
+                       parsed->has_directory ? parsed->directory : "",
+                       merged, sizeof(merged));
+            strncpy(nxt.directory, merged, sizeof(nxt.directory) - 1);
+            nxt.directory[sizeof(nxt.directory) - 1] = '\0';
+            nxt.has_directory = (merged[0] != '\0');
+            compose_ods2_r(&nxt, out, count, max_out, depth + 1);
+        }
+        return;
+    }
+
+    /* A plain device/logical equivalence (SYS$SYSDEVICE -> DKA0:): swap the
+     * device, keep the caller's directory, and re-resolve. */
+    {
+        vmsfs_filespec_t nxt = *parsed;
+        char e2[VMSFS_MAX_DEVICE + 1];
+        strncpy(e2, equiv, sizeof(e2) - 1);
+        e2[sizeof(e2) - 1] = '\0';
+        size_t l2 = strlen(e2);
+        if (l2 > 0 && e2[l2 - 1] == ':')
+            e2[l2 - 1] = '\0';
+        strncpy(nxt.device, e2, sizeof(nxt.device) - 1);
+        nxt.device[sizeof(nxt.device) - 1] = '\0';
+        nxt.has_device = 1;
+        compose_ods2_r(&nxt, out, count, max_out, depth + 1);
+    }
+}
+
+int vmsfs_compose_ods2_candidates(const char *filespec,
+                                  char out[][VMSFS_MAX_FILESPEC], int max_out)
+{
+    if (!filespec || !out || max_out <= 0)
+        return 0;
+
+    vmsfs_filespec_t parsed;
+    if (!$VMS_STATUS_SUCCESS(vmsfs_parse_filespec(filespec, &parsed)))
+        return 0;
+
+    int count = 0;
+    compose_ods2_r(&parsed, out, &count, max_out, 0);
+    return count;
+}
+
+/*
  * vmsfs_translate_directory - Convert VMS directory spec to Linux path.
  *
  * Translations:

@@ -523,7 +523,8 @@ bgsock-poll-always-ready
 bgsock-getname-addr-zeroed
 vmsfs-mountvis-crossproc-resolve-disabled
 initialize-home-magic-not-written
-ods2-read-content-vbn"
+ods2-read-content-vbn
+dirlogical-compose-drops-common-member"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -4982,6 +4983,39 @@ EOF
                       ;;
         esac;;
 
+    dirlogical-compose-drops-common-member)
+        case "$_f" in
+        facility)     echo "Rooted/concealed directory-logical composition to ODS-2 candidate specs (vmsfs_compose_ods2_candidates fans a concealed rooted SEARCH LIST -- SYS\$SYSROOT = dev:[SYS0.], dev:[SYS0.SYSCOMMON.] -- into ONE candidate per member so SYS\$SYSTEM:FILE resolves through the node-specific member first and the COMMON member second), vms-0044, epic vms-208";;
+        targets)      echo "vmsfs/vmsfs_translate.c";;
+        suites_red)   echo "test_syssvc_dirlogical_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "compose_ods2_r() fans a concealed rooted search-list device into one composed candidate PER member: the node-specific root [SYS0.] merged with the caller's subdirectory ([SYS0.SYSEXE]) FIRST, the common root [SYS0.SYSCOMMON.] merged SECOND ([SYS0.SYSCOMMON.SYSEXE]) -- the search order a running system disk presents (the shared files physically live under the COMMON root). Capping the member loop at the first member (i < 1) drops every candidate past the node-specific one, so SYS\$SYSTEM:SYSUAF.DAT composes ONLY to [SYS0.SYSEXE]SYSUAF.DAT -- a directory that does not exist on the fixture (SYS0 holds only SYSCOMMON). The ACP walk of that lone candidate fails at the missing [SYSEXE] level (RMS\$_DNF) and, with no common candidate to fall through to, resolve_logical() returns not-found: SYS\$SYSTEM:SYSUAF.DAT no longer resolves to a file FID at all. Only the resolution assertions can tell; the fail-honest RMS\$_FNF/RMS\$_DNF edge checks (which never needed the common member) stay green.";;
+        require_fail) cat <<'EOF'
+SYS$SYSTEM:SYSUAF.DAT resolves through lnm+$PARSE+ACP to a file FID
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the walk FELL THROUGH the empty node member and resolved on the COMMON member (search order)
+$GET/IO$_READVBLK reads SYSUAF.DAT byte-exact off the ODS-2 volume (no vmsfs_to_linux_path)
+SYS$MANAGER:WELCOME.TXT resolves through the same rooted chain to a file FID
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME DROPPED MEMBER, SEEN AT EVERY LOOKUP THAT LIVES UNDER THE COMMON ROOT.
+Every shared system file on the fixture (SYSUAF.DAT, WELCOME.TXT, STARLET.OLB)
+lives under [SYS0.SYSCOMMON.*]; with the common member dropped, NONE of them
+composes a candidate that reaches its real directory, so the search-order proof
+(which member resolved), the byte-exact read (which needs the file FID the
+common member yields), and the SYS$MANAGER: lookup all redden from the one
+capped loop. The two fail-honest cases -- a file absent from a directory that
+DOES resolve (RMS$_FNF) and a concrete spec with a missing directory level
+(RMS$_DNF) -- never depend on the common member being present and stay green.
+EOF
+                      ;;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -6419,6 +6453,18 @@ apply_edit() {
         # substitution the original text is gone, so a second apply matches
         # nothing (the no-op selftest requires).
         sed -i 's|vms_lock_acp_vol_ex(proc, fop_resnam, &fop_lkid)|SS__NORMAL /* NEGCTL acp-fileop-no-dlm-lock */|' "$_file";;
+    dirlogical-compose-drops-common-member)
+        # ANCHORED to the concealed-rooted search-list fan-out loop in
+        # compose_ods2_r(): `for (uint8_t i = 0; i < n && *count < max_out; i++)`
+        # occurs exactly once in the file (the `*count` pointer form is unique to
+        # this function; expand_rooted_concealed_multi's sibling loop uses a plain
+        # `count`). Capping the bound at `i < 1` drops every member past the
+        # node-specific one, so a concealed rooted search-list device composes
+        # only its FIRST member -- SYS$SYSTEM:SYSUAF.DAT no longer composes the
+        # COMMON candidate the fixture's shared files actually live under, and the
+        # resolution assertions redden. After substitution the original text is
+        # gone, so a second apply matches nothing (the no-op selftest requires).
+        sed -i 's|for (uint8_t i = 0; i < n \&\& \*count < max_out; i++) {|for (uint8_t i = 0; i < 1 \&\& *count < max_out; i++) { /* NEGCTL dirlogical-compose-drops-common-member */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

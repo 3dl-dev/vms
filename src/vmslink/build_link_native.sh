@@ -100,7 +100,7 @@ CC="$CC" CFLAGS="$LIBCFLAGS" WORK="$WORK/libvms" sh "$HERE/mk_libvms_shr.sh" \
 echo "== LIBVMSRMS\$SHR.EXE =="
 CC="$CC" CFLAGS="$LIBCFLAGS" WORK="$WORK/vmsrms" sh "$HERE/mk_vmsrms_shr.sh" \
     "$LINK_EXE" "$SYSLIB/LIBVMSRMS\$SHR.EXE" "$SYSLIB/DECC\$SHR.EXE" \
-    "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSFS\$SHR.EXE" \
+    "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSFS\$SHR.EXE" "$SYSLIB/LIBVMSSYS\$SHR.EXE" \
     "$SRC/vmsrms" "$SRC/libvms/include" "$SRC/vmsfs/include"
 
 echo "== DCL.EXE =="

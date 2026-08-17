@@ -149,7 +149,7 @@ CC="$CC" sh "$LINK_DIR/mk_libvms_shr.sh" \
 echo "== LIBVMSRMS\$SHR.EXE =="
 CC="$CC" sh "$LINK_DIR/mk_vmsrms_shr.sh" \
     "$WORK/LINK.EXE" "$SYSLIB/LIBVMSRMS\$SHR.EXE" \
-    "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSFS\$SHR.EXE" \
+    "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSFS\$SHR.EXE" "$SYSLIB/LIBVMSSYS\$SHR.EXE" \
     "$VMSRMS_DIR" "$LIBVMS_INC" "$VMSFS_INC"
 echo "-- full six-library producer graph linked VMS-native (same graph run_dcl_native.sh proves) --"
 

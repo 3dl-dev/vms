@@ -70,6 +70,39 @@ __asm__(
     ".hidden prod_counter\n"
     "prod_counter: .quad 0\n"
     ".popsection\n"
+#elif defined(__alpha__)
+    /* prod_bump is reached by an INDIRECT call through the mapped .vms$sv
+     * entry's raw address (bias + 0x100000), not a normal C-ABI call from
+     * this module -- so, exactly like real_start in testreal_inproc.c, it
+     * cannot assume $27/gp are valid at entry and must self-establish gp via
+     * the br+ldgp idiom before reaching prod_counter GP-relatively (Alpha has
+     * no PC-relative lea/adrp; see testreal_inproc.c's got_slot for the full
+     * rationale). Verified end-to-end under qemu-alpha with the identical
+     * br+ldgp+gprelhigh/gprellow sequence. */
+    ".pushsection .vms$pcode,\"ax\",@progbits\n"
+    ".balign 16\n"
+    ".hidden prod_bump\n.type prod_bump,@function\n"
+    ".ent prod_bump\n"
+    "prod_bump:\n"                       /* pinned at 0x100000 */
+    "  .frame $30, 0, $26, 0\n"
+    "  .prologue 0\n"
+    "  br   $29, 1f\n"
+    "1:\n"
+    "  ldgp $29, 0($29)\n"
+    "  ldah $1, prod_counter($29) !gprelhigh\n"
+    "  lda  $1, prod_counter($1) !gprellow\n"
+    "  ldq  $0, 0($1)\n"
+    "  addq $0, 1, $0\n"
+    "  stq  $0, 0($1)\n"
+    "  ret\n"
+    ".end prod_bump\n"
+    ".size prod_bump,.-prod_bump\n"
+    ".popsection\n"
+    ".pushsection .vms$pdata,\"aw\",@progbits\n"
+    ".balign 8\n"
+    ".hidden prod_counter\n"
+    "prod_counter: .quad 0\n"            /* pinned at 0x200000 */
+    ".popsection\n"
 #endif
 );
 

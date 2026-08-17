@@ -67,6 +67,14 @@
 #include <sys/uio.h>
 #include <sys/user.h>
 #include <sys/syscall.h>
+#if defined(__alpha__)
+/* Alpha's glibc ships no <sys/user.h> struct user_regs_struct at all (grep
+ * confirms it is simply absent from the alpha-linux-gnu sysroot) -- the
+ * kernel UAPI struct PTRACE_GETREGSET/NT_PRSTATUS actually transports on
+ * Alpha is struct pt_regs (asm/ptrace.h), which IS present. See
+ * syscall_nr_of() below for how its field differs from x86_64/aarch64. */
+#include <asm/ptrace.h>
+#endif
 #include <elf.h>
 
 #include "starlet.h"
@@ -954,6 +962,24 @@ static void cputim_probe(uint32_t target_pid, int repfd)
  */
 static long syscall_nr_of(pid_t pid)
 {
+#if defined(__alpha__)
+    /* Alpha has no user_regs_struct (see the asm/ptrace.h include above) --
+     * PTRACE_GETREGSET/NT_PRSTATUS transports struct pt_regs on this arch.
+     * The syscall number is v0 ($0), captured at trap entry before the
+     * dispatcher overwrites it with a return value -- struct pt_regs has no
+     * separate "orig_r0" the way x86_64 has orig_rax, because the ptrace
+     * snapshot for a PTRACE_SYSCALL entry-stop is taken before v0 is
+     * clobbered, so plain r0 already holds the pending call number. */
+    struct pt_regs regs;
+    struct iovec iov;
+
+    memset(&regs, 0, sizeof(regs));
+    iov.iov_base = &regs;
+    iov.iov_len  = sizeof(regs);
+    if (ptrace(PTRACE_GETREGSET, pid, (void *)NT_PRSTATUS, &iov) != 0)
+        return -1;
+    return (long)regs.r0;
+#else
     struct user_regs_struct regs;
     struct iovec iov;
 
@@ -968,6 +994,7 @@ static long syscall_nr_of(pid_t pid)
     return (long)regs.regs[8];
 #else
     return -1;
+#endif
 #endif
 }
 

@@ -88,6 +88,38 @@ static void img_exit_group(long code)
     __asm__ volatile("svc #0" : : "r"(x8), "r"(x0) : "memory");
     __builtin_unreachable();
 }
+#elif defined(__alpha__)
+/* Alpha/Linux syscall convention (src/libvmssys/arch/alpha/syscall.S,
+ * src/imgact/arch/alpha/imgact_arch.h's syscall6()): number in $0, args in
+ * $16.. ($16=a0 already lines up with fd/code, no shifting needed for a
+ * 1-3-arg call), `callsys`, error flagged out-of-band in $19 (a3) != 0 with
+ * $0 holding a POSITIVE errno on error. Clobber list matches syscall6()'s,
+ * proven under qemu-alpha (rd vms-e11/vms-fed). */
+static long img_write(long fd, const void *buf, long n)
+{
+    register long v0 __asm__("$0")  = 4;      /* __NR_write */
+    register long a0 __asm__("$16") = fd;
+    register long a1 __asm__("$17") = (long)buf;
+    register long a2 __asm__("$18") = n;
+    register long a3 __asm__("$19");
+    __asm__ volatile("callsys"
+                     : "+r"(v0), "=r"(a3)
+                     : "r"(a0), "r"(a1), "r"(a2)
+                     : "$1","$2","$3","$4","$5","$6","$7","$8",
+                       "$20","$21","$22","$23","$24","$25","$27","$28","memory");
+    return a3 ? -v0 : v0;
+}
+static void img_exit_group(long code)
+{
+    register long v0 __asm__("$0")  = 405;    /* __NR_exit_group */
+    register long a0 __asm__("$16") = code;
+    __asm__ volatile("callsys"
+                     :
+                     : "r"(v0), "r"(a0)
+                     : "$1","$2","$3","$4","$5","$6","$7","$8","$19",
+                       "$20","$21","$22","$23","$24","$25","$27","$28","memory");
+    __builtin_unreachable();
+}
 #else
 static long img_write(long fd, const void *buf, long n){(void)fd;(void)buf;(void)n;return -1;}
 static void img_exit_group(long code){(void)code; for(;;){}}
@@ -161,6 +193,23 @@ static void *got_slot(int i)
     void **g;
     __asm__("adrp %0, testreal_got0\n\tadd %0, %0, :lo12:testreal_got0" : "=r"(g));
     return g[i];
+#elif defined(__alpha__)
+    /* Alpha has no PC-relative lea/adrp; the position-independent equivalent
+     * is GP-relative addressing (!gprelhigh/!gprellow), which resolves to a
+     * link-time constant offset from $29 (gp) -- $29 is already valid here
+     * (established by our own real_start preamble below, then carried
+     * through jsr's standard $27-based re-establishment in every callee's
+     * own prologue, exactly as src/imgact/arch/alpha/start.S's _start does
+     * for imgact_bootstrap). Verified end-to-end under qemu-alpha: zero
+     * dynamic relocations (readelf -r empty) and the loaded value round-
+     * trips correctly regardless of where the image is mapped. */
+    void **g;
+    __asm__(
+        "ldah $1, testreal_got0($29) !gprelhigh\n\t"
+        "lda  $1, testreal_got0($1) !gprellow\n\t"
+        "mov  $1, %0\n\t"
+        : "=r"(g) :: "$1");
+    return g[i];
 #else
     (void)i; return 0;
 #endif
@@ -218,6 +267,35 @@ __asm__(
     "  ldr x0, [sp]\n"          /* argc */
     "  bl testreal_main\n"
     "  brk #0\n"
+    ".size real_start,.-real_start\n"
+#elif defined(__alpha__)
+    /* imgact_enter_auxv jumps here with $30 (sp) at the constructed initial
+     * stack (argc at 0($30)) and $27 NOT guaranteed to hold our own address
+     * (a raw jmp, not a jsr/bsr) -- so, exactly like
+     * src/imgact/arch/alpha/start.S's own _start, establish gp via the
+     * self-relocating br+ldgp idiom before touching any global/calling any
+     * C function. `jsr $26, testreal_main` is the assembler pseudo-op that
+     * loads $27 with testreal_main's own address and calls it, so the
+     * GCC-compiled callee's prologue can re-derive gp correctly regardless
+     * of how we got here -- the same idiom start.S uses for
+     * imgact_bootstrap. testreal_main never returns (every path SYS$EXITs
+     * or falls through to img_exit_group); if it somehow did, call_pal 0x81
+     * (bpt) traps rather than running off the end, matching x86_64's ud2 /
+     * aarch64's brk #0. Verified end-to-end under qemu-alpha (a standalone
+     * harness reaching a GCC-compiled callee this way, reading argc off the
+     * constructed stack, ran and exited with the expected code). */
+    ".text\n.globl real_start\n.type real_start,@function\n"
+    ".ent real_start\n"
+    "real_start:\n"
+    "  .frame $30, 0, $26, 0\n"
+    "  .prologue 0\n"
+    "  br   $29, 1f\n"
+    "1:\n"
+    "  ldgp $29, 0($29)\n"
+    "  ldq  $16, 0($30)\n"      /* argc = *(sp) */
+    "  jsr  $26, testreal_main\n"
+    "  call_pal 0x81\n"         /* bpt: must not return */
+    ".end real_start\n"
     ".size real_start,.-real_start\n"
 #endif
 );

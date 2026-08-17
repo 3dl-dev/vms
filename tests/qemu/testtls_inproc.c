@@ -94,6 +94,33 @@ static void img_exit_group(long code)
     __asm__ volatile("svc #0" : : "r"(x8), "r"(x0) : "memory");
     __builtin_unreachable();
 }
+#elif defined(__alpha__)
+/* See testreal_inproc.c's identical block for the full rationale. */
+static long img_write(long fd, const void *buf, long n)
+{
+    register long v0 __asm__("$0")  = 4;      /* __NR_write */
+    register long a0 __asm__("$16") = fd;
+    register long a1 __asm__("$17") = (long)buf;
+    register long a2 __asm__("$18") = n;
+    register long a3 __asm__("$19");
+    __asm__ volatile("callsys"
+                     : "+r"(v0), "=r"(a3)
+                     : "r"(a0), "r"(a1), "r"(a2)
+                     : "$1","$2","$3","$4","$5","$6","$7","$8",
+                       "$20","$21","$22","$23","$24","$25","$27","$28","memory");
+    return a3 ? -v0 : v0;
+}
+static void img_exit_group(long code)
+{
+    register long v0 __asm__("$0")  = 405;    /* __NR_exit_group */
+    register long a0 __asm__("$16") = code;
+    __asm__ volatile("callsys"
+                     :
+                     : "r"(v0), "r"(a0)
+                     : "$1","$2","$3","$4","$5","$6","$7","$8","$19",
+                       "$20","$21","$22","$23","$24","$25","$27","$28","memory");
+    __builtin_unreachable();
+}
 #else
 static long img_write(long fd, const void *buf, long n){(void)fd;(void)buf;(void)n;return -1;}
 static void img_exit_group(long code){(void)code; for(;;){}}
@@ -204,6 +231,15 @@ static void *got_slot(int i)
     void **g;
     __asm__("adrp %0, testtls_got0\n\tadd %0, %0, :lo12:testtls_got0" : "=r"(g));
     return g[i];
+#elif defined(__alpha__)
+    /* See testreal_inproc.c's got_slot for the full rationale. */
+    void **g;
+    __asm__(
+        "ldah $1, testtls_got0($29) !gprelhigh\n\t"
+        "lda  $1, testtls_got0($1) !gprellow\n\t"
+        "mov  $1, %0\n\t"
+        : "=r"(g) :: "$1");
+    return g[i];
 #else
     (void)i; return 0;
 #endif
@@ -238,6 +274,39 @@ static long img_tls_read(void)
         "ldr %0, [x1, x0]\n\t"          /* *(TP + offset)                       */
         : "=r"(v) : : "x0", "x1", "memory");
     return v;
+#elif defined(__alpha__)
+    /* Alpha has no PC-relative lea/adrp (see got_slot above) and no hardware
+     * TLSDESC (src/imgact/arch/alpha/start.S's __tlsdesc_static header
+     * comment) -- but this is OVMX's OWN descriptor convention (a plain
+     * function-pointer-plus-offset pair we call by hand), not the ELF
+     * TLSDESC ABI, so it ports cleanly: load &img_tlsdesc GP-relatively,
+     * indirect-call its resolver word with the descriptor address in $16
+     * (a0) per __tlsdesc_static's documented contract ("arg in $16, returns
+     * in $0"), then add the Alpha thread pointer (rduniq, call_pal 0x9e --
+     * same primitive src/imgact/arch/alpha/start.S's imgact_get_tp uses) to
+     * the returned bias and dereference. The resolver call is a genuine
+     * indirect call (target loaded into $27 = pv, then jsr $26,($27)), so
+     * the callee can validly re-derive its own gp if it needs to -- same
+     * ABI contract as got_slot's callees elsewhere in this file. $9 (a
+     * callee-saved register) carries the resolver's result across the
+     * call_pal so it is not lost; declared as a clobber so GCC saves/
+     * restores it around this asm as needed. Verified end-to-end under
+     * qemu-alpha (a standalone harness driving this exact resolver-call +
+     * rduniq sequence through a hand-built descriptor matched the expected
+     * TP+bias address). */
+    long v;
+    __asm__ volatile(
+        "ldah $16, img_tlsdesc($29) !gprelhigh\n\t"
+        "lda  $16, img_tlsdesc($16) !gprellow\n\t"
+        "ldq  $27, 0($16)\n\t"          /* resolver = descriptor[0]              */
+        "jsr  $26, ($27)\n\t"           /* resolver(a0=&descriptor) -> $0 = bias */
+        "mov  $0, $9\n\t"
+        "call_pal 0x9e\n\t"             /* rduniq -> $0 = TP                     */
+        "addq $0, $9, $0\n\t"
+        "ldq  %0, 0($0)\n\t"            /* *(TP + bias): the image's OWN slot    */
+        : "=r"(v)
+        : : "$16", "$27", "$26", "$0", "$9", "memory");
+    return v;
 #else
     return 0;
 #endif
@@ -260,6 +329,22 @@ static void img_tls_write(long val)
         "mrs x1, tpidr_el0\n\t"
         "str %0, [x1, x0]\n\t"
         : : "r"(val) : "x0", "x1", "memory");
+#elif defined(__alpha__)
+    /* See img_tls_read's identical descriptor-call + rduniq sequence above
+     * for the full rationale; this is the store form. %0 (val) is left to
+     * GCC's own register choice, which will not collide with the clobbered
+     * scratch set below. */
+    __asm__ volatile(
+        "ldah $16, img_tlsdesc($29) !gprelhigh\n\t"
+        "lda  $16, img_tlsdesc($16) !gprellow\n\t"
+        "ldq  $27, 0($16)\n\t"          /* resolver = descriptor[0]              */
+        "jsr  $26, ($27)\n\t"           /* resolver(a0=&descriptor) -> $0 = bias */
+        "mov  $0, $9\n\t"
+        "call_pal 0x9e\n\t"             /* rduniq -> $0 = TP                     */
+        "addq $0, $9, $0\n\t"
+        "stq  %0, 0($0)\n\t"            /* *(TP + bias) = val                    */
+        : : "r"(val)
+        : "$16", "$27", "$26", "$0", "$9", "memory");
 #else
     (void)val;
 #endif
@@ -323,6 +408,21 @@ __asm__(
     "  ldr x0, [sp]\n"          /* argc */
     "  bl testtls_main\n"
     "  brk #0\n"
+    ".size tls_start,.-tls_start\n"
+#elif defined(__alpha__)
+    /* See testreal_inproc.c's real_start for the full rationale. */
+    ".text\n.globl tls_start\n.type tls_start,@function\n"
+    ".ent tls_start\n"
+    "tls_start:\n"
+    "  .frame $30, 0, $26, 0\n"
+    "  .prologue 0\n"
+    "  br   $29, 1f\n"
+    "1:\n"
+    "  ldgp $29, 0($29)\n"
+    "  ldq  $16, 0($30)\n"      /* argc = *(sp) */
+    "  jsr  $26, testtls_main\n"
+    "  call_pal 0x81\n"         /* bpt: must not return */
+    ".end tls_start\n"
     ".size tls_start,.-tls_start\n"
 #endif
 );

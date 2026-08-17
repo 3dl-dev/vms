@@ -68,6 +68,17 @@
 #elif defined(__aarch64__)
 #  define IMGACT_EM       EM_AARCH64
 #  define IMGACT_R_RELATIVE R_AARCH64_RELATIVE
+#elif defined(__alpha__)
+/* EM_ALPHA (glibc's <elf.h> #define EM_ALPHA 0x9026) is the historic
+ * Linux/Alpha e_machine value (NOT the later, officially-reassigned
+ * EM_ALPHA=41 that Linux/binutils never adopted) -- confirmed against a
+ * real alpha-linux-gnu-gcc-built ELF (`readelf -h` reports "Machine:
+ * Alpha", i.e. e_machine==0x9026), matching the same value
+ * src/imgact/arch/alpha/imgact_arch.h's already-proven external-loader
+ * (rd vms-e11/A2) derives from the identical header. R_ALPHA_RELATIVE
+ * likewise matches that header's definition. */
+#  define IMGACT_EM       EM_ALPHA
+#  define IMGACT_R_RELATIVE R_ALPHA_RELATIVE
 #else
 #  define IMGACT_EM       0
 #  define IMGACT_R_RELATIVE 0
@@ -99,7 +110,7 @@ typedef long (*imgact_entryfn)(long, long);
  * descriptor cell, NOT a C-RTL universal -- it never enters the .vms$sv symbol
  * vector or the kif SYS_VEC, so adding it triggers no cascade. `mov`/`ldr` set
  * no flags, so the caller's condition codes survive the call too. */
-#if defined(__x86_64__) || defined(__aarch64__)
+#if defined(__x86_64__) || defined(__aarch64__) || defined(__alpha__)
 __asm__(
     ".text\n"
     ".p2align 4\n"
@@ -117,6 +128,24 @@ __asm__(
     "    ldr x0, [x0, #8]\n"        /* return descriptor->arg (TP-rel offset) */
     "    ret\n"
     ".size ovmx_tlsdesc_static,.-ovmx_tlsdesc_static\n"
+#elif defined(__alpha__)
+    /* Alpha's OVMX-native descriptor convention (NOT hardware TLSDESC, which
+     * Alpha has no compiler/PALcode support for -- see
+     * src/imgact/arch/alpha/imgact_arch.h's header comment) passes the
+     * descriptor address in $16 (a0, the plain first-argument register --
+     * unlike x86_64/aarch64's TLSDESC ABI, which reserves a special
+     * non-standard call register specifically to avoid clobbering it) and
+     * returns in $0 (v0), exactly mirroring
+     * src/imgact/arch/alpha/start.S's own __tlsdesc_static (the external-
+     * loader's version of this same resolver contract, already proven under
+     * qemu-alpha, rd vms-e11/A2). */
+    ".ent ovmx_tlsdesc_static\n"
+    "ovmx_tlsdesc_static:\n"
+    "    .frame $30, 0, $26, 0\n"
+    "    .prologue 0\n"
+    "    ldq $0, 8($16)\n"          /* return descriptor->arg (TP-rel offset) */
+    "    ret\n"
+    ".end ovmx_tlsdesc_static\n"
 #endif
 );
 extern void ovmx_tlsdesc_static(void);
@@ -147,6 +176,16 @@ static inline unsigned long imgact_read_tp(void)
 #elif defined(__aarch64__)
     unsigned long tp;
     __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tp));
+    return tp;
+#elif defined(__alpha__)
+    /* rduniq (call_pal 0x9e): the Alpha PALcode primitive that returns the
+     * current thread pointer in $0, the SAME primitive
+     * src/imgact/arch/alpha/start.S's imgact_get_tp uses (proven under
+     * qemu-alpha, rd vms-e11/A2). Read-only, so this is genuinely
+     * non-reprogramming -- the whole point of imgact_read_tp, matching the
+     * x86_64/aarch64 arms above. */
+    unsigned long tp;
+    __asm__ volatile("call_pal 0x9e\n\tmov $0, %0" : "=r"(tp) :: "$0");
     return tp;
 #else
     return 0;
@@ -232,6 +271,27 @@ static void imgact_enter_auxv(unsigned long entry, unsigned long sp)
         "mov x29, xzr\n\t"    /* clear frame pointer                         */
         "mov x0, xzr\n\t"     /* x0 = 0: no rtld_fini                        */
         "br %0\n\t"           /* branch to the image's _start                */
+        : : "r"(entry), "r"(sp) : "memory");
+#elif defined(__alpha__)
+    /* Switch to the constructed User-mode stack ($30 = sp) and jump to the
+     * image's _start. Alpha's freestanding _start entries (e.g.
+     * tests/qemu/testreal_inproc.c's real_start) read argc directly off the
+     * constructed stack, not off a register, so -- unlike x86_64/aarch64
+     * above, which also zero a "no rtld_fini" register their crt
+     * convention expects -- nothing else needs clearing here. $27 (pv) IS
+     * loaded with entry, matching the standard Alpha calling convention (the
+     * caller places the callee's own address in $27 so the callee's
+     * prologue can validly ldgp $29,0($27) if it needs to); OVMX's own
+     * entries additionally self-establish gp via the br+ldgp idiom (see
+     * their own header comments) so they do not strictly depend on this,
+     * but setting it costs nothing and keeps this call ABI-conformant for
+     * any callee that does rely on it. `jmp $31,($27)` discards the return
+     * address (target register $31 is the hardwired zero register) --
+     * never returns, matching x86_64's "jmp *%0" / aarch64's "br %0". */
+    __asm__ volatile(
+        "mov %1, $30\n\t"     /* sp = constructed stack */
+        "mov %0, $27\n\t"     /* pv = entry             */
+        "jmp $31, ($27)\n\t"  /* jump, discard return   */
         : : "r"(entry), "r"(sp) : "memory");
 #else
     (void)entry; (void)sp;

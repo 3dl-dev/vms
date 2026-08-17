@@ -523,7 +523,8 @@ bgsock-poll-always-ready
 bgsock-getname-addr-zeroed
 vmsfs-mountvis-crossproc-resolve-disabled
 initialize-home-magic-not-written
-ods2-read-content-vbn"
+ods2-read-content-vbn
+dcl-acp-search-fid-fabricated"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -5725,6 +5726,28 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    dcl-acp-search-fid-fabricated)
+        case "$_f" in
+        facility)     echo "DCL file access via RMS/\$QIO-to-ACP: DCL DIRECTORY /FULL and the F\$SEARCH lexical reach files through RMS \$SEARCH, which returns each wildcard match's GENUINE ODS-2 File ID from the executive directory context (rms_search_fid over vms_kif_acp_acpcontrol; src/vmsrms/rms_search.c, consumed by src/vmsdcl/dcl_filespec.c dcl_rms_dir_*), vms-481, epic vms-208";;
+        targets)      echo "vmsrms/rms_search.c";;
+        suites_red)   echo "test_syssvc_dcl_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_impl_search() records the match's File ID number the ACP directory search returned (\`ctx->fid_num = a.fid_num;\`) so rms_search_fid() can hand DIRECTORY /FULL the REAL id. The mutation adds one (\`ctx->fid_num = a.fid_num + 1;\`), so every File ID F\$SEARCH/DIRECTORY reports is fabricated one too high while the match NAME, VERSION and iteration ORDER (from the resultant name + out_version, untouched) stay correct. Only the assertions that check the File ID against the codec-deterministic fixture (A.TXT;3=14, ;2=13, ;1=12, B.TXT;1=16) redden; the RMS\$_NMF exhaustion, the SET DEFAULT directory check and the byte-exact TYPE/COPY/CREATE round-trips all read a DIFFERENT source (rms_file_attr / rms_io) and stay green -- which is exactly the point: the search FID is not synthesized, it is the on-disk one (INV-6). After substitution the original text is gone, so a second apply matches nothing (the no-op selftest requires).";;
+        require_fail) cat <<'EOF'
+F$SEARCH/DIRECTORY match 1 = A.TXT version 3, real File ID 14 (highest first)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+F$SEARCH match 2 = A.TXT version 2, real File ID 13 (versions descending)
+F$SEARCH match 3 = A.TXT version 1, real File ID 12
+F$SEARCH match 4 = B.TXT version 1, real File ID 16 (B.LOG excluded by .TXT)
+EOF
+                      ;;
+        knock_on_why)  echo "the same fabricated-FID mutation shifts every match's reported File ID, so all four *.TXT matches read one too high; match 1 is the require_fail, the rest are its knock-ons.";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -6693,6 +6716,18 @@ apply_edit() {
         # true VBN on re-$OPEN. A second apply finds no `+ 1u;` left in the range
         # and is the no-op the idempotency selftest requires.
         sed -i '/^ssize_t rms_io_write/,/^}$/ s|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 1u;|        a.vbn    = (uint32_t)(f->cursor / RMS_IO_BLK) + 2u; /* NEGCTL rms-put-wrong-vbn */|' "$_file";;
+
+    dcl-acp-search-fid-fabricated)
+        # ANCHORED to the single match-FID record in rms_impl_search:
+        # `ctx->fid_num = a.fid_num;` occurs exactly once in rms_search.c.
+        # Adding one fabricates every File ID F$SEARCH/DIRECTORY reports (one too
+        # high), while the match name/version/order (resultant name + out_version,
+        # untouched) stay correct -- so only the fixture-FID assertions in
+        # test_syssvc_dcl_acp redden, and rms_file_attr / the byte-exact
+        # round-trips (a different source) stay green. After substitution no
+        # `= a.fid_num;` is left (now `= a.fid_num + 1;`) -- the no-op the
+        # idempotency selftest requires.
+        sed -i 's|ctx->fid_num = a.fid_num; ctx->fid_seq = a.fid_seq;|ctx->fid_num = a.fid_num + 1; ctx->fid_seq = a.fid_seq; /* NEGCTL dcl-acp-search-fid-fabricated */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

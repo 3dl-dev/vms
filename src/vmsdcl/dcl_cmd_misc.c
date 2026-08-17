@@ -2265,31 +2265,10 @@ int cmd_mount(struct dcl_command *cmd)
         return pst;
     }
 
-    /* Resolve the unit to its backing block device through the executive
-     * (vms_kif_disk_resolve, vms-3e8) -- the process never scans /sys/block
-     * itself (Rule 11). */
-    char backing[VMS_BACKING_SIZE];
-    memset(backing, 0, sizeof(backing));
-    uint32_t rst = vms_kif_disk_resolve(dev_name, backing, sizeof(backing),
-                                         NULL, NULL);
-    switch (rst) {
-    case SS$_NORMAL:
-        break;
-    case SS$_NOSUCHDEV:
-        dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
-        return SS$_NOSUCHDEV;
-    case SS$_IVDEVNAM:
-        dcl_error("SYSTEM", 0, "IVDEVNAM", "invalid device name");
-        return SS$_IVDEVNAM;
-    default:
-        return rst;
-    }
-
-    if (mount_point_is_mounted(mount_point)) {
-        dcl_error("MOUNT", 2, "DEVMOUNT",
-                  "device already mounted - _%s", dev_name);
-        return SS$_DEVMOUNT;
-    }
+    /* vms-481: the unit is resolved and its ODS-2 home block validated by the
+     * executive ACP $MOUNT below (vms_kif_acp_mount / vms-127) -- the process no
+     * longer resolves a backing block device or scans /proc/mounts for a /vms
+     * passthrough. */
 
     /* Claim the unit in the executive's device table (vms-651 wires
      * vms_kif_alloc for the first time). */
@@ -2314,75 +2293,34 @@ int cmd_mount(struct dcl_command *cmd)
     }
 
     /*
-     * The actual mount(2), performed by the setuid-root helper
-     * (tools/vms_mount_helper.c, vms-651): LOGINOUT setuid()/setgid()'s
-     * every VMS session onto its SYSUAF UIC (tools/vms_login.c), so THIS
-     * process holds no Linux capability regardless of the PRV$M_MOUNT it
-     * was just found to hold -- mount(2) itself requires CAP_SYS_ADMIN
-     * unconditionally. The helper re-derives PRV$M_MOUNT from the
-     * executive itself (it does not trust this process's claim) before
-     * doing anything privileged -- see its header comment for why a
-     * kernel-mediated mount is not available on this platform and for the
-     * full security reasoning. The mount point already exists --
-     * src/ovmx_init/ovmx_init.c's provision_disk_mount_points() created it,
-     * as root, before any session dropped privilege.
+     * vms-481: MOUNT the ODS-2 volume EXECUTIVE-GLOBAL through the Files-11 ACP
+     * ($MOUNT over /dev/vms, vms_kif_acp_mount / vms-127) -- not a setuid-root
+     * mount(2) of a vmsfs passthrough. The executive reads and validates the
+     * volume's ODS-2 home block + SCB and records it in the executive-global
+     * mounted-volume table, so EVERY process that $ASSIGNs the unit sees the
+     * same mounted volume (design §4.3). This retires the setuid mount(2)
+     * helper, the /vms mount point, the per-process vmsfs_device_add filespec
+     * translator, and the DISK$-label-via-helper path -- filespecs against the
+     * unit now resolve by $ASSIGNing it through the ACP. Fail-honest (INV-6): no
+     * ACP / no such device => the real SS$_ status, never a passthrough mount.
      */
-    char backing_path[VMS_BACKING_SIZE + 8];
-    snprintf(backing_path, sizeof(backing_path), "/dev/%s", backing);
-    char *helper_argv[] = {
-        (char *)VMS_MOUNT_HELPER_PATH, (char *)"mount",
-        backing_path, mount_point, NULL
-    };
-    int helper_errno = 0;
-    int hrc = run_mount_helper(helper_argv, &helper_errno);
-    if (hrc == 3) {
+    uint32_t mst = vms_kif_acp_mount(dev_name);
+    if (mst == SS$_NOSUCHDEV) {
         vms_kif_dalloc(dev_name);
-        dcl_error("SYSTEM", 4, "NOPRIV",
-                  "insufficient privilege or object protection violation");
-        return SS$_NOPRIV;
+        dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
+        return SS$_NOSUCHDEV;
     }
-    if (hrc != 0) {
+    if (mst == SS$_DEVMOUNT) {
+        vms_kif_dalloc(dev_name);
+        dcl_error("MOUNT", 2, "DEVMOUNT",
+                  "device already mounted - _%s", dev_name);
+        return SS$_DEVMOUNT;
+    }
+    if (!(mst & 1)) {
         vms_kif_dalloc(dev_name);
         dcl_error("OVMX", 4, "MOUNTFAIL",
-                  "%s would not mount as vmsfs: %s", dev_name,
-                  hrc == 1 ? strerror(helper_errno) : "mount helper did not run");
-        return SS$_BUGCHECK;
-    }
-
-    /* Tell the per-process VMS-filespec translator (the same mechanism
-     * DKA0:/SYSDISK_MOUNT already uses) so filespecs against this device
-     * resolve for the rest of this session. */
-    vmsfs_device_add(log_name, mount_point);
-
-    /* Create logical name for device -> linux path */
-    const char *table = LNM_PROCESS_TABLE;
-    if (dcl_has_qualifier(cmd, "SYSTEM"))
-        table = LNM_SYSTEM_TABLE;
-
-    lnm_manager_t *mgr = lnm_get_manager();
-    if (mgr) {
-        lnm_create(mgr, table, log_name, mount_point,
-                   LNM_ATTR_TERMINAL, LNM_MODE_USER);
-    }
-
-    /*
-     * DISK$<volume-label> (vms-f83): VMS MOUNT defines a logical name from the
-     * volume's own label so the disk can be addressed by label independent of
-     * the physical unit -- DISK$MYVOL:[DIR]FILE resolves wherever MYVOL is
-     * mounted (VSI OpenVMS System Manager's Manual, Vol. 1, "Mounting
-     * Volumes"; VSI OpenVMS DCL Dictionary, MOUNT). The label is READ FROM THE
-     * VOLUME (its vmsfs home block, via the setuid helper), not the command-
-     * line token, so the DISK$ name always reflects the disk actually mounted;
-     * if it cannot be read, no DISK$ logical is defined rather than
-     * fabricating one (INV-DCL). The equivalence is the device (DKA100:), so
-     * DISK$<label>:[dir]file translates through the device the mount just
-     * established. DISMOUNT removes it. Placed in the same table as the device
-     * logical above so it is resolvable in exactly the same scope.
-     */
-    char vol_label[16] = "";
-    if (mgr && mount_helper_readlabel(backing_path, vol_label,
-                                      sizeof(vol_label))) {
-        (void)dcl_mount_define_disk(mgr, table, vol_label, dev_name);
+                  "%s would not mount as ODS-2", dev_name);
+        return mst;
     }
 
     printf("%%MOUNT-I-MOUNTED, %s mounted on _%s\n", label, dev_name);

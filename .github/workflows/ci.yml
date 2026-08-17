@@ -247,6 +247,20 @@ jobs:
               - 'tools/cross-vax/**'
               - 'src/kernel-core/**'
               - 'src/kernel-netbsd/**'
+              # vms-02b: netbsd-vax-vms-crosscompile (build-vms-module-vax.sh)
+              # builds src/kernel-core/vmsfs_acp.c + src/vmsfs/ods2/ods2_edit.c
+              # under -DOVMX_ODS2_KERNEL, and both pull in the genuine ODS-2
+              # codec header at src/vmsfs/include/vmsfs/ods2.h (-I$ODS2_INC).
+              # Neither src/vmsfs/ods2/** nor src/vmsfs/include/** was in this
+              # filter, so a change to ods2.h or ods2_kcompat.h did not
+              # re-trigger this gate on a PR (only surfaced once a later rung
+              # pulled the header in and someone touched src/kernel-core/**
+              # too) -- ods2.h/vms-6a7f and ods2_kcompat.h/#648 both hit this.
+              # The broader netbsd_vax filter already covers 'src/vmsfs/**'
+              # for the userland-side jobs; this filter is the executive-only
+              # twin and needs its own explicit entries for the same reason.
+              - 'src/vmsfs/ods2/**'
+              - 'src/vmsfs/include/**'
               - 'tests/netbsd/netbsd_version.env'
               - 'tests/netbsd/guest/vmseflag.c'
               - 'tests/netbsd/guest/vmsaccess.c'

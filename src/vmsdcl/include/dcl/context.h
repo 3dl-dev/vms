@@ -112,9 +112,20 @@ struct dcl_context {
     uint16_t default_protection;
     int logged_in;
 
-    /* Open file channels (OPEN command) */
+    /* Open file channels (OPEN command).
+     *
+     * vms-5f0 (epic vms-208, atomic flip): a channel opened on a REAL file
+     * rides RMS ($OPEN/$GET/$CREATE/$PUT over the Files-11 ODS-2 ACP), not a
+     * stdio fopen() on a vmsfs_to_linux_path passthrough -- the passthrough
+     * cannot see files that live only on the genuine ODS-2 SYS$DISK
+     * (SYS$STARTUP:VMS$PHASES.DAT et al). `reader`/`writer` hold the RMS
+     * handle; `fp` is kept ONLY for the SYS$OUTPUT:/SYS$ERROR:/SYS$INPUT:
+     * standard-stream channels, which are process streams, not RMS files.
+     * Exactly one of {fp, reader, writer} is non-NULL on an open channel. */
     struct {
         FILE *fp;
+        struct dcl_rms_reader *reader;
+        struct dcl_rms_writer *writer;
         char name[64];
         int  mode;  /* 0=read, 1=write, 2=append */
     } channels[16];

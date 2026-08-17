@@ -86,6 +86,7 @@
 #include "rms_internal.h"
 #include "rms_io.h"
 #include "vmsfs/filespec.h"
+#include "vmsfs/device.h"      /* vms-0044: compose directory/concealed logicals -> ODS-2 candidates */
 #include "vmsfs/version.h"
 #include "ovmx_layout.h"
 #include "ssdef.h"
@@ -196,22 +197,21 @@ struct rms_acp_spec {
     uint16_t version;                /* 0 => highest (open) / highest+1 (create) */
 };
 
-/* Compose the effective VMS filespec from fab$l_fna (+ fab$l_dna defaults) and
- * split it into device / directory / name.type / version. ODS-2 is case-
- * insensitive; the name is upcased so it matches the on-disk directory records
- * the codec decodes. Returns 0 on success, -1 on a malformed / empty spec. */
-static int rms_acp_spec_from_fab(struct FAB *fab, struct rms_acp_spec *s)
-{
-    char spec[1024] = "";
-    const char *p;
-    const char *lb, *rb, *colon;
+/* Number of ODS-2 search-list candidates RMS composes for one filespec
+ * (SYS$SYSTEM: fans out to the node member + the SYSCOMMON member; deeper
+ * concealed chains a couple more). Matches LNM_MAX_SEARCHLIST (8). */
+#define RMS_ACP_MAX_CANDS 8
 
+/* Compose the effective VMS filespec from fab$l_fna (+ fab$l_dna defaults)
+ * WITHOUT resolving logical names. Returns 0 on success, -1 on empty. */
+static int rms_acp_effective_spec(struct FAB *fab, char *spec, size_t speclen)
+{
     if (!fab->fab$l_fna || fab->fab$b_fns == 0)
         return -1;
 
     {
         size_t len = fab->fab$b_fns;
-        if (len >= sizeof(spec)) len = sizeof(spec) - 1;
+        if (len >= speclen) len = speclen - 1;
         memcpy(spec, fab->fab$l_fna, len);
         spec[len] = '\0';
     }
@@ -224,10 +224,26 @@ static int rms_acp_spec_from_fab(struct FAB *fab, struct rms_acp_spec *s)
         memcpy(dflt, fab->fab$l_dna, dlen);
         dflt[dlen] = '\0';
         if (rms_resolve_spec(spec, dflt, combined, sizeof(combined)) == 0) {
-            strncpy(spec, combined, sizeof(spec) - 1);
-            spec[sizeof(spec) - 1] = '\0';
+            strncpy(spec, combined, speclen - 1);
+            spec[speclen - 1] = '\0';
         }
     }
+    return 0;
+}
+
+/* Split a fully-composed VMS filespec string into device / directory /
+ * name.type / version. ODS-2 is case-insensitive; the name is upcased so it
+ * matches the on-disk directory records the codec decodes. A spec with no
+ * device gets the DKA0: default. Returns 0 on success, -1 on a malformed /
+ * empty spec. */
+static int rms_acp_spec_parse(const char *spec_in, struct rms_acp_spec *s)
+{
+    const char *p;
+    const char *lb, *rb, *colon;
+    const char *spec = spec_in;
+
+    if (!spec || !spec[0])
+        return -1;
 
     memset(s, 0, sizeof(*s));
     strncpy(s->devnam, RMS_ACP_DEFAULT_DEV, sizeof(s->devnam) - 1);
@@ -289,6 +305,55 @@ static int rms_acp_spec_from_fab(struct FAB *fab, struct rms_acp_spec *s)
         s->name[rl] = '\0';
     }
     return 0;
+}
+
+/*
+ * rms_acp_specs_from_fab - vms-5f0 (epic vms-208 atomic flip).
+ *
+ * Compose the effective filespec from the FAB, then resolve any directory /
+ * concealed-rooted logical in its device field (SYS$STARTUP:, SYS$SYSTEM:,
+ * SYS$LIBRARY: ...) into one or more FULLY-COMPOSED on-volume ODS-2 candidate
+ * specs via vmsfs_compose_ods2_candidates() -- in search-list order (node
+ * member first, SYSCOMMON member second). Each candidate is split into an
+ * rms_acp_spec the ACP directory walk consumes. The RMS open/create/erase path
+ * tries them in order; the first the ACP resolves wins.
+ *
+ * A device-less spec (no logical to resolve) has no candidates to compose, so
+ * we fall back to the single naive parse with the DKA0: default -- preserving
+ * the pre-logical behaviour for plain "NAME.TYP" and "DKA0:[DIR]NAME.TYP".
+ *
+ * Fail-honest (INV-6): an unresolvable logical chain yields no candidates and
+ * returns 0 here, so the caller reports the honest RMS error (never a fabricated
+ * path, never a POSIX fallback). Returns the candidate count, or -1 on a
+ * malformed/empty spec.
+ */
+static int rms_acp_specs_from_fab(struct FAB *fab, struct rms_acp_spec *specs,
+                                  int max)
+{
+    char spec[1024];
+    if (rms_acp_effective_spec(fab, spec, sizeof(spec)) < 0)
+        return -1;
+    if (max <= 0)
+        return -1;
+
+    char cands[RMS_ACP_MAX_CANDS][VMSFS_MAX_FILESPEC];
+    int n = vmsfs_compose_ods2_candidates(spec, cands, RMS_ACP_MAX_CANDS);
+
+    int out = 0;
+    for (int i = 0; i < n && out < max; i++) {
+        if (rms_acp_spec_parse(cands[i], &specs[out]) == 0)
+            out++;
+    }
+    if (out > 0)
+        return out;
+
+    /* No device logical composed (device-less spec, or no LNM manager):
+     * parse the effective spec directly with the DKA0: default. If that spec
+     * DID carry a device that simply is not a logical, rms_acp_spec_parse
+     * keeps it verbatim -- same physical unit compose would have emitted. */
+    if (rms_acp_spec_parse(spec, &specs[0]) == 0)
+        return 1;
+    return -1;
 }
 
 /* Resolve the directory named by s->dirpath to its FID by walking each
@@ -427,29 +492,40 @@ uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out)
 
 #if defined(__linux__)
     struct FAB tfab = cc$rms_fab;
-    struct rms_acp_spec sp;
+    struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
     struct vms_acp_access_args a;
-    uint32_t chan = 0, st;
+    uint32_t chan = 0, st = SS$_NOSUCHFILE;
+    int ncand, got = 0;
 
     tfab.fab$l_fna = (char *)vmsspec;
     tfab.fab$b_fns = (uint8_t)strlen(vmsspec);
-    if (rms_acp_spec_from_fab(&tfab, &sp) < 0)
+    /* vms-5f0: resolve directory/concealed logicals (SYS$SYSTEM:X for a
+     * DIRECTORY/FULL or F$FILE_ATTRIBUTES) and read the header from the first
+     * search-list member the ACP resolves. */
+    ncand = rms_acp_specs_from_fab(&tfab, specs, RMS_ACP_MAX_CANDS);
+    if (ncand < 0)
         return RMS$_SYN;
 
-    st = vms_kif_acp_assign(sp.devnam, &chan);
-    if (!$VMS_STATUS_SUCCESS(st))
+    for (int i = 0; i < ncand && !got; i++) {
+        struct rms_acp_spec *sp = &specs[i];
+        chan = 0;
+        st = vms_kif_acp_assign(sp->devnam, &chan);
+        if (!$VMS_STATUS_SUCCESS(st))
+            continue;
+        memset(&a, 0, sizeof(a));
+        a.chan = chan;                   /* read access (acctl 0) */
+        st = rms_acp_resolve_did(chan, sp->dirpath,
+                                 &a.did_num, &a.did_seq, &a.did_rvn, &a.did_nmx);
+        if (!$VMS_STATUS_SUCCESS(st)) { vms_kif_dassgn(chan); continue; }
+        a.version = sp->version;
+        strncpy(a.name, sp->name, VMS_ACP_NAME_SIZE - 1);
+
+        st = vms_kif_acp_access(&a);
+        if (!$VMS_STATUS_SUCCESS(st)) { vms_kif_dassgn(chan); continue; }
+        got = 1;
+    }
+    if (!got)
         return rms_acp_open_status(st);
-
-    memset(&a, 0, sizeof(a));
-    a.chan = chan;                       /* read access (acctl 0) */
-    st = rms_acp_resolve_did(chan, sp.dirpath,
-                             &a.did_num, &a.did_seq, &a.did_rvn, &a.did_nmx);
-    if (!$VMS_STATUS_SUCCESS(st)) { vms_kif_dassgn(chan); return rms_acp_open_status(st); }
-    a.version = sp.version;
-    strncpy(a.name, sp.name, VMS_ACP_NAME_SIZE - 1);
-
-    st = vms_kif_acp_access(&a);
-    if (!$VMS_STATUS_SUCCESS(st)) { vms_kif_dassgn(chan); return rms_acp_open_status(st); }
 
     out->fid_num = a.fid_num; out->fid_seq = a.fid_seq;
     out->fid_rvn = a.fid_rvn; out->fid_nmx = a.fid_nmx;
@@ -1022,9 +1098,10 @@ static uint32_t rms_impl_open(void *fab_ptr)
 #if defined(__linux__)
     /* --- Files-11 ODS-2 ACP path (vms-bc7): $ASSIGN + IO$_ACCESS --- */
     {
-        struct rms_acp_spec sp;
+        struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
         rms_file_t *h = NULL;
-        uint32_t st;
+        uint32_t st = SS$_NOSUCHFILE;
+        int ncand;
         int need_write = ((fab->fab$b_fac & FAB$M_PUT) ||
                           (fab->fab$b_fac & FAB$M_UPD) ||
                           (fab->fab$b_fac & FAB$M_DEL) ||
@@ -1038,15 +1115,23 @@ static uint32_t rms_impl_open(void *fab_ptr)
             fab->fab$l_sts = RMS$_ORG;
             return RMS$_ORG;
         }
-        if (rms_acp_spec_from_fab(fab, &sp) < 0) {
+        /* vms-5f0: resolve directory/concealed logicals (SYS$STARTUP:, etc.)
+         * to on-volume ODS-2 candidates and try each in search-list order. */
+        ncand = rms_acp_specs_from_fab(fab, specs, RMS_ACP_MAX_CANDS);
+        if (ncand < 0) {
             fab->fab$l_sts = RMS$_SYN;
             fab->fab$l_stv = 0;
             return RMS$_SYN;
         }
-        strncpy(fab->_resolved_path, sp.name, sizeof(fab->_resolved_path) - 1);
+        strncpy(fab->_resolved_path, specs[0].name,
+                sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
 
-        st = rms_acp_open_file(&sp, need_write, &h);
+        for (int i = 0; i < ncand; i++) {
+            st = rms_acp_open_file(&specs[i], need_write, &h);
+            if ($VMS_STATUS_SUCCESS(st))
+                break;
+        }
         if (!$VMS_STATUS_SUCCESS(st)) {
             if (st == SS$_NOSUCHFILE && (fab->fab$l_fop & FAB$M_CIF))
                 return rms_impl_create(fab_ptr);
@@ -1144,18 +1229,25 @@ static uint32_t rms_impl_create(void *fab_ptr)
     /* --- Files-11 ODS-2 ACP path (vms-bc7): $ASSIGN + IO$_CREATE(+ACCESS) --- */
     {
         struct rms_acp_spec sp;
+        struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
         rms_file_t *h;
         struct vms_acp_fileop_args fop;
         uint32_t chan = 0, st;
+        int ncand;
 
         if (fab->fab$b_org == FAB$C_IDX) {   /* deferred: see rms_impl_open */
             fab->fab$l_sts = RMS$_ORG;
             return RMS$_ORG;
         }
-        if (rms_acp_spec_from_fab(fab, &sp) < 0) {
+        /* vms-5f0: compose the target through any directory/concealed logical
+         * (SYS$SYSTEM:, SYS$MANAGER:, ...) and create in the PRIMARY search-list
+         * member -- exactly where VMS places a new file for a search list. */
+        ncand = rms_acp_specs_from_fab(fab, specs, RMS_ACP_MAX_CANDS);
+        if (ncand < 0) {
             fab->fab$l_sts = RMS$_SYN;
             return RMS$_SYN;
         }
+        sp = specs[0];
         strncpy(fab->_resolved_path, sp.name, sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
 
@@ -1421,37 +1513,43 @@ static uint32_t rms_impl_erase(void *fab_ptr)
 #if defined(__linux__)
     /* --- ACP path (vms-bc7): $ASSIGN + IO$_DELETE (remove entry + dealloc) --- */
     {
-        struct rms_acp_spec sp;
+        struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
         struct vms_acp_fileop_args fop;
-        uint32_t chan = 0, st;
+        uint32_t chan = 0, st = SS$_NOSUCHFILE;
+        int ncand, done = 0;
 
-        if (rms_acp_spec_from_fab(fab, &sp) < 0) {
+        /* vms-5f0: resolve directory/concealed logicals and try each search-
+         * list candidate in order; the first that resolves + deletes wins. */
+        ncand = rms_acp_specs_from_fab(fab, specs, RMS_ACP_MAX_CANDS);
+        if (ncand < 0) {
             fab->fab$l_sts = RMS$_SYN;
             return RMS$_SYN;
         }
-        st = vms_kif_acp_assign(sp.devnam, &chan);
-        if (!$VMS_STATUS_SUCCESS(st)) {
-            fab->fab$l_stv = st;
-            fab->fab$l_sts = rms_acp_open_status(st);
-            return fab->fab$l_sts;
-        }
-        memset(&fop, 0, sizeof(fop));
-        fop.chan      = chan;
-        fop.func      = VMS_ACP_FOP_DELETE;
-        fop.modifiers = VMS_ACP_M_DELETE;    /* remove entry AND deallocate */
-        st = rms_acp_resolve_did(chan, sp.dirpath, &fop.did_num, &fop.did_seq,
-                                 &fop.did_rvn, &fop.did_nmx);
-        if (!$VMS_STATUS_SUCCESS(st)) {
-            vms_kif_dassgn(chan);
-            fab->fab$l_stv = st; fab->fab$l_sts = RMS$_DNF;
-            return RMS$_DNF;
-        }
-        fop.version = sp.version;            /* 0 => all versions */
-        strncpy(fop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
+        for (int i = 0; i < ncand && !done; i++) {
+            struct rms_acp_spec *sp = &specs[i];
+            chan = 0;
+            st = vms_kif_acp_assign(sp->devnam, &chan);
+            if (!$VMS_STATUS_SUCCESS(st))
+                continue;                    /* try the next member */
+            memset(&fop, 0, sizeof(fop));
+            fop.chan      = chan;
+            fop.func      = VMS_ACP_FOP_DELETE;
+            fop.modifiers = VMS_ACP_M_DELETE;  /* remove entry AND deallocate */
+            st = rms_acp_resolve_did(chan, sp->dirpath, &fop.did_num,
+                                     &fop.did_seq, &fop.did_rvn, &fop.did_nmx);
+            if (!$VMS_STATUS_SUCCESS(st)) {
+                vms_kif_dassgn(chan);
+                continue;                    /* directory absent in this member */
+            }
+            fop.version = sp->version;       /* 0 => all versions */
+            strncpy(fop.name, sp->name, VMS_ACP_NAME_SIZE - 1);
 
-        st = vms_kif_acp_fileop(&fop);
-        vms_kif_dassgn(chan);
-        if (!$VMS_STATUS_SUCCESS(st)) {
+            st = vms_kif_acp_fileop(&fop);
+            vms_kif_dassgn(chan);
+            if ($VMS_STATUS_SUCCESS(st))
+                done = 1;
+        }
+        if (!done) {
             fab->fab$l_stv = st;
             fab->fab$l_sts = (st == SS$_NOSUCHFILE) ? RMS$_FNF
                            : (st == SS$_NOPRIV)     ? RMS$_PRV

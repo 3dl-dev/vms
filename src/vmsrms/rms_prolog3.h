@@ -101,6 +101,12 @@
 #define P3_FP_OFF_NUM_AREAS     4u   /* u16                                 */
 #define P3_FP_OFF_FIRST_AREAVBN 6u   /* u16, [PIN] value == 3               */
 #define P3_FP_OFF_FIRST_KEYOFF  8u   /* u16, byte offset of key-desc array  */
+/* [OVMX] write high-water: the next free VBN the writer (vms-045) will hand out
+ * for a new bucket. The oracle carries this notion in the area descriptor's
+ * "current extent {used,next}"; OVMX stores a single file-wide allocation cursor
+ * here (u32) so a reopened file resumes $PUT allocation without re-scanning the
+ * whole prologue. Zero on a read-only image the reader never allocates into. */
+#define P3_FP_OFF_ALLOC_NEXT    10u  /* u32  [OVMX] next free VBN (write only) */
 #define P3_FP_HDR_SIZE          16u  /* key descriptors start here by default */
 
 /* -------- area descriptor (VBN 3+), 64 bytes each [PIN size], [OVMX] offs -- */
@@ -222,6 +228,8 @@ typedef struct p3_ctx {
     uint16_t     version;
     uint16_t     num_keys;
     uint16_t     num_areas;
+    uint32_t     alloc_next;     /* write high-water: next free VBN to hand out */
+    int          writable;       /* 1 if bound/created for $PUT/$UPDATE        */
     p3_keydesc_t keys[P3_MAX_KEYS];
 } p3_ctx_t;
 
@@ -248,5 +256,54 @@ uint32_t rms_p3_get_by_key(p3_ctx_t *ctx, uint8_t krf,
 uint32_t rms_p3_find_by_key(p3_ctx_t *ctx, uint8_t krf,
                             const uint8_t *key, uint16_t key_len,
                             int rop_kge, int rop_kgt, uint16_t *rec_len);
+
+/* ====================================================================
+ * WRITE engine (vms-045): $CREATE / $PUT (insert + bucket SPLIT + RRV) /
+ * $UPDATE, authoring the genuine Files-11 Prolog-3 index over the ACP
+ * IO$_WRITEVBLK window. The writer emits EXACTLY the byte layout the reader
+ * above parses (same [PIN]/[OVMX] offsets), so writer and reader round-trip.
+ * ==================================================================== */
+
+/* Parameters to author a fresh Prolog-3 indexed file (single primary key,
+ * uncompressed keys/records this rung). [OVMX] layout is rms_prolog3.h. */
+typedef struct p3_create_params {
+    uint16_t key_size;      /* primary key length (bytes), 1..255            */
+    uint16_t seg0_pos;      /* embedded-key byte offset within the record    */
+    uint8_t  seg0_siz;      /* segment-0 size (== key_size, single segment)  */
+    uint8_t  dtp;           /* data type (0 == string; stored, not decoded)  */
+    uint8_t  bkt_blocks;    /* index/data bucket size in 512-byte blocks, >=1 */
+    uint8_t  allow_dup;     /* 1 permits duplicate keys, 0 -> RMS$_DUP        */
+} p3_create_params_t;
+
+/* Author a fresh, EMPTY Prolog-3 indexed file over the ACP window of the
+ * already-CREATEd/ACCESSED-for-write file `f` (an IO$_CREATE handle, or a
+ * POSIX-backed handle on the executive-absent defer). Writes VBN 1 (fixed
+ * prolog + key descriptor #0), VBN 3 (area descriptor), the root index bucket
+ * (Root Level 1), and the first empty data bucket -- all via IO$_WRITEVBLK.
+ * On success *out is a WRITABLE ctx (free with rms_p3_free), ready for $PUT.
+ * Returns RMS$_CREATED, RMS$_WPL (prologue write error), RMS$_KEY (bad key
+ * params), RMS$_PLG, RMS$_DME. */
+uint32_t rms_p3_create(rms_file_t *f, const p3_create_params_t *p,
+                       p3_ctx_t **out);
+
+/* Insert one record (`rec`, `rec_len` bytes; embedded key at the key
+ * descriptor's seg-0 position) into key-of-reference `krf` (0 == primary),
+ * maintaining sorted order, the control-flags/Record-ID/RRV lead, and the
+ * index. Splits the target data bucket when it fills (allocating a new bucket,
+ * redistributing records, leaving RRV stubs for RFA stability, and updating the
+ * parent index bucket's 2-byte child pointers). Returns RMS$_NORMAL, RMS$_DUP
+ * (duplicate key, allow_dup off), RMS$_RSZ (record shorter than the embedded
+ * key), RMS$_ORG (index would need a level this rung does not grow -- fail
+ * honest, no mis-write), RMS$_RER/RMS$_WPL (I/O), RMS$_PLG. */
+uint32_t rms_p3_put(p3_ctx_t *ctx, uint8_t krf,
+                    const uint8_t *rec, uint16_t rec_len);
+
+/* Modify the record whose key-of-reference `krf` key matches `key`: in place if
+ * the new image is the same length, else delete-and-reinsert (RFA may change,
+ * as on real RMS when the record grows). Returns RMS$_NORMAL, RMS$_RNF (no such
+ * record), RMS$_DUP/RMS$_RSZ/RMS$_ORG as $PUT, or an I/O status. */
+uint32_t rms_p3_update(p3_ctx_t *ctx, uint8_t krf,
+                       const uint8_t *key, uint16_t key_len,
+                       const uint8_t *rec, uint16_t rec_len);
 
 #endif /* RMS_PROLOG3_H */

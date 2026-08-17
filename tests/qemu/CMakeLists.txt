@@ -135,6 +135,17 @@ foreach(_anchored
     endif()
 endforeach()
 
+# test_syssvc_rms_p3_acp (vms-045) drives the runtime Prolog-3 indexed WRITE+READ
+# engine (src/vmsrms/rms_prolog3.c) over a real /dev/vms: it needs the engine's
+# private headers (rms_prolog3.h + rms_io.h, which define rms_file_t and the
+# create/put API) on its include path. The generic recipe links vmsrms already;
+# this only adds the src/vmsrms directory so the header resolves.
+if(TARGET test_syssvc_rms_p3_acp)
+    target_include_directories(test_syssvc_rms_p3_acp PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms
+        ${CMAKE_SOURCE_DIR}/src/kernel)
+endif()
+
 # test_syssvc_imgact_acp (vms-3e8e) drives the EXACT freestanding ACP reader
 # IMGACT.EXE runs (src/imgact/imgact_acp.c) against a real /dev/vms: the generic
 # function above already registered the target off the glob, so augment it with

@@ -4884,7 +4884,11 @@ EOF
         case "$_f" in
         facility)     echo "RMS reaches file data through the Files-11 (ODS-2) ACP: a record \$PUT is IO\$_WRITEVBLK at the record's {VBN, byte-offset} on the file's channel window, and a \$GET is IO\$_READVBLK at the same coordinate (src/vmsrms/rms_io.c, the block-I/O substrate under rms_seq/rel/idx; RMS \$OPEN/\$CREATE/\$CLOSE ride the ACP in rms_core.c), vms-bc7, epic vms-208";;
         targets)      echo "vmsrms/rms_io.c";;
-        suites_red)   echo "test_syssvc_rms_acp";;
+        # test_syssvc_rms_p3_acp (vms-045) also rides rms_io_write() -- it authors
+        # a genuine Prolog-3 indexed file over the SAME IO$_WRITEVBLK substrate,
+        # so a $PUT that lands one VBN too high desynchronizes the on-disk index
+        # from the untouched read path and its keyed read-back cannot resolve.
+        suites_red)   echo "test_syssvc_rms_acp test_syssvc_rms_p3_acp";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;

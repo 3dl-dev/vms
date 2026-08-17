@@ -41,6 +41,30 @@ set_tests_properties(vmsrms_prolog3_read PROPERTIES
     TIMEOUT 30
 )
 
+# vms-045: genuine Files-11 Prolog-3 indexed WRITE over the ACP block substrate.
+# The paired write half of test_prolog3_read: authors a real Prolog-3 file with
+# the runtime write engine (rms_p3_create/put/update), $PUTs enough records to
+# FORCE a genuine data-bucket SPLIT (new bucket + RRV + index-pointer update),
+# then reads them ALL back BY KEY through the read engine (rms_p3_get_by_key) --
+# proving writer<->reader agreement across a split. No .rms_idx sidecar, no /vms
+# write, no flat file. Host-only: the engine writes blocks via rms_io_write_exact
+# wrapping a plain fd (no /dev/vms); the /dev/vms ACP end-to-end is the paired
+# positive tests/qemu/test_syssvc_rms_p3_acp.c.
+add_executable(test_prolog3_write test_prolog3_write.c)
+target_include_directories(test_prolog3_write PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsrms
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_prolog3_write PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_prolog3_write COMMAND test_prolog3_write)
+set_tests_properties(vmsrms_prolog3_write PROPERTIES
+    LABELS "unit;rms;ods2"
+    TIMEOUT 30
+)
+
 # vms-5c6d: indexed sys$close must flush the in-memory B-tree before freeing it.
 # Regression for a Tier-1 silent-data-loss bug where records inserted since the
 # last periodic index save (rms_idx_put persists only every 100 inserts) were

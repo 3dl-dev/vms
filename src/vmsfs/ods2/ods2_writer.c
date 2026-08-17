@@ -458,7 +458,7 @@ static ods2_status_t encode_map_extent(uint8_t *mp, uint32_t lbn,
  * ods2_recattr_data_bytes() returns the true byte length.
  */
 enum fh2_kind { FH2_KIND_SYSTEM = 0, FH2_KIND_DIR, FH2_KIND_DATA,
-                FH2_KIND_DATA_FIX };
+                FH2_KIND_DATA_FIX, FH2_KIND_DATA_STMLF };
 
 /*
  * Write a complete FH2 header for FID `fidnum` at that FID's slot
@@ -572,6 +572,14 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
          * record framing. */
         rtype = ODS2_RTYPE_FIX; rattrib = 0x00; rsize = 512; maxrec = 512;
         break;
+    case FH2_KIND_DATA_STMLF:
+        /* RFM=STMLF (stream, LF-terminated), implied-CR -- the shape a real
+         * VMS text file (.COM/.DAT/SYSUAF) carries [S]. Verbatim bytes (no
+         * VAR re-framing, so byte-identical to the host file), but the reader
+         * frames one record per LF. rsize/maxrec are 0 for a stream file;
+         * efblk/ffbyte below give the exact valid byte length. */
+        rtype = ODS2_RTYPE_STMLF; rattrib = ODS2_RAT_CR; rsize = 0; maxrec = 0;
+        break;
     default: /* FH2_KIND_SYSTEM */
         rtype = 1; rattrib = 0x00; rsize = 512; maxrec = 512;
         break;
@@ -620,7 +628,8 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
             ffbyte = 0;
         } else {
             efblk = total_count;
-            if ((kind == FH2_KIND_DATA || kind == FH2_KIND_DATA_FIX) &&
+            if ((kind == FH2_KIND_DATA || kind == FH2_KIND_DATA_FIX ||
+                 kind == FH2_KIND_DATA_STMLF) &&
                 data_len > 0) {
                 size_t last_block_bytes = data_len - (size_t)(total_count - 1) * ODS2_BLOCK_SIZE;
                 ffbyte = (uint16_t)last_block_bytes; /* 1..512 */
@@ -1802,11 +1811,19 @@ ods2_status_t ods2_wvolume_create_file(ods2_wvolume_t *wvol,
     return wvol_commit(wvol, ODS2_OK);
 }
 
-ods2_status_t ods2_wvolume_create_file_raw(ods2_wvolume_t *wvol,
-                                           const char *name, uint16_t version,
-                                           const uint8_t *data, size_t data_len,
-                                           ods2_fid_t parent_dir,
-                                           ods2_fid_t *fid_out)
+/* Shared body for the two verbatim (byte-for-byte) create paths: the only
+ * difference between create_file_raw (RFM=FIXED, binary images) and
+ * create_file_stmlf (RFM=STMLF, text) is the FH2 record-attribute `kind`
+ * stamped into the header -- the block allocation and verbatim copy below are
+ * identical. */
+static ods2_status_t wvolume_create_file_verbatim(ods2_wvolume_t *wvol,
+                                                  const char *name,
+                                                  uint16_t version,
+                                                  const uint8_t *data,
+                                                  size_t data_len,
+                                                  ods2_fid_t parent_dir,
+                                                  enum fh2_kind kind,
+                                                  ods2_fid_t *fid_out)
 {
     uint32_t fidnum, lbn, nblocks, b;
     ods2_status_t st;
@@ -1848,15 +1865,35 @@ ods2_status_t ods2_wvolume_create_file_raw(ods2_wvolume_t *wvol,
         return st;
 
     /* seq == 1 (first generation); backlink == parent_dir. `data_len` (the
-     * verbatim byte count) drives write_fh2_header_ext's FH2_KIND_DATA_FIX
-     * efblk/ffbyte, so ods2_recattr_data_bytes() reports exactly data_len. */
-    st = write_fh2_header(wvol, fidnum, 1, name, version, 0, FH2_KIND_DATA_FIX,
+     * verbatim byte count) drives write_fh2_header_ext's efblk/ffbyte, so
+     * ods2_recattr_data_bytes() reports exactly data_len. */
+    st = write_fh2_header(wvol, fidnum, 1, name, version, 0, kind,
                           lbn, nblocks, data_len, parent_dir);
     if (st != ODS2_OK)
         return st;
 
     fid_from_num(fidnum, fid_out);
     return wvol_commit(wvol, ODS2_OK);
+}
+
+ods2_status_t ods2_wvolume_create_file_raw(ods2_wvolume_t *wvol,
+                                           const char *name, uint16_t version,
+                                           const uint8_t *data, size_t data_len,
+                                           ods2_fid_t parent_dir,
+                                           ods2_fid_t *fid_out)
+{
+    return wvolume_create_file_verbatim(wvol, name, version, data, data_len,
+                                        parent_dir, FH2_KIND_DATA_FIX, fid_out);
+}
+
+ods2_status_t ods2_wvolume_create_file_stmlf(ods2_wvolume_t *wvol,
+                                             const char *name, uint16_t version,
+                                             const uint8_t *data, size_t data_len,
+                                             ods2_fid_t parent_dir,
+                                             ods2_fid_t *fid_out)
+{
+    return wvolume_create_file_verbatim(wvol, name, version, data, data_len,
+                                        parent_dir, FH2_KIND_DATA_STMLF, fid_out);
 }
 
 ods2_status_t ods2_wvolume_create_dir(ods2_wvolume_t *wvol,

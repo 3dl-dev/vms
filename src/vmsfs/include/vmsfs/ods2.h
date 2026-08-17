@@ -221,8 +221,9 @@ static inline uint32_t ods2_fid_number(const ods2_fid_t *f)
 #define ODS2_RAT_CR    0x02u
 #define ODS2_RAT_PRN   0x04u
 #define ODS2_RAT_BLK   0x08u
-#define ODS2_RTYPE_FIX 1u
-#define ODS2_RTYPE_VAR 2u
+#define ODS2_RTYPE_FIX   1u
+#define ODS2_RTYPE_VAR   2u
+#define ODS2_RTYPE_STMLF 5u  /* stream, LF-terminated (FAB$C_STMLF) */
 
 typedef struct ods2_recattr {
     uint8_t  fat_rtype;         /*  0: record type / file organization */
@@ -1377,6 +1378,35 @@ ods2_status_t ods2_wvolume_create_file_raw(ods2_wvolume_t *wvol,
                                            const uint8_t *data, size_t data_len,
                                            ods2_fid_t parent_dir,
                                            ods2_fid_t *fid_out);
+
+/*
+ * ods2_wvolume_create_file_stmlf() (vms-5f0, epic vms-208): the TEXT twin of
+ * ods2_wvolume_create_file_raw(). Writes `data` VERBATIM (byte-for-byte, no
+ * re-framing -- the same contiguous block layout create_file_raw() uses, so
+ * the on-disk content bytes are identical to the host file) but stamps the
+ * header RFM=STMLF (fat_rtype == ODS2_RTYPE_STMLF, the FAB$C_STMLF on-disk
+ * analog [S]) with implied-CR record attributes.
+ *
+ * WHY THIS EXISTS: a genuine VMS text file (.COM, .DAT, SYSUAF, ...) is a
+ * STREAM of LF-terminated records, NOT one giant fixed 512-byte record.
+ * create_file_raw()'s RFM=FIXED/512 makes RMS/DCL read the WHOLE file as a
+ * single 512-byte padded record, so a line-oriented reader (STARTUP.COM's
+ * phase driver, LOGINOUT's SYSUAF scan) sees one bogus record then EOF. STMLF
+ * keeps the bytes verbatim (so the byte-identical-to-/vms property the master
+ * relies on holds) AND frames records on the LF the reader already expects, so
+ * a $GET returns one line per call. Binary images (.EXE) stay on
+ * create_file_raw() (FIXED) -- IMGACT reads their blocks, not records.
+ *
+ * Rule 8: fat_rtype==5 (STREAM-LF) and implied-CR (ODS2_RAT_CR) are public
+ * Files-11 / RMS FAB$B_RFM / FAB$B_RAT facts; the verbatim block layout adds
+ * no new on-disk format fact. Same allocation / FID / dir_insert contract as
+ * create_file_raw().
+ */
+ods2_status_t ods2_wvolume_create_file_stmlf(ods2_wvolume_t *wvol,
+                                             const char *name, uint16_t version,
+                                             const uint8_t *data, size_t data_len,
+                                             ods2_fid_t parent_dir,
+                                             ods2_fid_t *fid_out);
 
 /*
  * Create a new, empty directory file: one contiguous data block

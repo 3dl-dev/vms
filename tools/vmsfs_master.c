@@ -1069,6 +1069,25 @@ static int read_host_file(const char *path, uint64_t size,
     return 0;
 }
 
+/* Is this file type a BINARY image whose bytes must NOT be framed as text
+ * records? These stay RFM=FIXED (create_file_raw) -- IMGACT/loaders read their
+ * raw blocks, never line records. Everything else is treated as a STREAM-LF
+ * text file (create_file_stmlf) so a line-oriented RMS/DCL reader gets one
+ * record per LF instead of the whole file as one 512-byte record. `type` is
+ * the upcased file type (extension), no dot. Content bytes are verbatim in
+ * BOTH cases; only the FH2 record format differs. */
+static int ods2_type_is_binary_image(const char *type)
+{
+    static const char *bin[] = {
+        "EXE", "OLB", "OBJ", "STB", "DMP", "KIT", "GZ", "IMG", "ISO",
+        "BIN", "ELF", "TLB", "MLB", "SYS", "KO",
+    };
+    for (size_t i = 0; i < sizeof(bin)/sizeof(bin[0]); i++)
+        if (strcasecmp(type, bin[i]) == 0)
+            return 1;
+    return 0;
+}
+
 /* Construct a node's on-disk directory-entry name: "NAME.DIR" for a directory,
  * "NAME.TYPE" (or bare "NAME" when the type is empty) for a file -- exactly the
  * spelling ods2_wvolume_create_dir/create_file_raw + dir_insert expect and the
@@ -1123,8 +1142,16 @@ static int emit_tree_ods2(ods2_wvolume_t *wvol, const struct node *dir,
                 return -1;
 
             ods2_fid_t file_fid;
-            st = ods2_wvolume_create_file_raw(wvol, entry, MASTER_FILE_VER,
-                                              data, dlen, dir_fid, &file_fid);
+            /* Binary images (.EXE ...) -> RFM=FIXED verbatim (create_file_raw);
+             * text files (.COM/.DAT/SYSUAF ...) -> RFM=STMLF verbatim
+             * (create_file_stmlf) so DCL/RMS read them one LF-record at a time
+             * instead of the whole file as one 512-byte record (vms-5f0). */
+            if (ods2_type_is_binary_image(c->type))
+                st = ods2_wvolume_create_file_raw(wvol, entry, MASTER_FILE_VER,
+                                                  data, dlen, dir_fid, &file_fid);
+            else
+                st = ods2_wvolume_create_file_stmlf(wvol, entry, MASTER_FILE_VER,
+                                                    data, dlen, dir_fid, &file_fid);
             free(data);
             if (st != ODS2_OK) {
                 fprintf(stderr, "%%MASTER-F-MKFILE, create %s failed: %s\n",

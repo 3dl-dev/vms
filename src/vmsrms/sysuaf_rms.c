@@ -11,6 +11,7 @@
 #include "sysuaf_rms.h"
 #include "rmsdef.h"
 #include "ssdef.h"     /* $VMS_STATUS_SUCCESS */
+#include "purdy.h"     /* purdy_s_hash -- the real UAI$C_PURDY_S hash (seam) */
 
 #include <ctype.h>
 #include <string.h>
@@ -33,6 +34,49 @@ void sysuaf_rec_set_username(sysuaf_rms_record_t *r, const char *username)
         else
             r->uaf$t_username[i] = ' ';
     }
+}
+
+/* Trim the record's 32-byte blank-padded UAF$T_USERNAME into a NUL-terminated
+ * C string (VMS hashes the trimmed, variable-length name -- oracle-confirmed).
+ * out must hold SYSUAF_USERNAME_LEN + 1 bytes. */
+static void record_username(const sysuaf_rms_record_t *r, char *out)
+{
+    size_t n = SYSUAF_USERNAME_LEN;
+    while (n > 0 && r->uaf$t_username[n - 1] == ' ')
+        n--;
+    memcpy(out, r->uaf$t_username, n);
+    out[n] = '\0';
+}
+
+/* Password-hashing seam (vms-631e): compute the genuine PURDY_S hash from a
+ * plaintext password + the record's identity, and store it. */
+void sysuaf_rec_set_password_plaintext(sysuaf_rms_record_t *r,
+                                       const char *password, size_t pwlen,
+                                       uint16_t salt, uint8_t pwd_length)
+{
+    if (!r)
+        return;
+    char user[SYSUAF_USERNAME_LEN + 1];
+    record_username(r, user);
+    uint64_t quad = purdy_s_hash(password, pwlen, user, salt);
+    sysuaf_rec_set_password(r, quad, salt, UAI$C_PURDY_S, pwd_length);
+}
+
+/* Verify a login attempt against the stored quadword (constant-time compare on
+ * the 8 result bytes). Honest failure on a non-PURDY_S algorithm byte. */
+int sysuaf_rec_verify_password(const sysuaf_rms_record_t *r,
+                               const char *password, size_t pwlen)
+{
+    if (!r || r->uaf$b_encrypt != UAI$C_PURDY_S)
+        return 0;
+    char user[SYSUAF_USERNAME_LEN + 1];
+    record_username(r, user);
+    uint64_t attempt = purdy_s_hash(password, pwlen, user,
+                                    sysuaf_rec_salt(r));
+    uint64_t stored  = sysuaf_rec_pwd(r);
+    uint64_t diff = attempt ^ stored;
+    /* fold to a single 0/1 without an early-out branch on the secret */
+    return (int)((diff | (0ull - diff)) >> 63) ^ 1;
 }
 
 /* Build the 32-byte search key from a caller-supplied username the same way

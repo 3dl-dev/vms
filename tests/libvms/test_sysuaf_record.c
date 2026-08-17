@@ -87,6 +87,29 @@ int main(void)
     check(sizeof(((sysuaf_rms_record_t *)0)->uaf$q_pwd) == 8, "pwd is an 8-byte quadword");
     check(sizeof(((sysuaf_rms_record_t *)0)->uaf$w_salt) == 2, "salt is a 2-byte word");
 
+    /* ===== 1b. PASSWORD HASHING SEAM (vms-631e): the real PURDY_S hash ===
+     * Fill the record's password from PLAINTEXT via the seam helper and prove
+     * it lands byte-exact on the real OpenVMS oracle quadword (V1: A1ORA /
+     * KNOWNPW12 / salt 0x4D63 -> 0x716CBDC03C071C59), then verify a login. */
+    {
+        sysuaf_rms_record_t r;
+        memset(&r, 0, sizeof(r));
+        r.uaf$b_rtype = 1; r.uaf$b_version = 1;
+        sysuaf_rec_set_username(&r, "A1ORA");        /* username FIRST */
+        sysuaf_rec_set_password_plaintext(&r, "KNOWNPW12", 9,
+                                          0x4D63u, FIX_PWD_LEN);
+        check(sysuaf_rec_pwd(&r) == 0x716CBDC03C071C59ull,
+              "set_password_plaintext computes the real oracle V1 UAF$Q_PWD");
+        check(sysuaf_rec_salt(&r) == 0x4D63u, "salt stored");
+        check(r.uaf$b_encrypt == UAI$C_PURDY_S, "encrypt byte = PURDY_S");
+        check(sysuaf_rec_verify_password(&r, "KNOWNPW12", 9) == 1,
+              "verify_password accepts the correct password");
+        check(sysuaf_rec_verify_password(&r, "WRONGPW00", 9) == 0,
+              "verify_password rejects a wrong password");
+        check(sysuaf_rec_verify_password(&r, "knownpw12", 9) == 1,
+              "verify_password is case-insensitive (VMS upcases)");
+    }
+
     /* ===== 2. INDEXED FILE: create, put, read by username AND by UIC ===== */
     char path[] = "/tmp/ovmx_sysuaf_XXXXXX";
     int fd = mkstemp(path);

@@ -112,6 +112,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     syssvc/sys_imgact.c
     syssvc/imgact_prodreg.c
     rtl/sha256.c
+    rtl/purdy.c
     rtl/sysuaf.c
     rtl/rightslist.c
     rtl/rms_textfile.c

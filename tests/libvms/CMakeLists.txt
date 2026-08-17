@@ -42,6 +42,14 @@ libvms_add_test(test_libvms_lib_bitops
 libvms_add_test(test_libvms_str_routines
     ${CMAKE_CURRENT_SOURCE_DIR}/test_str_routines.c)
 
+# Test 4a: VMS Purdy password hash (vms-631e, epic vms-d0c) -- the REAL
+# UAI$C_PURDY_S one-way hash that replaces the SHA-256 facade. Asserts the 7
+# real OpenVMS UAF$Q_PWD quadwords (VAX V7.3 + Alpha V8.4,
+# docs/oracle/purdy-hash-vectors.md) byte-exact, plus determinism / salt /
+# username / password / length sensitivity.
+libvms_add_test(test_libvms_purdy
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_purdy.c)
+
 # Test 4b: lib$table_parse / lib$tparse — TPARSE finite-state parser (vms-9f6)
 libvms_add_test(test_libvms_lib_tparse
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_tparse.c)

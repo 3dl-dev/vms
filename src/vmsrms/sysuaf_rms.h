@@ -82,6 +82,32 @@ static inline uint16_t sysuaf_rec_salt(const sysuaf_rms_record_t *r)
     return p3_le16(r->uaf$w_salt);
 }
 
+/* ---- password HASHING seam (vms-631e, epic vms-d0c) ---------------------- *
+ * The real Purdy hash. sysuaf_rec_set_password (above) stores an
+ * already-computed quadword AS BYTES; these two functions are where a
+ * PLAINTEXT password meets the record -- computing UAF$Q_PWD with the genuine
+ * UAI$C_PURDY_S one-way hash (src/libvms/rtl/purdy.c, byte-exact vs real VMS
+ * AUTHORIZE) and verifying a login attempt against the stored quadword. This
+ * REPLACES the SHA-256 facade the legacy sysuaf.c auth path used. The live
+ * auth flip (sysuaf.c / sys_uai.c) is C1 (vms-d92); this rung provides the
+ * functions and fills the record seam. Implemented in sysuaf_rms.c. */
+
+/* Compute the PURDY_S hash of `password` for this record's identity and store
+ * it, the `salt`, the algorithm byte (UAI$C_PURDY_S) and `pwd_length` at their
+ * [PIN] offsets. The username folded into the hash is taken from the record's
+ * UAF$T_USERNAME field, so set the username (sysuaf_rec_set_username) FIRST. */
+void sysuaf_rec_set_password_plaintext(sysuaf_rms_record_t *r,
+                                       const char *password, size_t pwlen,
+                                       uint16_t salt, uint8_t pwd_length);
+
+/* Verify a login attempt: hash `password` with the record's stored salt and
+ * username, compare byte-exact to the stored UAF$Q_PWD quadword. Returns 1 on
+ * match, 0 otherwise (including a record whose UAF$B_ENCRYPT is not
+ * UAI$C_PURDY_S -- OVMX only computes that variant, so any other algorithm
+ * byte fails honestly rather than faking a match). */
+int sysuaf_rec_verify_password(const sysuaf_rms_record_t *r,
+                               const char *password, size_t pwlen);
+
 /* ---- indexed-file API ---------------------------------------------------- */
 
 /* Author a fresh, EMPTY SYSUAF indexed file over the (writable) handle `f`:

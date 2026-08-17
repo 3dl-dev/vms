@@ -822,4 +822,16 @@ uint32_t vms_kif_acp_writevb(struct vms_acp_rw_args *args);
  * rung); exercised by tests/qemu/test_syssvc_acp_search.c against real /dev/vms. */
 uint32_t vms_kif_acp_acpcontrol(struct vms_acp_acpcontrol_args *args);
 
+/*
+ * IO$_CREATE / IO$_DELETE / IO$_MODIFY -- the ACP file-operation umbrella
+ * (vms-5303): create a file (real FID from INDEXF.SYS, versioned directory
+ * entry, optional access), delete a file (remove the entry + deallocate header
+ * and blocks), modify a file (extend/truncate/write attributes). func-dispatched
+ * on args->func (VMS_ACP_FOP_*). See src/kernel/vms_acp.h for the FIB/ATR
+ * interface and the ioctl-mapping decision. Returns SS$_NOSUCHDEV if /dev/vms
+ * is absent. OVMX-UNWIRED: vms_kif_acp_fileop (vms-5303) -- no product caller
+ * yet (RMS $CREATE/$ERASE/$EXTEND wire to it in a later rung); exercised by
+ * tests/qemu/test_syssvc_acp_create.c against real /dev/vms. */
+uint32_t vms_kif_acp_fileop(struct vms_acp_fileop_args *args);
+
 #endif /* _VMS_KIF_H */

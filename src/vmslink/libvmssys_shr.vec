@@ -141,3 +141,11 @@ vms_kif_acp_writevb=PROCEDURE
 # shifts an existing index. OVMX-UNWIRED (test-only) today; exported so the
 # vector is stable when the RMS $SEARCH / DCL F$SEARCH rung wires it.
 vms_kif_acp_acpcontrol=PROCEDURE
+# --- Files-11 (ODS-2) ACP IO$_CREATE / IO$_DELETE / IO$_MODIFY (vms-5303, epic
+# vms-208). The ACP file-operation umbrella: create a file header (real FID from
+# INDEXF.SYS + versioned directory entry + optional access), delete a file
+# (remove entry + deallocate header/blocks), modify (extend/truncate/write
+# attributes). func-dispatched. APPENDED at the end per the append-only contract
+# -- a new universal never shifts an existing index. OVMX-UNWIRED (test-only)
+# today; exported so the vector is stable when RMS $CREATE/$ERASE/$EXTEND wire it.
+vms_kif_acp_fileop=PROCEDURE

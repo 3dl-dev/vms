@@ -1082,6 +1082,13 @@ long vms_ioctl_acp_acpcontrol(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg);
 /*
+ * IO$_CREATE / IO$_DELETE / IO$_MODIFY (vms-5303): the ACP file-operation
+ * umbrella -- allocate a file header from INDEXF.SYS, enter a versioned
+ * directory record, deallocate a header + its blocks, extend/truncate/write
+ * attributes. func-dispatched on VMS_ACP_FOP_*; see vms_acp.h.
+ */
+long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg);
+/*
  * Release one file-class channel by number, for vms_ioctl_dassgn()'s fallback
  * when `chan` is neither a device nor a mailbox channel. Returns 0 if `chan`
  * named a file channel (released), or -ENOENT if it did not.

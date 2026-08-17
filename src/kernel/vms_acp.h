@@ -417,4 +417,129 @@ _Static_assert(sizeof(struct vms_acp_acpcontrol_args) == 200,
 _Static_assert(VMS_IOCTL_ACP_ACPCONTROL == 0xC0C8566Fu,
                "VMS_IOCTL_ACP_ACPCONTROL encodes differently here than on the reference build");
 
+/*
+ * ============================================================================
+ * IO$_CREATE / IO$_DELETE / IO$_MODIFY -- the ACP FILE-OPERATION umbrella
+ * (vms-5303, epic vms-208). The SIXTH and final rung of the ACP-QIO surface:
+ * create a file header (allocate a real FID from INDEXF.SYS's index bitmap,
+ * initialize the FH2 from the ATR list, optionally enter it in a directory at
+ * a new highest version, optionally access it); delete a file (remove its
+ * directory entry and/or deallocate its header + all its blocks); and modify a
+ * file (extend/allocate, truncate, write attributes, write a directory entry).
+ *
+ * IOCTL-MAPPING DECISION (OVMX design choice, justified). On real OpenVMS these
+ * are THREE distinct $QIO function codes (IO$_CREATE=9, IO$_DELETE=3,
+ * IO$_MODIFY=6 in $IODEF), each with the same five FIB/name/ATR parameters. The
+ * ACP band 0x68-0x6F is FULL (0x68 MOUNT ... 0x6F ACPCONTROL) and 0x70 begins
+ * the mailbox band, so there is no free ioctl NUMBER for three more per-function
+ * ioctls. Rather than burn scarce ioctl numbers -- or, worse, restructure the
+ * already-shipped, ABI-frozen band -- these three route through ONE "ACP
+ * file-operation" ioctl whose `func` field carries the actual $QIO FUNCTION CODE
+ * (VMS_ACP_FOP_CREATE/_DELETE/_MODIFY == IO$_CREATE/_DELETE/_MODIFY). This is
+ * MORE VMS-faithful than one-ioctl-per-function, not less: on VMS $QIO is a
+ * SINGLE system service and the function code selects the operation, which is
+ * exactly what carrying the function code in a field reproduces. It also
+ * extends the umbrella #641 (vms-a0b) deliberately built at nr 0x6F "EXACTLY so
+ * more ACP ops can route through a func field."
+ *
+ * The ioctl REUSES nr 0x6F (the ACP umbrella nr) with its OWN, larger arg
+ * struct: _IOWR folds sizeof into the request number, so VMS_IOCTL_ACP_FILEOP
+ * (252-byte struct) and VMS_IOCTL_ACP_ACPCONTROL (200-byte struct) are DISTINCT
+ * 32-bit ioctl commands -- the kernel switch dispatches each to its own handler,
+ * and a size drift on either yields -ENOTTY (honest), never a cross-decode, the
+ * same property every ioctl in this header already relies on. The
+ * ACPCONTROL struct (search-shaped, ABI-frozen at 200 bytes) cannot itself hold
+ * the ATR attribute block a CREATE needs, which is why FILEOP is a second
+ * size-distinct struct on the umbrella nr rather than more `func` subcodes on
+ * the same struct.
+ *
+ * CLEAN-ROOM (CLAUDE.md Rule 8, posture D2). The FIB roles (FIB$W_FID/_DID/
+ * _ACCTL, FIB$W_EXCTL/FIB$L_EXSZ extend control, FIB$W_NMCTL FIB$V_NEWVER) and
+ * the ATR codes are from the public I/O manual + $FIBDEF/$ATRDEF; the byte
+ * layout of the struct below is an OVMX design choice (labelled), as for the
+ * other ACP structs. Only the ODS-2 ON-DISK bytes written (the new FH2, the
+ * INDEXF/BITMAP.SYS bits, the versioned directory record) are byte-authentic,
+ * via the codec (src/vmsfs/ods2/, ods2_edit.c).
+ */
+
+/* The `func` selector == the $QIO function code ($IODEF): create/delete/modify. */
+#define VMS_ACP_FOP_CREATE   9u    /* IO$_CREATE */
+#define VMS_ACP_FOP_DELETE   3u    /* IO$_DELETE */
+#define VMS_ACP_FOP_MODIFY   6u    /* IO$_MODIFY */
+
+/* `modifiers` bits (IO$M_* roles; OVMX-original bit values, Rule 8 D2). */
+#define VMS_ACP_M_CREATE     0x0001u  /* IO$M_CREATE: enter the file in a directory */
+#define VMS_ACP_M_ACCESS     0x0002u  /* IO$M_ACCESS: also access it (build a window) */
+#define VMS_ACP_M_DELETE     0x0004u  /* IO$M_DELETE: also delete the file (dealloc)  */
+
+/* `attr_ctl` bits: which ATR fields to apply (CREATE/MODIFY write-attributes). */
+#define VMS_ACP_ATTR_PROT    0x01u    /* apply attr.fileprot */
+#define VMS_ACP_ATTR_OWNER   0x02u    /* apply attr.uic_group/uic_member */
+
+/*
+ * IO$_CREATE / IO$_DELETE / IO$_MODIFY. `func` selects the operation.
+ *
+ *  - CREATE: allocate a FID (real, from the index bitmap), init the FH2 (kind
+ *    ODS2_FK_*, attrs from `attr` per attr_ctl, owner defaulting to the caller's
+ *    UIC per INV-6), optionally extend by `exsz` initial blocks, optionally
+ *    (VMS_ACP_M_CREATE) enter it in FIB$W_DID at a NEW HIGHEST version (`version`
+ *    0 => highest+1), optionally (VMS_ACP_M_ACCESS) build a window on `chan`.
+ *    Returns the assigned FID (fid_*) and version (out_version). SS$_DUPLNAM (duplicate name; SS$_DUPFILNAM value not yet lab-pinned)
+ *    if the {name,version} already exists; SS$_DEVICEFULL if INDEXF/BITMAP is
+ *    exhausted; SS$_NOPRIV if the directory write is denied.
+ *  - DELETE: remove the FIB$W_DID directory entry for `name`/`version` (0 => all
+ *    versions) and, if VMS_ACP_M_DELETE (or fidmode by-FID), deallocate the file
+ *    (free every data block in BITMAP.SYS, free the FID in the index bitmap,
+ *    invalidate the header). SS$_NOSUCHFILE if the file/entry does not exist.
+ *  - MODIFY: extend by `exsz` blocks (append a retrieval pointer, grow HIBLK);
+ *    and/or truncate to `trunc_efblk`/`trunc_ffbyte` (free the blocks past it);
+ *    and/or write attributes (fileprot/owner per attr_ctl). Returns the new
+ *    HIBLK/EOF. By FID (fidmode) or by name in FIB$W_DID.
+ */
+struct vms_acp_fileop_args {
+    uint32_t chan;              /* in: file-class channel */
+    uint32_t func;             /* in: VMS_ACP_FOP_* ($QIO function code) */
+    uint32_t modifiers;        /* in: VMS_ACP_M_* (IO$M_CREATE/_ACCESS/_DELETE) */
+    uint32_t acctl;            /* in: FIB$L_ACCTL (VMS_ACP_M_ACCESS: read/write) */
+    uint16_t did_num;          /* in: FIB$W_DID directory FID (0/0/0 => MFD) */
+    uint16_t did_seq;
+    uint8_t  did_rvn;
+    uint8_t  did_nmx;
+    uint8_t  fidmode;          /* in: DELETE/MODIFY by FID (ignore name/DID) */
+    uint8_t  kind;             /* in: CREATE file kind (ODS2_FK_*) */
+    uint16_t fid_num;          /* in (fidmode) / out (CREATE): FIB$W_FID */
+    uint16_t fid_seq;
+    uint8_t  fid_rvn;
+    uint8_t  fid_nmx;
+    uint16_t version;          /* in: wanted/new version (CREATE 0 => highest+1) */
+    uint16_t out_version;      /* out: resolved/assigned version */
+    uint8_t  attr_ctl;         /* in: VMS_ACP_ATTR_* (which attrs to apply) */
+    uint8_t  pad0;
+    uint32_t exsz;             /* in: FIB$L_EXSZ blocks to allocate (extend) */
+    uint32_t trunc_efblk;      /* in: MODIFY truncate-to EOF VBN (0 => no trunc) */
+    uint16_t trunc_ffbyte;     /* in: MODIFY truncate first-free byte */
+    uint16_t pad1;
+    uint32_t window_nextents;  /* out: extents in the built window (M_ACCESS) */
+    uint32_t total_blocks;     /* out: window total block count */
+    uint32_t first_lbn;        /* out: LBN of window VBN 1 */
+    uint32_t new_hiblk;        /* out: highest allocated VBN after the op */
+    uint32_t new_efblk;        /* out: end-of-file VBN after the op */
+    uint32_t new_ffbyte;       /* out: first free byte after the op */
+    uint32_t pad2;
+    char     name[VMS_ACP_NAME_SIZE];  /* in (P2): "NAME.TYPE" */
+    struct vms_acp_fileattr attr;      /* in (P5): CREATE/MODIFY attrs / out */
+    uint32_t status;           /* out: SS$_ */
+    uint32_t pad3;
+};
+
+#define VMS_IOCTL_ACP_FILEOP \
+    _IOWR(VMS_IOC_MAGIC, 0x6F, struct vms_acp_fileop_args)
+
+_Static_assert(sizeof(struct vms_acp_fileop_args) == 252,
+               "vms_acp_fileop_args changed size -- VMS_IOCTL_ACP_FILEOP ABI break");
+_Static_assert(VMS_IOCTL_ACP_FILEOP == 0xC0FC566Fu,
+               "VMS_IOCTL_ACP_FILEOP encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_ACP_FILEOP != VMS_IOCTL_ACP_ACPCONTROL,
+               "FILEOP and ACPCONTROL must stay DISTINCT 32-bit commands on the shared nr 0x6F");
+
 #endif /* _VMS_ACP_H */

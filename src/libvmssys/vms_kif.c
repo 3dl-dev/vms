@@ -2219,3 +2219,18 @@ uint32_t vms_kif_acp_acpcontrol(struct vms_acp_acpcontrol_args *args)
 
     return args->status;
 }
+
+uint32_t vms_kif_acp_fileop(struct vms_acp_fileop_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!acp_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->name[VMS_ACP_NAME_SIZE - 1] = '\0';
+    args->status = 0;
+
+    KIF_CALL(VMS_IOCTL_ACP_FILEOP, args);
+
+    return args->status;
+}

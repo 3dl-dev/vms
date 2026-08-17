@@ -4979,6 +4979,10 @@ than at the parent's verify. The single-writer path -- one CREATE, its FID, the
 fail-honest edges -- never has two processes in the critical section at once, so
 it is identical locked or not and stays green; only the SIMULTANEOUS release of
 N writers onto one volume is what the lock exists to serialize.
+EOF
+                      ;;
+        esac;;
+
     dirlogical-compose-drops-common-member)
         case "$_f" in
         facility)     echo "Rooted/concealed directory-logical composition to ODS-2 candidate specs (vmsfs_compose_ods2_candidates fans a concealed rooted SEARCH LIST -- SYS\$SYSROOT = dev:[SYS0.], dev:[SYS0.SYSCOMMON.] -- into ONE candidate per member so SYS\$SYSTEM:FILE resolves through the node-specific member first and the COMMON member second), vms-0044, epic vms-208";;

@@ -240,6 +240,18 @@
 #define SS__NOSUCHFILE  2696        /* no such file (IO$_ACCESS resolve miss) */
 #define SS__FILNOTACC   2744        /* file not accessed (IO$_DEACCESS w/o access) */
 /*
+ * SS__DEVICEFULL (SS$_DEVICEFULL == 2664): a PUBLIC STARLET SYSTEM-facility code
+ * ("%SYSTEM-?-DEVICEFULL, device full"), added for the ACP IO$_WRITEVBLK
+ * implicit-extend path (vms-c60) as the HONEST answer when a write past EOF
+ * cannot allocate the shortfall from BITMAP.SYS -- never a fabricated success
+ * (INV-6). Rule 8: a documented status-code number, not a lab-observed value.
+ * The write-locked case (channel accessed read-only) returns the already-defined
+ * SS__NOPRIV rather than a newly-introduced SS$_WRITLCK, to avoid an un-grounded
+ * constant on an asserted path (the oracle-authentic SS$_WRITLCK is a labelled
+ * follow-up, the same footing #633 used for its SS__DEVALLOC "busy" choice).
+ */
+#define SS__DEVICEFULL  2664        /* device full (extend cannot allocate) */
+/*
  * SS__EXQUOTA -- this tree's existing src/libvms/include/ssdef.h value
  * (SS$_EXQUOTA == 28), NOT independently re-derived here, same discipline
  * as the device-table block above. ssdef.h carries no oracle citation for
@@ -1049,6 +1061,13 @@ long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg);
  */
 long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg);
+/*
+ * IO$_READVBLK / IO$_WRITEVBLK (vms-c60): virtual-block transfer on an accessed
+ * file channel through its window; a write past EOF triggers an implicit extend
+ * (BITMAP.SYS allocation + FH2 grow). See vms_acp.h and design §4.2.
+ */
+long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg);
 /*
  * Release one file-class channel by number, for vms_ioctl_dassgn()'s fallback
  * when `chan` is neither a device nor a mailbox channel. Returns 0 if `chan`

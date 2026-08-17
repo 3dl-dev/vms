@@ -126,3 +126,11 @@ vms_kif_acp_assign=PROCEDURE
 # exported so the vector is stable when the RMS-over-$QIO rung wires them.
 vms_kif_acp_access=PROCEDURE
 vms_kif_acp_deaccess=PROCEDURE
+# --- Files-11 (ODS-2) ACP IO$_READVBLK / IO$_WRITEVBLK (vms-c60, epic vms-208).
+# Virtual-block transfer on an accessed file channel through its window; a write
+# past EOF implicitly extends (BITMAP.SYS allocation + FH2 grow). APPENDED at the
+# end per the append-only contract -- a new universal never shifts an existing
+# index. OVMX-UNWIRED (test-only) today; exported so the vector is stable when
+# the RMS-over-$QIO $GET/$PUT rung wires them.
+vms_kif_acp_readvb=PROCEDURE
+vms_kif_acp_writevb=PROCEDURE

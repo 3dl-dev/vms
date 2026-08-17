@@ -245,6 +245,61 @@ _Static_assert(VMS_IOCTL_ACP_ASSIGN == 0xC018566Au,
 #define VMS_IOCTL_ACP_ACCESS  _IOWR(VMS_IOC_MAGIC, 0x6B, struct vms_acp_access_args)
 #define VMS_IOCTL_ACP_DEACCESS _IOWR(VMS_IOC_MAGIC, 0x6C, struct vms_acp_deaccess_args)
 
+/*
+ * ============================================================================
+ * IO$_READVBLK / IO$_WRITEVBLK -- virtual-block transfer on an ACCESSED file
+ * channel (vms-c60, epic vms-208). The FIFTH rung: the ACP-QIO record/block I/O
+ * the IO$_ACCESS window (0x6B) was built to carry, occupying the reserved tail
+ * 0x6D-0x6E of the ACP band (0x6F is IO$_ACPCONTROL / wildcard $SEARCH).
+ *
+ * On real OpenVMS these are $QIO function codes (IO$_READVBLK/IO$_WRITEVBLK,
+ * $IODEF) on a channel $ASSIGNed to the volume with an accessed file: P1 = the
+ * buffer, P2 = the byte count, P3 = the starting VBN (VSI OpenVMS I/O User's
+ * Reference Manual, "ACP-QIO Interface"; the ACP window maps VBN->LBN and RMS
+ * $GET/$PUT are layered on these). OVMX reaches the executive over /dev/vms, so
+ * the transfer control fields are marshalled into the flat arg struct below and
+ * the DATA is copied separately to/from `buffer` (a user address) by the
+ * handler -- the executive convention (mount/access structs above), not a
+ * byte-level $QIO wire.
+ *
+ * ONE struct serves BOTH directions (a virtual-block transfer is symmetric; the
+ * ioctl code selects read vs write). A WRITE whose end position lies past the
+ * file's current highest allocated VBN triggers an IMPLICIT EXTEND: the
+ * executive allocates the shortfall from the volume's BITMAP.SYS storage bitmap,
+ * appends a retrieval pointer to the file's FH2 (growing its window), and
+ * updates the header's HIBLK/EOF -- matching RMS $EXTEND / a $PUT past EOF. This
+ * is the executive doing the file-system's allocation, in the caller's context,
+ * exactly as the ODS-2 XQP does (design §4.2).
+ *
+ * CLEAN-ROOM (CLAUDE.md Rule 8, posture D2): the arg-struct byte layout is an
+ * OVMX design choice (labelled), as for the other ACP structs; the on-disk
+ * bytes it reads/writes (FM2 map, RECATTR EOF/HIBLK, BITMAP.SYS bits, the FH2
+ * checksum) are byte-authentic via the codec (src/vmsfs/ods2/, ods2_edit.c).
+ */
+struct vms_acp_rw_args {
+    uint32_t chan;        /* in: file-class channel with an accessed file */
+    uint32_t vbn;         /* in: starting virtual block number (1-based) */
+    uint32_t offset;      /* in: byte offset within the starting block (0..511) */
+    uint32_t length;      /* in: transfer length in bytes */
+    uint64_t buffer;      /* in: user data buffer (READ: dest; WRITE: src) */
+    uint32_t xferred;     /* out: bytes transferred */
+    uint32_t new_hiblk;   /* out: highest allocated VBN after (grows on extend) */
+    uint32_t new_efblk;   /* out: end-of-file VBN after */
+    uint32_t extended;    /* out: blocks newly allocated by an implicit extend */
+    uint32_t status;      /* out: SS$_ */
+    uint32_t pad;
+};
+
+#define VMS_IOCTL_ACP_READVBLK  _IOWR(VMS_IOC_MAGIC, 0x6D, struct vms_acp_rw_args)
+#define VMS_IOCTL_ACP_WRITEVBLK _IOWR(VMS_IOC_MAGIC, 0x6E, struct vms_acp_rw_args)
+
+_Static_assert(sizeof(struct vms_acp_rw_args) == 48,
+               "vms_acp_rw_args changed size -- ACP READVBLK/WRITEVBLK ABI break");
+_Static_assert(VMS_IOCTL_ACP_READVBLK == 0xC030566Du,
+               "VMS_IOCTL_ACP_READVBLK encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_ACP_WRITEVBLK == 0xC030566Eu,
+               "VMS_IOCTL_ACP_WRITEVBLK encodes differently here than on the reference build");
+
 _Static_assert(sizeof(struct vms_acp_fileattr) == 88,
                "vms_acp_fileattr changed size -- IO$_ACCESS ATR ABI break");
 _Static_assert(sizeof(struct vms_acp_access_args) == 224,

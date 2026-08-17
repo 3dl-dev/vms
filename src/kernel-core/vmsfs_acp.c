@@ -42,19 +42,18 @@
 
 /*
  * The GENUINE ODS-2 codec, compiled kernel-resident (-DOVMX_ODS2_KERNEL), gives
- * $MOUNT its home-block/SCB validation (vms-127). It is present ONLY in the
- * out-of-tree QEMU-test vms.ko (src/kernel/Makefile links ods2_reader.o and
- * defines OVMX_ODS2_KERNEL); the in-tree BOOTABLE overlay (distro/kernel/
- * drivers-ovmx/vms) does NOT yet carry the codec, because it flattens sources to
- * basenames and the codec includes the public header as the subdir path
- * "vmsfs/ods2.h" (the same flatten-safe-include follow-up vmsfs.ko's bootable
- * build still owes -- distro/kernel/drivers-ovmx/vmsfs/Kbuild). So the codec use
- * BELOW is gated on OVMX_ODS2_KERNEL: with it, $MOUNT validates the volume for
- * real and rejects non-ODS-2 media; without it, $MOUNT fail-honestly refuses
- * (SS$_DEVNOTMOUNT) rather than recording an unvalidated volume -- a fake mount
- * is the exact INV-6 facade CLAUDE.md Rule 9 forbids. No product path calls the
- * bootable ACP $MOUNT yet (the ODS-2 runtime-flip capstone is a later rung), so
- * the refuse-without-codec branch is off every live path today.
+ * $MOUNT its home-block/SCB validation (vms-127). It is now present in BOTH the
+ * out-of-tree QEMU-test vms.ko (src/kernel/Makefile) AND the in-tree BOOTABLE
+ * overlay (distro/kernel/drivers-ovmx/vms/{Kbuild,sources.conf}) -- vms-5f0
+ * added ods2_reader.o + ods2_edit.o to the bootable module and made the codec's
+ * subdir'd public header "vmsfs/ods2.h" flatten-safe (the '->' staging
+ * convention vmsfs.ko already used), because the atomic flip makes PID 1 $MOUNT
+ * SYS$DISK via the ACP -- the FIRST product path to call the bootable ACP
+ * $MOUNT. The codec use BELOW is gated on OVMX_ODS2_KERNEL: with it (both
+ * modules now), $MOUNT validates the volume for real and rejects non-ODS-2
+ * media; without it (a hypothetical codec-less build), $MOUNT fail-honestly
+ * refuses (SS$_DEVNOTMOUNT) rather than recording an unvalidated volume -- a
+ * fake mount is the exact INV-6 facade CLAUDE.md Rule 9 forbids.
  */
 #if defined(OVMX_ODS2_KERNEL)
 #include "vmsfs/ods2.h"

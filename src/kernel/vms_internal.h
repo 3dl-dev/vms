@@ -229,6 +229,17 @@
 #define SS__DEVALLOC    2112        /* device already allocated to another user */
 #define SS__DEVNOTALLOC 2136        /* device not allocated */
 /*
+ * Files-11 ACP file-open statuses (vms-204, epic vms-208). Single-lineage from
+ * this tree's src/libvms/include/ssdef.h -- SS$_NOSUCHFILE == 2696 ("no such
+ * file", the fail-honest answer when an IO$_ACCESS name/FID resolves to no
+ * directory entry / header) and SS$_FILNOTACC == 2744 ("file not accessed", an
+ * IO$_DEACCESS of a channel with no file accessed on it). Not re-derived; the
+ * same values ssdef.h carries. (SS$_NOPRIV for a protection-denied open is
+ * SS__NOPRIV, already defined above.)
+ */
+#define SS__NOSUCHFILE  2696        /* no such file (IO$_ACCESS resolve miss) */
+#define SS__FILNOTACC   2744        /* file not accessed (IO$_DEACCESS w/o access) */
+/*
  * SS__EXQUOTA -- this tree's existing src/libvms/include/ssdef.h value
  * (SS$_EXQUOTA == 28), NOT independently re-derived here, same discipline
  * as the device-table block above. ssdef.h carries no oracle citation for
@@ -1031,6 +1042,13 @@ void vms_mbx_release_all(struct vms_proc *proc);
 long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_dmount(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg);
+/*
+ * IO$_ACCESS / IO$_DEACCESS (vms-204): open a file by name or by FID on a
+ * file-class channel, building its VBN->LBN window; release it. See vms_acp.h
+ * and docs/design-files11-acp-executive.md §4.2.
+ */
+long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg);
 /*
  * Release one file-class channel by number, for vms_ioctl_dassgn()'s fallback
  * when `chan` is neither a device nor a mailbox channel. Returns 0 if `chan`

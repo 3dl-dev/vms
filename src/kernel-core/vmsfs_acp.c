@@ -76,13 +76,57 @@ struct vms_acp_volume {
     uint32_t         volsize;           /* SCB volume size, 512-byte blocks */
     uint16_t         struclev;          /* home/SCB structure level (0x0201) */
     char             volname[13];       /* NUL-terminated ODS-2 volume label */
+    /*
+     * INDEXF.SYS header base (vms-204): the LBN of the primary header for file
+     * number 1, so file number N's header is at idx_lbn + (N - 1) -- the same
+     * arithmetic the codec's ods2_bdev_read_header() uses (idx_lbn =
+     * hm2_ibmaplbn + hm2_ibmapsize). Captured at $MOUNT from the validated home
+     * block so IO$_ACCESS need not re-read + re-parse the home block per open.
+     */
+    uint32_t         idx_lbn;           /* LBN of INDEXF.SYS file-1 header */
 };
 
-/* One process's file-class channel to a mounted volume. */
+/*
+ * One retrieval-pointer run of an accessed file's window: VBNs [start_vbn ..
+ * start_vbn+count) map to LBNs [lbn .. lbn+count). Plain fixed-width fields (no
+ * codec type) so the channel struct compiles in the codec-free bootable build
+ * too.
+ */
+struct acp_win_ext {
+    uint32_t start_vbn;
+    uint32_t lbn;
+    uint32_t count;
+};
+
+/*
+ * The window cache size. A file with more than this many extents cannot be
+ * fully mapped by one IO$_ACCESS on this rung -- refused fail-honest
+ * (SS$_NOSUCHFILE is wrong; see the handler: it returns the honest "window
+ * did not fit" rather than a partial map). Generous for the boot corpus (the
+ * real-VAX fixture's files are 1-3 extents; INDEXF.SYS itself is 3).
+ */
+#define ACP_WINDOW_MAX 24
+
+/*
+ * One process's file-class channel to a mounted volume. After IO$_ACCESS the
+ * channel additionally carries ONE accessed file (the VMS "one file accessed
+ * per channel" model): its FID, the access mode it was opened for, and its
+ * VBN->LBN window. IO$_DEACCESS clears file_accessed and the window.
+ */
 struct vms_acp_chan {
     exec_list_node_t list;              /* in proc->file_channels */
     uint32_t         chan;
     struct vms_acp_volume *vol;
+    /* accessed-file state (all zero until IO$_ACCESS opens a file) */
+    uint8_t          file_accessed;     /* 1 while a file is accessed here */
+    uint8_t          acc_write;         /* opened for write (acctl&WRITE) */
+    uint16_t         acc_version;       /* resolved version */
+    uint16_t         acc_fid_num;
+    uint16_t         acc_fid_seq;
+    uint8_t          acc_fid_rvn;
+    uint8_t          acc_fid_nmx;
+    uint32_t         win_n;             /* extents in win[] */
+    struct acp_win_ext win[ACP_WINDOW_MAX];
 };
 
 /*
@@ -282,6 +326,7 @@ static uint32_t acp_validate_ods2(uint32_t major, uint32_t minor,
      * process's -- this row is executive-global). */
     out->struclev = s->home.hm2_struclev;
     out->volsize  = s->scb.scb_volsize;
+    out->idx_lbn  = idx_lbn;            /* INDEXF.SYS file-1 header base (vms-204) */
     memcpy(out->volname, s->home.hm2_volname, 12);
     out->volname[12] = '\0';
     result = SS__NORMAL;
@@ -523,6 +568,519 @@ long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg)
     args.status = SS__NORMAL;
 
 out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/* ================================================================
+ * IO$_ACCESS / IO$_DEACCESS (vms-204, epic vms-208) -- open a file by name or
+ * by FID on a file-class channel, building its VBN->LBN window; release it.
+ *
+ * The resolution + window build is the GENUINE ODS-2 codec (src/vmsfs/ods2/,
+ * validated against a real VAX volume) run kernel-resident, so it exists only
+ * with -DOVMX_ODS2_KERNEL -- the same gate the $MOUNT validation above uses
+ * (see the top-of-file OVMX_ODS2_KERNEL note). Blocks are sourced through the
+ * executive's exec_blockdev_read_block() (submit_bio_wait) -- the same raw
+ * block read $MOUNT validated the home block/SCB with -- NOT the codec's
+ * sb_bread host path (there is no mounted super_block behind an ACP volume).
+ * This file therefore SEQUENCES block reads and feeds the codec's PURE parsers
+ * (ods2_fh2_parse / ods2_fh2_map_walk / ods2_fh2_ident / ods2_dir_block_scan):
+ * every on-disk ODS-2 fact comes from the codec, Rule-8 clean.
+ * ================================================================ */
+#if defined(OVMX_ODS2_KERNEL)
+
+/*
+ * Privilege overrides on a protection check (public $PRVDEF bit numbers, Rule 8
+ * clean-room -- src/libvms/include/prvdef.h carries the same values): BYPASS
+ * (29) lifts all object access control; READALL (35) grants read to any object;
+ * SYSPRV (28) makes the accessor qualify for the SYSTEM protection category.
+ */
+#define ACP_PRV_M_SYSPRV   (1ULL << 28)
+#define ACP_PRV_M_BYPASS   (1ULL << 29)
+#define ACP_PRV_M_READALL  (1ULL << 35)
+
+/*
+ * The SYSTEM protection category covers a UIC whose GROUP number is <=
+ * MAXSYSGROUP -- a SYSGEN parameter whose documented default is 8 (public
+ * OpenVMS System Management / SYSGEN documentation); OVMX uses that default.
+ * OVMX maps a Linux uid/gid to UIC [gid,uid] (vms_module.c), so root is group 0,
+ * which the standard `group <= MAXSYSGROUP` test includes -- root reads system
+ * files through the SYSTEM protection field, exactly as a VMS [1,x] system
+ * process does. SYSPRV also confers the SYSTEM category.
+ */
+#define ACP_MAXSYSGROUP    8u
+
+/*
+ * acp_check_access - the Files-11 protection gate (INV-6). Grant the requested
+ * access (read always; write additionally when `want_write`) iff SOME category
+ * the accessor belongs to allows it, or a privilege overrides. Within each
+ * 4-bit protection field a SET bit DENIES (bit0=Read, bit1=Write); the four
+ * fields are System, Owner, Group, World (low to high nibble). Returns
+ * SS__NORMAL if granted, SS__NOPRIV if refused -- never a silent allow.
+ */
+static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
+                                 int want_write)
+{
+    uint16_t prot = fh->fh2_fileprot;
+    uint32_t acc_group = (proc->uic >> 16) & 0xFFFFu;
+    uint32_t acc_member = proc->uic & 0xFFFFu;
+    uint32_t own_group = fh->fh2_fileowner.uic_group;
+    uint32_t own_member = fh->fh2_fileowner.uic_member;
+    uint64_t privs = proc->cur_privs;
+    unsigned want = 0x1u;               /* read */
+    unsigned denied;
+    int is_system, is_owner, is_group;
+
+    if (want_write)
+        want |= 0x2u;                   /* write */
+
+    /* BYPASS lifts every access control. READALL grants the read bit. */
+    if (privs & ACP_PRV_M_BYPASS)
+        return SS__NORMAL;
+    if ((privs & ACP_PRV_M_READALL) && !want_write)
+        return SS__NORMAL;
+
+    is_owner  = (acc_group == own_group && acc_member == own_member);
+    is_group  = (acc_group == own_group);
+    is_system = (acc_group <= ACP_MAXSYSGROUP) ||
+                (privs & ACP_PRV_M_SYSPRV) != 0;
+
+    /* Access is granted if ANY applicable category leaves the wanted bits
+     * un-denied. Start denied; clear a want bit as soon as a category allows
+     * it. World always applies. */
+    denied = want;
+    if (is_system) denied &= ~(~(unsigned)(prot & 0xFu) & want);
+    if (is_owner)  denied &= ~(~(unsigned)((prot >> 4) & 0xFu) & want);
+    if (is_group)  denied &= ~(~(unsigned)((prot >> 8) & 0xFu) & want);
+    /* World: */    denied &= ~(~(unsigned)((prot >> 12) & 0xFu) & want);
+
+    return denied ? SS__NOPRIV : SS__NORMAL;
+}
+
+/*
+ * acp_read_header - read + validate file number `fid_num`'s primary FH2 into
+ * `raw` (>= 512 bytes) and its parsed form into `*parsed`. Header N is at
+ * vol->idx_lbn + (N-1), the INDEXF.SYS arithmetic the codec's reader uses.
+ * A bad FID / unreadable or non-validating header is SS__NOSUCHFILE.
+ */
+static uint32_t acp_read_header(struct vms_acp_volume *vol, uint32_t fid_num,
+                                uint8_t *raw, ods2_fh2_t *parsed)
+{
+    uint32_t lbn;
+
+    if (fid_num == 0)
+        return SS__NOSUCHFILE;
+    lbn = vol->idx_lbn + (fid_num - 1u);
+    if (exec_blockdev_read_block(vol->backing_major, vol->backing_minor,
+                                 lbn, raw, ODS2_BLOCK_SIZE) != 0)
+        return SS__NOSUCHFILE;
+    if (ods2_fh2_parse(raw, ODS2_BLOCK_SIZE, parsed) != ODS2_OK)
+        return SS__NOSUCHFILE;
+    return SS__NORMAL;
+}
+
+/* ---- directory search (over exec_blockdev_read_block + codec decoders) ---- */
+
+/* Case-insensitive compare of an on-disk (length-counted) name against a C
+ * string, mirroring ods2_path.c's name_eq_ci -- VMS filespecs are case-blind. */
+static int acp_name_eq_ci(const char *name, unsigned name_len, const char *want)
+{
+    unsigned i;
+    for (i = 0; i < name_len; i++) {
+        if (want[i] == '\0')
+            return 0;
+        if (toupper((unsigned char)name[i]) != toupper((unsigned char)want[i]))
+            return 0;
+    }
+    return want[name_len] == '\0';
+}
+
+struct acp_dirfind {
+    const char *want;       /* "NAME.TYPE" including the type */
+    uint16_t    want_ver;   /* 0 => highest wins */
+    int         matched;
+    uint16_t    best_ver;
+    ods2_fid_t  best_fid;
+};
+
+/* ods2_dir_cb: one call per {name, version, fid} in a directory data block. */
+static int acp_dirfind_scan_cb(const char *name, unsigned name_len,
+                               uint16_t version, const ods2_fid_t *fid, void *ctx)
+{
+    struct acp_dirfind *c = (struct acp_dirfind *)ctx;
+
+    if (!acp_name_eq_ci(name, name_len, c->want))
+        return 0;                       /* keep scanning */
+    if (c->want_ver != 0) {
+        if (version == c->want_ver) {
+            c->matched = 1;
+            c->best_ver = version;
+            c->best_fid = *fid;
+            return 1;                   /* exact version -- stop */
+        }
+        return 0;
+    }
+    if (!c->matched || version >= c->best_ver) {
+        c->matched  = 1;
+        c->best_ver = version;
+        c->best_fid = *fid;
+    }
+    return 0;
+}
+
+struct acp_dirwalk {
+    struct vms_acp_volume *vol;
+    uint8_t              *dblk;         /* scratch data-block buffer */
+    struct acp_dirfind   *find;
+    int                   io_err;
+};
+
+/* ods2_map_cb: one call per retrieval-pointer extent of the directory file.
+ * Read each data block and decode its records with the shared codec scanner. */
+static int acp_dirwalk_map_cb(const ods2_extent_t *ext, void *ctx)
+{
+    struct acp_dirwalk *w = (struct acp_dirwalk *)ctx;
+    uint32_t k;
+
+    for (k = 0; k < ext->count; k++) {
+        if (exec_blockdev_read_block(w->vol->backing_major, w->vol->backing_minor,
+                                     ext->lbn + k, w->dblk, ODS2_BLOCK_SIZE) != 0) {
+            w->io_err = 1;
+            return 1;                   /* stop the walk */
+        }
+        if (ods2_dir_block_scan(w->dblk, acp_dirfind_scan_cb, w->find))
+            return 1;                   /* exact-version match -- stop */
+    }
+    return 0;
+}
+
+/*
+ * acp_dir_find - search the directory whose validated header block is `dirhdr`
+ * for `name` ("NAME.TYPE", `want_ver` 0 => highest), walking its data blocks
+ * via its FM2 retrieval map. Fills *fid_out / *ver_out. SS__NOSUCHFILE if no
+ * such entry; SS__DEVNOTMOUNT on a corrupt map / block-read failure.
+ */
+static uint32_t acp_dir_find(struct vms_acp_volume *vol, const uint8_t *dirhdr,
+                             uint8_t *dblk_scratch, const char *name,
+                             uint16_t want_ver, ods2_fid_t *fid_out,
+                             uint16_t *ver_out)
+{
+    struct acp_dirfind find;
+    struct acp_dirwalk w;
+    ods2_status_t st;
+
+    find.want = name;
+    find.want_ver = want_ver;
+    find.matched = 0;
+    find.best_ver = 0;
+    memset(&find.best_fid, 0, sizeof(find.best_fid));
+
+    w.vol = vol;
+    w.dblk = dblk_scratch;
+    w.find = &find;
+    w.io_err = 0;
+
+    st = ods2_fh2_map_walk(dirhdr, acp_dirwalk_map_cb, &w, NULL);
+    if (st != ODS2_OK || w.io_err)
+        return SS__DEVNOTMOUNT;
+    if (!find.matched)
+        return SS__NOSUCHFILE;
+    *fid_out = find.best_fid;
+    *ver_out = find.best_ver;
+    return SS__NORMAL;
+}
+
+/* ---- window build (VBN->LBN retrieval map) ---- */
+
+struct acp_winbuild {
+    struct acp_win_ext *win;
+    uint32_t            max;
+    uint32_t            n;
+    uint32_t            next_vbn;       /* running first-VBN, starts at 1 */
+    int                 overflow;
+};
+
+static int acp_winbuild_cb(const ods2_extent_t *ext, void *ctx)
+{
+    struct acp_winbuild *w = (struct acp_winbuild *)ctx;
+
+    if (!ext || ext->count == 0)
+        return 0;                       /* skip empty run */
+    if (w->n >= w->max) {
+        w->overflow = 1;
+        return 1;                       /* stop -- window is full */
+    }
+    w->win[w->n].start_vbn = w->next_vbn;
+    w->win[w->n].lbn       = ext->lbn;
+    w->win[w->n].count     = ext->count;
+    w->next_vbn += ext->count;
+    w->n++;
+    return 0;
+}
+
+/* Resolve VBN through a built window to its LBN, or 0 if unmapped. */
+static uint32_t acp_window_map_vbn(const struct acp_win_ext *win, uint32_t n,
+                                   uint32_t vbn)
+{
+    uint32_t i;
+
+    if (vbn == 0)
+        return 0;
+    for (i = 0; i < n; i++) {
+        if (vbn >= win[i].start_vbn && vbn < win[i].start_vbn + win[i].count)
+            return win[i].lbn + (vbn - win[i].start_vbn);
+    }
+    return 0;
+}
+
+/*
+ * Heap scratch for one IO$_ACCESS: the directory + file header blocks, a
+ * directory data-block buffer, and the two parsed headers -- ~2.5 KB, too much
+ * for the kernel stack (as acp_validate_ods2's own scratch is). exec_zalloc'd
+ * once per access (a file open sleeps on the block reads anyway), freed before
+ * return.
+ */
+struct acp_access_scratch {
+    uint8_t    dirhdr[ODS2_BLOCK_SIZE];
+    uint8_t    filehdr[ODS2_BLOCK_SIZE];
+    uint8_t    dblk[ODS2_BLOCK_SIZE];
+    ods2_fh2_t dfh;
+    ods2_fh2_t fh;
+};
+
+#endif /* OVMX_ODS2_KERNEL */
+
+/*
+ * IO$_ACCESS: resolve a file (by name in a directory, or by FID) on a
+ * file-class channel and open it -- read its FH2, gate the requested access on
+ * proc->uic/privs (INV-6), build its VBN->LBN window into the channel's
+ * per-process ACP state, and return its FID + attributes. See vms_acp.h for the
+ * FIB/ATR interface (OVMX-labelled layout, Rule 8 D2). Fail-honest: an unknown
+ * name/FID => SS$_NOSUCHFILE; a denied open => SS$_NOPRIV; an invalid channel
+ * => SS$_IVCHAN; a codec-free build => SS$_DEVNOTMOUNT (no volume can be
+ * mounted there, so no channel reaches this path on a live system).
+ */
+long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_acp_access_args args;
+    struct vms_acp_chan *ch;
+    struct vms_acp_volume *vol = NULL;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.name[VMS_ACP_NAME_SIZE - 1] = '\0';
+
+    /* Capture the channel's volume (executive-global, pinned by the channel's
+     * refcnt so it cannot be dismounted while we read). */
+    exec_lock(&proc->chan_lock);
+    ch = acp_chan_find_locked(proc, args.chan);
+    if (ch)
+        vol = ch->vol;
+    exec_unlock(&proc->chan_lock);
+    if (!ch || !vol) {
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+
+#if defined(OVMX_ODS2_KERNEL)
+    {
+        struct acp_access_scratch *s;
+        struct acp_winbuild wb;
+        struct acp_win_ext window[ACP_WINDOW_MAX];
+        const ods2_ident_t *id;
+        ods2_fid_t file_fid;
+        uint16_t out_version = args.version;
+        uint32_t file_fid_num;
+        uint32_t status;
+        int want_write = (args.acctl & VMS_ACP_ACCTL_WRITE) != 0;
+
+        s = exec_zalloc(sizeof(*s));
+        if (!s)
+            return -ENOMEM;
+
+        if (args.fidmode) {
+            /* Open by FIB$W_FID directly -- no directory search. */
+            memset(&file_fid, 0, sizeof(file_fid));
+            file_fid.fid_num = args.fid_num;
+            file_fid.fid_seq = args.fid_seq;
+            file_fid.fid_rvn = args.fid_rvn;
+            file_fid.fid_nmx = args.fid_nmx;
+            file_fid_num = ods2_fid_number(&file_fid);
+        } else {
+            /* Resolve `name` in the directory named by FIB$W_DID (0 => MFD). */
+            ods2_fid_t did;
+            uint32_t did_num;
+            uint16_t rver = 0;
+
+            memset(&did, 0, sizeof(did));
+            did.fid_num = args.did_num;
+            did.fid_nmx = args.did_nmx;
+            did_num = ods2_fid_number(&did);
+            if (did_num == 0)
+                did_num = ODS2_FID_MFD;
+
+            status = acp_read_header(vol, did_num, s->dirhdr, &s->dfh);
+            if (status != SS__NORMAL) {
+                exec_free(s);
+                args.status = status;   /* directory FID resolves to no header */
+                goto out;
+            }
+            if (!(s->dfh.fh2_filechar & ODS2_FH2_M_DIRECTORY)) {
+                exec_free(s);
+                args.status = SS__NOSUCHFILE;   /* DID is not a directory */
+                goto out;
+            }
+
+            status = acp_dir_find(vol, s->dirhdr, s->dblk, args.name,
+                                  args.version, &file_fid, &rver);
+            if (status != SS__NORMAL) {
+                exec_free(s);
+                args.status = status;   /* not found / corrupt directory */
+                goto out;
+            }
+            out_version = rver;
+            file_fid_num = ods2_fid_number(&file_fid);
+        }
+
+        /* Read + validate the file's own header. */
+        status = acp_read_header(vol, file_fid_num, s->filehdr, &s->fh);
+        if (status != SS__NORMAL) {
+            exec_free(s);
+            args.status = status;
+            goto out;
+        }
+        if (args.fidmode) {
+            /* Trust the on-disk header's own FID for the reported identity. */
+            file_fid = s->fh.fh2_fid;
+            out_version = args.version; /* by-FID open carries no dir version */
+        }
+
+        /* PROTECTION GATE (INV-6): refuse a denied open before building any
+         * window or marking the channel accessed. */
+        status = acp_check_access(proc, &s->fh, want_write);
+        if (status != SS__NORMAL) {
+            exec_free(s);
+            args.status = status;       /* SS$_NOPRIV -- fail-honest, not a silent allow */
+            goto out;
+        }
+
+        /* Build the VBN->LBN window from the header's FM2 retrieval pointers. */
+        wb.win = window;
+        wb.max = ACP_WINDOW_MAX;
+        wb.n = 0;
+        wb.next_vbn = 1;
+        wb.overflow = 0;
+        if (ods2_fh2_map_walk(s->filehdr, acp_winbuild_cb, &wb, NULL) != ODS2_OK) {
+            exec_free(s);
+            args.status = SS__DEVNOTMOUNT;  /* header map corrupt */
+            goto out;
+        }
+        if (wb.overflow) {
+            exec_free(s);
+            args.status = SS__NOSUCHFILE;   /* too many extents for this rung's window */
+            goto out;
+        }
+
+        /* Store the accessed-file state on the channel (re-find it under the
+         * lock -- a concurrent $DASSGN in this process may have released it). */
+        exec_lock(&proc->chan_lock);
+        ch = acp_chan_find_locked(proc, args.chan);
+        if (!ch) {
+            exec_unlock(&proc->chan_lock);
+            exec_free(s);
+            args.status = SS__IVCHAN;
+            goto out;
+        }
+        ch->file_accessed = 1;
+        ch->acc_write     = want_write ? 1 : 0;
+        ch->acc_version   = out_version;
+        ch->acc_fid_num   = file_fid.fid_num;
+        ch->acc_fid_seq   = file_fid.fid_seq;
+        ch->acc_fid_rvn   = file_fid.fid_rvn;
+        ch->acc_fid_nmx   = file_fid.fid_nmx;
+        ch->win_n = wb.n;
+        memcpy(ch->win, window, wb.n * sizeof(window[0]));
+        exec_unlock(&proc->chan_lock);
+
+        /* Fill the resultant FID, attributes (ATR subset) and window summary. */
+        args.fid_num = file_fid.fid_num;
+        args.fid_seq = file_fid.fid_seq;
+        args.fid_rvn = file_fid.fid_rvn;
+        args.fid_nmx = file_fid.fid_nmx;
+        args.out_version = out_version;
+
+        args.attr.filechar   = s->fh.fh2_filechar;
+        args.attr.efblk      = ods2_recattr_efblk(&s->fh.fh2_recattr);
+        args.attr.hiblk      = ods2_recattr_hiblk(&s->fh.fh2_recattr);
+        args.attr.ffbyte     = s->fh.fh2_recattr.fat_ffbyte;
+        args.attr.fileprot   = s->fh.fh2_fileprot;
+        args.attr.uic_group  = s->fh.fh2_fileowner.uic_group;
+        args.attr.uic_member = s->fh.fh2_fileowner.uic_member;
+        memcpy(args.attr.recattr, &s->fh.fh2_recattr, sizeof(args.attr.recattr));
+        id = ods2_fh2_ident(s->filehdr);
+        if (id) {
+            args.attr.revision = id->fi2_revision;
+            memcpy(args.attr.credate, id->fi2_credate, 8);
+            memcpy(args.attr.revdate, id->fi2_revdate, 8);
+            memcpy(args.attr.expdate, id->fi2_expdate, 8);
+            memcpy(args.attr.bakdate, id->fi2_bakdate, 8);
+        }
+
+        args.window_nextents = wb.n;
+        args.total_blocks    = wb.next_vbn - 1u;
+        args.first_lbn       = wb.n ? window[0].lbn : 0;
+        args.probe_lbn       = acp_window_map_vbn(window, wb.n, args.probe_vbn);
+
+        args.status = SS__NORMAL;
+        exec_free(s);
+    }
+#else
+    /* No kernel-resident codec in this build: nothing can be mounted, so a
+     * channel never reaches here on a live system. Refuse fail-honest. */
+    args.status = SS__DEVNOTMOUNT;
+#endif /* OVMX_ODS2_KERNEL */
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * IO$_DEACCESS: release the file accessed on the channel -- tear down its
+ * window, mark it not-accessed. Attribute write-back is a no-op for a read-mode
+ * open (which modifies nothing); the write path is a later rung, stated rather
+ * than silently omitted (CLAUDE.md Rule 10). SS$_FILNOTACC if no file is
+ * accessed on the channel; SS$_IVCHAN if the channel is invalid. Needs no
+ * codec, so it is unconditional.
+ */
+long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_acp_deaccess_args args;
+    struct vms_acp_chan *ch;
+    uint32_t status;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    exec_lock(&proc->chan_lock);
+    ch = acp_chan_find_locked(proc, args.chan);
+    if (!ch) {
+        status = SS__IVCHAN;
+    } else if (!ch->file_accessed) {
+        status = SS__FILNOTACC;
+    } else {
+        ch->file_accessed = 0;
+        ch->acc_write = 0;
+        ch->win_n = 0;
+        status = SS__NORMAL;
+    }
+    exec_unlock(&proc->chan_lock);
+
+    args.status = status;
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;

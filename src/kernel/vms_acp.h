@@ -98,6 +98,130 @@ struct vms_acp_assign_args {
 #define VMS_IOCTL_ACP_ASSIGN  _IOWR(VMS_IOC_MAGIC, 0x6A, struct vms_acp_assign_args)
 
 /*
+ * ============================================================================
+ * IO$_ACCESS / IO$_DEACCESS -- open a file by name or by FID (vms-204, epic
+ * vms-208). The FOURTH rung: the ACP-QIO FILE OPERATIONS the channel/mount
+ * front-end above (0x68-0x6A) was cut to carry, occupying the reserved tail
+ * 0x6B-0x6C of the ACP band.
+ *
+ * On real OpenVMS these are $QIO function codes (IO$_ACCESS/IO$_DEACCESS, from
+ * $IODEF) on a channel $ASSIGNed to the volume, with five function-dependent
+ * QIO parameters: P1 = the FIB (File Information Block), P2 = the file-name
+ * string, P3/P4 = the resultant-name buffer, P5 = the attribute (ATR) control
+ * list (VSI OpenVMS I/O User's Reference Manual, "ACP-QIO Interface"). OVMX
+ * reaches the executive over /dev/vms rather than a byte-level $QIO wire, so
+ * the FIB (P1)/name (P2)/ATR list (P5) are marshalled into the ONE flat,
+ * fixed-width arg struct below and issued as an ioctl -- exactly the executive
+ * convention the mount/assign structs above use.
+ *
+ * CLEAN-ROOM (CLAUDE.md Rule 8, posture D2). The FIB field NAMES/roles
+ * (FIB$W_FID, FIB$W_DID, FIB$L_ACCTL) and the ATR codes (ATR$C_UCHAR,
+ * ATR$C_RECATTR, ATR$C_FPRO, ATR$C_UIC, ATR$C_CREDATE/_REVDATE/...) are from
+ * the public I/O manual + $FIBDEF/$ATRDEF. The BYTE LAYOUT of the structs below
+ * is an OVMX DESIGN CHOICE (labelled), NOT a claim of VMS byte-fidelity -- the
+ * manual publishes the FIB/ATR EFFECT, not a /dev/vms wire. Only the ODS-2
+ * ON-DISK bytes these fields are read FROM are byte-authentic (the codec,
+ * src/vmsfs/ods2/, validated against a real VAX volume). This is the same
+ * resolution fibdef.h's pending sign-off (vms-531) points at.
+ */
+
+/* FIB$L_ACCTL access-control flags the ACP consumes. OVMX-original bit values
+ * (the manual publishes FIB$V_WRITE/FIB$V_NOWRITE as a role, not a wire bit);
+ * READ is the default (FIB$V_NOWRITE semantics) when WRITE is clear. */
+#define VMS_ACP_ACCTL_WRITE   0x00000001u   /* FIB$V_WRITE: access for write */
+
+/* Longest "NAME.TYPE" (P2) an IO$_ACCESS directory search takes. A directory
+ * component is searched as "NAME.DIR". Fixed so the arg struct's size (hence
+ * its ioctl encoding) is stable. */
+#define VMS_ACP_NAME_SIZE     80
+
+/*
+ * The ATR-list (P5) SUBSET IO$_ACCESS returns and IO$_DEACCESS could write
+ * back -- the file characteristics, record attributes (the 32-byte FAT), owner,
+ * protection, the four VMS dates, and the derived size fields RMS $OPEN needs,
+ * read verbatim from the file's on-disk FH2. A flat block rather than a
+ * pointer-chased {size,code,addr} list: OVMX design choice (labelled), the
+ * executive-ioctl convention. recattr[] is the FAT copied byte-for-byte (the
+ * byte-authentic ATR$C_RECATTR); the decoded efblk/hiblk/ffbyte are the codec's
+ * own accessors over it, surfaced so a caller need not re-decode the FAT.
+ */
+struct vms_acp_fileattr {
+    uint32_t filechar;      /* ATR$C_UCHAR: fh2_filechar (bit 0x2000 = directory) */
+    uint32_t efblk;         /* end-of-file VBN (decoded FAT) */
+    uint32_t hiblk;         /* highest allocated VBN (decoded FAT) */
+    uint16_t ffbyte;        /* first free byte in the EOF block */
+    uint16_t fileprot;      /* ATR$C_FPRO: fh2_fileprot (4 nibbles S/O/G/W) */
+    uint16_t uic_group;     /* ATR$C_UIC: fh2_fileowner group */
+    uint16_t uic_member;    /* ATR$C_UIC: fh2_fileowner member */
+    uint16_t revision;      /* fi2_revision (ident area) */
+    uint16_t pad0;
+    uint8_t  recattr[32];   /* ATR$C_RECATTR: the 32-byte FAT, verbatim */
+    uint8_t  credate[8];    /* ATR$C_CREDATE (VMS 64-bit absolute time) */
+    uint8_t  revdate[8];    /* ATR$C_REVDATE */
+    uint8_t  expdate[8];    /* ATR$C_EXPDATE */
+    uint8_t  bakdate[8];    /* ATR$C_BAKDATE */
+};
+
+/*
+ * IO$_ACCESS: resolve a file and open it on a file-class channel.
+ *
+ *  - BY NAME (fidmode == 0): search the directory named by FIB$W_DID (a FID;
+ *    all-zero => the MFD [000000], FID 4) for `name` ("NAME.TYPE", version in
+ *    `version`, 0 => highest). A multi-level filespec is walked one IO$_ACCESS
+ *    per level, DID chaining to each resolved sub-directory FID -- the VMS
+ *    model (RMS composes the chain).
+ *  - BY FID (fidmode != 0): open the file whose FIB$W_FID is {fid_num/nmx,
+ *    fid_seq, fid_rvn} directly, no directory search.
+ *
+ * On success the executive reads the file's on-disk FH2, builds the VBN->LBN
+ * retrieval-pointer WINDOW into the channel's per-process ACP state, gates the
+ * requested access (read, or write if acctl&WRITE) on proc->uic/privs
+ * (INV-6 -- a denied open is SS$_NOPRIV, never a silent allow), and returns the
+ * resolved FID (out), the attributes (out `attr`), and a window summary. A
+ * caller may pass probe_vbn to have the executive resolve that VBN through the
+ * freshly-built window and return its LBN (probe_lbn) -- the VBN->LBN mapping
+ * proof.  Fail-honest: an unknown name/FID => SS$_NOSUCHFILE; a denied open =>
+ * SS$_NOPRIV; an invalid channel => SS$_IVCHAN.
+ */
+struct vms_acp_access_args {
+    uint32_t chan;              /* in: file-class channel ($ASSIGN of the volume) */
+    uint32_t acctl;            /* in: FIB$L_ACCTL flags (VMS_ACP_ACCTL_*) */
+    uint16_t did_num;          /* in: FIB$W_DID directory FID (0/0/0 => MFD) */
+    uint16_t did_seq;
+    uint8_t  did_rvn;
+    uint8_t  did_nmx;
+    uint8_t  fidmode;          /* in: !=0 => open by FID below, ignore name/DID */
+    uint8_t  pad0;
+    uint16_t fid_num;          /* in (fidmode) / out: FIB$W_FID file number low 16 */
+    uint16_t fid_seq;          /* in (fidmode) / out: sequence */
+    uint8_t  fid_rvn;          /* in (fidmode) / out: relative volume */
+    uint8_t  fid_nmx;          /* in (fidmode) / out: file number high 8 */
+    uint16_t version;          /* in: wanted version (0 => highest) */
+    uint16_t out_version;      /* out: resolved version */
+    uint16_t pad1;
+    uint32_t probe_vbn;        /* in: VBN to resolve through the window (0 => none) */
+    uint32_t probe_lbn;        /* out: LBN probe_vbn maps to (0 if none/unmapped) */
+    uint32_t window_nextents;  /* out: extents in the built window */
+    uint32_t total_blocks;     /* out: sum of window extent counts */
+    uint32_t first_lbn;        /* out: LBN of the window's first extent (VBN 1) */
+    char     name[VMS_ACP_NAME_SIZE]; /* in (P2): "NAME.TYPE" incl type */
+    struct vms_acp_fileattr attr;     /* out (P5 subset) */
+    uint32_t status;           /* out: SS$_ */
+    uint32_t pad2;
+};
+
+/*
+ * IO$_DEACCESS: release the file accessed on `chan` -- tear down its window and
+ * mark the channel not-accessed. (Attribute write-back is a no-op for a
+ * read-mode open, which modifies nothing; the write path is a later rung.)
+ * SS$_FILNOTACC if the channel has no accessed file; SS$_IVCHAN if invalid.
+ */
+struct vms_acp_deaccess_args {
+    uint32_t chan;             /* in: file-class channel */
+    uint32_t status;           /* out: SS$_ */
+};
+
+/*
  * Freeze the shared layouts and the ioctl encodings -- see vms_mbx.h's and
  * vms_ioctl.h's identical notes for why: both sides of /dev/vms compile these
  * structs separately and pass them by raw address, and _IOWR folds sizeof into
@@ -117,5 +241,19 @@ _Static_assert(VMS_IOCTL_ACP_DMOUNT == 0xC0185669u,
                "VMS_IOCTL_ACP_DMOUNT encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_ACP_ASSIGN == 0xC018566Au,
                "VMS_IOCTL_ACP_ASSIGN encodes differently here than on the reference build");
+
+#define VMS_IOCTL_ACP_ACCESS  _IOWR(VMS_IOC_MAGIC, 0x6B, struct vms_acp_access_args)
+#define VMS_IOCTL_ACP_DEACCESS _IOWR(VMS_IOC_MAGIC, 0x6C, struct vms_acp_deaccess_args)
+
+_Static_assert(sizeof(struct vms_acp_fileattr) == 88,
+               "vms_acp_fileattr changed size -- IO$_ACCESS ATR ABI break");
+_Static_assert(sizeof(struct vms_acp_access_args) == 224,
+               "vms_acp_access_args changed size -- VMS_IOCTL_ACP_ACCESS ABI break");
+_Static_assert(sizeof(struct vms_acp_deaccess_args) == 8,
+               "vms_acp_deaccess_args changed size -- VMS_IOCTL_ACP_DEACCESS ABI break");
+_Static_assert(VMS_IOCTL_ACP_ACCESS == 0xC0E0566Bu,
+               "VMS_IOCTL_ACP_ACCESS encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_ACP_DEACCESS == 0xC008566Cu,
+               "VMS_IOCTL_ACP_DEACCESS encodes differently here than on the reference build");
 
 #endif /* _VMS_ACP_H */

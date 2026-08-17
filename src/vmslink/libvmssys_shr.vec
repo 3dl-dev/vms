@@ -119,3 +119,10 @@ vms_kif_bg_getsockopt=PROCEDURE
 vms_kif_acp_mount=PROCEDURE
 vms_kif_acp_dmount=PROCEDURE
 vms_kif_acp_assign=PROCEDURE
+# --- Files-11 (ODS-2) ACP IO$_ACCESS / IO$_DEACCESS (vms-204, epic vms-208).
+# Open a file by name or by FID on a file-class channel, building its VBN->LBN
+# window; release it. APPENDED at the end per the append-only contract -- a new
+# universal never shifts an existing index. OVMX-UNWIRED (test-only) today;
+# exported so the vector is stable when the RMS-over-$QIO rung wires them.
+vms_kif_acp_access=PROCEDURE
+vms_kif_acp_deaccess=PROCEDURE

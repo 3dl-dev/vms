@@ -2150,3 +2150,33 @@ uint32_t vms_kif_acp_assign(const char *devnam, uint32_t *exec_chan)
         *exec_chan = args.chan;
     return args.status;
 }
+
+uint32_t vms_kif_acp_access(struct vms_acp_access_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!acp_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->name[VMS_ACP_NAME_SIZE - 1] = '\0';
+    args->status = 0;
+
+    KIF_CALL(VMS_IOCTL_ACP_ACCESS, args);
+
+    return args->status;
+}
+
+uint32_t vms_kif_acp_deaccess(uint32_t chan)
+{
+    struct vms_acp_deaccess_args args;
+
+    if (!acp_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+
+    KIF_CALL(VMS_IOCTL_ACP_DEACCESS, &args);
+
+    return args.status;
+}

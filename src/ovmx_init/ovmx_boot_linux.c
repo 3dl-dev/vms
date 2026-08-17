@@ -185,6 +185,15 @@ int ovmx_boot_acp_mount_system_disk(void)
     return -1;
 }
 
+/* The flagless boot path's whole system-disk mount, Linux side (vms-5f0): the
+ * ATOMIC FLIP $MOUNTs the boot unit through the executive Files-11 (ODS-2) ACP
+ * -- there is no vmsfs.ko VFS mount on Linux any more. Relocated out of
+ * ovmx_init.c so the boot sequence stays ONE substrate-neutral source. */
+int ovmx_boot_mount_system_disk_native(void)
+{
+    return ovmx_boot_acp_mount_system_disk();
+}
+
 void ovmx_boot_power_off(void)
 {
     sync();

@@ -528,6 +528,24 @@ int ovmx_boot_acp_mount_system_disk(void)
     return -1;
 }
 
+/* The flagless boot path's whole system-disk mount, NetBSD side (vms-5f0):
+ * NetBSD keeps the vmsfs VFS mount for SYS$DISK (the Files-11 ACP flip is the
+ * Linux path only for now, vms-d5d). Load vmsfs.ko first (best-effort;
+ * already-loaded is fine -- EEXIST is survivable), then mount the system disk
+ * as vmsfs at SYSDISK_MOUNT. Relocated VERBATIM from ovmx_init.c's pre-seam
+ * #else branch so the boot sequence stays ONE substrate-neutral source
+ * (INV-DRIFT) -- same operations, same order, same errno contract. The
+ * vmsfs.ko-load warning is OVMX-facility, not a borrowed VMS message: VMS never
+ * narrates a kernel module load (vms-1fb facility audit). */
+int ovmx_boot_mount_system_disk_native(void)
+{
+    if (ovmx_boot_load_module("vmsfs") != 0 && errno != EEXIST) {
+        fprintf(stderr, "%%OVMX-W-MODFAIL, failed to load vmsfs.ko: %s\n",
+                strerror(errno));
+    }
+    return ovmx_boot_mount_system_disk(SYSDISK_MOUNT);
+}
+
 void ovmx_boot_power_off(void)
 {
     sync();

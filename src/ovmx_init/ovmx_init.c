@@ -569,51 +569,32 @@ static void bare_metal_init(void)
 
         printf("%%OVMX-I-SYSDISK, mounting system disk DKA0:\n");
 
-#if defined(__linux__)
-        /* ATOMIC FLIP (vms-5f0, epic vms-208): $MOUNT the boot unit through the
-         * Files-11 (ODS-2) ACP in the executive -- NOT the vmsfs.ko VFS mount of
-         * a bespoke-VMFS volume at /vms. SYS$DISK is now a genuine ODS-2 block
-         * device the ACP owns; every consumer (RMS/DCL/IMGACT/LOGINOUT) reaches
-         * it by $ASSIGN + $QIO, not through vmsfs_to_linux_path -> /vms. The
-         * executive is already attached (executive_attach() above), which the
-         * ACP $MOUNT requires. A blank/unformatted or non-ODS-2 volume fails to
-         * mount -- PID 1 does NOT initialize it (the installer spine does). */
-        if (ovmx_boot_acp_mount_system_disk() != 0) {
+        /* Mount the system disk via the substrate's own mechanism. The boot
+         * seam keeps ovmx_init.c substrate-neutral -- ONE source, no #ifdef
+         * (INV-DRIFT); the substrate split lives ONLY in ovmx_boot_linux.c /
+         * ovmx_boot_netbsd.c:
+         *   Linux  -- ATOMIC FLIP (vms-5f0, epic vms-208): $MOUNT the boot unit
+         *             through the Files-11 (ODS-2) ACP in the executive, NOT the
+         *             vmsfs.ko VFS mount of a bespoke-VMFS volume at /vms.
+         *             SYS$DISK is now a genuine ODS-2 block device the ACP owns;
+         *             every consumer (RMS/DCL/IMGACT/LOGINOUT) reaches it by
+         *             $ASSIGN + $QIO. The executive is already attached
+         *             (executive_attach() above), which the ACP $MOUNT requires.
+         *   NetBSD -- load vmsfs.ko (best-effort) then mount the system disk as
+         *             vmsfs (vms-d5d; its existing pre-flip sequence).
+         * Either way a blank/unformatted or non-installed volume fails to mount
+         * and PID 1 halts here -- it does NOT initialize it (the installer
+         * spine's INITIALIZE/PCSI job runs out of band). */
+        if (ovmx_boot_mount_system_disk_native() != 0) {
             char msg[128];
             snprintf(msg, sizeof(msg),
-                     "system disk %s (%s) would not $MOUNT via the Files-11 ACP",
+                     "system disk %s (%s) would not mount",
                      ovmx_boot_system_disk_unit(), ovmx_boot_system_disk_dev());
             ovmx_sysinit_halt(
                 msg,
-                "the volume is not an installed genuine ODS-2 system disk; "
+                "the volume is not an installed genuine system disk; "
                 "OVMX does not initialize or install it at boot");
         }
-#else
-        /* vmsfs.ko is the filesystem, not the executive; a failure here
-         * surfaces as the mount failure below, which halts honestly. The
-         * executive itself is loaded and pinned by executive_attach().
-         * OVMX-facility, not STARTUP: VMS never narrates a Linux kernel
-         * module load, so this is not dressed as a borrowed VMS message
-         * (vms-1fb facility audit, docs/design-boot-faithful.md). */
-        if (ovmx_boot_load_module("vmsfs") != 0 && errno != EEXIST) {
-            fprintf(stderr, "%%OVMX-W-MODFAIL, failed to load vmsfs.ko: %s\n",
-                    strerror(errno));
-        }
-
-        /* Mount the pre-installed disk, or halt. A blank or unformatted disk
-         * fails to mount as vmsfs -- and PID 1 does NOT initialize it (that
-         * is the installer spine's INITIALIZE/PCSI job, run out of band). */
-        if (ovmx_boot_mount_system_disk(SYSDISK_MOUNT) != 0) {
-            char msg[128];
-            snprintf(msg, sizeof(msg),
-                     "system disk DKA0: (%s) would not mount",
-                     ovmx_boot_system_disk_dev());
-            ovmx_sysinit_halt(
-                msg,
-                "the volume is not an installed VMSFS system disk; "
-                "OVMX does not initialize or install it at boot");
-        }
-#endif
 
         printf("%%OVMX-I-MOUNTED, system disk DKA0: mounted\n");
 

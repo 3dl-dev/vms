@@ -222,6 +222,19 @@ const char *ovmx_boot_system_disk_unit(void);
 int ovmx_boot_acp_mount_system_disk(void);
 
 /*
+ * ovmx_boot_mount_system_disk_native - run the substrate's WHOLE system-disk
+ * mount sequence for the flagless boot path, returning 0 on success and nonzero
+ * on failure (PID 1 then halts honestly). This is the seam that absorbs the
+ * atomic-flip substrate split (vms-5f0) so ovmx_init.c calls it ONCE with no
+ * #ifdef (INV-DRIFT); the substrate split lives ONLY in the backend files:
+ *   Linux  -> $MOUNT the boot unit through the Files-11 (ODS-2) ACP
+ *             (ovmx_boot_acp_mount_system_disk); no vmsfs.ko VFS mount.
+ *   NetBSD -> load vmsfs.ko (best-effort) then mount the system disk as vmsfs
+ *             at SYSDISK_MOUNT -- its existing pre-flip sequence (vms-d5d).
+ */
+int ovmx_boot_mount_system_disk_native(void);
+
+/*
  * ovmx_boot_power_off - flush and power the machine off, PID 1's analogue of
  * the VAX halting to the console prompt after a fail-stop boot. Returns ONLY
  * if the substrate refused (no privilege to power off); the caller then

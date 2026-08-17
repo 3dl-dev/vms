@@ -413,4 +413,14 @@
 # pollable fd for a BGn: socket. Anchors test_syssvc_bgsock_poll (poll() on the
 # fd blocks until the loopback peer sends, over a real /dev/vms); the mutation
 # makes .poll report readable unconditionally so poll() fires before data.
-104
+#
+# Raised 104 -> 105 by vms-904's suspnd-vmspid-not-resolved -- the executive
+# keystone (vms-6b8) wrong-process fix for the control-by-VMS-pid services:
+# sys$suspnd/$resume/$forcex now RESOLVE their VMS-pid argument to a Linux pid
+# through the executive (the shared resolve_control_target(), as sys$delprc)
+# before signalling, instead of casting the raw VMS pid into kill(). Anchors
+# the new test_syssvc_procctl suite; the mutation restores the raw cast on the
+# SIGSTOP path (unique in sys_process.c), which ESRCHes a >= 0x10000000 VMS pid
+# and so reddens exactly the suite's two P1 assertions (SS$_NORMAL return +
+# target actually STOPPED). See its own entry in facility_defects.sh.
+105

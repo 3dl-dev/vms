@@ -456,6 +456,7 @@ bind-client-no-register
 creprc-handshake-eintr
 run-detached-name-dropped
 delprc-privcheck-bypassed
+suspnd-vmspid-not-resolved
 creprc-detach-intermediate-reaped
 run-detached-not-detached
 run-image-qualifier-refused
@@ -3515,6 +3516,47 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    suspnd-vmspid-not-resolved)
+        case "$_f" in
+        facility)     echo "process control by VMS pid -- sys\$suspnd/\$resume/\$forcex RESOLVING the VMS pid to its Linux pid through the executive before signalling (src/libvms/syssvc/sys_process.c), vms-904";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        # PRODUCT-half defect, same class as delprc-privcheck-bypassed and
+        # getjpi-pidarg-discarded above: the property lives in libvms's
+        # control-by-pid services, NOT in vms.ko, so no kernel mutation can
+        # reach it. sys$suspnd/$resume/$forcex now RESOLVE their VMS-pid
+        # argument to a Linux pid through the executive (the shared
+        # resolve_control_target(), as sys$delprc), then signal the RESOLVED
+        # Linux pid. This mutation restores the pre-vms-904 raw cast on the
+        # SUSPND path alone: `kill((pid_t)*pidadr, SIGSTOP)` for the by-pid
+        # form. Since a VMS pid is always >= VMS_PID_BASE (0x10000000) -- a
+        # number above every possible Linux pid -- the raw-cast kill ESRCHes,
+        # so sys$suspnd(vms_pid) returns SS$_NONEXPR and the target is NEVER
+        # stopped.
+        #
+        # MEASURED-BY-CONSTRUCTION to test_syssvc_procctl's TWO P1 assertions
+        # (the SS$_NORMAL return and the "target is STOPPED" observation), and
+        # NOTHING ELSE: the resolution path is untouched (so P7's absent-pid
+        # SS$_NONEXPR and P1's premise/liveness checks stay green), $RESUME is
+        # a separate unmutated service acting on a target that was never
+        # stopped (SIGCONT is a harmless no-op -> P2 green), and $FORCEX/
+        # $DELPRC/$WAKE (P3-P6) are different services on different lines. The
+        # anchor sits on the SIGSTOP line, unique in the file.
+        suites_red)   echo "test_syssvc_procctl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$suspnd stops resolving its VMS-pid argument through the executive: the by-pid form casts the raw VMS pid straight into kill() again (the pre-vms-904 wrong-process bug). Because a VMS pid is always >= 0x10000000 -- above every possible Linux pid -- that kill ESRCHes, so sys\$suspnd(vms_pid) returns SS\$_NONEXPR and the intended VMS process is never stopped. Resolution, the self-directed form, \$resume, \$forcex, \$delprc and the absent-target SS\$_NONEXPR path are all untouched; only which pid \$SUSPND's by-pid form signals changes -- from the executive-resolved Linux pid back to the raw VMS-pid number.";;
+        require_fail) cat <<'EOF'
+P1: sys$suspnd(vms_pid) returns SS$_NORMAL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+P1: the RESOLVED target is STOPPED after $SUSPND -- VMS pid resolved to its Linux pid, not cast into kill()
+EOF
+                      ;;
+        knock_on_why)  echo "SAME DEFECT, OBSERVED ON THE PROCESS ITSELF. The SS\$_NORMAL return (require_fail) and the target actually reaching the STOPPED state (this assertion) are the two visible faces of the one raw-cast kill: with the VMS pid cast straight into kill() it ESRCHes 0x1000xxxx, so the service both reports SS\$_NONEXPR and never delivers SIGSTOP to the real target. Not two independent regressions -- one wrong signal target, seen from the return value and from the victim.";;
+        esac;;
+
     creprc-detach-intermediate-reaped)
         case "$_f" in
         facility)     echo "detachment in \$CREPRC's PRC\$M_DETACH path (src/libvms/syssvc/sys_process.c)";;
@@ -5945,6 +5987,20 @@ apply_edit() {
         # finds no `if (!authorized)` left to match -- the idempotent no-op
         # cmd_selftest requires. Resolution, naming and the kill are untouched.
         sed -i 's|        if (!authorized)|        if (0 /* NEGCTL delprc-privcheck-bypassed */)|' "$_file";;
+
+    suspnd-vmspid-not-resolved)
+        # The ONE edit, in libvms/syssvc/sys_process.c. The SIGSTOP kill is
+        # UNIQUE in the file -- SIGSTOP appears only in sys$suspnd. Restoring
+        # the raw cast on the by-pid form (`pidadr ? *pidadr : ...`, so the
+        # self-directed form still works) reintroduces the pre-vms-904
+        # wrong-process bug: a VMS pid (>= 0x10000000) is cast straight into
+        # kill(), which ESRCHes, so sys$suspnd(vms_pid) returns SS$_NONEXPR and
+        # the target is never stopped. resolve_control_target() still runs
+        # first, so the absent-target SS$_NONEXPR path and every other service
+        # are untouched. After substitution `(pid_t)target.linux_pid, SIGSTOP`
+        # is gone, so a second apply finds no match -- the idempotent no-op
+        # cmd_selftest requires.
+        sed -i 's|    if (kill((pid_t)target.linux_pid, SIGSTOP) < 0) return SS$_NONEXPR;|    if (kill((pid_t)(pidadr ? *pidadr : target.linux_pid), SIGSTOP) < 0) return SS$_NONEXPR; /* NEGCTL suspnd-vmspid-not-resolved */|' "$_file";;
 
     creprc-detach-intermediate-reaped)
         # The ONE edit: the parent-side reap of the detach intermediate is

@@ -89,6 +89,33 @@ static void img_exit_group(long code)
     __asm__ volatile("svc #0" : : "r"(x8), "r"(x0) : "memory");
     __builtin_unreachable();
 }
+#elif defined(__alpha__)
+/* See testreal_inproc.c's identical block for the full rationale. */
+static long img_write(long fd, const void *buf, long n)
+{
+    register long v0 __asm__("$0")  = 4;      /* __NR_write */
+    register long a0 __asm__("$16") = fd;
+    register long a1 __asm__("$17") = (long)buf;
+    register long a2 __asm__("$18") = n;
+    register long a3 __asm__("$19");
+    __asm__ volatile("callsys"
+                     : "+r"(v0), "=r"(a3)
+                     : "r"(a0), "r"(a1), "r"(a2)
+                     : "$1","$2","$3","$4","$5","$6","$7","$8",
+                       "$20","$21","$22","$23","$24","$25","$27","$28","memory");
+    return a3 ? -v0 : v0;
+}
+static void img_exit_group(long code)
+{
+    register long v0 __asm__("$0")  = 405;    /* __NR_exit_group */
+    register long a0 __asm__("$16") = code;
+    __asm__ volatile("callsys"
+                     :
+                     : "r"(v0), "r"(a0)
+                     : "$1","$2","$3","$4","$5","$6","$7","$8","$19",
+                       "$20","$21","$22","$23","$24","$25","$27","$28","memory");
+    __builtin_unreachable();
+}
 #else
 static long img_write(long fd, const void *buf, long n){(void)fd;(void)buf;(void)n;return -1;}
 static void img_exit_group(long code){(void)code; for(;;){}}
@@ -157,6 +184,15 @@ static void *got_slot(int i)
     void **g;
     __asm__("adrp %0, testextern_got0\n\tadd %0, %0, :lo12:testextern_got0" : "=r"(g));
     return g[i];
+#elif defined(__alpha__)
+    /* See testreal_inproc.c's got_slot for the full rationale. */
+    void **g;
+    __asm__(
+        "ldah $1, testextern_got0($29) !gprelhigh\n\t"
+        "lda  $1, testextern_got0($1) !gprellow\n\t"
+        "mov  $1, %0\n\t"
+        : "=r"(g) :: "$1");
+    return g[i];
 #else
     (void)i; return 0;
 #endif
@@ -198,6 +234,21 @@ __asm__(
     "  ldr x0, [sp]\n"          /* argc */
     "  bl testextern_main\n"
     "  brk #0\n"
+    ".size extern_start,.-extern_start\n"
+#elif defined(__alpha__)
+    /* See testreal_inproc.c's real_start for the full rationale. */
+    ".text\n.globl extern_start\n.type extern_start,@function\n"
+    ".ent extern_start\n"
+    "extern_start:\n"
+    "  .frame $30, 0, $26, 0\n"
+    "  .prologue 0\n"
+    "  br   $29, 1f\n"
+    "1:\n"
+    "  ldgp $29, 0($29)\n"
+    "  ldq  $16, 0($30)\n"      /* argc = *(sp) */
+    "  jsr  $26, testextern_main\n"
+    "  call_pal 0x81\n"         /* bpt: must not return */
+    ".end extern_start\n"
     ".size extern_start,.-extern_start\n"
 #endif
 );

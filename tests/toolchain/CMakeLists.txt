@@ -117,6 +117,24 @@ set_tests_properties(toolchain-mmk-component-build PROPERTIES
     LABELS "toolchain;librarian;link;selfhost"
 )
 
+# vms-89d (self-host S4 LINK.EXE fixpoint, MMK path): MMK plans the multi-TU
+# LINK.EXE self-host build described by tests/toolchain/component/LINKSH.MMS --
+# two TCC compiles (link.c + ovmx_link_rms_io.c) then a six-shareable LINK, in
+# dependency order, byte-identical across two runs.  The parse+plan half on the
+# host; the real-toolchain gen2==gen3 OUTPUT fixpoint is proven by the dedicated
+# CI job (ci.yml mmk-link-selfhost-fixpoint -> run_mmk_link_selfhost_build.sh),
+# and MMK's mailbox-driven execution rides QEMU.  This is the LINK.EXE-fixpoint
+# analog of toolchain-mmk-component-plan.
+add_test(
+    NAME toolchain-mmk-link-selfhost-plan
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_mmk_link_selfhost_plan.sh
+)
+set_tests_properties(toolchain-mmk-link-selfhost-plan PROPERTIES
+    ENVIRONMENT "MMK_EXE=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/MMK.EXE;REPO_SRC=${CMAKE_SOURCE_DIR}/src"
+    TIMEOUT 120
+    LABELS "toolchain;mmk;selfhost;link"
+)
+
 # spine #6 (vms-d1b): the STATIC TCC.EXE prerequisite for the QEMU MMK-driven
 # build.  mk_tcc_static.sh builds tinycc as the plain fork+execve compiler DCL
 # activates as a foreign command (no IMGACT/shareable, matching the staged

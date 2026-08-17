@@ -496,6 +496,7 @@ acp-mount-nonods2-accepted
 acp-access-window-vbn-offbyone
 acp-writevb-extend-alloc-offbyone
 acp-search-cursor-skips-versions
+acp-create-header-slot-offbyone
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -4909,6 +4910,39 @@ EOF
                       ;;
         esac;;
 
+    acp-create-header-slot-offbyone)
+        case "$_f" in
+        facility)     echo "Files-11 (ODS-2) ACP IO\$_CREATE file-header allocation (VMS_IOCTL_ACP_FILEOP allocates a real FID from INDEXF.SYS's index bitmap and writes the new FH2 at that FID's header slot, idx_lbn + (FID - 1)), vms-5303, epic vms-208";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_create";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The IO\$_CREATE handler writes the freshly built file header at its INDEXF slot -- vol->idx_lbn + (new_fidnum - 1u) -- the same header-number arithmetic acp_read_header uses to READ a header (header N at idx_lbn + (N-1)). Dropping the -1 writes the header ONE SLOT TOO HIGH (at FID new_fidnum+1's slot). The CREATE still marks new_fidnum's index-bitmap bit used, still returns new_fidnum, and still enters the directory record pointing at new_fidnum -- so the create reports success -- but the FID the directory now resolves to (new_fidnum) has no valid header at its own slot: acp_read_header(new_fidnum) reads the wrong (unwritten/stale) block, fails to parse, and returns SS\$_NOSUCHFILE. The file therefore cannot be re-opened by name. Only an assertion that re-ACCESSes the created file BY NAME (resolving the directory record to the FID and reading the header at its slot) can tell; the CREATE call's own status, the assigned FID, and the fail-honest edge checks (bad func, non-directory DID, delete-nonexistent) never re-read the header at its slot and stay green.";;
+        require_fail) cat <<'EOF'
+IO$_ACCESS CREAT.TST by name resolves the created FID at version 1 (header at its INDEXF slot)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+after DEACCESS + re-ACCESS the written bytes persist -- it hit the platter (INV-6)
+IO$_ACCESS CREAT.TST;1 still resolves the FIRST file (both versions coexist)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME ONE MISPLACED HEADER, SEEN AT EVERY LATER BY-NAME ACCESS OF THE FILE.
+Once CREAT.TST;1's header is written one slot too high, EVERY operation that
+resolves the name to its FID and reads the header at that FID's slot fails the
+same way: the write-persistence proof re-ACCESSes CREAT.TST to read its bytes
+back (require_fail already reddened the first such access, this is the same
+translation at a later step), and the ;1-still-resolves proof (after ;2 is
+created) re-opens CREAT.TST;1 by its explicit version -- both read the header at
+new_fidnum's slot, find no valid header, and observe SS$_NOSUCHFILE instead of
+the file. The write itself, the ;2 create (a DIFFERENT FID, its own slot), and
+the fail-honest edges never read fid1's header at its slot and stay green.
+EOF
+                      ;;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -6317,6 +6351,18 @@ apply_edit() {
         # substitution the original text is gone, so a second apply matches
         # nothing (the no-op selftest requires).
         sed -i 's|return version < c->prev_ver;|return version > c->prev_ver; /* NEGCTL acp-search-cursor-skips-versions */|' "$_file";;
+
+    acp-create-header-slot-offbyone)
+        # ANCHORED to the single IO$_CREATE header-slot write in
+        # vms_ioctl_acp_fileop: `vol->idx_lbn + (new_fidnum - 1u)` occurs exactly
+        # once in the file (the variable `new_fidnum` is unique to the CREATE
+        # path; acp_read_header/DELETE/MODIFY use `fid_num`/`file_fidnum`).
+        # Dropping the `- 1u` writes the new header one slot too high, so the
+        # created file cannot be re-opened by name -- only the negctl-anchored
+        # re-ACCESS-by-name assertions redden. After substitution the original
+        # text is gone, so a second apply matches nothing (the no-op selftest
+        # requires).
+        sed -i 's|vol->idx_lbn + (new_fidnum - 1u)|vol->idx_lbn + (new_fidnum) /* NEGCTL acp-create-header-slot-offbyone */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

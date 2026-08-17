@@ -858,6 +858,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_acp_writevb(proc, arg);
     case VMS_IOCTL_ACP_ACPCONTROL:
         return vms_ioctl_acp_acpcontrol(proc, arg);
+    case VMS_IOCTL_ACP_FILEOP:
+        return vms_ioctl_acp_fileop(proc, arg);
     case VMS_IOCTL_MBX_SET_WRTATTN:
         return vms_ioctl_mbx_set_wrtattn(proc, arg);
 

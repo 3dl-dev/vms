@@ -1480,6 +1480,68 @@ void ods2_sbm_block_alloc(void *bitmap_block, unsigned bit_in_block);
 void ods2_sbm_block_free(void *bitmap_block, unsigned bit_in_block);
 
 /* ================================================================
+ * FILE-HEADER allocation + creation (vms-5303, epic vms-208) -- the IO$_CREATE
+ * / IO$_DELETE / IO$_MODIFY write-side twins of ods2_writer.c's
+ * write_fh2_header_ext() / ifile_bitmap / dir_insert. All PURE (caller-supplied
+ * block buffers, no I/O, no allocation); the ACP sequences the raw block reads
+ * and writes around them. See ods2_edit.c for the per-field provenance.
+ * ================================================================ */
+
+/* Index-file bitmap (INDEXF.SYS index bitmap, hm2_ibmaplbn..): OPPOSITE bit
+ * sense from the storage bitmap -- a SET bit == a FID IN USE. bit_in_block is
+ * (fidnum-1) % 4096; the block is index (fidnum-1) / 4096 of the bitmap. */
+int  ods2_ifbm_block_fid_used(const void *bitmap_block, unsigned bit_in_block);
+void ods2_ifbm_block_alloc(void *bitmap_block, unsigned bit_in_block);
+void ods2_ifbm_block_free(void *bitmap_block, unsigned bit_in_block);
+
+/* FH2 file "kind" -- the RECATTR (FAT) / efblk preset, matching
+ * ods2_writer.c's internal enum fh2_kind values byte-for-byte. */
+enum ods2_fh2_kind {
+    ODS2_FK_SYSTEM   = 0,   /* reserved-file stub (rtype 1)                   */
+    ODS2_FK_DIR      = 1,   /* directory (rtype 2, rattrib 0x08)              */
+    ODS2_FK_DATA     = 2,   /* RFM=VAR data file (rtype 2, rattrib CR)        */
+    ODS2_FK_DATA_FIX = 3    /* RFM=FIXED 512-byte data file (rtype 1)         */
+};
+
+/* Build a complete FH2 file header into a caller-supplied 512-byte block.
+ * `owner`={0,0} + `fileprot`=0 => the writer's kind default (SYSTEM [1,4],
+ * 0xFA00/0xBA00). `extents`/`n_extents` are the file's initial allocation
+ * (may be 0). Reseals its own checksum. ODS2_ERR_ARGS on a bad fidnum/name;
+ * ODS2_ERR_NOSPACE if the extents overflow the FH2 map area. */
+ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
+                             const char *name, uint16_t version, uint32_t filechar,
+                             unsigned kind, const ods2_extent_t *extents,
+                             unsigned n_extents, size_t data_len,
+                             ods2_fid_t backlink, ods2_uic_t owner,
+                             uint16_t fileprot, uint32_t maxfiles);
+
+/* Insert a {name, version, entry_fid} directory record into a directory's
+ * data blocks (in_blocks = in_nblk contiguous 512-byte blocks), producing the
+ * repacked result in out_blocks (up to out_nblk_cap blocks) and its block
+ * count in *out_nblk (may exceed in_nblk -- the ACP then allocates the growth
+ * and rewrites the FH2 map). `flat` is caller scratch, >= in_nblk*512 + 528.
+ * is_resfile controls dir_verlimit ([F14]). ODS2_ERR_ARGS on a duplicate
+ * {name, version}; ODS2_ERR_NOSPACE if the repack exceeds out_nblk_cap. */
+ods2_status_t ods2_dir_insert_blocks(const uint8_t *in_blocks, unsigned in_nblk,
+                                     const char *name, unsigned namecount,
+                                     uint16_t version, ods2_fid_t entry_fid,
+                                     int is_resfile,
+                                     uint8_t *flat, size_t flat_cap,
+                                     uint8_t *out_blocks, unsigned out_nblk_cap,
+                                     unsigned *out_nblk);
+
+/* Remove `version` (0 => every version) of `name` from a directory's data
+ * blocks, repacking into out_blocks. Never grows or deallocates directory
+ * blocks: *out_nblk == in_nblk (trailing blocks emptied), so the ACP leaves
+ * the FH2 map untouched. *removed set iff a matching entry was dropped. */
+ods2_status_t ods2_dir_remove_blocks(const uint8_t *in_blocks, unsigned in_nblk,
+                                     const char *name, unsigned namecount,
+                                     uint16_t version,
+                                     uint8_t *flat, size_t flat_cap,
+                                     uint8_t *out_blocks, unsigned out_nblk_cap,
+                                     unsigned *out_nblk, int *removed);
+
+/* ================================================================
  * BLOCK-DEVICE-BACKED WRITER (implemented in ods2/ods2_writer.c) --
  * increment 11, vms-6d3b, R2 of the real-ODS-2-runtime epic vms-5eb.
  *

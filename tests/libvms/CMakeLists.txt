@@ -109,9 +109,25 @@ libvms_add_test(test_libvms_lib_symtab
 libvms_add_test(test_libvms_lib_fb3
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_fb3.c)
 
-# Test 9: vms-846.1 — binary SYSUAF record layout + RMS primary-key XABKEY
-libvms_add_test(test_libvms_sysuaf_record
+# Test 9: vms-f88 (epic vms-d0c) — the REAL binary $UAFDEF SYSUAF record over
+# the genuine Files-11 Prolog-3 indexed engine (supersedes the ASCII+SHA-256 /
+# 368-byte facade). Locks the 644-byte oracle layout, then authors a binary
+# indexed SYSUAF (primary USERNAME key + secondary UIC key) and reads records
+# back by username AND by UIC through sysuaf_rms.c/rms_prolog3.c. Not via
+# libvms_add_test(): it drives the RMS engine, so it links vmsrms (+ vmsfs,
+# vmslnm) and sees src/vmsrms (sysuaf_rms.h, rms_prolog3.h) + the RMS includes.
+add_executable(test_libvms_sysuaf_record
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_record.c)
+target_include_directories(test_libvms_sysuaf_record PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsrms
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+)
+target_link_libraries(test_libvms_sysuaf_record PRIVATE
+    vmsrms vmsfs vmslnm vms pthread m)
+add_test(NAME test_libvms_sysuaf_record COMMAND test_libvms_sysuaf_record)
 
 # Test 10: vms-ci.8 — node identity + cluster SYSGEN params (SCSNODE/
 # SCSSYSTEMID round-trip through the typed SYSGEN store, sys$getsyi)

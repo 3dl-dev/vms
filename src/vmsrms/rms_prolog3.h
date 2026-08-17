@@ -233,6 +233,15 @@ static inline void p3_put_le32(uint8_t *p, uint32_t v)
     p[0] = (uint8_t)(v & 0xff);        p[1] = (uint8_t)((v >> 8) & 0xff);
     p[2] = (uint8_t)((v >> 16) & 0xff); p[3] = (uint8_t)((v >> 24) & 0xff);
 }
+static inline uint64_t p3_le64(const uint8_t *p)
+{
+    return (uint64_t)p3_le32(p) | ((uint64_t)p3_le32(p + 4) << 32);
+}
+static inline void p3_put_le64(uint8_t *p, uint64_t v)
+{
+    p3_put_le32(p, (uint32_t)(v & 0xffffffffu));
+    p3_put_le32(p + 4, (uint32_t)((v >> 32) & 0xffffffffu));
+}
 
 /* -------- parsed per-key descriptor (host-side, native widths OK: not
  *          serialized -- this is in-memory working state) -------- */

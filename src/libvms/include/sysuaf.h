@@ -160,77 +160,139 @@ void     sysuaf_mask_to_flags(uint32_t mask, char *out, size_t outsz);
 
 
 /* =========================================================================
- * Binary on-disk SYSUAF record (RMS indexed file) — vms-846 / vms-846.1
+ * THE REAL BINARY $UAFDEF SYSUAF RECORD — vms-f88 / epic vms-d0c
  *
- * Real OpenVMS stores users in SYS$SYSTEM:SYSUAF.DAT as an RMS indexed
- * (ISAM) file of fixed-length binary records keyed by username, NOT the
- * flat pipe-delimited text file OVMX currently ships. sysuaf_rms_record_t
- * is the fixed-length record written to that RMS FAB$C_IDX file.
+ * Real OpenVMS stores users in SYS$SYSTEM:SYSUAF.DAT as an RMS PROLOG-3
+ * INDEXED file of fixed-length BINARY records ($UAFDEF) — NOT a flat text
+ * file, and NOT the ASCII+SHA-256 stand-in this record replaces.
+ * sysuaf_rms_record_t is that on-disk record; the indexed file that carries
+ * it is authored/read through the genuine Files-11 Prolog-3 engine
+ * (src/vmsrms/rms_prolog3.{c,h}) over the executive ACP window (or the rms_io
+ * POSIX backend when /dev/vms is absent), with primary key = 32-byte USERNAME
+ * (key of reference 0) and secondary key = the UIC longword (key 1). The small
+ * create/put/get-by-username/get-by-uic API lives in src/vmsrms/sysuaf_rms.h.
  *
- * CLEAN-ROOM / PURITY (CLAUDE.md invariant #8): field *names* follow the
- * public UAF$ symbol convention (UAF$T_USERNAME, UAF$L_UIC, UAF$Q_PRIV, …)
- * and the *shape* mirrors real VMS (indexed RMS file, fixed binary records,
- * primary key = 32-byte space-padded username). The exact byte offsets and
- * the compact field set below are an **OVMX design choice** — this is NOT a
- * byte-authentic reproduction of VSI's SYSUAF record ($UAFDEF), which is far
- * larger. Do not present these offsets as VMS-authentic.
+ * ORACLE GROUNDING (docs/oracle/vax73-alpha84-uafdef.md, vms-db8): the record
+ * is 644 bytes on BOTH VAX V7.3 and Alpha V8.4 (no architecture divergence),
+ * and the fields marked [PIN] below sit at the byte offset the oracle located
+ * by controlled edit (DUMP/RECORDS diff — clean-room, CLAUDE.md Rule 8):
  *
- * Encodings that DO match documented VMS semantics:
- *   - uaf$l_uic  : longword UIC, group in high 16 bits, member in low 16
- *                  (uic = (group << 16) | member).
- *   - uaf$q_priv : 64-bit privilege mask (PRV$ bit positions).
+ *   [PIN] UAF$T_USERNAME   @0x004  32   primary key, blank-padded, upcased
+ *   [PIN] UAF$L_UIC        @0x024   4   (group<<16)|member, LE longword
+ *   [PIN] owner identifier @0x02C   8   (key 3)
+ *   [PIN] UAF$Q_PWD        @0x154   8   hashed-password quadword
+ *   [PIN] UAF$W_SALT       @0x166   2   per-account salt word
+ *   [PIN] UAF$B_ENCRYPT    @0x168   1   algorithm (0x03 = UAI$C_PURDY_S)
+ *   [PIN] UAF$B_PWD_LENGTH @0x16A   1   minimum password length
+ *   [PIN] UAF$Q_PWD2       @0x16C   8   secondary password quadword
  *
- * Layout is hand-aligned so the struct has NO implicit padding, giving a
- * deterministic 368-byte on-disk record across compilers. The _Static_assert
- * block below locks the layout; adding/reordering fields is a design change
- * (run the vms-846 cascade) and must keep the key segment at offset 0.
+ * Where the oracle does NOT publish a field's byte offset (the account string
+ * area, the password-change date, the flags/priv/quota region), OVMX defines
+ * its own offset and LABELS it [OVMX] per Rule 8 — those are NOT presented as
+ * VMS-authentic sub-offsets. The [PIN] offsets above are exact and asserted.
+ *
+ * SUBSTRATE-AGNOSTIC ON-DISK ENCODING (vms-5f0 thin-seam): every multi-byte
+ * on-disk field is a fixed-width BYTE ARRAY read/written through the
+ * p3_le16/le32/le64 accessors — never a native long/size_t/pointer. The whole
+ * struct is uint8_t/char members (alignment 1) so it has NO implicit padding
+ * and is byte-identical on x86_64/aarch64 LP64 and VAX ILP32. There is no
+ * substrate #ifdef. Field-access helpers (UIC, password quadword/salt/encrypt)
+ * live in src/vmsrms/sysuaf_rms.h.
+ *
+ * ⚠ THE PASSWORD IS NOT COMPUTED HERE. This record STORES the password
+ * quadword + salt + algorithm byte AS BYTES (the record FIELD only). Computing
+ * the Purdy hash from (password, username, salt) is the NEXT rung (vms-631e);
+ * the seam is marked on uaf$q_pwd below. Nothing here hashes a password, and
+ * nothing stores a SHA-256 (the facade this record replaces).
  * ========================================================================= */
 
-#define SYSUAF_USERNAME_LEN  32     /* space-padded, primary key */
-#define SYSUAF_PWHASH_LEN    64     /* SHA-256 = 32 bytes used, remainder reserved */
-#define SYSUAF_DEFDIR_LEN   256     /* default directory filespec */
+#define SYSUAF_USERNAME_LEN    32   /* UAF$T_USERNAME width, primary key [PIN] */
+#define SYSUAF_UAF_RECORD_SIZE 644  /* $UAFDEF record length [PIN, both arches]*/
+
+/* [PIN] byte offsets the oracle located by controlled DUMP/RECORDS edit. */
+#define UAF$K_USERNAME_OFF   0x004
+#define UAF$K_UIC_OFF        0x024
+#define UAF$K_OWNER_OFF      0x02C
+#define UAF$K_PWD_OFF        0x154
+#define UAF$K_SALT_OFF       0x166
+#define UAF$K_ENCRYPT_OFF    0x168
+#define UAF$K_PWD_LENGTH_OFF 0x16A
+#define UAF$K_PWD2_OFF       0x16C
+
+/* UAF$B_ENCRYPT algorithm byte values (public $UAIDEF). */
+#define UAI$C_AD_II    0
+#define UAI$C_PURDY    1
+#define UAI$C_PURDY_V  2
+#define UAI$C_PURDY_S  3   /* [PIN] the modern default the oracle observed */
 
 typedef struct {
-    char     uaf$t_username[SYSUAF_USERNAME_LEN]; /* @0   primary key, space-padded */
-    uint8_t  uaf$b_pwd[SYSUAF_PWHASH_LEN];        /* @32  raw hash bytes (SHA-256) */
-    uint32_t uaf$l_uic;                           /* @96  (group << 16) | member */
-    uint32_t uaf$l_flags;                         /* @100 UAF$M_* flag bitmask */
-    uint64_t uaf$q_priv;                          /* @104 64-bit privilege mask */
-    char     uaf$t_defdir[SYSUAF_DEFDIR_LEN];     /* @112 default directory */
-} sysuaf_rms_record_t;                            /* total: 368 bytes */
+    /* -- record head -- */
+    uint8_t  uaf$b_rtype;         /* @0x000 [PIN] record type == 1            */
+    uint8_t  uaf$b_version;       /* @0x001 [PIN] record version == 1         */
+    uint8_t  uaf$w_reserved0[2];  /* @0x002 [PIN] reserved word               */
+    char     uaf$t_username[32];  /* @0x004 [PIN] primary key, blank-padded   */
+    uint8_t  uaf$l_uic[4];        /* @0x024 [PIN] (grp<<16)|mem, LE longword   */
+    uint8_t  uaf$l_uic_ext_hi[4]; /* @0x028 [OVMX] high half of the 8-byte     */
+                                  /*        extended user identifier (key 2)   */
+    uint8_t  uaf$q_owner_id[8];   /* @0x02C [PIN] owner identifier (key 3)     */
+    /* -- account string area ([OVMX] sub-offsets; oracle: not load-bearing) --*/
+    char     uaf$t_account[32];   /* @0x034 [OVMX] accounting string           */
+    char     uaf$t_owner_name[32];/* @0x054 [OVMX] account owner name          */
+    char     uaf$t_defdev[32];    /* @0x074 [OVMX] default device              */
+    char     uaf$t_defdir[64];    /* @0x094 [OVMX] default directory           */
+    char     uaf$t_lgicmd[64];    /* @0x0D4 [OVMX] login command file          */
+    char     uaf$t_defcli[32];    /* @0x114 [OVMX] CLI (e.g. "DCL")            */
+    char     uaf$t_clitables[32]; /* @0x134 [OVMX] command tables             */
+    /* -- password area (offsets [PIN]) -- */
+    /* Purdy hash filled by vms-631e; this rung stores the quadword AS BYTES.  */
+    uint8_t  uaf$q_pwd[8];        /* @0x154 [PIN] password hash quadword       */
+    uint8_t  uaf$q_pwd_date[8];   /* @0x15C [OVMX] password change date        */
+    uint8_t  uaf$w_reserved1[2];  /* @0x164 [OVMX] pad to the salt word        */
+    uint8_t  uaf$w_salt[2];       /* @0x166 [PIN] per-account salt word        */
+    uint8_t  uaf$b_encrypt;       /* @0x168 [PIN] algorithm (UAI$C_PURDY_S=3)  */
+    uint8_t  uaf$b_reserved2;     /* @0x169 [OVMX] pad                         */
+    uint8_t  uaf$b_pwd_length;    /* @0x16A [PIN] minimum password length      */
+    uint8_t  uaf$b_reserved3;     /* @0x16B [OVMX] pad                         */
+    uint8_t  uaf$q_pwd2[8];       /* @0x16C [PIN] secondary password quadword  */
+    /* -- flags / privileges ([OVMX] offsets) -- */
+    uint8_t  uaf$l_flags[4];      /* @0x174 [OVMX] UAF$M_* flags longword      */
+    uint8_t  uaf$q_priv[8];       /* @0x178 [OVMX] authorized privilege mask   */
+    uint8_t  uaf$q_def_priv[8];   /* @0x180 [OVMX] default privilege mask      */
+    uint8_t  uaf$r_reserved4[120];/* @0x188 [OVMX] reserved up to quota block  */
+    /* -- quota block ([OVMX]; oracle §4 correlates values, not sub-offsets) --*/
+    uint8_t  uaf$r_quota[132];    /* @0x200 [OVMX] quota region -> 0x284       */
+} sysuaf_rms_record_t;            /* total: 644 bytes ($UAFDEF) */
 
-/* Compile-time layout lock — deterministic on-disk record (no padding). */
-_Static_assert(sizeof(sysuaf_rms_record_t) == 368,
-               "sysuaf_rms_record_t must be exactly 368 bytes on disk");
-_Static_assert(offsetof(sysuaf_rms_record_t, uaf$t_username) == 0,
-               "username (primary key) must be at record offset 0");
-_Static_assert(offsetof(sysuaf_rms_record_t, uaf$l_uic) == 96,
-               "uaf$l_uic layout drift");
-_Static_assert(offsetof(sysuaf_rms_record_t, uaf$q_priv) == 104,
-               "uaf$q_priv layout drift");
+/* Compile-time layout lock: 644-byte record with NO implicit padding, and
+   every [PIN] field at the exact oracle offset. Adding/reordering a field is a
+   design change (run the vms-d0c cascade) and must keep the [PIN] offsets. */
+_Static_assert(sizeof(sysuaf_rms_record_t) == SYSUAF_UAF_RECORD_SIZE,
+               "sysuaf_rms_record_t must be exactly 644 bytes ($UAFDEF)");
+_Static_assert(offsetof(sysuaf_rms_record_t, uaf$t_username) == UAF$K_USERNAME_OFF,
+               "UAF$T_USERNAME must be at 0x04 (oracle [PIN])");
+_Static_assert(offsetof(sysuaf_rms_record_t, uaf$l_uic) == UAF$K_UIC_OFF,
+               "UAF$L_UIC must be at 0x24 (oracle [PIN])");
+_Static_assert(offsetof(sysuaf_rms_record_t, uaf$q_owner_id) == UAF$K_OWNER_OFF,
+               "owner identifier must be at 0x2C (oracle [PIN])");
+_Static_assert(offsetof(sysuaf_rms_record_t, uaf$q_pwd) == UAF$K_PWD_OFF,
+               "UAF$Q_PWD must be at 0x154 (oracle [PIN])");
+_Static_assert(offsetof(sysuaf_rms_record_t, uaf$w_salt) == UAF$K_SALT_OFF,
+               "UAF$W_SALT must be at 0x166 (oracle [PIN])");
+_Static_assert(offsetof(sysuaf_rms_record_t, uaf$b_encrypt) == UAF$K_ENCRYPT_OFF,
+               "UAF$B_ENCRYPT must be at 0x168 (oracle [PIN])");
+_Static_assert(offsetof(sysuaf_rms_record_t, uaf$b_pwd_length) == UAF$K_PWD_LENGTH_OFF,
+               "UAF$B_PWD_LENGTH must be at 0x16A (oracle [PIN])");
+_Static_assert(offsetof(sysuaf_rms_record_t, uaf$q_pwd2) == UAF$K_PWD2_OFF,
+               "UAF$Q_PWD2 must be at 0x16C (oracle [PIN])");
 
-/* Primary key geometry (segment 0). */
-#define SYSUAF_KEY_USERNAME_POS  0
+/* Primary key geometry (key of reference 0): the 32-byte username at [PIN]
+   offset 0x04. UIC secondary key (key of reference 1) is the LE longword at
+   [PIN] offset 0x24. Both are consumed by src/vmsrms/sysuaf_rms.c when it
+   authors the Prolog-3 indexed file (p3_create_params seg0_pos/seg0_siz). */
+#define SYSUAF_KEY_USERNAME_POS  UAF$K_USERNAME_OFF
 #define SYSUAF_KEY_USERNAME_SIZ  SYSUAF_USERNAME_LEN
-
-/*
- * Build the RMS XABKEY describing the SYSUAF primary key (key of reference 0):
- * a single string segment over the 32-byte username at record offset 0.
- * Usernames are unique, so no duplicates and no change-in-place are allowed.
- * Chain the returned XAB off the FAB (fab$l_xab) when creating/opening
- * SYSUAF.DAT as an indexed file.
- */
-static inline struct XABKEY sysuaf_rms_primary_key(void)
-{
-    struct XABKEY k = cc$rms_xabkey;    /* cod=KEY, bln, dtp=STG, nseg=1 */
-    k.xab$b_ref  = 0;                   /* primary key */
-    k.xab$w_flg  = 0;                   /* unique: no DUP, no CHG */
-    k.xab$w_pos0 = SYSUAF_KEY_USERNAME_POS;
-    k.xab$b_siz0 = SYSUAF_KEY_USERNAME_SIZ;
-    k.xab$w_tks  = SYSUAF_KEY_USERNAME_SIZ;
-    k.xab$l_knm  = "USERNAME";
-    return k;
-}
+#define SYSUAF_KEY_UIC_POS       UAF$K_UIC_OFF
+#define SYSUAF_KEY_UIC_SIZ       4
 
 /* Look up a user in sysuaf.dat. Returns 0 on success, -1 if not found. */
 int sysuaf_lookup(const char *username, sysuaf_record_t *rec);

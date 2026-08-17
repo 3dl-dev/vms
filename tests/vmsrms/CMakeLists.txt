@@ -96,6 +96,26 @@ set_tests_properties(vmsrms_sysroot_composed PROPERTIES
     TIMEOUT 30
 )
 
+# vms-0044: concealed-rooted directory-logical chain composes to concrete
+# on-volume ODS-2 candidate specs (SYS$SYSTEM:SYSUAF.DAT ->
+# DKA0:[SYS0.SYSCOMMON.SYSEXE]SYSUAF.DAT) -- the input the Files-11 ACP
+# directory walk consumes (flip-blocker, epic vms-208). Host LNM$PROCESS, no
+# /dev/vms needed; the ACP walk + byte-exact read is the paired positive in
+# tests/qemu/test_syssvc_dirlogical_acp.c.
+add_executable(test_dirlogical_compose test_dirlogical_compose.c)
+target_include_directories(test_dirlogical_compose PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_dirlogical_compose PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_dirlogical_compose COMMAND test_dirlogical_compose)
+set_tests_properties(vmsrms_dirlogical_compose PROPERTIES
+    LABELS "unit;rms;lnm"
+    TIMEOUT 30
+)
+
 # vms-240: iterative device-field LNM resolution through $PARSE and the unified
 # TERMINAL-honoring driver (lnm_translate_filespec). Host LNM$PROCESS, no
 # /dev/vms needed.

@@ -117,7 +117,22 @@ else
     echo "                the \$SEARCH test (vms-a0b) needs a multi-version ODS-2 volume on DKA200: (vdc)" >&2
     exit 2
 fi
-trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1" "$OVMX_DISK2"' EXIT
+#   vdd (DKA300:) -- a GENERATED genuine ODS-2 SYSTEM-DISK tree (from
+#                    /ods2_sysvol.img == tests/qemu/mkimage_ods2_sysvol.c). It
+#                    carries [SYS0.SYSCOMMON.{SYSEXE,SYSMGR,SYSLIB}] with
+#                    SYSUAF.DAT etc., so the directory-logical resolution test
+#                    (test_syssvc_dirlogical_acp, vms-0044) can compose
+#                    SYS$SYSTEM:SYSUAF.DAT and walk the ACP to the file FID.
+OVMX_DISK3=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
+OVMX_ODS2_SYSVOL_SRC=/ods2_sysvol.img
+if [ -f "$OVMX_ODS2_SYSVOL_SRC" ]; then
+    cp "$OVMX_ODS2_SYSVOL_SRC" "$OVMX_DISK3"
+else
+    echo "run_tests.sh: FATAL: ODS-2 sysvol fixture $OVMX_ODS2_SYSVOL_SRC missing --" >&2
+    echo "                the directory-logical test (vms-0044) needs a system-disk ODS-2 volume on DKA300: (vdd)" >&2
+    exit 2
+fi
+trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1" "$OVMX_DISK2" "$OVMX_DISK3"' EXIT
 
 # One virtio-net NIC (vms-9d2). Exactly as the two virtio disks above give the
 # executive real block devices to enumerate into DK units, this gives it a real
@@ -187,6 +202,8 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -device virtio-blk-pci,drive=ovmxdisk1 \
     -drive if=none,id=ovmxdisk2,file="$OVMX_DISK2",format=raw \
     -device virtio-blk-pci,drive=ovmxdisk2 \
+    -drive if=none,id=ovmxdisk3,file="$OVMX_DISK3",format=raw \
+    -device virtio-blk-pci,drive=ovmxdisk3 \
     2>&1) || QEMU_RC=$?
 
 # Splice the assertion transcript (ttyS1, if this arch has one) back into
@@ -230,7 +247,7 @@ OUTPUT_FILE=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 # ONE trap, both temp files: a second `trap ... EXIT` REPLACES the first
 # rather than stacking with it, so registering ASSERT_TRANSCRIPT's cleanup
 # separately above would have silently dropped it the moment this line ran.
-trap 'rm -f "$OUTPUT_FILE" "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1"' EXIT
+trap 'rm -f "$OUTPUT_FILE" "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1" "$OVMX_DISK2" "$OVMX_DISK3"' EXIT
 printf '%s\n' "$OUTPUT" > "$OUTPUT_FILE"
 
 if harness_verdict_zero_failures "$OUTPUT_FILE"; then

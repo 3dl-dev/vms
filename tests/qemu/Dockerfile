@@ -461,6 +461,20 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_search \
         /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
     /src/tests/qemu/mkimage_ods2_search /ods2_search.img 1
 
+# GENERATED genuine ODS-2 SYSTEM-DISK tree for the directory-logical resolution
+# proof (vms-0044, epic vms-208). mkimage_ods2_sysvol.c masters, with the SAME
+# byte-genuine writer, a concealed-rooted layout [SYS0.SYSCOMMON.{SYSEXE,SYSMGR,
+# SYSLIB}] holding SYSUAF.DAT etc. Staged as /ods2_sysvol.img, which
+# run_tests.sh copies onto DKA300: (vdd). test_syssvc_dirlogical_acp composes
+# SYS$SYSTEM:SYSUAF.DAT and walks the ACP MFD->[SYS0]->[SYSCOMMON]->[SYSEXE] to
+# the file FID, then reads it byte-exact.
+COPY tests/qemu/mkimage_ods2_sysvol.c /src/tests/qemu/
+RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_sysvol \
+        /src/tests/qemu/mkimage_ods2_sysvol.c \
+        /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
+        /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
+    /src/tests/qemu/mkimage_ods2_sysvol /ods2_sysvol.img 2
+
 # Locate the kernel image (may already exist as symlink)
 RUN KVER=$(cat /tmp/kver) && \
     if [ ! -e /boot/vmlinuz ]; then \

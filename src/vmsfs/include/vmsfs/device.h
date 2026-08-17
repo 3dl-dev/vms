@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "vmsfs/filespec.h"   /* VMSFS_MAX_FILESPEC (composed-candidate width) */
+
 /*
  * VMS Device Table
  *
@@ -71,5 +73,26 @@ uint32_t vmsfs_device_concealed_rooted(const char *device,
  */
 uint32_t vmsfs_resolve_filespec_device(const char *filespec, char *result,
                                        size_t result_size);
+
+/*
+ * vmsfs_compose_ods2_candidates - vms-0044 (flip-blocker, epic vms-208).
+ *
+ * Resolve a VMS filespec whose DEVICE field may be a directory logical
+ * (SYS$SYSTEM), a concealed rooted search-list logical (SYS$SYSROOT), or a
+ * chain of them, into one or more FULLY-COMPOSED on-volume ODS-2 candidate
+ * specs -- PHYSICALDEV:[DIR.SUB.SUB]NAME.TYPE;VERSION -- in search-list order
+ * (node-specific member first, common member second). This is the VMS-spec
+ * sibling of vmsfs_to_linux_path(): same concealed-rooted composition, but it
+ * stops at the resolved VMS spec the Files-11 ACP directory walk consumes
+ * (the [SYSn.SYSCOMMON.SYSEXE] path -> a directory FID; the file within -> the
+ * file FID), instead of continuing to a host path.
+ *
+ * Writes up to `max_out` candidate strings (each up to VMSFS_MAX_FILESPEC) and
+ * returns the count. Fail-honest (INV-6): an unresolvable device chain returns
+ * 0 -- never a fabricated path; the caller reports the honest RMS error
+ * (RMS$_DNF / RMS$_FNF).
+ */
+int vmsfs_compose_ods2_candidates(const char *filespec,
+                                  char out[][VMSFS_MAX_FILESPEC], int max_out);
 
 #endif /* __VMSFS_DEVICE_H */

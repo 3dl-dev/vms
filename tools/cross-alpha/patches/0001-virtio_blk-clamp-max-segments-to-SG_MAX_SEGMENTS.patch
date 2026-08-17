@@ -1,0 +1,49 @@
+virtio_blk: clamp max_segments to SG_MAX_SEGMENTS (Alpha boot hang, rd vms-80d)
+
+On architectures that cannot chain scatter-gather tables
+(CONFIG_ARCH_NO_SG_CHAIN -- alpha selects it in arch/alpha/Kconfig),
+SG_MAX_SEGMENTS == SG_CHUNK_SIZE == 128, and lib/scatterlist.c's
+__sg_alloc_table() refuses any request with more than max_ents segments
+(WARN_ON_ONCE(nents > max_ents) -> -EINVAL, guarded by ARCH_NO_SG_CHAIN).
+
+virtio-blk trusts whatever seg_max the host advertises and sets the queue's
+max_segments straight from it (clamped only to VIRTIO_BLK_MAX_SG_ELEMS - 2
+== 32766). qemu-system-alpha's virtio-blk device advertises seg_max =
+virtqueue_size - 2 = 254, so max_segments becomes 254.
+
+A demand-paged read of a large mmap'd file (e.g. exec()'ing an image off a
+virtio-blk-backed disk, whose text is faulted in through readahead) then
+builds a request with more than 128 physical segments. virtblk_map_data()'s
+sg_alloc_table_chained() lands in __sg_alloc_table() with nents > 128, which
+WARNs once and returns -EINVAL; virtblk_prep_rq() maps that to
+BLK_STS_RESOURCE (virtblk_fail_to_queue), so blk-mq requeues the request --
+forever. The page-in never completes and the faulting process never reaches
+its entry point. On OVMX/Alpha this hung PROVISION.EXE (read off the VMSFS
+system disk) one step short of the login chain, while STARTUP.EXE -- loaded
+from the initramfs, not virtio-blk -- was unaffected.
+
+Clamp max_segments to what the arch's SG allocator can actually handle. A
+no-op wherever SG chaining is available (SG_MAX_SEGMENTS == 2048, far above
+any host-advertised seg_max) and correct on ARCH_NO_SG_CHAIN arches.
+
+--- a/drivers/block/virtio_blk.c
++++ b/drivers/block/virtio_blk.c
+@@ -1339,6 +1339,18 @@
+ 	/* Prevent integer overflows and honor max vq size */
+ 	sg_elems = min_t(u32, sg_elems, VIRTIO_BLK_MAX_SG_ELEMS - 2);
+ 
++	/*
++	 * Clamp to what the arch's SG allocator can handle without chaining.
++	 * On CONFIG_ARCH_NO_SG_CHAIN arches (alpha) SG_MAX_SEGMENTS ==
++	 * SG_CHUNK_SIZE (128) and __sg_alloc_table() rejects (-EINVAL) any
++	 * request with more segments; trusting the host's seg_max (qemu
++	 * advertises virtqueue_size - 2 = 254) makes a large demand-paged
++	 * read requeue forever and hang the page-in. No-op where SG chaining
++	 * is available (SG_MAX_SEGMENTS == 2048, above any host seg_max).
++	 * rd vms-80d.
++	 */
++	sg_elems = min_t(u32, sg_elems, SG_MAX_SEGMENTS);
++
+ 	vdev->priv = vblk = kmalloc(sizeof(*vblk), GFP_KERNEL);
+ 	if (!vblk) {
+ 		err = -ENOMEM;

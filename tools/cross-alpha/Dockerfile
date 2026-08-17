@@ -8,6 +8,7 @@ RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y --no
       build-essential cmake make file ca-certificates \
       genisoimage \
       bc bison flex libssl-dev libelf-dev cpio xz-utils kmod \
+      patch \
       wget curl \
     && rm -rf /var/lib/apt/lists/*
 # alpha-linux-gnu-gcc + alpha headers; qemu-alpha (user) + qemu-system-alpha (full ES40);

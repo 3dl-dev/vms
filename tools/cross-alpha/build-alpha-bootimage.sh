@@ -199,6 +199,18 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     #########################################################################
     echo "-- rebuild vmlinux with the boot initramfs baked in --"
     cd /vmsko/linux-$KV
+    # OVMX kernel patches (rd vms-80d): idempotently ensure they are applied to
+    # this (possibly stale-cached) tree before make -- build-vmsko-alpha.sh only
+    # runs them when the modules are absent, so a pre-built cache could bake an
+    # unpatched vmlinux-boot otherwise. `patch --dry-run --forward` no-ops an
+    # already-patched tree.
+    for p in /repo/tools/cross-alpha/patches/*.patch; do
+        [ -e "$p" ] || continue
+        if patch -p1 --dry-run --forward <"$p" >/dev/null 2>&1; then
+            echo "   applying kernel patch: $(basename "$p")"
+            patch -p1 --forward <"$p"
+        fi
+    done
     ./scripts/config --enable BLK_DEV_INITRD --set-str INITRAMFS_SOURCE /work/alpha-boot.list
     # Make sure virtio-blk-pci (-> /dev/vda) + serial console are in (they are
     # from build-vmsko-alpha.sh, re-assert idempotently).

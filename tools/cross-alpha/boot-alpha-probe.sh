@@ -71,6 +71,16 @@ file /vmsfs.ko /vmsko/vmsfs.ko 644 0 0
 L
     echo "== bake probe kernel =="
     cd /vmsko/linux-$KV
+    # OVMX kernel patches (rd vms-80d): idempotently ensure applied to the
+    # (possibly stale-cached) tree before make. `--dry-run --forward` no-ops an
+    # already-patched tree.
+    for p in /repo/tools/cross-alpha/patches/*.patch; do
+        [ -e "$p" ] || continue
+        if patch -p1 --dry-run --forward <"$p" >/dev/null 2>&1; then
+            echo "   applying kernel patch: $(basename "$p")"
+            patch -p1 --forward <"$p"
+        fi
+    done
     ./scripts/config --enable BLK_DEV_INITRD --set-str INITRAMFS_SOURCE /work/probe.list \
         --enable VIRTIO --enable VIRTIO_PCI --enable VIRTIO_BLK \
         --enable SERIAL_8250 --enable SERIAL_8250_CONSOLE \

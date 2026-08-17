@@ -138,27 +138,80 @@
 /* The real component source + its headers, staged by the Dockerfile. */
 #define COMPONENT_DEFAULT "/tests/component"
 
-/* Failure bound (ms) for ONE drive: MMK spawns a DCL, drives the foreign-command
- * definition + the TCC compile (a real fork+execve of the compiler, which does
- * real work) + the marker echo, and EXITS. This is a CEILING, not pacing -- the
- * wait below returns the instant MMK exits, so a green drive costs only its real
- * runtime and this bound is only ever reached by a genuine hang. It is generous
- * because CI's TCG is much slower than a dev host: an earlier run compiled the
- * object and echoed the marker but MMK had not yet finished tearing down its DCL
- * subprocess within a tight 2s reap, reddening the run from clean (the whole
- * point of the vms-d1b gate is to pass from a clean CI build). Kept comfortably
- * under half run_tests.sh's 120s QEMU cap, and paired with the single-drive
- * short-circuit in main() (drive #2 is skipped only when drive #1 WEDGED), so
- * even a genuine hang costs one bound, not four. Raised 40000 -> 60000 for the
- * vms-725 LINK+activate drive: that drive does an extra (tiny) driver compile,
- * a LINK, and an activation after the two runtime compiles + archive, so under
- * slow/contended TCG the whole chain can exceed the old 40s bound AFTER the
- * archive but BEFORE the LINK -- which killed MMK mid-drive and reddened the
- * gate (the drive was progressing, not wedged; it just needed the headroom). To
- * keep the whole-VM 120s budget safe, only ONE of the two drives runs the
- * LINK+activate stage (see drive_build's do_link / main) -- the other stays the
- * lighter compile+archive drive vms-6be shipped. */
-#define DRIVE_TIMEOUT_MS 60000
+/*
+ * DRIVE BUDGET (vms-9d4f: machine-relative, NOT a wall bump).
+ *
+ * This USED to be one fixed host-wall constant (DRIVE_TIMEOUT_MS = 60000,
+ * raised once already from 40000 -- see git history) covering a 300 x
+ * poll(200ms) wait for EITHER drive. That is a HOST-WALL budget for work
+ * whose cost is dominated by an IN-GUEST TCC compile of the real
+ * src/libvmssys/vms_string.c, and under QEMU TCG (no -icount, no KVM -- Rule
+ * 9's faithful gate is `docker run`, plain TCG) the guest's own poll-timer
+ * tracks host wall while the compile's actual cost tracks host CPU speed.
+ * GitHub's TCG runner has been observed ~10x slower than the dev host's, so
+ * a fixed 60s constant that is comfortable here can be blown by the SAME
+ * compile there -- an emulation-speed flake, not a code regression (bisect +
+ * peer review both converged on this; see vms-9d4f). Raising the constant
+ * again would only move the same cliff further out (Rule 8: no wall bump).
+ *
+ * The fix is to stop budgeting in host-wall at all and budget instead
+ * relative to a MEASUREMENT of this run's own in-guest compile speed:
+ * calibrate_tcc_ms() (below) times a direct (non-DCL) TCC compile of the
+ * SAME reference TU (VMS_STRING.C, the SAME flags both drives use for their
+ * dominant compile) right before the drives run, and drive_budget_ms() turns
+ * that measurement into a per-drive budget with headroom. On a fast host
+ * this reproduces the historical ~60s neighborhood (no behavior change); on
+ * a slow host the budget grows with the SAME multiplier the guest's own
+ * compiler is running under, so it cannot be outrun by TCG speed the way a
+ * constant can.
+ *
+ * Model (see drive_budget_ms): budget = DRIVE_COMPILE_MARGIN * t_cal +
+ * DRIVE_FIXED_OVERHEAD_MS + (do_link ? DRIVE_LINK_OVERHEAD_MS : 0). Both
+ * drives compile VMS_STRING.C (398 lines) as their dominant cost; do_link
+ * additionally compiles the tiny 38-line OVMXRTRUN.C driver (folded into
+ * DRIVE_LINK_OVERHEAD_MS, not a second compile_units multiplier -- it is not
+ * TCG-compile-cost-dominant) and then LINKs + activates the result -- the
+ * SAME "extra tiny compile + LINK + activation" cost the 40000->60000 raise
+ * in this constant's git history already documented and paid for with a
+ * flat +20000. DRIVE_LINK_OVERHEAD_MS preserves that same headroom, now atop
+ * a calibrated (not fixed) compile budget.
+ */
+
+/* Ceiling for the calibration compile itself (a single, light, non-DCL
+ * fork+exec of TCC on one TU) -- generous so a slow run's calibration is not
+ * itself starved, but still bounded so a wedged TCC.EXE is a named failure
+ * (calibrate_tcc_ms returns -1) rather than an unattributable hang. */
+#define CAL_TIMEOUT_MS 180000
+
+/* If calibration cannot produce a measurement (TCC/staging missing, wedged,
+ * non-zero exit), drive_budget_ms falls back to this floor -- the historical
+ * fixed bound -- so a calibration hiccup never SHRINKS the real drives'
+ * budget below what has always worked here. This is the one place the old
+ * constant survives, and only as a floor, never as the ceiling a slow run is
+ * held to. */
+#define CAL_FALLBACK_MS 60000
+
+/* Multiplier applied to the measured calibration compile time to get the
+ * compile-proportional share of a drive's budget. Generous (not tight):
+ * covers run-to-run compile-time jitter and the small extra cost of
+ * compiling through DCL's foreign-command dispatch (fork+execve is the same
+ * either way; only DCL's own parse/dispatch sits on top) rather than
+ * calibrate_tcc_ms's direct fork+exec. */
+#define DRIVE_COMPILE_MARGIN 3
+
+/* Fixed per-drive overhead: lib$spawn of the persistent DCL, $CREMBX x2,
+ * foreign-command definition + dispatch, LIBRARIAN archiving the one small
+ * object, and the marker echo. Small and roughly constant relative to the
+ * compile itself -- the vms-9d4f diagnosis is explicit that this overhead
+ * was never what blew the old 60s bound, the compile was. */
+#define DRIVE_FIXED_OVERHEAD_MS 8000
+
+/* Extra fixed overhead for the do_link=1 drive ONLY: the tiny OVMXRTRUN.C
+ * compile, the LINK, and the harness's post-drive image activation. Mirrors
+ * the flat +20000 this file's history already applied when this drive was
+ * added (40000 -> 60000), now layered on a calibrated base instead of a
+ * fixed one. */
+#define DRIVE_LINK_OVERHEAD_MS 20000
 
 #define EXPECT_MARKER "OVMXD1B:COMPILED"
 
@@ -172,6 +225,14 @@ static const char *envdef(const char *name, const char *dflt)
 {
     const char *p = getenv(name);
     return (p && p[0]) ? p : dflt;
+}
+
+/* now_ms - CLOCK_MONOTONIC in milliseconds, for calibration timing. */
+static long long now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 static struct dsc$descriptor_s mkdsc(const char *s)
@@ -289,6 +350,106 @@ static int activate_image(const char *exepath)
 }
 
 /*
+ * calibrate_tcc_ms (vms-9d4f) -- measure THIS run's actual in-guest TCC
+ * compile speed by timing a direct (non-DCL) fork+exec of TCC.EXE compiling
+ * the SAME reference TU (VMS_STRING.C) with the SAME flags drive_build's
+ * descrip.mms uses for its dominant compile step. This is deliberately NOT
+ * routed through MMK/DCL: it isolates the emulation-speed-dependent cost (a
+ * real compile under TCG) from the drive's own fixed overhead, which is what
+ * drive_budget_ms below turns into a scaled budget. Returns the measured
+ * host-wall ms on a verified-successful compile (object produced, TCC exited
+ * 0, within CAL_TIMEOUT_MS), or -1 if calibration itself could not produce a
+ * trustworthy measurement -- callers must treat -1 as "no signal", not "the
+ * guest is fast", and fall back to CAL_FALLBACK_MS.
+ */
+static long calibrate_tcc_ms(const char *tcc, const char *tccinc, const char *comp)
+{
+    char workdir[] = "/tmp/mmkcal_XXXXXX";
+    if (!mkdtemp(workdir)) return -1;
+
+    char src[512], path[512];
+    int ok;
+    snprintf(src, sizeof(src), "%s/VMS_STRING.C", comp);
+    snprintf(path, sizeof(path), "%s/VMS_STRING.C", workdir);
+    ok = (copy_file(src, path) == 0);
+    static const char *hdrs[] = { "vms_string.h", "vms_types.h", NULL };
+    for (int i = 0; ok && hdrs[i]; i++) {
+        snprintf(src, sizeof(src), "%s/%s", comp, hdrs[i]);
+        snprintf(path, sizeof(path), "%s/%s", workdir, hdrs[i]);
+        ok = (copy_file(src, path) == 0);
+    }
+    if (!ok) { rmdir(workdir); return -1; }
+
+    char objpath[512];
+    snprintf(objpath, sizeof(objpath), "%s/VMS_STRING.OBJ", workdir);
+
+    long long t0 = now_ms();
+
+    pid_t pid = fork();
+    if (pid < 0) { rmdir(workdir); return -1; }
+    if (pid == 0) {
+        if (chdir(workdir) != 0) _exit(120);
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) { dup2(devnull, STDIN_FILENO); dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); }
+        /* Same flags as the descrip.mms TCC line in drive_build (-I <tccinc>
+         * -I . VMS_STRING.C -o VMS_STRING.OBJ), so the calibration compile is
+         * the SAME work, just reached directly instead of via MMK/DCL. */
+        execl(tcc, tcc, "-x", "c", "-c", "-ffreestanding", "-fno-builtin",
+              "-I", tccinc, "-I", ".", "VMS_STRING.C", "-o", "VMS_STRING.OBJ",
+              (char *)NULL);
+        _exit(127);   /* exec failed */
+    }
+
+    int status = 0, waited = 0, reaped = 0;
+    while (waited < CAL_TIMEOUT_MS) {
+        pid_t r = waitpid(pid, &status, WNOHANG);
+        if (r == pid) { reaped = 1; break; }
+        if (r < 0) break;
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 50 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+        waited += 50;
+    }
+    if (!reaped) {
+        kill(pid, SIGKILL);
+        (void)waitpid(pid, &status, 0);
+    }
+    long long t1 = now_ms();
+
+    struct stat objst;
+    int obj_ok = (stat(objpath, &objst) == 0 && objst.st_size > 0);
+
+    unlink(objpath);
+    snprintf(path, sizeof(path), "%s/VMS_STRING.C", workdir); unlink(path);
+    snprintf(path, sizeof(path), "%s/vms_string.h", workdir); unlink(path);
+    snprintf(path, sizeof(path), "%s/vms_types.h", workdir); unlink(path);
+    rmdir(workdir);
+
+    if (!reaped || !WIFEXITED(status) || WEXITSTATUS(status) != 0 || !obj_ok)
+        return -1;   /* no trustworthy measurement -- caller falls back */
+
+    long ms = (long)(t1 - t0);
+    return ms >= 0 ? ms : -1;
+}
+
+/*
+ * drive_budget_ms (vms-9d4f) -- turn a calibration measurement into a
+ * machine-relative host-wall budget for one drive. See the DRIVE BUDGET
+ * comment above DRIVE_COMPILE_MARGIN for the model and rationale. `t_cal_ms`
+ * is calibrate_tcc_ms's return value (may be -1: no measurement).
+ */
+static long drive_budget_ms(long t_cal_ms, int do_link)
+{
+    long base = (t_cal_ms > 0) ? t_cal_ms : CAL_FALLBACK_MS;
+    long budget = DRIVE_COMPILE_MARGIN * base + DRIVE_FIXED_OVERHEAD_MS;
+    if (do_link) budget += DRIVE_LINK_OVERHEAD_MS;
+    /* Never budget a real drive below the historical floor -- calibration
+     * refines the budget upward for a slow guest, it never shrinks the bound
+     * a fast guest has always run under. */
+    if (budget < CAL_FALLBACK_MS) budget = CAL_FALLBACK_MS;
+    return budget;
+}
+
+/*
  * Drive ONE MMK build in a fresh work directory. Both modes compile the real
  * runtime TU VMS_STRING.C with TCC.EXE and archive it into
  * OVMXRT.OLB with LIBRARIAN.EXE. When do_link is set, the drive ALSO compiles the
@@ -315,6 +476,7 @@ static int activate_image(const char *exepath)
 static void drive_build(const char *mmk, const char *comp, const char *tcc,
                         const char *tccinc, const char *libr,
                         const char *lnk, const char *deccshr, int do_link,
+                        long budget_ms,
                         char **objbuf, long *objlen,
                         char **olbbuf, long *olblen,
                         char **exebuf, long *exelen,
@@ -472,7 +634,7 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
     int wstatus = 0;
     struct stat finalst;
     acc[0] = '\0';
-    while (waited < DRIVE_TIMEOUT_MS) {
+    while (waited < budget_ms) {
         struct pollfd pfd = { .fd = outpipe[0], .events = POLLIN };
         int pr = poll(&pfd, 1, 200);
         if (pr > 0) {
@@ -580,6 +742,21 @@ int main(int argc, char **argv)
     if (stat(lnk, &sb)     != 0) { printf("  FAIL: static LINK.EXE not found at %s\n", lnk); return 1; }
     if (stat(deccshr, &sb) != 0) { printf("  FAIL: DECC$SHR.EXE not found at %s\n", deccshr); return 1; }
 
+    /* CALIBRATE (vms-9d4f): measure this run's own in-guest TCC compile
+     * speed once, before either drive, and derive both drives' host-wall
+     * budgets from it -- see the DRIVE BUDGET comment above
+     * DRIVE_COMPILE_MARGIN. Printed always: it is the load-bearing number
+     * for diagnosing a future timing report on this suite. */
+    long t_cal = calibrate_tcc_ms(tcc, tccinc, comp);
+    long budget1 = drive_budget_ms(t_cal, /*do_link=*/0);
+    long budget2 = drive_budget_ms(t_cal, /*do_link=*/1);
+    if (t_cal > 0)
+        printf("  (calibration: reference TCC compile took %ldms in-guest -- drive budgets %ldms / %ldms)\n",
+               t_cal, budget1, budget2);
+    else
+        printf("  (calibration: no measurement -- falling back to the historical %dms floor for both drives)\n",
+               CAL_FALLBACK_MS);
+
     /* Build #1: an independent MMK drive in its own work dir. */
     char *obj1 = NULL, *obj2 = NULL, *olb1 = NULL, *olb2 = NULL, *exe1 = NULL, *exe2 = NULL;
     long  objlen1 = -1, objlen2 = -1, olblen1 = -1, olblen2 = -1, exelen1 = -1, exelen2 = -1;
@@ -587,7 +764,7 @@ int main(int argc, char **argv)
 
     /* Drive #1: compile + archive only (do_link=0) -- the lighter vms-6be drive,
      * for the compile+archive byte-identity comparison. */
-    drive_build(mmk, comp, tcc, tccinc, libr, lnk, deccshr, /*do_link=*/0,
+    drive_build(mmk, comp, tcc, tccinc, libr, lnk, deccshr, /*do_link=*/0, budget1,
                 &obj1, &objlen1, &olb1, &olblen1, &exe1, &exelen1,
                 &act1, &mark1, &reap1);
 
@@ -603,7 +780,7 @@ int main(int argc, char **argv)
      * skips #2, and a genuine mid-drive wedge (no marker, no artifact) likewise
      * costs one bound. */
     if (obj1_valid && olb1_valid)
-        drive_build(mmk, comp, tcc, tccinc, libr, lnk, deccshr, /*do_link=*/1,
+        drive_build(mmk, comp, tcc, tccinc, libr, lnk, deccshr, /*do_link=*/1, budget2,
                     &obj2, &objlen2, &olb2, &olblen2, &exe2, &exelen2,
                     &act2, &mark2, &reap2);
 

@@ -345,6 +345,10 @@ struct posix_search_context {
     DIR *dir;                   /* Open directory handle */
     char directory[1024];       /* Linux directory path being searched */
     char pattern[256];          /* fnmatch-compatible pattern */
+    char vms_prefix[600];       /* "DEV:[DIR]" from the expanded spec, so the   */
+                                /* resultant is DEV:[DIR]NAME (vms-5f0) rather  */
+                                /* than round-tripped through vmsfs_to_vms_spec */
+                                /* (which maps /vms/X/Y -> X:[000000]Y).        */
     int  active;                /* Context is valid */
 };
 
@@ -393,8 +397,25 @@ static uint32_t rms_posix_search(void *fab_ptr)
             return RMS$_SYN;
         }
 
+        /* Preserve the "DEV:[DIR]" of the expanded VMS spec (up to and including
+         * the closing ']') so the $SEARCH resultant is composed as
+         * DEV:[DIR]NAME -- the genuine device/directory the caller searched, not
+         * vmsfs_to_vms_spec's positional guess. */
+        {
+            const char *rb = strchr(expanded, ']');
+            if (rb) {
+                size_t pl = (size_t)(rb - expanded) + 1;
+                if (pl >= sizeof(ctx->vms_prefix)) pl = sizeof(ctx->vms_prefix) - 1;
+                memcpy(ctx->vms_prefix, expanded, pl);
+                ctx->vms_prefix[pl] = '\0';
+            }
+        }
+
         char linux_path[1024];
-        if (vmsfs_to_linux_path(expanded, linux_path, sizeof(linux_path)) < 0) {
+        /* vmsfs_to_linux_path returns a VMS status code (odd == success), NOT
+         * 0-on-success -- the old `< 0` check never fired (see the project's
+         * vmsfs_to_linux_path gotcha). */
+        if (!(vmsfs_to_linux_path(expanded, linux_path, sizeof(linux_path)) & 1u)) {
             strncpy(linux_path, expanded, sizeof(linux_path) - 1);
             linux_path[sizeof(linux_path) - 1] = '\0';
         }
@@ -429,23 +450,42 @@ static uint32_t rms_posix_search(void *fab_ptr)
             continue;
         }
         if (fnmatch(ctx->pattern, entry->d_name, FNM_CASEFOLD) == 0) {
-            char result_path[1024];
-            snprintf(result_path, sizeof(result_path), "%s/%s",
-                     ctx->directory, entry->d_name);
-            if (nam->nam$l_rsa && nam->nam$b_rss > 0) {
-                char vms_result[1024];
-                if (vmsfs_to_vms_spec(result_path, vms_result,
-                                      sizeof(vms_result)) < 0) {
+            /* Compose the resultant VMS spec DEV:[DIR]NAME (name upper-cased --
+             * VMS specs are upper-case; the on-disk entry is lower-case). Prefer
+             * the searched device/directory (ctx->vms_prefix); only when it is
+             * unknown fall back to vmsfs_to_vms_spec on the Linux path. */
+            char vms_result[1024];
+            if (ctx->vms_prefix[0]) {
+                char upname[512];
+                size_t i = 0;
+                for (; entry->d_name[i] && i < sizeof(upname) - 1; i++) {
+                    char c = entry->d_name[i];
+                    upname[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+                }
+                upname[i] = '\0';
+                snprintf(vms_result, sizeof(vms_result), "%s%s",
+                         ctx->vms_prefix, upname);
+            } else {
+                char result_path[1024];
+                snprintf(result_path, sizeof(result_path), "%s/%s",
+                         ctx->directory, entry->d_name);
+                if (!(vmsfs_to_vms_spec(result_path, vms_result,
+                                        sizeof(vms_result)) & 1u)) {
                     strncpy(vms_result, result_path, sizeof(vms_result) - 1);
                     vms_result[sizeof(vms_result) - 1] = '\0';
                 }
+            }
+            if (nam->nam$l_rsa && nam->nam$b_rss > 0) {
                 size_t rlen = strlen(vms_result);
                 if (rlen > nam->nam$b_rss) rlen = nam->nam$b_rss;
                 memcpy(nam->nam$l_rsa, vms_result, rlen);
                 nam->nam$b_rsl = (uint8_t)rlen;
             }
-            snprintf(fab->_resolved_path, sizeof(fab->_resolved_path),
-                     "%s/%s", ctx->directory, entry->d_name);
+            /* The record engines resolve _resolved_path via the VMS spec (RMS
+             * re-parses it), so store the composed VMS spec, not a Linux path. */
+            strncpy(fab->_resolved_path, vms_result,
+                    sizeof(fab->_resolved_path) - 1);
+            fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
             fab->fab$l_sts = RMS$_NORMAL;
             nam->nam$l_sts = RMS$_NORMAL;
             return RMS$_NORMAL;

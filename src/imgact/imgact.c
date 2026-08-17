@@ -663,14 +663,17 @@ static int imgsrc_open(struct imgsrc *s, const char *path)
 	/*
 	 * ATOMIC-FLIP DEFER (vms-5f0): the ACP is unavailable only when
 	 * /dev/vms / the executive is absent -- imgact_acp_open() renders that
-	 * as SS$_NOSUCHDEV. In that environment (host ctest and the plain-
-	 * container self-host / link / activation gates) there is no runtime to
-	 * be authentic against, so we defer to the legacy POSIX open() on the
-	 * pre-flip /vms path, exactly as the RMS rung defers RMS$_ACC to its
-	 * legacy resolver (host ctest byte-identical). When /dev/vms IS present
-	 * the ACP open would have succeeded or failed for a real reason (e.g.
-	 * SS$_NOSUCHFILE) and we never fall through here, so the runtime boot
-	 * path stays ACP-only with NO POSIX image-read fallback (CLAUDE.md
+	 * as SS$_NOSUCHDEV (its imgact_acp_dev_open() fd < 0 path). In that
+	 * environment (host ctest and the plain-container self-host / link /
+	 * activation gates) there is no runtime to be authentic against, so we
+	 * defer to the legacy POSIX open() on the pre-flip /vms path, exactly as
+	 * the RMS rung defers RMS$_ACC to its legacy resolver (host ctest
+	 * byte-identical). When /dev/vms IS present the ACP open would have
+	 * succeeded or failed for a real reason -- SS$_NOSUCHFILE for a missing
+	 * file, or SS$_DEVNOTMOUNT for an unmounted unit (vms-03b: DISTINCT from
+	 * the executive-absent NOSUCHDEV, so an unmounted SYSDEVICE never falls
+	 * through to POSIX) -- and we never fall through here, so the runtime
+	 * boot path stays ACP-only with NO POSIX image-read fallback (CLAUDE.md
 	 * Rule 9 / INV-6).
 	 */
 	if (st == SS$_NOSUCHDEV) {

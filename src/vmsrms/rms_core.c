@@ -494,11 +494,26 @@ static void rms_acp_close_handle(rms_file_t *h)
 
 /*
  * rms_acp_absent - vms-5f0 executive-presence probe. A cheap $ASSIGN that comes
- * back SS$_NOSUCHDEV means /dev/vms / the Files-11 ACP is unreachable (host
- * ctest, plain-container self-host/link gates); RMS then defers $OPEN/$CREATE/
- * $ERASE to its legacy POSIX bodies, exactly as IMGACT's imgsrc_open() defers.
- * Any other status (success, or a real ACP error) means the executive IS
- * present, so the runtime stays ACP-only with no POSIX fallback (Rule 9/INV-6).
+ * back SS$_NOSUCHDEV -- and ONLY that status -- means /dev/vms / the Files-11 ACP
+ * is unreachable (host ctest, plain-container self-host/link gates); RMS then
+ * defers $OPEN/$CREATE/$ERASE to its legacy POSIX bodies, exactly as IMGACT's
+ * imgsrc_open() defers. Any other status means the executive IS present, so the
+ * runtime stays ACP-only with no POSIX fallback (Rule 9/INV-6).
+ *
+ * CRITICAL (vms-03b): SS$_NOSUCHDEV is emitted here EXCLUSIVELY by the userspace
+ * KIF (vms_kif_acp_assign / acp_bind_ok) when /dev/vms cannot be opened. Once
+ * inside the executive, an $ASSIGN of a unit that exists but has no volume
+ * mounted -- or of a unit that is not the probe's hardcoded DKA0: -- comes back
+ * SS$_DEVNOTMOUNT, which falls through to "present" below. That distinction is
+ * load-bearing: were an unmounted/non-DKA0: unit to report SS$_NOSUCHDEV, this
+ * probe would wrongly declare the executive absent and RMS would silently read
+ * the /vms POSIX passthrough -- the exact INV-6 masquerade the atomic flip
+ * exists to kill. So the probe reflects /dev/vms PRESENCE, not DKA0:'s mount
+ * state or existence. (The hardcoded RMS_ACP_DEFAULT_DEV as the probe unit is a
+ * vms-47d device-native-naming follow-up; it is harmless HERE precisely because
+ * DEVNOTMOUNT != NOSUCHDEV, but the OPEN path's DKA0: default is the real
+ * vms-47d item.)
+ *
  * Probed up front -- BEFORE rms_acp_specs_from_fab, whose ODS-2 candidate walk
  * needs the mounted volume and cannot resolve without the executive.
  */
@@ -506,11 +521,11 @@ static int rms_acp_absent(void)
 {
     uint32_t chan = 0;
     uint32_t st = vms_kif_acp_assign(RMS_ACP_DEFAULT_DEV, &chan);
-    if (st == SS$_NOSUCHDEV)
+    if (st == SS$_NOSUCHDEV)     /* ONLY executive-absent defers to POSIX (vms-03b) */
         return 1;
     if ($VMS_STATUS_SUCCESS(st))
         vms_kif_dassgn(chan);
-    return 0;
+    return 0;                    /* present: success OR SS$_DEVNOTMOUNT -> ACP path */
 }
 #endif /* __linux__ ACP lifecycle helpers */
 

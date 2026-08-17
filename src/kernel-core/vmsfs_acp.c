@@ -638,10 +638,23 @@ out:
 /*
  * $ASSIGN a FILE-CLASS channel to a mounted ODS-2 volume (design §4.2). The
  * channel is the executive's -- bound to the mounted volume, drawn from the
- * caller's proc->next_chan space -- not a Linux fd. SS$_NOSUCHDEV when the unit
- * is not a mounted volume: the fail-honest answer, never a fabricated channel
- * to a volume the executive does not have (CLAUDE.md Rule 9 / INV-6). $DASSGN
- * releases it (vms_acp_dassgn(), reached from vms_ioctl_dassgn's fallback).
+ * caller's proc->next_chan space -- not a Linux fd. SS$_DEVNOTMOUNT when the
+ * unit is not a mounted volume: the fail-honest answer, never a fabricated
+ * channel to a volume the executive does not have (CLAUDE.md Rule 9 / INV-6).
+ *
+ * This status is DELIBERATELY DISTINCT from SS$_NOSUCHDEV (vms-03b). Reaching
+ * this handler at all proves /dev/vms -- the executive -- is present; the
+ * userspace KIF (vms_kif_acp_assign / acp_bind_ok) is the ONLY layer that
+ * returns SS$_NOSUCHDEV, and only when /dev/vms itself cannot be opened. So a
+ * unit with no volume mounted must NOT report SS$_NOSUCHDEV: that conflation
+ * let RMS's executive-presence probe read an unmounted (or non-DKA0:) unit as
+ * "executive absent" and silently defer file reads to the /vms POSIX
+ * passthrough -- the exact INV-6 masquerade the ACP exists to refuse. Real VMS
+ * never conflates them either: $ASSIGN to an EXISTING device succeeds
+ * regardless of mount state (the volume is discovered later at $QIO time), and
+ * SS$_NOSUCHDEV is reserved for a genuinely non-existent device.
+ *
+ * $DASSGN releases it (vms_acp_dassgn(), reached from vms_ioctl_dassgn's fallback).
  */
 long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg)
 {
@@ -672,7 +685,7 @@ long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg)
     if (!vol) {
         exec_unlock(&vms_acp_vol_lock);
         exec_free(ch);
-        args.status = SS__NOSUCHDEV;    /* not a mounted volume -- fail honest */
+        args.status = SS__DEVNOTMOUNT;  /* device present, not a mounted volume -- fail honest (vms-03b: NOT executive-absent NOSUCHDEV) */
         goto out;
     }
     vol->refcnt++;

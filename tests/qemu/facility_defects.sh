@@ -4773,13 +4773,13 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_ioctl_acp_assign() stops FAILING when the named unit is not a mounted volume: the SS\$_NOSUCHDEV on the not-found (!vol) path becomes SS\$_NORMAL, so \$ASSIGN of the boot unit hands back a 'success' (and libvmssys then stores a PCB_CHAN_FILE slot) for a volume the executive does not have. That is the exact INV-6 facade the ACP exists to refuse -- a channel to nothing reported as an executive channel to something. The MOUNTED-volume \$ASSIGN is untouched (vol is found, so the mutated line never runs), so only the two fail-honest assertions -- \$ASSIGN before any \$MOUNT and \$ASSIGN after \$DISMOUNT -- can tell the difference, which is precisely the 'report success while sharing nothing' shape CLAUDE.md Rule 9 exists to catch.";;
+        why)          echo "vms_ioctl_acp_assign() stops FAILING when the named unit is not a mounted volume: the SS\$_DEVNOTMOUNT on the not-found (!vol) path becomes SS\$_NORMAL, so \$ASSIGN of the boot unit hands back a 'success' (and libvmssys then stores a PCB_CHAN_FILE slot) for a volume the executive does not have. That is the exact INV-6 facade the ACP exists to refuse -- a channel to nothing reported as an executive channel to something. The MOUNTED-volume \$ASSIGN is untouched (vol is found, so the mutated line never runs), so only the two fail-honest assertions -- \$ASSIGN before any \$MOUNT and \$ASSIGN after \$DISMOUNT -- can tell the difference, which is precisely the 'report success while sharing nothing' shape CLAUDE.md Rule 9 exists to catch.";;
         require_fail) cat <<'EOF'
-$ASSIGN of an UNMOUNTED boot unit returns SS$_NOSUCHDEV -- fail-honest, no fabricated channel
+$ASSIGN of an UNMOUNTED boot unit returns SS$_DEVNOTMOUNT -- fail-honest, no fabricated channel
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-after $DISMOUNT, $ASSIGN of the boot unit is SS$_NOSUCHDEV again (volume gone)
+after $DISMOUNT, $ASSIGN of the boot unit is SS$_DEVNOTMOUNT again (volume gone)
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
@@ -6472,10 +6472,11 @@ apply_edit() {
 
     acp-assign-unmounted-fabricates-channel)
         # RANGE-ANCHORED to vms_ioctl_acp_assign's own body: the comment-bearing
-        # `args.status = SS__NOSUCHDEV;    /* not a mounted volume -- fail honest
-        # */` occurs exactly once, on the !vol (not-a-mounted-volume) path. The
-        # file's OTHER SS__NOSUCHDEV is in vms_ioctl_acp_dmount, a different
-        # handler, so the /^long vms_ioctl_acp_assign/,/^}$/ range confines the
+        # `args.status = SS__DEVNOTMOUNT;  /* device present, not a mounted volume
+        # -- fail honest (vms-03b: NOT executive-absent NOSUCHDEV) */` occurs
+        # exactly once, on the !vol (not-a-mounted-volume) path. The file's OTHER
+        # SS__DEVNOTMOUNT uses are in different handlers ($MOUNT/IO$_ACCESS/...),
+        # so the /^long vms_ioctl_acp_assign/,/^}$/ range confines the
         # substitution to $ASSIGN's own fail-honest answer. Flipping it to
         # SS__NORMAL makes $ASSIGN report success for a unit that is not a
         # mounted volume -- the INV-6 facade (a channel to a volume the executive
@@ -6483,7 +6484,7 @@ apply_edit() {
         # never runs), so only the two fail-honest assertions redden. The
         # replacement does not contain the original comment text, so a second
         # apply matches nothing (the no-op selftest requires).
-        sed -i '/^long vms_ioctl_acp_assign/,/^}$/ s|args.status = SS__NOSUCHDEV;    /\* not a mounted volume -- fail honest \*/|args.status = SS__NORMAL; /* NEGCTL acp-assign-unmounted-fabricates-channel (was SS__NOSUCHDEV) */|' "$_file";;
+        sed -i '/^long vms_ioctl_acp_assign/,/^}$/ s|args.status = SS__DEVNOTMOUNT;  /\* device present, not a mounted volume -- fail honest (vms-03b: NOT executive-absent NOSUCHDEV) \*/|args.status = SS__NORMAL; /* NEGCTL acp-assign-unmounted-fabricates-channel (was SS__DEVNOTMOUNT) */|' "$_file";;
 
     acp-mount-nonods2-accepted)
         # ANCHORED to the single acp_validate_ods2() call in vms_ioctl_acp_mount:

@@ -225,8 +225,8 @@ int main(void)
 		imgact_acp_close(&nf);
 
 		st = imgact_acp_open(&nf, "DKA999:", IMG_PATH);
-		check(st == SS$_NOSUCHDEV,
-		      "a unit that is not an ACP-mounted volume is SS$_NOSUCHDEV (no POSIX fallback, INV-6)");
+		check(st == SS$_DEVNOTMOUNT,
+		      "a unit that is not an ACP-mounted volume is SS$_DEVNOTMOUNT (executive present, no volume; no POSIX fallback, INV-6)");
 		imgact_acp_close(&nf);
 	}
 

@@ -542,7 +542,11 @@ static uint32_t rms_impl_search(void *fab_ptr)
                        ? rms_posix_search(fab_ptr) : rms_acp_search(fab_ptr);
         }
     }
-    /* First call: probe the executive. SS$_NOSUCHDEV => /dev/vms absent. */
+    /* First call: probe the executive. SS$_NOSUCHDEV -- and ONLY that -- means
+     * /dev/vms is absent (userspace KIF); an unmounted or non-DKA0: unit with
+     * the executive present comes back SS$_DEVNOTMOUNT and stays on the ACP path
+     * (vms-03b: the probe reflects /dev/vms PRESENCE, never DKA0:'s mount state,
+     * so an unmounted unit never masquerades into the /vms passthrough). */
     {
         uint32_t pchan = 0;
         uint32_t pst = vms_kif_acp_assign(RMS_ACP_DEFAULT_DEV, &pchan);

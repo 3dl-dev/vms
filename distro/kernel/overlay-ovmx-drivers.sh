@@ -35,8 +35,17 @@
 # of record and still drive the standalone (out-of-tree) build used by the QEMU
 # test harness (tests/qemu/, src/kernel/Dockerfile). The core sources are
 # FLATTENED into each module dir because in-tree Kbuild builds objects under the
-# module's own directory; all local #include "..." directives are basename-only,
-# so a flat dir + -I$(src) resolves every header.
+# module's own directory; nearly all local #include "..." directives are
+# basename-only, so a flat dir + -I$(src) resolves every header.
+#
+# SUBDIR-PRESERVING STAGING (rd vms-4a8): a source that #includes a header by a
+# SUBDIR path -- e.g. the genuine ODS-2 codec's #include "vmsfs/ods2.h" -- needs
+# that ONE header to keep its path component even in the flat module dir. A
+# sources.conf line of the form
+#     <glob> -> <subdir>/
+# stages the matched files under $OUT/<subdir>/ instead of at $OUT/, so the flat
+# dir still resolves the subdir'd include via -I$(src). Lines without '->'
+# flatten to basenames exactly as before; the convention is purely additive.
 #
 # Usage: overlay-ovmx-drivers.sh <kernel-source-tree> <ovmx-repo-root>
 #
@@ -83,14 +92,25 @@ for mod in "${MODS[@]}"; do
     # Flatten every glob named in sources.conf (repo-relative). Comments/blanks
     # ignored. At least one file must land, or the module source is missing.
     n=0
-    while IFS= read -r glob; do
-        glob="${glob%%#*}"                       # strip inline comment
-        glob="$(echo "$glob" | xargs 2>/dev/null || true)"  # trim whitespace
-        [ -n "$glob" ] || continue
+    while IFS= read -r line; do
+        line="${line%%#*}"                       # strip inline comment
+        line="$(echo "$line" | xargs 2>/dev/null || true)"  # trim whitespace
+        [ -n "$line" ] || continue
+        # Optional 'glob -> subdir/' form (rd vms-4a8, additive): stage matched
+        # files under $OUT/<subdir>/ so a subdir'd #include keeps its path
+        # component. No '->' => flatten to $OUT/ exactly as before.
+        glob="$line"
+        subdir=""
+        if [[ "$line" == *"->"* ]]; then
+            glob="$(echo "${line%%->*}" | xargs 2>/dev/null || true)"
+            subdir="$(echo "${line##*->}" | xargs 2>/dev/null || true)"
+        fi
+        destdir="$OUT${subdir:+/$subdir}"
+        mkdir -p "$destdir"
         matched=0
         for f in $REPO/$glob; do                 # word-split glob on purpose
             [ -e "$f" ] || continue
-            cp "$f" "$OUT/"
+            cp "$f" "$destdir/"
             matched=$((matched + 1))
             n=$((n + 1))
         done

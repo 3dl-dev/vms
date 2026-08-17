@@ -188,24 +188,33 @@
 
 /*
  * PT_INTERP baked into every LINK.EXE executable: the OVMX image activator.
+ * This is the POSIX path the Linux kernel opens as the interpreter when it
+ * execve()s a native image, BEFORE any OVMX code runs.
  *
- * ATOMIC FLIP (vms-5f0), spot #3 -- DEFERRED, see note. When the /vms POSIX
- * passthrough is retired this interp path no longer resolves at boot, so the
- * kernel cannot exec IMGACT.EXE for a native image (DCL.EXE/LOGINOUT.EXE). PID
- * 1 already stages IMGACT.EXE off the ODS-2 volume THROUGH the ACP into
- * OVMX_BOOT_STAGE_DIR ("/run/ovmx-boot", src/ovmx_init/ovmx_boot_acp_read.c),
- * so the FINAL flip is to bake IMGACT_INTERP = OVMX_BOOT_STAGE_DIR
- * "/IMGACT.EXE". It is NOT done here for two reasons: (a) the boot walls at the
- * data-read layer (PROVISION's SYSUAF read over the retired /vms) BEFORE any
- * native image's PT_INTERP is ever resolved, so the flip yields no observable
- * progress this rung; (b) ~30 native activation tests (src/imgact/test/*.sh)
- * bake this exact string and stage IMGACT.EXE at it, so the interp flip must
- * land TOGETHER with migrating those tests to OVMX_BOOT_STAGE_DIR. The basename
- * stays IMGACT.EXE either way, so sys_imgact.c's in-process external-image
- * activation (which matches on the basename, vms-db2) is unaffected by the
- * eventual flip.
+ * ATOMIC FLIP (vms-5f0), spot #3. OVERRIDABLE so the boot flip and the native
+ * test suite can disagree on where IMGACT.EXE lives:
+ *
+ *   - DEFAULT "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE": the ~30 native
+ *     activation tests (src/imgact/test/*.sh via lib_build_graph.sh) build
+ *     their OWN LINK.EXE from this source and stage IMGACT.EXE at exactly this
+ *     path, so the default keeps them green untouched.
+ *
+ *   - BOOTABLE BUILD "/run/ovmx-boot/IMGACT.EXE": the /vms POSIX passthrough is
+ *     retired, so this path no longer resolves at boot and the kernel cannot
+ *     exec IMGACT.EXE for a native image (DCL.EXE/LOGINOUT.EXE). PID 1 stages
+ *     IMGACT.EXE off the genuine ODS-2 volume THROUGH the ACP into
+ *     OVMX_BOOT_STAGE_DIR ("/run/ovmx-boot", src/ovmx_init/ovmx_boot_acp_read.c
+ *     + src/libvms/include/ovmx_layout.h), so the CMake `vmslink` target that
+ *     LINK.EXE-builds the bootable DCL.EXE/LOGINOUT.EXE defines IMGACT_INTERP
+ *     to that staged path (src/vmslink/CMakeLists.txt). Keep the two in sync.
+ *
+ * The basename stays IMGACT.EXE either way, so sys_imgact.c's in-process
+ * external-image activation (which matches on the basename, vms-db2) is
+ * unaffected by which absolute path is baked.
  */
+#ifndef IMGACT_INTERP
 #define IMGACT_INTERP "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"
+#endif
 
 /* --------------------------------------------------------------------------
  * Declared universal symbols (from SYMBOL_VECTOR=).

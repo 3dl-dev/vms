@@ -606,9 +606,47 @@ static void scan_tls(struct obj *o, Elf64_Phdr *phdr, int phnum)
  * -------------------------------------------------------------------------- */
 struct imgsrc { struct imgact_acp_file f; };
 
+/*
+ * ATOMIC FLIP (vms-5f0): the first-hop boot images (DCL.EXE, LOGINOUT.EXE, ...)
+ * are execve'd from the boot-staging tmpfs (OVMX_BOOT_STAGE_DIR, "/run/ovmx-
+ * boot"), because the Linux kernel maps a main image's PT_LOAD and opens its
+ * PT_INTERP (this IMGACT.EXE) by POSIX path and the /vms passthrough is retired.
+ * So the kernel hands IMGACT that tmpfs path as the image to activate. IMGACT
+ * still reads the GENUINE image bytes from the ODS-2 volume THROUGH THE ACP --
+ * it never reads the tmpfs copy (no POSIX image read; CLAUDE.md Rule 9 / INV-6)
+ * -- so a staged path is mapped back to its SYS$SYSTEM volume location here
+ * before the ACP open. Non-staged paths (downstream shareables, which are
+ * already volume paths or bare SONAMEs) pass through unchanged. Self-contained
+ * (no libc), like the rest of the freestanding activator.
+ */
+#define IMGACT_BOOT_STAGE_PREFIX "/run/ovmx-boot/"
+#define IMGACT_SYSEXE_VOLPATH    "/vms/SYS0/SYSCOMMON/SYSEXE/"
+static const char *imgsrc_map_staged(const char *path, char *buf, unsigned long sz)
+{
+	const char *sp = IMGACT_BOOT_STAGE_PREFIX;
+	unsigned long i = 0;
+	while (sp[i] && path[i] == sp[i])
+		i++;
+	if (sp[i] != '\0')
+		return path;                  /* not a staged path: use as-is */
+
+	const char *base = path + i;          /* basename after the stage prefix */
+	const char *vp = IMGACT_SYSEXE_VOLPATH;
+	unsigned long o = 0, j = 0;
+	while (vp[j] && o + 1 < sz)
+		buf[o++] = vp[j++];
+	j = 0;
+	while (base[j] && o + 1 < sz)
+		buf[o++] = base[j++];
+	buf[o < sz ? o : sz - 1] = '\0';
+	return buf;
+}
+
 static int imgsrc_open(struct imgsrc *s, const char *path)
 {
-	uint32_t st = imgact_acp_open(&s->f, IMGACT_ACP_SYSDEVICE, path);
+	char mapped[256];
+	const char *p = imgsrc_map_staged(path, mapped, sizeof mapped);
+	uint32_t st = imgact_acp_open(&s->f, IMGACT_ACP_SYSDEVICE, p);
 	return (st & 1u) ? 0 : -1;
 }
 static long imgsrc_pread(struct imgsrc *s, void *buf, unsigned long n, long off)

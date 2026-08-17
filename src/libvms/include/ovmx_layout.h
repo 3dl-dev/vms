@@ -261,6 +261,9 @@ static inline int ovmx_boot_stage_exec_path(const char *in, char *out,
     if (!in || !out || sz == 0)
         return 0;
 
+    /* Case-insensitive uppercase of an ASCII byte (no libc/locale). */
+#define OVMX_BOOT__UP(c) (((c) >= 'a' && (c) <= 'z') ? (char)((c) - 32) : (char)(c))
+
     /* Length of `in`, and basename = char after the last '/'. */
     unsigned long len = 0;
     const char *base = in;
@@ -270,21 +273,31 @@ static inline int ovmx_boot_stage_exec_path(const char *in, char *out,
             base = p + 1;
     }
 
-    /* Basename must end in ".EXE" (images are uppercased on the volume). */
+    /* Basename must end in ".EXE" -- case-insensitively, because the /vms
+     * passthrough resolves the filename component in LOWERCASE (VMS specs are
+     * case-insensitive) while the genuine ODS-2 volume (and the staged copies)
+     * carry the UPPERCASE name. */
     unsigned long bl = 0;
     while (base[bl])
         bl++;
-    if (bl < 4 || base[bl - 4] != '.' || base[bl - 3] != 'E' ||
-        base[bl - 2] != 'X' || base[bl - 1] != 'E')
+    if (bl < 4 || base[bl - 4] != '.' ||
+        OVMX_BOOT__UP(base[bl - 3]) != 'E' ||
+        OVMX_BOOT__UP(base[bl - 2]) != 'X' ||
+        OVMX_BOOT__UP(base[bl - 1]) != 'E')
         return 0;
 
     /* Guard: only rewrite images that live in the SYSEXE directory, so a
-     * non-system image path is never redirected into the boot staging dir. */
+     * non-system image path is never redirected into the boot staging dir.
+     * Case-insensitive for the same reason. */
     int in_sysexe = 0;
     if (len >= 6) {
         for (unsigned long i = 0; i + 6 <= len; i++) {
-            if (in[i] == 'S' && in[i + 1] == 'Y' && in[i + 2] == 'S' &&
-                in[i + 3] == 'E' && in[i + 4] == 'X' && in[i + 5] == 'E') {
+            if (OVMX_BOOT__UP(in[i])     == 'S' &&
+                OVMX_BOOT__UP(in[i + 1]) == 'Y' &&
+                OVMX_BOOT__UP(in[i + 2]) == 'S' &&
+                OVMX_BOOT__UP(in[i + 3]) == 'E' &&
+                OVMX_BOOT__UP(in[i + 4]) == 'X' &&
+                OVMX_BOOT__UP(in[i + 5]) == 'E') {
                 in_sysexe = 1;
                 break;
             }
@@ -293,16 +306,21 @@ static inline int ovmx_boot_stage_exec_path(const char *in, char *out,
     if (!in_sysexe)
         return 0;
 
-    /* out = OVMX_BOOT_STAGE_DIR "/" basename (bounded). */
+    /* out = OVMX_BOOT_STAGE_DIR "/" UPPERCASE(basename) (bounded). The staged
+     * copies PID 1 writes carry the volume's UPPERCASE name, so the rewritten
+     * exec target must uppercase the (possibly lowercased) basename to match. */
     static const char pre[] = OVMX_BOOT_STAGE_DIR "/";
     unsigned long i = 0, j = 0;
     while (pre[j] && i + 1 < sz)
         out[i++] = pre[j++];
     j = 0;
-    while (base[j] && i + 1 < sz)
-        out[i++] = base[j++];
+    while (base[j] && i + 1 < sz) {
+        char c = base[j++];         /* separate step: the macro re-reads its arg */
+        out[i++] = OVMX_BOOT__UP(c);
+    }
     out[i] = '\0';
     return 1;
+#undef OVMX_BOOT__UP
 }
 
 #endif /* __OVMX_LAYOUT_H */

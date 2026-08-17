@@ -24,6 +24,17 @@ add_executable(vmslink link.c)
 target_include_directories(vmslink PRIVATE include)
 target_link_options(vmslink PRIVATE ${OVMX_HOST_TOOL_LINK_OPTS})
 set_target_properties(vmslink PROPERTIES OUTPUT_NAME "LINK" SUFFIX ".EXE")
+# ATOMIC FLIP (vms-5f0), spot #3: the CMake vmslink LINK.EXE builds the BOOTABLE
+# DCL.EXE/LOGINOUT.EXE (link_native_graph, below, via build_link_native.sh with
+# $<TARGET_FILE:vmslink>). With the /vms POSIX passthrough retired, their
+# PT_INTERP must name the boot-staging tmpfs where PID 1 stages IMGACT.EXE off
+# the genuine ODS-2 volume over the ACP -- NOT the /vms path, which no longer
+# resolves at boot. Kept in sync with OVMX_BOOT_STAGE_DIR in
+# src/libvms/include/ovmx_layout.h. The default in link.c stays the /vms path so
+# the standalone native activation tests (which build their own LINK.EXE from
+# source and stage IMGACT.EXE under /vms) are untouched.
+target_compile_definitions(vmslink PRIVATE
+    IMGACT_INTERP="/run/ovmx-boot/IMGACT.EXE")
 install(TARGETS vmslink RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
 add_executable(vmsdump dump_image.c)
